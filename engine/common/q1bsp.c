@@ -2008,13 +2008,96 @@ static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 		}
 		else
 		{
+			// Opt-in via r_wateralpha_extendpvs because modern compilers
+			// (ericw-tools vis with transparent-water support, qbsp -trans,
+			// etc.) already produce BSPs whose vis data correctly accounts
+			// for transparent water surfaces.  On those maps the fluid
+			// merge is redundant AND harmful — it adds far-away leafs that
+			// the fluid leafs can see for unrelated reasons, blowing the
+			// PVS up to nearly r_novis levels and ruining culling.  Only
+			// enable on legacy maps (vanilla GoldSrc, q1 with classic vis)
+			// where the compiler treated water as opaque.
+			qboolean want_fluid_merge = (model->leafs &&
+			                             r_wateralpha.value < 1.0f &&
+			                             r_wateralpha_extendpvs.ival);
+
 			if (clusters[1] >= 0 && clusters[1] != clusters[0])
 			{
 				vis = cvis = model->funcs.ClusterPVS(model, clusters[0], &pvsbuf, PVM_REPLACE);
 				vis = cvis = model->funcs.ClusterPVS(model, clusters[1], &pvsbuf, PVM_MERGE);
 			}
+			else if (want_fluid_merge)
+			{
+				// PVM_FAST returns a pointer INTO model->pvs (shared
+				// persistent vis data).  Writing to it from the fluid
+				// merge below would corrupt the map's vis data and
+				// produce drifting rendering artifacts that compound
+				// across frames.  Force REPLACE into pvsbuf so we own
+				// the buffer and can OR fluid bits into it safely.
+				vis = cvis = model->funcs.ClusterPVS(model, clusters[0], &pvsbuf, PVM_REPLACE);
+			}
 			else
 				vis = cvis = model->funcs.ClusterPVS(model, clusters[0], &pvsbuf, PVM_FAST);
+
+			// Water transparency PVS extension: when r_wateralpha is < 1,
+			// the player can see THROUGH water surfaces from any angle,
+			// but the vis compiler treated those surfaces as opaque
+			// boundaries — meaning the water leafs themselves often
+			// aren't even in the camera's normal PVS until the camera
+			// gets right up against them, and underwater leafs are gated
+			// behind that.  Gating the merge on "fluid leaf already
+			// visible" therefore never fires from a distance, defeating
+			// the whole purpose.
+			//
+			// Instead: walk ALL leafs in the model, and for every fluid
+			// leaf, mark it visible AND OR its own PVS into the result.
+			// This treats every fluid leaf as "always potentially in
+			// PVS", and brings in everything reachable through the water
+			// (underwater geometry, pool floors, decorations, and any
+			// air leaf the water can see directly).  Effectively turns
+			// water surfaces into PVS-transparent surfaces globally,
+			// without modifying the on-disk vis data.
+			//
+			// Cost: O(numleafs) bitmap-set + one ClusterPVS call per
+			// fluid leaf in the entire map.  HL maps typically have
+			// 0-50 fluid leafs total, each ClusterPVS call is a
+			// decompress+OR over pvsbytes (~500 B for HL maps).
+			// Sub-millisecond.  Skipped entirely when wateralpha == 1
+			// so opaque-water rendering is bit-for-bit unchanged.
+			if (want_fluid_merge)
+			{
+				int nc = model->numclusters;
+				int j;
+				for (j = 0; j < nc; j++)
+				{
+					int contents = model->leafs[j+1].contents;
+					if (contents == Q1CONTENTS_WATER ||
+					    contents == Q1CONTENTS_SLIME ||
+					    contents == Q1CONTENTS_LAVA  ||
+					    contents == HLCONTENTS_CURRENT_0 ||
+					    contents == HLCONTENTS_CURRENT_90 ||
+					    contents == HLCONTENTS_CURRENT_180 ||
+					    contents == HLCONTENTS_CURRENT_270 ||
+					    contents == HLCONTENTS_CURRENT_UP ||
+					    contents == HLCONTENTS_CURRENT_DOWN)
+					{
+						// Mark this fluid leaf as visible itself so the
+						// water surface renders even when the camera's
+						// baked PVS would have culled it.
+						vis[j>>3] |= (1<<(j&7));
+						// Pull in anything the fluid leaf can see (the
+						// underwater geometry).
+						vis = cvis = model->funcs.ClusterPVS(model, j, &pvsbuf, PVM_MERGE);
+					}
+				}
+				// Force PVS recompute next frame even from the same
+				// camera position — the merge state above isn't
+				// captured by the (clusters[0], clusters[1]) cache key,
+				// so without this a stationary camera with wateralpha
+				// just toggled wouldn't pick up the change.
+				prv->oldviewclusters[0] = -1;
+				prv->oldviewclusters[1] = -2;
+			}
 		}
 	}
 

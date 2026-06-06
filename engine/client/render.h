@@ -690,6 +690,7 @@ extern	cvar_t	r_wateralpha;
 extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_slimealpha;
 extern	cvar_t	r_telealpha;
+extern	cvar_t	r_wateralpha_extendpvs;
 extern	cvar_t	r_waterstyle;
 extern	cvar_t	r_lavastyle;
 extern	cvar_t	r_slimestyle;

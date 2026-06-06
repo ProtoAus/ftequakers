@@ -239,6 +239,9 @@ cvar_t r_slimealpha							= CVARF  ("r_slimealpha", "",
 												CVAR_ARCHIVE | CVAR_SHADERSYSTEM);
 cvar_t r_telealpha							= CVARF  ("r_telealpha", "",
 												CVAR_ARCHIVE | CVAR_SHADERSYSTEM);
+cvar_t r_wateralpha_extendpvs				= CVARFD ("r_wateralpha_extendpvs", "0",
+												CVAR_ARCHIVE,
+												"When 1 and r_wateralpha < 1, the renderer ORs every fluid leaf's PVS into the visible set so transparent water shows the geometry on the other side from any distance. ONLY needed for legacy maps compiled without transparent-water vis support (vanilla GoldSrc maps, q1bsp compiled with classic vis). Modern maps compiled with ericw-tools vis or any vis tool that handles transparent water at compile time already have correct PVS — leave this 0 for those, otherwise rendering will pull in far-away unrelated leafs.");
 cvar_t r_waterwarp							= CVARFD ("r_waterwarp", "1",
 												CVAR_ARCHIVE, "Enables fullscreen warp, preferably via glsl. -1 specifies to force the fov warp fallback instead which can give a smidge more performance.");
 
@@ -977,6 +980,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_lavaalpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimealpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_telealpha, GRAPHICALNICETIES);
+	Cvar_Register (&r_wateralpha_extendpvs, GRAPHICALNICETIES);
 	Cvar_Register (&gl_shadeq1_name, GLRENDEREROPTIONS);
 
 	Cvar_Register (&gl_mindist, GLRENDEREROPTIONS);
