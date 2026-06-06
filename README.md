@@ -1,103 +1,85 @@
-# [FTEQW](https://fteqw.org)
+# ftequakers
 
-![FTEQW Logo](engine/client/fte_eukara.ico)
+A personal fork of [FTEQW](https://fteqw.org) with a small set of engine
+changes made for my own mod/project. It is standard FTEQW plus the
+additions listed below — nothing has been removed.
 
-Powerful engine for playing and modding idTech based games.
+- Upstream: [fte-team/fteqw](https://github.com/fte-team/fteqw)
+- This fork's `master` tracks upstream; the custom engine work lives on
+  the `engine-patches` branch, one self-contained commit per feature.
 
-# What is FTEQW?
+## What's changed from upstream
 
-FTEQW is an advanced and portable Quake engine. It supports multiple games running on idTech, plus its own set of games that developers have created.
+Every addition is opt-in — the new cvars, render flags, and builtins
+default to the original engine behaviour, so a stock setup is unchanged.
 
-Due to the vast amount of supported formats, features, and innovations inside the engine and its very own QuakeC compiler (FTEQCC), it's very much considered the swiss-army knife of Quake engines.
+### Gameplay & physics
 
-### Highlights:
+- **`SOLID_PHYSICS_TRIMESH` collision** — players collide against a
+  prop's actual triangle mesh instead of its bounding box, on both the
+  server and the client-side predictor (alias/IQM/MD3 props that expose
+  NativeTrace).
+- **Half-Life model aim poses** — bone controllers (`.bonecontrol1..5`)
+  and the aim subblend are fed into the server framestate, so HL models
+  drive their torso/arm aim poses correctly.
+- **`ED_ParseUnknownEpair`** — optional QC hook
+  `void(string key, string value)` letting gamecode absorb arbitrary
+  mapper keyvalues (e.g. `multi_manager` `<target>=<delay>` pairs)
+  instead of warning about unknown fields.
 
-- Single & multi-player support
-- Supports multiple games
-- Vast amount of map, model, & image formats are supported
-- Advanced console, with descriptions & autocompletion
-- Plugin support, enabling use of FFMPEG, Bullet/ODE physics & more
-- Extensive suite of QuakeC/entity debugging features
-- Deep integration with FTEQCC (fork of QuakeC created for FTEQW), which can even be executed in-game
-- Support for split-screen local multiplayer
-- Voice-chat via Opus & Speex
-- Support for hundreds of players on a single server
-- Works on Windows, Linux, OpenBSD... & more
-- New features are added all the time in cooperation with modders
+### Rendering
 
-# Contributions
+- **`RF_XFLIP`** (CSQC render flag, 128) — horizontally mirrors an
+  entity, intended for left-handed viewmodels; flips projection X and
+  cull winding so backface culling stays correct.
+- **`r_viewmodel_maxlight`** — per-channel ceiling on the first-person
+  viewmodel's light so a bright floor (lava, white tile) doesn't blow
+  the gun out. `0` = off (engine default); try `96..160`.
+- **Half-Life `.mdl` normalmaps** — loads an optional `<model>_norm`
+  texture as a whole-model bumpmap, used by the defaultskin GLSL `#BUMP`
+  path when a per-pixel light direction is available.
+- **`r_wateralpha_extendpvs`** — opt-in transparent-water PVS extension
+  for legacy maps (vanilla GoldSrc / classic vis) so underwater geometry
+  shows through transparent water at a distance. Leave `0` for maps
+  compiled with modern transparent-water vis.
 
-Contributions and help is always welcomed.
+### System & performance (Windows)
 
-### Guidelines:
+- **`sys_framepacing`** — SpecialK-style high-resolution frame pacing
+  (high-res waitable timer, optional DXGI frame-latency sync on D3D11,
+  absolute-anchor pacing with frame-skip forgive). `sys_framepacing_stats`
+  reports what it is actually doing. `0` = vanilla `Sleep()`.
+- **`cl_debug_spikes`** — logs a per-stage timing breakdown whenever a
+  client frame exceeds `cl_debug_spike_ms` (default 2 ms), to pin a
+  hitch to a specific stage.
 
-- Be kind and respectful
-- GPL2 licensed contributions are preferred, but plugins can be different but GPL-compatbile licenses
-- This codebase follows USA/EU/UK copyright laws
-- Always give credit from other codebases and make sure licenses are compatible
-- Test your changes and ensure nothing else has been broken (games, plugins, formats, etc)
+### Menu / UI
 
-# Reporting Issues
+- **`localcmd_local`** (menu builtin) — injects a command at trusted
+  (LOCAL) level rather than INSECURE, so menu sliders can set
+  `NOTFROMSERVER` cvars (`sys_highpriority`, `sys_framepacing`, ...).
+  Menu-only by design.
 
-Bug reports are welcomed! :)
+## Building
 
-### Required Information:
+Same as upstream FTEQW (see the `documentation` folder). This fork is
+built with MSYS2 **UCRT64** (gcc). From `engine/`:
 
-- Your system information such as your **Operating System** and **Hardware** (GPU/CPU)
-- If the binary is pre-built (e.g. from fteqw.org) or if it was built manually
-- What version of FTEQW you're using (type `version` in console)
-- If it is a supported game/mod/plugin/etc you're having issues with, then provide the version info for it, and tell us how it should be behaving
-- Make sure you have read the included documentation and ensure you have done everything right
-- Remember to double check the problem hasn't already been reported
-- Screenshots and/or video are generally desired if it is a visual malfunction
+    make m-rel sv-rel FTE_TARGET=win64 CC=gcc CXX=g++ -j14
 
-**Windows Users**
+The `cod` and `hl2` asset plugins build separately under `plugins/` and
+must be rebuilt from this same tree so their engine ABI matches the
+executable.
 
-Please make sure you have not renamed your executable, `fteqw.exe`, to be `winquake.exe` or `glquake.exe` as Windows attempts compatability fixes that are not required for FTEQW and will cause problems.
+## Based on FTEQW — credits & license
 
-# Documentation
+All credit for the engine goes to the FTE team and contributors. FTEQW
+is licensed under the GNU General Public License v2.
 
-Please see the `documentation` folder inside the repo for building, using the engine, tools, and more.
+    Copyright (c) 2004-2025 FTE's team and its contributors
+    Quake source (c) 1999 id Software
 
-The `specs` folder is for more advanced users seeking QuakeC and idTech file format related information or examples.
-
-# Contact
-
-### Matrix
-
-https://matrix.to/#/#fte:matrix.org
-
-### IRC
-
-**Server:** irc.quakenet.org
-
-**Channel:** #fte
-
-### Forums
-
-**[Spike](https://forums.insideqc.com/memberlist.php?mode=viewprofile&u=26)** and **[eukara](https://forums.insideqc.com/memberlist.php?mode=viewprofile&u=949)** can be found on [insideqc.com](https://forums.insideqc.com/)
-
-### Discord
-
-https://discord.gg/p2ag7x6Ca6
-
-# Credits
-
-Please see the `Credits.md` file.
-
-# License
-
-Copyright (c) 2004-2025 FTE's team and its contributors
-Quake source (c) 1999 id Software
-
-FTEQW is supplied to you under the terms of the same license as the
-original Quake sources, the GNU General Public License Version 2.
-Please read the `LICENSE` file for details.
-
-# Download
-
-The latest source & binaries are always available at:
-
-[fteqw.org](https://fteqw.org)
-
-[fteqcc.org](https://fteqcc.org)
+See `LICENSE` for the full terms and `Credits.md` for contributors. The
+original upstream README — highlights, contact links, issue-reporting
+guidance — is preserved in this repository's git history and at
+[fteqw.org](https://fteqw.org).
