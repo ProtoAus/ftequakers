@@ -574,6 +574,24 @@ model_t *QDECL SVPR_GetCModel(world_t *w, int modelindex)
 static void QDECL SVPR_Get_FrameState(world_t *w, wedict_t *ent, framestate_t *fstate)
 {
 	memset(fstate, 0, sizeof(*fstate));
+
+#ifdef HALFLIFEMODELS
+	fstate->bonecontrols[0] = ent->xv->bonecontrol1;
+	fstate->bonecontrols[1] = ent->xv->bonecontrol2;
+	fstate->bonecontrols[2] = ent->xv->bonecontrol3;
+	fstate->bonecontrols[3] = ent->xv->bonecontrol4;
+	fstate->bonecontrols[4] = ent->xv->bonecontrol5;
+	// Match cs_getframestate: apply subblendfrac/subblend2frac to BOTH the
+	// regular layer and the base layer.  The base-specific fields
+	// (basesubblendfrac/basesubblend2frac) are typically zero on player
+	// entities and using them here leaves the torso/arm bones in their
+	// default pose even when the aim pose wants them raised/lowered.
+	fstate->g[FS_REG].subblendfrac    = ent->xv->subblendfrac;
+	fstate->g[FS_REG].subblend2frac   = ent->xv->subblend2frac;
+	fstate->g[FST_BASE].subblendfrac  = ent->xv->subblendfrac;
+	fstate->g[FST_BASE].subblend2frac = ent->xv->subblend2frac;
+#endif
+
 	fstate->g[FS_REG].frame[0] = ent->v->frame;
 	fstate->g[FS_REG].frametime[0] = ent->xv->frame1time;
 	fstate->g[FS_REG].lerpweight[0] = 1;

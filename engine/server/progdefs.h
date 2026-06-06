@@ -312,7 +312,8 @@ and the extension fields are added on the end and can have extra vm-specific stu
 	comfieldvector(color,"This affects the colour of realtime lights that were enabled via the pflags field.")/*Hexen2 has a .float color, the warnings should be benign but does mean updated hexen2 mods may need to use color_x for map compat*/ \
 	comfieldfloat(light_lev,"This is the radius of an entity's light. This is not normally used by the engine, but is used for realtime lights (ones that are enabled with the pflags field).")\
 	comfieldfloat(style,"Used by the light util to decide how an entity's light should animate. On an entity with pflags set, this also affects realtime lights.")\
-	comfieldfloat(pflags,"Realtime lighting flags")
+	comfieldfloat(pflags,"Realtime lighting flags")	\
+	HALFLIFEMODEL_FIELDS
 
 #ifdef HEXEN2
 #else
@@ -400,7 +401,6 @@ and the extension fields are added on the end and can have extra vm-specific stu
 	comfieldfloat(baseframe1time,"See basebone")	/*FTE_CSQC_BASEFRAME*/\
 	comfieldfloat(baseframe2time,"See basebone")	/*FTE_CSQC_BASEFRAME*/\
 	comfieldfloat(baselerpfrac,"See basebone")	/*FTE_CSQC_BASEFRAME*/\
-	HALFLIFEMODEL_FIELDS	\
 	comfieldfloat(drawmask, "Matces the bitmask passed to the addentities builtin, to easily submit entities to the renderer. Not otherwise meaningful.")	/*So that the qc can specify all rockets at once or all bannanas at once*/	\
 	comfieldfunction(predraw, ".float()","Called as part of the addentities builtin. Returns one of the PREDRAW_ constants. This gives you a chance to interpolate or animate entities as desired.")	/*If present, is called just before it's drawn.*/	
 
