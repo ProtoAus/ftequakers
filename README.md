@@ -5,8 +5,6 @@ changes made for my own mod/project. It is standard FTEQW plus the
 additions listed below — nothing has been removed.
 
 - Upstream: [fte-team/fteqw](https://github.com/fte-team/fteqw)
-- This fork's `master` tracks upstream; the custom engine work lives on
-  the `engine-patches` branch, one self-contained commit per feature.
 
 ## What's changed from upstream
 
