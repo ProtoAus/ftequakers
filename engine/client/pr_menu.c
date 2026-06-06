@@ -2325,6 +2325,19 @@ static void QCBUILTIN PF_menu_cprint (pubprogfuncs_t *prinst, struct globalvars_
 	const char *str = PF_VarString(prinst, 0, pr_globals);
 	SCR_CenterPrint(0, str, true);
 }
+
+//Sends text over to the client's execution buffer at trusted (LOCAL)
+//level instead of INSECURE.  Use for menu/UI-driven changes the user
+//explicitly triggered — bypasses the CVAR_NOTFROMSERVER gate so things
+//like sys_highpriority / sys_clocktype / sys_framepacing can be set
+//from in-menu sliders.  Menu-only by design; do NOT add to CSQC/SSQC
+//where remote-code paths can reach it (the security model assumes any
+//cvar_set/localcmd from those VMs is server-controlled and untrusted).
+static void QCBUILTIN PF_M_localcmd_local (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char *str = PF_VarString(prinst, 0, pr_globals);
+	Cbuf_AddText(str, RESTRICT_LOCAL);
+}
 static void QCBUILTIN PF_cl_changelevel (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 #ifndef CLIENTONLY
@@ -2430,6 +2443,7 @@ static struct {
 	{"crossproduct",			PF_crossproduct,			0},
 	{"random",					PF_random,					12},
 	{"localcmd",				PF_localcmd,				13},
+	{"localcmd_local",			PF_M_localcmd_local,		0},
 	{"cvar",					PF_menu_cvar,				14},
 	{"cvar_set",				PF_menu_cvar_set,			15},
 	{"dprint",					PF_dprint,					16},
