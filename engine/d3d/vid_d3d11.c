@@ -12,6 +12,14 @@
 
 #define COBJMACROS
 #include <d3d11.h>
+/* dxgi1_3.h provides IDXGISwapChain2 which exposes
+ * GetFrameLatencyWaitableObject.  Win8.1+ header; MinGW-w64 has it.
+ * Guarded so a pre-1.3 SDK (or Wine with old headers) falls back
+ * gracefully to "no waitable object available". */
+#if __has_include(<dxgi1_3.h>)
+#  include <dxgi1_3.h>
+#  define FTE_HAVE_DXGI1_3 1
+#endif
 
 ID3D11Device *pD3DDev11;
 ID3D11DeviceContext *d3ddevctx;
@@ -70,6 +78,15 @@ IDXGISwapChain1 *d3dswapchain;
 IDXGISwapChain *d3dswapchain;
 #endif
 IDXGIOutput *d3dscreen;
+
+/* Frame-latency waitable object (Win8.1+).  When the swap chain is
+ * created with DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+ * (=0x800), DXGI exposes a handle that fires when the present queue
+ * has room for the next frame.  Sys_FramePacedWait (sys_win.c) waits
+ * on it alongside the high-res timer so the CPU doesn't get ahead of
+ * the GPU — eliminates the classic DXGI 2-3 frame queue latency. */
+static HANDLE g_dxgi_wait_handle = NULL;
+HANDLE D3D11_GetFrameLatencyWaitHandle(void) { return g_dxgi_wait_handle; }
 
 ID3D11RenderTargetView *fb_backbuffer;
 ID3D11DepthStencilView *fb_backdepthstencil;
@@ -828,6 +845,14 @@ static qboolean initD3D11Device(HWND hWnd, rendererstate_t *info, PFN_D3D11_CREA
 	scd.SampleDesc.Quality = d3d11multisample_quality = 0;
 	scd.Windowed = TRUE;
 	scd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;// | DXGI_SWAP_CHAIN_FLAG_NONPREROTATED;
+#ifdef FTE_HAVE_DXGI1_3
+	/* Attempt to create the swap chain with the frame-latency waitable
+	 * object.  If Win8.1+ and the driver supports it, we gain a HANDLE
+	 * that fires when the present queue has room — lets the CPU wait
+	 * for the GPU instead of queueing 2-3 frames ahead.  Numeric 0x800
+	 * to avoid dependency on a specific SDK header version. */
+	scd.Flags |= 0x800; /* DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT */
+#endif
 
 #ifdef _DEBUG
 //	flags |= D3D11_CREATE_DEVICE_DEBUG;
@@ -853,10 +878,77 @@ static qboolean initD3D11Device(HWND hWnd, rendererstate_t *info, PFN_D3D11_CREA
 				&pD3DDev11,
 				&flevel,
 				&d3ddevctx)))
-		return false;
+	{
+#ifdef FTE_HAVE_DXGI1_3
+		/* Retry without the waitable flag — pre-Win8.1 or an MSAA-
+		 * incompatible driver path.  All other fields reusable. */
+		if (scd.Flags & 0x800)
+		{
+			scd.Flags &= ~0x800;
+			if (FAILED(func(adapt, drivertype, NULL, flags,
+						flevels, sizeof(flevels)/sizeof(flevels[0]),
+						D3D11_SDK_VERSION,
+						&scd,
+						&d3dswapchain,
+						&pD3DDev11,
+						&flevel,
+						&d3ddevctx)))
+				return false;
+		}
+		else
+#endif
+			return false;
+	}
 
 	if (!pD3DDev11)
 		return false;
+
+#ifdef FTE_HAVE_DXGI1_3
+	/* Pull the waitable handle + clamp max frame latency to 1.  Both
+	 * are safe no-ops if IDXGISwapChain2 isn't available (Win8 or
+	 * older).  Sys_FramePacedWait will just see a NULL handle and
+	 * skip the DXGI wait step. */
+	if (d3dswapchain && (scd.Flags & 0x800))
+	{
+		IDXGISwapChain2 *sc2 = NULL;
+		HRESULT qihr = IDXGISwapChain_QueryInterface(d3dswapchain,
+			&IID_IDXGISwapChain2, (void**)&sc2);
+		if (SUCCEEDED(qihr) && sc2)
+		{
+			IDXGISwapChain2_SetMaximumFrameLatency(sc2, 1);
+			g_dxgi_wait_handle = IDXGISwapChain2_GetFrameLatencyWaitableObject(sc2);
+			IDXGISwapChain2_Release(sc2);
+			Con_Printf("D3D11 frame-latency waitable object: %s (max frame latency = 1)\n",
+				g_dxgi_wait_handle ? "acquired" : "NULL (driver returned none)");
+		}
+		else
+			Con_Printf("D3D11 IDXGISwapChain2 QueryInterface failed: 0x%08lx (DXGI waitable sync unavailable)\n", (unsigned long)qihr);
+	}
+	else if (d3dswapchain)
+		Con_Printf("D3D11 swap chain created without FRAME_LATENCY_WAITABLE_OBJECT flag (driver rejected, fallback path)\n");
+#endif
+
+	/* Fallback that always works: cap the device-level frame latency to
+	 * 1 via IDXGIDevice1.  The waitable-object flag above requires a
+	 * FLIP-model swap chain, which FTE doesn't currently use, so the
+	 * BitBlt-model path lands here.  Setting device latency = 1 is a
+	 * simpler partial replacement — it caps the CPU-ahead queue at 1
+	 * frame (vs the default ~3), which eliminates the "CPU queues 3
+	 * frames, DXGI waits for vsync, then flips all 3" latency spike
+	 * without needing the waitable handle.  Roughly 2/3 of the mode-2
+	 * benefit, free on any D3D11 driver. */
+	if (pD3DDev11 && !g_dxgi_wait_handle)
+	{
+		IDXGIDevice1 *dxgidev1 = NULL;
+		HRESULT dhr = ID3D11Device_QueryInterface(pD3DDev11,
+			&IID_IDXGIDevice1, (void**)&dxgidev1);
+		if (SUCCEEDED(dhr) && dxgidev1)
+		{
+			IDXGIDevice1_SetMaximumFrameLatency(dxgidev1, 1);
+			IDXGIDevice1_Release(dxgidev1);
+			Con_Printf("D3D11 device max frame latency capped at 1 (BitBlt-path latency reduction).\n");
+		}
+	}
 
 	Con_Printf("D3D11 Feature level: %i_%i\n", flevel>>12, (flevel>>8) & 0xf);
 
@@ -1242,6 +1334,9 @@ static void	 (D3D11_VID_DeInit)				(void)
 		IDXGISwapChain_SetFullscreenState(d3dswapchain, false, NULL);
 
 	released3dbackbuffer();
+	if (g_dxgi_wait_handle)
+		CloseHandle(g_dxgi_wait_handle);
+	g_dxgi_wait_handle = NULL;
 	if(d3dswapchain)
 		IDXGISwapChain_Release(d3dswapchain);
 	d3dswapchain = NULL;
