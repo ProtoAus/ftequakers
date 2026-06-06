@@ -14004,6 +14004,7 @@ void PR_DumpPlatform_f(void)
 		{"RF_USEAXIS",			"const float", CS, D("The entity will be oriented according to the current v_forward+v_right+v_up vector values instead of the entity's .angles field."), CSQCRF_USEAXIS},
 		{"RF_NOSHADOW",			"const float", CS, D("This entity will not cast shadows. Often useful on view models."), CSQCRF_NOSHADOW},
 		{"RF_FRAMETIMESARESTARTTIMES","const float", CS, D("Specifies that the frame1time, frame2time field are timestamps (denoting the start of the animation) rather than time into the animation."), CSQCRF_FRAMETIMESARESTARTTIMES},
+		{"RF_XFLIP",			"const float", CS, D("Mirror this entity horizontally. Intended for left-handed viewmodels: the renderer flips projection X and inverts cull winding so backface culling stays correct."), CSQCRF_XFLIP},
 		{"RF_FIRSTPERSON","const float", CS, D("This is basically the opposite of RF_EXTERNALMODEL. Don't draw in third-person or mirrors."), CSQCRF_FIRSTPERSON},
 
 		{"IE_KEYDOWN",			"const float", CS|MENU, D("Specifies that a key was pressed. Second argument is the scan code. Third argument is the unicode (printable) char value. Fourth argument denotes which keyboard(or mouse, if its a mouse 'scan' key) the event came from. Note that some systems may completely separate scan codes and unicode values, with a 0 value for the unspecified argument."), CSIE_KEYDOWN},

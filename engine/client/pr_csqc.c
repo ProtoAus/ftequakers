@@ -792,6 +792,8 @@ static qboolean CopyCSQCEdictToEntity(csqcedict_t *fte_restrict in, entity_t *ft
 		//CSQCRF_USEAXIS is below
 		if (rflags & CSQCRF_NOSHADOW)
 			out->flags |= RF_NOSHADOW;
+		if (rflags & CSQCRF_XFLIP)
+			out->flags |= RF_XFLIP;
 		//CSQCRF_FRAMETIMESARESTARTTIMES is handled by cs_getframestate below
 
 //		if (rflags & CSQCRF_REMOVED)
