@@ -979,6 +979,18 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 			model = NULL;
 		}
 	}
+	else if (solid == SOLID_PHYSICS_TRIMESH && mdlidx)
+	{
+		// Treat physics trimesh entities like BSP for narrowphase: fetch the
+		// model and let World_TransformedTrace clip against the actual mesh
+		// (via funcs.NativeTrace). Without this, SOLID_PHYSICS_TRIMESH falls
+		// through to the box-hull path below and pmove sees only the AABB —
+		// which means the player can't collide with the prop's actual mesh
+		// shape. Requires the model to expose NativeTrace (alias/IQM/MD3 do).
+		model = w->Get_CModel(w, mdlidx);
+		if (!model || !model->funcs.NativeTrace)
+			model = NULL;
+	}
 	else
 		model = NULL;
 

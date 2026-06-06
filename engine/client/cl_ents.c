@@ -6141,8 +6141,15 @@ void CL_SetSolidEntities (void)
 			so we need to make sure that item pickups are not erroneously considered solid, but doors etc are.
 			normally, ONLY inline models are considered solid when we have no solid info.
 			monsters will always be non-solid, too.
+			Exception: alias/IQM models that expose a NativeTrace function are
+			meant to be solid (e.g. SOLID_PHYSICS_TRIMESH props). The server
+			only sends ES_SOLID_BSP for them when it actively wants the client
+			to predict mesh collision (see sv_ents.c SV_Snapshot_BuildStateQ1),
+			so trust that signal even on vanilla protocol.
 			*/
-			if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) && mod->numsubmodels <= 1)
+			if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) && mod->numsubmodels <= 1
+				&& !(mod->funcs.NativeTrace
+					&& (mod->type == mod_alias || mod->type == mod_halflife)))
 				continue;
 	
 			pent = &pmove.physents[pmove.numphysent];

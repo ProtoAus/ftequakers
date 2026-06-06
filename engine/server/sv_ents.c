@@ -3525,7 +3525,13 @@ void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *cli
 
 	if (client && client->edict && (ent->v->owner == client->edict->entnum))
 		state->solidsize = 0;
-	else if (ent->v->solid == SOLID_BSP || (ent->v->skin < 0 && ent->v->modelindex))
+	else if (ent->v->solid == SOLID_BSP || ent->v->solid == SOLID_PHYSICS_TRIMESH
+	      || (ent->v->skin < 0 && ent->v->modelindex))
+		// SOLID_PHYSICS_TRIMESH is encoded as ES_SOLID_BSP so the client
+		// loads the model into its physent and does mesh-narrowphase pmove
+		// prediction (matches the server-side world.c patch). Without this,
+		// the client skipped the entity entirely (solidsize=0) and the
+		// player snapped against the server's reconcile silhouette instead.
 		state->solidsize = ES_SOLID_BSP;
 	else if (ent->v->solid == SOLID_BBOX || ent->v->solid == SOLID_SLIDEBOX || ent->v->skin < 0)
 		state->solidsize = ent->solidsize;
