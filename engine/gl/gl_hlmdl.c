@@ -607,8 +607,29 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		}
 	}
 
-
-
+	// FTE patch: whole-model normalmap support for HL .mdl.
+	// Looks for <modelname-without-ext>_norm.<tga|png|...> next to the
+	// .mdl and binds it as the .bump slot on every shader entry.  The
+	// existing defaultskin GLSL program automatically picks up the bump
+	// slot via its #BUMP permutation when a per-pixel light direction is
+	// available (realtime dlights, deluxemaps, etc.).
+	//
+	// The normalmap should be authored at the same dimensions and atlas
+	// layout as the engine-built diffuse atlas (typically 1024x1024 for
+	// player models) so that per-mesh UVs sample matching pixels in
+	// both diffuse and bump.  Authors can dump the diffuse atlas via
+	// "r_imageexport models/<name>.mdl#0" to use as a paint reference.
+	{
+		char stripped[MAX_QPATH], normname[MAX_QPATH];
+		COM_StripExtension(mod->name, stripped, sizeof(stripped));
+		Q_snprintfz(normname, sizeof(normname), "%s_norm", stripped);
+		texid_t normtex = R_LoadHiResTexture(normname, NULL, 0);
+		if (normtex != r_nulltex)
+		{
+			for (i = 0; i < texheader->numtextures; i++)
+				shaders[i].defaulttex.bump = normtex;
+		}
+	}
 
 	model->numskinrefs = texheader->skinrefs;
 	model->numskingroups = texheader->skingroups;
