@@ -37,7 +37,7 @@ typedef struct
 
 
 
-extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models;
+extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight;
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 
@@ -1410,6 +1410,18 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			{	/*viewmodels may not be pure black*/
 				if (ambientlight[i] < 24)
 					ambientlight[i] = 24;
+				/*r_viewmodel_maxlight: optional ceiling so a bright floor
+				  (lava, white tile, sky-lit area) doesn't blow the gun out.
+				  0 disables the cap = engine-default behaviour. Caps both
+				  ambient and shade so directional brightening from below
+				  is also bounded.*/
+				if (r_viewmodel_maxlight.value > 0)
+				{
+					if (ambientlight[i] > r_viewmodel_maxlight.value)
+						ambientlight[i] = r_viewmodel_maxlight.value;
+					if (shadelight[i] > r_viewmodel_maxlight.value)
+						shadelight[i] = r_viewmodel_maxlight.value;
+				}
 			}
 		}
 		else
