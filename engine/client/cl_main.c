@@ -341,6 +341,8 @@ qbyte		*host_basepal;
 qbyte		*h2playertranslations;
 
 cvar_t	host_speeds = CVAR("host_speeds","0");		// set for running times
+cvar_t	cl_debug_spikes = CVARD("cl_debug_spikes", "0", "Logs a timing breakdown whenever a client Host_Frame exceeds cl_debug_spike_ms.");
+cvar_t	cl_debug_spike_ms = CVARD("cl_debug_spike_ms", "2.0", "Frame time threshold, in milliseconds, for cl_debug_spikes logging.");
 
 int			fps_count;
 qboolean	forcesaveprompt;
@@ -5784,6 +5786,8 @@ void CL_Init (void)
 	CSQC_RegisterCvarsAndThings();
 #endif
 	Cvar_Register (&host_speeds, cl_controlgroup);
+	Cvar_Register (&cl_debug_spikes, cl_controlgroup);
+	Cvar_Register (&cl_debug_spike_ms, cl_controlgroup);
 
 	Cvar_Register (&cfg_save_name, cl_controlgroup);
 
@@ -7100,6 +7104,18 @@ double Host_Frame (double time)
 	static qboolean hadwork;
 	unsigned int vrflags;
 	qboolean mustrenderbeforeread;
+	qboolean spike_enabled;
+	double spike_start = 0;
+	double spike_early = 0;
+	double spike_cap = 0;
+	double spike_work = 0;
+	double spike_input = 0;
+	double spike_protocol = 0;
+	double spike_server = 0;
+	double spike_postread = 0;
+	double spike_clienttime = 0;
+	double spike_gfx = 0;
+	double spike_audio = 0;
 
 	RSpeedLocals();
 
@@ -7120,6 +7136,9 @@ double Host_Frame (double time)
 	if (cl.gamespeed<0.1)
 		cl.gamespeed = 1;
 	time *= cl.gamespeed;
+	spike_enabled = !!cl_debug_spikes.ival;
+	if (spike_enabled)
+		spike_start = Sys_DoubleTime();
 
 #ifdef WEBCLIENT
 //	FTP_ClientThink();
@@ -7184,6 +7203,8 @@ double Host_Frame (double time)
 	Plug_Tick();
 #endif
 	NET_Tick();
+	if (spike_enabled)
+		spike_early = Sys_DoubleTime();
 
 /*
 	if (cl_maxfps.value)
@@ -7249,6 +7270,8 @@ double Host_Frame (double time)
 		spare = 0;
 	host_frametime = (realtime-spare - oldrealtime)*cl.gamespeed;
 	oldrealtime = realtime-spare;
+	if (spike_enabled)
+		spike_cap = Sys_DoubleTime();
 
 	if (host_speeds.ival)
 		time0 = Sys_DoubleTime ();	//end-of-idle
@@ -7266,6 +7289,8 @@ double Host_Frame (double time)
 #endif
 		;
 	COM_MainThreadWork();
+	if (spike_enabled)
+		spike_work = Sys_DoubleTime();
 
 //	if (host_frametime > 0.2)
 //		host_frametime = 0.2;
@@ -7279,6 +7304,8 @@ double Host_Frame (double time)
 
 	// process console commands from said click/button events
 	Cbuf_Execute ();
+	if (spike_enabled)
+		spike_input = Sys_DoubleTime();
 
 #ifdef HAVE_SERVER
 	if (isDedicated)	//someone changed it.
@@ -7350,6 +7377,8 @@ double Host_Frame (double time)
 	CL_AllowIndependantSendCmd(true);
 
 	RSpeedEnd(RSPEED_PROTOCOL);
+	if (spike_enabled)
+		spike_protocol = Sys_DoubleTime();
 
 #ifdef HAVE_SERVER
 	if (sv.state)
@@ -7365,6 +7394,8 @@ double Host_Frame (double time)
 	else
 		MSV_PollSlaves();
 #endif
+	if (spike_enabled)
+		spike_server = Sys_DoubleTime();
 
 	// fetch results from server... now that we've run it.
 	if (!mustrenderbeforeread)
@@ -7373,8 +7404,12 @@ double Host_Frame (double time)
 		CL_ReadPackets ();
 		CL_AllowIndependantSendCmd(true);
 	}
+	if (spike_enabled)
+		spike_postread = Sys_DoubleTime();
 
 	CL_CalcClientTime();
+	if (spike_enabled)
+		spike_clienttime = Sys_DoubleTime();
 
 	// update video
 	if (host_speeds.ival)
@@ -7426,6 +7461,8 @@ double Host_Frame (double time)
 
 		sh_config.showbatches = false;
 	}
+	if (spike_enabled)
+		spike_gfx = Sys_DoubleTime();
 
 	if (host_speeds.ival)
 		time2 = Sys_DoubleTime ();
@@ -7440,6 +7477,8 @@ double Host_Frame (double time)
 	S_Update ();
 
 	CDAudio_Update();
+	if (spike_enabled)
+		spike_audio = Sys_DoubleTime();
 
 	if (host_speeds.ival)
 	{
@@ -7464,6 +7503,39 @@ double Host_Frame (double time)
 #ifdef QUAKESTATS
 	TP_UpdateAutoStatus();
 #endif
+	if (spike_enabled)
+	{
+		double spike_end = Sys_DoubleTime();
+		double spike_total = (spike_end - spike_start) * 1000.0;
+		double spike_limit = cl_debug_spike_ms.value;
+#ifdef HAVE_SERVER
+		int spike_svstate = sv.state;
+#else
+		int spike_svstate = 0;
+#endif
+		if (spike_limit <= 0)
+			spike_limit = 2.0;
+		if (spike_total >= spike_limit)
+		{
+			Con_Printf(CON_WARNING "[engine-spike] frame=%i total=%.3fms hostft=%.3fms early=%.3f cap=%.3f work=%.3f input=%.3f protocol=%.3f server=%.3f postread=%.3f clienttime=%.3f gfx=%.3f audio=%.3f tail=%.3f state=%i sv=%i\n",
+				host_framecount,
+				spike_total,
+				host_frametime * 1000.0,
+				(spike_early - spike_start) * 1000.0,
+				(spike_cap - spike_early) * 1000.0,
+				(spike_work - spike_cap) * 1000.0,
+				(spike_input - spike_work) * 1000.0,
+				(spike_protocol - spike_input) * 1000.0,
+				(spike_server - spike_protocol) * 1000.0,
+				(spike_postread - spike_server) * 1000.0,
+				(spike_clienttime - spike_postread) * 1000.0,
+				(spike_gfx - spike_clienttime) * 1000.0,
+				(spike_audio - spike_gfx) * 1000.0,
+				(spike_end - spike_audio) * 1000.0,
+				cls.state,
+				spike_svstate);
+		}
+	}
 
 	host_framecount++;
 	cl.lasttime = cl.time;
