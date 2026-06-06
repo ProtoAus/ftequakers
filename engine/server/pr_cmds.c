@@ -482,6 +482,29 @@ static pbool PDECL SV_BadField(pubprogfuncs_t *inst, edict_t *foo, const char *k
 	if (!svs.numprogs)
 		return true;
 
+	//QC fallback hook — let the progs handle arbitrary unknown keys
+	//on a per-entity basis.  Looks up
+	//   void(string keyname, string value) ED_ParseUnknownEpair
+	//in the loaded progs; if present, calls it with self bound to the
+	//entity being parsed.  Used by entities like multi_manager that
+	//store mapper-supplied <targetname>=<delay> pairs as arbitrary
+	//keyvalues (HL/Source convention via SmartEdit-disabled mode).
+	//If the QC handler exists we always return true to suppress the
+	//"is not a field" warning — the QC code is responsible for
+	//ignoring keys it doesn't care about.
+	{
+		func_t hookfn = PR_FindFunction(inst, "ED_ParseUnknownEpair", PR_ANY);
+		if (hookfn)
+		{
+			globalvars_t *pr_globals = PR_globals(inst, PR_CURRENT);
+			pr_global_struct->self = EDICT_TO_PROG(inst, foo);
+			G_INT(OFS_PARM0) = (int)PR_TempString(inst, keyname);
+			G_INT(OFS_PARM1) = (int)PR_TempString(inst, value);
+			PR_ExecuteProgram(inst, hookfn);
+			return true;
+		}
+	}
+
 	return false;
 }
 
