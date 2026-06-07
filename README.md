@@ -60,14 +60,30 @@ default to the original engine behaviour, so a stock setup is unchanged.
 
 ## Building
 
-Same as upstream FTEQW (see the `documentation` folder). This fork is
-built with MSYS2 **UCRT64** (gcc). From `engine/`:
+Built with MSYS2 **UCRT64** (gcc). Open the *MSYS2 UCRT64* shell and run from
+`engine/`:
 
-    make m-rel sv-rel FTE_TARGET=win64 CC=gcc CXX=g++ -j14
+```sh
+# Engine: client fteqw64.exe + dedicated server fteqwsv64.exe
+make clean m-rel sv-rel FTE_TARGET=win64 \
+    CFLAGS="-O3 -march=x86-64-v2 -flto=14" \
+    LDFLAGS="-static -flto=14" \
+    OPTIM_RELEASE="-O3" \
+    CC=gcc CXX=g++ PKGCONFIG=pkg-config -j14
+```
 
-The `cod` and `hl2` asset plugins build separately under `plugins/` and
-must be rebuilt from this same tree so their engine ABI matches the
-executable.
+Drop `clean` for a fast incremental rebuild after a small change (only the
+touched files recompile, then it relinks). Note: the old `PLUGINS_STATIC="ode"`
+token did nothing — it is not a real Makefile variable — so it has been removed.
+
+```sh
+# Asset plugins (cod + hl2): build from THIS tree so the ABI matches the exe
+make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="cod hl2" CC=gcc CXX=g++
+```
+
+The plugin DLLs land in `engine/release/`; copy `fteplug_cod_x64.dll` and
+`fteplug_hl2_x64.dll` next to the executable. Rebuild them whenever the
+engine↔plugin ABI changes. See the `documentation` folder for more.
 
 ## Based on FTEQW — credits & license
 
