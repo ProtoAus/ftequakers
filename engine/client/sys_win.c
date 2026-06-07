@@ -2006,7 +2006,10 @@ void Sys_FramePacedWait(double seconds)
 	}
 
 	/* Spin out the final sub-millisecond sliver for precise wake. */
-	while (Sys_DoubleTime() < target - 5e-5)
+	/* Spin all the way to the boundary (not a margin short): the engine limiter
+	 * only renders once realtime reaches it, so landing early just makes it
+	 * busy-loop the remainder in tiny waits that flood the pacing stats. */
+	while (Sys_DoubleTime() < target)
 		YieldProcessor();
 
 	/* Record wait error for sys_framepacing_stats. */
