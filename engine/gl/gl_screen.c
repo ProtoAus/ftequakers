@@ -234,7 +234,10 @@ qboolean GLSCR_UpdateScreen (void)
 	{
 #if defined(_WIN32) && !defined(FTE_SDL)
 		extern void Sys_FramePacePresent(void);
-		Sys_FramePacePresent();	//sys_framepacing 4: hold the flip to the present grid (no-op in other modes)
+		extern qboolean Sys_FramePacePresentActive(void);
+		if (Sys_FramePacePresentActive())
+			qglFinish();		//drain the GPU queue first, so the paced flip below IS the real present and the GPU backlog can't sawtooth the cadence
+		Sys_FramePacePresent();	//sys_framepacing 4: hold the now-complete flip to the present grid (no-op in other modes)
 #endif
 		RSpeedMark();
 		VID_SwapBuffers();
