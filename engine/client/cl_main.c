@@ -7097,14 +7097,14 @@ void SNDDMA_SetUnderWater(qboolean underwater);
 #if defined(_WIN32) && !defined(FTE_SDL)
 extern qboolean Sys_FramePacingActive(void);
 extern qboolean Sys_FramePacingAnchor(void);
-extern double   Sys_FramePaceAnchorDelay(double fps, double now, double frameref);
+extern double   Sys_FramePaceAnchorDelay(double interval, double now, double frameref);
 #define FRAMEPACING_ACTIVE() Sys_FramePacingActive()
 #define FRAMEPACING_ANCHOR() Sys_FramePacingAnchor()
-#define FRAMEPACING_ANCHORDELAY(fps, now, ref) Sys_FramePaceAnchorDelay(fps, now, ref)
+#define FRAMEPACING_ANCHORDELAY(interval, now, ref) Sys_FramePaceAnchorDelay(interval, now, ref)
 #else
 #define FRAMEPACING_ACTIVE() false
 #define FRAMEPACING_ANCHOR() false
-#define FRAMEPACING_ANCHORDELAY(fps, now, ref) (1.0 / (fps) - ((now) - (ref)))
+#define FRAMEPACING_ANCHORDELAY(interval, now, ref) ((interval) - ((now) - (ref)))
 #endif
 
 double Host_Frame (double time)
@@ -7272,11 +7272,16 @@ double Host_Frame (double time)
 		spare = CL_FilterTime((realtime - oldrealtime)*1000, maxfps, 1.5, maxfpsignoreserver);
 		if (!spare)
 		{
+			//Pace to the SAME frame-due threshold CL_FilterTime enforces (it uses
+			//ceil(1000/fps)ms unless it's ignoring the server), so the paced wait lands
+			//exactly on the render boundary instead of waiting short and then busy-spinning
+			//the leftover ceil() remainder every frame (which also floods the pacing stats).
+			double frameinterval = maxfpsignoreserver ? (1.0 / maxfps) : (ceil(1000.0 / maxfps) / 1000.0);
 			while(COM_DoWork(0, false))
 				;
-			if (FRAMEPACING_ANCHOR())	//mode 3: wait to an absolute time grid instead of relative-to-last-frame, to shed the limiter's residual drift
-				return FRAMEPACING_ANCHORDELAY(maxfps, realtime, oldrealtime);
-			return (cl_yieldcpu.ival || vid.isminimized || idle || FRAMEPACING_ACTIVE())? (1.0 / maxfps - (realtime - oldrealtime)) : 0;
+			if (FRAMEPACING_ANCHOR())	//mode 3: wait to an absolute time grid instead of relative-to-last-frame
+				return FRAMEPACING_ANCHORDELAY(frameinterval, realtime, oldrealtime);
+			return (cl_yieldcpu.ival || vid.isminimized || idle || FRAMEPACING_ACTIVE())? (frameinterval - (realtime - oldrealtime)) : 0;
 		}
 		if (spare > cl_maxfps_slop.ival)
 			spare = cl_maxfps_slop.ival;

@@ -1831,7 +1831,7 @@ static double   g_pace_next_sanitize = 0;
 
 /* Mode-3 absolute-grid anchor state (renderer-agnostic, pure timing). */
 static double   g_anchor_base = 0;   /* engine-realtime of grid slot 0 */
-static double   g_anchor_fps  = 0;   /* fps the grid was built for */
+static double   g_anchor_tpf  = 0;   /* seconds-per-frame the grid was built for */
 
 /* Diagnostic ring: wait-error samples in microseconds.  Each call to
  * Sys_FramePacedWait records (actual_elapsed - requested_wait), so
@@ -2036,22 +2036,22 @@ qboolean Sys_FramePacingAnchor(void)
 }
 
 /* Returns how long to wait (seconds, in the engine's realtime base) so the next
- * frame lands on the absolute grid.  `now`/`frameref` are Host_Frame's
- * realtime/oldrealtime.  Snaps the last frame to its nearest grid slot and aims
- * one slot past it, so repeated calls within a frame converge instead of jumping
- * (and a long stall just drops to the next slot rather than bursting). */
-double Sys_FramePaceAnchorDelay(double fps, double now, double frameref)
+ * frame lands on the absolute grid.  `tpf` is the seconds-per-frame the caller
+ * (Host_Frame) computes to match the engine limiter's own frame-due threshold;
+ * `now`/`frameref` are Host_Frame's realtime/oldrealtime.  Snaps the last frame
+ * to its nearest grid slot and aims one slot past it, so repeated calls within a
+ * frame converge instead of jumping (a long stall just drops to the next slot). */
+double Sys_FramePaceAnchorDelay(double tpf, double now, double frameref)
 {
-	double tpf = (fps > 0) ? 1.0 / fps : 0;
 	double slot, target;
 	if (tpf <= 0)
 		return 0;
-	/* (re)establish the grid on first use / fps change, and re-anchor every few
-	 * minutes so double precision can't accumulate visible error. */
-	if (fps != g_anchor_fps || g_anchor_base <= 0 || (frameref - g_anchor_base) > 600.0)
+	/* (re)establish the grid on first use / interval change, and re-anchor every
+	 * few minutes so double precision can't accumulate visible error. */
+	if (tpf != g_anchor_tpf || g_anchor_base <= 0 || (frameref - g_anchor_base) > 600.0)
 	{
 		g_anchor_base = frameref;
-		g_anchor_fps  = fps;
+		g_anchor_tpf  = tpf;
 	}
 	slot   = floor((frameref - g_anchor_base) / tpf + 0.5);	/* nearest slot to last frame */
 	target = g_anchor_base + (slot + 1.0) * tpf;				/* one slot past it */
@@ -2069,7 +2069,7 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_pace_err_count = 0;
 	for (i = 0; i < PACE_ERR_RING; i++) g_pace_err_ring[i] = 0;
 	g_anchor_base = 0;	/* re-establish the mode-3 grid on next use */
-	g_anchor_fps  = 0;
+	g_anchor_tpf  = 0;
 	if (mode > 0)
 	{
 		Sys_FramePacing_Init();   /* idempotent */
@@ -2120,8 +2120,8 @@ static void Sys_FramePacing_Stats_f(void)
 	if (mode >= 3)
 	{
 		Con_Printf("\nAbsolute-grid anchor:\n");
-		Con_Printf("  grid fps           : %.2f\n", g_anchor_fps);
-		Con_Printf("  seconds per frame  : %.5f\n", g_anchor_fps > 0 ? 1.0 / g_anchor_fps : 0.0);
+		Con_Printf("  grid fps           : %.2f\n", g_anchor_tpf > 0 ? 1.0 / g_anchor_tpf : 0.0);
+		Con_Printf("  seconds per frame  : %.5f\n", g_anchor_tpf);
 	}
 
 	Con_Printf("\nWait accuracy (last %i frames):\n", g_pace_err_count);
