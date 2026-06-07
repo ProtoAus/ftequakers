@@ -68,6 +68,7 @@ void RSpeedShow(void)
 	RSpNames[RSPEED_RTLIGHTS]		= "  RT Lights";
 	RSpNames[RSPEED_TRANSPARENTS]	= "  Transparent Batches";
 	RSpNames[RSPEED_PARTICLES]		= "  Particle phys/sort";
+	RSpNames[RSPEED_PARTICLES_INTEGRATE]	= "   Particle integrate(mt)";
 	RSpNames[RSPEED_PARTICLESDRAW]	= "  Particle drawing";
 	RSpNames[RSPEED_2D]				= " 2d Elements";
 	RSpNames[RSPEED_PALETTEFLASHES]	= " Palette flashes";

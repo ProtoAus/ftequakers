@@ -441,6 +441,9 @@ extern cvar_t r_part_contentswitch;
 extern cvar_t r_part_density;
 extern cvar_t r_part_maxparticles;
 extern cvar_t r_part_maxdecals;
+extern cvar_t r_part_threaded;
+extern cvar_t r_part_threaded_min;
+extern cvar_t r_part_threaded_verify;
 
 static float particletime;
 
@@ -6942,6 +6945,373 @@ static void R_AddTexturedParticle(scenetris_t *t, particle_t *p, plooks_t *type)
 	t->numidx += 6;
 }
 
+//=========================================================================
+// Multi-core particle integrate (opt-in via r_part_threaded).
+//
+// The per-type integrate (org += vel*dt, friction, gravity, flurry, angle,
+// viewspace transform and the colour/alpha/scale ramps) is embarrassingly
+// parallel: every particle reads only itself plus hoisted per-type constants
+// and read-only globals, and writes only itself. We split the survivor list
+// into disjoint contiguous spans (chunks) and integrate them on the engine's
+// existing loader worker pool, with the main thread taking one chunk itself.
+//
+// Correctness is the whole point here, so:
+//  - only types with emit<0 are threaded (no per-particle trail/spawn that
+//    would have to interleave with the physics);
+//  - the kill-sweep, collision, spawning and draw stay strictly serial;
+//  - flurry's rand() (not thread-safe) is replaced by a per-chunk LCG;
+//  - the barrier is a targeted atomic counter, NOT COM_WorkerFullSync (which
+//    would run unrelated WG_MAIN work, e.g. model/GL finalisation, mid-render);
+//  - r_part_threaded_verify runs both the threaded and a single-chunk serial
+//    integrate from the same snapshot and bit-compares them every frame.
+//=========================================================================
+#define PS_MAXCHUNKS 16		//matches WORKERTHREADS; main thread is one extra chunk
+
+static unsigned int ps_seed = 0x12345;	//varies the per-chunk flurry LCG across frames
+
+//thread-safe, deterministic-per-seed replacement for crandom() in the worker.
+//flurry is cosmetic jitter ("should probably be partially synced"), so an
+//independent stream is fine; verify forces flurry off so it never affects the check.
+static float ps_crand(unsigned int *seed)
+{
+	*seed = *seed * 1103515245u + 12345u;
+	return (float)((*seed >> 8) & 0xffffff) * (2.0f/(float)0xffffff) - 1.0f;
+}
+
+typedef struct
+{
+	particle_t	*first;		//first particle of this chunk
+	int			count;		//how many nodes this chunk owns (disjoint span)
+	part_type_t	*type;		//read-only for the whole integrate
+	float		pframetime;
+	float		grav;
+	vec3_t		friction;
+	float		*viewtranslation;	//read-only; lives on the dispatcher's stack
+	int			doflurry;
+	unsigned int seed;
+	volatile qatomic32_t *pending;	//decremented when done (NULL = main/inline chunk)
+} ps_chunk_t;
+
+//The integrate body, lifted verbatim from the old fused loop (7420-7492). The
+//ONLY changes are: consts come from the chunk, crandom()->ps_crand(), and it
+//walks exactly 'count' nodes so chunks never overlap. No list/heap/global writes.
+static void PS_IntegrateChunk(void *vctx, void *data, size_t a, size_t b)
+{
+	ps_chunk_t *c = vctx;
+	part_type_t *type = c->type;
+	const float pframetime = c->pframetime;
+	const float grav = c->grav;
+	const float fr0 = c->friction[0], fr1 = c->friction[1], fr2 = c->friction[2];
+	float *viewtranslation = c->viewtranslation;
+	const int doflurry = c->doflurry && type->flurry;
+	unsigned int seed = c->seed;
+	particle_t *p = c->first;
+	ramp_t *ramp;
+	int rampind;
+	int i;
+
+	for (i = 0; i < c->count; i++, p = p->next)
+	{
+		if (type->flags & PT_VELOCITY)
+		{
+			p->org[0] += p->vel[0]*pframetime;
+			p->org[1] += p->vel[1]*pframetime;
+			p->org[2] += p->vel[2]*pframetime;
+			if (type->flags & PT_FRICTION)
+			{
+				p->vel[0] *= fr0;
+				p->vel[1] *= fr1;
+				p->vel[2] *= fr2;
+			}
+			if (doflurry)
+			{
+				p->vel[0] += ps_crand(&seed) * type->flurry;
+				p->vel[1] += ps_crand(&seed) * type->flurry;
+			}
+			p->vel[2] -= grav;
+		}
+
+		if (type->viewspacefrac)
+		{
+			vec3_t tmp;
+			Matrix4x4_CM_Transform3(viewtranslation, p->org, tmp);
+			VectorInterpolate(p->org, type->viewspacefrac, tmp, p->org);
+			Matrix4x4_CM_Transform3x3(viewtranslation, p->vel, tmp);
+			VectorInterpolate(p->vel, type->viewspacefrac, tmp, p->vel);
+		}
+
+		p->angle += p->rotationspeed*pframetime;
+
+		switch (type->rampmode)
+		{
+		case RAMP_NEAREST:
+			rampind = (int)(type->rampindexes * (type->die - (p->die - particletime)) / type->die);
+			if (rampind >= type->rampindexes)
+				rampind = type->rampindexes - 1;
+			ramp = type->ramp + rampind;
+			VectorCopy(ramp->rgb, p->rgba);
+			p->rgba[3] = ramp->alpha;
+			p->scale = ramp->scale;
+			break;
+		case RAMP_LERP:
+			{
+				float frac = (type->rampindexes * (type->die - (p->die - particletime)) / type->die);
+				int s1, s2;
+				s1 = min(type->rampindexes-1, frac);
+				s2 = min(type->rampindexes-1, s1+1);
+				frac -= s1;
+				VectorInterpolate(type->ramp[s1].rgb, frac, type->ramp[s2].rgb, p->rgba);
+				FloatInterpolate(type->ramp[s1].alpha, frac, type->ramp[s2].alpha, p->rgba[3]);
+				FloatInterpolate(type->ramp[s1].scale, frac, type->ramp[s2].scale, p->scale);
+			}
+			break;
+		case RAMP_DELTA:	//particle ramps
+			rampind = (int)(type->rampindexes * (type->die - (p->die - particletime)) / type->die);
+			if (rampind >= type->rampindexes)
+				rampind = type->rampindexes - 1;
+			ramp = type->ramp + rampind;
+			VectorMA(p->rgba, pframetime, ramp->rgb, p->rgba);
+			p->rgba[3] -= pframetime*ramp->alpha;
+			p->scale += pframetime*ramp->scale;
+			break;
+		case RAMP_NONE:	//particle changes acording to it's preset properties.
+			if (particletime < (p->die-type->die+type->rgbchangetime))
+			{
+				p->rgba[0] += pframetime*type->rgbchange[0];
+				p->rgba[1] += pframetime*type->rgbchange[1];
+				p->rgba[2] += pframetime*type->rgbchange[2];
+			}
+			p->rgba[3] += pframetime*type->alphachange;
+			p->scale += pframetime*type->scaledelta;
+		}
+	}
+
+	if (c->pending)
+		FTE_Atomic32_Dec(c->pending);
+}
+
+//Partition the (already kill-swept) survivor list into 'nchunks' disjoint spans
+//and integrate them. nchunks==1 -> pure inline serial (the verify reference).
+//Otherwise chunk 0 runs on this (main) thread while 1..n-1 go to loader workers;
+//we then spin on an atomic counter until the workers are done. The spin is bounded
+//by the integrate time (workers run on free cores) and gives the happens-before
+//(the atomic dec/read pair is a full barrier) so Pass 2 sees every worker's writes.
+static void PS_RunIntegrate(part_type_t *type, int total, float pframetime, float grav, vec3_t friction, float *viewtranslation, int doflurry, int nchunks)
+{
+	ps_chunk_t chunks[PS_MAXCHUNKS];
+	volatile qatomic32_t pending;
+	particle_t *p = type->particles;
+	int base, rem, i;
+
+	if (nchunks < 1)
+		nchunks = 1;
+	if (nchunks > PS_MAXCHUNKS)
+		nchunks = PS_MAXCHUNKS;
+	if (nchunks > total)
+		nchunks = total;
+	base = total / nchunks;
+	rem  = total % nchunks;
+
+	for (i = 0; i < nchunks; i++)
+	{
+		int cnt = base + (i < rem ? 1 : 0);
+		int k;
+		chunks[i].first = p;
+		chunks[i].count = cnt;
+		chunks[i].type = type;
+		chunks[i].pframetime = pframetime;
+		chunks[i].grav = grav;
+		VectorCopy(friction, chunks[i].friction);
+		chunks[i].viewtranslation = viewtranslation;
+		chunks[i].doflurry = doflurry;
+		chunks[i].seed = ps_seed + (unsigned)i*747796405u;
+		chunks[i].pending = NULL;
+		for (k = 0; k < cnt; k++)
+			p = p->next;
+	}
+	ps_seed++;
+
+	if (nchunks == 1)
+	{	//serial: just run it here, no atomics, no workers.
+		PS_IntegrateChunk(&chunks[0], NULL, 0, 0);
+		return;
+	}
+
+	pending = nchunks - 1;	//worker chunks only; chunk 0 is ours
+	for (i = 1; i < nchunks; i++)
+	{
+		chunks[i].pending = &pending;
+		COM_AddWork(WG_LOADER, PS_IntegrateChunk, &chunks[i], NULL, 0, 0);
+	}
+	PS_IntegrateChunk(&chunks[0], NULL, 0, 0);	//main thread pulls its weight
+	while (pending > 0)
+		{ }	//barrier: wait for the worker chunks (chunks own disjoint spans, no locks needed)
+}
+
+//Pass 0: trim every dead particle (die < particletime) up-front. This merges the
+//old interleaved head-kill + mid-loop kill into one serial forward pass; because
+//the integrate never kills, the survivor set and the kill_list prepend order are
+//identical to the original code.
+static void PS_KillSweep(part_type_t *type, particle_t **pkill_list, particle_t **pkill_first)
+{
+	particle_t *p, *kill;
+	particle_t *kill_list = *pkill_list, *kill_first = *pkill_first;
+	qboolean trail = (type->emittime < 0);
+
+	for ( ;; )
+	{	//leading dead nodes
+		kill = type->particles;
+		if (kill && kill->die < particletime)
+		{
+			if (trail)
+				P_DelinkTrailstate(&kill->state.trailstate);
+			type->particles = kill->next;
+			kill->next = kill_list;
+			kill_list = kill;
+			if (!kill_first)
+				kill_first = kill;
+			continue;
+		}
+		break;
+	}
+	for (p = type->particles; p; p = p->next)
+	{	//dead nodes anywhere after a survivor
+		for ( ;; )
+		{
+			kill = p->next;
+			if (kill && kill->die < particletime)
+			{
+				if (trail)
+					P_DelinkTrailstate(&kill->state.trailstate);
+				p->next = kill->next;
+				kill->next = kill_list;
+				kill_list = kill;
+				if (!kill_first)
+					kill_first = kill;
+				continue;
+			}
+			break;
+		}
+	}
+
+	*pkill_list = kill_list;
+	*pkill_first = kill_first;
+}
+
+//r_part_threaded_verify: prove the threaded integrate is bit-identical to serial.
+//Snapshot the survivors, run the real threaded integrate, capture it, restore the
+//snapshot, run a single-chunk serial integrate (same function, same inputs, just
+//un-chunked), and bit-compare. Flurry is forced off so both paths are fully
+//deterministic; a match is therefore bit-for-bit. The particles are left holding
+//the SERIAL result, so even a (hypothetical) threaded bug can't reach the screen.
+static float *ps_vbuf;
+static size_t ps_vbufsz;
+#define PS_VFLOATS 12	//org[3] vel[3] angle rgba[4] scale
+static void PS_SnapParticle(float *d, particle_t *p)
+{
+	d[0]=p->org[0]; d[1]=p->org[1]; d[2]=p->org[2];
+	d[3]=p->vel[0]; d[4]=p->vel[1]; d[5]=p->vel[2];
+	d[6]=p->angle;
+	d[7]=p->rgba[0]; d[8]=p->rgba[1]; d[9]=p->rgba[2]; d[10]=p->rgba[3];
+	d[11]=p->scale;
+}
+static void PS_RestoreParticle(particle_t *p, const float *d)
+{
+	p->org[0]=d[0]; p->org[1]=d[1]; p->org[2]=d[2];
+	p->vel[0]=d[3]; p->vel[1]=d[4]; p->vel[2]=d[5];
+	p->angle=d[6];
+	p->rgba[0]=d[7]; p->rgba[1]=d[8]; p->rgba[2]=d[9]; p->rgba[3]=d[10];
+	p->scale=d[11];
+}
+static void PS_IntegrateVerify(part_type_t *type, int total, float pframetime, float grav, vec3_t friction, float *viewtranslation, int nchunks)
+{
+	static const char *fieldname[PS_VFLOATS] =
+		{"org.x","org.y","org.z","vel.x","vel.y","vel.z","angle","rgba.r","rgba.g","rgba.b","rgba.a","scale"};
+	size_t need = (size_t)total * (2*PS_VFLOATS) * sizeof(float);
+	float *save, *thr, *d;
+	particle_t *p;
+	int i, mism = 0;
+
+	if (need > ps_vbufsz)
+	{
+		ps_vbuf = BZ_Realloc(ps_vbuf, need);
+		ps_vbufsz = need;
+	}
+	save = ps_vbuf;
+	thr  = ps_vbuf + (size_t)total*PS_VFLOATS;
+
+	for (d = save, p = type->particles; p; p = p->next, d += PS_VFLOATS)
+		PS_SnapParticle(d, p);					//snapshot inputs
+
+	PS_RunIntegrate(type, total, pframetime, grav, friction, viewtranslation, 0/*flurry off*/, nchunks);
+
+	for (d = thr, p = type->particles; p; p = p->next, d += PS_VFLOATS)
+		PS_SnapParticle(d, p);					//capture threaded result
+
+	for (d = save, p = type->particles; p; p = p->next, d += PS_VFLOATS)
+		PS_RestoreParticle(p, d);				//restore inputs
+
+	PS_RunIntegrate(type, total, pframetime, grav, friction, viewtranslation, 0/*flurry off*/, 1/*serial ref*/);
+
+	for (d = thr, i = 0, p = type->particles; p; p = p->next, i++, d += PS_VFLOATS)
+	{
+		float live[PS_VFLOATS];
+		PS_SnapParticle(live, p);				//serial result, now live
+		if (memcmp(d, live, sizeof(live)))
+		{
+			if (mism < 4)
+			{
+				int k;
+				for (k = 0; k < PS_VFLOATS; k++)
+					if (d[k] != live[k])
+						break;
+				if (k == PS_VFLOATS) k = 0;
+				Con_Printf(CON_ERROR"particle integrate MISMATCH type=%s p=%i %s serial=%.9g threaded=%.9g\n",
+					type->name, i, fieldname[k], live[k], d[k]);
+			}
+			mism++;
+		}
+	}
+	if (mism)
+		Con_Printf(CON_ERROR"particle integrate verify: %i/%i particles MISMATCH (type=%s, chunks=%i)\n", mism, total, type->name, nchunks);
+	else
+		Con_DPrintf("particle integrate verify OK (type=%s, n=%i, chunks=%i)\n", type->name, total, nchunks);
+}
+
+//Pass 1 dispatcher. Returns true if it performed the integrate (so the caller's
+//Pass-2 loop must NOT integrate inline), false if it declined (threading off / no
+//workers / below r_part_threaded_min) so the caller integrates inline as before.
+static qboolean PS_IntegrateType(part_type_t *type, float grav, vec3_t friction, float *viewtranslation, int doflurry)
+{
+	int total, nworkers, nchunks;
+	particle_t *p;
+
+	if (!r_part_threaded.ival)
+		return false;
+	nworkers = COM_HasWorkers(WG_LOADER);
+	if (nworkers < 1)
+		return false;					//no worker pool -> nothing to gain, let the loop do it
+
+	for (total = 0, p = type->particles; p; p = p->next)
+		total++;
+	if (total < 2)
+		return false;
+	if (!r_part_threaded_verify.ival && total < r_part_threaded_min.ival)
+		return false;					//too few to be worth the fork-join (verify ignores this)
+
+	if (nworkers > PS_MAXCHUNKS-1)
+		nworkers = PS_MAXCHUNKS-1;
+	nchunks = nworkers + 1;				//+1 for the main thread's own chunk
+	if (nchunks > total)
+		nchunks = total;
+
+	if (r_part_threaded_verify.ival)
+		PS_IntegrateVerify(type, total, pframetime, grav, friction, viewtranslation, nchunks);
+	else
+		PS_RunIntegrate(type, total, pframetime, grav, friction, viewtranslation, doflurry, nchunks);
+	return true;
+}
+
 static void PScript_DrawParticleTypes (void)
 {
 	float viewtranslation[16];
@@ -6956,7 +7326,7 @@ static void PScript_DrawParticleTypes (void)
 	vec3_t oldorg;
 	vec3_t stop, normal;
 	part_type_t *type;
-	particle_t		*p, *kill;
+	particle_t		*p;
 	clippeddecal_t *d, *dkill;
 	ramp_t *ramp;
 	float grav;
@@ -6973,6 +7343,8 @@ static void PScript_DrawParticleTypes (void)
 	static float oldtime;
 	static float flurrytime;
 	qboolean doflurry;
+	qboolean threaded;
+	double rsp_int = 0;	//isolates the threaded Pass-1 integrate time (RSPEED_PARTICLES_INTEGRATE)
 	int batchflags;
 	int i;
 	RSpeedMark();
@@ -7337,86 +7709,25 @@ static void PScript_DrawParticleTypes (void)
 			goto endtype;
 		}
 
-		//kill off early ones.
-		if (type->emittime < 0)
-		{
-			for ( ;; )
-			{
-				kill = type->particles;
-				if (kill && kill->die < particletime)
-				{
-					P_DelinkTrailstate(&kill->state.trailstate);
-					type->particles = kill->next;
-					kill->next = kill_list;
-					kill_list = kill;
-					if (!kill_first)
-						kill_first = kill;
-					continue;
-				}
-				break;
-			}
-		}
-		else
-		{
-			for ( ;; )
-			{
-				kill = type->particles;
-				if (kill && kill->die < particletime)
-				{
-					type->particles = kill->next;
-					kill->next = kill_list;
-					kill_list = kill;
-					if (!kill_first)
-						kill_first = kill;
-					continue;
-				}
-				break;
-			}
-		}
+		//Pass 0: trim every dead particle now (was the interleaved head + mid-loop kill).
+		PS_KillSweep(type, &kill_list, &kill_first);
 
 		grav = type->gravity*pframetime;
 		friction[0] = 1 - type->friction[0]*pframetime;
 		friction[1] = 1 - type->friction[1]*pframetime;
 		friction[2] = 1 - type->friction[2]*pframetime;
 
+		//Pass 1: integrate the survivors on the worker pool (emit<0 types only, so no
+		//per-particle trail/spawn has to interleave). false -> integrate inline below.
+		if (r_speeds.ival>1) rsp_int = Sys_DoubleTime()*1000000;
+		threaded = (type->emit < 0) && PS_IntegrateType(type, grav, friction, viewtranslation, doflurry);
+		if (r_speeds.ival>1) rspeeds[RSPEED_PARTICLES_INTEGRATE] += Sys_DoubleTime()*1000000 - rsp_int;
+
+		//Pass 2: collision + draw, plus the inline integrate when we did NOT thread.
 		for (p=type->particles ; p ; p=p->next)
 		{
-			if (type->emittime < 0)
+			if (!threaded)
 			{
-				for ( ;; )
-				{
-					kill = p->next;
-					if (kill && kill->die < particletime)
-					{
-						P_DelinkTrailstate(&kill->state.trailstate);
-						p->next = kill->next;
-						kill->next = kill_list;
-						kill_list = kill;
-						if (!kill_first)
-							kill_first = kill;
-						continue;
-					}
-					break;
-				}
-			}
-			else
-			{
-				for ( ;; )
-				{
-					kill = p->next;
-					if (kill && kill->die < particletime)
-					{
-						p->next = kill->next;
-						kill->next = kill_list;
-						kill_list = kill;
-						if (!kill_first)
-							kill_first = kill;
-						continue;
-					}
-					break;
-				}
-			}
-
 			VectorCopy(p->org, oldorg);
 			if (type->flags & PT_VELOCITY)
 			{
@@ -7501,6 +7812,7 @@ static void PScript_DrawParticleTypes (void)
 					P_RunParticleEffectType(p->org, p->vel, 1, type->emit);
 				}
 			}
+			}	//end if (!threaded): for threaded types Pass 1 already integrated, and emit<0 means no trail/spawn here
 
 			if (type->cliptype>=0 && r_bouncysparks.ival)
 			{

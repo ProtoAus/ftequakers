@@ -52,6 +52,22 @@ default to the original engine behaviour, so a stock setup is unchanged.
 - **`cl_debug_spikes`** — logs a per-stage timing breakdown whenever a
   client frame exceeds `cl_debug_spike_ms` (default 2 ms), to pin a
   hitch to a specific stage.
+- **`r_part_threaded`** — spreads the scripted-particle *integrate* (the
+  per-particle move/friction/gravity/ramp pass — the hot loop in heavy
+  weather) across the engine's worker threads (`worker_count`, default 4)
+  instead of one core. Only particle types with no per-particle trail or
+  spawn are threaded; the kill-sweep, collision, spawning and drawing stay
+  strictly serial, so behaviour is unchanged. `0` = stock single-core
+  (default). `r_part_threaded_min` (default 2000) is the per-type particle
+  count below which a type stays inline (fork/join isn't worth it).
+- **`r_part_threaded_verify`** — correctness self-check: each frame it runs
+  *both* the threaded and a single-core integrate from the same snapshot and
+  bit-compares them (flurry forced off so both are deterministic), then uses
+  the single-core result for the frame. With `developer 1` it prints
+  `verify OK`; a mismatch prints a red line with the exact particle and
+  field. Requires `r_part_threaded 1`. Leave it off for normal play; turn it
+  on to prove the threaded path matches. `r_speeds 2` shows the isolated
+  `Particle integrate(mt)` time — sweep `worker_count` to watch it fall.
 
 ### Menu / UI
 
@@ -68,11 +84,17 @@ Built with MSYS2 **UCRT64** (gcc). Open the *MSYS2 UCRT64* shell and run from
 ```sh
 # Engine: client fteqw64.exe + dedicated server fteqwsv64.exe
 make clean m-rel sv-rel FTE_TARGET=win64 \
-    CFLAGS="-O3 -march=x86-64-v2 -flto=14" \
+    CFLAGS="-O3 -march=x86-64-v3 -flto=14" \
     LDFLAGS="-static -flto=14" \
     OPTIM_RELEASE="-O3" \
     CC=gcc CXX=g++ PKGCONFIG=pkg-config -j14
 ```
+
+`-march=x86-64-v3` enables AVX2/FMA codegen engine-wide. **It requires a
+Haswell-era (2013+) CPU and will SIGILL on anything older** — there is no
+runtime fallback. Drop back to `-march=x86-64-v2` if you need to run on
+pre-AVX2 hardware (the threaded particle integrate below still works either
+way; it just won't get the AVX2 scalar codegen).
 
 Drop `clean` for a fast incremental rebuild after a small change (only the
 touched files recompile, then it relinks). Note: the old `PLUGINS_STATIC="ode"`
