@@ -7089,6 +7089,18 @@ extern cvar_t cl_netfps;
 void CL_StartCinematicOrMenu(void);
 int		nopacketcount;
 void SNDDMA_SetUnderWater(qboolean underwater);
+
+/* When sys_framepacing is active, Host_Frame yields the remaining frame time to
+ * the high-precision paced wait (sys_win.c) instead of busy-waiting, regardless
+ * of cl_yieldcpu.  Only the native win32 build provides the pacer; everywhere
+ * else this is a no-op. */
+#if defined(_WIN32) && !defined(FTE_SDL)
+extern qboolean Sys_FramePacingActive(void);
+#define FRAMEPACING_ACTIVE() Sys_FramePacingActive()
+#else
+#define FRAMEPACING_ACTIVE() false
+#endif
+
 double Host_Frame (double time)
 {
 	static double		time0 = 0;
@@ -7256,7 +7268,7 @@ double Host_Frame (double time)
 		{
 			while(COM_DoWork(0, false))
 				;
-			return (cl_yieldcpu.ival || vid.isminimized || idle)? (1.0 / maxfps - (realtime - oldrealtime)) : 0;
+			return (cl_yieldcpu.ival || vid.isminimized || idle || FRAMEPACING_ACTIVE())? (1.0 / maxfps - (realtime - oldrealtime)) : 0;
 		}
 		if (spare > cl_maxfps_slop.ival)
 			spare = cl_maxfps_slop.ival;

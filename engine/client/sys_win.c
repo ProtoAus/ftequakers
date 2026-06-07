@@ -1550,8 +1550,8 @@ static cvar_t sys_priority = CVARFCD("sys_highpriority", "0", CVAR_NOTFROMSERVER
 static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, Sys_ClockType_Changed, "Controls which system clock to base timings from.\n0: auto\n1: timeGetTime (low precision).\n2: QueryPerformanceCounter (may drift, desync between cpu cores, or run fast with longer uptimes depending on cpu(s) and windows version).\n3: QueryPerformanceCounter-with-force-affinity (shouldn't drift, but may result in less cpu time available).");
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
-static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "3", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"SpecialK-style frame pacing.  Default 3 — strictly better than 0/1/2 on every renderer, with graceful fallback to mode 1 behaviour when the D3D11-specific mode-2 path isn't available (e.g. OpenGL).  Set to 0 to revert to the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer hybrid. 2: +DXGI frame-latency waitable object sync (D3D11 only). 3: +absolute-anchor pacing with frame-skip forgive.");
+static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this only makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere).");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FramePacing_Init(void);
@@ -1784,20 +1784,20 @@ static void Sys_ClockPrecision_Changed(cvar_t *var, char *oldval)
 ==================================================================
  SpecialK-style frame pacing layer.
 
- Mode 0 = vanilla FTE (original Sys_Sleep).
- Mode 1 = NtSetTimerResolution (0.5ms) + high-res waitable timer
-          hybrid sleep (timer for bulk, YieldProcessor() spin for
-          final microseconds).
- Mode 2 = (1) + optional DXGI frame-latency waitable-object wait
-          (requires vid_d3d11.c patch; handle read through the
-          D3D11_GetFrameLatencyWaitHandle extern).
- Mode 3 = (2) + absolute-anchor pacing with sub-tick accumulator
-          and frame-skip forgive (prevents post-stutter double-
-          frames and long-run phase drift).
+ The engine limiter (CL_FilterTime + Host_Frame's oldrealtime carry)
+ already decides WHEN each frame is due and is drift-free; this layer
+ only makes the WAIT land on that target precisely.
 
- Cvar live-toggleable. Default 0 for safety: the new code path
- does not run until the user opts in.  All Windows APIs resolved
- via GetProcAddress so the binary still loads on pre-Win10-1803.
+ Mode 0 = vanilla FTE (original Sys_Sleep).
+ Mode 1 = NtSetTimerResolution (~0.5ms) + high-res waitable timer for
+          the bulk of the wait, then a YieldProcessor() spin for the
+          final sub-millisecond sliver.  Works on every renderer.
+ Mode 2 = (1) + the DXGI frame-latency waitable-object wait on D3D11
+          (handle from D3D11_GetFrameLatencyWaitHandle); identical to
+          mode 1 on OpenGL/Vulkan.
+
+ Cvar live-toggleable.  All Windows APIs resolved via GetProcAddress
+ so the binary still loads on pre-Win10-1803.
 ==================================================================
 */
 extern cvar_t cl_maxfps;
@@ -1817,18 +1817,12 @@ static NtQueryTimerResolution_pfn pNtQueryTimerResolution = NULL;
 typedef HANDLE (WINAPI *CreateWaitableTimerExW_pfn)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
 static CreateWaitableTimerExW_pfn pCreateWaitableTimerExW = NULL;
 
-/* Bookkeeping for modes 1/2/3 */
+/* Bookkeeping for the wait path */
 static HANDLE   g_pace_timer         = NULL;
 static int      g_pace_timer_highres = 0;
 static double   g_pace_timer_res_s   = 0.001;   /* effective scheduler tick */
 static int      g_pace_inited        = 0;
 static double   g_pace_next_sanitize = 0;
-
-/* Mode-3 absolute anchor state */
-static double   g_pace_anchor_time   = 0;   /* Sys_DoubleTime() of anchor frame 0 */
-static double   g_pace_frames        = 0;   /* frames emitted since anchor reset */
-static double   g_pace_last_fps      = 0;
-static double   g_pace_tpf_s         = 0;   /* seconds per frame at g_pace_last_fps */
 
 /* Diagnostic ring: wait-error samples in microseconds.  Each call to
  * Sys_FramePacedWait records (actual_elapsed - requested_wait), so
@@ -1921,22 +1915,11 @@ static void Sys_FramePacing_SanitizeRes(void)
 		g_pace_timer_res_s = curres * 1e-7;
 }
 
-/* Reset / refresh the absolute anchor.  Called when fps target changes
- * or when the caller has detected a long stall that would otherwise
- * cause a catch-up burst. */
-static void Sys_FramePacing_AnchorReset(double fps)
-{
-	g_pace_anchor_time = Sys_DoubleTime();
-	g_pace_frames      = 0;
-	g_pace_last_fps    = fps;
-	g_pace_tpf_s       = (fps > 0) ? 1.0 / fps : 0;
-}
-
-/* Hybrid paced wait: issues a high-res waitable-timer sleep for most of
- * the interval, tight-spins the final microseconds, and (mode >= 2)
- * piggy-backs on the DXGI frame-latency waitable object when the D3D11
- * renderer has one exposed.  Returns with wall clock >= (start + secs).
- */
+/* Accurate paced wait: a high-res waitable-timer sleep for the bulk of the
+ * interval, then a tight spin for the final microseconds, and (mode >= 2) a
+ * piggy-back on the DXGI frame-latency waitable object when the D3D11 renderer
+ * has one exposed.  Returns with wall clock >= (start + seconds).  The engine
+ * limiter supplies the drift-corrected `seconds`. */
 void Sys_FramePacedWait(double seconds)
 {
 	double start = Sys_DoubleTime();
@@ -1965,35 +1948,9 @@ void Sys_FramePacedWait(double seconds)
 		Sys_FramePacing_Init();
 	Sys_FramePacing_SanitizeRes();
 
-	/* Mode 3: override the caller's sleep budget with the absolute-
-	 * anchor target.  This is what prevents post-stutter double-frames
-	 * (we don't race to catch up — we forgive missed ticks). */
-	if (mode >= 3 && cl_maxfps.value > 0)
-	{
-		double fps = cl_maxfps.value;
-		double now_abs;
-		if (fps != g_pace_last_fps || g_pace_anchor_time <= 0)
-			Sys_FramePacing_AnchorReset(fps);
-
-		now_abs = Sys_DoubleTime();
-		target  = g_pace_anchor_time + (g_pace_frames + 1.0) * g_pace_tpf_s;
-
-		/* Behind by a full frame? forgive it, advance the counter. */
-		if (target < now_abs - g_pace_tpf_s)
-		{
-			double behind_frames = (now_abs - target) / g_pace_tpf_s;
-			g_pace_frames += (double)(int)behind_frames;
-			target = g_pace_anchor_time + (g_pace_frames + 1.0) * g_pace_tpf_s;
-		}
-		/* Anchor drift protection: if we've been running for >10 minutes
-		 * without fps change, re-anchor to avoid float precision loss. */
-		if (g_pace_frames > 60.0 * 60.0 * 10.0)
-			Sys_FramePacing_AnchorReset(fps);
-	}
-	else
-	{
-		target = start + seconds;
-	}
+	/* The engine limiter already computed how long to wait and carries any
+	 * sub-frame remainder itself, so we just need to land on that target. */
+	target = start + seconds;
 
 	/* Bulk wait: kernel timer for most of the interval; leave a small
 	 * tail for the spin so the OS scheduler jitter is absorbed. */
@@ -2012,11 +1969,14 @@ void Sys_FramePacedWait(double seconds)
 			if (to_wait <= g_pace_timer_res_s * 2.875)
 				break; /* short enough to fall into the spin phase */
 
-			/* Negative due = relative time in 100ns units. */
-			due.QuadPart = -(LONGLONG)((to_wait - g_pace_timer_res_s * 1.5) * 10000000.0);
+			/* Negative due = relative time in 100ns units.  Undershoot by
+			 * ~1.125x the timer resolution (SpecialK's fSwapWaitRatio) so the
+			 * spin tail, not the timer, is what lands us on target. */
+			due.QuadPart = -(LONGLONG)((to_wait - g_pace_timer_res_s * 1.125) * 10000000.0);
 			if (due.QuadPart >= 0)
 				break;
-			SetWaitableTimer(g_pace_timer, &due, 0, NULL, NULL, FALSE);
+			if (!SetWaitableTimer(g_pace_timer, &due, 0, NULL, NULL, FALSE))
+				break;	/* couldn't arm the timer; fall through to the spin */
 			took_timer = 1;
 			waits[nwaits++] = g_pace_timer;
 #ifdef D3D11QUAKE
@@ -2027,7 +1987,7 @@ void Sys_FramePacedWait(double seconds)
 					waits[nwaits++] = hsw;
 			}
 #endif
-			wait_ms = (DWORD)((to_wait - g_pace_timer_res_s * 1.5) * 1000.0) + 1;
+			wait_ms = (DWORD)((to_wait - g_pace_timer_res_s * 1.125) * 1000.0) + 1;
 			if (nwaits > 1)
 				WaitForMultipleObjects(nwaits, waits, FALSE, wait_ms);
 			else
@@ -2040,10 +2000,6 @@ void Sys_FramePacedWait(double seconds)
 	while (Sys_DoubleTime() < target - 5e-5)
 		YieldProcessor();
 
-	/* Post-wait: advance absolute-anchor frame count. */
-	if (mode >= 3)
-		g_pace_frames += 1.0;
-
 	/* Record wait error for sys_framepacing_stats. */
 	actual = Sys_DoubleTime() - start;
 	g_pace_last_err_us = (actual - seconds) * 1e6;
@@ -2051,6 +2007,14 @@ void Sys_FramePacedWait(double seconds)
 	g_pace_err_ring[g_pace_err_head] = g_pace_last_err_us;
 	g_pace_err_head = (g_pace_err_head + 1) % PACE_ERR_RING;
 	if (g_pace_err_count < PACE_ERR_RING) g_pace_err_count++;
+}
+
+/* Reported to the engine frame limiter (cl_main.c Host_Frame) so it yields the
+ * remaining frame time to the paced wait whenever pacing is enabled, regardless
+ * of cl_yieldcpu. */
+qboolean Sys_FramePacingActive(void)
+{
+	return sys_framepacing.ival > 0;
 }
 
 /* Called when sys_framepacing changes.  Force-init the subsystem so the
@@ -2063,10 +2027,6 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_pace_err_head  = 0;
 	g_pace_err_count = 0;
 	for (i = 0; i < PACE_ERR_RING; i++) g_pace_err_ring[i] = 0;
-	/* Reset the absolute anchor so mode 3 re-locks cleanly. */
-	g_pace_anchor_time = 0;
-	g_pace_frames      = 0;
-	g_pace_last_fps    = 0;
 	if (mode > 0)
 	{
 		Sys_FramePacing_Init();   /* idempotent */
@@ -2103,9 +2063,8 @@ static void Sys_FramePacing_Stats_f(void)
 
 	Con_Printf("sys_framepacing mode: %i\n", mode);
 	Con_Printf("  0 = vanilla Sleep()\n");
-	Con_Printf("  1 = high-res waitable timer hybrid\n");
+	Con_Printf("  1 = high-res waitable timer + spin\n");
 	Con_Printf("  2 = (1) + DXGI frame-latency waitable (D3D11 only)\n");
-	Con_Printf("  3 = (2) + absolute anchor + frame-skip forgive\n");
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
@@ -2113,14 +2072,6 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  effective timer res : %.3f ms\n", g_pace_timer_res_s * 1000.0);
 	Con_Printf("  waitable timer tier : %s\n", g_pace_timer ? (g_pace_timer_highres ? "HIGH_RESOLUTION (Win10 1803+)" : "standard (Win7/Vista)") : "none");
 	Con_Printf("  DXGI waitable handle: %s\n", hdxgi ? "present (D3D11 renderer active)" : "absent (GL/Vk/non-D3D11 renderer, or not created yet)");
-
-	if (mode >= 3)
-	{
-		Con_Printf("\nMode-3 anchor state:\n");
-		Con_Printf("  target fps         : %.1f\n", g_pace_last_fps);
-		Con_Printf("  frames since anchor: %.0f\n", g_pace_frames);
-		Con_Printf("  seconds per frame  : %.4f\n", g_pace_tpf_s);
-	}
 
 	Con_Printf("\nWait accuracy (last %i frames):\n", g_pace_err_count);
 	if (g_pace_err_count > 0)
