@@ -43,10 +43,12 @@ default to the original engine behaviour, so a stock setup is unchanged.
 
 ### System & performance (Windows)
 
-- **`sys_framepacing`** — SpecialK-style high-resolution frame pacing
-  (high-res waitable timer, optional DXGI frame-latency sync on D3D11,
-  absolute-anchor pacing with frame-skip forgive). `sys_framepacing_stats`
-  reports what it is actually doing. `0` = vanilla `Sleep()`.
+- **`sys_framepacing`** — high-precision `cl_maxfps` pacing. The engine's
+  own (drift-corrected) limiter still decides when each frame is due; this
+  makes the wait land on that target accurately. `0` = vanilla `Sleep()`;
+  `1` = NtSetTimerResolution + high-res waitable timer + spin; `2` = (1) +
+  DXGI frame-latency wait on D3D11; `3` = (2) + absolute-grid anchor
+  (renderer-agnostic). `sys_framepacing_stats` reports what it's doing.
 - **`cl_debug_spikes`** — logs a per-stage timing breakdown whenever a
   client frame exceeds `cl_debug_spike_ms` (default 2 ms), to pin a
   hitch to a specific stage.

@@ -1551,7 +1551,7 @@ static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, S
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
 static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this only makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere).");
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FramePacing_Init(void);
@@ -1795,6 +1795,11 @@ static void Sys_ClockPrecision_Changed(cvar_t *var, char *oldval)
  Mode 2 = (1) + the DXGI frame-latency waitable-object wait on D3D11
           (handle from D3D11_GetFrameLatencyWaitHandle); identical to
           mode 1 on OpenGL/Vulkan.
+ Mode 3 = (2) + the absolute-grid anchor: the limiter aims each frame at
+          a fixed time grid (base + N/fps) via Sys_FramePaceAnchorDelay()
+          instead of relative-to-last-frame, shedding the limiter's small
+          residual phase drift.  The anchor is pure timing, so it works on
+          every renderer (the DXGI part of mode 2 is still D3D11-only).
 
  Cvar live-toggleable.  All Windows APIs resolved via GetProcAddress
  so the binary still loads on pre-Win10-1803.
@@ -1823,6 +1828,10 @@ static int      g_pace_timer_highres = 0;
 static double   g_pace_timer_res_s   = 0.001;   /* effective scheduler tick */
 static int      g_pace_inited        = 0;
 static double   g_pace_next_sanitize = 0;
+
+/* Mode-3 absolute-grid anchor state (renderer-agnostic, pure timing). */
+static double   g_anchor_base = 0;   /* engine-realtime of grid slot 0 */
+static double   g_anchor_fps  = 0;   /* fps the grid was built for */
 
 /* Diagnostic ring: wait-error samples in microseconds.  Each call to
  * Sys_FramePacedWait records (actual_elapsed - requested_wait), so
@@ -2017,6 +2026,38 @@ qboolean Sys_FramePacingActive(void)
 	return sys_framepacing.ival > 0;
 }
 
+/* Mode 3 only: the absolute-grid anchor.  The engine limiter's target drifts
+ * relative to wall-clock (it carries a bounded sub-frame remainder); this pins
+ * each frame to a fixed grid at base + N/fps so that small bias can't
+ * accumulate.  Renderer-agnostic: pure QPC-time math, no D3D/DXGI. */
+qboolean Sys_FramePacingAnchor(void)
+{
+	return sys_framepacing.ival >= 3;
+}
+
+/* Returns how long to wait (seconds, in the engine's realtime base) so the next
+ * frame lands on the absolute grid.  `now`/`frameref` are Host_Frame's
+ * realtime/oldrealtime.  Snaps the last frame to its nearest grid slot and aims
+ * one slot past it, so repeated calls within a frame converge instead of jumping
+ * (and a long stall just drops to the next slot rather than bursting). */
+double Sys_FramePaceAnchorDelay(double fps, double now, double frameref)
+{
+	double tpf = (fps > 0) ? 1.0 / fps : 0;
+	double slot, target;
+	if (tpf <= 0)
+		return 0;
+	/* (re)establish the grid on first use / fps change, and re-anchor every few
+	 * minutes so double precision can't accumulate visible error. */
+	if (fps != g_anchor_fps || g_anchor_base <= 0 || (frameref - g_anchor_base) > 600.0)
+	{
+		g_anchor_base = frameref;
+		g_anchor_fps  = fps;
+	}
+	slot   = floor((frameref - g_anchor_base) / tpf + 0.5);	/* nearest slot to last frame */
+	target = g_anchor_base + (slot + 1.0) * tpf;				/* one slot past it */
+	return (target > now) ? (target - now) : 0;
+}
+
 /* Called when sys_framepacing changes.  Force-init the subsystem so the
  * stats command shows accurate state without waiting for a frame, and
  * clear the wait-error ring so only samples from the new mode show. */
@@ -2027,6 +2068,8 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_pace_err_head  = 0;
 	g_pace_err_count = 0;
 	for (i = 0; i < PACE_ERR_RING; i++) g_pace_err_ring[i] = 0;
+	g_anchor_base = 0;	/* re-establish the mode-3 grid on next use */
+	g_anchor_fps  = 0;
 	if (mode > 0)
 	{
 		Sys_FramePacing_Init();   /* idempotent */
@@ -2065,6 +2108,7 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  0 = vanilla Sleep()\n");
 	Con_Printf("  1 = high-res waitable timer + spin\n");
 	Con_Printf("  2 = (1) + DXGI frame-latency waitable (D3D11 only)\n");
+	Con_Printf("  3 = (2) + absolute-grid anchor (all renderers)\n");
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
@@ -2072,6 +2116,13 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  effective timer res : %.3f ms\n", g_pace_timer_res_s * 1000.0);
 	Con_Printf("  waitable timer tier : %s\n", g_pace_timer ? (g_pace_timer_highres ? "HIGH_RESOLUTION (Win10 1803+)" : "standard (Win7/Vista)") : "none");
 	Con_Printf("  DXGI waitable handle: %s\n", hdxgi ? "present (D3D11 renderer active)" : "absent (GL/Vk/non-D3D11 renderer, or not created yet)");
+
+	if (mode >= 3)
+	{
+		Con_Printf("\nAbsolute-grid anchor:\n");
+		Con_Printf("  grid fps           : %.2f\n", g_anchor_fps);
+		Con_Printf("  seconds per frame  : %.5f\n", g_anchor_fps > 0 ? 1.0 / g_anchor_fps : 0.0);
+	}
 
 	Con_Printf("\nWait accuracy (last %i frames):\n", g_pace_err_count);
 	if (g_pace_err_count > 0)

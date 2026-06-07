@@ -7096,9 +7096,15 @@ void SNDDMA_SetUnderWater(qboolean underwater);
  * else this is a no-op. */
 #if defined(_WIN32) && !defined(FTE_SDL)
 extern qboolean Sys_FramePacingActive(void);
+extern qboolean Sys_FramePacingAnchor(void);
+extern double   Sys_FramePaceAnchorDelay(double fps, double now, double frameref);
 #define FRAMEPACING_ACTIVE() Sys_FramePacingActive()
+#define FRAMEPACING_ANCHOR() Sys_FramePacingAnchor()
+#define FRAMEPACING_ANCHORDELAY(fps, now, ref) Sys_FramePaceAnchorDelay(fps, now, ref)
 #else
 #define FRAMEPACING_ACTIVE() false
+#define FRAMEPACING_ANCHOR() false
+#define FRAMEPACING_ANCHORDELAY(fps, now, ref) (1.0 / (fps) - ((now) - (ref)))
 #endif
 
 double Host_Frame (double time)
@@ -7268,6 +7274,8 @@ double Host_Frame (double time)
 		{
 			while(COM_DoWork(0, false))
 				;
+			if (FRAMEPACING_ANCHOR())	//mode 3: wait to an absolute time grid instead of relative-to-last-frame, to shed the limiter's residual drift
+				return FRAMEPACING_ANCHORDELAY(maxfps, realtime, oldrealtime);
 			return (cl_yieldcpu.ival || vid.isminimized || idle || FRAMEPACING_ACTIVE())? (1.0 / maxfps - (realtime - oldrealtime)) : 0;
 		}
 		if (spare > cl_maxfps_slop.ival)
