@@ -7097,13 +7097,16 @@ void SNDDMA_SetUnderWater(qboolean underwater);
 #if defined(_WIN32) && !defined(FTE_SDL)
 extern qboolean Sys_FramePacingActive(void);
 extern qboolean Sys_FramePacingAnchor(void);
+extern qboolean Sys_FramePacePresentActive(void);
 extern double   Sys_FramePaceAnchorDelay(double interval, double now, double frameref);
 #define FRAMEPACING_ACTIVE() Sys_FramePacingActive()
 #define FRAMEPACING_ANCHOR() Sys_FramePacingAnchor()
+#define FRAMEPACING_PRESENT() Sys_FramePacePresentActive()
 #define FRAMEPACING_ANCHORDELAY(interval, now, ref) Sys_FramePaceAnchorDelay(interval, now, ref)
 #else
 #define FRAMEPACING_ACTIVE() false
 #define FRAMEPACING_ANCHOR() false
+#define FRAMEPACING_PRESENT() false
 #define FRAMEPACING_ANCHORDELAY(interval, now, ref) ((interval) - ((now) - (ref)))
 #endif
 
@@ -7267,7 +7270,8 @@ double Host_Frame (double time)
 #ifdef HAVE_MEDIA_ENCODER
 		&& Media_Capturing() != 2
 #endif
-		&& !(vrflags&VRF_OVERRIDEFRAMETIME))
+		&& !(vrflags&VRF_OVERRIDEFRAMETIME)
+		&& !FRAMEPACING_PRESENT())	//mode 4 paces at the buffer swap instead, so render every loop here
 	{
 		spare = CL_FilterTime((realtime - oldrealtime)*1000, maxfps, 1.5, maxfpsignoreserver);
 		if (!spare)

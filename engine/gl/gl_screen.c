@@ -232,6 +232,10 @@ qboolean GLSCR_UpdateScreen (void)
 		R2D_Flush();
 
 	{
+#if defined(_WIN32) && !defined(FTE_SDL)
+		extern void Sys_FramePacePresent(void);
+		Sys_FramePacePresent();	//sys_framepacing 4: hold the flip to the present grid (no-op in other modes)
+#endif
 		RSpeedMark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);

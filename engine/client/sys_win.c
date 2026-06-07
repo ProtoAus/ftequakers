@@ -1551,7 +1551,7 @@ static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, S
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
 static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer.");
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only for now.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FramePacing_Init(void);
@@ -1800,6 +1800,12 @@ static void Sys_ClockPrecision_Changed(cvar_t *var, char *oldval)
           instead of relative-to-last-frame, shedding the limiter's small
           residual phase drift.  The anchor is pure timing, so it works on
           every renderer (the DXGI part of mode 2 is still D3D11-only).
+ Mode 4 = present-pacing (SpecialK-style).  Modes 1-3 pace the frame START,
+          so render-time variance leaks into the PRESENT (what a VRR display
+          follows).  Mode 4 instead renders frames ASAP and HOLDS the swap to
+          a fixed grid via Sys_FramePacePresent() (hooked before the renderer's
+          buffer swap), so the present cadence is flat -- at ~one frame more
+          latency than mode 3.  OpenGL only for now (hook is in gl_screen.c).
 
  Cvar live-toggleable.  All Windows APIs resolved via GetProcAddress
  so the binary still loads on pre-Win10-1803.
@@ -2035,7 +2041,7 @@ qboolean Sys_FramePacingActive(void)
  * accumulate.  Renderer-agnostic: pure QPC-time math, no D3D/DXGI. */
 qboolean Sys_FramePacingAnchor(void)
 {
-	return sys_framepacing.ival >= 3;
+	return sys_framepacing.ival == 3;
 }
 
 /* Returns how long to wait (seconds, in the engine's realtime base) so the next
@@ -2059,6 +2065,44 @@ double Sys_FramePaceAnchorDelay(double tpf, double now, double frameref)
 	slot   = floor((frameref - g_anchor_base) / tpf + 0.5);	/* nearest slot to last frame */
 	target = g_anchor_base + (slot + 1.0) * tpf;				/* one slot past it */
 	return (target > now) ? (target - now) : 0;
+}
+
+/* Mode 4 only: present-pacing (the SpecialK approach).  Modes 1-3 pace the frame
+ * START, so render-time variance leaks into the PRESENT (what a VRR display
+ * follows) as jitter.  Mode 4 instead lets frames render as soon as the previous
+ * flip completes and HOLDS the buffer swap to a fixed time grid -- absorbing
+ * render variance for a flat present cadence, at the cost of ~one frame of
+ * latency vs mode 3's present-ASAP.  Renderer-agnostic timing; hooked from the
+ * renderer just before the swap (GL: gl_screen.c). */
+static double g_present_base     = 0;	/* QPC-time of present grid slot 0 */
+static double g_present_interval = 0;	/* seconds per present the grid was built for */
+
+qboolean Sys_FramePacePresentActive(void)
+{
+	return sys_framepacing.ival == 4;
+}
+
+/* Called from the renderer immediately before the buffer swap.  Blocks until the
+ * next present-grid slot using the same high-res timer+spin wait as the other
+ * modes, so consecutive flips are evenly spaced.  A long render just drops to the
+ * next slot rather than bursting to catch up. */
+void Sys_FramePacePresent(void)
+{
+	double fps = cl_maxfps.value;
+	double now, slot, target, delay;
+	if (sys_framepacing.ival != 4 || fps <= 0)
+		return;	/* not in present mode, or uncapped -> swap immediately */
+	now = Sys_DoubleTime();
+	if ((1.0 / fps) != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
+	{
+		g_present_base     = now;
+		g_present_interval = 1.0 / fps;
+	}
+	slot   = floor((now - g_present_base) / g_present_interval) + 1.0;	/* next slot after now */
+	target = g_present_base + slot * g_present_interval;
+	delay  = target - now;
+	if (delay > 0)
+		Sys_FramePacedWait(delay);	/* reuse the high-res timer+spin wait (+stats) */
 }
 
 /* Called when sys_framepacing changes.  Force-init the subsystem so the
@@ -2111,7 +2155,8 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  0 = vanilla Sleep()\n");
 	Con_Printf("  1 = high-res waitable timer + spin\n");
 	Con_Printf("  2 = (1) + DXGI frame-latency waitable (D3D11 only)\n");
-	Con_Printf("  3 = (2) + absolute-grid anchor (all renderers)\n");
+	Con_Printf("  3 = (2) + absolute-grid anchor on frame START (all renderers)\n");
+	Con_Printf("  4 = present-pacing: hold the SWAP to the grid (flat VRR cadence, GL only)\n");
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
