@@ -629,10 +629,6 @@ cvar_t r_part_classic_square = CVARFD("r_part_classic_square", "0", CVAR_ARCHIVE
 cvar_t r_part_maxparticles = CVAR("r_part_maxparticles", "65536");
 cvar_t r_part_maxdecals = CVAR("r_part_maxdecals", "8192");
 
-cvar_t r_part_threaded = CVARFD("r_part_threaded", "0", CVAR_ARCHIVE, "Integrate (move) scripted particles across the engine's worker threads (set worker_count) instead of on one core. Only types with no per-particle trail/spawn are threaded; collision, spawning and drawing stay serial. 0 = stock single-core behaviour.");
-cvar_t r_part_threaded_min = CVARFD("r_part_threaded_min", "2000", CVAR_ARCHIVE, "A particle type is only threaded once it has at least this many live particles; below it the fork/join overhead isn't worth it and it integrates inline.");
-cvar_t r_part_threaded_verify = CVARFD("r_part_threaded_verify", "0", 0, "Debug: every frame, run both the threaded and a single-core integrate from the same snapshot and bit-compare them (flurry forced off). Prints 'verify OK' (developer 1) or a red MISMATCH with the exact particle/field. Uses the single-core result for the frame, so it's safe to leave on while validating.");
-
 
 particleengine_t *pe;
 
@@ -665,10 +661,6 @@ void P_InitParticleSystem(void)
 
 	Cvar_Register(&r_part_maxparticles, particlecvargroupname);
 	Cvar_Register(&r_part_maxdecals, particlecvargroupname);
-
-	Cvar_Register(&r_part_threaded, particlecvargroupname);
-	Cvar_Register(&r_part_threaded_min, particlecvargroupname);
-	Cvar_Register(&r_part_threaded_verify, particlecvargroupname);
 
 	Cvar_Register(&r_part_sparks, particlecvargroupname);
 	Cvar_Register(&r_part_sparks_trifan, particlecvargroupname);
