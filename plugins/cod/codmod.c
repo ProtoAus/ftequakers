@@ -311,9 +311,8 @@ static qboolean Mod_XModel_LoadSurfs (struct model_s *mod, struct fstream_s *f, 
 			}
 
 			if (ntris != t)
-			{
-				Con_Printf(CON_ERROR"Expected %i tris, got %i from %i runs\n", ntris, t, r);
-				return false;
+			{	//nettest: don't abort the WHOLE model. Big rocks use long multi-strips with degenerate-tri stitching; the emit loop above already guards `t < ntris`, so over-run is impossible and t<ntris just means some degenerate tris were dropped. Render what decoded instead of failing the whole xmodel.
+				Con_DPrintf(CON_WARNING"%s: expected %i tris, got %i from %i runs (rendering %i)\n", mod->name, ntris, t, r, t);
 			}
 			surf->numindexes = t*3;
 
@@ -884,6 +883,8 @@ qboolean QDECL Mod_XModel_Load (struct model_s *mod, void *buffer, size_t fsize)
 			return false;
 		plugfuncs->Free(pf.start);
 	}
+	else	//nettest: name the missing sub-file (developer 1) — a silent miss here was previously indistinguishable from a parse failure.
+		Con_DPrintf(CON_WARNING"%s: missing xmodelparts/%s\n", mod->name, lod[0].name);
 
 	for (i = 0; i < nlod; i++)
 	{
@@ -891,7 +892,11 @@ qboolean QDECL Mod_XModel_Load (struct model_s *mod, void *buffer, size_t fsize)
 			break;
 		lod[i].numtex = ReadUInt16(&f);
 		for (t = 0; t < lod[i].numtex; t++)
-			lod[i].tex[t] = ReadString(&f);
+		{	//nettest: always consume the name from the stream (keeps the parse aligned), but never write past tex[] — a material-rich model with >countof(tex) surfaces would otherwise overflow the stack array.
+			const char *tn = ReadString(&f);
+			if (t < countof(lod[i].tex))
+				lod[i].tex[t] = tn;
+		}
 		pf.ofs = 0;
 		pf.start = filefuncs->LoadFile(va("xmodelsurfs/%s", lod[i].name), &pf.len);
 		if (pf.start)
@@ -906,6 +911,8 @@ qboolean QDECL Mod_XModel_Load (struct model_s *mod, void *buffer, size_t fsize)
 			mincov = lod[i].coverage;
 			plugfuncs->Free(pf.start);
 		}
+		else	//nettest: name the missing high-detail surf file (developer 1). Big terrain rocks often ship their xmodelsurfs in a separate .iwd; if it isn't mounted the LOD was silently dropped.
+			Con_DPrintf(CON_WARNING"%s: missing xmodelsurfs/%s\n", mod->name, lod[i].name);
 	}
 
 

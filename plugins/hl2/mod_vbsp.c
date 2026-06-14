@@ -3338,6 +3338,26 @@ static qboolean VBSP_CullBox (vec3_t mins, vec3_t maxs)
 			return true;
 	return false;
 }
+// nettest: SAFE world-surface emit. A VBSP/Source world face reached by the leaf/node
+// walk can have NO valid render batch: mod->nummodelsurfaces is narrowed to
+// cmodels[0].numsurfaces (see ~"nummodelsurfaces = prv->cmodels[0].numsurfaces"), so
+// Mod_Batches only assigns surf->sbatch + counts maxmeshes over THAT range — yet the
+// walk emits any leaf-marked surface (validated only vs the LARGER loadmodel->numsurfaces).
+// Blindly doing surf->sbatch->mesh[meshes++] then either deref's a NULL sbatch or overruns
+// the batch's mesh[] block (sized maxmeshes*R_MAX_RECURSE), smashing an adjacent heap
+// allocation header — a later malloc reads the corrupted size and tries a multi-GB request
+// (the observed ~1GB->10GB-in-1s ramp, then crash, on the d1_canals team-select camera).
+// Guard the write: drop the surface instead of corrupting the heap. Warns a few times at
+// developer 1 so the path can be confirmed/quantified.
+static int vbsp_emit_dropped = 0;
+#define VBSP_EMIT_SURF(s) do { \
+		if ((s)->sbatch && (s)->sbatch->meshes < (s)->sbatch->maxmeshes*R_MAX_RECURSE) \
+			(s)->sbatch->mesh[(s)->sbatch->meshes++] = (s)->mesh; \
+		else if (vbsp_emit_dropped++ < 8) \
+			Con_DPrintf("[vbsp] surf-emit guard tripped: sbatch=%p meshes=%i cap=%i — surface dropped (heap overrun averted)\n", \
+				(void*)(s)->sbatch, (s)->sbatch?(int)(s)->sbatch->meshes:-1, (s)->sbatch?(int)((s)->sbatch->maxmeshes*R_MAX_RECURSE):0); \
+	} while(0)
+
 static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 {
 	int			c, side;
@@ -3383,7 +3403,7 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 					{	//only add once, it might be in multiple leafs.
 						surf->visframe = vbsp_surfsequence;
 						modfuncs->RenderDynamicLightmaps (surf);
-						surf->sbatch->mesh[surf->sbatch->meshes++] = surf->mesh;
+						VBSP_EMIT_SURF(surf);
 					}
 				}
 				else
@@ -3441,7 +3461,7 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 
 		modfuncs->RenderDynamicLightmaps (surf);
 
-		surf->sbatch->mesh[surf->sbatch->meshes++] = surf->mesh;
+		VBSP_EMIT_SURF(surf);
 	}
 
 
@@ -3464,6 +3484,8 @@ static qbyte *VBSP_MarkLeaves (model_t *model, int clusters[2])
 	{
 		vis = refdef->forcedvis;
 		prv->vcache.vis = NULL;
+		if (!vis)	//nettest: forcedvis can be NULL (a degenerate portal/water mesh, or ClusterPVS returning NULL, leaves forcevis set but forcedvis NULL) — the vis[] deref below would SIGSEGV. Fall through to the whole-model "all surfaces" path (VBSP_PrepareFrame handles surfvis==NULL). This is the d1_canals spawn-in water-reflection crash.
+			return NULL;
 	}
 	else if (portal || hl2_novis->ival || clusters[0] == -1 || !model->vis)
 		return NULL;	//use some blind whole-model thing
@@ -3567,7 +3589,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		{
 			surf = &mod->surfaces[i];
 			modfuncs->RenderDynamicLightmaps (surf);
-			surf->sbatch->mesh[surf->sbatch->meshes++] = surf->mesh;
+			VBSP_EMIT_SURF(surf);
 		}
 	}
 	else
@@ -3586,8 +3608,11 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (VBSP_EdictInFatPVS(mod, &disp->pvs, surfvis, areas))
 			{
 				surf = disp->surf;
+				if (surf->visframe == vbsp_surfsequence)
+					continue;	//nettest: already emitted by the leaf walk this frame — re-adding would overrun surf->sbatch->mesh[] (sized once per surface) and corrupt the heap. Dedup like the leaf walk.
+				surf->visframe = vbsp_surfsequence;
 				modfuncs->RenderDynamicLightmaps (surf);
-				surf->sbatch->mesh[surf->sbatch->meshes++] = surf->mesh;
+				VBSP_EMIT_SURF(surf);
 			}
 		}
 	}
@@ -3604,6 +3629,9 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		float d;
 		size_t i;
 		vec3_t disp;
+		int areas[2];	//nettest: same area set the displacement cull uses, but areas[] is scoped inside the else above, so rebuild it here.
+		areas[0] = 1;
+		areas[1] = area;
 		for (i = 0; i < prv->numstaticprops; i++)
 		{
 			sent = &prv->staticprops[i];
@@ -3629,6 +3657,37 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 					modfuncs->GetModel(src->model->publicname, MLV_WARN);	//we use threads, so these'll load in time.
 				continue;
 			}
+
+			//nettest: cull invisible props. Must run BEFORE NewSceneEntity (and before the lighting calc, which is pointless for culled props).
+			//pvscache must be valid first: props whose leaf set overflowed at load were flagged num_leafs==-2 and need VBSP_FindTouchedLeafs to fill it in.
+			//Moved this populate up from below the lighting block so the PVS test sees real leaf/area data.
+			if (src->pvscache.num_leafs==-2)
+			{
+				vec3_t absmin, absmax;
+				float r = src->model->radius;
+				VectorSet(absmin, -r,-r,-r);
+				VectorSet(absmax, r,r,r);
+				VectorAdd(absmin, src->origin, absmin);
+				VectorAdd(absmax, src->origin, absmax);
+				VBSP_FindTouchedLeafs(mod, &src->pvscache, absmin, absmax);
+			}
+
+			//PVS/area cull, exactly like the displacement loop above (VBSP_EdictInFatPVS at ~3587).
+			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
+			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
+			if (surfvis && !VBSP_EdictInFatPVS(mod, &src->pvscache, surfvis, areas))
+				continue;	//prop's leaves aren't in the view PVS and its area can't be reached — not visible.
+
+			//cheap frustum cull on the model's radius box (props through the portal still pass PVS above, so this only drops what's off-screen).
+			{
+				vec3_t cmin, cmax;
+				float r = src->model->radius;
+				VectorSet(cmin, src->origin[0]-r, src->origin[1]-r, src->origin[2]-r);
+				VectorSet(cmax, src->origin[0]+r, src->origin[1]+r, src->origin[2]+r);
+				if (VBSP_CullBox(cmin, cmax))
+					continue;
+			}
+
 #if 1
 			if (!src->light_known)
 			{
@@ -3645,16 +3704,6 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				}
 			}
 #endif
-			if (src->pvscache.num_leafs==-2)
-			{
-				vec3_t absmin, absmax;
-				float r = src->model->radius;
-				VectorSet(absmin, -r,-r,-r);
-				VectorSet(absmax, r,r,r);
-				VectorAdd(absmin, src->origin, absmin);
-				VectorAdd(absmax, src->origin, absmax);
-				VBSP_FindTouchedLeafs(mod, &src->pvscache, absmin, absmax);
-			}
 
 			ent = modfuncs->NewSceneEntity();
 			if (!ent)
@@ -3958,6 +4007,8 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
 	int leafnum = VBSP_PointLeafnum(model,point);
+	if (leafnum < 0 || leafnum >= model->numleafs)	//nettest: a point outside the loaded leafs (a prop near the void / map edge) gives an out-of-range leaf -> OOB read of leafs[]/leaflight[count]; clamp it
+		leafnum = 0;
 	mleaf_t *leaf = model->leafs+leafnum;
 	struct mleaflight_s *leaflight = prv->leaflight+leafnum;
 	struct leaflightpoint_s *best, *lp;
@@ -3967,8 +4018,8 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 	float sig[6];
 
 	static cvar_t *srgbmag, *scale, *forceface;
-	if (!srgbmag)	srgbmag		= cvarfuncs->GetNVFDG("hl2_lt_srgb_mag","1",	0, "TEST", "TEST");
-	if (!scale)		scale		= cvarfuncs->GetNVFDG("hl2_lt_scale",	"256",	0, "TEST", "TEST");
+	if (!srgbmag)	srgbmag		= cvarfuncs->GetNVFDG("hl2_lt_srgb_mag","0",	0, "sRGB-encode model lighting (0=off). nettest: was 1, which pushed unbounded HDR leaf-ambient over 255 = white blow-out.", "");
+	if (!scale)		scale		= cvarfuncs->GetNVFDG("hl2_lt_scale",	"160",	0, "Model-lighting brightness scale. nettest: was 256, which clamped bright leaves to white; 160 keeps the decoded-linear range in 0..255.", "");
 	if (!forceface)	forceface	= cvarfuncs->GetNVFDG("hl2_lt_face",	"-1",	0, "TEST", "TEST");
 
 	if (prv->leaflight && leaflight->count)
@@ -4009,10 +4060,10 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		VectorCopy(res_ambient, res_diffuse);
 		for (j = 0; j < 3; j++)
 		{
-			if (res_dir[0]>=0)
-				VectorMA(res_diffuse, res_dir[0], diff[j*2+1], res_diffuse);
+			if (res_dir[j]>=0)	//nettest: was res_dir[0] on all 3 axes — leaned every prop's shading toward the X faces; index per-axis
+				VectorMA(res_diffuse, res_dir[j], diff[j*2+1], res_diffuse);
 			else
-				VectorMA(res_diffuse, -res_dir[0], diff[j*2+0], res_diffuse);
+				VectorMA(res_diffuse, -res_dir[j], diff[j*2+0], res_diffuse);
 		}
 
 		if (forceface->ival >= 0)
@@ -4047,11 +4098,29 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 				VectorScale(best->rgb[j], scale->value, res_cube[j]);*/
 		}
 
-		return;
 	}
-	VectorSet(res_dir, 0,0.707,0.707);
-	VectorSet(res_diffuse, 64,64,64);
-	VectorSet(res_ambient, 192,192,192);
+	else
+	{
+		VectorSet(res_dir, 0,0.707,0.707);
+		VectorSet(res_diffuse, 64,64,64);
+		VectorSet(res_ambient, 192,192,192);
+	}
+
+	//nettest: clamp to a minimum ambient so models + viewmodels are never pure black
+	//on Source maps whose per-leaf ambient cube is missing or computes ~0 (HDR/LDR
+	//leaf-ambient lumps that don't load, or genuinely-dark leaves).
+	{
+		static cvar_t *minamb;
+		int k;
+		float m;
+		if (!minamb) minamb = cvarfuncs->GetNVFDG("hl2_lt_min", "64", 0, "Minimum model ambient floor on Source/HL2 maps (0-255). 0 = off.", "");
+		m = minamb->value;
+		for (k = 0; k < 3; k++)
+		{
+			if (res_ambient[k] < m) res_ambient[k] = m;
+			if (res_diffuse[k] < res_ambient[k]) res_diffuse[k] = res_ambient[k];
+		}
+	}
 }
 #else
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
@@ -4340,6 +4409,14 @@ qboolean VBSP_Init(void)
 	if (modfuncs && modfuncs->version != MODPLUGFUNCS_VERSION)
 		modfuncs = NULL;
 	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
+
+	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
+	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only
+	//material + lightmap passes are skipped on load — they call modfuncs->RegisterBasicShader / Batches_Build,
+	//which a SERVERONLY engine leaves NULL (engine/common/plugin.c) => call-through-NULL crash on any VBSP map.
+	//(Mirrors VTF_Init's interface probe in img_vtf.c; non-NULL on the client so it keeps QR_OPENGL there.)
+	if (!plugfuncs->GetEngineInterface(plugimagefuncs_name, sizeof(plugimagefuncs_t)))
+		qrenderer = QR_NONE;
 
 	if (modfuncs && filefuncs && threadfuncs)
 	{

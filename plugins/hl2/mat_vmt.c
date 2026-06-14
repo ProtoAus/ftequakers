@@ -14,6 +14,8 @@ typedef struct
 	{
 		char name[MAX_QPATH];
 	} tex[5];
+	char hdrcompressedtex[MAX_QPATH];	//nettest: $hdrcompressedtexture — compressed-HDR sky face (RGBS in BGRA8), decoded via the $hdr: prefix
+	char hdrbasetex[MAX_QPATH];			//nettest: $hdrbasetexture — uncompressed HDR sky face (RGBA16161616F), native float
 	char fullbrightmap[MAX_QPATH];
 	char envmap[MAX_QPATH];
 	char envmapmask[MAX_QPATH];
@@ -77,6 +79,39 @@ static void Q_StrCat(char **ptr, const char *append)
 }
 
 static qboolean VMT_ReadVMT(const char *materialname, vmtstate_t *st);	//this is made more complicated on account of includes allowing recursion
+//nettest: Source .vmt keys/blocks FTE intentionally ignores. Recognise-and-skip them so developer 1 isn't flooded,
+//while a genuinely novel/malformed key or block still reaches the warning below.
+static qboolean VMT_IsKnownIgnoredField(const char *key)
+{
+	static const char *ig[] = {"$nolod", "$model", "$FlashlightNoLambert",
+		"$parallaxmap", "$parallaxmapscale",	//nettest: Source parallax-occlusion hints, FTE has no POM path
+		"$cheapwaterstartdistance", "$cheapwaterenddistance",	//nettest: Source water LOD distance cutoffs, unused by FTE water
+		"$multipass", "$fresnelreflection", "$modelmaterial", "$texture2", "$no_fullbright",	//nettest: more benign Source-only fields on HL2 glass/metal/combine props
+		"$gnoise", "$playerdistance", "$playerdistance2", "$alpharesult", "$alpharesultmin", "$alpharesultmax",	//nettest: COMBINESHIELD proxy result-vars (top-level $-var declarations the proxy system writes)
+		"$smallamount", "$largeamount", "$hundred", "$ten", "$frameminusten",
+		NULL};
+	const char **i;
+	for (i = ig; *i; i++)
+		if (!Q_strcasecmp(key, *i))
+			return true;
+	return false;
+}
+static qboolean VMT_IsKnownIgnoredBlock(const char *key)
+{	//Source ships per-DX-level / HDR shader-variant sub-blocks + a Proxies block
+	static const char *ig[] = {"vertexlitgeneric", "lightmappedgeneric", "unlitgeneric", "worldvertextransition", "proxies",
+		"animatedtexture", "texturescroll", "waterlod",	//nettest: named animation/scroll/LOD sub-blocks FTE doesn't interpret
+		"water_",	//nettest: per-DX water fallbacks Water_DX81/DX80/DX60 (prefix, case-insensitive)
+		NULL};
+	const char **i;
+	//nettest: Source DX-version conditional blocks (">=dx90", "<DX90", ">=DX90", "=dx9") begin with an operator,
+	//not a letter; they are never real material blocks FTE handles, so skip any block whose name starts with > < or =.
+	if (*key == '>' || *key == '<' || *key == '=')
+		return true;
+	for (i = ig; *i; i++)
+		if (!Q_strncasecmp(key, *i, strlen(*i)))
+			return true;
+	return false;
+}
 static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 {	//assumes the open { was already parsed, but will parse the close.
 	char *replace = NULL;
@@ -96,7 +131,9 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			//insert and replace blocks do the same thing in practice 
 			if (!Q_strcasecmp(key, "replace") || !Q_strcasecmp(key, "insert"))
 				replace = line;
-			else
+			else if (VMT_IsKnownIgnoredBlock(key))
+				;	//nettest: Source per-DX/HDR shader-variant sub-block (vertexlitgeneric_dx9, Proxies, …) — benign
+			else if (st)	//nettest: only warn about UNKNOWN blocks at the material TOP level. Nested sub-blocks recurse with st==NULL — e.g. every proxy entry inside "Proxies" (GaussianNoise/PlayerProximity/Add/Subtract/Multiply/Equals/Sine/Clamp/…). FTE handles no nested blocks, so they're all benign noise.
 				Con_DPrintf("%s: Unknown block \"%s\"\n", fname, key);
 			line = VMT_ParseBlock(fname, NULL, line);
 			continue;
@@ -128,10 +165,12 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			if (!VMT_ReadVMT(value, st))
 				return NULL;
 		}
-		else if (!Q_strcasecmp(key, "$basetexture") || !Q_strcasecmp(key, "$hdrbasetexture"))	//fixme: hdr version should probably override the other. order matters.
+		else if (!Q_strcasecmp(key, "$basetexture"))	//nettest: $basetexture is the LDR face — make it authoritative
 			Q_strlcpy(st->tex[0].name, value, sizeof(st->tex[0].name));
-		else if (!Q_strcasecmp(key, "$hdrcompressedtexture"))	//named texture is R8G8B8E8 and needs to be decompressed manually... should probably just use e5bgr9 but we don't have a way to transcode it here.
-			;
+		else if (!Q_strcasecmp(key, "$hdrbasetexture"))	//nettest: uncompressed HDR sky face (RGBA16161616F) — native float HDR, used in preference to the LDR $basetexture to kill banding
+			Q_strlcpy(st->hdrbasetex, value, sizeof(st->hdrbasetex));
+		else if (!Q_strcasecmp(key, "$hdrcompressedtexture"))	//nettest: compressed HDR sky face (RGBS in BGRA8) — decoded rgb*alpha*8 by img_vtf via the $hdr: name prefix
+			Q_strlcpy(st->hdrcompressedtex, value, sizeof(st->hdrcompressedtex));
 		else if (!Q_strcasecmp(key, "$basetexturetransform"))
 			;
 		else if (!Q_strcasecmp(key, "$bumpmap")) // same as normalmap ~eukara
@@ -139,7 +178,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$dudvmap")) // refractions only
 		{
 			Q_strlcpy(st->dudvmap, value, sizeof(st->dudvmap));
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$ssbump"))
 			;
@@ -162,11 +201,11 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->alphatestref = atof(value);
 		else if (!Q_strcasecmp(key, "$alphafunc"))
 		{
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$alpha"))
 		{
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$translucent"))
 		{
@@ -176,7 +215,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		{
 			if (atoi(value))
 				st->additive = 1;
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$halflambert"))
 			st->halflambert = 1;
@@ -193,15 +232,15 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$decal"))
 			st->decal = atoi(value);
 		else if (!Q_strcasecmp(key, "$decalscale"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$decalsize"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$envmap"))
 			Q_strlcpy(st->envmap, value, sizeof(st->envmap));
 		else if (!Q_strcasecmp(key, "$envmapmask"))
 			Q_strlcpy(st->envmapmask, value, sizeof(st->envmapmask));
 		else if (!Q_strcasecmp(key, "$envmapcontrast"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$envmaptint"))
 		{
 			char tok[64];
@@ -241,58 +280,58 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$normalmapalphaenvmapmask"))
 			st->envfromnorm=1;
 		else if (!Q_strcasecmp(key, "$crackmaterial"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$selfillum"))
 			st->selfillum = 1;
 		else if (!Q_strcasecmp(key, "$selfillummask"))
 			Q_strlcpy(st->fullbrightmap, value, sizeof(st->fullbrightmap));
 		else if (!Q_strcasecmp(key, "$selfillumtint"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$nofog"))
 			st->nofog = 1;
 		else if (!Q_strcasecmp(key, "$nomip"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$nodecal"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detail"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detailscale"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detailtint"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detailblendfactor"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detailblendmode"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 
 		else if (!Q_strcasecmp(key, "$surfaceprop2"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$AllowAlphaToCoverage"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$blendmodulatetexture"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 
 		//water/reflection stuff
 		else if (!Q_strcasecmp(key, "$REFRACTTINTTEXTURE"))
 			Q_strlcpy(st->refracttinttexture, value, sizeof(st->refracttinttexture));
 		else if (!Q_strcasecmp(key, "$refracttexture"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$refractamount"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$refracttint"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflecttexture"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflectamount"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflecttint"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fresnelpower"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$minreflectivity"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$maxreflectivity"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$mod2x"))
 			st->mod2x = 1;
 		else if (!Q_strcasecmp(key, "$forcecheap"))
@@ -302,35 +341,37 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$normalmap"))
 		{
 			Q_strlcpy(st->normalmap, value, sizeof(st->normalmap));
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$bumpframe"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogenable"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogcolor"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogstart"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogend"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$abovewater"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$underwateroverlay"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflectentities"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$scale"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$bottommaterial"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$scroll1"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$scroll2"))
-			Con_DPrintf("%s: %s \"%s\"\n", fname, key, value);
+			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 
 		else if (*key == '%')
 			;	//editor lines
+		else if (VMT_IsKnownIgnoredField(key))
+			;	//nettest: known Source-only field FTE intentionally ignores — don't warn
 		else
 			Con_DPrintf("%s: Unknown field \"%s\"\n", fname, key);
 	}
@@ -378,7 +419,18 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	else if (!Q_strcasecmp(st->type, "UnlitGeneric"))
 	{
 		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		//nettest: HDR sky — prefer an HDR face over the LDR $basetexture (8-bit, bands).
+		//  $hdrbasetexture = RGBA16161616F (native float, used as-is); $hdrcompressedtexture
+		//  = RGBS packed in BGRA8, decoded to linear float by img_vtf via the $hdr: name
+		//  prefix (sets IF_HDRDECOMPRESS).  Prefer the uncompressed float face when both exist.
+		if (*st->hdrbasetex || *st->hdrcompressedtex)
+		{
+			const char *hdrname = *st->hdrbasetex ? st->hdrbasetex : st->hdrcompressedtex;
+			const char *hdrpfx  = *st->hdrbasetex ? "" : "$hdr:";
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s%s.vtf\"\n", hdrpfx, strcmp(hdrname, "materials/")?"materials/":"", hdrname);
+		}
+		else
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 
 		if (st->vertexcolor)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\rrgbGen vertex\n");

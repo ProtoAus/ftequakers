@@ -394,6 +394,7 @@ char *Cbuf_GetNext(int level, qboolean ignoresemicolon)
 	int		i;
 	char	*text;
 	int		quotes;
+	qboolean comment;
 	static char	line[1024];
 
 start:
@@ -401,14 +402,17 @@ start:
 	text = (char *)cmd_text[level].buf.data;
 
 	quotes = 0;
+	comment = false;
 	for (i=0 ; i< cmd_text[level].buf.cursize ; i++)
 	{
-		if (text[i] == '"')
-			quotes++;
-		if ( !(quotes&1) &&  text[i] == ';' && !ignoresemicolon)
-			break;	// don't break if inside a quoted string
 		if (text[i] == '\n')
 			break;
+		if (text[i] == '"')
+			quotes++;
+		if (!(quotes&1) && !comment && text[i] == '/' && i+1 < cmd_text[level].buf.cursize && text[i+1] == '/')
+			comment = true;	//nettest: rest of the physical line is a // comment — a ';' inside it must NOT split the line (matches Cbuf_ExecuteLevel)
+		if ( !(quotes&1) && !comment && text[i] == ';' && !ignoresemicolon)
+			break;	// don't break if inside a quoted string or a // comment
 	}
 
 	if (i >= sizeof(line)-1)

@@ -8,8 +8,10 @@ additions listed below — nothing has been removed.
 
 ## What's changed from upstream
 
-Every addition is opt-in — the new cvars, render flags, and builtins
-default to the original engine behaviour, so a stock setup is unchanged.
+The new cvars, render flags, and builtins are opt-in — they default to the
+original engine behaviour, so a stock setup is unchanged. The added map-format
+support and bug fixes don't alter stock Quake content either; they only apply
+when you load those maps or would otherwise have hit those bugs.
 
 ### Gameplay & physics
 
@@ -59,6 +61,51 @@ default to the original engine behaviour, so a stock setup is unchanged.
   (LOCAL) level rather than INSECURE, so menu sliders can set
   `NOTFROMSERVER` cvars (`sys_highpriority`, `sys_framepacing`, ...).
   Menu-only by design.
+
+### Source / Half-Life 2 maps
+
+- **Loads Valve Source (`.bsp`) maps** — Half-Life 2 and Counter-Strike: Source
+  levels, with their skyboxes (including HDR skies), textures and materials,
+  water, and props (which are distance- and visibility-culled). A large share of
+  the work went into *not crashing* on big, complex maps such as `d1_canals`,
+  and into silencing the flood of harmless warnings those maps print.
+
+### Call of Duty maps
+
+- **Loads Call of Duty 1 & 2 (`.bsp` / `.d3dbsp`) maps** — including the models
+  placed around the level (rocks, foliage, props) at the correct scale. A bug
+  that made large maps take minutes to load is fixed.
+
+### Using content from your installed games
+
+- **Mounts content straight from your installed Steam games** — Half-Life,
+  Counter-Strike 1.6, Half-Life 2, Counter-Strike: Source, and Call of Duty —
+  on demand and at low priority, so it fills in missing assets without ever
+  overriding your own files. The menu lists maps from those games (from an
+  offline index), and when two games share a map name (e.g. `de_dust2`) it loads
+  the correct copy.
+
+### Dedicated server & multiplayer
+
+- **Dedicated (windowless) servers can host Source and CoD maps** — they used to
+  crash the instant such a map loaded.
+- **A batch of connection fixes:** no instant crash when a second player joins;
+  no "map does not match" kick when you join a server hosting a map you also own
+  under a different game; water renders correctly the moment you connect (instead
+  of see-through until you change a setting); and `+connect` / `+map` launch
+  options take you straight into the game instead of the menu backdrop.
+
+### Weather & effects
+
+- **Rain that splashes** on water surfaces and on physics props, with optional
+  ripple rings and a per-frame cap so heavy weather stays cheap.
+
+### Smaller fixes & cleanup
+
+- A real **`flushshaders`** console command (reloads shaders without a full
+  video restart); console history kept inside the game folder instead of the
+  install root; comment-aware config parsing; and the bundled ODE physics plugin
+  is statically linked, so it needs no loose runtime DLLs alongside it.
 
 ## Building
 

@@ -608,6 +608,9 @@ struct vfsfile_s;
 //if loc is valid, loc->search is always filled in, the others are filled on success.
 //standard return value is 0 on failure, or depth on success.
 int FS_FLocateFile(const char *filename, unsigned int flags, flocation_t *loc);
+qboolean FS_FileIsAddonOnly(const char *name);	//nettest: file's top hit is in a low-priority fs_load addon dir
+void FS_SetPreferHint(const char *spec);		//nettest (P26 Part 2): bias the NEXT locate to a game spec's resolved dir
+void FS_ClearPreferHint(void);					//nettest (P26 Part 2): stop biasing (call right after the BSP load)
 struct vfsfile_s *FS_OpenReadLocation(const char *fname, flocation_t *location);	//fname used for extension-based filters
 #define WP_REFERENCE	1
 #define WP_FULLPATH		2

@@ -2997,6 +2997,18 @@ void COM_CleanUpPath(char *str)
 		memmove(str, str+1, strlen(str+1)+1);
 		criticize = 4;
 	}
+	{	//nettest: collapse INTERIOR double-slashes ("a//b" -> "a/b"). The leading-slash strip above and the ".." resolver
+		//leave these alone; a stray "//" baked into a Source .vmt material ref otherwise produced an "empty directory
+		//name" error + a wasted ".vmt_glsl.vmt" lookup downstream. URL-style "://" never reaches here (handled earlier).
+		char *dst, *src;
+		for (dst = src = str; *src; )
+		{
+			if (src[0] == '/' && src[1] == '/')
+				{ src++; continue; }
+			*dst++ = *src++;
+		}
+		*dst = 0;
+	}
 /*	if(criticize)
 	{
 		if (criticize == 1)	//not a biggy, so not red.

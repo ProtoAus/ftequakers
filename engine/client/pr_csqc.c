@@ -9439,9 +9439,21 @@ void CSQC_Input_Frame(int seat, usercmd_t *cmd)
 
 //this protocol allows up to 32767 edicts.
 #ifdef PEXT_CSQC
-static void CSQC_EntityCheck(unsigned int entnum)
+//nettest: returns false on a corrupt/out-of-range entity index so callers recover gracefully.
+// The wire protocol tops out at 22-bit indices (PEXT2_REPLACEMENTDELTAS:
+// (entnum&0x3fff)|(MSG_ReadByte()<<14)); anything beyond 0x3fffff is a bad read at a packet
+// boundary -- a failed MSG_ReadByte() returns -1 and the <<14 sign-extends into the high bits,
+// yielding ~0xFFFFFFxx. Left unbounded, newmax*sizeof(ptr) reached tens of GB and the BZ_Realloc +
+// memset below OOM-crashed the client (the d1_canals_01 ~34GB balloon; also a remote-server DoS).
+// Returning false makes the entity-parse loop treat it as end-of-packet and the sound paths skip
+// the bad sound -- the connection stays alive (a prop-dense map that overflows the CSQC entity
+// datagram just renders the entities that fit, instead of disconnecting to a black screen).
+static qboolean CSQC_EntityCheck(unsigned int entnum)
 {
 	unsigned int newmax;
+
+	if (entnum > 0x3fffff)
+		return false;
 
 	if (entnum >= maxcsqcentities)
 	{
@@ -9450,6 +9462,7 @@ static void CSQC_EntityCheck(unsigned int entnum)
 		memset(csqcent + maxcsqcentities, 0, (newmax - maxcsqcentities)*sizeof(csqcent));
 		maxcsqcentities = newmax;
 	}
+	return true;
 }
 
 int CSQC_StartSound(int entnum, int channel, char *soundname, vec3_t pos, float vol, float attenuation, float pitchmod, float timeofs, unsigned int flags)
@@ -9463,7 +9476,8 @@ int CSQC_StartSound(int entnum, int channel, char *soundname, vec3_t pos, float 
 	{
 		pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 
-		CSQC_EntityCheck(entnum);
+		if (!CSQC_EntityCheck(entnum))
+			return false;	//nettest: corrupt entnum -> let the engine play the sound normally
 		ent = csqcent[entnum];
 		if (ent)
 			*csqcg.self = EDICT_TO_PROG(csqcprogs, (void*)ent);
@@ -9486,7 +9500,8 @@ int CSQC_StartSound(int entnum, int channel, char *soundname, vec3_t pos, float 
 	}
 	else if (csqcg.CSQC_ServerSound)
 	{
-		CSQC_EntityCheck(entnum);
+		if (!CSQC_EntityCheck(entnum))
+			return false;	//nettest: corrupt entnum -> let the engine play the sound normally
 		ent = csqcent[entnum];
 		if (!ent)
 			return false;
@@ -9617,7 +9632,8 @@ void CSQC_ParseEntities(qboolean sized)
 			if (!entnum)
 				Host_EndGame("CSQC cannot remove world!\n");
 
-			CSQC_EntityCheck(entnum);
+			if (!CSQC_EntityCheck(entnum))
+				break;	//nettest: truncated/corrupt packet boundary -> stop parsing this packet, keep the connection
 
 			if (cl_shownet.ival == 3)
 				Con_Printf("%3i:     Remove %i\n", MSG_GetReadCount(), entnum);
@@ -9635,7 +9651,8 @@ void CSQC_ParseEntities(qboolean sized)
 		}
 		else
 		{
-			CSQC_EntityCheck(entnum);
+			if (!CSQC_EntityCheck(entnum))
+				break;	//nettest: truncated/corrupt packet boundary -> stop parsing this packet, keep the connection
 
 			if (sized)
 			{

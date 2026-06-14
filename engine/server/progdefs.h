@@ -591,5 +591,6 @@ typedef struct
 	vec3_t joint_velocity; // second joint axis
 	vec3_t joint_movedir; // parameters
 	void *massbuf;
+	void *geomdata;	//nettest: ODE dTriMeshData (dGeomTriMeshDataCreate) backing a TRIMESH geom. dGeomDestroy does NOT free it, so it must be tracked + dGeomTriMeshDataDestroy'd in World_ODE_RemoveFromEntity — else it leaks on every geom (re)build (per-frame for a moving/rotating brush entity = the d1_canals 12GB RAM climb).
 } entityrbe_t;
 #endif

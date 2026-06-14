@@ -136,6 +136,7 @@ typedef struct q2trace_s
 #define MOVE_LAGGED		(1<<6)			//trace touches current last-known-state, instead of actual ents (just affects players for now)
 #define MOVE_ENTCHAIN	(1<<7)			//chain of impacted ents, otherwise result shows only world
 #define MOVE_OTHERONLY	(1<<8)			//test the trace against a single entity, ignoring non-solid/owner/etc flags (but respecting contents).
+#define MOVE_HITPROPS	(1<<9)			//nettest: with MOVE_NOMONSTERS, ALSO collide with SOLID_PHYSICS_* props (rotated cabinet etc.) while still skipping players/monsters. For weather particles. -- FTE patch.
 #define MOVE_IGNOREHULL	(1u<<31)	//used on tracelines etc to simplify the code a little
 
 #ifdef USEAREAGRID

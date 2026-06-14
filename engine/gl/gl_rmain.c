@@ -1220,7 +1220,7 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 			for (i = batch->firstmesh; i < batch->meshes; i++)
 			{
 				mesh = batch->mesh[i];
-				if (!mesh->xyz_array)
+				if (!mesh->xyz_array || !mesh->numvertexes)	//nettest: skip degenerate meshes — numvertexes==0 would div-by-zero the centroid (VectorScale 1/numvertexes) below and leave forcedvis NULL with forcevis set
 					continue;
 				r_refdef.forcevis = true;
 				VectorClear(point);

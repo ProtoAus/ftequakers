@@ -720,6 +720,10 @@ mvdsv:
 
 ======================
 */
+//nettest (P26 Part 2): the game spec from a "map @<spec>/<mapname>" qualifier, consumed once by the next
+//SV_SpawnServer to bias the worldmodel locate to that game's copy.  "" = no qualifier (plain priority).
+char sv_mappreferhint[MAX_OSPATH];
+
 void SV_Map_f (void)
 {
 	char	level[MAX_QPATH];
@@ -743,6 +747,11 @@ void SV_Map_f (void)
 	int i;
 	char *startspot;
 	const char *cmd = Cmd_Argv(0);
+
+	//nettest (P26 Part 2): default to NO map-prefer-hint.  Only an explicit "@spec/map" arg (parsed below)
+	//sets it, so paths that skip the parse (map_restart, changelevel, savegame restore) can't inherit a
+	//stale hint from a previous qualified load.  SV_SpawnServer also consumes it one-shot.
+	sv_mappreferhint[0] = 0;
 
 #ifndef SERVERONLY
 	if (!Renderer_Started() && !isDedicated)
@@ -806,7 +815,7 @@ void SV_Map_f (void)
 		{
 			char *mangled = Cmd_Argv(1);
 			char *sep = strchr(mangled, ':');
-			if (sep && strncmp(mangled, "file:", 5) && strncmp(mangled, "http:", 5) && strncmp(mangled, "https:", 5))
+			if (sep && *mangled != '@' && strncmp(mangled, "file:", 5) && strncmp(mangled, "http:", 5) && strncmp(mangled, "https:", 5))	//nettest (P26 Part 2): '@spec/map' is our prefer-hint form, not a package, even though the spec contains ':'
 			{
 				*sep++ = 0;
 				if (Cmd_FromGamecode())
@@ -821,7 +830,31 @@ void SV_Map_f (void)
 		}
 #endif
 
-		Q_strncpyz (level, Cmd_Argv(1), sizeof(level));
+		//nettest (P26 Part 2): a "@<gamespec>/<mapname>" arg (always QUOTED by the menu, so it is ONE token)
+		//asks to load a SPECIFIC game's copy of a same-named map.  Split on the LAST '/' (the spec itself
+		//contains '/' and ':'), stash the spec for SV_SpawnServer to bias the worldmodel locate, and use the
+		//bare mapname for everything downstream.  A plain map name clears the hint.
+		{
+			const char *a1 = Cmd_Argv(1);
+			sv_mappreferhint[0] = 0;
+			if (*a1 == '@')
+			{
+				const char *lastslash = strrchr(a1, '/');
+				if (lastslash && lastslash > a1+1)
+				{
+					size_t taglen = lastslash - (a1+1);
+					if (taglen >= sizeof(sv_mappreferhint))
+						taglen = sizeof(sv_mappreferhint)-1;
+					memcpy(sv_mappreferhint, a1+1, taglen);
+					sv_mappreferhint[taglen] = 0;
+					Q_strncpyz (level, lastslash+1, sizeof(level));
+				}
+				else
+					Q_strncpyz (level, a1, sizeof(level));	//malformed (@ with no '/') -> load as-is
+			}
+			else
+				Q_strncpyz (level, a1, sizeof(level));
+		}
 		startspot = ((Cmd_Argc() == 2)?NULL:Cmd_Argv(2));
 	}
 
@@ -3508,6 +3541,37 @@ void SV_Download_f (void)
 	Con_Printf("scheme not supported\n");
 }
 
+//nettest (P26 Part 2): `mapfrom <game> <mapname>` — console convenience for loading a SPECIFIC game's copy
+//of a same-named map.  Mounts the game (add-only `fs_useaddons`) then loads the `@spec/map` qualified form.
+//<game> is a short nick (css/cs/hl/hl2/cod/cod2) OR a full "steam:Game/dir" spec.  All the quoting lives
+//HERE in C (clean single-level), so the config aliases that wrap it are quote-free — e.g. `alias css
+//"mapfrom css %1"` — which dodges the .cfg tokenizer mangling nested \" escapes.  The nick->spec table
+//mirrors fs_addons.txt + the create-server menu's deps (CS:S also pulls HL2's shared content).
+static void SV_MapFrom_f (void)
+{
+	const char *nick = Cmd_Argv(1);
+	const char *mapname = Cmd_Argv(2);
+	const char *prefer = NULL;	//the spec whose copy to LOAD
+	char mount[512];			//the (quoted) spec(s) to MOUNT first
+
+	if (Cmd_Argc() < 3 || !*nick || !*mapname)
+	{
+		Con_Printf("usage: mapfrom <game> <mapname>   games: css cs hl hl2 cod cod2 (or a full \"steam:Game/dir\" spec)\n");
+		return;
+	}
+
+	if      (!Q_strcasecmp(nick, "css"))  { prefer = "steam:Counter-Strike Source/cstrike"; Q_strncpyz(mount, "\"steam:Half-Life 2/hl2\" \"steam:Counter-Strike Source/cstrike\"", sizeof(mount)); }
+	else if (!Q_strcasecmp(nick, "cs"))   { prefer = "steam:Half-Life/cstrike";             Q_strncpyz(mount, "\"steam:Half-Life/cstrike\"", sizeof(mount)); }
+	else if (!Q_strcasecmp(nick, "hl"))   { prefer = "steam:Half-Life/valve";               Q_strncpyz(mount, "\"steam:Half-Life/valve\"", sizeof(mount)); }
+	else if (!Q_strcasecmp(nick, "hl2"))  { prefer = "steam:Half-Life 2/hl2";               Q_strncpyz(mount, "\"steam:Half-Life 2/hl2\"", sizeof(mount)); }
+	else if (!Q_strcasecmp(nick, "cod"))  { prefer = "C:/games/Call of Duty/Main";          Q_strncpyz(mount, "\"C:/games/Call of Duty/Main\"", sizeof(mount)); }
+	else if (!Q_strcasecmp(nick, "cod2")) { prefer = "C:/games/Call of Duty 2/main";        Q_strncpyz(mount, "\"C:/games/Call of Duty 2/main\"", sizeof(mount)); }
+	else { prefer = nick; Q_snprintfz(mount, sizeof(mount), "\"%s\"", nick); }	//generic: a full spec typed directly in console
+
+	Cbuf_AddText(va("fs_useaddons %s\n", mount), Cmd_ExecLevel);			//mount the game (add-only, crash-safe)
+	Cbuf_AddText(va("map \"@%s/%s\"\n", prefer, mapname), Cmd_ExecLevel);	//then load ITS copy via the prefer-hint
+}
+
 /*
 ==================
 SV_InitOperatorCommands
@@ -3585,6 +3649,7 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommand ("killserver", SV_KillServer_f);
 	Cmd_AddCommandD ("precaches", SV_PrecacheList_f, "Displays a list of current server precaches.");
 	Cmd_AddCommandAD ("map", SV_Map_f, SV_Map_c, "Begins a new game on the specified map.");
+	Cmd_AddCommandD ("mapfrom", SV_MapFrom_f, "nettest (P26 Part 2): mapfrom <game> <mapname> — mount that game then load ITS copy of a same-named map. <game> = css|cs|hl|hl2|cod|cod2 (or a full \"steam:Game/dir\" spec). e.g. mapfrom css de_dust2. The css/hl/cod... aliases wrap this.");
 	Cmd_AddCommandAD ("mapedit", SV_Map_f, SV_Map_c, "Loads the named map without any gamecode active.");
 #ifdef Q3SERVER
 	Cmd_AddCommandAD ("spmap", SV_Map_f, SV_Map_c, "Loads a map in single-player mode, for Quake III compat.");

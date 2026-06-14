@@ -616,6 +616,7 @@ extern cvar_t gl_part_flame;
 cvar_t r_part_rain_quantity = CVARF("r_part_rain_quantity", "1", CVAR_ARCHIVE);
 
 cvar_t r_particle_tracelimit = CVARFD("r_particle_tracelimit", "0x7fffffff", CVAR_ARCHIVE, "Number of traces to allow per frame for particle physics.");
+cvar_t r_part_splashlimit = CVARFD("r_part_splashlimit", "0x7fffffff", CVAR_ARCHIVE, "Max impact-splash effects (land + water + ring) spawned per frame, shared across all of them. Decoupled from collision: drops still die/stop on impact, but only this many splashes spawn. 0 = collide silently (no splash anywhere). Unlike r_particle_tracelimit (a land-trace cost cap) this also covers water.");
 cvar_t r_part_sparks = CVAR("r_part_sparks", "1");
 cvar_t r_part_sparks_trifan = CVAR("r_part_sparks_trifan", "1");
 cvar_t r_part_sparks_textured = CVAR("r_part_sparks_textured", "1");
@@ -658,6 +659,7 @@ void P_InitParticleSystem(void)
 	Cvar_Register(&r_part_rain_quantity, particlecvargroupname);
 
 	Cvar_Register(&r_particle_tracelimit, particlecvargroupname);
+	Cvar_Register(&r_part_splashlimit, particlecvargroupname);
 
 	Cvar_Register(&r_part_maxparticles, particlecvargroupname);
 	Cvar_Register(&r_part_maxdecals, particlecvargroupname);
@@ -979,6 +981,37 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 			*ent = result;
 		return bestfrac;
 	}
+}
+
+//nettest: like CL_TraceLine, but with MOVE_HITPROPS so it ALSO collides with SOLID_PHYSICS_*
+//props (the rotated filing cabinet) while still skipping players/monsters. CSQC path only; used
+//by the `clipprops` particle flag so weather rain/snow splash on phys props. World_OBBTrace
+//returns a world-space normal, so the splash direction is correct on tilted faces.
+float CL_TraceLineProps (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int *ent)
+{
+#ifdef CSQC_DAT
+	trace_t trace;
+	extern world_t csqc_world;
+	if (csqc_world.progs)
+	{
+		trace = World_Move(&csqc_world, start, vec3_origin, vec3_origin, end, MOVE_NOMONSTERS|MOVE_HITPROPS, csqc_world.edicts);
+		VectorCopy(trace.endpos, impact);
+		if (normal)
+			VectorCopy(trace.plane.normal, normal);
+		if (ent)
+		{
+			if (trace.entnum)
+				*ent = trace.entnum;
+			else if (trace.ent)
+				*ent = -((wedict_t*)trace.ent)->entnum;
+			else
+				*ent = 0;
+		}
+		return trace.fraction;
+	}
+#endif
+	//No CSQC progs: fall back to the world/physent path (no prop collision there).
+	return CL_TraceLine(start, end, impact, normal, ent);
 }
 
 //handy utility...

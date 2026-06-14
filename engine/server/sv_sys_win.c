@@ -316,6 +316,69 @@ LONG CALLBACK nonmsvc_CrashExceptionHandler(PEXCEPTION_POINTERS ExceptionInfo)
 }
 #endif
 
+//nettest: unconditional crash-address logger for the RELEASE dedicated server (CATCHCRASH is debug-only, so
+//there is otherwise NO crash handler / no minidump / no qconsole.log).  Resolves the faulting address + every
+//stack frame to MODULE+offset, so a crash inside a plugin DLL shows e.g. "fteplug_hl2_x64.dll+0x1234" which
+//objdump can map to a function.  Writes crashaddr.txt via raw Win32 (the fopen_nolink sandbox would swallow
+//it), then EXCEPTION_CONTINUE_SEARCH.
+static void nettest_logmod(HANDLE h, const char *label, void *addr)
+{
+	HMODULE mod = NULL;
+	char modname[64];
+	unsigned long long off = 0;
+	char line[256];
+	DWORD wrote;
+	modname[0] = 0;
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &mod) && mod)
+	{
+		char full[MAX_PATH];
+		char *nm;
+		full[0] = 0;
+		GetModuleFileNameA(mod, full, sizeof(full));
+		nm = strrchr(full, '\\');
+		nm = nm ? nm+1 : full;
+		strncpy(modname, nm, sizeof(modname)-1);
+		modname[sizeof(modname)-1] = 0;
+		off = (unsigned long long)((char*)addr - (char*)mod);
+	}
+	line[0] = 0;
+	snprintf(line, sizeof(line), "%s addr=%p mod=%s+0x%llx\r\n", label, addr, modname[0]?modname:"?", off);
+	WriteFile(h, line, (DWORD)strlen(line), &wrote, NULL);
+}
+LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
+{
+	DWORD code = ei->ExceptionRecord->ExceptionCode;
+	if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION
+	 || code == EXCEPTION_STACK_OVERFLOW   || code == EXCEPTION_IN_PAGE_ERROR
+	 || code == EXCEPTION_PRIV_INSTRUCTION)
+	{
+		HANDLE h = CreateFileA("C:\\FTEQuake\\nettest\\crashaddr.txt", FILE_APPEND_DATA,
+			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (h != INVALID_HANDLE_VALUE)
+		{
+			char buf[80];
+			DWORD wrote;
+			void *frames[40];
+			USHORT nf, fi;
+			SetFilePointer(h, 0, NULL, FILE_END);
+			buf[0] = 0;
+			snprintf(buf, sizeof(buf), "=== crash code=0x%08lx ===\r\n", (unsigned long)code);
+			WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
+			nettest_logmod(h, "fault", ei->ExceptionRecord->ExceptionAddress);
+			nf = CaptureStackBackTrace(0, 40, frames, NULL);
+			for (fi = 0; fi < nf; fi++)
+			{
+				char lbl[24];
+				lbl[0] = 0;
+				snprintf(lbl, sizeof(lbl), "  frame[%u]", (unsigned)fi);
+				nettest_logmod(h, lbl, frames[fi]);
+			}
+			CloseHandle(h);
+		}
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
 
 
 
@@ -1652,6 +1715,7 @@ SERVICE_TABLE_ENTRY   DispatchTable[] =
 
 int main (int argc, char **argv)
 {
+	AddVectoredExceptionHandler(1, nettest_CrashAddrLogger);	//nettest: release dedi has no crash handler otherwise
 #ifdef CATCHCRASH
 	LoadLibrary ("DBGHELP");	//heap corruption can prevent loadlibrary from working properly, so do this in advance.
 #ifdef _MSC_VER

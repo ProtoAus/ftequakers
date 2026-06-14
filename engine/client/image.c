@@ -97,6 +97,7 @@ char *r_defaultimageextensions =
 #ifdef IMAGEFMT_LMP
 	//" lmp" //lame outdated junk. any code that expects a lmp will use that extension, so don't bother swapping out extensions for it.
 #endif
+	" vtf"	//nettest: Source .vtf faces (skyboxes/materials) probed by raw name; decoded by the hl2 plugin img_vtf. Last so native tga/png/dds keep priority.
 	;
 
 static void QDECL R_ImageExtensions_Callback(struct cvar_s *var, char *oldvalue);
@@ -15140,7 +15141,7 @@ void Image_List_f(void)
 			}
 			if (tex->flags & IF_MIPCAP)			Con_Printf("^[^8MIPCAP\\tip\\allow the use of d_mipcap^] ");
 			if (tex->flags & IF_PREMULTIPLYALPHA)Con_Printf("^[^8PREMULTIPLYALPHA\\tip\\rgb *= alpha^] ");
-			if (tex->flags & IF_UNUSED15)		Con_Printf("^[^8UNUSED15\\tip\\...^] ");
+			if (tex->flags & IF_HDRDECOMPRESS)	Con_Printf("^[^8HDRDECOMPRESS\\tip\\Source RGBS compressed-HDR (rgb*alpha*8) decode^] ");
 			if (tex->flags & IF_UNUSED16)		Con_Printf("^[^8UNUSED16\\tip\\...^] ");
 			if (tex->flags & IF_INEXACT)		Con_Printf("^[^8INEXACT\\tip\\subdir info isn't to be used for matching^] ");
 			if (tex->flags & IF_WORLDTEX)		Con_Printf("^[^8WORLDTEX\\tip\\gl_picmip_world^] ");

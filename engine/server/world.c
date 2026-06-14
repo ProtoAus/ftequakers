@@ -553,9 +553,12 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 
 // set the abs box
 	solid = ent->v->solid;
-	if ((solid == SOLID_BSP||solid == SOLID_BSPTRIGGER) &&
+	if ((solid == SOLID_BSP||solid == SOLID_BSPTRIGGER||solid == SOLID_PHYSICS_BOX) &&
 	(ent->v->angles[0] || ent->v->angles[1] || ent->v->angles[2]) )
 	{	// expand for rotation
+		// SOLID_PHYSICS_BOX added by the OBB patch: a ROTATED physics box needs the
+		// enlarged broadphase AABB here, or its tilted corners get area-grid culled
+		// before World_OBBTrace's oriented narrowphase ever runs. -- FTE patch (#3)
 #if 1
 		int i;
 		float v;
@@ -909,7 +912,7 @@ qboolean World_TransformedTrace (struct model_s *model, int hulloverride, frames
 	}
 
 	// don't rotate non bsp ents. Too small to bother.
-	if (model && model->loadstate == MLS_LOADED)
+	if (model && model->loadstate == MLS_LOADED && model->funcs.NativeTrace)	//nettest: the CSQC (world.c:2283) and hitmodel trace paths null-check NativeTrace but this server worldmodel path didn't — a model reported MLS_LOADED before its deferred BIH build set NativeTrace would call a NULL fn ptr; the box-hull else-branch below is a safe fallback
 	{
 		VectorSubtract (start, origin, start_l);
 		VectorSubtract (end, origin, end_l);
@@ -951,6 +954,94 @@ qboolean World_TransformedTrace (struct model_s *model, int hulloverride, frames
 		result = false;
 
 	return result;
+}
+
+//Oriented-box trace. Clips a swept player box (mins..maxs, axis-aligned in WORLD
+//space) against entity 'ent's bounding box ROTATED by 'eang'. This is the box
+//analogue of the BSP/alias rotated trace in World_TransformedTrace: rotate the
+//trace into the box's local frame, clip against the (player-expanded) axis-aligned
+//box hull, then rotate the result plane normal back to world space. box_hull stays
+//axis-aligned the whole time (we rotate the TRACE, never the hull planes), so the
+//shared static box_hull is not corrupted for the next entity in the clip loop.
+//Lets a tumbling SOLID_PHYSICS_BOX prop (e.g. the filing cabinet) be walked on /
+//shot as its true oriented shape — smooth like a convex hull, not the per-triangle
+//mesh trace and not the axis-aligned AABB. -- FTE patch (ENGINE_PATCHES.md #3)
+static void World_OBBTrace (wedict_t *ent, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, vec3_t eorg, vec3_t eang, unsigned int hitcontentsmask, trace_t *trace)
+{
+	vec3_t	axis[3], iaxis[3];
+	vec3_t	phalf, pcenter, boxmins, boxmaxs;
+	vec3_t	start_l, end_l, tmp, norm;
+	hull_t	*hull;
+	int		i;
+
+	memset (trace, 0, sizeof(*trace));
+	trace->fraction = 1;
+	trace->allsolid = true;
+	trace->startsolid = false;
+	trace->inopen = true;
+	VectorCopy (end, trace->endpos);
+
+	//physics boxes present BODY contents only, exactly like the axis-aligned path.
+	if (!(hitcontentsmask & FTECONTENTS_BODY))
+		return;
+	if (IS_NAN(end[0]) || IS_NAN(end[1]) || IS_NAN(end[2]))
+		return;
+
+	//Use the entity angles DIRECTLY — do NOT apply the alias r_meshpitch/r_meshroll
+	//flip.  The IQM renders with raw angles, so applying mesh-pitch here pitched the
+	//collision box the WRONG way vs the visible model (World_TransformedTrace's mesh
+	//path applies r_meshpitch for mod_alias, which is exactly why copying it was the
+	//bug).  Raw angles == "r_meshpitch 1" behaviour for the box, without touching the
+	//global cvar (which would flip every other model).
+	AngleVectors (eang, axis[0], axis[1], axis[2]);
+	VectorNegate (axis[1], axis[1]);
+
+	//Minkowski-expand the prop box by the player box, measured in the prop's LOCAL
+	//frame (the world-axis player box projects to a conservative local AABB under
+	//rotation). Tracing the player ORIGIN ray against the expanded box gives the
+	//swept collision. For a point trace (bullets, mins==maxs==0) the expansion is
+	//zero, so it is an exact ray-vs-oriented-box test.
+	for (i = 0; i < 3; i++)
+	{
+		phalf[i]   = (maxs[i] - mins[i]) * 0.5;
+		pcenter[i] = (maxs[i] + mins[i]) * 0.5;
+	}
+	for (i = 0; i < 3; i++)
+	{
+		float h = fabs(axis[i][0])*phalf[0] + fabs(axis[i][1])*phalf[1] + fabs(axis[i][2])*phalf[2];
+		float c = DotProduct(axis[i], pcenter);
+		boxmins[i] = ent->v->mins[i] - (c + h);
+		boxmaxs[i] = ent->v->maxs[i] - (c - h);
+	}
+	hull = World_HullForBox (boxmins, boxmaxs);
+
+	//Rotate the trace into the prop local frame (relative to its origin).
+	VectorSubtract (start, eorg, tmp);
+	start_l[0] = DotProduct(tmp, axis[0]);
+	start_l[1] = DotProduct(tmp, axis[1]);
+	start_l[2] = DotProduct(tmp, axis[2]);
+	VectorSubtract (end, eorg, tmp);
+	end_l[0] = DotProduct(tmp, axis[0]);
+	end_l[1] = DotProduct(tmp, axis[1]);
+	end_l[2] = DotProduct(tmp, axis[2]);
+
+	Q1BSP_RecursiveHullCheck (hull, hull->firstclipnode, start_l, end_l, MASK_PLAYERSOLID, trace);
+
+	if (trace->fraction == 1)
+		VectorCopy (end, trace->endpos);
+	else
+	{
+		//rotate the hit normal back to world space; interpolate endpos along the
+		//world-space ray (matches q1bsp's rotated path).
+		Matrix3x3_RM_Invert_Simple ((void *)axis, iaxis);
+		VectorCopy (trace->plane.normal, norm);
+		trace->plane.normal[0] = DotProduct(norm, iaxis[0]);
+		trace->plane.normal[1] = DotProduct(norm, iaxis[1]);
+		trace->plane.normal[2] = DotProduct(norm, iaxis[2]);
+		VectorInterpolate (start, trace->fraction, end, trace->endpos);
+	}
+	if (trace->contents)
+		trace->contents = FTECONTENTS_BODY;
 }
 
 /*
@@ -1061,6 +1152,15 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 			trace.inopen = true;	//probably wrong...
 			VectorCopy (end, trace.endpos);
 		}
+	}
+	else if (solid == SOLID_PHYSICS_BOX && !model && (eang[0] || eang[1] || eang[2]))
+	{
+		//Oriented physics box: collide against the box ROTATED by the entity
+		//angles instead of its axis-aligned AABB. This is what lets a tumbling
+		//SOLID_PHYSICS_BOX prop (the filing cabinet) be walked on / shot as its
+		//real oriented shape. Scoped to SOLID_PHYSICS_BOX so SOLID_BBOX (items,
+		//players, etc.) keeps its cheap axis-aligned behaviour. -- FTE patch.
+		World_OBBTrace(ent, start, end, mins, maxs, eorg, eang, hitcontentsmask, &trace);
 	}
 	else
 		World_TransformedTrace(model, hullnum, &framestate, start, end, mins, maxs, capsule, &trace, eorg, eang, hitcontentsmask);
@@ -1697,6 +1797,9 @@ void World_UnlinkEdict (wedict_t *ent)
 	}
 }
 
+//nettest: a "phys prop" solid type — collidable geometry that isn't a player/monster/item.
+//MOVE_HITPROPS lets MOVE_NOMONSTERS traces (e.g. weather particles) also hit these. SOLID_PHYSICS_BOX..CYLINDER are 32..36.
+#define SOLID_ISPHYSPROP(s) ((s) >= SOLID_PHYSICS_BOX && (s) <= SOLID_PHYSICS_CYLINDER)
 static void World_ClipToLinks (world_t *w, areagridlink_t *node, moveclip_t *clip)
 {
 	link_t		*l, *next;
@@ -1735,7 +1838,8 @@ static void World_ClipToLinks (world_t *w, areagridlink_t *node, moveclip_t *cli
 					continue;
 		}
 
-		if ((clip->type & MOVE_NOMONSTERS) && (touch->v->solid != SOLID_BSP && touch->v->solid != SOLID_PORTAL))
+		if ((clip->type & MOVE_NOMONSTERS) && (touch->v->solid != SOLID_BSP && touch->v->solid != SOLID_PORTAL)
+			&& !((clip->type & MOVE_HITPROPS) && SOLID_ISPHYSPROP(touch->v->solid)))	//nettest clipprops: MOVE_HITPROPS keeps phys props
 			continue;
 
 		if (clip->passedict)
@@ -1979,7 +2083,8 @@ static void World_ClipToLinks (world_t *w, areanode_t *node, moveclip_t *clip)
 					continue;
 		}
 
-		if ((clip->type & MOVE_NOMONSTERS) && (touch->v->solid != SOLID_BSP && touch->v->solid != SOLID_PORTAL))
+		if ((clip->type & MOVE_NOMONSTERS) && (touch->v->solid != SOLID_BSP && touch->v->solid != SOLID_PORTAL)
+			&& !((clip->type & MOVE_HITPROPS) && SOLID_ISPHYSPROP(touch->v->solid)))	//nettest clipprops: MOVE_HITPROPS keeps phys props
 			continue;
 
 		if (clip->passedict)
@@ -2851,7 +2956,11 @@ static qboolean GenerateCollisionMesh_BSP(world_t *world, model_t *mod, wedict_t
 		if (surf->flags & (SURF_DRAWSKY|SURF_DRAWTURB))
 			continue;
 
-		if (surf->mesh)
+		//nettest: a headless server's VBSP/Source world has surf->mesh ALLOCATED but UNFILLED (the renderer
+		//Batches_Build that fills xyz_array is skipped on a dedicated server) — fall through to the edge path
+		//(exactly what Q1 maps use on a dedicated server, where surf->mesh is NULL) instead of dereferencing
+		//the NULL xyz_array later (the crash building the ODE world collision mesh on Source maps).
+		if (surf->mesh && surf->mesh->xyz_array)
 		{
 			mesh = surf->mesh;
 			numverts += mesh->numvertexes;
@@ -2879,7 +2988,7 @@ static qboolean GenerateCollisionMesh_BSP(world_t *world, model_t *mod, wedict_t
 		if (surf->flags & (SURF_DRAWSKY|SURF_DRAWTURB))
 			continue;
 
-		if (surf->mesh)
+		if (surf->mesh && surf->mesh->xyz_array)	//nettest: see the count loop above (headless VBSP guard)
 		{
 			mesh = surf->mesh;
 			for (i = 0; i < mesh->numvertexes; i++)

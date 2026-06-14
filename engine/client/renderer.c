@@ -104,6 +104,11 @@ cvar_t cl_cursor							= CVAR  ("cl_cursor", "");
 cvar_t cl_cursorscale						= CVAR  ("cl_cursor_scale", "1.0");
 cvar_t cl_cursorbiasx						= CVAR  ("cl_cursor_bias_x", "0.0");
 cvar_t cl_cursorbiasy						= CVAR  ("cl_cursor_bias_y", "0.0");
+//nettest: ignore a filesystem gfx/palette.lmp + gfx/colormap.lmp and use the engine's built-in
+//Quake palette/fullbright instead.  Set 1 when you MOUNT an external game (e.g. a Steam Half-Life/
+//CS dir) for its TEXTURES but don't want its global palette/colormap replacing yours (which corrupts
+//colours -> green, and flips fullbright on -> random glowing pixels, across ALL your own content).
+cvar_t r_builtinpalette						= CVARFD ("r_builtinpalette", "0", CVAR_ARCHIVE, "Ignore any mounted gfx/palette.lmp + gfx/colormap.lmp and use the engine's built-in Quake palette/fullbright. Use when mounting an external game for its textures only. -- FTE patch (nettest).");
 
 #ifdef QWSKINS
 cvar_t gl_nocolors							= CVARFD  ("gl_nocolors", "0", CVAR_ARCHIVE, "Ignores player colours and skins, reducing texture memory usage at the cost of not knowing whether you're killing your team mates.");
@@ -756,6 +761,18 @@ void R_ToggleFullscreen_f(void)
 //	Con_Printf("full video restart took %f secs\n", Sys_DoubleTime() - time);
 }
 
+//nettest: a real "flushshaders" command.  Drops the shader cache + rescans the filesystem so freshly-written
+//shader files (the mod's custom sprays) are re-parsed AND any shader that wasn't built yet gets rebuilt.  This
+//is exactly what the CVAR_SHADERSYSTEM cvars (r_wateralpha etc.) do on change -- which is why nudging
+//r_wateralpha "fixed" the see-through CoD water on a dedicated-server connect (the water shaders were stale).
+//The mod's CSQC already runs "flushshaders" on map load (client/cl_sprays.qc); it was a silent no-op
+//("Unknown command flushshaders") until now, so the water stayed stale on a connect until a manual cvar nudge.
+void Shader_NeedReload(qboolean rescanfs);	//nettest: declared in gl/shader.h, not always pulled into this TU
+static void R_FlushShaders_f(void)
+{
+	Shader_NeedReload(true);
+}
+
 void Renderer_Init(void)
 {
 	currentrendererstate.renderer = NULL;
@@ -765,6 +782,7 @@ void Renderer_Init(void)
 	Cmd_AddCommand("setrenderer", R_SetRenderer_f);
 	Cmd_AddCommand("vid_restart", R_RestartRenderer_f);
 	Cmd_AddCommand("vid_reload", R_ReloadRenderer_f);
+	Cmd_AddCommand("flushshaders", R_FlushShaders_f);	//nettest: real shader-cache flush (fixes connect-water + spray refresh; see R_FlushShaders_f above)
 	Cmd_AddCommand("vid_toggle", R_ToggleFullscreen_f);
 
 #ifdef RTLIGHTS
@@ -792,6 +810,7 @@ void Renderer_Init(void)
 #endif
 
 	Cvar_Register (&gl_conback, GRAPHICALNICETIES);
+	Cvar_Register (&r_builtinpalette, GRAPHICALNICETIES);	//nettest
 
 	Cvar_Register (&r_novis, GLRENDEREROPTIONS);
 
@@ -1558,7 +1577,7 @@ qboolean R_ApplyRenderer_Load (rendererstate_t *newr)
 
 		if (host_basepal)
 			BZ_Free(host_basepal);
-		host_basepal = (qbyte *)FS_LoadMallocFile ("gfx/palette.lmp", &sz);
+		host_basepal = r_builtinpalette.ival ? NULL : (qbyte *)FS_LoadMallocFile ("gfx/palette.lmp", &sz);	//nettest: skip a mounted (e.g. Half-Life) palette so it can't override ours globally -> falls to default_quakepal below
 		vid.fullbright = host_basepal?32:0;	//q1-like mods are assumed to have 32 fullbright pixels, even if the colormap is missing.
 		if (!host_basepal)
 		{
@@ -1588,7 +1607,7 @@ qboolean R_ApplyRenderer_Load (rendererstate_t *newr)
 
 		{
 			size_t csize;
-			qbyte *colormap = (qbyte *)FS_LoadMallocFile ("gfx/colormap.lmp", &csize);
+			qbyte *colormap = r_builtinpalette.ival ? NULL : (qbyte *)FS_LoadMallocFile ("gfx/colormap.lmp", &csize);	//nettest: see r_builtinpalette (skips a mounted HL/CS colormap that wrongly flips fullbright on)
 
 			if (colormap && csize == VID_GRADES*256+1 && Ruleset_FileLoaded("gfx/colormap.lmp", colormap, csize))
 			{
@@ -2530,6 +2549,8 @@ mspriteframe_t *R_GetSpriteFrame (entity_t *currententity)
 	float			*pintervals, fullinterval, targettime, time;
 
 	psprite = currententity->model->meshinfo;
+	if (currententity->model->type != mod_sprite || !psprite)
+		return NULL;	//nettest: a non-sprite / failed-load model (e.g. a Source sprite .vmt fed to the model loader -> mod_dummy with NULL meshinfo) must never be dereferenced as a sprite. The caller treats a NULL frame as "draw nothing".
 	frame = currententity->framestate.g[FS_REG].frame[0];
 
 	if ((frame >= psprite->numframes) || (frame < 0))

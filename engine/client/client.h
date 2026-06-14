@@ -578,6 +578,7 @@ typedef struct
 
 	colourised_t *colourised;
 	qboolean	nqexpectingstatusresponse;
+	int			shader_reload_servercount;	//nettest: cl.servercount we last fired the post-first-frame water/shader reload for (re-armed per map; -1 = none yet).  See the one-shot in CL_Frame.
 } client_static_t;
 
 extern client_static_t	cls;
@@ -1229,6 +1230,7 @@ extern char emodel_name[], pmodel_name[], prespawn_name[], modellist_name[], sou
 
 //CL_TraceLine traces against network(positive)+csqc(negative) ents. returns frac(1 on failure), and impact, normal, ent values
 float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int *ent);
+float CL_TraceLineProps (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int *ent);	//nettest: CL_TraceLine + SOLID_PHYSICS_* props (MOVE_HITPROPS)
 entity_t *TraceLineR (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, qboolean bsponly);
 
 //

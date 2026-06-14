@@ -624,6 +624,50 @@ int VARGS Sys_DebugLog(char *file, char *fmt, ...)
 	return 1;
 };
 
+//nettest (crash diag): UNCONDITIONAL crash-address logger (the release mingw build compiles out the whole
+//CATCHCRASH handler below, so a segfault otherwise leaves no trace). A process-wide vectored handler
+//registered in WinMain calls this; it records the faulting module-relative address to crashaddr.txt for
+//addr2line, then returns CONTINUE_SEARCH so normal handling is unchanged. Benign first-chance exceptions
+//pass through. Uses raw Win32 + an absolute path because FTE's `#define fopen fopen_nolink` + an unknown
+//cwd swallowed earlier attempts.
+LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
+{
+	DWORD code = ei->ExceptionRecord->ExceptionCode;
+	if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION
+	 || code == EXCEPTION_STACK_OVERFLOW   || code == EXCEPTION_IN_PAGE_ERROR
+	 || code == EXCEPTION_PRIV_INSTRUCTION)
+	{
+		char *base = (char*)GetModuleHandle(NULL);
+		char *addr = (char*)ei->ExceptionRecord->ExceptionAddress;
+		char buf[256];
+		buf[0] = 0;
+		snprintf(buf, sizeof(buf), "code=0x%08lx addr=%p base=%p rva=0x%llx\r\n",
+			(unsigned long)code, (void*)addr, (void*)base, (unsigned long long)(addr - base));
+		HANDLE h = CreateFileA("C:\\FTEQuake\\nettest\\crashaddr.txt", FILE_APPEND_DATA,
+			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (h != INVALID_HANDLE_VALUE)
+		{
+			DWORD wrote;
+			void *frames[28];
+			USHORT nf, fi;
+			SetFilePointer(h, 0, NULL, FILE_END);
+			WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
+			//also capture the call stack (module-relative) so addr2line can show the FULL chain.
+			nf = CaptureStackBackTrace(0, 28, frames, NULL);
+			for (fi = 0; fi < nf; fi++)
+			{
+				char fbuf[80];
+				fbuf[0] = 0;
+				snprintf(fbuf, sizeof(fbuf), "  frame[%u] rva=0x%llx\r\n",
+					(unsigned)fi, (unsigned long long)((char*)frames[fi] - base));
+				WriteFile(h, fbuf, (DWORD)strlen(fbuf), &wrote, NULL);
+			}
+			CloseHandle(h);
+		}
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
 #ifdef CATCHCRASH
 #include "dbghelp.h"
 typedef BOOL (WINAPI *MINIDUMPWRITEDUMP) (
@@ -4506,6 +4550,14 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #endif
 #endif
 
+	//nettest (crash diag): register the crash-address logger UNCONDITIONALLY + process-wide (vectored) so a
+	//segfault records its faulting address even in release (where the CATCHCRASH __try below is compiled out).
+	{
+		PVOID (WINAPI *pAVEHlog)(ULONG, PVECTORED_EXCEPTION_HANDLER);
+		dllfunction_t avehlogfuncs[] = {{(void*)&pAVEHlog, "AddVectoredExceptionHandler"}, {NULL,NULL}};
+		if (Sys_LoadLibrary("kernel32.dll", avehlogfuncs) && pAVEHlog)
+			pAVEHlog(1, nettest_CrashAddrLogger);
+	}
 #ifdef CATCHCRASH
 	LoadLibraryU ("DBGHELP");	//heap corruption can prevent loadlibrary from working properly, so do this in advance.
 #ifdef MSVC_SEH

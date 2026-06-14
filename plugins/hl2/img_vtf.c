@@ -232,6 +232,46 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			}
 		}
 	}
+	//nettest: Source compressed-HDR (RGBS) sky face — stored in a BGRA8 VTF, but the alpha
+	// byte is a per-pixel LINEAR HDR scale (not real alpha). Flagged via the $hdr: shader name
+	// prefix (IF_HDRDECOMPRESS). Uploading the raw bytes treated the scale as alpha -> banded/
+	// dark. Decode to linear float (the engine repacks RGBA32F -> RGBA16F/byte on upload):
+	//   linear.rgb = srgb_to_linear(rgb/255) * (alpha/255) * 8.0
+	// matching Valve's sky_hdr_compressed_rgbs shader (result.rgb = rgb*alpha; result *=
+	// InputScale=8; with an sRGB read on rgb). $color tint is ignored (defaults to white).
+	if (mips && (flags & IF_HDRDECOMPRESS) && vmffmt == VMF_BGRA8)
+	{
+		float srgblin[256];
+		unsigned int m, n;
+		for (n = 0; n < 256; n++)
+		{
+			float c = n / 255.0f;
+			srgblin[n] = (c <= 0.04045f) ? (c / 12.92f) : powf((c + 0.055f) / 1.055f, 2.4f);
+		}
+		for (m = 0; m < mips->mipcount; m++)
+		{
+			const qbyte *src = mips->mip[m].data;
+			unsigned int px = mips->mip[m].width * mips->mip[m].height * (unsigned int)mips->mip[m].depth;
+			float *dst, *out;
+			unsigned int p;
+			if (!src || !px)
+				continue;
+			out = dst = plugfuncs->Malloc(px * 4 * sizeof(float));
+			for (p = 0; p < px; p++, src += 4, out += 4)
+			{
+				float a = src[3] * (8.0f / 255.0f);	//alpha = linear HDR scale; *8 = InputScale
+				out[0] = srgblin[src[2]] * a;	//R  (VTF byte order is B,G,R,A)
+				out[1] = srgblin[src[1]] * a;	//G
+				out[2] = srgblin[src[0]] * a;	//B
+				out[3] = 1.0f;
+			}
+			mips->mip[m].data = dst;
+			mips->mip[m].datasize = px * 4 * (unsigned int)sizeof(float);
+			mips->mip[m].needfree = true;
+		}
+		mips->encoding = PTI_RGBA32F;
+	}
+
 	return mips;
 }
 

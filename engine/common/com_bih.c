@@ -1193,6 +1193,8 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 			vec3_t start_l;
 			vec3_t end_l;
 
+			if (!node->data.mesh.model || node->data.mesh.model->loadstate != MLS_LOADED || !node->data.mesh.model->funcs.NativeTrace)
+				return;	//nettest: a flushed/non-collidable static prop (model not loaded / no NativeTrace fn) — skip it instead of calling a NULL fn pointer. The sibling BIH_RecursiveTrace already guards loadstate; this Test variant didn't.
 			VectorSubtract (tr->startpos, node->data.mesh.tr->origin, start_l);
 			VectorSubtract (tr->endpos, node->data.mesh.tr->origin, end_l);
 			node->data.mesh.model->funcs.NativeTrace(node->data.mesh.model, 0, NULLFRAMESTATE, node->data.mesh.tr->axis, start_l, end_l, tr->size.min, tr->size.max, tr->shape==shape_iscapsule, tr->hitcontents, &sub);

@@ -550,7 +550,7 @@ void Con_History_Load(void)
 {
 	char line[8192];
 	char *cr;
-	vfsfile_t *file = FS_OpenVFS("conhistory.txt", "rb", FS_ROOT);
+	vfsfile_t *file = FS_OpenVFS("conhistory.txt", "rb", FS_GAMEONLY);	//nettest: was FS_ROOT (basedir) -> keep it inside the gamedir (nettest/) so the install root stays clean
 
 	for (edit_line=0 ; edit_line<=CON_EDIT_LINES_MASK ; edit_line++)
 	{
@@ -587,7 +587,7 @@ void Con_History_Save(void)
 	if (!con_savehistory.ival)
 		return;
 
-	file = FS_OpenVFS("conhistory.txt", "wb", FS_ROOT);
+	file = FS_OpenVFS("conhistory.txt", "wb", FS_GAMEONLY);	//nettest: was FS_ROOT (basedir) -> write into the gamedir (nettest/) instead
 	if (file)
 	{
 		line = edit_line - CON_EDIT_LINES_MASK;

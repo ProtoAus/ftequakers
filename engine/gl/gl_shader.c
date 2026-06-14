@@ -653,8 +653,9 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 	//if possible directly use a 7th/cubemap texture instead
 	//this requires fixing the sky code to not do the random transforms thing though.
 	qboolean allokay = true;
-	int i, ss, sp;
+	int i, ss, sp, pass;
 	char path[MAX_QPATH];
+	char hdrname[MAX_QPATH];		//nettest: <skyname>_hdr<side> compressed-HDR variant
 
 	static char	*skyname_suffix[][6] = {
 		{"rt", "bk", "lf", "ft", "up", "dn"},
@@ -669,7 +670,9 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 		"%s_%s",
 		"%s%s",
 		"env/%s%s",
-		"gfx/env/%s%s"
+		"gfx/env/%s%s",
+		"skybox/%s%s",			//nettest: Source/GoldSrc skyboxes live under materials/skybox/<name><side>.vtf
+		"materials/skybox/%s%s"	//nettest: explicit materials/ prefix (matches how Source .vpk paths are mounted)
 	};
 
 	if (*texturename == '$')
@@ -691,12 +694,34 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 		}
 		else
 		{
-			for (sp = 0; sp < sizeof(skyname_pattern)/sizeof(skyname_pattern[0]); sp++)
+			//nettest: HL2 ships a compressed-HDR sky face named "<skyname>_hdr<side>"
+			// (e.g. sky_day01_01_hdrrt) ALONGSIDE the LDR "<skyname><side>". The 8-bit
+			// LDR face bands; the _hdr face is RGBS-in-BGRA8 (or RGBA16F) and is smooth.
+			// Probe the _hdr variant FIRST with IF_HDRDECOMPRESS so img_vtf decodes the
+			// rgb*alpha*8 face (a native RGBA16F _hdr face just loads as float and ignores
+			// the flag, since the decode gate is vmffmt==VMF_BGRA8); fall back to the LDR
+			// face if no HDR variant exists (CS:S / older skies).
+			Q_snprintfz(hdrname, sizeof(hdrname), "%s_hdr", texturename);
+			for (pass = 0; pass < 2; pass++)
 			{
-				for (ss = 0; ss < sizeof(skyname_suffix)/sizeof(skyname_suffix[0]); ss++)
+				char *tn = pass ? texturename : hdrname;
+				for (sp = 0; sp < sizeof(skyname_pattern)/sizeof(skyname_pattern[0]); sp++)
 				{
-					Q_snprintfz ( path, sizeof(path), skyname_pattern[sp], texturename, skyname_suffix[ss][i] );
-					images[i] = R_LoadHiResTexture ( path, NULL, IF_NOALPHA|IF_CLAMP|IF_LOADNOW);
+					for (ss = 0; ss < sizeof(skyname_suffix)/sizeof(skyname_suffix[0]); ss++)
+					{
+						qboolean ishdr;
+						unsigned int xf;
+						Q_snprintfz ( path, sizeof(path), skyname_pattern[sp], tn, skyname_suffix[ss][i] );
+						//nettest: decode ANY face whose filename carries the Source "_hdr" tag —
+						// covers the "<name>"+"_hdr" probe AND a skyname the mapper already pointed
+						// at the _hdr variant (e.g. sky_day03_01_hdr, which otherwise loaded as plain
+						// LDR via pass 1 and kept banding). Plain LDR faces keep IF_NOALPHA.
+						ishdr = (strstr(path, "_hdr") != NULL);
+						xf = (ishdr ? IF_HDRDECOMPRESS : IF_NOALPHA) | IF_CLAMP | IF_LOADNOW;
+						images[i] = R_LoadHiResTexture ( path, NULL, xf);
+						if (images[i]->width)
+							break;
+					}
 					if (images[i]->width)
 						break;
 				}
@@ -830,6 +855,11 @@ static int Shader_SetImageFlags(parsestate_t *parsestate, shaderpass_t *pass, ch
 		{
 			*name+=11;
 			flags |= IF_PALETTIZE;
+		}
+		else if (!Q_strnicmp(*name, "$hdr:", 5))	//nettest: Source compressed-HDR (RGBS-in-BGRA8) sky face — img_vtf decodes rgb*alpha*8 to linear float
+		{
+			*name+=5;
+			flags |= IF_HDRDECOMPRESS;
 		}
 		else
 			break;
@@ -1993,7 +2023,9 @@ static qboolean Shader_LoadPermutations(char *name, program_t *prog, char *scrip
 				if (strncmp("OFFSETMAPPING", script, end - script))
 				if (strncmp("RELIEFMAPPING", script, end - script))
 				if (strncmp("FAKESHADOWS", script, end - script))
-					Con_DPrintf("Unknown pemutation in glsl program %s\n", name);
+				if (strncmp("NOFOG", script, end - script))			//nettest: the VMT programs declare NOFOG/AMBIENTCUBE as compile-time #defines (via #define injection), not bitmask permutations — recognise + skip like TESS/SPECULAR above
+				if (strncmp("AMBIENTCUBE", script, end - script))
+					Con_DLPrintf(2, "Unknown pemutation in glsl program %s\n", name);	//nettest: demote to developer 2 — this is about the bitmask permu table, not actual rendering, so it's spammy-but-benign
 			}
 			script = end;
 		}
@@ -5167,6 +5199,23 @@ static void Shader_Readpass (parsestate_t *ps)
 	Shader_EndPass(ps);
 }
 
+//nettest: CoD/CoD2 .stype materials use Q3-style directives FTE doesn't implement (nvTexShader, waterMap, perlight,
+//sunfile, tessSize, radialNormals). They're harmless; recognise-and-skip them so they don't spam the developer
+//console, while genuine typos / unknown directives still warn.
+static qboolean Shader_IsKnownIgnoredDirective(const char *token)
+{
+	static const char *ignored[] = {"nvTexShader", "waterMap", "perlight", "sunfile", "tessSize", "radialNormals",
+		//nettest: + Source VMT pass-only keywords / blendfunc args that leak to the top level of the generated shader (harmless no-ops there)
+		"alphatest", "rgbgen", "alphagen", "src_alpha", "dst_alpha", "one_minus_src_alpha", "one_minus_dst_alpha", "one", "zero",
+		//nettest: + CoD metadata directive (imagesize) and orphaned CoD/Q3 if() conditional operators that spill onto a continuation line (Shader_EvaluateCondition stops at the newline, leaving the operator as a bogus top-level directive)
+		"imagesize", "||", "&&", "<", "<=", ">", ">=", "==", "!=", NULL};
+	const char **i;
+	for (i = ignored; *i; i++)
+		if (!Q_stricmp(token, *i))
+			return true;
+	return false;
+}
+
 //we've read the first token, now make sense of it and any args
 static qboolean Shader_Parsetok(parsestate_t *ps, shaderkey_t *keys, const char *token)
 {
@@ -5206,7 +5255,7 @@ static qboolean Shader_Parsetok(parsestate_t *ps, shaderkey_t *keys, const char 
 		}
 	}
 
-	if (!toolchainprefix)	//we don't really give a damn about prefixes owned by various toolchains - they shouldn't affect us.
+	if (!toolchainprefix && !Shader_IsKnownIgnoredDirective(prefix?prefix:token))	//we don't really give a damn about prefixes owned by various toolchains - they shouldn't affect us.
 	{
 		if (prefix)
 			Con_DPrintf("Unknown shader directive parsing %s: \"%s\"\n", ps->s->name, prefix);

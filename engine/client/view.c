@@ -730,11 +730,11 @@ void V_SetContentsColor (int contents)
 
 	if (contents & FTECONTENTS_LAVA)
 		v = &v_cshift_lava;
-	else if (contents & (FTECONTENTS_SLIME | FTECONTENTS_SOLID))
+	else if (contents & FTECONTENTS_SLIME)
 		v = &v_cshift_slime;
 	else if (contents & FTECONTENTS_WATER)
 		v = &v_cshift_water;
-	else
+	else	//note: pure FTECONTENTS_SOLID (eg the eye is in the void/outside the bsp while noclipping) falls through to empty rather than being tinted green like slime.
 		v = &v_cshift_empty;
 
 	pv->cshifts[CSHIFT_CONTENTS].destcolor[0]	= v->vec4[0];

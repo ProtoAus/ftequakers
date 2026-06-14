@@ -64,6 +64,11 @@ cvar_t	cl_pure		= CVARD("cl_pure", "0", "0=standard quake rules.\n1=clients shou
 cvar_t	cl_sbar		= CVARFC("cl_sbar", "0", CVAR_ARCHIVE, CL_Sbar_Callback);
 cvar_t	cl_hudswap	= CVARF("cl_hudswap", "0", CVAR_ARCHIVE);
 cvar_t	cl_maxfps	= CVARFD("cl_maxfps", "250", CVAR_ARCHIVE, "Sets the maximum allowed framerate. If you're using vsync or want to uncap framerates entirely then you should probably set this to 0. Set cl_yieldcpu 0 if you're trying to benchmark.");
+//nettest: set to 1 by the engine when the user launched STRAIGHT into a game (+connect / +map / a demo) so
+//MenuQC's m_init can SKIP the menu backdrop (whose own `map` would otherwise clobber the launch command).
+//Must be a REGISTERED cvar (not a Cvar_Get/USERCREATED one) so it survives the post-CL_Init usercreated-cvar
+//reset; CVAR_NOSAVE keeps it out of config.cfg.
+cvar_t	cl_launchintogame = CVARFD("cl_launchintogame", "0", CVAR_NOSAVE|CVAR_NORESET, "Engine-set: 1 when launched with a +connect/+map/demo command-line so the mod menu can skip its backdrop.");
 static cvar_t	cl_maxfps_slop	= CVARFD("cl_maxfps_slop", "3", CVAR_ARCHIVE, "If a frame is delayed (eg because of poor system timer precision), this is how much sooner to pretend the frame happened (in milliseconds). If it is set too low then the average framerate will drop below the target, while too high may result in excessively fast frames.");
 static cvar_t	cl_idlefps	= CVARAFD("cl_idlefps", "60", "cl_maxidlefps"/*dp*/, CVAR_ARCHIVE, "This is the maximum framerate to attain while idle/paused/unfocused.");
 cvar_t	cl_yieldcpu = CVARFD("cl_yieldcpu", "1", CVAR_ARCHIVE, "Attempt to yield between frames. This can resolve issues with certain drivers and background software, but can mean less consistant frame times. Will reduce power consumption/heat generation so should be set on laptops or similar (over-hot/battery powered) devices.");
@@ -2479,6 +2484,7 @@ void CL_Disconnect (const char *reason)
 		Cvar_Set(&cl_disconnectreason, reason);
 
 	connectinfo.trying = false;
+	cls.shader_reload_servercount = -1;	//nettest: re-arm the post-first-frame water/shader reload for the next connect (also covers a reconnect to the same unchanged map, where cl.servercount wouldn't differ)
 
 	SCR_SetLoadingStage(0);
 
@@ -5750,6 +5756,7 @@ void CL_Init (void)
 	cls.state = ca_disconnected;
 	cls.demotrack = -1;
 	cls.demonum = -1;
+	cls.shader_reload_servercount = -1;	//nettest: arm the post-first-frame water/shader reload for the very first connect (re-armed per map thereafter)
 
 #ifdef SVNREVISION
 	if (strcmp(STRINGIFY(SVNREVISION), "-"))
@@ -7479,6 +7486,19 @@ double Host_Frame (double time)
 				vrui.enabled |= cl_vrui_force.ival || (vrflags&VRF_UIACTIVE);
 				if (SCR_UpdateScreen())
 					fps_count += 1+max(0, cl_fakeframes.ival);
+				//nettest: connect-time water renders see-through until a shader reload happens AFTER the first frame.
+				//Shader_DoReload early-returns while cls.state < ca_active (gl_shader.c), so on a connect the water
+				//shader is finalized stale (the mod's CSQC "flushshaders" fires too early, at ca_onserver).  Reproduce
+				//the user's working manual post-connect "flushshaders": once active + the world is loaded + this first
+				//active frame has been drawn, request ONE reload.  shader_reload_needed is consumed at the top of the
+				//NEXT frame's Shader_DoReload (before the world is drawn), so that frame shows corrected water.
+				//cl.servercount (fresh per signon) re-arms it per map; the marker lives in cls (survives the cl wipe).
+				if (cls.state == ca_active && cls.shader_reload_servercount != cl.servercount
+					&& cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADED)
+				{
+					Shader_NeedReload(false);
+					cls.shader_reload_servercount = cl.servercount;
+				}
 				if (R2D_Flush)
 					Sys_Error("update didn't flush 2d cache\n");
 				RSpeedEnd(RSPEED_TOTALREFRESH);
@@ -7820,9 +7840,9 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 		Cbuf_AddText ("exec default.cfg\n", RESTRICT_LOCAL);
 		if (q3cfg <= def && q3cfg!=FDEPTH_MISSING)
 			Cbuf_AddText ("exec q3config.cfg\n", RESTRICT_LOCAL);
-		else //if (cfg <= def && cfg!=0x7fffffff)
+		else if (!FS_FileIsAddonOnly("config.cfg"))	//nettest: skip a foreign config.cfg from a fs_load addon (mounted game)
 			Cbuf_AddText ("exec config.cfg\n", RESTRICT_LOCAL);
-		if (def!=FDEPTH_MISSING)
+		if (def!=FDEPTH_MISSING && !FS_FileIsAddonOnly("autoexec.cfg"))	//nettest: ditto — don't run a mounted game's autoexec.cfg
 			Cbuf_AddText ("exec autoexec.cfg\n", RESTRICT_LOCAL);
 	}
 #endif
@@ -8058,6 +8078,18 @@ void Host_Init (quakeparms_t *parms)
 
 //	W_LoadWadFile ("gfx.wad");
 	Key_Init ();
+
+	//nettest: set the launch-into-game flag before the menu's m_init reads it (m_init skips its backdrop when
+	//this is 1, so a command-line +connect/+map/demo lands straight in the game instead of the menu world).
+	//The cvar is declared CVAR_NORESET because Cvar_GamedirChange() (triggered as the fs mounts the game
+	//during boot) otherwise resets every registered cvar to its engine default BEFORE m_init runs, wiping our
+	//value back to "0".  NORESET makes Cvar_GamedirChange skip it, so the value we set here survives to m_init.
+	Cvar_Register (&cl_launchintogame, cl_controlgroup);
+	Cvar_ForceSet (&cl_launchintogame,
+		(COM_CheckParm("+connect") || COM_CheckParm("+map") || COM_CheckParm("+spmap")
+		 || COM_CheckParm("+devmap") || COM_CheckParm("+gamemap") || COM_CheckParm("+changelevel")
+		 || COM_CheckParm("+playdemo") || COM_CheckParm("+demo") || COM_CheckParm("+qtvplay")) ? "1" : "0");
+
 	M_Init ();
 	IN_Init ();
 	S_Init ();

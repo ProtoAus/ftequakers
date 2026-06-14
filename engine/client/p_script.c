@@ -292,6 +292,9 @@ typedef struct part_type_s {
 
 	int assoc;
 	int cliptype;
+	int watercliptype;	//nettest: like cliptype, but spawned at a WATER surface the particle falls into (solid traces can't hit water).  P_INVALID = off.
+	int waterringtype;	//nettest: a SECOND effect spawned at the same water surface (the flat ripple ring); rate = that effect's own `count`.  P_INVALID = off.
+	int clipprops;		//nettest: 1 = the cliptype solid trace ALSO collides with SOLID_PHYSICS_* props (rotated cabinet), not just world BSP.  0 = off (default).  Needs engine MOVE_HITPROPS.
 	int inwater;
 	float clipcount;
 	int emit;
@@ -433,6 +436,7 @@ static void QDECL R_ParticleDesc_Callback(struct cvar_s *var, char *oldvalue);
 extern cvar_t r_particledesc;
 extern cvar_t r_part_rain_quantity;
 extern cvar_t r_particle_tracelimit;
+extern cvar_t r_part_splashlimit;
 extern cvar_t r_part_sparks;
 extern cvar_t r_part_sparks_trifan;
 extern cvar_t r_part_sparks_textured;
@@ -515,6 +519,9 @@ static part_type_t *P_GetParticleType(const char *config, const char *name)
 	ptype->assoc = P_INVALID;
 	ptype->inwater = P_INVALID;
 	ptype->cliptype = P_INVALID;
+	ptype->watercliptype = P_INVALID;	//nettest
+	ptype->waterringtype = P_INVALID;	//nettest
+	ptype->clipprops = 0;				//nettest
 	ptype->emit = P_INVALID;
 
 	if (oldlist)
@@ -1065,6 +1072,9 @@ static void P_ResetToDefaults(part_type_t *ptype)
 	ptype->assoc=P_INVALID;
 	ptype->inwater = P_INVALID;
 	ptype->cliptype = P_INVALID;
+	ptype->watercliptype = P_INVALID;	//nettest
+	ptype->waterringtype = P_INVALID;	//nettest
+	ptype->clipprops = 0;				//nettest
 	ptype->emit = P_INVALID;
 	ptype->fluidmask = FTECONTENTS_FLUID;
 	ptype->alpha = 1;
@@ -2034,6 +2044,20 @@ parsefluid:
 			ptype = &part_type[pnum];
 			ptype->cliptype = assoc;
 		}
+		else if (!strcmp(var, "watercliptype"))	//nettest: effect to spawn when this particle crosses a WATER surface (solid traces can't hit water)
+		{
+			assoc = P_AllocateParticleType(config, value);//careful - this can realloc all the particle types
+			ptype = &part_type[pnum];
+			ptype->watercliptype = assoc;
+		}
+		else if (!strcmp(var, "waterringtype"))	//nettest: a second (ring) effect at the same water surface; density = that effect's own `count`
+		{
+			assoc = P_AllocateParticleType(config, value);//careful - this can realloc all the particle types
+			ptype = &part_type[pnum];
+			ptype->waterringtype = assoc;
+		}
+		else if (!strcmp(var, "clipprops"))	//nettest: 1 = also splash/collide on SOLID_PHYSICS_* props (rotated cabinet), not just world BSP
+			ptype->clipprops = atoi(value);
 		else if (!strcmp(var, "clipcount"))
 			ptype->clipcount = atof(value);
 		else if (!strcmp(var, "clipbounce"))
@@ -6969,6 +6993,7 @@ static void PScript_DrawParticleTypes (void)
 	beamseg_t *b, *bkill;
 
 	int traces=r_particle_tracelimit.ival;
+	int splashes=r_part_splashlimit.ival;	//nettest: per-frame cap on impact-splash spawns (land+water+ring), decoupled from the die/stop. See r_part_splashlimit.
 	int rampind;
 	static float oldtime;
 	static float flurrytime;
@@ -7508,7 +7533,68 @@ static void PScript_DrawParticleTypes (void)
 				if (DotProduct(stop,stop) > 10*10)
 				{
 					int e;
-					if (traces-->0&&CL_TraceLine(p->oldorg, p->org, stop, normal, &e)<1)
+
+					/* === WATER-SURFACE SPLASH (watercliptype) — nettest patch ======
+					   The solid trace below traces against MASK_WORLDSOLID, which does
+					   NOT include water (FTECONTENTS_WATER is a FLUID), so a clipping
+					   particle falls straight THROUGH a water surface and only splashes
+					   on the solid floor beneath it.  To splash ON the water too, detect
+					   this particle's air->water crossing along oldorg..org with cheap
+					   pointcontents tests (no extra CL_TraceLine), binary-refine the
+					   surface point, spawn this type's `watercliptype` effect there, and
+					   kill the drop.  OPT-IN per particle type: only runs when
+					   watercliptype is set (e.g. weather.cfg `r_part rain` ->
+					   `watercliptype splashbig`), so snow and other clippers are
+					   untouched.  Dir is straight up off the surface (the splash effect's
+					   veladd/spawnvel/gravity do the arc), mirroring the land cliptype
+					   path below.  Mod side: particles/weather.cfg + client/cl_rain.qc.
+					   Cost: +1 pointcontents per clipping drop per frame (far cheaper
+					   than the CL_TraceLine that already runs here); the binary search
+					   only runs for the few drops actually crossing a surface.
+					   =============================================================== */
+					if (type->watercliptype != P_INVALID && cl.worldmodel && cl.worldmodel->funcs.PointContents
+						&& (cl.worldmodel->funcs.PointContents(cl.worldmodel, NULL, p->org)    &  FTECONTENTS_WATER)
+						&& !(cl.worldmodel->funcs.PointContents(cl.worldmodel, NULL, p->oldorg) &  FTECONTENTS_WATER))
+					{
+						vec3_t wlo, whi, wmid, wnormal;
+						int wk;
+						VectorCopy(p->oldorg, wlo);	/* known AIR  (above the surface) */
+						VectorCopy(p->org,    whi);	/* known WATER (below the surface) */
+						for (wk = 0; wk < 6; wk++)	/* binary-refine the air<->water boundary */
+						{
+							VectorInterpolate(wlo, 0.5, whi, wmid);
+							if (cl.worldmodel->funcs.PointContents(cl.worldmodel, NULL, wmid) & FTECONTENTS_WATER)
+								VectorCopy(wmid, whi);
+							else
+								VectorCopy(wmid, wlo);
+						}
+						wnormal[0] = 0; wnormal[1] = 0; wnormal[2] = 1;	/* straight up off the water */
+						p->die = -1;
+						/* nettest: per-drop water RING at the EXACT surface point — reuses
+						   the surface we just found for the splash (no extra trace/search).
+						   Spawn count 1 -> the ring effect's own `count` IS the density
+						   (e.g. ringsplash count 0.5 = ~50% of water hits get a ring; that
+						   is the speed/density dial).  Replaces the old QC random-sampled
+						   ring (Rain_WaterRingTick), which is now removed. */
+						if (splashes-->0)	//nettest splash budget: the drop already died above (it STOPS at the surface); only the splash spawn is capped, shared with land
+						{
+							if (type->waterringtype != P_INVALID)
+								P_RunParticleEffectType(wlo, wnormal, 1, type->waterringtype);
+							P_RunParticleEffectType(wlo, wnormal, type->clipcount/part_type[type->watercliptype].count, type->watercliptype);
+						}
+						continue;
+					}
+
+					//nettest clipprops (APPLIED — see ENGINE_PATCHES.md Patch 4):
+					//this CL_TraceLine -> World_Move(&csqc_world, MOVE_NOMONSTERS) skips
+					//SOLID_PHYSICS_BOX/TRIMESH, so weather rain falls THROUGH phys props
+					//(cabinet/barrels) while still splashing on SOLID_BSP.  To splash on
+					//props too: add a per-type `clipprops` flag + a props-only trace
+					//(MOVE_NORMAL minus SOLID_SLIDEBOX/BBOX so players aren't hit; do NOT
+					//change global MOVE_NOMONSTERS).  APPLIED: routed via CL_TraceLineProps below when clipprops is set.
+					if (traces-->0 && (type->clipprops	//nettest clipprops: one MOVE_HITPROPS sweep hits world BSP + rotated phys props; World_OBBTrace gives a world-space normal so the splash aims right off tilted faces
+						? CL_TraceLineProps(p->oldorg, p->org, stop, normal, &e)
+						: CL_TraceLine     (p->oldorg, p->org, stop, normal, &e)) < 1)
 					{
 						if (type->stainonimpact && r_bloodstains.value)
 							Surf_AddStain(stop,	p->rgba[1]*-10+p->rgba[2]*-10,
@@ -7589,13 +7675,16 @@ static void PScript_DrawParticleTypes (void)
 							p->die = -1;
 							VectorNormalize(p->vel);
 
-							if (type->clipbounce)
+							if (splashes-->0)	//nettest splash budget: drop already died above (it STOPS at the surface); only the splash spawn is capped (shared with water)
 							{
-								VectorScale(normal, type->clipbounce, normal);
-								P_RunParticleEffectType(stop, normal, type->clipcount/part_type[type->cliptype].count, type->cliptype);
+								if (type->clipbounce)
+								{
+									VectorScale(normal, type->clipbounce, normal);
+									P_RunParticleEffectType(stop, normal, type->clipcount/part_type[type->cliptype].count, type->cliptype);
+								}
+								else
+									P_RunParticleEffectType(stop, p->vel, type->clipcount/part_type[type->cliptype].count, type->cliptype);
 							}
-							else
-								P_RunParticleEffectType(stop, p->vel, type->clipcount/part_type[type->cliptype].count, type->cliptype);
 							continue;
 						}
 					}

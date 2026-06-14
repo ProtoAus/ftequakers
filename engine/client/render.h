@@ -463,7 +463,7 @@ enum imageflags
 	IF_MIPCAP			= 1<<13,	//allow the use of d_mipcap
 	IF_PREMULTIPLYALPHA	= 1<<14,	//rgb *= alpha
 
-	IF_UNUSED15			= 1<<15,	//
+	IF_HDRDECOMPRESS	= 1<<15,	//nettest: Source compressed-HDR (RGBS) face stored in a BGRA8 VTF — decode rgb*alpha*8 (sRGB read) to linear float. Set via the $hdr: shader name prefix.
 	IF_UNUSED16			= 1<<16,	//
 	IF_INEXACT			= 1<<17,	//subdir info isn't to be used for matching
 

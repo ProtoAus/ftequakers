@@ -1390,6 +1390,11 @@ static void QDECL World_ODE_RemoveFromEntity(world_t *world, wedict_t *ed)
 	if (ed->rbe.body.geom)
 		dGeomDestroy((dGeomID)ed->rbe.body.geom);
 	ed->rbe.body.geom = NULL;
+	if (ed->rbe.geomdata)	//nettest: free the dTriMeshData behind a trimesh geom — dGeomDestroy does NOT, so it leaked on every (re)build (per-frame for moving brush ents -> 12GB OOM crash)
+	{
+		dGeomTriMeshDataDestroy((dTriMeshDataID)ed->rbe.geomdata);
+		ed->rbe.geomdata = NULL;
+	}
 	if (ed->rbe.body.body)
 	{
 		dJointID j;
@@ -2190,8 +2195,13 @@ static void World_ODE_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 			}
 			if (!rbefuncs->GenerateCollisionMesh(world, model, ed, geomcenter))
 			{
-				if (ed->rbe.physics)
-					World_ODE_RemoveFromEntity(world, ed);
+				//nettest: brush entity built no collision surfaces (Source func_door_rotating/
+				// func_breakable whose brush model has no faces in FTE). Do NOT RemoveFromEntity —
+				// that resets ed->rbe.physics=false, so the rebuild condition (!physics) re-fires and
+				// we re-attempt + re-spam "has no geometry" EVERY frame. Leave physics=true with a
+				// NULL geom (mins/maxs/modelindex were just recorded above) so we only retry if those
+				// actually change. The entity keeps its normal non-ODE (BSP/brush) collision.
+				ed->rbe.body.geom = NULL;
 				return;
 			}
 
@@ -2200,6 +2210,7 @@ static void World_ODE_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 			dataID = dGeomTriMeshDataCreate();
 			dGeomTriMeshDataBuildSingle(dataID, (void*)ed->rbe.vertex3f, sizeof(float[3]), ed->rbe.numvertices, ed->rbe.element3i, ed->rbe.numtriangles*3, sizeof(int[3]));
 			ed->rbe.body.geom = (void *)dCreateTriMesh(ctx->space, dataID, NULL, NULL, NULL);
+			ed->rbe.geomdata = dataID;	//nettest: track the trimesh data so RemoveFromEntity frees it (dGeomDestroy does NOT)
 			dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
 			break;
 		case GEOMTYPE_BOX:

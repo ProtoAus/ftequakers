@@ -1337,7 +1337,7 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 			}
 			else
 			{
-				Con_Printf(CON_WARNING "Unrecognised model format %c%c%c%c\n", ((char*)buf)[0], ((char*)buf)[1], ((char*)buf)[2], ((char*)buf)[3]);
+				Con_Printf(CON_WARNING "Unrecognised model format %c%c%c%c in \"%s\"\n", ((char*)buf)[0], ((char*)buf)[1], ((char*)buf)[2], ((char*)buf)[3], mod->name);	//nettest: name the offending file (was anonymous) — e.g. a Source sprite .vmt precached as a model
 				BZ_Free(buf);
 				continue;
 			}

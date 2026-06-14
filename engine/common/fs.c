@@ -233,8 +233,22 @@ static unsigned int fs_restarts;
 void *fs_thread_mutex;
 float fs_accessed_time;	//timestamp of read (does not include flocates, which should normally happen via a cache).
 
+//nettest (P26 Part 2): when non-empty, FS_FLocateFile PREFERS a searchpath whose logicalpath contains this
+//string (the resolved absolute game dir).  Set briefly around the worldmodel BSP load (SV_SpawnServer) so a
+//SPECIFIC game's copy of a same-named map loads (CS:S cs_assault over the higher-priority CS1.6 one) without
+//reordering/rebuilding the searchpaths.  Empty => today's plain highest-priority behaviour.
+char fs_preferhint[MAX_OSPATH];
+
 static cvar_t fs_hidesyspaths		= CVARFD	("fs_hidesyspaths", IFWEB("0","1"), 0, "0: Show system paths in console prints that might appear in screenshots or video capture.\n1: Replace the start of filenames in console prints with generic prefixes that cannot leak private info like your operating system's user name.");
 static cvar_t com_fs_cache			= CVARFD	("fs_cache", IFMINIMAL("2","1"), CVAR_ARCHIVE, "0: Do individual lookups.\n1: Scan all files for accelerated lookups. This provides a performance boost on windows and avoids case sensitivity issues on linux.\n2: like 1, but don't bother checking for external changes (avoiding the cost of rebuild the cache).");
+//nettest (P25/P26): DEFAULT 1 (lazy) — at boot index every fs_addons.txt game's maps OFFLINE (no mount)
+// and mount a game ON-DEMAND (fs_useaddons) only when one of its maps is selected. The on-demand mount is
+// purely ADD-ONLY (FS_Addon_Mount appends a searchpath, never frees/rebuilds), so it is crash-safe while a
+// map/backdrop server is loaded — unlike the old rebuild path (P26 KNOWN-BROKEN) which dangled loaded
+// content. Games accumulate for the session (never unmounted mid-session). Boot hashes only the small base
+// (valve+cstrike via the backdrop dep-mount); the heavy hl2/CSS .vpk + CoD .iwd stay lazy until selected.
+// 0 = eager boot-time mounting of all games (old behaviour, escape hatch).
+static cvar_t fs_lazyaddons			= CVARFD	("fs_lazyaddons", "1", CVAR_ARCHIVE, "nettest: lazy on-demand game mounting (add-only, crash-safe). Boot indexes maps offline + hashes only the base; a game mounts on first map-select. 0 = eager boot-time mounting of all games.");
 static cvar_t fs_noreexec			= CVARD		("fs_noreexec", "0", "Disables automatic re-execing configs on gamedir switches.\nThis means your cvar defaults etc may be from the wrong mod, and cfg_save will leave that stuff corrupted!");
 static cvar_t cfg_reload_on_gamedir = CVAR		("cfg_reload_on_gamedir", "1");
 static cvar_t fs_game				= CVARAFCD	("fs_game"/*q3*/, "", "game"/*q2/qs*/, CVAR_NOSAVE|CVAR_NORESET, fs_game_callback, "Provided for Q2 compat. Contains the subdir of the current mod.");
@@ -250,6 +264,8 @@ int fs_finds;
 void COM_CheckRegistered (void);
 void Mods_FlushModList(void);
 static void FS_ReloadPackFilesFlags(unsigned int reloadflags);
+static void FS_RemountAddons(unsigned int loadstuff);	//nettest (P8): fs_load on-demand addon games
+void FS_IndexAddonMaps(void);							//nettest (P25): offline maps_index.txt for the lazy-mount menu
 static qboolean Sys_SteamHasFile(char *steambasedir,size_t steambasedirsize, char *steamdir, char *fname);
 
 static void QDECL fs_game_callback(cvar_t *var, char *oldvalue)
@@ -2201,8 +2217,10 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 		goto fail;
 	}
 
-	if (com_fs_cache.ival && !com_fschanged && !(lflags & FSLF_IGNOREPURE))
-	{
+	if (com_fs_cache.ival && !com_fschanged && !(lflags & FSLF_IGNOREPURE) && !*fs_preferhint)
+	{	//nettest (P26 Part 2): a prefer-hint bypasses the cache fast-path -- the hash keeps only the highest-
+		//priority hit per filename, which is exactly the copy the hint wants to OVERRIDE, so fall through to
+		//the full search (pf = NULL) and let the preferred-searchpath pass below pick the hinted game's copy.
 		bucket_t *b = Hash_GetInsensitiveBucket(&filesystemhash, filename);
 		if (b)
 		{
@@ -2214,6 +2232,40 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	}
 	else
 		pf = NULL;
+
+	if (*fs_preferhint && found == FF_NOTFOUND && ((lflags & FSLF_IGNOREPURE) || fs_puremode < 2))
+	{	//nettest (P26 Part 2): load a SPECIFIC game's copy -- search ONLY searchpaths whose logicalpath
+		//contains the hint (the resolved game dir), so e.g. CS:S cs_assault wins over the CS1.6 one.  On a
+		//miss this leaves found==FF_NOTFOUND and the normal pure/main loops below run as the fallback.
+		for (search = com_searchpaths ; search ; search = search->next)
+		{
+			if ((lflags & FSLF_SECUREONLY) && (search->flags & SPF_UNTRUSTED))
+				continue;
+			{	//match the hint at a PATH BOUNDARY so a game dir can't match a longer one that starts with it
+				//(e.g. ".../Call of Duty" must NOT match ".../Call of Duty 2").  The hint is a full resolved
+				//dir, so it matches at the start and must be followed by a separator or end-of-string.
+				const char *m = Q_strcasestr(search->logicalpath, fs_preferhint);
+				if (!m)
+					continue;
+				m += strlen(fs_preferhint);
+				if (*m && *m != '/' && *m != '\\')
+					continue;
+			}
+			fs_finds++;
+			found = search->handle->FindFile(search->handle, loc, filename, NULL);
+			if (found)
+			{
+				if (!(lflags & FSLF_DONTREFERENCE))
+				{
+					if ((search->flags & fs_referencetype) != fs_referencetype)
+						Con_DPrintf("%s became referenced due to %s\n", search->purepath, filename);
+					search->flags |= fs_referencetype;
+				}
+				loc->search = search;
+				break;
+			}
+		}
+	}
 
 	if (com_purepaths && found == FF_NOTFOUND && !(lflags & FSLF_IGNOREPURE))
 	{
@@ -2474,7 +2526,11 @@ char *FS_GetPackHashes(char *buffer, int buffersize, qboolean referencedonly)
 	{
 		for (search = com_searchpaths ; search ; search = search->next)
 		{
-			if (search->crc_check)
+			//nettest: never advertise SPF_ADDON game-mounts (HL2/CS:S/CoD etc.) to clients — they carry
+			//absolute Steam purepaths, so the client builds "C:/dlcache/games/..." which FS_GetCleanPath
+			//rejects, looping the connect forever (never spawns). Addon mounts have "no pure/server
+			//semantics" by design (see SPF_ADDON in fs.h; FS_EnumerateNonAddonFiles filters them the same way).
+			if (search->crc_check && !(search->flags & SPF_ADDON))
 			{
 				Q_strncatz(buffer, va("%i ", search->crc_check), buffersize);
 			}
@@ -2521,7 +2577,9 @@ char *FS_GetPackNames(char *buffer, int buffersize, int referencedonly, qboolean
 	{
 		for (search = com_searchpaths ; search ; search = search->next)
 		{
-			if (search->crc_check)
+			//nettest: never advertise SPF_ADDON game-mounts to clients (see FS_GetPackHashes above) — their
+			//absolute Steam purepaths break the client's dlcache path and loop the connect forever.
+			if (search->crc_check && !(search->flags & SPF_ADDON))
 			{
 				if (referencedonly == 0 && !(search->flags & SPF_REFERENCED))
 					continue;
@@ -4312,11 +4370,11 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 
 	//temp packages also do not nest
 	if (!(flags & SPF_TEMPORARY))
-		FS_AddDataFiles(oldpaths, purepath, logicalpath, search, flags&(SPF_COPYPROTECTED|SPF_UNTRUSTED|SPF_TEMPORARY|SPF_SERVER|SPF_PRIVATE|SPF_QSHACK|SPF_VIRTUAL), loadstuff);
+		FS_AddDataFiles(oldpaths, purepath, logicalpath, search, flags&(SPF_COPYPROTECTED|SPF_UNTRUSTED|SPF_TEMPORARY|SPF_SERVER|SPF_PRIVATE|SPF_QSHACK|SPF_VIRTUAL|SPF_ADDON), loadstuff);	//nettest (P8): propagate SPF_ADDON so an addon's sub-packages (wads/iwds/vpks) also mount at LOW priority, not high
 
 	search->nextpure = (void*)0x1;	//mark as not linked
 
-	if (flags & (SPF_TEMPORARY|SPF_SERVER))
+	if (flags & (SPF_TEMPORARY|SPF_SERVER|SPF_ADDON))	//nettest: SPF_ADDON also appends at the tail (lowest priority)
 	{
 		int depth = 1;
 		searchpath_t *s;
@@ -5628,7 +5686,12 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 			if (next->orderkey != ++orderkey)
 				break;
 
-	if (next || i != orderkey)//some path changed. make sure the fs cache is flushed.
+	//nettest: ALSO flush on any rebuild (reloadflags), not just pure-path changes.  The old pure-only
+	//condition missed plain searchpath swaps: oldpaths were already ClosePath'd above, yet their file
+	//buckets stayed in filesystemhash, so FS_RemountAddons below rebuilt the hash on top of stale/dangling
+	//buckets -> garbage-pointer crash in Hash_GetInsensitiveBucket when a client connects (the COM_Gamedir
+	//reload re-mounts the fs_addons games, ~60k files, into the un-flushed hash).
+	if (next || i != orderkey || reloadflags)//some path changed. make sure the fs cache is flushed.
 		FS_FlushFSHashReally(false);
 
 #ifdef HAVE_CLIENT
@@ -5636,6 +5699,8 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 #endif
 //	Mod_ClearAll();
 //	Cache_Flush();
+	if (reloadflags)
+		FS_RemountAddons(reloadflags);	//nettest (P8): (re)mount EVERY fs_load addon game at lowest priority after base+mod are up. A genuine rebuild (fs_restart/gamedir switch) is from-scratch with no live lazy-menu map to dangle, so remounting every persisted addon here is correct and keeps the user's games across a restart. On-demand lazy mounting is purely add-only (FS_UseAddons_f), never a rebuild.
 }
 
 void FS_UnloadPackFiles(void)
@@ -5715,6 +5780,7 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 #ifdef MINGW
 #define byte BYTE	//some versions of mingw headers are broken slightly. this lets it compile.
 #endif
+DWORD GetFileAttributesU(const char * lpFileName);	//nettest: defined further down; used by the steam: gamedir directory-existence check below
 static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callback)(void*ctx,const char*basepath),void*ctx)
 {
 	/*
@@ -5734,7 +5800,18 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 		RegCloseKey(key);
 		narrowen(basepath,sizeof(basepath), suckysucksuck);
 		Q_strncatz(basepath, va("/SteamApps/common/%s", steamdir), sizeof(basepath));
-		if ((f = VFSOS_Open(va("%s/%s", basepath, fname), "rb")))
+		if (!*fname)
+		{	//nettest: empty filename = verify the GAMEDIR ITSELF exists (manifest "steam:Subdir/gamedir",
+			//e.g. "steam:Half-Life/cstrike").  A directory can't be VFSOS_Open'd as a file (that always
+			//failed on Windows, so steam: gamedirs never mounted), so check its attributes instead — and
+			//hand the RESOLVED ABSOLUTE PATH (not the empty fname) to the callback so it actually mounts.
+			if (GetFileAttributesU(basepath) != INVALID_FILE_ATTRIBUTES)
+			{
+				callback(ctx, basepath);
+				return true;
+			}
+		}
+		else if ((f = VFSOS_Open(va("%s/%s", basepath, fname), "rb")))
 		{
 			VFS_CLOSE(f);
 			callback(ctx, fname);
@@ -8303,10 +8380,14 @@ static qboolean FS_GetBestHomeDir(ftemanifest_t *manifest)
 		{	//windows has an _access function, but it doesn't actually bother to check if you're allowed to access it, so its utterly pointless.
 			//instead try to append nothing to some file that'll probably exist anyway.
 			//this MAY fail if another program has it open. windows sucks.
-			vfsfile_t *writetest = VFSOS_Open("conhistory.txt", "a");
+			//nettest: was VFSOS_Open("conhistory.txt","a") -- but conhistory now lives in the gamedir (console.c),
+			//so probing it here just left a stray 0-byte conhistory.txt in the install root every launch.  Probe a
+			//throwaway file and delete it instead, so the root stays clean.
+			vfsfile_t *writetest = VFSOS_Open(".fte_writeprobe", "wb");
 			if (!writetest)
 				return true; //basedir isn't writable, we'll need our home! use it by default.
 			VFS_CLOSE(writetest);
+			Sys_remove(".fte_writeprobe");
 		}
 		//else don't use it (unless -usehome, anyway)
 	}
@@ -8431,6 +8512,391 @@ COM_InitFilesystem
 note: does not actually load any packs, just makes sure the basedir+cvars+etc is set up. vfs_fopens will still fail.
 ================
 */
+//=================================================================
+//nettest (ENGINE_PATCHES.md P8): fs_load — on-demand low-priority game mounting
+//=================================================================
+// `fs_load <steam:Game/dir | C:\abs\path | reldir>` mounts an external game's
+// directory at the LOWEST search priority: its assets/maps fill gaps, but the
+// mod's own files ALWAYS win (no console-image / config / video override).  It
+// loads the dir's sub-packages (.wad/.vpk/.iwd/.pk3/.pak).  The set is saved to
+// <gamedir>/fs_addons.txt and auto-remounted on every searchpath rebuild, so it
+// persists across launches.  Replaces always-mounted `basegame steam:...` lines
+// (which mount at HIGH priority and hijack the mod's conback + video mode).
+#define FS_ADDONS_FILE "fs_addons.txt"
+
+static qboolean FS_Addon_Resolve(const char *arg, char *syspath, size_t syssize)
+{
+	if (!strncmp(arg, "steam:", 6))
+	{	//"steam:Game/subdir" -> absolute path via the Steam registry (reuses the basegame resolver)
+		char steamsub[MAX_OSPATH];
+		const char *sl;
+		Q_strncpyz(steamsub, arg+6, sizeof(steamsub));
+		sl = strchr(steamsub, '/');
+		if (!sl || !sl[1])
+		{
+			Con_Printf(CON_WARNING"fs_load: malformed \"%s\" (expected steam:Game/dir)\n", arg);
+			return false;
+		}
+		if (!Sys_SteamHasFile(syspath, syssize, steamsub, ""))
+		{
+			Con_Printf(CON_WARNING"fs_load: steam game \"%s\" not found/installed\n", arg+6);
+			return false;
+		}
+		return true;
+	}
+	if ((arg[0] && arg[1] == ':') || arg[0] == '/' || arg[0] == '\\')
+		Q_strncpyz(syspath, arg, syssize);					//absolute path
+	else
+		Q_snprintfz(syspath, syssize, "%s/%s", com_gamepath, arg);	//relative to the install dir
+	return true;
+}
+
+//nettest (P26 Part 2): set/clear the worldmodel-load prefer-hint.  FS_SetPreferHint resolves a game SPEC
+//(the same "steam:Game/dir" | abs | rel form fs_useaddons takes) to its absolute dir via the SAME resolver
+//that produced each addon searchpath's logicalpath, so the substring match in FS_FLocateFile is exact and
+//unambiguous (no "Call of Duty" vs "Call of Duty 2" prefix collision).  SV_SpawnServer sets it immediately
+//before loading the map BSP and clears it immediately after, so ONLY that .bsp locate is biased.
+void FS_SetPreferHint(const char *spec)
+{
+	char syspath[MAX_OSPATH];
+	if (spec && *spec && FS_Addon_Resolve(spec, syspath, sizeof(syspath)))
+		Q_strncpyz(fs_preferhint, syspath, sizeof(fs_preferhint));
+	else
+		fs_preferhint[0] = 0;
+}
+void FS_ClearPreferHint(void)
+{
+	fs_preferhint[0] = 0;
+}
+
+static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
+{
+	char syspath[MAX_OSPATH];
+	searchpath_t *s, *oldpaths = NULL;
+	searchpathfuncs_t *handle;
+
+	if (!FS_Addon_Resolve(arg, syspath, sizeof(syspath)))
+		return false;
+
+	for (s = com_searchpaths; s; s = s->next)	//skip if already mounted
+		if (!Q_strcasecmp(s->logicalpath, syspath))
+			return true;
+
+	handle = VFSOS_OpenPath(NULL, NULL, syspath, syspath, "");
+	if (!handle)
+	{
+		Con_Printf(CON_WARNING"fs_load: could not open \"%s\"\n", syspath);
+		return false;
+	}
+	//SPF_ADDON => appended at the TAIL (lowest priority); COPYPROTECTED+PRIVATE => not networked/redistributed.
+	FS_AddPathHandle(&oldpaths, arg, syspath, handle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
+	return true;
+}
+
+//(re)mount every game listed in <gamedir>/fs_addons.txt.  Called at the end of
+//each searchpath rebuild so addon games survive fs_restart / gamedir changes.
+static void FS_RemountAddons(unsigned int loadstuff)
+{
+	char *file, *line, *nl, *e;
+
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (!file)
+		return;
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+			*--e = 0;
+		if (!*line || line[0]=='#' || (line[0]=='/'&&line[1]=='/'))
+			continue;
+		if (FS_Addon_Mount(line, loadstuff))
+			Con_DPrintf("fs_load: re-mounted addon \"%s\"\n", line);
+	}
+	BZ_Free(file);
+}
+
+//=================================================================
+//nettest (P25): lazy on-demand addon mounting + offline map index
+//=================================================================
+// FS_IndexAddonMaps writes data/maps_index.txt: one "<sourcespec>\t<mapname>" line per map, built by
+// READDIR'ing each fs_addons.txt game's maps/ folder OFFLINE (maps are loose .bsp/.d3dbsp — no archive
+// mount, no BuildHash) + the mod's own maps. The create-server menu lists from that, tagged by the true
+// source game (so CS:S and CS1.6 same-named maps are distinct). Nothing external is mounted at boot.
+// On map-select the menu calls `fs_useaddons <spec>...` to mount only that game (+ deps), then `map`.
+#define FS_MAPS_INDEX "data/maps_index.txt"
+
+typedef struct { char *buf; size_t len, max; const char *tag; const char *gamedir; } fsmapidx_t;
+static int QDECL FS_IndexMap_Visit(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	fsmapidx_t *ctx = parm;
+	const char *base = fname, *s;
+	char mapname[MAX_QPATH], *dot;
+	char line[MAX_OSPATH];
+	size_t i, n;
+
+	for (s = fname; *s; s++)			//basename (strip any "maps/" dir prefix)
+		if (*s == '/' || *s == '\\')
+			base = s+1;
+	Q_strncpyz(mapname, base, sizeof(mapname));
+	dot = strrchr(mapname, '.');		//strip the extension
+	if (dot)
+		*dot = 0;
+	if (!*mapname)
+		return true;
+	for (i = 0; mapname[i]; i++)			//lowercase
+		if (mapname[i] >= 'A' && mapname[i] <= 'Z')
+			mapname[i] += 'a'-'A';
+
+	Q_snprintfz(line, sizeof(line), "%s\t%s\n", ctx->tag, mapname);
+	n = strlen(line);
+	if (ctx->len + n + 1 > ctx->max)
+	{
+		ctx->max = (ctx->len + n + 1) * 2 + 4096;
+		ctx->buf = BZ_Realloc(ctx->buf, ctx->max);
+	}
+	memcpy(ctx->buf + ctx->len, line, n);
+	ctx->len += n;
+	ctx->buf[ctx->len] = 0;
+	return true;
+}
+
+//peek inside one archive (CoD ships its maps in .iwd/.pk3 zips) for maps/, WITHOUT mounting it (no
+//global-hash insertion -- just the central directory).  Tagged with the same source game.
+static int QDECL FS_IndexArchive_Visit(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	fsmapidx_t *ctx = parm;
+	char archpath[MAX_OSPATH];
+	vfsfile_t *vf;
+	searchpathfuncs_t *handle;
+
+	Q_snprintfz(archpath, sizeof(archpath), "%s/%s", ctx->gamedir, fname);
+	vf = VFSOS_Open(archpath, "rb");
+	if (!vf)
+		return true;
+	handle = FS_OpenPackByExtension(vf, NULL, archpath, archpath, "");	//owns vf; closes it itself on failure
+	if (handle)
+	{
+		handle->EnumerateFiles(handle, "maps/*.bsp",    FS_IndexMap_Visit, ctx);
+		handle->EnumerateFiles(handle, "maps/*.d3dbsp", FS_IndexMap_Visit, ctx);
+		handle->ClosePath(handle);
+	}
+	return true;
+}
+
+//like COM_EnumerateFiles but SKIPS fs_load addon games, so the mod's own maps are never mis-tagged with
+//an addon spec (and an already-mounted on-demand game doesn't leak into the gid-1 "Net" list).
+static void FS_EnumerateNonAddonFiles(const char *match, int (QDECL *func)(const char*, qofs_t, time_t, void*, searchpathfuncs_t*), void *parm)
+{
+	searchpath_t *search;
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->flags & SPF_ADDON)
+			continue;
+		if (!search->handle->EnumerateFiles(search->handle, match, func, parm))
+			break;
+	}
+}
+
+void FS_IndexAddonMaps(void)
+{
+	fsmapidx_t ctx;
+	char *file, *line, *nl, *e;
+	char syspath[MAX_OSPATH];
+
+	ctx.buf = NULL; ctx.len = 0; ctx.max = 0;
+
+	//1. mod + FTE-base maps (NOT addon paths) -> tagged "nettest" (the menu's gid-1 "Net" tab).
+	ctx.tag = "nettest";
+	FS_EnumerateNonAddonFiles("maps/*.bsp", FS_IndexMap_Visit, &ctx);
+
+	//2. each fs_addons.txt game's maps, enumerated OFFLINE (resolve the dir, readdir maps/, no mount).
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (file)
+	{
+		for (line = file; line && *line; line = nl)
+		{
+			nl = strchr(line, '\n');
+			if (nl)
+				*nl++ = 0;
+			while (*line == ' ' || *line == '\t' || *line == '\r')
+				line++;
+			for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+				*--e = 0;
+			if (!*line || line[0]=='#' || (line[0]=='/'&&line[1]=='/'))
+				continue;
+			if (!FS_Addon_Resolve(line, syspath, sizeof(syspath)))
+				continue;	//game not installed -> just no maps for it
+			ctx.tag = line;
+			ctx.gamedir = syspath;
+			//loose maps (GoldSrc/Source ship maps as loose .bsp files)
+			Sys_EnumerateFiles(va("%s/maps", syspath), "*.bsp",    FS_IndexMap_Visit, &ctx, NULL);
+			Sys_EnumerateFiles(va("%s/maps", syspath), "*.d3dbsp", FS_IndexMap_Visit, &ctx, NULL);
+			//archived maps (CoD ships maps inside .iwd/.pk3 zips) -- peek each archive's maps/ dir
+			Sys_EnumerateFiles(syspath, "*.iwd", FS_IndexArchive_Visit, &ctx, NULL);
+			Sys_EnumerateFiles(syspath, "*.pk3", FS_IndexArchive_Visit, &ctx, NULL);
+			Sys_EnumerateFiles(syspath, "*.pk4", FS_IndexArchive_Visit, &ctx, NULL);
+			Sys_EnumerateFiles(syspath, "*.pak", FS_IndexArchive_Visit, &ctx, NULL);
+		}
+		BZ_Free(file);
+	}
+
+	FS_WriteFile(FS_MAPS_INDEX, ctx.buf ? ctx.buf : "", (int)ctx.len, FS_GAMEONLY);
+	Con_DPrintf("fs_indexmaps: wrote %s (%u bytes)\n", FS_MAPS_INDEX, (unsigned)ctx.len);
+	if (ctx.buf)
+		BZ_Free(ctx.buf);
+}
+
+static void FS_IndexMaps_f(void)
+{
+	FS_IndexAddonMaps();
+	Con_Printf("fs_indexmaps: %s rebuilt\n", FS_MAPS_INDEX);
+}
+
+//fs_useaddons <spec> [<spec> ...] — ADD-ONLY mount of the given on-demand game(s). Each spec is mounted
+//via FS_Addon_Mount, which resolves steam:/abs/rel, dup-skips an already-mounted path, appends it at the
+//LOWEST priority and BuildHashes the new files. It NEVER frees or rebuilds the searchpaths, so it is safe
+//to call while a map / the menu backdrop server is loaded (a rebuild would dangle the loaded content ->
+//crash). Games accumulate for the session (never unmounted mid-session). Quote specs with spaces
+//("steam:Half-Life 2/hl2"). Run before a `map` command (same command-buffer, FIFO) so the load sees it.
+static void FS_UseAddons_f(void)
+{
+	int i, argc = Cmd_Argc();
+	if (!fs_lazyaddons.ival)
+	{	//eager mode: fs_addons.txt is already all-mounted; nothing to add.
+		Con_DPrintf("fs_useaddons: ignored (fs_lazyaddons 0)\n");
+		return;
+	}
+	if (!fs_thread_mutex || Sys_LockMutex(fs_thread_mutex))	//BuildHash mutates filesystemhash via the Unsafe hash-add
+	{
+		for (i = 1; i < argc; i++)
+		{
+			const char *spec = Cmd_Argv(i);
+			if (*spec)
+				FS_Addon_Mount(spec, ~0u);	//add-only, dup-safe (~0u = load everything, same as the fs_load command)
+		}
+		if (fs_thread_mutex)
+			Sys_UnlockMutex(fs_thread_mutex);
+	}
+}
+
+//rewrite fs_addons.txt, optionally adding `add` (deduped) and/or removing `del`.
+static void FS_Addon_SaveList(const char *add, const char *del)
+{
+	char *file, *line, *nl, *e;
+	char out[8192];
+	qboolean have = false;
+	out[0] = 0;
+
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (file)
+	{
+		for (line = file; line && *line; line = nl)
+		{
+			nl = strchr(line, '\n');
+			if (nl)
+				*nl++ = 0;
+			for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+				*--e = 0;
+			if (!*line)
+				continue;
+			if (del && !Q_strcasecmp(line, del))
+				continue;
+			if (add && !Q_strcasecmp(line, add))
+				have = true;
+			Q_strncatz(out, line, sizeof(out));
+			Q_strncatz(out, "\n", sizeof(out));
+		}
+		BZ_Free(file);
+	}
+	if (add && !have)
+	{
+		Q_strncatz(out, add, sizeof(out));
+		Q_strncatz(out, "\n", sizeof(out));
+	}
+	FS_WriteFile(FS_ADDONS_FILE, out, (int)strlen(out), FS_GAMEONLY);
+}
+
+//grab the addon path argument, supporting an UNQUOTED path with spaces
+//(e.g. `fs_load C:\games\Call of Duty\Main`) as well as a quoted one.
+static const char *FS_Addon_Arg(void)
+{
+	static char arg[MAX_OSPATH];
+	char *e;
+	if (Cmd_Argc() > 2)
+		Q_strncpyz(arg, Cmd_Args(), sizeof(arg));	//multiple tokens => unquoted spaced path; take the whole tail
+	else
+		Q_strncpyz(arg, Cmd_Argv(1), sizeof(arg));	//single token or a quoted path
+	for (e = arg+strlen(arg); e > arg && (e[-1]==' '||e[-1]=='\t'||e[-1]=='"'); )
+		*--e = 0;					//trim trailing space/tab/quote
+	while (*arg=='"') memmove(arg, arg+1, strlen(arg));	//trim a leading quote
+	return arg;
+}
+
+static void FS_Load_f(void)
+{
+	const char *arg = FS_Addon_Arg();
+	if (!*arg)
+	{
+		Con_Printf("usage: fs_load <steam:Game/dir | C:\\path\\to\\game | reldir>\n");
+		return;
+	}
+	if (!FS_Addon_Mount(arg, ~0u))
+		return;
+	FS_Addon_SaveList(arg, NULL);
+	com_fschanged = true;
+	Con_Printf("fs_load: \"%s\" mounted (low priority) and saved; auto-remounts next launch\n", arg);
+}
+
+static void FS_Unload_f(void)
+{
+	const char *arg = FS_Addon_Arg();
+	if (!*arg)
+	{
+		Con_Printf("usage: fs_unload <name-exactly-as-loaded>  (see fs_loadlist)\n");
+		return;
+	}
+	FS_Addon_SaveList(NULL, arg);
+	Cbuf_AddText("fs_restart\n", RESTRICT_LOCAL);	//rebuild searchpaths without it
+	Con_Printf("fs_unload: \"%s\" removed; reloading filesystem\n", arg);
+}
+
+static void FS_LoadList_f(void)
+{
+	char *file, *line, *nl;
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (!file)
+	{
+		Con_Printf("fs_load: no addon games loaded\n");
+		return;
+	}
+	Con_Printf("addon games (low priority, %s):\n", FS_ADDONS_FILE);
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		if (*line && line[0]!='#')
+			Con_Printf("  %s\n", line);
+	}
+	BZ_Free(file);
+}
+
+//nettest (P8): true if `name`'s highest-priority instance lives in a low-priority
+//fs_load ADDON dir.  Lets the startup config-exec SKIP a foreign config.cfg/autoexec.cfg
+//that a mounted game (valve/cstrike/cod) ships when the mod itself has none — which would
+//otherwise spam "Unknown command" and clobber the user's binds/cvars.
+qboolean FS_FileIsAddonOnly(const char *name)
+{
+	flocation_t loc;
+	memset(&loc, 0, sizeof(loc));
+	FS_FLocateFile(name, FSLF_IFFOUND, &loc);
+	return (loc.search && (loc.search->flags & SPF_ADDON));
+}
+
 void COM_InitFilesystem (void)
 {
 	int		i;
@@ -8443,6 +8909,11 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("fs_changemod", FS_ChangeMod_f, "Provides the backend functionality of a transient online installer. Eg, for quaddicted's map/mod database.");
 	Cmd_AddCommand("fs_showmanifest", FS_ShowManifest_f);
 	Cmd_AddCommand ("fs_flush", COM_RefreshFSCache_f);
+	Cmd_AddCommandD("fs_load",    FS_Load_f,    "nettest: mount an external game (steam:Game/dir, an absolute path, or a relative dir) at LOW priority for its assets/maps; saved + auto-remounted next launch.");
+	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
+	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
+	Cmd_AddCommandD("fs_indexmaps",FS_IndexMaps_f,"nettest (P25): rebuild data/maps_index.txt — the offline per-game map list the lazy-mount create-server menu reads.");
+	Cmd_AddCommandD("fs_useaddons",FS_UseAddons_f,"nettest (P25/P26): ADD (mount) the given game spec(s) on demand so a single game's map can load without mounting all games at boot. Add-only — never unmounts, never rebuilds (crash-safe mid-map). Quote spaced paths.");
 	Cmd_AddCommandAD("dir", COM_Dir_f,			FS_ArbitraryFile_c, "Displays filesystem listings. Accepts wildcards."); //q3 like
 	Cmd_AddCommandAD("ls", COM_Dir_f,			FS_ArbitraryFile_c, "Displays filesystem listings. Accepts wildcards."); //q3 like
 	Cmd_AddCommandD("path", COM_Path_f,			"prints a list of current search paths.");
@@ -8471,6 +8942,7 @@ void COM_InitFilesystem (void)
 	Cvar_Register(&cfg_reload_on_gamedir, "Filesystem");
 	Cvar_Register(&dpcompat_ignoremodificationtimes, "Filesystem");
 	Cvar_Register(&com_fs_cache, "Filesystem");
+	Cvar_Register(&fs_lazyaddons, "Filesystem");	//nettest (P25)
 	Cvar_Register(&fs_hidesyspaths, "Filesystem");
 	Cvar_Register(&fs_gamename, "Filesystem");
 #ifdef PACKAGEMANAGER

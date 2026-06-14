@@ -8,6 +8,9 @@
 #include "../engine/common/com_bih.h"
 static plugfsfuncs_t *filefuncs;
 static plugmodfuncs_t *modfuncs;
+//nettest: set to QR_NONE on a dedicated/headless server (in CODBSP_Init) so the renderer-only material pass
+//(CODBSP_GenerateMaterials -> NULL modfuncs->RegisterBasicShader/Batches_Build) is skipped, not crashed.
+r_qrenderer_t qrenderer = QR_OPENGL;
 static plugthreadfuncs_t	*threadfuncs;
 
 typedef struct
@@ -106,6 +109,11 @@ typedef struct
 		float fov;
 	} *lights;
 	size_t numlights;
+#ifdef HAVE_CLIENT
+	//nettest: static map props (script_model entities -> xmodels), rendered each frame.
+	entity_t *props;
+	size_t numprops;
+#endif
 } codbspinfo_t;
 
 #define COD1BSP_VERSION 0x0000003b
@@ -676,6 +684,116 @@ static void CODBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 		plugfuncs->Free(data);
 }
 
+//nettest: CoD has no static-prop lump — placed models are `script_model` entities in the
+//entity lump with `model "xmodel/NAME"` + origin/angles.  The engine hands the entity lump
+//to QC, which has no spawn function for them, so nothing drew them.  Parse them here and
+//render them as scene entities each frame (mirrors the HL2 static-prop path, mod_vbsp.c).
+static const char *COD_NextToken(const char *p, const char *end, char *out, size_t outsz)
+{
+	size_t n = 0;
+	while (p < end && (unsigned char)*p <= ' ')
+		p++;
+	if (p >= end)
+		return NULL;
+	if (*p == '{' || *p == '}')
+	{
+		if (out) { out[0] = *p; out[1] = 0; }
+		return p+1;
+	}
+	if (*p == '"')
+	{
+		for (p++; p < end && *p != '"'; p++)
+			if (out && n+1 < outsz) out[n++] = *p;
+		if (p < end) p++;
+	}
+	else
+	{
+		for (; p < end && (unsigned char)*p > ' '; p++)
+			if (out && n+1 < outsz) out[n++] = *p;
+	}
+	if (out) out[n] = 0;
+	return p;
+}
+static void COD_ParseVec3(const char *s, vec3_t out)
+{
+	out[0] = atof(s);
+	while (*s && *s != ' ') s++;	while (*s == ' ') s++;
+	out[1] = atof(s);
+	while (*s && *s != ' ') s++;	while (*s == ' ') s++;
+	out[2] = atof(s);
+}
+static void COD_LoadProps(model_t *mod, const char *entdata, size_t entsize)
+{
+	codbspinfo_t *prv = (codbspinfo_t*)mod->meshinfo;
+	const char *end = entdata + entsize;
+	const char *p;
+	char tok[1024];
+	int pass;
+	size_t count;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		count = 0;
+		for (p = entdata; (p = COD_NextToken(p, end, tok, sizeof(tok))) != NULL; )
+		{
+			char classname[64], model[MAX_QPATH];
+			vec3_t origin, angles;
+			float modelscale;
+			if (tok[0] != '{')
+				continue;
+			classname[0] = model[0] = 0;
+			modelscale = 1;
+			VectorClear(origin); VectorClear(angles);
+			while ((p = COD_NextToken(p, end, tok, sizeof(tok))) != NULL && tok[0] != '}')
+			{
+				char key[64];
+				Q_strlcpy(key, tok, sizeof(key));
+				if (!(p = COD_NextToken(p, end, tok, sizeof(tok))))
+					break;
+				if (!strcmp(key, "classname"))   Q_strlcpy(classname, tok, sizeof(classname));
+				else if (!strcmp(key, "model"))  Q_strlcpy(model, tok, sizeof(model));
+				else if (!strcmp(key, "origin")) COD_ParseVec3(tok, origin);
+				else if (!strcmp(key, "angles")) COD_ParseVec3(tok, angles);
+				else if (!strcmp(key, "modelscale")) modelscale = atof(tok);	//nettest: CoD scales big rocks/props via modelscale; default 1 = base size (big rocks were rendering at ~1/4 because this was ignored)
+			}
+			if (!p)
+				break;
+			if (strncmp(model, "xmodel/", 7))
+				continue;	//not an xmodel reference (brushmodels / fx-less script ents)
+			//nettest: accept the common CoD static-model classes, not just script_model. CoD1/UO Radiant places large static
+			//rocks/cliffs/foliage as misc_model; script_model is the scripted/dynamic class. Any OTHER xmodel-bearing class is
+			//logged once (developer 1) so it can be added here if a map uses a different name.
+			if (strcmp(classname, "script_model") && strcmp(classname, "misc_model"))
+			{
+				if (pass)
+					Con_DPrintf("COD prop: skipping class='%s' model='%s'\n", classname, model);
+				continue;
+			}
+			if (pass)
+			{
+				entity_t *ent = &prv->props[count];
+				memset(ent, 0, sizeof(*ent));
+				ent->playerindex = -1;
+				ent->scale = modelscale;
+				ent->shaderRGBAf[0] = ent->shaderRGBAf[1] = ent->shaderRGBAf[2] = ent->shaderRGBAf[3] = 1;
+				ent->framestate.g[FS_REG].lerpweight[0] = 1;
+				VectorCopy(origin, ent->origin);
+				VectorCopy(angles, ent->angles);
+				ent->model = modfuncs->BeginSubmodelLoad(model);
+				modfuncs->AngleVectors(ent->angles, ent->axis[0], ent->axis[1], ent->axis[2]);
+				VectorNegate(ent->axis[1], ent->axis[1]);
+			}
+			count++;
+		}
+		if (!pass)
+		{
+			if (!count)
+				return;
+			prv->props = plugfuncs->GMalloc(&mod->memgroup, sizeof(entity_t)*count);
+			prv->numprops = count;
+		}
+	}
+}
 static void CODBSP_PrepareFrame(struct model_s *mod, refdef_t *refdef, int area, int clusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out)
 {
 	*entvis_out = *surfvis_out = CODBSP_ClusterPVS(mod, clusters[0], vis, false);
@@ -711,8 +829,30 @@ static void CODBSP_PrepareFrame(struct model_s *mod, refdef_t *refdef, int area,
 		}
 	}
 
-	//for static props...
-	//ent = modfuncs->NewSceneEntity();
+	//nettest: render the map's static props (script_model xmodels) as scene entities.
+	{
+		codbspinfo_t *prv = (codbspinfo_t*)mod->meshinfo;
+		entity_t *src, *ent;
+		size_t i;
+		for (i = 0; i < prv->numprops; i++)
+		{
+			src = &prv->props[i];
+			if (!src->model)
+				continue;
+			if (src->model->loadstate != MLS_LOADED)
+			{
+				if (src->model->loadstate == MLS_NOTLOADED)
+					modfuncs->GetModel(src->model->publicname, MLV_WARN);	//threaded — shows next frame
+				continue;
+			}
+			ent = modfuncs->NewSceneEntity();
+			if (!ent)
+				break;
+			*ent = *src;
+			ent->framestate.g[FS_REG].frametime[0] = refdef->time;
+			ent->framestate.g[FS_REG].frametime[1] = refdef->time;
+		}
+	}
 }
 static void CODBSP_InfoForPoint(struct model_s *mod, vec3_t pos, int *area, int *cluster, unsigned int *contentbits)
 {
@@ -761,6 +901,15 @@ static qboolean CODBSP_LoadShaders (model_t *mod, qbyte *mod_base, lump_t *l)
 	{
 		out->c.flags = LittleLong ( in->surfflags );
 		out->c.value = LittleLong ( in->contents );
+		{	//nettest: CoD foliage decoration (leaves/bushes/grass-blade sprites) is flagged SOLID in the bsp material
+			//contents, so the player collides with every leaf. Force those non-blocking. Match "foliage" ONLY: the CoD
+			//foliage materials are all named foliage_masked@.../foliage_detail@... (incl. grass-blades & bushes), whereas
+			//a bare "grass"/"bush" substring ALSO hit WALKABLE grass-ground displacements (CoD1 dam) and made the player
+			//fall through the terrain. Covers CoD2 (brush path) + CoD1 (mode0/mode1 patch) — both read surfaces[mat].c.value.
+			const char *mn = in->shadername;
+			if (strstr(mn, "foliage"))
+				out->c.value &= ~(FTECONTENTS_SOLID|FTECONTENTS_WINDOW|FTECONTENTS_PLAYERCLIP|FTECONTENTS_MONSTERCLIP|FTECONTENTS_BODY);
+		}
 		Q_strlcpy(out->rname, in->shadername, sizeof(out->rname));
 
 		mod->texinfo[i].texture = tex+i;
@@ -1118,6 +1267,9 @@ static qboolean CODBSP_LoadLightIndexes (model_t *mod, qbyte *mod_base, lump_t *
 }
 static qboolean CODBSP_LoadEntities (model_t *mod, qbyte *mod_base, lump_t *l)
 {	//just quake-style { "field" "value" "field2" "value2" } blocks.
+#ifdef HAVE_CLIENT
+	COD_LoadProps(mod, (const char*)(mod_base+l->fileofs), l->filelen);	//nettest: spawn placed xmodels
+#endif
 	return modfuncs->LoadEntities(mod, mod_base+l->fileofs, l->filelen);
 }
 
@@ -1191,6 +1343,7 @@ static qboolean CODBSP_LoadBrushes (model_t *mod, qbyte *mod_base, lump_t *l)
 	for (i = 0, j = 0; i < count; i++, in++)
 	{
 		unsigned int mat = LittleShort(in->material);
+		if (mat >= (unsigned int)mod->numtexinfo) mat = 0;	//nettest: clamp out-of-range material index -> avoid prv->surfaces[] overread crash on some CoD2 maps
 		out[i].numsides = (unsigned short)LittleShort(in->sides);
 		out[i].contents = prv->surfaces[mat].c.value;	//is this right? seems to kinda work? feels wrong though.
 		j += out[i].numsides;
@@ -1204,6 +1357,7 @@ static qboolean CODBSP_LoadBrushes (model_t *mod, qbyte *mod_base, lump_t *l)
 		for (j = 0; j < out->numsides; j++, inside++, outside++)
 		{
 			unsigned int mat = LittleLong(inside->material_idx);
+			if (mat >= (unsigned int)mod->numtexinfo) mat = 0;	//nettest: clamp out-of-range material index (CoD2)
 			if (j < 6)
 			{
 				aplane->dist = LittleFloat(inside->dist);
@@ -1314,7 +1468,7 @@ static qboolean CODBSP_LoadPatchCollision (model_t *mod, qbyte *mod_base, lump_t
 			;//Con_Printf("s%i: %s %4i+%-4i v%i+%i\n", (int)i, mod->textures[in->mat]->name, in->mode1.firstidx,in->mode1.numidx, in->mode1.firstvert,in->mode1.numverts);
 		else
 		{
-			Con_Printf("?%i: %s %i ?!?!?!?!?\n", (int)i, mod->textures[in->mat]->name, in->mode);
+			Con_Printf("?%i: mat=%i mode=%i ?!?!?!?!?\n", (int)i, (int)in->mat, in->mode);	//nettest: don't deref textures[in->mat] (index may be OOB)
 			return false;	//nope.
 		}
 	}
@@ -1544,7 +1698,7 @@ static void CODBSP_BuildBIH (model_t *mod, size_t firstbrush, size_t numbrushes,
 				{
 					vec_t *v1,*v2,*v3;
 					l->type = BIH_TRIANGLE;
-					l->data.contents = prv->surfaces[LittleLong(prv->patches[i].mat)].c.value;
+					{ unsigned int mat = (unsigned int)LittleLong(prv->patches[i].mat); if (mat >= (unsigned int)mod->numtexinfo) mat = 0; l->data.contents = prv->surfaces[mat].c.value; }	//nettest: clamp OOB material idx (CoD2)
 					l->data.tri.xyz = prv->patchvertexes + (unsigned int)LittleLong(prv->patches[i].mode1.firstvert);
 					l->data.tri.indexes = prv->patchindexes + (unsigned int)LittleLong(prv->patches[i].mode1.firstidx) + j;
 
@@ -1577,7 +1731,7 @@ static void CODBSP_BuildBIH (model_t *mod, size_t firstbrush, size_t numbrushes,
 					silly[5] = silly[2];
 
 					l->type = BIH_TRIANGLE;
-					l->data.contents = FTECONTENTS_SOLID; //prv->surfaces[LittleLong(prv->patches[i].mat)].c.value;
+					{ unsigned int mat = (unsigned int)LittleLong(prv->patches[i].mat); if (mat >= (unsigned int)mod->numtexinfo) mat = 0; l->data.contents = prv->surfaces[mat].c.value; }	//nettest: use the material's contents (foliage/grass = non-solid) instead of hardcoding SOLID, matching the mode1 path
 					l->data.tri.xyz = prv->patchvertexes + (unsigned int)LittleLong(prv->patches[i].mode0.firstvert);
 					l->data.tri.indexes = silly;
 
@@ -1594,7 +1748,7 @@ static void CODBSP_BuildBIH (model_t *mod, size_t firstbrush, size_t numbrushes,
 
 
 					l->type = BIH_TRIANGLE;
-					l->data.contents = FTECONTENTS_SOLID; //prv->surfaces[LittleLong(prv->patches[i].mat)].c.value;
+					{ unsigned int mat = (unsigned int)LittleLong(prv->patches[i].mat); if (mat >= (unsigned int)mod->numtexinfo) mat = 0; l->data.contents = prv->surfaces[mat].c.value; }	//nettest: use the material's contents (foliage/grass = non-solid) instead of hardcoding SOLID, matching the mode1 path
 					l->data.tri.xyz = prv->patchvertexes + (unsigned int)LittleLong(prv->patches[i].mode0.firstvert);
 					l->data.tri.indexes = silly;
 
@@ -1688,12 +1842,12 @@ static qboolean CODBSP_LoadInlineModels (model_t *wmod, qbyte *mod_base, lump_t 
 #ifdef HAVE_CLIENT
 //		mod->radius = RadiusFromBounds (mod->mins, mod->maxs);
 
-//		if (qrenderer != QR_NONE)
+		if (qrenderer != QR_NONE)	//nettest: uncommented — skip materials on a headless/dedicated server
 		{
 			builddata_t *bd = plugfuncs->Malloc(sizeof(*bd));
 			bd->buildfunc = CODBSP_BuildSurfMesh;
 			bd->paintlightmaps = false;	//q3like with prebaked lightmaps.
-			threadfuncs->AddWork(WG_MAIN, CODBSP_GenerateMaterials, mod, bd, 0, 0);
+			threadfuncs->AddWork(WG_MAIN, CODBSP_GenerateMaterials, mod, bd, i, 0);	//nettest: pass the inline-model index (was hardcoded 0) so only the worldmodel (i==0) re-registers ALL map shaders.  The bug made every one of the ~150 submodels re-register the whole shader set (O(textures*submodels)) -> ~0.4s/submodel = minute-long map load + the connecting client timing out.
 		}
 #endif
 
@@ -1852,6 +2006,12 @@ qboolean CODBSP_Init(void)
 	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
 	if (modfuncs && modfuncs->version != MODPLUGFUNCS_VERSION)
 		modfuncs = NULL;
+
+	//nettest: no client Image/renderer interface => dedicated/headless server.  Mark qrenderer QR_NONE so the
+	//material pass (CODBSP_GenerateMaterials -> NULL modfuncs->RegisterBasicShader/Batches_Build on a server
+	//build => crash) is skipped.  Same probe as the hl2 plugin / VTF_Init (img_vtf.c).
+	if (!plugfuncs->GetEngineInterface(plugimagefuncs_name, sizeof(plugimagefuncs_t)))
+		qrenderer = QR_NONE;
 
 	if (modfuncs && filefuncs && threadfuncs)
 	{

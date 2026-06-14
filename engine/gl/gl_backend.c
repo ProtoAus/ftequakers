@@ -214,6 +214,8 @@ static struct {
 	batch_t *wbatches;
 } shaderstate;
 
+static texnums_t r_nulltexnums;	//nettest: zeroed fallback for shaderstate.curtexnums when a shader is registered-but-not-yet-generated (defaulttextures==NULL, e.g. a Source prop's GLSL material on first frame). TEXLOADED() on all-zero texids is false, so every downstream deref (BE_RenderMeshProgram/DrawPass) safely binds nothing instead of NULL-faulting.
+
 #ifdef _DEBUG
 #define DRAWCALL(f) if (sh_config.showbatches) BE_PrintDrawCall(f)
 #include "pr_common.h"
@@ -1277,7 +1279,7 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 			t = r_nulltex;
 		break;
 	case T_GEN_FULLBRIGHT:
-		t = shaderstate.curtexnums->fullbright;
+		t = (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->fullbright)) ? shaderstate.curtexnums->fullbright : r_nulltex;	//nettest: guard the curtexnums deref like every other T_GEN_* case — an unresolved Source material/prop skin on frame 1 has curtexnums==NULL and crashed here
 		break;
 	case T_GEN_REFLECTCUBE:
 		if (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->reflectcube))
@@ -5130,7 +5132,7 @@ void GLBE_DrawMesh_List(shader_t *shader, int nummeshes, mesh_t **meshlist, vbo_
 		else if (shader->numdefaulttextures)
 			shaderstate.curtexnums = shader->defaulttextures + ((int)(shader->defaulttextures_fps * shaderstate.curtime) % shader->numdefaulttextures);
 		else
-			shaderstate.curtexnums = shader->defaulttextures;
+			shaderstate.curtexnums = shader->defaulttextures ? shader->defaulttextures : &r_nulltexnums;	//nettest: guard NULL defaulttextures (registered-but-not-yet-generated shader) — see r_nulltexnums
 
 		while (nummeshes--)
 		{
@@ -5155,7 +5157,7 @@ void GLBE_DrawMesh_List(shader_t *shader, int nummeshes, mesh_t **meshlist, vbo_
 		else if (shader->numdefaulttextures)
 			shaderstate.curtexnums = shader->defaulttextures + ((int)(shader->defaulttextures_fps * shaderstate.curtime) % shader->numdefaulttextures);
 		else
-			shaderstate.curtexnums = shader->defaulttextures;
+			shaderstate.curtexnums = shader->defaulttextures ? shader->defaulttextures : &r_nulltexnums;	//nettest: guard NULL defaulttextures (registered-but-not-yet-generated shader) — see r_nulltexnums
 
 		shaderstate.meshcount = nummeshes;
 		shaderstate.meshes = meshlist;
@@ -5188,6 +5190,8 @@ void GLBE_SubmitBatch(batch_t *batch)
 	}
 
 	sh = batch->shader;
+	if (!sh)	//nettest: the portal/depthmask loops call GLBE_SubmitBatch directly (bypassing the !bs guard on the sortlist path), so a still-NULL shader (e.g. a frame-1 unparsed Source water material) would fault on sh->remapto
+		return;
 	shaderstate.curshader = sh->remapto;
 	shaderstate.flags = batch->flags;
 	if (shaderstate.curentity != batch->ent)
@@ -5198,7 +5202,7 @@ void GLBE_SubmitBatch(batch_t *batch)
 	else if (sh->numdefaulttextures)
 		shaderstate.curtexnums = sh->defaulttextures + ((int)(sh->defaulttextures_fps * shaderstate.curtime) % sh->numdefaulttextures);
 	else
-		shaderstate.curtexnums = sh->defaulttextures;
+		shaderstate.curtexnums = sh->defaulttextures ? sh->defaulttextures : &r_nulltexnums;	//nettest: guard NULL defaulttextures (a Source prop's GLSL material on first frame faults in BE_RenderMeshProgram otherwise) — see r_nulltexnums
 
 	if (0)
 	{

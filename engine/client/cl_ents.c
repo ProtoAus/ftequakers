@@ -3673,7 +3673,7 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 				if (stat->mdlidx < MAX_PRECACHE_MODELS)
 					clmodel = cl.model_precache[stat->mdlidx];
 			}
-			if (!clmodel || clmodel->loadstate == MLS_LOADING)
+			if (!clmodel || clmodel->loadstate != MLS_LOADED)	//nettest: was ==MLS_LOADING — a static entity with a FAILED/dummy model (e.g. a Source model that didn't load) passed this guard and crashed in the bounds/PVS/axis setup below. Skip anything not fully loaded (matches every other model-use site).
 				continue;
 			if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 				continue;

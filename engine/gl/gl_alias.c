@@ -1228,7 +1228,7 @@ static shader_t *GL_ChooseSkin(galiasinfo_t *inf, model_t *model, int surfnum, e
 	else
 	{
 		static float timer;
-		Con_ThrottlePrintf(&timer, 1, "Skin number out of range (%u >= %u - %s)\n", e->skinnum, inf->numskins, model->name);
+		Con_ThrottlePrintf(&timer, 2, "Skin number out of range (%u >= %u - %s)\n", e->skinnum, inf->numskins, model->name);	//nettest: developer 2 — a 1-skin Source .mdl asked for skin index 1 is cosmetic (falls through to a valid skin), not worth flooding developer 1
 		if (!inf->numskins)
 			return NULL;
 	}
@@ -2594,6 +2594,8 @@ static void R_Sprite_GenerateTrisoup(entity_t *e, int bemode)
 		// don't even bother culling, because it's just a single
 		// polygon without a surface cache
 		frame = R_GetSpriteFrame(e);
+		if (!frame)	//nettest: sprite model failed to load (e.g. a Source .vmt handed to the model loader) — draw nothing rather than NULL-deref frame->shader
+			return;
 		shader = frame->shader;
 	}
 
