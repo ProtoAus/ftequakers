@@ -230,10 +230,17 @@ static int	CODBSP_ClusterForPoint	(struct model_s *model, const vec3_t point, in
 		*areaout = leaf->area;
 	return leaf->cluster;
 }
+static pvsbuffer_t	codpvsrow;	//fallback buffer so this never returns NULL
 static qbyte *CODBSP_ClusterPVS		(struct model_s *model, int cluster, pvsbuffer_t *pvsbuffer, pvsmerge_t merge)
 {
 	codbspinfo_t *prv = (codbspinfo_t*)model->meshinfo;
 	size_t i;
+	//checkpvs() passes pvsbuffer==NULL; on an invalid/-1 cluster the
+	//fallthrough below would then return NULL and EdictInFatPVS derefs it
+	//-> crash. CoD was the only BSP format missing this fallback that hl2
+	//(mod_vbsp.c) and q2/q3 (gl_q2bsp.c) already have.
+	if (!pvsbuffer)
+		pvsbuffer = &codpvsrow;
 	if (cluster >= 0 && cluster < model->numclusters)
 	{
 		qbyte *pvs = prv->pvsdata + cluster*model->pvsbytes;	//packed, without compresion.

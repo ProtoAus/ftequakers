@@ -127,17 +127,37 @@ runtime fallback. Drop back to `-march=x86-64-v2` if you need to run on
 pre-AVX2 hardware.
 
 Drop `clean` for a fast incremental rebuild after a small change (only the
-touched files recompile, then it relinks). Note: the old `PLUGINS_STATIC="ode"`
-token did nothing — it is not a real Makefile variable — so it has been removed.
+touched files recompile, then it relinks).
 
 ```sh
-# Asset plugins (cod + hl2): build from THIS tree so the ABI matches the exe
-make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="cod hl2" CC=gcc CXX=g++
+# Plugins: cod + hl2 asset loaders AND the ode physics plugin. Build from THIS
+# tree so the ABI matches the exe. The `ode` entry and `-k` are both required —
+# see the notes below.
+make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="cod hl2 ode" CC=gcc CXX=g++ -k
 ```
 
-The plugin DLLs land in `engine/release/`; copy `fteplug_cod_x64.dll` and
-`fteplug_hl2_x64.dll` next to the executable. Rebuild them whenever the
-engine↔plugin ABI changes. See the `documentation` folder for more.
+Two gotchas this command works around:
+
+- **List `ode` explicitly.** It is commented out of the Makefile's default
+  plugin set, so `NATIVE_PLUGINS="cod hl2"` builds *no physics plugin* and phys
+  props silently break. (The old `PLUGINS_STATIC="ode"` token this README used to
+  show did nothing — it is not a real Makefile variable.)
+- **Keep `-k`.** Each plugin's last build step embeds a metadata zip via the
+  `zip` tool, which isn't in the UCRT64 shell, so every plugin ends with
+  `zip: command not found` / `Error 127`. That step is **harmless** — the DLL is
+  fully linked *before* it, and the metazip is only plugin-manager cosmetics the
+  engine never reads — but **without `-k` it aborts the make after the first
+  plugin** (that is why `"cod hl2"` only ever produced `cod`). With `-k`, make
+  keeps going and builds all three despite the expected non-zero exit. ODE links
+  the prebuilt static `libode.a` under `engine/libs-x86_64-w64-mingw32/`.
+
+The DLLs land in **`engine/release/`**. Copy all three — `fteplug_cod_x64.dll`,
+`fteplug_hl2_x64.dll`, `fteplug_ode_x64.dll` — next to the executable, and
+**redeploy them every time you rebuild the engine**: a plugin built against an
+older exe fails to load with `Couldn't load plugin <name>`. The ODE plugin is
+statically linked, so it needs no `libwinpthread-1.dll` / `libgcc_s_seh-1.dll` /
+`libstdc++-6.dll` beside it — but a *non-static* ODE will fail to load once those
+runtime DLLs are gone. See the `documentation` folder for more.
 
 ## Based on FTEQW — credits & license
 
