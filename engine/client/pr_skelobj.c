@@ -2785,6 +2785,23 @@ void QCBUILTIN PF_modelframecount (pubprogfuncs_t *prinst, struct globalvars_s *
 		G_FLOAT(OFS_RETURN) = 0;
 }
 
+//float(float modelindex, string bonename, float hitgroup, vector mins, vector maxs) addmodelhitbox
+//nettest Patch 36 Part B: register a per-bone hitbox on an alias/IQM model so that
+//MOVE_HITMODEL traces the box (reporting its hitgroup via trace_surface_id) rather than
+//the mesh triangles. Returns 1 if the bone exists and the box was stored, else 0.
+void QCBUILTIN PF_addmodelhitbox (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	world_t *w = prinst->parms->user;
+	unsigned int modelindex = G_FLOAT(OFS_PARM0);
+	const char *bonename = PR_GetStringOfs(prinst, OFS_PARM1);
+	int hitgroup = G_FLOAT(OFS_PARM2);
+	float *bmins = G_VECTOR(OFS_PARM3);
+	float *bmaxs = G_VECTOR(OFS_PARM4);
+	model_t *mod = w->Get_CModel(w, modelindex);
+
+	G_FLOAT(OFS_RETURN) = Mod_AddHitbox(mod, bonename, hitgroup, bmins, bmaxs) ? 1 : 0;
+}
+
 //void(float modidx, float framenum, __inout float basetime, float targettime, void(float timestamp, int code, string data) callback)
 void QCBUILTIN PF_processmodelevents (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {

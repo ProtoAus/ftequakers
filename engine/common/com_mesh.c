@@ -21,6 +21,9 @@
 qboolean		r_loadbumpmapping;
 extern cvar_t r_noframegrouplerp;
 cvar_t r_lerpmuzzlehack						= CVARF  ("r_lerpmuzzlehack", "1", CVAR_ARCHIVE);
+//nettest Patch 36: master enable for the engine-native player spine bend (view-pitch lean + body twist)
+//applied to IQM player skeletons so the SERVER collision pose, gettaginfo and the render all match.
+cvar_t r_skel_spinebend						= CVARFD ("r_skel_spinebend", "1", CVAR_ARCHIVE, "Engine-native view-pitch/body-twist spine bend for IQM player models, so server-side hit detection matches the rendered lean. 0 disables (falls back to the QC client deform).");
 #ifdef MD1MODELS
 cvar_t mod_h2holey_bugged					= CVARD ("mod_h2holey_bugged", "0", "Hexen2's holey-model flag uses index 0 as transparent (and additionally 255 in gl, due to a bug). GLQuake engines tend to have bugs that use ONLY index 255, resulting in a significant compatibility issue that can be resolved only with this shitty cvar hack.");
 cvar_t mod_halftexel						= CVARD ("mod_halftexel", "1", "Offset texture coords by a half-texel, for compatibility with glquake and the majority of engine forks.");
@@ -1247,7 +1250,7 @@ static int Alias_BlendBoneData(galiasinfo_t *inf, const framestate_t *fstate, fl
 only writes targetbuffer if needed. the return value is the only real buffer result.
 assumes that all blended types are the same. probably buggy, but meh.
 */
-static const float *Alias_GetBoneInformation(galiasinfo_t *inf, const framestate_t *framestate, skeltype_t targettype, float *targetbuffer, float *targetbufferalt, size_t numbones, const galiasbone_t *boneinfo)
+static const float *Alias_GetBoneInformation_Raw(galiasinfo_t *inf, const framestate_t *framestate, skeltype_t targettype, float *targetbuffer, float *targetbufferalt, size_t numbones, const galiasbone_t *boneinfo)
 {
 	skellerps_t lerps[FS_COUNT], *lerp;
 	size_t numgroups;
@@ -1372,6 +1375,236 @@ static const float *Alias_GetBoneInformation(galiasinfo_t *inf, const framestate
 
 	return Alias_ConvertBoneData(lerps[0].skeltype, targetbuffer, inf->numbones, inf->ofsbones, targettype, targetbuffer, targetbufferalt, numbones);
 }
+
+//nettest Patch 36 ===========================================================
+//Engine-native view-pitch/body-twist spine bend for IQM player models.
+//
+//Background: the player models are IQM. The third-person up/down view-pitch
+//lean (and the strafe body-twist) used to be applied ONLY on the client, as a
+//QC skel_set_bone deform on the visual proxy. The server's collision pose and
+//gettaginfo stayed upright, so server-side hit detection (and the client's own
+//MOVE_HITMODEL trace) never matched the leaning silhouette. This reproduces the
+//exact client deform here in the pose pipeline so that the render, the
+//MOVE_HITMODEL trace and gettaginfo ALL carry the same lean, on both sides.
+//
+//It is driven by the framestate's HL subblend values, which the gamecode
+//already sets identically on both sides and which lag-comp already rewinds:
+//   subblend2frac = v_angle_x/90   (view pitch)
+//   subblendfrac  = leg_twist/90   (lower-body yaw delta -> upper-body twist)
+//Those were inert on IQM until now. No new fields, no new networking.
+//
+//Math mirrors cl_player.qc (PlayerVis_LoadBoneBasis / TwistBone / PitchBone):
+//we work in the same QC vector space (forward,right,up) using the engine's
+//bone<->qcvector convention (col0=forward, col1=-right, col2=up, col3=org),
+//apply twist (rotate right/up about forward) then pitch (rotate forward/right
+//about up), per spine bone, in PARENT-RELATIVE space so the hierarchy walk
+//propagates the bend to all descendants exactly like skel_set_bone did.
+
+static const char *spinebend_bonenames[5] =
+	{"Bip01 Spine", "Bip01 Spine1", "Bip01 Spine2", "Bip01 Spine3", "Bip01 Neck"};
+
+static qboolean Alias_SpineBend_Resolve(galiasinfo_t *inf)
+{
+	int i, b;
+	if (inf->spinebend_checked)
+		return inf->spinebend_any;
+	inf->spinebend_checked = true;
+	inf->spinebend_any = false;
+	for (i = 0; i < 5; i++)
+	{
+		inf->spinebend_bone[i] = -1;
+		for (b = 0; b < inf->numbones; b++)
+		{
+			if (!strcmp(inf->ofsbones[b].name, spinebend_bonenames[i]))
+			{
+				inf->spinebend_bone[i] = (short)b;
+				inf->spinebend_any = true;
+				break;
+			}
+		}
+	}
+	return inf->spinebend_any;
+}
+
+static qboolean Alias_SpineBendActive(galiasinfo_t *inf, const framestate_t *framestate)
+{
+#ifdef HALFLIFEMODELS
+	if (!inf->numbones || !framestate || !r_skel_spinebend.ival)
+		return false;
+#ifdef SKELETALOBJECTS
+	//nettest Patch 36: when a QC skeletal object drives this entity (the CLIENT player
+	//visual proxy uses skel_build + a QC skel_set_bone spine deform), that object already
+	//owns the pose AND the lean — applying the engine bend on top would double-bend/warp it
+	//(the gun attachment visibly warped). The engine bend is for entities WITHOUT a QC
+	//skeleton: the SERVER player (its skeleton is cleared each tick), so trust-0 still leans.
+	if (framestate->bonestate)
+		return false;
+#endif
+	if (fabs(framestate->g[FS_REG].subblend2frac) < 0.0001 &&
+		fabs(framestate->g[FS_REG].subblendfrac)  < 0.0001)
+		return false;
+	return Alias_SpineBend_Resolve(inf);
+#else
+	return false;
+#endif
+}
+
+#ifdef HALFLIFEMODELS
+//read a QC-registered tuning cvar by name (cached), falling back to the gamecode default.
+static float Alias_SpineBend_Tune(cvar_t **cache, const char *name, float def)
+{
+	if (!*cache)
+		*cache = Cvar_FindVar(name);
+	if (*cache)
+		return (*cache)->value;
+	return def;
+}
+
+//orthonormalize a (forward,right,up) basis - mirrors PlayerVis_LoadBoneBasis.
+static qboolean Alias_SpineBend_Ortho(vec3_t fwd, vec3_t right, vec3_t up)
+{
+	vec3_t lf, lu, lr;
+	float d;
+	VectorCopy(fwd, lf);
+	if (VectorNormalize(lf) < 0.001)
+		return false;
+	d = DotProduct(up, lf);
+	VectorMA(up, -d, lf, lu);
+	if (VectorLength(lu) < 0.001)
+		CrossProduct(right, lf, lu);
+	if (VectorNormalize(lu) < 0.001)
+		return false;
+	CrossProduct(lf, lu, lr);
+	if (VectorNormalize(lr) < 0.001)
+		return false;
+	if (DotProduct(lr, right) < 0)
+	{
+		VectorInverse(lr);
+		VectorInverse(lu);
+	}
+	VectorCopy(lf, fwd);
+	VectorCopy(lr, right);
+	VectorCopy(lu, up);
+	return true;
+}
+
+//apply the spine bend to a SKEL_RELATIVE pose buffer (numbones*12 floats), in place.
+static void Alias_ApplySpineBend(galiasinfo_t *inf, const framestate_t *framestate, float *rel)
+{
+	static cvar_t *c_pscale, *c_pmax, *c_pupper, *c_tscale, *c_tmax, *c_twaist, *c_tupper;
+	static const float pitch_frac[5] = {0.05f, 0.15f, 0.30f, 0.35f, 0.15f};
+	const double DEG2RAD = 3.14159265358979 / 180.0;
+
+	float pitch_scale = Alias_SpineBend_Tune(&c_pscale, "cl_player_spine_pitch_scale", 1);
+	float pitch_max   = Alias_SpineBend_Tune(&c_pmax,   "cl_player_spine_pitch_max",   35);
+	float pitch_upper = Alias_SpineBend_Tune(&c_pupper, "cl_player_spine_pitch_upper_scale", 0.6);
+	float twist_scale = Alias_SpineBend_Tune(&c_tscale, "cl_player_spine_twist_scale", -0.55);
+	float twist_max   = Alias_SpineBend_Tune(&c_tmax,   "cl_player_spine_twist_max",   50);
+	float twist_waist = Alias_SpineBend_Tune(&c_twaist, "cl_player_spine_twist_waist_scale", 1);
+	float twist_upper = Alias_SpineBend_Tune(&c_tupper, "cl_player_spine_twist_upper_scale", 0.5);
+	float pfrac, iqm_pitch, leg_twist, iqm_twist;
+	int i;
+
+	if (pitch_max <= 0) pitch_max = 35;
+	if (twist_max <= 0) twist_max = 50;
+	if (pitch_upper < 0) pitch_upper = 0; else if (pitch_upper > 2) pitch_upper = 2;
+	if (twist_upper < 0) twist_upper = 0; else if (twist_upper > 2) twist_upper = 2;
+	if (twist_waist < 0) twist_waist = 0; else if (twist_waist > 2) twist_waist = 2;
+
+	//pitch (degrees), clamped exactly as the client does
+	pfrac = framestate->g[FS_REG].subblend2frac;
+	if (pfrac < -1) pfrac = -1; else if (pfrac > 1) pfrac = 1;
+	iqm_pitch = pfrac * pitch_max * pitch_scale;
+	if (iqm_pitch < -pitch_max) iqm_pitch = -pitch_max; else if (iqm_pitch > pitch_max) iqm_pitch = pitch_max;
+
+	//twist (degrees): client uses leg_twist = subblendfrac*90, iqm_twist = -leg_twist*twist_scale
+	leg_twist = framestate->g[FS_REG].subblendfrac * 90.0f;
+	iqm_twist = -leg_twist * twist_scale;
+	if (iqm_twist < -twist_max) iqm_twist = -twist_max; else if (iqm_twist > twist_max) iqm_twist = twist_max;
+
+	for (i = 0; i < 5; i++)
+	{
+		int b = inf->spinebend_bone[i];
+		float *m;
+		vec3_t fwd, right, up;
+		float tdeg, pdeg, c, s;
+		vec3_t nf, nr, nu;
+		if (b < 0 || b >= inf->numbones)
+			continue;
+		m = rel + b*12;
+
+		//extract qc-space basis (bonemat_toqcvectors convention); origin (col3) is left untouched.
+		fwd[0]=m[0];    fwd[1]=m[4];    fwd[2]=m[8];
+		right[0]=-m[1]; right[1]=-m[5]; right[2]=-m[9];
+		up[0]=m[2];     up[1]=m[6];     up[2]=m[10];
+		if (!Alias_SpineBend_Ortho(fwd, right, up))
+			continue;
+
+		//twist: rotate (right,up) around forward.  fractions per the client.
+		tdeg = 0;
+		if      (i == 0) tdeg = iqm_twist * twist_waist;
+		else if (i == 1) tdeg = iqm_twist * 0.5f;
+		else if (i == 2) tdeg = iqm_twist * 0.25f * twist_upper;
+		else if (i == 3) tdeg = iqm_twist * 0.125f * twist_upper;
+		if (tdeg != 0)
+		{
+			c = cos(tdeg * DEG2RAD);
+			s = sin(tdeg * DEG2RAD);
+			VectorScale(right, c, nr); VectorMA(nr, s, up, nr);
+			VectorScale(up, c, nu);    VectorMA(nu, -s, right, nu);
+			VectorCopy(nr, right);
+			VectorCopy(nu, up);
+		}
+
+		//pitch: rotate (forward,right) around up.  upper bones scale by pitch_upper.
+		pdeg = iqm_pitch * pitch_frac[i];
+		if (i == 3 || i == 4) pdeg *= pitch_upper;
+		if (pdeg != 0)
+		{
+			c = cos(pdeg * DEG2RAD);
+			s = sin(pdeg * DEG2RAD);
+			VectorScale(fwd, c, nf);   VectorMA(nf, -s, right, nf);
+			VectorScale(right, c, nr); VectorMA(nr, s, fwd, nr);
+			VectorCopy(nf, fwd);
+			VectorCopy(nr, right);
+		}
+
+		//write back (bonemat_fromqcvectors convention).
+		m[0]=fwd[0];  m[1]=-right[0]; m[2]=up[0];
+		m[4]=fwd[1];  m[5]=-right[1]; m[6]=up[1];
+		m[8]=fwd[2];  m[9]=-right[2]; m[10]=up[2];
+	}
+}
+#endif //HALFLIFEMODELS
+
+//Wrapper around Alias_GetBoneInformation_Raw that injects the spine bend (Patch 36).
+//When no bend is active it is a straight pass-through (zero behaviour change).
+//When active it fetches the blended pose in SKEL_RELATIVE form into a PRIVATE copy
+//(never the shared static frame data), bends it, then converts to the requested type.
+static const float *Alias_GetBoneInformation(galiasinfo_t *inf, const framestate_t *framestate, skeltype_t targettype, float *targetbuffer, float *targetbufferalt, size_t numbones, const galiasbone_t *boneinfo)
+{
+#ifdef HALFLIFEMODELS
+	if (Alias_SpineBendActive(inf, framestate))
+	{
+		const float *rel = Alias_GetBoneInformation_Raw(inf, framestate, SKEL_RELATIVE, targetbuffer, targetbufferalt, numbones, boneinfo);
+		size_t n = numbones;
+		if (n > (size_t)inf->numbones)
+			n = inf->numbones;
+		//ensure we own the buffer before mutating it (the raw fast-path can return shared frame data).
+		if (rel != targetbuffer && rel != targetbufferalt)
+		{
+			memcpy(targetbuffer, rel, n*12*sizeof(float));
+			rel = targetbuffer;
+		}
+		Alias_ApplySpineBend(inf, framestate, (float*)rel);
+		if (targettype == SKEL_RELATIVE)
+			return rel;
+		return Alias_ConvertBoneData(SKEL_RELATIVE, rel, n, inf->ofsbones, targettype, targetbuffer, targetbufferalt, numbones);
+	}
+#endif
+	return Alias_GetBoneInformation_Raw(inf, framestate, targettype, targetbuffer, targetbufferalt, numbones, boneinfo);
+}
+//=========================================================================== Patch 36
 
 static void Alias_BuildSkeletalMesh(mesh_t *mesh, framestate_t *framestate, galiasinfo_t *inf)
 {
@@ -2586,6 +2819,219 @@ static qboolean Mod_Trace_Trisoup(vecV_t *posedata, index_t *indexes, int numind
 }
 
 //The whole reason why model loading is supported in the server.
+//nettest Patch 36 Part B ===================================================
+//Native per-bone hitbox collision for IQM/alias player models.
+//
+//IQM has no native hitbox chunk, so MOVE_HITMODEL would otherwise trace the mesh
+//triangles and the gamecode had to guess the hitgroup from the hit's Z-height
+//(a hand raised to head height read as a headshot). These boxes give exact,
+//forgiving, CS-style per-bone collision that returns the struck box's hitgroup.
+//Boxes are registered at runtime from QC (addmodelhitbox -> Mod_AddHitbox) out of
+//the same $hbox table the debug overlays use. The trace mirrors HLMDL_Trace
+//(gl/gl_hlmdl.c) but works in model space: the ray is already model-local
+//(start_l/end_l) and the SKEL_ABSOLUTE bones (with the Patch 36 view-pitch bend
+//already applied) are model-space too, so no axis is baked into the bones here.
+
+#ifdef SKELETALMODELS
+qboolean Mod_AddHitbox(model_t *model, const char *bonename, int hitgroup, const float *mins, const float *maxs)
+{
+	galiasinfo_t *inf;
+	int b, h;
+	aliashitbox_t *hb;
+
+	if (!model || model->type != mod_alias)
+		return false;	//HL .mdl has native hitboxes; non-skeletal has no bones.
+	inf = Mod_Extradata(model);
+	if (!inf || !inf->numbones || !inf->ofsbones)
+		return false;
+
+	for (b = 0; b < inf->numbones; b++)
+		if (!strcmp(inf->ofsbones[b].name, bonename))
+			break;
+	if (b >= inf->numbones)
+		return false;	//unknown bone (custom rig / wrong model) - skip silently.
+
+	//update the existing box for this bone if present (idempotent re-precache), else append.
+	for (h = 0; h < inf->numhitboxes; h++)
+		if (inf->hitbox[h].bone == b)
+			break;
+	if (h == inf->numhitboxes)
+	{
+		if (inf->numhitboxes >= MAX_ALIASHITBOXES)
+			return false;
+		inf->numhitboxes++;
+	}
+	hb = &inf->hitbox[h];
+	hb->bone = b;
+	hb->hitgroup = hitgroup;
+	VectorCopy(mins, hb->mins);
+	VectorCopy(maxs, hb->maxs);
+	return true;
+}
+
+static qboolean Mod_Trace_Hitbox(galiasinfo_t *inf, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t start_l, const vec3_t end_l, const vec3_t mins, const vec3_t maxs, trace_t *trace)
+{
+	float buffer[MAX_BONES*12];
+	float bufferalt[MAX_BONES*12];
+	const float *bones;
+	int h, i;
+	vec3_t p1l, p2l, norm;
+	float inverse[12];
+	float dist, d1, d2, f, enterfrac, enterdist, exitfrac;
+	qboolean startout, endout;
+	int enterplane;
+
+	trace->allsolid = false;
+	//Initialize the fields the post-loop and QC read, so a MISS can't leave stale/garbage
+	//values (HLMDL_Trace memsets the whole trace for this; Mod_Trace does not). Without this,
+	//a stale brush_face would index norm[]/bones[] out of bounds, and a stale surface_id would
+	//leak a phantom hitgroup to W_HitgroupClassify.
+	trace->brush_face = 0;
+	trace->bone_id = 0;
+	trace->brush_id = 0;
+	trace->surface_id = 0;
+
+	//nettest Patch 36 Part B FIX: pass inf->numbones, NOT MAX_BONES. Alias_GetBoneInformation_Raw
+	//only uses a QC skeletal object's bonestate when framestate->bonecount >= numbones; the CSQC
+	//player visual proxy's skel_build skeleton has bonecount == inf->numbones (~40-60), so passing
+	//MAX_BONES (256) made that test fail and SILENTLY DISCARDED the posed skeleton, tracing the
+	//bind/raw frame pose instead — boxes ended up offset from the rendered (posed) silhouette and a
+	//ray through the proxy origin missed. The render path always passes inf->numbones (e.g.
+	//Alias_BuildSkeletalMesh), so this realigns the trace's bone source with the render's.
+	bones = Alias_GetBoneInformation(inf, framestate, SKEL_ABSOLUTE, buffer, bufferalt, inf->numbones, NULL);
+	if (!bones)
+		return false;
+
+	for (h = 0; h < inf->numhitboxes; h++)
+	{
+		aliashitbox_t *hb = &inf->hitbox[h];
+		if (hb->bone < 0 || hb->bone >= inf->numbones)
+			continue;
+
+		startout = false;
+		endout = false;
+		enterplane = 0;
+		enterfrac = -1;
+		exitfrac = 10;
+		enterdist = 0;
+
+		//transform the model-space ray into this bone's local frame so the box is axial.
+		Matrix3x4_Invert_Simple((void*)(bones + hb->bone*12), inverse);
+		Matrix3x4_RM_Transform3(inverse, start_l, p1l);
+		Matrix3x4_RM_Transform3(inverse, end_l, p2l);
+
+		//clip against the 6 axial faces (Minkowski-expanded by the trace bbox, as HL does)
+		for (i = 0; i < 6; i++)
+		{
+			if (i < 3)
+			{
+				dist = hb->maxs[i] - mins[i];
+				d1 = p1l[i] - dist;
+				d2 = p2l[i] - dist;
+			}
+			else
+			{
+				dist = maxs[i-3] - hb->mins[i-3];
+				d1 = -p1l[i-3] - dist;
+				d2 = -p2l[i-3] - dist;
+			}
+
+			if (d1 >= 0)
+				startout = true;
+			if (d2 > 0)
+				endout = true;
+
+			if (d1 > 0 && d2 >= 0)
+				goto nexthitbox;	//fully outside one plane -> cannot enter
+			if (d1 < 0 && d2 <= 0)
+				continue;			//fully inside this plane -> irrelevant
+
+			f = d1 / (d1 - d2);
+			if (d1 > d2)
+			{	//entering - favour the furthest fraction (convex)
+				if (enterfrac < f)
+				{
+					enterfrac = f;
+					enterplane = i;
+					enterdist = dist;
+				}
+			}
+			else
+			{	//leaving - favour the nearest
+				if (exitfrac > f)
+					exitfrac = f;
+			}
+		}
+
+		if (!startout)
+		{	//ray started inside this box
+			trace->startsolid = true;
+			if (!endout)
+				trace->allsolid = true;
+			trace->contents = inf->contents;
+			trace->brush_face = 0;
+			trace->bone_id = hb->bone+1;
+			trace->brush_id = h+1;
+			trace->surface_id = hb->hitgroup;
+			trace->surface = &inf->csurface;
+			break;
+		}
+		if (enterfrac != -1 && enterfrac < exitfrac)
+		{
+			if (enterfrac < trace->fraction)
+			{	//closest impact so far
+				trace->fraction = trace->truefraction = enterfrac;
+				trace->plane.dist = enterdist;
+				trace->contents = inf->contents;
+				trace->brush_face = enterplane+1;
+				trace->bone_id = hb->bone+1;
+				trace->brush_id = h+1;
+				trace->surface_id = hb->hitgroup;
+				trace->surface = &inf->csurface;
+			}
+		}
+nexthitbox:
+		;
+	}
+
+	if (trace->brush_face)
+	{	//bone-local axial normal -> model space (bone rotation) -> world space (iaxis)
+		vec3_t mnorm;
+		VectorClear(norm);
+		if (trace->brush_face < 4)
+			norm[trace->brush_face-1] = 1;
+		else
+			norm[trace->brush_face-4] = -1;
+		Matrix3x4_RM_Transform3x3((void*)(bones + (trace->bone_id-1)*12), norm, mnorm);
+		if (axis)
+		{
+			vec3_t iaxis[3];
+			Matrix3x3_RM_Invert_Simple((const void *)axis, iaxis);
+			trace->plane.normal[0] = DotProduct(mnorm, iaxis[0]);
+			trace->plane.normal[1] = DotProduct(mnorm, iaxis[1]);
+			trace->plane.normal[2] = DotProduct(mnorm, iaxis[2]);
+		}
+		else
+			VectorCopy(mnorm, trace->plane.normal);
+	}
+	else
+		VectorClear(trace->plane.normal);
+
+	//world-space impact point
+	trace->endpos[0] = start[0] + trace->fraction*(end[0]-start[0]);
+	trace->endpos[1] = start[1] + trace->fraction*(end[1]-start[1]);
+	trace->endpos[2] = start[2] + trace->fraction*(end[2]-start[2]);
+
+	return trace->truefraction != 1;
+}
+#else
+qboolean Mod_AddHitbox(model_t *model, const char *bonename, int hitgroup, const float *mins, const float *maxs)
+{
+	return false;
+}
+#endif
+//=========================================================================== Patch 36 Part B
+
 static qboolean Mod_Trace(model_t *model, int forcehullnum, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int contentsmask, trace_t *trace)
 {
 	galiasinfo_t *mod = Mod_Extradata(model);
@@ -2621,6 +3067,14 @@ static qboolean Mod_Trace(model_t *model, int forcehullnum, const framestate_t *
 
 	trace->fraction = trace->truefraction = 1;
 
+#ifdef SKELETALMODELS
+	//nettest Patch 36 Part B: if this model has registered per-bone hitboxes (players),
+	//trace the boxes instead of the mesh triangles ("use only hitboxes") and report the
+	//struck box's hitgroup via trace->surface_id.
+	if (mod && mod->numhitboxes && framestate && (mod->contents & contentsmask))
+		return Mod_Trace_Hitbox(mod, framestate, axis, start, end, start_l, end_l, mins, maxs, trace);
+#endif
+
 	for(; mod; mod = mod->nextsurf, surfnum++)
 	{
 		if (!(mod->contents & contentsmask))
@@ -2638,7 +3092,12 @@ static qboolean Mod_Trace(model_t *model, int forcehullnum, const framestate_t *
 				if (curbonesurf != mod->shares_bones)
 				{
 					curbonesurf = mod->shares_bones;
-					bonepose = Alias_GetBoneInformation(mod, framestate, SKEL_INVERSE_ABSOLUTE, buffer, bufferalt, MAX_BONES, NULL);
+					//nettest Patch 36 FIX: inf->numbones, not MAX_BONES — see the matching note in
+					//Mod_Trace_Hitbox. A QC skeletal object's bonestate is only honoured when
+					//framestate->bonecount >= numbones; MAX_BONES(256) defeated that and made the
+					//mesh trace ignore the proxy's posed skeleton too (it would mostly bite when a
+					//player model has no registered hitboxes and falls through to this mesh path).
+					bonepose = Alias_GetBoneInformation(mod, framestate, SKEL_INVERSE_ABSOLUTE, buffer, bufferalt, mod->numbones, NULL);
 				}
 				posedata = alloca(mod->numverts*sizeof(vecV_t));
 				Alias_TransformVerticies_V(bonepose, mod->numverts, mod->ofs_skel_idx[0], mod->ofs_skel_weight[0], mod->ofs_skel_xyz[0], posedata[0]);
@@ -5362,6 +5821,20 @@ qboolean Mod_GetTag(model_t *model, int tagnum, framestate_t *fstate, float *res
 			if (tagnum <= 0 || tagnum > inf->numbones)
 				return false;
 			tagnum--;	//tagnum 0 is 'use my angles/org'
+
+#ifdef HALFLIFEMODELS
+			//nettest Patch 36: when the spine bend is active, build the bent absolute
+			//pose and read the bone directly, so gettaginfo (weapon attachment, debug
+			//hitbox draws, QC) matches the rendered/collided lean.
+			if (Alias_SpineBendActive(inf, fstate) && tagnum < inf->numbones)
+			{
+				float *bb = alloca(inf->numbones*12*sizeof(float));
+				float *ba = alloca(inf->numbones*12*sizeof(float));
+				const float *abspose = Alias_GetBoneInformation(inf, fstate, SKEL_ABSOLUTE, bb, ba, inf->numbones, NULL);
+				memcpy(result, abspose + tagnum*12, 12*sizeof(*result));
+				return true;
+			}
+#endif
 
 			//data comes from skeletal object, if possible
 			if (!numbonegroups && fstate->bonestate)
@@ -10312,6 +10785,7 @@ static qboolean QDECL Mod_LoadObjModel(model_t *mod, void *buffer, size_t fsize)
 
 void Alias_Register(void)
 {
+	Cvar_Register(&r_skel_spinebend, NULL);	//nettest Patch 36
 #ifdef MD1MODELS
 #ifndef SERVERONLY
 	Cvar_Register(&dpcompat_nofloodfill, NULL);

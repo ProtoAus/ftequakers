@@ -8590,6 +8590,30 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 	}
 	//SPF_ADDON => appended at the TAIL (lowest priority); COPYPROTECTED+PRIVATE => not networked/redistributed.
 	FS_AddPathHandle(&oldpaths, arg, syspath, handle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
+
+	//nettest: also mount the sibling <gamedir>_downloads (Steam/GoldSrc downloads custom
+	//content there, e.g. cstrike -> cstrike_downloads) at the same low addon priority, so
+	//downloaded maps + their assets load with the game.  Only when it exists + isn't already
+	//mounted -- VFSOS_OpenPath does NOT validate the dir, so probe it first with the same
+	//cancel-on-first-entry Sys_EnumerateFiles trick FS_DirHasContent uses (portable, Win32-safe).
+	{
+		char dlpath[MAX_OSPATH];
+		searchpath_t *ds;
+		searchpathfuncs_t *dlhandle;
+		Q_snprintfz(dlpath, sizeof(dlpath), "%s_downloads", syspath);
+		if (!Sys_EnumerateFiles(dlpath, "*", FS_DirDoesHaveGame, NULL, NULL))	//returns false => callback cancelled => dir has >=1 entry
+		{
+			for (ds = com_searchpaths; ds; ds = ds->next)
+				if (!Q_strcasecmp(ds->logicalpath, dlpath))
+					break;
+			if (!ds)
+			{
+				dlhandle = VFSOS_OpenPath(NULL, NULL, dlpath, dlpath, "");
+				if (dlhandle)
+					FS_AddPathHandle(&oldpaths, arg, dlpath, dlhandle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
+			}
+		}
+	}
 	return true;
 }
 
@@ -8682,6 +8706,8 @@ static int QDECL FS_IndexArchive_Visit(const char *fname, qofs_t fsize, time_t m
 	{
 		handle->EnumerateFiles(handle, "maps/*.bsp",    FS_IndexMap_Visit, ctx);
 		handle->EnumerateFiles(handle, "maps/*.d3dbsp", FS_IndexMap_Visit, ctx);
+		handle->EnumerateFiles(handle, "maps/mp/*.bsp",    FS_IndexMap_Visit, ctx);	//CoD MP maps inside the zip live under maps/mp/
+		handle->EnumerateFiles(handle, "maps/mp/*.d3dbsp", FS_IndexMap_Visit, ctx);
 		handle->ClosePath(handle);
 	}
 	return true;
@@ -8735,11 +8761,33 @@ void FS_IndexAddonMaps(void)
 			//loose maps (GoldSrc/Source ship maps as loose .bsp files)
 			Sys_EnumerateFiles(va("%s/maps", syspath), "*.bsp",    FS_IndexMap_Visit, &ctx, NULL);
 			Sys_EnumerateFiles(va("%s/maps", syspath), "*.d3dbsp", FS_IndexMap_Visit, &ctx, NULL);
+			//CoD multiplayer maps live in a maps/mp/ SUBFOLDER (e.g. mp_harbor.bsp); the visitor strips
+			//the dir prefix so they still index under the bare name "mp_harbor"
+			Sys_EnumerateFiles(va("%s/maps/mp", syspath), "*.bsp",    FS_IndexMap_Visit, &ctx, NULL);
+			Sys_EnumerateFiles(va("%s/maps/mp", syspath), "*.d3dbsp", FS_IndexMap_Visit, &ctx, NULL);
 			//archived maps (CoD ships maps inside .iwd/.pk3 zips) -- peek each archive's maps/ dir
 			Sys_EnumerateFiles(syspath, "*.iwd", FS_IndexArchive_Visit, &ctx, NULL);
 			Sys_EnumerateFiles(syspath, "*.pk3", FS_IndexArchive_Visit, &ctx, NULL);
 			Sys_EnumerateFiles(syspath, "*.pk4", FS_IndexArchive_Visit, &ctx, NULL);
 			Sys_EnumerateFiles(syspath, "*.pak", FS_IndexArchive_Visit, &ctx, NULL);
+
+			//nettest: also index the sibling <gamedir>_downloads — Steam/GoldSrc downloads
+			//custom content (maps) there (e.g. cstrike -> cstrike_downloads).  Tagged with the
+			//SAME game so its maps land on the same menu tab; Sys_EnumerateFiles silently
+			//no-ops when the sibling doesn't exist.
+			{
+				char dlpath[MAX_OSPATH];
+				Q_snprintfz(dlpath, sizeof(dlpath), "%s_downloads", syspath);
+				ctx.gamedir = dlpath;
+				Sys_EnumerateFiles(va("%s/maps", dlpath), "*.bsp",    FS_IndexMap_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(va("%s/maps", dlpath), "*.d3dbsp", FS_IndexMap_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(va("%s/maps/mp", dlpath), "*.bsp",    FS_IndexMap_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(va("%s/maps/mp", dlpath), "*.d3dbsp", FS_IndexMap_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(dlpath, "*.iwd", FS_IndexArchive_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(dlpath, "*.pk3", FS_IndexArchive_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(dlpath, "*.pk4", FS_IndexArchive_Visit, &ctx, NULL);
+				Sys_EnumerateFiles(dlpath, "*.pak", FS_IndexArchive_Visit, &ctx, NULL);
+			}
 		}
 		BZ_Free(file);
 	}

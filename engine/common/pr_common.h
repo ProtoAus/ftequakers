@@ -279,6 +279,7 @@ void QCBUILTIN PF_setattachment(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 	#define PF_skel_ragedit			PF_Fixme
 	#define PF_frameduration		PF_Fixme
 	#define PF_modelframecount		PF_Fixme
+	#define PF_addmodelhitbox		PF_Fixme
 	#define PF_frameforname			PF_Fixme
 	#define PF_frameforaction		PF_Fixme
 	#define PF_skel_delete			PF_Fixme
@@ -328,6 +329,7 @@ void QCBUILTIN PF_setattachment(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 	void QCBUILTIN PF_frameforaction (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 	void QCBUILTIN PF_frameduration (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 	void QCBUILTIN PF_modelframecount (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+	void QCBUILTIN PF_addmodelhitbox (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 	void QCBUILTIN PF_skinforname (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 	void QCBUILTIN PF_gettaginfo (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 	void QCBUILTIN PF_gettagindex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

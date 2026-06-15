@@ -6945,6 +6945,7 @@ static struct {
 	{"argescape",				PF_argescape,				295},
 
 	{"modelframecount",			PF_modelframecount,			0},
+	{"addmodelhitbox",			PF_addmodelhitbox,			0},	//nettest Patch 36 Part B
 
 //300
 	{"clearscene",				PF_R_ClearScene,	300},				// #300 void() clearscene (EXT_CSQC)
