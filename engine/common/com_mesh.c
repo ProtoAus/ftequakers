@@ -24,6 +24,13 @@ cvar_t r_lerpmuzzlehack						= CVARF  ("r_lerpmuzzlehack", "1", CVAR_ARCHIVE);
 //nettest Patch 36: master enable for the engine-native player spine bend (view-pitch lean + body twist)
 //applied to IQM player skeletons so the SERVER collision pose, gettaginfo and the render all match.
 cvar_t r_skel_spinebend						= CVARFD ("r_skel_spinebend", "1", CVAR_ARCHIVE, "Engine-native view-pitch/body-twist spine bend for IQM player models, so server-side hit detection matches the rendered lean. 0 disables (falls back to the QC client deform).");
+//nettest warp fix: re-orthonormalize each BLENDED bone matrix.  Alias_BlendBoneData does a
+//LINEAR weighted sum of 3x4 bone matrices; a linear blend of rotations is no longer orthonormal
+//(the basis shrinks/skews), and on a SKEL_RELATIVE skeleton that scale COMPOUNDS down the parent
+//chain, blowing the deepest bones (head/root) to a giant/inf ABSOLUTE scale — the IQM player-model
+//"warp" (and the same upper-body scale fed the weapon attach + warped the gun).  1 fixes it in the
+//engine for all models; 0 falls back to the per-bone QC orthonormalize.
+cvar_t r_skel_blendnormalize				= CVARFD ("r_skel_blendnormalize", "1", CVAR_ARCHIVE, "Re-orthonormalize blended IQM bone matrices so frame-blend scale can't compound down the skeleton (the player-model warp). 0 = off (set only for models that bake intentional non-unit bone scale).");
 #ifdef MD1MODELS
 cvar_t mod_h2holey_bugged					= CVARD ("mod_h2holey_bugged", "0", "Hexen2's holey-model flag uses index 0 as transparent (and additionally 255 in gl, due to a bug). GLQuake engines tend to have bugs that use ONLY index 255, resulting in a significant compatibility issue that can be resolved only with this shitty cvar hack.");
 cvar_t mod_halftexel						= CVARD ("mod_halftexel", "1", "Offset texture coords by a half-texel, for compatibility with glquake and the majority of engine forks.");
@@ -1203,6 +1210,29 @@ static int Alias_FindRawSkelData(galiasinfo_t *inf, const framestate_t *fstate, 
 	return value is the lastbone argument, or less if the model simply doesn't have that many bones.
 	_always_ writes into result
 */
+//nettest warp fix: Gram-Schmidt a blended bone's 3x3 (column basis) back to a clean rotation,
+//preserving handedness and the translation column.  m is a 3x4 row-major matrix (12 floats);
+//the columns are the local axes (matching bonemat_toqcvectors).  Leaves a degenerate bone as-is.
+//non-static: also called from pr_skelobj.c PF_skel_build (skel_build uses a different blend path).
+void Alias_RenormalizeBoneMatrix(float *m)
+{
+	vec3_t c0, c1, c2, x;
+	c0[0]=m[0]; c0[1]=m[4]; c0[2]=m[8];	//column 0
+	c1[0]=m[1]; c1[1]=m[5]; c1[2]=m[9];	//column 1
+	c2[0]=m[2]; c2[1]=m[6]; c2[2]=m[10];	//column 2 (original — only for the handedness test)
+	if (VectorNormalize(c0) < 0.000001)
+		return;
+	VectorMA(c1, -DotProduct(c1, c0), c0, c1);	//orthogonalize c1 against c0
+	if (VectorNormalize(c1) < 0.000001)
+		return;
+	CrossProduct(c0, c1, x);			//right-handed third axis
+	if (DotProduct(x, c2) < 0)			//keep the original handedness (don't mirror)
+		VectorNegate(x, x);
+	m[0]=c0[0]; m[4]=c0[1]; m[8]=c0[2];
+	m[1]=c1[0]; m[5]=c1[1]; m[9]=c1[2];
+	m[2]=x[0];  m[6]=x[1];  m[10]=x[2];
+}
+
 static int Alias_BlendBoneData(galiasinfo_t *inf, const framestate_t *fstate, float *result, skeltype_t skeltype, int firstbone, int lastbone, const galiasbone_t *boneinfo)
 {
 	skellerps_t lerps[FS_COUNT], *lerp;
@@ -1211,6 +1241,9 @@ static int Alias_BlendBoneData(galiasinfo_t *inf, const framestate_t *fstate, fl
 
 	float *pose, *matrix;
 	int k, b;
+	//nettest warp fix: only the BLENDED (non-exact) path skews the basis, and only relative
+	//skeletons compound it down the chain — so renormalize there.
+	int renorm = (skeltype == SKEL_RELATIVE) && r_skel_blendnormalize.ival;
 
 	for (lerp = lerps; numgroups--; lerp++)
 	{
@@ -1227,16 +1260,24 @@ static int Alias_BlendBoneData(galiasinfo_t *inf, const framestate_t *fstate, fl
 				{
 					pose = result + 12*bone;
 					//set up the per-bone transform matrix
-					matrix = lerps->pose[0] + bone*12;
+					//nettest fix: use THIS group's poses (lerp->pose), not the first group's
+					//(lerps->pose).  With a basebone split the torso group is lerps[1]; reading
+					//lerps[0].pose[b] for b>=group0's lerpcount dereferences an uninitialised pose
+					//pointer -> garbage keyframe data -> whole-upper-body translation blowup on a
+					//transition frame (the "stretched limbs" warp).  The memcpy fast-path above
+					//already correctly uses lerp->pose[0].
+					matrix = lerp->pose[0] + bone*12;
 					for (k = 0;k < 12;k++)
 						pose[k] = matrix[k] * lerp->frac[0];
 					for (b = 1;b < lerp->lerpcount;b++)
 					{
-						matrix = lerps->pose[b] + bone*12;
+						matrix = lerp->pose[b] + bone*12;
 
 						for (k = 0;k < 12;k++)
 							pose[k] += matrix[k] * lerp->frac[b];
 					}
+					if (renorm)
+						Alias_RenormalizeBoneMatrix(pose);	//undo the linear-blend basis shrink/skew
 				}
 			}
 		}
@@ -10786,6 +10827,7 @@ static qboolean QDECL Mod_LoadObjModel(model_t *mod, void *buffer, size_t fsize)
 void Alias_Register(void)
 {
 	Cvar_Register(&r_skel_spinebend, NULL);	//nettest Patch 36
+	Cvar_Register(&r_skel_blendnormalize, NULL);	//nettest warp fix (IQM frame-blend renormalize)
 #ifdef MD1MODELS
 #ifndef SERVERONLY
 	Cvar_Register(&dpcompat_nofloodfill, NULL);

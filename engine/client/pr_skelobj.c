@@ -40,6 +40,12 @@ qc must build the skeletal object still, which fills the skeletal object from th
 #include "pr_common.h"
 #include "com_mesh.h"
 
+//nettest warp fix (Patch 43): renormalize a blended bone matrix (defined in com_mesh.c).
+//skel_build below fills the QC skeleton via a different blend path than the renderer, so it
+//needs the same cleanup or the frame-blend scale compounds down the chain (head/root -> inf).
+void Alias_RenormalizeBoneMatrix(float *m);
+extern cvar_t r_skel_blendnormalize;
+
 #define MAX_SKEL_OBJECTS 1024
 
 #ifdef RAGDOLL
@@ -1984,6 +1990,12 @@ void QCBUILTIN PF_skel_build(pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 	if (!model)
 		return; //invalid model, can't get a skeleton
 
+	//nettest fix: fstate is an uninitialised stack local, and cs_getframestate only fills
+	//frame-blend slots [0] and [1] (the 4-slot path is #if 0'd out).  Without this memset,
+	//slots [2]/[3] keep stack GARBAGE, so Alias_BuildSkelLerps blends in two phantom poses
+	//with huge weights -> the whole skeleton's bone translations scale up (the "stretched
+	//limbs" player-model warp).  Zero it so only the real [0]/[1] influences are used.
+	memset(&fstate, 0, sizeof(fstate));
 	w->Get_FrameState(w, ent, &fstate);
 
 	//heh... don't copy.
@@ -2080,6 +2092,17 @@ void QCBUILTIN PF_skel_build(pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 					skelobj->bonematrix[i*12+j] += addition*relationsbuf[i*12+j];
 			}
 		}
+	}
+
+	//nettest warp fix (Patch 43): skel_build fills the QC skeleton via Mod_GetBoneRelations,
+	//a DIFFERENT blend path than the render's Alias_BlendBoneData, so the same un-renormalized
+	//frame-blend scale lands here and compounds down the relative chain (head/root -> inf, +
+	//feeds the gun mirror).  Clean every (re)built bone so render + gettaginfo + skel_get_* see a
+	//proper rotation.  Same gate as the render patch (r_skel_blendnormalize, relative only).
+	if (skelobj->type == SKEL_RELATIVE && r_skel_blendnormalize.ival)
+	{
+		for (i = firstbone; i < lastbone; i++)
+			Alias_RenormalizeBoneMatrix(skelobj->bonematrix + i*12);
 	}
 
 	G_FLOAT(OFS_RETURN) = (skelobj - skelobjects) + 1;
@@ -2442,6 +2465,14 @@ void QCBUILTIN PF_skel_set_bone_world (pubprogfuncs_t *prinst, struct globalvars
 	/*calc the result*/
 	bone = skelobj->bonematrix+12*boneidx;
 	Matrix3x4_Multiply(childworld, parentinv, bone);
+
+	//nettest warp fix (Patch 46): the multiply above stores the parent-relative bone VERBATIM.
+	//A non-unit childworld (gettaginfo chain-walks the deformed spine and compounds residual
+	//frame-blend scale) or a non-unit parentinv lands here and, on a relative skeleton, compounds
+	//down the chain + feeds the gun mirror.  Renormalize the write — the CSQC parallel of Patch 43's
+	//skel_build renorm — so the QC no longer needs to scrub bones after every skel_set_bone_world.
+	if (skelobj->type == SKEL_RELATIVE && r_skel_blendnormalize.ival)
+		Alias_RenormalizeBoneMatrix(bone);
 }
 
 //void(float skel, float bonenum, vector org) skel_set_bone (FTE_CSQC_SKELETONOBJECTS) (reads v_forward etc)
