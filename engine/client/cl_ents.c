@@ -49,6 +49,8 @@ extern	cvar_t	cl_nolerp_netquake;
 extern	cvar_t	r_torch;
 extern  cvar_t r_shadows;
 extern	cvar_t	r_showbboxes;
+extern	cvar_t	r_showhull;
+extern	cvar_t	r_showhull_maxdist;	//nettest Patch 69: cull hull viz beyond this many units from the view (0=unlimited)
 extern	cvar_t gl_simpleitems;
 float r_blobshadows;
 
@@ -2760,7 +2762,12 @@ void CLQ1_DrawLine(shader_t *shader, vec3_t v1, vec3_t v2, float r, float g, flo
 	scenetris_t *t;
 	int flags = BEF_NODLIGHT|BEF_NOSHADOWS|BEF_LINES;
 
-	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader && cl_stris[cl_numstris-1].flags == flags)
+	//nettest Patch 66: also require room for 2 more verts under MAX_INDICIES (16-bit index_t cap) —
+	//without this, a prop with many decomposition pieces (van/sofa) overflowed one scenetris batch
+	//and the relative indices wrapped, so its whole r_showhull wireframe silently vanished. Sibling
+	//helpers (CLQ1_AddSpriteQuad/CLQ1_AddBox) already guard this way; start a new batch near the cap.
+	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader && cl_stris[cl_numstris-1].flags == flags
+		&& cl_stris[cl_numstris-1].numvert + 2 <= MAX_INDICIES)
 		t = &cl_stris[cl_numstris-1];
 	else
 	{
@@ -3255,6 +3262,184 @@ void CLQ1_AddVisibleBBoxes(void)
 	}
 }
 
+//nettest Patch 56: draw the convex-hull collision geometry of SOLID_PHYSICS_TRIMESH props
+//as green lines (r_showhull) so the actual player-collision shape is visible. The hull
+//surface triangles are baked into the model at load (com_mesh.c Mod_BuildHullPlanes); here
+//each vert is rotated by the entity angles, scaled, and translated to world — the SAME
+//transform World_HullTrace uses, so the lines land exactly on what the player collides with.
+static void CLQ1_HullVizVert(vec3_t out, const vec3_t src, vec3_t axis[3], const vec3_t origin, float sc)
+{
+	out[0] = origin[0] + sc*(src[0]*axis[0][0] + src[1]*axis[1][0] + src[2]*axis[2][0]);
+	out[1] = origin[1] + sc*(src[0]*axis[0][1] + src[1]*axis[1][1] + src[2]*axis[2][1]);
+	out[2] = origin[2] + sc*(src[0]*axis[0][2] + src[1]*axis[1][2] + src[2]*axis[2][2]);
+}
+//nettest Patch 60: 12 edges of a box, as pairs of corner indices (see cv[] below).
+static const int CLQ1_BoxEdges[12][2] =
+{
+	{0,1},{1,2},{2,3},{3,0},	//bottom
+	{4,5},{5,6},{6,7},{7,4},	//top
+	{0,4},{1,5},{2,6},{3,7}		//verticals
+};
+void CLQ1_AddVisibleHulls(void)
+{
+	static int hullviz_lastshow = 0;
+	world_t *w = NULL;
+	wedict_t *e;
+	model_t *mod;
+	shader_t *s;
+	int i, t, solid, showdecomp;
+	vec3_t axis[3], v0, v1, v2, cv[8];
+	float sc;
+	qboolean diag;
+	static cvar_t *r_propcol;
+
+	if (!(r_showhull.ival & 3))
+	{
+		hullviz_lastshow = 0;	//re-print the hull-state summary next time it's toggled on
+		return;
+	}
+	diag = (r_showhull.ival != hullviz_lastshow);	//one-shot console summary on (re)enable
+	hullviz_lastshow = r_showhull.ival;
+	//nettest Patch 61: show the per-submesh DECOMPOSITION (mode 3) when active, else the single hull.
+	if (!r_propcol) r_propcol = Cvar_Get("sv_prop_collision", "2", CVAR_SERVERINFO, NULL);
+	showdecomp = (r_propcol && r_propcol->ival == 3);
+	if (R2D_Flush) R2D_Flush();
+
+	switch (r_showhull.ival & 3)
+	{
+#ifndef CLIENTONLY
+	case 1:
+		w = &sv.world;
+		break;
+#endif
+#ifdef CSQC_DAT
+	case 2:
+		{
+			extern world_t csqc_world;
+			w = &csqc_world;
+		}
+		break;
+#endif
+	default:
+		return;
+	}
+	if (!w || !w->progs)
+		return;
+
+	s = R_RegisterShader("hullshader", SUF_NONE,
+		"{\n"
+			"polygonoffset\n"
+			"sort additive\n"
+			"{\n"
+				"map $whiteimage\n"
+				"blendfunc add\n"
+				"rgbgen vertex\n"
+				"alphagen vertex\n"
+			"}\n"
+		"}\n");
+
+	for (i = 1; i < w->num_edicts; i++)
+	{
+		e = WEDICT_NUM_PB(w->progs, i);
+		if (ED_ISFREE(e))
+			continue;
+		solid = e->v->solid;
+		if ((solid != SOLID_PHYSICS_TRIMESH && solid != SOLID_PHYSICS_BOX) || !e->v->modelindex)
+			continue;
+		mod = w->Get_CModel(w, e->v->modelindex);
+		if (!mod)
+			continue;
+
+		//nettest Patch 69: cull props far from the view so a prop-dense scene doesn't overflow the
+		//(unbounded) scenetris LINE buffer — without this, once enough distant props piled lines in,
+		//the near hulls stopped drawing too. r_showhull_maxdist 0 = unlimited (old behaviour). Squared
+		//compare avoids the sqrt. Debug-viz ONLY — collision (Get_CModel hull) is unaffected.
+		if (r_showhull_maxdist.value > 0)
+		{
+			vec3_t hd;
+			VectorSubtract(e->v->origin, r_refdef.vieworg, hd);
+			if (DotProduct(hd, hd) > r_showhull_maxdist.value * r_showhull_maxdist.value)
+				continue;
+		}
+
+		//one-shot readout so a "blank" prop reports WHY (hulltris==0 -> no hull viz; a
+		//SOLID_PHYSICS_BOX prop draws its oriented box instead). Fires once per (re)enable.
+		if (diag)
+			Con_Printf("r_showhull: %s solid=%i hullplanes=%i hulltris=%i hulls=%i\n",
+				mod->name, solid, mod->numhullplanes, mod->numhulltris, mod->numhulls);
+
+		//nettest Patch 64: these are SOLID_PHYSICS_TRIMESH/BOX (alias) props — build the viz
+		//basis with r_meshpitch (AngleVectorsMesh) like the collision + render, so the debug
+		//lines land on the actual collision surface when the prop is pitched/rolled.
+		AngleVectorsMesh(e->v->angles, axis[0], axis[1], axis[2]);
+		VectorNegate(axis[1], axis[1]);
+
+		if (showdecomp && mod->numhulls > 0)
+		{	//convex DECOMPOSITION (mode 3) — each per-submesh piece in a cycling color, so the
+			//concave breakup (van body vs wheels) is visible. This is what mode 3 collides with.
+			static const float hue[6][3] = {{0,1,0},{0,1,1},{1,0,1},{1,1,0},{1,0.5,0},{0.4,0.7,1}};
+			int hh;
+			sc = e->xv->scale;
+			if (sc <= 0)
+				sc = 1;
+			for (hh = 0; hh < mod->numhulls; hh++)
+			{
+				const convhull_t *ch = &mod->convhulls[hh];
+				const float *col = hue[hh % 6];
+				for (t = 0; t < ch->numtris; t++)
+				{
+					CLQ1_HullVizVert(v0, ch->tris[t*3+0], axis, e->v->origin, sc);
+					CLQ1_HullVizVert(v1, ch->tris[t*3+1], axis, e->v->origin, sc);
+					CLQ1_HullVizVert(v2, ch->tris[t*3+2], axis, e->v->origin, sc);
+					CLQ1_DrawLine(s, v0, v1, col[0], col[1], col[2], 1);
+					CLQ1_DrawLine(s, v1, v2, col[0], col[1], col[2], 1);
+					CLQ1_DrawLine(s, v2, v0, col[0], col[1], col[2], 1);
+				}
+			}
+		}
+		else if (mod->numhulltris > 0 && mod->hulltris)
+		{	//single convex-hull surface (green) — the mode-2 player-collision shape
+			sc = e->xv->scale;
+			if (sc <= 0)
+				sc = 1;
+			for (t = 0; t < mod->numhulltris; t++)
+			{
+				CLQ1_HullVizVert(v0, mod->hulltris[t*3+0], axis, e->v->origin, sc);
+				CLQ1_HullVizVert(v1, mod->hulltris[t*3+1], axis, e->v->origin, sc);
+				CLQ1_HullVizVert(v2, mod->hulltris[t*3+2], axis, e->v->origin, sc);
+				CLQ1_DrawLine(s, v0, v1, 0, 1, 0, 1);
+				CLQ1_DrawLine(s, v1, v2, 0, 1, 0, 1);
+				CLQ1_DrawLine(s, v2, v0, 0, 1, 0, 1);
+			}
+		}
+		else
+		{	//no hull (SOLID_PHYSICS_BOX .mdl/cabinet, or a hull-less prop) -> the oriented bbox
+			//(yellow). e->v->mins/maxs are already world-scale (setsize), so sc=1 here.
+			vec3_t mn, mx;
+			VectorCopy(e->v->mins, mn);
+			VectorCopy(e->v->maxs, mx);
+			VectorSet(cv[0], mn[0], mn[1], mn[2]);
+			VectorSet(cv[1], mx[0], mn[1], mn[2]);
+			VectorSet(cv[2], mx[0], mx[1], mn[2]);
+			VectorSet(cv[3], mn[0], mx[1], mn[2]);
+			VectorSet(cv[4], mn[0], mn[1], mx[2]);
+			VectorSet(cv[5], mx[0], mn[1], mx[2]);
+			VectorSet(cv[6], mx[0], mx[1], mx[2]);
+			VectorSet(cv[7], mn[0], mx[1], mx[2]);
+			for (t = 0; t < 8; t++)
+			{
+				vec3_t tmp;
+				CLQ1_HullVizVert(tmp, cv[t], axis, e->v->origin, 1);
+				VectorCopy(tmp, cv[t]);
+			}
+			for (t = 0; t < 12; t++)
+				CLQ1_DrawLine(s, cv[CLQ1_BoxEdges[t][0]], cv[CLQ1_BoxEdges[t][1]], 1, 1, 0, 1);
+		}
+	}
+}
+
+extern cvar_t r_decal_lightmap;	//nettest
+
 typedef struct
 {
 	scenetris_t *t;
@@ -3263,15 +3448,124 @@ typedef struct
 	vec3_t axis[3];
 	float offset[3];
 	float scale[3];
+
+	//nettest r_decal_lightmap: lazy strip-open + per-lightmap-page split
+	shader_t *shader;
+	unsigned int flags;
+	int curpage;	//lightmap page of ctx->t (-2 = none opened yet)
+	qboolean dolm;	//compute + carry lightmap st for this decal (Q1/HL world only)
 } cl_adddecal_ctx_t;
+
+//nettest r_decal_lightmap helpers -------------------------------------------------
+//Drop the axis most aligned with the surface normal so a coplanar 3D point -> 2D.
+static void DecalLM_PickAxes(const vec3_t n, int *ax0, int *ax1)
+{
+	float ax = fabs(n[0]), ay = fabs(n[1]), az = fabs(n[2]);
+	if      (ax >= ay && ax >= az) { *ax0 = 1; *ax1 = 2; }
+	else if (ay >= ax && ay >= az) { *ax0 = 0; *ax1 = 2; }
+	else                           { *ax0 = 0; *ax1 = 1; }
+}
+//2D barycentric weights of p in triangle (a,b,c).  false if degenerate.
+static qboolean DecalLM_Bary(const float a[2], const float b[2], const float c[2], const float p[2], float *u, float *v, float *w)
+{
+	float v0x=b[0]-a[0], v0y=b[1]-a[1];
+	float v1x=c[0]-a[0], v1y=c[1]-a[1];
+	float v2x=p[0]-a[0], v2y=p[1]-a[1];
+	float den = v0x*v1y - v1x*v0y;
+	float inv;
+	if (den > -1e-9 && den < 1e-9) return false;
+	inv = 1.0/den;
+	*v = (v2x*v1y - v1x*v2y) * inv;	//weight of b
+	*w = (v0x*v2y - v2x*v0y) * inv;	//weight of c
+	*u = 1.0 - *v - *w;				//weight of a
+	return true;
+}
+//Interpolate the surface's final (atlased) lightmap st at point p.  The surface mesh is a
+//trifan (tris (0,k+1,k+2)).  Inside-test with eps; nearest-tri clamp fallback.
+static qboolean DecalLM_Interp(const mesh_t *sm, const vec3_t n, const vec3_t p, vec2_t out)
+{
+	int ax0, ax1, k, best=-1, bi0=0,bi1=0,bi2=0;
+	float p2[2], bu=0,bv=0,bw=0, bestcl=1e30;
+	const float eps = 0.01;
+	if (!sm || sm->numvertexes < 3 || !sm->lmst_array[0] || !sm->xyz_array)
+		return false;
+	DecalLM_PickAxes(n, &ax0, &ax1);
+	p2[0]=p[ax0]; p2[1]=p[ax1];
+	for (k = 0; k+2 < sm->numvertexes; k++)
+	{
+		int i0=0, i1=k+1, i2=k+2;
+		float a[2]={sm->xyz_array[i0][ax0], sm->xyz_array[i0][ax1]};
+		float b[2]={sm->xyz_array[i1][ax0], sm->xyz_array[i1][ax1]};
+		float c[2]={sm->xyz_array[i2][ax0], sm->xyz_array[i2][ax1]};
+		float u,v,w, cl;
+		if (!DecalLM_Bary(a,b,c,p2,&u,&v,&w)) continue;
+		if (u>=-eps&&v>=-eps&&w>=-eps && u<=1+eps&&v<=1+eps&&w<=1+eps)
+		{
+			out[0]=u*sm->lmst_array[0][i0][0]+v*sm->lmst_array[0][i1][0]+w*sm->lmst_array[0][i2][0];
+			out[1]=u*sm->lmst_array[0][i0][1]+v*sm->lmst_array[0][i1][1]+w*sm->lmst_array[0][i2][1];
+			return true;
+		}
+		cl = 0; if(u<cl)cl=u; if(v<cl)cl=v; if(w<cl)cl=w; cl=-cl;	//how far outside
+		if (cl<bestcl){bestcl=cl;best=k;bu=u;bv=v;bw=w;bi0=i0;bi1=i1;bi2=i2;}
+	}
+	if (best>=0)
+	{	//nearest-tri fallback: clamp + renormalise weights
+		float u=bu<0?0:(bu>1?1:bu), v=bv<0?0:(bv>1?1:bv), w=bw<0?0:(bw>1?1:bw);
+		float s=u+v+w; if(s<1e-6){u=1;v=0;w=0;s=1;} u/=s;v/=s;w/=s;
+		out[0]=u*sm->lmst_array[0][bi0][0]+v*sm->lmst_array[0][bi1][0]+w*sm->lmst_array[0][bi2][0];
+		out[1]=u*sm->lmst_array[0][bi0][1]+v*sm->lmst_array[0][bi1][1]+w*sm->lmst_array[0][bi2][1];
+		return true;
+	}
+	return false;
+}
+//Reuse the last scenetris strip iff (shader,flags,page) match, else open a new one.
+static scenetris_t *CL_Decal_GetStrip(cl_adddecal_ctx_t *ctx, int page)
+{
+	scenetris_t *t;
+	if (cl_numstris && cl_stris[cl_numstris-1].shader == ctx->shader
+		&& cl_stris[cl_numstris-1].flags == ctx->flags
+		&& cl_stris[cl_numstris-1].lightmap == page)
+		t = &cl_stris[cl_numstris-1];
+	else
+	{
+		if (cl_numstris == cl_maxstris)
+		{
+			cl_maxstris += 8;
+			cl_stris = BZ_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
+		}
+		t = &cl_stris[cl_numstris++];
+		t->shader = ctx->shader;
+		t->numidx = 0;
+		t->numvert = 0;
+		t->flags = ctx->flags;
+		t->lightmap = page;
+		t->firstidx = cl_numstrisidx;
+		t->firstvert = cl_numstrisvert;
+	}
+	ctx->t = t;
+	ctx->curpage = page;
+	return t;
+}
+
 static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t numtris, shader_t *shader)
 {
 	cl_adddecal_ctx_t *ctx = vctx;
-	scenetris_t *t = ctx->t;
+	const msurface_t *surf = Mod_Decal_CurrentSurface;	//nettest r_decal_lightmap
+	scenetris_t *t;
 	size_t numpoints = numtris*3;
 	size_t v;
+	int page;
 
-	
+	if (!numtris)
+		return;
+
+	//nettest: select/open the strip for this fragment's lightmap page (atlas page-split).
+	page = (ctx->dolm && surf && surf->sbatch) ? surf->sbatch->lightmap[0] : -1;
+	if (!ctx->t || ctx->curpage != page)
+		t = CL_Decal_GetStrip(ctx, page);
+	else
+		t = ctx->t;
+
 	if (cl_numstrisvert + numpoints > cl_maxstrisvert)
 		cl_stris_ExpandVerts(cl_numstrisvert + numpoints);
 	if (cl_maxstrisidx < cl_numstrisidx+numpoints)
@@ -3290,6 +3584,17 @@ static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t
 		cl_strisvertc[cl_numstrisvert+v][1] = ctx->rgbavalue[1];
 		cl_strisvertc[cl_numstrisvert+v][2] = ctx->rgbavalue[2];
 		cl_strisvertc[cl_numstrisvert+v][3] = ctx->rgbavalue[3] * (1-fabs(DotProduct(points[v], ctx->axis[0]) - ctx->offset[0]) * ctx->scale[0]);
+		//nettest r_decal_lightmap: per-vertex lightmap st (interp the surface's final lmst)
+		if (ctx->dolm && page >= 0)
+		{
+			if (!DecalLM_Interp(surf->mesh, surf->plane->normal, points[v], cl_strisvertlm[cl_numstrisvert+v]))
+				Vector2Copy(surf->mesh->lmst_array[0][0], cl_strisvertlm[cl_numstrisvert+v]);
+		}
+		else
+		{
+			cl_strisvertlm[cl_numstrisvert+v][0] = 0;
+			cl_strisvertlm[cl_numstrisvert+v][1] = 0;
+		}
 	}
 	for (v = 0; v < numpoints; v++)
 	{
@@ -3303,7 +3608,6 @@ static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t
 
 void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t rgbvalue, float alphavalue)
 {
-	scenetris_t *t;
 	float l, s, radius, vradius;
 	cl_adddecal_ctx_t ctx;
 
@@ -3331,32 +3635,17 @@ void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t
 	if (R2D_Flush)
 		R2D_Flush();
 
-	/*reuse the previous trigroup if its the same shader*/
-	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader && cl_stris[cl_numstris-1].flags == (BEF_NODLIGHT|BEF_NOSHADOWS))
-		t = &cl_stris[cl_numstris-1];
-	else
-	{
-		if (cl_numstris == cl_maxstris)
-		{
-			cl_maxstris += 8;
-			cl_stris = BZ_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-		}
-		t = &cl_stris[cl_numstris++];
-		t->shader = shader;
-		t->numidx = 0;
-		t->numvert = 0;
-		t->flags = BEF_NODLIGHT|BEF_NOSHADOWS;
-		t->firstidx = cl_numstrisidx;
-		t->firstvert = cl_numstrisvert;
-	}
+	//nettest r_decal_lightmap: strips are opened lazily per lightmap page INSIDE the
+	//callback (one decal can straddle pages), so there is no pre-open/rollback here.
+	ctx.t = NULL;
+	ctx.shader = shader;
+	ctx.flags = BEF_NODLIGHT|BEF_NOSHADOWS;
+	ctx.curpage = -2;
+	ctx.dolm = r_decal_lightmap.ival && cl.worldmodel && (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife);
 
-	ctx.t = t;
 	VectorCopy(rgbvalue, ctx.rgbavalue);
 	ctx.rgbavalue[3] = alphavalue;
 	Mod_ClipDecal(cl.worldmodel, origin, ctx.axis[0], ctx.axis[1], ctx.axis[2], max(radius, vradius), 0,0, CL_AddDecal_Callback, &ctx);
-
-	if (!t->numidx)
-		cl_numstris--;
 }
 
 void R_AddItemTimer(vec3_t shadoworg, float yaw, float radius, float percent, vec3_t rgb)
@@ -4841,6 +5130,7 @@ void CL_LinkPacketEntities (void)
 #endif
 
 	CLQ1_AddVisibleBBoxes();
+	CLQ1_AddVisibleHulls();
 
 #ifdef RTLIGHTS
 	R_EditLights_DrawLights();
@@ -6158,6 +6448,10 @@ void CL_SetSolidEntities (void)
 			VectorCopy (state->angles, pent->angles);
 			pent->angles[0]*=r_meshpitch.value;
 			pent->angles[2]*=r_meshroll.value;
+			//nettest Patch 57: prop scale (4.4 fixed, same decode as the renderer) so the
+			//client's convex-hull prediction (PM_HullTrace) matches the scaled server hull.
+			pent->scale = state->scale/16.0;
+			if (pent->scale <= 0) pent->scale = 1;
 		}
 		else
 		{

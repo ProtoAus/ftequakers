@@ -615,6 +615,7 @@ typedef struct fragmentdecal_s fragmentdecal_t;
 void Fragment_ClipPoly(fragmentdecal_t *dec, int numverts, float *inverts, shader_t *surfshader);
 size_t Fragment_ClipPlaneToBrush(vecV_t *points, size_t maxpoints, void *planes, size_t planestride, size_t numplanes, vec4_t face);
 void Mod_ClipDecal(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surflagmatch, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx);
+extern const struct msurface_s *Mod_Decal_CurrentSurface;	//nettest: surface of the in-progress decal fragment (r_decal_lightmap); set by Mod_ClipDecal's clipper, read by CL_AddDecal_Callback
 
 void Q1BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *node);
 void GLQ1BSP_LightPointValues(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir);
@@ -974,6 +975,19 @@ enum
 	MLS_LOADED,
 	MLS_FAILED
 };
+
+//nettest Patch 61: one convex piece of a prop's collision decomposition (sv_prop_collision
+//3). Same plane/tri layout as the single hull below; an array of these approximates a
+//CONCAVE shape (the union of convex pieces). Built per-submesh at load.
+typedef struct
+{
+	int		numplanes;
+	vec4_t	*planes;	//.xyz outward unit normal, .w dist (outside iff dot(p,.xyz)-.w > 0)
+	int		numtris;	//r_showhull viz surface tris (model space, 3 verts each)
+	vec3_t	*tris;
+	vec3_t	mins, maxs;	//nettest Patch 65: model-space AABB of this piece, for the per-piece trace cull
+} convhull_t;
+
 typedef struct model_s
 {
 	char		name[MAX_QPATH];	//actual name on disk
@@ -1005,6 +1019,23 @@ typedef struct model_s
 	float		radius;
 	float		clampscale;
 	float		maxlod;
+
+//
+// nettest Patch 56: TRUE convex-hull collision planes in MODEL space, built from the
+// base verts at load (alias/IQM) by an incremental QuickHull. World_HullTrace clips a
+// swept player box against these for smooth, watertight, mesh-shaped prop collision
+// (sv_prop_collision 2). numhullplanes==0 unless built; each plane: .xyz = outward unit
+// normal, .w = dist (a point is OUTSIDE iff dot(p,.xyz) - .w > 0). Allocated from the
+// model memgroup (auto-freed with the model).
+//
+	int			numhullplanes;
+	vec4_t		*hullplanes;
+	int			numhulltris;	//r_showhull debug viz: hull surface triangles (model space, 3 verts each)
+	vec3_t		*hulltris;
+	//nettest Patch 61: per-submesh CONVEX DECOMPOSITION (sv_prop_collision 3). numhulls==0 ->
+	//use the single hull above. Each entry is one convex piece; their union = a concave shape.
+	int			numhulls;
+	convhull_t	*convhulls;
 
 //
 // solid volume for clipping

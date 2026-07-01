@@ -999,6 +999,36 @@ Sys_ConsoleInput
 void SV_GetNewSpawnParms(client_t *cl);
 char	coninput_text[256];
 int		coninput_len;
+int		coninput_cursor;	//nettest: caret position within coninput_text (0..coninput_len)
+//nettest: dedicated-console command history + line-edit helpers (readline-style editing)
+#define SVCON_HIST 32
+static char	svcon_hist[SVCON_HIST][256];
+static int	svcon_hist_count;	//entries stored (<= SVCON_HIST)
+static int	svcon_hist_view;	//browse index; == svcon_hist_count is the live (unsaved) line
+static void SVCon_SetLine(const char *newtext)
+{	//rub out the visible input line and print newtext, leaving the caret at end
+	int i;
+	for (i = coninput_cursor; i < coninput_len; i++) putch(coninput_text[i]);
+	for (i = 0; i < coninput_len; i++) putch('\b');
+	for (i = 0; i < coninput_len; i++) putch(' ');
+	for (i = 0; i < coninput_len; i++) putch('\b');
+	Q_strncpyz(coninput_text, newtext, sizeof(coninput_text));
+	coninput_len = strlen(coninput_text);
+	coninput_cursor = coninput_len;
+	if (coninput_len) printf("%s", coninput_text);
+}
+static void SVCon_HistAdd(const char *line)
+{
+	if (!*line) return;
+	if (svcon_hist_count && !strcmp(svcon_hist[svcon_hist_count-1], line)) { svcon_hist_view = svcon_hist_count; return; }
+	if (svcon_hist_count >= SVCON_HIST)
+	{
+		memmove(svcon_hist[0], svcon_hist[1], (SVCON_HIST-1)*sizeof(svcon_hist[0]));
+		svcon_hist_count = SVCON_HIST-1;
+	}
+	Q_strncpyz(svcon_hist[svcon_hist_count++], line, sizeof(svcon_hist[0]));
+	svcon_hist_view = svcon_hist_count;
+}
 char *Sys_ConsoleInput (void)
 {
 	int		c;
@@ -1070,55 +1100,115 @@ char *Sys_ConsoleInput (void)
 
 
 
-	// read a line out
+	// read a line out  (nettest: readline-style editing - caret, history, extended keys)
 	while (_kbhit())
 	{
+		int i;
 		c = _getch();
+
+		//nettest: arrow/nav keys arrive as a 0x00 (function) or 0xE0 (extended) prefix
+		//byte followed by a scan byte. Handle the useful ones; swallow the rest so they
+		//don't echo as the old "àKàHàP" garbage.
+		if (c == 0 || c == 0xE0)
+		{
+			int ext = _getch();
+			switch (ext)
+			{
+			case 0x4B:	//left
+				if (coninput_cursor > 0) { coninput_cursor--; putch('\b'); }
+				break;
+			case 0x4D:	//right
+				if (coninput_cursor < coninput_len) putch(coninput_text[coninput_cursor++]);
+				break;
+			case 0x47:	//home
+				while (coninput_cursor > 0) { coninput_cursor--; putch('\b'); }
+				break;
+			case 0x4F:	//end
+				while (coninput_cursor < coninput_len) putch(coninput_text[coninput_cursor++]);
+				break;
+			case 0x53:	//delete (forward)
+				if (coninput_cursor < coninput_len)
+				{
+					memmove(coninput_text+coninput_cursor, coninput_text+coninput_cursor+1, coninput_len-coninput_cursor-1);
+					coninput_len--;
+					coninput_text[coninput_len] = 0;
+					for (i = coninput_cursor; i < coninput_len; i++) putch(coninput_text[i]);
+					putch(' ');
+					for (i = coninput_len+1; i > coninput_cursor; i--) putch('\b');
+				}
+				break;
+			case 0x48:	//up - older history
+				if (svcon_hist_view > 0)
+					SVCon_SetLine(svcon_hist[--svcon_hist_view]);
+				break;
+			case 0x50:	//down - newer history (past the newest = empty live line)
+				if (svcon_hist_view < svcon_hist_count)
+				{
+					svcon_hist_view++;
+					SVCon_SetLine((svcon_hist_view < svcon_hist_count) ? svcon_hist[svcon_hist_view] : "");
+				}
+				break;
+			default:
+				break;	//swallow any other extended key
+			}
+			continue;
+		}
+
 		if (c == '\r')
 		{
 			coninput_text[coninput_len] = 0;
 			putch ('\n');
 			putch (']');
+			SVCon_HistAdd(coninput_text);
 			coninput_len = 0;
+			coninput_cursor = 0;
 			return coninput_text;
 		}
-		if (c == 8)
+		if (c == 8)	//backspace - delete the char before the caret
 		{
-			if (coninput_len)
+			if (coninput_cursor > 0)
 			{
-				putch (c);
-				putch (' ');
-				putch (c);
+				memmove(coninput_text+coninput_cursor-1, coninput_text+coninput_cursor, coninput_len-coninput_cursor);
+				coninput_cursor--;
 				coninput_len--;
 				coninput_text[coninput_len] = 0;
+				putch('\b');
+				for (i = coninput_cursor; i < coninput_len; i++) putch(coninput_text[i]);
+				putch(' ');
+				for (i = coninput_len+1; i > coninput_cursor; i--) putch('\b');
 			}
 			continue;
 		}
 		if (c == '\t')
 		{
-			int i;
 			char *s = Cmd_CompleteCommand(coninput_text, true, true, 0, NULL);
 			if(s)
 			{
-				for (i = 0; i < coninput_len; i++)
-					putch('\b');
-				for (i = 0; i < coninput_len; i++)
-					putch(' ');
-				for (i = 0; i < coninput_len; i++)
-					putch('\b');
+				for (i = coninput_cursor; i < coninput_len; i++) putch(coninput_text[i]);	//caret to end first
+				for (i = 0; i < coninput_len; i++) putch('\b');
+				for (i = 0; i < coninput_len; i++) putch(' ');
+				for (i = 0; i < coninput_len; i++) putch('\b');
 
 				strcpy(coninput_text, s);
 				coninput_len = strlen(coninput_text);
+				coninput_cursor = coninput_len;
 				printf("%s", coninput_text);
 			}
 			continue;
 		}
-		putch (c);
-		coninput_text[coninput_len] = c;
+		if (c < 32)
+			continue;	//nettest: swallow other control chars instead of echoing garbage
+
+		//nettest: insert the printable char at the caret (was append-at-end)
+		if (coninput_len + 1 >= (int)sizeof(coninput_text))
+			continue;	//full
+		memmove(coninput_text+coninput_cursor+1, coninput_text+coninput_cursor, coninput_len-coninput_cursor);
+		coninput_text[coninput_cursor] = c;
 		coninput_len++;
 		coninput_text[coninput_len] = 0;
-		if (coninput_len == sizeof(coninput_text))
-			coninput_len = 0;
+		for (i = coninput_cursor; i < coninput_len; i++) putch(coninput_text[i]);	//echo new char + the shifted tail
+		for (i = coninput_len; i > coninput_cursor+1; i--) putch('\b');	//caret back to just after the inserted char
+		coninput_cursor++;
 	}
 
 	return NULL;
@@ -1269,6 +1359,8 @@ void Sys_Printf (char *fmt, ...)
 		{
 			int i;
 
+			for (i = coninput_cursor; i < coninput_len; i++)	//nettest: caret to end before rubbing out the input line
+				putch(coninput_text[i]);
 			for (i = 0; i < coninput_len; i++)
 				putch('\b');
 			putch('\b');
@@ -1315,6 +1407,11 @@ void Sys_Printf (char *fmt, ...)
 			printf("]%s", coninput_text);
 		else
 			putch(']');
+		{	//nettest: put the caret back where the user was editing mid-line
+			int i;
+			for (i = coninput_len; i > coninput_cursor; i--)
+				putch('\b');
+		}
 	}
 	else
 	{

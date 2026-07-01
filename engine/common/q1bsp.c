@@ -199,7 +199,14 @@ struct fragmentdecal_s
 
 	void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader);
 	void *ctx;
+
+	const msurface_t *surf;	//nettest: surface being clipped against (for r_decal_lightmap)
 };
+
+//nettest: the surface the current decal fragment belongs to, threaded out-of-band so the
+//ABI-fixed decal callback signature stays unchanged.  Set right before each callback in
+//Fragment_ClipPoly; read by CL_AddDecal_Callback for per-pixel lightmap sampling.
+const msurface_t *Mod_Decal_CurrentSurface;
 
 //#define SHOWCLIPS
 //#define FRAGMENTASTRIANGLES	//works, but produces more fragments.
@@ -430,6 +437,7 @@ void Fragment_ClipPoly(fragmentdecal_t *dec, int numverts, float *inverts, shade
 	{
 		if (numtris == MAXFRAGMENTTRIS)
 		{
+			Mod_Decal_CurrentSurface = dec->surf;	//nettest: r_decal_lightmap
 			dec->callback(dec->ctx, decalfragmentverts, numtris, NULL);
 			numtris = 0;
 			break;
@@ -441,17 +449,22 @@ void Fragment_ClipPoly(fragmentdecal_t *dec, int numverts, float *inverts, shade
 		numtris++;
 	}
 	if (numtris)
+	{
+		Mod_Decal_CurrentSurface = dec->surf;	//nettest: r_decal_lightmap
 		dec->callback(dec->ctx, decalfragmentverts, numtris, surfshader);
+	}
 }
 
 #endif
 
 //this could be inlined, but I'm lazy.
-static void Fragment_Mesh (fragmentdecal_t *dec, mesh_t *mesh, mtexinfo_t *texinfo)
+static void Fragment_Mesh (fragmentdecal_t *dec, const msurface_t *surf, mesh_t *mesh, mtexinfo_t *texinfo)
 {
 	int i;
 	vecV_t verts[3];
 	shader_t *surfshader = texinfo->texture->shader;
+
+	dec->surf = surf;	//nettest: r_decal_lightmap — threaded to the callback via Mod_Decal_CurrentSurface
 
 	if ((surfshader->flags & SHADER_NOMARKS) || !mesh)
 		return;
@@ -522,13 +535,13 @@ static void Q1BSP_ClipDecalToNodes (model_t *mod, fragmentdecal_t *dec, mnode_t 
 				if (DotProduct(surf->plane->normal, dec->normal) > -0.5)
 					continue;
 			}
-			Fragment_Mesh(dec, surf->mesh, surf->texinfo);
+			Fragment_Mesh(dec, surf, surf->mesh, surf->texinfo);
 		}
 	}
 	else
 	{
 		for (i=0 ; i<node->numsurfaces ; i++, surf++)
-			Fragment_Mesh(dec, surf->mesh, surf->texinfo);
+			Fragment_Mesh(dec, surf, surf->mesh, surf->texinfo);
 	}
 
 	Q1BSP_ClipDecalToNodes (mod, dec, node->children[0]);
@@ -566,7 +579,7 @@ static void Q3BSP_ClipDecalToNodes (fragmentdecal_t *dec, mnode_t *node)
 				continue;
 			surf->shadowframe = sh_shadowframe;
 #endif
-			Fragment_Mesh(dec, surf->mesh, surf->texinfo);
+			Fragment_Mesh(dec, surf, surf->mesh, surf->texinfo);
 		}
 		return;
 	}
@@ -637,7 +650,7 @@ void Mod_ClipDecal(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tan
 		{
 			msurface_t *surf;
 			for (surf = mod->surfaces+mod->firstmodelsurface, p = 0; p < mod->nummodelsurfaces; p++, surf++)
-				Fragment_Mesh(&dec, surf->mesh, surf->texinfo);
+				Fragment_Mesh(&dec, surf, surf->mesh, surf->texinfo);
 		}
 		else
 			Q3BSP_ClipDecalToNodes(&dec, mod->rootnode);

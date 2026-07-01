@@ -1082,6 +1082,79 @@ Mod_LoadModel
 Loads a model into the cache
 ==================
 */
+
+#ifndef SERVERONLY	//nettest P62: load a plain image (png/tga/jpg/…) as a 1-frame billboard sprite
+//So precache_model/setmodel of e.g. "sprites/light7.png" succeeds and the mod's env_sprite
+//renders it at the same world size a .spr of equal pixel dims would (env_sprite "scale" tunes it).
+//A bare image carries no sprite metadata, so dims are read SYNCHRONOUSLY from the file buffer;
+//the texture itself is (re)loaded async by Image_GetTexture, and the frame shader is built on
+//the main thread by Mod_ModelLoaded->Mod_LoadSpriteShaders (SPRITE_SHADER_UNLIT).  Mirrors the
+//external-image sprite path of Mod_LoadSprite2Model (.sp2).
+static qboolean Mod_LoadImageSprite (model_t *mod, void *buffer, size_t fsize)	//nettest P62
+{
+	extern qbyte *ReadRawImageFile(qbyte *buf, int len, int *width, int *height, uploadfmt_t *format, qboolean force_rgba8, const char *fname);	//image.c
+	msprite_t		*psprite;
+	mspriteframe_t	*frame;
+	int				w = 0, h = 0;
+	uploadfmt_t		fmt;
+	qbyte			*pix;
+
+	//Decode the in-hand buffer ONLY to learn the pixel dims synchronously (Image_GetTexture is
+	//async and never returns dims in time).  Discard the pixels — the GPU texture is loaded by
+	//Image_GetTexture below from the file on disk.
+	pix = ReadRawImageFile((qbyte*)buffer, (int)fsize, &w, &h, &fmt, true, mod->name);
+	if (!pix || w < 1 || h < 1)
+	{
+		if (pix)
+			BZ_Free(pix);
+		return false;	//not a decodable image -> caller emits the normal "Unrecognised model format" warning
+	}
+	BZ_Free(pix);
+
+	psprite = ZG_Malloc(&mod->memgroup, sizeof(msprite_t));	//msprite_t embeds frames[1]
+	mod->meshinfo = psprite;
+
+	psprite->type       = SPR_VP_PARALLEL;	//view-parallel billboard — correct for a light glow
+	psprite->maxwidth   = w;
+	psprite->maxheight  = h;
+	psprite->beamlength = 1;
+	psprite->numframes  = 1;
+	mod->synctype  = 0;
+	mod->numframes = 1;
+
+	//Origin-centered bbox, same convention as Mod_LoadSpriteModel (gl_model.c:6195).
+	mod->mins[0] = mod->mins[1] = -psprite->maxwidth/2;
+	mod->maxs[0] = mod->maxs[1] =  psprite->maxwidth/2;
+	mod->mins[2] = -psprite->maxheight/2;
+	mod->maxs[2] =  psprite->maxheight/2;
+
+	if (qrenderer == QR_NONE)
+	{	//headless client (no GPU): register a valid dummy model so precache still succeeds.
+		mod->type = mod_dummy;
+		return true;
+	}
+
+	psprite->frames[0].type = SPR_SINGLE;
+	frame = psprite->frames[0].frameptr = ZG_Malloc(&mod->memgroup, sizeof(mspriteframe_t));
+	memset(frame, 0, sizeof(*frame));
+
+	//Origin-centered frame bounds -> same world size as an equal-pixel .spr.
+	frame->up    =  h/2.0f;
+	frame->down  = -h/2.0f;
+	frame->left  = -w/2.0f;
+	frame->right =  w/2.0f;
+	frame->xmirror = false;
+
+	//Load the real image by name, async — like the .sp2 external-image path (gl_model.c:6359).
+	//IF_PREMULTIPLYALPHA: the image-sprite shader (SPRITE_SHADER_BLEND) blends GL_ONE,GL_1-SA
+	//(premultiplied) so the PNG's soft alpha edges are clean (no halo); see Mod_LoadSpriteFrameShader.
+	frame->image = Image_GetTexture(mod->name, NULL, IF_NOMIPMAP|IF_NOGAMMA|IF_CLAMP|IF_PREMULTIPLYALPHA, NULL, NULL, 0, 0, TF_INVALID);
+
+	mod->type = mod_sprite;	//Mod_ModelLoaded -> Mod_LoadSpriteShaders builds the frame shader (SPRITE_SHADER_UNLIT)
+	return true;
+}
+#endif	//!SERVERONLY
+
 static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 {
 	model_t *mod = ctx;
@@ -1337,9 +1410,22 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 			}
 			else
 			{
-				Con_Printf(CON_WARNING "Unrecognised model format %c%c%c%c in \"%s\"\n", ((char*)buf)[0], ((char*)buf)[1], ((char*)buf)[2], ((char*)buf)[3], mod->name);	//nettest: name the offending file (was anonymous) — e.g. a Source sprite .vmt precached as a model
-				BZ_Free(buf);
-				continue;
+#ifndef SERVERONLY	//nettest P62: an image (png/tga/…) precached as a model -> synthesize a 1-frame billboard sprite
+				const char *imgext = COM_GetFileExtension(mod->name, NULL);	//returns the extension WITH the dot
+				if (imgext && (!Q_strcasecmp(imgext, ".png") || !Q_strcasecmp(imgext, ".tga") ||
+				               !Q_strcasecmp(imgext, ".jpg") || !Q_strcasecmp(imgext, ".jpeg") ||
+				               !Q_strcasecmp(imgext, ".pcx") || !Q_strcasecmp(imgext, ".bmp")) &&
+				    Mod_LoadImageSprite(mod, buf, filesize))
+				{
+					//loaded as a sprite -> fall through to the MLS_LOADED success path below
+				}
+				else
+#endif
+				{
+					Con_Printf(CON_WARNING "Unrecognised model format %c%c%c%c in \"%s\"\n", ((char*)buf)[0], ((char*)buf)[1], ((char*)buf)[2], ((char*)buf)[3], mod->name);	//nettest: name the offending file (was anonymous) — e.g. a Source sprite .vmt precached as a model
+					BZ_Free(buf);
+					continue;
+				}
 			}
 		}
 
@@ -5917,6 +6003,22 @@ void Mod_LoadDoomSprite (model_t *mod)
 						"blendfunc add\n"				\
 					"}\n"								\
 				"}\n")
+//nettest P62: a sprite whose MODEL is a plain image (Mod_LoadImageSprite, e.g. env_sprite glow)
+//forces a smooth PREMULTIPLIED alpha blend (texture loaded IF_PREMULTIPLYALPHA) regardless of
+//gl_blendsprites — otherwise the default gl_blendsprites 0 path alpha-TESTS (masks at ge128) and a
+//soft glow PNG renders as a hard circle.  Fullbright (rgbgen/alphagen vertex keep entity rendermode/alpha).
+#define SPRITE_SHADER_BLEND							\
+			"{\n"									\
+				"program defaultsprite\n"			\
+				"{\n"								\
+					"map $diffuse\n"				\
+					"blendfunc GL_ONE GL_ONE_MINUS_SRC_ALPHA\n"	\
+					"rgbgen vertex\n"				\
+					"alphagen vertex\n"				\
+				"}\n"								\
+				"surfaceparm noshadows\n"			\
+				"surfaceparm nodlight\n"			\
+			"}\n"
 
 void Mod_LoadSpriteFrameShader(model_t *spr, int frame, int subframe, mspriteframe_t *frameinfo)
 {
@@ -5924,6 +6026,7 @@ void Mod_LoadSpriteFrameShader(model_t *spr, int frame, int subframe, mspritefra
 	char *shadertext;
 	char name[MAX_QPATH];
 	qboolean litsprite = false;
+	const char *spx;	//nettest P62: model-name extension, for image-sprite detection
 
 	if (qrenderer == QR_NONE)
 		return;
@@ -5961,7 +6064,13 @@ void Mod_LoadSpriteFrameShader(model_t *spr, int frame, int subframe, mspritefra
 	}
 #endif
 
-	if (litsprite)	// a ! in the filename makes it non-fullbright (and can also be lit by rtlights too).
+	//nettest P62: an image-MODEL sprite (png/tga/…; synthesized by Mod_LoadImageSprite) forces a
+	//smooth alpha blend — else gl_blendsprites 0 would alpha-TEST it into a hard circle, not a glow.
+	spx = COM_GetFileExtension(spr->name, NULL);
+	if (spx && (!Q_strcasecmp(spx, ".png") || !Q_strcasecmp(spx, ".tga") || !Q_strcasecmp(spx, ".jpg") ||
+	            !Q_strcasecmp(spx, ".jpeg") || !Q_strcasecmp(spx, ".pcx") || !Q_strcasecmp(spx, ".bmp")))
+		shadertext = SPRITE_SHADER_BLEND;
+	else if (litsprite)	// a ! in the filename makes it non-fullbright (and can also be lit by rtlights too).
 		shadertext = SPRITE_SHADER_LIT;
 	else
 		shadertext = SPRITE_SHADER_UNLIT;

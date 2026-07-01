@@ -600,6 +600,7 @@ static void QDECL R_ParticleSystem_Callback(struct cvar_s *var, char *oldvalue)
 }
 
 cvar_t r_decal_noperpendicular = CVARD("r_decal_noperpendicular", "1", "When enabled, decals will not be generated on planes at a steep angle from clipped decal orientation.");
+cvar_t r_decal_lightmap = CVARD("r_decal_lightmap", "0", "Apply the surface lightmap per-pixel to adddecal() decals (Q1/HL world only), so a decal is lit like the surface it sits on. Adddecal render path only (r_*_renderer 0 in the nettest mod). 0 = decal uses its vertex colour as today.");
 cvar_t r_rockettrail = CVARFC("r_rockettrail", "1", CVAR_SEMICHEAT, R_Rockettrail_Callback);
 cvar_t r_grenadetrail = CVARFC("r_grenadetrail", "1", CVAR_SEMICHEAT, R_Grenadetrail_Callback);
 #ifndef PSET_CLASSIC
@@ -648,6 +649,7 @@ void P_InitParticleSystem(void)
 	char *particlecvargroupname = "Particle effects";
 
 	Cvar_Register(&r_decal_noperpendicular, particlecvargroupname);	//decals might actually be used for more than just particles, but oh well.
+	Cvar_Register(&r_decal_lightmap, particlecvargroupname);
 
 	Cvar_Register(&r_particlesystem, particlecvargroupname);
 

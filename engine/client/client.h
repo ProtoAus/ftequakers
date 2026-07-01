@@ -1199,11 +1199,13 @@ typedef struct {
 	int numvert;
 	int numidx;
 	unsigned int flags;
+	int lightmap;	//nettest: lightmap atlas page for per-pixel-lit decals (r_decal_lightmap), -1 = none/unlit
 } scenetris_t;
 extern scenetris_t		*cl_stris;
 extern vecV_t			*fte_restrict cl_strisvertv;
 extern vec4_t			*fte_restrict cl_strisvertc;
 extern vec2_t			*fte_restrict cl_strisvertt;
+extern vec2_t			*fte_restrict cl_strisvertlm;	//nettest: per-vertex lightmap st for r_decal_lightmap decals
 //extern vec3_t			*fte_restrict cl_strisvertn[3];
 extern index_t			*fte_restrict cl_strisidx;
 extern unsigned int cl_numstrisidx;
@@ -1221,6 +1223,7 @@ extern unsigned int cl_maxstris;
 		cl_strisvertv = BZ_Realloc(cl_strisvertv, sizeof(*cl_strisvertv)*cl_maxstrisvert);	\
 		cl_strisvertt = BZ_Realloc(cl_strisvertt, sizeof(*cl_strisvertt)*cl_maxstrisvert);	\
 		cl_strisvertc = BZ_Realloc(cl_strisvertc, sizeof(*cl_strisvertc)*cl_maxstrisvert);	\
+		cl_strisvertlm = BZ_Realloc(cl_strisvertlm, sizeof(*cl_strisvertlm)*cl_maxstrisvert);	/*nettest: r_decal_lightmap*/	\
 /*		cl_strisvertn[0] = BZ_Realloc(cl_strisvertn[0], sizeof(*cl_strisvertn[0])*cl_maxstrisvert);	\
 		cl_strisvertn[1] = BZ_Realloc(cl_strisvertn[1], sizeof(*cl_strisvertn[1])*cl_maxstrisvert);	\
 		cl_strisvertn[2] = BZ_Realloc(cl_strisvertn[2], sizeof(*cl_strisvertn[2])*cl_maxstrisvert);	\

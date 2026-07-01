@@ -187,6 +187,8 @@ void R2D_Shutdown(void)
 	cl_strisvertc = NULL;
 	BZ_Free(cl_strisvertt);
 	cl_strisvertt = NULL;
+	BZ_Free(cl_strisvertlm);	//nettest: r_decal_lightmap
+	cl_strisvertlm = NULL;
 	BZ_Free(cl_strisidx);
 	cl_strisidx = NULL;
 	cl_numstrisidx = 0;

@@ -370,6 +370,77 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 	model->bones = bones;
 	model->bonectls = bonectls;
 
+	//nettest Patch 60: GoldSrc .mdl loaders never set mod->mins/maxs, so a prop spawned on a
+	//.mdl (server/sv_props.qc) hit the +-16 fallback cube -> wrong-size collision. Compute the
+	//real bounds from the BIND-POSE verts. Server-safe: the file + bones live in the loaded
+	//header on both sides (the global transform_matrix is only filled client-side), so we build
+	//a local bind-pose matrix set here. Falls back to the header's bbox if there are no verts.
+	{
+		hlmdl_bodypart_t *bodyparts = (hlmdl_bodypart_t *)((qbyte *)header + header->bodypartindex);
+		matrix3x4 *bonemat = NULL;
+		int bp, sm, vi, bi, added = 0;
+
+		if (header->numbones > 0 && header->numbones <= MAX_BONES)
+		{
+			bonemat = BZ_Malloc(sizeof(matrix3x4) * header->numbones);
+			for (bi = 0; bi < header->numbones; bi++)
+			{
+				float m[12]; vec4_t quat; vec3_t one; one[0]=one[1]=one[2]=1;
+				QuaternionGLAngle(bones[bi].value+3, quat);
+				GenMatrixPosQuat4Scale(bones[bi].value, quat, one, m);
+				if (bones[bi].parent >= 0 && bones[bi].parent < bi)
+					R_ConcatTransforms((void*)bonemat[bones[bi].parent], (void*)m, (void*)bonemat[bi]);
+				else
+					memcpy(bonemat[bi], m, sizeof(m));
+			}
+		}
+
+		ClearBounds(mod->mins, mod->maxs);
+		for (bp = 0; bp < header->numbodyparts; bp++)
+		{
+			hlmdl_submodel_t *subs = (hlmdl_submodel_t *)((qbyte *)header + bodyparts[bp].modelindex);
+			for (sm = 0; sm < bodyparts[bp].nummodels; sm++)
+			{
+				vec3_t *verts = (vec3_t *)((qbyte *)header + subs[sm].vertindex);
+				qbyte  *vinfo = (qbyte  *)header + subs[sm].vertinfoindex;
+				for (vi = 0; vi < subs[sm].numverts; vi++)
+				{
+					vec3_t world;
+					bi = vinfo[vi];
+					if (bonemat && bi >= 0 && bi < header->numbones)
+					{
+						float *t = (float *)bonemat[bi];
+						world[0] = t[0]*verts[vi][0] + t[1]*verts[vi][1] + t[2] *verts[vi][2] + t[3];
+						world[1] = t[4]*verts[vi][0] + t[5]*verts[vi][1] + t[6] *verts[vi][2] + t[7];
+						world[2] = t[8]*verts[vi][0] + t[9]*verts[vi][1] + t[10]*verts[vi][2] + t[11];
+					}
+					else
+						VectorCopy(verts[vi], world);
+					AddPointToBounds(world, mod->mins, mod->maxs);
+					added++;
+				}
+			}
+		}
+		if (bonemat)
+			BZ_Free(bonemat);
+
+		if (!added)
+		{	//no mesh verts -> use the header's ideal-hull (unknown3[1/2]) or clip (3/4) bbox,
+			//accepting a pair if it has nonzero extent on ANY axis (a flat prop may be valid
+			//on Y/Z but degenerate on X); else a degenerate box (the QC ±16 guard handles it).
+			vec3_t *idl = &header->unknown3[1];	//[0]=min, [1]=max
+			vec3_t *clp = &header->unknown3[3];
+			if (idl[1][0]>idl[0][0] || idl[1][1]>idl[0][1] || idl[1][2]>idl[0][2])
+				{ VectorCopy(idl[0], mod->mins); VectorCopy(idl[1], mod->maxs); }
+			else if (clp[1][0]>clp[0][0] || clp[1][1]>clp[0][1] || clp[1][2]>clp[0][2])
+				{ VectorCopy(clp[0], mod->mins); VectorCopy(clp[1], mod->maxs); }
+			else
+				{ VectorClear(mod->mins); VectorClear(mod->maxs); }
+		}
+		Con_DPrintf("HLMDL collision %s: bounds %.1f %.1f %.1f .. %.1f %.1f %.1f (%i verts)\n",
+			mod->name, mod->mins[0], mod->mins[1], mod->mins[2], mod->maxs[0], mod->maxs[1], mod->maxs[2], added);
+	}
+
 #ifndef SERVERONLY
 	model->compatbones = ZG_Malloc(&mod->memgroup, header->numbones * sizeof(*model->compatbones));
 	for (i = 0; i < header->numbones; i++)

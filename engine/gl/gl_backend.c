@@ -26,6 +26,13 @@ extern cvar_t r_wireframe;
 extern cvar_t r_outline;
 extern cvar_t r_outline_width;
 extern cvar_t r_refract_fbo;
+extern cvar_t gl_line_width;				//nettest: CSQC debug wireframe line width (3D scene polys / R_DB_Poly)
+extern cvar_t gl_2dline_width;				//nettest: 2D drawline width (hit-marker reticle / dummybatch)
+extern void R_DB_Poly(batch_t *batch);			//nettest: gl_alias.c scenetris builder; tags CSQC debug-line batches
+#ifndef GL_ALIASED_LINE_WIDTH_RANGE
+#define GL_ALIASED_LINE_WIDTH_RANGE 0x846E
+#endif
+static float gl_maxlinewidth = 8;			//nettest: GL_ALIASED_LINE_WIDTH_RANGE[1], cached in GLBE_Init
 
 extern texid_t missing_texture;
 extern texid_t missing_texture_gloss;
@@ -1610,6 +1617,18 @@ void GLBE_Init(void)
 	else
 #endif
 		qglGetIntegerv(GL_STENCIL_BITS, &sh_config.stencilbits);
+
+	{	//nettest: cache the driver's max aliased line width so gl_line_width can be clamped, and warn if the driver/profile pins it to 1px
+		float lwrange[2] = {1, 1};
+		if (qglGetFloatv)
+			qglGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lwrange);
+		if (lwrange[1] >= 1)
+			gl_maxlinewidth = lwrange[1];
+		Con_DPrintf("GL_ALIASED_LINE_WIDTH_RANGE: [%g, %g]\n", lwrange[0], lwrange[1]);
+		if (gl_maxlinewidth <= 1)
+			Con_Printf("note: GL driver/profile clamps line width to 1px; gl_line_width has no effect (use cl_debug_wire_thickness for quad thickness)\n");
+	}
+
 	for (i = 0; i < FTABLE_SIZE; i++)
 	{
 		t = (double)i / (double)FTABLE_SIZE;
@@ -3137,6 +3156,18 @@ static void BE_SubmitMeshChain(qboolean usetesselation)
 	}
 	else
 		batchtype = (shaderstate.flags & BEF_LINES)?GL_LINES:GL_TRIANGLES;
+
+	if (batchtype == GL_LINES)
+	{	//nettest: scoped line thickness.  CSQC debug overlays build via R_DB_Poly (gl_line_width);
+		//2D drawline — the hit-marker reticle — draws through the dummybatch (gl_2dline_width);
+		//everything else (particle trails, etc.) stays 1px.  glLineWidth is driver-clamped (GLBE_Init).
+		float lw = 1;
+		if (shaderstate.curbatch && shaderstate.curbatch->buildmeshes == R_DB_Poly)
+			lw = bound(1, gl_line_width.value, gl_maxlinewidth);
+		else if (shaderstate.curbatch == &shaderstate.dummybatch)
+			lw = bound(1, gl_2dline_width.value, gl_maxlinewidth);
+		qglLineWidth(lw);
+	}
 
 	if (!shaderstate.streamvbo[0])	//only if we're not forcing vbos elsewhere.
 	{
@@ -4985,7 +5016,21 @@ static void BE_GenTempMeshVBO(vbo_t **vbo, mesh_t *m)
 		shaderstate.dummyvbo.texcoord.gl.vbo = shaderstate.streamvbo[shaderstate.streamid];
 		len += sizeof(*m->st_array) * m->numvertexes;
 
-		//FIXME: lightmaps
+		//nettest: lightmap texcoords (needed by lightmapped poly/scenetris batches, e.g.
+		//per-pixel-lit decals - see r_decal_lightmap). Always set lmcoord[0] (copy or NULL)
+		//to clear any stale pointer from a previous mesh.
+		if (m->lmst_array[0])
+		{
+			memcpy(buffer+len, m->lmst_array[0], sizeof(*m->lmst_array[0]) * m->numvertexes);
+			shaderstate.dummyvbo.lmcoord[0].gl.addr = (void*)len;
+			shaderstate.dummyvbo.lmcoord[0].gl.vbo = shaderstate.streamvbo[shaderstate.streamid];
+			len += sizeof(*m->lmst_array[0]) * m->numvertexes;
+		}
+		else
+		{
+			shaderstate.dummyvbo.lmcoord[0].gl.addr = NULL;
+			shaderstate.dummyvbo.lmcoord[0].gl.vbo = 0;
+		}
 
 		if (m->colors4f_array[0])
 		{
@@ -5093,6 +5138,10 @@ static void BE_GenTempMeshVBO(vbo_t **vbo, mesh_t *m)
 		shaderstate.dummyvbo.coord.gl.addr = m->xyz_array;
 		shaderstate.dummyvbo.coord2.gl.addr = m->xyz2_array;
 		shaderstate.dummyvbo.texcoord.gl.addr = m->st_array;
+		//nettest: lightmap texcoords for lightmapped poly batches (r_decal_lightmap). NULL when
+		//absent so a stale pointer from a previous mesh can't leak in.
+		shaderstate.dummyvbo.lmcoord[0].gl.addr = m->lmst_array[0];
+		shaderstate.dummyvbo.lmcoord[0].gl.vbo = 0;
 		shaderstate.dummyvbo.indicies.gl.addr = m->indexes;
 		shaderstate.dummyvbo.normals.gl.addr = m->normals_array;
 		shaderstate.dummyvbo.svector.gl.addr = m->snormals_array;

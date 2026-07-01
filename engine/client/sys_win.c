@@ -1595,7 +1595,7 @@ static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, S
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
 static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only for now.");
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FramePacing_Init(void);
@@ -1859,6 +1859,9 @@ extern cvar_t cl_maxfps;
 #ifdef D3D11QUAKE
 extern HANDLE D3D11_GetFrameLatencyWaitHandle(void);
 #endif
+#ifdef GLQUAKE
+extern int GLVID_FramePaceDrainPath(void);	//nettest: sys_framepacing 4 GPU-drain path — 1=ARB_sync fence, 2=glFinish fallback
+#endif
 
 /* ntdll.dll signatures */
 typedef LONG (NTAPI *NtSetTimerResolution_pfn)(ULONG DesiredResolution, BOOLEAN SetResolution, PULONG CurrentResolution);
@@ -1896,6 +1899,15 @@ static int    g_pace_err_count = 0;
 static double g_pace_last_req_s  = 0;
 static double g_pace_last_err_us = 0;
 static int    g_pace_last_path   = 0;  /* 0=sleep, 1=timer+spin, 2=spin-only */
+
+/* Diagnostic ring: PRESENT cadence — the actual present-to-present interval (seconds),
+ * sampled once per swap by Sys_FramePace_RecordPresent.  This is the real VRR-smoothness
+ * metric: low jitter == a flat cadence the display can follow.  Modes 0-3 pace the frame
+ * START so render variance leaks in here; mode 4 holds the swap to a grid so it stays flat. */
+static double g_present_ring[PACE_ERR_RING];
+static int    g_present_head   = 0;
+static int    g_present_count  = 0;
+static double g_last_present_t = 0;
 
 static void Sys_FramePacing_Init(void)
 {
@@ -2085,7 +2097,9 @@ qboolean Sys_FramePacingActive(void)
  * accumulate.  Renderer-agnostic: pure QPC-time math, no D3D/DXGI. */
 qboolean Sys_FramePacingAnchor(void)
 {
-	return sys_framepacing.ival == 3;
+	/* mode 3 always; mode 4 too when present-pacing can't run (non-GL) so it cleanly
+	 * degrades to the frame-START grid anchor instead of doing nothing. */
+	return sys_framepacing.ival == 3 || (sys_framepacing.ival == 4 && qrenderer != QR_OPENGL);
 }
 
 /* Returns how long to wait (seconds, in the engine's realtime base) so the next
@@ -2123,7 +2137,9 @@ static double g_present_interval = 0;	/* seconds per present the grid was built 
 
 qboolean Sys_FramePacePresentActive(void)
 {
-	return sys_framepacing.ival == 4;
+	/* present-pacing only exists in the GL swap hook (gl_screen.c); off-GL, mode 4
+	 * falls back to the mode-3 frame-START anchor (see Sys_FramePacingAnchor). */
+	return sys_framepacing.ival == 4 && qrenderer == QR_OPENGL;
 }
 
 /* Called from the renderer immediately before the buffer swap.  Blocks until the
@@ -2149,6 +2165,21 @@ void Sys_FramePacePresent(void)
 		Sys_FramePacedWait(delay);	/* reuse the high-res timer+spin wait (+stats) */
 }
 
+/* Called once per frame from the renderer right after the buffer swap, to sample the
+ * actual present-to-present interval for sys_framepacing_stats — the real VRR-cadence
+ * metric (independent of which pacing mode is active).  Renderer-agnostic timing. */
+void Sys_FramePace_RecordPresent(void)
+{
+	double now = Sys_DoubleTime();
+	if (g_last_present_t > 0)
+	{
+		g_present_ring[g_present_head] = now - g_last_present_t;
+		g_present_head = (g_present_head + 1) % PACE_ERR_RING;
+		if (g_present_count < PACE_ERR_RING) g_present_count++;
+	}
+	g_last_present_t = now;
+}
+
 /* Called when sys_framepacing changes.  Force-init the subsystem so the
  * stats command shows accurate state without waiting for a frame, and
  * clear the wait-error ring so only samples from the new mode show. */
@@ -2159,6 +2190,9 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_pace_err_head  = 0;
 	g_pace_err_count = 0;
 	for (i = 0; i < PACE_ERR_RING; i++) g_pace_err_ring[i] = 0;
+	g_present_head = 0;	/* restart present-cadence sampling so stats reflect the new mode */
+	g_present_count = 0;
+	g_last_present_t = 0;
 	g_anchor_base = 0;	/* re-establish the mode-3 grid on next use */
 	g_anchor_tpf  = 0;
 	if (mode > 0)
@@ -2200,7 +2234,7 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  1 = high-res waitable timer + spin\n");
 	Con_Printf("  2 = (1) + DXGI frame-latency waitable (D3D11 only)\n");
 	Con_Printf("  3 = (2) + absolute-grid anchor on frame START (all renderers)\n");
-	Con_Printf("  4 = present-pacing: hold the SWAP to the grid (flat VRR cadence, GL only)\n");
+	Con_Printf("  4 = present-pacing: hold the SWAP to the grid (flat VRR cadence, GL only; falls back to mode 3 off-GL)\n");
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
@@ -2208,6 +2242,19 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  effective timer res : %.3f ms\n", g_pace_timer_res_s * 1000.0);
 	Con_Printf("  waitable timer tier : %s\n", g_pace_timer ? (g_pace_timer_highres ? "HIGH_RESOLUTION (Win10 1803+)" : "standard (Win7/Vista)") : "none");
 	Con_Printf("  DXGI waitable handle: %s\n", hdxgi ? "present (D3D11 renderer active)" : "absent (GL/Vk/non-D3D11 renderer, or not created yet)");
+	{	//sys_framepacing 4 GPU-drain path — confirms the ARB_sync fence is live vs the glFinish fallback
+		const char *drain = "n/a (only mode 4 drains the GPU before the paced swap)";
+		if (mode == 4)
+		{
+#ifdef GLQUAKE
+			if (qrenderer == QR_OPENGL)
+				drain = (GLVID_FramePaceDrainPath() == 1) ? "ARB_sync fence (surgical)" : "glFinish (ARB_sync absent on this context)";
+			else
+#endif
+				drain = "n/a (off-GL: mode 4 falls back to the mode-3 frame-START anchor)";
+		}
+		Con_Printf("  mode-4 GPU drain    : %s\n", drain);
+	}
 
 	if (mode >= 3)
 	{
@@ -2250,6 +2297,34 @@ static void Sys_FramePacing_Stats_f(void)
 	{
 		Con_Printf("  no samples yet — wait a few frames then retry.\n");
 	}
+
+	Con_Printf("\nPresent cadence (last %i swaps):\n", g_present_count);
+	if (g_present_count > 1)
+	{
+		mn = mx = g_present_ring[0]; sum = 0; stddev = 0;
+		for (i = 0; i < g_present_count; i++)
+		{
+			double v = g_present_ring[i];
+			sum += v;
+			if (v < mn) mn = v;
+			if (v > mx) mx = v;
+		}
+		avg = sum / g_present_count;
+		for (i = 0; i < g_present_count; i++)
+		{
+			double d = g_present_ring[i] - avg;
+			stddev += d * d;
+		}
+		stddev = sqrt(stddev / g_present_count);
+		Con_Printf("  interval           : avg %.3f ms (%.1f fps)  min %.3f  max %.3f ms\n",
+			avg * 1000.0, avg > 0 ? 1.0 / avg : 0.0, mn * 1000.0, mx * 1000.0);
+		Con_Printf("  jitter (stddev)    : %.1f us   spread (max-min) %.1f us\n",
+			stddev * 1e6, (mx - mn) * 1e6);
+		Con_Printf("  -> lower jitter = flatter present cadence (smoother on a VRR/G-Sync display);\n");
+		Con_Printf("     mode 4 should be far below mode 2 here even if wait-accuracy looks similar.\n");
+	}
+	else
+		Con_Printf("  present cadence: no samples yet.\n");
 }
 
 static quint64_t timer_qpc_frequency;

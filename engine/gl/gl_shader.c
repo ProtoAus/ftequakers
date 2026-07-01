@@ -5674,7 +5674,10 @@ static void Shader_Finish (parsestate_t *ps)
 		s->sort = SHADER_SORT_DECAL;
 	}
 
-	if ((r_vertexlight.value || !(s->usageflags & SUF_LIGHTMAP)) && !s->prog)
+	//nettest: a pass-level program that samples $lightmap (e.g. per-pixel-lit decals) uses the
+	//lightmap intentionally - don't apply the vertex-light lightmap strip/collapse to it (that
+	//discards its merged lightmap pass, leaving s_lightmap unbound).
+	if ((r_vertexlight.value || !(s->usageflags & SUF_LIGHTMAP)) && !s->prog && !s->passes->prog)
 	{
 		// do we have a lightmap pass?
 		pass = s->passes;

@@ -152,6 +152,8 @@ cvar_t r_wireframe							= CVARAFD ("r_showtris", "0",
 													"r_wireframe", CVAR_CHEAT, "Developer feature where everything is drawn with wireframe over the top. Only active where cheats are permitted.");
 cvar_t r_outline							= CVARD ("gl_outline", "0", "Draw some stylised outlines.");
 cvar_t r_outline_width						= CVARD ("gl_outline_width", "2", "The width of those outlines.");
+cvar_t gl_line_width						= CVARD ("gl_line_width", "1", "Pixel width of CSQC debug wireframe lines (nav graph, hitboxes, impacts, etc.). Driver-clamped to GL_ALIASED_LINE_WIDTH_RANGE; core-profile drivers may cap at 1.");
+cvar_t gl_2dline_width						= CVARD ("gl_2dline_width", "2", "Pixel width of 2D drawline strokes (e.g. the hit-marker reticle). Separate from gl_line_width (3D debug wireframe). Driver-clamped.");
 cvar_t r_wireframe_smooth					= CVAR ("r_wireframe_smooth", "0");
 cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refraction. If 0, just renders as a portal and uses a copy of the current framebuffer.");
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
@@ -486,6 +488,8 @@ cvar_t r_lodscale							= CVARFD ("r_lodscale", "5", CVAR_ARCHIVE, "Scales the l
 cvar_t r_lodbias							= CVARFD ("r_lodbias", "0", CVAR_ARCHIVE, "Biases the level-of-detail on models (for those that have lod).");
 cvar_t r_shadows							= CVARFD ("r_shadows", "0", CVAR_ARCHIVE, "Draw basic blob shadows underneath entities without using realtime lighting.");
 cvar_t r_showbboxes							= CVARFD("r_showbboxes", "0", CVAR_CHEAT, "Debugging. Shows bounding boxes. 1=ssqc, 2=csqc. Red=solid, Green=stepping/toss/bounce, Blue=onground.");
+cvar_t r_showhull							= CVARFD("r_showhull", "0", CVAR_CHEAT, "Debugging. Draws the convex-hull collision geometry of SOLID_PHYSICS_TRIMESH props as green lines. 1=ssqc, 2=csqc.");
+cvar_t r_showhull_maxdist					= CVARFD("r_showhull_maxdist", "1024", CVAR_CHEAT, "r_showhull: only draw the hulls of props within this many units of the view, so a prop-dense scene doesn't overflow the line buffer (distant hulls would stop drawing). 0 = unlimited.");
 cvar_t r_showfields							= CVARD("r_showfields", "0", "Debugging. Shows entity fields boxes (entity closest to crosshair). 1=ssqc, 2=csqc, 3=snapshots.");
 cvar_t r_showshaders						= CVARD("r_showshaders", "0", "Debugging. Shows the name of the (worldmodel) shader being pointed to.");
 cvar_t r_lightprepass_cvar					= CVARFD("r_lightprepass", "0", CVAR_ARCHIVE, "Experimental. Attempt to use a different lighting mechanism (aka: deferred lighting). Requires vid_reload to take effect.");
@@ -917,6 +921,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_wireframe_smooth, GRAPHICALNICETIES);
 	Cvar_Register (&r_outline, GRAPHICALNICETIES);
 	Cvar_Register (&r_outline_width, GRAPHICALNICETIES);
+	Cvar_Register (&gl_line_width, GRAPHICALNICETIES);
+	Cvar_Register (&gl_2dline_width, GRAPHICALNICETIES);
 	Cvar_Register (&r_refract_fbo, GRAPHICALNICETIES);
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
@@ -1040,6 +1046,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_replacemodels, GRAPHICALNICETIES);
 
 	Cvar_Register (&r_showbboxes, GLRENDEREROPTIONS);
+	Cvar_Register (&r_showhull, GLRENDEREROPTIONS);
+	Cvar_Register (&r_showhull_maxdist, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showfields, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showshaders, GLRENDEREROPTIONS);
 #ifdef BEF_PUSHDEPTH

@@ -686,7 +686,8 @@ enum fs_relative{
 	FS_GAMEONLY,	//$gamedir/
 	FS_BASEGAMEONLY,	//fte/
 	FS_PUBGAMEONLY,		//$gamedir/ or qw/ but not fte/
-	FS_PUBBASEGAMEONLY	//qw/ (fixme: should be the last non-private basedir)
+	FS_PUBBASEGAMEONLY,	//qw/ (fixme: should be the last non-private basedir)
+	FS_GAMEDOWNLOADS	//nettest P38: $gamedir_downloads/ - sibling of the active gamedir; client downloads land here so the gamedir stays pure.
 };
 
 qboolean COM_WriteFile (const char *filename, enum fs_relative fsroot, const void *data, int len);

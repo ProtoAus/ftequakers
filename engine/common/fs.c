@@ -2940,6 +2940,14 @@ static qboolean FS_NativePath(const char *fname, enum fs_relative relativeto, ch
 		else
 			nlen = Q_snprintfz(out, outlen, "%s%s/%s", fordisplay?"$basedir/":com_gamepath, last, fname);
 		break;
+	case FS_GAMEDOWNLOADS:	//nettest P38: $gamedir_downloads/ - client downloads land in a sibling of the active gamedir so the gamedir stays pure. Mirror FS_GAMEONLY but append _downloads; must match the mount derived from gamedirfile in FS_ReloadPackFilesFlags.
+		if (!*gamedirfile)
+			return false;
+		if (com_homepathenabled)
+			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
+		else
+			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
+		break;
 	default:
 		Sys_Error("FS_NativePath case not handled\n");
 	}
@@ -3143,6 +3151,7 @@ vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_rela
 		if (vfs || !(*mode == 'w' || *mode == 'a'))
 			return vfs;
 		//fall through
+	case FS_GAMEDOWNLOADS:		//nettest P38: used for $gamedir_downloads/* (loose client downloads). MUST be handled here or FS_OpenVFS hits the Sys_Error default below.
 	case FS_PUBGAMEONLY:		//used for $gamedir/downloads
 	case FS_BASEGAMEONLY:		//used for fte/configs/*
 	case FS_PUBBASEGAMEONLY:	//used for qw/skins/*
@@ -5488,6 +5497,35 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 					continue;
 				FS_AddGameDirectory(&oldpaths, dir, reloadflags, fl);
 			}
+		}
+	}
+
+	//nettest P38: mount <gamedir>_downloads as a LOW-priority (read) searchpath so loose files the client
+	//downloads there (DL_Begun -> FS_GAMEDOWNLOADS) are found by FS_FLocateFile and load with the game,
+	//while the gamedir itself stays pure. Rebuilt every reload like the gamedirs (persists across maps).
+	//Low-level add (FS_GetOldPath/VFSOS_OpenPath + FS_AddPathHandle) so we do NOT clobber gamedirfile/
+	//pubgamedirfile/gameonly_gamedir the way FS_AddSingleGameDirectory/FS_AddGameDirectory would. Base
+	//follows com_homepathenabled to match the FS_GAMEDOWNLOADS write path. SPF_ADDON => appended at the
+	//TAIL (BELOW the mod, mirroring the cstrike_downloads precedent in FS_Addon_Mount) so the mod's own
+	//files always win and a stale download can never shadow a mod asset; an addon path is also never a
+	//write target. NOT SPF_COPYPROTECTED (our own files; keep them re-servable) / NOT SPF_TEMPORARY (would
+	//be purged at map change). VFSOS_OpenPath tolerates a not-yet-existing dir, so the first download is
+	//found without a remount. Downloads still WRITE via the FS_GAMEDOWNLOADS system path, not this path.
+	if (*gamedirfile)
+	{
+		char dldir[MAX_OSPATH];
+		char dlpath[MAX_OSPATH];
+		const char *dlbase = com_homepathenabled ? com_homepath : com_gamepath;
+		unsigned int keptflags = 0;
+		searchpathfuncs_t *dlhandle;
+		Q_snprintfz(dldir, sizeof(dldir), "%s_downloads", gamedirfile);
+		if (FS_FixupFileCase(dlpath, sizeof(dlpath), dlbase, dldir, true))
+		{
+			dlhandle = FS_GetOldPath(&oldpaths, dlpath, &keptflags);
+			if (!dlhandle)
+				dlhandle = VFSOS_OpenPath(NULL, NULL, dlpath, dlpath, "");
+			if (dlhandle)
+				FS_AddPathHandle(&oldpaths, dldir, dlpath, dlhandle, "", SPF_ADDON|keptflags|SPF_ISDIR, reloadflags);
 		}
 	}
 

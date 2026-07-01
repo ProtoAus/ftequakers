@@ -48,6 +48,7 @@ typedef struct
 	qbyte		notouch;		//don't trigger touch events. FIXME: why are these entities even in the list?
 	qbyte		isportal;		//special portal traversion required
 	unsigned int forcecontentsmask;
+	float		scale;		//nettest Patch 57: prop scale for convex-hull collision (<=0 treated as 1)
 //	framestate_t framestate;
 #define PE_FRAMESTATE NULLFRAMESTATE	//remove this once we start wanting players to interact with ents in different frames.
 } physent_t;

@@ -2844,7 +2844,7 @@ static void R_Sprite_GenerateTrisoup(entity_t *e, int bemode)
 	VectorMA (point, frame->right, spraxis[1], xyz[3]);
 }
 
-static void R_DB_Poly(batch_t *batch)
+void R_DB_Poly(batch_t *batch)	//nettest: non-static so gl_backend.c can tag CSQC debug-line batches for gl_line_width
 {
 	static mesh_t mesh;
 	static mesh_t *meshptr = &mesh;
@@ -2861,6 +2861,13 @@ static void R_DB_Poly(batch_t *batch)
 	mesh.indexes = cl_strisidx + cl_stris[i].firstidx;
 	mesh.numindexes = cl_stris[i].numidx;
 	mesh.numvertexes = cl_stris[i].numvert;
+	//nettest r_decal_lightmap: per-pixel lightmap st for decal batches whose shader has a
+	//$lightmap stage.  Set EVERY call (the mesh is static) so a prior decal's pointer never
+	//leaks into a later non-lightmap batch.
+	if ((cl_stris[i].lightmap >= 0) && cl_stris[i].shader && (cl_stris[i].shader->flags & SHADER_HASLIGHTMAP))
+		mesh.lmst_array[0] = cl_strisvertlm + cl_stris[i].firstvert;
+	else
+		mesh.lmst_array[0] = NULL;
 }
 static void BE_GenPolyBatches(batch_t **batches)
 {
@@ -2892,6 +2899,12 @@ static void BE_GenPolyBatches(batch_t **batches)
 		b->shader = shader;
 		for (j = 0; j < MAXRLIGHTMAPS; j++)
 			b->lightmap[j] = -1;
+		//nettest r_decal_lightmap: a decal batch (shader carries a $lightmap stage) gets the
+		//surface's lightmap atlas page so the stage samples the matching lightmap.  Gated on
+		//the shader flag so the ~20 other scenetris producers (which don't set .lightmap) are
+		//unaffected.
+		if (shader->flags & SHADER_HASLIGHTMAP)
+			b->lightmap[0] = cl_stris[i].lightmap;
 		b->user.poly.surface = i;
 		b->flags = cl_stris[i].flags;
 		b->vbo = 0;

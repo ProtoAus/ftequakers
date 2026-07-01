@@ -235,13 +235,32 @@ qboolean GLSCR_UpdateScreen (void)
 #if defined(_WIN32) && !defined(FTE_SDL)
 		extern void Sys_FramePacePresent(void);
 		extern qboolean Sys_FramePacePresentActive(void);
+		extern void Sys_FramePace_RecordPresent(void);
 		if (Sys_FramePacePresentActive())
-			qglFinish();		//drain the GPU queue first, so the paced flip below IS the real present and the GPU backlog can't sawtooth the cadence
+		{	//drain THIS frame's GPU work so the paced flip below IS the real present and the GPU backlog can't sawtooth the cadence.
+			//Prefer an ARB_sync fence (this frame only, less collateral stall); fall back to a full glFinish if unavailable.
+			if (qglFenceSync)
+			{
+				GLsync fence = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+				if (fence)
+				{
+					qglClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000ull);	//<=100ms guard; proceed even if it ever times out
+					qglDeleteSync(fence);
+				}
+				else
+					qglFinish();
+			}
+			else
+				qglFinish();
+		}
 		Sys_FramePacePresent();	//sys_framepacing 4: hold the now-complete flip to the present grid (no-op in other modes)
 #endif
 		RSpeedMark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);
+#if defined(_WIN32) && !defined(FTE_SDL)
+		Sys_FramePace_RecordPresent();	//sample present-to-present cadence for sys_framepacing_stats (every mode)
+#endif
 	}
 
 	//gl 4.5 / GL_ARB_robustness / GL_KHR_robustness

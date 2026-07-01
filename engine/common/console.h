@@ -129,6 +129,7 @@ enum
 	CB_SELECT		= 6,
 	CB_SELECTED		= 7,	//selection ended (deferred until drawing to ensure selections happen properly)
 	CB_TAPPED		= 8,	//quick-tap ended (deferred until drawing to ensure selections happen properly)
+	CB_SCROLLBAR	= 9,	//nettest: dragging the window scrollbar thumb (absolute positioning)
 
 	//the flags part
 	CB_STALE		= (1u<<28),	//WAS held last frame - to make sure we still do stuff when released on the same frame.
@@ -268,6 +269,7 @@ void Con_CycleConsole (void);
 int Con_IsActive (console_t *con);
 void Con_Destroy (console_t *con);
 void Con_ClearCon(console_t *con);
+qboolean Con_SearchText(console_t *con, const char *text, int dir);	//nettest: Ctrl+F find-in-scrollback
 void Con_SetActive (console_t *con);
 qboolean Con_NameForNum(int num, char *buffer, int buffersize);
 console_t *Con_FindConsole(const char *name);

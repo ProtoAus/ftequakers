@@ -48,6 +48,10 @@ void (APIENTRY *qglDepthMask) (GLboolean flag);
 void (APIENTRY *qglDisable) (GLenum cap);
 void (APIENTRY *qglEnable) (GLenum cap);
 void (APIENTRY *qglFinish) (void);
+GLsync (APIENTRY *qglFenceSync) (GLenum condition, GLbitfield flags);				//nettest: GL_ARB_sync, sys_framepacing 4
+GLenum (APIENTRY *qglClientWaitSync) (GLsync sync, GLbitfield flags, unsigned long long timeout);
+void   (APIENTRY *qglDeleteSync) (GLsync sync);
+int GLVID_FramePaceDrainPath(void) { return qglFenceSync ? 1 : 2; }	//nettest: sys_framepacing 4 drain path (1=ARB_sync fence, 2=glFinish) for sys_framepacing_stats
 void (APIENTRY *qglFlush) (void);
 void (APIENTRY *qglGenTextures) (GLsizei n, GLuint *textures);
 void (APIENTRY *qglGenerateMipmap)(GLenum target);
@@ -3127,6 +3131,9 @@ void GL_ForgetPointers(void)
 	qglDisable			= NULL;
 	qglEnable			= NULL;
 	qglFinish			= NULL;
+	qglFenceSync		= NULL;
+	qglClientWaitSync	= NULL;
+	qglDeleteSync		= NULL;
 	qglFlush			= NULL;
 	qglGenTextures		= NULL;
 	qglGetFloatv		= NULL;
@@ -3436,6 +3443,9 @@ qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 	qglScissor			= (void *)getglcore("glScissor");
 	qglPolygonOffset	= (void *)getglext("glPolygonOffset");
 	qglLineWidth		= (void *)getglcore("glLineWidth");
+	qglFenceSync		= (void *)getglext("glFenceSync");		//GL_ARB_sync (3.2) — sys_framepacing 4; NULL-safe (gl_screen.c falls back to glFinish)
+	qglClientWaitSync	= (void *)getglext("glClientWaitSync");
+	qglDeleteSync		= (void *)getglext("glDeleteSync");
 #endif
 
 #ifndef FTE_TARGET_WEB

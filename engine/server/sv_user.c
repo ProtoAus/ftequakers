@@ -3351,6 +3351,7 @@ qboolean SV_AllowDownload (const char *name)
 	extern	cvar_t	allow_download_locs;
 	extern	cvar_t	allow_download_copyrighted;
 	extern	cvar_t	allow_download_other;
+	extern	cvar_t	sv_allow_download_anything;	//nettest P37
 	char cleanname[MAX_QPATH];
 	char ext[8];
 	int i=0;
@@ -3385,6 +3386,18 @@ qboolean SV_AllowDownload (const char *name)
 		return !!allow_download_logs.value;
 	if (Q_strncasecmp(name,	"logs/", 5) == 0)
 		return !!allow_download_logs.value;
+
+	//nettest P37: sv_allow_download_anything also lifts the per-type asset gates (allow_download_other/
+	//textures/wads/etc.) so a client can pull EVERY file the map needs from a copy-protected mount - wads,
+	//skybox faces (gfx/env/* or materials/skybox/*), and misc assets - in one go. Still NEVER hand out
+	//configs (.cfg or config(s)/), which can leak the rcon password (logs are already blocked just above).
+	//The copyright (SPF_COPYPROTECTED) veto is lifted separately in SV_LocateDownload.
+	if (sv_allow_download_anything.ival)
+	{
+		if (!Q_strcasecmp("cfg", ext) || !Q_strncasecmp(name, "config/", 7) || !Q_strncasecmp(name, "configs/", 8))
+			return false;
+		return true;
+	}
 
 	if (!Q_strncasecmp(name, "package/", 8))
 	{
@@ -3468,6 +3481,7 @@ qboolean SV_AllowDownload (const char *name)
 static int SV_LocateDownload(const char *name, flocation_t *loc, char **replacementname, qboolean redirectpaks)
 {
 	extern	cvar_t	allow_download_anymap, allow_download_pakcontents, allow_download_copyrighted, allow_download_packages;
+	extern	cvar_t	sv_allow_download_anything;	//nettest P37
 	qboolean copyprotected;
 	qboolean found;
 	static char tmpname[MAX_QPATH];
@@ -3626,6 +3640,8 @@ Con_Printf("Simple Redirecting %s to %s\n", name, tmpname);
 		const char *pakname = FS_GetPackageDownloadFilename(loc);
 		qboolean ispak = loc->search && !(loc->search->flags & SPF_ISDIR);
 		copyprotected = loc->search && (loc->search->flags & SPF_COPYPROTECTED);
+		if (sv_allow_download_anything.ival)	//nettest P37: opt-in - ignore copy-protection on our own searchpaths so loose copyrighted files (eg a map in a mounted cstrike/) can be sent. The non-copyright allow_download_* gates + path rules still apply.
+			copyprotected = false;
 
 		if (replacementname)
 		{	//if we're able to redirect it then do so.

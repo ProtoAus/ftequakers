@@ -97,6 +97,7 @@ cvar_t	allow_download_configs		= CVARFD("allow_download_configs", "0", CVAR_WARN
 cvar_t	allow_download_locs			= CVARD("allow_download_locs", "1", "0 blocks downloading of any file in the locs/ directory");
 cvar_t	allow_download_copyrighted	= CVARFD("allow_download_copyrighted", "0", CVAR_WARNONCHANGE, "0 blocks download of packages that are considered copyrighted. Specifically, this means packages with a leading 'pak' prefix on the filename.\nIf you take your copyrights seriously, you should also set allow_download_pakmaps 0 and allow_download_pakcontents 0.");
 cvar_t	allow_download_other		= CVARD("allow_download_other", "0", "0 blocks downloading of any file that was not covered by any of the directory download blocks.");
+cvar_t	sv_allow_download_anything	= CVARFD("sv_allow_download_anything", "0", CVAR_WARNONCHANGE, "If 1, the server ignores copy-protection flags on its own searchpaths and will send copyrighted/copy-protected files (e.g. a loose map inside a mounted Steam/cstrike dir) to clients. Default 0 = stock behaviour. The normal allow_download_* gates and path/name rules still apply."); //nettest P37
 
 extern cvar_t sv_allow_splitscreen;
 
@@ -6008,6 +6009,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&allow_download_root,	cvargroup_serverpermissions);
 	Cvar_Register (&allow_download_copyrighted,	cvargroup_serverpermissions);
 	Cvar_Register (&allow_download_other,	cvargroup_serverpermissions);
+	Cvar_Register (&sv_allow_download_anything,	cvargroup_serverpermissions);	//nettest P37
 	Cvar_Register (&secure,	cvargroup_serverpermissions);
 
 	Cvar_Register (&sv_highchars,	cvargroup_servercontrol);

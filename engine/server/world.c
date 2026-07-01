@@ -553,64 +553,44 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 
 // set the abs box
 	solid = ent->v->solid;
-	if ((solid == SOLID_BSP||solid == SOLID_BSPTRIGGER||solid == SOLID_PHYSICS_BOX) &&
+	if ((solid == SOLID_BSP||solid == SOLID_BSPTRIGGER||solid == SOLID_PHYSICS_BOX||solid == SOLID_PHYSICS_TRIMESH) &&
 	(ent->v->angles[0] || ent->v->angles[1] || ent->v->angles[2]) )
 	{	// expand for rotation
 		// SOLID_PHYSICS_BOX added by the OBB patch: a ROTATED physics box needs the
 		// enlarged broadphase AABB here, or its tilted corners get area-grid culled
 		// before World_OBBTrace's oriented narrowphase ever runs. -- FTE patch (#3)
-#if 1
-		int i;
-		float v;
-		float max;
-		//q2 method
-		max = 0;
-		for (i=0 ; i<3 ; i++)
+		// SOLID_PHYSICS_TRIMESH added by Patch 53: Patch 52 routes its swept-box (player)
+		// path through World_OBBTrace too, so a rotated trimesh prop needs the SAME
+		// expansion — without it the player only collided inside the un-rotated AABB
+		// (a long van rotated 90deg lost its length). Point/bullet traces use the mesh
+		// and don't need it, but this conservative AABB is harmless for them.
+		//nettest Patch 59: EXACT rotated AABB. Take the world min/max of all 8 box corners
+		//rotated by the entity angles, using the SAME axis convention as World_OBBTrace /
+		//World_HullTrace so the broadphase exactly wraps the oriented narrowphase. The old q2
+		//"max half-extent cube" UNDER-covered a long box turned ~22-45deg -- its corners stuck
+		//out past the cube, so the player fell through the rotated van there. Tight AND any angle.
+		//nettest Patch 64: the alias-mesh props (PHYSICS_BOX/TRIMESH) now build their narrowphase
+		//basis with r_meshpitch (AngleVectorsMesh, matching the render) — the broadphase MUST use
+		//the SAME basis per solid type or a pitched van falls through. Brush (BSP) stays raw.
+		int i, k;
+		vec3_t axis[3];
+		if (solid == SOLID_PHYSICS_BOX || solid == SOLID_PHYSICS_TRIMESH)
+			AngleVectorsMesh(ent->v->angles, axis[0], axis[1], axis[2]);	//alias mesh
+		else
+			AngleVectors(ent->v->angles, axis[0], axis[1], axis[2]);		//brush
+		VectorNegate(axis[1], axis[1]);
+		for (k = 0; k < 3; k++)
 		{
-			v =fabs( mins[i]);
-			if (v > max)
-				max = v;
-			v =fabs( maxs[i]);
-			if (v > max)
-				max = v;
-		}
-		for (i=0 ; i<3 ; i++)
-		{
-			ent->v->absmin[i] = ent->v->origin[i] - max;
-			ent->v->absmax[i] = ent->v->origin[i] + max;
-		}
-#else
-
-		int			i;
-
-		vec3_t f, r, u;
-		vec3_t mn, mx;
-
-		//we need to link to the correct leaves
-
-		AngleVectors(ent->v->angles, f,r,u);
-
-		mn[0] = DotProduct(mins, f);
-		mn[1] = -DotProduct(mins, r);
-		mn[2] = DotProduct(mins, u);
-
-		mx[0] = DotProduct(maxs, f);
-		mx[1] = -DotProduct(maxs, r);
-		mx[2] = DotProduct(maxs, u);
-		for (i = 0; i < 3; i++)
-		{
-			if (mn[i] < mx[i])
-			{
-				ent->v->absmin[i] = ent->v->origin[i]+mn[i]-0.1;
-				ent->v->absmax[i] = ent->v->origin[i]+mx[i]+0.1;
+			float lo = 0, hi = 0;
+			for (i = 0; i < 3; i++)
+			{	//max/min of (corner . axis[i][k]) over the box picks maxs/mins by the sign
+				float a = axis[i][k];
+				if (a > 0) { hi += maxs[i]*a; lo += mins[i]*a; }
+				else       { hi += mins[i]*a; lo += maxs[i]*a; }
 			}
-			else
-			{	//box went inside out
-				ent->v->absmin[i] = ent->v->origin[i]+mx[i]-0.1;
-				ent->v->absmax[i] = ent->v->origin[i]+mn[i]+0.1;
-			}
+			ent->v->absmin[k] = ent->v->origin[k] + lo - 0.1;
+			ent->v->absmax[k] = ent->v->origin[k] + hi + 0.1;
 		}
-#endif
 	}
 	else
 	{
@@ -987,13 +967,13 @@ static void World_OBBTrace (wedict_t *ent, vec3_t start, vec3_t end, vec3_t mins
 	if (IS_NAN(end[0]) || IS_NAN(end[1]) || IS_NAN(end[2]))
 		return;
 
-	//Use the entity angles DIRECTLY — do NOT apply the alias r_meshpitch/r_meshroll
-	//flip.  The IQM renders with raw angles, so applying mesh-pitch here pitched the
-	//collision box the WRONG way vs the visible model (World_TransformedTrace's mesh
-	//path applies r_meshpitch for mod_alias, which is exactly why copying it was the
-	//bug).  Raw angles == "r_meshpitch 1" behaviour for the box, without touching the
-	//global cvar (which would flip every other model).
-	AngleVectors (eang, axis[0], axis[1], axis[2]);
+	//nettest Patch 64: build the basis the SAME way the renderer does for an alias/IQM model
+	//(AngleVectorsMesh applies r_meshpitch to pitch + r_meshroll to roll) so the oriented box
+	//matches the VISIBLE model when the prop is pitched/rolled. SOLID_PHYSICS_BOX is always an
+	//alias mesh. At r_meshpitch 1 this is identical to raw AngleVectors. (Earlier "raw is
+	//intentional" comment was a mis-diagnosis: World_OBBTrace consumes axis world->local exactly
+	//like the confirmed-correct bullet path Mod_Trace, so it needs the same meshpitch axis.)
+	AngleVectorsMesh (eang, axis[0], axis[1], axis[2]);
 	VectorNegate (axis[1], axis[1]);
 
 	//Minkowski-expand the prop box by the player box, measured in the prop's LOCAL
@@ -1044,6 +1024,188 @@ static void World_OBBTrace (wedict_t *ent, vec3_t start, vec3_t end, vec3_t mins
 		trace->contents = FTECONTENTS_BODY;
 }
 
+//nettest Patch 56: TRUE convex-hull trace — the smooth, mesh-shaped analogue of
+//World_OBBTrace. Instead of the entity AABB it clips the swept player box against the
+//model's convex HULL (incremental QuickHull built from the verts at load, com_mesh.c).
+//Each hull face plane (model space) is rotated into world by the entity angles, scaled,
+//shifted by the origin, pushed out by the box (nearest corner, like CM_ClipBoxToBrush),
+//then an enter/leave-fraction loop finds first contact. Convex + watertight -> leak-free,
+//no seam stutter, O(numhullplanes). Requires model->numhullplanes>=4 (checked by caller).
+//nettest Patch 61: clip the swept box against ONE convex piece's planes (model space, rotated
+//by 'axis', scaled, origin-shifted). Outputs that piece's entry fraction (-1 = no valid entry),
+//hit normal, and start/exit flags. Returns false if the box CLEANLY MISSES the piece (stays in
+//front of some plane the whole sweep) — the caller skips it.
+static qboolean World_HullClipOne (int numplanes, vec4_t *planes, const vec3_t axis[3], const vec3_t eorg, float scale,
+		const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs,
+		float *out_enterfrac, float *out_nearfrac, vec3_t out_hitnorm, qboolean *out_startout, qboolean *out_getout)
+{
+	vec3_t	nw, ofs, hitnorm;
+	float	enterfrac = -1, nearfrac = -1, leavefrac = 2, d1, d2, f, dist, dw;
+	qboolean startout = false, getout = false;
+	int		j;
+
+	VectorClear (hitnorm);
+	for (j = 0; j < numplanes; j++)
+	{
+		const float *pl = planes[j];	//.xyz = model-space outward unit normal, .w = dist
+		nw[0] = pl[0]*axis[0][0] + pl[1]*axis[1][0] + pl[2]*axis[2][0];
+		nw[1] = pl[0]*axis[0][1] + pl[1]*axis[1][1] + pl[2]*axis[2][1];
+		nw[2] = pl[0]*axis[0][2] + pl[1]*axis[1][2] + pl[2]*axis[2][2];
+		dw = pl[3] * scale + DotProduct (eorg, nw);
+
+		ofs[0] = (nw[0] < 0) ? maxs[0] : mins[0];
+		ofs[1] = (nw[1] < 0) ? maxs[1] : mins[1];
+		ofs[2] = (nw[2] < 0) ? maxs[2] : mins[2];
+		dist = dw - DotProduct (ofs, nw);
+		d1 = DotProduct (start, nw) - dist;
+		d2 = DotProduct (end,   nw) - dist;
+		if (d1 > 0) startout = true;
+		if (d2 > 0) getout = true;
+		if (d1 > 0 && d2 >= d1) return false;	//in front of a plane: clean miss of this piece
+		if (d1 <= 0 && d2 <= 0) continue;		//behind it: inside this plane
+		if (d1 > d2)
+		{	//entering
+			f = d1 / (d1 - d2);
+			if (f > enterfrac)
+			{	//nettest Patch 63: track raw enter (for the union compare) + a back-off in the
+				//plane-NORMAL direction (like CM_ClipBoxToBrush) so a tangential slide keeps a
+				//fixed clearance off the surface instead of resting on it.
+				enterfrac = f;
+				nearfrac = (d1 - 0.03125) / (d1 - d2);	//DIST_EPSILON back-off, normal direction
+				VectorCopy (nw, hitnorm);
+			}
+		}
+		else
+		{	//leaving
+			f = d1 / (d1 - d2);
+			if (f < leavefrac) leavefrac = f;
+		}
+	}
+	*out_startout = startout;
+	*out_getout = getout;
+	if (enterfrac <= leavefrac)	//valid entry only if enter<=leave
+	{
+		*out_enterfrac = enterfrac;
+		*out_nearfrac  = nearfrac;
+	}
+	else
+	{
+		*out_enterfrac = -1;
+		*out_nearfrac  = -1;
+	}
+	VectorCopy (hitnorm, out_hitnorm);
+	return true;
+}
+
+//Trace a swept player box against a prop's convex collision. 'usedecomp' true (sv_prop_collision
+//3 + model->numhulls>0) clips against the per-submesh DECOMPOSITION (a set of convex pieces whose
+//union approximates a CONCAVE shape); else against the single all-verts hull (mode 2). The union
+//is: the player stops at the NEAREST piece it enters; it is startsolid if inside ANY piece; it
+//passes freely through concave gaps where no piece is entered. Convex + watertight -> leak-free.
+static void World_HullTrace (wedict_t *ent, model_t *model, qboolean usedecomp, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, vec3_t eorg, vec3_t eang, float scale, unsigned int hitcontentsmask, trace_t *trace)
+{
+	vec3_t	axis[3], hitnorm, besthitnorm;
+	vec3_t	lmin, lmax;	//nettest Patch 65: swept player box in the prop LOCAL frame, for the per-piece cull
+	float	bestenter = 1, bestnear = 1;
+	qboolean anystart = false, anyall = false, hashit = false;
+	int		h, nh, k;
+
+	memset (trace, 0, sizeof(*trace));
+	trace->fraction = 1;
+	trace->truefraction = 1;	//nettest Patch 61: match the client PM_HullTrace (was left 0)
+	trace->inopen = true;
+	VectorCopy (end, trace->endpos);
+
+	if (!(hitcontentsmask & FTECONTENTS_BODY))
+		return;
+	if (IS_NAN(end[0]) || IS_NAN(end[1]) || IS_NAN(end[2]))
+		return;
+
+	//nettest Patch 64: build the basis like the renderer (AngleVectorsMesh = r_meshpitch on pitch,
+	//r_meshroll on roll) so the hull matches the VISIBLE alias/IQM model when pitched/rolled.
+	//SOLID_PHYSICS_TRIMESH is always an alias mesh. Identical to raw AngleVectors at r_meshpitch 1.
+	AngleVectorsMesh (eang, axis[0], axis[1], axis[2]);
+	VectorNegate (axis[1], axis[1]);
+
+	//nettest Patch 65: project the swept player box into the prop LOCAL frame ONCE (model_pt =
+	//axis.(world-eorg), matching World_HullClipOne). Used to skip far decomposition pieces below.
+	{
+		vec3_t ds, de, pcenter, phalf;
+		for (k = 0; k < 3; k++) { pcenter[k] = (maxs[k]+mins[k])*0.5f; phalf[k] = (maxs[k]-mins[k])*0.5f; }
+		VectorSubtract (start, eorg, ds);
+		VectorSubtract (end,   eorg, de);
+		for (k = 0; k < 3; k++)
+		{
+			float c  = DotProduct(axis[k], pcenter);
+			float lh = fabs(axis[k][0])*phalf[0] + fabs(axis[k][1])*phalf[1] + fabs(axis[k][2])*phalf[2];
+			float a  = DotProduct(ds, axis[k]) + c;
+			float b  = DotProduct(de, axis[k]) + c;
+			lmin[k] = (a < b ? a : b) - lh;
+			lmax[k] = (a > b ? a : b) + lh;
+		}
+	}
+
+	VectorClear (besthitnorm);
+	nh = usedecomp ? model->numhulls : 1;
+	for (h = 0; h < nh; h++)
+	{
+		int np; vec4_t *pl;
+		float enterfrac, nearfrac; qboolean startout, getout;
+		if (usedecomp)
+		{	//per-piece AABB cull: skip a piece the swept box can't reach (piece AABB is unscaled
+			//model space -> compare vs scale*bounds). Only skips clean-misses -> result-neutral.
+			const convhull_t *ch = &model->convhulls[h];
+			if (lmin[0] > ch->maxs[0]*scale || lmax[0] < ch->mins[0]*scale ||
+			    lmin[1] > ch->maxs[1]*scale || lmax[1] < ch->mins[1]*scale ||
+			    lmin[2] > ch->maxs[2]*scale || lmax[2] < ch->mins[2]*scale)
+				continue;
+			np = ch->numplanes; pl = ch->planes;
+		}
+		else           { np = model->numhullplanes;      pl = model->hullplanes; }
+		if (np < 4)
+			continue;	//empty/degenerate piece
+		if (!World_HullClipOne (np, pl, axis, eorg, scale, start, end, mins, maxs, &enterfrac, &nearfrac, hitnorm, &startout, &getout))
+			continue;	//clean miss of this piece
+		if (!startout)
+		{	//started inside this piece -> embedded in the (union) solid
+			anystart = true;
+			if (!getout) anyall = true;
+		}
+		else if (enterfrac > -1)
+		{	//a real contact — keep the piece the box enters FIRST (min raw enterfrac); its
+			//nearfrac (normal back-off) is the fraction the player actually moves to.
+			if (enterfrac < bestenter)
+			{
+				bestenter = enterfrac;
+				bestnear  = nearfrac;
+				VectorCopy (hitnorm, besthitnorm);
+				hashit = true;
+			}
+		}
+	}
+
+	if (anystart)
+	{	//started inside the solid (any piece)
+		trace->startsolid = true;
+		if (anyall)
+			trace->allsolid = true;
+		return;
+	}
+	if (hashit)
+	{	//nettest Patch 63: fraction = the normal-direction back-off (player rests a fixed
+		//clearance off the surface -> smooth slide); truefraction = the true contact point.
+		float efn = (bestnear  < 0) ? 0 : bestnear;
+		float eft = (bestenter < 0) ? 0 : bestenter;
+		trace->fraction = efn;
+		trace->truefraction = eft;
+		VectorInterpolate (start, efn, end, trace->endpos);
+		VectorCopy (besthitnorm, trace->plane.normal);
+		VectorNormalize (trace->plane.normal);
+		trace->plane.dist = DotProduct (trace->endpos, trace->plane.normal);
+		trace->contents = FTECONTENTS_BODY;
+	}
+}
+
 /*
 ==================
 SV_ClipMoveToEntity
@@ -1059,6 +1221,10 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 	int mdlidx = ent->v->modelindex;
 	framestate_t framestate;
 	int solid = ent->v->solid;
+	//nettest Patch 55/61: convex-hull (sv_prop_collision 2) / decomposition (3) swept-box routing.
+	qboolean usehull = false;
+	qboolean usedecomp = false;
+	model_t *hullmodel = NULL;
 
 // get the clipping hull
 	if ((solid == SOLID_BSP || solid == SOLID_BSPTRIGGER || solid == SOLID_PORTAL) && mdlidx)
@@ -1072,15 +1238,36 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 	}
 	else if (solid == SOLID_PHYSICS_TRIMESH && mdlidx)
 	{
-		// Treat physics trimesh entities like BSP for narrowphase: fetch the
-		// model and let World_TransformedTrace clip against the actual mesh
-		// (via funcs.NativeTrace). Without this, SOLID_PHYSICS_TRIMESH falls
-		// through to the box-hull path below and pmove sees only the AABB —
-		// which means the player can't collide with the prop's actual mesh
-		// shape. Requires the model to expose NativeTrace (alias/IQM/MD3 do).
+		//nettest Patch 54/55: bullets (point/line) ALWAYS hit the exact per-triangle
+		//mesh. A SWEPT BOX (player) picks its collision SHAPE from sv_prop_collision:
+		//  0 = oriented box (World_OBBTrace), 1 = per-triangle mesh (fixed
+		//  Mod_Trace_Trisoup swept-box), 2 = convex hull (World_HullTrace, k-DOP).
+		//So the prop's player collision matches the model, not a too-small box.
+		static cvar_t *propcol;
+		if (!propcol)
+			propcol = Cvar_Get("sv_prop_collision", "2", CVAR_SERVERINFO,
+				"Static-prop (SOLID_PHYSICS_TRIMESH) player collision shape: 0=oriented box, 1=per-triangle mesh (exact but slow/leaky), 2=convex hull (smooth, fast, watertight; default), 3=convex decomposition (per-submesh hulls -> concave-aware on multi-part models; single-mesh props fall back to the single hull). Bullets always use the exact mesh.");
+
 		model = w->Get_CModel(w, mdlidx);
 		if (!model || !model->funcs.NativeTrace)
 			model = NULL;
+		if (model && (maxs[0] > mins[0] || maxs[1] > mins[1] || maxs[2] > mins[2]))
+		{	//swept box == player movement
+			int cm = propcol ? propcol->ival : 2;
+			if (cm == 3 && (model->numhulls > 0 || model->numhullplanes >= 4))
+			{	//convex decomposition (per-submesh); single-mesh props fall back to the single hull
+				usehull = true; usedecomp = (model->numhulls > 0); hullmodel = model; model = NULL;
+			}
+			else if (cm == 2 && model->numhullplanes >= 4)
+			{	//single convex hull
+				usehull = true; hullmodel = model; model = NULL;
+			}
+			else if (cm == 1)
+				;	//keep model → per-triangle mesh (fixed swept-box trace)
+			else
+				model = NULL;	//0, or hull unavailable → oriented box
+		}
+		//point/line (bullet): model kept → exact mesh, unchanged.
 	}
 	else
 		model = NULL;
@@ -1153,14 +1340,40 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 			VectorCopy (end, trace.endpos);
 		}
 	}
-	else if (solid == SOLID_PHYSICS_BOX && !model && (eang[0] || eang[1] || eang[2]))
+	else if (usehull)
+	{
+		//nettest Patch 55/61: convex-hull (mode 2) / decomposition (mode 3) swept-box player
+		//trace — smooth mesh-shaped collision against the model's hull(s).
+		float sc = ent->xv->scale; if (sc <= 0) sc = 1;
+		World_HullTrace(ent, hullmodel, usedecomp, start, end, mins, maxs, eorg, eang, sc, hitcontentsmask, &trace);
+	}
+	else if ((solid == SOLID_PHYSICS_BOX || solid == SOLID_PHYSICS_TRIMESH) && !model && (eang[0] || eang[1] || eang[2]))
 	{
 		//Oriented physics box: collide against the box ROTATED by the entity
 		//angles instead of its axis-aligned AABB. This is what lets a tumbling
 		//SOLID_PHYSICS_BOX prop (the filing cabinet) be walked on / shot as its
 		//real oriented shape. Scoped to SOLID_PHYSICS_BOX so SOLID_BBOX (items,
 		//players, etc.) keeps its cheap axis-aligned behaviour. -- FTE patch.
+		//nettest: ALSO the swept-box player path for SOLID_PHYSICS_TRIMESH (whose model
+		//was NULL'd above for box sweeps) — point traces keep the per-triangle mesh, the
+		//player box gets this smooth oriented bbox.
 		World_OBBTrace(ent, start, end, mins, maxs, eorg, eang, hitcontentsmask, &trace);
+	}
+	else if (solid == SOLID_PHYSICS_TRIMESH && model && ent->xv->scale > 0 && ent->xv->scale != 1)
+	{
+		//nettest: scale the per-triangle model trace by the entity's .scale so a scaled
+		//IQM/MD3 prop collides at its VISUAL size.  Uniform scale commutes with the
+		//origin-translate + angle-rotate inside World_TransformedTrace, so we trace the
+		//(unscaled) mesh against the ray + moving box pre-scaled about eorg by 1/scale,
+		//then un-scale the endpos back.  trace.fraction + the plane normal are
+		//scale-invariant under uniform scale, so they need no fix-up.
+		float sc = ent->xv->scale, inv = 1.0f/sc;
+		vec3_t ss, se, sm, sM;
+		VectorSubtract(start, eorg, ss); VectorMA(eorg, inv, ss, ss);
+		VectorSubtract(end,   eorg, se); VectorMA(eorg, inv, se, se);
+		VectorScale(mins, inv, sm); VectorScale(maxs, inv, sM);
+		World_TransformedTrace(model, hullnum, &framestate, ss, se, sm, sM, capsule, &trace, eorg, eang, hitcontentsmask);
+		VectorSubtract(trace.endpos, eorg, trace.endpos); VectorMA(eorg, sc, trace.endpos, trace.endpos);
 	}
 	else
 		World_TransformedTrace(model, hullnum, &framestate, start, end, mins, maxs, capsule, &trace, eorg, eang, hitcontentsmask);
@@ -3054,9 +3267,11 @@ static qboolean GenerateCollisionMesh_Alias(world_t *world, model_t *mod, wedict
 	entity_t re;
 	int *ptr_elements;
 	float *ptr_verts;
+	float sc;	//nettest Patch 70: entity scale
 
 	numverts = 0;
 	numindexes = 0;
+	sc = ed->xv->scale; if (sc <= 0) sc = 1;	//Patch 70: scale verts (geomcenter is already in scaled units)
 
 	//fill in the parts of the entity_t that Alias_GAliasBuildMesh needs.
 	world->Get_FrameState(world, ed, &re.framestate);
@@ -3087,7 +3302,10 @@ static qboolean GenerateCollisionMesh_Alias(world_t *world, model_t *mod, wedict
 	{
 		Alias_GAliasBuildMesh(&mesh, NULL, inf, surfnum++, &re, false);
 		for (i = 0; i < mesh.numvertexes; i++)
-			VectorSubtract(mesh.xyz_array[i], geomcenter, (ptr_verts + 3*(numverts+i)));
+		{	//Patch 70: vert*sc - geomcenter (geomcenter already scaled)
+			vec3_t vs; VectorScale(mesh.xyz_array[i], sc, vs);
+			VectorSubtract(vs, geomcenter, (ptr_verts + 3*(numverts+i)));
+		}
 		for (i = 0; i < mesh.numindexes; i+=3)
 		{
 			//flip the triangles as we go
@@ -3133,10 +3351,114 @@ static void CollisionMesh_CleanupMesh(wedict_t *ed)
 	ed->rbe.numtriangles = out/3;
 }
 
+//nettest Patch 67: build the ODE rigid-body collision mesh from the model's LOW-POLY collision
+//HULL (the per-submesh convex DECOMPOSITION convhulls[].tris, else the single hulltris) instead
+//of the full render mesh. Same shape the player already collides with (World_HullTrace, Patch
+//56/61/65), but tens of tris instead of thousands, so the ODE trimesh-vs-world dCollide stops
+//dominating the frame (12 props: ~22ms -> ~ms). Mirrors GenerateCollisionMesh_Alias: BZ_Malloc'd
+//on the ENGINE heap (freed by World_ReleaseCollisionMesh; the ODE plugin's BZ_Malloc is plain
+//malloc, so this MUST live here) and geomcenter-subtracted. The stored hull tris carry no
+//ODE-guaranteed winding, so each tri is oriented OUTWARD by its convex piece's centre -> ODE
+//gets correct face normals for stable resting. One independent triangle per hull tri (soup);
+//ODE handles it, and each conservative-outward piece encloses the model.
+static qboolean GenerateCollisionMesh_Hull(world_t *world, model_t *mod, wedict_t *ed, vec3_t geomcenter)
+{
+	int totaltris = 0, h, t, nv = 0, ni = 0, numgroups, g;
+	int *ptr_elements;
+	float *ptr_verts;
+	qboolean decomp;
+	float sc;	//nettest Patch 70: entity scale (assigned after declarations, used to scale the stored verts)
+	//nettest Patch 68: default the ODE body to the SINGLE convex hull (mod->hulltris, one clean
+	//shell) NOT the convex DECOMPOSITION soup — the soup's many internal/overlapping faces make ODE
+	//trimesh-vs-trimesh generate huge contact counts (the "bucket overflow" + O(n^2) cost when props
+	//pile up under the gravgun). physics_ode_use_decomp 1 restores the old soup. Player collision is
+	//UNCHANGED (World_HullTrace uses convhulls per sv_prop_collision 3).
+	static cvar_t *usedecomp;
+	if (!usedecomp) usedecomp = Cvar_Get("physics_ode_use_decomp", "0", 0, NULL);
+	decomp = (usedecomp && usedecomp->ival) && (mod->numhulls > 0 && mod->convhulls);
+
+	//nettest Patch 70: scale the stored hull verts by the entity scale. geomcenter (com_phys_ode) is
+	//already in SCALED units, so store vert*sc - geomcenter -> the ODE shell matches the scaled
+	//AABB/mass/offset + the player hull, and a scaled prop sits/sims at its real size (was floating as
+	//1.0). The outward-winding test below uses the UNSCALED verts (uniform scale preserves the sign).
+	sc = ed->xv->scale; if (sc <= 0) sc = 1;
+
+	if (decomp)
+	{
+		for (h = 0; h < mod->numhulls; h++)
+			totaltris += mod->convhulls[h].numtris;
+	}
+	else
+		totaltris = mod->numhulltris;
+	if (totaltris < 1)
+		return false;	//no hull tris -> caller falls back to the render mesh
+
+	ptr_verts    = (float*)BZ_Malloc(totaltris*3 * sizeof(vec3_t));
+	ptr_elements = (int*)  BZ_Malloc(totaltris*3 * sizeof(int));
+
+	numgroups = decomp ? mod->numhulls : 1;
+	for (g = 0; g < numgroups; g++)
+	{
+		vec3_t *srctris    = decomp ? mod->convhulls[g].tris    : mod->hulltris;
+		int     srcnumtris = decomp ? mod->convhulls[g].numtris : mod->numhulltris;
+		vec3_t  center;
+		if (decomp)
+		{	center[0]=(mod->convhulls[g].mins[0]+mod->convhulls[g].maxs[0])*0.5f;
+			center[1]=(mod->convhulls[g].mins[1]+mod->convhulls[g].maxs[1])*0.5f;
+			center[2]=(mod->convhulls[g].mins[2]+mod->convhulls[g].maxs[2])*0.5f; }
+		else
+		{	center[0]=(mod->mins[0]+mod->maxs[0])*0.5f;
+			center[1]=(mod->mins[1]+mod->maxs[1])*0.5f;
+			center[2]=(mod->mins[2]+mod->maxs[2])*0.5f; }
+
+		for (t = 0; t < srcnumtris; t++)
+		{
+			float *a = srctris[t*3+0], *b = srctris[t*3+1], *c = srctris[t*3+2];
+			vec3_t d1, d2, n, ctr, outward, as, bs, cs;
+			VectorSubtract(b, a, d1);
+			VectorSubtract(c, a, d2);
+			CrossProduct(d1, d2, n);
+			ctr[0]=(a[0]+b[0]+c[0])*(1.0f/3.0f); ctr[1]=(a[1]+b[1]+c[1])*(1.0f/3.0f); ctr[2]=(a[2]+b[2]+c[2])*(1.0f/3.0f);
+			VectorSubtract(ctr, center, outward);
+			//Patch 70: store vert*sc - geomcenter (geomcenter is already scaled); winding decided above on the unscaled verts.
+			VectorScale(a, sc, as); VectorScale(b, sc, bs); VectorScale(c, sc, cs);
+			VectorSubtract(as, geomcenter, (ptr_verts + 3*(nv+0)));
+			if (DotProduct(n, outward) >= 0)
+			{	//winding already gives an outward normal -> keep a,b,c
+				VectorSubtract(bs, geomcenter, (ptr_verts + 3*(nv+1)));
+				VectorSubtract(cs, geomcenter, (ptr_verts + 3*(nv+2)));
+			}
+			else
+			{	//inward -> flip to a,c,b so ODE's face normal points out
+				VectorSubtract(cs, geomcenter, (ptr_verts + 3*(nv+1)));
+				VectorSubtract(bs, geomcenter, (ptr_verts + 3*(nv+2)));
+			}
+			ptr_elements[ni+0]=nv+0; ptr_elements[ni+1]=nv+1; ptr_elements[ni+2]=nv+2;
+			nv += 3; ni += 3;
+		}
+	}
+
+	ed->rbe.element3i    = ptr_elements;
+	ed->rbe.vertex3f     = ptr_verts;
+	ed->rbe.numvertices  = nv;
+	ed->rbe.numtriangles = ni/3;
+	return true;
+}
+
 qboolean QDECL World_GenerateCollisionMesh(world_t *world, model_t *mod, wedict_t *ed, vec3_t geomcenter)
 {
 	qboolean result;
-	switch(mod->type)
+	//nettest Patch 67: physics_ode_trimesh_from_hull 1 (default; registered by the ODE plugin,
+	//read here at body build, reload to apply) -> ODE simulates the low-poly collision HULL. Only
+	//mod_alias (IQM/MD3) carries hull tris; brush/other always use their existing collision mesh.
+	static cvar_t *odehull;
+	if (!odehull)
+		odehull = Cvar_Get("physics_ode_trimesh_from_hull", "1", 0, NULL);
+	if (odehull && odehull->ival == 1 && mod->type == mod_alias &&
+		((mod->numhulls > 0 && mod->convhulls) || mod->numhulltris > 0) &&
+		GenerateCollisionMesh_Hull(world, mod, ed, geomcenter))
+		result = true;
+	else switch(mod->type)
 	{
 	case mod_brush:
 		result = GenerateCollisionMesh_BSP(world, mod, ed, geomcenter);

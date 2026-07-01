@@ -1073,7 +1073,10 @@ static qboolean CL_CheckHLBspWads(char *file)
 	char *w;
 	char key[256];
 	char wads[4096];
+	char skyname[64];	//nettest P39: capture worldspawn skyname so we can fetch the skybox faces too
 	dh = (dheader_t *)file;
+
+	skyname[0] = 0;	//nettest P39
 
 	lump.fileofs = LittleLong(dh->lumps[LUMP_ENTITIES].fileofs);
 	lump.filelen = LittleLong(dh->lumps[LUMP_ENTITIES].filelen);
@@ -1094,8 +1097,8 @@ static qboolean CL_CheckHLBspWads(char *file)
 
 		if (!strcmp(key, "wad"))
 		{
-			s = wads;
-			while ((s = COM_ParseToken(s, ";")))
+			char *p = wads;	//nettest P39: parse the wad list via a LOCAL cursor so the outer 's' (entity lump) survives - we keep scanning for "skyname" below instead of returning here
+			while ((p = COM_ParseToken(p, ";")))
 			{
 				if (!strcmp(com_token, ";"))
 					continue;
@@ -1108,9 +1111,35 @@ static qboolean CL_CheckHLBspWads(char *file)
 					CL_CheckOrEnqueDownloadFile(va("textures/%s", w), NULL, DLLF_REQUIRED);
 				}
 			}
-			return false;
+		}
+		else if (!strcmp(key, "skyname") || !strcmp(key, "sky"))	//nettest P39: GoldSrc/Source "skyname" (or Q1 "sky")
+			Q_strncpyz(skyname, wads, sizeof(skyname));
+	}
+
+	//nettest P39: a client without the mounted game (CS/HL/Source) has the map + wads but NOT the skybox
+	//faces, so the sky renders black ("Sky ... missing texture: materials/skybox/<name>..."). Request them
+	//here so they download (into nettest_downloads, P38) before the sky shader builds. We can't know which
+	//convention/extension the server stored, so ask for the two common ones for all 6 faces: GoldSrc
+	//gfx/env/<name><side>.tga and Source materials/skybox/<name><side>.vtf. The server serves whatever
+	//exists (it must permit them - see the SV_AllowDownload bypass under sv_allow_download_anything, P37);
+	//the other requests harmlessly resolve as not-found. DLLF_REQUIRED so the faces arrive before first
+	//render, matching the wad handling above (a not-found just resolves and is skipped, it does not hang).
+	if (*skyname)
+	{
+		static const char *skyside[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
+		int f;
+		for (f = 0; f < 6; f++)
+		{
+			char gld[128], src[128];
+			Q_snprintfz(gld, sizeof(gld), "gfx/env/%s%s.tga", skyname, skyside[f]);
+			Q_snprintfz(src, sizeof(src), "materials/skybox/%s%s.vtf", skyname, skyside[f]);
+			if (!CL_CheckFile(gld))
+				CL_CheckOrEnqueDownloadFile(gld, NULL, DLLF_REQUIRED);
+			if (!CL_CheckFile(src))
+				CL_CheckOrEnqueDownloadFile(src, NULL, DLLF_REQUIRED);
 		}
 	}
+
 	return false;
 }
 
@@ -2061,7 +2090,7 @@ qboolean DL_Begun(qdownload_t *dl)
 	else if (!strncmp(dl->tempname,"skins/",6))
 		dl->fsroot = FS_PUBBASEGAMEONLY;	//shared between gamedirs, so only use the basegame.
 	else
-		dl->fsroot = FS_PUBGAMEONLY;//FS_GAMEONLY;	//other files are relative to the active gamedir.
+		dl->fsroot = FS_GAMEDOWNLOADS;	//nettest P38: other files go to $gamedir_downloads/ (was FS_PUBGAMEONLY) to keep the active gamedir pure. Mounted as a searchpath in FS_ReloadPackFilesFlags so they still load.
 
 	Q_snprintfz(dl->dclname, sizeof(dl->dclname), "%s.dcl", dl->tempname);
 

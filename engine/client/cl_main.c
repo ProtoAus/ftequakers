@@ -282,6 +282,7 @@ scenetris_t		*cl_stris;
 vecV_t			*fte_restrict cl_strisvertv;
 vec4_t			*fte_restrict cl_strisvertc;
 vec2_t			*fte_restrict cl_strisvertt;
+vec2_t			*fte_restrict cl_strisvertlm;	//nettest: r_decal_lightmap per-vertex lightmap st
 index_t			*fte_restrict cl_strisidx;
 unsigned int cl_numstrisidx;
 unsigned int cl_maxstrisidx;

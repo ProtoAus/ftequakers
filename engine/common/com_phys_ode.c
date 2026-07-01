@@ -409,7 +409,7 @@ dJointID        (ODE_API *dBodyGetJoint)(dBodyID, int index);
 //int             (ODE_API *dBodyIsKinematic)(dBodyID);
 void            (ODE_API *dBodyEnable)(dBodyID);
 void            (ODE_API *dBodyDisable)(dBodyID);
-//int             (ODE_API *dBodyIsEnabled)(dBodyID);
+int             (ODE_API *dBodyIsEnabled)(dBodyID);	//nettest Patch 67: resting-prop dCollide skip
 void            (ODE_API *dBodySetGravityMode)(dBodyID b, int mode);
 int             (ODE_API *dBodyGetGravityMode)(dBodyID b);
 //void            (*dBodySetMovedCallback)(dBodyID b, void(ODE_API *callback)(dBodyID));
@@ -879,7 +879,7 @@ static dllfunction_t odefuncs[] =
 //	{"dBodyIsKinematic",							(void **) &dBodyIsKinematic},
 	{(void **) &dBodyEnable,						"dBodyEnable"},
 	{(void **) &dBodyDisable,						"dBodyDisable"},
-//	{"dBodyIsEnabled",								(void **) &dBodyIsEnabled},
+	{(void **) &dBodyIsEnabled,						"dBodyIsEnabled"},	//nettest Patch 67
 	{(void **) &dBodySetGravityMode,				"dBodySetGravityMode"},
 	{(void **) &dBodyGetGravityMode,				"dBodyGetGravityMode"},
 //	{"dBodySetMovedCallback",						(void **) &dBodySetMovedCallback},
@@ -1222,6 +1222,9 @@ static cvar_t *physics_ode_autodisable_threshold_linear;
 static cvar_t *physics_ode_autodisable_threshold_angular;
 static cvar_t *physics_ode_autodisable_threshold_samples;
 static cvar_t *physics_ode_maxspeed;
+static cvar_t *physics_ode_trimesh_from_hull;	//nettest Patch 67: 0 render mesh / 1 low-poly hull (default) / 2 box
+static cvar_t *physics_ode_restingskip;			//nettest Patch 67: skip world-dCollide for auto-disabled (settled) bodies
+static cvar_t *physics_ode_use_decomp;			//nettest Patch 68: ODE body = decomposition soup (1) vs single hull (0, default). Read in world.c.
 
 struct odectx_s
 {
@@ -1307,6 +1310,9 @@ static qboolean World_ODE_Init(void)
 	physics_ode_autodisable_threshold_linear	= cvarfuncs->GetNVFDG("physics_ode_autodisable_threshold_linear",		"0.2",	0,	"body will be disabled if it's linear move below this value",		"ODE Physics Library");
 	physics_ode_autodisable_threshold_angular	= cvarfuncs->GetNVFDG("physics_ode_autodisable_threshold_angular",	"0.3",	0,	"body will be disabled if it's angular move below this value",		"ODE Physics Library");
 	physics_ode_autodisable_threshold_samples	= cvarfuncs->GetNVFDG("physics_ode_autodisable_threshold_samples",	"5",	0,	"average threshold with this number of samples",					"ODE Physics Library");
+	physics_ode_trimesh_from_hull				= cvarfuncs->GetNVFDG("physics_ode_trimesh_from_hull",				"1",	0,	"ODE rigid-body collision shape for SOLID_PHYSICS_TRIMESH props (read at body build / model load; reload to apply). 0=full render mesh (slow), 1=low-poly collision hull/decomposition (default; player+bullet collision stays exact via World_HullTrace), 2=box from model bounds.",	"ODE Physics Library");
+	physics_ode_restingskip						= cvarfuncs->GetNVFDG("physics_ode_restingskip",						"1",	0,	"skip the world-collision test for auto-disabled (settled) physics bodies so a scene of resting props costs ~0; a body still wakes when another body lands on it",	"ODE Physics Library");
+	physics_ode_use_decomp						= cvarfuncs->GetNVFDG("physics_ode_use_decomp",						"0",	0,	"when physics_ode_trimesh_from_hull is 1: 0=ODE body is the single convex hull (cheap, avoids trimesh-trimesh contact-hash overflow when props pile; default), 1=convex DECOMPOSITION soup (concave sim, much slower in piles). Player collision is unaffected. Reload to apply.",	"ODE Physics Library");
 
 #ifdef ODE_DYNAMIC
 	// Load the DLL
@@ -2184,6 +2190,17 @@ static void World_ODE_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 		switch(geomtype)
 		{
 		case GEOMTYPE_TRIMESH:
+			//nettest Patch 67: physics_ode_trimesh_from_hull 2 -> simulate this prop as a cheap box
+			//(the player + bullet collision stays the exact hull via World_HullTrace, unaffected).
+			//0/1 build a trimesh; the hull-vs-render-mesh choice is made engine-side in
+			//World_GenerateCollisionMesh (same cvar), so here we only special-case the box.
+			if (physics_ode_trimesh_from_hull && physics_ode_trimesh_from_hull->ival == 2)
+			{
+				Matrix4x4_RM_CreateTranslate(ed->rbe.offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2]);
+				ed->rbe.body.geom = (void *)dCreateBox(ctx->space, geomsize[0], geomsize[1], geomsize[2]);
+				dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
+				break;
+			}
 			Matrix4x4_Identity(ed->rbe.offsetmatrix);
 			ed->rbe.body.geom = NULL;
 			if (!model)
@@ -2626,6 +2643,22 @@ static void VARGS nearCallback (void *data, dGeomID o1, dGeomID o2)
 		ed1 = world->edicts;
 	if(!ed2 || ED_ISFREE(ed2))
 		ed2 = world->edicts;
+
+	//nettest Patch 67/68: skip the O(tris) trimesh dCollide for pairs that can't newly interact this
+	//step, so a scene of resting props costs ~0 (auto-disable stops integrate/solve but NOT this
+	//broadphase collide). Two cases: (a) a settled body vs the STATIC WORLD (worldspawn ONLY — a
+	//SOLID_BSP mover or any other body must still push+wake it); (b) Patch 68: BOTH bodies settled
+	//(auto-disabled) — two sleeping props can't wake each other, and an external awake body is a
+	//separate (awake,disabled) pair that still collides+wakes them. This is what frees a GRAVGUN PILE
+	//of settled props (O(n^2) prop-vs-prop -> ~0). (physics_ode_restingskip 0 = off)
+	//NOTE for future paths: a prop moved by DIRECT QC .velocity/setorigin on an auto-disabled body
+	//would stay disabled here and be wrongly skipped — always wake it (physics_addforce auto-enables;
+	//else physics_enable(prop,TRUE)) so it's ENABLED before the next step. All current push paths do.
+	if (physics_ode_restingskip && physics_ode_restingskip->ival &&
+		((b1 && !b2 && ed2 == world->edicts && !dBodyIsEnabled(b1)) ||
+		 (b2 && !b1 && ed1 == world->edicts && !dBodyIsEnabled(b2)) ||
+		 (b1 && b2 && !dBodyIsEnabled(b1) && !dBodyIsEnabled(b2))))
+		return;
 
 	//non-solid things can still interact with pushers, but not other stuff.
 	if (!ed1->v->solid && ed2->v->solid != SOLID_BSP)

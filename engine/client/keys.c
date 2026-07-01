@@ -451,6 +451,8 @@ int PaddedPrint (char *s, int x)
 }
 
 int con_commandmatch;
+static qboolean con_findmode;		//nettest: Ctrl+F search-in-scrollback is open
+static char con_findtext[64];		//nettest: the current find term
 void Key_UpdateCompletionDesc(void)
 {
 	const char *desc;
@@ -478,11 +480,12 @@ void Key_UpdateCompletionDesc(void)
 		desc = c->completions[con_commandmatch-1].desc;
 		var = Cvar_FindVar(cmd);
 		if (var)
-		{
+		{	//nettest: show the cvar's current value AND its default
+			const char *def = var->defaultstr ? var->defaultstr : var->string;
 			if (desc)
-				Con_Footerf(NULL, false, "%s %s\n%s", cmd, var->string, localtext(desc));
+				Con_Footerf(NULL, false, "%s %s (default %s)\n%s", cmd, var->string, def, localtext(desc));
 			else
-				Con_Footerf(NULL, false, "%s %s", cmd, var->string);
+				Con_Footerf(NULL, false, "%s %s (default %s)", cmd, var->string, def);
 		}
 		else
 		{
@@ -505,13 +508,15 @@ void CompleteCommand (qboolean force, int direction)
 	const char	*cmd, *s;
 	const char *desc;
 	cmd_completion_t *c;
+	qboolean had_slash;	//nettest: was a leading / actually typed?
 
 	s = key_lines[edit_line];
 	if (!*s)
 		return;
 	if (*s == ' ' || *s == '\t')
 		s++;
-	if (*s == '\\' || *s == '/')
+	had_slash = (*s == '\\' || *s == '/');	//nettest: don't let tab-complete add a / the user didn't type
+	if (had_slash)
 		s++;
 	if (*s == ' ' || *s == '\t')
 		s++;
@@ -540,19 +545,17 @@ void CompleteCommand (qboolean force, int direction)
 
 			//complete to that (maybe partial) cmd.
 			Key_ClearTyping();
-			if (cl_chatmode.ival)
+			if (cl_chatmode.ival && had_slash)	//nettest: only re-insert the / if it was typed
 				Key_ConsoleInsert("/");
 			Key_ConsoleInsert(cmd);
 			s = key_lines[edit_line];
 			if (*s == '/')
 				s++;
 
-			//if its the only match, add a space ready for arguments.
 			c = Cmd_Complete(s, true);
 			cmd = ((c->num >= 1)?(c->completions[0].repl?c->completions[0].repl:c->completions[0].text):NULL);
 			desc = ((c->num >= 1)?c->completions[0].desc:NULL);
-			if (c->num == 1)
-				Key_ConsoleInsert(" ");
+			//nettest: don't auto-add a trailing space after a sole-match completion - the "invisible spacer" blocked Left-arrow re-completion (type the space yourself for an argument value).
 
 			if (!con_commandmatch)
 				con_commandmatch = 1;
@@ -572,7 +575,7 @@ void CompleteCommand (qboolean force, int direction)
 		if (i != 1 || strcmp(key_lines[edit_line]+i, cmd))
 		{	//if successful, use that instead.
 			Key_ClearTyping();
-			if (cl_chatmode.ival)
+			if (cl_chatmode.ival && had_slash)	//nettest: only re-insert the / if it was typed
 				Key_ConsoleInsert("/");
 			Key_ConsoleInsert(cmd);
 
@@ -759,6 +762,23 @@ qboolean Key_GetConsoleSelectionBox(console_t *con, int *sx, int *sy, int *ex, i
 		*sy = con->mousecursor[1];
 		*ex = con->mousecursor[0];
 		*ey = con->mousecursor[1];
+		return true;
+	}
+	else if (con->buttonsdown == CB_SCROLLBAR)
+	{	//nettest: window scrollbar drag - ABSOLUTE: map mouse Y in the track to a scroll position (top=oldest, bottom=newest), so dragging the thumb DOWN scrolls DOWN
+		float trkh = con->wnd_h - 16;
+		float frac = (trkh > 0) ? (con->mousecursor[1] - 8) / trkh : 0;
+		int target, n;
+		if (frac < 0) frac = 0;
+		if (frac > 1) frac = 1;
+		target = (int)(frac * con->linecount);
+		con->displayscroll = 0;
+		con->display = con->oldest;
+		for (n = 0; con->display && n < target && con->display->newer; n++)
+			con->display = con->display->newer;
+		if (!con->display || target >= con->linecount-1)
+			con->display = con->current;
+		*sx = *sy = *ex = *ey = 0;
 		return true;
 	}
 	else if (con->buttonsdown == CB_SELECT || con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED)
@@ -1649,7 +1669,7 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 			return true;
 		}
 		else
-			unicode = ' ';
+			return true;	//nettest: Right arrow at end-of-line is a no-op (was inserting a space)
 	}
 
 	if (key == K_DEL || key == K_KP_DEL)
@@ -1735,6 +1755,17 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 	{	//clear line
 		(*line)[lineoffset] = 0;
 		*linepos = strlen(*line);
+		return true;
+	}
+	if ((unicode=='W' || unicode=='w' || unicode==23/*etb*/) && ctrl)
+	{	//nettest: Ctrl+W - delete the word before the caret (readline-style)
+		int end = *linepos;
+		while (*linepos > lineoffset && (*line)[*linepos-1] == ' ')	//eat whitespace left of caret
+			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+		while (*linepos > lineoffset && (*line)[*linepos-1] != ' ')	//then the word itself
+			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+		if (end > *linepos)
+			memmove((*line)+*linepos, (*line)+end, strlen((*line)+end)+1);	//close the gap
 		return true;
 	}
 
@@ -1837,6 +1868,65 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	if ((unicode >= '0' && unicode <= '9') || unicode == '.' || key < 0)
 		key = 0;
 
+	//nettest: Ctrl+F find-in-scrollback. Ctrl+F opens a "find:" prompt (shown in the footer) and, if
+	//already open, jumps to the next older match. While open: typing edits the term + jumps to the
+	//newest match, Enter/F3 = next older, Shift+Enter = newer, Backspace edits, Esc closes.
+	if ((unicode=='f' || unicode=='F' || unicode==6/*ack*/) && ctrl)
+	{	//nettest: Ctrl+F toggles the find bar on/off (once open: Enter/F3 = next older, Shift+Enter = newer, Esc also closes)
+		con_findmode = !con_findmode;
+		con->flags &= ~CONF_KEEPSELECTION;
+		con->selstartline = con->selendline = NULL;
+		if (con_findmode)
+		{
+			con_findtext[0] = 0;
+			Con_Footerf(con, false, "find: ");
+		}
+		else
+			Con_Footerf(con, false, "");
+		return true;
+	}
+	if (con_findmode)
+	{
+		if (rkey == K_ESCAPE)
+		{
+			con_findmode = false;
+			con->flags &= ~CONF_KEEPSELECTION;
+			con->selstartline = con->selendline = NULL;
+			Con_Footerf(con, false, "");
+			return true;
+		}
+		if (rkey == K_ENTER || rkey == K_KP_ENTER || rkey == K_F3)
+		{
+			Con_SearchText(con, con_findtext, shift?1:-1);
+			Con_Footerf(con, false, "find: %s", con_findtext);
+			return true;
+		}
+		if (rkey == K_BACKSPACE)
+		{
+			int fl = strlen(con_findtext);
+			if (fl) con_findtext[fl-1] = 0;
+			con->display = con->current;	//re-search from the bottom
+			Con_SearchText(con, con_findtext, -1);
+			Con_Footerf(con, false, "find: %s", con_findtext);
+			return true;
+		}
+		if (!ctrl && unicode >= 32 && unicode < 127)
+		{
+			int fl = strlen(con_findtext);
+			if (fl < (int)sizeof(con_findtext)-1) { con_findtext[fl] = unicode; con_findtext[fl+1] = 0; }
+			con->display = con->current;	//incremental: jump to the newest match of the new term
+			Con_SearchText(con, con_findtext, -1);
+			Con_Footerf(con, false, "find: %s", con_findtext);
+			return true;
+		}
+		//other keys (PgUp/wheel/Home etc.) fall through to normal handling
+	}
+	if ((unicode=='l' || unicode=='L' || unicode==12/*ff*/) && ctrl)
+	{	//nettest: Ctrl+L - clear the console scrollback
+		Con_ClearCon(con);
+		return true;
+	}
+
 	if (key == K_TAB && !(con->flags & CONF_ISWINDOW) && ctrl&&shift)
 	{	// cycle consoles with ctrl+shift+tab.
 		// (ctrl+tab forces tab completion,
@@ -1924,7 +2014,10 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 #endif
 				if (key == K_TOUCHSLIDE || con->mousecursor[0] > ((con->flags & CONF_ISWINDOW)?con->wnd_w-16:vid.width)-8)
 				{	//just scroll the console up/down
-					con->buttonsdown = CB_SCROLL;
+					if ((con->flags & CONF_ISWINDOW) && key != K_TOUCHSLIDE)
+						con->buttonsdown = CB_SCROLLBAR;	//nettest: window scrollbar = absolute thumb drag (drag down -> scroll down)
+					else
+						con->buttonsdown = CB_SCROLL;		//touch / non-window = relative content drag
 				}
 				else
 				{	//selecting text. woo.
@@ -2020,24 +2113,18 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		}
 	}
 
-	if ((key == K_HOME || key == K_KP_HOME) && ctrl)
+	if (key == K_HOME || key == K_KP_HOME)	//nettest: plain Home (not only Ctrl+Home) jumps to the TOP of the console scrollback
 	{
-		if (con->display != con->oldest)
-		{
-			con->displayscroll = 0;
-			con->display = con->oldest;
-			return true;
-		}
+		con->displayscroll = 0;
+		con->display = con->oldest;
+		return true;
 	}
 
-	if ((key == K_END || key == K_KP_END) && ctrl)
+	if (key == K_END || key == K_KP_END)	//nettest: plain End jumps to the BOTTOM (live)
 	{
-		if (con->display != con->current)
-		{
-			con->displayscroll = 0;
-			con->display = con->current;
-			return true;
-		}
+		con->displayscroll = 0;
+		con->display = con->current;
+		return true;
 	}
 
 #ifdef TEXTEDITOR
@@ -2132,6 +2219,16 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	
 	if (key == K_UPARROW || key == K_KP_UPARROW || key == K_GP_DPAD_UP)
 	{
+		if (con_commandmatch)	//nettest: a completion list is open -> Up navigates it instead of history
+		{
+			char *ctxt = key_lines[edit_line];
+			cmd_completion_t *cc = Cmd_Complete((*ctxt=='/'||*ctxt=='\\')?ctxt+1:ctxt, true);
+			if (cc && cc->num > 1)
+			{
+				CompleteCommand(false, -1);
+				return true;
+			}
+		}
 		do
 		{
 			history_line = (history_line - 1) & CON_EDIT_LINES_MASK;
@@ -2149,6 +2246,16 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 
 	if (key == K_DOWNARROW || key == K_KP_DOWNARROW || key == K_GP_DPAD_DOWN)
 	{
+		if (con_commandmatch)	//nettest: a completion list is open -> Down navigates it instead of history
+		{
+			char *ctxt = key_lines[edit_line];
+			cmd_completion_t *cc = Cmd_Complete((*ctxt=='/'||*ctxt=='\\')?ctxt+1:ctxt, true);
+			if (cc && cc->num > 1)
+			{
+				CompleteCommand(false, 1);
+				return true;
+			}
+		}
 		if (history_line == edit_line)
 		{
 			key_lines[edit_line][0] = '\0';
@@ -3005,6 +3112,20 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 		{
 			if (Key_Dest_Has(kdm_prompt) || (Key_Dest_Has(kdm_menu) && !Key_Dest_Has(kdm_console|kdm_cwindows)))
 				Menu_KeyEvent (false, devid, key, unicode);
+			return;
+		}
+
+		//nettest: when the Ctrl+F find bar is open, Esc closes IT (not the console). Must live here -
+		//Esc is consumed in Key_Event, before the per-console Key_Console dispatch ever runs.
+		if (con_findmode && Key_Dest_Has(kdm_console|kdm_cwindows))
+		{
+			con_findmode = false;
+			if (con_current)
+			{
+				con_current->flags &= ~CONF_KEEPSELECTION;
+				con_current->selstartline = con_current->selendline = NULL;
+				Con_Footerf(con_current, false, "");
+			}
 			return;
 		}
 

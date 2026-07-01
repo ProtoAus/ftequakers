@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 
-static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace, vec3_t origin, vec3_t angles);
+static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale);
 int Q1BSP_HullPointContents(hull_t *hull, vec3_t p);
 static	hull_t		box_hull;
 static	mclipnode_t	box_clipnodes[6];
@@ -182,7 +182,7 @@ int PM_ExtraBoxContents (vec3_t p)
 		{
 			if (pe->forcecontentsmask)
 			{
-				if (!PM_TransformedHullCheck(pm, PE_FRAMESTATE, p, p, pmove.player_mins, pmove.player_maxs, &tr, pe->origin, pe->angles))
+				if (!PM_TransformedHullCheck(pm, PE_FRAMESTATE, p, p, pmove.player_mins, pmove.player_maxs, &tr, pe->origin, pe->angles, pe->scale))
 					continue;
 				if (tr.startsolid || tr.inwater)
 					pc |= pe->forcecontentsmask;
@@ -209,11 +209,207 @@ LINE TESTING IN HULLS
 */
 
 /*returns if it actually did a trace*/
-static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t player_mins, vec3_t player_maxs, trace_t *trace, vec3_t origin, vec3_t angles)
+//nettest Patch 57: client mirror of the server's World_HullTrace (server/world.c). Clips
+//the swept player box against model->hullplanes (model-space outward normal .xyz + support
+//.w), rotated into world by the prop angles, scaled by the prop scale, origin-shifted; an
+//enter/leave-fraction loop with the SAME 0.03125 back-off. start/end/mins/maxs are WORLD
+//space. Keeps client prediction bit-identical to server authority so SOLID_PHYSICS_TRIMESH
+//props don't glitch through / rubber-band / FPS-dip.
+//nettest Patch 61: client mirror of the server's World_HullClipOne — clip the swept box
+//against ONE convex piece. Returns false on a clean miss. MUST match the server bit-for-bit.
+static qboolean PM_HullClipOne (int numplanes, vec4_t *planes, const vec3_t axis[3], const vec3_t origin, float scale,
+		const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs,
+		float *out_enterfrac, float *out_nearfrac, vec3_t out_hitnorm, qboolean *out_startout, qboolean *out_getout)
+{
+	vec3_t	nw, ofs, hitnorm;
+	float	enterfrac = -1, nearfrac = -1, leavefrac = 2, d1, d2, f, dist, dw;
+	qboolean startout = false, getout = false;
+	int		j;
+
+	VectorClear (hitnorm);
+	for (j = 0; j < numplanes; j++)
+	{
+		const float *pl = planes[j];
+		nw[0] = pl[0]*axis[0][0] + pl[1]*axis[1][0] + pl[2]*axis[2][0];
+		nw[1] = pl[0]*axis[0][1] + pl[1]*axis[1][1] + pl[2]*axis[2][1];
+		nw[2] = pl[0]*axis[0][2] + pl[1]*axis[1][2] + pl[2]*axis[2][2];
+		dw = pl[3] * scale + DotProduct (origin, nw);
+
+		ofs[0] = (nw[0] < 0) ? maxs[0] : mins[0];
+		ofs[1] = (nw[1] < 0) ? maxs[1] : mins[1];
+		ofs[2] = (nw[2] < 0) ? maxs[2] : mins[2];
+		dist = dw - DotProduct (ofs, nw);
+		d1 = DotProduct (start, nw) - dist;
+		d2 = DotProduct (end,   nw) - dist;
+		if (d1 > 0) startout = true;
+		if (d2 > 0) getout = true;
+		if (d1 > 0 && d2 >= d1) return false;	//in front of a plane: clean miss of this piece
+		if (d1 <= 0 && d2 <= 0) continue;		//behind it: inside this plane
+		if (d1 > d2)
+		{
+			f = d1 / (d1 - d2);
+			if (f > enterfrac)
+			{	//nettest Patch 63: raw enter (union compare) + normal-direction back-off (match server)
+				enterfrac = f;
+				nearfrac = (d1 - 0.03125) / (d1 - d2);
+				VectorCopy (nw, hitnorm);
+			}
+		}
+		else
+		{
+			f = d1 / (d1 - d2);
+			if (f < leavefrac) leavefrac = f;
+		}
+	}
+	*out_startout = startout;
+	*out_getout = getout;
+	if (enterfrac <= leavefrac)
+	{
+		*out_enterfrac = enterfrac;
+		*out_nearfrac  = nearfrac;
+	}
+	else
+	{
+		*out_enterfrac = -1;
+		*out_nearfrac  = -1;
+	}
+	VectorCopy (hitnorm, out_hitnorm);
+	return true;
+}
+
+//nettest Patch 57/61: client mirror of World_HullTrace. 'usedecomp' clips against the
+//per-submesh decomposition (mode 3); else the single hull (mode 2). Union: nearest entered
+//piece wins; startsolid if inside any piece. MUST stay bit-identical to the server or
+//SOLID_PHYSICS_TRIMESH props glitch through / rubber-band.
+static void PM_HullTrace (model_t *model, qboolean usedecomp, vec3_t origin, vec3_t angles, float scale, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace)
+{
+	vec3_t	axis[3], hitnorm, besthitnorm;
+	vec3_t	lmin, lmax;	//nettest Patch 65: swept player box in the prop LOCAL frame, for the per-piece cull
+	float	bestenter = 1, bestnear = 1;
+	qboolean anystart = false, anyall = false, hashit = false;
+	int		h, nh, k;
+
+	memset (trace, 0, sizeof(*trace));
+	trace->fraction = 1;
+	trace->truefraction = 1;
+	trace->inopen = true;	//nettest Patch 61: match the server World_HullTrace
+	VectorCopy (end, trace->endpos);
+
+	if (IS_NAN(end[0]) || IS_NAN(end[1]) || IS_NAN(end[2]))	//match the server's guard
+		return;
+
+	if (scale <= 0) scale = 1;
+	//nettest Patch 64: match the renderer + server World_HullTrace (AngleVectorsMesh = r_meshpitch
+	//on pitch, r_meshroll on roll) so the predicted hull matches the visible pitched/rolled model.
+	//SOLID_PHYSICS_TRIMESH is always alias; identical to raw AngleVectors at r_meshpitch 1.
+	AngleVectorsMesh (angles, axis[0], axis[1], axis[2]);
+	VectorNegate (axis[1], axis[1]);
+
+	//nettest Patch 65: swept player box in the prop LOCAL frame for the per-piece cull (mirror the
+	//server World_HullTrace EXACTLY — model_pt = axis.(world-origin)).
+	{
+		vec3_t ds, de, pcenter, phalf;
+		for (k = 0; k < 3; k++) { pcenter[k] = (maxs[k]+mins[k])*0.5f; phalf[k] = (maxs[k]-mins[k])*0.5f; }
+		VectorSubtract (start, origin, ds);
+		VectorSubtract (end,   origin, de);
+		for (k = 0; k < 3; k++)
+		{
+			float c  = DotProduct(axis[k], pcenter);
+			float lh = fabs(axis[k][0])*phalf[0] + fabs(axis[k][1])*phalf[1] + fabs(axis[k][2])*phalf[2];
+			float a  = DotProduct(ds, axis[k]) + c;
+			float b  = DotProduct(de, axis[k]) + c;
+			lmin[k] = (a < b ? a : b) - lh;
+			lmax[k] = (a > b ? a : b) + lh;
+		}
+	}
+
+	VectorClear (besthitnorm);
+	nh = usedecomp ? model->numhulls : 1;
+	for (h = 0; h < nh; h++)
+	{
+		int np; vec4_t *pl;
+		float enterfrac, nearfrac; qboolean startout, getout;
+		if (usedecomp)
+		{	//per-piece AABB cull (match the server bit-for-bit: piece AABB unscaled -> *scale).
+			const convhull_t *ch = &model->convhulls[h];
+			if (lmin[0] > ch->maxs[0]*scale || lmax[0] < ch->mins[0]*scale ||
+			    lmin[1] > ch->maxs[1]*scale || lmax[1] < ch->mins[1]*scale ||
+			    lmin[2] > ch->maxs[2]*scale || lmax[2] < ch->mins[2]*scale)
+				continue;
+			np = ch->numplanes; pl = ch->planes;
+		}
+		else           { np = model->numhullplanes;      pl = model->hullplanes; }
+		if (np < 4)
+			continue;
+		if (!PM_HullClipOne (np, pl, axis, origin, scale, start, end, mins, maxs, &enterfrac, &nearfrac, hitnorm, &startout, &getout))
+			continue;
+		if (!startout)
+		{
+			anystart = true;
+			if (!getout) anyall = true;
+		}
+		else if (enterfrac > -1)
+		{	//nearest entered piece (min raw enterfrac); use its normal-back-off nearfrac
+			if (enterfrac < bestenter)
+			{
+				bestenter = enterfrac;
+				bestnear  = nearfrac;
+				VectorCopy (hitnorm, besthitnorm);
+				hashit = true;
+			}
+		}
+	}
+
+	if (anystart)
+	{
+		trace->startsolid = true;
+		if (anyall)
+			trace->allsolid = true;
+		return;
+	}
+	if (hashit)
+	{	//nettest Patch 63: fraction = normal back-off (match server World_HullTrace exactly)
+		float efn = (bestnear  < 0) ? 0 : bestnear;
+		float eft = (bestenter < 0) ? 0 : bestenter;
+		trace->fraction = efn;
+		trace->truefraction = eft;
+		VectorInterpolate (start, efn, end, trace->endpos);
+		VectorCopy (besthitnorm, trace->plane.normal);
+		VectorNormalize (trace->plane.normal);
+		trace->plane.dist = DotProduct (trace->endpos, trace->plane.normal);
+		trace->contents = FTECONTENTS_BODY;
+	}
+}
+
+static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t player_mins, vec3_t player_maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale)
 {
 	vec3_t		start_l, end_l;
 	int i;
 	vec3_t		axis[3];
+
+	//nettest Patch 57: a SOLID_PHYSICS_TRIMESH prop with a convex hull uses the SAME hull
+	//trace the server does (sv_prop_collision 2, the default) so client prediction matches
+	//authority — no glitch-through, no per-triangle FPS dip, correct scale. The SERVERINFO
+	//cvar is synced to the client, so both sides pick the same mode.
+	if (model && (model->numhullplanes >= 4 || model->numhulls > 0) &&
+	    (player_mins[0]!=player_maxs[0] || player_mins[1]!=player_maxs[1] || player_mins[2]!=player_maxs[2]))
+	{
+		static cvar_t *pm_propcol;
+		int cm;
+		if (!pm_propcol)
+			pm_propcol = Cvar_Get("sv_prop_collision", "2", CVAR_SERVERINFO, NULL);
+		cm = pm_propcol ? pm_propcol->ival : 2;
+		if (cm == 3 && (model->numhulls > 0 || model->numhullplanes >= 4))
+		{	//convex decomposition (mode 3) — mirror the server's per-submesh union
+			PM_HullTrace (model, model->numhulls > 0, origin, angles, scale, start, end, player_mins, player_maxs, trace);
+			return true;	//endpos already world-space
+		}
+		if (cm == 2 && model->numhullplanes >= 4)
+		{	//single convex hull (mode 2)
+			PM_HullTrace (model, false, origin, angles, scale, start, end, player_mins, player_maxs, trace);
+			return true;	//endpos already world-space
+		}
+	}
 
 	// subtract origin offset
 	VectorSubtract (start, origin, start_l);
@@ -224,7 +420,14 @@ static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestat
 	{
 		if (angles[0] || angles[1] || angles[2])
 		{
-			AngleVectors (angles, axis[0], axis[1], axis[2]);
+			//nettest Patch 64: mirror the server World_TransformedTrace EXACTLY — an alias/IQM
+			//model's basis uses r_meshpitch/r_meshroll (AngleVectorsMesh), a brush uses raw. The
+			//client previously used raw here while the server applied meshpitch -> a mode-1
+			//(sv_prop_collision 1, per-triangle) prediction desync on a pitched prop. Now matched.
+			if (model->type == mod_alias)
+				AngleVectorsMesh (angles, axis[0], axis[1], axis[2]);
+			else
+				AngleVectors (angles, axis[0], axis[1], axis[2]);
 			VectorNegate(axis[1], axis[1]);
 			model->funcs.NativeTrace(model, 0, framestate, axis, start_l, end_l, player_mins, player_maxs, pmove.capsule, MASK_PLAYERSOLID, trace);
 		}
@@ -391,7 +594,7 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 			//if the trace ended up inside a portal region, then its not valid.
 			if (pe->model)
 			{
-				if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, pos, pos, vec3_origin, vec3_origin, &trace, pe->origin, pe->angles))
+				if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, pos, pos, vec3_origin, vec3_origin, &trace, pe->origin, pe->angles, pe->scale))
 					continue;
 				if (trace.allsolid)
 					return false;
@@ -408,7 +611,7 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 		{
 			if (pe->model)
 			{
-				if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, pos, pos, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles))
+				if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, pos, pos, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles, pe->scale))
 					continue;
 				if (trace.allsolid)
 				{
@@ -483,7 +686,7 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 			PM_HullForBox (mins, maxs);
 
 			// trace a line through the apropriate clipping hull
-			if (!PM_TransformedHullCheck (NULL, NULL, start, end, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles))
+			if (!PM_TransformedHullCheck (NULL, NULL, start, end, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles, pe->scale))
 				continue;
 		}
 		else if (pe->isportal)
@@ -492,13 +695,13 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 			PM_PortalCSG(pe, i, pmove.player_mins, pmove.player_maxs, start, end, &total);
 
 			// trace a line through the apropriate clipping hull
-			if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, start, end, vec3_origin, vec3_origin, &trace, pe->origin, pe->angles))
+			if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, start, end, vec3_origin, vec3_origin, &trace, pe->origin, pe->angles, pe->scale))
 				continue;
 		}
 		else
 		{
 			// trace a line through the apropriate clipping hull
-			if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, start, end, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles))
+			if (!PM_TransformedHullCheck (pe->model, PE_FRAMESTATE, start, end, pmove.player_mins, pmove.player_maxs, &trace, pe->origin, pe->angles, pe->scale))
 				continue;
 
 			if (trace.allsolid)

@@ -627,6 +627,18 @@ extern void (APIENTRY *qglDrawArrays) (GLenum mode, GLint first, GLsizei count);
 extern void (APIENTRY *qglDrawElements) (GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);
 extern void (APIENTRY *qglEnable) (GLenum cap);
 extern void (APIENTRY *qglFinish) (void);
+/* GL_ARB_sync (core GL 3.2) — sys_framepacing 4 waits on a per-frame fence for THIS
+ * frame's GPU work, instead of a full qglFinish.  Optional: NULL on older contexts,
+ * in which case gl_screen.c falls back to qglFinish. */
+#ifndef FTE_GLSYNC_DEFINED
+#define FTE_GLSYNC_DEFINED
+typedef struct __GLsync *GLsync;
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_SYNC_FLUSH_COMMANDS_BIT    0x00000001
+#endif
+extern GLsync (APIENTRY *qglFenceSync) (GLenum condition, GLbitfield flags);
+extern GLenum (APIENTRY *qglClientWaitSync) (GLsync sync, GLbitfield flags, unsigned long long timeout);
+extern void   (APIENTRY *qglDeleteSync) (GLsync sync);
 extern void (APIENTRY *qglFlush) (void);
 extern void (APIENTRY *qglFrontFace) (GLenum mode);
 extern void (APIENTRY *qglGenTextures) (GLsizei n, GLuint *textures);

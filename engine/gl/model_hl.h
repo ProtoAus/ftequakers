@@ -41,7 +41,7 @@
 
 #define HLSHADER_MASKED \
 		"{\n" \
-			"program defaultskin#MASK=0.5\n" \
+			"program defaultskin#MASK=0.5#MASKLT=1\n" \
 			"{\n" \
 				"map $diffuse\n" \
 				"rgbgen lightingdiffuse\n" \
