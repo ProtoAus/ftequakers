@@ -12,6 +12,10 @@ engine/shaders/makevulkanblob
 engine/shaders/vulkanblobs/
 plugins/cef/cef_linux64/
 plugins/cef/cef_windows64/
+plugins/release/
+plugins/*.tar.gz
+engine/fte_libav_*/
+__pycache__/
 
 #quakec build artifacts...
 quakec/csaddon/csaddon.dat

@@ -19,6 +19,17 @@ when you load those maps or would otherwise have hit those bugs.
   prop's actual triangle mesh instead of its bounding box, on both the
   server and the client-side predictor (alias/IQM/MD3 props that expose
   NativeTrace).
+- **Box3D physics plugin (`fteplug_box3d`)** — a second rigid-body backend
+  alongside ODE, using [Box3D](https://box2d.org/posts/2026/06/announcing-box3d/)
+  (Erin Catto's C fork of Box2D). It has a **multicore** internal solver,
+  handles **concave props** by attaching one convex hull per convex-decomposition
+  piece to a body (`.acd` sidecars or the runtime decomposition), and supports the
+  gravity-gun "black hole" force. Load it with `plug_load box3d` (it registers as
+  the physics engine like ODE). Tuned by `physics_box3d_*` cvars: `unitscale`
+  (Quake-units-per-metre, so Box3D's metre-tuned tolerances fit — this is required),
+  `threads` (worker count), `substeps`, `decomp` / `maxpieces` (concave detail vs
+  cost), `debug`. Builds against the prebuilt pure-C `libbox3d.a` — no extra runtime
+  DLLs. Skeletal ragdolls and prop `.touch` events are not yet wired (ODE covers those).
 - **Half-Life model aim poses** — bone controllers (`.bonecontrol1..5`)
   and the aim subblend are fed into the server framestate, so HL models
   drive their torso/arm aim poses correctly.
@@ -42,6 +53,12 @@ when you load those maps or would otherwise have hit those bugs.
   for legacy maps (vanilla GoldSrc / classic vis) so underwater geometry
   shows through transparent water at a distance. Leave `0` for maps
   compiled with modern transparent-water vis.
+- **Crepuscular god-ray fixes** — the sun-shaft (crepuscular) pass now
+  aligns correctly at `r_renderscale` > 1, excludes the first-person
+  viewmodel from the occluder mask (so the gun's silhouette no longer
+  smears rays from screen-centre), and depth-gates the additive composite
+  so near geometry — including the gun — cleanly blocks the rays instead of
+  letting them bleed over it.
 
 ### System & performance (Windows)
 
@@ -99,6 +116,10 @@ when you load those maps or would otherwise have hit those bugs.
 
 - **Rain that splashes** on water surfaces and on physics props, with optional
   ripple rings and a per-frame cap so heavy weather stays cheap.
+- **`func_fogvolume` fog volumes** — bounded, per-brush-entity fog for Q1
+  (idBSP) and Half-Life maps, which have no Q3 fog lump. A mapper places a
+  `func_fogvolume` brush and the render path applies its fog only inside that
+  volume.
 
 ### Smaller fixes & cleanup
 
@@ -130,34 +151,36 @@ Drop `clean` for a fast incremental rebuild after a small change (only the
 touched files recompile, then it relinks).
 
 ```sh
-# Plugins: cod + hl2 asset loaders AND the ode physics plugin. Build from THIS
-# tree so the ABI matches the exe. The `ode` entry and `-k` are both required —
-# see the notes below.
-make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="cod hl2 ode" CC=gcc CXX=g++ -k
+# Plugins: cod + hl2 asset loaders AND the physics plugins (ode + box3d). Build
+# from THIS tree so the ABI matches the exe. The physics entries and `-k` are
+# both required — see the notes below.
+make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="cod hl2 ode box3d" CC=gcc CXX=g++ -k
 ```
 
 Two gotchas this command works around:
 
-- **List `ode` explicitly.** It is commented out of the Makefile's default
-  plugin set, so `NATIVE_PLUGINS="cod hl2"` builds *no physics plugin* and phys
-  props silently break. (The old `PLUGINS_STATIC="ode"` token this README used to
-  show did nothing — it is not a real Makefile variable.)
+- **List the physics plugins explicitly.** `ode` and `box3d` are both commented
+  out of the Makefile's default plugin set, so `NATIVE_PLUGINS="cod hl2"` builds
+  *no physics plugin* and phys props silently break. (The old `PLUGINS_STATIC="ode"`
+  token this README used to show did nothing — it is not a real Makefile variable.)
 - **Keep `-k`.** Each plugin's last build step embeds a metadata zip via the
   `zip` tool, which isn't in the UCRT64 shell, so every plugin ends with
   `zip: command not found` / `Error 127`. That step is **harmless** — the DLL is
   fully linked *before* it, and the metazip is only plugin-manager cosmetics the
   engine never reads — but **without `-k` it aborts the make after the first
   plugin** (that is why `"cod hl2"` only ever produced `cod`). With `-k`, make
-  keeps going and builds all three despite the expected non-zero exit. ODE links
-  the prebuilt static `libode.a` under `engine/libs-x86_64-w64-mingw32/`.
+  keeps going and builds them all despite the expected non-zero exit. ODE links
+  the prebuilt static `libode.a` under `engine/libs-x86_64-w64-mingw32/`; box3d
+  links the prebuilt pure-C `libbox3d.a` (`BOX3D_BASE` in the Makefile) — no
+  libstdc++, no runtime DLLs.
 
-The DLLs land in **`engine/release/`**. Copy all three — `fteplug_cod_x64.dll`,
-`fteplug_hl2_x64.dll`, `fteplug_ode_x64.dll` — next to the executable, and
-**redeploy them every time you rebuild the engine**: a plugin built against an
-older exe fails to load with `Couldn't load plugin <name>`. The ODE plugin is
-statically linked, so it needs no `libwinpthread-1.dll` / `libgcc_s_seh-1.dll` /
-`libstdc++-6.dll` beside it — but a *non-static* ODE will fail to load once those
-runtime DLLs are gone. See the `documentation` folder for more.
+The DLLs land in **`engine/release/`**. Copy all four — `fteplug_cod_x64.dll`,
+`fteplug_hl2_x64.dll`, `fteplug_ode_x64.dll`, `fteplug_box3d_x64.dll` — next to the
+executable, and **redeploy them every time you rebuild the engine**: a plugin built
+against an older exe fails to load with `Couldn't load plugin <name>`. The ODE and
+box3d plugins are statically linked, so they need no `libwinpthread-1.dll` /
+`libgcc_s_seh-1.dll` / `libstdc++-6.dll` beside them — but a *non-static* build will
+fail to load once those runtime DLLs are gone. See the `documentation` folder for more.
 
 ## Based on FTEQW — credits & license
 

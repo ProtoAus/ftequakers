@@ -71,6 +71,7 @@ cvar_t r_shadow_shadowmapping_precision		= CVARD ("r_shadow_shadowmapping_precis
 static cvar_t r_shadow_shadowmapping_depthbits		= CVARD ("r_shadow_shadowmapping_depthbits", "16", "Shadowmap depth bits. 16, 24, or 32.");
 cvar_t r_sun_dir							= CVARD ("r_sun_dir", "0.2 0.5 0.8", "Specifies the direction that crepusular rays appear along");
 cvar_t r_sun_colour							= CVARFD ("r_sun_colour", "0 0 0", CVAR_ARCHIVE, "Specifies the colour of sunlight that appears in the form of crepuscular rays.");
+cvar_t r_sun_occludedepth					= CVARFD ("r_sun_occludedepth", "0.65", CVAR_ARCHIVE, "Crepuscular god rays are depth-occluded by geometry NEARER than this window-depth (0..1), so the near first-person viewmodel blocks the rays while the farther scene still glows. Raise if the gun still shows rays; lower if near walls stop glowing. 0 = rays over everything.");
 
 static cvar_t r_shadows_fakedistance		= CVARD("r_shadows_fakedistance", "1024", "The radius to use for fake shadows.");
 static cvar_t r_shadows_throwdirection		= CVARD("r_shadows_throwdirection", "0 0 -1", "The direction to throw the fake shadows in. Should ideally be opposite to r_sun_dir, but that just shows how fake these things actually are.");
@@ -3768,10 +3769,14 @@ void Sh_DrawCrepuscularLight(dlight_t *dl, float *colours)
 {
 #ifdef GLQUAKE
 	int oldfbo;
+	int cwidth, cheight;
+	static int crep_w = 0, crep_h = 0;
 	static mesh_t mesh;
 	image_t *oldsrccol;
 	static vecV_t xyz[4] =
-	{
+	{	//nettest: clip-space fullscreen quad.  The z is OVERWRITTEN each call (below) from
+		//r_sun_occludedepth so the composite's forced depth test occludes the rays on near
+		//geometry (the first-person viewmodel).  See ENGINE_PATCHES Patch 76.
 		{-1,-1,-1},
 		{-1,1,-1},
 		{1,1,-1},
@@ -3812,6 +3817,14 @@ void Sh_DrawCrepuscularLight(dlight_t *dl, float *colours)
 
 	//fixme: we should add an extra few pixels each side to the fbo, to avoid too much weirdness at screen edges.
 
+	//size the mask FBO to the SCENE render target (r_refdef.pxrect), NOT the window
+	//(vid.pixelwidth).  With r_renderscale>1 the scene is rendered larger, so a
+	//window-sized mask lands offset/scaled from the geometry ("god rays way off").
+	cwidth  = r_refdef.pxrect.width;
+	cheight = r_refdef.pxrect.height;
+	if (cwidth  < 1) cwidth  = 1;
+	if (cheight < 1) cheight = 1;
+
 	if (!crepuscular_texture_id)
 	{
 		/*FIXME: requires npot*/
@@ -3826,12 +3839,19 @@ void Sh_DrawCrepuscularLight(dlight_t *dl, float *colours)
 			);
 
 		crepuscular_texture_id = Image_CreateTexture("***crepusculartexture***", NULL, IF_LINEAR|IF_NOMIPMAP|IF_CLAMP|IF_NOGAMMA);
-		Image_Upload(crepuscular_texture_id, TF_RGBA32, NULL, NULL, vid.pixelwidth, vid.pixelheight, 1, IF_LINEAR|IF_NOMIPMAP|IF_CLAMP|IF_NOGAMMA);
+		crep_w = crep_h = 0;	//force the (re)upload below
+	}
+	//(re)size the mask texture to match the scene render target whenever it changes.
+	if (crep_w != cwidth || crep_h != cheight)
+	{
+		Image_Upload(crepuscular_texture_id, TF_RGBA32, NULL, NULL, cwidth, cheight, 1, IF_LINEAR|IF_NOMIPMAP|IF_CLAMP|IF_NOGAMMA);
+		crep_w = cwidth;
+		crep_h = cheight;
 	}
 
 	BE_Scissor(NULL);
 
-	oldfbo = GLBE_FBO_Update(&crepuscular_fbo, FBO_RB_DEPTH, &crepuscular_texture_id, 1, r_nulltex, vid.pixelwidth, vid.pixelheight, 0);
+	oldfbo = GLBE_FBO_Update(&crepuscular_fbo, FBO_RB_DEPTH, &crepuscular_texture_id, 1, r_nulltex, cwidth, cheight, 0);
 
 	GL_ForceDepthWritable();
 //	qglClearColor(0, 0, 0, 1);
@@ -3850,7 +3870,18 @@ void Sh_DrawCrepuscularLight(dlight_t *dl, float *colours)
 
 	BE_SelectMode(BEM_STANDARD);
 
-	BE_DrawMesh_Single(crepuscular_shader, &mesh, NULL, 0);
+	//nettest: depth-occlude the additive rays against the scene depth so NEAR geometry (the
+	//first-person viewmodel) blocks them (otherwise the additive composite glows over the
+	//already-drawn gun).  Set the quad's clip-z from r_sun_occludedepth (window depth 0..1 ->
+	//NDC -1..1) and FORCE the depth test on (BEF_FORCEDEPTHTEST) -- the blend-add composite
+	//otherwise leaves depth-test in an indeterminate state (was drawing over everything).  GL_LEQUAL
+	//then rejects the rays where the scene is NEARER than the boundary (the gun) and passes over the
+	//farther scene (glow preserved).  Depth-WRITE stays off (blend-add), so the buffer is untouched.
+	{
+		float zt = r_sun_occludedepth.value * 2.0 - 1.0;
+		xyz[0][2] = xyz[1][2] = xyz[2][2] = xyz[3][2] = zt;
+	}
+	BE_DrawMesh_Single(crepuscular_shader, &mesh, NULL, BEF_FORCEDEPTHTEST);
 
 	GLBE_FBO_Sources(oldsrccol, NULL);
 #endif
@@ -4411,6 +4442,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadow_shadowmapping_bias,		REALTIMELIGHTING);
 	Cvar_Register (&r_sun_dir,							REALTIMELIGHTING);
 	Cvar_Register (&r_sun_colour,						REALTIMELIGHTING);
+	Cvar_Register (&r_sun_occludedepth,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_fakedistance,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_focus,					REALTIMELIGHTING);

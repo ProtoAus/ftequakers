@@ -5433,6 +5433,7 @@ void ModBrush_LoadGLStuff(void *ctx, void *data, size_t a, size_t b)
 			if (!mod->fogs[a].shader->fog_dist)
 			{
 				//invalid fog shader, don't use.
+				Con_Printf("^1fog[%i] '%s' nulled by GL resolve (fog_dist=%g)\n", (int)a, mod->fogs[a].shadername, mod->fogs[a].shader->fog_dist);	//nettest diag (Patch 77)
 				mod->fogs[a].shader = NULL;
 				mod->fogs[a].numplanes = 0;
 			}
@@ -5582,6 +5583,171 @@ static void Mod_FindVisPatch(struct vispatch_s *patch, model_t *mod, size_t leaf
 				break;
 		}
 		ofs += 36+len;
+	}
+}
+
+//nettest: Q1 (idBSP/HL) FOG VOLUMES.  Q1 has no Q3 fog lump, but the fog RENDER path is not
+//fromgame-gated -- if a Q1 world model's mod->fogs[] is populated and surfaces get surf->fog, it
+//fogs exactly like Q3.  So we source bounded fog volumes from `func_fogvolume` BRUSH entities: at
+//load, read each entity's inline-submodel AABB from the entity lump, build a 6-plane fog volume +
+//a synthesized `fogparms` shader (mirrors CModQ3_LoadFogs / the crepuscular runtime-shader trick),
+//and tag world surfaces whose CENTRE is inside the volume.  Called from Mod_LoadBrushModel after
+//submodels/planes/entities/faces load, BEFORE the async ModBrush_LoadGLStuff (which resolves fog
+//shaders by name) and Mod_Batches_Generate (which copies surf->fog into batch->fog).
+//v1: axis-aligned volumes; per-surface centroid test; visibleplane is an approximation.
+#define Q1FOG_MAX 64
+static void Mod_LoadQ1FogVolumes (model_t *mod)
+{
+	const char *data;
+	mfog_t tmp[Q1FOG_MAX];
+	int count = 0;
+	int i;
+
+	if (!mod->entities_raw || !mod->submodels || mod->numsubmodels < 2)
+		return;
+
+	data = mod->entities_raw;
+	while (count < Q1FOG_MAX)
+	{
+		char classname[64] = "", modelkey[64] = "";
+		vec3_t colour = {0.5, 0.5, 0.6};
+		float dist = 256;
+
+		data = COM_Parse(data);
+		if (!data || com_token[0] != '{')
+			break;
+		while (1)
+		{
+			char key[64];
+			data = COM_Parse(data);
+			if (!data || com_token[0] == '}')
+				break;
+			Q_strncpyz(key, com_token, sizeof(key));
+			data = COM_Parse(data);
+			if (!data)
+				break;
+			if (!strcmp(key, "classname"))
+				Q_strncpyz(classname, com_token, sizeof(classname));
+			else if (!strcmp(key, "model"))
+				Q_strncpyz(modelkey, com_token, sizeof(modelkey));
+			else if (!strcmp(key, "rendercolor"))
+			{
+				colour[0] = colour[1] = colour[2] = 0;
+				sscanf(com_token, "%f %f %f", &colour[0], &colour[1], &colour[2]);
+				VectorScale(colour, 1.0/255, colour);	//0..255 -> 0..1
+			}
+			else if (!strcmp(key, "fogdist"))
+				dist = atof(com_token);
+		}
+		if (!data)
+			break;
+
+		if (!strcmp(classname, "func_fogvolume") && modelkey[0] == '*')
+		{
+			int sm = atoi(modelkey+1);
+			if (sm > 0 && sm < mod->numsubmodels)
+			{
+				mfog_t *f = &tmp[count];
+				float *mins = mod->submodels[sm].mins;
+				float *maxs = mod->submodels[sm].maxs;
+				mplane_t *pl = ZG_Malloc(&mod->memgroup, 6*sizeof(mplane_t));
+				char sname[64], body[256];
+				int p;
+
+				memset(f, 0, sizeof(*f));
+				f->planes = ZG_Malloc(&mod->memgroup, 6*sizeof(mplane_t*));
+				//6 inward-facing axis-aligned planes bounding the box
+				VectorSet(pl[0].normal,  1, 0, 0);  pl[0].dist =  mins[0];
+				VectorSet(pl[1].normal, -1, 0, 0);  pl[1].dist = -maxs[0];
+				VectorSet(pl[2].normal,  0, 1, 0);  pl[2].dist =  mins[1];
+				VectorSet(pl[3].normal,  0,-1, 0);  pl[3].dist = -maxs[1];
+				VectorSet(pl[4].normal,  0, 0, 1);  pl[4].dist =  mins[2];
+				VectorSet(pl[5].normal,  0, 0,-1);  pl[5].dist = -maxs[2];
+				for (p = 0; p < 6; p++)
+				{
+					CategorizePlane(&pl[p]);
+					f->planes[p] = &pl[p];
+				}
+				f->numplanes = 6;
+				//visibleplane NULL => tcgen_fog uses plain DEPTH-based fog (st[1]=max) on tagged
+				//surfaces, which is what "stand inside the fog" wants.  A box face here instead makes
+				//the fog fade by height (Q3 "seen through the front face from outside") -> near-invisible.
+				f->visibleplane = NULL;
+
+				//synthesize a fogparms shader (Shader_FogParms fills fog_color + fog_dist); the
+				//:5429 resolve loop re-R_RegisterShader_Lightmap()s it by name -> returns this cached
+				//shader (fog_dist set -> kept).
+				Q_snprintfz(sname, sizeof(sname), "fogvolume_%i", count);
+				Q_snprintfz(body, sizeof(body), "{\nfogparms (%f %f %f) %f\n}\n",
+							colour[0], colour[1], colour[2], dist);
+				Q_strncpyz(f->shadername, sname, sizeof(f->shadername));
+				f->shader = R_RegisterShader(sname, SUF_NONE, body);
+				count++;
+			}
+		}
+	}
+
+	if (!count)
+		return;
+
+	mod->fogs = ZG_Malloc(&mod->memgroup, count*sizeof(mfog_t));
+	memcpy(mod->fogs, tmp, count*sizeof(mfog_t));
+	mod->numfogs = count;
+
+	//tag world surfaces whose bbox OVERLAPS a fog volume (surf->fog; Q3 sets this from a lump).
+	//AABB-overlap (not centroid) so a surface bigger than the box still gets tagged -- otherwise a
+	//fog box smaller than the room's walls/floor tags nothing and you see no fog.
+	{
+		int tagged = 0;
+		for (i = 0; i < mod->numsurfaces; i++)
+		{
+			msurface_t *surf = mod->surfaces + i;
+			vec3_t smin, smax;
+			int j, n = surf->numedges, fi, k;
+
+			if (!n)
+				continue;
+			smin[0] = smin[1] = smin[2] =  1e30;
+			smax[0] = smax[1] = smax[2] = -1e30;
+			for (j = 0; j < n; j++)
+			{
+				int se = mod->surfedges[surf->firstedge + j];
+				mvertex_t *v = (se >= 0) ? &mod->vertexes[mod->edges[se].v[0]]
+										 : &mod->vertexes[mod->edges[-se].v[1]];
+				for (k = 0; k < 3; k++)
+				{
+					if (v->position[k] < smin[k]) smin[k] = v->position[k];
+					if (v->position[k] > smax[k]) smax[k] = v->position[k];
+				}
+			}
+
+			for (fi = 0; fi < mod->numfogs; fi++)
+			{
+				mfog_t *f = &mod->fogs[fi];
+				//reconstruct the volume AABB from its 6 axis planes (see plane order above)
+				vec3_t vmin, vmax;
+				vmin[0] =  f->planes[0]->dist; vmax[0] = -f->planes[1]->dist;
+				vmin[1] =  f->planes[2]->dist; vmax[1] = -f->planes[3]->dist;
+				vmin[2] =  f->planes[4]->dist; vmax[2] = -f->planes[5]->dist;
+				if (smin[0] <= vmax[0] && smax[0] >= vmin[0] &&
+					smin[1] <= vmax[1] && smax[1] >= vmin[1] &&
+					smin[2] <= vmax[2] && smax[2] >= vmin[2])
+				{
+					surf->fog = f;
+					tagged++;
+					break;
+				}
+			}
+		}
+
+		//diagnostics (only fires on maps that have func_fogvolume, so no spam elsewhere)
+		Con_Printf("Q1 fog volumes: %i loaded, %i/%i surfaces tagged\n", count, tagged, mod->numsurfaces);
+		for (i = 0; i < count; i++)
+			Con_Printf("  fog[%i] '%s' fog_dist=%g planes=%i shader=%s\n", i,
+				mod->fogs[i].shadername,
+				mod->fogs[i].shader ? mod->fogs[i].shader->fog_dist : -1.0,
+				mod->fogs[i].numplanes,
+				mod->fogs[i].shader ? "ok" : "NULL");
 	}
 }
 
@@ -5806,6 +5972,8 @@ static qboolean QDECL Mod_LoadBrushModel (model_t *mod, void *buffer, size_t fsi
 	}
 
 	TRACE(("LoadBrushModel %i\n", __LINE__));
+	Mod_LoadQ1FogVolumes(mod);	//nettest: bounded fog volumes from func_fogvolume brush entities (before ModBrush_LoadGLStuff/Mod_Batches consume surf->fog)
+
 	Q1BSP_LoadBrushes(mod, bspx, mod_base);
 	TRACE(("LoadBrushModel %i\n", __LINE__));
 

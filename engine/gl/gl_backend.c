@@ -4668,6 +4668,13 @@ static void DrawMeshes(void)
 		break;
 #endif
 	case BEM_CREPUSCULAR:
+		//nettest: a first-person viewmodel is drawn with the weapon-view matrix + RF_DEPTHHACK
+		//projection (see :4240), which does NOT map to its on-screen position in this world-space
+		//mask FBO -- so as a crepuscular occluder its silhouette lands at the model origin (screen
+		//centre) instead of the drawn gun.  A weapon overlay shouldn't cast sun shadow-rays anyway,
+		//so skip it here; it still occludes the composited rays via its own opaque pixels.
+		if (shaderstate.curentity && (shaderstate.curentity->flags & RF_DEPTHHACK))
+			break;
 		altshader = shaderstate.curshader->bemoverrides[bemoverride_crepuscular];
 		if (!altshader && (shaderstate.curshader->flags & SHADER_SKY))
 			altshader = shaderstate.crepskyshader;

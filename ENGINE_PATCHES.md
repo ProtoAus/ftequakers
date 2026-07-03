@@ -1583,3 +1583,147 @@ Make `adddecal()` decals sample the underlying world surface's LIGHTMAP per-pixe
 - **gl_backend.c `BE_GenTempMeshVBO` — copy the lightmap texcoords.** This temp-VBO builder (used by scenetris/poly batches) had a literal `//FIXME: lightmaps` and copied `texcoord` from `m->st_array` but NEVER `m->lmst_array[0]` → the VBO's `lmcoord[0]` stayed NULL/stale → `v_lmcoord` read garbage. Added the copy in BOTH the streamvbo path (at the FIXME) AND the client-memory path (after the texcoord line), each with an `else` that NULLs `lmcoord[0]` (clears the pre-existing stale-pointer hazard for all other temp meshes).
 - **gl_shader.c finalizer — don't lightmap-strip a program pass.** The vertex-light block at ~:5677 runs when `(r_vertexlight.value || !(s->usageflags & SUF_LIGHTMAP)) && !s->prog`. A runtime decal shader has no `SUF_LIGHTMAP` and no material-level `s->prog`, so with its `rgbgen vertex` (RGB_GEN_VERTEX_LIGHTING) the block COLLAPSED the 2-merged-pass program shader to 1 pass, DISCARDING the `$lightmap` pass (→ `s_t1` never bound = black). Added `&& !s->passes->prog` to the guard: a pass-level program that samples `$lightmap` uses it intentionally and must not be stripped/vertex-lit. (Also fixes the QC-side gotcha: `blendfunc`/`rgbgen`/`alphagen` must be written BEFORE the `map` lines in the program pass, else the blend lands on the last merged sub-pass while the backend applies the base pass's blend = opaque = the decal's masked magenta shows.)
 - STATUS: **WORKING, user-confirmed on infodecals** (`r_decal_renderer 0` + `r_decal_lightmap 1` over a lit/shadow edge). Default 0 = byte-identical to before. GLSL has `r_decal_lightmap_debug` 0-7 diag modes + tunable `r_decal_lightmap_scale`. Sprays + bullet holes = same mod-side pattern (engine parts are global), pending.
+
+## Patch 73 — Box3D physics backend plugin (`fteplug_box3d`, multicore prop physics)  *(APPLIED, NEW plugin — no existing engine .c changed)*
+
+A second rigid-body physics backend alongside ODE, using **Box3D** (Erin Catto's C fork of Box2D; MIT; `C:\msys64\home\Lex\box3d-main`). It fills the same `rigidbodyengine_t` (world.h) as ODE and registers as `"Box3D"`, so `plug_load box3d` puts the server's props on Box3D instead of ODE. **The mod loads it by default** (sv_main.qc: `sv_physics_engine` selects `box3d` (default) or `ode`).
+
+**This is a NEW plugin, not a patch to existing engine source** — nothing in the stock engine tree was edited, so an upstream pull needs no re-apply, only a plugin rebuild. Two new/edited files, both nettest-owned:
+- **NEW `engine/common/com_phys_box3d.c`** — a 1:1 structural mirror of `com_phys_ode.c` with Box3D calls. Scope (v1): dynamic props → a convex HULL from the collision verts (`b3CreateHull`, ≤255 out-verts; Box3D has no dynamic trimesh — same limit as ODE `use_decomp 0`); static world/brush → a baked triangle mesh (`b3CreateMesh`+`b3CreateMeshShape`); box/sphere/capsule/cylinder primitives; the gravity-gun black hole (`RBECMD_FORCE`→`b3Body_ApplyForce(...,wake=true)`). **STUBBED:** skeletal ragdolls (all `Rag*` fns return false / no-op) and prop `.touch` events (props still collide physically). Player+bullet collision is unaffected (FTE's own `World_HullTrace`, never the physics engine — same as ODE).
+- **`plugins/Makefile`** — a `box3d` target cloned from the ODE one (~:270), linking the prebuilt `libbox3d.a` (pure C — no libstdc++, no `-flto`).
+
+**Key implementation notes (the bug-prone spots):**
+- **Transform sync mirrors ODE exactly**, substituting a `b3Quat` for ODE's 3×4 rotation matrix: read = `forward/left/up = b3RotateVector(q, axisX/Y/Z)` then the SAME `offsetimatrix` fold + `VectorAngles`; write = `AngleVectorsFLU` + `offsetmatrix` fold then `b3MakeQuatFromMatrix({cx=forward,cy=left,cz=up})`. Verified: `b3MakeQuatFromMatrix` uses the standard column trace, so its columns are the images of X/Y/Z — identical to ODE's `dBodySetRotation` column convention (self-consistent inverse). The avelocity↔angular-velocity axis map (`[PITCH]=x,[YAW]=z,[ROLL]=y`) and the `r_meshpitch` alias-model sign are copied verbatim from ODE.
+- **Multicore = Box3D's OWN internal scheduler** (native Win32 `CreateThread`), NOT FTE's worker pool: `b3WorldDef.workerCount = physics_box3d_threads` with `enqueueTask/finishTask left NULL`. Chosen deliberately — FTE's `WaitForCompletion` routes completion through WG_MAIN and doesn't per-item-signal from WG_LOADER, which fits coarse asset loads but not Box3D's fine per-step fork/join. Box3D's scheduler is purpose-built for this and avoids the deadlock/stall risk.
+- **`ids are 8-byte value structs`** stored in the edict `void*` slots via `b3StoreBodyId`/`b3StoreShapeId` (0==null). Per-edict `b3CreateHull`/`b3CreateMesh` heap blobs live in `ed->rbe.geomdata` and are freed in `RemoveFromEntity` by their leading `uint64` version tag (`B3_MESH_VERSION` vs `B3_HULL_VERSION`) — the analogue of the ODE `dTriMeshData` leak fix (Patch 24). Density = `mass/volume` (Box3D derives inertia) so total mass ≈ QC `.mass`.
+- **`cvar_r_meshpitch`/`cvar_r_meshroll` must be DEFINED** by the physics backend (mathlib.c's `VectorAngles(...,meshpitch)` references them as `r_meshpitch`/`r_meshroll`); this file defines + registers them like ODE does.
+
+**cvars:** `physics_box3d_threads` (1=single, 2-8=multicore, live-resizable), `physics_box3d_substeps` (4), `physics_box3d_autodisable` (1=sleep settled), `physics_box3d_maxlinearspeed` (0=default), **`physics_box3d_unitscale` (40)**, `physics_box3d_debug` (0).
+
+**CRITICAL unit-scale fix (else props are INERT):** Box3D — like Box2D — is metre-tuned; a global `b3_lengthUnitsPerMeter` (default 1.0) scales EVERY collision tolerance (`B3_LINEAR_SLOP=0.005×units`, `B3_SPECULATIVE_DISTANCE=0.02×units`, world `contactSpeed=3×units` push-out, `sleepThreshold=0.05×units`, `maxLinearSpeed=400×units`). At Quake scale (~40 units/metre, 64-unit props) they're ~40× too tight → contacts seen only within 0.02 QU + overlap resolved at 3 QU/s → props jam and never fall (look frozen). ODE has no unit concept so it works with raw QU. Fix: `World_Box3D_Start` calls `b3SetLengthUnitsPerMeter(physics_box3d_unitscale)` (default 40) BEFORE `b3CreateWorld`, rescaling all tolerances to Quake size at once. Gravity (800 QU/s²) + mass (`density=mass/geometric-volume`) are scale-independent, unchanged.
+
+**Build/deploy:**
+```
+$env:MSYSTEM="UCRT64"
+& C:\msys64\usr\bin\bash.exe -lc "cd /home/Lex/fteqw/engine && make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS=box3d"
+# -> engine/release/fteplug_box3d_x64.dll ; copy to C:\FTEQuake\fteplug_box3d_x64.dll
+```
+The final `EMBEDMETA` (zip) step is optional package metadata; if `zip` is absent the DLL is already fully built + loadable. **Verify:** `plug_load box3d` prints "Box3D physics started (N worker threads…)"; a `prop_physics` crate rests stably on the floor (transform sync); `spawnflood <N>` (QC cheat) piles props; the gravity gun sucks them in; `physics_box3d_threads 1` vs `4` A/B under the flood shows the multicore win. Flip back with `sv_physics_engine ode`.
+
+---
+
+## Patch 74 — crepuscular god-rays: fix `r_renderscale`>1 misalignment  *(APPLIED, client-only / `m-rel`)*
+
+**File:** `engine/gl/gl_shadow.c` (`Sh_DrawCrepuscularLight`)  ·  search `r_renderscale>1`
+
+**Why:** the crepuscular ("god ray") mask FBO was created at `vid.pixelwidth ×
+vid.pixelheight` (the **window** size), but the 3D scene renders into
+`r_refdef.pxrect` (= `vid.fbpwidth/fbpheight * r_renderscale`). With
+`r_renderscale 2` the sky drawn into the mask lands in a mis-sized region and the
+2D ray blit maps it back over the full screen offset/scaled — the rays appear
+"view-locked", the visible skybox pieces are "way off" from the geometry, and the
+whole field slides as you turn. At `r_renderscale 1` window==scene so it's fine.
+
+**What it changes:** size the crepuscular texture + `GLBE_FBO_Update` to
+`r_refdef.pxrect.width/height` (the actual scene render target) instead of
+`vid.pixel*`, and re-`Image_Upload` when that size changes (static `crep_w/crep_h`
+guard — mirrors the reflection FBO resize at `gl_backend.c` ~5362). Render path
+otherwise unchanged.
+
+**Companion gamedir shader overrides** (NOT engine source — live in
+`C:\FTEQuake\nettest\glsl\`, so they survive upstream pulls automatically):
+- `crepuscular_sky.glsl` — the stock mask shader assumes a Quake1 two-layer
+  scrolling-cloud sky (`!!samps 2`), so a **skybox** renders garbage into the
+  mask. Override = flat bright mask (draw sky surfaces via `ftetransform` as
+  white); works for any sky type.
+- `crepuscular_rays.glsl` — stock **hardcodes** the ray consts, so its `!!cvarf`
+  did nothing. Override reads them as live cvars: `crep_weight` (intensity),
+  `crep_decay` (shaft length), `crep_density` (reach). Colour/brightness stay on
+  `r_sun_colour`; direction on `r_sun_dir`. Driven per-map by the QC `env_sun`
+  entity (`nettest/src/server/sv_env_sun.qc`).
+
+**Verify:** with `r_renderscale 2` + `r_sun_colour "1 .9 .7"` on a map with visible
+sky, the shafts anchor to the actual sky openings (no offset). Rays legitimately
+pivot around the sun's screen position as you turn — that's correct, not the bug.
+
+---
+
+## Patch 75 — crepuscular mask: exclude the first-person viewmodel occluder  *(APPLIED, client-only / `m-rel`)*
+
+**File:** `engine/gl/gl_backend.c` (`case BEM_CREPUSCULAR:` ~:4670)  ·  search `nettest: a first-person viewmodel`
+
+**Why:** the crepuscular mask FBO is filled by `GLBE_SubmitMeshes`, which **always** submits entity
+batches (`shaderstate.mbatches`, ~:5626) even though `Sh_DrawCrepuscularLight` passes only
+`cl.worldmodel->batches`. So the **viewmodel** is drawn into the mask as a black occluder — but a
+viewmodel uses the weapon-view matrix + `RF_DEPTHHACK` projection (the swap at ~:4240), which does
+NOT map to its on-screen position in the world-space mask, so its shadow-silhouette lands at the
+model origin (screen centre) instead of the drawn gun. World entities (players/props) use normal
+transforms and are placed correctly — only depth-hacked/weapon overlays are wrong.
+
+**What it changes:** at the top of `case BEM_CREPUSCULAR:`, skip the surface when
+`shaderstate.curentity->flags & RF_DEPTHHACK` (`break;`). The viewmodel no longer casts a
+mispositioned sun-shadow gap; it still occludes the composited rays via its own opaque pixels at the
+correct position. Depends on Patch 74 (crepuscular renderscale fix).
+
+**Verify:** `r_sun_colour "1 .9 .7"` on a sky map — the gun blocks the rays where the gun actually
+is; no dark ray-gap floats at screen centre; players/props still cast correctly-placed ray-shadows.
+
+---
+
+## Patch 76 — crepuscular: gun cleanly blocks the rays (depth-gate the composite)  *(APPLIED, client-only / `m-rel`)*
+
+**File:** `engine/gl/gl_shadow.c` (`Sh_DrawCrepuscularLight`, the static fullscreen-quad `xyz[4]`)  ·  search `nettest: clip-space fullscreen quad`
+
+**Why:** the first-person viewmodel is drawn in the OPAQUE pass (`gl_backend.c:6510`) BEFORE the
+crepuscular composite (`Sh_DrawLights` :6519).  The composite is an ADDITIVE fullscreen quad, so the
+rays add over the already-drawn gun -> the gun glows instead of blocking them.  (Patch 75 keeps the
+gun out of the MASK so it casts no shadow-streaks, so it otherwise doesn't interact at all.)
+
+**What it changes (two parts):** (1) the composite was NOT actually honouring depth test in that
+draw state (blend-add left it indeterminate — it drew over everything), so it's now drawn with
+**`BEF_FORCEDEPTHTEST`** so `GL_LEQUAL` really runs against the main scene depth (depth-write stays
+off — buffer untouched, gun keeps its lighting since the composite just doesn't ADD there).  (2) the
+fullscreen quad's clip-z is set each frame from a new archived cvar **`r_sun_occludedepth`** (default
+0.2, window depth 0..1 → NDC), so the additive rays are rejected where the scene is NEARER than that
+boundary (the near depth-hacked viewmodel) and pass over the farther scene.  Cvar (not a hardcoded
+`-0.32`) because the exact viewmodel window-depth is uncertain — tune it live.  Builds on 74/75.
+
+**Tuning `r_sun_occludedepth`:** raise if the gun still shows rays; lower if near walls stop glowing;
+0 = rays over everything (old behaviour).  Caveat: viewmodel + world share the depth range, so
+geometry nearer than the boundary also stops glowing — keep it as low as covers the gun.
+
+**Verify:** `r_sun_colour "1 .9 .7"` on a sky map — the gun no longer glows; it blocks the rays at its
+on-screen position; walls/floor/sky-openings still glow.  `r_sun_occludedepth` tunes the boundary.
+
+---
+
+## Patch 77 — Q1 (idBSP/HL) fog VOLUMES from `func_fogvolume` brush entities  *(APPLIED, client-render / `m-rel`)*
+
+**File:** `engine/gl/gl_model.c` (`Mod_LoadQ1FogVolumes`, called in `Mod_LoadBrushModel` before
+`Q1BSP_LoadBrushes`)  ·  search `nettest: Q1 (idBSP/HL) FOG VOLUMES`
+**Also:** `gl/gl_shadow.c` `r_sun_occludedepth` default `0.2`→`0.65` (god-ray gun-occlusion, user-tuned).
+
+**Why:** Q1 BSP has no Q3 fog lump, so `fogparms` fog brushes can't be authored on Q1 maps. But the
+fog RENDER path is NOT `fromgame`-gated (`gl_backend.c:4930` `if(batch->fog && batch->fog->shader)`;
+`surf->fog`→`batch->fog` at `gl_model.c:3102`; the fog-shader-resolve loop at `:5429`) — populate a
+Q1 world model's `mod->fogs[]` + `surf->fog` and it fogs exactly like Q3.
+
+**What it adds:** at Q1 map load (after submodels/planes/entities/faces, before the async
+`ModBrush_LoadGLStuff` + `Mod_Batches_Generate`), scan `mod->entities_raw` for
+`classname "func_fogvolume"` (COM_Parse loop like `R_ImportRTLights`), read `model "*N"` →
+`mod->submodels[N].mins/maxs`, build a 6-plane axis-aligned `mfog_t` (mirrors `CModQ3_LoadFogs`) with
+a runtime-synthesized `fogparms` shader (`R_RegisterShader(name,SUF_NONE,"{ fogparms (r g b) dist }")`
+→ `Shader_FogParms` fills fog_color/fog_dist), and tag world surfaces whose CENTROID is inside the
+volume (`surf->fog`). Entities inside a volume fog via the existing `Mod_FogForOrigin`
+(`gl_alias.c:1863`, `#if Q3BSPS`). Keys: `rendercolor` (0-255) + `fogdist` (units).
+
+**QC/FGD (mod, not engine):** `func_fogvolume` spawn stub (`nettest/src/server/sv_fogvolume.qc`,
+`remove(self)` — client reads the BSP lump directly; server has no role) + FGD `@SolidClass`.
+
+**v1 caveats:** AABB volumes only (not arbitrary brush shape); per-surface centroid test (coarse for
+one huge floor spanning in/out); `visibleplane` is an approximation. Cap 64 volumes/map. Risk point:
+the synthesized fog shader must survive the name-cache to the async `:5429` resolve loop or the fog
+gets nulled (check `developer 1`).
+
+**Verify:** map with a `func_fogvolume` brush (`rendercolor "160 170 190"`, `fogdist 384`) over a
+room → surfaces + players inside fog; outside clear.

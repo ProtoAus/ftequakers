@@ -268,6 +268,19 @@ $(PLUG_PREFIX)ode$(PLUG_NATIVE_EXT): $(ODE_FILES)
 ######################################
 
 ######################################
+#nettest: Box3D physics backend (Erin Catto's C fork of Box2D).  Parallels the ODE
+#target above but links a prebuilt static libbox3d.a (pure C - no libstdc++).  Build with:
+#   make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS=box3d
+BOX3D_BASE=/c/msys64/home/Lex/box3d-main
+BOX3D_LIB=$(BOX3D_BASE)/build_manual/libbox3d.a
+BOX3D_FILES=../engine/common/com_phys_box3d.c ../engine/common/mathlib.c plugin.c $(BOX3D_LIB)
+$(PLUG_PREFIX)box3d$(PLUG_NATIVE_EXT): $(BOX3D_FILES)
+	$(CC) -s $(BASE_CFLAGS) $(CFLAGS) -Os -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -I$(BOX3D_BASE)/include $(BOX3D_FILES) $(PLUG_DEFFILE) $(PLUG_LDFLAGS) -static -static-libgcc -lpthread
+	$(call EMBEDMETA,box3d,$@,Box3D Physics,Provides Box3D Rigid Body Physics (dynamic props + static world + multicore).)
+#NATIVE_PLUGINS+=box3d
+######################################
+
+######################################
 ifneq ($(CMAKERULES),)
 BULLET_CFLAGS+=-static-libstdc++
 PLUG_CMAKE+= -DCMAKE_TOOLCHAIN_FILE="$(CMAKERULES)" 
