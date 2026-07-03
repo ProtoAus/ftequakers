@@ -5681,7 +5681,12 @@ static void Mod_LoadQ1FogVolumes (model_t *mod)
 				Q_snprintfz(body, sizeof(body), "{\nfogparms (%f %f %f) %f\n}\n",
 							colour[0], colour[1], colour[2], dist);
 				Q_strncpyz(f->shadername, sname, sizeof(f->shadername));
+#ifndef SERVERONLY
+				//R_RegisterShader is renderer-only; gl_model.c compiles into the headless dedicated
+				//server too, which has no renderer.  Fog is purely visual, so on the server leave
+				//f->shader NULL (memset above) - the fog data is just unused there.
 				f->shader = R_RegisterShader(sname, SUF_NONE, body);
+#endif
 				count++;
 			}
 		}
