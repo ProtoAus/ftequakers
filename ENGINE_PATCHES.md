@@ -2768,5 +2768,15 @@ baker produced inflated hulls and lost Patch 63's bevels. Both loaders honour Pa
 `AngleVectorsMesh` (cl_ents.c), which is format-agnostic, so a hull in model space rotates exactly as
 the model draws — no pitch compensation needed, despite `mesh_noscale` existing for the RENDER path.
 
-**To use:** `sv_physprop_weapon_geom 1` (default 0) now actually gives dropped weapons per-weapon
+**STATUS: DISABLED — this crashed the game on LAUNCH (STATUS_HEAP_CORRUPTION 0xC0000374).**
+Bisected to the GoldSrc half; the Q1 half is disabled with it (never proven innocent). The collection
+side looks correct (Patch 60 bind transform; hullvertcount bounds-guarded; Mod_AddHullBevels enforces
+HULL_MAXBEVELS), so the overrun is inside what Mod_BuildConvHull does with .mdl input —
+Mod_BuildHullPlanes decimation is the next thing to read. Two lesser bugs found and FIXED on the way:
+Mod_SkipCollisionHulls dereferenced cvar ->string, which is NULL until Cvar_Register runs (the CVAR
+macros init it to NULL and hold the default elsewhere) — harmless while only the late-loading IQM path
+called it, instant crash once the Quake loader did. Re-enable only with a heap-checked build
+(gflags/ASAN) and a real repro. The design and research below stand.
+
+**When re-enabled:** `sv_physprop_weapon_geom 1` (default 0) gives dropped weapons per-weapon
 convex collision. `r_showhull 1` to inspect.

@@ -383,7 +383,14 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		//bounds, so we can build a real collision hull from them (see the hull build after the loop).
 		vecV_t *hullverts = NULL;
 		int hullvertcount = 0, hullvertmax = 0;
-		qboolean wanthull = !Mod_SkipCollisionHulls(mod);
+		//*** DISABLED — this CRASHED THE GAME ON LAUNCH (STATUS_HEAP_CORRUPTION 0xC0000374). ***
+		//Bisected to this half specifically. The collected verts themselves look right (the bind-pose
+		//transform is Patch 60's own, already shipping for bounds) and hullvertcount is bounds-guarded
+		//against hullvertmax, so the overrun is inside what Mod_BuildConvHull does with this input,
+		//not in the collection. See the note on the disabled Q1 half in com_mesh.c.
+		//Left in place rather than deleted: the research is sound and worth finishing (75 dropped
+		//weapons currently share ONE hardcoded 12x5x3 box). Finish it with a heap-checked build.
+		qboolean wanthull = false && !Mod_SkipCollisionHulls(mod);
 
 		if (wanthull)
 		{	//count first: numverts is per-submodel, so total up the bodypart/submodel tree.

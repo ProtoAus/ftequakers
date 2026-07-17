@@ -3319,7 +3319,14 @@ qboolean Mod_SkipCollisionHulls(model_t *mod)
 	const char *list, *sep;
 	size_t seglen;
 
-	if (!*mod_prop_hull_exclude.string)
+	//NULL-CHECK ->string, do not just deref it. A cvar_t declared with the CVAR* macros is
+	//{name, NULL, NULL, flags, ...} -- ->string stays NULL until Cvar_Register runs (the default
+	//value is held in a separate field until then, cvar.h CVARAFCD). So ->string is NULL for any
+	//model loaded before Mod_Init registers this, and `!*var.string` faults on it.
+	//This crashed the game on launch the moment Patch 103 called this from Mod_LoadQ1Model: Quake
+	//.mdl load during startup, long before the IQM path (the only Patch 102 caller) ever ran.
+	//Treat "not registered yet" as "no exclusions" -- the same as an empty list.
+	if (!mod_prop_hull_exclude.string || !*mod_prop_hull_exclude.string)
 		return false;
 	for (list = mod_prop_hull_exclude.string; *list; )
 	{
@@ -5841,7 +5848,17 @@ static qboolean QDECL Mod_LoadQ1Model (model_t *mod, void *buffer, size_t fsize)
 	//above deliberately unions EVERY pose (bounds must contain the whole animation), but a hull over
 	//every pose would be the swept volume of the animation -- far too fat for collision. Static props
 	//and w_ models have one pose anyway, so the two agree there.
-	if (galias->numanimations && galias->numverts >= 4 && !Mod_SkipCollisionHulls(mod))
+	//*** DISABLED — Patch 103 CRASHED THE GAME ON LAUNCH (STATUS_HEAP_CORRUPTION 0xC0000374). ***
+	//Bisecting showed the GoldSrc half (gl_hlmdl.c) corrupts the heap on its own; this Q1 half was
+	//NOT proven guilty, but it is disabled with it because it was never proven innocent either -
+	//shipping half a bisect is how you get a second crash. Both halves are inert until the overrun is
+	//found: my hullverts buffer is bounds-guarded and Mod_AddHullBevels enforces HULL_MAXBEVELS, so
+	//the fault is somewhere else in what Mod_BuildConvHull does with .mdl input (Mod_BuildHullPlanes'
+	//decimation path is the next thing to read - it is the one part sized off the vert count).
+	//The design is still right and the research stands (see ENGINE_PATCHES.md Patch 103): .mdl verts
+	//ARE available and DO give every dropped weapon its own hull instead of one shared 12x5x3 box.
+	//Re-enable only with a real repro + a heap-checked run (gflags/ASAN), not by eyeballing it again.
+	if (0 && galias->numanimations && galias->numverts >= 4 && !Mod_SkipCollisionHulls(mod))
 	{
 		galiasanimation_t *a = galias->ofsanimations;
 		if (a->numposes && a->poseofs[0].ofsverts)
