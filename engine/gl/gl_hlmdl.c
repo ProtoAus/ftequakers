@@ -379,6 +379,23 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		hlmdl_bodypart_t *bodyparts = (hlmdl_bodypart_t *)((qbyte *)header + header->bodypartindex);
 		matrix3x4 *bonemat = NULL;
 		int bp, sm, vi, bi, added = 0;
+		//nettest Patch 103: collect the SAME bind-pose verts this block already computes for the
+		//bounds, so we can build a real collision hull from them (see the hull build after the loop).
+		vecV_t *hullverts = NULL;
+		int hullvertcount = 0, hullvertmax = 0;
+		qboolean wanthull = !Mod_SkipCollisionHulls(mod);
+
+		if (wanthull)
+		{	//count first: numverts is per-submodel, so total up the bodypart/submodel tree.
+			for (bp = 0; bp < header->numbodyparts; bp++)
+			{
+				hlmdl_submodel_t *subs = (hlmdl_submodel_t *)((qbyte *)header + bodyparts[bp].modelindex);
+				for (sm = 0; sm < bodyparts[bp].nummodels; sm++)
+					hullvertmax += subs[sm].numverts;
+			}
+			if (hullvertmax > 0)
+				hullverts = BZ_Malloc(sizeof(vecV_t) * hullvertmax);
+		}
 
 		if (header->numbones > 0 && header->numbones <= MAX_BONES)
 		{
@@ -417,12 +434,51 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 					else
 						VectorCopy(verts[vi], world);
 					AddPointToBounds(world, mod->mins, mod->maxs);
+					//nettest Patch 103: keep it. `world` is the bind-posed, MODEL-SPACE vertex --
+					//exactly the space the renderer draws in (gl_hlmdl.c's draw path transforms the
+					//bone-local xyz_array by the same bones), and exactly the space the hull trace
+					//rotates in. The raw studio verts are BONE-LOCAL: on w_awp the single bone's bind
+					//pose rotates the barrel axis Z->X and shifts the centroid 13.5qu, so a hull from
+					//raw verts would be a rifle standing vertically, offset from its own model.
+					if (hullverts && hullvertcount < hullvertmax)
+						VectorCopy(world, hullverts[hullvertcount++]);
 					added++;
 				}
 			}
 		}
 		if (bonemat)
 			BZ_Free(bonemat);
+
+		//nettest Patch 103: build the collision hull for GoldSrc .mdl.
+		//
+		//The IQM loader has done this since Patch 56 (com_mesh.c, Mod_LoadIQMFile); gl_hlmdl.c never
+		//did, so EVERY .mdl had numhullplanes==0 and numhulls==0. That silently disabled the whole
+		//hull path for them: the gate in pmovetst.c / world.c is
+		//    solid == SOLID_PHYSICS_TRIMESH && (numhullplanes >= 4 || numhulls > 0)
+		//so a .mdl asked to collide as a trimesh just fell back to its bbox. That is why all 75
+		//dropped weapon world models shared one hardcoded 12x5x3 box (sv_weapons.qc) -- a knife and
+		//an AWP had identical collision -- and why sv_physprop_weapon_geom 1 appeared to do nothing.
+		//
+		//No asset work is needed for this: the verts were always here, the loader just never used
+		//them. No .acd sidecar either -- a sidecar only describes a multi-piece DECOMPOSITION, and
+		//this is the single convex hull (mod->hullplanes), which is what sv_prop_collision 2 traces.
+		//
+		//Mins/maxs are already correct and in the same space at this point (Patch 60 just computed
+		//them from these very verts), so they can be passed straight through. Cap 256 matches the
+		//IQM caller.
+		if (hullverts)
+		{
+			if (hullvertcount >= 4)
+			{
+				convhull_t single;
+				Mod_BuildConvHull(mod, &single, hullverts, hullvertcount, mod->mins, mod->maxs, 256);
+				mod->numhullplanes = single.numplanes;
+				mod->hullplanes    = single.planes;
+				mod->numhulltris   = single.numtris;
+				mod->hulltris      = single.tris;
+			}
+			BZ_Free(hullverts);
+		}
 
 		if (!added)
 		{	//no mesh verts -> use the header's ideal-hull (unknown3[1/2]) or clip (3/4) bbox,

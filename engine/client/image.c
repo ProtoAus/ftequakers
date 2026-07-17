@@ -7730,6 +7730,63 @@ qbyte *ReadRawImageFile(qbyte *buf, int len, int *width, int *height, uploadfmt_
 	}
 #endif
 
+#ifdef IMAGEFMT_DDS
+	//nettest: let ReadRawImageFile (hence r_readimage / PF_CL_readimage, which passes
+	//force_rgba8) read DDS.  Image_ReadDDSFile decodes to a still-COMPRESSED BCn mip set
+	//(the GPU normally decompresses); with force_rgba8 we run the SAME CPU decode the
+	//imageloader-plugin branch below uses (Image_ChangeFormat -> RGBA8; BC1-BC7 are
+	//compiled in via DECOMPRESS_*).  2D only; extrafree == buf (the caller's file) so we
+	//never free it here.
+	if (len > 4 && buf[0]=='D'&&buf[1]=='D'&&buf[2]=='S'&&buf[3]==' ')
+	{
+		struct pendingtextureinfo *mips = Image_ReadDDSFile(0, fname, buf, len);
+		if (mips)
+		{
+			data = NULL;
+			if (mips->extrafree == buf)
+				mips->extrafree = NULL;	//input file belongs to the caller
+			while (mips->mipcount > 1)
+				if (mips->mip[--mips->mipcount].needfree)
+					BZ_Free(mips->mip[mips->mipcount].data);
+			if (mips->mipcount > 0 && mips->type == PTI_2D)
+			{
+				if (force_rgba8)
+				{
+					qboolean rgbx8only[PTI_MAX] = {0};
+					rgbx8only[PTI_RGBX8] = true;
+					rgbx8only[PTI_RGBA8] = true;
+					Image_ChangeFormat(mips, rgbx8only, mips->encoding, fname);
+				}
+				if (mips->mip[0].needfree)
+				{
+					data = mips->mip[0].data;
+					mips->mip[0].data = NULL;
+					mips->mip[0].needfree = false;
+				}
+				else
+				{
+					data = BZ_Malloc(mips->mip[0].datasize);
+					memcpy(data, mips->mip[0].data, mips->mip[0].datasize);
+				}
+				*width = mips->mip[0].width;
+				*height = mips->mip[0].height;
+				*format = mips->encoding;
+			}
+			for (i = 0; i < mips->mipcount; i++)
+				if (mips->mip[i].needfree)
+					BZ_Free(mips->mip[i].data);
+			if (mips->extrafree)
+				BZ_Free(mips->extrafree);
+			BZ_Free(mips);
+			if (data)
+			{
+				TRACE(("dbg: ReadRawImageFile: dds\n"));
+				return data;
+			}
+		}
+	}
+#endif
+
 #ifdef IMAGEFMT_PVR
 	if ((data = ReadPVRFile(buf, len, width, height, format, force_rgba8)))
 		return data;

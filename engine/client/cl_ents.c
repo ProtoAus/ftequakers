@@ -3326,15 +3326,20 @@ void CLQ1_AddVisibleHulls(void)
 	if (!w || !w->progs)
 		return;
 
+	//nettest Patch 101: OPAQUE lines (was `sort additive` + `blendfunc add`).  A hull wireframe is
+	//dense, self-overlapping thin geometry, so every crossing line paid a blend — pure overdraw on a
+	//debug view whose whole point is to be cheap enough to leave on.  Opaque lines also READ better:
+	//additive blending washed overlapping edges toward white and hid the per-piece decomposition hues.
+	//`alphagen vertex` dropped with the blendfunc — with nothing to blend against, alpha is unused
+	//(CLQ1_DrawLine writes a=1 for every hull line anyway).  `rgbgen vertex` KEPT: the per-piece
+	//decomposition colours and the green/yellow single-hull-vs-fallback-box distinction ride on it.
+	//`polygonoffset` KEPT: it is what stops the lines z-fighting with the surface they hug.
 	s = R_RegisterShader("hullshader", SUF_NONE,
 		"{\n"
 			"polygonoffset\n"
-			"sort additive\n"
 			"{\n"
 				"map $whiteimage\n"
-				"blendfunc add\n"
 				"rgbgen vertex\n"
-				"alphagen vertex\n"
 			"}\n"
 		"}\n");
 
@@ -3346,19 +3351,49 @@ void CLQ1_AddVisibleHulls(void)
 		solid = e->v->solid;
 		if ((solid != SOLID_PHYSICS_TRIMESH && solid != SOLID_PHYSICS_BOX) || !e->v->modelindex)
 			continue;
-		mod = w->Get_CModel(w, e->v->modelindex);
-		if (!mod)
-			continue;
 
 		//nettest Patch 69: cull props far from the view so a prop-dense scene doesn't overflow the
 		//(unbounded) scenetris LINE buffer — without this, once enough distant props piled lines in,
 		//the near hulls stopped drawing too. r_showhull_maxdist 0 = unlimited (old behaviour). Squared
 		//compare avoids the sqrt. Debug-viz ONLY — collision (Get_CModel hull) is unaffected.
+		//
+		//nettest Patch 101: HOISTED ABOVE Get_CModel (was below it).  Get_CModel is NOT free: for a
+		//model that is still loading it calls COM_WorkerPartialSync and BLOCKS THE RENDER THREAD until
+		//the worker finishes — and a heavy concave prop's load includes its whole ACD decomposition
+		//(up to 64 QuickHull builds).  That is the "first sight of a big prop hitches" stall.  Testing
+		//the cheap distance/frustum rejects first means we never even ask about props we are not going
+		//to draw.  (This loop runs EVERY frame over EVERY edict, so the order matters a lot.)
 		if (r_showhull_maxdist.value > 0)
 		{
 			vec3_t hd;
 			VectorSubtract(e->v->origin, r_refdef.vieworg, hd);
 			if (DotProduct(hd, hd) > r_showhull_maxdist.value * r_showhull_maxdist.value)
+				continue;
+		}
+
+		//nettest Patch 101: PEEK, don't Get.  Get_CModel BLOCKS the render thread
+		//(COM_WorkerPartialSync) until a still-loading model finishes — and a heavy concave prop's load
+		//runs its entire ACD decomposition (up to 64 QuickHull builds), which is the multi-second
+		//"hitch the first time I look at the van with r_showhull on".  A debug wireframe has no business
+		//stalling the frame for that: peek, and if the model is not ready yet just skip it this frame.
+		//It draws itself in a later frame the moment the worker is done, which is exactly the existing
+		//behaviour anyway (the hull pops in when the load completes) — minus the stall.
+		//Peek never kicks the load; the prop's real collision/render path already does that.
+		mod = w->Peek_CModel ? w->Peek_CModel(w, e->v->modelindex) : w->Get_CModel(w, e->v->modelindex);
+		if (!mod)
+			continue;
+
+		//nettest Patch 101: FRUSTUM cull.  r_showhull_maxdist alone is a RAW RADIUS, so hulls
+		//BEHIND the camera were still fully rebuilt every frame — for a decomposed prop that is
+		//pieces x tris x 3 lines of pure CPU work thrown away by the rasteriser.  R_CullSphere (not
+		//R_CullEntityBox): there is no entity_t here, the sphere test is 4 dot products, and it has
+		//no inside-out failure mode.
+		//The +32 slack absorbs a one-frame frustum staleness: this runs from CL_LinkPacketEntities,
+		//which CL_EmitEntities calls BEFORE R_SetFrustum runs for this frame, so r_refdef.frustum is
+		//still last frame's.  Slack keeps a fast turn from popping hulls at the screen edge.
+		{
+			float hullrad = mod->radius * ((e->xv->scale > 0) ? e->xv->scale : 1);
+			if (R_CullSphere(e->v->origin, hullrad + 32))
 				continue;
 		}
 
@@ -3547,6 +3582,79 @@ static scenetris_t *CL_Decal_GetStrip(cl_adddecal_ctx_t *ctx, int page)
 	return t;
 }
 
+//nettest: fill the decal projection ctx (axis/offset/scale + aspect footprint + lightmap gate) and
+//return the non-unit clip tangents + clipsize for Mod_ClipDecal. Shared by CL_AddDecal (transient) and
+//CL_ClipPersistDecal (persistent) so the projection/aspect/lightmap math lives in exactly one place.
+static void CL_Decal_SetupCtx(cl_adddecal_ctx_t *ctx, shader_t *shader, vec3_t origin, vec3_t up, vec3_t side,
+							  vec3_t rgbvalue, float alphavalue, float aspect,
+							  vec3_t out_cliptan1, vec3_t out_cliptan2, float *out_clipsize)
+{
+	float l, s, radius, vradius, hradius, clipsize;
+
+	if (aspect <= 0)
+		aspect = 1;
+
+	VectorNegate(up, ctx->axis[0]);
+	VectorCopy(side, ctx->axis[2]);
+
+	s = DotProduct(ctx->axis[2], ctx->axis[2]);
+	l = DotProduct(ctx->axis[0], ctx->axis[0]);
+	vradius = 1/sqrt(l);
+	radius = 1/sqrt(s);
+	hradius = radius * aspect;
+
+	VectorScale(ctx->axis[0], vradius, ctx->axis[0]);
+	VectorScale(ctx->axis[2], radius, ctx->axis[2]);
+
+	CrossProduct(ctx->axis[0], ctx->axis[2], ctx->axis[1]);
+
+	ctx->offset[2] = DotProduct(origin, ctx->axis[2]) + 0.5*radius;
+	ctx->offset[1] = DotProduct(origin, ctx->axis[1]) + 0.5*hradius;
+	ctx->offset[0] = DotProduct(origin, ctx->axis[0]);
+
+	ctx->scale[2] = 1/radius;
+	ctx->scale[1] = 1/hradius;
+	ctx->scale[0] = 2/vradius;
+
+	ctx->t = NULL;
+	ctx->shader = shader;
+	ctx->flags = BEF_NODLIGHT|BEF_NOSHADOWS;
+	ctx->curpage = -2;
+	ctx->dolm = r_decal_lightmap.ival && cl.worldmodel && (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife);
+
+	VectorCopy(rgbvalue, ctx->rgbavalue);
+	ctx->rgbavalue[3] = alphavalue;
+
+	//rectangular clip footprint: hradius/2 (axis[1]/S) and radius/2 (axis[2]/T); clipsize sets depth.
+	clipsize = max(radius, vradius);
+	if (clipsize <= 0)
+		clipsize = 1;	//defensive: only reachable via a degenerate (inf) side/up
+	VectorScale(ctx->axis[1], hradius / clipsize, out_cliptan1);
+	VectorScale(ctx->axis[2], radius  / clipsize, out_cliptan2);
+	*out_clipsize = clipsize;
+}
+
+//nettest: per-clipped-vertex decal attributes — texcoord, the edge-fade alpha FACTOR (kept separate
+//from base alpha so persistent decals can fade without re-clipping), and the atlas lightmap st. Shared
+//by CL_AddDecal_Callback (transient) and CL_AddDecalStatic_Callback (persistent) so they stay identical.
+static void CL_Decal_VertexAttribs(const cl_adddecal_ctx_t *ctx, const msurface_t *surf, int page,
+								   const vec3_t p, vec2_t out_st, vec2_t out_lm, float *out_valpha)
+{
+	out_st[0] = 1 + (DotProduct(p, ctx->axis[1]) - ctx->offset[1]) * ctx->scale[1];
+	out_st[1] =    -(DotProduct(p, ctx->axis[2]) - ctx->offset[2]) * ctx->scale[2];
+	*out_valpha = 1 - fabs(DotProduct(p, ctx->axis[0]) - ctx->offset[0]) * ctx->scale[0];
+	if (ctx->dolm && page >= 0 && surf)
+	{
+		if (!DecalLM_Interp(surf->mesh, surf->plane->normal, p, out_lm))
+			Vector2Copy(surf->mesh->lmst_array[0][0], out_lm);
+	}
+	else
+	{
+		out_lm[0] = 0;
+		out_lm[1] = 0;
+	}
+}
+
 static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t numtris, shader_t *shader)
 {
 	cl_adddecal_ctx_t *ctx = vctx;
@@ -3577,24 +3685,18 @@ static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t
 
 	for (v = 0; v < numpoints; v++)
 	{
+		vec2_t st, lm;
+		float valpha;
 		VectorCopy(points[v], cl_strisvertv[cl_numstrisvert+v]);
-		cl_strisvertt[cl_numstrisvert+v][0] = 1+(DotProduct(points[v], ctx->axis[1]) - ctx->offset[1]) * ctx->scale[1];
-		cl_strisvertt[cl_numstrisvert+v][1] = -(DotProduct(points[v], ctx->axis[2]) - ctx->offset[2]) * ctx->scale[2];
+		CL_Decal_VertexAttribs(ctx, surf, page, points[v], st, lm, &valpha);
+		cl_strisvertt[cl_numstrisvert+v][0] = st[0];
+		cl_strisvertt[cl_numstrisvert+v][1] = st[1];
 		cl_strisvertc[cl_numstrisvert+v][0] = ctx->rgbavalue[0];
 		cl_strisvertc[cl_numstrisvert+v][1] = ctx->rgbavalue[1];
 		cl_strisvertc[cl_numstrisvert+v][2] = ctx->rgbavalue[2];
-		cl_strisvertc[cl_numstrisvert+v][3] = ctx->rgbavalue[3] * (1-fabs(DotProduct(points[v], ctx->axis[0]) - ctx->offset[0]) * ctx->scale[0]);
-		//nettest r_decal_lightmap: per-vertex lightmap st (interp the surface's final lmst)
-		if (ctx->dolm && page >= 0)
-		{
-			if (!DecalLM_Interp(surf->mesh, surf->plane->normal, points[v], cl_strisvertlm[cl_numstrisvert+v]))
-				Vector2Copy(surf->mesh->lmst_array[0][0], cl_strisvertlm[cl_numstrisvert+v]);
-		}
-		else
-		{
-			cl_strisvertlm[cl_numstrisvert+v][0] = 0;
-			cl_strisvertlm[cl_numstrisvert+v][1] = 0;
-		}
+		cl_strisvertc[cl_numstrisvert+v][3] = ctx->rgbavalue[3] * valpha;
+		cl_strisvertlm[cl_numstrisvert+v][0] = lm[0];
+		cl_strisvertlm[cl_numstrisvert+v][1] = lm[1];
 	}
 	for (v = 0; v < numpoints; v++)
 	{
@@ -3606,46 +3708,317 @@ static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t
 	cl_numstrisvert += numpoints;
 }
 
-void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t rgbvalue, float alphavalue)
+void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t rgbvalue, float alphavalue, float aspect)
 {
-	float l, s, radius, vradius;
 	cl_adddecal_ctx_t ctx;
-
-	VectorNegate(up, ctx.axis[0]);
-	VectorCopy(side, ctx.axis[2]);
-
-	s = DotProduct(ctx.axis[2], ctx.axis[2]);
-	l = DotProduct(ctx.axis[0], ctx.axis[0]);
-	vradius = 1/sqrt(l);
-	radius = 1/sqrt(s);
-
-	VectorScale(ctx.axis[0], vradius, ctx.axis[0]);
-	VectorScale(ctx.axis[2], radius, ctx.axis[2]);
-
-	CrossProduct(ctx.axis[0], ctx.axis[2], ctx.axis[1]);
-
-	ctx.offset[2] = DotProduct(origin, ctx.axis[2]) + 0.5*radius;
-	ctx.offset[1] = DotProduct(origin, ctx.axis[1]) + 0.5*radius;
-	ctx.offset[0] = DotProduct(origin, ctx.axis[0]);
-
-	ctx.scale[2] = 1/radius;
-	ctx.scale[1] = 1/radius;
-	ctx.scale[0] = 2/vradius;
+	vec3_t cliptan1, cliptan2;
+	float clipsize;
 
 	if (R2D_Flush)
 		R2D_Flush();
 
-	//nettest r_decal_lightmap: strips are opened lazily per lightmap page INSIDE the
-	//callback (one decal can straddle pages), so there is no pre-open/rollback here.
-	ctx.t = NULL;
-	ctx.shader = shader;
-	ctx.flags = BEF_NODLIGHT|BEF_NOSHADOWS;
-	ctx.curpage = -2;
-	ctx.dolm = r_decal_lightmap.ival && cl.worldmodel && (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife);
+	CL_Decal_SetupCtx(&ctx, shader, origin, up, side, rgbvalue, alphavalue, aspect, cliptan1, cliptan2, &clipsize);
+	Mod_ClipDecal(cl.worldmodel, origin, ctx.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecal_Callback, &ctx);
+}
 
-	VectorCopy(rgbvalue, ctx.rgbavalue);
-	ctx.rgbavalue[3] = alphavalue;
-	Mod_ClipDecal(cl.worldmodel, origin, ctx.axis[0], ctx.axis[1], ctx.axis[2], max(radius, vradius), 0,0, CL_AddDecal_Callback, &ctx);
+//nettest: PERSISTENT LIT DECALS ================================================================
+// Clip a decal ONCE at spawn and cache the clipped geometry (+ per-vertex lightmap st + atlas page)
+// so it re-renders every frame as a cheap vertex copy instead of a per-frame BSP re-clip (the
+// Source/Momentum "static decal" model, keeping the per-pixel lightmap). Driven by the
+// adddecal_static/removedecal/updatedecal builtins; emitted each frame by CL_EmitPersistentDecals
+// (called from the world draw in r_surf.c, exactly like the particle-udecal R_AddClippedDecal path).
+typedef struct persistdecaltri_s
+{
+	struct persistdecaltri_s	*next;
+	vec3_t	vertex[3];
+	vec2_t	texcoord[3];
+	vec2_t	lmcoord[3];		//atlas lightmap st (from DecalLM_Interp); valid iff lightmap>=0
+	float	valpha[3];		//edge-fade factor (1-|depth|*scale); base alpha applied at emit
+	int		lightmap;		//lightmap atlas page for these 3 verts (-1 = unlit)
+} persistdecaltri_t;
+
+typedef struct
+{
+	int			inuse;
+	unsigned int seq;			//generation counter -> stale-handle detection
+	shader_t	*shader;		//resolved by name; re-resolved on r_regsequence change
+	unsigned int builtepoch;	//r_regsequence this decal was last clipped/resolved at
+	persistdecaltri_t *tris;	//clipped geometry (>=0 tris)
+	//authoritative spawn params (enough to RE-CLIP after a vid_restart / lightmap-atlas rebuild)
+	char		shadername[64];
+	vec3_t		origin, up, side;
+	float		aspect;
+	vec4_t		rgba;			//base rgb+alpha (updatedecal rewrites this; NO re-clip)
+	qboolean	dolm;
+	float		die;			//0 = never; else cl.time to expire
+} persistdecal_t;
+
+static persistdecal_t		*cl_persistdecals;
+static int					cl_numpersistdecals, cl_maxpersistdecals;
+static int					*cl_persistdecal_free;		//free-stack of slot indices
+static int					cl_persistdecal_freecount;
+static persistdecaltri_t	*cl_persisttri_freelist;	//recycled tri nodes (pooled across maps)
+static qboolean				cl_persistdecals_reclip;	//set on renderer restart -> re-resolve shaders + re-clip all next emit
+
+//handle = (index+1) | (seq<<16). index 16 bits, seq 8 bits -> max 2^24-1 (exact as a QC float).
+#define PDH_MAKE(idx,seq)	(((idx)+1) | (((seq)&0xff)<<16))
+
+static persistdecaltri_t *CL_PersistTri_Alloc(void)
+{
+	persistdecaltri_t *t = cl_persisttri_freelist;
+	if (t)
+		cl_persisttri_freelist = t->next;
+	else
+		t = Z_Malloc(sizeof(*t));
+	return t;
+}
+static void CL_PersistTri_FreeList(persistdecaltri_t *head)
+{
+	while (head)
+	{
+		persistdecaltri_t *n = head->next;
+		head->next = cl_persisttri_freelist;
+		cl_persisttri_freelist = head;
+		head = n;
+	}
+}
+
+static int CL_PersistDecal_AllocSlot(void)
+{
+	int idx;
+	if (cl_persistdecal_freecount > 0)
+		idx = cl_persistdecal_free[--cl_persistdecal_freecount];
+	else
+	{
+		if (cl_numpersistdecals >= 0xFFFE)
+			return -1;	//the handle packs the index into 16 bits; refuse past the addressable range (caller falls back to transient adddecal)
+		if (cl_numpersistdecals == cl_maxpersistdecals)
+		{
+			cl_maxpersistdecals += 128;
+			cl_persistdecals     = BZ_Realloc(cl_persistdecals,     sizeof(*cl_persistdecals)    *cl_maxpersistdecals);
+			cl_persistdecal_free = BZ_Realloc(cl_persistdecal_free, sizeof(*cl_persistdecal_free)*cl_maxpersistdecals);
+		}
+		idx = cl_numpersistdecals++;
+		cl_persistdecals[idx].seq = 0;
+	}
+	return idx;
+}
+static void CL_PersistDecal_FreeSlot(int idx)
+{
+	persistdecal_t *rec = &cl_persistdecals[idx];
+	CL_PersistTri_FreeList(rec->tris);
+	rec->tris = NULL;
+	rec->inuse = 0;
+	rec->seq++;		//invalidate any outstanding handle to this slot
+	cl_persistdecal_free[cl_persistdecal_freecount++] = idx;
+}
+static persistdecal_t *CL_PersistDecal_Resolve(int handle)
+{
+	int idx = (handle & 0xffff) - 1;
+	unsigned int seq = (handle >> 16) & 0xff;
+	if (idx < 0 || idx >= cl_numpersistdecals)		return NULL;
+	if (!cl_persistdecals[idx].inuse)				return NULL;
+	if ((cl_persistdecals[idx].seq & 0xff) != seq)	return NULL;
+	return &cl_persistdecals[idx];
+}
+
+//Open/extend a scene-tris strip by (shader,flags,page) — standalone twin of CL_Decal_GetStrip for the
+//per-frame persistent emit (which has no cl_adddecal_ctx_t).
+static scenetris_t *CL_Decal_OpenStrip(shader_t *shader, unsigned int flags, int page)
+{
+	scenetris_t *t;
+	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader
+		&& cl_stris[cl_numstris-1].flags == flags
+		&& cl_stris[cl_numstris-1].lightmap == page
+		&& cl_stris[cl_numstris-1].numvert + 3 <= MAX_INDICIES)	//break before the relative index overflows index_t (16-bit build)
+		t = &cl_stris[cl_numstris-1];
+	else
+	{
+		if (cl_numstris == cl_maxstris)
+		{
+			cl_maxstris += 8;
+			cl_stris = BZ_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
+		}
+		t = &cl_stris[cl_numstris++];
+		t->shader = shader;
+		t->numidx = 0;
+		t->numvert = 0;
+		t->flags = flags;
+		t->lightmap = page;
+		t->firstidx = cl_numstrisidx;
+		t->firstvert = cl_numstrisvert;
+	}
+	return t;
+}
+
+//Clip callback for a persistent decal: store the clipped tris (pos+texcoord+lmcoord+valpha+page)
+//into the record instead of the transient scene buffer. Mirrors CL_AddDecal_Callback, but base rgba
+//is NOT baked in here (applied at emit so updatedecal never re-clips).
+typedef struct
+{
+	cl_adddecal_ctx_t base;
+	persistdecal_t *rec;
+} cl_persistdecal_clipctx_t;
+static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, size_t numtris, shader_t *shader)
+{
+	cl_persistdecal_clipctx_t *cc = vctx;
+	cl_adddecal_ctx_t *ctx = &cc->base;
+	const msurface_t *surf = Mod_Decal_CurrentSurface;
+	int page = (ctx->dolm && surf && surf->sbatch) ? surf->sbatch->lightmap[0] : -1;
+	size_t tr, k;
+	for (tr = 0; tr < numtris; tr++)
+	{
+		persistdecaltri_t *tri = CL_PersistTri_Alloc();
+		tri->lightmap = page;
+		for (k = 0; k < 3; k++)
+		{
+			VectorCopy(points[tr*3+k], tri->vertex[k]);
+			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tri->texcoord[k], tri->lmcoord[k], &tri->valpha[k]);
+		}
+		tri->next = cc->rec->tris;
+		cc->rec->tris = tri;
+	}
+}
+
+//(Re)clip a persistent decal's geometry. Resolves the shader BY NAME (returns the QC-registered
+//_lm shader; never fabricate) and stamps the current r_regsequence epoch. Returns false if it
+//produced no geometry (no shader / no world / off any surface).
+static qboolean CL_ClipPersistDecal(persistdecal_t *rec)
+{
+	cl_persistdecal_clipctx_t cc;
+	vec3_t cliptan1, cliptan2;
+	float clipsize;
+
+	CL_PersistTri_FreeList(rec->tris);
+	rec->tris = NULL;
+	rec->builtepoch = r_regsequence;
+
+	rec->shader = R_RegisterShader(rec->shadername, SUF_NONE, NULL);
+	if (!rec->shader || !cl.worldmodel)
+		return false;
+
+	cc.rec = rec;
+	CL_Decal_SetupCtx(&cc.base, rec->shader, rec->origin, rec->up, rec->side, rec->rgba, rec->rgba[3], rec->aspect, cliptan1, cliptan2, &clipsize);
+	rec->dolm = cc.base.dolm;
+	Mod_ClipDecal(cl.worldmodel, rec->origin, cc.base.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecalStatic_Callback, &cc);
+	return rec->tris != NULL;
+}
+
+int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime)
+{
+	int idx;
+	persistdecal_t *rec;
+	unsigned int seq;
+
+	idx = CL_PersistDecal_AllocSlot();
+	if (idx < 0)
+		return -1;	//store full -> caller falls back to the transient adddecal path
+	rec = &cl_persistdecals[idx];
+	seq = rec->seq;
+	memset(rec, 0, sizeof(*rec));
+	rec->seq = seq;
+	rec->inuse = 1;
+	Q_strncpyz(rec->shadername, shadername, sizeof(rec->shadername));
+	VectorCopy(origin, rec->origin);
+	VectorCopy(up, rec->up);
+	VectorCopy(side, rec->side);
+	VectorCopy(rgb, rec->rgba);
+	rec->rgba[3] = alpha;
+	rec->aspect = aspect;
+	rec->die = (lifetime > 0) ? cl.time + lifetime : 0;
+
+	if (!CL_ClipPersistDecal(rec))
+	{	//off-surface / no world / no shader -> caller falls back to the transient path
+		CL_PersistDecal_FreeSlot(idx);
+		return -1;
+	}
+	return PDH_MAKE(idx, rec->seq);
+}
+void CL_RemovePersistentDecal(int handle)
+{
+	persistdecal_t *rec = CL_PersistDecal_Resolve(handle);
+	if (rec)
+		CL_PersistDecal_FreeSlot((int)(rec - cl_persistdecals));
+}
+void CL_UpdatePersistentDecal(int handle, const vec3_t rgb, float alpha)
+{
+	persistdecal_t *rec = CL_PersistDecal_Resolve(handle);
+	if (rec)
+	{
+		VectorCopy(rgb, rec->rgba);
+		rec->rgba[3] = alpha;
+	}
+}
+
+//Re-copy one persistent decal's cached tris into the transient scene buffer (no BSP clip). This is
+//R_AddClippedDecal PLUS per-vertex lmcoord + per-tri lightmap-page split, so the _lm shader lights it.
+static void CL_EmitPersistDecalTris(persistdecal_t *rec)
+{
+	persistdecaltri_t *tri;
+	for (tri = rec->tris; tri; tri = tri->next)
+	{
+		scenetris_t *t = CL_Decal_OpenStrip(rec->shader, BEF_NODLIGHT|BEF_NOSHADOWS, tri->lightmap);
+		int k;
+		if (cl_numstrisvert + 3 > cl_maxstrisvert)
+			cl_stris_ExpandVerts(cl_numstrisvert + 3 + 256);
+		if (cl_maxstrisidx < cl_numstrisidx + 3)
+		{
+			cl_maxstrisidx = cl_numstrisidx + 3 + 256;
+			cl_strisidx = BZ_Realloc(cl_strisidx, sizeof(*cl_strisidx)*cl_maxstrisidx);
+		}
+		for (k = 0; k < 3; k++)
+		{
+			VectorCopy(tri->vertex[k], cl_strisvertv[cl_numstrisvert]);
+			cl_strisvertt[cl_numstrisvert][0] = tri->texcoord[k][0];
+			cl_strisvertt[cl_numstrisvert][1] = tri->texcoord[k][1];
+			cl_strisvertc[cl_numstrisvert][0] = rec->rgba[0];
+			cl_strisvertc[cl_numstrisvert][1] = rec->rgba[1];
+			cl_strisvertc[cl_numstrisvert][2] = rec->rgba[2];
+			cl_strisvertc[cl_numstrisvert][3] = rec->rgba[3] * tri->valpha[k];
+			cl_strisvertlm[cl_numstrisvert][0] = tri->lmcoord[k][0];
+			cl_strisvertlm[cl_numstrisvert][1] = tri->lmcoord[k][1];
+			cl_strisidx[cl_numstrisidx++] = cl_numstrisvert - t->firstvert;
+			cl_numstrisvert++;
+		}
+		t->numvert += 3;
+		t->numidx += 3;
+	}
+}
+void CL_EmitPersistentDecals(void)
+{
+	int i;
+	for (i = 0; i < cl_numpersistdecals; i++)
+	{
+		persistdecal_t *rec = &cl_persistdecals[i];
+		if (!rec->inuse)
+			continue;
+		if (rec->die && rec->die < cl.time)
+		{
+			CL_PersistDecal_FreeSlot(i);
+			continue;
+		}
+		if (cl_persistdecals_reclip || rec->builtepoch != r_regsequence)	//renderer restart / lightmap-atlas rebuild -> re-resolve shader (stale ptr) + re-clip (stale page)
+			CL_ClipPersistDecal(rec);
+		if (!rec->shader || !rec->tris)
+			continue;
+		CL_EmitPersistDecalTris(rec);
+	}
+	cl_persistdecals_reclip = false;
+}
+//Called from the renderer-restart path (renderer.c): the shader cache was Z_Free'd and the lightmap atlas
+//rebuilt, so every record's rec->shader is now dangling and tri->lightmap pages are stale. r_regsequence is
+//NOT bumped on vid_restart, so flag a re-resolve+re-clip on the next emit (which replaces rec->shader BEFORE
+//it is used, so no use-after-free).
+void CL_PersistentDecals_Restarted(void)
+{
+	cl_persistdecals_reclip = true;
+}
+void CL_WipePersistentDecals(void)
+{	//map change / disconnect / CSQC restart: drop all decals (QC handles reset with them)
+	int i;
+	for (i = 0; i < cl_numpersistdecals; i++)
+		if (cl_persistdecals[i].inuse)
+			CL_PersistDecal_FreeSlot(i);
 }
 
 void R_AddItemTimer(vec3_t shadoworg, float yaw, float radius, float percent, vec3_t rgb)
@@ -5042,7 +5415,54 @@ void CL_LinkPacketEntities (void)
 
 #ifdef RAGDOLL
 		if (model && (model->dollinfo || le->skeletalobject))
+		{
+			//nettest: a server death ragdoll is a PACKET entity with networked bones.  On a packet entity
+			//`le->skeletalobject` (or a .doll, which this mod never uses) == a server ragdoll — players are
+			//CSQC proxies, props have no bones.  Two mod-driven touch-ups the QC can't reach on a packet ent:
+			//(1) KILLCAM CULL — while a local killcam replay reconstructs the rewound scene the mod sets
+			//    cl_killcam_hideragdolls; skip the present-time ragdoll (un-commit the visedict added above).
+			static cvar_t *rag_kchide;
+			if (!rag_kchide) rag_kchide = Cvar_FindVar("cl_killcam_hideragdolls");
+			if (rag_kchide && rag_kchide->ival)
+			{
+				cl_numvisedicts--;
+				continue;
+			}
+
 			rag_updatedeltaent(&csqc_world, ent, le);
+
+			//(2) BRIGHTNESS CAP — CSQC_ApplyTeamTints only caps player_visual_proxy CSQC entities, so a packet
+			//    ragdoll blows out.  Replicate cl_teamtint.qc CSQC_MaxlightScale: getlight = diffuse+0.5*ambient,
+			//    brightest channel, Reinhard rolloff toward r_playermodels_maxlight (soft knee r_maxlight_softknee).
+			{
+				static cvar_t *rag_cap, *rag_knee;
+				float cap;
+				if (!rag_cap)  rag_cap  = Cvar_FindVar("r_playermodels_maxlight");
+				if (!rag_knee) rag_knee = Cvar_FindVar("r_maxlight_softknee");
+				cap = rag_cap ? rag_cap->value : 0;
+				if (cap > 0 && cl.worldmodel && cl.worldmodel->funcs.LightPointValues)
+				{
+					vec3_t res_diffuse, res_ambient, ldir;
+					float c0, c1, c2, maxch, knee;
+					cl.worldmodel->funcs.LightPointValues(cl.worldmodel, ent->origin, res_diffuse, res_ambient, ldir);
+					c0 = res_diffuse[0] + 0.5f*res_ambient[0];
+					c1 = res_diffuse[1] + 0.5f*res_ambient[1];
+					c2 = res_diffuse[2] + 0.5f*res_ambient[2];
+					maxch = c0; if (c1 > maxch) maxch = c1; if (c2 > maxch) maxch = c2;
+					knee = cap * (rag_knee ? rag_knee->value : 1);
+					if (maxch > knee)
+					{
+						float range = cap - knee, over = maxch - knee;
+						float outv  = (range > 0) ? knee + over/(1.0f + over/range) : cap;
+						float scale = outv / maxch;		//<=1, hue-neutral (all 3 channels)
+						ent->shaderRGBAf[0] *= scale;
+						ent->shaderRGBAf[1] *= scale;
+						ent->shaderRGBAf[2] *= scale;
+						ent->flags |= RF_FORCECOLOURMOD;
+					}
+				}
+			}
+		}
 #endif
 		ent->framestate.g[FS_REG].frame[0] &= ~0x8000;
 		ent->framestate.g[FS_REG].frame[1] &= ~0x8000;

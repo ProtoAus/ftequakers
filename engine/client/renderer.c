@@ -170,6 +170,8 @@ cvar_t r_fb_models							= CVARAFD  ("r_fb_models", "1",
 													"gl_fb_models", CVAR_SEMICHEAT, "Enables the use of lumas on models. Note that if ruleset_allow_fbmodels is enabled, then all models are unconditionally fullbright in deathmatch, because cheaters would set up their models like that anyway, hurrah for beating them at their own game. QuakeWorld players suck.");
 cvar_t gl_overbright_models					= CVARFD("gl_overbright_models", "0", CVAR_SEMICHEAT|CVAR_ARCHIVE, "Doubles the brightness of models, to match QuakeSpasm's misfeature of the same name.");
 cvar_t r_viewmodel_maxlight					= CVARFD("r_viewmodel_maxlight", "0", CVAR_ARCHIVE, "Per-channel ceiling on the ambient/shade light sampled at the player's eye for the first-person viewmodel. 0 = off (engine default — viewmodel takes the full lightmap value, which can blow out the gun on bright floors / lava / white tiles). Try 96..160 to soften the brightening without losing low-light response.");
+cvar_t r_modellight_fallback				= CVARFD("r_modellight_fallback", "1", CVAR_ARCHIVE, "Model lighting is sampled 24qu above the entity origin, which lands inside the ceiling for roof-mounted models and makes them render pure black. When the standard sample comes back black, retry at the origin and then 24/48qu below it so ceiling/wall-mounted models pick up the light of the space they hang in. 0 = engine default (single sample).");
+cvar_t r_modellight_bilinear				= CVARFD("r_modellight_bilinear", "1", CVAR_ARCHIVE, "Bilinearly filter the world lightmap when sampling light for models/particles, matching how the GPU filters lit surfaces. 0 = nearest-luxel (engine default), which makes models catch isolated black luxels on dense/decoupled lightmaps where the surface beside them is lit.");
 //cvar_t r_skin_overlays						= CVARF  ("r_skin_overlays", "1",
 //													CVAR_SEMICHEAT|CVAR_RENDERERLATCH);
 cvar_t r_globalskin_first					= CVARFD  ("r_globalskin_first", "100", CVAR_RENDERERLATCH, "Specifies the first .skin value that is a global skin. Entities within this range will use the shader/image called 'gfx/skinSKIN.lmp' instead of their regular skin. See also: r_globalskin_count.");
@@ -486,6 +488,12 @@ cvar_t r_portalonly							= CVARD  ("r_portalonly", "0", "Don't draw things whic
 cvar_t r_noaliasshadows						= CVARF ("r_noaliasshadows", "0", CVAR_ARCHIVE);
 cvar_t r_lodscale							= CVARFD ("r_lodscale", "5", CVAR_ARCHIVE, "Scales the level-of-detail reduction on models (for those that have lod).");
 cvar_t r_lodbias							= CVARFD ("r_lodbias", "0", CVAR_ARCHIVE, "Biases the level-of-detail on models (for those that have lod).");
+//nettest Patch 100: model entities are otherwise frustum-culled ONLY, so a prop 3000qu away still
+//pays a full batch-gen, skeletal build, lightmap sample, uniform upload and draw call in every pass
+//while covering almost no pixels.  This culls a model entity once its projected on-screen size drops
+//below the threshold.  Size-aware for free (it is screen coverage, not raw distance), so a van stays
+//visible far out while a grass tuft drops early.  0 = off (the stock behaviour).
+cvar_t r_model_mincoverage					= CVARFD ("r_model_mincoverage", "0", CVAR_ARCHIVE, "Cull model entities whose projected on-screen size (fraction of screen height, as used by the LOD selector) falls below this. Players, viewmodels and skeletal-object entities are never culled. 0 = off. Try 0.002-0.01 on prop-dense maps.");
 cvar_t r_shadows							= CVARFD ("r_shadows", "0", CVAR_ARCHIVE, "Draw basic blob shadows underneath entities without using realtime lighting.");
 cvar_t r_showbboxes							= CVARFD("r_showbboxes", "0", CVAR_CHEAT, "Debugging. Shows bounding boxes. 1=ssqc, 2=csqc. Red=solid, Green=stepping/toss/bounce, Blue=onground.");
 cvar_t r_showhull							= CVARFD("r_showhull", "0", CVAR_CHEAT, "Debugging. Draws the convex-hull collision geometry of SOLID_PHYSICS_TRIMESH props as green lines. 1=ssqc, 2=csqc.");
@@ -592,6 +600,7 @@ void GLRenderer_Init(void)
 
 	Cvar_Register (&r_lodscale, GRAPHICALNICETIES);
 	Cvar_Register (&r_lodbias, GRAPHICALNICETIES);
+	Cvar_Register (&r_model_mincoverage, GRAPHICALNICETIES);	//nettest Patch 100
 
 	Cvar_Register (&gl_motionblur, GLRENDEREROPTIONS);
 	Cvar_Register (&gl_motionblurscale, GLRENDEREROPTIONS);
@@ -1037,6 +1046,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_fb_models, GRAPHICALNICETIES);
 	Cvar_Register (&gl_overbright_models, GRAPHICALNICETIES);
 	Cvar_Register (&r_viewmodel_maxlight, GRAPHICALNICETIES);
+	Cvar_Register (&r_modellight_fallback, GRAPHICALNICETIES);
+	Cvar_Register (&r_modellight_bilinear, GRAPHICALNICETIES);
 //	Cvar_Register (&r_fullbrights, GRAPHICALNICETIES);	//dpcompat: 1 if r_fb_bmodels&&r_fb_models
 //	Cvar_Register (&r_skin_overlays, GRAPHICALNICETIES);
 	Cvar_Register (&r_globalskin_first, GRAPHICALNICETIES);
@@ -1950,6 +1961,7 @@ TRACE(("dbg: R_ApplyRenderer: efrags\n"));
 	Shader_DoReload();
 	CSQC_RendererRestarted(false);
 #endif
+	CL_PersistentDecals_Restarted();	//nettest: re-resolve shaders + re-clip persistent decals against the rebuilt atlas
 #ifdef MENU_DAT
 	MP_RendererRestarted();
 #endif

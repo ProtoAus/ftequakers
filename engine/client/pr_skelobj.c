@@ -45,6 +45,7 @@ qc must build the skeletal object still, which fills the skeletal object from th
 //needs the same cleanup or the frame-blend scale compounds down the chain (head/root -> inf).
 void Alias_RenormalizeBoneMatrix(float *m);
 extern cvar_t r_skel_blendnormalize;
+extern cvar_t r_showragdoll;	//nettest: force-draw ragdoll bodies+joint anchors regardless of the .doll draw flags
 
 #define MAX_SKEL_OBJECTS 1024
 
@@ -58,6 +59,8 @@ typedef struct doll_s
 	struct doll_s *next;
 
 	qboolean drawn:1;
+	qboolean spawnatref:1;	//nettest: instanciate the ragdoll AT the reference pose (skip the re-pose to the entity's current anim) so bodies coincide with their joint anchors => no initial joint-yank collapse.
+	qboolean spawnatcur:1;	//nettest: instanciate the ragdoll AT the entity's CURRENT skeleton pose (the death pose cloned in via skel_copybones) - bake bodies+joints there so anchors coincide (no yank) AND the doll starts in that pose.  Joint axes are rotated by the bone's ref->current delta so they stay correct off the reference pose.
 	int refanim; //-1 for skining pose. otherwise the first pose of the specified anim. probaly 0.
 	float refanimtime; //usually just 0
 	int numdefaultanimated;
@@ -393,6 +396,16 @@ static qboolean rag_dollline(dollcreatectx_t *ctx, int linenum)
 		ctx->d->refanim = atoi(val);
 		ctx->d->refanimtime = atoi(Cmd_Argv(2));
 	}
+	//nettest: `spawnpose reference` = build the doll AT the reference pose (skip re-posing bodies to the
+	//entity's current anim), so the bodies start coincident with their baked joint anchors => no initial
+	//joint-yank/scrunch.  Default (no keyword) = the stock behaviour (re-pose to the entity's anim).
+	else if (argc == 2 && !stricmp(cmd, "spawnpose") && !strcmp(val, "reference"))
+		ctx->d->spawnatref = true;
+	//nettest: `spawnpose current` = bake bodies+joints at the entity's CURRENT skeleton pose (the death pose
+	//cloned in via skel_copybones) instead of the reference pose - so the ragdoll STARTS in that pose with no
+	//yank (both bodies of a joint still move by the same emat).  Requires the ref->current axis rotation below.
+	else if (argc == 2 && !stricmp(cmd, "spawnpose") && !strcmp(val, "current"))
+		ctx->d->spawnatcur = true;
 	//create a new body
 	else if (argc == 3 && !stricmp(cmd, "body"))
 	{
@@ -1202,14 +1215,12 @@ static void rag_uninstanciate(skelobject_t *sko)
 		Con_Printf(CON_ERROR "ERROR: Uninstanciating ragdoll from invalid world\n");
 	}
 
-	for (i = 0; i < sko->numbodies; i++)
-	{
-		sko->world->rbe->RagDestroyBody(sko->world, &sko->body[i].odebody);
-	}
-	BZ_Free(sko->body);
-	sko->body = NULL;
-	sko->numbodies = 0;
-
+	//nettest: destroy JOINTS BEFORE BODIES.  The Box3D backend's RagDestroyBody -> b3DestroyBody auto-destroys
+	//every joint still attached to that body, so if bodies went first the joint loop below would call
+	//b3DestroyJoint on already-freed joint ids -> double-free that corrupts the shared Box3D joint pool (it only
+	//faults later, when another live ragdoll's joints in that pool get stepped -> the "crash on 2nd corpse
+	//retire" bug).  Joints-first is safe for both backends (ODE tolerates either order; destroying a joint first
+	//unhooks it from the bodies so the subsequent body destroy has nothing left to auto-free).
 	for (i = 0; i < sko->numjoints; i++)
 	{
 		sko->world->rbe->RagDestroyJoint(sko->world, &sko->joint[i]);
@@ -1217,6 +1228,14 @@ static void rag_uninstanciate(skelobject_t *sko)
 	BZ_Free(sko->joint);
 	sko->joint = NULL;
 	sko->numjoints = 0;
+
+	for (i = 0; i < sko->numbodies; i++)
+	{
+		sko->world->rbe->RagDestroyBody(sko->world, &sko->body[i].odebody);
+	}
+	BZ_Free(sko->body);
+	sko->body = NULL;
+	sko->numbodies = 0;
 
 	sko->doll->uses--;
 	sko->doll = NULL;
@@ -1230,7 +1249,11 @@ static void rag_genbodymatrix(skelobject_t *sko, rbebodyinfo_t *dollbody, float 
 
 	if (dollbody->isoffset)
 	{
-		R_ConcatTransforms((void*)dollbody->relmatrix, (void*)bmat, (void*)tmp);
+		//nettest: apply the offset in the bone's LOCAL frame (bmat OUTER) so it points down the bone and
+		//rotates rigidly with the body, instead of a fixed MODEL-space translation (relmatrix outer) that
+		//only lined up at the spawn pose and detached from the limb once it rotated.  rag_derive mirrors
+		//this (inverse on the RIGHT) so genbody<->derive stay exact inverses and the bone still tracks the joint.
+		R_ConcatTransforms((void*)bmat, (void*)dollbody->relmatrix, (void*)tmp);
 		bmat = tmp;
 	}
 
@@ -1307,12 +1330,26 @@ static qboolean rag_instanciate(skelobject_t *sko, doll_t *doll, float *emat, we
 			sko->numanimated++;
 
 		//spawn the body in the base pose, so we can add joints etc (also ignoring the entity matrix, we'll fix all that up later).
-		if (absolutes)	//we have a reference pose
+		if (doll->spawnatcur)	//nettest: bake at the entity's CURRENT skeleton pose (= the death pose cloned in) instead of the reference pose
+			memcpy(bodymat, sko->bonematrix + 12*doll->body[i].bone, sizeof(float)*12);
+		else if (absolutes)	//we have a reference pose
 			memcpy(bodymat, absolutes+12*doll->body[i].bone, sizeof(float)*12);
 		else if (1)
 			Matrix3x4_Invert_Simple(bones[doll->body[i].bone].inverse, bodymat);
 		else
 			rag_genbodymatrix(sko, &doll->body[i], emat, bodymat);
+		//nettest: apply the body's bone-local offset HERE (same bmat*relmatrix the re-pose loop below uses) so
+		//the joints get baked against the ALREADY-offset bodies.  Without this the joint local frames are baked
+		//at the un-offset bone and the re-pose then slides every anchor by the offset => joints anchor at the
+		//box CENTRE (a shared elbow/knee pivot even splits into two divergent anchors = "very floppy").  At
+		//re-pose the R cancels its own inverse, so each anchor lands back at the pivot bone (box proximal end),
+		//identical to the working no-offset joint formula.  (After the if/else so the bind-pose fallback is covered.)
+		if (doll->body[i].isoffset)
+		{
+			float otmp[12];
+			R_ConcatTransforms((void*)bodymat, (void*)doll->body[i].relmatrix, (void*)otmp);
+			memcpy(bodymat, otmp, sizeof(float)*12);
+		}
 		if (!sko->world->rbe->RagCreateBody(sko->world, &sko->body[i].odebody, &doll->body[i], bodymat, ent))
 			return false;
 	}
@@ -1328,8 +1365,10 @@ static qboolean rag_instanciate(skelobject_t *sko, doll_t *doll, float *emat, we
 		bone = j->bonepivot;
 		bmat = sko->bonematrix + bone*12;
 
-		if (absolutes)	//we have a reference pose
-			memcpy(worldmat, absolutes+12*doll->body[i].bone, sizeof(float)*12);
+		if (doll->spawnatcur)	//nettest: anchor at the entity's CURRENT pose pivot bone (bmat == sko->bonematrix + bone*12), matching where the bodies were baked
+			memcpy(worldmat, bmat, sizeof(float)*12);
+		else if (absolutes)	//we have a reference pose
+			memcpy(worldmat, absolutes+12*bone, sizeof(float)*12);	//nettest: use the JOINT's pivot bone (bone==j->bonepivot), NOT doll->body[i].bone (i is the joint index here, so that grabbed an unrelated body's bone and anchored every joint 8-27u off => "disconnected" limbs). Matches the non-refpose fallback below.
 		else if (1)
 		{	//FIXME: j->offset isn't actually used?!?
 			Matrix3x4_Invert_Simple(bones[j->bonepivot].inverse, worldmat);
@@ -1345,8 +1384,25 @@ static qboolean rag_instanciate(skelobject_t *sko, doll_t *doll, float *emat, we
 		aaa2[0][0] = worldmat[3];
 		aaa2[0][1] = worldmat[3+4];
 		aaa2[0][2] = worldmat[3+8];
-		VectorNormalize2(j->axis, aaa2[1]);
-		VectorNormalize2(j->axis2, aaa2[2]);
+		//nettest: rotate the authored MODEL-space joint axis by the pivot bone's REFERENCE->bake-pose rotation, so
+		//it stays perpendicular to the limb (correct flex plane) at ANY spawn pose - not just the reference T-pose.
+		//delta = worldmat * inv(absolutes[pivot]); worldmat is the bake-pose pivot matrix (== absolutes for
+		//`spawnpose reference` => delta is IDENTITY => the authored axis is UNCHANGED, so ref-mode dolls keep their
+		//tuned behaviour; == the current/death pose for `spawnpose current` => the axis tracks the bone).
+		if (absolutes)
+		{
+			float invref[12], delta[12];
+			vec3_t ax;
+			Matrix3x4_Invert_Simple((void*)(absolutes+12*bone), invref);
+			R_ConcatTransforms((void*)worldmat, (void*)invref, (void*)delta);
+			Matrix3x4_RM_Transform3x3(delta, j->axis,  ax); VectorNormalize2(ax, aaa2[1]);
+			Matrix3x4_RM_Transform3x3(delta, j->axis2, ax); VectorNormalize2(ax, aaa2[2]);
+		}
+		else
+		{
+			VectorNormalize2(j->axis, aaa2[1]);
+			VectorNormalize2(j->axis2, aaa2[2]);
+		}
 
 		sko->world->rbe->RagCreateJoint(sko->world, &sko->joint[i], j, body1, body2, aaa2);
 
@@ -1357,8 +1413,41 @@ static qboolean rag_instanciate(skelobject_t *sko, doll_t *doll, float *emat, we
 	//this might result in the body flying across the room...
 	for (i = 0; i < sko->numbodies; i++)
 	{
-		rag_genbodymatrix(sko, &doll->body[i], emat, bodymat);
+		if (doll->spawnatref && absolutes)
+		{
+			//nettest: keep the body AT the reference pose (just transformed into world space by emat), instead of
+			//re-posing it to the entity's current anim (sko->bonematrix).  The joints + spring were baked with the
+			//bodies at `absolutes`; moving both bodies of a joint by the SAME emat keeps their anchors coincident,
+			//so there is NO initial joint-yank collapse (the "scrunch into the pelvis" transient).  Apply the same
+			//bone-local offset the create loop used (:1333) so the offset limbs match their baked joints.
+			R_ConcatTransforms((void*)emat, (void*)(absolutes+12*doll->body[i].bone), (void*)bodymat);
+			if (doll->body[i].isoffset)
+			{
+				float otmp[12];
+				R_ConcatTransforms((void*)bodymat, (void*)doll->body[i].relmatrix, (void*)otmp);
+				memcpy(bodymat, otmp, sizeof(float)*12);
+			}
+		}
+		else
+			rag_genbodymatrix(sko, &doll->body[i], emat, bodymat);
 		sko->world->rbe->RagMatrixToBody(&sko->body[i].odebody, bodymat);
+	}
+
+	//nettest: seed a LIMP ragdoll with the spawning entity's momentum so it can be THROWN.  This MUST run
+	//after the re-pose loop above (RagMatrixToBody just zeroed every body's velocity); a limp (animate 0)
+	//body is never re-posed again, so this sticks (animated bodies get re-zeroed next frame by
+	//rag_doallanimations, which is correct).  The model auto-path passes ent==NULL -> skipped.  avelocity is
+	//QC deg/s Euler; remap to physics rad/s spin axes once here (backend setter is a dumb primitive).
+	if (ent && sko->world->rbe->RagSetBodyVelocity &&
+	    (ent->v->velocity[0] || ent->v->velocity[1] || ent->v->velocity[2] ||
+	     ent->v->avelocity[0] || ent->v->avelocity[1] || ent->v->avelocity[2]))
+	{
+		vec3_t avel;		//DEG2RAD isn't in scope here (mathlib.c-local); M_PI is (mathlib.h)
+		avel[0] = ent->v->avelocity[PITCH] * (M_PI/180.0);
+		avel[1] = ent->v->avelocity[ROLL]  * (M_PI/180.0);
+		avel[2] = ent->v->avelocity[YAW]   * (M_PI/180.0);
+		for (i = 0; i < sko->numbodies; i++)
+			sko->world->rbe->RagSetBodyVelocity(sko->world, &sko->body[i].odebody, ent->v->velocity, avel);
 	}
 
 	sko->doll->numdefaultanimated = sko->numanimated;
@@ -1382,7 +1471,7 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 	Matrix3x4_Invert(emat, invemat);
 
 #ifndef SERVERONLY
-	if (doll->drawn)
+	if (doll->drawn || r_showragdoll.ival)	//nettest: r_showragdoll force-enables the whole debug block
 	{
 		float rad;
 		vec3_t mins, maxs;
@@ -1391,7 +1480,7 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 		vec3_t start, end;
 		for (i = 0; i < sko->numbodies; i++)
 		{
-			if (!doll->body[i].draw)
+			if (!doll->body[i].draw && !r_showragdoll.ival)	//nettest: r_showragdoll draws all bodies
 				continue;
 
 			if (!debugshader)
@@ -1401,6 +1490,7 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 					"{\n"
 					"map $whiteimage\n"
 					"blendfunc add\n"
+					"nodepthtest\n"		//nettest: draw ragdoll debug ON TOP of the mesh (r_showragdoll)
 					"rgbgen vertex\n"
 					"alphagen vertex\n"
 					"}\n"
@@ -1434,7 +1524,7 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 		maxs[0] = maxs[1] = maxs[2] = 1;
 		for (i = 0; i < doll->numjoints; i++)
 		{
-			if (!doll->joint[i].draw)
+			if (!doll->joint[i].draw && !r_showragdoll.ival)	//nettest: r_showragdoll draws all joint anchors
 				continue;
 			sko->world->rbe->RagMatrixFromJoint(&sko->joint[i], &doll->joint[i], bodymat);
 	//		CLQ1_AddOrientedCube(debugshader, mins, maxs, bodymat, 0, 0.2, 0, 1);
@@ -1446,6 +1536,7 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 					"{\n"
 					"map $whiteimage\n"
 					"blendfunc add\n"
+					"nodepthtest\n"		//nettest: draw ragdoll debug ON TOP of the mesh (r_showragdoll)
 					"rgbgen vertex\n"
 					"alphagen vertex\n"
 					"}\n"
@@ -1475,9 +1566,13 @@ static void rag_derive(skelobject_t *sko, skelobject_t *asko, float *emat)
 			sko->world->rbe->RagMatrixFromBody(sko->world, &sko->body[doll->bone[i].bodyidx].odebody, bodymat);
 			if (doll->body[doll->bone[i].bodyidx].isoffset)
 			{
+				//nettest: inverse of the BONE-LOCAL offset (genbodymatrix now does bmat*relmatrix): first go
+				//world->model (invemat*body), THEN apply inverserelmatrix on the RIGHT.  bone = (invemat*body)
+				//*inverserelmatrix recovers bmat exactly, pinning the bone/skin to the joint while the box sits
+				//down the (current, rotated) bone.
 				float tmp[12];
-				R_ConcatTransforms((void*)doll->body[doll->bone[i].bodyidx].inverserelmatrix, (void*)bodymat, (void*)tmp);
-				R_ConcatTransforms((void*)invemat, (void*)tmp, (void*)((float*)bmat+i*12));
+				R_ConcatTransforms((void*)invemat, (void*)bodymat, (void*)tmp);
+				R_ConcatTransforms((void*)tmp, (void*)doll->body[doll->bone[i].bodyidx].inverserelmatrix, (void*)((float*)bmat+i*12));
 			}
 			else
 				//that body matrix is in world space, so transform to model space for our result
@@ -1800,6 +1895,31 @@ void QCBUILTIN PF_skel_ragedit(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 				Con_Printf("enablejoint: %s is not defined as a ragdoll joint\n", Cmd_Argv(1));
 				G_FLOAT(OFS_RETURN) = 0;
 			}
+			return;
+		}
+		//nettest: shove a RUNNING doll's bodies (bullets / gravity-gun / throw).  Wraps the backend
+		//RagSetBodyVelocity (both box3d+ode implement it; guarded like rag_instanciate's throw-seed).
+		//`impulse <vx vy vz>`            = set EVERY body's velocity (whole-doll drag/fling).
+		//`impulsebody <name> <vx vy vz>` = set ONE named body (the rest follows through the joints).
+		else if (!stricmp(cmd, "impulse"))
+		{
+			vec3_t v, av = {0,0,0};
+			int i;
+			v[0] = atof(Cmd_Argv(1)); v[1] = atof(Cmd_Argv(2)); v[2] = atof(Cmd_Argv(3));
+			if (sko->doll && sko->world->rbe->RagSetBodyVelocity)
+				for (i = 0; i < sko->numbodies; i++)
+					sko->world->rbe->RagSetBodyVelocity(sko->world, &sko->body[i].odebody, v, av);
+			G_FLOAT(OFS_RETURN) = (sko->doll != NULL);
+			return;
+		}
+		else if (!stricmp(cmd, "impulsebody"))
+		{
+			vec3_t v, av = {0,0,0};
+			int body = sko->doll ? rag_finddollbody(sko->doll, Cmd_Argv(1)) : -1;
+			v[0] = atof(Cmd_Argv(2)); v[1] = atof(Cmd_Argv(3)); v[2] = atof(Cmd_Argv(4));
+			if (body >= 0 && sko->world->rbe->RagSetBodyVelocity)
+				sko->world->rbe->RagSetBodyVelocity(sko->world, &sko->body[body].odebody, v, av);
+			G_FLOAT(OFS_RETURN) = (body >= 0);
 			return;
 		}
 		else if (!stricmp(cmd, "animatebody"))

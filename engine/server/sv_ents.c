@@ -38,6 +38,12 @@ typedef struct
 	pvsbuffer_t pvs;
 } pvscamera_t;
 
+#ifdef SKELETALMODELS
+//nettest: forward-declared here (declared only in com_mesh.h, which sv_ents.c doesn't include; merged.h already
+//gives us skeltype_t / struct galiasbone_s / Mod_GetBoneInfo).  Used to network RAGDOLL (SKEL_ABSOLUTE) bones.
+void QDECL Alias_ForceConvertBoneData(skeltype_t sourcetype, const float *sourcedata, size_t bonecount, struct galiasbone_s *bones, skeltype_t desttype, float *destbuffer, size_t destbonecount);
+#endif
+
 static void *AllocateBoneSpace(packet_entities_t *pack, unsigned char bonecount, unsigned int *allocationpos)
 {
 	size_t space = bonecount * sizeof(short)*7;
@@ -3570,6 +3576,23 @@ void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *cli
 			{
 				Bones_To_PosQuat4(fs.bonecount, fs.bonestate, AllocateBoneSpace(pack, state->bonecount = fs.bonecount, &state->boneoffset));
 				//state->dpflags |= RENDER_COMPLEXANIMATION;
+			}
+			//nettest: a RAGDOLL skeleton is SKEL_ABSOLUTE (rag_derive leaves it absolute + entity-local via invemat)
+			//so the RELATIVE-only writer above silently drops it => a server-simulated ragdoll's flopping bones never
+			//reach clients.  Convert absolute->relative (needs the model's bone parents) into a temp buffer, then
+			//network it in the IDENTICAL wire format.  The client already rebuilds relative bones -> NO client change.
+			//state->bonecount is a byte, so cap at 255.
+			else if (fs.skeltype == SKEL_ABSOLUTE && fs.bonecount && fs.bonecount <= 255)
+			{
+				model_t *rmod = sv.world.Get_CModel(&sv.world, ent->v->modelindex);
+				int rnb = 0;
+				struct galiasbone_s *rbones = rmod ? Mod_GetBoneInfo(rmod, &rnb) : NULL;
+				if (rbones && rnb >= (int)fs.bonecount)
+				{
+					float relbuf[255*12];
+					Alias_ForceConvertBoneData(SKEL_ABSOLUTE, fs.bonestate, fs.bonecount, rbones, SKEL_RELATIVE, relbuf, fs.bonecount);
+					Bones_To_PosQuat4(fs.bonecount, relbuf, AllocateBoneSpace(pack, state->bonecount = fs.bonecount, &state->boneoffset));
+				}
 			}
 		}
 #endif

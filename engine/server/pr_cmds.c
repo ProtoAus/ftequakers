@@ -572,6 +572,21 @@ void QC_Clear(void);
 builtin_t pr_builtin[];
 extern int pr_numbuiltins;
 
+//nettest Patch 101: non-blocking peek — see the Peek_CModel comment in world.h.  Deliberately does
+//NOT call Mod_LoadModel or COM_WorkerPartialSync: a still-loading model simply reads as "not ready
+//yet" and the caller skips it this frame.  (Something else always kicks the real load: the prop is
+//precached and its collision/render path calls the blocking Get_CModel.)
+model_t *QDECL SVPR_PeekCModel(world_t *w, int modelindex)
+{
+	if ((unsigned int)modelindex < MAX_PRECACHE_MODELS)
+	{
+		model_t *mod = sv.models[modelindex];
+		if (mod && mod->loadstate == MLS_LOADED)
+			return mod;
+	}
+	return NULL;
+}
+
 model_t *QDECL SVPR_GetCModel(world_t *w, int modelindex)
 {
 	if ((unsigned int)modelindex < MAX_PRECACHE_MODELS)
@@ -800,6 +815,7 @@ void Q_SetProgsParms(qboolean forcompiler)
 	sv.world.Event_Sound = SVQ1_StartSound;
 	sv.world.Event_ContentsTransition = SVPR_Event_ContentsTransition;
 	sv.world.Get_CModel = SVPR_GetCModel;
+	sv.world.Peek_CModel = SVPR_PeekCModel;	//nettest Patch 101 (non-blocking; debug viz)
 	sv.world.Get_FrameState = SVPR_Get_FrameState;
 	PR_ClearThreads(svprogfuncs);
 	PR_fclose_progs(svprogfuncs);

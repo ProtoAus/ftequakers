@@ -815,9 +815,14 @@ void Bones_To_PosQuat4(int numbones, const float *matrix, short *result)
 			quatscale = (quat[3] >= 0 ? -32767.0f : 32767.0f) / sqrt(quatscale);
 		// use a negative scale on the quat because the above function produces a
 		// positive quat[3] and canonical quaternions have negative quat[3]
-		result[0] = origin[0] * origininvscale;
-		result[1] = origin[1] * origininvscale;
-		result[2] = origin[2] * origininvscale;
+		//nettest: CLAMP the position to the signed-short range instead of letting the float->short cast WRAP.
+		//A relative bone offset only exceeds +-511u (32767/64) for a RAGDOLL whose joints momentarily stretch
+		//under a violent impulse; unclamped that wraps to the far side = a grotesque distortion until it settles.
+		//Clamping turns that into a graceful stretch-to-edge.  The normal SKEL_RELATIVE anim path is unaffected
+		//(its child->parent offsets are bone lengths, far under 511u).
+		result[0] = bound(-32767, origin[0] * origininvscale, 32767);
+		result[1] = bound(-32767, origin[1] * origininvscale, 32767);
+		result[2] = bound(-32767, origin[2] * origininvscale, 32767);
 		result[3] = quat[0] * quatscale;
 		result[4] = quat[1] * quatscale;
 		result[5] = quat[2] * quatscale;

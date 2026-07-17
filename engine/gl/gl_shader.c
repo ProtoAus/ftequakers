@@ -1507,6 +1507,8 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 	qboolean fail = false;
 
 	extern cvar_t r_glsl_pbr, gl_specular, gl_specular_power;
+	extern cvar_t r_shadows_throwfade;	//nettest: contact-shadow gap fade, injected alongside FAKESHADOWS
+	extern cvar_t r_sun_dir;			//nettest: env_sun world direction, injected as e_fakesundir for model sun-shade
 
 	if (~prog->supportedpermutations & p)
 		return NULL;	//o.O
@@ -1522,11 +1524,21 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		Q_strlcatfz(defines, &offset, sizeof(defines), "#define PBR\n");
 #ifdef RTLIGHTS
 	if (r_fakeshadows)
+	{
 		Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS\n%s",
 #ifdef GLQUAKE
 				gl_config.arb_shadow?"#define USE_ARB_SHADOW\n":
 #endif
 				"");
+		//nettest: contact-shadow gap fade constant (sys/pcf.h reads it) driven by the live
+		//cvar value; changes take effect on the next shader flush (vid_reload / r_shadows toggle).
+		Q_strlcatfz(defines, &offset, sizeof(defines), "#define r_shadows_throwfade %f\n", r_shadows_throwfade.value);
+		//nettest: world-space env_sun direction (toward the sun) for the model N-dot-L "sun shade"
+		//in defaultskin.glsl.  r_sun_dir is CVAR_SHADERSYSTEM so its per-map change flushes shaders
+		//and re-injects this (no staleness across maps).
+		Q_strlcatfz(defines, &offset, sizeof(defines), "#define e_fakesundir vec3(%f,%f,%f)\n",
+			r_sun_dir.vec4[0], r_sun_dir.vec4[1], r_sun_dir.vec4[2]);
+	}
 #endif
 
 	for (n = 0; n < countof(permutations); n++)

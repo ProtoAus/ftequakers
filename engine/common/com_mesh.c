@@ -31,6 +31,8 @@ cvar_t r_skel_spinebend						= CVARFD ("r_skel_spinebend", "1", CVAR_ARCHIVE, "E
 //"warp" (and the same upper-body scale fed the weapon attach + warped the gun).  1 fixes it in the
 //engine for all models; 0 falls back to the per-bone QC orthonormalize.
 cvar_t r_skel_blendnormalize				= CVARFD ("r_skel_blendnormalize", "1", CVAR_ARCHIVE, "Re-orthonormalize blended IQM bone matrices so frame-blend scale can't compound down the skeleton (the player-model warp). 0 = off (set only for models that bake intentional non-unit bone scale).");
+cvar_t r_showragdoll						= CVARD ("r_showragdoll", "0", "Force-draw every ragdoll collision body (dark box/sphere) + joint anchor (cyan Z / yellow X gizmo) regardless of the .doll draw flags. Doll-tuning debug: the joint gizmo sits at the real constraint anchor, so mis-placed joints show as gizmos away from where two limbs meet.");
+cvar_t r_ragdoll_timescale					= CVARD ("r_ragdoll_timescale", "1", "Time scale for the CLIENT (csqc_world) ragdoll physics step. 1 = normal, 0.1 = slow motion, 0 = frozen (read-back + camera still run, so you can orbit and inspect a paused pose). Doll-tuning aid; does not affect gameplay/server physics.");
 #ifdef MD1MODELS
 cvar_t mod_h2holey_bugged					= CVARD ("mod_h2holey_bugged", "0", "Hexen2's holey-model flag uses index 0 as transparent (and additionally 255 in gl, due to a bug). GLQuake engines tend to have bugs that use ONLY index 255, resulting in a significant compatibility issue that can be resolved only with this shitty cvar hack.");
 cvar_t mod_halftexel						= CVARD ("mod_halftexel", "1", "Offset texture coords by a half-texel, for compatibility with glquake and the majority of engine forks.");
@@ -3156,7 +3158,8 @@ static void Mod_AddHullBevels(model_t *mod, convhull_t *out, const vecV_t *allve
 //with the QuickHull -> k-DOP -> AABB fallback chain. mins/maxs are this set's axis bounds
 //(used only by the fallback box viz). Used for both the single hull (mode 2, all verts) and
 //each per-submesh piece (mode 3).
-static void Mod_BuildConvHull(model_t *mod, convhull_t *out, const vecV_t *verts, int num, const vec3_t mins, const vec3_t maxs, int cap)
+//nettest Patch 103: no longer static - gl_hlmdl.c builds the same hull for GoldSrc .mdl. Prototype in com_mesh.h.
+void Mod_BuildConvHull(model_t *mod, convhull_t *out, const vecV_t *verts, int num, const vec3_t mins, const vec3_t maxs, int cap)
 {
 	int n;
 	out->numplanes = 0; out->planes = NULL;
@@ -3284,6 +3287,53 @@ static void Mod_ACDRecurse(acdctx_t *c, int *tris, int ntris, int depth)
 //in MODEL space. The engine builds each piece's hull with Mod_BuildConvHull (same bevels +
 //conservative push-out as the runtime ACD), so offline vs runtime differ ONLY in the partition.
 //Returns the piece count (0 = missing/invalid -> caller falls back to the runtime ACD).
+//nettest Patch 102: should this model skip collision-hull construction entirely?
+//
+//Mod_LoadIQMFile builds a QuickHull of EVERY IQM's base verts (Patch 56), and on top of that runs the
+//full convex DECOMPOSITION when sv_prop_decomp >= 1 -- and it does so with NO test that the model will
+//ever be used as a collidable prop, because at load time it cannot know.  So every player model, every
+//gib, every debris chip pays for collision geometry that nothing will ever trace against.  On this
+//game's content that is 11 player models (highly concave, thousands of verts -> the FULL recursive ACD,
+//up to 64 QuickHull builds each) plus 122 gibs -- all of it wasted, and all of it on the loader worker
+//that the map load is waiting for.  Players collide via hitboxes/skeleton and gibs via bounce boxes;
+//only SOLID_PHYSICS_TRIMESH/BOX entities ever reach World_HullTrace / PM_HullTrace.
+//
+//An EXCLUDE list (rather than an include list) is the safe direction: a path that is not listed keeps
+//exactly today's behaviour, so nothing silently loses collision by being forgotten.  And a model that
+//IS excluded but somehow gets used as a prop degrades gracefully rather than falling through the world
+//-- pmovetst.c gates the hull trace on `numhullplanes >= 4 || numhulls > 0`, so with no hull it simply
+//falls back to the engine's normal per-triangle/box alias trace, which is what an unhulled model has
+//always done.
+//nettest Patch 103: no longer static - gl_hlmdl.c gates its hull build on the same cvar. Prototype in com_mesh.h.
+qboolean Mod_SkipCollisionHulls(model_t *mod)
+{
+	//*** Registered in Mod_Init (gl_model.c), NOT Cvar_Get'd here. ***
+	//Mod_LoadIQMFile runs on a LOADER WORKER, and Cvar_Get REGISTERS the cvar on first call.  This
+	//started life as a lazy Cvar_Get here and crashed the game on any map with props: worker_count
+	//defaults to 4, a prop map loads many IQMs at once, and several workers hit the first-ever
+	//Cvar_Get simultaneously and raced to insert into the cvar hash.  (The neighbouring
+	//Cvar_Get("sv_prop_decomp") gets away with the same shape ONLY because that cvar is already in
+	//the mod's server.cfg, so it is registered on the main thread long before any model loads and the
+	//workers merely FIND it.  A brand-new cvar has no such protection -- do not copy that pattern.)
+	extern cvar_t mod_prop_hull_exclude;
+	const char *list, *sep;
+	size_t seglen;
+
+	if (!*mod_prop_hull_exclude.string)
+		return false;
+	for (list = mod_prop_hull_exclude.string; *list; )
+	{
+		sep = strchr(list, ';');
+		seglen = sep ? (size_t)(sep - list) : strlen(list);
+		if (seglen && !Q_strncasecmp(mod->name, list, seglen))
+			return true;
+		if (!sep)
+			break;
+		list = sep + 1;
+	}
+	return false;
+}
+
 static int Mod_LoadACDSidecar(model_t *mod)
 {
 	char	fname[MAX_QPATH];
@@ -3304,8 +3354,94 @@ static int Mod_LoadACDSidecar(model_t *mod)
 	memcpy(&ver, p+4, 4);     ver = LittleLong(ver);
 	memcpy(&npieces, p+8, 4); npieces = LittleLong(npieces);
 	p += 12;
-	if (ver != 1 || npieces < 1 || npieces > ACD_ARRAY)
+	if ((ver != 1 && ver != 2) || npieces < 1 || npieces > ACD_ARRAY)
 	{	Con_Printf(CON_WARNING "%s: unsupported .acd (ver=%i pieces=%i)\n", fname, ver, npieces); BZ_Free(buf); return 0; }
+
+	//nettest Patch 102: FCAD **v2** = fully-BUILT hulls (planes/tris/bounds straight off disk).
+	//
+	//*** STATUS: the READER is correct and stays (v2 files load fine). But NO v2 FILES SHIP: the
+	//*** offline baker that produced them was WRONG and its output was reverted. Do not re-bake v2
+	//*** until the baker reproduces Mod_BuildConvHull EXACTLY. What it missed:
+	//***   - Mod_AddHullBevels (Patch 63) - Mod_BuildConvHull ALWAYS calls it; v2 props silently lost
+	//***     their bevels, so the swept player box catches on prop edges again.
+	//***   - the Patch-60 conservative-outward plane push - CoACD face dists are not guaranteed to
+	//***     enclose the source mesh, so v2 hulls could clip INTO the visible model.
+	//***   - the face-merge TOLERANCE: this builder merges within ~2 degrees (dot > 0.99939, below);
+	//***     the baker merged only near-identical planes, so 697 of 7819 pieces jammed at the 256 cap
+	//***     (van_2: 3339 planes over 24 pieces, vs 111 for this builder's single hull of the same
+	//***     model). Capped pieces then hit the "merge into most-parallel, keep the looser .w" fudge
+	//***     -> INFLATED hulls -> invisible collision. And traces are O(planes) per piece.
+	//*** The lesson: an offline baker has to re-implement this whole pipeline and will silently drift
+	//*** from it. If this is revisited, have the ENGINE write the cache right here after
+	//*** Mod_BuildConvHull - byte-identical by construction, no divergence possible. FS_WriteFile
+	//*** (FS_GAMEONLY) is safe from the loader worker; the hash flush must be posted to WG_MAIN via
+	//*** COM_AddWork (COM_WriteFile / FS_FlushFSHashWritten from a worker DEADLOCK on COM_WorkerLock).
+	//
+	//v1 only cached the PARTITION -- the point set of each piece -- so the loader still had to run
+	//Mod_BuildConvHull per piece on every load (see the v1 path below).  For a 26-piece van that is 26
+	//QuickHull builds on the loader worker the map load is waiting on, from a file that was supposed to
+	//be "the cached version".  v2 stores what those builds produce, so loading is a read + memcpy.
+	//This is also why v2 is worth baking for CONVEX props that v1 deliberately skipped (the bake tool
+	//only wrote a v1 sidecar when CoACD found >1 piece, since a 1-piece v1 file saved nothing): a
+	//1-piece v2 file still skips that piece's hull build.
+	//
+	//Layout (little-endian, mirrors convhull_t):
+	//  "FCAD" | i32 ver=2 | i32 npieces
+	//  per piece: i32 numplanes | f32 planes[numplanes*4]   (xyz = outward unit normal, w = dist)
+	//             i32 numtris   | f32 tris[numtris*3*3]     (numtris triangles x 3 verts x xyz)
+	//             f32 mins[3]   | f32 maxs[3]
+	//v1 files keep loading unchanged -- 584 of them ship, and are currently the ONLY .acd in the game.
+	if (ver == 2)
+	{
+		mod->convhulls = ZG_Malloc(&mod->memgroup, sizeof(convhull_t)*npieces);
+		for (i = 0; i < npieces; i++)
+		{
+			convhull_t *ch = &mod->convhulls[i];
+			int np, nt, j, k;
+			if (p + 4 > end) { ok = 0; break; }
+			memcpy(&np, p, 4); np = LittleLong(np); p += 4;
+			//>=4 planes for a closed volume. Division, not multiplication, for the bounds test so a
+			//hostile count cannot wrap (same reasoning as the v1 path below). 16 bytes per vec4.
+			if (np < 4 || np > 65536 || (size_t)np > (size_t)(end - p) / 16) { ok = 0; break; }
+			ch->numplanes = np;
+			ch->planes = ZG_Malloc(&mod->memgroup, sizeof(vec4_t)*np);
+			for (j = 0; j < np; j++)
+			{
+				for (k = 0; k < 4; k++)
+				{
+					float f;
+					memcpy(&f, p, 4); p += 4;
+					ch->planes[j][k] = LittleFloat(f);
+				}
+			}
+
+			if (p + 4 > end) { ok = 0; break; }
+			memcpy(&nt, p, 4); nt = LittleLong(nt); p += 4;
+			//tris are viz-only (r_showhull); 0 is legal. 36 bytes per tri (3 verts x xyz).
+			if (nt < 0 || nt > 1048576 || (size_t)nt > (size_t)(end - p) / 36) { ok = 0; break; }
+			ch->numtris = nt;
+			ch->tris = nt ? ZG_Malloc(&mod->memgroup, sizeof(vec3_t)*nt*3) : NULL;
+			for (j = 0; j < nt*3; j++)
+			{
+				for (k = 0; k < 3; k++)
+				{
+					float f;
+					memcpy(&f, p, 4); p += 4;
+					ch->tris[j][k] = LittleFloat(f);
+				}
+			}
+
+			if (p + 24 > end) { ok = 0; break; }
+			for (k = 0; k < 3; k++) { float f; memcpy(&f, p, 4); p += 4; ch->mins[k] = LittleFloat(f); }
+			for (k = 0; k < 3; k++) { float f; memcpy(&f, p, 4); p += 4; ch->maxs[k] = LittleFloat(f); }
+		}
+		BZ_Free(buf);
+		if (!ok)
+		{	Con_Printf(CON_WARNING "%s: truncated/invalid .acd v2 -> falling back to runtime ACD\n", fname); return 0; }
+		mod->numhulls = npieces;
+		Con_DPrintf("ACD sidecar %s: %i pieces (v2, prebuilt)\n", fname, npieces);
+		return npieces;
+	}
 
 	mod->convhulls = ZG_Malloc(&mod->memgroup, sizeof(convhull_t)*npieces);
 	for (i = 0; i < npieces; i++)
@@ -5691,6 +5827,33 @@ static qboolean QDECL Mod_LoadQ1Model (model_t *mod, void *buffer, size_t fsize)
 	if (mod->maxs[0] < mod->mins[0])	//no points? o.O
 		AddPointToBounds(vec3_origin, mod->mins, mod->maxs);
 #endif
+
+	//nettest Patch 103: collision hull for QUAKE (IDPO) .mdl -- the companion to the GoldSrc one in
+	//gl_hlmdl.c. Only the IQM loader built a hull (Patch 56), so every .mdl had numhullplanes==0 and
+	//the SOLID_PHYSICS_TRIMESH path silently fell back to a bbox. 40 of this game's 75 dropped-weapon
+	//world models are IDPO (knife/ak47/awp/deagle/usp among them), so the GoldSrc fix alone would
+	//have covered less than half of them.
+	//
+	//Simpler than the GoldSrc case: Quake .mdl is VERTEX-ANIMATED, not skeletal, so poseofs verts are
+	//already in model space -- no bind-pose transform to replicate, and no bone-local trap.
+	//
+	//Use POSE 0 only (the rest pose), matching the IQM loader's use of the base verts. The bounds loop
+	//above deliberately unions EVERY pose (bounds must contain the whole animation), but a hull over
+	//every pose would be the swept volume of the animation -- far too fat for collision. Static props
+	//and w_ models have one pose anyway, so the two agree there.
+	if (galias->numanimations && galias->numverts >= 4 && !Mod_SkipCollisionHulls(mod))
+	{
+		galiasanimation_t *a = galias->ofsanimations;
+		if (a->numposes && a->poseofs[0].ofsverts)
+		{
+			convhull_t single;
+			Mod_BuildConvHull(mod, &single, a->poseofs[0].ofsverts, galias->numverts, mod->mins, mod->maxs, 256);
+			mod->numhullplanes = single.numplanes;
+			mod->hullplanes    = single.planes;
+			mod->numhulltris   = single.numtris;
+			mod->hulltris      = single.tris;
+		}
+	}
 
 	mod->type = mod_alias;
 	Mod_ClampModelSize(mod);
@@ -10243,7 +10406,10 @@ static galiasinfo_t *Mod_ParseIQMMeshModel(model_t *mod, const char *buffer, siz
 	//nettest Patch 56: build a TRUE convex hull (incremental QuickHull) of the base verts
 	//for smooth, watertight, O(planes) player collision (World_HullTrace, sv_prop_collision
 	//2). Fall back to the 26-DOP, then the AABB, so every static model gets a valid hull.
-	if (h->num_vertexes)
+	//nettest Patch 102: skip ALL collision-hull work for models that can never be props (see
+	//Mod_SkipCollisionHulls).  This is the whole block -- the Patch 56 single hull AND the Patch 61/65
+	//decomposition -- because neither is reachable for a non-prop.
+	if (h->num_vertexes && !Mod_SkipCollisionHulls(mod))
 	{
 		convhull_t single;
 		Mod_BuildConvHull(mod, &single, opos, h->num_vertexes, mod->mins, mod->maxs, 256);
@@ -11688,6 +11854,8 @@ void Alias_Register(void)
 {
 	Cvar_Register(&r_skel_spinebend, NULL);	//nettest Patch 36
 	Cvar_Register(&r_skel_blendnormalize, NULL);	//nettest warp fix (IQM frame-blend renormalize)
+	Cvar_Register(&r_showragdoll, NULL);	//nettest ragdoll debug draw toggle
+	Cvar_Register(&r_ragdoll_timescale, NULL);	//nettest ragdoll slow-mo/freeze
 #ifdef MD1MODELS
 #ifndef SERVERONLY
 	Cvar_Register(&dpcompat_nofloodfill, NULL);

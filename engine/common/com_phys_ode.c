@@ -1804,7 +1804,20 @@ static qboolean QDECL World_ODE_RagCreateBody(world_t *world, rbebody_t *bodyptr
 	dGeomSetBody(bodyptr->geom, bodyptr->body);
 	dGeomSetData(bodyptr->geom, (void*)ent);
 
+	//NB: don't seed velocity here - rag_instanciate re-poses every body via RagMatrixToBody AFTER this
+	//(which zeros velocity), so it's dead.  The throw seed is applied post-re-pose via RagSetBodyVelocity.
 	return World_ODE_RagMatrixToBody(bodyptr, mat);
+}
+
+//seed a ragdoll limb's velocity - called by rag_instanciate AFTER its final re-pose loop (so it survives).
+//linvel/avel are already physics-space (Quake units/s, rad/s); the QC-Euler remap happens at the call site.
+static void QDECL World_ODE_RagSetBodyVelocity(world_t *world, rbebody_t *bodyptr, vec3_t linvel, vec3_t avel)
+{
+	if (!bodyptr->body)
+		return;
+	dBodySetLinearVel(bodyptr->body,  linvel[0], linvel[1], linvel[2]);
+	dBodySetAngularVel(bodyptr->body, avel[0],   avel[1],   avel[2]);
+	dBodyEnable(bodyptr->body);
 }
 
 static void QDECL World_ODE_RagMatrixFromJoint(rbejoint_t *joint, rbejointinfo_t *info, float *mat)
@@ -2904,6 +2917,7 @@ static void QDECL World_ODE_Start(world_t *world)
 	ctx->pub.RagCreateJoint			= World_ODE_RagCreateJoint;
 	ctx->pub.RagDestroyBody			= World_ODE_RagDestroyBody;
 	ctx->pub.RagDestroyJoint		= World_ODE_RagDestroyJoint;
+	ctx->pub.RagSetBodyVelocity		= World_ODE_RagSetBodyVelocity;	//nettest: throwable ragdolls
 	ctx->pub.RunFrame				= World_ODE_Frame;
 	ctx->pub.PushCommand			= World_ODE_PushCommand;
 

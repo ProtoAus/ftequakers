@@ -37,9 +37,10 @@ typedef struct
 
 
 
-extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight;
+extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback;
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
+extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
 
 extern cvar_t gl_ati_truform;
 extern cvar_t r_vertexdlights;
@@ -1435,6 +1436,22 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			center[2] += 24;
 			#endif
 			cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+			if (r_modellight_fallback.ival)
+			{	/*the +24 sample point lands inside the ceiling for roof-mounted
+				  models, and a lightpoint trace that starts in solid returns
+				  pure black. step the sample point back down and retry so such
+				  models take the light of the open space they hang in; only a
+				  black first sample pays for the extra traces.*/
+				static const float drop[] = {0, -24, -48};
+				int attempt;
+				for (attempt = 0; attempt < countof(drop); attempt++)
+				{
+					if (ambientlight[0] || ambientlight[1] || ambientlight[2] || shadelight[0] || shadelight[1] || shadelight[2])
+						break;
+					center[2] = e->origin[2] + drop[attempt];
+					cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+				}
+			}
 		}
 	}
 	else
@@ -1764,6 +1781,7 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 	int surfnum, j;
 	shadersort_t sort;
 	float lod;
+	qboolean sizecullable;	//nettest Patch 100
 
 	texnums_t *skin;
 
@@ -1783,6 +1801,22 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 		}
 	}
 #endif
+
+	//nettest Patch 100: may this entity be culled purely for being small on screen?
+	//Starts from the same exemptions the frustum cull below uses (a viewmodel has no meaningful
+	//world size; a skeletal-object entity is posed by QC and may be drawn anywhere), then adds the
+	//ones that only matter when culling by SIZE rather than by visibility:
+	//  playerindex >= 0  -- a QW player (set from state->colormap-1 in cl_ents.c, else -1)
+	//  RF_EXTERNALMODEL  -- the local player's own body in third person
+	//  RF_FIRSTPERSON    -- eyes-only models
+	//A distant enemy must never blink out, so players are exempt regardless of how small they get.
+	//In this game the player proxies are CSQC skeletal objects and so are already covered by the
+	//bonestate test, but the explicit checks keep this correct for plain packet-entity players too.
+	sizecullable = !(e->flags & (RF_WEAPONMODEL|RF_EXTERNALMODEL|RF_FIRSTPERSON))
+#ifdef SKELETALMODELS
+				&& !e->framestate.bonestate
+#endif
+				&& e->playerindex < 0;
 
 	if (!(e->flags & RF_WEAPONMODEL)
 #ifdef SKELETALMODELS
@@ -1811,7 +1845,32 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 
 	inf = Mod_Extradata (clmodel);
 
-	if (clmodel->maxlod)
+	//nettest Patch 100: the projected screen-coverage of the model's bounding sphere drives BOTH the
+	//stock per-surface LOD selection AND the entity cull below, so it is computed once here.  It used
+	//to be gated behind `if (clmodel->maxlod)`, i.e. it never ran at all for a model without authored
+	//LOD data -- which is every asset in this game.  That left model entities frustum-culled ONLY: a
+	//prop 3000qu away still generated batches, rebuilt its skeleton, sampled the lightmap, uploaded
+	//its uniforms and issued draws in every pass, while covering almost no pixels.
+	//
+	//PERSPECTIVE PASSES ONLY (Patch 100a -- fixes "r_model_mincoverage kills self-shadowing").
+	//The maths below is a PERSPECTIVE projected-sphere size, but Sh_GenShadowMap OVERWRITES
+	//r_refdef.m_projection_std with the light's ORTHOGRAPHIC matrix (gl_shadow.c ->
+	//Matrix4x4_CM_Orthographic) before generating the shadow faces.  Fed an ortho matrix the formula
+	//is meaningless -- the perspective divide term (m[7]*r + m[11]*-z + m[15]) collapses to the
+	//constant 1 -- so it fell under the threshold for everything and culled every caster out of the
+	//depth map: models stopped shadowing themselves and each other the moment the cvar went nonzero.
+	//(vpn/vieworg stay the CAMERA's through the shadow pass -- ONLY the projection is swapped -- which
+	//is exactly what made this look correct right up until it wasn't.)
+	//Testing the matrix directly, rather than plumbing bemode down through 4 call sites, keeps the
+	//guard next to the assumption it protects and can never go stale:
+	//  perspective (Matrix4x4_CM_Projection_Far): m[11] = -1, m[15] = 0
+	//  orthographic (Matrix4x4_CM_Orthographic):  m[11] =  0, m[15] = 1
+	//Costs us nothing: the fake-sun pass is already limited to the r_shadows_distance ortho box, so
+	//the far props this cull targets were never drawn into it to begin with.
+	//This also guards the STOCK LOD path, which shares the same latent flaw and would have selected
+	//nonsense LOD levels in the shadow pass the moment any asset carried lodrange data.
+	if (r_refdef.m_projection_std[11] != 0
+	    && (clmodel->maxlod || r_model_mincoverage.value > 0))
 	{
 		vec3_t v;
 		float z;
@@ -1821,7 +1880,7 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 		if (z < -clmodel->radius)
 			return;		//furthest extent of bounding sphere is nearer than the near clip plane, and thus completely invisible
 		else if (z < 0)
-			lod = 0;	//nearer than the camera, use the highest lod
+			lod = 0;	//nearer than the camera, use the highest lod (and never size-cull)
 		else
 		{
 			//if the ent is in the middle of the screen, then the right edge of its sphere is at what percentage of the width of the screen...?
@@ -1829,11 +1888,30 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			//simplified Matrix4x4_CM_Transform4
 			float coverage = (r_refdef.m_projection_std[5]*clmodel->radius + r_refdef.m_projection_std[ 9]*-z + r_refdef.m_projection_std[13]) /
 							 (r_refdef.m_projection_std[7]*clmodel->radius + r_refdef.m_projection_std[11]*-z + r_refdef.m_projection_std[15]);
-			lod = 1-(coverage*r_lodscale.value);
-			lod = bound(0, lod, 1);	//so lodbias is a little more reliable.
-			lod *= clmodel->maxlod;
-			lod += r_lodbias.value;
-			lod = max(0, lod);	//never nearer than 0, the min value check wouldn't cope.
+
+			//nettest Patch 100: size cull.  Culling HERE (before Mod_Extradata's surface walk below)
+			//drops the whole per-entity cost -- batch-gen, Alias_GAliasBuildMesh's bone build,
+			//R_CalcModelLighting's recursive lightmap sample, the uniform upload and the draw -- not
+			//just triangles.  Both the main pass and the r_shadows 2 depth pass funnel through this
+			//one function via BE_GenModelBatches, so one test culls both.
+			//Coverage is a fraction of the screen, so this is size-aware: a large prop stays visible
+			//much further out than a small one at the same distance -- which is what you want, and
+			//what a raw distance cull cannot do.
+			//`sizecullable` deliberately excludes players/viewmodels/skeletal-object entities: an
+			//enemy going invisible at range is a gameplay bug, not an optimisation.
+			if (r_model_mincoverage.value > 0 && coverage < r_model_mincoverage.value && sizecullable)
+				return;
+
+			if (clmodel->maxlod)
+			{
+				lod = 1-(coverage*r_lodscale.value);
+				lod = bound(0, lod, 1);	//so lodbias is a little more reliable.
+				lod *= clmodel->maxlod;
+				lod += r_lodbias.value;
+				lod = max(0, lod);	//never nearer than 0, the min value check wouldn't cope.
+			}
+			else
+				lod = 0;
 		}
 	}
 	else

@@ -1727,3 +1727,1046 @@ gets nulled (check `developer 1`).
 
 **Verify:** map with a `func_fogvolume` brush (`rendercolor "160 170 190"`, `fogdist 384`) over a
 room → surfaces + players inside fog; outside clear.
+
+## Patch 78 — aspect-ratio (non-square) decals via optional `adddecal()` arg  *(APPLIED, client-only / `m-rel`)*
+
+**Files:** `engine/client/cl_ents.c` (`CL_AddDecal`) + `engine/client/pr_csqc.c` (`PF_R_AddDecal` + its
+forward decl)  ·  search `nettest: optional aspect`
+
+**Why:** `adddecal()` (the `r_decal_renderer 0` path, plus bullet holes / sprays / scorch / blood) was
+**square-only**: `CL_AddDecal` derived BOTH in-plane texture scales from the single `side` vector
+(`scale[1]=scale[2]=1/radius`) and cross-produced the second in-plane axis, so width always == height.
+Infodecals therefore couldn't keep a non-square PNG's proportions unless they used the tri-soup
+renderer (`r_decal_renderer 1`) — but that path can't do the per-pixel decal lightmap (Patch 72), which
+the mod pins on (`data/default.cfg`: `r_decal_renderer 0` + `r_decal_lightmap 1`). So per-pixel lightmap
+and aspect ratio were mutually exclusive.
+
+**What it adds:** an OPTIONAL 7th `adddecal()` argument `aspect` (= width/height; builtin #375). The
+passed `side` vector still sets the vertical (T / `axis[2]`) half-extent = `radius`; the DERIVED
+horizontal axis (`axis[1]` / S) is widened to `hradius = radius*aspect`, so `scale[1]=1/hradius`,
+`offset[1]=…+0.5*hradius`. `aspect<=0` or absent → `1` = square. Fully backward-compatible: every
+existing 6-arg caller (bullet holes, sprays, scorch, blood) is untouched and stays square
+(`prinst->callargc > 6 ? G_FLOAT(OFS_PARM6) : 1`).
+
+**TWO parts — texcoords AND the clip footprint (the second is easy to miss):** just widening the S
+texcoord scale corrects the *texel* aspect but leaves the `Mod_ClipDecal` FOOTPRINT a square, so an
+aspect-corrected texture **tiles** to fill the square (the texture uses `map` = GL_REPEAT, not
+`clampmap`). `Mod_ClipDecal` (q1bsp.c:605) sets each clip slab's half-extent to
+`length(tangent)*size/2` *after* normalizing the tangent to a plane normal — so pass **non-unit
+tangents** to make the footprint rectangular WITHOUT touching the callback's texcoords (which use the
+separate unit `ctx.axis[]`): `clipsize=max(radius,vradius)`,
+`cliptan1=axis[1]*(hradius/clipsize)` (→ half-extent `hradius/2`, matches S∈[0,1]),
+`cliptan2=axis[2]*(radius/clipsize)` (→ half-extent `radius/2`, matches T∈[0,1]), normal kept unit
+(`dec.normal` for the back-face test unchanged; depth = `clipsize/2` = original). Footprint edge now
+coincides exactly with the texcoord [0,1] range → no tiling, no stretch. For `aspect=1` with
+`radius>=vradius` (all legacy callers, unit normal) it reduces to unit tangents + `size=radius` =
+byte-identical to the pre-aspect call. **Adversarially verified** (3 lenses: clip geometry / texcoord
+consistency / aspect=1 regression) against the real clipper before shipping.
+
+**QC (mod, not engine):** `cl_defs.qc` builtin def gains `optional float aspect`; `cl_infodecal.qc`
+stores `id_dec_aspect = half_w/half_h` (= pngW/pngH from `drawgetimagesize`) per adddecal slot and
+passes it as the 7th arg on both the plain + `_lm` draw calls.
+
+**Verify:** `r_decal_renderer 0` + `r_decal_lightmap 1`, place `{airgarden25` (512×128) → 4:1 rectangle
+and still per-pixel lit; `{altar` (128×512) → 1:4; `{99store` (256×256) stays square; bullet holes/sprays
+unchanged (still square).
+
+## Patch 79 — PERSISTENT LIT DECALS: clip once + cache, kill the per-frame BSP re-clip  *(APPLIED, client-only / `m-rel`; Phase 1 = infodecals)*
+
+**Files:** `engine/client/cl_ents.c` (store + persistent callback + `CL_ClipPersistDecal` + `CL_EmitPersistentDecals`
++ `CL_WipePersistentDecals`; Phase-0 refactor of `CL_AddDecal`/`CL_AddDecal_Callback` into `CL_Decal_SetupCtx`
++ `CL_Decal_VertexAttribs`) · `engine/client/pr_csqc.c` (`PF_R_AddDecalStatic`/`PF_R_RemoveDecal`/`PF_R_UpdateDecal`
++ table entries `#0` name-resolved) · `engine/client/client.h` (protos by the `cl_stris*` block) ·
+`engine/client/r_surf.c` (emit hook after `P_DrawParticles`, both webostate + main branches, gated `!r_refdef.recurse`)
+· `engine/client/cl_main.c` (`CL_WipePersistentDecals` in `CL_ClearState`). Search `nettest: PERSISTENT`.
+
+**Why:** the QC re-issued `adddecal()` for every decal every frame (scene buffers wiped each frame in
+`CL_ClearEntityLists`), and `CL_AddDecal` **unconditionally re-walks the BSP + re-clips** via `Mod_ClipDecal`.
+So bullet holes (≤1024) + infodecals (≤128) — pinned to the `adddecal` path for the per-pixel lightmap
+(Patch 72, `r_decal_lightmap` only works there) — cost O(N) BSP re-clips **per frame** → FPS falls with decal
+count. FTE's native persistent decals (`clippeddecal_t`/particle udecal, `p_script.c`) clip once + re-copy each
+frame but carry **no lightmap**. This adds the same clip-once-persist model **with** the lightmap.
+
+**What it adds:** three CSQC builtins driving an engine persistent-decal store —
+`float adddecal_static(shader, org, up, side, rgb, alpha, [aspect], [lifetime])` clips ONCE (reusing the exact
+`CL_AddDecal` clip + `DecalLM_Interp` lightmap-coord code via the new shared `CL_Decal_SetupCtx`/`_VertexAttribs`),
+caches the tris (`vertex/texcoord/lmcoord/valpha` + per-tri lightmap **page**) in a `persistdecal_t` record, and
+returns a stale-safe handle (`(idx+1)|(seq<<8bits)`); `removedecal(h)` frees it; `updatedecal(h,rgb,alpha)` rewrites
+color/alpha for **free** (fades, no re-clip — base rgba applied at emit, `valpha` edge-fade kept separate).
+`CL_EmitPersistentDecals()` runs each frame in the world draw (before `BE_DrawWorld` consumes `cl_stris`, exactly
+where the udecal `R_AddClippedDecal` emits) and re-copies each record's cached tris into the transient scene buffer
+with lmcoord + per-tri page split → the existing `_lm` shader lights it, **no BSP clip**. Shaders are resolved BY
+NAME (returns the QC-registered `_lm`; never fabricate → no checkerboard) and re-resolved + re-clipped lazily on
+`r_regsequence` change (vid_restart / lightmap-atlas rebuild). Store wiped in `CL_ClearState` (map change / disconnect
+/ CSQC restart). Clip runs on the main thread at spawn/epoch-rebuild only, so the `sh_shadowframe++` in `Mod_ClipDecal`
+stays safe. ~0.6 MB at the 1024+128 caps.
+
+**QC (mod, not engine):** `cl_defs.qc` gains the 3 `#0:name` builtin defs; `cl_infodecal.qc` adds a **new renderer
+mode `r_decal_renderer 2`** (live-swappable): mode 2 reconciles an `id_dec_handle[]` per placed infodecal
+(`adddecal_static` once, `-1` = off-surface don't-retry) and draws nothing (engine emits); modes 0/1 first
+`removedecal` any leftover handles (no double-draw) then dispatch as before. Phase 0 refactor is byte-identical
+(transient `adddecal` path unchanged). Phase 2 (bullet holes: `updatedecal` fades + handle eviction, static-world
+holes) is the next step.
+
+**Hardened (3-lens adversarial review before ship):** (1) **vid_restart use-after-free** — `r_regsequence` is
+NOT bumped on renderer restart (only in `CL_ClearState:2295` + `sv_init`), so the `builtepoch` guard would miss it
+and feed a dangling `rec->shader` to the backend → crash. Fix: `CL_PersistentDecals_Restarted()` (renderer.c:1952,
+by the `CSQC_RendererRestarted` call) flags a re-resolve+re-clip on the next emit (which replaces `rec->shader`
+BEFORE use). (2) **strip index overflow** — this build is 16-bit `index_t` (`MAX_INDICIES 0xffff`); persistent
+decals accumulate into one merged strip, so `CL_Decal_OpenStrip` breaks the strip before `numvert+3 > MAX_INDICIES`.
+(3) **slot-index cap** — the 16-bit handle index caps the store at `0xFFFE` live decals (`AllocSlot` returns -1 →
+QC falls back to transient). (Refuted: the "non-byte-identical clip for |up|≠|side|" flag is Patch 78's intended
+aspect behavior, and no caller passes `|up|<|side|`.)
+
+**Verify:** `r_decal_renderer 2` + `r_decal_lightmap 1` on a wall of infodecals (or spam decals): FPS no longer falls
+with count; `Mod_ClipDecal` fires only at spawn (not per frame); per-pixel lightmap identical to mode 0; A/B mode
+`0`↔`2` pixel-matches; `vid_restart` / `map` / `disconnect` leave no leak/checkerboard/crash.
+
+---
+
+## Patch 80 — Box3D SKELETAL RAGDOLLS: implement the 8 stubbed `Rag*` backend functions  *(APPLIED, `fteplug_box3d` plugin — extends Patch 73)*
+
+**File:** `engine/common/com_phys_box3d.c` (the 8 `Rag*` members of `rigidbodyengine_t` + a `Box3D_JointBasisQuat`
+helper + a `B3RAGBODY` macro). Search `ragdoll`. Build/deploy = Patch 73's command (`make plugins-rel … NATIVE_PLUGINS=box3d`).
+
+**Why:** Patch 73 shipped the Box3D backend for props but left ragdolls STUBBED (`RagCreateBody`/`RagMatrixToBody`
+`return false`, the rest no-op), so skeletal ragdolls (e.g. the mod's IQM player death-flop) only worked on ODE.
+This un-stubs them so a `.doll`-defined ragdoll simulates on Box3D — its cone-twist spherical + limited revolute
+joints are actually a better limb fit than ODE's limitless ball. Mirrors `com_phys_ode.c:1744-2042`.
+
+**What it adds:** per doll-body a `b3_dynamicBody` + one primitive shape (SPHERE→b3Sphere, CAPSULE **and
+CYLINDER**→b3Capsule — no faithful dynamic cylinder in Box3D, a capsule is fine for a limb; BOX→b3MakeBoxHull),
+density=mass/volume (`b3Body_ApplyMassFromShapes`). Per doll-joint a Box3D joint by type: `JOINTTYPE_POINT`→
+`b3CreateSphericalJoint` (cone/twist OFF = ODE-parity unlimited ball), `HINGE`→`b3CreateRevoluteJoint`
+(enableLimit + lower/upperAngle from LoStop/HiStop, clamped ±0.99π; FMax→motor), `FIXED`→`b3CreateWeldJoint`
+(rigid), `SLIDER`→`b3CreatePrismaticJoint`, UNIVERSAL/HINGE2→spherical fallback. **The real new work vs ODE:** ODE
+sets a world anchor+axis directly, Box3D takes two LOCAL frames — so build one world joint frame (`wf.p`=anchor,
+`wf.q`=`Box3D_JointBasisQuat(axis)` mapping the axis to the joint's frame z (revolute/spherical) or x (prismatic))
+then `localFrameA/B = b3InvMulTransforms(bodyA/B_xf, wf)`. Transform sync reuses the prop FLU-column convention
+(`Box3D_QuatFromFLU` / `b3RotateVector` on the row-major 3x4 `mat`). `collideConnected=false` per joint (jointed
+pairs don't collide); bodies `b3DefaultFilter()` (collide static world + props + non-adjacent limbs). Ids pack into
+the `rbebody_t`/`rbejoint_t` `void*` slots via `b3Store/LoadBodyId/ShapeId/JointId`. `RagEnableJoint(false)`
+DESTROYS the joint (Box3D has no enable toggle; death ragdolls keep joints enabled).
+
+**Caveats:** FTE ragdoll is `FTE_QC_RAGDOLL_WIP` (engine FIXMEs). Box3D joints are soft/springy — tune
+`constraintHertz`. Needs a `.doll` def + QC `skel_ragupdate` glue (mod side) to actually flop a corpse.
+
+**Verify:** NOT yet runtime-validated. Author a player `.doll` (`skel_generateragdoll <model>` template), spawn a
+test ragdoll, confirm the bodies fall + REST on the floor (`physics_box3d_debug 1` awake-count/fall-Z; doll
+`draw 1` wireframes). Open question: does the CSQC-world Box3D rbe have the static BSP (floor)? If not, run the
+ragdoll server-side (server world has the mesh).
+
+---
+
+## Patch 81 — Ragdoll: fix `refpose` joint-anchor bug + `r_showragdoll` debug draw + entity-velocity seed (throwable)  *(APPLIED — extends Patch 80)*
+
+Three ragdoll fixes discovered while runtime-validating Patch 80 (the CSQC leet ragdoll flopped but limbs looked
+DISCONNECTED, there was no debug view, and it couldn't be thrown). Two build targets: A1/A2 are core engine
+(`make m-rel FTE_TARGET=win64`), A3 is the physics plugins (`make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS=box3d`,
+and `…NATIVE_PLUGINS=ode` for parity).
+
+**A1 — [UPSTREAM BUG FIX] joint anchor under a reference pose.** `engine/client/pr_skelobj.c` `rag_instanciate`
+(joint loop, ~:1332). A `.doll` with `refpose skin` sets `refanim=-1` so the `absolutes` (reference-pose) path
+runs. The loop computes the right pivot (`bone = j->bonepivot`) but the anchor `memcpy` indexed the wrong var:
+`absolutes + 12*doll->body[i].bone` where `i` is the **joint** loop index → joint #i anchored at body #i's bone.
+On the leet doll, 9 of 10 joints anchored **8–27 units** off their true pivot (shoulders at the head, right
+shoulder across the body at the left forearm, hips at forearms…) → point joints pinned limbs at far-off points =
+"disconnected/floppy". Fix: `absolutes + 12*bone` (== `j->bonepivot`), matching the non-refpose fallback at :1335
+(`bones[j->bonepivot]`). The body-placement loop above (:1311) legitimately uses `doll->body[i].bone` because
+there `i` IS the body index. **Backend-agnostic — fixes both Box3D and ODE, and every `refpose` doll.**
+
+**A2 — [DEBUG] `r_showragdoll` cvar** (runtime debug-draw toggle). `engine/common/com_mesh.c` (declare next to
+`r_skel_blendnormalize` :33, `Cvar_Register` :11690) + `extern` in `engine/client/pr_skelobj.c` :48. The doll
+`draw` flags are baked at parse (no runtime toggle), so `rag_derive` gated the whole debug block + each body/joint
+on them; relaxed all three gates to `|| r_showragdoll.ival` (:1385) / `&& !r_showragdoll.ival` (:1394 bodies,
+:1437 joints). `r_showragdoll 1` force-draws every collision body (dark oriented box/sphere at the sim pose) + each
+joint's anchor gizmo (cyan Z / yellow X). The joint gizmo sits at body-A's reconstructed constraint point, so a
+mis-anchored joint (A1) shows as a gizmo away from where two limbs meet — the direct diagnostic.
+
+**A3 — [THROW / Phase-3] seed ragdoll body velocity from the spawning entity.** `RagCreateBody` in
+`engine/common/com_phys_box3d.c` (`World_Box3D_RagCreateBody`, after the create/zero `RagMatrixToBody`) **and**
+`engine/common/com_phys_ode.c` (`World_ODE_RagCreateBody`) for parity. Stock code force-zeroes every limb's
+velocity at create (`RagMatrixToBody` :1001-1002 / ODE :1760-1761) and, for a fully-limp (`animate 0`) body,
+never re-poses it — so nothing QC-reachable could give a ragdoll initial motion. Now: if `ent` is non-NULL (the
+model auto-path passes NULL) and it has non-zero `velocity`/`avelocity`, seed the limb's linear velocity from
+`ent->v->velocity` and angular from `ent->v->avelocity` (QC deg/s Euler → physics spin axes via the same
+`DEG2RAD(pitch), DEG2RAD(roll), DEG2RAD(yaw)` map the prop path uses at box3d:725 / ode:2399), then wake it. QC
+recipe: set `.velocity`/`.avelocity` BEFORE `skel_ragupdate(e,"doll …",0)`. Enables the `throwragdoll` test and
+is exactly what Phase-3 corpses need (seed from `victim.velocity`).
+
+**Verify:** rebuild exe + box3d plugin, redeploy to `C:\FTEQuake`. `r_showragdoll 1` + `spawnragdoll` — joint
+gizmos now sit AT the shoulders/elbows/hips/knees (not scattered at head/forearms) = A1 confirmed; limbs stay
+connected. `throwragdoll` (tune `cl_ragdoll_throwspeed`) — the ragdoll flies in the aim direction and tumbles =
+A3 confirmed. `r_showragdoll 0` hides the debug.
+
+---
+
+## Patch 82 — Ragdoll: throwable (velocity applied post-re-pose) + Box3D spherical cone/twist limits  *(APPLIED — extends Patch 81)*
+
+Two ragdoll fixes found while tuning P81. **Rebuild exe AND both physics plugins together** — this adds a member
+to `rigidbodyengine_t`, so the core + plugins must share the same `world.h` (member appended at struct END so
+existing offsets don't shift → non-rebuilt map plugins like cod/hl2, which don't touch rbe, are unaffected).
+
+**A1 — [THROW] `RagSetBodyVelocity`: apply the seed AFTER the re-pose loop.** The P81 seed in `RagCreateBody` was
+DEAD: `rag_instanciate` (client/pr_skelobj.c) re-poses every body via `RagMatrixToBody` at :1359-1363 AFTER
+`RagCreateBody`, and `RagMatrixToBody` zeros linear+angular velocity (com_phys_box3d.c:1001-1002 / ode:1760-1761)
+— so a thrown ragdoll just dropped. Fix: a new rbe primitive `RagSetBodyVelocity(world, body, linvel, avel)`:
+- `common/world.h` — appended to `rigidbodyengine_t` (struct end, ABI-safe). May be NULL (call-site guards it).
+- `client/pr_skelobj.c` — after the re-pose loop (~:1365), if `ent` (auto-path passes NULL) has non-zero
+  velocity/avelocity, remap avelocity QC-deg→physics-rad ONCE (`* M_PI/180`, PITCH/ROLL/YAW order — DEG2RAD is
+  mathlib.c-local, not in scope; M_PI is) and call the setter per body. A limp (`animate 0`) body is never
+  re-posed again so it persists; animated bodies get re-zeroed next frame by `rag_doallanimations` (correct).
+- `com_phys_box3d.c` + `com_phys_ode.c` — implement `World_*_RagSetBodyVelocity` (SetLinear/AngularVelocity +
+  SetAwake/dBodyEnable), register after `RagDestroyJoint`, and DELETE the now-dead P81 seed inside RagCreateBody
+  (keep the `ent` param — still used for userData/GeomData). Bullet plugin: left NULL (not deployed).
+
+**A2 — [LIMITS] Box3D spherical cone + twist (stop the free-spin).** All doll ball joints are `type point`, and
+the POINT branch of `World_Box3D_RagCreateJoint` (com_phys_box3d.c:1224+) built a LIMITLESS `b3SphericalJointDef`
+→ head dangled into the torso + spun forever, arms rotated forever. Now: when the doll authors stops, enable
+Box3D's cone/twist (else stays a free ball → pre-limit dolls unchanged):
+`if (HiStop>0){enableConeLimit; coneAngle=HiStop;}` (Box3D clamps ≤π/2), `if (LoStop2<HiStop2){enableTwistLimit;
+lowerTwistAngle=LoStop2; upperTwistAngle=HiStop2;}`. Cone centres on frameA-z = the doll `axis` (mapped at :1177),
+so author `axis` down the bone. HINGE already honoured LoStop/HiStop (P80), so elbows/knees are doll-only
+(`type hinge` + axis + stops). ODE's ball has no cone/twist — ODE POINT stays unlimited (mod runs Box3D).
+
+**Doll side (nettest, not engine):** `models/player/*/*.iqm.rag` — elbows/knees → `type hinge` (axis + LoStop 0
+/HiStop ~2.6); shoulders/hips → point + `axis` down-bone + `HiStop 1.4` cone + `LoStop2/HiStop2 ±0.8` twist;
+neck/waist → point + `axis 0 0 1` + `HiStop 0.6` + tight twist `±0.3`. Values tuned live via `r_showragdoll 1`.
+
+**Verify:** rebuild exe + box3d + ode (`make m-rel` then `make plugins-rel NATIVE_PLUGINS=box3d` / `=ode`),
+redeploy all three. `throwragdoll` flies + tumbles; `r_showragdoll 1` shows the head no longer spins into the
+torso and arms bend at the elbow instead of spinning. No csprogs change (throw = engine, limits = .rag assets).
+
+---
+
+## Patch 83 — Ragdoll debug: draw gizmos THROUGH the mesh + `r_ragdoll_timescale` slow-mo/freeze  *(APPLIED — exe only, extends Patch 81/82)*
+
+Two doll-tuning aids. **EXE-only rebuild** (`make m-rel FTE_TARGET=win64`) — no `world.h`/physics-backend change,
+so plugins are untouched. (The paired stuck-limb fix was doll-only: elbows/knees `type hinge`→cone `point` joints
+in `*.iqm.rag`, because leet's near-straight bind pose makes an elbow hinge axis ill-conditioned + L/R
+sign-flipped and `LoStop 0` pinned the knee at its bind bend — a spherical cone can't lock.)
+
+**B1 — `nodepthtest` on the debug shaders (draw ON TOP of the model).** The `r_showragdoll` body/joint gizmos in
+`rag_derive` (client/pr_skelobj.c) were occluded by the player mesh. Added `nodepthtest` inside the inner stage of
+both inline shaders — `boneshader` (~:1416) + `lineshader` (~:1461). `nodepthtest` is the PER-STAGE keyword
+(gl_shader.c:4254 → `SBITS_MISC_NODEPTHTEST` → `glDisable(GL_DEPTH_TEST)` at gl_backend.c:3070); must be inside
+the `{ }` stage (unlike `polygonoffset`, which is top-level). Now the gizmos render through the mesh.
+
+**B2 — `r_ragdoll_timescale` (slow-mo / freeze the client ragdoll sim).** New cvar declared+registered in
+`common/com_mesh.c` beside `r_showragdoll` (default `1`), `extern`'d in `client/pr_csqc.c`. Scales the dt of the
+single CSQC-world step: `pr_csqc.c` (~:8824) now `RunFrame(&csqc_world, host_frametime * r_ragdoll_timescale.value
+(clamped ≥0), 800)`. `physicstime` still advances by the full `host_frametime` (~:8830) so the accumulator never
+spirals. `1`=normal, `0.1`=slow-mo, `0`=frozen (read-back + camera orbit still run → inspect a paused pose).
+CSQC-only (menu ragdolls step a separate world), so default 1 is inert.
+
+**Mesh ghosting (nettest QC, not engine):** `cl_ragdoll.qc` `CSQC_RagdollTest_Predraw` sets
+`self.alpha = (cvar("r_showragdoll")>=2) ? 0.25 : 1` so `r_showragdoll 2` = through-drawn gizmos + a translucent
+model (the gizmos are emitted by `skel_ragupdate` BEFORE `addentity`, so QC controls the mesh independently).
+
+**Verify:** rebuild exe (only) + csprogs. `spawnragdoll` — elbows/knees droop freely (no half-bent lock).
+`r_showragdoll 1` gizmos through the mesh; `2` ghosts the model. `r_ragdoll_timescale 0.1` slow-mo, `0` freeze.
+
+---
+
+## Patch 84 — Ragdoll: kill self-collision (it wouldn't collapse) + bone-local body `offset` (end-to-end limbs)  *(APPLIED — exe + box3d plugin)*
+
+Two fixes so the ragdoll behaves like one. Rebuild **exe** (Part B, pr_skelobj.c) + **box3d plugin** (Part A,
+com_phys_box3d.c); ODE untouched (already correct).
+
+**A — [COLLAPSE] no ragdoll SELF-collision (per-doll negative groupIndex).** `World_Box3D_RagCreateBody`
+(com_phys_box3d.c ~:1024) used `b3DefaultFilter()` (groupIndex 0), so a ragdoll's own NON-adjacent limbs collided
+with each other (only the 11 joint-connected pairs were exempt via `collideConnected=false`). At the standing
+spawn pose the two thigh boxes overlap at the crotch + forearms overlap the torso → contact push-out fires every
+frame and props the doll up in a jittery "sitting" pose instead of collapsing (looked like "gravity isn't even").
+**Regression from ODE**, whose near-callback skips same-doll pairs (`ed1==ed2`, non-solid owner → return,
+com_phys_ode.c:2645-2680). Fix = Box3D's documented ragdoll pattern: `sd.filter.groupIndex = -(1 +
+NUM_FOR_EDICT(world->progs, ent))` when `ent` — all of one doll's bodies share `ent` → same negative group →
+never self-collide; a negative-group shape vs group-0 (static world / props / OTHER dolls, different ent → diff
+group) still collides. Restores ODE parity; keeps ragdoll-vs-world + ragdoll-vs-ragdoll collision.
+
+**B — [END-TO-END] body `offset` is now BONE-LOCAL, not model-space.** `rag_genbodymatrix` (pr_skelobj.c:1234)
+left-multiplied `relmatrix` (`relmatrix ⊗ bonematrix`) → the offset was a fixed MODEL-space translation that only
+aligned at the spawn pose and DETACHED from the limb as it rotated (so the collision box never tracked the
+segment). Changed to `bmat ⊗ relmatrix` (bmat OUTER → `origin = B·t + b`, `t` along the bone's local axes,
+rotates with the body); mirrored the inverse in `rag_derive` (:1500-1505): `(invemat ⊗ body) ⊗ inverserelmatrix`
+(inverse on the RIGHT) so genbody↔derive stay exact inverses and the bone/skin still pins to the joint. Scoped to
+`isoffset` bodies (our doll is the only user). Now a uniform doll `offset <dims0/2> 0 0` (local-X = down the bone,
+same L/R) makes each limb box span bone→child end-to-end in EVERY pose, pivoting at the joint. Doll side
+(`*.iqm.rag`): the 8 limb bodies use `offset 5/5.5/8/7.5 0 0` (= half of dims[0] 10/11/16/15).
+
+**Verify:** rebuild exe + box3d plugin, redeploy both. Fully restart (reloads exe + doll cache). `spawnragdoll` —
+collapses into a limp HEAP (no sitting/jitter). `r_showragdoll 1` — limb boxes span each segment end-to-end and
+stay on the limb as it tumbles. Different ragdolls still collide with each other + the world. No csprogs change.
+
+---
+
+## Patch 85 — Ragdoll: bake joints against the OFFSET bodies (fix "pivot at box centre / floppy")  *(APPLIED — exe only, fixes P84-B)*
+
+P84-B offset the limb bodies end-to-end, but the joint anchors ended up at the box CENTRE (elbow/knee very
+floppy). Cause: in `rag_instanciate` (client/pr_skelobj.c) the bodies are created at the UN-offset bone (:1315),
+the joints are baked next (`RagCreateJoint`/`b3InvMulTransforms` stores the anchor relative to the body's
+transform AT THAT MOMENT, :1356), and only THEN are the bodies re-posed WITH the offset (:1363-1367). So each
+baked anchor rides its body to the offset position → box centre; a shared elbow/knee pivot bakes two divergent
+anchors → built-in slack. Buggy anchor = `E·B·R·B⁻¹·A_p` (stray `B·R·B⁻¹`). FIX: apply the same bone-local
+offset (`bodymat = bodymat ⊗ relmatrix`) in the body-CREATION loop (~:1320, after the if/else, guarded on
+`isoffset`) so joints bake against already-offset bodies; the `R` then cancels its own inverse at re-pose →
+anchor = `E·B·A_b⁻¹·A_p`, the exact no-offset formula → lands at the pivot bone (box proximal end). Bodies stay
+offset; skin/`rag_derive` + non-offset bodies (pelvis/chest/head) untouched. Verified by matrix algebra. Exe-only
+rebuild; no plugin/doll/csprogs. Now the elbow/knee gizmos sit where two boxes meet, not mid-box.
+
+---
+
+## Patch 86 — Ragdoll polish: selective self-collision (forearm/calf vs torso) + limb damping (stop forever-sway)  *(APPLIED — box3d plugin only)*
+
+Both in `World_Box3D_RagCreateBody` (com_phys_box3d.c). Rebuild **box3d plugin only** (`make plugins-rel
+NATIVE_PLUGINS=box3d`); no exe/doll/csprogs.
+
+**A — [FOREARM THROUGH TORSO] selective self-collision.** P84 disabled ALL ragdoll self-collision (per-doll
+negative group) to stop the propped-sitting jitter, but then the forearm/calf pass through the torso. With the
+P84/85 end-to-end offsets, an OBB-SAT check found the ONLY remaining standing-spawn overlap is chest↔thigh (~2.4u
+— the un-offset 16u chest box hangs into the thigh tops); forearm↔chest etc. are now separated. So: DISTAL bodies
+(name contains `loarm`/`forearm`/`calf`/`shin`/`hand`/`foot` — `strstr` on `bodyinfo->name`, plugin can't link
+core `Q_strcasestr`) stay in **group 0** → they collide with the torso; PROXIMAL bodies (pelvis/chest/head/
+upperarm/thigh) keep the per-doll **negative group** → chest↔thigh never contacts → no re-prop. Box3D: same
+negative group = never collide (wins); group0-vs-negative / different dolls / world = mask decides = collide.
+Jointed neighbours never collide (collideConnected=false).
+
+**B — [FOREVER-SWAY] limb damping.** Bodies were zero-damped (`b3DefaultBodyDef`) → frictionless pendulums (head
+on the neck, hanging arms) whose ω never decays, so they never drop under the ~2 QU/s sleep threshold → never
+sleep. Added `bd.angularDamping`/`bd.linearDamping` before `b3CreateBody`, driven by two new plugin cvars
+`physics_box3d_ragdoll_angulardamp` (default **4**) / `_lineardamp` (default **0.4**) (decl ~:81, register ~:1370
+via `cvarfuncs->GetNVFDG`). Damping is unitless (1/s, `exp(-c·t)`; does NOT scale with unitscale); angular ~4 →
+envelope `exp(-2t)` settles ~1.5s, then the doll sleeps via the existing autosleep. Tunable live (lower =
+livelier, higher = sluggish).
+
+**Verify:** rebuild+redeploy box3d plugin, fully restart. `spawnragdoll`/`throwragdoll` — forearm/calf no longer
+sink into the chest/pelvis; head + free arms settle in ~1-2s (no forever-sway) then sleep; still collapses to a
+heap (no return of the sitting prop); other ragdolls still collide.
+
+## Patch 87 — Ragdoll: fix teardown double-free CRASH (joints before bodies) + joint stiffness spring cvar  *(APPLIED — exe + box3d plugin)*
+
+Rebuild **BOTH** `m-rel` (exe, the crash fix) and the **box3d plugin** (the guard + stiffness); no doll/csprogs.
+
+**A — [CRASH on 2nd corpse retire] destroy ragdoll JOINTS before BODIES.** `rag_uninstanciate` (pr_skelobj.c,
+~:1206) tore down bodies first, then joints. On the Box3D backend `World_Box3D_RagDestroyBody`→`b3DestroyBody`
+**auto-destroys every joint still attached to that body** (Box2D-v3 core behaviour, undocumented in the port),
+so the subsequent joint loop called `b3DestroyJoint` on already-freed joint ids → **double-free that corrupts the
+shared Box3D joint pool**. It only faults later, when ANOTHER live ragdoll's joints in that pool are stepped by
+`b3World_Step` — i.e. the nettest symptom "kill a bot, respawn, kill again → crash the instant the first corpse
+is retired (`mp_deadbodies` cap) while the second ragdoll is live." (The `killragdolls` console cmd never
+crashed because it frees everything with no `b3World_Step` interleaved, so the corrupted free-list is never
+stepped.) **Fix: reorder the two loops in `rag_uninstanciate` so joints are destroyed FIRST, then bodies** —
+safe for both backends (ODE tolerates either order; destroying a joint first unhooks it from its bodies so the
+later body destroy has nothing left to auto-free). Defense-in-depth (box3d plugin): `World_Box3D_RagDestroyJoint`
+(com_phys_box3d.c ~:1287) now guards `b3DestroyJoint` with `b3Joint_IsValid(id)` so any stale id is a no-op
+instead of a pool-corrupting double-free.
+
+**B — [TOO FLOPPY] optional ragdoll joint spring (stiffness).** The P86 damping cvars resist *velocity* (shorten
+flailing, enable sleep) but don't restore a pose, so limbs still over-rotate wildly. Box3D's `b3SphericalJointDef`
+(the doll's `type point` joints) exposes a rotational spring — `enableSpring`/`hertz`/`dampingRatio` with
+`targetRotation` defaulting to identity (= the bind rest pose the joint frames were built in). Added two plugin
+cvars `physics_box3d_ragdoll_stiffness` (spring Hz, default **2**; 0 = old free/floppy, ~6 = stiff mannequin) /
+`physics_box3d_ragdoll_springdamp` (damping ratio, default **1** = critically damped, no ring) (decl ~:83,
+register ~:1378). Applied in `World_Box3D_RagCreateJoint` (com_phys_box3d.c): when `stiffness>0`, set
+`enableSpring`/`hertz`/`dampingRatio` on the spherical case (~:1272) and the revolute/hinge case (~:1225, with
+`targetAngle=0`). The spring gently returns each limb toward its rest pose so the doll reads as a body, not a
+rag; gravity still dominates the fall. Fixed/slider joints untouched. Live-tunable.
+
+**Verify:** rebuild+redeploy exe + box3d plugin, fully restart. Body-shot a bot → ragdoll; respawn + kill again →
+ragdolls AND **no crash** at the first-corpse retire; repeat + round restart → clean despawn. `spawnragdoll`
+`physics_box3d_ragdoll_stiffness 2` → limbs noticeably less floppy but still fall naturally; sweep 0→6 live.
+
+## Patch 88 — Ragdoll: `spawnpose reference` doll flag — build AT the reference pose (kills the "scrunch into the pelvis")  *(APPLIED — exe only)*
+
+Exe-only (pr_skelobj.c). No plugin/csprogs (a doll-file keyword drives it).
+
+**[SCRUNCH] initial joint-yank collapse.** `rag_instanciate` (pr_skelobj.c) creates the bodies + anchors every
+joint (and bakes the P87 spring's rest) at the doll's **reference pose** (`refpose skin` → the model's skin/bind
+pose = a wide T-pose), then the re-pose loop (~:1381) moves the bodies to `emat × sko->bonematrix` = the entity's
+**frame-0 idle** pose. The two poses differ per-bone, so the previously-coincident joint anchors separate and the
+solver yanks every limb toward the pelvis on the first steps = a "balled up" ragdoll. It's model-independent; the
+mod's death corpse showed it clearly on bot kills (the local player's own was masked by the killcam-hide from P87,
+hence the "scrunches when I kill a bot but not when a bot kills me" asymmetry). **Fix:** new opt-in doll keyword
+`spawnpose reference` (parse ~:393 next to `refpose`; `qboolean spawnatref:1` on `doll_t` ~:61). When set,
+`rag_instanciate`'s re-pose loop poses each body to `emat × absolutes[bone]` (+ the same bone-local offset the
+create loop applied) instead of `rag_genbodymatrix` — i.e. it keeps the bodies AT the reference pose, just
+transformed into world space. Because both bodies of a joint move by the SAME `emat`, their anchors stay
+coincident → **no initial yank**, and the spring/cone/hinge limits (all baked at the reference pose) are correct
+from frame 0. Default (no keyword) = stock behaviour (re-pose to the entity's current anim), so the auto-path and
+other dolls are unchanged. Tradeoff: the doll now visibly STARTS in the skin pose (T-pose, arms out) for the ~1-3
+frames before it flops — strictly better than balling up; to start from a natural idle instead, switch the doll to
+`refpose 0 0` and re-derive the model-space joint axes for that pose (bigger, not done).
+
+Mod side (nettest, not this repo): `models/player/*/*.iqm.rag` add `spawnpose reference`, and the elbows/knees
+change from `type point` cones to `type hinge` (`axis` = flex axis perpendicular to the limb + a NEGATIVE `LoStop`
+so "straight" is inside the range) for single-plane knee/elbow motion; `CSQC_SpawnCorpseRagdoll` calms the seeded
+death tumble (avel 110→50).
+
+**Verify:** rebuild+redeploy exe, re-copy the doll to all 11 model folders, fully restart. Kill a bot → the
+ragdoll spreads + flops from the skin pose, no ball-up in the pelvis. `r_showragdoll 1` → knees/elbows bend in ONE
+plane (tune the elbow `axis` if a forearm bends the wrong way). `spawnragdoll`/`throwragdoll` still clean.
+
+## Patch 89 — Ragdoll: `spawnpose current` (start in the DEATH pose) + pose-independent joint axes  *(APPLIED — exe only)*
+
+Exe-only (pr_skelobj.c). No plugin/csprogs (a doll keyword + the QC `skel_copybones` drive it). Extends P88.
+
+**[T-POSE START → DEATH POSE] `spawnpose current`.** P88's `spawnpose reference` starts the ragdoll in the skin
+T-pose facing yaw 0 — it "looks in the wrong direction and like a ragdoll just spawned" instead of continuing from
+the pose/direction the player was shot in. New opt-in doll keyword `spawnpose current` (`doll_t.spawnatcur`, parse
+~:407): `rag_instanciate` bakes the bodies (create matrix ~:1333) AND the joint anchors (worldmat ~:1360) at the
+entity's **current** `sko->bonematrix` (the pose in the skeleton at instanciate time) instead of `absolutes`. The
+re-pose loop is UNCHANGED — `spawnatcur` leaves `spawnatref` false, so it re-poses to `emat × sko->bonematrix` =
+`emat ×` the create matrix; both bodies of a joint move by the same `emat` → anchors stay coincident → still no
+yank, and the doll STARTS in that pose. The mod QC (`CSQC_RagdollSpawnAt`, cl_ragdoll.qc) clones the dying corpse
+proxy's live skeleton into the ragdoll's skeleton via `skel_copybones(dst,src,0,0)` before `skel_ragupdate("doll")`
+(at kill time the corpse still holds the last ALIVE rendered pose — mid-run, incl. the spine/aim deform), and sets
+`r.angles = corpse.angles` (facing). Test spawns (no corpse) fall back to the default-pose `skel_build`.
+
+**[AXES OFF THE REFERENCE POSE] rotate the joint axis by the pivot bone's ref→bake delta.** The joint `axis` is
+authored in MODEL space and was only correct at the reference T-pose; at an arbitrary death pose the model-space
+hinge/cone axis points the wrong way (elbow/knee would bend a skewed plane). At the axis-build site (~:1382), the
+authored `j->axis`/`axis2` are now rotated by `delta = worldmat × inv(absolutes[pivot])` before `VectorNormalize2`
+(`Matrix3x4_Invert_Simple` + `R_ConcatTransforms` + `Matrix3x4_RM_Transform3x3`). `worldmat` is the bake-pose pivot
+matrix: for `spawnpose reference` it == `absolutes[pivot]` → **delta is IDENTITY → the authored axis is unchanged**
+(so P88 ref-mode dolls keep their exact tuned behaviour), and for `spawnpose current` it's the death-pose matrix →
+the axis tracks the bone and stays perpendicular to the limb. **This means the doll axes did NOT need re-authoring
+to bone-local** — the model-space values (verified good at the T-pose) are made pose-independent by the engine.
+Guarded on `absolutes` (falls back to the raw authored axis when no `refpose`). Assumes rigid (orthonormal) bind
+bones (same assumption the existing `Matrix3x4_Invert_Simple` bone-matrix uses make).
+
+Mod side (nettest): `models/player/*/*.iqm.rag` change `spawnpose reference` → `spawnpose current`; elbow hinges
+`LoStop -0.2` → `-0.5` (more extension). `cl_ragdoll.qc` `CSQC_RagdollSpawnAt` gains a `posesrc` param (the corpse)
+for the `skel_copybones` + `r.angles`.
+
+**Verify:** rebuild+redeploy exe, re-copy the doll, fully restart. Kill a bot that's **running/strafing** → the
+ragdoll continues from that pose, faces the right way, flops. `r_showragdoll 1` → knees/elbows still single-plane at
+the death pose (if a hinge bends the wrong plane, flip that elbow `axis`). Arms extend straighter. `spawnragdoll`/
+`throwragdoll` (default pose) unchanged. Caveat (deferred): the hinge limit zero is the death-pose angle, so a
+limb that died bent measures its range from that bend — add a bind→current limit offset in `RagCreateJoint` only
+if that reads wrong.
+
+## Patch 90 — SERVER-side authoritative ragdolls: network ragdoll bones + a `impulse` dollcmd  *(APPLIED — exe (m-rel) + dedicated server (sv-rel))*
+
+Two engine changes that let the SERVER own the death ragdoll (sim in `sv.world`, network the flop to every client,
+be shootable) — the substrate (server rbe stepping, skel builtins, per-bone hitbox traces) already existed. Mod
+side = new `server/sv_ragdoll.qc` (spawn-on-death, per-frame derive, SOLID on a `RAGDOLL_DIM` pass-through
+dimension, lifecycle via `VisProxy_RetireCorpse`) + bullet-shove; the old client-side death ragdoll is disabled.
+
+**A — [MANDATORY] network SKEL_ABSOLUTE (ragdoll) bones** — `server/sv_ents.c` UF_BONEDATA writer (~:3569). It only
+emitted bones for `SKEL_RELATIVE` skeletons; a ragdoll skeleton is `SKEL_ABSOLUTE` (rag_derive leaves it absolute +
+entity-local via `invemat`), so a server ragdoll's flopping bones were silently dropped → clients saw nothing. Added
+a branch: when `SKEL_ABSOLUTE`, get the model's bone parents (`Mod_GetBoneInfo` via `sv.world.Get_CModel`), convert
+absolute→relative into a temp buffer with `Alias_ForceConvertBoneData` (forward-declared locally — com_mesh.h isn't
+in sv_ents.c's include chain, but merged.h gives skeltype_t/galiasbone_s/Mod_GetBoneInfo), then the existing
+`Bones_To_PosQuat4`. **Client side UNCHANGED** (cl_ents.c already rebuilds relative bones → `rag_lerpdeltaent`).
+Rebuild BOTH `m-rel` and `sv-rel` (server-side file). REQUIRES the QC set `.basebone = -1` on the ragdoll edict —
+the whole block is gated on `basebone < 0` (sv_ents.c:3560). Correctness rests on ragdoll bones being entity-local.
+
+**B — `impulse` / `impulsebody` dollcmd** — `client/pr_skelobj.c` `PF_skel_ragedit` (beside `animatebody`, ~:1900),
+shared VM so both server + client get it. Wraps the existing (both-backend) `RagSetBodyVelocity` (com_phys_box3d.c /
+com_phys_ode.c), previously only called by `rag_instanciate`. `impulse <vx vy vz>` sets EVERY body's velocity
+(whole-doll shove/throw); `impulsebody <name> <v>` sets one body by `rag_finddollbody`. Guarded on the rbe fn ptr.
+Used by the QC bullet-shove now + the Phase-2 gravity gun.
+
+**Verify:** rebuild+redeploy exe + dedicated server + qwprogs + csprogs. Kill a bot on a listen server with a 2nd
+client/spectator connected → BOTH see the same flop (proves A). Shoot a settled corpse → it shoves and the bullet
+passes through to an enemy behind (RAGDOLL_DIM). Known Phase-1a gaps to finish next: the packet-entity ragdoll isn't
+brightness-capped (`r_playermodels_maxlight`) or team-tinted; the animated corpse proxy still DOUBLE-DRAWS with the
+ragdoll (needs a networked "hide mesh" proxy flag so the killcam can still re-pose it); and the ragdoll shows during
+a local killcam replay (needs a cull).
+
+## Patch 91 — Server ragdoll Phase-1b: brightness-cap + killcam-cull the packet-entity ragdoll  *(APPLIED — exe (m-rel) only)*
+
+Two client-render touch-ups on the server ragdoll (a PACKET entity, so the QC render passes can't reach it), both
+at `client/cl_ents.c` `CL_LinkPacketEntities` (~:5382, the existing `model->dollinfo || le->skeletalobject` ragdoll
+detect — on a packet entity that's a server ragdoll: players are CSQC proxies, props have no bones, we never use
+`.doll`). The **double-draw fix is QC-only** (a networked "hide the corpse mesh" proxy flag — no engine change).
+
+**A — brightness cap.** `CSQC_ApplyTeamTints` only caps `player_visual_proxy` CSQC entities, so the packet ragdoll
+blew out on bright floors. After `rag_updatedeltaent`, replicate the QC `CSQC_MaxlightScale` (cl_teamtint.qc):
+`cl.worldmodel->funcs.LightPointValues(ent->origin, diffuse, ambient, dir)` → `getlight = diffuse + 0.5*ambient`
+per channel → brightest → Reinhard rolloff toward `r_playermodels_maxlight` (soft knee `r_maxlight_softknee`, both
+read via cached `Cvar_FindVar`, re-looked-up while NULL so QC-registration order doesn't matter) → scale all three
+`ent->shaderRGBAf` channels + **set `ent->flags |= RF_FORCECOLOURMOD`** (else the scaled colormod isn't applied).
+
+**B — killcam cull.** During a local killcam replay the present-time ragdoll must not show over the rewound scene.
+deltalisten/CSQC drawmask can't filter packet entities, so: the mod sets client cvar `cl_killcam_hideragdolls`
+(driven each frame from `Killcam_Active()` in CSQC_UpdateView); when set, cull the ragdoll here —
+`cl_numvisedicts--; continue;` (un-commit the visedict added at :5204). Client-render only → **m-rel only** (no
+sv-rel). Mod side: `.float vps_hide_ragdoll` networked at the END of the proxy `VP_SF_IDENTITY` section (one matched
+byte each way, sv_player.qc + cl_player.qc) + the corpse predraw hides its mesh on it (except while the killcam
+owns it), set/cleared in sv_ragdoll.qc's spawn/free.
+
+**Verify:** rebuild+redeploy exe + qwprogs + csprogs. Kill a bot → ONE body (the ragdoll, no frozen death-anim
+double). On a bright floor it's capped. Your own death → the killcam shows you alive (no present ragdoll over it);
+after, the ragdoll is there. Repeated kills + round restart → clean.
+
+## Patch 92 — Clamp the bone-position quantizer (fix the networked-ragdoll spawn "freak-out")  *(APPLIED — m-rel + sv-rel)*
+
+`Bones_To_PosQuat4` (`common/mathlib.c:818-824`) — the UF_BONEDATA encoder — stored each RELATIVE bone position as
+`pos*64` straight into a signed short with **no clamp** → range only ±511u (32767/64). A normal SKEL_RELATIVE anim's
+child→parent offsets are bone lengths (~10-30u) so it never mattered, but a SERVER RAGDOLL (P90) whose joints
+momentarily STRETCH past 511u under the violent death impulse produced a float→short **wrap** → the limb teleported
+to the opposite side = a ~300-500ms "expand/distort" until the doll settled back under range and it snapped normal.
+(The local CSQC test ragdolls render raw float matrices with no quantization, so they never showed it — the
+quantizer was the amplifier.) **Fix: `bound(-32767, pos*64, 32767)` on the three position stores** so an overshoot
+saturates (a graceful stretch-to-edge) instead of wrapping. `Bones_To_PosQuat4` runs in the SERVER snapshot writer
+(`sv_ents.c`), so rebuild **both m-rel (listen) and sv-rel (dedicated)**.
+
+Mod-side companion (P92, qwprogs, sv_ragdoll.qc `Ragdoll_Think`): the ragdoll edict had a FIXED 80×80×112 bbox pinned
+to the death origin (never updated) → the bullet-shove traceline hit whichever oversized/overlapping box the ray
+entered first = the WRONG doll ("shoot corpse A, corpse B jumps"). Now the think computes a TIGHT world AABB from the
+live bones each frame (`gettaginfo(self,i)` over `skel_get_numbones`, `setsize` relative to the fixed origin) so each
+box wraps its actual body — the shove hits the aimed doll and a slid body stays hittable.
+
+**Verify:** rebuild m-rel+sv-rel+qwprogs. Kill a bot → the ragdoll flops cleanly from frame 0 (no expand/distort).
+Two corpses near each other → shooting one moves only that one.
+
+## Patch 93 — Multi fake shadows: per-light shadow projections in one atlas (r_shadows_fakecount)  *(APPLIED — m-rel)*
+
+`r_shadows 2` renders ONE model-only ortho shadowmap from one global direction. This patch adds up to **8
+simultaneous projections** — slot 0 stays the classic sun ortho (throwdirection), slots 1..N-1 are **spot
+projections at real light positions** aimed straight down (QC feeds them via `r_shadows_fakelightN
+"x y z radius"` from the map's light entities) — so every nearby lamp throws its own model shadow.
+
+- `gl/gl_shadow.c` — new cvars `r_shadows_fakecount` (1..8, **CVAR_SHADERSYSTEM** so count changes flush
+  shaders), `r_shadows_fakefov` (140), `r_shadows_fakelight1..7`. `Sh_GenShadowFace` gained an atlas-cell
+  override (`sh_fakecell_*` statics). New `Sh_GenerateFakeShadowsAtlas(count)`: ONE `GLBE_BeginShadowMap`
+  (it clears the WHOLE texture — per-light Begins would wipe earlier cells) then each valid slot renders
+  models-only depth (face 4) into its cell of the SAME 2048² `shadowmap[2]` texture (2×2 cells ≤4 slots,
+  3×3 above; cells inset 16px so PCF taps/edge-fade can't bleed). Slot consumption matrices are UNBIASED
+  proj×view built in the FAKESHADOWS xyz convention (`ModelViewMatrixFromAxis(axis0, axis2, axis1)` — the
+  ORTHO-branch pairing; spot slots swap only the projection half via `Projection_Far`). GL-only; count 1
+  (default) = the untouched legacy single path.
+- `gl/gl_backend.c` — `shaderstate.fakeshadowmatrix[8]/fakeshadowcell[8]/fakeshadowcount` +
+  `GLBE_SetFakeShadowCount/Slot` (NULL slot = far-translate neutral matrix → shader early-outs). New
+  uniform uploads `SP_FAKESHADOWMATRIX` (mat4 array, per-batch modelmatrix-composed) / `SP_FAKESHADOWCELL`
+  (vec4 array).
+- `gl/gl_shader.c` — uniform rows `l_fakeshadowmatrix[0]`/`l_fakeshadowcell[0]` (+ bare-name variants);
+  the FAKESHADOWS define injection now also emits `#define FAKESHADOWS_COUNT %i`.
+- `gl/shader.h` — SP enum + prototypes.
+- **GLSL ships as a DISK OVERRIDE, not r_bishaders**: `nettest/glsl/defaultwall.glsl`
+  (Shader_LoadGeneric loads filesystem programs before builtins). `FAKESHADOWS_COUNT>1` declares
+  `l_fakeshadowmatrix[K]`/`l_fakeshadowcell[K]` + a varying array, loops K projections in the fragment:
+  cell-local coord → edge-fade → atlas remap → 9-tap PCF; per-slot darkening 0.5·(1−s) SUMMED, clamped
+  0.6 (single light identical to legacy s·0.5+0.5; overlaps read as umbra, never black). `#if
+  FAKESHADOWS_COUNT < 2` keeps the legacy path verbatim (and old engines w/o the define fall back safely).
+- Mod driver: `client/cl_maplights.qc` `MapLights_DriveFakeLights` (cl_lightshadow_perlight) assigns the
+  nearest in-reach map lights to slots with 20%-closer hysteresis, change-gated cvar_set.
+- BUILD NOTE: build from an MSYS2 UCRT64 **login shell** (`bash -lc`), NOT a plain shell — mixed
+  git-bash/msys2 runtimes break make's temp files ("Cannot create temporary file in C:\WINDOWS").
+- CRASH FIX (same day): the atlas loop MUST call `GLBE_SelectDLight` per slot before
+  `Sh_GenShadowFace` — it sets `shaderstate.curdlight`, which the BEM_DEPTHONLY entity batching
+  dereferences (`ent->keynum == dl->key`, gl_alias.c:3002). The first version skipped it (only
+  the matrix seemed needed) → NULL curdlight → segfault on the first frame with visedicts,
+  i.e. the moment a client spawns with r_shadows 2 + fakecount>1 active.
+- NO-SHADOWS FIX (same day): `GL_ViewportUpdate` FLIPS pxrect.y (top-origin) to GL's bottom-origin
+  (`maxheight-(y+height)`, glquake.h:423). The legacy single path centres its region symmetrically so
+  the flip is invisible; asymmetric atlas cells sampled the EMPTY half of the texture -> depth 1.0 ->
+  zero shadows at any fakecount>1. Fix: the cell uniform's v-offset is the region's BOTTOM edge:
+  `cell.y = (txsize - (row*cellsize + inset + smsize))/txsize` (x maps straight through).
+- **REDESIGN (spots → ortho-per-light, the fix that actually works):** the perspective spot
+  projection (`Projection_Far`, aimed straight down from the light) never lined up with the
+  FAKESHADOWS consumption shader — that shader + the whole atlas cell/viewport pipeline were built
+  and tuned for the ORTHO sun's clip convention, so spots came out mirrored and tiny, and their
+  non-linear perspective z made the edge-fade erase them (the "SPOT-FADE trap"). Replaced with:
+  **every per-light slot is now an ORTHO projection whose throw direction = `normalize(boxCentre −
+  lightOrg)`** (points from the lamp toward the casters). This reuses slot 0's exact matrices
+  (`Matrix4x4_CM_Orthographic` + `ModelViewMatrixFromAxis(axis0,axis2,axis1)`), so it can't disagree
+  with the shader; it also gives the physically-correct behaviour the user asked for — the shadow
+  **swings away from the light and lengthens as the light drops toward the horizon**, recomputed every
+  frame from the player's position (no `cl_lightshadow_swing` needed; that only steers slot 0). Box
+  positioned by `Sh_OrthoAlignToFrustum` (view-centred, texel-snapped) at half-extent
+  `r_shadows_fakelightsize` (new cvar, default 200 qu) — tight box = localised, high-res, only casters
+  near the player fall in it, so distant lamps don't shadow you. The cvar's 4th component (radius) now
+  only gates the slot on/off; box size is the cvar. `r_shadows_fakefov` is now dead (kept registered).
+  Shader simplified: all slots ortho (w==1) → uniform z-included edge-fade, no perspective/spot
+  special-casing. `LSHADER_SPOT` no longer used by the fake path (all `LSHADER_ORTHO`).
+- **REDESIGN 2 (ortho-per-LIGHT → ortho-per-CASTER, the Source RTT model):** one ortho box per
+  *light*, centred on the local player, still had a fatal flaw — an ortho projection has ONE parallel
+  direction, so every model in that box cast along the SAME direction (derived from the local
+  player), and the whole scene's shadows swung whenever the viewer moved (obvious under
+  `spawnflood 100` + `fakelightsize 1200`). Point lights need a perspective projection, which doesn't
+  fit the ortho-tuned shader. Fix = the same model Source uses for dynamic RTT shadows: **per-CASTER,
+  not per-light.** Slots 1..N-1 now read `r_shadows_fakelightN "cx cy cz dx dy dz"` = a nearby
+  *entity's* origin + its own dominant-light throw direction, both computed in QC
+  (`MapLights_DriveCasterShadows` picks the nearest registered casters; `MapLights_DirAt` gives each
+  one's direction). The engine parses 6 floats from `cv->string` (manual `strtod` loop — `cv->vec4`
+  only does 4), centres the box on the caster origin (`Sh_OrthoAlignToPoint`, NOT the view — the last
+  aim-dependence is gone), and keeps the angle-based auto-size + `pv[14] -= 2/radius` world-bias.
+  Result: each entity gets ONE correct shadow aimed from its own light; **nothing shifts with the
+  viewer.** Slot 0 unchanged (sun). `fakecount 1` = the plain single directional shadow. Ortho still
+  can't do true point-light divergence, but per small caster the parallel approximation is ~exact and,
+  crucially, lines up with the shader. Deferred: tight boxes isolate well-separated casters; dense
+  clusters (spawnflood) could add a per-slot entnum filter in `BE_GenModelBatches`. QC:
+  `client/cl_maplights.qc` (driver + `MapLights_RegisterShadowCaster`, fed from every `BlobShadow_Emit`
+  site). `r_shadows_fakelightsize` is now the box **minimum** (auto-grows). `r_shadows_fakefov` dead.
+- **REDESIGN 3 — per-caster RETIRED, model SELF-SHADOWS added (the actual shipping state; NO engine
+  change, all in the mod).** Per-caster is fundamentally broken: only entities that call
+  `BlobShadow_Emit` register as casters, but settled physics props unhook their predraw and
+  `prop_static` scenery has no CSQC predraw at all — so static props never get a slot and are rendered
+  into whatever moving caster's box covers them, sharing the *player's* angle. Not worth fixing
+  (needs static registration + per-slot entnum isolation). So `fakecount 1` (single sun ortho) is the
+  shipping shadow, and the mod now makes MODELS **receive** that sun depth map to self-shadow, via a
+  disk-override shader `nettest/glsl/defaultskin.glsl` (copy of baked `shaders/glsl/defaultskin.glsl` +
+  `!!permu FAKESHADOWS`/`!!samps =FAKESHADOWS shadowmap`/`ShadowmapFilter`, gated `FAKESHADOWS &&
+  !TESS && FAKESHADOWS_COUNT<=1`). No C edit — `Shader_LoadGeneric` loads gamedir `glsl/*.glsl` first,
+  and FAKESHADOWS/curshadowmap/l_cubematrix persist from `Sh_GenerateFakeShadows` into the forward
+  pass. BIAS: `ShadowmapCoord`'s built-in 0.015 NDC z-bias is 0.015×radius WORLD units (~15qu at
+  fakedistance 1024 → peter-pans a 32u model); the shader cancels it and uses a radius-independent
+  normal-offset (`w += n*2qu`) instead — critical because caster==receiver here (unlike the world).
+  Quality dial = `r_shadows_fakedistance` (lower = crisper self-shadow + world shadow, smaller
+  coverage). Cvardf knobs `r_shadows_selfshadow`/`_floor`/`_nbias`.
+
+## Patch 94 — Model-light black-sample fallback for ceiling/wall-mounted props (r_modellight_fallback)  *(APPLIED — m-rel)*
+
+Model lighting for every non-viewmodel entity is sampled at **origin + 24qu up** (`R_CalcModelLighting`,
+`gl/gl_alias.c` — a floor-item helper predating ceiling-mounted props), and `GLQ1BSP_LightPointValues`
+casts its lightmap ray straight DOWN from that point. A prop_static hung under a roof (e.g. the mega
+ceiling lamps, flipped over) puts origin+24 INSIDE the ceiling brush; the recursive lightpoint walk
+starts in solid, returns NULL, and the model renders pure black.
+
+- `gl/gl_alias.c` (`R_CalcModelLighting`, non-weaponmodel branch): after the standard +24 sample, if the
+  result is fully black (all six ambient+shade channels 0 — the in-solid/NULL signature), retry the
+  sample at origin, then origin−24, then origin−48, stopping at the first non-black result. Ceiling- and
+  wall-mounted models thereby take the light of the open space they hang in. Floor-standing entities
+  never trigger it (their first sample is lit), and a genuinely pitch-black room stays black (every rung
+  returns 0 → unchanged). Cost: extra lightpoint traces only when the first sample is black.
+- `client/renderer.c`: new cvar `r_modellight_fallback` (default **1**, CVAR_ARCHIVE) gating the ladder;
+  0 = engine-default single sample.
+
+Client render only — m-rel; no sv-rel, progs, or protocol impact. Applies to all BSP formats (the ladder
+re-calls `LightPointValues`, so Q1 lightmap walk, BSPX lightgrid, and Q3 lightgrid paths all benefit).
+
+## Patch 95 — REMOVE the multi fake-shadow atlas (Patch 93's fakecount path) + `r_shadows_fakeres`  *(APPLIED — m-rel)*
+
+The Patch 93 multi-projection atlas is retired for good (user call: "remove the cvar and the
+functionality — it no longer works").  It was already dead in practice: one ortho box carries ONE
+light direction so every caster in it shared the local player's throw angle, and static/settled
+props could never register per-caster slots (see the P93 REDESIGN 3 addendum).  The shipping look
+is the SINGLE sun-aligned fake shadow (`r_shadows 2`) + `defaultskin.glsl` model self-shadows.
+
+Removed (the single classic path is untouched — verified it never depended on any of this,
+including the atlas-only `pv[14]` world bias; its bias lives in `sys/pcf.h`):
+- `gl/gl_shadow.c`: cvars `r_shadows_fakecount`/`fakefov`/`fakelightsize`/`fakelight1..7` (+
+  registrations), `Sh_GenerateFakeShadowsAtlas`, `Sh_OrthoAlignToPoint`, `r_fakelights[8]`,
+  the `sh_fakecell_*` atlas-cell plumbing in `Sh_GenShadowFace`, and the fakecount dispatch
+  branch in `Sh_GenerateFakeShadows`.
+- `gl/gl_shader.c`: the `FAKESHADOWS_COUNT` define emission (plain `#define FAKESHADOWS` +
+  `USE_ARB_SHADOW` remain); the `l_fakeshadowmatrix`/`l_fakeshadowcell` uniform-name rows.
+- `gl/gl_backend.c`: `SP_FAKESHADOWMATRIX`/`SP_FAKESHADOWCELL` upload cases,
+  `GLBE_SetFakeShadowCount/Slot`, the per-slot state fields.
+- `gl/shader.h`: the two SP_ enum entries + setter decls.
+- Gamedir: `nettest/glsl/defaultwall.glsl` override RETIRED entirely (post-strip it equalled the
+  stock baked shader; moved to `glsl/retired/`); `defaultskin.glsl` self-shadow gate simplified
+  to `defined(FAKESHADOWS) && !defined(TESS)`.  QC driver (`MapLights_DriveCasterShadows` +
+  `MapLights_RegisterShadowCaster` + `cl_lightshadow_perlight`) deleted from the mod.
+
+Added — `r_shadows_fakeres` (CVARD, default "2048", REALTIMELIGHTING): fake shadowmap texture
+resolution.  Stock hardcoded `SHADOWMAP_SIZE*4` = 2048; now `smsize = bound(256, ival, 8192)` in
+`Sh_GenerateFakeShadows`.  Higher = sharper at the same `r_shadows_fakedistance` coverage
+(16-bit depth: 4096 ~ 32 MB).  This is the texel-COUNT dial; `r_shadows_fakedistance` remains
+the texel-DENSITY/coverage dial.
+
+Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 96 — de-"fake" the shadow cvar names + world-constant contact bias (`r_shadows_bias`)  *(APPLIED — m-rel)*
+
+Renames (old names live on as silent CVARAFD aliases, so stuffed cfgs keep working):
+- `r_shadows_fakedistance` → **`r_shadows_distance`** (coverage radius)
+- `r_shadows_fakeres`      → **`r_shadows_res`** (depth map resolution, P95)
+
+Contact-cutoff fix ("prop shadows cut off near the ground"): the ortho/FAKESHADOWS branch of
+`sys/pcf.h::ShadowmapCoord` (gl_vidcommon.c) applied a 0.015 NDC z bias that SCALES with the
+ortho radius — ~15 qu at distance 1024 — so any receiver within ~15 qu of its caster read as
+lit and the shadow detached before contact.  Now:
+- `gl_vidcommon.c`: the ortho/FAKESHADOWS bias term is REMOVED (spot/cube branches untouched).
+- `gl_backend.c` (GLBE_SelectDLight ortho branch): `lightprojmatrix[14] -= r_shadows_bias.value
+  / max(1, dl->radius)` — a WORLD-CONSTANT bias (default 2 qu) baked into the projection, the
+  same architecture the removed P93 atlas validated (`pv[14] -= 2/radius`).
+- New cvar `r_shadows_bias` (gl_shadow.c, default "2", world qu): lower = tighter contact,
+  higher = kills acne on steep surfaces.
+- Gamedir `defaultskin.glsl`: the vertex-side `z += (0.015-0.003)*w` cancellation line REMOVED
+  (it existed only to counter pcf.h's old constant; keeping it would be a wrong-way bias =
+  self-shadow acne).  Normal-offset (`r_shadows_selfshadow_nbias`) remains the acne guard.
+
+Applies to all LSHADER_ORTHO consumption (incl. hypothetical ortho rtlights — none in use).
+Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 97 — angled default sun direction + through-floor contact-shadow gap fade (`r_shadows_throwfade`)  *(APPLIED — m-rel)*
+
+Two fixes for `r_shadows 2` on maps **without** an `env_sun`:
+
+**(a) Angled default sun (was straight down).** The engine defaulted `r_shadows_throwdirection`
+to `"0 0 -1"` and `r_sun_dir` to `"0.2 0.5 0.8"`. Straight-down light grazes vertical walls, so a
+`func_detail` coplanar with a wall threw a shimmery shadow-acne band on it. New defaults
+(`gl_shadow.c`) match the ericw-tools LIGHT default sun that bakes the lightmap (worldspawn
+`_sun_mangle "230 -65 0"`), so dynamic shadows fall the same way as the baked static lighting:
+- `r_sun_dir` → **`-0.271654 0.582563 0.766045`** (toward the sun)
+- `r_shadows_throwdirection` → **`0.271654 -0.582563 -0.766045`** (the negated toward-sun)
+
+The gamedir also stuffs these per map (`sv_env_sun.qc` clear-first, for old engines) and sets them
+in `default.cfg`; maps with an `env_sun` still override as before.
+
+**(b) Contact-shadow gap fade (stops shadows leaking through floors).** In the fake-shadow depth
+pass the **world BSP is not a caster** (`smesh == NULL`; only entity meshes are drawn via
+`GLBE_BaseEntTextures`). So a prop/player on an upper floor writes depth into the single global
+ortho map and the floor *below* — a world surface that receives fake shadows — gets darkened, with
+no intervening geometry to occlude the projection. Inherent to one global ortho map (no cascades,
+no world occluder). Source hides the same limitation by baking static sun shadows into lightmaps
+and using short-range/cascaded dynamic shadows.
+
+Fix = a **two-tap compare** in `sys/pcf.h::ShadowmapFilter` (gl_vidcommon.c), needing NO depth read
+(the sampler is compare-only `sampler2DShadow`): after the normal PCF result `s`, re-test the depth
+compare at `shadowcoord.z - r_shadows_throwfade` (a hair closer to the light). If still lit, the
+occluder is within `throwfade` of the receiver (a real contact shadow → keep `s`); if shadowed too,
+the occluder is far in front (through-floor → `mix(1.0, s, 0)` = lit).
+- New cvar `r_shadows_throwfade` (`gl_shadow.c`, default `"0.06"`): fraction of the ortho depth
+  ([0,1] = 2·`r_shadows_distance` qu, so 0.06 ≈ 123 qu at distance 1024) beyond which a caster stops
+  shadowing. Higher = longer reach (more leak); lower = tighter contact-only; `0` = off.
+- Injected as a global `#define r_shadows_throwfade <value>` alongside `#define FAKESHADOWS`
+  (`gl_shader.c`), so it reaches every fake-shadow compile; changes take effect on the next shader
+  flush (`vid_reload` / `r_shadows` toggle). `pcf.h` keeps an `#ifndef` safety default.
+- Model self-shadow and normal ground-contact shadows are unaffected (occluder is close → kept).
+  Tradeoff: a very tall caster's long shadow tip can fade where the gap exceeds `throwfade`; raise
+  the cvar for longer shadows.
+
+Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 98 — model sun N·L "form shade" (`e_fakesundir` inject + `r_sun_dir` CVAR_SHADERSYSTEM)  *(APPLIED — m-rel)*
+
+Gives models directional *form* shading along the env_sun: faces pointing away from the sun get
+darker, so props/cars/players read 3D and their light/dark split matches the direction their cast
+shadow is thrown. (The `r_shadows 2` self-shadow only darkens where geometry *occludes* the sun —
+concavities/contact; a convex car body has almost none, hence it read flat.) The model shader
+already did N·L against `e_light_dir` (the light-grid dominant dir); this adds a term aligned to the
+**env_sun** specifically. Extends the P97 inject site. Models only — world surfaces bake the sun's
+N·L + shadows into their lightmaps (ericw LIGHT), so a runtime term there would double-count.
+
+- `gl_shader.c`: in the `if (r_fakeshadows)` block (next to the P97 `r_shadows_throwfade` inject),
+  also inject `#define e_fakesundir vec3(%f,%f,%f)` from `r_sun_dir.vec4` — the world toward-sun
+  direction as a compile-time constant.
+- `gl_shadow.c`: `r_sun_dir` promoted `CVARD`→`CVARFD(... CVAR_SHADERSYSTEM ...)`, so the per-map sun
+  change (`env_sun` stuff) flushes shaders and re-injects `e_fakesundir` — no staleness across maps.
+  Uses `r_sun_dir` (stable per map) rather than the swing-able `r_shadows_throwdirection` to avoid
+  per-frame recompile churn; they're identical in all default cases (swing off; env_sun disables it).
+- Gamedir `glsl/defaultskin.glsl` (loaded from disk, no engine dependency): under the existing
+  `MODEL_SELFSHADOW` gate, vertex computes `vsunlambert = dot(normalize(mat3(m_model)*n),
+  normalize(e_fakesundir))` (model-space deformed normal → world via `m_model`), fragment darkens
+  `col.rgb *= mix(1.0, mix(r_shadows_sunshade_floor, 1.0, clamp(vsunlambert*0.5+0.5,0,1)),
+  r_shadows_sunshade)`. New cvardf knobs `r_shadows_sunshade` (1) + `r_shadows_sunshade_floor` (0.5 =
+  away-side ~50% bright); an `#ifndef e_fakesundir` safety default keeps it inert if not injected.
+- Stacks multiplicatively with the light-grid shading and the self-shadow floor. Change needs a
+  shader flush (`vid_reload`) like the other cvardf knobs.
+- Future option (not done): a runtime `SP_E_SUNDIR` uniform (mirror `SP_LIGHTDIRECTION`, transform
+  `r_sun_dir` world→model per draw) would let the form-shade follow the *swung* throw with no
+  recompile — only worth it if `cl_lightshadow_swing` is used on env_sun-less maps.
+
+Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 99 — `r_readimage` decodes DDS (CPU BCn → RGBA8) for QC pixel reads  *(APPLIED — m-rel)*
+
+`r_readimage` (CSQC/MenuQC builtin `PF_CL_readimage`, `pr_menu.c:932`) previously returned null for
+DDS files, because `ReadRawImageFile` (`image.c:7687`) had no DDS branch — so the body-paint camo
+(`cl_paint.qc`) could not read wall textures that ship only as DDS inside a pk3 (they fell back to a
+flat olive tint). The engine already had everything needed: `Image_ReadDDSFile` (`image.c:6198`)
+decodes DDS to a compressed BCn mip set, and `ReadRawImageFile`'s imageloader-plugin branch already
+runs the CPU decompressor `Image_ChangeFormat` → RGBA8 when `force_rgba8` is set (which
+`PF_CL_readimage` always passes). BC1–BC7 CPU decode is compiled in (`DECOMPRESS_S3TC/RGTC/BPTC` in
+`config_fteqw.h`); it just wasn't routed for DDS.
+
+Fix (`image.c`, under `#ifdef IMAGEFMT_DDS`, right after the BMP/ICO block): detect the `'DDS '`
+magic, call the (same-file, static) `Image_ReadDDSFile`, then run the same mip-0 extraction the
+plugin branch uses — `force_rgba8 → Image_ChangeFormat(rgbx8only)` then copy `mip[0]` out as RGBA8.
+`Image_ReadDDSFile` sets `mips->extrafree = filedata` (the CALLER's buffer), so the branch nulls it
+before cleanup and never frees the input. 2D textures only (cubemap/3D/array DDS still return null —
+fine for a pixel-read builtin). Non-2D or BC6-HDR that can't reach RGBA8 → null → camo olive fallback.
+
+Now `r_readimage` reads DDS/DXT1-5/BC7 the same as PNG/TGA/JPG/BMP, so camo can copy any loaded wall
+texture regardless of container. Client image path only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 95 — Bilinear model/particle lightpoint sampling (r_modellight_bilinear)  *(APPLIED — m-rel)*
+
+Models, particles and CSQC `getlight` sample the world lightmap through
+`GLRecursiveLightPoint3C` (`gl/gl_rlight.c`), which took ONE nearest luxel (`int s,t` at the
+top of the function truncate the luxel coordinate). Lit brush SURFACES are drawn with hardware
+bilinear filtering, so with the new dense DECOUPLED_LM lightmaps (4qu/luxel) a model's single
+nearest tap lands on an isolated black luxel — a sharp shadow edge or a `-dirt` AO corner —
+where the bilinearly-filtered floor beside it stays lit. Result: models render black in spots
+the surfaces don't. (The sampler already supported decoupled + E5BGR9 HDR correctly; the only
+defect was nearest vs. bilinear.)
+
+- Extracted the per-format single-luxel decode (LM_E5BGR9 / LM_RGB8 / LM_L8, all lightstyles +
+  optional deluxe) into `LightPoint3C_AccumLuxel(mod, surf, lsi, lti, weight, l)` which adds a
+  weighted luxel into `l[0..2]` (colour) and `l[3..5]` (deluxe direction).
+- `GLRecursiveLightPoint3C` now does a 2×2 bilinear tap when `r_modellight_bilinear` is set:
+  continuous luxel coords from the same `lmvecs` (minus the half-luxel bias, which is baked into
+  decoupled `facelmvecs` but not classic `texinfo->vecs`), `floor`+frac for the 4 weights, each
+  tap edge-clamped into `[0..(extents>>lmshift)]`. The nearest path is preserved verbatim via one
+  `AccumLuxel(ds,dt,1.0)` call. The surface-selection bounds logic (`int s,t` + the
+  `texturemins`/`extents` `continue` tests) is unchanged.
+- New cvar `r_modellight_bilinear` (default **1**, CVAR_ARCHIVE, `client/renderer.c`). Set 0 for
+  exact pre-patch nearest behaviour (safe in-game escape hatch). The non-3C `GLRecursiveLightPoint`
+  (which only feeds the local-player `lightlev`) is deliberately untouched.
+
+Client render only — m-rel; no sv-rel/progs/protocol impact. Composes with Patch 94
+(`r_modellight_fallback`, the black-sample retry ladder), which runs first at the sample-point
+level; P95 refines the sample itself.
+
+## Patch 96 — Model lightpoint: skip no-lightmap faces + HDR brightness parity  *(APPLIED — m-rel)*
+
+Two fixes in `GLRecursiveLightPoint3C` (`gl/gl_rlight.c`), the model/particle/CSQC world-light
+sampler. These are the REAL fix for "models render black over a section on DECOUPLED_LM maps while
+the lit surfaces look fine, classic `_lightmap_scale` is fine" (Patch 95's bilinear did not address
+it — the data was never wrong; the surfaces and the sampler read the same `surf->samples`).
+
+1. **Skip faces with no lightmap instead of returning terminal black.** ericw omits fully-dark
+   faces from the DECOUPLED_LM lump (`light/write.cc:831 if(id.sorted.empty()) return;` before the
+   offset write), so FTE sees `lmsize==0` → `out->samples=NULL` (gl_model.c:4552-4584). The old
+   code did `if(!surf->samples){ l={0,0,0}; return l; }` — returning black AND terminating the
+   descent. Because decoupled zeroes every face's `texturemins` (gl_model.c:4550), an omitted
+   coplanar face can also win the CPU bbox accept-test over the lit floor a model rests on. Fixed:
+   `if(!surf->samples) continue;` — keep descending / try the next face so the sampler finds the
+   real lit surface. Classic (`_lightmap_scale`) never hit this because it wrote data for those
+   faces. Surfaces were always immune (GPU interpolates atlas texcoords, no accept/reject).
+2. **HDR (E5BGR9) brightness parity.** 3C decoded the exponent as `pow(2, exp-15-9+8)` = `2^(exp-16)`
+   but the surface build uses `rgb9e5tab[exp]*(1<<7)` = `2^(exp-24)*2^7` = `2^(exp-17)`
+   (client/image.c:223, r_surf.c:1511) — so model/viewmodel light was **2× brighter than the world**
+   on HDR maps (pre-existing; inherited verbatim by the P95 helper). Changed the `+8` to `+7` in
+   `LightPoint3C_AccumLuxel` so models match surfaces. NOTE: HDR model brightness halves — this is
+   the correct value; content lit around the old 2×-bright models may read slightly darker.
+
+Client render only — m-rel. Composes with P94 (black-sample retry ladder) and P95 (bilinear +
+`r_modellight_bilinear`, kept). No sv-rel/progs/protocol impact.
+
+---
+
+## Patch 100 — `r_model_mincoverage`: screen-coverage cull for model entities  *(APPLIED — m-rel)*
+
+**Files:** `client/renderer.c` (cvar + registration), `gl/gl_alias.c` (`R_GAlias_GenerateBatches`).
+
+**Problem.** Model entities were **frustum-culled only** (`gl_alias.c` `R_CullEntityBox`). There is no
+distance or size cull anywhere for them, so a prop 3000qu away still paid a full batch generation,
+`Alias_GAliasBuildMesh` skeletal rebuild, `R_CalcModelLighting` recursive lightmap sample, uniform
+upload (bone matrices included) and draw call — in **every** pass — while covering almost no pixels.
+On a prop-dense map this is the dominant main-pass cost.
+
+Measured on the reporting user's all-props stress map (~60fps):
+- `r_shadows 0` ≈ `r_shadows 2` ⇒ the fake-sun depth pass is NOT the cost. It only ever covered props
+  inside the `r_shadows_distance` (1024) ortho box, i.e. a small slice; the main pass has no such limit.
+- 640×480 ≈ native fps ⇒ **not** fragment/fill-bound.
+⇒ the bottleneck is per-entity CPU/geometry work in the main pass, scaling with prop COUNT at any range.
+
+**Fix.** The projected bounding-sphere coverage math already existed at `gl_alias.c:1843-1853` but was
+dead code behind `if (clmodel->maxlod)` — always false for assets with no authored LOD (i.e. all of
+them). Hoisted it out to run when `maxlod || r_model_mincoverage > 0`, and cull the entity when
+`coverage < r_model_mincoverage`. Culling there (before the surface walk) drops the WHOLE per-entity
+cost, not just triangles, and because both passes funnel through `BE_GenModelBatches` → this function,
+one test culls render + shadow.
+
+Coverage is a **fraction of the screen**, not a raw distance, so it is size-aware for free: a van
+survives far out while a grass tuft drops early — something a flat distance cull cannot do.
+
+**Exemptions (`sizecullable`).** Starts from the same set the frustum cull uses (`RF_WEAPONMODEL`,
+`framestate.bonestate`) plus `RF_EXTERNALMODEL`, `RF_FIRSTPERSON` and `playerindex >= 0` — a distant
+enemy blinking out is a gameplay bug, not an optimisation. (This game's players are CSQC skeletal
+objects, so `bonestate` already covers them; the explicit tests keep plain packet-entity players safe.)
+
+**Default 0 = OFF** — ships inert, opt-in per user tuning. Try 0.002–0.01. `CVAR_ARCHIVE`.
+Composes with the stock LOD path (Patch-free): `maxlod` models still select surfaces by the same
+coverage value, so if `lodrange` data is ever authored (FTE_MESH, `iqmtool lodrange`), both work off
+one computation. Client render only — m-rel. No sv-rel/progs/protocol impact.
+
+### Patch 100a — fix: `r_model_mincoverage` non-zero killed model self-shadowing  *(APPLIED — m-rel)*
+
+**Reported:** with `r_model_mincoverage 0.01` models stopped self-shadowing (and shadowing each other);
+`0` restored it.
+
+**Cause.** The coverage formula hoisted in Patch 100 is a **perspective** projected-sphere size. But
+`Sh_GenShadowMap` **overwrites `r_refdef.m_projection_std` with the light's ORTHOGRAPHIC matrix**
+(`gl_shadow.c` → `Matrix4x4_CM_Orthographic`) before generating the shadow faces. Under ortho the
+perspective-divide term `(m[7]*r + m[11]*-z + m[15])` collapses to the constant `1`, so `coverage`
+became a raw unprojected magnitude, fell under any sane threshold, and **every caster was culled out of
+the depth map**. Note `vpn`/`vieworg` stay the CAMERA's through the shadow pass (the path sets
+`r_refdef.m_view` directly and never calls `AngleVectors`) — *only* the projection is swapped, which is
+what made the original code look correct.
+
+**Fix.** Run the coverage block only under a perspective projection:
+`if (r_refdef.m_projection_std[11] != 0 && (clmodel->maxlod || r_model_mincoverage.value > 0))`.
+Verified constants: `Matrix4x4_CM_Projection_Far` sets `m[11] = -1, m[15] = 0`;
+`Matrix4x4_CM_Orthographic` sets `m[11] = 0, m[15] = 1` (`common/mathlib.c`).
+Testing the matrix directly keeps the guard adjacent to the assumption it protects and cannot go stale,
+unlike plumbing `bemode` through `R_GAlias_GenerateBatches`'s 4 call sites (render.h, com_mesh.c:2437,
+gl_alias.c:3034/3127, gl_heightmap.c:2906).
+
+**No perf loss:** the fake-sun pass is already limited to the `r_shadows_distance` ortho box, so the far
+props this cull targets were never drawn into it. Measured: `0 → 0.01` still 67 → 110 fps.
+
+**Bonus:** this also protects the STOCK LOD path, which shares the flaw and would have selected nonsense
+LOD levels in the shadow pass the moment any asset carried `lodrange` data.
+
+---
+
+## Patch 101 — `r_showhull`: frustum cull, non-blocking model peek, opaque lines  *(APPLIED — m-rel)*
+
+**Files:** `client/cl_ents.c` (`CLQ1_AddVisibleHulls`), `common/world.h` (+`Peek_CModel`),
+`server/pr_cmds.c` (+`SVPR_PeekCModel`), `client/pr_csqc.c` (+`CSQC_World_PeekModelForIndex`).
+
+User report: *"r_showhull 1 is slower at loading prop_physics ACD and they really chug my FPS."*
+Both halves were real and had separate causes.
+
+**1. The chug — no frustum cull.** `CLQ1_AddVisibleHulls` runs EVERY frame from
+`CL_LinkPacketEntities` over EVERY edict and rebuilds all hull lines from scratch (the scenetris line
+buffer is cleared per frame in `CL_ClearEntityLists`). Its only spatial filter was Patch 69's
+`r_showhull_maxdist` — a **raw radius**, so hulls *behind the camera* were fully rebuilt: for a
+decomposed prop that is pieces × tris × 3 `CLQ1_DrawLine` calls of CPU work (the van is 26 pieces)
+handed straight to the rasteriser to discard. Added `R_CullSphere(origin, mod->radius*scale + 32)`.
+`R_CullSphere` not `R_CullEntityBox`: no `entity_t` exists at that point, the sphere test is 4 dots,
+and it has no inside-out failure mode. The **+32 slack** absorbs a one-frame frustum staleness — this
+runs from `CL_EmitEntities`, which is called *before* `R_SetFrustum` for the frame, so
+`r_refdef.frustum` is last frame's; without slack a fast turn pops hulls at the screen edge.
+
+**2. The hitch — `Get_CModel` blocks the render thread.** `SVPR_GetCModel` / `CSQC_World_ModelForIndex`
+call `COM_WorkerPartialSync` for a model whose `loadstate != MLS_LOADED`, i.e. they **stall the frame**
+until the loader worker finishes — and a heavy concave prop's load runs its whole ACD decomposition
+(up to 64 QuickHull builds via `Mod_ACDRecurse`). That is the multi-second first-sight hitch. A debug
+wireframe must never do this. Added a **non-blocking `Peek_CModel`** to `world_t` (both SSQC and CSQC
+implementations): returns the model only if already `MLS_LOADED`, else NULL — never loads, never syncs.
+Not-ready props are simply skipped that frame and appear once the worker finishes, which is the
+existing pop-in behaviour minus the stall. Peek never kicks the load; the prop's real
+collision/render path already does. **Only for debug viz — never for collision, which must be correct.**
+
+Also **hoisted the `r_showhull_maxdist` test ABOVE the model lookup** (it was below): no point asking
+about — let alone blocking on — a prop we have already decided not to draw.
+
+**3. Overdraw — opaque lines.** The `hullshader` was `sort additive` + `blendfunc add`, so every
+crossing line in a dense self-overlapping wireframe paid a blend. Dropped both (and `alphagen vertex`
+with them — `CLQ1_DrawLine` writes a=1 for every hull line, so with no blendfunc alpha is unused).
+Lines now read **better**: additive was washing overlaps toward white and hiding the per-piece
+decomposition hues. `rgbgen vertex` KEPT (per-piece colours + the green/yellow single-hull-vs-
+fallback-box distinction ride on it); `polygonoffset` KEPT (stops z-fighting with the hugged surface).
+
+**Not done (deliberate, staged):** the per-model cached line mesh (`hullviz_t` + edge dedup — the
+current emit draws every shared hull edge twice) and model-space batch submission. Those remove the
+per-frame CPU rebuild itself; the above only stops doing it for props you cannot see. Revisit if the
+frustum cull is not enough. Client render only — m-rel. No progs/protocol impact.
+
+---
+
+## Patch 101a — CRITICAL: `Peek_CModel` placement broke the physics plugins  *(APPLIED — m-rel)*
+
+**Symptom:** "physics has stopped working, everything is sort of frozen when I load the map."
+
+**Cause.** Patch 101 added `Peek_CModel` to `struct world_s` **next to `Get_CModel`, in the middle of
+the struct**. `world_t` is shared ABI with the out-of-tree RBE **physics plugins**
+(`fteplug_ode_x64.dll`, `fteplug_box3d_x64.dll`) — which are built separately, are **not** rebuilt by
+`make m-rel`, and reach into `world_t` through offsets compiled into the DLL. Inserting a field shifted
+every following member out from under them → the backend read garbage → physics silently died.
+
+**Fix.** Moved the field to the **END** of the struct (offsets of all pre-existing members unchanged →
+the shipped plugins keep working), with a comment marking `world_t` as plugin ABI. Anything added in
+future goes at the bottom, or you rebuild the plugins (`make plugins-rel`) and ship them together.
+See [[fte-plugin-abi-mismatch]]. **Lesson: `world_t` / any struct a plugin touches is append-only.**
+
+---
+
+## Patch 102 — skip collision hulls for non-prop models + FCAD **v2** prebuilt sidecars  *(APPLIED — m-rel)*
+
+**Files:** `common/com_mesh.c` (`Mod_SkipCollisionHulls`, `Mod_LoadACDSidecar` v2 branch,
+`Mod_LoadIQMFile` gate); tools: `tools/acd_bake.py`, `tools/acd_bake_all.py`.
+
+User report: *"hitches still occur when loading the ACD mesh"*, and *"we do have multiple threads but it
+feels like it takes much longer than it should."* Both were right. `worker_count` defaults to 4, so
+different models load in parallel — but one model's ACD is one serial task on one worker, and far too
+much ACD work was being done at all.
+
+**1. Non-prop skip (`sv_prop_hull_exclude`).** `Mod_LoadIQMFile` built a QuickHull of EVERY IQM's verts
+(Patch 56) and, with `sv_prop_decomp >= 1`, ran the full decomposition — with **no test that the model
+is ever a collidable prop**, because at load it cannot know. On this content that is **11 player models**
+(highly concave, thousands of verts ⇒ the full recursive ACD, up to 64 QuickHull builds each) **+ 122
+gibs**, all wasted, all on the worker the map load waits for. Only `SOLID_PHYSICS_TRIMESH/BOX` entities
+ever reach `World_HullTrace`/`PM_HullTrace`; verified in the mod that those solids are set **only** in
+the physprop/props/vehicle paths — never for players or gibs.
+Added an **EXCLUDE** list (default `models/player/;models/gibs/`) rather than an include list: an
+unlisted path keeps today's behaviour, so nothing silently loses collision by being forgotten. And an
+excluded model that IS used as a prop degrades gracefully — `pmovetst.c:394` gates the hull trace on
+`numhullplanes >= 4 || numhulls > 0`, so with no hull it falls back to the normal alias trace.
+
+**2. FCAD v2 = prebuilt hulls.** v1 cached only the **partition**, so `Mod_LoadACDSidecar` still ran
+`Mod_BuildConvHull` per piece on every load — a 26-piece van meant 26 QuickHull builds *from the file
+that was supposed to be the cache*. v2 stores what those builds produce (planes/tris/bounds mirroring
+`convhull_t`), so loading is a read + memcpy. v1 files still load unchanged (~584 ship).
+Layout: `"FCAD" | i32 ver=2 | i32 npieces`, then per piece
+`i32 numplanes | f32 planes[n*4] | i32 numtris | f32 tris[n*3*3] | f32 mins[3] | f32 maxs[3]`.
+This also makes **convex (1-piece) props worth baking**, which v1 deliberately skipped (a 1-piece v1
+file saved nothing; a 1-piece v2 file still skips that hull build) — `acd_bake_all.py`'s `convex-skip`
+branch is removed accordingly.
+
+**Writer correctness (the two traps).** CoACD pieces are already convex, so their own faces ARE the hull
+surface — the tool must not re-run a hull algorithm or the collision geometry would drift from the asset.
+Two things had to mirror the engine exactly:
+- **Normal orientation** is decided by the piece CENTROID, not by mesh winding (decomposer winding is not
+  something to bet collision on): for a convex piece the centroid is strictly inside, so
+  `dot(n, centroid) - dist > 0` unambiguously means the normal is inward → flip.
+- **`PLANE_CAP = 256`** mirrors the `cap` the engine passes to `Mod_BuildConvHull`. A tessellated piece
+  (a barrel's curved shell) blows past it — an unclamped bake produced **632 planes/piece vs the runtime's
+  ≤256**, which would have traded load time for FRAME time since `World_HullTrace` is O(numplanes). Over
+  cap, the writer replicates Patch 57's merge exactly: fold the face into the most-parallel existing plane
+  and keep the LOOSER `.w` (conservative-outward). Verified on a tessellated sphere: planes ≤ cap at 256
+  and 64, and **zero verts outside the hull** either way — it never clips into the model.
+
+**Baking is a long batch job** (CoACD ~1-2 min/model at `acd_bake.py` defaults; `acd_bake_all.py` uses
+much faster tuned params). Existing v1 sidecars keep working meanwhile — v2 is a pure speedup, per asset.
+
+---
+
+## Patch 103 — collision hulls for `.mdl` (GoldSrc **and** Quake alias)  *(APPLIED — m-rel + sv-rel)*
+
+**Files:** `common/com_mesh.h` (prototypes), `common/com_mesh.c` (de-static ×2, Q1 hull build),
+`gl/gl_hlmdl.c` (GoldSrc hull build).
+
+**Problem.** Only the IQM loader built a collision hull (Patch 56). **No `.mdl` ever did** — neither
+GoldSrc (`mod_halflife`, gl_hlmdl.c) nor Quake alias (IDPO, `Mod_LoadQ1Model`). So every `.mdl` had
+`numhullplanes == 0 && numhulls == 0`, and the trace gate
+(`solid == SOLID_PHYSICS_TRIMESH && (numhullplanes >= 4 || numhulls > 0)`, pmovetst.c:394 /
+world.c:1257) silently fell through to a bbox. Consequences: all **75 dropped-weapon world models**
+shared ONE hardcoded 12×5×3 box (`sv_weapons.qc:1879-1886`) — a knife and an AWP had identical
+collision — and `sv_physprop_weapon_geom 1` (which already selects `SOLID_PHYSICS_TRIMESH`,
+sv_weapons.qc:1865) appeared to do nothing. **No asset work was ever needed**: the verts were always
+loaded, the loaders just never used them. No `.acd` either — a sidecar describes a multi-piece
+DECOMPOSITION; this is the single convex hull (`mod->hullplanes`) that `sv_prop_collision 2` traces.
+
+**GoldSrc — the trap.** The raw studio verts (`mesh->xyz_array`, copied verbatim at gl_hlmdl.c:262)
+are **BONE-LOCAL**; the renderer transforms them per frame (`VectorTransform(... transform_matrix
+[bonenums[v][0]] ...)`, :1562). A hull from raw verts is garbage. Measured on the real assets: all 35
+GoldSrc `w_*.mdl` have exactly 1 bone and **0/35 have an identity bind pose** — `w_awp` bone0 =
+`pos(3.0 0.3 0.7) rot(0.81 1.53 1.10)`, turning raw extent `(15.8 12.5 57.8)` into `(55.3 19.8 16.2)`
+(barrel axis Z→X, centroid shifted 13.5qu). A raw-vert hull would be a rifle standing vertically,
+offset from its own model.
+**Fix:** extend the existing **Patch 60** block, which already computes exactly the needed bind-pose
+transform (server-safe local matrix chain from the raw header) and was throwing the transformed verts
+away after folding them into `mod->mins/maxs`. Keep them, build the hull, free. `mod->mins/maxs` is
+already correct and in the same space at that point, so it passes straight through. Cap 256 = the IQM
+caller's.
+
+**Quake alias — the coverage finding.** Only **35 of the 75** `w_*.mdl` are GoldSrc; the other **40
+are IDPO v6** (knife/ak47/awp/deagle/usp among them) and never enter gl_hlmdl.c. A GoldSrc-only fix
+would have covered <half. Simpler case: Quake `.mdl` is vertex-animated, not skeletal, so
+`poseofs[].ofsverts` is already model-space — no transform, no bone-local trap. Uses **pose 0** only
+(the rest pose, matching the IQM loader's base verts): the bounds loop above it unions EVERY pose
+because bounds must contain the whole animation, but a hull over every pose would be the animation's
+swept volume — far too fat. Static props and `w_` models have one pose, so the two agree there.
+
+**Plumbing.** `Mod_BuildConvHull` and `Mod_SkipCollisionHulls` were both `static` to com_mesh.c with
+no prototypes anywhere; exposed via com_mesh.h (already included by gl_hlmdl.c) rather than
+duplicated — a second implementation would drift, which is exactly how the reverted offline `.acd` v2
+baker produced inflated hulls and lost Patch 63's bevels. Both loaders honour Patch 102's
+`sv_prop_hull_exclude`. `gl_hlmdl.o` is in `COMMON_OBJS`, so it links into the dedicated server —
+**sv-rel verified building**, not just m-rel.
+
+**Non-issue, checked:** the `r_meshpitch` convention. HL models consume `ent->axis` built by
+`AngleVectorsMesh` (cl_ents.c), which is format-agnostic, so a hull in model space rotates exactly as
+the model draws — no pitch compensation needed, despite `mesh_noscale` existing for the RENDER path.
+
+**To use:** `sv_physprop_weapon_geom 1` (default 0) now actually gives dropped weapons per-weapon
+convex collision. `r_showhull 1` to inspect.

@@ -82,6 +82,7 @@ extern cvar_t	in_vraim;
 
 // standard effect cvars/sounds
 extern cvar_t r_explosionlight;
+extern cvar_t r_ragdoll_timescale;	//nettest: client ragdoll slow-mo/freeze (com_mesh.c)
 extern sfx_t			*cl_sfx_wizhit;
 extern sfx_t			*cl_sfx_knighthit;
 extern sfx_t			*cl_sfx_tink1;
@@ -1079,7 +1080,7 @@ static void QCBUILTIN PF_R_RemoveEntity(pubprogfuncs_t *prinst, struct globalvar
 			i++;
 	}
 }
-void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t rgbvalue, float alphavalue);
+void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t rgbvalue, float alphavalue, float aspect);
 static void QCBUILTIN PF_R_AddDecal(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	shader_t *shader = R_RegisterShader(PR_GetStringOfs(prinst, OFS_PARM0), SUF_NONE, 
@@ -1098,8 +1099,32 @@ static void QCBUILTIN PF_R_AddDecal(pubprogfuncs_t *prinst, struct globalvars_s 
 	float *side = G_VECTOR(OFS_PARM3);
 	float *rgb = G_VECTOR(OFS_PARM4);
 	float alpha = G_FLOAT(OFS_PARM5);
+	float aspect = (prinst->callargc > 6) ? G_FLOAT(OFS_PARM6) : 1;	//nettest: optional width/height (default 1 = square)
 	if (shader)
-		CL_AddDecal(shader, org, up, side, rgb, alpha);
+		CL_AddDecal(shader, org, up, side, rgb, alpha, aspect);
+}
+
+//nettest: persistent lit decals — clip once + cache (with lightmap), re-render cheaply each frame.
+//adddecal_static returns a handle for removedecal/updatedecal; -1 = failed (QC falls back to adddecal).
+static void QCBUILTIN PF_R_AddDecalStatic(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{	//float(string shader, vector org, vector up, vector side, vector rgb, float alpha, optional float aspect, optional float lifetime)
+	const char *shadername = PR_GetStringOfs(prinst, OFS_PARM0);
+	float *org = G_VECTOR(OFS_PARM1);
+	float *up = G_VECTOR(OFS_PARM2);
+	float *side = G_VECTOR(OFS_PARM3);
+	float *rgb = G_VECTOR(OFS_PARM4);
+	float alpha = G_FLOAT(OFS_PARM5);
+	float aspect = (prinst->callargc > 6) ? G_FLOAT(OFS_PARM6) : 1;
+	float lifetime = (prinst->callargc > 7) ? G_FLOAT(OFS_PARM7) : 0;
+	G_FLOAT(OFS_RETURN) = CL_AddPersistentDecal(shadername, org, up, side, rgb, alpha, aspect, lifetime);
+}
+static void QCBUILTIN PF_R_RemoveDecal(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{	//void(float handle)
+	CL_RemovePersistentDecal((int)G_FLOAT(OFS_PARM0));
+}
+static void QCBUILTIN PF_R_UpdateDecal(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{	//void(float handle, vector rgb, float alpha)
+	CL_UpdatePersistentDecal((int)G_FLOAT(OFS_PARM0), G_VECTOR(OFS_PARM1), G_FLOAT(OFS_PARM2));
 }
 
 static void QCBUILTIN PF_R_DynamicLight_Set(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7092,6 +7117,9 @@ static struct {
 	{"dynamiclight_set",		PF_R_DynamicLight_Set,		373},
 	{"particleeffectquery",		PF_cs_particleeffectquery,	374},
 	{"adddecal",				PF_R_AddDecal,				375},
+	{"adddecal_static",			PF_R_AddDecalStatic,		0},		//nettest: persistent lit decals
+	{"removedecal",				PF_R_RemoveDecal,			0},		//nettest
+	{"updatedecal",				PF_R_UpdateDecal,			0},		//nettest
 	{"setcustomskin",			PF_cs_setcustomskin,		376},
 	{"loadcustomskin",			PF_cs_loadcustomskin,		377},
 	{"applycustomskin",			PF_cs_applycustomskin,		378},
@@ -7622,6 +7650,15 @@ static qboolean QDECL CSQC_Event_ContentsTransition(world_t *w, wedict_t *ent, i
 	return false;	//do legacy behaviour
 }
 
+//nettest Patch 101: non-blocking peek — see the Peek_CModel comment in world.h.  Never loads, never
+//COM_WorkerPartialSyncs; a still-loading model reads as "not ready yet".
+static model_t *QDECL CSQC_World_PeekModelForIndex(world_t *w, int modelindex)
+{
+	model_t *mod = CSQC_GetModelForIndex(modelindex);
+	if (mod && mod->loadstate == MLS_LOADED)
+		return mod;
+	return NULL;
+}
 static model_t *QDECL CSQC_World_ModelForIndex(world_t *w, int modelindex)
 {
 	model_t *mod = CSQC_GetModelForIndex(modelindex);
@@ -8152,6 +8189,7 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 		csqc_world.Event_Sound = CSQC_Event_Sound;
 		csqc_world.Event_ContentsTransition = CSQC_Event_ContentsTransition;
 		csqc_world.Get_CModel = CSQC_World_ModelForIndex;
+		csqc_world.Peek_CModel = CSQC_World_PeekModelForIndex;	//nettest Patch 101 (non-blocking; debug viz)
 		csqc_world.Get_FrameState = CSQC_World_GetFrameState;
 		World_ClearWorld(&csqc_world, false);
 		CSQC_InitFields();	//let the qclib know the field order that the engine needs.
@@ -8791,10 +8829,15 @@ qboolean CSQC_DrawView(void)
 #ifdef USERBE
 			if (csqc_world.rbe)
 			{
+				double ragdt;
 #ifdef RAGDOLL
 				rag_doallanimations(&csqc_world);
 #endif
-				csqc_world.rbe->RunFrame(&csqc_world, host_frametime, 800);
+				//nettest: scale the ragdoll sim dt for slow-mo/freeze inspection (r_ragdoll_timescale;
+				//physicstime below still advances by the full host_frametime so the accumulator stays synced).
+				ragdt = host_frametime * r_ragdoll_timescale.value;
+				if (ragdt < 0) ragdt = 0;
+				csqc_world.rbe->RunFrame(&csqc_world, ragdt, 800);
 			}
 #endif
 

@@ -201,6 +201,9 @@ typedef struct
 	void (QDECL *PushCommand)(struct world_s *world, rbecommandqueue_t *cmd);
 //	void (QDECL *ExpandBodyAABB)(struct world_s *world, rbebody_t *bodyptr, float *mins, float *maxs);	//expands an aabb to include the size of the body.
 	void (QDECL *Trace) (struct world_s *world, wedict_t *ed, vec3_t start, vec3_t end, trace_t *trace);
+	//nettest: seed a ragdoll limb's velocity AFTER rag_instanciate's re-pose loop (RagMatrixToBody zeros it).
+	//Appended at struct end so existing member offsets don't shift (ABI-safe). May be NULL (guard at call site).
+	void (QDECL *RagSetBodyVelocity)(struct world_s *world, rbebody_t *bodyptr, vec3_t linvel, vec3_t avel);
 } rigidbodyengine_t;
 #endif
 
@@ -283,6 +286,24 @@ struct world_s
 #ifdef ENGINE_ROUTING
 	void *waypoints;
 #endif
+
+	//nettest Patch 101: NON-BLOCKING variant of Get_CModel.  Get_CModel kicks off a load and then
+	//COM_WorkerPartialSyncs — i.e. BLOCKS the calling thread — until the loader worker finishes, which
+	//for a heavy concave prop includes its entire ACD decomposition.  Called from the render path that
+	//stalls the frame on first sight of such a prop.  Peek_CModel returns the model ONLY if it is
+	//already fully loaded, else NULL: never blocks, never starts a load.  For DEBUG VIZ and other
+	//"draw it if it happens to be ready" callers — NEVER for collision, which must be correct.
+	//
+	//*** MUST STAY AT THE END OF THIS STRUCT. ***
+	//world_t is shared ABI with the out-of-tree RBE PHYSICS PLUGINS (fteplug_ode_x64.dll /
+	//fteplug_box3d_x64.dll), which are built separately and are NOT rebuilt by `make m-rel`.  They
+	//reach into world_t through offsets compiled into the DLL, so inserting a field ANYWHERE above
+	//shifts every following field out from under them -> they read garbage -> physics silently dies
+	//("everything frozen on map load").  That is exactly what happened when this field was first added
+	//next to Get_CModel.  Appending keeps all existing offsets identical, so old plugins keep working.
+	//Anything added here in future goes at the BOTTOM, or you rebuild the plugins (make plugins-rel)
+	//and ship them together.  See [[fte-plugin-abi-mismatch]].
+	model_t *(QDECL *Peek_CModel)(struct world_s *w, int modelindex);
 };
 typedef struct world_s world_t;
 

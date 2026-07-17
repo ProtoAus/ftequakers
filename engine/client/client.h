@@ -1229,6 +1229,14 @@ extern unsigned int cl_maxstris;
 		cl_strisvertn[2] = BZ_Realloc(cl_strisvertn[2], sizeof(*cl_strisvertn[2])*cl_maxstrisvert);	\
 */	} while(0)
 
+//nettest: persistent lit decals (cl_ents.c) — clip once + cache, re-emit cheaply each frame.
+int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime);
+void CL_RemovePersistentDecal(int handle);
+void CL_UpdatePersistentDecal(int handle, const vec3_t rgb, float alpha);
+void CL_EmitPersistentDecals(void);	//called from the world draw (r_surf.c) before BE_DrawWorld
+void CL_WipePersistentDecals(void);	//called from CL_ClearState
+void CL_PersistentDecals_Restarted(void);	//called on renderer restart (renderer.c) -> re-clip all next emit
+
 extern char emodel_name[], pmodel_name[], prespawn_name[], modellist_name[], soundlist_name[];
 
 //CL_TraceLine traces against network(positive)+csqc(negative) ents. returns frac(1 on failure), and impact, normal, ent values

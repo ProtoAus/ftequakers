@@ -12,9 +12,10 @@
 	  * box/sphere/capsule/cylinder primitives.
 	  * the gravity-gun black hole (physics_addforce -> RBECMD_FORCE -> b3Body_ApplyForce).
 	  * multicore via Box3D's OWN internal task scheduler (physics_box3d_threads>1).
+	  * skeletal ragdolls (Patch 80: the Rag* functions build Box3D bodies + spherical/revolute/weld/
+	    prismatic joints, mirroring the ODE path) - drives death-flop player ragdolls in csqc_world.
 
 	Deliberately stubbed vs ODE:
-	  * skeletal ragdolls (all Rag* functions) - a separate path from props.
 	  * prop-vs-prop QC .touch events - props still collide physically, they just don't
 	    fire QC touch callbacks (v1.1: read b3World_GetContactEvents after the step).
 
@@ -77,6 +78,10 @@ static cvar_t *physics_box3d_unitscale;		//Quake units per real metre. Box3D's t
 static cvar_t *physics_box3d_decomp;		//1 = concave props use the multi-hull convex decomposition (many hull shapes/body); 0 = single convex hull.
 static cvar_t *physics_box3d_maxpieces;		//if a prop decomposes into more pieces than this, fall back to a single hull (bounds broadphase proxy count).
 static cvar_t *physics_box3d_debug;			//1 = verbose body-build + per-second sim tracing to the console.
+static cvar_t *physics_box3d_ragdoll_angulardamp;	//nettest: ragdoll limb angular damping (1/s) - stops the forever-sway
+static cvar_t *physics_box3d_ragdoll_lineardamp;	//nettest: ragdoll limb linear damping (1/s)
+static cvar_t *physics_box3d_ragdoll_stiffness;		//nettest: ragdoll joint spring hertz - springs limbs toward bind pose (0 = free/floppy)
+static cvar_t *physics_box3d_ragdoll_springdamp;	//nettest: ragdoll joint spring damping ratio (~1 = critically damped, no ring)
 
 //----------------------------------------------------------------------------
 // Box3D id <-> edict void* slot.  ids are 8-byte value structs; store the packed
@@ -88,6 +93,8 @@ static cvar_t *physics_box3d_debug;			//1 = verbose body-build + per-second sim 
 #define SETB3SHAPE(ed,id)  ((ed)->rbe.body.geom = (void*)(uintptr_t)b3StoreShapeId(id))
 #define HAVEB3BODY(ed)     ((ed)->rbe.body.body != NULL)
 #define HAVEB3SHAPE(ed)    ((ed)->rbe.body.geom != NULL)
+//ragdoll bodies live in a bare rbebody_t (not an edict); same packed-id slot.
+#define B3RAGBODY(bp)      b3LoadBodyId((uint64_t)(uintptr_t)(bp)->body)
 
 struct box3dctx_s
 {
@@ -944,25 +951,371 @@ static void World_Box3D_RunCmd(world_t *world, rbecommandqueue_t *cmd)
 }
 
 //----------------------------------------------------------------------------
-// ragdoll + joint entry points - STUBBED in v1 (props do not use these)
+// ragdoll + joint entry points (skeletal ragdolls; a separate path from props)
+//
+// The engine hands these functions a backend-agnostic doll description (rbebodyinfo_t / rbejointinfo_t,
+// world.h) and a per-bone world matrix `mat` (row-major 3x4: mat[0/4/8]=fwd col, [1/5/9]=left col,
+// [2/6/10]=up col, [3/7/11]=position - the SAME FLU-column convention the prop transform uses).  We
+// build one Box3D dynamic body per doll body and one Box3D joint per doll joint, then feed simulated
+// body poses back into `mat` each frame for the skeletal renderer.  Mirrors com_phys_ode.c:1744-2042.
 //----------------------------------------------------------------------------
 static void QDECL World_Box3D_RemoveJointFromEntity(world_t *world, wedict_t *ed)
 {
 	ed->rbe.joint_type = 0;
 	ed->rbe.joint.joint = NULL;
 }
-static qboolean QDECL World_Box3D_RagMatrixToBody(rbebody_t *bodyptr, float *mat)			{ return false; }
-static qboolean QDECL World_Box3D_RagCreateBody(world_t *world, rbebody_t *bodyptr, rbebodyinfo_t *bodyinfo, float *mat, wedict_t *ent)	{ return false; }
-static void QDECL World_Box3D_RagMatrixFromJoint(rbejoint_t *joint, rbejointinfo_t *info, float *mat)	{ }
+
+//Build a Box3D joint frame orientation from a world-space joint axis.  Box3D joints put their working
+//axis on a LOCAL frame axis: revolute rotates about frame z, the spherical cone is about frame-A z,
+//the prismatic slides along frame x.  So map the ODE-supplied axis to local z (axisSlot 2) or x
+//(axisSlot 0) and fill the other two with any orthonormal pair.  Returns X->fwd,Y->left,Z->up quat.
+static b3Quat Box3D_JointBasisQuat(const vec3_t axis, int axisSlot)
+{
+	vec3_t a, ref, t1, t2;
+	VectorCopy(axis, a);
+	if (VectorNormalize(a) < 1e-6f)
+		VectorSet(a, 0, 0, 1);				//degenerate axis -> arbitrary
+	if (fabs(a[2]) < 0.9f)
+		VectorSet(ref, 0, 0, 1);
+	else
+		VectorSet(ref, 1, 0, 0);
+	CrossProduct(ref, a, t1); VectorNormalize(t1);
+	CrossProduct(a, t1, t2);  VectorNormalize(t2);
+	if (axisSlot == 0)
+		return Box3D_QuatFromFLU(a, t1, t2);	//primary axis -> local x (prismatic slide axis)
+	return Box3D_QuatFromFLU(t1, t2, a);		//primary axis -> local z (revolute/spherical axis)
+}
+
+static qboolean QDECL World_Box3D_RagMatrixToBody(rbebody_t *bodyptr, float *mat)
+{
+	b3BodyId body;
+	vec3_t forward, left, up;
+	b3Pos pos;
+	b3Quat q;
+	if (!bodyptr->body)
+		return false;
+	body = B3RAGBODY(bodyptr);
+	//mat is row-major 3x4: the FLU basis lives in the matrix COLUMNS (matches BodyToEntity read-back).
+	VectorSet(forward, mat[0], mat[4], mat[8]);
+	VectorSet(left,    mat[1], mat[5], mat[9]);
+	VectorSet(up,      mat[2], mat[6], mat[10]);
+	q = Box3D_QuatFromFLU(forward, left, up);
+	pos.x = mat[3]; pos.y = mat[7]; pos.z = mat[11];
+	b3Body_SetTransform(body, pos, q);
+	b3Body_SetLinearVelocity(body, b3Vec3_zero);
+	b3Body_SetAngularVelocity(body, b3Vec3_zero);
+	return true;
+}
+
+static qboolean QDECL World_Box3D_RagCreateBody(world_t *world, rbebody_t *bodyptr, rbebodyinfo_t *bodyinfo, float *mat, wedict_t *ent)
+{
+	struct box3dctx_s *ctx = (struct box3dctx_s*)world->rbe;
+	b3BodyDef bd;
+	b3ShapeDef sd;
+	b3BodyId body;
+	b3ShapeId shape = {0};
+	float radius, length, volume;
+	ctx->hasextraobjs = true;
+
+	bd = b3DefaultBodyDef();
+	bd.type = b3_dynamicBody;
+	bd.position = b3Vec3_zero;				//real transform applied by RagMatrixToBody below
+	bd.userData = ent;
+	bd.enableSleep = physics_box3d_autodisable->ival ? true : false;
+	//nettest: ragdoll limbs are otherwise ZERO-damped => frictionless pendulums that sway forever (the head
+	//on the neck joint, free-hanging arms).  Damping is unitless (1/s, velocity decays exp(-c*t)); it does NOT
+	//scale with lengthUnitsPerMeter.  angular ~4 => oscillation envelope exp(-2t) settles ~1.5s, then the swing
+	//drops under the ~2 QU/s sleep threshold and the doll SLEEPS; small linear so the initial collapse isn't slowed.
+	bd.angularDamping = physics_box3d_ragdoll_angulardamp->value;
+	bd.linearDamping  = physics_box3d_ragdoll_lineardamp->value;
+	body = b3CreateBody(ctx->world, &bd);
+
+	sd = b3DefaultShapeDef();
+	sd.filter = b3DefaultFilter();
+	//nettest: SELECTIVE ragdoll self-collision.  DISTAL limb segments (forearm/calf; hand/foot if a doll has
+	//them) stay in group 0 so they DO collide with the torso - that stops the forearm/calf sinking through the
+	//chest/pelvis.  PROXIMAL bodies (pelvis/chest/head/upperarm/thigh) share a UNIQUE per-doll NEGATIVE group so
+	//they never self-collide - which keeps the ONE remaining standing-spawn overlap (the tall chest box hanging
+	//into the thigh tops, ~2.4u) from generating a contact whose push-out would prop the doll into a jittery
+	//"sitting" pose.  Box3D group rules: SAME negative group = never collide (wins over the mask); a group-0
+	//shape vs a negative-group shape (or two DIFFERENT dolls' negatives, or the static world / props) = the
+	//mask decides = collide.  Jointed neighbours (elbow/knee/shoulder/hip/waist/neck) never collide regardless -
+	//every ragdoll joint sets collideConnected=false.  (Restores ODE-parity self-skip, minus the distal limbs.)
+	if (ent)
+	{
+		//distal segments matched by (lowercase) body-name substring - our doll names them lloarm/rloarm/lcalf/
+		//rcalf; the extra tokens future-proof other dolls (plain strstr: plugin can't link core Q_strcasestr,
+		//and doll body names are authored lowercase).
+		const char *bn = bodyinfo->name;
+		qboolean distal = strstr(bn, "loarm") || strstr(bn, "forearm") || strstr(bn, "calf") ||
+						  strstr(bn, "shin")  || strstr(bn, "hand")    || strstr(bn, "foot");
+		if (!distal)
+			sd.filter.groupIndex = -(1 + (int)NUM_FOR_EDICT(world->progs, (edict_t*)ent));
+	}
+
+	switch(bodyinfo->geomshape)
+	{
+	case GEOMTYPE_SPHERE:
+		{
+			b3Sphere s;
+			radius = (bodyinfo->dimensions[0] + bodyinfo->dimensions[1] + bodyinfo->dimensions[2]) / 3.0f;
+			if (radius < 0.1f) radius = 0.1f;
+			s.center = b3Vec3_zero; s.radius = radius;
+			shape = b3CreateSphereShape(body, &sd, &s);
+			volume = (4.0f/3.0f)*M_PI*radius*radius*radius;
+		}
+		break;
+	case GEOMTYPE_CAPSULE:
+	case GEOMTYPE_CYLINDER:		//no faithful dynamic cylinder in Box3D -> rounded capsule (fine for a limb)
+		{
+			b3Capsule c;
+			radius = (bodyinfo->dimensions[0] + bodyinfo->dimensions[1]) * 0.5f;
+			if (radius < 0.1f) radius = 0.1f;
+			length = bodyinfo->dimensions[2];		//ODE capsule/cylinder length is the cylinder segment (local z)
+			if (length < 0.1f) length = 0.1f;
+			c.center1 = (b3Vec3){0.0f, 0.0f, -length*0.5f};
+			c.center2 = (b3Vec3){0.0f, 0.0f,  length*0.5f};
+			c.radius = radius;
+			shape = b3CreateCapsuleShape(body, &sd, &c);
+			volume = M_PI*radius*radius*length + (4.0f/3.0f)*M_PI*radius*radius*radius;
+		}
+		break;
+	default:
+	case GEOMTYPE_BOX:
+		{
+			vec3_t hd;
+			b3BoxHull bh;
+			hd[0] = bodyinfo->dimensions[0]*0.5f; if (hd[0] < 0.1f) hd[0] = 0.1f;
+			hd[1] = bodyinfo->dimensions[1]*0.5f; if (hd[1] < 0.1f) hd[1] = 0.1f;
+			hd[2] = bodyinfo->dimensions[2]*0.5f; if (hd[2] < 0.1f) hd[2] = 0.1f;
+			bh = b3MakeBoxHull(hd[0], hd[1], hd[2]);
+			shape = b3CreateHullShape(body, &sd, &bh.base);	//box hull is a value, deep-copied; no geomdata blob
+			volume = hd[0]*hd[1]*hd[2]*8.0f;
+		}
+		break;
+	}
+
+	//density picked so the total body mass ~= the doll body's mass; Box3D derives inertia from geometry.
+	if (volume < 1e-4f) volume = 1e-4f;
+	b3Shape_SetDensity(shape, (bodyinfo->mass > 0 ? bodyinfo->mass : 1.0f) / volume, false);
+	b3Body_ApplyMassFromShapes(body);
+
+	bodyptr->body = (void*)(uintptr_t)b3StoreBodyId(body);
+	bodyptr->geom = (void*)(uintptr_t)b3StoreShapeId(shape);	//no heap blob for primitive shapes (freed with the body)
+	//NB: don't seed velocity here - rag_instanciate re-poses every body via RagMatrixToBody AFTER this
+	//(which zeros velocity), so any seed here is dead.  The throw seed is applied post-re-pose via
+	//RagSetBodyVelocity instead.  ent is kept for bd.userData above.
+	return World_Box3D_RagMatrixToBody(bodyptr, mat);
+}
+
+//seed a ragdoll limb's velocity - called by rag_instanciate AFTER its final re-pose loop (so it survives).
+//linvel/avel are already physics-space (Quake units/s, rad/s); the QC-Euler remap happens at the call site.
+static void QDECL World_Box3D_RagSetBodyVelocity(world_t *world, rbebody_t *bodyptr, vec3_t linvel, vec3_t avel)
+{
+	b3BodyId body;
+	if (!bodyptr->body)
+		return;
+	body = B3RAGBODY(bodyptr);
+	b3Body_SetLinearVelocity(body,  (b3Vec3){linvel[0], linvel[1], linvel[2]});
+	b3Body_SetAngularVelocity(body, (b3Vec3){avel[0], avel[1], avel[2]});
+	b3Body_SetAwake(body, true);
+}
+
+static void QDECL World_Box3D_RagMatrixFromJoint(rbejoint_t *joint, rbejointinfo_t *info, float *mat)
+{
+	//debug-draw only: reconstruct the joint's world frame from body A's transform + the joint's local frame A.
+	b3JointId jid;
+	b3Transform lfa, wfa;
+	b3WorldTransform xa;
+	b3Vec3 fx, fy, fz;
+	if (!joint->joint)
+	{
+		Matrix4x4_Identity(mat);
+		return;
+	}
+	jid = b3LoadJointId((uint64_t)(uintptr_t)joint->joint);
+	xa  = b3Body_GetTransform(b3Joint_GetBodyA(jid));
+	lfa = b3Joint_GetLocalFrameA(jid);
+	wfa = b3MulTransforms(*(b3Transform*)&xa, lfa);		//single precision: b3WorldTransform == b3Transform
+	fx = b3RotateVector(wfa.q, b3Vec3_axisX);
+	fy = b3RotateVector(wfa.q, b3Vec3_axisY);
+	fz = b3RotateVector(wfa.q, b3Vec3_axisZ);
+	mat[0]=fx.x; mat[1]=fy.x; mat[2]=fz.x; mat[3]=wfa.p.x;
+	mat[4]=fx.y; mat[5]=fy.y; mat[6]=fz.y; mat[7]=wfa.p.y;
+	mat[8]=fx.z; mat[9]=fy.z; mat[10]=fz.z; mat[11]=wfa.p.z;
+	mat[12]=0; mat[13]=0; mat[14]=0; mat[15]=1;
+}
+
 static void QDECL World_Box3D_RagMatrixFromBody(world_t *world, rbebody_t *bodyptr, float *mat)
 {
-	//write identity so a caller rendering ragdoll bones gets a stable matrix, not garbage.
-	Matrix4x4_Identity(mat);
+	b3BodyId body;
+	b3WorldTransform xf;
+	b3Vec3 bx, by, bz;
+	if (!bodyptr->body)
+	{
+		Matrix4x4_Identity(mat);
+		return;
+	}
+	body = B3RAGBODY(bodyptr);
+	xf = b3Body_GetTransform(body);
+	//FLU basis into the matrix columns (exact inverse of RagMatrixToBody), position into the 4th column.
+	bx = b3RotateVector(xf.q, b3Vec3_axisX);
+	by = b3RotateVector(xf.q, b3Vec3_axisY);
+	bz = b3RotateVector(xf.q, b3Vec3_axisZ);
+	mat[0]=bx.x; mat[1]=by.x; mat[2]=bz.x; mat[3]=(float)xf.p.x;
+	mat[4]=bx.y; mat[5]=by.y; mat[6]=bz.y; mat[7]=(float)xf.p.y;
+	mat[8]=bx.z; mat[9]=by.z; mat[10]=bz.z; mat[11]=(float)xf.p.z;
+	mat[12]=0; mat[13]=0; mat[14]=0; mat[15]=1;
 }
-static void QDECL World_Box3D_RagEnableJoint(rbejoint_t *joint, qboolean enabled)			{ }
-static void QDECL World_Box3D_RagCreateJoint(world_t *world, rbejoint_t *joint, rbejointinfo_t *info, rbebody_t *body1, rbebody_t *body2, vec3_t aaa2[3])	{ }
-static void QDECL World_Box3D_RagDestroyBody(world_t *world, rbebody_t *bodyptr)			{ }
-static void QDECL World_Box3D_RagDestroyJoint(world_t *world, rbejoint_t *joint)			{ }
+
+static void QDECL World_Box3D_RagEnableJoint(rbejoint_t *joint, qboolean enabled)
+{
+	//Box3D has no dJointEnable/Disable toggle.  A disabled joint = no constraint, so DESTROY it (the doll's
+	//`enabled 0` / a runtime disable both mean "stop constraining").  Re-enabling can't recreate it (we hold
+	//no cached info) - acceptable: death ragdolls keep every joint enabled for their whole (short) life.
+	if (!enabled && joint->joint)
+	{
+		b3DestroyJoint(b3LoadJointId((uint64_t)(uintptr_t)joint->joint), true);
+		joint->joint = NULL;
+	}
+}
+
+static void QDECL World_Box3D_RagCreateJoint(world_t *world, rbejoint_t *joint, rbejointinfo_t *info, rbebody_t *body1, rbebody_t *body2, vec3_t aaa2[3])
+{
+	struct box3dctx_s *ctx = (struct box3dctx_s*)world->rbe;
+	b3BodyId b1, b2;
+	b3Transform wf, lfa, lfb;
+	b3WorldTransform xa, xb;
+	b3JointId jid = {0};
+
+	joint->joint = NULL;
+	//Box3D joints connect TWO bodies; ragdoll dolls always join two doll bodies.  World-anchored joints
+	//(a NULL body) aren't used by ragdolls, so skip rather than fabricate a static anchor body.
+	if (!body1 || !body2 || !body1->body || !body2->body)
+	{
+		if (physics_box3d_debug && physics_box3d_debug->ival)
+			Con_Printf("[box3d] ragdoll joint (type %i) needs two bodies - skipped\n", info->type);
+		return;
+	}
+	b1 = B3RAGBODY(body1);
+	b2 = B3RAGBODY(body2);
+
+	//world-space joint frame: origin at the anchor, oriented so the joint's working axis == aaa2[1].
+	wf.p = (b3Vec3){aaa2[0][0], aaa2[0][1], aaa2[0][2]};
+	wf.q = Box3D_JointBasisQuat(aaa2[1], (info->type == JOINTTYPE_SLIDER) ? 0 : 2);
+
+	//express that one world frame in each body's local space (they coincide in the reference pose).
+	xa = b3Body_GetTransform(b1);
+	xb = b3Body_GetTransform(b2);
+	lfa = b3InvMulTransforms(*(b3Transform*)&xa, wf);
+	lfb = b3InvMulTransforms(*(b3Transform*)&xb, wf);
+
+	switch(info->type)
+	{
+	case JOINTTYPE_HINGE:
+		{
+			b3RevoluteJointDef d = b3DefaultRevoluteJointDef();
+			d.base.bodyIdA = b1; d.base.bodyIdB = b2;
+			d.base.localFrameA = lfa; d.base.localFrameB = lfb;
+			d.base.collideConnected = false;
+			if (info->LoStop < info->HiStop)		//doll stops are radians
+			{
+				d.enableLimit = true;
+				d.lowerAngle = bound(-0.99f*M_PI, info->LoStop, 0.99f*M_PI);
+				d.upperAngle = bound(-0.99f*M_PI, info->HiStop, 0.99f*M_PI);
+			}
+			if (info->FMax > 0) { d.enableMotor = true; d.maxMotorTorque = info->FMax; d.motorSpeed = info->Vel; }
+			//nettest: same joint spring as the spherical case - targetAngle 0 springs the hinge back to rest.
+			if (physics_box3d_ragdoll_stiffness->value > 0)
+			{
+				d.enableSpring = true;
+				d.hertz        = physics_box3d_ragdoll_stiffness->value;
+				d.dampingRatio = physics_box3d_ragdoll_springdamp->value;
+				d.targetAngle  = 0;
+			}
+			jid = b3CreateRevoluteJoint(ctx->world, &d);
+		}
+		break;
+	case JOINTTYPE_SLIDER:
+		{
+			b3PrismaticJointDef d = b3DefaultPrismaticJointDef();
+			d.base.bodyIdA = b1; d.base.bodyIdB = b2;
+			d.base.localFrameA = lfa; d.base.localFrameB = lfb;
+			d.base.collideConnected = false;
+			if (info->LoStop < info->HiStop) { d.enableLimit = true; d.lowerTranslation = info->LoStop; d.upperTranslation = info->HiStop; }
+			if (info->FMax > 0) { d.enableMotor = true; d.maxMotorForce = info->FMax; d.motorSpeed = info->Vel; }
+			jid = b3CreatePrismaticJoint(ctx->world, &d);
+		}
+		break;
+	case JOINTTYPE_FIXED:
+		{
+			b3WeldJointDef d = b3DefaultWeldJointDef();
+			d.base.bodyIdA = b1; d.base.bodyIdB = b2;
+			d.base.localFrameA = lfa; d.base.localFrameB = lfb;
+			d.base.collideConnected = false;
+			//linearHertz/angularHertz default 0 = maximum stiffness (rigid weld)
+			jid = b3CreateWeldJoint(ctx->world, &d);
+		}
+		break;
+	case JOINTTYPE_POINT:
+	default:	//UNIVERSAL / HINGE2 aren't modelled by ragdolls -> spherical so the doll still assembles
+		{
+			b3SphericalJointDef d = b3DefaultSphericalJointDef();
+			d.base.bodyIdA = b1; d.base.bodyIdB = b2;
+			d.base.localFrameA = lfa; d.base.localFrameB = lfb;
+			d.base.collideConnected = false;
+			//nettest: unlike ODE's limitless ball, Box3D's spherical can cone/twist-limit.  Enable ONLY when
+			//the doll authors stops (else stays a free ball, so pre-limit dolls are unchanged).  The cone is
+			//centred on frameA z = the doll `axis` (mapped at :1177), so aim `axis` down the bone.  HiStop =
+			//cone half-angle (Box3D clamps to <=pi/2); LoStop2/HiStop2 = the twist range about that axis.
+			if (info->HiStop > 0)
+			{
+				d.enableConeLimit = true;
+				d.coneAngle = info->HiStop;
+			}
+			if (info->LoStop2 < info->HiStop2)
+			{
+				d.enableTwistLimit = true;
+				d.lowerTwistAngle = info->LoStop2;
+				d.upperTwistAngle = info->HiStop2;
+			}
+			//nettest: optional rotational spring so limbs aren't limitlessly floppy.  targetRotation defaults to
+			//identity (= the bind rest pose the joint frames were built in), so the spring gently returns each
+			//limb toward that pose - reins in wild flailing while gravity still dominates the fall.  0 = free.
+			if (physics_box3d_ragdoll_stiffness->value > 0)
+			{
+				d.enableSpring = true;
+				d.hertz        = physics_box3d_ragdoll_stiffness->value;
+				d.dampingRatio = physics_box3d_ragdoll_springdamp->value;
+			}
+			jid = b3CreateSphericalJoint(ctx->world, &d);
+		}
+		break;
+	}
+	joint->joint = (void*)(uintptr_t)b3StoreJointId(jid);
+}
+
+static void QDECL World_Box3D_RagDestroyBody(world_t *world, rbebody_t *bodyptr)
+{
+	if (bodyptr->body)
+		b3DestroyBody(B3RAGBODY(bodyptr));		//also destroys the attached primitive shape (no heap blob)
+	bodyptr->body = NULL;
+	bodyptr->geom = NULL;
+}
+
+static void QDECL World_Box3D_RagDestroyJoint(world_t *world, rbejoint_t *joint)
+{
+	//nettest: belt-and-suspenders against a double-free.  rag_uninstanciate now destroys joints before bodies
+	//(b3DestroyBody auto-frees a body's remaining joints), so joint->joint should always be live here; but if a
+	//stale id ever reaches this, b3Joint_IsValid stops b3DestroyJoint from corrupting the joint pool.
+	if (joint->joint)
+	{
+		b3JointId jid = b3LoadJointId((uint64_t)(uintptr_t)joint->joint);
+		if (b3Joint_IsValid(jid))
+			b3DestroyJoint(jid, true);
+	}
+	joint->joint = NULL;
+}
 
 //----------------------------------------------------------------------------
 // start / init
@@ -1019,6 +1372,7 @@ static void QDECL World_Box3D_Start(world_t *world)
 	ctx->pub.RagCreateJoint			= World_Box3D_RagCreateJoint;
 	ctx->pub.RagDestroyBody			= World_Box3D_RagDestroyBody;
 	ctx->pub.RagDestroyJoint		= World_Box3D_RagDestroyJoint;
+	ctx->pub.RagSetBodyVelocity		= World_Box3D_RagSetBodyVelocity;	//nettest: throwable ragdolls
 	ctx->pub.RunFrame				= World_Box3D_Frame;
 	ctx->pub.PushCommand			= World_Box3D_PushCommand;
 	ctx->pub.Trace					= NULL;					//engine null-checks it (ODE leaves it unset too)
@@ -1045,6 +1399,10 @@ static void Box3D_RegisterCvars(void)
 	physics_box3d_decomp		= cvarfuncs->GetNVFDG("physics_box3d_decomp",		"1",	0, "1 = CONCAVE dynamic props (rocks etc.) use the engine's convex DECOMPOSITION as many hull shapes on one body, so they collide + carry on their true shape (convex props decompose to 1 piece = ~free). 0 = one convex hull per prop (cheaper for a giant pile, but concave props collide bloated). Reload/re-spawn to apply.", "Box3D Physics");
 	physics_box3d_maxpieces		= cvarfuncs->GetNVFDG("physics_box3d_maxpieces",	"32",	0, "Cap on decomposition pieces (= collision shapes) per prop. A prop that splits into more than this uses a single hull instead. Each piece is its own broadphase proxy, so this bounds the per-frame cost of a big settling pile: lower it (e.g. 4) for smoother floods (coarser concave collision), raise it for the most accurate carried props. Reload/re-spawn to apply.", "Box3D Physics");
 	physics_box3d_debug			= cvarfuncs->GetNVFDG("physics_box3d_debug",		"0",	0, "1 = trace each physics body's build (verts/hull/mass/type) + a per-second awake-count/fall sample to the console.", "Box3D Physics");
+	physics_box3d_ragdoll_angulardamp = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_angulardamp", "4",   0, "Angular damping (unitless 1/s) on ragdoll limbs so a swinging head/arm decays and the doll sleeps instead of swaying forever. ~4 settles in ~1.5s; lower = livelier/longer swing, higher = sluggish. Applies to newly-spawned ragdolls.", "Box3D Physics");
+	physics_box3d_ragdoll_lineardamp  = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_lineardamp",  "0.4", 0, "Linear damping (unitless 1/s) on ragdoll limbs. Keep small (<0.5) so the initial collapse isn't slowed; helps hanging limbs settle. Applies to newly-spawned ragdolls.", "Box3D Physics");
+	physics_box3d_ragdoll_stiffness   = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_stiffness",   "2",   0, "Ragdoll joint spring stiffness in Hertz (cycles/s). A rotational spring gently pulls each limb back toward its bind rest pose, reining in wild flailing while gravity still dominates the fall. 0 = free/floppy (old behaviour); ~2 = subtle; ~6 = stiff mannequin. Applies to newly-spawned ragdolls.", "Box3D Physics");
+	physics_box3d_ragdoll_springdamp  = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_springdamp",  "1",   0, "Damping ratio for the ragdoll joint spring (physics_box3d_ragdoll_stiffness). ~1 = critically damped (springs back without oscillating); <1 = bouncy/springy; >1 = overdamped/slow. Applies to newly-spawned ragdolls.", "Box3D Physics");
 }
 
 qboolean Plug_Init(void)

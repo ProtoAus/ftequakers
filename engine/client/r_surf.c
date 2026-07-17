@@ -3230,6 +3230,8 @@ void Surf_DrawWorld (void)
 				TRACE(("dbg: calling R_DrawParticles\n"));
 				if (!r_refdef.recurse && !(r_refdef.flags & RDF_DISABLEPARTICLES))
 					P_DrawParticles ();
+				if (!r_refdef.recurse)
+					CL_EmitPersistentDecals ();	//nettest: persistent lit decals (before BE_DrawWorld consumes cl_stris)
 
 				TRACE(("dbg: calling BE_DrawWorld\n"));
 				r_refdef.scenevis = surfvis;
@@ -3278,6 +3280,8 @@ void Surf_DrawWorld (void)
 			TRACE(("dbg: calling R_DrawParticles\n"));
 			if (!r_refdef.recurse && !(r_refdef.flags & RDF_DISABLEPARTICLES))
 				P_DrawParticles ();
+			if (!r_refdef.recurse)
+				CL_EmitPersistentDecals ();	//nettest: persistent lit decals
 		}
 
 		TRACE(("dbg: calling BE_DrawWorld\n"));

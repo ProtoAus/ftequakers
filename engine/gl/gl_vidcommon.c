@@ -2043,8 +2043,11 @@ static const char *glsl_hdrs[] =
 					//l_projmatrix contains the light's projection matrix so no other magic needed
 					"return ((cubeproj.yxz-vec3(0.0,0.0,0.015))/cubeproj.w + vec3(1.0, 1.0, 1.0)) * vec3(0.5, 0.5, 0.5);\n"
 				"#elif defined(ORTHO) || defined(FAKESHADOWS)\n"
-					//the light's origin is in the center of the 'cube', projecting from one side to the other, so don't bias the z.
-					"return ((cubeproj.xyz-vec3(0.0,0.0,0.015))/cubeproj.w + vec3(1.0, 1.0, 1.0)) * vec3(0.5, 0.5, 0.5);\n"
+					//nettest: NO shader-side z bias here anymore — the old 0.015 NDC constant SCALED
+					//with the ortho radius (~15qu at r_shadows_distance 1024) and cut contact shadows
+					//off well before the caster touched the ground.  The bias is now world-constant,
+					//baked into the projection matrix (gl_backend.c ortho branch, r_shadows_bias qu).
+					"return (cubeproj.xyz/cubeproj.w + vec3(1.0, 1.0, 1.0)) * vec3(0.5, 0.5, 0.5);\n"
 				//"#elif defined(CUBESHADOW)\n"
 				//	vec3 shadowcoord = vshadowcoord.xyz / vshadowcoord.w;
 				//	#define dosamp(x,y) shadowCube(s_t4, shadowcoord + vec2(x,y)*texscale.xy).r
@@ -2145,6 +2148,27 @@ static const char *glsl_hdrs[] =
 								"s = mix(s, 1.0, min(1.0,10.0*(d-0.7)));\n"
 						"#endif\n"
 						"#ifdef FAKESHADOWS\n"
+							//nettest contact-shadow gap fade: the single global ortho sun map has no
+							//world occluder, so a caster on an upper floor projects its shadow onto the
+							//floor below.  Re-test the depth compare a touch (r_shadows_throwfade) closer
+							//to the light: if still lit, the occluder is WITHIN throwfade of the receiver
+							//(a real contact shadow -> keep); if shadowed, the occluder is far in front
+							//(the through-floor case -> fade back to lit).  Units are ortho depth [0,1] ~=
+							//2*r_shadows_distance qu.  Needs no depth READ, so it works with the compare-
+							//only sampler.  r_shadows_throwfade is injected as a #define alongside
+							//FAKESHADOWS (gl_shader.c); this #ifndef is just a safety default.
+							"#ifndef r_shadows_throwfade\n"
+								"#define r_shadows_throwfade 0.06\n"
+							"#endif\n"
+							"if (r_shadows_throwfade > 0.0)\n"
+							"{\n"
+								"#ifdef USE_ARB_SHADOW\n"
+									"float nearocc = float(shadow2D(smap, vec3(shadowcoord.xy, shadowcoord.z - r_shadows_throwfade)));\n"
+								"#else\n"
+									"float nearocc = float(texture2D(smap, shadowcoord.xy).r >= shadowcoord.z - r_shadows_throwfade);\n"
+								"#endif\n"
+								"s = mix(1.0, s, nearocc);\n"
+							"}\n"
 							"s = s*0.5+0.5;\n" //don't be completely black
 						"#endif\n"
 						"return s;\n"

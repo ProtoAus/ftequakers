@@ -4360,6 +4360,13 @@ qboolean GLBE_SelectDLight(dlight_t *dl, vec3_t colour, vec3_t axis[3], unsigned
 		Matrix4x4_CM_ModelViewMatrixFromAxis(view, axis[0], axis[2], axis[1], dl->origin);
 		Matrix4_Multiply(proj, view, shaderstate.lightprojmatrix);
 //		Matrix4x4_CM_LightMatrixFromAxis(shaderstate.lightprojmatrix, axis[0], axis[1], axis[2], dl->origin);
+		{	//nettest: WORLD-CONSTANT contact bias (r_shadows_bias qu; pv[14] = clip-z
+			//translation, 1 qu = 1/radius in ortho NDC).  Replaces pcf.h's old radius-
+			//SCALED 0.015 NDC bias (removed there), which grew to ~15qu at distance
+			//1024 and cut shadows off well before their caster touched the ground.
+			extern cvar_t r_shadows_bias;
+			shaderstate.lightprojmatrix[14] -= r_shadows_bias.value / max(1, dl->radius);
+		}
 	}
 	else if (shaderstate.lightmode & LSHADER_SPOT)
 	{

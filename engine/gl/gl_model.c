@@ -36,6 +36,18 @@ cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
 cvar_t mod_warnmodels						= CVARD("mod_warnmodels", "1", "Warn if any models failed to load. Set to 0 if your mod is likely to lack optional models (like its in development).");	//set to 0 for hexen2 and its otherwise-spammy-as-heck demo.
+//nettest Patch 102: read by Mod_SkipCollisionHulls (com_mesh.c) on the LOADER WORKER, so it MUST be
+//registered here on the main thread. A lazy Cvar_Get from the worker CRASHED every prop map: Cvar_Get
+//REGISTERS on first call, cvar.c has no locking at all, and dozens of IQMs precache at once across the
+//4 loader workers. Worse, registration ends in Cvar_SetCore -> InfoBuf_SetKey(&svs.info, ...) which
+//reallocs the serverinfo blob -- from the worker, while the main thread is inside SV_SpawnServer
+//writing its own keys. Hard crash, no error, log just stops.
+//
+//Deliberately NOT CVAR_SERVERINFO (that flag is what reached InfoBuf_SetKey above): the value is read
+//at model LOAD only, so pushing it live to clients buys nothing, and a live `serverinfo` set / QC
+//cvar_set would Z_Free the old ->string out from under a worker mid-read -- the same crash shape again.
+//It is plain CVAR_ARCHIVE: set it in a cfg, reload the map to apply.
+cvar_t mod_prop_hull_exclude				= CVARFD("sv_prop_hull_exclude", "models/player/;models/gibs/", CVAR_ARCHIVE, "Semicolon-separated model-path prefixes that skip collision-hull + convex-decomposition construction at load. Pure load-time cost for models that are never SOLID_PHYSICS_TRIMESH/BOX props (player models, gibs, debris) - a player model is highly concave, so it pays the full recursive ACD for nothing. A model listed here that IS used as a prop degrades to the normal alias trace rather than losing collision. Empty = build hulls for every model (the old behaviour). Read at model LOAD - reload the map to apply.");
 cvar_t mod_litsprites_force					= CVARFD("mod_litsprites_force", "0", CVAR_RENDERERLATCH, "If set to 1, sprites will be lit according to world lighting (including rtlights), like Tenebrae. Ideally use EF_ADDITIVE or EF_FULLBRIGHT to make emissive sprites instead.");
 cvar_t mod_loadmappackages					= CVARD ("mod_loadmappackages", "1", "Load additional content embedded within bsp files.");
 cvar_t mod_lightscale_broken				= CVARFD("mod_lightscale_broken", "0", CVAR_RENDERERLATCH, "When active, replicates a bug from vanilla - the radius of r_dynamic lights is scaled by per-surface texture scale rather than using actual distance.");
@@ -668,6 +680,7 @@ void Mod_Init (qboolean initial)
 	{
 		Cvar_Register(&mod_external_vis, "Graphical Nicaties");
 		Cvar_Register(&mod_warnmodels, "Graphical Nicaties");
+		Cvar_Register(&mod_prop_hull_exclude, NULL);	//nettest Patch 102 — MUST be registered here (main thread): the loader worker only reads it
 		Cvar_Register(&mod_litsprites_force, "Graphical Nicaties");
 		Cvar_Register(&mod_loadentfiles, NULL);
 		Cvar_Register(&mod_loadentfiles_dir, NULL);

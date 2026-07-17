@@ -337,6 +337,20 @@ void Mod_AccumulateMeshTextureVectors(mesh_t *mesh);
 void QDECL Mod_NormaliseTextureVectors(vec3_t *n, vec3_t *s, vec3_t *t, int v, qboolean calcnorms);
 void R_Generate_Mesh_ST_Vectors(mesh_t *mesh);
 
+//nettest Patch 103: shared collision-hull construction, so loaders OTHER than the IQM one can build
+//the same hull the IQM path has had since Patch 56. Both were static to com_mesh.c; gl_hlmdl.c (and
+//the Quake-alias loader) now call them, so they are exposed here rather than duplicated -- a second
+//implementation would drift from this one, which is exactly how the reverted offline .acd v2 baker
+//produced inflated hulls and lost Patch 63's bevels.
+//Mod_BuildConvHull: QuickHull over `verts` -> `out` (planes/tris/bounds), capped at `cap` planes
+//(over-cap faces merge into the most-parallel plane, conservative-outward). Verts MUST be in the
+//model space the renderer draws in -- a GoldSrc .mdl's raw studio verts are BONE-LOCAL and must be
+//bind-pose transformed first (see the Patch 60 block in gl_hlmdl.c).
+void Mod_BuildConvHull(model_t *mod, convhull_t *out, const vecV_t *verts, int num, const vec3_t mins, const vec3_t maxs, int cap);
+//Mod_SkipCollisionHulls: honours sv_prop_hull_exclude (Patch 102) - true = this model never collides
+//as a prop, so skip the whole hull build.
+qboolean Mod_SkipCollisionHulls(model_t *mod);
+
 #ifdef __cplusplus
 };
 #endif

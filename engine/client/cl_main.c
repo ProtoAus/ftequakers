@@ -2301,6 +2301,7 @@ void CL_ClearState (qboolean gamestart)
 	CL_ClearTEnts();
 	CL_ClearCustomTEnts();
 	Surf_ClearSceneCache();
+	CL_WipePersistentDecals();	//nettest: drop cached persistent lit decals on map change / disconnect
 #ifdef HEXEN2
 	T_FreeInfoStrings();
 #endif

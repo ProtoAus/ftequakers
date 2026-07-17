@@ -2695,8 +2695,84 @@ int R_LightPoint (vec3_t p)
 
 #ifdef PEXT_LIGHTSTYLECOL
 
+//Decodes ONE lightmap luxel of a surface (summed over its lightstyles), scaled by
+//`weight`, and accumulates it into l[0..2] (colour) + l[3..5] (deluxe direction). Shared
+//by the nearest and bilinear model-lightpoint paths so the per-format decode lives once.
+static void LightPoint3C_AccumLuxel(model_t *mod, msurface_t *surf, int lsi, int lti, float weight, float *l)
+{
+	int smax = (surf->extents[0]>>surf->lmshift)+1;
+	int tmax = (surf->extents[1]>>surf->lmshift)+1;
+	int plane = smax*tmax;
+	int idx = lti*smax + lsi;
+	qbyte *samples = surf->samples;
+	qbyte *deluxe = NULL;
+	float scale, overbright = weight/255.0f;
+	int maps;
+
+	if (mod->deluxdata)
+	{
+		switch(mod->lightmaps.fmt)
+		{
+		case LM_E5BGR9:	deluxe = ((surf->samples - mod->lightdata)>>2)*3 + mod->deluxdata;	break;
+		case LM_RGB8:	deluxe = (surf->samples - mod->lightdata) + mod->deluxdata;			break;
+		case LM_L8:		deluxe = (surf->samples - mod->lightdata)*3 + mod->deluxdata;		break;
+		}
+	}
+
+	switch(mod->lightmaps.fmt)
+	{
+	case LM_E5BGR9:
+		for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
+		{
+			unsigned int lm = *(unsigned int*)(samples + ((idx + maps*plane)<<2));
+			scale = d_lightstylevalue[surf->styles[maps]]*overbright;
+			scale *= pow(2, (int)(lm>>27)-15-9+7);	//2^(exp-17): match the surface build (rgb9e5tab[exp]*(1<<7)); the old +8 made models 2x brighter than the world on HDR maps
+			l[0] += ((lm>> 0)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[0];
+			l[1] += ((lm>> 9)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[1];
+			l[2] += ((lm>>18)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[2];
+			if (deluxe)
+			{
+				qbyte *d = deluxe + (idx + maps*plane)*3;
+				l[3] += (d[0]-127)*scale; l[4] += (d[1]-127)*scale; l[5] += (d[2]-127)*scale;
+			}
+		}
+		break;
+	case LM_RGB8:
+		for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
+		{
+			qbyte *lm = samples + (idx + maps*plane)*3;
+			scale = d_lightstylevalue[surf->styles[maps]]*overbright;
+			l[0] += lm[0] * scale * cl_lightstyle[surf->styles[maps]].colours[0];
+			l[1] += lm[1] * scale * cl_lightstyle[surf->styles[maps]].colours[1];
+			l[2] += lm[2] * scale * cl_lightstyle[surf->styles[maps]].colours[2];
+			if (deluxe)
+			{
+				qbyte *d = deluxe + (idx + maps*plane)*3;
+				l[3] += (d[0]-127)*scale; l[4] += (d[1]-127)*scale; l[5] += (d[2]-127)*scale;
+			}
+		}
+		break;
+	case LM_L8:
+		for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
+		{
+			qbyte *lm = samples + (idx + maps*plane);
+			scale = d_lightstylevalue[surf->styles[maps]]*overbright;
+			l[0] += *lm * scale * cl_lightstyle[surf->styles[maps]].colours[0];
+			l[1] += *lm * scale * cl_lightstyle[surf->styles[maps]].colours[1];
+			l[2] += *lm * scale * cl_lightstyle[surf->styles[maps]].colours[2];
+			if (deluxe)
+			{
+				qbyte *d = deluxe + (idx + maps*plane)*3;
+				l[3] += d[0]*scale; l[4] += d[1]*scale; l[5] += d[2]*scale;
+			}
+		}
+		break;
+	}
+}
+
 static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t start, const vec3_t end)
 {
+	extern cvar_t r_modellight_bilinear;
 	static float l[6];
 	float *r;
 	float		front, back, frac;
@@ -2705,11 +2781,10 @@ static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t
 	vec3_t		mid;
 	msurface_t	*surf;
 	int			s, t, ds, dt;
+	float		fs, ft;
 	int			i;
 	vec4_t	*lmvecs;
-	qbyte		*lightmap, *deluxmap;
-	float	scale, overbright;
-	int			maps;
+	qbyte		*lightmap;
 
 	if (mod->fromgame == fg_quake2)
 	{
@@ -2758,8 +2833,10 @@ static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t
 		else
 			lmvecs = surf->texinfo->vecs;
 		
-		s = DotProduct (mid, lmvecs[0]) + lmvecs[0][3];
-		t = DotProduct (mid, lmvecs[1]) + lmvecs[1][3];
+		fs = DotProduct (mid, lmvecs[0]) + lmvecs[0][3];
+		ft = DotProduct (mid, lmvecs[1]) + lmvecs[1][3];
+		s = fs;
+		t = ft;
 
 		if (s < surf->texturemins[0] ||
 			t < surf->texturemins[1])
@@ -2771,12 +2848,13 @@ static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t
 		if ( ds > surf->extents[0] || dt > surf->extents[1] )
 			continue;
 
+		//A face with no lightmap must NOT terminate the search with black: ericw omits
+		//fully-dark faces from the DECOUPLED_LM lump, so a model resting on (or a coplanar
+		//face of) the lit floor would otherwise read black. Skip it and keep descending so
+		//the sampler finds the real lit surface. (decoupled zeroes texturemins, so an
+		//omitted coplanar face can win the bbox accept-test above — skipping it is the fix.)
 		if (!surf->samples)
-		{
-			l[0]=0;l[1]=0;l[2]=0;
-			l[3]=0;l[4]=1;l[5]=1;
-			return l;
-		}
+			continue;
 
 		ds >>= surf->lmshift;
 		dt >>= surf->lmshift;
@@ -2786,137 +2864,36 @@ static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t
 		l[3]=0;l[4]=0;l[5]=0;
 		if (lightmap)
 		{
-			overbright = 1/255.0f;
-			if (mod->deluxdata)
+			int smax = (surf->extents[0]>>surf->lmshift)+1;
+			int tmax = (surf->extents[1]>>surf->lmshift)+1;
+			if (r_modellight_bilinear.ival && (smax > 1 || tmax > 1))
 			{
-				switch(mod->lightmaps.fmt)
-				{
-				case LM_E5BGR9:
-					deluxmap = ((surf->samples - mod->lightdata)>>2)*3 + mod->deluxdata;
-
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)<<2;
-					deluxmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)*3;
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						unsigned int lm = *(unsigned int*)lightmap;
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-						scale *= pow(2, (int)(lm>>27)-15-9+8);
-
-						l[0] += ((lm>> 0)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += ((lm>> 9)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += ((lm>>18)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						l[3] += (deluxmap[0]-127)*scale;
-						l[4] += (deluxmap[1]-127)*scale;
-						l[5] += (deluxmap[2]-127)*scale;
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1)<<2;
-						deluxmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1) * 3;
-					}
-					break;
-				case LM_RGB8:
-					deluxmap = surf->samples - mod->lightdata + mod->deluxdata;
-
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)*3;
-					deluxmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)*3;
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-
-						l[0] += lightmap[0] * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += lightmap[1] * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += lightmap[2] * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						l[3] += (deluxmap[0]-127)*scale;
-						l[4] += (deluxmap[1]-127)*scale;
-						l[5] += (deluxmap[2]-127)*scale;
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1) * 3;
-						deluxmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1) * 3;
-					}
-					break;
-				case LM_L8:
-					deluxmap = (surf->samples - mod->lightdata)*3 + mod->deluxdata;
-
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds);
-					deluxmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)*3;
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-
-						l[0] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						l[3] += deluxmap[0]*scale;
-						l[4] += deluxmap[1]*scale;
-						l[5] += deluxmap[2]*scale;
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1);
-						deluxmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1) * 3;
-					}
-					break;
-				}
-
+				//Bilinear 2x2 tap so model lighting is as smooth as the GPU-filtered
+				//surfaces. Nearest sampling (below) makes models catch isolated black
+				//luxels (sharp shadow / dirt-map corners) that dense lightmaps have many
+				//of, even where the floor beside them stays lit. The half-luxel bias is
+				//baked into the decoupled lmvecs (gl_model.c) but not the classic
+				//texinfo vecs, so remove it only for decoupled faces.
+				float halfbias = mod->facelmvecs ? 0.5f : 0.0f;
+				float cs = (fs - surf->texturemins[0]) / (float)(1<<surf->lmshift) - halfbias;
+				float ct = (ft - surf->texturemins[1]) / (float)(1<<surf->lmshift) - halfbias;
+				int ls0 = floor(cs), lt0 = floor(ct);
+				float ws = cs - ls0, wt = ct - lt0;
+				int ls1 = ls0+1, lt1 = lt0+1;
+				//edge-replicate clamp each tap into the face's luxel grid
+				if (ls0 < 0) ls0 = 0; else if (ls0 > smax-1) ls0 = smax-1;
+				if (ls1 < 0) ls1 = 0; else if (ls1 > smax-1) ls1 = smax-1;
+				if (lt0 < 0) lt0 = 0; else if (lt0 > tmax-1) lt0 = tmax-1;
+				if (lt1 < 0) lt1 = 0; else if (lt1 > tmax-1) lt1 = tmax-1;
+				LightPoint3C_AccumLuxel(mod, surf, ls0, lt0, (1-ws)*(1-wt), l);
+				LightPoint3C_AccumLuxel(mod, surf, ls1, lt0,    ws *(1-wt), l);
+				LightPoint3C_AccumLuxel(mod, surf, ls0, lt1, (1-ws)*   wt , l);
+				LightPoint3C_AccumLuxel(mod, surf, ls1, lt1,    ws *   wt , l);
 			}
 			else
-			{
-				switch(mod->lightmaps.fmt)
-				{
-				case LM_E5BGR9:
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)<<2;
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						unsigned int lm = *(unsigned int*)lightmap;
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-						scale *= pow(2, (int)(lm>>27)-15-9+8);
-
-						l[0] += ((lm>> 0)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += ((lm>> 9)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += ((lm>>18)&0x1ff) * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1)<<2;
-					}
-					break;
-				case LM_RGB8:
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds)*3;
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-
-						l[0] += lightmap[0] * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += lightmap[1] * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += lightmap[2] * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1) * 3;
-					}
-					break;
-				case LM_L8:
-					lightmap += (dt * ((surf->extents[0]>>surf->lmshift)+1) + ds);
-					for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
-					{
-						scale = d_lightstylevalue[surf->styles[maps]]*overbright;
-
-						l[0] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[0];
-						l[1] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[1];
-						l[2] += *lightmap * scale * cl_lightstyle[surf->styles[maps]].colours[2];
-
-						lightmap += ((surf->extents[0]>>surf->lmshift)+1) *
-								((surf->extents[1]>>surf->lmshift)+1);
-					}
-					break;
-				}
-			}
+				LightPoint3C_AccumLuxel(mod, surf, ds, dt, 1.0f, l);
 		}
-		
+
 		return l;
 	}
 

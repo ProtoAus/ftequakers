@@ -69,13 +69,41 @@ cvar_t r_shadow_raytrace					= CVARFD ("r_shadow_raytrace", "0", CVAR_ARCHIVE, "
 cvar_t r_shadow_shadowmapping				= CVARFD ("r_shadow_shadowmapping", "1", CVAR_ARCHIVE, "Enables soft shadows instead of stencil shadows.");
 cvar_t r_shadow_shadowmapping_precision		= CVARD ("r_shadow_shadowmapping_precision", "1", "Scales the shadowmap detail level up or down.");
 static cvar_t r_shadow_shadowmapping_depthbits		= CVARD ("r_shadow_shadowmapping_depthbits", "16", "Shadowmap depth bits. 16, 24, or 32.");
-cvar_t r_sun_dir							= CVARD ("r_sun_dir", "0.2 0.5 0.8", "Specifies the direction that crepusular rays appear along");
+//nettest: default is the ericw-tools LIGHT default sun (worldspawn "_sun_mangle" "230 -65 0"
+//-> toward-sun), so the r_shadows 2 fake shadows fall the same way as the baked lightmap on
+//maps without an env_sun (env_sun stuffs this per map when present).
+//nettest: CVAR_SHADERSYSTEM so a per-map sun change (env_sun stuff) flushes shaders and re-injects
+//the e_fakesundir #define used by the model sun-shade in defaultskin.glsl (no staleness across maps).
+//nettest: the ericw-tools LIGHT default sun, _sun_mangle "230 -65 0" (= yaw 230 / pitch -65), so the
+//dynamic sun agrees with the baked lightmap out of the box.  Mangle is YAW-PITCH-ROLL with +sin(pitch)
+//and points the way the light TRAVELS, so toward-sun = -(cos y cos p, sin y cos p, sin p) =
+//(0.271654, 0.323744, 0.906308) = azimuth 50, elevation 65.  (Was "-0.271654 0.582563 0.766045" =
+//azimuth 115/elev 50 — the mangle wrongly read as Quake pitch=230/yaw=-65 through AngleVectors.)
+cvar_t r_sun_dir							= CVARFD("r_sun_dir", "0.271654 0.323744 0.906308", CVAR_SHADERSYSTEM, "Direction toward the sun (the r_shadows 2 fake shadows are thrown opposite this unless r_shadows_throwdirection is set; also drives the model sun-shade).");
 cvar_t r_sun_colour							= CVARFD ("r_sun_colour", "0 0 0", CVAR_ARCHIVE, "Specifies the colour of sunlight that appears in the form of crepuscular rays.");
 cvar_t r_sun_occludedepth					= CVARFD ("r_sun_occludedepth", "0.65", CVAR_ARCHIVE, "Crepuscular god rays are depth-occluded by geometry NEARER than this window-depth (0..1), so the near first-person viewmodel blocks the rays while the farther scene still glows. Raise if the gun still shows rays; lower if near walls stop glowing. 0 = rays over everything.");
 
-static cvar_t r_shadows_fakedistance		= CVARD("r_shadows_fakedistance", "1024", "The radius to use for fake shadows.");
-static cvar_t r_shadows_throwdirection		= CVARD("r_shadows_throwdirection", "0 0 -1", "The direction to throw the fake shadows in. Should ideally be opposite to r_sun_dir, but that just shows how fake these things actually are.");
+//nettest: console names de-"fake"d (r_shadows_distance/res/bias); the old fake* names
+//survive as silent aliases via CVARAFD so stuffed cfgs / muscle memory keep working.
+static cvar_t r_shadows_distance			= CVARAFD("r_shadows_distance", "1024", "r_shadows_fakedistance", 0, "Coverage radius (qu) of the r_shadows 2 shadow volume around the view. Smaller = sharper (denser texels), larger = shadows reach further.");
+//nettest: default is the NEGATED r_sun_dir default (angled, not straight down) so sunless maps
+//get a natural sun that doesn't graze vertical walls (top-down light shimmered coplanar func_ brushes).
+static cvar_t r_shadows_throwdirection		= CVARD("r_shadows_throwdirection", "-0.271654 -0.323744 -0.906308", "The direction to throw the r_shadows 2 fake shadows in (opposite r_sun_dir). Empty = use -r_sun_dir.");
 static cvar_t r_shadows_focus				= CVARD("r_shadows_focus", "0 0 0", "Offset for the center of the fake-shadows volume.");
+//nettest: shadowmap texture resolution (the stock path hardcoded SHADOWMAP_SIZE*4=2048).
+//Higher = crisper shadows at the same r_shadows_distance coverage (16bit depth: 4096 ~ 32MB).
+static cvar_t r_shadows_res					= CVARAFD("r_shadows_res", "2048", "r_shadows_fakeres", 0, "r_shadows 2 depth map resolution. Higher = sharper at the same r_shadows_distance; 2048 = classic.");
+//nettest: world-constant contact bias (qu) baked into the shadow projection (gl_backend.c
+//ortho branch).  Replaces pcf.h's old radius-SCALED 0.015 NDC bias (~15qu at distance 1024),
+//which cut shadows off well before their caster touched the ground.  Raise if shadow acne
+//appears on steep surfaces; lower for even tighter contact.
+cvar_t r_shadows_bias						= CVARD("r_shadows_bias", "2", "r_shadows 2 shadow depth bias in world units. Lower = shadows hug contact points tighter; higher = kills acne on steep surfaces.");
+//nettest: contact-shadow gap fade (consumed in glsl sys/pcf.h FAKESHADOWS path).  The single
+//global ortho shadow map has no world occluder, so a caster on an upper floor leaks its shadow
+//onto the floor below.  This keeps a receiver shadowed only where its occluder is within this
+//fraction of the ortho depth ([0,1] = 2*r_shadows_distance qu; 0.06 ~= 123 qu at distance 1024).
+//Higher = shadows reach further (more leak); lower = tighter contact-only; 0 disables the fade.
+cvar_t r_shadows_throwfade					= CVARD("r_shadows_throwfade", "0.06", "r_shadows 2 contact-shadow gap fade: fraction of the ortho shadow depth beyond which a caster stops shadowing (stops shadows leaking through floors). Higher = longer reach; 0 = off.");
 
 static void Sh_DrawEntLighting(dlight_t *light, vec3_t colour, qbyte *pvs);
 
@@ -2877,8 +2905,11 @@ void Sh_OrthoAlignToFrustum(dlight_t *dl, int smsize)
 	}
 	VectorCopy(neworg, dl->origin);
 }
+
 qboolean r_fakeshadows;
 static dlight_t r_fakelight;
+
+
 void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight, but does not actually render any lighting. the lightmapped-wall etc glsl must filter by itself if it wants to accept shadows.
 {
 	dlight_t *l = &r_fakelight;
@@ -2895,11 +2926,11 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
 	VectorNegate(l->axis[1], l->axis[1]);
 
-	smsize = SHADOWMAP_SIZE*4;	//spot lights or ortho lights can just use the full thing.
+	smsize = bound(256, r_shadows_res.ival, 8192);	//nettest r_shadows_res (stock hardcoded SHADOWMAP_SIZE*4 = 2048)
 	Sh_OrthoAlignToFrustum(l, smsize);
 	l->rebuildcache = true;
 
-	l->radius = r_shadows_fakedistance.value;
+	l->radius = r_shadows_distance.value;
 	l->flags = LFLAG_SHADOWMAP|LFLAG_ORTHO;
 
 	if (R_CullSphere(l->origin, l->radius))
@@ -4443,9 +4474,12 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_sun_dir,							REALTIMELIGHTING);
 	Cvar_Register (&r_sun_colour,						REALTIMELIGHTING);
 	Cvar_Register (&r_sun_occludedepth,					REALTIMELIGHTING);
-	Cvar_Register (&r_shadows_fakedistance,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_distance,					REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_bias,						REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_throwfade,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_focus,					REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_res,						REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping_depthbits,	REALTIMELIGHTING);
 #endif
 }
