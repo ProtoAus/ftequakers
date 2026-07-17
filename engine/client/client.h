@@ -1136,6 +1136,9 @@ extern	dlight_t		*cl_dlights;
 extern	size_t cl_maxdlights;
 
 extern	int				d_lightstylevalue[MAX_NET_LIGHTSTYLES];
+/*Patch 105: bumped (in R_AnimateLight / Surf_NewMap) whenever anything that feeds the world
+  lightmap sampler changes, so gl_alias.c's per-entity model-light cache knows to re-sample.*/
+extern	unsigned int	r_modellight_seq;
 
 extern size_t rtlights_first, rtlights_max;
 extern int cl_baselines_count;

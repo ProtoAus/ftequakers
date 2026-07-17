@@ -37,7 +37,7 @@ typedef struct
 
 
 
-extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback;
+extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
@@ -1362,6 +1362,80 @@ static void R_DrawShadowVolume(mesh_t *mesh)
 #endif
 
 //true if no shading is to be used.
+/*Patch 105 -- persistent model-light cache.
+
+  THE COST: R_CalcModelLighting runs per model entity per pass, and its LightPointValues call
+  is a RECURSIVE BSP WALK down to the floor (GLRecursiveLightPoint3C, gl_rlight.c) that then
+  bilinearly taps up to 4 luxels x 4 lightstyle maps, each with a pow(). cl_visedicts is a
+  per-frame array and CL_LinkPacketEntities clears light_known every frame, so there was no
+  cross-frame reuse at all: 651 static props re-derived identical numbers 60 times a second.
+  Measured on a prop-dense map: 9.7ms/frame, of which r_fullbright (which skips exactly this
+  sample) proved ~6.3ms was the lighting and only ~1.8ms was the actual drawing.
+
+  WHY THIS IS EXACT, NOT AN APPROXIMATION: the sample is a pure function of
+      (sample point, lightstyle state, world lightdata, a few sampler cvars)
+  and the sample point is itself a pure function of e->origin (origin +24z, or the Patch 94
+  ladder's origin+0/-24/-48). So an entry is reusable iff the origin and r_modellight_seq
+  both match. Everything in the "lightstyle state / lightdata / cvars" half is folded into
+  r_modellight_seq by R_AnimateLight + Surf_NewMap (see gl_rlight.c).
+
+  WHAT IS DELIBERATELY *NOT* CACHED: only the sampler is wrapped. The dlight loop further
+  down this function reads cl_dlights fresh every frame and adds into ambientlight/
+  shadelight AFTER the cached value lands -- caching the function's final result instead
+  would freeze muzzle flashes and explosions onto every prop. MLS handling, the lightmap-
+  format clamps and the player/fbskin rules likewise still run per frame. The cut is exactly
+  the LightPointValues block and nothing else.
+
+  KEY: e->keynum is only a HASH BUCKET, never a correctness input -- it is reused for
+  tag-parents so it can collide. Validation is on origin + seq, which means a collision
+  degrades to a recompute, and two entities that genuinely share an origin sharing an entry
+  is CORRECT (same point => same sample, by definition). Origin validation also gives
+  move-invalidation for free: a prop that moves simply misses.
+  Not cached for RF_WEAPONMODEL: it samples the eye position, so it moves constantly (and
+  its post-sample clamps live inside that branch).*/
+#define MODELLIGHTCACHE_BUCKETS 4096	//power of 2. ~651 props on the stress map; direct-mapped
+typedef struct
+{
+	unsigned int seq;		//0 = empty; must match r_modellight_seq
+	vec3_t origin;			//the ENTITY origin the sample was taken for (not the sample point)
+	vec3_t shadelight;
+	vec3_t ambientlight;
+	vec3_t lightdir;
+} modellightcache_t;
+static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
+
+/*The world-lightmap sample, factored out so the cache-fill path and the r_modellight_cache 2
+  self-check can run byte-identical code. Pure function of e->origin (+ the world/styles/cvars
+  tracked by r_modellight_seq) -- that purity is the whole basis of the cache being exact.*/
+static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight, vec3_t ambientlight, vec3_t lightdir)
+{
+	vec3_t center;
+	#if 0 /*hexen2*/
+	VectorAvg(clmodel->mins, clmodel->maxs, center);
+	VectorAdd(e->origin, center, center);
+	#else
+	VectorCopy(e->origin, center);
+	center[2] += 24;
+	#endif
+	cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+	if (r_modellight_fallback.ival)
+	{	/*the +24 sample point lands inside the ceiling for roof-mounted
+		  models, and a lightpoint trace that starts in solid returns
+		  pure black. step the sample point back down and retry so such
+		  models take the light of the open space they hang in; only a
+		  black first sample pays for the extra traces.*/
+		static const float drop[] = {0, -24, -48};
+		int attempt;
+		for (attempt = 0; attempt < countof(drop); attempt++)
+		{
+			if (ambientlight[0] || ambientlight[1] || ambientlight[2] || shadelight[0] || shadelight[1] || shadelight[2])
+				break;
+			center[2] = e->origin[2] + drop[attempt];
+			cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+		}
+	}
+}
+
 qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 {
 	vec3_t lightdir;
@@ -1369,6 +1443,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	vec3_t dist;
 	float add, m;
 	vec3_t shadelight, ambientlight;
+	modellightcache_t *cache = NULL;	//Patch 105: non-NULL = this entity is cacheable
 
 	if (e->light_known)
 		return e->light_known-1;
@@ -1427,29 +1502,47 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 		}
 		else
 		{
-			vec3_t center;
-			#if 0 /*hexen2*/
-			VectorAvg(clmodel->mins, clmodel->maxs, center);
-			VectorAdd(e->origin, center, center);
-			#else
-			VectorCopy(e->origin, center);
-			center[2] += 24;
-			#endif
-			cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
-			if (r_modellight_fallback.ival)
-			{	/*the +24 sample point lands inside the ceiling for roof-mounted
-				  models, and a lightpoint trace that starts in solid returns
-				  pure black. step the sample point back down and retry so such
-				  models take the light of the open space they hang in; only a
-				  black first sample pays for the extra traces.*/
-				static const float drop[] = {0, -24, -48};
-				int attempt;
-				for (attempt = 0; attempt < countof(drop); attempt++)
+			qboolean cachehit = false;
+
+			/*Patch 105: reuse this entity's sample if it has not moved and nothing feeding
+			  the sampler has changed. Bucket by keynum; VALIDATE on origin + seq.*/
+			if (r_modellight_cache.ival)
+			{
+				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
+				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin))
 				{
-					if (ambientlight[0] || ambientlight[1] || ambientlight[2] || shadelight[0] || shadelight[1] || shadelight[2])
-						break;
-					center[2] = e->origin[2] + drop[attempt];
-					cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+					VectorCopy(cache->shadelight, shadelight);
+					VectorCopy(cache->ambientlight, ambientlight);
+					VectorCopy(cache->lightdir, lightdir);
+					cachehit = true;	//fall through to the per-frame dlight/clamp tail
+
+					if (r_modellight_cache.ival == 2)
+					{	/*self-check: re-sample and prove the cached value is EXACT. Any
+						  hit here is a real cache bug (a missed invalidation), not a
+						  rounding difference -- both sides run the same code on the same
+						  inputs, so the only correct outcome is bit-identical.*/
+						vec3_t s2, a2, d2;
+						R_SampleModelLight(e, clmodel, s2, a2, d2);
+						if (!VectorEquals(s2, shadelight) || !VectorEquals(a2, ambientlight) || !VectorEquals(d2, lightdir))
+							Con_Printf(CON_ERROR "r_modellight_cache: STALE for %s at %.1f %.1f %.1f\n",
+										clmodel?clmodel->name:"?", e->origin[0], e->origin[1], e->origin[2]);
+					}
+				}
+			}
+
+			if (!cachehit)
+			{
+				R_SampleModelLight(e, clmodel, shadelight, ambientlight, lightdir);
+
+				/*store the LADDER'S RESULT, so a ceiling prop's retries happen once rather
+				  than every frame -- the cache must kill the repetition, not the outcome.*/
+				if (cache)
+				{
+					VectorCopy(e->origin, cache->origin);
+					VectorCopy(shadelight, cache->shadelight);
+					VectorCopy(ambientlight, cache->ambientlight);
+					VectorCopy(lightdir, cache->lightdir);
+					cache->seq = r_modellight_seq;	//publish last: the entry is only valid once filled
 				}
 			}
 		}

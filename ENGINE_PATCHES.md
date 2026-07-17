@@ -2818,3 +2818,58 @@ polarity would have caused.
 **Scope:** only the self-shadow term. The sun form-shade (`r_shadows_sunshade`) still applies to the
 viewmodel — it's orientation shading, not an occlusion artifact. `r_shadows_viewmodel 1` restores the old
 look. Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 105 — `r_modellight_cache`: persist each model's world-lightmap sample  *(APPLIED — m-rel)*
+
+**Symptom:** a prop-dense map (651 props) ran at ~103fps / 9.7ms where the props' *drawing* was only ~1.8ms.
+
+**Measured, not guessed.** `r_fullbright 1` early-outs of `R_CalcModelLighting` before the lightmap sample,
+so it isolates that sample exactly: 103 → **293fps**. Void (props gone) = 630fps. ⇒ props = 8.1ms total, of
+which **drawing = 1.8ms (~2.7µs/prop across 672 batches — healthy)** and **lighting = 6.3ms = 65% of the
+entire frame**. This killed the planned static-prop batching/bake project outright: it would have attacked
+the 1.8ms and left the 6.3ms. (Draw calls were never the problem — 731 draws is fine.)
+
+**Cause.** `R_CalcModelLighting` (`gl_alias.c`) calls the world's `LightPointValues` → `GLRecursiveLightPoint3C`
+(`gl_rlight.c`), a **recursive BSP walk** down to the floor that then bilinearly taps 4 luxels × up to 4
+lightstyle maps, each with a `pow()`. There was **no cross-frame reuse whatsoever**: `cl_visedicts` is a
+per-frame array and `CL_LinkPacketEntities` (`cl_ents.c`) clears `light_known` every frame, so 651 props that
+never move re-derived identical numbers 60×/sec — ×4 more for ceiling props via Patch 94's retry ladder.
+
+**Fix — a persistent per-entity cache of ONLY the lightmap sample.**
+- `gl/gl_alias.c` — `modellightcache[4096]` (direct-mapped, `{seq, origin, shadelight, ambientlight, lightdir}`)
+  + `R_SampleModelLight()` factored out so the fill path and the mode-2 self-check run identical code.
+- `gl/gl_rlight.c` — `r_modellight_seq`, bumped from `R_AnimateLight` (which already walks every style once a
+  frame, so the change-hash is ~free and **exact**) and from `Surf_NewMap` on map load.
+- `client/client.h` — extern for `r_modellight_seq`. `client/renderer.c` — the cvar.
+
+**Why it is EXACT, not an approximation.** The sample is a pure function of
+`(sample point, lightstyle state, world lightdata, sampler cvars)`, and the sample point is itself a pure
+function of `e->origin` (origin+24z, or the ladder's origin+0/−24/−48). So an entry is reusable **iff** origin
+and `r_modellight_seq` both match. The seq hashes `d_lightstylevalue[]` + `cl_lightstyle[].colourkey` +
+`r_modellight_bilinear` / `r_modellight_fallback` / `mod_lightpoint_distance` /
+`r_shadow_realtime_world{,_lightmaps}` (all of which the sampler reads) + the worldmodel/lightdata pointers.
+Hashing **values** rather than tracking `cvar->modified` means nothing can be silently missed, and a cvar
+re-set to its existing value does not needlessly dump the cache. A map whose styles never change (a baked sun)
+never bumps the seq and caches at 100%; a flickering light bumps it and every prop re-samples that frame.
+
+**What is deliberately NOT cached.** Only the sampler is wrapped. The **dlight loop further down the same
+function reads `cl_dlights` fresh every frame** and adds into `ambientlight`/`shadelight` *after* the cached
+value lands — caching the function's final result instead would have **frozen muzzle flashes and explosions
+onto every prop**. MLS handling, the lightmap-format clamps and the player/fbskin rules likewise still run per
+frame. `RF_WEAPONMODEL` is not cached (it samples the eye, so it moves constantly).
+
+**`e->keynum` is a HASH BUCKET, never a correctness input** — it is reused for tag-parents (`cl_ents.c`) so it
+can collide. Validation is on **origin + seq**, so a collision degrades to a recompute, and two entities that
+genuinely share an origin sharing an entry is *correct* (same point ⇒ same sample, by definition). Origin
+validation also gives move-invalidation for free. **Stains do not invalidate:** they live in a separate
+`stainmaps` buffer (`render.h`) and `LightPoint3C_AccumLuxel` only reads `surf->samples`.
+
+**VERIFIED BY POSITIVE CONTROL, not by inspection.** `r_modellight_cache 2` uses the cached value but
+re-samples anyway and prints a console error on any disagreement. On `notnormals` (651 props, 50s live):
+**0 stale**. With a deliberate `cache->shadelight[0] += 1` injected: **4771 stale** — proving the check
+actually executes and can fail, so the 0 is a real pass and not a no-op test. Also confirms the cache stores
+the Patch 94 ladder's *result* (killing its repetition, not its outcome).
+
+**Ship:** `r_modellight_cache` default **1**; `0` = engine default (re-sample every frame) for instant A/B;
+`2` = validate. Client render only — m-rel; no sv-rel, progs, or protocol impact. No struct-ABI risk (nothing
+the physics/hl2/cod plugins read — cf. Patch 101a).

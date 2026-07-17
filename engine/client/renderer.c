@@ -172,6 +172,7 @@ cvar_t gl_overbright_models					= CVARFD("gl_overbright_models", "0", CVAR_SEMIC
 cvar_t r_viewmodel_maxlight					= CVARFD("r_viewmodel_maxlight", "0", CVAR_ARCHIVE, "Per-channel ceiling on the ambient/shade light sampled at the player's eye for the first-person viewmodel. 0 = off (engine default — viewmodel takes the full lightmap value, which can blow out the gun on bright floors / lava / white tiles). Try 96..160 to soften the brightening without losing low-light response.");
 cvar_t r_modellight_fallback				= CVARFD("r_modellight_fallback", "1", CVAR_ARCHIVE, "Model lighting is sampled 24qu above the entity origin, which lands inside the ceiling for roof-mounted models and makes them render pure black. When the standard sample comes back black, retry at the origin and then 24/48qu below it so ceiling/wall-mounted models pick up the light of the space they hang in. 0 = engine default (single sample).");
 cvar_t r_modellight_bilinear				= CVARFD("r_modellight_bilinear", "1", CVAR_ARCHIVE, "Bilinearly filter the world lightmap when sampling light for models/particles, matching how the GPU filters lit surfaces. 0 = nearest-luxel (engine default), which makes models catch isolated black luxels on dense/decoupled lightmaps where the surface beside them is lit.");
+cvar_t r_modellight_cache					= CVARFD("r_modellight_cache", "1", CVAR_ARCHIVE, "Cache each model entity's world-lightmap sample across frames instead of re-walking the BSP every frame for models that have not moved. The sample is a pure function of the entity origin and the lightstyle state, so the cached value is exact, not an approximation: it is dropped the moment the entity moves, a lightstyle changes, the map reloads, or any r_modellight_*/mod_lightpoint_distance setting changes. Dynamic lights are added AFTER the cache and are unaffected. 0 = re-sample every frame (engine default). 2 = validate: use the cached value but re-sample anyway and print a console error if they ever disagree (slower than 0; for proving a suspected stale-lighting bug). Prop-dense maps are dominated by this sample.");
 //cvar_t r_skin_overlays						= CVARF  ("r_skin_overlays", "1",
 //													CVAR_SEMICHEAT|CVAR_RENDERERLATCH);
 cvar_t r_globalskin_first					= CVARFD  ("r_globalskin_first", "100", CVAR_RENDERERLATCH, "Specifies the first .skin value that is a global skin. Entities within this range will use the shader/image called 'gfx/skinSKIN.lmp' instead of their regular skin. See also: r_globalskin_count.");
@@ -1048,6 +1049,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_viewmodel_maxlight, GRAPHICALNICETIES);
 	Cvar_Register (&r_modellight_fallback, GRAPHICALNICETIES);
 	Cvar_Register (&r_modellight_bilinear, GRAPHICALNICETIES);
+	Cvar_Register (&r_modellight_cache, GRAPHICALNICETIES);
 //	Cvar_Register (&r_fullbrights, GRAPHICALNICETIES);	//dpcompat: 1 if r_fb_bmodels&&r_fb_models
 //	Cvar_Register (&r_skin_overlays, GRAPHICALNICETIES);
 	Cvar_Register (&r_globalskin_first, GRAPHICALNICETIES);

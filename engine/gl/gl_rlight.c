@@ -27,9 +27,21 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t r_shadow_realtime_world, r_shadow_realtime_world_lightmaps;
 extern cvar_t r_hdr_irisadaptation, r_hdr_irisadaptation_multiplier, r_hdr_irisadaptation_minvalue, r_hdr_irisadaptation_maxvalue, r_hdr_irisadaptation_fade_down, r_hdr_irisadaptation_fade_up;
 extern cvar_t mod_lightpoint_distance;
+extern cvar_t r_modellight_bilinear, r_modellight_fallback;	//Patch 105 (both feed r_modellight_seq)
 
 int	r_dlightframecount;
 int		d_lightstylevalue[MAX_NET_LIGHTSTYLES];	// 8.8 fraction of base light value
+
+/*Patch 105: invalidation sequence for the model-light cache (gl_alias.c).
+  GLQ1BSP_LightPointValues' result is a PURE FUNCTION of (sample point, the lightstyle
+  state folded in by LightPoint3C_AccumLuxel, the world's lightdata, and the handful of
+  cvars the sampler reads). The cache validates the point itself by comparing origins, so
+  this counter has to cover everything ELSE. R_AnimateLight already walks every style once
+  per frame, so hashing the values as they are written costs ~nothing and is EXACT: a map
+  whose styles never change (a baked sun) never bumps this and caches at 100%, while a
+  flickering light bumps it and every prop re-samples that frame.
+  Bumped here on any change, and directly by Surf_NewMap on map load.*/
+unsigned int r_modellight_seq = 1;	//never 0: a zeroed cache entry must never validate
 
 void R_BumpLightstyles(unsigned int maxstyle)
 {
@@ -165,6 +177,45 @@ void R_AnimateLight (void)
 				cl_lightstyle[j].colourkey = 0xff;
 			else
 				cl_lightstyle[j].colourkey = (int)(cl_lightstyle[j].colours[0]*0x400) ^ (int)(cl_lightstyle[j].colours[1]*0x100000) ^ (int)(cl_lightstyle[j].colours[2]*0x40000000);
+		}
+	}
+
+	/*Patch 105: bump r_modellight_seq when anything the model-light sampler reads (other
+	  than the sample point, which the cache validates itself) changes. Hashing the actual
+	  VALUES rather than tracking cvar->modified means a cvar that is set to the value it
+	  already had does not needlessly dump the cache, and nothing can be silently missed.
+	  ~cl_max_lightstyles iterations ONCE PER FRAME, against 672 recursive BSP walks saved.*/
+	{
+		static unsigned int lasthash;
+		union {float f; unsigned int u;} c;
+		unsigned int hash = 0x811c9dc5;
+		#define MLHASH_U(v) (hash = (hash*33) ^ (unsigned int)(v))
+		#define MLHASH_F(v) (c.f = (v), hash = (hash*33) ^ c.u)
+		for (j=0 ; j<cl_max_lightstyles ; j++)
+		{	//everything LightPoint3C_AccumLuxel folds in per luxel
+			MLHASH_U(d_lightstylevalue[j]);
+			MLHASH_U(cl_lightstyle[j].colourkey);
+		}
+		//the cvars GLQ1BSP_LightPointValues / GLRecursiveLightPoint3C / the Patch 94 ladder read
+		MLHASH_U(r_modellight_bilinear.ival);
+		MLHASH_U(r_modellight_fallback.ival);
+		MLHASH_F(mod_lightpoint_distance.value);
+#ifdef RTLIGHTS
+		MLHASH_U(r_shadow_realtime_world.ival);		//scales the result at gl_rlight.c:3247
+		MLHASH_F(r_shadow_realtime_world_lightmaps.value);
+#endif
+		//map load / lightmap reload (Surf_NewMap also bumps directly; this is belt-and-braces)
+		MLHASH_U((uintptr_t)cl.worldmodel);
+		if (cl.worldmodel)
+			MLHASH_U((uintptr_t)cl.worldmodel->lightdata);
+		#undef MLHASH_U
+		#undef MLHASH_F
+
+		if (hash != lasthash)
+		{
+			lasthash = hash;
+			if (!++r_modellight_seq)
+				r_modellight_seq++;	//skip 0 on wrap; 0 means "empty slot"
 		}
 	}
 }

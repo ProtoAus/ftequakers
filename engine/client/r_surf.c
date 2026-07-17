@@ -4048,6 +4048,10 @@ void Surf_NewMap (model_t *worldmodel)
 
 	cl.worldmodel = worldmodel;
 
+	/*Patch 105: every cached model-light sample belongs to the OLD world's lightdata.*/
+	if (!++r_modellight_seq)
+		r_modellight_seq++;	//0 means "empty slot" in the cache
+
 	//evil haxx
 	r_dynamic.ival = r_dynamic.value;
 	if (r_dynamic.ival > 0 && (!cl.worldmodel || cl.worldmodel->lightmaps.prebaked)) //quake3 has no lightmaps, disable r_dynamic
