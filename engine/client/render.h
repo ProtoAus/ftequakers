@@ -792,6 +792,8 @@ enum {
 	RQUANT_RTLIGHT_CULL_PVS,
 	RQUANT_RTLIGHT_CULL_SCISSOR,
 
+	RQUANT_MODELLIGHTSAMPLE,	//Patch 105: props that re-walked the world lightmap this frame (r_modellight_cache misses)
+
 	RQUANT_MAX
 };
 extern int rquant[RQUANT_MAX];

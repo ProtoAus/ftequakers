@@ -97,6 +97,7 @@ void RSpeedShow(void)
 	RQntNames[RQUANT_RTLIGHT_CULL_FRUSTUM]	= "Lights offscreen";
 	RQntNames[RQUANT_RTLIGHT_CULL_PVS]		= "Lights PVS Culled";
 	RQntNames[RQUANT_RTLIGHT_CULL_SCISSOR]	= "Lights Scissored";
+	RQntNames[RQUANT_MODELLIGHTSAMPLE]		= "ModelLight Samples";
 
 	memcpy(savedsamplerquant, rquant, sizeof(savedsamplerquant));
 	if (r_speeds.ival > 1)

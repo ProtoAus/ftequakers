@@ -1533,6 +1533,13 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			if (!cachehit)
 			{
 				R_SampleModelLight(e, clmodel, shadelight, ambientlight, lightdir);
+				/*r_speeds "ModelLight Samples": props that actually re-walked the world
+				  lightmap this frame. ~0 in the good steady state; ~= visible-prop count
+				  with the cache off or when a flickering style defeats it globally; ticks
+				  up by the number of props currently in motion. Counted here (the genuine
+				  resample), NOT inside R_SampleModelLight, so the r_modellight_cache 2
+				  self-check's parallel resample does not double-count.*/
+				RQuantAdd(RQUANT_MODELLIGHTSAMPLE, 1);
 
 				/*store the LADDER'S RESULT, so a ceiling prop's retries happen once rather
 				  than every frame -- the cache must kill the repetition, not the outcome.*/
