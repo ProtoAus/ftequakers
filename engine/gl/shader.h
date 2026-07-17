@@ -433,6 +433,7 @@ typedef struct {
 		SP_E_COLOURS,
 		SP_E_COLOURSIDENT,
 		SP_E_GLOWMOD,
+		SP_E_NOSHADOWRECV,	//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap (the viewmodel). 0 = normal.
 		SP_E_TOPCOLOURS,
 		SP_E_BOTTOMCOLOURS,
 		SP_E_TIME,

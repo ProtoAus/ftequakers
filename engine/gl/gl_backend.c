@@ -3755,6 +3755,18 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_E_GLOWMOD:
 			qglUniform3fvARB(ph, 1, (GLfloat*)shaderstate.curentity->glowmod);
 			break;
+		//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap.  Only the
+		//first-person viewmodel qualifies: it is drawn INSIDE the local player's body, which is
+		//itself rendered into the fake-sun depth pass while r_shadow_playershadows is on — so the
+		//gun ends up shadowed by its own owner.  FAKESHADOWS is a global compile-time define, so
+		//this per-entity uniform is the only way the shader can know.  Polarity is FAIL-SAFE:
+		//an unbound/unsupported uniform reads 0 = normal shadow receive (never "shadows vanish").
+		case SP_E_NOSHADOWRECV:
+			{
+				extern cvar_t r_shadows_viewmodel;
+				qglUniform1fARB(ph, ((shaderstate.curentity->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival) ? 1.0f : 0.0f);
+			}
+			break;
 		case SP_E_ORIGIN:
 			qglUniform3fvARB(ph, 1, (GLfloat*)shaderstate.curentity->origin);
 			break;

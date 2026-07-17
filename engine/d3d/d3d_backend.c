@@ -2077,6 +2077,7 @@ static void BE_ApplyUniforms(program_t *prog, struct programpermu_s *perm)
 		case SP_E_VLSCALE:
 		case SP_E_ORIGIN:
 		case SP_E_GLOWMOD:
+		case SP_E_NOSHADOWRECV:	//nettest: GL-only (viewmodel fake-shadow suppress); unhandled here = uniform stays 0 = normal receive (fail-safe)
 		case SP_M_INVVIEWPROJECTION:
 		case SP_M_INVMODELVIEW:
 		case SP_M_INVMODELVIEWPROJECTION:

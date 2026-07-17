@@ -2780,3 +2780,41 @@ called it, instant crash once the Quake loader did. Re-enable only with a heap-c
 
 **When re-enabled:** `sv_physprop_weapon_geom 1` (default 0) gives dropped weapons per-weapon
 convex collision. `r_showhull 1` to inspect.
+
+## Patch 104 — viewmodel opts out of the fake-sun shadowmap (`r_shadows_viewmodel`)  *(APPLIED — m-rel)*
+
+**Symptom:** the first-person viewmodel looked like the player model was casting a shadow onto it. It was.
+
+**Cause.** `r_shadow_playershadows 1` renders the local player's body into the `r_shadows 2` fake-sun depth
+pass (it's hidden from the main view but still a caster — `gl_alias.c` skips it only when that cvar is 0).
+The viewmodel is drawn *inside* that body and samples the same shadowmap, so the gun receives its owner's
+shadow. The shader cannot simply special-case it: **`FAKESHADOWS` is a GLOBAL compile-time `#define`**
+prepended to every model program (`gl_shader.c` `Shader_LoadPermutations`), and the gamedir
+`glsl/defaultskin.glsl` turns it into `MODEL_SELFSHADOW` for *every* model. There is no per-entity gate.
+
+**Fix — a per-entity uniform.** New `SP_E_NOSHADOWRECV` / GLSL `e_noshadowrecv` (float):
+
+- `gl/shader.h` — `SP_E_NOSHADOWRECV` added to the *ent properties* enum group (renderer-internal; the
+  physics/hl2/cod plugins never touch `shaderprogparmtype_e`, so this is not the append-only struct-ABI
+  hazard of Patch 101a).
+- `gl/gl_shader.c` — `{"e_noshadowrecv", SP_E_NOSHADOWRECV}` in `shader_unif_names`. That table is walked by
+  `GLSlang_ProgAutoFields` (`gl_vidcommon.c`) which `glGetUniformLocation`s each name — so a plain
+  `uniform float e_noshadowrecv;` in the gamedir GLSL binds it. **No `sys/defs.h` change needed.**
+- `gl/gl_backend.c` — upload beside `SP_E_GLOWMOD`:
+  `((shaderstate.curentity->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival) ? 1.0f : 0.0f`.
+- `gl/gl_shadow.c` — `cvar_t r_shadows_viewmodel` (**"0"**, non-static so the backend externs it) +
+  `Cvar_Register` beside `r_shadow_playershadows`. **Runtime** — unlike the `cvardf` shader knobs it needs no
+  `vid_reload`.
+- `d3d/d3d_backend.c` + `d3d/d3d8_backend.c` — added to the ignored-parm fallthrough group (silences
+  `-Wswitch`; D3D simply keeps legacy behaviour).
+- Gamedir `nettest/glsl/defaultskin.glsl` (not engine): declare the uniform under `MODEL_SELFSHADOW` and gate
+  the self-shadow term — `ss = mix(1.0, ss, float(r_shadows_selfshadow) * (1.0 - clamp(e_noshadowrecv,0,1)));`
+
+**FAIL-SAFE POLARITY (deliberate).** The flag is *suppress* (1 = don't receive), not *enable*. A GLSL uniform
+reads **0** when unbound/unsupported, so any plumbing failure (D3D, an old gamedir GLSL, a link miss) degrades
+to **normal shadow receive** — never to "self-shadows silently vanish on every model", which the enable
+polarity would have caused.
+
+**Scope:** only the self-shadow term. The sun form-shade (`r_shadows_sunshade`) still applies to the
+viewmodel — it's orientation shading, not an occlusion artifact. `r_shadows_viewmodel 1` restores the old
+look. Client render only — m-rel; no sv-rel, progs, or protocol impact.

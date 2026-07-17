@@ -65,6 +65,13 @@ cvar_t r_shadow_realtime_dlight_ambient		= CVAR ("r_shadow_realtime_dlight_ambie
 cvar_t r_shadow_realtime_dlight_diffuse		= CVAR ("r_shadow_realtime_dlight_diffuse", "1");
 cvar_t r_shadow_realtime_dlight_specular	= CVAR ("r_shadow_realtime_dlight_specular", "4");	//excessive, but noticable. its called stylized, okay? shiesh, some people
 cvar_t r_shadow_playershadows				= CVARD ("r_shadow_playershadows", "1", "Controls the presence of shadows on the local player.");
+//nettest: the first-person VIEWMODEL sits INSIDE the local player's body, and with
+//r_shadow_playershadows 1 that body IS rendered into the fake-sun depth map — so the gun
+//visibly receives its own owner's shadow.  FAKESHADOWS is a GLOBAL compile-time define
+//(gl_shader.c), so the shader cannot tell it is the viewmodel; this cvar instead drives the
+//per-entity `e_noshadowrecv` uniform (uploaded in gl_backend.c, consumed by the gamedir
+//glsl/defaultskin.glsl self-shadow term).  Runtime — no vid_reload needed (unlike the cvardf knobs).
+cvar_t r_shadows_viewmodel					= CVARD ("r_shadows_viewmodel", "0", "Whether the first-person viewmodel RECEIVES the r_shadows 2 fake-sun shadow map. 0 = no (default; stops your own hidden first-person body from casting a shadow onto your gun). 1 = yes (legacy behaviour).");
 cvar_t r_shadow_raytrace					= CVARFD ("r_shadow_raytrace", "0", CVAR_ARCHIVE, "Enables use of hardware raytracing for shadows. Consider also using with r_halfrate.");
 cvar_t r_shadow_shadowmapping				= CVARFD ("r_shadow_shadowmapping", "1", CVAR_ARCHIVE, "Enables soft shadows instead of stencil shadows.");
 cvar_t r_shadow_shadowmapping_precision		= CVARD ("r_shadow_shadowmapping_precision", "1", "Scales the shadowmap detail level up or down.");
@@ -4466,6 +4473,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadow_realtime_dlight_shadows,	REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_realtime_world_lightmaps,	REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_playershadows,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_viewmodel,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_raytrace,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping_precision,	REALTIMELIGHTING);

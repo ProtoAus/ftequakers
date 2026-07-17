@@ -2495,6 +2495,7 @@ struct shader_field_names_s shader_unif_names[] =
 	{"e_colour",				SP_E_COLOURS},		//colormod/alpha, even if colormod isn't set
 /**/{"e_colourident",			SP_E_COLOURSIDENT},	//colormod,alpha or 1,1,1,alpha if colormod isn't set
 /**/{"e_glowmod",				SP_E_GLOWMOD},		//fullbright scalers (for hdr mostly)
+/**/{"e_noshadowrecv",			SP_E_NOSHADOWRECV},	//nettest: 1 = don't receive the r_shadows 2 fake-sun shadowmap (viewmodel); 0 = normal. Fail-safe polarity: an unbound uniform reads 0 = normal.
 /**/{"e_uppercolour",			SP_E_TOPCOLOURS},	//q1 player colours
 /**/{"e_lowercolour",			SP_E_BOTTOMCOLOURS},//q1 player colours
 /**/{"e_light_dir",				SP_E_L_DIR},		//lightgrid light dir. dotproducts should be clamped to 0-1.
