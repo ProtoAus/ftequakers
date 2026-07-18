@@ -3998,6 +3998,13 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	if (shaderstate.curbatch->lightmap[1] >= 0)
 		perm |= PERMUTATION_LIGHTSTYLES;
 #endif
+	//nettest: baked static-prop per-vertex lighting. Enable the VC (light *= v_colour) permutation
+	//only for a prop entity that resolved a placement record AND actually has its per-instance colour
+	//array bound (gl_alias.c's override sets colours[0]); this keeps it off for ordinary models and for
+	//the count-mismatch case where the override was skipped.
+	if (shaderstate.curbatch->ent && shaderstate.curbatch->ent->vertlightcolors &&
+		(shaderstate.sourcevbo->colours[0].gl.addr || shaderstate.sourcevbo->colours[0].gl.vbo))
+		perm |= PERMUTATION_VC;
 
 	perm &= p->supportedpermutations;
 	permu = p->permu[perm];

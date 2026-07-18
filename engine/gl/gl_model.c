@@ -1734,6 +1734,7 @@ void Mod_LoadLighting (model_t *loadmodel, bspx_header_t *bspx, qbyte *mod_base,
 
 #ifdef HAVE_CLIENT
 	BSPX_LightGridLoad(loadmodel, bspx, mod_base);
+	BSPX_PropLightLoad(loadmodel, bspx, mod_base);	//nettest: baked static-prop per-vertex lighting
 #endif
 
 	loadmodel->lightmaps.fmt = LM_L8;

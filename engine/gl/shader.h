@@ -376,6 +376,9 @@ enum{
 		#define PERMUTATION_LIGHTSTYLES	0u
 	#endif
 
+	#define PERMUTATION_VC				(1u<<PERMUTATION_BIT_VC)
+	PERMUTATION_BIT_VC,					//nettest: baked static-prop per-vertex colour multiplier (RGBPROPLIGHT)
+
 	PERMUTATION_BIT_MAX
 };
 #define PERMUTATIONS				(1u<<PERMUTATION_BIT_MAX)

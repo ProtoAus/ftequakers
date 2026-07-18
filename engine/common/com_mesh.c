@@ -10371,6 +10371,7 @@ static galiasinfo_t *Mod_ParseIQMMeshModel(model_t *mod, const char *buffer, siz
 		/*verts*/
 		gai[i].shares_verts = i;
 		gai[i].numverts = numverts;
+		gai[i].firstvert = firstvert;	//nettest: global base vertex for RGBPROPLIGHT per-vertex colour slicing
 		gai[i].ofs_skel_xyz = (opos+firstvert);
 		gai[i].ofs_skel_norm = (onorm1+firstvert);
 		gai[i].ofs_skel_svect = (onorm2+firstvert);

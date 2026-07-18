@@ -173,6 +173,10 @@ cvar_t r_viewmodel_maxlight					= CVARFD("r_viewmodel_maxlight", "0", CVAR_ARCHI
 cvar_t r_modellight_fallback				= CVARFD("r_modellight_fallback", "1", CVAR_ARCHIVE, "Model lighting is sampled 24qu above the entity origin, which lands inside the ceiling for roof-mounted models and makes them render pure black. When the standard sample comes back black, retry at the origin and then 24/48qu below it so ceiling/wall-mounted models pick up the light of the space they hang in. 0 = engine default (single sample).");
 cvar_t r_modellight_bilinear				= CVARFD("r_modellight_bilinear", "1", CVAR_ARCHIVE, "Bilinearly filter the world lightmap when sampling light for models/particles, matching how the GPU filters lit surfaces. 0 = nearest-luxel (engine default), which makes models catch isolated black luxels on dense/decoupled lightmaps where the surface beside them is lit.");
 cvar_t r_modellight_cache					= CVARFD("r_modellight_cache", "1", CVAR_ARCHIVE, "Cache each model entity's world-lightmap sample across frames instead of re-walking the BSP every frame for models that have not moved. The sample is a pure function of the entity origin and the lightstyle state, so the cached value is exact, not an approximation: it is dropped the moment the entity moves, a lightstyle changes, the map reloads, or any r_modellight_*/mod_lightpoint_distance setting changes. Dynamic lights are added AFTER the cache and are unaffected. 0 = re-sample every frame (engine default). 2 = validate: use the cached value but re-sample anyway and print a console error if they ever disagree (slower than 0; for proving a suspected stale-lighting bug). Prop-dense maps are dominated by this sample.");
+cvar_t r_propvertexlight						= CVARFD("r_propvertexlight", "1", CVAR_ARCHIVE, "Apply baked static-prop per-vertex lighting from the map's RGBPROPLIGHT BSPX lump (produced by protoanus-tools 'light -propvertexlight'). Each placed prop's baked lighting is multiplied over its live (PBR) lighting per vertex via the VC shader permutation, so a prop's sunlit top stays brighter than its shadowed underside instead of the whole model reading one light sample. 0 = off (no change). Contrast/clamps are r_propvertexlight_contrast/_min/_max (applied at map load).");
+cvar_t r_propvertexlight_contrast			= CVARFD("r_propvertexlight_contrast", "1", CVAR_ARCHIVE, "Exponent applied to the baked static-prop per-vertex multiplier (>1 exaggerates the sunlit/shadowed contrast, <1 flattens it). Applied when the map loads; change it then reload the map to re-tune. See r_propvertexlight.");
+cvar_t r_propvertexlight_min				= CVARFD("r_propvertexlight_min", "0.3", CVAR_ARCHIVE, "Lower clamp on the baked static-prop per-vertex multiplier, so shadowed vertices cannot go fully black. Applied at map load. See r_propvertexlight.");
+cvar_t r_propvertexlight_max				= CVARFD("r_propvertexlight_max", "3", CVAR_ARCHIVE, "Upper clamp on the baked static-prop per-vertex multiplier, so bright vertices cannot blow out. Applied at map load. See r_propvertexlight.");
 //cvar_t r_skin_overlays						= CVARF  ("r_skin_overlays", "1",
 //													CVAR_SEMICHEAT|CVAR_RENDERERLATCH);
 cvar_t r_globalskin_first					= CVARFD  ("r_globalskin_first", "100", CVAR_RENDERERLATCH, "Specifies the first .skin value that is a global skin. Entities within this range will use the shader/image called 'gfx/skinSKIN.lmp' instead of their regular skin. See also: r_globalskin_count.");
@@ -1050,6 +1054,10 @@ void Renderer_Init(void)
 	Cvar_Register (&r_modellight_fallback, GRAPHICALNICETIES);
 	Cvar_Register (&r_modellight_bilinear, GRAPHICALNICETIES);
 	Cvar_Register (&r_modellight_cache, GRAPHICALNICETIES);
+	Cvar_Register (&r_propvertexlight, GRAPHICALNICETIES);
+	Cvar_Register (&r_propvertexlight_contrast, GRAPHICALNICETIES);
+	Cvar_Register (&r_propvertexlight_min, GRAPHICALNICETIES);
+	Cvar_Register (&r_propvertexlight_max, GRAPHICALNICETIES);
 //	Cvar_Register (&r_fullbrights, GRAPHICALNICETIES);	//dpcompat: 1 if r_fb_bmodels&&r_fb_models
 //	Cvar_Register (&r_skin_overlays, GRAPHICALNICETIES);
 	Cvar_Register (&r_globalskin_first, GRAPHICALNICETIES);

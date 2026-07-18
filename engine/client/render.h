@@ -162,6 +162,10 @@ typedef struct entity_s
 	int drawflags;
 	int abslight;
 #endif
+	//nettest: APPEND-ONLY (prebuilt plugin ABI). baked static-prop per-vertex colours (RGBPROPLIGHT),
+	//resolved per frame in R_CalcModelLighting; NULL = none. vertlightverts is their length (global vtx order).
+	vec4_t					*vertlightcolors;
+	int						vertlightverts;
 } entity_t;
 
 #define MAX_GEOMSETS 32u

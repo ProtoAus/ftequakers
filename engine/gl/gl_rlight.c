@@ -3144,6 +3144,187 @@ void BSPX_LightGridLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
 
 	model->lightgrid = (void*)grid;
 }
+
+//nettest: baked static-prop per-vertex lighting (RGBPROPLIGHT lump, from protoanus-tools
+//`light -propvertexlight`).  One record per placed IQM prop: model name + placement, and one baked
+//absolute RGB per (global IQM-order) vertex.  We normalise each record to a ~1.0-centred GREYSCALE
+//multiplier so the renderer multiplies it over the prop's live (PBR) lighting via the VC shader
+//permutation -- redistributing brightness across the mesh (sunlit top brighter, shadowed underside
+//darker) without replacing per-pixel lighting or double-tinting the model's own light colour.
+extern cvar_t r_propvertexlight_contrast, r_propvertexlight_min, r_propvertexlight_max;
+
+#define PROPLIGHT_HASHSIZE 256
+typedef struct proplight_s
+{
+	struct proplight_s *hashnext;
+	unsigned int namehash;
+	int qorg[3];			//quantised origin (nearest unit) -- the match key
+	char model[MAX_QPATH];
+	unsigned int numverts;
+	vec4_t *colours;		//[numverts], normalised greyscale multiplier (~1.0), in global IQM vertex order
+} proplight_t;
+typedef struct
+{
+	unsigned int count;
+	proplight_t *records;
+	proplight_t *hash[PROPLIGHT_HASHSIZE];
+} proplightset_t;
+
+static unsigned int PropLight_NameHash(const char *s)
+{	//case-insensitive, treats '\\' as '/'
+	unsigned int h = 2166136261u;
+	for (; *s; s++)
+	{
+		int c = (unsigned char)*s;
+		if (c >= 'A' && c <= 'Z') c += 'a'-'A';
+		if (c == '\\') c = '/';
+		h = (h ^ (unsigned)c) * 16777619u;
+	}
+	return h;
+}
+static unsigned int PropLight_Bucket(unsigned int namehash, const int q[3])
+{
+	unsigned int h = namehash;
+	h ^= (unsigned)q[0]*73856093u;
+	h ^= (unsigned)q[1]*19349663u;
+	h ^= (unsigned)q[2]*83492791u;
+	return h & (PROPLIGHT_HASHSIZE-1);
+}
+static void PropLight_Quantise(const vec3_t v, int q[3])
+{
+	q[0] = (int)floor(v[0]+0.5);
+	q[1] = (int)floor(v[1]+0.5);
+	q[2] = (int)floor(v[2]+0.5);
+}
+
+void BSPX_PropLightLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
+{
+	struct rctx_s ctx = {0};
+	unsigned int version, count, i, v;
+	proplightset_t *set;
+	float contrast, cmin, cmax;
+
+	model->proplights = NULL;
+	ctx.data = BSPX_FindLump(bspx, mod_base, "RGBPROPLIGHT", &ctx.size);
+	if (!ctx.data)
+		return;
+
+	contrast = r_propvertexlight_contrast.value;
+	cmin = r_propvertexlight_min.value;
+	cmax = r_propvertexlight_max.value;
+	if (contrast <= 0) contrast = 1;
+	if (cmax < cmin) cmax = cmin;
+
+	version = ReadInt(&ctx);
+	if (version != 1)
+	{
+		Con_Printf(CON_WARNING "RGBPROPLIGHT: unsupported version %u (ignored)\n", version);
+		return;
+	}
+	count = ReadInt(&ctx);
+	if (!count || count > 0x100000)
+		return;
+
+	set = ZG_Malloc(&model->memgroup, sizeof(*set) + sizeof(proplight_t)*count);
+	set->count = count;
+	set->records = (proplight_t*)(set+1);	//hash[] left NULL by Z_Malloc
+
+	for (i = 0; i < count; i++)
+	{
+		proplight_t *pl = &set->records[i];
+		vec3_t org;
+		unsigned int namelen, nv, k;
+		double sum = 0;
+		float mean, inv;
+
+		for (k = 0; k < 3; k++) org[k] = ReadFloat(&ctx);
+		for (k = 0; k < 3; k++) (void)ReadFloat(&ctx);	//angles: read+skip (we match on model+origin, robust to QC angle normalisation)
+
+		namelen = (unsigned)ReadByte(&ctx);
+		namelen |= (unsigned)ReadByte(&ctx)<<8;
+		for (k = 0; k < namelen; k++)
+		{
+			qbyte c = ReadByte(&ctx);
+			if (k < sizeof(pl->model)-1) pl->model[k] = c;
+		}
+		pl->model[(namelen < sizeof(pl->model)-1)?namelen:sizeof(pl->model)-1] = 0;
+
+		nv = ReadInt(&ctx);
+		pl->numverts = nv;
+		pl->colours = nv ? ZG_Malloc(&model->memgroup, sizeof(vec4_t)*nv) : NULL;
+
+		//pass 1: read absolute RGB, accumulate luminance (stashed in [0])
+		for (v = 0; v < nv; v++)
+		{
+			float r = ReadByte(&ctx)/255.0f;
+			float g = ReadByte(&ctx)/255.0f;
+			float b = ReadByte(&ctx)/255.0f;
+			float lum = r*0.299f + g*0.587f + b*0.114f;
+			pl->colours[v][0] = lum;
+			sum += lum;
+		}
+		//pass 2: normalise to a ~1.0-centred greyscale multiplier (+contrast, +clamp)
+		mean = nv ? (float)(sum/nv) : 1.0f;
+		inv = (mean > 0.0001f) ? 1.0f/mean : 1.0f;
+		for (v = 0; v < nv; v++)
+		{
+			float m = pl->colours[v][0]*inv;
+			if (contrast != 1.0f) m = (float)pow(m, contrast);
+			if (m < cmin) m = cmin;
+			if (m > cmax) m = cmax;
+			pl->colours[v][0] = pl->colours[v][1] = pl->colours[v][2] = m;
+			pl->colours[v][3] = 1;
+		}
+
+		PropLight_Quantise(org, pl->qorg);
+		pl->namehash = PropLight_NameHash(pl->model);
+	}
+
+	//build the placement lookup
+	for (i = 0; i < count; i++)
+	{
+		proplight_t *pl = &set->records[i];
+		unsigned int b = PropLight_Bucket(pl->namehash, pl->qorg);
+		pl->hashnext = set->hash[b];
+		set->hash[b] = pl;
+	}
+
+	model->proplights = set;
+	Con_Printf("RGBPROPLIGHT: %u prop vertex-light record(s) loaded\n", count);
+}
+
+//Look up a prop placement's baked per-vertex colours by (model name, quantised origin).
+//Returns the greyscale-multiplier array (length via out_numverts) or NULL. Cheap: one hash probe.
+const vec4_t *PropLight_Find(model_t *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts)
+{
+	proplightset_t *set;
+	proplight_t *pl;
+	int q[3];
+	unsigned int nh, b;
+
+	*out_numverts = 0;
+	if (!world || !world->proplights || !modelname || !*modelname)
+		return NULL;
+	set = world->proplights;
+
+	nh = PropLight_NameHash(modelname);
+	PropLight_Quantise(origin, q);
+	b = PropLight_Bucket(nh, q);
+	for (pl = set->hash[b]; pl; pl = pl->hashnext)
+	{
+		if (pl->namehash != nh)
+			continue;
+		if (pl->qorg[0] != q[0] || pl->qorg[1] != q[1] || pl->qorg[2] != q[2])
+			continue;
+		if (Q_strcasecmp(pl->model, modelname))	//guard against a hash collision
+			continue;
+		*out_numverts = pl->numverts;
+		return pl->colours;
+	}
+	(void)angles;
+	return NULL;
+}
+
 static float BSPX_LightGridSingleValue(bspxlightgrid_t *grid, int x, int y, int z, float w, vec3_t res_diffuse)
 {
 	int i;

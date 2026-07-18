@@ -607,6 +607,9 @@ void Q1BSP_Init(void);
 void Q1BSP_GenerateShadowMesh(struct model_s *model, struct dlight_s *dl, const qbyte *lightvis, qbyte *litvis, void (*callback)(msurface_t *surf));
 
 void BSPX_LightGridLoad(struct model_s *model, bspx_header_t *bspx, qbyte *mod_base);	//for q1 or q2 models.
+void BSPX_PropLightLoad(struct model_s *model, bspx_header_t *bspx, qbyte *mod_base);	//nettest: baked static-prop per-vertex lighting (RGBPROPLIGHT).
+struct entity_s;
+const vec4_t *PropLight_Find(struct model_s *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts);	//nettest: look up a prop placement's baked per-vertex colours.
 void BSPX_LoadEnvmaps(struct model_s *mod, bspx_header_t *bspx, void *mod_base);
 void *BSPX_FindLump(bspx_header_t *bspxheader, void *mod_base, char *lumpname, size_t *lumpsize);
 bspx_header_t *BSPX_Setup(struct model_s *mod, char *filebase, size_t filelen, lump_t *lumps, size_t numlumps);
@@ -1164,6 +1167,7 @@ typedef struct model_s
 	void *meshinfo;	//data allocated within the memgroup allocations, will be nulled out when the model is flushed
 	searchpathfuncs_t *archive;	//some bsp formats have an embedded zip...
 	zonegroup_t memgroup;
+	void		*proplights;	//nettest: APPEND-ONLY (prebuilt plugin ABI). baked static-prop per-vertex lighting (RGBPROPLIGHT lump), keyed by prop placement. See gl_rlight.c.
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

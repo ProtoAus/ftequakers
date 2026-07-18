@@ -264,6 +264,7 @@ typedef struct galiasinfo_s
 
 	void *ctx;				//loader-specific stuff. must be ZG_Malloced if it lasts beyond the loader.
 	unsigned int warned;	//passed around at load time, so we don't spam warnings
+	int firstvert;			//nettest: APPEND-ONLY (prebuilt plugin ABI). this surface's base offset into the model's GLOBAL vertex arrays (IQM), for slicing baked RGBPROPLIGHT per-vertex colours (in global order).
 } galiasinfo_t;
 
 struct terrainfuncs_s;

@@ -38,6 +38,7 @@ typedef struct
 
 
 extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
+extern cvar_t r_propvertexlight;	//nettest: baked static-prop per-vertex lighting master toggle
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
@@ -1448,6 +1449,15 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	if (e->light_known)
 		return e->light_known-1;
 
+	//nettest: resolve this prop instance's baked per-vertex colours once per frame (the light_known
+	//guard above makes this run on the first call each frame, not per render pass). PropLight_Find is
+	//a cheap hash probe; NULL when the master toggle is off, the map has no RGBPROPLIGHT lump, or this
+	//placement has no record -- in which case the VC permutation stays inactive and drawing is unchanged.
+	e->vertlightcolors = NULL;
+	e->vertlightverts = 0;
+	if (r_propvertexlight.ival && clmodel && clmodel->type == mod_alias && cl.worldmodel && cl.worldmodel->proplights)
+		e->vertlightcolors = (vec4_t*)PropLight_Find(cl.worldmodel, clmodel->name, e->origin, e->angles, &e->vertlightverts);
+
 	e->light_dir[0] = 0; e->light_dir[1] = 1; e->light_dir[2] = 0;
 #ifdef HEXEN2
 	if ((e->drawflags & MLS_MASK) == MLS_ABSLIGHT)
@@ -1857,6 +1867,18 @@ void R_GAlias_DrawBatch(batch_t *batch)
 			if (batch->user.alias.surfrefs[0] == surfnum)
 			{
 				/*needrecolour =*/ Alias_GAliasBuildMesh(&mesh, &batch->vbo, inf, surfnum, e, batch->shader->prog && (batch->shader->prog->supportedpermutations & PERMUTATION_SKELETAL));
+				//nettest: override this surface's colour attribute with the prop instance's baked
+				//per-vertex multiplier. Colours are in GLOBAL vertex order, so slice by the surface's
+				//firstvert; the mesh's (local, 0-based) indices then address it correctly. The VC
+				//permutation (BE_RenderMeshProgram) does light *= v_colour, preserving PBR. This runs
+				//AFTER Alias_GAliasBuildMesh, which rewrites colours[0] every call, so it never leaks
+				//between entities. Skipped on a vertex-count mismatch (wrong LOD/model) to stay in-bounds.
+				if (e->vertlightcolors && batch->vbo && inf->firstvert + inf->numverts <= e->vertlightverts)
+				{
+					batch->vbo->colours[0].gl.vbo = 0;
+					batch->vbo->colours[0].gl.addr = e->vertlightcolors + inf->firstvert;
+					batch->vbo->colours_bytes = false;
+				}
 				batch->mesh = &meshl;
 				if (!mesh.numindexes)
 				{

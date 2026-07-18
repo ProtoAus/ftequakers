@@ -2579,7 +2579,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =OCCLUDE occlusion\n"
 "!!samps =USE_TRANSMISSION transmission //only .r valid, multiplier for factor_transmission\n"
 "!!samps =USE_VOLUME thickness   //only .g valid, multiplier for factor_volume_thickness, combined with factor_volume_rgb+factor_volume_distance(average distance travelled in metres)\n"
-//!!permu VC			// adds rgba vertex colour multipliers
+"!!permu VC\n"			// nettest: baked static-prop per-vertex lighting (RGBPROPLIGHT)
 //!!permu SPECULAR		// auto-added when gl_specular>0
 //!!permu OFFSETMAPPING	// auto-added when r_glsl_offsetmapping is set
 //!!permu NONORMALS		// states that there's no normals available, which affects lighting.
