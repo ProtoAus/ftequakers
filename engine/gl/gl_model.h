@@ -609,7 +609,7 @@ void Q1BSP_GenerateShadowMesh(struct model_s *model, struct dlight_s *dl, const 
 void BSPX_LightGridLoad(struct model_s *model, bspx_header_t *bspx, qbyte *mod_base);	//for q1 or q2 models.
 void BSPX_PropLightLoad(struct model_s *model, bspx_header_t *bspx, qbyte *mod_base);	//nettest: baked static-prop per-vertex lighting (RGBPROPLIGHT).
 struct entity_s;
-const vec4_t *PropLight_Find(struct model_s *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts);	//nettest: look up a prop placement's baked per-vertex colours.
+const vec4_t *PropLight_Find(struct model_s *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts, vec3_t out_meancolor);	//nettest: look up a prop placement's baked per-vertex colours + mean.
 void BSPX_LoadEnvmaps(struct model_s *mod, bspx_header_t *bspx, void *mod_base);
 void *BSPX_FindLump(bspx_header_t *bspxheader, void *mod_base, char *lumpname, size_t *lumpsize);
 bspx_header_t *BSPX_Setup(struct model_s *mod, char *filebase, size_t filelen, lump_t *lumps, size_t numlumps);

@@ -38,7 +38,7 @@ typedef struct
 
 
 extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
-extern cvar_t r_propvertexlight;	//nettest: baked static-prop per-vertex lighting master toggle
+extern cvar_t r_propvertexlight, r_propvertexlight_minlight, r_prop_minlight;	//nettest: baked static-prop per-vertex lighting + world-model minlight floor
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
@@ -1444,6 +1444,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	vec3_t dist;
 	float add, m;
 	vec3_t shadelight, ambientlight;
+	vec3_t bakedmean = {0,0,0};	//nettest: this prop's mean baked colour (0-1), if it has an RGBPROPLIGHT record
 	modellightcache_t *cache = NULL;	//Patch 105: non-NULL = this entity is cacheable
 
 	if (e->light_known)
@@ -1456,7 +1457,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	e->vertlightcolors = NULL;
 	e->vertlightverts = 0;
 	if (r_propvertexlight.ival && clmodel && clmodel->type == mod_alias && cl.worldmodel && cl.worldmodel->proplights)
-		e->vertlightcolors = (vec4_t*)PropLight_Find(cl.worldmodel, clmodel->name, e->origin, e->angles, &e->vertlightverts);
+		e->vertlightcolors = (vec4_t*)PropLight_Find(cl.worldmodel, clmodel->name, e->origin, e->angles, &e->vertlightverts, bakedmean);
 
 	e->light_dir[0] = 0; e->light_dir[1] = 1; e->light_dir[2] = 0;
 #ifdef HEXEN2
@@ -1570,6 +1571,40 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 		lightdir[0] = 0;
 		lightdir[1] = 1;
 		lightdir[2] = 1;
+	}
+
+	if (e->vertlightcolors)
+	{	//nettest: baked static-prop lighting. Take the prop's absolute brightness from its OWN baked mean
+		//(correctly self-shadowed, includes bounce colour) instead of the world lightmap sample, which reads
+		//the prop's OWN baked floor shadow -> too dark, and the relative VC multiply cannot rescue a dark base.
+		//Keep lightdir (the sun dir) for normalmaps; the VC permutation still multiplies the per-vertex
+		//top/underside variation on top. r_propvertexlight_minlight floors it so nothing goes pure black.
+		float minl = r_propvertexlight_minlight.value * 255.0f;
+		for (i = 0; i < 3; i++)
+		{
+			float mc = bakedmean[i] * 255.0f;
+			if (mc < minl)
+				mc = minl;
+			ambientlight[i] = mc;
+			shadelight[i] = mc;
+		}
+	}
+	else if (r_prop_minlight.value > 0.0f && e->playerindex < 0 && !(e->flags & RF_WEAPONMODEL))
+	{	//nettest: minimum brightness for world-placed models that DON'T have baked vertex lighting (a
+		//non-IQM prop, or any prop when -propvertexlight wasn't baked / r_propvertexlight is 0), so they
+		//never sit pure black in shadow. Opt-in (default 0). Applies to all non-player world models.
+		//NB: shadelight -> e->light_avg -> SP_E_L_AMBIENT is the shader's FLAT base (the term that fills
+		//faces pointing away from the light); ambientlight -> light_range -> SP_E_L_MUL is the directional
+		//multiplier (x dot(n,dir), so it can't lift a face that faces away). Floor BOTH, so the darkest
+		//faces are actually lifted -- flooring only the directional term keeps the contrast (parts x0).
+		float minl = r_prop_minlight.value * 255.0f;
+		for (i = 0; i < 3; i++)
+		{
+			if (shadelight[i] < minl)
+				shadelight[i] = minl;
+			if (ambientlight[i] < minl)
+				ambientlight[i] = minl;
+		}
 	}
 
 #ifdef HEXEN2

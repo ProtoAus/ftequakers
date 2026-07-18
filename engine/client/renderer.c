@@ -177,6 +177,8 @@ cvar_t r_propvertexlight						= CVARFD("r_propvertexlight", "1", CVAR_ARCHIVE, "
 cvar_t r_propvertexlight_contrast			= CVARFD("r_propvertexlight_contrast", "1", CVAR_ARCHIVE, "Exponent applied to the baked static-prop per-vertex multiplier (>1 exaggerates the sunlit/shadowed contrast, <1 flattens it). Applied when the map loads; change it then reload the map to re-tune. See r_propvertexlight.");
 cvar_t r_propvertexlight_min				= CVARFD("r_propvertexlight_min", "0.3", CVAR_ARCHIVE, "Lower clamp on the baked static-prop per-vertex multiplier, so shadowed vertices cannot go fully black. Applied at map load. See r_propvertexlight.");
 cvar_t r_propvertexlight_max				= CVARFD("r_propvertexlight_max", "3", CVAR_ARCHIVE, "Upper clamp on the baked static-prop per-vertex multiplier, so bright vertices cannot blow out. Applied at map load. See r_propvertexlight.");
+cvar_t r_propvertexlight_minlight			= CVARFD("r_propvertexlight_minlight", "0.1", CVAR_ARCHIVE, "Minimum base brightness (0..1) for a static prop lit by RGBPROPLIGHT. The prop's overall brightness comes from its own baked mean (not the world lightmap sample, which would read the prop's own cast shadow and go too dark); this floors that so a prop in deep shadow never renders pure black. 0 = no floor. See r_propvertexlight.");
+cvar_t r_prop_minlight						= CVARFD("r_prop_minlight", "0", CVAR_ARCHIVE, "Minimum ambient brightness (0..1) for world-placed models that do NOT have baked RGBPROPLIGHT vertex lighting (a non-IQM prop, or any prop when -propvertexlight wasn't baked or r_propvertexlight is 0), so they never sit pure black in shadow. Complements r_propvertexlight_minlight (which floors props that DO have baked lighting). 0 = off (default). Applies to all non-player, non-viewmodel models, not only props.");
 //cvar_t r_skin_overlays						= CVARF  ("r_skin_overlays", "1",
 //													CVAR_SEMICHEAT|CVAR_RENDERERLATCH);
 cvar_t r_globalskin_first					= CVARFD  ("r_globalskin_first", "100", CVAR_RENDERERLATCH, "Specifies the first .skin value that is a global skin. Entities within this range will use the shader/image called 'gfx/skinSKIN.lmp' instead of their regular skin. See also: r_globalskin_count.");
@@ -1058,6 +1060,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_propvertexlight_contrast, GRAPHICALNICETIES);
 	Cvar_Register (&r_propvertexlight_min, GRAPHICALNICETIES);
 	Cvar_Register (&r_propvertexlight_max, GRAPHICALNICETIES);
+	Cvar_Register (&r_propvertexlight_minlight, GRAPHICALNICETIES);
+	Cvar_Register (&r_prop_minlight, GRAPHICALNICETIES);
 //	Cvar_Register (&r_fullbrights, GRAPHICALNICETIES);	//dpcompat: 1 if r_fb_bmodels&&r_fb_models
 //	Cvar_Register (&r_skin_overlays, GRAPHICALNICETIES);
 	Cvar_Register (&r_globalskin_first, GRAPHICALNICETIES);

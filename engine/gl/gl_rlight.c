@@ -3162,6 +3162,8 @@ typedef struct proplight_s
 	char model[MAX_QPATH];
 	unsigned int numverts;
 	vec4_t *colours;		//[numverts], normalised greyscale multiplier (~1.0), in global IQM vertex order
+	vec3_t meancolor;		//nettest: mean of the ABSOLUTE baked RGB (0-1) = the prop's own overall brightness,
+							//used as the model's base light so it doesn't read its own baked floor shadow.
 } proplight_t;
 typedef struct
 {
@@ -3234,7 +3236,7 @@ void BSPX_PropLightLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
 		proplight_t *pl = &set->records[i];
 		vec3_t org;
 		unsigned int namelen, nv, k;
-		double sum = 0;
+		double sum = 0, sumr = 0, sumg = 0, sumb = 0;
 		float mean, inv;
 
 		for (k = 0; k < 3; k++) org[k] = ReadFloat(&ctx);
@@ -3262,6 +3264,7 @@ void BSPX_PropLightLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
 			float lum = r*0.299f + g*0.587f + b*0.114f;
 			pl->colours[v][0] = lum;
 			sum += lum;
+			sumr += r; sumg += g; sumb += b;
 		}
 		//pass 2: normalise to a ~1.0-centred greyscale multiplier (+contrast, +clamp)
 		mean = nv ? (float)(sum/nv) : 1.0f;
@@ -3275,6 +3278,11 @@ void BSPX_PropLightLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
 			pl->colours[v][0] = pl->colours[v][1] = pl->colours[v][2] = m;
 			pl->colours[v][3] = 1;
 		}
+
+		//mean of the ABSOLUTE baked colour = the prop's own brightness (used as its base light)
+		pl->meancolor[0] = nv ? (float)(sumr/nv) : 0.0f;
+		pl->meancolor[1] = nv ? (float)(sumg/nv) : 0.0f;
+		pl->meancolor[2] = nv ? (float)(sumb/nv) : 0.0f;
 
 		PropLight_Quantise(org, pl->qorg);
 		pl->namehash = PropLight_NameHash(pl->model);
@@ -3294,8 +3302,9 @@ void BSPX_PropLightLoad(model_t *model, bspx_header_t *bspx, qbyte *mod_base)
 }
 
 //Look up a prop placement's baked per-vertex colours by (model name, quantised origin).
-//Returns the greyscale-multiplier array (length via out_numverts) or NULL. Cheap: one hash probe.
-const vec4_t *PropLight_Find(model_t *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts)
+//Returns the greyscale-multiplier array (length via out_numverts) or NULL; also fills out_meancolor
+//(the record's mean ABSOLUTE colour, 0-1) when matched. Cheap: one hash probe.
+const vec4_t *PropLight_Find(model_t *world, const char *modelname, const vec3_t origin, const vec3_t angles, int *out_numverts, vec3_t out_meancolor)
 {
 	proplightset_t *set;
 	proplight_t *pl;
@@ -3303,6 +3312,8 @@ const vec4_t *PropLight_Find(model_t *world, const char *modelname, const vec3_t
 	unsigned int nh, b;
 
 	*out_numverts = 0;
+	if (out_meancolor)
+		VectorClear(out_meancolor);
 	if (!world || !world->proplights || !modelname || !*modelname)
 		return NULL;
 	set = world->proplights;
@@ -3319,6 +3330,8 @@ const vec4_t *PropLight_Find(model_t *world, const char *modelname, const vec3_t
 		if (Q_strcasecmp(pl->model, modelname))	//guard against a hash collision
 			continue;
 		*out_numverts = pl->numverts;
+		if (out_meancolor)
+			VectorCopy(pl->meancolor, out_meancolor);
 		return pl->colours;
 	}
 	(void)angles;
