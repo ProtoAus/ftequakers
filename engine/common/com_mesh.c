@@ -6880,6 +6880,18 @@ qboolean Mod_GetTag(model_t *model, int tagnum, framestate_t *fstate, float *res
 						m[k] += matrix[k] * lerp->frac[b];
 				}
 
+				//nettest Patch 112: the linear blend above is IDENTICAL to the one in
+				//Alias_BlendBoneData, which renormalizes afterwards (the renorm flag there) - but
+				//this copy never did. Blending two rotations linearly shrinks the basis to
+				//cos(theta/2) at the midpoint, and R_ConcatTransforms below compounds that up the
+				//parent chain, so every tag-driven attachment (gettaginfo, weapon attach, the IQM
+				//spine deform) still inherited the blend skew that Patch 43 fixed everywhere else.
+				//Gated per-lerp because GetTag has no function-level skeltype, but otherwise
+				//semantically identical to Alias_BlendBoneData - r_skel_blendnormalize 0 still
+				//turns the whole warp fix off in one place.
+				if (lerp->skeltype == SKEL_RELATIVE && r_skel_blendnormalize.ival)
+					Alias_RenormalizeBoneMatrix(m);
+
 				if (lerp->skeltype == SKEL_ABSOLUTE)
 				{
 					memcpy(result, m, sizeof(tempmatrix));
