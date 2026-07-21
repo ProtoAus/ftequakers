@@ -437,6 +437,8 @@ typedef struct {
 		SP_E_COLOURSIDENT,
 		SP_E_GLOWMOD,
 		SP_E_NOSHADOWRECV,	//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap (the viewmodel). 0 = normal.
+		SP_E_FPFADE,		//nettest: 1 = this entity is the local first-person body — dither it away above the cl_fpbody_fade_* height band. 0 = normal.
+		SP_E_SUNDIR,		//nettest: PER-ENTITY world-space dominant light direction (toward the light) for the model sun form-shade. From the map's deluxemap sample; falls back to the global r_sun_dir.
 		SP_E_TOPCOLOURS,
 		SP_E_BOTTOMCOLOURS,
 		SP_E_TIME,
@@ -474,6 +476,8 @@ typedef struct {
 		SP_LIGHTCUBEMATRIX,
 		SP_LIGHTSHADOWMAPPROJ,
 		SP_LIGHTSHADOWMAPSCALE,
+		SP_FAKESHADOWMATRIX,	//nettest P110: mat4[N] - per-atlas-slot ortho proj*view for the multi-direction fake shadow. Composed with the model matrix at upload, exactly like SP_LIGHTCUBEMATRIX.
+		SP_FAKESHADOWCELL,		//nettest P110: vec4[N] - atlas cell remap per slot (xy = cell origin in GL bottom-origin UV, zw = cell scale).
 
 		//things that are set immediatly
 		SP_FIRSTIMMEDIATE,	//never set
@@ -954,6 +958,17 @@ qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *re
 void GLBE_EndShadowMap(int restorefbo);
 void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float shadowscale);
 
+//nettest P110: multi-direction fake shadows.  The single ortho depth map of r_shadows 2 carries ONE cast
+//direction by construction; these let gl_shadow.c render N of them into cells of the SAME texture, each
+//from a different dominant-light direction, so props shadow away from whatever actually lights them.
+//8 = what the atlas layout holds (Sh_FakeShadowCellRect -- a 3/4-size cell for the sun plus an L of seven
+//quarter-size cells).  The engine clamp and the shader's FAKESHADOWS_COUNT both derive from this, so they
+//cannot disagree about how many cells exist.
+#define MAX_FAKESHADOW_SLOTS 8
+void GLBE_SetFakeShadowCount(int count);						//0/1 = legacy single path
+void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell);	//snapshot the CURRENT lightprojmatrix (set by GLBE_SelectDLight) as this slot's consumption matrix
+void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell);		//neutral matrix: projects everything outside the box so the shader early-outs
+
 qboolean GLVID_ApplyGammaRamps (unsigned int size, unsigned short *ramps);	//called when gamma ramps need to be reapplied
 qboolean GLVID_Init (rendererstate_t *info, unsigned char *palette);		//the platform-specific function to init gl state
 void GLVID_SwapBuffers(void);
@@ -1077,6 +1092,7 @@ void Sh_PreGenerateLights(void);
 //Draws lights, called from the backend
 void Sh_DrawLights(qbyte *vis);
 void Sh_GenerateFakeShadows(void);
+int Sh_FakeShadowFilter(int visedictindex);	//nettest P110: 1 = this visedict casts into the atlas cell currently being rendered. Always 1 outside the fake-shadow pass.
 #ifdef RTLIGHTS
 void Sh_CheckSettings(void);
 #endif

@@ -1535,6 +1535,7 @@ typedef struct q1usercmd_s
 #define Q2RF_SHELL_BLUE			(1u<<12)	//q2only
 //
 #define RF_NOSHADOW				(1u<<13)
+#define RF_NOSHADOWRECV			(1u<<23)	//nettest: entity does not RECEIVE the r_shadows 2 fake-sun shadowmap (no self-shadow). Internal render flag (never networked as an entity flag) set from CSQCRF_NOSELFSHADOW / the viewmodel path; read in gl_backend.c to drive the e_noshadowrecv uniform. 1<<23 = the retired Q2EXRF_BLOB_SHADOW slot (unused).
 #define Q2REX_CASTSHADOW		(1u<<14)
 //ROGUE start
 #define Q2RF_IR_VISIBLE			(1u<<15)	// shows red with Q2RDF_IRGOGGLES
@@ -1547,7 +1548,7 @@ typedef struct q1usercmd_s
 #define Q2EXRF_FLARE			(1u<<21)	//changes the interpretation of a lot of fields, basically replacing the entire ent.
 //#define Q2EXRF_OLD_FRAME_LERP	(1u<<22)	//This flag signals that `s.old_frame` should be used for the next frame and respected by the client. This can be used for custom frame interpolation; its use in this engine is specific to fixing interpolation bugs on certain monster animations.
 //#define Q2EXRF_BLOB_SHADOW		(1u<<23)	//
-//#define Q2EXRF_LOW_PRIORITY		(1u<<24)	//
+#define RF_FPFADE				(1u<<24)	//nettest: first-person body — dither this model away above a height band (cl_fpbody_fade_start/_end) so the owner's own head cannot clip the camera. Internal render flag (never networked), set from CSQCRF_FPFADE; read in gl_backend.c to drive the e_fpfade uniform. 1<<24 = the retired Q2EXRF_LOW_PRIORITY slot (unused), same as RF_NOSHADOWRECV took 1<<23.
 //#define Q2EXRF_NO_LOD				(1u<<25)	//
 //#define Q2EXRF_STAIRSTEP			(1u<<26)	//
 

@@ -1510,6 +1510,7 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 	extern cvar_t r_glsl_pbr, gl_specular, gl_specular_power;
 	extern cvar_t r_shadows_throwfade;	//nettest: contact-shadow gap fade, injected alongside FAKESHADOWS
 	extern cvar_t r_sun_dir;			//nettest: env_sun world direction, injected as e_fakesundir for model sun-shade
+	extern cvar_t r_shadows_slots;		//nettest P110: fake-shadow atlas slot count, injected as FAKESHADOWS_COUNT
 
 	if (~prog->supportedpermutations & p)
 		return NULL;	//o.O
@@ -1539,6 +1540,13 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		//and re-injects this (no staleness across maps).
 		Q_strlcatfz(defines, &offset, sizeof(defines), "#define e_fakesundir vec3(%f,%f,%f)\n",
 			r_sun_dir.vec4[0], r_sun_dir.vec4[1], r_sun_dir.vec4[2]);
+		//nettest P110: number of fake-shadow atlas slots (= distinct cast directions).  The receiving
+		//shaders size their uniform/varying ARRAYS from this, so it MUST be a compile-time define --
+		//which is why r_shadows_slots is CVAR_SHADERSYSTEM (a change flushes and recompiles shaders).
+		//1 = the legacy single sun ortho; the shaders keep a verbatim `#if FAKESHADOWS_COUNT < 2`
+		//branch so N=1 is the SAME COMPILED CODE as before this patch, not merely the same value.
+		Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_COUNT %i\n",
+			bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS));
 	}
 #endif
 
@@ -2497,6 +2505,19 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"e_colourident",			SP_E_COLOURSIDENT},	//colormod,alpha or 1,1,1,alpha if colormod isn't set
 /**/{"e_glowmod",				SP_E_GLOWMOD},		//fullbright scalers (for hdr mostly)
 /**/{"e_noshadowrecv",			SP_E_NOSHADOWRECV},	//nettest: 1 = don't receive the r_shadows 2 fake-sun shadowmap (viewmodel); 0 = normal. Fail-safe polarity: an unbound uniform reads 0 = normal.
+/**/{"e_fpfade",				SP_E_FPFADE},		//nettest: 1 = local first-person body, dither away above the height band; 0 = normal. Fail-safe polarity: an unbound uniform reads 0 = draw the whole model.
+/**/{"e_sundir",				SP_E_SUNDIR},		//nettest: PER-ENTITY world-space dominant light dir (toward the light) for the sun form-shade; deluxemap-derived, falls back to r_sun_dir.
+	//nettest P110: the fake-shadow atlas slot arrays.  BOTH the bare and the "[0]" spelling are registered
+	//ON PURPOSE.  GLSlang_ProgAutoFields binds by a literal glGetUniformLocation call per row -- there is no
+	//glGetActiveUniform enumeration and no name normalisation -- and drivers disagree about which spelling
+	//of an array uniform's element 0 resolves (the spec permits querying either; real drivers return -1 for
+	//one of them).  Registering both guarantees a hit.  If a driver resolves BOTH, we simply get two parm
+	//entries with the same handle and type, so the upload runs twice with identical data: wasteful by a few
+	//microseconds, never wrong.  DO NOT "clean this up" to a single row.
+/**/{"l_fakeshadowmatrix[0]",	SP_FAKESHADOWMATRIX},
+/**/{"l_fakeshadowmatrix",		SP_FAKESHADOWMATRIX},
+/**/{"l_fakeshadowcell[0]",		SP_FAKESHADOWCELL},
+/**/{"l_fakeshadowcell",		SP_FAKESHADOWCELL},
 /**/{"e_uppercolour",			SP_E_TOPCOLOURS},	//q1 player colours
 /**/{"e_lowercolour",			SP_E_BOTTOMCOLOURS},//q1 player colours
 /**/{"e_light_dir",				SP_E_L_DIR},		//lightgrid light dir. dotproducts should be clamped to 0-1.

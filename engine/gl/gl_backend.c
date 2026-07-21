@@ -216,6 +216,14 @@ static struct {
 		vec4_t lightshadowmapproj;
 	};
 
+	//nettest P110: per-slot fake-shadow projections.  Snapshots of lightprojmatrix taken as gl_shadow.c
+	//walks the atlas slots, so each slot's consumption matrix is BY CONSTRUCTION the same matrix the
+	//legacy single path uses (built in GLBE_SelectDLight's ORTHO branch, r_shadows_bias already baked
+	//into [14]) -- it cannot drift out of agreement with the shader.
+	float fakeshadowmatrix[MAX_FAKESHADOW_SLOTS][16];
+	vec4_t fakeshadowcell[MAX_FAKESHADOW_SLOTS];
+	int fakeshadowcount;
+
 	int wbatch;
 	int maxwbatches;
 	batch_t *wbatches;
@@ -1090,6 +1098,41 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 	shaderstate.lightshadowmapscale[0] = 1.0/texwidth;
 	shaderstate.lightshadowmapscale[1] = 1.0/texheight;
 }
+
+//nettest P110 --------------------------------------------------------------------------------------
+//Multi-direction fake shadows.  gl_shadow.c renders N model-only depth passes into cells of ONE texture,
+//each from a different dominant-light direction, and records each pass's projection here for the forward
+//pass to consume.  Slot 0 is always the sun, so N=1 is exactly the legacy behaviour.
+void GLBE_SetFakeShadowCount(int count)
+{
+	shaderstate.fakeshadowcount = bound(1, count, MAX_FAKESHADOW_SLOTS);
+}
+
+//Snapshot the projection GLBE_SelectDLight just built for this slot.  Deliberately a COPY rather than a
+//rebuild: the ORTHO branch of GLBE_SelectDLight already pairs Matrix4x4_CM_Orthographic with
+//ModelViewMatrixFromAxis(axis[0], axis[2], axis[1]) -- the "FAKESHADOWS xyz convention" -- and bakes the
+//Patch-96 world-constant r_shadows_bias into [14].  Reproducing that math here is exactly how Patch 93's
+//spot-slot attempt came out mirrored and tiny; copying makes disagreement impossible.
+void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell)
+{
+	if ((unsigned)slot >= MAX_FAKESHADOW_SLOTS)
+		return;
+	memcpy(shaderstate.fakeshadowmatrix[slot], shaderstate.lightprojmatrix, sizeof(shaderstate.lightprojmatrix));
+	Vector4Copy(cell, shaderstate.fakeshadowcell[slot]);
+}
+
+//An unused slot must not keep LAST frame's matrix, or receivers would project into a cell that now holds
+//a different direction's depth.  Identity with a huge z translation puts every fragment past the far
+//plane, so the shader's `fd < 1.0` box test rejects the slot outright and it costs no taps.
+void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell)
+{
+	if ((unsigned)slot >= MAX_FAKESHADOW_SLOTS)
+		return;
+	Matrix4x4_Identity(shaderstate.fakeshadowmatrix[slot]);
+	shaderstate.fakeshadowmatrix[slot][14] = 1e9f;
+	Vector4Copy(cell, shaderstate.fakeshadowcell[slot]);
+}
+//---------------------------------------------------------------------------------------------------
 
 int GLBE_BeginRenderBuffer_DepthOnly(texid_t depthtexture);
 qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *restorefbo)
@@ -3755,16 +3798,59 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_E_GLOWMOD:
 			qglUniform3fvARB(ph, 1, (GLfloat*)shaderstate.curentity->glowmod);
 			break;
-		//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap.  Only the
-		//first-person viewmodel qualifies: it is drawn INSIDE the local player's body, which is
-		//itself rendered into the fake-sun depth pass while r_shadow_playershadows is on — so the
-		//gun ends up shadowed by its own owner.  FAKESHADOWS is a global compile-time define, so
-		//this per-entity uniform is the only way the shader can know.  Polarity is FAIL-SAFE:
-		//an unbound/unsupported uniform reads 0 = normal shadow receive (never "shadows vanish").
+		//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap.  TWO sources:
+		//(1) the first-person VIEWMODEL (drawn INSIDE the local player's body, which is rendered into
+		//the fake-sun depth pass while r_shadow_playershadows is on, so the gun was shadowed by its
+		//owner) — gated by r_shadows_viewmodel; (2) any entity carrying RF_NOSHADOWRECV, set from the
+		//CSQCRF_NOSELFSHADOW renderflag (prop_static "Don't self-shadow" spawnflag).  FAKESHADOWS is a
+		//global compile-time define, so this per-entity uniform is the only way the shader can know.
+		//Polarity is FAIL-SAFE: an unbound/unsupported uniform reads 0 = normal receive (never "vanish").
 		case SP_E_NOSHADOWRECV:
 			{
 				extern cvar_t r_shadows_viewmodel;
-				qglUniform1fARB(ph, ((shaderstate.curentity->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival) ? 1.0f : 0.0f);
+				float supp = (shaderstate.curentity->flags & RF_NOSHADOWRECV) ? 1.0f : 0.0f;
+				if ((shaderstate.curentity->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival)
+					supp = 1.0f;
+				qglUniform1fARB(ph, supp);
+			}
+			break;
+		//nettest: 1 = this entity is the LOCAL FIRST-PERSON BODY (cl_fpbody).  The mod draws the
+		//owner's own player model so they can look down and see their legs; the model shader then
+		//dithers away everything above a height band so the head — which sits around the camera,
+		//the eye being at model Z +20 with the crown at +36 — can never clip into view.
+		//A per-entity uniform rather than a shader permutation ON PURPOSE: the body-paint system
+		//binds its own runtime `program defaultskin` shaders per surface, so gating inside the one
+		//shared shader is what makes a painted body fade correctly too, with no shader cross-product.
+		//Polarity is FAIL-SAFE: an unbound/unsupported uniform reads 0 = draw the whole model.
+		case SP_E_FPFADE:
+			qglUniform1fARB(ph, (shaderstate.curentity->flags & RF_FPFADE) ? 1.0f : 0.0f);
+			break;
+		//nettest: PER-ENTITY dominant light direction (WORLD space, pointing TOWARD the light) for the model
+		//sun form-shade in defaultskin.glsl.  Replaces the single global e_fakesundir #define so a prop beside
+		//a lamp shades toward THAT lamp while one in the open shades toward the sun — Source-style dominant
+		//light.  Freshness is free: R_CalcModelLighting's sample is cached per entity and the Patch-105 cache
+		//VALIDATES ON ORIGIN, so a static prop hits forever and a moving one re-samples as it travels.
+		//
+		//The value is reconstructed, NOT stored: gl_alias.c writes e->light_dir as the world direction
+		//PROJECTED onto the entity's orthonormal axes (light_dir[i] = DotProduct(worlddir, e->axis[i])), so
+		//the inverse is simply the axis-weighted sum.  Reconstructing here avoids adding a field to entity_t,
+		//which the prebuilt hl2/cod plugins reach via NewSceneEntity (struct-ABI hazard — see ENGINE_PATCHES).
+		//
+		//FALLBACK to the global sun when there is no per-entity information to be had:
+		//  - no deluxemap (.lux/LIGHTINGDIR) => LightPointValues returns a CONSTANT direction, which would look
+		//    worse than the sun; so un-relit maps keep exactly their current appearance (zero regression).
+		//  - RF_WEAPONMODEL => that branch transforms through the VIEW basis first (gl_alias.c), so the plain
+		//    inverse above does not apply.
+		case SP_E_SUNDIR:
+			{
+				extern cvar_t r_sun_dir;
+				vec3_t sundir;
+				//Patch 110: the reconstruction moved into R_EntityDominantLightDir (gl_alias.c) so this
+				//uniform and the fake-shadow direction bucketer share ONE implementation -- a prop's
+				//shading direction and its cast-shadow direction cannot disagree.
+				if (!R_EntityDominantLightDir(shaderstate.curentity, sundir))
+					VectorCopy(r_sun_dir.vec4, sundir);
+				qglUniform3fvARB(ph, 1, sundir);
 			}
 			break;
 		case SP_E_ORIGIN:
@@ -3909,6 +3995,20 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			break;
 		case SP_LIGHTSHADOWMAPSCALE:
 			qglUniform2fvARB(ph, 1, shaderstate.lightshadowmapscale);
+			break;
+		//nettest P110: the N fake-shadow slot projections, composed with the model matrix exactly like
+		//SP_LIGHTCUBEMATRIX above (the shaders feed them model-space vertex positions).
+		case SP_FAKESHADOWMATRIX:
+			{
+				float t[MAX_FAKESHADOW_SLOTS*16];
+				int s, n = bound(1, shaderstate.fakeshadowcount, MAX_FAKESHADOW_SLOTS);
+				for (s = 0; s < n; s++)
+					Matrix4_Multiply(shaderstate.fakeshadowmatrix[s], shaderstate.modelmatrix, t + s*16);
+				qglUniformMatrix4fvARB(ph, n, false, t);
+			}
+			break;
+		case SP_FAKESHADOWCELL:
+			qglUniform4fvARB(ph, bound(1, shaderstate.fakeshadowcount, MAX_FAKESHADOW_SLOTS), (GLfloat*)shaderstate.fakeshadowcell);
 			break;
 
 		/*static lighting info*/

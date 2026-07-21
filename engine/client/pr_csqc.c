@@ -793,6 +793,10 @@ static qboolean CopyCSQCEdictToEntity(csqcedict_t *fte_restrict in, entity_t *ft
 		//CSQCRF_USEAXIS is below
 		if (rflags & CSQCRF_NOSHADOW)
 			out->flags |= RF_NOSHADOW;
+		if (rflags & CSQCRF_NOSELFSHADOW)	//nettest: don't RECEIVE the fake-sun shadowmap (still casts) — drives e_noshadowrecv
+			out->flags |= RF_NOSHADOWRECV;
+		if (rflags & CSQCRF_FPFADE)			//nettest: first-person body — dither away above a height band — drives e_fpfade
+			out->flags |= RF_FPFADE;
 		if (rflags & CSQCRF_XFLIP)
 			out->flags |= RF_XFLIP;
 		//CSQCRF_FRAMETIMESARESTARTTIMES is handled by cs_getframestate below

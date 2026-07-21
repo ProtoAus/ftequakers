@@ -885,9 +885,10 @@ typedef enum
 //#define CSQCRFDP_WORLDOBJECT			128 // for large outdoor entities that should not be culled.
 //#define CSQCRFDP_FULLBRIGHT			256
 //#define CSQCRFDP_NOSHADOW				512
-//#define CSQCRF_UNUSED					2048
+#define CSQCRF_NOSELFSHADOW				2048 //nettest: entity does NOT receive the r_shadows 2 fake-sun shadowmap (no self-shadow); it still CASTS normally. Maps to internal RF_NOSHADOWRECV, drives e_noshadowrecv in defaultskin.glsl.
 //#define CSQCRFDP_MODELLIGHT			4096 // CSQC-set model light
 //#define CSQCRFDP_DYNAMICMODELLIGHT	8192 // origin-dependent model light
+#define CSQCRF_FPFADE					16384 //nettest: first-person body — dither the model away above a height band so the owner's own head can't clip the camera. Maps to internal RF_FPFADE, drives e_fpfade in defaultskin.glsl. (4096/8192 deliberately skipped: they are DP-compat slots.)
 
 /*only read+append+write are standard frik_file*/
 #define FRIK_FILE_READ		0 /*read-only*/
