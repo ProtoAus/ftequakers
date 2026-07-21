@@ -82,6 +82,7 @@ static cvar_t *physics_box3d_ragdoll_angulardamp;	//nettest: ragdoll limb angula
 static cvar_t *physics_box3d_ragdoll_lineardamp;	//nettest: ragdoll limb linear damping (1/s)
 static cvar_t *physics_box3d_ragdoll_stiffness;		//nettest: ragdoll joint spring hertz - springs limbs toward bind pose (0 = free/floppy)
 static cvar_t *physics_box3d_ragdoll_springdamp;	//nettest: ragdoll joint spring damping ratio (~1 = critically damped, no ring)
+static cvar_t *physics_box3d_playerpush;	//nettest: player slidebox is a KINEMATIC body carrying its real velocity, so walking into a prop is a true contact (friction/impulse/torque) instead of a zero-velocity static shove.
 
 //----------------------------------------------------------------------------
 // Box3D id <-> edict void* slot.  ids are 8-byte value structs; store the packed
@@ -302,6 +303,7 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 	int solid = SOLID_NOT;
 	int geomtype = GEOMTYPE_SOLID;
 	qboolean modified = false;
+	qboolean xformchanged = false;	//nettest: qc moved/rotated it, as opposed to only touching vel/gravity
 	qboolean gravity;
 	vec3_t angles, avelocity, entmaxs, entmins, forward, geomcenter, geomsize, left, origin, spinvelocity, up, velocity;
 	vec_t length, radius, scale;
@@ -385,7 +387,19 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 	if (movetype != MOVETYPE_PHYSICS)
 		massval = 1.0f;
 
-	bodytype = (movetype == MOVETYPE_PHYSICS) ? b3_dynamicBody : b3_staticBody;
+	//nettest: a player/monster slidebox becomes a KINEMATIC body (was static) when
+	//physics_box3d_playerpush is on, so it can carry a real velocity into the solver and
+	//push props through a GENUINE contact. Kinematic bodies drive dynamic ones but are
+	//never driven back -- exactly what we want here: the player stays authoritative and
+	//client-predicted (BodyToEntity still early-outs for non-MOVETYPE_PHYSICS), while
+	//props finally react to being walked into. Kinematic-vs-static/kinematic pairs don't
+	//collide, so player-vs-world and player-vs-player in the rbe are unchanged.
+	if (movetype == MOVETYPE_PHYSICS)
+		bodytype = b3_dynamicBody;
+	else if (physics_box3d_playerpush->ival && solid == SOLID_SLIDEBOX)
+		bodytype = b3_kinematicBody;
+	else
+		bodytype = b3_staticBody;
 
 	//------------------------------------------------------------------
 	// create or replace the body+shape
@@ -768,9 +782,14 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 		}
 	}
 
+	//nettest: track a TELEPORT (origin/angles) separately from a mere velocity/gravity change -- only the
+	//former has to force a wake. See the SetAwake call further down for why that distinction matters.
 	if (!VectorCompare(origin, ed->rbe.origin)
+	 || !VectorCompare(angles, ed->rbe.angles))
+		xformchanged = true;
+
+	if (xformchanged
 	 || !VectorCompare(velocity, ed->rbe.velocity)
-	 || !VectorCompare(angles, ed->rbe.angles)
 	 || !VectorCompare(avelocity, ed->rbe.avelocity)
 	 || gravity != ed->rbe.gravity)
 		modified = true;
@@ -802,6 +821,36 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 			b3Body_SetLinearVelocity(body, (b3Vec3){velocity[0], velocity[1], velocity[2]});
 			b3Body_SetAngularVelocity(body, (b3Vec3){spinvelocity[0], spinvelocity[1], spinvelocity[2]});
 			b3Body_SetGravityScale(body, gravity ? 1.0f : 0.0f);
+			//nettest Patch 111: do NOT wake unconditionally. b3Body_SetAwake wakes the ENTIRE contact
+			//island (box3d body.c:1965 -> b3WakeSolverSet), so a qc write that merely zeroes a settled
+			//prop's velocity or switches its gravity off -- i.e. exactly what a "this has come to rest"
+			//routine does -- used to wake every prop stacked on or under it and reset all their sleep
+			//timers. QC could therefore never put a pile of props to rest: each one settling re-woke its
+			//neighbours, which is what made two props floating on each other cycle at ~1Hz forever.
+			//
+			//Box3D's own setters already get this right, so deferring to them is both correct and safe
+			//(all three verified in box3d-main/src/body.c):
+			//  SetLinearVelocity/SetAngularVelocity wake only for a NON-ZERO value (:1149), and their
+			//    write is skipped when the body is asleep -- but that only ever discards a ZERO write to
+			//    an already-still body, which is a no-op anyway.
+			//  SetTransform (:1063) and SetGravityScale (:1931) both go through b3GetBodySim, NOT
+			//    b3GetBodyState, so they apply to a sleeping body and never wake it.
+			//So the one case we must still force is a TELEPORT: qc moving/rotating a sleeping body has to
+			//re-evaluate its contacts, and SetTransform will not do that on its own.
+			if (xformchanged)
+				b3Body_SetAwake(body, true);
+		}
+		else if (physics_box3d_playerpush->ival && solid == SOLID_SLIDEBOX)
+		{
+			//nettest: feed the player's REAL velocity to their kinematic body. Without this the
+			//body was teleported each frame with ZERO velocity, so the solver saw no relative
+			//motion at the contact: props were displaced by raw overlap only -- no friction, no
+			//speed-scaled impulse, no torque. That is why props felt weightless and couldn't be
+			//shoved by walking into them. Angular velocity is left at zero (forced above for
+			//SOLID_SLIDEBOX) since players don't spin. We keep teleporting the transform too, so
+			//the body can never drift from the authoritative QC position -- the velocity is purely
+			//what gives the contact its impulse.
+			b3Body_SetLinearVelocity(body, (b3Vec3){velocity[0], velocity[1], velocity[2]});
 			b3Body_SetAwake(body, true);
 		}
 	}
@@ -1403,6 +1452,7 @@ static void Box3D_RegisterCvars(void)
 	physics_box3d_ragdoll_lineardamp  = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_lineardamp",  "0.4", 0, "Linear damping (unitless 1/s) on ragdoll limbs. Keep small (<0.5) so the initial collapse isn't slowed; helps hanging limbs settle. Applies to newly-spawned ragdolls.", "Box3D Physics");
 	physics_box3d_ragdoll_stiffness   = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_stiffness",   "2",   0, "Ragdoll joint spring stiffness in Hertz (cycles/s). A rotational spring gently pulls each limb back toward its bind rest pose, reining in wild flailing while gravity still dominates the fall. 0 = free/floppy (old behaviour); ~2 = subtle; ~6 = stiff mannequin. Applies to newly-spawned ragdolls.", "Box3D Physics");
 	physics_box3d_ragdoll_springdamp  = cvarfuncs->GetNVFDG("physics_box3d_ragdoll_springdamp",  "1",   0, "Damping ratio for the ragdoll joint spring (physics_box3d_ragdoll_stiffness). ~1 = critically damped (springs back without oscillating); <1 = bouncy/springy; >1 = overdamped/slow. Applies to newly-spawned ragdolls.", "Box3D Physics");
+	physics_box3d_playerpush	= cvarfuncs->GetNVFDG("physics_box3d_playerpush",	"1",	0, "1 = a player is a KINEMATIC body carrying their REAL velocity, so walking into a prop is a genuine solver contact: friction, speed-scaled impulse and torque (a shoved crate tips and spins, and standing on one loads it). 0 = the old behaviour, a zero-velocity STATIC box that only displaced props by raw position overlap, which is why props felt weightless and couldn't be shoved by walking. Players are never pushed BACK by props either way (that would fight client movement prediction).", "Box3D Physics");
 }
 
 qboolean Plug_Init(void)
