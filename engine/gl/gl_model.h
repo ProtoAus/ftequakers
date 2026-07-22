@@ -410,6 +410,7 @@ typedef struct
 #define SURF_NOFLAT			0x08000
 #define SURF_DRAWALPHA		0x10000
 #define SURF_NODRAW			0x20000	//set on non-vertical halflife water submodel surfaces
+#define SURF_DETACHED		0x40000	//face not coplanar with the node it is filed under (misc_external_mesh bake); mark visible before the world walk so it does not pop
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!
 typedef struct

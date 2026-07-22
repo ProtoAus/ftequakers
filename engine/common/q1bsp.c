@@ -1784,6 +1784,8 @@ struct q1bspprv_s
 	int visframecount;
 	int framecount;
 	int oldviewclusters[2];
+	qboolean detachedscanned;	//have we looked for non-coplanar (misc_external_mesh) faces yet?
+	qboolean hasdetachedsurfs;	//...and did we find any? (gates the extra PrepareFrame work)
 };
 #define BACKFACE_EPSILON	0.01
 static void Q1BSP_RecursiveWorldNode (mnode_t *node, unsigned int clipflags)
@@ -2168,9 +2170,41 @@ static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 	return vis;
 }
 
+//misc_external_mesh bakes triangles into the world as faces that are NOT coplanar with any
+//BSP split, so qbsp files each under the deepest node containing its leafs, not a node on
+//its own plane. The perspective world walk (Q1BSP_RecursiveWorldNode) marks a surface
+//visible only when it reaches that surface's leaf, mid-traversal, and draws a node's faces
+//BETWEEN its front and back subtrees -- so a detached face can be drawn before its leaf has
+//been reached and gets skipped, popping in and out as the camera crosses the filed node's
+//plane. Flag those faces once here (a normal brush face shares its node's plane pointer; a
+//detached one does not) so PrepareFrame can mark them visible up-front, before the walk.
+static void Q1BSP_ScanDetachedSurfs (model_t *model)
+{
+	struct q1bspprv_s *prv = model->meshinfo;
+	int n;
+
+	prv->detachedscanned = true;
+	prv->hasdetachedsurfs = false;
+
+	for (n = 0; n < model->numnodes; n++)
+	{
+		mnode_t *node = model->nodes + n;
+		msurface_t *surf = model->surfaces + node->firstsurface;
+		unsigned int s;
+		for (s = 0; s < node->numsurfaces; s++, surf++)
+		{
+			if (surf->plane != node->plane)
+			{
+				surf->flags |= SURF_DETACHED;
+				prv->hasdetachedsurfs = true;
+			}
+		}
+	}
+}
+
 static void Q1BSP_PrepareFrame(model_t *model, refdef_t *refdef, int area, int clusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out)
 {
-	*entvis_out = Q1BSP_MarkLeaves (model, clusters);
+	qbyte *entvis = *entvis_out = Q1BSP_MarkLeaves (model, clusters);
 
 	if (vis->buffersize < model->pvsbytes)
 		vis->buffer = BZ_Realloc(vis->buffer, vis->buffersize=model->pvsbytes);
@@ -2180,7 +2214,38 @@ static void Q1BSP_PrepareFrame(model_t *model, refdef_t *refdef, int area, int c
 	if (model != cl.worldmodel)
 		; //global abuse...
 	else if (r_refdef.useperspective)
+	{
+		//Mark detached (misc_external_mesh) faces visible from the PVS before the walk, so
+		//the node draw-loop picks them up regardless of traversal order. Done every frame
+		//(a cached-vis result can skip MarkLeaves' own node loop, but q1_framecount is
+		//still bumped, so it matches what the walk will test against). Gated on
+		//hasdetachedsurfs, so a map with no imported mesh pays only the one-time scan.
+		struct q1bspprv_s *prv = model->meshinfo;
+		if (!prv->detachedscanned)
+			Q1BSP_ScanDetachedSurfs (model);
+		if (prv->hasdetachedsurfs && entvis)
+		{
+			int i;
+			for (i = 0; i < model->numclusters; i++)
+			{
+				mleaf_t *leaf;
+				msurface_t **mark;
+				int c;
+				if (!(entvis[i>>3] & (1<<(i&7))))
+					continue;
+				leaf = &model->leafs[i+1];
+				mark = leaf->firstmarksurface;
+				c = leaf->nummarksurfaces;
+				while (c-- > 0)
+				{
+					msurface_t *surf = *mark++;
+					if (surf->flags & SURF_DETACHED)
+						surf->visframe = q1_framecount;
+				}
+			}
+		}
 		Q1BSP_RecursiveWorldNode (model->nodes, 0x1f);
+	}
 	else
 		Q1BSP_OrthoRecursiveWorldNode (model->nodes, 0x1f);
 	*surfvis_out = q1frustumvis;
