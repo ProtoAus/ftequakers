@@ -39,6 +39,7 @@ extern texid_t missing_texture_gloss;
 extern texid_t missing_texture_normal;
 extern texid_t scenepp_postproc_cube;
 extern texid_t r_whiteimage;
+extern texid_t r_blackimage;	//nettest: SUNVIS fallback — black = zero sun occlusion = shadows behave as before
 
 #ifdef GLQUAKE
 static texid_t shadowmap[3];
@@ -1106,6 +1107,19 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 void GLBE_SetFakeShadowCount(int count)
 {
 	shaderstate.fakeshadowcount = bound(1, count, MAX_FAKESHADOW_SLOTS);
+}
+
+//nettest P114b: force the NEXT GLBE_SelectEntity to re-copy r_refdef.m_projection_std into the cached
+//shaderstate.projectionmatrix.  The fake-shadow ATLAS (Sh_GenerateCascadeAtlas / Sh_GenerateFakeShadowsAtlas)
+//renders N cells with a DIFFERENT ortho projection each, inside ONE Begin/End pair.  But GLBE_SelectEntity
+//only refreshes the cached projection when the entity's DEPTHHACK/XFLIP flags change -- which they never do
+//for world/prop casters -- so cells 1..N-1 rendered their caster depth with CELL 0's projection while the
+//shader sampled each with its own matrix.  For cascades that magnified every caster's shadow by
+//radius(s)/radius(0) (3x, 9x, ...): one prop cast three shadows at three sizes.  Same value that
+//GLBE_BeginShadowMap/EndShadowMap already use to invalidate; call this once per cell before its render.
+void GLBE_FlushProjection(void)
+{
+	shaderstate.usingweaponviewmatrix = -1;
 }
 
 //Snapshot the projection GLBE_SelectDLight just built for this slot.  Deliberately a COPY rather than a
@@ -4150,16 +4164,54 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		}
 	}
 #if MAXRLIGHTMAPS > 1
-	if (perm & PERMUTATION_LIGHTSTYLES)
-	{
-		GL_LazyBind(i++, shaderstate.curbatch->lightmap[1]>=0?lightmap[shaderstate.curbatch->lightmap[1]]->lightmap_texture:r_nulltex);
-		GL_LazyBind(i++, shaderstate.curbatch->lightmap[2]>=0?lightmap[shaderstate.curbatch->lightmap[2]]->lightmap_texture:r_nulltex);
-		GL_LazyBind(i++, shaderstate.curbatch->lightmap[3]>=0?lightmap[shaderstate.curbatch->lightmap[3]]->lightmap_texture:r_nulltex);
-		GL_LazyBind(i++, (shaderstate.curbatch->lightmap[1]>=0&&lightmap[shaderstate.curbatch->lightmap[1]]->hasdeluxe)?lightmap[shaderstate.curbatch->lightmap[1]+1]->lightmap_texture:missing_texture_normal);
-		GL_LazyBind(i++, (shaderstate.curbatch->lightmap[2]>=0&&lightmap[shaderstate.curbatch->lightmap[2]]->hasdeluxe)?lightmap[shaderstate.curbatch->lightmap[2]+1]->lightmap_texture:missing_texture_normal);
-		GL_LazyBind(i++, (shaderstate.curbatch->lightmap[3]>=0&&lightmap[shaderstate.curbatch->lightmap[3]]->hasdeluxe)?lightmap[shaderstate.curbatch->lightmap[3]+1]->lightmap_texture:missing_texture_normal);
+	{	//nettest: advance `i` once per DECLARED sampler bit, NOT once per bit we happen to have a
+		//texture for.  GLSlang_ProgAutoFields (gl_vidcommon.c) hands out texture units by walking
+		//sh_defaultsamplers[] with no permutation test at all, so any sampler declared AFTER these
+		//six reads whatever unit this loop leaves it on.
+		//
+		//The old code bound all six inside `if (perm & PERMUTATION_LIGHTSTYLES)` — and on q1bsp
+		//that permutation is NEVER set (gl_model.c forces batch->lightmap[1] = -1 for every batch),
+		//while !!samps =LIGHTSTYLED still declares bits 17-19 program-wide.  So `i` stalled 3-6
+		//units behind the uniform assignment.  That was latent forever because nothing was ever
+		//declared after deluxemap3; s_sunvis is the first sampler that is, and it landed on a unit
+		//the `while (lastpasstmus > i)` sweep below had just cleared to r_nulltex — sampling
+		//(0,0,0,1) on every surface of every map.
+		static const unsigned int lsbits[6] = {
+			1u<<S_LIGHTMAP1, 1u<<S_LIGHTMAP2, 1u<<S_LIGHTMAP3,
+			1u<<S_DELUXEMAP1,1u<<S_DELUXEMAP2,1u<<S_DELUXEMAP3};
+		int n, lm;
+		for (n = 0; n < 6; n++)
+		{
+			if (!(p->defaulttextures & lsbits[n]))
+				continue;	//not declared -> ProgAutoFields skipped it -> we must skip it too
+			lm = (perm & PERMUTATION_LIGHTSTYLES) ? shaderstate.curbatch->lightmap[(n%3)+1] : -1;
+			if (n < 3)
+				GL_LazyBind(i++, lm>=0?lightmap[lm]->lightmap_texture:r_nulltex);
+			else
+				GL_LazyBind(i++, (lm>=0&&lightmap[lm]->hasdeluxe)?lightmap[lm+1]->lightmap_texture:missing_texture_normal);
+		}
 	}
 #endif
+	//nettest (SUNVIS): baked per-luxel sun visibility, sharing lightmap[0]'s atlas coords.
+	//Bound LAST, matching s_sunvis's position at the end of sh_defaultsamplers[] — that table's
+	//order is what GLSlang_ProgAutoFields uses to assign texture units, so the two must agree.
+	//Guarded on the program actually asking for it, or `i` would drift out of step for every
+	//shader that doesn't.  Test `p`, the program being rendered with — NOT
+	//shaderstate.curshader->prog: on the alt-program paths (wireframe, fixed-function emulation,
+	//altshader) curshader is still defaultwall while `p` is something else entirely, and testing
+	//curshader there would bind a spurious extra texture over a unit that program actually uses.
+	//i < SHADER_TMU_MAX is NOT paranoia: GL_LazyBind indexes shaderstate.currenttextures[tmu]
+	//with no bounds check of its own, and defaultwall with every permutation on peaks at exactly
+	//15 of the 16 units — zero headroom. Overflow would corrupt backend state, not fail cleanly.
+	if (p && (p->defaulttextures & (1u<<S_SUNVIS)) && i < SHADER_TMU_MAX)
+	{
+		int svlm = shaderstate.curbatch->lightmap[0];
+		//r_blackimage, not r_whiteimage: the texture holds sun OCCLUSION, so black = fully lit =
+		//shadow at full strength = the pre-SUNVIS behaviour. See the polarity note in
+		//defaultwall.glsl - getting this backwards deletes every shadow in the game.
+		GL_LazyBind(i++, (svlm >= 0 && svlm < numlightmaps && TEXVALID(lightmap[svlm]->sunvis_texture))
+						? lightmap[svlm]->sunvis_texture : r_blackimage);
+	}
 	while (shaderstate.lastpasstmus > i)
 		GL_LazyBind(--shaderstate.lastpasstmus, r_nulltex);
 	shaderstate.lastpasstmus = i;
@@ -5784,6 +5836,44 @@ void GLBE_UpdateLightmaps(void)
 		lm = lightmap[lmidx];
 		if (!lm)
 			continue;
+
+		//nettest (SUNVIS): baked sun visibility is STATIC - no styles, no stains, no dlights -
+		//so unlike the lightmap it is uploaded once for the whole page and then never touched
+		//again. That is why it needs no rectchange tracking and no PBO path.
+		//the L8 guard matters: if the driver has no single-channel format the upload would
+		//silently produce garbage. Skipping leaves sunvis_texture invalid, the bind falls back
+		//to r_whiteimage, and shadows behave exactly as they did before.
+		if (lm->sunvis_modified && lm->sunvis_pixels && gl_config.formatinfo[PTI_L8].internalformat)
+		{
+			if (!TEXVALID(lm->sunvis_texture))
+			{
+				TEXASSIGN(lm->sunvis_texture, Image_CreateTexture(va("***sunvis %i***", lmidx), NULL, IF_LINEAR|IF_NOMIPMAP|IF_CLAMP));
+				qglGenTextures(1, &lm->sunvis_texture->num);
+			}
+			GL_MTBind(0, GL_TEXTURE_2D, lm->sunvis_texture);
+			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			qglTexImage2D(GL_TEXTURE_2D, 0, gl_config.formatinfo[PTI_L8].internalformat, lm->width, lm->height, 0,
+						gl_config.formatinfo[PTI_L8].format, gl_config.formatinfo[PTI_L8].type, lm->sunvis_pixels);
+#ifndef FTE_TARGET_WEB
+			//single-channel formats are commonly stored as GL_RED, so swizzle like the lightmap
+			//path does or the shader's .r would read the wrong component on some drivers.
+			if (gl_config.glversion >= (gl_config.gles?3.0:3.3))
+			{
+				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, gl_config.formatinfo[PTI_L8].swizzle_r);
+				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, gl_config.formatinfo[PTI_L8].swizzle_g);
+				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, gl_config.formatinfo[PTI_L8].swizzle_b);
+				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, gl_config.formatinfo[PTI_L8].swizzle_a);
+			}
+#endif
+			lm->sunvis_texture->format = PTI_L8;
+			lm->sunvis_texture->width  = lm->width;
+			lm->sunvis_texture->height = lm->height;
+			lm->sunvis_texture->depth  = 1;
+			lm->sunvis_texture->status = TEX_LOADED;
+			lm->sunvis_modified = false;
+		}
+
 		if (lm->modified)
 		{
 			int t = lm->rectchange.t;	//pull them out now, in the hopes that it'll be more robust with respect to r_dynamic -1

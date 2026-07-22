@@ -3270,3 +3270,42 @@ texels/qu** — near field now *sharper* than the frustum fit's 2.89, far cascad
   world pixel is multiplied by this colour, so shadows can sink toward the sky/ambient colour instead of dead
   grey.  Driven per-map by the new `env_sun "shadowcolor"` key (nettest `sv_env_sun.qc`, which stuffs the
   cvars — CVAR_SHADERSYSTEM auto-flush, no vid_reload).  Replaces the scalar `r_shadows_floor` from 114.
+
+### Patch 114b — stale cached render projection: atlas cells 1+ rendered with cell 0's matrix
+
+**Symptom (user-reported, took several rounds to catch):** with `r_shadows_cascades > 1`, cascade 0 (the near
+one) was correct but the outer cascades were "mapped incorrectly / a mess." A single carried prop cast **three
+separate shadow copies at once**, one per cascade ring, each a different size; a shadow held **constant apparent
+screen size** as you backed away from it (instead of shrinking). The `r_shadows_cascade_showsplit` debug showed
+the cascade *regions* were perfectly correct.
+
+**Root cause (found by a 4-agent workflow after hand-analysis kept wrongly concluding "the matrices are
+correct" — they *are*; the bug is a cache).** The fake-shadow ATLAS renders N cells, each with a **different**
+ortho projection, inside ONE `GLBE_BeginShadowMap`/`EndShadowMap` pair. But `GLBE_SelectEntity`
+(`gl_backend.c:4399`) only re-copies `r_refdef.m_projection_std` into the cached `shaderstate.projectionmatrix`
+inside `if (shaderstate.usingweaponviewmatrix != fl)` — where `fl = flags & (RF_DEPTHHACK|RF_XFLIP)`, which is
+**0 for every world/prop caster**. `usingweaponviewmatrix` is reset to -1 only in `GLBE_BeginShadowMap` (once,
+before the loop) and `GLBE_EndShadowMap` (once, after) — **never between cells**. So cell 0's first caster
+cached cell 0's ortho and set the flag to 0; cells 1..N-1 then saw `fl == 0 == usingweaponviewmatrix`, skipped
+the refresh, and rendered their caster **depth** with cell 0's projection while the shader **sampled** each with
+its own (correct, captured) matrix. For concentric cascades that scales the stored-vs-sampled ortho by
+`radius(0)/radius(s)`, so a caster's shadow is magnified about the eye by `radius(s)/radius(0)` — **1× / 3× /
+9×** for the default ratio-3 cascades. The sampling side being correct is exactly why the debug rings looked
+perfect while the shadow content was wrong. This also latently affected the P110 direction atlas (slots 1+).
+
+**Fix.** New `GLBE_FlushProjection()` (`gl_backend.c`) sets `shaderstate.usingweaponviewmatrix = -1` — the same
+invalidation Begin/EndShadowMap already use — so the next `GLBE_SelectEntity` re-reads the current
+`r_refdef.m_projection_std`. Called once per cell, right before the `Sh_GenShadowFace` render, in **both**
+`Sh_GenerateCascadeAtlas` and `Sh_GenerateFakeShadowsAtlas`. Declared in `gl/shader.h`. Deliberately NOT placed
+in the shared `Sh_GenShadowFace` (which rtlight cube/spot faces also use) — the atlas loops are the only paths
+that swap the projection mid-Begin/End, so the fix stays scoped to them.
+
+**Verify:** `r_shadows_cascades 3`; a carried prop now casts ONE consistently-sized shadow, and it shrinks with
+distance normally. Discriminating check that isolates *this* bug from the (separate, real) far-cascade
+coarseness: at `r_shadows_cascade_ratio 1.0` all cascades share one radius so the magnification is 1× — before
+this fix the "3 sizes" vanished at ratio 1; after it, ratio 3 is correctly sized too.
+
+**Still open (separate quality issue, not this bug):** the equal 2×2 cell layout gives every cascade the same
+texel count while radii grow ×3, so the far cascade is ~8× coarser than the old single map. That's a
+resolution/texel-budget follow-up (bigger atlas, per-cascade PCF scaling, or view-fitted far cascades), not a
+correctness bug.

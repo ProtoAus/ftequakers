@@ -901,6 +901,9 @@ enum
 	S_DELUXEMAP2	= 21,
 	S_DELUXEMAP3	= 22,
 #endif
+	//nettest: baked per-luxel sun visibility (SUNVIS lump), sampled with the lightmap texcoords
+	//to stop a dynamic sun shadow re-darkening geometry that is already in baked shadow.
+	S_SUNVIS		= 23,
 };
 extern const struct sh_defaultsamplers_s
 {
@@ -968,6 +971,7 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 void GLBE_SetFakeShadowCount(int count);						//0/1 = legacy single path
 void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell);	//snapshot the CURRENT lightprojmatrix (set by GLBE_SelectDLight) as this slot's consumption matrix
 void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell);		//neutral matrix: projects everything outside the box so the shader early-outs
+void GLBE_FlushProjection(void);								//P114b: invalidate the cached render projection so the next per-cell depth pass re-reads r_refdef.m_projection_std
 
 qboolean GLVID_ApplyGammaRamps (unsigned int size, unsigned short *ramps);	//called when gamma ramps need to be reapplied
 qboolean GLVID_Init (rendererstate_t *info, unsigned char *palette);		//the platform-specific function to init gl state

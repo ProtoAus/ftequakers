@@ -3473,6 +3473,11 @@ static void Sh_GenerateFakeShadowsAtlas(dlight_t *l, int slots, int txsize)
 
 		fs_curslot = s;	/*Sh_FakeShadowFilter now admits only this slot's casters*/
 		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		//P114b: this cell's ortho differs from the previous cell's, but GLBE_SelectEntity only refreshes
+		//the cached render projection when entity flags change (never for world/props).  Force it, or the
+		//depth here renders with cell 0's projection while the shader samples with this cell's -> shadows
+		//magnified by radius(s)/radius(0).
+		GLBE_FlushProjection();
 		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
 	}
 	fs_curslot = -1;
@@ -3632,6 +3637,10 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 
 		//fs_curslot intentionally left at -1: Sh_FakeShadowFilter passes ALL casters into this cascade.
 		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		//P114b: force the cached render projection to re-read THIS cascade's ortho.  Without it, cascades
+		//1+ render caster depth with cascade 0's projection while sampling with their own -> a single caster
+		//casts 3 shadows magnified by radius(s)/radius(0) (the "3 copies at 3 sizes" bug).
+		GLBE_FlushProjection();
 		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
 
 		if (dbg)
