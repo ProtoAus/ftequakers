@@ -32,6 +32,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t r_shadow_bumpscale_basetexture;
 extern cvar_t r_replacemodels;
 extern cvar_t r_lightmap_average;
+extern cvar_t r_waterripple;
+extern cvar_t r_waterripple_tess;
 cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
@@ -2587,6 +2589,258 @@ qboolean Mod_LoadVertexNormals (model_t *loadmodel, bspx_header_t *bspx, qbyte *
 }
 
 #if defined(Q1BSPS) || defined(Q2BSPS)
+#ifndef SERVERONLY
+// --- rippling water -------------------------------------------------------------------
+// r_waterripple subdivides each turbulent (liquid) surface into a world-grid mesh at load so
+// the shader's "deformVertexes wave" can ripple it per-vertex. Subdivision is by grid planes
+// (classic GLQuake SubdividePolygon) so neighbouring water faces share edge vertices and stay
+// crack-free while displaced. The same routine runs in count mode (mesh==NULL) to size the VBO
+// and in emit mode to fill it, so the two passes always agree.
+#define WATERSUBDIV_MINSPLIT 8.0f		// don't put a grid plane closer than this to an edge
+#define WATERSUBDIV_MAXVERTS 16384		// per-surface safety cap (well under MAX_ARRAY_VERTS)
+#define WATERSUBDIV_MAXPTS   64			// working winding size
+
+typedef struct
+{
+	model_t		*mod;
+	msurface_t	*surf;
+	float		cellsize;
+	mesh_t		*mesh;		// NULL => count only
+	int			nv;			// running vertex count / write cursor
+	int			ni;			// running index count / write cursor
+} watersubdiv_t;
+
+static void Surf_WaterEmitVert(watersubdiv_t *w, const vec3_t pos)
+{
+	mesh_t *mesh = w->mesh;
+	msurface_t *surf = w->surf;
+	model_t *mod = w->mod;
+	int i = w->nv;
+	float s, t, d;
+
+	if (mesh)
+	{
+		VectorCopy(pos, mesh->xyz_array[i]);
+
+		s = DotProduct(pos, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3];
+		t = DotProduct(pos, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3];
+		mesh->st_array[i][0] = s;
+		mesh->st_array[i][1] = t;
+		if (surf->texinfo->texture->vwidth)
+			mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
+		if (surf->texinfo->texture->vheight)
+			mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+		if (surf->texinfo->flags & TI_N64_UV)
+		{
+			mesh->st_array[i][0] /= 2;
+			mesh->st_array[i][1] /= 2;
+		}
+
+		// Lightmap coords: the turb shader has a LIT permutation that multiplies by the
+		// lightmap, so these MUST match the normal world fill exactly (decoupled/facelmvecs
+		// maps use a different projection than the standard formula) or the water shows
+		// garbage lightmap data. Mirrors ModQ1_Batches_BuildQ1Q2Poly's per-vertex lm block.
+		if (mesh->lmst_array[0])
+		{
+			if (mod->lightmaps.width <= 0 || mod->lightmaps.height <= 0)
+			{
+				mesh->lmst_array[0][i][0] = 0;
+				mesh->lmst_array[0][i][1] = 0;
+			}
+			else
+			{
+				struct facelmvecs_s *flmv = mod->facelmvecs ? mod->facelmvecs + (surf - mod->surfaces) : NULL;
+				if (flmv)
+				{
+					float ls = DotProduct(pos, flmv->lmvecs[0]) + flmv->lmvecs[0][3];
+					float lt = DotProduct(pos, flmv->lmvecs[1]) + flmv->lmvecs[1][3];
+					if (r_lightmap_average.ival)
+					{
+						ls = surf->extents[0]*0.5;
+						lt = surf->extents[1]*0.5;
+					}
+					mesh->lmst_array[0][i][0] = (surf->light_s[0] + ls) / mod->lightmaps.width;
+					mesh->lmst_array[0][i][1] = (surf->light_t[0] + lt) / mod->lightmaps.height;
+				}
+				else if (r_lightmap_average.ival)
+				{
+					mesh->lmst_array[0][i][0] = (surf->extents[0]*0.5 + (surf->light_s[0]<<surf->lmshift) + (1<<surf->lmshift)*0.5) / (mod->lightmaps.width<<surf->lmshift);
+					mesh->lmst_array[0][i][1] = (surf->extents[1]*0.5 + (surf->light_t[0]<<surf->lmshift) + (1<<surf->lmshift)*0.5) / (mod->lightmaps.height<<surf->lmshift);
+				}
+				else
+				{
+					mesh->lmst_array[0][i][0] = (s - surf->texturemins[0] + (surf->light_s[0]<<surf->lmshift) + (1<<surf->lmshift)*0.5) / (mod->lightmaps.width<<surf->lmshift);
+					mesh->lmst_array[0][i][1] = (t - surf->texturemins[1] + (surf->light_t[0]<<surf->lmshift) + (1<<surf->lmshift)*0.5) / (mod->lightmaps.height<<surf->lmshift);
+				}
+			}
+		}
+
+		// flat surface normal - the ripple comes from the deform, not baked geometry
+		if (surf->flags & SURF_PLANEBACK)
+			VectorNegate(surf->plane->normal, mesh->normals_array[i]);
+		else
+			VectorCopy(surf->plane->normal, mesh->normals_array[i]);
+		VectorCopy(surf->texinfo->vecs[0], mesh->snormals_array[i]);
+		VectorNegate(surf->texinfo->vecs[1], mesh->tnormals_array[i]);
+		d = -DotProduct(mesh->normals_array[i], mesh->snormals_array[i]);
+		VectorMA(mesh->snormals_array[i], d, mesh->normals_array[i], mesh->snormals_array[i]);
+		d = -DotProduct(mesh->normals_array[i], mesh->tnormals_array[i]);
+		VectorMA(mesh->tnormals_array[i], d, mesh->normals_array[i], mesh->tnormals_array[i]);
+		VectorNormalize(mesh->snormals_array[i]);
+		VectorNormalize(mesh->tnormals_array[i]);
+
+		if (mesh->colors4f_array[0])
+		{
+			mesh->colors4f_array[0][i][0] = 1;
+			mesh->colors4f_array[0][i][1] = 1;
+			mesh->colors4f_array[0][i][2] = 1;
+			mesh->colors4f_array[0][i][3] = 1;
+		}
+	}
+	w->nv++;
+}
+
+static void Surf_WaterEmitPoly(watersubdiv_t *w, int numpts, vec3_t *pts)
+{
+	int i, base = w->nv;
+
+	if (numpts < 3)
+		return;
+	if (w->nv + numpts > WATERSUBDIV_MAXVERTS)
+		return;	// safety: drop overflow geometry rather than corrupt the VBO
+
+	for (i = 0; i < numpts; i++)
+		Surf_WaterEmitVert(w, pts[i]);
+
+	if (w->mesh)
+	{
+		for (i = 0; i < numpts-2; i++)
+		{
+			w->mesh->indexes[w->ni + i*3+0] = base;
+			w->mesh->indexes[w->ni + i*3+1] = base + i+1;
+			w->mesh->indexes[w->ni + i*3+2] = base + i+2;
+		}
+	}
+	w->ni += (numpts-2)*3;
+}
+
+static void Surf_WaterSubdividePoly(watersubdiv_t *w, int numpts, vec3_t *pts)
+{
+	vec3_t	mins, maxs;
+	int		i, j, axis, f, b;
+	float	m, frac;
+	float	dist[WATERSUBDIV_MAXPTS+1];
+	vec3_t	front[WATERSUBDIV_MAXPTS], back[WATERSUBDIV_MAXPTS];
+
+	if (numpts > WATERSUBDIV_MAXPTS-4)
+	{	// too complex to keep splitting safely - just emit it
+		Surf_WaterEmitPoly(w, numpts, pts);
+		return;
+	}
+
+	ClearBounds(mins, maxs);
+	for (i = 0; i < numpts; i++)
+		AddPointToBounds(pts[i], mins, maxs);
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		m = (mins[axis] + maxs[axis]) * 0.5f;
+		m = w->cellsize * floor(m/w->cellsize + 0.5f);	// nearest grid plane
+		if (maxs[axis] - m < WATERSUBDIV_MINSPLIT)
+			continue;
+		if (m - mins[axis] < WATERSUBDIV_MINSPLIT)
+			continue;
+
+		for (i = 0; i < numpts; i++)
+			dist[i] = pts[i][axis] - m;
+		dist[numpts] = dist[0];		// wrap for the edge test
+
+		f = b = 0;
+		for (i = 0; i < numpts; i++)
+		{
+			if (dist[i] >= 0)
+			{
+				VectorCopy(pts[i], front[f]);
+				f++;
+			}
+			if (dist[i] <= 0)
+			{
+				VectorCopy(pts[i], back[b]);
+				b++;
+			}
+			if (dist[i] == 0 || dist[i+1] == 0)
+				continue;
+			if ((dist[i] > 0) != (dist[i+1] > 0))
+			{	// this edge crosses the plane - add the split point to both sides
+				frac = dist[i] / (dist[i] - dist[i+1]);
+				for (j = 0; j < 3; j++)
+					front[f][j] = back[b][j] = pts[i][j] + frac*(pts[(i+1)%numpts][j] - pts[i][j]);
+				f++;
+				b++;
+			}
+		}
+		Surf_WaterSubdividePoly(w, f, front);
+		Surf_WaterSubdividePoly(w, b, back);
+		return;
+	}
+
+	Surf_WaterEmitPoly(w, numpts, pts);	// small enough - emit as a fan
+}
+
+// Subdivide surf into w->mesh (or count into *out_nv/*out_ni when outmesh==NULL).
+static void Surf_WaterSubdivide(model_t *mod, msurface_t *surf, mesh_t *outmesh, int *out_nv, int *out_ni)
+{
+	watersubdiv_t w;
+	vec3_t	verts[WATERSUBDIV_MAXPTS];
+	unsigned int vertidx;
+	int		i, lindex, edgevert;
+	int		n = surf->numedges;
+
+	memset(&w, 0, sizeof(w));
+	w.mod = mod;
+	w.surf = surf;
+	w.mesh = outmesh;
+	w.cellsize = r_waterripple_tess.value;
+	if (w.cellsize < 16)
+		w.cellsize = 16;	// sane floor to bound the vertex count
+
+	if (n > WATERSUBDIV_MAXPTS)
+		n = WATERSUBDIV_MAXPTS;
+
+	for (i = 0; i < n; i++)
+	{
+		lindex = mod->surfedges[surf->firstedge + i];
+		edgevert = lindex <= 0;
+		if (edgevert)
+			lindex = -lindex;
+		if (lindex < 0 || lindex >= mod->numedges)
+			vertidx = 0;
+		else
+			vertidx = mod->edges[lindex].v[edgevert];
+		VectorCopy(mod->vertexes[vertidx].position, verts[i]);
+	}
+
+	Surf_WaterSubdividePoly(&w, n, verts);
+
+	if (out_nv) *out_nv = w.nv;
+	if (out_ni) *out_ni = w.ni;
+}
+
+static qboolean Surf_WaterShouldRipple(msurface_t *surf)
+{
+	float up;
+	if (!(surf->flags & SURF_DRAWTURB) || r_waterripple.value <= 0)
+		return false;
+	// only the roughly-upward-facing (top) liquid surfaces get tessellated + rippled; the
+	// vertical side faces and the floor keep their flat corner mesh so they don't wobble
+	// sideways, and we don't spend vertices on faces you can't see the ripple on.
+	up = surf->plane->normal[2];
+	if (surf->flags & SURF_PLANEBACK)
+		up = -up;
+	return up > 0.5f;
+}
+#endif
+
 void ModQ1_Batches_BuildQ1Q2Poly(model_t *mod, msurface_t *surf, builddata_t *cookie)
 {
 	unsigned int vertidx;
@@ -2600,18 +2854,42 @@ void ModQ1_Batches_BuildQ1Q2Poly(model_t *mod, msurface_t *surf, builddata_t *co
 
 	if (!mesh)
 	{
-		mesh = surf->mesh = ZG_Malloc(&mod->memgroup, sizeof(mesh_t) + (sizeof(vecV_t)+sizeof(vec2_t)*(1+1)+sizeof(vec3_t)*3+sizeof(vec4_t)*1)* surf->numedges + sizeof(index_t)*(surf->numedges-2)*3);
-		mesh->numvertexes = surf->numedges;
-		mesh->numindexes = (mesh->numvertexes-2)*3;
+		int nverts = surf->numedges;
+		int nindexes = (surf->numedges-2)*3;
+#ifndef SERVERONLY
+		if (Surf_WaterShouldRipple(surf))
+		{	// size the standalone mesh for the subdivided grid (non-world/bmodel path)
+			int wnv, wni;
+			Surf_WaterSubdivide(mod, surf, NULL, &wnv, &wni);
+			if (wnv >= 3)
+			{
+				nverts = wnv;
+				nindexes = wni;
+			}
+		}
+#endif
+		mesh = surf->mesh = ZG_Malloc(&mod->memgroup, sizeof(mesh_t) + (sizeof(vecV_t)+sizeof(vec2_t)*(1+1)+sizeof(vec3_t)*3+sizeof(vec4_t)*1)* nverts + sizeof(index_t)*nindexes);
+		mesh->numvertexes = nverts;
+		mesh->numindexes = nindexes;
 		mesh->xyz_array = (vecV_t*)(mesh+1);
-		mesh->st_array = (vec2_t*)(mesh->xyz_array+mesh->numvertexes);
-		mesh->lmst_array[0] = (vec2_t*)(mesh->st_array+mesh->numvertexes);
-		mesh->normals_array = (vec3_t*)(mesh->lmst_array[0]+mesh->numvertexes);
-		mesh->snormals_array = (vec3_t*)(mesh->normals_array+mesh->numvertexes);
-		mesh->tnormals_array = (vec3_t*)(mesh->snormals_array+mesh->numvertexes);
-		mesh->colors4f_array[0] = (vec4_t*)(mesh->tnormals_array+mesh->numvertexes);
-		mesh->indexes = (index_t*)(mesh->colors4f_array[0]+mesh->numvertexes);
+		mesh->st_array = (vec2_t*)(mesh->xyz_array+nverts);
+		mesh->lmst_array[0] = (vec2_t*)(mesh->st_array+nverts);
+		mesh->normals_array = (vec3_t*)(mesh->lmst_array[0]+nverts);
+		mesh->snormals_array = (vec3_t*)(mesh->normals_array+nverts);
+		mesh->tnormals_array = (vec3_t*)(mesh->snormals_array+nverts);
+		mesh->colors4f_array[0] = (vec4_t*)(mesh->tnormals_array+nverts);
+		mesh->indexes = (index_t*)(mesh->colors4f_array[0]+nverts);
 	}
+
+#ifndef SERVERONLY
+	if (Surf_WaterShouldRipple(surf))
+	{	// rippling water: emit a subdivided grid (its own indices) instead of the corner trifan
+		int wnv, wni;
+		mesh->istrifan = false;
+		Surf_WaterSubdivide(mod, surf, mesh, &wnv, &wni);
+		return;
+	}
+#endif
 	mesh->istrifan = true;
 
 	//output the mesh's indicies
@@ -3417,8 +3695,28 @@ void Mod_Batches_Build(model_t *mod, builddata_t *bd)
 		if (meshlist)
 		{
 			mesh = surf->mesh = &meshlist[i];
-			mesh->numvertexes = surf->numedges;
-			mesh->numindexes = (surf->numedges-2)*3;
+#ifndef SERVERONLY
+			if (Surf_WaterShouldRipple(surf))
+			{	// rippling water is tessellated - size the VBO for the subdivided grid
+				int wnv = 0, wni = 0;
+				Surf_WaterSubdivide(mod, surf, NULL, &wnv, &wni);
+				if (wnv >= 3)
+				{
+					mesh->numvertexes = wnv;
+					mesh->numindexes = wni;
+				}
+				else
+				{
+					mesh->numvertexes = surf->numedges;
+					mesh->numindexes = (surf->numedges-2)*3;
+				}
+			}
+			else
+#endif
+			{
+				mesh->numvertexes = surf->numedges;
+				mesh->numindexes = (surf->numedges-2)*3;
+			}
 		}
 		else
 			mesh = surf->mesh;

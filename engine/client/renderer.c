@@ -260,6 +260,12 @@ cvar_t r_wateralpha_extendpvs				= CVARFD ("r_wateralpha_extendpvs", "0",
 												"When 1 and r_wateralpha < 1, the renderer ORs every fluid leaf's PVS into the visible set so transparent water shows the geometry on the other side from any distance. ONLY needed for legacy maps compiled without transparent-water vis support (vanilla GoldSrc maps, q1bsp compiled with classic vis). Modern maps compiled with ericw-tools vis or any vis tool that handles transparent water at compile time already have correct PVS — leave this 0 for those, otherwise rendering will pull in far-away unrelated leafs.");
 cvar_t r_waterwarp							= CVARFD ("r_waterwarp", "1",
 												CVAR_ARCHIVE, "Enables fullscreen warp, preferably via glsl. -1 specifies to force the fov warp fallback instead which can give a smidge more performance.");
+cvar_t r_waterripple						= CVARFD ("r_waterripple", "3",
+												CVAR_ARCHIVE | CVAR_SHADERSYSTEM, "Makes liquid (water/slime/lava/teleport) surfaces ripple as a real subdivided mesh: the value is the wave height in world units, 0 disables. Turning it on from 0, or changing r_waterripple_tess, requires a map reload (the tessellation is baked into the world at load); changing the height or r_waterripple_speed updates live.");
+cvar_t r_waterripple_tess					= CVARFD ("r_waterripple_tess", "64",
+												CVAR_ARCHIVE, "Grid cell size, in world units, for r_waterripple tessellation. Smaller = smoother ripples but more vertices. Read at map load.");
+cvar_t r_waterripple_speed					= CVARFD ("r_waterripple_speed", "1",
+												CVAR_ARCHIVE | CVAR_SHADERSYSTEM, "Speed multiplier for the r_waterripple wave motion.");
 
 cvar_t r_replacemodels						= CVARFD ("r_replacemodels", IFMINIMAL("","md3 md2 md5mesh"),
 												CVAR_ARCHIVE, "A list of filename extensions to attempt to use instead of mdl.");
@@ -1018,6 +1024,9 @@ void Renderer_Init(void)
 
 	Cvar_Register (&r_fastturb, GRAPHICALNICETIES);
 	Cvar_Register (&r_wateralpha, GRAPHICALNICETIES);
+	Cvar_Register (&r_waterripple, GRAPHICALNICETIES);
+	Cvar_Register (&r_waterripple_tess, GRAPHICALNICETIES);
+	Cvar_Register (&r_waterripple_speed, GRAPHICALNICETIES);
 	Cvar_Register (&r_lavaalpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimealpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_telealpha, GRAPHICALNICETIES);

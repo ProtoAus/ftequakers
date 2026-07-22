@@ -6955,6 +6955,7 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 	int type;
 	float alpha;
 	qboolean explicitalpha = false;
+	char deform[256];
 	cvar_t *alphavars[] = {	&r_wateralpha, &r_lavaalpha, &r_slimealpha, &r_telealpha};
 	cvar_t *stylevars[] = {	&r_waterstyle, &r_lavastyle, &r_slimestyle, &r_telestyle};
 
@@ -7020,6 +7021,20 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 			wstyle = 1;
 	}
 
+	// r_waterripple: gently displace the (tessellated) liquid surface up/down along its
+	// normal. Two low-amplitude waves at non-harmonic wavelengths/speeds read as a soft chop
+	// rather than one marching sine. Empty when disabled, so the shader is otherwise unchanged.
+	*deform = 0;
+	if (r_waterripple.value > 0)
+	{
+		float amp = r_waterripple.value;
+		float spd = r_waterripple_speed.value;
+		Q_snprintfz(deform, sizeof(deform),
+			"deformVertexes wave 128 sin 0 %g 0 %g\n"
+			"deformVertexes wave 71 sin 0 %g 0.37 %g\n",
+			amp, 0.25*spd, amp*0.6, 0.17*spd);
+	}
+
 	switch(wstyle)
 	{
 	case -1:	//invisible
@@ -7032,8 +7047,9 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 			"}\n"
 		);
 	case -2:	//regular with r_wateralpha forced off.
-		return (
+		Q_snprintfz(buffer, buffersize,
 			"{\n"
+				"%s"
 				"fte_program defaultwarp\n"
 				"{\n"
 					"map $diffuse\n"
@@ -7043,7 +7059,8 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 				"surfaceparm nomarks\n"
 				"surfaceparm hasdiffuse\n"
 			"}\n"
-		);
+			, deform);
+		return buffer;
 	case 0:	//fastturb
 		return (
 			"{\n"
@@ -7059,10 +7076,11 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 		);
 	default:
 	case 1:	//vanilla style
-		Q_snprintfz(buffer, buffersize, 
+		Q_snprintfz(buffer, buffersize,
 				"{\n"
 					"surfaceparm nodlight\n"
 					"surfaceparm nomarks\n"
+					"%s"
 					"if %g < 1\n"
 						"sort underwater\n"
 					"endif\n"
@@ -7077,7 +7095,7 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 					"}\n"
 					"surfaceparm hasdiffuse\n"
 				"}\n"
-				, alpha, (explicitalpha||alpha==1)?"":va("#ALPHA=%g",alpha), alpha, alpha);
+				, deform, alpha, (explicitalpha||alpha==1)?"":va("#ALPHA=%g",alpha), alpha, alpha);
 		return buffer;
 	case 2:	//refraction of the underwater surface, with a fresnel
 		return (
