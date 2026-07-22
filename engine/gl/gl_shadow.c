@@ -153,9 +153,9 @@ static cvar_t r_shadows_slots_debug			= CVARD("r_shadows_slots_debug", "0", "Pri
 //CVAR_SHADERSYSTEM for the same reason as r_shadows_slots: it sets FAKESHADOWS_COUNT (array sizes).
 #define SH_MAX_CASCADES 4	/*the sun-cascade cell grid (Sh_CascadeCellRect) is 2x2 = four cells*/
 cvar_t r_shadows_cascades					= CVARFD("r_shadows_cascades", "1", CVAR_SHADERSYSTEM, "r_shadows 2 sun cascade count (only when r_shadows_slots is 1). 1 = classic single map. 2-4 = sharp near shadows AND long range; the near cascade packs many more texels per qu than the single map. Ignored while r_shadows_slots > 1.");
-static cvar_t r_shadows_cascade_dist		= CVARD("r_shadows_cascade_dist", "4096", "How far (qu) the OUTERMOST sun cascade reaches ahead of the view. The near cascades subdivide the space up to here; bigger = longer shadow range but each cascade covers more ground (less dense).");
-static cvar_t r_shadows_cascade_lambda		= CVARD("r_shadows_cascade_lambda", "0.85", "PSSM split weighting [0..1]. 1 = purely logarithmic splits (max near-field density, CS2 default); 0 = uniform-depth splits. Higher pulls texel density toward the camera.");
-static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "Print each sun cascade's split distance, box radius and texel density (texels/qu) once per second. Use it to confirm the near cascade is actually denser than the single map.");
+static cvar_t r_shadows_cascade_dist		= CVARD("r_shadows_cascade_dist", "2048", "Radius (qu) of the OUTERMOST sun cascade around the camera. Inner cascades are r_shadows_cascade_ratio smaller each; bigger = longer shadow range but each cascade covers more ground (less dense).");
+static cvar_t r_shadows_cascade_ratio		= CVARD("r_shadows_cascade_ratio", "3", "Size step between adjacent sun cascades: each inner cascade is 1/this the radius of the next one out. Higher = a tighter/denser near cascade but a bigger jump in resolution between cascades.");
+static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "Print each sun cascade's radius and texel density (texels/qu) once per second. Use it to confirm the near cascade is actually denser than the single map.");
 //---------------------------------------------------------------------------------------------------
 
 static void Sh_DrawEntLighting(dlight_t *light, vec3_t colour, qbyte *pvs);
@@ -3525,22 +3525,20 @@ static void Sh_CascadeCellRect(int idx, int n, int txsize, int *ox, int *oy, int
 	*oy = (idx & 2) ? h : 0;
 }
 
-//PSSM split: blend a logarithmic split (dense near field) with a uniform one, weighted by lambda.
-//k in [0,n] -> a distance in [nearp, farp].  lambda 1 = pure log (CS2's choice), 0 = pure uniform.
-static float Sh_CascadeSplit(int k, int n, float nearp, float farp, float lambda)
-{
-	float f = (float)k / (float)n;
-	float clog = nearp * pow(farp/nearp, f);
-	float clin = nearp + (farp - nearp) * f;
-	return lambda*clog + (1.0f-lambda)*clin;
-}
-
-//Render N nested SUN cascades, one per view-depth slice, into cells of ONE texture.  Built on the same
-//one-Begin, per-cell-viewport skeleton as Sh_GenerateFakeShadowsAtlas (BeginShadowMap clears the whole
-//texture, so it must be called once).  The two differences from the direction atlas are the whole point:
-//  - every cell is the SAME sun direction (l->axis unchanged across the loop), fitted to a frustum slice;
+//Render N nested SUN cascades into cells of ONE texture.  Built on the same one-Begin, per-cell-viewport
+//skeleton as Sh_GenerateFakeShadowsAtlas (BeginShadowMap clears the whole texture, so it must be called
+//once).  The differences from the direction atlas are the whole point:
+//  - every cell is the SAME sun direction (l->axis unchanged across the loop);
 //  - fs_curslot stays -1, so Sh_FakeShadowFilter admits EVERY caster into EVERY cascade -- a caster near
 //    the view straddles cascades and must appear in each, unlike a direction slot it belongs to just one.
+//
+//CONCENTRIC, CAMERA-CENTRED (not view-frustum fitted).  An earlier version centred each cascade AHEAD of
+//the camera along vpn and fitted it to a frustum slice.  That made the cascade boxes -- and so the boundary
+//between them -- SWING with the view DIRECTION: rotating the camera (not even moving) slid the shadows and
+//the far, huge cascade whipped around, which read as "shadows move when I look around, corrupt at 3+".  The
+//fix is to centre every cascade on the camera POSITION with geometrically growing radii.  Rotating no longer
+//moves anything (r_origin is rotation-independent); only walking does, and the whole-texel snap keeps that
+//shimmer-free.  The near box is small = dense; each outer box is `ratio`x bigger, out to r_shadows_cascade_dist.
 static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 {
 	int inset = 16;	/*same proven margin as the direction atlas: wider than the PCF tap radius so cells can't bleed*/
@@ -3553,8 +3551,7 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 	uploadfmt_t fmt;
 	vec4_t cell;
 	vec3_t sundir;
-	float nearp, farp, lambda;
-	float tx, ty;
+	float outer, ratio;
 	static int dbgframe;
 	qboolean dbg = r_shadows_cascade_debug.ival && ((dbgframe++ % 60) == 0);
 
@@ -3572,11 +3569,8 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		fmt = PTI_DEPTH16;
 
 	VectorCopy(l->axis[0], sundir);	/*the throw direction the caller set up; every cascade uses it*/
-	nearp  = 8.0f;					/*cascade 0 starts effectively at the camera*/
-	farp   = max(nearp*2.0f, r_shadows_cascade_dist.value);
-	lambda = bound(0.0f, r_shadows_cascade_lambda.value, 1.0f);
-	tx = tan(r_refdef.fov_x * (M_PI/360.0));	/*fov_x is the FULL angle in degrees; /2 for the half, /180 for rad*/
-	ty = tan(r_refdef.fov_y * (M_PI/360.0));
+	outer = max(64.0f, r_shadows_cascade_dist.value);	/*radius of the OUTERMOST (last) cascade*/
+	ratio = bound(1.5f, r_shadows_cascade_ratio.value, 8.0f);	/*each inner cascade is 1/ratio the next one out*/
 
 	memcpy(oprojs, r_refdef.m_projection_std,  sizeof(oprojs));
 	memcpy(oprojv, r_refdef.m_projection_view, sizeof(oprojv));
@@ -3601,40 +3595,24 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 
 	for (s = 0; s < cascades; s++)
 	{
-		vec3_t centre, corner;
-		float dn, df, radius, r;
-		int j;
+		float radius;
 
 		Sh_CascadeCellRect(s, cascades, txsize, &cx, &cy, &csize);
 		smsize = csize - 2*inset;
 		if (smsize < 16)
 			continue;
 
-		//this cascade's view-depth slice [dn,df] and its world-space bounding sphere.
-		dn = (s == 0) ? nearp : Sh_CascadeSplit(s,   cascades, nearp, farp, lambda);
-		df =                    Sh_CascadeSplit(s+1, cascades, nearp, farp, lambda);
-		//the 8 slice corners are symmetric about the view axis, so their mean is on it at (dn+df)/2.
-		VectorMA(r_origin, (dn+df)*0.5f, vpn, centre);
-		radius = 0;
-		for (j = 0; j < 8; j++)
-		{
-			float d  = (j & 1) ? df : dn;
-			float sx = (j & 2) ? 1.0f : -1.0f;
-			float sy = (j & 4) ? 1.0f : -1.0f;
-			VectorMA(r_origin, d,        vpn,    corner);
-			VectorMA(corner,   sx*d*tx,  vright, corner);
-			VectorMA(corner,   sy*d*ty,  vup,    corner);
-			r = sqrt((corner[0]-centre[0])*(corner[0]-centre[0])
-			       + (corner[1]-centre[1])*(corner[1]-centre[1])
-			       + (corner[2]-centre[2])*(corner[2]-centre[2]));
-			if (r > radius) radius = r;
-		}
-		if (radius < 1.0f) radius = 1.0f;
+		//concentric radius: the last cascade is `outer`, each inner one 1/ratio of the next.  So cascade
+		//s has radius outer / ratio^(cascades-1-s) -- geometric from a tight near box to the full reach.
+		radius = outer / (float)pow(ratio, (double)(cascades-1-s));
+		if (radius < 16.0f) radius = 16.0f;
 
 		l->radius = radius;
-		//whole-texel snap on the fitted centre -- same crawl-killer as the fitted lamp cells.  The lattice
-		//pitch is 2*radius/smsize (this CELL's extent), so it MUST use smsize not txsize.
-		Sh_OrthoAlignToPoint(l, centre, smsize);
+		//CENTRE ON THE CAMERA, not ahead of it: the box then does not move when the view rotates (only when
+		//it translates), which is what kills the "shadows swing when I look around" the frustum fit caused.
+		//Whole-texel snap on r_origin -- same crawl-killer as the fitted lamp cells.  The lattice pitch is
+		//2*radius/smsize (this CELL's extent), so it MUST use smsize not txsize.
+		Sh_OrthoAlignToPoint(l, r_origin, smsize);
 
 		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -l->radius, l->radius);
 		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
@@ -3657,8 +3635,8 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
 
 		if (dbg)
-			Con_Printf("^5cascade %i: depth %.0f..%.0f qu  radius %.0f  %.2f texels/qu\n",
-				s, dn, df, radius, smsize/(2.0f*radius));
+			Con_Printf("^5cascade %i: radius %.0f qu (concentric)  %.2f texels/qu\n",
+				s, radius, smsize/(2.0f*radius));
 	}
 	sh_fakecell_active = false;
 
@@ -5299,7 +5277,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_slots_debug,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascades,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_dist,				REALTIMELIGHTING);
-	Cvar_Register (&r_shadows_cascade_lambda,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_cascade_ratio,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_debug,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping_depthbits,	REALTIMELIGHTING);
 #endif

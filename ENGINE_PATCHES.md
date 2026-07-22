@@ -3242,3 +3242,31 @@ single map's ~1900. **Known limitation:** depth range is symmetric with the (tig
 `GLBE_SelectDLight`'s shared ORTHO branch, so a distant tall occluder's long shadow at a grazing sun can
 weaken in the innermost cascade (the occluder is outside its box). Not visible on a high sun; the fix is a
 toward-light Z-extend, deferred so the shared ortho path isn't changed on an untested premise.
+
+### Patch 114a — concentric camera-centred cascades + cross-fade + ambient tint (the "shadows swing when I look around" fix)
+
+The first cut fitted each cascade to a **view-frustum slice** (centre `r_origin + vpn*(dn+df)/2`, radius from
+a bounding sphere of the slice corners).  In an FPS that was wrong: the boxes — and the boundary between them
+— **swung with the view DIRECTION**, so merely *rotating* the camera slid the shadows across the world and the
+huge far cascade whipped around ("shadows move when I look around, corrupt at 3+").  User-reported, correct.
+
+**Fix: concentric, camera-centred cascades.** Every cascade is now centred on the camera POSITION (`r_origin`)
+with a geometric radius progression — cascade `s` has radius `outer / ratio^(cascades-1-s)`, so the outermost
+is `r_shadows_cascade_dist` and each inner one is `1/ratio` of it.  Rotating no longer moves anything
+(`r_origin` is rotation-independent); only translating does, and the Patch-106 whole-texel snap keeps that
+shimmer-free.  The frustum-slice fit, its fov/bounding-sphere math, `Sh_CascadeSplit`, and
+`r_shadows_cascade_lambda` are all gone; `r_shadows_cascade_dist` default dropped 4096→**2048** and a new
+`r_shadows_cascade_ratio` (default 3) tunes the size step.
+
+Measured on fy_killzone (res 4096, 3 cascades): radii **228 / 683 / 2048 qu** at **4.43 / 1.48 / 0.49
+texels/qu** — near field now *sharper* than the frustum fit's 2.89, far cascade up from 0.19 (5.3 qu/texel) to
+0.49 (2 qu/texel), and none of it swims under rotation.
+
+**Also folded into the shaders** (loose `defaultwall.glsl` / `defaultskin.glsl`, no rebuild):
+- **Cross-fade** between adjacent cascades (`r_shadows_cascade_blend`, default 0.8): the outer band of each
+  cascade lerps into the next wider one via `cascade_shadow()` helper — kills the hard resolution seam that
+  showed as a "cutoff" at cascade boundaries.
+- **Ambient shadow tint** (`r_shadows_color_r/g/b`, default 0.5 grey = the old scalar floor): a fully-shadowed
+  world pixel is multiplied by this colour, so shadows can sink toward the sky/ambient colour instead of dead
+  grey.  Driven per-map by the new `env_sun "shadowcolor"` key (nettest `sv_env_sun.qc`, which stuffs the
+  cvars — CVAR_SHADERSYSTEM auto-flush, no vid_reload).  Replaces the scalar `r_shadows_floor` from 114.
