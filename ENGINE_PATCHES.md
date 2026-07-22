@@ -2873,3 +2873,372 @@ the Patch 94 ladder's *result* (killing its repetition, not its outcome).
 **Ship:** `r_modellight_cache` default **1**; `0` = engine default (re-sample every frame) for instant A/B;
 `2` = validate. Client render only — m-rel; no sv-rel, progs, or protocol impact. No struct-ABI risk (nothing
 the physics/hl2/cod plugins read — cf. Patch 101a).
+
+## Patch 106 — r_shadows 2 shadow-edge shimmer: whole-texel snap (was ¼-texel)  *(APPLIED — m-rel)*
+
+**Symptom:** r_shadows 2 fake-sun shadows (incl. model self-shadow) shimmer/crawl along their edges when
+the camera ROTATES, and worse at higher `r_shadows_distance`.
+
+**Cause.** `Sh_OrthoAlignToFrustum` (`gl/gl_shadow.c`) DOES texel-snap the ortho shadow origin — the frustum
+follows the camera (`neworg = r_origin + (radius/3)*vpn − focus`), so without snapping it slides sub-texel
+each frame. But the snap grid was **`dl->radius/(smsize*2)`**, i.e. a QUARTER of a texel: the ortho projection
+spans `-radius..+radius = 2*radius` world units over `smsize` texels (`gl_backend.c` LSHADER_ORTHO block:
+`xmin=-radius, xmax=+radius`; `ShadowmapCoord = (ndc+1)*0.5`), so one texel is **`2*radius/smsize`** and the
+grid was `texel/4`. Snapping to a quarter-texel lattice leaves a world point's fractional texel position free
+to land on {0,¼,½,¾}, so the depth-compare boundary steps as the frustum swings → edges crawl. Scales with
+`r_shadows_distance` twice: coarser texels AND a bigger `radius/3` centre swing.
+
+**Fix (one line, `gl_shadow.c` `Sh_OrthoAlignToFrustum`):** `scale = dl->radius/(smsize*2)` →
+`scale = 2.0*dl->radius/smsize` (whole texel). Every world point now hashes to the same texel every frame
+regardless of the camera-follow swing → the crawl is gone, zero quality loss. The depth-axis (`axis[0]`) snap
+in the same loop is a provable no-op (a translation along the light dir cancels in the light-space depth
+compare), so all three axes can stay snapped; the transverse axes are the ones that matter. Also removed the
+stale `//there's 1 sample every dl->radius/(smsize*2)` comment (the off-by-4). The shared function's other
+caller (static ORTHO rtlight, `gl_shadow.c` ~4374, passes `SHADOWMAP_SIZE`) uses the identical `2*radius`
+ortho, so the fix is correct there too (and that path is currently unused).
+
+**Residual levers (NOT changed):** `r_shadows_res` (mod 4096) ↑ / `r_shadows_distance` (mod 2048) ↓ shrink
+world-per-texel for crisper edges; `r_glsl_pcf` is a 3×3 hardware PCF capped at 9 (can't widen via cvar — the
+built-in `sys/pcf.h` from `glsl_hdrs[]` wins over any gamedir copy). Client render only — m-rel; no sv-rel,
+progs, or protocol impact.
+
+## Patch 107 — per-entity "don't RECEIVE the fake-sun shadow" (prop_static "Don't Self-Shadow" flag)  *(APPLIED — m-rel)*
+
+**Goal:** let a specific model opt OUT of self-shadowing (being darkened by the r_shadows 2 sun map) while
+still CASTING its shadow normally. Used by a new prop_static/prop_detail spawnflag 64 "Don't Self-Shadow".
+
+**Why it's a per-entity RECEIVE toggle, not a cast toggle.** r_shadows 2 is a SINGLE shared ortho depth map;
+a model is either in it (casts on world + others + self) or not (`RF_NOSHADOW` / flag 16 = casts on nothing —
+and can't self-shadow, its geometry isn't in the map). The map has no caster identity, so "cast on the world
+but not on itself" is impossible. But the RECEIVE side (whether a model SAMPLES the map — the
+`MODEL_SELFSHADOW` term in the gamedir `defaultskin.glsl`) IS per-entity, via the P104 `e_noshadowrecv`
+uniform. This patch adds a second driver for that uniform.
+
+**Reuses P104.** `e_noshadowrecv` (uploaded in `gl_backend.c` `SP_E_NOSHADOWRECV`) already suppresses the
+self-shadow term for the viewmodel. Extended to also fire on a new render flag `RF_NOSHADOWRECV`.
+
+- `common/protocol.h` — `#define RF_NOSHADOWRECV (1u<<23)` (internal render flag; the retired
+  Q2EXRF_BLOB_SHADOW slot, unused. NOT networked as an entity flag — set fresh by the CSQC→render copy).
+- `common/pr_common.h` — `#define CSQCRF_NOSELFSHADOW 2048` (was the `//CSQCRF_UNUSED 2048` placeholder). This
+  is the QC-facing `.renderflags` bit.
+- `client/pr_csqc.c` (~797, the CSQCRF→RF mapping block) — `if (rflags & CSQCRF_NOSELFSHADOW) out->flags |=
+  RF_NOSHADOWRECV;`. **CSQC `.renderflags` is FILTERED, not passed through** — only known `CSQCRF_*` bits map
+  to `RF_*`, so a raw high bit would be ignored; this mapping line is mandatory.
+- `gl/gl_backend.c` `SP_E_NOSHADOWRECV` — now `supp = (flags & RF_NOSHADOWRECV) ? 1 : 0; if (RF_WEAPONMODEL &&
+  !r_shadows_viewmodel) supp = 1;`. Fail-safe polarity preserved (unbound uniform reads 0 = normal receive).
+
+**Mod side (QC + FGD).** `cl_defs.qc` `RF_NOSELFSHADOW = 2048`. `sv_props.qc` `PROP_NOSELFSHADOW = 64`;
+`predprop_Send`'s shadow byte became a FLAGS byte (bit1 NOSHADOW / bit2 NOSELFSHADOW — same wire size),
+`CSQC_PredProp_Update` reads it and sets `self.renderflags` RF_NOSHADOW / RF_NOSELFSHADOW. FGD flag 64 on
+prop_static + prop_detail.
+
+**LIMITATION — needs Predicted collision (flag 8).** Only the CSQC-mirror wire (`predprop_Send`) carries the
+bit. A standard-net prop can't: the entity delta networks only 16 bits of effects (U_EFFECTS + U_EFFECTS16,
+`sv_ents.c`) and there is no free EF bit below 1<<16 (1<<19 EF_UNUSED19 is the first free one, out of range).
+So flag 64 no-ops without flag 8 — labelled so in the FGD. (Hero props you'd tune shadows on are predicted
+anyway.) Client render + CSQC only — m-rel; the QC half needs a progs rebuild + reconnect.
+
+## Patch 108 — per-entity dominant-light sun-shade (`e_sundir`)  *(APPLIED — m-rel)*
+
+**Goal:** Source-style dominant-light model shading — a prop beside a lamp shades toward THAT lamp; one out in
+the open shades toward the sun. Previously the sun form-shade (`r_shadows_sunshade`) used ONE global direction
+(`e_fakesundir`, a compile-time `#define` from `r_sun_dir`) for every model on the map.
+
+**Also a correctness fix.** Models were already *lit* per-entity (the shader's lambert uses `e_light_dir`, a
+per-entity deluxemap sample) but *shaded* by the global sun — the two could point different ways, so a prop was
+lit from one side and shaded from another. Now they agree.
+
+**New per-entity uniform `e_sundir`** (world space, pointing TOWARD the light) — same 4 touch points as the
+`e_noshadowrecv` precedent (P104/P107):
+- `gl/shader.h` — `SP_E_SUNDIR` in the ent-properties enum.
+- `gl/gl_shader.c` — `{"e_sundir", SP_E_SUNDIR}` in `shader_unif_names` (walked by `GLSlang_ProgAutoFields`, so
+  a plain `uniform vec3 e_sundir;` in the gamedir GLSL binds it — no `sys/defs.h` change).
+- `gl/gl_backend.c` — the upload case (next to `SP_E_NOSHADOWRECV`).
+- `d3d/d3d_backend.c` + `d3d/d3d8_backend.c` — added to the ignored-parm fallthrough (silences `-Wswitch`).
+
+**RECONSTRUCTED, not stored — deliberately no new `entity_t` field.** `gl_alias.c` writes `e->light_dir` as the
+world direction PROJECTED onto the entity's orthonormal axes (`light_dir[i] = DotProduct(worlddir, e->axis[i])`),
+so the backend inverts it: `world = axis[0]*ld[0] + axis[1]*ld[1] + axis[2]*ld[2]`, normalized. Adding a field
+to `entity_t` would be a **plugin struct-ABI hazard** (the prebuilt hl2/cod plugins reach it via
+`NewSceneEntity`) — see the append-only rule at the top of this file.
+
+**Fallback to the global `r_sun_dir` when there is no per-entity information:**
+- `cl.worldmodel->deluxdata == NULL` (map compiled without `.lux`/`LIGHTINGDIR`) — `LightPointValues` would
+  otherwise return a CONSTANT `normalize(1,0,1)`, which looks worse than the sun. So un-relit maps are
+  **byte-identical to before** (zero regression).
+- `RF_WEAPONMODEL` — that branch (`gl_alias.c` ~:1826) transforms through the VIEW basis first, so the plain
+  inverse doesn't apply.
+- Degenerate sample (`VectorNormalize` returns 0).
+
+**Freshness is free.** `R_CalcModelLighting`'s sample is cached per entity and the Patch-105 cache **validates
+on origin** (exact `VectorEquals`) — a `prop_static` hits the cache forever, a rolling `prop_physics` misses and
+re-samples every frame. No think-hook, no networking, no QC.
+
+**Gamedir side** (`nettest/glsl/defaultskin.glsl`, `vid_reload`): declares `uniform vec3 e_sundir`, and the
+form-shade direction becomes `mix(global_sun, e_sundir, r_shadows_sunshade_perprop)` with **two NaN guards** (an
+unbound uniform reads `(0,0,0)`; and a partial blend of two near-opposite directions can cancel to zero — both
+fall back to the sun). New knob `r_shadows_sunshade_perprop` (cvardf, default 1; **0 = exactly the old
+global-sun look**, for instant A/B). Polarity matches: `e_light_dir` is *toward* the light (the lambert at ~:135
+uses `+e_light_dir`), same convention as `r_sun_dir`. Do NOT copy the PBR branch (~:453), which uses
+`-e_light_dir`.
+
+**PREREQUISITE — the map needs a deluxemap.** Compile with `light -bspxlux`. Present today on: `2fort`,
+`fy_killzone`, `normals`, `notnormals`, `parkour`, `surf_testramps`. **NOT** on `notnormals_shadowtest` or the
+CS/Source imports — those keep the global sun until relit.
+
+**Scope:** shading only. Per-prop CAST (ground) shadow direction remains impossible — `Sh_GenerateFakeShadows`
+builds one light, one ortho frustum, one depth map and one `l_cubematrix`; one map = one direction by
+construction. Client render only — m-rel; no sv-rel, progs, or protocol impact.
+
+## Patch 109 — deluxemap light direction decoded in the WRONG SPACE + inverted (`r_modellight_worlddir`)  *(APPLIED — m-rel)*
+
+**Symptom that exposed it:** with P108's per-prop sun-shade live (and `r_shadows_sunshade_ceil 4` amplifying
+4x), "the top of all the props is dark, and the sides are well lit" on deluxemapped maps.
+
+**Root cause — a ~2010 upstream bug, NOT a P108 regression.** Both bakers store the deluxel as
+`(dot(L,svector), dot(L,tvector), dot(L,facenormal))` with **L pointing TOWARD the light**, in the face's
+**TANGENT** basis — FTE's own `gl/ltface.c` (~:980, basis ~:911) and ericw-tools `light/write.cc` (~:452,
+basis `ltface.cc:690`). `GLQ1BSP_LightPointValues` (`gl/gl_rlight.c` ~:3483) consumed those tangent
+coefficients as if they were **world x/y/z**, and additionally **negated the third**:
+```c
+res_dir[0] = r[3];  res_dir[1] = r[4];  res_dir[2] = -r[5];
+```
+The model light sample traces straight DOWN (`gl_alias.c` ~:1418 samples origin+24), so the hit face is
+almost always a **floor** => `facenormal = +Z`. An overhead light bakes to `(0,0,+1)` => decodes to
+**`(0,0,-1)` = straight DOWN**. So on every deluxemapped map, model lighting has always been **lit from
+below**, with a **scrambled azimuth** on rotated/sloped faces (s/t are texture axes, not world X/Y). It was
+invisible in the additive lambert and only became glaring once the sun-shade amplified it.
+
+**Fix:** rotate the deluxel into world space with the real face basis at the sample site — the only place
+`surf` is in scope (`GLRecursiveLightPoint3C`, before `return l;`): `world = s*l[3] + (-t)*l[4] + n*l[5]`
+(**+l[5]**, no negation), using `surf->texinfo->vecs` (ericw derives s/t from texinfo even on DECOUPLED_LM
+faces) and `surf->plane->normal` with `SURF_PLANEBACK` handled. Rejected if it ends up facing behind the
+sampled face. Carried to the consumer in file-scope `lightpoint_worlddir`/`_ok` — both are inside ONE
+synchronous `LightPointValues` call, so **no per-entity storage is needed**, which matters because
+`entity_t` is plugin-visible (`plugins/plugin.h`, hl2/cod build `entity_t` arrays with their own compiled
+`sizeof`) so appending a field would be the Patch-101a stride/ABI hazard. Cleared at function entry so a
+miss can't leak a stale direction. Gated by **`r_modellight_worlddir`** (default 1; 0 = legacy decode).
+
+**REQUIRED companion shader change** (`nettest/glsl/defaultskin.glsl`): `e_light_dir` is consumed with TWO
+OPPOSITE conventions — the lambert (~:142/:145) treats it as toward-light (was therefore the broken half),
+while the PBR branch passed `-e_light_dir` (~:477) and gloss used `- e_light_dir` (~:479), which were
+**accidentally correct** because the decode was inverted. `DoPBR`'s 3rd arg is toward-light (its body does
+`dot(n,l)` clamped positive; `defaultwall.glsl`/`rtlight.glsl` both pass theirs unnegated). With the decode
+fixed, those two negations MUST be dropped or specular lights from underneath. Both flipped in the same
+change. `r_modellight_worlddir 0` restores both legacy halves together.
+
+**Blast radius:** model lighting on deluxemapped maps only (`2fort`, `fy_killzone`, `normals`, `notnormals`,
+`parkour`, `surf_testramps`); maps without a `.lux` never reach this code. The change is a *correction* —
+models stop being lit from below — but it is a visible change, hence the revert cvar. Client render only.
+
+## Patch 110 — per-prop cast shadow directions: the N-slot fake-shadow atlas (`r_shadows_slots`)  *(APPLIED — m-rel)*
+
+`r_shadows 2` renders every caster into ONE ortho depth map (`gl_shadow.c` `static dlight_t r_fakelight`,
+one `l_cubematrix`, `shadowmap[2]`). An orthographic projection **is** a single parallel direction, so the
+whole world's shadows fall the same way. After Patch 108/109 made model *shading* per-prop, a barrel beside
+a lamp was **shaded** by the lamp but **shadowed** along the sun. This closes that gap: the depth map is
+split into N cells, each rendered from a different dominant-light direction, with every caster assigned to
+exactly ONE cell.
+
+**This is Patch 93 revived, and the reason it died is now fixed.** P93 built the same atlas; P95 deleted it
+because slot assignment came from a QC registry fed by `BlobShadow_Emit` — `prop_static` has no CSQC predraw
+and settled physics props unhook theirs, so static props never registered and were rendered into whatever
+*moving* caster's box covered them, inheriting the player's angle (see the P93 REDESIGN 3 addendum). Patch
+108's per-entity deluxemap direction removes the registry entirely. The P93 C code is **not in git** (add and
+remove never hit a committed tree) and was rewritten; the shader half survived in `glsl/retired/`.
+
+- `gl/gl_alias.c` — new **`R_EntityDominantLightDir`** (decl `client/render.h`): reconstructs an entity's
+  world-space dominant light dir from `light_dir` × `axis[]`. `SP_E_SUNDIR` now calls it too, so a prop's
+  SHADE direction and its CAST direction cannot drift apart. Takes a `const entity_t*` and casts internally
+  — the `R_CalcModelLighting` call it makes is pure memoisation (the renderer performs that same fill
+  moments later in `R_GAlias_DrawBatch`). **That call is load-bearing:** `light_dir` is filled at DRAW time
+  and `CL_LinkPacketEntities` clears `light_known` every frame, so the bucketer (which runs at the top of
+  `GLBE_DrawWorld`) would otherwise read LAST frame's value left in that `cl_visedicts` slot.
+  Also the per-slot caster filter in `BE_GenModelBatches`, placed after the `dl->key` test and **before**
+  `EdictInFatPVS` so rejects skip the PVS walk.
+- `gl/gl_shadow.c` — cvars `r_shadows_slots` (1..8, default **1**, CVAR_SHADERSYSTEM), `_hyst` (1.5),
+  `_pcf` (4), `_debug`. `Sh_DirBucketId`/`Sh_BucketIdToDir` over a fixed 16×4 equal-area lattice (64 ids,
+  ~13° half-angle) — a bucket's representative is the lattice cell **centre, never the mean of its members**
+  (a mean drifts as members join/leave and props chase it). `Sh_FakeShadowChooseSlots` histograms visible
+  casters, drops anything within 20° of the sun (slot 0 serves those), and assigns slots with hysteresis +
+  a 30-frame idle timer. `Sh_FakeShadowFilter` + `Sh_GenerateFakeShadowsAtlas`, and the `sh_fakecell_*`
+  viewport override in `Sh_GenShadowFace`.
+- `gl/gl_backend.c` — `fakeshadowmatrix[8][16]`/`fakeshadowcell[8]`/`fakeshadowcount`,
+  `SP_FAKESHADOWMATRIX`/`SP_FAKESHADOWCELL` uploads (model-composed like `SP_LIGHTCUBEMATRIX`),
+  `GLBE_SetFakeShadowCount`/`CaptureFakeShadowSlot`/`ClearFakeShadowSlot`.
+- `gl/gl_shader.c` — `FAKESHADOWS_COUNT` define emission; **four** uniform-name rows (both the bare and the
+  `[0]` spelling of each array — the binder does a literal `glGetUniformLocation` with no name normalisation
+  and drivers disagree about which form of an array's element 0 resolves; registering both guarantees a hit,
+  and a driver that resolves both merely uploads twice with identical data).
+- `gl/shader.h`, `d3d/d3d_backend.c`, `d3d/d3d8_backend.c` — enum + `-Wswitch` fallthroughs.
+- Gamedir GLSL — `nettest/glsl/defaultwall.glsl` **restored as an override** (a fresh copy of today's baked
+  shader plus the three multi blocks, so upstream changes since P93 are picked up) and `defaultskin.glsl`.
+  ONE sampler with N cells, never N samplers: `defaultwall`'s worst case is already 15 of 16 TMUs.
+
+**Traps preserved from P93** (all four cost real debugging time the first time):
+1. `GLBE_SelectDLight` MUST run per slot before `Sh_GenShadowFace` — it sets `shaderstate.curdlight`, which
+   the BEM_DEPTHONLY batcher dereferences (`ent->keynum == dl->key`). NULL deref otherwise.
+2. `GL_ViewportUpdate` flips `pxrect.y` to GL bottom-origin. The legacy path centres its region so the flip
+   is invisible; **asymmetric atlas cells are not** — the cell uniform's v-offset must be the cell's BOTTOM
+   edge, or every cell samples the empty half and there are NO shadows at any count > 1.
+3. Exactly ONE `GLBE_BeginShadowMap` — it clears the WHOLE texture, so per-slot Begins wipe earlier cells.
+   (This is why the atlas cannot be built on `Sh_GenShadowMap`, which does its own Begin/End.)
+4. Every slot stays ORTHO. Perspective/spot never lined up with the ortho-tuned consumption shader.
+   Slot matrices are **snapshotted** out of `GLBE_SelectDLight` rather than rebuilt, so they cannot disagree.
+
+**Two things the retired shader got wrong and this one fixes:** it predated Patch 97, reimplementing PCF
+inline without the `r_shadows_throwfade` contact-gap fade (restoring it verbatim would have silently
+regressed through-floor leaking at N>1) — added per cell; and the multi path is gated `!TESS`, because it
+needs an ARRAY varying and FTE's tessellation varying-collection was never verified to handle those.
+
+**Models need no per-slot uniform.** A model renders into exactly one cell, so it self-shadows there (now
+from the light that actually lights it, not always the sun) and is merely absent from foreign cells, where
+it still correctly RECEIVES others' shadows. Strictly more correct than the single map, not a compromise.
+
+**Cost.** CPU is fine — triangle work is constant (each caster renders once); +0.1–0.3 ms at N=4. GPU is the
+real price: all N boxes are view-centred with the same radius, so a visible pixel is inside essentially all
+of them and the `fd < 1.0` early-out buys nothing. N=4 at uniform 9-tap = 40 shadow taps per world pixel vs
+10 (4×); `r_shadows_slots_pcf 4` drops that to 25 (2.5×). `r_shadows_res` is the WHOLE texture and the grid
+subdivides it, so N≤4 → 2×2 → 992² per cell from 2048² — sharpness halves. **Not auto-scaled** (a silent
+jump to 4096 is 32–64 MB); the tested "on" setting is `r_shadows_slots 4` + `r_shadows_res 4096` ≈ today's
+density. N=3 is pointless (the grid is 2×2 either way).
+
+**Default `r_shadows_slots 1` = byte-identical to before this patch** — the legacy single path is untouched
+and the shaders keep a verbatim `#if FAKESHADOWS_COUNT < 2` branch, so it is the same compiled code, not
+merely the same value. Needs a deluxemap: without one every entity falls back to the sun, every bucket
+collapses into slot 0, and the bucketer returns 1 (legacy path) — correct and free, but the feature does
+nothing. Only `2fort`, `fy_killzone`, `normals`, `notnormals`, `parkour`, `surf_testramps` have `.lux`.
+An outdoor map correctly collapses to 1 slot too: every prop genuinely points at the sun.
+
+Client render only — m-rel; no sv-rel, progs, or protocol impact. GL-only (the atlas branch is
+`qrenderer == QR_OPENGL`; other backends take the legacy single path).
+
+### Patch 110a — fitted cells + eased directions (the "snappy / lower res" follow-up)
+
+First cut shipped with two flaws the user caught immediately: shadows **snapped** between directions
+instead of gliding like the sunshade, and the map looked **lower-res**. Both were design errors, not bugs.
+
+**Snapping — the lattice was doing two jobs.** The 16×4 direction lattice was used both to ASSIGN props to
+cells *and* as the direction actually rendered (`Sh_BucketIdToDir` = the cell centre). That makes the cast
+direction one of only 64 fixed vectors, so a prop crossing a lattice boundary jumped ~26° in a frame, while
+`e_sundir` (which shades it) moved continuously. Split the two jobs: the lattice still decides membership —
+that is what keeps a static prop's assignment bit-constant, the property whose absence killed P93 — but the
+**rendered direction is now the running mean of the cell's actual members**, eased with a frame-rate
+independent exponential (`r_shadows_slots_smooth`, default 0.25s). Continuous direction, stable membership.
+
+**Resolution — every cell was covering the whole world.** All slots used the shared view-sized box
+(`r_shadows_distance`), so a cell holding 3 props spent its texels on the same 4096-unit volume as the cell
+holding 52. Now each non-sun cell's ortho box is **fitted to the bounds of its own members** plus
+`r_shadows_slots_margin` (the room the shadow needs to reach the floor), via a new `Sh_OrthoAlignToPoint`
+(view-INDEPENDENT, same whole-texel snap — a view-centred fitted box would swing the whole cell's shadows as
+the player walks, which is precisely how P93's per-light boxes failed). Measured on `parkour`: fitted cells
+land at **r354 against the sun's r2048**. Per-slot extents mean the ortho projection moves inside the loop.
+
+Two further consequences, both good: the shader's `fd < 1.0` box test now genuinely early-outs for pixels
+outside a small cell (the first cut had every cell covering the screen, so it never rejected anything), and
+the atlas layout became **uneven** — `Sh_FakeShadowCellRect` gives slot 0 a **3/4 × 3/4** cell (9× the area
+of the rest) with seven quarter-size cells tiling the remaining L. At `r_shadows_res 4096`: sun cell ≈ 0.74
+texels/world-unit vs 1.0 for a single full-texture map (so still ~26% softer — the honest residual), fitted
+cells ≈ 1.4 (**sharper than the original single map**). `MAX_FAKESHADOW_SLOTS` is 8 = what that layout holds.
+
+Also `r_shadows_slots_hyst` 1.5 → **2.5**: a cell changing owner moves every prop in it at once, so
+ownership should be stickier than the first cut assumed. New cvars in `data/default.cfg`.
+
+**Remaining hard limit, by construction:** with N cells a prop's cast direction can take only N values at
+any instant, so it can never be as continuous as per-pixel shading. Easing hides direction *changes*; it
+cannot make a prop's shadow interpolate between two cells. More slots = finer quantisation.
+
+## Patch 111 — QC field writes woke the whole Box3D contact island  *(APPLIED — plugins-rel NATIVE_PLUGINS=box3d)*
+
+**File:** `engine/common/com_phys_box3d.c` (the **box3d plugin**, not the exe — build with
+`make plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS=box3d`, per the note at `plugins/Makefile:271-280`.
+`make m-rel` does **not** compile this file; the exe relinks but the change is not in it.)
+
+**Symptom.** Two `prop_physics` floating on top of each other in water rose to the waterline, dropped back,
+and repeated on a ~0.7–1 s cycle indefinitely. Props resting in shallow water were spuriously woken and
+flung upward. Neither pile could ever go to sleep.
+
+**Cause.** `World_Box3D_Frame_BodyFromEntity` marks a body `modified` when **any** of origin / velocity /
+angles / avelocity / gravity differs from the last read-back (`:784-789`), and the push block then ended
+with an **unconditional** `b3Body_SetAwake(body, true)`. But `b3Body_SetAwake` wakes the **entire contact
+island** (`box3d-main/src/body.c:1965` → `b3WakeSolverSet`), resetting `sleepTime = 0` on every body
+touching this one. So a QC routine that merely zeroed a settled prop's velocity or switched its gravity
+off — i.e. precisely what a *"this has come to rest"* path does — woke every prop stacked on or under it.
+QC could never put a pile to rest: each prop settling re-woke its neighbours.
+
+**Fix.** Defer to Box3D's own setters, which already get this right — all three verified in
+`box3d-main/src/body.c`:
+
+| setter | wakes? | applies while asleep? |
+|---|---|---|
+| `SetLinearVelocity` / `SetAngularVelocity` | only for a **non-zero** value (`:1149`) | no — but the only write it drops is a *zero* write to an already-still body, a no-op |
+| `SetTransform` (`:1063`) | never | **yes** — goes through `b3GetBodySim`, not `b3GetBodyState` |
+| `SetGravityScale` (`:1931`) | never | **yes** — same |
+
+So the only case that must still force a wake is a **teleport**: QC moving or rotating a sleeping body has
+to re-evaluate its contacts, and `SetTransform` will not do that on its own. Added a `xformchanged` flag
+(set only by an origin/angles difference) and gated the `SetAwake` on it.
+
+**Why this is safe.** An earlier read of this claimed `SetTransform` is "silently discarded on a sleeping
+body", which would have meant `ed->rbe.*` diverging from the body whenever we skipped the wake. That is
+**wrong** — `SetTransform` and `SetGravityScale` both use `b3GetBodySim` and apply regardless of solver set,
+so the existing unconditional `ed->rbe.*` copy stays correct. Verified in the library source before patching.
+
+Kinematic player-push (`SOLID_SLIDEBOX`, `:831`), `RBECMD_ENABLE` and the ragdoll path keep their
+unconditional wakes — a player body must stay awake to shove props, and re-enabling a disabled body cannot
+work without it (`b3Body_SetAwake` is a no-op on `b3_disabledSet`, which is `< b3_firstSleepingSet`).
+
+Paired with the QC-side "silence rule" in `sv_physprop.qc`: while a prop is resting, QC writes **nothing**
+to it. The two together are what let a stacked pile of floating props actually settle.
+
+## Patch 114 — sun cascades: split `r_shadows 2` into view-depth cascades (`r_shadows_cascades`)  *(APPLIED — m-rel)*
+
+**Files:** `engine/gl/gl_shadow.c` (generation + cvars + first-frame NaN fix), `engine/gl/gl_shader.c`
+(`FAKESHADOWS_COUNT` / new `FAKESHADOWS_CASCADE` injection). Shader consumption is in the **loose gamedir**
+`nettest/glsl/defaultwall.glsl` + `defaultskin.glsl` (the MULTI path inlines its own sampling; `sys/pcf.h`
+is **not** involved and needs no rebuild). Client only — no shared struct touched, so no plugin/sv rebuild.
+
+**Problem.** The single `r_shadows 2` sun map spends its whole resolution on one view-sized ortho box, so a
+player 30 qu away and the skyline 1500 qu away share the same texel density (2.0 texels/qu at 4096²/1024,
+fading out ~1900 qu). That is "low-res up close AND short range" — the trade a single map can't escape.
+
+**Fix.** Split the SUN into N nested cascades fitted to successive view-depth slices. This **reuses P110's
+atlas plumbing wholesale** — the per-cell projection matrix (`fakeshadowmatrix[]`), cell rect
+(`fakeshadowcell[]`), and the shader's per-cell sample loop. Only the cell *contents* differ:
+
+- `Sh_GenerateCascadeAtlas` renders every cascade from the **same** sun direction, each fitted to a PSSM
+  frustum slice (`Sh_CascadeSplit`, λ = `r_shadows_cascade_lambda` 0.85 blends log/uniform splits) via a
+  world-space bounding sphere + the Patch-106 whole-texel snap (`Sh_OrthoAlignToPoint`). 2×2 equal cells
+  (`Sh_CascadeCellRect`), up to 4 cascades; near cascade's sharpness comes from its box **shrinking**, not
+  a bigger cell.
+- Every caster renders into **every** cascade (`fs_curslot` stays −1 → `Sh_FakeShadowFilter` passes all),
+  unlike a direction slot a caster belongs to exactly one of.
+- Shader (`FAKESHADOWS_CASCADE`): cascades are nested boxes of one sun, so a near pixel sits inside several.
+  The loop picks the **tightest** cascade that contains the pixel (densest data) and takes exactly one —
+  *not* the additive union the P110 direction path uses, which would triple-darken a near pixel's own
+  shadow. Inner cascades hand off at `fd 0.9` to the next (their outer 10 % overlaps it) so there is no lit
+  ring between cascades; only the outermost fades to lit at the true coverage edge.
+
+**Mutually exclusive with `r_shadows_slots`.** Slots re-key the cells by *direction*, cascades by *depth*;
+they can't both own the atlas. Slots win when > 1 (the opt-in lamp-shadow feature); cascades apply only at
+`slots == 1`. `cascades == 1` is the legacy single map, **bit-identical** (no `FAKESHADOWS_CASCADE`, count 1).
+
+**Also here (B4 part 1):** the shadow darkening floor is now `r_shadows_floor` (cvardf, cascade path;
+default 0.5 = the old hard `s*0.5+0.5`). SUNVIS (Patch 113-adjacent) now stops the double-darkening that
+floor guarded against, so it can be dialled down for punchier shadows. Models keep their existing
+`r_shadows_selfshadow_floor`.
+
+**First-frame NaN fix (folded in).** `Sh_GenerateFakeShadows` called `Sh_OrthoAlignToFrustum` (which divides
+by `scale = 2*radius/smsize`) **before** assigning `l->radius`. On frame 1 `r_fakelight` is static-zeroed →
+`radius 0` → `scale 0` → div-by-zero NaN origin that then defeated the cull. Radius is now set first.
+
+**Cvars:** `r_shadows_cascades` (CVAR_SHADERSYSTEM; 1 = off, 2–4), `r_shadows_cascade_dist` (4096; outermost
+reach), `r_shadows_cascade_lambda` (0.85), `r_shadows_cascade_debug` (per-cascade split/radius/texels-per-qu).
+
+**Verified (headless, fy_killzone, `r_shadows_res` 4096):** no crash, shaders compile clean, and the live
+debug shows the intended split — cascade 0: 8–260 qu, radius 349, **2.89 texels/qu**; cascade 1: 260–845 qu,
+0.92; cascade 2: 845–4096 qu, 0.19. Near field ~3× the far cascade's density and range out to 4096 vs the
+single map's ~1900. **Known limitation:** depth range is symmetric with the (tight) XY radius in
+`GLBE_SelectDLight`'s shared ORTHO branch, so a distant tall occluder's long shadow at a grazing sun can
+weaken in the innermost cascade (the occluder is outside its box). Not visible on a high sun; the fix is a
+toward-light Z-extend, deferred so the shared ortho path isn't changed on an untested premise.

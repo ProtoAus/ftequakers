@@ -1464,6 +1464,10 @@ const struct sh_defaultsamplers_s sh_defaultsamplers[] =
 	{"s_deluxemap2",	0},
 	{"s_deluxemap3",	0},
 #endif
+	//nettest: baked per-luxel sun visibility (SUNVIS lump).  MUST stay LAST in this table:
+	//GLSlang_ProgAutoFields assigns texture units by walking THIS array in order, so inserting
+	//anywhere earlier would shift every following sampler's unit. Bound last to match.
+	{"s_sunvis",		1u<<S_SUNVIS},
 	{NULL}
 };
 
@@ -1511,6 +1515,7 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 	extern cvar_t r_shadows_throwfade;	//nettest: contact-shadow gap fade, injected alongside FAKESHADOWS
 	extern cvar_t r_sun_dir;			//nettest: env_sun world direction, injected as e_fakesundir for model sun-shade
 	extern cvar_t r_shadows_slots;		//nettest P110: fake-shadow atlas slot count, injected as FAKESHADOWS_COUNT
+	extern cvar_t r_shadows_cascades;	//nettest P114: sun cascade count (slots==1 only), also drives FAKESHADOWS_COUNT
 
 	if (~prog->supportedpermutations & p)
 		return NULL;	//o.O
@@ -1540,13 +1545,24 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		//and re-injects this (no staleness across maps).
 		Q_strlcatfz(defines, &offset, sizeof(defines), "#define e_fakesundir vec3(%f,%f,%f)\n",
 			r_sun_dir.vec4[0], r_sun_dir.vec4[1], r_sun_dir.vec4[2]);
-		//nettest P110: number of fake-shadow atlas slots (= distinct cast directions).  The receiving
-		//shaders size their uniform/varying ARRAYS from this, so it MUST be a compile-time define --
-		//which is why r_shadows_slots is CVAR_SHADERSYSTEM (a change flushes and recompiles shaders).
+		//nettest P110/P114: number of fake-shadow atlas cells.  The receiving shaders size their
+		//uniform/varying ARRAYS from this, so it MUST be a compile-time define -- which is why both
+		//r_shadows_slots and r_shadows_cascades are CVAR_SHADERSYSTEM (a change recompiles shaders).
 		//1 = the legacy single sun ortho; the shaders keep a verbatim `#if FAKESHADOWS_COUNT < 2`
 		//branch so N=1 is the SAME COMPILED CODE as before this patch, not merely the same value.
-		Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_COUNT %i\n",
-			bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS));
+		//
+		//The cells hold EITHER P110 direction slots OR P114 sun cascades, never both -- slots win when
+		//>1, cascades apply only at slots==1.  FAKESHADOWS_CASCADE tells the shader which cell SEMANTICS
+		//to use: cascades are nested boxes of the same sun, so the shader must pick the tightest cell
+		//that contains a pixel (not ADD every containing cell as the direction-slot path does).
+		{
+			int fsslots = bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS);
+			int fscasc  = bound(1, r_shadows_cascades.ival, 4/*SH_MAX_CASCADES*/);
+			int fscells = (fsslots > 1) ? fsslots : fscasc;
+			Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_COUNT %i\n", fscells);
+			if (fsslots <= 1 && fscasc > 1)
+				Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_CASCADE 1\n");
+		}
 	}
 #endif
 

@@ -111,6 +111,52 @@ cvar_t r_shadows_bias						= CVARD("r_shadows_bias", "2", "r_shadows 2 shadow de
 //fraction of the ortho depth ([0,1] = 2*r_shadows_distance qu; 0.06 ~= 123 qu at distance 1024).
 //Higher = shadows reach further (more leak); lower = tighter contact-only; 0 disables the fade.
 cvar_t r_shadows_throwfade					= CVARD("r_shadows_throwfade", "0.06", "r_shadows 2 contact-shadow gap fade: fraction of the ortho shadow depth beyond which a caster stops shadowing (stops shadows leaking through floors). Higher = longer reach; 0 = off.");
+//nettest P110 (multi-direction fake shadows) --------------------------------------------------------
+//One ortho projection carries ONE parallel cast direction, so plain r_shadows 2 throws every prop's
+//shadow along the sun even when a nearby lamp is what actually lights it.  These split the depth map
+//into N cells, each rendered from a different DOMINANT LIGHT direction (the same per-entity direction
+//Patch 108 already uses to SHADE the prop), and assign every caster to exactly one cell.
+//CVAR_SHADERSYSTEM: the receiving shaders size uniform/varying arrays from FAKESHADOWS_COUNT, so a
+//count change has to recompile them.
+cvar_t r_shadows_slots						= CVARFD("r_shadows_slots", "1", CVAR_SHADERSYSTEM, "r_shadows 2 cast directions. 1 = classic single sun shadow. 2-8 = props also shadow away from nearby lamps. Non-sun cells are FITTED to the props in them, so they are SHARPER than the sun cell despite being a third of its width, and their box test early-outs for most pixels.");
+static cvar_t r_shadows_slots_hyst			= CVARD("r_shadows_slots_hyst", "2.5", "How much more popular a light direction must be before it steals an occupied r_shadows_slots slot. Higher = stickier (less shadow popping), lower = more responsive.");
+//A slot's RENDERED direction is the running mean of the props actually in it, eased over time -- not the
+//quantised lattice centre used to ASSIGN them.  That split is the point: the lattice keeps membership
+//stable (a static prop's bucket is bit-constant, which is what killed Patch 93 when it wasn't), while the
+//direction stays continuous so shadows glide the way the sunshade does instead of snapping between the
+//64 lattice directions.
+static cvar_t r_shadows_slots_smooth		= CVARD("r_shadows_slots_smooth", "0.25", "Seconds for a cast direction to ease onto its target. 0 = snap instantly (quantised, poppy); higher = smoother but laggier transitions.");
+//Non-sun cells cover only their own props, so their ortho box is fitted to those props' bounds plus this
+//margin -- the room the shadow needs to actually reach the floor.  Small box over few casters = far more
+//texels per prop than the shared view-sized box, AND the shader's box test can early-out for most pixels.
+static cvar_t r_shadows_slots_margin		= CVARD("r_shadows_slots_margin", "256", "World units of room added around a fitted cast-shadow cell for the shadow to land in. Too low = shadows cut off short; too high = wastes the cell's resolution.");
+static cvar_t r_shadows_slots_pcf			= CVARFD("r_shadows_slots_pcf", "4", CVAR_SHADERSYSTEM, "PCF taps for the non-sun r_shadows_slots directions (the sun keeps 9). 4 = cheaper secondary shadows; 9 = uniform quality. The single biggest cost dial when r_shadows_slots > 1.");
+static cvar_t r_shadows_slots_debug			= CVARD("r_shadows_slots_debug", "0", "Print the chosen r_shadows_slots directions and their caster counts each frame. Use this to confirm slot assignment is STABLE (static props must never migrate between slots).");
+//---------------------------------------------------------------------------------------------------
+//nettest P114 (sun cascades) -----------------------------------------------------------------------
+//The single r_shadows 2 sun map spends its whole resolution on ONE view-sized box, so a player 30qu
+//away and the skyline 1500qu away share the same texel density -- 1 texel/qu at the defaults, ~32
+//texels across a whole player.  Cascades split the SUN (not, like slots, into other directions but)
+//into N nested boxes fitted to successive view-depth slices: the near cascade covers only the first
+//few hundred units at a FRACTION of a texel per qu, the far one reaches to r_shadows_cascade_dist.
+//That is the CS2 "sharp up close AND long range" trade the single map can't make.
+//
+//Shares ALL of P110's atlas plumbing (per-cell projection matrix, cell rect, the shader's per-cell
+//sample loop); only the cell CONTENTS differ -- every cascade is the same sun direction, and every
+//caster renders into every cascade (no per-caster slot filter).  The shader picks the TIGHTEST
+//cascade that contains each pixel, so nested boxes never double-darken (which is why this is a
+//distinct FAKESHADOWS_CASCADE shader path, not P110's additive one).
+//
+//Mutually exclusive with r_shadows_slots: slots re-key the atlas by DIRECTION, cascades by DEPTH,
+//and they can't both own the cells.  slots > 1 wins (lamp shadows were the opt-in feature); cascades
+//apply only at slots == 1.  cascades == 1 is the legacy single map, bit-identical.
+//CVAR_SHADERSYSTEM for the same reason as r_shadows_slots: it sets FAKESHADOWS_COUNT (array sizes).
+#define SH_MAX_CASCADES 4	/*the sun-cascade cell grid (Sh_CascadeCellRect) is 2x2 = four cells*/
+cvar_t r_shadows_cascades					= CVARFD("r_shadows_cascades", "1", CVAR_SHADERSYSTEM, "r_shadows 2 sun cascade count (only when r_shadows_slots is 1). 1 = classic single map. 2-4 = sharp near shadows AND long range; the near cascade packs many more texels per qu than the single map. Ignored while r_shadows_slots > 1.");
+static cvar_t r_shadows_cascade_dist		= CVARD("r_shadows_cascade_dist", "4096", "How far (qu) the OUTERMOST sun cascade reaches ahead of the view. The near cascades subdivide the space up to here; bigger = longer shadow range but each cascade covers more ground (less dense).");
+static cvar_t r_shadows_cascade_lambda		= CVARD("r_shadows_cascade_lambda", "0.85", "PSSM split weighting [0..1]. 1 = purely logarithmic splits (max near-field density, CS2 default); 0 = uniform-depth splits. Higher pulls texel density toward the camera.");
+static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "Print each sun cascade's split distance, box radius and texel density (texels/qu) once per second. Use it to confirm the near cascade is actually denser than the single map.");
+//---------------------------------------------------------------------------------------------------
 
 static void Sh_DrawEntLighting(dlight_t *light, vec3_t colour, qbyte *pvs);
 
@@ -2408,6 +2454,11 @@ static void Sh_LightFrustumPlanes(dlight_t *l, vec3_t axis[3], vec4_t *planes, i
 
 //culling for the face happens in the caller.
 //these faces should thus match Sh_LightFrustumPlanes
+//nettest P110: when set, Sh_GenShadowFace renders into this CELL of the shadow texture instead of the
+//centred full-texture region.  Statics rather than parameters so the stock call sites are untouched.
+static qboolean sh_fakecell_active;
+static int sh_fakecell_x, sh_fakecell_y;
+
 static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowmesh_t *smesh, int face, int smsize, int txsize, float proj[16], const qbyte *lightpvs)
 {
 	vec3_t t1,t2,t3;
@@ -2474,7 +2525,19 @@ static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowm
 		break;
 	}
 
-	if (lighttype & (LSHADER_SPOT|LSHADER_ORTHO))
+	if (sh_fakecell_active)
+	{	//nettest P110: this face is one CELL of the multi-direction fake-shadow atlas rather than the
+		//whole texture.  Top-origin here; GL_ViewportUpdate flips it to GL's bottom-origin below, and
+		//the matching cell UNIFORM is computed flipped in Sh_GenerateFakeShadowsAtlas (see the note
+		//there -- an asymmetric rect that ignores the flip samples the empty half and yields NO shadows
+		//at all, which cost Patch 93 a whole debugging session).
+		r_refdef.pxrect.x = sh_fakecell_x;
+		r_refdef.pxrect.y = sh_fakecell_y;
+		r_refdef.pxrect.width = smsize;
+		r_refdef.pxrect.height = smsize;
+		r_refdef.pxrect.maxheight = txsize;
+	}
+	else if (lighttype & (LSHADER_SPOT|LSHADER_ORTHO))
 	{
 		r_refdef.pxrect.x = (txsize-smsize)/2;
 		r_refdef.pxrect.width = smsize;
@@ -2895,13 +2958,23 @@ void Sh_OrthoAlignToFrustum(dlight_t *dl, int smsize)
 	double dot;
 	double scale;
 	int i;
-	//there's 1 sample every dl->radius/(smsize*2)
 	//fixme: fit to frustum
 	VectorMA(r_origin, dl->radius/3, vpn, neworg);
 	VectorMA(neworg, -r_shadows_focus.vec4[2], vpn, neworg);
 	VectorMA(neworg, -r_shadows_focus.vec4[0], vright, neworg);
 	VectorMA(neworg, -r_shadows_focus.vec4[1], vup, neworg);
-	scale = dl->radius/(smsize*2);
+	//nettest: WHOLE-TEXEL snap.  The ortho projection spans -radius..+radius = 2*radius world units
+	//over smsize texels (gl_backend.c LSHADER_ORTHO: xmin=-radius,xmax=+radius), so ONE texel is
+	//exactly 2*radius/smsize.  The old `dl->radius/(smsize*2)` snapped neworg to a QUARTER-texel
+	//lattice (it's texel/4), which does NOT stabilise the sampling phase: the frustum centre rides
+	//r_origin + (radius/3)*vpn, so it slides sub-texel amounts every frame as the CAMERA ROTATES,
+	//and a quarter-texel grid leaves a world point's fractional texel position free to flip between
+	//{0,¼,½,¾} → the depth-compare boundary steps → shadow EDGES CRAWL (worse at higher
+	//r_shadows_distance: coarser texels AND a bigger radius/3 swing).  Snapping to a WHOLE texel makes
+	//every world point hash to the same texel every frame regardless of the swing → the crawl is gone,
+	//with zero quality loss (the depth-axis snap is a no-op: a translation along the light dir cancels
+	//in the light-space depth compare).
+	scale = 2.0*dl->radius/smsize;
 	for (i = 0; i < 3; i++)
 	{
 		dot = DotProduct_Double(neworg, dl->axis[i]);
@@ -2916,6 +2989,709 @@ void Sh_OrthoAlignToFrustum(dlight_t *dl, int smsize)
 qboolean r_fakeshadows;
 static dlight_t r_fakelight;
 
+//nettest P110: multi-direction fake shadows =========================================================
+//
+//An ortho projection has exactly ONE parallel direction, so the classic r_shadows 2 map throws every
+//prop's shadow along the sun.  Here the depth map is split into N cells; each cell is rendered from a
+//different DOMINANT LIGHT direction and holds only the casters whose own light points that way.  So a
+//barrel beside a lamp shadows away from the lamp while one out in the open still shadows along the sun.
+//
+//WHY THIS CAN WORK NOW.  Patch 93 built this same atlas and it was retired (Patch 95) because slot
+//assignment came from a QC registry fed by BlobShadow_Emit: prop_static scenery has no CSQC predraw and
+//settled physics props unhook theirs, so static props never registered and got rendered into whatever
+//MOVING caster's box happened to cover them -- inheriting the player's angle.  Patch 108's
+//R_EntityDominantLightDir removes the registry entirely: the direction comes from the map's deluxemap,
+//per entity, for engine-drawn prop_static as much as anything else.
+//
+//STABILITY IS THE WHOLE GAME.  A prop whose slot changes between frames visibly POPS its shadow, so:
+//  - directions quantise to a FIXED angular lattice, and a bucket's representative is the lattice cell
+//    CENTRE, never the mean of its members (a mean drifts as members join/leave and props chase it);
+//  - a prop_static never moves -> the Patch-105 origin-keyed light cache never invalidates -> its
+//    light_dir is bit-identical every frame -> its bucket id is literally constant;
+//  - which buckets OWN slots is sticky (hysteresis + an idle timer), so a prop briefly hidden behind a
+//    corner doesn't surrender its slot for one frame and snap back.
+#define SH_AZ 16	/*azimuth sectors*/
+#define SH_EL 4		/*elevation bands, equal-AREA in z so the poles don't crowd*/
+#define SH_BUCKETS (SH_AZ*SH_EL)	/*64 ids, ~13 degree mean cell half-angle*/
+
+static qbyte  *fs_entbucket;		/*slot index per visedict; parallel to cl_visedicts*/
+static int     fs_entbucket_max;
+static int     fs_slotbucket[MAX_FAKESHADOW_SLOTS];	/*bucket id each slot owns; -1 = free. PERSISTS across frames (hysteresis)*/
+static int     fs_slotcount;		/*slots live THIS frame; 1 = legacy single path*/
+static int     fs_curslot = -1;		/*cell currently rendering; -1 = not inside the atlas pass*/
+static vec3_t  fs_slotdir[MAX_FAKESHADOW_SLOTS];	/*eased THROW direction actually rendered*/
+static vec3_t  fs_slotorg[MAX_FAKESHADOW_SLOTS];	/*eased box centre (non-sun slots are FITTED to their props)*/
+static float   fs_slotrad[MAX_FAKESHADOW_SLOTS];	/*eased box half-extent*/
+static qboolean fs_slotsmooth[MAX_FAKESHADOW_SLOTS];/*false = no previous value to ease from, snap instead*/
+
+//Sh_OrthoAlignToFrustum centres the box on the VIEW.  A fitted per-prop-cluster cell needs to centre on
+//the cluster instead -- and must stay view-INDEPENDENT, or the whole cell's shadows would swing as the
+//player walks (the exact flaw that sank Patch 93's per-light boxes).  Same whole-texel snap, which is what
+//keeps shadow edges from crawling: a world point must hash to the same texel every frame.
+static void Sh_OrthoAlignToPoint(dlight_t *dl, const vec3_t centre, int smsize)
+{
+	vec3_t neworg;
+	double dot, scale;
+	int i;
+	VectorCopy(centre, neworg);
+	scale = 2.0*dl->radius/smsize;
+	for (i = 0; i < 3; i++)
+	{
+		dot = DotProduct_Double(neworg, dl->axis[i]);
+		dot /= scale;
+		dot = round(dot)-dot;
+		dot *= scale;
+		VectorMA(neworg, dot, dl->axis[i], neworg);
+	}
+	VectorCopy(neworg, dl->origin);
+}
+
+static int Sh_DirBucketId(const vec3_t d)
+{
+	int el = (int)((d[2]*0.5+0.5) * SH_EL);
+	int az = (int)((atan2(d[1], d[0]) + M_PI) * (SH_AZ/(2*M_PI)));
+	el = bound(0, el, SH_EL-1);
+	az &= (SH_AZ-1);
+	return el*SH_AZ + az;
+}
+
+static void Sh_BucketIdToDir(int id, vec3_t out)
+{
+	int el = id / SH_AZ, az = id % SH_AZ;
+	float z  = ((el+0.5f) / SH_EL) * 2.0f - 1.0f;
+	float a  = ((az+0.5f) / SH_AZ) * (2*M_PI) - M_PI;
+	float r  = sqrt(max(0, 1.0f - z*z));
+	out[0] = cos(a)*r;
+	out[1] = sin(a)*r;
+	out[2] = z;
+}
+
+//Called from BE_GenModelBatches' BEM_DEPTHONLY filter: does this visedict belong in the cell we are
+//rendering right now?  The fs_curslot guard is LOAD-BEARING -- without it every real rtlight shadow map
+//in the game (which also renders BEM_DEPTHONLY) would get filtered by our bucket table.
+int Sh_FakeShadowFilter(int visedictindex)
+{
+	if (fs_curslot < 0 || fs_slotcount <= 1)
+		return 1;	/*not our pass, or legacy single-direction: everything casts*/
+	if ((unsigned)visedictindex >= (unsigned)fs_entbucket_max)
+		return fs_curslot == 0;	/*unbucketed -> the sun slot owns it*/
+	return fs_entbucket[visedictindex] == fs_curslot;
+}
+
+//Histogram the visible casters by light direction and hand the N-1 most popular directions a slot.
+//Returns the slot count to use this frame (1 = nothing worth splitting, take the legacy path).
+static int Sh_FakeShadowChooseSlots(dlight_t *l)
+{
+	int counts[SH_BUCKETS];
+	int i, s, b, want, claimed;
+	int slotcount = bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS);
+	vec3_t sundir, dir, bdir;
+	float maxdist;
+	static int fs_slotidle[MAX_FAKESHADOW_SLOTS];
+	static qboolean fs_init;
+
+	if (!fs_init)
+	{
+		for (i = 0; i < MAX_FAKESHADOW_SLOTS; i++)
+			fs_slotbucket[i] = -1;
+		fs_init = true;
+	}
+
+	if (slotcount <= 1)
+		return 1;
+
+	//grow the side table with the visedict array. cl_visedicts is only reallocated in
+	//CL_ClearEntityLists, once per client frame BEFORE rendering, so indices are stable for the
+	//whole render frame (including portal/mirror recursion, which only appends).
+	if (fs_entbucket_max < cl_maxvisedicts)
+	{
+		Z_Free(fs_entbucket);
+		fs_entbucket_max = cl_maxvisedicts;
+		fs_entbucket = Z_Malloc(fs_entbucket_max);
+	}
+	if (fs_entbucket)
+		memset(fs_entbucket, 0, fs_entbucket_max);	/*default = slot 0 = the sun*/
+
+	memset(counts, 0, sizeof(counts));
+	VectorNegate(l->axis[0], sundir);	/*axis[0] is the THROW dir; buckets are TOWARD the light*/
+	maxdist = l->radius;
+
+	for (i = r_refdef.firstvisedict; i < cl_numvisedicts; i++)
+	{
+		entity_t *ent = &cl_visedicts[i];
+		vec3_t ofs;
+		float rad;
+
+		//mirror BE_GenModelBatches' BEM_DEPTHONLY rejects: anything that won't be rendered as a
+		//caster must not sway the histogram.
+		if (ent->flags & (RF_NOSHADOW|RF_ADDITIVE|RF_NODEPTHTEST|RF_TRANSLUCENT))
+			continue;
+		if ((ent->flags & RF_EXTERNALMODEL) && !r_shadow_playershadows.ival)
+			continue;
+		if (!ent->model || ent->model->type != mod_alias)
+			continue;
+		if (ent->model->engineflags & MDLF_FLAME)
+			continue;
+
+		//too far to land in ANY cell (every slot shares this radius and centre)
+		rad = ent->model->radius;
+		VectorSubtract(ent->origin, l->origin, ofs);
+		if (DotProduct(ofs, ofs) > (maxdist+rad)*(maxdist+rad))
+			continue;
+
+		if (!R_EntityDominantLightDir(ent, dir))
+			continue;	/*no per-entity info -> stays on the sun slot*/
+
+		b = Sh_DirBucketId(dir);
+		//already essentially the sun? slot 0 serves it, and splitting it out would only cost a cell.
+		Sh_BucketIdToDir(b, bdir);
+		if (DotProduct(bdir, sundir) > 0.93969f)	/*within 20 degrees*/
+			continue;
+		counts[b]++;
+	}
+
+	//--- slot ownership: incumbents are sticky, challengers must clearly beat them ---
+	claimed = 0;
+	for (s = 1; s < slotcount; s++)
+	{
+		b = fs_slotbucket[s];
+		if (b >= 0 && counts[b] > 0)
+		{
+			fs_slotidle[s] = 0;
+			claimed |= 1<<s;
+		}
+		else if (b >= 0 && ++fs_slotidle[s] < 30)
+			claimed |= 1<<s;	/*briefly occluded -- hold the slot rather than pop the shadow*/
+		else
+			fs_slotbucket[s] = -1;
+	}
+	for (s = 1; s < slotcount; s++)
+	{
+		int best = -1, bestcount = 0;
+		if (claimed & (1<<s))
+			continue;
+		for (b = 0; b < SH_BUCKETS; b++)
+		{
+			int taken = 0, s2;
+			for (s2 = 1; s2 < slotcount; s2++)
+				if (fs_slotbucket[s2] == b) { taken = 1; break; }
+			if (taken)
+				continue;
+			if (counts[b] > bestcount)
+				{ bestcount = counts[b]; best = b; }
+		}
+		if (best < 0)
+			break;
+		fs_slotbucket[s] = best;
+		fs_slotidle[s] = 0;
+	}
+	//an incumbent only loses its slot to a CLEARLY more popular direction
+	for (s = 1; s < slotcount; s++)
+	{
+		int own = fs_slotbucket[s];	/*NB: not "inc" -- gl_shadow.c has a `#define inc 128` above*/
+		float thresh;
+		if (own < 0)
+			continue;
+		thresh = counts[own] * max(1.0f, r_shadows_slots_hyst.value);
+		for (b = 0; b < SH_BUCKETS; b++)
+		{
+			int taken = 0, s2;
+			for (s2 = 1; s2 < slotcount; s2++)
+				if (fs_slotbucket[s2] == b) { taken = 1; break; }
+			if (!taken && counts[b] > thresh)
+				{ fs_slotbucket[s] = b; fs_slotidle[s] = 0; break; }
+		}
+	}
+
+	//--- how many slots carry casters at all ---
+	want = 1;
+	for (s = 1; s < slotcount; s++)
+		if (fs_slotbucket[s] >= 0 && counts[fs_slotbucket[s]])
+			want = s+1;
+
+	//--- second pass: stamp each caster's slot, and gather that slot's TRUE mean direction + bounds ---
+	//The lattice bucket decided MEMBERSHIP (stable), but it is far too coarse to render with: its cell
+	//centre can be ~13 degrees off, so a prop crossing a lattice boundary would jump ~26 degrees.  The
+	//mean of the members' own directions is continuous, so it tracks the way the sunshade does.
+	{
+		vec3_t dirsum[MAX_FAKESHADOW_SLOTS], bmin[MAX_FAKESHADOW_SLOTS], bmax[MAX_FAKESHADOW_SLOTS];
+		int    nmemb[MAX_FAKESHADOW_SLOTS];
+
+		for (s = 0; s < MAX_FAKESHADOW_SLOTS; s++)
+		{
+			VectorClear(dirsum[s]);
+			nmemb[s] = 0;
+			bmin[s][0] = bmin[s][1] = bmin[s][2] =  FLT_MAX;
+			bmax[s][0] = bmax[s][1] = bmax[s][2] = -FLT_MAX;
+		}
+
+		if (want > 1 && fs_entbucket)
+		{
+			for (i = r_refdef.firstvisedict; i < cl_numvisedicts; i++)
+			{
+				entity_t *ent = &cl_visedicts[i];
+				float rad;
+				if (!ent->model || ent->model->type != mod_alias)
+					continue;
+				if (!R_EntityDominantLightDir(ent, dir))
+					continue;
+				b = Sh_DirBucketId(dir);
+				for (s = 1; s < want; s++)
+				{
+					if (fs_slotbucket[s] != b)
+						continue;
+					fs_entbucket[i] = s;
+					VectorAdd(dirsum[s], dir, dirsum[s]);
+					nmemb[s]++;
+					rad = ent->model->radius;
+					for (b = 0; b < 3; b++)
+					{
+						bmin[s][b] = min(bmin[s][b], ent->origin[b] - rad);
+						bmax[s][b] = max(bmax[s][b], ent->origin[b] + rad);
+					}
+					break;
+				}
+			}
+		}
+
+		//--- publish, easing onto the targets so transitions glide instead of snapping ---
+		//slot 0 is the sun: view-centred, full radius, exactly as the legacy single path.
+		VectorCopy(l->axis[0], fs_slotdir[0]);
+		VectorCopy(l->origin,  fs_slotorg[0]);
+		fs_slotrad[0] = l->radius;
+		fs_slotsmooth[0] = true;
+
+		for (s = 1; s < slotcount; s++)
+		{
+			vec3_t tdir, torg;
+			float trad, lerp;
+
+			if (s >= want || !nmemb[s])
+			{	//owns a direction with nothing visible right now: keep ownership (the idle timer decides
+				//when to release it) but render nothing into the cell, and forget the eased state so the
+				//slot snaps cleanly when it next picks up casters instead of sweeping in from stale values.
+				VectorCopy(l->axis[0], fs_slotdir[s]);
+				VectorCopy(l->origin,  fs_slotorg[s]);
+				fs_slotrad[s] = l->radius;
+				fs_slotsmooth[s] = false;
+				continue;
+			}
+
+			VectorCopy(dirsum[s], tdir);
+			if (!VectorNormalize(tdir))
+				{ Sh_BucketIdToDir(fs_slotbucket[s], tdir); }	/*members cancelled out - fall back to the lattice*/
+			VectorNegate(tdir, tdir);	/*directions point TOWARD the light; we render the THROW dir*/
+
+			//fit the box to these props plus the room their shadows need to reach the floor.  This is
+			//why a non-sun cell is SHARPER than the sun cell despite being a quarter of the texture: it
+			//covers a few hundred units instead of the whole view volume.
+			for (b = 0; b < 3; b++)
+				torg[b] = (bmin[s][b] + bmax[s][b]) * 0.5f;
+			trad = 0;
+			for (b = 0; b < 3; b++)
+				trad = max(trad, (bmax[s][b] - bmin[s][b]) * 0.5f);
+			trad += max(0, r_shadows_slots_margin.value);
+			trad = bound(64, trad, l->radius);
+
+			if (!fs_slotsmooth[s] || r_shadows_slots_smooth.value <= 0)
+			{	//no previous value to ease from (or easing disabled) -> take the target outright
+				VectorCopy(tdir, fs_slotdir[s]);
+				VectorCopy(torg, fs_slotorg[s]);
+				fs_slotrad[s] = trad;
+				fs_slotsmooth[s] = true;
+			}
+			else
+			{	//exponential ease, frame-rate independent
+				lerp = 1.0f - exp(-host_frametime / r_shadows_slots_smooth.value);
+				lerp = bound(0, lerp, 1);
+				VectorInterpolate(fs_slotdir[s], lerp, tdir, fs_slotdir[s]);
+				if (!VectorNormalize(fs_slotdir[s]))
+					VectorCopy(tdir, fs_slotdir[s]);
+				VectorInterpolate(fs_slotorg[s], lerp, torg, fs_slotorg[s]);
+				fs_slotrad[s] += (trad - fs_slotrad[s]) * lerp;
+			}
+		}
+	}
+
+	if (r_shadows_slots_debug.ival)
+	{
+		int percell[MAX_FAKESHADOW_SLOTS];
+		memset(percell, 0, sizeof(percell));
+		if (fs_entbucket)
+			for (i = r_refdef.firstvisedict; i < cl_numvisedicts; i++)
+				if (fs_entbucket[i] < MAX_FAKESHADOW_SLOTS)
+					percell[fs_entbucket[i]]++;
+		Con_Printf("^3fakeshadow slots %i:", want);
+		for (s = 0; s < want; s++)
+			Con_Printf(" [%i]b%i n%i r%.0f (%.2f %.2f %.2f)", s, s?fs_slotbucket[s]:-1, percell[s],
+						fs_slotrad[s], fs_slotdir[s][0], fs_slotdir[s][1], fs_slotdir[s][2]);
+		Con_Printf("\n");
+	}
+
+	return want;
+}
+//====================================================================================================
+
+#ifdef GLQUAKE
+//nettest P110 atlas layout.  NOT an even grid -- that would spend as many texels on a cell holding three
+//props as on the one holding fifty, which is exactly why the first cut of this patch looked lower-res than
+//the single map it replaced.
+//
+//Slot 0 is the sun.  It carries the overwhelming majority of casters AND must cover the whole view volume,
+//so it takes a 3/4 x 3/4 cell -- NINE times the area of the others.  The per-light cells are FITTED to
+//their own props (a few hundred units across instead of the view volume), so at a quarter of the width
+//they still end up SHARPER per world unit than the sun cell, and they tile the remaining L:
+//
+//      +---------------+---+     u = txsize/4
+//      |               | 1 |     slot 0 : 3u x 3u   (sun, view-sized box, ~3/4 of a full-texture map)
+//      |               +---+     slots 1+: u x u    (fitted boxes, far denser per world unit)
+//      |       0       | 2 |
+//      |     (3u)      +---+
+//      |               | 3 |
+//      +---+---+---+---+---+
+//      | 4 | 5 | 6 | 7 |
+//      +---+---+---+---+
+static void Sh_FakeShadowCellRect(int slot, int slots, int txsize, int *ox, int *oy, int *osize)
+{
+	int u = txsize/4;
+	if (slots <= 1)
+		{ *ox = 0; *oy = 0; *osize = txsize; return; }	/*legacy: the whole texture*/
+	if (slot == 0)
+		{ *ox = 0; *oy = 0; *osize = 3*u; return; }
+	switch (slot)
+	{
+	case 1:  *ox = 3*u; *oy = 0;   break;
+	case 2:  *ox = 3*u; *oy = u;   break;
+	case 3:  *ox = 3*u; *oy = 2*u; break;
+	case 4:  *ox = 0;   *oy = 3*u; break;
+	case 5:  *ox = u;   *oy = 3*u; break;
+	case 6:  *ox = 2*u; *oy = 3*u; break;
+	default: *ox = 3*u; *oy = 3*u; break;	/*slot 7 -- the layout holds 8 in total*/
+	}
+	*osize = u;
+}
+
+//nettest P110: render N model-only depth passes, one per cast direction, into cells of ONE texture.
+//
+//Deliberately NOT built on Sh_GenShadowMap: that function does its own BeginShadowMap/EndShadowMap pair
+//and BeginShadowMap CLEARS THE WHOLE TEXTURE, so calling it per slot would wipe every cell rendered
+//before it.  Hence one Begin here, then a manual per-cell viewport loop.
+static void Sh_GenerateFakeShadowsAtlas(dlight_t *l, int slots, int txsize)
+{
+	int inset    = 16;	/*Patch 93's proven margin: wider than the PCF tap radius + edge-fade slack, so
+						  neighbouring cells cannot bleed into each other*/
+	int s, restorefbo = 0;
+	int cx, cy, csize, smsize;
+	float oprojs[16], oprojv[16], oview[16];
+	pxrect_t oprect;
+	unsigned int oldflip, oldcolourmask;
+	qboolean oldexternalview;
+	uploadfmt_t fmt;
+	vec4_t cell;
+
+	Sh_FakeShadowCellRect(0, slots, txsize, &cx, &cy, &csize);
+	smsize = csize - 2*inset;	/*slot 0's cell; the loop recomputes this per slot*/
+	if (smsize < 64)
+		{ GLBE_SetFakeShadowCount(1); return; }	/*r_shadows_res too small to subdivide sensibly*/
+
+	if (r_shadow_shadowmapping_depthbits.ival >= 32 && sh_config.texfmt[PTI_DEPTH32])
+		fmt = PTI_DEPTH32;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24])
+		fmt = PTI_DEPTH24;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24_8])
+		fmt = PTI_DEPTH24_8;
+	else
+		fmt = PTI_DEPTH16;
+
+	memcpy(oprojs, r_refdef.m_projection_std,  sizeof(oprojs));
+	memcpy(oprojv, r_refdef.m_projection_view, sizeof(oprojv));
+	memcpy(oview,  r_refdef.m_view,            sizeof(oview));
+	oprect          = r_refdef.pxrect;
+	oldflip         = r_refdef.flipcull;
+	oldcolourmask   = r_refdef.colourmask;
+	oldexternalview = r_refdef.externalview;
+
+	//Each slot gets its OWN ortho projection, built inside the loop: non-sun cells are FITTED to the props
+	//they contain (a few hundred units instead of the whole view volume), which is where their sharpness
+	//comes from and why the shader's box test can early-out for most pixels.  Trap #4 from Patch 93 still
+	//holds though -- a perspective/spot projection never lines up with the ortho-tuned consumption shader
+	//(it came out mirrored and tiny), so every slot stays ORTHOGRAPHIC, only the extent and axes differ.
+
+	//smapidx 2 = the fake-shadow texture, same slot the single path uses.  ONE Begin (it clears all of it).
+	if (!GLBE_BeginShadowMap(2, txsize, txsize, fmt, &restorefbo))
+		{ GLBE_SetFakeShadowCount(1); return; }
+
+	r_refdef.externalview = true;	//never any viewmodels
+	//PCF tap offsets are in ATLAS uv space (the shader remaps cell-local coords into the atlas before
+	//sampling), so the scale is 1/txsize -- the whole texture, not the cell.
+	GLBE_SetupForShadowMap(l, txsize, txsize, smsize/(float)txsize);
+
+	for (s = 0; s < slots; s++)
+	{
+		Sh_FakeShadowCellRect(s, slots, txsize, &cx, &cy, &csize);
+		smsize = csize - 2*inset;
+		if (smsize < 16)
+			continue;
+
+		VectorCopy(fs_slotdir[s], l->axis[0]);
+		if (!VectorNormalize(l->axis[0]))
+			VectorNegate(r_sun_dir.vec4, l->axis[0]);
+		VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+		VectorNegate(l->axis[1], l->axis[1]);
+
+		//re-snap the box for THIS direction and extent: the whole-texel lattice is per-axis and its pitch
+		//is 2*radius/smsize -- the CELL size, not the texture size.  Getting that wrong reintroduces
+		//exactly the shadow-edge crawl the snap exists to kill.
+		l->radius = fs_slotrad[s];
+		if (s == 0)
+			Sh_OrthoAlignToFrustum(l, smsize);	//the sun covers the view, as it always has
+		else
+			Sh_OrthoAlignToPoint(l, fs_slotorg[s], smsize);	//fitted cells centre on their own props
+
+		//this slot's projection (extent varies per slot now, so it cannot be hoisted out of the loop)
+		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -l->radius, l->radius);
+		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
+
+		//viewport in TOP-origin coords; GL_ViewportUpdate flips it for GL.
+		sh_fakecell_active = true;
+		sh_fakecell_x = cx + inset;
+		sh_fakecell_y = cy + inset;
+
+		//...and the matching UNIFORM must therefore use the cell's BOTTOM edge (trap #2).  The legacy
+		//single path centres its region symmetrically, which makes the flip invisible; asymmetric atlas
+		//cells sampled the EMPTY half of the texture and produced zero shadows at any count > 1.
+		cell[0] = (cx + inset)                     / (float)txsize;
+		cell[1] = (txsize - (cy + inset + smsize)) / (float)txsize;
+		cell[2] = cell[3] = smsize / (float)txsize;
+
+		//trap #1: BE_SelectDLight sets shaderstate.curdlight, which the BEM_DEPTHONLY entity batcher
+		//dereferences (ent->keynum == dl->key).  Skipping it per slot is a NULL deref the first frame a
+		//client spawns with this active.  It also builds the very matrix we snapshot next.
+		if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
+			continue;
+		GLBE_CaptureFakeShadowSlot(s, cell);
+
+		fs_curslot = s;	/*Sh_FakeShadowFilter now admits only this slot's casters*/
+		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
+	}
+	fs_curslot = -1;
+	sh_fakecell_active = false;
+
+	//stale matrices in unused slots would project receivers into a cell that now holds a different
+	//direction's depth, so neutralise every slot the shader will still loop over.
+	for (s = slots; s < MAX_FAKESHADOW_SLOTS; s++)
+	{
+		Vector4Set(cell, 0, 0, 0, 0);
+		GLBE_ClearFakeShadowSlot(s, cell);
+	}
+	GLBE_SetFakeShadowCount(slots);
+
+	memcpy(r_refdef.m_view,            oview,  sizeof(r_refdef.m_view));
+	memcpy(r_refdef.m_projection_std,  oprojs, sizeof(r_refdef.m_projection_std));
+	memcpy(r_refdef.m_projection_view, oprojv, sizeof(r_refdef.m_projection_view));
+	r_refdef.pxrect       = oprect;
+	r_refdef.flipcull     = oldflip;
+	r_refdef.colourmask   = oldcolourmask;
+	r_refdef.externalview = oldexternalview;
+	R_SetFrustum(r_refdef.m_projection_std, r_refdef.m_view);
+
+	GLBE_EndShadowMap(restorefbo);
+	GL_ViewportUpdate();
+
+	//leave SLOT 0 selected so the forward pass sees sun-slot backend state: defaultskin's legacy
+	//l_cubematrix branch and any other single-map consumer keep working unchanged.
+	//NB restore the radius too -- the loop above overwrote l->radius with each fitted cell's extent.
+	l->radius = fs_slotrad[0];
+	VectorCopy(fs_slotdir[0], l->axis[0]);
+	VectorNormalize(l->axis[0]);
+	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+	VectorNegate(l->axis[1], l->axis[1]);
+	Sh_FakeShadowCellRect(0, slots, txsize, &cx, &cy, &csize);
+	Sh_OrthoAlignToFrustum(l, csize - 2*inset);
+	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
+}
+
+//nettest P114: sun cascades =========================================================================
+//Equal cells in a 2x2 grid (each half the texture).  Cascades get EQUAL texels on purpose: the near
+//cascade's density comes from its ortho box SHRINKING to a few hundred units, not from a bigger cell.
+static void Sh_CascadeCellRect(int idx, int n, int txsize, int *ox, int *oy, int *osize)
+{
+	int h = txsize/2;
+	if (n <= 1)
+		{ *ox = 0; *oy = 0; *osize = txsize; return; }
+	*osize = h;
+	*ox = (idx & 1) ? h : 0;
+	*oy = (idx & 2) ? h : 0;
+}
+
+//PSSM split: blend a logarithmic split (dense near field) with a uniform one, weighted by lambda.
+//k in [0,n] -> a distance in [nearp, farp].  lambda 1 = pure log (CS2's choice), 0 = pure uniform.
+static float Sh_CascadeSplit(int k, int n, float nearp, float farp, float lambda)
+{
+	float f = (float)k / (float)n;
+	float clog = nearp * pow(farp/nearp, f);
+	float clin = nearp + (farp - nearp) * f;
+	return lambda*clog + (1.0f-lambda)*clin;
+}
+
+//Render N nested SUN cascades, one per view-depth slice, into cells of ONE texture.  Built on the same
+//one-Begin, per-cell-viewport skeleton as Sh_GenerateFakeShadowsAtlas (BeginShadowMap clears the whole
+//texture, so it must be called once).  The two differences from the direction atlas are the whole point:
+//  - every cell is the SAME sun direction (l->axis unchanged across the loop), fitted to a frustum slice;
+//  - fs_curslot stays -1, so Sh_FakeShadowFilter admits EVERY caster into EVERY cascade -- a caster near
+//    the view straddles cascades and must appear in each, unlike a direction slot it belongs to just one.
+static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
+{
+	int inset = 16;	/*same proven margin as the direction atlas: wider than the PCF tap radius so cells can't bleed*/
+	int s, restorefbo = 0;
+	int cx, cy, csize, smsize;
+	float oprojs[16], oprojv[16], oview[16];
+	pxrect_t oprect;
+	unsigned int oldflip, oldcolourmask;
+	qboolean oldexternalview;
+	uploadfmt_t fmt;
+	vec4_t cell;
+	vec3_t sundir;
+	float nearp, farp, lambda;
+	float tx, ty;
+	static int dbgframe;
+	qboolean dbg = r_shadows_cascade_debug.ival && ((dbgframe++ % 60) == 0);
+
+	Sh_CascadeCellRect(0, cascades, txsize, &cx, &cy, &csize);
+	if (csize - 2*inset < 64)
+		{ GLBE_SetFakeShadowCount(1); return; }	/*r_shadows_res too small to subdivide*/
+
+	if (r_shadow_shadowmapping_depthbits.ival >= 32 && sh_config.texfmt[PTI_DEPTH32])
+		fmt = PTI_DEPTH32;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24])
+		fmt = PTI_DEPTH24;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24_8])
+		fmt = PTI_DEPTH24_8;
+	else
+		fmt = PTI_DEPTH16;
+
+	VectorCopy(l->axis[0], sundir);	/*the throw direction the caller set up; every cascade uses it*/
+	nearp  = 8.0f;					/*cascade 0 starts effectively at the camera*/
+	farp   = max(nearp*2.0f, r_shadows_cascade_dist.value);
+	lambda = bound(0.0f, r_shadows_cascade_lambda.value, 1.0f);
+	tx = tan(r_refdef.fov_x * (M_PI/360.0));	/*fov_x is the FULL angle in degrees; /2 for the half, /180 for rad*/
+	ty = tan(r_refdef.fov_y * (M_PI/360.0));
+
+	memcpy(oprojs, r_refdef.m_projection_std,  sizeof(oprojs));
+	memcpy(oprojv, r_refdef.m_projection_view, sizeof(oprojv));
+	memcpy(oview,  r_refdef.m_view,            sizeof(oview));
+	oprect          = r_refdef.pxrect;
+	oldflip         = r_refdef.flipcull;
+	oldcolourmask   = r_refdef.colourmask;
+	oldexternalview = r_refdef.externalview;
+
+	if (!GLBE_BeginShadowMap(2, txsize, txsize, fmt, &restorefbo))
+		{ GLBE_SetFakeShadowCount(1); return; }
+
+	r_refdef.externalview = true;	//never any viewmodels
+	GLBE_SetupForShadowMap(l, txsize, txsize, (csize-2*inset)/(float)txsize);
+
+	//sun axis is constant for the whole loop -- set it once.
+	VectorCopy(sundir, l->axis[0]);
+	if (!VectorNormalize(l->axis[0]))
+		VectorNegate(r_sun_dir.vec4, l->axis[0]);
+	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+	VectorNegate(l->axis[1], l->axis[1]);
+
+	for (s = 0; s < cascades; s++)
+	{
+		vec3_t centre, corner;
+		float dn, df, radius, r;
+		int j;
+
+		Sh_CascadeCellRect(s, cascades, txsize, &cx, &cy, &csize);
+		smsize = csize - 2*inset;
+		if (smsize < 16)
+			continue;
+
+		//this cascade's view-depth slice [dn,df] and its world-space bounding sphere.
+		dn = (s == 0) ? nearp : Sh_CascadeSplit(s,   cascades, nearp, farp, lambda);
+		df =                    Sh_CascadeSplit(s+1, cascades, nearp, farp, lambda);
+		//the 8 slice corners are symmetric about the view axis, so their mean is on it at (dn+df)/2.
+		VectorMA(r_origin, (dn+df)*0.5f, vpn, centre);
+		radius = 0;
+		for (j = 0; j < 8; j++)
+		{
+			float d  = (j & 1) ? df : dn;
+			float sx = (j & 2) ? 1.0f : -1.0f;
+			float sy = (j & 4) ? 1.0f : -1.0f;
+			VectorMA(r_origin, d,        vpn,    corner);
+			VectorMA(corner,   sx*d*tx,  vright, corner);
+			VectorMA(corner,   sy*d*ty,  vup,    corner);
+			r = sqrt((corner[0]-centre[0])*(corner[0]-centre[0])
+			       + (corner[1]-centre[1])*(corner[1]-centre[1])
+			       + (corner[2]-centre[2])*(corner[2]-centre[2]));
+			if (r > radius) radius = r;
+		}
+		if (radius < 1.0f) radius = 1.0f;
+
+		l->radius = radius;
+		//whole-texel snap on the fitted centre -- same crawl-killer as the fitted lamp cells.  The lattice
+		//pitch is 2*radius/smsize (this CELL's extent), so it MUST use smsize not txsize.
+		Sh_OrthoAlignToPoint(l, centre, smsize);
+
+		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -l->radius, l->radius);
+		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
+
+		sh_fakecell_active = true;
+		sh_fakecell_x = cx + inset;
+		sh_fakecell_y = cy + inset;
+
+		//cell rect in the SAME bottom-origin convention the direction atlas uses (trap #2 there).
+		cell[0] = (cx + inset)                     / (float)txsize;
+		cell[1] = (txsize - (cy + inset + smsize)) / (float)txsize;
+		cell[2] = cell[3] = smsize / (float)txsize;
+
+		if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
+			continue;
+		GLBE_CaptureFakeShadowSlot(s, cell);
+
+		//fs_curslot intentionally left at -1: Sh_FakeShadowFilter passes ALL casters into this cascade.
+		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
+
+		if (dbg)
+			Con_Printf("^5cascade %i: depth %.0f..%.0f qu  radius %.0f  %.2f texels/qu\n",
+				s, dn, df, radius, smsize/(2.0f*radius));
+	}
+	sh_fakecell_active = false;
+
+	//neutralise unused cells so the shader's fixed loop never projects into a stale cascade.
+	for (s = cascades; s < MAX_FAKESHADOW_SLOTS; s++)
+	{
+		Vector4Set(cell, 0, 0, 0, 0);
+		GLBE_ClearFakeShadowSlot(s, cell);
+	}
+	GLBE_SetFakeShadowCount(cascades);
+
+	memcpy(r_refdef.m_view,            oview,  sizeof(r_refdef.m_view));
+	memcpy(r_refdef.m_projection_std,  oprojs, sizeof(r_refdef.m_projection_std));
+	memcpy(r_refdef.m_projection_view, oprojv, sizeof(r_refdef.m_projection_view));
+	r_refdef.pxrect       = oprect;
+	r_refdef.flipcull     = oldflip;
+	r_refdef.colourmask   = oldcolourmask;
+	r_refdef.externalview = oldexternalview;
+	R_SetFrustum(r_refdef.m_projection_std, r_refdef.m_view);
+
+	GLBE_EndShadowMap(restorefbo);
+	GL_ViewportUpdate();
+
+	//leave a sane sun slot selected for the forward pass (matches the direction atlas epilogue).
+	l->radius = r_shadows_distance.value;
+	VectorCopy(sundir, l->axis[0]);
+	VectorNormalize(l->axis[0]);
+	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+	VectorNegate(l->axis[1], l->axis[1]);
+	Sh_OrthoAlignToFrustum(l, txsize);
+	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
+}
+#endif
 
 void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight, but does not actually render any lighting. the lightmapped-wall etc glsl must filter by itself if it wants to accept shadows.
 {
@@ -2934,11 +3710,13 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	VectorNegate(l->axis[1], l->axis[1]);
 
 	smsize = bound(256, r_shadows_res.ival, 8192);	//nettest r_shadows_res (stock hardcoded SHADOWMAP_SIZE*4 = 2048)
-	Sh_OrthoAlignToFrustum(l, smsize);
-	l->rebuildcache = true;
-
+	//nettest P114: radius MUST be set before the align.  Sh_OrthoAlignToFrustum divides by
+	//scale = 2*radius/smsize, so on the very first frame (r_fakelight is static-zeroed, radius 0)
+	//the old order gave scale 0 -> a div-by-zero NaN origin that then defeated the cull test.
 	l->radius = r_shadows_distance.value;
 	l->flags = LFLAG_SHADOWMAP|LFLAG_ORTHO;
+	Sh_OrthoAlignToFrustum(l, smsize);
+	l->rebuildcache = true;
 
 	if (R_CullSphere(l->origin, l->radius))
 	{
@@ -2959,6 +3737,11 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 		RQuantAdd(RQUANT_RTLIGHT_CULL_SCISSOR, 1);
 		return;
 	}
+
+	//nettest P110: pick this frame's cast directions.  Runs here, AFTER the slot-0 axis/origin/radius
+	//setup and the frustum+scissor culls, because the bucketer needs the box centre to range-cull
+	//casters -- and because a culled frame should cost nothing at all.
+	fs_slotcount = Sh_FakeShadowChooseSlots(l);
 
 	texwidth = smsize;
 	texheight = smsize;
@@ -2985,6 +3768,26 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 		(void)texheight;
 		break;
 	}
+
+	//nettest P110: more than one cast direction this frame -> render the atlas instead of the single map.
+	if (fs_slotcount > 1 && qrenderer == QR_OPENGL)
+	{
+		Sh_GenerateFakeShadowsAtlas(l, fs_slotcount, smsize);
+		return;
+	}
+	//nettest P114: single cast direction -> optionally split the SUN into view-depth cascades.  Mutually
+	//exclusive with slots (which already claimed the cells above); fs_slotcount is 1 here so the caster
+	//filter passes everything into every cascade.
+	if (qrenderer == QR_OPENGL)
+	{
+		int cascades = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
+		if (cascades > 1)
+		{
+			Sh_GenerateCascadeAtlas(l, cascades, smsize);
+			return;
+		}
+	}
+	GLBE_SetFakeShadowCount(1);
 
 	if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
 		return;
@@ -4488,6 +5291,16 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_focus,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_res,						REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots,					REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots_hyst,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots_smooth,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots_margin,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots_pcf,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_slots_debug,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_cascades,					REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_cascade_dist,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_cascade_lambda,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_cascade_debug,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping_depthbits,	REALTIMELIGHTING);
 #endif
 }
