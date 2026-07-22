@@ -1039,6 +1039,12 @@ static void Shader_DeformVertexes (parsestate_t *ps, const char **ptr)
 			deformv->args[0] = 1.0f / deformv->args[0];
 		Shader_ParseFunc (ps, "deformvertexes wave", ptr, &deformv->func );
 	}
+	else if ( !Q_stricmp (token, "ripple") )
+	{
+		//nettest: interactive water ripples.  No per-shader args -- the ring sources are global
+		//(r_waterripples[], fed by R_AddWaterRipple); this just marks the surface as a receiver.
+		deformv->type = DEFORMV_RIPPLE;
+	}
 	else if ( !Q_stricmp (token, "normal") )
 	{
 		deformv->type = DEFORMV_NORMAL;
@@ -7034,6 +7040,11 @@ char *Shader_DefaultBSPWater(parsestate_t *ps, const char *shortname, char *buff
 			"deformVertexes wave 71 sin 0 %g 0.37 %g\n",
 			amp, 0.25*spd, amp*0.6, 0.17*spd);
 	}
+	// interactive ripples (splashes / bullets / props / wading) ride on top of the ambient wave.
+	// The ring sources are global (R_AddWaterRipple); this deform just marks the surface as a
+	// receiver, and the per-source strength is read live so r_waterripple_react tunes without a reload.
+	if (r_waterripple_react.value > 0)
+		Q_strncatz(deform, "deformVertexes ripple\n", sizeof(deform));
 
 	switch(wstyle)
 	{

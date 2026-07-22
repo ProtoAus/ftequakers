@@ -2498,6 +2498,52 @@ static void deformgen(const deformv_t *deformv, int cnt, vecV_t *src, vecV_t *ds
 		}
 		break;
 
+	case DEFORMV_RIPPLE:
+		//nettest: interactive water ripples.  Sum every live expanding-ring source (r_waterripples,
+		//fed by R_AddWaterRipple) as a gaussian-windowed cosine riding an outward-growing wavefront,
+		//and push the vertex up/down in Z on top of whatever the wave deform already did.  Pure Z
+		//(these are up-facing liquid tops), so no normals needed and xy are left untouched.
+		if (src != dst)
+			memcpy(dst, src, sizeof(*src)*cnt);
+		if (r_waterripple_react.value > 0)
+		{
+			float react = r_waterripple_react.value;
+			float now = shaderstate.updatetime;
+			for ( j = 0; j < cnt; j++ )
+			{
+				float disp = 0;
+				for ( k = 0; k < MAX_WATERRIPPLES; k++ )
+				{
+					const waterripple_t *rip = &r_waterripples[k];
+					float age = now - rip->starttime;
+					float front, dx, dy, d2, lo, hi, d, x, env, fade;
+					if (rip->amp <= 0 || age < 0 || age >= rip->lifetime)
+						continue;
+					front = age * rip->speed;
+					dx = src[j][0] - rip->origin[0];
+					dy = src[j][1] - rip->origin[1];
+					d2 = dx*dx + dy*dy;
+					//only vertices near the current ring radius move -- skip the rest before the sqrt
+					lo = front - 3.0f*rip->size;
+					hi = front + 3.0f*rip->size;
+					if (lo < 0)
+						lo = 0;
+					if (d2 > hi*hi || d2 < lo*lo)
+						continue;
+					d = sqrt(d2);
+					x = (d - front) / rip->size;			//offset from the wavefront, in 'size' units
+					if (x < -3.0f || x > 3.0f)
+						continue;
+					env = exp(-x*x);						//gaussian ring band
+					fade = 1.0f - age / rip->lifetime;
+					fade *= fade;							//ease-out over the ripple's life
+					disp += rip->amp * fade * env * cos(x * 3.14159265f);
+				}
+				dst[j][2] += disp * react;
+			}
+		}
+		break;
+
 	case DEFORMV_NORMAL:
 		//normal does not actually move the verts, but it does change the normals array
 		//we don't currently support that.

@@ -34,6 +34,7 @@ extern cvar_t r_replacemodels;
 extern cvar_t r_lightmap_average;
 extern cvar_t r_waterripple;
 extern cvar_t r_waterripple_tess;
+extern cvar_t r_waterripple_react;
 cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
@@ -2596,7 +2597,7 @@ qboolean Mod_LoadVertexNormals (model_t *loadmodel, bspx_header_t *bspx, qbyte *
 // (classic GLQuake SubdividePolygon) so neighbouring water faces share edge vertices and stay
 // crack-free while displaced. The same routine runs in count mode (mesh==NULL) to size the VBO
 // and in emit mode to fill it, so the two passes always agree.
-#define WATERSUBDIV_MINSPLIT 8.0f		// don't put a grid plane closer than this to an edge
+#define WATERSUBDIV_SNAP     0.1f		// treat a vertex within this of a grid plane as ON it (kills slivers)
 #define WATERSUBDIV_MAXVERTS 16384		// per-surface safety cap (well under MAX_ARRAY_VERTS)
 #define WATERSUBDIV_MAXPTS   64			// working winding size
 
@@ -2744,15 +2745,27 @@ static void Surf_WaterSubdividePoly(watersubdiv_t *w, int numpts, vec3_t *pts)
 
 	for (axis = 0; axis < 3; axis++)
 	{
+		// Split at the GLOBAL grid plane nearest this fragment's centre (binary subdivision, so the
+		// recursion stays O(log span) deep). Snapping the plane to the world lattice -- and NOT
+		// skipping one merely because it lands near an edge -- means both sides of every shared edge
+		// end up split at the identical set of planes: no fragment is ever left a vertex short of its
+		// neighbour, which was the T-junction that detached corner tris from the wave grid. Recursion
+		// keeps going until a fragment has no grid line strictly inside it, so every interior grid
+		// line is split regardless of the order they are picked in.
 		m = (mins[axis] + maxs[axis]) * 0.5f;
-		m = w->cellsize * floor(m/w->cellsize + 0.5f);	// nearest grid plane
-		if (maxs[axis] - m < WATERSUBDIV_MINSPLIT)
-			continue;
-		if (m - mins[axis] < WATERSUBDIV_MINSPLIT)
-			continue;
+		m = w->cellsize * floor(m/w->cellsize + 0.5f);	// nearest global grid plane
+		if (m <= mins[axis] + WATERSUBDIV_SNAP || m >= maxs[axis] - WATERSUBDIV_SNAP)
+			continue;	// plane sits at (or within snap of) an edge -> no interior split, and the
+						// edge vertex is already on the grid so its neighbour shares it (no T-junction)
 
 		for (i = 0; i < numpts; i++)
+		{
 			dist[i] = pts[i][axis] - m;
+			// A grid line grazing a boundary vertex would otherwise shave a near-degenerate sliver;
+			// snap the vertex onto the plane so the dist==0 path below shares it cleanly instead.
+			if (dist[i] > -WATERSUBDIV_SNAP && dist[i] < WATERSUBDIV_SNAP)
+				dist[i] = 0;
+		}
 		dist[numpts] = dist[0];		// wrap for the edge test
 
 		f = b = 0;
@@ -2829,7 +2842,9 @@ static void Surf_WaterSubdivide(model_t *mod, msurface_t *surf, mesh_t *outmesh,
 static qboolean Surf_WaterShouldRipple(msurface_t *surf)
 {
 	float up;
-	if (!(surf->flags & SURF_DRAWTURB) || r_waterripple.value <= 0)
+	//tessellate the surface if EITHER the ambient wave OR interactive reactions are enabled --
+	//reactive ripples need the same subdivided mesh, so you can have calm-but-reactive water.
+	if (!(surf->flags & SURF_DRAWTURB) || (r_waterripple.value <= 0 && r_waterripple_react.value <= 0))
 		return false;
 	// only the roughly-upward-facing (top) liquid surfaces get tessellated + rippled; the
 	// vertical side faces and the floor keep their flat corner mesh so they don't wobble

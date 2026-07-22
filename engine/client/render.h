@@ -638,6 +638,24 @@ void R_UpdateHDR(vec3_t org);
 void R_UpdateLightStyle(unsigned int style, const char *stylestring, float r, float g, float b);
 void R_BumpLightstyles(unsigned int maxstyle);	//bumps the cl_max_lightstyles array size, if needed.
 qboolean R_CalcModelLighting(entity_t *e, struct model_s *clmodel);
+
+//interactive water ripples: transient expanding-ring disturbances summed on top of the
+//r_waterripple ambient wave by the DEFORMV_RIPPLE shader deform.  Sources are spawned by
+//gameplay (a splash, a bullet hitting water, a prop dropping in, a player wading) via
+//R_AddWaterRipple / the addwaterripple CSQC builtin, stamped with r_refdef.time, and aged out
+//by lifetime.  Held in a fixed ring buffer read by the renderer's deform pass (main thread only).
+typedef struct
+{
+	vec3_t	origin;		//world-space centre (only xy is used by the deform)
+	float	starttime;	//r_refdef.time when spawned
+	float	amp;		//peak height in world units
+	float	size;		//ring band spatial scale in world units (also sets the ripple wavelength)
+	float	speed;		//how fast the ring radius expands, world units/sec
+	float	lifetime;	//seconds until the ring has fully faded
+} waterripple_t;
+#define MAX_WATERRIPPLES 64
+extern waterripple_t r_waterripples[MAX_WATERRIPPLES];
+void R_AddWaterRipple(const vec3_t org, float amp, float size, float speed, float lifetime);
 struct texture_s *R_TextureAnimation (int frame, struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 struct texture_s *R_TextureAnimation_Q2 (struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 void RQ_Init(void);
@@ -698,6 +716,7 @@ extern	cvar_t	r_wateralpha_extendpvs;
 extern	cvar_t	r_waterripple;
 extern	cvar_t	r_waterripple_tess;
 extern	cvar_t	r_waterripple_speed;
+extern	cvar_t	r_waterripple_react;	//interactive ripples: splashes/impacts spawn expanding rings on the water mesh
 extern	cvar_t	r_waterstyle;
 extern	cvar_t	r_lavastyle;
 extern	cvar_t	r_slimestyle;

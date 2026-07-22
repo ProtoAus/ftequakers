@@ -266,6 +266,30 @@ cvar_t r_waterripple_tess					= CVARFD ("r_waterripple_tess", "64",
 												CVAR_ARCHIVE, "Grid cell size, in world units, for r_waterripple tessellation. Smaller = smoother ripples but more vertices. Read at map load.");
 cvar_t r_waterripple_speed					= CVARFD ("r_waterripple_speed", "1",
 												CVAR_ARCHIVE | CVAR_SHADERSYSTEM, "Speed multiplier for the r_waterripple wave motion.");
+cvar_t r_waterripple_react					= CVARFD ("r_waterripple_react", "1",
+												CVAR_ARCHIVE | CVAR_SHADERSYSTEM, "Makes liquid surfaces REACT to gameplay: players jumping in / wading, and bullets and props hitting the water spawn expanding ripple rings on the mesh. The value scales the strength of those rings; 0 disables the reaction (the ambient r_waterripple wave is separate). Like the wave this needs the water tessellated, so turning it on from 0 needs a map reload; the strength updates live. Sources are spawned from QC via the addwaterripple builtin.");
+
+//interactive water ripples fed by R_AddWaterRipple (see render.h).  A fixed ring buffer: new
+//sources overwrite the oldest slot, and the renderer's DEFORMV_RIPPLE pass skips any whose
+//lifetime has elapsed, so nothing has to be explicitly pruned.
+waterripple_t r_waterripples[MAX_WATERRIPPLES];
+static int r_waterripples_next;
+void R_AddWaterRipple(const vec3_t org, float amp, float size, float speed, float lifetime)
+{
+	waterripple_t *r;
+	if (r_waterripple_react.value <= 0)
+		return;	//reaction disabled (the ambient wave is a separate cvar); drop it
+	if (amp <= 0 || lifetime <= 0)
+		return;
+	r = &r_waterripples[r_waterripples_next];
+	r_waterripples_next = (r_waterripples_next + 1) % MAX_WATERRIPPLES;
+	VectorCopy(org, r->origin);
+	r->starttime = r_refdef.time;
+	r->amp = amp;
+	r->size = (size > 1)? size : 16;
+	r->speed = (speed > 0)? speed : 60;
+	r->lifetime = lifetime;
+}
 
 cvar_t r_replacemodels						= CVARFD ("r_replacemodels", IFMINIMAL("","md3 md2 md5mesh"),
 												CVAR_ARCHIVE, "A list of filename extensions to attempt to use instead of mdl.");
@@ -1027,6 +1051,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_waterripple, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterripple_tess, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterripple_speed, GRAPHICALNICETIES);
+	Cvar_Register (&r_waterripple_react, GRAPHICALNICETIES);
 	Cvar_Register (&r_lavaalpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimealpha, GRAPHICALNICETIES);
 	Cvar_Register (&r_telealpha, GRAPHICALNICETIES);

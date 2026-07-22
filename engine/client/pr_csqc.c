@@ -1408,6 +1408,20 @@ void QCBUILTIN PF_R_DynamicLight_AddDynamic(pubprogfuncs_t *prinst, struct globa
 	PF_R_DynamicLight_AddInternal(prinst, pr_globals, false);
 }
 
+//nettest: interactive water ripples.  QC spawns an expanding ring at a world point (a splash, a
+//bullet hitting water, a prop dropping in, a player wading); the renderer's DEFORMV_RIPPLE deform
+//sums it onto the tessellated liquid surface.  No-op unless r_waterripple_react > 0.
+//void(vector org, float amplitude, [float size, float speed, float lifetime]) addwaterripple
+void QCBUILTIN PF_cs_addwaterripple(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float *org      = G_VECTOR(OFS_PARM0);
+	float amplitude = G_FLOAT(OFS_PARM1);
+	float size      = (prinst->callargc > 2)?G_FLOAT(OFS_PARM2):16;
+	float speed     = (prinst->callargc > 3)?G_FLOAT(OFS_PARM3):60;
+	float lifetime  = (prinst->callargc > 4)?G_FLOAT(OFS_PARM4):1.5;
+	R_AddWaterRipple(org, amplitude, size, speed, lifetime);
+}
+
 static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	int mask = G_FLOAT(OFS_PARM0);
@@ -7455,6 +7469,8 @@ static struct {
 	{"gp_rumbletriggers",		PF_cl_gp_rumbletriggers,	0}, // #0 void(float devid, float left, float right, float duration) gp_rumbletriggers
 	{"gp_setledcolor",			PF_cl_gp_setledcolor,		0}, // #0 void(float devid, float red, float green, float blue) gp_setledcolor
 	{"gp_settriggerfx",			PF_cl_gp_settriggerfx,		0}, // #0 void(float devid, const void *data, int size) gp_settriggerfx
+
+	{"addwaterripple",			PF_cs_addwaterripple,		0}, // #0 void(vector org, float amplitude, float size, float speed, float lifetime) addwaterripple (nettest)
 
 	{NULL}
 };

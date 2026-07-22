@@ -102,7 +102,8 @@ typedef struct
 		DEFORMV_AUTOSPRITE,
 		DEFORMV_AUTOSPRITE2,
 		DEFORMV_PROJECTION_SHADOW,
-		DEFORMV_TEXT
+		DEFORMV_TEXT,
+		DEFORMV_RIPPLE		//nettest: interactive water ripples (global sources in r_waterripples[])
 	} type;
     float			args[4];
     shaderfunc_t	func;
