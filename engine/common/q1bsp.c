@@ -1881,8 +1881,17 @@ start:
 				if (surf->visframe != q1_framecount)
 					continue;
 
-				if (((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK)))
-					continue;		// wrong side
+				//backface cull against the surface's OWN plane, not the node's. For a
+				//normal brush face those are the same plane so sdot==dot and this is
+				//identical; but a qbsp mesh importer (misc_external_mesh) can leave
+				//triangles on a node whose plane differs from the triangle's, and the
+				//node dot would then cull them by the wrong plane -- they vanish from one
+				//side of that plane and cast ghost shadows from the other.
+				{
+					double sdot = DotProduct(r_origin, surf->plane->normal) - surf->plane->dist;
+					if (((sdot < 0) ^ !!(surf->flags & SURF_PLANEBACK)))
+						continue;		// wrong side
+				}
 
 				Surf_RenderDynamicLightmaps (surf);
 				surf->sbatch->mesh[surf->sbatch->meshes++] = surf->mesh;
