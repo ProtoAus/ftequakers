@@ -48,6 +48,21 @@
 #define RAD2DEG(d) ((d)*180.0 / M_PI)
 #endif
 
+//Max vertices we may ask b3CreateHull for.
+//
+//Box3D index-encodes the finished hull with uint8_t, so vertices, faces AND half-edges must each
+//stay under 255 (hull.c: B3_HULL_LIMIT).  Only the VERTEX count is budgeted by the builder; faces
+//and half-edges fall out of the geometry, and b3CreateHull enforces Euler's identity
+//(v - e + f == 2), so half-edges H = 2(V+F-2).  A triangulated hull -- which is what organic prop
+//meshes produce -- has F = 2V-4, giving H = 6V-12.  H <= 254 therefore needs V <= 44.
+//
+//Asking for 255 (as this file used to) is self-defeating: the budget permits 255 and the builder
+//then REJECTS at >= 255, so anything that saturates it is thrown away and b3CreateHull returns
+//NULL.  In practice the half-edge limit bit first -- a 55-vertex hull produces 316 half-edges and
+//died, which is where the endless "hull final half edge count of N exceeds limit of 255" spam came
+//from.  Do not raise this without re-deriving it against hull.c.
+#define BOX3D_MAXHULLVERTS 44
+
 #ifndef FTEENGINE
 #define BZ_Malloc malloc
 #define BZ_Free free
@@ -496,7 +511,7 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 							pts[i].y = ch->tris[i][1]*scale - geomcenter[1];
 							pts[i].z = ch->tris[i][2]*scale - geomcenter[2];
 						}
-						ph = b3CreateHull(pts, ptcount, ptcount < 255 ? ptcount : 255);
+						ph = b3CreateHull(pts, ptcount, ptcount < BOX3D_MAXHULLVERTS ? ptcount : BOX3D_MAXHULLVERTS);
 						BZ_Free(pts);
 					}
 					if (!ph)
@@ -579,13 +594,62 @@ static void World_Box3D_Frame_BodyFromEntity(world_t *world, wedict_t *ed)
 			else
 			{
 				//dynamic prop, no decomposition (single-mesh / convex) -> one convex hull from the
-				//collision verts (Box3D has no dynamic trimesh).  Hull verts index with uint8 -> <=255.
+				//collision verts (Box3D has no dynamic trimesh).  See BOX3D_MAXHULLVERTS: the cap is
+				//44, not 255, or the half-edge count overflows uint8 and b3CreateHull returns NULL.
 				box3dgeom_t *g;
-				int maxv = ed->rbe.numvertices < 255 ? ed->rbe.numvertices : 255;
+				int maxv = ed->rbe.numvertices < BOX3D_MAXHULLVERTS ? ed->rbe.numvertices : BOX3D_MAXHULLVERTS;
 				b3HullData *hull = b3CreateHull((const b3Vec3*)ed->rbe.vertex3f, ed->rbe.numvertices, maxv);
 				if (!hull)
-				{
-					World_Box3D_RemoveFromEntity(world, ed);
+				{	//Quickhull failed (degenerate/coplanar cloud).  Fall back to a solid box built from
+					//the collision verts' own AABB -- the same "never drop a piece" trick the decomposition
+					//path uses above, and in the SAME space (vertex3f is already body-local), so it cannot
+					//be misplaced.
+					//
+					//This used to call World_Box3D_RemoveFromEntity, which was doubly wrong: it left the
+					//prop with NO collision at all (players walk through it), AND it cleared
+					//ed->rbe.physics, which is the very flag the per-frame rebuild gate tests -- so
+					//World_Box3D_Frame retried the full quickhull over thousands of points EVERY FRAME,
+					//forever, re-logging each time.  Same reasoning as the GenerateCollisionMesh failure
+					//above: never RemoveFromEntity on a build failure or we re-spam every frame.
+					b3Vec3 corners[8];
+					vec3_t bmin, bmax;
+					int i;
+					if (ed->rbe.numvertices > 0)
+					{
+						VectorCopy(ed->rbe.vertex3f, bmin);
+						VectorCopy(ed->rbe.vertex3f, bmax);
+						for (i = 1; i < ed->rbe.numvertices; i++)
+						{
+							const float *v = ed->rbe.vertex3f + i*3;
+							int a;
+							for (a = 0; a < 3; a++)
+							{
+								if (v[a] < bmin[a])
+									bmin[a] = v[a];
+								if (v[a] > bmax[a])
+									bmax[a] = v[a];
+							}
+						}
+					}
+					else
+					{	//no verts at all -> use the entity's own box
+						VectorSet(bmin, -geomsize[0]*0.5f, -geomsize[1]*0.5f, -geomsize[2]*0.5f);
+						VectorSet(bmax,  geomsize[0]*0.5f,  geomsize[1]*0.5f,  geomsize[2]*0.5f);
+					}
+					for (i = 0; i < 8; i++)
+					{
+						corners[i].x = (i&1)?bmax[0]:bmin[0];
+						corners[i].y = (i&2)?bmax[1]:bmin[1];
+						corners[i].z = (i&4)?bmax[2]:bmin[2];
+					}
+					hull = b3CreateHull(corners, 8, 8);
+				}
+				if (!hull)
+				{	//even the box was degenerate (zero-extent on an axis).  Leave physics=true with no
+					//shape so the rebuild gate stays shut -- mins/maxs/modelindex were recorded above, so
+					//we only retry if the model actually changes.
+					if (physics_box3d_debug->ival)
+						Con_Printf("Box3D: %s has no usable collision hull\n", PR_GetString(world->progs, ed->v->classname));
 					return;
 				}
 				g = Box3D_AllocGeom(1); g->ptr[0] = hull;					//free via b3DestroyHull on remove

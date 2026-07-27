@@ -352,7 +352,9 @@ LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
 	 || code == EXCEPTION_STACK_OVERFLOW   || code == EXCEPTION_IN_PAGE_ERROR
 	 || code == EXCEPTION_PRIV_INSTRUCTION)
 	{
-		HANDLE h = CreateFileA("C:\\FTEQuake\\nettest\\crashaddr.txt", FILE_APPEND_DATA,
+		//was ...\nettest\crashaddr.txt; that gamedir is now quakers, so crashes were logging into a
+		//directory that no longer exists and the file was never created.
+		HANDLE h = CreateFileA("C:\\FTEQuake\\quakers\\crashaddr.txt", FILE_APPEND_DATA,
 			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (h != INVALID_HANDLE_VALUE)
 		{

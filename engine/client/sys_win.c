@@ -643,7 +643,10 @@ LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
 		buf[0] = 0;
 		snprintf(buf, sizeof(buf), "code=0x%08lx addr=%p base=%p rva=0x%llx\r\n",
 			(unsigned long)code, (void*)addr, (void*)base, (unsigned long long)(addr - base));
-		HANDLE h = CreateFileA("C:\\FTEQuake\\nettest\\crashaddr.txt", FILE_APPEND_DATA,
+		//was C:\FTEQuake\nettest\crashaddr.txt -- that gamedir was renamed to quakers, so every
+		//crash address was being written into a folder that no longer exists (CreateFileA does not
+		//create missing directories), silently losing the diagnostics this whole handler exists for.
+		HANDLE h = CreateFileA("C:\\FTEQuake\\quakers\\crashaddr.txt", FILE_APPEND_DATA,
 			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (h != INVALID_HANDLE_VALUE)
 		{

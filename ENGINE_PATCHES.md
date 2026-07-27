@@ -18,6 +18,38 @@ $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
 harmless `pattern recipe did not update peer target p_script.d` warning may
 print; the `.o` and `.exe` still build.
 
+**RULE (2026-07-23, learned the hard way): every exe rebuild must also rebuild
+and redeploy ALL native plugins** — `fteplug_{hl2,cod,box3d,ode}_x64.dll`:
+
+```powershell
+& "C:\msys64\usr\bin\make.exe" -C "C:\msys64\home\Lex\fteqw\engine" plugins-rel FTE_TARGET=win64 NATIVE_PLUGINS="hl2 cod box3d ode"
+```
+
+Plugins compile engine headers (`gl_model.h`, `com_mesh.h`, `shader.h`) into
+their DLLs, and the engine's plugin gate only checks the *function table*
+(`sizeof(plugmodfuncs_t)` + `MODPLUGFUNCS_VERSION`) — there is **no data-struct
+canary**, so a stale plugin loads silently and corrupts memory at map load. A
+Jun-15 `fteplug_hl2` against a Jul exe (model_t had 48 bytes inserted
+mid-struct) made **every HL2/CSS map stall on load** with no error. APPEND-ONLY
+field discipline protects existing offsets but NOT array strides (a plugin
+that allocates arrays of `galiasinfo_t` bakes the old stride in), so
+rebuilding everything together is the only safe rule. Two traps in the plugin
+build itself: bare `plugins-rel` (no NATIVE_PLUGINS) dies on an unrelated
+ffmpeg target, and the plugin makefiles do **not** track engine-header deps —
+after a header change, `rm engine/release/fteplug_*_x64.dll` first or make
+will happily report "nothing to do". The scratchpad `build_fte.ps1` does the
+full set (m-rel + sv-rel + plugins).
+
+**WORSE (found the same day): the ENGINE's make doesn't track header deps
+either.** After the model_t layout change, `make m-rel` rebuilt only **7 of
+213** client objects — the linked exe mixed old-layout and new-layout code and
+SIGSEGV'd at VBSP load (crash stack: engine frame called from
+`VBSP_GenerateMaterials`). `make clean` does not clean the win64 object dirs.
+After ANY engine-header change, force a full recompile: touch every
+`*.c/*.cpp/*.h` under `engine/` (or delete all `.o`/`.d` under
+`release/m_mgw64` + `release/sv_mingw64`), then rebuild. `build_fte.ps1 -full`
+does exactly this.
+
 ---
 
 ## Patch 1 — `watercliptype` (rain splashes on water surfaces)
@@ -3309,3 +3341,114 @@ this fix the "3 sizes" vanished at ratio 1; after it, ratio 3 is correctly sized
 texel count while radii grow ×3, so the far cascade is ~8× coarser than the old single map. That's a
 resolution/texel-budget follow-up (bigger atlas, per-cascade PCF scaling, or view-fitted far cascades), not a
 correctness bug.
+
+---
+
+## Maintenance 2026-07-23 — model_t APPEND-ONLY restored (the "all HL2/CSS maps stall" incident)  *(APPLIED, `m-rel`+`sv-rel`+ALL plugins)*
+
+**Symptom:** every Source map (HL2 VBSP / CSS) stalled or crashed at load, with nothing in the log. Quake
+maps fine. Started silently at some point; user couldn't date it.
+
+**Root cause:** the Patch 56/61 convex-hull fields (`numhullplanes/hullplanes/numhulltris/hulltris/
+numhulls/convhulls`, 48 bytes) were inserted into the **middle** of `model_t` (before `clipbox`),
+violating the struct's own APPEND-ONLY comments. VBSP loading lives in `plugins/hl2/mod_vbsp.c`, which
+compiles `gl_model.h` into `fteplug_hl2_x64.dll` — the deployed DLL predated the insertion (built Jun 15),
+so on a newer exe every `model_t` member it touches (`surfaces`, `planes`, `textures`, `lightdata`,
+`funcs.*`, the embedded `batches[]`, `memgroup`) was read/written **48 bytes off**: `GMalloc(&mod->memgroup)`
+built the allocation chain inside the wrong bytes of the struct, `Mod_Batches_Build` read garbage surface
+pointers → stall/crash on the first VBSP map. `fteplug_cod` had the identical exposure for CoD maps.
+It was silent because the plugin gate (`plugin.c` `PlugBI_GetEngineInterface` + `MODPLUGFUNCS_VERSION` in
+`com_mesh.h`) only checks the function table, never data-struct layout.
+
+**Fix:** moved the six fields to the **tail** of `model_t` (after `sunvisdata`) in `gl_model.h`, with a
+comment recording the incident; rebuilt exe + `fteqwsv64` + all four native plugins together and deployed
+as a set. Headless-verified: `d1_trainstation_01` (HL2), `de_dust2` (CSS) and `2fort` (Quake, Box3D up)
+all reach "Server spawned." on the dedicated server.
+
+**Standing rule going forward** (also in the Build/deploy section above): any change to a plugin-visible
+struct — and in practice ANY engine rebuild — means rebuilding + redeploying all native plugins. Delete
+`engine/release/fteplug_*_x64.dll` first after header changes; the plugin makefiles don't track engine
+headers.
+
+**Follow-up A (build-system trap, same day):** the first "fixed" exe SIGSEGV'd anyway — FTE's make does
+not track engine-header deps, so `make m-rel` after the gl_model.h change rebuilt only 7/213 client
+objects = an exe mixing old- and new-layout code (crash under `VBSP_GenerateMaterials`). See the RULE +
+forced-full-rebuild note in the Build/deploy section. Also: Q3/botlib objects in `release/m_mgw64` build
+from `plugins/quake3/` — touching only `engine/` misses them.
+
+**Follow-up B (`s_shadowmap` C1503, `gl_shader.c` `Com_PermuOrFloatArgument`):** cold-starting straight
+into a map (`+map` / cl_launchintogame) parsed every world program's `!!samps =FAKESHADOWS shadowmap`
+while the `r_fakeshadows` global was still false (it only flips in a rendered 3D frame,
+`gl_shadow.c:5688`) → no `s_shadowmap` uniform → when the FAKESHADOWS define later reached a
+permutation, GLSL compile died `C1503 undefined variable "s_shadowmap"` (surfaced on the hl2 plugin's
+`vmt/lightmapped#ENVFROMMASK`). Fix: the samps condition now also accepts the cvar intent
+(`r_fakeshadows || r_shadows.ival == 2`) — declaring the never-bound sampler is free, all usage stays
+behind `#ifdef FAKESHADOWS`.
+
+**Verified end-to-end** (client under gdb, cold `+map`): `d1_trainstation_01`, `de_dust2`, `2fort` —
+0 signals, 0 shader/host errors, in-game with Box3D up, on both the client and the dedicated server.
+
+---
+
+## Patch 115 — Box3D rejected any prop hull over ~44 verts, then retried it every frame  *(APPLIED — `plugins-rel NATIVE_PLUGINS=box3d`, win64 + linux64)*
+
+**Symptom.** Loading `2fort` on the dedicated server printed hundreds of lines of
+
+```
+Box3D: hull final half edge count of 316 exceeds limit of 255
+Box3D: hull final face count of 403 exceeds limit of 255
+Box3D: hull final vertex count of 255 exceeds limit of 255
+```
+
+and kept printing them for the life of the server.
+
+**Cause 1 — the cap was wrong by ~6x.** Box3D index-encodes a finished hull with `uint8_t`, so
+vertices, faces *and* half-edges must each stay under 255 (`hull.c`, `B3_HULL_LIMIT`). `b3CreateHull`
+does not simplify or truncate on overflow — all three checks `b3Free(...); return NULL;`. Only the
+VERTEX count is budgeted (`hull.c:1429`); faces and half-edges fall out of the geometry, and the
+builder enforces Euler's identity (`v - e + f == 2`), so half-edges `H = 2(V+F-2)`. A triangulated
+hull — what organic prop meshes produce — has `F = 2V-4`, giving `H = 6V-12`. `H <= 254` therefore
+needs **`V <= 44`**, but `com_phys_box3d.c` asked for up to 255 at both call sites. The reported 316
+half-edges back-solves exactly to a 55-vertex hull. Asking for 255 is self-defeating on its own: the
+budget permits 255 and the builder then rejects at `>= 255`, hence the absurd "vertex count of 255
+exceeds limit of 255".
+
+Measured over the shipped `.acd` sidecars: 34% of decomposition pieces already exceed 44 verts
+(median 35, p90 84, max 445), so this fired constantly.
+
+**Cause 2 — the failure path was destructive AND self-repeating.** The decomposition path degraded a
+failed piece to its AABB (playable, but it quietly defeats the entire point of decomposition). The
+single-hull path did `World_Box3D_RemoveFromEntity(world, ed); return;` — which leaves the prop with
+**no collision at all**, and clears `ed->rbe.physics`, which is the very flag the rebuild gate at
+`com_phys_box3d.c:407` tests. `World_Box3D_Frame` walks every edict each frame, so the full quickhull
+over thousands of points re-ran, re-failed and re-logged **every frame, forever**. The same file
+already knew this trap — the `GenerateCollisionMesh` failure above it says "do NOT RemoveFromEntity or
+we re-spam every frame".
+
+**Fix** (`engine/common/com_phys_box3d.c`):
+- `#define BOX3D_MAXHULLVERTS 44`, derived above, used at both `b3CreateHull` call sites.
+- The single-hull failure now falls back to a solid box built from the collision verts' own AABB — the
+  same "never drop a piece" trick the decomposition path uses, and in the same space (`vertex3f` is
+  already body-local) so it cannot be misplaced. If even that degenerates, return with `physics` left
+  true so the gate stays shut instead of looping.
+
+**Verified.** `fteqwsv64.exe -game quakers +map 2fort`: **301 log lines before, 0 after**, with
+`sv_writecvars` confirming the map actually loaded and QC `StartFrame` ran. Do not raise
+`BOX3D_MAXHULLVERTS` without re-deriving it against `hull.c`.
+
+## Patch 116 — map index tagged with a hardcoded gamedir, emptying the Create Server map list  *(APPLIED — `m-rel` + `sv-rel`)*
+
+`FS_IndexAddonMaps` wrote the tag for the mod's own (non-addon) maps as the string literal
+`"nettest"`, so it did not follow the `nettest` -> `quakers` gamedir rename. The menu's
+`create_server_map_game()` matches on the gamedir name, stopped recognising them, and they fell
+through to its HL2 default — the Net tab came up empty even though all 1,624 maps were indexed
+correctly (they were showing under HL2). Now derived from `gamedirfile`, so a future rename cannot
+desync the two again. `menu/m_createserver.qc` also accepts both spellings, so the mod works against
+a stock engine build too.
+
+## Patch 117 — crash handler logged into a directory that no longer exists  *(APPLIED — `m-rel` + `sv-rel`)*
+
+`client/sys_win.c` and `server/sv_sys_win.c` both wrote crash addresses to
+`C:\FTEQuake\nettest\crashaddr.txt`. That gamedir is now `quakers`, and `CreateFileA` does not create
+missing directories, so every crash address and stack dump this handler exists to capture was being
+silently discarded. Repointed at `C:\FTEQuake\quakers\crashaddr.txt`.

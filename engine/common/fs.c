@@ -8773,8 +8773,15 @@ void FS_IndexAddonMaps(void)
 
 	ctx.buf = NULL; ctx.len = 0; ctx.max = 0;
 
-	//1. mod + FTE-base maps (NOT addon paths) -> tagged "nettest" (the menu's gid-1 "Net" tab).
-	ctx.tag = "nettest";
+	//1. mod + FTE-base maps (NOT addon paths) -> tagged with the ACTIVE GAMEDIR, which is what the
+	//create-server menu matches on to fill its own "Net" tab (gid 1).
+	//
+	//This was a hardcoded "nettest" and so did NOT follow the nettest->quakers gamedir rename: every
+	//one of the mod's own maps kept the stale tag, the menu's create_server_map_game() stopped
+	//recognising them, and they silently fell through to its HL2 default -- the Net tab came up
+	//empty even though the maps were indexed fine.  Deriving it from gamedirfile means a future
+	//rename can never desync the two again.
+	ctx.tag = *gamedirfile ? gamedirfile : "quakers";
 	FS_EnumerateNonAddonFiles("maps/*.bsp", FS_IndexMap_Visit, &ctx);
 
 	//2. each fs_addons.txt game's maps, enumerated OFFLINE (resolve the dir, readdir maps/, no mount).
