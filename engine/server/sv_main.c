@@ -18,6 +18,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #include "quakedef.h"
+#include "qkupdate.h"
 #include "netinc.h"
 #include "fs.h"	//for updates
 #ifdef SQL
@@ -280,6 +281,7 @@ void SV_Shutdown (void)
 	}
 
 #ifdef WEBCLIENT
+	QKU_Shutdown();	//quakers: before the terminate, so no late callback lands on freed plan state
 	HTTP_CL_Terminate();
 #endif
 
@@ -6520,7 +6522,11 @@ void SV_ExecInitialConfigs(char *defaultexec)
 	//make sure +set args override fmf/engine defaults (redundant when there's no map/etc command in configs)
 	COM_ParsePlusSets(true);
 
-	if (COM_FileSize("server.cfg") != -1)
+	//quakers: prefer <gamedir>/cfg/*.cfg so the mod can keep every config in one folder, falling
+	//back to the root names when absent (stock games, or a cfg-less install, boot unchanged).
+	if (COM_FileSize("cfg/server.cfg") != -1)
+		Cbuf_AddText ("cl_warncmd 1\nexec cfg/server.cfg\nexec cfg/ftesrv.cfg\n", RESTRICT_LOCAL);
+	else if (COM_FileSize("server.cfg") != -1)
 		Cbuf_AddText ("cl_warncmd 1\nexec server.cfg\nexec ftesrv.cfg\n", RESTRICT_LOCAL);
 	else if (COM_FileSize("quake.rc") != -1)
 		Cbuf_AddText ("cl_warncmd 0\nexec quake.rc\ncl_warncmd 1\nexec ftesrv.cfg\n", RESTRICT_LOCAL);
@@ -6528,6 +6534,8 @@ void SV_ExecInitialConfigs(char *defaultexec)
 	else if (COM_FileSize("hexen.rc") != -1)	//fixme: some kind of priority thing.
 		Cbuf_AddText ("cl_warncmd 0\nexec hexen.rc\ncl_warncmd 1\nexec ftesrv.cfg\n", RESTRICT_LOCAL);
 #endif
+	else if (COM_FileSize("cfg/default.cfg") != -1)
+		Cbuf_AddText ("cl_warncmd 0\nexec cfg/default.cfg\ncl_warncmd 1\nexec cfg/ftesrv.cfg\n", RESTRICT_LOCAL);
 	else
 		Cbuf_AddText ("cl_warncmd 0\nexec default.cfg\ncl_warncmd 1\nexec ftesrv.cfg\n", RESTRICT_LOCAL);
 

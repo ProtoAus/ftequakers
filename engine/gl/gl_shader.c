@@ -1522,6 +1522,9 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 	extern cvar_t r_sun_dir;			//nettest: env_sun world direction, injected as e_fakesundir for model sun-shade
 	extern cvar_t r_shadows_slots;		//nettest P110: fake-shadow atlas slot count, injected as FAKESHADOWS_COUNT
 	extern cvar_t r_shadows_cascades;	//nettest P114: sun cascade count (slots==1 only), also drives FAKESHADOWS_COUNT
+	extern cvar_t r_shadows_propshadows;		//nettest Phase-1: per-prop PERSPECTIVE shadow cells (slots==1 only)
+	extern cvar_t r_shadows_propshadows_max;	//nettest Phase-1: how many perspective prop cells the atlas carries
+	extern cvar_t r_shadows_propshadows_worldmask;	//Patch 120: halves the live cell budget -- must be mirrored below
 
 	if (~prog->supportedpermutations & p)
 		return NULL;	//o.O
@@ -1562,12 +1565,38 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		//to use: cascades are nested boxes of the same sun, so the shader must pick the tightest cell
 		//that contains a pixel (not ADD every containing cell as the direction-slot path does).
 		{
-			int fsslots = bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS);
+			//nettest Phase-1: the atlas may now carry SUN cells [0,fssun) followed by PERSPECTIVE per-prop
+			//cells [fssun, fssun+fspersp).  FAKESHADOWS_PERSP_FIRST tells the shader where the switch is;
+			//when it is absent the layout is exactly the P110/P114 all-ortho one (byte-identical output).
+			//Perspective prop shadows only apply with slots==1, and (for Phase 1) force a SINGLE sun cell --
+			//they replace the cascades rather than coexisting yet (Phase 2 lifts that).
+			int fsslots = bound(1, r_shadows_slots.ival, 8);	/*direction-atlas layout max (must match Sh_FakeShadowChooseSlots)*/
 			int fscasc  = bound(1, r_shadows_cascades.ival, 4/*SH_MAX_CASCADES*/);
-			int fscells = (fsslots > 1) ? fsslots : fscasc;
+			int fspersp = (fsslots <= 1 && r_shadows_propshadows.ival) ? bound(1, r_shadows_propshadows_max.ival, MAX_FAKESHADOW_SLOTS-1) : 0;
+			//Phase-2: cascades now COEXIST with prop cells.  Sun cells = direction slots (MULTI) OR cascades.
+			int fssun   = (fsslots > 1) ? fsslots : fscasc;
+			int fscells;
+			if (fspersp > 0)
+			{	//cap prop cells to the free atlas space (MUST match Sh_GeneratePropShadowsAtlas's propmax
+				//clamp): each free quadrant packs up to 16 eighth-size subcells, bounded by the slot array.
+				//Patch 120: the worldmask halving was MISSING here, so at cascades 3 + worldmask 1 the
+				//shader compiled 13 perspective cells while the engine could only ever fill 8.  The five
+				//dead slots still cost a loop iteration (5 depth taps) per pixel on every wall and model,
+				//plus their share of the 16 mat4 uniforms uploaded per draw call.
+				int nce = (fssun <= 1) ? 1 : fssun;
+				int cap = (4-nce)*16;
+				if (r_shadows_propshadows_worldmask.ival)
+					cap /= 2;	//each lamp also gets a same-size WORLD-occlusion subcell
+				if (cap > MAX_FAKESHADOW_SLOTS - nce) cap = MAX_FAKESHADOW_SLOTS - nce;
+				if (cap < 0) cap = 0;
+				if (fspersp > cap) fspersp = cap;
+			}
+			fscells = fssun + fspersp;
 			Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_COUNT %i\n", fscells);
-			if (fsslots <= 1 && fscasc > 1)
+			if (fsslots <= 1 && fscasc > 1)	//cascades (NOT direction slots) -- may now coexist with prop cells
 				Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_CASCADE 1\n");
+			if (fspersp > 0)
+				Q_strlcatfz(defines, &offset, sizeof(defines), "#define FAKESHADOWS_PERSP_FIRST %i\n", fssun);
 		}
 	}
 #endif
@@ -1639,12 +1668,21 @@ qboolean Shader_PermutationEnabled(unsigned int bit)
 qboolean Com_PermuOrFloatArgument(const char *shadername, char *arg, size_t arglen, float def)
 {
 	extern cvar_t gl_specular;
+	extern cvar_t r_shadows;	//nettest: see FAKESHADOWS below
 	size_t p;
 	//load-time-only permutations...
 	if (arglen == 8 && !strncmp("SPECULAR", arg, arglen) && gl_specular.value)
 		return true;
 #ifdef RTLIGHTS
-	if (arglen == 11 && !strncmp("FAKESHADOWS", arg, arglen) && r_fakeshadows)
+	//nettest: also accept the CVAR intent, not just the live global.  r_fakeshadows only flips true
+	//once the shadow-settings check runs in a rendered 3D frame (gl_shadow.c), so a cold start
+	//straight into a map (+map / cl_launchintogame) parses every world program's "!!samps
+	//=FAKESHADOWS shadowmap" while the global is still false -> no s_shadowmap uniform -> when the
+	//FAKESHADOWS define later reaches the permutation (injection or !!permu force-define) the GLSL
+	//dies with C1503 "undefined variable s_shadowmap" (seen on the hl2 plugin's vmt/lightmapped).
+	//Declaring the sampler whenever fake shadows COULD enable is free: nothing binds it and all
+	//usage stays behind #ifdef FAKESHADOWS.
+	if (arglen == 11 && !strncmp("FAKESHADOWS", arg, arglen) && (r_fakeshadows || r_shadows.ival == 2))
 		return true;
 #endif
 	if ((arglen==5||arglen==6) && !strncmp("DELUXE", arg, arglen) && r_deluxemapping && Shader_PermutationEnabled(PERMUTATION_BUMPMAP))
@@ -2529,6 +2567,7 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"e_noshadowrecv",			SP_E_NOSHADOWRECV},	//nettest: 1 = don't receive the r_shadows 2 fake-sun shadowmap (viewmodel); 0 = normal. Fail-safe polarity: an unbound uniform reads 0 = normal.
 /**/{"e_fpfade",				SP_E_FPFADE},		//nettest: 1 = local first-person body, dither away above the height band; 0 = normal. Fail-safe polarity: an unbound uniform reads 0 = draw the whole model.
 /**/{"e_sundir",				SP_E_SUNDIR},		//nettest: PER-ENTITY world-space dominant light dir (toward the light) for the sun form-shade; deluxemap-derived, falls back to r_sun_dir.
+/**/{"e_sunshade",			SP_E_SUNSHADE},		//nettest Patch 120c: PER-ENTITY 0..1 sun-shade fraction (0 sunlit, 1 under a roof), time-smoothed. Fail-safe polarity: an unbound uniform reads 0 = full sun terms.
 	//nettest P110: the fake-shadow atlas slot arrays.  BOTH the bare and the "[0]" spelling are registered
 	//ON PURPOSE.  GLSlang_ProgAutoFields binds by a literal glGetUniformLocation call per row -- there is no
 	//glGetActiveUniform enumeration and no name normalisation -- and drivers disagree about which spelling
@@ -2540,6 +2579,8 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"l_fakeshadowmatrix",		SP_FAKESHADOWMATRIX},
 /**/{"l_fakeshadowcell[0]",		SP_FAKESHADOWCELL},
 /**/{"l_fakeshadowcell",		SP_FAKESHADOWCELL},
+/**/{"l_fakeshadowinfo[0]",		SP_FAKESHADOWINFO},
+/**/{"l_fakeshadowinfo",		SP_FAKESHADOWINFO},
 /**/{"e_uppercolour",			SP_E_TOPCOLOURS},	//q1 player colours
 /**/{"e_lowercolour",			SP_E_BOTTOMCOLOURS},//q1 player colours
 /**/{"e_light_dir",				SP_E_L_DIR},		//lightgrid light dir. dotproducts should be clamped to 0-1.

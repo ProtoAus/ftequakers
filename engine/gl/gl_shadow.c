@@ -111,6 +111,15 @@ cvar_t r_shadows_bias						= CVARD("r_shadows_bias", "2", "r_shadows 2 shadow de
 //fraction of the ortho depth ([0,1] = 2*r_shadows_distance qu; 0.06 ~= 123 qu at distance 1024).
 //Higher = shadows reach further (more leak); lower = tighter contact-only; 0 disables the fade.
 cvar_t r_shadows_throwfade					= CVARD("r_shadows_throwfade", "0.06", "r_shadows 2 contact-shadow gap fade: fraction of the ortho shadow depth beyond which a caster stops shadowing (stops shadows leaking through floors). Higher = longer reach; 0 = off.");
+//nettest Phase-0 (caster sun-visibility gate) -------------------------------------------------------
+//The fake-SUN pass renders EVERY caster into the sun map regardless of whether the sun actually lights
+//it, so a prop/player standing in baked shade still stamps a hard sun shadow onto nearby props (and
+//double-darkens baked shade).  This gate drops a caster from the sun map when its dominant BAKED light
+//direction (the same per-entity deluxemap dir Patch 108 uses to shade it) disagrees with the sun by more
+//than the cutoff -- i.e. it is lit by a lamp / in shade, so the sun is not its shadow-caster.  Compares
+//dot(toward-dominant-light, toward-sun): ~1 = sunlit (cast), low = lamp-lit/shade (skip).  Fail-safe: no
+//deluxemap -> no dir -> treated as sunlit (still casts).  0 = off (classic: everyone casts).
+cvar_t r_shadows_caster_sunvis				= CVARD("r_shadows_caster_sunvis", "0", "r_shadows 2: a caster whose dominant baked light is more than this far (dot cutoff, 0..1) from the sun is treated as lamp-lit/in-shade and does NOT cast a sun shadow onto others. 0 = off (DEFAULT since Patch 120: it deletes a shadow and puts nothing in its place, and its single origin-relative probe flipped as a player walked or ducked). Higher = more casters excluded; needs a deluxemap (light -bspxlux).");
 //nettest P110 (multi-direction fake shadows) --------------------------------------------------------
 //One ortho projection carries ONE parallel cast direction, so plain r_shadows 2 throws every prop's
 //shadow along the sun even when a nearby lamp is what actually lights it.  These split the depth map
@@ -156,6 +165,57 @@ cvar_t r_shadows_cascades					= CVARFD("r_shadows_cascades", "1", CVAR_SHADERSYS
 static cvar_t r_shadows_cascade_dist		= CVARD("r_shadows_cascade_dist", "2048", "Radius (qu) of the OUTERMOST sun cascade around the camera. Inner cascades are r_shadows_cascade_ratio smaller each; bigger = longer shadow range but each cascade covers more ground (less dense).");
 static cvar_t r_shadows_cascade_ratio		= CVARD("r_shadows_cascade_ratio", "3", "Size step between adjacent sun cascades: each inner cascade is 1/this the radius of the next one out. Higher = a tighter/denser near cascade but a bigger jump in resolution between cascades.");
 static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "Print each sun cascade's radius and texel density (texels/qu) once per second. Use it to confirm the near cascade is actually denser than the single map.");
+//---------------------------------------------------------------------------------------------------
+//nettest Phase-1 (per-prop PERSPECTIVE shadows) ----------------------------------------------------
+//The Source/CS2 "dominant local light" model.  A prop lit by a room lamp casts ONE shadow FROM that lamp,
+//rendered as a spotlight PERSPECTIVE projection through the prop -- so it swings to any angle AND grows as
+//the prop nears the lamp (the two things the ortho slots/cascades physically cannot do), while darkening
+//only (all baked lighting is preserved).  Each qualifying prop gets its own atlas cell.  slots==1 only.
+//CVAR_SHADERSYSTEM: r_shadows_propshadows(_max) set FAKESHADOWS_COUNT / FAKESHADOWS_PERSP_FIRST.
+cvar_t r_shadows_propshadows				= CVARFD("r_shadows_propshadows", "1", CVAR_SHADERSYSTEM, "r_shadows 2: props cast a PERSPECTIVE shadow from their nearest map light -- swings 360 and grows as it nears the lamp, darkening only. Needs a deluxemap (light -bspxlux) + point-light entities. Requires r_shadows_slots 1. 0 = off. (nettest ships this ON; the whole feature is inert on maps with no point lights.)");
+cvar_t r_shadows_propshadows_cone			= CVARD("r_shadows_propshadows_cone", "120", "Prop shadows: cone angle (degrees, full width) used by a light that does NOT set its own \"angle\"/\"_cone\" spot key. The cone is FIXED per light -- aimed by \"mangle\"/\"target\", or straight down when the light declares neither -- so projections never re-aim or re-zoom as props move through them. Narrower = sharper (the cell's pixels cover less ground) but a prop outside the cone gets no shadow.");
+cvar_t r_shadows_propshadows_switch			= CVARD("r_shadows_propshadows_switch", "2", "Prop shadows: how much brighter-per-distance a lamp must be than the one already shadowing a prop before it takes over (1 = no stickiness, switch on every tie; 2 = the challenger must score twice as high). Stops a prop's shadow snapping to a different lamp as you walk across two lamps' iso-surface.");
+cvar_t r_shadows_propshadows_max			= CVARFD("r_shadows_propshadows_max", "13", CVAR_SHADERSYSTEM, "Max simultaneous LIGHT cells for prop shadows (each cell = one lamp cone covering every prop near it; on-screen-nearest lamps win, with hysteresis). Shares the 16-slot atlas with the sun cells: cascades 3 leaves up to 13, cascades 1 up to 15. More live cells = smaller per-cell resolution once past 4 per free quadrant (raise r_shadows_res to compensate).");
+static cvar_t r_shadows_propshadows_range	= CVARD("r_shadows_propshadows_range", "1.5", "How far a map light reaches to own a prop's shadow, as a multiple of its brightness value (matches the light-swing/blob reach). Higher = distant lamps still shadow props.");
+static cvar_t r_shadows_propshadows_bias	= CVARD("r_shadows_propshadows_bias", "0.0015", "Depth bias for the per-prop perspective shadow (clip-z units, nudged toward the lamp). Raise to kill self-shadow acne on the caster; lower to hug contact tighter.");
+static cvar_t r_shadows_propshadows_debug	= CVARD("r_shadows_propshadows_debug", "0", "Print the per-prop perspective shadow assignments (lamp count, prop->lamp distance/fov) -- confirm assignment is stable. 2 = FORCE mode: bypass the sun-vs-lamp classification so any prop near a lamp casts (to verify the projection).");
+static cvar_t r_shadows_propshadows_showatlas = CVARD("r_shadows_propshadows_showatlas", "0", "Draw the fake-shadow depth atlas as an on-screen overlay: see the sun cascade quadrants, the lamp subcells, and what each cone actually captured. 1 = corner thumbnail, 2 = big. Depth shown as brightness (empty/far = black).");
+//Sunlight-aware lamp shadows: where a lamp's shadow lands on a SUN-VISIBLE surface the sun re-lights it,
+//so the shadow should wash out -- by the lamp-vs-sun brightness ratio (a floodlight keeps its shadow on
+//sunlit ground; a candle loses it).  Engine computes suppress = Bsun/(Bsun+Blamp) per LIGHT CELL and the
+//receiver multiplies it by the pixel's own baked sun visibility -- so the shadow fades exactly across the
+//sun/shade boundary.  Needs a SUNVIS bake (without one the factor is forced 0 = feature inert).
+static cvar_t r_shadows_sunbrightness		= CVARD("r_shadows_sunbrightness", "250", "The map sun's brightness in the same units as point-light `light` values (worldspawn _sunlight). env_sun stuffs the real per-map value; this is the fallback. Used to wash lamp shadows out on sunlit surfaces (r_shadows_propshadows_sunmask).");
+static cvar_t r_shadows_propshadows_sunmask	= CVARD("r_shadows_propshadows_sunmask", "1", "How strongly SUNLIT surfaces wash out lamp shadows: 0 = off (lamp shadows stamp onto sunlit ground at full strength), 1 = physical lamp-vs-sun brightness ratio, >1 = harsher washout. Needs a SUNVIS bake (light -sunvis).");
+/*non-static (Patch 120): gl_shader.c mirrors this cvar's halving of the lamp-cell budget into
+  FAKESHADOWS_COUNT -- the two clamps MUST agree or the shader loops over cells the engine cannot fill.
+  Patch 120b: hence CVAR_SHADERSYSTEM.  It was a plain CVARD, so toggling it changed the ENGINE's live
+  budget immediately while leaving the compiled loop bounds stale until the next vid_reload -- which
+  silently invalidated every A/B test of the mask itself.*/
+cvar_t r_shadows_propshadows_worldmask = CVARFD("r_shadows_propshadows_worldmask", "1", CVAR_SHADERSYSTEM, "Lamp shadows stop at walls: each lamp cell carries a paired WORLD-depth render and a pixel only receives the shadow when no world surface sits between it and the lamp (first-surface-only, the modern-Source projected-texture fix). Costs half the lamp-cell budget + one cached depth draw per lamp. 0 = old behaviour (shadows project through walls; full budget).");
+//In-shade classification for prop shadows: a prop whose BAKED sun visibility at its origin is >= this is
+//treated as sunlit (the sun already shadows it) and does NOT get a lamp shadow; below it the prop is in the
+//sun's shadow and is a candidate.  Uses the SUNVIS lump (true occlusion) -- far better than the sun-biased
+//deluxemap DIRECTION, which stays sun-leaning even in shade.  No SUNVIS bake => falls back to the deluxemap
+//dot (r_shadows_caster_sunvis), so un-baked maps are unchanged.
+static cvar_t r_shadows_propshadows_sunvis	= CVARD("r_shadows_propshadows_sunvis", "0.5", "r_shadows 2 propshadows: a prop whose baked sun visibility at its origin is >= this (0..1, 1=fully sunlit) is treated as sunlit and gets NO lamp shadow; below it the prop is in shade and casts from its lamp. Needs a SUNVIS bake (light -sunvis); without one it falls back to r_shadows_caster_sunvis.");
+//Patch 120b: in-shade classification WITHOUT any bake.  Both of the gates above need a lump the map may
+//not carry (SUNVIS, or a deluxemap for the r_shadows_caster_sunvis dot), and on a map with neither the
+//verdict stayed "unknown" -- so a player standing under a roof kept a full sun shadow while ALSO getting
+//its lamp shadow, which is exactly the "the sun atlas still masks me indoors" report.  A trace along the
+//sun direction answers the same question exactly, from geometry, on every map: if it stops on a solid
+//world surface there is a roof overhead.  Sky brushes are deliberately NOT solid to this trace (q1bsp
+//maps CONTENTS_SKY to FTECONTENTS_SKY, which MASK_WORLDSOLID does not include) so open air reads sunlit.
+//Patch 120c: how long the model's SUN form-shade and self-shadow take to cross-fade as a caster moves
+//between sun and shade.  Everything else in this system is anti-chatter hysteresis, which only DELAYS
+//a flip -- this is the only thing that makes one gradual.
+static cvar_t r_shadows_sunfade				= CVARD("r_shadows_sunfade", "0.25", "Seconds for a model's SUN form-shade and sun self-shadow to cross-fade as it moves between sunlight and shade (time constant, not a hard duration). 0 = instant, the pre-Patch-120c behaviour. Does not affect lamp shadows, which stay at full strength indoors.");
+//Patch 120c: with the fade above in place, an in-shade caster no longer has to LEAVE the sun cascades
+//to look right -- its sun shading is faded on the receive side instead -- so it can keep casting its
+//sun shadow onto the world indoors.  On a map with a SUNVIS bake the receiving floor erases that
+//shadow by itself; on a map without one it will not, which is the accepted trade for this being on.
+static cvar_t r_shadows_propshadows_suncast	= CVARD("r_shadows_propshadows_suncast", "1", "r_shadows 2 propshadows: 1 = a caster stays in the sun cascades even when it is indoors, so its sun shadow keeps landing on the world (its own sun form-shade and self-shadow fade out via r_shadows_sunfade instead). 0 = the Patch 120a behaviour, where an in-shade caster is dropped from the sun cascades entirely. NOTE: on a map with no SUNVIS bake nothing erases an indoor sun shadow, so 1 will stamp one on indoor floors.");
+static cvar_t r_shadows_propshadows_suntrace	= CVARD("r_shadows_propshadows_suntrace", "1", "r_shadows 2 propshadows: classify a caster as in-shade by TRACING toward the sun when the map has no SUNVIS/deluxemap bake to answer with. Costs one extra world trace per caster per frame and needs no compile flags. 0 = old behaviour (an unbaked map cannot classify, so casters keep both a sun shadow and a lamp shadow).");
 //---------------------------------------------------------------------------------------------------
 
 static void Sh_DrawEntLighting(dlight_t *light, vec3_t colour, qbyte *pvs);
@@ -3019,6 +3079,19 @@ static int     fs_entbucket_max;
 static int     fs_slotbucket[MAX_FAKESHADOW_SLOTS];	/*bucket id each slot owns; -1 = free. PERSISTS across frames (hysteresis)*/
 static int     fs_slotcount;		/*slots live THIS frame; 1 = legacy single path*/
 static int     fs_curslot = -1;		/*cell currently rendering; -1 = not inside the atlas pass*/
+static qboolean fs_sunpass;			/*Phase-0: true ONLY while the fake-SUN depth pass renders (distinguishes it from real rtlight depth passes, which also reach Sh_FakeShadowFilter with fs_curslot<0)*/
+static qboolean fs_propshadowpass;	/*Patch 120: true while the PROPSHADOW atlas renders (as opposed to the r_shadows_slots direction atlas).  The two paths disagree about what fs_entbucket means for the sun cell -- see Sh_FakeShadowFilter.*/
+static vec3_t  fs_sundir;			/*Phase-0: direction TOWARD the sun, for the caster sun-visibility gate*/
+//BY-CONE lamp casting: during a LAMP cell's caster depth pass, admit ANY visedict whose origin sits
+//inside that lamp's cone -- not just the one prop the clusterer assigned it to.  So a caster near two
+//lamps casts into both (multiple projections), and any model that walks into an existing cone casts
+//without depending on the (fragile) per-caster in-shade classification -- the PLAYER included.  Set
+//from the lamp-cell loop right before its caster render; consumed by Sh_FakeShadowFilter.
+#define FS_WORLDSLOT 0x7f			/*fs_curslot sentinel for the world-occlusion cell: admit NO entity*/
+static vec3_t  fs_cone_org;			/*current lamp cell cone: apex (lamp origin)...*/
+static vec3_t  fs_cone_axis;		/*...unit aim...*/
+static float   fs_cone_rad2;		/*...(reach + pad)^2...*/
+static float   fs_cone_coscos;		/*...cos^2(half-fov+pad), the angular gate*/
 static vec3_t  fs_slotdir[MAX_FAKESHADOW_SLOTS];	/*eased THROW direction actually rendered*/
 static vec3_t  fs_slotorg[MAX_FAKESHADOW_SLOTS];	/*eased box centre (non-sun slots are FITTED to their props)*/
 static float   fs_slotrad[MAX_FAKESHADOW_SLOTS];	/*eased box half-extent*/
@@ -3071,11 +3144,66 @@ static void Sh_BucketIdToDir(int id, vec3_t out)
 //in the game (which also renders BEM_DEPTHONLY) would get filtered by our bucket table.
 int Sh_FakeShadowFilter(int visedictindex)
 {
+	int base;
 	if (fs_curslot < 0 || fs_slotcount <= 1)
-		return 1;	/*not our pass, or legacy single-direction: everything casts*/
-	if ((unsigned)visedictindex >= (unsigned)fs_entbucket_max)
-		return fs_curslot == 0;	/*unbucketed -> the sun slot owns it*/
-	return fs_entbucket[visedictindex] == fs_curslot;
+		base = 1;	/*not our pass (rtlight/cascade/single), or legacy single-direction: everything casts*/
+	else if (fs_curslot == FS_WORLDSLOT)
+		return 0;	/*the world-occlusion cell renders WORLD depth only -- no entities*/
+	else if (fs_curslot > 0)
+	{	//a LAMP cell: admit any caster geometrically inside this lamp's cone (by-cone, see fs_cone_*),
+		//regardless of which lamp the clusterer assigned it to -- so the player (and any model) casts
+		//into every nearby lamp instead of at most one, and casting no longer hinges on the per-caster
+		//in-shade classification.  fs_entbucket is now consulted only by the SUN branch (below).
+		vec3_t d;
+		float dist2, proj;
+		if ((unsigned)visedictindex >= (unsigned)cl_numvisedicts)
+			return 0;
+		VectorSubtract(cl_visedicts[visedictindex].origin, fs_cone_org, d);
+		dist2 = DotProduct(d, d);
+		if (dist2 > fs_cone_rad2)
+			return 0;			//past the lamp's reach
+		proj = DotProduct(d, fs_cone_axis);
+		if (proj <= 0)
+			return 0;			//behind the lamp
+		if (proj*proj < fs_cone_coscos * dist2)
+			return 0;			//outside the cone half-angle
+		return 1;
+	}
+	else if ((unsigned)visedictindex >= (unsigned)fs_entbucket_max)
+		base = 1;	/*sun cell (fs_curslot==0), unbucketed -> the sun owns it*/
+	else
+		base = (fs_entbucket[visedictindex] == 0);
+			/*Sun cell: admit only casters NOT owned by a lamp.
+			  For the PROPSHADOW path (Patch 120a) that means "not classified in shade" -- a prop under a
+			  roof should be lit and shadowed by the lamp above it, and a hard sun shadow from something
+			  standing indoors makes no sense.  Sunlit props (and every prop on a map with no bake to
+			  classify with) stay in bucket 0 and keep their sun shadow.
+			  For the r_shadows_slots direction atlas it means the histogram gave the caster to a
+			  non-sun direction slot, which really is exclusive.
+			  Patch 120's blanket bypass here was WRONG: it also gave in-shade props a sun shadow, which
+			  is what "the shadows don't make any sense indoors" was.  What actually needed fixing was
+			  the CHATTER -- see Sh_PropShadeState's debounce.*/
+	if (!base)
+		return 0;
+
+	//nettest Phase-0: caster sun-visibility gate.  ONLY during the fake-SUN pass (fs_sunpass) and only for
+	//the sun cell(s) (fs_curslot<=0: -1 = cascade/single, 0 = the slots-path sun cell): drop a caster whose
+	//dominant baked light disagrees with the sun beyond the cutoff -- it is lamp-lit / in baked shade, so a
+	//hard sun shadow from it reads wrong and double-darkens the bake.  Real rtlight depth passes have
+	//fs_sunpass=0; non-sun lamp slots have fs_curslot>0 -- both untouched.  Fail-safe: no deluxemap dir ->
+	//R_EntityDominantLightDir returns false -> still casts (classic behaviour).
+	//Patch 120c: r_shadows_propshadows_suncast makes this the SAME decision as the fs_entbucket stamp --
+	//"may an in-shade caster stay in the sun cascades" -- so one cvar has to govern both, or turning it
+	//on would still see deluxemapped maps silently evicting casters here.
+	if (fs_sunpass && fs_curslot <= 0 && r_shadows_caster_sunvis.value > 0 &&
+		!(fs_propshadowpass && r_shadows_propshadows_suncast.ival))
+	{
+		vec3_t dir;
+		if (R_EntityDominantLightDir(&cl_visedicts[visedictindex], dir))
+			if (DotProduct(dir, fs_sundir) < r_shadows_caster_sunvis.value)
+				return 0;
+	}
+	return base;
 }
 
 //Histogram the visible casters by light direction and hand the N-1 most popular directions a slot.
@@ -3084,7 +3212,7 @@ static int Sh_FakeShadowChooseSlots(dlight_t *l)
 {
 	int counts[SH_BUCKETS];
 	int i, s, b, want, claimed;
-	int slotcount = bound(1, r_shadows_slots.ival, MAX_FAKESHADOW_SLOTS);
+	int slotcount = bound(1, r_shadows_slots.ival, 8);	/*the direction-atlas L-layout holds 8 cells max, regardless of MAX_FAKESHADOW_SLOTS*/
 	vec3_t sundir, dir, bdir;
 	float maxdist;
 	static int fs_slotidle[MAX_FAKESHADOW_SLOTS];
@@ -3680,6 +3808,1298 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 }
 #endif
 
+//nettest Phase-1: map-light table (lamp POSITIONS for the perspective prop shadows) ================
+//A perspective spot needs a lamp ORIGIN, but R_EntityDominantLightDir only gives a DIRECTION and the
+//engine's rtlight array is empty unless realtime world lighting is on.  So parse the BSP entity lump the
+//same way R_ImportRTLights (gl_rlight.c) does -- classname light / light_* (not light_environment = the
+//sun) -- keeping only {origin, brightness}.  Rebuilt whenever the worldmodel changes.
+#define SH_MAXMAPLIGHTS 1024
+typedef struct
+{
+	vec3_t org;
+	float bright;
+	//Patch 120a: the lamp's FIXED shadow cone, resolved once at load from the map entity.  Previously the
+	//cone was re-fitted every frame to whichever props were currently inside it -- so its aim was the
+	//running MEAN of their directions and its fov was the widest member's angle, both recomputed from
+	//scratch each frame.  That is why the atlas tile visibly panned and zoomed with the player, and why
+	//two props entering or leaving a cell shifted every shadow in it.  A fixed cone is stable by
+	//construction: nothing a prop does can move it.
+	//  aim  = ericw "mangle" (yaw pitch roll) or the direction to "target"; STRAIGHT DOWN when the light
+	//         declares neither, which is the overwhelmingly common case for a ceiling lamp.
+	//  fov  = ericw "angle" (spot cone DIAMETER in degrees) or "_cone"*2 (Q2 radius); a wide default
+	//         otherwise, since an unaimed omni lamp still has to cover the floor beneath it.
+	vec3_t aim;
+	float  fov;
+	qboolean shadowflag;	//map explicitly opted this light in with "_shadow" / "_shadowcast"
+	//WORLD-OCCLUSION mask: the world-surface depth mesh as seen from this lamp (SHM_BuildShadowMesh,
+	//SMT_SHADOWMAP).  Lamps are static, so this builds ONCE (lazily, the first frame the lamp wins a
+	//cell) and then every frame is a single cached-VBO depth draw -- same lifecycle as the rtlight
+	//prebuild in Sh_PreGenerateLights.  Freed on map change (Sh_LoadMapLights).
+	struct shadowmesh_s *mesh;
+} sh_maplight_t;
+static sh_maplight_t sh_maplights[SH_MAXMAPLIGHTS];
+static int sh_nummaplights;
+static model_t *sh_maplights_model;
+static qboolean sh_anyshadowflag;	//this map flagged at least one light -> those lights are a WHITELIST
+//HYSTERESIS: the lamps that held atlas cells LAST frame.  Without stickiness the nearest-N cell ranking
+//churns as the camera walks and lamps at the budget boundary flick their shadows on/off.
+static int sh_heldlamp[MAX_FAKESHADOW_SLOTS];
+static int sh_heldlamp_n;
+
+static qboolean Sh_LampWasHeld(int lamp)
+{
+	int i;
+	for (i = 0; i < sh_heldlamp_n; i++)
+		if (sh_heldlamp[i] == lamp)
+			return true;
+	return false;
+}
+
+//"mangle" is ericw's "yaw pitch roll" and yields the direction the light TRAVELS:
+//  (cos p cos y, cos p sin y, sin p)   -- note +sin(pitch), NOT Quake's makevectors convention.
+//Same decode sv_env_sun.qc uses for the sun; getting it wrong tilts every spot cone.
+static void Sh_MangleToVec(const vec3_t mangle, vec3_t out)
+{
+	float y = mangle[0] * (M_PI/180.0f);
+	float pt = mangle[1] * (M_PI/180.0f);
+	float cp = cos(pt);
+	out[0] = cos(y) * cp;
+	out[1] = sin(y) * cp;
+	out[2] = sin(pt);
+}
+
+//Resolve "target" -> the origin of the entity with that "targetname".  Spotlights are aimed this way at
+//least as often as with mangle, so ignoring it would silently point half the mapper's lights at the floor.
+#define SH_MAXTARGETS 512
+typedef struct { char name[64]; vec3_t org; } sh_target_t;
+static qboolean Sh_FindTarget(const sh_target_t *tbl, int n, const char *name, vec3_t out)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		if (!strcmp(tbl[i].name, name))
+			{ VectorCopy(tbl[i].org, out); return true; }
+	return false;
+}
+
+static void Sh_LoadMapLights(void)
+{
+	const char *lump, *p;
+	char key[256], value[1024];
+	int nest;
+	vec3_t org, mangle, aimat;
+	float bright, cone;
+	qboolean islight, hasorg, hasmangle, hasaim, shadowflag;
+	char targetname[64];
+	static sh_target_t targets[SH_MAXTARGETS];
+	int numtargets = 0;
+	qboolean anyflagged = false;
+
+	{	//free the per-lamp world-occlusion meshes (they reference the OLD map's surfaces/leafs)
+		int i;
+		for (i = 0; i < sh_nummaplights; i++)
+			if (sh_maplights[i].mesh)
+				{ SH_FreeShadowMesh(sh_maplights[i].mesh); sh_maplights[i].mesh = NULL; }
+	}
+	sh_nummaplights = 0;
+	sh_heldlamp_n = 0;	//lamp indices are per-map; forget the held set
+	sh_maplights_model = cl.worldmodel;
+	sh_anyshadowflag = false;
+	if (!cl.worldmodel)
+		return;
+	lump = Mod_GetEntitiesString(cl.worldmodel);
+	if (!lump)
+		return;
+
+	//PASS 1: every targetname -> origin, so a spotlight's "target" can be resolved below.
+	for (p = lump; ;)
+	{
+		qboolean gotname = false, gotorg = false;
+		p = COM_Parse(p);
+		if (com_token[0] != '{')
+			break;
+		targetname[0] = 0;
+		VectorClear(org);
+		nest = 1;
+		while (p)
+		{
+			p = COM_ParseOut(p, key, sizeof(key));
+			if (!p) break;
+			if (key[0] == '{') { nest++; continue; }
+			if (key[0] == '}') { if (!--nest) break; continue; }
+			if (nest != 1) continue;
+			p = COM_ParseOut(p, value, sizeof(value));
+			if (!p) break;
+			if (!strcmp(key, "targetname"))
+				{ Q_strncpyz(targetname, value, sizeof(targetname)); gotname = true; }
+			else if (!strcmp(key, "origin"))
+			{
+				org[0] = org[1] = org[2] = 0;
+				sscanf(value, "%f %f %f", &org[0], &org[1], &org[2]);
+				gotorg = true;
+			}
+		}
+		if (gotname && gotorg && numtargets < SH_MAXTARGETS)
+		{
+			Q_strncpyz(targets[numtargets].name, targetname, sizeof(targets[numtargets].name));
+			VectorCopy(org, targets[numtargets].org);
+			numtargets++;
+		}
+	}
+
+	//PASS 2: the lights themselves.
+	for (p = lump; ;)
+	{
+		p = COM_Parse(p);
+		if (com_token[0] != '{')
+			break;
+		islight = hasorg = hasmangle = hasaim = shadowflag = false;
+		bright = 0;
+		cone = 0;
+		VectorClear(org);
+		VectorClear(mangle);
+		VectorClear(aimat);
+		nest = 1;
+		while (p)
+		{
+			p = COM_ParseOut(p, key, sizeof(key));
+			if (!p)
+				break;
+			if (key[0] == '{') { nest++; continue; }
+			if (key[0] == '}') { if (!--nest) break; continue; }
+			if (nest != 1)
+				continue;
+			if (key[0] == '_')
+				memmove(key, key+1, strlen(key));	//_light -> light, _color -> color, ...
+			p = COM_ParseOut(p, value, sizeof(value));
+			if (!p)
+				break;
+			if (!strcmp(key, "classname"))
+			{
+				if (!strcmp(value, "light"))
+					islight = true;
+				else if (!strncmp(value, "light_", 6) && strcmp(value, "light_environment"))
+					islight = true;	//light_torch/globe/... presets (NOT the sun)
+			}
+			else if (!strcmp(key, "origin"))
+			{
+				org[0] = org[1] = org[2] = 0;
+				sscanf(value, "%f %f %f", &org[0], &org[1], &org[2]);
+				hasorg = true;
+			}
+			else if (!strcmp(key, "light"))
+			{
+				float v[4] = {0,0,0,0};
+				int n = sscanf(value, "%f %f %f %f", &v[0], &v[1], &v[2], &v[3]);
+				bright = (n >= 4) ? v[3] : v[0];	//HL/Source `r g b i` -> i; Quake `n` -> n
+			}
+			//--- Patch 120a: the shadow cone, straight off the ericw-tools spotlight keys ---
+			else if (!strcmp(key, "mangle"))
+			{
+				mangle[0] = mangle[1] = mangle[2] = 0;
+				sscanf(value, "%f %f %f", &mangle[0], &mangle[1], &mangle[2]);
+				hasmangle = true;
+			}
+			else if (!strcmp(key, "target"))
+			{
+				if (Sh_FindTarget(targets, numtargets, value, aimat))
+					hasaim = true;
+			}
+			else if (!strcmp(key, "angle"))
+				cone = atof(value);			//q1 style: cone DIAMETER in degrees
+			else if (!strcmp(key, "cone"))
+				cone = atof(value) * 2.0f;	//q2 style ("_cone"): cone RADIUS -> diameter
+			else if (!strcmp(key, "shadow") || !strcmp(key, "shadowcast"))
+				shadowflag = !!atoi(value);
+		}
+		if (islight && hasorg && sh_nummaplights < SH_MAXMAPLIGHTS)
+		{
+			sh_maplight_t *ml = &sh_maplights[sh_nummaplights];
+			if (bright <= 0)
+				bright = 200;	//Quake default `light` value
+			VectorCopy(org, ml->org);
+			ml->bright = bright;
+			ml->shadowflag = shadowflag;
+			if (shadowflag)
+				anyflagged = true;
+
+			//AIM: "target" beats "mangle" (that is ericw's precedence too); neither = STRAIGHT DOWN.
+			if (hasaim)
+			{
+				VectorSubtract(aimat, org, ml->aim);
+				if (!VectorNormalize(ml->aim))
+					VectorSet(ml->aim, 0, 0, -1);
+			}
+			else if (hasmangle)
+			{
+				Sh_MangleToVec(mangle, ml->aim);
+				if (!VectorNormalize(ml->aim))
+					VectorSet(ml->aim, 0, 0, -1);
+			}
+			else
+				VectorSet(ml->aim, 0, 0, -1);	//an unaimed lamp lights the floor under it
+
+			//FOV: honour "angle"/"_cone" whenever the mapper set one, even on a lamp that ericw would
+			//not treat as a spotlight -- it is the natural knob for "how wide should this thing cast".
+			//Otherwise r_shadows_propshadows_cone, which has to be wide enough to cover the floor below.
+			ml->fov = (cone > 0) ? cone : r_shadows_propshadows_cone.value;
+			ml->fov = bound(20.0f, ml->fov, 150.0f);
+			sh_nummaplights++;
+		}
+	}
+
+	//OPT-IN, but only if the mapper actually opted in: a map with at least one "_shadow" light casts from
+	//THOSE ONLY; a map with none casts from all of them, exactly as before.  So no existing map needs
+	//editing, and flagging one light immediately becomes a whitelist for that map.
+	sh_anyshadowflag = anyflagged;
+
+	if (r_shadows_propshadows_debug.ival)
+	{
+		int spots = 0, flagged = 0, i;
+		for (i = 0; i < sh_nummaplights; i++)
+		{
+			if (sh_maplights[i].aim[2] > -0.999f) spots++;
+			if (sh_maplights[i].shadowflag) flagged++;
+		}
+		Con_Printf("Sh_LoadMapLights: %i point lamps (%i aimed, %i flagged _shadow%s)\n",
+			sh_nummaplights, spots, flagged, anyflagged ? " -- WHITELIST ACTIVE" : "");
+	}
+}
+
+//The map lamp that best "owns" a prop at `org` (its shadow-probe point, origin+24z).  Ranked by physical
+//falloff bright^2/dist^2 so the nearest bright lamp wins.  `minalign` optionally gates lamps against the
+//prop's baked dominant-light direction (`lightdir`, toward-light) -- only meaningful on maps with NO
+//SUNVIS bake; on baked maps the deluxemap direction stays sun-biased even in shade, so the gate rejected
+//every lamp on the DOWNSUN side of a prop => shadows appeared in one direction and not the other.
+//`lostrace` instead requires WORLD line-of-sight from the probe point: the top-scoring lamps are traced
+//in order and the first VISIBLE one wins -- direction no longer matters, and a lamp behind a wall can't
+//own a prop.  A trace that stops within 32qu of the lamp still counts as seen (lights sit embedded in
+//fixture brushes; they must not occlude themselves).  Returns lamp index or -1.
+//Patch 120: 8, was 3.  With only 3 traced, a prop with three occluded lamps in front of it returned -1
+//and lost its shadow ENTIRELY even though a fourth visible lamp was in range.
+#define SH_LAMPCANDS 8
+
+//Is `lamp` visible from the probe point?  A trace that stops within 32qu of the lamp still counts as
+//seen -- lights sit embedded in their fixture brushes and must not occlude themselves.
+static qboolean Sh_PropLampVisible(int lamp, const vec3_t org)
+{
+	trace_t tr;
+	vec3_t left;
+	if (!cl.worldmodel || !cl.worldmodel->funcs.NativeTrace)
+		return true;
+	cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, NULLFRAMESTATE, NULL, org, sh_maplights[lamp].org, vec3_origin, vec3_origin, false, MASK_WORLDSOLID, &tr);
+	if (tr.fraction >= 1)
+		return true;
+	VectorSubtract(sh_maplights[lamp].org, tr.endpos, left);
+	return DotProduct(left, left) < 32*32;
+}
+
+//Patch 120b: is there a ROOF between this caster and the sun?  Returns 1 = in shade, 0 = sunlit,
+//-1 = cannot tell (no world model, or the probe point is buried in solid).
+//
+//`towardsun` must point TOWARD the sun.  The trace mask is MASK_WORLDSOLID *plus* FTECONTENTS_SKY, and
+//the two outcomes are then distinguished by what it stopped in:
+//  - nothing hit                  -> open air (or out through the void): SUNLIT.
+//  - stopped in a SKY leaf        -> the ray reached the skybox: SUNLIT.  This case is the whole reason
+//                                    sky has to be IN the mask: a q1 sky brush is a thin shell with the
+//                                    solid void behind it, so a sky-blind trace sails through the shell
+//                                    and stops on that void, reporting "roof" for everything outdoors.
+//  - stopped in anything else     -> real geometry overhead: IN SHADE.
+//The q2/q3 TI_SKY surface flag is accepted too, for map formats where sky brushes are solid.
+static int Sh_PropSunOccluded(const vec3_t org, const vec3_t towardsun)
+{
+	trace_t tr;
+	vec3_t end;
+	unsigned int mask = MASK_WORLDSOLID;
+	if (!cl.worldmodel || !cl.worldmodel->funcs.NativeTrace)
+		return -1;
+	//FTECONTENTS_SKY is 0x80000000, which Q3CONTENTS_NODROP aliases onto (bspfile.h).  Only q1/hl BSPs
+	//have non-solid sky leafs and need the bit; adding it on a q3 map would stop the trace on any nodrop
+	//volume (they ring pits and lava) and then read that as "sky" = sunlit.  q2/q3 sky brushes ARE solid
+	//and carry TI_SKY on the surface, which the surface test below picks up instead.
+	if (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife)
+		mask |= FTECONTENTS_SKY;
+	VectorMA(org, 16384.0f, towardsun, end);	//well past any map's bounds; a roof is a roof regardless of r_shadows_distance
+	cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, NULLFRAMESTATE, NULL, org, end, vec3_origin, vec3_origin, false, mask, &tr);
+	if (tr.startsolid || tr.allsolid)
+		return -1;	//probe buried in world geometry: no honest answer, leave the caster as it was
+	if (tr.fraction >= 1)
+		return 0;
+	if (tr.contents & FTECONTENTS_SKY)
+		return 0;
+	if (tr.surface && (tr.surface->flags & TI_SKY))
+		return 0;
+	return 1;
+}
+
+//Falloff score of ONE lamp at a probe point, 0 when the lamp cannot shadow that point at all.  Same
+//metric as the ranking below, so the two are directly comparable (that is what the stickiness needs).
+//Patch 120a adds two rejections that the ranking MUST share, or a prop gets assigned to a lamp whose
+//cell can never contain it and ends up with no shadow:
+//  - the "_shadow" whitelist, when the map uses one;
+//  - the lamp's FIXED cone.  Cones no longer stretch to fit their members, so a prop outside the cone
+//    is simply not shadowed by that lamp -- the next-best lamp should get it instead.
+static float Sh_PropLampScore(int lamp, const vec3_t org)
+{
+	vec3_t d;
+	float dist2, reach, dist, proj, coshalf;
+	const sh_maplight_t *ml;
+	if (lamp < 0 || lamp >= sh_nummaplights)
+		return 0;
+	ml = &sh_maplights[lamp];
+	if (sh_anyshadowflag && !ml->shadowflag)
+		return 0;			//map declares its shadow casters and this is not one
+	VectorSubtract(ml->org, org, d);
+	dist2 = DotProduct(d, d);
+	if (dist2 < 1.0f)
+		return 0;
+	reach = ml->bright * r_shadows_propshadows_range.value;
+	if (dist2 > reach*reach)
+		return 0;
+	//inside the fixed cone?  d is prop->lamp, so test against the REVERSED aim.
+	dist = sqrt(dist2);
+	proj = -DotProduct(d, ml->aim) / dist;
+	coshalf = cos(ml->fov * 0.5f * (M_PI/180.0f));
+	if (proj < coshalf)
+		return 0;
+	return ml->bright * ml->bright / dist2;
+}
+
+static int Sh_PropDominantLamp(const vec3_t org, const vec3_t lightdir, float minalign, qboolean lostrace)
+{
+	int i, j, k;
+	int   top[SH_LAMPCANDS];		//best N by score, so a blocked lamp falls back to the next
+	float topscore[SH_LAMPCANDS];
+	for (j = 0; j < SH_LAMPCANDS; j++)
+		{ top[j] = -1; topscore[j] = 0; }
+	for (i = 0; i < sh_nummaplights; i++)
+	{
+		vec3_t d;
+		float dist2, score;
+		//Patch 120a: ONE definition of "can this lamp shadow this point" -- whitelist, reach and the
+		//lamp's fixed cone all live in Sh_PropLampScore, so the ranking here and the stickiness
+		//comparison in Sh_PropStickyLamp can never disagree about which lamps are eligible.
+		score = Sh_PropLampScore(i, org);
+		if (score <= 0)
+			continue;
+		VectorSubtract(sh_maplights[i].org, org, d);	//prop -> lamp
+		dist2 = DotProduct(d, d);
+		if (minalign > -1 && DotProduct(d, lightdir)/sqrt(dist2) < minalign)
+			continue;	//legacy deluxemap gate (un-baked maps only; Patch 120 passes -2 = disabled)
+		for (j = 0; j < SH_LAMPCANDS; j++)
+			if (score > topscore[j])
+			{
+				for (k = SH_LAMPCANDS-1; k > j; k--)
+					{ top[k] = top[k-1]; topscore[k] = topscore[k-1]; }
+				top[j] = i;  topscore[j] = score;
+				break;
+			}
+	}
+	if (!lostrace || !cl.worldmodel || !cl.worldmodel->funcs.NativeTrace)
+		return top[0];
+	for (j = 0; j < SH_LAMPCANDS && top[j] >= 0; j++)
+	{	//the nearest bright lamp the prop can actually SEE
+		if (Sh_PropLampVisible(top[j], org))
+			return top[j];
+	}
+	//Patch 120: every candidate occluded -> fall back to the best-scoring one rather than returning -1.
+	//A shadow from a slightly wrong lamp is far less jarring than one that blinks out for a frame as you
+	//walk past a railing or a doorframe.
+	return top[0];
+}
+
+//nettest Phase-1: sun in cell 0 (single ortho) + up to N per-prop PERSPECTIVE shadows in cells 1..N of
+//Patch 120: PER-ENTITY LAMP STICKINESS.
+//Sh_PropDominantLamp is stateless and has no dead-band, so two comparable lamps flip the instant a prop
+//crosses their bright^2/dist^2 iso-surface -- the shadow snapped to the other side of the prop on a
+//single frame as you walked.  The LOS trace made it worse: one frame of occlusion behind a railing
+//handed the prop to a different lamp entirely.  This holds the incumbent lamp across frames and only
+//switches when a challenger is decisively better, or when the incumbent has been unusable for several
+//frames running.  Bucketed by keynum and VALIDATED on it (every visedict has one: pr_csqc.c sets
+//keynum = entnum for csqc ents, and players get their slot index), mirroring the Patch-105 model-light
+//cache.  Entries expire so the table self-cleans across map changes and entity churn.
+#define SH_STICKYLAMP_BUCKETS 4096	//power of two
+#define SH_STICKYLAMP_EXPIRE  60	//frames an untouched entry survives
+#define SH_STICKYLAMP_MISSES  3		//frames of no line-of-sight tolerated before dropping the incumbent
+#define SH_STICKYLAMP_SHADE   6		//consecutive frames the in-shade verdict must hold before it flips
+typedef struct
+{
+	int          keynum;	//owner; 0 = free.  Validated, so bucket collisions just lose stickiness.
+	int          lamp;
+	unsigned int frame;
+	int          misses;
+	//Patch 120a: the in-shade verdict, DEBOUNCED.  The raw test is a hard threshold against a single
+	//probe luxel, so a prop straddling it (or walking a lightmap gradient, or stepping over a luxel the
+	//sample misses) answered differently frame to frame -- and since the verdict decides whether the
+	//prop is in the sun cascades at all, that swapped its entire shadow. `pending` must agree with
+	//itself for SH_STICKYLAMP_SHADE frames running before `inshade` is allowed to follow it.
+	signed char  inshade;	//-1 = not yet classified
+	signed char  pending;
+	signed char  pendcount;
+	//Patch 120c: the same verdict as a CONTINUOUS 0..1 (0 sunlit, 1 fully in shade), time-smoothed.
+	//`inshade` above still decides the discrete question "is this caster in the sun cascades"; this one
+	//drives the model's SUN form-shade and self-shadow, which have to cross-fade or the model visibly
+	//snaps between two shading regimes as you walk through a doorway.  Every hysteresis in this file
+	//DELAYS a flip; none of them makes one gradual, and that is what the transition needed.
+	float        shade;
+	qboolean     shadeinit;	//false = never classified; the accessor then reports 0 (= unchanged)
+} sh_stickylamp_t;
+static sh_stickylamp_t sh_stickylamp[SH_STICKYLAMP_BUCKETS];
+static unsigned int    sh_stickyframe;
+static int             sh_dbg_held, sh_dbg_swap;	//per-frame counters for the debug line
+
+static int Sh_PropStickyLamp(const entity_t *ent, const vec3_t org, const vec3_t dir, qboolean sticky)
+{
+	sh_stickylamp_t *e;
+	int best;
+	float bestscore, heldscore, ratio;
+
+	best = Sh_PropDominantLamp(org, dir, -2.0f, sticky);
+	if (!sticky || !ent || !ent->keynum)
+		return best;	//FORCE mode (debug 2), or an entity with no stable key: no stickiness
+
+	e = &sh_stickylamp[(unsigned int)ent->keynum & (SH_STICKYLAMP_BUCKETS-1)];
+	if (e->keynum != ent->keynum || sh_stickyframe - e->frame > SH_STICKYLAMP_EXPIRE)
+	{	//new owner, or this entity has been out of sight long enough that its old lamp is meaningless
+		e->keynum = ent->keynum;
+		e->lamp   = best;
+		e->misses = 0;
+		e->frame  = sh_stickyframe;
+		return best;
+	}
+	e->frame = sh_stickyframe;
+
+	if (e->lamp == best)
+		{ e->misses = 0; return best; }
+
+	//Is the incumbent still usable?  Out of reach is immediate; merely occluded is tolerated briefly so
+	//a doorframe or a passing player cannot strobe the shadow.
+	heldscore = Sh_PropLampScore(e->lamp, org);
+	if (heldscore > 0 && !Sh_PropLampVisible(e->lamp, org))
+	{
+		if (++e->misses > SH_STICKYLAMP_MISSES)
+			heldscore = 0;
+	}
+	else
+		e->misses = 0;
+
+	if (heldscore <= 0)
+		{ e->lamp = best; sh_dbg_swap++; return best; }	//incumbent gone -> take the new one
+
+	//Both usable: the challenger must be decisively brighter-per-distance to take over.
+	bestscore = Sh_PropLampScore(best, org);
+	ratio = r_shadows_propshadows_switch.value;
+	if (ratio < 1.0f)
+		ratio = 1.0f;
+	if (bestscore > heldscore * ratio)
+		{ e->lamp = best; sh_dbg_swap++; return best; }
+
+	sh_dbg_held++;
+	return e->lamp;
+}
+
+//Debounced in-shade verdict for one caster.  `raw` is this frame's answer from the bake (1 in shade,
+//0 sunlit, -1 = the map has no data to answer with).  Returns the STABLE verdict; -1 propagates.
+//Without this the classification is a per-frame coin flip at every sun/shade boundary, and because an
+//in-shade prop is excluded from the sun cascades entirely, each flip swapped its whole shadow.
+static int Sh_PropShadeState(const entity_t *ent, int raw)
+{
+	sh_stickylamp_t *e;
+	if (!ent || !ent->keynum)
+		return raw;
+	e = &sh_stickylamp[(unsigned int)ent->keynum & (SH_STICKYLAMP_BUCKETS-1)];
+	if (e->keynum != ent->keynum)
+		{ e->keynum = ent->keynum; e->lamp = -1; e->misses = 0; e->inshade = -1; e->shadeinit = false; }
+	e->frame = sh_stickyframe;
+	//Patch 120b: a DROPOUT (raw < 0) holds the last stable verdict instead of returning -1.  It used to
+	//bypass the debounce entirely, so a single frame the classifier could not answer -- a SUNVIS sample
+	//miss, or Sh_PropSunOccluded's startsolid guard when a prop clips into geometry -- popped a settled
+	//in-shade caster straight back into the sun cascades with a full sun shadow, one frame on, one off.
+	//The 6-frame hysteresis below only ever protected 0<->1; this covers the third answer too.  A caster
+	//that has NEVER been classified still returns -1 (e->inshade starts at -1), so a map with no bake and
+	//no sun trace behaves exactly as before.
+	if (raw < 0)
+		return e->inshade;
+	if (e->inshade < 0)
+		{ e->inshade = (signed char)raw; e->pending = (signed char)raw; e->pendcount = 0; return raw; }
+	if (raw == e->inshade)
+		{ e->pendcount = 0; return e->inshade; }
+	if (raw != e->pending)
+		{ e->pending = (signed char)raw; e->pendcount = 1; return e->inshade; }
+	if (++e->pendcount >= SH_STICKYLAMP_SHADE)
+		{ e->inshade = (signed char)raw; e->pendcount = 0; }
+	return e->inshade;
+}
+
+//Patch 120c: the same in-shade question as a CONTINUOUS 0..1, smoothed in TIME rather than debounced
+//in frames.  `target` is this frame's answer (0 sunlit .. 1 in shade, <0 = could not tell).
+//
+//Exponential approach with a real time constant, so the fade is framerate-independent: over dt the
+//value covers 1 - exp(-dt/tau) of the remaining gap.  r_shadows_sunfade IS tau (seconds); 0 snaps.
+//
+//The dropout rule from Patch 120b applies here too -- a frame that cannot answer holds the current
+//value rather than dragging it toward either end.
+static float Sh_PropShadeFraction(const entity_t *ent, float target, float dt)
+{
+	sh_stickylamp_t *e;
+	float tau, k;
+	if (!ent || !ent->keynum)
+		return (target < 0) ? 0.0f : target;
+	e = &sh_stickylamp[(unsigned int)ent->keynum & (SH_STICKYLAMP_BUCKETS-1)];
+	if (e->keynum != ent->keynum)
+		{ e->keynum = ent->keynum; e->lamp = -1; e->misses = 0; e->inshade = -1; e->shadeinit = false; }
+	e->frame = sh_stickyframe;
+	if (target < 0)
+		return e->shadeinit ? e->shade : 0.0f;	//no answer this frame: hold
+	if (!e->shadeinit)
+	{	//first ever classification: adopt it outright.  Ramping up from 0 would make every prop fade
+		//INTO shade the moment it comes into view, which reads as a light turning off.
+		e->shade = target;
+		e->shadeinit = true;
+		return e->shade;
+	}
+	tau = r_shadows_sunfade.value;
+	if (dt <= 0)
+		k = 0.0f;			//paused / same frame twice: hold, don't snap
+	else if (tau <= 0)
+		k = 1.0f;			//fade disabled: the old instant behaviour
+	else
+	{
+		k = 1.0f - (float)exp(-dt / tau);
+		if (k > 1.0f) k = 1.0f;
+		if (k < 0.0f) k = 0.0f;
+	}
+	e->shade += (target - e->shade) * k;
+	if (e->shade < 0.0f) e->shade = 0.0f;
+	if (e->shade > 1.0f) e->shade = 1.0f;
+	return e->shade;
+}
+
+//Patch 120c: how far into shade this entity is, for the FORWARD pass (gl_backend.c, SP_E_SUNSHADE and
+//SP_E_SUNDIR).  0 = fully sunlit, which is also what an entity we have never classified reports --
+//that is the fail-safe, and it matches the shader's unbound-uniform value, so anything this system
+//never saw renders exactly as it did before Patch 120c.
+//
+//Unlike Sh_EntityLampDir this does NOT bail on !sh_nummaplights: a lamp-less map still has a sun, and
+//a caster under a roof there still needs its sun form-shade faded out.
+float Sh_EntitySunShade(const entity_t *ent)
+{
+	const sh_stickylamp_t *e;
+	if (!ent || !ent->keynum)
+		return 0;
+	e = &sh_stickylamp[(unsigned int)ent->keynum & (SH_STICKYLAMP_BUCKETS-1)];
+	if (e->keynum != ent->keynum || !e->shadeinit)
+		return 0;
+	if (sh_stickyframe - e->frame > SH_STICKYLAMP_EXPIRE)
+		return 0;	//stale: the atlas pass has not seen this entity for a while (it may not even run)
+	return e->shade;
+}
+
+//The lamp direction (TOWARD the lamp) a caster is currently shadowed by, for the model form-shade.
+//Returns false when the caster has no lamp -- the shader then keeps the global sun direction.
+qboolean Sh_EntityLampDir(const entity_t *ent, vec3_t out)
+{
+	const sh_stickylamp_t *e;
+	if (!ent || !ent->keynum || !sh_nummaplights)
+		return false;
+	e = &sh_stickylamp[(unsigned int)ent->keynum & (SH_STICKYLAMP_BUCKETS-1)];
+	if (e->keynum != ent->keynum || e->lamp < 0 || e->lamp >= sh_nummaplights)
+		return false;
+	if (sh_stickyframe - e->frame > SH_STICKYLAMP_EXPIRE)
+		return false;
+	VectorSubtract(sh_maplights[e->lamp].org, ent->origin, out);
+	return VectorNormalize(out) != 0;
+}
+
+//ONE texture.  Modelled on Sh_GenerateFakeShadowsAtlas; the perspective cells are the whole point.
+//nettest Phase-2: atlas layout for sun CASCADES + perspective PROP cells sharing ONE texture.
+//  nc==1 : the single-sun layout (cell 0 = the 3/4 sun cell, prop cells in the 7 small L-cells) -- the
+//          bit-identical Phase-1 layout, so single-sun + props is unchanged.
+//  nc>1  : each of the nc sun cascades takes a full QUADRANT (txsize/2, same as Sh_CascadeCellRect), and
+//          the prop cells pack into the (4-nc) FREE quadrants as quarter-size (txsize/4) subcells, 4 per
+//          quadrant.  Cascades keep their resolution; props ride the leftover corner.  Fits nc+ceil(np/4)<=4.
+//worldmask: each prop cell gets a same-size sibling subcell at +1 holding the WORLD's depth from the
+//lamp's view, so lamp shadows can't project through walls.  Halves the subcell budget when set.
+static qboolean sh_propcell_paired;
+
+//Patch 120: the subcell tier is chosen from the BUDGET, not the live count.  It used to key off how many
+//cells were live this frame, so at cascades 3 + worldmask 1 the tier flipped at 2 lamps: a third lamp
+//coming into view instantly QUARTERED the pixel area of every lamp shadow on screen, and walking back out
+//of the room quadrupled it again.  Sizing from the budget makes every lamp shadow the same resolution
+//always -- the atlas simply reserves space it may not use, which costs nothing (unused cells are cleared
+//past the far plane and never sampled).  Set once per frame beside propmax.
+static int sh_propsub_budget;
+
+//place the s-th SUBCELL of the free quadrants: quarter-size while the BUDGET fits, else eighth-size
+//(4x4 of 16 per quadrant).  Shared by the prop cells and their world siblings.
+static void Sh_PropSubCellRect(int s, int nc, int nsub, int txsize, int *ox, int *oy, int *osize)
+{
+	int h = txsize/2, q = txsize/4;
+	if (sh_propsub_budget > nsub)
+		nsub = sh_propsub_budget;
+	if (nsub <= (4-nc)*4)
+	{	//quarter cells, 4 per free quadrant
+		int quad = nc + (s >> 2), sub = s & 3;
+		*osize = q;
+		*ox = ((quad & 1) ? h : 0) + ((sub & 1) ? q : 0);
+		*oy = ((quad & 2) ? h : 0) + ((sub & 2) ? q : 0);
+	}
+	else
+	{	//eighth cells, a 4x4 grid of 16 per free quadrant
+		int e = txsize/8;
+		int quad = nc + (s >> 4), sub = s & 15;
+		*osize = e;
+		*ox = ((quad & 1) ? h : 0) + (sub & 3)*e;
+		*oy = ((quad & 2) ? h : 0) + ((sub >> 2) & 3)*e;
+	}
+}
+
+static void Sh_PropComboCellRect(int idx, int nc, int np, int txsize, int *ox, int *oy, int *osize)
+{
+	int h = txsize/2;
+	if (nc <= 1 && np <= 7 && !sh_propcell_paired)
+	{	//single sun + few UNPAIRED props: reuse the direction-atlas layout (big 3/4 sun cell + L cells)
+		Sh_FakeShadowCellRect(idx, 1 + np, txsize, ox, oy, osize);
+		return;
+	}
+	if (idx < nc)
+	{	//cascade cell = whole quadrant idx (nc==1 past 7 props: the sun drops to one quadrant too)
+		*osize = h;
+		*ox = (idx & 1) ? h : 0;
+		*oy = (idx & 2) ? h : 0;
+	}
+	else
+	{	//prop cell p: subcell p (unpaired) or 2p (paired -- its WORLD-occlusion sibling sits at 2p+1)
+		int p = idx - nc;
+		if (sh_propcell_paired)
+			Sh_PropSubCellRect(p*2, nc, np*2, txsize, ox, oy, osize);
+		else
+			Sh_PropSubCellRect(p, nc, np, txsize, ox, oy, osize);
+	}
+}
+
+//the WORLD-occlusion sibling of prop cell p (subcell 2p+1, same size).  Only meaningful when paired.
+static void Sh_PropWorldCellRect(int p, int nc, int np, int txsize, int *ox, int *oy, int *osize)
+{
+	Sh_PropSubCellRect(p*2 + 1, nc, np*2, txsize, ox, oy, osize);
+}
+
+static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
+{
+	int inset = 16;
+	int s, restorefbo = 0, propcells, propmax, nc;
+	int cx, cy, csize, smsize, txsize = fulltexsize;
+	vec3_t sundir, tosun;
+	float outer, ratio;
+	float oprojs[16], oprojv[16], oview[16];
+	pxrect_t oprect;
+	unsigned int oldflip, oldcolourmask;
+	qboolean oldexternalview;
+	uploadfmt_t fmt;
+	vec4_t cell;
+	int i, npc;
+	//PER-LIGHT cells: each atlas cell is a shadowmap attached to a LIGHT, and EVERY in-shade prop near that
+	//light renders into it -- so the cell budget limits active LIGHTS, not props.  A room full of props
+	//under one lamp costs ONE cell.
+	#define SH_MAXPROPCANDS 256
+	//Patch 120a removed the direction CLUSTERING (and with it SH_CELLJOINANG, pc_dir and pc_angrad): a
+	//lamp now has exactly one cell with the lamp's own fixed cone, so there is nothing to group by and
+	//nothing that re-aims when a prop joins or leaves.
+	int   pc_ve[SH_MAXPROPCANDS];		//lamp-lit props (visedict index)...
+	int   pc_lamp[SH_MAXPROPCANDS];		//...each one's dominant lamp...
+	float pc_camdist[SH_MAXPROPCANDS];	//...its camera distance (for ranking its light's cell)...
+	int   pc_cell[SH_MAXPROPCANDS];		//...and its final cell (-1 = none this frame)
+	int   pc_shade[SH_MAXPROPCANDS];	//...debounced in-shade verdict: 1 in shade, 0 sunlit, -1 unknown
+	//eviction hysteresis: a lamp that held a cell LAST frame counts as SH_HELDBIAS x its real (squared)
+	//camera distance -- both as an incumbent and as a challenger.  0.25 in dist^2 space = a challenger
+	//must be within HALF the held lamp's distance to displace it, so ranking flutter can't strobe cells.
+	#define SH_HELDBIAS 0.25f
+	int   lc_lamp[MAX_FAKESHADOW_SLOTS];	//the lamp each chosen LIGHT CELL wraps (its cone comes from the lamp)
+	float lc_camdist[MAX_FAKESHADOW_SLOTS];	//nearest assigned prop's camera distance (cell ranking)
+	qboolean lc_held[MAX_FAKESHADOW_SLOTS];	//this cell's lamp held a cell last frame (hysteresis)
+	//diagnostics (r_shadows_propshadows_debug): where do props fall out of candidacy?
+	int   dbg_alias = 0, dbg_nodir = 0, dbg_nolamp = 0, dbg_inshade = 0;
+	float dbg_nearcam = 1e30f;
+	float dbg_nearsunvis = -1.0f, dbg_nearsunvis_cam = 1e30f;
+	static unsigned int dbg_frame = 0;
+	//SUNVIS bake present?  Drives BOTH the in-shade classification (exact sun occlusion beats the
+	//deluxemap dot, which stays sun-biased even in shade) and the sunmask term further down.
+	qboolean hassunvis = (cl.worldmodel && cl.worldmodel->sunvisdata != NULL);
+
+	if (sh_maplights_model != cl.worldmodel)
+	{
+		Sh_LoadMapLights();
+		memset(sh_stickylamp, 0, sizeof(sh_stickylamp));	//lamp INDICES just changed meaning
+	}
+	sh_stickyframe++;
+	sh_dbg_held = sh_dbg_swap = 0;
+
+	//nc = number of SUN cells = cascades (Phase-2: cascades now COEXIST with prop cells).  The prop-cell
+	//budget must match the atlas layout AND gl_shader.c's FAKESHADOWS_COUNT / FAKESHADOWS_PERSP_FIRST=nc.
+	nc = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
+	{
+		//geometric capacity: each free quadrant packs up to 16 eighth-size subcells (the layout keeps the
+		//roomier quarter/L cells while the live count allows), bounded by the slot arrays.  The
+		//FAKESHADOWS_COUNT clamp in gl_shader.c is the matching UPPER bound (worldmask halves the live
+		//capacity below it -- the paired world cells consume subcells but no matrix slots).
+		int cap;
+		sh_propcell_paired = !!r_shadows_propshadows_worldmask.ival;
+		cap = (4-nc)*16;
+		if (sh_propcell_paired)
+			cap /= 2;	//each lamp also gets a same-size WORLD-occlusion subcell
+		if (cap > MAX_FAKESHADOW_SLOTS - nc) cap = MAX_FAKESHADOW_SLOTS - nc;
+		if (cap < 0) cap = 0;
+		propmax = bound(0, r_shadows_propshadows_max.ival, cap);
+		//Patch 120: freeze the subcell tier at the worst case so cell resolution never steps (see
+		//Sh_PropSubCellRect).  Paired cells consume two subcells each.
+		sh_propsub_budget = sh_propcell_paired ? propmax*2 : propmax;
+	}
+	//the sun throw direction (shared by every sun cell), + cascade geometry (used only when nc>1)
+	if (*r_shadows_throwdirection.string)
+		VectorCopy(r_shadows_throwdirection.vec4, sundir);
+	else
+		VectorNegate(r_sun_dir.vec4, sundir);
+	outer = max(64.0f, r_shadows_cascade_dist.value);
+	ratio = bound(1.5f, r_shadows_cascade_ratio.value, 8.0f);
+	//Patch 120b: the same direction REVERSED and normalised, for the in-shade sun trace below.  Derived
+	//from the local sundir (not fs_sundir) so it always matches the direction the sun cells actually
+	//render with, r_shadows_throwdirection override included.
+	VectorNegate(sundir, tosun);
+	if (!VectorNormalize(tosun))
+		VectorSet(tosun, 0, 0, 1);	//degenerate sun: straight up, so the trace still asks a sane question
+
+	//--- collect EVERY in-shade, lamp-lit prop (they get grouped by lamp below) ---
+	npc = 0;
+	//Patch 120c: the `&& sh_nummaplights` that used to sit here moved DOWN to just before the lamp
+	//range gate.  The loop body now also produces the per-caster sun-shade fraction, which a map with
+	//no lamps at all still needs -- with the guard up here that map classified nothing and every model
+	//on it fell back to "fully sunlit" even standing under a roof.
+	for (i = r_refdef.firstvisedict; i < cl_numvisedicts; i++)
+	{
+		entity_t *ent = &cl_visedicts[i];
+		vec3_t dir, d, sp;
+		int lamp, shade;
+		float camdist;
+		qboolean hasdir;
+		if (ent->flags & (RF_NOSHADOW|RF_ADDITIVE|RF_NODEPTHTEST|RF_TRANSLUCENT))
+			continue;
+		if ((ent->flags & RF_EXTERNALMODEL) && !r_shadow_playershadows.ival)
+			continue;
+		if (!ent->model || ent->model->type != mod_alias)
+			continue;
+		if (ent->model->engineflags & MDLF_FLAME)
+			continue;
+		dbg_alias++;
+		VectorSubtract(ent->origin, r_origin, d);
+		camdist = DotProduct(d, d);
+		//Patch 120: the deluxemap direction is now DIAGNOSTIC ONLY.  It used to be a hard requirement --
+		//no dir, no lamp shadow -- which silently killed the whole feature on every map built without
+		//`light -bspxlux` (22 of the mod's 29 maps), even though on a SUNVIS map the direction was already
+		//unused (minalign was forced to -2).  The LOS trace in Sh_PropDominantLamp is what actually decides
+		//lamp ownership, and it needs no bake at all.
+		hasdir = R_EntityDominantLightDir(ent, dir);
+		if (!hasdir)
+		{
+			dbg_nodir++;
+			VectorClear(dir);	//unused by the lamp pick (minalign -2 skips the alignment test)
+		}
+		else if (camdist < dbg_nearcam)
+			dbg_nearcam = camdist;
+		//The shadow probe point = the caster's GROUND CONTACT (its model's lowest extent + a little), NOT
+		//origin+24.  Origin conventions differ: a prop's origin is at its base (so +24 = mid-body), but a
+		//PLAYER's origin is the physics CENTRE, so +24 lands at the HEAD.  model->mins[2] normalises that:
+		//prop base+8, player shin -- both sample the floor the shadow actually lands on.  (Patch 120: this
+		//point no longer CLASSIFIES anything, it is only the origin of the lamp LOS trace, so the 18qu the
+		//player's origin drops on duck can no longer change whether a shadow exists.)
+		VectorCopy(ent->origin, sp);
+		sp[2] += (ent->model ? ent->model->mins[2] : 0) + 8;
+		//--- IN-SHADE CLASSIFICATION (Patch 120a: restored, debounced) ---
+		//Indoors a prop should be lit and shadowed by the LAMP, not the sun: the sun form-shade and the
+		//sun self-shadow on something standing under a roof make no sense.
+		//
+		//What Patch 120 got wrong was not HAVING this test -- it was that the test was a hard threshold
+		//on one probe luxel evaluated fresh every frame, so it chattered.  Sh_PropShadeState debounces
+		//it: the answer has to hold for SH_STICKYLAMP_SHADE frames before the prop actually switches.
+		//
+		//Patch 120c: this block moved ABOVE the lamp range gate below, and the loop no longer requires
+		//sh_nummaplights.  It has to run for EVERY caster, not just ones standing near a map lamp,
+		//because the continuous fraction it produces now drives the model's sun shading in the forward
+		//pass -- and a player out in the open, or on a map with no lamps at all, needs that value just
+		//as much.  Under the old order they bailed at the range gate and were never classified.
+		{
+			int rawshade = -1;			//discrete: 1 in shade, 0 sunlit, -1 no answer
+			float shadetarget = -1.0f;	//continuous: same question, 0..1, -1 no answer
+			if (r_shadows_propshadows_debug.ival < 2)	//debug 2 = FORCE mode: everything is a lamp caster
+			{
+				if (hassunvis)
+				{
+					float sv = R_PointSunVis(cl.worldmodel, sp);
+					if (sv >= 0.0f)
+					{
+						float t = r_shadows_propshadows_sunvis.value;
+						if (camdist < dbg_nearsunvis_cam) { dbg_nearsunvis_cam = camdist; dbg_nearsunvis = sv; }
+						rawshade = (sv < t);
+						//Patch 120c: keep the FLOAT.  R_PointSunVis returns a real 0..1 and this used to
+						//throw it away on the very next line.  Remapped piecewise so the cvar threshold
+						//stays exactly the half-way point -- sv==t gives 0.5 -- which means the discrete
+						//verdict above and the fraction cross over together and cannot disagree.
+						if (sv <= t)  shadetarget = (t > 0.0f)  ? 0.5f + 0.5f*(t - sv)/t          : 1.0f;
+						else          shadetarget = (t < 1.0f)  ? 0.5f * (1.0f - sv)/(1.0f - t)   : 0.0f;
+					}
+				}
+				else if (hasdir && r_shadows_caster_sunvis.value > 0)
+					rawshade = (DotProduct(dir, fs_sundir) < r_shadows_caster_sunvis.value);
+				//Patch 120b: neither bake could answer -> ask the WORLD.  This is the case for every map
+				//built without `light -bspxlux -sunvis`, which is most of them, and leaving it unanswered
+				//is what kept a full sun shadow on a player standing indoors.  The probe is the caster's
+				//MID-HEIGHT, not the ground-contact point the lamp traces use: sp sits 8qu above the model's
+				//lowest extent, close enough to the floor that a prop resting flush reads startsolid.
+				if (rawshade < 0 && r_shadows_propshadows_suntrace.ival)
+				{
+					vec3_t sunsp;
+					VectorCopy(ent->origin, sunsp);
+					if (ent->model)
+						sunsp[2] += (ent->model->mins[2] + ent->model->maxs[2]) * 0.5f;
+					rawshade = Sh_PropSunOccluded(sunsp, tosun);
+				}
+				//no continuous source (no SUNVIS bake): fall back to the discrete answer as the target.
+				//The time-smoothing in Sh_PropShadeFraction is what makes it gradual on those maps.
+				if (shadetarget < 0 && rawshade >= 0)
+					shadetarget = (float)rawshade;
+			}
+			//Order matters: Sh_PropShadeFraction is the first toucher of the sticky bucket now, so it
+			//owns the new-owner reset (it clears shadeinit, which Sh_PropShadeState alone would not).
+			Sh_PropShadeFraction(ent, shadetarget, (float)host_frametime);
+			shade = Sh_PropShadeState(ent, rawshade);
+			if (shade > 0)
+				dbg_inshade++;
+		}
+		//Cheap range gate (plain lamp scan, no trace): a prop with no lamp in range and in-cone at
+		//all can never get a lamp shadow, so don't pay a BSP walk or a trace on it.  Everything from
+		//here down is about picking a LAMP, so it is also where the sh_nummaplights guard belongs.
+		//minalign is always -2 (= disabled): the deluxemap alignment gate rejected lamps DOWNSUN of a
+		//prop ("casts one way but not the other"), and the LOS trace supersedes it.
+		if (!sh_nummaplights)
+			continue;
+		if (Sh_PropDominantLamp(sp, dir, -2.0f, false) < 0)
+			{ dbg_nolamp++; continue; }
+		//The prop's lamp: the nearest bright in-range lamp it has LINE OF SIGHT to, held STICKY across
+		//frames (Sh_PropStickyLamp) so it cannot swap as the player walks across two lamps' iso-surface.
+		//FORCE mode (debug 2): nearest bright, no trace, no stickiness.
+		lamp = Sh_PropStickyLamp(ent, sp, dir, r_shadows_propshadows_debug.ival < 2);
+		if (lamp < 0)
+			{ dbg_nolamp++; continue; }
+		if (npc < SH_MAXPROPCANDS)
+		{	//accepted.  The cone is the lamp's own, so there is nothing per-prop to record beyond which
+			//lamp owns it and how far away it is (that ranks its lamp's cell).
+			float propr = ent->model->radius > 0 ? ent->model->radius : 16.0f;
+			pc_ve[npc] = i;  pc_lamp[npc] = lamp;  pc_camdist[npc] = camdist;
+			pc_shade[npc] = shade;
+			//cell-ranking bias: props OUTSIDE the view frustum rank 4x as far away, so the cells go to
+			//the shadows the player can actually SEE (standing among off-screen props must not evict
+			//the lamps they are looking at).
+			if (R_CullSphere(ent->origin, propr + 32))
+				pc_camdist[npc] *= 16.0f;	//squared-distance space: 16 = 4x the distance
+			npc++;
+		}
+	}
+
+	//--- ONE CELL PER LAMP (Patch 120a).  The cone is the LAMP's, fixed at map load, so there is nothing
+	//    to cluster: every prop that picked lamp L shares L's single cell.  This replaces the old
+	//    (lamp, direction-cluster) grouping, whose cone aim was the running MEAN of its members' directions
+	//    and whose fov was refitted to the widest member -- both recomputed from scratch every frame, so
+	//    the projection panned and zoomed with the player and any prop joining or leaving shifted every
+	//    other shadow in the cell.  Cells still rank by their nearest prop's (frustum-biased) camera
+	//    distance, and the nearest `propmax` win the atlas. ---
+	propcells = 0;
+	for (i = 0; i < npc; i++)
+	{
+		int c, cbest = -1;
+		for (c = 0; c < propcells; c++)
+			if (lc_lamp[c] == pc_lamp[i])
+				{ cbest = c; break; }
+		if (cbest >= 0)
+		{	//joins its lamp's cell -- the cone does not move to accommodate it
+			if (pc_camdist[i] < lc_camdist[cbest])
+				lc_camdist[cbest] = pc_camdist[i];
+		}
+		else if (propcells < propmax)
+		{
+			lc_lamp[propcells] = pc_lamp[i];
+			lc_camdist[propcells] = pc_camdist[i];
+			lc_held[propcells] = Sh_LampWasHeld(pc_lamp[i]);
+			propcells++;
+		}
+		else
+		{	//cell budget full: evict the EFFECTIVELY-farthest cell -- held lamps count as much closer
+			//than they are (and a held challenger presses harder), so cells don't strobe as ranking
+			//flutters with camera movement.
+			int worst = 0, k;
+			float weff, ceff;
+			for (k = 1; k < propcells; k++)
+				if (lc_camdist[k]*(lc_held[k]?SH_HELDBIAS:1.0f) > lc_camdist[worst]*(lc_held[worst]?SH_HELDBIAS:1.0f))
+					worst = k;
+			weff = lc_camdist[worst] * (lc_held[worst] ? SH_HELDBIAS : 1.0f);
+			ceff = pc_camdist[i] * (Sh_LampWasHeld(pc_lamp[i]) ? SH_HELDBIAS : 1.0f);
+			if (ceff < weff)
+			{
+				lc_lamp[worst] = pc_lamp[i];
+				lc_camdist[worst] = pc_camdist[i];
+				lc_held[worst] = Sh_LampWasHeld(pc_lamp[i]);
+			}
+		}
+	}
+	//remember this frame's winners for next frame's hysteresis
+	sh_heldlamp_n = 0;
+	for (i = 0; i < propcells; i++)
+	{
+		int k;
+		for (k = 0; k < sh_heldlamp_n; k++)
+			if (sh_heldlamp[k] == lc_lamp[i])
+				break;
+		if (k == sh_heldlamp_n && sh_heldlamp_n < MAX_FAKESHADOW_SLOTS)
+			sh_heldlamp[sh_heldlamp_n++] = lc_lamp[i];
+	}
+	//FINAL membership against the surviving cells (eviction above may have orphaned props whose lamp lost
+	//its cell; they must not render into whatever replaced it).  A prop belongs to its lamp's cell, full
+	//stop -- Sh_PropLampScore already guaranteed it is inside that lamp's fixed cone.
+	for (i = 0; i < npc; i++)
+	{
+		int c, cbest = -1;
+		for (c = 0; c < propcells; c++)
+			if (lc_lamp[c] == pc_lamp[i])
+				{ cbest = c; break; }
+		pc_cell[i] = cbest;
+	}
+
+	if (r_shadows_propshadows_debug.ival && ((dbg_frame++ & 63) == 0))
+		Con_Printf("propshadows: lamps=%i alias=%i nodir=%i nolamp=%i inshade=%i -> props=%i lightcells=%i (held=%i swapped=%i; nearest sunvis=%.2f vs %.2f; suncast=%i shadefade=%.2fs)\n",
+			sh_nummaplights, dbg_alias, dbg_nodir, dbg_nolamp, dbg_inshade, npc, propcells,
+			sh_dbg_held, sh_dbg_swap, dbg_nearsunvis, r_shadows_propshadows_sunvis.value,
+			r_shadows_propshadows_suncast.ival, r_shadows_sunfade.value);
+
+	//--- stamp the caster filter table.  Everyone defaults to the sun cell(s) (bucket 0); an IN-SHADE prop
+	//    whose lamp won a cell is stamped with that cell instead, which Sh_FakeShadowFilter reads as "keep
+	//    this one out of the sun cascades" -- so indoors a prop's cast shadow, self-shadow and form-shade
+	//    all come from its lamp and nothing from the sun.  A prop that is SUNLIT (or on a map with no bake
+	//    to tell) stays in bucket 0 and keeps its sun shadow while still rendering into its lamp's cone by
+	//    geometry, so a sunlit prop near a lamp is not silently robbed of its sun shadow the way it was
+	//    before Patch 120. ---
+	if (fs_entbucket_max < cl_maxvisedicts)
+	{
+		Z_Free(fs_entbucket);
+		fs_entbucket_max = cl_maxvisedicts;
+		fs_entbucket = Z_Malloc(fs_entbucket_max);
+	}
+	if (fs_entbucket)
+		memset(fs_entbucket, 0, fs_entbucket_max);	//default 0 = the sun cell(s); cascades all filter as slot 0
+	//Patch 120c: with r_shadows_propshadows_suncast set (the default) NOTHING is stamped -- every caster
+	//stays in the sun cascades and keeps throwing a sun shadow onto the world, indoors included.  That is
+	//only safe because the model's own SUN form-shade and self-shadow now fade out via e_sunshade
+	//instead; left in the cascades WITHOUT that fade, an indoor model self-shadows itself from a sun it
+	//cannot see, since defaultskin.glsl samples the very cells the caster renders into.  The two halves
+	//are one change.  0 restores the Patch 120a exclusivity exactly.
+	if (!r_shadows_propshadows_suncast.ival)
+		for (i = 0; i < npc; i++)
+			if (pc_cell[i] >= 0 && pc_shade[i] > 0 && fs_entbucket && (unsigned)pc_ve[i] < (unsigned)fs_entbucket_max)
+				fs_entbucket[pc_ve[i]] = nc + pc_cell[i];	//in shade -> its lamp owns it, not the sun
+	fs_slotcount = nc + propcells;
+
+	if (r_shadow_shadowmapping_depthbits.ival >= 32 && sh_config.texfmt[PTI_DEPTH32])       fmt = PTI_DEPTH32;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24])   fmt = PTI_DEPTH24;
+	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24_8]) fmt = PTI_DEPTH24_8;
+	else                                                                                     fmt = PTI_DEPTH16;
+
+	memcpy(oprojs, r_refdef.m_projection_std,  sizeof(oprojs));
+	memcpy(oprojv, r_refdef.m_projection_view, sizeof(oprojv));
+	memcpy(oview,  r_refdef.m_view,            sizeof(oview));
+	oprect          = r_refdef.pxrect;
+	oldflip         = r_refdef.flipcull;
+	oldcolourmask   = r_refdef.colourmask;
+	oldexternalview = r_refdef.externalview;
+
+	if (!GLBE_BeginShadowMap(2, txsize, txsize, fmt, &restorefbo))
+	{	//no atlas this frame: neutralise EVERY extra cell (the uniforms upload all slots now, so
+		//anything left un-cleared would replay last frame's capture)
+		for (s = 1; s < MAX_FAKESHADOW_SLOTS; s++)
+		{
+			Vector4Set(cell, 0, 0, 0, 0);
+			GLBE_ClearFakeShadowSlot(s, cell);
+		}
+		GLBE_SetFakeShadowCount(1);
+		fs_slotcount = 1;
+		return;
+	}
+
+	r_refdef.externalview = true;
+	Sh_PropComboCellRect(0, nc, propcells, txsize, &cx, &cy, &csize);
+	smsize = csize - 2*inset;
+	GLBE_SetupForShadowMap(l, txsize, txsize, smsize/(float)txsize);
+
+	//--- sun cells [0, nc): a single ortho fitted to the view (nc==1) OR nc concentric camera-centred
+	//    cascades (nc>1, geometry matching Sh_GenerateCascadeAtlas).  ALL filter as slot 0 (fs_curslot=0),
+	//    so every non-prop caster lands in every sun cell while the prop-assigned casters (entbucket=nc+p)
+	//    are excluded -- an in-shade prop casts ONLY its lamp shadow, never a sun/cascade one. ---
+	for (s = 0; s < nc; s++)
+	{
+		Sh_PropComboCellRect(s, nc, propcells, txsize, &cx, &cy, &csize);
+		smsize = csize - 2*inset;
+		if (smsize < 16)
+			continue;
+		VectorCopy(sundir, l->axis[0]);
+		if (!VectorNormalize(l->axis[0]))
+			VectorNegate(r_sun_dir.vec4, l->axis[0]);
+		VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+		VectorNegate(l->axis[1], l->axis[1]);
+		l->flags = LFLAG_SHADOWMAP|LFLAG_ORTHO;
+		if (nc == 1)
+		{
+			l->radius = r_shadows_distance.value;
+			Sh_OrthoAlignToFrustum(l, smsize);
+		}
+		else
+		{	//concentric: cascade s has radius outer/ratio^(nc-1-s), centred on the CAMERA (rotation-stable)
+			float radius = outer / (float)pow((double)ratio, (double)(nc-1-s));
+			if (radius < 16.0f) radius = 16.0f;
+			l->radius = radius;
+			Sh_OrthoAlignToPoint(l, r_origin, smsize);
+		}
+		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -l->radius, l->radius);
+		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
+		sh_fakecell_active = true;
+		sh_fakecell_x = cx + inset;
+		sh_fakecell_y = cy + inset;
+		cell[0] = (cx + inset)                     / (float)txsize;
+		cell[1] = (txsize - (cy + inset + smsize)) / (float)txsize;
+		cell[2] = cell[3] = smsize / (float)txsize;
+		if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
+			continue;
+		GLBE_CaptureFakeShadowSlot(s, cell);
+		fs_curslot = 0;	//sun: admit entbucket==0 casters (Phase-0 sun-vis gate still applies)
+		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		GLBE_FlushProjection();
+		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
+	}
+
+	//--- cells nc..nc+N: ONE spot shadowmap per LIGHT, containing EVERY prop assigned to that light.  The
+	//    cone aims at its props' centroid and widens to contain them all, so a whole room's props cast from
+	//    a single lamp cell -- the budget limits LIGHTS, not props. ---
+	for (s = 0; s < propcells; s++)
+	{
+		vec3_t lamp, aim;
+		float rad, fov, nearclip;
+		int nprops;
+		float slotmat[16];
+		int cellidx = nc + s;
+
+		Sh_PropComboCellRect(cellidx, nc, propcells, txsize, &cx, &cy, &csize);
+		smsize = csize - 2*inset;
+		if (smsize < 16)
+			continue;
+
+		VectorCopy(sh_maplights[lc_lamp[s]].org, lamp);
+		VectorCopy(sh_maplights[lc_lamp[s]].aim, aim);	//THE LAMP'S OWN cone axis -- fixed at map load
+
+		//Patch 120a: the projection is now a property of the LAMP, not of whatever happens to be standing
+		//under it this frame.  aim / fov / near / far are all constant, so the captured matrix is
+		//bit-identical frame to frame while the camera moves -- which is what makes the shadow stop
+		//swimming, and what stopped the atlas tile panning around like a free camera.
+		nprops = 0;
+		for (i = 0; i < npc; i++)
+			if (pc_cell[i] == s)
+				nprops++;
+		if (!nprops)
+		{	//cell lost all its members: neutralise it so LAST frame's capture can't linger in this atlas
+			//slot (the receiver still loops over it).
+			Vector4Set(cell, 0, 0, 0, 0);
+			GLBE_ClearFakeShadowSlot(cellidx, cell);
+			continue;
+		}
+		fov = bound(20.0f, sh_maplights[lc_lamp[s]].fov, 150.0f);
+		rad = sh_maplights[lc_lamp[s]].bright * r_shadows_propshadows_range.value;	//zfar = lamp reach
+		if (rad < 64.0f)
+			rad = 64.0f;
+
+		//by-cone caster admission: hand Sh_FakeShadowFilter this lamp's cone so ANY model inside it casts
+		//into this cell (see fs_cone_*).  Widen the half-angle and reach a touch so a caster whose ORIGIN
+		//is just outside but whose body pokes in still renders.
+		VectorCopy(lamp, fs_cone_org);
+		VectorCopy(aim, fs_cone_axis);
+		fs_cone_rad2 = (rad + 48.0f) * (rad + 48.0f);
+		{
+			float halfrad = (0.5f*fov + 8.0f) * (float)(M_PI/180.0);	//half-fov + 8deg pad
+			if (halfrad > (float)(M_PI*0.5 - 0.01)) halfrad = (float)(M_PI*0.5 - 0.01);
+			fs_cone_coscos = (float)cos(halfrad); fs_cone_coscos *= fs_cone_coscos;
+		}
+		nearclip = 8.0f;	//fixed, like everything else about this frustum
+
+		VectorCopy(lamp, l->origin);
+		VectorCopy(aim, l->axis[0]);
+		VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+		l->radius = rad;
+		l->fov = fov;
+		l->nearclip = nearclip;
+		l->flags = LFLAG_SHADOWMAP;
+
+		Matrix4x4_CM_Projection_Far(r_refdef.m_projection_std, fov, fov, nearclip, rad, false);
+		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
+
+		sh_fakecell_active = true;
+		sh_fakecell_x = cx + inset;
+		sh_fakecell_y = cy + inset;
+		cell[0] = (cx + inset)                     / (float)txsize;
+		cell[1] = (txsize - (cy + inset + smsize)) / (float)txsize;
+		cell[2] = cell[3] = smsize / (float)txsize;
+
+		if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_SPOT))
+		{
+			Vector4Set(cell, 0, 0, 0, 0);
+			GLBE_ClearFakeShadowSlot(cellidx, cell);
+			continue;
+		}
+
+		fs_curslot = cellidx;	//Sh_FakeShadowFilter now admits any caster inside fs_cone_* (this lamp's cone)
+		RQuantAdd(RQUANT_SHADOWSIDES, 1);
+		GLBE_FlushProjection();
+		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_SPOT|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
+
+		//ROBUST capture: snapshot the transform ACTUALLY rendered (proj * m_view, the view Sh_GenShadowFace
+		//just built for face 4), NOT GLBE_SelectDLight's spot matrix -- that uses a different axis
+		//convention (xy transposed vs face 4) and would mismatch the depth (the P93 "mirrored/tiny" trap).
+		//Copying the real render transform is correct for ANY projection by construction.
+		Matrix4_Multiply(r_refdef.m_projection_std, r_refdef.m_view, slotmat);
+		slotmat[14] -= r_shadows_propshadows_bias.value;	//nudge clip-z toward the lamp = self-shadow acne guard
+		//normalise the WHOLE matrix by the lamp reach: xyz/w is a ratio so sampling is bit-identical, but
+		//the shader's raw pc.w becomes DISTANCE/REACH (0..1) -- a free per-pixel POWER FALLOFF term with no
+		//extra uniform.  The shader fades the darkening to zero as pc.w -> 1, so a shadow can never throw
+		//further than its lamp's power (r_shadows_propshadows_range * brightness).
+		for (i = 0; i < 16; i++)
+			slotmat[i] *= 1.0f / rad;
+		GLBE_CaptureFakeShadowSlotMatrix(cellidx, slotmat, cell);
+
+		//SUNLIGHT-AWARE washout (info.x): where this lamp's shadow lands on a SUN-VISIBLE pixel, the sun
+		//re-lights the area, so the receiver scales the darkening down by the lamp-vs-sun brightness
+		//ratio x the pixel's own baked sun visibility.  Bsun comes from env_sun (r_shadows_sunbrightness,
+		//same units as point-light `light` values).  MUST be forced 0 on maps with no SUNVIS bake: their
+		//sampler fallback reads "fully sunlit" everywhere and would erase every lamp shadow.
+		{
+			vec4_t info = {0, 0, 0, 0};
+			if (hassunvis && r_shadows_propshadows_sunmask.value > 0)
+			{
+				float bsun = max(0.0f, r_shadows_sunbrightness.value);
+				float blamp = max(1.0f, sh_maplights[lc_lamp[s]].bright);
+				info[0] = bound(0.0f, (bsun / (bsun + blamp)) * r_shadows_propshadows_sunmask.value, 1.0f);
+			}
+			//WORLD-OCCLUSION cell (info.y/z = its atlas uv origin, info.w = live flag): render the
+			//WORLD's depth through the SAME cone into the paired subcell, so the receiver can reject any
+			//pixel with a wall between it and the lamp -- the shadow lands on the FIRST surface only and
+			//can never project through a wall into the next room (the modern-Source fix).  Same captured
+			//matrix, same cell scale; only the uv origin differs, so it costs no uniform/varying slots.
+			if (sh_propcell_paired)
+			{
+				int wx, wy, wsize, wsm;
+				shadowmesh_t *smesh;
+				Sh_PropWorldCellRect(s, nc, propcells, txsize, &wx, &wy, &wsize);
+				wsm = wsize - 2*inset;
+				//adopt this LAMP's cached world mesh: SHM_BuildShadowMesh caches on the dlight and is NOT
+				//keyed on origin, so plant the lamp's own mesh (rebuild only when absent -- map lamps are
+				//static, so each builds ONCE ever) and steal the pointer back afterwards (Begin can free
+				//and replace it on leafbytes mismatch; the steal-back self-heals the table).
+				l->worldshadowmesh = sh_maplights[lc_lamp[s]].mesh;
+				l->rebuildcache = !l->worldshadowmesh;
+				smesh = SHM_BuildShadowMesh(l, NULL, SMT_SHADOWMAP);
+				sh_maplights[lc_lamp[s]].mesh = l->worldshadowmesh;
+				if (smesh && wsm >= 16)
+				{
+					sh_fakecell_active = true;
+					sh_fakecell_x = wx + inset;
+					sh_fakecell_y = wy + inset;
+					fs_curslot = FS_WORLDSLOT;	//Sh_FakeShadowFilter rejects EVERY visedict, so only the world mesh draws
+					RQuantAdd(RQUANT_SHADOWSIDES, 1);
+					GLBE_FlushProjection();
+					Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_SPOT|LSHADER_FAKESHADOWS, smesh, 4, wsm, txsize, r_refdef.m_projection_std, NULL);
+					info[1] = (wx + inset)                  / (float)txsize;	//world cell uv origin
+					info[2] = (txsize - (wy + inset + wsm)) / (float)txsize;	//(bottom-origin, like cell[1])
+					info[3] = 1;	//world mask live for this cell
+				}
+			}
+			GLBE_SetFakeShadowSlotInfo(cellidx, info);
+		}
+	}
+	fs_curslot = -1;
+	sh_fakecell_active = false;
+	//un-plant the last lamp's adopted mesh from the shared r_fakelight: the table owns these meshes;
+	//leaving the pointer here would let some other path free or clobber a lamp's cache.
+	l->worldshadowmesh = NULL;
+	l->rebuildcache = true;
+
+	//neutralise every atlas cell the compile-time FAKESHADOWS_COUNT loop will still read past our live count.
+	for (s = nc+propcells; s < MAX_FAKESHADOW_SLOTS; s++)
+	{
+		Vector4Set(cell, 0, 0, 0, 0);
+		GLBE_ClearFakeShadowSlot(s, cell);
+	}
+	GLBE_SetFakeShadowCount(nc+propcells);
+
+	memcpy(r_refdef.m_view,            oview,  sizeof(r_refdef.m_view));
+	memcpy(r_refdef.m_projection_std,  oprojs, sizeof(r_refdef.m_projection_std));
+	memcpy(r_refdef.m_projection_view, oprojv, sizeof(r_refdef.m_projection_view));
+	r_refdef.pxrect       = oprect;
+	r_refdef.flipcull     = oldflip;
+	r_refdef.colourmask   = oldcolourmask;
+	r_refdef.externalview = oldexternalview;
+	R_SetFrustum(r_refdef.m_projection_std, r_refdef.m_view);
+
+	GLBE_EndShadowMap(restorefbo);
+	GL_ViewportUpdate();
+
+	//leave the SUN slot selected for the forward pass (as the other atlas paths do).
+	if (*r_shadows_throwdirection.string)
+		VectorCopy(r_shadows_throwdirection.vec4, l->axis[0]);
+	else
+		VectorNegate(r_sun_dir.vec4, l->axis[0]);
+	VectorNormalize(l->axis[0]);
+	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+	VectorNegate(l->axis[1], l->axis[1]);
+	l->radius = r_shadows_distance.value;
+	l->flags = LFLAG_SHADOWMAP|LFLAG_ORTHO;
+	Sh_PropComboCellRect(0, nc, propcells, txsize, &cx, &cy, &csize);
+	Sh_OrthoAlignToFrustum(l, csize - 2*inset);
+	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
+}
+
+//nettest: r_shadows_propshadows_showatlas -- draw the fake-shadow depth atlas as a 2d overlay so the
+//cell layout (cascade quadrants, lamp subcells, insets, what each cone captured) can be SEEN.  Called
+//from SCR_DrawTwoDimensional every 2d frame; no-ops unless the cvar is set.
+//The atlas is a DEPTH texture with ARB compare mode enabled, so a plain texture2D read of it is
+//undefined -- the glsl (nettest glsl/atlasdebug.glsl) instead takes N shadow-COMPARE taps at swept
+//reference depths and the pass fraction reconstructs the stored depth as grayscale.
+void Sh_DrawFakeShadowAtlasOverlay(void)
+{
+	shader_t *sh;
+	texid_t tex;
+	float size, x, y;
+	if (!r_shadows_propshadows_showatlas.ival)
+		return;
+	if (qrenderer != QR_OPENGL || !gl_config.arb_shadow)
+		return;
+	tex = GLBE_GetFakeShadowAtlasTexture();
+	if (!TEXVALID(tex) || tex->status != TEX_LOADED)
+		return;
+	sh = R_RegisterShader("fakeshadow_atlasdebug", 0, "{\nprogram atlasdebug\n{\nmap $diffuse\n}\n}");
+	if (!sh)
+		return;
+	sh->defaulttextures->base = tex;
+	if (r_shadows_propshadows_showatlas.ival >= 2)
+		size = min(vid.width, vid.height) - 16;			//big: as much of the screen as stays square
+	else
+		size = min(vid.width, vid.height) * 0.35;		//corner thumbnail
+	x = vid.width - size - 8;
+	y = vid.height - size - 8;
+	R2D_ImageColours(1, 1, 1, 1);
+	//t flipped: the atlas viewports use GL's bottom-left origin, so t1=1 puts cell row 0 at the top.
+	R2D_Image(x, y, size, size, 0, 1, 1, 0, sh);
+}
+
 void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight, but does not actually render any lighting. the lightmapped-wall etc glsl must filter by itself if it wants to accept shadows.
 {
 	dlight_t *l = &r_fakelight;
@@ -3756,10 +5176,30 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 		break;
 	}
 
+	//nettest Phase-0: mark the fake-SUN depth pass so Sh_FakeShadowFilter's caster sun-visibility gate
+	//applies HERE (cascade / single / slots-sun-cell) and NOT to the real rtlight shadow maps that reach
+	//the same filter later.  fs_sundir points TOWARD the sun (dominant-light dirs are toward-light too, so
+	//the dot in the gate compares like with like).  Reset before every exit so it never leaks.
+	fs_sunpass = true;
+	VectorNegate(l->axis[0], fs_sundir);
+
 	//nettest P110: more than one cast direction this frame -> render the atlas instead of the single map.
 	if (fs_slotcount > 1 && qrenderer == QR_OPENGL)
 	{
 		Sh_GenerateFakeShadowsAtlas(l, fs_slotcount, smsize);
+		fs_sunpass = false;
+		return;
+	}
+	//nettest Phase-1: per-prop PERSPECTIVE shadows (only reachable with slots==1, since slots>1 returned
+	//above).  Cell 0 = the sun, cells 1..N = one spot shadow per prop from its dominant lamp.  For now this
+	//replaces the cascades (Phase 2 merges them); gl_shader.c injects the matching FAKESHADOWS_PERSP_FIRST.
+	if (r_shadows_propshadows.ival && qrenderer == QR_OPENGL)
+	{
+		fs_propshadowpass = true;	//Patch 120: tells Sh_FakeShadowFilter that lamp cells are ADDITIVE,
+									//so the sun cells must admit every caster (see the filter's sun branch)
+		Sh_GeneratePropShadowsAtlas(l, smsize);
+		fs_propshadowpass = false;
+		fs_sunpass = false;
 		return;
 	}
 	//nettest P114: single cast direction -> optionally split the SUN into view-depth cascades.  Mutually
@@ -3771,14 +5211,15 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 		if (cascades > 1)
 		{
 			Sh_GenerateCascadeAtlas(l, cascades, smsize);
+			fs_sunpass = false;
 			return;
 		}
 	}
 	GLBE_SetFakeShadowCount(1);
 
-	if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
-		return;
-	Sh_GenShadowMap(l, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, l->axis, NULL, smsize, texwidth);
+	if (BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
+		Sh_GenShadowMap(l, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, l->axis, NULL, smsize, texwidth);
+	fs_sunpass = false;
 }
 
 static void Sh_DrawShadowMapLight(dlight_t *l, vec3_t colour, vec3_t axis[3], qbyte *vvis)
@@ -5275,6 +6716,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_distance,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_bias,						REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwfade,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_focus,					REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_res,						REALTIMELIGHTING);
@@ -5288,6 +6730,21 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_cascade_dist,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_ratio,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_debug,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_max,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_switch,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_cone,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_range,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_bias,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_sunvis,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_suntrace,		REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_suncast,		REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_sunfade,					REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_debug,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_showatlas,		REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_sunbrightness,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_sunmask,		REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_propshadows_worldmask,		REALTIMELIGHTING);
 	Cvar_Register (&r_shadow_shadowmapping_depthbits,	REALTIMELIGHTING);
 #endif
 }

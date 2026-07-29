@@ -950,6 +950,8 @@ COMMON_OBJS = \
 	fs_zip.o		\
 	fs_dzip.o		\
 	fs_xz.o		\
+	fs_lzma.o		\
+	LzmaDec.o		\
 	m_download.o	\
 	mathlib.o 		\
 	huff.o		\
@@ -957,6 +959,8 @@ COMMON_OBJS = \
 	md5.o 		\
 	sha1.o		\
 	sha2.o		\
+	blake2b.o	\
+	qkupdate.o	\
 	log.o 		\
 	net_chan.o 		\
 	net_wins.o 		\

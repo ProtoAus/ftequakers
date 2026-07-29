@@ -1430,6 +1430,52 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 		Surf_BuildDeluxMap(model, surf, deluxedest, dlm, blocknormals);
 	}
 
+	//nettest (SUNVIS): copy this face's baked sun-visibility block into the page at the SAME
+	//atlas rect the lightmap just went to.  Static data, so unlike the lightmap there is no
+	//style scaling, no stain and no dlight - a straight row-by-row blit.
+	//
+	//Two traps, both easy to get wrong:
+	// * surf->samples is a BYTE pointer into lightdata scaled by the lightmap format (4 for
+	//   E5BGR9, 3 for RGB8, 1 for L8), but SUNVIS is always 1 byte per LUXEL - so the luxel
+	//   index has to divide that scale back out.
+	// * SUNVIS is style-INDEPENDENT: one value per luxel, style 0 only. The deluxemap advances
+	//   by size per style; this must not. Only map 0 writes.
+	if (map == 0 && lm->sunvis_pixels && model->sunvisdata && surf->samples)
+	{
+		unsigned int lofsscale;
+		switch(model->lightmaps.fmt)
+		{
+		case LM_E5BGR9:	lofsscale = 4;	break;
+		case LM_RGB8:	lofsscale = 3;	break;
+		default:
+		case LM_L8:		lofsscale = 1;	break;
+		}
+		if (lofsscale)
+		{
+			size_t luxel = (size_t)(surf->samples - model->lightdata) / lofsscale;
+			//bounds-check against the lump: the face-load path only validates style 0's extent.
+			if (luxel + (size_t)smax*tmax <= (size_t)model->lightdatasize / lofsscale)
+			{
+				qbyte *svsrc = model->sunvisdata + luxel;
+				qbyte *svdst = lm->sunvis_pixels + surf->light_t[map] * lm->width + surf->light_s[map];
+				int svrow, svcol;
+				//INVERTED on the way in: the lump stores sun VISIBILITY (255 = fully lit) because
+				//that is the natural thing to bake, but the TEXTURE stores sun OCCLUSION so that
+				//black (0) means "fully lit, dynamic shadow at full strength".  That makes every
+				//failure mode - sampler unbound, texture never created, format unsupported -
+				//land on the OLD behaviour instead of silently deleting every shadow in the game.
+				for (svrow = 0; svrow < tmax; svrow++)
+				{
+					for (svcol = 0; svcol < smax; svcol++)
+						svdst[svcol] = 255 - svsrc[svcol];
+					svsrc += smax;
+					svdst += lm->width;
+				}
+				lm->sunvis_modified = true;
+			}
+		}
+	}
+
 	if (lm->fmt != PTI_L8)
 	{
 		// set to full bright if no light data
@@ -3529,7 +3575,7 @@ static void Surf_FreeLightmap(lightmapinfo_t *lm)
 }
 
 //needs to be followed by a BE_UploadAllLightmaps at some point
-int Surf_NewLightmaps(int count, int width, int height, uploadfmt_t fmt, qboolean deluxe)
+int Surf_NewLightmaps(int count, int width, int height, uploadfmt_t fmt, qboolean deluxe, qboolean sunvis)
 {
 	int first = numlightmaps;
 	int i;
@@ -3639,6 +3685,24 @@ int Surf_NewLightmaps(int count, int width, int height, uploadfmt_t fmt, qboolea
 		lightmap[i]->rectchange.t = 0;
 		lightmap[i]->rectchange.b = lightmap[i]->height;
 		lightmap[i]->rectchange.r = lightmap[i]->width;
+
+		//nettest (SUNVIS): a single-channel page mirroring this lightmap page's atlas coords.
+		//Allocated ONLY when the map actually shipped a SUNVIS lump - otherwise every page
+		//would cost width*height bytes for data that is uniformly "fully lit" anyway.
+		//Pre-filled 255 so any luxel the fill pass never reaches reads as fully sunlit, which
+		//is the fail-safe direction (dynamic shadow behaves exactly as it does today).
+		lightmap[i]->sunvis_texture = r_nulltex;
+		lightmap[i]->sunvis_modified = false;
+		if (sunvis)
+		{
+			lightmap[i]->sunvis_pixels = Z_Malloc(width*height);
+			//0 = no occlusion = fully sunlit = dynamic shadow at full strength. Any luxel the
+			//fill pass never reaches therefore behaves exactly as it did before SUNVIS existed.
+			memset(lightmap[i]->sunvis_pixels, 0, width*height);
+			lightmap[i]->sunvis_modified = true;
+		}
+		else
+			lightmap[i]->sunvis_pixels = NULL;
 
 
 		lightmap[i]->lightmap_texture = r_nulltex;
@@ -3780,7 +3844,7 @@ void Surf_BuildModelLightmaps (model_t *m)
 			m->lightmaps.count = numlightmaps - newfirst;
 		}
 		else
-			newfirst = Surf_NewLightmaps(m->lightmaps.count, m->lightmaps.width, m->lightmaps.height, fmt, m->lightmaps.deluxemapping);
+			newfirst = Surf_NewLightmaps(m->lightmaps.count, m->lightmaps.width, m->lightmaps.height, fmt, m->lightmaps.deluxemapping, m->sunvisdata != NULL);
 	}
 
 	//fixup batch lightmaps

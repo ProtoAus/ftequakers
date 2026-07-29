@@ -39,6 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #include "com_mesh.h"
 #include "com_bih.h"
+#include "LzmaDec.h"	//nettest: Strata Source (BSP v25) + newer Valve maps LZMA-compress individual lumps
 
 static plugfsfuncs_t		*filefuncs;
 static plugmodfuncs_t		*modfuncs;
@@ -613,10 +614,11 @@ static qboolean VBSP_LoadEdges (model_t *loadmodel, qbyte *mod_base, vlump_t *l)
 {
 	medge_t *out;
 	size_t 	i, count;
+	//Strata v25 (LUMP_EDGES_VERSION 1) widened the vertex indices from 16-bit to 32-bit.
+	size_t elemsz = (l->version >= 1) ? sizeof(dledge_t) : sizeof(dsedge_t);
 
-	dsedge_t *in = (void *)(mod_base + l->fileofs);
-	count = l->filelen / sizeof(*in);
-	if (l->filelen % sizeof(*in) || count > SANITY_LIMIT(*out))
+	count = l->filelen / elemsz;
+	if (l->filelen % elemsz || count > SANITY_LIMIT(*out))
 	{
 		Con_Printf ("VBSP_LoadEdges: funny lump size in %s\n", loadmodel->name);
 		return false;
@@ -626,10 +628,23 @@ static qboolean VBSP_LoadEdges (model_t *loadmodel, qbyte *mod_base, vlump_t *l)
 	loadmodel->edges = out;
 	loadmodel->numedges = count;
 
-	for ( i=0 ; i<count ; i++, in++, out++)
+	if (l->version >= 1)
 	{
-		out->v[0] = (unsigned short)LittleShort(in->v[0]);
-		out->v[1] = (unsigned short)LittleShort(in->v[1]);
+		dledge_t *in = (void *)(mod_base + l->fileofs);
+		for ( i=0 ; i<count ; i++, in++, out++)
+		{
+			out->v[0] = LittleLong(in->v[0]);
+			out->v[1] = LittleLong(in->v[1]);
+		}
+	}
+	else
+	{
+		dsedge_t *in = (void *)(mod_base + l->fileofs);
+		for ( i=0 ; i<count ; i++, in++, out++)
+		{
+			out->v[0] = (unsigned short)LittleShort(in->v[0]);
+			out->v[1] = (unsigned short)LittleShort(in->v[1]);
+		}
 	}
 
 	return true;
@@ -660,11 +675,14 @@ static qboolean VBSP_LoadMarksurfaces (model_t *loadmodel, qbyte *mod_base, vlum
 {
 	size_t		i, j, count;
 	msurface_t **out;
+	//Strata v25 (LUMP_LEAFFACES_VERSION 1) widened leaffaces from 16-bit to 32-bit.
+	qboolean wide = (l->version >= 1);
+	size_t elemsz = wide ? sizeof(unsigned int) : sizeof(unsigned short);
+	unsigned short *ins = (void *)(mod_base + l->fileofs);
+	unsigned int   *inl = (void *)(mod_base + l->fileofs);
 
-	unsigned short		*ins;
-	ins = (void *)(mod_base + l->fileofs);
-	count = l->filelen / sizeof(*ins);
-	if (l->filelen % sizeof(*ins) || count > SANITY_LIMIT(*out))
+	count = l->filelen / elemsz;
+	if (l->filelen % elemsz || count > SANITY_LIMIT(*out))
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadMarksurfaces: funny lump size in %s\n",loadmodel->name);
 		return false;
@@ -676,7 +694,7 @@ static qboolean VBSP_LoadMarksurfaces (model_t *loadmodel, qbyte *mod_base, vlum
 
 	for ( i=0 ; i<count ; i++)
 	{
-		j = (unsigned short)LittleShort(ins[i]);
+		j = wide ? LittleLong(inl[i]) : (unsigned short)LittleShort(ins[i]);
 		if (j >= loadmodel->numsurfaces)
 		{
 			Con_Printf (CON_ERROR "VBSP_LoadMarksurfaces: bad surface number\n");
@@ -865,16 +883,19 @@ static qboolean VBSP_LoadLeafBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	int			i;
 	q2cbrush_t	**out;
-	unsigned short 	*in;
 	int			count;
+	//Strata v25 (LUMP_LEAFBRUSHES_VERSION 1) widened leafbrushes from 16-bit to 32-bit.
+	qboolean wide = (l->version >= 1);
+	size_t elemsz = wide ? sizeof(unsigned int) : sizeof(unsigned short);
+	unsigned short *ins = (void *)(mod_base + l->fileofs);
+	unsigned int   *inl = (void *)(mod_base + l->fileofs);
 
-	in = (void *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
+	if (l->filelen % elemsz)
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadLeafBrushes: funny lump size\n");
 		return false;
 	}
-	count = l->filelen / sizeof(*in);
+	count = l->filelen / elemsz;
 
 	if (count < 1)
 	{
@@ -892,8 +913,8 @@ static qboolean VBSP_LoadLeafBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	out = prv->leafbrushes = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * (count+prv->numbrushes));
 	prv->numleafbrushes = count;
 
-	for ( i=0 ; i<count ; i++, in++, out++)
-		*out = prv->brushes + (unsigned short)(short)LittleShort (*in);
+	for ( i=0 ; i<count ; i++, out++)
+		*out = prv->brushes + (wide ? LittleLong(inl[i]) : (unsigned short)(short)LittleShort(ins[i]));
 
 	return true;
 }
@@ -1275,20 +1296,32 @@ typedef struct
 	unsigned short	area;
 	unsigned short pad;
 } hl2dnode_t;
+typedef struct
+{	//Strata v25 (LUMP_NODES_VERSION 1): float bounds + 32-bit face refs
+	int			planenum;
+	int			children[2];
+	float		mins[3];
+	float		maxs[3];
+	unsigned int	firstface;
+	unsigned int	numfaces;
+	short		area;
+} strata_dnode_t;
 static qboolean VBSP_LoadNodes (model_t *mod, qbyte *mod_base, vlump_t *l)
 {
-	hl2dnode_t *in;
 	int			child;
 	mnode_t		*out;
 	int			i, j, count;
+	qboolean	wide = (l->version >= 1);
+	size_t		elemsz = wide ? sizeof(strata_dnode_t) : sizeof(hl2dnode_t);
+	hl2dnode_t	*ins = (void *)(mod_base + l->fileofs);
+	strata_dnode_t *inl = (void *)(mod_base + l->fileofs);
 
-	in = (void *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
+	if (l->filelen % elemsz)
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadNodes: funny lump size\n");
 		return false;
 	}
-	count = l->filelen / sizeof(*in);
+	count = l->filelen / elemsz;
 
 	if (count < 1)
 	{
@@ -1306,25 +1339,48 @@ static qboolean VBSP_LoadNodes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	mod->nodes = out;
 	mod->numnodes = count;
 
-	for (i=0 ; i<count ; i++, out++, in++)
+	for (i=0 ; i<count ; i++, out++)
 	{
+		int planenum, children[2];
+		unsigned int firstface, numfaces;
+
 		memset(out, 0, sizeof(*out));
 
-		for (j=0 ; j<3 ; j++)
+		if (wide)
 		{
-			out->minmaxs[j] = LittleShort (in->mins[j]);
-			out->minmaxs[3+j] = LittleShort (in->maxs[j]);
+			for (j=0 ; j<3 ; j++)
+			{
+				out->minmaxs[j]   = LittleFloat (inl[i].mins[j]);
+				out->minmaxs[3+j] = LittleFloat (inl[i].maxs[j]);
+			}
+			planenum    = LittleLong(inl[i].planenum);
+			firstface   = LittleLong(inl[i].firstface);
+			numfaces    = LittleLong(inl[i].numfaces);
+			children[0] = LittleLong(inl[i].children[0]);
+			children[1] = LittleLong(inl[i].children[1]);
+		}
+		else
+		{
+			for (j=0 ; j<3 ; j++)
+			{
+				out->minmaxs[j]   = LittleShort (ins[i].mins[j]);
+				out->minmaxs[3+j] = LittleShort (ins[i].maxs[j]);
+			}
+			planenum    = LittleLong(ins[i].planenum);
+			firstface   = (unsigned short)LittleShort(ins[i].firstface);
+			numfaces    = (unsigned short)LittleShort(ins[i].numfaces);
+			children[0] = LittleLong(ins[i].children[0]);
+			children[1] = LittleLong(ins[i].children[1]);
 		}
 
-		out->plane = mod->planes + LittleLong(in->planenum);
-
-		out->firstsurface = (unsigned short)LittleShort (in->firstface);
-		out->numsurfaces = (unsigned short)LittleShort (in->numfaces);
+		out->plane = mod->planes + planenum;
+		out->firstsurface = firstface;
+		out->numsurfaces = numfaces;
 		out->contents = -1;	// differentiate from leafs
 
 		for (j=0 ; j<2 ; j++)
 		{
-			child = LittleLong (in->children[j]);
+			child = children[j];
 			out->childnum[j] = child;
 			if (child < 0)
 				out->children[j] = (mnode_t *)(mod->leafs + -1-child);
@@ -1363,23 +1419,38 @@ typedef struct
 	} light[6];
 	short pad;
 } hl2dleaf_t;
+typedef struct
+{	//Strata v25 (LUMP_LEAFS_VERSION 2): 32-bit cluster + float bounds + 32-bit leafface/leafbrush refs
+	int				contents;
+	int				cluster;
+	int				areaflags;		// area:17, flags:15
+	float			mins[3];
+	float			maxs[3];
+	unsigned int	firstleafface;
+	unsigned int	numleaffaces;
+	unsigned int	firstleafbrush;
+	unsigned int	numleafbrushes;
+	int				leafwaterid;
+} strata_dleaf_t;
 
 static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int ver)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	int			i, j;
 	mleaf_t		*out;
-	hl2dleaf_t	*in;
+	qbyte		*inbase = mod_base + l->fileofs;
 	int			count;
-	size_t		insize = sizeof(*in);
+	qboolean	wide = (l->version >= 2);	//LUMP_LEAFS_VERSION 2 = Strata widened struct
+	size_t		insize;
 	struct leaflightpoint_s *lightpoint = NULL;
 
-	if (ver == 19)
+	if (wide)
+		insize = sizeof(strata_dleaf_t);	//56, but a different layout to v19's 56
+	else if (ver == 19)
 		insize = 56;	//older maps have some lighting info here.
 	else
 		insize = 32;
 
-	in = (void *)(mod_base + l->fileofs);
 	if (l->filelen % insize)
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadLeafs: funny lump size\n");
@@ -1405,51 +1476,66 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 	mod->leafs = out;
 	mod->numleafs = count;
 
-	if (ver == 19)
+	if (!wide && ver == 19)
 	{
 		prv->leaflight = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * count);
 		lightpoint = plugfuncs->GMalloc(&mod->memgroup, sizeof(*lightpoint) * count);
 	}
 
-	for ( i=0 ; i<count ; i++, in = (hl2dleaf_t*)((qbyte*)in+insize), out++)
+	for ( i=0 ; i<count ; i++, out++)
 	{
 		memset(out, 0, sizeof(*out));
 
-		for (j=0 ; j<3 ; j++)
+		if (wide)
 		{
-			out->minmaxs[j] = LittleShort (in->mins[j]);
-			out->minmaxs[3+j] = LittleShort (in->maxs[j]);
+			strata_dleaf_t *in = (strata_dleaf_t*)(inbase + (size_t)i*insize);
+			for (j=0 ; j<3 ; j++)
+			{
+				out->minmaxs[j]   = LittleFloat (in->mins[j]);
+				out->minmaxs[3+j] = LittleFloat (in->maxs[j]);
+			}
+			out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
+			out->cluster = LittleLong(in->cluster);		//already signed; -1 = no cluster
+			out->area = LittleLong(in->areaflags) & 0x1ffff;	//low 17 bits; upper 15 are flags
+			out->firstleafbrush = LittleLong(in->firstleafbrush);
+			out->numleafbrushes = LittleLong(in->numleafbrushes);
+			out->firstmarksurface = mod->marksurfaces + LittleLong(in->firstleafface);
+			out->nummarksurfaces = LittleLong(in->numleaffaces);
 		}
+		else
+		{
+			hl2dleaf_t *in = (hl2dleaf_t*)(inbase + (size_t)i*insize);
+			for (j=0 ; j<3 ; j++)
+			{
+				out->minmaxs[j]   = LittleShort (in->mins[j]);
+				out->minmaxs[3+j] = LittleShort (in->maxs[j]);
+			}
+			out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
+			out->cluster = (unsigned short)LittleShort (in->cluster);
+			if (out->cluster == 0xffff)
+				out->cluster = -1;
+			out->area = (unsigned short)LittleShort (in->area) & 0x1ff;	//upper part is flags.
+			out->firstleafbrush = (unsigned short)LittleShort (in->firstleafbrush);
+			out->numleafbrushes = (unsigned short)LittleShort (in->numleafbrushes);
+			out->firstmarksurface = mod->marksurfaces + (unsigned short)LittleShort(in->firstleafface);
+			out->nummarksurfaces = (unsigned short)LittleShort(in->numleaffaces);
 
-		out->contents = VBSP_TranslateContentBits(prv,LittleLong (in->contents));
-		out->cluster = (unsigned short)LittleShort (in->cluster);
-		if (out->cluster == 0xffff)
-			out->cluster = -1;
-
-		out->area = (unsigned short)LittleShort (in->area);
-		out->area &= 0x1ff;		//upper part is flags.
-		out->firstleafbrush = (unsigned short)LittleShort (in->firstleafbrush);
-		out->numleafbrushes = (unsigned short)LittleShort (in->numleafbrushes);
-
-		out->firstmarksurface = mod->marksurfaces +
-			(unsigned short)LittleShort(in->firstleafface);
-		out->nummarksurfaces = (unsigned short)LittleShort(in->numleaffaces);
+			if (lightpoint)
+			{
+				for (j = 0; j < 6; j++)
+				{
+					float e = pow(2, in->light[j].e);
+					lightpoint->rgb[j][0] = e * in->light[j].rgb[0];
+					lightpoint->rgb[j][1] = e * in->light[j].rgb[1];
+					lightpoint->rgb[j][2] = e * in->light[j].rgb[2];
+				}
+				prv->leaflight[i].count = 1;
+				prv->leaflight[i].point = lightpoint++;
+			}
+		}
 
 		if (out->cluster >= mod->numclusters)
 			mod->numclusters = out->cluster + 1;
-
-		if (lightpoint)
-		{
-			for (j = 0; j < 6; j++)
-			{
-				float e = pow(2, in->light[j].e);
-				lightpoint->rgb[j][0] = e * in->light[j].rgb[0];
-				lightpoint->rgb[j][1] = e * in->light[j].rgb[1];
-				lightpoint->rgb[j][2] = e * in->light[j].rgb[2];
-			}
-			prv->leaflight[i].count = 1;
-			prv->leaflight[i].point = lightpoint++;
-		}
 	}
 	mod->pvsbytes = ((mod->numclusters + 31)>>3)&~3;
 
@@ -1465,23 +1551,34 @@ typedef struct
 	unsigned short numverts;
 	unsigned int planenum;
 } hl2dareaportal_t;
+typedef struct
+{	//Strata v25 (LUMP_AREAPORTALS_VERSION 1): all 32-bit
+	unsigned int	portalnum;
+	unsigned int	otherarea;
+	unsigned int	firstvert;
+	unsigned int	numverts;
+	int				planenum;
+} strata_dareaportal_t;
 static qboolean VBSP_LoadAreaPortals (model_t *mod, qbyte *mod_base, vlump_t *l, vlump_t *lump_verts)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	int			i;
 	q2dareaportal_t		*out;
-	hl2dareaportal_t 	*in;
 	int			count, vcount;
 	vec3_t		*inverts;
 	mesh_t		mesh;
+	//Strata v25 widened all fields (12->20 bytes).
+	qboolean wide = (l->version >= 1);
+	size_t elemsz = wide ? sizeof(strata_dareaportal_t) : sizeof(hl2dareaportal_t);
+	hl2dareaportal_t    *ins = (void *)(mod_base + l->fileofs);
+	strata_dareaportal_t *inl = (void *)(mod_base + l->fileofs);
 
-	in = (void *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
+	if (l->filelen % elemsz)
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadAreaPortals: funny lump size\n");
 		return false;
 	}
-	count = l->filelen / sizeof(*in);
+	count = l->filelen / elemsz;
 
 	inverts = (void *)(mod_base + lump_verts->fileofs);
 	if (lump_verts->filelen % sizeof(*inverts))
@@ -1519,16 +1616,30 @@ static qboolean VBSP_LoadAreaPortals (model_t *mod, qbyte *mod_base, vlump_t *l,
 		mesh.indexes[i*3+2] = i+2;
 	}
 
-	for (i=0 ; i<count ; i++, in++, out++)
+	for (i=0 ; i<count ; i++, out++)
 	{
-		out->portalnum = LittleShort (in->portalnum);
-		out->otherarea = LittleShort (in->otherarea);
+		unsigned int portalnum, otherarea, firstvert, numverts;
+		int planenum;
+		if (wide)
+		{
+			portalnum = LittleLong(inl[i].portalnum);  otherarea = LittleLong(inl[i].otherarea);
+			firstvert = LittleLong(inl[i].firstvert);   numverts  = LittleLong(inl[i].numverts);
+			planenum  = LittleLong(inl[i].planenum);
+		}
+		else
+		{
+			portalnum = (unsigned short)LittleShort(ins[i].portalnum);  otherarea = (unsigned short)LittleShort(ins[i].otherarea);
+			firstvert = (unsigned short)LittleShort(ins[i].firstvert);   numverts  = (unsigned short)LittleShort(ins[i].numverts);
+			planenum  = LittleLong(ins[i].planenum);
+		}
+		out->portalnum = portalnum;
+		out->otherarea = otherarea;
 
-		prv->portalplane[i] = mod->planes + LittleLong (in->planenum);
+		prv->portalplane[i] = mod->planes + planenum;
 
-		prv->portalpoly[i].xyz_array = mesh.xyz_array+LittleLong(in->firstvert);
+		prv->portalpoly[i].xyz_array = mesh.xyz_array+firstvert;
 		prv->portalpoly[i].st_array = mesh.st_array;
-		prv->portalpoly[i].numvertexes = LittleLong(in->numverts);
+		prv->portalpoly[i].numvertexes = numverts;
 
 		if (prv->portalpoly[i].numvertexes>2)
 		{
@@ -1578,7 +1689,6 @@ static qboolean VBSP_LoadDisplacements (model_t *mod, qbyte *mod_base, vlump_t *
 	vbspinfo_t			*prv = (vbspinfo_t*)mod->meshinfo;
 	vlump_t 			*l = &lumps[VLUMP_DISP_INFO];
 	vlump_t 			*vl = &lumps[VLUMP_DISP_VERTS];
-	hl2ddisplacement_t	*in;
 	dispinfo_t			*out;
 	int					i, count, x, y;
 	hl2displacementvert_t *inv;
@@ -1596,31 +1706,42 @@ static qboolean VBSP_LoadDisplacements (model_t *mod, qbyte *mod_base, vlump_t *
 	int primary;
 	float pdist,dist;
 
-	in = (void *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
+	//Strata v25 (LUMP_DISPINFO_VERSION 1): m_iMapFace (faceidx) widened 16->32 bit and the neighbour
+	//arrays grew, so the record STRIDE is 232 not 176.  Every field the loader reads (position, firstvert,
+	//power, contents, faceidx) sits at the SAME offset in both layouts -- only faceidx's width and the
+	//overall stride differ -- so read fields through the classic struct but stride/faceidx per version.
+	qbyte  *dispbase = mod_base + l->fileofs;
+	qboolean dispwide = (l->version >= 1);
+	size_t  dispstride = dispwide ? 232 : sizeof(hl2ddisplacement_t);
+	#define DISPAT(idx) ((hl2ddisplacement_t*)(dispbase + (size_t)(idx)*dispstride))
+	#define DISPFACE(dp) (dispwide ? (unsigned int)LittleLong(*(unsigned int*)((qbyte*)(dp)+36)) : (dp)->faceidx)
+
+	if (l->filelen % dispstride)
 	{
 		Con_Printf ("VBSP_LoadDisplacements: funny lump size in %s\n",mod->name);
 		return false;
 	}
-	count = l->filelen / sizeof(*in);
+	count = l->filelen / dispstride;
 	if (!count)
 		return true;	//nothing to worry about.
 	out = plugfuncs->GMalloc(&mod->memgroup, count*sizeof(*out));
 
 	for (maxverts = 0, i = 0; i < count; i++)
-		maxverts += ((1<<in[i].power)) * ((1<<in[i].power));
+		maxverts += ((1<<DISPAT(i)->power)) * ((1<<DISPAT(i)->power));
 	indexes = plugfuncs->GMalloc(&mod->memgroup, maxverts*sizeof(*indexes)*6);
 
 	for (maxverts = 0, i = 0; i < count; i++)
-		maxverts += ((1<<in[i].power)+1) * ((1<<in[i].power)+1);
+		maxverts += ((1<<DISPAT(i)->power)+1) * ((1<<DISPAT(i)->power)+1);
 	verts = plugfuncs->GMalloc(&mod->memgroup, maxverts*sizeof(*verts));
 	xyz = plugfuncs->GMalloc(&mod->memgroup, maxverts*sizeof(*xyz));
 
 	prv->displacements = out;
 	prv->numdisplacements = count;
-	for (i = 0; i < count; i++, out++, in++)
+	for (i = 0; i < count; i++, out++)
 	{
-		surf = mod->surfaces + in->faceidx;
+		hl2ddisplacement_t *in = DISPAT(i);
+		unsigned int faceidx = DISPFACE(in);
+		surf = mod->surfaces + faceidx;
 		if (surf->numedges != 4)
 		{
 			Con_Printf ("VBSP_LoadDisplacements: displacement surface doesn't have 4 edges in %s\n",mod->name);
@@ -1656,7 +1777,7 @@ static qboolean VBSP_LoadDisplacements (model_t *mod, qbyte *mod_base, vlump_t *
 		}
 
 		out->surf = surf;
-		prv->surfdisp[in->faceidx] = out;	//the surface needs to be able to get its proper info when building vbos
+		prv->surfdisp[faceidx] = out;	//the surface needs to be able to get its proper info when building vbos
 		ClearBounds(out->aamin, out->aamax);
 		out->contents = VBSP_TranslateContentBits(prv,in->contents);
 		out->width = (1<<in->power);
@@ -1748,6 +1869,26 @@ typedef struct
 	unsigned short firstprim;
 	unsigned int smoothinggroup;
 } hl2dface_t;
+typedef struct
+{	//Strata v25 (LUMP_FACES_VERSION 2): 32-bit planenum/numedges/texinfo/dispinfo/fogvolume
+	unsigned int	planenum;
+	qbyte			side;
+	qbyte			onnode;
+	int				firstedge;
+	int				numedges;
+	int				texinfo;
+	int				dispinfo;
+	int				fogvolume;
+	qbyte			styles[4];
+	int				lightofs;
+	float			surfacearea;
+	int				extents_min[2];
+	int				extents_size[2];
+	int				origface;
+	unsigned int	primbits;		// m_EnableShadows:1 | m_NumPrims:31
+	unsigned int	firstprim;
+	unsigned int	smoothinggroup;
+} strata_dface_t;
 
 
 typedef struct
@@ -1882,12 +2023,14 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	vlump_t *l = &lumps[VLUMP_FACES_LDR];
 	vlump_t *l2 = &lumps[VLUMP_FACES_HDR];
-	hl2dface_t	*in;
+	qbyte		*inbase;
 	msurface_t 	*out;
 	int			i, count, surfnum;
 	int			planenum;
 	int			ti, st;
-	int			lumpsize = sizeof(*in);
+	int			lumpsize = sizeof(hl2dface_t);
+	int			prefix = 0;
+	qboolean	wide;
 
 	mesh_t		*meshes;
 
@@ -1899,13 +2042,15 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 	if (l2->filelen && !(hl2_favour_ldr->ival && lumps[VLUMP_LIGHTING_LDR].filelen))
 		l = l2;
 
-	if (version == 18)
+	wide = (l->version >= 2);	//Strata v25 LUMP_FACES_VERSION 2 = 32-bit fields
+	if (wide)
+		lumpsize = sizeof(strata_dface_t);
+	else if (version == 18)
 	{	//this version seems to have rgbx*4 prefixed
-		in = (void *)(mod_base + l->fileofs + 4*4);
+		prefix = 4*4;
 		lumpsize += 4*4;
 	}
-	else
-		in = (void *)(mod_base + l->fileofs);
+	inbase = (qbyte *)(mod_base + l->fileofs + prefix);
 	if (l->filelen % lumpsize)
 	{
 		Con_Printf ("VBSP_LoadFaces: funny lump size in %s\n",mod->name);
@@ -1922,24 +2067,54 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 
 	mod->lightmaps.surfstyles = 1;
 
-	for ( surfnum=0 ; surfnum<count ; surfnum++, in = (void*)((qbyte*)in+lumpsize), out++)
+	for ( surfnum=0 ; surfnum<count ; surfnum++, out++)
 	{
-		out->firstedge = LittleLong(in->firstedge);
-		out->numedges = (unsigned short)LittleShort(in->numedges);
+		int firstedge, numedges, lightofs, extmin[2], extsize[2];
+		qbyte side, onnode, *styles;
+
+		if (wide)
+		{
+			strata_dface_t *in = (strata_dface_t*)(inbase + (size_t)surfnum*lumpsize);
+			firstedge  = LittleLong(in->firstedge);
+			numedges   = LittleLong(in->numedges);
+			planenum   = LittleLong(in->planenum);
+			side       = in->side;
+			onnode     = in->onnode;
+			ti         = LittleLong(in->texinfo);
+			extmin[0]  = LittleLong(in->extents_min[0]);  extmin[1]  = LittleLong(in->extents_min[1]);
+			extsize[0] = LittleLong(in->extents_size[0]); extsize[1] = LittleLong(in->extents_size[1]);
+			styles     = in->styles;
+			lightofs   = LittleLong(in->lightofs);
+		}
+		else
+		{
+			hl2dface_t *in = (hl2dface_t*)(inbase + (size_t)surfnum*lumpsize);
+			firstedge  = LittleLong(in->firstedge);
+			numedges   = (unsigned short)LittleShort(in->numedges);
+			planenum   = (unsigned short)LittleShort(in->planenum);
+			side       = in->side;
+			onnode     = in->onnode;
+			ti         = (unsigned short)LittleShort(in->texinfo);
+			extmin[0]  = in->extents_min[0];  extmin[1]  = in->extents_min[1];
+			extsize[0] = in->extents_size[0]; extsize[1] = in->extents_size[1];
+			styles     = in->styles;
+			lightofs   = LittleLong(in->lightofs);
+		}
+
+		out->firstedge = firstedge;
+		out->numedges = numedges;
 		out->flags = 0;
 		out->mesh = meshes+surfnum;
 		out->mesh->numvertexes = out->numedges;
 		out->mesh->numindexes = (out->mesh->numvertexes-2)*3;
 
-		planenum = (unsigned short)LittleShort(in->planenum);
-		if (in->side)
+		if (side)
 			out->flags |= SURF_PLANEBACK;
-		if (!in->onnode)
+		if (!onnode)
 			out->flags |= SURF_OFFNODE;
 
 		out->plane = mod->planes + planenum;
 
-		ti = (unsigned short)LittleShort (in->texinfo);
 		if (ti < 0 || ti >= mod->numtexinfo)
 		{
 			Con_Printf (CON_ERROR "VBSP_LoadFaces: bad texinfo number\n");
@@ -1957,16 +2132,16 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 		}
 
 		out->lmshift = 0;
-		out->texturemins[0] = in->extents_min[0];
-		out->texturemins[1] = in->extents_min[1];
-		out->extents[0] = in->extents_size[0];
-		out->extents[1] = in->extents_size[1];
+		out->texturemins[0] = extmin[0];
+		out->texturemins[1] = extmin[1];
+		out->extents[0] = extsize[0];
+		out->extents[1] = extsize[1];
 
 	// lighting info
 
 		for (i=0 ; i<Q1Q2BSP_STYLESPERSURF ; i++)
 		{
-			st = in->styles[i];
+			st = styles[i];
 			if (st == 255)
 				st = INVALID_LIGHTSTYLE;
 			else if (mod->lightmaps.maxstyle < st)
@@ -1977,7 +2152,7 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 			out->styles[i] = INVALID_LIGHTSTYLE;
 		for (i = 0; i<MAXRLIGHTMAPS ; i++)
 			out->vlstyles[i] = INVALID_VLIGHTSTYLE;
-		i = LittleLong(in->lightofs);
+		i = lightofs;
 		if (i == -1 || !mod->lightdata)
 			out->samples = NULL;
 		else
@@ -2199,22 +2374,33 @@ typedef struct
 	unsigned short dispinfo;
 	short bevel;
 } hl2dbrushside_t;
+typedef struct
+{	//Strata v25 (LUMP_BRUSHSIDES_VERSION 1): 32-bit planenum/texinfo + a `thin` byte
+	unsigned int	planenum;
+	int				texinfo;
+	int				dispinfo;
+	unsigned char	bevel;
+	unsigned char	thin;
+} strata_dbrushside_t;
 static qboolean VBSP_LoadBrushSides (model_t *mod, qbyte *mod_base, vlump_t *l)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	unsigned int			i, j;
 	q2cbrushside_t	*out;
-	hl2dbrushside_t *in;
 	int			count;
-	int			num;
+	unsigned int			num;
+	//Strata v25 widened planenum (16->32) and texinfo (16->32) and added a `thin` byte.
+	qboolean wide = (l->version >= 1);
+	size_t elemsz = wide ? sizeof(strata_dbrushside_t) : sizeof(hl2dbrushside_t);
+	hl2dbrushside_t     *ins = (void *)(mod_base + l->fileofs);
+	strata_dbrushside_t *inl = (void *)(mod_base + l->fileofs);
 
-	in = (void *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
+	if (l->filelen % elemsz)
 	{
 		Con_Printf (CON_ERROR "VBSP_LoadBrushSides: funny lump size\n");
 		return false;
 	}
-	count = l->filelen / sizeof(*in);
+	count = l->filelen / elemsz;
 
 	// need to save space for box planes
 	if (count > SANITY_MAX_MAP_BRUSHSIDES)
@@ -2226,12 +2412,12 @@ static qboolean VBSP_LoadBrushSides (model_t *mod, qbyte *mod_base, vlump_t *l)
 	out = prv->brushsides = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * count);
 	prv->numbrushsides = count;
 
-	for ( i=0 ; i<count ; i++, in++, out++)
+	for ( i=0 ; i<count ; i++, out++)
 	{
-		num = (unsigned short)LittleShort (in->planenum);
+		num = wide ? LittleLong(inl[i].planenum) : (unsigned short)LittleShort(ins[i].planenum);
 		out->plane = &mod->planes[num];
-		j = (unsigned short)LittleShort (in->texinfo);
-		if (j >= mod->numtexinfo)
+		j = wide ? (unsigned int)LittleLong(inl[i].texinfo) : (unsigned short)LittleShort(ins[i].texinfo);
+		if (j >= mod->numtexinfo)	//also catches texinfo == -1 (wraps huge)
 			out->surface = &nullsurface;
 		else
 			out->surface = &prv->surfaces[j];
@@ -2290,6 +2476,9 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		break;
 	case 11://+scale
 		propsize = 19*4;
+		break;
+	case 13://Strata: v11 but scale is a non-uniform Vector (12 not 4) + a flags_ex uint. NOTE: best-effort,
+		propsize = 22*4;	//no map with real v13 props to test against; a wrong stride is caught by the size check below.
 		break;
 	default:
 		return true;	//version not supported, just ignore it entirely. sorry.
@@ -2384,7 +2573,12 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		{
 			ent->flags = LittleLong(*(int*)prop);						prop += sizeof(int);
 		}
-		if (version >= 11)
+		if (version == 13)
+		{	//Strata: non-uniform Vector scale (engine entity_t has a single scale, so take X) + flags_ex
+			ent->scale = LittleFloat(*(float*)prop);					prop += sizeof(float)*3;
+			/*flags_ex = LittleLong(*(int*)prop);*/						prop += sizeof(int);
+		}
+		else if (version >= 11)
 		{
 			ent->scale = LittleFloat(*(float*)prop);					prop += sizeof(float);
 		}
@@ -2436,6 +2630,38 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 	}
 	return true;
 }
+//malloc/free ISzAlloc for the LZMA one-call decoder, shared by the game-lump sub-lump decompressor
+//(just below) and the top-level lump decompressor (VBSP_DecompressLumps, further down).
+static void *VBSP_LzmaAlloc(ISzAllocPtr p, size_t size) { (void)p; return malloc(size); }
+static void  VBSP_LzmaFree (ISzAllocPtr p, void *a)     { (void)p; free(a); }
+static const ISzAlloc vbsp_lzma_alloc = { VBSP_LzmaAlloc, VBSP_LzmaFree };
+
+//A game-lump SUB-lump can be individually LZMA-compressed (flags bit 0), which Strata (and lzma-packed
+//classic maps like surf_angst) do for their static props.  Framing is the same Source 17-byte 'LZMA'
+//header VBSP_DecompressLumps handles.  Returns a model-lifetime plain buffer (+ size via *outsize), or
+//NULL on failure.  This is separate from VBSP_DecompressLumps, which only touches the 64 TOP-level lumps.
+static qbyte *VBSP_DecompressGameSubLump(model_t *mod, qbyte *d, size_t complen, size_t *outsize)
+{
+	unsigned int actual, lzmasize;
+	SizeT destLen, srcLen;
+	ELzmaStatus status;
+	SRes res;
+	qbyte *out;
+	if (complen < 17 || !(d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A'))
+		return NULL;
+	actual   = (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+	lzmasize = (unsigned)d[8] | ((unsigned)d[9]<<8) | ((unsigned)d[10]<<16) | ((unsigned)d[11]<<24);
+	if ((size_t)17 + lzmasize > complen)
+		return NULL;
+	out = plugfuncs->GMalloc(&mod->memgroup, actual?actual:1);
+	destLen = actual;
+	srcLen  = lzmasize;
+	res = LzmaDecode(out, &destLen, d+17, &srcLen, d+12, 5, LZMA_FINISH_END, &status, &vbsp_lzma_alloc);
+	if (res != SZ_OK || destLen != actual)
+		return NULL;
+	*outsize = actual;
+	return out;
+}
 static qboolean VBSP_LoadGameLump(model_t *mod, qbyte *mod_base, vlump_t *l)
 {
 	size_t i;
@@ -2446,14 +2672,27 @@ static qboolean VBSP_LoadGameLump(model_t *mod, qbyte *mod_base, vlump_t *l)
 		return false;	//not even enough space for the header...
 	for (i = 0; i < blob->count; i++)
 	{
+		qbyte *sub = mod_base+blob->sl[i].ofs/*sigh - absolute file offset*/;
+		size_t sublen = blob->sl[i].len;
+		if (blob->sl[i].flags & 1)	//LZMA-compressed sub-lump (Strata / lzma-packed maps)
+		{
+			if (sublen < 17)
+				continue;	//too small for even a Source 'LZMA' header - a degenerate/empty sub-lump (e.g. Strata writes a 12-byte stub for an empty sprp). nothing to load.
+			sub = VBSP_DecompressGameSubLump(mod, sub, sublen, &sublen);
+			if (!sub)
+			{
+				Con_Printf(CON_ERROR "VBSP: gamelump %c%c%c%c LZMA decode failed in %s\n", (blob->sl[i].id>>24),(blob->sl[i].id>>16),(blob->sl[i].id>>8),(blob->sl[i].id>>0), mod->name);
+				continue;
+			}
+		}
 #define LUMPTYPE(a,b,c,d, minver, maxver) (blob->sl[i].id == (((qbyte)a<<24)|((qbyte)b<<16)|((qbyte)c<<8)|((qbyte)d<<0)) && blob->sl[i].version >= minver && blob->sl[i].version <= maxver)
-		if (LUMPTYPE('s','p','r','p', 4,10) && !blob->sl[i].flags)	//static props (placed by mapper)
-			VBSP_LoadStaticProps(mod, mod_base+blob->sl[i].ofs/*sigh*/, blob->sl[i].len, blob->sl[i].version);
-		else if (LUMPTYPE('d','p','r','p', 4,4) && !blob->sl[i].flags)	//dynamic props (generated by textures)
+		if (LUMPTYPE('s','p','r','p', 4,13))	//static props (placed by mapper); v11/v13 = Strata
+			VBSP_LoadStaticProps(mod, sub, sublen, blob->sl[i].version);
+		else if (LUMPTYPE('d','p','r','p', 4,4))	//dynamic props (generated by textures)
 			;
-		else if (LUMPTYPE('d','p','l','t', 0,0) && !blob->sl[i].flags)	//detail prop ldr lighting
+		else if (LUMPTYPE('d','p','l','t', 0,0))	//detail prop ldr lighting
 			;
-		else if (LUMPTYPE('d','p','l','h', 0,0) && !blob->sl[i].flags)	//detail prop hdr lighting
+		else if (LUMPTYPE('d','p','l','h', 0,0))	//detail prop hdr lighting
 			;
 		else
 			Con_Printf("Unsupported gamelump id/version %c%c%c%c %i\n", (blob->sl[i].id>>24),(blob->sl[i].id>>16),(blob->sl[i].id>>8),(blob->sl[i].id>>0),blob->sl[i].version);
@@ -4146,6 +4385,77 @@ static void VBSP_ComputeChecksum(model_t *mod, void *data, size_t length)
 	mod->checksum = mod->checksum2 = checksum;
 }
 
+//nettest: LZMA lump decompression (Source lump-compression, used by Strata BSP v25 and repacked classic
+//maps).  A compressed lump begins with a 17-byte Source header -- magic 'LZMA', u32 uncompressed size,
+//u32 lzma size, 5 LZMA property bytes -- then a raw LZMA1 stream.  Without this, a compressed lump's byte
+//count doesn't divide by its struct size and every Load* rejects it as "funny lump size".
+//(the malloc/free ISzAlloc vbsp_lzma_alloc is defined earlier, before VBSP_LoadGameLump, so the
+//game-lump sub-lump decompressor can share it with this top-level lump decompressor.)
+
+//Decompress every compressed TOP-LEVEL lump into one model-lifetime buffer and rewrite its fileofs/filelen,
+//so every Load* (which reads mod_base+fileofs) transparently sees plain data.  The whole file is copied
+//first, so uncompressed lumps AND the game lump's ABSOLUTE sub-offsets stay valid.  Returns the new base,
+//the original base if nothing was compressed (classic maps pay nothing), or NULL on a decode failure.
+static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen, dvbspheader_t *header)
+{
+	size_t i, extra = 0, tail;
+	int anycompressed = 0;
+	qbyte *newbase;
+
+	for (i = 0; i < HL2_MAXLUMPS; i++)
+	{
+		vlump_t *l = &header->lumps[i];
+		qbyte *d;
+		if (l->filelen < 17 || (size_t)l->fileofs + l->filelen > filelen)
+			continue;
+		d = mod_base + l->fileofs;
+		if (d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A')
+		{
+			extra += (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+			anycompressed = 1;
+		}
+	}
+	if (!anycompressed)
+		return mod_base;	//uncompressed classic map: leave it exactly as-is
+
+	newbase = plugfuncs->GMalloc(&mod->memgroup, filelen + extra);
+	memcpy(newbase, mod_base, filelen);
+	tail = filelen;
+	for (i = 0; i < HL2_MAXLUMPS; i++)
+	{
+		vlump_t *l = &header->lumps[i];
+		qbyte *d;
+		unsigned int actual, lzmasize;
+		SizeT destLen, srcLen;
+		ELzmaStatus status;
+		SRes res;
+		if (l->filelen < 17 || (size_t)l->fileofs + l->filelen > filelen)
+			continue;
+		d = mod_base + l->fileofs;	//read the (compressed) source from the ORIGINAL file (never overwritten)
+		if (!(d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A'))
+			continue;
+		actual   = (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+		lzmasize = (unsigned)d[8] | ((unsigned)d[9]<<8) | ((unsigned)d[10]<<16) | ((unsigned)d[11]<<24);
+		if ((size_t)17 + lzmasize > l->filelen)
+		{
+			Con_Printf(CON_ERROR "VBSP: lump %i LZMA stream overruns lump in %s\n", (int)i, mod->name);
+			return NULL;
+		}
+		destLen = actual;
+		srcLen  = lzmasize;
+		res = LzmaDecode(newbase + tail, &destLen, d + 17, &srcLen, d + 12, 5, LZMA_FINISH_END, &status, &vbsp_lzma_alloc);
+		if (res != SZ_OK || destLen != actual)
+		{
+			Con_Printf(CON_ERROR "VBSP: lump %i LZMA decode failed (%i) in %s\n", (int)i, (int)res, mod->name);
+			return NULL;
+		}
+		l->fileofs = tail;	//point this lump at its decompressed copy in the tail
+		l->filelen = actual;
+		tail += actual;
+	}
+	return newbase;
+}
+
 static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, char *loadname)
 {
 	dvbspheader_t *srcheader = (void*)mod_base;
@@ -4169,8 +4479,16 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	{
 		header.lumps[i].filelen = LittleLong (srcheader->lumps[i].filelen);
 		header.lumps[i].fileofs = LittleLong (srcheader->lumps[i].fileofs);
+		header.lumps[i].version = LittleLong (srcheader->lumps[i].version);	//nettest: per-lump version drives 32-bit struct choice (v25)
+		header.lumps[i].fourcc  = LittleLong (srcheader->lumps[i].fourcc);	//(LZMA uncompressed-size hint)
 		//fixme: truncate lumps if they go off the end
 	}
+
+	//nettest: transparently decompress any LZMA-compressed lumps (repoints mod_base + rewrites the lump
+	//table, so every Load* below sees plain data).  Must run before LoadMapArchive / the Load* calls.
+	mod_base = VBSP_DecompressLumps(mod, mod_base, filelen, &header);
+	if (!mod_base)
+		return false;
 
 	if (header.lumps[VLUMP_ZIPFILE].filelen)
 		modfuncs->LoadMapArchive(mod, mod_base+header.lumps[VLUMP_ZIPFILE].fileofs, header.lumps[VLUMP_ZIPFILE].filelen);
@@ -4294,13 +4612,14 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	case 21:	//cs:go, portal 2, l4d2
 	//case 22:	//dota 2
 	//case 23:	//dota 2
+	case 25:	//nettest: Strata Source (Momentum/P2CE/etc). Widened 32-bit lumps + LZMA lump compression -- gated per lump.version below.
 	//case 27:	//'contagion'
 	//case 29:	//'titanfall'
 		if (!VBSP_LoadModel(mod, filein, filelen, loadname))
 			return false;
 		break;
 	default:
-		Con_Printf (CON_ERROR "VBSP with unknown version (%s: %i should be 18, 19, 20, or 21)\n"
+		Con_Printf (CON_ERROR "VBSP with unknown version (%s: %i should be 18, 19, 20, 21, or 25)\n"
 			, mod->name, header.version);
 		return false;
 	}

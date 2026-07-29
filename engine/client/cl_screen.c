@@ -3639,6 +3639,12 @@ void SCR_DrawTwoDimensional(qboolean nohud)
 
 	Prompts_Draw();
 
+#ifdef RTLIGHTS
+	//nettest: r_shadows_propshadows_showatlas debug view (no-op unless set).  Drawn LAST so it stays on
+	//top of menus/console -- it's a debug instrument, occluding it defeats the point.
+	Sh_DrawFakeShadowAtlasOverlay();
+#endif
+
 	SCR_DrawCursor();
 	SCR_DrawSimMTouchCursor();
 

@@ -2620,10 +2620,25 @@ qboolean QC_FixFileName(const char *name, const char **result, const char **fall
 		return false;
 	}
 
-	if (!strncmp(name, "data/", 5))
+	//quakers: "cfg/" is accepted as a second writable prefix alongside "data/".
+	//
+	//The mod keeps every config in <gamedir>/cfg/ -- both the ones it hand-edits and the ones the
+	//menu regenerates (settings.cfg, server.cfg). Without this, fopen("cfg/x.cfg", FILE_WRITE)
+	//falls through to the branch below and is rewritten to "data/cfg/x.cfg", so QC would READ
+	//cfg/ but WRITE data/cfg/ -- silently, and the file it just "saved" never loads again. That
+	//exact bug already bit this codebase once, see client/cl_sprays.qc:344-354.
+	//
+	//Deliberately additive rather than replacing "data/": that prefix is what every other FTE mod
+	//uses and what this engine's own docs promise (server/pr_cmds.c:12303).
+	//
+	//Security: this widens the QC write sandbox by exactly one directory. The exposure is
+	//unchanged in practice -- QC could already write configs under data/ and the menu already
+	//execs one of them -- and the read sandbox (QC_PathRequiresSandbox, which hides *.cfg at the
+	//gamedir root and under configs/) is untouched.
+	if (!strncmp(name, "data/", 5) || !strncmp(name, "cfg/", 4))
 	{
 		*fallbackread = NULL;	//don't be weird.
-		*result = name;	//already has a data/ prefix.
+		*result = name;	//already has a writable-directory prefix.
 	}
 	else if (COM_CheckParm("-unsafefopen") && !QC_PathRequiresSandbox(name))
 	{

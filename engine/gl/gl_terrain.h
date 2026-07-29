@@ -30,7 +30,7 @@ cluster:
 	internal concept to avoid a single pointer array of 16 million entries per terrain.
 */
 
-int Surf_NewLightmaps(int count, int width, int height, uploadfmt_t fmt, qboolean deluxe);
+int Surf_NewLightmaps(int count, int width, int height, uploadfmt_t fmt, qboolean deluxe, qboolean sunvis);	//nettest: +sunvis = also allocate a per-luxel sun-visibility page (SUNVIS lump)
 
 #define MAXCLUSTERS 64
 #define MAXSECTIONS 64	//this many sections within each cluster in each direction

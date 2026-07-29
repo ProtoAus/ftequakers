@@ -132,7 +132,11 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 	vtf->bumpmapscale = LittleFloat(vtf->bumpmapscale);
 
 	version = (vtf->major<<16)|vtf->minor;
-	if (version > 0x00070005)
+	//7.6 (Strata Source) is 7.5 + optional extra resource types; the fields we read and the resource
+	//table (parsed for 7.3+ below) are unchanged, so accept it. NOTE: 7.6 also allows per-image
+	//"auxiliary compression" (an 'AXC' resource); maps that use it would need that decoded here too, but
+	//the packed 7.6 textures seen so far carry an uncompressed high-res image resource like 7.5.
+	if (version > 0x00070006)
 	{
 		Con_Printf("%s: VTF version %i.%i is not supported\n", fname, vtf->major, vtf->minor);
 		return NULL;

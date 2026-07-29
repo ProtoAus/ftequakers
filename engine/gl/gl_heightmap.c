@@ -171,7 +171,7 @@ static qboolean QDECL Terr_InitLightmap(hmsection_t *s, qboolean initialise)
 			int lm;
 			int i;
 			Sys_UnlockMutex(com_resourcemutex);
-			lm = Surf_NewLightmaps(1, SECTTEXSIZE*LMCHUNKS, SECTTEXSIZE*LMCHUNKS, PTI_BGRA8, false);
+			lm = Surf_NewLightmaps(1, SECTTEXSIZE*LMCHUNKS, SECTTEXSIZE*LMCHUNKS, PTI_BGRA8, false, false);
 			Sys_LockMutex(com_resourcemutex);
 			for (i = 0; i < LMCHUNKS*LMCHUNKS; i++)
 			{
@@ -5750,7 +5750,7 @@ void Terr_Brush_Draw(heightmap_t *hm, batch_t **batches, entity_t *e)
 			{
 				int first;
 				hm->brushlmremaps = BZ_Realloc(hm->brushlmremaps, sizeof(*hm->brushlmremaps) * lmcount);
-				first = Surf_NewLightmaps(lmcount - hm->brushmaxlms, hm->brushlmalloc.width, hm->brushlmalloc.height, PTI_BGRA8, hm->brushlmalloc.deluxe);
+				first = Surf_NewLightmaps(lmcount - hm->brushmaxlms, hm->brushlmalloc.width, hm->brushlmalloc.height, PTI_BGRA8, hm->brushlmalloc.deluxe, false);
 
 				while(hm->brushmaxlms < lmcount)
 					hm->brushlmremaps[hm->brushmaxlms++] = first++;

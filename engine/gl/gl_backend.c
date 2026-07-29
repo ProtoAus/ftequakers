@@ -223,6 +223,7 @@ static struct {
 	//into [14]) -- it cannot drift out of agreement with the shader.
 	float fakeshadowmatrix[MAX_FAKESHADOW_SLOTS][16];
 	vec4_t fakeshadowcell[MAX_FAKESHADOW_SLOTS];
+	vec4_t fakeshadowinfo[MAX_FAKESHADOW_SLOTS];	//nettest: per-slot metadata (x = sun-suppression for lamp cells)
 	int fakeshadowcount;
 
 	int wbatch;
@@ -1135,6 +1136,27 @@ void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell)
 	Vector4Copy(cell, shaderstate.fakeshadowcell[slot]);
 }
 
+//nettest Phase-1: capture an EXPLICIT projection for this slot instead of copying the one GLBE_SelectDLight
+//built.  The PERSPECTIVE (spot) prop-shadow cells render via Sh_GenShadowFace's face-4 view
+//(LightMatrixFromAxis(axis[2],axis[1],-axis[0])), but GLBE_SelectDLight's SPOT branch builds a DIFFERENT
+//convention (ModelViewMatrixFromAxis(axis[0],axis[1],axis[2]) = xy transposed vs face-4) -- copying that
+//would mismatch the rendered depth (the P93 "mirrored/tiny" trap).  The caller instead passes the transform
+//it ACTUALLY rendered with, r_refdef.m_projection_std * r_refdef.m_view, which is correct for ANY projection
+//by construction (the shader reproduces exactly the clip-space the depth was written in).
+void GLBE_CaptureFakeShadowSlotMatrix(int slot, const float *matrix, const vec4_t cell)
+{
+	if ((unsigned)slot >= MAX_FAKESHADOW_SLOTS)
+		return;
+	memcpy(shaderstate.fakeshadowmatrix[slot], matrix, sizeof(shaderstate.fakeshadowmatrix[slot]));
+	Vector4Copy(cell, shaderstate.fakeshadowcell[slot]);
+}
+
+//nettest: the fake-shadow atlas texture (r_shadows_propshadows_showatlas debug view samples it).
+texid_t GLBE_GetFakeShadowAtlasTexture(void)
+{
+	return shadowmap[2];
+}
+
 //An unused slot must not keep LAST frame's matrix, or receivers would project into a cell that now holds
 //a different direction's depth.  Identity with a huge z translation puts every fragment past the far
 //plane, so the shader's `fd < 1.0` box test rejects the slot outright and it costs no taps.
@@ -1145,6 +1167,19 @@ void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell)
 	Matrix4x4_Identity(shaderstate.fakeshadowmatrix[slot]);
 	shaderstate.fakeshadowmatrix[slot][14] = 1e9f;
 	Vector4Copy(cell, shaderstate.fakeshadowcell[slot]);
+	Vector4Set(shaderstate.fakeshadowinfo[slot], 0, 0, 0, 0);	//dead cells must not suppress (or un-suppress) anything
+}
+
+//nettest: per-slot metadata for the PERSPECTIVE lamp cells (l_fakeshadowinfo).  x = sun-suppression
+//factor: how much a sun-visible receiving pixel washes this lamp's shadow out (the lamp-vs-sun
+//brightness ratio, computed by Sh_GeneratePropShadowsAtlas; 0 on maps with no SUNVIS bake, which keeps
+//the feature inert there -- the sampler fallback reads "fully sunlit" everywhere on those maps and would
+//otherwise erase every lamp shadow).  yzw reserved.
+void GLBE_SetFakeShadowSlotInfo(int slot, const vec4_t info)
+{
+	if ((unsigned)slot >= MAX_FAKESHADOW_SLOTS)
+		return;
+	Vector4Copy(info, shaderstate.fakeshadowinfo[slot]);
 }
 //---------------------------------------------------------------------------------------------------
 
@@ -1164,6 +1199,12 @@ qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *re
 		tex->height = h;
 		tex->format = encoding;
 		qglGenTextures(1, &tex->num);
+		//nettest: the FBO attach below is cached BY TEXTURE NAME (shadow_fbo_depth_num) -- but GL recycles
+		//names, so the gen above typically returns the name the destroy just freed.  The stale cache then
+		//SKIPPED the re-attach while the deletion had already detached the old image, leaving the FBO with
+		//no depth attachment: every depth render+clear got dropped, the atlas stayed undefined, and every
+		//shadow test read "in shadow" -- the whole world went dark on any LIVE r_shadows_res change.
+		shadow_fbo_depth_num = 0;
 		GL_MTBind(0, GL_TEXTURE_2D, tex);
 #ifdef SHADOWDBG_COLOURNOTDEPTH
 		qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -1198,6 +1239,25 @@ qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *re
 
 	/*set framebuffer*/
 	*restorefbo = GLBE_BeginRenderBuffer_DepthOnly(shaderstate.curshadowmap);
+
+	//nettest: an incomplete shadow FBO silently drops every depth render+clear and the whole world reads
+	//as "in shadow" (dark) -- make it LOUD instead, and fail properly so the caller disables the feature
+	//for the frame rather than sampling an undefined atlas.
+	if (qglCheckFramebufferStatusEXT)
+	{
+		GLenum fbstatus = qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+		if (fbstatus != GL_FRAMEBUFFER_COMPLETE_EXT)
+		{
+			static float lastwarn;
+			if (realtime > lastwarn + 5)
+			{
+				lastwarn = realtime;
+				Con_Printf(CON_WARNING "GLBE_BeginShadowMap: %ix%i depth fbo incomplete (0x%x) -- shadows disabled this frame\n", w, h, fbstatus);
+			}
+			GLBE_FBO_Pop(*restorefbo);
+			return false;
+		}
+	}
 
 	shaderstate.usingweaponviewmatrix = -1;		//make sure the projection matrix is updated.
 
@@ -3904,13 +3964,48 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_E_SUNDIR:
 			{
 				extern cvar_t r_sun_dir;
+				extern qboolean Sh_EntityLampDir(const entity_t *ent, vec3_t out);
 				vec3_t sundir;
 				//Patch 110: the reconstruction moved into R_EntityDominantLightDir (gl_alias.c) so this
 				//uniform and the fake-shadow direction bucketer share ONE implementation -- a prop's
 				//shading direction and its cast-shadow direction cannot disagree.
+				//Patch 120a: if this prop is currently shadowed by a map LAMP, shade it from that lamp's
+				//actual position instead.  The deluxemap reconstruction below only exists on maps built
+				//with `light -bspxlux` (6 of the mod's 29), so everywhere else the "per-prop dominant
+				//light" silently fell back to the global sun -- i.e. a prop indoors was form-shaded by a
+				//sun it cannot see, on top of a lamp shadow pointing the other way.  The lamp direction
+				//needs no bake and is the same light that owns the prop's cast + self shadow, so all
+				//three now agree.
+				//Patch 120c: BLEND, don't switch.  e->lamp is a single int, so the old select swapped the
+				//whole direction vector in one frame -- and defaultskin.glsl maps N.dot.sundir across
+				//r_shadows_sunshade_floor..._ceil (0..2 as shipped), so a model could swing 0x..2x in that
+				//one frame walking through a doorway.  That, not the shadow itself, is what read as a
+				//"hard transition".  Lerping by the same shade fraction the shader uses also settles an
+				//inconsistency: Sh_EntityLampDir keys on e->lamp alone and never on the in-shade verdict,
+				//so a SUNLIT prop merely standing near a lamp was already being form-shaded by that lamp
+				//while casting from the sun.  At shade 0 we are now back on the sun regardless.
+				extern float Sh_EntitySunShade(const entity_t *ent);
+				vec3_t lampdir;
+				float shade = Sh_EntitySunShade(shaderstate.curentity);
 				if (!R_EntityDominantLightDir(shaderstate.curentity, sundir))
 					VectorCopy(r_sun_dir.vec4, sundir);
+				if (shade > 0 && Sh_EntityLampDir(shaderstate.curentity, lampdir))
+				{
+					VectorScale(sundir, 1.0f - shade, sundir);
+					VectorMA(sundir, shade, lampdir, sundir);
+					if (!VectorNormalize(sundir))	//exactly opposed at the midpoint: keep the lamp end
+						VectorCopy(lampdir, sundir);
+				}
 				qglUniform3fvARB(ph, 1, sundir);
+			}
+			break;
+		case SP_E_SUNSHADE:
+			{	//Patch 120c: how far into shade this entity is, 0..1, time-smoothed engine-side.  The
+				//shader fades its SUN form-shade and sun self-shadow by it (and nothing else -- a prop
+				//indoors keeps its lamp shadow at full strength).  Fail-safe: 0 for anything the shadow
+				//system never classified, which is what an unbound uniform reads too.
+				extern float Sh_EntitySunShade(const entity_t *ent);
+				qglUniform1fARB(ph, Sh_EntitySunShade(shaderstate.curentity));
 			}
 			break;
 		case SP_E_ORIGIN:
@@ -4058,17 +4153,24 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			break;
 		//nettest P110: the N fake-shadow slot projections, composed with the model matrix exactly like
 		//SP_LIGHTCUBEMATRIX above (the shaders feed them model-space vertex positions).
+		//Upload ALL slots, not just the live count: the glsl loop bound (FAKESHADOWS_COUNT) is COMPILE
+		//time, so when the live count SHRINKS the program would keep reading LAST frame's matrices for
+		//the vanished cells -- stale shadows flickering in as the budget churns.  The generators clear
+		//dead slots (identity + huge z) every frame; excess array elements are ignored by GL.
 		case SP_FAKESHADOWMATRIX:
 			{
 				float t[MAX_FAKESHADOW_SLOTS*16];
-				int s, n = bound(1, shaderstate.fakeshadowcount, MAX_FAKESHADOW_SLOTS);
-				for (s = 0; s < n; s++)
+				int s;
+				for (s = 0; s < MAX_FAKESHADOW_SLOTS; s++)
 					Matrix4_Multiply(shaderstate.fakeshadowmatrix[s], shaderstate.modelmatrix, t + s*16);
-				qglUniformMatrix4fvARB(ph, n, false, t);
+				qglUniformMatrix4fvARB(ph, MAX_FAKESHADOW_SLOTS, false, t);
 			}
 			break;
 		case SP_FAKESHADOWCELL:
-			qglUniform4fvARB(ph, bound(1, shaderstate.fakeshadowcount, MAX_FAKESHADOW_SLOTS), (GLfloat*)shaderstate.fakeshadowcell);
+			qglUniform4fvARB(ph, MAX_FAKESHADOW_SLOTS, (GLfloat*)shaderstate.fakeshadowcell);
+			break;
+		case SP_FAKESHADOWINFO:
+			qglUniform4fvARB(ph, MAX_FAKESHADOW_SLOTS, (GLfloat*)shaderstate.fakeshadowinfo);
 			break;
 
 		/*static lighting info*/

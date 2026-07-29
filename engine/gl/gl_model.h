@@ -1025,23 +1025,6 @@ typedef struct model_s
 	float		maxlod;
 
 //
-// nettest Patch 56: TRUE convex-hull collision planes in MODEL space, built from the
-// base verts at load (alias/IQM) by an incremental QuickHull. World_HullTrace clips a
-// swept player box against these for smooth, watertight, mesh-shaped prop collision
-// (sv_prop_collision 2). numhullplanes==0 unless built; each plane: .xyz = outward unit
-// normal, .w = dist (a point is OUTSIDE iff dot(p,.xyz) - .w > 0). Allocated from the
-// model memgroup (auto-freed with the model).
-//
-	int			numhullplanes;
-	vec4_t		*hullplanes;
-	int			numhulltris;	//r_showhull debug viz: hull surface triangles (model space, 3 verts each)
-	vec3_t		*hulltris;
-	//nettest Patch 61: per-submesh CONVEX DECOMPOSITION (sv_prop_collision 3). numhulls==0 ->
-	//use the single hull above. Each entry is one convex piece; their union = a concave shape.
-	int			numhulls;
-	convhull_t	*convhulls;
-
-//
 // solid volume for clipping
 //
 	qboolean	clipbox;
@@ -1169,6 +1152,30 @@ typedef struct model_s
 	searchpathfuncs_t *archive;	//some bsp formats have an embedded zip...
 	zonegroup_t memgroup;
 	void		*proplights;	//nettest: APPEND-ONLY (prebuilt plugin ABI). baked static-prop per-vertex lighting (RGBPROPLIGHT lump), keyed by prop placement. See gl_rlight.c.
+	qbyte		*sunvisdata;	//nettest: APPEND-ONLY (prebuilt plugin ABI). baked per-luxel sun visibility (SUNVIS lump), 1 byte per luxel, laid out parallel to lightdata at style 0. NULL = no lump; the shader then falls back to fully-lit and dynamic sun shadows behave as they always did.
+
+//
+// nettest Patch 56: TRUE convex-hull collision planes in MODEL space, built from the
+// base verts at load (alias/IQM) by an incremental QuickHull. World_HullTrace clips a
+// swept player box against these for smooth, watertight, mesh-shaped prop collision
+// (sv_prop_collision 2). numhullplanes==0 unless built; each plane: .xyz = outward unit
+// normal, .w = dist (a point is OUTSIDE iff dot(p,.xyz) - .w > 0). Allocated from the
+// model memgroup (auto-freed with the model).
+// APPEND-ONLY (prebuilt plugin ABI): these fields originally sat mid-struct (before
+// clipbox) and shifted every later member by 48 bytes, which silently broke any plugin
+// built before them (fteplug_hl2's VBSP loader wrote mod->surfaces/memgroup/etc at the
+// old offsets = corrupt Source maps). Moved to the tail 2026-07: everything below the
+// struct's classic layout must only ever be APPENDED, and any change here still means
+// rebuilding ALL native plugins (append-only keeps offsets, not array strides).
+//
+	int			numhullplanes;
+	vec4_t		*hullplanes;
+	int			numhulltris;	//r_showhull debug viz: hull surface triangles (model space, 3 verts each)
+	vec3_t		*hulltris;
+	//nettest Patch 61: per-submesh CONVEX DECOMPOSITION (sv_prop_collision 3). numhulls==0 ->
+	//use the single hull above. Each entry is one convex piece; their union = a concave shape.
+	int			numhulls;
+	convhull_t	*convhulls;
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

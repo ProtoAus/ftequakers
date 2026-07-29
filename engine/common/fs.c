@@ -1,4 +1,5 @@
 #include "quakedef.h"
+#include "qkupdate.h"
 #include "netinc.h"
 
 //#define com_gamedir com__gamedir
@@ -1736,6 +1737,107 @@ static void COM_Locate_f (void)
 		Con_Printf("Not found\n");
 }
 
+//A writable-file filter that hashes everything written through it and fails the CLOSE if
+//either the size or the digest disagrees with what was promised. Because the failure lands
+//on VFS_CLOSE, a caller that checks the close result can never promote a bad file.
+//
+//quakers: this lived in client/m_download.c as a static, but it is a generic VFS write
+//filter with no package-manager knowledge, and the in-game updater needs the identical
+//guarantee for its downloads. Moved here rather than duplicated -- one implementation means
+//`pkg` and the updater cannot drift apart on what "verified" means.
+typedef struct {
+	vfsfile_t pub;
+	vfsfile_t *f;
+	hashfunc_t *hashfunc;
+	qofs_t sz;
+	qofs_t needsize;
+	qboolean fail;
+	qbyte need[DIGEST_MAXSIZE];
+	char *fname;
+	qbyte ctx[1];
+} hashfile_t;
+static int QDECL HashFile_WriteBytes (struct vfsfile_s *file, const void *buffer, int bytestowrite)
+{
+	hashfile_t *f = (hashfile_t*)file;
+	f->hashfunc->process(f->ctx, buffer, bytestowrite);
+	if (bytestowrite != VFS_WRITE(f->f, buffer, bytestowrite))
+		f->fail = true;	//something went wrong.
+	if (f->fail)
+		return -1;	//error! abort! fail! give up!
+	f->sz += bytestowrite;
+	return bytestowrite;
+}
+static void QDECL HashFile_Flush (struct vfsfile_s *file)
+{
+	hashfile_t *f = (hashfile_t*)file;
+	VFS_FLUSH(f->f);
+}
+static qboolean QDECL HashFile_Close (struct vfsfile_s *file)
+{
+	qbyte digest[DIGEST_MAXSIZE];
+	hashfile_t *f = (hashfile_t*)file;
+	if (!VFS_CLOSE(f->f))
+		f->fail = true;	//something went wrong.
+	f->f = NULL;
+
+	f->hashfunc->terminate(digest, f->ctx);
+	if (f->fail)
+		Con_Printf("Filesystem problem saving %s during download\n", f->fname);	//don't error if we failed on actual disk problems
+	else if (f->sz != f->needsize)
+	{
+		Con_Printf("Download truncated: %s\n", f->fname);	//don't error if we failed on actual disk problems
+		f->fail = true;
+	}
+	else if (memcmp(digest, f->need, f->hashfunc->digestsize))
+	{
+		qbyte base64[(DIGEST_MAXSIZE*2)+16];
+		Con_Printf("Invalid hash for downloaded file %s, try again later?\n", f->fname);
+
+		//print in whatever encoding the source of the hash used, so the two strings can
+		//actually be eyeballed against the manifest/packagelist they came from.
+		if (f->hashfunc == &hash_sha1 || f->hashfunc == &hash_blake2b_256)
+		{
+			base64[Base16_EncodeBlock(digest, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
+			Con_Printf("%s vs ", base64);
+			base64[Base16_EncodeBlock(f->need, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
+			Con_Printf("%s\n", base64);
+		}
+		else
+		{
+			base64[Base64_EncodeBlock(digest, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
+			Con_Printf("%s vs ", base64);
+			base64[Base64_EncodeBlock(f->need, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
+			Con_Printf("%s\n", base64);
+		}
+		f->fail = true;
+	}
+
+	return !f->fail;	//true if all okay!
+}
+vfsfile_t *FS_Hash_ValidateWrites(vfsfile_t *f, const char *fname, qofs_t needsize, hashfunc_t *hashfunc, const char *hash)
+{	//wraps a writable file with a layer that'll cause failures when the hash differs from what we expect.
+	if (f)
+	{
+		hashfile_t *n = Z_Malloc(sizeof(*n) + hashfunc->contextsize + strlen(fname));
+		n->pub.WriteBytes = HashFile_WriteBytes;
+		n->pub.Flush = HashFile_Flush;
+		n->pub.Close = HashFile_Close;
+		n->pub.seekstyle = SS_UNSEEKABLE;
+		n->f = f;
+		n->hashfunc = hashfunc;
+		n->fname = n->ctx+hashfunc->contextsize;
+		strcpy(n->fname, fname);
+		n->needsize = needsize;
+		Base16_DecodeBlock(hash, n->need, sizeof(n->need));
+		n->fail = false;
+
+		n->hashfunc->init(n->ctx);
+
+		f = &n->pub;
+	}
+	return f;
+}
+
 static void COM_CalcHash_Thread(void *ctx, void *fname, size_t a, size_t b)
 {
 	int h;
@@ -1758,6 +1860,10 @@ static void COM_CalcHash_Thread(void *ctx, void *fname, size_t a, size_t b)
 //		{"sha384", &hash_sha2_384},
 //		{"sha512", &hash_sha2_512},
 #endif
+		//quakers: unconditional -- the updater has to verify manifest hashes on the
+		//dedicated server too, and `fs_hash` is how we prove the engine agrees with
+		//publish.py and the rust launcher on any given file.
+		{"blake2b-256", &hash_blake2b_256},
 	};
 	qbyte digest[DIGEST_MAXSIZE];
 	qbyte digesttext[DIGEST_MAXSIZE*2+1];
@@ -6937,7 +7043,8 @@ qboolean FS_ChangeGame(ftemanifest_t *man, qboolean allowreloadconfigs, qboolean
 
 	//if any of these files change location, the configs will be re-execed.
 	//note that we reuse path handles if they're still valid, so we can just check the pointer to see if it got unloaded/replaced.
-	char *conffile[] = {"quake.rc", "hexen.rc", "default.cfg", "server.cfg"};
+	//quakers: cfg/* are listed too, since the boot exec prefers them (cl_main.c / sv_main.c).
+	char *conffile[] = {"quake.rc", "hexen.rc", "default.cfg", "server.cfg", "cfg/default.cfg", "cfg/server.cfg"};
 	searchpathfuncs_t *confpath[countof(conffile)];
 
 #ifdef HAVE_CLIENT
@@ -7224,6 +7331,13 @@ qboolean FS_ChangeGame(ftemanifest_t *man, qboolean allowreloadconfigs, qboolean
 
 	//make sure it has a trailing slash, or is empty. woo.
 	FS_CleanDir(com_gamepath, sizeof(com_gamepath));
+
+	//quakers: finish any update that was interrupted mid-apply. THIS is the one safe moment --
+	//com_gamepath is final and cleaned, but on first boot nothing is mounted and no plugin is
+	//loaded yet, so every destination is closeable. (The tail of COM_InitFilesystem, which is
+	//where you would expect this, runs before com_gamepath is assigned at all.) QKU_ReplayJournal
+	//runs once per process, so a mid-session gamedir change -- where packs ARE open -- skips it.
+	QKU_ReplayJournal();
 
 	{
 		qboolean oldhome = com_homepathenabled;
@@ -8684,12 +8798,14 @@ static void FS_RemountAddons(unsigned int loadstuff)
 //=================================================================
 //nettest (P25): lazy on-demand addon mounting + offline map index
 //=================================================================
-// FS_IndexAddonMaps writes data/maps_index.txt: one "<sourcespec>\t<mapname>" line per map, built by
+// FS_IndexAddonMaps writes cfg/maps_index.txt: one "<sourcespec>\t<mapname>" line per map, built by
 // READDIR'ing each fs_addons.txt game's maps/ folder OFFLINE (maps are loose .bsp/.d3dbsp — no archive
 // mount, no BuildHash) + the mod's own maps. The create-server menu lists from that, tagged by the true
 // source game (so CS:S and CS1.6 same-named maps are distinct). Nothing external is mounted at boot.
 // On map-select the menu calls `fs_useaddons <spec>...` to mount only that game (+ deps), then `map`.
-#define FS_MAPS_INDEX "data/maps_index.txt"
+//quakers: lives in cfg/ with the rest of the mod's generated state. The menu reads it through
+//QC fopen, which only reaches data/ and cfg/ (see QC_FixFileName), so this cannot move freely.
+#define FS_MAPS_INDEX "cfg/maps_index.txt"
 
 typedef struct { char *buf; size_t len, max; const char *tag; const char *gamedir; } fsmapidx_t;
 static int QDECL FS_IndexMap_Visit(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)

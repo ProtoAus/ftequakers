@@ -440,6 +440,7 @@ typedef struct {
 		SP_E_NOSHADOWRECV,	//nettest: 1 = this entity must NOT receive the r_shadows 2 fake-sun shadowmap (the viewmodel). 0 = normal.
 		SP_E_FPFADE,		//nettest: 1 = this entity is the local first-person body — dither it away above the cl_fpbody_fade_* height band. 0 = normal.
 		SP_E_SUNDIR,		//nettest: PER-ENTITY world-space dominant light direction (toward the light) for the model sun form-shade. From the map's deluxemap sample; falls back to the global r_sun_dir.
+		SP_E_SUNSHADE,		//nettest Patch 120c: PER-ENTITY sun-shade fraction, 0 = fully sunlit .. 1 = fully under a roof, time-smoothed (r_shadows_sunfade). Fades the model's SUN form-shade and sun self-shadow; leaves lamp shadows alone. Fail-safe polarity: unbound reads 0 = full sun terms = unchanged.
 		SP_E_TOPCOLOURS,
 		SP_E_BOTTOMCOLOURS,
 		SP_E_TIME,
@@ -479,6 +480,7 @@ typedef struct {
 		SP_LIGHTSHADOWMAPSCALE,
 		SP_FAKESHADOWMATRIX,	//nettest P110: mat4[N] - per-atlas-slot ortho proj*view for the multi-direction fake shadow. Composed with the model matrix at upload, exactly like SP_LIGHTCUBEMATRIX.
 		SP_FAKESHADOWCELL,		//nettest P110: vec4[N] - atlas cell remap per slot (xy = cell origin in GL bottom-origin UV, zw = cell scale).
+		SP_FAKESHADOWINFO,		//nettest: vec4[N] - per-slot metadata for the PERSPECTIVE lamp cells. x = sun-suppression factor (how much a sun-visible receiver washes this lamp's shadow out; 0 on unbaked maps = feature inert). yzw reserved.
 
 		//things that are set immediatly
 		SP_FIRSTIMMEDIATE,	//never set
@@ -968,10 +970,13 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 //8 = what the atlas layout holds (Sh_FakeShadowCellRect -- a 3/4-size cell for the sun plus an L of seven
 //quarter-size cells).  The engine clamp and the shader's FAKESHADOWS_COUNT both derive from this, so they
 //cannot disagree about how many cells exist.
-#define MAX_FAKESHADOW_SLOTS 8
+#define MAX_FAKESHADOW_SLOTS 16	/*renderer-internal (NOT plugin abi): atlas cells, glsl uniform/varying arrays scale with this*/
 void GLBE_SetFakeShadowCount(int count);						//0/1 = legacy single path
 void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell);	//snapshot the CURRENT lightprojmatrix (set by GLBE_SelectDLight) as this slot's consumption matrix
-void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell);		//neutral matrix: projects everything outside the box so the shader early-outs
+void GLBE_CaptureFakeShadowSlotMatrix(int slot, const float *matrix, const vec4_t cell);	//nettest Phase-1: snapshot an EXPLICIT matrix (proj*m_view actually rendered) -- for PERSPECTIVE prop cells where GLBE_SelectDLight's spot matrix would mismatch the face-4 render convention
+void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell);		//neutral matrix: projects everything outside the box so the shader early-outs; also zeroes the slot's info
+void GLBE_SetFakeShadowSlotInfo(int slot, const vec4_t info);	//nettest: per-slot metadata (l_fakeshadowinfo) -- x = sun-suppression factor for perspective lamp cells
+texid_t GLBE_GetFakeShadowAtlasTexture(void);					//nettest: the atlas depth texture (r_shadows_propshadows_showatlas debug view)
 void GLBE_FlushProjection(void);								//P114b: invalidate the cached render projection so the next per-cell depth pass re-reads r_refdef.m_projection_std
 
 qboolean GLVID_ApplyGammaRamps (unsigned int size, unsigned short *ramps);	//called when gamma ramps need to be reapplied

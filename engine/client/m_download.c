@@ -4068,96 +4068,10 @@ static char *PM_GetTempName(package_t *p)
 }
 
 
-typedef struct {
-	vfsfile_t pub;
-	vfsfile_t *f;
-	hashfunc_t *hashfunc;
-	qofs_t sz;
-	qofs_t needsize;
-	qboolean fail;
-	qbyte need[DIGEST_MAXSIZE];
-	char *fname;
-	qbyte ctx[1];
-} hashfile_t;
-static int QDECL HashFile_WriteBytes (struct vfsfile_s *file, const void *buffer, int bytestowrite)
-{
-	hashfile_t *f = (hashfile_t*)file;
-	f->hashfunc->process(f->ctx, buffer, bytestowrite);
-	if (bytestowrite != VFS_WRITE(f->f, buffer, bytestowrite))
-		f->fail = true;	//something went wrong.
-	if (f->fail)
-		return -1;	//error! abort! fail! give up!
-	f->sz += bytestowrite;
-	return bytestowrite;
-}
-static void QDECL HashFile_Flush (struct vfsfile_s *file)
-{
-	hashfile_t *f = (hashfile_t*)file;
-	VFS_FLUSH(f->f);
-}
-static qboolean QDECL HashFile_Close (struct vfsfile_s *file)
-{
-	qbyte digest[DIGEST_MAXSIZE];
-	hashfile_t *f = (hashfile_t*)file;
-	if (!VFS_CLOSE(f->f))
-		f->fail = true;	//something went wrong.
-	f->f = NULL;
-
-	f->hashfunc->terminate(digest, f->ctx);
-	if (f->fail)
-		Con_Printf("Filesystem problem saving %s during download\n", f->fname);	//don't error if we failed on actual disk problems
-	else if (f->sz != f->needsize)
-	{
-		Con_Printf("Download truncated: %s\n", f->fname);	//don't error if we failed on actual disk problems
-		f->fail = true;
-	}
-	else if (memcmp(digest, f->need, f->hashfunc->digestsize))
-	{
-		qbyte base64[(DIGEST_MAXSIZE*2)+16];
-		Con_Printf("Invalid hash for downloaded file %s, try again later?\n", f->fname);
-
-		if (f->hashfunc == &hash_sha1)
-		{
-			base64[Base16_EncodeBlock(digest, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
-			Con_Printf("%s vs ", base64);
-			base64[Base16_EncodeBlock(f->need, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
-			Con_Printf("%s\n", base64);
-		}
-		else
-		{
-			base64[Base64_EncodeBlock(digest, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
-			Con_Printf("%s vs ", base64);
-			base64[Base64_EncodeBlock(f->need, f->hashfunc->digestsize, base64, sizeof(base64)-1)] = 0;
-			Con_Printf("%s\n", base64);
-		}
-		f->fail = true;
-	}
-
-	return !f->fail;	//true if all okay!
-}
-static vfsfile_t *FS_Hash_ValidateWrites(vfsfile_t *f, const char *fname, qofs_t needsize, hashfunc_t *hashfunc, const char *hash)
-{	//wraps a writable file with a layer that'll cause failures when the hash differs from what we expect.
-	if (f)
-	{
-		hashfile_t *n = Z_Malloc(sizeof(*n) + hashfunc->contextsize + strlen(fname));
-		n->pub.WriteBytes = HashFile_WriteBytes;
-		n->pub.Flush = HashFile_Flush;
-		n->pub.Close = HashFile_Close;
-		n->pub.seekstyle = SS_UNSEEKABLE;
-		n->f = f;
-		n->hashfunc = hashfunc;
-		n->fname = n->ctx+hashfunc->contextsize;
-		strcpy(n->fname, fname);
-		n->needsize = needsize;
-		Base16_DecodeBlock(hash, n->need, sizeof(n->need));
-		n->fail = false;
-
-		n->hashfunc->init(n->ctx);
-
-		f = &n->pub;
-	}
-	return f;
-}
+//quakers: hashfile_t / HashFile_* / FS_Hash_ValidateWrites moved to common/fs.c. It is a
+//generic VFS write filter with no package-manager knowledge, and the in-game updater needs
+//the same verify-on-close guarantee. Declared in common.h; the two callers below are
+//unchanged.
 
 //function that returns true if the package doesn't look exploity.
 //so either its a versioned package, or its got a trusted signature.

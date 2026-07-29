@@ -242,6 +242,17 @@ NATIVE_PLUGINS+=ffmpeg
 ######################################
 
 ######################################
+#`-static` is fine when the plugin is a mingw DLL, but it contradicts `-shared` when the
+#output is an ELF .so: ld then pulls crtbeginT.o and dies with
+#  "relocation R_X86_64_32 against hidden symbol `__TMC_END__' can not be used when making
+#   a shared object".  So only fully-static-link on the windows targets.
+ifeq ($(findstring win,$(FTE_TARGET)),win)
+    PLUG_FULLSTATIC=-static
+else
+    PLUG_FULLSTATIC=
+endif
+
+######################################
 #small script for ode
 #FIXME: ode fails to compile under cygwin
 #FIXME: race condition if you try compiling debug+release at the same time, as this makefile is invoked twice by the engine's one
@@ -262,7 +273,7 @@ $(ODE_LIB): $(OUT_DIR)/../ode-$(ODE_VER).tar.gz
 
 ODE_FILES=../engine/common/com_phys_ode.c ../engine/common/mathlib.c plugin.c $(ODE_LIB)
 $(PLUG_PREFIX)ode$(PLUG_NATIVE_EXT): $(ODE_FILES)
-	$(CC) -flto -s $(BASE_CFLAGS) $(CFLAGS) -Os -DFTEPLUGIN -DODE_STATIC -o $@ -shared $(PLUG_CFLAGS) -I$(ODE_BASE)ode-$(ODE_VER)/include $(ODE_FILES) $(PLUG_DEFFILE) $(PLUG_LDFLAGS) -static -static-libgcc `$(CC) -print-file-name=libstdc++.a` -lpthread
+	$(CC) -flto -s $(BASE_CFLAGS) $(CFLAGS) -Os -DFTEPLUGIN -DODE_STATIC -o $@ -shared $(PLUG_CFLAGS) -I$(ODE_BASE)ode-$(ODE_VER)/include $(ODE_FILES) $(PLUG_DEFFILE) $(PLUG_LDFLAGS) $(PLUG_FULLSTATIC) -static-libgcc `$(CC) -print-file-name=libstdc++.a` -lpthread
 	$(call EMBEDMETA,ode,$@,ODE Physics,Provides Rigid Body Physics behaviours.)
 #NATIVE_PLUGINS+=ode
 ######################################
@@ -275,7 +286,7 @@ BOX3D_BASE=/c/msys64/home/Lex/box3d-main
 BOX3D_LIB=$(BOX3D_BASE)/build_manual/libbox3d.a
 BOX3D_FILES=../engine/common/com_phys_box3d.c ../engine/common/mathlib.c plugin.c $(BOX3D_LIB)
 $(PLUG_PREFIX)box3d$(PLUG_NATIVE_EXT): $(BOX3D_FILES)
-	$(CC) -s $(BASE_CFLAGS) $(CFLAGS) -Os -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -I$(BOX3D_BASE)/include $(BOX3D_FILES) $(PLUG_DEFFILE) $(PLUG_LDFLAGS) -static -static-libgcc -lpthread
+	$(CC) -s $(BASE_CFLAGS) $(CFLAGS) -Os -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -I$(BOX3D_BASE)/include $(BOX3D_FILES) $(PLUG_DEFFILE) $(PLUG_LDFLAGS) $(PLUG_FULLSTATIC) -static-libgcc -lpthread
 	$(call EMBEDMETA,box3d,$@,Box3D Physics,Provides Box3D Rigid Body Physics (dynamic props + static world + multicore).)
 #NATIVE_PLUGINS+=box3d
 ######################################
@@ -522,7 +533,7 @@ endif
 
 ######################################
 #for compat with half-life 2's file formats
-$(PLUG_PREFIX)hl2$(PLUG_NATIVE_EXT): hl2/fs_vpk.c hl2/fs_vpk_vtmb.c hl2/fs_gma.c hl2/img_tth.c hl2/img_vtf.c hl2/mod_hl2.c hl2/mat_vmt.c hl2/mod_vbsp.c hl2/hl2.c plugin.c
+$(PLUG_PREFIX)hl2$(PLUG_NATIVE_EXT): hl2/fs_vpk.c hl2/fs_vpk_vtmb.c hl2/fs_gma.c hl2/img_tth.c hl2/img_vtf.c hl2/mod_hl2.c hl2/mat_vmt.c hl2/mod_vbsp.c hl2/LzmaDec.c hl2/hl2.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -DMULTITHREAD -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS_ZLIB) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,hl2,$@,HL2 Formats,Provides support for various formats used by Valve's Source engine.)
 NATIVE_PLUGINS+=hl2

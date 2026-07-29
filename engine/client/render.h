@@ -397,6 +397,18 @@ typedef struct {
 #ifdef GLQUAKE
 	int			pbo_handle;	//when set, lightmaps is a persistently mapped write-only pbo for us to scribble data into, ready to be copied to the actual texture without waiting for glTexSubImage to complete.
 #endif
+	//nettest (SUNVIS): baked per-luxel sun visibility for THIS page, at the SAME atlas coords as
+	//the lightmap above — so the existing lmst texcoords sample it with no new varying and no
+	//extra packing work.  Kept ON the page rather than interleaved like the deluxemap (which
+	//lives at lmnum*2+1): a third interleave stride would mean auditing every *2 / +1 / &1 /
+	//hasdeluxe site in the allocator, the page builder and the batch splitter.
+	//Separately allocated, NOT inline after the struct, because the PBO path maps `lightmaps`
+	//straight out of GPU memory.  NULL when the map has no SUNVIS lump — the shader then falls
+	//back to a white texture and dynamic sun shadows behave exactly as they did before.
+	//APPEND-ONLY (this struct is shared with prebuilt plugins).
+	qbyte		*sunvis_pixels;		//width*height, 1 byte per luxel
+	texid_t		sunvis_texture;
+	qboolean	sunvis_modified;
 } lightmapinfo_t;
 extern lightmapinfo_t **lightmap;
 extern int numlightmaps;
@@ -656,6 +668,9 @@ typedef struct
 #define MAX_WATERRIPPLES 64
 extern waterripple_t r_waterripples[MAX_WATERRIPPLES];
 void R_AddWaterRipple(const vec3_t org, float amp, float size, float speed, float lifetime);
+qboolean R_EntityDominantLightDir(const entity_t *ce, vec3_t out);	//nettest P108/P110: per-entity WORLD-space dominant light dir (toward the light). false = no per-entity info, caller falls back to r_sun_dir.
+float R_PointSunVis(struct model_s *world, const vec3_t org);	//nettest: baked sun visibility 0..1 (1=fully sunlit) at org; -1 = no SUNVIS lump / sample miss.
+void Sh_DrawFakeShadowAtlasOverlay(void);	//nettest: r_shadows_propshadows_showatlas 2d debug view of the fake-shadow atlas (no-op unless set).
 struct texture_s *R_TextureAnimation (int frame, struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 struct texture_s *R_TextureAnimation_Q2 (struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 void RQ_Init(void);

@@ -2461,6 +2461,19 @@ LIGHT SAMPLING
 
 mplane_t		*lightplane;
 vec3_t			lightspot;
+//nettest: corrected WORLD-space light direction (pointing TOWARD the light) for the luxel that
+//GLRecursiveLightPoint3C last sampled, plus a validity flag.  Written at the sample site (the only place
+//the face's tangent basis is in scope) and consumed a few lines later in GLQ1BSP_LightPointValues -- both
+//within one synchronous call, so no per-entity storage is needed (and none is possible: entity_t is
+//plugin-visible, so appending a field to it would be a stride/ABI hazard).  See r_modellight_worlddir.
+vec3_t			lightpoint_worlddir;
+qboolean		lightpoint_worlddir_ok;
+//nettest: sun VISIBILITY (0..1, 1=fully sunlit) for the luxel GLRecursiveLightPoint3C last sampled, read
+//from the parallel SUNVIS lump at the SAME luxel the deluxemap uses.  Written at the sample site, consumed
+//synchronously by R_PointSunVis.  _ok=false => no SUNVIS data at that hit (caller treats as fully sunlit).
+float			lightpoint_sunvis;
+qboolean		lightpoint_sunvis_ok;
+extern cvar_t	r_modellight_worlddir;
 
 static void GLQ3_AddLatLong(const qbyte latlong[2], vec3_t dir, float mag)
 {
@@ -2943,6 +2956,52 @@ static float *GLRecursiveLightPoint3C (model_t *mod, mnode_t *node, const vec3_t
 			}
 			else
 				LightPoint3C_AccumLuxel(mod, surf, ds, dt, 1.0f, l);
+		}
+
+		//nettest: rotate the deluxel from the face's TANGENT basis into WORLD space.
+		//The bakers store (dot(L,svector), dot(L,tvector), dot(L,facenormal)) with L pointing TOWARD the
+		//light -- FTE's own ltface.c (~:980, basis ~:911) and ericw-tools light/write.cc (~:452, basis
+		//ltface.cc:690).  The legacy consumer below just aliased those tangent coefficients onto world x/y/z
+		//AND negated the third, so for the common case (the sample ray goes straight DOWN, so the hit face is
+		//a FLOOR with facenormal=+Z) an overhead light decoded to (0,0,-1) = pointing straight DOWN.  Every
+		//model was therefore lit from BELOW; invisible in the additive lambert, glaring once the per-prop
+		//sun-shade amplified it.  Rotating with the real face basis fixes both the inverted pitch AND the
+		//scrambled azimuth (s/t are texture axes, not world X/Y -- wrong on any rotated/sloped face).
+		//Use texinfo->vecs, NOT lmvecs: ericw derives its s/t normals from texinfo even on DECOUPLED_LM faces.
+		lightpoint_worlddir_ok = false;
+		if (r_modellight_worlddir.ival && (l[3] || l[4] || l[5]))
+		{
+			vec3_t sn, tn, fn;
+			VectorCopy(surf->texinfo->vecs[0], sn); VectorNormalize(sn);
+			VectorCopy(surf->texinfo->vecs[1], tn); VectorNormalize(tn); VectorNegate(tn, tn);
+			VectorCopy(surf->plane->normal, fn);
+			if (surf->flags & SURF_PLANEBACK)
+				VectorNegate(fn, fn);
+			VectorScale(sn, l[3], lightpoint_worlddir);
+			VectorMA(lightpoint_worlddir, l[4], tn, lightpoint_worlddir);
+			VectorMA(lightpoint_worlddir, l[5], fn, lightpoint_worlddir);	//+l[5], NOT negated
+			//a sample taken on a face cannot legitimately be lit from behind that face -- reject garbage
+			if (VectorNormalize(lightpoint_worlddir) && DotProduct(lightpoint_worlddir, fn) > 0)
+				lightpoint_worlddir_ok = true;
+		}
+
+		//nettest: sun-visibility at THIS luxel.  The SUNVIS lump (mod->sunvisdata, 1 byte/luxel, style-0
+		//only) is laid out parallel to the style-0 lightdata, so index it with the SAME face base +
+		//nearest-luxel offset the deluxemap uses (gl_rlight.c deluxe base ~:2775) but at UNIT stride and
+		//with NO maps*plane style term -- exactly as r_surf.c:1443-1471 does when it blits this same lump
+		//into the atlas.  RAW byte is VISIBILITY (255=fully sunlit, 0=occluded): byte/255 directly, do NOT
+		//invert (the shader's 1-x only cancels the engine's own 255-x TEXTURE-upload flip in r_surf.c).
+		lightpoint_sunvis_ok = false;
+		if (mod->sunvisdata && surf->samples)
+		{
+			int lofsscale = (mod->lightmaps.fmt==LM_E5BGR9)?4 : (mod->lightmaps.fmt==LM_RGB8)?3 : 1;
+			int smax = (surf->extents[0]>>surf->lmshift)+1;
+			size_t off = (size_t)(surf->samples - mod->lightdata)/lofsscale + (size_t)dt*smax + ds;
+			if (off < (size_t)mod->lightdatasize / lofsscale)	//== sunvisdata byte count (r_surf.c:1457)
+			{
+				lightpoint_sunvis    = mod->sunvisdata[off] * (1.0f/255.0f);
+				lightpoint_sunvis_ok = true;
+			}
 		}
 
 		return l;
@@ -3428,6 +3487,11 @@ void GLQ1BSP_LightPointValues(model_t *model, const vec3_t point, vec3_t res_dif
 	extern cvar_t r_shadow_realtime_world, r_shadow_realtime_world_lightmaps;
 #endif
 
+	//nettest: clear before sampling so a MISS (or a non-deluxe path) can never leak the previous
+	//caller's world direction into this result.  Set only by GLRecursiveLightPoint3C on a real hit.
+	lightpoint_worlddir_ok = false;
+	lightpoint_sunvis_ok = false;	//same: the lightgrid branch + the early-outs below must not leak stale sunvis
+
 	if (!model->lightdata || r_fullbright.ival || model->loadstate != MLS_LOADED)
 	{
 		if (model->loadstate != MLS_LOADED)
@@ -3480,12 +3544,20 @@ void GLQ1BSP_LightPointValues(model_t *model, const vec3_t point, vec3_t res_dif
 		res_ambient[1] = r[1];
 		res_ambient[2] = r[2];
 
-		res_dir[0] = r[3];
-		res_dir[1] = r[4];
-		res_dir[2] = -r[5];
-		if (!res_dir[0] && !res_dir[1] && !res_dir[2])
-			res_dir[0] = res_dir[2] = 1;
-		VectorNormalize(res_dir);
+		//nettest: prefer the properly rotated WORLD-space direction computed at the sample site (see
+		//lightpoint_worlddir).  The legacy path below aliases the face-TANGENT coefficients straight onto
+		//world x/y/z and negates the third, which points the vector at the FLOOR instead of the light.
+		if (lightpoint_worlddir_ok)
+			VectorCopy(lightpoint_worlddir, res_dir);
+		else
+		{
+			res_dir[0] = r[3];
+			res_dir[1] = r[4];
+			res_dir[2] = -r[5];
+			if (!res_dir[0] && !res_dir[1] && !res_dir[2])
+				res_dir[0] = res_dir[2] = 1;
+			VectorNormalize(res_dir);
+		}
 	}
 
 #ifdef RTLIGHTS
@@ -3498,6 +3570,20 @@ void GLQ1BSP_LightPointValues(model_t *model, const vec3_t point, vec3_t res_dif
 		VectorScale(res_ambient, lm, res_ambient);
 	}
 #endif
+}
+
+//nettest: sun visibility 0..1 (1=fully sunlit) at `org`, sampled FRESH via the shared LightPointValues walk
+//(which warms lightpoint_sunvis in GLRecursiveLightPoint3C).  Returns -1 when the world has no SUNVIS lump,
+//the sample missed a lit face, or the walk took the lightgrid / early-out path -- callers must treat -1 as
+//"no data, don't suppress the sun shadow", NEVER as 0 (which would delete every prop's sun shadow).  Does
+//NOT ride the Patch-105 model-light cache: a cache HIT skips the walk, so this must sample every call.
+float R_PointSunVis(model_t *world, const vec3_t org)
+{
+	vec3_t d, a, dir;	//scratch: we only want the side-effect (lightpoint_sunvis)
+	if (!world || !world->sunvisdata || !world->funcs.LightPointValues)
+		return -1.0f;
+	world->funcs.LightPointValues(world, org, d, a, dir);
+	return lightpoint_sunvis_ok ? lightpoint_sunvis : -1.0f;
 }
 
 #endif

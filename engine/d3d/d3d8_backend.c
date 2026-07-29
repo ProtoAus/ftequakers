@@ -1763,6 +1763,10 @@ static void BE_ApplyUniforms(program_t *prog, int permu)
 		case SP_E_ORIGIN:
 		case SP_E_GLOWMOD:
 		case SP_E_NOSHADOWRECV:	//nettest: GL-only (viewmodel fake-shadow suppress); unhandled here = uniform stays 0 = normal receive (fail-safe)
+		case SP_E_SUNDIR:		//nettest: GL-only (per-entity dominant light dir); unhandled here = shader's length guard falls back to the global sun
+		case SP_E_SUNSHADE:		//nettest Patch 120c: GL-only (per-entity sun-shade fraction); unhandled here = uniform stays 0 = full sun terms (fail-safe)
+		case SP_FAKESHADOWMATRIX://nettest P110: GL-only (multi-direction fake shadow atlas); FAKESHADOWS itself is GL-only, so these never bind here
+		case SP_FAKESHADOWCELL:
 		case SP_W_FOG:
 		case SP_M_INVVIEWPROJECTION:
 		case SP_M_INVMODELVIEWPROJECTION:

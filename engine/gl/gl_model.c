@@ -1754,6 +1754,7 @@ void Mod_LoadLighting (model_t *loadmodel, bspx_header_t *bspx, qbyte *mod_base,
 
 	loadmodel->lightdata = NULL;
 	loadmodel->deluxdata = NULL;
+	loadmodel->sunvisdata = NULL;	//nettest: SUNVIS is optional; absent => fully-lit fallback
 	if (loadmodel->fromgame == fg_halflife || loadmodel->fromgame == fg_quake2 || loadmodel->fromgame == fg_quake3)
 	{
 		litdata = mod_base + l->fileofs;
@@ -2203,6 +2204,30 @@ void Mod_LoadLighting (model_t *loadmodel, bspx_header_t *bspx, qbyte *mod_base,
 		loadmodel->deluxdata = luxdata;
 	else if (interleaveddeluxe)
 		loadmodel->deluxdata = ZG_Malloc(&loadmodel->memgroup, samples*3);
+
+	//nettest: SUNVIS — one byte per luxel, how much of the sun that luxel sees (0 = fully
+	//occluded by world geometry, 255 = fully lit).  Baked by protoanus-tools `light -sunvis`.
+	//Lets the world shader scale the DYNAMIC r_shadows 2 sun shadow by the BAKED sun
+	//visibility, so a player's shadow falling inside an already-baked shadow stops darkening
+	//it a second time.  Optional: absent lump => NULL => the shader falls back to a white
+	//texture and behaves exactly as it did before.
+	//Sized like the vanilla lighting lump (1 byte/luxel) — the size check is what rejects a
+	//lump left over from a differently-lit compile.  Always a BSPX lump, so always a copy
+	//into the memgroup: the BSP file image is freed after load.
+	{
+		size_t sunvissize;
+		qbyte *sunvisdata = BSPX_FindLump(bspx, mod_base, "SUNVIS", &sunvissize);
+		if (sunvisdata && sunvissize == samples)
+		{
+			loadmodel->sunvisdata = ZG_Malloc(&loadmodel->memgroup, samples);
+			memcpy(loadmodel->sunvisdata, sunvisdata, samples);
+			//positive control: without this there is no way to tell "lump accepted" from
+			//"lump silently rejected" apart from staring at shadows. developer 1 to see it.
+			Con_DPrintf("SUNVIS: %u luxels loaded, dynamic sun shadows are now baked-shadow aware\n", (unsigned)samples);
+		}
+		else if (sunvisdata)
+			Con_DPrintf("SUNVIS lump size %u != %u luxels, ignored\n", (unsigned)sunvissize, (unsigned)samples);
+	}
 
 	if (expdata)
 	{

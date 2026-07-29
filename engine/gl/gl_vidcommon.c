@@ -2471,6 +2471,10 @@ static GLuint GLSlang_CreateShader (program_t *prog, const char *name, int ver, 
 				"uniform sampler2D s_deluxemap1;\n",
 				"uniform sampler2D s_deluxemap2;\n",
 				"uniform sampler2D s_deluxemap3;\n",
+
+				//nettest S_SUNVIS (23): baked per-luxel sun visibility. This array is indexed
+				//POSITIONALLY by the S_* enum, so this entry must sit at index 23 exactly.
+				"uniform sampler2D s_sunvis;\n",
 			};
 			for (i = 0; i < countof(defaultsamplernames); i++)
 			{

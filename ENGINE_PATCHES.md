@@ -3452,3 +3452,457 @@ a stock engine build too.
 `C:\FTEQuake\nettest\crashaddr.txt`. That gamedir is now `quakers`, and `CreateFileA` does not create
 missing directories, so every crash address and stack dump this handler exists to capture was being
 silently discarded. Repointed at `C:\FTEQuake\quakers\crashaddr.txt`.
+
+## Patch 118 — in-game delta updater (`update_check` / `update_apply`)  *(APPLIED — full rebuild + all four plugins)*
+
+**New files:** `common/blake2b.c`, `common/qkupdate.c`, `common/qkupdate.h`.
+**Modified:** `common/common.h`, `common/fs.c`, `common/common.c`, `client/m_download.c`,
+`client/cl_main.c`, `server/sv_main.c`, `Makefile`.
+
+**Why:** content ships as a content-addressed tree on Cloudflare R2 (manifest + `objects/<hh>/<hash>`,
+BLAKE2b-256) and the Rust launcher installs it. The gap was never capability, it was **discovery** —
+a player already in the game had no way to learn a new build existed without quitting and re-running
+the launcher. The engine now checks when the map-backdrop main menu opens and applies small deltas
+in place. First-time installs, full repairs and anything touching the engine binaries still refuse
+and hand off to the launcher.
+
+**Not FTE's own package manager.** `m_download.c` models *packages*, hard-wires its hash keys to
+sha1/sha512 (`:1310`), and `PM_SignatureOkay` refuses arbitrary loose files. Adopting it would mean
+repackaging 4,243 loose files into pk3s and losing per-file dedup. Its *parts* are reused instead:
+`FS_Hash_ValidateWrites` (hoisted here to `fs.c`), `HTTP_CL_Get`, `DL_CreateThread`, `VFSPIPE_Open`.
+
+**`blake2b.c`** must match RustCrypto's `Blake2b<U32>` exactly — RFC 7693 with the parameter block's
+digest_length set to 32 (`h[0] ^= 0x01010020`), **not** a truncated BLAKE2b-512. The hash can never
+change: object names *are* the hashes, so switching renames every R2 object and forces a 6.3 GB
+re-download for everyone. Registered in `COM_CalcHash_Thread`, so `fs_hash <file>` is the oracle.
+
+**Three placements that are not obvious and must not be "tidied":**
+
+1. `QKU_ReplayJournal()` sits in `FS_ChangeGame` right after `FS_CleanDir(com_gamepath,…)`, **not**
+   at the tail of `COM_InitFilesystem` — `com_gamepath` is not assigned until then, so the obvious
+   spot is a silent no-op. It is run-once guarded because later calls happen with packs open.
+2. Download callbacks `Cmd_AddTimer` to the main thread rather than acting directly:
+   `notifycomplete` fires from inside `HTTP_CL_Think` with arbitrary engine state on the stack.
+3. Apply never calls `FS_ReloadPackFiles` (`fs.c` flags it "potentially unsafe"). It relies on the
+   Win32 asymmetry that a locked file cannot be deleted but *can* be renamed, then
+   `FS_FlushFSHashFull()`. Note `Sys_Rename` is `MoveFileW` **without** `MOVEFILE_REPLACE_EXISTING`,
+   so every rename-over is preceded by `FS_Remove`.
+
+**The updater writes back to `.quakers-launcher/state.json`.** Skipping that is not cosmetic: the
+launcher would still hold the old hashes and re-download everything the engine just installed, and
+the two would then disagree about what is on disk. `version` is bumped only when the whole plan
+landed; individual paths are recorded as they land.
+
+**Verified** against live `dl.proto.bar` on a real launcher install at `2026.07.27_1617`: delta
+computed as exactly the 4 changed files, downloaded, hash-verified, installed, ledger updated to
+`2026.07.27_1727`, and the launcher independently confirmed 4,235/4,238 correct afterwards.
+`fs_hash` output matches Python `hashlib.blake2b(digest_size=32)` on sizes 0/1/63/64/65/127/128/129/
+255/256/257 B, 4 KB, 1 MB, 7.9 MB and on 16 real published objects including a 473 MB pk3.
+
+**One bug worth remembering:** the manifest reader called `strlen()` on a buffer before writing its
+terminator. At boot the allocation lands on fresh zeroed pages and it passes; called later off a
+dirty heap it rejects a perfectly good manifest with a bare "http 200". Terminate, then measure.
+
+## Patch 119 — `cfg/` accepted as a writable QC prefix, so the mod can keep every config in one folder  *(APPLIED — `m-rel` + `sv-rel`; no header change, plugins unaffected)*
+
+**Files:** `common/pr_bgcmd.c`, `common/fs.c`, `common/cmd.c`, `client/cl_main.c`, `server/sv_main.c`.
+
+**The problem, and why it was not a mod-side one.** Quakers had *two* sets of configs —
+`quakers/default.cfg`, `server.cfg`, `ftesrv.cfg` at the gamedir root **and** the same three names
+again under `quakers/data/`. That was not sloppiness, it was forced by the engine:
+
+- `QC_FixFileName` (`pr_bgcmd.c:2605`) rewrites **every** QC `fopen`/`fcopy`/`frename`/`fremove`
+  in all three VMs so writes land under `data/`. The builtin's own doc string says so
+  (`server/pr_cmds.c:12303`).
+- `QC_PathRequiresSandbox` (`:2584`) makes any `*.cfg` at the gamedir **root** unreadable by QC.
+
+So the root copies were the ones the engine execs at boot and QC cannot see; the `data/` copies
+were the only ones QC could read or write. Two locations was the only arrangement that worked.
+
+**The change.** `cfg/` is now accepted as a *second* pass-through writable prefix alongside
+`data/` — one extra `strncmp`. Additive on purpose: `data/` is what every other FTE mod uses.
+`cfg/` is neither root-level nor `configs/`, so it also falls outside the read sandbox, which is
+what lets QC read the same files it writes. Security: this widens the QC write sandbox by exactly
+one directory, and the exposure is unchanged in practice — QC could already write configs under
+`data/` and the menu already exec'd one of them.
+
+Supporting changes so nothing is left behind in `data/`:
+- `FS_MAPS_INDEX` (`fs.c`) → `cfg/maps_index.txt`.
+- `cmd.c:4177` `saveconfig` `nohidden` heuristic extended to `cfg/`.
+- `cl_main.c` / `sv_main.c` boot exec now **prefer** `cfg/default.cfg` / `cfg/server.cfg` /
+  `cfg/ftesrv.cfg`, falling back to the gamedir-root names when absent — via the same
+  `COM_FileSize` idiom `sv_main.c` already used. Stock games and a `cfg`-less install boot
+  unchanged; verified by hiding `cfg/` and confirming a clean fall back, exit 0.
+- `fs.c` re-exec watchlist gained `cfg/default.cfg` + `cfg/server.cfg`.
+
+**Trap that bit during the merge.** The root `default.cfg` carries `seta vid_*`, and its own
+header explains those must be captured during early boot. Merging it with `data/default.cfg`
+(which the menu VM exec'd at init) meant one file exec'd twice — so every menu-VM init would have
+reset the player's saved resolution to 1024x768 windowed. Fixed by dropping the menu's re-exec
+(`menu/m_menu.qc` `Menu_LoadConfig`); the engine's boot exec still runs before
+`cfg/settings.cfg`, so the "defaults first, user settings second" ordering is preserved.
+
+Also removed `CSQC_RegenerateSpraysShader`'s file write: it wrote `data/scripts/sprays.shader`,
+which the renderer never read (sprays go through `shaderforname` — the function's own comment
+documented the bug), and it would have re-created a stray `data/` on every map load.
+
+**Verified** on `C:\FTEQuake`: after the move, a client boot writes `cfg/maps_index.txt` (engine)
+and `cfg/settings.cfg` (menu QC `fopen`) and **no `data/` directory reappears**;
+`cl_download_redirection 1` and `vid_width 1024` confirm the merged boot block ran; box3d/hl2/cod
+all load; the dedicated server execs `cfg/server.cfg` + `cfg/ftesrv.cfg`.
+
+---
+
+## Patch 120 — model shadows: casters always reach the sun, sticky lamp pick, constant cell size  *(APPLIED — m-rel)*
+
+**Files:** `engine/gl/gl_shadow.c` (the bulk), `engine/gl/gl_shader.c` (one clamp).
+No header change, so the native plugins are unaffected and were **not** rebuilt.
+
+**Why.** Three independent instabilities in `r_shadows 2` that together read as "shadow quality is
+all over the place":
+
+1. **A player's sun shadow vanished near local lights, and CROUCHING brought it back.** Two gates
+   deleted a caster from the sun cascades and nothing put it back:
+   - `Sh_FakeShadowFilter`'s sun branch admitted only `fs_entbucket[i] == 0`, so the moment a lamp
+     cell claimed a prop it was removed from **every** sun cascade — replaced by a lamp cone that
+     might be aimed elsewhere, washed out by the sunmask, or (several edge paths) never rendered.
+   - `r_shadows_caster_sunvis` (0.3) dropped any caster whose baked dominant light was >72° off the
+     sun, replaced by nothing at all.
+
+   Both keyed off a single point rigidly offset from `e->origin`. Ducking lowers the player's origin
+   by exactly 18qu (`sh_pmove.qc` `PM_DUCK_MINS`), the only crouch-sensitive input the engine has:
+   enough to swing the lamp-direction vector 10-20° for a nearby lamp and to push the shin probe
+   from `feet+8` to `feet-10`, i.e. through the floor plane. That flipped the claim, and the shadow
+   reappeared.
+
+2. **The projecting lamp kept swapping.** `Sh_PropDominantLamp` was stateless with no dead-band, so
+   two comparable lamps flipped the instant a prop crossed their `bright²/dist²` iso-surface. It
+   traced only the top **3** candidates and returned −1 when all three were occluded, so walking
+   past a railing dropped the shadow entirely for a frame even with a fourth visible lamp in range.
+
+3. **Lamp cell resolution was a step function of the LIVE cell count.** At `cascades 3` +
+   `worldmask 1` the quarter/eighth tier flipped at 2 lamps, so a third lamp coming into view
+   instantly **quartered the pixel area of every lamp shadow on screen**.
+
+Also found: the candidacy loop hard-bailed when `R_EntityDominantLightDir` failed, which killed the
+whole per-light feature on any map built without `light -bspxlux` — **22 of the mod's 29 maps** —
+even though on a SUNVIS-baked map the direction was already unused (`minalign` forced to `-2`).
+
+**What changed.**
+
+- **Additive, not exclusive.** New `fs_propshadowpass` static; while the propshadow atlas renders,
+  `Sh_FakeShadowFilter`'s sun branch admits every caster. Lamp cells were already by-cone, so a
+  caster now renders into the sun cascades **and** any lamp cone containing it, and the shader
+  accumulates the two terms separately. Nothing left to classify, nothing left to flicker. The
+  `r_shadows_slots > 1` direction atlas is genuinely exclusive (one quantised direction per caster)
+  and keeps its `fs_entbucket` filter — that is what the new flag distinguishes.
+- **`r_shadows_caster_sunvis` now defaults to 0.**
+- **In-shade classification deleted** from `Sh_GeneratePropShadowsAtlas`: no SUNVIS threshold, no
+  deluxemap-dot fallback, `minalign` always `-2`. The deluxemap direction is diagnostic only, so
+  lamp shadows work on all 29 maps. Where a SUNVIS bake exists, the sunmask term still fades a lamp
+  shadow across sunlit ground — a smooth per-pixel falloff instead of a hard per-entity switch,
+  which is where that decision belongs.
+- **`SH_LAMPCANDS` 3 → 8**, and an all-occluded trace now falls back to the best-scoring lamp
+  instead of returning −1. Factored out `Sh_PropLampVisible` / `Sh_PropLampScore`.
+- **`Sh_PropStickyLamp`**: a 4096-bucket table keyed and *validated* on `keynum` (mirroring the
+  Patch-105 model-light cache) holding each caster's current lamp. A challenger must out-score the
+  incumbent by `r_shadows_propshadows_switch` (**new cvar**, default 2) to take over, and 3 frames
+  of lost line-of-sight are tolerated first. Cleared when `sh_maplights` is rebuilt, since lamp
+  indices change meaning on map load.
+- **`sh_propsub_budget`**: the subcell tier is chosen from the *budget* (`propmax`), not the live
+  count, so cell resolution never steps. The atlas reserves space it may not use, which is free —
+  unused cells are already pushed past the far plane and never sampled.
+- **`gl_shader.c`**: its `FAKESHADOWS_COUNT` clamp was missing the worldmask halving that
+  `Sh_GeneratePropShadowsAtlas` applies, so at `cascades 3` + `worldmask 1` the shader compiled 13
+  perspective cells while the engine could only fill 8. The 5 dead slots still cost a loop iteration
+  (5 depth taps) per pixel on every wall and model plus their share of the 16 mat4 uniforms uploaded
+  per draw. `r_shadows_propshadows_worldmask` had to lose `static` for this.
+
+**Debug line changed** — `sunlit=` is gone (always 0 now); it reports `held=` / `swapped=` instead,
+which is what you want when tuning `_switch`.
+
+**Watch for:** on the 26 maps with no SUNVIS bake the sunmask is forced off, so a prop in bright
+sunlight near a lamp now casts a lamp shadow as well as its sun shadow. `r_shadows_propshadows_range`
+(lamp reach = brightness × this) is the dial for that — not the classifier, which is what was
+flickering.
+
+**Companion cfg changes** (`C:\FTEQuake\quakers\cfg\default.cfg`): `r_shadows_res` 4096 → 8192
+(three 4096 cascades + a constant 1024 per lamp cell, ~256MB depth), `r_shadows_caster_sunvis` → 0,
+`r_shadows_selfshadow_cascadebias` 0 → 1 (it was fighting the shader's own default of 1; at 0 the
+model self-shadow bias is flat across cascades whose texels are 1:3:9, which banded distant props),
+and `r_shadows_cascade_blend` set to 0.85 — it had never been set, so it ran on the shader default
+0, and since the blend factor is a Chebyshev distance ≥0.5 everywhere inside a cascade box, **every
+pixel in the near cascades was more than half blended toward the coarser cascade's fatter penumbra,
+at 24 PCF taps instead of 12.**
+
+### Patch 120a — revert "always both", fixed per-lamp cones, mapper-flagged shadow lights  *(APPLIED — m-rel)*
+
+**Files:** `engine/gl/gl_shadow.c`, `engine/gl/gl_backend.c` (`SP_E_SUNDIR` only).
+
+Patch 120 made the sun and lamp shadows **additive** to stop a player's sun shadow vanishing near
+lamps. That fixed the flicker but was the wrong call: a prop standing under a roof then cast a hard
+sun shadow *and* carried a sun form-shade on top of its lamp shadow — "the shadows don't make any
+sense indoors". The real defect in the old code was never the exclusivity, it was that the verdict
+was recomputed from one probe luxel every frame with no hysteresis.
+
+- **Exclusivity restored, debounced.** `Sh_PropShadeState` holds each caster's in-shade verdict and
+  only lets it flip after `SH_STICKYLAMP_SHADE` (6) consecutive frames of the opposite answer. An
+  in-shade caster is stamped into `fs_entbucket` and so leaves the sun cascades; a sunlit one keeps
+  its sun shadow. A map with neither bake cannot answer, and those props keep both — there is no
+  information to do better with, and dropping either would lose a feature outright.
+  `r_shadows_caster_sunvis` goes back to `0.3` (it is the no-SUNVIS fallback, not a blanket gate).
+- **Form-shade follows the lamp.** `SP_E_SUNDIR` now asks `Sh_EntityLampDir` first. The deluxemap
+  reconstruction it used before only exists on 6 of 29 maps, so everywhere else the "per-prop
+  dominant light" silently fell back to the global sun — a prop indoors was form-shaded by a sun it
+  cannot see while its lamp shadow pointed the other way. Cast shadow, self-shadow and form-shade
+  now all come from the same lamp, with no bake required.
+- **Cones are FIXED per lamp, resolved at load.** Was: aim = the running mean of whichever props were
+  in the cell, fov = refitted to the widest member, both recomputed every frame — which is why the
+  atlas tile panned and zoomed with the player and why one prop joining a cell shifted every other
+  shadow in it. Now `Sh_LoadMapLights` parses the ericw spotlight keys:
+  - `mangle` ("yaw pitch roll" → `(cos p·cos y, cos p·sin y, sin p)`, the direction light TRAVELS)
+  - `target` → aimed at that entity's origin (resolved by a first pass over `targetname`), which
+    takes precedence over `mangle`, matching ericw
+  - `angle` (cone **diameter**, q1) or `_cone` (**radius**, q2 — doubled)
+  - neither aim key → **straight down**; no angle key → `r_shadows_propshadows_cone` (**new cvar**,
+    default 120°)
+
+  Clustering is gone with it: one cell per lamp, so `SH_CELLJOINANG`, `pc_dir`, `pc_angrad` and
+  `lc_aim` are all deleted. `nearclip` is a constant 8 and `zfar` is the lamp's reach.
+- **`_shadow` / `_shadowcast` light key.** If a map flags at least one light, only flagged lights
+  cast prop shadows on that map; if none are flagged, all of them do exactly as before. So no
+  existing map needs editing, and flagging one light turns the map into a whitelist.
+- **One eligibility test.** Whitelist, reach and the fixed cone all live in `Sh_PropLampScore`, which
+  the ranking, the stickiness comparison and the incumbent check all call — they cannot disagree
+  about which lamps are usable, so a prop can no longer be assigned to a lamp whose cone can never
+  contain it (which would leave it with no shadow at all).
+
+**Fixed while here:** `pc_shade[npc]` was being written before the `npc < SH_MAXPROPCANDS` bounds
+check — a 257th candidate would have written one past the array.
+
+**Debug line** now reports `inshade=` alongside `held=` / `swapped=`.
+
+### Patch 120b — lamp shadows never landed on the world; no-bake in-shade classification  *(APPLIED — m-rel)*
+
+**Files:** `engine/gl/gl_shadow.c`, and the mod's `glsl/defaultwall.glsl` (shader-only, no rebuild
+needed for that half).
+
+Two separate defects, both reported as *"my shadow from local lights only projects onto other props,
+it doesn't project onto the world"* and *"the sun atlas still shows a player mask when I stand over a
+prop_static inside"*.
+
+**1. The world-occlusion mask rejected every world surface (the `props only` bug).**
+`r_shadows_propshadows_worldmask 1` gives each lamp cell a paired depth render of the *world* through
+the same cone, and the receiver multiplies its lamp darkening by `worldlit`. The compare was
+
+```glsl
+float fswz = fsc.z + float(r_shadows_propshadows_worldbias);   // 0.003
+worldlit = (stored_world_depth >= fswz);
+```
+
+For a **world** receiver the stored first-surface depth *is this pixel*, so the test read
+`d >= d + bias` — always false. `worldlit` was 0 on every world surface and the lamp shadow was
+multiplied out of existence. **Models** were untouched because they sit in front of the stored world
+depth, which is exactly why the shadows landed on props and nothing else. Nothing compensated in the
+other direction either: `slotmat[14] -= r_shadows_propshadows_bias` is a constant subtraction from
+clip-z, so after the perspective divide it is only `bias/d` ≈ 4e-6 at 200qu; and the depth pass'
+polygon offset is `glPolygonOffset(0, 0.05)` ≈ 3e-9 on a 24-bit buffer. (Note `renderer.c:404-405`
+registers those two cvars under each other's names — the C identifier `..._offset` is the cvar named
+`..._factor`. Left alone; it is stock FTE and nothing here depends on it.)
+
+Fixed by flipping the sign so the margin favours **lit**, and re-expressing it in **quake units**
+rather than raw depth — a constant depth margin is ~4× too tight at 100qu and ~4× too loose at 400qu,
+so no single value can cover a cone.
+
+The lamp frustum's near plane is a fixed 8 and zfar is the lamp's reach, so with `k = f/(f−n)`:
+
+```
+z01      = k·(1 − n/d)          dz01/dd = k·n/d²          1 − z01 = n·(f−d)/((f−n)·d)
+```
+
+The tempting shorthand `D·(1−z01)²/n` is **not** `D·dz01/dd` — substituting the exact `1−z01` gives
+`D·n·(f−d)²/((f−n)²d²)`, short of the true value by `k·(1−d/f)²`. That is 0.31× at half the lamp's
+reach and **zero at the far plane**, which would have brought the world shadows back near a lamp and
+left them missing further out — the same bug with a smaller radius. `pc.w` already *is* `d/reach`
+(the engine normalises the whole slot matrix by `rad`), so dividing by `(1−pc.w)²` restores it
+exactly with no extra uniform:
+
+```glsl
+float wbase = float(r_shadows_propshadows_worldbias) * (1.0-fsc.z)*(1.0-fsc.z) * 0.125;  //0.125 = 1/nearclip
+float wrem  = 1.0 - pc.w;
+float fswz  = fsc.z - wbase / max(1e-4, wrem*wrem);
+```
+
+Checked against the exact form at both ends: 1.8 % over at d=200 and at d=400 with f=450. `k` is
+dropped deliberately — it runs 1.00…1.14 across the reach range and over-delivering margin is the
+fail-safe direction. **`r_shadows_propshadows_worldbias` therefore changes units: 0.003 → 4 (quake
+units); usable band ~4–8.** The trade it now states honestly: a wall thinner than *D* along the light
+ray still leaks. At `r_shadows_res 8192` the ±1-texel PCF slope error on a floor lit at 20° grazing
+is ~1.9qu, so 4 has better than 2× headroom; drop to eighth-size cells at a lower `_res` and it
+tightens proportionally.
+
+**Known asymmetry, deliberately left:** `defaultskin.glsl`'s perspective block has no world-mask term
+at all, so lamp shadows can still project through a wall onto a *model* in the next room. Adding it
+needs `l_fakeshadowinfo` plumbed into that shader; out of scope here.
+> **This turned out NOT to be benign — see Patch 120c, which ports the mask across.** It is the
+> "second smaller silhouette on a prop_static" report: the world rejected a through-geometry lamp
+> projection and the model standing in it did not, so the ghost appeared on props and nowhere else.
+
+**2. In-shade classification needed a bake the map probably doesn't have.**
+`rawshade` could only be computed from a SUNVIS lump, or from a deluxemap via
+`r_shadows_caster_sunvis`. With neither it stayed `-1`, nothing was stamped into `fs_entbucket`, and
+`Sh_FakeShadowFilter` kept admitting the caster into the sun cascades — so on any map built without
+`light -bspxlux -sunvis` (most of them) a player under a roof still cast a full sun shadow.
+
+New `Sh_PropSunOccluded()` answers the same question from geometry, on every map: trace from the
+caster's **mid-height** toward the sun and call it in shade if a solid world surface is overhead. The
+mask is `MASK_WORLDSOLID|FTECONTENTS_SKY` and the outcome is read off `trace.contents`:
+
+- nothing hit → sunlit;
+- stopped in a **sky** leaf → sunlit;
+- anything else → in shade.
+
+Sky has to be *in* the mask: a q1 sky brush is a thin shell with solid void behind it
+(`q1bsp.c` maps `Q1CONTENTS_SKY` → `FTECONTENTS_SKY`, which `MASK_WORLDSOLID` excludes), so a
+sky-blind trace sails through the shell, stops on that void and reports "roof" for everything
+outdoors. `TI_SKY` is accepted too, for formats where sky brushes are solid. `startsolid`/`allsolid`
+return "unknown" so a buried probe changes nothing. The probe is mid-height rather than the
+ground-contact point the lamp traces use — `sp` sits 8qu above the model's lowest extent, close
+enough to the floor that a prop resting flush reads `startsolid`.
+
+Runs only for casters that already passed the cheap lamp range gate, and only when neither bake
+answered. **New cvar `r_shadows_propshadows_suntrace`** (default 1) turns it off.
+
+**Also fixed, both found while verifying the above:**
+
+- **`r_shadows_propshadows_worldmask` was a plain `CVARD`** while `gl_shader.c:1527/1588` reads it to
+  halve the cell cap that produces `FAKESHADOWS_COUNT`. Toggling it changed the engine's live budget
+  immediately and left the compiled loop bounds stale until the next `vid_reload` — which silently
+  invalidated every A/B test of the mask itself. Now `CVARFD(..., CVAR_SHADERSYSTEM, ...)`, matching
+  `_slots` / `_cascades` / `_propshadows` / `_max`.
+- **`Sh_PropShadeState` bypassed its own debounce on a dropout.** `if (raw < 0 || …) return raw;`
+  returned −1 *before* the hysteresis, so one frame the classifier could not answer popped a settled
+  in-shade caster straight back into the sun with a full sun shadow. The 6-frame debounce only ever
+  protected 0↔1. A dropout now holds the last stable verdict; a caster never yet classified still
+  returns −1, so a map with no bake and `_suntrace 0` behaves exactly as before.
+
+**Known limits of the new classifier**, none of which existed to be wrong before:
+
+- The trace tests `cl.worldmodel` only, so a roof made of a **brush entity** (`func_wall`,
+  `func_door`, a lift) reads as open sky and the caster keeps its sun shadow.
+- A **fully sealed map with no sky brushes** now classifies every caster as in-shade. That is the
+  right answer (no sun reaches it), but on such a map every model leaves the sun cascades.
+- The verdict is one point sample, so it has a hard edge where SUNVIS gives a gradient. The 6-frame
+  debounce covers the flutter; crossing a real shadow boundary pops rather than fades.
+- `MASK_WORLDSOLID` includes `FTECONTENTS_WINDOW`, so glass counts as a roof.
+
+**Known limits of the world mask**, now visible for the first time because `worldlit` finally does
+something: the world depth mesh is world-only (`Sh_FakeShadowFilter` rejects every visedict under
+`FS_WORLDSLOT`), so **brush-model entities are not in it** and lamp shadows still project through a
+closed `func_door`. `defaultskin.glsl` has no world-mask term at all, so the same is true of any
+model receiver. Neither is new; both were simply unreachable while `worldlit` was pinned at 0.
+
+**Not fixed, noted:** `r_polygonoffset_shadowmap_{offset,factor}` are registered under each other's
+names (`renderer.c:404-405`), so the pipeline runs `glPolygonOffset(0, 0.05)` where `(0.05, 0)` was
+meant — no slope-scaled term on any shadowmap depth render, and tuning either cvar moves the other.
+Stock FTE; nothing here depends on it, but it is why `worldbias` has to absorb the whole slope error
+alone. Likewise `r_shadows_throwfade` is baked into the shader by `gl_shader.c:1549` without being
+`CVAR_SHADERSYSTEM`, so changing it needs a manual `vid_reload`.
+
+**Companion cfg changes** (`C:\FTEQuake\quakers\cfg\default.cfg`): `r_shadows_propshadows_worldbias`
+0.003 → **4** (units changed — do not carry the old value forward), and
+`set r_shadows_propshadows_suntrace 1` added.
+
+### Patch 120c — the ghost silhouette, and a continuous sun/shade transition  *(APPLIED — m-rel)*
+
+**Files:** `engine/gl/gl_shadow.c`, `engine/gl/gl_backend.c`, `engine/gl/gl_shader.c`, `engine/gl/shader.h`,
+`engine/d3d/d3d_backend.c`, `engine/d3d/d3d8_backend.c`, and the mod's `glsl/defaultskin.glsl`.
+
+Two reports: *"a second smaller player projection on a prop_static indoors"*, and *"the transition
+between outside/inside could be smoother on the sun-shade / self-shadowing front"*.
+
+**1. The second silhouette — the world mask existed only in `defaultwall.glsl`.**
+
+Patch 120b noted that `defaultskin.glsl` had no world-occlusion term and left it as a "known
+asymmetry". It is not benign. Lamp-cell caster admission is pure cone geometry with **no
+line-of-sight test** (`Sh_FakeShadowFilter`'s `fs_curslot > 0` branch), so a lamp behind a wall or
+one floor up projects a caster through solid geometry. The **world** rejected that projection via
+`worldlit`; a **model** had nothing to reject it with. Hence a ghost that appeared on the prop and
+on nothing around it, and smaller — a longer lamp→caster distance means less projective
+magnification.
+
+Fixed by porting the mask into `defaultskin.glsl`: `l_fakeshadowinfo` declared (the engine already
+uploads it to any program that asks), the `fsampw` macro added, and the `worldlit` block inserted
+into the lamp loop with 120b's corrected sign and `(1-pc.w)²` margin. The two shaders must stay in
+step; the long comment lives in `defaultwall.glsl`.
+
+Also corrected the design note at the top of `defaultskin.glsl`, which still claimed "a model is
+rendered into exactly ONE cell". True of the P110 direction histogram, invalidated by Patch 120a's
+by-cone admission. Casting into every cone you are inside is **kept** — two lamps that can genuinely
+see you should give two shadows, which is what the world already does.
+
+**2. The transition was a switch, and it switched the wrong things together.**
+
+One binary `inshade` flag governed the cast shadow, the self-shadow and the form-shade at once. And
+the quantity that actually jumped was the form-shade **direction**: `SP_E_SUNDIR` hard-selected
+between the lamp vector and the sun vector in a single frame, and `defaultskin.glsl` maps
+`N·sundir` across `r_shadows_sunshade_floor`…`_ceil` — 0…2 as shipped, so a model could swing 0×→2×
+in that one frame. Every hysteresis in the file (`SH_STICKYLAMP_SHADE`, `_MISSES`, `_switch`,
+`_EXPIRE`) only *delays* a flip; none makes one gradual.
+
+- **New per-entity uniform `e_sunshade`**, 0 = fully sunlit … 1 = fully under a roof. Polarity is
+  deliberate: an unbound uniform reads 0 in GLSL, so every failure mode lands on "today's
+  behaviour", matching `e_noshadowrecv` / `e_fpfade`. An "exposure" scalar where 0 meant shade would
+  black out every model if a bind ever failed.
+- `sh_stickylamp_t` gains `float shade` + `shadeinit`; `Sh_PropShadeFraction()` approaches the
+  frame's target exponentially with time constant **`r_shadows_sunfade` (new cvar, 0.25 s)**, so the
+  fade is framerate-independent. 120b's dropout rule carries over — a frame that cannot answer holds.
+- **The continuous input that was being discarded.** `R_PointSunVis` returns a real 0..1 and the
+  classification threw it away on the next line by thresholding it. It is now kept and remapped
+  piecewise so `r_shadows_propshadows_sunvis` stays exactly the half-way point — the discrete verdict
+  and the fraction therefore cross over together and cannot disagree. Maps with no SUNVIS lump get a
+  0/1 target and the time-smoothing alone.
+- **`SP_E_SUNDIR` now blends** lamp↔sun by the same fraction instead of selecting. This also settles
+  a real inconsistency: `Sh_EntityLampDir` keys on `e->lamp` alone and never on the in-shade verdict,
+  so a *sunlit* prop merely standing near a lamp was already being form-shaded by that lamp while
+  casting from the sun. At shade 0 the direction is now the sun regardless.
+- The shader fades **only** the sun self-shadow and the sun form-shade. The lamp block is untouched
+  on purpose — a prop indoors keeps its lamp shadow at full strength.
+
+**Structural change, load-bearing.** The classification moved *above* the lamp range gate, and
+`&& sh_nummaplights` was lifted out of the candidacy loop header down to just before the lamp pick.
+The loop body now produces a value the forward pass needs for **every** caster; under the old order
+anything not standing near a map lamp bailed at the range gate and was never classified — which is
+most casters, and all of them on a lamp-less map. `Sh_EntitySunShade` returns 0 for anything stale or
+unclassified, so the five paths on which `Sh_GeneratePropShadowsAtlas` may not run at all
+(`r_fakeshadows` lag, `r_lightprepass`, two culls, `r_shadows_slots > 1`) all land on "unchanged".
+
+**3. Always cast into the sun — `r_shadows_propshadows_suncast` (new cvar, default 1).**
+
+With the receive-side fade in place, an in-shade caster no longer has to *leave* the sun cascades to
+look right, so it now keeps throwing its sun shadow onto the world indoors. One cvar governs both
+exclusions — the `fs_entbucket` stamp and the `r_shadows_caster_sunvis` Phase-0 gate in
+`Sh_FakeShadowFilter` — because they answer the same question and splitting them would let
+deluxemapped maps keep evicting casters silently. `0` restores Patch 120a exactly.
+
+> **This is one change, not two.** Left in the cascades *without* the `e_sunshade` fade, an indoor
+> model self-shadows itself from a sun it cannot see — `defaultskin.glsl` samples the very cells the
+> caster renders into, and models have no `sunvis` term of any kind. Do not land the cvar without the
+> shader.
+
+> **Accepted trade-off (explicitly chosen).** Only a SUNVIS bake erases an indoor sun shadow on the
+> receiving floor, and **25 of 29 maps have none** — verified by scanning the BSPX lump directory of
+> every map: `LIGHTINGDIR` on 6 (2fort, fy_killzone, normals, notnormals, parkour, surf_testramps),
+> `SUNVIS` on 4 (2fort, fy_killzone, notnormals, **sunvistest**, the last carrying SUNVIS with no
+> LIGHTINGDIR). On the other 25, `suncast 1` will stamp a sun shadow on indoor floors.
+
+**Companion cfg changes** (`C:\FTEQuake\quakers\cfg\default.cfg`): `r_shadows_propshadows_suncast 1`
+and `r_shadows_sunfade 0.25` added, with the trade-off written into the comment block. The
+propshadows debug line now also reports `suncast=` and `shadefade=`.
+
+**Unrelated pre-existing crash found while boot-testing, NOT fixed:** the *client* binary run with
+`-dedicated` dies with `0xC0000094` (integer divide by zero) while loading any map carrying a
+`LIGHTINGDIR` lump — 2fort, parkour, normals — but loads `sunvistest` and `start` fine. It reproduces
+identically on the pre-120c binary, so it predates this work. The real dedicated server
+(`fteqwsv64.exe`, the `sv-rel` target) boots all of them correctly, which is why it had not been
+noticed.

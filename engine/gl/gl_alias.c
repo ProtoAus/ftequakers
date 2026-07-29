@@ -1873,6 +1873,55 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	return e->light_known-1;
 }
 
+//nettest (Patch 108/110): reconstruct an entity's dominant light direction in WORLD space, pointing TOWARD
+//the light.  R_CalcModelLighting above stores e->light_dir PROJECTED onto the entity's orthonormal axes
+//(the DotProduct block at the end of it), so the inverse is simply the axis-weighted sum.  Reconstructing
+//rather than storing keeps entity_t's layout frozen -- the prebuilt hl2/cod plugins build entity_t arrays
+//using their own compiled sizeof, so appending a field to it is an ABI break.
+//
+//SINGLE SOURCE OF TRUTH: both the SP_E_SUNDIR shader uniform (the per-prop sun form-shade, Patch 108) and
+//the Patch 110 fake-shadow direction bucketer call this, so the direction a prop is SHADED by and the
+//direction it CASTS its shadow along can never drift apart.
+//
+//Returns false when there is no per-entity direction to be had -- the caller must fall back to r_sun_dir:
+//  - no deluxemap (.lux/LIGHTINGDIR): LightPointValues returns a CONSTANT direction, which would look
+//    worse than the sun, so un-relit maps keep exactly their current appearance (zero regression).
+//  - RF_WEAPONMODEL: that branch projects through the VIEW basis first, so the plain inverse is wrong.
+//  - non-alias models: light_dir is only ever written by R_CalcModelLighting.
+//  - "nolightdir" (fullbright/abslight/lightstyle paths return early leaving light_dir at the {0,1,0}
+//    placeholder set on entry), or a degenerate zero-length sample.
+//Takes a CONST entity because the backend's shaderstate.curentity is const.  The R_CalcModelLighting call
+//below does mutate the entity, but only to fill its per-frame light memo -- the renderer performs that exact
+//same fill moments later in R_GAlias_DrawBatch, so the resulting state is identical either way.  Hence the
+//cast: logically const, physically a cache warm-up.
+qboolean R_EntityDominantLightDir(const entity_t *ce, vec3_t out)
+{
+	entity_t *e = (entity_t*)ce;
+
+	if (!cl.worldmodel || !cl.worldmodel->deluxdata)
+		return false;
+	if (!e->model || e->model->type != mod_alias)
+		return false;
+	if (e->flags & RF_WEAPONMODEL)
+		return false;
+
+	//CRITICAL: light_dir is filled at DRAW time (R_GAlias_DrawBatch below), and CL_LinkPacketEntities
+	//clears light_known every frame -- so a caller running EARLIER in the frame (the Patch 110 bucketer
+	//fires at the top of GLBE_DrawWorld, before any model is drawn) would otherwise read LAST frame's
+	//value, left in this cl_visedicts slot by whatever entity happened to occupy it.  This call is
+	//idempotent (the light_known guard) and Patch-105 origin-cached, so it moves existing work earlier
+	//in the frame rather than adding any.  Safe to hoist: every view-state dependency inside
+	//R_CalcModelLighting (r_refdef.vieworg, vpn/vright/vup) lives in the RF_WEAPONMODEL branch, which
+	//is rejected above.
+	if (R_CalcModelLighting(e, e->model))
+		return false;	//returns "nolightdir"
+
+	VectorScale(e->axis[0], e->light_dir[0], out);
+	VectorMA(out, e->light_dir[1], e->axis[1], out);
+	VectorMA(out, e->light_dir[2], e->axis[2], out);
+	return VectorNormalize(out) != 0;
+}
+
 void R_GAlias_DrawBatch(batch_t *batch)
 {
 	entity_t *e;
@@ -3237,6 +3286,13 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 			if (ent->keynum == dl->key && ent->keynum)	//shadows are not cast from the entity that owns the light. it is expected to be inside.
 				continue;
 			if (ent->model && ent->model->engineflags & MDLF_FLAME)
+				continue;
+			//nettest P110: the multi-direction fake-shadow atlas renders one cell per cast direction,
+			//and each caster belongs to exactly ONE of them -- otherwise every prop would be drawn into
+			//every cell and pick up all N directions at once.  Placed before the EdictInFatPVS call
+			//below so rejected entities don't pay for the PVS walk.  Returns 1 for every other
+			//BEM_DEPTHONLY pass (the real rtlight shadow maps), which must stay unfiltered.
+			if (bemode == BEM_DEPTHONLY && !Sh_FakeShadowFilter(i))
 				continue;
 		}
 #endif

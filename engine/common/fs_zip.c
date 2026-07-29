@@ -1,6 +1,10 @@
 #include "quakedef.h"
 #include "fs.h"
 
+//raw-LZMA1 decode (zip compression method 14, used by Source/Strata packed BSP pakfiles). Lives in
+//fs_lzma.c so the LZMA SDK's 7z type universe never enters this translation unit. Returns 1 on success.
+int FS_LZMA_DecodeRaw(unsigned char *dst, size_t dstlen, const unsigned char *src, size_t srclen, const unsigned char *props, unsigned propslen);
+
 //#define AVAIL_BZLIB
 //#define DYNAMIC_BZLIB
 
@@ -659,8 +663,9 @@ typedef struct
 #define ZFL_CORRUPT		(1u<<4)	//file is corrupt or otherwise unreadable (usually just means we don't support reading it rather than actually corrupt, but hey).
 #define ZFL_WEAKENCRYPT	(1u<<5)	//traditional zip encryption
 #define ZFL_DEFLATE64D	(1u<<6)	//need to use zlib's 'inflateBack9' stuff.
+#define ZFL_LZMA		(1u<<7)	//lzma1 (zip method 14 - Source/Strata packed bsps, and 7-zip). one-shot decode via fs_lzma.c
 
-#define ZFL_COMPRESSIONTYPE (ZFL_STORED|ZFL_CORRUPT|ZFL_DEFLATED|ZFL_DEFLATE64D|ZFL_BZIP2)
+#define ZFL_COMPRESSIONTYPE (ZFL_STORED|ZFL_CORRUPT|ZFL_DEFLATED|ZFL_DEFLATE64D|ZFL_BZIP2|ZFL_LZMA)
 
 
 typedef struct zipfile_s
@@ -1625,6 +1630,49 @@ static vfsfile_t *QDECL FSZIP_OpenVFS(searchpathfuncs_t *handle, flocation_t *lo
 		}
 	}
 
+	if (flags & ZFL_LZMA)
+	{	//Source/Strata pakfiles store their vmt/vtf/mdl with zip method 14. PKWARE zip-lzma framing:
+		//2 version bytes, a u16 property size (=5), that many LZMA property bytes, then a raw LZMA1 stream
+		//whose decompressed length is pf->filelen. One-shot decode into a memory pipe -- each packed file
+		//is opened and closed individually, so peak extra RAM is just the largest single entry.
+		vfsfile_t *tmp = NULL;
+		qofs_t startpos = vfsz->startpos;
+		qofs_t csize = datasize;
+		qofs_t usize = vfsz->length;
+		unsigned int propslen;
+		qbyte *cbuf, *ubuf;
+		Z_Free(vfsz);
+
+		if (csize < 9 || !usize)
+			return NULL;
+		cbuf = Z_Malloc(csize);
+		ubuf = Z_Malloc(usize);
+		if (Sys_LockMutex(zip->mutex))
+		{
+			VFS_SEEK(zip->raw, startpos);
+			if ((qofs_t)VFS_READ(zip->raw, cbuf, csize) != csize)
+				csize = 0;	//short read -> treat as decode failure below
+			Sys_UnlockMutex(zip->mutex);
+		}
+		else
+			csize = 0;
+
+		propslen = csize ? (cbuf[2] | (cbuf[3]<<8)) : 0;
+		if (csize >= (qofs_t)4+propslen && propslen >= 5 &&
+			FS_LZMA_DecodeRaw(ubuf, usize, cbuf+4+propslen, csize-4-propslen, cbuf+4, propslen))
+		{
+			tmp = VFSPIPE_Open(1, true);
+			if (tmp)
+				VFS_WRITE(tmp, ubuf, usize);
+		}
+		else
+			Con_Printf(CON_WARNING"%s:%s: zip-lzma decode failed\n", COM_SkipPath(zip->filename), pf->name);
+
+		Z_Free(cbuf);
+		Z_Free(ubuf);
+		return tmp;
+	}
+
 	FTE_Atomic32_Inc(&zip->references);
 	return (vfsfile_t*)vfsz;
 }
@@ -1827,6 +1875,8 @@ static qboolean FSZIP_ValidateLocalHeader(zipfile_t *zip, zpackfile_t *zfile, qo
 	if (local.cmethod == 12)
 		return (zfile->flags & ZFL_COMPRESSIONTYPE) == ZFL_BZIP2;
 #endif
+	if (local.cmethod == 14)	//lzma1 - decoded one-shot in FSZIP_OpenVFS via fs_lzma.c
+		return (zfile->flags & ZFL_COMPRESSIONTYPE) == ZFL_LZMA;
 	return false;	//some other method that we don't know.
 }
 
@@ -2007,8 +2057,8 @@ static qboolean FSZIP_ReadCentralEntry(zipfile_t *zip, qbyte *data, struct zipce
 	//10: implode
 	else if (entry->cmethod == 12)	//12: bzip2
 		entry->flags |= ZFL_BZIP2;
-//	else if (entry->cmethod == 14)
-//		entry->flags |= ZFL_LZMA;
+	else if (entry->cmethod == 14)	//14: lzma1 (Source/Strata packed bsps store their vmt/vtf/mdl this way)
+		entry->flags |= ZFL_LZMA;
 	//19: lz77
 	//97: wavpack
 	//98: ppmd

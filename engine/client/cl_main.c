@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_main.c  -- client main loop
 
 #include "quakedef.h"
+#include "qkupdate.h"
 #include "winquake.h"
 #include <sys/types.h>
 #include "netinc.h"
@@ -7839,7 +7840,13 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 //		int cfg = COM_FDepthFile ("config.cfg", true);
 		int q3cfg = COM_FDepthFile ("q3config.cfg", true);
 	//	Cbuf_AddText ("bind ` toggleconsole\n", RESTRICT_LOCAL);	//in case default.cfg does not exist. :(
-		Cbuf_AddText ("exec default.cfg\n", RESTRICT_LOCAL);
+		//quakers: prefer <gamedir>/cfg/default.cfg so the mod can keep every config in one folder.
+		//Falls back to the root name when absent, so stock games and a cfg-less install boot
+		//exactly as before. Same COM_FileSize idiom the dedicated server already uses below.
+		if (COM_FileSize("cfg/default.cfg") != -1)
+			Cbuf_AddText ("exec cfg/default.cfg\n", RESTRICT_LOCAL);
+		else
+			Cbuf_AddText ("exec default.cfg\n", RESTRICT_LOCAL);
 		if (q3cfg <= def && q3cfg!=FDEPTH_MISSING)
 			Cbuf_AddText ("exec q3config.cfg\n", RESTRICT_LOCAL);
 		else if (!FS_FileIsAddonOnly("config.cfg"))	//nettest: skip a foreign config.cfg from a fs_load addon (mounted game)
@@ -8156,6 +8163,7 @@ void Host_Shutdown(void)
 	CL_UseIndepPhysics(false);
 
 #ifdef WEBCLIENT
+	QKU_Shutdown();	//quakers: before the terminate, so no late callback lands on freed plan state
 	HTTP_CL_Terminate();
 #endif
 
