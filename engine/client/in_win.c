@@ -296,6 +296,11 @@ static int rawmicecount;
 static int rawkbdcount;
 static RAWINPUT *raw;
 static int ribuffersize;
+//nettest: Sys_DoubleTime() when raw input last reported a transition for each of the
+//five buttons it has usButtonFlags for.  Read only by INS_MouseEvent, to tell a genuine
+//duplicate legacy message from a device raw input never enumerated -- see the comment
+//there.
+static double rawbuttontime[5];
 
 static cvar_t in_rawinput_mice = CVARD("in_rawinput", "0", "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse)");
 static cvar_t in_rawinput_keyboard = CVARD("in_rawinput_keyboard", "0", "Enables rawinput support for keyboards in XP onwards as well as just mice.");
@@ -1492,7 +1497,26 @@ void INS_MouseEvent (int mstate)
 			if ( (mstate & (1<<i)) &&
 				!(sysmouse.oldbuttons & (1<<i)) )
 			{
-				if (!rawmicecount)
+				//nettest: this used to be `if (!rawmicecount) ... else mstate &= ~(1<<i);`,
+				//which discarded the legacy press whenever ANY mouse was raw-enumerated.
+				//rawmicecount is a GLOBAL count and a legacy WM_*BUTTON* does not say which
+				//device sent it, so a device raw input never enumerated lost its buttons
+				//because some *other* device was covered.  A Windows precision touchpad is
+				//a HID digitizer, not a RIM_TYPEMOUSE, so it emits no RI_MOUSE_BUTTON_*
+				//flags and the legacy message was the only press it had -- dropping it
+				//produced no K_MOUSE1 at all, for taps AND for press-and-hold.  Motion was
+				//unaffected (the free-cursor path reads GetCursorPos directly), so the
+				//cursor still tracked and menu hover still highlighted: it presented as a
+				//dead hit-test rather than as missing input, which is what made it hard to
+				//find.  Worked around downstream with in_rawinput 0.
+				//
+				//WM_INPUT for a physical click is delivered before the synthesised legacy
+				//message, so a raw transition on this button in the last 100ms identifies
+				//the real duplicate.  Buttons past the five raw reports usButtonFlags for
+				//keep the old blanket behaviour, since those arrive via ulRawButtons below
+				//and would otherwise double up.
+				if (!rawmicecount ||
+					(i < (int)countof(rawbuttontime) && Sys_DoubleTime() - rawbuttontime[i] > 0.1))
 					IN_KeyEvent (sysmouse.qdeviceid, true, K_MOUSE1 + i, 0);
 				else
 					mstate &= ~(1<<i);
@@ -1699,6 +1723,24 @@ void INS_RawInput_MouseRead(void)
 	}
 
 	multicursor_active[mouse->qdeviceid&7] = 0;
+
+	{	//nettest: note which buttons raw input actually accounted for, so INS_MouseEvent
+		//can drop the matching legacy message and only that one.  Deliberately outside
+		//the vid.activeapp test below: releases are dispatched even when unfocused, and
+		//a release we failed to record would let the next legacy press through as a dupe.
+		int b;
+		static const unsigned short btnflags[countof(rawbuttontime)] =
+		{
+			RI_MOUSE_BUTTON_1_DOWN|RI_MOUSE_BUTTON_1_UP,
+			RI_MOUSE_BUTTON_2_DOWN|RI_MOUSE_BUTTON_2_UP,
+			RI_MOUSE_BUTTON_3_DOWN|RI_MOUSE_BUTTON_3_UP,
+			RI_MOUSE_BUTTON_4_DOWN|RI_MOUSE_BUTTON_4_UP,
+			RI_MOUSE_BUTTON_5_DOWN|RI_MOUSE_BUTTON_5_UP
+		};
+		for (b = 0; b < (int)countof(btnflags); b++)
+			if (raw->data.mouse.usButtonFlags & btnflags[b])
+				rawbuttontime[b] = Sys_DoubleTime();
+	}
 
 	if (vid.activeapp)
 	{
