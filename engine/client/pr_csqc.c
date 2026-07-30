@@ -8894,11 +8894,22 @@ qboolean CSQC_DrawView(void)
 	if (csqcg.intermission_time)
 		*csqcg.intermission_time = cl.completed_time;
 
+	//nettest: PREDICTION bucket.  These three sit inside the CSQC Drawing bracket and in no child
+	//bucket, so they were part of the ~325us that CSQC Drawing carries above its measured children.
+	//Suspected to be dominated by CL_PredictMove tracing against every SOLID_PHYSICS_TRIMESH prop
+	//with no broadphase: PM_TransformedHullCheck's convex-hull branch (common/pmovetst.c ~407)
+	//calls PM_HullTrace and returns BEFORE the cheap AABB rejects at ~436, and the rotated-model
+	//path has no reject at all.  Bracketed to find out whether that is actually where the time is
+	//before writing a broadphase for it.
+	{
+	RSpeedMark();
 	//work out which packet entities are solid
 	CL_SetSolidEntities ();
 	CL_TransitionEntities();
 	if (cl.worldmodel)
 		CL_PredictMove ();
+	RSpeedEnd(RSPEED_CSQC_PREDICT);
+	}
 
 	if (csqcg.cltime)
 		*csqcg.cltime = realtime-cl.mapstarttime;
@@ -8954,10 +8965,29 @@ qboolean CSQC_DrawView(void)
 		}
 		G_FLOAT(OFS_PARM2) = !Key_Dest_Has(kdm_menu|kdm_cwindows) && !r_refdef.eyeoffset[0] && !r_refdef.eyeoffset[1];
 
+		//nettest: QCVIEW bucket.  CSQC Drawing carries ~434us above the sum of its measured
+		//children; that is the mod's QC plus this function's engine-side prologue/epilogue, and
+		//they want different fixes.  This bracket contains the QC AND every builtin it calls
+		//(addentities, renderscene, ...), so:
+		//    CSQC Drawing - QCVIEW              = engine-side setup outside the QC call
+		//    QCVIEW - (the renderscene children) = QC statement time + builtin overhead
+		//Note FTE charges builtin time to the QC function that called it (qclib/pr_comp.h:719-720
+		//-- profilechildtime excludes builtins; execloop.h:919-945 -- builtins bypass
+		//PR_EnterFunction), which is exactly why profile_csqc could never answer this on its own.
+		//MUST be a brace block with RSpeedMark(), NOT a bare RSpeedRemark().  RSpeedRemark only
+		//ASSIGNS the existing `rsp` (render.h), and CSQC_DrawView's own RSpeedRemark at the top of
+		//this function owns that variable for the whole RSPEED_CSQCREDRAW bracket -- remarking here
+		//silently reset the parent's start time, so "CSQC Drawing" measured from this call instead
+		//of from the top of the function and came out identical to this child.  RSpeedMark declares
+		//a fresh shadowing `rsp` scoped to the block, which is what nesting requires.
+		{
+		RSpeedMark();
 		if (csqcg.CSQC_UpdateViewLoading && ((cls.state && cls.state < ca_active) || scr_drawloading || loading_stage))
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateViewLoading);
 		else
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateView);
+		RSpeedEnd(RSPEED_CSQC_QCVIEW);
+		}
 	}
 
 	if (*r_refdef.rt_destcolour[0].texname)

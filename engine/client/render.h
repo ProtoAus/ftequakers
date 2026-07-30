@@ -808,6 +808,11 @@ enum {
 	//between them these two should account for essentially all of it.
 	RSPEED_SHADOW_CLASSIFY,
 	RSPEED_SHADOW_ENTDRAW,
+	//nettest: CL_SetSolidEntities + CL_TransitionEntities + CL_PredictMove, which run inside the
+	//CSQC Drawing bracket but in no child bucket.  See pr_csqc.c.
+	RSPEED_CSQC_PREDICT,
+	//nettest: the PR_ExecuteProgram(CSQC_UpdateView) call itself, builtins included. See pr_csqc.c.
+	RSPEED_CSQC_QCVIEW,
 	RSPEED_POSTPROC,	//nettest: FBO resolve + postproc chain + bloom -- was in NO bucket
 	RSPEED_RSPEEDSHOW,	//nettest: the cost of DRAWING this very table -- was in NO bucket
 	//nettest: the five gaps in GLSCR_UpdateScreen.  Between them these cover EVERY statement in

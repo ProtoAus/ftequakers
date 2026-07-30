@@ -82,6 +82,8 @@ void RSpeedShow(void)
 	RSpNames[RSPEED_FAKESHADOWS]	= "  Shadow generation";
 	RSpNames[RSPEED_SHADOW_CLASSIFY]= "   Shadow classify";
 	RSpNames[RSPEED_SHADOW_ENTDRAW]	= "   Shadow entdraw";
+	RSpNames[RSPEED_CSQC_PREDICT]	= "  Prediction";
+	RSpNames[RSPEED_CSQC_QCVIEW]	= "  QC UpdateView";
 	RSpNames[RSPEED_POSTPROC]		= "  Postproc/resolve";
 	RSpNames[RSPEED_RSPEEDSHOW]		= " r_speeds overhead";
 	RSpNames[RSPEED_SCR_SETUP]		= " Screen setup";
