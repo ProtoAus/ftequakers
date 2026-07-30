@@ -4412,3 +4412,75 @@ The adversarial verification pass on these four died on a session limit, so they
 than findings. Given that `r_props_shadowdist 1200` looked well-reasoned and culled *exactly zero*
 props — the `PP_CULL_HYST` offset makes the effective radius `value + 192`, and the farthest prop was
 1371 — each should be measured before any code is written.
+
+---
+
+## Patch 124 — rawinput discarded legacy mouse buttons for devices it never enumerated  *(APPLIED — `m-rel`; no header change, plugins unaffected)*
+
+> **Numbering note.** The commit that introduced this (`c9305a293`) is titled "Patch 123" in error —
+> 123 was already taken by the frame-pacing work (`c69b933c3`, plus `2628b026f` = 123e). It is
+> Patch 124. History was left alone rather than force-pushed, because a second machine has the
+> branch checked out and is building from it.
+
+**Symptom.** Menus were completely unclickable on a laptop. Taps *and* press-and-hold produced no
+`K_MOUSE1` at all. `in_rawinput 0` was the interim workaround.
+
+**Cause.** `INS_MouseEvent` decided whether to honour a legacy `WM_*BUTTON*` press with
+`if (!rawmicecount) IN_KeyEvent(...); else mstate &= ~(1<<i);`. `rawmicecount` is a **global** count
+of raw-enumerated mice, and a legacy button message does not say which device produced it — so the
+moment *any* mouse was raw-covered, *every* device's legacy buttons were discarded, including devices
+raw input had never enumerated.
+
+A Windows precision touchpad is a HID digitizer, not a `RIM_TYPEMOUSE`. It never reports
+`RI_MOUSE_BUTTON_*` flags, so `INS_RawInput_MouseRead` has nothing to deliver on its behalf and the
+legacy message was the only press it had.
+
+**Why it was hard to find.** Motion was unaffected. The free-cursor path (`mouseactive == false`,
+which `setcursormode(TRUE)` selects for menus) reads `GetCursorPos` directly with no rawinput
+involvement, so the cursor tracked normally and SUI hover highlighting followed it correctly. It
+presented as a **dead hit-test rather than as missing input**. ENTER (keyboard) and the touchscreen
+(`K_TOUCH`) both kept working, pointing further away from the button path.
+
+**Fix.** Record what raw input actually accounted for, per button, for the five buttons it has
+`usButtonFlags` for, and drop the legacy message only for those. Buttons past those five keep the old
+blanket behaviour — they arrive via `ulRawButtons` and would otherwise double up.
+
+Two pieces of state are required, and the second was missing from the first cut:
+
+| | purpose |
+|---|---|
+| `rawbuttontime[5]` | `Sys_DoubleTime()` of the last raw transition. `WM_INPUT` for a physical click precedes the synthesised legacy message, so a transition within 100 ms identifies the genuine duplicate — from the very first press, with no warm-up click. |
+| `rawbuttondown[5]` | whether raw currently holds it down. |
+
+**`rawbuttondown` is not redundant.** `WM_MOUSEMOVE` falls into the same window-proc `case` block as
+the button messages (`gl/gl_vidnt.c`, and the d3d/sw equivalents) and calls `INS_MouseEvent` with the
+live `MK_*` flags. A suppressed press never reaches `sysmouse.oldbuttons` — the `else` branch clears
+the bit out of `mstate`, and `oldbuttons = mstate` runs at the end. So on the timestamp alone:
+
+1. Press and hold on a raw mouse → raw stamps the time, legacy press correctly suppressed,
+   `oldbuttons` bit stays **clear**.
+2. Raw reports *transitions*, not held state, so no new stamp arrives while it is held.
+3. 100 ms later any `WM_MOUSEMOVE` carries the button bit, `oldbuttons` is clear, the time test now
+   passes — **a spurious second press on every drag.**
+
+Tracking the hold closes it. `DOWN` is applied before `UP` within a packet so a click fast enough to
+report both edges at once settles as released rather than latching down forever, and both arrays are
+cleared in `INS_RawInput_DeInit` and at re-enumeration — a device unplugged mid-press never sends its
+`UP`, and a latched `rawbuttondown` would suppress that button's legacy messages permanently,
+reinstating the very bug this exists to fix.
+
+The recording block sits deliberately **outside** the `vid.activeapp` test in
+`INS_RawInput_MouseRead`: releases are dispatched even when unfocused, and a release we failed to
+record would let the next legacy press through as a duplicate.
+
+**Rejected:** detecting touchpads by device name — a heuristic arms race against touchpad drivers,
+where this simply stops discarding input that nothing accounted for.
+
+**Residual risk.** Legacy messages carry no device id, so if a raw mouse button is genuinely held at
+the instant a touchpad tap arrives, the tap is still suppressed. That ambiguity is not resolvable
+from a legacy message and is not worth chasing.
+
+**Testing status.** Compiles clean (`m-rel FTE_TARGET=win64`, gcc 16.1.0) adding no new warnings — 3
+before, 3 after, all pre-existing (two `-Waddress` on `sysname`, one `-Wenum-int-mismatch` on
+`keydown`). **Neither the touchpad tap with `in_rawinput 1` nor the drag-with-held-button regression
+has been exercised on hardware.** Both need a physical test.
