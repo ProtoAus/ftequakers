@@ -829,6 +829,11 @@ void Renderer_Init(void)
 	currentrendererstate.renderer = NULL;
 	qrenderer = QR_NONE;
 
+	//nettest Patch 120d: set up the renderer-INDEPENDENT image state here, because Image_Init only
+	//ever runs from R_ApplyRenderer's graphics branch and a dedicated client never takes it -- yet
+	//the model and wad loaders still run.  Host_Init calls Renderer_Init in both modes.
+	Image_InitCore();
+
 	r_blockvidrestart = true;
 	Cmd_AddCommand("setrenderer", R_SetRenderer_f);
 	Cmd_AddCommand("vid_restart", R_RestartRenderer_f);

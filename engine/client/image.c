@@ -117,7 +117,14 @@ extern cvar_t r_shadow_heightscale_bumpmap;
 
 
 static bucket_t *imagetablebuckets[256];
-static hashtable_t imagetable;
+//nettest Patch 120d: STATICALLY initialised, not left to Image_Init.
+//Image_Init runs only from R_ApplyRenderer, i.e. only once a real renderer is up.  But the model
+//loaders call Image_FindTexture unconditionally, so a CLIENT build started with -dedicated (which
+//never applies a renderer) reached Hash_GetInsensitive with numbuckets == 0 and died in `div` --
+//an instant SIGFPE / 0xC0000094 on a worker thread the moment any real map was loaded.
+//A static init costs nothing: imagetablebuckets is static storage and therefore already zero-filled,
+//which is exactly Hash_InitTable's documented precondition ("mem must be 0 filled").
+static hashtable_t imagetable = {sizeof(imagetablebuckets)/sizeof(imagetablebuckets[0]), imagetablebuckets};
 static image_t *imagelist;
 #endif
 
@@ -4881,13 +4888,20 @@ static void Image_LoadTextureMips(void *ctx, void *data, size_t a, size_t b)
 	if ((tex->flags & IF_TEXTYPEMASK)==IF_TEXTYPE_ANY)
 		tex->flags = (tex->flags&~IF_TEXTYPEMASK)|(mips->type<<IF_TEXTYPESHIFT);
 
-	if (rf->IMG_LoadTextureMips(tex, mips))
+	//nettest Patch 120d: `rf` (currentrendererstate.renderer) is NULL when no renderer was ever
+	//applied -- a client build run with -dedicated.  The model loaders still queue texture uploads,
+	//and COM_WorkerPartialSync drains that queue on the main thread, so this ran with rf == NULL and
+	//took an access violation on every map load.  IMG_UpdateFiltering below already guards for it;
+	//these did not.  With no renderer there is genuinely nowhere to upload to, so the existing
+	//failure path is the right answer.
+	if (rf && rf->IMG_LoadTextureMips(tex, mips))
 	{
 		tex->format = mips->encoding;
 		tex->status = TEX_LOADED;
 	}
 	else
 	{	//failure can happen because a) lost device. b) out of device memory. c) format not supported.
+		//d) no renderer at all (dedicated).
 		//FIXME: handle oom properly.
 		tex->format = TF_INVALID;
 		tex->status = TEX_FAILED;
@@ -14975,7 +14989,8 @@ void Image_Upload			(texid_t tex, uploadfmt_t fmt, void *data, void *palette, in
 		return;
 	Image_GenerateMips(&mips, flags);
 	Image_ChangeFormatFlags(&mips, flags, fmt, tex->ident);
-	rf->IMG_LoadTextureMips(tex, &mips);
+	if (rf)	//Patch 120d: NULL with no renderer applied (-dedicated); nowhere to upload to
+		rf->IMG_LoadTextureMips(tex, &mips);
 	tex->format = fmt;
 	tex->width = width;
 	tex->height = height;
@@ -15066,7 +15081,8 @@ qboolean Image_UnloadTexture(image_t *tex)
 {
 	if (tex->status == TEX_LOADED)
 	{
-		rf->IMG_DestroyTexture(tex);
+		if (rf)	//Patch 120d: nothing was ever uploaded without a renderer, so nothing to destroy
+			rf->IMG_DestroyTexture(tex);
 		tex->status = TEX_NOTLOADED;
 		return true;
 	}
@@ -15392,18 +15408,35 @@ void Image_Shutdown(void)
 		imagelist = tex->next;
 		if (tex->status == TEX_LOADED)
 			j++;
-		rf->IMG_DestroyTexture(tex);
+		if (rf)	//Patch 120d: see Image_UnloadTexture
+			rf->IMG_DestroyTexture(tex);
 		Z_Free(tex);
 		i++;
 	}
 	if (i)
 		Con_DPrintf("Destroyed %i/%i images\n", j, i);
 
-	if (wadmutex)
-		Sys_DestroyMutex(wadmutex);
-	wadmutex = NULL;
+	//Patch 120d: wadmutex is NOT destroyed here any more.  It is created once by Image_InitCore at
+	//Host_Init and is process-lifetime state, because the wad loaders run with or without a renderer.
+	//Destroying it on renderer teardown left six unguarded Sys_LockMutex(wadmutex) sites in wad.c
+	//holding a NULL, which is what crashed a dedicated client in W_GetTexture.  Keeping it costs one
+	//critical section for the life of the process and removes the whole window.
 }
 #endif
+
+//nettest Patch 120d: the part of Image_Init that has NOTHING to do with having a renderer.
+//Image_Init is only reached from R_ApplyRenderer, i.e. only once a renderer is applied -- but the
+//model/wad loaders run regardless, so a client build started with -dedicated used the image
+//subsystem with none of its state set up.  That produced a string of crashes (an uninitialised
+//hash table, then a NULL wad mutex) each of which looked like a separate bug and was really this
+//one.  Called from Renderer_Init, which Host_Init runs in BOTH modes.  Idempotent.
+void Image_InitCore(void)
+{
+#ifdef HAVE_CLIENT
+	if (!wadmutex)
+		wadmutex = Sys_CreateMutex();
+#endif
+}
 
 //may not create any images yet.
 void Image_Init(void)
@@ -15424,9 +15457,15 @@ void Image_Init(void)
 	}
 
 #ifdef HAVE_CLIENT
-	wadmutex = Sys_CreateMutex();
-	memset(imagetablebuckets, 0, sizeof(imagetablebuckets));
-	Hash_InitTable(&imagetable, sizeof(imagetablebuckets)/sizeof(imagetablebuckets[0]), imagetablebuckets);
+	Image_InitCore();	//Patch 120d: idempotent, and already done if we booted headless
+	//Patch 120d: the table is now initialised statically (see its declaration), so DON'T clear it here.
+	//Blindly re-initing would drop anything already registered -- and something can now legitimately
+	//register before the renderer comes up, which is the whole point of the static init.
+	if (!imagetable.numbuckets)
+	{
+		memset(imagetablebuckets, 0, sizeof(imagetablebuckets));
+		Hash_InitTable(&imagetable, sizeof(imagetablebuckets)/sizeof(imagetablebuckets[0]), imagetablebuckets);
+	}
 
 	Cmd_AddCommandD("r_imagelist", Image_List_f, "Prints out a list of the currently-known textures.");
 	Cmd_AddCommandD("r_imageformats", Image_Formats_f, "Prints out a list of the usable hardware pixel formats.");

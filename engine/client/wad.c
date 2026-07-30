@@ -24,6 +24,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 void *wadmutex;
 
+//nettest Patch 120d: wadmutex is created by Image_InitCore and destroyed by nothing, but it is still
+//possible to reach the wad code before it exists (or, historically, after Image_Shutdown NULLed it).
+//Two of the ten lock sites in this file already open-coded `if (wadmutex)`; the other eight did not,
+//and Sys_LockMutex(NULL) is an EnterCriticalSection(NULL) -- an instant access violation, which is
+//what a client build run with -dedicated hit in W_GetTexture on every map load.  One idiom now, so a
+//new call site cannot get it wrong.  No mutex simply means no contention worth serialising.
+#define W_LockWads()   do { if (wadmutex) Sys_LockMutex(wadmutex);   } while(0)
+#define W_UnlockWads() do { if (wadmutex) Sys_UnlockMutex(wadmutex); } while(0)
+
 #ifndef PACKAGE_TEXWAD
 void Wads_Flush (void){}
 qboolean Wad_NextDownload (void){return true;}
@@ -253,8 +262,7 @@ static wadfile_t *openwadfiles;
 void Wads_Flush (void)
 {
 	wadfile_t *wf;
-	if (wadmutex)
-		Sys_LockMutex(wadmutex);
+	W_LockWads();
 	while(openwadfiles)
 	{
 		VFS_CLOSE(openwadfiles->file);
@@ -265,8 +273,7 @@ void Wads_Flush (void)
 	}
 
 	numwadtextures=0;
-	if (wadmutex)
-		Sys_UnlockMutex(wadmutex);
+	W_UnlockWads();
 }
 /*
 ====================
@@ -565,7 +572,7 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 
 	texname[16] = 0;
 	W_CleanupName (name, texname);
-	Sys_LockMutex(wadmutex);
+	W_LockWads();
 	for (i = 0;i < numwadtextures;i++)
 	{
 		if (!strcmp(texname, texwadlump[i].name)) // found it
@@ -577,7 +584,7 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 				tex = BZ_Malloc(texwadlump[i].size);	//temp buffer for disk info (was hunk_tempalloc, but that wiped loading maps and the like
 				if (tex && VFS_READ(file, tex, texwadlump[i].size) == texwadlump[i].size)
 				{
-					Sys_UnlockMutex(wadmutex);
+					W_UnlockWads();
 
 #ifdef IMAGEFMT_PVR
 					//hldc, pvr texture
@@ -603,7 +610,7 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 			break;
 		}
 	}	
-	Sys_UnlockMutex(wadmutex);
+	W_UnlockWads();
 	return NULL;
 }
 
@@ -616,7 +623,7 @@ miptex_t *W_GetMipTex(const char *name)
 
 	texname[16] = 0;
 	W_CleanupName (name, texname);
-	Sys_LockMutex(wadmutex);
+	W_LockWads();
 	for (i = 0;i < numwadtextures;i++)
 	{
 		if (!strcmp(texname, texwadlump[i].name)) // found it
@@ -627,7 +634,7 @@ miptex_t *W_GetMipTex(const char *name)
 				tex = BZ_Malloc(texwadlump[i].size);	//temp buffer for disk info (was hunk_tempalloc, but that wiped loading maps and the like
 				if (tex && VFS_READ(file, tex, texwadlump[i].size) == texwadlump[i].size)
 				{
-					Sys_UnlockMutex(wadmutex);
+					W_UnlockWads();
 					tex->width = LittleLong(tex->width);
 					tex->height = LittleLong(tex->height);
 					for (j = 0;j < MIPLEVELS;j++)
@@ -639,7 +646,7 @@ miptex_t *W_GetMipTex(const char *name)
 			break;
 		}
 	}	
-	Sys_UnlockMutex(wadmutex);
+	W_UnlockWads();
 	return NULL;
 }
 
@@ -648,7 +655,7 @@ void WAD_ImageList_f(void)
 	wadfile_t *wad;
 	int i;
 	char *match = Cmd_Argv(1);
-	Sys_LockMutex(wadmutex);
+	W_LockWads();
 	for (i = 0;i < numwadtextures;i++)
 	{
 		if (*match && !wildcmp(match, texwadlump[i].name))
@@ -658,7 +665,7 @@ void WAD_ImageList_f(void)
 				break;
 		Con_Printf("^[\\img\\%s\\s\\%i\\tip\\From inside %s^] %s\n", texwadlump[i].name, 64, wad?wad->name:"<unknown>", texwadlump[i].name);
 	}
-	Sys_UnlockMutex(wadmutex);
+	W_UnlockWads();
 }
 
 typedef struct mapgroup_s {
