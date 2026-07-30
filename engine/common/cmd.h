@@ -158,6 +158,7 @@ qboolean	Cmd_AddCommandAD (const char *cmd_name, xcommand_t function, xcommandar
 // as a clc_stringcmd instead of executed locally
 
 qboolean Cmd_Exists (const char *cmd_name);
+qboolean Cmd_IsKnownName (const char *name);	//nettest: command|alias|cvar lookup that matches the executor. Use instead of the tab-completion list, which truncates at 50 matches.
 char *Cmd_AliasExist(const char *name, int restrictionlevel);
 // used by the cvar code to check for cvar / command name overlap
 

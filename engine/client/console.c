@@ -67,7 +67,7 @@ static cvar_t		con_notify_y = CVAR("con_notify_y","0");
 static cvar_t		con_notify_w = CVAR("con_notify_w","1");
 static cvar_t		con_centernotify = CVAR("con_centernotify", "0");
 static cvar_t		con_displaypossibilities = CVAR("con_displaypossibilities", "1");
-static cvar_t		con_showcompletion = CVAR("con_showcompletion", "1");
+cvar_t				con_showcompletion = CVAR("con_showcompletion", "1");	//nettest: no longer static - keys.c gates right-arrow-accept on it
 static cvar_t		con_maxlines = CVAR("con_maxlines", "1024");
 cvar_t				cl_chatmode = CVARD("cl_chatmode", "2", "0(nq) - everything is assumed to be a console command. prefix with 'say', or just use a messagemode bind\n1(q3) - everything is assumed to be chat, unless its prefixed with a /\n2(qw) - anything explicitly recognised as a command will be used as a command, anything unrecognised will be a chat message.\n/ prefix is supported in all cases.\nctrl held when pressing enter always makes any implicit chat into team chat instead.");
 static cvar_t		con_numnotifylines_chat = CVAR("con_numnotifylines_chat", "8");
@@ -77,6 +77,10 @@ static cvar_t		con_timestamps = CVAR("con_timestamps", "0");
 static cvar_t		con_timeformat = CVAR("con_timeformat", "(%H:%M:%S) ");
 cvar_t				con_textsize = CVARD("con_textsize", "8", "Resize the console text to be a different height, scaled separately from the hud. The value is the height in (virtual) pixels.");
 static cvar_t		con_savehistory = CVARD("con_savehistory", "1", "Write/update conhistory.txt");
+//nettest: closing the console used to throw away where you were reading. It still has to DRAW the
+//live tail while hidden (that surface doubles as the notify overlay under con_window 1), so the
+//position is parked for the duration of the draw and restored immediately after.
+static cvar_t		con_keepscroll = CVARD("con_keepscroll", "1", "Remember the console scrollback position when you close the console, so reopening it lands where you left off. 0 = always reopen at the live end.");
 extern cvar_t log_developer;
 
 void con_window_cb(cvar_t *var, char *oldval)
@@ -872,6 +876,7 @@ void Con_Init (void)
 	Cvar_Register (&con_textsize, "Console controls");
 	Cvar_Register (&con_window, "Console controls");
 	Cvar_Register (&con_savehistory, "Console controls");
+	Cvar_Register (&con_keepscroll, "Console controls");
 	Cvar_ForceCallback(&con_window);
 
 	Cmd_AddCommand ("toggleconsole", Con_ToggleConsole_f);
@@ -3140,6 +3145,8 @@ void Con_DrawConsole (int lines, qboolean noback)
 	for (w = con_head; w; w = w->next)
 	{
 		srect_t srect;
+		int keepback = -1;	//nettest: con_keepscroll - how many lines above the live tail the user was reading. -1 = not scrolled / disabled.
+		float keepscroll = 0;
 		if ((w->flags & (CONF_HIDDEN|CONF_ISWINDOW)) != CONF_ISWINDOW)
 			continue;
 
@@ -3295,7 +3302,24 @@ void Con_DrawConsole (int lines, qboolean noback)
 		else
 		{
 			w->buttonsdown = 0;
-			w->display = w->current;	//nettest: a closed/unfocused console snaps to the bottom (kills the stuck ^^^^ and reopens at the live end)
+			//nettest: a closed/unfocused console still DRAWS the live tail -- that is not cosmetic.
+			//With con_window 1, con_window_cb clears CONF_NOTIFY from con_main, so Con_DrawNotify
+			//skips it and this faded hidden window IS the in-game notify overlay. Con_DrawConsoleLines
+			//only ever walks OLDER than the line it is given, so drawing from a scrolled-up display
+			//would make every new print invisible in game. And its ^^^^ backscroll marker is emitted
+			//before any age-fade test, so a stale display also parks a permanent full-brightness row
+			//of '^' over the view. Hence: snap to the tail for the draw, then put the user's reading
+			//position back afterwards so reopening lands where they left off (con_keepscroll).
+			if (con_keepscroll.ival && w->display && w->display != w->current)
+			{	//store it as a DISTANCE, not a pointer: Con_DrawConsoleLines can Con_Printf (failed
+				//link-image registration), which can evict and free a line out from under us.
+				conline_t *cl;
+				keepback = 0;
+				for (cl = w->display; cl && cl != w->current; cl = cl->newer)
+					keepback++;
+				keepscroll = w->displayscroll;
+			}
+			w->display = w->current;
 			w->displayscroll = 0;
 		}
 
@@ -3354,6 +3378,20 @@ void Con_DrawConsole (int lines, qboolean noback)
 			if (R2D_Flush)
 				R2D_Flush();
 			BE_Scissor(NULL);
+		}
+
+		if (keepback >= 0)
+		{	//nettest: put the reading position back now the draw is done, so reopening the console
+			//lands where the user left off. Walking older from the (never-freed) current line means
+			//an eviction mid-draw just costs us a row or two of accuracy instead of a dangling pointer.
+			conline_t *cl = w->current;
+			while (keepback-- > 0 && cl && cl->older)
+				cl = cl->older;
+			if (cl)
+			{
+				w->display = cl;
+				w->displayscroll = keepscroll;
+			}
 		}
 
 		if (w->selstartline)
