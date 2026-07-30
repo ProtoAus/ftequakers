@@ -62,6 +62,13 @@ qboolean GLSCR_UpdateScreen (void)
 	qboolean nohud;
 	qboolean noworld;
 	extern cvar_t vid_srgb;
+	RSpeedLocals();	//nettest: shared by the five SCR_ gap buckets below
+
+	//nettest: SCREEN SETUP gap.  Everything from here to the 3d dispatch -- vid_srgb changes,
+	//Shader_DoReload, SCR_SetUpToDrawConsole and the r_clear glClear -- was in no bucket.
+	//The early returns below deliberately skip the matching RSpeedEnd; on those frames nothing
+	//accumulates, which is correct (no 3d frame was drawn either).
+	RSpeedRemark();
 
 	r_refdef.pxrect.maxheight = vid.pixelheight;
 
@@ -172,6 +179,8 @@ qboolean GLSCR_UpdateScreen (void)
 			depthcleared = true;
 		}
 
+		RSpeedEnd(RSPEED_SCR_SETUP);
+
 		if (topmenu && topmenu->isopaque)
 			nohud = true;
 #ifdef VM_CG
@@ -189,6 +198,12 @@ qboolean GLSCR_UpdateScreen (void)
 			else
 				noworld = true;
 		}
+
+		//nettest: SCREEN COMPOSITE gap.  GL_Set2D(false) is the call that tears down the 3d
+		//state and re-establishes the 2d ortho pass over the finished scene; on the FBO path it
+		//is also where the gameview target stops being current.  It and the noworld fallback
+		//below were in no bucket.
+		RSpeedRemark();
 
 		GL_Set2D (false);
 
@@ -218,52 +233,124 @@ qboolean GLSCR_UpdateScreen (void)
 			nohud = true;
 		}
 
+		RSpeedEnd(RSPEED_SCR_COMPOSITE);
+
 		r_refdef.playerview = &cl.playerview[0];
 		if (!vrui.enabled)
 			SCR_DrawTwoDimensional(nohud);
 
 		V_UpdatePalette (false);
+
+		//nettest: BRIGHTEN/CAPTURE gap.  R2D_BrightenScreen is a full-screen blend pass when
+		//v_contrast/v_brightness are off their defaults, and Media_RecordFrame does a blocking
+		//glReadPixels while capturing.  Neither was in a bucket.
+		RSpeedRemark();
 		R2D_BrightenScreen();
 		Media_RecordFrame();
+		RSpeedEnd(RSPEED_SCR_BRIGHTEN);
 	}
 
+	//nettest: the OBSERVER EFFECT bucket.  RSpeedShow draws ~37 strings -- 1000+ glyph quads --
+	//every single frame, and the R2D_Flush immediately after is what submits them.  None of that was
+	//in any bucket, so the cost of LOOKING at r_speeds was silently inflating the very residual we
+	//were chasing.  This has to be subtracted before trusting any r_speeds 2 total.
+	RSpeedRemark();
 	RSpeedShow();
 	if (R2D_Flush)
 		R2D_Flush();
+	RSpeedEnd(RSPEED_RSPEEDSHOW);
 
 	{
 #if defined(_WIN32) && !defined(FTE_SDL)
 		extern void Sys_FramePacePresent(void);
 		extern qboolean Sys_FramePacePresentActive(void);
 		extern void Sys_FramePace_RecordPresent(void);
+		//nettest: FRAME PACING bucket.  This is where the missing third of the frame was.
+		//
+		//The drain below sat in no RSPEED_ bucket, and it could not have been caught by any of
+		//the others either: RSpeedEnd only issues its own qglFinish at r_speeds > 2 (render.h),
+		//so at the r_speeds 2 anyone actually measures with, NO child bucket contains a GPU sync.
+		//All GPU-tail time was therefore structurally forced into the unattributed remainder of
+		//"Total refresh", where it read as mystery CPU cost.  Measured on fy_killzone at a fixed
+		//viewpoint (340 draw calls, 2.0M indices), sys_framepacing 4, drain depth 1:
+		//
+		//                       r_renderscale 2      r_renderscale 1
+		//   Total refresh          2764.51 us           2576.52 us
+		//   Frame pacing            623.09               501.51
+		//   ...with drain off      2076.21              2061.48
+		//
+		//Note what that last row says: with the drain off, r_renderscale 2 costs 14.7us -- 4x the
+		//pixels for nothing.  The GPU was never the limiter.  The drain was simply forbidding
+		//frame N's GPU work from overlapping frame N+1's CPU work, and charging the tail latency
+		//to the CPU every frame.  Hence the depth-2 default below.
+		//
+		//The paced hold further down contributes nothing to this bucket: Sys_FramePacePresent
+		//early-outs on cl_maxfps 0.  So what this reads is the drain alone.
+		RSpeedRemark();
 		if (Sys_FramePacePresentActive())
-		{	//drain THIS frame's GPU work so the paced flip below IS the real present and the GPU backlog can't sawtooth the cadence.
-			//Prefer an ARB_sync fence (this frame only, less collateral stall); fall back to a full glFinish if unavailable.
-			if (qglFenceSync)
+		{	//Bound the GPU backlog so the paced flip below IS the real present and the cadence can't
+			//sawtooth.  sys_framepacing_drain chooses how far back to wait:
+			//  1 = this frame -- the original behaviour.  Correct, but it forbids frame N's GPU work
+			//      from overlapping frame N+1's CPU work, and that measured 623us/frame of dead
+			//      stall on fy_killzone (22% of the frame; 361 -> 481 fps with it off) on a machine
+			//      whose GPU had headroom to spare.
+			//  2 = previous frame (default) -- queue depth is still capped at one frame, so the flip
+			//      still lands on a nearly-drained GPU, but the pipeline keeps its overlap and the
+			//      stall shrinks to however far the GPU is genuinely behind.
+			//  3 = two frames back -- loosest; more latency, least stall.
+			extern int Sys_FramePaceDrainDepth(void);
+			int drain = Sys_FramePaceDrainDepth();
+			if (drain > 0)
 			{
-				GLsync fence = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-				if (fence)
-				{
-					qglClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000ull);	//<=100ms guard; proceed even if it ever times out
-					qglDeleteSync(fence);
+				if (!qglFenceSync || !qglClientWaitSync || !qglDeleteSync)
+					qglFinish();	//no ARB_sync available: a full serialising drain is the only option
+				else if (drain == 1)
+				{	//legacy: fence this frame, then immediately block on it
+					GLsync fence = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+					if (fence)
+					{
+						qglClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000ull);	//<=100ms guard; proceed even if it ever times out
+						qglDeleteSync(fence);
+					}
+					else
+						qglFinish();
 				}
 				else
-					qglFinish();
+				{	//Rotate through (drain-1) slots so we block on the fence inserted (drain-1) frames
+					//ago.  On the first frames after a context creation the slot is still NULL and
+					//nothing is waited on, which is correct -- there is no backlog to bound yet.
+					int slots = drain - 1;			//drain 2 -> 1 slot (N-1); drain 3 -> 2 slots (N-2)
+					int i = gl_framepace_slot % slots;
+					GLsync prev = gl_framepace_fence[i];
+					if (prev)
+					{
+						qglClientWaitSync(prev, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000ull);
+						qglDeleteSync(prev);
+						gl_framepace_fence[i] = NULL;	//cleared before the re-fence so a failed qglFenceSync can't leave a stale handle
+					}
+					gl_framepace_fence[i] = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+					gl_framepace_slot = (gl_framepace_slot + 1) % slots;
+				}
 			}
-			else
-				qglFinish();
 		}
 		Sys_FramePacePresent();	//sys_framepacing 4: hold the now-complete flip to the present grid (no-op in other modes)
+		RSpeedEnd(RSPEED_SCR_PACING);
 #endif
-		RSpeedMark();
+		RSpeedRemark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);
 #if defined(_WIN32) && !defined(FTE_SDL)
+		RSpeedRemark();
 		Sys_FramePace_RecordPresent();	//sample present-to-present cadence for sys_framepacing_stats (every mode)
+		RSpeedEnd(RSPEED_SCR_PACING);
 #endif
 	}
 
 	//gl 4.5 / GL_ARB_robustness / GL_KHR_robustness
+	//nettest: GL RESET CHECK gap.  qglGetGraphicsResetStatus is a synchronous driver round-trip
+	//issued unconditionally once per frame, and it was in no bucket.  Cheap on most drivers, but
+	//that is an assumption, and assumptions are what this whole exercise is replacing.
+	RSpeedRemark();
 	if (qglGetGraphicsResetStatus)
 	{
 		char *reason;
@@ -288,6 +375,7 @@ qboolean GLSCR_UpdateScreen (void)
 			break;
 		}
 	}
+	RSpeedEnd(RSPEED_SCR_RESET);
 	return true;
 }
 

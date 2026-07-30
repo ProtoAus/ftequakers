@@ -1599,6 +1599,14 @@ static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFR
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
 static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
 	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
+//nettest: how deep the sys_framepacing 4 GPU drain reaches back.  The original behaviour was
+//"fence this frame, then immediately wait on it", which forbids frame N's GPU work from
+//overlapping frame N+1's CPU work.  Measured on fy_killzone that cost 623us/frame -- 22% of the
+//whole frame, 361->481 fps -- while the GPU still had headroom (r_renderscale 2 vs 1 was 14.7us
+//with the drain off).  Waiting on the PREVIOUS frame's fence bounds queue depth just as well,
+//so the paced flip is still the real present, but the pipeline keeps its overlap.
+static cvar_t sys_framepacing_drain = CVARFD("sys_framepacing_drain", "2", CVAR_NOTFROMSERVER,
+	"How far back sys_framepacing 4's GPU drain waits before the paced flip. 0: no drain (fastest, but the swap can sit behind a deep GPU queue and the cadence sawtooths). 1: drain THIS frame -- the original behaviour; flattest cadence, but it serialises CPU and GPU and costs ~a fifth of the frame. 2: drain the PREVIOUS frame (default) -- caps queue depth at one frame while keeping CPU/GPU overlap. 3: drain two frames back -- looser still, more latency, least stall. Only used when sys_framepacing is 4 on OpenGL.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FramePacing_Init(void);
@@ -1619,6 +1627,7 @@ void Sys_Init (void)
 	Cvar_Register(&sys_clocktype, "System vars");
 	Cvar_Register(&sys_clockprecision, "System vars");
 	Cvar_Register(&sys_framepacing, "System vars");
+	Cvar_Register(&sys_framepacing_drain, "System vars");
 	Cmd_AddCommandD("sys_framepacing_stats", Sys_FramePacing_Stats_f,
 		"Reports what sys_framepacing is actually doing: current mode, acquired timer resolution, waitable-timer tier, DXGI handle availability, and wait-accuracy stats over the last 128 frames. Use this to verify non-zero modes have any effect.");
 #ifndef SERVERONLY
@@ -2138,6 +2147,16 @@ double Sys_FramePaceAnchorDelay(double tpf, double now, double frameref)
 static double g_present_base     = 0;	/* QPC-time of present grid slot 0 */
 static double g_present_interval = 0;	/* seconds per present the grid was built for */
 
+/* nettest: drain depth for the GL present pacer.  0 = none, 1 = this frame (legacy full
+ * serialisation), 2 = previous frame, 3 = two frames back.  See sys_framepacing_drain. */
+int Sys_FramePaceDrainDepth(void)
+{
+	int d = sys_framepacing_drain.ival;
+	if (d < 0) d = 0;
+	if (d > 3) d = 3;
+	return d;
+}
+
 qboolean Sys_FramePacePresentActive(void)
 {
 	/* present-pacing only exists in the GL swap hook (gl_screen.c); off-GL, mode 4
@@ -2251,7 +2270,15 @@ static void Sys_FramePacing_Stats_f(void)
 		{
 #ifdef GLQUAKE
 			if (qrenderer == QR_OPENGL)
+			{
+				static const char *depthname[4] = {
+					"OFF (sys_framepacing_drain 0 -- no GPU wait before the flip)",
+					"THIS frame (sys_framepacing_drain 1 -- legacy; serialises CPU and GPU, costs ~a fifth of the frame)",
+					"PREVIOUS frame (sys_framepacing_drain 2 -- caps queue depth, keeps CPU/GPU overlap)",
+					"TWO frames back (sys_framepacing_drain 3 -- loosest, most latency, least stall)"};
 				drain = (GLVID_FramePaceDrainPath() == 1) ? "ARB_sync fence (surgical)" : "glFinish (ARB_sync absent on this context)";
+				Con_Printf("  GPU drain depth     : %s\n", depthname[Sys_FramePaceDrainDepth()]);
+			}
 			else
 #endif
 				drain = "n/a (off-GL: mode 4 falls back to the mode-3 frame-START anchor)";

@@ -927,8 +927,33 @@ typedef void (APIENTRY * PFNGLUNLOCKARRAYSEXTPROC) (void);
 
 #ifndef GL_ARB_framebuffer_object
 #define GL_DRAW_FRAMEBUFFER_ARB           0x8CA9
-#define GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE 0x8217 
+#define GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE 0x8217
 #define GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_ARB 0x8210
+#endif
+
+//nettest: scene MSAA.  All of these are core in GL_ARB_framebuffer_object / GL3 / GLES3, but none
+//of them existed anywhere in this tree before -- the engine had no multisample render-target path
+//at all, which is why vid_multisample only ever affected the WINDOW and never the 3D scene (the
+//scene always renders into an FBO here because r_renderscale != 1 forces RDF_ALLPOSTPROC).
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER               0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER
+#define GL_DRAW_FRAMEBUFFER               0x8CA9
+#endif
+#ifndef GL_MAX_SAMPLES
+#define GL_MAX_SAMPLES                    0x8D57
+#endif
+#ifndef GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE
+//the existing GLBE_FBO_Update completeness switch has no case for this one; it is what you get if
+//the colour and depth attachments ever disagree about sample count.
+#define GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE 0x8D56
+#endif
+#ifndef GL_SAMPLE_ALPHA_TO_COVERAGE
+#define GL_SAMPLE_ALPHA_TO_COVERAGE       0x809E
+#endif
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE                    0x809D
 #endif
 
 #ifndef GL_VERSION_3_0

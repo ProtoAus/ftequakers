@@ -639,6 +639,18 @@ typedef struct __GLsync *GLsync;
 extern GLsync (APIENTRY *qglFenceSync) (GLenum condition, GLbitfield flags);
 extern GLenum (APIENTRY *qglClientWaitSync) (GLsync sync, GLbitfield flags, unsigned long long timeout);
 extern void   (APIENTRY *qglDeleteSync) (GLsync sync);
+/* nettest: rotating fence ring for sys_framepacing's drain.  Waiting on THIS frame's own fence
+ * (the original mode-4 behaviour) forbids frame N's GPU work from overlapping frame N+1's CPU
+ * work, which measured 623us/frame of pure stall on fy_killzone -- 22% of the frame -- even
+ * though the GPU had headroom (r_renderscale 2 vs 1 cost only 14.7us with the drain off).
+ * Waiting on frame N-1's fence instead still bounds queue depth, so the paced flip is still
+ * the real present and the cadence stays flat, but the pipeline keeps one frame of overlap.
+ * Owned by gl_vidcommon.c so the ring is zeroed in the same place the entry points are bound,
+ * i.e. on every context (re)creation -- a GLsync from a destroyed context must never be waited
+ * on.  Two slots covers the deepest supported depth (N-2). */
+#define GL_FRAMEPACE_SLOTS 2
+extern GLsync gl_framepace_fence[GL_FRAMEPACE_SLOTS];
+extern int    gl_framepace_slot;
 extern void (APIENTRY *qglFlush) (void);
 extern void (APIENTRY *qglFrontFace) (GLenum mode);
 extern void (APIENTRY *qglGenTextures) (GLsizei n, GLuint *textures);

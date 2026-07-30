@@ -516,6 +516,7 @@ qboolean Image_LocateHighResTexture(image_t *tex, flocation_t *bestloc, char *be
 void Image_Upload			(texid_t tex, uploadfmt_t fmt, void *data, void *palette, int width, int height, int depth, unsigned int flags);
 void Image_Purge(void);	//purge any textures which are not needed any more (releases memory, but doesn't give null pointers).
 void Image_Init(void);
+void Image_InitCore(void);	//nettest Patch 120d: renderer-independent half; safe (and required) with no renderer
 void Image_Shutdown(void);
 void Image_PrintInputFormatVersions(void); //for version info
 qboolean Image_WriteKTXFile(const char *filename, enum fs_relative fsroot, struct pendingtextureinfo *mips);
@@ -796,6 +797,28 @@ enum {
 	RSPEED_LINKENTITIES,
 	RSPEED_WORLDNODE,
 	RSPEED_DYNAMIC,
+	RSPEED_FAKESHADOWS,	//nettest: Sh_GenerateFakeShadows -- was in NO bucket, see gl_backend.c
+	//nettest: split of the 429us FAKESHADOWS bucket, because the two halves want completely
+	//different fixes and guessing which dominates has been wrong every time this session.
+	//CLASSIFY is Sh_GeneratePropShadowsAtlas's per-caster loop (lamp ownership, sun-vis, LOS
+	//traces) -- pure CPU, and it has no distance or frustum rejection at all before the
+	//expensive work.  ENTDRAW is GLBE_BaseEntTextures inside Sh_GenShadowFace, which the engine
+	//itself flags at gl_shadow.c:2676 as walking the entity list up to 6 times per frame per
+	//entity.  Both live faces pass smesh=NULL, so NO world geometry is rendered into the atlas;
+	//between them these two should account for essentially all of it.
+	RSPEED_SHADOW_CLASSIFY,
+	RSPEED_SHADOW_ENTDRAW,
+	RSPEED_POSTPROC,	//nettest: FBO resolve + postproc chain + bloom -- was in NO bucket
+	RSPEED_RSPEEDSHOW,	//nettest: the cost of DRAWING this very table -- was in NO bucket
+	//nettest: the five gaps in GLSCR_UpdateScreen.  Between them these cover EVERY statement in
+	//that function that was not already inside CSQCREDRAW / 2D / PALETTEFLASHES / RSPEEDSHOW /
+	//PRESENT, so "Total refresh" is now forced to reconcile with its children instead of leaving
+	//a ~1100us residual for us to guess at.
+	RSPEED_SCR_SETUP,	//prologue: srgb, Shader_DoReload, console setup, r_clear
+	RSPEED_SCR_COMPOSITE,	//GL_Set2D(false) after the 3d view + the noworld fallback
+	RSPEED_SCR_BRIGHTEN,	//R2D_BrightenScreen + Media_RecordFrame
+	RSPEED_SCR_PACING,	//sys_framepacing GPU drain + paced hold either side of the swap
+	RSPEED_SCR_RESET,	//qglGetGraphicsResetStatus -- a driver round-trip run every frame
 	RSPEED_OPAQUE,
 	RSPEED_RTLIGHTS,
 	RSPEED_TRANSPARENTS,

@@ -175,7 +175,16 @@ static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "
 cvar_t r_shadows_propshadows				= CVARFD("r_shadows_propshadows", "1", CVAR_SHADERSYSTEM, "r_shadows 2: props cast a PERSPECTIVE shadow from their nearest map light -- swings 360 and grows as it nears the lamp, darkening only. Needs a deluxemap (light -bspxlux) + point-light entities. Requires r_shadows_slots 1. 0 = off. (nettest ships this ON; the whole feature is inert on maps with no point lights.)");
 cvar_t r_shadows_propshadows_cone			= CVARD("r_shadows_propshadows_cone", "120", "Prop shadows: cone angle (degrees, full width) used by a light that does NOT set its own \"angle\"/\"_cone\" spot key. The cone is FIXED per light -- aimed by \"mangle\"/\"target\", or straight down when the light declares neither -- so projections never re-aim or re-zoom as props move through them. Narrower = sharper (the cell's pixels cover less ground) but a prop outside the cone gets no shadow.");
 cvar_t r_shadows_propshadows_switch			= CVARD("r_shadows_propshadows_switch", "2", "Prop shadows: how much brighter-per-distance a lamp must be than the one already shadowing a prop before it takes over (1 = no stickiness, switch on every tie; 2 = the challenger must score twice as high). Stops a prop's shadow snapping to a different lamp as you walk across two lamps' iso-surface.");
-cvar_t r_shadows_propshadows_max			= CVARFD("r_shadows_propshadows_max", "13", CVAR_SHADERSYSTEM, "Max simultaneous LIGHT cells for prop shadows (each cell = one lamp cone covering every prop near it; on-screen-nearest lamps win, with hysteresis). Shares the 16-slot atlas with the sun cells: cascades 3 leaves up to 13, cascades 1 up to 15. More live cells = smaller per-cell resolution once past 4 per free quadrant (raise r_shadows_res to compensate).");
+//nettest: default was 13, which is actively counter-productive.  sh_propsub_budget is sized from
+//THIS value (not the live cell count -- Patch 120, deliberately, so resolution never steps), and
+//Sh_PropSubCellRect picks quarter-size subcells only while `nsub <= (4-nc)*4`.  At the shipped
+//r_shadows_cascades 2 that threshold is 8, so a budget of 13 fails it and EVERY lamp shadow is
+//allocated an eighth-size cell -- 256px of a 2048 atlas instead of 512px, a quarter of the pixel
+//area.  Measured on fy_killzone: 8 vs 13 costs nothing (442.18 vs 453.16us Shadow generation,
+//identical draw calls) and quadruples lamp shadow resolution.  8 is also >= any live cell count
+//seen on the mod's maps (6 map lights -> 5 cells), so no cell is ever lost to the lower budget.
+//NOTE: with r_shadows_cascades 3 the threshold drops to 4, so this would need to be <=4 there.
+cvar_t r_shadows_propshadows_max			= CVARFD("r_shadows_propshadows_max", "8", CVAR_SHADERSYSTEM, "Max simultaneous LIGHT cells for prop shadows (each cell = one lamp cone covering every prop near it; on-screen-nearest lamps win, with hysteresis). Shares the 16-slot atlas with the sun cells: cascades 3 leaves up to 13, cascades 1 up to 15. More live cells = smaller per-cell resolution once past 4 per free quadrant (raise r_shadows_res to compensate).");
 static cvar_t r_shadows_propshadows_range	= CVARD("r_shadows_propshadows_range", "1.5", "How far a map light reaches to own a prop's shadow, as a multiple of its brightness value (matches the light-swing/blob reach). Higher = distant lamps still shadow props.");
 static cvar_t r_shadows_propshadows_bias	= CVARD("r_shadows_propshadows_bias", "0.0015", "Depth bias for the per-prop perspective shadow (clip-z units, nudged toward the lamp). Raise to kill self-shadow acne on the caster; lower to hug contact tighter.");
 static cvar_t r_shadows_propshadows_debug	= CVARD("r_shadows_propshadows_debug", "0", "Print the per-prop perspective shadow assignments (lamp count, prop->lamp distance/fov) -- confirm assignment is stable. 2 = FORCE mode: bypass the sun-vs-lamp classification so any prop near a lamp casts (to verify the projection).");
@@ -2681,7 +2690,15 @@ static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowm
 		break;
 #ifdef GLQUAKE
 	case QR_OPENGL:
+		{
+		//nettest: ENTDRAW.  This is the "walks the entity lists up to 6 times per frame per entity"
+		//admitted just above -- one full pass per shadow face, 7 faces at the shipped cvar defaults.
+		//Bracketed so we know whether the 429us Shadow generation bucket is dominated by these
+		//repeated walks or by the classification loop, instead of assuming.
+		RSpeedMark();
 		GLBE_BaseEntTextures(lightpvs, NULL);
+		RSpeedEnd(RSPEED_SHADOW_ENTDRAW);
+		}
 
 		if (lighttype & LSHADER_ORTHO)
 			qglDisable(GL_DEPTH_CLAMP_ARB);
@@ -4497,6 +4514,7 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 	uploadfmt_t fmt;
 	vec4_t cell;
 	int i, npc;
+	RSpeedLocals();	//nettest: splits Shadow generation into classify vs entdraw
 	//PER-LIGHT cells: each atlas cell is a shadowmap attached to a LIGHT, and EVERY in-shade prop near that
 	//light renders into it -- so the cell budget limits active LIGHTS, not props.  A room full of props
 	//under one lamp costs ONE cell.
@@ -4566,6 +4584,13 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 	VectorNegate(sundir, tosun);
 	if (!VectorNormalize(tosun))
 		VectorSet(tosun, 0, 0, 1);	//degenerate sun: straight up, so the trace still asks a sane question
+
+	//nettest: CLASSIFY phase begins.  Everything to the GLBE_SetupForShadowMap below is CPU-side
+	//caster bookkeeping -- no GL calls, no geometry.  Bracketed separately from the face rendering
+	//because the two need different fixes: this half wants an early distance/frustum reject (there
+	//is none today; camdist is computed and then only used for ranking ~100 lines later), while the
+	//draw half wants the 7 repeated entity-list walks collapsed or cached.
+	RSpeedRemark();
 
 	//--- collect EVERY in-shade, lamp-lit prop (they get grouped by lamp below) ---
 	npc = 0;
@@ -4829,6 +4854,8 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 		fs_slotcount = 1;
 		return;
 	}
+
+	RSpeedEnd(RSPEED_SHADOW_CLASSIFY);	//nettest: end of the CPU-side caster classification
 
 	r_refdef.externalview = true;
 	Sh_PropComboCellRect(0, nc, propcells, txsize, &cx, &cy, &csize);

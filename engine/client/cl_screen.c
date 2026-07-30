@@ -33,6 +33,21 @@ char levelshotname[MAX_QPATH];
 extern cvar_t con_textsize;
 
 
+//nettest: r_speeds_dump -- print the r_speeds table to the console instead of only drawing it.
+//Reading a 40-row table of microsecond figures off a downscaled screenshot is lossy and slow;
+//with -condebug this lands in qconsole.log as exact text, which is what the reconciliation
+//arithmetic actually needs.  One-shot: set the flag, next RSpeedShow prints and clears it.
+static int rspeed_dumpreq;
+static void RSpeed_Dump_f(void)
+{
+	if (r_speeds.ival <= 1)
+	{
+		Con_Printf("r_speeds_dump: needs r_speeds 2 or higher (the sampler only runs then)\n");
+		return;
+	}
+	rspeed_dumpreq = 1;
+}
+
 void RSpeedShow(void)
 {
 	int i;
@@ -64,6 +79,16 @@ void RSpeedShow(void)
 	RSpNames[RSPEED_LINKENTITIES]	= "  Entity setup";
 	RSpNames[RSPEED_WORLDNODE]		= "  World walking";
 	RSpNames[RSPEED_DYNAMIC]		= "  Lightmap updates";
+	RSpNames[RSPEED_FAKESHADOWS]	= "  Shadow generation";
+	RSpNames[RSPEED_SHADOW_CLASSIFY]= "   Shadow classify";
+	RSpNames[RSPEED_SHADOW_ENTDRAW]	= "   Shadow entdraw";
+	RSpNames[RSPEED_POSTPROC]		= "  Postproc/resolve";
+	RSpNames[RSPEED_RSPEEDSHOW]		= " r_speeds overhead";
+	RSpNames[RSPEED_SCR_SETUP]		= " Screen setup";
+	RSpNames[RSPEED_SCR_COMPOSITE]	= " Screen composite";
+	RSpNames[RSPEED_SCR_BRIGHTEN]	= " Brighten/capture";
+	RSpNames[RSPEED_SCR_PACING]		= " Frame pacing";
+	RSpNames[RSPEED_SCR_RESET]		= " GL reset check";
 	RSpNames[RSPEED_OPAQUE]			= "  Opaque Batches";
 	RSpNames[RSPEED_RTLIGHTS]		= "  RT Lights";
 	RSpNames[RSPEED_TRANSPARENTS]	= "  Transparent Batches";
@@ -119,6 +144,21 @@ void RSpeedShow(void)
 		Draw_FunStringWidthFont(font_console, 0, (i+RSPEED_MAX)*tsize, s, vid.width, true, false);
 	}
 	memcpy(rquant, savedsamplerquant, sizeof(rquant));
+
+	if (rspeed_dumpreq)
+	{	//nettest: same snapshot the table above is drawn from, as parseable text.
+		rspeed_dumpreq = 0;
+		Con_Printf("---- r_speeds_dump (us/frame, %i-frame average) ----\n", frameinterval);
+		for (i = 0; i < RSPEED_MAX; i++)
+			if (RSpNames[i])
+				Con_Printf("%12.2f %s\n", samplerspeeds[i]/(float)frameinterval, RSpNames[i]);
+		for (i = 0; i < RQUANT_MAX; i++)
+			if (RQntNames[i])
+				Con_Printf("%12u %s\n", samplerquant[i]/frameinterval, RQntNames[i]);
+		if (samplerspeeds[RSPEED_TOTALREFRESH])
+			Con_Printf("%12.2f %s\n", (frameinterval*1000*1000.0f)/samplerspeeds[RSPEED_TOTALREFRESH], "Framerate (refresh only)");
+		Con_Printf("---- end r_speeds_dump ----\n");
+	}
 
 	if (++framecount>=frameinterval)
 	{
@@ -3676,6 +3716,7 @@ void SCR_Init (void)
 	Cmd_AddCommandD ("screenshot_cubemap",SCR_ScreenShot_Cubemap_f, "screenshot_cubemap <name> [size]\nTakes 6 screenshots forming a single cubemap.");
 	Cmd_AddCommandD ("envmap",SCR_ScreenShot_Envmap_f, "Legacy name for the screenshot_cubemap command.");	//legacy 
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
+	Cmd_AddCommandD ("r_speeds_dump", RSpeed_Dump_f, "Prints the current r_speeds 2 sample table to the console as text, so it can be logged with -condebug and reconciled arithmetically instead of read off a screenshot.");
 
 	scr_net = R2D_SafePicFromWad ("net");
 	scr_turtle = R2D_SafePicFromWad ("turtle");

@@ -2355,6 +2355,17 @@ void GLR_RenderView (void)
 
 	checkglerror();
 
+	//nettest: POST-PROCESS / RESOLVE bucket.  Everything from here to the end of this function --
+	//the FBO pop, the scenepp_rescaled resolve blit that r_renderscale exists to feed, the whole
+	//R_RenderPostProcess chain (gamma / waterwarp / custom / fxaa), R_BloomBlend, the R2D_Flush that
+	//actually SUBMITS all of it, and motion blur -- sat in no RSPEED_* bucket at all.  Before this,
+	//gl_rmain.c contained exactly one RSpeed pair in the whole file (the gl_finish block above), so
+	//this entire stage was counted in Total refresh and CSQC Drawing yet attributed to nothing.
+	//It is also the only stage that scales with r_renderscale on BOTH sides: the source read scales
+	//with renderscale^2, the write with the output resolution.
+	{
+	RSpeedMark();
+
 	//update stuff now that we're not rendering the 3d scene
 	if (dofbo)
 		GLBE_FBO_Pop(oldfbo);
@@ -2394,6 +2405,9 @@ void GLR_RenderView (void)
 
 	if (gl_screenangle.value)
 		GL_Set2D (false);	//make sure any hud stuff is rotated properly.
+
+	RSpeedEnd(RSPEED_POSTPROC);
+	}
 
 	checkglerror();
 }

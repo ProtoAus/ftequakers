@@ -1038,9 +1038,16 @@ void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 #endif
 #ifndef SERVERONLY
 	if (mod->type == mod_brush)
-		Surf_BuildModelLightmaps(mod);
+	{	//nettest Patch 120d: guarded, exactly like the alias branch below.  Lightmaps are purely
+		//visual and r_surf.c has no dedicated guards anywhere in it, so with no renderer this walked
+		//into the image/lightmap code with a zeroed sh_config and died.  A headless client has no use
+		//for them either -- Mod_LightmapAllocSurf already bails on isDedicated and stamps
+		//lightmaptexturenums = -1, so the rest of the engine is already expecting none.
+		if (qrenderer != QR_NONE)
+			Surf_BuildModelLightmaps(mod);
+	}
 	if (mod->type == mod_sprite)
-	{
+	{	//no guard needed: Mod_LoadSpriteModel returns a mod_dummy under QR_NONE, so this never fires.
 		Mod_LoadSpriteShaders(mod);
 	}
 	if (mod->type == mod_alias)
@@ -2965,12 +2972,17 @@ void ModQ1_Batches_BuildQ1Q2Poly(model_t *mod, msurface_t *surf, builddata_t *co
 		else
 */
 		{
+			//nettest Patch 120d: texinfo->texture is NULL with no renderer (a client build run with
+			//-dedicated never loads the miptextures), and SERVER QC reaches here through the
+			//getsurface* builtins -- PF_getsurfacenumpoints -> PF_BuildSurfaceMesh -- during entity
+			//spawn.  Leaving st unnormalised is the same thing the vwidth/vheight==0 case already does.
+			texture_t *stex = surf->texinfo->texture;
 			mesh->st_array[i][0] = s;
 			mesh->st_array[i][1] = t;
-			if (surf->texinfo->texture->vwidth)
-				mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
-			if (surf->texinfo->texture->vheight)
-				mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+			if (stex && stex->vwidth)
+				mesh->st_array[i][0] /= stex->vwidth;
+			if (stex && stex->vheight)
+				mesh->st_array[i][1] /= stex->vheight;
 
 			if (surf->texinfo->flags & TI_N64_UV)
 			{
@@ -5954,6 +5966,14 @@ static void Mod_LoadQ1FogVolumes (model_t *mod)
 	mfog_t tmp[Q1FOG_MAX];
 	int count = 0;
 	int i;
+	//nettest Patch 120d: parse into a LOCAL buffer, never com_token.
+	//COM_Parse(d) is a macro for COM_ParseOut(d, com_token, sizeof(com_token)), and com_token is ONE
+	//65536-byte global shared by the whole engine.  This function runs on a WORKER thread
+	//(Mod_LoadModelWorker -> Mod_LoadBrushModel), so every token it parsed was racing whatever the
+	//main thread happened to be parsing at the same moment.  _DEBUG builds catch it outright --
+	//"Not on main thread: COM_ParseOut: com_token" -- and release builds just corrupt each other's
+	//tokens, which is a map-load-time data race on EVERY map, not only in dedicated mode.
+	char token[1024];
 
 	if (!mod->entities_raw || !mod->submodels || mod->numsubmodels < 2)
 		return;
@@ -5965,31 +5985,31 @@ static void Mod_LoadQ1FogVolumes (model_t *mod)
 		vec3_t colour = {0.5, 0.5, 0.6};
 		float dist = 256;
 
-		data = COM_Parse(data);
-		if (!data || com_token[0] != '{')
+		data = COM_ParseOut(data, token, sizeof(token));
+		if (!data || token[0] != '{')
 			break;
 		while (1)
 		{
 			char key[64];
-			data = COM_Parse(data);
-			if (!data || com_token[0] == '}')
+			data = COM_ParseOut(data, token, sizeof(token));
+			if (!data || token[0] == '}')
 				break;
-			Q_strncpyz(key, com_token, sizeof(key));
-			data = COM_Parse(data);
+			Q_strncpyz(key, token, sizeof(key));
+			data = COM_ParseOut(data, token, sizeof(token));
 			if (!data)
 				break;
 			if (!strcmp(key, "classname"))
-				Q_strncpyz(classname, com_token, sizeof(classname));
+				Q_strncpyz(classname, token, sizeof(classname));
 			else if (!strcmp(key, "model"))
-				Q_strncpyz(modelkey, com_token, sizeof(modelkey));
+				Q_strncpyz(modelkey, token, sizeof(modelkey));
 			else if (!strcmp(key, "rendercolor"))
 			{
 				colour[0] = colour[1] = colour[2] = 0;
-				sscanf(com_token, "%f %f %f", &colour[0], &colour[1], &colour[2]);
+				sscanf(token, "%f %f %f", &colour[0], &colour[1], &colour[2]);
 				VectorScale(colour, 1.0/255, colour);	//0..255 -> 0..1
 			}
 			else if (!strcmp(key, "fogdist"))
-				dist = atof(com_token);
+				dist = atof(token);
 		}
 		if (!data)
 			break;
@@ -6106,6 +6126,83 @@ static void Mod_LoadQ1FogVolumes (model_t *mod)
 				mod->fogs[i].numplanes,
 				mod->fogs[i].shader ? "ok" : "NULL");
 	}
+}
+
+//nettest: repair a brush model whose stored bounds are +-INFINITY.
+//
+//Some compilers write the WORLD model's bounds that way instead of the real extents --
+//fy_killzone.bsp (BSP2) ships mins=(-inf,-inf,-inf) maxs=(+inf,+inf,+inf) for model 0,
+//while 2fort.bsp (v29) has proper finite bounds.  Mod_LoadSubmodels passes them straight
+//through: its "spread the mins/maxs by a pixel" -1/+1 leaves an infinity untouched.
+//
+//Almost everything downstream tolerates that, which is why it went unnoticed.  What does
+//NOT is rigid-body physics: World_Box3D_Frame_BodyFromEntity takes
+//    geomcenter = (mins + maxs) / 2
+//and (-inf + +inf)/2 is NaN.  GenerateCollisionMesh_BSP (server/world.c) then subtracts
+//that geomcenter from EVERY world vertex, so the entire static world collision mesh comes
+//out NaN and Box3D can collide with none of it -- prop_physics falls straight through the
+//floor.  Brush ENTITIES keep finite bounds and still build valid meshes, so props land on
+//func_door and nothing else; turning such a door into func_detail merges it into the world
+//model and it stops catching them too.  That is exactly the reported symptom.
+//
+//Recompute from the model's own faces.  Deliberately the EDGE path rather than surf->mesh:
+//mesh->xyz_array is filled by the renderer, so a dedicated server has none -- and a
+//dedicated server is precisely where this must still work.  IS_NAN tests the exponent
+//mask, so it is true for infinities as well as NaNs, which is what we want.
+//
+//Called after the faces/edges/vertexes lumps are loaded and after firstmodelsurface /
+//nummodelsurfaces are assigned.
+static void Mod_FixNonFiniteModelBounds (model_t *submod, model_t *mod, int modelindex)
+{
+	int s, e, lindex;
+	float t;
+	qboolean bad = false, any = false;
+	vec3_t mins, maxs;
+	msurface_t *surf;
+
+	for (s = 0; s < 3; s++)
+	{
+		t = submod->mins[s];	if (IS_NAN(t)) bad = true;
+		t = submod->maxs[s];	if (IS_NAN(t)) bad = true;
+	}
+	if (!bad)
+		return;
+
+	VectorClear(mins);
+	VectorClear(maxs);
+	for (s = 0; s < submod->nummodelsurfaces; s++)
+	{
+		surf = &mod->surfaces[submod->firstmodelsurface + s];
+		for (e = 0; e < surf->numedges; e++)
+		{
+			float *v;
+			lindex = mod->surfedges[surf->firstedge + e];
+			if (lindex > 0)
+				v = mod->vertexes[mod->edges[lindex].v[0]].position;
+			else
+				v = mod->vertexes[mod->edges[-lindex].v[1]].position;
+			if (!any)
+			{
+				VectorCopy(v, mins);
+				VectorCopy(v, maxs);
+				any = true;
+			}
+			else
+				AddPointToBounds(v, mins, maxs);
+		}
+	}
+	//no faces at all -> leave a degenerate but FINITE box; anything is better than a NaN.
+
+	//Con_Printf, not Con_DPrintf: this is a defect in the BSP that the engine is papering
+	//over, and the mapper wants to know.  One line per affected model, only on maps that
+	//have the problem, so a healthy map stays silent.
+	Con_Printf("^3%s: model %i has non-finite bounds; recomputed from %i faces as "
+				"%g %g %g .. %g %g %g (recompile the map to fix properly)\n",
+				mod->name, modelindex, submod->nummodelsurfaces,
+				mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2]);
+
+	VectorCopy(mins, submod->mins);
+	VectorCopy(maxs, submod->maxs);
 }
 
 /*
@@ -6387,6 +6484,9 @@ TRACE(("LoadBrushModel %i\n", __LINE__));
 		
 		VectorCopy (bm->maxs, submod->maxs);
 		VectorCopy (bm->mins, submod->mins);
+
+		//must run BEFORE RadiusFromBounds, or the radius inherits the infinity too.
+		Mod_FixNonFiniteModelBounds (submod, mod, i);
 
 		submod->radius = RadiusFromBounds (submod->mins, submod->maxs);
 

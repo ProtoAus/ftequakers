@@ -3900,9 +3900,515 @@ deluxemapped maps keep evicting casters silently. `0` restores Patch 120a exactl
 and `r_shadows_sunfade 0.25` added, with the trade-off written into the comment block. The
 propshadows debug line now also reports `suncast=` and `shadefade=`.
 
-**Unrelated pre-existing crash found while boot-testing, NOT fixed:** the *client* binary run with
-`-dedicated` dies with `0xC0000094` (integer divide by zero) while loading any map carrying a
-`LIGHTINGDIR` lump — 2fort, parkour, normals — but loads `sunvistest` and `start` fine. It reproduces
-identically on the pre-120c binary, so it predates this work. The real dedicated server
-(`fteqwsv64.exe`, the `sv-rel` target) boots all of them correctly, which is why it had not been
-noticed.
+**Unrelated pre-existing crash found while boot-testing:** the *client* binary run with `-dedicated`
+dies with `0xC0000094` (integer divide by zero) on map load. It reproduces identically on the
+pre-120c binary, so it predates this work; the real dedicated server (`fteqwsv64.exe`, the `sv-rel`
+target) boots every map correctly, which is why it had not been noticed. Root-caused and partly
+fixed in **Patch 120d** — note the first-pass claim here that it correlated with the `LIGHTINGDIR`
+lump was **wrong**, drawn from too small a sample; see 120d.
+
+### Patch 120d — `fteqw64.exe -dedicated` map load: five faults  *(APPLIED — m-rel + sv-rel)*
+
+**Files:** `engine/client/image.c`, `engine/client/wad.c`, `engine/client/renderer.c`,
+`engine/client/render.h`, `engine/gl/gl_model.c`.
+
+One of these — the `com_token` race in fault 2 — is a **data race present in the normal graphical
+client on every map load**, and is worth having on its own merits regardless of dedicated mode.
+
+Chased down from the crash noted in 120c. Caught under gdb, symbolised against the build's `.db`:
+
+```
+SIGFPE, Arithmetic exception          => 0x...eb49:  div %r9d      (r9d == 0)
+                                         0x...eb4c:  mov %edx,%eax  <- returns the REMAINDER
+hash.c <- hash.c <- image.c <- image.c <- gl_model.c <- common.c <- sys_win_threads.c
+```
+
+`Hash_Key*()` ends in `key % table->numbuckets`. `imagetable` is initialised in `Image_Init()`, which
+is called from **`R_ApplyRenderer()` only** (`client/renderer.c:1732`) — i.e. only once a real
+renderer is up. The model loaders call `Image_FindTexture()` unconditionally, so a client build
+started with `-dedicated` reached `Hash_GetInsensitive()` with `numbuckets == 0` and died in `div` on
+a worker thread the instant a map was loaded.
+
+Fixed by initialising the table **statically** at its declaration. It costs nothing —
+`imagetablebuckets` is static storage and therefore already zero-filled, which is exactly
+`Hash_InitTable`'s documented precondition. `Image_Init()` now only initialises when the table is
+still empty, so it cannot wipe entries registered before the renderer came up.
+
+*Safe across `vid_restart`:* `Image_Shutdown()` walks `imagelist` and `Hash_RemoveDataInsensitive`s
+every entry individually, so the table is genuinely empty by the time `Image_Init()` runs again —
+skipping the re-init is equivalent, not a leak.
+
+**CORRECTION to the note in 120c:** the crash does **not** correlate with the `LIGHTINGDIR` lump.
+That was inferred from three maps that happened to have one. Re-tested against maps with no
+deluxemap — `css_dust2_go`, `fy_iceworld`, `streets`, `spleef`, `testing` — and every one crashed
+too. It is essentially every real map; only trivial ones (`start`, `sunvistest`) survived, because
+they load few or no external textures.
+
+The hash table was the first of **five** distinct faults on that path, each hidden behind the last.
+All five are fixed; `fteqw64.exe -dedicated` now loads maps. Found by building `m-dbg` and walking
+each crash under gdb.
+
+*(The debug target does not link on this toolchain — `Makefile:1539` passes `-Wl,--no-dynamicbase`,
+which ld 16.1 removed. Build it with `make m-dbg FTE_TARGET=win64 DEBUG_LDFLAGS=-Wl,--disable-dynamicbase`.
+Worth knowing: `_DEBUG` also enables `COM_AssertMainThread`, which is what caught fault 2.)*
+
+**2. `com_token` data race in `Mod_LoadQ1FogVolumes` (`gl_model.c`) — affects EVERY build.**
+`COM_Parse(d)` is a macro for `COM_ParseOut(d, com_token, sizeof(com_token))`, and `com_token` is one
+65536-byte global shared engine-wide. This fork's fog-volume parser used it while running on a
+**worker thread** (`Mod_LoadModelWorker` → `Mod_LoadBrushModel`), racing whatever the main thread was
+parsing. `_DEBUG` builds abort outright ("Not on main thread: COM_ParseOut: com_token"); release
+builds silently let the two corrupt each other's tokens. **This is a map-load data race on every map
+in the graphical client too, not a dedicated-mode issue** — it is the most valuable fix in this
+patch. Now parses into a local buffer.
+
+**3. NULL `rf` dereferences (`image.c`).** `rf` is `currentrendererstate.renderer`, NULL when no
+renderer was applied. `Image_LoadTextureMips` called `rf->IMG_LoadTextureMips` unguarded, reached
+from a QC `precache_model` via `COM_WorkerPartialSync` draining the load queue on the main thread.
+Guarded, along with the three other unguarded `rf->` sites; `IMG_UpdateFiltering` already had the
+`if (rf && ...)` guard, so the convention was already there. With no renderer the existing failure
+path (`TF_INVALID` / `TEX_FAILED`) is the correct answer.
+
+**4. NULL `wadmutex` (`wad.c`, `image.c`).** `Sys_LockMutex(NULL)` is `EnterCriticalSection(NULL)`.
+The mutex was created in `Image_Init` — renderer-gated like everything else — and destroyed in
+`Image_Shutdown`. Two of the ten lock sites in `wad.c` open-coded `if (wadmutex)`; the other eight
+did not. Fixed at both ends: `Image_InitCore()` (new, called from `Renderer_Init`, which `Host_Init`
+runs in **both** modes) owns it for the process lifetime and `Image_Shutdown` no longer destroys it;
+and all ten sites now go through `W_LockWads()` / `W_UnlockWads()` so a new call site cannot get it
+wrong.
+
+**5. NULL `texinfo->texture` in `ModQ1_Batches_BuildQ1Q2Poly` (`gl_model.c`).** With no renderer the
+miptextures are never loaded, and **server** QC reaches this through the `getsurface*` builtins
+(`PF_getsurfacenumpoints` → `PF_BuildSurfaceMesh`) during entity spawn — this mod does exactly that.
+Guarded; leaving st unnormalised is what the existing `vwidth == 0` branch already does.
+
+Also guarded `Surf_BuildModelLightmaps` in `Mod_ModelLoaded` on `qrenderer != QR_NONE`, matching the
+alias branch two lines below it. `r_surf.c` contains no dedicated guards anywhere, and lightmaps are
+purely visual — `Mod_LightmapAllocSurf` already bails on `isDedicated`.
+
+**Verified:** `fteqw64.exe -dedicated` boots 2fort, css_dust2_go, parkour, fy_iceworld, streets and
+notnormals; the graphical client loads 2fort with video; `fteqwsv64.exe` still boots. No new
+`ssqccore.txt`.
+
+**Graphical-client risk is nil by construction:** every change is either inert with a renderer
+present (`if (rf)` where `rf` is non-NULL, `qrenderer != QR_NONE`), literally equivalent (the static
+hash-table init uses the same arguments `Hash_InitTable` did; `W_LockWads` is the same call when the
+mutex exists), or strictly safer (not destroying the mutex removes a NULL window; the local parse
+buffer removes a race). `fteqwsv64.exe` was rebuilt and redeployed alongside so both binaries carry
+fault 2's fix.
+
+---
+
+## Patch 121 — brush models with `±inf` bounds no longer NaN the world collision mesh  *(APPLIED — `m-rel` + `sv-rel`; no header change, plugins unaffected)*
+
+**Symptom.** On `fy_killzone`, every `prop_physics` fell straight through the floor. They landed
+on `func_door` and nothing else; converting that door to `func_detail` (which the compiler merges
+into worldspawn) made them fall through it too. `2fort` was fine.
+
+**Cause.** The map's own BSP:
+
+```
+fy_killzone.bsp [BSP2]  model 0: mins=(-inf,-inf,-inf) maxs=(+inf,+inf,+inf)
+2fort.bsp       [v29]   model 0: mins=(-2143,-1663,-223) maxs=(2143,1663,471)
+```
+
+Some compilers write the WORLD model's bounds as ±infinity instead of its real extents.
+`Mod_LoadSubmodels` passes them straight through — its "spread the mins/maxs by a pixel" `-1`/`+1`
+leaves an infinity untouched — and `model->mins/maxs` inherit them.
+
+Most of the engine tolerates that, which is why it went unnoticed. Rigid-body physics does not.
+`World_Box3D_Frame_BodyFromEntity` (`common/com_phys_box3d.c`) takes
+
+```c
+VectorAvg(entmins, entmaxs, geomcenter);      // (-inf + +inf) / 2  ==  NaN
+```
+
+and `GenerateCollisionMesh_BSP` (`server/world.c`) then does `VectorSubtract(vec, geomcenter, ...)`
+for **every** world vertex. The entire static world collision mesh comes out NaN, so Box3D collides
+with none of it. Brush ENTITIES keep finite bounds and still build valid meshes — hence props
+resting on a `func_door` while passing through everything else, and hence the `func_detail` test
+(merging into model 0) reproducing the fall-through. The `massval * geomsize[0..2] == 0` guard right
+below does not catch it either: `inf*inf*inf` is not `0`.
+
+**Fix.** `Mod_FixNonFiniteModelBounds` (`gl/gl_model.c`), called from the submodel setup loop
+immediately after `VectorCopy(bm->mins/maxs, submod->mins/maxs)` and **before** `RadiusFromBounds`
+(which would otherwise inherit the infinity). If any component fails `IS_NAN` — whose mask is the
+exponent, so it is true for infinities as well as NaNs — the bounds are recomputed from the model's
+own faces.
+
+Deliberately the EDGE path (`surfedges` → `edges` → `vertexes`) rather than `surf->mesh`:
+`mesh->xyz_array` is filled by the renderer, so a dedicated server has none, and a dedicated server
+is precisely where this has to keep working. A model with no faces is left a degenerate but FINITE
+box — anything beats a NaN.
+
+Logged with `Con_Printf`, not `Con_DPrintf`: the engine is papering over a defect in the BSP and the
+mapper should see it. One line per affected model, so a healthy map stays silent.
+
+**Verified.** Dedicated server, `+map fy_killzone`:
+
+```
+maps/fy_killzone.bsp: model 0 has non-finite bounds; recomputed from 27606 faces as
+    -980 -1152 -16 .. 316 1784 464 (recompile the map to fix properly)
+```
+
+`+map 2fort` produces no message — untouched, as intended.
+
+**Note for the mapper.** This is a runtime repair, not a substitute for a correct BSP. The ±inf
+bounds are still in the file and any other tool reading it sees them.
+
+**Recompiling does NOT clear it** — tested. A fresh `fy_killzone` build (2026-07-30, 30006 faces)
+still writes `model 0 mins=(-inf,-inf,-inf) maxs=(inf,inf,inf)`. ericw-tools reproduces it
+deterministically for this map, so "just recompile" is not available as a workaround and the engine
+repair is the only thing standing between this map and total loss of world physics.
+
+Where it comes from, compiler side:
+
+- `qbsp/writebsp.cc:301` — `dmodel.mins[i] = headnode->bounds.mins()[i] + SIDESPACE;`
+  The model bounds are copied straight off the tree headnode with **no finiteness check**. Leaves
+  get one (`writebsp.cc:167`, throws "leaf bounds was unassigned"); the model headnode does not.
+- `qbsp/brushbsp.cc:1327-1333` — `tree.bounds` accumulates brush bounds, then
+  `node->bounds = tree.bounds.grow(SIDESPACE)`. An unfed/degenerate `tree.bounds` propagates
+  straight into the written model.
+
+The compile log states the consequence outright:
+
+```
+LIMITS EXCEEDED ON dnode_t::mins
+NOTE: limits exceeded for Quake BSP - switching to Quake BSP2
+```
+
+`dnode_t::mins` is a `short` (±32768) and the map's own reported extent is **5008 units**, so
+nothing legitimate can blow that limit. The infinite headnode bounds are what forced the BSP2
+downgrade — one defect, two symptoms. 2fort compiles with identical flags and stays v29 precisely
+because its bounds are finite.
+
+Spread within the file: model 0, the root node, **33 of 3605 nodes and 4 of 2042 leafs** carry ±inf.
+All 31 submodels are finite — which is exactly why props landed on `func_door` and nothing else, and
+why reclassifying that door as `func_detail` (merging it into model 0) made them fall through there
+too. That was the decisive clue.
+
+Player and bullet collision were never affected: the map is compiled `-noclip -wrbrushes`
+(`0 clipnodes`), so hull traces run off the BSPX `BRUSHLIST` lump, which is finite. Only the physics
+path reads `model->mins/maxs`, via:
+
+`com_phys_box3d.c:360` `VectorScale(model->mins, scale, entmins)` → `:394` `geomsize = inf` →
+`:441` `VectorAvg(entmins, entmaxs, geomcenter)` = `(-inf + +inf)/2` = **NaN** →
+`world.c:3239` `VectorSubtract(vec, geomcenter, …)` applied to every world vertex → the entire
+static world collision mesh is NaN → Box3D collides with none of it.
+
+The nearby sanity guard at `com_phys_box3d.c:444`
+(`massval * geomsize[0]*geomsize[1]*geomsize[2] == 0`) does not catch this: `inf*inf*inf` is `inf`,
+not `0`.
+
+---
+
+## Patch 122 — `r_shadows` became a chat message; console gains completion-accept, page scroll and sticky scrollback  *(APPLIED — `m-rel`; no header layout change, plugins unaffected)*
+
+Four separate console-layer changes. Only the first is a bug fix; the other three are features
+Lex asked for. All are client-side (`client/keys.c`, `client/console.c`) except the `Cmd_IsCommand`
+rewrite, which lands in `common/cmd.c`.
+
+### 122a — `r_shadows 0` was silently broadcast as chat  *(the actual bug)*
+
+**Symptom.** Typing `r_shadows 0` in the console printed `Player: r_shadows 0` in chat instead of
+setting the cvar. `r_shadows` is registered perfectly normally (`client/renderer.c:535`, registered
+at `:1110`); `cvarlist` finds it; only the console refused it. Confirmed in Lex's own
+`quakers/qconsole.log` — five occurrences of `Player: r_shadows…`.
+
+**Cause — a fixed 50-entry array, overflowed by this fork's own cvars.**
+
+`cl_chatmode 2` (the default, `console.c:72`) decides command-vs-chat by asking
+`Cmd_IsCommand(line)` (`keys.c:654`). That asked the **tab-completion** machinery:
+
+```c
+cmd = Cmd_CompleteCommand (command, true, false, -1, NULL);   //matchnum -1 == "exact match only"
+if (!cmd || strcmp (cmd, command)) return false;              // just a chat message
+```
+
+`matchnum < 0` scans only the entries **stored in `c->completions[]`** (`cmd.c:2653-2663`) — and
+that array is a hard-capped 50:
+
+```c
+} completions[50];                            // common/cmd.h:178
+...
+if (res->num == countof(res->completions))    // common/cmd.c:2485
+{
+    res->extra++;
+    return;                                   // no more space for more options
+}
+```
+
+Two things conspire to overflow it for this exact name:
+
+1. `Cmd_IsCommand` truncates the line to its **first token**, so `Cmd_Complete` sees
+   `partial == "r_shadows"` with `partial[len] == 0`. That enables the `!partial[len] ||`
+   disjunct at `cmd.c:2617`/`2635` and degenerates the filter into a pure **prefix** match — every
+   `r_shadows*` cvar matches.
+2. This fork + the quakers mod now register **53** names beginning with `r_shadows`: 35 from
+   `"Realtime Lighting"` (33 cvars + the `r_shadows_fakedistance` / `r_shadows_fakeres` `name2`
+   aliases, which `Cmd_Complete` emits as their own entries), 15 more created by the `set`s in
+   `quakers/cfg/default.cfg` into `"Custom variables"`, 2 more from the `!!cvardf` pragmas in
+   `quakers/glsl/*.glsl` into `"GLSL Variables"` — plus plain `r_shadows` in `"Graphical Nicaties"`.
+
+Both `cvar_groups` and `group->cvars` are built **head-first** (`cvar.c:198-199`, `cvar.c:1341-1343`),
+so the **earliest-created group is walked LAST**. `"Graphical Nicaties"` is created at
+`renderer.c:868`, before `Sh_RegisterCvars()` creates `"Realtime Lighting"` at `renderer.c:965`, and
+long before the config and shader groups. So plain `r_shadows` is offered to an **already-full**
+array, gets counted into `res->extra`, and is thrown away. The exact-match scan finds nothing,
+`Cmd_IsCommand` returns false, and `keys.c:660-669` prefixes the line with `say `.
+
+The margin is a knife-edge: 35 + 15 = **exactly 50**, so `r_shadows` is candidate #51. One fewer
+mod cvar and the bug disappears — which is precisely why this looked intermittent.
+
+Note the *chat* conversion also requires `cls.state >= ca_connected` (`keys.c:662`); while
+disconnected the line falls to `keys.c:671-672` and execs anyway. That is why it works at the main
+menu and only fails in game.
+
+**Fix.** Ask the question the executor asks, not the completion list. New `Cmd_IsKnownName` in
+`common/cmd.c` (it has to live there — `cmd_functions` is `static` at `cmd.c:1570`), walking
+commands then aliases then cvars directly. `Cmd_IsCommand` in `keys.c` becomes a token copy plus
+one call.
+
+Two deliberate decisions:
+
+- **Case-SENSITIVE**, matching the old code exactly (`Cmd_Complete` with `caseinsens=false`, then
+  `strcmp`). Mirroring the executor's case-*insensitive* lookup would be more self-consistent, but
+  it would also make typing `KILL` or `QUIT` in chat silently execute the command. `Cvar_FindVar`'s
+  hash *is* insensitive, so the cvar branch re-checks the case (and accepts `name2`, which the old
+  completion walk offered as its own entry).
+- **No restriction filtering.** This answers "is this a known name", not "may you run it". Using
+  `Cmd_AliasExist(name, RESTRICT_LOCAL)` would make a restriction-elevated alias fail the test and
+  get **broadcast as public chat** instead of reaching the cbuf, which prints `was restricted`
+  locally. Existence and permission are different questions.
+
+Net behavioural delta: **only** names past the 50-match truncation change answer. Nothing else.
+
+**Also fixed, in `Cmd_Complete_Check` (`cmd.c:2485`)** — the same truncation meant Tab could not
+*list* or complete `r_shadows` either, and `Key_UpdateCompletionDesc` could not show its value. An
+exact match now steals the last slot rather than being dropped, and `res->extra` is only incremented
+when something was genuinely omitted (it was over-counting otherwise). The array stays at 50 —
+growing it only moves the cliff; this removes it for the case that matters.
+
+> This is a general defect, not an `r_shadows` one: **any** command or cvar whose name is a prefix
+> of 50+ other names hits it.
+
+### 122b — RIGHTARROW accepts the inline completion (`con_acceptcompletion`, default 1)
+
+`Con_DrawInput` already paints the completed remainder in green at `console.c:1592-1602`. Right
+arrow at end-of-line was a no-op (`keys.c:1672`, a previous nettest fix). It now accepts that hint,
+shell-autosuggestion style — the same accept Ctrl+Space performs.
+
+The guard mirrors the paint's condition clause for clause, so the key is only stolen while green
+text is genuinely on screen: `con->commandcompletion` (excludes plugin/cluster subconsoles, the
+`Con_Navigate` URL bar and the text editor), `con_showcompletion`, the same emptiness test, caret at
+end of line, a single leading `/` only, `max(1, con_commandmatch)`, and `strlen(fname) > typedlen`
+(an equal-or-shorter suggestion paints zero green chars).
+
+One extra test the paint does not need: `CompleteCommand` inserts `completions[idx].repl` when set
+(argument completions only) and **returns without changing anything** if that is shorter than what
+is typed (`keys.c:543`). Without checking the accepted string's length first, right arrow would eat
+the keypress and do nothing visible. Ctrl and shift variants, `K_GP_DPAD_RIGHT` (the only way to
+move the caret on a pad), and `con_findmode` all fall through to normal cursor movement.
+
+`con_showcompletion` had to lose its `static` in `console.c:70` for this to link.
+
+### 122c — PgUp/PgDn page a whole console window (`con_pagelines` 0, `con_pageoverlap` 2)
+
+Was a fixed 2 lines (8 with ctrl), shared with the mouse wheel. The page keys now step
+`window height / Font_CharVHeight(font_console) - 2 - con_pageoverlap` rows; **the wheel and gamepad
+stick keep the old 2/8 feel**. `con_pagelines 2` restores the old behaviour exactly. Ctrl still means
+*faster*, not slower.
+
+The row count is derived from `con->vislines` (or `wnd_h` for a `CONF_ISWINDOW` console) rather than
+cached by the renderer, so this needs no draw-path hook. `Font_CharVHeight` takes an explicit font,
+so unlike `Font_CharHeight` it does not depend on whichever font happened to be bound last.
+
+**The load-bearing part is the two new end-clamps, not the step size.** Neither walk loop clamped
+the leftover `displayscroll` when it ran out of lines:
+
+- PgUp exits `while (displayscroll >= display->numlines)` with the remainder intact at the oldest
+  line. That remainder becomes the renderer's `chop` (`console.c:2212`), `y += chop` (`:2230`) shoves
+  the origin down, and the row loop `continue`s past everything — the console draws **nothing but
+  the `^^^^` marker**.
+- PgDn exits `while (displayscroll < 0)` **negative** whenever you are less than a page from the live
+  end. The snap-to-bottom at `keys.c:2107` cannot catch it (it tests `display->newer == con->current`,
+  but `newer` is `NULL` there). The view draws that many rows too high with a blank gap below — and,
+  worse, `Con_PrintCon`'s auto-follow gate requires `displayscroll == 0` (`console.c:1050`), so the
+  console **silently stops following new output** until you press End.
+
+At the old 2-line step the leftover was at most 2 rows and invisible. At a full-page step it is a
+broken console. Both loops now clamp to 0 at the ends, matching what Home and the mouse-drag path
+(`keys.c:730-734`, `:743-747`) already did. A `numlines < 1` floor was added too, so a line the
+renderer never walked cannot be consumed for free.
+
+### 122d — the console remembers where you were reading (`con_keepscroll`, default 1)
+
+`console.c:3298` snapped a closed/unfocused console window to the live tail every frame — a previous
+nettest fix, whose comment says it "kills the stuck `^^^^`".
+
+**Simply not resetting would have been a serious regression, and both halves matter:**
+
+1. With `con_window 1` (which quakers sets, `cfg/default.cfg:437`), `con_window_cb` clears
+   `CONF_NOTIFY` from `con_main` (`console.c:89`), so `Con_DrawNotify` skips it — **the faded hidden
+   window IS the in-game notify overlay**. `Con_DrawConsoleLines` only ever walks *older* than the
+   line it is handed (`console.c:2300`), so drawing from a scrolled-up `display` makes every new
+   console and chat print invisible in game.
+2. Its `^^^^` backscroll marker is emitted at `console.c:2214-2221`, **before** the `lineagelimit`
+   fade test at `:2305-2318`, with no alpha. A stale `display` parks a permanent full-brightness row
+   of `^` over the game view.
+
+So the shape is **save then draw the live tail then restore**, entirely inside `Con_DrawConsole`. The
+hidden console keeps drawing and fading exactly as before; the reading position is put back after
+the draw, so reopening lands where you left off.
+
+The position is stored as an **integer distance from `con->current`**, not a pointer:
+`Con_DrawConsoleLines` registers link images (`console.c:2336-2372`), which can `Con_Printf` on
+failure, which can evict and free a line mid-draw — and the eviction fixup at `console.c:1010-1011`
+only knows about `con->display`. Walking back from the never-freed `current` line means an eviction
+costs a row or two of accuracy instead of a dangling pointer. No new `console_t` fields, no new
+fixup sites.
+
+The non-windowed main console never reset in the first place (nothing writes `con_current->display`
+outside `Con_DrawConsole`'s NULL guard), and its notify overlay reads `con->current` independently,
+so `con_window 0` is unaffected either way.
+
+### Verification
+
+`m-rel` builds clean — **zero warnings** from `keys.c`, `console.c` and `cmd.c`. Graphical client
+smoke-tested twice on `2fort` (640x480 windowed, 30 s, `-condebug`): map loads, player connects,
+physics starts, no errors in the log beyond the pre-existing `GNUTLS` / `.lit` notices.
+
+The four behaviours are all input-driven and need in-game confirmation:
+
+| Check | Expected |
+|---|---|
+| `r_shadows 0` in console, in game | sets the cvar; first token paints **yellow**, not sent as chat |
+| `r_shad` + Tab | list now includes plain `r_shadows` |
+| type `r_sha`, press right arrow | line completes, same as Tab |
+| PgUp / PgDn | one full window; wheel still fine-grained |
+| PgDn at the live end, then print | console still auto-follows (the clamp) |
+| scroll up, close console, reopen | lands where you left off |
+| while closed, with `con_window 1` | notify text still appears; **no** stray `^^^^` over the view |
+
+Escape hatches, all live cvars: `con_acceptcompletion 0`, `con_pagelines 2`, `con_keepscroll 0`.
+
+## Patch 123 — the missing third of the frame: `r_speeds` structurally could not see a GPU stall, and `sys_framepacing 4` was one  *(APPLIED — `m-rel`; no header change, plugins unaffected)*
+
+**Symptom.** fy_killzone with all 66 `prop_physics` ran at ~360 fps and nobody could say why. Adding
+up every `r_speeds 2` bucket left **~1138 µs unaccounted inside `Total refresh`** — 33% of the frame,
+attributed to nothing. It scaled with `r_renderscale` but did not appear in `CSQC Drawing`, which
+ruled out the scene render itself.
+
+**Why more bucketing was never going to find it.** `RSpeedEnd` only issues its own `qglFinish` when
+`r_speeds > 2` (`client/render.h`). At the `r_speeds 2` anyone actually measures with, **no child
+bucket contains a GPU sync at all**, so GPU-tail time is *structurally* forced into the unattributed
+remainder of the parent. Three rounds of new buckets (postproc/resolve; the cost of drawing the
+r_speeds table itself; then five brackets covering every remaining statement in `GLSCR_UpdateScreen`)
+each came back near zero and each narrowed it correctly — the residual was never CPU work.
+
+**Cause.** `Sys_FramePacePresentActive()` is true whenever `sys_framepacing == 4` on OpenGL, and
+`cfg/settings.cfg` sets 4. That armed the pre-swap drain in `gl/gl_screen.c`: `qglFenceSync`
+immediately followed by `qglClientWaitSync` on *that same fence* — block until the GPU has retired
+every command submitted this frame. It sat outside every bucket. At a fixed viewpoint (340 draw
+calls, 2.0M indices):
+
+| | `r_renderscale 2` | `r_renderscale 1` |
+|---|---|---|
+| `Total refresh` | 2764.51 µs | 2576.52 µs |
+| *(new)* `Frame pacing` | 623.09 µs | 501.51 µs |
+| with the drain off | 2076.21 µs | 2061.48 µs |
+
+That last row is the finding: **with the drain off, `r_renderscale 2` costs 14.7 µs** — 4× the pixels
+for nothing. The GPU was never the limiter. The drain was forbidding frame N's GPU work from
+overlapping frame N+1's CPU work and charging the tail latency to the CPU every frame. This also
+refutes the intermediate conclusion "we are GPU-bound", which the same data appeared to support
+before the drain was isolated.
+
+**Fix — `sys_framepacing_drain` (`client/sys_win.c`), default 2.** A rotating fence ring
+(`gl_framepace_fence[]`, owned by `gl/gl_vidcommon.c` so it is zeroed where the entry points are
+bound — i.e. on every context creation, because a `GLsync` from a destroyed context must never be
+waited on). Depth 1 reproduces the old behaviour; depth 2 waits on frame N−1's fence, still capping
+queue depth at one frame but keeping the pipeline overlapped; 3 waits two back; 0 disables.
+
+**The drain was never earning its keep.** Swept with `cl_maxfps 300` so the paced hold actually
+engaged (target interval 3.333 ms):
+
+| `_drain` | interval | jitter (stddev) | `Frame pacing` |
+|---|---|---|---|
+| 1 (old) | 4.167 ms → 240.0 fps | **1445.2 µs** | 1800.35 µs |
+| **2 (new default)** | **3.360 ms → 297.6 fps** | **295.0 µs** | 1080.85 µs |
+| 3 | 3.568 ms → 280.3 fps | 871.4 µs | 967.82 µs |
+| 0 | 3.646 ms → 274.3 fps | 976.1 µs | 856.35 µs |
+
+Depth 1 was so expensive it ate the whole 3.333 ms budget, so the pacer could not reach its grid slot
+and the cadence collapsed — *worse* jitter than not draining at all. Depth 0 sawtooths at 976 µs
+because the GPU backlog runs deep, which is the real problem the drain was written to solve. Only
+N−1 gets the bound without the serialisation. **Bounding queue depth flattens cadence; bounding it to
+zero costs more than it buys.**
+
+Also: with `cl_maxfps 0`, `Sys_FramePacePresent` early-outs on `fps <= 0`, so mode 4 does *nothing
+but drain* — ~600 µs/frame for a pacing feature that never runs.
+
+### 123a — new `RSPEED_` buckets
+
+`RSPEED_POSTPROC` (18.7 µs), `RSPEED_RSPEEDSHOW` (~55 µs — the cost of drawing the very table being
+read, which was inflating the residual being chased), `RSPEED_SCR_SETUP` / `_COMPOSITE` / `_BRIGHTEN`
+/ `_PACING` / `_RESET` covering every remaining statement in `GLSCR_UpdateScreen`, and
+`RSPEED_SHADOW_CLASSIFY` / `_ENTDRAW` splitting the shadow bucket. `Total refresh` now reconciles with
+its children to **under 10 µs**, down from ~1138.
+
+### 123b — `r_speeds_dump` (`client/cl_screen.c`)
+
+Prints the sample table to the console as text. With `-condebug` the exact figures land in
+`qconsole.log`, so reconciliation arithmetic runs on numbers rather than on a downscaled screenshot.
+One-shot flag consumed by the next `RSpeedShow`.
+
+### 123c — `r_shadows_propshadows_max` default 13 → 8
+
+`sh_propsub_budget` is sized from this cvar, not the live cell count (Patch 120, deliberately, so
+resolution never steps). `Sh_PropSubCellRect` picks quarter-size subcells only while
+`nsub <= (4-nc)*4`; at the shipped `r_shadows_cascades 2` that threshold is 8, so a budget of 13
+failed it and **every lamp shadow got a 256 px cell instead of 512 px** — a quarter of the pixel
+area. 8 vs 13 measured 442.18 vs 453.16 µs with identical draw calls (i.e. free), and 8 still exceeds
+any live cell count on the mod's maps (6 map lights → 5 cells). With `cascades 3` the threshold drops
+to 4 and this would need to be ≤ 4.
+
+### 123d — shadow bucket decomposition
+
+The split is ~50/50 — `classify` 219.75 µs vs `entdraw` 204.18 µs — so neither half dominates and
+neither fix alone is decisive. Both live atlas faces pass `smesh = NULL`, so **no world geometry is
+rendered into the shadow atlas at all**; the cost is entirely the per-caster classification loop plus
+the repeated entity-list walks the engine itself flags at `gl/gl_shadow.c:2676` (*"fixme: this walks
+through the entity lists up to 6 times per frame per entity"*). The classification loop has **no
+distance or frustum rejection** before the expensive work — `camdist` is computed and then used only
+as a ranking multiplier ~100 lines later.
+
+`RF_NOSHADOW` *is* the first rejection in that loop, which is why the mod-side
+`r_props_shadowdist 1000` cull moves both sub-buckets together (classify → 102.19, entdraw → 123.59)
+and drops `Shadowmap Sides` 7 → 3: excluding distant props stops whole lamp cells being allocated.
+
+**End to end at `r_renderscale 2`, shipped defaults before vs after: 2764.51 → 2178.95 µs,
+361.73 → 458.94 fps (+27%).**
+
+### Still open — measured, not yet fixed, and NOT independently verified
+
+- Shadow atlas has **no frame-to-frame caching**: the 2048² depth texture is cleared and every face
+  re-rendered each frame, though lamp-cell projections are provably constant (Patch 120a) and their
+  casters are sleeping props. Biggest remaining shadow win; needs the whole-texture clear replaced.
+- `CL_PredictMove` traces against all 66 `SOLID_PHYSICS_TRIMESH` props with **no broadphase** —
+  `PM_TransformedHullCheck` jumps straight to `PM_HullTrace`, bypassing the AABB rejects. ~175 ns per
+  prop per trace, ~75% of it six double-precision `sin`/`cos` in `AngleVectorsMesh`. Est. 60–120 µs.
+- `Opaque Batches` (533–640 µs): vertex attribute pointers re-specified on every batch, and uniforms
+  have only an all-or-nothing `entunchanged` flag that `GLBE_SelectEntity` defeats per entity. Est.
+  ~131 µs. No instancing support exists anywhere in the GL backend.
+- `World walking` (312–379 µs) is reportedly a **DRAM bandwidth** problem, not algorithmic:
+  `msurface_t` is 288 bytes, the array is 8.7 MB, and the walk touches all five cache lines of ~20 k
+  surfaces ≈ 7 MB/frame ≈ 22.6 GB/s. Also PVS from that view leaf is 1534/1719 clusters (**89.2%
+  visible**) — fy_killzone is effectively unvised, which is map-side.
+- **Latent:** baked prop lighting binds its colour array from **client memory**
+  (`gl/gl_alias.c:1961`, `vbo = 0` + sysmem pointer), so the driver copies ~53 KB per prop per frame.
+  Inert on fy_killzone (no `RGBPROPLIGHT` lump) but will bite on any map carrying one.
+
+The adversarial verification pass on these four died on a session limit, so they are leads rather
+than findings. Given that `r_props_shadowdist 1200` looked well-reasoned and culled *exactly zero*
+props — the `PP_CULL_HYST` offset makes the effective radius `value + 192`, and the farthest prop was
+1371 — each should be measured before any code is written.

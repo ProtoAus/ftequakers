@@ -6861,7 +6861,19 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		{
 #ifdef RTLIGHTS
 			if (r_fakeshadows)
+			{
+				//nettest: Sh_GenerateFakeShadows used to sit OUTSIDE every RSPEED_ bucket -- the
+				//nearest RSpeedRemark() is the one below, AFTER it.  Its cost (the sun cascades, the
+				//per-prop lamp cells and their paired world cells, plus all the per-caster
+				//classification and lamp scoring) was therefore counted in Total refresh and CSQC
+				//Drawing but attributed to NOTHING.  The sub-buckets simply did not sum to the
+				//total, and on a prop-dense map the missing slice was the LARGEST single line in
+				//the frame -- bigger than Opaque Batches -- which made r_speeds actively
+				//misleading about where the time went.  Read it as "Shadow generation".
+				RSpeedRemark();
 				Sh_GenerateFakeShadows();
+				RSpeedEnd(RSPEED_FAKESHADOWS);
+			}
 #endif
 			GLBE_SelectEntity(&r_worldentity);
 

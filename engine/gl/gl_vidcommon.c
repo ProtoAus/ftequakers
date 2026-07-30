@@ -52,6 +52,8 @@ GLsync (APIENTRY *qglFenceSync) (GLenum condition, GLbitfield flags);				//nette
 GLenum (APIENTRY *qglClientWaitSync) (GLsync sync, GLbitfield flags, unsigned long long timeout);
 void   (APIENTRY *qglDeleteSync) (GLsync sync);
 int GLVID_FramePaceDrainPath(void) { return qglFenceSync ? 1 : 2; }	//nettest: sys_framepacing 4 drain path (1=ARB_sync fence, 2=glFinish) for sys_framepacing_stats
+GLsync gl_framepace_fence[GL_FRAMEPACE_SLOTS];	//nettest: see glquake.h -- rotating drain ring, zeroed on context (re)creation
+int    gl_framepace_slot;
 void (APIENTRY *qglFlush) (void);
 void (APIENTRY *qglGenTextures) (GLsizei n, GLuint *textures);
 void (APIENTRY *qglGenerateMipmap)(GLenum target);
@@ -3474,6 +3476,11 @@ qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 	qglFenceSync		= (void *)getglext("glFenceSync");		//GL_ARB_sync (3.2) — sys_framepacing 4; NULL-safe (gl_screen.c falls back to glFinish)
 	qglClientWaitSync	= (void *)getglext("glClientWaitSync");
 	qglDeleteSync		= (void *)getglext("glDeleteSync");
+	//nettest: this runs on every context (re)creation, so it is the correct place to drop the
+	//framepacing fence ring.  Any GLsync still held here belongs to a context that no longer
+	//exists; waiting on or deleting one is undefined behaviour, so just forget them.
+	memset(gl_framepace_fence, 0, sizeof(gl_framepace_fence));
+	gl_framepace_slot = 0;
 #endif
 
 #ifndef FTE_TARGET_WEB
