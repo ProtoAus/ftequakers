@@ -892,8 +892,11 @@ void CL_DownloadFinished(qdownload_t *dl)
 static qboolean CL_CheckFile(const char *filename)
 {
 	if (strstr (filename, ".."))
-	{
-		Con_TPrintf ("Refusing to download a path with ..\n");
+	{	//nettest: name the path. This fires from four unrelated call sites (hlbsp wad list,
+		//hlbsp skybox faces, Sound_CheckDownload, the download queue) and the bare message
+		//made it impossible to tell which, or whether ".." was real traversal or just a
+		//substring -- the test is strstr, so "foo..tga" trips it as readily as "../foo".
+		Con_Printf (CON_WARNING "Refusing to download a path with ..: \"%s\"\n", filename);
 		return true;
 	}
 
