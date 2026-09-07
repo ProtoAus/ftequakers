@@ -2172,7 +2172,16 @@ static void Surf_PushChains(batch_t **batches)
 		for (i = 0; i < SHADER_SORT_COUNT; i++)
 		for (batch = batches[i]; batch; batch = batch->next)
 		{
-			batch->recursefirst[r_refdef.recurse] = batch->firstmesh;
+			/* FTESurf Patch 221: index from the branch's own floor.
+			   recursefirst is declared [R_MAX_RECURSE-2] (gl_model.h) -- four
+			   entries -- and this branch runs for recurse 2..R_MAX_RECURSE-1, so
+			   indexing it by recurse writes past the end at depth 4 and 5, into
+			   whatever follows in batch_t.  r_portalrecursion caps live recursion
+			   at 2 today (gl_backend.c) so it is not currently reachable, but
+			   cfg/testrun/g2a.cfg already sets 3 and the array is exactly the
+			   right size once the floor is subtracted.  Paired with the read in
+			   Surf_PopChains. */
+			batch->recursefirst[r_refdef.recurse-2] = batch->firstmesh;
 			batch->firstmesh = batch->meshes;
 		}
 	}
@@ -2206,7 +2215,8 @@ static void Surf_PopChains(batch_t **batches)
 		for (batch = batches[i]; batch; batch = batch->next)
 		{
 			batch->meshes = batch->firstmesh;
-			batch->firstmesh = batch->recursefirst[r_refdef.recurse];
+			//FTESurf Patch 221: the read side of the same -2; see Surf_PushChains.
+			batch->firstmesh = batch->recursefirst[r_refdef.recurse-2];
 		}
 	}
 #endif
@@ -2219,6 +2229,216 @@ static void Surf_PopChains(batch_t **batches)
 			batch->firstmesh = 0;
 		}
 	}
+}
+
+/*
+FTESurf Patch 218: put the blended world surfaces back into painter's order.
+
+The world walk emits FRONT-TO-BACK -- near child, then this node's surfaces, then
+the far child -- which is right for opaque geometry and exactly inverted for
+alpha blending.  Because that order is an exact painter's order for the surfaces
+the BSP separates, reading it backwards is an exact back-to-front order, so this
+is a reversal and not a sort: no distances, no comparator, no tie-breaks.
+
+Runs on the current view's range only (firstmesh..meshes), so a recursed portal
+view reverses its own meshes and leaves the primary view's alone -- see
+Surf_PushChains above for how that range is maintained.
+
+The full essay, including what this does NOT fix (ordering BETWEEN batches of
+different materials) is on r_blendsort in renderer.c.
+*/
+static void Surf_SortBlendedChains(batch_t **batches)
+{
+	batch_t *batch;
+	mesh_t *swap;
+	int a, b;
+
+	if (!r_blendsort.ival)
+		return;
+
+	for (batch = batches[SHADER_SORT_BLEND]; batch; batch = batch->next)
+	{
+		//guarded rather than relying on the subtraction: meshes is unsigned, so an
+		//empty batch would wrap `meshes - 1` to something enormous.
+		if (batch->meshes <= batch->firstmesh + 1)
+			continue;	//nothing, or one mesh -- already in order either way
+		for (a = batch->firstmesh, b = batch->meshes - 1; a < b; a++, b--)
+		{
+			swap = batch->mesh[a];
+			batch->mesh[a] = batch->mesh[b];
+			batch->mesh[b] = swap;
+		}
+	}
+}
+
+/*
+FTESurf Patch 138: the last cluster pair we actually resolved for the PRIMARY view.
+
+A pvsorigin inside solid, or outside the map entirely, makes InfoForPoint report
+cluster -1.  Every consumer then degrades to "no PVS at all" -- and not just for
+surfaces.  On a VBSP map VBSP_MarkLeaves bails out on clusters[0] == -1
+(mod_vbsp.c:3768) and returns NULL, so the whole-model surface loop runs with no
+PVS test AND no frustum test, the static-prop cull is skipped because it is gated
+on the same null pointer, and CL_LinkStaticEntities' cull goes with it.  Q1 and
+HL maps reach the identical state through Q1BSP_ClusterPVS(-1) -> mod_novis.
+
+Measured on surf_666: 35,302 worldspawn faces and 653 props, with good vis -- the
+average cluster sees 1.6% of the map and the worst sees 5.1%.  So stepping into
+the void takes you from 1.6% of the map to 100% of it, unculled.  That is the
+whole of "super low fps when you're in the void", and Source does not do it
+because it keeps the last valid area when the view leaves the world.
+
+Keyed on the world pointer so a stale cluster index cannot survive a map change,
+and applied to the primary view ONLY: R_DrawSkyroom bumps r_refdef.recurse and
+supplies its own pvsorigin which may legitimately be in solid, and must not
+inherit the main view's cache.
+*/
+static model_t *surf_lastgoodworld;
+static int surf_lastgoodcluster[2] = {-1, -1};
+
+/*
+FTESurf build 17.  "The view is in the void AND the player is noclipping."
+
+Set once per primary view in Surf_SetupFrame and read by the two entity gates
+(CL_LinkStaticEntities and BE_GenModelBatches).  A global rather than a flag in
+r_refdef because those two are reached through several call paths that do not
+carry the refdef, and because it is strictly per-frame state with one writer.
+
+NOCLIP IS READ FROM THE PMOVE TYPE, not from a cvar or a QC stat.
+SV_PMTypeForClient maps MOVETYPE_NOCLIP to PM_SPECTATOR, or to PM_OLD_SPECTATOR
+for a client without the newer extensions (sv_user.c:7397-7404), and cl_pred.c
+copies it into playerview->pmovetype every frame.  So it is predicted, local,
+already there, and correct on a remote server as well as a listen one.
+
+The honest limitation: a real SPECTATOR is the same pm_type, so a spectator in
+the void would get this too.  That is arguably right -- a spectator out there
+wants to see the map for the same reason -- and this build has no spectators.
+*/
+qboolean r_voidview;
+
+/*
+BUILD 19 -- the entity census, and it is why this cvar is two settings and not
+four.
+
+The report was reporting the DECISION and nothing about its consequences, so
+"r_voidvis 1 and 2 look the same and cost the same" had no answer in the log.
+It does now, and the answer settled it: aimed at the map from outside it, at
+EVERY setting including 0 where no gate runs, this reads
+
+    entities 0 (brush 0)
+
+There are nothing out there to drop.  On a VBSP map the static props are emitted
+from inside the world model's own prepare-frame (mod_vbsp.c), each one PVS-tested
+and radius-culled BEFORE it becomes a visedict, so they never reach the entity
+list at all in the void -- and the whole difference between 0 and 1 is the world,
+i.e. Patch 178's forcevis.  Both entity gates went; see renderer.c.
+
+Written by BE_GenModelBatches (gl_alias.c), which is the one place every visedict
+passes through, and read here.  The world side is r_speeds' job and is not
+duplicated.
+
+The counters live in the engine and not in the plugin on purpose: a plugin cannot
+reach an engine global, and counting them where the entities are CONSUMED is the
+honest place anyway -- it measures what the renderer was handed, not what the
+loader believed it emitted.
+*/
+int r_voidvis_edicts;		/*visedicts offered to the batch generator*/
+int r_voidvis_brush;		/*...of which are brush models*/
+int r_voidvis_dropped;		/*...dropped before drawing.  Zero since build 19*/
+
+/*
+An all-visible PVS, handed to the world through r_refdef.forcedvis.
+
+MEASURED, NOT ASSUMED, and the measurement is why this exists.  The first cut
+simply left r_viewcluster at -1, which is the state Patch 138 describes: VBSP's
+PrepareFrame bails and the whole model is drawn with no PVS test AND NO FRUSTUM
+TEST.  timerefresh on surf_666 from 60,000 units up: 3785 fps with the fallback,
+and 27.6 fps without it.  27 fps is precisely the "drops FPS too much" this
+feature was asked to avoid, so drawing everything behind the camera as well is
+not a cost worth paying to see what is in front of it.
+
+forcevis is the lever that keeps the frustum.  VBSP_MarkLeaves takes
+refdef->forcedvis in preference to its own cluster lookup (mod_vbsp.c:4274), and
+returning a real vis pointer instead of NULL puts VBSP_PrepareFrame back on the
+VBSP_RecursiveWorldNode path -- which frustum-culls and area-culls exactly as it
+does indoors.  Set every bit and the only test it loses is the one that has no
+answer out here.
+
+The mechanism is not new: this is what the portal and mirror code already does
+with a real cluster's PVS.  Sized from the world's own pvsbytes and rebuilt when
+that changes, so a map with more clusters cannot read past the end.
+*/
+static qbyte  *surf_voidvis;
+static size_t  surf_voidvisbytes;
+
+static qbyte *Surf_VoidVis(model_t *w)
+{
+	if (!w || !w->pvsbytes)
+		return NULL;
+	if (surf_voidvisbytes < w->pvsbytes)
+	{
+		surf_voidvis = BZ_Realloc(surf_voidvis, w->pvsbytes);
+		surf_voidvisbytes = w->pvsbytes;
+		memset(surf_voidvis, 0xff, surf_voidvisbytes);
+	}
+	return surf_voidvis;
+}
+
+static qboolean Surf_PlayerIsNoclipping(void)
+{
+	if (!r_refdef.playerview)
+		return false;
+	return r_refdef.playerview->pmovetype == PM_SPECTATOR ||
+		   r_refdef.playerview->pmovetype == PM_OLD_SPECTATOR;
+}
+
+/*
+Build 17, and it is here because four benchmark runs were spent guessing at it.
+
+The measurement said r_voidvis was slowing the frame down INSIDE the map, where
+both halves of the gate should have been false -- and from the outside there is
+no way to tell which half was wrong, or whether the position under test was
+where the config thought it was.  Every input to the decision, printed at
+developer 1 and only when one of them CHANGES, so a benchmark log carries the
+gate's own reasoning next to the numbers it produced instead of beside them.
+
+Change-triggered rather than per-frame: this is called once per view, so an
+unconditional print would be 500 lines a second and would itself be the slowest
+thing in the frame.
+*/
+static void Surf_VoidVisReport(qboolean fired)
+{
+	static int	lastcluster = -2;
+	static int	lastpm = -2;
+	static int	lastvv = -2;
+	static int	lastfired = -2;
+
+	if (!developer.ival)
+		return;
+	if (r_viewcluster == lastcluster && lastpm == (r_refdef.playerview?r_refdef.playerview->pmovetype:-1) &&
+		lastvv == r_voidvis.ival && lastfired == (int)fired)
+		return;
+
+	lastcluster = r_viewcluster;
+	lastpm = r_refdef.playerview?r_refdef.playerview->pmovetype:-1;
+	lastvv = r_voidvis.ival;
+	lastfired = fired;
+
+	Con_Printf("voidvis: cluster %i  pmovetype %i (noclip %i)  r_voidvis %i  -> %s\n",
+		lastcluster, lastpm, Surf_PlayerIsNoclipping()?1:0, lastvv,
+		fired?"VOID VIEW":"off");
+	/*
+	  Build 19.  LAST FRAME'S counts, deliberately: this runs in Surf_SetupFrame,
+	  before BE_GenModelBatches has touched them this frame.  One frame stale is
+	  the right trade for keeping the census where the rest of the gate's
+	  reasoning is printed -- and the numbers that matter here are steady-state,
+	  not per-frame transients.
+
+	  "entities N (brush B), dropped D" reads directly: D of 0 with N large is a
+	  mode doing nothing, and B tells you what mode 2 alone could ever add.
+	*/
+	Con_Printf("        entities %i (brush %i) -- world counts are r_speeds\n",
+		r_voidvis_edicts, r_voidvis_brush);
 }
 
 //most of this is a direct copy from gl
@@ -2275,6 +2495,118 @@ void Surf_SetupFrame(void)
 	{
 		r_viewcluster = -1;
 		r_viewcluster2 = -1;
+	}
+
+	/*
+	  FTESurf Patch 138 -- the void.  See the note on surf_lastgoodcluster.
+
+	  Both clusters, not just the first: MarkLeaves keys its PVS cache on the
+	  PAIR, so a mixed one would thrash it every frame.
+
+	  r_novis 1 still forces the old behaviour, which is what makes this
+	  A/B-able: with the fallback working, r_novis 0 and r_novis 1 in the void
+	  are the difference between 1.6% of the map and all of it.
+
+	  BUILD 17 puts that reversal behind r_voidvis, for noclip only, because
+	  falling into the void and flying out of it want opposite things -- see
+	  r_voidview above.
+	*/
+
+	/*
+	  Cleared for EVERY view, including the recursive ones, and cleared before
+	  anything below can set it.  A skyroom or a mirror renders with its own
+	  pvsorigin that may legitimately be in solid (see the note at the top of
+	  this function), and it must not inherit the main view's answer -- but it
+	  also runs AFTER the main view has already set this, so leaving a stale
+	  true here would silently drop every entity out of the reflection.
+	*/
+	r_voidview = false;
+
+	/*
+	  And the forced vis with it, for the primary view only.
+
+	  The portal code sets forcevis for the recursive views it renders and
+	  clears it again itself, so clearing it here for recurse > 0 would take a
+	  mirror's own vis away from it mid-frame.  For the primary view nothing
+	  else ever sets it, so leaving a stale one from the frame you flew back
+	  indoors would draw the whole map from then on -- silently, and only until
+	  the next map change.
+	*/
+	if (!r_refdef.recurse)
+	{
+		r_refdef.forcevis = false;
+		r_refdef.forcedvis = NULL;
+	}
+
+	if (!r_refdef.recurse && !(r_refdef.flags & RDF_NOWORLDMODEL) && cl.worldmodel)
+	{
+		if (surf_lastgoodworld != cl.worldmodel)
+		{	//new world: the old cluster indices mean nothing in it.
+			surf_lastgoodworld = cl.worldmodel;
+			surf_lastgoodcluster[0] = surf_lastgoodcluster[1] = -1;
+		}
+
+		/*
+		  Build 17: in the void, noclipping, and asked for.  Leave the cluster
+		  at -1 so the whole world is drawn, and tell the entity gates to skip.
+
+		  BOTH HALVES OF THE GATE MATTER and each is load-bearing on its own.
+		  Without the cluster test this would fire while noclipping INSIDE the
+		  map, where vis is working perfectly and there is nothing to fix.
+		  Without the noclip test it would fire on the ordinary fall into the
+		  void, which is the exact case Patch 138 exists to keep playable.
+		*/
+		if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping())
+		{
+			r_voidview = true;
+
+			/*
+			  All bits set, so every cluster is "visible" and the world falls
+			  back on its frustum and area tests alone -- see Surf_VoidVis.
+
+			  Only for the PRIMARY view, which is also why it is safe to own
+			  this field here: the portal and mirror code sets forcevis for the
+			  RECURSIVE views it renders (gl_rmain.c:1225), always with
+			  recurse > 0, so nothing else is ever competing for it at this
+			  level.  If the buffer cannot be had we simply do not force, and
+			  fall through to the old whole-model draw rather than to nothing.
+			*/
+			r_refdef.forcedvis = Surf_VoidVis(cl.worldmodel);
+			r_refdef.forcevis = !!r_refdef.forcedvis;
+			Surf_VoidVisReport(true);
+		}
+		else if (r_viewcluster == -1)
+		{
+			Surf_VoidVisReport(false);	//before the cluster below is overwritten, or the print lies about it
+
+			/*RANGE-CHECKED, and not as a formality.
+
+			  The pointer test above and the two invalidations in Surf_NewMap /
+			  Surf_PreNewMap both assume a new world means a new address -- but
+			  Mod_ClearAll frees the old model first, so the allocator is free to
+			  hand the same address straight back.  A cluster index from the
+			  previous map would then reach VBSP_ClusterPVS, which indexes
+			  prv->vis->bitofs[cluster] with NO upper bound of its own
+			  (mod_vbsp.c) -- an out-of-range read on the first rendered frame of
+			  the new map.  That is an intermittent crash whose cause depends on
+			  the allocator, which is the worst kind to be left holding.
+
+			  Bounding against the world's own numclusters makes the cache safe
+			  whether or not any invalidation fired.  Everything else here is an
+			  optimisation; this line is the correctness.*/
+			if (surf_lastgoodcluster[0] < cl.worldmodel->numclusters &&
+				surf_lastgoodcluster[1] < cl.worldmodel->numclusters)
+			{
+				r_viewcluster  = surf_lastgoodcluster[0];
+				r_viewcluster2 = surf_lastgoodcluster[1];
+			}
+		}
+		else
+		{
+			Surf_VoidVisReport(false);
+			surf_lastgoodcluster[0] = r_viewcluster;
+			surf_lastgoodcluster[1] = r_viewcluster2;
+		}
 	}
 
 #ifdef TERRAIN
@@ -2424,6 +2756,70 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 		bef |= BEF_FORCENODEPTH;
 	if (ent->flags & RF_NOSHADOW)
 		bef |= BEF_NOSHADOWS;
+	//nettest: r_shadows_bmodels 0 - only MODELS cast shadows, not brush entities.
+	//`submodelof` is set only for an inline "*N" submodel of the world, i.e. exactly
+	//a func_door / func_wall / func_train / func_pushable and never the world itself
+	//(the same test r_pushdepth uses a few lines above), so the world keeps casting
+	//and only the func_ classes stop.  Reached by EVERY brush-model entity - CSQC-drawn
+	//or engine-networked - and BEF_NOSHADOWS is already honoured by the depth/stencil
+	//passes in GLBE_SubmitMeshesSortList, so this one condition covers the whole class.
+	if (!r_shadows_bmodels.ival && model->submodelof == r_worldentity.model)
+		bef |= BEF_NOSHADOWS;
+
+	//nettest: DRAW A LIQUID BRUSH ENTITY FROM BOTH SIDES.
+	//
+	//A func_water submodel is a CLOSED box whose every face points OUTWARD - the
+	//compiler emits one face per plane, unlike worldspawn water, which it emits on
+	//both sides of each plane.  Shader_DefaultBSPWater never writes a `cull` line,
+	//so the shader inherits SHADER_CULL_FRONT (gl_shader.c:7798), and a brush
+	//ENTITY gets no per-surface plane test at all - the loop below copies
+	//model->batches wholesale.  The GPU is therefore the only culler, and from
+	//inside the volume every face of the box is backfacing.  Result: swim into a
+	//func_water and the surface above your head simply is not drawn.
+	//
+	//Gated on a NEGATIVE skinnum, which is the engine's own existing marker for
+	//"this brush model is a contents volume" - cl_ents.c uses exactly that test to
+	//turn a networked brush entity into a physent with a forced contents mask, and
+	//CSQC passes .skin through to skinnum (pr_csqc.c:920).  So this reaches
+	//func_water / func_slime / func_lava and nothing else: not the world model, not
+	//func_door, not func_wall, and it leaves Shader_DefaultBSPWater alone so the
+	//WORLD's doubled water faces keep relying on GL cull to avoid drawing twice.
+	//
+	//(Fixing this in the shader template instead - the obvious `cull none` - would
+	//be wrong on any map big enough to auto-enable the temporal scene cache, where
+	//Surf_SimpleWorld_Q1BSP walks marksurfaces with no backface test and the
+	//world's two coincident water quads would both rasterize.)
+	if (ent->skinnum < 0)
+	{
+		bef |= BEF_FORCETWOSIDED;
+
+		//nettest: AND THE WATER SHADER'S OWN ALPHA IS THE WHOLE ANSWER.
+		//
+		//Shader_DefaultBSPWater bakes r_wateralpha into the liquid shader
+		//(gl_shader.c: "alphagen const %g" plus defaultwarp#ALPHA=%g), and
+		//defaultwarp.glsl then multiplies that by e_colourident - which is the
+		//ENTITY's alpha, verbatim, via SP_E_COLOURSIDENT in gl_backend.c.  For
+		//worldspawn water there is no entity and the factor is 1.  For a
+		//func_water the mod translates the GoldSrc `renderamt` key into entity
+		//alpha, so the pool renders at r_wateralpha * renderamt/255 while the
+		//worldspawn water beside it renders at r_wateralpha.
+		//
+		//That is the "func_water is about half the transparency of the
+		//worldspawn water, I need r_wateralpha 2 to make it look solid" report,
+		//and the factor of two is literal: renderamt 128 is the single most
+		//common value.  Across the Sven Co-op map set func_water carries
+		//renderamt 65, 70, 75, 85, 100, 128, 130, 150, 175, 200, 210 and 255,
+		//so how transparent a pool looked was a property of which map it was in.
+		//
+		//Neither engine multiplies these: GoldSrc has no r_wateralpha and uses
+		//renderamt alone, FTE's world water uses r_wateralpha alone.  Doing both
+		//is the bug.  r_hlwater_entalpha 1 restores the old compounding.
+		if (!r_hlwater_entalpha.ival)
+		{
+			ent->shaderRGBAf[3] = 1;
+			bef &= ~BEF_FORCETRANSPARENT;
+		}
+	}
 
 	for (i = 0; i < SHADER_SORT_COUNT; i++)
 	for (ob = model->batches[i]; ob; ob = ob->next)
@@ -3010,6 +3406,233 @@ cvar_t r_temporalscenecache					= CVARAFD ("r_temporalscenecache", "", "r_scenec
 cvar_t r_temporalscenecache					= CVARAFD ("r_temporalscenecache", "", "r_scenecache", CVAR_NOSET, "Controls whether to generate+reuse a scene cache over multiple frames. This is generated on a separate thread to avoid any associated costs. This can significantly boost framerates on complex maps, but can also stress the gpu more (performance tradeoff that varies per map). An outdated cache may be used if the cache takes too long to build (eg: lightmap animations), which could cause the odd glitch when moving fast (but retain more consistent framerates - another tradeoff).\n0: Tranditional quake rendering.\n1: Generate+Use the scene cache.");
 #endif
 
+//nettest: what the scene-cache decision in Surf_DrawWorld actually came to on
+//the last frame, for `r_waterinfo` below.  Latched rather than recomputed
+//because the decision depends on state (loadstate, Media_Capturing, the
+//per-style cvars) that is only meaningful mid-frame.
+static int nettest_sc_wanted = -1;	//what the heuristic/cvar asked for
+static int nettest_sc_forced = -1;	//...and whether the wateralpha override overrode it
+
+/*
+=============
+R_WaterInfo_f
+
+nettest: ONE COMMAND THAT SAYS WHY THE WATER LOOKS WRONG.
+
+Transparent GoldSrc water has an unreasonable number of independent off
+switches, none of which announces itself, and every previous round of this has
+been spent guessing which one was closed:
+
+  - r_wateralpha left at 1 (its default) by a config or a map cfg, which alone
+    makes both the blend AND r_wateralpha_extendpvs no-ops.
+  - cls.allow_watervis, a SERVER permission (the `watervis` serverinfo key). If
+    the server says no, Shader_DefaultBSPWater forces alpha to 1 whatever the
+    client asked for - gl_shader.c:7110-7113.
+  - the temporal scene cache, which returns before Q1BSP_MarkLeaves and so
+    silently disables extendpvs entirely; it auto-enables above 6000 leafs, i.e.
+    on exactly the maps big enough to want translucent water.
+  - the fluid merge only ever walks WORLDSPAWN leafs. Water built as a func_
+    brush entity has no leafs in the world's cluster range at all, so no amount
+    of extendpvs can do anything for it. On th_ep1_01 that is most of the water.
+  - r_hlwater_hidesides, which suppresses the underside/sides of HL water.
+=============
+*/
+void R_WaterInfo_f(void)
+{
+	extern cvar_t r_hlwater_hidesides, r_waterripple, r_waterstyle;
+	extern float q1bsp_marktime;
+	extern int q1bsp_wantmerge, q1bsp_fluidtotal, q1bsp_fluidmerged;
+	extern int q1bsp_fluidshoreents, q1bsp_fluidnovis, q1bsp_fluidbodies;
+	model_t *m = cl.worldmodel;
+	int i, worldliquid = 0, entliquid = 0, hidden = 0, kept = 0;
+	float alpha;
+
+	//Say WHICH of the two it is.  "no world loaded" covers both "you are at the
+	//menu" and "the map is still loading", and on the headless client - where
+	//this is driven from a deferred console command with no way to watch the
+	//load - those need telling apart or the run silently measures nothing.
+	if (!m)
+	{
+		Con_Printf("r_waterinfo: no world model yet (not connected, or still receiving the map)\n");
+		return;
+	}
+	if (m->loadstate != MLS_LOADED)
+	{
+		Con_Printf("r_waterinfo: world \"%s\" is still loading (loadstate %i) - try again in a moment\n",
+				m->name, m->loadstate);
+		return;
+	}
+
+	Con_Printf("^2world^7: %s (%s), %i leafs, %i clusters\n", m->name,
+			(m->fromgame==fg_halflife)?"halflife":((m->fromgame==fg_quake)?"quake":"other"),
+			m->numleafs, m->numclusters);
+
+	//the alpha the water shader will actually have resolved to.
+	if (cls.allow_watervis)
+		alpha = *r_wateralpha.string?r_wateralpha.value:1;
+	else
+		alpha = 1;
+	Con_Printf("^2alpha^7: r_wateralpha %s -> effective %g   (server allow_watervis %s)\n",
+			*r_wateralpha.string?r_wateralpha.string:"<empty>", alpha,
+			cls.allow_watervis?"YES":"^1NO - water is forced OPAQUE^7");
+	if (!cls.allow_watervis)
+		Con_Printf("        ^3the server has not set the `watervis` serverinfo key; nothing client-side can override this\n");
+	else if (alpha >= 1)
+		Con_Printf("        ^3alpha is 1, so water is opaque and extendpvs is a no-op whatever it is set to\n");
+
+	//liquid faces, split by owner - the distinction that decides whether the
+	//PVS extension can possibly help.
+	for (i = 0; i < m->numsurfaces; i++)
+	{
+		if (!(m->surfaces[i].flags & SURF_DRAWTURB))
+			continue;
+		if (i >= m->submodels[0].firstface && i < m->submodels[0].firstface+m->submodels[0].numfaces)
+			worldliquid++;
+		else
+			entliquid++;
+		if (m->surfaces[i].flags & SURF_NODRAW)
+			hidden++;
+		else
+			kept++;
+	}
+	Con_Printf("^2liquid faces^7: %i worldspawn, %i brush-entity   (%i drawn, %i hidden by r_hlwater_hidesides %s)\n",
+			worldliquid, entliquid, kept, hidden, r_hlwater_hidesides.string);
+	if (entliquid > worldliquid)
+		Con_Printf("        ^3most of this map's water is brush-ENTITY water; r_wateralpha_extendpvs only ever\n"
+				   "        ^3merges WORLDSPAWN fluid leafs, so it cannot affect those pools at all\n");
+
+	//nettest: WHAT SHADER DOES A HIDDEN FACE ACTUALLY GET?
+	//"the sides and bottom of the func_water are solid bright orange" is a
+	//SHADER question, not a texture question - bspguy is right that every face
+	//carries the water texture.  Mod_Batches (gl_model.c) throws that texture
+	//away for any SURF_NODRAW face and hands the surface this shader instead,
+	//so if this one ever resolves with a pass it PAINTS the sides rather than
+	//hiding them, in whatever the fallback texture happens to look like.
+	{
+		shader_t *nd = R_RegisterShader("nodraw", SUF_NONE, "{\nsurfaceparm nodraw\n}");
+		Con_Printf("^2nodraw shader^7: \"%s\" passes=%i sort=%i flags=%#x -> %s\n",
+				nd->name, nd->numpasses, nd->sort, nd->flags,
+				(nd->flags & SHADER_NODRAW)
+					?"^2not drawn^7"
+					:"^1DRAWN - every hidden liquid side is being painted^7");
+		//Only when it is broken: register the IDENTICAL body under a name nothing
+		//can claim.  If the control comes out nodraw and "nodraw" does not, the
+		//NAME has been taken - by a plugin material loader or a shader script -
+		//rather than the body being at fault.  That is the exact shape of the two
+		//hijacks this engine has already hit ("black", then "nodraw").
+		if (!(nd->flags & SHADER_NODRAW))
+		{
+			shader_t *pr = R_RegisterShader("\1waterinfo_nodraw_control", SUF_NONE|SUR_FORCEFALLBACK, "{\nsurfaceparm nodraw\n}");
+			Con_Printf("        genargs=%s\n", nd->genargs?nd->genargs:"^1NULL^7");
+			Con_Printf("        control (same body, name nothing can claim): passes=%i flags=%#x -> %s\n",
+					pr->numpasses, pr->flags,
+					(pr->flags & SHADER_NODRAW)
+						?"^3nodraw, so the BODY is fine and the NAME was taken^7"
+						:"^3also drawn, so the body itself is not parsing^7");
+		}
+	}
+
+	//nettest: COINCIDENT LIQUID SURFACES, per submodel.
+	//A pool that renders as TWO wavy sheets is two faces on one plane, both
+	//still drawn.  The compiler emits the top boundary in both facings and
+	//gl_model.c deliberately keeps the down-facing twin so you can see the
+	//surface from underneath - which is right for worldspawn, where GL backface
+	//culling shows exactly one of the pair.  It is wrong for a liquid brush
+	//ENTITY, because Surf_DrawBrushModel forces those two-sided (skinnum < 0),
+	//so both copies rasterize; and with r_waterripple they deform along
+	//OPPOSITE normals and visibly separate into two sheets.
+	//Counted as "down-facing liquid faces that are still drawn AND share their
+	//plane with an up-facing one that is also still drawn", i.e. the number of
+	//SURFACES you see twice - not the number of (up,down) pairs, which on a
+	//tessellated pool is the product of the two counts and reads as nonsense.
+	{
+		int sm, a, b, dbl, entdbl = 0;
+		for (sm = 0; sm < m->numsubmodels; sm++)
+		{
+			int first = m->submodels[sm].firstface;
+			int last  = first + m->submodels[sm].numfaces;
+			dbl = 0;
+			for (a = first; a < last; a++)
+			{
+				if (!(m->surfaces[a].flags & SURF_DRAWTURB) || (m->surfaces[a].flags & SURF_NODRAW))
+					continue;
+				if (((m->surfaces[a].flags & SURF_PLANEBACK)?-1:1) * m->surfaces[a].plane->normal[2] >= -0.5)
+					continue;	//only the down-facing half is the redundant copy
+				for (b = first; b < last; b++)
+				{
+					if (b == a || m->surfaces[b].plane != m->surfaces[a].plane)
+						continue;
+					if (!(m->surfaces[b].flags & SURF_DRAWTURB) || (m->surfaces[b].flags & SURF_NODRAW))
+						continue;
+					if (((m->surfaces[b].flags & SURF_PLANEBACK)?-1:1) * m->surfaces[b].plane->normal[2] > 0.5)
+					{
+						dbl++;
+						break;
+					}
+				}
+			}
+			if (dbl && sm)
+			{
+				entdbl += dbl;
+				Con_Printf("^2coincident^7: submodel *%i draws %i liquid surface(s) TWICE (one plane, both facings)\n", sm, dbl);
+			}
+			else if (dbl)
+				Con_Printf("^2coincident^7: worldspawn has %i down-facing liquid face(s) over an up-facing twin"
+						   "   ^2(expected - nothing draws the world two-sided, so GL culling picks one)^7\n", dbl);
+		}
+		if (entdbl)
+			Con_Printf("        ^1a liquid brush ENTITY is drawn two-sided, so BOTH facings rasterize -"
+					   " that is the doubled surface^7\n");
+	}
+
+	Con_Printf("^2scene cache^7: r_temporalscenecache \"%s\" -> wanted %i, in use %i%s\n",
+			r_temporalscenecache.string, nettest_sc_wanted, r_temporalscenecache.ival,
+			(nettest_sc_forced>0)?"   ^2(forced off by r_wateralpha_extendpvs)^7":"");
+
+	Con_Printf("^2extendpvs^7: r_wateralpha_extendpvs %s\n", r_wateralpha_extendpvs.string);
+	if (q1bsp_marktime < 0)
+		Con_Printf("        ^1Q1BSP_MarkLeaves has NEVER run^7 - on a real renderer that means the scene\n"
+				   "        cache is returning before it and the extension is dead whatever the cvars say.\n"
+				   "        (On vid_renderer headless it means only that nothing draws the world.)\n");
+	else if (realtime - q1bsp_marktime > 1)
+		Con_Printf("        ^1MarkLeaves last ran %.1f seconds ago^7 - it is not running per-frame, so the\n"
+				   "        scene cache is returning before it and the extension is inert\n",
+				realtime - q1bsp_marktime);
+	else
+	{
+		Con_Printf("        MarkLeaves ran %.2fs ago (i.e. per-frame), merge wanted: %s\n",
+				realtime - q1bsp_marktime, q1bsp_wantmerge?"yes":"^3no^7");
+		if (q1bsp_fluidtotal >= 0)
+		{
+			Con_Printf("        merging %i of %i worldspawn fluid leafs%s\n",
+					q1bsp_fluidmerged, q1bsp_fluidtotal,
+					(q1bsp_fluidtotal==0)?"   ^3(none: this map has no worldspawn water)^7":"");
+			//The shore table is what makes the merge possible at all on a map whose
+			//vis treated water as opaque - see Q1BSP_BuildFluidAdjacency.  Zero
+			//entries with a non-zero fluid count means it could not be built and the
+			//gate has fallen back to the direct PVS test, which on such a map is
+			//always false.
+			Con_Printf("        shore table: %i adjacency entries across %i connected water bodies%s\n",
+					q1bsp_fluidshoreents, q1bsp_fluidbodies,
+					(q1bsp_fluidtotal>0 && q1bsp_fluidshoreents<=0)?"   ^1(EMPTY - merge cannot fire)^7":"");
+			if (q1bsp_fluidnovis > 0)
+				Con_Printf("        %i visible pool(s) skipped for having no vis data of their own\n"
+						   "        (merging one would set every bit and turn the frame into r_novis)\n",
+						q1bsp_fluidnovis);
+		}
+	}
+
+	//The amplifier for every "I can see things that should be culled" report on
+	//a HL map: the sky writes no depth, so anything the PVS lets through is
+	//drawn straight over it.  Widening the PVS and having a depth-less sky are
+	//individually defensible and together are what a player reads as "faces
+	//flickering in the distance".
+	Con_Printf("^2sky^7: allow_unmaskedskyboxes %s%s\n",
+			cls.allow_unmaskedskyboxes?"1":"0",
+			cls.allow_unmaskedskyboxes?"   ^3(sky writes NO depth: anything the PVS admits draws through it)^7":"");
+	Con_Printf("^2ripple^7: r_waterripple %s, r_waterstyle %s\n", r_waterripple.string, r_waterstyle.string);
+}
+
 /*
 =============
 R_DrawWorld
@@ -3063,6 +3686,36 @@ void Surf_DrawWorld (void)
 			if (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife)
 				sc = ((r_novis.ival==1)||(cl.worldmodel->numleafs > 6000)) && r_waterstyle.ival<=1 && r_telestyle.ival<=1 && r_slimestyle.ival<=1 && r_lavastyle.ival<=1 && Media_Capturing()<2;
 		}
+		//nettest: THE WATERALPHA PVS EXTENSION AND THE SCENE CACHE ARE MUTUALLY EXCLUSIVE.
+		//
+		//r_wateralpha_extendpvs is implemented in Q1BSP_MarkLeaves (common/q1bsp.c), which is
+		//only reachable via model->funcs.PrepareFrame further down this function - and the
+		//scene-cache branch RETURNS before it, handing BE_DrawWorld a PVS that R_GenWorldEBO
+		//built straight out of ClusterPVS with no fluid merge at all.  So wherever the cache is
+		//active the cvar does literally nothing, AND the leafs behind the water are missing
+		//while the water is still drawn `sort underwater` with a blendfunc - so at
+		//r_wateralpha 0.5 you blend water over an unpainted framebuffer and see straight out of
+		//the level.  Both halves of the reported bug, from one cause.
+		//
+		//The auto-default above is what decides it, and it is leaf-count driven: th_ep1_00 has
+		//2452 leafs so the feature works there, th_ep1_01 has 7328 and trips the >6000 rule, so
+		//it is dead on exactly the maps big enough to want translucent water.  q1bsp.c:2079
+		//already documents this trap and says it has to be fixed HERE.
+		//
+		//Forced AFTER the auto-default so it also overrides an explicit
+		//"r_temporalscenecache 1"; .value is re-read first because .ival is the field this code
+		//clobbers, so the override lifts cleanly when extendpvs is turned back off.
+		//COST: the cache is a real FPS win on big maps.  This trades it back for correct water,
+		//and only for someone who has actually asked for both translucent water AND the PVS
+		//extension - set r_wateralpha_extendpvs 0 to get the cache back.
+		if (*r_temporalscenecache.string)
+			sc = (int)r_temporalscenecache.value;
+		nettest_sc_wanted = sc;
+		if (r_wateralpha_extendpvs.ival && r_wateralpha.value < 1.0f && cl.worldmodel &&
+			(cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife))
+			sc = 0;
+		nettest_sc_forced = (sc != nettest_sc_wanted);
+
 		if (sc != r_temporalscenecache.ival)
 		{
 			r_temporalscenecache.ival = sc;
@@ -3317,6 +3970,33 @@ void Surf_DrawWorld (void)
 
 		RSpeedEnd(RSPEED_WORLDNODE);
 
+		/* FTESurf: HOW MUCH WORLD DID *THIS* VIEW EMIT?
+
+		   r_speeds aggregates every view in the frame into one set of numbers, so on
+		   a map with portals it cannot answer "did the recursed view draw anything",
+		   which is the only question that separates a culling bug from a shading one.
+		   Counted over the current view's own range (firstmesh..meshes) and reported
+		   with the recursion level, area and cluster that produced it. */
+		{
+			static int worldreports = 0;
+			if (worldreports < 16 && !(r_refdef.flags & RDF_NOWORLDMODEL))
+			{
+				batch_t *b;
+				int i, nm = 0, nb = 0;
+				for (i = 0; i < SHADER_SORT_COUNT; i++)
+					for (b = cl.worldmodel->batches[i]; b; b = b->next)
+						if (b->meshes > b->firstmesh)
+						{
+							nb++;
+							nm += b->meshes - b->firstmesh;
+						}
+				worldreports++;
+				Con_DPrintf("[world] recurse %i: area %i cluster %i vis %s -> %i meshes in %i batches\n",
+					r_refdef.recurse, r_viewarea, r_viewcluster,
+					surfvis?"yes":"NONE", nm, nb);
+			}
+		}
+
 		areas[0] = 1;
 		areas[1] = r_viewarea;
 		r_refdef.sceneareas = areas;
@@ -3329,6 +4009,11 @@ void Surf_DrawWorld (void)
 			if (!r_refdef.recurse)
 				CL_EmitPersistentDecals ();	//nettest: persistent lit decals
 		}
+
+		//FTESurf Patch 218: the world walk emitted these near-to-far, which is
+		//backwards for alpha.  Must be after the walk has filled the batches and
+		//before they are submitted.
+		Surf_SortBlendedChains(cl.worldmodel->batches);
 
 		TRACE(("dbg: calling BE_DrawWorld\n"));
 		r_refdef.scenevis = surfvis;
@@ -3361,6 +4046,13 @@ unsigned int Surf_CalcMemSize(msurface_t *surf)
 void Surf_DeInit(void)
 {
 	int i;
+	extern void R_VertLightBuffers_Flush(void);	//FTESurf Patch 262, gl_alias.c
+
+	//FTESurf Patch 262: the per-instance static prop colour buffers.  This runs on
+	//vid_restart AND -- because Surf_NewMap calls it -- on every map load, which is the one
+	//that matters: those buffers are keyed on CPU pointers that the world model's memgroup
+	//is about to free, so a recycled address would otherwise hit a stale entry.
+	R_VertLightBuffers_Flush();
 
 #ifdef THREADEDWORLD
 	webo_blocklightmapupdates = 0;
@@ -3812,7 +4504,36 @@ void Surf_BuildModelLightmaps (model_t *m)
 		return;
 
 	if (!m->lightmaps.count)
+	{
+		//FTESurf build 11: a brush model with no lightmap PAGES leaves here
+		//before any of the fixup below, so its surfaces are never painted and
+		//it draws flat.  Counted rather than listed -- on a Source map there
+		//can be thousands.
+		if (r_texdiag.ival && m->nummodelsurfaces)
+		{
+			//Most of these are trigger volumes, which are invisible and are
+			//SUPPOSED to be unlit.  What matters is whether any DRAWN surface is
+			//in here, so count those separately and name the texture -- an
+			//unlit drawn surface is the pale one.
+			int k, drawn = 0;
+			const char *tn = "?";
+			for (k = 0; k < m->nummodelsurfaces; k++)
+			{
+				msurface_t *s = m->surfaces + k + m->firstmodelsurface;
+				if (s->flags & (SURF_NODRAW|SURF_DRAWSKY))
+					continue;
+				if (s->texinfo && (s->texinfo->flags & TEX_SPECIAL))
+					continue;
+				if (!drawn && s->texinfo && s->texinfo->texture)
+					tn = s->texinfo->texture->name;
+				drawn++;
+			}
+			if (drawn)
+				Con_Printf("[texdiag] LM0 %-20s NO LIGHTMAP PAGES, %i surfaces, %i DRAWN  first=%s\n",
+					m->name, m->nummodelsurfaces, drawn, tn);
+		}
 		return;
+	}
 
 	currentmodel = m;
 	shift = Surf_LightmapShift(currentmodel);
@@ -4025,6 +4746,99 @@ void Surf_BuildModelLightmaps (model_t *m)
 		}
 	}
 	m->lightmaps.first = newfirst;
+
+	/*
+	FTESurf build 11: did this model's surfaces actually END UP lightmapped?
+
+	A surface can be allocated a lightmap by Mod_Batches_AllocLightmaps and then
+	quietly lose it here -- the two range checks above stamp -1 on anything
+	outside [lightmaps.first, first+count) -- and a surface with
+	lightmaptexturenums[0] == -1 draws against a default white lightmap.  That is
+	not black and it is not obviously broken; it is FLAT AND NEUTRAL, which on a
+	warm map reads as "pale", and it was reported as a texture problem.
+
+	`samples` is the other half: no luxels means nothing to paint whatever the
+	allocation says.  Printed per model so the world and the brush entities can
+	be compared side by side, which is the whole question.
+	*/
+	if (r_texdiag.ival && m->lightmaps.count)
+	{
+		int lit = 0, unlit = 0, nosamples = 0, k;
+		double lr = 0, lg = 0, lb = 0;
+		size_t nlux = 0;
+		for (k = 0; k < m->nummodelsurfaces; k++)
+		{
+			surf = m->surfaces + k + m->firstmodelsurface;
+			if (surf->lightmaptexturenums[0] < 0)
+				unlit++;
+			else
+				lit++;
+			if (!surf->samples)
+				nosamples++;
+
+			/*
+			THE LUXELS THEMSELVES, averaged.  Everything above says only that a
+			lightmap was allocated and painted; this says what was painted WITH.
+			If a brush entity's average luxel is near-white while the world's is
+			warm and dark, then the renderer is doing exactly as it was told and
+			the wrong data is being read out of the lighting lump -- which is a
+			different bug in a different file from anything the counts can show.
+			*/
+			else if (m->lightmaps.fmt == LM_E5BGR9 && surf->lightmaptexturenums[0] >= 0)
+			{
+				int smax = (surf->extents[0]>>surf->lmshift)+1;
+				int tmax = (surf->extents[1]>>surf->lmshift)+1;
+				unsigned int *lx = (unsigned int*)surf->samples;
+				int n = smax*tmax, q;
+				if (n > 256) n = 256;	//a sample, not a survey
+				for (q = 0; q < n; q++)
+				{
+					unsigned int v = lx[q];
+					double sc = pow(2.0, (double)((v>>27)&0x1f) - 15 - 9);
+					lr += ((v>> 0)&0x1ff)*sc;
+					lg += ((v>> 9)&0x1ff)*sc;
+					lb += ((v>>18)&0x1ff)*sc;
+					nlux++;
+				}
+			}
+		}
+		if (nlux)
+			Con_Printf("[texdiag] LUX %-22s mean luxel %.3f %.3f %.3f  (R/B %.2f) over %u\n",
+				m->name, lr/nlux, lg/nlux, lb/nlux,
+				lb?(lr/lb):0.0, (unsigned)nlux);
+
+		/*
+		THE LAST LINK.  The surfaces can hold a perfectly good lightmap index and
+		still draw unlit, because the BACKEND binds per batch, not per surface --
+		batch->lightmap[0] is what actually reaches the shader.  A batch left at
+		-1 whose surfaces are lit is invisible to every check above it.
+		*/
+		{
+			int bl = 0, bunlit = 0, sid;
+			batch_t *b;
+			for (sid = 0; sid < SHADER_SORT_COUNT; sid++)
+				for (b = m->batches[sid]; b; b = b->next)
+				{
+					if (b->lightmap[0] < 0)
+						bunlit++;
+					else
+						bl++;
+				}
+			Con_Printf("[texdiag] BAT %-22s batches lit=%i unlit=%i\n", m->name, bl, bunlit);
+		}
+		/*
+		`shift` and `overbright` are printed together because they have to
+		AGREE ACROSS MODELS or the same lightmap comes out at a different
+		brightness on a brush entity than on the world.  Surf_LightmapShift
+		bakes the luxels darker by `shift` when MDLF_NEEDOVERBRIGHT is set, and
+		the backend multiplies them back up per ENTITY on the same flag
+		(gl_backend.c:3884).  One of the two disagreeing is a factor of four.
+		*/
+		Con_Printf("[texdiag] LM %-24s first=%-4i count=%-3i %ix%i  surfs lit=%i unlit=%i nosamples=%i  shift=%i overbright=%i fmt=%i\n",
+			m->name, m->lightmaps.first, m->lightmaps.count,
+			m->lightmaps.width, m->lightmaps.height, lit, unlit, nosamples,
+			shift, (m->engineflags & MDLF_NEEDOVERBRIGHT)?1:0, (int)m->lightmaps.fmt);
+	}
 }
 
 void Surf_ClearSceneCache(void)
@@ -4139,6 +4953,7 @@ void Surf_NewMap (model_t *worldmodel)
 
 	r_viewcluster = -1;
 	r_viewcluster2 = -1;
+	surf_lastgoodworld = NULL;	//FTESurf P138: drop the void-PVS cache with the old world.
 #ifdef BEF_PUSHDEPTH
 	r_pushdepth = false;
 	for (s = r_polygonoffset_submodel_maps.string; s && *s; )
@@ -4157,13 +4972,31 @@ void Surf_NewMap (model_t *worldmodel)
 	P_ClearParticles ();
 	CL_RegisterParticles();
 
-	Shader_DoReload();
+	/*
+	  nettest Patch 141.  There was a second Shader_DoReload() immediately above
+	  this block, with only the worldmodel sync and Mod_ParseInfoFromEntityLump
+	  between the two.  It is gone, but NOT for the reason it first looked like.
+
+	  I removed it expecting to halve the map-load shader cost, on the theory
+	  that the entity parse sets `skyname` -> the r_skybox cvar -> a second
+	  reload.  Measuring with the call-site labels showed that was wrong: BOTH
+	  reloads during a map load come from elsewhere entirely (CL_MakeActive and
+	  then SCR_UpdateScreen's per-frame call), because Shader_DoReload early-outs
+	  while cls.state < ca_active -- which is the whole of a map load.  Both of
+	  the calls in this file are no-ops at that point, and always were.
+
+	  So this is tidying, not a fix, and it is written down as such: the real
+	  cost is measured at the two sites that actually pay it.  Keeping one call
+	  here rather than two costs nothing either way; keeping the one AFTER the
+	  entity parse is simply the correct order if the guard ever changes.
+	*/
 	if (cl.worldmodel)
 	{
 		if (cl.worldmodel->loadstate == MLS_LOADING)
 			COM_WorkerPartialSync(cl.worldmodel, &cl.worldmodel->loadstate, MLS_LOADING);
 		Mod_ParseInfoFromEntityLump(cl.worldmodel);
 	}
+	shader_reload_why = "Surf_NewMap";
 	Shader_DoReload();
 
 #ifdef THREADEDWORLD
@@ -4232,7 +5065,9 @@ void Surf_PreNewMap(void)
 #endif
 	r_viewcluster = -1;
 	r_viewcluster2 = -1;
+	surf_lastgoodworld = NULL;	//FTESurf P138: drop the void-PVS cache with the old world.
 
+	shader_reload_why = "Surf_PreNewMap";
 	Shader_DoReload();
 }
 

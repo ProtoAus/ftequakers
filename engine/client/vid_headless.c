@@ -205,6 +205,30 @@ static char	*Headless_VID_GetRGBInfo			(int *bytestride, int *truevidwidth, int 
 }
 static qboolean	Headless_SCR_UpdateScreen			(void)
 {
+	// A NULL RENDERER, NOT A NULL CLIENT FRAME.  Packet-entity transition is
+	// client state rather than drawing, and cl.lerpents - along with the
+	// cl.maxlerpents that bounds it - is populated ONLY by CL_TransitionEntities.
+	// Under QuakeWorld that is reached from CSQC_DrawView (pr_csqc.c) and
+	// V_RenderView (view.c) and nowhere else; cl_main.c's call is guarded to
+	// CP_NETQUAKE signon.  Headless calls neither, so a headless client's
+	// lerpents table stays permanently EMPTY, and everything that reads it
+	// silently does nothing:
+	//
+	//   CSQC getentity()          pr_csqc.c:6070  - tests cl.maxlerpents first,
+	//                                               so GE_MAXENTS returns 0 and
+	//                                               every field lookup fails
+	//   entity sound spatialising snd_dma.c:2771
+	//   spectator-track camera    cl_pred.c:1067
+	//   status bar entity lookups sbar.c:3669
+	//
+	// Measured before this line existed: a headless client watching a firefight
+	// with several hundred entities live on the wire reported GE_MAXENTS = 0.
+	// That is not a rendering difference, and it makes the whole getentity API -
+	// which is how CSQC reaches non-CSQC entities at all - untestable without a
+	// screen.
+	if (cls.state == ca_active)
+		CL_TransitionEntities();
+
 	if (!cls.timedemo)
 	{
 #ifdef FTE_SDL

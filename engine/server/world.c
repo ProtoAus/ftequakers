@@ -514,6 +514,7 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 	pvec_t *mins;
 	pvec_t *maxs;
 	int solid;
+	qboolean rotatedbox;	//nettest: does this entity's box turn with .angles?
 
 #ifdef USEAREAGRID
 	World_UnlinkEdict (ent);	// unlink from old position
@@ -553,7 +554,35 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 
 // set the abs box
 	solid = ent->v->solid;
-	if ((solid == SOLID_BSP||solid == SOLID_BSPTRIGGER||solid == SOLID_PHYSICS_BOX||solid == SOLID_PHYSICS_TRIMESH) &&
+	rotatedbox = (solid == SOLID_BSP||solid == SOLID_BSPTRIGGER||solid == SOLID_PHYSICS_BOX||solid == SOLID_PHYSICS_TRIMESH);
+
+	//nettest: a NON-SOLID brush model still needs its box rotated, for PVS.
+	//
+	//The list above is the set of solid types whose COLLISION broadphase needs the
+	//expansion, but absmin/absmax is also what FindTouchedLeafs() below derives
+	//pvsinfo from - so a rotating brush entity that happens to be non-solid got a
+	//PVS box that never turned with it.  Worse, the box is origin+mins/maxs and a
+	//brush model's bounds are not centred on its origin: They Hunger's headlight
+	//brush *26 spans x -450..-150, a box that does not even contain its own origin.
+	//So the entity was tested for visibility against a slab bolted to one side of
+	//the truck and pointing a fixed direction no matter which way the truck faced -
+	//it passed PVS from places it should not and drew through the level, while the
+	//truck body (SOLID_BSP, and therefore rotated here) behaved correctly.  That
+	//asymmetry is exactly what the func_tracktrain TT_PASSABLE flag produces.
+	//
+	//Only the PVS box is affected: SOLID_NOT returns before the area-grid link
+	//below, so this cannot change collision. Gated on modelindex+angles first so
+	//the Get_CModel call is only paid by rotating model entities, and inline brush
+	//models are already resident as part of the world.
+	if (!rotatedbox && solid == SOLID_NOT && ent->v->modelindex &&
+		(ent->v->angles[0] || ent->v->angles[1] || ent->v->angles[2]) )
+	{
+		model_t *bmod = w->Get_CModel(w, ent->v->modelindex);
+		if (bmod && bmod->type == mod_brush)
+			rotatedbox = true;
+	}
+
+	if (rotatedbox &&
 	(ent->v->angles[0] || ent->v->angles[1] || ent->v->angles[2]) )
 	{	// expand for rotation
 		// SOLID_PHYSICS_BOX added by the OBB patch: a ROTATED physics box needs the
@@ -1323,6 +1352,29 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 		case Q1CONTENTS_PLAYERCLIP:		forcedcontents = FTECONTENTS_PLAYERCLIP;	break;
 		case Q1CONTENTS_CORPSE:scorpse: forcedcontents = FTECONTENTS_CORPSE;		break;
 		safedefault:					forcedcontents = 0;							break;
+		}
+		//nettest: A CLIP BRUSH DOES NOT EXIST IN HULL 0.
+		//
+		//GoldSrc compiles CONTENTS_CLIP (func_monsterclip, func_playerclip, the CLIP
+		//texture) into the COLLISION hulls only.  Hull 0 - the point hull that bullets,
+		//line-of-sight checks, gunfire and every other traceline run through - contains
+		//no clip geometry at all, which is why a Half-Life monster penned in by a
+		//monsterclip can still shoot straight through it.
+		//
+		//A forced-contents entity has no hulls of its own to differ: the same brush
+		//answers every trace shape identically, so the distinction has to be made here
+		//or a monsterclip volume blocks a monster's bullets and its sight as well as its
+		//feet.  A POINT trace (mins == maxs, necessarily the origin) is exactly the hull-0
+		//case, so that is the test.
+		//
+		//Scoped to a forced contents that is NOTHING BUT clip: HLCONTENTS_CLIP and the
+		//two Q1 clip values are the only ones affected, and a brush forcing water, solid,
+		//ladder or corpse keeps blocking point traces exactly as before.
+		{
+			const int clipbits = FTECONTENTS_PLAYERCLIP|FTECONTENTS_MONSTERCLIP;
+			if ((forcedcontents & clipbits) && !(forcedcontents & ~clipbits)
+				&& mins[0] == maxs[0] && mins[1] == maxs[1] && mins[2] == maxs[2])
+				forcedcontents = 0;	//falls into the clean-miss arm below
 		}
 		if (hitcontentsmask & forcedcontents)
 		{

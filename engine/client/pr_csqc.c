@@ -499,6 +499,14 @@ static void cs_getframestate(csqcedict_t *in, unsigned int rflags, framestate_t 
 #endif
 	}
 
+	//nettest Patch 155: same reasoning as the SSQC builder in pr_cmds.c - this
+	//function fills the struct member by member and several of its callers keep
+	//a framestate_t on the stack, so an unwritten member is garbage.  CSQC drives
+	//its own animation clock, so the cross-fade gets exactly the value it read
+	//before this member existed.
+	out->g[FS_REG].seqtime   = out->g[FS_REG].frametime[0];
+	out->g[FST_BASE].seqtime = out->g[FST_BASE].frametime[0];
+
 
 #if defined(SKELETALOBJECTS) || defined(RAGDOLL)
 	out->bonecount = 0;
@@ -910,6 +918,7 @@ static qboolean CopyCSQCEdictToEntity(csqcedict_t *fte_restrict in, entity_t *ft
 	out->abslight = in->xv->abslight;
 #endif
 	out->skinnum = in->v->skin;
+	out->body = in->xv->body;	//nettest Patch 131: HL bodygroup, CSQC side
 	out->fatness = in->xv->fatness;
 	ival = in->xv->forceshader;
 	if (ival >= 1 && ival <= r_numshaders)
@@ -1111,16 +1120,42 @@ static void QCBUILTIN PF_R_AddDecal(pubprogfuncs_t *prinst, struct globalvars_s 
 //nettest: persistent lit decals — clip once + cache (with lightmap), re-render cheaply each frame.
 //adddecal_static returns a handle for removedecal/updatedecal; -1 = failed (QC falls back to adddecal).
 static void QCBUILTIN PF_R_AddDecalStatic(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
-{	//float(string shader, vector org, vector up, vector side, vector rgb, float alpha, optional float aspect, optional float lifetime)
+{	//float(string shader, vector org, vector up, vector side, vector rgb,
+	//      optional vector alpha_aspect_life, optional vector srange, optional vector trange)
+	//
+	//nettest: alpha, aspect and lifetime share ONE vector, and that is not tidiness -- it is the
+	//parameter budget. A builtin can be handed at most 8 arguments: the call opcodes stop at OP_CALL8
+	//(engine/qclib/pr_comp.h:119), so a ninth is neither passed nor counted -- prinst->callargc reads
+	//8 no matter how many the QC wrote, and reading past OFS_PARM7 returns whatever globals happen to
+	//sit there. Measured, not assumed: a 10-argument call built without a warning and arrived as
+	//"argc 8" with both extra vectors missing. So the texture range, which needs four floats, can only
+	//exist if three scalars give up two slots between them.
 	const char *shadername = PR_GetStringOfs(prinst, OFS_PARM0);
 	float *org = G_VECTOR(OFS_PARM1);
 	float *up = G_VECTOR(OFS_PARM2);
 	float *side = G_VECTOR(OFS_PARM3);
 	float *rgb = G_VECTOR(OFS_PARM4);
-	float alpha = G_FLOAT(OFS_PARM5);
-	float aspect = (prinst->callargc > 6) ? G_FLOAT(OFS_PARM6) : 1;
-	float lifetime = (prinst->callargc > 7) ? G_FLOAT(OFS_PARM7) : 0;
-	G_FLOAT(OFS_RETURN) = CL_AddPersistentDecal(shadername, org, up, side, rgb, alpha, aspect, lifetime);
+	float *aal = (prinst->callargc > 5) ? G_VECTOR(OFS_PARM5) : NULL;
+	float alpha    = aal ? aal[0] : 1;
+	float aspect   = (aal && aal[1]) ? aal[1] : 1;
+	float lifetime = aal ? aal[2] : 0;
+	//The texture range mapped across the footprint, as (s0,s1,_) and (t0,t1,_). Omitted means 0..1 on
+	//both axes, which is what the footprint always mapped before this existed. It is the only way to
+	//express a mirrored image (s1 < s0) -- the projection frame is a fixed proper rotation, so no
+	//choice of up/side can reflect -- or a texture that repeats or shows only a sub-rectangle.
+	vec4_t texrange;
+	if (prinst->callargc > 7)
+	{
+		float *sr = G_VECTOR(OFS_PARM6), *tr = G_VECTOR(OFS_PARM7);
+		Vector4Set(texrange, sr[0], sr[1], tr[0], tr[1]);
+	}
+	else
+		Vector4Set(texrange, 0, 1, 0, 1);
+	if (developer.ival >= 2)
+		Con_DPrintf("adddecal_static \"%s\": argc %i alpha %g aspect %g life %g texrange s %g..%g t %g..%g\n",
+					shadername, prinst->callargc, alpha, aspect, lifetime,
+					texrange[0], texrange[1], texrange[2], texrange[3]);
+	G_FLOAT(OFS_RETURN) = CL_AddPersistentDecal(shadername, org, up, side, rgb, alpha, aspect, lifetime, texrange);
 }
 static void QCBUILTIN PF_R_RemoveDecal(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {	//void(float handle)
@@ -1789,8 +1824,19 @@ void QCBUILTIN PF_R_PolygonEndRibbon(pubprogfuncs_t *prinst, struct globalvars_s
 
 	nv = cl_numstrisvert-csqc_poly_startvert;
 	//dupe the verts
-	if (cl_numstrisvert+nv < cl_maxstrisvert)
-		cl_stris_ExpandVerts(cl_numstrisvert+nv);
+	//nettest: this test was inverted - it grew the arrays only when the copy
+	//ALREADY fitted, and skipped the growth in exactly the case that needed it,
+	//so the memcpys below ran off the end of the heap block.  cl_stris_ExpandVerts
+	//also *assigns* cl_maxstrisvert rather than taking a max, so the old test
+	//additionally shrank the buffer to a perfect fit whenever it did fire - which
+	//left zero slack and made the NEXT ribbon in the same frame overflow for
+	//certain.  PF_R_PolygonVertex only ever grows in 64-vert chunks, so any ribbon
+	//longer than 64 verts overflowed on its own.  Compare the two index-array
+	//tests below, which both use the correct sense.
+	//+64 of headroom, so a frame with many ribbons (They Hunger's rain is 129
+	//env_beams) doesn't realloc four parallel arrays once per beam.
+	if (cl_numstrisvert+nv > cl_maxstrisvert)
+		cl_stris_ExpandVerts(cl_numstrisvert+nv+64);
 	memcpy(&cl_strisvertv[cl_numstrisvert], &cl_strisvertv[csqc_poly_startvert], sizeof(*cl_strisvertv)*nv);
 	memcpy(&cl_strisvertt[cl_numstrisvert], &cl_strisvertt[csqc_poly_startvert], sizeof(*cl_strisvertt)*nv);
 	memcpy(&cl_strisvertc[cl_numstrisvert], &cl_strisvertc[csqc_poly_startvert], sizeof(*cl_strisvertc)*nv);
@@ -5539,6 +5585,19 @@ static void CSQC_LerpStateToCSQC(lerpents_t *le, csqcedict_t *ent, qboolean nole
 	ent->xv->baseframe2time = max(0, cl.servertime - le->oldframestarttime[FST_BASE]);
 	ent->xv->baselerpfrac = bound(0, 1-(ent->xv->baseframe1time) / le->framelerpdeltatime[FST_BASE], 1);
 	ent->xv->basebone = le->basebone;
+
+	//nettest Patch 155: hand CSQC the networked playback rate so a csqc-side
+	//re-render of an engine-networked entity agrees with what the engine's own
+	//renderer would have drawn.
+	//
+	//The frame*time fields above are deliberately left as raw wall-clock.  CSQC
+	//may set RF_FRAMETIMESARESTARTTIMES, under which the engine subtracts them
+	//from `time` itself (pr_csqc.c, CSQC_FrameStateToRenderState), so baking a
+	//rate into them here would apply it twice.  QC that wants rate-correct
+	//playback multiplies frame1time by .animrate itself - and for a negative
+	//rate counts down from frameduration() - which is the same arithmetic the
+	//engine does in CL_LerpNetFrameState and is now expressible from QC.
+	ent->xv->animrate = le->animrate ? le->animrate : 1;
 
 
 	if (nolerp)

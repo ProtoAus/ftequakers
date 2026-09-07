@@ -35,6 +35,7 @@ extern cvar_t r_lightmap_average;
 extern cvar_t r_waterripple;
 extern cvar_t r_waterripple_tess;
 extern cvar_t r_waterripple_react;
+extern cvar_t r_hlwater_hidesides;
 cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
@@ -51,6 +52,34 @@ cvar_t mod_warnmodels						= CVARD("mod_warnmodels", "1", "Warn if any models fa
 //cvar_set would Z_Free the old ->string out from under a worker mid-read -- the same crash shape again.
 //It is plain CVAR_ARCHIVE: set it in a cfg, reload the map to apply.
 cvar_t mod_prop_hull_exclude				= CVARFD("sv_prop_hull_exclude", "models/player/;models/gibs/;models/nature/grass;models/nature/fern;models/nature/wheat", CVAR_ARCHIVE, "Semicolon-separated model-path prefixes that skip collision-hull + convex-decomposition construction at load. Pure load-time cost for models that are never SOLID_PHYSICS_TRIMESH/BOX props (player models, gibs, debris, foliage) - a player model is highly concave, so it pays the full recursive ACD for nothing, and grass/fern/wheat are spawned SOLID_NOT yet were each building THIRTY-TWO convex pieces. Prefix match, so 'models/nature/grass' covers grass_2.iqm etc. A model listed here that IS used as a prop degrades to the normal alias trace rather than losing collision (the hull trace is gated on numhullplanes>=4). Empty = build hulls for every model (the old behaviour). Read at model LOAD - reload the map to apply.");
+/* FTESurf Patch 222: the other two halves of Patch 102's crash.
+
+   Mod_ParseIQMMeshModel ran `Cvar_Get("sv_prop_decomp", ...)` and
+   `Cvar_Get("sv_prop_decomp_concavity", ...)` inline (com_mesh.c), and Cvar_Get
+   REGISTERS a cvar on its first call.  That happens on a LOADER WORKER, and for a
+   CVAR_SERVERINFO cvar registration goes Cvar_Register -> Cvar_SetCore ->
+   InfoBuf_SetStarBlobKey -> ZF_ReallocElements -> BZ_Realloc, i.e. it reallocates
+   the global serverinfo buffer off the main thread.  gdb caught exactly that stack
+   crashing surf_kitsune at load.
+
+   Patch 102 already found this and fixed it for sv_prop_hull_exclude above, but
+   left these two, on the reasoning recorded at com_mesh.c:3314 -- that they "get
+   away with the same shape ONLY because that cvar is already in the mod's
+   server.cfg, so it is registered on the main thread long before any model loads".
+   That is true for the nettest game at C:\FTEQuake.  IT IS NOT TRUE FOR FTESURF:
+   neither cvar appears in any of its configs, so every single IQM load here hit the
+   first-ever Cvar_Get, on a worker, and raced the main thread's heap.
+
+   CVAR_SERVERINFO is KEPT rather than dropped as it was for sv_prop_hull_exclude
+   above.  The race was in REGISTRATION, which now happens once at Mod_Init on the
+   main thread, and these two are read as ->ival/->value rather than ->string, so
+   the live-serverinfo-set hazard that argued against the flag there does not apply.
+   Dropping it would stop the value reaching clients, and the description below says
+   why that matters: the hulls are collision geometry, so a client predicting props
+   must agree with the server.  Behaviour is unchanged; only the thread that first
+   registers them is. */
+cvar_t mod_prop_decomp						= CVARFD("sv_prop_decomp", "0", CVAR_SERVERINFO, "Prop convex-DECOMPOSITION method for sv_prop_collision 3, read at model LOAD (reload to apply): 0=per-submesh (one hull per mesh part), 1=geometric ACD (splits concavity within a single mesh: hollow pipe, arch), 2=offline-baked .acd sidecar if present else 1. Builds the collision geometry, so for client-PREDICTED props the client and server must use the SAME value (a content constant — set it server-side; a listen server shares one cvar).");
+cvar_t mod_prop_decomp_concavity			= CVARFD("sv_prop_decomp_concavity", "0.06", CVAR_SERVERINFO, "Geometric-ACD concavity threshold as a fraction of the model extent (clamped 0.01..0.5); smaller = more/finer pieces. Read at model load.");
 cvar_t mod_litsprites_force					= CVARFD("mod_litsprites_force", "0", CVAR_RENDERERLATCH, "If set to 1, sprites will be lit according to world lighting (including rtlights), like Tenebrae. Ideally use EF_ADDITIVE or EF_FULLBRIGHT to make emissive sprites instead.");
 cvar_t mod_loadmappackages					= CVARD ("mod_loadmappackages", "1", "Load additional content embedded within bsp files.");
 cvar_t mod_lightscale_broken				= CVARFD("mod_lightscale_broken", "0", CVAR_RENDERERLATCH, "When active, replicates a bug from vanilla - the radius of r_dynamic lights is scaled by per-surface texture scale rather than using actual distance.");
@@ -175,6 +204,120 @@ static void Mod_BatchList_f(void)
 			}
 			Con_Printf("^h(%u batches, lm %i*%i, lux %s)\n", count, mod->lightmaps.width, mod->lightmaps.height, mod->lightmaps.deluxemapping?"true":"false");
 		}
+	}
+}
+
+//nettest: read the BUILT lightmap atlas back, per surface, for a brush model.
+//
+//Everything upstream of this has been measured and is fine: the wad decode, the
+//palette, the shader, the lightmap ALLOCATION, and the lightstyle values (styles
+//32/47 on th_ep1_01 both report 264 via r_lightstyles).  Yet masked '{' faces on
+//brush entities shade to an exact zero.  Between "the atlas really is black
+//here" and "the atlas is fine and the surface samples the wrong place" there is
+//no way to tell from inside the fragment shader, and they need opposite fixes.
+//
+//So print, per surface: the styles actually kept, the page it landed on, its
+//light_s/light_t origin in that page, its luxel extent, whether it has bsp
+//samples at all, and the mean/peak of the texels Surf_BuildLightMap actually
+//wrote there.  A masked face reading mean=0 next to a sibling face on the SAME
+//page reading mean>0 is a data fault; both reading mean>0 means the data is
+//there and the texcoord is the liar.
+static void Mod_SurfLM_f(void)
+{
+	const char *want = Cmd_Argv(1);
+	const char *wanttex = Cmd_Argv(2);	//optional: only surfaces whose texture name contains this
+	int m, i, matched, black, nopage;
+	double grand;
+	model_t *mod;
+	msurface_t *surf;
+
+	if (!*want)
+	{
+		Con_Printf("r_surflm <model name substring> [texture substring]\n"
+		           "  e.g. r_surflm *538          - one brush entity, every face\n"
+		           "       r_surflm maps/ {stripeh - one texture across the whole world\n");
+		return;
+	}
+
+	for (m = 0, mod = mod_known; m < mod_numknown; m++, mod++)
+	{
+		if (mod->type != mod_brush || mod->loadstate != MLS_LOADED)
+			continue;
+		if (!strstr(mod->name, want))
+			continue;
+		Con_Printf("^1%s^7: %i surfaces, atlas %i*%i, %i pages loaded\n",
+			mod->name, mod->nummodelsurfaces,
+			mod->lightmaps.width, mod->lightmaps.height, numlightmaps);
+		matched = black = nopage = 0;
+		grand = 0;
+		for (i = 0; i < mod->nummodelsurfaces; i++)
+		{
+			int lmn, smax, tmax, s, t, c, peak = 0, cnt = 0;
+			double sum = 0;
+			const char *tname;
+			surf = mod->surfaces + mod->firstmodelsurface + i;
+			tname = surf->texinfo->texture?surf->texinfo->texture->name:"?";
+			if (*wanttex && !strstr(tname, wanttex))
+				continue;
+			matched++;
+			lmn = surf->lightmaptexturenums[0];
+			smax = (surf->extents[0]>>surf->lmshift)+1;
+			tmax = (surf->extents[1]>>surf->lmshift)+1;
+
+			if (matched <= 24)
+			Con_Printf("  %-14s styles=%3i,%3i,%3i,%3i lm=%-4i st=%4i,%-4i %2ix%-2i bspsamples=%-4s",
+				tname,
+				(int)surf->styles[0], (int)surf->styles[1],
+				(int)surf->styles[2], (int)surf->styles[3],
+				lmn, surf->light_s[0], surf->light_t[0], smax, tmax,
+				surf->samples?"yes":"^1NULL^7");
+
+			if (lmn >= 0 && lmn < numlightmaps && lightmap[lmn] && lightmap[lmn]->lightmaps)
+			{
+				lightmapinfo_t *lm = lightmap[lmn];
+				for (t = 0; t < tmax; t++)
+				{
+					if (surf->light_t[0]+t >= lm->height)
+						break;
+					for (s = 0; s < smax; s++)
+					{
+						qbyte *px;
+						if (surf->light_s[0]+s >= lm->width)
+							break;
+						px = lm->lightmaps + ((surf->light_t[0]+t)*(size_t)lm->width + (surf->light_s[0]+s))*lm->pixbytes;
+						for (c = 0; c < 3 && c < lm->pixbytes; c++)
+						{
+							sum += px[c];
+							cnt++;
+							if (px[c] > peak)
+								peak = px[c];
+						}
+					}
+				}
+				if (cnt)
+				{
+					grand += sum/cnt;
+					if (!peak)
+						black++;
+					if (matched <= 24)
+						Con_Printf(" built mean=%5.1f peak=%3i%s", sum/cnt, peak, peak?"":" ^1<-- BLACK^7");
+				}
+				else if (matched <= 24)
+					Con_Printf(" ^1built: rect outside page^7");
+			}
+			else
+			{
+				nopage++;
+				if (matched <= 24)
+					Con_Printf(" ^1built: no page^7");
+			}
+			if (matched <= 24)
+				Con_Printf("\n");
+		}
+		if (matched > 24)
+			Con_Printf("  ^h(%i more surfaces not listed)\n", matched-24);
+		Con_Printf("^2  %i surface(s) matched: %i built BLACK, %i with no lightmap page, mean of means %.1f\n",
+			matched, black, nopage, matched?grand/matched:0);
 	}
 }
 
@@ -675,6 +818,7 @@ void Mod_Init (qboolean initial)
 		Cmd_AddCommand("mod_memlist", Mod_MemList_f);
 #ifndef SERVERONLY
 		Cmd_AddCommand("mod_batchlist", Mod_BatchList_f);
+		Cmd_AddCommand("r_surflm", Mod_SurfLM_f);	//nettest: per-surface built-lightmap readback
 		Cmd_AddCommand("mod_texturelist", Mod_TextureList_f);
 		Cmd_AddCommand("mod_usetexture", Mod_BlockTextureColour_f);
 #endif
@@ -684,6 +828,8 @@ void Mod_Init (qboolean initial)
 		Cvar_Register(&mod_external_vis, "Graphical Nicaties");
 		Cvar_Register(&mod_warnmodels, "Graphical Nicaties");
 		Cvar_Register(&mod_prop_hull_exclude, NULL);	//nettest Patch 102 — MUST be registered here (main thread): the loader worker only reads it
+		Cvar_Register(&mod_prop_decomp, NULL);			//FTESurf Patch 222 — same rule, same reason; see the declarations
+		Cvar_Register(&mod_prop_decomp_concavity, NULL);
 		Cvar_Register(&mod_litsprites_force, "Graphical Nicaties");
 		Cvar_Register(&mod_loadentfiles, NULL);
 		Cvar_Register(&mod_loadentfiles_dir, NULL);
@@ -1192,6 +1338,11 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 	size_t filesize;
 	char ext[8];
 	int basedepth;
+	//FTESurf Build 7: where does a 50-second map load actually go?  Every BSP,
+	//every static prop and every replacement model comes through here, so one
+	//timer here breaks the load down by file without a bespoke harness.  Costs a
+	//clock read per model when developer is off, and nothing else.
+	double loadstart = Sys_DoubleTime();
 
 	//clear out any old state.
 	memset(&mod->loadstate+1, 0, sizeof(*mod) - (qintptr_t)(&((model_t*)NULL)->loadstate+1));
@@ -1456,6 +1607,15 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 
 		BZ_Free(buf);
 
+		//Only the slow ones, or the log is thousands of lines of 0ms props and
+		//the two that matter are lost in it.
+		if (developer.ival)
+		{
+			double took = (Sys_DoubleTime() - loadstart) * 1000;
+			if (took >= 20)
+				Con_Printf("^5load^7 %6.0fms  %s\n", took, mod->name);
+		}
+
 		COM_AddWork(WG_MAIN, Mod_ModelLoaded, mod, NULL, MLS_LOADED, 0);
 		return;
 	}
@@ -1590,6 +1750,113 @@ static const char *Mod_RemapBuggyTexture(const char *name, const qbyte *data, un
 	return NULL;
 }
 
+//nettest: r_hidetextures - a comma-separated list of BSP texture names to draw as
+//nothing.  Q1/HL BSP textures get one shader each, registered by name just below, so
+//substituting a `surfaceparm nodraw` shader here suppresses that texture everywhere it
+//appears: world faces AND every func_ brush entity, with no per-entity bookkeeping.
+//
+//It exists because a mapper's intended-invisible texture is a per-map NAME, not a
+//property the BSP records - a scan of every map in this corpus found no texture called
+//nodraw, NULL or skip, so there is nothing general to key on.  Use the `surf_info`
+//console command to read the name off the surface, then list it here (a map cfg can
+//set it per map).  Empty by default, so this is inert until someone names something.
+//
+//Matching is case-insensitive and on the WHOLE name, deliberately: substring matching
+//would make "water" also hide "!water", which is the exact distinction a mapper who
+//textured the sides of a water volume differently was drawing.
+cvar_t r_hidetextures = CVARFD("r_hidetextures", "", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Comma-separated list of BSP texture names to not draw, e.g. \"nodraw,clip_side\". Applies to world faces and brush entities alike. Names are matched whole and case-insensitively; use the `surf_info` command to read the name off the surface under your crosshair. Empty = draw everything (default).");
+
+//nettest: GoldSrc alpha-tests a '{'-masked texture ONLY when the surface belongs to an
+//ENTITY whose Render Mode is Solid (kRenderTransAlpha).  On a WORLD brush the engine
+//draws palette index 255 as its literal colour - pure blue (0,0,255) in every sample in
+//this corpus - which is exactly why every mapping guide tells you to tie a '{' brush to
+//a func_wall/func_illusionary before it will go see-through.
+//
+//FTE masks them everywhere (Shader_DefaultBSPQ1 keys purely on the leading '{'), so a
+//world floor textured '{something' becomes a stencil: the index-255 texels are discarded
+//and you look straight through the floor into the sealed void.  That reads as PITCH
+//BLACK, which is what a solid-looking ground texture turns into.
+//
+//Only textures used SOLELY by world faces are un-masked.  Anything a submodel touches
+//keeps the mask, so fences/ladders/hedges - always brush entities in a GoldSrc map - are
+//untouched, and a texture shared by both is left exactly as it was rather than guessed
+//at (css_dust2's '{invisible' is on the world AND on fourteen submodels).
+cvar_t r_goldsrc_worldmask = CVARFD("r_goldsrc_worldmask", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "GoldSrc BSPs: 1 = draw '{'-masked textures OPAQUE on worldspawn faces, matching GoldSrc (where masking requires an entity with Render Mode Solid). 0 = alpha-test them everywhere, the old behaviour. Only textures that no brush entity uses are affected. Takes effect on the next map load.");
+cvar_t r_texdiag = CVARFD("r_texdiag", "0", CVAR_SHADERSYSTEM, "Print one line per world texture as a map loads: its size, whether its pixels came with the bsp or must be resolved from a wad, and which shader it was given. Diagnostic for GoldSrc textures that render wrong.");
+
+static qboolean Mod_TextureIsHidden(const char *name)
+{
+	const char *s = r_hidetextures.string;
+	size_t nlen;
+	if (!s || !*s || !name || !*name)
+		return false;
+	nlen = strlen(name);
+	while (*s)
+	{
+		const char *e;
+		while (*s == ',' || *s == ' ' || *s == '\t')
+			s++;
+		e = s;
+		while (*e && *e != ',')
+			e++;
+		//trim trailing spaces so "a, b" behaves like "a,b"
+		{
+			const char *t = e;
+			while (t > s && (t[-1] == ' ' || t[-1] == '\t'))
+				t--;
+			if ((size_t)(t - s) == nlen && !Q_strncasecmp(s, name, nlen))
+				return true;
+		}
+		s = e;
+		if (*s == ',')
+			s++;
+	}
+	return false;
+}
+
+//nettest: is this '{'-masked texture used ONLY by worldspawn faces?  See
+//r_goldsrc_worldmask above for why that is the question worth asking.
+//
+//Cheap to answer here and nowhere else: for Q1/HL BSPs Mod_FinishTexture runs from the
+//render-batch pass, AFTER the faces and submodels are loaded, so the answer reads
+//straight off the loaded model rather than needing the lumps re-parsed.  Restricted to
+//fg_halflife because '{' means nothing in Quake - a Q1 map that happens to use one is
+//not ours to reinterpret.
+static qboolean Mod_MaskedTextureIsWorldOnly(model_t *mod, const texture_t *tx)
+{
+	int m, f, end;
+	qboolean onworld = false;
+
+	if (!r_goldsrc_worldmask.ival)
+		return false;
+	if (!tx || tx->name[0] != '{')
+		return false;
+	if (mod->fromgame != fg_halflife)
+		return false;
+	if (!mod->surfaces || !mod->submodels || mod->numsubmodels < 1)
+		return false;
+
+	//used by ANY submodel -> that submodel may well be the Render Mode Solid entity the
+	//mapper tied it to, so leave the mask alone.
+	for (m = 1; m < mod->numsubmodels; m++)
+	{
+		end = mod->submodels[m].firstface + mod->submodels[m].numfaces;
+		if (end > mod->numsurfaces)
+			return false;	//malformed; don't start second-guessing the map
+		for (f = mod->submodels[m].firstface; f < end; f++)
+			if (mod->surfaces[f].texinfo && mod->surfaces[f].texinfo->texture == tx)
+				return false;
+	}
+
+	end = mod->submodels[0].firstface + mod->submodels[0].numfaces;
+	if (end > mod->numsurfaces)
+		return false;
+	for (f = mod->submodels[0].firstface; f < end && !onworld; f++)
+		if (mod->surfaces[f].texinfo && mod->surfaces[f].texinfo->texture == tx)
+			onworld = true;
+	return onworld;
+}
+
 static void Mod_FinishTexture(model_t *mod, texture_t *tx, const char *loadname, qboolean safetoloadfromwads)
 {
 	extern cvar_t gl_shadeq1_name;
@@ -1597,6 +1864,22 @@ static void Mod_FinishTexture(model_t *mod, texture_t *tx, const char *loadname,
 	char *star;
 	const char *origname = NULL;
 	const char *shadername = tx->name;
+
+	//nettest: named in r_hidetextures -> a shader that draws nothing.  Done BEFORE the
+	//normal registration so the texture's own image is never even uploaded.
+	if (Mod_TextureIsHidden(tx->name))
+	{
+		tx->shader = R_RegisterShader(va("nodraw_%s", tx->name), SUF_NONE,
+				"{\n"
+					"surfaceparm nodraw\n"
+					"surfaceparm nodlight\n"
+					"surfaceparm nomarks\n"
+					"surfaceparm noshadows\n"
+				"}\n");
+		BZ_Free(tx->srcdata);
+		tx->srcdata = NULL;
+		return;
+	}
 
 	if (!safetoloadfromwads || !tx->shader)
 	{
@@ -1621,7 +1904,42 @@ static void Mod_FinishTexture(model_t *mod, texture_t *tx, const char *loadname,
 			shadername = altname;
 		}
 
-		tx->shader = R_RegisterCustom (mod, shadername, SUF_LIGHTMAP, Shader_DefaultBSPQ1, NULL);
+		//nettest: a '{' texture no brush entity ever uses is a WORLD texture, and GoldSrc
+		//draws those opaque.  Two things have to change together: index 255 has to come
+		//back as its palette colour instead of a hole (the T255 decoder writes RGBA 0,
+		//so leaving the format alone and only dropping the alphatest would paint those
+		//texels transparent BLACK - the same symptom by a different route), and the
+		//shader has to be the ordinary lightmapped wall, which is precisely what
+		//Shader_DefaultBSPQ1 falls through to once its '{' case is skipped.  The
+		//'#'-suffixed name keeps it a separate cache entry while R_BuildDefaultTexnums
+		//still truncates at the '#', so external replacement lookups are unaffected.
+		if (Mod_MaskedTextureIsWorldOnly(mod, tx))
+		{
+			if (tx->srcfmt == TF_MIP4_8PAL24_T255)
+				tx->srcfmt = TF_MIP4_8PAL24;
+			tx->shader = R_RegisterShader_Lightmap (mod, va("%s#HLWORLDOPAQUE", shadername));
+		}
+		else
+			tx->shader = R_RegisterCustom (mod, shadername, SUF_LIGHTMAP, Shader_DefaultBSPQ1, NULL);
+
+		//nettest: r_texdiag - say which of the two paths each world texture actually took,
+		//and whether it brought its own pixels or has to be resolved from a wad.  A texture
+		//that renders wrong is otherwise indistinguishable between "decoded wrong", "picked
+		//the wrong shader" and "never resolved at all", and all three have been guessed at
+		//more than once.  Its own cvar rather than `developer`, which cfg/default.cfg resets
+		//to 0 after the command line is applied and so cannot be relied on to be set.
+		if (r_texdiag.ival && *tx->name)
+		{
+			//HASLIGHTMAP is the one that decides whether Mod_LightmapAllocSurf will give this
+			//texture's surfaces a lightmap at all (gl_model.c:3768). A masked world texture
+			//reporting lm=0 renders black no matter how good its pixels are.
+			Con_Printf("[texdiag] %-20s %4dx%-4d src=%-9s lm=%d passes=%d shader=%s\n",
+				tx->name, tx->srcwidth, tx->srcheight,
+				tx->srcdata?"embedded":"wad/repl",
+				(tx->shader && (tx->shader->flags & SHADER_HASLIGHTMAP))?1:0,
+				tx->shader?tx->shader->numpasses:-1,
+				tx->shader?tx->shader->name:"(none)");
+		}
 
 		if (!tx->srcdata && !safetoloadfromwads)
 			return;
@@ -3330,7 +3648,28 @@ static int Mod_Batches_Generate(model_t *mod)
 
 		if (surf->flags & SURF_NODRAW)
 		{
-			shader = R_RegisterShader("nodraw", SUF_NONE, "{\nsurfaceparm nodraw\n}");
+			//nettest: SUR_FORCEFALLBACK, or a material loader eats this name.
+			//
+			//This is a BUILT-IN substitution shader with its body supplied right
+			//here; there is nothing on disk it could ever legitimately want.  But
+			//without the flag R_LoadShader still offers the bare name "nodraw" to
+			//every registered material loader (gl_shader.c, Shader_ParseShader),
+			//and the cod plugin answers with its own tool material - so every face
+			//this code path exists to HIDE was painted in a flat tool colour
+			//instead.  Measured on sc_psyko with `r_waterinfo`: the shader came out
+			//passes=1 flags=0x8000808 (CULL_FRONT|DEPTHWRITE|HASDIFFUSE) and no
+			//SHADER_NODRAW at all, while the identical body under a unique name
+			//came out passes=0 SHADER_NODRAW - i.e. the body was fine and the NAME
+			//was taken.  That is the "the sides and bottom of the func_water are
+			//solid bright orange, but bspguy says they are all water texture".
+			//
+			//Shader_ParseShader already has a guard for exactly this hijack (the
+			//cod plugin claiming "black" off th_ep1_00's func_wall), but it keys on
+			//ps->s->model and this shader is registered with no model, so it went
+			//straight through the same hole.  Fixing it at the call site keeps a
+			//real disk shader able to override the model-owned world textures,
+			//which is a feature; only this built-in stops asking.
+			shader = R_RegisterShader("nodraw", SUF_NONE|SUR_FORCEFALLBACK, "{\nsurfaceparm nodraw\n}");
 			sortid = shader->sort;
 			VectorClear(plane);
 			plane[3] = 0;
@@ -3577,7 +3916,10 @@ static void Mod_Batches_SplitLightmaps(model_t *mod, int lmmerge)
 				*nb = *batch;
 				batch->next = nb;
 
-				nb->mesh = batch->mesh + j*2;
+				/* FTESurf Patch 221: the child's slice must clear the parent's WHOLE
+				   recursion space, which is maxmeshes*R_MAX_RECURSE and not maxmeshes*2.
+				   See the twin at Mod_Batches_AllocLightmaps for the full account. */
+				nb->mesh = batch->mesh + j*R_MAX_RECURSE;
 				nb->maxmeshes = batch->maxmeshes - j;
 				batch->maxmeshes = j;
 				for (sty = 0; sty < MAXRLIGHTMAPS; sty++)
@@ -3605,7 +3947,7 @@ static void Mod_Batches_SplitLightmaps(model_t *mod, int lmmerge)
 #endif
 
 #if defined(Q1BSPS) || defined(Q2BSPS)
-static void Mod_LightmapAllocSurf(lmalloc_t *lmallocator, msurface_t *surf, int surfstyle)
+static void Mod_LightmapAllocSurf(model_t *mod, lmalloc_t *lmallocator, msurface_t *surf, int surfstyle)
 {
 	int smax, tmax;
 	smax = (surf->extents[0]>>surf->lmshift)+1;
@@ -3617,6 +3959,42 @@ static void Mod_LightmapAllocSurf(lmalloc_t *lmallocator, msurface_t *surf, int 
 		(surf->texinfo->flags & TEX_SPECIAL) ||	//the original 'no lightmap'
 		smax > lmallocator->width || tmax > lmallocator->height || smax < 0 || tmax < 0)	//bugs/bounds/etc
 	{
+		//nettest r_texdiag: name WHY a surface was denied a lightmap. A denied surface samples a
+		//black lightmap and draws black however good its texture is, and the five conditions
+		//above are indistinguishable from the outside. Capped so a big map cannot flood the log.
+		//'sky' is denied by design and there are hundreds of them; letting them count
+		//against the cap meant the interesting denials never got printed at all.
+		//FTESurf build 11: exclude sky BY ITS FLAG, not by the name "sky".  Only
+		//Q1 calls it that; a Source map's is "sky/tools/toolsskybox", so on VBSP
+		//every sky surface counted against the cap and 200 of them buried every
+		//denial worth reading -- which is the exact failure the name test was
+		//added to prevent, just in a game it did not know about.
+		if (r_texdiag.ival && surf->texinfo->texture &&
+			!(surf->flags & SURF_DRAWSKY) &&
+			strcmp(surf->texinfo->texture->name, "sky"))
+		{
+			static int reported = 0;
+			//FTESurf build 11: the cap was 200, which surf_666 reached on its 180 water
+			//surfaces alone -- before the world model was even finished, so NOT ONE
+			//submodel line was ever printed, and the submodels are the half that
+			//answers "is it the brush entities".  The output is meant to be
+			//post-processed (sort | uniq -c), so the cap only has to stop a runaway.
+			if (reported++ < 20000)
+				Con_Printf("[texdiag] NO LIGHTMAP %-28s on %-20s ded=%d haslm=%d drawsky/tiled=%d texspecial=%d size=%dx%d(max %dx%d)\n",
+					surf->texinfo->texture->name,
+					//FTESurf build 11: WHICH MODEL.  A surface denied a lightmap
+					//draws at full texture brightness -- pale, against a world
+					//the lightmap has darkened.  "*12:maps/x.bsp" versus
+					//"maps/x.bsp" is the difference between a map-wide material
+					//problem and a brush-entity one, and this line could not
+					//tell them apart.
+					mod?mod->name:"?",
+					isDedicated?1:0,
+					(surf->texinfo->texture->shader && (surf->texinfo->texture->shader->flags & SHADER_HASLIGHTMAP))?1:0,
+					(surf->flags & (SURF_DRAWSKY|SURF_DRAWTILED))?1:0,
+					(surf->texinfo->flags & TEX_SPECIAL)?1:0,
+					smax, tmax, lmallocator->width, lmallocator->height);
+		}
 		surf->lightmaptexturenums[surfstyle] = -1;
 		return;
 	}
@@ -3661,8 +4039,17 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 	mod->lightmaps.width = 1<<i;
 	for (i = 0; (1<<i) < mod->lightmaps.height; i++);
 	mod->lightmaps.height = 1<<i;
-	mod->lightmaps.width = bound(64, mod->lightmaps.width, sh_config.texture2d_maxsize);
-	mod->lightmaps.height = bound(64, mod->lightmaps.height, sh_config.texture2d_maxsize);
+	//nettest: a renderer that reports no texture size limit (the headless/null one does,
+	//and so would any backend that fails to fill sh_config in time) collapses this to ZERO,
+	//because bound(64, w, 0) returns the max for any w >= 64.  A zero-sized allocator then
+	//fails `smax > lmallocator->width` for EVERY surface, so the whole world silently loses
+	//its lightmaps - which reads exactly like a per-texture bug and is not one.  Treat an
+	//absent limit as "no limit" rather than as "zero".
+	{
+		int maxlm = sh_config.texture2d_maxsize?sh_config.texture2d_maxsize:LMBLOCK_SIZE_MAX;
+		mod->lightmaps.width = bound(64, mod->lightmaps.width, maxlm);
+		mod->lightmaps.height = bound(64, mod->lightmaps.height, maxlm);
+	}
 
 	Mod_LightmapAllocInit(&lmallocator, mod->deluxdata != NULL, mod->lightmaps.width, mod->lightmaps.height, 0x50);
 
@@ -3670,7 +4057,7 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 	for (batch = mod->batches[sortid]; batch != NULL; batch = batch->next)
 	{
 		surf = (msurface_t*)batch->mesh[0];
-		Mod_LightmapAllocSurf (&lmallocator, surf, 0);
+		Mod_LightmapAllocSurf (mod, &lmallocator, surf, 0);
 		for (sty = 1; sty < MAXRLIGHTMAPS; sty++)
 			surf->lightmaptexturenums[sty] = -1;
 		for (sty = 0; sty < MAXRLIGHTMAPS; sty++)
@@ -3683,7 +4070,7 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 		for (j = 1; j < batch->maxmeshes; j++)
 		{
 			surf = (msurface_t*)batch->mesh[j];
-			Mod_LightmapAllocSurf (&lmallocator, surf, 0);
+			Mod_LightmapAllocSurf (mod, &lmallocator, surf, 0);
 			for (sty = 1; sty < MAXRLIGHTMAPS; sty++)
 				surf->lightmaptexturenums[sty] = -1;
 			if (surf->lightmaptexturenums[0] != batch->lightmap[0])
@@ -3692,7 +4079,32 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 				*nb = *batch;
 				batch->next = nb;
 
-				nb->mesh = batch->mesh + j*2;
+				/* FTESurf Patch 221: SPLIT WITH THE RECURSION STRIDE, NOT WITH TWO.
+
+				   Mod_Batches_Build allocates one block of
+				   nummodelsurfaces*R_MAX_RECURSE mesh pointers and hands each batch
+				   maxmeshes*R_MAX_RECURSE of it (see the loop there) -- because
+				   Surf_PushChains gives every recursed view its own window above the
+				   last (r_surf.c:2176, :2185), so a batch needs maxmeshes slots at
+				   EVERY level.  R_MAX_RECURSE is 6 (render.h:263).
+
+				   This line was written against the stale "*2 for recursion" comment
+				   over that allocation and stayed at 2.  The parent keeps maxmeshes=j
+				   and still needs 6j slots from its base; the child was being started
+				   at 2j -- INSIDE the parent's own space.  Levels 0 and 1 fit below
+				   2j and are fine, which is why this survived: it needs a THIRD view
+				   in one frame before the parent's level-2 window [2j,3j) lands on
+				   top of the child's level-0 meshes.  surf_kitsune renders exactly
+				   three (main + portal + a portal seen through it,
+				   r_portalrecursion 2 in cfg/default.cfg), and VBSP always takes the
+				   splitting path (mod_vbsp.c sets paintlightmaps for worldspawn and
+				   every submodel).
+
+				   j*R_MAX_RECURSE closes the arithmetic exactly:
+				   j*R + (maxmeshes-j)*R == maxmeshes*R, so the child still ends on
+				   the parent's original boundary and the memmove below stays inside
+				   the allocation. */
+				nb->mesh = batch->mesh + j*R_MAX_RECURSE;
 				nb->maxmeshes = batch->maxmeshes - j;
 				batch->maxmeshes = j;
 				for (sty = 0; sty < MAXRLIGHTMAPS; sty++)
@@ -3790,7 +4202,11 @@ void Mod_Batches_Build(model_t *mod, builddata_t *bd)
 	bmeshes = ZG_Malloc(&mod->memgroup, sizeof(*bmeshes)*mod->nummodelsurfaces*R_MAX_RECURSE);
 
 	//we now know which batch each surface is in, and how many meshes there are in each batch.
-	//allocate the mesh-pointer-lists for each batch. *2 for recursion.
+	//allocate the mesh-pointer-lists for each batch. *R_MAX_RECURSE for recursion:
+	//Surf_PushChains stacks each view's meshes above the last (r_surf.c:2176, :2185),
+	//so a batch needs room for maxmeshes at EVERY level, not two levels' worth.
+	//FTESurf Patch 221: this comment used to say "*2 for recursion" and the two
+	//lightmap-split sites below were written against it -- see them for what that cost.
 	for (i = 0, sortid = 0; sortid < SHADER_SORT_COUNT; sortid++)
 	for (batch = mod->batches[sortid]; batch != NULL; batch = batch->next)
 	{
@@ -6464,19 +6880,152 @@ TRACE(("LoadBrushModel %i\n", __LINE__));
 //				Q1BSP_CheckHullNodes(&submod->hulls[j]);
 		}
 
+		//Half-Life water volumes: keep only the surface you can swim through and
+		//hide the sides and the underside.  GoldSrc never drew them, and on a HL
+		//map the sky writes no depth (cls.allow_unmaskedskyboxes, cl_main.c), so
+		//anything the PVS lets through is visible straight through the skybox --
+		//which is exactly how this gets reported: "I can see the sides of the
+		//water through the sky".
+		//
+		//TWO CHANGES from the original here, both deliberate:
+		//
+		//  1. The `&& i` is gone.  `i` is the submodel index, so this only ever
+		//     ran for water built as a brush ENTITY and never for water built
+		//     into worldspawn (i == 0).  Across the 108-map Sven Co-op set that
+		//     left 338 worldspawn side faces drawn against 2745 correctly
+		//     suppressed submodel ones; th_ep1_00 has 58 of them and exactly one
+		//     func_water.
+		//
+		//  2. The keep-test is the face NORMAL rather than
+		//     `plane->type == PLANE_Z && plane->dist >= bbox midpoint`.  The
+		//     midpoint has no meaning once worldspawn is included (its bbox is
+		//     the whole map), and PLANE_Z additionally mis-hides SLOPED water
+		//     tops -- a water surface at any angle off the axis failed the test
+		//     and vanished (3 such faces in hl_c05_a2, 30 more in worldspawn).
+		//     Normals agree with the old test on the ordinary box-shaped volume
+		//     that is the common case.
+		//
+		//SURF_PLANEBACK means the face uses the reverse of its plane's normal.
+		//
+		//Behind r_hlwater_hidesides so a map that builds a WATERFALL out of
+		//vertical water faces can get them back.
+		//The cvar lives in renderer.c, which the DEDICATED SERVER does not link
+		//(gl_model.c does get compiled into it, for collision). The server has no
+		//renderer, so draw flags are irrelevant there -- keep its behaviour
+		//exactly as it was rather than reaching for a symbol that isn't present.
+#ifndef SERVERONLY
+		if (mod->fromgame == fg_halflife && (i || r_hlwater_hidesides.ival))
+#else
 		if (mod->fromgame == fg_halflife && i)
+#endif
 		{
+			int hidwater = 0, keptwater = 0;
 			for (j=bm->firstface ; j<bm->firstface+bm->numfaces ; j++)
 			{
 				if (mod->surfaces[j].flags & SURF_DRAWTURB)
 				{
-					float mid = bm->mins[2] + (0.5 * (bm->maxs[2] - bm->mins[2]));
-					if (mod->surfaces[j].plane->type == PLANE_Z && mod->surfaces[j].plane->dist >= mid) {
+					//same classification, and the same 0.5 threshold, as
+					//Surf_WaterShouldRipple above -- which already splits liquid
+					//faces into "roughly-upward-facing top" versus "vertical
+					//sides and the floor" for the ripple tessellation.
+					float up = mod->surfaces[j].plane->normal[2];
+					if (mod->surfaces[j].flags & SURF_PLANEBACK)
+						up = -up;
+					if (up > 0.5f)	//the swimmable surface: keep it
+					{
+						keptwater++;
 						continue;
 					}
+
+					//THE TWIN RULE BELOW IS FOR WORLDSPAWN ONLY (i == 0), and that
+					//restriction is the fix for "the func_water has two top mesh
+					//surfaces".
+					//
+					//It keeps the down-facing copy of a water top so you can still
+					//see the surface from underneath, and for worldspawn that is
+					//free: nothing draws those faces two-sided, so GL backface
+					//culling shows exactly one of the pair from any viewpoint.
+					//
+					//A liquid brush ENTITY is not free.  Surf_DrawBrushModel forces
+					//BEF_FORCETWOSIDED on any brush model with a negative skinnum
+					//(r_surf.c) - which is every func_water - precisely so the
+					//up-facing surface is visible from below.  That already solves
+					//the from-underneath case, so keeping the twin only adds a
+					//SECOND copy, and both copies rasterize.  With r_waterripple on
+					//they then deformVertexes along OPPOSITE normals and physically
+					//separate into two wavy sheets several units apart.
+					//
+					//Measured with `r_waterinfo` on sc_psyko before this change:
+					//five func_water submodels reporting coincident liquid surfaces
+					//still drawn; and across the 108-map Sven set 361 of 1622
+					//down-facing func_water faces share a plane with an up-facing
+					//one.  (The old comment below asserted a func_water box never
+					//has such a twin.  It is right about the shape of a single
+					//brush and wrong about the maps: 22% of them do.)
+					//
+					//A DOWNWARD-FACING WATER FACE IS TWO DIFFERENT THINGS, and
+					//hiding both was the "swim under the water, look up, and the
+					//surface is a flat solid you cannot see through" report.
+					//
+					//The compiler emits the water TOP boundary TWICE, once in each
+					//facing, because every generated shader defaults to
+					//SHADER_CULL_FRONT (gl_shader.c:7886) and the water shader adds
+					//no cull override -- so one facing is drawn from above and the
+					//other from below, and exactly one of the pair survives culling
+					//at any viewpoint. They cannot z-fight for the same reason.
+					//Hiding the down-facing copy therefore deletes the water surface
+					//for anyone swimming under it, leaving whatever the PVS happens
+					//to have painted there.
+					//
+					//A func_water brush is different: it is a closed box, so its
+					//bottom is a face on its OWN plane with no up-facing twin, and
+					//that one really is the "underside seen through the sky" this
+					//whole block exists to suppress.
+					//
+					//Measured on th_ep1_01, which has both shapes: 3 horizontal
+					//liquid planes carry BOTH facings and all 3 are worldspawn (42+42,
+					//3+3, 1+1 faces); 3 more carry a down-facing face ALONE and all 3
+					//are brush entities. So the twin is exactly what separates them,
+					//and no threshold on the normal alone ever could.
+					//
+					//O(liquid^2) within one submodel, and only for down-facing liquid
+					//faces -- about a hundred of them on a whole map, against a flag
+					//test that rejects everything else immediately.
+					if (i == 0 && up < -0.5f)
+					{
+						qboolean twin = false;
+						int k;
+						for (k = bm->firstface; k < bm->firstface+bm->numfaces; k++)
+						{
+							float up2;
+							if (k == j)
+								continue;
+							if (!(mod->surfaces[k].flags & SURF_DRAWTURB))
+								continue;
+							if (mod->surfaces[k].plane != mod->surfaces[j].plane)
+								continue;
+							up2 = mod->surfaces[k].plane->normal[2];
+							if (mod->surfaces[k].flags & SURF_PLANEBACK)
+								up2 = -up2;
+							if (up2 > 0.5f)
+							{
+								twin = true;
+								break;
+							}
+						}
+						if (twin)
+						{	//the underside of a surface we are keeping
+							keptwater++;
+							continue;
+						}
+					}
+
 					mod->surfaces[j].flags |= SURF_NODRAW;
+					hidwater++;
 				}
 			}
+			if (hidwater || keptwater)
+				Con_DPrintf("hlwater: submodel %i - kept %i surface face(s), hid %i side/underside face(s)\n", i, keptwater, hidwater);
 		}
 		
 		submod->firstmodelsurface = bm->firstface;
@@ -6616,6 +7165,22 @@ void Mod_LoadDoomSprite (model_t *mod)
 				"surfaceparm noshadows\n"					\
 				extra										\
 			"}\n"
+//Beam-ribbon variant of the sprite shader: unmasked, additive, vertex-coloured,
+//no depthwrite.  cull none because a ribbon is viewed from arbitrary angles.
+//See the long comment at the registration site in Mod_LoadSpriteFrameShader.
+#define SPRITE_SHADER_BEAM						\
+			"{\n"					\
+				"nopicmip\n"				\
+				"cull none\n"				\
+				"{\n"					\
+					"map $diffuse\n"			\
+					"blendfunc add\n"			\
+					"rgbgen vertex\n"			\
+					"alphagen vertex\n"			\
+				"}\n"					\
+				"surfaceparm noshadows\n"		\
+				"surfaceparm nodlight\n"		\
+			"}\n"
 #define SPRITE_SHADER_UNLIT	SPRITE_SHADER_MAIN(			\
 				"surfaceparm nodlight\n")
 #define SPRITE_SHADER_LIT	SPRITE_SHADER_MAIN(			\
@@ -6650,6 +7215,7 @@ void Mod_LoadSpriteFrameShader(model_t *spr, int frame, int subframe, mspritefra
 #ifndef SERVERONLY
 	char *shadertext;
 	char name[MAX_QPATH];
+	char beamname[MAX_QPATH+8];	//nettest: name + "_beam", for the ribbon shader below
 	qboolean litsprite = false;
 	const char *spx;	//nettest P62: model-name extension, for image-sprite detection
 
@@ -6702,6 +7268,25 @@ void Mod_LoadSpriteFrameShader(model_t *spr, int frame, int subframe, mspritefra
 	frameinfo->lit = litsprite;
 	frameinfo->shader = R_RegisterShader(name, SUF_NONE, shadertext);
 	frameinfo->shader->defaulttextures->base = frameinfo->image;
+
+	//nettest: a SECOND shader over the same image, for CSQC beam ribbons
+	//(env_beam / env_laser).  Reachable from QC as strcat(spriteframe(..), "_beam").
+	//
+	//The ordinary sprite shader above cannot draw a ribbon.  At the default
+	//gl_blendsprites 0 it compiles to "defaultsprite#MASK=0.666", and that MASK is a
+	//discard inside the fragment program (defaultsprite.glsl: "if (col.a <
+	//float(MASK)) discard;") which no batch flag can override - BEF_FORCEADDITIVE
+	//only rewrites state bits.  It tests the TEXTURE alpha, and HL beam sprites are
+	//additive art with low alpha throughout: sprites/nm_rain.spr peaks at 96/255, so
+	//every texel of They Hunger's rain was discarded and the beams drew as nothing.
+	//The stock shader also carries depthwrite, which is wrong for an additive ribbon.
+	//
+	//No extra texture is uploaded - this shares frameinfo->image - so the cost is one
+	//shader_t per sprite frame.
+	//separate buffer: "%s" reading the same array it is writing into is undefined.
+	Q_snprintfz(beamname, sizeof(beamname), "%s_beam", name);
+	frameinfo->beamshader = R_RegisterShader(beamname, SUF_NONE, SPRITE_SHADER_BEAM);
+	frameinfo->beamshader->defaulttextures->base = frameinfo->image;
 	frameinfo->shader->width = frameinfo->right-frameinfo->left;
 	frameinfo->shader->height = frameinfo->up-frameinfo->down;
 #endif

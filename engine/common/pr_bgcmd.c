@@ -33,9 +33,15 @@ cvar_t	pr_fixbrokenqccarrays = CVARFD("pr_fixbrokenqccarrays", "0", CVAR_MAPLATC
 cvar_t pr_tempstringcount = CVARD("pr_tempstringcount", "", "Obsolete. Set to 16 if you want to recycle+reuse the same 16 tempstring references and break lots of mods.");
 cvar_t pr_tempstringsize = CVARD("pr_tempstringsize", "4096", "Obsolete");
 #ifdef MULTITHREAD
-cvar_t pr_gc_threaded = CVARD("pr_gc_threaded", "1", "Says whether to use a separate thread for tempstring garbage collections. This avoids main-thread stalls but at the expense of more memory usage.");
+//FTESurf Patch 222: CVAR_NOSAVE.  Value 2 disables the collector for BOTH VMs
+//(pr_csqc.c and pr_cmds.c latch it at VM creation) and leaks every tempstring for the
+//life of the VM -- fine for a 30-second diagnostic run, unbounded for a server or a long
+//session, and this binary is shared with the game at C:\FTEQuake.  cfg_save writes any
+//changed non-default cvar unless it is NOSET/NOSAVE (cvar.c), so without this flag a
+//diagnostic run could bake "2" into a config and quietly disable the GC forever.
+cvar_t pr_gc_threaded = CVARFD("pr_gc_threaded", "1", CVAR_NOSAVE, "Says whether to use a separate thread for tempstring garbage collections. This avoids main-thread stalls but at the expense of more memory usage. 2 is a FTESurf DIAGNOSTIC value that disables the collector outright, leaking every tempstring for the life of the VM -- see PR_RunGC.");
 #else
-cvar_t pr_gc_threaded = CVARFD("pr_gc_threaded", "0", CVAR_NOSET|CVAR_NOSAVE, "Says whether to use a separate thread for tempstring garbage collections. This avoids main-thread stalls but at the expense of more memory usage.");
+cvar_t pr_gc_threaded = CVARFD("pr_gc_threaded", "0", CVAR_NOSET|CVAR_NOSAVE, "Says whether to use a separate thread for tempstring garbage collections. This avoids main-thread stalls but at the expense of more memory usage. 2 is a FTESurf DIAGNOSTIC value that disables the collector outright, leaking every tempstring for the life of the VM -- see PR_RunGC.");
 #endif
 cvar_t	pr_sourcedir = CVARD("pr_sourcedir", "src", "Subdirectory where your qc source is located. Used by the internal compiler and qc debugging functionality.");
 cvar_t pr_enable_uriget = CVARD("pr_enable_uriget", "1", "Allows gamecode to make direct http requests");
@@ -2001,7 +2007,15 @@ void QCBUILTIN PF_cvar_setf (pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 void QCBUILTIN PF_registercvar (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char *name = PR_GetStringOfs(prinst, OFS_PARM0);
-	const char *value = (prinst->callargc>2)?PR_GetStringOfs(prinst, OFS_PARM1):"";
+	//The default value is PARM1, so it must be gated on callargc>1, not >2.
+	//With the >2 test the documented two-argument DP_QC_REGISTERCVAR form
+	//	registercvar("hud_scale", "2")
+	//silently created the cvar as the EMPTY STRING -- so every QC that used
+	//the standard signature got 0 back from cvar() forever after, with no
+	//warning. (nettest works around this in CVar_DoRegister by force-setting
+	//when cvar_string() comes back empty; that workaround simply stops firing
+	//now.) dpflags below IS at PARM2 and its >2 test is correct.
+	const char *value = (prinst->callargc>1)?PR_GetStringOfs(prinst, OFS_PARM1):"";
 	int dpflags = (prinst->callargc>2)?G_FLOAT(OFS_PARM2):0;
 	int realflags = 0;
 	name = PR_GetStringOfs(prinst, OFS_PARM0);
@@ -3402,15 +3416,22 @@ void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 				src = FS_OpenVFS(fallbackread, "rb", FS_GAME);
 			if (src)
 			{
-				dst = FS_OpenVFS(srcname, "wbp", FS_GAMEONLY);	//lets mark it as persistent. this is probably profile data after all.
+				//FTESurf Patch 143: this said srcname, so fcopy(a,b) opened
+				//A for writing -- truncating the file it was asked to copy and
+				//then reading its own empty output. dstname is the whole point
+				//of the builtin.
+				dst = FS_OpenVFS(dstname, "wbp", FS_GAMEONLY);	//lets mark it as persistent. this is probably profile data after all.
 				if (dst)
 				{
+					G_FLOAT(OFS_RETURN) = 0;	//success, unless a write says otherwise below
 					while ((sz = VFS_READ(src, buffer, sizeof(buffer)))>0)
 					{
 						if (sz != VFS_WRITE(dst, buffer, sz))
 							G_FLOAT(OFS_RETURN) = -3;	//weird errors...
 					}
-					G_FLOAT(OFS_RETURN) = 0;	//success...
+					//FTESurf Patch 143: the success assignment was AFTER the
+					//loop, so it overwrote the -3 a short write had just set
+					//and a truncated copy reported success.
 					VFS_CLOSE(dst);
 				}
 				else

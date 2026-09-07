@@ -30,6 +30,7 @@ extern	cvar_t	cl_predict_players_latency;
 extern	cvar_t	cl_predict_players_nudge;
 extern	cvar_t	cl_lerp_players;
 extern  cvar_t	cl_lerp_maxinterval;
+extern  cvar_t	cl_debug_animrate;	//nettest Patch 155
 extern	cvar_t	cl_lerp_maxdistance;
 extern	cvar_t	cl_solid_players;
 extern	cvar_t	cl_item_bobbing;
@@ -73,7 +74,7 @@ static struct predicted_player
 	player_state_t *oldstate;
 } predicted_players[MAX_CLIENTS];
 
-static void CL_LerpNetFrameState(framestate_t *fs, lerpents_t *le);
+static void CL_LerpNetFrameState(framestate_t *fs, lerpents_t *le, model_t *model);
 void CL_PlayerFrameUpdated(player_state_t *plstate, entity_state_t *state, int sequence);
 void CL_AckedInputFrame(int inseq, int outseq, qboolean worldstateokay);
 
@@ -756,9 +757,17 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 		if (predbits & UFP_MOVETYPE)
 			news->u.q1.pmovetype = MSG_ReadByte();
 		if (predbits & UFP_VELOCITYXY)
-		{
-			news->u.q1.velocity[0] = MSG_ReadShort();
-			news->u.q1.velocity[1] = MSG_ReadShort();
+		{	/*FTESurf: must mirror SV_WriteEntityState's width exactly*/
+			if (cls.fteprotocolextensions2 & PEXT2_BIGVELOCITY)
+			{
+				news->u.q1.velocity[0] = MSG_ReadLong();
+				news->u.q1.velocity[1] = MSG_ReadLong();
+			}
+			else
+			{
+				news->u.q1.velocity[0] = MSG_ReadShort();
+				news->u.q1.velocity[1] = MSG_ReadShort();
+			}
 		}
 		else
 		{
@@ -766,7 +775,12 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 			news->u.q1.velocity[1] = 0;
 		}
 		if (predbits & UFP_VELOCITYZ)
-			news->u.q1.velocity[2] = MSG_ReadShort();
+		{
+			if (cls.fteprotocolextensions2 & PEXT2_BIGVELOCITY)
+				news->u.q1.velocity[2] = MSG_ReadLong();
+			else
+				news->u.q1.velocity[2] = MSG_ReadShort();
+		}
 		else
 			news->u.q1.velocity[2] = 0;
 		if (predbits & UFP_MSEC)
@@ -913,9 +927,46 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 			news->basebone = 0;
 			news->baseframe = 0;
 		}
+		//nettest Patch 125: HL bone controllers.  The server only ever sets 0x20
+		//for a client that negotiated PEXT2_BONECONTROLS, so an old client still
+		//reaches the Host_EndGame below exactly as before - which is what keeps
+		//old demos replayable.
+		if (fl & 0x20)
+		{
+			news->bonecontrol[0] = MSG_ReadShort();
+			news->bonecontrol[1] = MSG_ReadShort();
+			news->bonecontrol[2] = MSG_ReadShort();
+			news->bonecontrol[3] = MSG_ReadShort();
+			news->bonecontrol[4] = MSG_ReadShort();
+		}
+		else
+		{
+			news->bonecontrol[0] = news->bonecontrol[1] = news->bonecontrol[2] =
+			news->bonecontrol[3] = news->bonecontrol[4] = 0;
+		}
+
+		//nettest Patch 131: the HL bodygroup.  Absent means zero, matching the
+		//writer, which only sets the bit for a non-zero value - so a barney who
+		//holsters his gun again is one byte cheaper than one who keeps it out.
+		if (fl & 0x10)
+			news->bodygroup = MSG_ReadByte();
+		else
+			news->bodygroup = 0;
+
+		//nettest Patch 155: the playback rate, biased so that absent == 0 ==
+		//normal speed.  The writer only sets the bit for a non-zero biased
+		//value, so an entity that stops reversing costs two bytes once and then
+		//nothing.
+		if (fl & 0x08)
+			news->animrate = MSG_ReadShort();
+		else
+			news->animrate = 0;
 
 		//fixme: basebone, baseframe, etc.
-		if (fl & 0x3f)
+		//0x07, not 0x0f: 0x08 is the playback-rate bit above, as 0x10 is the
+		//bodygroup's.  Leaving a newly used bit in this mask would make the new
+		//extension end the game on its first use.
+		if (fl & 0x07)
 			Host_EndGame("unsupported entity delta info\n");
 	}
 	else if (news->bonecount)
@@ -2357,7 +2408,7 @@ void CL_RotateAroundTag(entity_t *ent, int entnum, int parenttagent, int parentt
 		parent[10] = axis[2][2];
 		parent[11] = org[2];
 
-		CL_LerpNetFrameState(&fstate, &cl.lerpents[parenttagent]);
+		CL_LerpNetFrameState(&fstate, &cl.lerpents[parenttagent], model);	//nettest Patch 155: parent's model, resolved just above
 
 		/*inherit certain properties from the parent entity*/
 		if (ps->dpflags & RENDER_VIEWMODEL)
@@ -2391,11 +2442,14 @@ void CL_RotateAroundTag(entity_t *ent, int entnum, int parenttagent, int parentt
 			}
 			model = cl.model_precache[cl.inframes[parsecountmod].playerstate[parenttagent-1].modelindex];
 
-			CL_LerpNetFrameState(&fstate, &cl.lerpplayers[parenttagent-1]);
+			CL_LerpNetFrameState(&fstate, &cl.lerpplayers[parenttagent-1], model);	//nettest Patch 155
 		}
 		else
 		{
-			CL_LerpNetFrameState(&fstate, &cl.lerpents[parenttagent]);
+			//nettest Patch 155: NULL - this branch has no parent model at all
+			//(it sets model = 0 immediately below).  A reversed sequence on such
+			//a parent pins to its first pose; see the note on the function.
+			CL_LerpNetFrameState(&fstate, &cl.lerpents[parenttagent], NULL);
 			model = 0;
 		}
 	}
@@ -3488,7 +3542,14 @@ typedef struct
 	shader_t *shader;
 	unsigned int flags;
 	int curpage;	//lightmap page of ctx->t (-2 = none opened yet)
-	qboolean dolm;	//compute + carry lightmap st for this decal (Q1/HL world only)
+	qboolean dolm;	//compute + carry lightmap st for this decal (world has usable lightmaps)
+	//nettest: the texture range mapped across the footprint. (0,1),(0,1) is the identity and what
+	//every caller before this used implicitly. It exists because the projection frame is a fixed
+	//PROPER ROTATION -- axis[1]xaxis[2] is identically -axis[0] -- so a mirrored image is not
+	//reachable by any choice of up/side, and because a hardwired 0..1 cannot express a texture that
+	//repeats or that shows only a sub-rectangle of itself. Source's baked overlays need all three:
+	//6.3% are mirrored, 17.8% tile (median 13x) and 1.4% crop.
+	float srange[2], trange[2];
 } cl_adddecal_ctx_t;
 
 //nettest r_decal_lightmap helpers -------------------------------------------------
@@ -3515,24 +3576,40 @@ static qboolean DecalLM_Bary(const float a[2], const float b[2], const float c[2
 	*u = 1.0 - *v - *w;				//weight of a
 	return true;
 }
-//Interpolate the surface's final (atlased) lightmap st at point p.  The surface mesh is a
-//trifan (tris (0,k+1,k+2)).  Inside-test with eps; nearest-tri clamp fallback.
+//Interpolate the surface's final (atlased) lightmap st at point p.  Inside-test with eps;
+//nearest-tri clamp fallback.
+//nettest: this used to hardcode the trifan winding (tris (0,k+1,k+2)).  That is only the winding
+//Q1/Q2 polys are built with; a Source DISPLACEMENT is an indexed diamond-flipped quad grid that
+//sets mesh->istrifan = false (plugins/hl2/mod_vbsp.c:2376) while still carrying real lmst_array
+//data.  Fanning over such a mesh tests triangles that are not faces of the surface (for a 5x5 disp,
+//(v0,v4,v5) spans an entire grid row), so the point-in-tri test picks the wrong triangle and the
+//decal samples the wrong luxel.  It never read out of bounds — both arrays are numvertexes long —
+//so the symptom was silently wrong lighting, not a crash.  Walk mesh->indexes when it has them,
+//exactly as the CLIPPER already does (Fragment_Mesh, engine/common/q1bsp.c:481-491).
 static qboolean DecalLM_Interp(const mesh_t *sm, const vec3_t n, const vec3_t p, vec2_t out)
 {
-	int ax0, ax1, k, best=-1, bi0=0,bi1=0,bi2=0;
+	int ax0, ax1, k, numtris, best=-1, bi0=0,bi1=0,bi2=0;
 	float p2[2], bu=0,bv=0,bw=0, bestcl=1e30;
 	const float eps = 0.01;
+	qboolean fan;
 	if (!sm || sm->numvertexes < 3 || !sm->lmst_array[0] || !sm->xyz_array)
 		return false;
+	fan = sm->istrifan || !sm->indexes || sm->numindexes < 3;
+	numtris = fan ? sm->numvertexes-2 : sm->numindexes/3;
 	DecalLM_PickAxes(n, &ax0, &ax1);
 	p2[0]=p[ax0]; p2[1]=p[ax1];
-	for (k = 0; k+2 < sm->numvertexes; k++)
+	for (k = 0; k < numtris; k++)
 	{
-		int i0=0, i1=k+1, i2=k+2;
-		float a[2]={sm->xyz_array[i0][ax0], sm->xyz_array[i0][ax1]};
-		float b[2]={sm->xyz_array[i1][ax0], sm->xyz_array[i1][ax1]};
-		float c[2]={sm->xyz_array[i2][ax0], sm->xyz_array[i2][ax1]};
+		int i0 = fan?0:sm->indexes[k*3+0];
+		int i1 = fan?k+1:sm->indexes[k*3+1];
+		int i2 = fan?k+2:sm->indexes[k*3+2];
+		float a[2], b[2], c[2];
 		float u,v,w, cl;
+		if (i0 >= sm->numvertexes || i1 >= sm->numvertexes || i2 >= sm->numvertexes)
+			continue;	//defensive: a malformed index list must not read past the vertex arrays
+		a[0]=sm->xyz_array[i0][ax0]; a[1]=sm->xyz_array[i0][ax1];
+		b[0]=sm->xyz_array[i1][ax0]; b[1]=sm->xyz_array[i1][ax1];
+		c[0]=sm->xyz_array[i2][ax0]; c[1]=sm->xyz_array[i2][ax1];
 		if (!DecalLM_Bary(a,b,c,p2,&u,&v,&w)) continue;
 		if (u>=-eps&&v>=-eps&&w>=-eps && u<=1+eps&&v<=1+eps&&w<=1+eps)
 		{
@@ -3586,13 +3663,26 @@ static scenetris_t *CL_Decal_GetStrip(cl_adddecal_ctx_t *ctx, int page)
 //return the non-unit clip tangents + clipsize for Mod_ClipDecal. Shared by CL_AddDecal (transient) and
 //CL_ClipPersistDecal (persistent) so the projection/aspect/lightmap math lives in exactly one place.
 static void CL_Decal_SetupCtx(cl_adddecal_ctx_t *ctx, shader_t *shader, vec3_t origin, vec3_t up, vec3_t side,
-							  vec3_t rgbvalue, float alphavalue, float aspect,
+							  vec3_t rgbvalue, float alphavalue, float aspect, const float *texrange,
 							  vec3_t out_cliptan1, vec3_t out_cliptan2, float *out_clipsize)
 {
 	float l, s, radius, vradius, hradius, clipsize;
 
 	if (aspect <= 0)
 		aspect = 1;
+
+	//nettest: the texture range mapped across the footprint, as (s0,s1,t0,t1). NULL means the
+	//identity (0..1 on both axes), which is what every caller did implicitly before this existed.
+	if (texrange)
+	{
+		ctx->srange[0] = texrange[0];	ctx->srange[1] = texrange[1];
+		ctx->trange[0] = texrange[2];	ctx->trange[1] = texrange[3];
+	}
+	else
+	{
+		ctx->srange[0] = 0;	ctx->srange[1] = 1;
+		ctx->trange[0] = 0;	ctx->trange[1] = 1;
+	}
 
 	VectorNegate(up, ctx->axis[0]);
 	VectorCopy(side, ctx->axis[2]);
@@ -3620,7 +3710,16 @@ static void CL_Decal_SetupCtx(cl_adddecal_ctx_t *ctx, shader_t *shader, vec3_t o
 	ctx->shader = shader;
 	ctx->flags = BEF_NODLIGHT|BEF_NOSHADOWS;
 	ctx->curpage = -2;
-	ctx->dolm = r_decal_lightmap.ival && cl.worldmodel && (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife);
+	//nettest: this used to test fromgame == fg_quake||fg_halflife, which made EVERY decal on a Source,
+	//Quake2/3 or CoD world fullbright — VBSP sets fromgame = fg_new (plugins/hl2/mod_vbsp.c:6293) and
+	//was never in the list. Test the two PROPERTIES the interpolation actually needs instead of a game
+	//id: surfstyles>0 is exactly the condition under which mesh->lmst_array[0] is non-NULL
+	//(gl_model.c:3406-3466), and count>0 is exactly the condition under which the surfaces' batch
+	//lightmap pages were rebased from model-local to global atlas indices (r_surf.c:4499 returns before
+	//the rebase at :4563 when count is 0). Doom 3 sets surfstyles but never any lightmap, so it is
+	//still correctly excluded; CoD sets both and is correctly admitted.
+	ctx->dolm = r_decal_lightmap.ival && cl.worldmodel
+				&& cl.worldmodel->lightmaps.surfstyles > 0 && cl.worldmodel->lightmaps.count > 0;
 
 	VectorCopy(rgbvalue, ctx->rgbavalue);
 	ctx->rgbavalue[3] = alphavalue;
@@ -3640,13 +3739,32 @@ static void CL_Decal_SetupCtx(cl_adddecal_ctx_t *ctx, shader_t *shader, vec3_t o
 static void CL_Decal_VertexAttribs(const cl_adddecal_ctx_t *ctx, const msurface_t *surf, int page,
 								   const vec3_t p, vec2_t out_st, vec2_t out_lm, float *out_valpha)
 {
-	out_st[0] = 1 + (DotProduct(p, ctx->axis[1]) - ctx->offset[1]) * ctx->scale[1];
-	out_st[1] =    -(DotProduct(p, ctx->axis[2]) - ctx->offset[2]) * ctx->scale[2];
+	//Both of these ran 0..1 across the footprint and were used directly as the texcoord. Keep them as
+	//the normalised position and map the caller's texture range onto them, so a decal can mirror
+	//(s1 < s0), tile (a span > 1) or crop (a sub-range) -- none of which the footprint's own frame,
+	//a fixed proper rotation, can express.
+	float snorm = 1 + (DotProduct(p, ctx->axis[1]) - ctx->offset[1]) * ctx->scale[1];
+	float tnorm =    -(DotProduct(p, ctx->axis[2]) - ctx->offset[2]) * ctx->scale[2];
+	out_st[0] = ctx->srange[0] + (ctx->srange[1]-ctx->srange[0]) * snorm;
+	out_st[1] = ctx->trange[0] + (ctx->trange[1]-ctx->trange[0]) * tnorm;
 	*out_valpha = 1 - fabs(DotProduct(p, ctx->axis[0]) - ctx->offset[0]) * ctx->scale[0];
-	if (ctx->dolm && page >= 0 && surf)
+	//nettest: valpha reaches 0 at |depth| = vradius/2 but geometry is accepted out to clipsize/2 =
+	//max(radius,vradius)/2, so whenever the decal is wider than it is deep this goes NEGATIVE — and the
+	//decal shader is `blendfunc gl_one gl_one_minus_src_alpha` with `alphagen vertex`, which turns a
+	//negative alpha into a multiplicative BRIGHTENING of whatever is behind it. At the stock
+	//fs_decal_size 32 / DECAL_DEPTH 8 that is alpha = -3 at the edge of the clip box.
+	if (*out_valpha < 0)
+		*out_valpha = 0;
+	if (ctx->dolm && page >= 0 && surf && surf->mesh && surf->plane)
 	{
 		if (!DecalLM_Interp(surf->mesh, surf->plane->normal, p, out_lm))
-			Vector2Copy(surf->mesh->lmst_array[0][0], out_lm);
+		{	//DecalLM_Interp returns false when lmst_array[0] is NULL, so the old fallback dereferenced
+			//exactly the pointer whose NULL-ness sent it here. Harmless while the gate was Q1/HL-only.
+			if (surf->mesh->lmst_array[0])
+				Vector2Copy(surf->mesh->lmst_array[0][0], out_lm);
+			else
+				out_lm[0] = out_lm[1] = 0;
+		}
 	}
 	else
 	{
@@ -3717,7 +3835,7 @@ void CL_AddDecal(shader_t *shader, vec3_t origin, vec3_t up, vec3_t side, vec3_t
 	if (R2D_Flush)
 		R2D_Flush();
 
-	CL_Decal_SetupCtx(&ctx, shader, origin, up, side, rgbvalue, alphavalue, aspect, cliptan1, cliptan2, &clipsize);
+	CL_Decal_SetupCtx(&ctx, shader, origin, up, side, rgbvalue, alphavalue, aspect, NULL, cliptan1, cliptan2, &clipsize);
 	Mod_ClipDecal(cl.worldmodel, origin, ctx.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecal_Callback, &ctx);
 }
 
@@ -3748,6 +3866,7 @@ typedef struct
 	char		shadername[64];
 	vec3_t		origin, up, side;
 	float		aspect;
+	vec4_t		texrange;		//(s0,s1,t0,t1) mapped across the footprint; (0,1,0,1) = the identity
 	vec4_t		rgba;			//base rgb+alpha (updatedecal rewrites this; NO re-clip)
 	qboolean	dolm;
 	float		die;			//0 = never; else cl.time to expire
@@ -3898,13 +4017,13 @@ static qboolean CL_ClipPersistDecal(persistdecal_t *rec)
 		return false;
 
 	cc.rec = rec;
-	CL_Decal_SetupCtx(&cc.base, rec->shader, rec->origin, rec->up, rec->side, rec->rgba, rec->rgba[3], rec->aspect, cliptan1, cliptan2, &clipsize);
+	CL_Decal_SetupCtx(&cc.base, rec->shader, rec->origin, rec->up, rec->side, rec->rgba, rec->rgba[3], rec->aspect, rec->texrange, cliptan1, cliptan2, &clipsize);
 	rec->dolm = cc.base.dolm;
 	Mod_ClipDecal(cl.worldmodel, rec->origin, cc.base.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecalStatic_Callback, &cc);
 	return rec->tris != NULL;
 }
 
-int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime)
+int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime, const float *texrange)
 {
 	int idx;
 	persistdecal_t *rec;
@@ -3925,6 +4044,10 @@ int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec
 	VectorCopy(rgb, rec->rgba);
 	rec->rgba[3] = alpha;
 	rec->aspect = aspect;
+	if (texrange)
+		Vector4Copy(texrange, rec->texrange);
+	else
+		Vector4Set(rec->texrange, 0, 1, 0, 1);
 	rec->die = (lifetime > 0) ? cl.time + lifetime : 0;
 
 	if (!CL_ClipPersistDecal(rec))
@@ -4224,25 +4347,206 @@ void CLQ1_AddPowerupShell(entity_t *ent, qboolean viewweap, unsigned int effects
 	shell->flags &= ~RF_TRANSLUCENT|RF_ADDITIVE;
 }
 
-static void CL_LerpNetFrameState(framestate_t *fs, lerpents_t *le)
+//nettest Patch 155: `model` is used only to ask how long a sequence lasts, and
+//only when the rate is negative - a reversed sequence has to start at its END,
+//which is the one thing the client cannot work out from the timestamps alone.
+//Callers that genuinely have no model (the tag-parent paths below, which are
+//building a framestate for something whose model they have not resolved yet)
+//pass NULL and get 0, i.e. a reversed sequence there pins to its first pose.
+//That is a corner of a corner - a tag parent playing an animation backwards -
+//and every path that actually renders a monster has its model to hand.
+static void CL_LerpNetFrameState(framestate_t *fs, lerpents_t *le, model_t *model)
 {
 	int fsanim;
+	float rate = le->animrate ? le->animrate : 1;
 	for (fsanim = 0; fsanim < FS_COUNT; fsanim++)
 	{
+		float seqtime = cl.servertime - le->newframestarttime[fsanim];
+
 		fs->g[fsanim].frame[0] = le->newframe[fsanim];
 		fs->g[fsanim].frame[1] = le->oldframe[fsanim];
 
-		fs->g[fsanim].frametime[0] = cl.servertime - le->newframestarttime[fsanim];
-		fs->g[fsanim].frametime[1] = cl.servertime - le->oldframestarttime[fsanim];
+		if (rate == 1)
+		{	//the overwhelming majority of entities, and byte-for-byte the old path.
+			fs->g[fsanim].frametime[0] = seqtime;
+			fs->g[fsanim].frametime[1] = cl.servertime - le->oldframestarttime[fsanim];
+		}
+		else
+		{
+			float t = le->animphase[fsanim] + (cl.servertime - le->animphasetime[fsanim]) * rate;
+			//A negative rate counts DOWN from the end of the sequence, which is
+			//how Half-Life expresses a node-graph transition walked backwards
+			//(FindTransition returns *piDir = -1; CTentacle turns that into
+			//pev->framerate = -1 with pev->frame parked at 255).
+			if (rate < 0 && model)
+				t += Mod_GetFrameDuration(model, 0, le->newframe[fsanim]);
+			fs->g[fsanim].frametime[0] = t;
+			//The outgoing sequence keeps the same rate.  It is only alive for the
+			//length of a cross-fade, and the alternative - remembering the rate
+			//the previous sequence was playing at - buys nothing visible.
+			fs->g[fsanim].frametime[1] = (cl.servertime - le->oldframestarttime[fsanim]) * rate;
+		}
 
-		fs->g[fsanim].lerpweight[0] = (fs->g[fsanim].frametime[0]) / le->framelerpdeltatime[fsanim];
+		//Wall-clock, deliberately: see the note on framestate_t.seqtime.  Both
+		//the frame-blend weight here and the sequence cross-fade in gl_hlmdl.c
+		//are asking "how far through the TRANSITION are we", which has nothing
+		//to do with how fast the sequence itself is being played.
+		fs->g[fsanim].seqtime = seqtime;
+
+		fs->g[fsanim].lerpweight[0] = seqtime / le->framelerpdeltatime[fsanim];
 		fs->g[fsanim].lerpweight[0] = bound(0, fs->g[FS_REG].lerpweight[0], 1);
 		fs->g[fsanim].lerpweight[1] = 1 - fs->g[fsanim].lerpweight[0];
 	}
 	fs->g[0].endbone = le->basebone;
+
+	//nettest Patch 125: hand the networked HL bone controllers to the renderer.
+	//framestate_t.bonecontrols is what HLMDL_GetBoneData_Internal already reads
+	//(gl_hlmdl.c:1367) - it has always been there, and until now only CSQC could
+	//ever fill it, which is why a SERVER-side HL model could never aim.
+	//
+	//Undo the fixed point here, so everything downstream sees the same degrees a
+	//CSQC-set controller would have produced.
+	fs->bonecontrols[0] = le->bonecontrol[0] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols[1] = le->bonecontrol[1] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols[2] = le->bonecontrol[2] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols[3] = le->bonecontrol[3] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols[4] = le->bonecontrol[4] * (1.0/ES_BONECONTROL_SCALE);
+
+	//nettest Patch 126: hand the PREVIOUS pair over too, with how far between them
+	//we are, so HL_CalcBoneAdj can smooth the bounded controllers.  The fraction is
+	//computed the same way the frame lerp above is - elapsed over the delta between
+	//the last two arrivals - so a head follows exactly the cadence the body does.
+	fs->bonecontrols_old[0] = le->bonecontrol_old[0] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols_old[1] = le->bonecontrol_old[1] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols_old[2] = le->bonecontrol_old[2] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols_old[3] = le->bonecontrol_old[3] * (1.0/ES_BONECONTROL_SCALE);
+	fs->bonecontrols_old[4] = le->bonecontrol_old[4] * (1.0/ES_BONECONTROL_SCALE);
+
+	if (le->bonecontroldeltatime > 0)
+	{
+		float f = (cl.servertime - le->bonecontrolstarttime) / le->bonecontroldeltatime;
+		//Clamped, not extrapolated.  Overshooting a head turn past its newest
+		//known angle looks worse than arriving early and waiting, and a stalled
+		//entity (one that stops sending because nothing changed) would otherwise
+		//keep swinging forever.
+		if (f < 0) f = 0;
+		if (f > 1) f = 1;
+		fs->bonecontrol_lerpfrac = f;
+	}
+	else
+		fs->bonecontrol_lerpfrac = 1;	//no history yet: use the newest as-is
+
+	//nettest Patch 126: the jaw, driven by the actual audio.
+	//
+	//This is how GoldSrc does it and the reason a QC-side approximation never
+	//looked right: the mouth is not game state at all, it is the amplitude of
+	//whatever this entity is saying, sampled where playback currently is.
+	//S_GetChannelLevel already returns exactly that (snd_dma.c) and had no callers
+	//outside a CSQC builtin.  Negative means "nothing playing on that channel",
+	//which HL_CalcBoneAdj treats as a closed mouth.
+	{
+		float lvl = S_GetChannelLevel(le - cl.lerpents, CHAN_VOICE);
+		fs->mouthopen = (lvl > 0) ? lvl : 0;
+	}
 }
 
-static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbaseframe, int curbasebone, lerpents_t *le, float lerpend)
+//nettest Patch 125: carry the parsed HL bone controllers into the lerp entity.
+//Kept as its own two-line helper rather than an extra argument on
+//CL_UpdateNetFrameLerpState because one of that function's three call sites is
+//the player path, which has no entity_state_t to take them from.
+//
+//No interpolation, deliberately.  These are absolute pose parameters, and
+//blending two aim angles across the short way vs the long way round is not
+//something the value itself tells you - a turret that snapped from 179 to -179
+//would sweep the whole way back through zero.  Half-Life sets them per-frame for
+//the same reason.
+static void CL_UpdateBoneControls(lerpents_t *le, const entity_state_t *snew)
+{
+	//Patch 126: keep the previous pair and stamp the arrival, so
+	//CL_LerpNetFrameState can blend across the gap.  Only re-stamp when the values
+	//actually CHANGED - a monster holding a steady head angle re-sends the same
+	//numbers every snapshot, and re-stamping on those would restart a zero-length
+	//blend forever and pin the fraction at 0.
+	if (memcmp(le->bonecontrol, snew->bonecontrol, sizeof(le->bonecontrol)))
+	{
+		float dt = cl.servertime - le->bonecontrolstarttime;
+		memcpy(le->bonecontrol_old, le->bonecontrol, sizeof(le->bonecontrol_old));
+		memcpy(le->bonecontrol, snew->bonecontrol, sizeof(le->bonecontrol));
+		//Guard the first update on an entity (starttime 0 -> a huge dt) and any
+		//hitch, or the blend would take minutes.  0.1s is the AI think rate these
+		//come from, which is the common case by a wide margin.
+		if (dt <= 0 || dt > 0.5)
+			dt = 0.1;
+		le->bonecontrolstarttime = cl.servertime;
+		le->bonecontroldeltatime = dt;
+	}
+}
+
+//nettest Patch 155: carry the parsed playback rate into the lerp entity, and
+//rebase the phase so a rate change mid-sequence is continuous.
+//
+//Its own helper for the same reason CL_UpdateBoneControls is one: the third
+//caller of CL_UpdateNetFrameLerpState is the player path, which has no
+//entity_state_t to read this from.
+//
+//MUST be called AFTER CL_UpdateNetFrameLerpState.  If the sequence changed this
+//frame that function has already rebased the phase to the start, and rebasing
+//again here would be harmless but pointless; if it did NOT change, the phase
+//still refers to the old rate and has to be carried forward at that rate before
+//the new one takes over.  Doing it the other way round would apply the new rate
+//retroactively to time that was played at the old one.
+static void CL_UpdateAnimRate(lerpents_t *le, const entity_state_t *snew)
+{
+	float rate = snew->animrate * (1.0/ES_ANIMRATE_SCALE) + ES_ANIMRATE_BIAS;
+	int fst;
+
+	if (rate == le->animrate)
+		return;		//steady state, and that is nearly always
+
+	for (fst = 0; fst < FS_COUNT; fst++)
+	{
+		//Where the old rate had got to by now becomes the new rate's origin.
+		//Note this is the raw phase and deliberately does NOT include the
+		//duration offset a negative rate gets in CL_LerpNetFrameState, so a
+		//rate change that keeps its sign stays exactly continuous.  A change
+		//that FLIPS sign mid-sequence would pop; Half-Life always sets the
+		//sequence and the direction together (tentacle.cpp), so that case does
+		//not arise in practice.
+		le->animphase[fst] += (cl.servertime - le->animphasetime[fst]) * le->animrate;
+		le->animphasetime[fst] = cl.servertime;
+	}
+	le->animrate = rate;
+
+	//Throttled and developer-gated, because "the server set it" and "the client
+	//received it" are different claims and only this one can be checked from a
+	//headless client.  Rate 1 is the steady state and is not worth a line; a
+	//NEGATIVE rate is the interesting event, so it says so explicitly.
+	if (cl_debug_animrate.ival && rate != 1)
+	{
+		static float animratetimer;
+		Con_ThrottlePrintf(&animratetimer, 0, "[animrate] ent %i: %s %g\n",
+			snew->number, (rate < 0)?"REVERSE":"rate", rate);
+	}
+}
+
+//nettest: the loaded model for an entity state, or NULL if there is not one yet.
+//Only used to ask a sequence's duration; a miss simply falls back to the old
+//replay-from-the-top behaviour rather than failing.
+static model_t *CL_LerpModelFor(const entity_state_t *s)
+{
+	model_t *m;
+	if (!s || s->modelindex <= 0 || s->modelindex >= countof(cl.model_precache))
+		return NULL;
+	m = cl.model_precache[s->modelindex];
+	if (!m || m->loadstate != MLS_LOADED)
+		return NULL;
+	return m;
+}
+
+//nettest: `model` is consulted ONLY on the force path, to answer "how long is the
+//sequence this entity is arriving mid-way through".  Callers that have no model to
+//hand (the player path) pass NULL and get the old behaviour exactly.
+static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbaseframe, int curbasebone, lerpents_t *le, float lerpend, model_t *model)
 {
 	int fst, frame;
 	if (curbasebone != le->basebone)
@@ -4277,12 +4581,50 @@ static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbase
 			le->newframe[fst] = frame;
 			le->newframestarttime[fst] = cl.servertime;
 
-//			if (force)
-//			{
-//				//if its new, we need to tweak the age of the animation. looping anims won't appear any different, while non-looping ones will clamp to the last pose of the animation when its new.
-//				le->oldframestarttime[fst] -= Mod_GetFrameDuration(le->model, 0, le->oldframe[fst]);
-//				le->newframestarttime[fst] -= Mod_GetFrameDuration(le->model, 0, le->newframe[fst]);
-//			}
+			//nettest Patch 155: a new sequence starts at its own beginning, so
+			//the playback clock rebases to zero here.  For a NEGATIVE rate zero
+			//means the end - CL_LerpNetFrameState adds the sequence duration,
+			//because that is the only place with the model to ask.
+			le->animphase[fst] = 0;
+			le->animphasetime[fst] = cl.servertime;
+
+			//nettest: AN ENTITY ARRIVING MID-SEQUENCE DOES NOT REPLAY IT.
+			//
+			//This is Spike's own commented-out block, restored - his note read
+			//"if its new, we need to tweak the age of the animation. looping anims
+			//won't appear any different, while non-looping ones will clamp to the
+			//last pose of the animation when its new."  It could not be enabled as
+			//written because it asked `le->model`, and lerpents_t has no such
+			//field; the model is now passed in from the callers, which have the
+			//entity state and therefore the modelindex.
+			//
+			//The symptom without it is the reported one: walk out of a room and
+			//back, and every corpse in it DIES AGAIN.  A dead monster holds the
+			//last frame of a non-looping death sequence, and the whole of that
+			//pose is a function of `cl.servertime - newframestarttime`.  When the
+			//entity drops out of the PVS and comes back, `isnew` is set, that
+			//timestamp is stamped to NOW, and the death plays from the top.  The
+			//server is not involved and cannot be: the animation clock for a
+			//networked entity is entirely client-side.
+			//
+			//Back-dating by one sequence duration puts a non-looping animation
+			//straight at its clamped final pose, and leaves a looping one on
+			//exactly the phase it would have had anyway - a whole period earlier
+			//is the same place in the cycle.  So idle and walk cycles are
+			//bit-identical and only the once-through animations change, which is
+			//precisely the set that was wrong.
+			if (force && model)
+			{
+				float dur = Mod_GetFrameDuration(model, 0, frame);
+				if (dur > 0)
+				{
+					le->oldframestarttime[fst] -= dur;
+					le->newframestarttime[fst] -= dur;
+					//...and the same for the rate-scaled clock, which is a
+					//separate accumulator (see CL_UpdateAnimRate).
+					le->animphase[fst] = dur;
+				}
+			}
 		}
 	}
 }
@@ -4308,6 +4650,20 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 
 	if (r_drawflame.ival < 0 || r_drawentities.ival == 0)
 		return;
+
+	/*
+	  FTESurf build 17 dropped every static entity here while r_voidvis was
+	  showing the void, on the reasoning that 653 per-instance-lit static props
+	  are what the void costs you where the batched world is affordable.
+
+	  BUILD 19 REMOVED IT.  Measured from outside surf_666 and aimed at it, the
+	  entity census reads zero at every r_voidvis setting including the one where
+	  no gate runs at all -- on a VBSP map the props are emitted by the world
+	  model's own prepare-frame and its PVS and radius culls have already
+	  rejected them, and this function never sees them in the first place.  So it
+	  was dropping nothing while looking like the reason the feature worked.  See
+	  the r_voidvis essay in renderer.c for the numbers.
+	*/
 
 	if (!cl.worldmodel)
 		return;
@@ -4551,7 +4907,9 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 					le->isnew = true;
 					VectorCopy(le->origin, le->lastorigin);
 				}
-				CL_UpdateNetFrameLerpState(sold == snew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend);
+				CL_UpdateNetFrameLerpState(sold == snew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend, CL_LerpModelFor(snew));
+				CL_UpdateBoneControls(le, snew);
+				CL_UpdateAnimRate(le, snew);	//nettest Patch 155 - after the frame state, see the note on it
 
 
 				from = sold;	//eww
@@ -4723,7 +5081,9 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 		}
 #endif
 
-		CL_UpdateNetFrameLerpState(isnew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend);
+		CL_UpdateNetFrameLerpState(isnew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend, CL_LerpModelFor(snew));
+		CL_UpdateBoneControls(le, snew);
+		CL_UpdateAnimRate(le, snew);	//nettest Patch 155 - after the frame state, see the note on it
 	}
 }
 
@@ -5292,13 +5652,14 @@ void CL_LinkPacketEntities (void)
 
 		// set skin
 		ent->skinnum = state->skinnum;
+		ent->body    = state->bodygroup;	//nettest Patch 131
 
 #ifdef HEXEN2
 		ent->abslight = state->abslight;
 		ent->drawflags = state->hexen2flags;
 #endif
 
-		CL_LerpNetFrameState(&ent->framestate, le);
+		CL_LerpNetFrameState(&ent->framestate, le, ent->model);	//nettest Patch 155
 
 #ifdef PEXT_SCALE
 		//set scale
@@ -6331,7 +6692,7 @@ void CL_LinkPlayers (void)
 			continue;	// not present this frame
 		}
 
-		CL_UpdateNetFrameLerpState(false, state->frame, 0, 0, &cl.lerpplayers[j], 0);
+		CL_UpdateNetFrameLerpState(false, state->frame, 0, 0, &cl.lerpplayers[j], 0, NULL);
 		cl.lerpplayers[j].sequence = cl.lerpentssequence;
 
 #ifdef CSQC_DAT
@@ -6443,8 +6804,14 @@ void CL_LinkPlayers (void)
 		ent->model = model;
 
 		ent->skinnum = state->skinnum;
+		//nettest Patch 131: NO bodygroup on the player path.  This `state` is a
+		//player_state_t, a different struct with its own much tighter wire
+		//format, and players in this mod do not use HL bodygroups - the viewmodel
+		//and the world weapon are separate entities.  Monsters go through the
+		//entity path above, which is what the report was about.
+		ent->body    = 0;
 
-		CL_LerpNetFrameState(&ent->framestate,	&cl.lerpplayers[j]);
+		CL_LerpNetFrameState(&ent->framestate,	&cl.lerpplayers[j], ent->model);	//nettest Patch 155
 
 		// set colormap
 		ent->playerindex = j;
@@ -6803,6 +7170,88 @@ void CL_LinkViewModel(void)
 
 //======================================================================
 
+#ifdef CSQC_DAT
+/*
+===============
+CL_AddCSQCPortalsToPmove
+
+FTESurf Patch 203, gap G4: the CSQC portals, as physents.
+
+pe->isportal was assigned in exactly one place in the whole engine before this
+patch -- sv_user.c's AddEntityToPmove -- so it was a server-only concept.  The
+client builds its physents from cl.inframes[...].packet_entities and nothing
+else, which means a portal that lives in CSQC (as ours does: the doors are
+static map entities, derived on both sides from the BSP entity lump rather than
+networked) was invisible to prediction.  The server would walk the player
+through the doorway and the client would predict them walking into the wall
+behind it, once per frame, forever -- a permanent rubber-band exactly at the
+place the player is trying to use.
+
+pmove.world is already &csqc_world (below), which is what PM_PortalTransform
+needs to call camera_transform, so this is the only piece that was missing.
+
+Walking w->portallist rather than the edict table is deliberate: World_LinkEdict
+puts SOLID_PORTAL entities on their own list precisely because portals must be
+considered regardless of distance (sv_user.c's AddPortalsToPmove says the same),
+and it is O(portals) rather than O(entities) on a path that runs every frame.
+
+Two limitations, stated rather than hidden:
+
+ * pe->info here is a CSQC entity number, while every other physent on the
+   client carries an SSQC one.  Nothing mixes them -- info reaches
+   PM_PortalTransform only for isportal physents, and PM_PortalTransform
+   resolves it against pmove.world, which is csqc_world -- except
+   pmove.skipent, which cl_pred.c sets to the player's SSQC entnum.  A CSQC
+   portal that happened to share that number would be skipped.
+ * a portal is only predicted while CSQC has it linked.  A door created after
+   the fact, or one whose camera_transform is not yet resolved, simply is not
+   in the list, and prediction falls back to "solid wall" for that frame.
+===============
+*/
+static void CL_AddCSQCPortalsToPmove (void)
+{
+	world_t		*w = &csqc_world;
+	link_t		*l, *next;
+	wedict_t	*check;
+	physent_t	*pent;
+
+	if (!w->progs)
+		return;
+
+#ifdef USEAREAGRID
+	for (l = w->portallist.l.next; l != &w->portallist.l; l = next)
+	{
+		next = l->next;
+		check = ((areagridlink_t*)l)->ed;
+#else
+	for (l = w->portallist.edicts.next; l != &w->portallist.edicts; l = next)
+	{
+		next = l->next;
+		check = (wedict_t*)EDICT_FROM_AREA(l);
+#endif
+		if (check->v->solid != SOLID_PORTAL)
+			continue;	//shouldn't happen; the unlink is what takes them off this list
+		if (!check->xv->camera_transform)
+			continue;	//PM_PortalTransform would PR_ExecuteProgram(0) and fault
+		if (!check->v->size[0])
+			continue;	//points are not meant to be solid -- same rule AddEntityToPmove uses
+
+		if (pmove.numphysent == MAX_PHYSENTS)
+			break;
+		pent = &pmove.physents[pmove.numphysent++];
+		memset(pent, 0, sizeof(*pent));
+		pent->model = NULL;		//ours are point entities sized with setsize
+		pent->isportal = true;
+		pent->scale = 1;
+		pent->info = NUM_FOR_EDICT(w->progs, (struct edict_s*)check);
+		VectorCopy (check->v->origin, pent->origin);
+		VectorCopy (check->v->angles, pent->angles);
+		VectorCopy (check->v->mins, pent->mins);
+		VectorCopy (check->v->maxs, pent->maxs);
+	}
+}
+#endif
+
 /*
 ===============
 CL_SetSolid
@@ -6829,6 +7278,17 @@ void CL_SetSolidEntities (void)
 	VectorClear (pmove.physents[0].origin);
 	pmove.physents[0].info = 0;
 	pmove.numphysent = 1;
+
+	/* P203: immediately after the world and before the packet entities.  Two
+	   reasons, both structural rather than aesthetic.  A map with enough networked
+	   entities to reach MAX_PHYSENTS would otherwise drop the portals, which are
+	   the few physents the player cannot do without.  And PM_PlayerTrace's
+	   world-is-allsolid recovery only scans FORWARD from the entity it is testing
+	   for portals to carve with (pmovetst.c, `for (j = i+1; ...)`), so a portal
+	   that sits before the world in the array can never be found by it. */
+#ifdef CSQC_DAT
+	CL_AddCSQCPortalsToPmove ();
+#endif
 
 	frame = &cl.inframes[cl.validsequence&UPDATE_MASK];
 	pak = &frame->packet_entities;

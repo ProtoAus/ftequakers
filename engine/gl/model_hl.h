@@ -29,12 +29,44 @@
 			"}\n" \
 		"}\n"
 
+//nettest Patch 132: #usemods, and it is the whole fix for "the alien grunt's
+//shoulder armour is black".
+//
+//This shader was already asking for `tcgen environment` and already being
+//selected for every chrome-flagged texture - but the tcgen was silently thrown
+//away, so chrome faces drew at whatever texcoords the model file happened to
+//store.  Two independent reasons, both verified in the source:
+//
+//  1. `#CHROME` is not a permutation (the table is gl_shader.c:1484-1495) and
+//     the token does not appear anywhere in shaders/glsl/defaultskin.glsl.  It
+//     compiled to `#define CHROME 1` in a shader that never tests it.
+//  2. BE_GeneratePassTC - the ONLY caller of tcgen() - runs only when
+//     prog->calcgens is set (gl_backend.c:4296-4303), which needs either
+//     `!!fixed` at the top of the GLSL or `#usemods` in the program name
+//     (gl_shader.c:1757, 2180-2181).  This had neither.
+//
+//The CPU generator has been present and correct the whole time
+//(tcgen_environment, gl_backend.c:1876-1901) - it was simply unreachable.
+//
+//What made it black rather than merely wrong: studiomdl writes a PLACEHOLDER
+//texcoord on chrome meshes, because GoldSrc replaces them per-vertex at runtime.
+//Measured out of agrunt.mdl, all 256 chrome triangles carry s=0 t=63 on every
+//vertex - one texel of Chrome2.bmp, palette index 106, RGB(0,0,0).  Twenty
+//chrome textures across the model set were affected; agrunt and hassassin were
+//literally black, islave/controller/sentry/player near-black.
+//
+//Textures still bind in the calcgens branch (gl_backend.c:4302), so this costs
+//one CPU texcoord pass over a few hundred verts and nothing else.
+//nettest: `tcgen chrome`, not `tcgen environment`.  The two are different mappings
+//and only one of them is GoldSrc's - the reasoning, and the model that exposed it,
+//are written out at tcgen_chrome in gl_backend.c.  Everything else about Patch 132
+//above still stands: #usemods is what makes ANY tcgen reachable here.
 #define HLSHADER_CHROME \
 		"{\n" \
-			"program defaultskin#CHROME\n" \
+			"program defaultskin#usemods\n" \
 			"{\n" \
 				"map $diffuse\n" \
-				"tcgen environment\n" \
+				"tcgen chrome\n" \
 				"rgbgen lightingdiffuse\n" \
 			"}\n" \
 		"}\n"
@@ -49,12 +81,60 @@
 			"}\n" \
 		"}\n"
 
+//`#CHROME` is not a permutation and never was (Patch 132's note above says so in
+//as many words), so this program name was ALSO failing the calcgens test that makes
+//a tcgen run at all - the fullbright-chrome textures were drawing at their
+//placeholder texcoords exactly as the plain chrome ones used to.  #usemods is what
+//turns the tcgen on; the token that did nothing is dropped rather than kept.
 #define HLSHADER_FULLBRIGHTCHROME \
 		"{\n" \
-			"program defaultskin#CHROME\n" \
+			"program defaultskin#usemods\n" \
 			"{\n" \
 				"map $diffuse\n" \
-				"tcgen environment\n" \
+				"tcgen chrome\n" \
+			"}\n" \
+		"}\n"
+
+//nettest: MASKED is not exclusive with FULLBRIGHT or CHROME, but the selector below used
+//to treat it as though it were - it tested FULLBRIGHT first and CHROME in the same else-if
+//chain, so any texture carrying MASKED *and* one of those got a shader with no alpha test
+//at all.  That is not a corner case: measured across 16497 studio models in the HL/Sven
+//corpus, 2816 masked textures are plain MASKED but 179 also set FULLBRIGHT (129 + 46 that
+//add FLAT + 2 that add ADDITIVE) and 2 also set CHROME.
+//
+//What made the failure BLACK rather than merely unlit: the masked upload path deliberately
+//writes RGBA(0,0,0,0) into palette entry 255 (gl_hlmdl.c, "pal index 255 = always
+//transparent"), so the texels that exist only to be discarded carry pure black RGB.  Drop
+//the discard and every one of them is drawn as opaque black.  These are overwhelmingly the
+//2D billboard/sprite-style models (2d_*.mdl, v_tesla's bulb_masked) whose whole silhouette
+//is keyed out, so the visible result is a black card - exactly the reported symptom.
+#define HLSHADER_FULLBRIGHTMASKED \
+		"{\n" \
+			"program defaultskin#MASK=0.5#MASKLT=1\n" \
+			"{\n" \
+				"map $diffuse\n" \
+				"alphaFunc GE128\n" \
+			"}\n" \
+		"}\n"
+
+#define HLSHADER_CHROMEMASKED \
+		"{\n" \
+			"program defaultskin#usemods#MASK=0.5#MASKLT=1\n" \
+			"{\n" \
+				"map $diffuse\n" \
+				"tcgen chrome\n" \
+				"rgbgen lightingdiffuse\n" \
+				"alphaFunc GE128\n" \
+			"}\n" \
+		"}\n"
+
+#define HLSHADER_FULLBRIGHTCHROMEMASKED \
+		"{\n" \
+			"program defaultskin#usemods#MASK=0.5#MASKLT=1\n" \
+			"{\n" \
+				"map $diffuse\n" \
+				"tcgen chrome\n" \
+				"alphaFunc GE128\n" \
 			"}\n" \
 		"}\n"
 
@@ -294,6 +374,14 @@ typedef struct	//this is stored as the cache. an hlmodel_t is generated when dra
 {
 	//updated while rendering...
 	float	controller[5];				/* Position of bone controllers */
+	//nettest Patch 126: the previous snapshot's controllers and how far between
+	//the two we are, so HL_CalcBoneAdj can smooth the BOUNDED ones (it is the only
+	//place that can see each controller's type and so tell those apart from the
+	//wrapping ones, which must not be blended).  Plus GoldSrc's mouth: 0..1 of how
+	//loud this entity's voice channel is at its current playback offset.
+	float	controller_old[5];
+	float	controllerfrac;
+	float	mouthopen;
 	float	adjust[5];
 
 	hlmdl_header_t			*header;
@@ -312,6 +400,8 @@ typedef struct	//this is stored as the cache. an hlmodel_t is generated when dra
 		int atlasid;
 		unsigned short x,y;
 	} *shaders;
+	int numshaders;		//nettest: so r_texdiag_now can walk `shaders` after load; the
+						//texture header itself is a load-time local and is not kept.
 	short *skinref;
 	int numskinrefs;
 	int numskingroups;

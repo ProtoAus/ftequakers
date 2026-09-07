@@ -416,6 +416,12 @@ qboolean World_GetEntGravityAxis(wedict_t *ent, vec3_t axis[3]);
 void WPhys_Init(void);
 void World_Physics_Frame(world_t *w);
 void SV_SetMoveVars(void);
+void SV_SetSourceMoveVars(void);	//FTESurf: pm_source.c parameters, refreshed per-command
+void SV_ReportMoveVars(void);		//FTESurf: the once-per-map-load movement banner (Patch 133)
+void SV_LockMovementVars(void);		//FTESurf: restore the locked movement ruleset (Patch 170)
+void SV_HookMovementLock(void);		//FTESurf: arm the lock's per-cvar callbacks (Patch 170)
+void SV_ApplyGamemode(const char *mapname);	//FTESurf: pick this map's ruleset (Patch 224)
+void SV_Movement_f(void);			//FTESurf: the `movement` console handle (Patch 224)
 void WPhys_RunNewmis (world_t *w);
 qboolean SV_Physics (void);
 void WPhys_CheckVelocity (world_t *w, wedict_t *ent);

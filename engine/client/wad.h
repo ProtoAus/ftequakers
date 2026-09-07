@@ -103,7 +103,11 @@ void SwapPic (qpic_t *pic);
 struct model_s;
 
 void Mod_ParseWadsFromEntityLump(char *data);
-qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *height, uploadfmt_t *format);
+//asdecal: read a '{' texture with GoldSrc DECAL semantics (palette entry 255 is the decal's colour and
+//the pixel index is an inverted alpha ramp) instead of the default MASKED semantics (index 255 becomes
+//transparent, palette RGB kept).  Only a caller that actually wants a decal may pass true -- BSP face
+//textures must not, or opaque world surfaces vanish.  Mirrors xash3d-fwgs's IL_LOAD_DECAL gate.
+qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *height, uploadfmt_t *format, qboolean asdecal);
 void Mod_ParseInfoFromEntityLump(struct model_s *wmodel);
 qboolean Wad_NextDownload (void);
 qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *format);

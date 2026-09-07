@@ -310,7 +310,30 @@ static int ribuffersize;
 static double rawbuttontime[5];
 static qboolean rawbuttondown[5];
 
-static cvar_t in_rawinput_mice = CVARD("in_rawinput", "0", "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse)");
+/*FTESurf Patch 204: default 1, and answers to Source's name for it.
+
+  The default was 0, which meant the live path was INS_Accumulate's
+  GetCursorPos/SetCursorPos recentre -- ONE already-OS-summed delta per call,
+  roughly twice a frame, with the OS's own pointer acceleration and its
+  screen-pixel quantisation baked in before the engine ever sees it.  That is
+  the wrong input for a movement game and it is strictly the wrong input for
+  Patch 202's journal, whose entire premise is one record per report.  Both
+  games on this tree were already setting it to 1 from their configs, so this
+  moves the good case out of a config line and into the engine, where a fresh
+  install and a wiped config also get it.
+
+  "m_rawinput" is the alias because that is what this cvar is called in the
+  Source engine, and this game's players arrive from there with the name in
+  their fingers.  name2 hashes to the same cvar, so the two are one setting
+  with two spellings rather than two settings that can disagree -- which is the
+  only reason an alias is safe to add at all.
+
+  CVAR_ARCHIVE, so turning it off sticks.  cfg/default.cfg's `set in_rawinput 1`
+  is removed in the same patch: an archived cvar whose default.cfg also asserts
+  a value can never be turned off by the player, because default.cfg execs
+  before the archived config and the player's own choice would be the one
+  getting overwritten -- backwards.*/
+static cvar_t in_rawinput_mice = CVARAFD("in_rawinput", "1", "m_rawinput", CVAR_ARCHIVE, "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse), and reports mouse motion as the device sends it rather than as an OS-summed and OS-accelerated cursor delta.");
 static cvar_t in_rawinput_keyboard = CVARD("in_rawinput_keyboard", "0", "Enables rawinput support for keyboards in XP onwards as well as just mice.");
 static cvar_t in_rawinput_rdp = CVARD("in_rawinput_rdp", "0", "Activate Remote Desktop Protocol devices too.");
 

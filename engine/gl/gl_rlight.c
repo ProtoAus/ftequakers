@@ -111,6 +111,47 @@ void R_UpdateHDR(vec3_t org)
 		r_refdef.hdr_value = 1;
 }
 
+//nettest: dump every lightstyle's live value.
+//
+//GoldSrc maps light most brush entities with SWITCHABLE styles (hlrad hands out
+//32 and up to any light with a targetname).  A face whose styles[] names only
+//such a style contributes NOTHING to the lightmap unless the game announces
+//that style, because Surf_BuildLightMap skips a style whose scale is zero
+//(r_surf.c:1571, `if (scale) ... else src += size*3`).  The result is a surface
+//that is EXACTLY black - not dim, not mis-textured - with a perfectly valid
+//texture, a perfectly valid lightmap allocation, and real light data sitting
+//unused in the bsp.  th_ep1_01's func_door_rotating *538 is lit by styles 32
+//and 47 and by nothing else, which is the whole of that bug.
+//
+//It is invisible from the outside and unreadable from the map: d_lightstylevalue
+//is a zeroed global and R_AnimateLight's "unset style reads as normal" fallback
+//(:146-150) only runs for j < cl_max_lightstyles, which grows solely as styles
+//are RECEIVED.  So a style nobody ever sent is not 264-and-bright, it is 0-and-
+//black, and the two cases are indistinguishable without printing them.
+void R_LightStyles_f(void)
+{
+	size_t j, shown = 0, lim;
+	int all = (Cmd_Argc() > 1);
+	lim = countof(d_lightstylevalue);
+	if (lim > 256)
+		lim = 256;	//GoldSrc never allocates past 63; 256 is already far past anything real
+	Con_Printf("cl_max_lightstyles = %u  (a style at or past this was NEVER sent by the server,\n"
+	           "                          so R_AnimateLight never writes it and it stays 0 = black)\n",
+	           (unsigned)cl_max_lightstyles);
+	for (j = 0; j < lim; j++)
+	{
+		qboolean known = (j < cl_max_lightstyles);
+		const char *map = known?cl_lightstyle[j].map:"";
+		if (!all && !d_lightstylevalue[j] && !known && j >= 12)
+			continue;	//silent, never-sent, never-used: the overwhelming majority
+		Con_Printf("  style %3u: value=%4i %-9s map=\"%s\"\n",
+			(unsigned)j, d_lightstylevalue[j],
+			known?"(sent)":"^1(NEVER SENT)^7", map);
+		shown++;
+	}
+	Con_Printf("%u shown. 'r_lightstyles all' lists every slot.\n", (unsigned)shown);
+}
+
 /*
 ==================
 R_AnimateLight

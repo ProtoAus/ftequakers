@@ -26,6 +26,8 @@ cvar_t	cl_lerp_smooth = CVARD("cl_lerp_smooth", "2", "If 2, will act as 1 when p
 static cvar_t	cl_lerp_driftbias = CVARD("cl_lerp_driftbias", "0", "Additional bias, can be set to a negative value to hold interpolation in the past.");
 static cvar_t	cl_lerp_driftfrac = CVARD("cl_lerp_driftfrac", "0", "Proportion of the latest time vs the older time to favour drifting towards.");
 cvar_t	cl_nopred = CVARD("cl_nopred","0", "Disables clientside movement prediction.");
+/*FTESurf Patch 243.  See the block that reads it in CL_PredictMove.*/
+static cvar_t	cl_predict_freshtype = CVARD("cl_predict_freshtype","1", "Take the decision to predict or interpolate from the newest received player state rather than from the previous frame's copy of it. 0 restores the historical one-frame-stale behaviour, in which the frame a freeze (MOVETYPE_NONE, PM_FREEZE) begins still predicts and the frame it ends still interpolates.");
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
 
 extern float	pm_airaccelerate;
@@ -404,6 +406,16 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	VectorCopy (from->origin, pmove.origin);
 	VectorCopy (u->angles, pmove.angles);
 	VectorCopy (from->velocity, pmove.velocity);
+	/*
+	FTESurf Patch 240: basevelocity is server-only.  It is not in
+	pmsourcestate_t and is not networked, so there is nothing here to replay --
+	but pmove is ONE global, and on a listen server SV_RunCmd has just written
+	the local player's carrier velocity into it.  Left alone, the client would
+	predict a push it is also about to be told about, i.e. apply it twice, and
+	only in singleplayer.  Clearing it makes the prediction honestly ignorant
+	instead of wrong.
+	*/
+	VectorClear (pmove.basevelocity);
 	VectorCopy (from->gravitydir, pmove.gravitydir);
 
 	if (IS_NAN(pmove.velocity[0]))
@@ -419,6 +431,7 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	pmove.jump_held = from->jump_held;
 	pmove.waterjumptime = from->waterjumptime;
 	pmove.pm_type = from->pm_type;
+	PMSrc_LoadState(&from->pmsrc);	//FTESurf: duck/tick state, replayed forward
 
 	pmove.cmd = *u;
 	pmove.skipent = entnum;
@@ -438,6 +451,7 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	to->waterjumptime = pmove.waterjumptime;
 	to->jump_held = pmove.jump_held;
 	to->jump_msec = pmove.jump_msec;
+	PMSrc_SaveState(&to->pmsrc);	//FTESurf
 	pmove.jump_msec = 0;
 
 	VectorCopy (pmove.origin, to->origin);
@@ -1086,6 +1100,44 @@ void CL_PredictMovePNum (int seat)
 	else if (cl.movesequence - cl.ackedmovesequence >= UPDATE_BACKUP-1)
 		nopred = true;
 
+	/*FTESurf Patch 243: DECIDE WITH THE MOVETYPE WE WERE JUST SENT, not with
+	  the one we decided with last frame.
+
+	  pv->pmovetype is read by the test immediately below and assigned only at
+	  the two sites further down this same function (from to.state->pm_type,
+	  and again after the prediction loop) -- both AFTER the read.  So the value
+	  tested has always been the PREVIOUS call's, one frame stale, and stale in
+	  both directions:
+
+	    * the frame a freeze BEGINS still predicts, running pmove forward
+	      against a player the server has already pinned;
+	    * the frame a freeze ENDS still takes the interpolating branch below,
+	      which lerps simorg and simvel between the frozen state and the
+	      released one with frac < 1.  The 128-unit teleport guard in that
+	      branch does not save it, because a player released from a freeze has
+	      not moved anywhere.  CSQC reads that blend as pmove_vel, which is how
+	      FTESurf's HUD came to print exactly one frame of a speed that was
+	      neither the parked value nor the live one every time a save-lock hold
+	      was let go -- reported as "it will say the wrong value for a frame,
+	      but switch to the correct value".
+
+	  This does not invent a value: it reads the same newest state that the
+	  assignment further down is about to use, only earlier.  Camera-locked
+	  views are excluded because their pmovetype legitimately comes from the
+	  TRACKED player's state rather than our own, and CAM_ISLOCKED forces
+	  nopred below in any case; nolocalplayer protocols have no player state to
+	  read; and the demo/MVD paths pick their states differently.
+
+	  cl_predict_freshtype 0 restores the historical behaviour exactly.*/
+	if (cl_predict_freshtype.ival && !pv->nolocalplayer && !CAM_ISLOCKED(pv) &&
+		cls.demoplayback != DPB_MVD && cl.validsequence &&
+		(unsigned int)pv->playernum < (unsigned int)cl.allocated_client_slots)
+	{
+		player_state_t *fresh = &cl.inframes[cl.validsequence & UPDATE_MASK].playerstate[pv->playernum];
+		if (fresh->messagenum == cl.validsequence)
+			pv->pmovetype = fresh->pm_type;
+	}
+
 	//these things also force-disable prediction
 	if (cls.demoplayback==DPB_MVD ||
 		cl.intermissionmode != IM_NONE || cl.paused || pv->pmovetype == PM_NONE || pv->pmovetype == PM_FREEZE || CAM_ISLOCKED(pv))
@@ -1301,6 +1353,18 @@ void CL_PredictMovePNum (int seat)
 					from.state->jump_held = pv->prop.jump_held;
 				from.state->jump_msec = pv->prop.jump_msec;
 				from.state->waterjumptime = pv->prop.waterjumptime;
+				//FTESurf Patch 132: duck/tick state, exactly as the extrapolation
+				//block below does it.  Omitting it here is not a missing nicety --
+				//pmsrc is never networked, so from.state is whatever the snapshot
+				//ring slot last held, i.e. ducked==false.  The origin arriving from
+				//the server ALREADY contains the mid-air duck's +18
+				//(pm_source.c:1123), so a replay seeded with ducked==false runs
+				//PMSrc_FinishDuck a second time and adds another 18 units.  Whether
+				//a rendered frame takes this path or the extrapolation one alternates
+				//with whether this loop runs any iterations at all, which is why the
+				//symptom was a camera shaking at exactly frame rate, and why it only
+				//showed in mid-air: the origin bump is gated on !onground.
+				from.state->pmsrc = pv->prop.pmsrc;
 				if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 					VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 			}
@@ -1311,6 +1375,7 @@ void CL_PredictMovePNum (int seat)
 				pv->prop.jump_held = pmove.jump_held;
 				pv->prop.jump_msec = pmove.jump_msec;
 				pv->prop.waterjumptime = pmove.waterjumptime;
+				PMSrc_SaveState(&pv->prop.pmsrc);	//FTESurf
 				VectorCopy(pmove.gravitydir, pv->prop.gravitydir);
 				pv->prop.sequence = i;
 			}
@@ -1351,6 +1416,7 @@ void CL_PredictMovePNum (int seat)
 						from.state->jump_held = pv->prop.jump_held;
 					from.state->jump_msec = pv->prop.jump_msec;
 					from.state->waterjumptime = pv->prop.waterjumptime;
+					from.state->pmsrc = pv->prop.pmsrc;	//FTESurf: duck/tick state
 					if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 						VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 				}
@@ -1360,6 +1426,17 @@ void CL_PredictMovePNum (int seat)
 		}
 		pv->onground = pmove.onground;
 		pv->pmovetype = to.state->pm_type;
+
+		//FTESurf Patch 132b: take the PREDICTED eye height rather than the stat.
+		//pmove.viewheight is derived once per PM_PlayerMove (pm_source.c:1789) and
+		//was then thrown away here, so the eye only ever moved when a snapshot
+		//arrived -- one server frame after the origin it belongs to.  Ducking in
+		//mid-air raises the origin by 18 and drops the eye by 18 in the same tick
+		//(the absolute eye position must not move at all), so a one-snapshot lag
+		//between the two halves is a visible 18-unit pop.  Only the Source module
+		//writes this field; every other physicsmode leaves the stat in charge.
+		if (movevars.physicsmode == PHYSMODE_SOURCE)
+			pv->viewheight = pmove.viewheight;
 	}
 
 	pmove.numphysent = oldphysent;
@@ -1504,6 +1581,7 @@ void CL_InitPrediction (void)
 	extern char cl_predictiongroup[];
 	Cvar_Register (&cl_pushlatency, cl_predictiongroup);
 	Cvar_Register (&cl_nopred,	cl_predictiongroup);
+	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
 	Cvar_Register (&cl_predict_extrapolate,	cl_predictiongroup);
 	Cvar_Register (&cl_predict_timenudge,	cl_predictiongroup);
 	Cvar_Register (&cl_lerp_smooth,	cl_predictiongroup);

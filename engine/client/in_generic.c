@@ -27,6 +27,15 @@ static cvar_t m_accel_power		= CVARAD("m_accel_power",	"2",	"cl_mouseAccelPower"
 static cvar_t m_accel_offset	= CVARAD("m_accel_offset",	"0",	"cl_mouseAccelOffset",	"Used when m_accel_style is 1.\nAcceleration will not be active until the mouse movement exceeds this speed (counts per millisecond). Negative values are supported, which has the effect of causing higher rates of acceleration to happen at lower velocities.");
 static cvar_t m_accel_senscap	= CVARAD("m_accel_senscap",	"0",	"cl_mouseSensCap",		"Used when m_accel_style is 1.\nSets an upper limit on the amplified mouse movement. Great for tuning acceleration around lower velocities while still remaining in control of fast motion such as flicking.");
 
+/*FTESurf Patch 202: the raw input journal.  The cvar lives up here with the rest of
+  this file's cvars; the machinery it belongs to is a long way down, just above
+  IN_Commands, because that is where it hooks in.*/
+static cvar_t in_journal_maxkb	= CVARD("in_journal_maxkb", "8192", "Memory cap on a raw input journal, in kilobytes. About 1.15 MB per minute at a 1000 Hz polling rate, so the default is roughly seven minutes; past that the file records a 'truncated' marker and stops.");
+static void IN_JournalBegin_f(void);
+static void IN_JournalEnd_f(void);
+static void IN_JournalNote_f(void);
+static void IN_JournalSynth_f(void);
+
 void QDECL joyaxiscallback(cvar_t *var, char *oldvalue)
 {
 	int sign;
@@ -177,6 +186,11 @@ static struct eventlist_s
 	} type;
 	unsigned int devid;
 
+	/*FTESurf Patch 202: when in_newevent() handed this slot out.  See the journal
+	  block below for what it does and does not mean -- on Windows this is the time
+	  the ENGINE saw the report, not the time the mouse produced it.*/
+	double time;
+
 	union
 	{
 		struct
@@ -206,10 +220,37 @@ static struct eventlist_s
 static volatile int events_avail; /*volatile to make sure the cc doesn't try leaving these cached in a register*/
 static volatile int events_used;
 
+/*FTESurf Patch 202: the ring has always dropped events silently when it filled, and
+  nothing in this engine has ever reported that it happened.  A journal that cannot
+  say "I lost some" is a journal that lies, so the count is kept whether or not one
+  is open.  Same volatile discipline as events_avail, for the same reason.*/
+static volatile unsigned int in_jrn_dropped;
+
 static struct eventlist_s *in_newevent(void)
 {
 	if (events_avail >= events_used + EVENTQUEUELENGTH)
+	{
+		in_jrn_dropped++;
 		return NULL;
+	}
+
+	/*FTESurf Patch 202.  Stamped HERE and not in the five producers because this is
+	  the one choke point every event passes through -- key, mouse, joystick,
+	  accelerometer, gyro, every platform backend -- so it is one line that a new
+	  caller cannot forget.
+
+	  Stamped UNCONDITIONALLY rather than only while a journal is open.  The gate
+	  would save one QPC on a path that goes on to call Key_Event, and would buy a
+	  bug: events already sitting in the ring when in_journal_begin runs would carry
+	  stale stamps and be journalled as truth.
+
+	  On the volatile comment above -- this is a store into the same struct the
+	  producer already fills before it bumps events_avail, so it is exactly as
+	  synchronised as ev->mouse.x already is, and no more.  On Windows every producer
+	  is main-thread anyway: the wndproc, INS_Accumulate, and the low-level keyboard
+	  hook (delivered on the installing thread's queue).  CL_IndepPhysicsThread calls
+	  only CL_SendCmd and never touches this ring.*/
+	eventlist[events_avail & (EVENTQUEUELENGTH-1)].time = Sys_DoubleTime();
 	return &eventlist[events_avail & (EVENTQUEUELENGTH-1)];
 }
 
@@ -394,6 +435,17 @@ void IN_Init(void)
 
 	Cmd_AddCommand ("in_deviceids", IN_DeviceIDs_f);
 
+	/*FTESurf Patch 202.  Commands rather than a cvar, and the reason is concrete:
+	  a cvar callback fires on registration too (the Cvar_ForceCallback idiom just
+	  above), so an archived value would write a file at startup and every exec or
+	  server "stuffcmd set" would write another.  A cvar also cannot express
+	  "discard" distinctly from "write to an empty path".*/
+	Cvar_Register (&in_journal_maxkb, "input controls");
+	Cmd_AddCommandD ("in_journal_begin", IN_JournalBegin_f, "Start an in-memory journal of raw input events.  Discards any journal already open.");
+	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal under data/ and close it.  With no path, discard it.");
+	Cmd_AddCommandD ("in_journal_note", IN_JournalNote_f, "Append a comment line to the open input journal.");
+	Cmd_AddCommandD ("in_journal_synth", IN_JournalSynth_f, "in_journal_synth <n> -- inject n synthetic input events, for testing.  Marks the journal as synthetic, which makes it inadmissible.");
+
 	INS_Init();
 }
 
@@ -432,6 +484,490 @@ qboolean IN_Touch_MouseIsAbs(unsigned int devid)
 	return false;
 }
 
+/*
+==============================================================================
+
+FTESurf Patch 202: the raw input journal (.hid)
+
+WHAT IT IS FOR.  FTESurf records every timed run twice already -- a server-side
+.rec at ~66/s and a client-side .view at render rate -- and both are derived
+data: by the time either sees the mouse, IN_MoveMouse has consumed one SUMMED
+delta per frame (see ptr[].delta below) and CL_AccumlateInput has weighted-
+averaged the move axes across frames.  The individual reports are gone.
+
+This journal keeps them.  It is an ANTI-CHEAT instrument and deliberately not a
+playback one: the .rec positions are authoritative and the .view angle stream at
+300 Hz is already finer than 66.7 Hz physics can express, so there is no fidelity
+to gain.  What there is to gain is evidence -- the shape of the delta sequence
+(a script's is uniform and unjittered), the effective report rate, and three
+independent recordings of one run that a forgery has to falsify consistently.
+
+WHAT THE TIMESTAMPS ARE, AND ARE NOT.  On Windows WM_INPUT arrives in the thread
+message queue and Sys_SendKeyEvents drains a frame's worth in one PeekMessage
+loop, microseconds apart; RAWMOUSE carries no hardware timestamp.  So a stamp
+taken anywhere in this engine is WHEN THE ENGINE SAW THE REPORT, not when the
+mouse produced it.  Per-frame timing is real.  Inter-event spacing INSIDE one
+frame is a pump artifact and no reader may treat it as anything else.
+(The upgrade, if that ever becomes the limiting factor, is GetMessageTime() in
+the wndproc -- 1 ms resolution, which at 1000 Hz polling is one report per tick.
+Nothing in this engine calls it today.)
+
+AND IT DEPENDS ON in_rawinput.  That cvar defaults to 0 (in_win.c), as does
+in_dinput, and the fallback path is INS_Accumulate's GetCursorPos/SetCursorPos
+recentre -- ONE already-OS-summed delta per call, about twice a frame.  At the
+ENGINE default this file is a slightly finer .view and nothing more.
+
+Measured, on this machine, at the time of writing: BOTH games on this tree
+already run in_rawinput 1 -- FTESurf sets it in cfg/default.cfg:493, and quakers
+reports "1" (default), i.e. its own config value locked in by cvar_lockdefaults.
+So the case the engine default describes is a bare engine, not either game here.
+That is a fact about a config and not about this code, which is exactly why it is
+recorded in the FILE rather than assumed by the reader.
+
+So the header records the mode, and both halves of it: `rawinput` for the mouse
+and `rawkbd` for in_rawinput_keyboard, which is separately defaulted off and
+which leaves keys on the legacy WM_KEYDOWN path -- that one AUTO-REPEATS, and a
+reader pairing downs with ups needs to know.  A tool drawing a timing conclusion
+without reading both keys is drawing it from the wrong data.
+
+PRIVACY.  data/ is readable by any CSQC, and every server a player joins runs
+CSQC.  A journal written with the console open would contain the scancodes of an
+rcon_password.  Two rules, both here rather than "later", because a mitigation
+deferred is a mitigation that never lands:
+  - the unicode is NEVER journalled.  The scancode is the input; the unicode is
+    the plaintext, and it adds nothing to an audit.
+  - when anything above the game has focus, the scancode is replaced by an 'x'
+    line.  Timing and count survive -- a macro bound to a key and fired with the
+    console open still shows as a burst -- only the identity is dropped.  Those
+    keystrokes never reach +forward and carry no audit value.  The count is in
+    the trailer, so the suppression is itself auditable.
+
+THE FORMAT.  Header keys one per line, unknown keys skipped, exactly the additive
+rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
+
+	f <dt> <abs> <seq>      a drain of IN_Commands began.  abs = seconds since
+	                        'base', seq = cl.movesequence
+	m <dt> <dev> <dx> <dy>  IEV_MOUSEDELTA, in device units
+	a <dt> <dev> <x> <y>    IEV_MOUSEABS.  An absolute position identical to the
+	                        previous one from the same device is NOT recorded --
+	                        the same non-event IN_MouseMove already drops for a
+	                        zero delta.  See the case body for the measurement
+	                        that made it necessary rather than tidy.
+	+ <dt> <dev> <key>      key down, FTE K_* scancode
+	- <dt> <dev> <key>      key up
+	x <dt> <dev>            a key event whose scancode was suppressed
+	j <dt> <dev> <ax> <v>   joystick axis
+	# <dt> <text>           a note from the gamecode (save/load marks)
+	! <dt> <n>              n events were lost by the ring BEFORE this point
+	truncated <dt>          the cap was hit; nothing after this exists
+	end <dt> <abs> <events> <frames> <dropped> <hidden>
+
+<dt> is integer MICROSECONDS since the previous line, whatever kind it was.
+Every line carries one, and only 'f' also carries an absolute -- so a reader can
+resync after a corrupt region, AND the running sum of dt must equal each f's abs.
+That is a self-check written from two independent counters, which is the same
+discipline reccheck.py already applies to the .rec's end record.
+
+The sum is EXACT, not approximate, because IN_Journal_Line carries the sub-
+microsecond remainder forward rather than discarding it on each line.  Without
+that the two disagree by about 1.8 ms per 5500 lines and the check would need a
+tolerance proportional to file length, which is barely a check at all.
+
+'+'/'-' for down/up is deliberate: grep '^+' is the whole keyboard.
+
+WHY IN MEMORY.  The run's tag (pb/last/shadow) is part of the filename and is not
+known until the run ends, so streaming would need a .part and a rename -- the
+exact failure SV_RecClose was rewritten to eliminate, where a crash between the
+remove and the rename loses the previous recording as well as this one.  Discard
+on a voided run is then free, and the cap is one number.  What it costs, and this
+is a real cost rather than a tidy one: a crash loses the evidence, and the write
+is one synchronous COM_WriteFile at the instant the run ends.  in_journal_maxkb
+8192 holds that to about 40 ms.  If crash-resistance ever matters more than the
+rename hazard, stream to .part and accept the other failure mode.
+
+==============================================================================
+*/
+/*QC_FixFileName lives in common/pr_bgcmd.c and no header declares it; the local
+  extern with a source note is the idiom cl_input.c:1815 already uses.*/
+qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
+
+static char			*in_jrn_buf;
+static size_t		in_jrn_len, in_jrn_cap, in_jrn_max;
+static double		in_jrn_base, in_jrn_last;
+static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_frames, in_jrn_hidden;
+static qboolean		in_jrn_full, in_jrn_synth;
+static float		in_jrn_lastabs[MAXPOINTERS][2];
+static qboolean		in_jrn_haveabs[MAXPOINTERS];
+
+/*Raw append.  Grows by doubling; the caller has already decided the line fits.*/
+static void IN_Journal_Raw(const char *s)
+{
+	size_t l = strlen(s);
+
+	if (!in_jrn_buf)
+		return;
+
+	if (in_jrn_len + l > in_jrn_cap)
+	{
+		size_t want = in_jrn_cap*2;
+		while (want < in_jrn_len + l)
+			want *= 2;
+		if (want > in_jrn_max + 1024)
+			want = in_jrn_max + 1024;	/*headroom for the truncated and end lines*/
+		if (in_jrn_len + l > want)
+			return;
+		in_jrn_buf = BZ_Realloc(in_jrn_buf, want);
+		in_jrn_cap = want;
+	}
+
+	memcpy(in_jrn_buf+in_jrn_len, s, l);
+	in_jrn_len += l;
+}
+
+/*Every line goes through here so nothing can forget the delta.  Clamped at 0:
+  notes and the trailer are stamped from the Cbuf, which runs after the drain, so
+  they are monotone in practice -- but a clamp is cheaper than a negative dt that
+  a reader would have to decide what to do with.
+
+  The cap is enforced HERE rather than in the raw append, because only this
+  function knows `when` -- and a truncation marker whose own timestamp is
+  guesswork would be the one line in the file that cannot be checked.*/
+static void IN_Journal_Line(double when, const char *kind, const char *tail)
+{
+	char line[256];
+	double dt;
+	int us;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	dt = when - in_jrn_last;
+	if (dt < 0)
+		dt = 0;
+
+	/*THE TRUNCATION REMAINDER IS CARRIED, not discarded, and that is what makes
+	  the file's self-check exact instead of approximate.
+
+	  Advancing in_jrn_last to `when` throws away up to 1 us on every line.  At
+	  ~5500 lines in 1.6 s -- measured, not guessed -- that is 1.8 ms of drift
+	  between the running sum of dt and the absolute on the next frame marker, and
+	  it grows without bound.  A self-check that needs a tolerance proportional to
+	  the file length is barely a self-check.
+
+	  Advancing by the dt actually EMITTED instead means the sum of dt is the
+	  elapsed time by construction: the residual is carried into the next line's
+	  dt and comes back.  The error is then bounded below 1 us for the whole file,
+	  however long it is, and hidcheck.py can demand exactness.*/
+	us = (int)(dt*1000000);
+	Q_snprintfz(line, sizeof(line), "%s %i%s%s\n", kind, us, *tail?" ":"", tail);
+
+	if (in_jrn_len + strlen(line) > in_jrn_max)
+	{	/*one honest marker, then nothing.  A truncated journal is useless as an
+		  audit, but it must never be mistakable for a complete one.*/
+		in_jrn_full = true;
+		Q_snprintfz(line, sizeof(line), "truncated %i %.6f\n", us, when - in_jrn_base);
+		in_jrn_last += us*0.000001;
+		IN_Journal_Raw(line);
+		return;
+	}
+
+	in_jrn_last += us*0.000001;
+	IN_Journal_Raw(line);
+}
+
+void IN_Journal_Note(const char *text)
+{
+	char clean[96];
+	size_t i;
+
+	if (!in_jrn_buf)
+		return;
+
+	/*the gamecode writes this, so it is sanitised rather than trusted: anything
+	  that could introduce a newline would let a note forge a record line.*/
+	for (i = 0; i < sizeof(clean)-1 && text[i]; i++)
+	{
+		char c = text[i];
+		clean[i] = ((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c==' '||c=='_'||c=='.'||c=='-') ? c : '?';
+	}
+	clean[i] = 0;
+
+	/*STAMPED AT THE STREAM POSITION, NOT AT THE WALL CLOCK, and that is a
+	  correctness fix rather than a shortcut.
+
+	  A note arrives from the command buffer, which Cbuf_Execute runs AFTER
+	  IN_Commands has already drained that frame -- but in_journal_note is issued
+	  by the same Cbuf pass that in_journal_synth (or, in the real case, a save
+	  keypress) put events into the ring with EARLIER stamps.  Those events are
+	  drained on the next frame, so a note stamped from the wall clock lands 600 us
+	  ahead of the frame marker that follows it.  IN_Journal_Line's dt clamp then
+	  emits a 0 there and the running sum of dt runs ahead of the absolutes, which
+	  breaks the one identity this format is built on.  Measured: +-609 us,
+	  twice, in the first build of this.
+
+	  A note is an annotation and not an event.  Its useful content is WHERE in
+	  the stream it sits -- which frame it fell between -- and that is exactly
+	  what this preserves, at the cost of up to one frame of precision on a
+	  timestamp nobody reads.*/
+	IN_Journal_Line(in_jrn_last, "#", clean);
+}
+
+void IN_Journal_Drop(void)
+{
+	if (in_jrn_buf)
+		BZ_Free(in_jrn_buf);
+	in_jrn_buf = NULL;
+	in_jrn_len = in_jrn_cap = 0;
+	in_jrn_full = in_jrn_synth = false;
+	in_jrn_events = in_jrn_frames = in_jrn_hidden = 0;
+	memset(in_jrn_haveabs, 0, sizeof(in_jrn_haveabs));
+}
+
+static void IN_Journal_Event(struct eventlist_s *ev)
+{
+	char tail[128];
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	in_jrn_events++;
+
+	switch(ev->type)
+	{
+	case IEV_KEYDOWN:
+	case IEV_KEYRELEASE:
+		/*never the unicode -- see the privacy note above.  scancode -1 is the
+		  "release everything" pseudo-event and 0 is the unicode-only dead-key
+		  path (in_win.c); neither is a key anyone pressed, so neither is
+		  journalled as one.*/
+		if (Key_Dest_Has_Higher(kdm_game))
+		{
+			in_jrn_hidden++;
+			Q_snprintfz(tail, sizeof(tail), "%u", ev->devid);
+			IN_Journal_Line(ev->time, "x", tail);
+			break;
+		}
+		Q_snprintfz(tail, sizeof(tail), "%u %i", ev->devid, ev->keyboard.scancode);
+		IN_Journal_Line(ev->time, (ev->type==IEV_KEYDOWN)?"+":"-", tail);
+		break;
+	case IEV_MOUSEDELTA:
+		Q_snprintfz(tail, sizeof(tail), "%u %g %g", ev->devid, ev->mouse.x, ev->mouse.y);
+		IN_Journal_Line(ev->time, "m", tail);
+		break;
+	case IEV_MOUSEABS:
+		/*AN UNCHANGED ABSOLUTE POSITION IS NOT AN EVENT, and dropping it is the
+		  same call IN_MouseMove already makes one screen down, where a delta of
+		  (0,0,0) never becomes an event at all.
+
+		  It is not a nicety.  IN_MouseMove does NOT apply that early-out to
+		  absolute events, so while a menu or the console is up -- which is when
+		  the cursor is free and the engine reports it -- a motionless mouse
+		  produces two identical lines EVERY frame.  Measured on a headless run:
+		  3706 of 5559 lines, all reading the same "-1718 793", for 1.6 seconds
+		  of a config doing nothing.  At 1100 fps that is a megabyte a minute of
+		  a cursor sitting still, and it would reach in_journal_maxkb and
+		  truncate a real journal with pure noise.
+
+		  Nothing is lost that an audit could use: an identical position carries
+		  no information by definition, and absolute events only happen while
+		  something above the game has focus -- which is exactly the state where
+		  the key identities are being suppressed anyway.*/
+		if (ev->devid < MAXPOINTERS)
+		{
+			if (in_jrn_haveabs[ev->devid] &&
+			    in_jrn_lastabs[ev->devid][0] == ev->mouse.x &&
+			    in_jrn_lastabs[ev->devid][1] == ev->mouse.y)
+			{
+				in_jrn_events--;
+				break;
+			}
+			in_jrn_haveabs[ev->devid] = true;
+			in_jrn_lastabs[ev->devid][0] = ev->mouse.x;
+			in_jrn_lastabs[ev->devid][1] = ev->mouse.y;
+		}
+		Q_snprintfz(tail, sizeof(tail), "%u %g %g", ev->devid, ev->mouse.x, ev->mouse.y);
+		IN_Journal_Line(ev->time, "a", tail);
+		break;
+	case IEV_JOYAXIS:
+		Q_snprintfz(tail, sizeof(tail), "%u %i %g", ev->devid, ev->joy.axis, ev->joy.value);
+		IN_Journal_Line(ev->time, "j", tail);
+		break;
+	default:
+		in_jrn_events--;	/*accelerometer/gyro: not journalled, not counted*/
+		break;
+	}
+}
+
+static void IN_Journal_Frame(void)
+{
+	char tail[64];
+	double first;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	/*The f line's own stamp is the FIRST event of this drain, not the drain time:
+	  the events were stamped on arrival, i.e. before now, so anchoring to the
+	  drain would make every dt that follows negative.*/
+	first = eventlist[events_used & (EVENTQUEUELENGTH-1)].time;
+	in_jrn_frames++;
+
+	Q_snprintfz(tail, sizeof(tail), "%.6f %i", first - in_jrn_base, cl.movesequence);
+	IN_Journal_Line(first, "f", tail);
+
+	if (in_jrn_dropped != in_jrn_dropreported)
+	{	/*The drop TIME is genuinely unknown -- the ring threw the events away
+		  without recording when -- so this says "n were lost somewhere before
+		  this frame" and does not pretend to more.  A .hid carrying one of these
+		  is not admissible across that gap.*/
+		Q_snprintfz(tail, sizeof(tail), "%u", in_jrn_dropped - in_jrn_dropreported);
+		in_jrn_dropreported = in_jrn_dropped;
+		IN_Journal_Line(first, "!", tail);
+	}
+}
+
+static void IN_JournalBegin_f(void)
+{
+	/*Read by name rather than linked: both live in the platform backend
+	  (in_win.c) as statics, and this file is the cross-platform one.  A missing
+	  cvar reports as 0, which is the truthful answer on a platform that has no
+	  raw input at all.*/
+	cvar_t *raw = Cvar_FindVar("in_rawinput");
+	cvar_t *rawkbd = Cvar_FindVar("in_rawinput_keyboard");
+	char head[512];
+
+	IN_Journal_Drop();
+
+	in_jrn_max = in_journal_maxkb.value * 1024;
+	if (in_jrn_max < 4096)
+		in_jrn_max = 4096;
+	in_jrn_cap = 65536;
+	if (in_jrn_cap > in_jrn_max + 1024)
+		in_jrn_cap = in_jrn_max + 1024;
+	in_jrn_buf = BZ_Malloc(in_jrn_cap);
+	in_jrn_len = 0;
+	in_jrn_base = in_jrn_last = Sys_DoubleTime();
+	in_jrn_dropreported = in_jrn_dropbase = in_jrn_dropped;
+
+	Q_snprintfz(head, sizeof(head),
+		"FTESURF-HID 1\n"
+		"map %s\n"
+		"base %.6f\n"
+		"rawinput %i\n"
+		"rawkbd %i\n"
+		"synth 0\n"
+		"begin\n",
+		InfoBuf_ValueForKey(&cl.serverinfo, "map"),
+		in_jrn_base,
+		raw?raw->ival:0,
+		rawkbd?rawkbd->ival:0);
+	IN_Journal_Raw(head);
+}
+
+static void IN_JournalEnd_f(void)
+{
+	const char *name, *fallback;
+	char tail[128];
+	double now;
+
+	if (!in_jrn_buf)
+	{
+		if (Cmd_Argc() > 1)
+			Con_Printf("in_journal_end: no journal open\n");
+		return;
+	}
+
+	if (Cmd_Argc() < 2 || !*Cmd_Argv(1))
+	{	/*no path means discard, and the discard branch is not optional -- without
+		  it an abandoned run's buffer stays resident until the next begin.
+
+		  It prints, because this is the branch a non-PB run takes and a headless
+		  test otherwise has no way at all to see that the gamecode's end edge
+		  fired: a discard leaves no file to inspect.*/
+		Con_DPrintf("in_journal_end: discarded, %u events / %u frames\n",
+			in_jrn_events, in_jrn_frames);
+		IN_Journal_Drop();
+		return;
+	}
+
+	/*ONE clock read, used for both halves.  Two calls here put the absolute in
+	  the trailer and the dt that leads to it a couple of microseconds apart, so
+	  the file disagreed with itself by exactly the gap between two adjacent QPC
+	  reads -- which is a silly way to fail an exactness check that everything
+	  else in the format works to make exact.*/
+	now = Sys_DoubleTime();
+	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u",
+		now - in_jrn_base, in_jrn_events, in_jrn_frames,
+		in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden);
+	/*the trailer is written whether or not the cap was hit -- a truncated file
+	  still has to say how much it was missing.  in_jrn_max is lifted rather than
+	  in_jrn_full cleared, so a second truncated marker cannot appear.*/
+	in_jrn_full = false;
+	in_jrn_max = in_jrn_cap;
+	IN_Journal_Line(now, "end", tail);
+
+	/*Deliberately NOT Cmd_IsInsecure()-guarded, unlike condump: CSQC has to be able
+	  to call this and localcmd is RESTRICT_INSECURE by construction, so an exec-level
+	  test would block the only caller there is.  The safety is in the path instead --
+	  QC_FixFileName is the same sandbox PF_fopen uses, AND a data/ prefix is required
+	  on top of it, because QC_FixFileName alone also accepts cfg/ and a journal must
+	  not be able to overwrite a config.*/
+	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5))
+	{
+		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/\n", Cmd_Argv(1));
+		IN_Journal_Drop();
+		return;
+	}
+
+	COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, in_jrn_len);
+	Con_DPrintf("in_journal_end: %s, %u events / %u frames / %u dropped / %u hidden, %uk\n",
+		name, in_jrn_events, in_jrn_frames, in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden, (unsigned)(in_jrn_len/1024));
+	IN_Journal_Drop();
+}
+
+static void IN_JournalNote_f(void)
+{
+	if (Cmd_Argc() > 1)
+		IN_Journal_Note(Cmd_Args());
+}
+
+/*A console +forward is a Cbuf command and never passes through in_newevent, so
+  without this there is no way at all to exercise the key path, the m format or the
+  ring overflow from a scripted config -- and this project does not ship what it
+  cannot measure.  What makes it safe to ship is that it MARKS THE FILE: a journal
+  containing injected events says synth 1 in its header and is inadmissible as
+  evidence.  It does not need a cheat gate because it cannot forge a clean file.*/
+static void IN_JournalSynth_f(void)
+{
+	int n = (Cmd_Argc() > 1) ? atoi(Cmd_Argv(1)) : 1;
+	int i;
+
+	if (n < 1)
+		n = 1;
+	if (n > 100000)
+		n = 100000;
+
+	if (in_jrn_buf && !in_jrn_synth)
+	{	/*rewrite the header's synth key in place -- it is a fixed-width "0" by
+		  construction, so this cannot move anything after it.*/
+		char *at = in_jrn_buf ? strstr(in_jrn_buf, "\nsynth 0\n") : NULL;
+		if (at)
+			at[7] = '1';
+		in_jrn_synth = true;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		/*x is never zero: IN_MouseMove early-returns when every axis is 0
+		  (in_generic.c, the !abs && !x && !y && !z test), so a delta pair that
+		  could be (0,0) would make the count printed below a lie.*/
+		IN_MouseMove(0, false, (i%7)+1, (i%5)-2, 0, 0);
+		if (!(i % 16))
+			IN_KeyEvent(0, (i/16)&1, K_SPACE, 0);
+	}
+	Con_Printf("in_journal_synth: injected %i mouse and %i key events\n", n, (n+15)/16);
+}
+
 /*a 'pointer' is either a multitouch pointer, or a separate device
 note that mice use the keyboard button api, but separate devices*/
 void IN_Commands(void)
@@ -440,9 +976,20 @@ void IN_Commands(void)
 
 	INS_Commands();
 
+	/*Patch 202: the frame marker, and the per-event append below, both sit ABOVE
+	  the IEV_MOUSEDELTA case's ptr[].delta summation -- which is the whole point.
+	  By the time that runs the individual reports have been added together and
+	  are unrecoverable.  Emitted only on a non-empty drain, so an idle frame
+	  costs nothing and the .view already carries one line per rendered frame.*/
+	if (in_jrn_buf && events_used != events_avail)
+		IN_Journal_Frame();
+
 	while (events_used != events_avail)
 	{
 		ev = &eventlist[events_used & (EVENTQUEUELENGTH-1)];
+
+		if (in_jrn_buf)
+			IN_Journal_Event(ev);
 
 		switch(ev->type)
 		{

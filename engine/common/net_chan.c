@@ -232,6 +232,51 @@ unsigned int Net_PextMask(unsigned int protover, qboolean fornq)
 				mask |= PEXT2_LERPTIME;
 
 			mask |= PEXT2_NEWSIZEENCODING;	//use if we can
+
+			//nettest Patch 125: Half-Life bone controllers.  MUST live inside the
+			//replacementdeltas block - the payload rides in UF_BONEDATA, which only
+			//exists in the replacement delta stream, so advertising it without
+			//deltas would negotiate a capability with nowhere to put its bytes.
+			//
+			//THIS LINE WAS THE WHOLE BUG.  Patch 125 defined the bit, wrote it,
+			//read it and listed it in PEXT2_CLIENTSUPPORT - but PEXT2_CLIENTSUPPORT
+			//is only the "warn about unknown bits" set, not the advertised one.
+			//Nothing ever put the bit in a mask, so neither side offered it,
+			//negotiation always came back 0, the server's `pext2 &
+			//PEXT2_BONECONTROLS` gate was never true, and not one byte of bone
+			//controller data was ever sent.  Every part of the feature worked
+			//except being switched on.
+			mask |= PEXT2_BONECONTROLS;
+
+			//nettest Patch 141: AND THE BODYGROUP MADE EXACTLY THE SAME MISTAKE.
+			//Patch 131 defined PEXT2_BODYGROUP, wrote it (sv_ents.c:1067, :1390),
+			//read it (cl_ents.c:934-943), handed it to the renderer
+			//(cl_ents.c:5406 -> gl_hlmdl.c:1791, :1927) and listed it in
+			//PEXT2_CLIENTSUPPORT - and, exactly like Patch 125 above, never put it
+			//in a mask.  So it was never offered by either side, negotiation always
+			//returned 0, every `pext2 & PEXT2_BODYGROUP` gate was false, and not
+			//one bodygroup byte has ever left the server.
+			//
+			//The symptom is the one Patch 131 was written to cure and did not:
+			//every studiomodel still drew submodel 0.  On desertcircle that is an
+			//M4 for a hgrunt whose loadout says MP5, and an MP5 for a male
+			//assassin whose loadout says M40A1 - "there is a grunt who is sniping
+			//me but in the hands is an assault rifle".
+			//
+			//Same block as BONECONTROLS, and for the same reason: the payload
+			//rides in UF_BONEDATA, which only exists in the replacement delta
+			//stream.
+			mask |= PEXT2_BODYGROUP;
+
+			//nettest Patch 155: the animation playback rate.  Third feature in
+			//this block, and the first one written already knowing why the two
+			//above it are here - the note is kept short because the two long
+			//post-mortems immediately preceding it say everything.
+			//
+			//Same block, same reason: UF_BONEDATA exists only in the replacement
+			//delta stream, so advertising this without deltas would negotiate a
+			//capability with nowhere to put its bytes.
+			mask |= PEXT2_FRAMERATE;
 		}
 
 		if (pext_infoblobs.ival)

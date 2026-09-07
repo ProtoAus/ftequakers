@@ -611,6 +611,12 @@ int FS_FLocateFile(const char *filename, unsigned int flags, flocation_t *loc);
 qboolean FS_FileIsAddonOnly(const char *name);	//nettest: file's top hit is in a low-priority fs_load addon dir
 void FS_SetPreferHint(const char *spec);		//nettest (P26 Part 2): bias the NEXT locate to a game spec's resolved dir
 void FS_ClearPreferHint(void);					//nettest (P26 Part 2): stop biasing (call right after the BSP load)
+void FS_AutoMountForMap(const char *mapname);	//ftesurf (P175): mount this map's extra asset pack, per data/mapdeps.txt
+void FS_AutoUnmountStale(void);					//ftesurf (P184): give back packs the map now loading does not want. MUST be called only once the load is committed -- see the essay above FS_AutoUnmountStale
+void FS_LoadStats_Begin(void);					//ftesurf (P180): bracket a map load and report what it cost the filesystem
+void FS_LoadStats_End(const char *what);		//cvar_t is not declared this early, so fs_maploadhash is extern'd at its use site
+void FS_RehashIfStale(void);					//ftesurf (P180): rebuild the name hash if it was invalidated, without polling for external changes
+void FS_Cache_Tick(void);						//ftesurf (P186): drain a little of the asset-cache harvest. Called once per client frame; does nothing unless a harvest is armed and has settled.
 struct vfsfile_s *FS_OpenReadLocation(const char *fname, flocation_t *location);	//fname used for extension-based filters
 #define WP_REFERENCE	1
 #define WP_FULLPATH		2
@@ -687,7 +693,8 @@ enum fs_relative{
 	FS_BASEGAMEONLY,	//fte/
 	FS_PUBGAMEONLY,		//$gamedir/ or qw/ but not fte/
 	FS_PUBBASEGAMEONLY,	//qw/ (fixme: should be the last non-private basedir)
-	FS_GAMEDOWNLOADS	//nettest P38: $gamedir_downloads/ - sibling of the active gamedir; client downloads land here so the gamedir stays pure.
+	FS_GAMEDOWNLOADS,	//nettest P38: $gamedir_downloads/ - sibling of the active gamedir; client downloads land here so the gamedir stays pure.
+	FS_GAMECACHE		//ftesurf P186: $gamedir_cache/ - another sibling; the runtime asset cache writes here so a map that needed a big Steam pack can be replayed without mounting it.
 };
 
 qboolean COM_WriteFile (const char *filename, enum fs_relative fsroot, const void *data, int len);

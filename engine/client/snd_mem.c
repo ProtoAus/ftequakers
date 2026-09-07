@@ -553,7 +553,9 @@ void SND_ResampleStream (const void *in, int inrate, qaudiofmt_t informat, int i
 ResampleSfx
 ================
 */
-static qboolean ResampleSfx (sfx_t *sfx, int inrate, int inchannels, qaudiofmt_t informat, int insamps, int inloopstart, qbyte *data)
+//no longer static: snd_minimp3.c decodes a whole mp3 up front and needs the same
+//"here is a PCM block, resample it into the sfxcache" handoff S_LoadWavSound uses.
+qboolean ResampleSfx (sfx_t *sfx, int inrate, int inchannels, qaudiofmt_t informat, int insamps, int inloopstart, qbyte *data)
 {
 	extern cvar_t snd_linearresample;
 	extern cvar_t snd_loadasstereo;

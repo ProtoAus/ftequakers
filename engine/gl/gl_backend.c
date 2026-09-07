@@ -41,6 +41,25 @@ extern texid_t scenepp_postproc_cube;
 extern texid_t r_whiteimage;
 extern texid_t r_blackimage;	//nettest: SUNVIS fallback — black = zero sun occlusion = shadows behave as before
 
+//FTESurf Patch: declared here rather than in render.h, following the texid_t
+//externs directly above.  Two backends and renderer.c is not worth a header
+//change, which would turn a -Engine build of a shared tree into a -Full one.
+extern cvar_t r_reflectcube;
+
+/*
+FTESurf Patch: the census behind r_reflectcube, and it is the CONSUMER that is
+counted rather than the loader -- the build 19 lesson about r_voidvis, where
+"the setting looks the same either way" turned out to mean "there was nothing
+out there to drop at any setting".  A switch that cannot be shown to do anything
+is worse than no switch.
+
+Counted here because this is the only place the decision is made.  Read and
+zeroed by shader_here, so the number is "batches since you last asked", which
+over a second of frames is a clear signal and costs one increment per batch.
+*/
+int r_reflectcube_used;		//batches that took a cubemap reflection
+int r_reflectcube_gated;	//batches that would have, and were stopped
+
 #ifdef GLQUAKE
 static texid_t shadowmap[3];
 static int shadow_fbo_id;
@@ -80,7 +99,8 @@ static const char LIGHTPASS_SHADER[] = "\
 	}\n\
 }";
 
-extern cvar_t r_glsl_offsetmapping, r_portalrecursion, r_portalonly;
+extern cvar_t r_glsl_offsetmapping, r_portalrecursion, r_portalonly, r_portaldebug;
+extern cvar_t r_portalscissor;	//FTESurf Patch 208
 
 static void BE_SendPassBlendDepthMask(unsigned int sbits);
 void GLBE_SubmitBatch(batch_t *batch);
@@ -154,6 +174,13 @@ static struct {
 
 		int colourarraytype;
 		vec4_t pendingcolourflat;
+		//FTESurf Patch 166.  pendingcolourflat has ALWAYS been a leftover as far as
+		//the GLSL path is concerned -- nothing cleared it and nothing bound it -- so
+		//v_colour could not be trusted from it.  This says "GenerateColourMods just
+		//wrote it, for this draw".  Cleared per program draw, set only by the flat
+		//branches of GenerateColourMods, and read only where there is no array at
+		//all; a program that never asks for colourgens sees exactly the old white.
+		qboolean pendingcolourflatvalid;
 		int pendingcolourvbo;
 		void *pendingcolourpointer;
 		int curcolourvbo;
@@ -745,7 +772,29 @@ static void BE_ApplyAttributes(unsigned int bitstochange, unsigned int bitstoend
 				{
 					shaderstate.sha_attr &= ~(1u<<i);
 					qglDisableVertexAttribArray(i);
-					qglVertexAttrib4f(VATTR_COLOUR, 1, 1, 1, 1);
+					/*
+					FTESurf Patch 166.  "No colour ARRAY" is not the same statement
+					as "no colour", and this read it as though it were: a pass whose
+					rgbgen/alphagen is a CONSTANT has its colour in
+					pendingcolourflat and no array at all, and was handed white.
+
+					That is the whole of "hl2_water 3 is a white sheet" and
+					"hl2_dither_alpha does nothing" -- vmt/flatdither takes both its
+					colour and its coverage from v_colour, and v_colour was
+					(1,1,1,1) every frame.  With alpha 1 the dither can never
+					discard, so the cvar had nothing to move either.
+
+					Guarded on the flag rather than applied unconditionally,
+					because pendingcolourflat is stale for every path that does not
+					compute it, and reading a stale one here would tint or vanish
+					geometry that renders correctly today.
+					*/
+					if (shaderstate.pendingcolourflatvalid)
+						qglVertexAttrib4f(VATTR_COLOUR,
+							shaderstate.pendingcolourflat[0], shaderstate.pendingcolourflat[1],
+							shaderstate.pendingcolourflat[2], shaderstate.pendingcolourflat[3]);
+					else
+						qglVertexAttrib4f(VATTR_COLOUR, 1, 1, 1, 1);
 					continue;
 				}
 				GL_SelectVBO(shaderstate.pendingcolourvbo);
@@ -1478,7 +1527,24 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 		t = shaderstate.tex_reflection[r_refdef.recurse];
 		break;
 	case T_GEN_REFRACTION:
-		if (!r_refract_fboival)
+		/* FTESurf Patch 210: a portal must read the texture the portal was
+		   rendered into, whatever r_refract_fbo says.
+
+		   GLBE_GenerateBatchTextures generates into the FBO when
+		   `r_refract_fboival || SHADER_HASPORTAL`, but this -- the read side of
+		   the same texture -- consulted only r_refract_fboival.  With
+		   r_refract_fbo 0 the two disagree: the far view is rendered into
+		   tex_refraction and then the surface samples a copy of the CURRENT
+		   FRAMEBUFFER instead.  For water that substitution is the whole point of
+		   the cvar and is roughly right; for a portal it is not a worse portal, it
+		   is not a portal at all, and because a SHADER_SORT_PORTAL surface draws
+		   before sky and opaque there is almost nothing in the framebuffer yet, so
+		   the doorway comes out black.  Which is indistinguishable from "the
+		   recursed scene rendered nothing", and would have cost the next person
+		   the same hours it nearly cost this one.
+
+		   r_refract_fbo defaults to 1, so this was latent rather than active. */
+		if (!r_refract_fboival && !(shaderstate.curshader && (shaderstate.curshader->flags & SHADER_HASPORTAL)))
 		{
 			T_Gen_CurrentRender(tmu);
 			return;
@@ -1900,6 +1966,57 @@ static void tcgen_environment(float *st, unsigned int numverts, float *xyz, floa
 	}
 }
 
+//nettest: GOLDSRC STUDIO CHROME, which is not what tcgen environment does.
+//
+//StudioSetupChrome (StudioModelRenderer.cpp) builds the chrome s/t axes from the
+//VIEW's right and up vectors and then maps the vertex NORMAL onto them:
+//
+//	CrossProduct(bonedir, m_vRight, chromeupvec);
+//	CrossProduct(bonedir, chromeupvec, chromerightvec);
+//	pchrome[0] = (DotProduct(normal, chromeright) + 1.0) * 32;   // 64-texel texture
+//	pchrome[1] = (DotProduct(normal, chromeup)    + 1.0) * 32;
+//
+//i.e. a MATCAP: the pattern is fixed to the SCREEN and the model turns inside it.
+//tcgen environment is Q3's reflection map instead, and it takes components [1] and
+//[2] of a reflection vector computed in the ENTITY's own frame - so the pattern is
+//fixed to the MODEL and slides across it as the model rotates.  On a standing
+//scientist that swims; on a corpse, whose entity axis is rotated ninety degrees,
+//the axes it happens to pick are the wrong two entirely, which is the reported
+//"bottom of foot ... looks flickery and streched" (hunger/scientist.mdl's tex[28]
+//"Sci2_Chrome1.bmp", flags 0x3 = FLATSHADE|CHROME - the one flagged texture on the
+//whole model).
+//
+//The per-BONE refinement is deliberately not reproduced: it re-derives the axes
+//per bone from the direction to that bone, which only bends the mapping for bones
+//well off the view centre, and the vertex normals here are already in model space
+//with no bone index to hand at this stage.  What matters - and what was wrong - is
+//that the basis follows the camera rather than the model.
+//
+//Its own tcgen rather than a change to tcgen_environment, because every Q3 map in
+//the corpus uses `tcgen environment` for real reflections and must not move.
+static void tcgen_chrome(float *st, unsigned int numverts, float *normal)
+{
+	int i;
+	vec3_t sax, tax;
+
+	//The camera's right/up expressed in the entity's own frame.  entity->axis[j]
+	//is the j'th model axis in world space, so dotting against it picks out the
+	//j'th model-space component - the transpose, which for an orthonormal basis is
+	//the inverse.
+	sax[0] = DotProduct(vright, shaderstate.curentity->axis[0]);
+	sax[1] = DotProduct(vright, shaderstate.curentity->axis[1]);
+	sax[2] = DotProduct(vright, shaderstate.curentity->axis[2]);
+	tax[0] = DotProduct(vup,    shaderstate.curentity->axis[0]);
+	tax[1] = DotProduct(vup,    shaderstate.curentity->axis[1]);
+	tax[2] = DotProduct(vup,    shaderstate.curentity->axis[2]);
+
+	for (i = 0; i < numverts; i++, normal += 3, st += 2)
+	{
+		st[0] = 0.5 + DotProduct(normal, sax) * 0.5;
+		st[1] = 0.5 - DotProduct(normal, tax) * 0.5;
+	}
+}
+
 #ifndef GLSLONLY
 static void tcgen_fog(float *st, unsigned int numverts, float *xyz, mfog_t *fog)
 {
@@ -2012,6 +2129,12 @@ static float *tcgen(const shaderpass_t *pass, int cnt, float *dst, const mesh_t 
 		if (!mesh->normals_array)
 			return (float*)mesh->st_array;
 		tcgen_environment(dst, cnt, (float*)mesh->xyz_array, (float*)mesh->normals_array);
+		return dst;
+
+	case TC_GEN_CHROME:	//nettest: GoldSrc studio chrome, see tcgen_chrome
+		if (!mesh->normals_array)
+			return (float*)mesh->st_array;
+		tcgen_chrome(dst, cnt, (float*)mesh->normals_array);
 		return dst;
 
 //	case TC_GEN_DOTPRODUCT:
@@ -3004,6 +3127,7 @@ static void GenerateColourMods(const shaderpass_t *pass)
 		shaderstate.colourarraytype = 0;
 		shaderstate.pendingcolourvbo = 0;
 		shaderstate.pendingcolourpointer = NULL;
+		shaderstate.pendingcolourflatvalid = true;	//FTESurf Patch 166
 	}
 	else
 	{
@@ -4254,8 +4378,45 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		perm |= PERMUTATION_FOG;
 //	if (TEXLOADED(shaderstate.curtexnums->bump) && shaderstate.curbatch->lightmap[0] >= 0 && lightmap[shaderstate.curbatch->lightmap[0]]->hasdeluxe)
 //		perm |= PERMUTATION_DELUXE;
+	/*
+	FTESurf Patch: r_reflectcube -- the one gate every cubemap reflection passes.
+
+	This is the ONLY place PERMUTATION_REFLECTCUBEMASK is ever set, and that
+	permutation is what compiles in the cubemap sampling block in every shader
+	that has one (vmt/lightmapped, vmt/vertexlit, vmt/transition, vmt/water,
+	defaultwall, ...).  So one test here is a complete off switch.
+
+	IT IS DELIBERATELY DOWNSTREAM OF SHADER GENERATION, and that is the whole
+	point of it rather than an implementation detail.  Turning a material's
+	$envmap off in the hl2 plugin regenerates the script WITHOUT a reflectcube
+	line -- but Shader_Reset preserves shader->defaulttextures across a
+	regenerate (it detaches the block, memsets the shader and reattaches it), so
+	the texid an EARLIER generation loaded is still sitting in curtexnums and
+	this test still passes.  The reflection survives its own cvar.  Reported as
+	"Cubemaps off and Env maps off, and one map still reflects"; that map was
+	simply the one whose materials had been generated while the cvars were on.
+
+	Fixing the staleness at its source is not available: defaulttextures is also
+	written by the MODEL loader (R_BuildLegacyTexnums, Mod_RegisterBasicShader),
+	so clearing it on a regenerate would drop the base, bump and luma of every
+	Q1BSP wall on the first CVAR_SHADERSYSTEM change in the shared game.
+
+	Not CVAR_SHADERSYSTEM itself, for the same reason: a reload here would cost
+	the ~600ms full re-parse and would be exactly the thing that cannot be
+	trusted to have happened.  perm is masked against supportedpermutations two
+	lines on and simply selects an already-compiled permutation, so this costs
+	one integer test per batch and caches nothing.
+	*/
 	if ((TEXLOADED(shaderstate.curtexnums->reflectcube) || TEXLOADED(shaderstate.curtexnums->reflectmask)))
-		perm |= PERMUTATION_REFLECTCUBEMASK;
+	{
+		if (r_reflectcube.ival)
+		{
+			perm |= PERMUTATION_REFLECTCUBEMASK;
+			r_reflectcube_used++;
+		}
+		else
+			r_reflectcube_gated++;
+	}
 #if MAXRLIGHTMAPS > 1
 	if (shaderstate.curbatch->lightmap[1] >= 0)
 		perm |= PERMUTATION_LIGHTSTYLES;
@@ -4264,7 +4425,8 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	//only for a prop entity that resolved a placement record AND actually has its per-instance colour
 	//array bound (gl_alias.c's override sets colours[0]); this keeps it off for ordinary models and for
 	//the count-mismatch case where the override was skipped.
-	if (shaderstate.curbatch->ent && shaderstate.curbatch->ent->vertlightcolors &&
+	if (shaderstate.curbatch->ent &&
+		(shaderstate.curbatch->ent->vertlightcolors || shaderstate.curbatch->ent->vertlightbytes) &&	//FTESurf Patch 259: either form
 		(shaderstate.sourcevbo->colours[0].gl.addr || shaderstate.sourcevbo->colours[0].gl.vbo))
 		perm |= PERMUTATION_VC;
 
@@ -4280,6 +4442,30 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	}
 
 	GL_SelectProgram(permu->h.glsl.handle);
+
+	/*
+	FTESurf Patch 166.  THE COLOURGEN HAS TO HAPPEN BEFORE THE ATTRIBUTE BIND,
+	and in this build it was not happening at all.
+
+	Two faults, one symptom.  The call below sat inside `#ifndef GLSLONLY`, and
+	bothdefs.h:320 defines GLSLONLY for every build we ship -- so `!!fixed` set
+	prog->calcgens and NOTHING ever read it.  Patch 159 was correct about which
+	flag the shader needed and inert for that reason.
+
+	And even in a build where the block did compile, it ran AFTER
+	BE_Program_Set_Attributes, which is what binds v_colour: the colour was
+	generated one draw too late to be seen.  So this moves it up rather than
+	just widening the #ifdef.
+
+	The texcoord half stays inside the guard.  BE_GeneratePassTC feeds
+	pendingtexcoord*, which the GLSL attribute path does not read (it takes tex
+	coords straight off the vbo), so calling it here would be cost without
+	effect -- and the non-GLSLONLY behaviour is left exactly as it was.
+	*/
+	shaderstate.pendingcolourflatvalid = false;
+	if (p->calcgens)
+		GenerateColourMods(pass);
+
 #ifndef FORCESTATE
 	if (shaderstate.lastuniform == shaderstate.currentprogram)
 		i = true;
@@ -4293,23 +4479,13 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 
 	BE_SendPassBlendDepthMask(pass->shaderbits);
 
+	for (i = 0; i < pass->numMergedPasses; i++)
+	{
+		Shader_BindTextureForPass(i, pass+i);
 #ifndef GLSLONLY
-	if (p->calcgens)
-	{
-		GenerateColourMods(pass);
-		for (i = 0; i < pass->numMergedPasses; i++)
-		{
-			Shader_BindTextureForPass(i, pass+i);
+		if (p->calcgens)
 			BE_GeneratePassTC(pass+i, i);
-		}
-	}
-	else
 #endif
-	{
-		for (i = 0; i < pass->numMergedPasses; i++)
-		{
-			Shader_BindTextureForPass(i, pass+i);
-		}
 	}
 #if MAXRLIGHTMAPS > 1
 	{	//nettest: advance `i` once per DECLARED sampler bit, NOT once per bit we happen to have a
@@ -4714,8 +4890,71 @@ qboolean GLBE_SelectDLight(dlight_t *dl, vec3_t colour, vec3_t axis[3], unsigned
 	return true;
 }
 
-void GLBE_Scissor(srect_t *rect)
+/*
+  FTESurf Patch 208: BE_Scissor(NULL) means "no LOCAL scissor", not "no scissor".
+
+  Patch 208 confines a portal's recursed frame to the aperture's projected
+  rectangle.  The obstacle is that this backend does not track scissor state at
+  all -- gl_shadow.c:5773 says so in as many words -- and the recursed frame runs
+  a complete R_RenderScene, which reaches Sh_DrawLights (via GLBE_DrawWorld,
+  :7107) whose teardown is a flat BE_Scissor(NULL) at gl_shadow.c:6693.  Setting
+  the scissor and hoping would work right up until somebody switched rtlights on.
+
+  So the ambient clip lives in r_refdef (which is saved and restored across the
+  recursion for free) and every BE_Scissor call resolves against it here.  A
+  caller asking for no scissor gets the aperture; a caller asking for a box gets
+  box-intersect-aperture, which for a light is not merely safe but correct and
+  faster.  No existing call site changes.
+
+  The intersection is done in FRACTIONS so that the one piece of coordinate
+  arithmetic anybody has to trust -- the y flip below -- is inherited rather than
+  written out a second time.
+
+  portalclippx guards it: if the render target has changed since the rectangle
+  was measured (a reflection/refraction FBO, a shadow atlas -- all of which
+  overwrite pxrect and then call GL_ViewportUpdate), the fractions would land
+  somewhere meaningless, so the clip simply does not apply while they are
+  retargeted.  That is what makes those paths safe with no explicit suspend, and
+  GLBE_ViewportUpdate below is what re-arms it on the way back.
+*/
+static qboolean scissor_ambient;	//the GL scissor currently reflects a portal clip
+
+static void GLBE_ApplyScissor(srect_t *rect)
 {
+	srect_t r;
+	qboolean amb;
+
+	amb =	r_refdef.portalclip &&
+			r_refdef.portalclippx[0] == r_refdef.pxrect.x &&
+			r_refdef.portalclippx[1] == r_refdef.pxrect.y &&
+			r_refdef.portalclippx[2] == r_refdef.pxrect.width &&
+			r_refdef.portalclippx[3] == r_refdef.pxrect.maxheight;
+	if (amb)
+	{
+		r.x      = r_refdef.portalcliprect[0];
+		r.y      = r_refdef.portalcliprect[1];
+		r.width  = r_refdef.portalcliprect[2];
+		r.height = r_refdef.portalcliprect[3];
+		r.dmin   = 0;
+		r.dmax   = 1;
+		if (rect)
+		{
+			float x2 = r.x + r.width, y2 = r.y + r.height;
+			if (x2 > rect->x + rect->width)		x2 = rect->x + rect->width;
+			if (y2 > rect->y + rect->height)	y2 = rect->y + rect->height;
+			if (r.x < rect->x)	r.x = rect->x;
+			if (r.y < rect->y)	r.y = rect->y;
+			//an empty intersection is a legitimate answer: a light that does not
+			//overlap the aperture draws nothing.  It must not go negative.
+			r.width  = (x2 > r.x) ? x2 - r.x : 0;
+			r.height = (y2 > r.y) ? y2 - r.y : 0;
+			if (r.dmin < rect->dmin) r.dmin = rect->dmin;
+			if (r.dmax > rect->dmax) r.dmax = rect->dmax;
+		}
+		rect = &r;
+	}
+	scissor_ambient = amb;
+
 	if (rect)
 	{
 		qglScissor(
@@ -4746,6 +4985,38 @@ void GLBE_Scissor(srect_t *rect)
 //		if (qglDepthBoundsEXT)
 //			qglDepthBoundsEXT(0, 1);
 	}
+}
+
+void GLBE_Scissor(srect_t *rect)
+{
+	GLBE_ApplyScissor(rect);
+}
+
+/*
+  FTESurf Patch 208: was a bare qglViewport macro in glquake.h.
+
+  Every call site of it is a render-TARGET change -- an FBO push or pop for a
+  reflection, a refraction, a ripplemap or a shadow atlas -- and each one either
+  invalidates the portal clip (the fractions no longer refer to the same pixels)
+  or restores the target it was measured against.  Resolving the scissor here
+  means those paths need no explicit suspend or resume: they overwrite pxrect,
+  the identity test in GLBE_ApplyScissor fails, their unclipped clears run, and
+  the restoring GL_ViewportUpdate on the way out re-arms the aperture.
+
+  The scissor_ambient guard is what keeps the 2d users bit-for-bit unchanged:
+  with no portal clip anywhere in the frame this function is exactly the old
+  macro, so console.c, pr_csqc.c, pr_menu.c, m_native.c, m_items.c and
+  clhl_game.c -- each of which sets a scissor and may cross a GL_Set2D -- behave
+  as they always did.
+*/
+void GLBE_ViewportUpdate(void)
+{
+	qglViewport(r_refdef.pxrect.x,
+				r_refdef.pxrect.maxheight-(r_refdef.pxrect.y+r_refdef.pxrect.height),
+				r_refdef.pxrect.width,
+				r_refdef.pxrect.height);
+	if (r_refdef.portalclip || scissor_ambient)
+		GLBE_ApplyScissor(NULL);
 }
 
 #if defined(RTLIGHTS) && !defined(GLSLONLY)
@@ -4872,6 +5143,113 @@ static void BE_LegacyLighting(void)
 //	GL_LazyBind(1, 0, r_nulltex);
 //	GL_LazyBind(2, 0, r_nulltex);
 //	GL_LazyBind(3, 0, r_nulltex);
+}
+
+/*
+FTESurf Patch 266: distance fog for shaders that have no GLSL program.
+
+This is the FIXME twenty lines into the global-fog block at the bottom of
+GLBE_DrawWorld -- "should really be doing this on a per-shader basis, for custom
+shaders that don't use glsl".  That block is whole-scene and switches itself off
+whenever GLSL is available, so in practice a program-less shader has never been
+fogged at all: PERMUTATION_FOG is set in exactly one place, inside
+BE_RenderMeshProgram, and DrawMeshes only calls that for the whole shader when
+curshader->prog is non-NULL.
+
+Reported as "the clouds take no distance fog".  surf_boreas's
+project_tendies/cloods is an UnlitGeneric material, and UnlitGeneric is the one
+arm of the hl2 plugin's translator that emits a real PASS instead of a program,
+so it has no prog and cannot reach the permutation.  Its neighbours in the same
+3D-skybox room are WorldVertexTransition, which do get a program and do fog --
+which is why this reads as one material misbehaving rather than a broken region.
+
+WHY FIXED-FUNCTION FOG RATHER THAN AN EXTRA FOG PASS.  A second pass drawn over
+the same geometry, which is how the mfog volume path below does it, has no
+access to the surface's own alpha: on a translucent surface such as these clouds
+it would paint fog across the fully-transparent texels too and put a
+fog-coloured rectangle in the sky.  GL's fixed-function fog is applied per
+fragment after texturing and modifies RGB only, leaving alpha alone, which is
+exactly the semantics sys/fog.h's fog3() gives the program shaders.  It also
+cannot touch a shader that HAS a program -- GL ignores it while one is bound --
+so there is no risk of double-fogging the surfaces that already work.
+
+EXACTNESS, AND WHAT THIS DELIBERATELY DOES NOT COVER.  Linear maps exactly:
+sys/fog.h reads density as the end distance and depthbias as the start, which is
+GL_FOG_END/GL_FOG_START.  Exp and exp2 map exactly when depthbias is 0, GL having
+no bias term.
+
+`alpha` is the one that cannot be done.  It is not a scale on the fog, it is a
+CAP: the gamecode reparametrises Source's min(fogmaxdensity, ramp) into FTE's
+alpha plus a shortened end distance (see cl_fog.qc), so the fog opacity is a
+linear ramp that stops climbing at alpha.  GL's fixed-function fog always ramps
+to fully fogged; the start and end can be reconstructed exactly, but there is no
+clamp.  Setting them anyway would leave the near field right and over-fog
+everything past the cap, worst where the cap is lowest.
+
+So those maps are declined rather than approximated, and say so once.  Measured:
+of 36 env_fog_controllers across a 146-map sample, 22 set fogmaxdensity below 1,
+so this covers the other 14 plus every map with no controller at all.
+surf_boreas, which is where this was reported, is fogmaxdensity 1 and is exact.
+Closing the remaining 61% means giving these shaders a real program -- routing
+them through `fixedemu` with a FOG permutation would do it, and would cover the
+core-profile path this cannot reach either -- which is a bigger change than the
+reported bug needs and is recorded as the follow-up rather than guessed at here.
+
+A silent approximation is the failure mode this patch series keeps having to
+undo, so the decline is loud.
+
+2D is safe without a guard: it draws at an eye-space depth of ~0, where both
+fog modes give a factor of 1, i.e. no fog.
+*/
+static qboolean BE_ProglessFogBegin(void)
+{
+	extern cvar_t r_fog_progless, r_fog_linear, r_fog_exp2;
+	static qboolean moaned = false;
+	float col[4];
+
+	if (!r_refdef.globalfog.density || !r_fog_progless.ival)
+		return false;
+	if (shaderstate.curshader->prog)
+		return false;	//has a program; PERMUTATION_FOG already covers it.
+	if (shaderstate.curshader->flags & SHADER_SKY)
+		return false;	//sky is not at a distance.
+	if (!qglFogi || !qglFogf || !qglFogfv)
+		return false;	//not bound on this context.
+
+	if (r_refdef.globalfog.alpha < 1 ||
+		(!r_fog_linear.ival && r_refdef.globalfog.depthbias))
+	{
+		if (!moaned)
+		{
+			moaned = true;
+			Con_DPrintf("[fog] program-less surfaces left unfogged: fixed-function fog cannot express alpha %g / depthbias %g. See r_fog_progless.\n",
+				r_refdef.globalfog.alpha, r_refdef.globalfog.depthbias);
+		}
+		return false;
+	}
+
+	VectorCopy(r_refdef.globalfog.colour, col);
+	col[3] = 1;
+	qglFogfv(GL_FOG_COLOR, col);
+
+	if (r_fog_linear.ival)
+	{	//density is the end distance and depthbias the start, per sys/fog.h.
+		qglFogi(GL_FOG_MODE, GL_LINEAR);
+		qglFogf(GL_FOG_START, r_refdef.globalfog.depthbias);
+		qglFogf(GL_FOG_END, r_refdef.globalfog.density);
+	}
+	else
+	{
+		qglFogi(GL_FOG_MODE, r_fog_exp2.ival?GL_EXP2:GL_EXP);
+		qglFogf(GL_FOG_DENSITY, r_refdef.globalfog.density);
+	}
+	qglEnable(GL_FOG);
+	return true;
+}
+static void BE_ProglessFogEnd(qboolean fogging)
+{
+	if (fogging)
+		qglDisable(GL_FOG);
 }
 #endif
 
@@ -5234,6 +5612,9 @@ static void DrawMeshes(void)
 #ifndef GLSLONLY
 		else
 		{
+			//FTESurf Patch 266: the live path on a compatibility context, and the one
+			//that had no fog of any kind.  See BE_ProglessFogBegin.
+			qboolean fogging = BE_ProglessFogBegin();
 			while (passno < shaderstate.curshader->numpasses)
 			{
 				p = &shaderstate.curshader->passes[passno];
@@ -5259,6 +5640,7 @@ static void DrawMeshes(void)
 					DrawPass(p);
 				}
 			}
+			BE_ProglessFogEnd(fogging);
 		}
 		if (shaderstate.curbatch->fog && shaderstate.curbatch->fog->shader)
 		{
@@ -5616,6 +5998,13 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 	/*attempt to draw portal shaders*/
 	if (shaderstate.mode == BEM_STANDARD)
 	{
+		/* FTESurf Patch 206: decide ONCE, before anything is rendered or masked,
+		   which portals get a view this time.  All three loops -- this one, the
+		   depth-mask loop below, and GLR_DrawPortal's own mask loop -- then ask
+		   the same question and get the same answer.  Their disagreeing about it
+		   is the bug this patch is mostly about. */
+		GLR_PortalBudgetBegin(worldlist, dynamiclist);
+
 		for (i = 0; i < 2; i++)
 		{
 			for (batch = i?dynamiclist:worldlist[SHADER_SORT_PORTAL]; batch; batch = batch->next)
@@ -5623,8 +6012,32 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 				if (batch->meshes == batch->firstmesh)
 					continue;
 
+				/* FTESurf Patch 210: a portal that paints ITSELF is not painted here.
+
+				   This loop is the paint-over-the-screen-then-mask-it-back-off
+				   design, and it is the reason the far room appeared as a
+				   rectangle rather than as the doorway.  A SHADER_HASPORTAL
+				   aperture takes the other route entirely: it is rendered to an
+				   FBO and sampled per-pixel by its own surface, from the ordinary
+				   sort list, in GLBE_SubmitMeshesSortList -> GLBE_GenerateBatchTextures.
+
+				   It must be skipped in BOTH loops or it would pay for two full
+				   scene renders and then mask off the one it wanted.  gl_shader.c
+				   does the same thing for `dp_camera` by demoting the sort; that
+				   is not available here because the sort is what puts this batch in
+				   front of GLR_PortalBudgetBegin, which has already scored it. */
+				if (batch->shader && (batch->shader->flags & SHADER_HASPORTAL))
+					continue;
+
 				if (batch->buildmeshes)
 					batch->buildmeshes(batch);
+
+				/* Out of budget: not recursed AND not masked, so the batch falls
+				   through to the ordinary sort list where a zero-pass portal
+				   shader draws nothing and the wall behind it survives.  That is
+				   the "closed" look, and it costs nothing to produce. */
+				if (!GLR_PortalWouldDraw(batch))
+					continue;
 
 				il = shaderstate.identitylighting;
 				masklists[0] = worldlist[SHADER_SORT_PORTAL];
@@ -5641,6 +6054,8 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 		if (gl_config.arb_depth_clamp)
 			qglEnable(GL_DEPTH_CLAMP_ARB);
 		/*draw depth only, to mask it off*/
+		if (r_portaldebug.ival == 2)	//P206 bisect: no mask at all
+			return;
 		GLBE_SelectMode(BEM_DEPTHONLY);
 		for (i = 0; i < 2; i++)
 		{
@@ -5648,6 +6063,50 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 			{
 //				if (batch->meshes == batch->firstmesh)
 //					continue;
+
+				/* FTESurf Patch 203, same reason as the depthmask loop in
+				   GLR_DrawPortal: an alias-model portal's mesh pointer is a
+				   file-static shared by every alias batch, and it only describes
+				   THIS batch between its build and its submit.  The loop above
+				   built each one just before recursing a whole scene through it,
+				   so by now they all point at whichever was built last.  Rebuild
+				   in step; skip the ones that produce nothing rather than letting
+				   GLBE_SubmitBatch dereference a NULL mesh[0]. */
+				/* FTESurf Patch 206: MASK ONLY WHAT WAS ACTUALLY DRAWN.
+
+				   This loop's job is to stop the ordinary scene painting over a
+				   portal's contents.  It had no idea which portals had contents.
+				   GLR_DrawPortal refuses on four separate grounds -- above all
+				   "the viewer is behind this plane" -- and every refusal still
+				   got its wall-killing depth written here, with nothing rendered
+				   behind it.  That is the user's "it deletes the wall behind it
+				   and has a square transparency in the middle": half of a set of
+				   PAIRED doors faces away from you at any instant, and `cull
+				   none` means the back face masks just as happily as the front.
+
+				   Ask the same question the renderer asked.  It is a table lookup
+				   that touches no mesh, so it goes FIRST and the batches we are
+				   not going to mask never pay for a rebuild. */
+				/* FTESurf Patch 210: and a self-painting portal is not masked at
+				   all -- there is nothing on the screen to protect, and its own
+				   opaque surface writes the depth that keeps the world off it. */
+				if (batch->shader && (batch->shader->flags & SHADER_HASPORTAL))
+					continue;
+				if (!GLR_PortalWouldDraw(batch))
+					continue;
+
+				/* FTESurf Patch 203, same reason as the depthmask loop in
+				   GLR_DrawPortal: an alias-model portal's mesh pointer is a
+				   file-static shared by every alias batch, and it only describes
+				   THIS batch between its build and its submit.  The loop above
+				   built each one just before recursing a whole scene through it,
+				   so by now they all point at whichever was built last.  Rebuild
+				   in step; skip the ones that produce nothing rather than letting
+				   GLBE_SubmitBatch dereference a NULL mesh[0]. */
+				if (batch->buildmeshes)
+					batch->buildmeshes(batch);
+				if (!batch->mesh || batch->meshes == batch->firstmesh)
+					continue;
 
 				GLBE_SubmitBatch(batch);
 			}
@@ -5669,6 +6128,28 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	//(BEM_DEPTHDARK is used when lightmap scale is 0, but still shows any emissive stuff)
 	if (shaderstate.mode != BEM_STANDARD && shaderstate.mode != BEM_DEPTHDARK)
 		return false;
+
+	/* FTESurf Patch 210: the budget applies here too.
+
+	   Patch 206 capped portal views at r_portalmaxviews because surf_tripportals
+	   has 116 doors and each one is a whole scene.  That cap lived entirely in
+	   GLBE_SubmitMeshesPortals, which a self-painting portal no longer goes
+	   through -- so without this line the FBO route would quietly reintroduce the
+	   unbounded cost the cap exists to prevent, on the one map that proves it.
+
+	   The table was built for this level moments ago, by GLR_PortalBudgetBegin at
+	   the top of GLBE_SubmitMeshesPortals: GLBE_SubmitMeshes calls that for
+	   SHADER_SORT_PORTAL and only then submits the same sort list, so the scores
+	   are current and were measured under this view.  The two recursion guards
+	   above run FIRST because past r_portalrecursion the table for this level was
+	   never rebuilt and would answer from a different subtree.
+
+	   Returning false means the caller skips the batch entirely, which for an
+	   opaque aperture is exactly Patch 207's "renders closed": nothing is drawn,
+	   so whatever the doorway is set into survives. */
+	if ((bs->flags & SHADER_HASPORTAL) && !GLR_PortalWouldDraw(batch))
+		return false;
+
 	oldbem = shaderstate.mode;
 	oldil = shaderstate.identitylighting;
 
@@ -5791,7 +6272,59 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			qglClearColor(0, 0, 0, 1);
 			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 			if (bs->flags&SHADER_HASPORTAL)
-				GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 0);
+			{
+				/* FTESurf: SAY WHETHER THE PORTAL ACTUALLY DREW.
+
+				   The FBO was just cleared to opaque black three lines up, and this
+				   call's return value was thrown away -- so every one of
+				   GLR_DrawPortal's six refusal paths ends with the quad faithfully
+				   painting that black clear onto the doorway.  "The portal renders
+				   black" and "the portal was refused and you are looking at the
+				   clear colour" are the same pixels and completely different bugs,
+				   and telling them apart by screenshot is not possible: it cost this
+				   investigation a run each on vis, areas, the skyroom, standoff
+				   distance and lightmaps before anyone asked the function.
+
+				   Counter-limited rather than rate-limited: this is a per-frame call
+				   site and the interesting information is all in the first few. */
+				qboolean drew = GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 0);
+				static int portalreports = 0;
+				/* developer.ival is tested HERE and not left to Con_DPrintf.  Only the
+				   PRINT is developer-gated; qglReadPixels below is not, and a
+				   synchronous readback stalls the pipeline -- shipping twelve of those
+				   per map load for every player, to fill a log nobody asked for, is
+				   the kind of diagnostic cost Patch 209a was written about. */
+				if (portalreports < 12 && developer.ival)
+				{
+					/* READ THE FBO BACK.  The queued-mesh count in r_surf.c says the
+					   recursed view emits 6222 meshes, which is what it should -- but
+					   emitted is not drawn, and the doorway is still black.  Those two
+					   facts can only be reconciled by looking at the pixels the
+					   recursion actually produced, and the FBO is still bound here
+					   (GLBE_FBO_Pop is below), so a readback costs one stall on a
+					   frame that is already being instrumented.
+					   Centre 8x8: if this is ~0 the recursion drew nothing visible and
+					   the shader is innocent; if it is bright the image exists and the
+					   fault is downstream in the sample. */
+					GLubyte px[8*8*4];
+					int i, sum = 0, mx = 0;
+					qglReadPixels(r_refdef.pxrect.width/2 - 4, r_refdef.pxrect.height/2 - 4,
+						8, 8, GL_RGBA, GL_UNSIGNED_BYTE, px);
+					for (i = 0; i < 8*8*4; i++)
+					{
+						sum += px[i];
+						if (px[i] > mx)
+							mx = px[i];
+					}
+					portalreports++;
+					Con_DPrintf("[portal] recurse %i: GLR_DrawPortal %s (fbo %ix%i, meshes %u..%u) fbo centre mean %i max %i\n",
+						r_refdef.recurse, drew?"DREW":"REFUSED",
+						shaderstate.tex_refraction[r_refdef.recurse]->width,
+						shaderstate.tex_refraction[r_refdef.recurse]->height,
+						(unsigned)batch->firstmesh, (unsigned)batch->meshes,
+						sum/(8*8*4), mx);
+				}
+			}
 			else
 				GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, ((bs->flags & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
 			GLBE_FBO_Pop(oldfbo);
@@ -5924,6 +6457,72 @@ static void GLBE_SubmitMeshesSortList(batch_t *sortlist)
 		{
 			if (!GLBE_GenerateBatchTextures(batch, bs))
 				continue;
+
+			/* FTESurf Patch 220: REBUILD BEFORE SUBMITTING.  This is the black doorway.
+
+			   GLBE_GenerateBatchTextures has just rendered one or more WHOLE SCENES --
+			   GLR_DrawPortal -> R_RenderScene for a portal or a reflection, and a
+			   nested GLBE_SubmitMeshes for a ripplemap.  R_GAlias_DrawBatch hands
+			   every alias batch in the engine a pointer to ONE file-static mesh_t
+			   (gl_alias.c:1934-1935, :1967) which describes THIS batch only between
+			   its own build and its own submit, and every alias model in that
+			   recursed view -- plus GLR_PortalBudgetBegin's own build loop
+			   (gl_rmain.c:1481-1482) -- has since memset and refilled it.
+
+			   So batch->mesh now carries a foreign model's numvertexes/numindexes/
+			   vbofirstelement while GLBE_SubmitBatch still draws from THIS batch's
+			   vbo.  For a linked_portal_door that is a prop's index count read out
+			   of a four-vertex quad's element buffer: nothing usable rasterises, the
+			   aperture is never painted, and what shows in the doorway is whatever
+			   was behind it.  The far view in the FBO was correct the whole time,
+			   which is exactly why measuring it proved nothing.
+
+			   The discipline and the reason are already spelled out at :5994-5997
+			   and gl_rmain.c:1968-1971 (Patch 203).  This was the one
+			   submit-after-recursion path that never got it -- Patch 210 is the
+			   first thing to route an ALIAS batch through here, and before it only
+			   brush water/reflect surfaces arrived, whose meshes live in per-batch
+			   storage (r_surf.c:2821-2829) rather than in a shared static. */
+			if (batch->buildmeshes && r_portaldebug.ival != 4)
+			{
+				/* FTESurf Patch 220: SAY THAT IT HAPPENED, don't infer it from pixels.
+				   "the doorway looks better now" is not evidence -- this map animates.
+				   Sample the header the batch was ABOUT to be submitted with, then say
+				   so when the rebuild changes it.  A material whose mesh survives the
+				   recursion prints nothing, so this is self-limiting, and it is
+				   counter-limited on top because it is a per-frame call site.
+				   developer.ival is tested here rather than left to Con_DPrintf so the
+				   three reads cost nothing when nobody is looking. */
+				int owasi = 0, owasv = 0;
+				unsigned int owase = 0;
+				qboolean osampled = (developer.ival && batch->mesh &&
+					batch->meshes != batch->firstmesh && batch->mesh[batch->firstmesh]);
+				if (osampled)
+				{
+					owasi = batch->mesh[batch->firstmesh]->numindexes;
+					owasv = batch->mesh[batch->firstmesh]->numvertexes;
+					owase = batch->mesh[batch->firstmesh]->vbofirstelement;
+				}
+
+				batch->buildmeshes(batch);
+				if (!batch->mesh || batch->meshes == batch->firstmesh)
+					continue;
+
+				if (osampled)
+				{
+					static int clobberreports = 0;
+					mesh_t *nm = batch->mesh[batch->firstmesh];
+					if (clobberreports < 12 && nm &&
+						(owasi != nm->numindexes || owasv != nm->numvertexes || owase != nm->vbofirstelement))
+					{
+						clobberreports++;
+						Con_DPrintf("[portal] %s: mesh clobbered by the recursed view -- was about to submit idx %i vert %i firstelem %u, rebuilt to idx %i vert %i firstelem %u\n",
+							bs->name, owasi, owasv, owase,
+							nm->numindexes, nm->numvertexes, nm->vbofirstelement);
+					}
+				}
+			}
+
 			if ((bs->flags&SHADER_HASPORTAL) && shaderstate.mode != BEM_DEPTHONLY && gl_config.arb_depth_clamp)
 			{	//this little bit of code is meant to prevent issues when the near clip plane intersects the portal surface, allowing us to be that little bit closer to the portal.
 				qglEnable(GL_DEPTH_CLAMP_ARB);

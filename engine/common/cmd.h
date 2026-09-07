@@ -117,6 +117,15 @@ void Cbuf_Execute (void);
 // Do not call inside a command function!
 
 extern qboolean cmd_blockwait;
+
+//nettest Patch 140.  Cmd_Wait_f's "waits without server frames" diagnostic sets
+//this and NOTHING in the tree ever cleared it, so once two waits had run with a
+//server up the warning fired on every wait for the rest of the session.  It is
+//meant to say "waits are piling up INSIDE one frame"; SV_Frame clears it so it
+//can mean that again.  Declared here rather than left file-static in cmd.c so
+//the server can reach it.
+extern qboolean cmd_didwait;
+
 void Cbuf_ExecuteLevel(int level);
 //executes only a single cbuf level. can be used to restrict cbuf execution to some 'safe' set of commands, so there are no surprise 'map' commands.
 //will not magically make all commands safe to exec, but will prevent user commands slipping in too.
@@ -176,7 +185,25 @@ typedef struct
 		const char *text;
 		const char *repl;	//used for sole matches
 		const char *desc;
-	} completions[50];
+	/*
+	FTESurf Patch 211: 50 -> 256.
+
+	50 was already too small and this tree has the scar: keys.c:446 records
+	`r_shadows` reading as UNREGISTERED, because 53 r_shadows* cvars pushed the
+	exact match off the end of this array -- so cl_chatmode 2 broadcast a cvar set
+	to the server as a chat message.  That was worked around by having
+	Cmd_IsCommand ask Cmd_IsKnownName instead; the cap itself stayed.
+
+	The console dropdown makes it visible again for a different reason: `cl_` has
+	well over 50 matches, and a list you are meant to scroll that silently stops
+	at 50 is a list that lies about what exists.  res->extra still counts the
+	overflow and the dropdown still prints "N MORE", so 256 is a bigger honest
+	number rather than a claim of completeness.
+
+	Cost is one static: Cmd_Complete caches a single cmd_completion_t (cmd.c),
+	so this is ~5KB of .bss, not per-call.
+	*/
+	} completions[256];
 } cmd_completion_t;
 cmd_completion_t *Cmd_Complete(const char *partial, qboolean caseinsens);	//calculates and caches info.
 

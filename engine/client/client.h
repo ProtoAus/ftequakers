@@ -85,6 +85,7 @@ typedef struct
 	qboolean	jump_held;	//networked with Z_EXT_PM_TYPE
 	int			jump_msec;	// hack for fixing bunny-hop flickering on non-ZQuake servers
 	vec3_t		gravitydir;	//networked with replacementdeltas
+	pmsourcestate_t	pmsrc;	//FTESurf: never networked; replayed forward by prediction
 } player_state_t;
 
 
@@ -639,6 +640,37 @@ typedef struct {
 	float oldframestarttime[FS_COUNT];
 	int oldframe[FS_COUNT];
 	qbyte basebone;
+	//nettest Patch 125: HL bone controllers, carried here so CL_LerpNetFrameState
+	//can hand them to framestate_t alongside the frame data.
+	//
+	//Patch 126 CORRECTS Patch 125's note here, which said these must never be
+	//lerped because blending across a wrap-around (255 -> 0 is one step, not 255)
+	//would make a turret sweep the long way round.  That hazard is real but it
+	//applies ONLY to controllers the model marks as wrapping (type & 0x8000).
+	//Every controller this mod actually drives - the head yaw at -60..60 and the
+	//jaw at 0..45 - is a BOUNDED rotation that HL_CalcBoneAdj already clamps to
+	//the model's own start..end, and those blend perfectly well.  Taking the raw
+	//newest value meant a server-driven head turned in visible steps at the AI
+	//think rate (10Hz) while the body it is attached to interpolated smoothly.
+	//
+	//So both ends are kept and the blend is done in HL_CalcBoneAdj, which is the
+	//only place that can see the per-controller type and skip the wrapping ones.
+	short bonecontrol[5];		//degrees * ES_BONECONTROL_SCALE, newest snapshot
+	short bonecontrol_old[5];	//...and the one before it
+	float bonecontrolstarttime;	//when the newest arrived
+	//nettest Patch 155: the animation playback rate, and the phase bookkeeping
+	//that lets it change mid-sequence without the pose jumping.
+	//
+	//frametime is not simply elapsed*rate, because the rate can change while a
+	//sequence is still playing - HL's tentacle sweeps faster the more recently
+	//it heard something (tentacle.cpp) - and rescaling the whole elapsed time
+	//would teleport the pose.  So the clock is rebased on every rate change:
+	//animphase remembers the frametime reached at animphasetime, and playback
+	//continues from there at the new rate.  Continuous by construction.
+	float animrate;					//playback multiplier, 1 = normal
+	float animphase[FS_COUNT];		//frametime reached at animphasetime
+	float animphasetime[FS_COUNT];	//when the phase was last rebased
+	float bonecontroldeltatime;	//how long the previous pair took to arrive
 
 	//intermediate values for origin lerping of stepping things
 	int newsequence;
@@ -743,6 +775,7 @@ struct playerview_s
 		vec3_t		gravitydir;
 		qboolean	jump_held;
 		int			jump_msec;		// hack for fixing bunny-hop flickering on non-ZQuake servers
+		pmsourcestate_t	pmsrc;		//FTESurf: pm_source.c duck/tick state
 
 		int			sequence;
 	} prop;
@@ -1075,6 +1108,7 @@ extern	cvar_t	cl_backspeed;
 extern	cvar_t	cl_sidespeed;
 
 extern	cvar_t	cl_movespeedkey;
+extern	cvar_t	in_speedbutton;	//FTESurf
 
 extern	cvar_t	cl_yawspeed;
 extern	cvar_t	cl_pitchspeed;
@@ -1233,7 +1267,7 @@ extern unsigned int cl_maxstris;
 */	} while(0)
 
 //nettest: persistent lit decals (cl_ents.c) — clip once + cache, re-emit cheaply each frame.
-int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime);
+int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime, const float *texrange);
 void CL_RemovePersistentDecal(int handle);
 void CL_UpdatePersistentDecal(int handle, const vec3_t rgb, float alpha);
 void CL_EmitPersistentDecals(void);	//called from the world draw (r_surf.c) before BE_DrawWorld

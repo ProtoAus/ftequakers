@@ -2161,6 +2161,12 @@ static void QDECL MP_Read_FrameState(pubprogfuncs_t *prinst, wedict_t *ent, fram
 	fstate->g[FS_REG].lerpweight[1] = lerpfracval?lerpfracval->_float:0;
 	fstate->g[FS_REG].frametime[0] = frame1timeval?frame1timeval->_float:0;
 	fstate->g[FS_REG].frametime[1] = frame2timeval?frame2timeval->_float:0;
+	//nettest Patch 155: this builder does not zero the struct and its callers
+	//keep a framestate_t on the stack, so the new member has to be written here
+	//or the HL cross-fade reads garbage.  MenuQC drives its own animation clock,
+	//so it gets the value the fade read before the member existed.
+	fstate->g[FS_REG].seqtime   = fstate->g[FS_REG].frametime[0];
+	fstate->g[FST_BASE].seqtime = fstate->g[FST_BASE].frametime[0];
 
 #if FRAME_BLENDS >= 4
 	fstate->g[FS_REG].frame[2] = fstate->g[FS_REG].frame[0];
@@ -2222,6 +2228,7 @@ static qboolean CopyMenuEdictToEntity(pubprogfuncs_t *prinst, menuedict_t *in, e
 	out->framestate.g[FS_REG].lerpweight[0] = 1-out->framestate.g[FS_REG].lerpweight[1];
 	out->framestate.g[FS_REG].frametime[0] = frame1timeval?frame1timeval->_float:0;
 	out->framestate.g[FS_REG].frametime[1] = frame2timeval?frame2timeval->_float:0;
+	out->framestate.g[FS_REG].seqtime      = out->framestate.g[FS_REG].frametime[0];	//nettest Patch 155
 
 #if defined(SKELETALOBJECTS) || defined(RAGDOLL)
 	out->framestate.bonecount = 0;

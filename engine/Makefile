@@ -782,6 +782,8 @@ CLIENT_OBJS = \
 	snd_dma.o	\
 	snd_mem.o	\
 	snd_mix.o	\
+	snd_flac.o	\
+	snd_minimp3.o	\
 	snd_mp3.o	\
 	snd_ov.o	\
 	valid.o	\
@@ -976,6 +978,7 @@ COMMON_OBJS = \
 	sv_move.o 		\
 	pmove.o		\
 	pmovetst.o		\
+	pm_source.o		\
 	iwebiface.o		\
 	translate.o		\
 	plugin.o		\

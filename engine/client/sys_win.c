@@ -643,10 +643,25 @@ LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
 		buf[0] = 0;
 		snprintf(buf, sizeof(buf), "code=0x%08lx addr=%p base=%p rva=0x%llx\r\n",
 			(unsigned long)code, (void*)addr, (void*)base, (unsigned long long)(addr - base));
-		//was C:\FTEQuake\nettest\crashaddr.txt -- that gamedir was renamed to quakers, so every
-		//crash address was being written into a folder that no longer exists (CreateFileA does not
-		//create missing directories), silently losing the diagnostics this whole handler exists for.
-		HANDLE h = CreateFileA("C:\\FTEQuake\\quakers\\crashaddr.txt", FILE_APPEND_DATA,
+		//NEXT TO THE RUNNING EXE, derived at crash time.  This was a hard-coded
+		//C:\FTEQuake\quakers\crashaddr.txt (and before that ...\nettest\, a folder that had been
+		//renamed).  One tree builds two games and deploys to two installs, so every FTESurf crash
+		//was appending into the OTHER game's gamedir -- which is exactly where nobody looked, and
+		//is why the map-switch crash was believed to produce no diagnostics at all for a whole
+		//build.  It had been recording a full symbolisable backtrace the entire time.
+		//GetModuleFileNameA + a manual truncation, because a crash handler must not allocate.
+		char path[MAX_OSPATH];
+		DWORD pn = GetModuleFileNameA(NULL, path, sizeof(path)-24);
+		HANDLE h;
+		if (pn && pn < sizeof(path)-24)
+		{
+			while (pn && path[pn-1] != '\\' && path[pn-1] != '/')
+				pn--;
+			memcpy(path+pn, "crashaddr.txt", 14);
+		}
+		else
+			memcpy(path, "crashaddr.txt", 14);
+		h = CreateFileA(path, FILE_APPEND_DATA,
 			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (h != INVALID_HANDLE_VALUE)
 		{

@@ -2066,6 +2066,712 @@ char *Shader_GetShaderBody(shader_t *s, char *fname, size_t fnamesize);
 extern vec3_t nametagorg[MAX_CLIENTS];
 extern qboolean nametagseen[MAX_CLIENTS];
 extern cvar_t r_showshaders, r_showfields, r_projection;
+
+/*
+FTESurf Patch 264: shader_here names ONE surface, and on a Source map the one
+that matters is often the one behind it.
+
+This started as a fix for a bug that turned out not to exist.  Patch 263 recorded
+that shader_here had named a coplanar neighbour of the face the trace hit -- that
+it said `sky/tools/toolsskybox` where the crosshair was really on
+`fakeskies/mpa45` -- and reserved a patch to correct it.  Reproducing that on the
+map first (cfg/testrun/shaderhere01.cfg, six probes across three columns of
+surf_monolith bonus 4) says otherwise: every probe stopped at z=16296 on
+`surf_minigolf/grid`, shader_here named exactly that, and solid_here agreed on
+both the endpoint and the contents.  The endpoint and the 0x410 surface flags
+match Patch 263's own probe table for the grid face to the unit.  The arithmetic
+says the same thing: Mod_GetSurfaceNearPoint ranks by squared distance from the
+endpoint, BIH_Trace puts that endpoint DIST_EPSILON = 0.03125 in front of the
+plane it stopped on, and 0.03 vs 4.03 is a factor of 128 -- it cannot prefer the
+far face, in either scan order.  The record was wrong; it has been corrected.
+
+What is actually wrong is smaller and more useful.  Bonus 4's ceiling is FOUR
+surfaces inside eight units --
+
+    z 16296  surf_minigolf/grid    the additive lattice you look through
+    z 16300  fakeskies/mpa45       the imposter slab, bottom
+    z 16302  fakeskies/mpa45       the imposter slab, top
+    z 16304  tools/toolsskybox     the real sky brush
+
+-- and a command that prints one name can only ever describe one of them.  The
+report that started all this ("missing sky texture") named the sky because the
+ray reached the sky, which was a true answer to the question asked and a useless
+one, because the thing doing the damage was two units below it.  No instrument in
+the tree could say "there is something else here".
+
+So: print every face at the hit point, not the best one.  The pick is NOT
+changed, Mod_GetSurfaceNearPoint is NOT changed -- it is a published contract, QC
+builtin #438 getsurfacenearpoint returns the index it chooses (pr_bgcmd.c:1239)
+-- and texture= reports exactly what it reported before.  This is additive: a few
+more lines of console output and nothing else.
+
+The walk covers 0..numsurfaces rather than the model's own range, because a
+brush entity's faces live in the world's surfaces allocation and only the
+firstmodelsurface/nummodelsurfaces window is narrowed (mod_vbsp.c).  So a
+func_brush face is at least LISTED and labelled with its submodel, even where the
+ray could not stop on it -- which is the blind spot CL_LightHere_f's comment
+below already records from the other side.  Submodel faces are in model space and
+this applies no entity transform: Source brush entities are normally authored at
+origin 0 0 0, but a mover will be listed in the wrong place.  Known, and named in
+the output rather than silent.
+*/
+#define SH_MAXCAND	8
+/*
+The two tolerances are separate on purpose, and the first run is why.
+
+With a single 8-unit figure the monolith stack printed grid / mpa45 / mpa45 and
+stopped: tools/toolsskybox sits at off=-8.031, a thirty-second of a unit outside.
+Cutting the last layer off a four-layer shell is precisely the failure this
+command exists to prevent, so the DEPTH slab is 16 -- deep enough for a Source
+fake-sky shell twice over.
+
+The IN-PLANE tolerance stays tight.  Widening that one does not find more layers,
+it finds the neighbouring floor tiles of the face you are already on, and a
+listing that pads itself with the rest of the room is worse than no listing.  2
+units is enough to survive a seam without dragging in the next brush.
+*/
+#define SH_SLAB		16.0f	//how far off the hit plane a face may be and still be listed
+#define SH_EDGE		2.0f	//how far outside the face outline the crosshair may be
+
+typedef struct
+{
+	msurface_t	*surf;
+	int			index;		//into mod->surfaces
+	float		planeoff;	//signed distance of the hit point in front of the face
+	float		edgedist;	//0 == the hit point is inside the face outline
+	qboolean	planematch;	//parallel to the plane the trace actually stopped on
+	qboolean	faces;		//its front side points back along the ray
+} shcand_t;
+
+//The outward-facing plane of a bsp face.  surf->plane is the raw planes-lump
+//entry shared by both sides; SURF_PLANEBACK (gl_model.h:401) means this face is
+//the far side of it.
+static void CL_SH_FacePlane(const msurface_t *surf, vec3_t normal, float *dist)
+{
+	if (surf->flags & SURF_PLANEBACK)
+	{
+		VectorNegate(surf->plane->normal, normal);
+		*dist = -surf->plane->dist;
+	}
+	else
+	{
+		VectorCopy(surf->plane->normal, normal);
+		*dist = surf->plane->dist;
+	}
+}
+
+/*
+How far OUTSIDE the face outline the point is, measured in the face's own plane.
+0 means the crosshair is on this face rather than merely near its plane.
+
+This is the containment half of getsurface_clippointtri (pr_bgcmd.c:1132) done
+separately, for two reasons: that function is static, and it folds the
+out-of-plane distance into its answer -- which is exactly what makes a stack of
+coplanar faces indistinguishable.  Keeping the two distances apart is the whole
+point of the listing.
+*/
+static float CL_SH_EdgeDist(const msurface_t *surf, const vec3_t p)
+{
+	mesh_t *mesh = surf->mesh;
+	int j, e;
+	float best = 1e30f;
+
+	//numindexes is set at load but the arrays are filled later, on a main-thread
+	//work item.  Do not trust one without the others.
+	if (!mesh || !mesh->indexes || !mesh->xyz_array || mesh->numindexes < 3)
+		return 1e30f;
+
+	for (j = 0; j+2 < mesh->numindexes; j += 3)
+	{
+		const float *v[3];
+		vec3_t n, e1, e2, edge, side, cr;
+		float d, out = 0;
+
+		v[0] = mesh->xyz_array[mesh->indexes[j+0]];
+		v[1] = mesh->xyz_array[mesh->indexes[j+1]];
+		v[2] = mesh->xyz_array[mesh->indexes[j+2]];
+
+		VectorSubtract(v[1], v[0], e1);
+		VectorSubtract(v[2], v[0], e2);
+		CrossProduct(e1, e2, n);
+		if (!VectorNormalize(n))
+			continue;	//degenerate triangle
+
+		for (e = 0; e < 3; e++)
+		{
+			VectorSubtract(v[(e+1)%3], v[e], edge);
+			VectorSubtract(p, v[e], side);
+			CrossProduct(edge, side, cr);
+			d = DotProduct(cr, n);		//>= 0 == inside this edge
+			if (d < 0)
+			{
+				float len = VectorLength(edge);
+				d = len ? -d/len : -d;	//perpendicular distance outside the edge
+				if (d > out)
+					out = d;
+			}
+		}
+		if (out < best)
+			best = out;
+		if (best <= 0)
+			break;		//inside a triangle; nothing can beat that
+	}
+	return best;
+}
+
+//Which brush entity owns a surface index, or the world.  Submodels share the
+//world's surfaces array and differ only in their window into it.
+static model_t *CL_SH_OwnerModel(model_t *world, int surfindex)
+{
+	int i;
+	if (surfindex >= world->firstmodelsurface && surfindex < world->firstmodelsurface + world->nummodelsurfaces)
+		return world;
+	for (i = 1; i < MAX_PRECACHE_MODELS; i++)
+	{
+		model_t *m = cl.model_precache[i];
+		if (!m || m == world || m->submodelof != world || m->surfaces != world->surfaces)
+			continue;
+		if (surfindex >= m->firstmodelsurface && surfindex < m->firstmodelsurface + m->nummodelsurfaces)
+			return m;
+	}
+	return NULL;
+}
+
+//Ordering for the LISTING, which is not the same as picking a winner: faces the
+//crosshair is actually on first, then by depth along the ray, so a layered shell
+//prints in the order you would meet it.
+static qboolean CL_SH_Better(const shcand_t *a, const shcand_t *b)
+{
+	if ((a->edgedist<=0) != (b->edgedist<=0))	return (a->edgedist<=0)?true:false;
+	if (fabs(a->planeoff) != fabs(b->planeoff))	return fabs(a->planeoff) < fabs(b->planeoff);
+	return a->edgedist < b->edgedist;
+}
+
+static void CL_SH_PrintCandidates(model_t *mod, trace_t *tr, const vec3_t raydir, const char *prefix)
+{
+	shcand_t cand[SH_MAXCAND];
+	msurface_t *surf, *np;
+	int i, j, k, count = 0;
+	qboolean haveplane;
+
+	if (!mod || !mod->surfaces)
+		return;
+
+	haveplane = (tr->plane.normal[0] || tr->plane.normal[1] || tr->plane.normal[2]);
+	np = Mod_GetSurfaceNearPoint(mod, tr->endpos);
+
+	//The trace's OWN identity, which does not come from a point lookup at all:
+	//the plane it stopped on, and (Patch 264, mod_vbsp.c VBSP_LoadTexInfo) the
+	//name of the brush side that owns that plane -- previously the literal
+	//"FIXME" on every Source map.  When this name and the picked surface
+	//disagree, that disagreement is the finding.
+	Con_Printf("%s   hitplane=%.3f %.3f %.3f d=%.2f side=%s nearpoint=%s\n", prefix,
+		tr->plane.normal[0], tr->plane.normal[1], tr->plane.normal[2], tr->plane.dist,
+		(tr->surface && *tr->surface->name) ? tr->surface->name : "-",
+		(np && np->texinfo && np->texinfo->texture) ? np->texinfo->texture->name : "-");
+
+	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
+	{
+		shcand_t c;
+		vec3_t n;
+		float d, off;
+
+		if (!surf->plane || !surf->texinfo || !surf->texinfo->texture)
+			continue;
+
+		CL_SH_FacePlane(surf, n, &d);
+		off = DotProduct(tr->endpos, n) - d;
+		if (off < -SH_SLAB || off > SH_SLAB)
+			continue;			//wrong depth -- one dot product rejects nearly everything
+
+		c.edgedist = CL_SH_EdgeDist(surf, tr->endpos);
+		if (c.edgedist > SH_EDGE)
+			continue;			//not under the crosshair
+
+		c.surf = surf;
+		c.index = i;
+		c.planeoff = off;
+		c.faces = (DotProduct(n, raydir) < 0);
+		c.planematch = haveplane && (fabs(DotProduct(n, tr->plane.normal)) > 0.999);
+
+		for (j = 0; j < count; j++)
+			if (CL_SH_Better(&c, &cand[j]))
+				break;
+		if (j >= SH_MAXCAND)
+			continue;
+		if (count < SH_MAXCAND)
+			count++;
+		for (k = count-1; k > j; k--)
+			cand[k] = cand[k-1];
+		cand[j] = c;
+	}
+
+	if (!count)
+	{
+		Con_Printf("%s   cand none within %g units of the hit plane and %g of the outline"
+			" -- a displacement (whose msurface_t plane is the flat base face, not the"
+			" displaced triangle the ray hit), terrain, or a face whose mesh is not built yet\n",
+			prefix, SH_SLAB, SH_EDGE);
+		return;
+	}
+	for (i = 0; i < count; i++)
+	{
+		model_t *own = CL_SH_OwnerModel(mod, cand[i].index);
+		Con_Printf("%s   cand%i surf=%i tex=%s sub=%s off=%+.3f edge=%.2f %s match=%s%s\n",
+			prefix, i, cand[i].index,
+			cand[i].surf->texinfo->texture->name,
+			!own ? "?" : (own == mod) ? "world" : (*own->publicname ? own->publicname : own->name),
+			cand[i].planeoff, cand[i].edgedist,
+			cand[i].faces ? "front" : "back",
+			cand[i].planematch ? "yes" : "no",
+			(np == cand[i].surf) ? "  <-- REPORTED" : "");
+	}
+}
+
+/*
+ftesurf (P173): "what am I looking at", asked once rather than drawn forever.
+
+This is the trace r_showshaders has always done, lifted out of the drawing code
+so that a console command can ask the same question.  r_showshaders answers it on
+the screen, which is the right answer while you are hunting; it is the wrong one
+when you have found twenty of them and want a list, because reading a name off a
+screenshot does not survive being sorted, counted, or pasted into a bug report.
+
+The trace goes through csqc_world when the CSQC module is up, so it hits brush
+entities and models as well as the world -- which matters, because "is this
+surface part of the world or a func_brush" is usually the first question.
+*/
+static qboolean CL_TraceShaderUnderCrosshair(trace_t *trace, const char **shadername, shader_t **outshader)
+{
+#ifdef CSQC_DAT
+	extern world_t csqc_world;
+#endif
+	vec3_t targ;
+	msurface_t *surf;
+
+	*shadername = NULL;
+	*outshader = NULL;
+
+	if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+		return false;
+
+	VectorMA(r_refdef.vieworg, 8192, vpn, targ);
+#ifdef CSQC_DAT
+	if (csqc_world.progs)
+	{
+		int oldhit = csqc_world.edicts->xv->hitcontentsmaski;
+		csqc_world.edicts->xv->hitcontentsmaski = ~0;
+		*trace = World_Move(&csqc_world, r_refdef.vieworg, vec3_origin, vec3_origin, targ, MOVE_EVERYTHING, csqc_world.edicts);
+		csqc_world.edicts->xv->hitcontentsmaski = oldhit;
+	}
+	else
+#endif
+		cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, PE_FRAMESTATE, NULL, r_refdef.vieworg, targ, vec3_origin, vec3_origin, false, ~0, trace);
+
+	if (trace->fraction >= 1)
+		return false;
+
+#ifdef TERRAIN
+	if (cl.worldmodel->terrain && trace->brush_id && (*outshader = Terr_GetShader(cl.worldmodel, trace)))
+	{
+		*shadername = (*outshader)->name;
+		return true;
+	}
+#endif
+	if ((surf = Mod_GetSurfaceNearPoint(cl.worldmodel, trace->endpos)))
+	{
+		*shadername = surf->texinfo->texture->name;
+		*outshader = surf->texinfo->texture->shader;
+	}
+	else if (trace->surface && *trace->surface->name)
+		*shadername = trace->surface->name;
+	else
+		*shadername = "the unknown";
+	return true;
+}
+
+/*
+shader_here [tag] -- print what the crosshair is on, in one greppable line.
+
+Written for "I will look at all of the broken textures and tag them for you".
+Bind it with a label and every press appends a line that `-condebug` records:
+
+    bind f "shader_here noise"
+    bind g "shader_here black"
+
+so the log can be reduced with
+
+    grep shaderhere qconsole.log | sort | uniq -c
+
+The tag is free text and is echoed verbatim, so it can be anything that tells
+the two of us apart later.  Every field is key=value on one line for exactly that
+reason: a diagnostic you cannot sort is a diagnostic you read once.
+
+The shader BODY follows on continuation lines, also prefixed, because the name
+alone rarely settles it -- the program permutation and the diffusemap path are
+what say whether the material resolved to what the map asked for.
+*/
+/*
+FTESurf Patch: how a texid reads in the census below.
+
+The permutation gate tests TEXLOADED, so "present but still loading" and "not
+there" are different states that would otherwise print identically -- and one of
+them is a race and the other is the thing being diagnosed.
+*/
+//Declared here rather than in render.h so the whole patch stays a -Engine build
+//of a tree that is shared with another game; see gl_backend.c.
+extern cvar_t r_reflectcube;
+extern int r_reflectcube_used, r_reflectcube_gated;
+
+static const char *CL_ShaderHereTex(texid_t t)
+{
+	if (!t)
+		return "-";
+	if (!t->ident || !*t->ident)
+		return TEXLOADED(t) ? "?" : "~?";
+	if (!TEXLOADED(t))
+		return va("~%s", t->ident);
+	return t->ident;
+}
+
+static void CL_ShaderHere_f(void)
+{
+	trace_t trace;
+	const char *shadername;
+	shader_t *shader;
+	msurface_t *surf;
+	texnums_t *tn;
+	char fname[MAX_QPATH];
+	char *body, *line, *nl;
+	const char *tag = (Cmd_Argc() > 1) ? Cmd_Args() : "-";
+	int width = 0, height = 0;
+
+	if (!CL_TraceShaderUnderCrosshair(&trace, &shadername, &shader))
+	{
+		Con_Printf("[shaderhere] tag=%s hit=nothing\n", tag);
+		return;
+	}
+
+	if (shader)
+		R_GetShaderSizes(shader, &width, &height, false);
+
+	Con_Printf("[shaderhere] tag=%s texture=%s size=%ix%i usage=%s world=%s at=%.0f %.0f %.0f\n",
+		tag, shadername, width, height,
+		!shader ? "noshader" :
+			(shader->usageflags & SUF_LIGHTMAP) ? "lightmapped" :
+			(shader->usageflags & SUF_2D) ? "2d" : "auto",
+		cl.worldmodel->name,
+		trace.endpos[0], trace.endpos[1], trace.endpos[2]);
+
+	//FTESurf Patch 264: and everything ELSE at that point.  The line above names
+	//one surface; on a Source fake-sky shell there are four inside eight units
+	//and the interesting one is usually not the one the ray stopped on.
+	CL_SH_PrintCandidates(cl.worldmodel, &trace, vpn, "[shaderhere]");
+
+	body = shader ? Shader_GetShaderBody(shader, fname, countof(fname)) : NULL;
+
+	/*
+	FTESurf Patch: the reflection census, and it is printed HERE on purpose.
+
+	Shader_GetShaderBody calls Shader_Regenerate, so by this line the material
+	has just been rebuilt at the CURRENT cvars.  That ordering is the whole
+	diagnostic: if the body printed below carries no `reflectcube` line and
+	`cube=` still names a texture, the texnums block has outlived the script that
+	put it there -- which is Shader_Reset preserving shader->defaulttextures
+	across a regenerate, and is why r_reflectcube had to be a runtime gate rather
+	than another generation-time cvar.
+
+	Each field kills exactly one candidate route, so one line settles it:
+
+	  gen       0 = a literal .shader/.mtr on disk won over the plugin's
+	                generator, in which case no hl2_* cvar was ever consulted
+	  cube/mask THE DECISIVE PAIR -- what BE_RenderMeshProgram actually tests
+	  haspass   a literal `map $reflectcube` pass, which the permutation does
+	            not gate and which reaches the backend by a different door
+	  prog      which #ENVFROM* permutation the plugin chose, if any
+	  surfenv   surf->envmap, the per-surface baked cubemap: the ONLY way to see
+	            whether hl2_cubemaps really emptied mod->envmaps for this map,
+	            which it cannot do for a BSP that was already resident
+	  defenv    R_GetDefaultEnvmap(), i.e. whether the fallback is the skybox
+	*/
+	tn = shader ? shader->defaulttextures : NULL;
+	surf = Mod_GetSurfaceNearPoint(cl.worldmodel, trace.endpos);
+	Con_Printf("[shaderhere]   refl gen=%i cube=%s mask=%s haspass=%i prog=%s surfenv=%s defenv=%s cvar=%i\n",
+		shader && shader->generator ? 1 : 0,
+		tn ? CL_ShaderHereTex(tn->reflectcube) : "-",
+		tn ? CL_ShaderHereTex(tn->reflectmask) : "-",
+		shader && (shader->flags & SHADER_HASREFLECTCUBE) ? 1 : 0,
+		(shader && shader->prog && shader->prog->name) ? shader->prog->name : "-",
+		surf ? CL_ShaderHereTex(surf->envmap) : "-",
+		CL_ShaderHereTex(R_GetDefaultEnvmap()),
+		r_reflectcube.ival);
+
+	/*
+	The whole-frame answer, which the per-surface fields above cannot give: how
+	many batches ANYWHERE took a cubemap reflection since the last time this was
+	asked.  used=0 gated=0 means the cvar has nothing to act on here, whatever
+	the crosshair happens to be on -- and that is a finding, not a failure to
+	measure.  Zeroed on read so two presses a second apart bracket a known span.
+	*/
+	Con_Printf("[shaderhere]   refl batches since last: used=%i gated=%i\n",
+		r_reflectcube_used, r_reflectcube_gated);
+	r_reflectcube_used = r_reflectcube_gated = 0;
+
+	if (!body)
+		return;
+
+	//fname is empty for a GENERATED shader, which is every VMT-derived one --
+	//there is no .shader file it came from.  Fall back to the shader's own name
+	//so the line never reads "shader=" with nothing after it.
+	Con_Printf("[shaderhere]   shader=%s\n", *fname ? fname : shader->name);
+	for (line = body; line && *line; line = nl ? nl + 1 : NULL)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl = 0;
+		while (*line == '\r' || *line == '\t' || *line == ' ')
+			line++;
+		if (*line)
+			Con_Printf("[shaderhere]   %s\n", line);
+	}
+	Z_Free(body);
+}
+
+/*
+FTESurf Patch 250: solid_here [tag] -- WHY is the thing under the crosshair solid.
+
+shader_here answers "what material is this".  The commonest follow-up on an
+imported Source map is "why does that stop me", and until now the only way to
+answer it was to guess a cvar and reload.  The two questions have different
+answers because they read different data: rendering reads the surface, collision
+reads CONTENTS, and nothing in the VMT participates in the second one at all.
+
+Two traces along the same ray:
+  - one with ~0, which stops at the first geometry of ANY kind;
+  - one with MASK_PLAYERSOLID, which stops where a player would.
+Print both.  When they disagree, the gap IS the diagnosis: geometry is there,
+and it is deliberately not blocking you.  That is what a displacement carrying
+SURF_NOHULL_COLL looks like from the inside, and it is how Patch 250 was checked
+rather than assumed -- the smoke on surf_demise reports geom at ~0 and
+playersolid=no, and hl2_dispflags 0 flips it back to yes.
+
+Contents are printed raw AND decoded, because the raw word is what you grep for
+and the names are what you read.
+*/
+static const char *CL_SolidHereContents(unsigned int c)
+{
+	static char buf[256];
+	*buf = 0;
+	if (!c)
+		return "empty";
+	#define CBIT(bit,name) if (c & (bit)) { if (*buf) Q_strncatz(buf, "|", sizeof(buf)); Q_strncatz(buf, name, sizeof(buf)); }
+	CBIT(FTECONTENTS_SOLID,			"solid")
+	CBIT(FTECONTENTS_WINDOW,		"window")
+	CBIT(FTECONTENTS_LAVA,			"lava")
+	CBIT(FTECONTENTS_SLIME,			"slime")
+	CBIT(FTECONTENTS_WATER,			"water")
+	CBIT(FTECONTENTS_LADDER,		"ladder")
+	CBIT(FTECONTENTS_PLAYERCLIP,	"playerclip")
+	CBIT(FTECONTENTS_MONSTERCLIP,	"monsterclip")
+	CBIT(FTECONTENTS_BODY,			"body")
+	CBIT(FTECONTENTS_CORPSE,		"corpse")
+	CBIT(FTECONTENTS_SKY,			"sky")
+	CBIT(Q2CONTENTS_TRANSLUCENT,	"translucent")
+	CBIT(Q2CONTENTS_AREAPORTAL,		"areaportal")
+	#undef CBIT
+	if (!*buf)
+		Q_strncpyz(buf, "other", sizeof(buf));
+	return buf;
+}
+
+static void CL_SolidHere_f(void)
+{
+	trace_t any, solid;
+	vec3_t targ;
+	msurface_t *surf;
+	const char *tag = (Cmd_Argc() > 1) ? Cmd_Args() : "-";
+	const char *name = "-";
+
+	if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+	{
+		Con_Printf("[solidhere] tag=%s hit=noworld\n", tag);
+		return;
+	}
+
+	VectorMA(r_refdef.vieworg, 8192, vpn, targ);
+	//World model only, and deliberately: this is the BIH that carries the world
+	//brushes, the displacement triangles and the static props, which is every
+	//candidate for "an invisible wall".  Entities are a different question and a
+	//different fix (sv_entities.qc's classname list), so they are not conflated here.
+	cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, PE_FRAMESTATE, NULL, r_refdef.vieworg, targ, vec3_origin, vec3_origin, false, ~0u, &any);
+	cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, PE_FRAMESTATE, NULL, r_refdef.vieworg, targ, vec3_origin, vec3_origin, false, MASK_PLAYERSOLID, &solid);
+
+	if (any.fraction >= 1)
+	{
+		Con_Printf("[solidhere] tag=%s hit=nothing (nothing within 8192)\n", tag);
+		return;
+	}
+
+	if ((surf = Mod_GetSurfaceNearPoint(cl.worldmodel, any.endpos)))
+		name = surf->texinfo->texture->name;
+	else if (any.surface && *any.surface->name)
+		name = any.surface->name;
+
+	Con_Printf("[solidhere] tag=%s texture=%s at=%.0f %.0f %.0f dist=%.0f\n",
+		tag, name, any.endpos[0], any.endpos[1], any.endpos[2],
+		any.fraction * 8192);
+	Con_Printf("[solidhere]   geom contents=%#x [%s] surfaceflags=%#x\n",
+		any.contents, CL_SolidHereContents(any.contents),
+		any.surface ? any.surface->flags : 0);
+
+	if (solid.fraction >= 1)
+		Con_Printf("[solidhere]   playersolid=NO -- nothing blocks a player along this ray\n");
+	else if (solid.fraction > any.fraction + 0.0001)
+		Con_Printf("[solidhere]   playersolid=no here -- the first blocker is %.0f units further, at %.0f %.0f %.0f contents=%#x [%s]\n",
+			(solid.fraction - any.fraction) * 8192,
+			solid.endpos[0], solid.endpos[1], solid.endpos[2],
+			solid.contents, CL_SolidHereContents(solid.contents));
+	else
+		Con_Printf("[solidhere]   playersolid=YES contents=%#x [%s]\n",
+			solid.contents, CL_SolidHereContents(solid.contents));
+
+	//FTESurf Patch 264: the same listing shader_here gets.  It belongs here too --
+	//"why does that stop me" and "what else is stacked there" are the same
+	//question when a slab you cannot see is the thing doing the stopping.
+	CL_SH_PrintCandidates(cl.worldmodel, &any, vpn, "[solidhere]");
+}
+
+/*
+FTESurf Patch 251: light_here [tag] -- WHY is the thing under the crosshair the
+brightness it is.
+
+The report was "these textures appear fullbright" on surf_666, and every
+instrument already in the tree gave an answer that turned out to be about
+something else:
+
+  shader_here    prints shader->usageflags & SUF_LIGHTMAP -- what the material was
+                 REGISTERED as, which is set at the R_RegisterBasicShader call site
+                 and is true of every world material whether or not the compiled
+                 shader kept a lightmap.
+  r_texdiag      names surfaces DENIED a lightmap, which these were not.
+  r_lightmap 1   substitutes a lightmap-only builtin, but only inside the engine's
+                 own Shader_DefaultBSP* generators -- a plugin-generated VMT shader
+                 never reaches that code, so the cvar silently does nothing on a
+                 Source map and the screenshot looks like a null result.
+  r_fullbright   works, but only tells you the RATIO, and a surface can be bright
+                 because its lightmap is bright or because nothing multiplied it.
+
+So this prints the surface's actual lighting state, and the lightmap block's own
+decoded value, which is the one number none of the above could give.  The BSP is
+readable offline; what is not is which of those bytes this surface ended up
+pointing at, and whether it got a lightmap ATLAS PAGE to sample them from.
+
+lightmaptexturenums[0] is the decisive field: -1 means the surface samples the
+default white image and draws at full texture brightness times the overbright,
+which is exactly what "fullbright" looks like from the outside.
+
+The block mean is decoded with the same E5BGR9 packing mod_vbsp.c:2907-2911
+writes (R at bit 0, G at 9, B at 18, exponent+15 at 27, scale 2^(e-9)), and is
+gated on the model actually being in that format so a Q1 map prints nothing
+rather than nonsense.
+*/
+static void CL_LightHere_f(void)
+{
+	trace_t trace;
+	const char *shadername;
+	shader_t *shader;
+	msurface_t *surf;
+	model_t *mod;
+	const char *tag = (Cmd_Argc() > 1) ? Cmd_Args() : "-";
+	cvar_t *overbright;
+	int i, smax, tmax, n;
+
+	if (!CL_TraceShaderUnderCrosshair(&trace, &shadername, &shader))
+	{
+		Con_Printf("[lighthere] tag=%s hit=nothing\n", tag);
+		return;
+	}
+
+	mod = cl.worldmodel;
+	//Mod_GetSurfaceNearPoint searches the WORLD only, and CL_TraceShaderUnderCrosshair
+	//traces cl.worldmodel only, so the two agree -- but a brush entity (func_brush,
+	//func_illusionary, every rotating thing) is neither, and is reported as no surface
+	//rather than as the world surface behind it.  Say so, instead of printing a
+	//confident line about the wrong face.
+	surf = Mod_GetSurfaceNearPoint(mod, trace.endpos);
+
+	Con_Printf("[lighthere] tag=%s texture=%s at=%.0f %.0f %.0f world=%s\n",
+		tag, shadername, trace.endpos[0], trace.endpos[1], trace.endpos[2], mod->name);
+	Con_Printf("[lighthere]   shader=%s haslightmap=%i usage=%s prog=%s\n",
+		shader ? shader->name : "-",
+		(shader && (shader->flags & SHADER_HASLIGHTMAP)) ? 1 : 0,
+		!shader ? "noshader" :
+			(shader->usageflags & SUF_LIGHTMAP) ? "lightmapped" :
+			(shader->usageflags & SUF_2D) ? "2d" : "auto",
+		(shader && shader->prog && shader->prog->name) ? shader->prog->name : "-");
+
+	overbright = Cvar_FindVar("gl_overbright");
+	Con_Printf("[lighthere]   r_fullbright=%g gl_overbright=%s r_lightmap=%i lmfmt=%s\n",
+		r_fullbright.value, overbright?overbright->string:"?", r_lightmap.ival,
+		mod->lightmaps.fmt == LM_E5BGR9 ? "e5bgr9" :
+		mod->lightmaps.fmt == LM_RGB8 ? "rgb8" : "l8");
+
+	if (!surf)
+	{
+		Con_Printf("[lighthere]   no world surface here -- this is a brush ENTITY or a"
+			" displacement the point lookup cannot name. Nothing more to say.\n");
+		return;
+	}
+
+	Con_Printf("[lighthere]   lmpage=%i,%i,%i,%i styles=%i,%i,%i,%i samples=%s\n",
+		surf->lightmaptexturenums[0],
+#if MAXRLIGHTMAPS > 1
+		surf->lightmaptexturenums[1], surf->lightmaptexturenums[2], surf->lightmaptexturenums[3],
+#else
+		-1, -1, -1,
+#endif
+		(surf->styles[0]==INVALID_LIGHTSTYLE)?-1:surf->styles[0],
+		(MAXCPULIGHTMAPS>1 && surf->styles[1]!=INVALID_LIGHTSTYLE)?surf->styles[1]:-1,
+		(MAXCPULIGHTMAPS>2 && surf->styles[2]!=INVALID_LIGHTSTYLE)?surf->styles[2]:-1,
+		(MAXCPULIGHTMAPS>3 && surf->styles[3]!=INVALID_LIGHTSTYLE)?surf->styles[3]:-1,
+		surf->samples?"yes":"NULL");
+
+	smax = (surf->extents[0]>>surf->lmshift)+1;
+	tmax = (surf->extents[1]>>surf->lmshift)+1;
+	Con_Printf("[lighthere]   lmshift=%i extents=%ix%i luxels=%ix%i mins=%i,%i atlas=%ix%i\n",
+		surf->lmshift, surf->extents[0], surf->extents[1], smax, tmax,
+		surf->texturemins[0], surf->texturemins[1],
+		mod->lightmaps.width, mod->lightmaps.height);
+
+	for (i = 0; i < MAXCPULIGHTMAPS && i < 4; i++)
+		if (surf->styles[i] != INVALID_LIGHTSTYLE && surf->styles[i] < MAX_NET_LIGHTSTYLES)
+			Con_Printf("[lighthere]   style %i -> d_lightstylevalue %i (1.0 == 256)\n",
+				surf->styles[i], d_lightstylevalue[surf->styles[i]]);
+
+	n = smax*tmax;
+	if (surf->samples && n > 0 && mod->lightmaps.fmt == LM_E5BGR9)
+	{
+		const unsigned int *l = (const unsigned int*)surf->samples;
+		double tot = 0; float peak = 0;
+		for (i = 0; i < n; i++)
+		{
+			unsigned int w = l[i];
+			float scale = pow(2, (float)((int)((w>>27)&0x1f) - 15) - 9);
+			float r = ((w>>0)&0x1ff)*scale, g = ((w>>9)&0x1ff)*scale, b = ((w>>18)&0x1ff)*scale;
+			float lum = 0.2126f*r + 0.7152f*g + 0.0722f*b;
+			tot += lum;
+			if (lum > peak) peak = lum;
+		}
+		Con_Printf("[lighthere]   lightmap block: mean %.4f peak %.4f over %i luxels\n",
+			tot/n, peak, n);
+		Con_Printf("[lighthere]   ^-- this is what the shader samples. 1.0 is white;"
+			" a mean near 1 IS a fullbright surface and the map is at fault, a mean near 0"
+			" with a bright picture means the lightmap is not reaching the shader.\n");
+	}
+	else if (surf->samples)
+		Con_Printf("[lighthere]   lightmap block not decoded (format is not e5bgr9)\n");
+}
+
 void R_DrawNameTags(void)
 {
 	int i;
@@ -2082,56 +2788,18 @@ void R_DrawNameTags(void)
 #if defined(CSQC_DAT) || !defined(CLIENTONLY)
 	if (r_showshaders.ival && cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADED)
 	{
-#ifdef CSQC_DAT
-		extern world_t csqc_world;
-#endif
 		trace_t trace;
 		char *str;
-		vec3_t targ;
-		vec2_t scale = {12,12};
-		msurface_t *surf;
 		shader_t *shader;
 		const char *shadername;
 		char *body;
+		vec2_t scale = {12,12};
 		char fname[MAX_QPATH];
-		VectorMA(r_refdef.vieworg, 8192, vpn, targ);
-#ifdef CSQC_DAT
-		if (csqc_world.progs)
-		{
-			int oldhit = csqc_world.edicts->xv->hitcontentsmaski;
-			csqc_world.edicts->xv->hitcontentsmaski = ~0;
-			trace = World_Move(&csqc_world, r_refdef.vieworg, vec3_origin, vec3_origin, targ, MOVE_EVERYTHING, csqc_world.edicts);
-			csqc_world.edicts->xv->hitcontentsmaski = oldhit;
-		}
-		else
-#endif
-			cl.worldmodel->funcs.NativeTrace(cl.worldmodel, 0, PE_FRAMESTATE, NULL, r_refdef.vieworg, targ, vec3_origin, vec3_origin, false, ~0, &trace);
 
-		if (trace.fraction >= 1)
+		if (!CL_TraceShaderUnderCrosshair(&trace, &shadername, &shader))
 			str = "hit nothing";
 		else
 		{
-			shader = NULL;
-#ifdef TERRAIN
-			if (cl.worldmodel->terrain && trace.brush_id && (shader = Terr_GetShader(cl.worldmodel, &trace)))
-				shadername = shader->name;
-			else
-#endif
-				 if ((surf = (trace.fraction == 1)?NULL:Mod_GetSurfaceNearPoint(cl.worldmodel, trace.endpos)))
-			{
-				shadername = surf->texinfo->texture->name;
-				shader = surf->texinfo->texture->shader;
-			}
-			else if (trace.surface && *trace.surface->name)
-			{
-				shadername = trace.surface->name;
-				shader = NULL;
-			}
-			else
-			{
-				shadername = "the unknown";
-				shader = NULL;
-			}
 
 			body = shader?Shader_GetShaderBody(shader, fname, countof(fname)):NULL;
 			if (body)
@@ -2730,6 +3398,12 @@ void V_Init (void)
 	Cmd_AddCommand ("df", V_DarkFlash_f);
 	Cmd_AddCommand ("wf", V_WhiteFlash_f);
 	Cmd_AddCommand ("centerview", V_CenterView_f);
+#if defined(CSQC_DAT) || !defined(CLIENTONLY)
+	//ftesurf P173: r_showshaders, but printed once per press so it can be logged.
+	Cmd_AddCommandD ("shader_here", CL_ShaderHere_f, "shader_here [tag]\nPrints the material under the crosshair as one greppable line, plus its shader body. Bind it with a label -- bind f \"shader_here noise\" -- run with -condebug, and every press lands in qconsole.log.");
+	Cmd_AddCommandD ("solid_here", CL_SolidHere_f, "solid_here [tag]\nPrints whether the world geometry under the crosshair blocks a player, and its collision contents. Traces twice -- once hitting anything, once with the player's mask -- so \"there is geometry here but it does not stop you\" is distinguishable from \"there is nothing here\". Answers \"why is this solid\" the way shader_here answers \"what material is this\".");
+	Cmd_AddCommandD ("light_here", CL_LightHere_f, "light_here [tag]\nPrints the lighting state of the world surface under the crosshair: which lightmap atlas page it got (-1 means none, and it draws fully lit), its lightstyles, and the decoded mean/peak of its own lightmap block. Answers \"why is this fullbright\" -- a mean near 1 blames the map, a mean near 0 with a bright picture blames the renderer.");
+#endif
 
 	Cvar_Register (&v_centermove, VIEWVARS);
 	Cvar_Register (&v_centerspeed, VIEWVARS);

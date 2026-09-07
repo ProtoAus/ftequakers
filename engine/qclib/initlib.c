@@ -1439,6 +1439,22 @@ static string_t PDECL PR_AllocTempStringLen			(pubprogfuncs_t *ppf, char **str, 
 }
 void PR_RunGC (progfuncs_t *progfuncs)
 {
+	/* FTESurf diagnostic: pr_gc_threaded 2 switches the collector OFF entirely.
+
+	   surf_kitsune crashes ~5 times in 8 during CSQC_WorldLoaded with
+	   STATUS_HEAP_CORRUPTION, and gdb puts the fault inside this function.  That
+	   is not the same claim as "the collector is wrong": this is the first heavy
+	   free() traffic in the whole load, so it is also the first place an
+	   unrelated heap corruption would be DETECTED.  Turning it off separates the
+	   two -- temp strings simply leak for the life of the VM, which costs a few
+	   MB on a test run and nothing else.
+
+	   Carried on usethreadedgc rather than a new extern so that qclib's public
+	   header does not change; 2 is deliberately outside the cvar's documented
+	   0/1 and is a diagnostic value, not a shipping one. */
+	if (externs->usethreadedgc == 2)
+		return;
+
 #ifdef THREADEDGC
 	if (!prinst.gccontext)
 #endif

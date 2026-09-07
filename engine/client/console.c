@@ -62,11 +62,30 @@ static float		con_cursorspeed = 4;
 
 static cvar_t		con_numnotifylines = CVAR("con_notifylines","4");		//max lines to show
 static cvar_t		con_notifytime = CVAR("con_notifytime","3");		//seconds
+static cvar_t		con_notifyfade = CVARD("con_notifyfade","1", "Seconds that closed-console notifications spend fading after con_notifytime expires.");
+/*FTESurf Patch 242.  Two knobs the notify overlay never had.
+
+  con_notifytime_error lets a failure stay on screen long enough to read while
+  ordinary chatter still clears quickly.  0 means "same as con_notifytime", so
+  the feature costs nothing to anyone who does not want it.
+
+  con_notifystyle is the ORDER, which no notify surface in this engine has ever
+  offered: every one of them draws oldest-first, so new lines arrive at the
+  bottom and push older ones up and off.  1 puts the newest line at the top with
+  older ones sliding down beneath it -- the newest is then always in the same
+  place instead of moving as the block grows, which is what makes a burst of
+  errors readable at a glance.  2 is the classic order anchored to the BOTTOM of
+  the block, which is what CONF_NOTIFY_BOTTOM has always done for the chat
+  console and the frag tracker and which nothing could reach from a config.*/
+static cvar_t		con_notifytime_error = CVARD("con_notifytime_error","0", "Seconds an error or warning line stays on screen before fading, instead of con_notifytime. 0 uses con_notifytime.");
+static cvar_t		con_notifystyle = CVARD("con_notifystyle","0", "Notification order for the main console. 0: oldest at the top, newest at the bottom (classic). 1: newest at the top, older below it. 2: newest at the bottom, older pushed up, anchored to the bottom of the block.");
 static cvar_t		con_notify_x = CVAR("con_notify_x","0");
 static cvar_t		con_notify_y = CVAR("con_notify_y","0");
 static cvar_t		con_notify_w = CVAR("con_notify_w","1");
 static cvar_t		con_centernotify = CVAR("con_centernotify", "0");
-static cvar_t		con_displaypossibilities = CVAR("con_displaypossibilities", "1");
+//FTESurf Patch 211: no longer static -- keys.c gates the dropdown's wheel on it.
+//Same reason con_showcompletion was de-static'd below.
+cvar_t				con_displaypossibilities = CVARD("con_displaypossibilities", "1", "Show the list of possible completions above the input line.\n0: never.\n1: after Tab, as one wrapped line of links.\n2: as you type, as a scrollable vertical dropdown.");
 cvar_t				con_showcompletion = CVAR("con_showcompletion", "1");	//nettest: no longer static - keys.c gates right-arrow-accept on it
 static cvar_t		con_maxlines = CVAR("con_maxlines", "1024");
 cvar_t				cl_chatmode = CVARD("cl_chatmode", "2", "0(nq) - everything is assumed to be a console command. prefix with 'say', or just use a messagemode bind\n1(q3) - everything is assumed to be chat, unless its prefixed with a /\n2(qw) - anything explicitly recognised as a command will be used as a command, anything unrecognised will be a chat message.\n/ prefix is supported in all cases.\nctrl held when pressing enter always makes any implicit chat into team chat instead.");
@@ -81,6 +100,482 @@ static cvar_t		con_savehistory = CVARD("con_savehistory", "1", "Write/update con
 //live tail while hidden (that surface doubles as the notify overlay under con_window 1), so the
 //position is parked for the duration of the draw and restored immediately after.
 static cvar_t		con_keepscroll = CVARD("con_keepscroll", "1", "Remember the console scrollback position when you close the console, so reopening it lands where you left off. 0 = always reopen at the live end.");
+
+/*
+FTESurf Patch 211: the windowed console's chrome.
+
+Everything below replaces a bare 8, 16 or 24 that was typed into console.c AND
+independently into keys.c -- the draw and the hit test.  They have to agree or
+the title bar draws at one height and is grabbable at another, and the failure is
+silent: a bar that simply ignores you.  So the two sizes get one speller each and
+both files call it.  Same move FS_SaveSlotName, FS_RunPath and Zone_TrackSegs
+were, each after a drift bug of exactly this shape.
+
+CON_WNDBORDER stays 8 and stays a constant: it is the LEFT inset and the origin
+mousecursor[] is measured from, and neither is a thing anyone asked to resize.
+
+FTESurf Patch 213: the resize grips are no longer CON_WNDBORDER either. They are
+con_gripsize, because "the bottom right corner is easier to grab" is a question
+about a hit target and the inset is a question about layout, and folding the two
+into one constant is what made the corner an 8x8 square in the first place.
+*/
+/*
+EVERY DEFAULT BELOW IS THE PREVIOUS BEHAVIOUR, and that is not tidiness: this
+engine is shared with quakers, and `con_window` defaults to 1 THERE TOO -- so
+the windowed console is not FTESurf-only and a new default here would change a
+game whose owner did not ask for it. FTESurf opts in from its own cfg/default.cfg.
+*/
+static void QDECL con_window_rect_cb(cvar_t *var, char *oldval);
+static cvar_t		con_window_rect = CVARFCD("con_window_rect", "0 0 640 480", 0, con_window_rect_cb, "Where the console window sits: x y width height, in virtual pixels. Setting it moves the window immediately, so a value in a config applies on the launch it is read.");
+static cvar_t		con_window_titlepad = CVARD("con_window_titlepad", "0", "Padding above and below the console window's title text, in virtual pixels. The title bar is the drag handle, so this is how much bigger than the text it is.");
+static cvar_t		con_scrollwidth = CVARD("con_scrollwidth", "8", "Width of the console window's scrollbar, in virtual pixels.");
+static cvar_t		con_colour_back = CVARD("con_colour_back", "0 0.05 0.1", "Console window background colour, \"r g b\" from 0 to 1. The default is the stock navy.");
+static cvar_t		con_colour_accent = CVARD("con_colour_accent", "0.55 0.7 0.95", "Console window accent colour, \"r g b\" from 0 to 1: the scrollbar thumb, its track, and the resize-edge highlights are all derived from this. The default is the stock thumb colour.");
+static cvar_t		con_completionrows = CVARD("con_completionrows", "12", "How many entries of the tab-completion dropdown are shown at once. The rest scroll.");
+static cvar_t		con_completiondown = CVARD("con_completiondown", "0", "Where the tab-completion list is drawn.\n0: above the input line, a drop-UP (default).\n1: below it, inside the console. The console is drawn from the bottom up, so the list claims the bottom band and the input line moves up above it -- the field shifts as the match count changes.\n2: below it, as a floating popup drawn outside the console after everything else. The input line never moves. It flips above the field when there is no room below.");
+static cvar_t		con_gripsize = CVARD("con_gripsize", "8", "Width of the console window's right resize grip and height of its bottom one, in virtual pixels. The bottom-right corner is both at once, so this squares: 16 makes that corner four times the target 8 does. The left grip is deliberately not affected.");
+
+/*
+FTESurf Patch 211: a pastel dark-mode text palette.
+
+consolecolours[] (common/common.c) is the CGA RGBI table -- fully saturated
+primaries designed for a black CRT.  `^4` blue is {0.33,0.33,1} and `^1` red is
+{1,0.33,0.33}: on a dark ground they glare, and their dark halves (indices 0-7,
+reached by ^& codes and by CON_HALFALPHA) are close to unreadable.
+
+WHAT THIS TOUCHES, because it is wider than the console and must be said: the
+table is read by gl_font.c for EVERY ^N glyph the engine draws -- the console,
+chat, Con_Printf, Draw_FunString -- and by m_items.c for the built-in menus.  So
+the timer's ^3practice^7 and every console line change with it.  That is what a
+dark mode is; `con_palette 0` puts all of it back in one command, and nothing
+drawn from an explicit colour vector (most of the FTESurf HUD) is affected at all.
+
+Index 0 is deliberately left pure black: it is used as a BACKGROUND colour, not
+as ink, and lifting it would put a grey box behind ^0 text.
+*/
+static const consolecolours_t con_palette_cga[MAXCONCOLOURS] =
+{	//the stock table, kept here so con_palette 0 restores it exactly rather than
+	//requiring a restart
+	{0,    0,    0   }, {0,    0,    0.67}, {0,    0.67, 0   }, {0,    0.67, 0.67},
+	{0.67, 0,    0   }, {0.67, 0,    0.67}, {0.67, 0.33, 0   }, {0.67, 0.67, 0.67},
+	{0.33, 0.33, 0.33}, {0.33, 0.33, 1   }, {0.33, 1,    0.33}, {0.33, 1,    1   },
+	{1,    0.33, 0.33}, {1,    0.33, 1   }, {1,    1,    0.33}, {1,    1,    1   }
+};
+static const consolecolours_t con_palette_pastel[MAXCONCOLOURS] =
+{
+	{0.00, 0.00, 0.00},	// 0  black -- a background, left alone
+	{0.24, 0.31, 0.48},	// 1  dark blue
+	{0.27, 0.42, 0.31},	// 2  dark green
+	{0.25, 0.42, 0.45},	// 3  dark cyan
+	{0.48, 0.28, 0.30},	// 4  dark red
+	{0.42, 0.29, 0.47},	// 5  dark magenta
+	{0.46, 0.37, 0.26},	// 6  brown
+	{0.55, 0.57, 0.62},	// 7  grey        -- this is ^9
+	{0.36, 0.38, 0.43},	// 8  dark grey
+	{0.55, 0.70, 0.95},	// 9  blue        -- ^4
+	{0.62, 0.84, 0.62},	// 10 green       -- ^2
+	{0.58, 0.84, 0.87},	// 11 cyan        -- ^5
+	{0.94, 0.60, 0.60},	// 12 red         -- ^1
+	{0.87, 0.66, 0.92},	// 13 magenta     -- ^6
+	{0.94, 0.85, 0.60},	// 14 yellow      -- ^3
+	{0.88, 0.89, 0.92}	// 15 white       -- ^7, softened off pure white
+};
+static void QDECL con_palette_cb(cvar_t *var, char *oldval)
+{
+	memcpy(consolecolours, var->ival ? con_palette_pastel : con_palette_cga, sizeof(consolecolours));
+}
+static cvar_t		con_palette = CVARFCD("con_palette", "0", CVAR_ARCHIVE, con_palette_cb, "Colour table for ^-codes, everywhere the engine draws them.\n0: the stock CGA palette (default).\n1: a desaturated pastel set intended for a dark background.");
+
+//CON_WNDBORDER and these two accessors are declared in common/console.h, because
+//keys.c hit-tests against exactly the numbers this file draws with.
+
+//FTESurf Patch 211: the title bar's height. Derived from the font it is drawn in
+//(font_console -- con_textfont at con_textsize) rather than typed, so it stays
+//right at any con_textsize. Font_CharVHeight takes its font explicitly, unlike
+//Font_CharHeight, whose global is not bound this early in Con_DrawConsole.
+int Con_WindowTitleHeight(void)
+{
+	int h = Font_CharVHeight(font_console) + 2*(int)con_window_titlepad.value;
+	if (h < 8)
+		h = 8;	//the stock height is the floor; below it the X is unclickable
+	return h;
+}
+
+//FTESurf Patch 211: the scrollbar strip on the right, inside the resize grip.
+int Con_WindowScrollWidth(void)
+{
+	int w = con_scrollwidth.ival;
+	if (w < 4)
+		w = 4;
+	if (w > 64)
+		w = 64;
+	return w;
+}
+
+/*
+FTESurf Patch 213: the right and bottom resize grips.
+
+The scrollbar moves inward with this rather than being eaten by it. The two are
+adjacent -- grip at the window's edge, scrollbar just inside it -- and today they
+do not overlap only because both happen to be 8. Growing the grip on its own
+would have taken half of the scrollbar's clickable width, which is the thing the
+LAST build widened on request; so the scrollbar's x, the text width and the text
+region's bottom are all derived from this, and the invariant "the grip is outside
+everything else" is what is actually being kept.
+
+The floor is 4 rather than 0: a zero-width grip is a window that cannot be
+resized at all, with nothing on screen to say why.
+*/
+int Con_WindowGripSize(void)
+{
+	int g = con_gripsize.ival;
+	if (g < 4)
+		g = 4;
+	if (g > 64)
+		g = 64;
+	return g;
+}
+
+/*
+FTESurf Patch 211: the completion dropdown is a CHAIN of conline_t, one per row,
+linked by ->older -- the same structure Con_Footerf builds for a multi-line
+footer, and the one Con_DrawConsoleLines already knows how to walk.
+
+Both helpers exist because the chain has two owners: the draw rebuilds it every
+frame, and Con_Destroy/Con_Finit have to drop it. Before this it was a single
+allocation and a bare Z_Free; freeing only the head now would leak the rest.
+*/
+extern int con_commandmatch;
+int con_completionscroll;	//first entry shown in the dropdown
+
+/*
+FTESurf Patch 226: con_completiondown 2 -- the list as a FLOATING popup.
+
+    "the real dream is to have it part of an actual drop down, separate from the
+     console, so that the console text enter bar never has to shift"
+
+Patch 215 could not do that and said why: Con_DrawInput is bottom-anchored, so the
+only way to put the list BELOW the input line was to give it the bottom band and
+move the input row up above it -- and a console window is scissored to its own
+rect (Con_DrawConsole's BE_Scissor around Con_DrawOneConsole), so a list hanging
+below the window would be clipped rather than drawn over the game.
+
+Both halves of that are still true.  What was missed is that the scissor is
+released again a few lines later, and the console has nothing left to draw by
+then: a popup emitted AFTER the console's own draw is unclipped and on top, which
+is what every real combobox does.  So the list stops being part of the console's
+vertical budget entirely.  Con_DrawInput records where the input line ended up
+and how many rows are waiting; Con_DrawCompletionPopup paints them.
+
+The input row's y is then fixed at exactly the one place that has always set it
+(y -= Font_CharHeight() below), and no longer depends on the match count.
+*/
+static console_t	*con_popupcon;		//whose list is pending this frame. NULL = none.
+static int			con_popuprows;		//conline_t nodes in the chain, the ordinal row included
+static int			con_popupl;			//the input line's left, right and BOTTOM, in physical
+static int			con_popupr;			//font space -- the same space Con_DrawConsoleLines and
+static int			con_popupb;			//Font_BeginString hand back.
+/*The window scissor to put back afterwards. Con_DrawCompletionPopup is called
+  from inside Con_DrawOneConsole -- see the essay on it for why it cannot simply
+  be called at the end of Con_DrawConsole -- so it has to lift and restore the
+  clip itself. BE_Scissor is a flat set with no stack, hence keeping a copy.*/
+static srect_t		con_popupclip;
+static qboolean		con_popupclipped;
+/*
+Where the popup actually painted, in VIRTUAL pixels, so the con_mouseover test
+can route a click that lands on it.
+
+Deliberately NOT cleared per frame with the rest: that test runs at the top of
+Con_DrawConsole, before this frame's Con_DrawInput has recorded anything, so it
+is always answering with the last frame that painted. A mouse does not teleport,
+and the alternative is laying the popup out twice per frame to ask where it will
+be. Cleared by Con_DrawCompletionPopup itself on the first frame it declines.
+*/
+static console_t	*con_popupshown;
+static float		con_popuphit[4];	//x, y, w, h
+
+static void Con_FreeCompletion(console_t *con)
+{
+	conline_t *l;
+	qboolean dropsselection = false;
+
+	/*These rows are rebuilt every frame. A drag-selection can point at one of
+	  them, so invalidate that selection before its node is freed rather than
+	  leaving Con_CopyConsole/the next draw with a dangling line pointer.*/
+	for (l = con->completionline; l; l = l->older)
+	{
+		if (con->selstartline == l || con->selendline == l)
+			dropsselection = true;
+		if (con->userline == l)
+			con->userline = NULL;
+		if (con->highlightline == l)
+			con->highlightline = NULL;
+	}
+	if (dropsselection)
+	{
+		con->selstartline = con->selendline = NULL;
+		con->flags &= ~(CONF_KEEPSELECTION|CONF_BACKSELECTION);
+	}
+
+	while (con->completionline)
+	{
+		l = con->completionline;
+		con->completionline = l->older;
+		Z_Free(l);
+	}
+}
+
+/*Make arbitrary cvar text safe to place inside a parsed console fun-string.
+  Carets introduce native markup and &c can introduce legacy colour markup, so
+  both are encoded without changing what is displayed. Controls and quoting are
+  made visible so one value cannot manufacture extra rows or ambiguous quotes.*/
+const char *Con_EscapeConsoleMarkup(const char *text, char *out, size_t outsize)
+{
+	char *dst = out;
+	char *last;
+
+	if (!outsize)
+		return out;
+	last = out + outsize - 1;
+	while (*text && dst < last)
+	{
+		const char *escaped = NULL;
+		char control[5];
+		unsigned char ch = (unsigned char)*text++;
+
+		switch (ch)
+		{
+		case '^':  escaped = "^^"; break;
+		case '&':  escaped = "^U0026"; break;
+		case '\\': escaped = "\\\\"; break;
+		case '"':  escaped = "\\\""; break;
+		case '\n': escaped = "\\n"; break;
+		case '\r': escaped = "\\r"; break;
+		case '\t': escaped = "\\t"; break;
+		default:
+			if (ch < 32 || ch == 127)
+			{
+				Q_snprintfz(control, sizeof(control), "\\x%02x", ch);
+				escaped = control;
+			}
+			else
+				*dst++ = ch;
+			break;
+		}
+
+		if (escaped)
+		{
+			size_t escapedlen = strlen(escaped);
+			/*Never truncate inside ^U0026: the fun-string parser quite reasonably
+			  expects all six bytes once it sees ^U, and a partial escape at the
+			  buffer edge would make it inspect beyond this string's terminator.*/
+			if ((size_t)(last-dst) < escapedlen)
+				break;
+			memcpy(dst, escaped, escapedlen);
+			dst += escapedlen;
+		}
+	}
+	*dst = 0;
+	return out;
+}
+
+//push a row onto the chain. The chain head is drawn at the BOTTOM, so the LAST
+//row pushed is the one nearest the bottom -- see Con_BuildCompletion.
+static void Con_PushCompletion(console_t *con, const char *text)
+{
+	conchar_t marked[512], *markedend;
+	conline_t *nl;
+	size_t len;
+
+	/* Completion rows are already ephemeral console text.  Parse colour markup
+	 * now instead of preserving it, otherwise strings such as "^9...^7" are
+	 * rendered literally in the dropdown.  FORCEUTF8 retains the intended text
+	 * decoding while still consuming markup and preserving clickable links. */
+	markedend = COM_ParseFunString(COLOR_GREEN<<CON_FGSHIFT, text, marked, sizeof(marked), PFS_FORCEUTF8);
+	len = markedend - marked;
+
+	nl = Z_Malloc(sizeof(*nl) + len*sizeof(conchar_t));
+	nl->length = len;
+	nl->older = con->completionline;
+	if (nl->older)
+		nl->older->newer = nl;
+	memcpy((conchar_t*)(nl+1), marked, len*sizeof(conchar_t));
+	con->completionline = nl;
+}
+
+/*
+FTESurf Patch 215: build the dropdown's rows.
+
+Split out of Con_DrawInput's tail so that con_completiondown can draw the list
+BEFORE the input line -- i.e. in the band the input line then sits above --
+without a second copy of this loop drifting away from the first.
+
+THE ROW ORDER WAS BACKWARDS, and that is the reported bug:
+
+	"the drop up up/down arrow keys moves the selection highlight in the wrong
+	 direction"
+
+Con_DrawConsoleLines draws the line it is HANDED at the y it is given and then
+walks ->older UPWARD (it does `y -= Font_CharHeight()` before each row), so the
+chain HEAD is the BOTTOM row and the deepest link is the TOP one.  Con_PushCompletion
+pushes onto the head.  Patch 211 therefore pushed backwards -- `for (i = last-1;
+i >= first; i--)` -- under a comment claiming that made entry[first] "deepest,
+i.e. at the top".  It did the exact opposite: entry[first] was pushed LAST, so it
+became the head, so it was drawn at the BOTTOM, and the list read in DESCENDING
+index order.
+
+Up decrements con_commandmatch (Key_CompletionNav), so Up walked toward index 1,
+which was at the bottom of the screen.  Up moved the highlight DOWN.  Pushing
+FORWARDS is the whole fix, and it is right for both layouts.
+
+`maxrows` is the caller's height budget, and it is new.  Patch 211 passed top=0
+to Con_DrawConsoleLines, so con_completionrows 64 in a short window drew the list
+straight out through the top of the console.  That was survivable while the list
+sat above the input line; with con_completiondown it would also shove the input
+line off the top, so the row count is now bounded by the space that actually
+exists.
+
+It is a budget in ENTRIES against a limit in screen rows, and those are not the
+same thing: Con_DrawConsoleLines runs each conline_t through Font_LineBreaks and
+a name too long for the console wraps onto several rows.  The budget is therefore
+advisory, and the callers do not rely on it alone -- both pass a real `top` to
+Con_DrawConsoleLines, which stops rather than drawing past it.
+
+Returns the number of rows pushed; 0 means there is nothing to draw.
+*/
+static int Con_BuildCompletion(console_t *con, const char *text, int maxrows)
+{
+	cmd_completion_t *c;
+	int cmdstart = (text[0] == '/')?1:0;
+	int rows = con_completionrows.ival;
+	int first, last, i, n = 0;
+	size_t total;
+	qboolean showstatus = (maxrows != 1);
+
+	Con_FreeCompletion(con);
+
+	c = Cmd_Complete(text+cmdstart, true);
+	if (!c || !c->num)
+		return 0;
+
+	if (rows < 1)
+		rows = 1;
+	if (rows > 64)
+		rows = 64;
+	/*The ordinal is a real row too. Keep it inside the caller's height budget.*/
+	if (maxrows > 1 && rows > maxrows-1)
+		rows = maxrows-1;
+	else if (maxrows == 1 && rows > 1)
+		rows = 1;
+
+	/*
+	Scroll the window to the highlight, THEN bound the window to the list.
+
+	Patch 211 did those two in the opposite order, and the order is the whole bug:
+	the highlight clamp does not know how long the list is, so it could leave
+	`first` past the end.  That needs con_commandmatch > c->num, which is reachable
+	because the number is set against a slightly different string from the one the
+	draw completes -- CompleteCommand and Key_UpdateCompletionDesc strip leading
+	whitespace and a leading '\\' (keys.c), while the draw strips only a leading
+	'/'.  So type a space and then a command, and with num 0 and match 13 you get
+	first 1, last 0: the row loop runs zero times and `extra` comes out
+	0 + 0 - (0-1) = 1, so the dropdown draws as a single phantom "1 more" with no
+	rows and no highlight.  Stable, every frame, because both clamps re-fight it.
+
+	Bounding to the list last makes 0 <= first <= max(0, num-rows) unconditionally,
+	so last > first whenever there is anything to show.
+	*/
+	if (con_commandmatch)
+	{
+		if (con_commandmatch-1 < con_completionscroll)
+			con_completionscroll = con_commandmatch-1;
+		if (con_commandmatch-1 >= con_completionscroll+rows)
+			con_completionscroll = con_commandmatch-rows;
+	}
+	if (con_completionscroll > (int)c->num - rows)
+		con_completionscroll = (int)c->num - rows;
+	if (con_completionscroll < 0)
+		con_completionscroll = 0;
+
+	first = con_completionscroll;
+	last = first + rows;
+	if (last > (int)c->num)
+		last = c->num;
+	total = c->num + c->extra;
+
+	for (i = first; i < last; i++, n++)
+	{
+		const char *choice;
+		cvar_t *var;
+		//note: if cl_chatmode is 0, then we shouldn't show the leading /, however that is how the console link stuff recognises it as command text, so we always display it.
+		int col = (con_commandmatch == i+1)?3:2;
+		choice = c->completions[i].repl ? c->completions[i].repl : c->completions[i].text;
+		var = Cvar_FindVar(choice);
+		if (var)
+		{
+			const char *def = var->defaultstr ? var->defaultstr : (var->enginevalue ? var->enginevalue : var->string);
+			const char *cur = var->latched_string ? var->latched_string : var->string;
+			char safedef[1024], safecur[1024];
+			if (var->flags & CVAR_NOUNSAFEEXPAND)
+			{
+				/*Never turn completion into a password/key disclosure surface.*/
+				if (strcmp(def, cur))
+					Con_PushCompletion(con, va("^[^%i/%s^]  ^3<value hidden>^7  ^9(default hidden)^7", col, c->completions[i].text));
+				else
+					Con_PushCompletion(con, va("^[^%i/%s^]  ^9<value hidden> (default)^7", col, c->completions[i].text));
+			}
+			else
+			{
+				Con_EscapeConsoleMarkup(def, safedef, sizeof(safedef));
+				Con_EscapeConsoleMarkup(cur, safecur, sizeof(safecur));
+				if (strcmp(def, cur))
+					Con_PushCompletion(con, va("^[^%i/%s^]  ^3\"%s\"^7  ^9(default \"%s\")^7", col, c->completions[i].text, safecur, safedef));
+				else
+					Con_PushCompletion(con, va("^[^%i/%s^]  ^9\"%s\" (default)^7", col, c->completions[i].text, safedef));
+			}
+		}
+		else
+			Con_PushCompletion(con, va("^[^%i/%s^]", col, c->completions[i].text));
+	}
+
+	/*
+	Always put one status row at the list's far end.  "N more" mixed viewport
+	overflow with Cmd_Complete's hard-cap overflow, so a short visible list could
+	report a startling number with no indication of which row the arrows had
+	selected.  The ordinal is stable as the viewport scrolls; before navigation,
+	the same slot reports the total without pretending that anything is selected.
+	*/
+	if (showstatus)
+	{
+		if (con_commandmatch > 0 && con_commandmatch <= (int)c->num)
+		{
+			if (c->extra)
+				Con_PushCompletion(con, va("^9%i of %u selectable (%u matches)^7", con_commandmatch, (unsigned)c->num, (unsigned)total)), n++;
+			else
+				Con_PushCompletion(con, va("^9%i of %u^7", con_commandmatch, (unsigned)total)), n++;
+		}
+		else if (c->extra)
+			Con_PushCompletion(con, va("^9%u selectable (%u matches)^7", (unsigned)c->num, (unsigned)total)), n++;
+		else
+			Con_PushCompletion(con, va("^9%u match%s^7", (unsigned)total, total == 1 ? "" : "es")), n++;
+	}
+
+	return n;
+}
+
+//FTESurf Patch 211: "r g b" -> three floats, falling back to the given default
+//rather than to black, because a typo'd colour cvar that blanks the console is a
+//trap you cannot type your way out of.
+static void Con_ParseColour(cvar_t *var, float *out, float dr, float dg, float db)
+{
+	if (sscanf(var->string, " %f %f %f", out+0, out+1, out+2) != 3)
+	{
+		out[0] = dr;
+		out[1] = dg;
+		out[2] = db;
+	}
+}
+
 extern cvar_t log_developer;
 
 void con_window_cb(cvar_t *var, char *oldval)
@@ -90,7 +585,13 @@ void con_window_cb(cvar_t *var, char *oldval)
 
 	if (var->ival)
 	{
-		con_main->flags &= ~CONF_NOTIFY;
+		/*
+		FTESurf: a floating console and its in-game notifications are two different
+		surfaces.  Keep CONF_NOTIFY so a closed window uses Con_DrawNotifyOne at the
+		top-left instead of fading the entire window at its last dragged position.
+		Con_DrawNotify suppresses this flag again while the main window is open.
+		*/
+		con_main->flags |= CONF_NOTIFY;
 		if (!(con_main->flags & CONF_ISWINDOW))
 		{
 			con_main->flags |= CONF_ISWINDOW;
@@ -111,7 +612,12 @@ void con_window_cb(cvar_t *var, char *oldval)
 }
 static cvar_t con_window = CVARCD("con_window", "0", con_window_cb, "States whether the console should be a floating window as in source engine games, or a top-of-the-screen-only thing.");
 
-#define	NUM_CON_TIMES 24
+/*FTESurf Patch 242: 24 -> 64.  "I want to see the full list of errors if they
+  appear and I don't have the console open" -- a failing map load prints well
+  over twenty lines, and the old ceiling silently clipped con_notifylines to 24
+  with no indication that it had.  It sizes three arrays local to
+  Con_DrawNotifyOne, so the cost is about 1.3KB of stack in one function.*/
+#define	NUM_CON_TIMES 64
 
 qboolean	con_initialized;
 
@@ -164,9 +670,7 @@ void Con_Destroy (console_t *con)
 	con->display = con->current = con->oldest = NULL;
 
 	Con_Footerf(con, false, "");
-	if (con->completionline)
-		Z_Free(con->completionline);
-	con->completionline = NULL;
+	Con_FreeCompletion(con);	//FTESurf Patch 211: it is a chain now, not one line
 
 	for (link = &con_head; *link; link = &(*link)->next)
 	{
@@ -276,6 +780,34 @@ static qboolean Con_Main_BlockClose(console_t *con, qboolean force)
 	con_main = NULL;	//its forced to die. and don't forget it.
 	return true;
 }
+/*
+FTESurf Patch 213: ONE place that turns con_window_rect into a window rect.
+
+The NULL guard is not defensive padding, it is the bug this patch fixes: .string
+is NULL until Cvar_Register runs, and Con_GetMain is reached before that (and can
+be reached earlier still, by any Con_Printf during startup). See the essay in
+Con_GetMain for what that cost.
+*/
+static void Con_ApplyWindowRect(console_t *w)
+{
+	float x, y, cw, ch;
+	if (!w || !con_window_rect.string)
+		return;
+	if (sscanf(con_window_rect.string, " %f %f %f %f", &x, &y, &cw, &ch) != 4)
+		return;
+	if (cw < 64 || ch < 64)
+		return;		//Con_DrawConsole clamps a window bigger than the screen, but a
+					//zero-sized one never becomes visible enough to fix by hand
+	w->wnd_x = x;
+	w->wnd_y = y;
+	w->wnd_w = cw;
+	w->wnd_h = ch;
+}
+static void QDECL con_window_rect_cb(cvar_t *var, char *oldval)
+{	//a value arriving with the config reaches a window that already exists
+	Con_ApplyWindowRect(con_main);
+}
+
 console_t *Con_GetMain(void)
 {
 	if (!con_main)
@@ -284,12 +816,43 @@ console_t *Con_GetMain(void)
 
 		con_main->linebuffered = Con_ExecuteLine;
 		con_main->commandcompletion = true;
-		con_main->wnd_w = 640;
-		con_main->wnd_h = 480;
+		/*
+		FTESurf Patch 211: where the window first appears, from a cvar.
+
+		Was 640x480 at 0,0 -- pinned to the top-left corner with no gap.  A cvar
+		rather than four new constants because nothing persists wnd_*: the geometry
+		resets on every launch, so re-tuning it must not mean re-tuning the engine.
+
+		PATCH 213 -- THIS WAS BROKEN, AND IT WAS BROKEN IN THE DIRECTION THAT LOOKS
+		LIKE IT WORKS.  Patch 211's comment here claimed an unregistered cvar_t
+		"still carries its compile-time default" in .string.  It does not: cvar.h's
+		CVARAFCD initialiser sets .string to NULL and puts the default in
+		.enginevalue, and Con_Init called Con_GetMain THIRTY LINES BEFORE it
+		registered this cvar.  So the sscanf ran on a null pointer, failed (or
+		worse), and the hardcoded fallback below it won -- which happened to be
+		exactly the geometry FTESurf wanted, so the feature looked correct.
+
+		Two things were actually wrong.  quakers, which never sets this cvar and
+		whose engine default is "0 0 640 480" precisely so its console does not
+		move, got the 64,64 960x640 window anyway -- the exact bisection failure the
+		Build 27 regression existed to catch, and it slipped through because that
+		run checked the cvar's VALUE and not the window's position.  And FTESurf's
+		own default.cfg value never reached here either, since cfg/default.cfg is
+		exec'd long after Con_Init; it only agreed by coincidence.
+
+		So: registration moved above this call (Con_Init), the parse is guarded, the
+		fallback is the ENGINE default rather than FTESurf's numbers, and a callback
+		below applies a later `set` -- which is the only way a value that arrives
+		with the config can reach a window that already exists.
+		*/
 		con_main->wnd_x = 0;
 		con_main->wnd_y = 0;
+		con_main->wnd_w = 640;
+		con_main->wnd_h = 480;
+		Con_ApplyWindowRect(con_main);
 		con_main->close = Con_Main_BlockClose;
-		Q_strncpyz(con_main->title, "MAIN", sizeof(con_main->title));
+		//FTESurf Patch 211: this string is the window's title bar. It said "MAIN".
+		Q_strncpyz(con_main->title, "Console", sizeof(con_main->title));
 		Q_strncpyz(con_main->prompt, "]", sizeof(con_main->prompt));
 
 		Cvar_ForceCallback(&con_window);
@@ -850,6 +1413,10 @@ void Con_Init (void)
 	con_current = NULL;
 	con_head = NULL;
 
+	//FTESurf Patch 213: registered BEFORE the console that reads it is created.
+	//Patch 211 had this the other way round and the read landed on a NULL .string.
+	Cvar_Register (&con_window_rect, "Console controls");
+
 	con_main = Con_GetMain();
 
 	con_initialized = true;
@@ -860,6 +1427,9 @@ void Con_Init (void)
 //
 	Cvar_Register (&con_centernotify, "Console controls");
 	Cvar_Register (&con_notifytime, "Console controls");
+	Cvar_Register (&con_notifytime_error, "Console controls");	//FTESurf Patch 242
+	Cvar_Register (&con_notifystyle, "Console controls");		//FTESurf Patch 242
+	Cvar_Register (&con_notifyfade, "Console controls");
 	Cvar_Register (&con_notify_x, "Console controls");
 	Cvar_Register (&con_notify_y, "Console controls");
 	Cvar_Register (&con_notify_w, "Console controls");
@@ -877,6 +1447,16 @@ void Con_Init (void)
 	Cvar_Register (&con_window, "Console controls");
 	Cvar_Register (&con_savehistory, "Console controls");
 	Cvar_Register (&con_keepscroll, "Console controls");
+	//con_window_rect is registered at the TOP of this function -- Patch 213.
+	Cvar_Register (&con_window_titlepad, "Console controls");
+	Cvar_Register (&con_scrollwidth, "Console controls");
+	Cvar_Register (&con_colour_back, "Console controls");
+	Cvar_Register (&con_colour_accent, "Console controls");
+	Cvar_Register (&con_completionrows, "Console controls");
+	Cvar_Register (&con_completiondown, "Console controls");	//FTESurf Patch 215
+	Cvar_Register (&con_gripsize, "Console controls");
+	Cvar_Register (&con_palette, "Console controls");
+	Cvar_ForceCallback(&con_palette);	//the table is only written by the callback
 	Cvar_ForceCallback(&con_window);
 
 	Cmd_AddCommand ("toggleconsole", Con_ToggleConsole_f);
@@ -988,6 +1568,26 @@ void Con_PrintCon (console_t *con, const char *txt, unsigned int parseflags)
 	else
 		maxlines = con_maxlines.ival;
 
+	/*FTESurf Patch 242: does this text announce itself as a failure?
+
+	  There is no print LEVEL in this engine -- Con_Printf takes a string and
+	  nothing else -- but there is a convention, and it is universal: an error
+	  begins with CON_ERROR and a warning with CON_WARNING, which are the colour
+	  markers "^&C0" and "^&E0".  438 call sites already spell themselves that
+	  way, so reading the prefix here marks every one of them without touching a
+	  single one, and without inventing a second way to say the same thing.
+
+	  Tested on the RAW text rather than after COM_ParseFunString, because after
+	  parsing the marker has become colour bits on the first character and
+	  telling "this is an error" from "this line happens to start red" would
+	  need a colour comparison that any theme change could break.
+
+	  Sticky on the console rather than a local, because Con_Printf need not end
+	  in a newline: the flag has to survive to whichever call finally completes
+	  the line, and is cleared there.*/
+	if (!strncmp(txt, CON_ERROR, 4) || !strncmp(txt, CON_WARNING, 4))
+		con->pendingerror = true;
+
 	COM_ParseFunString(con->defaultcharbits, txt, expanded, sizeof(expanded), parseflags);
 
 	c = expanded;
@@ -1025,6 +1625,13 @@ void Con_PrintCon (console_t *con, const char *txt, unsigned int parseflags)
 			con->linecount++;
 			con->current->time = realtime;
 			con->current->flags = 0;
+			//FTESurf Patch 242: the line is finished, so the pending mark
+			//belongs to it and to nothing after it.
+			if (con->pendingerror)
+			{
+				con->current->flags |= CONL_ERROR;
+				con->pendingerror = false;
+			}
 			if (parseflags & PFS_CENTERED)
 				con->current->flags |= CONL_CENTERED;
 			if (parseflags & PFS_NONOTIFY)
@@ -1477,9 +2084,10 @@ y is the bottom of the input
 return value is the top of the region
 ================
 */
-int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y, qboolean selactive, int selsx, int selex, int selsy, int seley)
+int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y, int top, qboolean selactive, int selsx, int selex, int selsy, int seley)
 {
 	int		i;
+	int		drewdown = 0;	//FTESurf Patch 215: rows the drop-DOWN already drew below the input line
 	int lhs, rhs;
 	int p;
 	unsigned char	*text, *fname = NULL;
@@ -1519,6 +2127,101 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		return y;		// don't draw anything (always draw if not active)
 
 	text = key_lines[edit_line];
+
+	/*
+	FTESurf Patch 215: the drop-DOWN.
+
+		"is it possible to display the option preview below the typing field?
+		 source has it be a drop down, not a drop up?"
+
+	Con_DrawInput is bottom-anchored: the caller hands it the BOTTOM of the console
+	text region and everything it draws walks upward from there -- input line
+	first, then the footer, then the completion list, and whatever y it returns is
+	where the scrollback then starts. So there is no space "below the input line"
+	to draw into; the input line IS the bottom.
+
+	Drawing the list outside the console instead -- Source's true overlay -- is not
+	available either: a console window is scissored to its own rect, so anything
+	below the bottom edge is clipped away rather than drawn over the game.
+
+	So "below the input line" is implemented as: the list claims the bottom band,
+	and the input line moves up to sit directly above it. y+Font_CharHeight() is
+	the bottom the caller passed in, before the line above reserved the input row.
+	Con_DrawConsoleLines returns the top of what it drew, so the input row is one
+	character height above that -- no row counting, and a row that WRAPS in a
+	narrow window is accounted for for free.
+
+	Consequence worth stating rather than burying: the input line moves as the
+	match count changes. That is inherent to doing it in HERE -- a bottom-anchored
+	console can either pin the field or put the list under it, not both. Patch 226
+	adds mode 2, which pins the field by taking the list out of this function's
+	vertical budget entirely; see con_popupcon and Con_DrawCompletionPopup.
+	*/
+	if (con->commandcompletion && con_displaypossibilities.ival >= 2 && con_displaypossibilities.value &&
+		text[0] && !(text[0] == '/' && !text[1]))
+	{
+		if (con_completiondown.ival == 2)
+		{
+			/*
+			FTESurf Patch 226: build the chain, record where the field is, draw
+			nothing, and DO NOT TOUCH y. The popup lives outside the console, so
+			its height is its own business rather than a claim on this budget --
+			which is exactly why the input line stops moving.
+
+			con_completionrows+1 rather than a height-derived budget for the same
+			reason: the space that bounds this list is the SCREEN, and the screen
+			is not known here. Con_DrawCompletionPopup clamps against it.
+			*/
+			int rows = Con_BuildCompletion(con, text, con_completionrows.ival + 1);
+			if (rows > 0 && con->completionline)
+			{
+				con_popupcon  = con;
+				con_popuprows = rows;
+				con_popupl    = left;
+				con_popupr    = right;
+				con_popupb    = y + Font_CharHeight();	//the bottom the caller passed in
+			}
+			/*Set even when there is nothing to show, so the drop-UP arm below
+			  cannot rebuild the chain and draw it inside the console instead.*/
+			drewdown = 1;
+		}
+		else if (con_completiondown.ival)
+		{
+			/*
+			How many rows fit. y is already the input row's tentative top, so the
+			band below it runs from y+charheight down, and the input row lands at
+			y - rows*charheight: the exact fit is (y-top)/charheight. One row is
+			given back because the footer is drawn AFTER this point and is not in y
+			yet, and because a console showing the list and the input line and no
+			scrollback at all is not worth drawing. top is 0 for the fullscreen
+			console, where the limit is simply the top of the screen.
+			*/
+			int maxrows = ((y - (top>0?top:0)) / Font_CharHeight()) - 1;
+			if (maxrows > 0)
+			{
+				drewdown = Con_BuildCompletion(con, text, maxrows);
+				if (drewdown && con->completionline)
+				{
+					/*
+					top+charheight, not top: Con_DrawConsoleLines stops at whatever
+					`top` it is given, and the input row then goes one height ABOVE
+					where it stopped. Handing it the real top would let a wrapped row
+					spend the last of the budget and push the input line out of the
+					console. Reserving that row here is what makes the entry budget
+					above advisory rather than load-bearing.
+					*/
+					y = Con_DrawConsoleLines(con, con->completionline, 0, left, right, y + Font_CharHeight(),
+							(top>0)?top+Font_CharHeight():0, selactive, selsx, selex, selsy, seley, 0) - Font_CharHeight();
+				}
+			}
+		}
+	}
+
+	//the input row has moved; say where it actually is. (Nothing on win32 reads
+	//this today -- the engine never places an OS IME candidate window -- but a
+	//coordinate that is knowingly wrong is not worth keeping.)
+	if (focused)
+		vid.ime_position[1] = ((float)y/vid.pixelheight)*vid.height;
 
 	cursorpos = key_linepos;
 
@@ -1595,7 +2298,23 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 			int cmdstart;
 			cmdstart = text[0] == '/'?1:0;
 			fname = Cmd_CompleteCommand(text+cmdstart, true, true, max(1, con_commandmatch), NULL);
-			if (fname && strlen(fname) < 256)	//we can compleate it to:
+			/*
+			FTESurf Patch 215: only paint the green inline hint when the match
+			actually EXTENDS what you typed.
+
+			The loop below starts writing at cursorpos and copies the completion
+			from that offset on, which is right precisely because a prefix match's
+			first cursorpos characters ARE what you typed. sv_mapcompletion breaks
+			that: `map kits` matches "map surf_kitsune", whose 8th character
+			onwards is "_kitsune", and the line drew as `map kits_kitsune` -- text
+			that was never typed and would never be run. Measured on the first
+			screenshot of this patch.
+
+			When the match is not an extension there is simply nothing to hint at,
+			so nothing is drawn; the dropdown underneath is still the answer.
+			*/
+			if (fname && strlen(fname) < 256 &&
+				!Q_strncasecmp(fname, text+cmdstart, cursorpos-cmdstart))	//we can compleate it to:
 			{
 				for (p = min(strlen(fname), cursorpos-cmdstart); fname[p]>0; p++)
 					textstart[p+cmdstart] = (unsigned int)fname[p] | (COLOR_GREEN<<CON_FGSHIFT);
@@ -1670,28 +2389,88 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		y = Con_DrawConsoleLines(con, con->footerline, 0, left, right, y, 0, selactive, selsx, selex, selsy, seley, 0);
 	}
 
-	/*just above that, we have the tab completion list*/
-	if (con_commandmatch && con_displaypossibilities.value)
+	/*
+	just above that, we have the tab completion list
+
+	FTESurf Patch 211: a scrollable vertical DROPDOWN rather than a wrapped
+	paragraph, at con_displaypossibilities 2.
+
+	Three changes, and the shape of the first is what makes the rest cheap:
+
+	 - ONE conline_t PER MATCH, linked by ->older, exactly the way Con_Footerf
+	   already builds a multi-line footer. Con_BuildCompletion owns that loop --
+	   and Patch 215 corrected its direction; the claim that used to stand here,
+	   that pushing backwards put entry[first] at the top, was the reverse of what
+	   the code did and is what made Up move the highlight down.
+	 - a window of con_completionrows entries starting at con_completionscroll,
+	   so a prefix with 200 matches scrolls instead of wrapping into a wall.
+	 - at mode 2 it is drawn whenever there is anything to complete, not only
+	   after Tab. con_commandmatch stays 0 until you actually navigate, and that
+	   is deliberate: it is the same variable K_ENTER tests, so a list that merely
+	   APPEARS cannot change what ENTER does to a line you typed in full.
+
+	Mode 1 is build 26 byte for byte: gated on con_commandmatch, one line, tabs.
+
+	Patch 215: at con_completiondown 1 the rows were already built and drawn near
+	the top of this function, in the band BELOW the input line -- so this arm has
+	nothing left to do and must not free the chain out from under them.
+	*/
+	/*
+	FTESurf Patch 226: mode 2 owns the list outright -- Con_DrawCompletionPopup
+	draws it, or nothing does. Returning unconditionally rather than only on
+	drewdown covers the case where the popup's gate declined and this one would
+	not have: con_commandmatch alone satisfies the test below, so an empty line
+	carrying a stale highlight would draw a list INSIDE the console on the one
+	frame the popup had nothing to say. Free the chain on the way out for the same
+	reason -- nothing downstream is going to, and leaving it allocated makes last
+	frame's rows eligible to reappear.
+	*/
+	if (con_completiondown.ival == 2)
+	{
+		if (con_popupcon != con)
+			Con_FreeCompletion(con);
+		return y;
+	}
+	if (drewdown)
+		return y;
+	if ((con_commandmatch || (con_displaypossibilities.ival >= 2 && text[0] && !(text[0] == '/' && !text[1]))) && con_displaypossibilities.value)
 	{
 		conchar_t *end, *s;
 		const char *cmd;//, *desc;
 		int cmdstart;
 		size_t newlen;
 		cmd_completion_t *c;
+		qboolean dropdown = (con_displaypossibilities.ival >= 2);
 		cmdstart = text[0] == '/'?1:0;
 		end = maskedtext;
+
+		c = Cmd_Complete(text+cmdstart, true);
+
+		if (dropdown)
+		{
+			//FTESurf Patch 215: one speller for the rows -- see Con_BuildCompletion.
+			//maxrows keeps a tall con_completionrows from drawing out through the
+			//top of a short console, which top=0 used to allow.
+			int maxrows = (y - (top>0?top:0)) / Font_CharHeight();
+			if (maxrows > 0)
+			{
+				if (Con_BuildCompletion(con, text, maxrows) && con->completionline)
+					y = Con_DrawConsoleLines(con, con->completionline, 0, left, right, y, top, selactive, selsx, selex, selsy, seley, 0);
+			}
+			else
+				Con_FreeCompletion(con);
+			return y;
+		}
 
 		if (!con->completionline || con->completionline->length + 512 > con->completionline->maxlength)
 		{
 			newlen = (con->completionline?con->completionline->length:0) + 2048;
 
-			Z_Free(con->completionline);
+			Con_FreeCompletion(con);
 			con->completionline = Z_Malloc(sizeof(*con->completionline) + newlen*sizeof(conchar_t));
 			con->completionline->maxlength = newlen;
 		}
 		con->completionline->length = 0;
-
-		c = Cmd_Complete(text+cmdstart, true);
 
 		for (i = 0; i < c->num; i++)
 		{
@@ -1717,6 +2496,8 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		if (con->completionline->length)
 			y = Con_DrawConsoleLines(con, con->completionline, 0, left, right, y, 0, selactive, selsx, selex, selsy, seley, 0);
 	}
+	else if (con->completionline)
+		Con_FreeCompletion(con);	//FTESurf Patch 211: the chain must not outlive the list
 
 	return y;
 }
@@ -1730,6 +2511,7 @@ Draws the last few lines of output transparently over the game top
 */
 void Con_DrawNotifyOne (console_t *con)
 {
+	struct font_s *notifyfont = (con == con_main) ? font_default : font_console;
 	conchar_t *starts[NUM_CON_TIMES], *ends[NUM_CON_TIMES];
 	float alphas[NUM_CON_TIMES], a;
 	conchar_t *c;
@@ -1743,8 +2525,11 @@ void Con_DrawNotifyOne (console_t *con)
 
 	int maxlines;
 	float t;
+	float hold, maxage;	//FTESurf Patch 242
+	int i, step, stop;	//FTESurf Patch 242
 
-	Font_BeginString(font_console, con->notif_x * vid.width, con->notif_y * vid.height, &nx, &y);
+	/*The main-console overlay is HUD text, not a miniature copy of the console.*/
+	Font_BeginString(notifyfont, con->notif_x * vid.width, con->notif_y * vid.height, &nx, &y);
 	Font_Transform(con->notif_w * vid.width, 0, &nw, NULL);
 
 	if (con->notif_l < 0)
@@ -1756,6 +2541,16 @@ void Con_DrawNotifyOne (console_t *con)
 	if (!con->notif_x && !con->notif_y && con->notif_w == 1)
 		y = Con_DrawProgress(0, nw, 0);
 
+	/*FTESurf Patch 242: the oldest a line of ANY kind can still be showing.
+	  The walk below used to stop at the first expired line, which was sound
+	  while every line aged at the same rate.  With con_notifytime_error it is
+	  not: an ordinary line printed eight seconds ago is finished while an ERROR
+	  printed ten seconds ago is not, and the walk meets the ordinary one first.
+	  So an expired line no longer ends the walk -- it is skipped -- and this is
+	  what still bounds it, because nothing older than this can be live whatever
+	  its flags say.*/
+	maxage = ((con->notif_t_err > con->notif_t) ? con->notif_t_err : con->notif_t) + con->notif_fade;
+
 	l = con->current;
 	if (!l->length)
 		l = l->older;
@@ -1763,13 +2558,19 @@ void Con_DrawNotifyOne (console_t *con)
 	{
 		if (l->flags & CONL_NONOTIFY)
 			continue; //hidden from notify
-		t = realtime - (l->time+con->notif_t);
+		/*FTESurf Patch 242: errors and warnings hold longer.  The > 0 test is
+		  what makes this safe for the chat console and the frag tracker, which
+		  never set notif_t_err and would otherwise expire an error instantly.*/
+		hold = ((l->flags & CONL_ERROR) && con->notif_t_err > 0) ? con->notif_t_err : con->notif_t;
+		t = realtime - (l->time+hold);
 		if (t > 0)
 		{
 			if (t > con->notif_fade)
 			{
 				l->flags |= CONL_NONOTIFY;
-				break;
+				if (realtime - l->time > maxage)
+					break;
+				continue;
 			}
 			a = 1 - (t/con->notif_fade);
 		}
@@ -1802,13 +2603,47 @@ void Con_DrawNotifyOne (console_t *con)
 	if (con->flags & CONF_NOTIFY_BOTTOM)
 		y -= (con->notif_l - lines) * Font_CharHeight();
 
-	while (lines < con->notif_l)
+	/*FTESurf Patch 242: THE ORDER, which is the one thing this surface never had.
+
+	  The gather above fills starts[] from the top of the array downwards while
+	  walking newest -> oldest, so starts[lines] is the OLDEST line held and
+	  starts[notif_l-1] is the NEWEST.  Drawing that range forwards with y
+	  increasing therefore puts the oldest at the top and the newest at the
+	  bottom -- classic Quake, and every notify surface in this engine.  It is
+	  still style 0 and still the default for the chat console and the tracker.
+
+	  Style 1 walks the same array BACKWARDS: newest at the top, older sliding
+	  down beneath it.  The newest line is then always on the same row rather
+	  than moving as the block fills, which is what makes a burst of errors
+	  readable without reading it bottom-up.
+
+	  Style 2 is style 0 with CONF_NOTIFY_BOTTOM, set for con_main in
+	  Con_DrawNotify -- new lines arrive at the bottom and push older ones up,
+	  anchored to the bottom of the block rather than the top.  The anchor
+	  itself is the pre-existing line just above.
+
+	  y is always advanced DOWNWARDS; only which end of the array is visited
+	  first changes.  Nothing here needs to know how many lines there are.*/
+	if (con->notif_style == 1)
+	{
+		i    = con->notif_l - 1;
+		stop = lines - 1;
+		step = -1;
+	}
+	else
+	{
+		i    = lines;
+		stop = con->notif_l;
+		step = 1;
+	}
+
+	for (; i != stop; i += step)
 	{
 		x = 0;
-		R2D_ImageColours(1, 1, 1, alphas[lines]);
+		R2D_ImageColours(1, 1, 1, alphas[i]);
 		if (con->flags & CONF_NOTIFY_RIGHT)
 		{
-			for (c = starts[lines]; c < ends[lines]; )
+			for (c = starts[i]; c < ends[i]; )
 			{
 				c = Font_Decode(c, &codeflags, &codepoint);
 				x += Font_CharWidth(codeflags, codepoint);
@@ -1817,21 +2652,19 @@ void Con_DrawNotifyOne (console_t *con)
 		}
 		else if (con_centernotify.value)
 		{
-			for (c = starts[lines]; c < ends[lines]; )
+			for (c = starts[i]; c < ends[i]; )
 			{
 				c = Font_Decode(c, &codeflags, &codepoint);
 				x += Font_CharWidth(codeflags, codepoint);
 			}
 			x = (nw - x) / 2;
 		}
-		Font_LineDraw(nx+x, y, starts[lines], ends[lines]);
+		Font_LineDraw(nx+x, y, starts[i], ends[i]);
 
 		y += Font_CharHeight();
-
-		lines++;
 	}
 
-	Font_EndString(font_console);
+	Font_EndString(notifyfont);
 
 	R2D_ImageColours(1,1,1,1);
 }
@@ -1859,6 +2692,26 @@ void Con_DrawNotify (void)
 		con_main->notif_x = con_notify_x.value;
 		con_main->notif_y = con_notify_y.value;
 		con_main->notif_t = con_notifytime.value;
+		/*Historically con_notifytime 0 disabled notifications immediately.*/
+		con_main->notif_fade = con_notifytime.value > 0 ? max(0, con_notifyfade.value) : 0;
+
+		/*FTESurf Patch 242.  0 means "no separate error hold", which is the
+		  stock behaviour and the default; anything else is used for CONL_ERROR
+		  lines only.  Not clamped upwards against con_notifytime on purpose --
+		  a SHORTER error hold is a legitimate thing to want and refusing it
+		  would be the cvar deciding it knows better.*/
+		con_main->notif_t_err = con_notifytime_error.value > 0 ? con_notifytime_error.value : con_main->notif_t;
+
+		/*FTESurf Patch 242.  Style 2 is the classic order with the block
+		  anchored to its BOTTOM, which is what CONF_NOTIFY_BOTTOM already did
+		  for the chat console -- so it is set here rather than reimplemented.
+		  Assigned every frame, both ways, because the cvar can change at any
+		  time and a flag that is only ever ORed in never comes back off.*/
+		con_main->notif_style = con_notifystyle.ival;
+		if (con_main->notif_style == 2)
+			con_main->flags |= CONF_NOTIFY_BOTTOM;
+		else
+			con_main->flags &= ~CONF_NOTIFY_BOTTOM;
 	}
 
 	if (con_chat)
@@ -1867,6 +2720,7 @@ void Con_DrawNotify (void)
 		con_chat->notif_w = 1;
 		con_chat->notif_y = (vid.height - sb_lines - 8*4) / vid.width;
 		con_chat->notif_t = con_notifytime_chat.value;
+		con_chat->notif_t_err = con_chat->notif_t;	//FTESurf Patch 242: chat has no error lines.
 	}
 
 	if (startuppending)
@@ -1880,7 +2734,9 @@ void Con_DrawNotify (void)
 	{
 		for (con = con_head; con; con = con->next)
 		{
-			if (con->flags & CONF_NOTIFY)
+			/*The open floating main console already draws its complete scrollback.*/
+			if ((con->flags & CONF_NOTIFY) &&
+				!(con == con_main && Key_Dest_Has(kdm_cwindows) && con_curwindow == con_main))
 				Con_DrawNotifyOne(con);
 		}
 	}
@@ -3126,6 +3982,182 @@ Con_DrawConsole
 Draws the console with the solid background
 ================
 */
+/*
+FTESurf Patch 226: paint the floating completion popup (con_completiondown 2).
+
+CALLED FROM INSIDE THE CONSOLE'S OWN DRAW, not once at the end of
+Con_DrawConsole, and that is not a preference. Con_DrawOneConsole clears
+con->selstartline at the top of every frame so a stale drag cannot survive, and
+reads it again at the bottom to turn a release into a link activation. A popup
+painted after all of that would set selstartline just in time for the next frame
+to clear it, and its rows could never be clicked -- which is how you FIND a map.
+Painted here it is inside the same brackets as the console's own rows, and
+clicking works for the same reason it already works for them.
+
+The cost is that the popup is painted before any LATER console window in the
+loop. A list can only belong to a FOCUSED console -- Con_DrawInput returns before
+the completion arms otherwise -- so the case where that is visible needs two
+focused consoles, which is not a state this engine has.
+*/
+static void Con_DrawCompletionPopup(console_t *con)
+{
+	int ch, h, w, top, bot;
+	int selsx, selsy, selex, seley;
+	unsigned int oldflags;
+	float back[3], accent[3];
+	float sxv, syv, vx, vy, vw, vh;
+
+	if (con_popupcon != con || !con || !con->completionline || con_popuprows < 1)
+	{
+		if (con_popupshown == con)
+			con_popupshown = NULL;
+		return;
+	}
+	con_popupcon = NULL;	//one paint per record
+
+	ch = Font_CharHeight();
+	if (ch < 1)
+		return;
+
+	h = con_popuprows * ch;
+	w = con_popupr - con_popupl;
+	if (w < ch*4)
+		w = ch*4;
+
+	top = con_popupb;			//the bottom of the input row: the popup starts here
+	if (top + h > (int)vid.pixelheight)
+		top = con_popupb - ch - h;	//no room below: flip above the field, one row tall
+	if (top < 0)
+		top = 0;
+	bot = top + h;
+
+	/*
+	The height is exact ONLY because the rows are forced to one line each.
+
+	Con_DrawConsoleLines always walks UPWARD from a bottom it is handed, so a box
+	that grows downward has to know how tall it is before it draws -- and
+	Font_LineBreaks can turn one conline_t into several screen rows, which is
+	precisely what the existing in-console arms rely on and account for for free.
+	CONF_NOWRAP makes linecount 1 per node, so rows == nodes and the arithmetic
+	above closes. A long cvar row then clips at the popup's right edge instead of
+	quietly making the box too short, and clipping a long entry is what a real
+	combobox does anyway.
+	*/
+	oldflags = con->flags;
+	con->flags |= CONF_NOWRAP;
+
+	/*
+	Lift the window clip, and this is the whole trick. Patch 215 rejected a true
+	overlay because Con_DrawOneConsole runs inside BE_Scissor(&srect) and anything
+	past the window's bottom edge is thrown away. That was right, and it is still
+	right -- so the popup takes the clip off, paints, and puts it back. The
+	R2D_Flush either side is mandatory: 2D geometry is batched and a scissor change
+	with a batch in flight applies to the wrong quads.
+	*/
+	/*
+	Font_EndString FIRST, for the same reason it is needed on the way out: the
+	console's own rows may have auto-flushed mid-list and left their tail queued
+	with R2D_Flush NULL, in which case `if (R2D_Flush)` is false, the flush below
+	does nothing, and those glyphs surface LATER -- on top of the background this
+	is about to paint. That is not theoretical either: the flipped popup, which
+	overlaps the console's text region, showed the scrollback straight through it.
+	*/
+	Font_EndString(font_console);
+	if (R2D_Flush)
+		R2D_Flush();
+	if (con_popupclipped)
+		BE_Scissor(NULL);
+
+	sxv = (float)vid.width  / vid.pixelwidth;	//physical font space -> virtual, the
+	syv = (float)vid.height / vid.pixelheight;	//same conversion Con_DrawImageClip does
+	vx = con_popupl * sxv;
+	vy = top * syv;
+	vw = w * sxv;
+	vh = h * syv;
+
+	Con_ParseColour(&con_colour_back,   back,   0.0f, 0.05f, 0.1f);
+	Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+
+	/*
+	OPAQUE, not the console's own alpha, and R2D_FillBlock cares about the
+	difference: at alpha 1 it picks shader_draw_fill rather than
+	shader_draw_fill_trans. This hangs over the game and, when it flips, over the
+	console's own scrollback -- a list of map names read against either is not a
+	list. At 0.96 the scrollback behind a flipped popup was still legible through
+	it, which is what settled this.
+	*/
+	R2D_ImageColours(back[0], back[1], back[2], 1.0f);
+	R2D_FillBlock(vx, vy, vw, vh);
+	R2D_ImageColours(accent[0], accent[1], accent[2], 0.85f);
+	R2D_FillBlock(vx,        vy,        vw, 1);
+	R2D_FillBlock(vx,        vy+vh-1,   vw, 1);
+	R2D_FillBlock(vx,        vy,        1,  vh);
+	R2D_FillBlock(vx+vw-1,   vy,        1,  vh);
+	R2D_ImageColours(1, 1, 1, 1);
+	if (R2D_Flush)
+		R2D_Flush();
+
+	/*
+	The hit box straight from the cursor, with NO window skew.
+
+	Patch 213's essay in Con_DrawOneConsole exists because con->mousecursor[] is
+	measured from (wnd_x+CON_WNDBORDER, wnd_y) while the code there treats it as
+	measured from (fx, fy). None of that applies to a popup placed in absolute
+	screen space, so the global cursor converts straight across -- and applying
+	that skew here would reintroduce exactly the bug Patch 213 removed.
+
+	A degenerate box (start == end) at selactive 0 is mouse-over tracking with no
+	drawn selection, which is all a dropdown wants: Con_DrawConsoleLines promotes
+	0 to 2 ("calculate, but don't draw") and drops the box entirely when the
+	cursor is outside the rows.
+	*/
+	Font_BeginString(font_console, mousecursor_x, mousecursor_y, &selsx, &selsy);
+	selex = selsx;
+	seley = selsy;
+
+	Con_DrawConsoleLines(con, con->completionline, 0, con_popupl, con_popupl+w,
+			bot, top, 0, selsx, selex, selsy, seley, 0);
+
+	/*
+	Font_EndString before the flush, and it is load-bearing rather than tidy.
+
+	Font_Flush() sets R2D_Flush = NULL on its way in (gl_font.c). The glyph batch
+	auto-flushes every FONT_CHAR_BUFFER characters, so any list longer than that
+	leaves the TAIL of its rows queued with no flush pointer at all -- `if
+	(R2D_Flush)` is then false, the rows are still in flight when the scissor
+	comes back, and they get clipped away by the window they were drawn outside
+	of. That is not a hypothetical: it drew six rows of a thirteen-row list and
+	left the other seven as empty space inside a correctly-sized box.
+
+	Font_EndString re-arms the pointer exactly when the mesh is non-empty, which
+	is why Con_DrawConsole has always ended with one. The Font_BeginString after
+	puts the caller's font state back so this is invisible from outside.
+	*/
+	Font_EndString(font_console);
+	if (R2D_Flush)
+		R2D_Flush();
+	if (con_popupclipped)
+		BE_Scissor(&con_popupclip);
+	Font_BeginString(font_console, 0, 0, &selsx, &selsy);
+
+	con->flags = oldflags;
+
+	con_popupshown = con;
+	con_popuphit[0] = vx;
+	con_popuphit[1] = vy;
+	con_popuphit[2] = vw;
+	con_popuphit[3] = vh;
+}
+
+//FTESurf Patch 226: is (x,y) over the popup the console last painted? Virtual pixels.
+static qboolean Con_PopupCovers(console_t *con, float x, float y)
+{
+	if (con_popupshown != con || con_completiondown.ival != 2)
+		return false;
+	return x >= con_popuphit[0] && x < con_popuphit[0]+con_popuphit[2] &&
+	       y >= con_popuphit[1] && y < con_popuphit[1]+con_popuphit[3];
+}
+
 void Con_DrawConsole (int lines, qboolean noback)
 {
 	extern qboolean scr_con_forcedraw;
@@ -3140,6 +4172,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 		con_current = Con_GetMain();
 
 	con_mouseover = NULL;
+	con_popupcon = NULL;	//FTESurf Patch 226: a frame that draws no input line leaves no popup
 
 	//draw any windowed consoles (under main console)
 	for (w = con_head; w; w = w->next)
@@ -3147,8 +4180,22 @@ void Con_DrawConsole (int lines, qboolean noback)
 		srect_t srect;
 		int keepback = -1;	//nettest: con_keepscroll - how many lines above the live tail the user was reading. -1 = not scrolled / disabled.
 		float keepscroll = 0;
+		int top, sw, gr;	//FTESurf Patch 211/213: title height, scrollbar width, grip size
 		if ((w->flags & (CONF_HIDDEN|CONF_ISWINDOW)) != CONF_ISWINDOW)
 			continue;
+		/*
+		The closed main window is represented by Con_DrawNotifyOne, at the HUD's
+		top-left in the fixed 8px font.  Drawing this window as well is what made
+		notifications inherit its last dragged rectangle and 16px console face.
+		*/
+		if (w == con_main && (!Key_Dest_Has(kdm_cwindows) || con_curwindow != w))
+			continue;
+
+		//FTESurf Patch 211: read once, here, so the draw below and the hit tests in
+		//keys.c cannot be looking at different numbers within one frame.
+		top = Con_WindowTitleHeight();
+		sw  = Con_WindowScrollWidth();
+		gr  = Con_WindowGripSize();		//Patch 213
 
 		if (Key_Dest_Has(kdm_cwindows))
 			fadetime = 0;	//nothing fades when focused.
@@ -3159,10 +4206,31 @@ void Con_DrawConsole (int lines, qboolean noback)
 			w->wnd_w = vid.width;
 		if (w->wnd_h > vid.height)
 			w->wnd_h = vid.height;
-		if (w->wnd_w < 64)
-			w->wnd_w = 64;
-		if (w->wnd_h < 16)
-			w->wnd_h = 16;
+		/*
+		FTESurf Patch 213: the size floor has to know how big the chrome is.
+
+		This is not a new hazard, it is one this patch found and Build 27 shipped.
+		Everything that ACTS on a drag -- CB_MOVE, all three CB_SIZE* -- lives in
+		Key_GetConsoleSelectionBox, which for a window is only ever reached from
+		Con_DrawOneConsole, which is only called inside the `srect.width > 0 &&
+		srect.height > 0` guard below. So a window whose chrome does not fit
+		inside it stops drawing AND stops answering the mouse in the same frame:
+		blank, unresizable, unmovable, with the input line gone too. You can still
+		blind-type your way out, which is not a recovery anyone should need.
+
+		The old floors were 64 and 16 against a title bar that Patch 211 made as
+		tall as its font. At con_textsize 16 that is 22, so wnd_h 16 gave
+		srect.height = 16-22-8 = -14 and the window bricked the moment you dragged
+		it that short -- in build 27, before this patch existed.
+
+		So the floors come from the chrome instead of being typed. +8 and +32 are
+		one row of text and a few columns of it: the point is that the text region
+		is never allowed to reach zero, because zero is what turns the guard off.
+		*/
+		if (w->wnd_w < CON_WNDBORDER + gr + sw + 32)
+			w->wnd_w = CON_WNDBORDER + gr + sw + 32;
+		if (w->wnd_h < top + gr + 8)
+			w->wnd_h = top + gr + 8;
 		//windows that move off the top of the screen somehow are bad.
 		if (w->wnd_y > vid.height - 8)
 			w->wnd_y = vid.height - 8;
@@ -3176,25 +4244,56 @@ void Con_DrawConsole (int lines, qboolean noback)
 		if (w->wnd_h < 8)
 			w->wnd_h = 8;
 
-		if (mousecursor_x >= w->wnd_x && mousecursor_x < w->wnd_x+w->wnd_w && mousecursor_y >= w->wnd_y && mousecursor_y < w->wnd_y+w->wnd_h && mousecursor_y > lines)
+		/*FTESurf Patch 226: the completion popup hangs OUTSIDE this rect by design,
+		  so a cursor over one of its rows would fail this test and the click would
+		  never be routed to the console that owns it. Con_PopupCovers answers with
+		  the rect the popup last painted -- see the note on con_popupshown for why
+		  one frame of staleness is the right trade here.*/
+		if ((mousecursor_x >= w->wnd_x && mousecursor_x < w->wnd_x+w->wnd_w && mousecursor_y >= w->wnd_y && mousecursor_y < w->wnd_y+w->wnd_h && mousecursor_y > lines)
+			|| Con_PopupCovers(w, mousecursor_x, mousecursor_y))
 			con_mouseover = w;
 
-		w->mousecursor[0] = mousecursor_x - (w->wnd_x+8);
+		w->mousecursor[0] = mousecursor_x - (w->wnd_x+CON_WNDBORDER);
 		w->mousecursor[1] = mousecursor_y - w->wnd_y;
 
 		if (Key_Dest_Has(kdm_cwindows))
 		{
-			int top = 8;	//padding at the top
-			if (con_curwindow==w)
-				R2D_ImageColours(SRGBA(0.0, 0.05, 0.1, 0.8));
-			else
-				R2D_ImageColours(SRGBA(0.0, 0.05, 0.1, 0.5));
+			/*
+			FTESurf Patch 211.  Four changes here and each answers one report:
+
+			  top     was a literal 8 and is now the height of the font the title
+			          is actually drawn in, plus padding -- the bar is the drag
+			          handle, and an 8px handle under a 16px face is why it was
+			          hard to hit.  keys.c hit-tests against the same accessor.
+			  font    was Draw_FunStringWidth, i.e. font_default, the engine's 8px
+			          bitmap.  font_console IS con_textfont at con_textsize, so
+			          naming it here is both "the Google font" and "twice as big"
+			          in one token, with no second font object to keep alive across
+			          a vid_restart.
+			  align   the `2` was CENTRED (sbar.c:257). 0 is left.
+			  colour  the background was SRGBA(0, 0.05, 0.1) -- a navy with zero
+			          red, which is the blue. Now two cvars and everything derived.
+
+			The title strip is a second fill over the first rather than a shorter
+			background: the window fill has to cover the whole rect anyway (it is
+			what makes the text legible), so painting the bar on top of it costs
+			one block and keeps the two alphas in step.
+			*/
+			int titleh = top;
+			float back[3], accent[3], a;
+			Con_ParseColour(&con_colour_back, back, 0.0f, 0.05f, 0.1f);
+			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+			a = (con_curwindow==w)?0.8f:0.5f;
+
+			R2D_ImageColours(SRGBA(back[0], back[1], back[2], a));
 			R2D_FillBlock(w->wnd_x, w->wnd_y, w->wnd_w, w->wnd_h);
+			//the bar, lifted off the ground so it reads as a handle
+			R2D_ImageColours(SRGBA(back[0]*1.9f+0.03f, back[1]*1.9f+0.03f, back[2]*1.9f+0.03f, a));
+			R2D_FillBlock(w->wnd_x, w->wnd_y, w->wnd_w, titleh);
 			R2D_ImageColours(1, 1, 1, 1);
 
-			//fixme: scale up this font...
-			Draw_FunStringWidth(w->wnd_x, w->wnd_y, w->title, w->wnd_w-top, 2, (con_curwindow==w)?true:false);
-			Draw_FunStringWidth(w->wnd_x+w->wnd_w-top, w->wnd_y, "X", top, 2, ((w->buttonsdown == CB_CLOSE && w->mousecursor[0] > w->wnd_w-(8+top) && w->mousecursor[1] < top) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-(8+top) && w->mousecursor[0] < w->wnd_w-8 && w->mousecursor[1] >= 0 && w->mousecursor[1] < 8))?true:false);
+			Draw_FunStringWidthFont(font_console, w->wnd_x+CON_WNDBORDER, w->wnd_y+(int)con_window_titlepad.value, w->title, w->wnd_w-CON_WNDBORDER-titleh, 0, (con_curwindow==w)?true:false);
+			Draw_FunStringWidthFont(font_console, w->wnd_x+w->wnd_w-titleh, w->wnd_y+(int)con_window_titlepad.value, "X", titleh, 2, ((w->buttonsdown == CB_CLOSE && w->mousecursor[0] > w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[1] < titleh) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[0] < w->wnd_w-CON_WNDBORDER && w->mousecursor[1] >= 0 && w->mousecursor[1] < titleh))?true:false);
 
 			if (w->backshader || *w->backimage)
 			{
@@ -3244,7 +4343,14 @@ void Con_DrawConsole (int lines, qboolean noback)
 								else
 									tw = 32;
 								fl = con_curwindow==w;
-								if (w->mousecursor[1] >= 8 && w->mousecursor[1] < 16 && w->mousecursor[0] >= x && w->mousecursor[0] < x+tw)
+								//FTESurf Patch 213: was `>= 8 && < 16`, i.e. the row under
+								//an 8px title bar. keys.c arms CB_ACTIONBAR over
+								//[wtop, wtop+8), so once the bar grew past 8 the two
+								//bands stopped intersecting and these buttons became
+								//unclickable. (Reached only by a cinematic/browser
+								//console, which FTESurf does not open -- fixed because
+								//it is the same one-speller defect, not because it bit.)
+								if (w->mousecursor[1] >= top && w->mousecursor[1] < top+8 && w->mousecursor[0] >= x && w->mousecursor[0] < x+tw)
 								{
 									fl |= 2;
 									if (w->buttonsdown == CB_ACTIONBAR)
@@ -3302,14 +4408,12 @@ void Con_DrawConsole (int lines, qboolean noback)
 		else
 		{
 			w->buttonsdown = 0;
-			//nettest: a closed/unfocused console still DRAWS the live tail -- that is not cosmetic.
-			//With con_window 1, con_window_cb clears CONF_NOTIFY from con_main, so Con_DrawNotify
-			//skips it and this faded hidden window IS the in-game notify overlay. Con_DrawConsoleLines
-			//only ever walks OLDER than the line it is given, so drawing from a scrolled-up display
-			//would make every new print invisible in game. And its ^^^^ backscroll marker is emitted
-			//before any age-fade test, so a stale display also parks a permanent full-brightness row
-			//of '^' over the view. Hence: snap to the tail for the draw, then put the user's reading
-			//position back afterwards so reopening lands where they left off (con_keepscroll).
+			//Non-main floating consoles retain their legacy faded live-tail display. The
+			//closed main console never reaches here now; Con_DrawNotifyOne owns its fixed
+			//top-left HUD overlay. For these remaining windows, Con_DrawConsoleLines only
+			//walks OLDER than the line it is given, so drawing from a scrolled-up display
+			//would hide new prints. Snap to the tail for the draw, then put the user's
+			//reading position back afterwards so reopening preserves it (con_keepscroll).
 			if (con_keepscroll.ival && w->display && w->display != w->current)
 			{	//store it as a DISTANCE, not a pointer: Con_DrawConsoleLines can Con_Printf (failed
 				//link-image registration), which can evict and free a line out from under us.
@@ -3323,32 +4427,58 @@ void Con_DrawConsole (int lines, qboolean noback)
 			w->displayscroll = 0;
 		}
 
-		srect.x = (w->wnd_x+8) / vid.width;
-		srect.y = (w->wnd_y+8) / vid.height;
-		srect.width = (w->wnd_w-24) / vid.width;	//nettest: -24 (was -16) leaves an 8px strip on the right for the scrollbar
-		srect.height = (w->wnd_h-16) / vid.height;
+		/*
+		FTESurf Patch 211: the text region, derived rather than typed.
+
+		Was x+8, y+8, w-24, h-16 -- where the first 8 is the left inset, the 24 is
+		"both insets plus an 8px scrollbar strip", and the y+8/h-16 assumed an 8px
+		title bar.  The title bar is now as tall as its font and the scrollbar is
+		as wide as con_scrollwidth, so every one of those numbers had to come from
+		the same two accessors keys.c hit-tests against.
+
+		Patch 213 moves the right-hand and bottom bounds off CON_WNDBORDER and onto
+		the grip, so the last line of text can never sit UNDER the bottom grip --
+		text you can read but cannot select, because clicking it resizes instead.
+		*/
+		srect.x = (w->wnd_x+CON_WNDBORDER) / vid.width;
+		srect.y = (w->wnd_y+top) / vid.height;
+		srect.width = (w->wnd_w-(CON_WNDBORDER+gr+sw)) / vid.width;
+		srect.height = (w->wnd_h-top-gr) / vid.height;
 		srect.dmin = -99999;
 		srect.dmax = 99999;
 		srect.y = (1-srect.y) - srect.height;
-		if (srect.width && srect.height)
+		if (srect.width > 0 && srect.height > 0)
 		{
+			float back[3], accent[3];
+			Con_ParseColour(&con_colour_back, back, 0.0f, 0.05f, 0.1f);
+			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+
 			if (!fadetime)
 			{
-				R2D_ImageColours(SRGBA(0, 0.1, 0.2, 1.0));
-				if ((w->buttonsdown & CB_SIZELEFT) || (con_curwindow==w && w->mousecursor[0] >= -8 && w->mousecursor[0] < 0 && w->mousecursor[1] >= 8 && w->mousecursor[1] < w->wnd_h))
-					R2D_FillBlock(w->wnd_x, w->wnd_y+8, 8, w->wnd_h-8);
-				if ((w->buttonsdown & CB_SIZERIGHT) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-16 && w->mousecursor[0] < w->wnd_w-8 && w->mousecursor[1] >= 8 && w->mousecursor[1] < w->wnd_h))
-					R2D_FillBlock(w->wnd_x+w->wnd_w-8, w->wnd_y+8, 8, w->wnd_h-8);
-				if ((w->buttonsdown & CB_SIZEBOTTOM) || (con_curwindow==w && w->mousecursor[0] >= -8 && w->mousecursor[0] < w->wnd_w-8 && w->mousecursor[1] >= w->wnd_h-8 && w->mousecursor[1] < w->wnd_h))
-					R2D_FillBlock(w->wnd_x, w->wnd_y+w->wnd_h-8, w->wnd_w, 8);
+				//FTESurf Patch 211: was SRGBA(0, 0.1, 0.2, 1.0), a solid navy edge
+				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.25f));
+				if ((w->buttonsdown & CB_SIZELEFT) || (con_curwindow==w && w->mousecursor[0] >= -CON_WNDBORDER && w->mousecursor[0] < 0 && w->mousecursor[1] >= top && w->mousecursor[1] < w->wnd_h))
+					R2D_FillBlock(w->wnd_x, w->wnd_y+top, CON_WNDBORDER, w->wnd_h-top);
+				/*
+				The right GRIP is `gr` wide at the window's own edge and does not
+				move with the scrollbar. mousecursor[] is offset by CON_WNDBORDER,
+				so the window's last column is wnd_w-CON_WNDBORDER -- and the grip
+				is the `gr` columns below that, NOT below wnd_w. Confusing those
+				two is the one arithmetic slip here that still looks like it works.
+				*/
+				if ((w->buttonsdown & CB_SIZERIGHT) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-CON_WNDBORDER-gr && w->mousecursor[0] < w->wnd_w-CON_WNDBORDER && w->mousecursor[1] >= top && w->mousecursor[1] < w->wnd_h))
+					R2D_FillBlock(w->wnd_x+w->wnd_w-gr, w->wnd_y+top, gr, w->wnd_h-top);
+				if ((w->buttonsdown & CB_SIZEBOTTOM) || (con_curwindow==w && w->mousecursor[0] >= -CON_WNDBORDER && w->mousecursor[0] < w->wnd_w-CON_WNDBORDER && w->mousecursor[1] >= w->wnd_h-gr && w->mousecursor[1] < w->wnd_h))
+					R2D_FillBlock(w->wnd_x, w->wnd_y+w->wnd_h-gr, w->wnd_w, gr);
 			}
-			//nettest: scrollbar in the 8px strip on the right (freed by narrowing the text to wnd_w-24). That
+			//nettest: scrollbar in the strip on the right (freed by narrowing the text). That
 			//strip is already the CB_SCROLL drag region, so dragging it scrolls; the thumb tracks con->display.
 			if (Key_Dest_Has(kdm_cwindows) && w->linecount > 0)	//nettest: only show the scrollbar while the console is focused/open
 			{
-				float trkx = w->wnd_x + w->wnd_w - 16;
-				float trky = w->wnd_y + 8;
-				float trkh = w->wnd_h - 16;
+				//FTESurf Patch 213: sits just INSIDE the right grip, not under it
+				float trkx = w->wnd_x + w->wnd_w - (gr+sw);
+				float trky = w->wnd_y + top;
+				float trkh = w->wnd_h - top - gr;
 				int total = w->linecount, above = 0;
 				conline_t *cl;
 				float vis, thumbh, thumby, pos, ch;
@@ -3365,19 +4495,37 @@ void Con_DrawConsole (int lines, qboolean noback)
 				if (pos < 0) pos = 0;
 				if (pos > 1) pos = 1;
 				thumby = trky + pos * (trkh - thumbh);
-				R2D_ImageColours(SRGBA(1,1,1,0.10));		//track
-				R2D_FillBlock(trkx+1, trky, 6, trkh);
-				R2D_ImageColours(SRGBA(0.55,0.7,0.95,0.85));	//thumb
-				R2D_FillBlock(trkx+1, thumby, 6, thumbh);
+				//FTESurf Patch 211: sized off sw, coloured off con_colour_accent
+				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.10f));	//track
+				R2D_FillBlock(trkx+1, trky, sw-2, trkh);
+				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.85f));	//thumb
+				R2D_FillBlock(trkx+1, thumby, sw-2, thumbh);
 				R2D_ImageColours(1,1,1,1);
 			}
 			if (R2D_Flush)
 				R2D_Flush();
 			BE_Scissor(&srect);
-			Con_DrawOneConsole(w, con_curwindow == w && Key_Dest_Has(kdm_console|kdm_cwindows) == kdm_cwindows, font_console, w->wnd_x+8, w->wnd_y, w->wnd_w-24, w->wnd_h-8, fadetime);
+			//FTESurf Patch 226: what Con_DrawCompletionPopup has to put back after it
+			//lifts the clip to paint outside this window. BE_Scissor is a flat set
+			//with no stack, so the rect has to be kept rather than pushed.
+			con_popupclip = srect;
+			con_popupclipped = true;
+			/*
+			FTESurf Patch 211: fy is offset by the title bar rather than assuming it
+			is 8 tall. Con_DrawOneConsole lays out from fy+fsy upward, so the pair
+			(fy, fsy) has to describe the SAME box the scissor above does.
+
+			Patch 213: what matters is the BOTTOM edge, fy+fsy, and it has to land on
+			wnd_y+wnd_h-gr like the scissor now does. fy is deliberately left alone --
+			it overshoots upward and the scissor clips it -- so the whole grip change
+			lands in fsy. At the default gr == CON_WNDBORDER this is wnd_h-top, i.e.
+			byte-identical to build 27.
+			*/
+			Con_DrawOneConsole(w, con_curwindow == w && Key_Dest_Has(kdm_console|kdm_cwindows) == kdm_cwindows, font_console, w->wnd_x+CON_WNDBORDER, w->wnd_y+top-CON_WNDBORDER, w->wnd_w-(CON_WNDBORDER+gr+sw), w->wnd_h-top+CON_WNDBORDER-gr, fadetime);
 			if (R2D_Flush)
 				R2D_Flush();
 			BE_Scissor(NULL);
+			con_popupclipped = false;
 		}
 
 		if (keepback >= 0)
@@ -3446,11 +4594,15 @@ void Con_DrawConsole (int lines, qboolean noback)
 
 		y -= Font_CharHeight();
 		haveprogress = Con_DrawProgress(x, ex - x, y) != y;
-		y = Con_DrawInput (con_current, Key_Dest_Has(kdm_console), x, ex - x, y, selactive, selsx, selex, selsy, seley);
+		y = Con_DrawInput (con_current, Key_Dest_Has(kdm_console), x, ex - x, y, top, selactive, selsx, selex, selsy, seley);	//FTESurf Patch 215: `top` bounds the dropdown
 
 		l = con_current->display;
 
 		y = Con_DrawConsoleLines(con_current, l, con_current->displayscroll, sx, ex, y, top, selactive, selsx, selex, selsy, seley, 0);
+
+		//FTESurf Patch 226: same call, the fullscreen console's copy. No scissor is
+		//live on this path (con_popupclipped is false), so the popup simply paints.
+		Con_DrawCompletionPopup(con_current);
 
 		if (!haveprogress && lines == vid.height)
 		{
@@ -3551,6 +4703,27 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 		{
 			con->selstartline = NULL;
 			con->selendline = NULL;
+			/*
+			FTESurf Patch 213: put the selection box into the same space the four
+			lines below assume it is already in.
+
+			Key_GetConsoleSelectionBox hands back con->mousecursor[], which for a
+			window is measured from (wnd_x+CON_WNDBORDER, wnd_y). The `+= x` / `+= y`
+			below treat it as measured from (fx, fy). X agrees by construction --
+			fx IS wnd_x+CON_WNDBORDER. Y agreed only while the title bar was 8 tall,
+			because the caller passes fy = wnd_y+top-CON_WNDBORDER and top was 8.
+
+			Patch 211 made top the height of the console font, so since build 27 every
+			selection and every LINK CLICK in a console window has been out by
+			top-CON_WNDBORDER -- 14px at con_textsize 16, about one row. That is why
+			clicking a completion row could take the row above it.
+			*/
+			if (con->flags & CONF_ISWINDOW)
+			{
+				int skew = (int)(fy - con->wnd_y);
+				selsy -= skew;
+				seley -= skew;
+			}
 			Font_BeginString(font, selsx, selsy, &selsx, &selsy);
 			Font_BeginString(font, selex, seley, &selex, &seley);
 			selsx += x;
@@ -3561,7 +4734,7 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 	}
 
 	R2D_ImageColours(1, 1, 1, 1);
-	sy = Con_DrawInput (con, focused, x, sx, sy, selactive, selsx, selex, selsy, seley);
+	sy = Con_DrawInput (con, focused, x, sx, sy, y, selactive, selsx, selex, selsy, seley);	//FTESurf Patch 215: `y` is this window's top, and bounds the dropdown
 
 	sx -= con->displayoffset;
 	selsx -= con->displayoffset;
@@ -3571,6 +4744,10 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 		con->display = con->current;
 	Con_DrawConsoleLines(con, con->display, con->displayscroll, x, sx, sy, y, selactive, selsx, selex, selsy, seley, lineagelimit);
 
+	/*FTESurf Patch 226: the floating completion list, over the top of everything
+	  this window just drew and outside its clip. BEFORE the release handling
+	  below, which is what turns a click on one of its rows into a link.*/
+	Con_DrawCompletionPopup(con);
 
 	if (con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED)
 	{	//select was released...

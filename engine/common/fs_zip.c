@@ -1570,7 +1570,13 @@ static vfsfile_t *QDECL FSZIP_OpenVFS(searchpathfuncs_t *handle, flocation_t *lo
 
 		if (Sys_LockMutex(zip->mutex))
 		{
-			VFS_SEEK(vfsz->parent->raw, startpos);
+			//ftesurf (P184): was VFS_SEEK(vfsz->parent->raw, startpos) -- vfsz was Z_Free'd
+			//eight lines up, so this read ->parent out of freed heap, read ->raw through it
+			//and called ->Seek through THAT.  vfsz->parent was assigned `zip` at the top of
+			//this function, so the intended pointer is the one the very next line already
+			//uses.  The seek itself is load-bearing and must stay: FSZIP_Deflate64 never
+			//seeks, it only reads forward from wherever the handle happens to be.
+			VFS_SEEK(zip->raw, startpos);
 			tmp = FSZIP_Deflate64(zip->raw, csize, usize, pf->crc);
 			Sys_UnlockMutex(zip->mutex);
 		}

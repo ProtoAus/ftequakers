@@ -3311,10 +3311,17 @@ qboolean Mod_SkipCollisionHulls(model_t *mod)
 	//Mod_LoadIQMFile runs on a LOADER WORKER, and Cvar_Get REGISTERS the cvar on first call.  This
 	//started life as a lazy Cvar_Get here and crashed the game on any map with props: worker_count
 	//defaults to 4, a prop map loads many IQMs at once, and several workers hit the first-ever
-	//Cvar_Get simultaneously and raced to insert into the cvar hash.  (The neighbouring
-	//Cvar_Get("sv_prop_decomp") gets away with the same shape ONLY because that cvar is already in
-	//the mod's server.cfg, so it is registered on the main thread long before any model loads and the
-	//workers merely FIND it.  A brand-new cvar has no such protection -- do not copy that pattern.)
+	//Cvar_Get simultaneously and raced to insert into the cvar hash.
+	//
+	//FTESurf Patch 222: this comment used to go on to say that the neighbouring
+	//Cvar_Get("sv_prop_decomp") "gets away with the same shape ONLY because that cvar is already in
+	//the mod's server.cfg".  That was true of nettest and NOT of FTESurf, which sets it nowhere -- so
+	//every IQM load there took the first-ever Cvar_Get on a worker, and because the cvar carried
+	//CVAR_SERVERINFO the registration reallocated the global serverinfo buffer off the main thread
+	//(Cvar_Register -> Cvar_SetCore -> InfoBuf_SetStarBlobKey -> BZ_Realloc).  surf_kitsune crashed
+	//8 times in 8 on it.  Both of those cvars are now registered in Mod_Init like this one and merely
+	//READ down in Mod_ParseIQMMeshModel.  There is no longer a lazy Cvar_Get anywhere on a loader
+	//path -- do not add one; "it works because someone's cfg happens to set it" is not protection.
 	extern cvar_t mod_prop_hull_exclude;
 	const char *list, *sep;
 	size_t seglen;
@@ -10453,9 +10460,15 @@ static galiasinfo_t *Mod_ParseIQMMeshModel(model_t *mod, const char *buffer, siz
 		//body vs wheels); 1 = geometric ACD (recursive concavity-split — concavity WITHIN a mesh,
 		//hollow pipe / arch); 2 = offline .acd sidecar (Phase B; falls through to 1 here for now).
 		{
-			cvar_t *cdecomp = Cvar_Get("sv_prop_decomp", "0", CVAR_SERVERINFO,
-				"Prop convex-DECOMPOSITION method for sv_prop_collision 3, read at model LOAD (reload to apply): 0=per-submesh (one hull per mesh part), 1=geometric ACD (splits concavity within a single mesh: hollow pipe, arch), 2=offline-baked .acd sidecar if present else 1. Builds the collision geometry, so for client-PREDICTED props the client and server must use the SAME value (a content constant — set it server-side; a listen server shares one cvar).");
-			int decomp = cdecomp ? cdecomp->ival : 0;
+			/* FTESurf Patch 222: READ it, do not Cvar_Get it.  This function runs on a
+			   LOADER WORKER (Mod_LoadModelWorker <- COM_DoWork <- COM_WorkerThread) and
+			   Cvar_Get REGISTERS on first call; for a CVAR_SERVERINFO cvar that
+			   reallocates the global serverinfo buffer off the main thread.  Registered
+			   in Mod_Init (gl_model.c) instead -- the full account is on the declaration
+			   there.  This is the same defect Patch 102 fixed for sv_prop_hull_exclude
+			   and the comment at Mod_SkipCollisionHulls above warns about by name. */
+			extern cvar_t mod_prop_decomp;
+			int decomp = mod_prop_decomp.ival;
 
 			//gate ACD to <=32 submeshes: the shared piece counter across submeshes is then bounded
 			//(<=64 cap + ~8 unwind + <=32 roots = <=104 < ACD_ARRAY 128), so the hard backstop never
@@ -10467,9 +10480,11 @@ static galiasinfo_t *Mod_ParseIQMMeshModel(model_t *mod, const char *buffer, siz
 				;	//offline .acd bake loaded -> convhulls/numhulls set; skip the runtime ACD
 			 else
 			 {	//runtime geometric ACD (decomp 1, or 2 with no/invalid sidecar)
-				cvar_t *cconc = Cvar_Get("sv_prop_decomp_concavity", "0.06", CVAR_SERVERINFO,
-					"Geometric-ACD concavity threshold as a fraction of the model extent (clamped 0.01..0.5); smaller = more/finer pieces. Read at model load.");
-				float frac = cconc ? cconc->value : 0.06f;
+				//FTESurf Patch 222: read, do not Cvar_Get -- see the sibling above.
+				//Unreachable before Mod_Init registers it, because getting here needs
+				//mod_prop_decomp >= 1 and that is 0 until the same registration runs.
+				extern cvar_t mod_prop_decomp_concavity;
+				float frac = mod_prop_decomp_concavity.value;
 				float ext = mod->maxs[0]-mod->mins[0];
 				int m, nm = h->num_meshes ? (int)h->num_meshes : 1;
 				acdctx_t ctx;

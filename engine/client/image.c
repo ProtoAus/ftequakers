@@ -8216,6 +8216,83 @@ static void Image_MipMap4X8 (qbyte *in, int inwidth, int inheight, qbyte *out, i
 	}
 }
 
+//nettest: bleed opaque colour outwards into the fully-transparent texels of a masked image.
+//
+//GoldSrc keys transparency on palette index 255, and both of our decoders write RGBA(0,0,0,0)
+//there - the RGB is zeroed, not merely the alpha.  Nothing downstream weights colour by
+//alpha: Image_MipMap4X8 just above averages all four channels with a flat >>2, and on any
+//GPU that advertises can_genmips we do not even run it (Image_GenerateMips returns early and
+//glGenerateMipmap does the same unweighted box filter in hardware).  So every mip level mixes
+//black into the texels that survive the alpha test, and the darkening is worst exactly where
+//foliage lives: a card that is mostly keyed-out loses most of its colour to its own
+//background.  Measured on They Hunger's bush1.mdl ({bush1_2.bmp, 79.8% transparent), mean
+//RGB of the texels still passing alphaFunc GE128:
+//    mip0 luma 108.4 -> mip3 100.8 -> mip6 65.0     (39% of the colour gone by mip6)
+//and on tree1.mdl's branch.bmp, which starts dark at luma 43.8, mip6 falls to 35.0 - which
+//against any normal lighting reads as black.
+//
+//Fixing the filter alone would be useless while the GPU generates the chain, so fix the
+//SOURCE instead: give the invisible texels a sensible colour before upload and every
+//consumer - our filter, the driver's, and any future backend - produces the right average.
+//Iterative dilate, cheap and bounded; texels deep inside a large transparent region never
+//reach a visible mip level, so a capped pass count is sufficient rather than a full flood.
+//With this, the same measurement holds at mip6 luma 97.9 / 42.6 instead of 65.0 / 35.0.
+//
+//Only touches texels with alpha 0, so nothing that is drawn can change colour, and an image
+//with no transparent texels at all (or no opaque ones) leaves on the first pass.
+void Image_BleedTransparentRGB(qbyte *rgba, int width, int height)
+{
+	int pass, x, y, changed;
+	qbyte *copy;
+	size_t sz = (size_t)width * height * 4;
+
+	if (width < 2 || height < 2)
+		return;
+
+	copy = BZ_Malloc(sz);
+	for (pass = 0; pass < 16; pass++)
+	{
+		changed = 0;
+		memcpy(copy, rgba, sz);
+		for (y = 0; y < height; y++)
+		{
+			for (x = 0; x < width; x++)
+			{
+				qbyte *d = rgba + (y*width + x)*4;
+				int r = 0, g = 0, b = 0, n = 0, dx, dy;
+				if (d[3])
+					continue;	//visible, leave it exactly as it is
+				for (dy = -1; dy <= 1; dy++)
+				{
+					int sy = y + dy;
+					if (sy < 0 || sy >= height)
+						continue;
+					for (dx = -1; dx <= 1; dx++)
+					{
+						int sx = x + dx;
+						qbyte *s;
+						if (sx < 0 || sx >= width)
+							continue;
+						s = copy + (sy*width + sx)*4;
+						//alpha is still 0 on a texel this pass filled, so track
+						//"has colour" by the copy's RGB rather than by its alpha.
+						if (!s[3] && !s[0] && !s[1] && !s[2])
+							continue;
+						r += s[0]; g += s[1]; b += s[2]; n++;
+					}
+				}
+				if (!n)
+					continue;
+				d[0] = r/n; d[1] = g/n; d[2] = b/n;	//alpha deliberately left at 0
+				changed++;
+			}
+		}
+		if (!changed)
+			break;
+	}
+	BZ_Free(copy);
+}
+
 //oh how I wish I had C++'s template stuff right now
 static void Image_MipMap4X16 (unsigned short *in, int inwidth, int inheight, unsigned short *out, int outwidth, int outheight)
 {
@@ -11349,6 +11426,7 @@ static void Image_Decode_BC7_Block(qbyte *fte_restrict in, pixel32_t *fte_restri
 
 	pixel32_t palette[3][2];
 	pixel32_t tab[3][16];
+	pixel32_t blk[16];		//nettest Patch 131: see the blit at the end
 	int mode, i, j, bit, partition, ss, cb;
 	const int *weight;
 	const qbyte *p;
@@ -11357,6 +11435,22 @@ static void Image_Decode_BC7_Block(qbyte *fte_restrict in, pixel32_t *fte_restri
 	for (mode = 0; mode < 8; mode++)
 		if (*in & (1u<<mode))
 			break;
+
+	//nettest Patch 131: mode 8 is "reserved", and it is reachable from real data -
+	//it is simply a block whose first byte has none of the eight mode bits set,
+	//which is what a run of zero bytes in a corrupt or padded mip decodes as.
+	//The BC7 spec says such a block returns all zeroes; the table entry for it is
+	//all zeroes too, so falling through used to run the whole decoder with
+	//colourbits 0 and indexbits 0 and shift by (8-0).  Return the defined result
+	//instead of a coincidence.
+	if (mode >= 8)
+	{
+		for (j = 0; j < 4; j++)
+			for (i = 0; i < 4; i++)
+				out[j*w + i].u = 0;
+		return;
+	}
+
 	ss = m[mode].numsubsets;
 	bit = mode+1;
 	partition = ReadBits(in, &bit, m[mode].partitionbits);
@@ -11379,28 +11473,59 @@ static void Image_Decode_BC7_Block(qbyte *fte_restrict in, pixel32_t *fte_restri
 		else palette[i][0].v[3] = palette[i][1].v[3] = 255;
 	}
 
-	if(m[mode].pmode)
+	//nettest Patch 131: THE ENDPOINT EXPANSION BELONGS INSIDE THE SUBSET LOOP.
+	//
+	//Both branches used to run it exactly once, AFTER the loop, on `palette[i]`
+	//with i left at numsubsets - so for a 3-subset block (modes 0 and 2) that is
+	//palette[3], eight bytes past a 3x2 array, and etc_expandv is a read-modify-
+	//WRITE.  It scribbled into `tab` on the stack every time one of those blocks
+	//was decoded.  The two real subsets never got expanded at all, which is a
+	//correctness bug of its own: BC7 endpoints are stored truncated and have to
+	//have their high bits replicated down, so every BC7 texture in the game has
+	//been decoding with darker endpoints than it was authored with.
+	//
+	//The second line of each pair also read palette[i][0] where it meant [1] - a
+	//copy-paste that made the second endpoint's alpha a copy of the first's.
+	if (m[mode].pmode)
 	{
-		for (i = 0; i < m[mode].numsubsets; i++)
+		for (i = 0; i < ss; i++)
 		{
-			qbyte p = ReadBits(in, &bit, 1);
+			qbyte pb = ReadBits(in, &bit, 1);
 			for (j = 0; j < 3; j++)
-				palette[i][0].v[j] |= p<<(7-m[mode].colourbits);
-			palette[i][0].v[3] |= p<<(7-m[mode].alphabits);
+				palette[i][0].v[j] |= pb<<(7-m[mode].colourbits);
+			if (m[mode].alphabits)
+				palette[i][0].v[3] |= pb<<(7-m[mode].alphabits);
 
 			if (m[mode].pmode!=2)
-				p = ReadBits(in, &bit, 1);
+				pb = ReadBits(in, &bit, 1);
 			for (j = 0; j < 3; j++)
-				palette[i][1].v[j] |= p<<(7-m[mode].colourbits);
-			palette[i][1].v[3] |= p<<(7-m[mode].alphabits);
+				palette[i][1].v[j] |= pb<<(7-m[mode].colourbits);
+			if (m[mode].alphabits)
+				palette[i][1].v[3] |= pb<<(7-m[mode].alphabits);
+
+			//the p-bit widened each endpoint by one, so the replication shift is
+			//colourbits+1 here and colourbits in the branch below.
+			etc_expandv(palette[i][0], m[mode].colourbits+1, m[mode].colourbits+1, m[mode].colourbits+1);
+			etc_expandv(palette[i][1], m[mode].colourbits+1, m[mode].colourbits+1, m[mode].colourbits+1);
+			if (m[mode].alphabits)
+			{
+				palette[i][0].v[3] |= palette[i][0].v[3]>>(m[mode].alphabits+1);
+				palette[i][1].v[3] |= palette[i][1].v[3]>>(m[mode].alphabits+1);
+			}
 		}
-		etc_expandv(palette[i][0], m[mode].colourbits+1, m[mode].colourbits+1, m[mode].colourbits+1); palette[i][0].v[3]|=palette[i][0].v[3]>>(m[mode].alphabits+1);
-		etc_expandv(palette[i][1], m[mode].colourbits+1, m[mode].colourbits+1, m[mode].colourbits+1); palette[i][0].v[3]|=palette[i][0].v[3]>>(m[mode].alphabits+1);
 	}
 	else
 	{
-		etc_expandv(palette[i][0], m[mode].colourbits, m[mode].colourbits, m[mode].colourbits); palette[i][0].v[3]|=palette[i][0].v[3]>>m[mode].alphabits;
-		etc_expandv(palette[i][1], m[mode].colourbits, m[mode].colourbits, m[mode].colourbits);	palette[i][1].v[3]|=palette[i][0].v[3]>>m[mode].alphabits;
+		for (i = 0; i < ss; i++)
+		{
+			etc_expandv(palette[i][0], m[mode].colourbits, m[mode].colourbits, m[mode].colourbits);
+			etc_expandv(palette[i][1], m[mode].colourbits, m[mode].colourbits, m[mode].colourbits);
+			if (m[mode].alphabits)
+			{
+				palette[i][0].v[3] |= palette[i][0].v[3]>>m[mode].alphabits;
+				palette[i][1].v[3] |= palette[i][1].v[3]>>m[mode].alphabits;
+			}
+		}
 	}
 
 	cb = m[mode].indexbits[idxsel];
@@ -11426,8 +11551,28 @@ static void Image_Decode_BC7_Block(qbyte *fte_restrict in, pixel32_t *fte_restri
 			anchor[i] = 0;
 	}
 
-	//okay, tables are all set up, spew out the pixels
-	for (i = 0; i < 16; )
+	//nettest Patch 131: DECODE INTO A LOCAL 4x4, THEN BLIT ONCE.  This is the
+	//crash, and it is the same arithmetic slip three times over.
+	//
+	//The three passes below used to walk `out` through the destination image
+	//directly, each rewinding to the start of the block before its own pass.  But
+	//the walk advances `out` by 4*(w-4), while both rewinds subtracted w*4 - so
+	//each one landed SIXTEEN PIXELS BEFORE the block.  For the first block of an
+	//image that is a write behind the heap allocation; for the partial-block path
+	//(Image_Block_Decode hands the decoder a 16x16 stack scratch buffer) it is a
+	//write behind a stack array.  Either way the damage is to memory freed later,
+	//which is why the fault surfaced inside BZ_Free rather than here.
+	//
+	//Only BC7 modes 4 and 5 reach the second and third passes - the two that
+	//carry a separate index set for alpha and a channel rotation - which is why
+	//the two "FIXME: untested" notes that used to head them survived so long.
+	//What made it start biting is content: 6095 BC7 textures in the material
+	//packs, 145 of them not a multiple of 4 in one axis.
+	//
+	//Writing into a fixed 16-entry local removes the pointer arithmetic from all
+	//three passes, so this class of bug cannot come back, and the single blit at
+	//the end is now the only code that has to know the destination stride.
+	for (i = 0; i < 16; i++)
 	{
 		int pidx = p[i];
 		int idx;
@@ -11435,55 +11580,49 @@ static void Image_Decode_BC7_Block(qbyte *fte_restrict in, pixel32_t *fte_restri
 			idx = ReadBits(in, &bit, cb-1);
 		else
 			idx = ReadBits(in, &bit, cb);
-		out[i].u = tab[pidx][idx].u;
-		i++;
-		if (!(i & 3))
-			out += w-4;
+		blk[i].u = tab[pidx][idx].u;
 	}
 
 	//mode has separate alpha indexes, spew those out too, clobbering any alpha from dodgy rgb blends
 	if (m[mode].indexbits[idxsel^1])
-	{	//FIXME: untested
-		out -= w*4;
+	{
 		cb = m[mode].indexbits[idxsel^1];
 		weight = wsz[cb];
-		for (i = 0; i < m[mode].numsubsets; i++)
+		for (i = 0; i < ss; i++)
 		{
 			for (j = 0; j < (1<<cb); j++)
 				tab[i][j].v[3] = (palette[i][0].v[3]*(64-weight[j]) + palette[i][1].v[3]*weight[j] + 32)>>6;
 		}
 
-		for (i = 0; i < 16; )
+		for (i = 0; i < 16; i++)
 		{
 			int idx;
+			//the second index set always anchors at pixel 0: every mode that has
+			//one is single-subset, so there is no per-subset anchor to look up.
 			if (i == 0)
 				idx = ReadBits(in, &bit, cb-1);
 			else
 				idx = ReadBits(in, &bit, cb);
-			out[i].v[3] = tab[p[i]][idx].v[3];
-			i++;
-			if (!(i & 3))
-				out += w-4;
+			blk[i].v[3] = tab[p[i]][idx].v[3];
 		}
 	}
 
 	//some modes allow swapping the alpha with an rgb channel (per block)
 	if (rot)
-	{	//FIXME: untested
+	{
 		qbyte t;
 		rot--; //0=disable, 1=red, 2=green, 3=blue
-		out -= w*4;
-		for (i = 0; i < 16; )
+		for (i = 0; i < 16; i++)
 		{
-			t = out[i].v[3];
-			out[i].v[3] = out[i].v[rot];
-			out[i].v[rot] = t;
-
-			i++;
-			if (!(i & 3))
-				out += w-4;
+			t = blk[i].v[3];
+			blk[i].v[3] = blk[i].v[rot];
+			blk[i].v[rot] = t;
 		}
 	}
+
+	for (j = 0; j < 4; j++)
+		for (i = 0; i < 4; i++)
+			out[j*w + i].u = blk[j*4 + i].u;
 }
 #endif
 
@@ -13274,6 +13413,8 @@ static qboolean Image_GenMip0(struct pendingtextureinfo *mips, unsigned int flag
 					rgbadata[i] = 0xff000000 | (p[0]<<0) | (p[1]<<8) | (p[2]<<16);	//FIXME: endian
 				}
 			}
+			if (imgdepth == 1)
+				Image_BleedTransparentRGB((qbyte*)rgbadata, imgwidth, imgheight);
 		}
 		else
 		{
@@ -13301,6 +13442,9 @@ static qboolean Image_GenMip0(struct pendingtextureinfo *mips, unsigned int flag
 		rgbadata = BZ_Malloc(imgdepth * imgwidth * imgheight*4);
 		for (i = 0; i < imgwidth * imgheight * imgdepth; i++)
 			rgbadata[i] = ((unsigned int*)palettedata)[((qbyte*)rawdata)[i]];
+		//HL studio masked skins arrive here, with alphaPal[255] = RGBA(0,0,0,0).
+		if (imgdepth == 1)
+			Image_BleedTransparentRGB((qbyte*)rgbadata, imgwidth, imgheight);
 		if (freedata)
 			BZ_Free(rawdata);
 		freedata = true;
@@ -14492,6 +14636,43 @@ qboolean Image_LocateHighResTexture(image_t *tex, flocation_t *bestloc, char *be
 	return bestdepth != 0x7fffffff;
 }
 
+//nettest: is this identifier a SECONDARY map rather than the diffuse itself?
+//
+//R_BuildLegacyTexnums builds every secondary map's identifier by APPENDING a suffix to the
+//diffuse name (gl_shader.c:6799 _pal, :6819 _norm, :6828 _pants, :6835 _shirt, :6843 _gloss,
+//:6851 _reflect, :6867 "_luma:%s_glow"), so a masked texture "{grate3a" also asks for
+//"{grate3a_norm", "{grate3a_pal", "{grate3a_gloss", "{grate3a_reflect" and
+//"{grate3a_luma:{grate3a_glow" - every one of which ALSO begins with '{'.
+//
+//That matters because the "draw it as nothing" rescue further down keys purely on the first
+//character, and it is only ever correct for the DIFFUSE image.  Rescuing the others made
+//Image_LoadRawTexture SUCCEED for maps that should have failed, so TEXLOADED() reported true
+//for bump/fullbright/specular/reflectmask on every masked texture in the map and on nothing
+//else.  A phantom normalmap is the damaging one: it set PERMUTATION_BUMPMAP
+//(gl_backend.c:4304), which pulled in "#define DELUXE" (gl_shader.c), and defaultwall.glsl
+//then computed norm = normalize(vec3(0)-0.5) and did `lightmaps *= dot(norm, deluxe)` with
+//that -0.577 - clamping a perfectly good lightmap to PURE BLACK.  That was the whole of the
+//"masked world surfaces render black" bug.
+//
+//Handles the "%s_luma:%s_glow" alternation form by testing only the first alternative.
+//A stringly-typed test, deliberately: the exact alternative is a new IF_ flag threaded
+//through the five tex->base call sites, which is a much wider change for a case where the
+//worst outcome of a false positive is one texture drawing as missing rather than as nothing.
+static qboolean Image_IsSecondaryMapIdent(const char *ident)
+{
+	static const char *suffix[] = {"_luma","_glow","_norm","_bump","_pal","_gloss","_spec","_reflect","_pants","_shirt","_diff"};
+	const char *e = strchr(ident, ':');
+	size_t len = e?(size_t)(e-ident):strlen(ident);
+	size_t i, sl;
+	for (i = 0; i < countof(suffix); i++)
+	{
+		sl = strlen(suffix[i]);
+		if (len > sl && !Q_strncasecmp(ident+len-sl, suffix[i], sl))
+			return true;
+	}
+	return false;
+}
+
 static void Image_LoadHiResTextureWorker(void *ctx, void *data, size_t a, size_t b)
 {
 	image_t *tex = ctx;
@@ -14697,7 +14878,57 @@ static void Image_LoadHiResTextureWorker(void *ctx, void *data, size_t a, size_t
 		tex->fallbackdata = NULL;	
 	}
 
-//	Sys_Printf("Texture %s failed\n", nicename);
+	//nettest: A '{'-PREFIXED IMAGE IS A GOLDSRC MASK, AND FAILING IT INTO
+	//missing_texture IS THE WORST POSSIBLE ANSWER FOR ONE.
+	//
+	//Shader_DefaultBSPQ1 keys purely on the leading '{' (gl_shader.c:7385) and hands
+	//every such BSP texture "defaultwall#MASK=0.666#MASKLT", i.e. a fragment program
+	//whose whole job is `if (col.a < 0.666) discard;`.  When the image does not
+	//resolve, T_GEN_DIFFUSE falls back to missing_texture (gl_backend.c:1370-1375) —
+	//which is created with IF_NOALPHA (r_2d.c:290), which rewrites RGBA8 to RGBX8
+	//(image.c:13408-13413), which makes the sampler return alpha 1.0.  The discard can
+	//then never fire, so a texture that exists ONLY in order to be invisible renders as
+	//an opaque block.  GoldSrc maps use exactly that idiom for invisible-but-solid
+	//brushwork: th_ep1_01's func_wall *130 is five faces of "{invisible", a 16x16
+	//halflife.wad lump whose 256 texels are ALL palette index 255.
+	//
+	//Fail it into "nothing" instead, which is what GoldSrc draws.  A 1x1 transparent
+	//RGBA texel is discarded by the same alpha test at every mip level and on every
+	//backend, including the Vulkan one where missing_texture is not substituted at all
+	//(vk_backend.c:1561-1562 returns curtexnums->base unconditionally).
+	//
+	//Deliberately placed HERE, at the tail, rather than in R_BuildLegacyTexnums where
+	//it would have to be passed as fallbackdata: Image_LoadHiResTextureWorker only
+	//probes the WADs at all under `if (!tex->fallbackdata)` (:14730 above), so giving a
+	//'{' texture a fallback up front would stop the real lump from EVER being found and
+	//turn every fence, grate, ladder and vine in the corpus invisible.  By the time
+	//control reaches this line, every resolve has already been tried and lost.
+	//...and ONLY for the diffuse.  Every secondary map ("{grate3a_norm", "{grate3a_luma", ...)
+	//starts with '{' too, and rescuing those handed the renderer phantom normalmaps and lumas.
+	//See Image_IsSecondaryMapIdent above for what that cost.
+	if (tex->ident[0] == '{' && !Image_IsSecondaryMapIdent(tex->ident))
+	{
+		qbyte *clear = BZ_Malloc(4);
+		clear[0] = clear[1] = clear[2] = clear[3] = 0;
+		Con_DPrintf(CON_WARNING "masked texture \"%s\" did not resolve from any wad "
+		                        "or replacement - drawing it as nothing\n", tex->ident);
+		//PTI_RGBA8 is what W_ConvertWAD3Texture itself produces for a masked lump
+		//(wad.c:486), so this is the format this function is already proven to take.
+		//IF_NOALPHA cleared for the same reason the fallback above is fatal with it.
+		if (Image_LoadRawTexture(tex, tex->flags & ~IF_NOALPHA, clear, NULL, 1, 1, PTI_RGBA8))
+			return;
+		//Image_LoadRawTexture has already signalled the failure on this path.
+		return;
+	}
+
+	//nettest: name it.  This was a bare commented-out Sys_Printf, and a per-texture WAD
+	//miss printing NOTHING anywhere is the single reason the "{invisible" case above
+	//survived two separate investigations - W_LoadTextureWadFile's own "couldn't find"
+	//is also suppressed, its only callers passing complain=false (wad.c:894, :896).
+	//Con_DPrintf, so it costs nothing unless `developer` is set.
+	Con_DPrintf(CON_WARNING "texture \"%s\" did not resolve from any wad or "
+	                        "replacement - drawing it as no_texture\n", tex->ident);
+
 	//signal the main thread to set the final status instead of just setting it to avoid deadlock (it might already be waiting for it).
 	if (tex->flags & IF_NOWORKER)
 		Image_LoadTexture_Failed(tex, NULL, 0, 0);

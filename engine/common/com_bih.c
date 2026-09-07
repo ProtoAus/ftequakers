@@ -249,12 +249,133 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 		}
 	}
 }*/
+/*FTESurf Patch 258: a diagnostic tap on the triangle clipper, and nothing else.
+
+  pm_dispprobe reported that the displacement-seam snag SURVIVES Patch 256's
+  winding fix: the player stops dead (fraction 0, origin unchanged) against a
+  normal with z 0.411 -- too steep to stand on, too steep to step onto.
+
+  A normal on its own cannot say why.  It is one thing if the terrain there
+  really is a 66-degree slope, and quite another if it is one of the three
+  in-plane edge planes below being applied outside the region where it is valid,
+  which is the bevel deficiency the plan calls Bug B.  Those two demand opposite
+  work, so record WHICH plane of the set stopped the trace, and the triangle it
+  came from.
+
+  The winning normal is recorded alongside on purpose.  A pmove trace is merged
+  across several models, and the last triangle to win an INNER trace is not
+  necessarily the one that won the OUTER one -- so the reader must compare this
+  normal against the trace it is printing before believing the record.  The two
+  brush clippers clear the index for the same reason.
+
+  Not compiled out: the whole value of pm_dispprobe is that it can be switched on
+  in a shipped build, on the machine where the snag actually reproduces. */
+int		bih_probe_plane = -1;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
+vec3_t	bih_probe_norm;
+vec3_t	bih_probe_tri[3];
+
+extern cvar_t pm_trisoup_bevels;	//FTESurf Patch 258, defined in common.c
+
+/*
+==================
+BIH_TriangleBevels			FTESurf Patch 258
+
+The nine edge-cross-axis bevel planes that an AABB sweep against a triangle
+needs, and that this file has never built.
+
+WHY THE OLD SET IS NOT ENOUGH.  Sweeping a box against a triangle is a point
+query against the Minkowski sum of the two.  That sum's faces are: the two
+triangle face planes, the six box face planes, and one plane for each pairing of
+a triangle edge with a box edge direction -- three edges by three axes, nine.
+BIH_ClipToTriangle built the first two groups (planes[0..1], and the axial block
+under `if (tr->shape)`) and, instead of the nine, three IN-PLANE edge planes with
+a `//FIXME: use adjacency info` beside them.  Those three are valid supporting
+planes, so they never over-tighten -- but they leave the swept volume a strict
+SUPERSET of the true sum, bulging along every edge.
+
+WHAT THAT COST.  On bhop_monster_jam, standing at 10529.1 -324.1 5357.3 on
+displacement #89, the player is stopped dead: fraction 0, origin unchanged, on a
+normal of 0.506 -0.759 0.411.  That normal is perpendicular to the triangle's own
+face normal to within 0.0002 -- it IS one of the in-plane edge planes -- and the
+triangle it belongs to has a face normal of z 0.859, comfortably standable.  An
+exact separating-axis test puts the box 0.11 units clear of that triangle, and
+names the separating axis: edge2 cross Y, one of the nine that were missing.  The
+reported normal's z of 0.411 is below PMSrc_Standable(), so the step-down is
+refused too, and the player is wedged on empty air next to walkable ground.
+
+ORIENTATION.  For each edge, the normal is signed so the third vertex ends up
+INSIDE (d <= 0), which is the same thing as taking the triangle's support in that
+direction; the two vertices on the edge share a distance because the normal is
+perpendicular to the edge.
+
+AND THE SLAB, which is the subtle part.  planes[1] gives every triangle four
+units of solid BEHIND its face, so the shape these planes must contain is not the
+triangle but the prism.  A bevel normal is not perpendicular to the face normal,
+so a plane that merely supports the triangle can slice the corners off the back of
+that prism -- and a plane that cuts the solid volume is a FALSE EXCLUSION, which
+means falling through the world, a far worse failure than the snag being fixed.
+So the distance is the support of the whole prism: the back vertices are
+v - 4*facenormal, which shifts the plane by -4*dot(n, facenormal), and only when
+that shift is outward does it matter.  Four of the nine need it on the triangle
+above; the one that does the work does not, so the fix is unaffected by the
+safety margin.  With this the construction cannot exclude a real contact at all,
+by construction rather than by sampling.
+
+Both clippers call this, and that is deliberate: BIH_ClipToTriangle and
+BIH_TestToTriangle must agree about what is solid or a move can end at a position
+the unswept test still calls solid, and PMSrc_TryPlayerMove would clear velocity
+there.  One function means they cannot drift apart.
+==================
+*/
+static int BIH_TriangleBevels(mplane_t *out, const mplane_t *face, const float *p1, const float *p2, const float *p3)
+{
+	static const int ev[3][3] = {{0,1,2},{1,2,0},{2,0,1}};	//edge start, edge end, off-vertex
+	const float *v[3];
+	vec3_t edge, axis, n;
+	int e, a, count = 0;
+	float d, l;
+
+	v[0] = p1;
+	v[1] = p2;
+	v[2] = p3;
+
+	for (e = 0; e < 3; e++)
+	{
+		VectorSubtract(v[ev[e][1]], v[ev[e][0]], edge);
+		for (a = 0; a < 3; a++)
+		{
+			VectorClear(axis);
+			axis[a] = 1;
+			CrossProduct(edge, axis, n);
+			if (VectorNormalize(n) < 1e-5)
+				continue;	//edge is parallel to this axis; there is no such face
+
+			d = DotProduct(v[ev[e][0]], n);
+			if (DotProduct(v[ev[e][2]], n) > d)
+			{	//point it away from the triangle
+				VectorNegate(n, n);
+				d = -d;
+			}
+
+			l = DotProduct(n, face->normal);
+			if (l < 0)
+				d -= 4*l;	//also support the back of the four-unit slab
+
+			VectorCopy(n, out[count].normal);
+			out[count].dist = d;
+			count++;
+		}
+	}
+	return count;
+}
+
 static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct bihdata_s *info)
 {
 	int i, j;
 	float *p1, *p2, *p3;
 	vec3_t edge1, edge2, edge3;
-	mplane_t planes[5];
+	mplane_t planes[5+9];	//FTESurf Patch 258: +9 edge-cross-axis bevels
+	int numplanes;
 	const mplane_t *plane;
 	vec3_t tmins, tmaxs;
 
@@ -322,6 +443,15 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	VectorNormalize(planes[4].normal);
 	planes[4].dist = DotProduct(p1, planes[4].normal);
 
+	/*FTESurf Patch 258 -- see the essay above BIH_TriangleBevels.  Only for a
+	  shaped trace: a point trace's Minkowski sum IS the prism, so the three
+	  in-plane planes above are already exact for it and these would be pure
+	  cost.  tr->shape is 0 for shape_ispoint, which is the same test the axial
+	  bevel block below uses. */
+	numplanes = 5;
+	if (tr->shape && pm_trisoup_bevels.ival)
+		numplanes += BIH_TriangleBevels(planes+numplanes, &planes[0], p1, p2, p3);
+
 	nearfrac=0;
 	enterfrac = -1;
 	leavefrac = 2;
@@ -330,7 +460,7 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	getout = false;
 	startout = false;
 
-	for (i=0, plane = planes ; i<countof(planes) ; i++, plane++)
+	for (i=0, plane = planes ; i<numplanes ; i++, plane++)	//FTESurf Patch 258: numplanes, not countof
 	{
 		calcdist(dist, plane)
 
@@ -442,6 +572,15 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 			VectorCopy(clipplane->normal, tr->trace.plane.normal);
 			tr->trace.surface = &nullsurface.c;
 			tr->trace.contents = info->contents;
+
+			//FTESurf Patch 258: see the essay above this function.  u is always
+			//assigned by the test above, and is the bbox-plane index when it is
+			//in range; otherwise clipplane points into planes[].
+			bih_probe_plane = (u < countof(bboxplanes))?100+(int)u:(int)(clipplane-planes);
+			VectorCopy(clipplane->normal, bih_probe_norm);
+			VectorCopy(p1, bih_probe_tri[0]);
+			VectorCopy(p2, bih_probe_tri[1]);
+			VectorCopy(p3, bih_probe_tri[2]);
 		}
 	}
 }
@@ -451,7 +590,8 @@ static void BIH_TestToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	int j;
 	float *p1, *p2, *p3;
 	vec3_t edge1, edge2, edge3;
-	mplane_t planes[5];
+	mplane_t planes[5+9];	//FTESurf Patch 258: +9, and it MUST match BIH_ClipToTriangle
+	int numplanes;
 	const mplane_t *plane;
 	vec3_t tmins, tmaxs;
 
@@ -515,7 +655,12 @@ static void BIH_TestToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	VectorNormalize(planes[4].normal);
 	planes[4].dist = DotProduct(p1, planes[4].normal);
 
-	for (i=0, plane = planes; i<countof(planes) ; i++, plane++)
+	//FTESurf Patch 258: in lockstep with BIH_ClipToTriangle, via the same builder.
+	numplanes = 5;
+	if (tr->shape && pm_trisoup_bevels.ival)
+		numplanes += BIH_TriangleBevels(planes+numplanes, &planes[0], p1, p2, p3);
+
+	for (i=0, plane = planes; i<numplanes ; i++, plane++)
 	{
 		calcdist(dist, plane)
 		d1 = DotProduct (tr->startpos, plane->normal) - dist;
@@ -636,6 +781,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			VectorCopy(clipplane->normal, tr->trace.plane.normal);
 			tr->trace.surface = &(leadside->surface->c);
 			tr->trace.contents = brush->contents;
+			bih_probe_plane = -1;	//FTESurf Patch 258: a brush won, so any triangle record is stale.
 		}
 	}
 }
@@ -750,6 +896,7 @@ static void BIH_ClipBoxToPatch (struct bihtrace_s *fte_restrict tr, q2cbrush_t *
 			VectorCopy(clipplane->normal, tr->trace.plane.normal);
 			tr->trace.surface = &leadside->surface->c;
 			tr->trace.contents = brush->contents;
+			bih_probe_plane = -1;	//FTESurf Patch 258: a patch won, so any triangle record is stale.
 		}
 		else if (enterfrac < tr->trace.truefraction)
 			leavefrac=0;
@@ -1859,12 +2006,36 @@ void BIH_BuildAlias (model_t *mod, galiasinfo_t *meshes)
 	struct bihleaf_s *leafs, *leaf;
 	galiasinfo_t *submesh;
 
+	/*
+	FTESurf Patch 201: LOD surfaces are NOT collision.
+
+	This walks whatever galiasinfo_t chain it is handed, and that chain may now
+	carry every level of detail rather than just one -- so without a filter a
+	model's collision tree would hold two or three overlapping copies of the same
+	shape, at different densities, all solid at once.
+
+	`mindist` is nonzero only on a reduced level (level 0 is always [0,maxdist)),
+	so it is exactly the "this is not the real mesh" test.  Latent for MD3's
+	external _1.md3/_2.md3 LODs since long before this patch, for the same
+	reason; live now that mod_hl2.c populates the field.
+
+	Only matters where the render mesh IS the collision mesh -- for Source props
+	that is the .phy fallback, 162 of the 3,084 .phy files in the mounted
+	archives (see the essay in mod_hl2.c).  The other 2,922 pass a .phy hull in
+	here instead, which has no LOD chain and is unaffected either way.
+	*/
 	numleafs = 0;
 	for (submesh = meshes; submesh; submesh = submesh->nextsurf)
+	{
+		if (submesh->mindist)
+			continue;
 		numleafs+=submesh->numindexes/3;
+	}
 	leaf = leafs = BZ_Malloc(sizeof(*leafs)*numleafs);
 	for (submesh = meshes; submesh; submesh = submesh->nextsurf)
 	{
+		if (submesh->mindist)
+			continue;
 		for (i = 0; i < submesh->numindexes; i+=3)
 		{
 			vec_t *v1,*v2,*v3;

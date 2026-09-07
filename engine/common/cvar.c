@@ -993,7 +993,12 @@ static cvar_t *Cvar_SetCore (cvar_t *var, const char *value, qboolean force)
 	{
 		if (var->string && value)
 			if (strcmp(var->string, value))
+			{	//nettest Patch 141: name the cvar, so a per-map-load full shader
+				//re-parse can be traced to whatever changed.
+				extern const char *shader_needreload_why;
+				shader_needreload_why = var->name;
 				Shader_NeedReload(false);
+			}
 	}
 	if (var->flags & CVAR_USERINFO)
 	{

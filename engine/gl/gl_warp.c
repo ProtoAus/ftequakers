@@ -28,7 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static void R_CalcSkyChainBounds (batch_t *s);
 static void GL_DrawSkySphere (batch_t *fa, shader_t *shader);
 static void GL_SkyForceDepth(batch_t *fa);
-static void GL_DrawSkyBox (texid_t *texnums, batch_t *s);
+static void GL_DrawSkyBox (texid_t *texnums, const float *tscale, batch_t *s);
 
 static void GL_DrawSkyGrid (texnums_t *tex);
 
@@ -39,9 +39,46 @@ static cvar_t r_fastskycolour						= CVARF ("r_fastskycolour", "0",	CVAR_RENDERE
 static cvar_t gl_skyboxdist						= CVARD  ("gl_skyboxdist", "0", "The distance of the skybox. If 0, the engine will determine it based upon the far clip plane distance.");	//0 = guess.
 static cvar_t r_skycloudalpha						= CVARFD ("r_skycloudalpha", "1", CVAR_RENDERERLATCH, "Controls how opaque the front layer of legacy scrolling skies should be.");
 cvar_t r_skyboxname							= CVARFC ("r_skybox", "", CVAR_RENDERERCALLBACK | CVAR_SHADERSYSTEM, R_SkyBox_Changed);
+/*
+FTESurf Patch 211: a sky for a map that declares none.
+
+Measured on surf_colin_blaster_69000 (VBSP v25): its worldspawn has NO `skyname`
+key at all, its 34 texture names contain exactly one sky string
+(TOOLS/TOOLSSKYBOX2D), and the only sky asset in its 80-entry pakfile is its own
+materials/tools/toolsskybox2d.{vmt,vtf} -- an UnlitGeneric %compile2Dsky with a
+flat 256x256 image and no cubemap.  The faces ARE sky faces (mod_vbsp.c maps
+TIHL2_SKYBOX -> TI_SKY -> SURF_DRAWSKY), but with no name R_SetSky leaves
+`forcedsky` NULL and R_DrawSkyChain falls through to the surface's own shader --
+so one flat picture ends up on all six faces, and the top is where that reads as
+obviously wrong.  Reported as "the top uses a side sky texture as the top", which
+is the right observation about the wrong cause: every face is the same picture.
+
+Censused over the 1084 installed cstrike maps: 1074 declare a skyname, 10 do not.
+So this is inert on 99% of the library, and it fills a HOLE rather than
+overriding anything -- r_skybox still wins over both, which is the ordering
+below and is the whole design.  Empty by default so nothing outside FTESurf's
+own cfg changes.
+*/
+cvar_t r_skybox_default						= CVARFCD("r_skybox_default", "", CVAR_ARCHIVE | CVAR_RENDERERCALLBACK | CVAR_SHADERSYSTEM, R_SkyBox_Changed, "Skybox to use on a map that declares no sky of its own. Empty (the default) leaves such a map drawing whatever its own sky surfaces carry. r_skybox overrides this, and also overrides a map that DOES declare a sky.");
 cvar_t r_skybox_orientation					= CVARFD ("r_glsl_skybox_orientation", "0 0 0 0", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skybox_autorotate					= CVARFD ("r_glsl_skybox_autorotate", "1", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skyfog								= CVARD  ("r_skyfog", "0.5", "This controls an alpha-blend value for fog on skyboxes, cumulative with regular fog alpha.");
+//nettest Patch 126.  Reported on They Hunger: func_ brush entities from elsewhere
+//in the map are visible THROUGH the sky.  The comment further down this file
+//names that exact symptom - "this can result in rooms behind the sky surfaces
+//being visible" - and the guard against it is GL_SkyForceDepth.
+//
+//But the GLSL sky path never reaches it.  When the sky shader carries a program
+//(which is the normal case on a modern build), R_DrawSkyChain returns false to
+//mean "draw it as an ordinary batch" and returns from ABOVE the masking call at
+//the bottom of the function.  Only the legacy skydome/skybox/skygrid paths get
+//masked.  World geometry is still hidden by the BSP's own PVS, which is why the
+//leak shows up as entities and never as walls.
+//
+//Default 1, because on a Quake or Half-Life BSP the mask is what the engine
+//already intends (SKYMUSTBEMASKED is true for both).  Set to 0 to get the old
+//behaviour back if a map turns out to depend on seeing through its own sky.
+cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "1", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox on Quake/Half-Life BSPs.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not (default).\n2: always mask, on every game.");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;
@@ -83,6 +120,8 @@ void R_SetSky(const char *sky)
 		return;	//not ready yet...
 	if (*r_skyboxname.string)	//override it with the user's preference
 		sky = r_skyboxname.string;
+	else if (!*sky)				//FTESurf Patch 211: the map declared none -- fill the hole
+		sky = r_skybox_default.string;
 
 	shadername = va("skybox_%s", sky);
 	if (!forcedsky || strcmp(shadername, forcedsky->name))
@@ -249,10 +288,16 @@ static void R_ForceSky_f(void)
 {
 	if (Cmd_Argc() < 2)
 	{
+		//FTESurf Patch 211: report what is actually IN FORCE, in the same order
+		//R_SetSky resolves it. Without the middle clause a map with no skyname
+		//reported "no skybox forced" while drawing r_skybox_default's sky, which
+		//is the one state this command exists to make visible.
 		if (*r_skyboxname.string)
 			Con_Printf("Current user skybox is %s\n", r_skyboxname.string);
 		else if (*cl.skyname)
 			Con_Printf("Current per-map skybox is %s\n", cl.skyname);
+		else if (*r_skybox_default.string)
+			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string, forcedsky?"yes":"no");
 		else
 			Con_Printf("no skybox forced.\n");
 	}
@@ -322,17 +367,66 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 
 	if (cl.fog[FOGTYPE_SKYROOM].density)
 	{
+		extern cvar_t r_fog_linear;	//FTESurf Patch 254
 		CL_BlendFog(&r_refdef.globalfog, &cl.oldfog[FOGTYPE_SKYROOM], realtime, &cl.fog[FOGTYPE_SKYROOM]);
-		r_refdef.globalfog.density/=64;
+
+		/*
+		  FTESurf Patch 254: this /64 was unconditional, unlike the main-scene
+		  twin in gl_rmain.c which skips it under r_fog_linear.  In linear mode
+		  density is the fog END DISTANCE, so dividing it by 64 turned a
+		  skyroomfog end of 8000 into 125 -- and with a start (depthbias) of 2000
+		  the shader's (density-depthbias) denominator goes to -1875, giving fog
+		  that gets THINNER with distance and inverts.  Source maps set exactly
+		  these numbers on sky_camera, so this had to be guarded before any of
+		  them could work.
+
+		  The constant was standing in for a real quantity: Source divides 3D
+		  skybox fog distances by the sky_camera scale (viewrender.cpp
+		  Enable3dSkyboxFog -- scale = 1/m_skybox3d.scale, then
+		  FogStart(GetSkyboxFogStart()*scale)).  FTE's skyroom renders the small
+		  geometry at true size and only moves the camera, so the same division
+		  is needed -- but the gamecode is what knows the scale, so the gamecode
+		  does it when it emits `skyroomfog` and the engine stops guessing 64.
+		*/
+		if (!r_fog_linear.ival)
+			r_refdef.globalfog.density/=64;
 	}
 
 	/*work out where the camera should be (use the same angles)*/
 	VectorCopy(r_refdef.skyroom_pos, r_refdef.vieworg);
 	VectorCopy(r_refdef.skyroom_pos, r_refdef.pvsorigin);
 
+	/*
+	FTESurf Patch 209a: this used to run the PointContents trace and print EVERY FRAME for as long as
+	the skyroom camera sat in solid.  That is one line per frame -- ~300/s uncapped -- and
+	Con_DPrintf writes to the log whenever log_developer is set REGARDLESS of developer
+	(console.c:1258), so each one hits the disk too.  It is a measurable framerate sink in
+	exactly the configuration we develop in, and it cost a whole verification run: the G3
+	sweep died after two maps with 168 lines of it in the tail.
+
+	Momentum/Strata maps hit this routinely -- surf_kitsune's sky_camera is inside brushwork,
+	so the message is permanently true there rather than being a rare warning.
+
+	Gate on BOTH a movement threshold and a minimum interval, ANDed.  lastpos is only updated
+	when we actually print, so a camera that moves 4 units and then stops still gets reported
+	on a later frame rather than being swallowed by the time gate.  A static skyroom in solid
+	-- the normal case -- now prints exactly once instead of once per frame, and the trace is
+	skipped with it: that was pure diagnostic cost paid on every frame of every skyroom.
+	*/
 	if (developer.ival)
-		if (r_worldentity.model->funcs.PointContents(r_worldentity.model, NULL, r_refdef.skyroom_pos) & FTECONTENTS_SOLID)
-			Con_DPrintf("Skyroom position %.1f %.1f %.1f in solid\n", r_refdef.skyroom_pos[0], r_refdef.skyroom_pos[1], r_refdef.skyroom_pos[2]);
+	{
+		static vec3_t	lastskyroomreport = {-999999, -999999, -999999};
+		static double	lastskyroomtime;
+		vec3_t			skyroomdelta;
+		VectorSubtract(r_refdef.skyroom_pos, lastskyroomreport, skyroomdelta);
+		if (DotProduct(skyroomdelta, skyroomdelta) >= 16.0 && realtime - lastskyroomtime >= 0.25)
+		{
+			VectorCopy(r_refdef.skyroom_pos, lastskyroomreport);
+			lastskyroomtime = realtime;
+			if (r_worldentity.model->funcs.PointContents(r_worldentity.model, NULL, r_refdef.skyroom_pos) & FTECONTENTS_SOLID)
+				Con_DPrintf("Skyroom position %.1f %.1f %.1f in solid\n", r_refdef.skyroom_pos[0], r_refdef.skyroom_pos[1], r_refdef.skyroom_pos[2]);
+		}
+	}
 
 	if (r_refdef.skyroom_spin[3])
 	{
@@ -372,7 +466,46 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 
 //q3 mustn't mask sky (breaks q3map2's invisible skyportals), whereas q1 must (or its a cheat). halflife doesn't normally expect masking.
 //we also MUST mask any sky inside skyrooms, or you'll see all the entities outside of the skyroom through the room's own sky (q3map2 skyportals are hopefully irrelevant in this case).
-#define SKYMUSTBEMASKED (r_worldentity.model->fromgame != fg_quake3 || ((r_refdef.flags & RDF_DISABLEPARTICLES) && r_ignoreentpvs.ival) || !cls.allow_unmaskedskyboxes)
+
+/*
+  nettest Patch 140.  WHICH GAMES WANT THE MASK, and why this became a per-game
+  question rather than a global one.
+
+  Patch 126/126b added the mask because a Half-Life BSP was showing rooms and
+  water through its own sky, and on a Quake or HL BSP masking is what the engine
+  already intends -- Q1 sky IS opaque geometry and seeing past it is a cheat.
+
+  A SOURCE map is the opposite case.  Source draws sky as a distant environment
+  and never writes sky depth at the brush, so a prop that pokes through, sits
+  behind, or merely intersects a sky brush is whole there and was being SLICED
+  here.  On a surf map that is most of the decoration near the map edges.
+
+  So r_sky_forcedepth is now three-state rather than a boolean:
+      0  never mask   (the pre-Patch-126 behaviour)
+      1  auto         (default: mask Quake/HL/Q2, do not mask Source)
+      2  always mask  (the Patch 126 behaviour on every game)
+  The default keeps quakers -- which is Quake and Half-Life BSPs, sharing this
+  engine tree -- byte-for-byte identical, and only changes VBSP.
+
+  fg_new IS SHARED, and it is worth being straight about it: VBSP, Doom 3 and
+  CoD all report fg_new, so this turns the mask off for those two as well.
+  Neither is mounted in either install here, and both draw sky the modern way
+  (a distant environment, not depth-writing geometry), so the semantics are
+  right for them too -- but if that ever turns out to be wrong, r_sky_forcedepth 2
+  is the switch and this is the note.
+*/
+static qboolean R_SkyMaskWantedForGame(void)
+{
+	if (!r_worldentity.model)
+		return true;
+	if (r_worldentity.model->fromgame == fg_quake3)
+		return false;	//q3map2's invisible skyportals, as before
+	if (r_worldentity.model->fromgame == fg_new && r_sky_forcedepth.ival < 2)
+		return false;	//Source et al: masking here clips props at the sky brush
+	return true;
+}
+
+#define SKYMUSTBEMASKED (R_SkyMaskWantedForGame() || ((r_refdef.flags & RDF_DISABLEPARTICLES) && r_ignoreentpvs.ival) || !cls.allow_unmaskedskyboxes)
 
 /*
 =================
@@ -383,6 +516,7 @@ qboolean R_DrawSkyChain (batch_t *batch)
 {
 	shader_t *skyshader;
 	texid_t *skyboxtex;
+	const float *skyboxscale = NULL;	//ftesurf (P181): per-face T scale from $basetexturetransform
 
 	if (r_fastsky.value)
 	{
@@ -396,7 +530,58 @@ qboolean R_DrawSkyChain (batch_t *batch)
 
 		if (r_refdef.flags & RDF_SKIPSKY)
 		{
-			if (r_worldentity.model->fromgame != fg_quake3)
+			/*
+			FTESurf Patch 265: this was the one RDF_SKIPSKY site Patch 140 missed.
+
+			Patch 140 turned "does this game want its sky depth-masked" from a
+			hard-coded `!= fg_quake3` into SKYMUSTBEMASKED, which additionally
+			exempts Source (fg_new) -- and rewrote the other three tests in
+			this function to use it (the SKIPSKY return in the `else` branch
+			below, the cubemap-sky return above it, and the one at the bottom
+			of the function).  This one kept the old literal, so a Source map
+			took the mask here and nowhere else.
+
+			The two branches that differ are this one, taken when worldspawn
+			names a skyname so `forcedsky` is set, and the `else` below, taken
+			when it does not so the surface's own GLSL sky shader is used.
+			Nothing about a map's sky NAME should decide whether its sky
+			occludes, and that was the entire difference:
+			surf_boreas declares `skyname "tendies_sky"` and therefore masked,
+			while a Source map with no skyname did not.
+
+			What the mask does here: under RDF_SKIPSKY the skyroom has already
+			been drawn into the colour buffer and depth cleared, so writing sky
+			depth at the sky brush depth-rejects the world BEHIND that brush and
+			leaves the skyroom showing through it.  On surf_boreas a sky brush at
+			y=6144 stands ~880 units in front of the mountain at the stage edge,
+			so the mountain was rejected and the skyroom's cloud planes were
+			drawn over solid rock -- reported as "turning on the 3d skybox
+			presents some sort of skybox onto the stage making me see through
+			the stage itself".  169,193 pixels of that vantage.
+
+			SAFE FOR THE SKYROOM RECURSION, which is what the note in
+			GL_SkyForceDepth warns about: R_DrawSkyroom clears RDF_SKIPSKY
+			before recursing (`r_refdef.flags &= ~RDF_SKIPSKY`, just after it
+			sets RDF_DISABLEPARTICLES), so this branch cannot be entered from
+			inside a skyroom at all.  It is main-pass only.  That is the whole
+			safety argument and it does not depend on anything below.
+
+			A first draft of this comment went further and said the skyroom's
+			own sky is still masked "for any game" because R_DrawSkyroom sets
+			RDF_DISABLEPARTICLES, which is the macro's second clause.  That is
+			wrong and the review caught it: the second clause is a conjunction,
+			`(RDF_DISABLEPARTICLES && r_ignoreentpvs.ival)`, so it also needs
+			the cvar.  r_ignoreentpvs defaults to 1 only under HAVE_LEGACY
+			(renderer.c registers it twice, "1" with and "0" without, and
+			NOLEGACY is commented out in config_fteqw.h), so the claim is true
+			as we ship and false as a general statement -- and r_ignoreentpvs 0
+			is exactly what v_skyroom's own cvar description tells a skyroom
+			user to set.  At that setting all three disjuncts go false on a
+			Source map and the skyroom's sky is not masked.  That is
+			pre-existing, is not caused by this patch, and is recorded here
+			rather than fixed because it wants its own test.
+			*/
+			if (SKYMUSTBEMASKED)
 				GL_SkyForceDepth(batch);
 			return true;
 		}
@@ -409,6 +594,15 @@ qboolean R_DrawSkyChain (batch_t *batch)
 			b.skin = NULL;
 			b.texture = NULL;
 			BE_SubmitBatch(&b);
+			//nettest Patch 126b: mask here too.  This branch returns above BOTH
+			//of the function's existing GL_SkyForceDepth calls, so a map that
+			//sets worldspawn `skyname` -- which is every They Hunger and most
+			//Half-Life maps, and which is what populates `forcedsky` -- escaped
+			//the masking entirely however r_sky_forcedepth was set.
+			//`batch`, not `b`: b.texture was just cleared, and GL_SkyForceDepth
+			//tests batch->texture.
+			if (r_sky_forcedepth.ival && SKYMUSTBEMASKED)
+				GL_SkyForceDepth(batch);
 			return true;
 		}
 	}
@@ -423,13 +617,20 @@ qboolean R_DrawSkyChain (batch_t *batch)
 					GL_SkyForceDepth(batch);
 				return true;
 			}
+			//nettest Patch 126: mask the sky BEFORE handing it to the normal draw
+			//path.  Without this the whole GLSL sky branch escapes the
+			//GL_SkyForceDepth call at the bottom of this function, and anything
+			//the BSP's PVS does not cull - which means every entity, everywhere -
+			//draws in front of the sky at its own depth.
+			if (r_sky_forcedepth.ival && SKYMUSTBEMASKED)
+				GL_SkyForceDepth(batch);
 			//if the first pass is transparent in some form, then be prepared to give it a skyroom behind.
 			return false;	//draw as normal...
 		}
 	}
 
 	if (skyshader->skydome)
-		skyboxtex = skyshader->skydome->farbox_textures;
+		skyboxtex = skyshader->skydome->farbox_textures, skyboxscale = skyshader->skydome->farbox_tscale;	//ftesurf (P181)
 	else
 		skyboxtex = NULL;
 
@@ -454,7 +655,7 @@ qboolean R_DrawSkyChain (batch_t *batch)
 	else if (skyboxtex && TEXVALID(*skyboxtex))
 	{	//draw a skybox if we were given the textures
 		R_CalcSkyChainBounds(batch);
-		GL_DrawSkyBox (skyboxtex, batch);
+		GL_DrawSkyBox (skyboxtex, skyboxscale, batch);
 
 		if (skyshader->numpasses)
 			GL_DrawSkySphere(batch, skyshader);
@@ -841,7 +1042,23 @@ static void gl_skyspherecalc(int skytype)
 
 static void GL_SkyForceDepth(batch_t *batch)
 {
-	if (!cls.allow_unmaskedskyboxes && batch->texture)	//allow a little extra fps.
+	//nettest Patch 126b: r_sky_forcedepth now overrides the allow_unmaskedskyboxes
+	//veto.  That flag is set true for ANY non-Quake game (cl_main.c:3141-3145,
+	//`fromgame != fg_quake`), so on a Half-Life BSP this function was a no-op no
+	//matter which caller reached it -- and separately it strips the `depthwrite`
+	//line out of the forced-skybox shader via `if !$unmaskedsky` (see R_SetSky
+	//below).  Between the two, HL maps left the depth buffer at the far plane
+	//wherever the sky was, and every fluid surface the PVS did not cull drew over
+	//it.  That is the "water renders through the skybox" report.
+	//
+	//Every caller already decides whether masking is appropriate for this map
+	//(they gate on SKYMUSTBEMASKED); this internal test was a second, stricter
+	//gate that only ever vetoed.
+	//Patch 140 note: deliberately NOT given the per-game test.  Every caller
+	//already applies SKYMUSTBEMASKED, and the one path that still reaches here
+	//on a Source map is the skyroom recursion -- where masking is mandatory
+	//whatever the game, or the outer world shows through the sky room's own sky.
+	if ((r_sky_forcedepth.ival || !cls.allow_unmaskedskyboxes) && batch->texture)	//allow a little extra fps.
 	{
 		BE_SelectMode(BEM_DEPTHONLY);
 		BE_DrawMesh_List(batch->shader, batch->meshes-batch->firstmesh, batch->mesh+batch->firstmesh, batch->vbo, NULL, batch->flags);
@@ -1098,7 +1315,7 @@ R_DrawSkyBox
 ==============
 */
 static int	skytexorder[6] = {0,2,1,3,4,5};
-static void GL_DrawSkyBox (texid_t *texnums, batch_t *s)
+static void GL_DrawSkyBox (texid_t *texnums, const float *tscale, batch_t *s)
 {
 	int i;
 
@@ -1160,6 +1377,24 @@ static void GL_DrawSkyBox (texid_t *texnums, batch_t *s)
 		GL_MakeSkyVec (skymins[0][i], skymaxs[1][i], i, skyface_vertex[1], skyface_texcoord[1]);
 		GL_MakeSkyVec (skymaxs[0][i], skymaxs[1][i], i, skyface_vertex[2], skyface_texcoord[2]);
 		GL_MakeSkyVec (skymaxs[0][i], skymins[1][i], i, skyface_vertex[3], skyface_texcoord[3]);
+
+		/*
+		ftesurf (P181): Source's "$basetexturetransform ... scale 1 2" on a
+		half-height side face.  GL_MakeSkyVec emits tc[1] = 1-t, so 0 is the TOP
+		of the face -- the same origin the transform assumes (its center is 0 0)
+		-- and scaling T by 2 therefore puts the 2:1 image in the top half and
+		leaves CLAMPT to smear its last row over the bottom, which is exactly
+		what Source draws.  The faces are already loaded IF_CLAMP in
+		Shader_ParseSkySides, so sampling past 1.0 needs nothing else.
+		*/
+		if (tscale && tscale[skytexorder[i]] != 1 && tscale[skytexorder[i]] > 0)
+		{
+			float sc = tscale[skytexorder[i]];
+			skyface_texcoord[0][1] *= sc;
+			skyface_texcoord[1][1] *= sc;
+			skyface_texcoord[2][1] *= sc;
+			skyface_texcoord[3][1] *= sc;
+		}
 
 		skyboxface->defaulttextures->base = texnums[skytexorder[i]];
 		R_DrawSkyMesh(s, &skyfacemesh, skyboxface);
@@ -1343,10 +1578,24 @@ void R_Sky_Register(void)
 	Cvar_Register (&r_fastsky,				groupname);
 	Cvar_Register (&r_fastskycolour,		groupname);
 	Cvar_Register (&r_skyfog,				groupname);
+	Cvar_Register (&r_sky_forcedepth,	groupname);
 	Cvar_Register (&r_skyboxname,			groupname);
+	Cvar_Register (&r_skybox_default,		groupname);	//FTESurf Patch 211
 	Cvar_Register (&r_skybox_orientation,	groupname);
 	Cvar_Register (&r_skybox_autorotate,	groupname);
 	Cvar_Register (&gl_skyboxdist,			groupname);
+
+	//nettest Patch 126.  Not a sky cvar, but this is the renderer-cvar
+	//registration point that gl_hlmdl.c can reach without adding an init hook of
+	//its own, and R_Sky_Register runs unconditionally on every renderer start.
+	{
+		extern cvar_t r_hlmdl_seqblend;
+		extern cvar_t r_hlmdl_seqblend_time;
+		extern cvar_t r_hlmdl_atlasmips;
+		Cvar_Register (&r_hlmdl_seqblend,	"Half-Life models");
+		Cvar_Register (&r_hlmdl_seqblend_time,	"Half-Life models");
+		Cvar_Register (&r_hlmdl_atlasmips,	"Half-Life models");
+	}
 
 	Cmd_AddCommandAD("sky", R_ForceSky_f, R_ForceSky_c, "For compat with Quakespasm, please use r_skybox.");	//QS compat
 	Cmd_AddCommandAD("loadsky", R_ForceSky_f, R_ForceSky_c, "For compat with DarkPlaces, please use r_skybox.");

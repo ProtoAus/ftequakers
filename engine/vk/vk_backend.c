@@ -43,6 +43,7 @@ extern cvar_t r_portalrecursion;
 extern cvar_t r_polygonoffset_shadowmap_offset, r_polygonoffset_shadowmap_factor;
 extern cvar_t r_wireframe;
 extern cvar_t vk_stagingbuffers;
+extern cvar_t r_reflectcube;	//FTESurf Patch: see gl_backend.c for why it is not in render.h
 
 static unsigned int vk_usedynamicstaging;
 
@@ -1580,6 +1581,13 @@ static texid_t SelectPassTexture(const shaderpass_t *pass)
 	case T_GEN_PALETTED:
 		return shaderstate.curtexnums->paletted;
 	case T_GEN_REFLECTCUBE:
+		// FTESurf Patch: r_reflectcube.  The permutation gate above covers every
+		// shader that samples a cube through #REFLECTCUBEMASK; this covers the
+		// two that do not -- a material with a literal `map $reflectcube` pass,
+		// and vmt/water.glsl's #LQWATER, which samples s_reflectcube outright.
+		// A black cube is "no reflection" as exactly as a missing one.
+		if (!r_reflectcube.ival)
+			return r_blackcubeimage;
 		if (TEXLOADED(shaderstate.curtexnums->reflectcube))
 			return shaderstate.curtexnums->reflectcube;
 		else if (shaderstate.curbatch->envmap)
@@ -3103,6 +3111,9 @@ static qboolean BE_SetupMeshProgram(program_t *p, shaderpass_t *pass, unsigned i
 		perm |= PERMUTATION_FULLBRIGHT;
 	if (TEXLOADED(shaderstate.curtexnums->upperoverlay) || TEXLOADED(shaderstate.curtexnums->loweroverlay))
 		perm |= PERMUTATION_UPPERLOWER;
+	// FTESurf Patch: r_reflectcube.  The GL backend's copy of this line carries
+	// the essay; without this one the switch would work on one renderer only.
+	if (r_reflectcube.ival)
 	if (TEXLOADED(shaderstate.curtexnums->reflectcube) || TEXLOADED(shaderstate.curtexnums->reflectmask))
 		perm |= PERMUTATION_REFLECTCUBEMASK;
 	if (r_refdef.globalfog.density)

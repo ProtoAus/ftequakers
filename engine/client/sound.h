@@ -257,7 +257,7 @@ void S_Voip_Ignore(unsigned int plno, qboolean ignore);
 #endif
 
 qboolean S_IsPlayingSomewhere(sfx_t *s);
-//qboolean ResampleSfx (sfx_t *sfx, int inrate, int inchannels, int inwidth, int insamps, int inloopstart, qbyte *data);
+qboolean ResampleSfx (sfx_t *sfx, int inrate, int inchannels, qaudiofmt_t informat, int insamps, int inloopstart, qbyte *data);	//snd_mem.c
 
 // picks a channel based on priorities, empty slots, number of channels
 channel_t *SND_PickChannel(soundcardinfo_t *sc, int entnum, int entchannel);
@@ -325,6 +325,8 @@ qboolean S_LoadSound (sfx_t *s, qboolean forcedecode);
 
 typedef qboolean (QDECL *S_LoadSound_t) (sfx_t *s, qbyte *data, size_t datalen, int sndspeed, qboolean forcedecode);
 qboolean S_RegisterSoundInputPlugin(void *module, S_LoadSound_t loadfnc); //called to register additional sound input plugins
+void S_RegisterMP3Plugin(void);	//snd_minimp3.c - lieff/minimp3, registered from S_Init
+void S_RegisterFLACPlugin(void);	//snd_flac.c - native FLAC decoder, registered from S_Init
 void S_UnregisterSoundInputModule(void *module);
 
 void S_AmbientOff (void);

@@ -1975,6 +1975,221 @@ static void Q1BSP_OrthoRecursiveWorldNode (mnode_t *node, unsigned int clipflags
 	return;
 }
 
+mleaf_t *Q1BSP_LeafForPoint (model_t *model, vec3_t p);	//defined further down; the
+												//submerged-camera probe below needs it
+
+//Is this leaf's contents a fluid the player can see through when r_wateralpha < 1?
+//Shared by both halves of the wateralpha PVS extension in Q1BSP_MarkLeaves: the sweep
+//that pulls every fluid leaf into an above-water camera's PVS, and the probe that pulls
+//the above-water leaf into a submerged one's.  The HL CURRENT_* values are conveyor
+//water - still water as far as rendering is concerned.
+//nettest: latched state for the `r_waterinfo` diagnostic in r_surf.c.  See the
+//note beside want_fluid_merge below for why "did MarkLeaves run at all" has to
+//be recorded separately from "did the merge fire".
+float q1bsp_marktime = -1;		//realtime the last time MarkLeaves ran (-1 = never)
+int q1bsp_wantmerge = -1;		//...and whether the fluid merge was wanted then
+int q1bsp_fluidtotal = -1;		//fluid leafs in the world
+int q1bsp_fluidmerged = -1;		//...of which, ones the camera could see
+int q1bsp_fluidshoreents = -1;	//total entries in the shore table (0 = adjacency unavailable)
+int q1bsp_fluidnovis = -1;		//fluid leafs skipped for having no vis data of their own
+int q1bsp_fluidbodies = -1;		//connected bodies of water those fluid leafs form
+
+static qboolean Q1BSP_ContentsIsFluid(int contents)
+{
+	return contents == Q1CONTENTS_WATER ||
+	       contents == Q1CONTENTS_SLIME ||
+	       contents == Q1CONTENTS_LAVA  ||
+	       contents == HLCONTENTS_CURRENT_0 ||
+	       contents == HLCONTENTS_CURRENT_90 ||
+	       contents == HLCONTENTS_CURRENT_180 ||
+	       contents == HLCONTENTS_CURRENT_270 ||
+	       contents == HLCONTENTS_CURRENT_UP ||
+	       contents == HLCONTENTS_CURRENT_DOWN;
+}
+
+//nettest: THE SHORE TABLE, and why "is the fluid leaf in the camera's PVS" cannot work.
+//
+//The gate this replaces asked exactly that, reasoning that vis is symmetric so a fluid
+//leaf you cannot see is one whose water you cannot see either.  Symmetric it is - and
+//that is precisely what makes it useless HERE.  This feature exists for maps whose vis
+//compiler treated water as an OPAQUE boundary; on such a map the compiler generates no
+//portals through the water surface, so no air leaf ever has a water leaf in its PVS and
+//the test is false for every fluid leaf on the map, from every viewpoint.  Measured with
+//`r_waterinfo` on two unrelated maps: "merging 0 of 83" on th_ep1_01 and "merging 0 of 8"
+//on cs_rats2.  Not a tuning problem - the feature had been dead since that gate landed,
+//independently of the temporal-scene-cache kill fixed in r_surf.c.
+//
+//What the camera can actually see is the water SURFACE, and it sees it from the air leaf
+//on the near side.  So the correct question is "is any leaf ADJACENT to this pool
+//visible", and adjacency is static geometry - computed once per map rather than per
+//frame.  Two leafs are adjacent when their bounding boxes touch.
+//
+//Adjacency alone is not enough, and measuring said so: on th_ep1_01 only 37 of the 83
+//fluid leafs touch a non-fluid leaf at all.  The other 46 are INTERIOR - the middle of a
+//body of water, whose neighbours are all more water.  So the fluid leafs are also grouped
+//into connected BODIES (union-find over fluid-to-fluid adjacency), and a body counts as
+//visible when any of its members can see a shore.  That takes coverage to 83 of 83 on
+//th_ep1_01 (2 bodies) and 8 of 8 on cs_rats2 (1 body).
+//
+//Grouping by GEOMETRY is what keeps this from becoming the old bug.  The version before
+//the broken gate set every fluid bit unconditionally and let pools merge each other
+//through the PVS, so one visible puddle dragged in water from across the map.  A body is
+//a single connected volume of water: seeing into one end of a river legitimately means
+//seeing along it, and a pool in another room is simply a different body.
+//
+//Cost is O(fluidleafs * clusters) once at first use.  HL maps run 8-83 fluid leafs
+//against 800-1900 clusters, i.e. a few hundred thousand box tests - immeasurable next to
+//loading the map.  Bounded anyway, and the table simply stays empty past the bound, which
+//degrades to the old direct-PVS test rather than to a stall.
+#define Q1BSP_FLUIDADJ_BUDGET 8000000
+static model_t *fluidadj_model;
+static int fluidadj_count;
+static int *fluidadj_cluster;	//cluster index of each fluid leaf
+static int *fluidadj_ofs;		//where its shore list starts in fluidadj_shore
+static int *fluidadj_cnt;		//how long that list is
+static int *fluidadj_shore;		//flat list of adjacent non-fluid cluster indices
+static int *fluidadj_body;		//which connected body of water each fluid leaf belongs to
+static int fluidadj_numbodies;
+static qbyte *fluidadj_bodyvis;	//per-frame scratch: is this body's shore visible
+
+static qboolean Q1BSP_LeafBoxesTouch(const float *a, const float *b)
+{	//minmaxs is mins[0..2] then maxs[3..5].  One unit of slop: BSP leaf bounds are
+	//integral and neighbours share a plane exactly, so this is about float equality,
+	//not about reaching into the next room.
+	const float e = 1;
+	if (a[0] > b[3]+e || a[1] > b[4]+e || a[2] > b[5]+e)
+		return false;
+	if (b[0] > a[3]+e || b[1] > a[4]+e || b[2] > a[5]+e)
+		return false;
+	return true;
+}
+
+static void Q1BSP_BuildFluidAdjacency(model_t *model)
+{
+	int i, j, n, total, pass;
+	int nc = model->numclusters;
+
+	if (fluidadj_model == model)
+		return;
+
+	BZ_Free(fluidadj_cluster);	fluidadj_cluster = NULL;
+	BZ_Free(fluidadj_ofs);		fluidadj_ofs = NULL;
+	BZ_Free(fluidadj_cnt);		fluidadj_cnt = NULL;
+	BZ_Free(fluidadj_shore);	fluidadj_shore = NULL;
+	BZ_Free(fluidadj_body);		fluidadj_body = NULL;
+	BZ_Free(fluidadj_bodyvis);	fluidadj_bodyvis = NULL;
+	fluidadj_model = model;
+	fluidadj_count = 0;
+	fluidadj_numbodies = 0;
+	q1bsp_fluidshoreents = 0;
+
+	if (!model->leafs || nc <= 0)
+		return;
+
+	fluidadj_cluster = BZ_Malloc(sizeof(int)*nc);
+	for (i = 0; i < nc; i++)
+		if (Q1BSP_ContentsIsFluid(model->leafs[i+1].contents))
+			fluidadj_cluster[fluidadj_count++] = i;
+	if (!fluidadj_count)
+		return;
+	if ((double)fluidadj_count * nc > Q1BSP_FLUIDADJ_BUDGET)
+	{	//pathological map; leave the shore lists empty rather than stall the load.
+		Con_DPrintf("wateralpha extendpvs: %i fluid leafs x %i clusters exceeds the adjacency budget; falling back to the direct PVS test\n", fluidadj_count, nc);
+		return;
+	}
+
+	fluidadj_ofs = BZ_Malloc(sizeof(int)*fluidadj_count);
+	fluidadj_cnt = BZ_Malloc(sizeof(int)*fluidadj_count);
+
+	//counted first so the flat array can be sized exactly, then filled.
+	for (pass = 0; pass < 2; pass++)
+	{
+		total = 0;
+		for (i = 0; i < fluidadj_count; i++)
+		{
+			const float *fb = model->leafs[fluidadj_cluster[i]+1].minmaxs;
+			if (pass)
+				fluidadj_ofs[i] = total;
+			n = 0;
+			for (j = 0; j < nc; j++)
+			{
+				mleaf_t *ol;
+				if (j == fluidadj_cluster[i])
+					continue;
+				ol = &model->leafs[j+1];
+				if (ol->contents == Q1CONTENTS_SOLID)
+					continue;	//you cannot stand in it, so it cannot be a viewpoint
+				if (Q1BSP_ContentsIsFluid(ol->contents))
+					continue;	//one pool must not vouch for the next - that cascades
+				if (!Q1BSP_LeafBoxesTouch(fb, ol->minmaxs))
+					continue;
+				if (pass)
+					fluidadj_shore[total+n] = j;
+				n++;
+			}
+			if (pass)
+				fluidadj_cnt[i] = n;
+			total += n;
+		}
+		if (!pass)
+			fluidadj_shore = BZ_Malloc(sizeof(int)*(total?total:1));
+	}
+	q1bsp_fluidshoreents = total;	//nettest: for r_waterinfo
+
+	//Group the fluid leafs into connected bodies of water.  Union-find over
+	//fluid-to-fluid bbox adjacency, then the roots are renumbered 0..n so the
+	//per-frame visible flags can be a flat array.  O(fluid^2) once - 83 leafs is
+	//under 7000 box tests.
+	//
+	//The parent array is SEPARATE from the output array, and that is not tidiness.
+	//The first version of this unioned in place and then flattened in place, writing
+	//each entry's answer over the parent pointer the NEXT entry's find() still had to
+	//walk through.  As soon as one chain passed through an already-rewritten entry the
+	//walk read a negative "root id" as a parent index and indexed the array with it -
+	//an out-of-bounds read that crashed the moment r_wateralpha_extendpvs was set to 1.
+	{
+		int *parent = BZ_Malloc(sizeof(int)*fluidadj_count);
+		int *dense  = BZ_Malloc(sizeof(int)*fluidadj_count);
+		for (i = 0; i < fluidadj_count; i++)
+		{
+			parent[i] = i;			//parent = self
+			dense[i]  = -1;			//no body id assigned yet
+		}
+		for (i = 0; i < fluidadj_count; i++)
+		{
+			const float *ib = model->leafs[fluidadj_cluster[i]+1].minmaxs;
+			for (j = i+1; j < fluidadj_count; j++)
+			{
+				int ra, rb;
+				if (!Q1BSP_LeafBoxesTouch(ib, model->leafs[fluidadj_cluster[j]+1].minmaxs))
+					continue;
+				for (ra = i; parent[ra] != ra; ra = parent[ra])
+					;
+				for (rb = j; parent[rb] != rb; rb = parent[rb])
+					;
+				if (ra != rb)
+					parent[ra] = rb;
+			}
+		}
+		fluidadj_body = BZ_Malloc(sizeof(int)*fluidadj_count);
+		for (i = 0; i < fluidadj_count; i++)
+		{
+			int r;
+			for (r = i; parent[r] != r; r = parent[r])
+				;
+			if (dense[r] < 0)
+				dense[r] = fluidadj_numbodies++;
+			fluidadj_body[i] = dense[r];
+		}
+		BZ_Free(parent);
+		BZ_Free(dense);
+	}
+	fluidadj_bodyvis = BZ_Malloc(fluidadj_numbodies?fluidadj_numbodies:1);
+	q1bsp_fluidbodies = fluidadj_numbodies;	//nettest: for r_waterinfo
+	Con_DPrintf("wateralpha extendpvs: %i fluid leafs in %i connected bodies, %i shore entries\n",
+				fluidadj_count, fluidadj_numbodies, total);
+}
+
 static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 {
 	static qbyte	*cvis;
@@ -1983,6 +2198,12 @@ static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 	int		i;
 	int portal = r_refdef.recurse;
 	static pvsbuffer_t pvsbuf;
+	//nettest: snapshot of the camera's own PVS, taken before the wateralpha fluid
+	//merge writes into pvsbuf.  Kept as a separate allocation because ClusterPVS
+	//may realloc pvsbuf out from under us.  Static and never freed, matching
+	//pvsbuf above.
+	static qbyte *basevis;
+	static size_t basevisbytes;
 	struct q1bspprv_s *prv = model->meshinfo;
 
 	q1_framecount = ++prv->framecount;
@@ -2045,6 +2266,36 @@ static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 			                             r_wateralpha.value < 1.0f &&
 			                             r_wateralpha_extendpvs.ival);
 
+			//nettest: latched for the `r_waterinfo` command (r_surf.c).  Three
+			//separate things silently disable this feature and the console gives
+			//no sign of which - the cvar, the alpha, and the temporal scene
+			//cache returning before MarkLeaves is ever reached.  Recording the
+			//fact that we GOT here is what distinguishes the third from the
+			//first two, so it is written unconditionally and before the gate.
+			q1bsp_marktime = realtime;
+			q1bsp_wantmerge = want_fluid_merge;
+
+			{	//nettest: report why the extension is or is not running.  Change-gated,
+				//so a steady state prints once.  r_wateralpha is easily left at 1 by a
+				//map cfg or a worldspawn key, which silently disables the whole thing.
+				//
+				//Note there is a SECOND way this silently does nothing: the temporal
+				//scene cache.  When r_temporalscenecache is on, Surf_DrawWorld takes the
+				//webostate branch (client/r_surf.c) and returns before ever calling
+				//model->funcs.PrepareFrame, so MarkLeaves - and everything below - is
+				//skipped entirely and the cached PVS is used as-is.  The cvar's default
+				//is empty, which auto-enables the cache on maps with >6000 leafs, so
+				//wateralpha extendpvs stops working on exactly the big maps where it
+				//would matter most.  If that needs fixing, it has to be fixed there.
+				static int lastwant = -1;
+				if ((int)want_fluid_merge != lastwant && r_wateralpha_extendpvs.ival >= 2)
+				{
+					lastwant = want_fluid_merge;
+					Con_Printf("wateralpha extendpvs: %s (r_wateralpha %g, extendpvs %i)\n",
+								want_fluid_merge?"ON":"off", r_wateralpha.value, r_wateralpha_extendpvs.ival);
+				}
+			}
+
 			if (clusters[1] >= 0 && clusters[1] != clusters[0])
 			{
 				vis = cvis = model->funcs.ClusterPVS(model, clusters[0], &pvsbuf, PVM_REPLACE);
@@ -2064,61 +2315,213 @@ static qbyte *Q1BSP_MarkLeaves (model_t *model, int clusters[2])
 				vis = cvis = model->funcs.ClusterPVS(model, clusters[0], &pvsbuf, PVM_FAST);
 
 			// Water transparency PVS extension: when r_wateralpha is < 1,
-			// the player can see THROUGH water surfaces from any angle,
-			// but the vis compiler treated those surfaces as opaque
-			// boundaries — meaning the water leafs themselves often
-			// aren't even in the camera's normal PVS until the camera
-			// gets right up against them, and underwater leafs are gated
-			// behind that.  Gating the merge on "fluid leaf already
-			// visible" therefore never fires from a distance, defeating
-			// the whole purpose.
+			// the player can see THROUGH water surfaces, but the vis
+			// compiler treated those surfaces as opaque boundaries, so
+			// the leafs BEHIND the water are missing from the camera's
+			// baked PVS.  For every fluid leaf the camera can see, OR
+			// that leaf's own PVS into the result: that brings in the
+			// underwater geometry, pool floors and decorations without
+			// modifying the on-disk vis data.
 			//
-			// Instead: walk ALL leafs in the model, and for every fluid
-			// leaf, mark it visible AND OR its own PVS into the result.
-			// This treats every fluid leaf as "always potentially in
-			// PVS", and brings in everything reachable through the water
-			// (underwater geometry, pool floors, decorations, and any
-			// air leaf the water can see directly).  Effectively turns
-			// water surfaces into PVS-transparent surfaces globally,
-			// without modifying the on-disk vis data.
+			//nettest: this used to walk EVERY leaf in the model and, for
+			//every fluid leaf anywhere on the map, force-set its visible
+			//bit before merging.  That is what made distant water render
+			//through walls under r_showtris - not the merge, the
+			//unconditional bit-set on line "vis[j>>3] |= ...".  Every
+			//water surface in the map was submitted from everywhere.
 			//
-			// Cost: O(numleafs) bitmap-set + one ClusterPVS call per
-			// fluid leaf in the entire map.  HL maps typically have
-			// 0-50 fluid leafs total, each ClusterPVS call is a
-			// decompress+OR over pvsbytes (~500 B for HL maps).
-			// Sub-millisecond.  Skipped entirely when wateralpha == 1
-			// so opaque-water rendering is bit-for-bit unchanged.
+			//The gate is now "the fluid leaf is in the camera's own PVS",
+			//which is the correct rule for a transparent surface: you can
+			//only see through a surface you can see.  The old comment here
+			//argued such a gate "never fires from a distance", but vis is
+			//symmetric - if no sight line reaches the fluid leaf then its
+			//water surface is genuinely not visible and drawing it is the
+			//bug, not the fix.  Both confirmed-working cases survive:
+			//looking into a pool still merges that pool (its leaf is in
+			//PVS), and the submerged camera is handled geometrically by
+			//the probe below, independently of this loop.
+			//
+			//Test against a SNAPSHOT, never the live buffer.  A version
+			//that tested the growing vis set is order-dependent: 146 of
+			//873 viewpoints on th_ep1_00 give a different answer scanning
+			//ascending vs descending, max delta 34 clusters, because a
+			//pool merged early can pull in a pool the camera cannot see,
+			//which then merges its own PVS in turn and cascades.
+			//
+			// Cost: O(numleafs) bitmap test + one ClusterPVS call per
+			// VISIBLE fluid leaf (was: per fluid leaf in the entire map).
+			// HL maps typically have 0-50 fluid leafs total, each
+			// ClusterPVS call is a decompress+OR over pvsbytes (~500 B for
+			// HL maps).  Sub-millisecond.  Skipped entirely when
+			// wateralpha == 1 so opaque-water rendering is bit-for-bit
+			// unchanged.
 			if (want_fluid_merge)
 			{
-				int nc = model->numclusters;
-				int j;
-				for (j = 0; j < nc; j++)
+				int f, k;
+				int fluidtotal = 0, fluidmerged = 0, fluidnovis = 0;
+
+				Q1BSP_BuildFluidAdjacency(model);
+				fluidtotal = fluidadj_count;
+
+				if (basevisbytes < model->pvsbytes)
+					basevis = BZ_Realloc(basevis, basevisbytes = model->pvsbytes);
+				memcpy(basevis, vis, model->pvsbytes);
+
+				// Every table has to be present before any of it is indexed.
+				// Q1BSP_BuildFluidAdjacency returns early on a map that busts
+				// the adjacency budget, leaving the fluid COUNT set but the
+				// tables NULL - which the two passes below would happily walk
+				// straight off. Nothing merges in that case, which is the same
+				// answer as before this feature existed.
+				if (!fluidadj_count || !fluidadj_body || !fluidadj_bodyvis)
+					goto fluidmergedone;
+
+				// PASS 1 - which BODIES of water can the camera see a shore of.
+				// Bodies rather than individual leafs because most fluid leafs
+				// are interior and touch nothing but more water; see the note
+				// above Q1BSP_BuildFluidAdjacency.
+				memset(fluidadj_bodyvis, 0, fluidadj_numbodies);
+				for (f = 0; f < fluidadj_count; f++)
 				{
-					int contents = model->leafs[j+1].contents;
-					if (contents == Q1CONTENTS_WATER ||
-					    contents == Q1CONTENTS_SLIME ||
-					    contents == Q1CONTENTS_LAVA  ||
-					    contents == HLCONTENTS_CURRENT_0 ||
-					    contents == HLCONTENTS_CURRENT_90 ||
-					    contents == HLCONTENTS_CURRENT_180 ||
-					    contents == HLCONTENTS_CURRENT_270 ||
-					    contents == HLCONTENTS_CURRENT_UP ||
-					    contents == HLCONTENTS_CURRENT_DOWN)
+					int fc = fluidadj_cluster[f];
+					int bd = fluidadj_body[f];
+
+					if (fluidadj_bodyvis[bd])
+						continue;	//already established
+
+					// Direct hit first: on a map compiled by a vis tool that
+					// DOES understand transparent water the fluid leaf really is
+					// in the camera's PVS, and then this costs one bit test.
+					if (basevis[fc>>3] & (1<<(fc&7)))
 					{
-						// Mark this fluid leaf as visible itself so the
-						// water surface renders even when the camera's
-						// baked PVS would have culled it.
-						vis[j>>3] |= (1<<(j&7));
-						// Pull in anything the fluid leaf can see (the
-						// underwater geometry).
-						vis = cvis = model->funcs.ClusterPVS(model, j, &pvsbuf, PVM_MERGE);
+						fluidadj_bodyvis[bd] = 1;
+						continue;
+					}
+					if (fluidadj_cnt)
+					{	// ...otherwise, can we see its shore?
+						int first = fluidadj_ofs[f], cnt = fluidadj_cnt[f];
+						for (k = 0; k < cnt; k++)
+						{
+							int sc = fluidadj_shore[first+k];
+							if (basevis[sc>>3] & (1<<(sc&7)))
+							{
+								fluidadj_bodyvis[bd] = 1;
+								break;
+							}
+						}
 					}
 				}
+
+				// PASS 2 - merge every leaf of every visible body.
+				for (f = 0; f < fluidadj_count; f++)
+				{
+					int fc = fluidadj_cluster[f];
+
+					if (!fluidadj_bodyvis[fluidadj_body[f]])
+						continue;
+
+					// A fluid leaf with NO vis data at all is the dangerous case:
+					// Q1BSP_DecompressVis answers "everything is visible" for a
+					// NULL row (q1bsp.c:2709-2717) and does so by OVERWRITING,
+					// so merging one is r_novis for the whole frame - geometry
+					// from the far end of the map drawn over a depth-less HL
+					// sky, which is exactly the "faces flickering in the
+					// distance" report.  Skip it; we have already decided the
+					// surface is visible, and drawing that does not depend on
+					// this merge.
+					if (!model->leafs[fc+1].compressed_vis)
+					{
+						fluidnovis++;
+						continue;
+					}
+
+					fluidmerged++;
+					vis = cvis = model->funcs.ClusterPVS(model, fc, &pvsbuf, PVM_MERGE);
+					// Mark the fluid leaf itself, which the old code got for
+					// free from basevis and this no longer can: reaching a pool
+					// through its body's shore means its own bit was never set,
+					// and without it the geometry filed inside the water leaf -
+					// the pool floor - stays culled.  Done through the RETURNED
+					// pointer because ClusterPVS may have reallocated pvsbuf.
+					vis[fc>>3] |= (1<<(fc&7));
+				}
+fluidmergedone:
+
+				q1bsp_fluidtotal  = fluidtotal;		//nettest: for r_waterinfo
+				q1bsp_fluidmerged = fluidmerged;
+				q1bsp_fluidnovis  = fluidnovis;
+
+				{	//nettest: developer readout for tuning this.  The old code
+					//merged fluidtotal every frame from every viewpoint; anything
+					//well below that is the gate doing its job.  Printed only when
+					//the count changes, so it does not flood a moving camera.
+					static int lastmerged = -1;
+					if (fluidmerged != lastmerged && r_wateralpha_extendpvs.ival >= 2)
+					{
+						lastmerged = fluidmerged;
+						Con_Printf("wateralpha extendpvs: merging %i of %i fluid leafs\n", fluidmerged, fluidtotal);
+					}
+				}
+				// The SUBMERGED camera — the loop above cannot help it.
+				//
+				// Everything that loop merges is another FLUID leaf's PVS, and
+				// on a map whose compiler treated water as opaque a fluid leaf
+				// can see little but other fluid leafs.  With the eye under the
+				// surface the result is a PVS holding the pool and nothing else:
+				// look up through a half-transparent surface and the entire
+				// world above it is missing.  Vis is symmetric, so this is not
+				// an oversight in the loop — there is genuinely no above-water
+				// leaf reachable from down here for it to merge.
+				//
+				// Fix it geometrically instead.  Step straight up from the eye
+				// until the leaf stops being fluid and merge THAT leaf's PVS:
+				// literally "what you would see with your head out of the
+				// water".  Together with the loop above (which keeps the
+				// underwater geometry in) that gives the both-ways visibility a
+				// transparent surface implies.
+				//
+				// Solid and sky leafs are stepped over rather than ending the
+				// search, so swimming under a ledge or through a submerged pipe
+				// still finds the open air past it.  The walk is bounded by the
+				// world's own maxs and a fixed step count, so water with solid
+				// rock all the way up just costs a few dozen point-in-leaf
+				// descents (a handful of plane dots each) and merges nothing.
+				if (clusters[0] >= 0 && Q1BSP_ContentsIsFluid(model->leafs[clusters[0]+1].contents))
+				{
+					vec3_t probe;
+					float ceiling = model->maxs[2];
+					int step;
+					VectorCopy(r_refdef.vieworg, probe);
+					for (step = 0; step < 64 && probe[2] < ceiling; step++)
+					{
+						mleaf_t *l;
+						int c;
+						probe[2] += 32;
+						l = Q1BSP_LeafForPoint(model, probe);
+						c = l->contents;
+						if (c == Q1CONTENTS_SOLID || c == Q1CONTENTS_SKY)
+							continue;	//rock or skybox overhead - keep climbing
+						if (Q1BSP_ContentsIsFluid(c))
+							continue;	//still submerged
+						{	//broke the surface
+							int aircluster = (int)(l - model->leafs) - 1;
+							if (aircluster >= 0 && aircluster < model->numclusters)
+							{
+								vis[aircluster>>3] |= (1<<(aircluster&7));
+								vis = cvis = model->funcs.ClusterPVS(model, aircluster, &pvsbuf, PVM_MERGE);
+							}
+						}
+						break;
+					}
+				}
+
 				// Force PVS recompute next frame even from the same
 				// camera position — the merge state above isn't
 				// captured by the (clusters[0], clusters[1]) cache key,
 				// so without this a stationary camera with wateralpha
-				// just toggled wouldn't pick up the change.
+				// just toggled wouldn't pick up the change.  The submerged
+				// probe above needs it for a second reason: it keys off the
+				// eye ORIGIN, which moves within a leaf.
 				prv->oldviewclusters[0] = -1;
 				prv->oldviewclusters[1] = -2;
 			}

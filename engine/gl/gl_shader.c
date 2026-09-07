@@ -241,6 +241,11 @@ typedef struct shaderparsestate_s
 	qboolean droppass;
 	unsigned int oldflags;	//shader flags to revert to if the pass is dropped.
 
+	//FTESurf Patch 266: set only while Shader_ProgBlendFunc is delegating to
+	//Shaderpass_BlendFunc, to suppress that function's nextbundle redirect.  See
+	//the comment on the redirect itself.
+	qboolean blendfunc_nonextbundle;
+
 	//for dpwater compat, used to generate a program
 	int dpwatertype;
 	float reflectmin;
@@ -648,7 +653,111 @@ static void Shader_ParseVector(shader_t *shader, const char **ptr, vec3_t v)
 	*/
 }
 
-qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *images)
+/*
+ftesurf (P181): a Source sky face is described by a .vmt, and we were never reading it.
+
+Shader_ParseSkySides below loads faces as IMAGES -- R_LoadHiResTexture, whose
+extension list (image.c) is dds/ktx/tga/png/jpg/pcx/vtf and cannot contain .vmt,
+because a .vmt is a material and not a picture.  For most skies that is fine, since
+the .vmt is a one-line wrapper naming a .vtf of the same name.  For two classes of
+sky it is not:
+
+  1. ALIASED FACES.  TF2's sky_dustbowl_01 has no rt/lf/bk/ft .vtf at all.  It has
+     six .vmt files, four of which name a single shared "sky_dustbowl_01side".  The
+     probe finds nothing, the face becomes r_blackimage, and because R_SetSky keeps
+     a sky if even ONE face loaded, you get half a sky rather than a clean failure.
+     Measured: 58 maps in the library, surf_utopia among them.
+
+  2. HALF-HEIGHT FACES.  Source side faces are commonly 2:1 (512x256) with
+     "$basetexturetransform" "center 0 0 scale 1 2 rotate 0 translate 0 0", which
+     maps the image into the TOP half of the square face and lets CLAMPT smear the
+     final row over the bottom.  Ignoring it stretches the sky to twice its
+     intended height.  This is NOT a TF2 quirk: 148 of TF2's 211 skybox materials
+     carry it, and so do 16 of CS:S's 138 loose ones -- and exactly those 16 have
+     2:1 textures, which is as close to proof of intent as this gets.  Note the
+     `up` face has the same line COMMENTED OUT, so the comment stripping in
+     Shader_SkyVMT_Value is load-bearing, not tidiness.
+
+So: read the .vmt if there is one, believe what it says about which image to load
+and how tall it is, and fall back to the old filename probing when there is not.
+Deliberately a small self-contained scraper rather than a call into the hl2 plugin:
+the engine must not depend on a plugin to draw a sky, and three keys do not justify
+a plugin interface.
+*/
+static char *Shader_SkyVMT_Value(const char *vmt, const char *key, char *out, size_t outsize)
+{	//one key out of a VMT's text, ignoring // comments and tolerating any quoting
+	const char *l = vmt;
+	size_t klen = strlen(key);
+	*out = 0;
+	while (*l)
+	{
+		const char *eol = l, *c;
+		while (*eol && *eol != '\n')
+			eol++;
+		//a // anywhere before the key means this line is commented out, which is
+		//exactly how Valve disables the transform on the up/dn faces
+		for (c = l; c < eol-1; c++)
+		{
+			if (c[0] == '/' && c[1] == '/')
+			{
+				eol = c;
+				break;
+			}
+		}
+		for (c = l; c < eol; c++)
+		{
+			//the key must END here as well as start here, or "$basetexture" also
+			//matches "$basetexturetransform" and a sky tries to load a texture
+			//called "center 0 0 scale 1 2 rotate 0 translate 0 0"
+			const char *k = c + (*c=='"'?1:0);
+			if ((*c=='$'||*c=='"') && *k=='$' && !Q_strncasecmp(k+1, key, klen) &&
+				!((k[1+klen]>='a'&&k[1+klen]<='z')||(k[1+klen]>='A'&&k[1+klen]<='Z')||
+				  (k[1+klen]>='0'&&k[1+klen]<='9')||k[1+klen]=='_'))
+			{
+				const char *v = k + 1 + klen;
+				size_t n = 0;
+				if (*v == '"')
+					v++;
+				while (*v==' '||*v=='\t')
+					v++;
+				if (*v == '"')
+					v++;
+				while (v < eol && *v != '"' && *v != '\r' && n < outsize-1)
+					out[n++] = *v++;
+				while (n && (out[n-1]==' '||out[n-1]=='\t'))
+					n--;
+				out[n] = 0;
+				if (n)
+					return out;
+			}
+		}
+		if (!*eol)
+			break;
+		l = eol;
+		while (*l && *l != '\n')
+			l++;
+		if (*l)
+			l++;
+	}
+	return NULL;
+}
+
+//"center 0 0 scale 1 2 rotate 0 translate 0 0" -> the T scale, or 1
+static float Shader_SkyVMT_TScale(const char *xform)
+{
+	const char *s = Q_strcasestr(xform, "scale");
+	float sx, sy;
+	if (!s)
+		return 1;
+	s += 5;
+	if (sscanf(s, " %f %f", &sx, &sy) != 2)
+		return 1;
+	if (sy < 0.01f || sy > 16)
+		return 1;	//nonsense, or an animation we do not model
+	return sy;
+}
+
+qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *images, float *tscale)
 {	//FIXME: use Image_LoadCubemapTextureData to load the faces
 	//if possible directly use a 7th/cubemap texture instead
 	//this requires fixing the sky code to not do the random transforms thing though.
@@ -656,6 +765,11 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 	int i, ss, sp, pass;
 	char path[MAX_QPATH];
 	char hdrname[MAX_QPATH];		//nettest: <skyname>_hdr<side> compressed-HDR variant
+	char vmtval[MAX_QPATH], vmtx[128];
+	//ftesurf (P181): how each face was resolved, so `developer 1` can prove the
+	//material path did something rather than leaving it to be inferred from the
+	//absence of a warning.  'm' material, 'f' filename probe, 'X' nothing.
+	char howto[8] = "......";
 
 	static char	*skyname_suffix[][6] = {
 		{"rt", "bk", "lf", "ft", "up", "dn"},
@@ -694,6 +808,135 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 		}
 		else
 		{
+			/*
+			ftesurf (P181): ask the material before guessing at filenames.
+
+			Only three name shapes are tried, not the full 24-stem table below:
+			a sky material lives at materials/skybox/<name><side>.vmt in every
+			Source game, and probing a table designed for Quake's env/ layout for
+			a file that cannot be there is cost with no coverage.  Both suffix
+			sets are tried because a name may already carry an underscore style.
+			*/
+			static const char *vmtprefix[] = {"materials/skybox/%s%s.vmt", "materials/%s%s.vmt", "%s%s.vmt"};
+			char *vmt = NULL;
+			tscale[i] = 1;
+			images[i] = r_nulltex;
+			for (sp = 0; sp < (int)(sizeof(vmtprefix)/sizeof(vmtprefix[0])) && !vmt; sp++)
+			{
+				for (ss = 0; ss < (int)(sizeof(skyname_suffix)/sizeof(skyname_suffix[0])); ss++)
+				{
+					Q_snprintfz(path, sizeof(path), vmtprefix[sp], texturename, skyname_suffix[ss][i]);
+					vmt = FS_LoadMallocFile(path, NULL);
+					if (vmt)
+						break;
+				}
+			}
+			if (vmt)
+			{
+				char *v;
+				char vmtbase[MAX_QPATH];
+				char *vb;
+				qboolean ishdrkey = true;
+				v = Shader_SkyVMT_Value(vmt, "hdrcompressedTexture", vmtval, sizeof(vmtval));
+				if (!v)
+					v = Shader_SkyVMT_Value(vmt, "hdrbasetexture", vmtval, sizeof(vmtval));
+				//read $basetexture unconditionally now: it is both the LDR fallback
+				//and the cross-check below.
+				vb = Shader_SkyVMT_Value(vmt, "basetexture", vmtbase, sizeof(vmtbase));
+				if (!v)
+				{
+					ishdrkey = false;
+					v = vb;	//may be NULL, which the `if (v && *v)` below already handles
+				}
+				/*
+				FTESurf Patch 211: a face whose HDR key names ANOTHER FACE.
+
+				Momentum ships materials/skybox/sky_cape_hillup.vmt as
+
+				    $hdrcompressedtexture "skybox/sky_cape_hilllf"   <- the LEFT face
+				    $basetexture          "skybox/sky_cape_hillup"   <- correct
+
+				Every other face of that sky names itself in both keys; only `up` is
+				wrong, and it is wrong only in the HDR key. Source never notices,
+				because $hdrcompressedtexture is read only on its compressed-HDR
+				path; in LDR it uses $basetexture and the sky is right. We prefer
+				the HDR keys (P181, for the range), so we faithfully put a SIDE
+				texture on the TOP -- which is exactly how it was reported.
+
+				The rule, and it is general rather than a special case for one file:
+				if the HDR key names a texture ending in a DIFFERENT face's suffix
+				than the one we are loading, while $basetexture ends in the RIGHT
+				one, the material is contradicting itself and $basetexture is the
+				key that names this face. Believe that one.
+
+				This deliberately does NOT fire on aliased faces (TF2's
+				sky_dustbowl_01, whose four side VMTs both-keys-name one shared
+				"...side" texture): there the two keys AGREE, so there is nothing
+				to contradict, and the suffix test never runs.
+				*/
+				if (v && vb && ishdrkey && Q_strcasecmp(v, vb))
+				{
+					int hs, bs;
+					qboolean hdrwrong = false, basright = false;
+					for (ss = 0; ss < (int)(sizeof(skyname_suffix)/sizeof(skyname_suffix[0])); ss++)
+					{
+						for (hs = 0; hs < 6; hs++)
+						{
+							size_t sl = strlen(skyname_suffix[ss][hs]);
+							size_t vl = strlen(v);
+							if (vl >= sl && !Q_strcasecmp(v+vl-sl, skyname_suffix[ss][hs]) && hs != i)
+								hdrwrong = true;
+						}
+						for (bs = 0; bs < 6; bs++)
+						{
+							size_t sl = strlen(skyname_suffix[ss][bs]);
+							size_t bl = strlen(vb);
+							if (bl >= sl && !Q_strcasecmp(vb+bl-sl, skyname_suffix[ss][bs]) && bs == i)
+								basright = true;
+						}
+					}
+					if (hdrwrong && basright)
+					{
+						Con_DPrintf("Sky \"%s\": the %s face's hdr key names \"%s\" -- another face. Using $basetexture \"%s\".\n",
+									texturename, skyname_suffix[0][i], v, vb);
+						v = vb;
+						ishdrkey = false;
+					}
+				}
+				if (Shader_SkyVMT_Value(vmt, "basetexturetransform", vmtx, sizeof(vmtx)))
+					tscale[i] = Shader_SkyVMT_TScale(vmtx);
+				if (v && *v)
+				{
+					char stem[MAX_QPATH];
+					char *e;
+					for (e = v; *e; e++)
+						if (*e == '\\')
+							*e = '/';
+					//the value names a material-relative texture, and
+					//R_LoadHiResTexture appends the extension itself
+					if (!Q_strncasecmp(v, "materials/", 10))
+						Q_strncpyz(stem, v, sizeof(stem));
+					else
+						Q_snprintfz(stem, sizeof(stem), "materials/%s", v);
+					e = stem + strlen(stem);
+					if (e-stem > 4 && !Q_strcasecmp(e-4, ".vtf"))
+						e[-4] = 0;
+					images[i] = R_LoadHiResTexture(stem, NULL,
+						(ishdrkey?IF_HDRDECOMPRESS:IF_NOALPHA)|IF_CLAMP|IF_LOADNOW);
+					if (images[i]->width)
+						Q_strncpyz(path, stem, sizeof(path));	//so a later failure names something useful
+				}
+				BZ_Free(vmt);
+			}
+			//r_nulltex is literally NULL (client/render.h), so this must be
+			//guarded -- images[i] is only dereferenceable once something has
+			//actually loaded into it.
+			if (images[i] && images[i]->width)
+			{
+				howto[i] = 'm';
+				continue;	//the material answered; no need to guess
+			}
+
 			//nettest: HL2 ships a compressed-HDR sky face named "<skyname>_hdr<side>"
 			// (e.g. sky_day01_01_hdrrt) ALONGSIDE the LDR "<skyname><side>". The 8-bit
 			// LDR face bands; the _hdr face is RGBS-in-BGRA8 (or RGBA16F) and is smooth.
@@ -728,12 +971,43 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 				if (images[i]->width)
 					break;
 			}
+			howto[i] = images[i]->width?'f':'X';
 			if (!images[i]->width)
 			{
-				Con_DPrintf("Sky \"%s\" missing texture: %s\n", shadername, path);
+				//ftesurf (P181): name the SKY and the FACE.  This used to print
+				//only the last candidate tried, which is the least informative
+				//of the 24 and is why a broken sky went undiagnosed for so long.
+				Con_DPrintf("Sky \"%s\" (%s): no image for the %s face, tried up to \"%s\"\n",
+					shadername, texturename, skyname_suffix[0][i], path);
 				images[i] = r_blackimage;
 				allokay = false;
 			}
+		}
+	}
+	/*
+	ftesurf (P181): say something only when the sky needed handling.
+
+	A plain six-VTF sky with no texture transform is the common case and is not
+	worth a line on every map.  What IS worth saying is that a face is missing
+	(the sky will have a black side and nobody will know why) or that a
+	half-height face was corrected -- because if that correction is ever wrong,
+	this line is the only place it is written down.
+	*/
+	if (*texturename && *texturename != '-')
+	{
+		qboolean notable = false;
+		for (i = 0; i < 6; i++)
+			if (howto[i] == 'X' || tscale[i] != 1)
+				notable = true;
+		//...but only once per sky.  A map load registers the sky shader three
+		//times (server, client, and the shader reload pass), and three identical
+		//lines is how a useful message turns into noise people learn to skip.
+		static char saidfor[MAX_QPATH];
+		if (notable && strcmp(saidfor, texturename))
+		{
+			Q_strncpyz(saidfor, texturename, sizeof(saidfor));
+			Con_Printf("sky \"%s\": rt,bk,lf,ft,up,dn = %s (m=material, f=filename, X=MISSING), t-scale %.2g %.2g %.2g %.2g %.2g %.2g\n",
+				texturename, howto, tscale[0],tscale[1],tscale[2],tscale[3],tscale[4],tscale[5]);
 		}
 	}
 	return allokay;
@@ -1119,7 +1393,7 @@ static void Shader_SkyParms(parsestate_t *ps, const char **ptr)
 	shader->skydome = skydome;
 
 	boxname = Shader_ParseString(ptr);
-	Shader_ParseSkySides(shader->name, boxname, skydome->farbox_textures);
+	Shader_ParseSkySides(shader->name, boxname, skydome->farbox_textures, skydome->farbox_tscale);
 
 	/*skyheight =*/ Shader_ParseFloat(shader, ptr, 512);
 
@@ -1197,6 +1471,44 @@ static void Shader_SurfaceParm (parsestate_t *ps, const char **ptr)
 		shader->flags |= SHADER_HASPALETTED;
 	else if (!Q_stricmp(token, "hastop") || !Q_stricmp(token, "hasbottom") || !Q_stricmp(token, "hastopbottom"))
 		shader->flags |= SHADER_HASTOPBOTTOM;
+
+	/*
+	FTESurf Patch 150: q3map2 COMPILE-TIME surfaceparms, recognised and ignored.
+
+	These are instructions to the map compiler -- how to light, clip and cull a
+	brush while building the bsp -- and carry no runtime meaning at all, so a
+	renderer reading a finished bsp has nothing to do with them.  Warning about
+	them is warning that a shader was written for a compiler we are not.
+
+	The hl2 plugin WRITES two of these itself (mat_vmt.c emits `surfaceparm
+	trans` and `surfaceparm alphashadow` into every generated Water shader), so
+	on a Source map the engine was warning about its own generated text -- twice
+	per map load, once per shader reload.  Silencing them here rather than at
+	that one caller also covers every Q3 shader quakers loads, which is where
+	the rest of this family comes from.
+	*/
+	else if (!Q_stricmp(token, "trans")			/* q3map2: the surface is see-through, light through it */
+		|| !Q_stricmp(token, "alphashadow")		/* q3map2: cast shadows from the alpha channel */
+		|| !Q_stricmp(token, "lightfilter")		/* q3map2: tint light passing through */
+		|| !Q_stricmp(token, "nolightmap")		/* compile-time; runtime uses the shader's own passes */
+		|| !Q_stricmp(token, "pointlight")
+		|| !Q_stricmp(token, "detail")			/* vis hint */
+		|| !Q_stricmp(token, "structural")		/* vis hint */
+		|| !Q_stricmp(token, "areaportal")
+		|| !Q_stricmp(token, "clusterportal")
+		|| !Q_stricmp(token, "donotenter")		/* bot navigation */
+		|| !Q_stricmp(token, "botclip")
+		|| !Q_stricmp(token, "nonsolid")		/* collision, decided at compile time */
+		|| !Q_stricmp(token, "playerclip")
+		|| !Q_stricmp(token, "monsterclip")
+		|| !Q_stricmp(token, "origin")
+		|| !Q_stricmp(token, "trigger")
+		|| !Q_stricmp(token, "nodrop")
+		|| !Q_stricmp(token, "antiportal")
+		|| !Q_stricmp(token, "skip")
+		|| !Q_stricmp(token, "hint"))
+		;
+
 	else
 		Con_DLPrintf(2, "Shader %s, Unknown surface parm \"%s\"\n", ps->s->name, token);	//note that there are game-specific names used to override mod surfaceflags+contents
 }
@@ -1617,7 +1929,36 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 				Q_strlcatfz(defines, &offset, sizeof(defines), "#define RELIEFMAPPING\n");
 		}
 
-		if (r_deluxemapping)	//fixme: should be per-model really
+		//nettest: a shader may only take the DELUXE path if the LOADED WORLD actually HAS
+		//deluxemaps.  This is the "should be per-model really" FIXME that stood here, and it
+		//was not cosmetic.
+		//
+		//r_deluxemapping is a RENDERER CAPABILITY flag (gl_draw.c:546, straight off the cvar at
+		//renderer init), so this define was injected into every shader whose texture merely
+		//happened to carry a normalmap - map contents never entered into it.  On a map with no
+		//deluxemap lump, defaultwall.glsl:456-467 then ran
+		//        lightmaps *= 2.0 / max(0.25, deluxe.z);
+		//        lightmaps *= dot(norm, deluxe);
+		//against whatever placeholder got bound to s_deluxemap (gl_backend.c:1365 hands out
+		//missing_texture_normal when the page has no deluxe).  dot() is free to come out zero or
+		//NEGATIVE there, and a negative lightmap clamps to pure black - so a surface with a
+		//correct texture, a correctly allocated lightmap page and correct lightmap texels still
+		//rendered PURE BLACK, and only the additive rtlight pass (which has no such term) could
+		//ever put colour on it.  That is why a flashlight was the only thing that lit these
+		//surfaces, and why it appeared to depend on angle.
+		//
+		//Half-Life BSPs never carry deluxemaps at all, so on GoldSrc content this hit every world
+		//texture that had a normalmap - which in practice meant the masked '{' ones.  Diagnosed on
+		//th_ep1_01's func_door_rotating and pizza_ya_san1's {stripeh by probing the two factors
+		//separately: the raw lightmap texel and e_lmscale were both bright, while their product
+		//came out black, which only this multiply can do.
+		//
+		//Deliberately only the DEFINE is gated, not the `!!samps =DELUXE deluxemap` declaration at
+		//Com_PermuOrFloatArgument (:1688).  Suppressing the sampler too would change numsamplers,
+		//hence the synthesised pass list and every texture binding index after it; leaving it
+		//declared but unused costs one ignored uniform and keeps the pass layout byte-identical.
+		//cl.worldmodel is NULL for 2D/menu//loading shaders, which want no deluxe modulation either.
+		if (r_deluxemapping && cl.worldmodel && cl.worldmodel->lightmaps.deluxemapping)
 			Q_strlcatfz(defines, &offset, sizeof(defines), "#define DELUXE\n");
 	}
 	permutationdefines[pn++] = defines;
@@ -2157,8 +2498,29 @@ static qboolean Shader_LoadPermutations(char *name, program_t *prog, char *scrip
 	if (qrenderer == qrtype && ver < 150)
 		prog->tess = cantess = false;	//GL_ARB_tessellation_shader requires glsl 150(gl3.2) (or glessl 3.1). nvidia complains about layouts if you try anyway
 
+	/*
+	FTESurf Patch 266: this ORed the permutation's BIT INDEX into a MASK.
+
+	`nopermutation` is a bitmask -- the line directly below it uses
+	PERMUTATION_SKELETAL, the (1u<<BIT) form, and is the proof of intent.
+	PERMUTATION_BIT_FOG is the enum member, which with SKELETALMODELS defined
+	sits at index 5 (shader.h: BUMPMAP, FULLBRIGHT, UPPERLOWER, REFLECTCUBEMASK,
+	SKELETAL, FOG).  So `|= 5` set bits 0 and 2 -- PERMUTATION_BUMPMAP and
+	PERMUTATION_UPPERLOWER -- and never once touched PERMUTATION_FOG, which is 32.
+
+	`r_fog_permutation 0` therefore did not disable fog permutations at all.  It
+	stripped normal mapping and upper/lower skins from every program built while
+	it was 0, silently, and the cvar carries CVAR_SHADERSYSTEM so that rebuild
+	happens the moment you set it.
+
+	This matters beyond the bug: r_fog_permutation 0 is the control anyone
+	reaches for to ask "is this surface missing fog because of the permutation
+	path", and it has been answering a different question.  Any earlier
+	measurement in this file's patch record that used it was measuring BUMP and
+	UPPERLOWER coming off, not fog.
+	*/
 	if (!r_fog_permutation.ival)
-		nopermutation |= PERMUTATION_BIT_FOG;
+		nopermutation |= PERMUTATION_FOG;
 	if (!sh_config.max_gpu_bones)
 		nopermutation |= PERMUTATION_SKELETAL;
 
@@ -2740,12 +3102,54 @@ static void Shader_HLSL11ProgramName (parsestate_t *ps, const char **ptr)
 }
 
 static void Shaderpass_BlendFunc (parsestate_t *ps, const char **ptr);
+/*
+FTESurf Patch 219: progblendfunc was a SILENT NO-OP without a program.
+
+The directive is named for a program and its effect is on a PASS -- its own table
+entry says so: "actually just overrides the first subpasses' blendmode".  Guarding
+it on ps->s->prog therefore threw the blend away for every shader that has passes
+and no top-level program, and threw it away QUIETLY: no warning, no fallback, and
+a shader that reads as translucent everywhere you look at it.
+
+That is the whole of "surf_kitsune has no transparent surfaces".  Its nine
+GRIDS/GRID_* materials are authored `$translucent 0 $selfillum 1 $alpha 0.75`, and
+by the time they reach here the hl2 plugin has resolved them entirely correctly --
+measured, from the plugin's own diagnostic:
+
+    [vmt] grids/grid_red: alpha 0.750 translucent 1 additive 0 animpass 0
+                          blendfunc src_alpha one_minus_src_alpha
+
+so the VMT side emits `progblendfunc src_alpha one_minus_src_alpha` and this
+function silently dropped it.  With no blend bits on pass 0, Shader_Finish's
+"all passes have blendfuncs" test (:6330-6342) fails, the program branch is taken
+instead, and that branch derives no blend sort AND force-enables depthwrite
+(:6418-6423).  The finished shader:
+
+    [shader] grids/grid_red   sort 5 prog 0 passes 1 bits0 0x10000
+
+sort 5 is SHADER_SORT_OPAQUE where 11 is SHADER_SORT_BLEND.  Opaque, depth-writing,
+and 75% alpha never applied.
+
+Why it looked map-specific: the materials that DO blend on other maps -- water,
+Refract glass, LightmappedGeneric -- emit a top-level `program`, so they had a prog
+and passed the guard.  Only the pass-based arms lost their blend, which is why the
+report was "other maps do, this one does not".
+
+Gate on having a pass instead, which is the thing actually written to.  `prog` is
+kept in the condition so a program shader with no counted passes behaves exactly as
+it did rather than silently changing.
+*/
 static void Shader_ProgBlendFunc (parsestate_t *ps, const char **ptr)
 {
-	if (ps->s->prog)
+	if (ps->s->prog || ps->s->numpasses)
 	{
 		ps->pass = ps->s->passes;
+		//FTESurf Patch 266: aiming at passes[0] is not enough on its own --
+		//Shaderpass_BlendFunc redirects away from a pass that has sub-passes, and a
+		//pass-level `program` gives pass 0 sub-passes.  See the comment there.
+		ps->blendfunc_nonextbundle = true;
 		Shaderpass_BlendFunc(ps, ptr);
+		ps->blendfunc_nonextbundle = false;
 		ps->pass = NULL;
 	}
 }
@@ -2883,6 +3287,41 @@ static void Shader_PortalFBOScale(parsestate_t *ps, const char **ptr)
 	shader_t *shader = ps->s;
 	shader->portalfboscale = Shader_ParseFloat(shader, ptr, 0);
 	shader->portalfboscale = max(shader->portalfboscale, 0);
+}
+/*
+  FTESurf Patch 210: render this portal's far view INTO A TEXTURE, and let the
+  surface paint itself with it, instead of painting the far view over the whole
+  screen and masking it back off.
+
+  The engine already knows how to do this -- SHADER_HASPORTAL, "reflection image
+  is actually a portal rather than a simple reflection", complete with the
+  GL_DEPTH_CLAMP handling for the near clip plane intersecting the aperture
+  (gl_backend.c) -- but the flag had exactly one way in: `dp_camera`, which drags
+  the whole DarkPlaces altwater program along with it (fresnel, ripples,
+  normalmap sampling, and a refraction TINT that defaults to BLACK because
+  dp_camera never parses one).  None of that is wanted for a doorway.  So the
+  capability gets its own keyword and the material supplies its own program.
+
+  Pair it with a `map $refraction` pass, which is what actually sets
+  SHADER_HASREFRACT; the flag's own comment in shader.h requires that pairing and
+  GLBE_GenerateBatchTextures only reaches the portal branch through it.
+
+  r_portalfbo 0 turns the material back into the Patch 206-208 one WITHOUT
+  needing a second copy of the file: SHADER_NODRAW is tested in
+  GLBE_SubmitMeshesSortList before anything else, so the pass never runs and the
+  aperture behaves exactly like the zero-pass shader it replaced -- recursed in
+  place by GLBE_SubmitMeshesPortals and masked off afterwards -- while this
+  material still declares one pass for the FBO route to use when it is on.  That
+  matters because the two designs fail differently and the old one is the only
+  way to see the original symptom again.
+*/
+static void Shader_PortalFBO(parsestate_t *ps, const char **ptr)
+{
+	extern cvar_t r_portalfbo;
+	if (r_portalfbo.ival)
+		ps->s->flags |= SHADER_HASPORTAL;
+	else
+		ps->s->flags |= SHADER_NODRAW;
 }
 
 static void Shader_DP_Camera(parsestate_t *ps, const char **ptr)
@@ -3130,6 +3569,7 @@ static shaderkey_t shaderkeys[] =
 	{"thicknessmap",		Shader_ThicknessMap,		"fte"},
 
 	{"portalfboscale",		Shader_PortalFBOScale,		"fte"},	//portal/mirror/refraction/reflection FBOs are resized by this scale
+	{"portalfbo",			Shader_PortalFBO,			"fte"},	//FTESurf Patch 210: draw the portal's view as a texture on the aperture, not over the screen. needs a $refraction pass.
 	{"basefactor",			Shader_FactorBase,			"fte"},	//material scalers for glsl
 	{"specularfactor",		Shader_FactorSpec,			"fte"},	//material scalers for glsl
 	{"fullbrightfactor",	Shader_FactorEmit,			"fte"},	//material scalers for glsl
@@ -3906,7 +4346,50 @@ static void Shaderpass_BlendFunc (parsestate_t *ps, const char **ptr)
 	shaderpass_t *pass = ps->pass;
 	char		*token;
 
-	if (pass->numMergedPasses>1)
+	/*
+	FTESurf Patch 266: this redirect is right for `blendfunc` and wrong for
+	`progblendfunc`.
+
+	Inside a pass block, a `blendfunc` written after several `map` lines belongs
+	to the LAST bundle, which is what this moves it to.  But Shader_ProgBlendFunc
+	delegates here in order to write pass 0 specifically -- the keyword table's
+	own entry for progblendfunc says "actually just overrides the first
+	subpasses' blendmode" -- and this redirect silently moved that write
+	somewhere else.
+
+	It only fires when pass 0 already has sub-passes, which for a generated VMT
+	material means the material's class emitted its `program` INSIDE a pass
+	rather than at top level: Shader_FixupProgPasses then inflates
+	passes[0].numMergedPasses to numsamplers plus one per declared default
+	texture, and s->numpasses with it.  mat_vmt.c's VertexlitGeneric arm is such
+	a class and vmt/vertexlit has six, so the blend landed on passes[5].
+
+	Pass 0 then kept no blend bits, the blend/sort scan below reads only LEADER
+	passes, and the shader fell through to the default SHADER_SORT_OPAQUE with
+	depthwrite force-enabled.  Measured on surf_boreas, where the same material
+	name exists as two files -- the world one is LightmappedGeneric and emits a
+	top-level program, the model one is VertexlitGeneric and emits a pass-level
+	one:
+
+	    [shader] maps/surf_boreas/.../ice_transparent_13140_-9344_13440
+	                                            sort 11 prog 1 passes 1 bits0 0x10065
+	    [shader] project_tendies/models/ice_transparent.vmt
+	                                            sort  5 prog 0 passes 6 bits0 0x10000
+
+	0x10065 is DEPTHWRITE|DSTBLEND_ONE_MINUS_SRC_ALPHA|SRCBLEND_SRC_ALPHA and
+	0x10000 is DEPTHWRITE alone.  That is the reported "the ramp's ice panes have
+	no transparency applied like they should have", and it is every
+	$translucent/$additive VertexlitGeneric material in the library -- 330 of
+	4198 (7.9%) across 23% of maps in a 146-map sample.
+
+	It is also why only the blend went missing while the program still ran: only
+	a LEADER pass's shaderbits ever reach GL blend state (BE_RenderMeshProgram
+	sends them once), so bits parked on a sub-pass are inert.
+
+	Third patch on this one directive -- 195 stopped it being emitted twice, 219
+	fixed its guard, this fixes where it lands.
+	*/
+	if (pass->numMergedPasses>1 && !ps->blendfunc_nonextbundle)
 		pass = ps->s->passes+ps->s->numpasses-1;	//nextbundle stuff.
 
 	//reset to defaults
@@ -4188,6 +4671,8 @@ static void Shaderpass_TcGen (parsestate_t *ps, const char **ptr)
 		pass->tcgen = TC_GEN_LIGHTMAP;
 	} else if ( !Q_stricmp (token, "environment") ) {
 		pass->tcgen = TC_GEN_ENVIRONMENT;
+	} else if ( !Q_stricmp (token, "chrome") ) {	//nettest: GoldSrc studio chrome
+		pass->tcgen = TC_GEN_CHROME;
 	} else if ( !Q_stricmp (token, "fireriseenv") ) {	//from RTCW
 		pass->tcgen = TC_GEN_ENVIRONMENT;	//FIXME: not supported
 	} else if ( !Q_stricmp (token, "vector") )
@@ -4540,6 +5025,7 @@ qboolean Shader_Init (void)
 	}
 
 	Shader_NeedReload(true);
+	shader_reload_why = "Shader_Init";
 	Shader_DoReload();
 	return true;
 }
@@ -5482,6 +5968,32 @@ static const char *Shader_AlphaMaskProgArgs(shader_t *s)
 			return "#MASK=0.5#MASKLT=1";	//ignore the eq part.
 		}
 	}
+
+	//nettest: a shader can carry its alpha test ONLY in its program args, with no pass and no
+	//alphafunc at all - and the GoldSrc '{' world shader is exactly that shape:
+	//    "{ fte_program defaultwall#MASK=0.666#MASKLT }"      (Shader_DefaultBSPQ1, below)
+	//Reading passes[0] alone therefore returned "" for EVERY masked GoldSrc world texture, so
+	//neither the depthonly nor the rtlight override was ever given a mask for them. The visible
+	//consequence was that a flashlight lit up the keyed-out holes of grates, ladders and
+	//func_illusionary ladders: the additive rtlight pass had no discard, so it deposited light
+	//across the whole quad. Studio models were unaffected and did work, because HLSHADER_MASKED
+	//writes a real "alphaFunc GE128" pass - which is exactly why the same fix landed on models
+	//and not on brushes, and why the two were reported separately.
+	//
+	//Recover the values from the program name instead. Rebuilt from the parsed numbers rather
+	//than returned as a substring, so that unrelated args (#usemods, which sets calcgens) cannot
+	//leak into the override's program name and change its behaviour.
+	if (s->prog && s->prog->name && strchr(s->prog->name, '#'))
+	{
+		float m = Com_FloatArgument(s->prog->name, "MASK", 4, -1);
+		if (m >= 0)
+		{	//"MASK" cannot match "MASKLT": Com_FloatArgument requires the next char to be
+			//'=', '#' or NUL, and MASKLT's is 'L', so the two are read independently.
+			if (Com_FloatArgument(s->prog->name, "MASKLT", 6, 0) != 0)
+				return va("#MASK=%g#MASKLT=1", m);
+			return va("#MASK=%g", m);
+		}
+	}
 	return "";
 }
 
@@ -6049,16 +6561,45 @@ done:;
 			s->sort = SHADER_SORT_OPAQUE;
 	}
 
+	/*
+	FTESurf: REPORT THE FINISHED SORT.
+
+	A material can be correctly marked translucent, be handed a correct #ALPHA and
+	emit a correct progblendfunc, and still be drawn opaque -- because whether it
+	BLENDS is decided here, from the pass bits, and the program branch above
+	(:6412-6423) derives no blend sort at all and force-enables depthwrite.
+	surf_kitsune's grids report `alpha 0.750 translucent 1 blendfunc
+	src_alpha one_minus_src_alpha` from the VMT side and render solid, and there was
+	no way to see which of those two halves was lying.  Static reading of this
+	function said three times that the sort "should" come out SHADER_SORT_BLEND;
+	this prints what it actually is.
+
+	SHADER_SORT_BLEND is 11 and SHADER_SORT_OPAQUE is 5 in the enum at
+	gl_model.h:36-57, so the answer is readable without a decoder ring.
+	*/
+	if (developer.ival)
+		Con_DPrintf("[shader] %-44s sort %2i prog %i passes %i bits0 %#x\n",
+			s->name, s->sort, s->prog?1:0, s->numpasses,
+			s->numpasses ? (unsigned)s->passes[0].shaderbits : 0u);
+
 	if ((s->flags & SHADER_SKY) && (s->flags & SHADER_DEPTHWRITE))
 	{
 		s->flags &= ~SHADER_DEPTHWRITE;
 	}
 
+	//nettest: both per-shader overrides below need the alpha-mask args, so derive them once.
+	//COPIED into a local rather than held as the returned pointer: the program-name branch of
+	//Shader_AlphaMaskProgArgs returns a va() buffer, and the rtlight loop below calls va() once
+	//per lighting mode, which would recycle that buffer out from under us mid-loop.
+	{
+	char mask[64];
+	qboolean tess = (s->prog && s->prog->tess);
+	Q_strncpyz(mask, Shader_AlphaMaskProgArgs(s), sizeof(mask));
+
 	if (!s->bemoverrides[bemoverride_depthonly])
 	{
-		const char *mask = Shader_AlphaMaskProgArgs(s);
-		if (*mask || (s->prog&&s->prog->tess))
-			s->bemoverrides[bemoverride_depthonly] = R_RegisterShader(va("depthonly%s%s", mask, (s->prog&&s->prog->tess)?"#TESS":""), SUF_NONE, 
+		if (*mask || tess)
+			s->bemoverrides[bemoverride_depthonly] = R_RegisterShader(va("depthonly%s%s", mask, tess?"#TESS":""), SUF_NONE,
 				"{\n"
 					"program depthonly\n"
 					"{\n"
@@ -6068,7 +6609,22 @@ done:;
 					"}\n"
 				"}\n");
 	}
-	if (!s->bemoverrides[LSHADER_STANDARD] && (s->prog&&s->prog->tess))
+	//nettest: the RTLIGHT pass needs the mask for exactly the reason the depth pass did, and
+	//never got it - this used to register overrides only for tessellated shaders, so an
+	//alpha-tested surface lit by a dlight (the flashlight, muzzle flashes, explosions) got a
+	//plain `rtlight` program with no discard.  The additive pass then deposited light across
+	//the WHOLE quad, including the texels the base pass keys out.
+	//
+	//That leak was invisible for as long as the keyed-out texels were pure black, because
+	//adding light to black adds nothing you can see.  Both halves of this patch give those
+	//texels a real colour - the wad decoder now keeps the GoldSrc key colour, and
+	//Image_BleedTransparentRGB fills studio skins with neighbouring colour - so the leak
+	//became visible the moment they were fixed: a blue hue on keyed brush faces (the key
+	//colour is usually 0,0,255) and a smear of leaf colour across foliage cards, both only
+	//under a dlight and worst at a grazing angle where the light covers most of the surface.
+	//Registering with `mask` makes the rtlight program compile its MASK permutation, which
+	//rtlight.glsl now discards on, so the light stops where the surface does.
+	if (!s->bemoverrides[LSHADER_STANDARD] && (tess || *mask))
 	{
 		int mode;
 		for (mode = 0; mode < LSHADER_MODES; mode++)
@@ -6077,17 +6633,18 @@ done:;
 				continue;
 			if (s->bemoverrides[mode])
 				continue;
-			s->bemoverrides[mode] = R_RegisterShader(va("rtlight%s%s%s%s#TESS", 
+			s->bemoverrides[mode] = R_RegisterShader(va("rtlight%s%s%s%s%s%s",
 																(mode & LSHADER_SMAP)?"#PCF":"",
 																(mode & LSHADER_SPOT)?"#SPOT":"",
 																(mode & LSHADER_CUBE)?"#CUBE":"",
 #ifdef GLQUAKE
-																(qrenderer == QR_OPENGL && gl_config.arb_shadow && (mode & (LSHADER_SMAP|LSHADER_SPOT)))?"#USE_ARB_SHADOW":""
+																(qrenderer == QR_OPENGL && gl_config.arb_shadow && (mode & (LSHADER_SMAP|LSHADER_SPOT)))?"#USE_ARB_SHADOW":"",
 #else
-																""
+																"",
 #endif
-																)
-														, s->usageflags, 
+																mask,
+																tess?"#TESS":"")
+														, s->usageflags,
 				"{\n"
 					"program rtlight\n"
 					"{\n"
@@ -6097,6 +6654,7 @@ done:;
 					"}\n"
 				"}\n");
 		}
+	}
 	}
 
 	if (!s->prog && sh_config.progs_supported && (r_forceprogramify.ival || (ps->parseflags & SPF_PROGRAMIFY)))
@@ -7350,7 +7908,7 @@ void Shader_DefaultBSPQ1(parsestate_t *ps, const char *shortname, const void *ar
 			Z_Free(s->skydome);
 			s->skydome = (skydome_t *)Z_Malloc(sizeof(skydome_t));
 
-			okay = Shader_ParseSkySides(shortname, "", s->skydome->farbox_textures);
+			okay = Shader_ParseSkySides(shortname, "", s->skydome->farbox_textures, s->skydome->farbox_tscale);
 			s->flags |= SHADER_SKY|SHADER_NODLIGHT;
 			s->sort = SHADER_SORT_SKY;
 
@@ -7386,6 +7944,12 @@ void Shader_DefaultBSPQ1(parsestate_t *ps, const char *shortname, const void *ar
 	{
 		/*alpha test*/
 		if (sh_config.progs_supported)
+			//NOTE: this shader deliberately has no passes, and that is NOT the reason masked
+			//world surfaces render black - A/B tested. Adding "{ map $diffuse }" here to match
+			//Shader_DefaultBSPLM changes nothing: with or without it these shaders report
+			//SHADER_HASLIGHTMAP set and 3 passes, identical to an ordinary wall, because the
+			//passes are synthesised from the program's declared samplers at :6245 rather than
+			//from the script. Recorded so the same idea is not tried a third time.
 			builtin = (
 				"{\n"
 					"fte_program defaultwall#MASK=0.666#MASKLT\n"
@@ -7843,6 +8407,34 @@ static qboolean Shader_ParseShader(parsestate_t *ps, const char *parsename)
 			char shaderfile[MAX_QPATH];
 			if (!*token)
 			{
+				//nettest: an external material loader must NOT be allowed to claim a
+				//Q1/HL/Q2 BSP world texture merely because the bare names collide.
+				//
+				//The cod plugin (plug_load cod) registers builtin TOOL materials for
+				//names like "black" - and GoldSrc maps use exactly those names for
+				//ordinary world brushwork.  th_ep1_00's func_wall *92, the only brush
+				//sealing the starting room, is textured "black", so it silently picked
+				//up cod's
+				//    { program tools  map $diffuse
+				//      blendfunc src_alpha one_minus_src_alpha }
+				//instead of the BSP default wall shader.  That sorts SHADER_SORT_BLEND,
+				//so the wall never wrote depth: it rendered as a black film that
+				//occluded nothing, and the entire intro diorama behind it - including
+				//the translucent window panes - drew straight through the wall.
+				//Diagnosed by dumping both shaders with `r_showshader`: the hijacked
+				//one had no SHADER_HASLIGHTMAP, which no real BSP wall shader lacks.
+				//
+				//These formats are loaded natively and never need a plugin's material,
+				//so consulting the loaders for them can only ever do harm.  Shaders
+				//with no model (2D, CSQC, plugin-owned content) are unaffected.
+				qboolean allowmaterialloaders = true;
+				if (ps->s->model)
+					if (ps->s->model->fromgame == fg_quake ||
+						ps->s->model->fromgame == fg_halflife ||
+						ps->s->model->fromgame == fg_quake2)
+						allowmaterialloaders = false;
+
+				if (allowmaterialloaders)
 				for (i = 0; i < materialloader_count; i++)
 				{
 					if (materialloader[i].funcs->ReadMaterial(ps, parsename, Shader_LoadMaterialString))
@@ -8529,6 +9121,60 @@ void Shader_ShaderList_f(void)
 	}
 }
 
+//nettest: print the RESOLVED passes of a shader - what it actually ended up with,
+//not what the script said.
+//
+//A '{' masked bsp texture is generated by Shader_DefaultBSPQ1 (:7448) as a PASSLESS
+//`fte_program defaultwall#MASK...#MASKLT`, while an ordinary wall goes through
+//Shader_DefaultBSPLM (:6954) and carries a real `{ map $diffuse }`.  In both cases
+//the fte_program handler throws the script passes away and synthesises one pass per
+//declared sampler (:6245), setting texgen from prog->defaulttextures but NEVER
+//setting tcgen - so a synthesised lightmap pass keeps tcgen 0 (TC_GEN_BASE) instead
+//of TC_GEN_LIGHTMAP.  Whether that matters depends on which draw path the batch
+//takes, and there is no way to tell by reading the script.  So print texgen/tcgen
+//per pass and diff the masked shader against the ordinary one beside it.
+void Shader_ShaderPasses_f(void)
+{
+	static const char *tcgennames[] = {"BASE","LIGHTMAP","ENVIRONMENT","DOTPRODUCT","VECTOR",
+		"NORMAL","SVECTOR","TVECTOR","SKYBOX","WOBBLESKY","REFLECT","CHROME","UNSPECIFIED"};
+	const char *want = Cmd_Argv(1);
+	unsigned int i;
+	int j, shown = 0;
+
+	if (!*want)
+	{
+		Con_Printf("r_shaderpasses <shader name substring>\n"
+		           "  e.g. r_shaderpasses {stripeh   /   r_shaderpasses nm_metal8\n");
+		return;
+	}
+
+	for (i = 0; i < r_numshaders; i++)
+	{
+		shader_t *s = r_shaders[i];
+		if (!s || !strstr(s->name, want))
+			continue;
+		shown++;
+		Con_Printf("^2%s^7  flags=0x%x%s%s  sort=%i  passes=%i  prog=%s\n",
+			s->name, s->flags,
+			(s->flags & SHADER_HASLIGHTMAP)?" HASLIGHTMAP":" ^1noLIGHTMAP^7",
+			(s->flags & SHADER_HASDIFFUSE)?" HASDIFFUSE":"",
+			s->sort, s->numpasses,
+			(s->prog && s->prog->name)?s->prog->name:"<none>");
+		for (j = 0; j < s->numpasses; j++)
+		{
+			shaderpass_t *p = &s->passes[j];
+			Con_Printf("    pass %i: texgen=%-3i tcgen=%-3i(%s)%s shaderbits=0x%x\n",
+				j, (int)p->texgen, (int)p->tcgen,
+				((unsigned)p->tcgen < countof(tcgennames))?tcgennames[p->tcgen]:"?",
+				(p->texgen == T_GEN_LIGHTMAP && p->tcgen != TC_GEN_LIGHTMAP)?
+					" ^1<-- LIGHTMAP SAMPLER WITH NON-LIGHTMAP TCGEN^7":"",
+				(unsigned)p->shaderbits);
+		}
+	}
+	if (!shown)
+		Con_Printf("no loaded shader matches \"%s\"\n", want);
+}
+
 void Shader_TouchTexnums(texnums_t *t)
 {
 	if (t->base)
@@ -8577,6 +9223,16 @@ void Shader_TouchTextures(void)
 	}
 }
 
+/*
+  nettest Patch 141.  WHO ASKED, so the map-load cost can be attributed.
+
+  Shader_DoReload is called from six places and its timing print could not say
+  which one it was, which made "why does this run twice per map load" a matter
+  of reading call graphs.  Callers set this immediately before calling; it is
+  advisory only and never read for anything but the message.
+*/
+const char *shader_reload_why = "?";
+
 void Shader_DoReload(void)
 {
 	shader_t *s;
@@ -8592,6 +9248,26 @@ void Shader_DoReload(void)
 		return;
 	if (!r_shaders)
 		return;	//err, not ready yet
+
+	/*
+	FTESurf Build 7: this function is a leading suspect for the map-load time and
+	nobody had ever measured it.  Both arms are O(everything), and neither says so:
+
+	  - the RESCAN arm walks FOUR COM_EnumerateFiles patterns across every mounted
+	    package.  With Momentum + CS:S + HL2 + CS:GO + TF2 that is several hundred
+	    thousand file entries, four times.
+	  - the RELOAD arm below walks every shader that has ever been created in this
+	    process and re-parses each one's source -- which for a Source map means
+	    re-reading and re-parsing its .vmt out of a VPK.  That is why the console
+	    shows the same materials being parsed on every map change, including
+	    materials belonging to maps that are not being loaded.
+
+	So: time both, and count what the reload arm actually did.  Developer-gated,
+	one clock read otherwise.
+	*/
+	double t0 = Sys_DoubleTime();
+	unsigned int reparsed = 0, regenerated = 0, live = 0;
+	qboolean rescanned = shader_rescan_needed;
 
 	if (shader_rescan_needed)
 	{
@@ -8626,6 +9302,7 @@ void Shader_DoReload(void)
 		s = r_shaders[i];
 		if (!s || !s->uses)
 			continue;
+		live++;
 		ps.s = s;
 		ps.saveshaderbody = NULL;
 
@@ -8637,6 +9314,7 @@ void Shader_DoReload(void)
 		TRACE(("reparsing %s\n", s->name));
 		if (ruleset_allow_shaders.ival && !(s->usageflags & SUR_FORCEFALLBACK))
 		{
+			reparsed++;
 			if (sh_config.shadernamefmt)
 			{
 				char drivername[MAX_QPATH];
@@ -8652,6 +9330,7 @@ void Shader_DoReload(void)
 		}
 		if (s->generator)
 		{
+			regenerated++;
 			oldsort = s->sort;
 			Shader_Regenerate(&ps, shortname);
 			if (s->sort != oldsort)
@@ -8665,10 +9344,33 @@ void Shader_DoReload(void)
 	{
 		Mod_ResortShaders();
 	}
+
+	if (developer.ival)
+		Con_Printf("^5shaders^7 %6.0fms  %s from %s, %u live of %u ever: %u reparsed, %u regenerated\n",
+			(Sys_DoubleTime() - t0) * 1000, rescanned?"RESCAN+reload":"reload",
+			shader_reload_why, live, (unsigned)r_numshaders, reparsed, regenerated);
 }
+
+/*
+  nettest Patch 141.  WHO RAISED THE FLAG.
+
+  Shader_DoReload re-parses EVERY live shader whenever this has been called even
+  once, so a single CVAR_SHADERSYSTEM cvar changing after a map has loaded costs
+  a full re-parse of the map's whole material set on the next frame -- measured
+  at 599ms for 197 shaders on kz_bhop_yonkoma, one second after the identical
+  692ms reload CL_MakeActive had just done.
+
+  There is no way to tell from the reload itself what asked for it, so callers
+  leave their reason here.  developer 2, because on a busy frame this can fire
+  more than once and the point is to catch the ones that fire per map load.
+*/
+const char *shader_needreload_why = "?";
 
 void Shader_NeedReload(qboolean rescanfs)
 {
+	if (!shader_reload_needed && developer.ival >= 2)
+		Con_DPrintf("^5shaders^7 reload requested by %s%s\n",
+			shader_needreload_why, rescanfs?" (+filesystem rescan)":"");
 	if (rescanfs)
 		shader_rescan_needed = true;
 	shader_reload_needed = true;

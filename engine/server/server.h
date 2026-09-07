@@ -488,6 +488,7 @@ typedef struct client_s
 	usercmd_t		lastcmd;			// for filling in big drops and partial predictions
 	double			localtime;			// of last message
 	qboolean jump_held;
+	pmsourcestate_t	pmsrc;	//FTESurf: pm_source.c cross-command state (duck, tick carry)
 	unsigned int	lockanglesseq;		//mod is spamming angle changes, don't do relative changes. outgoing sequence. v_angles isn't really known until netchan.incoming_acknowledged>=lockangles
 
 	float			maxspeed;			// localized maxspeed
@@ -1393,6 +1394,7 @@ void SV_PreRunCmd(void);
 void SV_RunCmd (usercmd_t *ucmd, qboolean recurse);
 void SV_PostRunCmd(void);
 void SV_RunCmdCleanup(void);
+void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
 
 void SV_SendClientPrespawnInfo(client_t *client);
 void SV_ClientProtocolExtensionsChanged(client_t *client);

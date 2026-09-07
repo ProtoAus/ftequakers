@@ -29,6 +29,7 @@ key up events are sent even if in console mode
 */
 qboolean Editor_Key(int key, int unicode);
 void Key_ConsoleInsert(const char *instext);
+void Key_EntryInsert(unsigned char **line, int *linepos, const char *instext);
 void Key_ClearTyping (void);
 
 unsigned char	*key_lines[CON_EDIT_LINES_MASK+1];
@@ -61,6 +62,8 @@ cvar_t con_echochat = CVAR("con_echochat", "0");
 extern cvar_t cl_chatmode;
 extern cvar_t con_showcompletion;	//nettest: right-arrow-accept must mirror the green hint Con_DrawInput paints, so it reads the same cvar. REQUIRES the de-static in console.c.
 cvar_t con_acceptcompletion	= CVARD("con_acceptcompletion", "1", "When the console is showing the green inline completion hint at the end of your input line, RIGHTARROW accepts it (shell autosuggestion style), exactly as if you had pressed Tab. 0 leaves RIGHTARROW as a plain cursor move. Has no effect while con_showcompletion is 0, since there is then nothing on screen to accept.");
+//FTESurf Patch 226
+cvar_t con_completionenter	= CVARD("con_completionenter", "0", "What ENTER does once you have arrowed onto a row of the completion list.\n0: types the row into the input line, and a second ENTER runs it (default).\n1: runs it outright. TAB then takes over the type-it-in-without-running half, and SHIFT+ENTER still accepts without running at either setting.");
 //nettest: PgUp/PgDn page a whole console window. The mouse wheel is deliberately NOT affected.
 cvar_t con_pagelines		= CVARD("con_pagelines", "0", "How many lines PgUp/PgDn scroll the console by. 0 = one full console window minus con_pageoverlap. Set to 2 for the old fixed step. Does not affect the mouse wheel.");
 cvar_t con_pageoverlap		= CVARD("con_pageoverlap", "2", "Rows of context kept on screen when PgUp/PgDn scroll a full window. One of them is eaten by the ^^^^ backscroll marker row.");
@@ -463,6 +466,7 @@ int PaddedPrint (char *s, int x)
 }
 
 int con_commandmatch;
+extern int con_completionscroll;	//FTESurf Patch 211: first row shown in the dropdown (console.c)
 static qboolean con_findmode;		//nettest: Ctrl+F search-in-scrollback is open
 static char con_findtext[64];		//nettest: the current find term
 void Key_UpdateCompletionDesc(void)
@@ -492,12 +496,34 @@ void Key_UpdateCompletionDesc(void)
 		desc = c->completions[con_commandmatch-1].desc;
 		var = Cvar_FindVar(cmd);
 		if (var)
-		{	//nettest: show the cvar's current value AND its default
-			const char *def = var->defaultstr ? var->defaultstr : var->string;
-			if (desc)
-				Con_Footerf(NULL, false, "%s %s (default %s)\n%s", cmd, var->string, def, localtext(desc));
+		{	//FTESurf: mirror the dropdown row's current/default value colours.
+			const char *def = var->defaultstr ? var->defaultstr : (var->enginevalue ? var->enginevalue : var->string);
+			const char *cur = var->latched_string ? var->latched_string : var->string;
+			qboolean changed = strcmp(def, cur) != 0;
+			char safedef[2048], safecur[2048];
+
+			/*Selecting a password-like cvar must not become a value-disclosure
+			  path. This is the same guard used by cvarlist.*/
+			if (var->flags & CVAR_NOUNSAFEEXPAND)
+			{
+				if (desc)
+					Con_Footerf(NULL, false, "%s ^9<value hidden>^7\n%s", cmd, localtext(desc));
+				else
+					Con_Footerf(NULL, false, "%s ^9<value hidden>^7", cmd);
+			}
 			else
-				Con_Footerf(NULL, false, "%s %s (default %s)", cmd, var->string, def);
+			{
+				Con_EscapeConsoleMarkup(def, safedef, sizeof(safedef));
+				Con_EscapeConsoleMarkup(cur, safecur, sizeof(safecur));
+				if (changed && desc)
+					Con_Footerf(NULL, false, "%s ^3\"%s\"^7  ^9(default \"%s\")^7\n%s", cmd, safecur, safedef, localtext(desc));
+				else if (changed)
+					Con_Footerf(NULL, false, "%s ^3\"%s\"^7  ^9(default \"%s\")^7", cmd, safecur, safedef);
+				else if (desc)
+					Con_Footerf(NULL, false, "%s ^9\"%s\" (default)^7\n%s", cmd, safedef, localtext(desc));
+				else
+					Con_Footerf(NULL, false, "%s ^9\"%s\" (default)^7", cmd, safedef);
+			}
 		}
 		else
 		{
@@ -581,6 +607,23 @@ void CompleteCommand (qboolean force, int direction)
 	}
 	//complete to a partial match.
 	cmd = c->guessed;
+	/*
+	FTESurf Patch 215: a partial completion may never SHORTEN the line.
+
+	The sole-match arm above has carried exactly this test since forever
+	("if (strlen(cmd) < strlen(s)) return;") and this arm has not, because with
+	PREFIX completion it could not fire: c->guessed is the common prefix of a set
+	of strings that all begin with what you typed, so it is never shorter than
+	what you typed.
+
+	sv_mapcompletion 1 breaks that invariant, which is the whole point of it --
+	`map a` now matches every map with an 'a' anywhere in its name, and the common
+	prefix of THAT set collapses to "map ".  Inserting it would delete what you
+	typed on a keystroke whose entire job is to add to it.  So the guard moves
+	here too, where it is now load-bearing rather than redundant.
+	*/
+	if (cmd && strlen(cmd) < strlen(s))
+		cmd = NULL;
 	if (cmd)
 	{
 		int i = key_lines[edit_line][0] == '/'?1:0;
@@ -601,6 +644,441 @@ void CompleteCommand (qboolean force, int direction)
 	if (con_commandmatch <= 0)
 		con_commandmatch += c->num;
 	Key_UpdateCompletionDesc();
+}
+
+/*
+FTESurf: Up/Down and the wheel deliberately move only the dropdown highlight;
+they do not rewrite the input line.  The stock ENTER path accepts a highlighted
+command name before executing it, but excludes every line containing a space.
+That makes argument completions unusable: `map kits`, Down, Enter submits the
+literal `map kits` instead of taking the highlighted `map surf_kitsune` row.
+
+Keep ENTER's existing two-step contract -- accept first, execute next -- and
+extend it to highlighted argument completions.  Resetting con_commandmatch after
+the rewrite is important: the completed line may itself still have matches, and
+otherwise each Enter can keep accepting a row instead of ever executing it.
+
+FTESurf Patch 226: also TAB's job now, so `argsonly` chooses which caller this is.
+
+  true   ENTER's first arm.  Declines a line with no whitespace, because that is
+         the bare-command-name case and the arm below it in Key_Console has
+         handled it since forever -- taking it here would be a second spelling of
+         a rule that already exists.
+  false  TAB, which has no such second arm and wants the highlighted row whatever
+         shape it is.
+*/
+static qboolean Key_TakeHighlightedRow(qboolean argsonly)
+{
+	const char *selected, *s;
+	cmd_completion_t *c;
+	size_t idx;
+
+	if (con_commandmatch <= 0)
+		return false;
+
+	s = key_lines[edit_line];
+	if (!*s)
+		return false;
+	if (*s == ' ' || *s == '\t')
+		s++;
+	if (*s == '\\' || *s == '/')
+		s++;
+	if (*s == ' ' || *s == '\t')
+		s++;
+
+	/*Command names cannot contain whitespace, so none means this is the legacy
+	  command-name case handled by the original ENTER path below.*/
+	if (argsonly && !strchr(s, ' ') && !strchr(s, '\t'))
+		return false;
+
+	c = Cmd_Complete(s, true);
+	idx = (size_t)(con_commandmatch - 1);
+	if (!c || idx >= c->num)
+		return false;
+
+	selected = c->completions[idx].repl ? c->completions[idx].repl : c->completions[idx].text;
+	if (!selected || !strcmp(selected, s) || strlen(selected) < strlen(s))
+		return false;
+
+	CompleteCommand(true, 0);
+	con_commandmatch = 0;
+	return true;
+}
+
+/*
+FTESurf Patch 213: move the dropdown's highlight, and ONLY the highlight.
+
+Two reports, one function.
+
+  "the arrow keys should cycle through the command display, currently it cycles
+   through the console history even if you start typing in a command"
+
+The arrows were gated on `con_commandmatch`, and Patch 211 deliberately leaves
+that 0 until you navigate -- which is what keeps ENTER meaning "run my line"
+while the list is merely open. So the gate could only ever become true after Tab
+or the wheel had already set it, and typing `cl_` and pressing Up gave you
+history. The gate is now "is the dropdown actually showing rows", which is what
+you can see, and it MIRRORS Con_DrawInput's own condition rather than
+approximating it -- same string, same cmdstart, same Cmd_Complete call -- so the
+list you navigate cannot be a different list from the one on screen.
+
+Pressing Up first highlights the LAST row and Down the first, which falls out of
+the wrap for free and is what a dropdown opening upward should do.
+
+WHY NOT CompleteCommand: its partial-match arm INSERTS c->guessed into the line,
+so navigating `cl_sh` past a run of `cl_show*` would silently rewrite what you
+typed. That is right for Tab -- it is what Tab IS -- and wrong for a highlight.
+Tab's path is untouched.
+
+HISTORY IS NOT LOST, and the rule is one already in the file: history_line ==
+edit_line exactly while you are editing the live line rather than browsing a
+recalled one. So the first Up/Down can still enter and walk history. Any real
+content edit detaches that recalled copy from its history cursor; from then on,
+if the edited text has visible matches, Up/Down own the dropdown. Cursor-only
+movement does not detach it because it has not changed the recalled command.
+*/
+static qboolean Key_CompletionNav(console_t *con, int direction)
+{
+	const char *ctxt;
+	cmd_completion_t *c;
+
+	if (!con->commandcompletion || con_findmode)
+		return false;
+	if (con_displaypossibilities.ival < 2 || !con_displaypossibilities.value)
+		return false;	//mode 1 keeps build 26's arrows exactly
+	if (history_line != edit_line)
+		return false;	//browsing history -- these arrows are history's
+
+	//Con_DrawInput's gate, verbatim
+	ctxt = key_lines[edit_line];
+	if (!ctxt[0] || (ctxt[0] == '/' && !ctxt[1]))
+		return false;
+	c = Cmd_Complete(ctxt + (ctxt[0] == '/'), true);
+	if (!c || !c->num)
+		return false;	//nothing is drawn, so nothing to navigate
+
+	con_commandmatch += direction;
+	if (con_commandmatch <= 0)
+		con_commandmatch = c->num;
+	else if (con_commandmatch > (int)c->num)
+		con_commandmatch = 1;
+	Key_UpdateCompletionDesc();	//NOTE: reads con_commandmatch, so it is set first
+	return true;
+}
+
+/*A recalled command is copied into the live edit slot, but history_line keeps
+  pointing at its source so subsequent arrows continue browsing history. The
+  first content mutation makes that copy a new input line. Keep this transition
+  at the mutation primitives so typing, deletion, paste and completion edits all
+  agree; chat input uses another pointer and is intentionally ignored.*/
+static void Key_ConsoleLineEdited(unsigned char **line)
+{
+	if (line == &key_lines[edit_line])
+		history_line = edit_line;
+}
+
+/*
+==============================================================================
+
+FTESurf Patch 213: con_selftest.
+
+A config cannot press a key, so the arrow-key change above is exactly the kind of
+thing this project would otherwise have to ship saying "nobody has looked at it".
+It does not have to: the gate is a pure function of the input line, the mode and
+history_line, and every one of those can be set from here. So this drives
+Key_CompletionNav directly and pins what it does -- the same instrument pm_selftest
+and zone_selftest already are, for the same reason.
+
+What it CANNOT prove, and the report must keep saying so: that pressing the
+physical Up key reaches Key_Console at all. What it does prove is that when it
+does, the answer is right.
+
+The single most valuable check here is `line unchanged`. The obvious
+implementation of this feature calls CompleteCommand, whose partial-match arm
+inserts c->guessed -- so navigating a dropdown would silently rewrite what you
+typed. That is a real bug that was avoided rather than a hypothetical, and it is
+invisible to every other check in the list.
+*/
+static int con_test_fails;
+
+static void Key_ConCheck (const char *what, int got, int expect)
+{
+	if (got == expect)
+		Con_Printf ("  ^2ok^7   %-38s %6i\n", what, got);
+	else
+	{
+		Con_Printf ("  ^1FAIL^7 %-38s %6i  (expected %i)\n", what, got, expect);
+		con_test_fails++;
+	}
+}
+
+static void Key_ConSetLine (const char *s)
+{
+	size_t l = strlen(s);
+	key_lines[edit_line] = BZ_Realloc(key_lines[edit_line], l+1);
+	memcpy(key_lines[edit_line], s, l+1);
+	key_linepos = l;
+}
+
+/*
+FTESurf Patch 215: put text on the console's input line from a config.
+
+The dropdown's two remaining questions -- which side of the input line it is on,
+and whether the rows read top-to-bottom -- are things you LOOK at, and up to now
+they could only be shipped saying "nobody has looked at it": a config can take a
+screenshot but cannot type, and with an empty input line there is no list to
+photograph.
+
+This closes that. It is the same argument in_journal_synth already makes -- the
+only way to reach a keyboard-driven path from a cfg -- with none of the same risk,
+because it forges no evidence: it writes the line you would have typed and the
+completion machinery then does exactly what it always does. It sets nothing else,
+in particular not con_commandmatch, so ENTER still means "run my line".
+*/
+static void Key_ConSetLine (const char *s);
+static void Key_ConSetText_f (void)
+{
+	Key_ConSetLine(Cmd_Argc() > 1 ? Cmd_Args() : "");
+	con_commandmatch = 0;
+	Key_UpdateCompletionDesc();
+}
+
+static void Key_ConSelfTest_f (void)
+{
+	console_t *con = con_current;
+	cvar_t *gs = Cvar_FindVar("con_gripsize");
+	cvar_t *mc = Cvar_FindVar("sv_mapcompletion");	//FTESurf Patch 215
+	cmd_completion_t *c;
+	char saveline[MAXCMDLINE];
+	int savematch = con_commandmatch, savehist = history_line, savepos = key_linepos;
+	int savemode = con_displaypossibilities.ival, savegrip = gs?gs->ival:8;
+	int n;
+
+	con_test_fails = 0;
+	if (key_lines[edit_line])
+		Q_strncpyz(saveline, key_lines[edit_line], sizeof(saveline));
+	else
+		*saveline = 0;
+
+	Con_Printf ("^5con_selftest^7  the completion-dropdown arrow gate (Patch 213)\n");
+
+	if (!con || !con->commandcompletion)
+	{
+		/*FTESurf Patch 215: a SKIP, not a FAIL. The completion machinery is not
+		  up before a map is loaded, so a run that reaches here has told us
+		  nothing about the code -- and a diagnostic that cries failure when it
+		  simply did not run teaches everyone to ignore it. The quakers
+		  regression hits this every time by design.*/
+		Con_Printf ("  ^3skip^7 no console with commandcompletion yet -- load a map first\n");
+		goto done;
+	}
+
+	Cvar_SetValue(&con_displaypossibilities, 2);
+	history_line = edit_line;	//a line you typed, not one you recalled
+
+	/*"cl_" has many matches in every build of this engine. Take the count from
+	  Cmd_Complete itself rather than hardcoding it: the number changes as cvars
+	  are added, and a test that pins it would fail for the wrong reason.*/
+	Key_ConSetLine("cl_");
+	c = Cmd_Complete("cl_", true);
+	n = c ? (int)c->num : 0;
+	Con_Printf ("  (\"cl_\" has %i matches)\n", n);
+	if (n < 2)
+	{
+		Con_Printf ("  ^1FAIL^7 need >1 match to test wrap -- is cmd.c registered?\n");
+		con_test_fails++;
+		goto restore;
+	}
+
+	con_commandmatch = 0;
+	Key_ConCheck("Down from nothing -> first row",
+				 Key_CompletionNav(con, 1) ? con_commandmatch : -1, 1);
+
+	con_commandmatch = 0;
+	Key_ConCheck("Up from nothing -> LAST row",
+				 Key_CompletionNav(con, -1) ? con_commandmatch : -1, n);
+
+	con_commandmatch = n;
+	Key_ConCheck("Down off the end wraps to first",
+				 Key_CompletionNav(con, 1) ? con_commandmatch : -1, 1);
+
+	con_commandmatch = 1;
+	Key_ConCheck("Up off the top wraps to last",
+				 Key_CompletionNav(con, -1) ? con_commandmatch : -1, n);
+
+	/*the whole point of not calling CompleteCommand*/
+	Key_ConCheck("line unchanged by navigating",
+				 strcmp(key_lines[edit_line], "cl_") ? 0 : 1, 1);
+
+	/*every way the gate must DECLINE, so the arrows fall through to history*/
+	con_commandmatch = 0;
+	Key_ConSetLine("");
+	Key_ConCheck("declines on an empty line",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+
+	Key_ConSetLine("zzqqnotacommandatall");
+	Key_ConCheck("declines when nothing matches",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+
+	Key_ConSetLine("/");
+	Key_ConCheck("declines on a bare slash",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+
+	Key_ConSetLine("cl_");
+	history_line = (edit_line + 1) & CON_EDIT_LINES_MASK;
+	Key_ConCheck("declines while browsing history",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+
+	/*Drive the same insertion primitive used by a printable key. Once recalled
+	  text is changed, the next arrow belongs to its newly filtered dropdown.*/
+	Key_EntryInsert(&key_lines[edit_line], &key_linepos, "c");
+	Key_ConCheck("typing detaches recalled history line",
+				 history_line == edit_line ? 1 : 0, 1);
+	Key_ConCheck("edited history Down -> first row",
+				 Key_CompletionNav(con, 1) ? con_commandmatch : -1, 1);
+	con_commandmatch = 0;
+
+	Cvar_SetValue(&con_displaypossibilities, 1);
+	Key_ConCheck("declines at con_displaypossibilities 1",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+	Cvar_SetValue(&con_displaypossibilities, 0);
+	Key_ConCheck("declines at con_displaypossibilities 0",
+				 Key_CompletionNav(con, 1) ? 1 : 0, 0);
+	Cvar_SetValue(&con_displaypossibilities, 2);
+
+	/*and the geometry accessors, which are cheap to pin and are the other half
+	  of this patch. The clamp matters: a 0 grip is a window that cannot be
+	  resized at all, with nothing on screen to say why.*/
+	if (gs)
+	{
+		Cvar_SetValue(gs, 0);   Key_ConCheck("grip 0 clamps up to 4",     Con_WindowGripSize(), 4);
+		Cvar_SetValue(gs, 8);   Key_ConCheck("grip 8 is the stock size",  Con_WindowGripSize(), 8);
+		Cvar_SetValue(gs, 16);  Key_ConCheck("grip 16 is twice stock",    Con_WindowGripSize(), 16);
+		Cvar_SetValue(gs, 999); Key_ConCheck("grip 999 clamps to 64",     Con_WindowGripSize(), 64);
+	}
+
+	/*
+	FTESurf Patch 215: lenient map completion.
+
+	This one does not need a keypress at all -- it is a pure function of the
+	filesystem and one cvar -- so unlike the arrows it can be MEASURED rather
+	than shipped saying nobody has looked at it.
+
+	The test is written against whatever maps are installed rather than against
+	a name: it asks for a substring that cannot be a prefix of anything (every
+	map here is <gamemode>_<name>), and requires that 0 becomes a nonzero count
+	at 1. If a tree has no maps at all it says so instead of failing, because
+	an empty maps/ is not this patch being broken.
+	*/
+	if (mc)
+	{
+		int savemc = mc->ival, all, pre, sub;
+		cmd_completion_t *r;
+
+		/*Cmd_Complete memoises on the partial STRING, so asking the same question
+		  either side of the cvar would return the first answer twice and the test
+		  would pass for the wrong reason. Cmd_Complete(NULL) drops the cache.*/
+		Cvar_SetValue(mc, 0);
+		Cmd_Complete(NULL, false);
+		r = Cmd_Complete("map ", true);  all = r?(int)r->num + (int)r->extra:0;
+		Cmd_Complete(NULL, false);
+		r = Cmd_Complete("map _", true); pre = r?(int)r->num:0;
+		Cvar_SetValue(mc, 1);
+		Cmd_Complete(NULL, false);
+		r = Cmd_Complete("map _", true); sub = r?(int)r->num:0;
+
+		Con_Printf ("  (%i map(s) installed; \"_\" matches %i as a prefix, %i as a substring)\n", all, pre, sub);
+		if (!all)
+			Con_Printf ("  ^3skip^7 no maps installed -- nothing to complete against\n");
+		else
+		{
+			Key_ConCheck("lenient off: \"_\" is a prefix of no map", pre, 0);
+			Key_ConCheck("lenient on:  \"_\" matches by substring",  sub > 0 ? 1 : 0, 1);
+
+			/*The guard leniency made necessary, tested through the real Tab path
+			  rather than by inspecting c->guessed: against the whole library the
+			  common prefix collapses to "map ", which is SHORTER than the line,
+			  and without the guard CompleteCommand would insert it and delete
+			  what was typed.*/
+			Key_ConSetLine("map _");
+			CompleteCommand(false, 0);
+			Key_ConCheck("Tab does not shorten the typed line",
+						 strcmp(key_lines[edit_line], "map _") ? 0 : 1, 1);
+
+			/*Navigation leaves the query untouched; Enter must take the selected
+			  full command without executing it until the next Enter.*/
+			{
+				const char *query = "map kits";
+
+				Cmd_Complete(NULL, false);
+				r = Cmd_Complete(query, true);
+				if (!r || !r->num)
+				{	//portable fallback for installs without the reported kitsune maps
+					query = "map _";
+					Cmd_Complete(NULL, false);
+					r = Cmd_Complete(query, true);
+				}
+				if (r && r->num)
+				{
+					char selected[MAXCMDLINE];
+					const char *choice = r->completions[0].repl ? r->completions[0].repl : r->completions[0].text;
+
+					Q_strncpyz(selected, choice, sizeof(selected));
+					Con_Printf ("  (argument acceptance: \"%s\" -> \"%s\")\n", query, selected);
+					Key_ConSetLine(query);
+					con_commandmatch = 1;
+					Key_ConCheck("Enter accepts highlighted argument row",
+								 Key_TakeHighlightedRow(true) && !strcmp(key_lines[edit_line], selected), 1);
+					Key_ConCheck("accepted row clears its highlight", con_commandmatch, 0);
+
+					/*
+					FTESurf Patch 226. The take is shared by ENTER and TAB and is
+					unchanged by con_completionenter -- the cvar decides what the
+					CALLER does next, not what the take does -- so the check above
+					holds at either setting and this one covers the half TAB adds.
+
+					argsonly FALSE is the whole difference: a bare command name has
+					no whitespace, so the ENTER path declines it (its second arm owns
+					that case) while TAB, which has no second arm, must take it.
+					*/
+					Key_ConSetLine(query);
+					con_commandmatch = 1;
+					Key_ConCheck("Tab takes the same row Enter would",
+								 Key_TakeHighlightedRow(false) && !strcmp(key_lines[edit_line], selected), 1);
+
+					Cmd_Complete(NULL, false);
+					r = Cmd_Complete("con_completione", true);
+					if (r && r->num)
+					{
+						Key_ConSetLine("con_completione");
+						con_commandmatch = 1;
+						Key_ConCheck("argsonly declines a bare command name",
+									 Key_TakeHighlightedRow(true), 0);
+						Key_ConCheck("Tab does not",
+									 Key_TakeHighlightedRow(false), 1);
+					}
+				}
+			}
+		}
+		Cvar_SetValue(mc, savemc);
+		Cmd_Complete(NULL, false);
+	}
+
+restore:
+	Cvar_SetValue(&con_displaypossibilities, savemode);
+	if (gs)
+		Cvar_SetValue(gs, savegrip);
+	Key_ConSetLine(saveline);
+	key_linepos = savepos;
+	con_commandmatch = savematch;
+	history_line = savehist;
+	Con_Footerf(NULL, false, "");
+
+done:
+	if (con_test_fails)
+		Con_Printf ("^1%i check(s) FAILED^7\n", con_test_fails);
+	else
+		Con_Printf ("^2all checks passed^7\n");
 }
 
 int Con_Navigate(console_t *con, const char *line)
@@ -778,8 +1256,12 @@ qboolean Key_GetConsoleSelectionBox(console_t *con, int *sx, int *sy, int *ex, i
 	}
 	else if (con->buttonsdown == CB_SCROLLBAR)
 	{	//nettest: window scrollbar drag - ABSOLUTE: map mouse Y in the track to a scroll position (top=oldest, bottom=newest), so dragging the thumb DOWN scrolls DOWN
-		float trkh = con->wnd_h - 16;
-		float frac = (trkh > 0) ? (con->mousecursor[1] - 8) / trkh : 0;
+		//FTESurf Patch 211: the track is drawn from the title bar's bottom to the
+		//window's, so the drag has to map through the SAME two numbers or the thumb
+		//lands somewhere other than where you dropped it.
+		int top = Con_WindowTitleHeight();
+		float trkh = con->wnd_h - top - Con_WindowGripSize();	//Patch 213: the track stops above the bottom grip
+		float frac = (trkh > 0) ? (con->mousecursor[1] - top) / trkh : 0;
 		int target, n;
 		if (frac < 0) frac = 0;
 		if (frac > 1) frac = 1;
@@ -858,6 +1340,7 @@ void Key_ConsoleInsert(const char *instext)
 	char *old;
 	if (!*instext)
 		return;
+	Key_ConsoleLineEdited(&key_lines[edit_line]);
 
 	old = key_lines[edit_line];
 	len = strlen(instext);
@@ -1302,8 +1785,21 @@ void Key_ConsoleRelease(console_t *con, int key, unsigned int unicode)
 		Z_Free(buffer);
 	}*/
 	if (con->buttonsdown == CB_CLOSE)
-	{	//window X (close)
-		if (con->mousecursor[0] > con->wnd_w-16 && con->mousecursor[1] < 8)
+	{	/*window X (close)
+
+		FTESurf Patch 213: this was the THIRD speller of the X's box and the only
+		one Patch 211 missed -- raw wnd_w-16 and 8, from when the title bar was
+		8px. The press arms CB_CLOSE over a titleh-wide, titleh-tall box and the
+		draw highlights that same box, so at con_textsize 16 the button lit up
+		over 22x22 and actually closed over 8x8: about an eighth of itself, with
+		the rest looking like a click the window ignored. Exactly the failure the
+		accessors exist to prevent, shipped in build 27 because this line is a
+		hundred lines away from the two that agreed with each other.
+
+		Spelled here the way the PRESS spells it, not the way the draw does, so
+		the arm and the release can never disagree about the same click.*/
+		int wtop = Con_WindowTitleHeight();
+		if (con->mousecursor[0] > con->wnd_w-CON_WNDBORDER-wtop && con->mousecursor[1] < wtop)
 		{
 			if (con->close && !con->close(con, false))
 				return;
@@ -1616,6 +2112,7 @@ void Key_EntryInsert(unsigned char **line, int *linepos, const char *instext)
 
 	if (!*instext)
 		return;
+	Key_ConsoleLineEdited(line);
 
 	old = (*line);
 	len = strlen(instext);
@@ -1690,6 +2187,7 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 		{
 			int charlen = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - ((*line) + *linepos);
 			memmove((*line)+*linepos, (*line)+*linepos+charlen, strlen((*line)+*linepos+charlen)+1);
+			Key_ConsoleLineEdited(line);
 			return true;
 		}
 		else
@@ -1703,6 +2201,7 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 			int charlen = ((*line)+*linepos) - utf_left((*line)+lineoffset, (*line) + *linepos, !alt);
 			memmove((*line)+*linepos-charlen, (*line)+*linepos, strlen((*line)+*linepos)+1);
 			*linepos -= charlen;
+			Key_ConsoleLineEdited(line);
 		}
 
 		if (con_commandmatch)
@@ -1759,12 +2258,16 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 	if ((unicode=='X' || unicode=='x' || unicode==24/*cancel*/) && ctrl)
 	{	//cut - copy-to-clipboard-and-delete
 		Sys_SaveClipboard(CBT_CLIPBOARD, *line);
+		if ((*line)[lineoffset])
+			Key_ConsoleLineEdited(line);
 		(*line)[lineoffset] = 0;
 		*linepos = strlen(*line);
 		return true;
 	}
 	if ((unicode=='U' || unicode=='u' || unicode==21/*nak*/) && ctrl)
 	{	//clear line
+		if ((*line)[lineoffset])
+			Key_ConsoleLineEdited(line);
 		(*line)[lineoffset] = 0;
 		*linepos = strlen(*line);
 		return true;
@@ -1777,7 +2280,10 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 		while (*linepos > lineoffset && (*line)[*linepos-1] != ' ')	//then the word itself
 			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
 		if (end > *linepos)
+		{
 			memmove((*line)+*linepos, (*line)+end, strlen((*line)+end)+1);	//close the gap
+			Key_ConsoleLineEdited(line);
+		}
 		return true;
 	}
 
@@ -1883,7 +2389,11 @@ static int Key_ConsoleScrollStep(console_t *con, qboolean page, qboolean ctrl)
 	else
 	{
 		float chv = Font_CharVHeight(font_console);
-		float px = (con->flags & CONF_ISWINDOW)?con->wnd_h-16:con->vislines;
+		//FTESurf Patch 213: the fourth speller of the window's text height. The
+		//literal 16 was "8px title + 8px bottom border" and has been wrong since
+		//Patch 211 made the bar as tall as its font -- PgUp then paged by more
+		//lines than were on screen and skipped some. Same box the scissor uses.
+		float px = (con->flags & CONF_ISWINDOW)?con->wnd_h-Con_WindowTitleHeight()-Con_WindowGripSize():con->vislines;
 		int overlap = con_pageoverlap.ival;
 		rows = (chv >= 1 && px > 0)?(int)(px/chv) - 2:24;	//24 = a sane guess if we've never been drawn
 		if (overlap < 0)
@@ -2003,8 +2513,21 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	if (key == K_TOUCHTAP || key == K_TOUCHSLIDE || key == K_TOUCHLONG || key == K_MOUSE1 || key == K_MOUSE2)
 	{
 		int olddown[2] = {con->mousedown[0],con->mousedown[1]};
+		/*
+		FTESurf Patch 211: the title bar and the scrollbar are no longer 8 pixels,
+		so every hit test below reads the same two accessors console.c DRAWS with.
+		A mismatch here is the silent kind: the bar paints in one place and answers
+		the mouse in another, with nothing in any log to say so.
+
+		wtop falls back to the stock 8 for a NON-window console, because this
+		function also handles the main console's tab strip, which is not a window
+		and whose 8px row has nothing to do with con_window_titlepad.
+		*/
+		int wtop = (con->flags & CONF_ISWINDOW) ? Con_WindowTitleHeight() : 8;
+		int wsw = Con_WindowScrollWidth();
+		int wgr = Con_WindowGripSize();		//FTESurf Patch 213
 		if (con->flags & CONF_ISWINDOW)
-			if (con->mousecursor[0] < -8 || con->mousecursor[1] < 0 || con->mousecursor[0] > con->wnd_w || con->mousecursor[1] > con->wnd_h)
+			if (con->mousecursor[0] < -CON_WNDBORDER || con->mousecursor[1] < 0 || con->mousecursor[0] > con->wnd_w || con->mousecursor[1] > con->wnd_h)
 				return true;
 		if (con == con_mouseover)
 		{
@@ -2015,7 +2538,7 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		}
 		con->mousedown[0] = con->mousecursor[0];
 		con->mousedown[1] = con->mousecursor[1];
-		if (con_mouseover && con->mousedown[1] < 8)//(8.0*vid.height)/vid.pixelheight)
+		if (con_mouseover && con->mousedown[1] < wtop)//(8.0*vid.height)/vid.pixelheight)
 		{
 			if ((key == K_MOUSE2||key==K_TOUCHLONG) && !(con->flags & CONF_ISWINDOW))
 			{
@@ -2026,11 +2549,20 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			else
 			{
 				Con_SetActive(con);
+				//FTESurf Patch 211: the X is drawn wtop wide at the bar's right end
 				if ((con->flags & CONF_ISWINDOW))
-					con->buttonsdown = (con->mousedown[0] > con->wnd_w-16)?CB_CLOSE:CB_MOVE;
+					con->buttonsdown = (con->mousedown[0] > con->wnd_w-CON_WNDBORDER-wtop)?CB_CLOSE:CB_MOVE;
 			}
 		}
-		else if (con_mouseover && con->mousedown[1] < 16)
+		/*FTESurf Patch 213: the action bar must not claim a click that is inside a
+		  side grip. The grips are drawn from the title bar's bottom edge downward,
+		  but this arm runs first and took their top 8 rows -- so the top of each
+		  side grip highlighted and then did nothing (on a plain console) or ran a
+		  media button (on one that has an action bar). The grip wins its own
+		  columns; the bar keeps everything between them.*/
+		else if (con_mouseover && con->mousedown[1] < wtop+8 &&
+				 !((con->flags & CONF_ISWINDOW) &&
+				   (con->mousedown[0] < 0 || con->mousedown[0] >= con->wnd_w-CON_WNDBORDER-wgr)))
 			con->buttonsdown = CB_ACTIONBAR;
 		else if (key == K_MOUSE2)
 		{
@@ -2045,9 +2577,23 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			con->buttonsdown = CB_NONE;
 			if ((con->flags & CONF_ISWINDOW) && con->mousedown[0] < 0)
 				con->buttonsdown |= CB_SIZELEFT;
-			if ((con->flags & CONF_ISWINDOW) && con->mousedown[0] > con->wnd_w-16)
+			/*
+			FTESurf Patch 211/213: the resize grips sit at the window's own edges
+			and do NOT move with con_scrollwidth. mousecursor[] is offset by
+			CON_WNDBORDER, so the window's last column is wnd_w-CON_WNDBORDER and
+			the right grip is the wgr columns below THAT -- not below wnd_w.
+
+			These two OR rather than else, which is the whole of the request: the
+			bottom-right corner is both, so it drags diagonally, and at wgr 16 it
+			is a 16x16 target where it used to be 8x8.
+			*/
+			//>= , not >: the draw highlights from exactly this column/row, and with
+			//`>` the first one lit up but fell through to the scrollbar (right) or
+			//to a text selection (bottom) -- a grip that answers with the wrong verb
+			//rather than not at all, which is harder to notice than a dead pixel.
+			if ((con->flags & CONF_ISWINDOW) && con->mousedown[0] >= con->wnd_w-CON_WNDBORDER-wgr)
 				con->buttonsdown |= CB_SIZERIGHT;
-			if ((con->flags & CONF_ISWINDOW) && con->mousedown[1] > con->wnd_h-8)
+			if ((con->flags & CONF_ISWINDOW) && con->mousedown[1] >= con->wnd_h-wgr)
 				con->buttonsdown |= CB_SIZEBOTTOM;
 			if (con->buttonsdown == CB_NONE)
 			{
@@ -2060,7 +2606,11 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 					return true;
 				}
 #endif
-				if (key == K_TOUCHSLIDE || con->mousecursor[0] > ((con->flags & CONF_ISWINDOW)?con->wnd_w-16:vid.width)-8)
+				//FTESurf Patch 211/213: the scrollbar strip sits inside the right
+				//grip, so it starts wsw further left than the grip does -- and it
+				//moves inward with the grip rather than being eaten by it. (This
+				//arm is only reached when no grip claimed the click above.)
+				if (key == K_TOUCHSLIDE || con->mousecursor[0] > ((con->flags & CONF_ISWINDOW)?con->wnd_w-CON_WNDBORDER-wgr-wsw:vid.width-8))
 				{	//just scroll the console up/down
 					if ((con->flags & CONF_ISWINDOW) && key != K_TOUCHSLIDE)
 						con->buttonsdown = CB_SCROLLBAR;	//nettest: window scrollbar = absolute thumb drag (drag down -> scroll down)
@@ -2107,6 +2657,26 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	}
 	if (key == K_TOUCH)
 		return true;	//eat it, so we don't get any kind of mouse emu junk
+
+	/*
+	FTESurf Patch 211: with the dropdown open the wheel walks IT, not the
+	scrollback -- "up and down arrow or mouse and scroll to highlight through
+	them", which is what was asked for.
+
+	The trade, stated rather than hidden: while you have text on the input line
+	and matches for it, the wheel no longer scrolls the console. That is most of
+	the time you are typing. The scrollback is still reachable by the (now twice
+	as wide) scrollbar, by PGUP/PGDN, and by clearing the line -- and the wheel
+	goes back to scrolling the moment there is nothing to complete.
+
+	Gated on mode 2 so con_displaypossibilities 1 keeps the wheel unconditionally.
+	*/
+	//FTESurf Patch 213: through the same helper the arrows use. Two navigation
+	//verbs for one list must not disagree about what "highlight" means, and the
+	//old copy here differed in two ways that would have shown: it required more
+	//than one match, and CompleteCommand could rewrite the typed line under you.
+	if ((key == K_MWHEELUP || key == K_MWHEELDOWN) && Key_CompletionNav(con, (key == K_MWHEELUP)?-1:1))
+		return true;
 
 	if (key == K_PGUP || key == K_KP_PGUP || key==K_MWHEELUP || key == K_GP_LEFT_THUMB_UP)
 	{
@@ -2231,12 +2801,35 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	if (key == K_ENTER || key == K_KP_ENTER || key == K_GP_DIAMOND_CONFIRM)
 	{	// backslash text are commands, else chat
 		char demoji[8192];
-		const char *txt = Key_Demoji(demoji, sizeof(demoji), key_lines[edit_line]);
+		const char *txt;
 
 #ifndef FTE_TARGET_WEB
 		if (keydown[K_LALT] || keydown[K_RALT])
 			Cbuf_AddText("\nvid_toggle\n", RESTRICT_LOCAL);
 #endif
+
+		/*The original path below only accepts incomplete command names.  Argument
+		  completions need the same accept-without-executing step before map/cvar
+		  dispatch sees the literal query text.*/
+		if (con->commandcompletion && !ctrl && !shift && Key_TakeHighlightedRow(true))
+		{
+			/*
+			FTESurf Patch 226: at con_completionenter 1, DON'T stop here.
+
+				"when you type 'map kits' and then arrow down to 'map surf_kitsune'
+				 I want the first enter to submit the map"
+
+			The line has just been rewritten to the highlighted row and
+			con_commandmatch zeroed, so falling through runs THAT rather than the
+			query text -- and the arm below cannot re-accept, because it tests
+			con_commandmatch. txt is read after this block, so nothing stale
+			survives; the command-name arm is not so lucky and re-reads it.
+			*/
+			if (!con_completionenter.ival)
+				return true;
+		}
+
+		txt = Key_Demoji(demoji, sizeof(demoji), key_lines[edit_line]);
 
 		if ((con_commandmatch && !strchr(txt, ' ')) || shift)
 		{	//if that isn't actually a command, and we can actually complete it to something, then lets try to complete it.
@@ -2246,7 +2839,29 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			if ((shift||!Cmd_IsCommand(txt)) && Cmd_CompleteCommand(txt, true, true, con_commandmatch, NULL))
 			{
 				CompleteCommand (true, 1);
-				return true;
+				/*
+				FTESurf Patch 226: run it, unless the caller asked not to.
+
+				SHIFT+ENTER is excluded and that costs nothing to keep: `|| shift`
+				above is what forces this arm for a line that is already a complete
+				command, so shift has ALWAYS meant "complete, don't run" here. It is
+				now the escape hatch for both settings rather than an accident.
+
+				txt has to be re-read. It was taken from key_lines[edit_line] before
+				CompleteCommand rewrote the line, so falling through with the old
+				pointer would execute what you typed instead of the row you picked --
+				and it points into demoji[], so it would not even be obviously wrong.
+
+				Re-read WHOLE, with any leading '/' left on, unlike the `txt++` above.
+				That strip exists to let Cmd_IsCommand see a command name; Con_ExecuteLine
+				does its own (line[0]=='/') test and, at cl_chatmode 1, a line handed to
+				it WITHOUT the slash the user typed is a chat message rather than a
+				command. Stripping here would be copying a local convenience into the
+				one place where it changes the meaning of the line.
+				*/
+				if (!con_completionenter.ival || shift)
+					return true;
+				txt = Key_Demoji(demoji, sizeof(demoji), key_lines[edit_line]);
 			}
 			Con_Footerf(con, false, "");
 			con_commandmatch = 0;
@@ -2285,12 +2900,32 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	if (key == K_TAB)
 	{	// command completion
 		if (con->commandcompletion)
+		{
+			/*
+			FTESurf Patch 226: with a row highlighted, TAB takes THAT row and leaves
+			the cursor in the line.
+
+			It is the other half of the pair whose first half is con_completionenter's
+			ENTER -- one key runs the row, one types it in -- so it is gated on the
+			same cvar. Changing TAB for a console whose ENTER still does the typing
+			would take the typing key away and give nothing back.
+
+			Everything else is untouched: with nothing highlighted (con_commandmatch 0),
+			or under ctrl/shift, TAB still completes to the longest common prefix and
+			steps the highlight, which is the job it has always had.
+			*/
+			if (con_completionenter.ival && con_commandmatch > 0 && !ctrl && !shift &&
+				Key_TakeHighlightedRow(false))
+				return true;
 			CompleteCommand (ctrl, shift?-1:1);
+		}
 		return true;
 	}
 	
 	if (key == K_UPARROW || key == K_KP_UPARROW || key == K_GP_DPAD_UP)
 	{
+		if (Key_CompletionNav(con, -1))	//FTESurf Patch 213: the dropdown, if it is showing
+			return true;
 		if (con_commandmatch)	//nettest: a completion list is open -> Up navigates it instead of history
 		{
 			char *ctxt = key_lines[edit_line];
@@ -2318,6 +2953,8 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 
 	if (key == K_DOWNARROW || key == K_KP_DOWNARROW || key == K_GP_DPAD_DOWN)
 	{
+		if (Key_CompletionNav(con, 1))	//FTESurf Patch 213: the dropdown, if it is showing
+			return true;
 		if (con_commandmatch)	//nettest: a completion list is open -> Down navigates it instead of history
 		{
 			char *ctxt = key_lines[edit_line];
@@ -2437,7 +3074,14 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		}
 	}
 	else
+	{
 		Key_EntryLine(con, &key_lines[edit_line], 0, &key_linepos, key, unicode);
+		//FTESurf Patch 211: a keystroke re-filters the list, so the dropdown's
+		//viewport goes back to the top. (The branch above is the one where a
+		//highlight is being CARRIED across the edit; there the draw's own clamp
+		//keeps the highlighted row on screen, which is what should win.)
+		con_completionscroll = 0;
+	}
 
 	return true;
 }
@@ -3119,9 +3763,14 @@ void Key_Init (void)
 	Cmd_AddCommand ("bindlevel",Key_Bind_f);
 	Cmd_AddCommandAD ("unbind",Key_Unbind_f, Key_Bind_c, NULL);
 	Cmd_AddCommandD ("unbindall",Key_Unbindall_f, "A dangerous command that forgets ALL your key settings. For use only in default.cfg.");
+	//FTESurf Patch 213: the arrow-key completion gate, measured rather than asserted.
+	Cmd_AddCommandD ("con_selftest", Key_ConSelfTest_f, "Verifies the console completion dropdown's Up/Down gate, highlighted argument acceptance, the window grip clamps and lenient map completion. Restores every value it touches.");
+	//FTESurf Patch 215: the only way a config can make the dropdown appear, so that the one thing left to check -- how it LOOKS -- can be screenshotted.
+	Cmd_AddCommandD ("con_settext", Key_ConSetText_f, "Replaces the console's input line with the given text, as if you had typed it. Nothing is highlighted and ENTER still runs the line; this exists so a config can put the completion dropdown on screen.");
 
 	Cvar_Register (&con_echochat, "Console variables");
 	Cvar_Register (&con_acceptcompletion, "Console controls");	//nettest: same group as con_showcompletion
+	Cvar_Register (&con_completionenter, "Console controls");	//FTESurf Patch 226
 	Cvar_Register (&con_pagelines, "Console controls");
 	Cvar_Register (&con_pageoverlap, "Console controls");
 }
@@ -3587,4 +4236,3 @@ void Key_ClearStates (void)
 	for (i=0 ; i<K_MAX ; i++)
 		keydown[i] = 0;
 }
-

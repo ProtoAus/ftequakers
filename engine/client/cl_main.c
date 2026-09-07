@@ -116,6 +116,11 @@ cvar_t	m_forward = CVARF("m_forward","1", CVAR_ARCHIVE);
 cvar_t	m_side = CVARF("m_side","0.8", CVAR_ARCHIVE);
 
 cvar_t	cl_lerp_maxinterval = CVARD("cl_lerp_maxinterval", "0.3", "Maximum interval between keyframes, in seconds. Larger values can result in entities drifting very slowly when they move sporadically.");
+//nettest Patch 155: the receiving half of sv_debug_animrate.  See the note there
+//for why this is not gated on `developer`.  Together they are the only way to
+//tell "the server decided to reverse a sequence" from "the client was told", and
+//those are different claims.
+cvar_t	cl_debug_animrate = CVARD("cl_debug_animrate", "0", "Report entities arriving with a networked animation playback rate (.animrate) that is not 1. Throttled to one line per second.");
 cvar_t	cl_lerp_maxdistance = CVARD("cl_lerp_maxdistance", "200", "Maximum distance that an entity may move between snapshots without being considered as having teleported.");
 cvar_t	cl_lerp_players = CVARD("cl_lerp_players", "0", "Set this to make other players smoother, though it may increase effective latency. Affects only QuakeWorld.");
 cvar_t	cl_predict_players			= CVARD("cl_predict_players", "1", "Clear this cvar to see ents exactly how they are on the server.");
@@ -140,6 +145,11 @@ static cvar_t cl_verify_urischeme = CVARAFD("cl_verify_urischeme", "2", "cl_veri
 static cvar_t cl_verify_urischeme = CVARAFD("cl_verify_urischeme", "0", "cl_verify_qwprotocol"/*ezquake, inappropriate for misc schemes*/, CVAR_NOSAVE/*checked at startup, so its only really default.cfg that sets it*/, "0: Do nothing.\n1: Check whether our protocol scheme is registered and prompt the user to register associations.\n2: Always re-register on every startup, without prompting. Sledgehammer style.");
 #endif
 
+//nettest Patch 141.  See the note at the call site, in the frame loop: this
+//one-shot reload after a map's first drawn frame costs a FULL re-parse of every
+//live shader (~633ms on a 197-material map) to correct a handful of water
+//shaders.  Default 1 keeps the water fix; 0 trades it for the load time.
+cvar_t r_shader_reload_afterframe = CVARD("r_shader_reload_afterframe", "1", "Re-finalise shaders once, after a map's first rendered frame. Fixes water that connects see-through, at the cost of a full shader re-parse per map load (see developer 1's `shaders NNNms` lines). 0 skips it.");
 cvar_t cl_fakeframes = CVARD("cl_fakeframes", "0", "Slow GPU? Want to see higher framerates get reported! Unleash the power of the lie to see much higher framerates! Many people said it couldn't be done, that the people wouldn't accept it, but to hell with the neighsayers and non-believers! WE WANT BIGGER NUMBERS AND WE'RE DAMN WELL GONNA GET THEM!... For best results, combine with an external tool like fluid motion frames...");
 
 
@@ -445,6 +455,7 @@ void CL_MakeActive(char *gamename)
 	Mod_Purge(MP_MAPCHANGED);
 
 	//and reload shaders now if needed (this was blocked earlier)
+	shader_reload_why = "CL_ParseServerData/ca_active";
 	Shader_DoReload();
 
 	//and now free any textures that were not still needed.
@@ -484,15 +495,27 @@ void CL_Quit_f (void)
 	if (!host_initialized)
 		return;
 
-	if (forcesaveprompt && strcmp(Cmd_Argv(1), "force"))
-	{
-		forcesaveprompt = false;
-		if (Cmd_Exists("menu_quit"))
-		{
-			Cmd_ExecuteString("menu_quit", RESTRICT_LOCAL);
-			return;
-		}
-	}
+	/*
+	FTESurf Patch 211: `quit` always quits.  No prompt, no menu, no argument.
+
+	The branch that used to sit here handed the whole command to `menu_quit`
+	whenever `forcesaveprompt` was set, unless you spelled `quit force`.  Its one
+	and only setter in the tree is m_options.c:1247 -- applying a PRESET from the
+	engine's built-in options menu, which sets it beside an `fs_restart` because
+	the preset it just applied is not on disk yet.  So the prompt existed to catch
+	one screen's unsaved work.
+
+	FTESurf never opens that screen: its options live in menu.dat and its own
+	settings are written by cfg_save, so `forcesaveprompt` can only ever be false
+	here -- which means deleting this is not a behaviour change today.  It is
+	deleted rather than left because `quit` is BOUND TO F10 (cfg/default.cfg), and
+	a key that quits nine times out of ten and opens a menu the tenth is worse
+	than either.  `exit` is registered as a second name for exactly this function,
+	so the two cannot drift.
+
+	The config is still written: Sys_Quit -> Host_Shutdown -> Cvar_WriteVariables
+	is the path cfg_save_auto rides, and it is below this line, not above it.
+	*/
 
 	TP_ExecTrigger("f_quit", true);
 	Cbuf_Execute();
@@ -2158,6 +2181,35 @@ void CL_BlendFog(fogstate_t *result, fogstate_t *oldf, float time, fogstate_t *n
 	FloatInterpolate(oldf->density, nfrac, newf->density, result->density);	//this should be non-linear, but that sort of maths is annoying.
 	VectorInterpolate(oldf->colour, nfrac, newf->colour, result->colour);
 
+	/*
+	  FTESurf Patch 254: under r_fog_linear the two geometry fields change
+	  MEANING, and interpolating them is no longer harmless.
+
+	  In exp/exp2 mode `density` is a rate and 0 means "no fog", so fading it up
+	  from 0 over the one second CL_Fog_f asks for (cl_main.c: `time += 1`) is a
+	  fog that thickens smoothly.  In linear mode `density` is the fog END
+	  DISTANCE and `depthbias` the START, so density 0 does not mean "no fog", it
+	  means "the fog ends at the eye" -- i.e. EVERYTHING is fully fogged.  The
+	  renderer only treats density==0 as off (PERMUTATION_FOG, gl_backend.c), so
+	  every intermediate value along the fade DOES run the shader: one frame in,
+	  end is ~200 units and the screen is solid fog colour, receding over a
+	  second.  That fires on map load and on every entity-I/O fog switch, and it
+	  fires in reverse too -- turning fog off blends 8000 down through 100 before
+	  snapping to 0, so the whiteout happens on the way out as well.
+
+	  So in linear mode the distances snap and only alpha and colour animate.
+	  Alpha is the correct knob for a fade anyway: alpha 0 is exactly "no fog",
+	  at any distance.
+	*/
+	{
+		extern cvar_t r_fog_linear;
+		if (r_fog_linear.ival)
+		{
+			result->density   = newf->density;
+			result->depthbias = newf->depthbias;
+		}
+	}
+
 	result->time = time;
 }
 void CL_ResetFog(int ftype)
@@ -2276,6 +2328,14 @@ void CL_ClearState (qboolean gamestart)
 	CL_ReconfigureCommands(cls.protocol);
 
 	CL_UpdateWindowTitle();
+
+	/*FTESurf Patch 202: throw away any open input journal, WITHOUT writing it.  This
+	  is reached by both paths that matter -- the map-change ParseServerData calls and
+	  CL_Disconnect -- and dropping rather than salvaging is the same rule the .view
+	  sidecar already follows: the server discards its half of the recording at
+	  SV_TimerMapInit, so a journal saved here would describe a run whose .rec no
+	  longer exists.*/
+	IN_Journal_Drop();
 
 	CL_AllowIndependantSendCmd(false);	//model stuff could be a problem.
 
@@ -3205,6 +3265,105 @@ void CL_CheckServerInfo(void)
 		movevars.edgefriction = *s?Q_atof(s):2;
 		if (!(movevars.flags&MOVEFLAG_VALID))
 			movevars.flags = (movevars.flags&~MOVEFLAG_QWEDGEBOX) | (*s?0:MOVEFLAG_QWEDGEBOX);
+
+		//FTESurf: Counter-Strike: Source movement (engine/common/pm_source.c).
+		//The client MUST predict with byte-identical parameters or every ramp
+		//rubber-bands, so each one falls back to the same default the server's
+		//SV_SetSourceMoveVars uses rather than to 0.
+		movevars.physicsmode = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_physicsmode"));
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ticrate");
+		movevars.ticrate = *s?Q_atof(s):0.015;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxairspeed");
+		movevars.maxairspeed = *s?Q_atof(s):30;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpvelocity");
+		movevars.jumpvelocity = *s?Q_atof(s):301.9933774;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_standablenormal");
+		movevars.standablenormal = *s?Q_atof(s):0.7;
+		//FTESurf Patch 260: same defaults as SV_SetSourceMoveVars, or the client
+		//predicts a climb the server does not run.
+		movevars.ladders = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_ladders"));
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ladderdampen");
+		movevars.ladderdampen = (*s && Q_atof(s) > 0)?Q_atof(s):0.2;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ladderangle");
+		movevars.ladderangle = (*s && Q_atof(s))?Q_atof(s):-0.707;
+		movevars.bounce = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_sourcebounce"));
+		//FTESurf: resolved in the same order as SV_SetSourceMoveVars -- pm_maxvelocity
+		//is an optional override and sv_maxvelocity is the real knob, as in Momentum.
+		//sv_maxvelocity only became CVAR_SERVERINFO in build 41; before that the client
+		//could not see it at all, so a map that raised it desynced by construction.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxvelocity");
+		if (!*s || Q_atof(s) <= 0)
+			s = InfoBuf_ValueForKey(&cl.serverinfo, "sv_maxvelocity");
+		movevars.maxvelocity = (*s && Q_atof(s) > 0)?Q_atof(s):3500;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_standheight");
+		movevars.standheight = *s?Q_atof(s):62;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_duckheight");
+		movevars.duckheight = *s?Q_atof(s):45;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_duckspeed");
+		movevars.duckspeed = *s?Q_atof(s):0.34;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_viewheight");
+		movevars.viewheight = *s?Q_atof(s):64;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_duckviewheight");
+		movevars.duckviewheight = *s?Q_atof(s):47;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_viewscale");
+		movevars.viewscale = (*s && Q_atof(s) > 0)?Q_atof(s):0.5;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_noclipspeed");
+		movevars.noclipspeed = *s?Q_atof(s):4;
+		movevars.stamina = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_stamina"));
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_staminajumpcost");
+		movevars.staminajumpcost = *s?Q_atof(s):25;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_staminalandcost");
+		movevars.staminalandcost = *s?Q_atof(s):20;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_staminarecovery");
+		movevars.staminarecovery = *s?Q_atof(s):19;
+		//NOTE the fallback is 1, not 0: pm_normalizejump is the first of these
+		//whose default is non-zero, so the bare Q_atof idiom used for pm_stamina
+		//above would silently predict stock-Source jumps against a normalising
+		//server the moment the key went missing.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_normalizejump");
+		movevars.normalizejump = *s?Q_atof(s):1;
+		//FTESurf Patch 241.  Bare Q_atof is CORRECT here and is not the bug the
+		//note above describes: this one's engine default is 0, so a missing key
+		//and an absent server agree.  Left explicit so it does not get "fixed"
+		//into a `*s?:1` that would predict the old additive jump.
+		movevars.jumpaddrise = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpaddrise"));
+		movevars.jumpzoffset = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpzoffset"));
+		//Fallback 0 = off, matching the engine default: a server that does not
+		//publish this key is one whose walk key is Quake's clientside
+		//cl_movespeedkey, and scaling maxspeed here as well would halve it twice.
+		movevars.walkspeed = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_walkspeed"));
+		//FTESurf Patch 172.  ALL FOUR default non-zero, so all four need the
+		//`*s?:` form rather than the bare Q_atof above -- see the note on
+		//pm_normalizejump.  A missing key here would predict ground detection
+		//against a 0-unit trace and a 0-bump move loop, i.e. the client would
+		//believe it was permanently airborne and permanently stuck, which is
+		//about the loudest desync this file can produce.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_groundtracedist");
+		movevars.groundtracedist = *s?Q_atof(s):2;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_bumpcount");
+		movevars.bumpcount = *s?Q_atof(s):8;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_snaptoground");
+		movevars.snaptoground = *s?Q_atof(s):1;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_groundquadrants");
+		movevars.groundquadrants = *s?Q_atof(s):1;
+		//FTESurf Patch 176.  Both default 1, so both need the `*s?:` form too.
+		//These two decide whether a landing happens at all, so a client that
+		//defaulted them to 0 against a server running them at 1 would predict
+		//itself onto every ramp it rides past.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_fixslopes");
+		movevars.fixslopes = *s?Q_atof(s):1;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_fixedges");
+		movevars.fixedges = *s?Q_atof(s):1;
+		//FTESurf Patch 177.  Both non-zero defaults, so both take the `*s?:`
+		//form as well.  pm_fixrampbugs in particular decides whether a stuck
+		//trace is recovered from or stopped on, so a client that defaulted it
+		//to 0 would predict a dead stop on every ramp seam the server rode
+		//straight through - the loudest possible rubber-band, and only on the
+		//ramps that matter.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_fixrampbugs");
+		movevars.fixrampbugs = *s?Q_atof(s):1;
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_rampretrace");
+		movevars.rampretrace = *s?Q_atof(s):0.2;
 	}
 	movevars.coordtype = cls.netchan.netprim.coordtype;
 
@@ -3884,6 +4043,54 @@ void CL_Reconnect_f (void)
 
 	CL_Disconnect(NULL);
 	CL_BeginServerReconnect();
+}
+
+//ftesurf (P167): Source's `retry`.  In Source this means "put me back into the
+//game I am already in", which on a listen server is a map reload -- and that is
+//the surf-practice gesture: reset the map, keep the session.
+//
+//`reconnect` cannot be used for it.  On a listen server cls.state is
+//ca_connected, so CL_Reconnect_f takes its first branch and sends "new": that
+//re-runs the CLIENT handshake against a server whose entities, doors and
+//triggers have not moved.  The world does not reset, which is the entire point.
+//So: if we are the server, reload the map; otherwise fall through to the
+//reconnect that a remote `retry` should mean anyway.
+void CL_Retry_f (void)
+{
+#ifdef HAVE_SERVER
+	if (sv.state == ss_active)
+	{
+		/*ftesurf (P186): offer it to the mod BEFORE restarting the map.
+
+		  A mod that handles `retry` wants to write its side of the run state to
+		  disk while the world it describes still exists -- the restart below
+		  calls PR_Deinit and CSQC_Shutdown, so nothing at all survives it in
+		  either VM and disk is the only channel.
+
+		  It cannot see this command any other way.  Cmd_ExecuteString returns
+		  the instant an engine command matches (cmd.c), so cmd beats alias beats
+		  cvar beats CSQC -- and PF_cs_registercommand refuses a name that
+		  already exists, so registercommand("retry") from QC is a silent no-op
+		  rather than a shadow.  Offering it here is the only hook there is.
+		  Same idiom the console and menu already use.
+
+		  INSIDE the ss_active test on purpose: a client of a REMOTE server must
+		  not be able to send its mod a "restart the map" gesture for a map that
+		  is not ours to restart, for everyone on it.
+
+		  Returns false when there is no CSQC or no handler, so a mod that does
+		  not want this -- quakers, sharing this tree -- is byte-identical.
+		*/
+#ifdef CSQC_DAT
+		if (CSQC_ConsoleCommand(-1, "retry"))
+			return;
+#endif
+
+		Cbuf_AddText("map_restart\n", RESTRICT_LOCAL);
+		return;
+	}
+#endif
+	CL_Reconnect_f();
 }
 
 static void CL_ConnectionlessPacket_Connection(char *tokens)
@@ -5814,6 +6021,7 @@ void CL_Init (void)
 	Cvar_Register (&cl_backspeed, cl_inputgroup);
 	Cvar_Register (&cl_sidespeed, cl_inputgroup);
 	Cvar_Register (&cl_movespeedkey, cl_inputgroup);
+	Cvar_Register (&in_speedbutton, cl_inputgroup);	//FTESurf
 	Cvar_Register (&cl_yawspeed, cl_inputgroup);
 	Cvar_Register (&cl_pitchspeed, cl_inputgroup);
 	Cvar_Register (&cl_anglespeedkey, cl_inputgroup);
@@ -5842,6 +6050,7 @@ void CL_Init (void)
 	Cvar_Register (&rcon_address,	cl_controlgroup);
 
 	Cvar_Register (&cl_lerp_maxinterval, cl_controlgroup);
+	Cvar_Register (&cl_debug_animrate, cl_controlgroup);	//nettest Patch 155
 	Cvar_Register (&cl_lerp_maxdistance, cl_controlgroup);
 	Cvar_Register (&cl_lerp_players, cl_controlgroup);
 	Cvar_Register (&cl_predict_players,	cl_predictiongroup);
@@ -5935,6 +6144,7 @@ void CL_Init (void)
 	Cvar_Register (&cl_splitscreen,					cl_controlgroup);
 
 	Cvar_Register (&cl_fakeframes,					cl_controlgroup);
+	Cvar_Register (&r_shader_reload_afterframe,		cl_controlgroup);	//nettest Patch 141
 
 #ifndef SERVERONLY
 	Cvar_Register (&cl_loopbackprotocol,			cl_controlgroup);
@@ -6009,7 +6219,11 @@ void CL_Init (void)
 #endif
 
 	Cmd_AddCommand ("cl_status", CL_Status_f);
-	Cmd_AddCommandD ("quit", CL_Quit_f, "Use this command when you get angry. Does not save any cvars. Use cfg_save to save settings, or use the menu for a prompt.");
+	Cmd_AddCommandD ("quit", CL_Quit_f, "Closes the game immediately, with no prompt. Archived cvars are still written on the way out; use cfg_save first if you want the rest.");
+	//FTESurf Patch 211: `exit` is the same function, not an alias -- an alias would
+	//be a separate object that a later edit to one could leave disagreeing with the
+	//other, and cmd.c refuses to forward some things through aliases at all.
+	Cmd_AddCommandD ("exit", CL_Quit_f, "Closes the game immediately, with no prompt. Identical to `quit`.");
 
 #if defined(CL_MASTER) && defined(HAVE_PACKET)
 	Cmd_AddCommandAD ("connectbr", CL_ConnectBestRoute_f, CL_Connect_c, "connect address:port\nConnect to a qw server using the best route we can detect.");
@@ -6065,6 +6279,7 @@ void CL_Init (void)
 	Cmd_AddCommandAD("qwurl", CL_Connect_f, CL_Connect_c, "For compat with ezquake.");
 #endif
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
+	Cmd_AddCommandD ("retry", CL_Retry_f, "Source-style retry: reloads the current map when we are hosting it, otherwise reconnects to the server.");	//ftesurf P167
 	Cmd_AddCommandAD ("join", CL_Join_f, CL_Connect_c, "Switches away from spectator mode, optionally connecting to a different server.");
 	Cmd_AddCommandAD ("observe", CL_Observe_f, CL_Connect_c, "Switches to spectator mode, optionally connecting to a different server.");
 
@@ -7190,6 +7405,13 @@ double Host_Frame (double time)
 	if (startuppending)
 		CL_StartCinematicOrMenu();
 
+	/* ftesurf (P186): drain a little of the asset-cache harvest, if one is armed and has
+	stopped growing.  Here rather than at the end of the map load because the CLIENT's texture
+	loads continue after SV_SpawnServer returns, and because a player who loads one map and
+	then quits would otherwise never write a cache at all -- the map-change drain never runs
+	for them.  Bounded per frame (see FS_CACHE_TICK*), so it cannot show up as a hitch. */
+	FS_Cache_Tick();
+
 	if (cl.paused)
 		cl.gametimemark += time;
 
@@ -7496,9 +7718,27 @@ double Host_Frame (double time)
 				//active frame has been drawn, request ONE reload.  shader_reload_needed is consumed at the top of the
 				//NEXT frame's Shader_DoReload (before the world is drawn), so that frame shows corrected water.
 				//cl.servercount (fresh per signon) re-arms it per map; the marker lives in cls (survives the cl wipe).
-				if (cls.state == ca_active && cls.shader_reload_servercount != cl.servercount
+				//nettest Patch 141: MEASURED, and it is the second most expensive
+				//thing in a map load.  Shader_DoReload has no way to reload a
+				//SUBSET, so this one-line request to fix a handful of water
+				//shaders re-parses every live shader on the map:
+				//
+				//  shaders  660ms  reload from CL_ParseServerData/ca_active, 195 live
+				//  shaders  633ms  reload from SCR_UpdateScreen (per frame), 197 live
+				//
+				//on kz_bhop_yonkoma -- 1.3s per map load, of which this is half,
+				//and it scales with the map's material count.  It cannot simply be
+				//deleted: without it the water bug it was written for comes back,
+				//and dropping the OTHER reload instead just moves the same work to
+				//frame 1.  The real fix is a targeted reload, which is its own job.
+				//Until then this is at least a choice you can make: set
+				//r_shader_reload_afterframe 0 to skip it and take the ~600ms, at the
+				//cost of water that stays stale until the next reload.
+				if (r_shader_reload_afterframe.ival
+					&& cls.state == ca_active && cls.shader_reload_servercount != cl.servercount
 					&& cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADED)
 				{
+					shader_needreload_why = "post-first-frame water fixup";
 					Shader_NeedReload(false);
 					cls.shader_reload_servercount = cl.servercount;
 				}

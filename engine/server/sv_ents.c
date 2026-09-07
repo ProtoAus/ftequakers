@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef CLIENTONLY
 
 extern cvar_t sv_nailhack;
+extern cvar_t sv_debug_animrate;	//nettest Patch 155
 extern cvar_t sv_cullentities_trace;
 extern cvar_t sv_cullplayers_trace;
 extern cvar_t sv_nopvs;
@@ -1053,6 +1054,28 @@ static unsigned int SVFTE_DeltaCalcBits(entity_state_t *from, qbyte *frombonedat
 			bits |= UF_BONEDATA;
 	}
 
+	//nettest Patch 125: bone controllers are their own dirty test, OUTSIDE the
+	//PEXT2_NEWSIZEENCODING block above, because they are gated on their own
+	//extension.  memcmp over all five so a turret that only swivels in yaw costs
+	//one comparison, not five.
+	if ((pext2 & PEXT2_BONECONTROLS) && memcmp(to->bonecontrol, from->bonecontrol, sizeof(to->bonecontrol)))
+		bits |= UF_BONEDATA;
+
+	//nettest Patch 131: same shape for the bodygroup, and gated on its own
+	//extension for the same reason.  It changes rarely - a barney draws his gun
+	//once and drops it once - so this costs one byte compare per entity per frame
+	//and a two-byte payload only on the frames it actually moves.
+	if ((pext2 & PEXT2_BODYGROUP) && to->bodygroup != from->bodygroup)
+		bits |= UF_BONEDATA;
+
+	//nettest Patch 155: the playback rate, same shape again.  Biased encoding
+	//means the steady state for every entity that never touches it is 0 == 0,
+	//so this comparison is false for essentially the whole entity list and the
+	//two payload bytes are spent only by the handful of things that reverse or
+	//speed up a sequence.
+	if ((pext2 & PEXT2_FRAMERATE) && to->animrate != from->animrate)
+		bits |= UF_BONEDATA;
+
 	if (to->colormod[0]!=from->colormod[0]||to->colormod[1]!=from->colormod[1]||to->colormod[2]!=from->colormod[2])
 		bits |= UF_COLORMOD;
 
@@ -1108,7 +1131,19 @@ static void SVFTE_WriteUpdate(unsigned int bits, entity_state_t *state, sizebuf_
 		}
 	}
 
-	if (!(pext2 & PEXT2_NEWSIZEENCODING))	//was added at the same time
+	//nettest Patch 125: ...unless BONECONTROLS is negotiated, which also rides in
+	//this payload.  Stripping the flag here regardless would have silently thrown
+	//away every bone-controller update for a client that has the newer extension
+	//but not the older one.
+	//nettest Patch 141: ...and unless BODYGROUP is, which is the third rider in
+	//this same payload.  Patch 131 added the rider and not the guard, so a client
+	//that negotiated the bodygroup but neither of the other two would have had
+	//every update silently stripped here.  Belt and braces today - all three are
+	//advertised together in Net_PextMask - but the guard should name what it
+	//actually protects.
+	//nettest Patch 155: ...and unless FRAMERATE is, the fourth rider.  Added
+	//with the guard this time rather than after it.
+	if (!(pext2 & (PEXT2_NEWSIZEENCODING|PEXT2_BONECONTROLS|PEXT2_BODYGROUP|PEXT2_FRAMERATE)))	//was added at the same time
 		bits &= ~UF_BONEDATA;
 
 #ifdef _DEBUG
@@ -1247,12 +1282,25 @@ static void SVFTE_WriteUpdate(unsigned int bits, entity_state_t *state, sizebuf_
 		if (predbits & UFP_MOVETYPE)
 			MSG_WriteByte(msg, state->u.q1.pmovetype);
 		if (predbits & UFP_VELOCITYXY)
-		{
-			MSG_WriteShort(msg, state->u.q1.velocity[0]);
-			MSG_WriteShort(msg, state->u.q1.velocity[1]);
+		{	/*FTESurf: 32 bits when negotiated, so >4096 u/s stops wrapping*/
+			if (pext2 & PEXT2_BIGVELOCITY)
+			{
+				MSG_WriteLong(msg, state->u.q1.velocity[0]);
+				MSG_WriteLong(msg, state->u.q1.velocity[1]);
+			}
+			else
+			{
+				MSG_WriteShort(msg, state->u.q1.velocity[0]);
+				MSG_WriteShort(msg, state->u.q1.velocity[1]);
+			}
 		}
 		if (predbits & UFP_VELOCITYZ)
-			MSG_WriteShort(msg, state->u.q1.velocity[2]);
+		{
+			if (pext2 & PEXT2_BIGVELOCITY)
+				MSG_WriteLong(msg, state->u.q1.velocity[2]);
+			else
+				MSG_WriteShort(msg, state->u.q1.velocity[2]);
+		}
 		if (predbits & UFP_MSEC)
 			MSG_WriteByte(msg, state->u.q1.msec);
 		if (pext2 & PEXT2_PREDINFO)
@@ -1357,6 +1405,26 @@ static void SVFTE_WriteUpdate(unsigned int bits, entity_state_t *state, sizebuf_
 			bfl |= 0x80;
 		if (state->basebone || state->baseframe)
 			bfl |= 0x40;
+		//nettest Patch 125: 0x20 = five HL bone controllers follow.  This bit MUST
+		//never be set for a client that did not negotiate PEXT2_BONECONTROLS - the
+		//old client's parser calls Host_EndGame on any unknown bit in this byte,
+		//so setting it unconditionally would drop every old client on connect and
+		//break every existing demo.  That is the entire reason for the extension.
+		if ((pext2 & PEXT2_BONECONTROLS)
+		    && (state->bonecontrol[0] || state->bonecontrol[1] || state->bonecontrol[2]
+		     || state->bonecontrol[3] || state->bonecontrol[4]))
+			bfl |= 0x20;
+		//nettest Patch 131: 0x10 = one bodygroup byte follows.  Same gate and the
+		//same reasoning as 0x20 above - an engine that did not negotiate this
+		//extension parses the flag byte strictly and ends the connection.
+		if ((pext2 & PEXT2_BODYGROUP) && state->bodygroup)
+			bfl |= 0x10;
+		//nettest Patch 155: 0x08 = one signed playback-rate short follows.  Same
+		//gate and the same reasoning as 0x20 and 0x10 above.  The test is against
+		//the BIASED value, so it is false for normal speed and the field costs
+		//nothing on the overwhelming majority of entities.
+		if ((pext2 & PEXT2_FRAMERATE) && state->animrate)
+			bfl |= 0x08;
 		MSG_WriteByte(msg, bfl);
 		if (bfl & 0x80)
 		{
@@ -1379,6 +1447,18 @@ static void SVFTE_WriteUpdate(unsigned int bits, entity_state_t *state, sizebuf_
 				MSG_WriteShort(msg, state->baseframe);
 			}
 		}
+		if (bfl & 0x20)
+		{	//nettest Patch 125: ten bytes, only on entities that actually set one.
+			MSG_WriteShort(msg, state->bonecontrol[0]);
+			MSG_WriteShort(msg, state->bonecontrol[1]);
+			MSG_WriteShort(msg, state->bonecontrol[2]);
+			MSG_WriteShort(msg, state->bonecontrol[3]);
+			MSG_WriteShort(msg, state->bonecontrol[4]);
+		}
+		if (bfl & 0x10)
+			MSG_WriteByte(msg, state->bodygroup);
+		if (bfl & 0x08)
+			MSG_WriteShort(msg, state->animrate);	//nettest Patch 155
 	}
 	if (bits & UF_DRAWFLAGS)
 	{
@@ -3456,6 +3536,38 @@ static void SV_Snapshot_Build_Playback(client_t *client, packet_entities_t *pack
 }
 #endif
 
+/*
+FTESurf: velocity is carried as 1/8-unit fixed point.  This used to be a bare
+`state->u.q1.velocity[i] = ent->v->velocity[i] * 8;` -- a float assigned into a
+signed short with no bound at all -- so anything past 4096 units/sec on an axis
+wrapped and CHANGED SIGN: 4200 became -3992.  The client re-seeded its prediction
+from that every packet and the QW path has no prediction-error smoothing, so it
+showed up as hard per-frame positional flicker rather than a rubber-band.  Surf
+maps that raise sv_maxvelocity past the default reach that speed in normal play.
+
+Two defences, because the second is negotiated and the first must hold regardless:
+saturate rather than wrap, and use the full 32-bit range when the client agreed to
+PEXT2_BIGVELOCITY.  Without the extension the wire field is still 16 bits, so the
+value is additionally clamped to what will survive MSG_WriteShort -- otherwise the
+truncation we just avoided would happen in the writer instead.
+*/
+static void SV_EncodeVelocity(entity_state_t *state, edict_t *ent, client_t *client)
+{
+	int i;
+	float lim = (client && (client->fteprotocolextensions2 & PEXT2_BIGVELOCITY))
+				? 1073741824.0f	/*2^30, far past anything a mod can produce*/
+				: 32767.0f;
+	for (i = 0; i < 3; i++)
+	{
+		float v = ent->v->velocity[i] * 8;
+		if (!(v > -lim))	/*written so a NaN takes this branch too*/
+			v = -lim;
+		else if (v > lim)
+			v = lim;
+		state->u.q1.velocity[i] = (int)v;
+	}
+}
+
 void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *client, packet_entities_t *pack)
 {
 //builds an entity_state from an entity
@@ -3499,15 +3611,11 @@ void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *cli
 				state->u.q1.msec = bound(0, 1000*(sv.time - cl->localtime), 255);
 			}
 
-			state->u.q1.velocity[0] = ent->v->velocity[0] * 8;
-			state->u.q1.velocity[1] = ent->v->velocity[1] * 8;
-			state->u.q1.velocity[2] = ent->v->velocity[2] * 8;
+			SV_EncodeVelocity(state, ent, client);
 		}
 		else if (ent == cl->edict)
 		{
-			state->u.q1.velocity[0] = ent->v->velocity[0] * 8;
-			state->u.q1.velocity[1] = ent->v->velocity[1] * 8;
-			state->u.q1.velocity[2] = ent->v->velocity[2] * 8;
+			SV_EncodeVelocity(state, ent, client);
 		}
 
 		//fixme: deal with fixangles
@@ -3601,6 +3709,37 @@ void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *cli
 	{
 		state->basebone = ent->xv->basebone;
 		state->baseframe = ent->xv->baseframe;
+	}
+
+	//nettest Patch 125: HL bone controllers.  Filled unconditionally - whether
+	//they are actually SENT is decided per-client in the delta writer, because it
+	//is the client's negotiated extensions that decide, not the entity's.
+	//
+	//Clamped rather than truncated: an out-of-range QC value should saturate at
+	//the end of its travel, not wrap round and swing the bone the wrong way.
+	state->bonecontrol[0] = bound(-32768, (int)(ent->xv->bonecontrol1 * ES_BONECONTROL_SCALE), 32767);
+	state->bonecontrol[1] = bound(-32768, (int)(ent->xv->bonecontrol2 * ES_BONECONTROL_SCALE), 32767);
+	state->bonecontrol[2] = bound(-32768, (int)(ent->xv->bonecontrol3 * ES_BONECONTROL_SCALE), 32767);
+	state->bonecontrol[3] = bound(-32768, (int)(ent->xv->bonecontrol4 * ES_BONECONTROL_SCALE), 32767);
+	state->bonecontrol[4] = bound(-32768, (int)(ent->xv->bonecontrol5 * ES_BONECONTROL_SCALE), 32767);
+	//nettest Patch 131: the bodygroup, clamped to the byte the protocol carries.
+	state->bodygroup = bound(0, (int)ent->xv->body, 255);
+	//nettest Patch 155: the playback rate.  QC zero means "never set", which is
+	//every entity in every mod that predates this field, and it must encode as
+	//normal speed - so the default is folded in HERE rather than on the client,
+	//where a zero would be indistinguishable from a deliberate freeze.
+	//
+	//A genuine freeze is still expressible: anything non-zero passes through, so
+	//QC can ask for 1/64 and get a sequence that takes 64x as long.
+	{
+		float rate = ent->xv->animrate ? ent->xv->animrate : 1.0;
+		state->animrate = bound(-32768, (int)((rate - ES_ANIMRATE_BIAS) * ES_ANIMRATE_SCALE), 32767);
+		if (sv_debug_animrate.ival && state->animrate)
+		{
+			static float sartimer;
+			Con_ThrottlePrintf(&sartimer, 0, "[sv animrate] ent %i: qc %g -> wire %i\n",
+				NUM_FOR_EDICT(svprogfuncs, (edict_t*)ent), rate, state->animrate);
+		}
 	}
 
 	if (!ent->v->movetype || ent->v->movetype == MOVETYPE_STEP)

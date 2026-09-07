@@ -2316,6 +2316,14 @@ void S_Init (void)
 
 	Cmd_AddCommand("snd_restart", S_Restart_f);
 
+	//mp3 support (snd_minimp3.c).  Registered here rather than as a static
+	//AudioInputPlugins entry because that table is #ifdef'd per available
+	//library and this decoder is unconditional - there is nothing to be missing.
+	S_RegisterMP3Plugin();
+	//flac support (snd_flac.c), for the same reason.  Order against the mp3 one
+	//is irrelevant: both require their own container magic.
+	S_RegisterFLACPlugin();
+
 	Cmd_AddCommand("soundcontrol", S_Control_f);
 
 	Cvar_Register(&nosound,				"Sound controls");

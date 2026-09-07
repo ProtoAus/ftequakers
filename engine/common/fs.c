@@ -250,6 +250,76 @@ static cvar_t com_fs_cache			= CVARFD	("fs_cache", IFMINIMAL("2","1"), CVAR_ARCH
 // (valve+cstrike via the backdrop dep-mount); the heavy hl2/CSS .vpk + CoD .iwd stay lazy until selected.
 // 0 = eager boot-time mounting of all games (old behaviour, escape hatch).
 static cvar_t fs_lazyaddons			= CVARFD	("fs_lazyaddons", "1", CVAR_ARCHIVE, "nettest: lazy on-demand game mounting (add-only, crash-safe). Boot indexes maps offline + hashes only the base; a game mounts on first map-select. 0 = eager boot-time mounting of all games.");
+//ftesurf (P175): the SAME add-only mount, keyed on the map's own material list rather than on
+//which game the map came from. fs_lazyaddons answers "this map belongs to CoD, mount CoD";
+//this answers "this map is a Momentum map that references six TF2 concrete textures, mount TF2",
+//which is a question no map index can answer and only the BSP can. See FS_AutoMountForMap.
+static cvar_t fs_automount			= CVARFD	("fs_automount", "1", CVAR_ARCHIVE, "ftesurf: mount a map's extra asset pack automatically on map load, from the data/mapdeps.txt list that tools/mapdeps.py bakes out of the BSPs. 0 = never; a map needing one then loads untextured until you fs_load it by hand.");
+//ftesurf (P186): the third and last lever on map load time.  fs_automount mounts a map's Steam
+//pack, fs_autounmount gives it back -- but a REPEAT visit still pays the mount again, and that
+//mount is ~1.4s of directory walk and 14MB of allocation for TF2 whether the map reads six files
+//out of it or six thousand.  This copies the files the map actually opened into <gamedir>_cache
+//and, once it can prove the copy is complete, skips the mount entirely.
+//
+//NOT named fs_cache: that name is already taken by com_fs_cache, the filesystem NAME HASH.
+//
+//ftesurf (P197): the three faults P186 listed here are closed.
+//  * The ordering inversion is gone because there is no global cache searchpath any more.
+//    Files are namespaced per pack (<gamedir>_cache/<packkey>/...) and that directory is
+//    mounted only on a proven load, from FS_AutoMountForMap, in the exact slot the pack it
+//    replaces would have occupied.  Nothing above or below it moves, so it cannot shadow the
+//    fs_addons.txt games -- not by a rule, but because there is nowhere else for it to go.
+//  * The flat-directory collision (TF2's and CS:GO's copies of one filename landing on the
+//    same path) is gone with the namespacing.
+//  * The exit crash was never this feature's: see Patch 196.  FS_AddPathHandle wrote into the
+//    filesystem name hash without checking com_fschanged, i.e. while that table still held
+//    buckets belonging to a freed pack.  A populated <gamedir>_downloads reproduces it with
+//    fs_assetcache 0.
+//
+//Completeness is now a NAME SET comparison -- visit 1 records what it harvested in the
+//manifest, visit 2 is proven when its own set is a subset -- rather than P186's "nothing
+//reached the pack", which only worked because the cache outranked the pack.
+//
+//STILL DEFAULT 0.  It is a disk-writing cache keyed on observed behaviour; it should be
+//switched on deliberately, and `fs_cache_clear <map>` is the repair if one ever looks short.
+static cvar_t fs_assetcache			= CVARFD	("fs_assetcache", "0", CVAR_ARCHIVE, "ftesurf (P186/P197): copy the files a map actually loads out of an fs_automount'ed Steam pack into <gamedir>_cache/<pack>/, and once a later visit proves the copy complete, mount that directory in the pack's place instead of opening the pack at all. Saves ~1.4s and ~14MB per proven pack per visit. Defaults off; fs_cache_info reports the size, fs_cache_clear [map] empties it or makes one map re-prove itself.");
+static cvar_t fs_autounmount		= CVARFD	("fs_autounmount", "1", CVAR_ARCHIVE, "ftesurf (P183): when fs_automount mounts a pack for one map, give it back on the first later map that does not need it. Only ever drops packs fs_automount itself mounted -- an fs_addons.txt game, or one you fs_load'ed by hand, is never touched. 0 = keep every pack for the rest of the session (the old behaviour); costs ~6s on the next map load per pack carried, and buys back the ~3s remount when you return to a map that wants it.");
+/* ftesurf (P231): what fs_automount actually did for the map now loading, published so that
+the material census in the hl2 plugin can stop guessing.
+
+mod_vbsp.c's "N material(s) did not resolve" printed the same two hardcoded `fs_load` lines
+for every miss on every map.  That advice is wrong far more often than it is right:
+tools/mapdeps.py --audit puts 593 of the library's 1411 maps in the "references content NO
+pack supplies" bucket, and surf_demise -- which has no dep line at all, precisely BECAUSE
+the census established no pack resolves it -- was still being told to mount CS:GO.  The
+engine knew better at that moment and simply had no way to say so.
+
+  0  mapdeps.txt was read and names no pack for this map       -> mounting anything is futile
+  1  the pack(s) it names are mounted from disk
+  2  the pack(s) it names are served from <gamedir>_cache      -> the ONE state where a short
+                                                                  cache is worth suspecting
+  3  it names a pack that did not resolve (game not installed) -> the ONLY state in which
+                                                                  `fs_load` is right
+  4  unknown: fs_automount is off, or there is no mapdeps.txt  -> claim nothing specific
+
+Published on EVERY path out of FS_AutoMountForMap, early returns included.  State 4 is the
+initial value for exactly that reason: leave it unset on a path and the previous map's answer
+is what the next map's warning quotes, which is the failure this cvar exists to end. */
+static cvar_t fs_automount_state	= CVARFD	("fs_automount_state", "4", CVAR_NOSAVE, "ftesurf (P231): what fs_automount did for the loaded map. 0=it needs no pack, 1=its pack is mounted, 2=its pack is served from the asset cache, 3=it names a pack that is not installed, 4=unknown (fs_automount off, or no data/mapdeps.txt). Read by the missing-material warning to pick its advice; setting it by hand only lies to that warning.");
+static cvar_t fs_automount_spec		= CVARFD	("fs_automount_spec", "", CVAR_NOSAVE, "ftesurf (P231): the data/mapdeps.txt spec behind fs_automount_state -- the pack the loaded map asks for, or empty when it asks for none. In state 3 this is the one an fs_load would name.");
+//nettest: Half-Life ships its high-definition model pack as a SEPARATE gamedir sibling
+//("valve" -> "valve_hd", "bshift" -> "bshift_hd", "anticlimax" -> "anticlimax_hd", ...),
+//containing nothing but models/, sprites/ and sound/ overrides for the base game.
+//
+//Mounting it is not enough on its own.  Every fs_addons.txt game is added at the TAIL
+//(FS_Addon_Mount's SPF_ADDON), so an _hd line appended by `fs_load` lands BELOW the base
+//game it is supposed to override and loses every lookup.  The order that makes it work is
+//the one thing an addon list cannot express, so it is done here instead: when this is set,
+//FS_RemountAddons mounts each line's _hd sibling immediately BEFORE the line itself, which
+//puts HD above its own base and below every game listed earlier.
+//
+//Takes effect on a searchpath rebuild - set it and `fs_restart`.
+static cvar_t fs_hdmodels			= CVARFD	("fs_hdmodels", "0", CVAR_ARCHIVE, "nettest: prefer Half-Life's high-definition model pack. Mounts the \"<game>_hd\" sibling of every fs_addons.txt game just ABOVE that game, so valve_hd/bshift_hd override valve/bshift. Needs an fs_restart to take effect.");
 static cvar_t fs_noreexec			= CVARD		("fs_noreexec", "0", "Disables automatic re-execing configs on gamedir switches.\nThis means your cvar defaults etc may be from the wrong mod, and cfg_save will leave that stuff corrupted!");
 static cvar_t cfg_reload_on_gamedir = CVAR		("cfg_reload_on_gamedir", "1");
 static cvar_t fs_game				= CVARAFCD	("fs_game"/*q3*/, "", "game"/*q2/qs*/, CVAR_NOSAVE|CVAR_NORESET, fs_game_callback, "Provided for Q2 compat. Contains the subdir of the current mod.");
@@ -266,6 +336,9 @@ void COM_CheckRegistered (void);
 void Mods_FlushModList(void);
 static void FS_ReloadPackFilesFlags(unsigned int reloadflags);
 static void FS_RemountAddons(unsigned int loadstuff);	//nettest (P8): fs_load on-demand addon games
+static void FS_AutoMount_Forget(void);					//ftesurf (P184): drop the automount bookkeeping; the searchpaths it names are about to stop existing
+static void FS_Cache_Note(const char *fname, searchpath_t *sp);	//ftesurf (P186): record a file the asset cache should copy. Called from FS_FLocateFile, so it is declared here and defined next to the rest of the cache, far below.
+static void FS_Cache_Forget(void);						//ftesurf (P186): abandon an in-flight harvest; the searchpaths it was reading from are about to stop existing
 void FS_IndexAddonMaps(void);							//nettest (P25): offline maps_index.txt for the lazy-mount menu
 static qboolean Sys_SteamHasFile(char *steambasedir,size_t steambasedirsize, char *steamdir, char *fname);
 
@@ -2271,6 +2344,12 @@ void FS_FlushFSHashFull(void)
 
 	//for safety we would need to sync with all threads, so lets just not bother.
 	//FS_FlushFSHashReally(true);
+
+	//ftesurf (P196): which makes com_fschanged a stronger statement than "out of date".
+	//The caller has usually just ClosePath'd and Z_Free'd a searchpath, and its buckets are
+	//still linked in filesystemhash.  So while this flag is set, NOTHING may walk that table
+	//-- not to read it and not to insert into it.  FS_FLocateFile and FS_RebuildFSHash_Update
+	//already check; FS_AddPathHandle did not, and crashed on exit.  See FS_AddPathHandle.
 }
 
 
@@ -2493,6 +2572,29 @@ fail:
 			return 0x7fffffff;	//if we're asking for depth, the file is reported to be so far into the filesystem as to be irrelevant.
 		return 0;
 	}
+
+	/* ftesurf (P186): the asset cache's harvest hook.
+
+	This is the one funnel every lookup passes through -- FS_OpenVFS, FS_MallocFile,
+	COM_LoadFile, the hl2 plugin's material and model loads, all of it -- so hooking it
+	catches assets a static dependency walk cannot predict, including anything loaded
+	lazily minutes into a run.  That is the whole reason the harvest observes rather than
+	re-implementing tools/mapdeps.py in C.
+
+	`filename` here is the CLEANED name (FS_GetCleanPath above, or the hash's own key), which
+	is exactly the name FS_WriteFile will want later, and loc->search is the TOP hit -- the
+	loops above break on the first success -- so a name only reaches the cache if nothing of
+	higher priority provides it.
+
+	Note this fires on a successful LOCATE, not on a read, so a bare "does this exist" probe
+	is harvested too.  That is deliberate and cheap: a probe that succeeded is a file the map
+	asked about, and over-harvesting costs disk, while under-harvesting costs a wrong render.
+
+	Everything expensive is behind two loads and a flag test, because this runs on the hot
+	path and on loader threads. */
+	if (loc->search)
+		FS_Cache_Note(filename, loc->search);
+
 	return depth+1;
 }
 
@@ -2929,7 +3031,14 @@ static qboolean FS_NativePath(const char *fname, enum fs_relative relativeto, ch
 	{
 		//this is sometimes used to query the actual path.
 		//don't alow it for other stuff though.
-		if (relativeto != FS_ROOT && relativeto != FS_BINARYPATH && relativeto != FS_LIBRARYPATH && relativeto != FS_GAMEONLY)
+		//ftesurf (P197): FS_GAMECACHE joins that list.  The asset cache genuinely wants the
+		//DIRECTORY -- to open a handle over it for fs_cache_info/fs_cache_clear, and to test
+		//whether an automounted path is one of its own -- and there is no file to name.
+		//Getting `false` back here silently is what made FS_Cache_IsOurDir answer "no" for
+		//every path, which let a cached load harvest out of its own cache and rewrite the
+		//manifest with the cache directory in place of the pack.  Caught by reading the
+		//manifest the run produced, not by the run failing.
+		if (relativeto != FS_ROOT && relativeto != FS_BINARYPATH && relativeto != FS_LIBRARYPATH && relativeto != FS_GAMEONLY && relativeto != FS_GAMECACHE)
 			return false;
 	}
 	else
@@ -3053,6 +3162,14 @@ static qboolean FS_NativePath(const char *fname, enum fs_relative relativeto, ch
 			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
 		else
 			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
+		break;
+	case FS_GAMECACHE:	//ftesurf P186: $gamedir_cache/ - the runtime asset cache. Same shape as _downloads for the same reason: it is a sibling of the gamedir, so the gamedir stays pure and the cache can be deleted wholesale without touching mod content. Must match the mount in FS_ReloadPackFilesFlags.
+		if (!*gamedirfile)
+			return false;
+		if (com_homepathenabled)
+			nlen = Q_snprintfz(out, outlen, "%s%s_cache/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
+		else
+			nlen = Q_snprintfz(out, outlen, "%s%s_cache/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
 		break;
 	default:
 		Sys_Error("FS_NativePath case not handled\n");
@@ -3258,6 +3375,7 @@ vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_rela
 			return vfs;
 		//fall through
 	case FS_GAMEDOWNLOADS:		//nettest P38: used for $gamedir_downloads/* (loose client downloads). MUST be handled here or FS_OpenVFS hits the Sys_Error default below.
+	case FS_GAMECACHE:			//ftesurf P186: used for $gamedir_cache/* (the harvested asset cache), for both the writes and the manifest reads. Same reason: unhandled here means Sys_Error, not a failed open.
 	case FS_PUBGAMEONLY:		//used for $gamedir/downloads
 	case FS_BASEGAMEONLY:		//used for fte/configs/*
 	case FS_PUBBASEGAMEONLY:	//used for qw/skins/*
@@ -4512,8 +4630,48 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 		}
 		*link = search;
 
-		if (filesystemhash.numbuckets)
+		/* ftesurf (P196): do not write into the name hash while it is known to be stale.
+
+		This is the only place in the engine that inserts into filesystemhash INCREMENTALLY
+		(FS_AddFileHashUnsafe, which is why it is named that), and it only fires for
+		SPF_TEMPORARY/SPF_SERVER/SPF_ADDON paths -- every other mount takes the else branch
+		below and just sets com_fschanged for a later rebuild.
+
+		com_fschanged does not mean "the hash is out of date".  It means "a searchpath has
+		been ClosePath'd and Z_Free'd, and its fsbucket_t's are STILL LINKED in
+		filesystemhash".  FS_FlushFSHashFull (fs.c:2316) says so in its own comment: it sets
+		the flag and deliberately does nothing else, because really flushing would need a
+		sync with every worker thread.  COM_FlushTempoaryPacks calls it on every map change
+		as it frees the previous map's embedded pakfile.
+
+		So while com_fschanged is set, that table contains dangling pointers, and
+		FS_AddFileHashUnsafe's very first act is Hash_GetInsensitiveBucket -- which walks the
+		bucket chain dereferencing ->key.string.  filesystemhash never grows past its initial
+		1024 buckets (FS_RebuildFSHash:2213), so with 232k files indexed the average chain is
+		~227 entries long and a single lookup is near-certain to reach a freed one.
+
+		Every READER of the hash already honours the flag: FS_FLocateFile:2375 will not use
+		the fast path without it, and FS_RebuildFSHash_Update returns immediately.  This
+		writer did not, and that asymmetry is the whole bug.  It is the Patch 27
+		dangling-bucket signature, and the comment at fs.c:6032 describes this exact crash --
+		that fix moved a FS_FlushFSHashReally to just above FS_RemountAddons, but the
+		<gamedir>_downloads mount at :5786 and the P186 <gamedir>_cache mount at :5827 both
+		run EARLIER in the same reload and were left on the wrong side of it.
+
+		Reproduced, symbolised and controlled rather than reasoned about; see the P196 entry
+		in ENGINE_PATCHES.md for the stack and the arms.
+
+		Skipping the insert costs nothing.  With com_fschanged set, FS_FLocateFile is doing
+		linear walks anyway, so the new path is still found, and the next COM_FlushFSCache /
+		FS_RehashIfStale rebuilds the whole table including it.  It is in fact strictly
+		cheaper: FS_AutoMountForMap mounts a 147k-entry pack immediately before
+		sv_ccmds.c:1028 rebuilds the hash from scratch, so that incremental insert was always
+		thrown away.  The else arm keeps the flag set for exactly the same reason the other
+		branch sets it. */
+		if (filesystemhash.numbuckets && !com_fschanged)
 			search->handle->BuildHash(search->handle, depth, FS_AddFileHashUnsafe);
+		else
+			com_fschanged = true;
 	}
 	else
 	{
@@ -4554,6 +4712,77 @@ void COM_FlushFSCache(qboolean purge, qboolean domutex)
 		FS_RebuildFSHash(domutex);
 	}
 #endif
+}
+
+/*
+ftesurf (P180): what a map load actually costs the filesystem.
+
+Nobody had ever measured this, and the guesses in ftesurf/fs_addons.txt were wrong
+twice over.  The number that matters is not "how many archives are mounted" but
+"how many times did FS_FLocateFile have to fall out of the hash and walk every file
+in every one of them", because that is the term that is quadratic in mount count.
+
+fs_finds already counts exactly that (it is incremented at each FindFile call site),
+and com_fschanged already says whether the hashed fast path at FS_FLocateFile was
+even eligible.  Both were right here the whole time; neither was ever printed
+outside a Con_DPrintf.  So this is a bracket, not a new mechanism.
+
+Deliberately Con_Printf and defaulted on: one line per map load, and it is the line
+that tells you whether a slow load was the filesystem or the renderer.
+*/
+cvar_t fs_maploadhash = CVARFD("fs_maploadhash", "1", CVAR_ARCHIVE, "ftesurf: rebuild the filesystem name hash after the previous map's embedded package is dropped, so the incoming map's assets load through the hash instead of a linear scan of every mounted archive. 0 restores the old behaviour, which is only useful for measuring the difference.");
+cvar_t fs_loadstats = CVARFD("fs_loadstats", "1", CVAR_ARCHIVE, "ftesurf: print one line per map load giving the time, the number of filesystem lookups that missed the name hash, and whether the hash was valid for the load at all. A large lookup count with a stale hash means every lookup was a linear scan of every mounted archive.");
+static int		fs_ls_finds;
+static double	fs_ls_start;
+static qboolean	fs_ls_open;
+
+/*
+ftesurf (P180): repair the name hash, without asking the OS anything.
+
+COM_FlushFSCache is the wrong tool for this: before it looks at com_fschanged it
+walks every searchpath calling PollChanges, and a single directory reporting an
+external change forces a full O(total files) rebuild that was not otherwise needed.
+Measured cost of that on a map whose hash was already valid: +1.5s.
+
+We are not looking for external edits here.  We know exactly what went stale --
+COM_FlushTempoaryPacks just freed the previous map's buckets out from under the
+hash -- so the only question worth asking is whether the flag is set.
+*/
+void FS_RehashIfStale(void)
+{
+#ifndef FTE_TARGET_WEB
+	if (com_fs_cache.ival && com_fschanged)
+		FS_RebuildFSHash(true);
+#endif
+}
+
+void FS_LoadStats_Begin(void)
+{
+	fs_ls_finds = fs_finds;
+	fs_ls_start = Sys_DoubleTime();
+	fs_ls_open = true;
+}
+
+void FS_LoadStats_End(const char *what)
+{
+	searchpath_t *sp;
+	int paths = 0;
+
+	if (!fs_ls_open)
+		return;		//never begun, or already reported
+	fs_ls_open = false;
+	if (!fs_loadstats.ival)
+		return;
+
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		paths++;
+
+	Con_Printf("fs: %s in %.0fms | %i lookups missed the hash | %i searchpaths, %i files indexed | hash %s\n",
+		what?what:"load",
+		(Sys_DoubleTime() - fs_ls_start) * 1000.0,
+		fs_finds - fs_ls_finds,
+		paths, fs_hash_files,
+		com_fschanged?"STALE (every lookup is a linear scan)":"valid");
 }
 
 /*since should start as 0, otherwise this can be used to poll*/
@@ -5635,6 +5864,26 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		}
 	}
 
+	/* ftesurf (P186/P197): <gamedir>_cache is deliberately NOT mounted here any more.
+
+	P186 mounted it at this point, one line below _downloads, on the reasoning that
+	SPF_ADDON appends at the tail so it must be below everything real.  That reasoning was
+	wrong, and it is the one ordering rule this codebase has been careful about since Patch
+	8: FS_RemountAddons runs at the END of this function (:6040), AFTER this point, so a
+	cache mounted here outranked cstrike, hl2 and momentum -- the fs_addons.txt games that
+	hold nearly all of this mod's content.
+
+	P197 mounts the cache per pack instead, from FS_AutoMountForMap, in the exact slot the
+	pack it replaces would have taken (see FS_Cache_MountFor).  Ordering is then unchanged
+	by construction rather than by a second rule that has to be kept in step with this one,
+	and a map that needs no pack mounts no cache at all.
+
+	Nothing else needed this mount: the harvest writes through FS_WriteFile(FS_GAMECACHE)
+	and the manifests are read through FS_MallocFile(FS_GAMECACHE), both of which are native
+	paths (FS_NativePath's FS_GAMECACHE case) and never consult com_searchpaths.  The mount
+	existed only so cached files could be read back, which is exactly what the per-pack
+	mount does properly. */
+
 	FS_AddDownloadManifestPackages(&oldpaths, reloadflags);
 
 	/*sv_pure: Reload pure paths*/
@@ -5907,6 +6156,120 @@ static void FS_ReloadPackFiles_f(void)
 		FS_BeginManifestUpdates();
 }
 
+//=================================================================
+//ftesurf (P182): find Steam games on a machine with more than one library folder
+//=================================================================
+// Sys_SteamParseLibraries and its probe helper used to live inside the UNIX-ONLY
+// arm of the #if chain below, so on Windows a "steam:Game/dir" spec resolved
+// through exactly ONE candidate: <HKCU\SOFTWARE\Valve\Steam\SteamPath>/SteamApps/
+// common/<dir>.  A player who keeps Steam on C: and their games on D: -- the
+// ordinary case the moment one drive fills up -- got "not found/installed" for a
+// game that is plainly installed, and then fs_automount could never mount the
+// pack for a map whose missing textures it had correctly diagnosed.  That is the
+// single biggest hole in "this needs to work for any random player".
+//
+// Nothing in the parser was ever unix-specific -- COM_ParseCString, Q_snprintfz,
+// strtoul, FS_MallocFile.  Only the existence probe was (`access`), so the probe
+// is now portable and both platforms share one parser.
+//
+// The probe answers two DIFFERENT questions depending on `fname`:
+//   non-empty -> "is <basepath>/<fname> a readable FILE".  Sys_FindBaseDirs sniffs
+//                gamemodes that way, e.g. "id1/pak0.pak".
+//   empty     -> "does the GAMEDIR ITSELF exist", which is what FS_Addon_ResolveEx
+//                asks for every fs_addons.txt / mapdeps.txt "steam:Game/dir" line.
+//                A directory cannot be VFSOS_Open'd as a file on Windows, so that
+//                case uses the same cancel-on-first-entry Sys_EnumerateFiles trick
+//                as FS_Addon_MountHD and the _downloads sibling probe.
+//The guard must match the arms that actually CALL this, not merely "has stdio": the
+//bare #else fallback below (Android, SDL-on-Windows, WinRT, Xbox) has a stub
+//Sys_SteamDirsWithFile that never touches the parser, and a static function nobody
+//references is a -Wunused-function warning on exactly those targets.  Before P182
+//these two lived inside the unix arm and so did not exist there at all.
+#if !defined(NOSTDIO) && \
+	((defined(_WIN32) && !(defined(FTE_SDL)&&!defined(FTE_SDL3)) && !defined(WINRT) && !defined(_XBOX)) || \
+	 ((defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)))
+static int QDECL FS_DirDoesHaveGame(const char *fname, qofs_t fsize, time_t modtime, void *ctx, searchpathfuncs_t *subdir);	//ftesurf (P182): defined further down, next to the other gamedir probes
+static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *librarypath, char *steamdir, char *fname)	//fills in the base system path
+{
+	char clean[MAX_OSPATH];
+	char *s;
+	vfsfile_t *f;
+
+	//libraryfolders.vdf on Windows stores "D:\\SteamLibrary".  COM_ParseCString has
+	//already turned the escaped pair back into one backslash (common.c, case '\\'),
+	//but the rest of the engine wants forward slashes -- normalise once here rather
+	//than at every call site.  Trailing separators are stripped so "D:\\" cannot
+	//produce a doubled slash further down.
+	Q_strncpyz(clean, librarypath, sizeof(clean));
+	for (s = clean; *s; s++)
+		if (*s == '\\')
+			*s = '/';
+	while (s > clean && s[-1] == '/')
+		*--s = 0;
+
+	Q_snprintfz(basepath, basepathlen, "%s/steamapps/common/%s", clean, steamdir);
+
+	if (*fname)
+	{
+		f = VFSOS_Open(va("%s/%s", basepath, fname), "rb");
+		if (!f)
+			return false;
+		VFS_CLOSE(f);
+		return true;
+	}
+	//false => the callback cancelled the walk => the directory has >=1 entry => it is there.
+	return !Sys_EnumerateFiles(basepath, "*", FS_DirDoesHaveGame, NULL, NULL);
+}
+static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*basepath),void*ctx, char *libraryfile, char *steamdir, char *fname)	//returns the base system path
+{
+	qboolean success = false;
+	char key[1024], *end;
+	char value[1024];
+	char basepath[1024];
+	char *lib = libraryfile;
+	int depth = 0;
+	if (!libraryfile)
+		return false;
+	lib = COM_ParseCString(lib, key, sizeof(key), NULL);
+	lib = COM_ParseCString(lib, value, sizeof(value), NULL);
+	if (!strcmp(key, "libraryfolders") && !strcmp(value, "{"))
+	{
+		depth=1;
+		while(lib && !success)
+		{
+			lib = COM_ParseCString(lib, key, sizeof(key), NULL);
+			if (!strcmp(key, "}"))
+			{
+				if (!--depth)
+					break;
+				continue;
+			}
+			lib = COM_ParseCString(lib, value, sizeof(value), NULL);
+
+			if (!strcmp(value, "{"))
+				depth++;
+			else if (depth == 1 && *key)
+			{	//older format...
+				strtoul(key, &end, 10);
+				if (!*end)
+				{
+					//okay, its strictly base10
+					if (Sys_SteamLibraryHasFile(basepath,sizeof(basepath), value, steamdir,fname))
+						success = true, callback(ctx, basepath);
+				}
+			}
+			else if (depth == 2 && !strcmp(key, "path"))
+			{	//newer format...
+				if (Sys_SteamLibraryHasFile(basepath,sizeof(basepath), value, steamdir,fname))
+					success = true, callback(ctx, basepath);
+			}
+		}
+	}
+	FS_FreeFile(libraryfile);
+	return success;
+}
+#endif
+
 #ifdef NOSTDIO
 static qboolean Sys_DoDirectoryPrompt(char *basepath, size_t basepathsize, const char *poshname, const char *savedname)
 {
@@ -5934,34 +6297,56 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 	vfsfile_t *f;
 	DWORD resultlen;
 	HKEY key = NULL;
+	wchar_t suckysucksuck[MAX_OSPATH];
+	char steampath[MAX_OSPATH];
 	char basepath[MAX_OSPATH];
+	char libdirs[MAX_OSPATH];	//ftesurf (P182)
 
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", 0, STANDARD_RIGHTS_READ|KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
-	{
-		wchar_t suckysucksuck[MAX_OSPATH];
-		resultlen = sizeof(suckysucksuck);
-		RegQueryValueExW(key, L"SteamPath", NULL, NULL, (void*)suckysucksuck, &resultlen);
-		RegCloseKey(key);
-		narrowen(basepath,sizeof(basepath), suckysucksuck);
-		Q_strncatz(basepath, va("/SteamApps/common/%s", steamdir), sizeof(basepath));
-		if (!*fname)
-		{	//nettest: empty filename = verify the GAMEDIR ITSELF exists (manifest "steam:Subdir/gamedir",
-			//e.g. "steam:Half-Life/cstrike").  A directory can't be VFSOS_Open'd as a file (that always
-			//failed on Windows, so steam: gamedirs never mounted), so check its attributes instead — and
-			//hand the RESOLVED ABSOLUTE PATH (not the empty fname) to the callback so it actually mounts.
-			if (GetFileAttributesU(basepath) != INVALID_FILE_ATTRIBUTES)
-			{
-				callback(ctx, basepath);
-				return true;
-			}
-		}
-		else if ((f = VFSOS_Open(va("%s/%s", basepath, fname), "rb")))
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", 0, STANDARD_RIGHTS_READ|KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+		return false;
+	resultlen = sizeof(suckysucksuck);
+	suckysucksuck[0] = 0;
+	RegQueryValueExW(key, L"SteamPath", NULL, NULL, (void*)suckysucksuck, &resultlen);
+	RegCloseKey(key);
+	narrowen(steampath,sizeof(steampath), suckysucksuck);
+	if (!*steampath)
+		return false;
+
+	//1. the library Steam itself was installed into.  This is the only place the
+	//   engine used to look, and for most people it is still the right answer.
+	Q_strncpyz(basepath, steampath, sizeof(basepath));
+	Q_strncatz(basepath, va("/SteamApps/common/%s", steamdir), sizeof(basepath));
+	if (!*fname)
+	{	//nettest: empty filename = verify the GAMEDIR ITSELF exists (manifest "steam:Subdir/gamedir",
+		//e.g. "steam:Half-Life/cstrike").  A directory can't be VFSOS_Open'd as a file (that always
+		//failed on Windows, so steam: gamedirs never mounted), so check its attributes instead — and
+		//hand the RESOLVED ABSOLUTE PATH (not the empty fname) to the callback so it actually mounts.
+		if (GetFileAttributesU(basepath) != INVALID_FILE_ATTRIBUTES)
 		{
-			VFS_CLOSE(f);
-			callback(ctx, fname);
+			callback(ctx, basepath);
 			return true;
 		}
 	}
+	else if ((f = VFSOS_Open(va("%s/%s", basepath, fname), "rb")))
+	{
+		VFS_CLOSE(f);
+		callback(ctx, fname);
+		return true;
+	}
+
+	//2. ftesurf (P182): every OTHER library folder the user has added.  Steam writes
+	//   this file in two places depending on its vintage and keeps both current, so
+	//   probe both rather than pick.  Sys_SteamParseLibraries handles the old numeric-
+	//   key form and the newer nested "path" form, frees the buffer either way, and
+	//   hands the callback a resolved ABSOLUTE path -- so unlike branch 1's non-empty-
+	//   fname case above (which passes the relative `fname`, upstream's behaviour and
+	//   left alone here) a library hit is always directly mountable.
+	Q_snprintfz(libdirs, sizeof(libdirs), "%s/steamapps/libraryfolders.vdf", steampath);
+	if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
+		return true;
+	Q_snprintfz(libdirs, sizeof(libdirs), "%s/config/libraryfolders.vdf", steampath);
+	if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
+		return true;
 	return false;
 }
 
@@ -6208,61 +6593,9 @@ static void Sys_FindBaseDirs(const char *poshname, const char *gamename, void (*
 #if (defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)
 #include <sys/stat.h>
 
-static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *librarypath, char *steamdir, char *fname)	//returns the base system path
-{
-	Q_snprintfz(basepath, basepathlen, "%s/steamapps/common/%s", librarypath, steamdir);
-	if (0==access(va("%s/%s", basepath, fname), R_OK))
-		return true;
-	return false;
-}
-static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*basepath),void*ctx, char *libraryfile, char *steamdir, char *fname)	//returns the base system path
-{
-	qboolean success = false;
-	char key[1024], *end;
-	char value[1024];
-	char basepath[1024];
-	char *lib = libraryfile;
-	int depth = 0;
-	if (!libraryfile)
-		return false;
-	lib = COM_ParseCString(lib, key, sizeof(key), NULL);
-	lib = COM_ParseCString(lib, value, sizeof(value), NULL);
-	if (!strcmp(key, "libraryfolders") && !strcmp(value, "{"))
-	{
-		depth=1;
-		while(lib && !success)
-		{
-			lib = COM_ParseCString(lib, key, sizeof(key), NULL);
-			if (!strcmp(key, "}"))
-			{
-				if (!--depth)
-					break;
-				continue;
-			}
-			lib = COM_ParseCString(lib, value, sizeof(value), NULL);
-
-			if (!strcmp(value, "{"))
-				depth++;
-			else if (depth == 1 && *key)
-			{	//older format...
-				strtoul(key, &end, 10);
-				if (!*end)
-				{
-					//okay, its strictly base10
-					if (Sys_SteamLibraryHasFile(basepath,sizeof(basepath), value, steamdir,fname))
-						success = true, callback(ctx, basepath);
-				}
-			}
-			else if (depth == 2 && !strcmp(key, "path"))
-			{	//newer format...
-				if (Sys_SteamLibraryHasFile(basepath,sizeof(basepath), value, steamdir,fname))
-					success = true, callback(ctx, basepath);
-			}
-		}
-	}
-	FS_FreeFile(libraryfile);
-	return success;
-}
+//ftesurf (P182): Sys_SteamLibraryHasFile and Sys_SteamParseLibraries used to be defined
+//here, unix-only.  They are now shared with the Win32 branch and live above the whole
+//#if chain; the probe no longer uses `access` so it builds on both.  See the P182 block.
 static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callback)(void*ctx,const char*basepath),void*ctx)	//returns the base system path
 {
 	/*
@@ -6427,6 +6760,19 @@ static void FS_FreePaths(void)
 {
 	searchpath_t *next;
 	FS_FlushFSHashReally(true);
+
+	/* ftesurf (P184): every searchpath is about to go, and FS_RemountAddons will put
+	the fs_addons.txt ones back on the way out of the rebuild.  Anything still recorded
+	as "automounted, ours to drop" would then be naming a pack that is now a permanent
+	mount, and the next map would unmount the user's game.  Forget it all instead. */
+	FS_AutoMount_Forget();
+
+	/* ftesurf (P186): likewise for the asset-cache harvest. Its name set is only meaningful
+	while the searchpaths it was collected from are still mounted -- FS_Cache_CopySome
+	re-locates each name and requires SPF_HARVEST -- and every searchpath is about to be freed.
+	Dropping it means an fs_restart mid-map loses that map's harvest, which costs one more
+	visit and cannot produce a manifest claiming files that were never written. */
+	FS_Cache_Forget();
 
 	//
 	// free up any current game dir info
@@ -8676,7 +9022,13 @@ note: does not actually load any packs, just makes sure the basedir+cvars+etc is
 // (which mount at HIGH priority and hijack the mod's conback + video mode).
 #define FS_ADDONS_FILE "fs_addons.txt"
 
-static qboolean FS_Addon_Resolve(const char *arg, char *syspath, size_t syssize)
+//`quiet` suppresses the not-installed warning for SPECULATIVE resolves - specs the engine
+//invents rather than ones the user asked for.  FS_Addon_MountHD probes "<spec>_hd" for every
+//line in fs_addons.txt, and an absent HD pack is the NORMAL case (of the games mounted here
+//only a handful ship one), so warning about it produced a screenful of "not found/installed"
+//at every boot for games that were never listed and are not missing.  An explicit `fs_load` /
+//fs_addons.txt line still warns: there the spec came from the user and a typo is worth saying.
+static qboolean FS_Addon_ResolveEx(const char *arg, char *syspath, size_t syssize, qboolean quiet)
 {
 	if (!strncmp(arg, "steam:", 6))
 	{	//"steam:Game/subdir" -> absolute path via the Steam registry (reuses the basegame resolver)
@@ -8686,12 +9038,14 @@ static qboolean FS_Addon_Resolve(const char *arg, char *syspath, size_t syssize)
 		sl = strchr(steamsub, '/');
 		if (!sl || !sl[1])
 		{
-			Con_Printf(CON_WARNING"fs_load: malformed \"%s\" (expected steam:Game/dir)\n", arg);
+			if (!quiet)
+				Con_Printf(CON_WARNING"fs_load: malformed \"%s\" (expected steam:Game/dir)\n", arg);
 			return false;
 		}
 		if (!Sys_SteamHasFile(syspath, syssize, steamsub, ""))
 		{
-			Con_Printf(CON_WARNING"fs_load: steam game \"%s\" not found/installed\n", arg+6);
+			if (!quiet)
+				Con_Printf(CON_WARNING"fs_load: steam game \"%s\" not found/installed\n", arg+6);
 			return false;
 		}
 		return true;
@@ -8701,6 +9055,10 @@ static qboolean FS_Addon_Resolve(const char *arg, char *syspath, size_t syssize)
 	else
 		Q_snprintfz(syspath, syssize, "%s/%s", com_gamepath, arg);	//relative to the install dir
 	return true;
+}
+static qboolean FS_Addon_Resolve(const char *arg, char *syspath, size_t syssize)
+{
+	return FS_Addon_ResolveEx(arg, syspath, syssize, false);
 }
 
 //nettest (P26 Part 2): set/clear the worldmodel-load prefer-hint.  FS_SetPreferHint resolves a game SPEC
@@ -8769,6 +9127,124 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 	return true;
 }
 
+//=================================================================
+//ftesurf (P183): FS_Addon_Unmount -- hand an addon game's searchpaths back
+//=================================================================
+// Until now nothing could un-mount an addon short of `fs_unload`, which edits
+// fs_addons.txt and does a whole fs_restart -- an FS_ReloadPackFilesFlags that
+// unconditionally arms the shader RESCAN (fs.c, shader_rescan_needed), four
+// COM_EnumerateFiles wildcard walks over the entire index.  So a session that
+// visited one TF2 map and then one CS:GO map carried both packs, 250k files,
+// for the rest of the session.  Measured: loading surf_tensor2 with TF2 still
+// mounted from surf_utopia takes 8619ms; loading it with CS:GO alone takes
+// 2778ms.  Carrying the pack the incoming map does NOT want is most of that.
+//
+// This is COM_FlushTempoaryPacks' shape, and deliberately so -- that function
+// unlinks a searchpath, ClosePath()es it and Z_Free()s it on EVERY map change
+// already, under exactly these two locks, so the lifetime rules are settled
+// engine behaviour rather than something invented here:
+//   * COM_WorkerLock() stops the loader threads touching files mid-unlink.
+//   * Both refcounted archive handlers (fs_zip.c, fs_vpk.c) keep the underlying
+//     pack alive while any vfsfile_t inside it is still open, so ClosePath on a
+//     pack someone is mid-read of decrements rather than frees.
+//   * com_purepaths is dropped because the nextpure chain would otherwise keep
+//     a pointer to the freed searchpath.
+//   * FS_FlushFSHashReally (NOT ...HashFull, which only sets a flag and leaves
+//     the freed pack's buckets linked -- the Patch 27 dangling-bucket path) NULs
+//     every bucket and frees the bucket blocks.  We already hold the mutex, so
+//     it is called with domutexes=false.
+//
+// MATCHING: an FS_Addon_Mount(spec) call adds more than one searchpath -- the
+// gamedir itself, every sub-package FS_AddDataFiles found inside it (logicalpath
+// "<syspath>/<pak>", FS_AddSingleDataFile builds it from parentdesc), the
+// "<syspath>_downloads" sibling with its own sub-packages, and FS_Addon_MountHD's
+// "<syspath>_hd".  So the match is a prefix followed by end-of-string, '/', '\'
+// or '_', which covers exactly that family and cannot swallow a neighbouring
+// game (".../tf" must not match ".../tf2").
+static qboolean FS_Addon_IsFamily(const searchpath_t *sp, const char *syspath, size_t len)
+{
+	char c;
+	if (!(sp->flags & SPF_ADDON))
+		return false;	//never the mod, the basedir, or anything mounted at high priority
+	if (len >= sizeof(sp->logicalpath))
+		return false;
+	if (Q_strncasecmp(sp->logicalpath, syspath, len))
+		return false;
+	c = sp->logicalpath[len];
+	return (c == 0 || c == '/' || c == '\\' || c == '_');
+}
+static int FS_Addon_Unmount(const char *syspath)
+{
+	searchpath_t *sp, **link;
+	size_t len;
+	int removed = 0;
+
+	COM_AssertMainThread("FS_Addon_Unmount");
+
+	if (!syspath || !*syspath)
+		return 0;
+	len = strlen(syspath);
+	if (!com_searchpaths || !fs_thread_mutex)
+		return 0;	//already shut down
+
+	COM_WorkerLock();
+	Sys_LockMutex(fs_thread_mutex);
+
+	link = &com_searchpaths;
+	while (*link)
+	{
+		sp = *link;
+		if (FS_Addon_IsFamily(sp, syspath, len))
+		{
+			*link = sp->next;
+			com_purepaths = NULL;
+
+			sp->handle->ClosePath(sp->handle);
+			Z_Free(sp);
+			removed++;
+		}
+		else
+			link = &sp->next;
+	}
+
+	if (removed)
+		FS_FlushFSHashReally(false);	//mutex already held
+
+	Sys_UnlockMutex(fs_thread_mutex);
+	COM_WorkerUnlock();
+	return removed;
+}
+
+//nettest: mount `spec`'s HIGH-DEFINITION sibling ("<spec>_hd") if fs_hdmodels is set.
+//
+//MUST be called immediately BEFORE mounting `spec` itself.  Every addon searchpath is
+//appended at the tail in call order (FS_Addon_Mount's SPF_ADDON), so mounting HD first is
+//the only way it can outrank the base game it exists to override - which is precisely why
+//`fs_load steam:Half-Life/valve_hd` cannot do this job: FS_Addon_SaveList appends the new
+//line at the END of fs_addons.txt, i.e. BELOW valve.
+//
+//PROBED, not merely resolved.  FS_Addon_Resolve succeeds for "steam:Half-Life/valve_hd"
+//purely because the STEAM GAME exists, and VFSOS_OpenPath does not validate the directory
+//either (see the _downloads note in FS_Addon_Mount) - so without the probe every game
+//without an HD pack would mount a phantom empty searchpath apiece.  Same cancel-on-first-
+//entry trick the _downloads sibling uses: Sys_EnumerateFiles returning false means the
+//callback cancelled, i.e. the directory has at least one entry.
+static void FS_Addon_MountHD(const char *spec, unsigned int loadstuff)
+{
+	char hdspec[MAX_OSPATH], hdpath[MAX_OSPATH];
+	if (!fs_hdmodels.ival)
+		return;
+	Q_snprintfz(hdspec, sizeof(hdspec), "%s_hd", spec);
+	//QUIET: this spec is the engine's guess, not the user's request.  Most games have no
+	//_hd sibling and never will, so a warning per absent pack per boot is pure noise.
+	if (!FS_Addon_ResolveEx(hdspec, hdpath, sizeof(hdpath), true))
+		return;
+	if (Sys_EnumerateFiles(hdpath, "*", FS_DirDoesHaveGame, NULL, NULL))
+		return;						//no such directory / empty
+	if (FS_Addon_Mount(hdspec, loadstuff))
+		Con_DPrintf("fs_load: mounted HD pack \"%s\"\n", hdspec);
+}
+
 //(re)mount every game listed in <gamedir>/fs_addons.txt.  Called at the end of
 //each searchpath rebuild so addon games survive fs_restart / gamedir changes.
 static void FS_RemountAddons(unsigned int loadstuff)
@@ -8789,6 +9265,7 @@ static void FS_RemountAddons(unsigned int loadstuff)
 			*--e = 0;
 		if (!*line || line[0]=='#' || (line[0]=='/'&&line[1]=='/'))
 			continue;
+		FS_Addon_MountHD(line, loadstuff);	//nettest: above its own base game, see the helper
 		if (FS_Addon_Mount(line, loadstuff))
 			Con_DPrintf("fs_load: re-mounted addon \"%s\"\n", line);
 	}
@@ -8985,22 +9462,1399 @@ static void FS_UseAddons_f(void)
 		{
 			const char *spec = Cmd_Argv(i);
 			if (*spec)
+			{
+				//nettest: HD sibling first, for the ordering reason in FS_Addon_MountHD.
+				//This is the path that matters in the default configuration - fs_lazyaddons
+				//is 1, so a game normally reaches the searchpaths through here and not
+				//through FS_RemountAddons at all.
+				FS_Addon_MountHD(spec, ~0u);
 				FS_Addon_Mount(spec, ~0u);	//add-only, dup-safe (~0u = load everything, same as the fs_load command)
+			}
 		}
 		if (fs_thread_mutex)
 			Sys_UnlockMutex(fs_thread_mutex);
 	}
 }
 
+//=================================================================
+//ftesurf (P175): per-map asset packs, mounted only for the maps that need one
+//=================================================================
+// fs_addons.txt mounts Momentum, CS:S and HL2 at boot and deliberately leaves
+// CS:GO and TF2 out: those two are 85% of every file the engine indexes and
+// cost 13 seconds of EVERY launch.  That trade is right and it has a cost --
+// 104 of the 1409 maps in the library need one of them anyway (62 CS:GO, 42
+// TF2, measured from the BSPs themselves), and until now the only way to find
+// out which was to load the map, see a checkerboard, and read the console.
+//
+// data/mapdeps.txt is the answer, computed offline by tools/mapdeps.py out of
+// each map's own texdata string lump: one "dep <mapname> <spec>" line per map
+// whose materials do not all resolve against the packs we already mount.  Read
+// here, one map load before anything of that map is located.
+//
+// The mount is the same add-only FS_Addon_Mount that fs_useaddons uses. It
+// appends at lowest priority and never frees a searchpath, which is the whole
+// reason it is safe to call at this point rather than only at boot -- see the
+// crash note on FS_UseAddons_f.  Lowest priority also means a CS:GO texture
+// can never outrank the CS:S or Momentum one a surf map was built against,
+// which is the ordering fs_addons.txt's own comments insist on.
+//
+// NOT CACHED, deliberately: it is five kilobytes once per map load, and
+// caching it would mean a freshly rebuilt index needed a restart to matter.
+// Same shape as fs_addons.txt on purpose -- plain text in the mod's own tree,
+// written by a tool and read by the engine.
+//
+// ftesurf (P183): the list is COLLECTED first and mounted second, because a map
+// may name more than one pack, so "which packs does this map want" is not known
+// until every dep line has been read.
+//
+// ftesurf (P184): the DROP pass does not happen here.  It used to, and that was
+// wrong twice over:
+//
+//   * SV_Map_f calls us at sv_ccmds.c:1026, which is BEFORE the COM_FCheckExists
+//     extension loop that decides whether the map exists at all.  While mounting
+//     was purely additive that ordering was harmless -- a mistyped `map` name
+//     just left a spare pack mounted.  Once it could also DROP, a typo unmounted
+//     the packs of the map you were still playing, and SV_Map_f's "Can't find"
+//     early-return never put them back.  So the drop now runs from
+//     FS_AutoUnmountStale, called from SV_SpawnServer, which is only reached once
+//     the load is committed.  It still runs before the world and its assets load,
+//     which is the part that has to see the smaller index.
+//
+//   * "we mounted it, so we may drop it" is not a stable fact.  FS_Addon_Mount
+//     RETURNS TRUE on its dup-skip path, so `fs_load steam:Team Fortress 2/tf`
+//     on a pack fs_automount already mounted succeeds, writes the line into
+//     fs_addons.txt and tells the user it will auto-remount next launch -- while
+//     our stale record still said the pack was ours to throw away.  The drop pass
+//     therefore re-checks fs_addons.txt at the moment it is about to unmount.
+#define FS_MAPDEPS_FILE "data/mapdeps.txt"
+#define FS_MAXAUTOMOUNT 8
+static char fs_automounted[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): resolved syspaths this code mounted
+static int fs_numautomounted;
+static char fs_automountwant[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P184): what the map now loading asked for
+static int fs_numautomountwant;
+static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
+{
+	fs_numautomounted = 0;
+	fs_numautomountwant = 0;
+}
+static qboolean FS_Addon_IsMounted(const char *syspath)
+{
+	searchpath_t *sp;
+	size_t len = strlen(syspath);
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		if (FS_Addon_IsFamily(sp, syspath, len))
+			return true;
+	return false;
+}
+//ftesurf (P184): has this pack been adopted into fs_addons.txt since we mounted it?
+//`fs_load` can promote an automounted pack to a permanent one behind our back (its
+//dup-skip returns true, so FS_Load_f saves the line and reports success), and after
+//that it is the user's, not ours.  Read rather than cached: fs_load rewrites the
+//file, and a cache would have to be invalidated from the very place that is the
+//problem.  Only ever runs on the drop path, a few KB at most.
+static qboolean FS_Addon_IsListed(const char *syspath)
+{
+	char *file, *line, *nl, *e;
+	char resolved[MAX_OSPATH];
+	qboolean found = false;
+
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (!file)
+		return false;
+	for (line = file; line && *line && !found; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+			*--e = 0;
+		if (!*line || line[0]=='#' || (line[0]=='/'&&line[1]=='/'))
+			continue;
+		//QUIET: an uninstalled game listed here is normal and already reported at boot.
+		if (FS_Addon_ResolveEx(line, resolved, sizeof(resolved), true) && !Q_strcasecmp(resolved, syspath))
+			found = true;
+	}
+	BZ_Free(file);
+	return found;
+}
+/*
+================================================================================
+ftesurf (P186): the runtime asset cache.
+
+WHAT IT IS FOR.  P175 mounts a map's Steam pack, P183/P184 give it back.  What
+neither fixes is that a REPEAT visit pays the mount again, and the mount is a
+fixed cost -- ~1.4s of directory walk and ~14MB of allocation for TF2's
+147,457-entry pak01_dir.vpk -- regardless of whether the map reads six files out
+of it or six thousand.  Every measured surf map reads a few hundred.  So: copy
+the ones it actually reads into <gamedir>_cache, and once we can PROVE the copy
+is complete, stop mounting the pack for that map at all.
+
+WHY OBSERVE INSTEAD OF PREDICT.  The plan for this step was to re-implement
+tools/mapdeps.py's dependency walk in C: texdata lumps -> .vmt -> its textures
+-> static props -> .mdl/.vvd/.vtx -> cdmaterials -> skybox.  Harvesting what the
+map ACTUALLY OPENED is both far less code and strictly more accurate, because it
+also catches everything no static walk can predict -- a lazily-loaded model, an
+asset pulled in by a cvar the player changed, the sky VMT indirection P181 added.
+The hook is one `if` at the bottom of FS_FLocateFile, which every read in the
+engine already funnels through.
+
+HOW COMPLETENESS IS PROVEN, which is the only part that is subtle.  An
+incomplete cache is worse than no cache: it renders the map with missing
+textures, which is complaint #1 of this entire workstream.  So a map is never
+trusted on the strength of one harvest.
+
+  visit 1  pack mounted.  Every file whose top hit is INSIDE the pack is copied
+           to <gamedir>_cache.  Manifest written with state 0.
+  visit 2  manifest is state 0, so the pack is mounted AGAIN.  But the cache
+           outranks it (see the mount in FS_ReloadPackFilesFlags), so every file
+           visit 1 caught now resolves from the cache and is NOT harvested.  The
+           harvest set therefore contains exactly what visit 1 MISSED.  Empty
+           set => the cache is complete => state 1.
+  visit 3+ state 1, so the pack is not mounted at all.
+
+The proof costs nothing to collect: "did anything reach the pack this time" is
+the natural by-product of the priority order, not an extra pass.  A map that
+declares a dependency but genuinely reads nothing out of the pack reaches state
+1 on visit 1, which is correct rather than a special case.
+
+This is "slow twice, fast forever" where the plan said "slow once".  That is a
+deliberate trade and it is the honest one: the alternative is trusting a single
+observation, whose failure mode is silently missing textures on visit 2.
+
+WHAT STILL INVALIDATES A MANIFEST.  The pack set for the map changing
+(mapdeps.txt regenerated), and the permanent addon set changing -- fs_load,
+fs_unload, a game installed or uninstalled -- because a file cached when nothing
+outranked it could be outranked afterwards.  The first is compared directly; the
+second is caught by a checksum of fs_addons.txt stored in the manifest.  Neither
+covers a Steam game being UPDATED under us; fs_cache_clear is the answer to that
+and is why an explicit purge exists.
+
+THREADING.  FS_Cache_Note runs on loader threads.  It allocates nothing: the
+name set lives in a fixed arena allocated once on the main thread, and running
+out marks the harvest incomplete rather than growing.  Everything else here is
+main-thread only.
+================================================================================
+*/
+#define FS_CACHE_MANIFESTDIR	"fscache"		//inside the cache searchpath, but not a name any Source content tree uses
+#define FS_CACHE_MAXFILES		24576			//largest measured per-map dependency set is ~6900 (what_is_this, 244MB)
+#define FS_CACHE_ARENA			(1024*1024)		//~20k names at the observed average length
+#define FS_CACHE_HASHSIZE		4096			//power of two; masked, not modulo'd
+#define FS_CACHE_MAXCOPY		(192*1024*1024)	//per-file sanity cap; nothing legitimate is near this
+#define FS_CACHE_SETTLE			2.0				//seconds of no new names before the drain starts
+#define FS_CACHE_TICKFILES		48				//per client frame, once settled...
+#define FS_CACHE_TICKBYTES		(2*1024*1024)	//...and no more than this, so the drain never shows as a hitch
+
+static char		*fs_hv_arena;		//NUL-separated names
+static size_t	 fs_hv_used;
+static int		*fs_hv_ofs;			//FS_CACHE_MAXFILES offsets into the arena, in insertion order
+static int		*fs_hv_chain;		//FS_CACHE_MAXFILES next-in-bucket indices, -1 terminated
+static int		*fs_hv_bucket;		//FS_CACHE_HASHSIZE heads, -1 empty
+static int		 fs_hv_num;			//names recorded for this map
+static int		 fs_hv_done;		//names already copied out
+/* ftesurf (P235): WHAT ACTUALLY HAPPENED TO EACH NAME.
+
+The manifest used to be a list of names SEEN and a claim, computed from those names, that
+the map could load from the cache alone.  It was never a claim about files, and the two
+came apart: surf_sodacity's manifest promises 526 files and 62 of them are not on disk --
+including materials/models/props/de_venice/venice_streetlight_1/venice_streetlight_1_lamp_off.vmt,
+which exists in CS:GO, is listed at line 295, and is the single material that map reports
+missing.  The manifest still said `state 1`, so fs_automount trusted it and did not mount
+CS:GO, and nothing downstream could tell the difference.
+
+The mechanism was FS_Cache_CopySome's six `continue` paths, none of which the manifest
+heard about, plus FS_Cache_PrevHas skipping the name forever afterwards on the strength of
+the previous visit having LISTED it.  One failed copy, permanently claimed.
+
+So each name now carries what became of it, and the manifest is written from that. */
+#define FS_HV_UNKNOWN	0	//not copied, for any of the reasons below: blocks completeness
+#define FS_HV_CACHED	1	//the bytes are in <gamedir>_cache/<packkey>/<name>
+#define FS_HV_ELSEWHERE	2	//served by a searchpath that is NOT one of the packs we mounted -- the map's
+							//own pakfile, or the base gamedir -- so it will still be there on a cached
+							//load and the cache does not need a copy.  Not listed, does not block.
+static qbyte	*fs_hv_state;		//FS_CACHE_MAXFILES of the above, parallel to fs_hv_ofs
+static qboolean	 fs_hv_overflow;	//ran out of arena/slots, so "nothing was missed" cannot be claimed
+static qboolean	 fs_hv_armed;		//read unlocked on the hot path; only ever set with the arena allocated
+static void		*fs_hv_mutex;
+static float	 fs_hv_lastadd;
+static char		 fs_hv_map[MAX_QPATH];		//map the current harvest belongs to
+static char		 fs_hv_pending[MAX_QPATH];	//map the load in flight is for; promoted once the load commits
+static char		*fs_hv_copybuf;
+static size_t	 fs_hv_copysz;
+static int		 fs_hv_files;		//copied this map
+static qofs_t	 fs_hv_bytes;		//copied this map
+static char		 fs_hv_packs[FS_MAXAUTOMOUNT][MAX_OSPATH];
+static int		 fs_hv_numpacks;
+static unsigned int fs_hv_sig;
+
+//case-insensitive FNV-1a, and it must fold '\\' the same way FS_GetCleanPath does or
+//the same file could occupy two slots.
+static unsigned int FS_Cache_HashName(const char *s)
+{
+	unsigned int h = 2166136261u;
+	for (; *s; s++)
+	{
+		unsigned char c = (unsigned char)*s;
+		if (c >= 'A' && c <= 'Z')
+			c += 'a'-'A';
+		else if (c == '\\')
+			c = '/';
+		h = (h ^ c) * 16777619u;
+	}
+	return h;
+}
+
+//A checksum of fs_addons.txt, stored in every manifest.  That file is exactly what
+//decides which permanent addons are mounted and in what order, so if it changes, a
+//file we cached because nothing outranked it might now be outranked -- and every
+//manifest has to be re-proven.  fs_load and fs_unload both rewrite the file, so this
+//needs no cooperation from them.
+static unsigned int FS_Cache_AddonSig(void)
+{
+	unsigned int h = 2166136261u;
+	qofs_t sz = 0, i;
+	qbyte *f = FS_LoadMallocFile(FS_ADDONS_FILE, &sz);
+	if (f)
+	{
+		for (i = 0; i < sz; i++)
+			h = (h ^ f[i]) * 16777619u;
+		BZ_Free(f);
+	}
+	return h;
+}
+
+static void FS_Cache_ManifestName(const char *map, char *out, size_t outsize)
+{
+	Q_snprintfz(out, outsize, FS_CACHE_MANIFESTDIR "/%s.txt", map);
+}
+
+/* ftesurf (P197): one directory per pack, instead of one flat tree for all of them.
+
+P186 wrote every harvested file to <gamedir>_cache/<name>, so TF2's and CS:GO's copies of
+the same filename landed on the same path with nothing left to tell them apart and the last
+writer winning.  The key below namespaces them.
+
+It is BOTH readable and unique on purpose.  The last two components of the resolved system
+path are what a person recognises ("Team Fortress 2/tf" -> team_fortress_2_tf), and eight
+hex digits of FNV-1a over the whole path are what stop two installs whose tails agree
+(a second Steam library, or "common/X/tf" against "backup/X/tf") sharing a directory.  A
+key derived from the pack SPEC instead would not do: two different specs can resolve to one
+game, which is exactly why fs_automounted[] holds resolved paths. */
+static void FS_Cache_PackKey(const char *syspath, char *out, size_t outsize)
+{
+	size_t len = strlen(syspath);
+	size_t start = 0, i, o = 0;
+	int slashes = 0;
+	unsigned int h;
+
+	while (len && (syspath[len-1] == '/' || syspath[len-1] == '\\'))
+		len--;						//a trailing slash is not a component
+	for (i = len; i > 0; i--)
+	{
+		if (syspath[i-1] == '/' || syspath[i-1] == '\\')
+			if (++slashes == 2)
+			{
+				start = i;
+				break;
+			}
+	}
+
+	for (i = start; i < len && o+10 < outsize; i++)
+	{
+		char c = syspath[i];
+		if (c >= 'A' && c <= 'Z')
+			c += 'a'-'A';
+		if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')))
+			c = '_';
+		if (c == '_' && (!o || out[o-1] == '_'))
+			continue;				//no leading or doubled underscores; these paths are noisy enough
+		out[o++] = c;
+	}
+	while (o && out[o-1] == '_')
+		o--;
+	out[o] = 0;
+
+	h = FS_Cache_HashName(syspath);	//case-folded and '\\'-folded, so one install always keys the same
+	Q_snprintfz(out+o, outsize-o, "%s%08x", o?"_":"pack_", h);
+}
+
+//The absolute system path of one pack's cache directory.  FS_Addon_Mount takes an absolute
+//path directly (FS_Addon_ResolveEx's arg[1]==':' arm), so this is all the mount needs.
+static qboolean FS_Cache_PackDir(const char *syspath, char *out, size_t outsize)
+{
+	char key[MAX_QPATH];
+	FS_Cache_PackKey(syspath, key, sizeof(key));
+	return FS_SystemPath(key, FS_GAMECACHE, out, (int)outsize);
+}
+
+static int QDECL FS_Cache_AnyFileVisit(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	*(qboolean*)parm = true;
+	return false;	//one is enough
+}
+//Does this pack's cache directory actually hold anything?  A manifest that says "proven"
+//is worthless if someone deleted the tree underneath it, and the failure mode of trusting
+//it is a map rendered with missing textures -- complaint #1 of this whole workstream.
+static qboolean FS_Cache_PackDirHasFiles(const char *syspath)
+{
+	char dir[MAX_OSPATH];
+	qboolean found = false;
+	if (!FS_Cache_PackDir(syspath, dir, sizeof(dir)))
+		return false;
+	Sys_EnumerateFiles(dir, "*", FS_Cache_AnyFileVisit, &found, NULL);
+	return found;
+}
+
+//Is this automounted path one of ours rather than a real Steam game?  Answered by location
+//rather than by a parallel bookkeeping array, because P184's drop pass memmoves
+//fs_automounted[] and a second array would have to be kept in step with it forever.
+static qboolean FS_Cache_IsOurDir(const char *syspath)
+{
+	char root[MAX_OSPATH];
+	size_t len;
+	if (!FS_SystemPath("", FS_GAMECACHE, root, sizeof(root)))
+		return false;
+	len = strlen(root);
+	while (len && (root[len-1] == '/' || root[len-1] == '\\'))
+		len--;
+	return len && !Q_strncasecmp(syspath, root, len)
+			&& (syspath[len] == '/' || syspath[len] == '\\' || !syspath[len]);
+}
+
+/* ftesurf (P197): the previous visit's name set, and why completeness is now a set
+comparison rather than a priority trick.
+
+P186 proved a map complete by mounting the pack again on visit 2 and observing that nothing
+reached it -- which only works because the cache outranked the pack, i.e. because of the
+mount placement that turns out to be wrong.  With the cache mounted in the pack's own slot
+that observation is unavailable, and it should be: the proof should not depend on an
+ordering the rest of the design is trying to get rid of.
+
+So visit 1 records the names it harvested INTO the manifest, and visit 2 -- which mounts the
+pack again, with no cache dir in the way -- is complete when its own set is a subset of
+that.  Same guarantee, no dependence on priority, and it also tells the copy pass which
+names are new, so a confirming visit re-copies nothing. */
+static char	 *fs_hv_prev;		//the previous manifest's name list, NUL-separated, Z_Malloc'd
+static char	**fs_hv_previdx;	//pointers into it, sorted, for bsearch
+static int	  fs_hv_prevnum;
+
+static int QDECL FS_Cache_PrevSort(const void *a, const void *b)
+{
+	return Q_strcasecmp(*(const char*const*)a, *(const char*const*)b);
+}
+static qboolean FS_Cache_PrevHas(const char *name)
+{
+	int lo = 0, hi = fs_hv_prevnum-1;
+	while (lo <= hi)
+	{
+		int mid = (lo+hi)>>1;
+		int c = Q_strcasecmp(name, fs_hv_previdx[mid]);
+		if (!c)
+			return true;
+		if (c < 0)
+			hi = mid-1;
+		else
+			lo = mid+1;
+	}
+	return false;
+}
+static void FS_Cache_PrevFree(void)
+{
+	Z_Free(fs_hv_prev);
+	Z_Free(fs_hv_previdx);
+	fs_hv_prev = NULL;
+	fs_hv_previdx = NULL;
+	fs_hv_prevnum = 0;
+}
+
+static void FS_Cache_ResetSet(void)
+{
+	int i;
+	fs_hv_num = fs_hv_done = 0;
+	fs_hv_used = 0;
+	fs_hv_overflow = false;
+	if (fs_hv_bucket)
+		for (i = 0; i < FS_CACHE_HASHSIZE; i++)
+			fs_hv_bucket[i] = -1;
+	if (fs_hv_state)
+		memset(fs_hv_state, FS_HV_UNKNOWN, FS_CACHE_MAXFILES);	//ftesurf (P235)
+}
+
+//Allocated once, on the main thread, and never grown -- FS_Cache_Note must not allocate.
+static qboolean FS_Cache_Alloc(void)
+{
+	if (fs_hv_arena)
+		return true;
+	if (!fs_hv_mutex)
+		return false;
+	fs_hv_arena  = Z_Malloc(FS_CACHE_ARENA);
+	fs_hv_ofs    = Z_Malloc(sizeof(int)*FS_CACHE_MAXFILES);
+	fs_hv_chain  = Z_Malloc(sizeof(int)*FS_CACHE_MAXFILES);
+	fs_hv_bucket = Z_Malloc(sizeof(int)*FS_CACHE_HASHSIZE);
+	fs_hv_state  = Z_Malloc(FS_CACHE_MAXFILES);	//ftesurf (P235)
+	if (!fs_hv_arena || !fs_hv_ofs || !fs_hv_chain || !fs_hv_bucket || !fs_hv_state)
+		return false;
+	FS_Cache_ResetSet();
+	return true;
+}
+
+//The hot-path hook, called from the bottom of FS_FLocateFile, possibly on a loader thread.
+static void FS_Cache_Note(const char *fname, searchpath_t *sp)
+{
+	unsigned int h;
+	int i;
+	size_t l;
+
+	if (!fs_hv_armed || !(sp->flags & SPF_HARVEST))
+		return;		//two loads and a mask for every lookup in the engine; everything else is behind them
+
+	l = strlen(fname);
+	if (!l || l >= MAX_QPATH)
+		return;
+	if (!Sys_LockMutex(fs_hv_mutex))
+		return;
+
+	h = FS_Cache_HashName(fname) & (FS_CACHE_HASHSIZE-1);
+	for (i = fs_hv_bucket[h]; i >= 0; i = fs_hv_chain[i])
+		if (!Q_strcasecmp(fs_hv_arena + fs_hv_ofs[i], fname))
+			break;
+	if (i < 0)
+	{
+		if (fs_hv_num >= FS_CACHE_MAXFILES || fs_hv_used + l + 1 > FS_CACHE_ARENA)
+			fs_hv_overflow = true;	//no growth from this thread; the map just does not get to claim completeness
+		else
+		{
+			i = fs_hv_num++;
+			fs_hv_ofs[i] = (int)fs_hv_used;
+			memcpy(fs_hv_arena + fs_hv_used, fname, l+1);
+			fs_hv_used += l+1;
+			fs_hv_chain[i] = fs_hv_bucket[h];
+			fs_hv_bucket[h] = i;
+			fs_hv_lastadd = (float)realtime;
+		}
+	}
+
+	Sys_UnlockMutex(fs_hv_mutex);
+}
+
+//Copy up to maxfiles/maxbytes of the outstanding set into the cache.  Main thread only.
+static void FS_Cache_CopySome(int maxfiles, size_t maxbytes)
+{
+	flocation_t loc;
+	vfsfile_t *f, *w;
+	const char *name;
+	size_t did = 0;
+	qofs_t flen;
+	int pk;
+	char dest[MAX_OSPATH];	//ftesurf (P235): the SYSTEM path now -- see the write below
+
+	while (fs_hv_done < fs_hv_num && maxfiles > 0 && did < maxbytes)
+	{
+		int idx = fs_hv_done++;
+		name = fs_hv_arena + fs_hv_ofs[idx];
+		maxfiles--;
+
+		//ftesurf (P197): a name the previous visit already filed is already on disk, so a
+		//confirming visit copies NOTHING and costs no I/O at all.  It still has to be
+		//counted by the caller's subset test, which is why this skip is here and not in
+		//FS_Cache_Note -- the set is the proof, the copy is just the payload.
+		//
+		//ftesurf (P235): "already on disk" is only true because the manifest now lists what
+		//was WRITTEN rather than what was seen, and FS_Cache_LoadPrev refuses to read a v2
+		//one.  Under v2 this line is what turned a single failed copy into a permanent claim.
+		if (FS_Cache_PrevHas(name))
+		{
+			fs_hv_state[idx] = FS_HV_CACHED;
+			continue;
+		}
+
+		//Re-located rather than remembered: a searchpath_t* held across a map load could
+		//have been freed, and re-asking is also the check we want.  If the top hit is no
+		//longer inside a harvestable pack then something better provides the file now, and
+		//caching it would put a redundant copy where it can only ever be shadowed.
+		if (!FS_FLocateFile(name, FSLF_IFFOUND|FSLF_DONTREFERENCE, &loc) || !loc.search)
+		{
+			Con_DPrintf("fs_cache: %s does not resolve any more; not cached\n", name);
+			continue;
+		}
+		if (!(loc.search->flags & SPF_HARVEST))
+		{
+			//Served by something that is not one of the packs we mounted -- the map's own
+			//pakfile, or the base gamedir -- and both of those are still there on a cached
+			//load.  Nothing to copy, and nothing that should stop the map claiming the cache.
+			fs_hv_state[idx] = FS_HV_ELSEWHERE;
+			continue;
+		}
+
+		//ftesurf (P197): WHICH pack served it decides which directory it is filed under.
+		//Taken from the location rather than guessed, and taken here rather than in
+		//FS_Cache_Note because this is where a searchpath_t is legitimately in hand.
+		for (pk = 0; pk < fs_hv_numpacks; pk++)
+			if (FS_Addon_IsFamily(loc.search, fs_hv_packs[pk], strlen(fs_hv_packs[pk])))
+				break;
+		if (pk == fs_hv_numpacks)
+		{
+			fs_hv_state[idx] = FS_HV_ELSEWHERE;
+			continue;	//SPF_HARVEST but not one of ours any more; do not invent a home for it
+		}
+
+		f = FS_OpenReadLocation(name, &loc);
+		if (!f)
+		{
+			Con_DPrintf("fs_cache: %s located but would not open; not cached\n", name);
+			continue;
+		}
+		flen = VFS_GETLEN(f);	//not loc.len: FS_OpenReadLocation may have wrapped a filter around it
+		if (flen > FS_CACHE_MAXCOPY)
+		{
+			VFS_CLOSE(f);
+			Con_DPrintf("fs_cache: %s is over the %i-byte per-file cap; not cached\n", name, FS_CACHE_MAXCOPY);
+			continue;
+		}
+		if (flen + 1 > fs_hv_copysz)
+		{
+			Z_Free(fs_hv_copybuf);
+			fs_hv_copysz = (size_t)flen + 1;
+			fs_hv_copybuf = Z_Malloc(fs_hv_copysz);
+			if (!fs_hv_copybuf)
+			{
+				fs_hv_copysz = 0;
+				VFS_CLOSE(f);
+				Con_DPrintf("fs_cache: no memory for %s; not cached\n", name);
+				continue;
+			}
+		}
+		if (flen && VFS_READ(f, fs_hv_copybuf, (int)flen) != (int)flen)
+		{
+			VFS_CLOSE(f);
+			Con_DPrintf("fs_cache: short read on %s; not cached\n", name);
+			continue;	//the map stays unproven so the next visit tries again
+		}
+		VFS_CLOSE(f);
+
+		/* Not FS_WriteFile, and not COM_WriteFile.
+
+		COM_WriteFile Sys_Printf's every name and then calls FS_FlushFSHashWritten, which
+		takes COM_WorkerLock and walks every searchpath.  Doing that thousands of times would
+		be both a wall of console spam and a stall.  The hash does not need updating either --
+		the pack is still mounted and already resolves these names to byte-identical content;
+		the next rebuild picks the cache up.
+
+		ftesurf (P235): AND FS_WriteFile CANNOT EXPRESS THIS PATH.  It goes through FS_OpenVFS,
+		which cleans the name into a char[MAX_QPATH] (fs.c:3287) -- 128 bytes.  The destination
+		here is the 45-character pack key plus a Source content path, and Source content paths
+		run to ninety-odd characters, so the sum crosses 128 for exactly the deep ones:
+
+		  materials/models/props/de_venice/venice_streetlight_1/venice_streetlight_1.vmt      124  written
+		  materials/models/props/de_venice/.../venice_streetlight_1_lamp_off.vmt              133  REFUSED
+		  materials/models/props/de_nuke/hr_nuke/chainlink_fence_001/chainlink_fence_001.vmt  128  REFUSED
+
+		FS_GetCleanPath refuses with a THROTTLED "filename too long", so 62 of surf_sodacity's
+		526 files silently never arrived -- among them the one material that map reports
+		missing, which is the whole reported bug.  P197 introduced it by prefixing the pack key
+		onto the relative name; the length was never anybody's decision.
+
+		The write therefore goes to the system path directly, exactly as FS_OpenWithFriends
+		does (fs.c:3232-3240): the pack DIRECTORY is short enough to survive cleaning, and the
+		content name is appended to it afterwards.  Reads were never affected -- the cache
+		directory is mounted as a searchpath, so the name the engine asks for is the content
+		path alone. */
+		if (!FS_Cache_PackDir(fs_hv_packs[pk], dest, sizeof(dest)))
+		{
+			Con_DPrintf("fs_cache: no cache directory for %s; %s not cached\n", fs_hv_packs[pk], name);
+			continue;
+		}
+		FS_CleanDir(dest, sizeof(dest));
+		Q_strncatz(dest, name, sizeof(dest));
+		COM_CreatePath(dest);
+		w = VFSOS_Open(dest, "wbp");
+		if (!w)
+		{
+			Con_DPrintf("fs_cache: could not write %s; not cached\n", dest);
+			continue;
+		}
+		if (VFS_WRITE(w, fs_hv_copybuf, (int)flen) != (int)flen)
+		{
+			VFS_CLOSE(w);
+			Con_DPrintf("fs_cache: short write on %s; not cached\n", dest);
+			continue;	//a half-written file in the cache is worse than none: leave it unproven
+		}
+		VFS_CLOSE(w);
+		fs_hv_state[idx] = FS_HV_CACHED;	//ftesurf (P235): the ONLY place this is earned by a copy
+		fs_hv_files++;
+		fs_hv_bytes += flen;
+		did += (size_t)flen;
+	}
+}
+
+/* ftesurf (P197/P235): manifest v3 -- the same header, plus the FILE set the proof needs.
+
+Sized from what can actually be written rather than guessed at.  P184's fs_addons.txt
+truncation was a fixed buffer plus Q_strncatz, and it silently lost the line it was adding;
+this one has a name list in it, which is 25 names for surf_utopia and ~6,900 for the worst
+map in the library, so a fixed buffer would be that bug waiting to happen.  The bound is
+exact: header + one "pack <path>\n" per pack + every previous name + every current name,
+each with an "f " and a newline. */
+static qboolean FS_Cache_WriteManifest(void)
+{
+	char path[MAX_QPATH];
+	char *out;
+	size_t outsize, used = 0;
+	int i, n = 0;
+	qboolean complete;
+
+	if (!*fs_hv_map)
+		return false;
+
+	/* The completeness proof.  Visit 1 has no previous set, so a map that needed anything at
+	all fails it and comes back for visit 2; a map that needed NOTHING from its pack passes
+	immediately, which is right and is what P186 did too.  Visit 2 mounts the pack again with
+	no cache in the way, so it sees the same names, and every one of them is already known.
+
+	An overflowed name set can never claim it: the names dropped on the floor are exactly the
+	ones we do not know about.
+
+	ftesurf (P235): AND THE FILE HAS TO BE THERE.  The subset test above proves the dependency
+	set has stopped moving; it says nothing at all about whether the bytes were written, and
+	FS_Cache_CopySome has six ways to fail to write them.  surf_sodacity passed this test with
+	62 of its 526 files absent.  A name is now only allowed to satisfy the proof if it was
+	copied (FS_HV_CACHED) or provably does not need copying (FS_HV_ELSEWHERE).
+
+	This is the conservative direction on purpose: the failure it prevents is a map rendered
+	with missing textures, and the failure it can cause is a map mounting its real pack -- a
+	slower load instead of a wrong picture. */
+	complete = !fs_hv_overflow;
+	for (i = 0; i < fs_hv_num && complete; i++)
+	{
+		//ftesurf (P235): SAY WHICH NAME STOPPED IT.  "one more visit to prove it" on visit
+		//five is the same sentence as on visit one and carries none of the difference, and
+		//working out which of several hundred names is holding a map back is otherwise a
+		//question only a debugger can answer.
+		if (fs_hv_state[i] == FS_HV_UNKNOWN)
+		{
+			Con_DPrintf("fs_cache: %s not proven: %s was never copied\n",
+						fs_hv_map, fs_hv_arena + fs_hv_ofs[i]);
+			complete = false;
+		}
+		else if (fs_hv_state[i] == FS_HV_CACHED && !FS_Cache_PrevHas(fs_hv_arena + fs_hv_ofs[i]))
+		{
+			Con_DPrintf("fs_cache: %s not proven: %s is new this visit\n",
+						fs_hv_map, fs_hv_arena + fs_hv_ofs[i]);
+			complete = false;	//copied for the first time this visit: the set has not settled yet
+		}
+	}
+
+	//ftesurf (P235): the shape of the visit in one line, because "one more visit to prove it"
+	//is the same sentence on visit one and visit five and carries none of the difference.
+	{
+		int st[3] = {0,0,0}, prevhas = 0;
+		for (i = 0; i < fs_hv_num; i++)
+		{
+			if (fs_hv_state[i] < 3)
+				st[fs_hv_state[i]]++;
+			if (FS_Cache_PrevHas(fs_hv_arena + fs_hv_ofs[i]))
+				prevhas++;
+		}
+		Con_DPrintf("fs_cache: %s -- %i noted (%i in the cache, %i served elsewhere, %i not copied), "
+					"%i already filed, prev %i, overflow %i -> %s\n",
+					fs_hv_map, fs_hv_num, st[FS_HV_CACHED], st[FS_HV_ELSEWHERE], st[FS_HV_UNKNOWN],
+					prevhas, fs_hv_prevnum, fs_hv_overflow?1:0, complete?"proven":"not proven");
+	}
+
+	outsize = 256 + fs_hv_numpacks*(MAX_OSPATH+8);
+	for (i = 0; i < fs_hv_prevnum; i++)
+		outsize += strlen(fs_hv_previdx[i]) + 4;
+	outsize += fs_hv_used + fs_hv_num*4;
+	out = Z_Malloc(outsize);
+	if (!out)
+		return false;
+
+	//ftesurf (P235): v3 -- every "f " line below is a file that is ON DISK in the cache, not a
+	//name that was merely asked for.  The version is what makes the previous visit's list safe
+	//to trust in FS_Cache_CopySome, so a v2 manifest must not be read as one: bumping it here
+	//and refusing 2 in LoadPrev/MapIsComplete re-proves every map already cached, once.
+	Q_snprintfz(out, outsize, "FTESURF-CACHE 3\n");
+	used = strlen(out);
+	for (i = 0; i < fs_hv_numpacks; i++)
+	{
+		Q_snprintfz(out+used, outsize-used, "pack %s\n", fs_hv_packs[i]);
+		used += strlen(out+used);
+	}
+
+	//The union of what was already known and what this visit added.  Written after the pack
+	//lines so a human opening one sees the identity before the inventory.
+	for (i = 0; i < fs_hv_prevnum; i++, n++)
+	{
+		Q_snprintfz(out+used, outsize-used, "f %s\n", fs_hv_previdx[i]);
+		used += strlen(out+used);
+	}
+	for (i = 0; i < fs_hv_num; i++)
+	{
+		const char *name = fs_hv_arena + fs_hv_ofs[i];
+		if (FS_Cache_PrevHas(name))
+			continue;
+		if (fs_hv_state[i] != FS_HV_CACHED)
+			continue;	//ftesurf (P235): not written, so it is not in the cache and must not be listed as if it were
+		Q_snprintfz(out+used, outsize-used, "f %s\n", name);
+		used += strlen(out+used);
+		n++;
+	}
+
+	//"copied" is what the LAST visit had to copy, which on a confirming visit is correctly
+	//zero; "files" is the size of the set.  Nothing reads either back -- they are there so the
+	//manifest explains itself when you open one.  Written after the list rather than before it
+	//because n is not known until the list is built, and the parser is order-free by design.
+	Q_snprintfz(out+used, outsize-used, "map %s\nstate %i\nsig %u\ncopied %i\nfiles %i\n",
+				fs_hv_map, complete?1:0, fs_hv_sig, fs_hv_files, n);
+	used += strlen(out+used);
+
+	FS_Cache_ManifestName(fs_hv_map, path, sizeof(path));
+	FS_WriteFile(path, out, (int)used, FS_GAMECACHE);
+	Z_Free(out);
+	return complete;
+}
+
+//Load the previous visit's file set for `map`.  Only v3 manifests are read: a v1 (P186's, in
+//the old flat tree) has neither the list nor the per-pack directories, and a v2 lists names
+//that were asked for rather than files that were written.  Either is treated as absent and
+//the map re-harvests from scratch.
+static void FS_Cache_LoadPrev(const char *map)
+{
+	char path[MAX_QPATH];
+	char *file, *line, *nl;
+	int i, n = 0;
+	size_t used = 0;
+
+	FS_Cache_PrevFree();
+
+	FS_Cache_ManifestName(map, path, sizeof(path));
+	file = FS_MallocFile(path, FS_GAMECACHE, NULL);
+	if (!file)
+		return;
+	//ftesurf (P235): 3, not 2.  A v2 list names files that were merely asked for, and
+	//FS_Cache_CopySome trusts this list to mean "already on disk" -- which is how one failed
+	//copy became a permanent claim.  Refusing it costs each already-cached map one re-harvest.
+	if (strncmp(file, "FTESURF-CACHE ", 14) || atoi(file+14) != 3)
+	{
+		BZ_Free(file);
+		return;
+	}
+
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			nl++;
+		if (!strncmp(line, "f ", 2))
+			n++;
+	}
+	if (!n)
+	{
+		BZ_Free(file);
+		return;
+	}
+
+	fs_hv_prev    = Z_Malloc(strlen(file)+1);
+	fs_hv_previdx = Z_Malloc(sizeof(char*)*n);
+	if (!fs_hv_prev || !fs_hv_previdx)
+	{
+		FS_Cache_PrevFree();
+		BZ_Free(file);
+		return;
+	}
+
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		for (i = (int)strlen(line); i > 0 && (line[i-1]=='\r'||line[i-1]==' '); )
+			line[--i] = 0;
+		if (strncmp(line, "f ", 2) || !line[2])
+			continue;
+		fs_hv_previdx[fs_hv_prevnum++] = fs_hv_prev + used;
+		strcpy(fs_hv_prev + used, line+2);
+		used += strlen(line+2) + 1;
+	}
+	BZ_Free(file);
+
+	qsort(fs_hv_previdx, fs_hv_prevnum, sizeof(*fs_hv_previdx), FS_Cache_PrevSort);
+}
+
+//Can this map load with the cache alone?  Read at mount time, from the manifest on disk.
+static qboolean FS_Cache_MapIsComplete(const char *map, char wantpath[][MAX_OSPATH], int numwant)
+{
+	char path[MAX_QPATH];
+	char packs[FS_MAXAUTOMOUNT][MAX_OSPATH];
+	char *file, *line, *nl;
+	int numpacks = 0, state = 0, i, j, nresolved = 0;
+	unsigned int sig = 0;
+	qboolean header = false;
+
+	FS_Cache_ManifestName(map, path, sizeof(path));
+	file = FS_MallocFile(path, FS_GAMECACHE, NULL);
+	if (!file)
+		return false;
+
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		for (i = (int)strlen(line); i > 0 && (line[i-1]=='\r'||line[i-1]==' '); )
+			line[--i] = 0;
+
+		if (!strncmp(line, "FTESURF-CACHE ", 14))
+			//ftesurf (P197): a v1 manifest describes the old flat tree; re-harvest instead.
+			//ftesurf (P235): and a v2 one lists names rather than files -- surf_sodacity's
+			//promised 526 and delivered 464 -- so it cannot be trusted either.
+			header = (atoi(line+14) == 3);
+		else if (!strncmp(line, "state ", 6))
+			state = atoi(line+6);
+		else if (!strncmp(line, "sig ", 4))
+			sig = (unsigned int)strtoul(line+4, NULL, 10);
+		else if (!strncmp(line, "pack ", 5) && numpacks < FS_MAXAUTOMOUNT)
+			Q_strncpyz(packs[numpacks++], line+5, sizeof(packs[0]));
+	}
+	BZ_Free(file);
+
+	if (!header || state != 1)
+		return false;
+	if (sig != FS_Cache_AddonSig())
+		return false;	//the permanent addon set moved under us; re-prove it
+
+	//The pack set must match exactly, in both directions.  A spec that did not resolve is
+	//excluded from both sides: it could not have been harvested from and cannot be mounted now.
+	for (i = 0; i < numwant; i++)
+	{
+		if (!*wantpath[i])
+			continue;
+		nresolved++;
+		for (j = 0; j < numpacks; j++)
+			if (!Q_strcasecmp(packs[j], wantpath[i]))
+				break;
+		if (j == numpacks)
+			return false;
+
+		//ftesurf (P197): and the files have to still be there.  The manifest is a claim about
+		//a directory, and someone can delete that directory (or copy the manifest between
+		//installs) without the claim noticing.  Trusting it then renders the map with missing
+		//textures, which is the exact failure this whole workstream started from, so it is
+		//worth one directory probe per pack per load to refuse instead.
+		if (!FS_Cache_PackDirHasFiles(wantpath[i]))
+		{
+			Con_DPrintf("fs_cache: %s claims %s but its cache directory is empty; re-harvesting\n", map, wantpath[i]);
+			return false;
+		}
+	}
+	if (nresolved != numpacks)
+		return false;
+
+	return true;
+}
+
+/* ftesurf (P197): mount one pack's cache directory INSTEAD of the pack, in the pack's slot.
+
+This is the whole of the ordering fix.  Every addon searchpath is appended at the tail in
+call order (FS_AddPathHandle's SPF_ADDON arm), so calling this from exactly where
+FS_AutoMountForMap would have called FS_Addon_Mount puts the cached copies at exactly the
+depth the pack would have had.  Nothing above them moves, nothing below them moves, and the
+cache can no longer outrank the fs_addons.txt games -- not because a second rule says so,
+but because there is no longer anywhere else for it to go.
+
+FS_Addon_Mount takes an absolute path, dedups on logicalpath, and the caller records the
+result in fs_automounted[] just as it does for a real pack, so P183's drop pass unmounts
+these again when a later map does not want them.  No new searchpath plumbing at all. */
+static qboolean FS_Cache_MountFor(const char *syspath, char *dirout, size_t dirsize)
+{
+	if (!FS_Cache_PackDir(syspath, dirout, dirsize))
+		return false;
+	return FS_Addon_Mount(dirout, ~0u);
+}
+
+//Called once the incoming map is committed, from FS_AutoUnmountStale, AFTER the drop pass
+//so the harvestable set is final.  Recomputes SPF_HARVEST from scratch every map: the flag
+//is on searchpaths, and which searchpaths are ours changes on every load.
+static void FS_Cache_BeginMap(void)
+{
+	searchpath_t *sp;
+	size_t len;
+	int i;
+
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		sp->flags &= ~SPF_HARVEST;
+
+	fs_hv_armed = false;
+	Q_strncpyz(fs_hv_map, fs_hv_pending, sizeof(fs_hv_map));
+	fs_hv_files = 0;
+	fs_hv_bytes = 0;
+	fs_hv_numpacks = 0;
+	FS_Cache_ResetSet();
+	FS_Cache_PrevFree();
+
+	if (!fs_assetcache.ival || !*fs_hv_map || !fs_numautomounted)
+		return;		//nothing of ours is mounted, so there is nothing this map could need cached
+	if (!FS_Cache_Alloc())
+		return;
+
+	for (i = 0; i < fs_numautomounted; i++)
+	{
+		//ftesurf (P197): fs_automounted[] now holds cache directories as well as packs, since
+		//a cached load mounts one in the pack's place and P183's drop pass has to be able to
+		//take it away again.  Harvesting out of one would copy the cache onto itself and, worse,
+		//would let a confirming visit "prove" a map against its own output.  A cached load has
+		//nothing to harvest, and if NOTHING real is mounted the harvest does not arm at all.
+		if (FS_Cache_IsOurDir(fs_automounted[i]))
+			continue;
+		len = strlen(fs_automounted[i]);
+		for (sp = com_searchpaths; sp; sp = sp->next)
+			if (FS_Addon_IsFamily(sp, fs_automounted[i], len))
+				sp->flags |= SPF_HARVEST;	//the gamedir, its sub-packages, its _downloads and _hd siblings
+		if (fs_hv_numpacks < FS_MAXAUTOMOUNT)
+			Q_strncpyz(fs_hv_packs[fs_hv_numpacks++], fs_automounted[i], sizeof(fs_hv_packs[0]));
+	}
+	if (!fs_hv_numpacks)
+		return;
+
+	//ftesurf (P197): what the last visit filed, so this one knows what is new and can decide
+	//whether it learned anything.  See FS_Cache_WriteManifest for why that is the proof.
+	FS_Cache_LoadPrev(fs_hv_map);
+
+	fs_hv_sig = FS_Cache_AddonSig();
+	fs_hv_armed = true;
+}
+
+//Called at the top of FS_AutoMountForMap, i.e. at the START of the next load, while the pack
+//the harvest was reading from is still mounted.  That is the last moment the copy can be made,
+//and it is also before anything of the NEW map has been touched, so the set cannot be polluted
+//by the incoming map's BSP.
+static void FS_Cache_EndMap(void)
+{
+	qboolean complete;
+	if (!fs_hv_armed)
+		return;
+	FS_Cache_CopySome(0x7fffffff, (size_t)-1);
+	complete = FS_Cache_WriteManifest();
+	//ftesurf (P197): say which of the two states it reached, because "0 files" on a confirming
+	//visit is the SUCCESS case and read as a failure otherwise -- nothing was copied precisely
+	//because nothing new was seen, which is the proof.
+	if (fs_hv_files || fs_hv_num)
+	{
+		char sz[64];
+		Con_Printf("fs_cache: %s, %i file%s (%s), %i name%s known -- %s\n",
+					fs_hv_map, fs_hv_files, fs_hv_files==1?"":"s",
+					FS_AbbreviateSize(sz, sizeof(sz), fs_hv_bytes),
+					fs_hv_num, fs_hv_num==1?"":"s",
+					fs_hv_overflow?"set overflowed, will re-harvest":
+					complete?"proven, next visit mounts the cache":"one more visit to prove it");
+	}
+	else
+		Con_DPrintf("fs_cache: %s needed nothing from its pack; marked complete\n", fs_hv_map);
+	fs_hv_armed = false;
+}
+
+//Drain a little at a time, from the client frame, once the set has stopped growing.  This is
+//what makes "play one map, then quit" still populate the cache -- the map-change drain alone
+//would never run for that player.
+void FS_Cache_Tick(void)
+{
+	if (!fs_hv_armed || fs_hv_done >= fs_hv_num)
+		return;
+	if (realtime - fs_hv_lastadd < FS_CACHE_SETTLE)
+		return;
+	FS_Cache_CopySome(FS_CACHE_TICKFILES, FS_CACHE_TICKBYTES);
+	if (fs_hv_done >= fs_hv_num)
+		FS_Cache_WriteManifest();	//so a quit here is not wasted; rewritten with final numbers at map end
+}
+
+//The searchpaths this harvest was reading from are about to be freed (fs_restart, shutdown).
+//Whatever has not been copied yet cannot be, so drop the set rather than let the next map
+//write a manifest claiming it.
+static void FS_Cache_Forget(void)
+{
+	fs_hv_armed = false;
+	FS_Cache_ResetSet();
+	FS_Cache_PrevFree();
+	*fs_hv_map = 0;
+	*fs_hv_pending = 0;
+	fs_hv_numpacks = 0;
+}
+
+/* ftesurf (P197): the cache is no longer a mounted searchpath, so the two commands open a
+throwaway handle over its directory, use it, and close it again.  That is the Patch 26
+FS_IndexArchive_Visit pattern -- FS_OpenPackByExtension/VFSOS_OpenPath hand back a
+searchpathfuncs_t without touching com_searchpaths -- and it is strictly better here: these
+commands now work on the whole cache regardless of which packs happen to be mounted, which
+under the old FindPath they did not.  VFSOS_OpenPath tolerates a directory that does not
+exist yet, so a first run reports an empty cache rather than an error. */
+static searchpathfuncs_t *FS_Cache_OpenRoot(char *rootout, size_t rootsize)
+{
+	size_t len;
+	if (!FS_SystemPath("", FS_GAMECACHE, rootout, (int)rootsize))
+		return NULL;
+	//FS_NativePath's empty-name form ends in '/'; every other caller of VFSOS_OpenPath in this
+	//file passes a bare directory, so match them rather than find out the hard way.
+	len = strlen(rootout);
+	while (len && (rootout[len-1] == '/' || rootout[len-1] == '\\'))
+		rootout[--len] = 0;
+	return VFSOS_OpenPath(NULL, NULL, rootout, rootout, "");
+}
+
+struct fscachesize_s { int files; qofs_t bytes; };
+static int QDECL FS_Cache_SizeVisit(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct fscachesize_s *ctx = parm;
+	if (*fname && fname[strlen(fname)-1] == '/')
+	{	//same recursion shape as FS_RemoveTreeCallback
+		char sub[MAX_OSPATH];
+		Q_snprintfz(sub, sizeof(sub), "%s*", fname);
+		spath->EnumerateFiles(spath, sub, FS_Cache_SizeVisit, parm);
+		return true;
+	}
+	ctx->files++;
+	ctx->bytes += fsize;
+	return true;
+}
+
+static void FS_Cache_Info_f(void)
+{
+	struct fscachesize_s ctx = {0, 0};
+	char root[MAX_OSPATH];
+	char sz[64];
+	searchpathfuncs_t *h = FS_Cache_OpenRoot(root, sizeof(root));
+	if (!h)
+	{
+		Con_Printf("fs_cache_info: no cache directory\n");
+		return;
+	}
+	h->EnumerateFiles(h, "*", FS_Cache_SizeVisit, &ctx);
+	h->ClosePath(h);
+	Con_Printf("%s: %i files, %s\n", root, ctx.files, FS_AbbreviateSize(sz, sizeof(sz), ctx.bytes));
+	Con_Printf("fs_assetcache is %s.\n", fs_assetcache.ival?"on":"off");
+}
+
+static void FS_Cache_Clear_f(void)
+{
+	char root[MAX_OSPATH];
+	searchpathfuncs_t *h;
+
+	/* With a map name, forget just that map instead of purging everything.
+
+	This is the answer to the one failure this design cannot detect on its own: a map is
+	proven complete by a confirming visit that found nothing new, and if something is
+	nevertheless loaded later still -- later than any visit has ever reached -- the cache is
+	silently short and the map renders without it.  Deleting the manifest alone is enough:
+	the files already harvested stay, so the re-proof costs one mount rather than a full
+	re-download of 6MB of textures from the pack. */
+	if (Cmd_Argc() > 1)
+	{
+		char path[MAX_QPATH], want[MAX_QPATH];
+		COM_StripExtension(COM_SkipPath(Cmd_Argv(1)), want, sizeof(want));
+		if (!*want)
+			return;
+		if (!Q_strcasecmp(want, fs_hv_map))
+			FS_Cache_Forget();	//it is the map we are on; do not let the in-flight harvest write it back
+		FS_Cache_ManifestName(want, path, sizeof(path));
+		if (FS_Remove(path, FS_GAMECACHE))
+			Con_Printf("fs_cache_clear: %s will re-harvest on its next two visits\n", want);
+		else
+			Con_Printf("fs_cache_clear: %s was not cached\n", want);
+		return;
+	}
+	//Abandon the in-flight harvest first: it is mid-way through writing into the very tree we
+	//are about to empty, and its manifest would outlive the files it describes.
+	FS_Cache_Forget();
+	h = FS_Cache_OpenRoot(root, sizeof(root));
+	if (!h)
+	{
+		Con_Printf("fs_cache_clear: no cache directory\n");
+		return;
+	}
+	//FS_RemoveTreeCallback recurses into subdirectories itself and calls FS_RebuildFSHash_Update
+	//per file, which is what makes the hash forget them.  Slow per file, but a purge is explicit
+	//and rare.
+	h->EnumerateFiles(h, "*", FS_RemoveTreeCallback, NULL);
+	h->ClosePath(h);
+	Con_Printf("fs_cache_clear: emptied %s\n", root);
+}
+
+//ftesurf (P184): the drop pass, run from SV_SpawnServer once the map is committed.
+//ftesurf (P186): and the point at which the asset-cache harvest is armed, because this is the
+//first moment the set of packs that are ours is final AND the map is known to exist.
+void FS_AutoUnmountStale(void)
+{
+	int i, j;
+
+	if (!fs_automount.ival || !fs_autounmount.ival)
+	{
+		FS_Cache_BeginMap();	//ftesurf (P186): still arm the harvest -- it does not depend on the drop
+		return;
+	}
+
+	for (i = 0; i < fs_numautomounted; )
+	{
+		for (j = 0; j < fs_numautomountwant; j++)
+			if (!Q_strcasecmp(fs_automounted[i], fs_automountwant[j]))
+				break;
+		if (j < fs_numautomountwant)
+		{
+			i++;	//the incoming map wants it too -- keep it, and skip the remount entirely
+			continue;
+		}
+
+		if (FS_Addon_IsListed(fs_automounted[i]))
+		{	//promoted to a permanent mount while we were not looking; it is not ours now.
+			Con_DPrintf("fs_automount: \"%s\" is in " FS_ADDONS_FILE " now, leaving it mounted\n", fs_automounted[i]);
+			memmove(fs_automounted[i], fs_automounted[i+1], (fs_numautomounted-i-1)*sizeof(fs_automounted[0]));
+			fs_numautomounted--;
+			continue;
+		}
+
+		//Said out loud for the same reason the mount is: this takes a moment and a
+		//silent stall mid-load looks like a hang.
+		Con_Printf("fs_automount: dropping \"%s\", this map does not need it\n", fs_automounted[i]);
+		FS_Addon_Unmount(fs_automounted[i]);
+		memmove(fs_automounted[i], fs_automounted[i+1], (fs_numautomounted-i-1)*sizeof(fs_automounted[0]));
+		fs_numautomounted--;
+	}
+
+	//ftesurf (P186): last, so SPF_HARVEST is computed from the set that survived the drop.
+	FS_Cache_BeginMap();
+}
+void FS_AutoMountForMap(const char *mapname)
+{
+	char *file, *line, *nl, *e, *spec;
+	char tmp[MAX_QPATH], want[MAX_QPATH];
+	char wantspec[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): the specs this map asks for...
+	char wantpath[FS_MAXAUTOMOUNT][MAX_OSPATH];	//...each resolved, so it can be compared against fs_automounted[]
+	char cachedir[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P197): ...and, on a proven load, what gets mounted in its place
+	qboolean cached = false;
+	int numwant = 0, i, j;
+
+	/* ftesurf (P186): close out the PREVIOUS map's harvest first.
+
+	This is the right boundary for two reasons.  The pack it was reading from is still
+	mounted -- FS_AutoUnmountStale, which drops it, does not run until SV_SpawnServer --
+	so this is the last moment the copy can be made at all.  And nothing of the incoming
+	map has been touched yet: SV_Map_f's own COM_FCheckExists for the .bsp comes after us,
+	and a map can live INSIDE a mounted addon, so doing this any later would file the new
+	map's BSP under the old map's manifest.
+
+	Before the fs_automount early-out, because the previous map's harvest has to be flushed
+	even if the cvar was turned off in between. */
+	FS_Cache_EndMap();
+
+	//ftesurf (P231): "I do not know" is the honest answer on every path that gives up below,
+	//and it has to be written BEFORE the first of them -- see fs_automount_state.
+	Cvar_ForceSet(&fs_automount_state, "4");
+	Cvar_ForceSet(&fs_automount_spec, "");
+
+	if (!fs_automount.ival || !mapname || !*mapname)
+		return;
+
+	//`level` reaches us as a bare name almost always, but `map maps/x.bsp` and
+	//the package-qualified `map x#pak` forms are both legal, so normalise
+	//rather than assume.
+	Q_strncpyz(tmp, mapname, sizeof(tmp));
+	e = strchr(tmp, '#');
+	if (e)
+		*e = 0;
+	COM_StripExtension(COM_SkipPath(tmp), want, sizeof(want));
+	if (!*want)
+		return;
+
+	file = FS_LoadMallocFile(FS_MAPDEPS_FILE, NULL);
+	if (!file)
+		return;
+
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		if (strncmp(line, "dep ", 4))
+			continue;	//header, comment, or a keyword from a later version
+		line += 4;
+
+		while (*line == ' ' || *line == '\t')
+			line++;
+		for (e = line; *e && *e != ' ' && *e != '\t'; e++)
+			;
+		if (!*e)
+			continue;	//a name with no spec after it
+		*e++ = 0;
+		if (Q_strcasecmp(line, want))
+			continue;
+
+		//The spec is the REST of the line, not the next token: every real one
+		//has spaces in it ("steam:Team Fortress 2/tf").
+		while (*e == ' ' || *e == '\t')
+			e++;
+		spec = e;
+		for (e = spec + strlen(spec); e > spec && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+			*--e = 0;
+		if (!*spec)
+			continue;
+
+		//ftesurf (P183): collect, don't mount yet.  Resolving here as well as in
+		//FS_Addon_Mount is what lets the unmount pass below compare like with
+		//like -- fs_automounted[] holds resolved absolute paths, because two
+		//different specs ("steam:X/y" and the absolute form) can name one game.
+		//QUIET resolve: a pack that is not installed is a normal, already-
+		//reported condition, and the mount below says so properly.
+		if (numwant < FS_MAXAUTOMOUNT)
+		{
+			Q_strncpyz(wantspec[numwant], spec, sizeof(wantspec[0]));
+			if (!FS_Addon_ResolveEx(spec, wantpath[numwant], sizeof(wantpath[0]), true))
+				wantpath[numwant][0] = 0;
+			numwant++;
+		}
+		//No break: a map may name more than one pack, and mounting both is
+		//cheaper than being wrong about which one wins.
+	}
+	BZ_Free(file);
+
+	//ftesurf (P186): the name the harvest will be filed under, if this load commits.  `want` is
+	//already normalised out of the `maps/x.bsp` and `x#pak` forms, and it is promoted to
+	//fs_hv_map only by FS_Cache_BeginMap -- so a mistyped map name, which never reaches
+	//SV_SpawnServer, writes no manifest.  Set before the completeness check below, which reads
+	//the manifest belonging to exactly this name.
+	Q_strncpyz(fs_hv_pending, want, sizeof(fs_hv_pending));
+
+	/* ftesurf (P197): decide cached-or-not FIRST, because it changes what "this map wants".
+
+	P184 hands the resolved want-set to FS_AutoUnmountStale, which does the dropping later from
+	SV_SpawnServer once this map is known to exist.  It is recorded even when empty -- "this map
+	wants nothing" is exactly the case that should drop everything, and it is also the case a
+	mistyped map name produces, which is why the drop cannot happen from here.
+
+	P186 answered a proven load by mounting nothing at all and leaving the want-set empty,
+	which worked only because a globally-mounted cache was already there to serve the files.
+	There is no global cache mount any more, so a proven load mounts each pack's cache
+	DIRECTORY in that pack's place -- and the want-set has to name those directories, or
+	P184's drop pass would unmount them again on the very next map for not being wanted. */
+	cached = fs_assetcache.ival && numwant && FS_Cache_MapIsComplete(want, wantpath, numwant);
+	for (i = 0; i < numwant; i++)
+	{
+		cachedir[i][0] = 0;
+		if (cached && *wantpath[i] && !FS_Cache_PackDir(wantpath[i], cachedir[i], sizeof(cachedir[i])))
+			cachedir[i][0] = 0;
+	}
+
+	fs_numautomountwant = 0;
+	for (i = 0; i < numwant; i++)
+	{
+		const char *p = *cachedir[i] ? cachedir[i] : wantpath[i];
+		if (*p)
+			Q_strncpyz(fs_automountwant[fs_numautomountwant++], p, sizeof(fs_automountwant[0]));
+	}
+
+	/* ftesurf (P186/P197): and the payoff.  If the cache has been PROVEN to cover this map --
+	v2 manifest, state 1, same pack set, same fs_addons.txt, and the files still on disk --
+	then each pack's cache directory is mounted where that pack would have been, and the pack
+	itself is never opened.  That is ~1.4s of directory walk and ~14MB of allocation saved per
+	proven pack, which is the whole point of the feature. */
+	if (cached)
+		Con_Printf("fs_automount: %s is cached, not mounting %s\n", want,
+					numwant==1?wantspec[0]:va("%i packs", numwant));
+
+	for (i = 0; i < numwant; i++)
+	{
+		const char *path = *cachedir[i] ? cachedir[i] : wantpath[i];
+		//Said out loud, not DPrintf'd: mounting one of these takes several
+		//seconds, and a silent stall during a map load is indistinguishable
+		//from a hang.  FS_Addon_Mount dup-skips, so the second load of the
+		//same map says this and returns immediately.
+		qboolean already = *path && FS_Addon_IsMounted(path);
+
+		if (!fs_thread_mutex || Sys_LockMutex(fs_thread_mutex))
+		{
+			if (*cachedir[i])
+			{
+				//ftesurf (P197): in the pack's own slot, so nothing above or below it moves.
+				Con_DPrintf("fs_automount: %s from cache instead of \"%s\"\n", want, wantspec[i]);
+				FS_Cache_MountFor(wantpath[i], cachedir[i], sizeof(cachedir[i]));
+			}
+			else
+			{
+				Con_Printf("fs_automount: %s needs \"%s\"\n", want, wantspec[i]);
+				FS_Addon_MountHD(wantspec[i], ~0u);
+				FS_Addon_Mount(wantspec[i], ~0u);
+			}
+			if (fs_thread_mutex)
+				Sys_UnlockMutex(fs_thread_mutex);
+		}
+
+		//ftesurf (P183): remember it ONLY if we are the ones who put it there.
+		//A pack listed in fs_addons.txt, or one the user fs_load'ed by hand, was
+		//already mounted before this call and must never be dropped by us.
+		//ftesurf (P197): `path` rather than wantpath[i], so a mounted cache directory is
+		//dropped by the same pass that drops a pack.  A cache directory is always ours.
+		if (*path && !already)
+		{
+			for (j = 0; j < fs_numautomounted; j++)
+				if (!Q_strcasecmp(fs_automounted[j], path))
+					break;
+			if (j == fs_numautomounted && fs_numautomounted < FS_MAXAUTOMOUNT)
+				Q_strncpyz(fs_automounted[fs_numautomounted++], path, sizeof(fs_automounted[0]));
+		}
+	}
+
+	/* ftesurf (P231): and say, for the material census, what all of that came to.  Written
+	last because state 1 and state 2 are only distinguishable once `cached` is known. */
+	{
+		char spec[MAX_OSPATH*2];
+		int state, bad = -1;
+		*spec = 0;
+		for (j = 0; j < numwant; j++)
+			if (!*wantpath[j])
+			{	bad = j;	break;	}
+		if (!numwant)
+			state = 0;
+		else if (bad >= 0)
+		{	//an unresolved spec is the one thing here a player can act on, so it is the
+			//one we name even when a sibling spec resolved perfectly well.
+			state = 3;
+			Q_strncpyz(spec, wantspec[bad], sizeof(spec));
+		}
+		else
+		{	//truncation here is fine: this is a diagnostic string, not a path to open.
+			state = cached?2:1;
+			for (j = 0; j < numwant; j++)
+				Q_strncatz(spec, va(j?", %s":"%s", wantspec[j]), sizeof(spec));
+		}
+		Cvar_ForceSetValue(&fs_automount_state, state);
+		Cvar_ForceSet(&fs_automount_spec, spec);
+	}
+}
+
 //rewrite fs_addons.txt, optionally adding `add` (deduped) and/or removing `del`.
+//ftesurf (P184): `out` was a fixed char[8192] filled with Q_strncatz, which SILENTLY
+//TRUNCATES.  fs_addons.txt is mostly explanatory comments and this one had grown to
+//8372 bytes, so `fs_load` rewrote the file cut off at 8192 -- losing the tail of the
+//comment block AND the very line it was appending -- while still reporting "mounted
+//and saved; auto-remounts next launch".  fs_unload had the same shape.  Caught by a
+//P184 regression test that could not see its own fs_load take effect.
+//
+//Sized from the input instead.  The output can only ever be the input minus dropped
+//lines plus at most one added line: each line is copied back with its single '\n'
+//restored, and trailing whitespace is trimmed, so insize + strlen(add) + 2 is a hard
+//upper bound rather than an estimate.
 static void FS_Addon_SaveList(const char *add, const char *del)
 {
 	char *file, *line, *nl, *e;
-	char out[8192];
+	char *out;
+	size_t outsize, used = 0, insize = 0;
 	qboolean have = false;
+
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, &insize);
+	outsize = insize + (add?strlen(add):0) + 2;
+	out = Z_Malloc(outsize);
 	out[0] = 0;
 
-	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
 	if (file)
 	{
 		for (line = file; line && *line; line = nl)
@@ -9016,17 +10870,22 @@ static void FS_Addon_SaveList(const char *add, const char *del)
 				continue;
 			if (add && !Q_strcasecmp(line, add))
 				have = true;
-			Q_strncatz(out, line, sizeof(out));
-			Q_strncatz(out, "\n", sizeof(out));
+			Q_strncatz(out+used, line, outsize-used);
+			used += strlen(out+used);
+			Q_strncatz(out+used, "\n", outsize-used);
+			used += strlen(out+used);
 		}
 		BZ_Free(file);
 	}
 	if (add && !have)
 	{
-		Q_strncatz(out, add, sizeof(out));
-		Q_strncatz(out, "\n", sizeof(out));
+		Q_strncatz(out+used, add, outsize-used);
+		used += strlen(out+used);
+		Q_strncatz(out+used, "\n", outsize-used);
+		used += strlen(out+used);
 	}
-	FS_WriteFile(FS_ADDONS_FILE, out, (int)strlen(out), FS_GAMEONLY);
+	FS_WriteFile(FS_ADDONS_FILE, out, (int)used, FS_GAMEONLY);
+	Z_Free(out);
 }
 
 //grab the addon path argument, supporting an UNQUOTED path with spaces
@@ -9121,6 +10980,8 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("fs_load",    FS_Load_f,    "nettest: mount an external game (steam:Game/dir, an absolute path, or a relative dir) at LOW priority for its assets/maps; saved + auto-remounted next launch.");
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
+	Cmd_AddCommandD("fs_cache_info", FS_Cache_Info_f, "ftesurf (P186/P197): report how much disk the runtime asset cache is using. Reports the whole cache regardless of which packs happen to be mounted.");
+	Cmd_AddCommandD("fs_cache_clear",FS_Cache_Clear_f,"ftesurf (P186/P197): empty the runtime asset cache. With a map name, forgets just that map -- it keeps its cached files but must re-prove them, which is the fix if one map ever looks short. With no argument, deletes the lot.");
 	Cmd_AddCommandD("fs_indexmaps",FS_IndexMaps_f,"nettest (P25): rebuild data/maps_index.txt — the offline per-game map list the lazy-mount create-server menu reads.");
 	Cmd_AddCommandD("fs_useaddons",FS_UseAddons_f,"nettest (P25/P26): ADD (mount) the given game spec(s) on demand so a single game's map can load without mounting all games at boot. Add-only — never unmounts, never rebuilds (crash-safe mid-map). Quote spaced paths.");
 	Cmd_AddCommandAD("dir", COM_Dir_f,			FS_ArbitraryFile_c, "Displays filesystem listings. Accepts wildcards."); //q3 like
@@ -9152,6 +11013,14 @@ void COM_InitFilesystem (void)
 	Cvar_Register(&dpcompat_ignoremodificationtimes, "Filesystem");
 	Cvar_Register(&com_fs_cache, "Filesystem");
 	Cvar_Register(&fs_lazyaddons, "Filesystem");	//nettest (P25)
+	Cvar_Register(&fs_automount, "Filesystem");		//ftesurf (P175)
+	Cvar_Register(&fs_autounmount, "Filesystem");	//ftesurf (P183)
+	Cvar_Register(&fs_assetcache, "Filesystem");	//ftesurf (P186)
+	Cvar_Register(&fs_automount_state, "Filesystem");	//ftesurf (P231)
+	Cvar_Register(&fs_automount_spec, "Filesystem");	//ftesurf (P231)
+	Cvar_Register(&fs_loadstats, "Filesystem");		//ftesurf (P180)
+	Cvar_Register(&fs_maploadhash, "Filesystem");	//ftesurf (P180)
+	Cvar_Register(&fs_hdmodels, "Filesystem");	//nettest: Half-Life HD model pack preference
 	Cvar_Register(&fs_hidesyspaths, "Filesystem");
 	Cvar_Register(&fs_gamename, "Filesystem");
 #ifdef PACKAGEMANAGER
@@ -9176,6 +11045,7 @@ void COM_InitFilesystem (void)
 	}
 
 	fs_thread_mutex = Sys_CreateMutex();
+	fs_hv_mutex = Sys_CreateMutex();	//ftesurf (P186): its own, not fs_thread_mutex -- FS_Cache_Note runs inside FS_FLocateFile, which is called with fs_thread_mutex already held in places
 }
 
 

@@ -118,6 +118,12 @@ typedef struct entity_s
 
 	struct model_s			*model;			// NULL = no model
 	int						skinnum;		// for Alias models
+	//nettest Patch 131: Half-Life bodygroup selector.  GoldSrc packs every
+	//bodypart's choice into one integer (index = sum(choice_i * base_i)) and
+	//gl_hlmdl.c divides it back out per bodypart.  It read a hardcoded 0 until
+	//now, so every studiomodel wore its default parts - Barney's holstered
+	//pistol, the hgrunt's plain head, a corpse still gripping the gun it dropped.
+	int						body;
 	skinid_t				customskin;		// quake3 style skins
 
 	int						playerindex;	//for qw skins
@@ -166,6 +172,15 @@ typedef struct entity_s
 	//resolved per frame in R_CalcModelLighting; NULL = none. vertlightverts is their length (global vtx order).
 	vec4_t					*vertlightcolors;
 	int						vertlightverts;
+	//FTESurf Patch 259: the same thing in RGBA BYTES, 4 bytes per vertex instead of 16.
+	//Two forms rather than one because the two producers store different things: the Quake-side
+	//RGBPROPLIGHT loader keeps a multiplier that deliberately exceeds 1 (r_propvertexlight_max
+	//defaults to 3), which a normalised ubyte attribute cannot represent, while the HL2 .vhv path
+	//normalises its multiplier to peak exactly 1 and folds the gain into the entity's base light --
+	//so bytes are lossless there, and 4x smaller both in RAM and in what the driver reads per draw.
+	//Whichever is set is bound to VATTR_COLOUR by R_GAlias_DrawBatch; vertlightverts is the length
+	//of either, in the model's GLOBAL vertex order. Never both.
+	qbyte					*vertlightbytes;
 } entity_t;
 
 #define MAX_GEOMSETS 32u
@@ -311,6 +326,33 @@ typedef struct refdef_s
 	pxrect_t	pxrect;				/*vrect, but in pixels rather than virtual coords*/
 	qboolean	externalview;		/*draw external models and not viewmodels*/
 	int			recurse;			/*in a mirror/portal/half way through drawing something else*/
+
+	/* FTESurf Patch 208: the aperture this view is confined to, if any.
+
+	   FTE renders a portal's far scene over the WHOLE SCREEN and relies on the
+	   ordinary world being drawn afterwards to paint back over everything except
+	   the hole (SHADER_SORT_PORTAL is 3, SHADER_SORT_OPAQUE is 5).  On surf_kitsune
+	   that repaint does not happen, and the far room covers the entire wall the
+	   doorway is set into -- measured: r_portaldebug 1, which skips only the
+	   recursed R_RenderScene, brings the wall straight back.
+
+	   So the recursed frame is confined to the aperture's projected rectangle and
+	   the leak stops being possible rather than stopping by luck.  This lives in
+	   refdef_t because refdef_t is copied by value across the recursion
+	   (gl_rmain.c GLR_DrawPortal), which makes save/restore and nested-aperture
+	   intersection free.
+
+	   portalclippx is the render TARGET identity -- pxrect.{x,y,width,maxheight}
+	   as they were when the rectangle was measured.  An FBO path that retargets
+	   pxrect no longer matches, and the clip drops itself for the duration; see
+	   GLBE_ApplyScissor.  Read only by the GL backend: srect_t fractions mean
+	   "of pxrect" there but "of the whole framebuffer" in D3D9/Vulkan.
+
+	   Four floats rather than an srect_t so this header need not include merged.h. */
+	qboolean	portalclip;			/*this view is clipped to a portal aperture*/
+	float		portalcliprect[4];	/*x, y, width, height -- srect_t fractions, y from the BOTTOM*/
+	int			portalclippx[4];	/*pxrect x, y, width, maxheight when measured*/
+
 	qboolean	forcevis;			/*if true, vis comes from the forcedvis field instead of recalculated*/
 	unsigned int	flipcull;		/*reflected/flipped view, requires inverted culling (should be set to SHADER_CULL_FLIPPED or 0 - its implemented as a xor)*/
 	unsigned int	colourmask;		/*shaderbits mask. anything not here will be forced to 0. this is for red/green type stereo*/
@@ -427,7 +469,10 @@ void GLR_InitTextures (void);
 void GLR_InitEfrags (void);
 void GLR_RenderView (void);		// must set r_refdef first
 								// called whenever r_refdef or vid change
-void GLR_DrawPortal(struct batch_s *batch, struct batch_s **blist, struct batch_s *depthmasklist[2], int portaltype);
+qboolean GLR_DrawPortal(struct batch_s *batch, struct batch_s **blist, struct batch_s *depthmasklist[2], int portaltype);	//FTESurf Patch 206: false when it refused to draw, so the caller does not mask an aperture with nothing behind it
+qboolean GLR_PortalWouldDraw(struct batch_s *batch);	//FTESurf Patch 206: the same verdict, without rendering -- for the two depth-mask loops
+qboolean GLR_PortalWouldDrawAt(struct batch_s *batch, int level);	//...and at an explicit recursion level, for the loop that runs after the increment
+void GLR_PortalBudgetBegin(struct batch_s **worldlist, struct batch_s *dynamiclist);	//FTESurf Patch 206: pick this view's r_portalmaxviews portals, largest first
 
 void GLR_PushDlights (void);
 void GLR_DrawWaterSurfaces (void);
@@ -504,6 +549,11 @@ enum imageflags
 #define R_LoadTexture32(id,w,h,d,f)			Image_GetTexture(id, NULL, f, d, NULL, w, h, TF_RGBA32)
 #define R_LoadTextureFB(id,w,h,d,f)			Image_GetTexture(id, NULL, f, d, NULL, w, h, TF_TRANS8_FULLBRIGHT)
 #define R_LoadTexture(id,w,h,fmt,d,fl)		Image_GetTexture(id, NULL, fl, d, NULL, w, h, fmt)
+
+//nettest: dilate opaque RGB into fully-transparent texels of an RGBA8 image, so that
+//mipmapping (ours or the driver's, neither of which weights colour by alpha) cannot bleed
+//the keyed-out black back into the texels that survive an alpha test.
+void Image_BleedTransparentRGB(qbyte *rgba, int width, int height);
 
 image_t *Image_TextureIsValid(qintptr_t address);
 image_t *Image_FindTexture	(const char *identifier, const char *subpath, unsigned int flags);
@@ -715,6 +765,10 @@ extern	cvar_t	r_glsl_offsetmapping;
 extern	cvar_t	r_skyfog;	//additional fog alpha on sky
 extern	cvar_t	r_shadow_playershadows;
 extern	cvar_t	r_shadow_realtime_dlight, r_shadow_realtime_dlight_shadows;
+extern	cvar_t	r_shadows_bmodels;	//nettest: 0 = only models + the world cast shadows, not func_ brush entities. Read in Surf_GenBrushBatches.
+extern	cvar_t	r_hidetextures;		//nettest: comma-separated BSP texture names to draw as nothing. Read in Mod_FinishTexture (gl_model.c).
+extern	cvar_t	r_goldsrc_worldmask;//nettest: GoldSrc '{' textures draw opaque on world faces. Read in Mod_MaskedTextureIsWorldOnly (gl_model.c).
+extern	cvar_t	r_texdiag;		//nettest: per-texture load diagnostic (gl_model.c).
 extern	cvar_t	r_shadow_realtime_dlight_ambient;
 extern	cvar_t	r_shadow_realtime_dlight_diffuse;
 extern	cvar_t	r_shadow_realtime_dlight_specular;
@@ -729,6 +783,7 @@ extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_slimealpha;
 extern	cvar_t	r_telealpha;
 extern	cvar_t	r_wateralpha_extendpvs;
+extern	cvar_t	r_hlwater_entalpha;
 extern	cvar_t	r_waterripple;
 extern	cvar_t	r_waterripple_tess;
 extern	cvar_t	r_waterripple_speed;
@@ -741,6 +796,23 @@ extern	cvar_t	r_dynamic;
 extern qboolean r_dlightlightmaps;
 extern	cvar_t	r_temporalscenecache;
 extern	cvar_t	r_novis;
+/*
+FTESurf build 17.  r_voidvis is the cvar; r_voidview is "this primary view is in
+the void with a noclipping player, and r_voidvis agrees" -- written once per view
+in Surf_SetupFrame and read by the entity gates in CL_LinkStaticEntities and
+BE_GenModelBatches.  Declared here because those three live in three files.
+*/
+extern	cvar_t	r_voidvis;
+extern	cvar_t	r_blendsort;	//FTESurf Patch 218 -- see the essay in renderer.c
+extern	qboolean r_voidview;
+/*
+FTESurf build 19.  The entity census behind that decision, written by
+BE_GenModelBatches and printed by Surf_VoidVisReport -- see the block above them
+in r_surf.c for why the count is taken where the entities are CONSUMED.
+*/
+extern	int	r_voidvis_edicts;
+extern	int	r_voidvis_brush;
+extern	int	r_voidvis_dropped;
 extern	cvar_t	r_netgraph;
 extern	cvar_t	r_deluxemapping_cvar;
 extern	qboolean r_deluxemapping;

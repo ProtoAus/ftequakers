@@ -3768,7 +3768,23 @@ void CL_Say (qboolean team, char *extra)
 
 	if (Cmd_Argc() < 2)
 	{
-		if (team)
+		/*
+		FTESurf Patch 134: bare `say` opens the chat prompt, as it does in the
+		Source engine.
+
+		This branch previously did nothing whatsoever for `say` -- no message,
+		no usage line, no "not connected" (that check is below this one), just a
+		silent return -- so nothing that worked before can change.  `messagemode`
+		and `messagemode2` are untouched and still the canonical binds; this
+		simply makes the name Source players reach for do the same thing.
+		*/
+		if (!isDedicated)
+		{
+			chat_team = team;
+			Key_Dest_Add(kdm_message);
+			Key_Dest_Remove(kdm_console);
+		}
+		else if (team)
 			Con_Printf ("%s <text>: send a team message\n", Cmd_Argv(0));
 		return;
 	}

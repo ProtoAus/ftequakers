@@ -39,6 +39,7 @@ typedef struct
 
 extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
 extern cvar_t r_propvertexlight, r_propvertexlight_minlight, r_prop_minlight;	//nettest: baked static-prop per-vertex lighting + world-model minlight floor
+extern cvar_t r_showhitboxes;	//nettest: per-bone hitbox overlay for GoldSrc studio models
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
@@ -1455,6 +1456,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	//a cheap hash probe; NULL when the master toggle is off, the map has no RGBPROPLIGHT lump, or this
 	//placement has no record -- in which case the VC permutation stays inactive and drawing is unchanged.
 	e->vertlightcolors = NULL;
+	e->vertlightbytes = NULL;	//FTESurf Patch 259: the byte form, set by the hl2 plugin's static props
 	e->vertlightverts = 0;
 	if (r_propvertexlight.ival && clmodel && clmodel->type == mod_alias && cl.worldmodel && cl.worldmodel->proplights)
 		e->vertlightcolors = (vec4_t*)PropLight_Find(cl.worldmodel, clmodel->name, e->origin, e->angles, &e->vertlightverts, bakedmean);
@@ -1922,6 +1924,221 @@ qboolean R_EntityDominantLightDir(const entity_t *ce, vec3_t out)
 	return VectorNormalize(out) != 0;
 }
 
+/*
+FTESurf Patch 262 -- the per-instance prop colours have to live in a GPU buffer.
+
+Patch 259 bound entity_t::vertlightbytes straight onto the colour attribute as CLIENT
+MEMORY (colours[0].gl.vbo = 0 plus a raw heap pointer).  That is correct, and it is slow,
+and the cost is not where I said it was ("two pointer stores per surface").  Measured at
+surf_boreas's start zone:
+
+    3D skybox off, hl2_lt_baked 1   1000fps    1.00ms
+    3D skybox off, hl2_lt_baked 2    300fps    3.33ms
+    3D skybox on,  hl2_lt_baked 1    440fps    2.27ms
+    3D skybox on,  hl2_lt_baked 2     35fps   28.57ms
+
+The skybox-on control is what makes that readable: the skyroom is a second scene render
+costing 1.27ms of its own, and 24.0ms of the remaining 26.3ms is this same per-prop cost
+paid again over the ~900 props the 3D skybox sees.  One bug, charged twice.
+
+It is a PER-VERTEX cost, not a per-draw one, and that is what says where it lives:
+surf_garden's 28 drawn props cost 141us each against surf_boreas's 91 at 26us.  Draw-call
+overhead cannot rise 5.5x while the draw count falls 3.3x.  What differs is vertices --
+garden draws the giant stage hedges (s3hedge2 is 15447 verts, its biggest props 30811)
+against boreas's median 1684.
+
+With one attribute in client memory the driver cannot issue the draw from server-side
+state alone.  GL_SelectVBO(0) unbinds GL_ARRAY_BUFFER in the middle of BE_ApplyAttributes'
+walk -- colour sits between vertex and texcoord (shader.h:404), so the currentvbo
+redundancy filter stops collapsing anything -- the referenced vertex range is copied out
+of our heap, and the whole vertex-array state is revalidated because the "every attribute
+is in buffer N" fast path no longer holds.  So: upload it once, bind an offset.
+
+What makes that fiddly is ownership.  The entity_t the renderer sees is a COPY --
+mod_vbsp.c does `ent = NewSceneEntity(); *ent = *src;` -- so a buffer handle cached on it
+is thrown away every frame.  The CPU pointer is stable for the life of the map, so that is
+the key, and this is a table rather than a field.
+
+Two things checked before blaming the driver, because either would have meant a different
+fix entirely:
+  - NOT lost VAO caching.  Alias models already re-specify every attribute on every batch:
+    com_mesh.c:2371 and gl_backend.c:5836 both stomp vaodynamic = ~0, vaoenabled = 0.
+    There was no cache here to lose.
+  - NOT shared-VBO corruption.  batch->vbo is one process-wide scratch vbo_t
+    (com_mesh.c:719, handed out at :2365) refilled from the model's immutable buffers on
+    every call, so Patch 259 writing into it was safe.
+*/
+#ifdef GLQUAKE
+typedef struct
+{
+	const qbyte	*src;		//key: the entity's vertlightbytes.  NULL marks an empty slot.
+	unsigned int verts;
+	vboarray_t	vbo;		//what the colour attribute gets pointed at
+	vboarray_t	ebo;		//BE_VBO_Finish insists on index data; this holds the stub
+	void		*vbomem;
+	void		*ebomem;
+} vertlightbuf_t;
+static vertlightbuf_t	*vertlightbufs;			//open addressed, power of two, kept under half full
+static unsigned int		vertlightbufs_mask;
+static unsigned int		vertlightbufs_used;
+static const qbyte		*vertlightbuf_memosrc;	//an entity's surfaces all share one array, so the
+static vertlightbuf_t	*vertlightbuf_memo;		//per-surface lookups collapse to a pointer compare
+
+static unsigned int VertLightBuf_Hash(const qbyte *p)
+{	//heap pointers are aligned and handed out in runs, so the low bits carry nothing.
+	quint64_t v = (quint64_t)(size_t)p >> 4;
+	v *= 0x9E3779B97F4A7C15ull;
+	return (unsigned int)(v >> 40);
+}
+static vertlightbuf_t *VertLightBuf_Find(const qbyte *src)
+{
+	unsigned int i;
+	if (!vertlightbufs)
+		return NULL;
+	for (i = VertLightBuf_Hash(src); ; i++)
+	{	//never allowed past half full, so an empty slot always terminates this
+		vertlightbuf_t *e = &vertlightbufs[i & vertlightbufs_mask];
+		if (!e->src)
+			return NULL;
+		if (e->src == src)
+			return e;
+	}
+}
+static void VertLightBuf_Insert(const vertlightbuf_t *n)
+{
+	unsigned int i;
+	for (i = VertLightBuf_Hash(n->src); ; i++)
+	{
+		vertlightbuf_t *e = &vertlightbufs[i & vertlightbufs_mask];
+		if (!e->src)
+		{
+			*e = *n;
+			return;
+		}
+	}
+}
+static qboolean VertLightBuf_Grow(void)
+{
+	vertlightbuf_t *old = vertlightbufs;
+	unsigned int oldcount = old?vertlightbufs_mask+1:0, newcount = oldcount?oldcount*2:256, i;
+
+	vertlightbufs = Z_Malloc(sizeof(*vertlightbufs)*newcount);	//Z_Malloc is calloc, so every slot starts empty
+	if (!vertlightbufs)
+	{
+		vertlightbufs = old;
+		return false;
+	}
+	vertlightbufs_mask = newcount-1;
+	//the memo holds a pointer INTO the old table, which is about to be freed
+	vertlightbuf_memosrc = NULL;
+	vertlightbuf_memo = NULL;
+	for (i = 0; i < oldcount; i++)
+		if (old[i].src)
+			VertLightBuf_Insert(&old[i]);
+	Z_Free(old);
+	return true;
+}
+static const vboarray_t *VertLightBuf_Lookup(const qbyte *src)
+{	//pure lookup -- never allocates, so it is safe to call mid-batch
+	vertlightbuf_t *e;
+	if (!src)
+		return NULL;
+	if (src == vertlightbuf_memosrc)
+		return vertlightbuf_memo?&vertlightbuf_memo->vbo:NULL;
+	e = VertLightBuf_Find(src);
+	vertlightbuf_memosrc = src;
+	vertlightbuf_memo = e;
+	return e?&e->vbo:NULL;
+}
+/*
+The upload, and the only place one happens.
+
+It has to be called from R_GAlias_DrawBatch and NOT from R_GAlias_GenerateBatches, and
+the first attempt had it the other way round because generating batches looked like the
+calmer place to create a buffer object.  It crashed surf_boreas a second after the map
+finished loading, and it deserved to: entity_t::vertlightbytes is only cleared inside
+R_CalcModelLighting (:1459), which sits BELOW that function's light_known early-out and
+runs from DrawBatch.  So before DrawBatch has touched an entity the field holds whatever
+the recycled cl_visedicts slot held last -- for a player or a viewmodel, a dead prop's
+array from an earlier frame or an earlier map.  Uploading verts*4 bytes from that is an
+access violation with a stack that points at the wrong module entirely.
+
+Read after R_CalcModelLighting, the field means what it says.  And creating buffers
+mid-batch turns out to cost nothing in safety: every binding this moves -- ARRAY, ELEMENT
+and the VAO -- goes through GL_SelectVBO / GL_SelectEBO / the VAO cache, all of which the
+submission path re-establishes per draw (gl_backend.c:3466, :3517, BE_ApplyAttributes).
+*/
+static const vboarray_t *VertLightBuf_Acquire(const qbyte *src, unsigned int verts)
+{
+	const vboarray_t *have;
+	vertlightbuf_t n;
+	vbobctx_t ctx;
+	index_t stub = 0;
+
+	if (!src || !verts || qrenderer != QR_OPENGL)
+		return NULL;
+	have = VertLightBuf_Lookup(src);
+	if (have)
+		return have;
+	if (!vertlightbufs || (vertlightbufs_used+1)*2 > vertlightbufs_mask+1)
+		if (!VertLightBuf_Grow())
+			return NULL;
+
+	//BE_VBO_* rather than raw qglGenBuffers because it is the one allocation path every
+	//backend implements, and because Mod_GenerateMeshVBO already uploads byte colours
+	//through it (com_mesh.c:4630).  Its no-buffer-object fallback hands back gl.vbo == 0
+	//and a heap pointer, which is exactly Patch 259's arrangement -- so that case is not a
+	//failure, it simply does not speed anything up.  BE_VBO_Finish always wants an index
+	//buffer, hence the stub; a couple of bytes per prop is cheaper than a private
+	//allocation path.
+	GL_DeselectVAO();	//as r_surf.c:2979 does -- the binds below would otherwise land in a VAO
+	memset(&n, 0, sizeof(n));
+	n.src = src;
+	n.verts = verts;
+	BE_VBO_Begin(&ctx, (size_t)verts*4);
+	BE_VBO_Data(&ctx, (void*)src, (size_t)verts*4, &n.vbo);
+	BE_VBO_Finish(&ctx, &stub, sizeof(stub), &n.ebo, &n.vbomem, &n.ebomem);
+	VertLightBuf_Insert(&n);
+	vertlightbufs_used++;
+
+	vertlightbuf_memosrc = NULL;	//re-find it through the normal path rather than guess the slot
+	vertlightbuf_memo = NULL;
+	return VertLightBuf_Lookup(src);
+}
+#endif
+
+//Everything those buffers own, released.  Called from Surf_DeInit, which runs BOTH on
+//vid_restart and -- via Surf_NewMap -- on every map load.  The map load is the one that
+//matters: the CPU arrays this is keyed on are GMalloc'd against the world model's memgroup
+//and freed with it, so a recycled malloc address would otherwise find a stale entry and
+//draw some other prop's light.  BE_ClearVBO cannot do this for us; GLBE_ClearVBO's delete
+//loop runs i < 7 over a list that does not include colours at all (gl_rsurf.c:31-71).
+void R_VertLightBuffers_Flush(void)
+{
+#ifdef GLQUAKE
+	unsigned int i;
+	if (vertlightbufs)
+	{
+		//`rf` and not `rf->BE_VBO_Destroy`: BE_VBO_Destroy is itself a macro for
+		//rf->BE_VBO_Destroy, so spelling the member out expands recursively.
+		if (rf)
+			for (i = 0; i <= vertlightbufs_mask; i++)
+			{
+				if (!vertlightbufs[i].src)
+					continue;
+				BE_VBO_Destroy(&vertlightbufs[i].vbo, vertlightbufs[i].vbomem);
+				BE_VBO_Destroy(&vertlightbufs[i].ebo, vertlightbufs[i].ebomem);
+			}
+		Z_Free(vertlightbufs);
+		vertlightbufs = NULL;
+	}
+	vertlightbufs_mask = 0;
+	vertlightbufs_used = 0;
+	vertlightbuf_memosrc = NULL;
+	vertlightbuf_memo = NULL;
+#endif
+}
+
 void R_GAlias_DrawBatch(batch_t *batch)
 {
 	entity_t *e;
@@ -1957,11 +2174,64 @@ void R_GAlias_DrawBatch(batch_t *batch)
 				//permutation (BE_RenderMeshProgram) does light *= v_colour, preserving PBR. This runs
 				//AFTER Alias_GAliasBuildMesh, which rewrites colours[0] every call, so it never leaks
 				//between entities. Skipped on a vertex-count mismatch (wrong LOD/model) to stay in-bounds.
-				if (e->vertlightcolors && batch->vbo && inf->firstvert + inf->numverts <= e->vertlightverts)
+				//FTESurf Patch 259: the byte form takes priority, and is what the hl2 static props use.
+				//Same slice, same guard, 4 bytes per vertex instead of 16 -- the attribute is declared
+				//GL_UNSIGNED_BYTE + normalized, which gl_backend.c already spells for every colour array
+				//(:801, and colourarraytype from colours_bytes at :5410).
+				//firstvert < 0 is the hl2 loader's "no external per-vertex array addresses
+				//this surface" marker, set when it could not build a scatter table for the
+				//model (mod_hl2.c, Mod_HL2_BuildVhvMap).  Tested rather than left to the
+				//arithmetic: -1 would otherwise pass the bound below and read four bytes
+				//off the front of the array.
+				if (batch->vbo)
 				{
+					//FTESurf Patch 262: clear FIRST, bind second.  Alias_GAliasBuildMesh's
+					//early return (com_mesh.c:2015) hands back the scratch vbo_t without
+					//rewriting colours[0] at all, and NEITHER of its paths ever clears
+					//colours_bytes (:2346 memsets colours[0] only).  So a surface that
+					//declined below used to inherit the PREVIOUS surface's slice pointer --
+					//same entity, larger firstvert -- and read past the end of the array.
+					//Patch 259's comment claimed this could not happen; that was true of the
+					//path it looked at and not of the early return.
 					batch->vbo->colours[0].gl.vbo = 0;
-					batch->vbo->colours[0].gl.addr = e->vertlightcolors + inf->firstvert;
+					batch->vbo->colours[0].gl.addr = NULL;
 					batch->vbo->colours_bytes = false;
+
+					//qrenderer, because the writes below are into the vboarray_t's GL arm and
+					//would land on .d3d.buff under any other backend.
+					if (qrenderer == QR_OPENGL && inf->firstvert >= 0 && inf->firstvert + inf->numverts <= e->vertlightverts)
+					{
+						if (e->vertlightbytes)
+						{
+#ifdef GLQUAKE
+							//FTESurf Patch 262: prefer the GPU copy, creating it on the first
+							//surface that asks.  Its .gl.addr is a byte offset into the buffer
+							//where Patch 259's was a heap pointer, and offset+n is the same
+							//expression as pointer+n, so one slice serves both and the fallback
+							//needs no second branch.  Safe to read e->vertlightbytes here and
+							//nowhere earlier: R_CalcModelLighting at the top of this function is
+							//what clears it on an entity that does not own one.
+							const vboarray_t *gpu = VertLightBuf_Acquire(e->vertlightbytes, (unsigned int)e->vertlightverts);
+							if (gpu)
+							{
+								batch->vbo->colours[0].gl.vbo = gpu->gl.vbo;
+								batch->vbo->colours[0].gl.addr = (qbyte*)gpu->gl.addr + (size_t)inf->firstvert*4;
+							}
+							else
+#endif
+							{
+								batch->vbo->colours[0].gl.vbo = 0;
+								batch->vbo->colours[0].gl.addr = e->vertlightbytes + (size_t)inf->firstvert*4;
+							}
+							batch->vbo->colours_bytes = true;
+						}
+						else if (e->vertlightcolors)
+						{
+							batch->vbo->colours[0].gl.vbo = 0;
+							batch->vbo->colours[0].gl.addr = e->vertlightcolors + inf->firstvert;
+							batch->vbo->colours_bytes = false;
+						}
+					}
 				}
 				batch->mesh = &meshl;
 				if (!mesh.numindexes)
@@ -2083,7 +2353,22 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 
 		VectorSubtract(e->origin, r_refdef.vieworg, v);
 		z = DotProduct(v, vpn);
-		if (z < -clmodel->radius)
+		//nettest Patch 100b: `sizecullable` gates this return too, not just the coverage cull below.
+		//e->origin is only a WORLD position for ordinary entities.  For RF_WEAPONMODEL it is
+		//CAMERA-RELATIVE -- a few qu of bob/sway offset -- and is not composed with
+		//r_refdef.weaponmatrix until R_RotateForEntity (gl_rmain.c), long after this point.  Feeding
+		//that into a world-space near-plane test degenerates to
+		//    cull  <=>  dot(vieworg, vpn) > clmodel->radius
+		//i.e. the viewmodel vanishes based on where the player STANDS and which way they LOOK --
+		//roughly half of all yaw directions once you are further than `radius` from the map origin.
+		//(Reported as "the AK47 disappears at certain angles"; v_ak47.mdl has radius 58.)  Upstream
+		//never hit this because the whole block was gated behind `clmodel->maxlod`, which is 0 for
+		//every asset in this game; Patch 100 opened it via r_model_mincoverage.
+		//Skeletal-object entities are excluded for the same class of reason: QC poses them by bone
+		//and their geometry need not be anywhere near e->origin.
+		//When exempt we fall through to the `z < 0` branch and take lod 0, which is what a
+		//viewmodel wants anyway -- it is never a LOD candidate.
+		if (sizecullable && z < -clmodel->radius)
 			return;		//furthest extent of bounding sphere is nearer than the near clip plane, and thus completely invisible
 		else if (z < 0)
 			lod = 0;	//nearer than the camera, use the highest lod (and never size-cull)
@@ -3266,6 +3551,41 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		Alias_FlushCache();
 	}
 
+	/*
+	  FTESurf build 19: the void census, and it is the evidence that removed two
+	  cvar modes rather than a leftover from them.
+
+	  r_voidvis shipped in build 17 with two entity-dropping modes here -- one
+	  that skipped non-brush models and one that skipped everything -- on the
+	  reasoning that the props are what the void costs you.  This counter is what
+	  disproved that: aimed straight at the map from outside it, at EVERY mode
+	  including the one where no gate runs, it reads zero.  There are no entities
+	  out there; VBSP's own PVS and radius culls have already rejected them.  So
+	  both gates were inert and both are gone; see the essay on r_voidvis in
+	  renderer.c for the numbers.
+
+	  Kept, because the next person to propose dropping entities in the void
+	  should be able to read the answer off one frame instead of spending two
+	  benchmark runs on it.  STANDARD pass only -- the shadow and depth passes
+	  walk this same list for their own reasons, and folding them in would triple
+	  the number and make it mean nothing -- and developer-gated, because it is a
+	  whole extra walk of the visedict list for a print nobody is reading.
+	*/
+	if (bemode == BEM_STANDARD && developer.ival)
+	{
+		r_voidvis_edicts = cl_numvisedicts - r_refdef.firstvisedict;
+		r_voidvis_brush = 0;
+		r_voidvis_dropped = 0;
+		for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
+		{
+			ent = &cl_visedicts[i];
+			if (ent->rtype != RT_MODEL || !ent->model)
+				continue;
+			if (ent->model->type == mod_brush)
+				r_voidvis_brush++;
+		}
+	}
+
 	// draw sprites seperately, because of alpha blending
 	for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 	{
@@ -3331,6 +3651,14 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 						continue;
 			}
 
+			/*
+			  FTESurf build 17's r_voidvis 1 dropped every non-brush model here.
+			  Build 19 removed it: measured from outside the map and aimed at it,
+			  there are no entities in the void for this to reject -- the census
+			  above reads zero at every mode -- so it was a test that never fired.
+			  See r_voidvis in renderer.c.
+			*/
+
 			safeswitch(emodel->type)
 			{
 			case mod_brush:
@@ -3351,6 +3679,15 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 			case mod_halflife:
 #ifdef HALFLIFEMODELS
 				R_HalfLife_GenerateBatches(ent, batches);
+				//nettest: r_showhitboxes - overlay this model's own per-bone
+				//hitboxes.  HLMDL_DrawHitBoxes already existed and already did
+				//exactly the right thing (it builds the bone matrices from
+				//rent->framestate, the same data HLMDL_Trace poses from), but the
+				//only caller was the model viewer in m_options.c.  Wiring it into
+				//the scene means the overlay cannot disagree with the boxes bullets
+				//are tested against, which is the whole point of asking for it.
+				if (r_showhitboxes.ival)
+					HLMDL_DrawHitBoxes(ent);
 #endif
 				break;
 			case mod_dummy:

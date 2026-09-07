@@ -47,6 +47,8 @@ extern int		gl_stencilbits;
 extern cvar_t	gl_part_flame;
 extern cvar_t	r_bloom;
 extern cvar_t	r_wireframe, r_wireframe_smooth;
+extern cvar_t	r_portalmaxviews, r_portaldebug;	//FTESurf Patch 206
+extern cvar_t	r_portalscissor;					//FTESurf Patch 208
 extern cvar_t	r_outline;
 
 cvar_t	gl_affinemodels = CVARFD("gl_affinemodels","0", CVAR_ARCHIVE, "Use affine texture sampling for models. This replicates software rendering's distortions.");
@@ -1109,7 +1111,499 @@ static void TransformDir(vec3_t in, vec3_t planea[3], vec3_t viewa[3], vec3_t re
 
 void R_ObliqueNearClip(float *viewmat, mplane_t *wplane);
 void CL_DrawDebugPlane(float *normal, float dist, float r, float g, float b, qboolean enqueue);
-void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], int portaltype)
+
+/*
+  FTESurf Patch 206: the portal's plane, factored out of GLR_DrawPortal.
+
+  Three separate loops need to agree about whether a given portal batch is going
+  to be rendered this view, and until now only one of them could tell -- the
+  test lived inline in the middle of the function that does the rendering.  The
+  answer is a pure function of the batch and the current view, so it is one here
+  and everybody asks the same question.
+
+  Returns false when the batch has no usable geometry at all.
+*/
+static qboolean GLR_PortalPlane(batch_t *batch, plane_t *out, mesh_t **outmesh)
+{
+	plane_t plane, oplane;
+	mesh_t *mesh;
+
+	/* FTESurf Patch 203: a portal batch can legitimately have no mesh.
+
+	   Every portal in the engine up to now has been a world surface, whose
+	   mesh is always there.  Patch 205's apertures are ALIAS models, and an
+	   alias batch carries mesh==NULL until its buildmeshes callback runs
+	   (gl_alias.c:2166) -- and that callback sets it back to NULL when the
+	   surface produced no indices (:1970-1971).  The caller builds it before
+	   calling us, so this is the second of those two cases; either way,
+	   dereferencing batch->mesh[] on faith is a null read. */
+	if (!batch->mesh || batch->meshes == batch->firstmesh)
+		return false;
+	mesh = batch->mesh[batch->firstmesh];
+	if (!mesh || !mesh->xyz_array)
+		return false;
+
+	if (!mesh->normals_array)
+	{
+		VectorSet(plane.normal, 0, 0, 1);
+	}
+	else
+	{
+		VectorCopy(mesh->normals_array[0], plane.normal);
+	}
+
+	if (batch->ent == &r_worldentity)
+	{
+		plane.dist = DotProduct(mesh->xyz_array[0], plane.normal);
+	}
+	else
+	{
+		vec3_t point;
+		VectorCopy(plane.normal, oplane.normal);
+		//rotate the surface normal around its entity's matrix
+		plane.normal[0] = oplane.normal[0]*batch->ent->axis[0][0] + oplane.normal[1]*batch->ent->axis[1][0] + oplane.normal[2]*batch->ent->axis[2][0];
+		plane.normal[1] = oplane.normal[0]*batch->ent->axis[0][1] + oplane.normal[1]*batch->ent->axis[1][1] + oplane.normal[2]*batch->ent->axis[2][1];
+		plane.normal[2] = oplane.normal[0]*batch->ent->axis[0][2] + oplane.normal[1]*batch->ent->axis[1][2] + oplane.normal[2]*batch->ent->axis[2][2];
+
+		//rotate some point on the mesh around its entity's matrix
+		point[0] = mesh->xyz_array[0][0]*batch->ent->axis[0][0] + mesh->xyz_array[0][1]*batch->ent->axis[1][0] + mesh->xyz_array[0][2]*batch->ent->axis[2][0] + batch->ent->origin[0];
+		point[1] = mesh->xyz_array[0][0]*batch->ent->axis[0][1] + mesh->xyz_array[0][1]*batch->ent->axis[1][1] + mesh->xyz_array[0][2]*batch->ent->axis[2][1] + batch->ent->origin[1];
+		point[2] = mesh->xyz_array[0][0]*batch->ent->axis[0][2] + mesh->xyz_array[0][1]*batch->ent->axis[1][2] + mesh->xyz_array[0][2]*batch->ent->axis[2][2] + batch->ent->origin[2];
+
+		//now we can figure out the plane dist
+		plane.dist = DotProduct(point, plane.normal);
+	}
+
+	*out = plane;
+	if (outmesh)
+		*outmesh = mesh;
+	return true;
+}
+
+/*
+  FTESurf Patch 206: the geometric half of the verdict -- would GLR_DrawPortal
+  render a view through this batch, from the given view?
+
+  Must stay in lockstep with the refusals at the top of GLR_DrawPortal; that is
+  the whole point of it existing.  A caller that masks an aperture this says no
+  to is writing a hole into the wall.
+
+  `level` is passed rather than read from r_refdef because GLR_DrawPortal's own
+  depth-mask loop runs with recurse ALREADY incremented while still using the
+  outer view's matrices and origin -- so it has to ask about the outer level,
+  and a function that quietly read the global would be off by one exactly where
+  it matters.
+*/
+static qboolean GLR_PortalDrawableAt(batch_t *batch, int level)
+{
+	plane_t plane;
+	float d;
+
+	if (level >= R_MAX_RECURSE-1)
+		return false;
+	if (!GLR_PortalPlane(batch, &plane, NULL))
+		return false;
+
+	d = DotProduct(r_refdef.vieworg, plane.normal) - plane.dist;
+	if ((batch->shader->flags & SHADER_AGEN_PORTAL) && d > batch->shader->portaldist)
+		return false;
+	if (d < -r_refdef.mindist)
+		return false;
+	return true;
+}
+
+/*
+  FTESurf Patch 206: the per-view portal budget.
+
+  Angular size is the metric because it is the one the eye uses.  A doorway
+  filling a third of the screen is worth a scene render; the same doorway across
+  the map, four pixels wide, is not -- and crucially, a portal seen THROUGH
+  another portal is scored from the recursed eye, where it is large, which is
+  what makes the next room's door render open while everything past it renders
+  closed.  That is the behaviour asked for, and it falls out of the metric
+  rather than being special-cased.
+
+  One set per recursion level, because GLBE_SubmitMeshesPortals re-enters at
+  every level and each level's budget is its own question.
+
+  THE VERDICT IS CACHED, and that is a correctness requirement rather than an
+  optimisation.  R_GAlias_DrawBatch points every alias batch at ONE file-static
+  mesh_t (gl_alias.c:1934-1935) which describes that batch only between its own
+  build and its own submit.  A portal's plane therefore cannot be recomputed
+  later from batch->mesh -- it would read whichever aperture was built last, and
+  eighteen doors would all answer with the geometry of one.  So each batch is
+  built and judged in the same step, once, and every loop afterwards does a
+  pointer lookup and touches no mesh at all.  That also deletes the quadratic
+  buildmeshes traffic GLR_DrawPortal's mask loop used to generate.
+*/
+static int portalscenes;	//FTESurf Patch 206: scene renders this frame, every level
+#define PORTALBUDGETMAX 16
+#define PORTALTABLEMAX 256	//surf_tripportals has 116 doors; past this they render closed
+static struct
+{
+	struct
+	{
+		batch_t	*batch;
+		float	score;
+		qboolean drawable;
+		/* FTESurf Patch 208: the aperture's bounds on screen, in THIS view.
+		   Measured in the same build-and-judge pass and for the same reason as
+		   `score` -- see the header above -- and additionally because this pass
+		   is the last moment before R_ObliqueNearClip rewrites
+		   m_projection_std in place (gl_rmain.c, GLR_DrawPortal), so every
+		   rectangle at a level comes from one consistent projection.
+		   haverect false means "do not clip", never "cull". */
+		qboolean haverect;
+		srect_t	rect;
+	} ent[PORTALTABLEMAX];
+	int		numents;
+	batch_t	*chosen[PORTALBUDGETMAX];
+	int		count;
+	qboolean limited;
+} portalbudget[R_MAX_RECURSE];
+
+/*
+  FTESurf Patch 208: one aperture vertex, in world space.
+
+  This was spelled out twice inside GLR_PortalAngularSize and Patch 208 needs it
+  a third time, so it is a function.  The axis rows are not optional decoration:
+  cl_portal.qc builds all 443 of the library's doors from ONE unit quad and puts
+  each door's half-width and half-height into the axis rows as a per-axis scale
+  (RF_USEAXIS), so the model-space vertex says nothing whatever about where the
+  door is or how big it is.
+*/
+static void GLR_PortalVertex(batch_t *batch, mesh_t *mesh, int v, vec3_t out)
+{
+	if (batch->ent == &r_worldentity)
+	{
+		VectorCopy(mesh->xyz_array[v], out);
+		return;
+	}
+	out[0] = mesh->xyz_array[v][0]*batch->ent->axis[0][0] + mesh->xyz_array[v][1]*batch->ent->axis[1][0] + mesh->xyz_array[v][2]*batch->ent->axis[2][0] + batch->ent->origin[0];
+	out[1] = mesh->xyz_array[v][0]*batch->ent->axis[0][1] + mesh->xyz_array[v][1]*batch->ent->axis[1][1] + mesh->xyz_array[v][2]*batch->ent->axis[2][1] + batch->ent->origin[1];
+	out[2] = mesh->xyz_array[v][0]*batch->ent->axis[0][2] + mesh->xyz_array[v][1]*batch->ent->axis[1][2] + mesh->xyz_array[v][2]*batch->ent->axis[2][2] + batch->ent->origin[2];
+}
+
+/*
+  FTESurf Patch 208: the aperture's bounding rectangle on screen, in the current
+  view, as srect_t fractions of r_refdef.pxrect (x from the left, y from the
+  BOTTOM -- GLBE_Scissor's convention, not the 2d one).
+
+  Modelled on Sh_ScissorForBox (gl_shadow.c), which is the engine's working
+  example of this projection, with three deliberate differences.
+
+  It walks the aperture's own VERTICES over the whole firstmesh..meshes range
+  rather than a bounding box.  A world-space AABB of a yawed 88x88 door is far
+  looser than its four corners, and the range must match what the depth mask
+  actually submits (GLBE_SubmitBatch takes the whole range) -- a rectangle that
+  excluded part of the masked quad would punch a fresh hole in the wall.
+
+  It NEVER CULLS.  Sh_ScissorForBox returns "fully offscreen" and its callers
+  skip the light; here the analogous answers all mean "do not clip", which is
+  bit-for-bit the pre-Patch-208 behaviour.  In particular a vertex at or behind
+  the near plane makes it decline outright instead of interpolating the crossing
+  the way Sh_ScissorForBox does: after a w that has passed through zero, the
+  0..1 clamp can produce a rectangle SMALLER than the true footprint, and a
+  rectangle short at the aperture rim is Patch 206's transparent square back
+  again as a one-pixel fringe -- appearing exactly while you walk through the
+  door, which is the worst possible moment for it. Declining to clip while the
+  eye is in the doorway is also just correct: from in there the aperture really
+  does fill the view, and containment is the near clip's job.
+
+  For the same reason the rectangle is padded by two pixels: it must be a strict
+  SUPERSET of the aperture's rasterised footprint.
+
+  dmin/dmax are pinned to 0 and 1 rather than derived. R_ObliqueNearClip
+  (r_surf.c) rewrites only the z row of m_projection_std, so screen x and y stay
+  trustworthy while any depth computed from it does not -- and GLBE_Scissor
+  feeds dmin/dmax straight into qglDepthBoundsEXT.
+*/
+static qboolean GLR_PortalScreenRect(batch_t *batch, srect_t *out)
+{
+	mesh_t *mesh;
+	vec3_t p;
+	vec4_t v, tv;
+	float ncpdist, x, y, x1, y1, x2, y2, padx, pady;
+	int m, i;
+	qboolean any = false;
+
+	if (!r_portalscissor.ival)
+		return false;
+	if (!batch->mesh)
+		return false;
+
+	ncpdist = DotProduct(r_refdef.vieworg, vpn) + r_refdef.mindist;
+	x1 = y1 = 1;
+	x2 = y2 = -1;
+
+	for (m = batch->firstmesh; m < batch->meshes; m++)
+	{
+		mesh = batch->mesh[m];
+		if (!mesh || !mesh->xyz_array)
+			continue;
+		for (i = 0; i < mesh->numvertexes; i++)
+		{
+			GLR_PortalVertex(batch, mesh, i, p);
+
+			if (ncpdist - DotProduct(p, vpn) > 0)
+				return false;	//straddles the near plane: do not clip at all
+
+			VectorCopy(p, v);
+			v[3] = 1;
+			Matrix4x4_CM_Transform4(r_refdef.m_view, v, tv);
+			Matrix4x4_CM_Transform4(r_refdef.m_projection_std, tv, v);
+			if (v[3] <= 0)
+				return false;	//cannot happen after the test above; cheap insurance
+
+			x = v[0] / v[3];
+			y = v[1] / v[3];
+			if (x < x1) x1 = x;
+			if (x > x2) x2 = x;
+			if (y < y1) y1 = y;
+			if (y > y2) y2 = y;
+			any = true;
+		}
+	}
+	if (!any)
+		return false;
+
+	x1 = (1+x1)*0.5;
+	x2 = (1+x2)*0.5;
+	y1 = (1+y1)*0.5;
+	y2 = (1+y2)*0.5;
+
+	padx = (r_refdef.pxrect.width  > 0) ? 2.0f/r_refdef.pxrect.width  : 0;
+	pady = (r_refdef.pxrect.height > 0) ? 2.0f/r_refdef.pxrect.height : 0;
+	x1 -= padx;	x2 += padx;
+	y1 -= pady;	y2 += pady;
+
+	if (x1 < 0) x1 = 0;
+	if (y1 < 0) y1 = 0;
+	if (x2 > 1) x2 = 1;
+	if (y2 > 1) y2 = 1;
+	if (x2 <= x1 || y2 <= y1)
+		return false;	//degenerate: do not clip
+
+	out->x		= x1;
+	out->y		= y1;
+	out->width	= x2 - x1;
+	out->height	= y2 - y1;
+	out->dmin	= 0;
+	out->dmax	= 1;
+	return true;
+}
+
+//angular radius of the aperture as seen from the eye: size over distance.
+static float GLR_PortalAngularSize(batch_t *batch)
+{
+	mesh_t *mesh;
+	vec3_t centre, point, d;
+	float radius = 0, dist, l;
+	int i;
+
+	if (!batch->mesh || batch->meshes == batch->firstmesh)
+		return 0;
+	mesh = batch->mesh[batch->firstmesh];
+	if (!mesh || !mesh->xyz_array || !mesh->numvertexes)
+		return 0;
+
+	VectorClear(centre);
+	for (i = 0; i < mesh->numvertexes; i++)
+	{
+		GLR_PortalVertex(batch, mesh, i, point);
+		VectorAdd(centre, point, centre);
+	}
+	VectorScale(centre, 1.0/mesh->numvertexes, centre);
+
+	for (i = 0; i < mesh->numvertexes; i++)
+	{
+		GLR_PortalVertex(batch, mesh, i, point);
+		VectorSubtract(point, centre, d);
+		l = DotProduct(d, d);
+		if (l > radius)
+			radius = l;
+	}
+	radius = sqrt(radius);
+
+	VectorSubtract(centre, r_refdef.vieworg, d);
+	dist = sqrt(DotProduct(d, d));
+	if (dist < 1)
+		dist = 1;	//standing in the doorway: as big as it gets
+	return radius / dist;
+}
+
+//called once per GLBE_SubmitMeshesPortals, before either loop touches anything
+void GLR_PortalBudgetBegin(batch_t **worldlist, batch_t *dynamiclist)
+{
+	int level = r_refdef.recurse;
+	int limit = r_portalmaxviews.ival;
+	batch_t *batch;
+	int i, j, k;
+
+	if (level < 0 || level >= R_MAX_RECURSE)
+		return;
+	portalbudget[level].numents = 0;
+	portalbudget[level].count = 0;
+	portalbudget[level].limited = false;
+
+	/* FTESurf Patch 206: nothing at all while the view is outside the world.
+
+	   A portal recursed from the void is meaningless twice over -- its PVS
+	   sample comes from a cluster that does not exist, so the far side renders
+	   as garbage or as nothing -- and it is not cheap meaninglessness: each one
+	   is still a full scene.  Noclipping out through the ceiling of
+	   surf_kitsune therefore paid for eighteen scene renders per frame to look
+	   at eighteen rectangles of nothing.
+
+	   r_viewcluster == -1 is the engine's own "outside the world" (r_surf.c:2446,
+	   and the same test r_voidvis is built on).  Gating on the cluster rather
+	   than on pmovetype covers every way of getting there, and deliberately does
+	   NOT consult r_voidvis, which is a separate feature about what the WORLD
+	   draws and which ftesurf.cfg has switched off. */
+	if (r_viewcluster == -1)
+	{
+		portalbudget[level].limited = true;	//nothing recorded: nothing qualifies
+		return;
+	}
+
+	portalbudget[level].limited = true;
+	if (limit <= 0 || limit > PORTALBUDGETMAX)
+		limit = PORTALBUDGETMAX;	//"unlimited" still cannot exceed the table
+
+	/* Pass one: build and judge in the same step, and remember the answer.  This
+	   is the only place batch->mesh may be read for a portal, for the reason in
+	   the header above. */
+	for (i = 0; i < 2; i++)
+		for (batch = i?dynamiclist:worldlist[SHADER_SORT_PORTAL]; batch; batch = batch->next)
+		{
+			if (portalbudget[level].numents >= PORTALTABLEMAX)
+				break;
+			if (batch->buildmeshes)
+				batch->buildmeshes(batch);
+			j = portalbudget[level].numents++;
+			portalbudget[level].ent[j].batch = batch;
+			portalbudget[level].ent[j].drawable = GLR_PortalDrawableAt(batch, level);
+			portalbudget[level].ent[j].score =
+				portalbudget[level].ent[j].drawable ? GLR_PortalAngularSize(batch) : 0;
+			//FTESurf Patch 208: measured here and nowhere else, for the two
+			//reasons in the struct comment -- the shared alias mesh_t, and the
+			//projection that R_ObliqueNearClip is about to rewrite.
+			portalbudget[level].ent[j].haverect =
+				portalbudget[level].ent[j].drawable &&
+				GLR_PortalScreenRect(batch, &portalbudget[level].ent[j].rect);
+		}
+
+	/* Pass two: keep the largest `limit` of them.  Selection sort over at most
+	   sixteen kept entries -- the table can be hundreds long but the kept set
+	   never is, so this is linear in the table and trivial in the limit. */
+	for (k = 0; k < limit; k++)
+	{
+		int best = -1;
+		for (j = 0; j < portalbudget[level].numents; j++)
+		{
+			if (!portalbudget[level].ent[j].drawable)
+				continue;
+			if (best < 0 || portalbudget[level].ent[j].score > portalbudget[level].ent[best].score)
+			{
+				//skip ones already taken
+				for (i = 0; i < portalbudget[level].count; i++)
+					if (portalbudget[level].chosen[i] == portalbudget[level].ent[j].batch)
+						break;
+				if (i == portalbudget[level].count)
+					best = j;
+			}
+		}
+		if (best < 0)
+			break;
+		portalbudget[level].chosen[portalbudget[level].count++] =
+			portalbudget[level].ent[best].batch;
+	}
+
+	/* Instrument the CONSUMER, not the producer.  "18 doors on this map" is what
+	   the loader believes; what decides the frame is how many portal batches
+	   survived culling into THIS view and how many of those got a scene, and
+	   until this line said so both numbers were guesses.  Change-triggered, per
+	   recursion level, developer only. */
+	{
+		static int lastcand[R_MAX_RECURSE], lastdrawn[R_MAX_RECURSE];
+		static int lastreported = -1;
+		int cand = 0;
+		for (j = 0; j < portalbudget[level].numents; j++)
+			if (portalbudget[level].ent[j].drawable)
+				cand++;
+
+		/* The per-FRAME total is the number that answers "is this the lag", and
+		   it is not any one level's count -- it is the whole tree.  Level 0
+		   starting again means the previous frame is finished and countable. */
+		if (!level)
+		{
+			if (portalscenes != lastreported)
+			{
+				lastreported = portalscenes;
+				Con_DPrintf("portals: %i scene renders last frame\n", portalscenes);
+			}
+			portalscenes = 0;
+		}
+
+		if (cand != lastcand[level] || portalbudget[level].count != lastdrawn[level])
+		{
+			lastcand[level] = cand;
+			lastdrawn[level] = portalbudget[level].count;
+			Con_DPrintf("portals: depth %i, %i in view, %i rendered, %i closed\n",
+				level, cand, portalbudget[level].count, cand - portalbudget[level].count);
+		}
+	}
+}
+
+/*
+  The full verdict: geometry, then the budget.  Every loop that renders a portal
+  or masks one asks this, so all of them agree -- which is the invariant Patch
+  206 exists to restore.  A pure table lookup: it must not touch batch->mesh,
+  because by the time most callers ask, the shared alias mesh_t describes
+  somebody else.
+*/
+qboolean GLR_PortalWouldDrawAt(batch_t *batch, int level)
+{
+	int i;
+	if (level < 0 || level >= R_MAX_RECURSE || !portalbudget[level].limited)
+		return GLR_PortalDrawableAt(batch, level);
+	for (i = 0; i < portalbudget[level].count; i++)
+		if (portalbudget[level].chosen[i] == batch)
+			return true;
+	return false;
+}
+
+qboolean GLR_PortalWouldDraw(batch_t *batch)
+{
+	return GLR_PortalWouldDrawAt(batch, r_refdef.recurse);
+}
+
+/*
+  FTESurf Patch 208: the aperture's screen rectangle, by lookup.
+
+  Same contract as GLR_PortalWouldDrawAt and for the same reason: a pure table
+  read that touches no mesh, because by the time this is asked the shared alias
+  mesh_t describes whichever batch was built last.  Returning false means "do
+  not clip" -- the pre-Patch-208 full-screen render -- and never "cull".
+*/
+static qboolean GLR_PortalScreenRectAt(batch_t *batch, int level, srect_t *out)
+{
+	int i;
+	if (level < 0 || level >= R_MAX_RECURSE || !portalbudget[level].limited)
+		return false;
+	for (i = 0; i < portalbudget[level].numents; i++)
+	{
+		if (portalbudget[level].ent[i].batch != batch)
+			continue;
+		if (!portalbudget[level].ent[i].haverect)
+			return false;
+		*out = portalbudget[level].ent[i].rect;
+		return true;
+	}
+	return false;
+}
+
+qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], int portaltype)
 {
 	entity_t *view, *surfent;
 //	GLdouble glplane[4];
@@ -1118,63 +1612,59 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 	refdef_t oldrefdef;
 	vec3_t r;
 	int i;
-	mesh_t *mesh = batch->mesh[batch->firstmesh];
+	mesh_t *mesh;
 	pvsbuffer_t newvis;
 	float ivmat[16], trmat[16];
 
-	if (mesh->xyz_array)
-	{
-		if (!mesh->normals_array)
-		{
-			VectorSet(plane.normal, 0, 0, 1);
-		}
-		else
-		{
-			VectorCopy(mesh->normals_array[0], plane.normal);
-		}
-
-		if (batch->ent == &r_worldentity)
-		{
-			plane.dist = DotProduct(mesh->xyz_array[0], plane.normal);
-		}
-		else
-		{
-			vec3_t point;
-			VectorCopy(plane.normal, oplane.normal);
-			//rotate the surface normal around its entity's matrix
-			plane.normal[0] = oplane.normal[0]*batch->ent->axis[0][0] + oplane.normal[1]*batch->ent->axis[1][0] + oplane.normal[2]*batch->ent->axis[2][0];
-			plane.normal[1] = oplane.normal[0]*batch->ent->axis[0][1] + oplane.normal[1]*batch->ent->axis[1][1] + oplane.normal[2]*batch->ent->axis[2][1];
-			plane.normal[2] = oplane.normal[0]*batch->ent->axis[0][2] + oplane.normal[1]*batch->ent->axis[1][2] + oplane.normal[2]*batch->ent->axis[2][2];
-
-			//rotate some point on the mesh around its entity's matrix
-			point[0] = mesh->xyz_array[0][0]*batch->ent->axis[0][0] + mesh->xyz_array[0][1]*batch->ent->axis[1][0] + mesh->xyz_array[0][2]*batch->ent->axis[2][0] + batch->ent->origin[0];
-			point[1] = mesh->xyz_array[0][0]*batch->ent->axis[0][1] + mesh->xyz_array[0][1]*batch->ent->axis[1][1] + mesh->xyz_array[0][2]*batch->ent->axis[2][1] + batch->ent->origin[1];
-			point[2] = mesh->xyz_array[0][0]*batch->ent->axis[0][2] + mesh->xyz_array[0][1]*batch->ent->axis[1][2] + mesh->xyz_array[0][2]*batch->ent->axis[2][2] + batch->ent->origin[2];
-
-			//now we can figure out the plane dist
-			plane.dist = DotProduct(point, plane.normal);
-		}
-	}
-	else
-		return;
+	if (!GLR_PortalPlane(batch, &plane, &mesh))
+		return false;
 
 	//if we're too far away from the surface, don't draw anything
 	if (batch->shader->flags & SHADER_AGEN_PORTAL)
 	{
 		/*there's a portal alpha blend on that surface, that fades out after this distance*/
 		if (DotProduct(r_refdef.vieworg, plane.normal)-plane.dist > batch->shader->portaldist)
-			return;
+			return false;
 	}
+	/* ---- FTESurf Patch 206: THIS is the transparent square -------------------
+
+	   Every refusal in this function -- no mesh, no xyz_array, the
+	   alphagen-portal distance above, and the behind-the-plane test below -- was
+	   invisible to the caller, which went on to write the aperture into the
+	   depth buffer regardless.  A depth mask with no scene rendered behind it
+	   does not hide the portal, it deletes the WALL: the world is rejected
+	   there, and since r_clear defaults to 0 and nothing clears colour inside a
+	   recursion, what shows through is the PREVIOUS FRAME.  Smeary, not black,
+	   which is why it reads as "a square transparency".
+
+	   It bit here and not upstream because a world portal surface is split by
+	   SURF_PLANEBACK at load (gl_model.c:3653-3656) and its back side is a
+	   different batch that gets culled.  An alias-model aperture with `cull
+	   none` is in the list from BOTH sides, so on a map of paired doors roughly
+	   half of them are behind you at any instant, and each punched an 88x88 hole
+	   in the wall it was set into.
+
+	   Report the refusal.  The caller then masks only what it actually drew. */
 	//if we're behind it, then also don't draw anything. for our purposes, behind is when the entire near clipplane is behind.
 	if (DotProduct(r_refdef.vieworg, plane.normal)-plane.dist < -r_refdef.mindist)
-		return;
+		return false;
 
 	if (r_refdef.recurse >= R_MAX_RECURSE-1)
-	{
-		GLBE_SelectMode(BEM_DEPTHDARK);
-		GLBE_SubmitBatch(batch);
-		GLBE_SelectMode(BEM_STANDARD);
-		return;
+	{	/* Out of recursion.  BEM_DEPTHDARK paints the surface black for a shader
+		   that has passes and draws nothing at all for a zero-pass portal
+		   shader; either way no view was rendered, so it must not be masked. */
+		/* FTESurf Patch 210: ...and nothing at all for a SHADER_NODRAW one.  That
+		   is the r_portalfbo 0 fallback, whose material keeps its $refraction pass
+		   so the FBO route can use it when the cvar is on; painting that pass here
+		   would show a stale portal image from some other aperture.  Every other
+		   submit path already honours NODRAW; this one, being ours, did not. */
+		if (!(batch->shader->flags & SHADER_NODRAW))
+		{
+			GLBE_SelectMode(BEM_DEPTHDARK);
+			GLBE_SubmitBatch(batch);
+			GLBE_SelectMode(BEM_STANDARD);
+		}
+		return false;
 	}
 
 
@@ -1416,7 +1906,7 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 		r_refdef.frustum[r_refdef.frustum_numplanes++] = fp;
 	}
 #if 1
-	if (depthmasklist)
+	if (depthmasklist && r_portaldebug.ival != 3)
 	{
 		/*draw already-drawn portals as depth-only, to ensure that their contents are not harmed*/
 		/*we can only do this AFTER the oblique perspective matrix is calculated, to avoid depth inconsistancies, while we still have the old view matrix*/
@@ -1442,6 +1932,43 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 					continue;
 //				if (dmask->meshes == dmask->firstmesh)
 //					continue;
+				/* FTESurf Patch 206: mask only the portals that are themselves
+				   being rendered in the OUTER view (this loop still runs under
+				   the old matrices, which is why it is here and not later).
+
+				   The comment above calls this list "already-drawn portals"; it
+				   is not, it is every portal.  Masking one that will never be
+				   drawn stencils its aperture out of this scene AND out of every
+				   other portal's scene, so a failed aperture cannot be painted
+				   by anything at all -- it is locked open as a hole through all
+				   eighteen passes.  That is the second half of the transparent
+				   square, and it is why the symptom survived being looked at
+				   from several angles.
+
+				   oldrefdef.recurse, not r_refdef.recurse: this loop runs after
+				   the increment but still under the outer view. */
+				if (!GLR_PortalWouldDrawAt(dmask, oldrefdef.recurse))
+					continue;
+				/* FTESurf Patch 203: build it first.  This loop submits the OTHER
+				   portal batches, which nothing has built -- an alias batch's mesh
+				   is NULL until buildmeshes runs, and GLBE_SubmitBatch's no-vbo
+				   path dereferences mesh[0] immediately (gl_backend.c:5728).  That
+				   is the crash: an alias-model portal took the renderer out on the
+				   first frame one was visible.
+
+				   Rebuilding rather than merely skipping also fixes what would
+				   otherwise be a silent wrong answer.  R_GAlias_DrawBatch hands
+				   every alias batch a pointer to ONE file-static mesh_t
+				   (gl_alias.c:1934-1935, 1967) which is only valid between its own
+				   build and its own submit -- so eighteen already-built portal
+				   batches would all describe whichever was built last, and the
+				   depth mask would cover one doorway eighteen times.
+				   Build-then-submit in step is the discipline
+				   GLBE_SubmitMeshesSortList already keeps for the same reason. */
+				if (dmask->buildmeshes)
+					dmask->buildmeshes(dmask);
+				if (!dmask->mesh || dmask->meshes == dmask->firstmesh)
+					continue;
 				GLBE_SubmitBatch(dmask);
 			}
 		}
@@ -1469,9 +1996,76 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 	if (r_refdef.m_projection_std[5]<0)
 		r_refdef.flipcull ^= SHADER_CULL_FLIP;
 
+	/* ---- FTESurf Patch 208: CONTAINMENT ---------------------------------------
+
+	   Below this line the recursed frame may only touch the aperture's own
+	   pixels.  This is the answer to "the portal covers the whole wall, and not
+	   the doorway".
+
+	   Measured rather than reasoned: r_portaldebug 1 skips exactly the
+	   R_RenderScene below and nothing else, and on surf_kitsune's exit doorway
+	   that alone brings the entire missing wall back.  So the far scene's colour
+	   IS the thing covering the wall.  FTE paints it over the whole screen --
+	   there is no scissor and no stencil anywhere in this path, only the FIXME
+	   further up this function -- and trusts SHADER_SORT_OPAQUE, which comes
+	   later, to repaint everywhere except the hole.  Where that repaint does not
+	   happen, the far room keeps the wall.  Clipping the far scene to the
+	   doorway makes the question moot instead of answering it, which is the
+	   honest description of this patch: it CONTAINS the repaint bug rather than
+	   curing it, and r_portalscissor 0 is how you get the raw symptom back.
+
+	   A rectangle is a bounding box, so a yawed door leaves the corners of its
+	   projected trapezoid reachable.  Accepted deliberately: a stencil would be
+	   exact but this backend tracks neither scissor nor stencil state
+	   (gl_shadow.c says so), and stencil shadows contend for the buffer inside
+	   this very recursion.
+
+	   depthmasklist is the gate, and it is exact rather than approximate: of
+	   GLR_DrawPortal's five call sites only GLBE_SubmitMeshesPortals passes a
+	   list; the four GLBE_GenerateBatchTextures FBO paths pass NULL.  So the
+	   clip arms only on the main framebuffer -- the path with the leak, and the
+	   only one whose portalbudget table was built for this view, so a stale
+	   table can never be consulted. */
+	if (depthmasklist)
+	{
+		srect_t ap;
+		if (GLR_PortalScreenRectAt(batch, oldrefdef.recurse, &ap))
+		{
+			if (oldrefdef.portalclip)
+			{	/*a portal seen THROUGH a portal: narrow, never widen.  Both
+				  rectangles are in the same screen space because R_SetupGL's
+				  viewport block is gated on !r_refdef.recurse, so pxrect is
+				  still the outermost view's.*/
+				float x2 = ap.x + ap.width, y2 = ap.y + ap.height;
+				if (x2 > oldrefdef.portalcliprect[0] + oldrefdef.portalcliprect[2])
+					x2 = oldrefdef.portalcliprect[0] + oldrefdef.portalcliprect[2];
+				if (y2 > oldrefdef.portalcliprect[1] + oldrefdef.portalcliprect[3])
+					y2 = oldrefdef.portalcliprect[1] + oldrefdef.portalcliprect[3];
+				if (ap.x < oldrefdef.portalcliprect[0]) ap.x = oldrefdef.portalcliprect[0];
+				if (ap.y < oldrefdef.portalcliprect[1]) ap.y = oldrefdef.portalcliprect[1];
+				ap.width  = (x2 > ap.x) ? x2 - ap.x : 0;
+				ap.height = (y2 > ap.y) ? y2 - ap.y : 0;
+			}
+			r_refdef.portalclip = true;
+			r_refdef.portalcliprect[0] = ap.x;
+			r_refdef.portalcliprect[1] = ap.y;
+			r_refdef.portalcliprect[2] = ap.width;
+			r_refdef.portalcliprect[3] = ap.height;
+			r_refdef.portalclippx[0] = r_refdef.pxrect.x;
+			r_refdef.portalclippx[1] = r_refdef.pxrect.y;
+			r_refdef.portalclippx[2] = r_refdef.pxrect.width;
+			r_refdef.portalclippx[3] = r_refdef.pxrect.maxheight;
+		}
+		//else: no measurable rectangle for this door, so this view inherits
+		//whatever the parent had -- which for the outermost level is nothing,
+		//i.e. exactly the old behaviour.
+		BE_Scissor(NULL);	//resolves against r_refdef; see GLBE_ApplyScissor
+	}
+
 	Surf_SetupFrame();
 	//FIXME: just call Surf_DrawWorld instead?
-	R_RenderScene();
+	if (r_portaldebug.ival != 1)	//P206 bisect: aperture drawn, nothing rendered through it
+		R_RenderScene();
 //	if (qglClipPlane)
 //		qglDisable(GL_CLIP_PLANE0);
 
@@ -1489,6 +2083,12 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 
 
 	r_refdef = oldrefdef;
+	/* FTESurf Patch 208: restore THEN resolve, in that order -- the restore is
+	   what puts the parent's clip (or none) back in r_refdef, and this call is
+	   what makes the GL state agree with it again.  There is no early return
+	   between the arming block above and here. */
+	if (depthmasklist)
+		BE_Scissor(NULL);
 
 	/*broken stuff*/
 	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
@@ -1504,6 +2104,8 @@ void GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], 
 #pragma warningmsg("warning: there's a bug with rtlights in portals, culling is broken or something. May also be loading the wrong matrix")
 #endif
 	currententity = NULL;
+	portalscenes++;	//P206: counted where it happened, not where it was intended
+	return true;
 }
 
 
@@ -2149,6 +2751,12 @@ void GLR_RenderView (void)
 	else if (renderscale != 1)
 		forcedfb = gl_config.ext_framebuffer_objects && sh_config.texture_non_power_of_two_pic;
 
+	/* FTESurf Patch 208: belt and braces.  A portal clip only ever lives inside
+	   GLR_DrawPortal, which restores it on the way out, but this is the top of
+	   every 3d view and r_refdef is assembled upstream by several different
+	   paths -- so start each one with the clip provably down, and let the
+	   BE_Scissor below actually disable it rather than resolve to a stale box. */
+	r_refdef.portalclip = false;
 	BE_Scissor(NULL);
 	if (dofbo)
 	{

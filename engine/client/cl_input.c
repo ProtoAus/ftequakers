@@ -38,6 +38,8 @@ cvar_t	cl_c2spps = CVARD("cl_c2spps", "0", "Reduces outgoing packet rates by dro
 cvar_t	cl_c2sImpulseBackup = CVARD("cl_c2sImpulseBackup","3", "Prevents the cl_c2spps setting from dropping redundant packets that contain impulses, in an attempt to keep impulses more reliable.");
 static cvar_t	cl_c2sMaxRedundancy = CVARD("cl_c2sMaxRedundancy","5", "This is the maximum number of input frames to send in each input packet. Values greater than 1 provide redundancy and avoid prediction misses, though you might find cl_c2sdupe provides equivelent result and at lower latency. It is locked at 3 for vanilla quakeworld, and locked at 1 for vanilla netquake.");
 cvar_t	cl_netfps = CVARFD("cl_netfps", "150", CVAR_ARCHIVE, "Send up to this many packets to the server per second. The rate used is also limited by the server which usually forces a cap to this setting of 77. Low packet rates can result in extra extrapolation to try to hide the resulting latencies.");
+//FTESurf Patch 252: see the essay at the snap itself, in CL_SendCmd.
+cvar_t	cl_netfps_snap = CVARFD("cl_netfps_snap", "1", CVAR_ARCHIVE, "When the Source movement module is active (pm_physicsmode 1), round the usercmd interval to a whole number of physics ticks. The mover runs whole pm_ticrate ticks and carries the remainder, so a command interval that is not a multiple of the tick makes some commands move the player two ticks and others none at all -- a periodic stall you can see and feel. 0 sends at exactly cl_netfps and restores the old behaviour.");
 cvar_t  cl_queueimpulses = CVARD("cl_queueimpulses", "0", "Queues unsent impulses instead of replacing them. This avoids the need for extra wait commands (and the timing issues of such commands), but potentially increases latency and can cause scripts to be desynced with regard to buttons and impulses.");
 cvar_t	cl_smartjump = CVARD("cl_smartjump", "1", "Makes the jump button act as +moveup when in water. This is typically quieter and faster.");
 cvar_t	cl_iDrive = CVARFD("cl_iDrive", "1", CVAR_SEMICHEAT, "Effectively releases movement keys when the opposing key is pressed. This avoids dead-time when both keys are pressed. This can be emulated with various scripts, but that's messy.");
@@ -147,6 +149,7 @@ static kbutton_t	in_left, in_right, in_forward, in_back;
 static kbutton_t	in_lookup, in_lookdown, in_moveleft, in_moveright;
 static kbutton_t	in_use, in_jump, in_attack;
 static kbutton_t	in_rollleft, in_rollright, in_up, in_down;
+static kbutton_t	in_duck;	//FTESurf: +duck, Source's IN_DUCK. ORs into bit 3 alongside +button4.
 
 static kbutton_t	in_button[19+1];
 
@@ -957,9 +960,19 @@ static void IN_AttackUp(void) {if (KeyUp(&in_attack)) IN_DoWeaponHide();}
 
 static void IN_UseDown (void) {KeyDown(&in_use, NULL);}
 static void IN_UseUp (void) {KeyUp(&in_use);}
+
+//FTESurf: +duck. Its own kbutton rather than an alias to +button4, because
+//Cmd_ExecuteString refuses to forward the keynum into an alias whose body
+//starts with '+' (cmd.c:3125). Without the keynum KeyDown takes its k=-1
+//"typed at the console" path (cl_input.c:219), and then with duck bound to two
+//keys the second press is swallowed as a repeat and releasing EITHER key
+//stands you up. Both commands still fold into bit 3, so +button4 is unaffected.
+static void IN_DuckDown (void) {KeyDown(&in_duck, NULL);}
+static void IN_DuckUp (void) {KeyUp(&in_duck);}
 static void IN_JumpDown (void)
 {
 	qboolean up;
+	qboolean flying = false;	//FTESurf Patch 162: smartjump diverted for noclip/fly, not for swimming
 	int pnum = CL_TargettedSplit(false);
 	playerview_t *pv = &cl.playerview[pnum];
 
@@ -977,7 +990,7 @@ static void IN_JumpDown (void)
 	else if (!pv->spectator && pv->stats[STAT_HEALTH] <= 0)
 		up = false;	//don't ever 'swim' when dead.
 	else if (pv->pmovetype == PM_FLY || pv->pmovetype == PM_6DOF || pv->pmovetype == PM_SPECTATOR || pv->pmovetype == PM_OLD_SPECTATOR)
-		up = true;	//fling/spectating
+		up = flying = true;	//fling/spectating
 	else if ((pv->pmovetype == PM_NORMAL || pv->pmovetype == PM_WALLWALK) && pv->waterlevel >= 2 && (!cl.teamfortress || !(in_forward.state[pnum] & 1)))
 		up = true;	//swimming. TF only (silently) smartjumps when NOT moving.
 #endif
@@ -985,6 +998,33 @@ static void IN_JumpDown (void)
 		up = false;
 
 	KeyDown((up?&in_up:&in_jump), &in_down);
+
+	/*
+	FTESurf Patch 162 -- smartjump was EATING the jump button in noclip, and
+	that is why Patch 156 appeared to do nothing.
+
+	Reported twice as "+jump still moves the player up during noclip".  The
+	branch above is the whole reason: in noclip pmovetype is PM_SPECTATOR, so
+	`up` is true and the key presses in_up instead of in_jump.  in_up becomes a
+	positive upmove -- which PMSrc_NoClipMove was asked to ignore -- and
+	BUTTON_JUMP (GATHERBIT(in_jump, 1), cl_input.c:1282) is never set at all.
+	So Patch 156's `buttons & BUTTON_JUMP` could not fire, and neither could
+	SV_TeleportBypassed's `.button2` on the server: two halves of one feature,
+	both dead, for one missing bit.
+
+	Press in_jump AS WELL, so the button reports the key honestly and the MOVER
+	decides what jump means rather than the input layer guessing.  in_up stays
+	pressed, so nothing else changes: quakers runs QuakeWorld physics
+	(PHYSMODE_SOURCE is off, pmove.c:1437) and its PM_SpectatorMove still flies
+	upward on space exactly as before.
+
+	Scoped to the fling/spectate branch only.  Doing it for the swimming branch
+	as well would newly set button2 while underwater, where stock QuakeC's
+	PlayerJump gives velocity_z = 100 -- a real behaviour change to a game this
+	engine is shared with, for no benefit here.
+	*/
+	if (flying)
+		KeyDown(&in_jump, NULL);
 }
 static void IN_JumpUp (void)
 {
@@ -1189,6 +1229,13 @@ cvar_t	cl_backspeed = CVARFD("cl_backspeed","", CVAR_ARCHIVE, "The base speed th
 cvar_t	cl_sidespeed = CVARF("cl_sidespeed","400", CVAR_ARCHIVE);
 
 cvar_t	cl_movespeedkey = CVAR("cl_movespeedkey","2.0");
+//FTESurf: +speed is normally a purely clientside scale on the move values, so
+//the server cannot tell it apart from "walked slower".  pm_source.c's noclip
+//wants to know, and there is no room left in the QuakeWorld usercmd's single
+//BUTTON BYTE to add a bit unconditionally.  Bit 7 (+button8 / QC .button8) is
+//the last free one, so this is opt-in: default 0 means every other game on
+//this engine sees exactly the byte it saw before.
+cvar_t	in_speedbutton	= CVARFD("in_speedbutton", "0", CVAR_ARCHIVE, "Make +speed also set usercmd button bit 7 (QC's .button8), so server-side movement code can see the run/walk key. Off by default because it collides with +button8 for mods that use it.");
 
 cvar_t	cl_yawspeed = CVAR("cl_yawspeed","140");
 cvar_t	cl_pitchspeed = CVAR("cl_pitchspeed","150");
@@ -1264,11 +1311,13 @@ void CL_GatherButtons (usercmd_t *cmd, int pnum)
 	UNUSEDBUTTON(1);				//officially, qc's button1 field is unusable (although qw folds button3 over to it)
 	GATHERBIT(in_button[2],		1);	GATHERBIT(in_jump,			1);
 	GATHERBIT(in_button[3],		2);
-	GATHERBIT(in_button[4],		3);
+	GATHERBIT(in_button[4],		3);	GATHERBIT(in_duck,			3);	//FTESurf: bit 3 == pmove.h's BUTTON_DUCK, read by pm_source.c
 	GATHERBIT(in_button[5],		4);
 	GATHERBIT(in_button[6],		5);
 	GATHERBIT(in_button[7],		6);
 	GATHERBIT(in_button[8],		7);
+	if (in_speedbutton.ival)	//FTESurf: bit 7 == pmove.h's BUTTON_SPEED. Opt-in; see the cvar.
+		GATHERBIT(in_speed,		7);
 
 	//more inconsistencies, as required for dpcompat.
 	GATHERBIT(in_use,			(cls.protocol==CP_QUAKEWORLD)?4:8);
@@ -1294,10 +1343,16 @@ void CL_GatherButtons (usercmd_t *cmd, int pnum)
 	cmd->buttons |= bits;
 }
 
+void CL_ClearAngleHistory(void);		/*FTESurf P136, defined below*/
+
 void CL_ClearPendingCommands(void)
 {
 	size_t seat, i;
 	memset(&cl_pendingcmd, 0, sizeof(cl_pendingcmd));
+	CL_ClearAngleHistory();	//FTESurf P136: samples from before a map change or a
+							//reconnect describe a different world; a resample that
+							//reached across one would aim the first command of the
+							//new map at the last angle of the old.
 	for (seat = 0; seat < countof(cl_pendingcmd); seat++)
 	{
 		for (i=0 ; i<3 ; i++)
@@ -1716,12 +1771,124 @@ static void CL_FinishMove (usercmd_t *cmd, int pnum)
 }
 
 
-static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, float framemsecs/*total accumulated*/)
+/*
+==============
+FTESurf Patch 136: resample a usercmd's angles to the command's NOMINAL end time.
+
+THE BUG.  FTE paces usercmds to a nominal slot: CL_FilterTime consumes exactly
+1000/cl_netfps ms per command and carries the surplus in msecsround, so over the
+long run the msec the physics is handed equals real elapsed time.  But the
+command's ANGLE is a point sample taken at whatever video frame happened to
+trigger the send.  So the angular velocity the physics actually integrates is
+
+	cl_yawspeed * (real time between the two sampling frames) / 15 ms
+
+which is 1.0 only when the video frame grid happens to divide the command
+exactly.  At cl_yawspeed 120.6 the ideal is 1.8090 deg per tick; simulated
+against this file's own arithmetic plus pm_source's tick loop:
+
+	 100 fps   -33.5% .. +33.6%
+	 120 fps   -44.7% .. +11.1%
+	 128 fps   -48.1% ..  +4.5%   (~96% of ticks +4.5%, a -48% spike every ~0.4s)
+	 500 fps          +-7%
+	 200/400/600/1000 fps        +-0.2%   (the grid divides 15 ms exactly)
+
+That is why a keyboard turn -- no mouse anywhere in the loop -- felt clean at
+1000 fps and jittered at 128.
+
+THE FIX.  Keep a short history of (realtime, aimangles) and report the angle at
+the command's nominal end time, realtime - cmdlag, instead of the angle at the
+video frame.  Simulated, this takes per-tick yaw from 0.94-1.89 deg at 128 fps to
+1.8073-1.8127 deg at EVERY frame rate from 30 to 1234.  The residual +-0.2% is
+the 16-bit angle step on the wire and needs a protocol change to remove.
+
+WHAT IT COSTS.  The physics angle currently LEADS its command's nominal time by
+up to one video frame; removing that lead raises the physics' effective input
+latency by about half a frame -- 0.5 ms at 1000 fps, 3.9 ms at 128.  The rendered
+view is untouched: nothing here writes viewangles or aimangles, and the only path
+from cmd->angles back to the view (cl_pred.c) is gated on QuakeWorld demo
+playback.
+
+Deliberately NOT done: changing CL_AdjustAngles, which integrates against
+host_frametime and is already correct, and making msec "truthful", which
+simulates strictly worse.
+==============
+*/
+float LerpAngles360(float to, float from, float frac);	/*cl_pred.c; no header declares it*/
+
+#define CL_ANGHIST 16			/*one video frame of lag at most, while fps >= cl_netfps*/
+static struct
+{
+	double time;
+	vec3_t ang;
+} cl_anghist[MAX_SPLITS][CL_ANGHIST];
+static int cl_anghist_head[MAX_SPLITS];
+static int cl_anghist_len[MAX_SPLITS];
+
+void CL_ClearAngleHistory(void)
+{
+	memset(cl_anghist_head, 0, sizeof(cl_anghist_head));
+	memset(cl_anghist_len, 0, sizeof(cl_anghist_len));
+}
+
+static void CL_PushAngleSample(int plnum, const vec3_t ang)
+{
+	int h = cl_anghist_head[plnum];
+	cl_anghist[plnum][h].time = realtime;
+	VectorCopy(ang, cl_anghist[plnum][h].ang);
+	cl_anghist_head[plnum] = (h + 1) % CL_ANGHIST;
+	if (cl_anghist_len[plnum] < CL_ANGHIST)
+		cl_anghist_len[plnum]++;
+}
+
+/*Angle at `when`, lerped between the two bracketing samples.  Yaw takes the
+  short way round; pitch and roll are linear and never wrap in practice.*/
+static void CL_AngleAt(int plnum, double when, vec3_t out)
+{
+	int i, newer, older;
+	double span, f;
+	int n = cl_anghist_len[plnum];
+	int h = cl_anghist_head[plnum];
+
+	if (!n)
+	{
+		VectorClear(out);
+		return;
+	}
+
+	newer = (h - 1 + CL_ANGHIST) % CL_ANGHIST;
+	if (when >= cl_anghist[plnum][newer].time || n < 2)
+	{	/*asking for now, or for the future: the newest sample is the answer*/
+		VectorCopy(cl_anghist[plnum][newer].ang, out);
+		return;
+	}
+
+	for (i = 1; i < n; i++)
+	{
+		older = (h - 1 - i + 2*CL_ANGHIST) % CL_ANGHIST;
+		if (cl_anghist[plnum][older].time <= when)
+		{
+			span = cl_anghist[plnum][newer].time - cl_anghist[plnum][older].time;
+			f = (span > 0) ? (when - cl_anghist[plnum][older].time) / span : 1;
+			out[0] = LerpAngles360(cl_anghist[plnum][older].ang[0], cl_anghist[plnum][newer].ang[0], f);
+			out[1] = LerpAngles360(cl_anghist[plnum][older].ang[1], cl_anghist[plnum][newer].ang[1], f);
+			out[2] = LerpAngles360(cl_anghist[plnum][older].ang[2], cl_anghist[plnum][newer].ang[2], f);
+			return;
+		}
+		newer = older;
+	}
+
+	/*older than anything we kept -- a hitch.  The oldest is the best answer.*/
+	VectorCopy(cl_anghist[plnum][newer].ang, out);
+}
+
+static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, float framemsecs/*total accumulated*/, float cmdlag/*ms this cmd's nominal end is behind now*/)
 {
 	usercmd_t *cmd = &cl_pendingcmd[plnum];
 	int i;
 	static vec3_t mousemovements[MAX_SPLITS];
 	vec3_t newmoves;
+	vec3_t resampled;
 
 	float nscale = framemsecs?framemsecs / (framemsecs+cmd->msec):0;
 	float oscale = 1 - nscale;
@@ -1735,8 +1902,17 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 	IN_Move (mousemovements[plnum], newmoves, plnum, frametime);
 	CL_ClampPitch(plnum, frametime);
 
+	/*Patch 136.  aimangles, not viewangles: CL_FinishMove:1722 writes aimangles
+	  on the first frame of a window and this used to write viewangles on frames
+	  2..N, so cmd->angles' provenance depended on how many accumulate frames the
+	  command happened to get.  aimangles is what client.h calls "angles actually
+	  being sent to the server", is derived from viewangles by CL_ClampPitch just
+	  above, and is identical to it with in_vraim 0.*/
+	CL_PushAngleSample(plnum, cl.playerview[plnum].aimangles);
+	CL_AngleAt(plnum, realtime - cmdlag*0.001, resampled);
+
 	for (i=0 ; i<3 ; i++)
-		cmd->angles[i] = ((int)(cl.playerview[plnum].viewangles[i]*65536.0/360)&65535);
+		cmd->angles[i] = (int)(ANGLE2SHORT(resampled[i]))&65535;
 
 	cmd->fservertime = cl.servertime;
 	cmd->servertime = cl.time*1000;
@@ -1754,6 +1930,33 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 
 		CL_FinishMove(cmd, plnum);
 		Cbuf_Waited();	//its okay to stop waiting now
+	}
+	else if (framemsecs && cl.movesequence > 2)
+	{
+		/*FTESurf Patch 136c: keep gathering buttons for the whole accumulation
+		  window instead of only its first video frame.
+
+		  The gate above samples buttons ONCE, on the first frame of a command --
+		  so button latency GROWS with frame rate: at 1000 fps a 15 ms command
+		  spans about fifteen frames and its jump bit is up to 15 ms stale, while
+		  a press-and-release inside the window is dropped entirely.  That is
+		  precisely the wrong direction for a bhop trainer, where the whole point
+		  of a high frame rate is to hit a tighter window.
+
+		  CL_GatherButtons ORs (cl_input.c:1313), so calling it again accumulates
+		  rather than replaces: a button that goes down at ANY point in the window
+		  is in the command.  A release inside the window is deferred to the next
+		  one, which is the right trade -- a jump that never registers is a lost
+		  input, a jump held 15 ms too long is not.
+
+		  It cannot leak past the send: cl_pendingcmd is memset by
+		  CL_ClearPendingCommands after every one.  The movesequence > 2 test
+		  mirrors CL_FinishMove, which deliberately zeroes buttons for the first
+		  two moves to dump stale input from the previous level; re-gathering
+		  here would undo that.
+
+		  Impulses and Cbuf_Waited() stay one-shot in the branch above.*/
+		CL_GatherButtons(cmd, plnum);
 	}
 	cmd->msec = framemsecs;
 
@@ -2062,6 +2265,26 @@ void Name_Callback(struct cvar_s *var, char *oldvalue)
 
 }
 #endif
+
+/*FTESurf Patch 252: CL_FilterTime with the interval STATED, in milliseconds,
+  instead of derived from a rate.  Same contract and same return value -- the
+  surplus left for the next slot -- but the threshold and the amount consumed
+  are the same number by construction, which is the whole point: CL_FilterTime
+  below tests ceil(1000/fps) and then eats 1000/fps, and any gap between those
+  two is banked every command until it becomes a short command that runs no
+  physics tick at all.  See the essay in CL_SendCmd.*/
+static float CL_FilterTimeMS (double time, double intervalms, float limit)
+{
+	if (cls.timedemo)
+		return -1;
+	if (intervalms <= 0)
+		return -1;
+	if (time < intervalms)
+		return 0;
+	if (limit && time - intervalms > intervalms*limit)
+		return intervalms*limit;
+	return time - intervalms;
+}
 
 float CL_FilterTime (double time, float wantfps, float limit, qboolean ignoreserver)	//now returns the extra time not taken in this slot. Note that negative 1 means uncapped.
 {
@@ -2769,7 +2992,10 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 	static double msecsround;
 	qboolean	dontdrop=false;
 	float usetime;		//how many msecs we can use for the new frame
+	float spare = 0;	//time deliberately left for the next command (FTESurf P136)
+	float cmdlag = 0;	//how far this command's nominal end is behind now, ms (FTESurf P136)
 	int msecstouse;		//usetime truncated to network precision (how much we'll actually eat)
+	double snapms = 0;	//FTESurf P252: whole-tick usercmd interval, ms. 0 = not snapping.
 	float framemsecs;	//how long we're saying the input frame should be (differs from realtime with nq as we want to send frames reguarly, but note this might end up with funny-duration frames).
 	qboolean xonoticworkaround;
 
@@ -2811,7 +3037,7 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 				playerview_t *pv = &cl.playerview[plnum];
 				cmd = &cl.outframes[i].cmd[plnum];
 
-				CL_AccumlateInput(plnum, frametime, frametime*1000);
+				CL_AccumlateInput(plnum, frametime, frametime*1000, 0);
 				*cmd = cl_pendingcmd[plnum];
 				memset(&cl_pendingcmd[plnum], 0, sizeof(*cmd));	//reset the pending for the next frame.
 
@@ -2884,6 +3110,115 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 	//	Con_Printf("%f\n", msecs);
 
 		wantfps = cl_netfps.value;
+
+		/*
+		==================================================================
+		FTESurf Patch 252: pace usercmds to a WHOLE number of physics ticks.
+
+		THE BUG.  PMSrc_PlayerMove (pm_source.c:2984) does
+
+			avail = msec_carry + cmd.msec;
+			while (avail + EPSILON >= tick) { PMSrc_Tick(); avail -= tick; }
+			pmove.msec_carry = avail;
+
+		i.e. it runs WHOLE ticks and carries the remainder.  A usercmd
+		therefore moves the player an integer number of ticks or not at all.
+		When the command interval is not a multiple of the tick, the carry
+		makes that integer cycle.  10 ms commands into a 15 ms mover is the
+		worst case in the shipped configs and it is strictly periodic:
+
+			avail 0.010 -> 0 ticks, carry 0.010   <- the player does not move
+			avail 0.020 -> 1 tick,  carry 0.005
+			avail 0.015 -> 1 tick,  carry 0.000   -> repeats forever
+
+		Measured on surf_rise from the .rec's own origin+velocity columns,
+		same map, same walk, same build, cl_netfps the only difference:
+
+			cl_netfps 100      10.00 ms packets   101101101101...
+							   117 of 351 usercmds moved ZERO units
+			cl_netfps 66.6667  15.00 ms packets   111111111111...
+							   0 of 234, motion stddev 0.470 -> 0.013
+
+		A 33 Hz stop-go in POSITION ONLY.  View angles are resampled per
+		command by Patch 136 above and never pass through the tick, which is
+		why the reporter was certain the mouse was smooth while movement was
+		not -- and they were right.
+
+		HOW IT GOT SHIPPED.  cfg/mode_bhop.cfg is correct to set cl_netfps
+		100: it also sets pm_ticrate/sv_mintic/sv_maxtic to 0.01, so on a
+		bhop map all four match.  But cl_netfps is a CLIENT cvar with
+		CVAR_ARCHIVE while the gamemode overlay is applied server-side
+		(SV_ApplyModeFile, sv_phys.c:3399), and there is no mode_surf.cfg to
+		put it back (default.cfg:116, deliberate).  So one bhop map archives
+		100 into the saved config, which loads AFTER default.fmf's forced
+		66.6667 -- and every surf map from then on runs 10 ms commands into a
+		15 ms mover.  mode_bhop.cfg's own header already names the hole:
+		"KNOWN LIMIT: this is a client cvar, and the ruleset is applied
+		server-side."
+
+		THE FIX, AND WHY IT IS HERE RATHER THAN IN A CONFIG.  A config can
+		only restate the coupling and can be overridden by a later one --
+		which is the whole shape of the bug.  The tick is authoritative and
+		the client already has it: movevars.ticrate arrives through
+		serverinfo with the rest of the extended movevars, precisely so
+		prediction and the server agree.  So derive the interval from it.
+
+		cl_netfps keeps its meaning as "how often I want to send": we round
+		its interval to the NEAREST whole number of ticks, so asking for
+		fewer packets still gets you fewer packets (2 ticks per command, or
+		3), just uniformly.  Only the non-integer relationship is removed,
+		because only the non-integer relationship stalls.
+
+		WHY THE INTERVAL IS PASSED IN MILLISECONDS AND NOT AS A RATE, WHICH
+		COST A MEASUREMENT TO LEARN.  CL_FilterTime tests the threshold with
+		ceil(1000/fps) but CONSUMES the raw 1000/fps, and those are not the
+		same number.  Handing it exactly 1000/slot leaves 1000/fps sitting on
+		an integer where a float hair decides between 15 and 16 -- and 16 ms
+		into a 15 ms mover is this same bug, slower.  The first version of
+		this patch dodged that by aiming half a millisecond under the slot,
+		which fixed the threshold and then banked 0.5 ms of unconsumed time
+		every single command: reg252 arm A measured 14.50 ms commands and a
+		zero-tick command every ~30th, 8 of 242.  33% of commands stalling
+		became 3.3%, which is not a fix, it is a smaller bug.
+
+		So the snapped path states the interval directly, in whole
+		milliseconds, and threshold == consumed by construction.  pm_ticrate
+		0.015 and 0.01 are both a whole number of ms by design
+		(default.cfg:144-147 chose 0.015 over 64-tick's 15.625 precisely so
+		usercmd_t.msec survives the round trip), so the slot is always an
+		integer and there is no rounding left to get wrong.
+		==================================================================
+		*/
+		if (cl_netfps_snap.ival && wantfps > 0 &&
+			movevars.physicsmode == PHYSMODE_SOURCE && movevars.ticrate > 0)
+		{
+			double tickms = movevars.ticrate * 1000.0;
+			int    n      = (int)floor((1000.0 / wantfps) / tickms + 0.5);
+			double slot;
+			if (n < 1)
+				n = 1;
+			slot = n * tickms;
+			if (slot > 1.0)		/*paranoia: never divide by ~0*/
+			{
+				static double announced = -1;
+				/*A server-imposed packet ceiling is respected by taking MORE
+				  ticks per command, never by breaking the multiple.*/
+				if (cls.maxfps > 0)
+				{
+					double minms = 1000.0 / max(30.0, cls.maxfps);
+					while (slot < minms)
+						slot = ++n * tickms;
+				}
+				snapms = slot;
+				if (announced != snapms)
+				{
+					announced = snapms;
+					Con_DPrintf("cl_netfps %g -> one usercmd per %g ms (%i x %g ms tick)\n",
+								cl_netfps.value, snapms, n, tickms);
+				}
+			}
+		}
+
 		fullsend = true;
 
 		msecstouse = 0;
@@ -2909,8 +3244,14 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 			}
 			if (!runningindepphys && (cl_netfps.value > 0 || !fullsend))
 			{
-				float spare;
-				spare = CL_FilterTime(msecs, wantfps, (/*cls.protocol == CP_NETQUAKE*/0?0:1.5), false);
+				/*FTESurf P252: the snapped path only once we are actually
+				  playing -- above, `wantfps` may have been replaced by the
+				  12.5 Hz connect-time keepalive, and movevars is not the
+				  server's until then either.*/
+				if (snapms > 0 && cls.state == ca_active)
+					spare = CL_FilterTimeMS(msecs, snapms, (/*cls.protocol == CP_NETQUAKE*/0?0:1.5));
+				else
+					spare = CL_FilterTime(msecs, wantfps, (/*cls.protocol == CP_NETQUAKE*/0?0:1.5), false);
 				usetime = msecsround + (msecs - spare);
 				msecstouse = (int)usetime;
 				if (!spare)
@@ -2923,10 +3264,17 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 			}
 			else
 			{
+				spare = 0;
 				usetime = msecsround + msecs;
 				msecstouse = (int)usetime;
 				msecsround = usetime - msecstouse;
 			}
+
+			//FTESurf Patch 136.  How far this command's NOMINAL end time is
+			//behind now: `spare` is the accumulated time we are deliberately not
+			//spending on it, and msecsround is the sub-millisecond remainder we
+			//are carrying.  See CL_AngleAt.
+			cmdlag = spare + msecsround;
 		}
 
 		if (msecstouse > 200) // cap at 200 to avoid servers splitting movement more than four times
@@ -2953,7 +3301,7 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 	if (!CLHL_BuildUserInput(msecstouse, &cl_pendingcmd[0]))
 #endif
 	for (plnum = 0; plnum < (cl.splitclients?cl.splitclients:1); plnum++)
-		CL_AccumlateInput(plnum, frametime, framemsecs);
+		CL_AccumlateInput(plnum, frametime, framemsecs, cmdlag);
 
 	//the main loop isn't allowed to send
 	if (runningindepphys && mainloop)
@@ -3239,6 +3587,7 @@ void CL_InitInput (void)
 	Cvar_Register (&cl_c2spps, inputnetworkcvargroup);
 	Cvar_Register (&cl_queueimpulses, inputnetworkcvargroup);
 	Cvar_Register (&cl_netfps, inputnetworkcvargroup);
+	Cvar_Register (&cl_netfps_snap, inputnetworkcvargroup);	//FTESurf Patch 252
 	Cvar_Register (&cl_run, inputnetworkcvargroup);
 	Cvar_Register (&cl_iDrive, inputnetworkcvargroup);
 
@@ -3302,6 +3651,8 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("-attack",		IN_AttackUp);
 	Cmd_AddCommand ("+use",			IN_UseDown);
 	Cmd_AddCommand ("-use",			IN_UseUp);
+	Cmd_AddCommandD("+duck",		IN_DuckDown, "Crouch. Sets usercmd button bit 3, which pm_physicsmode 1 reads as Source's IN_DUCK.");
+	Cmd_AddCommand ("-duck",		IN_DuckUp);
 	Cmd_AddCommand ("+jump",		IN_JumpDown);
 	Cmd_AddCommand ("-jump",		IN_JumpUp);
 	Cmd_AddCommandD("impulse",		IN_Impulse, "Sends an impulse number to the server (read: weapon change).");

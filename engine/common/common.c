@@ -90,6 +90,25 @@ cvar_t	host_mapname			= CVARAFD("mapname", "", "host_mapname", 0, "Cvar that hol
 #ifdef HAVE_LEGACY
 cvar_t	ezcompat_markup			= CVARD("ezcompat_markup", "1", "Attempt compatibility with ezquake's text markup.0: disabled.\n1: Handle markup ampersand markup.\n2: Handle chevron markup (only in echo commands, for config compat, because its just too unreliable otherwise).");
 cvar_t	pm_noround				= CVARD("pm_noround", "0", "Disables player prediction snapping, in a way that cannot be reliably predicted but may be needed to avoid map bugs.");
+//FTESurf Patch 256, TEMPORARY.  Lives here beside pm_noround rather than with the
+//other pm_ cvars in sv_phys.c because pm_source.c reads it directly and that file
+//is linked into the client too -- a server-side definition would not link.
+cvar_t	pm_dispprobe			= CVARFD("pm_dispprobe", "0", CVAR_NOSAVE, "FTESurf Patch 256, temporary instrument. Print the flat movement sweep, and any rejected step-down, whenever a GROUNDED player's move is stopped -- so a snag on a displacement seam can be told apart from a snag on the four-unit collision slab Patch 256 re-wound. A clean 4-6 unit lip with a (0,0,1) normal that hl2_dispwinding toggles away is the winding; a stop with a normal whose z sits between 0.2 and 0.7 over ground that is much flatter is the five separating planes BIH_ClipToTriangle does not build. Loud by design: it prints every frame you are pressed against anything.");
+//FTESurf Patch 258.  Same reason as pm_dispprobe above: com_bih.c reads this and
+//is linked into the client as well as the server, so it cannot live with the
+//other pm_ cvars in sv_phys.c.  CVAR_SERVERINFO so a dedicated server publishes
+//the value -- note that publishing is all it does; a remote client does not adopt
+//it, so client and server must agree or prediction will disagree about geometry.
+cvar_t	pm_trisoup_bevels		= CVARFD("pm_trisoup_bevels", "1", CVAR_SERVERINFO, "FTESurf Patch 258. Build the nine edge-cross-axis bevel planes an AABB sweep against a triangle needs. Without them BIH_ClipToTriangle's swept volume bulges past the true Minkowski sum along every triangle edge, and a player walking a displacement seam is stopped dead by an in-plane edge plane whose normal is far too steep to stand on or step onto. 0 restores the old 11-plane set exactly, for A/B against recorded times; it does not restore correctness.");
+//FTESurf Patch 260, TEMPORARY.  Here for the same linkage reason as the two above.
+//This one exists to settle a question that cannot be settled by reading: the QC's
+//ladder essay (sv_entities.qc) asserts that Source ladder brushes "already report
+//FTECONTENTS_LADDER to every trace", but MASK_PLAYERSOLID is SOLID|PLAYERCLIP|
+//WINDOW|BODY and does NOT contain LADDER (0x4000) -- so a brush whose only contents
+//is LADDER is not merely unreported, it is not hit at all.  Whether the bit reaches
+//a Source-mode trace therefore depends on what else the mapper put on the brush,
+//which is map data, not code.  Measure it before porting a mover against it.
+cvar_t	pm_ladderprobe			= CVARFD("pm_ladderprobe", "0", CVAR_NOSAVE, "FTESurf Patch 260, temporary instrument. Fire the ladder-detection traces a Source-mode mover would fire, at the point in PMSrc_Tick where the ladder hook would live, and print what each one sees: a zero-length box trace at the origin and a forward trace, each run under MASK_PLAYERSOLID, under MASK_PLAYERSOLID|LADDER, and under an all-bits mask, plus PM_ExtraBoxContents for the entity path. Answers three questions at once -- does a ladder brush exist here, does the default mask hit it, and does trace.contents carry the LADDER bit when it does. 4Hz, and it prints even when nothing is hit so a negative is legible.");
 cvar_t	scr_usekfont			= CVARD("scr_usekfont"/*kex*/, "0", "Exists for compat with the quake rerelease, changing the behaviour of QC's sprint/bprint/centerprint builtins.");
 #endif
 
@@ -6856,6 +6875,9 @@ void COM_Init (void)
 	Cvar_Register (&scr_usekfont, NULL);
 	Cvar_Register (&ezcompat_markup, NULL);
 	Cvar_Register (&pm_noround, NULL);
+	Cvar_Register (&pm_dispprobe, NULL);	//Patch 256, temporary
+	Cvar_Register (&pm_trisoup_bevels, NULL);	//Patch 258
+	Cvar_Register (&pm_ladderprobe, NULL);	//Patch 260, temporary
 #endif
 	Cvar_Register (&com_highlightcolor, "Internationalisation");
 	com_parseutf8.ival = 1;

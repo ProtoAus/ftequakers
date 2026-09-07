@@ -136,6 +136,10 @@ qboolean GLSCR_UpdateScreen (void)
 	}
 
 
+	//nettest Patch 141: THE PER-FRAME ONE.  Early-outs unless something set
+	//shader_reload_needed, but when anything does -- one new material, one
+	//cvar callback -- this re-parses EVERY live shader, next frame.
+	shader_reload_why = "SCR_UpdateScreen (per frame)";
 	Shader_DoReload();
 
 	qglDisable(GL_SCISSOR_TEST);

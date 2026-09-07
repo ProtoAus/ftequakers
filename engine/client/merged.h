@@ -62,6 +62,23 @@ typedef struct framestate_s {
 		float frametime[FRAME_BLENDS];
 		float lerpweight[FRAME_BLENDS];
 
+		//nettest Patch 155: raw seconds since this sequence started, WITHOUT the
+		//playback rate applied.
+		//
+		//Patch 130's cross-fade reads frametime[0] as "how long has the new
+		//sequence been playing", which was true only while the rate was fixed at
+		//1.  Once the rate is networked it stops being true in both directions:
+		//a 2x sequence would fade in half the time, and a REVERSED one starts at
+		//frametime == the sequence duration, so the fade weight would already be
+		//>1 on its first frame and every reversed transition would snap - which
+		//is the exact artefact the reverse-playback work exists to remove.
+		//
+		//The fade wants wall-clock, so it gets wall-clock, kept beside the value
+		//it used to borrow.  Zero unless something fills it in, which keeps every
+		//non-networked caller (menuqc, csqc, the server's hitbox posing) working
+		//as before.
+		float seqtime;
+
 #ifdef HALFLIFEMODELS
 		float subblendfrac;		//hl models are weird
 		float subblend2frac;	//very weird.
@@ -78,6 +95,22 @@ typedef struct framestate_s {
 
 #ifdef HALFLIFEMODELS
 	float bonecontrols[MAX_BONE_CONTROLLERS];	//hl special bone controllers
+	//nettest Patch 126: the PREVIOUS snapshot's controllers plus how far we are
+	//between the two.  Bone controllers arrive at the entity update rate, which
+	//for a server-driven monster is its AI think rate - 10Hz - and until now the
+	//renderer took the newest value raw, so a scientist's head turned in visible
+	//10Hz steps while its body interpolated smoothly.  Blending them is done in
+	//HL_CalcBoneAdj rather than here because that is the only place that knows
+	//which controllers WRAP (type & 0x8000) and so cannot be linearly blended.
+	float bonecontrols_old[MAX_BONE_CONTROLLERS];
+	float bonecontrol_lerpfrac;			//0 = old, 1 = new
+
+	//nettest Patch 126: how loud this entity's voice channel is RIGHT NOW, 0..1.
+	//GoldSrc drives the jaw from the sample's amplitude in the sound engine
+	//(mouth.mouthopen), not from game code - which is why a QC-side sine wave
+	//never looked right no matter how it was tuned.  S_GetChannelLevel already
+	//computes exactly this value and nothing was using it.
+	float mouthopen;
 #endif
 } framestate_t;
 #define NULLFRAMESTATE (framestate_t*)NULL
@@ -367,6 +400,15 @@ typedef union vboarray_s
 } vboarray_t;
 
 //scissor rects
+/* FTESurf Patch 208: THE UNITS ARE NOT THE SAME IN EVERY BACKEND.  x/y/width/
+   height are 0..1 fractions with y measured from the BOTTOM, but GLBE_Scissor
+   takes them as fractions of r_refdef.pxrect while D3D9BE_Scissor and
+   VKBE_Scissor take them as fractions of the whole framebuffer.  The two agree
+   only when the 3d view fills the window, so a shared caller misplaces the box
+   under splitscreen or r_renderscale on D3D/Vulkan.  Written down rather than
+   fixed: making the other backends pxrect-relative is a correctness change to
+   them, with its own testing.  Patch 208's portal clip is therefore read only
+   by the GL backend. */
 typedef struct
 {
 	float x;

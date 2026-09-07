@@ -42,7 +42,56 @@ qboolean SV_MayCheat(void)
 cvar_t sv_autooffload = CVARD("sv_autooffload", "0", "Automatically start the server in a separate process, so that sporadic or persistent gamecode slowdowns do not affect visual framerates (equivelent to the mapcluster command). Note: Offloaded servers have separate cvar+command states which may complicate usage.");
 #endif
 extern cvar_t cl_warncmd;
-cvar_t sv_cheats = CVARF("sv_cheats", "0", CVAR_MAPLATCH);
+/*
+FTESurf Patch 153: sv_cheats takes effect NOW, not at the next map load.
+
+It was CVAR_MAPLATCH, so `sv_cheats 1` printed "will be changed after a map
+load" and every cheat-flagged cvar stayed rejected until you reloaded -- which,
+on a 25-second Source map, is an expensive way to look at r_showtris.
+
+The two things a map spawn does with it (sv_init.c:980-995) are set
+sv_allow_cheats and publish the *cheats serverinfo key, and both are just as
+valid mid-map: nothing about them is bound to the map being loaded.  So the
+callback does exactly that work and then re-derives cls.allow_cheats through
+CL_CheckServerInfo, which is the same call the spawn path already makes.
+
+Both directions are live.  Turning cheats back OFF mid-map immediately
+re-latches every cheat cvar, which is the honest counterpart -- an on-only
+switch would leave a server advertising *cheats "" while the client still
+believed it could set them.
+*/
+static void QDECL SV_Cheats_Callback (struct cvar_s *var, char *oldvalue)
+{
+	if (sv.state != ss_active)
+		return;	//nothing to update yet; the map spawn will do it.
+
+	if (var->ival)
+	{
+		sv_allow_cheats = true;
+		InfoBuf_SetStarKey(&svs.info, "*cheats", "ON");
+	}
+	else
+	{
+		sv_allow_cheats = 2;	//"single player only", same as the spawn path
+		InfoBuf_SetStarKey(&svs.info, "*cheats", "");
+
+		//FTESurf Patch 170: turning cheats off puts the movement ruleset back.
+		//Same principle as the re-latch above -- an off switch that left the
+		//physics wherever you had dragged them would be worse than no switch,
+		//because the console would then agree with the HUD that cheats were
+		//off while you were still playing on your own numbers.
+		SV_LockMovementVars();
+	}
+#ifndef SERVERONLY
+	//the local client caches its own copy of serverinfo and derives
+	//cls.allow_cheats from it; without this the cvar changes and nothing that
+	//reads allow_cheats notices.
+	InfoBuf_Clone(&cl.serverinfo, &svs.info);
+	if (!isDedicated)
+		CL_CheckServerInfo();
+#endif
+}
+cvar_t sv_cheats = CVARFC("sv_cheats", "0", 0, SV_Cheats_Callback);
 	extern		redirect_t	sv_redirected;
 
 extern cvar_t sv_public;
@@ -498,6 +547,46 @@ static void SV_MapList_f(void)
 	COM_EnumerateFilesReverse("maps/*/*/*.*", ShowMapList, &spath);
 }
 
+/*
+FTESurf Patch 215: lenient map completion.
+
+	"is it possible to make the map command be full lenient? so "map kits" in
+	 console will auto populate all maps with kits, like surf_kitsune and
+	 surf_kitsune_mom ect."
+
+SV_Map_c globs "maps/<typed>*.bsp", so the typed text has to be the START of the
+name.  On a library whose maps are all called surf_<something> that means the
+first token you can usefully type is "surf_", and the part you actually remember
+-- kitsune -- can never find anything.
+
+1 makes that final component "*<typed>*.bsp" instead, so the text may appear
+anywhere.  Nothing else changes: wildcmp() (common.c) is a real recursive glob in
+which '*' matches any run of characters except a path separator, and every
+searchpath backend this game uses filters through it -- the raw directory
+(sys_win.c asks the OS for a bare "everything" pattern and runs its own wildcmp on
+each name, so FindFirstFile never sees ours and its DOS wildcard quirks cannot
+apply), .pak, .pk3 and zip, dzip, and the Source .vpk via the plugin's
+filefuncs->WildCmp.  So there is no backend here where a leading '*' is a special
+case.
+
+Portability note rather than a live one: an SDL3 non-Windows build routes
+Sys_EnumerateFiles to SDL_GlobDirectory instead, whose own comment in sys_sdl.c
+records '*' crossing the separator and walking the whole tree under wine.  This
+build is native win32, and the default is 0, so that path is not ours today.
+
+Cost on the leaf globs is nothing: an empty argument ALREADY enumerates every map,
+so a full pass is the existing baseline rather than a new one.
+
+Two things deliberately left alone:
+ - PM_EnumerateMaps takes the ORIGINAL text.  It is a Q_strncasecmp prefix test
+   over package names (m_download.c), not a glob, so handing it "*kits" would
+   silently match nothing.  Its namespace is pkg:map and leniency over it is not
+   what was asked for.
+ - a text that already contains '*' or '?' is passed through untouched -- if you
+   are globbing by hand, that is the glob you meant.
+*/
+cvar_t sv_mapcompletion = CVARD("sv_mapcompletion", "0", "How the map command's tab-completion and dropdown match what you have typed.\n0: the text must be a PREFIX of the map name (default).\n1: lenient -- the text may appear ANYWHERE in the name, so `map kits` offers surf_kitsune and surf_kitsune_mom.");
+
 static int QDECL CompleteMapList (const char *name, qofs_t flags, time_t mtime, void *parm, searchpathfuncs_t *spath)
 {
 	struct xcommandargcompletioncb_s *ctx = parm;
@@ -543,6 +632,31 @@ static void SV_Map_c(int argn, const char *partial, struct xcommandargcompletion
 {
 	if (argn == 1)
 	{
+		const char *raw = partial;	//the text exactly as typed
+		char lenient[MAX_QPATH];
+
+		/*
+		FTESurf Patch 215: see the essay above sv_mapcompletion. Rewriting the
+		text ONCE here rather than at each glob keeps the nine leaf globs below
+		byte-identical to build 28, so sv_mapcompletion 0 is provably today.
+
+		`raw` survives for the two places leniency must NOT reach:
+
+		 - the eight subdirectory globs below, the ones whose %s names a
+		   DIRECTORY rather than a map. The win32 enumerator uses that component
+		   as its recursion gate: it opens and walks every directory the pattern
+		   matches. A leading '*' widens that from "subdirectories starting with
+		   the text" to "subdirectories containing it", once per glob per
+		   searchpath, to complete a thing nobody asked to complete.
+		 - PM_EnumerateMaps, which is a Q_strncasecmp prefix test over package
+		   names rather than a glob, so a '*' would silently match nothing.
+		*/
+		if (sv_mapcompletion.ival && *partial && !strchr(partial, '*') && !strchr(partial, '?'))
+		{
+			Q_snprintfz(lenient, sizeof(lenient), "*%s", partial);
+			partial = lenient;
+		}
+
 		//FIXME: maps/mapname#modifier.ent
 		COM_EnumerateFiles(va("maps/%s*.bsp", partial), CompleteMapList, ctx);
 		COM_EnumerateFiles(va("maps/%s*.d3dbsp", partial), CompleteMapList, ctx);
@@ -555,17 +669,17 @@ static void SV_Map_c(int argn, const char *partial, struct xcommandargcompletion
 
 		COM_EnumerateFiles(va("maps/%s*.ent", partial), CompleteMapListEnt, ctx);
 
-		COM_EnumerateFiles(va("maps/%s*/*.bsp", partial), CompleteMapList, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.d3dbsp", partial), CompleteMapList, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.bsp.gz", partial), CompleteMapListExt, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.bsp.xz", partial), CompleteMapListExt, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.map", partial), CompleteMapListExt, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.map.gz", partial), CompleteMapListExt, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.cm", partial), CompleteMapList, ctx);
-		COM_EnumerateFiles(va("maps/%s*/*.hmp", partial), CompleteMapList, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.bsp", raw), CompleteMapList, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.d3dbsp", raw), CompleteMapList, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.bsp.gz", raw), CompleteMapListExt, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.bsp.xz", raw), CompleteMapListExt, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.map", raw), CompleteMapListExt, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.map.gz", raw), CompleteMapListExt, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.cm", raw), CompleteMapList, ctx);
+		COM_EnumerateFiles(va("maps/%s*/*.hmp", raw), CompleteMapList, ctx);
 
 #ifdef PACKAGEMANAGER
-		PM_EnumerateMaps(partial, ctx);
+		PM_EnumerateMaps(raw, ctx);
 #endif
 	}
 }
@@ -962,6 +1076,19 @@ void SV_Map_f (void)
 #else
 	#define SCR_SetLoadingFile(s)
 #endif
+
+	/*
+	ftesurf (P175): mount this map's extra asset pack before anything of the map
+	is located.
+
+	Here rather than in the menu because this is the ONE funnel every map load
+	goes through -- the browser, a typed `map`, `changelevel`, `retry` and a
+	savegame all arrive at this function, and a mount wired into the menu would
+	have covered only the first.  After `level` is final (the `*` prefix is
+	stripped above) and immediately BEFORE the cache flush, which is what makes
+	the newly-added searchpath visible to the existence check below it.
+	*/
+	FS_AutoMountForMap(level);
 
 	COM_FlushFSCache(false, true);
 
@@ -3609,6 +3736,7 @@ void SV_InitOperatorCommands (void)
 	Cvar_Register(&sv_autooffload, "server control variables");
 #endif
 	Cvar_Register(&sv_cheats, "Server Permissions");
+	Cvar_Register(&sv_mapcompletion, "server control variables");	//FTESurf Patch 215
 	if (COM_CheckParm ("-cheats"))
 	{
 		Cvar_Set(&sv_cheats, "1");

@@ -2361,6 +2361,12 @@ static void QDECL Q1QVM_Get_FrameState(world_t *w, wedict_t *ent, framestate_t *
 	fstate->g[FST_BASE].lerpweight[0] = 1;
 	fstate->g[FST_BASE].endbone = ent->xv->basebone;
 
+	//nettest Patch 155: keep the HL sequence cross-fade reading what it read
+	//before framestate_t gained its own wall-clock member.  Zeroed by the memset
+	//above, so this is behaviour preservation rather than a garbage guard.
+	fstate->g[FS_REG].seqtime   = fstate->g[FS_REG].frametime[0];
+	fstate->g[FST_BASE].seqtime = fstate->g[FST_BASE].frametime[0];
+
 #if defined(SKELETALOBJECTS) || defined(RAGDOLL)
 	if (ent->xv->skeletonindex)
 		skel_lookup(w, ent->xv->skeletonindex, fstate);

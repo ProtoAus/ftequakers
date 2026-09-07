@@ -61,6 +61,13 @@ cvar_t	sv_maxtic					= CVARD("sv_maxtic","0.1", "The maximum interval between ru
 cvar_t	sv_limittics				= CVARD("sv_limittics","3", "The maximum number of ticks that may be run within a frame, to allow the server to catch up if it stalled or if sv_maxtic is too low.");//
 
 cvar_t	sv_nailhack					= CVARD("sv_nailhack","1", "If set to 1, disables the nail entity networking optimisation. This hack was popularised by qizmo which recommends it for better compression. Also allows clients to interplate nail positions and add trails.");
+//nettest Patch 155: its OWN cvar rather than riding on `developer`, and that is
+//not a style preference.  cfg/default.cfg sets developer 0 and execs during
+//init - after every +set on the command line - so a developer-gated diagnostic
+//is invisible to the headless harnesses, which is exactly where this one has to
+//be readable.  Two runs were spent concluding the feature was broken when it was
+//only the print that was off.
+cvar_t	sv_debug_animrate			= CVARD("sv_debug_animrate","0", "Report entities whose networked animation playback rate (.animrate) is not 1. Throttled to one line per second.");
 cvar_t	sv_nopvs					= CVARD("sv_nopvs", "0", "Set to 1 to ignore pvs on the server. This can make wallhacks more dangerous, so should only be used for debugging.");
 cvar_t	fraglog_public				= CVARD("fraglog_public", "1", "Enables support for connectionless fraglog requests");
 cvar_t	fraglog_details				= CVARD("fraglog_details", "1", "Bitmask\n1: killer+killee names.\n2: killer+killee teams\n4:timestamp.\n8:killer weapon\n16:killer+killee guid.\nFor compatibility, use 1(vanilla) or 7(mvdsv).");
@@ -2189,6 +2196,20 @@ void SV_ClientProtocolExtensionsChanged(client_t *client)
 	client->fteprotocolextensions2 &= Net_PextMask(PROTOCOL_VERSION_FTE2, ISNQCLIENT(client)) & PEXT2_SERVERADVERTISE;
 	client->ezprotocolextensions1  &= Net_PextMask(PROTOCOL_VERSION_EZQUAKE1, ISNQCLIENT(client)) & EZPEXT1_SERVERADVERTISE;
 	client->zquake_extensions &= SERVER_SUPPORTED_Z_EXTENSIONS;
+
+	//nettest Patch 125b: say out loud whether the optional protocol features this
+	//mod depends on actually survived negotiation.  Patch 125 shipped a complete,
+	//correct bone-controller path that transmitted nothing for weeks, because the
+	//bit was never added to Net_PextMask - and the failure was completely silent
+	//on both sides.  A negotiated capability that nobody prints is a capability
+	//nobody can debug: "the head does not turn" looks identical whether the QC
+	//never set the value, the delta never flagged it, or the extension was simply
+	//never agreed.  One line under `developer 1` collapses all three.
+	Con_DPrintf("client %s: pext2=%#x bonecontrols=%s deltas=%s\n",
+				client->name[0]?client->name:"(connecting)",
+				client->fteprotocolextensions2,
+				(client->fteprotocolextensions2 & PEXT2_BONECONTROLS)?"YES":"no",
+				(client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"YES":"no");
 
 	//older versions of fte didn't understand any interactions between ez's limited float support and replacement deltas. so only activate both when vrinputs is also supported.
 	if ((client->ezprotocolextensions1 & EZPEXT1_FLOATENTCOORDS) && (client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) && !(client->fteprotocolextensions2 & PEXT2_VRINPUTS))
@@ -5533,6 +5554,24 @@ float SV_Frame (void)
 
 	COM_MainThreadWork();
 
+	/*
+	  nettest Patch 140.  THE OTHER HALF OF Cmd_Wait_f's DIAGNOSTIC.
+
+	  cmd.c:212 warns "waits without server frames" when a `wait` runs and
+	  cmd_didwait is already set -- i.e. when a second wait happens before the
+	  server has advanced, which is the stall that message exists to catch.  But
+	  cmd_didwait was assigned in exactly one place in the whole tree (`= true`,
+	  cmd.c:215) and cleared nowhere, so after the first two waits of a session
+	  the condition was permanently true and every subsequent wait printed.  With
+	  developer 1 and a wait-driven test config that is one line per wait, forever.
+
+	  A server frame is precisely the event the warning is asking about, so
+	  clearing it here both restores the intended meaning and stops the spam.
+	  Not a suppression: a config that really does queue waits faster than the
+	  server ticks still prints, which is the case worth knowing about.
+	*/
+	cmd_didwait = false;
+
 	//qw qc uses this for newmis handling
 	svs.framenum++;
 	if (svs.framenum > 0x10000)
@@ -5868,6 +5907,43 @@ void SV_InitLocal (void)
 	extern	cvar_t	pm_flyfriction;
 	extern	cvar_t	pm_edgefriction;
 
+	//FTESurf: pm_source.c
+	extern	cvar_t	pm_physicsmode;
+	extern	cvar_t	pm_ticrate;
+	extern	cvar_t	pm_maxairspeed;
+	extern	cvar_t	pm_jumpvelocity;
+	extern	cvar_t	pm_standablenormal;
+	extern	cvar_t	pm_sourcebounce;
+	extern	cvar_t	pm_maxvelocity;
+	extern	cvar_t	pm_standheight;
+	extern	cvar_t	pm_duckheight;
+	extern	cvar_t	pm_duckspeed;
+	extern	cvar_t	pm_viewheight;
+	extern	cvar_t	pm_duckviewheight;
+	extern	cvar_t	pm_viewscale;
+	extern	cvar_t	pm_noclipspeed;
+	extern	cvar_t	pm_stamina;
+	extern	cvar_t	pm_staminajumpcost;
+	extern	cvar_t	pm_staminalandcost;
+	extern	cvar_t	pm_staminarecovery;
+	extern	cvar_t	pm_normalizejump;
+	extern	cvar_t	pm_jumpaddrise;
+	extern	cvar_t	pm_jumpzoffset;
+	extern	cvar_t	pm_walkspeed;
+	extern	cvar_t	pm_groundtracedist;
+	extern	cvar_t	pm_bumpcount;
+	extern	cvar_t	pm_snaptoground;
+	extern	cvar_t	pm_groundquadrants;
+	extern	cvar_t	pm_fixslopes;
+	extern	cvar_t	pm_fixedges;
+	extern	cvar_t	pm_fixrampbugs;
+	extern	cvar_t	pm_rampretrace;
+	extern	cvar_t	pm_ladders;			//Patch 260
+	extern	cvar_t	pm_ladderdampen;
+	extern	cvar_t	pm_ladderangle;
+	extern	cvar_t	pm_lockmovement;
+	extern	cvar_t	sv_gamemode;	//FTESurf Patch 224
+
 #ifdef VM_Q1	//cvars for pimping ourselves to ktx...
 	static cvar_t qws_name		= CVARF("qws_name",		DISTRIBUTION,			CVAR_NOSET );
 	static cvar_t qws_fullname	= CVARF("qws_fullname", FULLENGINENAME,			CVAR_NOSET );
@@ -5948,6 +6024,54 @@ void SV_InitLocal (void)
 	Cvar_Register (&pm_stepdown,			cvargroup_serverphysics);
 	Cvar_Register (&pm_walljump,			cvargroup_serverphysics);
 	Cvar_Register (&pm_edgefriction,		cvargroup_serverphysics);
+
+	//FTESurf: Counter-Strike: Source movement, engine/common/pm_source.c.
+	Cvar_Register (&pm_physicsmode,			cvargroup_serverphysics);
+	Cvar_Register (&pm_ticrate,				cvargroup_serverphysics);
+	Cvar_Register (&pm_maxairspeed,			cvargroup_serverphysics);
+	Cvar_Register (&pm_jumpvelocity,		cvargroup_serverphysics);
+	Cvar_Register (&pm_standablenormal,		cvargroup_serverphysics);
+	Cvar_Register (&pm_sourcebounce,		cvargroup_serverphysics);
+	Cvar_Register (&pm_maxvelocity,			cvargroup_serverphysics);
+	Cvar_Register (&pm_standheight,			cvargroup_serverphysics);
+	Cvar_Register (&pm_duckheight,			cvargroup_serverphysics);
+	Cvar_Register (&pm_duckspeed,			cvargroup_serverphysics);
+	Cvar_Register (&pm_viewheight,			cvargroup_serverphysics);
+	Cvar_Register (&pm_duckviewheight,		cvargroup_serverphysics);
+	Cvar_Register (&pm_viewscale,			cvargroup_serverphysics);
+	Cvar_Register (&pm_noclipspeed,			cvargroup_serverphysics);
+	Cvar_Register (&pm_stamina,				cvargroup_serverphysics);
+	Cvar_Register (&pm_staminajumpcost,		cvargroup_serverphysics);
+	Cvar_Register (&pm_staminalandcost,		cvargroup_serverphysics);
+	Cvar_Register (&pm_staminarecovery,		cvargroup_serverphysics);
+	Cvar_Register (&pm_normalizejump,		cvargroup_serverphysics);
+	Cvar_Register (&pm_jumpaddrise,			cvargroup_serverphysics);
+	Cvar_Register (&pm_jumpzoffset,			cvargroup_serverphysics);
+	Cvar_Register (&pm_walkspeed,			cvargroup_serverphysics);
+	Cvar_Register (&pm_groundtracedist,		cvargroup_serverphysics);
+	Cvar_Register (&pm_bumpcount,			cvargroup_serverphysics);
+	Cvar_Register (&pm_snaptoground,		cvargroup_serverphysics);
+	Cvar_Register (&pm_groundquadrants,		cvargroup_serverphysics);
+	Cvar_Register (&pm_fixslopes,			cvargroup_serverphysics);
+	Cvar_Register (&pm_fixedges,			cvargroup_serverphysics);
+	Cvar_Register (&pm_fixrampbugs,			cvargroup_serverphysics);
+	Cvar_Register (&pm_rampretrace,			cvargroup_serverphysics);
+	Cvar_Register (&pm_ladders,				cvargroup_serverphysics);	//Patch 260
+	Cvar_Register (&pm_ladderdampen,		cvargroup_serverphysics);
+	Cvar_Register (&pm_ladderangle,			cvargroup_serverphysics);
+	Cvar_Register (&pm_lockmovement,		cvargroup_serverphysics);
+	Cvar_Register (&sv_gamemode,			cvargroup_serverphysics);
+
+	//FTESurf Patch 170: must come after every cvar in the locked table is
+	//registered -- Cvar_Hook only sets a field, but a cvar created early from
+	//the command line is re-initialised by its Cvar_Register.
+	SV_HookMovementLock();
+
+	//FTESurf Patch 224: the ruleset a map load picks, and what it picked.
+	Cmd_AddCommandD("movement", SV_Movement_f, "Report the movement ruleset "
+					"this map loaded: which gamemode it was detected as, where "
+					"that came from, and every cvar cfg/mode_<name>.cfg changed "
+					"against cfg/default.cfg's value.");
 
 	Cvar_Register (&sv_compatiblehulls,		cvargroup_serverphysics);
 	Cvar_Register (&dpcompat_stats,			"Darkplaces compatibility");
@@ -6038,6 +6162,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&sv_minping, cvargroup_servercontrol);
 
 	Cvar_Register (&sv_nailhack, cvargroup_servercontrol);
+	Cvar_Register (&sv_debug_animrate, cvargroup_servercontrol);	//nettest Patch 155
 	Cvar_Register (&sv_nopvs, cvargroup_servercontrol);
 
 	Cmd_AddCommand ("sv_impulse", SV_Impulse_f);

@@ -379,8 +379,8 @@ void W_ApplyGamma (qbyte *data, int len, int skipalpha)
 	}
 }
 */
-qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *height, uploadfmt_t *format)	//returns rgba
-{	
+qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *height, uploadfmt_t *format, qboolean asdecal)	//returns rgba
+{
 	qbyte *in, *data, *out, *pal;
 	int d, p;
 
@@ -419,11 +419,29 @@ qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *hei
 	else
 		pal = host_basepal;
 
-	/* handle decals type textures -eukara */
-	if (alpha == 1 && (pal[765] == 255 && pal[766] == 255 && pal[767] == 255))
-		alpha = 3;
-	if (alpha == 1 && !(pal[765] == 0 && pal[766] == 0 && pal[767] == 255))
-		alpha = 2;
+	/* handle decals type textures -eukara
+
+	   ONLY when the caller actually asked for a decal.  These two lines used to run for every '{'
+	   texture, which is wrong: in GoldSrc a '{' texture is MASKED (palette index 255 transparent,
+	   palette RGB kept) unless it is being loaded AS A DECAL -- xash3d-fwgs gates the identical
+	   gradient reading on IL_LOAD_DECAL in Image_LoadMIP.  Ungated, any '{' texture whose palette
+	   entry 255 was not exactly (0,0,255) got its RGB replaced by that palette entry and its alpha
+	   replaced by 255-pal[index], and the '{' shader is an ALPHA TEST (gl_shader.c, MASK=0.666), so
+	   the whole surface was then discarded.
+
+	   Real case: pizza_ya_san1 paints zebra crossings with "{stripeh" out of decals.wad -- near-white
+	   road paint, 0 of 4096 texels using index 255, pal[255] = (141,15,2).  It decoded to dark red at
+	   alpha 24..58, every texel below the 170 threshold, so all 418 worldspawn faces using it turned
+	   fully invisible and the sky showed through.  This is not map-specific: across 98 HL/CS/Sven wads
+	   727 of 1190 '{' textures took this path, including fences, vines and glass whose keyed background
+	   is (0,0,252) or (0,255,0) rather than exactly blue. */
+	if (asdecal)
+	{
+		if (alpha == 1 && (pal[765] == 255 && pal[766] == 255 && pal[767] == 255))
+			alpha = 3;
+		if (alpha == 1 && !(pal[765] == 0 && pal[766] == 0 && pal[767] == 255))
+			alpha = 2;
+	}
 
 	if (tex->offsets[0] + tex->width * tex->height > lumpsize)
 	{	//fucked texture.
@@ -440,7 +458,29 @@ qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *hei
 	{
 		p = *in++;
 		if (alpha == 1 && p == 255) {
-			out[0] = out[1] = out[2] = out[3] = 0;
+			//nettest: keep the KEY COLOUR and zero only the alpha.
+			//
+			//r_goldsrc_worldmask (gl_model.c:1625) draws a '{' texture that no brush entity
+			//uses as an OPAQUE world texture, matching GoldSrc, where masking needs an entity
+			//with Render Mode Solid.  Its shader therefore has no discard at all, so whatever
+			//sits in RGB here is what gets drawn.  That half of the patch only ever worked for
+			//textures EMBEDDED in the bsp, where gl_model.c:1758 rewrites TF_MIP4_8PAL24_T255
+			//to TF_MIP4_8PAL24 and index 255 comes back as its palette entry.  A wad-resident
+			//texture never has srcdata, so it takes this decoder instead - and this line used
+			//to zero the RGB too, painting every keyed-out texel OPAQUE BLACK.  That is not a
+			//corner: pizza_ya_san1 has 191 miptex and 0 of them carry embedded pixels, which
+			//is normal for GoldSrc maps.  gl_model.c:1749 predicts this failure in as many
+			//words; it just could not reach this decoder to prevent it.
+			//
+			//Alpha-tested callers are unaffected - alpha is still 0, so the texel is still
+			//discarded.  The RGB they now carry is the key colour rather than black, which is
+			//also what GoldSrc bleeds when it filters these, so masked fences keep their own
+			//keyed colour at distance instead of darkening toward black.
+			p *= 3;
+			out[0] = pal[p];
+			out[1] = pal[p+1];
+			out[2] = pal[p+2];
+			out[3] = 0;
 		} else if (alpha == 2) {
 			p *= 3;
 			/* this will be a blended decal -eukara */
@@ -466,6 +506,34 @@ qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *hei
 		out += 4;
 	}
 	*format = alpha?PTI_RGBA8:PTI_RGBX8;
+	//Deliberately NOT running Image_BleedTransparentRGB over this: the keyed-out texels now
+	//hold the key colour, which the r_goldsrc_worldmask path needs to draw literally.  The
+	//studio-model decoder has no such consumer and does bleed - see image.c.
+
+	//r_texdiag: report what this lump actually DECODED to, which is the one thing that
+	//separates "the wad decode is wrong" from "the decode is fine and something downstream
+	//is darkening it".  Reported as the mean of the texels that survive the '{' shader's
+	//alpha test (MASK 0.666 -> alpha >= 170), because those are the only ones ever drawn.
+	if (r_texdiag.ival)
+	{
+		int px, keyed = 0, lit = 0;
+		double sr = 0, sg = 0, sb = 0;
+		for (px = 0; px < tex->width * tex->height; px++)
+		{
+			qbyte *t = data + px*4;
+			if (t[3] < 170)
+				{ keyed++; continue; }
+			lit++;
+			sr += t[0]; sg += t[1]; sb += t[2];
+		}
+		Con_Printf("[texdiag]   %-16s decode=%s keyed=%.1f%% visible=%d mean RGB(%.0f,%.0f,%.0f) luma %.1f\n",
+			tex->name,
+			(alpha==0)?"opaque":(alpha==1)?"masked":(alpha==2)?"decal":"glass",
+			100.0*keyed/(double)max(1, tex->width*tex->height), lit,
+			lit?sr/lit:0, lit?sg/lit:0, lit?sb/lit:0,
+			lit?(0.299*sr + 0.587*sg + 0.114*sb)/lit:0);
+	}
+
 	if (!vid_hardwaregamma.value)
 		BoostGamma(data, tex->width, tex->height, *format);
 	return data;
@@ -478,6 +546,19 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 	vfsfile_t *file;
 	miptex_t *tex;
 	qbyte *data;
+	qboolean asdecal = false;
+
+	//A '{' wad lump means two different things depending on why it is wanted, and the name alone cannot
+	//say which: a BSP face texture must decode MASKED, a decal must decode with the GoldSrc colour+ramp
+	//convention.  The engine has no decal loader of its own (this is CSQC's job), so the request opts in
+	//by prefix: ask for "waddecal/{TARGET" to get decal semantics, "{TARGET" to get masked.  Masked is
+	//the default because that is what every BSP face wants and BSP faces are the overwhelming majority.
+	//Checked before the "wad/" test below and distinct from it ("wadd" != "wad/").
+	if (!strncmp(name, "waddecal/", 9))
+	{
+		asdecal = true;
+		name += 9;
+	}
 
 	if (!strncmp(name, "gfx/", 4) || !strncmp(name, "wad/", 4))
 	{
@@ -601,7 +682,7 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 					for (j = 0;j < MIPLEVELS;j++)
 						tex->offsets[j] = LittleLong(tex->offsets[j]);
 
-					data = W_ConvertWAD3Texture(tex, texwadlump[i].size, width, height, format);
+					data = W_ConvertWAD3Texture(tex, texwadlump[i].size, width, height, format, asdecal);
 					BZ_Free(tex);
 					return data;
 				}
@@ -810,6 +891,32 @@ qboolean Wad_NextDownload (void)
 			}
 		}
 	}
+	//nettest: bias wad LOADING to the game the map actually came from.
+	//
+	//Wads are located by BARE FILENAME through the normal searchpath, so a Sven Co-op map asking
+	//for "halflife.wad" was getting Half-Life's copy: svencoop sits below valve/cstrike in the
+	//searchpath (fs_addons.txt order, and fs_load addons mount in file order at the tail).  Sven
+	//ships its own halflife.wad / xeno.wad / liquids.wad / decals.wad with the SAME texture names
+	//at the SAME dimensions but re-encoded pixel data -- measured: 3116/3116 shared lumps differ
+	//in halflife.wad alone -- so every wad texture drew as Half-Life's rendition.  Right slot,
+	//wrong pixels, which reads in-game as "some textures are subtly wrong".  cs_bdog.wad was the
+	//blatant case: CS 1.6's copy holds 132 textures, Sven's holds 25 unrelated ones.
+	//
+	//This reuses the hint the worldmodel load already relies on (the "*mappref" serverinfo key,
+	//set by SV_SpawnServer from a `map "@<spec>/<name>"` qualifier).  That window is opened and
+	//closed around Mod_ForName in the MODELLIST stage; wads load here, in the later "wads"
+	//precache stage, so they were never covered by it.
+	//
+	//Safe by construction: FS_FLocateFile treats the hint as a PREFERENCE, not a filter -- the
+	//preferred-searchpath pass runs first and, on a miss, leaves found==FF_NOTFOUND so the normal
+	//priority search still runs.  A wad the hinted game does not ship (fonts.wad, which only
+	//Half-Life has) therefore still resolves exactly as before.  Cleared before returning so the
+	//hint can never leak into the model/sound/texture loads that follow.
+	{
+		const char *mappref = InfoBuf_ValueForKey(&cl.serverinfo, "*mappref");
+		if (mappref && *mappref)
+			FS_SetPreferHint(mappref);
+	}
 	Wads_Flush();
 	if (*wads)	//now go about loading the wads, we are now safe from tempallocs
 	{
@@ -845,6 +952,7 @@ qboolean Wad_NextDownload (void)
 			}
 		}
 	}
+	FS_ClearPreferHint();	//nettest: stop biasing -- everything after this is generic content
 	return true;
 }
 #endif

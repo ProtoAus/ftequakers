@@ -132,6 +132,7 @@ struct modlist_s *Mods_GetMod(size_t diridx);
 #define SPF_ISDIR			1024	//is an actual directory (not itself a package).
 #define SPF_VIRTUAL			2048	//path is virtual in some form, and the logicalpath is NOT a path..
 #define SPF_ADDON			4096	//nettest: fs_load addon dir — appended at the LOWEST priority (assets only, never overrides the mod); loads its sub-packages; no pure/server semantics.
+#define SPF_HARVEST			8192	//ftesurf (P186): a pack fs_automount put here for THIS map, whose files the asset cache may copy. Set/cleared once per map load by FS_Cache_BeginMap; read on the FS_FLocateFile hot path, which is why it is a flag and not a path comparison.
 qboolean FS_LoadPackageFromFile(vfsfile_t *vfs, char *pname, char *localname, int *crc, unsigned int flags);
 
 #ifdef AVAIL_XZDEC

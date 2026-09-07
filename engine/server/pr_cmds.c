@@ -640,6 +640,16 @@ static void QDECL SVPR_Get_FrameState(world_t *w, wedict_t *ent, framestate_t *f
 	fstate->g[FST_BASE].lerpweight[0] = 1;
 	fstate->g[FST_BASE].endbone = ent->xv->basebone;
 
+	//nettest Patch 155: this builder fills the struct field by field rather than
+	//zeroing it, and its callers put a framestate_t on the STACK - so a new
+	//member left unwritten here is read as garbage, not as zero.  seqtime is
+	//"wall clock since the sequence changed", a notion this path does not have
+	//(QC drives .frame1time by hand for hitbox posing), so it takes the value
+	//the cross-fade used to read directly.  Behaviour is therefore byte-for-byte
+	//what it was before the field existed.
+	fstate->g[FS_REG].seqtime   = fstate->g[FS_REG].frametime[0];
+	fstate->g[FST_BASE].seqtime = fstate->g[FST_BASE].frametime[0];
+
 #if defined(SKELETALOBJECTS) || defined(RAGDOLL)
 	if (ent->xv->skeletonindex)
 		skel_lookup(w, ent->xv->skeletonindex, fstate);
@@ -1017,6 +1027,11 @@ void PR_LoadGlabalStruct(qboolean muted)
 
 	memset(&evalc_idealpitch, 0, sizeof(evalc_idealpitch));
 	memset(&evalc_pitch_speed, 0, sizeof(evalc_pitch_speed));
+
+	//FTESurf Patch 139: and the board/ramp telemetry's five, for exactly the
+	//same reason.  An evalc_t that outlives a progs load holds a pointer into
+	//the old field table; see the comment on SV_FS_ResetFieldCaches.
+	SV_FS_ResetFieldCaches();
 
 	if (pr_global_ptrs->serverid)
 		*pr_global_ptrs->serverid = svs.clusterserverid;

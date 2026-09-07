@@ -185,6 +185,9 @@ struct {
 	sizebuf_t	buf;
 	int noclear;
 	double waitattime;
+	int waitframes;		//FTESurf Patch 164: frames still owed by `wait <n>`
+	double waituntil;	//FTESurf Patch 164: realtime deadline owed by `waitms`/`waitmap`
+	int waitmap;		//FTESurf Patch 164: block until the client is in a map
 } cmd_text[RESTRICT_MAX+3+MAX_SPLITS];	//max is local.
 							//RESTRICT_MAX+1 is the from sever buffer (max+2 is for second player...)
 
@@ -205,6 +208,8 @@ bind g "impulse 5 ; +attack ; wait ; -attack ; impulse 2"
 */
 static void Cmd_Wait_f (void)
 {
+	int n;
+
 	if (cmd_blockwait)
 		return;
 
@@ -214,6 +219,77 @@ static void Cmd_Wait_f (void)
 #endif
 	cmd_didwait = true;
 	cmd_text[Cmd_ExecLevel].waitattime = realtime;
+
+	/*
+	FTESurf Patch 164 -- `wait` takes a frame count.
+
+	One `wait` is one frame, and that is the right primitive for the thing it
+	was written for ("+attack; wait; -attack").  It is the wrong primitive for
+	everything else, because a script that has to sit out a map load can only
+	express that as a column of `wait` lines -- switchtest.cfg was 3,954 lines
+	of which 3,946 were the word `wait`, and the count was a guess.
+
+	`wait 1` is exactly the old `wait`, which is why the counter is n-1: the
+	line that runs this already costs the frame that waitattime just claimed.
+	A missing, zero or unparseable argument is the old behaviour too, so no
+	existing cfg or bind changes meaning -- `wait` ignored its arguments
+	before, so nothing could have depended on them.
+	*/
+	if (Cmd_Argc() > 1)
+	{
+		n = atoi(Cmd_Argv(1));
+		if (n > 1)
+		{
+			if (n > 100000)
+				n = 100000;	//a typo should not wedge the console for an hour
+			cmd_text[Cmd_ExecLevel].waitframes = n-1;
+		}
+	}
+}
+
+/*
+============
+Cmd_WaitMS_f / Cmd_WaitMap_f					FTESurf Patch 164
+
+Two waits that are about the thing being waited FOR rather than about a frame
+count somebody had to estimate.
+
+`waitms <ms>` is wall clock, which is what you want when the thing you are
+waiting on is work rather than frames -- a map load runs at whatever framerate
+it runs at, and a frame count that is generous on one machine is short on the
+next.
+
+`waitmap [timeout]` is the honest version of the same wait: block until the
+client is actually in a map, then continue.  No estimate at all.  It carries a
+timeout (default 60s) because a map that fails to load must not wedge the
+command buffer forever -- on timeout it gives up with a warning and lets the
+rest of the script run, which is what makes it safe to put in a cfg.
+============
+*/
+static void Cmd_WaitMS_f (void)
+{
+	float ms;
+	if (cmd_blockwait)
+		return;
+	cmd_didwait = true;
+	ms = atof(Cmd_Argv(1));
+	if (ms <= 0)
+		ms = 0;
+	cmd_text[Cmd_ExecLevel].waitattime = realtime;
+	cmd_text[Cmd_ExecLevel].waituntil = realtime + ms/1000.0;
+}
+static void Cmd_WaitMap_f (void)
+{
+	float timeout;
+	if (cmd_blockwait)
+		return;
+	cmd_didwait = true;
+	timeout = (Cmd_Argc() > 1) ? atof(Cmd_Argv(1)) : 60;
+	if (timeout <= 0)
+		timeout = 60;
+	cmd_text[Cmd_ExecLevel].waitattime = realtime;
+	cmd_text[Cmd_ExecLevel].waituntil = realtime + timeout;
+	cmd_text[Cmd_ExecLevel].waitmap = true;
 }
 
 /*
@@ -286,7 +362,12 @@ void Cbuf_Init (void)
 {
 	int level;
 	for (level = 0; level <= RESTRICT_MAX+1; level++)
+	{
 		cmd_text[level].waitattime = -1;
+		cmd_text[level].waitframes = 0;		//FTESurf Patch 164
+		cmd_text[level].waituntil = 0;
+		cmd_text[level].waitmap = false;
+	}
 }
 
 static void Cbuf_WorkerAddText(void *ctx, void *data, size_t a, size_t b)
@@ -475,6 +556,57 @@ void Cbuf_ExecuteLevel (int level)
 			break;
 		}
 
+		/*
+		FTESurf Patch 164.  The multi-frame waits, resolved one frame at a
+		time.  Ordered deliberately: waitmap owns waituntil while it is armed
+		(that is its timeout) and clears it the moment it resolves, so the
+		plain waitms test below cannot inherit a deadline that was never
+		about time.
+
+		Each arm re-stamps waitattime before breaking, which is what makes the
+		guard above cost exactly one frame per pass rather than spinning.
+		*/
+		if (cmd_text[level].waitmap)
+		{
+			qboolean up = false;
+#ifdef HAVE_CLIENT
+			if (cls.state == ca_active)
+				up = true;
+#endif
+#ifdef HAVE_SERVER
+			if (!up && isDedicated && sv.state >= ss_active)
+				up = true;	//dedicated: there is no client to become active
+#endif
+			if (up)
+			{
+				cmd_text[level].waitmap = false;
+				cmd_text[level].waituntil = 0;
+			}
+			else if (realtime >= cmd_text[level].waituntil)
+			{
+				Con_Printf(CON_WARNING "waitmap: gave up waiting for a map, continuing\n");
+				cmd_text[level].waitmap = false;
+				cmd_text[level].waituntil = 0;
+			}
+			else
+			{
+				cmd_text[level].waitattime = realtime;
+				break;
+			}
+		}
+		if (cmd_text[level].waituntil > realtime)
+		{
+			cmd_text[level].waitattime = realtime;
+			break;
+		}
+		cmd_text[level].waituntil = 0;
+		if (cmd_text[level].waitframes > 0)
+		{
+			cmd_text[level].waitframes--;
+			cmd_text[level].waitattime = realtime;
+			break;
+		}
+
 // find a \n or ; line break
 		text = (char *)cmd_text[level].buf.data;
 
@@ -547,6 +679,22 @@ void Cbuf_ExecuteLevel (int level)
 		Cmd_ExecuteString (line, level);
 		if (line != linebuf)
 			free(line);
+	}
+
+	/*
+	FTESurf Patch 164: a wait with nothing left behind it is spent.
+
+	`wait 500` as the LAST line of a cfg would otherwise leave 500 frames owed
+	against an empty buffer, and the next thing typed at the console would sit
+	there for eight seconds with no explanation.  Only reachable when the loop
+	ran the buffer dry -- every waiting path above breaks with text still in
+	it, so a wait that is still holding something back is never cleared here.
+	*/
+	if (!cmd_text[level].buf.cursize)
+	{
+		cmd_text[level].waitframes = 0;
+		cmd_text[level].waituntil = 0;
+		cmd_text[level].waitmap = false;
 	}
 }
 
@@ -910,7 +1058,13 @@ static void Cmd_Exec_f (void)
 	if (cvar_watched)
 		Cbuf_InsertText (va("echo END %s", buf), level, true);
 	// don't execute anything if it was from server (either the stuffcmd/localcmd, or the file)
-	if (!strcmp(name, "default.cfg"))
+	//FTESurf Patch 169: match the LEAF name, not the argument as typed.  This
+	//test is what gives a game `cvar_lockdefaults` and its manifest's `set`
+	//overrides, and it was comparing against the whole exec argument -- so the
+	//moment Patch 119 moved us to `exec cfg/default.cfg` both silently stopped
+	//happening, with no error and no missing file to notice.  A default.cfg in
+	//a subdirectory is still a default.cfg.
+	if (!strcmp(COM_SkipPath(name), "default.cfg"))
 	{
 		if (!(Cmd_FromGamecode() || untrusted))
 			Cbuf_InsertText ("\ncvar_lockdefaults 1\n", level, false);
@@ -2351,8 +2505,9 @@ instead would be more self-consistent, but it would also mean that typing "KILL"
 chat silently executes the command instead of being said -- so the only behaviour that changes
 here is the one that was actually broken.
 
-Deliberately does NOT consult the tab-completion machinery.  Cmd_Complete only keeps the first
-50 matches for a prefix (cmd_completion_t::completions[50] in cmd.h; the overflow is swallowed
+Deliberately does NOT consult the tab-completion machinery.  Cmd_Complete only keeps a bounded
+number of matches per prefix (cmd_completion_t::completions[] in cmd.h -- 50 when this was
+written, 256 since Patch 211, and a cap either way; the overflow is swallowed
 into res->extra in Cmd_Complete_Check), and because Cmd_IsCommand hands it a bare first token
 the `!partial[len]` disjunct in Cmd_Complete degenerates the filter into a pure PREFIX match.
 Both cvar_groups and group->cvars are built head-first (Cvar_GetGroup / Cvar_Register), so the
@@ -2711,6 +2866,44 @@ cmd_completion_t *Cmd_Complete(const char *partial, qboolean caseinsens)
 
 	//quickly sort the completions. this is primarily so that the first item is the shortest, but whatever.
 	qsort(c.completions, c.num, sizeof(c.completions[0]), Cmd_Complete_Sort);
+
+	/*
+	FTESurf Patch 215: collapse duplicates, which the sort has just made adjacent.
+
+	This is the FIXME above Cmd_Complete_Sort, and that comment already names the
+	cause: "its possible that they're equal (eg: filesystem searches)". A file
+	completion runs once per searchpath, so a map present in more than one of them
+	is offered once per searchpath.
+
+	It was survivable while the list was a Tab-only convenience. It stopped being
+	survivable when sv_mapcompletion made the dropdown the way you FIND a map:
+	the first screenshot of this patch listed surf_kitsune, surf_kitsune2 and
+	surf_kitsune_mom TWICE EACH, which reads as six maps rather than three.
+
+	Only `text` decides identity -- two searchpaths' copies of one map are the same
+	completion whatever description each carried. `repl` is deliberately not freed
+	because Cmd_Complete_End does not free it either; matching that is safer than
+	introducing the tree's only free of a pointer somebody else might still hold.
+	*/
+	if (c.num > 1)
+	{
+		size_t r, w = 1;
+		for (r = 1; r < c.num; r++)
+		{
+			if (!Q_strcasecmp(c.completions[r].text, c.completions[w-1].text))
+			{
+				if (c.completions[r].text_alloced)
+					Z_Free((char*)c.completions[r].text);
+				if (c.completions[r].desc_alloced)
+					Z_Free((char*)c.completions[r].desc);
+				continue;
+			}
+			if (w != r)
+				c.completions[w] = c.completions[r];
+			w++;
+		}
+		c.num = w;
+	}
 	return &c;
 }
 
@@ -4524,7 +4717,10 @@ void Cmd_Init (void)
 	Cmd_AddCommand ("echo",Cmd_Echo_f);
 	Cmd_AddCommand ("alias",Cmd_Alias_f);
 	Cmd_AddCommand ("newalias",Cmd_Alias_f);
-	Cmd_AddCommand ("wait", Cmd_Wait_f);
+	Cmd_AddCommandD ("wait", Cmd_Wait_f, "Delays the rest of the command buffer.\nwait [frames] -- one frame if unspecified, which is the classic behaviour.");
+	//FTESurf Patch 164
+	Cmd_AddCommandD ("waitms", Cmd_WaitMS_f, "Delays the rest of the command buffer by a wall-clock time.\nwaitms <milliseconds>");
+	Cmd_AddCommandD ("waitmap", Cmd_WaitMap_f, "Delays the rest of the command buffer until the client is in a map.\nwaitmap [timeout seconds, default 60] -- gives up with a warning rather than wedging the buffer.");
 #ifdef HAVE_CLIENT
 	Cmd_AddCommand ("cmd", Cmd_ForwardToServer_f);
 	Cmd_AddCommand ("condump", Cmd_Condump_f);

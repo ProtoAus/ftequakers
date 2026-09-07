@@ -35,6 +35,7 @@ vec3_t		forward, right, up;
 void PM_Init (void)
 {
 	PM_InitBoxHull();
+	PMSrc_Init();	//FTESurf: registers pm_selftest
 }
 
 #define	MIN_STEP_NORMAL	0.7		// roughly 45 degrees
@@ -48,7 +49,7 @@ void PM_Init (void)
 /*
 ** Add an entity to touch list, discarding duplicates
 */
-static void PM_AddTouchedEnt (int num)
+void PM_AddTouchedEnt (int num)	//FTESurf: was static; pm_source.c reuses it
 {
 	if (pmove.numtouch == MAX_PHYSENTS)
 		return;
@@ -150,7 +151,9 @@ static qboolean PM_PortalTransform(world_t *w, int portalnum, vec3_t org, vec3_t
 	return okay;
 }
 
-static trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int solidmask, float *tookportal)
+/*FTESurf Patch 203: no longer static -- pm_source.c's PMSrc_TryPlayerMove calls it
+  too now.  Declared in pmove.h.*/
+trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int solidmask, float *tookportal)
 {
 	trace_t trace = PM_PlayerTrace (start, end, MASK_PLAYERSOLID);
 	if (tookportal)
@@ -188,7 +191,22 @@ static trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int soli
 					VectorCopy(newvel, pmove.velocity);
 					return exit;
 				}
+
+				/* FTESurf Patch 203.  A refusal here is INVISIBLE from outside:
+				   the player is left standing against the portal, and because
+				   the bump made no progress PMSrc_TryPlayerMove then deletes
+				   their velocity -- so the symptom is "the doorway is a wall
+				   that eats your speed", with no clue as to which of the three
+				   gates said no.  It cost a full run and a hand derivation of
+				   PM_PortalCSG's plane arithmetic to learn that the landing was
+				   0.3 units behind the exit plane against a 0.125 tolerance.
+				   Say which gate, and where. */
+				Con_DPrintf("portal %i: landing refused at %.3f %.3f %.3f\n",
+					impact->info, exit.endpos[0], exit.endpos[1], exit.endpos[2]);
 			}
+			else
+				Con_DPrintf("portal %i: transform refused from %.3f %.3f %.3f\n",
+					impact->info, trace.endpos[0], trace.endpos[1], trace.endpos[2]);
 		}
 	}
 	return trace;
@@ -1425,16 +1443,25 @@ void PM_PlayerMove (float gamespeed)
 	frametime = pmove.cmd.msec * 0.001*gamespeed;
 	pmove.numtouch = 0;
 
+	// take angles directly from command
+	pmove.angles[0] = SHORT2ANGLE(pmove.cmd.angles[0]);
+	pmove.angles[1] = SHORT2ANGLE(pmove.cmd.angles[1]);
+	pmove.angles[2] = SHORT2ANGLE(pmove.cmd.angles[2]);
+
+	//FTESurf: Counter-Strike: Source movement lives in its own module and
+	//shares nothing below this line but the trace layer.  Defaults to off,
+	//so every other game on this engine keeps QuakeWorld's physics exactly.
+	if (movevars.physicsmode == PHYSMODE_SOURCE)
+	{
+		PMSrc_PlayerMove (gamespeed);
+		return;
+	}
+
 	if (pmove.pm_type == PM_NONE || pmove.pm_type == PM_FREEZE)
 	{
 		PM_CategorizePosition ();
 		return;
 	}
-
-	// take angles directly from command
-	pmove.angles[0] = SHORT2ANGLE(pmove.cmd.angles[0]);
-	pmove.angles[1] = SHORT2ANGLE(pmove.cmd.angles[1]);
-	pmove.angles[2] = SHORT2ANGLE(pmove.cmd.angles[2]);
 
 	AngleVectors (pmove.angles, forward, right, up);
 

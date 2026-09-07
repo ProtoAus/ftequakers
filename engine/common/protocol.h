@@ -88,8 +88,69 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define PEXT2_STUNAWARE				0x00000100	//changes the netchan to biased-bigendian (so lead two bits are 1 and not stun's 0, so we don't get confused)
 #define PEXT2_VRINPUTS				0x00000200	//clc_move changes, more buttons etc. vr stuff!
 #define PEXT2_LERPTIME				0x00000400	//fitz-bloat parity. redefines UF_16BIT as UF_LERPEND in favour of length coding.
+//nettest Patch 125: network Half-Life bone controllers (SSQC .bonecontrol1..5).
+//They already existed on both sides - framestate_t.bonecontrols is read by
+//HLMDL_GetBoneData_Internal, and the SSQC fields are in progdefs - but nothing
+//ever carried them across the wire, so a server-side HL model could not aim,
+//swivel or open its mouth.  Sent as 5 bytes inside the existing UF_BONEDATA
+//payload under a spare flag bit, and ONLY when this extension is negotiated:
+//an old client reads that flag byte and Host_EndGames on unknown bits, so the
+//gate is what keeps old clients and existing demos working.
+#define PEXT2_BONECONTROLS			0x00000800	//qbyte bonecontrol[5] in UF_BONEDATA
+//nettest Patch 131: network the Half-Life model BODYGROUP (SSQC .body).
+//gl_hlmdl.c has read `0/*rent->body*/` since forever, so every studiomodel in
+//the game has been drawn wearing bodygroup 0 - which is why Barney's pistol is
+//in his holster (barney.mdl spawns at BARNEY_BODY_GUNHOLSTERED and only reaches
+//GUNDRAWN via a bodygroup change), why a corpse that has dropped its weapon
+//still has one welded to its hand, and why the hgrunt's shotgun and commander
+//variants all look identical.  .body was already parsed and stored by the
+//monster spawner and read by nothing at all.
+//
+//Its OWN extension bit rather than riding on PEXT2_BONECONTROLS: that flag byte
+//is parsed strictly and an engine build with 0x20 but not 0x10 would drop the
+//connection on the new bit, which includes every demo recorded before today.
+#define PEXT2_BODYGROUP				0x00001000	//qbyte body in UF_BONEDATA
+//nettest Patch 155: network the animation PLAYBACK RATE (HL's pev->framerate).
+//
+//The client has always derived an HL model's playback clock entirely by itself:
+//CL_LerpNetFrameState (cl_ents.c) sets frametime[0] = servertime - the moment
+//.frame last CHANGED, and CL_UpdateNetFrameLerpState stamps that moment locally.
+//The rate is therefore hardcoded to exactly 1 and the phase to "from zero", and
+//no amount of QC could say otherwise.  Three separate places in the mod had
+//already written that limit down as unfixable-without-an-engine-change:
+//sv_ai_core.qc (Barney's pev->framerate=1.5 firing speed-up), sv_xen_flora.qc
+//and mon_flock.qc.
+//
+//Nothing in the RENDERER ever needed fixing.  HL_SetupBones (gl_hlmdl.c) is a
+//pure function of frametime - frame1 = (int)(frametime * sequence->timing),
+//lerp to frame1+1, wrap or clamp - with no accumulator and no assumption that
+//time moves forwards.  A decreasing frametime plays the sequence backwards,
+//correctly interpolated, and always could.  So this extension carries the one
+//number that was missing rather than adding any playback machinery.
+//
+//Sent as a signed short inside the existing UF_BONEDATA payload under the next
+//spare flag bit, gated exactly like the two above: an old client parses that
+//flag byte strictly and Host_EndGames on unknown bits, which is what keeps old
+//clients and existing demos working.
+#define PEXT2_FRAMERATE				0x00002000	//short animrate in UF_BONEDATA
+
+//FTESurf: entity_state_t.u.q1.velocity is a signed short at 1/8 unit, so it wraps
+//hard at +-4096 units/sec per axis -- and the encoder (sv_ents.c) assigned a float
+//straight into it with no bound, so 4200 became -3992 and the client re-seeded its
+//prediction backwards every packet.  The QW path has no prediction-error smoothing,
+//so that reads on screen as per-frame positional flicker rather than a rubber-band.
+//
+//Surf maps that raise sv_maxvelocity past 3500 (surf_sandtraps2) reach that ceiling
+//in normal play, so the range has to actually go up rather than merely stop wrapping.
+//This extension widens the wire field to 32 bits at the SAME 1/8-unit scale, so
+//precision is unchanged and only the range grows (to +-268 million).  Keeping the
+//fixed-point scale rather than switching to floats means every consumer's existing
+//*8 / *(1/8.0) arithmetic and the delta-compression comparisons all still hold.
+//The encoder ALSO saturates now, so a client or demo without this bit degrades to
+//a clamp at 4095.875 instead of inverting.
+#define PEXT2_BIGVELOCITY			0x00004000	//32-bit 1/8-unit velocity instead of 16-bit
 #define PEXT2_SERVERADVERTISE		~0u
-#define PEXT2_CLIENTSUPPORT			(PEXT2_PRYDONCURSOR|PEXT2_VOICECHAT|PEXT2_SETANGLEDELTA|PEXT2_REPLACEMENTDELTAS|PEXT2_MAXPLAYERS|PEXT2_PREDINFO|PEXT2_NEWSIZEENCODING|PEXT2_INFOBLOBS|PEXT2_STUNAWARE|PEXT2_VRINPUTS|PEXT2_LERPTIME) //warn if we see bits not listed here.
+#define PEXT2_CLIENTSUPPORT			(PEXT2_PRYDONCURSOR|PEXT2_VOICECHAT|PEXT2_SETANGLEDELTA|PEXT2_REPLACEMENTDELTAS|PEXT2_MAXPLAYERS|PEXT2_PREDINFO|PEXT2_NEWSIZEENCODING|PEXT2_INFOBLOBS|PEXT2_STUNAWARE|PEXT2_VRINPUTS|PEXT2_LERPTIME|PEXT2_BONECONTROLS|PEXT2_BODYGROUP|PEXT2_FRAMERATE|PEXT2_BIGVELOCITY) //warn if we see bits not listed here.
 #define PEXT2_DEPRECATEDORNEW		(PEXT2_INFOBLOBS|PEXT2_VRINPUTS|PEXT2_LERPTIME) //extensions that are outdated
 #define PEXT2_MVDSUPPORT			(PEXT2_CLIENTSUPPORT&~PEXT2_DEPRECATED&~PEXT2_STUNAWARE)	//pext2 extensions to use when recording mvds.
 
@@ -651,6 +712,54 @@ enum {
 #define PF_INWATER		(1u<<31) //for network smartjump.
 
 
+
+/*
+FTESurf: the engine/common/pm_source.c state that has to survive from one
+usercmd to the next AND be replayed bit-identically by the client's
+prediction, or client and server diverge.
+
+The duck fields are why this is not optional: ducking changes the collision
+hull, so a client replaying a move without knowing it was ducked traces a
+72-unit box where the server traced a 54-unit one -- and unlike most
+prediction misses that one is permanent rather than self-correcting.
+
+Server: one per client_t.  Client: one per player_state_t, plus one in the
+acked-propagation struct (playerpredprop_s).  Declared here rather than in
+pmove.h because client.h needs it and is included first
+(client/quakedef.h:186 vs :196).
+*/
+typedef struct
+{
+	float		surfacefriction;
+	float		ducktime;		//milliseconds, counts down from 1000
+	qboolean	ducking;
+	qboolean	ducked;
+	float		msec_carry;		//fixed-tick remainder, seconds
+	int			oldbuttons;
+	float		stamina;		//milliseconds, CS:S jump/land speed penalty
+	float		rampoff;		//seconds since we last clipped a ramp plane.
+								//Carried because the arrival gate ("were you
+								//actually in the air first?") spans commands --
+								//without it, sustained surfing re-boards every
+								//tick, which is the failure mode the surf
+								//community's own 25u/s plugin rule has.
+	float		boardcount;		//monotonic count of ramp entries, so QC can
+								//edge-detect without a timestamp
+	float		rampcontact;	//1 while riding a ramp.  Carried, not merely
+								//per-tick, because at high framerates most
+								//usercmds run ZERO ticks -- and an uncarried
+								//flag would then still hold whichever client
+								//moved last.
+	qboolean	srcladder;		//FTESurf Patch 260: on a ladder.  Carried because the
+								//probe distance and the probe DIRECTION both depend on
+								//it -- Momentum traces 10 units along the remembered
+								//ladder normal while attached and only 2 units along
+								//your input while not, so a lost flag does not merely
+								//drop you, it changes where the next trace even looks.
+	vec3_t		srcladdernormal;//the attached ladder's plane normal; the whole climb is
+								//expressed relative to it, so it must survive a replay
+								//or the client and server climb along different axes.
+} pmsourcestate_t;
 
 // player move types
 #define PMC_NORMAL			0		// normal ground movement
@@ -1244,7 +1353,12 @@ typedef struct entity_state_s
 			short vangle[3];
 
 			short movement[3];
-			short velocity[3]; // 1/8th
+			//FTESurf: was `short`, which wrapped at +-4096 units/sec and inverted the
+			//sign, so a surf map with sv_maxvelocity raised past 3500 re-seeded client
+			//prediction backwards every packet.  Still 1/8-unit fixed point -- only the
+			//range changed -- so every consumer's *8 and *(1/8.0) is untouched.  The
+			//WIRE width is still 16 bits unless PEXT2_BIGVELOCITY was negotiated.
+			int velocity[3]; // 1/8th
 
 			unsigned short weaponframe;
 			unsigned char gravitydir[2];	//pitch/yaw, no roll
@@ -1261,6 +1375,44 @@ typedef struct entity_state_s
 
 	unsigned short		baseframe;
 	qbyte				basebone;
+	//nettest Patch 125: HL bone controllers, as DEGREES in 1/64 fixed point.
+	//
+	//NOT the 0-255 byte Half-Life networks.  FTE's own convention differs: the
+	//SSQC/CSQC .bonecontrolN fields and framestate_t.bonecontrols are consumed by
+	//HL_CalcBoneAdj (gl_hlmdl.c:988) as `M_PI * value / 180` after clamping to the
+	//controller's [start,end] DEGREE range - so the value is an angle, and it is
+	//signed.  A byte would clip every controller whose range crosses zero, which
+	//is most of them (a turret's yaw is typically -90..90).
+	//
+	//1/64 gives +-512 degrees at 0.016 degree steps: wider than any real
+	//controller range and finer than anyone can see, for 2 bytes.
+	short				bonecontrol[5];
+#define ES_BONECONTROL_SCALE 64.0
+	//nettest Patch 131: the Half-Life bodygroup selector.  One byte is the whole
+	//range GoldSrc has - studiomdl packs every bodypart into a single integer as
+	//index = sum(choice_i * base_i), and the largest model in the corpus
+	//(hgrunt_opfor.mdl: 1 x 8 x 4 x 4) needs 128 values.
+	qbyte				bodygroup;
+	//nettest Patch 155: the animation playback rate, as a multiplier in 1/64
+	//fixed point, BIASED so that the wire zero means normal speed.
+	//
+	//The bias is what keeps this free.  entity_state_t baselines are memset to
+	//zero and the overwhelming majority of entities never touch the rate, so an
+	//unbiased encoding would make "1.0" a permanent delta miss on every single
+	//animating entity.  Biased, the common case is 0 == 0 and the field costs
+	//nothing until something actually asks for a non-standard rate.
+	//
+	//Signed, because negative IS the point: HL's FindTransition returns
+	//*piDir = -1 for a node-graph link walked backwards (animation.cpp), and
+	//CTentacle turns that straight into pev->framerate = -1.
+	//
+	//1/64 over a short gives -511..+513 at 0.016 steps.  Half-Life's own uses
+	//sit between -1.5 and 1.5 (tentacle.cpp, barney.cpp) and studiomdl clamps
+	//nothing, so the range is far wider than anything real and the step is well
+	//below what a 10Hz animation can express.
+	short				animrate;
+#define ES_ANIMRATE_SCALE 64.0
+#define ES_ANIMRATE_BIAS  1.0
 	qbyte				solidtype;
 #define EST_FTE		0	//q2pro/r1q2, also used for fte's replacement deltas etc.
 #define EST_Q2EX	1	//q2ex packs it differently.

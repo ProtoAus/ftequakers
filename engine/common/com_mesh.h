@@ -264,7 +264,21 @@ typedef struct galiasinfo_s
 
 	void *ctx;				//loader-specific stuff. must be ZG_Malloced if it lasts beyond the loader.
 	unsigned int warned;	//passed around at load time, so we don't spam warnings
-	int firstvert;			//nettest: APPEND-ONLY (prebuilt plugin ABI). this surface's base offset into the model's GLOBAL vertex arrays (IQM), for slicing baked RGBPROPLIGHT per-vertex colours (in global order).
+	int firstvert;			//nettest: APPEND-ONLY (prebuilt plugin ABI). this surface's base offset into the model's GLOBAL vertex arrays (IQM), for slicing baked RGBPROPLIGHT per-vertex colours (in global order). -1 = this surface cannot be addressed that way.
+	/*
+	FTESurf Patch 259: APPEND-ONLY (prebuilt plugin ABI).  Where VRAD's baked
+	per-prop colours go.
+
+	Source writes sp_N.vhv with one colour per LOD0 VTX STRIP-GROUP vertex, in
+	strip order -- which is a cache-optimised order, not the model's vertex
+	order.  vhvmap[k] is the global vertex index our arrays hold for VRAD's
+	colour k, so scattering is out[vhvmap[k]] = colour[k].  Built by the hl2
+	loader; set on the FIRST surface only, and NULL for every model that has no
+	such table.  vhvmodelverts is the length the scattered array must have.
+	*/
+	int *vhvmap;
+	int vhvmapcount;
+	int vhvmodelverts;
 } galiasinfo_t;
 
 struct terrainfuncs_s;

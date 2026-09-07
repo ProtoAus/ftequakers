@@ -54,6 +54,13 @@ void IN_Accelerometer(unsigned int devid, float x, float y, float z);
 void IN_Gyroscope(unsigned int devid, float pitch, float yaw, float roll);
 qboolean IN_SetHandPosition(const char *devname, vec3_t org, vec3_t ang, vec3_t vel, vec3_t avel);
 
+//FTESurf Patch 202: the raw input journal.  Drop is called from CL_ClearState, so a
+//map change or a disconnect throws the buffer away WITHOUT writing it -- the server
+//discards its half of the recording at the same moment, so a salvaged journal would
+//be an orphan.  Note is the gamecode's hook for marking save/load points.
+void IN_Journal_Drop(void);
+void IN_Journal_Note(const char *text);
+
 //system-specific functions
 void INS_Move (void);
 void INS_Accumulate (void);

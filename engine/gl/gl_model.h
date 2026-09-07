@@ -641,6 +641,7 @@ typedef struct mspriteframe_s
 	qboolean xmirror;
 	qboolean lit;
 	shader_t *shader;
+	shader_t *beamshader;	//same image, additive+unmasked, for CSQC beam ribbons
 	image_t *image;
 } mspriteframe_t;
 

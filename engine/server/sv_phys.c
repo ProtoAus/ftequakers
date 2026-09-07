@@ -42,7 +42,12 @@ solid_edge items only clip against bsp models.
 
 */
 
-cvar_t	sv_maxvelocity = CVAR("sv_maxvelocity","10000");
+//FTESurf: CVAR_SERVERINFO so client prediction can see it.  Momentum has exactly
+//ONE velocity cvar and this is it (CGameModeBase::SetGameModeVars sets it to 3500);
+//pm_maxvelocity now merely overrides it when non-zero.  Without the serverinfo flag
+//the client could not read this number at all, so any map raising it desynced by
+//construction.
+cvar_t	sv_maxvelocity = CVARFD("sv_maxvelocity","10000", CVAR_SERVERINFO, "Maximum speed an entity may reach. Under pm_physicsmode 1 this is clamped PER AXIS, as Source's CheckVelocity does, so diagonal speed can exceed it; otherwise the whole vector is scaled down.");
 
 cvar_t	sv_gravity			 = CVAR( "sv_gravity", "800");
 cvar_t	sv_stopspeed		 = CVAR( "sv_stopspeed", "100");
@@ -82,6 +87,48 @@ cvar_t	pm_pground			 = CVARFD("pm_pground", "", CVAR_SERVERINFO, "Use persisten 
 cvar_t	pm_stepdown			 = CVARFD("pm_stepdown", "", CVAR_SERVERINFO, "Causes physics to stick to the ground, instead of constantly losing traction while going down steps.");
 cvar_t	pm_walljump			 = CVARFD("pm_walljump", "", CVAR_SERVERINFO, "Allows the player to bounce off walls while arborne.");
 cvar_t	pm_edgefriction		 = CVARAFD("pm_edgefriction", "", /*nq*/"edgefriction", CVAR_SERVERINFO, "Increases friction when about to walk over a cliff, so you're less likely to plummet by mistake. When empty defaults to 2, but uses a tracebox instead of a traceline to detect the drop.");
+
+//FTESurf: Counter-Strike: Source movement (engine/common/pm_source.c).
+//pm_physicsmode 0 keeps QuakeWorld's pmove.c and none of the rest is read,
+//so this whole block is inert for every other game on this engine.
+cvar_t	pm_physicsmode		 = CVARFD("pm_physicsmode", "0", CVAR_SERVERINFO, "0: QuakeWorld movement (pmove.c).\n1: Counter-Strike: Source movement (pm_source.c) - fixed tick, Source air acceleration, ClipVelocity with the adjust pass, Source ducking.");
+cvar_t	pm_ticrate			 = CVARFD("pm_ticrate", "0.015", CVAR_SERVERINFO, "Fixed physics step for pm_physicsmode 1, in seconds. 0.015 is 66.666.. Hz, which is 15ms exactly and therefore survives usercmd_t's integer msec field losslessly. Set cl_netfps to match.");
+cvar_t	pm_maxairspeed		 = CVARFD("pm_maxairspeed", "30", CVAR_SERVERINFO, "Source's GetAirSpeedCap: the most air acceleration may add along wishdir per tick. 30 in every Source game. This is the budget air-strafing spends.");
+cvar_t	pm_jumpvelocity		 = CVARFD("pm_jumpvelocity", "301.9933774", CVAR_SERVERINFO, "Upward impulse on jump. Momentum's CGameModeBase::GetJumpFactor() is sqrt(57*2*800) = 301.9933774, which every CS-based mode (surf, bhop, KZ) inherits. CS:S's own 268.3281572999747 (a 45 unit apex) is what FTESurf shipped up to build 40, and it made every plain jump 9.76 units lower than Momentum's.");
+cvar_t	pm_standablenormal	 = CVARFD("pm_standablenormal", "0.7", CVAR_SERVERINFO, "Surfaces whose normal.z is below this leave you airborne and sliding. 0.7 (about 45 degrees) in every Source game. This one number is the whole of surfing.");
+//FTESurf Patch 260.  Ladders, ON by default: they are intended map content, and
+//242 library maps ship them.  0 bypasses the mover entirely and restores the old
+//behaviour exactly, which is the bisection handle if a ladder ever grabs someone
+//who did not want it.
+cvar_t	pm_ladders			 = CVARFD("pm_ladders", "1", CVAR_SERVERINFO, "Climb brushes carrying Source's CONTENTS_LADDER, as Momentum does. 0 bypasses the ladder mover entirely and restores the pre-Patch-260 behaviour exactly. Note that roughly 10% of library ladder brushes belong to brush entities the QC forces non-solid (func_illusionary, func_simpleladder) and cannot be reached by any pmove trace at any setting -- that is a QC gap, not something this cvar controls.");
+cvar_t	pm_ladderdampen		 = CVARFD("pm_ladderdampen", "0.2", CVAR_SERVERINFO, "Momentum sv_ladder_dampen. How much sideways movement is damped when you meet the rungs at a glancing angle, so you climb instead of skating along the ladder's face.");
+cvar_t	pm_ladderangle		 = CVARFD("pm_ladderangle", "-0.707", CVAR_SERVERINFO, "Momentum sv_ladder_angle. Cosine of the incidence angle below which pm_ladderdampen applies; -0.707 is 135 degrees.");
+cvar_t	pm_sourcebounce		 = CVARFD("pm_sourcebounce", "0", CVAR_SERVERINFO, "sv_bounce equivalent: extra overbounce when an airborne player clips a wall, scaled by (1 - surfaceFriction).");
+cvar_t	pm_maxvelocity		 = CVARFD("pm_maxvelocity", "0", CVAR_SERVERINFO, "DEPRECATED override for the per-axis velocity clamp. 0 (the default) means follow sv_maxvelocity, which is the only such cvar Momentum has. Set non-zero only to make the player's clamp differ from every other entity's.");
+cvar_t	pm_standheight		 = CVARFD("pm_standheight", "62", CVAR_SERVERINFO, "Standing hull height. Momentum's g_ViewVectorsMom is 62 (mom_gamerules.cpp:36) - NOT CS:S's 72, which is what FTESurf shipped up to build 40. Note the eye at pm_viewheight 64 is deliberately ABOVE the crown.");
+cvar_t	pm_duckheight		 = CVARFD("pm_duckheight", "45", CVAR_SERVERINFO, "Ducked hull height. Momentum is 45 (mom_gamerules.cpp:39). The hull shrinks by 17, but the mid-air origin only moves by pm_viewscale times that - see pm_viewscale.");
+cvar_t	pm_duckspeed		 = CVARFD("pm_duckspeed", "0.34", CVAR_SERVERINFO, "Move-value scale while ducked and grounded. CS:S uses 0.34, giving 85 u/s from a 250 u/s run.");
+cvar_t	pm_viewheight		 = CVARFD("pm_viewheight", "64", CVAR_SERVERINFO, "Eye height above the feet while standing (Source VEC_VIEW). The eye slides between this and pm_duckviewheight over the crouch, on a SimpleSpline.");
+cvar_t	pm_duckviewheight	 = CVARFD("pm_duckviewheight", "47", CVAR_SERVERINFO, "Eye height above the feet while ducked (Source VEC_DUCK_VIEW). Momentum is 47 (mom_gamerules.cpp:40).");
+cvar_t	pm_viewscale		 = CVARFD("pm_viewscale", "0.5", CVAR_SERVERINFO, "Momentum's IGameMode::GetViewScale(), 0.5 for every CS-based mode. Ducking in MID-AIR moves the origin by this fraction of (pm_standheight - pm_duckheight), so the hull shrinks from the top AND the bottom - 8.5 units each at 62/45 - rather than lifting the feet by the whole 17. 1 is the pre-build-41 behaviour, which lifted the feet by the full difference and left the head where it was. 0 is treated as unset and falls back to 0.5.");
+cvar_t	pm_noclipspeed		 = CVARFD("pm_noclipspeed", "4", CVAR_SERVERINFO, "Noclip flies at this multiple of sv_maxspeed, doubled while +speed is held (which needs the client's in_speedbutton set). Direction comes from the move keys but speed does not, so cl_movespeedkey cannot slow it down.");
+cvar_t	pm_stamina			 = CVARFD("pm_stamina", "0", CVAR_SERVERINFO, "Enable CS:S's stamina penalty: jumping and landing throttle maxspeed and jump height for about a second afterwards. This is what makes a landing bleed speed instead of holding it. Air acceleration is NOT affected, so surfing is unchanged.");
+cvar_t	pm_staminajumpcost	 = CVARFD("pm_staminajumpcost", "25", CVAR_SERVERINFO, "Percentage penalty applied on jump (CS:S STAMINA_COST_JUMP). Recovers linearly over cost/pm_staminarecovery seconds. Set to 0 to keep the landing penalty but let repeated jumps reach full height.");
+cvar_t	pm_staminalandcost	 = CVARFD("pm_staminalandcost", "20", CVAR_SERVERINFO, "Percentage penalty applied on landing (CS:S STAMINA_COST_FALL).");
+cvar_t	pm_staminarecovery	 = CVARFD("pm_staminarecovery", "19", CVAR_SERVERINFO, "CS:S STAMINA_RECOVERY_RATE. A cost of N recovers over N/this seconds, so the default 25 and 19 give a 1.32s jump penalty.");
+cvar_t	pm_normalizejump	 = CVARFD("pm_normalizejump", "1", CVAR_SERVERINFO, "Momentum Mod's mom_mv_normalize_jump_height. Every jump reaches exactly pm_jumpvelocity^2/(2*sv_gravity), whatever your duck state and whatever pm_ticrate is. 0 is stock Source, where a standing jump reaches 43.0 units and a crouch-jump 45.0 - the two units you cannot make.");
+cvar_t	pm_jumpaddrise		 = CVARFD("pm_jumpaddrise", "0", CVAR_SERVERINFO, "FTESurf Patch 241. Whether a jump ADDS its impulse to upward speed you were already carrying. 0 (default) discards that rise first, so every jump reaches exactly its own height however you arrived - a trigger_teleport or a save-loc restore can hand you up to pm_groundtracedist worth of a floor while still rising, and CategorizePosition calls that grounded up to 140 u/s. 1 is the build-38 behaviour, where the two combine into a jump up to 2.3x as high. Only consulted when pm_normalizejump is set; stock Source's own duck-state ASSIGN capped this case and Patch 168 removed that branch.");
+cvar_t	pm_jumpzoffset		 = CVARFD("pm_jumpzoffset", "0", CVAR_SERVERINFO, "Momentum Mod's sv_jump_z_offset, 1.5 there. PINS the takeoff height to this many units above the surface: the origin is traced down to the ground and then back up by this amount. It is not a bonus - it removes the up-to-pm_groundtracedist of jump-height variance you get from counting as grounded while not touching anything. Only used when pm_normalizejump is set; 0 disables it and leaves the variance in.");
+cvar_t	pm_groundtracedist	 = CVARFD("pm_groundtracedist", "2", CVAR_SERVERINFO, "Momentum Mod's mom_mv_considered_on_ground: how far below you the ground trace looks, in units. 2 is stock Source. This is also the width of the band in which you count as standing on a surface without touching it, so it is how much your jump height can vary before pm_jumpzoffset pins it.");
+cvar_t	pm_bumpcount		 = CVARFD("pm_bumpcount", "8", CVAR_SERVERINFO, "Momentum Mod's sv_ramp_bumpcount: how many collide-and-slide iterations one movement tick may spend. Stock Source ships 4; Momentum ships 8 because its ramp recovery spends bumps re-tracing. Clamped to 4..16.");
+cvar_t	pm_snaptoground		 = CVARFD("pm_snaptoground", "1", CVAR_SERVERINFO, "Momentum Mod's mom_mv_snap_to_ground: move the player to exactly ground level when considered standing on the ground. Off, you take a series of tiny hops going downhill instead of staying glued to it.");
+cvar_t	pm_groundquadrants	 = CVARFD("pm_groundquadrants", "1", CVAR_SERVERINFO, "Momentum Mod's mom_mv_check_ground_quadrants: when the ground trace finds nothing standable, retest with four sub-boxes in case a shallower slope is under one corner of the hull. This is Source's own behaviour; the switch exists so it can be taken out of the picture while bisecting something else.");
+cvar_t	pm_fixslopes		 = CVARFD("pm_fixslopes", "1", CVAR_SERVERINFO, "Momentum Mod's sv_slope_fix, which is both of its mom_mv_fix_uphill_slopes and _downhill_slopes. When you would land on a slope, look one tick ahead: adopt the collision only if it GAINS horizontal speed (downhill, where it converts your fall into forward motion), and do not land at all if it would still be throwing you upward at over 140 u/s (uphill, where stock Source robs you of speed you already had). 0 is stock Source - land on the first standable plane, whatever it does to you.");
+cvar_t	pm_fixedges			 = CVARFD("pm_fixedges", "1", CVAR_SERVERINFO, "Momentum Mod's sv_edge_fix. Before landing, simulate the next tick: fall, clip, slide, then look for ground under where that ended up. If there would be none, you were about to edgebug - land and immediately drop off the lip - so stay airborne instead. Removes the RNG in both directions: an intentional edgebug becomes reliable, and an accidental one stops happening. Costs up to three extra traces, but only on the frame a landing is considered.");
+cvar_t	pm_fixrampbugs		 = CVARFD("pm_fixrampbugs", "1", CVAR_SERVERINFO, "Momentum Mod's sv_ramp_fix. When a movement trace comes back useless - it started inside the ramp, or it swept cleanly to a spot that is itself solid - stock Source stops the player dead. On a surf ramp that is not an error condition, it is the normal case, and the dead stop on a seam is the result. This recovers instead: find a plane to push away from (this trace's, then the planes already clipped this tick, then a 27-direction search with a grown hull), nudge out along it by pm_rampretrace, and re-trace. Also fixes the vertical rampbug, where a surfer sinks into the face and the loop mistakes one plane for a crease between two.");
+cvar_t	pm_rampretrace		 = CVARFD("pm_rampretrace", "0.2", CVAR_SERVERINFO, "Momentum Mod's sv_ramp_initial_retrace_length. How far pm_fixrampbugs nudges the player out along a recovered plane before re-tracing, and the step by which its 27-direction search grows on each failed attempt. Clamped to 0.2 if unset and to 4 at the top - it is a distance the player is teleported by, once per bump, so an unbounded value is a way through a wall rather than a setting.");
+cvar_t	pm_walkspeed		 = CVARFD("pm_walkspeed", "0", CVAR_SERVERINFO, "CS:S's CS_PLAYER_SPEED_WALK_MODIFIER: while the speed button is held, maxspeed is scaled by this. 0.52 is CS:S. 0 disables it, which is what every non-Source game on this engine wants - they use Quake's clientside cl_movespeedkey instead. Needs the client's in_speedbutton set, or the button never reaches the server.");
+cvar_t	pm_lockmovement		 = CVARFD("pm_lockmovement", "0", CVAR_NOTFROMSERVER, "Lock the movement ruleset. Every cvar that feeds the mover is restored to this game's default at each map load, and refused thereafter unless sv_cheats is 1. The engine default is 0, so this does nothing until a game asks for it in its default.cfg.");
 
 #define cvargroup_serverphysics  "server physics variables"
 void WPhys_Init(void)
@@ -155,8 +202,20 @@ void WPhys_CheckVelocity (world_t *w, wedict_t *ent)
 {
 	int		i;
 #ifdef HAVE_SERVER
-	if (sv_nqplayerphysics.ival)
-	{	//bound axially (like vanilla)
+	//FTESurf: Source clamps each axis independently (CGameMovement::CheckVelocity,
+	//gamemovement.cpp:3060), so diagonal speed may exceed the cap.  FTE's default
+	//is the RADIAL clamp below, which scales the whole vector -- and because
+	//SV_RunCmd calls this on the player every usercmd (sv_user.c:7812) BEFORE the
+	//velocity reaches the mover, gaining downward speed while at the cap silently
+	//deleted horizontal speed: at 3500 and falling 2000, 628 u/s of it, 66 times a
+	//second.  The client has no equivalent call, so it was also a permanent
+	//prediction miss.  pm_source.c's own per-axis clamp was already correct; this
+	//one ran first and undid it.
+	//
+	//Gated on the mode, not changed outright: quakers/nettest share this tree and
+	//run pm_physicsmode 0, where the radial clamp is the long-standing behaviour.
+	if (sv_nqplayerphysics.ival || movevars.physicsmode == PHYSMODE_SOURCE)
+	{	//bound axially (like vanilla, and like Source)
 		for (i=0 ; i<3 ; i++)
 		{
 			if (IS_NAN(ent->v->velocity[i]))
@@ -2786,5 +2845,762 @@ void SV_SetMoveVars(void)
 	movevars.flyfriction		= *pm_flyfriction.string?pm_flyfriction.value:4;
 	movevars.edgefriction		= *pm_edgefriction.string?pm_edgefriction.value:2;
 	movevars.flags				= MOVEFLAG_VALID|MOVEFLAG_NOGRAVITYONGROUND|(*pm_edgefriction.string?0:MOVEFLAG_QWEDGEBOX);
+
+	//FTESurf: Counter-Strike: Source movement (engine/common/pm_source.c).
+	SV_SetSourceMoveVars();
+}
+
+/*
+FTESurf Patch 133: the report, split out of SV_SetMoveVars.
+
+Which physics a session ran under is the first thing you need to know when a
+recorded time looks wrong, and it is not otherwise visible anywhere -- so this
+is worth printing.  Once, though.
+
+It used to sit at the bottom of SV_SetMoveVars, whose comment said "once per
+map load" and which nothing enforced: SV_SpawnServer deliberately calls
+SV_SetMoveVars TWICE (sv_init.c, once early to have the values in place while
+the mod spawns, and once at the end to pick up any pm_* cvar a mod stuffcmd'd
+on the way through).  Both calls printed, so every map load said everything
+twice.  Hanging the print off the SECOND call site instead makes it
+structurally once per SV_SpawnServer, with no latch to re-arm.
+*/
+void SV_ReportMoveVars(void)
+{
+	if (movevars.physicsmode != PHYSMODE_SOURCE)
+		return;
+
+	Con_Printf("^5Momentum movement^7: %g Hz tick, accel %g, airaccel %g, aircap %g, friction %g, stopspeed %g, gravity %g, jump %g, hull %g/%g, maxvel %g/axis\n",
+		1.0/movevars.ticrate, movevars.accelerate, movevars.airaccelerate,
+		movevars.maxairspeed, movevars.friction, movevars.stopspeed,
+		movevars.gravity, movevars.jumpvelocity,
+		movevars.standheight, movevars.duckheight, movevars.maxvelocity);
+	Con_Printf("^5Momentum movement^7: eye %g/%g, viewscale %g (mid-air duck shifts the origin %g)\n",
+		movevars.viewheight, movevars.duckviewheight, movevars.viewscale,
+		movevars.viewscale * (movevars.standheight - movevars.duckheight));
+
+	/* Quake BSPs ship PRECOMPUTED clip hulls and Q1BSP_ChooseHull (q1bsp.c:1527)
+	   snaps whatever we ask for onto the nearest one -- a 62-tall request lands on
+	   hull 1, which is 56, and a 45-tall duck request lands there too because
+	   Quake has no hull 3.  So on a Q1 map the player is the wrong size and
+	   ducking has no collision effect at all.  Source BSPs trace the real box via
+	   BIH_Trace and are exact.  A Q1 map compiled with ericw-tools -wrbrushes
+	   carries a BSPX BRUSHLIST lump, which makes gl_model.c swap in BIH_Trace and
+	   is exact too -- so this warns rather than refuses. */
+	if (sv.world.worldmodel && sv.world.worldmodel->fromgame == fg_quake)
+		Con_Printf(CON_WARNING "Momentum movement on a Quake BSP: the player collides at this map's precompiled hull size, not %g/%g, and ducking may not shrink the hull at all. Source BSPs are exact.\n",
+			movevars.standheight, movevars.duckheight);
+
+	if (movevars.stamina)
+		Con_Printf("^5CS:S stamina^7: jump %g%%, land %g%%, recovery rate %g (jump penalty lasts %.2fs)\n",
+			movevars.staminajumpcost, movevars.staminalandcost, movevars.staminarecovery,
+			movevars.staminarecovery > 0 ? movevars.staminajumpcost/movevars.staminarecovery : 0);
+}
+
+//FTESurf: kept separate from SV_SetMoveVars so the three other places that
+//refresh movevars per-command (sv_user.c) can share one definition of what
+//"the Source parameters" are.  Every value here is CVAR_SERVERINFO, so the
+//client parses the same numbers in CL_ParseServerinfo and predicts with them.
+void SV_SetSourceMoveVars(void)
+{
+	movevars.physicsmode		= pm_physicsmode.ival;
+	movevars.ticrate			= pm_ticrate.value > 0 ? pm_ticrate.value : 0.015;
+	movevars.maxairspeed		= pm_maxairspeed.value > 0 ? pm_maxairspeed.value : 30;
+	movevars.jumpvelocity		= pm_jumpvelocity.value > 0 ? pm_jumpvelocity.value : 301.9933774;
+	movevars.standablenormal	= pm_standablenormal.value > 0 ? pm_standablenormal.value : 0.7;
+	movevars.bounce				= pm_sourcebounce.value;
+	//ONE velocity cap, as Momentum has: pm_maxvelocity is an optional override and
+	//defaults to 0.  Both keys are CVAR_SERVERINFO and CL_ParseServerinfo resolves
+	//them in this same order, so the client predicts against the identical number.
+	movevars.maxvelocity		= pm_maxvelocity.value > 0 ? pm_maxvelocity.value :
+								  (sv_maxvelocity.value > 0 ? sv_maxvelocity.value : 3500);
+	movevars.standheight		= pm_standheight.value > 0 ? pm_standheight.value : 62;
+	movevars.duckheight			= pm_duckheight.value > 0 ? pm_duckheight.value : 45;
+	movevars.duckspeed			= pm_duckspeed.value > 0 ? pm_duckspeed.value : 0.34;
+	movevars.viewheight			= pm_viewheight.value > 0 ? pm_viewheight.value : 64;
+	movevars.duckviewheight		= pm_duckviewheight.value > 0 ? pm_duckviewheight.value : 47;
+	movevars.viewscale			= pm_viewscale.value > 0 ? pm_viewscale.value : 0.5;
+	movevars.noclipspeed		= pm_noclipspeed.value > 0 ? pm_noclipspeed.value : 4;
+	movevars.stamina			= pm_stamina.value;
+	movevars.staminajumpcost	= pm_staminajumpcost.value;
+	movevars.staminalandcost	= pm_staminalandcost.value;
+	movevars.staminarecovery	= pm_staminarecovery.value > 0 ? pm_staminarecovery.value : 19;
+	movevars.normalizejump		= pm_normalizejump.value;
+	movevars.jumpaddrise		= pm_jumpaddrise.value;
+	movevars.jumpzoffset		= pm_jumpzoffset.value;
+	movevars.walkspeed			= pm_walkspeed.value;
+	movevars.groundtracedist	= pm_groundtracedist.value;
+	movevars.bumpcount			= pm_bumpcount.value;
+	movevars.snaptoground		= pm_snaptoground.value;
+	movevars.groundquadrants	= pm_groundquadrants.value;
+	movevars.fixslopes			= pm_fixslopes.value;
+	movevars.fixedges			= pm_fixedges.value;
+	movevars.fixrampbugs		= pm_fixrampbugs.value;
+	movevars.rampretrace		= pm_rampretrace.value;
+	movevars.ladders			= pm_ladders.value;					//Patch 260
+	movevars.ladderdampen		= pm_ladderdampen.value > 0 ? pm_ladderdampen.value : 0.2;
+	movevars.ladderangle		= pm_ladderangle.value ? pm_ladderangle.value : -0.707;
+}
+
+/*
+===========================================================================
+FTESurf Patch 170: the movement ruleset lock.
+
+A timed game whose physics can be retuned from the console is a game with no
+times in it.  This restores every cvar that feeds the mover to this game's
+default at each map load, and refuses changes afterwards unless sv_cheats is
+1 -- so the ruleset is a property of the install, and departing from it is a
+deliberate act you have to name.
+
+THE CANONICAL VALUE IS defaultstr, NOT enginevalue.  `exec cfg/default.cfg`
+is followed by an automatic `cvar_lockdefaults 1` (cmd.c:1067-1070), so every
+`set` in a game's default.cfg becomes that cvar's default -- which is exactly
+"what this game considers correct", maintained in one readable file rather
+than duplicated into a table here.  enginevalue would be FTE's Quake numbers
+(sv_airaccelerate 0.7, sv_maxspeed 320, sv_stopspeed 100), which is the
+opposite of what a Source game wants; that is the trap CVAR_CHEAT falls into
+at cvar.c:1163, and the reason this is not implemented with that flag.
+
+The other two reasons it is not CVAR_CHEAT: Cvar_LockDefaults_f deliberately
+SKIPS cheat cvars (cvar.c:566), so their defaultstr could never be the config
+value anyway; and both cls.allow_cheats (cl_main.c:3173) and SV_MayCheat()
+(sv_ccmds.c:36) hand out cheats unconditionally to any server with a single
+client slot -- which is every FTESurf session ever played.  A cheat flag here
+would have been silently inert.  sv_cheats.ival is read directly for that
+reason: it is the only one of the three that means what it says.
+===========================================================================
+*/
+extern cvar_t sv_cheats;
+
+static cvar_t *pms_lockedmovevars[] =
+{
+	&pm_lockmovement,	/*locked by itself: see SV_MovementLocked*/
+
+	/*read by SV_SetMoveVars*/
+	&sv_stopspeed,		&sv_maxspeed,		&sv_accelerate,
+	&sv_airaccelerate,	&sv_wateraccelerate,&sv_friction,
+	&sv_waterfriction,	&sv_stepheight,		&pm_watersinkspeed,
+	&pm_flyfriction,	&pm_edgefriction,
+
+	/*read per-frame rather than latched into movevars*/
+	&sv_gravity,		&sv_maxvelocity,
+
+	/*read by SV_SetSourceMoveVars*/
+	&pm_physicsmode,	&pm_ticrate,		&pm_maxairspeed,
+	&pm_jumpvelocity,	&pm_standablenormal,&pm_sourcebounce,
+	&pm_maxvelocity,	&pm_standheight,	&pm_duckheight,
+	&pm_duckspeed,		&pm_viewheight,		&pm_duckviewheight,
+	&pm_viewscale,
+	&pm_stamina,		&pm_staminajumpcost,&pm_staminalandcost,
+	&pm_staminarecovery,&pm_normalizejump,	&pm_jumpaddrise,
+	&pm_jumpzoffset,
+	&pm_walkspeed,		&pm_groundtracedist,&pm_bumpcount,
+	&pm_snaptoground,	&pm_groundquadrants,&pm_fixslopes,
+	&pm_fixedges,		&pm_fixrampbugs,	&pm_rampretrace,
+	&pm_ladders,		&pm_ladderdampen,	&pm_ladderangle,	//Patch 260
+
+	/*FTE's anti-bunnyhop family. Having these off is a rule, not a taste.*/
+	&pm_bunnyspeedcap,	&pm_bunnyfriction,	&pm_ktjump,
+	&pm_walljump,		&pm_autobunny,		&pm_airstep,
+	&pm_pground,		&pm_stepdown,		&pm_slidefix,
+	&pm_slidyslopes,
+
+	/*NOT locked: pm_noclipspeed (noclip already voids the run, so how fast
+	  you fly while voided is a preference) and sv_spectatormaxspeed.*/
+	NULL
+};
+
+/*
+FTESurf Patch 224: the gamemode's overlay on top of that table.
+
+Patch 170 says the canonical value of a movement cvar is its defaultstr, i.e.
+whatever cfg/default.cfg set before the automatic cvar_lockdefaults.  That is
+still true for the BASE ruleset, and it is exactly the right answer for a game
+with one ruleset.  This game has more than one: a bhop map is not a surf map
+running slowly, it is a different tick and a different pace, and until now
+every map in the library got surf's numbers because surf's numbers were the
+only numbers there were.
+
+So the canonical value becomes "the gamemode's override if there is one, and
+defaultstr otherwise", in ONE function -- SV_MovementCanonical -- which both
+the lock and its per-cvar callback ask.  Neither of them learns what a gamemode
+is, and no third place can disagree with them about what the ruleset is.
+
+The overlay is rebuilt from scratch at every map load (SV_ApplyGamemode), so
+it can never carry one map's mode into the next; and it is consulted rather
+than baked into defaultstr, so the base ruleset stays readable in
+cfg/default.cfg rather than being mutated out from under it.
+*/
+#define PMS_MAXOVERRIDE 64
+typedef struct
+{
+	cvar_t	*var;
+	char	*val;		/*Z_StrDup'd; the mode's value for this cvar*/
+} pms_override_t;
+static pms_override_t	pms_over[PMS_MAXOVERRIDE];
+static int				pms_numover;
+
+static const char *SV_MovementCanonical(cvar_t *var)
+{
+	int i;
+	for (i = 0; i < pms_numover; i++)
+		if (pms_over[i].var == var)
+			return pms_over[i].val;
+	return var->defaultstr;
+}
+
+static qboolean SV_MovementLocked(void)
+{
+	/*The GAME's default decides whether the ruleset is locked -- not the live
+	  value.  Reading the live value would leave a hole you could walk through
+	  from the menu, where there is no server up to refuse `pm_lockmovement 0`
+	  and the setting would then survive into the next map.*/
+	if (!pm_lockmovement.defaultstr || !Q_atoi(pm_lockmovement.defaultstr))
+		return false;
+	return !sv_cheats.ival;
+}
+
+/*Fires after the value has already been committed (cvar.c:1041-1046), so this
+  reverts rather than refuses.  Cvar_ForceSet re-enters us exactly once, and
+  that pass returns at the strcmp below, so the recursion is bounded at one.*/
+static void QDECL SV_MovementVar_Callback (struct cvar_s *var, char *oldvalue)
+{
+	const char *canon;
+	if (sv.state != ss_active)
+		return;		/*not in a game yet; the map spawn re-applies anyway*/
+	if (!SV_MovementLocked())
+		return;
+	canon = SV_MovementCanonical(var);
+	if (!canon || !strcmp(var->string, canon))
+		return;
+
+	Cvar_ForceSet(var, canon);
+	Con_Printf(CON_WARNING"%s is part of the locked movement ruleset - "
+			   "restored to \"%s\".\nUse \"sv_cheats 1\" first if you mean to "
+			   "change it; anything you set then is not a legal run.\n",
+			   var->name, canon);
+}
+
+void SV_LockMovementVars(void)
+{
+	cvar_t **v;
+	int n = 0;
+
+	if (!SV_MovementLocked())
+		return;
+
+	for (v = pms_lockedmovevars; *v; v++)
+	{
+		const char *canon = SV_MovementCanonical(*v);
+		if (!canon || !strcmp((*v)->string, canon))
+			continue;
+		Cvar_ForceSet(*v, canon);
+		n++;
+	}
+
+	if (n)
+		Con_Printf("^5movement lock^7: %i cvar%s restored to the ruleset default\n",
+					n, (n==1)?"":"s");
+}
+
+/*Hooked after registration rather than declared with CVARFC, so that adding a
+  cvar to the table above is the only edit needed to lock it.*/
+void SV_HookMovementLock(void)
+{
+	cvar_t **v;
+	for (v = pms_lockedmovevars; *v; v++)
+		Cvar_Hook(*v, SV_MovementVar_Callback);
+}
+
+/*
+===========================================================================
+FTESurf Patch 224: the movement ruleset is a property of the GAMEMODE.
+
+WHAT WAS ACTUALLY WRONG.  Every map in the library ran surf's numbers -- 66.667
+Hz, sv_airaccelerate 150 -- because nothing anywhere read the map and picked
+anything else.  On a bhop map that is not a tuning preference, it is the wrong
+game: these maps were built against CS:S servers running -tickrate 100, and a
+third of the library is bhop or climb.
+
+AND IT COULD NOT BE FIXED FROM THE CONSOLE, which is the part worth writing
+down.  Patch 170's lock (above) restores every movement cvar to its default at
+each map load and reverts any live change, so `sv_airaccelerate 1000` typed at
+the console was reverted twice over -- immediately by the callback, and again
+at the next map spawn.  A per-gamemode ruleset therefore cannot live outside
+the lock; it has to BE the lock's idea of correct, which is why this sits in
+this file rather than in the gamecode.
+
+HOW THE MODE IS DECIDED, best evidence first:
+
+  1. sv_gamemode, if it names one.  An explicit answer beats a derived one.
+  2. data/mapmeta.txt column 9 -- Momentum's own gamemode id for this map,
+     already shipped for 2271 maps and already read by the map browser
+     (src/menu/m_main.qc).  This is a LOOKUP and it is right about maps whose
+     name lies.
+  3. the map name's prefix, for the ~700 maps Momentum has never indexed.
+     A guess, but a good one, and it is the same prefix table the browser
+     censused (surf 2025, bhop 240, kz 18, ...).
+
+Nothing else is consulted, and in particular the BSP is not: a map that is not
+in the index and does not say what it is in its name has nothing to read.
+
+WHERE THE NUMBERS LIVE: cfg/mode_<name>.cfg in the gamedir, not in a table
+here.  That is the same argument Patch 170 makes for defaultstr -- "what this
+game considers correct, maintained in one readable file rather than duplicated
+into a table" -- and it means a ruleset can be tuned, diffed and reviewed
+without an engine build.  The specific mode is tried first and its CATEGORY
+second (mode_kz.cfg, then mode_climb.cfg), so a category file covers its whole
+family and a specific one can still depart from it.
+
+surf has no file, deliberately.  Surf IS the base ruleset in cfg/default.cfg;
+a mode_surf.cfg would be a second copy of it, free to disagree.
+
+A mode may not set sv_cheats, pm_lockmovement, or any CVAR_CHEAT cvar.  A
+ruleset that could turn the lock off would not be a ruleset.
+===========================================================================
+*/
+cvar_t	sv_gamemode = CVARFD("sv_gamemode", "", CVAR_NOTFROMSERVER,
+	"Which movement ruleset a map loads. Empty (or \"auto\") detects it from "
+	"data/mapmeta.txt and then from the map name. A mode name -- surf, bhop, "
+	"kz, climb, ahop, rj, sj, conc, defrag -- pins it for every map. \"none\" "
+	"runs the base cfg/default.cfg ruleset everywhere, which is what this "
+	"engine did before Patch 224.");
+
+/*Momentum's gamemode ids, as they appear in mapmeta.txt column 9. Kept in ITS
+  numbering rather than renumbered, so the file and this table cannot drift.
+  Ported from src/menu/m_main.qc, which took them from Momentum's own
+  panorama/scripts/common/web/enums/gamemode.enum.ts after an earlier
+  reconstructed-by-census version turned out to be wrong for every id from 3 up.*/
+static const char *pms_modename[] =
+{
+	NULL, "surf", "bhop", "bhop-hl1", "climb", "kz", "climb-16",
+	"rj", "sj", "ahop", "conc", "df-cpm", "df-vq3", "df-vtg"
+};
+#define PMS_NUMMODES (int)(sizeof(pms_modename)/sizeof(pms_modename[0]))
+
+/*GamemodeToGamemodeCategory, same source. Three ids are climb variants and
+  three are defrag variants; the category is what a ruleset usually wants.*/
+static const char *SV_GamemodeCategory(int id)
+{
+	switch(id)
+	{
+	case 1:						return "surf";
+	case 2: case 3:				return "bhop";
+	case 4: case 5: case 6:		return "climb";
+	case 7:						return "rj";
+	case 8:						return "sj";
+	case 9:						return "ahop";
+	case 10:					return "conc";
+	case 11: case 12: case 13:	return "defrag";
+	}
+	return NULL;
+}
+
+/*The prefix fallback. Same set the map browser censused across all three
+  mounts; the counts there are why this order is not alphabetical.*/
+static const struct { const char *prefix; int mode; } pms_modeprefix[] =
+{
+	{"surf_",	1},		{"bhop_",	2},		{"kz_",		5},
+	{"trikz_",	5},		{"climb_",	4},		{"xc_",		6},
+	{"ahop_",	9},		{"rj_",		7},		{"sj_",		8},
+	{"conc_",	10},	{"defrag_",	11},	{"df_",		11},
+	{NULL, 0}
+};
+
+static int SV_GamemodeFromName(const char *mapname)
+{
+	int i;
+	for (i = 0; pms_modeprefix[i].prefix; i++)
+		if (!Q_strncasecmp(mapname, pms_modeprefix[i].prefix,
+						   strlen(pms_modeprefix[i].prefix)))
+			return pms_modeprefix[i].mode;
+	return 0;
+}
+
+/*
+data/mapmeta.txt, written by tools/mapmeta.py:
+
+    meta <name> <tier> <linear> <stages> <bonuses> <page> <cell> <uuid> <mode> [tsrc]
+
+A linear scan of 172 KB once per map load, which is nothing next to the BSP --
+and a hash table here would have to be invalidated whenever the file changed,
+which is a cache to get wrong in exchange for microseconds.
+
+FTESurf Patch 227: the row is now read WHOLE rather than for its mode alone.
+
+The tier is column 2 and this function was already walking past it to reach
+column 9. It exists nowhere else the client can see: the map browser reads this
+file, but the browser is menu.dat and the HUD is csprogs.dat, two separate progs.
+Publishing the row as serverinfo is the one answer that is right in all three
+places the game needs it -- live, in a demo (serverinfo is recorded), and for a
+remote client in a P2P session whose own mapmeta.txt may not match the server's.
+
+'-' means UNKNOWN and is not the same as 0. atoi("-") is 0, and there is no tier
+0, no gamemode 0 and no map with 0 segments, so the sentinel survives the
+conversion unambiguously in every column that uses it.
+*/
+typedef struct
+{
+	int mode;
+	int tier;
+	int linear;
+	int stages;
+	int bonuses;
+	char tsrc[16];		/*rank / sugg / alias / over, or "" for a file written
+						  before the column existed*/
+} svmapmeta_t;
+
+static qboolean SV_MapMetaLookup(const char *mapname, svmapmeta_t *out)
+{
+	char *file, *l, *e, *p;
+	size_t sz, namelen = strlen(mapname);
+	int col;
+	qboolean found = false;
+
+	memset(out, 0, sizeof(*out));
+
+	file = FS_LoadMallocFile("data/mapmeta.txt", &sz);
+	if (!file)
+		return false;
+
+	for (l = file; *l; l = e)
+	{
+		for (e = l; *e && *e != '\n'; e++)
+			;
+		if (*e)
+			*e++ = 0;	/*terminate THIS line: COM_Parse skips newlines, so
+						  without this a short row would read the next row's
+						  columns and silently mode a map from its neighbour.*/
+
+		if (strncmp(l, "meta ", 5))
+			continue;
+		if (Q_strncasecmp(l+5, mapname, namelen) || l[5+namelen] != ' ')
+			continue;
+
+		/*columns 2..10. Read rather than indexed by offset because the uuid
+		  column's width is not something to rely on. The loop still stops on the
+		  first empty token, so a row that is short of column 10 keeps everything
+		  it did reach -- which is what makes the tsrc column additive exactly the
+		  way the map browser treats it.*/
+		p = l+5+namelen;
+		for (col = 2; col <= 10; col++)
+		{
+			p = COM_Parse(p);
+			if (!com_token[0])
+				break;
+			switch(col)
+			{
+			case 2:		out->tier    = atoi(com_token);	break;
+			case 3:		out->linear  = atoi(com_token);	break;
+			case 4:		out->stages  = atoi(com_token);	break;
+			case 5:		out->bonuses = atoi(com_token);	break;
+			case 9:		out->mode    = atoi(com_token);	break;
+			case 10:	Q_strncpyz(out->tsrc, com_token, sizeof(out->tsrc));	break;
+			}
+		}
+		found = true;
+		break;
+	}
+
+	FS_FreeFile(file);
+	return found;
+}
+
+/*Drop the current overlay. pms_numover is zeroed BEFORE anything is restored,
+  because SV_MovementCanonical is what the per-cvar callback consults -- restore
+  with the entries still live and the callback puts the mode's value straight
+  back, and the ruleset never changes again.*/
+static void SV_ClearGamemodeOverrides(qboolean restore)
+{
+	pms_override_t old[PMS_MAXOVERRIDE];
+	int n = pms_numover, i;
+
+	memcpy(old, pms_over, sizeof(old[0]) * n);
+	pms_numover = 0;
+
+	for (i = 0; i < n; i++)
+	{
+		/*Restores cvars the lock does NOT police too -- sv_mintic, cl_netfps,
+		  fs_starthop. Those are not in pms_lockedmovevars, so SV_LockMovementVars
+		  will not put them back and the previous mode would otherwise leak into
+		  the next map.*/
+		if (restore && old[i].var->defaultstr &&
+			strcmp(old[i].var->string, old[i].var->defaultstr))
+			Cvar_ForceSet(old[i].var, old[i].var->defaultstr);
+		Z_Free(old[i].val);
+	}
+	memset(pms_over, 0, sizeof(pms_over));
+}
+
+static char pms_appliedmode[32];	/*"" when the base ruleset is running*/
+static char pms_appliedsrc[16];		/*forced / mapmeta / name / none*/
+static char pms_appliedfile[MAX_QPATH];
+
+static qboolean SV_LoadGamemodeRuleset(const char *modename)
+{
+	char path[MAX_QPATH], name[64];
+	char *file, *l, *e, *p;
+	size_t sz;
+	cvar_t *var;
+
+	Q_snprintfz(path, sizeof(path), "cfg/mode_%s.cfg", modename);
+	file = FS_LoadMallocFile(path, &sz);
+	if (!file)
+		return false;
+
+	Q_strncpyz(pms_appliedfile, path, sizeof(pms_appliedfile));
+
+	for (l = file; *l; l = e)
+	{
+		for (e = l; *e && *e != '\n'; e++)
+			;
+		if (*e)
+			*e++ = 0;	/*per line, so a missing value cannot eat the next line's
+						  cvar name and set the wrong thing to a plausible number*/
+
+		p = COM_Parse(l);
+		if (!com_token[0])
+			continue;			/*blank, or a whole-line // comment*/
+
+		/*`set`/`seta` accepted so the file reads like every other cfg here,
+		  even though nothing is being registered.*/
+		if (!strcmp(com_token, "set") || !strcmp(com_token, "seta") ||
+			!strcmp(com_token, "sets") || !strcmp(com_token, "setr"))
+		{
+			p = COM_Parse(p);
+			if (!com_token[0])
+				continue;
+		}
+		Q_strncpyz(name, com_token, sizeof(name));
+
+		p = COM_Parse(p);
+		if (!com_token[0])
+		{
+			Con_Printf(CON_WARNING"%s: \"%s\" has no value - ignored\n", path, name);
+			continue;
+		}
+
+		var = Cvar_FindVar(name);
+		if (!var)
+		{
+			Con_Printf(CON_WARNING"%s: no cvar named \"%s\" - ignored\n", path, name);
+			continue;
+		}
+		if (var == &pm_lockmovement || var == &sv_cheats || var == &sv_gamemode ||
+			(var->flags & (CVAR_CHEAT|CVAR_SEMICHEAT)))
+		{
+			Con_Printf(CON_WARNING"%s: \"%s\" may not be set by a gamemode "
+					   "ruleset - ignored\n", path, name);
+			continue;
+		}
+		if (pms_numover >= PMS_MAXOVERRIDE)
+		{
+			Con_Printf(CON_WARNING"%s: more than %i cvars - the rest ignored\n",
+					   path, PMS_MAXOVERRIDE);
+			break;
+		}
+
+		/*Recorded BEFORE it is set, and that order is load-bearing: the set
+		  fires the lock's callback, which asks SV_MovementCanonical what this
+		  cvar should be. With the entry already in place the callback agrees
+		  and returns; without it, the callback reverts the line we just read.*/
+		pms_over[pms_numover].var = var;
+		pms_over[pms_numover].val = Z_StrDup(com_token);
+		pms_numover++;
+		Cvar_ForceSet(var, com_token);
+	}
+
+	FS_FreeFile(file);
+	return true;
+}
+
+/*
+Called from SV_SpawnServer, in the one window where it is both possible and
+correct: after the map name is known and the entities have spawned, and BEFORE
+SV_LockMovementVars / SV_SetMoveVars / SV_ReportMoveVars read the values and
+before any client sends `new` (SV_New_f writes movevars into the serverdata
+message, which is how a client learns what to predict with).  A tick later and
+the first map of a session would be predicted against the previous ruleset.
+*/
+void SV_ApplyGamemode(const char *mapname)
+{
+	char name[MAX_QPATH];
+	int mode = 0;
+	size_t l;
+	const char *src = "none", *cat;
+	svmapmeta_t meta;
+	qboolean havemeta;
+
+	SV_ClearGamemodeOverrides(true);
+	*pms_appliedmode = *pms_appliedsrc = *pms_appliedfile = 0;
+	InfoBuf_SetValueForKey(&svs.info, "gamemode", "");
+	/*FTESurf Patch 227: cleared here with gamemode, so a map with no row cannot
+	  wear the previous map's tier.*/
+	InfoBuf_SetValueForKey(&svs.info, "maptier", "");
+	InfoBuf_SetValueForKey(&svs.info, "maplinear", "");
+	InfoBuf_SetValueForKey(&svs.info, "mapstages", "");
+	InfoBuf_SetValueForKey(&svs.info, "mapbonuses", "");
+	InfoBuf_SetValueForKey(&svs.info, "maptiersrc", "");
+
+	if (!mapname || !*mapname)
+		return;
+
+	/*svs.name is the bare map name today, but this is called with whatever the
+	  spawn was given and a stray "maps/" or ".bsp" would silently defeat every
+	  prefix test below -- which fails as "no gamemode", the quietest possible
+	  wrong answer.*/
+	if (!Q_strncasecmp(mapname, "maps/", 5))
+		mapname += 5;
+	Q_strncpyz(name, mapname, sizeof(name));
+	l = strlen(name);
+	if (l > 4 && !Q_strcasecmp(name+l-4, ".bsp"))
+		name[l-4] = 0;
+	mapname = name;
+
+	/*
+	FTESurf Patch 227: read the row ONCE, HERE, and unconditionally.
+
+	The lookup used to hang off gamemode detection three branches down, which is
+	the wrong place for anything but the mode: `sv_gamemode surf` skips that
+	branch entirely and `sv_gamemode none` returns above it, so on exactly the
+	installs that set the cvar the tier would silently never be published. Same
+	single file read as before -- it has just stopped being conditional on a
+	question it is not being asked.
+	*/
+	havemeta = SV_MapMetaLookup(mapname, &meta);
+	if (havemeta)
+	{
+		if (meta.tier > 0)
+			InfoBuf_SetValueForKey(&svs.info, "maptier", va("%i", meta.tier));
+		InfoBuf_SetValueForKey(&svs.info, "maplinear",  va("%i", meta.linear));
+		InfoBuf_SetValueForKey(&svs.info, "mapstages",  va("%i", meta.stages));
+		InfoBuf_SetValueForKey(&svs.info, "mapbonuses", va("%i", meta.bonuses));
+		if (*meta.tsrc)
+			InfoBuf_SetValueForKey(&svs.info, "maptiersrc", meta.tsrc);
+	}
+
+	if (*sv_gamemode.string && Q_strcasecmp(sv_gamemode.string, "auto"))
+	{
+		int i;
+		if (!Q_strcasecmp(sv_gamemode.string, "none"))
+		{
+			Q_strncpyz(pms_appliedsrc, "off", sizeof(pms_appliedsrc));
+			return;
+		}
+		for (i = 1; i < PMS_NUMMODES; i++)
+			if (!Q_strcasecmp(sv_gamemode.string, pms_modename[i]))
+			{
+				mode = i;
+				break;
+			}
+		if (!mode)
+		{
+			/*A category name is a legal answer too -- "bhop" is both.*/
+			for (i = 1; i < PMS_NUMMODES; i++)
+			{
+				cat = SV_GamemodeCategory(i);
+				if (cat && !Q_strcasecmp(sv_gamemode.string, cat))
+				{
+					mode = i;
+					break;
+				}
+			}
+		}
+		if (!mode)
+		{
+			Con_Printf(CON_WARNING"sv_gamemode \"%s\" is not a mode name - "
+					   "detecting instead\n", sv_gamemode.string);
+		}
+		else
+			src = "forced";
+	}
+
+	if (!mode)
+	{	//Patch 227: from the row read above rather than from a second scan of the file
+		mode = havemeta ? meta.mode : 0;
+		if (mode)
+			src = "mapmeta";
+	}
+	if (!mode)
+	{
+		mode = SV_GamemodeFromName(mapname);
+		if (mode)
+			src = "name";
+	}
+
+	if (mode <= 0 || mode >= PMS_NUMMODES)
+	{
+		Con_Printf("^5movement^7: %s has no gamemode - base ruleset\n", mapname);
+		Q_strncpyz(pms_appliedsrc, "none", sizeof(pms_appliedsrc));
+		return;
+	}
+
+	Q_strncpyz(pms_appliedmode, pms_modename[mode], sizeof(pms_appliedmode));
+	Q_strncpyz(pms_appliedsrc, src, sizeof(pms_appliedsrc));
+	InfoBuf_SetValueForKey(&svs.info, "gamemode", pms_appliedmode);
+
+	cat = SV_GamemodeCategory(mode);
+	if (!SV_LoadGamemodeRuleset(pms_appliedmode))
+		if (!cat || !strcmp(cat, pms_appliedmode) || !SV_LoadGamemodeRuleset(cat))
+		{
+			/*No file is not an error. surf has none by design, and a mode
+			  nobody has written a ruleset for should run the base one rather
+			  than refuse to load.*/
+			Con_Printf("^5movement^7: %s is %s (%s), base ruleset\n",
+					   mapname, pms_appliedmode, pms_appliedsrc);
+			return;
+		}
+
+	Con_Printf("^5movement^7: %s is %s (%s), %i cvar%s from %s\n",
+			   mapname, pms_appliedmode, pms_appliedsrc, pms_numover,
+			   (pms_numover==1)?"":"s", pms_appliedfile);
+}
+
+/*
+`movement` -- what ruleset is running, where it came from, and every cvar that
+departs from cfg/default.cfg because of it.
+
+The three columns are the whole point: a mode that says it set pm_ticrate and a
+pm_ticrate that still reads 0.015 is the failure this is for, and one column
+could not show it.
+*/
+void SV_Movement_f(void)
+{
+	int i;
+
+	if (sv.state != ss_active)
+	{
+		Con_Printf("^5movement^7: no server running\n");
+		return;
+	}
+
+	Con_Printf("^5movement^7: %s%s^7 on %s, from %s%s\n",
+			   *pms_appliedmode?"":"^3",
+			   *pms_appliedmode?pms_appliedmode:"base ruleset",
+			   svs.name,
+			   *pms_appliedsrc?pms_appliedsrc:"nothing",
+			   *pms_appliedfile?va(" (%s)", pms_appliedfile):"");
+
+	if (!SV_MovementLocked())
+		Con_Printf("  ^3the ruleset lock is off^7 - %s\n",
+				   sv_cheats.ival?"sv_cheats is 1, so no run here is legal"
+								 :"pm_lockmovement's default is 0");
+
+	if (pms_numover)
+	{
+		Con_Printf("  %-24s %-12s %-12s\n", "cvar", "live", "base");
+		for (i = 0; i < pms_numover; i++)
+		{
+			cvar_t *v = pms_over[i].var;
+			qboolean applied = !strcmp(v->string, pms_over[i].val);
+			Con_Printf("  %-24s %s%-12s^7 %-12s\n", v->name,
+					   applied?"":"^1", v->string,
+					   v->defaultstr?v->defaultstr:"?");
+		}
+	}
+	else
+		Con_Printf("  no overrides - every value is cfg/default.cfg's\n");
+
+	SV_ReportMoveVars();
 }
 #endif

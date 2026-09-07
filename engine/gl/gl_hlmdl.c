@@ -28,6 +28,10 @@
 qboolean HLMDL_Trace		(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace);
 unsigned int HLMDL_Contents	(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p, const vec3_t mins, const vec3_t maxs);
 
+//nettest: defined further down with the other r_hlmdl_* cvars, but read by the
+//skin-atlas builder above them.
+extern cvar_t r_hlmdl_atlasmips;
+
 void QuaternionGLMatrix(float x, float y, float z, float w, vec4_t *GLM)
 {
 	GLM[0][0] = 1 - 2 * y * y - 2 * z * z;
@@ -276,6 +280,40 @@ static void HLMDL_PrepareVerticies (model_t *mod, hlmodel_t *model)
 		}
 	}
 
+#if defined(RTLIGHTS) && defined(GLQUAKE)
+	//nettest: FILL THE TANGENT ARRAYS.  They are allocated above and were left
+	//ALL ZERO - the only thing that would have filled them is the
+	//R_Generate_Mesh_ST_Vectors call commented out in the loop above, and
+	//R_HL_BuildFrame carries a matching "//FIXME: svector, tvector!".
+	//
+	//Zero tangents are not merely wrong, they are POISON: rtlight.glsl does
+	//`s = normalize(s)`, normalize(vec3(0)) is NaN, lightvector.xy become NaN,
+	//and `colorscale = max(1.0 - dot(lightvector,lightvector)/r2, 0.0)` then
+	//returns 0.0 because GLSL's max is y<x?x:y and NaN<0 is false.  Every
+	//realtime light contributes exactly nothing to every GoldSrc studio model -
+	//which is why a flashlight lights .iqm props and never lights an NPC.
+	//
+	//Done ONCE FOR THE WHOLE MESH here rather than by uncommenting the call in
+	//the loop: HLMDL_DeDupe hands back ABSOLUTE indices into the whole-model
+	//vertex array while each submesh's arrays are offset by vbofirstvert, so a
+	//per-submesh call would index out of bounds and corrupt the heap.  At this
+	//point mesh->indexes still holds the real indices (the scratch reallocation
+	//is the next statement), numvertexes/numindexes are final, and
+	//normals_array is filled - exactly what the generator needs.
+	//
+	//st_array is not built until R_HL_BuildFrame, which needs the texture-atlas
+	//offsets.  lmst_array[0] holds the same UVs before that atlas scale, and
+	//scaling s by 1/w and t by 1/h scales sdir by w and tdir by h - both
+	//positive and constant within a mesh - so the NORMALISED tangents come out
+	//bit-identical either way.  Borrow it.
+	{
+		vec2_t *savedst = mesh->st_array;
+		mesh->st_array = mesh->lmst_array[0];
+		R_Generate_Mesh_ST_Vectors(mesh);
+		mesh->st_array = savedst;
+	}
+#endif
+
 	//scratch space...
 	mesh->indexes = ZG_Malloc(model->memgroup, sizeof(*mesh->indexes)*idx);
 
@@ -290,6 +328,55 @@ static void HLMDL_PrepareVerticies (model_t *mod, hlmodel_t *model)
 	Mod_LoadHLModel - read in the model's constituent parts
  =======================================================================================================================
  */
+#ifndef SERVERONLY
+//nettest: "r_texdiag_now" - dump every loaded studio model's skins with the numbers that
+//decide where it samples, ON DEMAND.  The load-time print (below, in Mod_LoadHLModel) cannot
+//show `bound`, because image uploads are asynchronous and have not happened yet when a model
+//finishes loading - it reports 0x0 for every skin.  Those bound dimensions are exactly the
+//thing worth seeing: R_HL_BuildFrame builds texcoords as (x + s)/bound->width, while the
+//studio texcoords `s` are in SOURCE texels, so any difference between bound and source means
+//the model samples the wrong part of its own skin and the transparent regions land in the
+//wrong place.  Run it in-game, then `condump texdiag.txt`.
+void R_TexDiagNow_f(void)
+{
+	extern model_t *mod_known;
+	extern int mod_numknown;
+	model_t *mod;
+	int m, t, shown = 0, mismatched = 0;
+
+	Con_Printf("^3--- r_texdiag_now: loaded Half-Life studio models ---\n");
+	for (m = 0, mod = mod_known; m < mod_numknown; m++, mod++)
+	{
+		hlmodel_t *hm;
+		if (mod->type != mod_halflife || !mod->meshinfo || mod->loadstate != MLS_LOADED)
+			continue;
+		hm = mod->meshinfo;
+		if (!hm->shaders)
+			continue;
+		for (t = 0; t < hm->numshaders; t++)
+		{
+			texid_t bound = hm->shaders[t].defaulttex.base;
+			int bw = bound?(int)bound->width:0, bh = bound?(int)bound->height:0;
+			qboolean masked = !!strstr(hm->shaders[t].name, "masked");
+			qboolean bad = (bw && bh && (bw != hm->shaders[t].w || bh != hm->shaders[t].h));
+			if (!masked && !bad)
+				continue;	//only the masked skins are interesting, plus anything mismatched
+			Con_Printf("%s [%d] src=%dx%d uvbase=%d,%d bound=%dx%d%s %s\n",
+				mod->name, t,
+				hm->shaders[t].w, hm->shaders[t].h,
+				hm->shaders[t].x, hm->shaders[t].y,
+				bw, bh,
+				bad?"  ^1<<< UV MISMATCH^7":"",
+				hm->shaders[t].name);
+			shown++;
+			if (bad)
+				mismatched++;
+		}
+	}
+	Con_Printf("^3--- %d masked skin(s), %d with a UV mismatch ---\n", shown, mismatched);
+}
+#endif
+
 qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 {
 #ifndef SERVERONLY
@@ -534,6 +621,7 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 
 	shaders = ZG_Malloc(&mod->memgroup, texheader->numtextures*sizeof(shader_t));
 	model->shaders = shaders;
+	model->numshaders = texheader->numtextures;
 
 	for(i = 0; i < texheader->numtextures; i++)
 	{
@@ -543,23 +631,32 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		if (tex[i].flags)
 		{
 			char *shader;
+			//MASKED is orthogonal to FULLBRIGHT and CHROME - see the corpus counts beside
+			//HLSHADER_FULLBRIGHTMASKED in model_hl.h.  It has to be folded into the branch
+			//rather than sitting in the same else-if chain, or a texture that sets it
+			//alongside either of the others silently loses its alpha test and draws the
+			//zeroed transparent texels as solid black.
+			qboolean masked = !!(tex[i].flags & (HLMDLFL_MASKED | HLMDLFL_ALPHASOLID));
 			if (tex[i].flags & HLMDLFL_FULLBRIGHT)
 			{
 				if (tex[i].flags & HLMDLFL_CHROME)
 				{
-					shader = HLSHADER_FULLBRIGHTCHROME;
-					Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), "common/hlmodel_fullbrightchrome");
+					shader = masked?HLSHADER_FULLBRIGHTCHROMEMASKED:HLSHADER_FULLBRIGHTCHROME;
+					Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), masked?"common/hlmodel_fullbrightchromemasked":"common/hlmodel_fullbrightchrome");
 				}
 				else
 				{
-					shader = HLSHADER_FULLBRIGHT;
-					Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), "common/hlmodel_fullbright");
+					shader = masked?HLSHADER_FULLBRIGHTMASKED:HLSHADER_FULLBRIGHT;
+					Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), masked?"common/hlmodel_fullbrightmasked":"common/hlmodel_fullbright");
 				}
 			}
-			else if ( (tex[i].flags & HLMDLFL_MASKED) || (tex[i].flags & (HLMDLFL_MASKED | HLMDLFL_ALPHASOLID)))
+			else if (masked)
 			{
-				shader = HLSHADER_MASKED;
-				Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), "common/hlmodel_masked");
+				//CHROME+MASKED keeps the chrome tcgen instead of dropping it, which the old
+				//chain did by reaching the masked case first.  Only 2 textures in the corpus,
+				//but the two flags cost nothing to honour together.
+				shader = (tex[i].flags & HLMDLFL_CHROME)?HLSHADER_CHROMEMASKED:HLSHADER_MASKED;
+				Q_snprintfz(shaders[i].name, sizeof(shaders[i].name), (tex[i].flags & HLMDLFL_CHROME)?"common/hlmodel_chromemasked":"common/hlmodel_masked");
 			}
 			else if (tex[i].flags & HLMDLFL_CHROME)
 			{
@@ -582,6 +679,22 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 	}
 
 
+	//nettest: EVERY SLOT GETS A ONE-TEXEL GUTTER OF ITS OWN EDGE TEXELS.
+	//
+	//This atlas used to pack skins flush against each other, which makes a
+	//sample anywhere on a slot's outer boundary a blend with whatever skin was
+	//packed next to it.  R_HL_BuildFrame clamps the VERTEX texcoords inwards
+	//(see the note there) and that fixed the reported case, but a clamp cannot
+	//help a filter that reaches outside the slot on its own account - which is
+	//exactly what mip levels do.  The gutter is the half of the fix that lives
+	//on the data side, and it is what r_2d.c's pic atlas has always done
+	//(r_2d.c:523 allocates width+2/height+2 and replicates the border).
+	//
+	//Skipped when the model has a single texture: that path sizes the atlas to
+	//be exactly the one skin, there is no neighbour to bleed from, and padding
+	//it would simply fail to fit.
+	int pad = (texheader->numtextures == 1)?0:1;
+
 	//figure out the preferred atlas size. hopefully it'll fit well enough...
 	if (texheader->numtextures == 1)
 		Mod_LightmapAllocInit(&atlas, false, tex[0].w, tex[0].h, 0);
@@ -589,7 +702,7 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 	{
 		int sz = 1;
 		for(i = 0; i < texheader->numtextures; i++)
-			while (sz < tex[i].w || sz < tex[i].h)
+			while (sz < tex[i].w+pad*2 || sz < tex[i].h+pad*2)
 				sz <<= 1;
 		for (; sz < sh_config.texture2d_maxsize && sz <= LMBLOCK_SIZE_MAX; sz<<=1)
 		{
@@ -600,7 +713,7 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 			{
 				if ((tex[i].flags & HLMDLFL_CHROME) || !Q_strncasecmp(tex[i].name, "DM_Base", 7))
 					continue;
-				Mod_LightmapAllocBlock(&atlas, tex[i].w, tex[i].h, &x, &y, &atlasid);
+				Mod_LightmapAllocBlock(&atlas, tex[i].w+pad*2, tex[i].h+pad*2, &x, &y, &atlasid);
 			}
 			if (i == texheader->numtextures && atlas.lmnum <= 0)
 				break;	//okay, just go with it.
@@ -620,7 +733,12 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		}
 		shaders[i].w = tex[i].w;
 		shaders[i].h = tex[i].h;
-		Mod_LightmapAllocBlock(&atlas, shaders[i].w, shaders[i].h, &shaders[i].x, &shaders[i].y, &shaders[i].atlasid);
+		//allocate the slot WITH its gutter, then step x/y in to the first real
+		//texel - so shaders[].x/y keep meaning "where the skin starts", which is
+		//what every texcoord calculation downstream already assumes.
+		Mod_LightmapAllocBlock(&atlas, shaders[i].w+pad*2, shaders[i].h+pad*2, &shaders[i].x, &shaders[i].y, &shaders[i].atlasid);
+		shaders[i].x += pad;
+		shaders[i].y += pad;
 	}
 	if (atlas.allocated[0])
 		atlas.lmnum++;
@@ -634,20 +752,57 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 		{
 			if (shaders[i].atlasid == j)
 			{
-				unsigned *out = basepix + atlas.width*shaders[i].y + shaders[i].x;
+				int aw = atlas.width, sw = tex[i].w, sh = tex[i].h, p;
+				unsigned *slot = basepix + aw*shaders[i].y + shaders[i].x;
+				unsigned *out = slot;
 				qbyte *in = (qbyte *) texheader + tex[i].offset;
 				qbyte *pal = (qbyte *) texheader + tex[i].w * tex[i].h + tex[i].offset;
 				qbyte *rgb;
-				for(y = 0; y < tex[i].h; y++, out += atlas.width-shaders[i].w)
-					for(x = 0; x < tex[i].w; x++, in++)
+				for(y = 0; y < sh; y++, out += aw-sw)
+					for(x = 0; x < sw; x++, in++)
 					{
 						rgb = pal + *in*3;
 						*out++ = 0xff000000 | (rgb[0]<<0) | (rgb[1]<<8) | (rgb[2]<<16);
 					}
+
+				//nettest: fill the gutter with a copy of the slot's own edge, so
+				//any filter tap that strays outside the skin lands on the skin's
+				//own colour instead of the neighbouring one.  Sides first, then
+				//top/bottom over the full padded width - that order lets the
+				//vertical pass pick the corners up for free from the columns the
+				//horizontal pass just wrote.
+				for (p = 1; p <= pad; p++)
+				{
+					for (y = 0; y < sh; y++)
+					{
+						unsigned *row = slot + aw*y;
+						row[-p]       = row[0];
+						row[sw-1+p]   = row[sw-1];
+					}
+					for (x = -p; x < sw+p; x++)
+					{
+						slot[-aw*p + x]         = slot[x];
+						slot[aw*(sh-1+p) + x]   = slot[aw*(sh-1) + x];
+					}
+				}
 			}
 		}
 		Q_snprintfz(texname, sizeof(texname), "%s*%i", mod->name, j);
-		basetex = Image_GetTexture(texname, "", IF_NOALPHA|IF_NOREPLACE, basepix, NULL, atlas.width, atlas.height, PTI_RGBX8);
+		//nettest: NO MIPMAPS ON A SHARED ATLAS, unless asked for.
+		//
+		//The gutter above makes mip 0 and mip 1 correct, but every level after
+		//that averages a box wider than one texel and so reaches through the
+		//gutter into the neighbouring skin regardless of texcoords.  It gets
+		//worse the smaller the slot: a 68x29 skin in a 1024 atlas is 4x1 texels
+		//by mip 4 and gone entirely by mip 5, at which point its colour is
+		//ENTIRELY its neighbours' - which is what a small skin on a distant
+		//model reads as, "that face is stretched/smeared".  Correct mipping
+		//would need the chain built per-slot rather than over the whole page.
+		//
+		//Cost of turning them off is aliasing on distant models.  Set
+		//r_hlmdl_atlasmips 1 to get them (and the bleed) back - which is also
+		//the A/B test for whether a given artefact is this at all.
+		basetex = Image_GetTexture(texname, "", IF_NOALPHA|IF_NOREPLACE|((pad && !r_hlmdl_atlasmips.ival)?IF_NOMIPMAP:0), basepix, NULL, atlas.width, atlas.height, PTI_RGBX8);
 		Z_Free(basepix);
 		for(i = 0; i < texheader->numtextures; i++)
 		{
@@ -704,16 +859,10 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 			shaders[i].defaulttex.loweroverlay = Image_GetTexture(texname, "", IF_NOALPHA|IF_NOREPLACE, lower, NULL, tex[i].w, tex[i].h, PTI_L8);
 			Z_Free(basepix);
 		}
-		else if (tex[i].flags & HLMDLFL_CHROME)
-		{
-			qbyte *in = (qbyte *) texheader + tex[i].offset;
-			qbyte *pal = (qbyte *) texheader + tex[i].w * tex[i].h + tex[i].offset;
-
-			shaders[i].atlasid = j++;
-			Q_snprintfz(texname, sizeof(texname), "%s*%i", mod->name, shaders[i].atlasid);
-			shaders[i].defaulttex.base = Image_GetTexture(texname, "", IF_NOALPHA|IF_NOREPLACE, in, pal, tex[i].w, tex[i].h, TF_8PAL24);
-		}
-		else if (tex[i].flags & HLMDLFL_MASKED)
+		//MASKED is tested BEFORE chrome here, to match the shader selector above: a
+		//CHROME|MASKED texture that took the chrome branch was uploaded TF_8PAL24, which has
+		//no alpha channel at all, so its alpha test could never fire whatever shader it got.
+		else if (tex[i].flags & (HLMDLFL_MASKED | HLMDLFL_ALPHASOLID))
 		{
 			int k = 0;
 			qbyte *in = (qbyte *) texheader + tex[i].offset;
@@ -735,9 +884,33 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 			alphaPal[255*4+2] = 0;
 			alphaPal[255*4+3] = 0;
 
+			//This texture is about to be bound as a STANDALONE image, but the atlas pass
+			//above already handed it an (x,y) slot inside the shared atlas and R_HL_BuildFrame
+			//builds texcoords as (texinfo->x + s) / boundtexture->width.  Left alone, the mesh
+			//samples the standalone texture at an offset of x/w - correct only when the atlas
+			//happened to place it at an exact multiple of its own size, which is why this has
+			//gone unnoticed on power-of-two foliage.  Reset it the way the DM_Base/chrome
+			//branch does, so the UVs describe the image that is actually bound.
+			shaders[i].x = shaders[i].y = 0;
+			shaders[i].w = tex[i].w;
+			shaders[i].h = tex[i].h;
+
 			shaders[i].atlasid = j++;
 			Q_snprintfz(texname, sizeof(texname), "%s*%i", mod->name, shaders[i].atlasid);
 			shaders[i].defaulttex.base = Image_GetTexture(texname, "", IF_NOREPLACE, in, alphaPal, tex[i].w, tex[i].h, TF_8PAL32);
+		}
+		else if (tex[i].flags & HLMDLFL_CHROME)
+		{
+			qbyte *in = (qbyte *) texheader + tex[i].offset;
+			qbyte *pal = (qbyte *) texheader + tex[i].w * tex[i].h + tex[i].offset;
+
+			shaders[i].x = shaders[i].y = 0;	//standalone, same reasoning as the masked branch
+			shaders[i].w = tex[i].w;
+			shaders[i].h = tex[i].h;
+
+			shaders[i].atlasid = j++;
+			Q_snprintfz(texname, sizeof(texname), "%s*%i", mod->name, shaders[i].atlasid);
+			shaders[i].defaulttex.base = Image_GetTexture(texname, "", IF_NOALPHA|IF_NOREPLACE, in, pal, tex[i].w, tex[i].h, TF_8PAL24);
 		}
 	}
 
@@ -773,6 +946,39 @@ qboolean QDECL Mod_LoadHLModel (model_t *mod, void *buffer, size_t fsize)
 
 	if (texmem)
 		Z_Free(texmem);
+
+	//nettest: r_texdiag also covers studio skins, because the world-texture half of it could
+	//not see the thing that actually goes wrong on models.  R_HL_BuildFrame builds texcoords
+	//as (x + s)/bound->width and (y + t)/bound->height, so a model draws at the WRONG PART of
+	//its own skin whenever the bound image's dimensions are not the source dimensions the
+	//studio texcoords were authored against, or whenever x/y still describe an atlas slot the
+	//image is no longer inside.  Both are invisible from the outside - they look like
+	//"the transparent bits are in the wrong place" - so print the four numbers that decide it.
+	//...but only on a build that HAS a renderer.  tex[], model->shaders and
+	//r_texdiag itself all live inside the #ifndef SERVERONLY above, so this
+	//block broke the dedicated-server link outright ("'tex' undeclared") - it
+	//just was not noticed, because nothing had rebuilt the sv target since.
+#ifndef SERVERONLY
+	if (r_texdiag.ival)
+	{
+		int t;
+		for (t = 0; t < texheader->numtextures; t++)
+		{
+			texid_t bound = model->shaders[t].defaulttex.base;
+			int bw = bound?(int)bound->width:0, bh = bound?(int)bound->height:0;
+			//bw==0 just means the upload has not finished yet, which is not a mismatch.
+			qboolean bad = (bw && bh && (bw != model->shaders[t].w || bh != model->shaders[t].h));
+			Con_Printf("[texdiag] %s : %-20s flags=0x%04x src=%dx%d uvbase=%d,%d uvsize=%dx%d bound=%dx%d%s shader=%s\n",
+				mod->name, tex[t].name, tex[t].flags,
+				tex[t].w, tex[t].h,
+				model->shaders[t].x, model->shaders[t].y,
+				model->shaders[t].w, model->shaders[t].h,
+				bw, bh,
+				bad?"  <<< UV MISMATCH":"",
+				model->shaders[t].name);
+		}
+	}
+#endif
 
 	mod->funcs.NativeContents = HLMDL_Contents;
 	mod->funcs.NativeTrace = HLMDL_Trace;
@@ -966,6 +1172,10 @@ void HL_CalcBoneAdj(hlmodel_t *model)
 
 		if(control[i].type & 0x8000)
 		{	//wraps normally
+			//NOT blended, and this is the case Patch 125's "never interpolate"
+			//note was really about: a wrapping controller stepping 179 -> -179
+			//has moved two degrees, and lerping the numbers would sweep it the
+			//long way round through zero.  Take the newest and be done.
 			value = model->controller[j];// + control[i].start;
 		}
 		else
@@ -977,7 +1187,26 @@ void HL_CalcBoneAdj(hlmodel_t *model)
 //				value = 1.0;
 //			value = (1.0 - value) * control[i].start + value * control[i].end;
 
-			value = model->controller[j];
+			//nettest Patch 126: BOUNDED controllers blend.  These are clamped to
+			//the model's own start..end a few lines down, so there is no wrap to
+			//go the wrong way round - every one this mod drives (head yaw
+			//-60..60, jaw 0..45) lives here.  Without the blend a server-driven
+			//head moved in discrete steps at the AI think rate while the body
+			//carrying it interpolated smoothly, which is what "their head
+			//movement isn't smooth" describes.
+			value = model->controller_old[j]
+			      + (model->controller[j] - model->controller_old[j]) * model->controllerfrac;
+
+			//THE JAW, index 4 by GoldSrc convention, driven by how loud the
+			//sample being spoken is at its current playback offset rather than by
+			//anything the game code decides.  That is the whole point: HL's mouth
+			//is a property of the AUDIO, which is why no QC-side wobble ever
+			//matched it.  Scaled into this model's own range so a scientist
+			//(0..20) and a barney (0..45) both open by the right amount.
+			if (j == 4 && model->mouthopen > 0)
+				value = control[i].start
+				      + (control[i].end - control[i].start) * model->mouthopen;
+
 			if (value < control[i].start)
 				value = control[i].start;
 			if (value > control[i].end)
@@ -1359,12 +1588,98 @@ int HLMDL_GetAttachment(model_t *mod, int tagnum, float *resultmatrix)
 	return -1;
 }
 
+//nettest Patch 126: cross-fade between two SEQUENCES.
+//
+//gl_hlmdl.c has carried "FIXME: we don't handle frame2" since forever, and the
+//consequence is the reported one: Half-Life models never blend between
+//animations.  HL_SetupBones interpolates beautifully between two FRAMES inside a
+//sequence, and between the sub-animations of a blended sequence, but a change of
+//sequence - idle to walk, walk to attack - snaps the whole skeleton in one tick.
+//
+//Everything needed was already being computed and thrown away: cl_ents.c fills
+//frame[1] with the previous sequence and lerpweight[0] with how far we are into
+//the new one (over at most cl_lerp_maxinterval, which is exactly the right
+//duration for a cross-fade), and HLMDL_GetBoneData_Internal read frame[0] only.
+//
+//The blend is elementwise on the bone matrices, then re-orthonormalised.  That is
+//not slerp, and for a 0.1s cross-fade between two poses the difference is not
+//visible - it is also precisely what the weighted-blend path in HL_SetupBones
+//already does ("we were lame and didn't use slerp. boo hiss. now we need to
+//normalise the things"), so it is the house style here rather than a shortcut
+//invented for this.
+//
+//nettest Patch 130: DEFAULT ON.  This landed defaulted off because it could not
+//be verified without eyes on it; it has now been played, and "can the animations
+//be smoothed between?" is the report that turns it on.
+cvar_t r_hlmdl_seqblend = CVARFD("r_hlmdl_seqblend", "1", CVAR_ARCHIVE,
+	"Cross-fade between animation sequences on Half-Life models instead of snapping. 0 = off (stock GoldSrc behaviour).");
+
+//nettest: see the long note at the Image_GetTexture call in the skin-atlas
+//builder.  A Half-Life model's skins share one atlas page, and a mip level
+//averages across the slot boundaries no matter what the texcoords say, so small
+//skins take on their neighbours' colour at distance.
+cvar_t r_hlmdl_atlasmips = CVARFD("r_hlmdl_atlasmips", "0", CVAR_ARCHIVE|CVAR_RENDERERLATCH,
+	"Generate mipmaps for the shared Half-Life model skin atlas. 0 (default) trades aliasing on distant models for an end to skins bleeding into each other - a mip level averages a box wider than the one-texel gutter between slots, so a small skin picks up its neighbours' colour and reads as a stretched or smeared face. 1 restores mipmapping, which is also the A/B test for whether an artefact is this. Requires a map reload / vid_restart.");
+
+//nettest Patch 130: the fade gets its OWN clock.
+//
+//It used to reuse lerpweight[0], which is frametime[0]/framelerpdeltatime - and
+//framelerpdeltatime is "how long the PREVIOUS sequence happened to be playing
+//for", clamped to cl_lerp_maxinterval (cl_ents.c:4362-4364).  That is the right
+//number for positional interpolation and the wrong one here, twice over: a
+//monster that has been idling for ten seconds fades over the full 0.3s clamp,
+//while one whose schedule churned two frames ago fades over 0.03s and still
+//snaps.  The fade duration should depend on nothing but the fade.
+//
+//frametime[0] is already exactly "seconds since this sequence started"
+//(cl_ents.c:4252), so the weight is that over a fixed time and needs no new
+//plumbing.  0.12s is GoldSrc-ish: long enough to kill the snap on idle->walk,
+//short enough that the first frames of an attack are still readable, which
+//matters because the attack animation IS the tell the player reacts to.
+cvar_t r_hlmdl_seqblend_time = CVARFD("r_hlmdl_seqblend_time", "0.12", CVAR_ARCHIVE,
+	"Seconds to cross-fade over when a Half-Life model changes animation sequence.");
+
+//Gram-Schmidt the 3x3 part back into a rotation.  A per-element blend of two
+//rotations is a valid rotation only after this; skipping it makes limbs stretch
+//during the fade, which is much more obvious than any slerp-vs-nlerp difference.
+static void HL_ReOrthonormalise(float *m)
+{
+	vec3_t x, y, z;
+	float len;
+
+	VectorSet(x, m[0], m[4], m[8]);
+	VectorSet(y, m[1], m[5], m[9]);
+
+	len = VectorLength(x);
+	if (len < 0.0001)
+		return;			//degenerate; leave it rather than produce NaNs
+	VectorScale(x, 1/len, x);
+
+	//y perpendicular to x
+	VectorMA(y, -DotProduct(y, x), x, y);
+	len = VectorLength(y);
+	if (len < 0.0001)
+		return;
+	VectorScale(y, 1/len, y);
+
+	CrossProduct(x, y, z);
+
+	m[0] = x[0]; m[4] = x[1]; m[8]  = x[2];
+	m[1] = y[0]; m[5] = y[1]; m[9]  = y[2];
+	m[2] = z[0]; m[6] = z[1]; m[10] = z[2];
+}
+
 static int HLMDL_GetBoneData_Internal(hlmodel_t *model, int firstbone, int lastbone, const framestate_t *fstate, float *result)
 {
 	int b, cbone, bgroup;
 
 	for (b = 0; b < MAX_BONE_CONTROLLERS; b++)
+	{
 		model->controller[b] = fstate->bonecontrols[b];
+		model->controller_old[b] = fstate->bonecontrols_old[b];
+	}
+	model->controllerfrac = fstate->bonecontrol_lerpfrac;
+	model->mouthopen = fstate->mouthopen;
 	for (cbone = 0, bgroup = 0; bgroup < FS_COUNT; bgroup++)
 	{
 		lastbone = fstate->g[bgroup].endbone;
@@ -1373,6 +1688,54 @@ static int HLMDL_GetBoneData_Internal(hlmodel_t *model, int firstbone, int lastb
 		if (cbone >= lastbone)
 			continue;
 		HL_SetupBones(model, fstate->g[bgroup].frame[0] & ~0x8000, cbone, lastbone, fstate->g[bgroup].subblendfrac, fstate->g[bgroup].subblend2frac, fstate->g[bgroup].frametime[0], result);	/* Setup the bones */
+
+		if (r_hlmdl_seqblend.ival)
+		{
+			int newseq = fstate->g[bgroup].frame[0] & ~0x8000;
+			int oldseq = fstate->g[bgroup].frame[1] & ~0x8000;
+			//0 = old pose, 1 = new.  Its own clock - see the cvar comment.
+			float bt = r_hlmdl_seqblend_time.value;
+			//nettest Patch 155: seqtime, not frametime[0].  These were the same
+			//number until the playback rate became networkable; they are not any
+			//more.  A sequence played at 2x would fade in half the intended time,
+			//and a REVERSED one starts with frametime[0] == the sequence duration,
+			//so w would already exceed 1 on the very first frame and every
+			//reversed transition would snap - the precise artefact that reverse
+			//playback exists to remove.  seqtime is wall-clock since the sequence
+			//changed, which is what a cross-fade actually wants.
+			float w = (bt > 0) ? (fstate->g[bgroup].seqtime / bt) : 1;
+			if (w < 0)
+				w = 0;
+			else if (w > 1)
+				w = 1;
+
+			//Only while the two genuinely differ AND the fade is in progress.  The
+			//steady state - same sequence, or w already 1 - costs one comparison
+			//and never touches the second pose, which is what keeps this off the
+			//bill for the overwhelming majority of frames.
+			if (oldseq != newseq && w > 0.001 && w < 0.999)
+			{
+				float scratch[MAX_BONES*12];
+				int nb = lastbone;
+				if (nb > MAX_BONES)
+					nb = MAX_BONES;
+				if (cbone < nb)
+				{
+					int i, k;
+					float iw = 1 - w;
+					HL_SetupBones(model, oldseq, cbone, nb, fstate->g[bgroup].subblendfrac, fstate->g[bgroup].subblend2frac, fstate->g[bgroup].frametime[1], scratch);
+					for (i = cbone; i < nb; i++)
+					{
+						float *dst = result  + i*12;
+						float *src = scratch + i*12;
+						for (k = 0; k < 12; k++)
+							dst[k] = src[k]*iw + dst[k]*w;
+						HL_ReOrthonormalise(dst);
+					}
+				}
+			}
+		}
+
 		cbone = lastbone;
 	}
 	return cbone;
@@ -1593,8 +1956,29 @@ static void R_HL_BuildFrame(hlmodel_t *model, int bodypart, int bodyidx, int mes
 	int v;
 	int w = texinfo->defaulttex.base->width;
 	int h = texinfo->defaulttex.base->height;
-	vec2_t texbase = {texinfo->x/(float)w, texinfo->y/(float)h};
 	vec2_t texscale = {1.0/w, 1.0/h};
+	//nettest: when this skin is one slot of the SHARED atlas, its texcoords must never reach
+	//the slot's outer boundary.  The old form was texbase + s*texscale == (x + s)/W, which
+	//samples texel CORNERS, so s=0 lands EXACTLY on the seam - and the atlas built above packs
+	//slots with NO padding between them, so the bilinear tap there is a 50/50 blend with the
+	//neighbouring skin.  Severity scales with how few source texels a mesh's UVs span, which is
+	//why this is per-MESH and not per-model, and why it reads as "some faces are stretched".
+	//
+	//Measured: pizza_ya_san1's owner_shin.mdl paints both legs and both arms from black.bmp, a
+	//4x8 swatch, using only s=0..1 - packed immediately right of main.bmp (248x253).  Half of
+	//every limb pixel was therefore the neighbour.  th_ep1_01's scientist.mdl has the same thing
+	//on its 68x29 Sci3(Shoe) slot, where the sole's verts sit at t=0 and t=1.
+	//
+	//r_2d.c's pic atlas has always done this correctly - it pads each entry by a texel and uses
+	//(x+0.5)/width (r_2d.c:523, 528-529, 618).  Clamping at the VERTICES is enough here: a
+	//triangle's interpolated st is a convex combination of its three vertex values, so it cannot
+	//leave the range they span.
+	//
+	//A standalone upload (chrome / DM_Base / masked, and the single-texture case) IS the whole
+	//image, so leave its wrap behaviour alone or models that deliberately tile lose their tiling.
+	qboolean atlased = (w != texinfo->w || h != texinfo->h);
+	float smin = atlased?texinfo->x + 0.5f : -1e30f, smax = atlased?texinfo->x + texinfo->w - 0.5f : 1e30f;
+	float tmin = atlased?texinfo->y + 0.5f : -1e30f, tmax = atlased?texinfo->y + texinfo->h - 0.5f : 1e30f;
 
 	mesh_t *srcmesh = &model->geomset[bodypart].alternatives[bodyidx].submesh[meshidx];
 
@@ -1605,9 +1989,11 @@ static void R_HL_BuildFrame(hlmodel_t *model, int bodypart, int bodyidx, int mes
 	if (outmesh == &model->mesh)
 	{	//get the backend to do the skeletal stuff (read: glsl)
 		for(v = 0; v < srcmesh->numvertexes; v++)
-		{	//should really come up with a better way to deal with this, like rect textures.
-			srcmesh->st_array[v][0] = texbase[0] + srcmesh->lmst_array[0][v][0] * texscale[0];
-			srcmesh->st_array[v][1] = texbase[1] + srcmesh->lmst_array[0][v][1] * texscale[1];
+		{	//clamp into the slot - see the note beside texscale at the top of this function.
+			float s = texinfo->x + srcmesh->lmst_array[0][v][0];
+			float t = texinfo->y + srcmesh->lmst_array[0][v][1];
+			srcmesh->st_array[v][0] = bound(smin, s, smax) * texscale[0];
+			srcmesh->st_array[v][1] = bound(tmin, t, tmax) * texscale[1];
 		}
 	}
 	else
@@ -1617,9 +2003,11 @@ static void R_HL_BuildFrame(hlmodel_t *model, int bodypart, int bodyidx, int mes
 		vec3_t *nnorm = outmesh->normals_array+fvert;
 
 		for(v = 0; v < srcmesh->numvertexes; v++)
-		{	//should really come up with a better way to deal with this, like rect textures.
-			srcmesh->st_array[v][0] = texbase[0] + srcmesh->lmst_array[0][v][0] * texscale[0];
-			srcmesh->st_array[v][1] = texbase[1] + srcmesh->lmst_array[0][v][1] * texscale[1];
+		{	//clamp into the slot - see the note beside texscale at the top of this function.
+			float s = texinfo->x + srcmesh->lmst_array[0][v][0];
+			float t = texinfo->y + srcmesh->lmst_array[0][v][1];
+			srcmesh->st_array[v][0] = bound(smin, s, smax) * texscale[0];
+			srcmesh->st_array[v][1] = bound(tmin, t, tmax) * texscale[1];
 
 			//transform to nxyz (a separate buffer from the srcmesh data)
 			VectorTransform(srcmesh->xyz_array[v], (void *)transform_matrix[srcmesh->bonenums[v][0]], nxyz[v]);
@@ -1646,7 +2034,13 @@ static void R_HL_BuildMeshes(batch_t *b)
 	static mesh_t *mptr[1], softbonemesh;
 	skinfile_t *sk = rent->customskin?Mod_LookupSkin(rent->customskin):NULL;
 
-	const unsigned int entity_body = 0/*rent->body*/;
+	//nettest Patch 131: the bodygroup, live at last.  This read a hardcoded 0
+	//since the HL loader was written, so every studiomodel in the game drew its
+	//DEFAULT parts regardless of what the game code asked for.  entity_t.body is
+	//now filled from entity_state_t.bodygroup (networked under PEXT2_BODYGROUP)
+	//and from the CSQC .body field.  The divisor arithmetic below was always
+	//correct - it just had nothing to divide.
+	const unsigned int entity_body = rent->body;
 	int surf;
 
 	float *bones;
@@ -1776,7 +2170,13 @@ void R_HalfLife_GenerateBatches(entity_t *rent, batch_t **batches)
 	int						body, m;
 	skinfile_t *sk = rent->customskin?Mod_LookupSkin(rent->customskin):NULL;
 
-	const unsigned int entity_body = 0/*rent->body*/;
+	//nettest Patch 131: the bodygroup, live at last.  This read a hardcoded 0
+	//since the HL loader was written, so every studiomodel in the game drew its
+	//DEFAULT parts regardless of what the game code asked for.  entity_t.body is
+	//now filled from entity_state_t.bodygroup (networked under PEXT2_BODYGROUP)
+	//and from the CSQC .body field.  The divisor arithmetic below was always
+	//correct - it just had nothing to divide.
+	const unsigned int entity_body = rent->body;
 	batch_t *b = NULL;
 
 	unsigned int surfidx = 0;

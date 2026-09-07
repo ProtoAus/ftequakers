@@ -106,6 +106,12 @@ extern conchar_t q3codemasks[MAXQ3COLOURS];
 #define CONL_NONOTIFY	(1u<<1)
 #define CONL_BREAKPOINT	(1u<<2)	//red
 #define CONL_EXECUTION	(1u<<3)	//yellow
+/*FTESurf Patch 242: this line was printed as an error or a warning, so the
+  notify overlay ages it with con_notifytime_error instead of con_notifytime.
+  Set in Con_PrintCon from the CON_ERROR / CON_WARNING marker the text already
+  begins with -- see the essay there for why that is the signal rather than a
+  new print level.  flags is an unsigned char and bits 0-3 were in use.*/
+#define CONL_ERROR		(1u<<4)
 typedef struct conline_s {
 	struct conline_s *older;
 	struct conline_s *newer;
@@ -172,6 +178,11 @@ typedef struct console_s
 	int notif_l;
 	float notif_fade;		// will be transparent for this long when fading
 	float notif_t;
+	float notif_t_err;		//FTESurf Patch 242: ...and this long for a CONL_ERROR line.
+	int notif_style;		//FTESurf Patch 242: 0 oldest-first, 1 newest-first, 2 newest-first from the bottom.
+	qboolean pendingerror;	//FTESurf Patch 242: the text being printed began with an error/warning
+							//marker, and the line it lands on is not finished yet.  Lives on the
+							//console rather than in a local because Con_Printf need not end in '\n'.
 	int maxlines;
 	conline_t *oldest;
 	conline_t *current;		// line where next message will be printed
@@ -240,6 +251,25 @@ void Con_History_Load(void);
 struct font_s;
 void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, float fx, float fy, float fsx, float fsy, float lineagelimit);
 void Con_DrawConsole (int lines, qboolean noback);
+/*
+FTESurf Patch 211: the windowed console's two variable sizes, with ONE speller each.
+
+Both were bare 8/16/24 literals typed into console.c (which draws the bar and the
+scrollbar) and independently into keys.c (which decides where you clicked). They
+have to agree, and when they do not the failure is silent -- a title bar that
+draws at one height and is grabbable at another, with nothing in any log to say
+so. CON_WNDBORDER is the third size and is deliberately still a constant: it is
+the left inset, and it is the origin mousecursor[] is measured from, so it is
+layout rather than a hit target.
+
+FTESurf Patch 213 adds the third accessor. The resize grips used to be
+CON_WNDBORDER too, which is why they could not be widened without moving the
+text inset with them.
+*/
+int Con_WindowTitleHeight(void);	//title bar height, in virtual pixels
+int Con_WindowScrollWidth(void);	//scrollbar strip width, in virtual pixels
+int Con_WindowGripSize(void);		//right/bottom resize grips, in virtual pixels
+#define CON_WNDBORDER 8
 void Con_ExpandConsoleSelection(console_t *con);
 char *Con_CopyConsole(console_t *con, qboolean nomarkup, qboolean onlyiflink, qboolean forceutf8);
 void Con_Print (const char *txt);
@@ -255,6 +285,7 @@ void VARGS Con_DLPrintf (int level, const char *fmt, ...) LIKEPRINTF(2);	//devel
 void VARGS Con_ThrottlePrintf (float *timer, int developerlevel, const char *fmt, ...) LIKEPRINTF(3); //for spammed warnings, so they don't spam prints with every single frame/call. the timer arg should be a static local.
 void VARGS Con_SafePrintf (const char *fmt, ...) LIKEPRINTF(1);
 void Con_Footerf(console_t *con, qboolean append, const char *fmt, ...) LIKEPRINTF(3); 
+const char *Con_EscapeConsoleMarkup(const char *text, char *out, size_t outsize);
 void Con_Clear_f (void);
 void Con_DrawNotify (void);
 void Con_ClearNotify (void);
@@ -287,4 +318,3 @@ void Con_NotifyBox (char *text);	// during startup for sound / cd warnings
 #else
 #define TRACE(x)
 #endif
-
