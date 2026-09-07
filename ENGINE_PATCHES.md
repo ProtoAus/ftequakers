@@ -6,6 +6,33 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+## Reading entries written before build 46 — the `fs_` names
+
+Build 46 moved every FTESurf cvar, field and global **off the `fs_` prefix**, because
+`fs_` is the engine's *filesystem* namespace and the mod had been squatting in it.
+**Entries below were not rewritten**: they keep the names the code had when they were
+written, which is what a changelog is for. This table is how you find a name that no
+longer exists.
+
+| old | now | what it covers |
+|---|---|---|
+| `fs_t_*`, `fs_st_*`, `fs_pb_*`, `fs_rc_*`, `fs_pad_*`, `fs_leg_*`, `fs_ps_*` | `run_*` | the timer, the ruleset, stages, the movement assists |
+| `fs_rec_*`, `fs_wt_*`, `fs_rp_*`, `fs_gh_*`, `fs_sl_*`, `fs_sb_*`, `fs_vw_*` | `rec_*` | recording, replay, ghosts, the save-lock, the leaderboard |
+| `fs_prop_*`, `fs_spr_*`, `fs_decal_*`, `fs_overlay_*`, `fs_portal_*`, `fs_lpd_*`, `fs_io_*`, `fs_tele_*`, `fs_water_*` | `vbsp_*` | Source map content and the entity I/O that runs it |
+| `fs_cv_*`, `fs_he_*`, `fs_hl_*`, `fs_tm_*`, `fs_sp_*`, `fs_font_*`, `fs_menu_*`, `fs_ramp_*` | `ui_*` | the HUD, the menu, fonts, the strafe board instrument |
+
+The rule is mechanical — `fs_` is replaced by the family word and the rest of the name
+is unchanged — with three exceptions worth knowing: `fs_runclass` → **`run_class`**,
+`fs_record` → **`rec_enable`**, and `fs_argc` → `cmdargc` (a local variable that wanted
+no namespace at all).
+
+**Four names in these entries are NOT the mod's and did not move.** `fs_restart`,
+`fs_game`, `fs_automount`, `fs_cache` and the rest of `fs.c`'s set are the engine's
+filesystem and always were; `fs_addons` is a file on disk (`ftesurf/fs_addons.txt`); and
+`fs_missingwarn` is the mod's but really is about missing files, so it stayed — which is
+the point of the move rather than an exception to it. After build 46, `fs_` in this tree
+means the filesystem and nothing else.
+
 ## Build / deploy
 
 ```powershell
@@ -962,7 +989,7 @@ if (next || i != orderkey || reloadflags)
 
 **Mechanism:** a new engine cvar tells the menu the launch intent.
 - **[cl_main.c](C:\msys64\home\Lex\fteqw\engine\client\cl_main.c)** — `cvar_t cl_launchintogame = CVARFD("cl_launchintogame","0", CVAR_NOSAVE|CVAR_NORESET, …)`. In **`Host_Init`, immediately before `M_Init()`** (which is where the menu's `m_init` runs — and `M_Init` is *before* `CL_Init`), register it and `Cvar_ForceSet` it to `"1"` iff the command line has any of `+connect/+map/+spmap/+devmap/+gamemap/+changelevel/+playdemo/+demo/+qtvplay`.
-- **[m_main.qc](c:\FTEQuake\nettest\src\menu\m_main.qc)** `m_init` — gate the backdrop on it: `if (menumap != "" && menumap != "none" && cvar("cl_launchintogame") == 0) Menu_StartBackdrop(menumap);` (backdrop logic was lifted into a `Menu_StartBackdrop(menumap)` helper).
+- **`nettest/src/menu/m_main.qc`** `m_init` — gate the backdrop on it: `if (menumap != "" && menumap != "none" && cvar("cl_launchintogame") == 0) Menu_StartBackdrop(menumap);` (backdrop logic was lifted into a `Menu_StartBackdrop(menumap)` helper).
 
 **THE two traps that made this hard (both essential):**
 1. **`CVAR_NORESET` is mandatory.** `Cvar_GamedirChange()` ([cvar.c:602](C:\msys64\home\Lex\fteqw\engine\common\cvar.c#L602)) runs as the fs mounts the game during boot and **resets every registered cvar to its engine default BEFORE `m_init` reads it** — so without `NORESET` the value was silently wiped back to `0` (the symptom: `m_init` always saw `0`). `NORESET` makes `Cvar_GamedirChange` skip it (line 610). Do **not** try to fix this via `Cvar_SetEngineDefault` — its `Z_Free(enginevalue)` corrupts the heap (0xC0000374) because a `CVARFD` cvar's `enginevalue` is the literal default string, not heap.
@@ -4484,3 +4511,16071 @@ from a legacy message and is not worth chasing.
 before, 3 after, all pre-existing (two `-Waddress` on `sysname`, one `-Wenum-int-mismatch` on
 `keydown`). **Neither the touchpad tap with `in_rawinput 1` nor the drag-with-held-button regression
 has been exercised on hardware.** Both need a physical test.
+
+## Patch 125 — Counter-Strike: Source player movement (`pm_physicsmode 1`, FTESurf)  *(APPLIED — `m-rel` + `sv-rel`; header layout CHANGED, all plugins rebuilt)*
+
+**Files:** `engine/common/pm_source.c` (**new**) · `engine/common/pmove.h` ·
+`engine/common/pmove.c` · `engine/common/protocol.h` · `engine/client/client.h` ·
+`engine/client/cl_pred.c` · `engine/client/cl_main.c` · `engine/server/server.h` ·
+`engine/server/sv_user.c` · `engine/server/sv_phys.c` · `engine/server/sv_main.c` ·
+`engine/common/world.h` · `engine/Makefile`
+
+**Why.** FTESurf (`C:\FTESurf`) is a surf training tool: it plays Source-engine surf maps and has to
+reproduce CS:S movement exactly, because a trainer whose physics differ from the game being trained
+for is worse than no trainer. FTE's `pmove.c` is the same *shape* as Valve's `CGameMovement` but
+differs in about a dozen load-bearing places, and every one of them ruins surfing specifically:
+
+* `PM_ClipVelocity` (`pmove.c:74`) has only the backoff pass. Source follows it with
+  `adjust = DotProduct(out, normal); if (adjust < 0) out -= normal*adjust;`. Without that, float
+  error leaves a residual component pointing **into** the plane at overbounce 1.0; on a ramp it is
+  re-clipped every tick and the player sticks instead of sliding. That one line is the difference
+  between surfing working and not.
+* `PM_SlideMove` (`pmove.c:339`) zeroes velocity whenever
+  `DotProduct(velocity, primal_velocity) <= 0`. Source has no such bail on the airborne
+  first-impact branch — it uses `allFraction` instead — and QW's version kills momentum in ramp
+  corners.
+* `PM_AirMove:854` passes `movevars.accelerate` to `PM_AirAccelerate`, so **`sv_airaccelerate` is
+  dead code** in the QW path.
+* Gravity is applied in one step, not split either side of the move, so jump height varies with
+  tick rate.
+* There is no `surfaceFriction`, no per-axis `sv_maxvelocity`, and no duck at all
+  (`PM_CheckDuck` does not exist anywhere in FTE).
+* Player physics runs per usercmd with `frametime = cmd.msec/1000` (`sv_user.c:7512`), so the
+  simulation step is whatever the client's framerate produced. Air acceleration adds
+  `airaccel * wishspeed * dt` against a fixed 30 u/s budget, so **the speed a ramp gives you
+  depends on your framerate.**
+
+**Approach — a separate module, not a mutation of `pmove.c`.** This tree is shared with
+`quakers`/nettest at `C:\FTEQuake`. Patching QuakeWorld's pmove into Source's shape would have put
+every one of those differences into that game too. Instead `pm_source.c` is self-contained and
+selected by one branch at the top of `PM_PlayerMove`:
+
+```c
+if (movevars.physicsmode == PHYSMODE_SOURCE)
+{
+    PMSrc_PlayerMove (gamespeed);
+    return;
+}
+```
+
+`pm_physicsmode` defaults to **0**, so `quakers` is byte-identical. The only thing shared below that
+line is the trace layer (`PM_PlayerTrace`, `PM_TestPlayerPosition`, `PM_PointContents`), which means
+portals, `physent_t.scale` (Patch 57) and the convex-hull prop collision (Patches 55-63) all keep
+working under Source physics for free. `PM_AddTouchedEnt` lost its `static` so the new module can
+reuse the same touch list — `trigger_push`/`trigger_teleport` fire exactly as they did.
+
+**Ported from** `nettest/src/gamemovement_momentummod.cpp` (Momentum Mod's `CGameMovement`, 4190
+lines — the real thing), function by function, with the C++ line numbers left in the comments:
+`TryPlayerMove` (2582), `ClipVelocity` (3159), `Friction` (1644), `Accelerate` (1833),
+`AirAccelerate` (1718), `WalkMove` (1906), `StepMove` (1549), `StayOnGround` (1870),
+`CategorizePosition` (3786), `Duck` (4316), `CheckJumpButton` (2376), `FullWalkMove` (2036),
+`CheckVelocity` (3060), `Start`/`FinishGravity` (1261/1702).
+
+**Three things that look like bugs and are not — do not "fix" them.**
+
+1. **`AirAccelerate`'s asymmetry.** `addspeed` is computed against wishspeed *clamped to 30*, but
+   `accelspeed` uses the *unclamped* wishspeed (cpp:1733-1747). So the amount you may add along
+   wishdir is tiny while the rate at which you may add it is large — which is precisely why
+   air-strafing gains speed without bound: your velocity's projection onto a perpendicular wishdir
+   is ~0, so the full 30 is available no matter how fast you are already going.
+2. **`FinishGravity` is called twice on the jump tick.** Once inside `CheckJumpButton` (cpp:2520)
+   and again at the end of `FullWalkMove` (cpp:2133). Takeoff velocity is therefore
+   `268.328 - 3 * (0.5 * 800 * 0.015)` = **250.328**, not the impulse. Verified by `pm_selftest`.
+3. **The jump impulse is `+=` when standing but `=` when ducked** (cpp:2474-2487). Adding is what
+   lets you keep upward velocity coming off a ramp.
+
+Source's duck-jump machinery (`m_flJumpTime` / `bInDuckJump`) is gated on
+`gpGlobals->maxClients == 1` at cpp:2530 — it only ever runs in single-player HL2 — so in a CS:S
+build that whole branch is dead and is not ported. `PMSrc_Duck` implements what is left.
+
+**Tick rate.** `pm_ticrate 0.015` — 66.666… Hz. That value and not 64 for a concrete reason:
+0.015 s is **15 ms exactly**, and `usercmd_t.msec` is an integer number of milliseconds, so the step
+survives the round trip losslessly. 64-tick's 15.625 ms would not. `PMSrc_PlayerMove` accumulates
+`cmd.msec` and runs whole ticks, carrying the remainder in `pmove.msec_carry`, so packet loss or a
+stalled frame cannot change the physics result. Capped at 8 ticks per command (`PMSRC_MAX_TICKS`) —
+past that the config is wrong, and dropping the excess beats hitching.
+
+**Prediction — the part that is easy to get wrong.** New `pmsourcestate_t` (declared in
+`protocol.h`, because `client.h` needs it and is included first — `client/quakedef.h:186` vs `:196`)
+carries `surfacefriction`, `ducktime`, `ducking`, `ducked`, `msec_carry`, `oldbuttons`. It is
+**never networked**; it is replayed forward. The server keeps one per `client_t`
+(`PMSrc_LoadState`/`SaveState` around `PM_PlayerMove` in `SV_RunCmd`); the client keeps one per
+`player_state_t` plus one in `playerpredprop_s` for the acked carry, mirroring exactly how
+`jump_held`/`waterjumptime` are already handled (`cl_pred.c:1298-1317`). The duck fields are why
+this is not optional: ducking changes the hull, so a client replaying a move without knowing it was
+ducked traces a 72-unit box where the server traced a 54-unit one — and unlike most prediction
+misses, that one is permanent rather than self-correcting.
+
+**Hull ownership.** FTE normally takes `pmove.player_mins/maxs` straight from the entity
+(`sv_user.c:7752`). Duck now lives in the engine, so width and floor still come from the entity but
+**height comes from `movevars`**. Taking the standing height from the entity would be circular: the
+writeback resizes the edict to match the duck state, so next tick the entity would report the
+*ducked* hull as if it were the standing one. The writeback also sets `PMF_DUCKED` in
+`pmove_flags` so QC can put the eye at the right height.
+
+`PM_NudgePosition` is deliberately **not** called — it snaps the origin to 1/8 unit, and Source runs
+on unquantized float origins. `pm_source.c` has its own axial unstick instead. This makes
+`sv_bigcoords 1` effectively required: without it the origin the client replays from is a rounded
+copy of the server's, and every ramp shows a small permanent prediction offset.
+
+**New cvars** (all `CVAR_SERVERINFO`, parsed back in `CL_ParseServerinfo` so prediction uses
+byte-identical values — each falls back to the same default the server uses, *not* to 0):
+
+| cvar | default | note |
+|---|---|---|
+| `pm_physicsmode` | `0` | 1 = Source. **Leave at 0 for every other game on this engine.** |
+| `pm_ticrate` | `0.015` | 66.666… Hz; match `cl_netfps` |
+| `pm_jumpvelocity` | `268.3281572999747` | `sqrt(2*800*45)`, apex 45u. CS:GO's `sv_jump_impulse` is 301.993 (57u) — a different game |
+| `pm_maxairspeed` | `30` | `GetAirSpeedCap()`. The entire air-strafe budget |
+| `pm_standablenormal` | `0.7` | normal.z below this leaves you airborne and sliding — this one number is the whole of surfing |
+| `pm_maxvelocity` | `3500` | clamped **per axis**, as Source does, so diagonal speed can exceed it |
+| `pm_standheight` / `pm_duckheight` | `72` / `54` | the 18 difference is the crouch-jump: 45+18 = 63 |
+| `pm_duckspeed` | `0.34` | 250 × 0.34 = 85 u/s crouched |
+| `pm_sourcebounce` | `0` | `sv_bounce`, the airborne wall-clip overbounce |
+
+`sv_airaccelerate` finally means something (150 for surf; stock CS:S is 10). QW's dead-code bug at
+`pmove.c:854` is deliberately left alone.
+
+Duck input is `cmd.buttons` bit 3 (value 8, Source's `IN_DUCK`), which FTE fills from `+button4`
+(`cl_input.c:1267`). It is **not** `upmove` — that axis is for swimming and `pm_source` does not
+read it for ducking.
+
+`SV_SetMoveVars` prints the whole Source parameter set once per map load when the mode is on.
+Which physics a session ran under is the first thing you need when a recorded time looks wrong, and
+it was not otherwise visible anywhere.
+
+**`pm_selftest`** — new console command, registered from `PM_Init`. Drives the real functions with
+known inputs against a fixed CS:S reference set (deliberately *not* the running config: movevars are
+zero until a server starts, so a config-driven test silently passes against all-zero parameters when
+run from the menu — that false pass was observed and is what motivated the fixed set). It prints the
+running config beside the reference so the two can be compared. Runs without a map. Current result —
+**20/20**:
+
+```
+ok  Accelerate 250@5 from rest        18.75000    (5 * 0.015 * 250)
+ok  Friction from 250                235.00000    (drop 250*4*0.015)
+ok  Friction from 50 (stopspeed)      45.50000    (drop 75*4*0.015)
+ok  AirAccel from rest -> air cap     30.00000
+ok  AirAccel at cap adds nothing      30.00000
+ok  AirAccel gains at 2000 u/s        30.00000    <- surf works
+ok  Clip 500 down onto 45deg: |v|    353.55341    (500*cos45, no loss)
+ok  Clip leaves no into-plane part     0.00000    <- the adjust pass
+ok  Jump takeoff velocity            250.32816    (268.328 - 3 half-gravity)
+ok  crouch-jump reach                 63.00000
+```
+
+**Deployment.** `pmove.h`, `protocol.h`, `client.h` and `server.h` all changed struct layout
+(`playermove_t`, `movevars_t`, `player_state_t`, `client_t`, `playerpredprop_s`). Rebuilt from clean
+and redeployed **both** installs with all four plugins, per the 2026-07-23 rule.
+`C:\FTESurf\src\build.ps1 -Engine -Full` does the whole set and deploys to `C:\FTESurf` and
+`C:\FTEQuake` together.
+
+**Testing status.** `pm_selftest` 20/20. `surf_kitsune` (VBSP v20) loads and runs, reporting
+`CS:S movement: 66.6667 Hz tick, accel 5, airaccel 150, aircap 30, friction 4, stopspeed 75,
+gravity 800, jump 268.328, hull 72/54` — no crash over repeated 35 s runs. `C:\FTEQuake` boots
+clean with no `CS:S movement` line (mode 0) and no errors, confirming QW physics is untouched.
+**Not yet exercised by a human:** actual ramp feel, sustained speed gain, ramp-corner behaviour,
+duck and crouch-jump, and prediction smoothness under latency. All five need someone on a surf map.
+
+## Patch 126 — `+duck`, a real crouch command  *(APPLIED — `m-rel`; no header change, plugins unaffected)*
+
+**Files:** `engine/client/cl_input.c` · `engine/client/menu.c`
+
+**Why.** Patch 125 put Source's `IN_DUCK` on usercmd button bit 3, which FTE only reached through
+`+button4`. FTESurf's config therefore read `bind CTRL +button4`, which is both opaque and wrong
+next to the game it reproduces — in Counter-Strike: Source the bind is literally `+duck`.
+
+**Why not an alias.** `alias +duck "+button4"` looks like it should work, and it half does: the
+key-release machinery is purely textual and does prepend the `-` (`keys.c:3548-3559`), so both
+edges fire. But `Cmd_ExecuteString` refuses to forward the keynum into an alias whose body starts
+with `+` (`cmd.c:3124-3126` — `a->value[0] != '+'` is an explicit term in the condition). Without
+the keynum, `KeyDown` takes its `k = -1` "typed at the console" path (`cl_input.c:219-223`), and
+that path cannot track two keys. With duck bound to CTRL *and* `c`, as every CS config does:
+pressing `c` while CTRL is held is swallowed as a key repeat (`KeyDown_Scan`, `cl_input.c:188-189`),
+and releasing *either* key clears the button outright (`KeyUp_Scan`, `cl_input.c:232-241`). You
+would stand up mid-crouch-jump. The alias would also be persisted into the saved config by
+`Alias_WriteAliases` (`cmd.c:1483-1500`) and become sticky.
+
+So it is a real `kbutton_t`, four lines, each beside the existing `+use`:
+
+| edit | site |
+|---|---|
+| `static kbutton_t in_duck;` | `cl_input.c:150`, beside `in_use, in_jump, in_attack` |
+| `IN_DuckDown` / `IN_DuckUp` | `cl_input.c:961-968`, beside `IN_UseDown`/`IN_UseUp` |
+| `GATHERBIT(in_duck, 3);` | `cl_input.c:1276`, beside `GATHERBIT(in_button[4], 3)` |
+| `Cmd_AddCommandD("+duck", …)` | `cl_input.c:3312`, after `+use` |
+
+`+duck` and `+button4` OR into the **same** bit, so nothing that already used `+button4` changes —
+including the hardcoded gamepad-B default at `keys.c:3493`, which now means duck for free. Bit 3 is
+otherwise unclaimed: nothing in `pmove.c`, `cl_cam.c` or `sv_phys.c` reads it, and unlike `+use`'s
+non-QW bit 8 it survives `MSGQW_WriteDeltaUsercmd`'s single byte (`common.c:1950-1951`).
+
+Also added to `qwbindnames[]` (`menu.c:831`) so it appears in the options key list.
+
+**`+use` needed nothing** — it already exists (`cl_input.c:3309`). Worth recording where it lands,
+because it is not where you would guess: under QuakeWorld it sets **bit 4**
+(`cl_input.c:1283`, `(cls.protocol==CP_QUAKEWORLD)?4:8`), which SSQC reads as **`.button5`**
+(`buttonfields[]`, `pr_cmds.c:195`). `.buttonuse` is the NQ spelling and stays 0 here. Leave
+`+button5` unbound so the two do not collide.
+
+**Testing.** `bind e +use`, `bind CTRL +duck`, `bind c +duck` in `cfg/default.cfg`; the engine wrote
+all three back into the regenerated `ftesurf.cfg`, which is the proof the commands resolved. The
+two-key hold case still needs a human.
+
+---
+
+## Patch 127 — `registercvar` silently created every cvar as the empty string  *(APPLIED — `m-rel` + `sv-rel`; no header change, plugins unaffected)*
+
+**File:** `engine/common/pr_bgcmd.c`
+
+**The bug.** `PF_registercvar` read its default value from the wrong argument-count gate:
+
+```c
+const char *value = (prinst->callargc>2)?PR_GetStringOfs(prinst, OFS_PARM1):"";
+int dpflags       = (prinst->callargc>2)?G_FLOAT(OFS_PARM2):0;
+```
+
+The value is at **PARM1**, so it must be gated on `callargc > 1`. `dpflags` is at PARM2 and its
+`> 2` test is correct — the two lines were simply copied. The effect is that the *documented*
+two-argument form of `DP_QC_REGISTERCVAR`
+
+```qc
+registercvar("hud_scale", "2");
+```
+
+creates the cvar with `""`, so `cvar()` returns **0** for it forever after. Three arguments worked;
+two silently did not. No warning, no console message, and `cvar_string()` returning `""` is
+indistinguishable from a user having cleared it.
+
+Fixed to `callargc > 1`.
+
+**How it surfaced.** FTESurf's entire build-1 HUD — speed, per-tick gain, peak, the key block and
+the physics readout — never rendered once. Everything downstream looked correct: `notmenu` arrived
+as 1, `clientstate()` was 2, keydest was 0, the map was loaded and `HUD_Draw` was being called every
+frame. It drew nothing because `HUD_ReadCvars` read `hud_speed`, `hud_keys` and `hud_debug` as 0 and
+skipped all three panels. `hud_scale` alone survived, and only because
+`if (!fs_cv_scale) fs_cv_scale = 2;` happened to paper over it.
+
+This had been broken since build 1 and was invisible because nobody had run the client to a map yet.
+
+**Blast radius on the shared tree.** `pr_bgcmd.c` is common to SSQC, CSQC and MenuQC, so this
+changes `quakers`/nettest too — for the better, and inertly. nettest had already hit this and worked
+around it in `CVar_DoRegister` (`nettest/src/shared/sh_cvar_table.qc:2128-2137`):
+
+```qc
+registercvar(name, def);
+if (cvar_string(name) == "")
+    cvar_set(name, def);
+```
+
+with a comment blaming FTE for creating cvars that "don't reliably surface in the console-visible
+cvar table" — the same bug seen from the other end, since an empty user-created cvar is what the
+console was refusing to show. That workaround is idempotent: with the fix, `cvar_string()` now
+comes back non-empty and the `cvar_set` simply stops firing. Same resulting values, one fewer
+`cvar_set` per cvar. nettest's only other two-argument call sites are that wrapper's; its seven
+three-argument calls were never affected.
+
+**Testing.** Before: `speed=0 keys=0 debug=0 scale=0`. After: `speed=1 keys=1 debug=1 scale=2`,
+`speedpos 960,864`, and the full HUD renders on `surf_kitsune` — verified from a screenshot taken
+by the new `fs_bootcheck 3` self-check, which drives menu → create server → launch → in-game
+headlessly.
+
+
+---
+
+## Patch 128 — CS:S stamina  *(APPLIED — `m-rel` + `sv-rel`; pmove.h/protocol.h changed, `-Full` required)*
+
+**Files:** `engine/common/pm_source.c` · `engine/common/pmove.h` · `engine/common/protocol.h`
+· `engine/server/sv_phys.c` · `engine/server/sv_main.c` · `engine/client/cl_main.c`
+
+**The symptom.** "Ground friction doesn't feel right… I feel like I need more slow down on landing
+that's not there."
+
+**The cause is not friction.** `sv_friction 4` / `sv_stopspeed 75` were already CS:S's numbers and
+`PMSrc_Friction` already matched `CGameMovement::Friction` line for line. What was missing is a
+separate system: `CCSGameMovement`'s **stamina**, which the reference sources this port was built
+from do not contain. `nettest/src/gamemovement_momentummod.cpp` is *Momentum Mod's* movement, and
+Momentum deliberately strips stamina because it ruins their bhop; `movementmath/` models a
+CS2-flavoured version that is `enabled: false` by default. Both authorities agreed by omission, and
+both are wrong for a tool whose whole point is reproducing CS:S.
+
+**What it does.** `m_flStamina` is a pool held in MILLISECONDS that drains at real time
+(`ReduceTimers`). Jumping and landing REFILL it — a full pool is the penalised state:
+
+```
+ratio = (100 - (stamina_ms/1000) * recoveryrate) / 100
+jump:  stamina = (25/19)*1000 = 1315.8 ms  ->  ratio 0.75, gone in 1.32 s
+land:  stamina = (20/19)*1000 = 1052.6 ms  ->  ratio 0.80, gone in 1.05 s
+```
+
+and the ratio scales exactly two things: the jump impulse (`CheckJumpButton`, read BEFORE that
+jump's own cost is charged, so a first jump from rest is always full height) and `m_flMaxSpeed`
+(`CCSGameMovement::PlayerMove`, before `BaseClass::PlayerMove`).
+
+Scaling maxspeed rather than velocity is why the absence reads as "friction feels wrong". It does
+not slow you down; it lowers the speed ground friction is pulling you *toward*. Land at 400 and you
+bleed to ~200 instead of ~250, then climb back over the next second.
+
+**It does not touch surfing.** `AirAccelerate`'s `addspeed` is measured against the 30 u/s air cap,
+and `accelspeed = airaccel * wishspeed * dt` is 562 at the default tuning — still two orders above
+30 even at ratio 0.75. That asymmetry is precisely why CS:S can afford this at all.
+
+**Landing site.** Charged in `PMSrc_FullWalkMove` on a false→true `onground` transition rather than
+inside `CategorizePosition`, which runs several times per tick (once per `FinishDuck`) and would
+charge repeatedly. The penalty therefore bites from the NEXT tick — which is also the order Source
+reads `m_flMaxSpeed` in.
+
+`pmove.stamina` is PREDICTED and is in `pmsourcestate_t` alongside the duck fields. A client
+replaying a move without it would rubber-band on every landing.
+
+Cvars, all `CVAR_SERVERINFO` and defaulting OFF in the engine (`pm_stamina "0"`), so no other game
+on this tree changes: `pm_stamina`, `pm_staminajumpcost` (25), `pm_staminalandcost` (20),
+`pm_staminarecovery` (19). FTESurf's `cfg/default.cfg` turns it on.
+
+**Testing.** Eight new `pm_selftest` checks covering the ratio at full/half/empty pool, both charge
+values in ms, the recovery time, and that `pm_stamina 0` is a true no-op rather than a small
+penalty. 36/36 pass.
+
+---
+
+## Patch 129 — the duck eye slide (SetDuckedEyeOffset)  *(APPLIED — same build as 128)*
+
+**Files:** `engine/common/pm_source.c` · `engine/common/pmove.h` · `engine/server/sv_user.c`
+· `engine/server/sv_phys.c` · `engine/server/sv_main.c` · `engine/client/cl_main.c`
+
+**Why the engine and not QC.** In Source the hull SNAPS at the end of a crouch but the eye SLIDES
+for the whole of it, on a `SimpleSpline` (smoothstep) over `TIME_TO_DUCK` 0.4 s going down and
+`TIME_TO_UNDUCK` 0.2 s coming up. QC cannot reproduce that curve: `PMF_DUCKED` only flips once the
+transition has already FINISHED, so anything driven from it can only ever be the snap
+`PlayerPostThink` was already doing. The fraction lives in pmove's carried duck state and nothing
+outside pmove can reconstruct it.
+
+So `pmove.viewheight` is computed here and `sv_user.c` writes it to `sv_player->v->view_ofs[2]`
+right beside the `PMF_DUCKED` write, gated on `physicsmode == PHYSMODE_SOURCE`.
+`SV_UpdateClientStats` copies `view_ofs[2]` into `STAT_VIEWHEIGHT` as a FLOAT (`sv_send.c:2221`),
+and `Z_EXT_VIEWHEIGHT` is in `SERVER_SUPPORTED_Z_EXTENSIONS` whenever `QUAKESTATS` is defined
+(`protocol.h:175`), so the whole curve survives to `pv->viewheight` and `view.c:1684`.
+
+**DERIVED, not written at the four Source call sites.** This is the part that matters. Source calls
+`SetDuckedEyeOffset` from inside `Duck()`. Doing the same here breaks at high framerates: this
+module runs a FIXED 66 Hz tick and carries the remainder, so at 300 fps most usercmds run ZERO
+ticks — and on those the eye keeps whatever the last command left, or whatever the entry seed
+wrote. Visible jitter for the whole 0.4 s. `PMSrc_DuckFraction` instead computes it as a pure
+function of the carried state, once per move, after the tick loop.
+
+The three-state read needs `oldbuttons`, not just `ducked`: releasing crouch PART WAY DOWN leaves
+`ducking=true, ducked=false` while running the UNDUCK timeline (`Duck()` inverts the remaining time
+for exactly that case), so `ducked` alone cannot tell a duck-in from a duck-out.
+
+Source's `fMore = duckHullMin.z - standHullMin.z` term is dropped rather than carried as a constant
+zero: in the Source player convention both mins.z are 0.
+
+Mid-air ducking still snaps, and that is invisible — the origin rises by the same 18 units the eye
+offset drops, so the absolute eye position does not move.
+
+Cvars `pm_viewheight` (64) / `pm_duckviewheight` (46), `CVAR_SERVERINFO`. Inert at
+`pm_physicsmode 0`. `sv_player.qc`'s `PlayerPostThink` no longer writes `view_ofs`.
+
+**Testing.** `pm_selftest` checks `SimpleSpline` at 0/0.25/0.5/1 and the eye at standing, ducked,
+mid-duck (0.2 s of 0.4 s → 55) and mid-unduck (0.1 s of 0.2 s → 55).
+
+---
+
+## Patch 130 — noclip speed, and `+speed` on the wire  *(APPLIED — same build as 128)*
+
+**Files:** `engine/common/pm_source.c` · `engine/common/pmove.h` · `engine/client/cl_input.c`
+· `engine/client/client.h` · `engine/client/cl_main.c` · `engine/server/sv_phys.c`
+· `engine/server/sv_main.c`
+
+`PMSrc_NoClipMove` took its speed from the MAGNITUDE of the move values, capped at `maxspeed * 4`.
+That is wrong here for a specific reason: FTESurf configures `cl_run 0` + `cl_movespeedkey 0.52` to
+turn Quake's run key into CS's WALK key, so holding `+speed` made noclip *slower*. Now the
+direction comes from the move values and the speed does not — `pm_noclipspeed * sv_maxspeed`,
+default 4 (1000 u/s), doubled while `+speed` is held.
+
+**Getting `+speed` to the server.** `+speed` is normally purely clientside: `CL_BaseMove` scales the
+move values and the server cannot tell it from "walked slower". There is no room to add a bit
+unconditionally — the QuakeWorld usercmd's buttons field is a single BYTE (`common.c:1951`; the
+64-bit `MSGFTE_WriteDeltaUsercmd` path needs `PEXT2_VRINPUTS`, which is not negotiated here), and
+bits 0-7 are all claimed: attack, jump, button3, duck/button4, use/button5, button6, button7,
+button8. Bit 7 (`+button8`, QC `.button8`) is the only one nettest does not use — it uses
+`+button6` and `+button7`.
+
+So it is opt-in: `in_speedbutton` (CVAR_ARCHIVE, default **0**). At 0 the `GATHERBIT` never runs and
+every other game on this tree sees exactly the byte it saw before. FTESurf's `cfg/default.cfg` sets
+it to 1. `BUTTON_SPEED` (128) is read only by `PMSrc_NoClipMove`.
+
+Note `MOVETYPE_NOCLIP` maps to `PM_SPECTATOR` (`sv_user.c:7343`), which `PMSrc_Tick`'s
+CheckParameters deliberately does not clamp — so the move values arrive unscaled and normalising
+them is safe.
+
+---
+
+## Patch 131 — board telemetry: the plane you actually hit  *(APPLIED — `m-rel` + `sv-rel`; pmove.h/protocol.h changed, `-Full` required)*
+
+**Files:** `engine/common/pmove.h` · `engine/common/protocol.h` · `engine/common/pm_source.c`
+· `engine/server/sv_user.c`
+
+FTESurf's HUD grades the moment you land on a ramp — how much velocity the ramp took, and how close
+to parallel you arrived. Both are decided in a single tick, by one `PMSrc_ClipVelocity` call inside
+`PMSrc_TryPlayerMove`'s bump loop, and both were unreachable: the clip plane lives in a local
+`planes[]` array and the pre-clip velocity is overwritten one line later. QC's only option was to
+guess, and it did — `sv_player.qc` fired a `tracebox` one tick ahead each frame and took
+`trace_plane_normal`, which is an approximation of what you are *about* to touch rather than a
+record of what you did.
+
+This publishes the real thing.
+
+**`playermove_t` gains four output-only fields** (append-only — plugins bake struct strides):
+`boardnormal`, `boardvelocity`, `boardcount`, `rampcontact`, plus `rampoff` as working state.
+Nothing here feeds back into the movement, so a stale value cannot change where a player goes.
+
+**`pmsourcestate_t` gains `rampoff`, `boardcount` and `rampcontact`.** All three have to be carried across commands. `rampcontact` in particular: at high framerates most usercmds run ZERO ticks (the fixed-tick loop carries a remainder), so a flag re-derived per tick would, on those commands, still be holding whichever client moved last. The
+gate that makes a board a board is "were you actually in the air first" — without it a sustained
+ride re-boards *every tick*, because gravity pushes into the face every tick and so the clip fires
+every tick. `PMSRC_BOARD_AIRGATE` is 0.08 s, about five ticks at 66 Hz. This is the same failure the
+surf community's own server plugins have: applying their 25 u/s impact rule alone grades 84% of
+events as perfect, because it never asks the question this gate asks.
+
+The ramp band is `0.1 <= |n.z| <= 0.7`. The top is Source's own standable cut — above it you are
+standing, not surfing. The bottom is a judgement: past ~84 degrees the surface takes your speed
+head-on and grading it as a landing means nothing. `fabs` because a displacement triangle's winding
+can face downward while being the face you ride.
+
+**Publishing to QC, and why this is inert for `quakers`.** `sv_user.c` writes the four values into
+*optional* QC fields — `fs_boardnormal`, `fs_boardvelocity`, `fs_boardcount`, `fs_rampcontact` —
+looked up by name with `svprogfuncs->GetEdictFieldValue`, the same idiom the playermodel and ping
+lookups use at `sv_user.c:2346-2354`. A mod that does not declare those fields gets `NULL` back and
+nothing is written at all. Declaring them in `sv_player.qc` is what switches the feature on.
+
+`boardnormal` and `boardvelocity` are only meaningful on the move where `boardcount` changed; at any
+other time they hold the previous board's. That is why the counter exists rather than a flag — a
+flag can be missed between client frames, a counter cannot — and it is also why a value left over
+from another client's move is harmless: their count did not change, so it is never read.
+
+**What this makes possible.** The cost of a board is then exact arithmetic rather than a
+measurement:
+
+    dot  = |v.n| / |v|          sinA = sqrt(1 - dot^2)
+    loss = |v| * (1 - sinA)     kept = sinA * 100
+
+because `ClipVelocity` at overbounce 1 is an orthogonal projection and removes exactly `(v.n)n`.
+`pm_selftest` checks that identity in the real function at three angles — head-on into 45 degrees
+keeps 707.107 of 1000, parallel keeps all 1000, dead-on into a wall keeps none.
+
+The alternative, `|v_before| - |v_after|`, does not work and it is worth recording why: wrlines
+shipped exactly that, measured it over 27,508 boards, and removed it, because a surfer's per-tick
+background motion (7-12 u/s from gravity and air acceleration) is *larger* than the thing being
+measured (4-23 u/s). The subtraction is mostly noise. The projected form has no such problem.
+
+---
+
+> **Gap note.** Patches 132-141 were applied across FTESurf builds 6-8 and are recorded in the build
+> plan rather than here; this file resumes at 142. The two below are the only engine changes in
+> build 9.
+
+---
+
+## Patch 142 — `fs_forceduck`: let QC hand the duck state back  *(APPLIED — `m-rel` + `sv-rel`; no header change, plugins unaffected)*
+
+**File:** `engine/server/sv_user.c`
+
+FTESurf's save-locks (`sv_saveloc.qc`) drop a position you can come back to. Origin, velocity and
+angles are all QC's to save and restore. **The duck state is not.** `pmove.ducked` is carried
+across commands inside `host_client->pmsrc` (`PMSrc_LoadState`, `sv_user.c:7815`) and QC can
+neither read it nor write it.
+
+That is fine for movement and fatal for a save-lock. Save while crouched under a lip, load
+standing, and the 72-unit hull spawns inside the ceiling: you arrive stuck, in the exact spot you
+were trying to practise.
+
+**One optional float field, read and cleared by the engine**, applied immediately after
+`PMSrc_LoadState` so `PMSrc_ApplyHull` (called at the top of `PM_PlayerMove`) rebuilds
+`player_maxs` from it without anything else being touched:
+
+    0 = no change    1 = stand up    2 = crouch
+
+**Zero is the no-op on purpose.** A QC field is zero on a fresh edict, so the patch is inert
+without anything remembering to initialise it — and "-1 means leave it alone" would have needed
+exactly that. The engine writes the field back to 0 itself, so QC cannot leave it latched and pin
+a player crouched forever.
+
+`ducking` and `ducktime` are cleared with `ducked`: those describe a transition IN PROGRESS and a
+restored state is a finished one. The consequence is worth stating because it looks like a bug and
+is not — with `ducktime` at 0, `PMSrc_Duck`'s unduck arm computes `flDuckSeconds` as the full
+`PMSRC_DUCK_TIMER` (1.0 s), which is over `PMSRC_TIME_TO_UNDUCK`, so a restored crouch in open
+space with the key not held stands you up on the very next tick. **That is correct**: you are not
+holding duck. Under a ceiling `PMSrc_CanUnduck()` fails and the else-arm keeps you ducked, which is
+the case the patch exists for.
+
+**Inert for `quakers`**, which shares this tree: the field is looked up by name with
+`GetEdictFieldValue` and a mod that does not declare `.float fs_forceduck` gets `NULL` back. Same
+idiom as the Patch 131 board telemetry, and the cache is on `SV_FS_ResetFieldCaches`'s list — see
+Patch 139 for what happens to an `evalc_t` that is not.
+
+**Verified** by a test that cannot pass without it. Save while standing, hold `+duck` (hull
+54), save again, then load the STANDING save *while still holding duck*:
+
+    saveloc: 2 saved, current 2
+       1    2134 -13777  -7223     0 u/s  yaw  -90  standing
+       2    2134 -13777  -7223     0 u/s  yaw  -90  ducked
+    ---load-the-STANDING-save-while-still-holding-duck---
+    stuck: at 2134 -13777 -7223  hull 0..72 tall 72      <- 72, not 54
+    ---load-the-DUCKED-save---
+    stuck: at 2134 -13777 -7223  hull 0..54 tall 54
+
+Without the patch the first of those reads `tall 54`: the held duck key never re-presses, so
+nothing in `PMSrc_Duck` would have cleared the carried state.
+
+---
+
+## Patch 143 — `fcopy` destroyed its source file  *(APPLIED — same build; no header change)*
+
+**File:** `engine/common/pr_bgcmd.c`
+
+    src = FS_OpenVFS(srcname, "rb", FS_GAME);
+    ...
+    dst = FS_OpenVFS(srcname, "wbp", FS_GAMEONLY);   // <- srcname
+
+`PF_fcopy` opened its **source** path for writing. So `fcopy(a, b)` truncated `a`, then read its
+own empty output and wrote nothing to `b`: the file you asked to copy is gone and the copy was
+never made. `dstname` is parsed, sandbox-checked and then never used.
+
+Found while looking for a way to promote a finished run recording to a personal-best file. FTESurf
+does not use the builtin in the end (`frename` plus a `fremove` of the destination is cheaper — no
+byte is copied), and neither game's QC calls `fcopy` anywhere, so nothing here was ever bitten by
+it. It is fixed because the next mod to reach for a documented builtin should not lose a file to
+it, and because `quakers` shares this engine.
+
+Second, smaller, in the same function: `G_FLOAT(OFS_RETURN) = 0; //success` sat AFTER the copy
+loop, so it overwrote the `-3` a short write had just set and a truncated copy reported success.
+Moved above the loop.
+
+Neither half is exercised by any current caller, so there is nothing to verify beyond the read:
+this is a fix by inspection and is labelled as one.
+
+---
+
+## Patch 144 — Source water was three scene renders per frame  *(APPLIED — `plugins-rel NATIVE_PLUGINS=hl2`; no engine or header change)*
+
+**Files:** `plugins/hl2/mat_vmt.c` · `plugins/hl2/mod_vbsp.c`
+
+A Source `Water` VMT compiled to a shader carrying
+
+    map $refraction
+    map $reflection
+
+Those are not textures. They are **render targets**, and the backend fills a render target by
+rendering the world into it again: `gl_backend.c:5732` tests `SHADER_HASREFLECT` and calls
+`GLR_DrawPortal`, `:5781` does the same for `SHADER_HASREFRACT`, and both run **per batch** of that
+shader. One water plane in view is therefore up to three full scene renders instead of one.
+Source's `Refract` materials — which is what most Source glass is — are cheaper but not free:
+`map $currentrender` is a framebuffer copy per batch.
+
+None of it was reachable from a cvar.
+
+**Measured**, `d1_canals_02` (10 water materials), same camera, 640x480, 100-frame average:
+
+| `hl2_water` | fps | us/frame | World Batches |
+|---|---|---|---|
+| 2 — refraction + reflection *(what shipped)* | **8.71** | 32072 | 771 |
+| 1 — refraction only *(new default)* | **390.36** | 1851 | 94 |
+| 0 — flat | 367.02 | 1520 | 85 |
+
+The World Batches column is the mechanism showing through: 771 against 94 is the world being
+walked and batched again for each portal pass.
+
+**1 is the new default, and the reflection is what it drops.** Two screenshots from the same
+camera at 1 and at 2 are indistinguishable — on a surf map you are looking along a ramp, not down
+at a lake — and Source's own "cheap" water draws without a reflection for exactly this reason.
+`hl2_water 2` restores what shipped.
+
+`hl2_refract` does the same for glass: 0 draws the pane as ordinary translucency with no
+framebuffer copy, 1 (default) keeps Source's refraction.
+
+**One thing that had to be corrected during the work.** `hl2_water 0` first drew `$basetexture`,
+on the reasoning that flat water should still be the material's own picture. It came out as an
+**opaque white slab**: a Water VMT's base map is an input to the refraction program, not a picture
+of water. What Source paints where water is opaque is `$fogcolor`, so mode 0 now paints that —
+flat and translucent, the same idiom the engine's own `r_waterstyle 0` uses (`gl_shader.c:7205`).
+`$fogcolor` was parsed-and-ignored before this; the brackets are the type tag (`[0..1]` vs
+`{0..255}`) and are read rather than guessed at, because `{1 1 1}` is a legitimate near-black
+under one convention and white under the other.
+
+Both cvars are `CVAR_RENDERERLATCH`: the shader is compiled once, when the material is first
+loaded, so changing either needs a map reload to mean anything. A per-map census at `developer 1`
+says how many of each a map has — `surf_666` has 4 water and 2 refract; `surf_aquaflow`, despite
+the name, has none.
+
+---
+
+## Patch 145 — the plugin's map cvars were latched to the wrong event
+
+`plugins/hl2/mod_vbsp.c`
+
+`hl2_water`, `hl2_refract`, `hl2_propcollision`, `hl2_dispcollision`, `hl2_areaportals`,
+`hl2_hidetools` and `hl2_favour_ldr` were all registered `CVAR_RENDERERLATCH`, and the comments
+beside them said "so it needs a map reload". **That is not what that flag means.** Only
+`renderer.c` ever calls `Cvar_ApplyLatches(CVAR_RENDERERLATCH)`, so a new value sat in
+`latched_string` until a `vid_reload`, and
+
+```
+hl2_water 0
+map surf_666
+```
+
+**did nothing at all** — the engine says so in a line easily lost in a map load's output,
+`variable hl2_water will be changed after a vid_reload`. Every one of these cvars is read exactly
+once, while a map loads, which is precisely when `CVAR_MAPLATCH` is applied: `SV_SpawnServer`
+immediately before the world model loads (`sv_init.c:968`) and the client on connect
+(`cl_main.c:2309`). Swapped, not added — only one latch flag is allowed per cvar
+(`CVAR_LATCHMASK`, `cvar.h:148`), and `hl2_favour_ldr` was violating that already with
+`CVAR_RENDERERLATCH|CVAR_CHEAT`.
+
+**Verified:** `hl2_water 0; hl2_refract 0` then a plain `map surf_666` now changes the frame —
+**World Batches 43 → 30** and 59% of pixels differ. Before the swap the two arms were identical.
+
+This is what made build 10's water measurement look better than the shipped behaviour: those
+numbers were taken with the value set at boot, *before* the renderer started, where no latch
+applies at all.
+
+## Patch 146 — r_texdiag could not answer the question it was written for
+
+`engine/gl/gl_model.c`, `engine/client/r_surf.c`
+
+Three defects in the diagnostic itself, all found by trying to use it on a Source map:
+
+- **The sky exclusion was Q1-only.** It skipped surfaces whose texture is literally named `sky`;
+  a Source map's is `sky/tools/toolsskybox`, so every sky surface counted against the 200-line
+  cap. On `surf_666` the cap was reached on water and sky alone and **not one submodel line was
+  ever printed** — the half that answers "is it the brush entities". Now excluded by
+  `SURF_DRAWSKY`, which is game-independent, and the cap is 20000 (the output is meant to be
+  `sort | uniq -c`'d).
+- **The denial line did not say WHICH MODEL.** `*12:maps/x.bsp` versus `maps/x.bsp` is the
+  difference between a map-wide material problem and a brush-entity one.
+- **There was no report for models that were denied a lightmap wholesale.** `Surf_BuildModelLightmaps`
+  returns early on `!m->lightmaps.count`, before any fixup, so those models are never painted and
+  draw flat — and nothing said so. Now counted, with the drawn (non-tool, non-nodraw) surfaces
+  separated from the invisible ones, because on `surf_666` **824 of 835** brush models have no
+  lightmap pages and every one of them is a trigger volume that is supposed to be unlit.
+
+Plus a per-model census at `r_texdiag 1`: lightmap pages, lit/unlit surface counts, `shift` and
+`MDLF_NEEDOVERBRIGHT` (these must agree across models or the same lightmap is a factor of four
+brighter on a brush entity — `gl_backend.c:3884` multiplies per *entity*), and the **mean decoded
+luxel** per model. That last one is what separates "the renderer is wrong" from "the data is".
+
+## Patch 147 — a map that needs an unmounted asset pack now says so
+
+`plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`
+
+CS:GO and TF2 were mounted permanently so that a couple of maps had their fallback textures.
+Measured cost, same machine, same map, one arm each:
+
+| | archives | files indexed | boot | boot→map |
+|---|---|---|---|---|
+| with CS:GO + TF2 | 14 | 339,103 | **12.0 s** | **7.0 s** |
+| without | 6 | 48,537 | **3.0 s** | **3.0 s** |
+
+CS:GO's `pak01_dir.vpk` (133,676 files) and TF2's `tf2_misc_dir.vpk` (102,288) are **85% of
+everything the engine indexes**, and it is paid twice — once at boot and again on every shader
+rescan, which walks four `COM_EnumerateFiles` patterns across the whole index
+(`gl_shader.c:8779-8786`).
+
+So they are unmounted, and `Shader_LoadVMT` counts the materials that then fail to resolve;
+`VBSP_BuildBIHMain` names the map, the first missing material and the `fs_load` line that fixes
+it. **Three filters had to be found by measurement, because a counter that fires on every map
+means nothing on any map** — the first two versions did exactly that:
+
+- `<name>_glsl` — the shader system probing for a hand-written GLSL variant. Supposed to miss.
+  `surf_666`, every material of which resolves, produced **373**.
+- `tools/` and `sky/` — synthesised rather than loaded. A further ~14 per map, on every map.
+- no `/` at all — engine-internal shader names (`depthonly`, `defaultwall`). Exactly **13** on
+  `surf_666`, `surf_null` *and* `surf_sandtrap2`; a constant floor across unrelated maps is a
+  property of the engine, not of the map.
+
+**Verified, and it corrects the claim the mounts were added for:**
+
+| map | unresolved |
+|---|---|
+| surf_666, surf_null, **surf_sandtrap2** | **0** |
+| surf_utopia | 13, first `concrete/concretewall011` → TF2 |
+| surf_pipeline | 6, first `models/props_bisou/...` → its own custom props, in neither pack |
+
+`surf_sandtrap2` never needed CS:GO. One map out of 1308 is actually served by these two mounts.
+End to end on `surf_utopia`: 13 unresolved → `fs_load steam:Team Fortress 2/tf` → reload → **zero**.
+
+---
+
+## Patch 148 — the minimum model ambient desaturated everything it touched
+
+`plugins/hl2/mod_vbsp.c`, `VBSP_LightPointValues`.
+
+The `hl2_lt_min` floor, which exists so a model is never pure black, was applied **per channel**:
+
+```c
+for (k = 0; k < 3; k++)
+    if (res_ambient[k] < m) res_ambient[k] = m;
+```
+
+A per-channel floor is a desaturation operator. Warm (90,55,35) — R/B 2.57 — becomes (90,64,64),
+R/B 1.41. Dimmer warm (60,38,24) becomes **(64,64,64): perfectly neutral, and brighter than it
+should be.** Now it scales the colour by `m/luminance` instead, which cannot change hue because it
+is a multiply. A leaf that is genuinely zero has no hue to preserve and still gets the neutral
+floor — the one case the old code was right about.
+
+Default lowered 64 to 16. At 64 it was lifting **486 of surf_666's 653 props** and was effectively
+the map's lighting; that was only possible because of Patch 152 below.
+
+## Patch 149 — the crouch-jump was worth two units and we gave it to the wrong case
+
+`engine/common/pm_source.c`, `PMSrc_CheckJumpButton`.
+
+Source assigns rather than adds when **`m_bDucking || FL_DUCKING`** (cpp:2472) — the duck
+*transition* counts, not only the finished duck. We tested `pmove.ducked` alone, which is
+`FL_DUCKING`, and ignored `pmove.ducking`.
+
+The tick charges gravity in three half-steps (StartGravity, FinishGravity inside CheckJumpButton,
+FinishGravity at the end of FullWalkMove), so at 800/66.67Hz `velocity[2]` is -6 on arrival:
+
+| | takeoff | apex |
+|---|---|---|
+| ADD (standing) | 250.328 | **39.165** |
+| ASSIGN (ducked or ducking) | 256.328 | **41.065** |
+
+> **THE APEX COLUMN IS WRONG — CORRECTED IN PATCH 168.** Both figures were derived as
+> `takeoff^2 / 2g` from the END-of-tick velocity, which is half a gravity step too late and
+> discards the 3.8 units the jump tick itself travels. Leapfrog puts the apex at
+> `(v_drift + g*dt/2)^2 / 2g`, giving **43.010** and **45.000**, a gain of **1.990**. The takeoff
+> column, the diagnosis and the fix are all unaffected — only the heights were misreported, and
+> `pm_selftest` reported them under the same wrong names until Patch 168.
+
+The assign throws away that first -6, and that is the entire difference: **1.900 units**. The
+ground duck takes 0.4 s and that window is where most crouch-jumps are actually pressed, so the
+case Source rewards was the one case we penalised. Three new `pm_selftest` cases pin both takeoff
+velocities and the gain; they fail on the code before this patch.
+
+*Also confirmed, not assumed:* `flMul = 268.3281572999747f` appears literally in the reference
+`CGameMovement` for every non-HL2 build, so our jump velocity was already right. CS:GO's 301.993
+is a different game.
+
+## Patch 150 — the engine warning about its own generated text
+
+`engine/gl/gl_shader.c` (`Shader_SurfaceParm`) and `plugins/hl2/mat_vmt.c`
+(`VMT_IsKnownIgnoredField`).
+
+`surfaceparm trans` and `surfaceparm alphashadow` are **q3map2 compile-time** parms with no runtime
+meaning — and the hl2 plugin writes both into every generated Water shader itself, so the engine
+was warning about text it had just produced, twice per map load (once per shader reload). Now
+recognised-and-ignored along with the rest of that family (`nolightmap`, `detail`, `structural`,
+`playerclip`, `hint`, and so on), which also silences them for every Q3 shader quakers loads.
+
+Same treatment for the VMT fields behind the remaining `developer 1` spam: `$reflectivity` (a VRAD
+compile-time input), `$bluramount`, and the whole `$phong*` / `$rimlight*` family (a shading model
+FTE has no path for — half-applying it looks worse than not).
+
+## Patch 151 — dithered flat water and glass
+
+New `plugins/hl2/glsl/vmt/flatdither.glsl`; `hl2_water 3` and `hl2_refract 2` are the new defaults.
+
+A Source `Water` VMT compiles to `$refraction` + `$reflection` and `Refract` to `$currentrender`;
+all three are render targets the backend fills by rendering the scene again, per batch. Turning
+them off (`hl2_water 0`) still left a **blended** surface, and a blend cannot write depth, so it is
+sorted back-to-front and everything behind it is drawn whether or not you can see it.
+
+An ordered dither is opaque geometry with a `discard`: no blend, no sort, no framebuffer copy, and
+it **writes depth**, so what is behind is z-rejected instead of overdrawn. Strictly cheaper than
+the mode it replaces as the default. A 4x4 Bayer threshold in **screen space** (`gl_FragCoord`) —
+locked to the surface's own UVs it would swim and moire as you move. Colour and coverage come from
+the material's own keys (`$fogcolor` and `$fogend` for water, `$refracttint`/`$basetexture` and
+`$alpha` for glass), passed through the pass's `rgbgen`/`alphagen const` so no shader permutation
+is spent carrying them.
+
+Numbering is additive: 0/1/2 keep the meanings they shipped with, so no pre-build-12 config changes
+behaviour. New `hl2_translucent 0` draws `$translucent` world materials opaque — **not** dithered,
+deliberately, because those emit a top-level `program` and a dither has to be a pass; adding one
+alongside would draw the surface twice.
+
+**Two build-system traps found shipping this**, both of which fail silently:
+
+1. `make plugins-rel` never invokes `plugins/hl2/Makefile`, whose `all:` rule regenerates
+   `mat_vmt_progs.h` from the GLSL. The new program compiled clean against the stale header and
+   simply was not in the DLL. `build.ps1` now runs that step.
+2. `plugins/Makefile`'s hl2 rule did not list `mat_vmt_progs.h` as a prerequisite at all, so even
+   a regenerated header relinked nothing. Now a real prerequisite (order-only would not do — the
+   failure is the header *changing*, not being absent), with the recipe taking `$(filter %.c,$^)`
+   because a `.h` on the command line makes gcc build a precompiled header instead.
+
+## Patch 152 — the pale props: three bugs stacked, and none of them was a renderer
+
+`plugins/hl2/mod_vbsp.c`. Reported as "brush entities look pale"; three builds looked for a brush
+entity. An offline decoder (`FTESurf/tools/vbsp_lightmap.py`) settled it: the nearest brush entity
+to the reported spot is **4,444 units away and is a trigger**, and the thing actually there is
+`prop 264, models/props/666/s1_ramp1b.mdl` at 1,214 units. **A static prop.** `r_drawentities 0`
+removes those too, which is all that test ever proved.
+
+Three independent faults, each of which alone was enough:
+
+**1. The HDR ambient cube won on a map with no HDR lighting.** The lump choice tested the
+*pointers*, which are addresses of lump-directory entries and are never null:
+
+```c
+if (hdridx && hdrvals)  lump_idx = hdridx, lump_vals = hdrvals;
+```
+
+VRAD writes a full-size HDR ambient lump on an LDR-only compile and fills it with zeros. Measured
+on surf_666 (`LIGHTING_HDR` is 0 bytes): `LEAF_AMBIENT_LIGHTING_HDR` = 24,951 entries, **all
+zero**; `LEAF_AMBIENT_LIGHTING` = 132,972 entries, mean **R/B 1.80** — the map's real warm tone,
+which its world lightmap independently measures at 1.88. Now chosen by content and by the same
+question `VBSP_LoadFaces` asks, so the ambient cube and the lightmaps always agree.
+
+**2. Every prop was lit at the origin of the coordinate system.** `LightingOrigin` is only written
+when the prop carries `STATIC_PROP_USE_LIGHTING_ORIGIN` (0x02) — the flags byte this code parsed
+and discarded (`/*ent->flags = *prop*/`). Without it Source lights the prop at its own origin.
+surf_666: **653 props, zero with the flag set.** So `VBSP_PointLeafnum` was asked about (0,0,0),
+which is nowhere near the map, and returned leaf 0 — the solid leaf, which carries no ambient — for
+all 653.
+
+**3. The fallback for a missed lookup could never fire.** It tested brightness:
+
+```c
+/* HACK: If it's dark, might as well sample the model pos directly. */
+if (VectorLength(src->light_range) < 0.25)
+```
+
+A miss does not come back dark — `VBSP_LightPointValues` answers a flat **192** when the leaf has
+no ambient cube, and 192/255 = 0.75 is three times the threshold. Replaced with
+`VBSP_LeafHasAmbient()`, which asks the leaf instead of the pixel: one tree walk instead of a
+second full lighting solve, and it distinguishes "no data here" from "genuinely dark".
+
+**And the gamma, which is why a floor was needed at all.** The cube decodes to *linear* light
+(c times 2^exponent); displaying that needs a gamma encode and a multiply is not one. A typical
+surf_666 leaf is 0.034 linear: `x 160` gives **5.4/255** (black), the sRGB encode gives
+**55.6/255**. The encode had been the default and was disabled with the note *"was 1, which pushed
+unbounded HDR leaf-ambient over 255 = white blow-out"* — a correct diagnosis with too broad a
+remedy: HDR ambient is unbounded so `pow()` runs away, LDR is bounded and the encode is exactly
+right. Now clamped to 1.0 first, then encoded: correct for LDR, safe for HDR.
+`hl2_lt_srgb_mag` 0 to 1, `hl2_lt_scale` 160 to 255.
+
+**Measured on surf_666, 653 props, `[texdiag] PROPLIGHT`:**
+
+| | in a leaf with no ambient | mean ambient | R/B |
+|---|---|---|---|
+| before | **653** | 64.0 64.0 64.0 | **1.00** |
+| after | **62** | 62.7 48.6 48.5 | **1.29** |
+
+**The census had to be moved to make it honest.** `VBSP_PointLeafnum` returns 0 unconditionally
+while `mod->loadstate != MLS_LOADED`, and `VBSP_BuildBIHMain` — the obvious home for a load-time
+census — *is* the work that finishes the load. A census taken there reports the solid leaf for
+every prop on every map and is indistinguishable from a map with no ambient data. I chased that
+artifact for two rebuilds. It now runs once from the draw path, over all props rather than only the
+visible ones, because a camera facing a wall reports four props and tells you nothing.
+
+---
+
+## Patch 153 — env_cubemap: we never implemented it, and the substitute was the sky
+
+`plugins/hl2/mod_vbsp.c` (new `VBSP_LoadCubemaps`), `plugins/hl2/mat_vmt.c`.
+
+Reported as "some of the brushes on `!s 2` of surf_666 are now bright blue, very saturated, and
+it's a warm map". It is not lighting. It is **reflection**, and it is a feature we had simply never
+implemented while telling the shader we had.
+
+`$envmap env_cubemap` is Source's standard idiom for "reflect the baked cubemap from the nearest
+`env_cubemap` entity" — 20 of surf_666's 149 packed VMTs say exactly that. `VMT_GenerateShader` saw
+a non-empty `$envmap`, picked a `vmt/lightmapped#ENVFROM*` permutation so the shader samples
+`s_reflectcube`, and then deliberately emitted **no** `reflectcube` line for it (mat_vmt.c:1014,
+`strcmp(st->envmap, "env_cubemap")`). So the backend walked its fallback chain:
+
+```c
+case T_GEN_REFLECTCUBE:                                     // gl_backend.c:1408
+    if (curtexnums && TEXLOADED(curtexnums->reflectcube))    // unset: we never wrote one
+    else if (shaderstate.curbatch->envmap)                   // never set: nothing filled surf->envmap
+    else t = shaderstate.tex_reflectcube;                    // = R_GetDefaultEnvmap() = THE SKYBOX
+```
+
+**CORRECTED IN BUILD 13b — the measurement below is wrong, and so is the symptom it was
+attached to.** The VTF `reflectivity` vec3 is at byte **32**, not 28; 28 is padding. So "red is
+exactly 0.0000 on all six faces" was the padding reading as zero, and the numbers called G and B
+were R and G. The 10,136-face count is also an overcount of what could ever *see* a reflection:
+`PERMUTATION_REFLECTCUBEMASK` is enabled only when the shader has a reflectcube or a reflectmask
+actually bound (gl_backend.c:4314), so an `$envmap env_cubemap` material with no `$envmapmask` --
+`METAL/CITADEL_TILEFLOOR016A`, all 7,423 of those faces -- compiled the envmap code out entirely
+and reflected nothing at all. The bug below is real for the materials that DO carry a mask
+(`CONCRETE/MILFLR001`, `GLASS/GLASSWINDOW007A`), and those did get the sky. The bright blue on
+surf_666's `!s 2` is a different bug in a different subsystem: see Patch 158.
+
+**Every env_cubemap surface in the game was mirroring the sky.** Measured on surf_666, straight out
+of the six sky45 VTF headers' own `reflectivity` field:
+
+| face | R | G | B |
+|---|---|---|---|
+| sky45up | **0.0000** | 0.1528 | 0.1286 |
+| sky45dn | **0.0000** | 0.0001 | 0.0001 |
+| sky45lf/rt/ft/bk | **0.0000** | ~0.05 | ~0.04 |
+
+**Red is exactly zero on all six faces.** A pure cyan sky, painted onto **10,136 of surf_666's
+39,034 world faces (26%)** — 7,423 of them `METAL/CITADEL_TILEFLOOR016A`, the big tile floor — on a
+map whose world lightmap measures R/B 1.88. That is the report, and the R/B of 0.00 against 1.88 is
+why no amount of further work on the ambient cube would ever have touched it.
+
+**The engine already had the entire mechanism and it was never fed.** `menvmap_t`,
+`mod->envmaps[]`, `msurface_t::envmap`, the batch key at gl_model.c:3617, the bind above, and
+`Mod_CubemapForOrigin` for alias models (gl_alias.c:2162) — all present, all driven by BSPX
+`ENVMAP`+`SURFENVMAP` for Q1BSP (q1bsp.c:3230) and by nothing at all for VBSP. `LUMP_CUBEMAPS` (42)
+is the same data, origin plus face size, so `VBSP_LoadCubemaps` fills the same fields from it and
+assigns nearest-by-centroid, which is Source's rule too. Props come along for free: the alias path
+was already asking `Mod_CubemapForOrigin`, and now gets an answer.
+
+The centroid is walked out of surfedges/edges/vertexes rather than read from `surf->mesh`, because
+at load time the mesh is **allocated but not filled** — `VBSP_BuildSurfMesh` runs later from the
+batch builder's buildfunc, and `gl_model.c` reads `surf->envmap` to *key* those batches. Reading
+`xyz_array` there would have given every surface the centroid of the origin: the same class of
+mistake as Patch 152's lighting origin, one build later.
+
+**A map with no cubemaps still must not get the sky.** surf_666 has none — `LUMP_CUBEMAPS` is 0
+bytes and there are zero `env_cubemap` entities; the author never ran `buildcubemaps`. Source falls
+back to the map's own `materials/maps/<map>/cubemapdefault.vtf`, a neutral grey, so a synthetic
+single-entry table is built pointing at it. That is what keeps the skybox out of the reflection on
+exactly the map that reported the bug.
+
+**And the hardcoded sky, deleted.** `VertexLitGeneric` unconditionally emitted
+
+```c
+reflectcube $cube:materials/skybox/sky_day03_06
+```
+
+on **every** Source model material, whether or not it asked for a reflection — one hardcoded
+Half-Life 2 daytime sky, on every prop, on every map. It also blocked the correct answer, since the
+backend prefers the shader's own reflectcube over the batch's.
+
+Measured after: `surf_pipeline.bsp: 26 env_cubemap(s), 0 whose baked VTF is missing`;
+`surf_666.bsp: no env_cubemaps built -- using the map's cubemapdefault`.
+
+New `hl2_cubemaps` (`CVAR_MAPLATCH`, default 1) turns the whole thing off — which is the
+pre-build-13 behaviour minus the bug.
+
+## Patch 154 — VTF cubemaps before 7.5 store SEVEN faces
+
+`plugins/hl2/img_vtf.c`.
+
+`faces = ((mips->type==PTI_CUBE)?6:1);` was used as both the upload depth and the **mip stride**.
+Valve's `CVTFTexture::FaceCount()` returns 7 for an envmap below minor version 5 and 6 at 7.5+ —
+the seventh is a precomputed spheremap, dropped in 7.5, and it is stored per mip level interleaved
+with the real faces, so it is part of the stride whether or not anything wants it.
+
+Inert until Patch 153 made cubemaps load at all, and then immediately load-bearing: surf_666's and
+surf_pipeline's baked cubemaps are **v7.4**, so every mip after the first would have been read from
+the wrong offset. surf_utopia's are v7.6 and would have been fine — exactly the split that presents
+as "cubemaps work on some maps".
+
+Seven for the stride, six for the upload.
+
+## Patch 155 — sv_cheats mid-map, and r_drawentities is not a cheat
+
+`engine/server/sv_ccmds.c`, `engine/client/renderer.c`.
+
+**sv_cheats was `CVAR_MAPLATCH`**, so `sv_cheats 1` printed "will be changed after a map load" and
+every cheat cvar stayed rejected until you reloaded — an expensive way to look at `r_showtris` on a
+map that takes seconds to load and minutes to walk back into position on.
+
+The two things a map spawn does with it (sv_init.c:980-995) are set `sv_allow_cheats` and publish
+the `*cheats` serverinfo key, and neither is bound to the map being loaded. A callback now does
+exactly that work and re-derives `cls.allow_cheats` through `CL_CheckServerInfo` — the same call the
+spawn path already makes. Both directions are live; an on-only switch would leave a server
+advertising `*cheats ""` while the client still believed it could set them.
+
+Verified by the latch message appearing and then not: `sv_cheats 0` → `r_showtris 1` → *"variable
+r_showtris is a cheat variable - latched"*; `sv_cheats 1` → `r_showtris 1` → accepted; `sv_cheats 0`
+again → latched again. No map reload anywhere in that sequence.
+
+**`r_drawentities` loses `CVAR_CHEAT`.** Mode 2 is the only one with cheat value — it hides bmodels,
+which do normally occlude — and that mode is already gated at the draw site on `cls.allow_cheats`
+(gl_alias.c:3353), which is the gate that actually matters because it cannot be set before
+connecting. Modes 0 and 3 hide *more* than normal, not less. Flagging them as cheats only stopped
+them being used for the one thing they are for.
+
+## Patch 156 — +jump does not fly you upward in noclip
+
+`engine/common/pm_source.c`, `PMSrc_NoClipMove`.
+
+The client synthesises `upmove = 200` from a held jump key whenever no explicit `+moveup` is active
+(cl_input.c:2667) — Quake's swimming rule, which predates noclip having its own controls. In noclip
+it means the key you hold constantly while playing quietly climbs you out of the room you were
+trying to look at.
+
+Dropped only in the noclip mover, so swimming and the jump itself are untouched. With the button
+doing nothing for movement it is free to mean something else, and the gamecode now uses it to fly
+straight through `trigger_teleport`s (`SV_TeleportBypassed`) — which matters because surf_666 has
+**351** of them and most are the "you fell off" resets that carpet every stage floor, so any noclip
+route to somewhere interesting used to get snatched back before it arrived.
+
+`pm_selftest` still passes, including all three of Patch 149's crouch-jump cases.
+
+## Patch 157 — dither strength, and switches for the expensive Source features
+
+`plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`.
+
+Build 12's dithered water and glass shipped their coverages raw and read as a flat painted sheet
+rather than something you look through — a correct mapping and too strong a picture. New
+`hl2_dither_alpha` (default **0.55**) scales the result of the per-material mapping, so the relative
+ordering the `$fogend` curve produces is preserved and only the overall strength moves. Clamped to
+[0.03, 0.98] so nothing becomes a hole or a wall.
+
+Two more switches, so a feature's cost can be measured instead of argued about:
+
+* `hl2_bumpmap 0` — no `$bumpmap`/`$normalmap` on world or model materials. Water and Refract keep
+  theirs regardless: theirs is not a lighting detail, it is the geometry the refraction is perturbed
+  *by*, and those paths emit it unconditionally.
+* `hl2_envmap 0` — no `$envmap` reflections at all, including named skybox cubemaps.
+
+Both applied by **clearing the parsed field** rather than at each of the dozen emit sites, because
+every downstream decision is already written as `if (*st->envmap)` / `if (*st->normalmap)`. One
+place to change, and no way for a shader to end up sampling a sampler that was never bound — which
+is precisely the failure Patch 153 exists to fix.
+
+All `CVAR_MAPLATCH`, which is the class that actually works for generated shader text — Build 11's
+finding.
+
+---
+
+## Patch 158 — the blue props: Patch 148's lift was amplifying a hue below the noise floor
+
+`plugins/hl2/mod_vbsp.c`, `VBSP_LightPointValues`.
+
+Reported twice: "some of the brushes on `!s 2` of surf_666 are bright blue, very saturated, and it
+is a warm map — not there on the CS:S or Momentum version." Build 13 blamed the env_cubemap
+reflection. **That was wrong**, and the toggles built in Build 13 are what disproved it:
+`hl2_envmap 0`, `hl2_bumpmap 0` and `hl2_cubemaps 0` each leave the blue exactly as it was.
+`r_drawentities 0` removes it — so it is an entity — and `hl2_lt_scale 0` turns those entities
+black, which puts it squarely in the model-lighting path.
+
+**They are not brushes.** Four `models/props/s2_d_1.mdl` static props, mirrored by four identical
+ones on the other side of the corridor that look correct: same model, same skin (0), same angles,
+so it is not the material. The world faces around both sets measure R/B **2.51**, so it is not the
+lightmap either. It is the leaf ambient cube, and the cube is real:
+
+| | leaf | nearest sample, all six faces | magnitudes (linear) |
+|---|---|---|---|
+| left props (blue) | 16884 | R/B **0.22 – 0.66** | 0.0010 – 0.0059 |
+| right props (fine) | 16919 | R/B **1.62 – 1.78** | 0.0101 – 0.0557 |
+
+VRAD really did write a blue cube there. It is also ten times darker than the one beside it and
+sits at **one or two units of an 8-bit mantissa** — the quantisation floor, where the hue is noise
+rather than information. Source draws it as near-black and you never see the colour.
+
+We drew it as electric blue, because `hl2_lt_min` multiplies. sRGB-encoding (0.0016, 0.0003,
+0.0059) gives about (4.4, 1.0, 17.6); its luminance is 3.85, so `m/lum` is **4.16** and the result
+is (18, 4, 73). The floor is not adding a tint — it is amplifying one that was always there and was
+always below the threshold of visibility.
+
+**This is Patch 148's other half, and the sequence explains the whole reporting history.** Before
+148 the floor clamped each channel independently, which desaturates: every prop in a dim leaf went
+pale grey ("the pale ramps", three builds of it). Patch 148 replaced the clamp with a proportional
+scale, which cannot change a hue — correctly — and the pale props became *blue* props the moment
+the hue was preserved honestly. Each fix was right about the thing it was aimed at.
+
+So the lift now keeps the hue only to the extent the sample earned it. `t = lum/m` is the fraction
+of the floor the data actually reached; each vector is blended toward its own post-lift
+luminance-grey by `1-t`. At `t = 1` — a sample needing no lift — it is exactly Patch 148 and warm
+props stay warm. As `t → 0` it becomes the neutral floor, so the zero-luminance special case and
+the scaling case are now one continuous rule instead of a cliff. `res_diffuse` desaturates toward
+*its own* grey, not the ambient's, because it carries the directional term and pulling it to the
+ambient's luminance would flatten the shading as well as the colour.
+
+For these props `t = 0.24`: (18, 4, 73) becomes about (17, 13, 30) — a dark near-neutral with a
+faint cool cast, which is what a black corner with a slightly blue bounce should look like.
+
+`hl2_lt_min 0` turns the floor off entirely and is now the exactly-like-Source setting. That is
+only a sensible option because Patch 152 made the cube itself arrive correct.
+
+> **LARGELY SUPERSEDED IN BUILD 14.** Everything above is true of the ambient cube, and the cube
+> turned out to be the wrong input: Source lights a static prop from a per-instance VRAD bake we
+> had never read (Patch 163), and 629 of surf_666's 653 props now take their colour from that
+> instead. This desaturation still runs, and still matters, for the 24 that have no bake and for
+> every dynamic model. It is no longer what those ten props are drawn with.
+
+## Patch 159 — `!!fixed`: build 12's dither never received its own colour
+
+`plugins/hl2/glsl/vmt/flatdither.glsl`.
+
+Reported as "`hl2_water 3` makes the water a white surface that is dithered" and "at `hl2_water 3`,
+`hl2_dither_alpha` does nothing". Both are one missing directive.
+
+`GenerateColourMods` — the only thing that ever evaluates an `rgbgen` or an `alphagen` — runs from
+gl_backend.c:4354 under `if (p->calcgens)`, and `calcgens` is set by exactly two things: `!!fixed`
+at the top of the GLSL, or `#usemods` in the program name (gl_shader.c:1831-1834, 2247-2248).
+`flatdither` had neither. So `v_colour` was never written for that program and the pass inherited
+whatever colour array the previous draw happened to leave bound: the colour was not `$fogcolor`
+(hence white) and the coverage was not `$alpha` (hence a dither the multiplier could not move).
+
+`hl2_water 0` looked right the whole time for one reason — mode 0 emits **no program at all**, so
+it takes the legacy path where colourgen always runs. That is exactly the difference the report
+describes ("what I really want was more `hl2_water 0`, but dithered"), and with `!!fixed` mode 3
+*is* mode 0 with a dither instead of a blend.
+
+Same trap as Patch 132's `#CHROME` (engine/gl/model_hl.h): a generated shader asking for a gen that
+nothing was ever going to compute. It costs one CPU pass over the vertices.
+
+> **THIS SHIPPED INERT, AND BUILD 14 IS WHY.** `!!fixed` sets `prog->calcgens`, and the only thing
+> that reads it sits inside `#ifndef GLSLONLY` — which `bothdefs.h:320` defines for every build we
+> ship. The diagnosis above is right about which flag the shader needed; the flag went nowhere.
+> Two further faults underneath it (the colourgen ran after the attribute bind, and `v_colour` was
+> hardcoded to white when there was no colour array) are Patch 166. The directive stays, and is now
+> load-bearing.
+
+## Patch 160 — `hl2_water 1` and `2` rendered identically
+
+`plugins/hl2/mat_vmt.c`.
+
+Mode 1 was only half a mode. Dropping `map $reflection` does remove the reflection **render
+target** — that is real, and it is the whole of Build 10's 8.71 → 390.36 fps — but
+`vmt/water.glsl` declares `!!samps reflect=1` unconditionally and samples `s_reflect`
+unconditionally. With no pass to bind it, the shader read whatever was left in sampler 1 and mixed
+it in by fresnel exactly as before. Cheap and expensive water were the same picture, and only one
+of them was honest about it.
+
+The shader already had the answer: `#LQWATER` takes the reflection from `s_reflectcube` instead of
+the render target. Mode 1 now forces it rather than leaving it to the material's own
+`$cheapwaterstartdistance` hints — which is what "cheap water" is supposed to mean, and which as of
+Patch 153 has a real baked cubemap to read. Mode 2 is unchanged.
+
+## Patch 161 — the material switches apply without a map reload
+
+`plugins/hl2/mod_vbsp.c`.
+
+Asked as "is it possible for these to swap without a vid_restart?" Yes — and without a map reload
+either. The flag for "changing this invalidates every shader" already exists and is exactly these
+cvars' semantics: `CVAR_SHADERSYSTEM` (cvar.h:133). cvar.c:992-1001 calls `Shader_NeedReload` the
+moment the value changes and the next frame re-parses, which for a generated shader means
+re-running `Shader_GenerateFromVMT` with the new value. It is not in `CVAR_LATCHMASK` (cvar.h:148),
+so it is not a latch at all — the cvar takes its new value immediately and the flush is a side
+effect.
+
+`hl2_water`, `hl2_refract`, `hl2_translucent`, `hl2_dither_alpha`, `hl2_bumpmap` and `hl2_envmap`
+all move. Build 11 found `CVAR_MAPLATCH` by ruling out `CVAR_RENDERERLATCH`, and MAPLATCH was
+correct — it made them work at all. It was simply a bigger hammer than the job needs, and it made
+comparing two settings cost a map load each.
+
+`hl2_cubemaps` stays MAPLATCH: it decides what `VBSP_LoadCubemaps` puts in `mod->envmaps` while the
+BSP is being read, which no shader flush revisits.
+
+## Patch 162 — smartjump was eating the jump button in noclip
+
+`engine/client/cl_input.c` (`IN_JumpDown`), `engine/common/pm_source.c`.
+
+Reported twice as "+jump still moves the player up during noclip", after Patch 156 was supposed to
+have stopped it. Patch 156 was correct and unreachable.
+
+`IN_JumpDown`'s smartjump branch presses **`in_up` instead of `in_jump`** whenever pmovetype is
+`PM_FLY`/`PM_6DOF`/`PM_SPECTATOR`/`PM_OLD_SPECTATOR` — and noclip is `PM_SPECTATOR`
+(sv_user.c:7381-7386). `in_up` becomes a positive upmove, which is what Patch 156 was asked to
+ignore, and `BUTTON_JUMP` (`GATHERBIT(in_jump, 1)`, cl_input.c:1282) is **never set at all**. So
+Patch 156's `buttons & BUTTON_JUMP` could not fire, and neither could `SV_TeleportBypassed`'s
+`.button2` on the server. Two halves of one feature, both dead, for one missing bit.
+
+`in_jump` is now pressed **as well**, so the button reports the key honestly and the mover decides
+what jump means rather than the input layer guessing. `in_up` stays pressed, so nothing else
+changes: quakers runs QuakeWorld physics (`PHYSMODE_SOURCE` is off, pmove.c:1437) and its
+`PM_SpectatorMove` still flies upward on space exactly as before. `IN_JumpUp` already released
+both.
+
+Scoped to the fling/spectate branch only. Doing it for the swimming branch as well would newly set
+`button2` underwater, where stock QuakeC's `PlayerJump` gives `velocity_z = 100` — a real behaviour
+change to a game this engine is shared with, for no benefit here.
+
+A side effect worth having: an explicit `+moveup` on its own key now works in noclip again. It
+presses `in_up` without `in_jump`, so it carries no `BUTTON_JUMP` and the mover does not swallow
+it — which is why the test is on the button rather than on the sign of upmove.
+
+---
+
+## Patch 163 — static props are lit by VRAD's own bake, which we had never read
+
+`plugins/hl2/mod_vbsp.c` (`VBSP_LoadPropBakedLight`, `HL2_RetintFromBaked`).
+
+Reported for a fourth time, now against a Momentum screenshot of the same corridor: "they still
+don't have the correct hue, with each of them a slightly different colour per model". Both halves
+of that sentence have one cause, and it is not a tuning problem.
+
+**The leaf ambient cube is not how Source lights a static prop.** It is the fallback — for dynamic
+models, and for props carrying `STATIC_PROP_NO_PER_VERTEX_LIGHTING` (12 of surf_666's 653). For
+everything else VRAD runs a full radiosity gather at every vertex and writes the answer into the
+map's own pakfile as `sp_<index>.vhv`, **one file per prop instance**. surf_666 ships 633 of them,
+629 with usable LOD-0 data. We have never opened one.
+
+That is exactly why neighbouring copies of one model came out different colours: we were reading a
+six-sample-per-leaf average and picking whichever sample was nearest, and adjacent props kept
+landing on different samples — one of which, in that corridor, VRAD had written blue.
+
+| the ten `models/props/s2_d_1.mdl` props | left five | right five |
+|---|---|---|
+| our leaf ambient cube, R/B | 0.22 – 0.66 | 1.62 – 1.78 |
+| VRAD's own bake, mean RGB | (22, 15, 13) | (22, 15, 13) |
+| VRAD's own bake, R/B | **1.67** | **1.67** |
+
+Symmetric geometry, symmetric lighting, warm — which is the screenshot.
+
+**The byte order is BGRA, and that was measured rather than recalled.** Across the 551 props that
+also have a usable ambient cube, the correlation between a prop's baked hue and its own leaf's
+ambient hue is **+0.757** reading the bytes as BGR and **−0.757** reading them as RGB. Two VRAD
+outputs for the same point cannot disagree that consistently; only one ordering can be right and
+the sign says which. Stated the other way: 91% of those leaves are warm and only 7% of props have
+byte0 > byte2.
+
+The header is 40 bytes, not 24 — `HardwareVerts::FileHeader_t` is six ints followed by
+`int m_nUnused[4]` — then one 28-byte `MeshHeader_t` per mesh. Read as 24, mesh[0] comes back as
+(lod 0, 0 verts, offset 0) and every file looks empty, which is what the first pass at this did.
+
+**The overbright, and where it goes.** `Surf_LightmapShift` gives a VBSP world lightmap
+`shift = gl_overbright` (1 by default, r_surf.c:71-72): the luxel is halved into the texture and
+the shader multiplies it back, so a world surface is drawn at **twice** its raw VRAD value. Model
+lighting has never had that factor, from the ambient cube or from here, and both read the same
+VRAD units. `hl2_lt_baked_scale` (default 2) is that factor.
+
+It is applied **after the gamma encode**, which is where the world applies it — the world's
+overbright is a plain multiply of an already-encoded texel, in the shader. Doing it in linear
+instead forces a clamp to 1.0 before `pow()`, and that clamp blows out a channel on **23.6% of
+d1_canals_02's 356 props** at scale 4 while surf_666, being dark, clips nothing and looks fine. A
+brightness that is correct on one map and destructive on another is not a brightness, it is a
+coincidence. Nothing clamps here now: a light value above 1 is not an error, and it is multiplied
+by an albedo before anything reaches the framebuffer.
+
+**Why the ambient/directional split is fixed and mostly ambient.** VRAD's per-vertex bake has
+already integrated the directional lighting — each vertex colour is the finished answer for that
+vertex, cosine and all, and Source applies no further N·L. Re-imposing our single mean as a
+strongly directional term would shade it twice: bright where the ambient cube's dominant direction
+happens to point and near-black on the far side of the same prop, neither of which VRAD said. So
+the cube keeps exactly one job, which is *which way*, and 70% of the light comes back as a
+constant. `FS_BAKED_DIR` is named as the presentation choice it is.
+
+A consequence worth stating: this **overrides `hl2_lt_min`** for props that have a bake, because it
+sets the absolute level rather than scaling it. The floor exists to rescue props whose lighting we
+could not determine, and for these we now can.
+
+Measured after, on surf_666: `props: 629 of 653 lit from VRAD's baked vertex lighting`, and
+`[texdiag] PROPLIGHT ... mean 65.3 52.5 49.7, R/B 1.31` — against the tuned ambient-cube path's
+62.7 48.6 48.5, R/B 1.29 from Build 12. Two unrelated data paths landing on the same level is the
+corroboration that the ×2 is real.
+
+Fixed in passing: `m_DiffuseModulation` (sprp v7+) is applied only when its alpha byte is non-zero.
+CS:S's VBSP does not populate the field and it reads `(0, 1, 0, 0)` on 620 of surf_666's 653 props
+— applied literally that multiplies the prop by black. Nothing downstream currently reads
+`shaderRGBAf` for these, which is the only reason it has never shown; that is luck, not a design.
+
+## Patch 164 — `wait` takes a count, and two waits that wait for the thing
+
+`engine/common/cmd.c`.
+
+Asked as "can't you just fix the engine to not need 500+ waits every time?", about a config I wrote.
+It was 3,954 lines of which **3,946 were the word `wait`**, and every count in it was a guess.
+
+One `wait` is one frame, which is the right primitive for what it was written for
+(`+attack; wait; -attack`) and the wrong one for everything else. Three changes:
+
+* **`wait [frames]`** — the counter is `n-1`, because the line that runs it already costs the frame
+  `waitattime` just claimed, so `wait 1` is exactly the old `wait`. A missing, zero or unparseable
+  argument is the old behaviour too: `wait` ignored its arguments before, so nothing can have
+  depended on them.
+* **`waitms <ms>`** — wall clock, for when the thing being waited on is work rather than frames. A
+  frame count generous on one machine is short on the next.
+* **`waitmap [timeout]`** — block until the client is actually in a map. No estimate at all. It
+  carries a timeout (default 60s) and gives up with a warning rather than wedging the buffer,
+  which is what makes it safe to put in a cfg at all.
+
+The multi-frame arms each re-stamp `waitattime` before breaking, so the existing
+`waitattime == realtime` guard costs exactly one frame per pass rather than spinning. And a wait
+left owing against an **empty** buffer is cleared: `wait 500` as the last line of a cfg would
+otherwise leave the next thing typed at the console sitting there for eight seconds with no
+explanation.
+
+The verification config for this build is 30 lines.
+
+## Patch 165 — `setpos`'s angles never survived the next usercmd
+
+`engine/server/sv_user.c` (`Cmd_SetPos_f`).
+
+`.angles` on a player is the **model's** orientation; the view is `.v_angle`, which `SV_RunCmd`
+refills from the usercmd every frame and then re-derives `.angles` from. So writing `.angles` alone
+survives about 15ms: the position moves and the view does not. `setpos x y z pitch yaw roll` has
+therefore never been able to aim, which is the one thing it gets reached for.
+
+Identical to the fix Build 13 made for `trigger_teleport_touch`, and for the same reason —
+`SV_ZoneGotoAng` writes both, which is why `!s` and `zone_goto` have always aimed correctly and
+these two never did.
+
+**This does not change FTESurf**, which shadows `setpos` with its own client command
+(sv_player.qc) that already writes both. It fixes the engine's own, which is what quakers and every
+other FTE game get.
+
+## Patch 166 — a GLSL program's flat colour was hardcoded white, and Patch 159 was inert
+
+`engine/gl/gl_backend.c`.
+
+Reported as "`hl2_water 3` = white sheet with dithering, and `hl2_dither_alpha` 1 or 0 or 0.1
+doesn't change it". Patch 159 identified the missing `!!fixed` correctly and fixed nothing, because
+of a second fault underneath it. Three things, in the order they bite:
+
+1. **`GenerateColourMods` was never called.** The call sits inside `#ifndef GLSLONLY`
+   (gl_backend.c:4353) and `bothdefs.h:320` defines `GLSLONLY` for every build we ship. `!!fixed`
+   sets `prog->calcgens` and nothing in this binary has ever read it. `flatdither.glsl` is the only
+   thing in the entire tree that sets that flag, so widening the guard can affect nothing else.
+2. **It ran after the attribute bind.** Even in a build where the block compiled, it ran *after*
+   `BE_Program_Set_Attributes`, which is what binds `v_colour` — the colour was generated one draw
+   too late to be seen. So the call moves up rather than the `#ifdef` merely widening.
+3. **`VATTR_COLOUR` with no array was hardcoded to white.** "No colour ARRAY" is not the same
+   statement as "no colour": a pass whose rgbgen/alphagen is a *constant* has its colour in
+   `pendingcolourflat` and no array at all, and was handed `(1,1,1,1)` every frame. With alpha 1
+   the dither can never discard, which is why the cvar had nothing to move either.
+
+`pendingcolourflatvalid` gates the third, because `pendingcolourflat` is stale for every path that
+does not compute it and reading a stale one there would tint or vanish geometry that renders
+correctly today. It is cleared per program draw and set only by the flat branch of
+`GenerateColourMods`.
+
+Measured after, on surf_null: `hl2_dither_alpha` 0.15 against 0.55 moves **517,607 pixels** of a
+921,600-pixel frame. Before, the two were byte-identical.
+
+The texcoord half of the old block stays inside the guard: `BE_GeneratePassTC` feeds
+`pendingtexcoord*`, which the GLSL attribute path does not read, so calling it here would be cost
+without effect — and the non-GLSLONLY behaviour is left exactly as it was.
+
+
+## Patch 167 — `retry`, because `reconnect` cannot reload a map you are hosting
+
+`engine/client/cl_main.c` (`CL_Retry_f`, registered beside `reconnect`).
+
+Source has `retry` and it means "put me back into the game I am already in". On a listen server
+that is a map reload, and that is the surf-practice gesture: reset the world, keep the session, keep
+the cvars. FTE had no command for it.
+
+`reconnect` is not it. On a listen server `cls.state` is `ca_connected`, so `CL_Reconnect_f` takes
+its first branch and sends `new` — which re-runs the **client** handshake against a server whose
+entities, doors and triggers have not moved. The world does not reset, which is the entire point of
+pressing it.
+
+`map_restart` *is* it (`SV_Map_f` maps level `"."` onto `svs.name` at sv_ccmds.c:949), but it is a
+server command with a Quake III name, it is not what anyone types, and with no server running it
+falls through to `startmap_dm` or `start` — loading a *different* map, which is the worst possible
+answer to "retry".
+
+So: one client command that picks. Hosting the map → `map_restart`. Not hosting → `CL_Reconnect_f`,
+which is what `retry` should mean against a remote server anyway. The `sv.state` test is inside
+`#ifdef HAVE_SERVER`, so a client-only build gets the reconnect arm and still has the command.
+
+Used by FTESurf's graphics menu, where three rows are `CVAR_MAPLATCH` and the footer has always said
+"takes effect on the next map load" without the menu being able to provide one. Key 7 is now that
+map load.
+
+---
+
+## Patch 168 — Source's jump height is not constant, and Momentum's is
+
+`engine/common/pm_source.c` (`PMSrc_CheckJumpButton`), plus the usual movevar quadruple in
+`pmove.h`, `sv_phys.c`, `sv_main.c` and `cl_main.c`.
+
+Reported as "the jumping or gravity doesn't feel quite right, I can't make some jumps I can in
+Momentum mod". It is the jumping, it is two units, and the port was right about Source the whole
+time — Momentum simply does not ship Source's behaviour here. From the installed game:
+`mom_mv_normalize_jump_height "1"`, *"Fixes subtle variations in jump height."*
+
+**Where the two units are.** Measure the height against the velocity the move is PERFORMED with,
+not the velocity left at the end of the tick. This is leapfrog integration — StartGravity, drift,
+FinishGravity — so the apex is `(v_drift + g*dt/2)^2 / 2g`. At 800/66.67 Hz a half-step is 6.0 u/s:
+
+| | at the impulse | v_drift | apex |
+|---|---|---|---|
+| standing (ADD) | 262.33 | 256.33 | **43.010** |
+| ducked or mid-duck (ASSIGN) | 268.33 | 262.33 | **45.000** |
+
+45.000 is exactly `pm_jumpvelocity^2 / (2*sv_gravity)`, i.e. the impulse's own apex. So the
+crouch-jump is the honest number and the standing jump is the anomaly — the opposite of how it
+reads.
+
+**Why.** `CheckJumpButton` calls `FinishGravity()` (cpp:2520) and `FullWalkMove` calls it again
+(cpp:2133), so a jump tick is charged three half-steps instead of two. The ADD case eats that
+duplicate. The ASSIGN case only looks correct because discarding StartGravity's half-step happens
+to cancel it — two bugs cancelling, which is not the same as no bug, and the cancellation holds
+only from rest.
+
+**The fix follows from that and needs no tuning constant.** Under `pm_normalizejump`, add
+unconditionally and drop the duplicate `FinishGravity`:
+
+    (v0 - g*dt/2 + I + g*dt/2)^2 / 2g  ==  (v0 + I)^2 / 2g
+
+Free of `dt`, free of duck state, and still additive over inbound vertical speed — which matters,
+because `CategorizePosition` will hand `CheckJumpButton` up to `NON_JUMP_VELOCITY` (140 u/s) of rise
+and still call it grounded, and an unconditional ASSIGN would have deleted all of it. That is the
+trap this patch exists to avoid, and it is why "just always assign" is the wrong fix even though it
+produces the right number from rest.
+
+`pm_jumpzoffset` is Momentum's `mom_mv_jump_z_offset`, an instantaneous rise at takeoff. It is
+**traced** before being applied — an unchecked origin bump embeds you in whatever is overhead, and a
+jump under a low ceiling is precisely where someone would reach for it. Default 0, which leaves the
+jump at its ideal apex and keeps `pm_selftest` trace-free.
+
+Not ported: Momentum's mode 2 ("normalize landing height only unless jumping from ladders") is a
+separate landing-side correction. Any non-zero value here means mode 1.
+
+**`pm_selftest` was pinning the wrong quantity under the right name.** "standing jump apex 39.165"
+came from `v_end^2 / 2g` — the end-of-tick velocity, half a step too late, which throws away the
+3.8 units the jump tick itself travels. The number was stable and reproducible and 3.8 units wrong.
+It now measures from the drift velocity, reports 43.010 / 45.000 for stock, and adds five cases for
+the normalised mode: both duck states reach 45.000, they differ by zero, the height is unchanged at
+100 Hz, and it still adds to a 100 u/s inbound rise.
+
+The client fallback in `CL_CheckServerInfo` is **1**, not 0. `pm_normalizejump` is the first of
+these movevars whose default is non-zero, so the bare `Q_atof` idiom used for `pm_stamina` beside it
+would have predicted stock-Source jumps against a normalising server the moment the key went
+missing — a divergence that only shows as a rubber-band on the way up.
+
+## Patch 169 — `exec cfg/default.cfg` stopped counting as a default.cfg
+
+`engine/common/cmd.c` (`Cmd_Exec_f`).
+
+Two things hang off one `strcmp`: `cvar_lockdefaults 1`, and the manifest's `set` overrides
+(`fs_manifest->defaultoverrides`, the bare-`set` lines in a `.fmf`). The test compared the **exec
+argument as typed** against the literal `"default.cfg"`.
+
+FTESurf's Patch 119 moved its configs into `cfg/` and the game now execs `cfg/default.cfg`. The
+comparison stopped matching, and both features quietly stopped happening — no error, no missing
+file, nothing to notice. FTESurf's manifest had been forcing `sv_mintic`/`sv_maxtic`/`cl_netfps`
+with a comment reading *"Forced with `set` so a stale ftesurf.cfg can never desync the physics"*,
+and none of those three lines had run since.
+
+Now compares `COM_SkipPath(name)`, so a `default.cfg` in a subdirectory is still a default.cfg. It
+handles both separators already.
+
+Harmless in practice *today* only because Patch 125's fixed 15 ms tick with a carry makes
+`sv_mintic` irrelevant to the physics result — which is exactly why it went unnoticed for six
+builds.
+
+---
+
+## Patch 170 — the movement ruleset lock, and `sv_maxspeed` finally meaning something
+
+Two changes that belong together: the movement cvars become a *ruleset* rather than a starting
+point, and the one cvar that looked like the most important knob in the config — and did nothing —
+is wired to what it names.
+
+### The lock
+
+`SV_LockMovementVars()` restores every cvar that feeds the mover to this game's default at each
+map spawn (`sv_init.c`, immediately before the authoritative `SV_SetMoveVars()`), and a shared
+callback on each of them refuses changes afterwards unless `sv_cheats` is 1. Turning `sv_cheats`
+back off restores them immediately, which is the honest counterpart Patch 153 established for the
+cheat latch — an off switch that left the physics where you had dragged them would be worse than
+no switch, because the console would then agree with the HUD that cheats were off while you played
+on your own numbers.
+
+**The canonical value is `defaultstr`, not `enginevalue`.** `exec cfg/default.cfg` is followed by
+an automatic `cvar_lockdefaults 1` (`cmd.c:1067-1070`, restored by Patch 169 — this patch depends
+on that one), so every `set` in a game's `default.cfg` *is* that cvar's default. The ruleset is
+therefore maintained in one readable file with no second copy in the engine to fall out of step
+with it.
+
+### Why this is not `CVAR_CHEAT`
+
+FTE has a cheat-latch flag that looks like exactly this feature. It is inert here, three times
+over, and each reason would have failed silently:
+
+| | |
+|---|---|
+| `cvar.c:1163` | reverting a cheat cvar prefers **`enginevalue`** — FTE's *Quake* numbers. `sv_airaccelerate` would snap to 0.7, `sv_maxspeed` to 320, `sv_stopspeed` to 100. The lock would enforce the opposite of the intended ruleset. |
+| `cvar.c:566` | `Cvar_LockDefaults_f` deliberately **skips** `CVAR_CHEAT` cvars, so their `defaultstr` can never be the config's value anyway — there is no way to repair the row above from a config. |
+| `cl_main.c:3173`, `sv_ccmds.c:36` | both `cls.allow_cheats` and `SV_MayCheat()` grant cheats unconditionally to any server with **one client slot** — which is every FTESurf session ever played. The flag would never have latched anything. |
+
+`sv_cheats.ival` is read directly for that third reason: of the three cheat predicates in the
+engine it is the only one that means what its name says.
+
+The callback fires *after* the value is committed (`cvar.c:1041-1046`), so it reverts rather than
+refuses. `Cvar_ForceSet` re-enters it exactly once and that pass returns at the `strcmp`, so the
+recursion is bounded at one level.
+
+### The hole that isn't
+
+`SV_MovementLocked()` tests `pm_lockmovement`'s **default**, not its live value. Reading the live
+value would leave a gap you could walk straight through: at the menu there is no server up, so the
+callback's `sv.state != ss_active` guard lets `pm_lockmovement 0` through, and it would then
+survive into the next map and unlock everything. The engine default is `0`, so the whole mechanism
+stays dormant for every other game on this tree; FTESurf opts in with one line in its `default.cfg`.
+
+Not locked: `pm_noclipspeed` (noclip already voids the run, so how fast you fly while voided is a
+preference) and `sv_spectatormaxspeed`.
+
+### `sv_maxspeed`, and the 278 vs 289 it explains
+
+`.maxspeed` is what the mover actually reads — the server networks it per client as `svc_maxspeed`
+and `sv_user.c:7883` hands *that* to `pm_source`, never the cvar. `PutClientInServer` pinned it to
+a compile-time constant, so `sv_maxspeed` was a cvar you could set all day with no effect. QC's
+`PlayerPreThink` now tracks it per frame.
+
+This is the whole of the reported prestrafe gap. Turning at `cl_yawspeed 120` with one strafe key
+held settles at **289** in Momentum and settled at **278** here.
+
+At 120 deg/s the accelerate cap is never the binding constraint — the tick needs 11.5 u/s and
+`sv_accelerate 5` offers 18.75 — so every tick ends with exactly `maxspeed` along `wishdir` and the
+entire fixed point is the perpendicular remainder. With `f = 1 - sv_friction*dt` and `t` the
+per-tick turn:
+
+```
+q = f*M*sin(t) / (1 - f*cos(t))        speed = hypot(M, q) = M * 1.112862
+```
+
+Proportional to `M`, and free of `sv_accelerate` **entirely**: 5, 150 and 10000 all give 278.216.
+So no air-accel or ground-accel setting could ever have accounted for it.
+
+| `sv_maxspeed` | prestrafe |
+|---|---|
+| 250 (CS:S knife) | **278.216** |
+| 260 (Momentum) | **289.344** |
+
+Inverting a displayed 289 gives 259.24–260.14, and 260 is the only integer in that window. The
+`sv_friction 4` and `pm_ticrate 0.015` the derivation rests on are both independently confirmed
+against Momentum (the tick from `panorama/scripts/common/web/maps/tick-intervals.map.ts:32`,
+`Gamemode.SURF → 0.015`).
+
+`PM_RUN_SPEED` in `src/shared/sh_defs.qc` is now 260 and only a fallback for the frames before
+`sv_maxspeed` has been read.
+
+### A trap worth recording
+
+`sv_mv_maxspeed` had to be declared at the **end** of `defs/sv_defs.qc`. Everything above the
+system function declarations occupies fixed QC global offsets, and inserting one float in the
+middle shifts the lot: fteqcc rejects the progs outright with *"system defs not recognised from
+quake nor clones, probably buggy (sys)defs.qc"*, which does not name the line you added.
+
+---
+
+## Patch 171 — the move values were the real speed cap, and the walk key was tangled in them
+
+Patch 170 raised `sv_maxspeed` to Momentum's 260 and **nothing moved**, because `sv_maxspeed` was
+never the binding constraint. The client sends `forwardmove`/`sidemove` in **units**, and
+`CheckParameters` clamps their *magnitude* to maxspeed — so a move value below maxspeed is a cap on
+your speed, silently, and only on the axes you are actually pressing.
+
+At `cl_forwardspeed 250` with `sv_maxspeed 260`:
+
+| input | wishspeed |
+|---|---|
+| one key | **250** — 10 short |
+| two keys (353.6 clamped) | **260** — correct |
+
+So forward-only running and prestrafe were both short while diagonals were right. The honest
+statement of Patch 170's formula is therefore
+
+```
+prestrafe = min(cl_sidespeed, sv_maxspeed) * 1.112862
+```
+
+Momentum ships 450. Anything ≥ maxspeed removes the cap entirely, so the number itself is not
+load-bearing beyond that. Two new `pm_selftest` cases pin both halves:
+`cl_forwardspeed 250 CAPS wishspeed → 250` and `cl_forwardspeed 450 reaches maxspeed → 260`.
+
+### Why that could not just be set
+
+FTESurf's walk key was `cl_run 0` + `cl_movespeedkey 0.52` — Quake's *clientside* walk, which
+scales the move values. That produces the right number **only while `cl_forwardspeed` happens to
+equal maxspeed**, because past that point the clamp decides everything. Raising the move values to
+450 would have turned the walk key into `0.52 * 450 = 234 u/s`, a 0.9x amble, with nothing to
+indicate it had happened.
+
+CS:S does not walk that way. `CCSPlayer::HandleSpeedChanges` **reduces `m_flMaxSpeed`** by
+`CS_PLAYER_SPEED_WALK_MODIFIER`, and `CheckParameters` clamps against the smaller number. New
+`pm_walkspeed` (engine default `0`, FTESurf `0.52`) does it there, so walk is 0.52 of whatever
+maxspeed currently is, and it compounds with the duck crop exactly as Source's does because
+`Duck()` runs afterwards. `cl_movespeedkey 1` takes the client out of it.
+
+No per-command state was needed: Source tracks `m_bIsWalking` across the button edge, but what it
+derives is a pure function of the button, so reading the bit is identical and `pmsourcestate_t` is
+unchanged. It does need the client's `in_speedbutton`, or `BUTTON_SPEED` never reaches the server.
+
+### The noclip trap this opened, and closed
+
+`PMSrc_NoClipMove` scaled off `pms_maxspeed` — which now carries the walk modifier, and the walk
+modifier is keyed off **the same button that is supposed to make noclip go faster**. `+speed` would
+have multiplied by 0.52 and by 2 at once: a 4% speedup dressed up as a sprint. Noclip now scales
+off the base `movevars.maxspeed`, which is the independence its own comment already claimed — it
+just had one more modifier to stay independent of. It also stops noclip being stamina-throttled,
+which was a latent oddity that only hid because `pm_stamina` defaults to 0.
+
+The modifier chain is extracted into `PMSrc_EffectiveMaxSpeed()` so it is testable at all; four
+new selftest cases cover running, walking, walk disabled, and walk correctly ignored in noclip.
+
+### View pitch
+
+Quake clamps pitch to **−70 up / +80 down**, and it is not a render clamp — the server rewrites
+`v_angle` at `sv_user.c:8069-8074`, so looking further simply does not happen. Source's
+`cl_pitchup`/`cl_pitchdown` are 89. On a steep ramp that difference is the whole ramp.
+
+Fixed with the sanctioned QuakeWorld knobs rather than a client-side override: `minpitch -89` /
+`maxpitch 89` (aliases `sv_minpitch`/`sv_maxpitch`) are `CVAR_SERVERINFO`, read by the server for
+its clamp and by the client at `cl_main.c:3269-3272` for its own, so both ends agree and no server
+can quietly disagree with the client the way `cl_fullpitch` allows. FTE hard-bounds them to ±89.9
+regardless, so 89 is both the practical maximum and exactly Source's.
+
+**Deliberately not in the movement lock.** Pitch cannot change where you go: `PMSrc_WishDir`
+flattens forward and right onto the horizontal plane before building `wishdir`, so ground and air
+movement are identical at any pitch. It moves the camera, and noclip, which is practice-only.
+
+### The saved config, again
+
+`cl_forwardspeed` and friends are `CVAR_ARCHIVE`, so `ftesurf.cfg` carried `250` and execs *after*
+`default.cfg` — the boot check read `"cl_forwardspeed" is "250"  Default: "450"`, which is the same
+shape as the `sv_airaccelerate 10000` freeze in Patch 168's notes. Corrected in place. These are
+client cvars and the lock is server-side, so they are not covered by it; the asymmetry is
+acceptable because a move value can only ever *cost* you speed — the clamp means raising it past
+maxspeed does nothing at all.
+
+## Patch 172 — Momentum's real movement source turned up, and the jump offset was the wrong algorithm
+
+`engine/common/pmove.h`, `engine/common/pm_source.c`, `engine/server/sv_phys.c`,
+`engine/server/sv_main.c`, `engine/client/cl_main.c`
+
+The Build 15 audit's central finding was that `mom_gamemovement.cpp` — the half of Momentum's
+movement carrying every surf-critical fix — was not on this disk, so Patches 149/168 had been
+written against Valve's base `CGameMovement` for the wrong layer, and Stages B/C were planned as
+reconstructions from one-line ConVar help strings. The Momentum tree is now checked out at
+Momentum Mod's public archive (github.com/momentum-mod/game), and that file is in it. This patch is the first of three that
+replace guesses with ports.
+
+**`pm_jumpzoffset` was implementing the opposite of what it should.** The help string —
+*"Instantaneous height increase when the player jumps"* — reads like an addition, and Patch 168
+wrote one: `origin[2] += offset`, guarded by a stuck test. `mom_gamemovement.cpp:1596-1616` does
+something else entirely. It traces **down** to the ground, then **up** by `sv_jump_z_offset`, and
+sets the origin to that. It *pins* the takeoff height.
+
+That distinction is the whole value of the feature, and it only makes sense once you know what
+`sv_considered_on_ground` is. You count as standing on a surface anywhere inside that band without
+touching it, so stock Source's takeoff height — and therefore its apex — varies by the full width
+of the band, up to two units, based on nothing the player did. Normalising the impulse (Patch 168)
+removes the *duck-state* variation; this removes the *standing-height* variation. They are separate
+bugs and Patch 168 only ever fixed one. Adding a constant would have preserved every bit of the
+second one and moved it upward.
+
+Rewritten to trace, with both traces checked and the whole thing skipped if either refuses — this
+runs at the top of a jump, where declining to move is always safe and an unchecked move under a low
+ceiling is not. `cfg/default.cfg` sets Momentum's **1.5**, so a jump is now 46.5 units above the
+surface, every time, against 45.0 ± the band before.
+
+**Four constants became cvars**, because three of them are numbers Momentum has actually changed
+and the fourth is worth being able to switch off while bisecting:
+
+| new cvar | default | was | Momentum |
+|---|---|---|---|
+| `pm_groundtracedist` | 2 | `PMSRC_GROUND_TRACE_DIST` | `mom_mv_considered_on_ground` (1.0 in 0.8.7, 2.0 today) |
+| `pm_bumpcount` | **8** | `PMSRC_MAX_BUMPS` (4) | `sv_ramp_bumpcount` 8, min 4 max 16 |
+| `pm_snaptoground` | 1 | `PMSrc_StayOnGround` ran unconditionally | `mom_mv_snap_to_ground` |
+| `pm_groundquadrants` | 1 | the sub-box retest ran unconditionally | `mom_mv_check_ground_quadrants` |
+
+Both accessors **clamp** rather than default: these arrive over serverinfo, so "whatever the other
+end sent" includes 0 and 1000000. A zero trace distance means never finding ground; an unbounded
+bump count means an unbounded number of traces inside one usercmd. Neither is a setting, both are a
+hang. All four are in `pms_lockedmovevars[]` — a movement rule the ruleset lock does not cover is a
+hole in the lock — and all four take the `*s?:` form in `CL_CheckServerInfo`, since all four
+default non-zero and the bare `Q_atof` idiom would have predicted against a 0-unit ground trace.
+
+**`PMSrc_StayOnGround`'s epsilon was half of Source's.** Source tests `delta > 0.5f *
+COORD_RESOLUTION` with `COORD_RESOLUTION` = 1/32, i.e. 1/64. We had `0.5f * (1.0f/64.0f)` = 1/128,
+so we snapped the origin in roughly twice as many cases as Source does — every extra one an origin
+move nothing asked for, onto ground we were already close enough to.
+
+**`ClipVelocity`'s wall test is an epsilon compare now**, matching `CloseEnough(normal.z, 0,
+FLT_EPSILON)` at reference :2757; same for the identical test in `TryPlayerMove`. A plane 1e-9 off
+vertical is a wall and exact-float equality says it is not. Cosmetic today — every caller in
+`pm_source.c` discards `blocked` — fixed so the next person to start reading it does not have to
+find this first.
+
+`pm_selftest` gains eight cases: the two clamps in both directions, the two fallbacks, and the
+epsilon in both the near-vertical and real-slope directions. The traced parts (the jump offset, the
+snap epsilon) cannot be tested there — `pm_selftest` runs with no map loaded — and are verified in
+game against the energy readout, which reads 45 before this patch and 46.5 after.
+
+
+## Patch 173 — `shader_here`, so a broken texture can be named instead of described
+
+`r_showshaders` answers "what am I looking at" continuously, in a corner, at whatever frame rate
+the map runs at. That is the right tool for sweeping a room and the wrong one for the question it
+kept being used for: *this* surface, once, in a form that survives into a log someone else can
+read.
+
+Asked for as "can you make me a command and I will look at all of the broken textures and tag them
+for you, print to console and I will leave a log". Every word of that is a spec: **a command**
+(bindable), **tag** (the press has to carry which kind of broken it was), **print to console**
+(not an overlay), **leave a log** (one line, greppable, and stable across builds).
+
+`CL_TraceShaderUnderCrosshair` is the trace that was already inside the `r_showshaders` drawing
+block, lifted out unchanged — 8192 units down `vpn`, through `World_Move` when CSQC owns a world so
+brush entities and props are hit rather than passed through, falling back to the world model's
+`NativeTrace`. Both callers use it now, so the overlay and the command can never disagree about
+what is under the crosshair.
+
+`shader_here [tag]` prints one line:
+
+    [shaderhere] tag=noise texture=metal/metalgrate013a size=256x256 usage=lightmapped world=maps/surf_tensor2.bsp at=-11776 -10688 13745
+
+then the shader body, indented, so a generated VMT shader can be read without finding its source.
+`Shader_GetShaderBody` returns an empty filename for a GENERATED shader — which is every
+VMT-derived one, i.e. all of them on a Source map — so the name falls back to `shader->name`
+rather than printing `shader=` and nothing.
+
+`ftesurf/fs_tag.cfg` binds F5–F9 to five tags. Run with `-condebug`, aim, press, and
+`grep shaderhere ftesurf/qconsole.log` is the report. Note that `-condebug` **appends**: delete the
+log first or two sessions run together.
+
+## Patch 174 — one coverage for every dithered surface, and the missing-material list
+
+Three things, all downstream of the same report: *"the window on surf_spectra has too much alpha, I
+can barely see it"*, and *"all of surf_utopia's textures are missing, making me believe the mount
+isn't working correctly"*.
+
+**`hl2_dither_force`.** `hl2_dither_alpha` is a multiplier, and a multiplier cannot rescue a pane
+the material itself authored as nearly invisible — it scales the faint ones down along with
+everything else, so the surface that is hardest to see stays hardest to see at every setting.
+`hl2_dither_force` replaces the per-material derivation instead of scaling it: above 0, every
+dithered surface in the map gets exactly that coverage, whatever its VMT says. 0 (the default)
+leaves the existing path alone. It is the only one of the two that can be reasoned about without
+knowing what an individual material author wrote.
+
+**`hl2_dither_alpha` 0.55 → 1.** 0.55 was chosen against water, where `VMT_WaterDitherAlpha`'s
+`$fogend` curve lands between 0.35 and 0.90 and wanted pulling back. Glass shares the multiplier
+and starts from a 0.25 fallback, so the same number took panes to 0.14 — an empty frame rather
+than a window. 1 is "whatever the material asked for", which is the only default that does not
+silently second-guess every VMT in the map.
+
+**The unresolved-material list.** Build 11 kept the *first* name that failed to resolve, because
+one name is enough to identify the asset pack, which is what that message is for. It is not enough
+for the other question the same message raises — which of the things I am looking at are broken —
+and answering that by hand meant standing in front of each surface and asking the engine what it
+was (Patch 173). The loader now names every material, capped at 24 with the tail counted, and
+publishes `hl2_unresolved` / `hl2_unresolved_first` so CSQC can put the count on screen over the
+checkerboard it explains. The console line was correct since build 11 and still went unread,
+because a map load prints several hundred lines and this was two of them.
+
+**Four lighting cvars now register at plugin init.** `hl2_lt_min`, `hl2_lt_scale`,
+`hl2_lt_srgb_mag` and `hl2_lt_baked_scale` were each created lazily inside the function that first
+reads them, so until a Source map had loaded once they did not exist. Invisible from a console —
+you would type the name and get a value — but not from a menu: `cvar()` on an unregistered name
+reads 0, so all four would have shown their *off* state on a fresh start and cycled from the wrong
+place. `GetNVFDG` hands back an existing cvar rather than making a second one, so this is one cvar
+with two registration sites, not a duplicate. They carry no latch flag, which is correct: they are
+read while a map loads, so the value changes immediately and the next load applies it.
+
+
+## Patch 175 — `fs_automount`: a map's asset pack is mounted for that map and no other
+
+**The question that produced this:** *"I thought we had a system to load only the assets that are
+needed? can we load just the needed assets and save on mounting time?"*
+
+We did, and it did not apply here. **Patch 26's `fs_lazyaddons` keys on which game a MAP CAME
+FROM** — index every addon game's `maps/` offline, mount that game when one of its maps is picked.
+That answers "this is a CoD map, mount CoD". It cannot answer the question FTESurf actually has,
+which is *"this is a Momentum map that references six TF2 concrete textures"*. No map index knows
+that. Only the BSP does.
+
+It was also never wired up: `fs_useaddons` has been in the engine since Patch 26 and no FTESurf QC
+has ever called it. Everything in `fs_addons.txt` is mounted eagerly by `FS_RemountAddons`, so the
+only "laziness" available was commenting a line out by hand.
+
+**The measurement first, because the existing note was wrong.** `fs_addons.txt` claimed *"ONE map
+out of 1308 is actually served by these two mounts"* — a five-map sample extrapolated to the
+library, and four of those five happened to need nothing. `tools/mapdeps.py` asks every map, out of
+its own texdata string lump (43) and string table (44), resolving each material against the packs
+we mount plus the map's own embedded pakfile (lump 40):
+
+| | maps |
+|---|---|
+| need CS:GO | **62** |
+| need TF2 | **42** |
+| unresolved materials in NEITHER pack (missing content) | 115 |
+| resolve completely | the rest of 1409 |
+
+So it is 104, not 1. The packs really are needed and really are not needed at boot; both are true
+at once, and that is the shape the fix has to have.
+
+**`FS_AutoMountForMap`** (fs.c) reads `data/mapdeps.txt` — `dep <mapname> <spec>` lines the tool
+bakes — and mounts what that map wants, using the same add-only `FS_Addon_Mount` `fs_useaddons`
+uses. Add-only is what makes it safe here: it appends a searchpath at lowest priority and never
+frees one, so it cannot dangle content the way the pre-Patch-26 rebuild did. Lowest priority also
+preserves the ordering `fs_addons.txt` insists on — a CS:GO texture can never outrank the CS:S or
+Momentum one a surf map was built against.
+
+**Called from `SV_Map_f`, not from the menu.** That function is the one funnel every map load goes
+through — the browser, a typed `map`, `changelevel`, `retry`, a savegame — and a mount wired into
+the map browser would have covered only the first of those. It sits after `level` is final and
+immediately before `COM_FlushFSCache`, which is what makes the new searchpath visible to the
+existence check below it.
+
+The file is re-read per map load rather than cached: it is five kilobytes once a map load, and
+caching it would mean a rebuilt index needed a restart to matter. The mount prints at `Con_Printf`
+rather than `Con_DPrintf` — it takes several seconds, and a silent stall during a map load is
+indistinguishable from a hang.
+
+**Verified end to end.** surf_utopia before: 13 unresolved materials, a checkerboard, no automount.
+After: `fs_automount: surf_utopia needs "steam:Team Fortress 2/tf"`, TF2 mounted *during the load
+and not at boot*, **zero** unresolved, fully textured. Control on surf_spectra (no dependency): 6
+archives mounted, no automount line, no unresolved, 9.1s against surf_utopia's 14.7s — the pack
+costs only the map that needs it.
+
+**KNOWN GAP, found by this and not caused by it.** TF2 packs a skybox's four side faces into one
+`<name>side.vtf` and points six per-face `.vmt` files at it; CS:S and HL2 ship six real VTFs.
+`R_LoadSkys` (gl_shader.c) probes face *textures* by filename and never reads a VMT, so a TF2 sky
+is still missing after TF2 is mounted — surf_utopia loads fully textured and skyless. Bounded to
+the sky, and to the 42 TF2 maps.
+
+---
+
+## Patch 176 — finding a standable plane is not the same as landing on it
+
+**Files:** `engine/common/pmove.h` (append: `fixslopes`, `fixedges`), `engine/common/pm_source.c`,
+`engine/server/sv_phys.c`, `engine/server/sv_main.c`, `engine/client/cl_main.c`.
+Header change, so this was a **`-Full`** rebuild and a dual deploy.
+
+Stage 2 of Build 16. Ports Momentum's `sv_slope_fix` and `sv_edge_fix` from
+`mom_gamemovement.cpp:1750-1864` as `pm_fixslopes` and `pm_fixedges`, both default 1.
+
+### What was wrong
+
+`PMSrc_CategorizePosition` grounded the player the instant the trace under them returned a plane
+with `normal[2] >= 0.7`. That is stock Source, and it is faithful, and it is the single largest
+source of surf RNG in the game: **whether you land on a ramp or keep riding it was decided by where
+inside `pm_groundtracedist`'s 2-unit band the tick boundary happened to fall.** Nothing the player
+did entered into it. That is the mechanism behind "sometimes I make that jump and sometimes I
+don't" — the same input, twice, with two different outcomes.
+
+Momentum decides it by simulating one tick forward instead, which turns the coin flip into a rule.
+
+### The slope fix (`pm_fixslopes`)
+
+One comparison covers both of Momentum's slope cvars. Clip next tick's velocity against the plane
+you are about to land on, and:
+
+* **it gains 2D speed** — downhill. The collision converts your fall into forward motion, so keep
+  it. That is `mom_mv_fix_downhill_slopes`, "always collide and gain horizontal speed".
+* **it would still be throwing you up at over 140 u/s** — uphill. That is a ramp you are riding,
+  not a floor you landed on, so decline the landing entirely and keep the speed stock Source would
+  have taken off you. That is `mom_mv_fix_uphill_slopes`, "land instead of colliding if
+  beneficial".
+
+Both halves fire on the same vector, which is the point: *the collision you would lose speed to is
+the one that was never a landing.*
+
+### The edge fix (`pm_fixedges`)
+
+Three traces — the fall, the clip-and-slide, then a ground test under where that ended up. No
+ground means you were about to land on a lip and drop straight off it, so stay airborne instead.
+This removes the RNG in **both** directions: a deliberate edgebug becomes repeatable, and an
+accidental one stops happening. Skipped while the player holds jump with `pm_autobunny` on, since
+they have already said they do not want to be grounded (`cpp:1761`).
+
+The traces cost nothing in the common case — the whole block runs only on the airborne→grounded
+transition, so walking, standing and prestrafe never reach it.
+
+### Three decisions worth recording
+
+**We ported the `sv_rngfix_enable == 0` arm (`cpp:1847`), not the other one.** The rngfix arm at
+`cpp:1812` skips the 140 test entirely on any mode that allows bhop — which for us would mean
+`pm_autobunny` silently disabling half the fix. rngfix ships **off** in this tree, so that arm is
+also the less exercised of the two.
+
+**The 140 test is bound to `pm_fixslopes`, where Momentum leaves it unconditional.** Deliberate.
+These cvars exist so a regression can be bisected against the build before them, and
+`pm_fixslopes 0 pm_fixedges 0` has to *be* that build — stock Source, ground on the first standable
+plane — or it is not a bisection. The Momentum-faithful setting is the default.
+
+**`cpp:1774`'s `GetInteraction(0)` branch was dropped.** It reuses the collision the player already
+recorded this tick when the ground trace comes back flush. We keep no per-tick collision record,
+and adding one for a single fallback would be a large change; the reference's own third branch
+(`cpp:1783`, `pmFall = pm`) is what *it* uses when that record is absent, so that is what we use
+always.
+
+### `DidHit` is not `fraction < 1`
+
+Source's `CGameTrace::DidHit()` is `fraction < 1 || allsolid || startsolid`. A trace that begins
+inside a brush reports fraction 1 and has certainly hit something. That distinction is invisible
+everywhere else in `pm_source.c` and load-bearing here, so it is now a named function,
+`PMSrc_TraceDidHit`, with its own selftest cases rather than an inline comparison.
+
+### Verified
+
+`pm_selftest` cannot call `CategorizePosition` — it traces, and the selftest runs with no map. So
+the rule was factored into two **pure** functions, `PMSrc_NextTickVelocity` and
+`PMSrc_SlopeLandingGains`, and those are what get pinned; what is left in `CategorizePosition` is
+three trace calls and an `if`. Fourteen new cases, all hand-derived rather than recorded from a run,
+so a change in `ClipVelocity` fails them instead of quietly updating them:
+
+| case | measured |
+|---|---|
+| downhill: gains 2d speed, converts fall to forward | **240.00** from 0 |
+| downhill: lands (z <= 140) | **-180.00** |
+| uphill: loses 2d speed, would be robbed of | **408.00** of 1000 |
+| uphill: declines the landing (z > 140) | yes |
+| **flat ground: no gain, so nothing is adopted** | **300.00 unchanged** |
+| flat ground: lands | z **0.00** |
+| NextTickVelocity: half a tick of gravity / entgravity 0 means 1 / scales | -6 / -6 / -3 |
+| DidHit: clean miss / startsolid at fraction 1 / ordinary impact | 0 / 1 / 1 |
+
+The flat-ground case is the one that matters most: it proves an ordinary landing is *exactly* what
+it was, and that the fix cannot hand out free speed on level ground.
+
+In-game on surf_666, the landing round-trip was proven with the Patch 172 `jump z:` line, which
+fires only when the player is **grounded** — so a jump line appearing at all proves the new code
+grounded them. Five jumps, then five more in each of the four cvar combinations: every group
+produced its lines, and the resting height is **15360.4023 in all four**, identical to the digit.
+Landings on flat ground are untouched by this patch, as the selftest says they must be.
+
+`pm_selftest` **all checks passed**, `zone_selftest` **22/22**, three progs at **0 warnings**, both
+cvars boot `(default)`, publish to serverinfo, and the Patch 170 lock refuses and restores each with
+cheats off. quakers: `pm_physicsmode "0"`, so both are inert there; `sv_gravity 500` accepted
+freely, Box3D 8 workers, every `BAD=0`, hulls 72/36/24, sqlite ready.
+
+---
+
+## Patch 177 — a movement trace that starts inside the ramp is not an error, it is Tuesday
+
+`engine/common/pm_source.c`, `engine/common/pmove.h`, `engine/server/sv_phys.c`,
+`engine/server/sv_main.c`, `engine/client/cl_main.c`.
+
+New: **`pm_fixrampbugs`** (default 1) and **`pm_rampretrace`** (default 0.2). Momentum Mod's
+`sv_ramp_fix` and `sv_ramp_initial_retrace_length`, ported from
+`mom_gamemovement.cpp:2393-2700` and `:109-144`.
+
+### What was wrong
+
+`PMSrc_TryPlayerMove` was stock Source, and stock Source has exactly one answer for a movement
+trace that comes back useless: stop. `pm.allsolid` zeroed velocity and returned 4; a swept trace
+that reported a clean pass to an endpos that was itself solid zeroed velocity and broke out of the
+loop.
+
+That is defensible for a player walking into a wall. It is not defensible for a surfer, who is a
+32x32x72 box riding a plane at several hundred units a second. One tick of clipping leaves you a
+fraction of a unit *inside* the face often enough that it is the normal case, not the error case.
+So "stop" is the dead stop on a seam, and the variant where the engine's own push-out happens to
+point the wrong way is the launch. Neither is anything the player did.
+
+### The three things the loop now carries
+
+* **`fixed_origin`**, a working origin separate from `pmove.origin`. Recovery nudges `fixed_origin`
+  and re-traces from it; `pmove.origin` is only ever assigned from a trace that actually succeeded.
+  A recovery that finds nothing therefore costs a bump and cannot move the player — which is the
+  property that makes this safe to ship on by default.
+* **`valid_plane` / `has_valid_plane`**, the plane to push away from, looked for in three places in
+  descending order of trust: this trace's own normal, then the planes already accumulated this tick
+  walked *backwards* (newest first, because on a seam the plane that stopped you is usually the one
+  you were riding a moment ago), then `PMSrc_FindRecoveryPlane`.
+* **`stuck_on_ramp`**, which turns the next pass of the loop into a recovery pass.
+
+### `PMSrc_FindRecoveryPlane` — the 27-direction search
+
+Trace the intended move 27 times, once per combination of `{-o, 0, +o}` on each axis, with the hull
+grown to match; sum every normal that comes back sane and normalise the sum. `o` is
+`(bumpcount * 2) * pm_rampretrace`, so each failed attempt searches wider than the last.
+
+The average is deliberately not "the nearest surface". In the case this exists for, the player is
+wedged and several faces are touching at once, and the direction that gets them out is the one all
+of them agree on.
+
+Momentum's asymmetric hull growth (`cpp:2494-2509` — half the offset on the trailing face, a quarter
+on the leading one) is copied as-is. It looks arbitrary because it is; the only property that
+matters is that the probe box is bigger than the player, so it can find a face the player's own hull
+is already inside of.
+
+**It rejects any probe that is itself `startsolid`**, which gives the fix a useful bound: a player
+entombed deep inside a brush has no reachable face at any offset the search reaches, so nothing is
+found and nobody is teleported. Verified below. This is a ramp-seam recovery, not a noclip.
+
+### `PMSrc_IsValidMovementTrace`
+
+Ported verbatim from `cpp:109` minus one dead test — `cpp:125-129` is the fraction-is-zero test
+ANDed with an extra condition, so it can only be reached after the earlier one has already returned.
+Dropped rather than copied, because a check that cannot fire reads like a check that can.
+
+The last of its four tests is the interesting one: a swept trace can report a clean pass to an
+endpos that is inside geometry, which is a precision artefact of triangle-soup (displacement)
+tracing. So it re-tests the destination with an **unswept** hull, which cannot lie about it.
+
+### Two gates that read backwards until you see what they are for
+
+* **The unswept re-test now only runs on the first bump** (or on the ground, or with the fix off),
+  `cpp:2645`. On later bumps `PMSrc_IsValidMovementTrace` has already run and already done that
+  exact test, so the old unconditional version would be the second of two identical traces. On the
+  first bump its failure is now routed into `stuck_on_ramp` instead of into a dead stop.
+* **`pm.allsolid` no longer returns 4 while the fix is on**, `cpp:2627`. Being inside a solid is the
+  state the recovery path exists to get out of; returning early is conceding it.
+
+### `allFraction` moved inside the `fraction > 0` block  (cpp:2688)
+
+It used to be added at the trace. That meant a bump spent entirely on a *refused* move still looked
+like progress to the `allFraction == 0` guard at the bottom of the function — so a player who never
+moved at all kept their velocity, and on a ramp that velocity accumulates every tick without bound.
+Momentum's own comment at `cpp:2906` is about exactly this: *"if a client is triggering this, and if
+they are on a surf ramp they will stand still but gain velocity that can build up for ever."*
+
+### The vertical rampbug  (cpp:2856)
+
+Two clip planes that are the **same plane** is not a crease, it is a surfer who has sunk into the
+ramp: the face did not push them out far enough, the next trace hits it again, and the loop believes
+it is wedged between two surfaces. The cross product of a vector with itself is zero, so the crease
+maths sets velocity to nothing and the ride ends in a dead stop, mid-ramp, for no visible reason.
+
+Now it pushes away from the face instead, `VectorMA(original_velocity, 20, planes[0])` — and **only
+in x/y**. z belongs to gravity; adding to it here would be a free boost proportional to how badly
+the player happened to clip.
+
+### Three decisions
+
+**The degenerate-crease push is bound to `pm_fixrampbugs`, where Momentum applies it
+unconditionally.** Same reason as Patch 176's 140 test: `pm_fixrampbugs 0` has to be *exactly* the
+pre-patch build, or the cvar is not a bisection and is not worth having.
+
+**`pm_rampretrace` is clamped to 4 at the top; Momentum has no ceiling.** It arrives over serverinfo
+and is therefore whatever the other end sent, and it is a distance the player is teleported by, once
+per bump. At 4 with a 16-bump budget that is already 64 units of free movement; past that a hostile
+or broken server could walk a client through a wall using nothing but a movevar.
+
+**This needs Patch 172's bump count.** Recovery spends bumps re-tracing, and at Source's 4 there is
+not enough budget left to both recover and finish the move — which is why Momentum ships
+`sv_ramp_bumpcount 8`. Stage 1 raising it to 8 was the first half of this patch.
+
+### Verification
+
+`pm_selftest` **all checks passed**, with 18 new cases. The move loop traces, so it cannot run
+headless; what is pinned is every decision the loop makes *about* a trace, which is where the bugs
+would live.
+
+| new selftest case | measured |
+|---|---|
+| rampretrace: 0.2 through / 0 falls back / negative falls back / clamps to 4 | 0.2 / 0.2 / 0.2 / 4.0 |
+| PlaneIsSane: floor, ramp, empty | all sane — **zero is not deformed** |
+| PlaneIsSane: 1.5 / -1.0001 | both refused |
+| VecCloseEnough: identical / 1e-9 apart | same plane |
+| VecCloseEnough: 0.001 apart / a real plane vs empty | different |
+| ValidTrace: allsolid / startsolid / fraction 0 / deformed plane | all four refused |
+
+`ValidTrace`'s fifth test traces, so only its four early refusals are reachable here. They are also
+the four that matter — each is a distinct way a ramp trace comes back useless.
+
+`zone_selftest` **all 22 checks passed**. `pm_source.c`, `sv_phys.c` and `cl_main.c` compile at zero
+warnings; `sv_main.c`'s only diagnostic is the pre-existing unused `slots` in `SVC_Status`.
+
+Both cvars boot `(default)`, publish to serverinfo, and the Patch 170 lock refuses each with cheats
+off (*"is part of the locked movement ruleset - restored to..."*), accepts both under `sv_cheats 1`,
+and reports *"movement lock: 2 cvars restored to the ruleset default"* on the way back out.
+
+**The rewrite is behaviour-preserving on ordinary movement**, which is the real regression risk of
+replacing a bump loop. Same map, same coordinates, same timings, `pm_fixrampbugs` 1 vs 0:
+
+| measurement | fix on | fix off |
+|---|---|---|
+| clean drop from 40 above, resting origin z | **15360.3** | **15360.3** |
+| `jump z:` correction and destination | **15360.3105 => 15361.5312** | **15360.3105 => 15361.5312** |
+| 8-second walk, final x from -15496 | **-13398.2** | **-13398.2** |
+
+The jump line is Patch 172's, and it only prints when the player is grounded — so its presence is
+itself proof that landings still happen. Those are the same numbers Patch 176 measured.
+
+**The bound above is real, and was measured rather than asserted.** `setpos` the player 20 and 40
+units inside the start block while holding `+forward`, both arms: nobody moves, identically. The
+27-direction search rejects every probe that is `startsolid`, and at that depth every probe is.
+
+quakers: `pm_physicsmode "0" (default)`, so both new cvars are inert there; `pm_lockmovement "0"`,
+`sv_gravity 500` accepted freely, `sv_maxspeed "320" (default)`, Box3D 8 workers, every `BAD=0`,
+hulls 72/36/24, sqlite ready, server spawned.
+
+**What is not verified here is the thing the patch is for.** A ramp seam that used to dead-stop is
+not reachable from a console — surf_666's start area is 2000 units of flat ground in the direction
+scripted input can reach, and manufacturing the geometry is not possible from a cfg. `pm_fixrampbugs
+0` is exactly the previous build, so it is a one-command A/B on a real run.
+
+---
+
+## Patch 178 — falling into the void and flying out of it want opposite things
+
+`engine/client/renderer.c`, `engine/client/render.h`, `engine/client/r_surf.c`,
+`engine/client/cl_ents.c`, `engine/gl/gl_alias.c`.
+
+New: **`r_voidvis`** (default 1). When the view is outside the world **and** the player is
+noclipping, draw the whole world and drop the entities.
+
+### What Patch 138 does, and why this is not a revert of it
+
+Step outside the map and there is no visibility data to work with. `r_viewcluster` goes to -1,
+`VBSP_PrepareFrame` bails (`mod_vbsp.c:4466`) and the whole-model surface loop runs with **no PVS
+test and no frustum test** — 35,302 faces and 653 static props on surf_666, against the 1.6% an
+average cluster sees. Patch 138 keeps the last cluster that resolved instead, so falling into the
+void during a run costs you nothing.
+
+That is the right answer for falling in. It is the wrong answer for flying out, which is a different
+gesture with the opposite need: you noclip into the void to **look at the map** and pick somewhere to
+go, and the map is exactly what Patch 138 hides. So this is not "Patch 138 was wrong" — it is the
+same question with a second answer, selected by what the player is actually doing.
+
+`r_voidvis 0` is Patch 138 byte for byte, which is the same bisection rule Patches 176 and 177
+follow.
+
+### The gate is two tests and both are load-bearing
+
+```c
+if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping())
+    r_voidview = true;
+else if (r_viewcluster == -1)
+    ... Patch 138, unchanged ...
+```
+
+Drop the cluster test and it fires while noclipping **inside** the map, where vis is working and
+there is nothing to fix. Drop the noclip test and it fires on the ordinary fall into the void, which
+is the exact case Patch 138 exists to keep playable.
+
+**Noclip is read from the pmove type**, not from a cvar and not from a QC stat.
+`SV_PMTypeForClient` maps `MOVETYPE_NOCLIP` to `PM_SPECTATOR` (or `PM_OLD_SPECTATOR` for a client
+without the newer extensions, `sv_user.c:7397-7404`) and `cl_pred.c` copies it into
+`playerview->pmovetype` every frame — so it is predicted, local, already there, and right on a remote
+server as well as a listen one. The honest limitation is that a real spectator is the same pm_type;
+that is arguably the same want, and this build has no spectators.
+
+`r_voidview` is cleared for **every** view including the recursive ones, before anything can set it.
+A skyroom supplies its own pvsorigin which may legitimately be in solid, it renders after the main
+view has already set the flag, and a stale `true` would silently drop every entity out of the
+reflection.
+
+### Where the entities actually go
+
+Two gates, both already reading `r_drawentities`:
+
+* `CL_LinkStaticEntities` (`cl_ents.c:4569`) — the 653 props, in both modes. This is where the cost
+  is: a static prop is a per-instance-lit model, and the world is one batched draw.
+* `BE_GenModelBatches` (`gl_alias.c:3268`) — the single choke point every visedict passes through.
+  Mode 2 returns before the loop; mode 1 skips everything that is not `mod_brush`.
+
+**Mode 1 keeps brush entities on purpose.** A ramp built as a `func_*` is a thing you might be
+noclipping towards, and losing it would defeat the feature on exactly the maps that need it. One
+test before the switch rather than a `continue` per arm, because the set is "not a bmodel" and
+spelling that as four cases is four places for a fifth model type to be forgotten.
+
+The world is generated above both of these and is never touched.
+
+### The frustum, which the measurement said was not optional
+
+The first cut left `r_viewcluster` at -1 and stopped there — the state Patch 138 describes, where
+VBSP's `PrepareFrame` bails and the whole model is drawn with no PVS test **and no frustum test**.
+`timerefresh 0 128` on surf_666 from 60,000 units up, entities already suppressed:
+
+| `r_voidvis` | fps |
+|---|---|
+| 0 — Patch 138 | **3785** |
+| 1 — full world, models dropped | **27.6** |
+| 2 — full world, all entities dropped | **27.4** |
+
+Two things fall out of that table and both change the patch.
+
+**27 fps is the complaint this feature exists to avoid.** Shipping it would have delivered the
+request and the objection to it in the same build.
+
+**Mode 2 buys nothing over mode 1** — 27.4 against 27.6 is noise. So the entity suppression, which
+is the half that was asked for, is not where the cost is: it is the world drawn without a frustum,
+i.e. everything behind the camera, every frame.
+
+So `refdef->forcevis` / `forcedvis` (`mod_vbsp.c:4274`) is used after all — the same mechanism the
+portal and mirror code already drives with a real cluster's PVS. An all-bits-set buffer sized from
+the world's own `pvsbytes` puts `VBSP_MarkLeaves` back on the `VBSP_RecursiveWorldNode` path, so the
+frustum and area tests apply exactly as they do indoors and the only test lost is the one that has no
+answer out there. Area culling is already a no-op in the void for a reason the loader prints itself:
+`area 0 of 14: 14 area(s) reachable (null area -- everything sent)`.
+
+`forcevis` is cleared for the primary view at the top of `Surf_SetupFrame` and set only there.
+The portal path sets it for the **recursive** views it renders and clears it itself, so the two never
+contend; and clearing it unconditionally would take a mirror's own vis away from it mid-frame.
+
+**The entity gates stay**, even though the table says they are not the expensive half here. They cost
+one branch, they are the difference on a map whose props *are* the frame rate, and mode 1 vs mode 2
+remains a real choice for a map built out of brush entities. What the table actually retires is the
+assumption that dropping entities was going to be sufficient on its own.
+
+### The same vantage, after
+
+Repeated on the finished binary at the same 60,000 units, five samples per setting, interleaved
+`0,1,2 / 0,1,2 / …` rather than run in blocks, and read as the **best** sample per setting because
+every source of noise here can only add time:
+
+| `r_voidvis` | before | after |
+|---|---|---|
+| 0 — Patch 138 | 3785 | **4045** |
+| 1 — full world, models dropped | 27.6 | **1303** |
+| 2 — full world, all entities dropped | 27.4 | **1171** |
+
+**47×**, and mode 0 landing on 4045 against the old 3785 is the check that the vantage really is the
+same one: that arm is byte-identical code, so a large move there would have meant the two tables were
+measuring different scenes. 1303 fps is not "playable in the void" — it is faster than this machine
+renders the map from inside it.
+
+Looking *across* the map from 17,000 units — the real gesture, more of the world inside the frustum —
+reads 9645 / 692 / 699. Mode 2's 1% over mode 1 costs you every brush entity, which on surf_666
+includes the zone markers; **mode 1 is the default and mode 2 is not worth switching to** on a map
+like this one. It stays because "a map built out of brush entities" is a real map and one branch is a
+cheap thing to keep.
+
+### Both halves of the gate, proven — and the four runs it took to prove them
+
+| state | cluster | pmovetype | gate |
+|---|---|---|---|
+| in the map, walking | 8243 | 0 | off |
+| in the map, **noclipping** | 8243 | 2 | **off** — the cluster half holds it |
+| in the void, **not** noclipping | -1 | 0 | **off** — the noclip half holds it |
+| in the void, noclipping | -1 | 2 | **VOID VIEW** |
+
+Measured either side of that: inside the map the three settings read 6549 / 6696 / 6618 walking and
+6677 / 6875 / 7011 noclipping — flat within noise, in both directions, which is what "inert unless
+both halves are true" has to look like.
+
+**Getting there cost four benchmark runs to a bug that was never in the engine.** Every one of them
+"controlled" by teleporting 40 units above the spawn and calling that inside the map. That point
+reads **cluster -1** — it is outside the world — so the control was a second void measurement wearing
+a control's label, and it duly showed `r_voidvis` doing something where it must do nothing. Two more
+runs went into the theory that the gate was broken.
+
+Hence `Surf_VoidVisReport` in `r_surf.c`: every input to the decision — cluster, pmovetype, the
+resolved noclip answer, the cvar, and which way it went — printed at `developer 1` and **only when
+one of them changes**. Change-triggered because it is called once per view and an unconditional print
+would be five hundred lines a second and the slowest thing in the frame. A benchmark log now carries
+the gate's own reasoning next to the numbers it produced, so "was the player where the config thought"
+is a line in the log rather than an afternoon.
+
+The general lesson, which is not specific to this patch: **a control has to be verified to be in the
+state it claims**, or it is just a second measurement of the thing under test. `timerefresh` also
+turned out to spread 14× across identical work on a single sample — 404, 5646 and 441 fps for three
+renders of the same scene — so single-sample benchmarking in this engine says nothing at all.
+
+
+## Patch 180 — the filesystem name hash is dead for most of every map load
+
+**The report:** *"when you change from utopia to tensor2, the load time is awful."* Exactly right,
+and exactly the wrong place to have been looking. Patches 26 and 175 are about how much is mounted.
+This is about the fact that after the first map of a session, none of it is indexed.
+
+`com_fschanged` is assigned `false` in exactly ONE place in the engine — inside `FS_RebuildFSHash`
+(`fs.c`), reachable only from `COM_FlushFSCache`. On the map path that runs at `sv_ccmds.c`, i.e.
+BEFORE `SV_SpawnServer`. Then:
+
+```
+sv_ccmds.c   FS_AutoMountForMap(level)      // P175
+sv_ccmds.c   COM_FlushFSCache(false,true)   // rebuild; com_fschanged := FALSE
+      ...
+sv_init.c    COM_FlushTempoaryPacks()       // drops the PREVIOUS map's embedded pakfile
+                                            //   -> FS_FlushFSHashFull() -> com_fschanged := TRUE
+sv_init.c    Mod_ForName(sv.modelname)      // <-- the world, and every .vmt/.vtf/.mdl with it
+```
+
+Nothing rebuilds the hash between those last two lines. So the whole asset-loading phase of the map
+runs with `com_fschanged` true, which disables the hashed lookup in `FS_FLocateFile` and drops every
+single lookup into the linear walk — where each archive `strcmp`s its entire file list (`fs_vpk.c`,
+`fs_zip.c`). Cost per lookup becomes the sum of every file in every mounted archive.
+
+`COM_FlushTempoaryPacks` only sets the flag if it actually dropped a temporary pack, i.e. only if the
+PREVIOUS map had an embedded pakfile — which is nearly every Source map. **That is why the first map
+of a session is fine and every map after it crawls.**
+
+Measured, same binary, same session, surf_utopia then surf_tensor2:
+
+| | time | lookups that missed the hash | hash |
+|---|---|---|---|
+| `fs_maploadhash 0`, utopia (cold) | 1503 ms | 458 | valid |
+| `fs_maploadhash 0`, tensor2 (warm) | **9551 ms** | **142,646** | STALE |
+| `fs_maploadhash 1`, utopia (cold) | 1555 ms | 438 | valid |
+| `fs_maploadhash 1`, tensor2 (warm) | **4337 ms** | **4,412** | valid |
+
+**2.2× on the warm map, 32× fewer hash misses, and nothing measurable on the cold one.**
+
+The fix is one call to a new `FS_RehashIfStale` immediately after `COM_FlushTempoaryPacks`.
+Deliberately not `COM_FlushFSCache`, which polls every searchpath for external changes first and
+forces a full rebuild when any directory answers "changed" — measured at +1.5 s on a cold map whose
+hash was already valid. We are not looking for external edits; we are repairing an invalidation
+caused two lines earlier.
+
+It also closes a latent crash. `FS_FlushFSHashFull` only sets a flag, so the buckets
+`COM_FlushTempoaryPacks` just freed stay linked in `filesystemhash`; the next incremental `BuildHash`
+— the map's own pakfile, or an `fs_automount` — walks them through `FS_AddFileHashUnsafe`. That is
+the Patch 27 crash signature and it is reachable today. A real rebuild calls `FS_FlushFSHashReally`,
+which nulls them.
+
+`fs_loadstats` (default 1) prints one line per map load: time, lookups that missed the hash, the
+searchpath and file counts, and whether the hash was valid. `fs_finds` already counted the thing that
+mattered and had never been printed outside a `Con_DPrintf`.
+
+**Files:** `engine/common/fs.c`, `engine/common/common.h`, `engine/server/sv_init.c`.
+
+
+## Patch 181 — three separate reasons a texture goes missing, none of them the one we blamed
+
+**The reports:** *"Tensor2 still has missing textures"*, and *"TF2 skyboxes still don't load even with
+TF2 mounted — can you fix this?"* Chasing the first found two engine bugs; the second turned out to
+be misdiagnosed in our own notes.
+
+### (a) The VPK reader could not read 14% of CS:GO's pak
+
+`surf_tensor2` reported two unresolved materials *only once CS:GO was mounted for it*, and the message
+told the player to mount CS:GO. Advice that appears when you take it cannot be right.
+
+`concrete/tunnel_concretewall_01b.vmt` is in `pak01_dir.vpk` with `archiveindex = 0x7fff`,
+`archivesize = 0`, `preloadsize = 433` — the whole file lives in its preload bytes inside the
+directory file. `FSVPK_OpenVFS` treated `0x7fff` as a fragment index, found it out of range, and
+returned NULL. Meanwhile `FSVPK_FLocate` happily answers `FF_FOUND` with the correct length, so
+`flocate` prints *"File is 433 bytes … inside pak01_dir.vpk"* for a file the engine cannot open.
+
+**18,657 of CS:GO's 133,676 pak01 entries are stored this way.** `0x7fff` is Valve's sentinel for "the
+payload is in this dir file", not a fragment number. `vpk_t` now records where its own data section
+starts (header + tree) and `FSVPK_OpenVFS` handles the sentinel.
+
+### (b) "Did not resolve" conflated two different faults
+
+`VMT_ReadVMT` ends `return !!line`, so it returns false both for "no such file" and for "found it, the
+parse gave up". `Shader_LoadVMT` counted both as missing and printed *"This map wants an asset pack
+that is not mounted"*. `vmtstate_t` now records whether the FILE turned up; a found-but-unparsed
+material is counted separately and reported quietly, because its fix is ours and not the player's.
+
+### (c) The sky — two bugs, and our note named a function that does not exist
+
+`ftesurf/fs_addons.txt` said the loader was `R_LoadSkys` — which has no definition anywhere, only a
+dead declaration in `render.h` — and that TF2 "packs the four side faces into ONE `<name>side.vtf`".
+Both wrong. The loader is `Shader_ParseSkySides`, and `sky_dustbowl_01side.vtf` is an ordinary
+512×256 face that four `.vmt` files *alias*; there is nothing packed and nothing to unpack.
+
+`Shader_ParseSkySides` loads faces through `R_LoadHiResTexture`, an IMAGE load whose extension list
+cannot contain `.vmt`. So:
+
+1. **Aliased faces.** Four of `sky_dustbowl_01`'s six faces have no `.vtf` at the probed name at all.
+   They became `r_blackimage`, and since `R_SetSky` keeps a sky if even one face loaded, the result
+   was half a sky rather than a clean failure. Measured across 1309 BSPs (entity lump plus each map's
+   own pakfile plus all five packs): 1273 maps declare a skyname, 1200 have all six VTFs — 843 of
+   those from the map's OWN embedded pak — **58 need the material indirection**, and 15 have a sky
+   that exists nowhere.
+2. **Half-height faces.** Source side faces are commonly 2:1 with
+   `"$basetexturetransform" "center 0 0 scale 1 2 …"`, which puts the image in the top half of the
+   square face and lets CLAMPT smear the last row below it. We discarded the key, so those skies drew
+   at twice their intended height. **This is not a TF2 quirk**: 148 of TF2's 211 skybox materials
+   carry it, and so do 16 of CS:S's 138 loose ones — and exactly those 16 have 2:1 textures, which is
+   as close to proof of intent as this gets.
+
+`Shader_ParseSkySides` now looks for the face's `.vmt` first, takes the real texture stem from
+`$hdrcompressedTexture` / `$hdrbasetexture` / `$basetexture`, and records the transform's T scale per
+face in `skydome_t::farbox_tscale`. `GL_DrawSkyBox` applies it to the texcoords after `GL_MakeSkyVec`
+— which already emits `tc[1] = 1-t`, so t=0 is the top of the face, the same origin Source's transform
+assumes. Faces are already loaded `IF_CLAMP`, so sampling past 1.0 needs nothing further. The VMT key
+scrape is deliberately self-contained: the engine must not need a plugin to draw a sky.
+
+Verified by the loader's own report, which now prints once per sky and only when there is something to
+say:
+
+```
+sky "sky_dustbowl_01": rt,bk,lf,ft,up,dn = mmmmmm (m=material, f=filename, X=MISSING), t-scale 2 2 2 2 1 2
+sky "sky_day01_01":    rt,bk,lf,ft,up,dn = mmmmmm  … t-scale 2 2 2 2 1 1
+```
+
+All six faces from the material, none missing, and the per-face scale matching the VMTs exactly —
+including `up`, whose transform line Valve leaves commented out, which is why the comment stripping in
+`Shader_SkyVMT_Value` is load-bearing rather than tidiness. The old miss message printed only the last
+of 24 candidate paths, which is the least informative one and is how this stayed misdiagnosed; it now
+names the sky and the face.
+
+**Not yet confirmed by eye.** Every map tried has an enclosed start box, so the evidence above is the
+loader's own account of what it loaded, not a screenshot of a sky.
+
+**Files:** `plugins/hl2/fs_vpk.c`, `plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`,
+`engine/gl/gl_shader.c`, `engine/gl/gl_warp.c`, `engine/gl/shader.h`.
+
+## Patch 182 — a Steam game on the second drive was invisible on Windows
+
+**The constraint that found this:** *"this needs to work for any random player using my game."*
+
+Every `steam:Game/dir` line in `fs_addons.txt` and every `dep` line in `data/mapdeps.txt` becomes an
+absolute path through `FS_Addon_ResolveEx` → `Sys_SteamHasFile` → `Sys_SteamDirsWithFile`. On Windows
+that last function probed exactly one location:
+
+```
+<HKCU\SOFTWARE\Valve\Steam\SteamPath>/SteamApps/common/<dir>
+```
+
+A player who keeps Steam on `C:` and their games on `D:` — the ordinary case the moment one drive
+fills up — got `steam game "Team Fortress 2/tf" not found/installed` for a game that is plainly
+installed. `fs_automount` could then never mount the pack for a map whose missing textures it had
+correctly diagnosed, and the map came up untextured with a banner blaming a pack the player owns.
+
+The code for the multi-library case already existed and was already right. `Sys_SteamParseLibraries`
+handles both the pre-2021 numeric-key `libraryfolders.vdf` and the newer nested `"path"` form. It was
+only ever *called* from inside the unix arm of the platform `#if` chain. Nothing in it is
+unix-specific — `COM_ParseCString`, `Q_snprintfz`, `strtoul`, `FS_MallocFile`. **Only the existence
+probe was:** `access(path, R_OK)`.
+
+So the probe is now portable and both platforms share one parser. It answers two different questions
+depending on `fname`:
+
+| `fname` | question | how |
+|---|---|---|
+| non-empty | is `<basepath>/<fname>` a readable file? | `VFSOS_Open` |
+| empty | does the **gamedir itself** exist? | cancel-on-first-entry `Sys_EnumerateFiles` |
+
+The second is the one every addon spec asks, and it is why the probe could not simply stay `VFSOS_Open`:
+a directory cannot be opened as a file on Windows. That is the same trick `FS_Addon_MountHD` and the
+`_downloads` sibling probe already use.
+
+Windows paths need one more thing. `libraryfolders.vdf` stores `"D:\\SteamLibrary"`; `COM_ParseCString`
+already collapses the escaped pair to one backslash, so the probe normalises to forward slashes and
+strips trailing separators — otherwise `"D:\\"` yields a doubled slash. The Win32 branch now falls back
+to `<SteamPath>/steamapps/libraryfolders.vdf` and then `<SteamPath>/config/libraryfolders.vdf`; Steam
+keeps both current depending on its vintage, so probing both beats guessing.
+
+**Verified:** this machine has exactly one Steam library, so the case the patch exists to fix cannot be
+reached here. The parser is covered instead by a standalone harness carrying the function text verbatim
+against synthetic VDFs — second drive in the new nested format, the old numeric format, an escaped
+trailing backslash, unix forward slashes, a game in no library, a garbage file, and a `NULL` file. All
+eight pass. In-engine this is a **non-regression** result only: both `steam:` lines still mount at boot,
+`FS_Addon_MountHD`'s per-line `_hd` probe still fails quietly (that path now runs the new vdf parse
+twice per absent pack, so a leak or crash there would show at boot), and `fs_automount` still resolves
+CS:GO for `surf_tensor2`.
+
+**Consequence in the mod, not the engine.** `ftesurf/fs_addons.txt` mounted Momentum by absolute path,
+with a comment explaining that the `steam:` form could not survive a second library drive. That was
+true, and it made the file wrong on every machine but this one: an absolute path hard-codes a drive
+letter and an install location, so a random player got **no map library at all**. It is now
+`steam:Momentum Mod Playtest/momentum`, and the comment records why the old reason expired.
+
+---
+
+## Patch 183 — the pack the last map needed is not free to keep
+
+Patch 175 mounts a map's asset pack for that map. Nothing ever gave one back. `fs_unload` is not the
+tool: it edits `fs_addons.txt` and does a whole `fs_restart`, an `FS_ReloadPackFilesFlags` that
+unconditionally arms the shader **rescan** — four `COM_EnumerateFiles` wildcard walks across the entire
+index, each a linear `WildCmp` over every entry.
+
+So a session that visited one TF2 map and then one CS:GO map carried both for the rest of the session:
+**22 searchpaths, 356,035 files**, on every subsequent map load, including the maps that need neither.
+
+`FS_Addon_Unmount` is `COM_FlushTempoaryPacks` with a different predicate, and deliberately so — that
+function already unlinks a searchpath, `ClosePath`es it and `Z_Free`s it on *every* map change, under
+exactly these two locks, so the lifetime rules are settled engine behaviour rather than something
+invented here:
+
+- `COM_WorkerLock()` stops the loader threads touching files mid-unlink.
+- Both refcounted archive handlers keep the underlying pack alive while any `vfsfile_t` inside it is
+  open, so `ClosePath` on a pack someone is mid-read of decrements rather than frees.
+- `com_purepaths` is dropped, because the `nextpure` chain would otherwise point at freed memory.
+- `FS_FlushFSHashReally` — **not** `FS_FlushFSHashFull`, which only sets a flag and leaves the freed
+  pack's buckets linked. That is the Patch 27 dangling-bucket path, and using the flag-only form here
+  would have re-created it.
+
+**Matching the family.** One `FS_Addon_Mount(spec)` adds more than one searchpath: the gamedir, every
+sub-package `FS_AddDataFiles` found inside it (`<syspath>/<pak>`), the `<syspath>_downloads` sibling
+with its own sub-packages, and `FS_Addon_MountHD`'s `<syspath>_hd`. So the match is the prefix followed
+by end-of-string, `/`, `\` or `_` — which covers exactly that family and cannot swallow a neighbour
+(`.../tf` must not match `.../tf2`).
+
+**Never the wrong pack.** `FS_AutoMountForMap` now collects the wanted specs first, drops what is no
+longer wanted, then mounts — collection has to come first because a map may name more than one pack.
+`fs_automounted[]` records only packs *this code actually mounted*: if the pack was already there when
+we looked, it belongs to an `fs_addons.txt` line or a manual `fs_load`, and it is never a candidate for
+dropping. `fs_autounmount 0` restores the old keep-everything behaviour.
+
+**Measured**, two repeats per arm, second pair run in reversed order, same binary:
+
+| load | `fs_autounmount 0` | `fs_autounmount 1` |
+|---|---|---|
+| 1. `surf_utopia` cold (mounts TF2) | 1507 / 1478 ms | 1487 / 1481 ms |
+| 2. `surf_tensor2` (wants CS:GO) | 6587 / 6399 ms | **3814 / 3878 ms** |
+| 3. back to `surf_utopia` (remounts TF2) | 5421 / 5256 ms | **2810 / 2926 ms** |
+| session total | 13.3 s | **8.2 s** |
+
+Load 3 is the one that could have gone the other way, and it is worth stating plainly: dropping CS:GO
+and **remounting TF2 from scratch is still 46% faster than keeping both mounted and mounting nothing at
+all.** Carrying a pack is more expensive than re-acquiring it. Searchpaths stay at 17 and the index at
+209–232k files instead of climbing to 22 and 356k.
+
+> **Superseded in part by Patch 184.** The drop pass moved out of `FS_AutoMountForMap`, and
+> the numbers below were re-measured. See "Corrections to Patch 183's entry" in P184.
+
+Against the original complaint — `surf_utopia` → `surf_tensor2` in one session — the three patches
+compound: **22,977 ms → 8,619 ms (P180) → 3,846 ms (P183)**, a 6.0× improvement on the transition the
+report was actually about.
+
+## Patch 184 — four things Patch 183 got wrong, and one it inherited
+
+Patch 183 was put through an adversarial review — five independent lenses, each finding
+verified by a separate agent told to refute it. Ten findings were raised and six were refuted
+with evidence. The four that survived are below. Three are P183's own; one is older than it.
+
+### (a) A mistyped `map` name unmounted the map you were still playing
+
+`FS_AutoMountForMap` runs from `SV_Map_f` at `sv_ccmds.c:1026` — **before** the
+`COM_FCheckExists` extension loop that decides whether the map exists at all. While mounting
+was purely additive that ordering was harmless: a typo just left a spare pack mounted. Once
+P183 gave the same function the power to *drop*, a typo unmounted the packs of the running
+map, and SV_Map_f's `Can't find "maps/…"` early-return never put them back.
+
+The drop pass therefore moved out of `FS_AutoMountForMap` into a new `FS_AutoUnmountStale`,
+called from `SV_SpawnServer` — which is only reached once the load is committed. It still runs
+before the world and its assets load, and before P180's rehash, so the expensive phase still
+sees the smaller index.
+
+**The mount must stay where it is**, because a map can live *inside* the addon being mounted,
+so mounting has to precede the existence check even though dropping must follow it.
+
+### (b) "We mounted it, so we may drop it" is not a stable fact
+
+`FS_Addon_Mount` returns **true** on its dup-skip path. So `fs_load steam:Team Fortress 2/tf`
+on a pack `fs_automount` had already mounted succeeds, appends the line to `fs_addons.txt`, and
+prints *"mounted (low priority) and saved; auto-remounts next launch"* — while our record still
+said the pack was ours to throw away. The next map dropped the game the user had just
+permanently added, contradicting `fs_autounmount`'s own help text.
+
+The drop pass now re-reads `fs_addons.txt` and resolves each line at the moment it is about to
+unmount. Read rather than cached, because the thing that invalidates the cache is exactly the
+thing being guarded against.
+
+`fs_automounted[]` is also cleared in `FS_FreePaths` now: after a rebuild, `FS_RemountAddons`
+has put the `fs_addons.txt` games back, and a surviving record would name a pack that is now a
+permanent mount.
+
+### (c) `fs_load` was silently writing a truncated `fs_addons.txt` — found by a failing test
+
+The regression test for (b) still failed after the fix, and the reason was not in P183 at all.
+`FS_Addon_SaveList` built the new file in a fixed `char out[8192]` with `Q_strncatz`, which
+**truncates silently**. `fs_addons.txt` is mostly explanatory comment, and this one had grown to
+**8372 bytes** — so `fs_load` rewrote it cut off at 8192, losing the tail of the comment block
+*and the very line it was appending*, while reporting success. `fs_unload` had the same shape.
+
+The buffer is now sized from the input: the output can only be the input minus dropped lines
+plus at most one added line, so `insize + strlen(add) + 2` is a hard bound, not an estimate.
+
+Worth saying plainly: **this was latent until Patch 182 made the file longer.** Editing a
+comment turned a silent 8 KB cliff into live data loss, and only an end-to-end test that checked
+the file on disk — rather than the console's report of success — caught it.
+
+### (d) A use-after-free in the deflate64 path, older than any of this
+
+Not ours, but the review found it and it is a crash, so it is fixed here.
+`engine/common/fs_zip.c`, `FSZIP_OpenVFS`:
+
+```c
+Z_Free(vfsz);
+Con_Printf(CON_WARNING"file %s:%s was compressed with deflate64\n", …);
+if (Sys_LockMutex(zip->mutex))
+{
+    VFS_SEEK(vfsz->parent->raw, startpos);   // <- vfsz was freed eight lines up
+    tmp = FSZIP_Deflate64(zip->raw, csize, usize, pf->crc);
+```
+
+`VFS_SEEK` is `((vf)->Seek(vf,pos))`, so that line reads `->parent` out of freed heap, reads
+`->raw` through it, and **calls a function pointer through that** — with a `Con_Printf` in
+between giving the allocator every chance to hand the block to someone else. `vfsz->parent` was
+assigned `zip` at the top of the function, so the intended pointer is the one the very next line
+already uses.
+
+The branch is live in this build, not dead code: the Makefile defines `ZLIB_DEFLATE64` whenever
+`libs-x86_64-w64-mingw32/infback9.h` exists, and the compiled `fs_zip.o` contains the string
+`"was compressed with deflate64"` rather than `"deflate64 not supported"`. It is reached by any
+`.pk3` made with Windows Explorer's *Send to → Compressed (zipped) folder* on a large file, which
+picks method 9. **The seek is load-bearing and must not simply be deleted** —
+`FSZIP_Deflate64` never seeks, it only reads forward from wherever the handle sits — so the fix
+is the pointer, not the line.
+
+### (e) A new `-Wunused-function` warning on four build targets
+
+P182's shared parser was guarded only by `#ifndef NOSTDIO`, but only the Win32 and unix arms
+call it; the bare `#else` fallback (Android, SDL-on-Windows, WinRT, Xbox) has a stub that never
+does. Reproduced by compiling with `-DFTE_SDL`. The guard now matches the two arms that actually
+use it. No `-Werror` anywhere in the tree, so this was noise rather than a break.
+
+---
+
+### Corrections to Patch 183's entry above
+
+Two things in it are now out of date, and the numbers moved:
+
+- The drop pass is **not** in `FS_AutoMountForMap`. It is in `FS_AutoUnmountStale`, called from
+  `SV_SpawnServer`, for reason (a).
+- Because the drop now happens after `SV_Map_f`'s own `COM_FlushFSCache`, that one rebuild walks
+  both packs before the smaller one is established. Re-measured, two runs:
+
+| load | `fs_autounmount 0` | P183 as first written | **P184, shipped** |
+|---|---|---|---|
+| `surf_utopia` cold | 1507 / 1478 ms | 1487 / 1481 ms | 1517 / 1488 ms |
+| `surf_tensor2` | 6587 / 6399 ms | 3814 / 3878 ms | **4101 / 4226 ms** |
+| back to `surf_utopia` | 5421 / 5256 ms | 2810 / 2926 ms | **2929 / 2906 ms** |
+
+So correctness cost about **320 ms** on the tensor2 load and nothing measurable on the return.
+Against keeping both packs the win is still −36% and −45%. The cumulative figure for the
+originally reported transition is therefore **22,977 → 8,619 (P180) → 4,164 ms**, a **5.5×**
+improvement rather than the 6.0× P183's entry claims.
+
+### Verified
+
+- **(a)** load `surf_utopia`, then `map surf_utopa` (typo), then `surf_utopia` again: the typo
+  prints `Can't find`, emits no `dropping` line, and the third load reports the same 17
+  searchpaths with **23** hash misses instead of 442 — TF2 was never dropped and never remounted.
+- **(b)+(c)** `surf_utopia` → `fs_load "steam:Team Fortress 2/tf"` → `bhop_aberrant` (needs no
+  pack): `fs_addons.txt` grows 8372 → 8397 bytes and contains the new line, and aberrant reports
+  **17 searchpaths / 232,278 files** — kept, not dropped. Before the fix it reported 12.
+- **Cycling** — 7 loads alternating TF2 / CS:GO / neither, including two different maps wanting
+  the same pack in a row: clean exit, no errors, no unresolved assets, the shared pack correctly
+  *not* churned between loads 5 and 6, and the searchpath count never exceeding 17 (it reaches 22
+  without the patch) and falling to 12 on the map that needs nothing.
+
+
+## Patch 185 — `retry` has to ask the mod before it tears the world down
+
+`engine/client/cl_main.c`, four lines inside `CL_Retry_f`.
+
+Patch 167 added Source's `retry`: when we are hosting, reload the map; otherwise reconnect. That is
+the surf-practice gesture — reset the doors, the platforms and the button you triggered by accident,
+without leaving the session. What it could not do was keep the player where they were, because by
+the time anything else runs, everything that knew is gone.
+
+`CL_Retry_f` now offers the command to CSQC first and only falls through to `map_restart` if the mod
+declines.
+
+```c
+if (sv.state == ss_active)
+{
+#ifdef CSQC_DAT
+    if (CSQC_ConsoleCommand(-1, "retry"))
+        return;
+#endif
+    Cbuf_AddText("map_restart\n", RESTRICT_LOCAL);
+    return;
+}
+```
+
+### Why the mod cannot reach this command any other way
+
+Three separate mechanisms all fail, and the third is the one that looks like it should work:
+
+* `Cmd_ExecuteString` returns the instant an engine command matches, so the order is **cmd > alias >
+  cvar > CSQC**. An alias named `retry` never runs.
+* A cvar named `retry` never runs either, for the same reason.
+* **`registercommand("retry")` from CSQC is a silent no-op, not a shadow.**
+  `PF_cs_registercommand` is `if (!Cmd_Exists(str)) Cmd_AddCommandD(...)` — it refuses a name that
+  already exists and says nothing about it. A mod that tried this would look correct, compile
+  cleanly, and never be called.
+
+So the offer has to come from the engine side. The idiom is the one `cmd.c` and `console.c` already
+use; `CSQC_ConsoleCommand` returns false when there is no CSQC or no handler, so a mod that does not
+want it — quakers, sharing this tree — is byte-identical.
+
+### Inside the `ss_active` branch, and that is a security boundary not a tidy-up
+
+Offering it to a client of a **remote** server would hand the mod a "the map is about to restart"
+gesture for a map that is not ours to restart, and let it send a server command off the back of it,
+for everyone on that server. The offer only exists where the restart itself is already ours.
+
+### Why the mod needs the callback at all
+
+Because nothing survives `map_restart` in either VM, and the two halves of a run live in different
+ones:
+
+* `SV_SpawnServer` calls `PR_Deinit` — every SSQC global and every edict is destroyed.
+* `CLQW_ParseServerData` calls `CSQC_Shutdown` unconditionally — the CSQC VM, and any strbuf it
+  holds, goes with it.
+
+FTESurf's build 18 uses this to write both halves of the run to disk before the restart: the server
+writes the timer state and the recording, and the client writes its camera sidecar — which it can
+only do from inside this call, because it is the only moment at which that VM is still alive and the
+restart is already certain. `PR_ExecuteProgram` runs QC to completion, so the file is closed before
+this function returns and the `Cbuf` is not pumped until afterwards. **The ordering is not a race:
+there is no interleaving available.**
+
+### Re-entrancy, checked rather than assumed
+
+`CSQC_ConsoleCommand` cannot recurse back into the console from here — QC's only route out is
+`localcmd`, which is `Cbuf_AddText` and therefore deferred. It cannot clobber the caller's argv
+either: QC's `tokenize` uses its own token array, not `cmd_argv`, and `Cmd_ExecLevel` is saved and
+restored around the command function. `CL_Retry_f` returns immediately after.
+
+`retry` on a dedicated server does not exist (`CL_Retry_f` is under `HAVE_CLIENT`), and a remote
+client still gets the `CL_Reconnect_f` fall-through unchanged.
+
+
+## Patch 186 — the runtime asset cache: works, measured, and shipped switched OFF
+
+**Status: incomplete. `fs_assetcache` defaults to 0 and the searchpath it mounts is gated on
+that cvar, so by default this patch changes nothing.** The harvest, the completeness proof and
+the mount-skip all work and are a large measured win. What is wrong is *where the cache is
+mounted*, and that is not a tuning detail — it is the one ordering rule this codebase has been
+careful about since Patch 8. The mechanism is described here because it is sound and the rework
+keeps all of it; only the mount changes.
+
+### What it does
+
+Patch 175 mounts a map's Steam asset pack for the map that needs it; 183/184 give it back when
+the next map does not. What none of them touch is that a **repeat** visit pays the mount again,
+and the mount is a fixed cost: ~1.4s of directory walk and ~14MB of allocation for TF2's
+147,457-entry `pak01_dir.vpk`, whether the map reads six files out of it or six thousand.
+
+Every map measured reads a few hundred. So this copies the ones it actually reads into
+`<gamedir>_cache`, and once it can prove the copy is complete, stops mounting the pack at all.
+
+### Observing beats predicting, and it is also less code
+
+The plan for this step was to re-implement `tools/mapdeps.py`'s dependency walk in C: texdata
+lumps 43/44 → `.vmt` → its twelve texture keys → `patch`/`include` parents → static props from
+the `sprp` game lump → `.mdl`/`.vvd`/`.vtx` → `cdmaterials` → skybox. That is a lot of C, in the
+hl2 plugin, duplicating a Python tool that is already hard to keep correct.
+
+Harvesting **what the map actually opened** is one `if` at the bottom of `FS_FLocateFile` — the
+single funnel every read in the engine already passes through — and it is *strictly more
+accurate*, because it catches what no static walk can predict: a model first referenced mid-run,
+an asset pulled in by a cvar the player changed, the sky VMT indirection Patch 181 added.
+
+The hook fires on a successful **locate**, not a read, so a bare existence probe is harvested
+too. Deliberate: a probe that succeeded is a file the map asked about, and over-harvesting costs
+disk while under-harvesting costs a wrong render.
+
+### The completeness proof
+
+An incomplete cache is worse than no cache — it renders the map with missing textures, which is
+complaint #1 of this whole workstream. So a map is never trusted on one harvest:
+
+| visit | manifest | what happens |
+|---|---|---|
+| 1 | absent | pack mounted. Every file whose **top hit** is inside the pack is copied out. Manifest written `state 0`. |
+| 2 | `state 0` | pack mounted **again**. The cache outranks it, so everything visit 1 caught resolves from the cache and is not harvested. The harvest set therefore holds exactly what visit 1 **missed**. Empty ⇒ complete ⇒ `state 1`. |
+| 3+ | `state 1` | pack not mounted at all. |
+
+**Slow twice, fast forever**, where the plan said "slow once". A deliberate trade: the
+alternative is trusting a single observation whose failure mode is silently missing textures.
+
+Note this proof *depends on the cache outranking the pack*, which is exactly the mount placement
+that turns out to be wrong. The rework replaces it with a set comparison — store visit 1's name
+list in the manifest, and confirm when visit 2's set is a subset. That works at any priority.
+
+### Measured, before it was switched off
+
+`surf_utopia` (TF2) and `surf_monotony` (TF2 **and** CS:GO) alternated with `bhop_aberrant`
+(needs nothing, so the packs are really dropped and really re-mounted each time):
+
+| | mounting the pack | proven, cache only | |
+|---|---|---|---|
+| `surf_utopia` | 2859 ms, 18 paths, 232,252 files | **1730 ms, 13 paths, 84,939 files** | **−39%** |
+| `surf_tensor2` | 4223 ms, 18 paths, 208,768 files | **3006 ms, 13 paths, 85,043 files** | **−29%** |
+| `surf_monotony` | 5585 ms, 23 paths, 356,406 files | **1774 ms, 13 paths, 85,621 files** | **−68%** |
+
+Each pair is the same map, same session, back to back. The mounting column reproduces P184's
+baseline for these transitions to within noise, so the arm is the same arm.
+
+The harvests are small and exactly right:
+
+- `surf_utopia` — **25 files, 6.03 MB**: the six `sky_dustbowl_01` face VMTs and their three HDR
+  VTFs, plus TF2's `concrete/computerwall*`, `concrete/concretewall*`, `glass/glasswindow001a`
+  and two `water/` materials.
+- `surf_tensor2` — **5 files, 1.33 MB**: `concrete/hr_c/hr_concrete_floor_05_dirty` (.vmt+.vtf),
+  `concrete/tunnel_concretewall_01b` (.vmt+.vtf) and the `_01a_height-ssbump.vtf` the latter
+  references. That is the entire CS:GO dependency of the map from complaint #1, and it means
+  tensor2 renders fully textured with CS:GO not mounted.
+- `surf_monotony` — 171 files, 49.05 MB across both packs.
+
+Against a predicted 3.5 MB median, the observed per-map cost is in the right range.
+
+**The sky is the proof.** On a cached `surf_utopia` load the loader reports
+`sky "sky_dustbowl_01": rt,bk,lf,ft,up,dn = mmmmmm ... t-scale 2 2 2 2 1 2` — all six faces
+resolved, identical to the mounted load — at **13 searchpaths with no TF2**. `sky_dustbowl_01`
+exists nowhere but TF2 and, now, the cache. No load in any test reported an unresolved material
+or texture.
+
+Copies were checked, not assumed: every cached `.vtf` carries a valid `VTF\0` header at the
+expected size (including a legitimate 196-byte 4×4 down-face), and the VMTs are intact text.
+
+### Why it is switched off — three faults, one of them a crash
+
+**(a) The mount lands above the `fs_addons.txt` games.** `FS_RemountAddons` is called at the END
+of `FS_ReloadPackFilesFlags` (`fs.c:6019`), after this mount. So the real order is
+
+```
+gamedirs > <gamedir>_downloads > <gamedir>_cache > cstrike > hl2 > momentum > automounted packs
+```
+
+The cache outranks CS:S, HL2 and Momentum — which hold nearly all of this mod's content. That is
+precisely the inversion `fs_addons.txt`'s own comment block exists to forbid, and the code
+comment written next to the mount claims the opposite ("sits BELOW every real gamedir"). It is
+true only if the addon games are not counted as real gamedirs, which is not a defensible reading.
+
+The harvest rule (*only* files whose top hit is inside the pack are cached) makes the inversion
+hard to trigger, but does not close it: a name present in both TF2 and CS:GO, harvested from one,
+is afterwards served from the cache to a map that mounted the other.
+
+**(b) One flat directory cannot hold two packs.** TF2's and CS:GO's copies of the same filename
+land on the same path, last writer wins, with nothing left to tell them apart.
+
+**(c) It crashes on exit, reproducibly, once the cache holds files.** 0xC0000005 with a
+recursive-looking material teardown stack. Isolated by control runs rather than guessed at:
+
+| | result |
+|---|---|
+| cache mounted, directory populated | **crash** (repeated) |
+| cache mounted, directory emptied first (`fs_cache_clear`) | clean |
+| mount compiled out | clean |
+| mount gated off by the cvar, directory left populated | clean |
+
+Not root-caused. It appeared with this mount and only with this mount, and no symbols are
+available (the build is stripped to an external PDB that is not produced, and the tree is one
+uncommitted working copy so there is no prior revision to bisect against).
+
+One measurement in this sequence was invalid and is worth recording: a "safe state" run appeared
+to crash with the cvar at 0, because `fs_assetcache "1"` had been **archived into `ftesurf.cfg`
+by the earlier test runs**. CVAR_ARCHIVE cvars set by a test cfg get written back on quit. The
+re-run with the cfg corrected exits 0.
+
+### The rework, which keeps everything above
+
+Stop having a global cache searchpath at all:
+
+- Namespace the files per pack — `<gamedir>_cache/<pack>/…` — which fixes (b).
+- Mount that directory **only on a cached load**, in the exact slot the pack it replaces would
+  have occupied. Ordering is then unchanged by construction and nothing can ever be shadowed,
+  which fixes (a) — and removes the mount that (c) tracks with.
+- Prove completeness by comparing harvested **name sets** between visits (store visit 1's list in
+  the manifest, confirm when visit 2 ⊆ visit 1) instead of relying on the cache outranking the
+  pack.
+
+### What is in the tree
+
+`fs.c` (the cache, the `FS_FLocateFile` hook, the `FS_GAMECACHE` path case, the mount, the
+`fs_cache_info` / `fs_cache_clear [map]` commands), `fs.h` (`SPF_HARVEST`), `common.h`
+(`FS_GAMECACHE`, `FS_Cache_Tick`), `cl_main.c` (the drain tick in `Host_Frame`). All of it is
+inert with `fs_assetcache 0`, which is the default and what ships.
+
+Threading, since it survives the rework: `FS_Cache_Note` runs on loader threads inside
+`FS_FLocateFile`, which is itself sometimes called with `fs_thread_mutex` held — hence its own
+mutex. It allocates nothing (a 1MB arena and 24,576 slots, sized once on the main thread);
+overflow sets a flag that makes the manifest refuse to claim completeness. Its fast path is two
+loads and a mask, so a map that mounts no pack pays nothing measurable.
+
+## Patch 192 — the void's entity modes were switches that could not be shown to do anything
+
+`r_voidvis` shipped in Patch 178 with three settings. 0 is Patch 138 as written — falling into the
+void keeps the last cluster that resolved, so you carry on seeing what you could see indoors. 1 and
+2 reverse that for noclip only and draw the whole world through an all-bits-set PVS (`forcevis`,
+which keeps the frustum and area culls), and they *paid* for it by dropping entities: 1 skipped
+models and static props, 2 skipped every entity including brush models.
+
+Reported as: **"r_voidvis 1/2 is visually the same in the void, I don't see any brushes spawn in or
+not spawn in, the fps doesn't change — but the green/red/stage zones disable when 2."**
+
+Both halves of that are true, and neither has the cause the modes assumed.
+
+### The zones vanishing was a real bug, and it was much wider than the zones
+
+Mode 2 was implemented as an early `return` out of `BE_GenModelBatches`. `BE_GenPolyBatches` — the
+**only** call site in the engine that turns `cl_stris` into batches — is at the bottom of that same
+function, *after* the return. `cl_stris` is where CSQC's `R_BeginPolygon` output lands, along with
+particles, beams and every other scene triangle.
+
+So mode 2 was not dropping brush entities and the zone overlay. It was dropping **every scene
+triangle in the frame**. FTESurf draws its zone boxes as two-vertex `R_BeginPolygon` lines
+(`cl_zones.qc`), not as entities, so on a surf map in the void the zone overlay was the only
+*visible* member of that set — which is exactly why nothing else gave it away. The same return also
+skipped the epilogue that restores `cl_numstris` and `cl_numvisedicts`, which is harmless today only
+because `R_Clutter_Emit` above it does nothing at the default `r_clutter_density`.
+
+### The modes cost nothing because they were dropping nothing
+
+Rather than fix the return, measure whether the thing it was protecting exists. New counters in
+`BE_GenModelBatches`, printed by `Surf_VoidVisReport` beside the gate's existing inputs:
+
+```
+voidvis: cluster -1  pmovetype 2 (noclip 1)  r_voidvis 1  -> VOID VIEW
+        entities 0 (brush 0) -- world counts are r_speeds
+```
+
+surf_666, noclipping at z 17000 — 1,640 units above the spawn, which the probe proved reads cluster
+-1 — and **aimed at the map**, so the frustum cannot be what is doing the rejecting. Best of five
+interleaved 512-frame passes:
+
+| vantage | `r_voidvis 0` | `1` | `2` | entities |
+|---|---|---|---|---|
+| above and west, looking down-and-east across the map | **3355.8** | 480.5 | 492.8 | **0 (brush 0)** |
+| straight down over the start | **3338.5** | 328.0 | 327.3 | **0 (brush 0)** |
+
+Zero entities, at every setting **including 0, where neither gate runs at all**. On a VBSP map the
+static props are emitted from inside the world model's own prepare-frame (`mod_vbsp.c`), each one
+PVS-tested and radius-culled *before* it becomes a visedict — so out in the void they never reach
+the entity list, `CL_LinkStaticEntities` never sees them, and `BE_GenModelBatches` has nothing to
+filter. Both gates were inert. The entire difference between 0 and 1 is the world, i.e. Patch 178's
+`forcevis`. Mode 2 reading *faster* than mode 1 at one vantage is the noise floor saying so.
+
+### So the gates are gone rather than fixed
+
+`r_voidvis` is 0/1. The mode-2 `return` in `gl_alias.c` is deleted (and with it the scene-triangle
+bug), the `emodel->type != mod_brush` filter below it is deleted, and the `if (r_voidview) return;`
+in `CL_LinkStaticEntities` is deleted. Any nonzero value still means on, so a config carrying
+`r_voidvis 2` behaves identically and nothing has to be migrated.
+
+A switch that cannot be shown to do anything is worse than no switch: it invites exactly the "is
+this actually doing anything" question that cost two benchmark runs here and four in Patch 178.
+
+**The census stays**, developer-gated and standard-pass only. It is the evidence, and the next
+person to propose dropping entities in the void should be able to read the answer off one frame.
+
+### Two method notes, both of which cost a launch
+
+**Build 178's table was taken from the wrong place.** 27.6 → 1303 fps was measured 60,000 units
+above the map, where the whole world is in the frustum. Nobody flies there. At a realistic vantage
+the same arms read 3355 → 480, and the screenshots at 0 and 1 are nearly identical because the
+preserved cluster already sees most of what is in front of you that close in. The feature earns its
+keep further out; the honest number is not the dramatic one.
+
+**A gate cannot be measured on a frame with nothing for it to drop.** The first aimed run left the
+camera pointing horizontally after a `setpos`, i.e. out over the void and away from the map, and
+read `entities 0` — which is the right answer for the wrong reason, since the frustum had already
+rejected everything. `setpos` takes pitch/yaw/roll; use them.
+
+
+## Patch 187 — the transition shader drew the wrong texture, opaquely, at full transparency cost
+
+Three faults stacked on one material type, reported as two separate bugs on two
+separate maps: "surf_demise's smoke is supposed to be alpha and wavy but is
+solid, and the map runs at 30fps", and "surf_rise's transparency is missing and
+the displacement blend between transparent and opaque does not work".
+
+### (a) The alpha was thrown away
+
+`plugins/hl2/glsl/vmt/transition.glsl` ended its texture fetch with
+
+```glsl
+diffuse_f.rgb = mix(texture2D(s_diffuse, tex_c).rgb, texture2D(s_upper, tex_c).rgb, vex_color.a);
+diffuse_f.a = 1.0;
+```
+
+`mat_vmt.c` emits `progblendfunc src_alpha one_minus_src_alpha` for every
+`$translucent` material, so `src_alpha` was **always 1** — the surface came out
+fully opaque while still paying the whole cost of transparency. A blend cannot
+write depth, so it is sorted back-to-front and everything behind it is drawn
+whether or not it ends up visible. Solid *and* expensive, from one line.
+
+This was specific to WorldVertexTransition: `lightmapped.glsl:124` keeps its
+texture alpha, which is why an ordinary `$translucent` LightmappedGeneric has
+always blended correctly and only this shader was ever reported broken.
+
+### (b) A one-texture material was drawn as its missing second texture
+
+`uppermap` was emitted unconditionally, so a WorldVertexTransition with no
+`$basetexture2` bound the literal path `materials/.vtf`. That alone would be a
+missing sampler. What made it fatal is the mix factor: the blend is vertex
+alpha, and `mod_vbsp.c:2384` gives **every non-displacement surface an alpha of
+1.0** (only displacements carry the painted value, at `:2313`). `mix(diffuse,
+upper, 1.0)` is entirely `upper`, so on an ordinary brush face the material's
+own texture was never sampled at all.
+
+Both reported materials are exactly this shape, and both sit on brush entities:
+
+```
+ELLY/ANIMATED_SMOKE (surf_demise)     WorldVertexTransition, $basetexture only
+SONICCOLOURS/IVY_BLENDMODULATE (rise) WorldVertexTransition, $basetexture only
+```
+
+93 materials across 49 maps are like this — surf_torrential 9, surf_radiant 5,
+surf_agony 4, surf_demise 4, surf_surreal 3, surf_rise 2. `#NOBLEND` now makes
+the shader sample `s_diffuse` alone and the second sampler is not even declared,
+which is the rule Build 13 already set: never write `materials/.vtf`.
+
+### (c) `$blendmodulatetexture` was parsed and discarded
+
+It is the map that decides *where* and *how sharply* the two textures cross
+over — green is the midpoint, red the half-width, and Source shapes the
+transition with `smoothstep(g-r, g+r, vertexalpha)` rather than fading linearly.
+**722 of the library's 1,337 WorldVertexTransition materials write it.** It now
+rides in on `lowermap`: `S_LOWERMAP`/`s_lower` (`gl_shader.c:1694`, keyword at
+`:3402`) is a real sampler slot nothing on this material type uses, so the blend
+shape costs no engine change and no new interface.
+
+`smoothstep` is undefined when its edges are equal and `r == 0` is a legitimate
+"hard edge", so that case is a `step`.
+
+### And then the texture said the fix was not finished
+
+With the alpha honoured, demise's smoke was still an opaque grey rectangle. The
+VTF says why: **`elly/smokeanimated` is DXT1 with no alpha channel at all** (and
+331 frames). There is nothing for `src_alpha` to read — the author made it
+transparent with `$additive 1`, which only the pass-based arms had ever
+honoured. `$additive` now sets `progblendfunc add` on program materials too
+(`gl_shader.c:4205` turns that name into `SRCBLEND_ONE|DSTBLEND_ONE`).
+
+That reached further than demise. Counted over the library's embedded pakfiles:
+**462 program-based materials in 220 maps write `$additive` alongside
+`$translucent`**, and **232 more in 102 maps write `$additive` alone** — those
+232 are currently drawn fully opaque, which for a glow, a light shaft or a
+hologram is a solid box where the mapper put something you were meant to see
+through. There is no reading of `$additive` under which opaque is right, so the
+narrower "only upgrade an already-blended material" version was not worth the
+maps it would have left broken. Gated on `hl2_translucent` like every other
+blended world surface, because it costs exactly what one costs.
+
+surf_rise needed none of that: `IVY_BLENDMODULATE_FoliageSMOOTH` is DXT5 with
+the 8-bit-alpha flag set, so the ivy is fixed by the alpha change by itself.
+
+### `$alpha`, which this file said had nowhere to go
+
+The comment on the `$alpha` key claimed a fractional value could not be
+honoured because "FTE takes alphagen only inside a pass and this generator emits
+a top-level program block". Right about the cause, wrong about the conclusion:
+`#ALPHA` is a compile-time define on the program, the same mechanism
+`#ENVTINT`/`#ENVSAT` already used. Applied in all four vmt shaders, last, after
+any envmap block — `$basealphaenvmapmask` reads the *texture's* alpha, not the
+material's opacity. Under `$additive` it scales the colour instead, because
+`src_one` never reads the source alpha.
+
+`$alphatest` also worked for the first time here: `mat_vmt.c` has always emitted
+`#MASK`/`#MASKLT` for this material type and `transition.glsl` never read it, so
+an alpha-masked transition surface was a solid rectangle.
+
+### One latent bug found on the way
+
+`progargs` was a `char *` and every feature ASSIGNED to it, so the last one to
+run won. `$nofog` on an `$alphatest` material silently discarded the alpha mask —
+a hole you fall through. It is a buffer now and features append. Water and
+Refract still replace, exactly as before: their modes are whole-program
+selections and an alpha mask on a water plane means nothing.
+
+### Verified
+
+`r_showshader` on the reported materials, with the shader body logged rather
+than read off a screen:
+
+```
+elly/animated_smoke
+  program "vmt/transition#COLOR=0.200000,0.200000,0.200000#SCROLL=0.019924,0.001743#NOBLEND#ALPHA=0.800000"
+  diffusemap "materials/elly/smokeanimated.vtf"
+  progblendfunc add                       <- was src_alpha one_minus_src_alpha
+                                          <- and there is no uppermap line
+
+soniccolours/ivy_blendmodulate
+  program "vmt/transition#NOBLEND"
+  diffusemap "materials/soniccolours/IVY_BLENDMODULATE_FoliageSMOOTH.vtf"
+  normalmap  "materials/soniccolours/myk_plant_kt_ivy_nrm.vtf"
+  cull disable
+  progblendfunc src_alpha one_minus_src_alpha
+
+de_aztec/hr_aztec/hr_aztec_blend_groundgrass01-groundrock04   (surf_sodacity)
+  program "vmt/transition#BLENDMOD"       <- a REAL two-texture blend
+  diffusemap "…hr_aztec_ground_rock_04_color.vtf"
+  uppermap   "…hr_aztec_ground_grass_01_color.vtf"
+  lowermap   "…hr_aztec_ground_rock_04_blend.vtf"   <- the modulate map, bound
+  normalmap  "…hr_aztec_ground_rock_04_normal.vtf"
+```
+
+The sodacity case is the one that proves the two-texture path still works: it
+keeps its `uppermap`, gains the modulate map, and does not take `#NOBLEND`.
+
+---
+
+## Patch 188 — `$color`/`$color2` were dropped, and that is the whole of surf_unrequited
+
+"surf_unrequited: all textures are white? `$color2` is a missing key."
+
+Both halves of that are literally true and they are the same bug.
+
+`$color2` was not parsed at all — it fell through to `Con_DPrintf("Unknown
+field")`, which is the "missing key" the report is quoting. `$color` *was*
+parsed, and then emitted as a **top-level** `rgbGen const`. `rgbgen` is
+registered only in `shaderpasskeywords` (`gl_shader.c:4615`) and these materials
+emit a `program` with no pass at all, so it was parsed as an unknown top-level
+directive — `gl_shader.c:5586` has been listing `rgbgen` among the Source
+keywords that "leak to the top level of the generated shader (harmless no-ops
+there)" the whole time. It also passed the value through verbatim with its
+brackets still on, so even inside a pass `rgbGen const {400 380 370}` would not
+have parsed.
+
+`e_colourident` could not carry it either: that is the entity's colormod, one
+value for a whole entity, and this is a per-material constant.
+
+**surf_unrequited is a flat-shaded map whose entire palette is this key.** Its
+eleven world materials are `dreams/white|black|orange|blue|pink`, and **227 of
+its 275 embedded VMTs tint a white base texture with `$color2`**. Drop the key
+and the map is white — which is exactly what was reported, and is not a texture
+resolution failure: all eleven world materials resolve. Across the library it is
+**3,357 materials in 356 maps**.
+
+So it goes where `#ENVTINT`/`#ENVSAT` already go — `#COLOR=r,g,b` on the program
+string, consumed by lightmapped/vertexlit/unlit/transition. `UnlitGeneric` is
+the one arm that emits a real PASS, so it gets the pass keyword the engine
+actually has and spends no permutation; `$vertexcolor` wins there, because a
+pass has one rgbgen and the material asked for the per-vertex one explicitly.
+
+`$color2` wins over `$color` where a material writes both, as it does in Source.
+
+**Not clamped, deliberately.** `{400 380 370}` and `{450 350 250}` are real
+values on surf_unrequited and they are meant to blow out; clamping them to white
+would throw away the only thing distinguishing a lamp from a wall on a map whose
+whole palette is this. Both conventions are load-bearing too — `{255 169 99}` is
+0-255 and `[0.5 0.4 0.1]` is 0-1 — so `VMT_FogColorString`'s
+brackets-as-a-type-tag parser was generalised rather than re-guessed.
+
+Permutation cost is bounded and measured rather than assumed: surf_unrequited,
+the worst map in the library for this, has **52 distinct colour values** across
+275 materials.
+
+### Verified
+
+```
+dreams/window_fake                       $color  "{400 380 370}"
+  map "materials/dreams/white.vtf"
+  rgbGen const 1.568628 1.490196 1.450980       <- 400/255, unclamped
+
+models/dreams/her/umbrella_blue.vmt      $color2 "{30 90 165}"
+  program "vmt/vertexlit#COLOR=0.117647,0.352941,0.647059"
+
+models/dreams/alarm_clock/clock_second.vmt   $color2 "{150 0 0}"
+  map "materials/dreams/clock_second.vtf"
+  rgbGen const 0.588235 0.000000 0.000000
+```
+
+and `developer 1` no longer reports `Unknown field "$color2"`.
+
+**Known gap:** the `Sprite`, `UnlitTwoTexture`, `DecalModulate` and `Modulate`
+arms are pass-based and hardcode their own rgbgen, so `$color2` does not reach
+them — `dreams/heart2` is one. Left alone rather than guessed at, because
+changing a Sprite's rgbgen would change how every sprite takes its entity
+colour.
+
+---
+
+## Patch 189 — the TextureScroll proxy, which is 1,007 maps of "wavy"
+
+`VMT_IsKnownIgnoredBlock` skipped the entire `Proxies` block. Counted over the
+library's embedded pakfiles that is **TextureScroll in 4,697 materials across
+1,007 maps** — the most widespread Source material feature FTE does not
+implement, and most of what "wavy" means on a smoke sheet, a waterfall or a
+conveyor.
+
+It is also nearly free: `defaultwall.glsl:83` already does `tc.st += e_time *
+vec2(FLOWV)` from a define, so this is the same idiom in the vmt shaders.
+Source gives a RATE in texture units per second and an ANGLE in degrees; the
+trig happens once in the plugin rather than per fragment.
+
+`Proxies` is now descended into far enough to find `TextureScroll` and no
+further — every other proxy is still skipped with `st == NULL`, so none of them
+start warning. `texturescrollvar` says which transform the proxy drives; only
+`$basetextureTransform` is modelled, so a proxy pointed at the bump transform is
+read and then declined rather than silently applied to the wrong map.
+
+`UnlitGeneric` emits a real pass and gets the engine's own `tcMod scroll`
+instead, which is the same thing without a permutation.
+
+**AnimatedTexture is NOT in this patch** and demise's smoke will drift without
+cycling. 3,342 materials across 741 maps use it, and it is a much bigger job:
+`img_vtf.c:194` reads `frames = 1;//vtf->numframes;`, so every multi-frame VTF
+in the game is currently truncated to frame 0 — `elly/smokeanimated` has 331 of
+them. The loader, the shader's frame clock and the animmap path have to change
+together.
+
+### Verified
+
+`elly/animated_smoke` writes `texturescrollrate 0.02`, `texturescrollangle 5`,
+and the generated program carries `#SCROLL=0.019924,0.001743`. That is
+`0.02·cos5°` and `0.02·sin5°` — the arithmetic, not just the presence of a key.
+
+---
+
+## Patch 190 — a material name is not a texture name, and twelve console lines said so
+
+```
+Unable to load file materials/models/surf_demise/ramp7/sky_demise_05.vmt (format unsupported)
+```
+
+Twelve of them on surf_demise, one per ramp directory. The material is
+
+```
+UnlitGeneric { $envmap "elly/fakeskies/sky_demise_05.hdr"  $model 1  $nofog 1 }
+```
+
+— no `$basetexture` at all. The chain, verified link by link:
+
+1. `mod_hl2.c:491` names model skins WITH a `.vmt` extension.
+2. `gl_shader.c:8263` hands that name to the material loader verbatim.
+3. `mat_vmt.c` filled a missing `$basetexture` with the material's own name, so
+   `tex[0]` became `models/surf_demise/ramp7/sky_demise_05.vmt`.
+4. The UnlitGeneric arm appended `.vtf`.
+5. `image.c:14461` stripped the extension it recognised, and `image.c:14193`
+   appends an **empty** extension to the probe list — so the last probe was the
+   `.vmt` itself. It exists, it loads, and it is not a picture.
+
+Two defects, both fixed: the fallback now strips a `.vmt`/`.vtf` (a material
+name is never a texture name with an extension on it), and an envmap-only
+`UnlitGeneric` emits `map $whiteimage` rather than a synthesised path, because
+the material name is not a texture it just happens to resolve to the VMT.
+
+Tested before the `hl2_envmap` switch clears `st->envmap`, deliberately: the
+question is what the material was AUTHORED as, not whether we are currently
+honouring its cubemap. At `hl2_envmap 0` that leaves a flat white surface, which
+is still a better answer than a checkerboard.
+
+**Known limitation:** what Source actually draws there is the cubemap. That arm
+emits a PASS and a pass cannot sample `s_reflectcube` — only the program paths
+can — so doing it properly means moving envmap-only UnlitGeneric onto a program,
+which changes lighting for every other material of that type. Not done here.
+
+### Verified
+
+```
+models/surf_demise/ramp7/sky_demise_05.vmt
+  map $whiteimage
+  reflectcube "materials/elly/fakeskies/sky_demise_05.hdr.vtf"
+```
+
+and `format unsupported` appears **0 times** in a full surf_demise load, against
+twelve before.
+
+---
+
+## Patch 191 — 1,168 teleports that pointed at nothing but a letter case
+
+"can you check the entities on surf_kitsune? the teleports simply don't work on
+that map."
+
+`find()` is `strcmp` (`pr_bgcmd.c:1728`), and `trigger_teleport_touch` resolves
+its destination with `find(world, targetname, self.target)`. Source's entity I/O
+is case-insensitive, and mappers rely on that without knowing they do.
+surf_kitsune's author was not consistent:
+
+| the teleport says | the destination is spelled |
+|---|---|
+| `Red`, `Orange1`, `Green1`, `Teal1` | `red`, `orange1`, `green1`, `teal1` |
+| `yellow`, `white`, `Yellow1` | `YELLOW`, `WHITE`, `YELLOW1` |
+
+**28 of kitsune's 44 trigger_teleports fail on case alone**, each one printing
+`trigger_teleport: no destination '…'` to a console nobody has open. Counted
+across all 2,394 BSPs in the library: **1,184 mismatched `target` references in
+145 maps, 1,168 of them trigger_teleport** — surf_tycho 74, surf_prevail 52,
+surf_mesa_mine 48, surf_delight 41, then surf_santorini3 / surf_kitsune /
+surf_happyhug at 28 each.
+
+### Why rewrite the key instead of fixing the lookup
+
+The lookup is not in one place. `trigger_teleport` resolves `target` and
+`landmark`; `func_tanktrain`, `path_track`, `point_viewcontrol` and
+`func_tracktrain` resolve `target` too, and the survey found mismatches on all
+of them. Repairing the KEY fixes every consumer — including ones not written
+yet — and leaves the touch path as a single `find()` with no added runtime cost.
+
+And it is deliberately **not** an engine change. Making the `find()` builtin
+case-insensitive would change behaviour for every mod that uses it, to fix a
+problem that belongs to one game's entity format.
+
+Exact matches are never touched: the exact `find()` is tried first and wins, so a
+map where two destinations differ only in case keeps whatever it resolves to
+today. The scan only runs for references that already resolve to nothing, which
+is why it costs nothing on the 2,249 maps that are fine.
+
+Runs from `StartFrame`'s first-frame-after-worldspawn hook, for the reason the
+comment above `SV_EntityReport` already records: `StartFrame` is called before
+the map's entities exist, so doing this any earlier would walk an empty world.
+It is early enough because nothing resolves a target until a player touches
+something. The count is printed at load beside the existing `relative
+teleports:` and `areaportals:` lines — a silent repair is one nobody can check.
+
+`linked_portal_door` is **not** in this patch. surf_kitsune also has 18 of them
+(443 across 18 maps, led by surf_tripportals 116), they have no spawn function,
+and a non-seamless stopgap is not what the entity is for. Its own patch.
+
+## Patch 193 — surf_demise at 23fps is 2,350 static props, and none of them fade
+
+"surf_sodacity, very low FPS like demise. I was thinking it could be because of
+the model count and the way we handle it. Since nothing moves, batch/trisoup all
+brush entities in a rendered area? or in the whole map?"
+
+Half right, and the measurement says which half. It is the model count. It is not
+the brush entities, and batching them would have bought nothing.
+
+### The baseline
+
+`r_speeds 2` + `r_speeds_dump`, 1280x720, `vid_vsync 0`, `cl_maxfps 0`,
+`cl_yieldcpu 0`, each viewpoint held 300 frames before the dump because the
+sampler only publishes a completed 100-frame window (`cl_screen.c:150-165`).
+Every camera is a `setpos` at a position read out of the map's own entity lump,
+paired with a `screenshot_mega` so the frame that produced each row can be
+checked against the row.
+
+| viewpoint | fps | Total | Opaque | Predict | indices | draw calls | Ent/World batches |
+|---|---|---|---|---|---|---|---|
+| surf_demise, its info_player_start | **24.6** | 40.7ms | 27.1ms | 0.2ms | 5,230,080 | 1535 | 1453 / 59 |
+| surf_sodacity, its spawn | 110.5 | 9.0ms | 7.7ms | 0.05ms | 1,090,638 | 766 | 621 / 123 |
+| surf_utopia (fast control) | 771.7 | 1.3ms | 0.2ms | 0.04ms | 24,968 | 76 | 27 / 27 |
+| bhop_aberrant | 1196.5 | 0.8ms | 0.2ms | 0.02ms | 5,868 | 94 | 55 / 17 |
+
+Two things fall out before any fix. **Opaque Batches is 67% of demise's frame**
+and Transparent Batches is 0.4ms, so the sort is not the problem — which also
+means Patch 187 had already taken that cost off this map. And **surf_sodacity
+does not reproduce at all**: 110fps at its spawn, and 49-82fps at five more
+viewpoints picked from its own stage-start teleport destinations and its two
+densest static-prop cells. Whatever sodacity was doing when it was reported, it
+is not doing it now; 67 of its 172 world materials are `$translucent` and Patch
+187 is the thing that changed for those.
+
+### Where the 5.2M indices come from
+
+`r_drawentities` already splits the entity list by model type, so no new
+instrumentation was needed: 3 skips `mod_alias` (`gl_alias.c:3403`) and Source
+props are `mod_alias` (`mod_hl2.c:1021`); 2 skips `mod_brush` (`gl_alias.c:3396`);
+0 returns before both (`gl_alias.c:3268`). Same viewpoint, same 300-frame hold:
+
+| arm | fps | indices | draw calls | Ent batches |
+|---|---|---|---|---|
+| base | 23.2 | 5,230,080 | 1535 | 1453 |
+| `r_drawentities 3` — props off | **271.4** | 1,119,782 | 139 | 57 |
+| `r_drawentities 2` — brush entities off | **22.9** | 5,228,283 | 1485 | 1405 |
+| `r_drawentities 0` — all entities off | 293.0 | 1,114,331 | 78 | 9 |
+
+The props are **4.11M of the 5.2M indices and 25.6ms of the 26.9ms**. Everything
+else on surf_demise together — world, displacements, brush entities, water — is a
+3.7ms frame.
+
+**Brush entities cost nothing measurable**: 22.9fps against 23.2, which is inside
+the run-to-run noise. And bhop_aberrant carries **504 brush models**, five times
+demise's 104 and nearly double sodacity's 277, at 1197fps. So the proposed fix —
+batch or trisoup the brush entities — was aimed at the one component that is
+already free. Recorded rather than quietly dropped, because it was a reasonable
+guess and the only thing that could settle it was a number.
+
+### Why every prop draws
+
+Reading surf_demise's `sprp` game lump: 2,350 static props, **2,350 of them with
+`FadeMaxDist` 0**. `VBSP_PrepareFrame`'s prop loop already PVS-culls
+(`mod_vbsp.c:4661`) and frustum-culls on the model radius (`:4664-4672`), and the
+only distance test in the engine is the per-prop fade at `:4623` — which a prop
+with no fade distance skips entirely. The median prop distance from that
+viewpoint is **24,185 units**; only 4% are within 6,000.
+
+Source would not draw them either. A prop that declares no fade distance falls
+back to the engine's own `r_propsmaxdist` there, so having no limit at all is our
+divergence and not the map author's intent. Compounding it, FTE has no MDL LOD
+support — `mod_hl2.c:11` "FIXME: no lod stuff", `:381` "must remain at 1 (instead
+of 8) until fixups are handled", `:585` `surf->mindist = 0; /*fixme: lods*/` — so
+each of those 24,000-unit-distant props is submitted at LOD0.
+
+### `hl2_propdist`
+
+A maximum draw distance for props that declare no fade distance of their own.
+Props that set their own are untouched; this only supplies a limit where the map
+supplied none. Read per prop per frame, so it applies without a map reload.
+
+| `hl2_propdist` | fps | indices | Ent batches |
+|---|---|---|---|
+| 0 (default, and what shipped before) | 22.6 | 5,230,097 | 1453 |
+| 20000 | 30.1 | 4,045,320 | 638 |
+| 12000 | 38.1 | 3,356,514 | 444 |
+| **8000** | **52.2** | 2,704,849 | 335 |
+| 4000 | 104.0 | 1,794,331 | 176 |
+
+The 0 arm is first on purpose: it reproduces the pre-patch 23fps on the patched
+binary (22.6 against 23.2), so the cvar has not moved the default.
+
+**8000 is the recommendation, and the screenshots are the argument**: the
+`hl2_propdist 0` and `hl2_propdist 8000` frames from that viewpoint are difficult
+to tell apart — same forest, same valley, same architecture — for 2.3x the
+framerate. At 4000 the difference is obvious: the pine wall on the left thins out
+and the valley floor loses most of its trees, which is not worth 104fps.
+
+**It still defaults to 0.** This trades draw distance for framerate and which side
+of that a player wants is theirs to pick — on a wide-open surf map the far
+scenery is frequently the whole view, and quietly changing how every Source map
+looks is not a decision to make on someone's behalf. The number that matters is
+that 8000 is available and costs nothing visible.
+
+### The proper fix, named and not done
+
+MDL LOD selection. A prop 24,000 units away should be drawing its lowest LOD, not
+LOD0, and that gives the same win with no draw-distance loss at all. The loader
+already parses the LOD table (`hl2vtxlod_t`, `Mod_HL2_LoadIndexes` takes a `lod`
+argument and handles `ctx->lod[lod].numfixups`) and `msurface_t` already carries
+the `mindist` field intended to switch on — the blocker is the vertex fixups, as
+`mod_hl2.c:381` says. That is its own patch, and it is the one that makes
+`hl2_propdist` unnecessary.
+
+### One measurement thrown away, and why it is written down
+
+The first attempt used `7223 -6287 4763` for the second demise viewpoint, taken
+from the `shader_here` dump in the original report. That reported **Prediction
+127.6ms of a 135.1ms frame** and looked like a spectacular find — the
+`RSPEED_CSQC_PREDICT` bucket even carries a written hypothesis from a previous
+session predicting exactly it (`pr_csqc.c:8930-8936`: "dominated by CL_PredictMove
+tracing against every SOLID_PHYSICS_TRIMESH prop with no broadphase"). A
+conservative AABB reject was written for `PM_TransformedHullCheck`, built, and
+measured: **81.4ms against 79.6ms. No effect.**
+
+The screenshot said why. `shader_here` reports the position of the surface the
+view trace HIT, not a position to stand at, so `setpos` had buried the camera
+inside a rock face and the 127ms was a stuck player's physics, not gameplay. The
+reject was reverted — it fixed nothing measurable, and an unproven change to the
+collision path is exactly the kind that should not ship. The collision test
+written for it did pass (two drops onto known solid props held their height while
+a control drop 600 units aside fell 354 units to real ground), so the reject was
+correct; it was simply pointless.
+
+Kept in the record for two reasons. A bucket that has carried a plausible
+hypothesis for several patches now has a measurement against it. And the trap is
+worth naming: a viewpoint quoted from a diagnostic is not necessarily a viewpoint,
+and the paired screenshot is what caught it.
+
+## Patch 194 — linked_portal_door, so surf_kitsune can be finished
+
+Patch 191 fixed kitsune's 28 case-broken `trigger_teleport` destinations and the
+map still could not be completed. Its route does not run on teleports. It runs on
+**eighteen `linked_portal_door`s**, which had no spawn function, reached the
+catch-all, and became `SOLID_BSP` — an invisible wall standing exactly where the
+way through was meant to be.
+
+Counted over the library: **443 instances across 18 maps** — surf_tripportals
+116, bhop_tripportals 54, bhop_flything 50, noneuclidean 43, surf_kitsune2 30,
+bhop_parallel and surf_4plar 20 each, surf_kitsune 18.
+
+### What the entity is
+
+A point entity: an `origin`, `angles`, and a `width` x `height` rectangle
+standing in the plane those angles face. It names its opposite number with
+`partnername`, and the pairing is symmetric, so there is nothing to infer. All
+443 write width/height/angles/targetname/startactive; 440 write partnername.
+
+Two things the survey changed about the implementation. Yaws are mostly axis
+aligned — 427 of 443 at 0/90/180/270 — but 45, 135, 198.5, 225, 315 and 338.5 all
+occur; and **pitch is not always zero**: 61 doors lie at pitch -90 and 48 at +90,
+i.e. flat in a floor or ceiling. So the trigger volume is built from the full
+`makevectors` basis and the standard sum-of-|axis component| x half-extent, which
+is exact for the axis-aligned ones and conservative for the rest, rather than
+from the common case.
+
+### The transform
+
+The ordinary portal one: express the player's offset from the entry door in that
+door's basis, turn it half a revolution about the up axis, read it back out in
+the exit door's basis. Velocity and view angles go through the same rotation with
+the translation dropped, so **speed is preserved in magnitude and turned in
+direction** — on a surf map that is the entire point, and a teleport that reset
+either would break every route through these maps.
+
+View angles are written to `.v_angle` *and* `.angles` with `fixangle`, because
+`SV_RunCmd` refills `v_angle` from the usercmd every tick and re-derives `angles`
+from it — writing `angles` alone lasts about 15ms. Same reason Patch 165 had to
+add it to `setpos` and Build 13 to `trigger_teleport_touch`.
+
+### Two faults the first test run found
+
+**The pairing broke on the one map that needed it most.** A door with no
+`partnername` was being removed as malformed. Three of the 443 omit the key, and
+on bhop_aberrant `p2` names `p1` as its partner while `p1` names nobody — so
+deleting `p1` left `p2` pointing at an entity that no longer existed. A door with
+no partnername is a **destination**, not a mistake: Source's pairing is
+one-directional per door and the second direction is simply absent. It now stays,
+findable by name, with no touch function, and is counted separately because "this
+door is one-way" is worth knowing when a route stops working.
+
+**The ping-pong.** The mirror puts an arriving player near the exit's plane —
+inside the exit's own trigger — so the exit sent them straight back, and they
+oscillated. The first run showed it perfectly and confusingly: of two crossings
+placed on the portal centre, one read the partner and one read its own source,
+which is the same event sampled an odd and an even number of times.
+
+A time guard alone cannot fix it, because the player does not leave the volume by
+standing still. Pushing the arrival further out is not a fix either — the
+player's own box is +/-16, so clearing a 16-deep trigger needs more than 32 units
+of displacement, and that starts to move people noticeably. So the **arrival door
+is remembered on the player and skipped, and the guard is refreshed on every
+suppressed touch**: `touch` fires each frame they remain in contact, so the window
+keeps renewing while they are inside and lapses shortly after they step out.
+Self-clearing, no think, no polling, and it cannot wedge — a player who never
+touches it again just lets it expire.
+
+### Verified against coordinates computed before the run
+
+Counts predicted from the entity lumps first, and all four matched: surf_kitsune
+**18**, surf_kitsune2 **30**, surf_tripportals **116**, bhop_aberrant **1 linked,
+1 with no partner** (that last one having disproved my own expectation of zero —
+aberrant really does carry two, and one of them is the library's unpaired case).
+
+Crossings were checked arithmetically rather than by eye. `portal_s3_exit` sits at
+`-11264 -10504 -2024` yaw 270, so its forward is `(0,-1,0)`; entering 10 units to
+either side of its plane should arrive on either side of `portal_s4_entry` at
+`-8192 -15352 -2856` by the clamp distance:
+
+| entry | predicted arrival | measured | held after ~1.3s |
+|---|---|---|---|
+| `-11264 -10514 -2024` | `-8192 -15376 -2856` | `-8192 -15376 -2856` | unchanged |
+| `-11264 -10494 -2024` | `-8192 -15328 -2856` | `-8192 -15328` (falling in z) | same x/y, still falling |
+| `portal_s4_exit` | `portal_s5_entry` + clamp | `-5120 -15376 -5320` | unchanged |
+
+Both x and y land exactly on the predicted value, and the "held after" column is
+the ping-pong test: before the fix these alternated between the partner and the
+source between the two samples.
+
+### What this is not
+
+**It is not seamless.** You do not see through the doorway, and the crossing
+happens when you touch the volume rather than when your eye crosses the plane.
+Seamless needs a portal surface and a trace that spans both sides. The renderer
+half is closer than it looks — the engine already has `RT_PORTALSURFACE` and
+`RT_PORTALCAMERA`, and `cl_ents.c:5677-5688` reaches both from an ordinary
+networked entity with `tag_index` 0xffff (a non-zero `tag_entity` selecting the
+camera form), with `gl_rmain.c:1307` already separating the true-portal case from
+the mirror case. Physics-through is the hard half. Shipped in this form first on
+purpose: a completable surf_kitsune now is worth more than a perfect portal later.
+
+**17 doors of the 443 carry `startactive 0`** — 14 of them on surf_tripportals —
+and are spawned inactive, because that is what the key says. If those maps enable
+them through entity I/O that this mod does not implement, those doors stay shut.
+They were solid walls before, so this is not a regression, but it is the reason
+surf_tripportals may still not be completable and it should not come as a
+surprise.
+
+## Patch 195 — AnimatedTexture: 741 maps' flipbooks have all been frame 0
+
+Patch 189 gave surf_demise's smoke its scroll and said plainly that it would
+drift without cycling, because `img_vtf.c:194` read
+
+    frames = 1;//vtf->numframes;
+
+Every multi-frame VTF in the game has therefore always rendered as its first
+frame. **3,342 materials across 741 maps** drive one with an `AnimatedTexture`
+proxy: smoke, fire, screens, water, flickering lights.
+
+### The loader was already doing the work
+
+`img_vtf.c` already walked `frame < vtf->numframes` and already computed the
+per-frame offsets. Only the count was pinned. And the file's layout is a gift:
+a VTF stores every frame of a mip level **contiguously**, which is exactly what
+`PTI_2D_ARRAY` wants — one mip per level, `depth` layers deep. So this is a
+layout reinterpretation, not new decoding.
+
+**Opt-in on the requested texture type.** A VTF is loaded by name and the loader
+cannot know what the shader will do with it, so returning an array for every
+multi-frame file would hand a `sampler2DArray` to every existing `sampler2D` and
+break materials that render correctly today. The caller asks with
+`IF_TEXTYPE_2D_ARRAY`, which the shader script already spells `map "$2darray:…"`
+(`gl_shader.c:1022`); anything that does not ask keeps frame 0 and the behaviour
+that shipped.
+
+### `vmt/animated`, and why it is a separate shader
+
+Sampling a flipbook needs `sampler2DArray`, which needs GLSL 130. The four vmt
+shaders are `!!ver 110`, and raising them would move every permutation of every
+Source material onto a newer context to serve one feature. So `vmt/animated.glsl`
+is its own file at `!!ver 130-450`, selected per material the way `vmt/transition`
+already is — a map with no animated materials compiles none of it.
+
+The frame count comes from `textureSize(s_anim, 0).z` rather than a define, so no
+permutation is spent per frame count and the plugin never opens the VTF. That is
+the engine's own idiom: `default2danim.glsl` is the shipped precedent for an
+array sampler here, and `vertexlit.glsl`'s `rtenvsphere:2D=0` is the precedent
+for binding a custom numbered sampler from a pass in this very plugin.
+
+Deliberately narrow — no cubemaps, no bumpmapping, no fake shadows. A flipbook is
+smoke, fire, a screen or water, and none of those want an envmap; keeping the
+permutation set small is what stops this being a second copy of `vmt/lightmapped`
+that has to be maintained beside it.
+
+### Two faults, both caught by looking rather than assuming
+
+**The arm was unreachable.** Written next to the `LightmappedGeneric` arm, it
+never fired for the material that motivated it: `elly/animated_smoke` is a
+**WorldVertexTransition**, whose arm comes 400 lines earlier in the type chain and
+had already claimed it. The test dumped `program "vmt/transition#…#NOBLEND"` twice
+before that was obvious. Moved to the head of the chain, straight after `nodraw`.
+A WorldVertexTransition with no `$basetexture2` is a lightmapped material wearing
+the wrong type name — Patch 187 already draws it `#NOBLEND`, sampling `s_diffuse`
+alone — so it can animate. One that *does* carry a second texture is left alone,
+because `vmt/animated` has no blend and quietly dropping the crossover would be
+worse than not animating.
+
+**The blend went missing, and it was visible from a mile away.** `progblendfunc`
+is emitted at the top level and applies to a **top-level** program; with the
+program inside a pass there is nothing for it to attach to. The smoke came out
+fully opaque — a dark slab across the valley, hiding the mountains it is supposed
+to drift in front of. The pass now emits its own `blendFunc`, mirroring the
+`$additive`/`$translucent` decision made further down (`st->blendfunc` is not
+assigned until well after the dispatch runs), and `animpass` suppresses the
+top-level emit so the material does not carry two.
+
+### Verified
+
+The generated shader for `elly/animated_smoke`:
+
+    {
+        {
+            program "vmt/animated#COLOR=0.160000,0.160000,0.160000#SCROLL=0.019924,0.001743#ANIMRATE=24.000000"
+            map "$2darray:materials/elly/smokeanimated.vtf"
+        }
+    }
+
+`#ANIMRATE=24.000000` is the proxy's own rate; the `#SCROLL` from Patch 189
+survives; the `$2darray:` prefix is what fetches all 331 frames. It compiles and
+links with **no GLSL error**, which was the most likely way this went wrong —
+`vmt/animated` is the first `sampler2DArray` in this plugin.
+
+On screen, from surf_demise's own spawn: the smoke is a light wispy band with the
+mountains and treeline visible through it, and **its shape changes substantially
+between two shots two seconds apart**. That the change is the frames and not the
+scroll is arithmetic rather than impression: the scroll is 0.02 texture units per
+second, so two seconds of it moves the sheet by 4% of one tile, while two seconds
+at 24fps is 48 frames of a 331-frame flipbook.
+
+### Off by default
+
+`hl2_animated 0`. The proxy is on 3,342 materials in 741 maps, so switching it on
+moves a large fraction of the library's world materials onto a shader that has
+never rendered anything before and onto a GLSL 130 context. That is not a change
+to make silently on someone's behalf. `hl2_animated 1` turns it on with no map
+reload needed beyond the shader rebuild the cvar already triggers.
+
+## Patch 196 — the exit crash blamed on the asset cache is a stale name hash, and it is nobody's cache
+
+Patch 186 shipped switched off with three faults listed, and the third was
+*"it crashes on exit, reproducibly, once the cache holds files. 0xC0000005 with a
+recursive-looking material teardown stack. **Not root-caused** — no symbols are available
+(the build is stripped to an external PDB that is not produced) and the tree is one
+uncommitted working copy so there is no prior revision to bisect against."*
+
+Both halves of that excuse were wrong, and they are the reason this sat unexplained.
+
+- **Symbols were there the whole time.** `engine/Makefile:2094-2096` links to
+  `$(EXE_NAME).db` and *strips that* into the shipped exe, so
+  `engine/release/fteqw64.exe.db` is a full unstripped copy of the binary that is running.
+  Re-stripping it reproduces the deployed `ftesurf64.exe` byte for byte apart from five
+  header bytes (the PE timestamp and checksum), which is the proof that its RVAs line up.
+- **A crash logger was already running.** `nettest_CrashAddrLogger` (`sys_win.c:633`) is
+  registered *unconditionally* in release (`sys_win.c:4674-4679`) and already writes the
+  faulting address **and a 28-frame `CaptureStackBackTrace`** to `crashaddr.txt` beside the
+  running exe. It had been recording a symbolisable stack for this crash all along.
+
+So the whole diagnosis is one repro plus `nm` and a bisect over the sorted symbol table.
+
+### It is not in the material teardown
+
+```
+Host_Frame -> Cbuf_Execute -> Cmd_ExecuteString("quit") -> Sys_Quit -> Host_Shutdown
+  -> Plug_Shutdown -> Plug_Close                       (FS_UnRegisterFileSystemModule)
+    -> Cmd_ExecuteString -> FS_ReloadPackFiles_f -> FS_ReloadPackFilesFlags
+      -> FS_AddPathHandle -> VFSW32_BuildHash
+        -> Sys_EnumerateFiles -> VFSW32_RebuildFSHash    (once per directory level)
+          -> FS_AddFileHashUnsafe -> Hash_GetInsensitiveBucket     <-- 0xC0000005
+```
+
+`Plug_Close` unregisters the hl2 plugin's filesystem module, and that runs `fs_restart`,
+because no searchpath may outlive the plugin code that serves it. The reload re-mounts
+every searchpath — and one of them faults while indexing its files.
+
+The faulting instruction says exactly what is wrong. `Hash_GetInsensitiveBucket+0x25` is
+
+```
+1402e1445:  mov (%rdx,%rax,8),%rbx     ; buck = table->bucket[bucknum]
+1402e1449:  test %rbx,%rbx
+1402e144c:  je   ...                   ; non-NULL, so we go on
+1402e144e:  mov 0x8(%rbx),%rdx         ; buck->key.string        <-- faults
+```
+
+The chain head came straight out of `filesystemhash.bucket[]`, is not NULL, and is not
+readable. This is a **freed bucket still linked in the table**: the Patch 27
+dangling-bucket signature, which `fs.c:6032`'s own comment already describes as
+*"their file buckets stayed in filesystemhash ... garbage-pointer crash in
+Hash_GetInsensitiveBucket"*.
+
+### The bug: `com_fschanged` is an invariant, and one writer ignores it
+
+`com_fschanged` does not mean "the hash is out of date". `FS_FlushFSHashFull`
+(`fs.c:2316`) sets it and, by its own comment, **deliberately does nothing else** —
+really flushing would need a sync with every worker thread. Its callers have just
+`ClosePath`'d and `Z_Free`'d a searchpath. `COM_FlushTempoaryPacks` calls it on every map
+change as it frees the previous map's embedded pakfile. So the flag means:
+
+> this table currently contains pointers to freed memory. Do not walk it.
+
+Every *reader* honours that. `FS_FLocateFile:2375` refuses the hashed fast path without
+it; `FS_RebuildFSHash_Update` returns immediately. **`FS_AddPathHandle:4596` did not.**
+It is the only incremental *writer* — `FS_AddFileHashUnsafe`, so named — and it fired on
+the sole condition `filesystemhash.numbuckets`. Its first act per file is a
+`Hash_GetInsensitiveBucket` lookup, and the table never grows past its initial **1024
+buckets** (`FS_RebuildFSHash:2213`), so at 232k files indexed the average chain is ~227
+entries and a single lookup is near-certain to reach a freed one.
+
+Only `SPF_TEMPORARY|SPF_SERVER|SPF_ADDON` paths take that branch; everything else defers to
+a later full rebuild. And within a reload, the flush that the earlier fix added
+(`fs.c:6032`) sits **above `FS_RemountAddons` but below** the `<gamedir>_downloads` mount
+at `:5786` and P186's `<gamedir>_cache` mount at `:5827`. Those two were left on the wrong
+side of it.
+
+### Why it looked like the cache's fault
+
+`<gamedir>_downloads` is mounted one line *earlier* than the cache and is the identical
+shape of path. It has simply always been **empty on this machine**, and an empty directory
+enumerates nothing, so `FS_AddFileHashUnsafe` is never reached. P186 created the first
+populated addon directory this tree has ever had, and it stepped on a landmine that was
+already armed.
+
+Proven by moving the files instead of the code — 64 probe files planted in
+`ftesurf_downloads/`, `fs_assetcache 0`, and `ftesurf_cache` left populated but unmounted
+(which is P186's own "clean" control arm):
+
+| arm | maps loaded | populated addon dir | `fs_assetcache` | result |
+|---|---|---|---|---|
+| p196a | 3 | `ftesurf_cache` (26) | 1 | **crash**, `FS_ReloadPackFilesFlags+0x697` |
+| p196b | 1 | `ftesurf_downloads` (64) | 0 | clean |
+| p196c | 3 | `ftesurf_downloads` (64) | 0 | **crash**, `FS_ReloadPackFilesFlags+0x5a7` |
+
+Same faulting instruction, same stack; the two crashes differ only by the call-site offset
+inside `FS_ReloadPackFilesFlags`, which is precisely the difference between the `_cache`
+mount and the `_downloads` mount. **The cache is not the cause, and never was.**
+
+p196b is the arm that makes the mechanism exact, and it is here because it was a
+*prediction that failed*: one map load was expected to crash and did not. One map load
+cannot poison the hash, because `COM_FlushTempoaryPacks` only flushes when it finds a
+temporary pack to free — and a session's first map has no predecessor's pakfile. Two map
+loads can.
+
+### The fix
+
+`FS_AddPathHandle` now checks the invariant the rest of the engine already checks:
+
+```c
+if (filesystemhash.numbuckets && !com_fschanged)
+    search->handle->BuildHash(search->handle, depth, FS_AddFileHashUnsafe);
+else
+    com_fschanged = true;
+```
+
+Skipping the insert cannot lose a file. With `com_fschanged` set, `FS_FLocateFile` is doing
+linear walks anyway, so the new path is found regardless, and the next
+`COM_FlushFSCache`/`FS_RehashIfStale` rebuilds the whole table including it. It is in fact
+strictly cheaper: `FS_AutoMountForMap` mounts a 147,457-entry pack immediately before
+`sv_ccmds.c:1028` rebuilds the hash from scratch, so that incremental insert was always
+thrown away. `FS_FlushFSHashFull` gained a comment stating the invariant, since the next
+person to add an incremental writer will read that function and not this one.
+
+### Verified
+
+All three arms above re-run on the rebuilt engine: **exit code 0, no `crashaddr.txt`**.
+Load times and hash validity are unchanged, which is the thing a hash fix could plausibly
+have broken — `surf_utopia` 1511 -> 1498 ms, `bhop_aberrant` 932 -> 947 ms, the second
+`surf_utopia` 3116 -> 3025 ms, every load still reporting `hash valid`.
+
+Re-checked once more on the final Patch 197 binary, with `ftesurf_downloads` re-populated
+so the crash path is genuinely exercised: clean exit again. That matters because P197
+removes the global `<gamedir>_cache` mount, so the arm that first exposed this can no longer
+reach it -- `_downloads` is now the only way to reproduce, and it still passes.
+
+### What this changes about Patch 186
+
+Fault (c) in the P186 entry is withdrawn: it is not a fault of the asset cache. Faults (a)
+(the mount outranks the `fs_addons.txt` games) and (b) (one flat directory cannot hold two
+packs) stand, and the rework still has to happen — but it is no longer gated on a crash,
+and `fs_assetcache 1` no longer takes the engine down on exit.
+
+Note for anyone re-running P186's numbers: the cache searchpath is created only inside
+`FS_ReloadPackFilesFlags`, and `FS_AutoMountForMap` mounts packs with `FS_Addon_Mount`,
+which is not a reload. So setting `fs_assetcache 1` from a config **does not mount the
+cache in that session** — `fs_cache_info` says "no cache searchpath" all the way through.
+P186's cached-load measurements were taken with the cvar already archived into
+`ftesurf.cfg`, i.e. set before the boot-time reload. That is a second reason the mount is
+in the wrong place, and the rework removes it.
+
+### Shared tree
+
+The concurrent session rebuilt the engine at 15:40 (renderer.c, gl_backend.c, vk_backend.c,
+view.c) between p196a and p196c, so those two ran against different binaries; both stacks
+were symbolised against the `.db` that matched their own run, and the RVAs differ by a
+constant for that reason and no other.
+
+## Patch 197 — the asset cache, mounted where the pack it replaces would have been
+
+Patch 186 built the runtime asset cache, measured it, and shipped it switched off for three
+reasons. Patch 196 withdrew the third — the exit crash was a stale filesystem name hash and
+had nothing to do with this feature. The other two were real and are what this patch is:
+
+- **(a)** the cache searchpath outranked the `fs_addons.txt` games, which is the one ordering
+  rule this codebase has been careful about since Patch 8;
+- **(b)** one flat directory could not hold two packs' copies of the same filename.
+
+Everything P186 measured is kept. Only where the files go, and where they are mounted from,
+changes.
+
+### The mount, which is the whole fix
+
+P186 mounted `<gamedir>_cache` inside `FS_ReloadPackFilesFlags`, one line below the
+`_downloads` sibling, reasoning that `SPF_ADDON` appends at the tail so it must be below
+everything real. `FS_RemountAddons` runs at the **end** of that same function, so the actual
+order was
+
+```
+gamedirs > <gamedir>_downloads > <gamedir>_cache > cstrike > hl2 > momentum > automounts
+```
+
+and the cache sat above the three games that hold nearly all of this mod's content.
+
+There is no global cache searchpath any more. On a proven load, `FS_AutoMountForMap` mounts
+`<gamedir>_cache/<packkey>` **instead of** the pack, from exactly the line that would have
+called `FS_Addon_Mount` for that pack. Addon searchpaths are appended at the tail in call
+order, so the cached copies land at precisely the depth the pack would have had. Ordering is
+then correct **by construction** — not by a second rule that has to be kept in step with the
+first — and a map that needs no pack mounts no cache at all.
+
+It also costs nothing in plumbing. `FS_Addon_Mount` already takes an absolute path, already
+dedups on `logicalpath`, and the result is recorded in `fs_automounted[]` exactly as a real
+pack is, so P183's drop pass gives the directory back on the first later map that does not
+want it — visible in the test run as
+`fs_automount: dropping "C:\FTESurf/ftesurf_cache/team_fortress_2_tf_4be3e80e"`.
+
+Nothing else ever needed that mount: the harvest writes through
+`FS_WriteFile(..., FS_GAMECACHE)` and manifests are read through `FS_MallocFile(FS_GAMECACHE)`,
+both native paths that never consult `com_searchpaths`.
+
+### One directory per pack
+
+`<gamedir>_cache/team_fortress_2_tf_4be3e80e/`,
+`<gamedir>_cache/counter_strike_global_offensive_csgo_61b38d28/`. The key is the last two
+components of the resolved system path, lowercased with non-alphanumerics folded to `_`, plus
+eight hex digits of FNV-1a over the whole path. Readable, because a person opening the cache
+should recognise what is in it; hashed, because two installs whose tails agree (a second Steam
+library, a backup copy) must not share a directory. Derived from the resolved path and not
+from the spec, since two different specs can name one game — which is exactly why
+`fs_automounted[]` holds resolved paths in the first place.
+
+### Completeness is now a set comparison
+
+P186 proved a map complete by mounting the pack again on visit 2 and observing that nothing
+reached it. That works **only because the cache outranked the pack**, i.e. only because of the
+mount placement being removed here. It had to be replaced, not ported.
+
+Manifest v2 records the names visit 1 harvested. Visit 2 mounts the pack again with no cache
+in the way, so it sees the same names, and the map is proven when its set is a **subset** of
+what is already known. No dependence on priority at all, and it doubles as the copy filter —
+a confirming visit copies zero bytes, because every name it sees is already filed.
+
+Two guards on top: a manifest is refused if the pack's cache directory is empty (the manifest
+is a claim about a directory, and someone can delete that directory without the claim
+noticing), and a v1 manifest is refused outright, since it describes the old flat tree.
+
+### A bug of mine, caught by reading the output rather than by the run failing
+
+The first full run passed every visible check — harvest, proof, cached load, sky resolved —
+and was still wrong. The manifest it left behind said
+
+```
+pack C:\FTESurf/ftesurf_cache/team_fortress_2_tf_4be3e80e
+```
+
+The **cache directory**, in the field that names the pack. A cached load had armed the harvest
+against its own cache and re-proven the map from its own output, which is the one thing the
+proof must never do.
+
+`FS_NativePath` refuses an empty filename for all but four `fs_relative` values
+(`fs.c:3006-3013`, *"this is sometimes used to query the actual path; don't allow it for other
+stuff"*). `FS_SystemPath("", FS_GAMECACHE, ...)` therefore returned false, and every caller
+that asks for the cache **directory** rather than a file in it got nothing:
+`FS_Cache_IsOurDir` answered "no" for every path, and `fs_cache_info` / `fs_cache_clear` both
+reported "no cache directory" while 225 files sat in it. `FS_GAMECACHE` joins that list, and
+the empty-name form's trailing `/` is trimmed before it reaches `VFSOS_OpenPath`, which every
+other caller in this file passes a bare directory to.
+
+Worth recording because the failure was **silent in both directions**: a predicate that
+answers false is not an error, and the run that produced it looked like a success.
+
+### Measured, on the full lifecycle
+
+One session, `surf_utopia` three times with `bhop_aberrant` between each, then `surf_monotony`:
+
+| | searchpaths | files indexed | load | harvest |
+|---|---|---|---|---|
+| visit 1 (cold, mounts TF2) | 17 | 232,416 | 1565 ms | 25 files, 6.03 MB, unproven |
+| visit 2 (warm, mounts TF2) | 17 | 232,416 | 3194 ms | **0 files**, 23 names, **proven** |
+| visit 3 (warm, cache only) | **13** | **85,102** | **1763 ms** | not armed |
+
+Visit 2 against visit 3 is the like-for-like pair — both warm, both preceded by
+`bhop_aberrant` — and it is **3194 → 1763 ms, −45%**, with the index down from 232,416 files
+to 85,102 and four searchpaths gone. That reproduces P186's −39% for this map.
+
+Repeated on the deployed binary after the final build -- the numbers above were taken with a
+side-by-side copy, because the concurrent session held the shared install's exe open -- and it
+reproduces: visit 1 1620 ms / 17 paths, visit 2 3234 ms / 17 paths and proven, visit 3
+**1864 ms / 13 paths / 85,048 files**, i.e. −42% on the like-for-like pair, with the same
+three console lines and a clean exit.
+
+"0 files" on visit 2 is the success case and reads as a failure otherwise, so the console line
+now says which of the two states it reached: *"25 files (6.02894MB), 25 names known — one more
+visit to prove it"*, then *"0 files (0B), 23 names known — proven, next visit mounts the
+cache"*. (23 against 25 because two names visit 1 probed were not asked for again; a subset is
+what the proof requires, and a subset is what it got.)
+
+The strongest single check is unchanged from P186 and still passes:
+`sky "sky_dustbowl_01": rt,bk,lf,ft,up,dn = mmmmmm` on the cached load. That sky exists nowhere
+but TF2 and, now, the cache — six resolved faces with TF2 unmounted is the feature working.
+
+`surf_monotony` is the two-pack case P186's flat tree could not represent: it produced **two**
+cache directories and a manifest with **two** `pack` lines, 181 files.
+
+### Ordering, shown rather than asserted
+
+`flocate` on the cached load reports both spot-checked files served from
+`C:\FTESurf/ftesurf_cache/team_fortress_2_tf_4be3e80e`, so the cache really is what is
+answering.
+
+For the direction that matters — that it does **not** outrank the permanent games — a booby
+trap: `maps/zones/online/surf_utopia.json` exists inside the mounted Momentum install, and a
+junk file of that name was planted in surf_utopia's TF2 cache directory. Under P186's ordering
+the cache would have won and the junk would have been parsed.
+
+It is not:
+
+```
+flocate maps/zones/online/surf_utopia.json
+  Inside c:/program files (x86)/steam/SteamApps/common/Momentum Mod Playtest/momentum/
+         maps/zones/online/surf_utopia.json (1424 bytes)
+```
+
+1424 bytes is Momentum's real file, not the 80-byte trap, and the zone loader confirms it
+behaviourally on the same load: `zones: 6 on surf_utopia (maps/zones/online)` — surf_utopia's
+own count, which the junk file cannot produce. The same load serves
+`materials/skybox/sky_dustbowl_01_hdrside.vtf` and `materials/concrete/computerwall001.vtf`
+from the cache directory, so the cache is live and losing to Momentum at the same time, which
+is exactly the intended order. Trap file deleted afterwards.
+
+### Still default 0
+
+`fs_assetcache` stays off by default. It is a disk-writing cache keyed on observed behaviour
+and should be switched on deliberately. `fs_cache_info` reports the size (200 files, 56.4 MB
+after this test), `fs_cache_clear` empties it, and `fs_cache_clear <map>` deletes just that
+map's manifest so it re-proves itself while keeping its files — which remains the repair for
+the one failure this design cannot detect on its own, an asset first loaded later than any
+visit has ever reached.
+
+### Build note
+
+The concurrent session was running `C:\FTESurf\ftesurf64.exe` throughout, so `build.ps1`'s
+deploy could not overwrite it. Every measurement above was taken with a side-by-side
+`ftesurf64_p197.exe` copied from the same `engine/release/fteqw64.exe` the deploy would have
+installed, launched from the same directory so it uses the same gamedir. The normal deploy
+still has to be re-run once that process exits.
+
+## Patch 198 — reflections that outlive their own cvar, and one switch that does not
+
+Reported as: *"When I use Cubemaps off and Env maps off I would have no reflections on the
+world textures, but surf_spectra."* Two plugin cvars set to 0, and one map still reflecting.
+
+Both of those act while something is being **built** — `hl2_envmap` clears `$envmap` as a
+material is generated, `hl2_cubemaps` decides what `VBSP_LoadCubemaps` puts into `mod->envmaps`
+as the BSP is parsed. Neither can reach a thing that is already built, and one of them cannot
+reach the reported case at all.
+
+### Measured before it was changed
+
+The instrument is a batch census at the one place the decision is made
+(`gl_backend.c`, `BE_RenderMeshProgram`), read and zeroed by `shader_here`. It counts the
+**consumer** — how many batches in the frame actually took a cubemap reflection — because
+Patch 192's `r_voidvis` work established the hard way that "both settings look the same" can
+mean "there was nothing there to drop at any setting". Counting the loader would have said
+nothing.
+
+surf_spectra, ~1.5s windows, at the spawn:
+
+| setting | reflection batches |
+|---|---|
+| everything on | **12,544** |
+| `hl2_envmap 0` — regenerated, no reload | **14,616** (unchanged) |
+| `r_reflectcube 0` — same frame, nothing regenerated | **0** |
+| `hl2_cubemaps 0` + a full map reload | **0** |
+
+And for scale, the same measurement on two other maps at default settings: surf_666 **400**
+batches, surf_utopia **1,900**, surf_spectra **12,544**. The report named the right map: it is
+roughly thirty times more cubemap-reflective than the everyday one.
+
+**So the diagnosis is not the one I expected.** The per-surface census reads
+`cube=- mask=- surfenv=materials/maps/surf_spectra/c0_-768_16032.vtf` — the reflection is the
+map's own **baked** cubemap bound per surface, not a `reflectcube` named by the material. The
+plugin deliberately does not emit `reflectcube` for `$envmap env_cubemap` (Patch 158's fix for
+sky-tinted reflections), so clearing `$envmap` cannot remove it. `hl2_envmap` was never able to
+touch this route. `hl2_cubemaps` can, and does — but only through a map load, because that is
+when `VBSP_LoadCubemaps` runs, and `Mod_LoadModel` skips the parse entirely for a BSP that is
+already `MLS_LOADED`.
+
+That is the whole report: a toggle that cannot apply to this route, and a toggle that can but
+needs a reload the menu marked and the player had no reason to perform mid-session.
+
+### `r_reflectcube`, at the point of use
+
+```c
+cvar_t r_reflectcube = CVARAFD("r_reflectcube", "1", NULL, CVAR_ARCHIVE, ...);
+```
+
+`gl_backend.c:4344` and `vk_backend.c:3107` are the only two places
+`PERMUTATION_REFLECTCUBEMASK` is ever set, and that permutation is what compiles in the
+cubemap sampling block of every shader that has one. One test in each is a complete off
+switch. `vk_backend.c`'s `T_GEN_REFLECTCUBE` bind also returns `r_blackcubeimage` when off,
+which covers a literal `map $reflectcube` pass and `vmt/water.glsl`'s `#LQWATER`.
+
+**Deliberately not `CVAR_SHADERSYSTEM`.** Needing a reload is the failure this exists to fix,
+and a reload here would pay Patch 141's ~600ms full re-parse for nothing. `perm` is masked
+against `supportedpermutations` two lines later and simply selects an already-compiled
+permutation, so the cost is one integer test per batch and nothing caches past it.
+
+**Not fixed at source, and the reason is the shared tree.** `Shader_Reset`
+(`gl_shader.c:5051-5088`) preserves `shader->defaulttextures` across a regenerate — it detaches
+the block, memsets the shader, and reattaches it intact — so a `reflectcube` texid loaded by an
+earlier generation survives a regeneration that no longer names one. That is a real latent
+staleness and it is documented at the gate. It is not repaired there, because that same
+`texnums_t` is written by the **model** loader (`R_BuildLegacyTexnums`,
+`Mod_RegisterBasicShader`), and clearing it on every regenerate would drop the base, bump and
+luma of every Q1BSP wall in quakers on the first `CVAR_SHADERSYSTEM` change. The runtime gate
+is immune to it either way.
+
+The GL-side `T_GEN_REFLECTCUBE` bind is left alone: `r_blackcubeimage` is Vulkan-only
+(`vk_init.c:34`) and GL has no cube sibling. The permutation gate covers every route the
+census found; the uncovered corner is a literal `$reflectcube` pass on GL, which is already
+`hl2_water`'s territory. Stated rather than papered over.
+
+### Files
+
+`engine/client/renderer.c` (the cvar), `engine/gl/gl_backend.c` (the gate + the census
+counters), `engine/vk/vk_backend.c` (the same gate and the bind),
+`engine/client/view.c` (`shader_here` grows a `refl` line and a batch count).
+
+`extern cvar_t r_reflectcube;` is declared locally in each of the three consumers rather than
+in `render.h`, following the `texid_t` externs already at the top of `gl_backend.c` — a header
+change would turn a `-Engine` build of this shared tree into a `-Full` one for four lines.
+
+### Inert in quakers, shown rather than assumed
+
+`vw_city` boots identically: `r_reflectcube "1" (default)`, `r_voidvis "1" (default)`,
+`pm_physicsmode "0" (default)`, Box3D 8 worker threads, every `BAD=0`, hulls 72/36/24, sqlite
+ready. At 1 the gate is a single true test and the code path is byte-identical.
+
+FTESurf's graphics menu grows a **Reflections** row at the head of page 2, above Cubemaps and
+Env maps because it is the master of both, and unmarked because it genuinely is instant. The
+existing **Env maps** row gains the map-latch `*` it should always have carried.
+
+---
+
+## Patch 199 — a named screenshot goes where every other screenshot goes
+
+`screenshot` with no argument writes `screenshots/fte-<date>-0.png`. `screenshot foo` wrote
+`foo.png` into the **gamedir root**. One command, one name, two destinations — and the second
+form is the one every test script and every bound key with an argument uses, so the folder that
+exists to hold screenshots was being bypassed by the only callers that name their output.
+
+### It was the odd one out, not a design decision
+
+`scr_sshot_prefix` (renderer.c:433) defaults to `"screenshots/fte-"`, which is deliberately a
+**directory plus a filename stem**. Every other screenshot command already reads it that way:
+`screenshot_mega`, `screenshot_stereo`, `screenshot_360` (cl_screen.c:2875-2888) and
+`screenshot_vr` (:2986-2999) all copy the prefix, walk to its basename with `COM_SkipPath`, and
+overwrite only that — keeping the folder and replacing `fte-` with the supplied name.
+
+`SCR_ScreenShot_f`'s named branch did not. It copied `Cmd_Argv(1)` straight into `pcxname` and
+added an extension, so the prefix never entered the path at all. The unnamed branch three lines
+below it uses the prefix correctly, which is why the inconsistency reads as a bug rather than a
+convention: the same function spells the same idea two ways.
+
+The fix is the sibling idiom copied verbatim rather than reinvented.
+
+### One thing moved, and it had to
+
+The name check (`..`, `:`, a leading `.` or `/`) used to run against `pcxname` *after* the copy.
+It now runs against `Cmd_Argv(1)` directly, because by the time the name is written `pcxname`
+holds our own prefix — and `"screenshots/fte-"` contains a `/`, so testing the joined string
+would have refused every screenshot on the grounds of the engine's own default.
+
+### Consequence, stated plainly
+
+`screenshot foo` now writes `screenshots/foo.png` where it previously wrote `foo.png`. That is
+the point of the change, and it is what makes the folder mean something, but it *is* a change of
+destination for an existing command rather than a pure bug fix with no observable difference.
+A caller who wants the old location can pass a prefix-relative path, since a `/` inside the name
+is still allowed — only a *leading* one is refused.
+
+### Files
+
+`engine/client/cl_screen.c`, one branch of `SCR_ScreenShot_f`. No header, so `-Engine` rather
+than `-Full` on this shared tree.
+
+### Measured in both games
+
+FTESurf: `screenshot b21-namedshot` → `$basedir/ftesurf/screenshots/b21-namedshot.png`, and the
+gamedir root holds no `.png` at all afterwards. Before the patch the same command in the same
+build wrote `$basedir/ftesurf/b21-after.png`.
+
+quakers on `vw_city`, which is the real regression because its gamedir and therefore its
+`screenshots/` are different directories: `scr_sshot_prefix "screenshots/fte-" (default)`,
+`screenshot b21-quakers` → `$basedir/quakers/screenshots/b21-quakers.png`, and bare `screenshot`
+→ `$basedir/quakers/screenshots/fte-20260903171722-0.png` — the unnamed control, unchanged.
+Boot otherwise identical: Box3D 8 worker threads, hulls 72/36/24, `315 PASS, BAD=0` on the
+resolver selftest, every other `BAD=0`, sqlite ready, a live server with a LAN address and zero
+`not connected` lines.
+
+## Patch 200 — the props that swung around the player, and the flag word that was never a flag word
+
+Reported on surf_rise and surf_gigapede: some props render as if pinned to screen space,
+swinging around the player as the view turns, and floating over everything. The same props
+every time the map loads.
+
+### One line
+
+`plugins/hl2/mod_vbsp.c:2876`, in the static-prop lump reader:
+
+```c
+	if (version >= 10)
+	{
+		ent->flags = LittleLong(*(int*)prop);						prop += sizeof(int);
+	}
+```
+
+`ent` is an engine `entity_t` and `flags` is FTE's **`RF_*` render-flag bitfield**
+(`protocol.h:1640-1682`). A dword out of a Source BSP was being assigned into it with no
+translation and no mask — two unrelated flag domains sharing an assignment operator.
+
+The bit that hurts is `1<<21`. In FTE that is `Q2EXRF_FLARE`, aliased as **`RF_XFLIP`**
+(`protocol.h:1670,1682`), and `GLBE_SelectEntity` (`gl_backend.c:4716-4735`) answers it by
+swapping the entity onto `r_refdef.m_projection_view` — the **viewmodel** projection, built
+from the gun FOV and depth-crunched into the near third at `gl_rmain.c:635-640` — then
+negating projection X and flipping the cull winding. The model matrix is untouched
+(`R_RotateForEntity` takes its view-space branch only on `RF_WEAPONMODEL`), so the prop keeps
+its world position while being drawn through the gun's camera, mirrored. That hybrid is
+exactly "anchored in the world, yet it orbits me and floats over the level".
+
+Read out of the BSPs rather than guessed. **surf_gigapede has five static props and exactly
+one with a nonzero flag word: `disres_models/gigapederamps/ramp2/ramp2.mdl`, value
+`0x00200020` = `RF_TRANSLUCENT|RF_XFLIP`.** That is the ramp in the report. surf_rise has five
+props at `0x200020` and 46 trees and rocks at `0x800080` (`Q2RF_BEAM|RF_NOSHADOWRECV`).
+Library-wide the blit lands a nonzero `RF_` word on **759 prop instances across 41 maps** —
+also surf_666 (20), bhop_collective (164), surf_midsommar (124), surf_clavius (68).
+
+### The second bug on the same line, which hit every v10+ map
+
+It was `=`, not `|=`. Ninety-seven lines earlier `:2779` sets `ent->flags = RF_NOSHADOW` for
+every prop; this line then destroyed it. So **every** prop of **every** v10/v11/v13 map has
+been casting a shadow it was explicitly marked not to cast, not just the 759.
+
+### What that dword actually is
+
+Not flags. The raw records say so. Every nonzero value seen anywhere in the library is a
+single bit **replicated into both 16-bit halves**, and reading them as two `unsigned short`
+gives:
+
+| dword | as two u16 | count |
+|---|---|---|
+| `0x00200020` | 32, 32 | 541 |
+| `0x00100010` | 16, 16 | 87 |
+| `0x00800080` | 128, 128 | 72 |
+| `0x00400040` | 64, 64 | 46 |
+| `0x02000200` | 512, 512 | 13 |
+
+A power of two paired with itself, five times over. That is a **per-prop lightmap resolution
+X/Y pair**, which the CS:GO-lineage static prop lump carries at this offset — not
+`m_FlagsEx`, which is what the stride table's own comment at `:2743` (`case 10://-360+flags`)
+claims lives here. The raw tail confirms the rest of the layout is right:
+
+```
+tree_aspen01f_scale06, surf_rise, sprp v10, stride 72 (validates exactly)
+  bytes[56:] = 00 00 80 3f | 00 00 00 00 | d2 00 00 00 | 80 00 80 00
+                ForcedFade    cpu/gpu lvl   diffusemod    128 x 128
+                = 1.0f
+```
+
+FTE has no per-prop lightmap path, so nothing is lost by dropping the field. It is read into
+a local and discarded, and the comment records what it is rather than the code pretending to
+use it. Deliberately **no** Source-to-`RF_` translation table: there is no bit here FTE would
+render differently, and a translation table is a second thing that has to be kept correct.
+
+### Verified by moving the code, with the camera held still
+
+Two builds of the plugin differing in that one line, same binary otherwise, same cfg, same
+`setpos`: camera at `5184 3712 14600` on surf_gigapede, pitch 90 — looking **straight down**
+at ramp2's own origin (`5184 3712 12848`), so a world-locked prop is dead centre by
+construction and no knowledge of the map's geometry is needed.
+
+| | the ramp |
+|---|---|
+| before | runs bottom-left → top-right, drawn **over** the surrounding blocks |
+| after | runs top-left → bottom-right, correctly **occluded** by them |
+
+Mirrored about the vertical centreline, which is projection X negated, plus the depth crunch
+that put it in front of geometry it is behind. `screenshots/p200_before_top_1750.png` and
+`p200_after_top_1750.png`.
+
+`RF_NOSHADOW` is restored by construction — the assignment that destroyed it is gone. Maps
+with a v4–v9 prop lump never enter this branch and cannot have been affected either way.
+
+### Harness note, because it cost two runs
+
+**The first `map` in a `+exec`'d cfg is silently swallowed**, and so is `+map` on the command
+line: both land before the renderer is up, and the command does nothing at all — no error,
+not even under `developer 1`. `waitmap` then sits out its entire timeout waiting for a load
+that was never started, and the run produces a directory of screenshots of the main menu.
+Proved rather than assumed: a diagnostic cfg ran `map surf_gigapede` (nothing), `waitmap 60`,
+then `map surf_utopia`, which loaded in 1.7 s from the same cfg. Put a `waitms 1500` before
+the first map load.
+
+## Patch 201 — MDL level of detail, and what surf_demise is actually spending its frame on
+
+Patch 193 measured surf_demise at 24.6 fps, found the static props were 4.11M of its 5.23M
+draw indices, concluded "FTE has no MDL LOD", and shipped `hl2_propdist` — a flat distance
+cull — as the workaround. Half of that was wrong, and the correction changes the answer.
+
+**FTE's LOD system is complete and shipping. The hl2 plugin was throwing the data away.**
+
+### Everything the engine already had
+
+- `galiasinfo_t::mindist`/`maxdist` (`com_mesh.h:180-181`) and `model_t::maxlod` (`gl_model.h:1026`)
+- the selector, `gl_alias.c:2127-2136` — `lod = 1-(coverage*r_lodscale.value)`, scaled by
+  `maxlod`, biased by `r_lodbias`, where `coverage` (`:2111-2112`) is a **projected screen-size
+  fraction**, so selection is size-aware: a large prop keeps its detail much further out than a
+  small one, which a distance cull cannot do
+- the filter, `gl_alias.c:2146`
+- `r_lodscale` (default **5**) and `r_lodbias`, already `CVAR_ARCHIVE`, already documented
+  "for those that have lod" (`renderer.c:637-638`)
+- the ortho/shadow-pass guard Patch 100a wrote for this exact path (`gl_alias.c:2079-2080`)
+- per-surface VBO and skin build for an arbitrary chain length (`com_mesh.c:4847-4852`)
+
+None of it had ever run, because `model_t::maxlod` is 0 for every asset in this game and
+`gl_alias.c:2136` takes `lod = 0` in that case.
+
+### What the plugin was doing
+
+`mod_hl2.c` parsed the `.vtx` LOD table — `hl2vtxlod_t` even declares Source's `switchPoint`
+as `dist` — and then discarded it. The entire cull was one array bound:
+
+```c
+	} lod[1];	//must remain at 1 (instead of 8) until fixups are handled.
+```
+
+applied through `min(vsurf->lod_count, countof(ctx->lod))` at the counting and build walks,
+with `surf->mindist = 0; surf->maxdist = 0;	/*fixme: lods*/` at the emit. `Mod_HL2_LoadIndexes`
+already **took a `lod` argument** and already selected the matching fixup table; the surface
+name already interpolated the level number. Only the bound was wrong.
+
+### The fixups, and the reading that was wrong first
+
+`ctx->lod[l].fixup[]` maps a level-`l` compacted vertex index to a source vertex, but the
+loader indexes it with `firstvert + mmesh->vert_first + origMeshVertID`, both of which come out
+of the MDL and are level-0-relative. At level 0 the map is a permutation so the spaces
+coincide; above 0 they do not, and the MDL has no per-level model offset. So the gate is: use
+levels above 0 only when the `.vvd` has **no fixups**, because then nothing was compacted and
+every level indexes the one full array through `Mod_HL2_LoadIndexes`' `else` branch.
+
+The first draft additionally demanded that the per-level vertex counts be **equal**, and
+admitted **precisely zero models in the entire library**. That is how the real arrangement got
+noticed. Dumping the headers of the models that declare multiple levels and carry no fixups:
+
+```
+tree_douglasfir01d_opt_large   lod_count=4  fixups=0  lodverts = 2787, 2312, 1675, 926
+tree_douglasfir01f_opt_large   lod_count=4  fixups=0  lodverts = 3268, 2721, 1949, 1063
+tree_douglasfir01a_opt_large   lod_count=4  fixups=0  lodverts = 3062, 2395, 1752,  797
+```
+
+Monotonically **decreasing**, not equal. studiomdl orders a model's vertices so each level uses
+a *prefix* of the array — which is exactly why it had no fixups to write. The test is therefore
+the prefix invariant (nonzero, no larger than level 0), and a zero-result census is worth more
+than a plausible one.
+
+### Coverage, measured rather than intended
+
+| | .vvd | declare >1 level | have fixups | **gain LOD** |
+|---|---|---|---|---|
+| surf_demise (packed) | 73 | 12 | 0 | **12** |
+| surf_sodacity (packed) | 194 | 12 | 2 | **10** |
+| surf_rise (packed) | 31 | 7 | 7 | **0** |
+| bhop_aberrant / surf_gigapede | 0 / 23 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+By instance rather than by model, demise's 12 are the douglasfirs: **785 of its 2,350 props,
+33%**, and they are the heavy ones (~3,000 verts against the speleothems that make up the next
+1,094). surf_rise gains nothing — all seven of its multi-level models carry fixups — which
+makes it a clean null control below.
+
+### Correctness, by looking at it
+
+`r_lodbias 3` forces every capable prop to its coarsest mesh regardless of distance;
+`r_lodbias -100` clamps the selector to level 0 through its own `max(0, lod)`, reproducing the
+pre-patch mesh exactly. Same binary, same frame, camera 300 units from a douglasfir.
+
+At level 3 — 926 verts against 2,787 — they are still the same trees: same trunks, same
+silhouettes, same positions, with visibly chunkier foliage cards. No shredding, no stray
+triangles, nothing pulled to the origin. The prefix reading is confirmed on screen, not just in
+the header. `screenshots/p201_lod0_tree_near.png` against `p201_lod3_tree_near.png`, 33.0 → 39.9 fps.
+
+### Measured
+
+`r_lodbias` is the A/B, so both arms are one binary and one load and differ **only** in which
+surfaces the filter admits. Static samples at the map's own spawn, 100-frame window, `r_speeds 2`,
+`cl_yieldcpu 0`, `vid_vsync 0`, 1280x720.
+
+| map | fps off → on | draw indices | opaque us |
+|---|---|---|---|
+| surf_demise | 24.11 → **25.91  (+7.5%)** | 5,209,779 → 4,478,862 (−14.0%) | 29,048 → 28,982 (−0.2%) |
+| surf_sodacity | 64.63 → **66.30  (+2.6%)** | 1,501,723 → 1,460,928 (−2.7%) | 11,301 → 10,820 (−4.3%) |
+| surf_rise | 219.40 → 216.63 (−1.3%) | 469,224 → 469,195 (−0.0%) | null control, 0 capable models |
+| bhop_aberrant | 1659 → 1367 | 6,227 → 6,269 | noise: 602us vs 732us frames, 0 capable models |
+
+Two honest caveats. **bhop_aberrant's −17.6% is not a regression** — it has no LOD-capable
+model at all and its indices, draw calls and batch counts are identical between arms; at 1,600
+fps the frame is 600 microseconds and a 130-microsecond difference is 17% of it. And a
+**`+forward` sample is not a controlled comparison**: the paired screenshots show the two arms
+at different points in the run (surf_rise at timer 3.270 vs 3.375, speed −841 vs −959), which
+is where that arm's spurious +26% comes from. Only the static samples are used above.
+
+### And the redirect, which is the more useful half of this patch
+
+−14.0% draw indices bought −0.2% Opaque Batches on surf_demise. **surf_demise is not
+triangle-bound**, so the whole premise of Patch 193's prop-count reasoning — and of
+`hl2_propdist` — is wrong about the mechanism.
+
+Three arms at demise's spawn settle what it *is* bound by:
+
+| arm | fps | total refresh | QC UpdateView | Opaque | Present | draws | indices |
+|---|---|---|---|---|---|---|---|
+| base 1280x720 | 26.07 | 38,364 us | 34,231 | 31,591 | 3,708 | 1532 | 4.48M |
+| **640x360** (quarter the pixels) | **26.05** | **38,391 us** | 29,111 | 26,985 | **9,001** | 1532 | 4.48M |
+| `r_drawentities 3` (props off) | 232.86 | 4,294 us | 3,634 | 1,417 | 43 | 141 | 1.12M |
+
+At a quarter of the pixels the frame time is **unchanged** (38,364 → 38,391 us) and the 5.1 ms
+saved in submission reappears as 5.3 ms in **Present**. That is the textbook GPU-bound
+signature: the CPU gets to the swap sooner and waits there. Resolution verified from the PNG
+headers, not assumed. So:
+
+- **not fill-bound** — a quarter of the pixels changes nothing
+- **not vertex-bound** — 14% fewer indices changes nothing
+- props are **34 ms of the 38 ms frame** (26 fps against 233 with them off)
+
+What is left is per-draw cost across **1,532 draw calls**, and the fix for that is fewer draws:
+merging or instancing the props that share a model. FTE has no instancing today
+(`gl_terrain.h:393`, *"fixme: implement instancing"*), and each batch carries its own entity and
+uploads that entity's model matrix and lighting uniforms, so two props of one model cannot
+currently share a batch. That is its own patch and a substantial one.
+
+Note that `r_model_mincoverage` does not stand in for it: at `0.010` it removed 194 of demise's
+1,449 entity batches (13%) and returned 26.07 → 26.47 fps (+1.5%), because what it removes are
+the small distant props, which are not what the frame is spending its time on.
+
+### Also in this patch
+
+`BIH_BuildAlias` (`com_bih.c:1862-1866`) walked the whole `nextsurf` chain with no filter,
+which would have put every level of detail into a model's collision tree at once — several
+overlapping copies of one shape, all solid. It now skips surfaces with a nonzero `mindist`.
+Latent for MD3's external `_1.md3`/`_2.md3` LODs since long before this patch and live the
+moment the plugin populated the field. Only reachable where the render mesh *is* the collision
+mesh, i.e. the `.phy` fallback (162 of 3,084 `.phy` files); all twelve douglasfir models ship a
+usable `.phy`, so demise's own collision comes from the hull either way and is unchanged.
+
+Models that declare one level keep `maxlod` 0 and take `gl_alias.c:2140`'s `lod = 0`, so nothing
+without authored LOD data pays the coverage arithmetic or changes in any way. `hl2_propdist`
+stays in the tree at default 0; this patch does not make it redundant, because it was never
+addressing the real cost either.
+
+---
+
+## Patch 202 — every input event gets a timestamp, and a journal that cannot lie about itself
+
+Nothing in this engine has ever known **when** an input event arrived. `struct eventlist_s`
+(`in_generic.c:166`) carries a type, a device id and a payload; `IN_Commands` drains the ring once
+per video frame and, for the mouse, sums a whole frame's reports into one delta at
+`in_generic.c:524`. `CL_AccumlateInput` then weighted-averages *those* across frames into one
+usercmd (`cl_input.c:1921`). By the time any recording sees the mouse, the individual reports are
+gone twice over.
+
+FTESurf records every timed run to a `.rec` (position at ~66 Hz) and a `.view` (angles and keys at
+render rate). Both are derived data. This adds an optional third file — a `.hid` — holding the
+reports themselves, for **auditing a run**, not for replaying one.
+
+### The timestamp is one line, at the one place every event passes
+
+`in_newevent()` (`in_generic.c:209`) is the sole allocator of a ring slot: every key, mouse,
+joystick, accelerometer and gyro event on every platform backend goes through it. So the stamp is
+one `Sys_DoubleTime()` there rather than five in the producers, and a new caller cannot forget it.
+
+It is taken **unconditionally**, not gated on a journal being open. The gate would save one QPC on
+a path that goes on to call `Key_Event`, and would buy a bug: events already sitting in the ring
+when the journal opens would carry stale stamps and be journalled as truth.
+
+On the `volatile` comment at `in_generic.c:206` — the write is into the same struct the producer
+already fills before it bumps `events_avail`, so it is exactly as synchronised as `ev->mouse.x`
+already is, and no more. On Windows every producer is main-thread anyway; `CL_IndepPhysicsThread`
+calls only `CL_SendCmd` and never touches this ring.
+
+### What the timestamps mean, and what they do not
+
+Windows delivers `WM_INPUT` to the thread message queue and `Sys_SendKeyEvents` drains a frame's
+worth in one `PeekMessage` loop; `RAWMOUSE` carries no hardware timestamp. So a stamp taken
+**anywhere in this engine** records when the engine saw the report, not when the mouse produced it.
+Per-frame timing is real. Inter-event spacing inside one frame is a pump artifact, and the format
+comment says so in as many words rather than leaving a reader to over-read it.
+
+What survives and is worth having is the **sequence and magnitude of individual reports**, which
+`in_generic.c:524` destroys today, and the report *count*. The named upgrade, deliberately not
+here, is `GetMessageTime()` in the wndproc — 1 ms resolution, which at 1000 Hz polling is one
+report per tick. Nothing in this engine calls it.
+
+### The ring has always dropped events silently
+
+`in_newevent()`'s `return NULL` branch discarded and said nothing, and no counter existed. A
+journal that cannot say "I lost some" is a journal that lies, and this is the one failure mode
+undetectable from outside the file. `in_jrn_dropped` now counts it — whether or not a journal is
+open — and the next frame marker emits a `! <dt> <n>` line. The drop *time* is genuinely unknown,
+so the marker claims only "n were lost somewhere before this frame".
+
+Measured: `in_journal_synth 4000` against a 1024-entry ring produced `! 0 3226` and a trailer
+reading `3226`.
+
+### The format, and the one identity it is built on
+
+Header keys one per line, unknown keys skipped — the additive rule `FTESURF-REC 3` already
+follows. Then `f` frame markers, `m`/`a` mouse, `+`/`-`/`x` keys, `j` joystick, `#` notes, `!`
+drops, `truncated`, `end`.
+
+Every line carries a `dt` in integer microseconds since the previous line; only `f` also carries an
+absolute. **So the running sum of dt must equal each frame's absolute**, and those are written from
+two independent counters. That check found two real bugs in this patch's own first build:
+
+- `IN_Journal_Line` advanced its clock to the true time, discarding up to 1 microsecond per line.
+  Measured drift: **1.8 ms per 5500 lines**, growing without bound. It now carries the truncation
+  remainder forward, so the residual is under one microsecond for any file length and the check is
+  exact rather than tolerance-based.
+- `IN_JournalEnd_f` called `Sys_DoubleTime()` twice — once for the trailer's absolute and once for
+  the dt leading to it — so the file disagreed with itself by the gap between two adjacent QPC
+  reads. One read now, used for both.
+
+And a third, from ordering: a `#` note arrives from `Cbuf_Execute`, which runs *after* that frame's
+drain, while the events it precedes were stamped earlier in the same Cbuf pass. Stamping the note
+from the wall clock put it 609 microseconds ahead of the following frame marker, the dt clamp
+emitted a zero, and the sum ran ahead of the absolutes. A note is an annotation, not an event, so
+it is now stamped at the current stream position — its useful content is which frame it fell
+between.
+
+### Privacy, in the first patch rather than later
+
+`data/` is readable by any CSQC, and every server a player joins runs CSQC. A journal written with
+the console open would contain the scancodes of an `rcon_password`.
+
+The unicode is **never** journalled — the scancode is the input, the unicode is the plaintext, and
+it adds nothing to an audit. And when `Key_Dest_Has_Higher(kdm_game)` says something above the game
+has focus, the scancode is replaced by an `x` line: the timing and the count survive, so a macro
+bound to a key and fired with the console open still shows as a burst, but the identity is gone.
+The count is in the trailer, so the suppression is itself auditable.
+
+Measured in one file across three batches — in game, menu up, in game: `+ 0 0 32` / `x 0 0` /
+`+ 0 0 32`, with `hidden 6` matching the six `x` lines and no `x` line carrying a fourth field.
+
+### An unchanged absolute position is not an event
+
+`IN_MouseMove` early-returns for a zero *delta* but not for a repeated *absolute*, so while a menu
+or console is up — which is when the cursor is free and absolute events are generated — a
+motionless mouse produces two identical lines every frame. Measured on a headless run: **3706 of
+5559 lines**, all reading the same `-1718 793`, for 1.6 seconds of a config doing nothing. At
+1100 fps that is a megabyte a minute of a cursor sitting still, and it would reach the cap and
+truncate a real journal with pure noise. Deduped per device; the same call `IN_MouseMove` already
+makes one screen down. After: the same test wrote **1** event.
+
+### Buffered in memory, and the ledger for it
+
+The run's tag (`pb`/`last`/`shadow`) is part of the filename and is not known until the run ends,
+so streaming would need a `.part` and a rename — the exact failure `SV_RecClose` was rewritten to
+eliminate, where a crash between the remove and the rename loses the previous recording too.
+Discard on a voided run is then free and the cap is one number. **What it costs, stated rather than
+hidden:** a crash loses the evidence, and the write is one synchronous `COM_WriteFile` at the
+instant a run ends. `in_journal_maxkb` 8192 holds that to ~40 ms.
+
+### Commands, not a cvar, and where the safety lives
+
+A cvar callback fires on registration (the `Cvar_ForceCallback` idiom at `in_generic.c:382`), so an
+archived value would write a file at startup and every `exec` or server `stuffcmd set` would write
+another. A cvar also cannot express "discard" distinctly from "write to an empty path".
+
+`in_journal_end` is deliberately **not** `Cmd_IsInsecure()`-guarded, unlike `condump`
+(`cmd.c:4503`): CSQC has to reach it and `localcmd` is `RESTRICT_INSECURE` by construction, so an
+exec-level test would block the only caller there is. The safety is in the path instead — it runs
+through `QC_FixFileName`, the same sandbox `PF_fopen` uses, **and additionally requires a `data/`
+prefix**, because `QC_FixFileName` alone also accepts `cfg/` and a journal must not be able to
+overwrite a config. All three of `../../../x.hid`, `C:/x.hid` and `cfg/x.cfg` are refused, and the
+third is the one the extra rule exists for.
+
+`in_journal_synth` injects synthetic events, because a console `+forward` is a command-buffer entry
+and never passes through `in_newevent` — so without it there is no way at all to exercise the key
+path, the `m` format or the ring overflow from a scripted config. It is safe to ship because it
+**marks the file**: `synth 1` in the header makes an injected journal self-declaring and
+inadmissible. It cannot forge a clean one.
+
+### Files
+
+`engine/client/in_generic.c` (the struct field, `in_newevent`, the journal block, the drain hook,
+registration), `engine/client/input.h` (two prototypes), `engine/client/cl_main.c`
+(`IN_Journal_Drop` in `CL_ClearState`, so a map change or disconnect throws the buffer away without
+writing it — the same rule the `.view` sidecar follows, because the server discards its half at the
+same moment).
+
+A header changed, so `-Full` on this shared tree.
+
+### Measured in both games
+
+FTESurf, eight journals across three scripted configs, all clean under the new `tools/hidcheck.py`:
+the negative control's entire body is **one** line and **zero** `+`/`-` records, proving scripted
+key commands do not reach the input path; the cap file ends `truncated` then `end`; the drop file
+carries `! 0 3226`; the sandbox writes nothing outside the gamedir. `pm_selftest` all checks
+passed, `zone_selftest` 22/22, `reccheck.py` clean on 12 files.
+
+quakers on `vw_city`: **no `Unknown command`** for any of the four new commands,
+`in_journal_maxkb "8192" (default)`, and nothing ever starts a journal because nothing there calls
+`in_journal_begin`. Boot otherwise identical — Box3D 8 worker threads, hulls 72/36/24,
+`315 PASS, BAD=0` on the resolver selftest, every other `BAD=0`, sqlite ready.
+
+### Not verified, and it is the important one
+
+No console command in this engine synthesises a real `WM_INPUT` report, so **everything about what
+a physical mouse actually produces is untested**: the report rate against the mouse's rated polling
+rate, the intra-frame `dt` distribution, and whether `in_rawinput` 0 and 1 differ as predicted.
+The synth injector proves the format and the plumbing, not the content. The first real measurement
+has to be a manual capture, and the number to report is events/second against the rated rate — if
+that ratio is not near 1, the premise needs revisiting before anything is built on top of this.
+
+---
+
+## Patch 204 — raw mouse input on by default, under the name Source gives it
+
+*(203 is the concurrent session's `linked_portal_door` work — its number is claimed in
+`sh_portal.qc`, `cl_portal.qc`, `sv_entities.qc`, `cl_main.qc` and `cfg/default.cfg` but its entry
+is not in this file yet. This is 204 rather than 203 for that reason, not because 203 is free.)*
+
+`in_rawinput` defaulted to **0** (`in_win.c:313`). At that default the live mouse path is
+`INS_Accumulate`'s `GetCursorPos`/`SetCursorPos` recentre: one delta per call, roughly twice a
+frame, already summed by the OS, already through the OS's pointer acceleration, and already
+quantised to whole screen pixels. That is the wrong input for a movement game and it is
+structurally the wrong input for Patch 202's journal, whose entire premise is one record per
+report.
+
+Both games on this tree already set it to 1 from their configs, so this moves the good case out of
+a config line and into the engine — where a fresh install, a wiped config and a `cvar_reset` also
+get it.
+
+### The alias, and why an alias is safe here
+
+`CVARAFD`'s `name2` is added to the same hash as the primary name (`cvar.c:1398`), so
+`m_rawinput` and `in_rawinput` are **one cvar with two spellings** rather than two settings that
+can disagree. That is the only reason adding a second name is defensible at all; a mirror cvar
+would be a second answer to one question. `Cvar_RegisterVariable` also refuses the alias outright
+if the name is already taken (`cvar.c:1384-1387`), and `m_rawinput` appears nowhere else in the
+engine or plugins.
+
+Measured, and the write is the half that matters:
+
+```
+"in_rawinput" is "1" (default)      <- in_rawinput
+"in_rawinput" is "1" (default)      <- m_rawinput, echoing the PRIMARY name
+m_rawinput 0
+"in_rawinput" is "0"                <- writing the alias moved the real cvar
+```
+
+The name is Source's because this game's players arrive from there with it in their fingers.
+
+### CVAR_ARCHIVE, and the config line that had to go with it
+
+Turning it off should stick, so it archives. `cfg/default.cfg`'s `set in_rawinput 1` is deleted in
+the same change, and that is not tidying: `default.cfg` execs **before** the archived config, so a
+cvar that is both archived and asserted there can never be turned off by the player — their own
+saved choice is the one being overwritten, every launch, by ours. Build 15 hit exactly this with
+the move values.
+
+### What it does not do
+
+Registration of the raw devices happens once, in `INS_ReInit`, so turning it **on** from the
+console mid-session needs a `vid_restart`. Said in `default.cfg` rather than left for someone to
+discover.
+
+`in_rawinput_keyboard` is left at 0. It is a separate cvar governing all keyboard input including
+text entry, nobody asked for it, and its cost is visible but bounded: on the legacy path a held key
+auto-repeats, which a real journal shows plainly — 833 `+` records against 74 `-` records over one
+61-second run. Worth changing on evidence, not on tidiness.
+
+### Files
+
+`engine/client/in_win.c` — one cvar declaration. No header change, so `-Engine` rather than
+`-Full`.
+
+### Measured in both games
+
+FTESurf on surf_utopia: `pm_selftest` all checks passed, `zone_selftest` **22/22**, 6 zones,
+`reccheck.py` clean on 12 files, `hidcheck.py` clean.
+
+quakers on `vw_city`: `in_rawinput "1" (default)`, `m_rawinput` resolving to it,
+`in_rawinput_keyboard "0" (default)`, **no `Unknown command`**, Box3D 8 worker threads, hulls
+72/36/24, `315 PASS, BAD=0` on the resolver selftest, every other `BAD=0`, sqlite ready. It was
+already running `in_rawinput 1` from its own config, so the change is a no-op there by measurement
+rather than by argument.
+
+### And what Patch 202's journal says now that a human has produced one
+
+The gating measurement Patch 202 could not make headlessly. 61.6 s of surf_utopia, `rawinput 1`,
+`dropped 0`:
+
+```
+687.8 frames/s        842.7 mouse records/s        52,844 events
+
+mouse records in one frame:  0  1  2  3  4 .. 10
+                             %  0.4  79.6  18.6  0.9 ... max 10
+```
+
+**Frames carrying two, three and ten records exist.** Per-frame summation can produce at most one,
+so the per-report premise holds — that is the finding, and it is a shape rather than an average,
+which is why no rate calculation could have settled it.
+
+The second half is negative and equally clear. Consecutive records inside one drain sit a **median
+8 µs** apart where the observed rate implies 1187 µs — 148× too tight. That is
+`Sys_SendKeyEvents` draining a frame's worth of `WM_INPUT` in one `PeekMessage` loop, exactly as
+Patch 202's comment predicted. **Sequence, count and magnitude are real; sub-frame timing is
+not**, and `GetMessageTime()` (1 ms) is the named upgrade that would make it so.
+
+`tools/hidstats.py` is the reader. Its own first cut reported "80% of records arrive
+simultaneously", which was the *format's* convention measured back: `IN_Journal_Frame` stamps the
+`f` line at the time of the first event of the drain, so that event's dt is 0 by construction. The
+histogram now excludes the first record of each frame and says so on the line above itself.
+
+---
+
+## Patch 203 — the portal engine: five places where SOLID_PORTAL was never finished
+
+`SOLID_PORTAL` has been in FTE for years and every piece of it is real:
+`PM_PortalTransform` calls QC to ask where a point comes out, `PM_PlayerTracePortals`
+follows a crossing and re-traces from the far side, `PM_PortalCSG` carves the world
+behind an aperture out of a trace, `AddPortalsToPmove` adds every portal regardless of
+distance so the exit-side carve can happen. None of it had ever been used by a *point*
+entity, by Source movement, or by the client, and each of those three had a specific
+thing missing. Patch 205's `linked_portal_door` needs all five fixes below; on its own
+this patch changes nothing any existing map can see.
+
+### G3 — a modelless `SOLID_PORTAL` got garbage bounds (`sv_user.c:7086`)
+
+`AddEntityToPmove` takes `pe` raw out of the physents array and does not memset it. The
+`SOLID_PORTAL || SOLID_BSP` branch set `model` and `angles`; the `else` branch that
+copies `mins`/`maxs` was the only place they were written. Harmless for a brush model —
+`pe->model` is non-NULL and `PM_PlayerTrace` never reads them — but Source's
+`linked_portal_door` is a point entity sized with `setsize`, so `sv.models[0]` came back
+NULL, the trace fell into the `!pe->model` box branch, and the box it used was whatever
+the previous occupant of that physent slot had left there: a random size, at the portal's
+origin, and on a path that never calls `PM_PortalCSG` at all. So the one entity type
+whose entire purpose is to let you through a wall was the one that never carved it.
+
+Now copied in both branches, with `pe->model` explicitly NULLed on `modelindex 0` rather
+than trusting index 0 of the precache. `pe->scale` is set here too — nothing in the file
+had ever written it, and `PM_TransformedHullCheck` passes it to `PM_HullTrace`. That path
+needs `numhullplanes >= 4`, which no brush model has and no prop reaches through this
+function's filters, so the garbage was never read; it was one `if` away from being read.
+
+### G2 — the CSG window could not reach a player standing on the floor (`pmovetst.c:472`)
+
+The blocker, and it took the arithmetic written out longhand to see.
+
+`PM_PortalCSG` carved a **fixed** box: `portalradius = 128`, halved to 64, then shrunk by
+a hardcoded 24 on each side plane — ±40 about the portal **origin** along right and up,
+for every portal in existence. Source's `linked_portal_door` origin is the *centre* of
+its rectangle and FTE's player origin is at the *feet*, so for an 88-tall door on the
+floor the feet are 44 below centre, `44 > 40`, the up plane rejected, the function took
+its `return; //end is already outside`, the wall stayed solid — and `PMSrc_CheckStuck`
+then shoved the player up to 16 units every tick they stood in the doorway.
+
+Two changes. The window now comes from the entity's own `mins`/`maxs` (which G3 above
+finally puts in the physent) projected onto the portal's local right and up. QC bounds are
+world-axis-aligned, so the projection is exact at 0/90/180/270 yaw — 427 of the library's
+443 doors — and conservative in between.
+
+The second is the `+= 24`. Its intent is right: the player's box must be entirely inside
+the aperture before the world may be carved. But the corner it wants is the box's
+**minimum** support along the plane normal, and both the 24 and the commented-out
+`DotProduct(nearest, ...)` beside it use the **maximum**. With a hull of
+`(-16,-16,0)..(16,16,72)`:
+
+| reading | accepted feet, for an 88-tall door whose bottom edge is the floor |
+|---|---|
+| maximum support (`+= 24`, and the commented alternative) | 28..44 **above** the floor — i.e. floating |
+| minimum support (this patch) | floor..floor+16 — a 72-tall player inside an 88-tall hole |
+
+Only the four side planes move. Planes 0 and 1 stay anchored on `portal->origin`: that
+pair is the portal *plane*, the thing `camera_transform` mirrors about and the thing whose
+crossing sets `trace->entnum`, and it does not belong to the box.
+
+### The modelless portal branch (`pmovetst.c`, `PM_PlayerTrace`)
+
+`if (pe->isportal)` now comes first and splits on whether there is a model, instead of
+being reachable only when there is one. The modelless branch is point-size against the
+entity's own box with no rotation:
+
+* **point-size** because that is what `SOLID_PORTAL` means (`pr_common.h:711`) and what
+  the model-backed branch already did — and because it is the only reading that works.
+  The traversal fires on `trace.entnum` and `PM_PortalTransform` mirrors `trace.endpos`;
+  expand the box by the player hull and the trace stops ~16 units short of the plane, so
+  the point handed to the transform has not crossed yet and comes out on the wrong side
+  of the exit. That is exactly how Patch 194's teleport left players inside the wall.
+* **no rotation** because `pe->mins`/`maxs` came from `setsize` and are already
+  world-axis-aligned; `PM_PortalCSG` derives the aperture from the same box the same way.
+
+`PM_TestPlayerPosition` already had a correct modelless-portal branch — it was reading the
+garbage bounds G3 fixes, and needs no change.
+
+### Portals in Source movement (`pm_source.c`)
+
+`PMSrc_TraceHull` is the only trace entry point in the file and has ~18 call sites: ground
+probes, step-up and step-down tests, duck clearance, stuck recovery, the Patch 177 ramp
+fix's 27-direction search. `PM_PlayerTracePortals` cannot be substituted for it, because
+taking a portal is not a query — it rewrites `pmove.angles` and `pmove.velocity` as a side
+effect, and a "is there floor two units below me" probe that silently teleported the player
+and spun their view would be worse than the bug being fixed.
+
+So exactly one call site is portal-aware: the top-level bump in `PMSrc_TryPlayerMove`, the
+direct analogue of `PM_SlideMove`'s `pmove.c:257`. The recovery re-trace is deliberately
+left plain — a traversal launched from an origin the recovery invented is one the player
+never made — and the cached first trace from `PMSrc_WalkMove` is refused when it landed on
+a portal, because that trace knows the portal is there but not how to go through it.
+
+On a crossing: origin moved **here** rather than in the `pm.fraction > 0` block below,
+because a crossing that emerges flush has fraction 0 and would otherwise leave the player
+on the near side holding the far side's angles and velocity. `time_left` reduced,
+`primal_velocity`/`original_velocity` reseeded, `numplanes` cleared, the Patch 177 ramp
+state cleared, and `pms_forward/right/up` re-derived from the angles that just changed.
+
+And `allFraction += tookportal`, which has no analogue in `PM_SlideMove` because
+`PM_SlideMove` has no `allFraction`. Without it a bump spent entirely on reaching the
+portal plane reads as "never moved at all" to the guard at the bottom of the function,
+whose answer is to delete the player's velocity — a surfer entering a portal at 1500 u/s
+would arrive stopped.
+
+`PMSrc_StepMove` runs the move twice, restoring origin and velocity between attempts but
+**not** angles, so a `pms_portalcrossed` flag makes it return after whichever attempt
+crossed; without it the stepped attempt goes through the same doorway a second time, and
+the winner is then chosen by comparing horizontal distance across a portal, which is not a
+comparison of anything. `PMSrc_WalkMove` skips `PMSrc_StayOnGround` after a crossing —
+that function traces up 2 and down `stepheight+2` and snaps you to what it finds, which
+one tick after emerging is a floor you have no relationship to yet, and for a portal in a
+floor would pull you straight back through.
+
+### G4 — client prediction had no portal path (`cl_ents.c`)
+
+`pe->isportal` was assigned in exactly one place in the engine, `sv_user.c:7056`, so it was
+a server-only concept. `CL_SetSolidEntities` builds physents from
+`cl.inframes[...].packet_entities` and nothing else, so a portal living in CSQC — as
+Patch 205's do, derived from the BSP entity lump on both sides rather than networked —
+was invisible to prediction. The server would walk the player through the doorway and the
+client would predict them into the wall behind it, once per frame, forever: a permanent
+rubber-band exactly where the player is trying to go.
+
+`CL_AddCSQCPortalsToPmove` walks `csqc_world.portallist` — the list `World_LinkEdict` puts
+`SOLID_PORTAL` entities on precisely because portals must be considered regardless of
+distance — and is called immediately after the world physent, before the packet entities.
+Both reasons are structural: a map with enough networked entities to reach `MAX_PHYSENTS`
+would otherwise drop the portals, and `PM_PlayerTrace`'s world-is-allsolid recovery only
+scans *forward* from the entity it is testing when looking for portals to carve with.
+
+Stated limitation: `pe->info` for these is a CSQC entity number while every other physent
+on the client carries an SSQC one. Nothing mixes them — `info` reaches
+`PM_PortalTransform` only for `isportal` physents, and that resolves it against
+`pmove.world`, which is `csqc_world` — except `pmove.skipent`, which `cl_pred.c` sets to
+the player's SSQC entnum. A CSQC portal that happened to share that number would be
+skipped.
+
+### A scaled axis was culled as if it were unscaled (`renderer.c`, `R_CullEntityBox`)
+
+`e->scale` is not the only place an entity's size lives. `CSQCRF_USEAXIS` copies
+`v_forward`/`-v_right`/`v_up` straight into `axis[]` without normalising
+(`pr_csqc.c:838-844`) and forces `scale` to 1, so a non-unit axis row **is** a per-axis
+scale — the only non-uniform scale the renderer offers, and what Patch 205's apertures are
+built from: one unit quad drawn at 88×88, or 304×208, or 1000×1000. Culled against the raw
+model bounds an 88×88 aperture was a 2-unit cube, so the doorway vanished the moment its
+centre left the frustum — which, standing in a doorway looking at its edge, is most of the
+time it matters. `mrad` now also accounts for the largest axis row length; every ordinary
+entity gets its axis from `AngleVectors`, so the squared length is exactly 1 for them, the
+`sqrt` is skipped, and nothing changes on the path that runs 2350 times a frame on
+surf_demise.
+
+### An alias-model portal took out the renderer (`gl_rmain.c`, `gl_backend.c`)
+
+Every portal in this engine until now has been a world surface, whose mesh is always
+there. Patch 205's apertures are alias models, and an alias batch carries `mesh == NULL`
+until its `buildmeshes` callback runs (`gl_alias.c:2166`) — and that callback sets it back
+to NULL when the surface produced no indices (`:1970`).
+
+`GLR_DrawPortal`'s depth-mask loop submits every *other* portal batch, which nothing has
+built, and `GLBE_SubmitBatch`'s no-vbo path dereferences `batch->mesh[0]` immediately
+(`gl_backend.c:5728`). That is a null read on the first frame a portal is visible, and it
+is what an `ACCESS_VIOLATION` on a release mingw build with no symbols looks like. Found
+by bisection rather than a stack, through a `fs_portal_debug` cvar that removes the
+aperture one piece at a time:
+
+| mode | what is drawn | result |
+|---|---|---|
+| 3 | nothing — physics only | survives |
+| 2 | `RF_USEAXIS` + a plain opaque shader | survives, screenshot taken |
+| 4 | portal shader, no `camera_transform` | **crash** |
+| 1 | portal shader, no `RF_USEAXIS` | **crash** |
+| 0 | everything | **crash** |
+
+So: not the model, not the scaled axis rows, not the QC being called back into from inside
+the renderer — the engine's own portal path.
+
+Both loops now build in step before submitting. Rebuilding rather than merely skipping also
+fixes what would otherwise be a silent wrong answer: `R_GAlias_DrawBatch` hands every alias
+batch a pointer to **one file-static `mesh_t`** (`gl_alias.c:1934-1935, 1967`) which only
+describes that batch between its own build and its own submit, so eighteen already-built
+portal batches all point at whichever was built last and the depth mask would cover one
+doorway eighteen times. Build-then-submit in step is the discipline
+`GLBE_SubmitMeshesSortList` already keeps for exactly this reason. `GLR_DrawPortal` also
+returns early on a batch with no mesh instead of dereferencing on faith.
+
+There is a precedent comment three lines from the crash: `GLBE_SubmitBatch` was already
+hardened for a still-NULL *shader* reaching it through these same loops. Same family, same
+loops, one field over.
+
+### And the diagnostic, because the failure is invisible
+
+A refused crossing leaves the player standing against the portal, and because the bump made
+no progress `PMSrc_TryPlayerMove` deletes their velocity — so the symptom is "the doorway
+is a wall that eats your speed", with nothing to say which of the three gates said no.
+`PM_PlayerTracePortals` now prints which, and where, at `developer 1`. It cost a full run
+and a hand derivation of `PM_PortalCSG`'s plane arithmetic to learn the answer once; see
+Patch 205 for what it was.
+
+### Measured
+
+Nothing here is reachable without a `SOLID_PORTAL` entity, and no map in the library has
+one until Patch 205 creates them. surf_demise (no portals, 5966 draw calls, 49.25 fps) is
+byte-identical in behaviour and prints nothing. The verification that matters is in
+Patch 205.
+
+---
+
+## Patch 205 — linked_portal_door, seamless, and the 0.175 of a unit that stopped it working
+
+*(204 is the concurrent session's in-flight input-timestamp work; this took the next free
+number at append time, per the shared-tree rule.)*
+
+Patch 194 shipped these doors as teleports and said in its own header that seamless was a
+bigger patch. It is, and this is it — but the reason it had to happen is not polish.
+**Patch 194 put you inside the wall**, and its own verification table recorded that and
+read it as a pass.
+
+### Why no number could have fixed the teleport
+
+Its transform was right. Its trigger was not. A `touch` fires when your **box** reaches
+the volume, so with a 16-deep trigger and a ±16 player it first fires about 32 units in
+*front* of the entry plane. The mirror sends +32 to −32 — 32 units *behind* the exit
+plane, inside the wall the exit is set into — and the anti-ping-pong guard then made it
+permanent, because a wedged player keeps touching the door they arrived at and keeps
+refreshing the suppression. Patch 194's table logged the `-15376` arrival as "unchanged";
+that was a player embedded in solid.
+
+A crossing has to be measured **at** the plane, and the only thing that knows where the
+plane was crossed is the mover. So the door becomes `SOLID_PORTAL` and the engine does the
+crossing. Patch 203 is the engine half — five separate things that had never been
+finished, including a CSG window that could not reach a player standing on the floor.
+
+### The census, measured rather than assumed
+
+443 doors across 18 maps (surf_tripportals 116, bhop_tripportals 54, bhop_flything 50,
+noneuclidean 43, surf_kitsune2 30, bhop_parallel and surf_4plar 20 each, surf_kitsune 18,
+surf_kitsune_mom 18, bhop_furret 14, …). Two numbers decided the design:
+
+* **38.6% are not square** — 304×208 (all 30 of surf_kitsune2's), 320×400, 192×512,
+  128×120, 176×208, 24×56. So a uniform `.scale` cannot draw them and `CSQCRF_USEAXIS`
+  with per-axis scale is not a flourish, it is the only route.
+* **109 carry a nonzero pitch** — mostly ±90, portals in floors and ceilings. Those are
+  out of scope here and the limitation is specific rather than vague; see the bottom.
+
+surf_kitsune's own eighteen are all 88×88, pure yaw (90 or 270), pitch and roll zero,
+`startactive 1`, and paired symmetrically. Which is the map this patch is for.
+
+### One QC function serves all three callers
+
+`camera_transform` is called from three places and they agree on a shape that is easy to
+misread: `self` is the portal, `PARM0` is a **point** to transform, `PARM1` is angles, and
+`v_forward`/`v_right`/`v_up` are three **directions** to rotate in place. `pmove.c:106-114`
+calls it with (origin, velocity, move-remainder, gravitydir) and again with (origin, and
+the three rows of the view basis); `pr_csqc.c:8787-8798` calls it with (vieworg, and the
+three rows of the view basis). "Transform the point, rotate the three vectors" is correct
+for all three, so `shared/sh_portal.qc` holds one function rather than three, and it is in
+both `.src` files.
+
+The six basis vectors and the exit origin are cached at link time because **`makevectors`
+writes the very globals the contract passes data in** — calling it inside the transform
+would destroy the caller's input before it had been read. Which also means these doors must
+not move at runtime; none in the library does.
+
+The rotation negates the forward and right components and keeps up: a half turn about up,
+not a reflection, so nothing comes out mirrored. Forward flips because you approach the
+entry from its front and must leave the exit through its front.
+
+### The 0.175 of a unit
+
+The first build was worse than broken, it was *nearly* working, which is harder to read.
+The player reached `y = -15351.7` against a portal plane at `-15352` — through the wall,
+at the plane, correct to a third of a unit — and then stopped dead and lost all 1200 u/s
+of speed. Every gate looked right.
+
+The mirror is exact, and that is the problem: a player stopped `t` in front of the entry
+plane arrives `t` **behind** the exit plane. `t` is the near face of the aperture box, 0.25
+units. And `PM_PortalCSG`'s back plane — the one that decides whether a position inside the
+exit's wall is nevertheless legal — allows exactly `4/32 = 0.125`. Rejected by 0.175 of a
+unit, whereupon `PM_PlayerTracePortals` refuses the whole crossing, `PMSrc_TryPlayerMove`
+sees a bump that made no progress, and Patch 203's `allFraction` credit never applies
+because nothing was traversed. Hence: dead stop.
+
+Working that out took a full run and the plane arithmetic done longhand, which is why
+Patch 203 now prints which gate refused and where.
+
+The fix is one unit of forward nudge on the returned point, and it is the same idea Patch
+194's clamp was reaching for at 100× the wrong magnitude. It also removes a second problem
+for free: `PM_PlayerTracePortals` validates the landing with `PM_TestPlayerPosition`, which
+rejects a position inside a portal's own box, so without the nudge a crossing needed enough
+leftover movement *in that tick* to clear the box — about 33 u/s of forward speed, which a
+deliberate crawl does not have. Only the returned **point** moves; velocities and the three
+direction vectors are rotations and must not be translated.
+
+### The assets, and three details that are load-bearing
+
+`ftesurf/models/ftesurf_portal.obj` is a unit quad in the model's YZ plane. A
+`linked_portal_door` is a point entity with no brush anywhere in the BSP, so the surface
+the recursed view is drawn through has to be shipped rather than found.
+
+1. **The normal is exactly `1 0 0`.** `GLR_DrawPortal` takes the portal plane's normal from
+   `normals_array[0]` rotated by the entity's axis, and with a model normal of exactly
+   (1,0,0) that product collapses to `axis[0]` — the door's own forward, unit length,
+   exactly the plane the physics crosses. This is also why it is `.obj` and not `.md3`:
+   MD3 stores normals as two bytes of spherical angle and (1,0,0) quantises to
+   (0.99998, 0, −0.00615), a plane tilted ~0.35°, which over a 500-unit aperture is three
+   units of error.
+2. **The four vertices are symmetric in y and z.** `mod_obj_orientation` defaults to 1,
+   which swaps a vertex's y and z on load; for {(0,±1,±1)} that swap is a permutation of
+   the same four points, so the quad loads identically at orientation 0 and 1, and the
+   normal, having nothing in y or z, survives both. (Orientation 2 *would* break it — zxy
+   sends the normal to (0,1,0). Noted so the failure is recognisable.)
+3. **The `usemtl` line is not decoration.** The loader copies the material name into the
+   surface's one skinframe (`com_mesh.c:11773`), and a surface whose skin does not resolve
+   to a shader is dropped before `.forceshader` is ever consulted.
+
+`ftesurf/scripts/portal.shader` has **zero passes, and that is correct**: the engine renders
+the far side into the aperture first and then submits the same batch again depth-only to
+mask it, so anything this surface painted would sit on top of the view through it.
+`gl_shader.c:6026` exempts `SHADER_SORT_PORTAL` from the invent-a-diffuse-pass fallback for
+exactly this reason. `cull none` because the aperture masks depth from both sides and the
+`.obj` loader reverses winding depending on `mod_obj_orientation` anyway; `polygonoffset`
+because these doors sit flush against the wall they cut through, so z-fighting is the
+default outcome and not the unlucky one.
+
+### The client side, and the pairing bug the count caught
+
+CSQC reads the doors from the BSP entity lump with `getentitytoken`, following
+`Zone_LoadFromBsp` — proven on VBSP maps in this build rather than hoped for. No
+networking: they are static map entities and both sides derive from the same lump with the
+same arithmetic, so there is no delta to skew, and surf_tripportals would otherwise cost
+116 networked entities. Each door gets `SOLID_PORTAL` (so Patch 203's
+`CL_AddCSQCPortalsToPmove` can find it), the quad, `.forceshader`,
+`.drawmask = MASK_ENGINE`, and a `predraw` that sets `RF_USEAXIS` with `v_right`/`v_up`
+scaled to the door's half-width and half-height. `.solid` before the link so
+`World_LinkEdict` routes it to the portal list; `setmodel` before `setsize` so the model's
+2-unit bounds do not survive as the collision box.
+
+The first version cleared each door's cached `targetname` the moment it paired, as
+tidiness. `find()` searches that field across every door on every iteration, so blanking a
+name made that door invisible to every door resolved after it — surf_kitsune reported
+`portals: 9 rendered` against 18 doors, **exactly one per pair**. A count that is exactly
+half is worth more than a count that is merely plausible.
+
+`r_portalrecursion 2` ships in `cfg/default.cfg`: at the engine default of 1 a
+portal-seen-through-a-portal is not drawn at all and renders as a hole. Not higher, because
+each level is a complete extra scene render of everything visible through that aperture and
+the cost multiplies rather than adds.
+
+### Verified
+
+surf_kitsune, `portal_s1_entry` (−15360 −15352 904, yaw 90) → `portal_hub_exit`
+(0 −520 184, yaw 270), approached at 1200 u/s from a hand-written saveloc — the only thing
+in the game that sets position *and* velocity together, and necessary because the aperture
+is **44 units above the floor**. These are holes you fly through off a ramp, not doors you
+walk into; a standing player's feet are below the bottom edge and the window correctly
+refuses to carve. Two runs were spent learning that, one of them invalid because FTESurf's
+QC shadows the engine's `setpos` and does not force noclip, so the `noclip` meant to undo
+it turned noclip **on** and the player flew through the wall reading like a pass.
+
+| sample | position | note |
+|---|---|---|
+| load | −15360, −15200, 870 | 1200 u/s in −Y, +50 u/s lift to cancel the fall |
+| +140 ms | −15360, −15344, 870.2 | through the wall, at the plane |
+| +220 ms | **−0, −585, 146** | the far side of the map, at the hub exit |
+| +370 ms | −0, −765, 122.9 | 180 units in 150 ms = **1200 u/s, exactly preserved** |
+
+No teleport event, no ping-pong, the view rotated once and correctly (yaw −90 before and
+after, which is right because the exit's forward is −Y), and the arrival is where the
+transform's arithmetic says to four significant figures.
+
+Rendering, as an A/B on one frame with `fs_portal_debug`: with the aperture off, the
+doorway is a solid panel of the red wall grid; with it on, that exact panel becomes the far
+room — white beams, floor grid, correct vertical plane, filling the doorway opening and no
+more. `screenshots/p203b_1_noaperture.png` against `p203b_2_aperture.png`.
+
+| map | portals | draw calls | fps | note |
+|---|---|---|---|---|
+| surf_kitsune | 18 of 18 | — | — | crossing verified above |
+| surf_tripportals | **102** | 2846 | **99.5** | the stress case, 116 doors, no crash |
+| surf_demise | none, silent | 5966 | 49.3 | a map with no portals is untouched |
+
+### Stated limitations
+
+* **Pitched doors.** The rotation handles them geometrically, but `pmove.c:110-139` passes
+  `pmove.gravitydir` through as `v_up` and applies a 200 u/s minimum-speed clamp when the
+  transformed gravitydir has turned more than 45°. A pure-yaw pair leaves gravitydir
+  unchanged and the clamp correctly stays off; a floor portal fires it. Half gravity is
+  also applied before and after the move, which a yaw rotation preserves exactly and a
+  pitch does not. 109 of 443 doors, none of them in surf_kitsune.
+* **Off-axis yaws.** QC bounds are world-axis-aligned, so the aperture is exact at
+  0/90/180/270 (427 of 443) and conservative in between — an off-axis door fires slightly
+  early at its corners.
+* **A door toggled at runtime** (Source's Enable/Disable inputs) keeps rendering after the
+  server stops letting anyone through, because the client's copy comes from the lump and is
+  not networked. No map in the library does this.
+* **The lazy-reload transient.** `serverkey("map")` flips before `Changing map...`, so the
+  first pass after a map change reads the *previous* map's entity lump — the log shows
+  `portals: 18 rendered on surf_tripportals` immediately before `portals: 102`. Every
+  consumer of this idiom in the codebase has it, including the pre-existing sky and zone
+  loaders (the same log shows the sky named `blacksky` then `sky_day01_01`), and it
+  self-corrects on the next pass because `Portal_Clear` runs first.
+* **`FS_PortalTransform` writes `trace_endpos`** — but only in the CSQC copy, which is why
+  the render entry point is a separate wrapper rather than a flag inside the shared one.
+  The server's physics path never touches the global.
+* **`fs_portal_debug` is kept**, not deleted. It is what found the renderer crash without a
+  stack trace, and the same question will be asked again the next time a backend disagrees
+  about non-unit axis rows.
+* **Not verified: a floor-level doorway walked into on foot, and prediction under real
+  latency.** surf_kitsune has no door at floor height to test the first, and the second
+  needs a client and server that are not the same process.
+
+---
+
+## Patch 206 — the portal that could only be entered by crouch-jumping
+
+Patch 205 shipped seamless `linked_portal_door` with a verification table: a 1200 u/s
+crossing on surf_kitsune, exact to four significant figures, and a same-frame render A/B.
+Playing it produced a different report, and the first line of it is the whole patch:
+
+> "Omg I just realised I just to crouch jump into them, which is not normal."
+
+That is a measurement, and it names the bug precisely.
+
+### The window was sixteen units tall
+
+Patch 203 changed `PM_PortalCSG`'s four side planes from the player box's maximum support
+to its **minimum**, which spells "the whole player must be inside the aperture". The
+reading is defensible. It is also unplayable: an 88-tall opening minus a 72-tall standing
+hull leaves **sixteen units** of freedom, and they sit at the bottom of the opening.
+surf_kitsune's apertures span z 860–948, so the accepted band for the feet was [860, 876].
+
+The ducked hull is 54 tall. That widens the band to [860, 894] — thirty-four units instead
+of sixteen. Crouch-jumping is not a workaround the user found, it is the only thing that
+fits.
+
+**And Patch 205's own test fixture was built to land inside it.** `p203c.cfg` sets velocity
+`0 -1200 +50`, and its comment explains why: "the +50 u/s of lift cancels the fall over
+exactly that interval, so the feet arrive at ~870 — the middle of the [860, 876] band the
+window accepts." The measurement was aimed at the middle of the thing it was measuring. It
+proved the mechanism and said nothing whatever about whether anyone could use it.
+
+The fix is to test the box's **centre**. Your middle is in the hole, so you are going
+through the hole — which is also what Source asks (`WorldSpaceCenter` against the door
+rectangle). It is safe to let half the box sit inside the wall mid-crossing because the
+**exit carves symmetrically**: the same function runs from `PM_TestPlayerPosition`'s
+fallback on the arrival, so a landing partly inside the exit wall is accepted for exactly
+the reason the departure was. Planes 0 and 1 are untouched — that pair is the portal
+*plane*, the thing `camera_transform` mirrors about, and it does not belong to the box.
+
+Measured, six savelocs at the same approach and different heights, which is the test Patch
+205 did not have:
+
+| feet z | before (derived) | after (measured) |
+|---|---|---|
+| 820 | refuse | refuse — *"below it by 8.0 units"*, so the edge is 824.0 exactly |
+| 840 | refuse | **cross → −0, −729, 99** |
+| 860 | cross  | **cross → −0, −747, 116** |
+| 880 | refuse | **cross → −0, −729, 139** |
+| 900 | refuse | **cross → −0, −747, 156** |
+| 920 | refuse | refuse — edge is 912 |
+
+[860, 876] → [824, 912]. The whole doorway, with the edges landing where the arithmetic
+says to a decimal place, which is the part that makes it a measurement rather than a
+feeling.
+
+### A refused carve could not report itself, and that is structural
+
+The refusal is not merely unlogged, it is *unreachable* from anywhere downstream. When the
+window says no, the world trace stops the player's **box** short of the plane while the
+portal's own point trace only reaches the aperture **at** the plane; the box trace
+therefore has the smaller fraction and wins the comparison in `PM_PlayerTrace`, so
+`total.entnum` stays 0 — the world. `PM_PlayerTracePortals`' `if (impact->isportal)` is
+never entered, `camera_transform` is never called, and **both** of Patch 203's refusal
+`Con_DPrintf`s — written for precisely this — are dead code. The player just stops.
+
+`PM_PortalCSGReport` fixes that, with two filters that are not optional.
+`AddPortalsToPmove` adds every portal on the map to every move regardless of distance
+(that is deliberate — it is what makes the exit-side carve possible), so this function runs
+eighteen times per trace on kitsune and seventeen of those are doors thousands of units
+away refusing by thousands of units. The first version printed eighteen lines per trace.
+Only a near miss is a diagnosis. The second filter is per-door change detection, sixteen
+slots hashed on entnum: a single last-seen slot is defeated by the commonest case there
+is — two doorways in reach of one trace alternate, each counting as a change from the
+other, and kitsune's pair 6/14 printed both halves on every trace.
+
+### The grounded walk-through, and a trace nothing could ask about
+
+`PMSrc_WalkMove`'s first trace **is** the whole move for a player on the floor, and when it
+came back clean the function returned before ever reaching `PMSrc_TryPlayerMove` — the one
+site Patch 203 made portal-aware. Harmless while the aperture was an unpassable box.
+Now that the window accepts a standing player, `PM_PortalCSG` *elongates* that trace
+through the wall, so a clean fraction of 1 is exactly what a successful carve looks like:
+the player would be walked bodily into the far side of the entry wall with no transform, no
+rotation and no velocity change.
+
+Patch 203 guarded the cached-trace reuse in `PMSrc_TryPlayerMove` with "did this trace stop
+on a portal?", via `trace.entnum`. **That question cannot be answered.** `PM_PortalCSG`
+stamps `entnum` only when the move leaves through the portal plane itself (`hitplane == 1`);
+a move that enters the carved region and exits through a *side* plane has been elongated
+through solid brushwork and still reports the world. So the gate is the coarse one —
+`PM_AnyPortals`, cached once per tick — and on the 1290 maps with no portals it is a single
+early-out and nothing changes anywhere.
+
+### The transparent square: two loops that disagreed
+
+> "it sort of deletes the wall behind it? and has a square transparency in the middle"
+
+`GLBE_SubmitMeshesPortals` runs two loops over the same batch list. The first delegates to
+`GLR_DrawPortal`, which refuses a portal on four separate grounds — no mesh, no
+`xyz_array`, the alphagen-portal distance, and above all **you are behind it**
+(`gl_rmain.c:1184`). The second writes the wall-masking depth and had *none* of them.
+
+A depth mask with no scene rendered behind it does not hide a portal, it deletes the
+**wall**: the world is rejected there, and since `r_clear` defaults to 0 and nothing clears
+colour inside a recursion, what shows through is the **previous frame** — smeary rather
+than black, which is why it reads as a transparency.
+
+It bit here and not upstream because a world portal surface is split by `SURF_PLANEBACK` at
+load and its back side is a different batch that gets culled. An alias-model aperture with
+`cull none` is in the list from both sides, so on a map of **paired** doors roughly half of
+them are behind you at any instant, and each punched an 88×88 hole in the wall it was set
+into. `GLR_DrawPortal`'s own mask loop made it worse: it masks every *other* portal out of
+the scene it is about to render, so a failed aperture was stencilled out of all eighteen
+passes and could not be painted by anything at all.
+
+`GLR_PortalWouldDraw` is now the single verdict, and all three loops ask it.
+
+### r_portalmaxviews: the cost was quadratic and nobody had bounded the width
+
+`r_portalrecursion` bounds the **depth** of the portal tree. Nothing bounded its **width**,
+so the cost is (portals visible) ^ depth complete `R_RenderScene` calls per frame — world
+walk, batch generation, lighting, all of it, each time. Measured on surf_kitsune from three
+positions the player actually occupied during a crossing:
+
+| camera | apertures off | apertures on |
+|---|---|---|
+| 0, −765, 133 | 1357 µs, 57 world batches | **18956 µs, 720 batches** |
+| 0, −900, 160 | 1094 µs, 57 | **17264 µs, 633** |
+| −15360, −15200, 870 | 1186 µs, 111 | **11898 µs, 681** |
+
+Fourteen times the rest of the scene put together. That is the "laggy", and it is not a
+slow frame, it is an unplayable one.
+
+Angular size is the metric because it is the one the eye uses — and because a portal seen
+*through* another portal is scored from the recursed eye, where it is large. That is what
+makes the next room's door render open and everything past it render closed, which is the
+behaviour asked for; it falls out of the metric instead of being special-cased.
+
+**The verdict is cached, and that is correctness rather than optimisation.**
+`R_GAlias_DrawBatch` points every alias batch at ONE file-static `mesh_t`, valid only
+between that batch's own build and its own submit. A portal's plane therefore cannot be
+recomputed later from `batch->mesh` — it would read whichever aperture was built last, and
+eighteen doors would all answer with the geometry of one. So each batch is built and judged
+in the same step, once, and every loop afterwards is a pointer lookup that touches no mesh.
+That also deletes the quadratic `buildmeshes` traffic the mask loops used to generate.
+
+surf_tripportals, 116 doors: **2347 µs**, no crash. Scene renders per frame on kitsune go
+14 → 7 at `r_portalmaxviews 2`, and the counter says so from inside the budget pass rather
+than being inferred from the door count at load — instrument the consumer.
+
+### The void
+
+A portal recursed from outside the world samples PVS from a cluster that does not exist, so
+it renders garbage or nothing — at full price. Noclipping out through kitsune's ceiling paid
+for eighteen scene renders a frame to look at eighteen rectangles of nothing. Gated on
+`r_viewcluster == -1`, which is the engine's own "outside the world" and covers every way of
+getting there; deliberately *not* coupled to `r_voidvis`, which is a different feature about
+what the world draws and which `ftesurf.cfg` has switched off. Measured: 712 µs in the void.
+
+### NOT FIXED, and this is the honest part
+
+**The far view still leaks outside the doorway on some geometry.** The user's other
+sentence — "it was projecting the whole wall, not just in the doorway" — is real and
+survives this patch.
+
+FTE does not scissor or stencil a portal. `GLR_DrawPortal` renders the far scene over the
+**entire screen**, clipped only by an oblique near plane, and relies on the ordinary world
+being drawn afterwards to paint back over it everywhere except the aperture. On kitsune's
+hub doorway that repaint does not happen for the wall the aperture sits in — while the floor
+in front of it and the doorway frame around it both repaint correctly.
+
+Ruled out, each by its own run:
+
+* **the depth mask** — `r_portaldebug 2` removes it entirely and the wall is still missing;
+* **the mask's size** — `fs_portal_debug 1` leaves a **two-unit** quad and the wall is still
+  missing, so it is not the axis rows;
+* **`polygonoffset`** — removed in Patch 207 (it was resolving to unit −25, a genuine bug in
+  its own right), no change to this;
+* **the oblique near clip** — `temp_useplaneclip 0` skips it, no change;
+* **the per-view budget** — one portal at one level behaves identically to seven;
+* **the inner mask loop** — `r_portaldebug 3` is pixel-identical to normal;
+* **PVS state** — `r_novis 1` is pixel-identical;
+* **brush entities** — `r_drawentities 0` does not remove the wall, so it is world geometry;
+* **the world not being submitted** — `r_speeds` counts 57 world batches without a portal
+  and 159 with, so the outer view's batches are still being drawn.
+
+`r_portaldebug` is kept for whoever picks this up. The named fix is the one FTE's own source
+already carries as a FIXME at `gl_rmain.c:1408`: scissor the recursed render to the
+aperture's projected rectangle, and narrow the recursed frustum to the aperture cone by
+substituting the four side planes (there is no room to append — `MAXFRUSTUMPLANES` is 7 and
+`GLR_DrawPortal` already spends one). That makes the leak impossible by construction instead
+of relying on a repaint, and it is also the remaining cost lever: each recursed view
+currently draws ~95 world batches against the primary view's 57, because it is culled to the
+whole screen rather than to the hole.
+
+Until then `fs_portal_render 0` turns the apertures off and leaves the physics working, and
+Patch 207's config block says so where someone will find it. A map plays better with a solid
+wall than with a wrong one.
+
+---
+
+## Patch 207 — the QC half, and 116 phantom portals on a map that has none
+
+Patch 206 is the engine half of correcting Patch 205. This is everything above the engine,
+and the largest item in it is a bug Patch 205 documented as harmless.
+
+### 116 apertures on surf_demise
+
+Patch 205 read the doors out of the BSP entity lump with the lazy idiom every other lump
+reader here uses: compare `serverkey("map")` against a latched name, reload on a change. Its
+entry recorded the transient and dismissed it — "it self-corrects on the next pass because
+`Portal_Clear` runs first".
+
+That is true when the map key **lags** the lump. It changes in either order, and when it
+**leads**, the load reads the previous map's doors, latches the new map's name, and never
+looks again. Changing from surf_tripportals to surf_demise built **one hundred and sixteen
+phantom apertures on a map with no portal doors at all** — 116 entities carrying
+`SOLID_PORTAL` in `csqc_world`, on a map where the server has none. The log said
+`portals: 116 rendered on surf_demise` in as many words, which is the only reason it was
+caught: Patch 205's print did not name the map it thought it was loading for.
+
+**It was not the framerate**, and the first version of this entry said it was. demise
+measured 90 ms a frame with the phantoms present, which looked like a smoking gun next to a
+map already being complained about at ~30 fps. It is not: booting straight to demise with no
+portal map before it — no stale lump, no phantoms, signature `0/` — measures **104 ms**, and
+`fs_portal_render 0` measures **107 ms**. Same 59 world batches throughout. The phantoms
+cost nothing because Patch 207's predraw declines every one of them (no `portals: depth`
+line appears on demise at all), and demise's frame time is demise's own prop cost, which is
+what prop instancing is queued for. The claim was retracted rather than quietly dropped
+because a wrong attribution about the map the user is complaining about is worse than none.
+
+What made it a real bug is the physics: a client-side `SOLID_PORTAL` where the server has
+nothing is a disagreement waiting to be walked into.
+
+Two things fix it and neither is sufficient alone.
+
+`CSQC_WorldLoaded` is the engine's own answer to "when may I read the entity lump" —
+declared in `cl_defs.qc:396` since forever, and nothing in FTESurf had ever defined it, which
+is why every lump reader here grew its own serverkey compare instead. It is defined now.
+
+**It is still not trusted**, and that correction cost a run. The first version treated the
+hook as authoritative and closed the recheck window, reasoning that the engine would not
+offer it before the lump was ready. It does: the demise transition still read tripportals'
+116 doors from inside `CSQC_WorldLoaded`, and closing the window made that *permanent* —
+strictly worse than the lazy compare, which at least got a second look. So a cheap
+**signature** of the lump (door count plus the first door's origin) is what actually knows,
+both entry points arm it, and the loader re-reads at intervals until two consecutive reads
+agree. The retries are counted in **frames, not seconds**: a 60-second map load does not
+advance `time`, so a time-based window expires without ever having looked.
+
+And the signature is taken **during the load's own walk**, not from a fresh walk afterwards.
+Taking it afterwards is what made three consecutive runs look like the guard did not work at
+all: on the demise transition the lump flipped *between* the load walk and the signature
+walk, so the signature recorded demise's zero doors while the entities recorded tripportals'
+116 — and the two could then never disagree, so the recheck declared the lump settled and
+kept the phantoms. A signature has to describe what was actually built, not what a second
+look happened to see.
+
+The last thing that had to change was the log. The correcting reload builds nothing, so a
+print gated on "did we build any" said nothing at all, and the successful outcome was
+invisible while the wrong one was loud. Every load now dprints its own outcome, and the line
+the player sees is printed **once, from the settled state**. The audit trail on the demise
+transition reads:
+
+```
+portals: loaded surf_demise -> 116 apertures, 0 name-only, sig 116/-10400 20222 -11104
+portals: loaded surf_demise -> 0 apertures, 0 name-only, sig 0/
+portals: settled on surf_demise with sig 0/
+```
+
+— stale read, correction, settled, and nothing printed to the player at all, which is right
+for a map with no portal doors.
+
+### The predraw had no visibility test of any kind
+
+Every door on the map returned `PREDRAW_AUTOADD` on every frame, and each one that survived
+frustum culling drove a complete recursive scene. Four questions now, cheapest first, all
+per-entity — which is why they can live in the predraw rather than in a pre-pass:
+`fs_portal_render`, then noclip (via `STAT_FS_MOVETYPE`, which FTESurf already networks),
+then **facing**, then distance and `checkpvs`. The facing test is the same one
+`GLR_DrawPortal` applies; refusing the door here means Patch 206's depth mask never even
+sees the aperture you are standing behind.
+
+The count is deliberately *not* decided here. `r_portalmaxviews` owns it and has to, because
+it is the only thing that can see the recursed views — a QC count would bound the primary
+view and nothing else.
+
+### The cvars are registered
+
+Patch 205 called `cvar("fs_portal_debug")` once per door per frame on a cvar nothing ever
+registered. FTE auto-creates an unknown cvar as the empty string, so it booted as `""` and
+read 0 — which happened to be the ship default, so it worked by luck. This project's notes
+already carry the trap ("register at the point of first read, not in worldspawn") and it has
+cost a whole feature once before. `fs_portal_render`, `fs_portal_dist` and `fs_portal_debug`
+are registered, and `fs_portal_render 0` is a real switch rather than a debug mode: apertures
+off, physics still crossing, which is what makes kitsune completable while Patch 206's
+remaining leak is unfixed.
+
+### polygonoffset was deleting the wall
+
+Bare `polygonoffset` resolves to unit **−25**, factor −0.05, and `BE_PolyOffset` runs in
+every backend mode including `BEM_DEPTHONLY`. So the aperture's depth mask was written
+twenty-five depth units *toward the camera*, and at a grazing angle that kill volume is much
+larger than the aperture's own footprint. Patch 205 added the keyword against z-fighting that
+cannot happen — a `linked_portal_door` stands in a doorway **opening**, and there is no
+coplanar brush for it to fight. A hairline bias would have been defensible; −25 is not a
+hairline. Removed.
+
+### Three client/server divergences
+
+* **One-way destinations.** The server deliberately keeps unpartnered and inactive doors
+  alive so they stay findable by `targetname` — three of the library's 443 name a partner
+  without being named by one, and on bhop_aberrant `p2` points at a `p1` that has no partner
+  of its own. Patch 205's client skipped creating those, so `find()` failed for `p2`, `p2`
+  was swept as unpaired, and the client had **no** aperture where the server had a working
+  portal. Every door is now an entity; whether it gets a model and a `SOLID_PORTAL` is a
+  separate question. Nothing is swept — an unpaired door costs one inert entity with no model
+  and a predraw that is never reached, which is cheaper than the bug.
+* **`startactive`.** The server refuses on `startactive == 0 || StartDisabled` and an absent
+  key reads 0 there, so an absent key must read inactive on the client too. All 443 doors
+  write it, so this is lockstep rather than a live case — but the failure mode of not doing
+  it is invisible until somebody walks into it.
+* **The count print.** It came from the entity report, which runs from `StartFrame` — and in
+  FTESurf `StartFrame` runs before `worldspawn`, and therefore long before the `time + 0.1`
+  think that resolves the pairs. So the line meant to say "eighteen doors linked" said "no
+  portal doors on this map", on every map that has them, for two patches. It is deferred now,
+  and it **re-arms until the number stops changing** rather than waiting a fixed delay: the
+  first version waited 0.2 s and reported `1 linked` on a map with eighteen, because during a
+  load `time` can jump far enough that every pending think fires in one frame, in entity
+  order — and the reporter, spawned by the first door, has a lower entity number than the
+  seventeen doors it was waiting on. A longer delay cannot fix an ordering problem.
+
+Both sides now print, and the two numbers are meant to be compared: server `portal doors: 18
+linked` against client `portals: 18 with apertures, 0 name-only`. A count that is exactly
+**half** the door count is Patch 205's pairing bug; short by two or three is a one-way
+destination. surf_tripportals reports 116 apertures against 102 linked, which is a residual
+divergence and is written down here rather than smoothed over — 14 of its doors resolve
+client-side and not server-side, and nobody has been through them yet.
+
+### And when a door never linked, it says so
+
+`FS_PortalTransform`'s `!lpd_ok` path returned the point unchanged and left
+`v_forward`/`v_right`/`v_up` alone — a total no-op crossing. The player walks into the
+doorway, the engine dutifully transforms them to exactly where they already were, and the
+symptom is "the portal does nothing at all" with no evidence anywhere that a portal was
+involved. Same class of silent failure as Patch 206's refused carve, same treatment.
+
+### The config block, corrected
+
+`default.cfg` claimed that past `r_portalrecursion` a portal "renders as a hole — black, or
+whatever the depth buffer last held". **It does not**, and believing it was what made
+`r_portalrecursion 2` look mandatory. Past the limit `GLBE_SubmitMeshes` does not call
+`GLBE_SubmitMeshesPortals` at all, so neither a scene nor a depth mask is emitted, the batch
+falls through to the ordinary sort list, a zero-pass portal shader draws nothing, and the
+wall behind it survives. A portal past the limit renders **closed** — which is what it should
+look like, and it is free. That is also what makes `r_portalmaxviews` produce the intended
+behaviour rather than a hole.
+
+### Verified
+
+surf_kitsune: 18 linked, 18 apertures, the acceptance band [824, 912] measured at six
+heights, `fs_portal_render 0` crossing with the apertures off. surf_tripportals: 116
+apertures, 2347 µs, no crash. The void: 712 µs.
+
+**Not verified:** surf_kitsune completable end to end at speed off the ramps — that is a play
+test, and it is the one that matters now that the window is the whole doorway. Prediction
+under a real client/server split is still unverified for the same reason as before: a listen
+server is both sides.
+
+---
+
+## Patch 208 — the doorway is the window
+
+> "the portal covers the whole wall, and not the 'doorway' do we have a method to fix this?"
+
+Yes, and it is the one FTE's own source has been carrying as a FIXME since before
+any of this: `//fixme: we can probably scissor a smaller frusum`, `gl_rmain.c`, three
+lines above the `R_SetFrustum` call in `GLR_DrawPortal`.
+
+### The measurement that chose the lever
+
+Patch 206 listed eight things it had ruled out for this leak and admitted it had not
+found the cause. It never ran the one bisect that mattered, which is embarrassing
+because it had already built the cvar for it. `r_portaldebug 1` skips the recursed
+`R_RenderScene` and changes nothing else. Run it at surf_kitsune's exit doorway and
+**the entire missing wall comes back**.
+
+So the far scene's colour is the thing covering the wall, and it is covering it
+because FTE paints that scene over the **whole screen**. There is no scissor and no
+stencil anywhere in the path. `SHADER_SORT_PORTAL` is 3 and `SHADER_SORT_OPAQUE` is
+5, so a repaint is due and the design depends on it; on kitsune's hub geometry it
+does not arrive for the wall the doorway is set into, while the floor in front and
+the frame around it repaint correctly.
+
+**This patch does not explain that.** It removes the far scene's ability to reach
+those pixels at all, which is a stronger guarantee than fixing a repaint race and is
+the same change that bounds the recursed view's cost. `r_portalscissor 0` restores
+the full-screen render, deliberately, because a switch that re-exposes the raw
+symptom is worth more than a tidy story about a bug nobody has cornered.
+
+### Where the rectangle is measured, and why only there
+
+`GLR_PortalScreenRect` projects the aperture's own vertices and takes their bounding
+rectangle. It is called from exactly one place — `GLR_PortalBudgetBegin`'s
+build-and-judge pass — and the two reasons are independent and both fatal.
+
+The first is Patch 206's: `R_GAlias_DrawBatch` points every alias batch at one
+file-static `mesh_t`, valid only between that batch's own build and its own submit,
+so aperture geometry read later describes whichever door was built last. The second
+is new. `R_ObliqueNearClip` rewrites `r_refdef.m_projection_std` **in place** partway
+down `GLR_DrawPortal`, and the `switch(portaltype)` above it has already overwritten
+`vpn` and `vieworg` with the far camera's. The budget pass is the last moment at
+which the outer view's projection, view matrix and eye all still agree — everything
+after it would silently mix two cameras. So the rectangle is cached beside the
+drawable verdict and every later use is a pure table lookup, `GLR_PortalScreenRectAt`.
+
+### It never culls
+
+`Sh_ScissorForBox` — the engine's working example, which this is modelled on —
+returns "fully offscreen" and its callers skip the light. Every analogous answer here
+means **"do not clip"**, which is bit-for-bit the pre-208 behaviour. That includes the
+case `Sh_ScissorForBox` handles most carefully: a vertex at or behind the near plane.
+It interpolates the crossing; this declines outright.
+
+That is not laziness. After a `w` that has passed through zero, clamping the
+projected result to 0..1 can produce a rectangle **smaller** than the true footprint,
+and a rectangle that falls short at the aperture's rim writes the portal's depth over
+pixels with nothing rendered behind them — Patch 206's transparent square, back as a
+one-pixel fringe, appearing exactly while you walk through the door. Declining is
+also simply correct: from inside the doorway the aperture really does fill the view.
+For the same reason the rectangle is padded by two pixels. It has to be a strict
+**superset** of what the depth mask submits, never a subset.
+
+`dmin`/`dmax` are pinned to 0 and 1 rather than derived from the projection.
+`R_ObliqueNearClip` rewrites only the z row, so screen x and y survive it and any
+depth taken from the same matrix does not — and `GLBE_Scissor` feeds those two
+straight into `qglDepthBoundsEXT`.
+
+### `BE_Scissor(NULL)` had to stop meaning "no scissor"
+
+Setting a scissor and calling `R_RenderScene` does not work, and the reason is
+written in the engine already: *"The backend doesn't maintain scissor state."*
+(`gl_shadow.c`). The recursed frame is a complete scene, so it reaches
+`Sh_DrawLights` through `GLBE_DrawWorld`, and that function's teardown is a flat
+`BE_Scissor(NULL)`. The clip would have survived until somebody switched rtlights on
+— a failure that appears only in one configuration, which is the worst kind.
+
+So the aperture became an **ambient clip** carried in `refdef_t`, and every
+`BE_Scissor` call resolves against it in `GLBE_ApplyScissor`. `refdef_t` is copied by
+value across the recursion, so save, restore and nested-aperture intersection are all
+free. A caller asking for no scissor now gets the aperture; a caller asking for a box
+gets box-intersect-aperture, which for a light is not merely safe but correct and
+slightly faster. **No existing call site changed.** The intersection is done in
+fractions so the one piece of arithmetic anybody has to trust — the y flip in
+`GLBE_Scissor`, which its own author left a commented-out wrong version above —
+is inherited rather than written a second time.
+
+The other half is `GL_ViewportUpdate`, which was a bare `qglViewport` macro and is
+now a function. Every call site of it is a render-target change: a reflection,
+refraction or ripplemap FBO, or a shadow atlas. Each either invalidates the
+rectangle or restores the target it was measured against, and `portalclippx` — the
+`pxrect` identity recorded at measurement time — is what tells them apart. So those
+paths need no explicit suspend: they retarget, the identity test fails, their
+unclipped clears run, and the restoring `GL_ViewportUpdate` re-arms the aperture.
+A `scissor_ambient` guard means that with no portal clip in the frame the function is
+exactly the old macro, so the console, menu and CSQC `drawsetcliparea` users are
+untouched.
+
+### Three corrections to Patch 206 and 207's own record
+
+**The refusal diagnostic floods, and its own comment claims it cannot.**
+`PM_PortalCSGReport` suppresses repeats with sixteen slots indexed `entnum & 15`,
+and the comment says "a collision costs one extra line, never a missed diagnosis".
+A collision does not cost one line. It costs an unbounded number, because it does
+not happen once — it happens on every trace, forever, and it is precisely the
+alternation the single-slot version was replaced to cure. Any two doors sixteen
+apart alias, and surf_kitsune's entry hall has four such doors in range at once:
+1 with 17, and 3 with 19. Standing still in front of them wrote about a thousand
+lines per door in a few seconds, dragged the game to **0.9 fps**, and cost a whole
+verification run — the user killed it. Fixed with linear probing, so distinct
+entities get distinct slots outright instead of being hoped not to collide, and a
+full table degrades to the old behaviour rather than to something worse.
+
+The change threshold moved from 1 unit to 8 for a second, independent flood:
+walking toward a door at 250 u/s changes the miss distance by 2.5 units a tick, so
+an approach printed every tick even when the table behaved. Note what makes this a
+diagnostic bug rather than a player-facing one: `Con_DPrintf` writes to the log
+whenever `log_developer` is set *regardless of `developer`* (console.c), so the
+test configs' own `log_developer 1` is what put those lines on disk. A player at
+defaults never paid the disk cost — only the two cheap filters, which is why this
+survived two patches unnoticed.
+
+**`r_portaldebug 3` measuring "pixel-identical to normal" was not a ruled-out
+suspect.**
+
+**`r_portaldebug 3` measuring "pixel-identical to normal" was not a ruled-out
+suspect. It was evidence that the loop it disables is dead code.**
+It was evidence that the loop it disables is dead code.
+`GLR_DrawPortal`'s inner depth-mask loop writes other apertures' depth, and then
+`R_RenderScene` — called about ninety lines later — clears the whole depth buffer
+before a single pixel is drawn. Nothing reads it in between. Patch 206 recorded the
+observation and drew the wrong conclusion from it. The loop costs a `buildmeshes`
+and a `GLBE_SubmitBatch` for every other portal batch, per portal, per level, and
+buys nothing; deleting it is queued as its own change rather than bundled here.
+
+**`p206final.cfg`'s screenshot pair was taken with the feature switched off by its
+own gate.** It toggles `noclip` on before its `setpos`, and Patch 207's predraw
+returns `PREDRAW_NEXT` under `MOVETYPE_NOCLIP` — so both arms of the "apertures on
+vs off" comparison had no apertures. The habit came from `setpos` not forcing noclip
+in FTESurf, which is already in this project's notes; what the notes did not say is
+that the workaround now collides with a gate added two patches later. Patch 208's
+configs stand on the floor instead, which is also where a player is.
+
+### Verified
+
+surf_kitsune, standing on the exit-side floor at `0 -765 97` looking at the doorway:
+
+* `r_portalscissor 0` — the grey grid wall is gone above the horizon, replaced by the
+  far room's red floor grid and red ramps spanning the full screen width.
+* `r_portalscissor 1` — the wall and floor are identical to `fs_portal_render 0`, and
+  the far room appears **inside the doorway opening only**.
+
+The entry side, pressed up against the wall at `-15360 -15250 816`, is the cleaner
+proof because the wall there is an unbroken red grid: at `0` the far room's floor,
+ceiling beams and its own distant doorway cover the screen; at `1` the grid wall is
+back and the far room sits in a rectangle whose edges are visible as the exact
+places the wall's gridlines stop and restart.
+
+Also verified: facing **away** from a door, the wall is solid with no transparent
+square, so Patch 206's fix stays fixed; at `r_portalrecursion 3` — the only setting
+at which the nested-aperture intersection is ever executed, since the shipped
+default of 2 never reaches it — the far room is confined identically; surf_demise,
+which has no doors, produces **no portal output of any kind**; and surf_tripportals'
+116 apertures run with the budget reporting `8 in view, 2 rendered, 6 closed` and no
+crash.
+
+**The physics still works, tested by walking rather than by fixture.** Standing at
+`-15360 -15250 816` in the entry hall and holding forward for two seconds ends at
+`7.9 -960.5 96.0` — the exit hall, on the other side of the map. That is Patch 206's
+actual headline (a standing player walks through a doorway that used to demand a
+crouch-jump) and it is a better test than the 1200 u/s band, which is a fixture
+nobody plays.
+
+The band itself was **not** re-run, and the reason is worth recording because three
+attempts failed and every failure was silent. The hand-written savelocs answered
+`save: nothing saved on this map` for all six slots. The first cause was real and
+fixed — they carried five `note` lines *above* the `FTESURF-SAVE` header, and
+`SV_SaveLocScan` keys on it. With that corrected they still were not found, and
+`fs_flush` (the command that rebuilds FTE's file index, not `fs_rehash`) did not
+help either: `search_begin` is not seeing state files written while the engine was
+not running. Unexplained, written down, and worked around by testing the gesture a
+player actually makes.
+
+**Cost is unchanged, and that is the expected result rather than a disappointment.**
+surf_kitsune at the exit doorway, three interleaved passes, best of each because
+every source of noise here can only add time:
+
+| | total µs/frame | world walking | opaque batches |
+|---|---|---|---|
+| `r_portalscissor 0` | 2578 | 450 | 3356 |
+| `r_portalscissor 1` | 2439 | 416 | 3157 |
+| `fs_portal_render 0` | 1077 | 104 | 300 |
+
+The two portal arms are inside each other's noise. A scissor bounds **fill**, and
+fill is not what a portal costs here — scene *setup* is, and setup is untouched
+because the recursed view's frustum is still the whole screen's. This is the
+measurement that says the frustum cone, not the scissor, is the cost lever, and it
+is why the cone is deferred rather than assumed. (The 2.4x between portals on and
+off is `r_portalmaxviews` already having done its work: two scene renders, not
+eighteen. The pre-206 figure for the same camera was fourteen times.)
+
+### One thing this found and did not cause
+
+**With realtime world lighting on, portals stop rendering entirely.** Spawn an
+rtlight and set `r_shadow_realtime_world 1` on surf_kitsune and the wall is intact
+but the doorway is empty — no far room at all. It is **not** Patch 208: the image is
+pixel-identical at `r_portalscissor 0` and `1`, and it recovers the moment the
+lights go off. Pre-existing, out of scope, and written down here because it was
+found while trying to test something else and would otherwise be found again by
+whoever turns rtlights on next. No library map ships rtlights, so nothing is
+currently affected.
+
+### What could not be tested, and why
+
+**The ambient-clip resolver's hardest case has not been exercised by a run.** Its
+whole justification is `Sh_DrawLights`' trailing `BE_Scissor(NULL)` destroying a
+naively-set clip mid-render. On these maps `Sh_DrawLights` never gets that far — the
+log says `No lights detected in map` and it returns at its own early-out — and the
+one configuration that does light the world blacks the portal out anyway (above).
+So the hook is justified by reading `gl_shadow.c`, and verified not to *break* the
+no-rtlight path, but its necessity is argued rather than demonstrated.
+
+**The 2d scissor users are argued, not measured, for a duller reason: neither
+screenshot command can capture them.** `screenshot_mega` re-renders the 3d scene and
+drops 2d entirely (its output has no HUD), and plain `screenshot` returned a black
+image for every state including ones known to render correctly. What can be said
+without a picture is structural: `scissor_ambient` and `r_refdef.portalclip` are
+both false everywhere outside `GLR_DrawPortal` — `GLR_RenderView` now clears the
+flag at the top of every 3d view — so `GLBE_ApplyScissor` passes its argument
+through unchanged and `GLBE_ViewportUpdate` does not touch the scissor at all. The
+console, menu and CSQC clip-area paths execute exactly the instructions they did
+before.
+
+### Known and not fixed
+
+* **This contains the repaint failure, it does not cure it.** Nobody has yet
+  explained why the wall does not repaint. `r_portalscissor 0` is how to get the
+  symptom back to look at.
+* **A rectangle is a bounding box.** A door seen at an angle can still leak into the
+  corners of its own projected trapezoid — and only where the repaint also fails, so
+  what survives is a precise, bounded sample of the real bug. Exact masking wants a
+  stencil, and this backend tracks stencil state no better than scissor state while
+  stencil shadows contend for the buffer inside the same recursion. Not worth that
+  risk to make an unexplained bug harder to see.
+* **`srect_t`'s units are not the same in every backend.** GL reads the fractions
+  against `r_refdef.pxrect`; D3D9 and Vulkan read them against the whole framebuffer.
+  They agree only when the 3d view fills the window. The ambient clip is therefore
+  read **only** by the GL backend; a comment at the type records the inconsistency
+  rather than papering over it.
+* **The recursed frustum is still the whole screen's.** Scissoring stops the far
+  scene reaching those pixels but the world walk still culls to the full frustum, so
+  a recursed view generates far more batches than the hole warrants. Substituting the
+  four side planes with the aperture cone is the remaining cost lever and is
+  deliberately not in this patch: it is the one change that can silently *remove*
+  geometry, and `R_SetFrustum` is re-run mid-scene by three separate shadow paths,
+  which would discard substituted planes without saying so.
+
+
+## Patch 209 — a flood, a heap overrun on 49 maps, and what the bug is not
+
+**Three defects found while investigating "the world isn't visible in some maps, and only
+visible when in the void" — none of which turned out to be that bug.** The report is not yet
+explained; this entry records what was fixed, and, at least as importantly, what was ruled
+out and by what measurement, so the next attempt does not re-tread it.
+
+### 209a. The skyroom diagnostic flooded at framerate — `engine/gl/gl_warp.c`
+
+`R_DrawSkyroom` ran a `PointContents` trace and printed `Skyroom position %f %f %f in solid`
+on **every frame** for as long as the skyroom camera sat in solid, gated only on
+`developer.ival`. That is ~300 lines/second uncapped, and `Con_DPrintf` writes to the log
+whenever `log_developer` is set *regardless of `developer`* (console.c:1258), so every one of
+them also hit the disk.
+
+This is not hypothetical and it is not rare: surf_kitsune's `sky_camera` is inside brushwork,
+so the message is permanently true there. It killed the first diagnostic run of the night
+after two maps, with 168 consecutive copies of itself in the tail. It is the same class of
+defect as Patch 208's `PM_PortalCSGReport` flood — the one that produced the user-visible
+0.9 fps — and it was found the same way: by a run dying rather than by reading the code.
+
+Now gated on a movement threshold **and** a minimum interval, ANDed. `lastpos` is updated only
+when a line is actually printed, so a camera that moves 4 units and then stops is still
+reported on a later frame instead of being swallowed by the time gate. A static skyroom in
+solid — the normal case — prints once instead of once per frame, and the `PointContents` trace
+is skipped with it: that was pure diagnostic cost paid on every frame of every skyroom.
+
+**Measured, same map and same route.** Before: 432 lines across 27 seconds. After: 17 lines
+across 4 seconds, and the per-second histogram is `1, 4, 4, 4, 4` — pinned at exactly the
+0.25s gate — with **zero** lines while the camera was static at spawn and after returning
+indoors. The point is not the ratio but the change of kind: the rate is now bounded by wall
+clock instead of by framerate, so it cannot scale with fps the way one-per-frame did.
+
+### 209b. `VBSP_LoadVisibility` corrupted the heap on unvised maps — `plugins/hl2/mod_vbsp.c`
+
+**49 of the 1310 installed maps ship with a zero-length VISIBILITY lump** — 46 at BSP v20,
+plus `ahop_rainbow`, `df_cavernish` and `df_map` at v25. Counted, not guessed: every map's
+lump 4 was LZMA-decompressed and measured.
+
+On those maps the loader called `GMalloc(0)`, which returns a **non-NULL** pointer to a
+zero-byte block (`ZG_Malloc` always adds its header and returns `newm+1`), and then executed
+
+    prv->vis->numclusters = LittleLong (prv->vis->numclusters);
+    for (i=0 ; i<prv->vis->numclusters ; i++) { ...bitofs[i][0]...; ...bitofs[i][1]...; }
+
+so it **read and wrote** `numclusters` four bytes past the end of the allocation, and then
+byte-swapped that garbage count times eight more bytes. Load-time heap corruption, on 49 maps
+the user has installed. It also left `mod->vis` non-NULL, which defeats the `!model->vis`
+guard in `VBSP_MarkLeaves` and lets `VBSP_ClusterPVS` index `prv->vis->bitofs[cluster]` into
+the same zero-byte block.
+
+Two guards now. A lump shorter than its own fixed header is treated as "unvised": `prv->vis`
+and `mod->vis` are left NULL, which routes `VBSP_MarkLeaves` to the whole-model path — and
+**no vis must mean everything visible, never nothing**. The minimum is
+`offsetof(q2dvis_t, bitofs)` and deliberately **not** `sizeof(q2dvis_t)`: `bitofs[8][2]` in
+that struct is a placeholder for a variable-length array, so `sizeof` is 68 and would reject a
+perfectly valid lump for a small map. Second, `numclusters` is bounded against the lump length
+before the swap loop runs — the length is the only thing that can contradict a corrupt count,
+and without it a truncated lump walks the same loop off the end.
+
+`mod->numclusters` being zeroed here is safe: `VBSP_LoadLeafs` runs *after*
+`VBSP_LoadVisibility` and re-derives it from the maximum leaf cluster, so the PVS row width is
+still correct on an unvised map.
+
+### 209c. `VBSP_ClusterPVS` wiped a merged row, and could deref a NULL vis — `plugins/hl2/mod_vbsp.c`
+
+The `cluster == -1` branch memset the buffer to zero **unconditionally**, consulting `merge`
+only in the else-branch. So a `PVM_MERGE` of an invalid cluster destroyed the row the
+preceding `PVM_REPLACE` had just built — and `VBSP_MarkLeaves` issues exactly that pair for a
+two-cluster view. The engine's own Q3 branch already guards this (`gl_q2bsp.c:7128-7131`); the
+Q2 branch this was copied from does not. "No cluster" contributes nothing to a merge, so the
+correct behaviour is to leave the row alone.
+
+A `!prv->vis` guard was added at the same time, because 209b makes that pointer legitimately
+NULL and the `bitofs[]` lookup dereferences it *before* `VBSP_DecompressVis` gets its chance to
+notice. Same guard in `VBSP_ClusterPHS`, or an unvised map goes silent as well as invisible.
+
+Credit where due: 209c was surfaced by an adversarial audit that **refuted its own primary
+claim** — it demonstrated by reimplementing `VBSP_PointLeafnum` and sampling 246,000 eye
+positions across three maps that the merge path is always called with two valid clusters on
+those maps, and reported the defect as latent rather than causal. That is the right answer and
+it is recorded as such: this is hardening, not a fix for the reported symptom.
+
+### What was RULED OUT, and how
+
+Recorded because each of these cost real time and each looked convincing:
+
+- **Strata Source BSP v25 parsing.** `strata_dleaf_t` was verified field-by-field against the
+  actual bytes of `surf_kitsune.bsp`: 56-byte stride, `cluster` int32 at +4, `areaflags` at +8,
+  float bounds at +12, 32-bit refs at +36. Correct. The dangerous collision — classic
+  version-0 `dleaf_t` is *also* 56 bytes with completely different offsets — is avoided because
+  the loader keys on `l->version >= 2`, not on stride. A 10-agent audit of the v25 leaf, vis,
+  node and consumer paths produced **zero** confirmed findings.
+- **Visibility data in every installed map.** All 1310 maps had their PVS decompressed by an
+  independent RLE decoder. Every cluster can see itself; no malformed header anywhere. v25 maps
+  are *looser* than v20 (median 17.8% vs 8.8% of clusters visible per cluster), so they cull
+  less, not more. The independent decoder agreeing with the engine's `(numclusters+7)>>3` row
+  width also validates that path.
+- **Area culling.** `map_noareas 1` vs `0` on surf_kitsune: **261 → 261** world batches at the
+  exit hall, **468 → 468** at the entry hall. Identical. The engine's own report says
+  `area 4 of 13: 1 area(s) reachable`, and kitsune has 13 areas with a single areaportal — but
+  the twelve unreachable areas are empty, so the culling costs nothing. A promising-looking
+  lead that the A/B killed outright.
+- **Patch 208's scissor.** `r_portalscissor 0` is indistinguishable from stock on kitsune.
+- **Order dependence across map changes.** `surf_conc` renders identically (7 world batches,
+  5 ent batches) loaded first and loaded after a map change.
+
+### A methodological correction worth keeping
+
+A 103-map sweep appeared to show 25 maps drawing **zero** world batches, and it was wrong twice
+over. First, the sweep sampled 5s after `waitmap`, while materials were still resolving — the
+log shows shaders reloading *per frame* — so maps that render fine were captured black.
+Second, an arm that set `map_noareas` (a `CVAR_RENDERERLATCH`) before the map load forced a
+renderer restart and produced the 0-batch readings by itself. `surf_conc` was black at 0
+batches in that run and a bright sky with geometry one second later in another. **The sweep's
+finding was an artifact of the harness, not a property of the maps, and is withdrawn.**
+
+Also withdrawn: "N materials missing — this map wants an asset pack" is *not* why those maps
+looked black. `df_elco-gbparadise` is missing exactly one material and it is
+`textures/common/weapclip`, an invisible tool texture. Where a map genuinely does render pink
+and black — `surf_conc` misses 7 real materials — FTESurf already diagnoses it correctly and
+prints the fix (`fs_load steam:Team Fortress 2/tf`, or csgo, then `retry`).
+
+### Still open
+
+- **The reported bug is not explained.** "World invisible in the map, visible in the void" was
+  not reproduced on any map tried. The strongest remaining lead is `r_surf.c:2528-2553`: when
+  the view is in the void or in solid and the player is **not** noclipping, `r_viewcluster` is
+  replaced by `surf_lastgoodcluster` — the PVS of wherever the camera last was. `r_voidvis`
+  only hands out the all-visible set when in the void **and** noclipping (`r_surf.c:2509`).
+- **The portal aperture renders as its bounding rectangle, not as the doorway.** This is Patch
+  208 working as designed and it is not good enough; see the note below.
+### Deployment status — READ THIS BEFORE TRUSTING 209b/209c
+
+209a is built, deployed and verified. **209b and 209c are compiled but NOT deployed and
+therefore NOT tested**: `fteplug_hl2_x64.dll` was locked by a running game process the whole
+time, and the engine tree is shared, so it was left alone rather than killed. The engine binary
+went out side-by-side as `ftesurf64_p209.exe`; the plugin in `C:\FTESurf` is still the old one.
+Both plugin fixes are argued from the code and from a file-format census, not from a run. The
+test that must happen once the DLL can be written is `cfg/testrun/g10vguard.cfg`, which loads
+the unvised maps (`df_cavernish`, `df_map`, `ahop_rainbow`, `surf_pure`) that were the ones
+being corrupted, plus surf_kitsune as the vised regression arm.
+
+### A harness artifact that produced a false claim
+
+Several runs looked like they "terminated during a map load". They did not. The background
+task wrapper reports completion while the engine process is still alive, so the logs were being
+read half-written — process 33840 was still running and still appending after its run had been
+reported finished. Any conclusion drawn from a log tail should first check whether the process
+has actually exited. One earlier note in this session claiming repeated map-load crashes was
+wrong for this reason and is withdrawn.
+
+### The next portal patch, which the user has already specified
+
+The user's words: *"it's a square box, and not the size of the doorway ... you can't just fill
+the plane?"* That is exactly right, and Patch 208's own entry admits the limitation — a
+rectangle bounds the projected quad, so a yawed door leaves its box corners reachable.
+
+The engine already has the machinery. `GLBE_GenerateBatchTextures` (gl_backend.c:5969) renders
+a `SHADER_HASREFLECT` surface's view into an FBO via `GLR_DrawPortal(batch, ..., NULL, 1)` —
+note the **NULL depthmasklist**, i.e. the path that never paints outside the surface at all —
+and the surface then samples that texture (`T_GEN_REFLECTION`, gl_backend.c:1526). The
+aperture's shader (`ftesurf/scripts/portal.shader`) currently declares `portal` with **zero
+passes**, which is what selects the in-place recursed paint that has to be masked afterwards.
+
+Giving it a reflection pass instead would confine the far view to the aperture polygon
+*per-pixel*, which removes the rect, the corner leak, and the need for a scissor at once — and
+it is the fix the user asked for rather than a tighter approximation of it. The cost is one FBO
+and a scene render at `portalfboscale` per portal, against a full recursed scene today.
+
+## Patch 210 — the doorway stops being a rectangle by being the doorway
+
+**The user asked for this one in so many words:** *"it's a square box, and not the
+size of the doorway, I assume it's a texture on a plane? you can't just fill the
+plane?"* Yes. That is now what it is, and the change is a change of design rather
+than another approximation of the old one.
+
+### What the old design was, and why a rectangle was its ceiling
+
+Patches 206–208 all worked inside FTE's original scheme: a `SHADER_SORT_PORTAL`
+surface is **not drawn**. The engine renders the far side of the link over the
+**whole screen** (`GLBE_SubmitMeshesPortals`), submits the same batch again in
+`BEM_DEPTHONLY` as a depth mask, and trusts the ordinary world to repaint
+everywhere the doorway is not. Where that repaint fails, the far room covers the
+wall. Patch 208's answer was a scissor to the aperture's projected **bounding
+rectangle** — and its own entry admitted the limit: a rectangle bounds a
+trapezoid, so a yawed door leaves the box corners reachable. What the user was
+looking at is that rectangle. No scissor can do better, because the shape is not
+a rectangle.
+
+### What it is now
+
+`portalfbo` in `ftesurf/scripts/portal.shader` sets `SHADER_HASPORTAL`, which
+routes the batch through `GLBE_GenerateBatchTextures`: the far view is rendered
+into a texture, and a one-pass material paints that texture onto the doorway quad
+from the ordinary sort list. Confinement is the **polygon**, per pixel. The
+rectangle, the corner leak and the repaint race stop being possible rather than
+being made unlikely, and the scissor is no longer needed on this path at all.
+
+The engine already had the capability — `SHADER_HASPORTAL`, *"reflection image is
+actually a portal rather than a simple reflection"*, complete with the
+`GL_DEPTH_CLAMP` handling for the near clip plane cutting the aperture. It had
+exactly one way in: `dp_camera`, which drags the DarkPlaces `altwater` program
+with it — fresnel, ripples, normalmap sampling, and a refraction tint that
+defaults to **black** because `dp_camera` never parses one. So the capability got
+a keyword of its own and the material brought its own program.
+
+`portal` **stays** on the material even though the surface is now drawn like any
+other opaque one. `SHADER_SORT_PORTAL` is what puts the batch in front of
+`GLR_PortalBudgetBegin`, and that is where Patch 206's `r_portalmaxviews` cap and
+the void gate live. `GLBE_SubmitMeshesPortals` skips `SHADER_HASPORTAL` batches in
+both of its loops — otherwise the aperture would pay for two scene renders and
+then mask off the one it wanted — and `GLBE_GenerateBatchTextures` asks
+`GLR_PortalWouldDraw` before spending an FBO. Without that last line the new route
+would have quietly reintroduced the unbounded cost on the one map that proves it,
+surf_tripportals and its 116 doors. A refusal means the batch is not drawn, which
+for an opaque aperture is exactly Patch 207's "renders closed".
+
+### The measurement
+
+Aiming was the hard part and three runs were wasted on it. The QC kept answering
+*"nearest aperture 228.9 units away"* and I kept ignoring it; surf_kitsune's
+entity lump says every door is **88x88 units**, so from the position those runs
+used the target was an 88-unit square 245 units off — a small rectangle on a map
+whose walls are black, where "painted nothing" and "painted the same black as the
+wall" are the same picture. Nothing could have been concluded from any of them.
+
+From 100 units, with the fragment shader temporarily rigged to emit **solid
+magenta** except a vertical band showing the real lookup tinted green:
+
+- **The pass rasterises, and paints exactly the quad.** Magenta stopped at the
+  doorway edge on all four sides.
+- **Obliquely it is a trapezoid** — slanted top and bottom edges, perspective
+  correct. This is the picture the whole patch exists for: a bounding rectangle
+  would have been an axis-aligned box around that shape.
+- **The lookup is a correct screen-space one.** The probe's `0.4 < stc.x < 0.6`
+  band landed in the middle of the aperture. A wrong tcgen would have put it
+  somewhere arbitrary, or wallpapered the far room across the door.
+- **The texture has content.** The far view's red geometry came through the
+  probe's 0.2-red tint as *dark* red, which it could only do by being sampled
+  from the texture rather than drawn over it.
+
+**Cost, and it is a regression: 2532 µs total refresh against the old path's
+1089 µs at the same spot, same map, same eye.** Roughly 2.3x, and the cause is
+known rather than guessed: Patch 208's scissor shrank the old recursed render to
+the aperture's rectangle, so it rasterised a doorway's worth of pixels; the FBO
+render covers the whole target at `portalfboscale 1`. The scene-render *count* is
+identical (2 per frame in both arms), so this is fill, not extra work. See below.
+
+### A latent trap closed on the way past
+
+`T_GEN_REFRACTION` bound the FBO only `if (r_refract_fboival)`, while generation
+runs when `r_refract_fboival || SHADER_HASPORTAL`. The two sides disagree: with
+`r_refract_fbo 0` the far view is rendered into `tex_refraction` and the surface
+then samples a copy of the **current framebuffer** — which, for a surface that
+draws before sky and opaque, is almost empty. The doorway comes out **black**,
+which is indistinguishable from "the recursed scene rendered nothing" and is
+precisely the symptom this session spent hours on. `r_refract_fbo` defaults to 1
+so it never fired, but it is armed for whoever turns that cvar off next.
+
+### Deployment and what is NOT verified
+
+- Built and deployed **side by side as `ftesurf64_p210.exe`**. `C:\FTESurf\ftesurf64.exe`
+  and `fteplug_hl2_x64.dll` were locked by the user's own running game for the whole
+  session, and the tree is shared, so it was left alone rather than killed.
+- **Patch 209b and 209c are still not deployed and still not tested** for the same
+  reason. They are plugin-side; nothing here changes that.
+- The far view's *content* was not proven correct on surf_kitsune, because the map
+  is black geometry on black walls and both rooms look alike. What is proven is
+  the shape, the lookup and that the texture is populated. A map with two visually
+  distinct rooms would settle the rest in one screenshot.
+- `r_portalrecursion` is 2 on this install, so the nested case ran, but no shot
+  isolates a portal seen through a portal.
+
+### Next, in order
+
+1. **Scissor the FBO render.** Patch 208 already measures the aperture's screen
+   rectangle in the right frame (`GLR_PortalScreenRectAt`), and its rect is a
+   strict superset of the polygon by construction, so clipping the FBO render to
+   it cannot remove a pixel the surface will sample. That reclaims the 2.3x
+   directly. The arming needs care: the identity test in `GLBE_Scissor` compares
+   against `pxrect`, and the FBO path rewrites `pxrect` — deliberately, so that
+   the FBO's own clears are unclipped.
+2. `r_portalfbo 0` + `vid_reload` is the A/B and must stay. The two designs fail
+   differently and the old one is the only way to see the original symptom again.
+   It is `CVAR_RENDERERLATCH` so the cvar and the parsed materials cannot disagree.
+3. The user's other report — entities not loading, the level appearing to despawn
+   through a portal, on **surf_aircontrol** — is untouched by any of this. But it
+   was reproduced and localised while the portal work was being tested, and that
+   result is below because it is the most useful thing this session produced for
+   it.
+
+### surf_aircontrol: reproduced, and it is the PVS
+
+The user named the map, and it fails on sight: at spawn the screen is white with
+a single "Map Bonus" sign on it. The counters say this is **not** "nothing is
+drawn" and **not** a materials failure:
+
+| arm | World batches | Draw indices |
+|---|---|---|
+| at spawn, normally | 51 | 12,809 |
+| same spot, `r_novis 1` | **400** | **58,121** |
+| from the void looking down | 376 | 59,213 |
+
+**`r_novis 1` renders the map perfectly** — brick, concrete, lighting, the lot.
+So the geometry, the materials and the lightmaps are all fine and roughly seven
+eighths of the world is being culled away by visibility alone. The void arm
+matching the novis arm is the user's own observation reproduced as a number:
+outside the world the PVS test is skipped, so the map comes back.
+
+What this rules out, each by measurement:
+
+- **Not Strata v25.** surf_aircontrol is BSP **version 20**, VISIBILITY lump
+  version 0. Every v25-specific theory from Patch 209 is irrelevant to it.
+- **Not the void/`surf_lastgoodcluster` substitution**, which was Patch 209's
+  strongest surviving lead. The engine's own line says
+  `voidvis: cluster 829  pmovetype 0 (noclip 0)  r_voidvis 1  -> off`: the camera
+  is in a real cluster, not −1, so that path is never entered.
+- **Not a malformed or degenerate PVS in the file.** Decoded independently: 991
+  clusters, 5797 bytes, median cluster sees 388 others (34.8% of the map), and
+  cluster 829 specifically sees **158 clusters (15.9%) and sees itself**. That is
+  a normal row, not a broken one.
+
+So the file says cluster 829 can see 158 clusters and the renderer behaves as if
+it can see almost none. The next question is therefore the narrow one, and it is
+answerable offline: **is 829 the right cluster for that spawn point at all?** Walk
+the BSP nodes for the spawn origin with an independent implementation and compare
+against what `VBSP_PointLeafnum` returned. A leaf lookup that lands in a plausible
+but wrong cluster produces exactly this — a view culled to somewhere else in the
+map, with no void, no warning and no bad data anywhere to find.
+
+`r_novis 1` is a usable workaround in the meantime, at the cost of the culling.
+
+## Patch 211 — the console gets a window, a dropdown, and three keys start working
+
+Eight items out of playing FTESurf build 26. **Three of them turned out to be already done**
+and are recorded here as measurements rather than changes, one was a live bug in FTESurf's
+`default.cfg` that nobody had noticed, and the sky item measured out as something other than
+what was reported.
+
+Taken as **211** rather than 210: the concurrent session claimed 210 for `r_portalfbo` in five
+source files *and* in this log while this patch was being planned. Read the number at write
+time, not at plan time.
+
+### 211a. `quit` always quits, and `exit` exists — `client/cl_main.c`
+
+`CL_Quit_f` handed the whole command to `menu_quit` whenever `forcesaveprompt` was set unless
+you spelled `quit force`. The **only** setter of that flag in the tree is `m_options.c:1247`,
+applying a preset from the engine's built-in options menu — it exists to catch one screen's
+unsaved work, and it sets an `fs_restart` beside it for the same reason.
+
+FTESurf never opens that screen, so the flag could only ever read false there and deleting the
+branch is not a behaviour change today. It is deleted rather than left because `quit` is bound
+to **F10**, and a key that quits nine times out of ten and opens a menu the tenth is worse than
+either. `exit` is registered as a second name for the same function — not an alias, because an
+alias is a separate object that a later edit could leave disagreeing, and `cmd.c` declines to
+forward some things through aliases at all.
+
+The config still writes: `Sys_Quit` -> `Host_Shutdown` -> `Cvar_WriteVariables` is below the
+deleted branch, not above it.
+
+### 211b. `fullscreen_toggle` — `client/renderer.c`
+
+FTESurf's `default.cfg` has carried `bind f11 fullscreen` since its build 21. **`fullscreen`
+is not a command in this engine.** The only hit anywhere in the tree is `sys_plugfte.c`'s
+browser-plugin parameter table, which maps the word onto the `vid_fullscreen` cvar and never
+reaches the console. So F11 has been a silent no-op for six builds.
+
+FTE's own name for the action is `vid_toggle` (`R_ToggleFullscreen_f`, which ALT+ENTER already
+uses at `keys.c:2238`). `fullscreen_toggle` is registered beside it: same function, a name
+someone looking for it would type.
+
+**It is not instant, and this entry says so rather than letting the cvar help imply otherwise.**
+The function ends in `R_RestartRenderer`, a real renderer restart — it simply does not require
+you to type `vid_restart` first. It already prints its own cost under `developer 1` ("main
+thread video restart took %f secs"). If that number turns out to be large, the in-place path
+exists: the engine already services `WM_SIZE` (`gl_vidnt.c:2859`, which is how
+`vid_fullscreen 0`'s resizable window works), so a borderless toggle can be a `SetWindowLong` +
+`SetWindowPos` with no context recreation. That is deliberately a separate patch, not smuggled
+into this one.
+
+### 211c. Screenshots named after the map — `client/cl_screen.c`, `client/renderer.c`
+
+`scr_sshot_mapname` (default 1). An unnamed `screenshot` becomes `<map>_000.png`, counting up
+per map; `menu` is used when `cl.worldmodel` is NULL. **The counter is the engine's existing
+free-name probe, not stored state** — the loop already walked `i` upward until a name was free,
+so per-map numbering falls out of changing the stem. Nothing to persist, nothing to reset on a
+map change, it survives a restart, and deleting `_001` refills 001 rather than leaving a hole.
+
+The prefix contributes its **directory** only, via the same `COM_SkipPath` split the named-
+screenshot branch above it already uses — otherwise `screenshots/fte-` would produce
+`fte-surf_666_000.png`. `scr_sshot_mapname 0` restores the `<date>-<n>` form byte for byte.
+
+### 211d. The windowed console: geometry, title bar, scrollbar — `client/console.c`, `client/keys.c`, `common/console.h`
+
+Four reports, and the interesting part is the fifth thing they had in common.
+
+* **`con_window_rect`** (default `"64 64 960 640"`, was a hardcoded 640x480 at 0,0). Read once
+  when the console is created. A cvar rather than four constants because nothing persists
+  `wnd_*` — the geometry resets every launch, so re-tuning it must not mean re-tuning the
+  engine.
+* **The title bar** now reads `Console` (was `MAIN`), is **left**-aligned (the `rightalign`
+  argument was `2`, which is CENTRED — `sbar.c:257`), and is drawn with **`font_console`**
+  instead of `font_default`. That last one is both halves of "the Google font" and "twice as
+  big" in a single token, because `font_console` *is* `con_textfont` at `con_textsize`
+  (`r_2d.c:1306`) — no second font object to keep alive across a `vid_restart`.
+* **Its height** is that font's height plus `con_window_titlepad`, instead of a flat 8. At
+  FTESurf's `con_textsize 16` that is ~22px, which is the padding that makes it grabbable.
+* **`con_scrollwidth`** (default 16, was 8).
+
+**And the defect all four would have caused.** Those sizes were bare `8`/`16`/`24` typed into
+`console.c`, which DRAWS the bar and the scrollbar, and independently into `keys.c`, which
+decides where you clicked. Change one and the bar paints in one place and answers the mouse in
+another — a failure with nothing in any log to say so. So they get one speller each,
+`Con_WindowTitleHeight()` and `Con_WindowScrollWidth()` in `common/console.h`, and every
+literal in both files now calls them. Same move `FS_SaveSlotName`, `FS_RunPath` and
+`Zone_TrackSegs` were on the QC side, each after a drift bug of exactly this shape.
+
+`CON_WNDBORDER` stays a constant at 8 and is deliberately *not* a cvar: it is the left/bottom
+inset and the width of the resize grips, and the grips must stay pinned to the window's own
+edges rather than moving with the scrollbar. `mousecursor[]` is already offset by it, which is
+why the right grip tests `wnd_w - 2*CON_WNDBORDER` and the scrollbar strip tests
+`wnd_w - 2*CON_WNDBORDER - sw`. Getting those two confused is the one arithmetic slip here
+that would look like the feature working.
+
+`wtop` falls back to 8 for a **non-window** console, because the same function handles the main
+console's tab strip, whose 8px row has nothing to do with `con_window_titlepad`.
+
+### 211e. Dark mode — `client/console.c`
+
+Two separate blues.
+
+**The chrome** was five literals, the first of which — `SRGBA(0.0, 0.05, 0.1, ...)`, a navy
+with literally zero red — is the one you look at. Now two cvars, `con_colour_back` and
+`con_colour_accent`, with the title bar (back, lifted), the resize highlights (accent at 25%),
+the scroll track (10%) and its thumb (85%) all derived. `con_colour_back "0 0.05 0.1"`
+restores the previous look exactly. A malformed value falls back to the built-in default rather
+than to black, because a typo that blanks the console is a trap you cannot type your way out
+of.
+
+**The text** is `consolecolours[]` (`common/common.c`), the CGA RGBI table: `^4` blue is
+`{0,0,0.67}` and `^1` red is `{1,0.33,0.33}` — saturated primaries designed for a black CRT.
+`con_palette 1` swaps in a desaturated pastel set; `0` is the stock table, restored live by the
+same callback rather than needing a restart.
+
+**Its reach is wider than the console and the cvar help says so.** That table is read by
+`gl_font.c` for every `^N` glyph the engine draws — console, chat, `Con_Printf`,
+`Draw_FunString` — and by `m_items.c` for the built-in menus. Nothing drawn from an explicit
+colour vector is affected. Index 0 is left pure black on purpose: it is used as a *background*,
+not as ink, and lifting it would put a grey box behind `^0` text.
+
+**Engine default is 0.** This is the one item in the patch that could otherwise reach quakers,
+whose menus and console would change colour without anyone asking.
+
+### 211f. The completion dropdown — `client/console.c`, `client/keys.c`, `common/cmd.h`
+
+Half of this was already built: `Cmd_Complete` + `con_commandmatch` + `con->completionline`
+already rendered clickable `^[/cmd^]` links above the input line with the current one coloured
+differently, and Up/Down already navigated them. Three things were missing.
+
+**It never opened on its own.** `con_commandmatch` is 0 until Tab is pressed, and the draw was
+gated on it — so the list existed but was invisible until you asked. `con_displaypossibilities`
+**2** draws it as you type. `1` is the previous behaviour exactly, and stays the engine default.
+
+**It was horizontal.** All matches went into ONE `conline_t` separated by `\t` and wrapped as a
+paragraph. It is a chain of `conline_t` linked by `->older` now — the same structure
+`Con_Footerf` already builds for a multi-line footer, and the one `Con_DrawConsoleLines`
+already knows how to walk. The line it is *handed* draws at the bottom and it walks `older`
+upward, which is why the build loop runs backwards. `Con_FreeCompletion` exists because the
+old single allocation was freed with a bare `Z_Free`; freeing only the head would now leak.
+
+**It was capped at 50 and could not scroll.** `cmd_completion_t::completions[50]` -> **256**.
+This tree already has the scar from that cap: `keys.c:446` records `r_shadows` reading as
+unregistered because 53 `r_shadows*` cvars pushed the exact match off the end, so
+`cl_chatmode 2` broadcast a cvar set to the server as a chat message. `cmd.c` bounds itself
+with `countof()`, so nothing else needed changing, and `res->extra` still counts the overflow —
+256 is a bigger honest number, not a claim of completeness. A window of `con_completionrows`
+(12) rows scrolls, with the viewport clamped to keep the highlight visible.
+
+**ENTER is deliberately unchanged until you navigate.** `con_commandmatch` stays 0 while the
+list merely *appears*, and it is the same variable `K_ENTER` tests at `keys.c:2241` — so a
+dropdown opening under a line you typed in full cannot change what ENTER does to it. Press
+Up/Down/Tab and ENTER takes the highlighted row. Auto-highlighting the top match would mean
+`cl_showfps` needs two ENTERs whenever `cl_showfps_x` also exists.
+
+**The wheel walks the dropdown while it is open**, which is the trade stated rather than
+hidden: for as long as the input line has matches, the wheel no longer scrolls the scrollback.
+That is reachable on the (now twice as wide) scrollbar and on PGUP/PGDN, and the wheel returns
+to scrolling the moment there is nothing to complete. Gated on mode 2.
+
+`con_displaypossibilities` had to lose its `static` for this — `keys.c` already carried an
+`extern` for it that nothing used, which would have been a link error the first time anything
+did.
+
+### 211g. A sky for a map that declares none — `engine/gl/gl_warp.c`
+
+Reported as "the top sky texture of surf_colin_blaster_69000 uses a side sky texture as the
+top". Measured out of the BSP (VBSP v25, entity lump LZMA-decompressed) it is something else:
+
+```
+worldspawn      : world_maxs world_mins maxpropscreenwidth maxprojectedtextures
+                  detailvbsp detailmaterial classname mapversion hammerid
+                  -- and NO skyname
+sky textures    : TOOLS/TOOLSSKYBOX2D, the only sky string in 34 texture names
+pakfile         : 80 entries; the only sky asset is the map's own
+                  materials/tools/toolsskybox2d.{vmt,vtf} -- UnlitGeneric,
+                  %compile2Dsky 1, one flat 256x256 image, no cubemap
+```
+
+The faces really are sky faces (`mod_vbsp.c` maps `TIHL2_SKYBOX` -> `TI_SKY` ->
+`SURF_DRAWSKY`), but with no name `R_SetSky` leaves `forcedsky` NULL and `R_DrawSkyChain` falls
+through to the surface's own shader. So one picture ends up on all six faces — the right
+observation about the wrong cause, and the top is simply where "every face is the same picture"
+reads as obviously wrong.
+
+`r_skybox_default` fills that hole, ordered **below** `r_skybox` so an explicit override still
+wins over both it and a map that declares its own sky. Empty by default, so quakers and every
+map that declares a sky are untouched.
+
+**Scoped by a census rather than a guess**: of the 1084 installed cstrike maps, **1074 declare
+a `skyname` and 10 do not** (`bhop_tripportals`, `df_forward`, `df_map`, `surf_bugs`,
+`surf_okeycave`, `surf_okeycavetrails`, `surf_proto`, `surf_proto2`,
+`surf_proto_stage1unit_beta`, `testbhop`), plus the reported one. And the failure mode is soft:
+if no face of the default loads, `forcedsky` stays NULL and the map draws exactly what it drew
+before. FTESurf sets it to `sky_day01_01`, which is the most-used sky in the installed library
+by a wide margin — 143 maps — and is therefore known to resolve.
+
+### Already correct, recorded so it is not re-investigated
+
+**`show_fps` is already the Google face at 16.** `SCR_DrawFPS` draws through `SCR_StringXY`,
+which at `cl_screen.c:1903` picks
+`(Font_CharVHeight(font_console) > Font_CharVHeight(font_default)) ? font_console : font_default`
+— and `font_console` is `con_textfont` at `con_textsize`, which FTESurf sets to GoogleMed at
+16. So that readout has been twice the engine's 8px default since FTESurf's build 25. Its
+apparent size is a `vid_conautoscale` question, not a font one. No change.
+
+### Inert in quakers, and one assumption the regression caught
+
+The first draft of this entry said "`con_window` is 0 in quakers, so 211d is unreachable there".
+**It is 1** — that is the engine default, and the quakers run printed
+`"con_window" is "1" (default)`. So the windowed console is not FTESurf-only, and every new
+default in 211d and 211e would have changed a game whose owner did not ask for it.
+
+So **every new cvar's ENGINE default is the previous behaviour** and FTESurf opts in from its
+own `cfg/default.cfg`: `con_window_rect "0 0 640 480"`, `con_window_titlepad 0`,
+`con_scrollwidth 8`, `con_colour_back "0 0.05 0.1"`, `con_colour_accent "0.55 0.7 0.95"`,
+`con_palette 0`, `con_displaypossibilities 1`, `r_skybox_default ""`. Verified on `vw_city`:
+all eight read their stock value with `(default)` beside them, `no skybox forced.`, Box3D 8
+worker threads, hulls 72/36/24, every `BAD=0`, sqlite ready.
+
+**Two things are NOT cvar-gated and do change quakers**, stated rather than buried: the window
+title reads `Console` instead of `MAIN`, and it is left-aligned instead of centred. Neither is
+worth a cvar. And at the default accent the scrollbar THUMB is byte-identical (it was
+`0.55 0.7 0.95` already) while the track and the hover-only resize grips shift slightly — they
+were previously white@10% and a solid navy, and are now derived from the accent at 10% and 25%.
+
+`scr_sshot_mapname` defaults to 1 in the engine, which changes only a filename, and
+`scr_sshot_prefix` keeps its stock `screenshots/fte-` there.
+
+`common/console.h` and `common/cmd.h` both changed, so this is a `-Full` rebuild — but no
+native plugin includes either (checked: only `plugins/ezhud` includes `console.h`, and nothing
+outside `common/` and `client/` references `cmd_completion_t`).
+
+## Patch 212 — `width` and `height` were already half-extents
+
+Two reports in one sentence, and one cause under both of them:
+
+> *"The kitsune portal is a square that I can see the next world, and it render correctly, and
+> the current room render correctly, but the portal doesn't cover the door, and once you walk
+> though it the world entities disapear, you just walk forward into the room and it's gone."*
+
+### The cause
+
+`momentum.fgd:5366-5372`, shipped in the Momentum Mod install, in the Hammer helper's own name:
+
+```
+	orientedwidthheighthalf(width, height)
+= linked_portal_door: ...
+	width(integer)  : "Half-Width (G)"  : 128 : "Half-width of the portal, on the Green axis."
+	height(integer) : "Half-Height (B)" : 128 : "Half-height of the portal, on the Blue axis."
+```
+
+The keys are **half-extents**. `cl_portal.qc:339-340` and `sv_entities.qc:1033-1034` each halved
+them a second time, so every `linked_portal_door` on every map was **half its size in each axis,
+a quarter of its area** — in what was drawn *and* in what the physics would accept. The fallback
+for a missing key was 32; the FGD's default is 128.
+
+Both sites now take the value as given, and both are commented with the FGD quote, because
+`lpd_hw` reads like "half width" and the obvious tidy-up is to put the `* 0.5` back.
+
+### The measurement, before touching anything
+
+Solving the camera from Patch 210's magenta-probe screenshot (the quad is 88x88 units by
+construction there, giving f = 480.7 px and fov_x 106.2 deg), then reading `portal_hub_exit`'s
+frame — the opening in the `func_brush` named `kitsune`, brushmodel `*48`:
+
+| quantity | measured | the entity declares |
+|---|---|---|
+| painted aperture | 88.0 x 88.0 units | `width 88` `height 88` |
+| frame opening, from 200 units back | **176.12** wide, top edge z **272.15** | — |
+| frame opening, from 100 units back | **176.15** wide | — |
+
+Two camera distances agreeing to **0.03 units**, and 272.15 - 184 = 88.15 giving the same answer
+on the other axis. Exactly 2x the declared numbers, both ways. There is no hole in the world
+brushwork at all — sampling solidity across a 512x256 region of the wall behind the aperture
+returns solid everywhere, and open everywhere in front. Kitsune's apertures hang in front of a
+sealed wall inside a decorative frame.
+
+Library-wide: **443 doors across 18 maps**, all doubling. Declared widths run 64, 128, 256, 88,
+304, 512 — real openings of 128, 256, 512, 176, 608, 1024.
+
+### The aperture, after
+
+Differencing `fs_portal_render 1` against `0` at a fixed eye isolates the painted quad exactly,
+with no probe colour to install and revert (`FS_PortalPredraw` returns `PREDRAW_NEXT`, so nothing
+else in the frame moves):
+
+| eye | painted aperture | frame opening |
+|---|---|---|
+| 100 units back | 844 px = **175.6 units** wide | 176.15 |
+| 200 units back | 415 x 414 px = **172.7 x 172.2 units** | 176.12 |
+
+The last couple of edge pixels are lost to the difference threshold, because kitsune is black
+geometry on black walls and the outermost column of the aperture is the same colour in both
+arms. The white gap that used to show through above and below the quad is gone.
+
+### The second symptom was the same bug, and here is the A/B
+
+This is the part worth keeping. The doorway is 176 wide; the acceptance band was 88. So the outer
+ring of every doorway on every map was **a hole you could walk into that did not teleport you**,
+with solid wall 64 units behind it.
+
+Stepping across `portal_hub_exit` in 22-unit increments and walking forward at each offset. Mean
+frame saturation classifies the outcome with no ambiguity: inside stage 1 is a rainbow corridor at
+0.97, standing in the hub with the aperture in view is 0.40:
+
+| offset | before (`width * 0.5`) | after |
+|---|---|---|
+| -88 | 0.406 refused | 0.436 refused |
+| **-66** | **0.005 refused** | 0.973 CROSSED |
+| -44 | 0.972 CROSSED | 0.974 CROSSED |
+| -22 .. +44 | CROSSED | CROSSED |
+| **+66** | **0.005 refused** | 0.974 CROSSED |
+| +88 | 0.401 refused | 0.431 refused |
+| +110 | 0.428 refused | 0.428 refused |
+
+**Before: crossed only at -44 .. +44. After: -66 .. +66.** The refusals at +-88 and +110 are
+correct — the player is 32 units wide, so at +-88 the body straddles the frame edge, and +110 is
+outside the doorway.
+
+Note the **0.005** at +-66 before the fix. That is not "still in the hub" (0.40), it is a black
+screen: `h1bB_p66.png` is the player jammed against the solid wall behind the aperture with a
+single grey seam visible and nothing else. *"You just walk forward into the room and it's gone."*
+Both reported symptoms, one cause, one fix, and the second one is a measurement rather than a
+story.
+
+### Corrections to Patch 210's entry
+
+Patch 210 recorded "surf_aircontrol reproduced: invisible world, 51 world batches against 400
+with `r_novis 1`". **That was wrong.** `screenshots/g18_a_baseline.png` and
+`screenshots/g18_c_novis.png` are the same picture — aircontrol renders correctly at spawn either
+way, brick and concrete and lighting and the "Map Bonus" sign. The 51-vs-400 gap is the PVS
+working, not failing.
+
+Two further things were ruled out on the way past, and are recorded so they are not chased again:
+
+* **Not the area test.** `mod_vbsp.c:4311` removes **zero** leafs the PVS had not already
+  dropped, at all three viewpoints checked (aircontrol spawn, kitsune spawn, a kitsune stage
+  destination). Confirmed at runtime too: `map_noareas 1` changes the world batch count by
+  nothing. The degenerate areaportal graph is real — kitsune has 13 areas and 1 dummy
+  areaportal, so `FloodAreaConnections` gives every area its own floodnum and
+  `VBSP_WriteAreaBits` sets one bit (`area 4 of 13: 1 area(s) reachable` in the log) — but areas
+  and PVS agree exactly here, because both derive from the same physically disconnected volumes.
+* **Not a vis decode or indexing bug.** Independent decode of both maps: every cluster sees
+  itself (991/991 and 133/133) and the visibility matrix is **100% symmetric** — 0 asymmetric of
+  170,619 visible pairs on aircontrol, 0 of 899 on kitsune. Vis is symmetric by construction, so
+  that is a real integrity check and it passes.
+
+`vbsp_emit_dropped` never tripped in any of these runs.
+
+### Not verified
+
+- Only `portal_hub_exit` was swept. The other 17 doors on kitsune, and the other 425 in the
+  library, are inferred from the same two lines of QC rather than measured.
+- The vertical band was not swept, only the horizontal one. `lpd_hh` takes the identical change.
+- Patches 209b/209c are **still not deployed** — the user's game has held
+  `C:\FTESurf\fteplug_hl2_x64.dll` for three sessions now. Nothing here is plugin-side, so this
+  patch does not depend on them, but the ClusterPVS merge wipe remains live in what they run.
+
+---
+
+## Patch 213 — the grips get bigger, the arrows find the dropdown, and Patch 211 gets four corrections
+
+Two requests:
+
+> *"can you make it so the right side of the console and the bottom bar of the console be 2x so
+> the bottom right corner is easier to grab for resizing."*
+>
+> *"when you're typing in a command, the arrow keys should cycle though the command display,
+> currently it cycles though the console history even if you start typing in a command."*
+
+Both are small. What they turned up is not: **four of the six defects fixed here were shipped by
+Patch 211 in build 27**, and every one of them is the same shape — a number spelled twice, where
+one speller was updated and the other was not, and the failure is a click that does nothing.
+
+Taken as **213**; the other session claimed 212 mid-write.
+
+### 213a. The grips — `con_gripsize`
+
+New cvar, engine default **8 = the previous size**, accessor `Con_WindowGripSize()` in
+`console.c`, declared in `common/console.h` beside the other two. FTESurf sets 16 in its own
+`cfg/default.cfg`. The bottom-right corner is both grips at once, so 8 to 16 takes that target
+from 8x8 to 16x16 — four times the area, which is the request.
+
+`CON_WNDBORDER` stays 8 and stays a constant, but its *meaning* narrowed: it is now the left
+inset and the origin `mousecursor[]` is measured from. It used to be the grips as well, which is
+exactly why they could not be widened without moving the text with them.
+
+**The scrollbar moves inward rather than being eaten.** Grip and scrollbar are adjacent today
+only because both happen to be 8; growing the grip alone would have taken half the clickable
+width build 27 had just added on request. So the scrollbar's x, the text width, the scissor and
+`Con_DrawOneConsole`'s box all derive from the grip, and the invariant kept is *the grip is
+outside everything else*. The left grip is deliberately unchanged — the request named the right
+side and the bottom.
+
+At `con_gripsize 8` every changed expression reduces to its build-27 text, term for term. That is
+not tidiness: `con_window` defaults to 1 in quakers too.
+
+### 213b. The arrows
+
+`Key_CompletionNav()` in `keys.c`, called from `K_UPARROW`, `K_DOWNARROW` and the wheel.
+
+The arrows were gated on `con_commandmatch`, which Patch 211 deliberately leaves 0 until you
+navigate — that is what keeps ENTER meaning "run my line" while the list is merely open. So the
+gate could only become true *after* Tab or the wheel had already set it, and typing `cl_` and
+pressing Up gave you history. The report is exact.
+
+The gate is now "is the dropdown actually showing rows", mirroring `Con_DrawInput`'s own
+condition — same string, same `cmdstart`, same `Cmd_Complete` call — so the list navigated cannot
+be a different list from the one on screen. Up from nothing highlights the **last** row and Down
+the **first**, which falls out of the wrap.
+
+**It does not call `CompleteCommand`**, whose partial-match arm inserts `c->guessed`: navigating
+`cl_sh` past a run of `cl_show*` would silently rewrite what you typed. Right for Tab, wrong for
+a highlight. `con_selftest` pins that the line is untouched.
+
+**History is not lost**, and the rule was already in the file: `history_line == edit_line`
+exactly while you are on a line you typed rather than one you recalled. So the dropdown owns the
+arrows on a fresh line, and once you walk into history they stay history's until ENTER. Accepted
+seam, stated rather than buried: recall a line, edit it, and the arrows still walk history even
+with a dropdown under them — the conservative direction.
+
+The wheel goes through the same helper. Its old copy differed twice: it required more than one
+match, and it could rewrite the line.
+
+### 213c. `con_selftest` — because a config cannot press a key
+
+`pm_selftest` and `zone_selftest` exist for exactly this reason. The gate is a pure function of
+the input line, the mode and `history_line`, so this drives it directly and pins: first Up is the
+last row, first Down the first, both wrap, **the typed line is unchanged**, and the gate declines
+on an empty line, on no matches, on a bare slash, while browsing history, and at
+`con_displaypossibilities` 1 and 0. Plus the grip clamps at both ends.
+
+It cannot prove that pressing the physical key reaches `Key_Console`. It proves that when it
+does, the answer is right.
+
+### 213d. Four corrections to Patch 211, all found by reviewing 213
+
+Each was shipped in build 27. Each is a number with two spellers.
+
+**The X button was dead over seven eighths of itself.** `Key_ConsoleRelease` tested
+`mousecursor[0] > wnd_w-16 && mousecursor[1] < 8` — the third spelling of that box, and the only
+one 211 missed. The press arms over `titleh` and the draw highlights over `titleh`, so at
+`con_textsize 16` the X lit up across 22x22 and closed across 8x8. Now spelled the way the
+**press** spells it, so arm and release cannot disagree about one click.
+
+**Windowed selection and every link click were 14px out.** `Con_DrawOneConsole` does
+`selsy += y`, treating the selection box as relative to `fy`; `Key_GetConsoleSelectionBox` returns
+`mousecursor[]`, relative to `wnd_y`. Those agreed only while `fy = wnd_y+top-CON_WNDBORDER` had
+`top == 8`. Patch 211 made `top` the console font's height, so since build 27 clicking a
+completion row could take the row above it. Corrected by skewing the box into `fy`'s space.
+
+**`con_window_rect` never worked, in the direction that looks like it does.** Patch 211's comment
+claimed an unregistered `cvar_t` "still carries its compile-time default" in `.string`. It does
+not — `CVARAFCD` sets `.string` to NULL and puts the default in `.enginevalue` — and `Con_Init`
+called `Con_GetMain` thirty lines before registering the cvar. The `sscanf` ran on a null pointer,
+failed, and the hardcoded fallback below it won: **FTESurf's geometry was a coincidence and
+quakers got the 64,64 960x640 window unasked.** That is the precise bisection failure build 27's
+quakers regression existed to catch, and it passed because it checked the cvar's *value* and not
+the window's *position*. Registration moved above the read, the parse is guarded, the fallback is
+the engine default, and a callback applies a later `set` — the only way a value arriving with the
+config can reach a window that already exists.
+
+**A short window bricked itself.** Everything that acts on a drag — `CB_MOVE`, all three
+`CB_SIZE*` — lives in `Key_GetConsoleSelectionBox`, reached for a window only from
+`Con_DrawOneConsole`, called only inside the `srect.width > 0 && srect.height > 0` guard. The old
+floors were 64 and **16** against a title bar Patch 211 made 22 tall, so `srect.height` was
+already negative at minimum height: drag the console short enough and it went blank,
+unresizable and unmovable in the same frame. The floors now derive from the chrome.
+
+Also: `Key_ConsoleScrollStep`'s `wnd_h-16` (a fourth speller of the text height, so PgUp paged
+past the end); the action bar claiming the top 8 rows of both side grips; and the grip hit tests
+using `>` where the draw uses `>=`, so the first column lit up and then did something else — a
+scrollbar jump on the right, a text selection at the bottom.
+
+### Inert in quakers
+
+Every new cvar's engine default is the previous behaviour. The 213d fixes are not cvar-gated and
+**do** change quakers, all four in the direction of working: the X closes over its whole box,
+selection lands where the mouse is, the console window goes back to 0,0 640x480 where it belonged
+before build 27, and a short window no longer bricks.
+
+### Not verified
+
+- **Nobody has looked at any of it.** The grips, the title bar and the dropdown are drawn and
+  clicked, and a config can press neither a key nor a mouse button. `con_selftest` closes the
+  arrow gate's logic; it does not close the keypress reaching it.
+- The `top += 8` media/browser arm still bumps `top` where `keys.c` cannot see it, so a cinematic
+  console's scrollbar drag is 8px out. FTESurf never opens one; left, named.
+- The 8-row band under the title bar is still `CB_ACTIONBAR` on a plain window, so the top row of
+  text is unselectable. Pre-dates 211; out of scope.
+
+## Patch 214 — the carve that ate the floor
+
+**Patch 212 was right and it broke something anyway.** Doubling the aperture from 88 to 176
+units also doubled the door's *collision* box, and `PM_PortalCSG` derives its carve window from
+that box — so the window's bottom plane dropped 44 units, from just above the doorway floor to
+36 units below it. Standing in a doorway then deleted the floor you were standing on.
+
+The user's report, and it is two sentences that turned out to be one bug and one stale build:
+
+> *"when you pass into the next world, the world despawns still :? also when you walk between the
+> two "worlds" you can fall inbetween them and get stuck in the floor 64~ units, you can jump out"*
+
+### The arithmetic, with the floor height measured rather than assumed
+
+`sv_entities.qc:1056` sets the door's bounds from `FS_PortalExtent`, so `lpd_hh` is the box's
+half-height. Patch 206 tests the four side planes against the player box's **centre**
+(`pmovetst.c:687-689`), and the Source standing hull is `(-16,-16,0)..(16,16,72)`, so the bottom
+plane sits at `door_z - halfheight - 36`. On `portal_hub_exit` (origin z 184):
+
+| | bottom plane | doorway floor z 96 | result |
+|---|---|---|---|
+| Patch 206–211 (`hh` 44) | **104** | 8 units below it | refused — floor stays solid |
+| Patch 212 (`hh` 88) | **60** | 36 units inside it | accepted — **floor carved** |
+
+The floor height is not a guess and not a trace: `PM_PortalCSGReport` names the refusing plane,
+and the pre-212 band run logged the `below it` edge **58 times, every single one at exactly 8.0
+units** — feet at 96 against a plane at 104. The post-212 run logs **zero**. That one histogram
+gives the floor height, the plane position, and the sign of the change at once.
+
+It agrees with the independent camera solve from the Patch 212 measurements (eye 160.08 minus
+the 64-unit standing viewheight = 96.08) to 0.08 units.
+
+### The mechanism
+
+A downward ground trace at the doorway began ending *inside* the window. It crosses none of the
+six planes, so `hitplane` stays -1 and `bestfrac` stays 1 — and the tail of `PM_PortalCSG` then
+set `fraction = 1` regardless, which is "the trace hit nothing". The floor ceased to exist for
+that trace. The player sinks to about z 60, where the window refuses again and the brush closes
+around them, and `PM_TestPlayerPosition`'s portal fallback (`pmovetst.c:793-804`) clears
+`allsolid` for any position a portal CSG accepts — so the embedded position is judged **valid**
+and nothing tries to push them out. Hence "stuck in the floor, you can jump out".
+
+The old build's log carries the wedge signature plainly: **196 copies** of the refusal pair
+`in front of it | 0.2` and `in front of it | 15.8`, which sum to the 16-unit box depth — a player
+oscillating against the plane. The fixed build logs no such pair.
+
+### The gate that did NOT work, and why it is worth recording
+
+The first attempt gated the elongation on `hitplane == 1`, reasoning that a crossing must leave
+through the portal plane because that is the only case that stamps `trace->entnum`, which is the
+only thing `PM_PlayerTracePortals` (`pmove.c:161-165`) reacts to.
+
+**That is true of the final tick of a crossing and false of every tick before it, and it broke
+the crossing outright.** Measured, not argued: with that gate, walking the hub door left the
+timer at `0:00.000` and the player in the hub; the build without it reached stage 1 at
+`0:03.840`. A player walking at ~3 units a tick first stops with their box *face* on the plane,
+which is 16 units of origin travel short of it. Carrying those 16 units is exactly what the
+elongation is for, and across that stretch the trace crosses no plane at all. **`hitplane == -1`
+is the normal case for a crossing, not an anomaly** — which is also why the floor deletion shared
+a code path with the traversal in the first place.
+
+### The gate that works
+
+Direction. The carve exists to let a trace pass *through* the aperture, so it applies to a trace
+that is trying to: one whose motion has a component along the portal's inward normal.
+
+    VectorSubtract(end, start, movedir);
+    if (DotProduct(movedir, planes[1]) >= 0)
+        return;		//not heading into the aperture: nothing to pass through
+
+* A walk into the doorway has such a component — carved, as before.
+* A downward ground trace, the thing that decides whether you are standing on anything, is
+  perpendicular to it and has none — so the floor is left exactly as the world reported it.
+* `PM_TestPlayerPosition`'s point test (`start == end`) has none either, and does not need one:
+  it wants the `startsolid`/`allsolid` clear, which stays **unconditional and above the gate**.
+  That half is the real contract — "your box is in the aperture, so the wall it straddles does
+  not count for you" — and it is also what keeps a player who arrives half inside the exit wall
+  from being pinned by `PM_SlideMove`'s `startsolid` bail (`pmove.c:268`).
+
+Deliberately independent of aperture size: no plane position, no half-extent and no QC changes.
+Shrinking the portal back would have "fixed" the fall too, and would have been wrong — 176 is the
+measured width of the doorway.
+
+### Verified
+
+| check | result |
+|---|---|
+| **eye height, within-build** — side-on view, same flat floor, one spot outside the carve window (y -560) and one inside (y -528) | **old: 35 px drop. new: 0 px.** Repeatability control (outside → outside again) **0 px on both** |
+| **control arm** — player 120 units out, outside the window entirely | **pixel-identical between builds**, mean abs difference `0.000` |
+| **acceptance band** — the ten-offset sweep across the hub door | **identical at all ten**: crosses −66…+66, refuses ±88 and +110. Saturation is cleanly bimodal (refusals 0.41–0.43, crossings 0.60–0.98) |
+| **crossing still works** | timer `0:03.090`, "9 stages", rainbow stage-1 room |
+| **wedge oscillation** | 196 × the `0.2`/`15.8` pair before, none after |
+
+The band sweep's crossings land at a *different depth* into stage 1 after the fix (saturation
+0.601 against 0.978). That is the fix working, not a discrepancy: before it, the player was
+falling through the carved floor while crossing.
+
+### Not verified — stated so it is not assumed
+
+* **Only `portal_hub_exit` on surf_kitsune.** The other 17 doors on that map and the 425 across
+  the library are inferred from shared code. Only the horizontal band was swept, never the
+  vertical one.
+* **No other map was run.** `surf_tripportals` (116 apertures) is the obvious regression sample
+  and has not been checked against this gate.
+* **The sink magnitude does not match the report.** The user said "64~ units"; the model predicts
+  36 and the optical measurement reads 35 px against far geometry. The direction and the
+  before/after are certain; the absolute depth is not, and nothing here depends on it.
+
+### Two corrections to the record
+
+1. **The despawning world was a stale build, not a bug.** The user confirms after redeploying:
+   *"I deployed and tested the correct version, and now the entities don't despawn!"* This
+   matches the instrumentation, which never once reproduced it — `h1_cross.log` arm B, walking
+   the hub portal for real, reported a valid cluster 131 and 333 of a possible 384 world batches
+   at the destination. Earlier entries treating it as an open rendering fault were chasing a
+   client running old progs.
+2. **Patches 209b/209c were never causal and should stop being described as a blocker.** 209b
+   only fires on maps with a zero-length VISIBILITY lump and surf_kitsune has a valid one (133
+   clusters); 209c's own adversarial audit already refuted itself and filed the defect as latent.
+   They are hardening.
+
+### Housekeeping
+
+Patch number **213 was taken by the concurrent session** (the console grips/dropdown work) between
+this patch being designed and being logged. Grepping the log *and* the source at append time is
+what caught it — the same procedure that caught 211 during Patch 212. This is 214.
+
+**Still open:** surfaces seen *through* a portal render essentially unlit. Standing in stage 1
+gives a full spectral gradient (`screenshots/h1b_p00.png`); the same room seen through an
+aperture is black with only thin red wireframe lines (`h1_hub100_on.png`, and the portal visible
+in the centre of `h1b_p00.png` itself). A truncated investigation was tracking a material named
+`rainbowscroll` on **world-model** faces before it died on a rate limit — a lead, not a finding.
+
+
+---
+
+## Patch 215 — the dropdown turns the right way up, and `map` stops needing the prefix
+
+Three requests:
+
+> *"On the console command preview, is it possible to display the option preview below the
+> typing field? source has it be a drop down, not a drop up?"*
+>
+> *"the drop up up/down arrow keys moves the selection highlight in the wrong direction."*
+>
+> *"is it possible to make the map command be full lenient? so "map kits" in console will auto
+> populate all maps with kits, like surf_kitsune and surf_kitsune_mom ect."*
+
+The second is a one-line bug and it is **Patch 211's**, sitting under a comment that asserted the
+opposite of what the code did. The third turned up two more defects that only became visible once
+the list was worth reading.
+
+Taken as **215**; the other session holds 214, 216 and 217, so this is the gap between them.
+
+### 215a. The rows were built backwards — `Up` moved the highlight `Down`
+
+`Con_DrawConsoleLines` draws the line it is HANDED at the y it is given and then walks `->older`
+**upward** (`y -= Font_CharHeight()` before each row), so the chain HEAD is the **bottom** row.
+`Con_PushCompletion` pushes onto the head. Patch 211 therefore pushed backwards —
+`for (i = last-1; i >= first; i--)` — under a comment claiming that made `entry[first]` *"deepest,
+i.e. at the top"*. It did the exact opposite: `entry[first]` was pushed **last**, so it became the
+head, so it was drawn at the **bottom**, and the list read in **descending index order**.
+
+`Up` decrements `con_commandmatch`, so `Up` walked toward index 1 — which was on the floor of the
+list. The report is exact, and it is one loop direction.
+
+**The overflow marker moved with it, and that was not taste.** `"N more"` was pushed before the
+loop, i.e. topmost. That was right while the rows descended: the top row was the highest index, so
+the hidden ones continued upward and the counter was on the end they ran off. Now that the rows
+ascend, the hidden ones run off the **bottom** — at the usual `con_completionscroll 0` every hidden
+entry has an index above `last` — so the marker follows them there.
+
+### 215b. The drop-DOWN — `con_completiondown`
+
+`Con_DrawInput` is bottom-anchored: it is handed the BOTTOM of the console text region and
+everything it draws walks upward from there — input line, then footer, then the list — and whatever
+y it returns is where the scrollback starts. **There is no space below the input line; the input
+line IS the bottom.** Drawing outside the console instead, Source's true overlay, is not available
+either: a console window is scissored to its own rect, so anything past the bottom edge is clipped
+rather than drawn over the game.
+
+So "below the input line" is: **the list claims the bottom band and the input line moves up above
+it.** The band is drawn first, at the y the caller passed, and the input row is placed one character
+height above whatever `Con_DrawConsoleLines` returns — so a row that WRAPS in a narrow window is
+accounted for with no row counting.
+
+The consequence, stated rather than buried: **the input line now moves as the match count changes.**
+A bottom-anchored console can pin the field or put the list under it, not both. `con_completiondown 0`
+is the drop-up, unchanged.
+
+`Con_DrawInput` gained a `top` parameter, from both call sites, and it closes a Patch 211 hole on
+the way: the list was drawn with `top = 0`, so `con_completionrows 64` in a short window drew
+straight out through the top of the console. Now the row count is bounded by the space that exists,
+and the drop-down reserves one row beyond that so a wrapped row can never push the input line out.
+
+### 215c. `sv_mapcompletion` — the text may appear anywhere in the name
+
+`SV_Map_c` globs `maps/<typed>*.bsp`, so on a library where every map is `surf_<something>` the
+first token you can usefully type is `surf_`, and the part you actually remember can never find
+anything. At 1 the final component becomes `*<typed>*.bsp`.
+
+Nothing else changes, and that is checked rather than assumed: `wildcmp` is a real recursive glob in
+which `*` matches any run of characters except a path separator, and **every** backend this game
+uses filters through it — the raw directory (win32 asks the OS for a bare "everything" pattern and
+runs its own `wildcmp`, so `FindFirstFile` never sees ours and its DOS wildcard quirks cannot
+apply), `.pak`, `.pk3`/zip, dzip, and the Source `.vpk` through the plugin's `filefuncs->WildCmp`.
+
+**Two places leniency deliberately does not reach.** The eight subdirectory globs, whose `%s` names
+a DIRECTORY rather than a map: the win32 enumerator uses that component as its *recursion gate*, so
+a leading `*` would open and walk every directory containing the text, once per glob per searchpath,
+to complete something nobody asked to complete. And `PM_EnumerateMaps`, which is a `Q_strncasecmp`
+prefix test over package names rather than a glob, so a `*` would silently match nothing.
+
+Cost on the leaf globs is zero: an empty argument already enumerates every map, so a full pass is
+the existing baseline.
+
+### 215d. Three defects the leniency exposed, two of them only under a camera
+
+**Tab could delete the line it was meant to extend.** `CompleteCommand`'s sole-match arm has carried
+`if (strlen(cmd) < strlen(s)) return;` forever; the partial-match arm has not, and did not need to —
+with prefix completion `c->guessed` is the common prefix of strings that all begin with what you
+typed, so it can never be shorter. Leniency breaks that invariant by design: `map a` matches most of
+the library and the common prefix collapses to `"map "`. The guard moves to the partial arm too,
+where it is now load-bearing.
+
+**The green inline hint drew text that was never typed.** `Con_DrawInput` paints the completion from
+the cursor position onward, which is right precisely because a prefix match's first *cursorpos*
+characters ARE what you typed. `map kits` matches `map surf_kitsune`, whose 8th character onward is
+`_kitsune`, and the line drew as **`]map kits_kitsune`** — found in the first screenshot of this
+patch, not by reading. The hint is now painted only when the match actually extends what you typed.
+
+**Every entry appeared twice.** `Cmd_Complete_Sort`'s own FIXME named this — *"its possible that
+they're equal (eg: filesystem searches)"* — because a file completion runs once per searchpath.
+Survivable while the list was a Tab-only convenience; not survivable once the dropdown is how you
+FIND a map, where `map kits` listed surf_kitsune, surf_kitsune2 and surf_kitsune_mom **twice each**
+and read as six maps. Duplicates are collapsed after the sort, which has just made them adjacent.
+
+**And `con_completionscroll`'s two clamps ran in the wrong order.** The window was bounded to the
+list first and to the highlight second, and the highlight clamp does not know how long the list is —
+so it could leave `first` past the end. It needs `con_commandmatch > c->num`, which is reachable
+because the number is set against a slightly different string from the one the draw completes
+(`CompleteCommand` strips leading whitespace and a `\`; the draw strips only a `/`). With num 0 and
+match 13 you get `first 1, last 0`: the row loop runs zero times and `extra` comes out
+`0 + 0 - (0-1) = 1`, so the dropdown draws as a single phantom **"1 more"** with no rows — stably,
+every frame, because both clamps re-fight it each time. Bounding to the list *last* makes
+`0 <= first <= max(0, num-rows)` unconditionally.
+
+### 215e. `con_settext`, and why this one is not "nobody has looked at it"
+
+The two visual questions — which side of the input line the list is on, and whether the rows read
+top-to-bottom — are things you LOOK at, and a config can take a screenshot but cannot type. With an
+empty input line there is no list to photograph, so both would have shipped unverified.
+
+`con_settext <text>` writes the line you would have typed and lets the existing machinery do the
+rest. It is the same argument `in_journal_synth` already makes — the only way to reach a
+keyboard-driven path from a cfg — with none of the same risk, because it forges no evidence: it sets
+nothing else, in particular not `con_commandmatch`, so ENTER still means "run my line".
+
+It earned itself immediately. The inline-hint corruption and the duplicate rows were both invisible
+to every check in `con_selftest` and were both plainly visible in the first picture it produced.
+
+`con_selftest` also grew the map arm, which needs no keypress at all — it is a pure function of the
+filesystem and one cvar. It asks for a substring that cannot be a prefix of anything, and it drops
+`Cmd_Complete`'s memo between the two halves, without which the second question returns the first
+answer and the test passes for the wrong reason.
+
+### Measured
+
+```
+  ("cl_" has 181 matches)
+  ok   Down from nothing -> first row              1
+  ok   Up from nothing -> LAST row               181
+  ok   line unchanged by navigating                1
+  ok   grip 16 is twice stock                     16
+  (2473 map(s) installed; "_" matches 0 as a prefix, 256 as a substring)
+  ok   lenient off: "_" is a prefix of no map      0
+  ok   lenient on:  "_" matches by substring       1
+  ok   Tab does not shorten the typed line         1
+all checks passed
+```
+
+`pm_selftest` all passed, `zone_selftest` **22/22**, zero warnings in `console.c`, `keys.c`,
+`cmd.c` and `sv_ccmds.c`, zero `Unknown command`. And the picture, which is the point:
+
+```
+]map kits
+/map surf_kitsune
+/map surf_kitsune2
+/map surf_kitsune_mom
+```
+
+— below the input line at `con_completiondown 1`, above it at 0, ascending in both, once each.
+
+### Inert in quakers
+
+Both new cvars' engine defaults are the previous behaviour, verified there:
+`con_completiondown "0" (default)`, `sv_mapcompletion "0" (default)`, alongside `con_gripsize "8"`
+and `con_displaypossibilities "1"`.
+
+Four things are **not** cvar-gated and do change quakers, all four in the direction of working: the
+row order (and with it the arrow direction), the `con_completionscroll` clamp order, the duplicate
+collapse, and the partial-completion length guard. `con_settext` is a new command and nothing calls
+it. `con_selftest` reporting "no console yet" is now a **skip** rather than a FAIL — it hits that
+every time by design, and a diagnostic that cries failure when it did not run teaches everyone to
+ignore it.
+
+### Not verified
+
+- **The drop-down was photographed, not used.** `con_settext` proves the list is drawn below the
+  input line and in ascending order; it cannot press Up. That the physical arrow key reaches
+  `Key_Console` is still the one thing `con_selftest` says it cannot close.
+- **Whether the moving input line is worth the drop-down is a judgement.** It is one cvar.
+- An SDL3 non-Windows build routes `Sys_EnumerateFiles` to `SDL_GlobDirectory` rather than
+  `wildcmp`, and that function's own comment in `sys_sdl.c` records `*` crossing the separator and
+  walking the whole tree under wine. This build is native win32 and the default is 0, so it is not
+  ours today — named because a leading `*` is the one thing that would find it.
+- The duplicate collapse is by name only. Two genuinely different files with one map name — the same
+  map in two mounted games — now offer one row, which is what you want to click but hides that there
+  are two. `mapfrom` is still how you choose between them.
+
+## Patch 216 — direction was not enough; what you HIT is the discriminator
+
+**Patch 214 was necessary and not sufficient, and the user found the hole in one session.**
+214 stopped the purely-vertical ground probe from deleting the doorway floor. It did nothing for
+a trace that is moving forward *and* downward at the same time — which is the state you are in on
+the tick you arrive at a doorway, and every tick of a surf ramp. The report:
+
+> *"when you get stuck between portals and fall 30~ units down, now you slide around and I can't
+> jump out"*
+
+Both halves of that sentence are predicted by the code. The 30 is the 36 that
+`door_z - hh - 36` gives for a (-16,-16,0)..(16,16,72) hull against an opening whose bottom edge
+is the floor. The sliding-and-cannot-jump is `PM_TestPlayerPosition`'s portal fallback
+(`pmovetst.c:856-869`) clearing `allsolid` on the embedded position, so it is reported VALID:
+`PMSrc_CheckStuck` never runs, nothing pushes them out, and a downward probe that finds no plane
+gives no ground to jump from.
+
+### Why direction cannot decide it
+
+214 asks *where is this trace going*. A crossing goes into the aperture; a ground probe is
+perpendicular to it. That is a real distinction and it is the wrong one, because a walking trace
+carries gravity in the same vector. `DotProduct(movedir, planes[1]) < 0` is true for
+"forward into the doorway", "forward and falling", and "forward and falling fast", and only the
+first of those should be allowed to discard the floor the trace just found.
+
+### What decides it
+
+The surface the trace actually hit. The carve exists to remove **one** surface — the face of the
+wall the portal is mounted in, whose normal is parallel to the portal's own. A floor, a ceiling
+or a side wall that happens to lie inside the window is not that surface.
+
+    if (!trace->startsolid && fabs(DotProduct(trace->plane.normal, planes[1])) < 0.5)
+        return;		//we hit a floor/ceiling/side wall, not the portal's own wall
+
+0.5 is ±60°, which admits a wall that is not perfectly axial and excludes anything that could be
+stood on — Quake's own walkable limit is 0.7. `startsolid` is exempt because an embedded trace
+reports no plane at all; that case is the arrival-inside-the-exit-wall unstick, and part 2 below
+bounds it.
+
+### Part 1: nothing below the opening is forgiven
+
+The solidity clear is what makes an embedded position *legal*, and it was unconditional. Patch 206
+tests the side planes against the box's CENTRE, so plane 5 accepts a player whose feet are 36
+units under the opening's bottom edge — and on `portal_hub_exit` that edge IS the doorway floor
+(aperture z 96..272, floor 96). So the clear was being asked to forgive being inside the *floor*,
+and forgiving it is precisely why a player who got under there stayed.
+
+The centre reading is right for *lining up with* a hole and wrong for *standing in* one. A hole in
+a wall has a bottom edge; below it is not the doorway. So the box's own lowest corner is tested
+against the rectangle's own bottom edge, captured before the loop offsets it:
+
+    aperturebottom = planes[5][3];		//before any box correction
+    ...
+    feetdist = DotProduct(worldpos, planes[5]) + DotProduct(botcorner, planes[5]);
+    if (feetdist < aperturebottom - (1/32.0))
+        return;
+
+**This costs normal play nothing, and that is checkable rather than hopeful.** A player standing
+in a doorway is in open air; their world trace is not `allsolid`, so `PM_TestPlayerPosition` never
+calls this function at all. The gate can only fire on a position already inside solid brushwork,
+where the honest answer is "no, get out". A player standing exactly on the floor sits on the
+boundary and passes it with 1/32 to spare.
+
+Neither part touches a plane position, a half-extent, or any QC — 215 is as independent of the
+176-unit aperture as 214 was.
+
+### Verified
+
+| check | result |
+|---|---|
+| eye height, within-build — side-on, one probe outside the carve window (y -560) and one inside it (y -528) | **0 px**, with a **0 px** repeatability control |
+| crossing still works | `h3_crossed`: timer **0:02.835**, "9 stages", landed in the rainbow room (centre brightness 95.4, saturation 0.755) |
+| the door the test was actually looking at | `fs_portal_debug 1` logs `portal_hub_exit: offered at 122 units` — one door, matching a camera 120 units out. Position stopped being an inference |
+
+### Not verified — stated so it is not assumed
+
+* **The unstick itself was never reproduced.** Part 1 is reasoned from the code path, not measured:
+  getting deliberately buried under a doorway is not something the test harness can currently set
+  up. The floor no longer being deleted is measured; "and if you do get under there you are pushed
+  out" is not.
+* **Only `portal_hub_exit` on surf_kitsune**, horizontal band only. `surf_tripportals` (116
+  apertures) is still the obvious regression sample and is still not run.
+* **The 0.5 normal threshold is a judgement**, not a measurement. It is bounded on one side by
+  Quake's 0.7 walkable limit and on the other by wanting non-axial walls to work; no map in the
+  library has been surveyed for a portal set into a surface more than 60° off its own plane.
+
+### Correction to the record
+
+**Patch 214's entry claims a 36-unit sink and the user reported "64~".** 214 called that a
+discrepancy worth measuring. It is now clear the two numbers were measuring different builds of
+the same arithmetic and the model was right: `door_z - hh - 36` puts the accepted floor for the
+FEET at z 60 against a doorway floor at 96 — 36 units — and the later report of "30~" matches it.
+The earlier "64~" was taken on a build whose aperture was still being changed underneath it.
+
+### A note on instruments, because two of them are useless here
+
+`r_fullbright 1` and `r_lightmap 1` change **zero pixels** on this map — not through a portal and
+not in the main view either. They are not wired into the VBSP/GLSL shader path at all. Anyone
+reaching for them to diagnose a lighting problem on a Source map will read a null result as
+evidence and it is not evidence of anything. `r_showtris` does work.
+
+
+## Patch 217 — `$translucent` never read its value, and `$alpha` is translucency too
+
+Two halves, and the first half shipped alone for one build and broke the map. Both are recorded
+because the pair is the lesson: half of Source's rule is worse than none of it.
+
+### The bug
+
+```c
+else if (!Q_strcasecmp(key, "$translucent"))
+{
+    st->translucent = 1;          // <- value never read
+}
+else if (!Q_strcasecmp(key, "$additive"))
+{
+    if (atoi(value))              // <- value read, correctly
+        st->additive = 1;
+```
+
+`$translucent 0` — a material stating outright that it is not translucent — was made translucent.
+The correct form was four lines below it the whole time.
+
+That is not one wrong surface, it is a wrong RENDER MODE for the surface and everything behind
+it: a blended surface cannot write depth, so it stops occluding and has to be composited in
+order. A map whose walls and floors have all been turned to glass draws its whole world that way.
+
+Measured across the 2394 VBSP maps in the library carrying an embedded pakfile (counted per map,
+so a material packed into several counts several times): **945 materials in 106 maps** write
+`$translucent 0`. **22740** write a nonzero value and are untouched.
+
+### The half that was missing
+
+Reading the value and stopping there is wrong, and the user found it within one build:
+
+> *"The stage textures on kitsune are supposed to be transparent, they are like dark with coloured
+> highlights which you can see through slightly, but in the current patch, they come back solid."*
+
+In Source a fractional `$alpha` blends the material **on its own**; `$translucent 0` does not veto
+it. surf_kitsune's nine grid materials are exactly that shape:
+
+```
+UnlitGeneric { $basetexture "grids/grid_red"  $translucent 0
+               $selfillum 1  $alpha 0.75 }
+```
+
+The `$translucent 0` declines the translucent FLAG, not the alpha. So:
+
+```c
+if (st->alphaval > 0 && st->alphaval < 1)
+    st->translucent = 1;
+```
+
+tested after the keys are parsed, because both orders are live — of 1633 packed materials writing
+both keys, **304 put `$alpha` first**. Zero alpha is excluded; it is already turned into nodraw
+where `$alpha` is parsed.
+
+Net scope: of the 945, the **39 across 4 maps** that also carry a fractional `$alpha` stay
+translucent (kitsune among them); the other **906** become correctly opaque, which was the point.
+
+### The census gets to print
+
+```c
+if (vmt_stat_water || vmt_stat_refract || vmt_stat_translucent)
+```
+
+It was gated on water-or-refract, so the translucency count — in the same line — was invisible on
+every map with neither. surf_kitsune is one. Diagnosing this there meant inferring translucency
+from screen brightness, and that proxy gave me a **wrong answer I briefly believed**: the
+portal-off wall read 84.1 both before and after the alpha fix, which I read as "the fix did not
+take". The count says otherwise and is not a proxy:
+
+    maps/surf_kitsune.bsp: 0 water material(s) at hl2_water 3, 0 refract at hl2_refract 2, 11 translucent
+
+11 with the alpha rule, ~2 without it: the nine grids are back. That line is the verification for
+this patch and it exists because of this patch.
+
+### Not verified
+
+* **Only surf_kitsune was run.** The other 105 maps with `$translucent 0` materials, and the 3
+  other maps in the fractional-alpha-and-zero group, are inferred from the census and not looked at.
+* **The 906 that become opaque are unexamined.** The argument that opaque is what their author
+  asked for is the VMT's own text, not an observation of any of them.
+
+
+## Patch 218 — blended world surfaces were drawn front-to-back
+
+Reported precisely:
+
+> *"there is a lot of 'glass' / alpha textures in this map, with more alpha textures, and it seems
+> to get the ordering of these alphas wrong, almost backwards?"*
+
+Not almost. Exactly.
+
+### The order
+
+Every BSP world walk in this engine visits the NEAR child of a node first, then that node's own
+surfaces, then the far child — `Surf_RecursiveQ2WorldNode` (`gl_q2bsp.c:7988-8009`) and the VBSP
+plugin's own `VBSP_RecursiveWorldNode` (`mod_vbsp.c:4378-4398`) both. Surfaces are appended to
+their batch in exactly that order.
+
+For opaque geometry that is correct and deliberate: it is a painter's order run nearest-first,
+which is what lets early-z reject the far surfaces. For a BLENDED surface it is precisely
+backwards — alpha blending is not commutative, so a translucent surface must be composited over
+what is behind it, which means far-to-near. Drawn near-to-far, the nearer pane is laid down first
+and ends up underneath.
+
+This was latent on this map until Patch 217 made `$alpha 0.75` blend the nine `GRIDS/GRID_*`
+materials that surf_kitsune's floors and walls are made of — which is why the two reports arrived
+together.
+
+### The fix is a reversal, not a sort
+
+BSP front-to-back order is an EXACT painter's order for the surfaces the tree separates, so
+reading it backwards is an exact back-to-front order. No distances, no comparator, no tie-breaks,
+no per-frame qsort — one pass swapping the ends of an array the walk has already ordered:
+
+    static void Surf_SortBlendedChains(batch_t **batches)   // r_surf.c
+
+running over `firstmesh..meshes` so a recursed portal view reverses its own range and leaves the
+primary view's alone. Called after the world walk has filled the batches and before
+`BE_DrawWorld` submits them.
+
+`r_blendsort` is the A/B, default 1. Only `SHADER_SORT_BLEND` is touched: additive blending IS
+commutative, alpha-tested surfaces write depth, and the banner/underwater sorts are left alone
+because nothing has measured them.
+
+### NOT VERIFIED, and the measurement that failed is worth recording
+
+**The A/B could not be separated from the map's own animation, and the first reading of it was a
+false positive I nearly reported.**
+
+`r_blendsort 1` vs `0`, same camera in stage 1, read as mean absolute pixel difference:
+
+| | mean abs diff | pixels differing |
+|---|---|---|
+| blendsort 1 vs 0 | **128.3** | 59.43% |
+| blendsort 1 vs 1 again ("noise floor") | 11.4 | 59.17% |
+
+An 11x margin, and wrong. Looking at the two frames settles it: they differ only in the HUE PHASE
+of the rainbow wall — blue/magenta in one, green/yellow in the other. `CUSTOM/RAINBOWSCROLL`
+scrolls at rate 1, so 2.5 seconds between arms moves the gradient a long way. The 128 is the
+scroll. The 11 is the control arm happening to land back near the first arm's phase, **because a
+periodic animation sampled once is not a noise floor** — the near-identical "% differing" (59.43
+vs 59.17) against wildly different means was the tell, and it was there to be read.
+
+In the hub, where nothing animates, both readings are `0.000` and `0.00%` — so that view has no
+overlapping blended surfaces and cannot test this either.
+
+What would actually verify it: a camera with overlapping translucent surfaces and no scrolling
+material in frame, or arms interleaved a few hundred milliseconds apart and repeated so the scroll
+barely moves between a matched pair. Neither has been run. The patch ships on the argument, not on
+a measurement, and `r_blendsort 0` is one cvar away.
+
+### Also not verified
+
+* **The scene-cache path is not covered.** `Surf_DrawWorld` returns early through the
+  `r_temporalscenecache` branch with its own `rbatches`, which this never sees. That path is
+  gated to `fg_quake`/`fg_halflife`/`fg_quake3`, so no VBSP map takes it, but a Q1 map with
+  translucent world surfaces and the cache active keeps the old order.
+* **Entity/brush-model batches are not covered** — only the world model's.
+* **Ordering BETWEEN batches is not fixed.** Batches group by shader AND lightmap, so two
+  overlapping translucent surfaces wearing different materials can still composite in the wrong
+  order. On kitsune the nine grid colours are nine shaders, so this case is live on the very map
+  that prompted the patch. Fixing it needs a cross-batch depth sort, which is a materially bigger
+  and more expensive change.
+
+
+## Patch 219 — `progblendfunc` was a silent no-op without a program
+
+> *"the map surf_kitsune no longer has transparent surfaces, other maps do, this one does not, I
+> can't test the blendsort on this map"*
+
+All three clauses are one bug, and the third is a consequence of the first.
+
+### The guard names the wrong thing
+
+    static void Shader_ProgBlendFunc (parsestate_t *ps, const char **ptr)
+    {
+        if (ps->s->prog)          // <-- shader has no top-level program: blend discarded
+        {
+            ps->pass = ps->s->passes;
+            Shaderpass_BlendFunc(ps, ptr);
+            ps->pass = NULL;
+        }
+    }
+
+The directive is named for a program and its effect is on a PASS — its own table entry says so:
+*"actually just overrides the first subpasses' blendmode"*. Gating on `prog` discarded the blend
+for every shader with passes and no top-level program, and discarded it **quietly**: no warning,
+no fallback, and a shader that reads as translucent at every level you inspect.
+
+### Why it took all afternoon, and the two diagnostics that ended it
+
+The plugin side is entirely correct and says so:
+
+    [vmt] grids/grid_red: alpha 0.750 translucent 1 additive 0 animpass 0
+                          blendfunc src_alpha one_minus_src_alpha
+
+alpha parsed, flag set, `progblendfunc src_alpha one_minus_src_alpha` emitted. Patch 217's census
+agreed — `11 translucent` on a map rendering entirely solid. **Two independent measurements both
+said "translucent" while the screen said "opaque", and neither could see the step in between.**
+Three separate readings of `Shader_Finish` concluded the sort "should" come out
+`SHADER_SORT_BLEND`. It does not, and only printing it settled it:
+
+| | sort | prog | passes | pass 0 bits |
+|---|---|---|---|---|
+| before | **5** (`SHADER_SORT_OPAQUE`) | 0 | 1 | `0x10000` (depthwrite, no blend) |
+| after | **11** (`SHADER_SORT_BLEND`) | 0 | 1 | `0x65` (blend bits, depthwrite gone) |
+
+With no blend bits on pass 0, `Shader_Finish`'s "all passes have blendfuncs" test
+(`gl_shader.c:6330-6342`) fails, so the program branch runs instead — and that branch derives no
+blend sort at all and **force-enables depthwrite** (`:6418-6423`). Opaque, depth-writing, and the
+75% alpha never applied to anything.
+
+### Why it looked map-specific
+
+The materials that DO blend on other maps — water, Refract glass, LightmappedGeneric — emit a
+top-level `program`, so they had a `prog` and passed the guard. Only the pass-based arms lost
+their blend. Hence "other maps do, this one does not". On kitsune every VMT-generated world
+material reports `prog 0`; the only `prog 1` shaders in the frame are menu and 2D ones.
+
+**And it is why Patch 218 could not be tested here.** 218 reverses `SHADER_SORT_BLEND` batches;
+these surfaces were in `SHADER_SORT_OPAQUE`, so it had nothing to act on — the user's "I can't
+test the blendsort on this map" was an accurate report of a second symptom of this same bug. With
+219 in, kitsune becomes a test case for 218 rather than a blind spot.
+
+### The change
+
+Gate on having a pass, which is the thing actually written to. `prog` is kept in the condition so
+a program shader with no counted passes behaves exactly as before rather than silently changing:
+
+    if (ps->s->prog || ps->s->numpasses)
+
+### Verified
+
+* the sort table above, read from the engine rather than reasoned about
+* surf_kitsune still crosses (`0:02.835`, "9 stages") and the doorway floor still holds — 0 px
+  eye movement with a 0 px control, so 216 is not disturbed
+
+### Not verified
+
+* **No other map has been looked at**, and this changes the render mode of a whole class of
+  material across the library — every pass-based Source material carrying `$translucent` or
+  `$additive`. The direction is right (they were authored translucent and were being drawn
+  opaque) but the scale is unmeasured, and a map that was accidentally relying on opaque glass
+  will now show through it.
+* **The blend ORDER on these surfaces is now live and unproven.** They were opaque, so Patch
+  218's reversal never applied to them; it does now, and 218's own entry records that its A/B was
+  never separated from this map's scrolling material.
+* **The rainbow-through-a-portal fault is unrelated and still open.** It was measured to be a
+  sampling failure downstream of a correctly-rendered FBO, which no part of this touches.
+
+
+---
+
+## Patch 220 — the aperture could be submitted with another model's mesh header
+
+`R_GAlias_DrawBatch` hands **every alias batch in the engine** a pointer to one file-static
+`mesh_t` (`gl_alias.c:1934-1935`, `:1967`), which describes a batch only between its own
+`buildmeshes` and its own submit. The codebase already knows this and enforces
+rebuild-in-step in the two depth-mask loops, each with a Patch 203 comment saying why:
+`gl_backend.c:5994-5997` and `gl_rmain.c:1968-1971`.
+
+`GLBE_SubmitMeshesSortList` did not. Its order is `buildmeshes` (`:6303`) →
+`GLBE_GenerateBatchTextures` (`:6346`) → `GLBE_SubmitBatch` (`:6412`/`:6423`), and the
+middle step renders **whole scenes**: `GLR_DrawPortal` → `R_RenderScene` for a portal or a
+reflection, a nested `GLBE_SubmitMeshes` for a ripplemap. Every alias model in that
+recursed view, plus `GLR_PortalBudgetBegin`'s own build loop (`gl_rmain.c:1481-1482`),
+memsets and refills the static in between. The batch would then be drawn with a foreign
+model's `numvertexes`/`numindexes`/`vbofirstelement` against its own `vbo`.
+
+That was true in stock FTE too, but harmless: only *brush* water/reflect batches reached
+here and their meshes live in per-batch storage (`r_surf.c:2821-2829`). **Patch 210 is the
+first thing to route an ALIAS batch through a full recursive scene render between its build
+and its submit** — `linked_portal_door` apertures are `models/ftesurf_portal.obj`
+(`cl_portal.qc:400`). The claim in Patch 203's entry that "build-then-submit in step is the
+discipline `GLBE_SubmitMeshesSortList` already keeps" stopped being true at that moment.
+
+Fix: rebuild after `GLBE_GenerateBatchTextures` returns, before either `GLBE_SubmitBatch`,
+with the same NULL/empty guard the other two sites use. One site covers the portal, reflect
+and ripplemap branches, and `GLBE_BaseEntTextures` for free. A brush batch's `buildmeshes`
+is `Mod_UpdateBatchShader_Q1/Q2/HL`, which only re-picks an animated shader, so it pays
+nothing.
+
+`r_portaldebug 4` skips the rebuild, restoring the pre-220 submit, so the two arms can be
+compared in one binary.
+
+### UNVERIFIED, and honestly so
+
+**This did not change a single pixel on surf_kitsune, and the diagnostic proves it never
+fired there.** The patch ships a counter-limited, developer-gated print that compares the
+mesh header before and after the rebuild and speaks only when they differ:
+
+```
+[portal] <shader>: mesh clobbered by the recursed view -- was about to submit
+         idx N vert N firstelem N, rebuilt to idx N vert N firstelem N
+```
+
+Across nine runs of `cfg/testrun/p220.cfg` that line appeared **zero** times. On kitsune
+all 18 doors are the same `.obj`, so the last alias built in the recursion produces a
+byte-identical header. The hazard is real and read straight out of the source; it is
+map-dependent, and this map does not trigger it. Do not record it as having fixed
+anything until that line appears somewhere.
+
+## Patch 221 — a lightmap split placed the child batch inside the parent's recursion space
+
+`Mod_Batches_Build` allocates `nummodelsurfaces*R_MAX_RECURSE` mesh pointers and gives each
+batch `maxmeshes*R_MAX_RECURSE` of them (`gl_model.c:4144`, `:4152`), because
+`Surf_PushChains` gives every recursed view its own window above the last
+(`r_surf.c:2176`, `:2185`) — a batch needs `maxmeshes` slots at *every* level.
+`R_MAX_RECURSE` is 6 (`render.h:263`).
+
+The comment above that allocation still read **"\*2 for recursion"**, and both lightmap-split
+sites were written against it:
+
+```c
+nb->mesh = batch->mesh + j*2;     // gl_model.c:4049 (AllocLightmaps) and :3889 (Q3 path)
+```
+
+The parent keeps `maxmeshes = j` and still needs `6j` slots from its base; the child was
+being started at `2j`, inside them. Levels 0 and 1 fit below `2j`, which is why this
+survived: it needs a **third view in one frame** before the parent's level-2 window
+`[2j,3j)` lands on the child's level-0 meshes. surf_kitsune renders four —
+`[world] recurse 0/1/2/3` in `ftesurf/logs/p221.log` — from `r_portalrecursion 2` plus the
+skyroom, and VBSP always takes the splitting path (`mod_vbsp.c` sets `paintlightmaps` for
+worldspawn and every submodel). So it is live on this map, not theoretical.
+
+`j*R_MAX_RECURSE` closes the arithmetic exactly: `j*R + (max-j)*R == max*R`, so the child
+still ends on the parent's original boundary and the `memmove` stays inside the allocation.
+Fixed at both sites, and the stale comment with them.
+
+Also bundled, because it is the same structure: `recursefirst` is declared
+`[R_MAX_RECURSE-2]` (`gl_model.h:160`) — four entries — but was indexed by
+`r_refdef.recurse` in a branch that runs for `recurse` 2..5 (`r_surf.c:2175`, `:2209`),
+writing past the end at depth 4 and 5. `r_portalrecursion` caps live recursion at 2 today
+so it was not reachable, but `cfg/testrun/g2a.cfg` already sets 3. Now indexed
+`[r_refdef.recurse-2]`, which is an exact fit and needs no header change.
+
+### UNVERIFIED
+
+Also changed no pixels on kitsune: `[portal] recurse 1 ... fbo centre mean 63` before and
+after. The corruption is real and the arithmetic is now right, but nothing observable on
+this map moved, and `mod_batchlist` output should be identical either way (only the pointer
+arithmetic moves, not the batch list).
+
+## What Patches 220 and 221 taught about section 3 of HANDOFF-rendering.md
+
+**The premise of that section is wrong. The depth-0 portal renders correctly, and did so
+before any of this.** Three arms at one camera, `cfg/testrun/p221.cfg`,
+`setpos -15360 -15252 870 0 270 0`:
+
+| arm | | result |
+|---|---|---|
+| A | normal | the far room: white ceiling wedge, floor grid, ramp, a distant rainbow-framed doorway |
+| B | `r_portaldebug 1` (aperture drawn, recursed scene skipped) | solid black over the whole doorway |
+| C | `fs_portal_render 0` (no aperture) | the red `grids/grid_red` wall the doorway is set into |
+
+Three different pictures, so the aperture draws, the recursed scene reaches it, and the
+doorway is not a hole into the void. Arm A is also pixel-comparable with
+`screenshots/g16_new_s1.png`, taken on the **pre-220** binary at the same camera: same
+image. Nothing in 220 or 221 changed it because it was never broken.
+
+A debug shader (`ftesurf_portal.glsl`, left half painting `vec4(stc,0,1)`) settled the rest:
+the quad rasterises, it covers the **whole** doorway — at that camera x 218..1062, not the
+65px rectangle at screen centre — and its screen-space texcoords are a clean gradient. So
+`tf.w`, the clamp, the Y orientation, the FBO viewport and the sampler binding are all
+innocent.
+
+**What is actually black is a doorway seen two portals deep, and it is not being drawn at
+all.** `r_portalrecursion 2` and `r_portalrecursion 1` give a pixel-identical doorway
+(`p222_A_rec2.png` vs `p222_B_rec1.png`, at `fov 20`; the only difference is the rainbow's
+scroll phase, which is its own noise floor). The log says why: `portals: 1 scene renders
+last frame` at that camera. `GLBE_SubmitMeshesPortals` returns at `gl_backend.c:5883`
+because the recursed view has **no portal batches at all**.
+
+The suspect, and it is game code rather than engine code: `FS_PortalPredraw`
+(`src/client/cl_portal.qc:159-203`) culls apertures against
+`eye = getproperty(VF_ORIGIN)` — the player's real eye — on noclip, behind-the-plane,
+`fs_portal_dist` (default 3000) and `checkpvs(eye, self)`. `predraw` runs **once per frame**,
+during the main view's `addentities`, and its verdict binds every recursed view in that
+frame. A door that is behind you, too far, or out of your PVS is never offered to the
+renderer, even when the recursed eye is standing right in front of it. With
+`fs_portal_dist 0` the log gains `portal portal_s1_exit: offered at 3762 units` — past the
+default limit — and only two of eighteen doors survive at all, the rest cut by `checkpvs`
+from the player's position. This is very likely the same fault as the separate
+"the level appears to despawn through a portal" report.
+
+**Not yet fixed, and not yet proven to be the whole story**: `fs_portal_dist 0` alone did
+not light the nested doorway, so `checkpvs` is doing the remaining work, and it has not been
+confirmed that the doorway in question is an aperture rather than plain geometry.
+
+## Separate and pre-existing: surf_kitsune crashes intermittently at map load
+
+Five of eight launches died between "map load complete" and the first second of play —
+`0xC0000374` (heap corruption) mostly, `0xC0000005` once. **Not caused by Patch 220**: with
+`r_portaldebug 4`, which skips the entire new block, run 1 of 3 still died (`0xC0000005`),
+and the same binary completed runs 2 and 3. It reproduces with the original
+`ftesurf_portal.glsl` and with the debug one. It is not new to 220 or 221 and it is
+currently the biggest practical obstacle to testing anything on this map.
+
+## Patch 223 — three cvar registrations in the hl2 plugin that described or latched the wrong thing
+
+Found while auditing `gfx_menu` for FTESurf build 33, which is a front end for this
+plugin's cvars and can only be as honest as they are. All three are in `VBSP_Init`
+(`plugins/hl2/mod_vbsp.c`), the one function where every `hl2_*` cvar is registered.
+
+**A. `hl2_displacement_scale` held two latch bits at once** (`:6108`). It was
+`CVAR_RENDERERLATCH|CVAR_CHEAT`, and `cvar.h:148` puts *both* inside `CVAR_LATCHMASK`
+with the comment "you're only allowed one of these" — so this was illegal rather than
+untidy. The joke is that the essay immediately **below** it diagnoses exactly this bug
+and fixes it for `hl2_favour_ldr`; the line above was left standing.
+
+Resolved to **`CVAR_CHEAT`**, not to `CVAR_MAPLATCH`. The read is at BSP load (`:1926`),
+so MAPLATCH is what the reload semantics want — but this multiplies how far displacement
+geometry moves, in a game that records timed runs, and the cheat bit is the property
+somebody deliberately asked for. Keeping it costs a developer one `map` command; dropping
+it would quietly retire a protection. It is console-only, not a menu row, so nothing
+user-facing depended on the latch behaviour.
+
+**B. `hl2_contents_remap` was `CVAR_RENDERERLATCH`** (`:6341`) with its only read at BSP
+load (`:506`) — demanding a `vid_reload` for something a map reload settles. Now
+`CVAR_MAPLATCH`. No cheat bit here, so no trade-off to weigh.
+
+**C. `r_novis` was registered with the wrong description** (`:6107`):
+`"Multiplier for how far displacements can move."`, copy-pasted from the line below. This
+is the **engine's own** `r_novis` — `GetNVFDG` hands back the existing cvar rather than
+minting a second one, exactly as the `r_texdiag` line further down says of itself — so
+`cvarlist r_novis` was describing a different cvar entirely. Replaced with a real one.
+
+**Rebuild:** hl2 plugin only (`make plugins-rel NATIVE_PLUGINS=hl2`). No engine change, so
+no exe rebuild — and the ABI rule at the top of this file is satisfied in the other
+direction: `gl_model.h` and `com_mesh.h` were last touched 2026-08-05, a month before the
+plugin binary this replaces, so the plugin was never stale against them.
+
+### UNVERIFIED
+
+Flag changes, verified by reading the built DLL's strings (the new `r_novis` description is
+present, and the displacement string now appears exactly once) but **not** exercised at
+runtime: map load was unavailable while this was written. What wants checking is that
+`hl2_contents_remap` still takes effect on a `map` command now that it latches on the map
+rather than the renderer, and that `hl2_displacement_scale` is now refused without
+`sv_cheats`.
+
+### FOUND, NOT FIXED
+
+`hl2_lt_min`, `hl2_lt_scale` and `hl2_lt_srgb_mag` are read per model per frame, and the
+registration comment at `:6283` says the value "changes immediately". It no longer does:
+this fork's `r_modellight_cache` (default 1, `renderer.c:187`) reuses a prop's light sample
+until the prop moves or `r_modellight_seq` bumps, and **nothing bumps it when one of these
+cvars changes**. On a map without animated lightstyles they sit still until a reload. The
+menu marks all three as needing a reload, so it is honest by accident; the plugin's comment
+is what is now wrong. The real fix is to bump `r_modellight_seq` on change, which is engine
+work and was left alone rather than collided with.
+
+Also left alone: those three plus `hl2_lt_baked_scale` carry **no** flags at all, and
+`hl2_lt_baked_scale` is read at BSP load, so `CVAR_MAPLATCH` would arguably be right. A
+latch flag changes what `cvar()` reports between set and apply, and the graphics menu reads
+exactly that to choose which value name to display — not worth risking a stale readout for
+a cosmetic flag correction.
+
+---
+
+## Patch 222 — a loader worker registered a CVAR_SERVERINFO cvar, and reallocated the serverinfo buffer under the main thread
+
+surf_kitsune died on **8 loads out of 8**, between "map load complete" and the first
+second of play, with `0xC0000374` (STATUS_HEAP_CORRUPTION) and occasionally `0xC0000005`.
+
+### How it was found
+
+The unstripped build (`engine/release/fteqw64.exe.db` — the makefile links this and then
+strips it to the shipped exe, so it is the same code with symbols) run under
+`ucrt64/bin/gdb.exe -batch -ex run -ex bt`. Two stacks, and the second is the one that
+matters:
+
+```
+#0  PR_RunGC   #1 PR_ExecuteProgram   #2 CSQC_WorldLoaded   #3 CL_LoadModels ...
+```
+
+That first stack was a **red herring, and an expensive one**. `PR_RunGC` is the first
+heavy `free()` traffic of the whole load, so it is simply the first place an
+already-damaged heap gets *detected*. Proved rather than assumed: `PR_RunGC` gained a
+`pr_gc_threaded 2` arm that returns before any mark or sweep, and with the collector
+switched off entirely the crash rate did not move —
+
+| arm | runs | crashed |
+|---|---|---|
+| `pr_gc_threaded 1` (threaded collector, the default) | 8 | 5 |
+| `pr_gc_threaded 0` (same-thread collector) | 8 | 4 |
+| `pr_gc_threaded 2` (**collector off**) | 10 | 6 |
+
+Re-running gdb with the collector off produced the real stack:
+
+```
+#5  ntdll!RtlReAllocateHeap        #6  ucrtbase!_realloc_base
+#7  BZ_Realloc                     #8  ZF_ReallocElements
+#9  InfoBuf_SetStarBlobKey         #10 Cvar_SetCore
+#11 Cvar_Register                  #12 Cvar_Get2
+#13 Mod_ParseIQMMeshModel          #14 Mod_LoadInterQuakeModel
+#15 Mod_LoadModelWorker            #16 COM_DoWork      #17 COM_WorkerThread
+```
+
+### The defect
+
+`Mod_ParseIQMMeshModel` (`com_mesh.c:9829`) runs on a **loader worker**, and had two
+lazy `Cvar_Get`s inline:
+
+```c
+cvar_t *cdecomp = Cvar_Get("sv_prop_decomp", "0", CVAR_SERVERINFO, "...");          // :10456
+cvar_t *cconc   = Cvar_Get("sv_prop_decomp_concavity", "0.06", CVAR_SERVERINFO, "..."); // :10470
+```
+
+`Cvar_Get` **registers** on its first call, and for a `CVAR_SERVERINFO` cvar registration
+runs `Cvar_Register -> Cvar_SetCore -> InfoBuf_SetStarBlobKey -> ZF_ReallocElements ->
+BZ_Realloc`: it reallocates the **global serverinfo buffer**, off the main thread, while
+the main thread is doing its own heap work. `player.iqm` is loaded on every map, so every
+single load took that path.
+
+**This is the third time this exact defect has been fixed in this file.** Patch 102 hit it
+for `sv_prop_hull_exclude` and moved that cvar's registration to `Mod_Init`, leaving a
+comment at `com_mesh.c:3310-3317` that said the neighbouring `Cvar_Get("sv_prop_decomp")`
+"gets away with the same shape ONLY because that cvar is already in the mod's server.cfg,
+so it is registered on the main thread long before any model loads", and warned "do not
+copy that pattern". The comment was right about the mechanism and wrong about the
+protection: **`sv_prop_decomp` is set nowhere in FTESurf** — not in `ftesurf.cfg`, not in
+`cfg/`, not in engine init. It is in nettest's `server.cfg`, which is the game that
+comment was written for. So the protection existed for `C:\FTEQuake` and never for here,
+and the load-bearing assumption was invisible from the code.
+
+### The fix
+
+Both cvars are declared in `gl_model.c` beside `mod_prop_hull_exclude` and registered in
+`Mod_Init` on the main thread; `Mod_ParseIQMMeshModel` now just reads `->ival` / `->value`
+through an `extern`. Exactly the shape Patch 102 established.
+
+`CVAR_SERVERINFO` is **kept**, unlike Patch 102's cvar, which dropped it. The race was in
+*registration*, which now happens once at startup on the main thread; these two are read
+as `->ival`/`->value` rather than `->string`, so the live-`serverinfo`-set hazard that
+argued against the flag there does not apply here; and the flag is load-bearing, because
+the value decides collision geometry and a client predicting props must agree with the
+server. The one behaviour change is that both keys are now in serverinfo from boot rather
+than from the first IQM load.
+
+Also `pr_gc_threaded` is now `CVAR_NOSAVE`: its diagnostic value 2 disables the collector
+for **both** VMs and leaks every tempstring for the life of the VM, and `cfg_save` writes
+any changed non-default cvar unless it is NOSET/NOSAVE. That diagnostic arm is kept —
+"is the collector actually the problem, or just the first `free()`?" is a two-line
+question that cost this investigation an hour to answer the hard way.
+
+### Verified
+
+Interleaved run-by-run against the pre-fix binary, same machine, same cfg
+(`cfg/testrun/p225gc.cfg`, scored on process exit code because the VEH logger does not
+catch `0xC0000374`):
+
+| binary | runs | crashed |
+|---|---|---|
+| pre-222 | 8 | **8** |
+| Patch 222 | 8 | **0** |
+
+Plus 14 consecutive clean runs on the side-by-side build before deploying, and 12 more on
+the deployed `ftesurf64.exe` afterwards: **34 clean runs, 0 crashes**, against a pooled
+pre-fix rate of 23 crashes in 34 runs. At the pre-fix rate the probability of 34 clean
+runs is about 1e-9.
+
+### Blast radius
+
+`C:\FTEQuake` shares this binary. It sets `sv_prop_decomp` in its `server.cfg`, so it was
+never crashing and its value still applies — `Cvar_Register` adopts a value already set by
+config. The only difference there is that the two keys enter serverinfo at boot instead of
+at the first IQM load.
+
+### Worth doing, deliberately NOT bundled here
+
+Both are upstream FTEQW defects in `qclib`, unreachable from FTESurf's QC today, and both
+should land separately so this patch's A/B stays clean:
+
+- `initlib.c:1145` and `:1178` — `unsigned int newsize` truncates `offset + datasize` on
+  64-bit, so a QC pointer-write into a tempstring can allocate 4 bytes and then `memset`
+  `0u - temp->size`. A real heap overflow; needs QC that FTESurf does not write.
+- `initlib.c:1403` — `PR_AllocTempStringLen` can return 0 at the `:1427` panic without
+  ever assigning `*str`, leaving ten callers' out-pointers indeterminate. One added
+  `*str = NULL;` closes it.
+
+---
+
+## Patch 224 — the movement ruleset was a property of the install; it should be a property of the gamemode
+
+Reported as "bhop maps don't set the movement mode to 100 tick, 1000 airaccelerate — we
+did this but it's not taking?"
+
+**Nothing was taking because nothing existed.** No per-map movement selection was ever
+written, in the engine or in the QC. `bhop_` appears in exactly one place in the gamecode
+(`src/menu/m_main.qc:821`) and that is the map browser's gametype *filter*, which decides
+which rows the list shows and touches no cvar. Every map in the library — 531 bhop, 299
+climb, 557 surf — ran surf's numbers, because surf's numbers were the only numbers there
+were.
+
+And it could not have been worked around from the console either, which is the part worth
+recording. **Patch 170's ruleset lock reverts it, twice over**: the per-cvar callback
+restores `sv_airaccelerate` to `defaultstr` the instant you set it, and `SV_LockMovementVars`
+restores it again at the next map spawn. So a per-gamemode ruleset cannot be layered on
+top of the lock; it has to *be* the lock's idea of correct.
+
+### The shape
+
+`SV_MovementCanonical(var)` is now the single answer to "what should this cvar be", and
+both readers — the callback and `SV_LockMovementVars` — ask it instead of reading
+`defaultstr` directly. It returns the gamemode's override if there is one and `defaultstr`
+otherwise, so the base ruleset still lives in `cfg/default.cfg` exactly as Patch 170's
+essay argues it should, and the mode is a layer over it rather than a replacement for it.
+
+`SV_ApplyGamemode(mapname)` rebuilds that overlay from scratch at every map load, which is
+what makes leaking structurally impossible rather than carefully avoided.
+
+**Detection, best evidence first:**
+
+1. `sv_gamemode`, if it names a mode. `none` disables the whole mechanism.
+2. `data/mapmeta.txt` column 9 — Momentum's own gamemode id, already shipped for 2271 maps
+   and already read by the map browser. A lookup, so it is right about maps whose name lies.
+3. the map name prefix — the same set `m_main.qc` censused, for the ~700 installed maps
+   Momentum has never indexed.
+
+Momentum's id numbering is used as-is rather than renumbered, so `mapmeta.txt` and the
+table cannot drift. The specific mode's file is tried first and its category's second
+(`mode_kz.cfg`, then `mode_climb.cfg`), so one file can cover a family of three ids.
+
+**The numbers live in the gamedir**, in `cfg/mode_<name>.cfg`, for the reason Patch 170
+gives for `defaultstr`: "what this game considers correct, maintained in one readable file
+rather than duplicated into a table here." There is no `mode_surf.cfg` — surf *is*
+`cfg/default.cfg`, and a second copy would be free to disagree with the first. A ruleset
+may not set `sv_cheats`, `pm_lockmovement`, or any `CVAR_CHEAT`/`CVAR_SEMICHEAT` cvar; one
+that could switch the lock off would not be a ruleset.
+
+### Where it is called from, and why that is not where it looks like it should go
+
+The obvious site is beside `SV_LockMovementVars()` near the end of `SV_SpawnServer`. That
+is too late, and only one of the four readers would have shown it:
+
+| reader | when |
+|---|---|
+| the gamecode's `fs_t_tick` (`sv_timer.qc`, `SV_TimerMapInit`) | the **two settle frames**, `sv_init.c:1730/1739` |
+| `SV_SetMoveVars` → `movevars` | `:1749`, and again at `:1903` |
+| `SV_ReportMoveVars` — the CS:S banner | `:1907` |
+| `SV_New_f` → the client's serverdata movevars | after the spawn, on the client's `new` |
+
+`SV_TimerMapInit` latches `pm_ticrate` *once per map* and converts every recorded tick
+count with it. Applied at the late site, a bhop map's timer would have converted 100 Hz
+ticks at 66.667 Hz — a silent 1.5× error in a leaderboard time, which is a worse bug than
+the movement one and would not have shown up in any movement test.
+
+So the call sits at `sv_init.c:969`, immediately **before** `Cvar_ApplyLatches(CVAR_MAPLATCH)`
+— early enough for all four, and before the latch pass so a ruleset that sets a MAPLATCH
+cvar takes effect on *this* map rather than the next. `sv.state` is still `ss_dead` there,
+so Patch 170's callback returns early and does not fight the values being installed;
+`SV_LockMovementVars` later in the same function is what makes them stick.
+
+### `movement`
+
+New console command: which gamemode, which of the three sources answered, which file, and
+every overridden cvar with its live value beside `cfg/default.cfg`'s. Three columns rather
+than one on purpose — a mode that claims to set `pm_ticrate` and a `pm_ticrate` that still
+reads 0.015 is precisely the failure this exists to catch, and one column cannot show it.
+
+### Verified — `ftesurf/cfg/testrun/p224a.cfg`, `p224b.cfg`
+
+- `surf_null` → `surf (name)`. Its mapmeta row exists but its mode column is `-`, so this
+  is the index *declining* and the prefix answering. `bhop_futile` → `bhop (mapmeta)`,
+  6 cvars from `cfg/mode_bhop.cfg`. One map alone could not tell those two paths apart.
+- `CS:S movement: 100 Hz tick, ... airaccel 1000` on the bhop map, printed from `movevars`
+  rather than from the cvars.
+- **the lock is mode-aware**: `pm_ticrate 0.015` on the bhop map is reverted `to "0.01"` —
+  the mode's number — while `sv_maxspeed 320`, which the mode does not mention, is still
+  reverted `to "260"` from `default.cfg`. Both warnings name the value they restored.
+- **nothing leaks**: back on `surf_null`, all six read `default.cfg`'s values again,
+  including `cl_netfps` and `fs_starthop`, which are *not* in the locked table and are
+  therefore restored by the overlay teardown rather than by the lock.
+- `sv_gamemode bhop` forces bhop onto `surf_null`; `sv_gamemode none` runs the base ruleset
+  on `bhop_futile`.
+
+### Not done, deliberately
+
+`cfg/mode_bhop.cfg` is the only ruleset that ships. climb/kz, ahop, rj, sj, conc and defrag
+all *resolve* correctly and then run the base ruleset, because inventing numbers for a mode
+nobody has measured would be worse than leaving it alone — and writing one file is the whole
+of what adding a ruleset takes.
+
+`cl_netfps` is a client cvar set server-side. On the listen server this game is today that
+reaches the only client there is; a remote client in a future P2P session would keep its own
+send rate. Fixing that properly means a stuffcmd or a serverinfo-driven client-side rule, and
+neither is worth building before there is a second client to test it against.
+
+---
+
+## Patch 225 — edited history hands its arrows to completion; completion values/counts and closed-console notify HUD
+
+Three console behaviours shared one boundary: the temporary UI around the live input line
+must not inherit state from history, scrollback, or the floating console window.
+
+### History → completion handoff
+
+`history_line != edit_line` still means Up/Down are browsing recalled commands. The first
+actual mutation of that recalled copy now sets `history_line = edit_line`, so the next arrow
+navigates the visible completion list. The transition lives in the edit primitives, covering
+printable input, paste/completion insertion, Delete, Backspace, Ctrl+X/U/W. Cursor-only moves
+do not detach history because they did not edit it.
+
+`con_selftest` drives the real insertion primitive and pins the reported sequence: recall
+`cl_`, type `c`, then Down selects completion row 1. Existing wrap, no-match, map-argument,
+movement and zone tests remain green.
+
+### Values and an honest ordinal
+
+Each cvar row now includes its value state:
+
+- unchanged: grey `"value" (default)`;
+- changed or latched: yellow `"current"`, followed by grey `(default "value")`;
+- `CVAR_NOUNSAFEEXPAND`: value hidden, so completion cannot disclose passwords/keys.
+
+The old viewport-derived `N more` footer is gone. Once a row is selected it reads `i of N`;
+before selection it reports `N matches`. When `Cmd_Complete` hits its 256-row storage cap,
+the footer distinguishes the selectable rows from the larger match count instead of implying
+that an unavailable row can be selected.
+
+The vertical-row builder had been calling `COM_ParseFunString(..., PFS_KEEPMARKUP)`, which is
+why colour text such as `^99 more^7` appeared literally. It now parses the markup into conchar
+flags with `PFS_FORCEUTF8`. Arbitrary cvar values are escaped first, preventing values that
+contain colour/link syntax or control characters from recolouring, spoofing links, or adding
+rows. Completion rows are rebuilt every frame; teardown now invalidates any selection that
+points into the old chain before freeing it, closing a selection/copy use-after-free.
+
+### Closed console notifications
+
+The floating main console keeps `CONF_NOTIFY`, but its closed window is no longer drawn as a
+faded copy of its last rectangle. `Con_DrawNotifyOne` owns the closed state and draws the main
+console with `font_default` (8px), at the notification origin (default top-left), oldest first
+and newer lines downward. `con_notifyfade` (default 1 second) adds a real alpha fade after
+`con_notifytime`; zero `con_notifytime` keeps its historical immediate-disable meaning. The
+open floating console suppresses the duplicate notify overlay.
+
+### Verified
+
+- Full `build.ps1 -Engine`: all three QuakeC targets, Windows client/server and plugins built;
+  deployed to both `C:\FTESurf` and the shared `C:\FTEQuake` tree.
+- `b37_selftest.log`: console, movement and all 22 zone checks pass; `map kits` still accepts
+  `map surf_kitsune`.
+- `b36_completion.cfg`: a posted physical Down event advances `1 of 21` to `2 of 21`; default
+  values stay grey and changed `cl_c2sdupe "2"` is yellow beside default `"0"`.
+- `b36_notify.cfg`: fresh/fading/expired captures show 8px output at `(0,0)`, downward stacking,
+  fade, and complete expiry while `con_textsize 16` and a displaced floating rect are active.
+- `b36_markup.cfg`: a value containing `^1` and a fake `/quit` link is displayed literally.
+
+---
+
+## Patch 226 — the completion list stops being part of the console
+
+Two reports, one file each, and the first one had already been declared impossible.
+
+> *"The console command preview is great and almost perfect, the only issue is that the
+> real dream is to have it part of a actual drop down, seperate from the console, so that
+> the console text eneter bar never has to shift, you type, and the console presents a
+> dropdown, you can arrow though."*
+>
+> *"When you type "map kits" and then arrow down to "map surf_kitsune" I want the first
+> enter to submit the map, it simply types it out for you in the text box instead of
+> loading directly into the map."*
+
+### 226a. `con_completiondown 2` — a popup, drawn outside the console
+
+Patch 215 put the list below the input line by giving it the bottom band and moving the
+input row up above it, and said plainly why it could not do better: `Con_DrawInput` is
+bottom-anchored, so a bottom-anchored console can pin the field or put the list under it,
+not both — and a true overlay was unavailable because `Con_DrawOneConsole` runs inside
+`BE_Scissor(&srect)` and anything past the window's bottom edge is clipped rather than
+drawn over the game.
+
+**Both halves of that are still true. What was missed is that the scissor is released a few
+lines later and the console has nothing left to draw by then.** A popup emitted after the
+console's own text is unclipped and on top, which is what every real combobox does. So the
+list stops being part of `Con_DrawInput`'s vertical budget entirely — and that, rather than
+any change to where the input row is computed, is what pins the field.
+
+`Con_DrawInput`'s mode-2 arm builds the chain, records the input line's rect and the row
+count, and **returns `y` untouched**. `Con_DrawCompletionPopup` paints it.
+
+**The height has to be known before the draw**, because `Con_DrawConsoleLines` only ever
+walks upward from a bottom it is handed, and `Font_LineBreaks` can turn one `conline_t` into
+several screen rows. `CONF_NOWRAP` for the duration of the popup's own draw makes
+`linecount` 1 per node, so rows == nodes and the arithmetic closes; a long cvar row then
+clips at the popup's right edge instead of quietly making the box too short.
+
+**Where it is called from is not a preference.** `Con_DrawOneConsole` clears
+`con->selstartline` at the top of every frame and reads it again at the bottom to turn a
+release into a link activation. A popup painted at the end of `Con_DrawConsole` would set
+that field just in time for the next frame to clear it, and **its rows could never be
+clicked** — which is how you find a map. It is painted between the console's own
+`Con_DrawConsoleLines` and that release handling instead, lifting and restoring the clip
+around itself.
+
+Three things had to be got right, and each was found by looking at a screenshot:
+
+- **`Font_Flush` sets `R2D_Flush = NULL` on its way in.** The glyph batch auto-flushes every
+  `FONT_CHAR_BUFFER` characters, so any list longer than that leaves the tail of its rows
+  queued with no flush pointer — `if (R2D_Flush)` is then false, and those glyphs are still
+  in flight when the scissor comes back, which clips them away. It drew **six rows of a
+  thirteen-row list** inside a correctly-sized box. `Font_EndString` re-arms the pointer
+  exactly when the mesh is non-empty, which is why `Con_DrawConsole` has always ended with
+  one. Needed on the way *in* as well: without it the console's own scrollback surfaced on
+  top of the popup's background, which is what a flipped popup showed.
+- **The hit box comes straight from `mousecursor_x/y` with no window skew.** Patch 213's
+  essay exists because `con->mousecursor[]` is measured from `(wnd_x+CON_WNDBORDER, wnd_y)`;
+  the popup is in absolute screen space, so applying that skew would reintroduce the bug
+  Patch 213 removed. `con_mouseover`'s gate at `console.c:3859` is widened to accept the
+  popup's rect, since it hangs outside the window by design.
+- **Opaque, not 0.96.** `R2D_FillBlock` picks `shader_draw_fill` rather than
+  `shader_draw_fill_trans` at alpha 1. At 0.96 the console's scrollback was still legible
+  through a flipped popup.
+
+It flips above the input line when `top + h` would leave the screen.
+
+### 226b. `con_completionenter` — ENTER runs the row
+
+`Key_AcceptArgumentCompletion` becomes `Key_TakeHighlightedRow(argsonly)`, shared by ENTER
+and TAB. At `con_completionenter 1` both accept arms fall through to the execute block
+instead of returning.
+
+- **`txt` is re-read after the command-name arm.** It is captured before `CompleteCommand`
+  rewrites the line, so falling through with the old pointer would execute the query text
+  rather than the picked row — and it points into `demoji[]`, so it would not even look
+  wrong. Re-read **whole**, with any leading `/` left on: the local `txt++` above exists to
+  let `Cmd_IsCommand` see a command name, and at `cl_chatmode 1` a line handed to
+  `Con_ExecuteLine` without the slash the user typed is a chat message rather than a command.
+- **SHIFT+ENTER stays accept-only** at either setting, and costs nothing to keep: the
+  `|| shift` in that arm has always forced it.
+- **TAB takes over the half ENTER gives up** — with a row highlighted it fills that row in
+  and leaves the cursor there. Gated on the same cvar, because changing TAB for a console
+  whose ENTER still does the typing would take the typing key away and give nothing back.
+  `CompleteCommand`'s force arm carries Patch 215d's "may not shorten the line" guard, so
+  that invariant is inherited rather than re-implemented.
+
+### Verified — `ftesurf/cfg/testrun/p226.cfg`
+
+`con_selftest` **all checks passed**, 26 checks including three new ones:
+`Tab takes the same row Enter would 1`, `argsonly declines a bare command name 0`,
+`Tab does not 1`.
+
+The claim is about what does NOT move, so one screenshot cannot make it. Four input strings
+at one console geometry — `map kits` (3 rows), `cl_c` (12 rows plus the ordinal),
+`map surf_kitsune2` (1), `zzqqxnomatch` (none) — put the input line on the **same scanline
+in all four**, with the popup hanging below the console window and over the game, and no box
+at all drawn for the no-match case. `con_completiondown 1` beside it is the control. With
+the window dragged to the bottom of the screen a 13-row popup flips above the field and
+paints opaque over the scrollback.
+
+### Inert in quakers
+
+`con_completiondown` and `con_completionenter` both default to the previous behaviour.
+FTESurf opts in from `cfg/default.cfg`. The one thing not gated is the `Font_EndString`
+pairing around the popup, which only runs when a popup runs.
+
+### Not verified
+
+- **Clicking a popup row was reasoned about, not clicked.** The hit boxes are registered by
+  the same `Con_DrawConsoleLines` that registers them for every other console row, and
+  `con_mouseover` now accepts the popup rect — but a config cannot press a mouse button, and
+  `con_selftest` already says so about physical input.
+- The popup is painted before any LATER console window in the loop. A list can only belong
+  to a focused console, so seeing that needs two focused consoles, which is not a state this
+  engine has.
+
+---
+
+## Patch 227 — the map's tier existed in three places and none of them was the HUD
+
+> *"The top right of the screen of the HUD, can you display "game name, (next line) map
+> name, (next line) map teir, and stage count or linear."*
+
+Three of those four the gamecode could already answer. The tier it could not, and the reason
+is structural rather than missing plumbing: it lives in `data/mapmeta.txt`, which is read by
+the **map browser** — and the browser is `menu.dat` while the HUD is `csprogs.dat`, two
+separate progs with no way to hand a value between them. `grep -rn tier src/client
+src/shared src/server` returns zero.
+
+`SV_GamemodeFromMeta` was already loading that file at every map load and walking columns
+2..9 to reach the mode. **The tier is column 2** — it was being stepped over.
+
+So the function becomes `SV_MapMetaLookup(mapname, out)`, reading the row whole, and
+`SV_ApplyGamemode` publishes it as serverinfo beside the `gamemode` key Patch 224 added:
+
+```
+maptier  maplinear  mapstages  mapbonuses  maptiersrc
+```
+
+Serverinfo rather than a QC-side re-read of the file, because that answer is also right in a
+demo (serverinfo is recorded) and right for a client in a future P2P session whose own
+`mapmeta.txt` does not match the server's — which is the case that starts mattering once the
+leaderboard is real.
+
+**The call had to move, and this is the part that would have failed silently.** The lookup
+used to hang off gamemode *detection*, three branches down: `sv_gamemode surf` skips that
+branch entirely and `sv_gamemode none` returns above it. Hanging the tier off the existing
+call site would have published it on every install except the ones that set the cvar. It is
+now unconditional, immediately after the map name is normalised — the same single file read
+as before, just no longer conditional on a question it is not being asked.
+
+`'-'` in the file means UNKNOWN and is not 0. `atoi("-")` is 0, and there is no tier 0, no
+gamemode 0 and no map with 0 segments, so the sentinel survives the conversion in every
+column that uses it; `maptier` is left empty rather than published as 0.
+
+### Verified — `ftesurf/cfg/testrun/b34.cfg`
+
+`serverinfo` on `surf_kitsune` prints `maptier 1`, `maplinear 0`, `mapstages 9`,
+`mapbonuses 1`, `maptiersrc rank` — which is that map's `mapmeta.txt` row exactly. The HUD
+block reads `FTESurf / surf_kitsune / Tier 1 / 9 stages`.
+
+### Blast radius
+
+`C:\FTEQuake` shares this binary. It gains five serverinfo keys on maps that have a
+`mapmeta.txt` row, and nothing else; the gamemode resolution is byte-identical, reading
+`meta.mode` from the row this function already parsed instead of calling a second copy of it.
+
+### Not done, deliberately
+
+The HUD reads the **stage count from the map's own zone file** (`Zone_TrackSegs(0)`) and uses
+`mapstages` only when there is no zone file at all. The zone file describes the map that is
+actually loaded; mapmeta describes Momentum's record of it, and where the two disagree the
+loaded map is the one on screen.
+
+## Patch 228 — 32,127 static props were being discarded in silence, because the stride was never a property of the version number  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+`VBSP_LoadStaticProps` chose the per-prop record size from a `switch` on the sprp lump
+version, walked `numprops*propsize`, and bailed at `if (size) return true; //funny lump size...`
+— with no message — whenever that did not land exactly on the end of the lump. Reported as
+"on bhop_ambience the trees don't render". A census of all 1310 maps in the Momentum library
+([scratchpad `sprp_census.py`](#)) says the bail was firing on **82 maps** and throwing away
+**32,127 props**:
+
+| bspver | sprp | real stride | code said | maps | props |
+|---|---|---|---|---|---|
+| 19/20 | 5 | 60 | 60 | 78 | — |
+| 20/21 | 6 | 64 | 64 | 161 | — |
+| 21 | 9 | 72 | 72 | 1 | — |
+| 20 | 10 | 72 | 72 | **502** | — |
+| 21 | 10 | **76** | 72 | 18 | 2,374 |
+| 21 | 11 | **80** | **76** | 45 | 19,994 |
+| 25 | 13 | 88 | 88 | 19 | 9,759 |
+
+`case 11: propsize = 19*4` had **never matched a single map**. CS:GO's "v10" and Source
+2013's "v10" are different records sharing a version number, so no switch on the version can
+ever be right.
+
+**What actually varies** is a 4-byte field VBSP inserts at offset 72 on every `bspver >= 21`
+lump — measured as zero in all 32,127 records:
+
+```
+ 0..67  canonical, through DiffuseModulation   (v5-v8 genuinely differ; the sequential
+                                                parse was already correct for them)
+68..71  uint  FlagsEx                (v10+)
+72..75  uint  <inserted>             bspver>=21 ONLY -- absent from the 502 v10@72 maps
+76..79  float UniformScale           (v11)
+76..87  vec3  Scale                  (v12/v13, engine takes X)
+```
+
+**The fix**, all in `plugins/hl2/mod_vbsp.c`:
+
+1. The version supplies a **base** ("canonical bytes through the scale"); the stride is
+   **measured** as `size/numprops`, and `extra = stride - base`. New `VBSP_ParseSprpHeader`
+   does that with every advance bounds-checked.
+2. **Leaf-ref width is discovered, not assumed.** Strata (v12+) widened the array to 32-bit;
+   parse at 16 and retry at 32 if the prop block does not then divide evenly. This — not the
+   stride — is why v13's correct 88-byte records were failing.
+3. **A per-record cursor** (`prop = propbase + i*propsize`). The sequential parse can abandon
+   a record mid-way via the dx/cpu/gpu `skip` paths, and with an inserted field the fields no
+   longer reach the end of the record. This one line is what fixes the 18 v10@76 maps.
+4. **The scale is read at `72 + extra`**, not a hardcoded offset, and clamped. The old v13
+   path read it from offset 72 — the inserted field — so **every Strata prop in the library
+   was loading at scale 0**.
+5. The silent `return true` bails now print, naming map, version, measured stride and expected
+   base. (sprp **v12 exists in 1 map** and was being dropped with nothing said.)
+6. `VBSP_BuildBIHMain`: the `"%s has no collision info"` warning dereferenced
+   `l->data.mesh.model->name` from *inside* its own `!model` branch, and the `WaitForCompletion`
+   above it dereferenced the model unconditionally. Never fired before because no prop on the
+   affected maps got here; 32k do now. NULL-checked ahead of the wait.
+
+**Verified** (`ftesurf/logs/p228a.log`, counts derived offline from the BSPs first, then matched
+in-game):
+
+| map | | before | after | stride line |
+|---|---|---|---|---|
+| surf_demise | guard, v10@72 | 2350 | **2350** | none |
+| surf_garden | guard, v10@72 | 429 | **429** | none |
+| bhop_ambience | v10@76 | 0 | **72** | `76-byte (72 + 4 inserted), 16-bit` |
+| surf_hektik | v11@80 | 0 | **2506** | `80-byte (76 + 4 inserted), 16-bit` |
+| bhop_canals | v13@88 | 0 | **3126** | `88-byte (84 + 4 inserted), 32-bit` |
+
+The two guards are the point: `extra == 0` on the 502 canonical v10 and 161 v6 maps, so every
+new branch is a no-op there. surf_demise's 2350 is independently corroborated by Patch 193's
+own essay ("2350 of surf_demise's props, which is ALL of them"). Screenshot of bhop_ambience
+shows the tree line restored.
+
+**Not a bug, recorded so it is not re-investigated:** those trees render **magenta**, and that
+is the artist's intent. The models are `.../deciduous_tree/default_tree_02/normal_tree_*_02_pu.mdl`
+— `_pu` for purple — and the leaf card packed in the map's own pakfile
+(`leaves_04_1024_pu.vtf`, DXT5) decodes to a mean visible RGB of **(199, 15, 213)**. Rendered
+under this map's measured prop ambient (`[texdiag] PROPLIGHT ... mean 92.3 100.1 95.2, R/B 0.97`)
+that predicts ≈(72,6,79); the canopy measures (80,22,97). The renderer is right. Ruled out along
+the way: the BC3 upload path (`gl_load24bit`), `r_reflectcube`, `hl2_bumpmap`, and the ambient
+cube — none of them move that colour.
+
+**Known gap, pre-existing and NOT introduced here:** `bihtransform_s` (`com_bih.h:94-98`) carries
+axis and origin but no scale, and `VBSP_BuildBIHMain` bounds each leaf as `origin ± model->radius`,
+also unscaled. So a scaled static prop now **renders** at its true size and still **collides** at
+1.0. That touches ~3.5k of the 32k props recovered here; the rest are exactly 1.0. Fixing it means
+threading a scale through `BIH_RecursiveTrace`, which is its own patch.
+
+**Second-order cost:** many more props now reach the BIH build, which forces `GetModel` +
+`WaitForCompletion` per solid prop (bhop_canals 0 → 3126). Map loads on the 82 affected maps are
+measurably longer.
+
+**Build/deploy:** `plugins/hl2/mod_vbsp.c` only → `cd C:\FTESurf\src ; .\build.ps1 -Engine`.
+
+## Patch 229 (+ FTESurf Build 34) — the server never put a prop in its own pmove list, while the client predicted it solid  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+
+Reported as "on ahop_coast there are prop_physics that have no collision, and when you
+walk into them you get an unhappy client/server situation". Two independent defects, and
+**either one alone makes the other inert**.
+
+### Build 34 (QC) — every prop in the game had a bounding box of nothing
+
+FTESurf compiles to `qwprogs.dat`, whose progdefs CRC is **54730** — which the engine reads
+as `PROG_QW` (`pr_cmds.c:702, :713`). `PF_setmodel` copies a model's bounds onto the entity
+only when `progstype != PROG_QW || sv_gameplayfix_setmodelsize_qw` (`pr_cmds.c:3156`), and
+that cvar defaults to `0`. Nothing set it. So `setmodel(prop, "…​.mdl")` left `.mins`/`.maxs`
+at `'0 0 0'` for **every prop on every map**, and:
+
+- `AddEntityToPmove` bails on exactly that — `if (!check->v->size[0]) return true;`
+  (`sv_user.c:7049`) — so no prop was ever a physent and the engine fix below could not
+  have worked on its own;
+- `World_LinkEdict` boxes non-BSP solids by `.mins`/`.maxs` (`world.c:534-535`), so
+  `absmin == absmax == origin` and each prop sat in the area grid as a **point**;
+- `SV_SpawnProp`'s own `setsize(self, self.mins*sc, self.maxs*sc)` multiplied zero by the
+  scale — and being guarded by `if (sc != 1)`, never ran at all for an unscaled prop.
+
+This is nettest Patch 58's root cause, unfixed on the FTESurf side.
+
+**Fix** (`src/server/sv_main.qc` `worldspawn`, above the first `precache_model`):
+`cvar_set("sv_gameplayfix_setmodelrealbox","1")` + `cvar_set("sv_gameplayfix_setmodelsize_qw","1")`.
+Realbox must be 1 before the first precache or `sv.models[i]` is never filled for a `.mdl`
+(`pr_cmds.c:4622`) and `setmodelsize_qw` alone falls through to a ±16 fallback cube. Safe for
+everything else: every other `setmodel` in this game binds a `'*N'` brush model and takes the
+early return at `pr_cmds.c:3111`; the player `setmodel("")`s then `setsize`s explicitly.
+
+Also in `sv_entities.qc`: `setsize` made **unconditional**; a `setorigin(self, self.origin)`
+relink after `.solid` is assigned (it is assigned *after* `setmodel`/`setsize`, so at link time
+it still held Source's raw value 6, and `World_LinkEdict`'s rotation expansion — which tests
+`SOLID_PHYSICS_*` at `world.c:556-557` — never fired for any prop); and a new
+**`fs_prop_nobox_n`** counter printed on the `props:` line only when non-zero, which is the
+direct readout that setmodel handed over real bounds.
+
+### Patch 229 (engine) — `SOLID_PHYSICS_TRIMESH` was not in the server's pmove filter
+
+`AddLinksToPmove`'s solid filter (`sv_user.c`, 4 copies) admitted `SOLID_TRIGGER`(skin<0),
+`BSP`, `PORTAL`, `BBOX`, `SLIDEBOX`, `LADDER`. **`SOLID_PHYSICS_TRIMESH` (35) and
+`SOLID_PHYSICS_BOX` were absent**, so a QC-spawned prop was never considered by the player's
+move at all. And `AddEntityToPmove` attached `pe->model` only in the `SOLID_BSP` branch, so
+even once admitted a prop would have collided as a box.
+
+The disagreement ran the **surprising way round**: `CL_SetSolidEntities` accepts an alias model
+exposing `NativeTrace` (`cl_ents.c:7232-7241`), so the *client* predicted these props solid all
+along. The client stopped the player at the prop; the server, which had nothing there, said they
+never stopped. That is the rubber-band, and it was a total absence rather than a mismatch.
+Server-side traceline/bullets always worked because those go through `World_Move`
+(`world.c:1268`) — which is why the code reads as though it were fine.
+
+Everything downstream already existed from Patches 54–64. This is wiring, not new physics.
+
+**`AddEntityToPmove` gets its own branch**, not an extension of the BSP one — that branch
+multiplies `pe->angles[0]` by `r_meshpitch` *before* its `VectorCopy` overwrites it (dead code
+on the previous slot's occupant, left alone). The new branch mirrors `CL_SetSolidEntities`
+(`cl_ents.c:7246-7253`) exactly, copy-then-multiply, because prediction parity is between these
+two pmove feeds and nothing else. Scale uses the value the client **decodes** —
+`sv_ents.c:3909-3912` sends `!scale ? 16 : bound(1, scale*16, 255)` and `cl_ents.c:7251` divides
+by 16 — because the raw float would desync any non-dyadic `modelscale` by up to 1/16, and 52% of
+this library's props carry one.
+
+> **Noted, not fixed:** `pmovetst.c` then calls `AngleVectorsMesh`, which applies `r_meshpitch`
+> *again*, while the server's non-pmove path (`world.c:1156`) applies it once to raw angles. So
+> pmove and `World_Move` already disagree for a **pitched or rolled** prop. Invisible today —
+> props are yaw-only — and it is a pre-existing inconsistency in the other path.
+
+### Verified — the reporter's own save-lock, A/B against the pre-patch binary
+
+`ahop_coast` carries 284 prop entities (263 `prop_dynamic_override`, 18 `prop_dynamic`, 2
+`prop_ragdoll`, 1 `prop_physics`), 269 writing `"solid" "6"`, all `modelscale 1.0`. The barrels
+under the save-lock are `models/props_c17/oildrum001.mdl` at **z = −14643.0**; save003 sits 258
+units above one. Drop from it and read where the player rests
+(`ftesurf/logs/p229a.log`, `p229ctl.log`):
+
+| | resting z |
+|---|---|
+| pre-patch binary, same QC | **−14625.1** — fell through to the floor |
+| Patch 229 + Build 34 | **−14583.1** — stopped on the barrel |
+
+**42.0 units apart**, ≈ one oildrum's height, identical across two consecutive drops in both
+runs. Both runs printed `props: 284 spawned (269 solid, 0 scaled)` with **no "NO BOUNDS"**, so
+the QC half was constant and the engine half is isolated.
+
+**Regression surface:** every mod on this shared engine now gets `SOLID_PHYSICS_*` in pmove.
+`MAX_PHYSENTS` is 2048 (`pmove.h:44`) and the server pre-culls to a ±256 box, so overflow needs
+~2000 props within 512 units — no map here is close. But `AddEntityToPmove` returning false
+breaks the enumeration loop, and the server adds portals **last** (`AddAllLinksToPmove`) where
+the client adds them **first**; if a dense map ever does overflow, portals are what it drops.
+Worth moving that call ahead of the grid walk to match the client.
+
+**Build/deploy:** `engine/server/sv_user.c` + `src/server/sv_main.qc` + `src/server/sv_entities.qc`
+→ `cd C:\FTESurf\src ; .\build.ps1 -Engine` (runs `m-rel` **and** `sv-rel`; `sv_user.c` is in both).
+
+## Measurement note (pre-Patch 230) — what surf_demise's prop frame is actually spending, CPU vs GPU
+
+Taken at surf_demise's own `info_player_start` (the Patch 193 viewpoint), current build,
+`ftesurf/logs/p230a.log` + `screenshots/surf_demise_00{0,1,2}.png`. **`r_speeds 3` calls
+`glFinish` (`render.h:947`); `r_speeds 2` does not**, so the pair separates CPU from GPU.
+
+| | Opaque Batches | Present | Draw Indices | Draw Calls | Ent Batches | fps |
+|---|---|---|---|---|---|---|
+| `r_speeds 2` (no glFinish) | **27,528 µs** | 11,145 µs | 4,703,625 | 1863 | 1779 | 24.4 |
+| `r_speeds 3` (glFinish) | **46,284 µs** | 359 µs | 4,703,625 | 1863 | 1779 | 19.2 |
+| `r_speeds 3` + `r_drawentities 3` | **3,104 µs** | 234 µs | 1,114,932 | 159 | 75 | **147.5** |
+
+**Reading it.** `glFinish` moves the GPU wait out of `Present` (11.1 ms → 0.36 ms) and into the
+opaque block, so the honest split at this viewpoint is roughly **27.5 ms CPU** in the batch loop
+with **~19 ms of GPU** behind it that the CPU was not already covering. It is **not** cleanly
+CPU-bound, which is what one of the analyses assumed.
+
+`r_drawentities 3` skips `mod_alias` — exactly the static props — and is the total-cost bound:
+props are **43.2 ms of the 46.3 ms** opaque block, **3.59 M of 4.70 M** indices and **1704 of 1863**
+draw calls. 19.2 → 147.5 fps.
+
+**What that means for the candidate fixes**, now that it is measured rather than estimated:
+
+- The static-VBO fix (give Source MDLs the rigid path at `com_mesh.c:2100`, or add
+  `!!permu SKELETAL` to the VMT shaders that lack it) attacks the **CPU ~25 ms** — the per-frame
+  vertex rebuild and dynamic re-upload. Real, and the largest single item.
+- It **cannot** touch the ~18 ms of GPU vertex/fill from 3.59 M prop indices. Only drawing less
+  geometry does that — which is what Patch 201's LOD and `hl2_propdist` already exist for.
+- Merging or instancing would cut 1704 draw calls but **not one index**, and at ~2100 indices per
+  draw these are not pathologically small batches. Instancing remains the wrong first move, and
+  the engine has no instancing path to build on (`gl_terrain.h:393` is the only mention).
+
+**Ruled out by measurement, not argument:** the GPU-bone-limit cause. `developer 1` across the
+whole map load prints **no** `"exceeds gpu bone limit and will be software-skinned"`
+(`com_mesh.c:4670`), so no prop model on this map exceeds `sh_config.max_gpu_bones`. The earlier
+"16 of 57 models have >12 bones" counter-sample does not bite here. Note its absence does **not**
+clear the props: the `shader->prog` route is a separate failure that prints nothing, and
+distinguishing it still needs the per-program material census (C1's code half, not yet written).
+
+---
+
+## Patch 230 — a $staticprop is not a skeletal model, and every prop on the map was being skinned on the CPU to prove it  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+**surf_demise at `info_player_start`: 24.2 → 150.5 fps.  Under `glFinish`, 19.15 → 97.19.
+Same 4.70 M draw indices, same 1865 draw calls, same 1779 entity batches — not one triangle
+removed.**
+
+### The measurement note above this one drew the wrong conclusion, and this patch is why
+
+That note read the `r_speeds 2` vs `r_speeds 3` gap (27.6 ms vs 46.4 ms) as "~19 ms of GPU
+vertex/fill behind the CPU cost", and concluded that a static-VBO fix could win the CPU half
+at best. **`glFinish` does not only wait for rasterisation — it waits for every pending buffer
+transfer too.** The props were re-uploading their whole vertex set every frame, and that upload
+is what the extra 18.8 ms was. With the upload gone the `glFinish` penalty falls to 2.2 ms while
+the index count is *unchanged*, which is the proof: fill would not have moved.
+
+| surf_demise, `info_player_start` | Opaque Batches | Total refresh | Draw Indices | Draw Calls | fps |
+|---|---|---|---|---|---|
+| `hl2_rigidprops 0`, `r_speeds 2` | 27,604.6 µs | 41,194.3 µs | 4,703,608 | 1863 | **24.2** |
+| `hl2_rigidprops 1`, `r_speeds 2` | 4,263.1 µs | 6,643.3 µs | 4,705,136 | 1865 | **150.5** |
+| `hl2_rigidprops 0`, `r_speeds 3` (glFinish) | 46,403.9 µs | 52,225.7 µs | 4,703,608 | 1863 | **19.15** |
+| `hl2_rigidprops 1`, `r_speeds 3` (glFinish) | 6,439.1 µs | 10,289.1 µs | 4,705,484 | 1865 | **97.19** |
+| `hl2_rigidprops 1`, props not drawn (`r_drawentities 3`) | — | — | 1,116,33x | — | 144.5 |
+
+The last row is the point: **drawing all 2350 props now costs less than the run-to-run noise.**
+150.5 with props against 144.5 without them, at the same viewpoint in the same build.
+
+Both arms are the SAME BINARY, one cvar apart, so nothing else can be responsible. The control
+arm reproduces the pre-patch reading to within measurement noise (46,403.9 µs / 19.15 fps against
+the earlier 46,284 µs / 19.2 fps), which is what makes the comparison worth anything.
+
+### Why every prop was on the slow path — both halves, and neither is the one the plan predicted
+
+`Alias_GAliasBuildMesh` (`com_mesh.c:2100`) keys its cheapest path on
+`inf->ofs_skel_xyz && !inf->ofs_skel_weight`. Source `.vvd` files always carry weights, so no
+Source model has ever reached it. Everything falls into the `numbones` branch, where the choice
+is made by `gl_alias.c:1954`:
+
+    usebones = batch->shader->prog && (batch->shader->prog->supportedpermutations & PERMUTATION_SKELETAL)
+
+`usebones == false` means `Alias_BuildSkeletalMesh` re-skins on the CPU every frame **and** leaves
+`*vbop` NULL (`com_mesh.c:2099`), so the vertices are re-uploaded every frame as well.
+
+The plan expected this to bite only the ~20% of prop material slots that declare `UnlitGeneric`,
+because `vmt/vertexlit.glsl` is the one VMT shader that declares `!!permu SKELETAL`. **That was
+wrong, and the 6× says so.** There are two independent failures:
+
+- **UnlitGeneric** emits a *top-level* `program`, so `shader->prog` is set — but `unlit.glsl` has
+  no `SKELETAL` permutation. `usebones` false.
+- **VertexLitGeneric** — the dominant prop shader — emits its program **inside a pass**
+  (`mat_vmt.c:1563`, `"{ program … map $rt:$linear:rtenvsphere }"`). `Shader_ProgramName`
+  (`gl_shader.c:3033-3050`) assigns `pass->prog` when a pass is open and `shader->prog` only when
+  one is not, and nothing promotes one to the other. So `batch->shader->prog` is **NULL** and
+  `usebones` is false *no matter what permutations vertexlit.glsl declares.*
+
+So the planned fix — add `!!permu SKELETAL` to `unlit.glsl` and friends — would have moved the
+smaller half only, and left the dominant material class exactly where it was. **Measure first was
+the correct call and it changed the patch.**
+
+### What this does instead
+
+Don't emit skinning data for a model that cannot be skinned. `Mod_LoadHL2Model` sets
+`ctx.rigid` and `Mod_HL2_LoadVVD` then never allocates or fills `ofs_skel_idx` / `ofs_skel_weight`:
+
+    ctx.rigid = (ctx.header->flags & HL2MDL_STATIC_PROP) && ctx.header->num_bones <= 1
+             && (!hl2_rigidprops || hl2_rigidprops->ival);
+
+With both pointers NULL, `com_mesh.c:2100` takes the rigid branch, the vertices live in a static
+VBO, `Mod_BuildVBOs` skips both bone-attribute uploads (`com_mesh.c:4694-4700` guard on exactly
+these pointers — 20 bytes per vertex of client memory and VRAM returned), and
+`gl_backend.c:4365` stops setting `PERMUTATION_SKELETAL` because that is keyed on
+`sourcevbo->numbones`, which the rigid branch zeroes. Vertexlit props therefore also pick up the
+cheaper non-skeletal vertex shader.
+
+**This is not an approximation.** FTE composes `SKEL_INVERSE_ABSOLUTE` matrices — absolute ×
+inverse bind-absolute — which is the identity in the bind pose, and a `$staticprop` has no other
+pose to be in. Deleting the weights deletes an identity transform.
+
+**The gate is studiomdl's own assertion, not our inference.** `num_bones <= 1` is necessary but
+not sufficient: a one-bone model with a sequence that moves that bone is legal and animatable, and
+stripping its weights would freeze it. `STUDIOHDR_FLAGS_STATIC_PROP` (0x10) is the flag studiomdl
+sets once it has collapsed the rig and Source itself refuses to animate the model. Both required.
+
+Measured offline from the `.mdl` headers before any code was written, and confirmed in-engine
+afterwards by the per-model `Con_DPrintf` this patch adds (`developer 1`):
+
+| map | predicted rigid | measured RIGID | measured skeletal |
+|---|---|---|---|
+| surf_demise | 73 of 73 | **73** | 0 |
+| surf_garden | 54 of 54 | — | — |
+| ahop_coast + bhop_ambience | 224 rigid, 18 rigged | **224** | **18** |
+
+The 18 are ahop_coast's ragdolls and NPCs, up to 56 bones. They are untouched, still skeletal,
+and still draw in the same frame as the rigid ones.
+
+`hl2_rigidprops` (`CVAR_MAPLATCH`) exists so this can be turned off without a rebuild — it is the
+control half of the A/B above, not a tuning knob.
+
+### Verification
+
+- **Render is unchanged.** Pixel-diffed the two arms over a scene-only region: the residual is
+  1.2–2.1/255 mean, and the *props-not-drawn* control pair differs by the same order (1.2), so the
+  residual is run-to-run variation in water/sky/HUD, not geometry. The one cluster of large deltas
+  is a HUD banner that had timed out in one run.
+- **Patch 228 holds:** bhop_ambience still reports 72 static props and the trees still render
+  (screenshot), with all its models on the new rigid path.
+- **Patch 229 + Build 34 hold:** ahop_coast still reports `props: 284 spawned (269 solid, 0
+  scaled)` with no `NO BOUNDS`, and the drop from the reporter's save003 still rests at
+  **−14583.1** on both drops — identical to the post-229 figure. Expected: the `.phy` hull is
+  loaded separately by `Mod_PHY_CollisionMesh` and never saw a bone.
+
+### Left standing, deliberately
+
+**Rigged models still take the software path**, and for the same `shader->prog == NULL` reason —
+that is players, ragdolls and viewmodels wearing VertexLitGeneric. This patch does not touch them
+because they genuinely need skinning; the fix there is to let `gl_alias.c:1954` see a single
+pass's program, or to emit vertexlit's `program` at the top level, and neither should be bundled
+with a change whose whole claim is that it removes an identity transform.
+
+`hl2_propdist` and `r_model_mincoverage` (nettest Patch 100) both remain at 0 and both still
+work; they are now much less necessary at this viewpoint than the note above assumed.
+
+---
+
+## FTESurf Build 35 (QC) — the five prop classnames the FGD declares and no map uses  *(APPLIED, QC only — `build.ps1`)*
+
+`src/server/sv_entities.qc`, five one-line spawn functions beside `prop_ragdoll` (:660).
+
+This is the tidy-up the props plan deliberately scheduled last, and its honest value is
+**nothing today**: a census of all 1310 maps in the library finds **zero instances** of every
+classname below. It is here so that a map which does use one spawns a prop instead of landing in
+`ent_census` as an open question for whoever hits it next, and so the FGD's list and this file's
+list finally agree.
+
+| classname | maps using it | routed to | solid? | why |
+|---|---|---|---|---|
+| `prop_physics_ragdoll` | 0 | `prop_ragdoll()` | no | the FGD says it in as many words: *"Alternate classname for prop_ragdoll"* |
+| `prop_physics_respawnable` | 0 | `prop_physics()` | yes | *"same as prop_physics, except it respawns after it breaks"* — nothing breaks here |
+| `simple_physics_prop` | 0 | `prop_physics()` | yes | what `phys_convert` emits; *"See prop_physics for more options"* |
+| `prop_sphere` | 0 | `prop_physics()` | yes | *"A variant of prop_physics which has a perfect sphere shape"* |
+| `prop_hallucination` | 0 | `SV_SpawnProp(SRCSOLID_NONE)` | **no** | *"a prop players can't get a good look at"* — per-client visibility does not exist here, so it is scenery, and it must never be solid: a prop half the server cannot see must not block anyone |
+
+They are defined **after** the functions they call, because QuakeC resolves a call against what is
+already defined above it.
+
+**`simple_physics_brush` is deliberately absent.** It is a `@SolidClass`, so its model is a `*N`
+brush; the catch-all already keeps unrecognised brush entities as `SOLID_BSP`, which is right.
+Naming it here would hand a brush model to `SV_SpawnProp`, which drops `*N` models on sight
+(`sv_entities.qc:517`), and the map would silently lose the brush.
+
+### Coverage is now complete, and that was checked rather than assumed
+
+Every classname the FGD declares matching `prop_*` / `simple_physics_*` — 19 of them:
+
+- **14 point-entity props** — all now have a spawn function.
+- **`prop_dynamic_base`** — an `@BaseClass` (`momentum.fgd:9665`), a Hammer inheritance node.
+  Never placeable, so never a classname in an entity lump.
+- **`prop_static`** — the `sprp` game lump, Patch 228.
+- **`prop_detail` / `prop_detail_sprite`** — moved by VBSP into the `dprp` game lump, stubbed
+  no-op at `mod_vbsp.c:3108`. A separate feature, still out of scope.
+- **`simple_physics_brush`** — above.
+
+### Verification: the entities had to be synthesised, because none exist
+
+A compile proves the functions exist; it cannot prove the engine's spawn-function lookup finds
+them under the name a mapper would type, and a misspelling would be **silent** — the entity is
+removed and counted by `ent_census`, not reported as an error. With zero instances library-wide
+there is nothing on disk that would exercise them.
+
+So `ftesurf/maps/bhop_ambience.ent` was written: the map's own entity lump (`sv_loadentfiles 1`,
+`gl_model.c:2727`) with five props appended, one per alias, all carrying a crate model the map
+already ships and **no `solid` key** — so what is under test is exactly the `defsolid` each alias
+passes to `SV_SpawnProp`.
+
+| | baseline | with the .ent | |
+|---|---|---|---|
+| spawned | 36 | **41** | +5 — every alias reached `SV_SpawnProp` |
+| solid | 36 | **39** | +3 — respawnable/simple/sphere are VPHYSICS; ragdoll and hallucination are not |
+
+Both numbers came back exactly as predicted (`p230d.log:84`), and `ent_census` listed only
+`env_sun` and `light_environment` — pre-existing, unrelated, and correctly unhandled. The `.ent`
+was deleted afterwards; `cfg/testrun/p230d.cfg` records how to rebuild it.
+
+### Not a bug: bhop_ambience's magenta trees
+
+Worth writing down because it looks exactly like a missing material and was reported as one. The
+72 static props are `.../deciduous_tree/default_tree_02/normal_tree_{sm,xl}_02_pu.mdl`, and the
+`_pu` is the map author's own **purple** leaf texture — `leaves_04_pu`, magenta leaves on a dark
+branch, straight out of the VTF. Nothing failed to load: the log carries no missing-material line
+for them, only benign `Unknown field "$treesway*"` warnings for CS:GO tree-sway parameters FTE does
+not implement. The trees are drawing the art the mapper shipped.
+
+---
+
+## Patch 231 — "this map wants an asset pack" was wrong for 593 of the 1411 maps, and the count it quoted was wrong too  *(APPLIED, engine + plugin — `build.ps1 -Engine`)*
+
+Reported as two things, and neither turned out to be what it looked like:
+
+> *"when loading a map like surf_aesthetic, I get a warning that it needs a pack mounted for a
+> water texture, i have fs_cache 1 on however I still get the warning? surf_demise claims it's
+> missing 41 materials, first: liquidpack/water/unique/water_tar_beneath.vmf. can you audit this."*
+
+### The audit
+
+**`fs_cache` is not the cvar involved.** `fs_cache` is stock FTE's filesystem NAME HASH
+(`com_fs_cache`, `fs.c:244`). The asset cache is `fs_assetcache` (`fs.c:285`), it is already `1`
+in `ftesurf.cfg:604`, and the collision was flagged in the source at `fs.c:264` when P186 named it.
+
+**The automount and the cache both worked correctly.** surf_aesthetic needs 26 CS:GO files; all 26
+were served from `ftesurf_cache/counter_strike_global_offensive_csgo_61b38d28/`, and 10 visible
+textures that would otherwise be checkerboard came out right.
+
+**Both maps' misses are `$bottommaterial` faces, and the material ships nowhere.** Read straight
+out of surf_demise's own pakfile:
+
+```
+materials/liquidpack/water/unique/water_tar.vmt
+    "$bottommaterial" "liquidpack/water/unique/water_tar_beneath.vmf"     <-- .vmf for .vmt
+```
+
+VBSP writes that string into the texdata string table as a real texinfo — confirmed present in
+lump 43/44 of both maps — so the underside of the water is an ordinary world surface. It is
+visible only from under the water, and the material is in **no** pack: not CS:GO, not TF2, not
+CS:S, not HL2, not Momentum, and not the map's own pakfile (2,993 entries, zero matching
+`*beneath*`). surf_aesthetic's `water/clear_beneath` is the identical shape.
+
+So the advice was unfixable-by-mounting in both cases, and that is not rare.
+`tools/mapdeps.py --audit` over the library: **335 maps need an addon pack, 593 reference content
+NO pack supplies.** Every one of the 593 was told to `fs_load` CS:GO or TF2 —
+`mod_vbsp.c:4353-4356`, two hardcoded string literals, printed unconditionally. surf_demise has no
+`data/mapdeps.txt` line *because* mapdeps.py already established no pack resolves it, and it was
+recommended one anyway.
+
+### The count was not a count of materials
+
+"41" was never 41 materials. Measured on surf_demise: `models/elly/bones/Bone_Pearl.vmt` was
+counted **81** times and `models/props_forest/firbranch02_singlemat_snowy.vmt` **36**. A failed
+shader is not cached — `R_LoadShader` frees it and returns NULL when the generator path is not
+taken (`gl_shader.c:8570-8578`) — so every model referencing a missing skin re-attempts it, and the
+counter fired each time. Three separate inflations, all now closed:
+
+| | |
+|---|---|
+| duplicate names | the census counts distinct names (`VMT_CensusSeen`, `mat_vmt.c`) |
+| the double probe | `R_LoadShader` tries `cleanname` then `shortname` (`gl_shader.c:8561-8564`), so a name with a foreign extension counted twice — and the first probe asks for `<name>.vmf.vmt`, which cannot exist. The census now skips extension-bearing names, **sound only because that retry is unconditional** |
+| `gfx/` | `gfx/conback`, `gfx/backtile`, `gfx/loading` are Quake's own 2D images, probed on every map — 13 constant entries, now filtered beside `tools/` and `sky/` |
+
+**surf_demise: 41 → 3**, and the first name is now the truthful `water_tar_beneath`, not the typo.
+
+### The changes
+
+- **`fs.c`** — `FS_AutoMountForMap` publishes `fs_automount_state` (0 no dep line, 1 pack mounted,
+  2 served from cache, 3 named but not installed, 4 unknown) and `fs_automount_spec`. Written on
+  every path out, early returns included; 4 is the initial value so a path that gives up cannot
+  leave the previous map's answer for the next map's warning to quote.
+- **`mod_vbsp.c`** — the warning picks a sentence from that. `fs_load` is offered **only** in
+  state 3. State 2 offers `fs_cache_clear <map>`, which is the one case where a short cache is
+  worth suspecting.
+- **`mat_vmt.c`** — `VMT_MISSING_LIST` 24 → 256 for storage; the warning still shows 24
+  (`VMT_MISSING_SHOW`) and `hl2_missing` prints everything.
+- **`hl2_missing`** — new command. It reports two numbers, because materials keep failing after
+  the load-time warning prints (streamed props, the HUD, and the previous map's cached models
+  being re-registered): surf_aesthetic is 1 at load and 52 by the time it is playable, most of the
+  rest being surf_demise's props from the load before. Both are true; showing only one invites the
+  next false report.
+- **The gamelump line.** `Con_Printf` in a plugin formats into a buffer and hands a NUL-terminated
+  string to `plugfuncs->Print` (`plugins/plugin.c:221-231`), so `%c` of a zero byte **ends the
+  string** — taking the remaining id bytes, the version and the newline with it. Every map carries
+  a zero-id terminator entry in the game-lump table (verified on both), so every load printed
+  `Unsupported gamelump id/version ` with no newline and the next message continued on that row.
+  That is the run-together line in the report. The terminator is now skipped and the tag is built
+  printable (`VBSP_GameLumpTag`); the same `%c` exposure in the LZMA-failure print is fixed too.
+
+### Verified — `cfg/testrun/p231c.cfg`, `logs/p231f.log`
+
+| map | state | before | after |
+|---|---|---|---|
+| surf_demise | 0 (no dep line) | 41 missing, "fs_load CS:GO or TF2" | **3**, "No asset pack supplies these" |
+| surf_aesthetic | 2 (served from cache) | 1 missing, "fs_load ..." | 1, "served from the asset cache", `fs_cache_clear surf_aesthetic` |
+| surf_rise | 2 (two deps, both cached) | 4 missing, "fs_load ..." | 4, cache sentence — regression, unchanged count |
+
+Zero `fs_load` lines and zero `Unsupported gamelump` lines across the whole run. The four
+surf_rise misses (`props_canaveral` folding chairs) and surf_demise's two prop skins were checked
+against all five packs individually: **in none of them**, so every message above is accurate.
+
+**Not changed, deliberately:** the failed-shader retry itself. 81 repeated filesystem lookups for
+one absent skin is a real cost, but caching a negative result is a shader-system change with a
+much wider blast radius than a census fix.
+
+---
+
+## Patch 232 — `$vertexcolor` and `$vertexalpha` were parsed and thrown away on every lit material  *(APPLIED, plugin + GLSL — `build.ps1 -Engine`)*
+
+> *"surf_rise transparency in textures missing and displacement blend feature not working between
+> transparent and opaque."*
+
+**The pasted `[shaderhere]` dump was pre-Patch-187** — `uppermap "materials/.vtf"` cannot be
+produced by any build since 2026-09-03, and `logs/p187.log:2620` already shows this material as
+`vmt/transition#NOBLEND`. The symptom was real; the evidence was stale, and it pointed at a
+different defect.
+
+`soniccolours/ivy_blendmodulate`, read out of surf_rise's pakfile:
+
+```
+WorldVertexTransition
+{
+	$basetexture "soniccolours/IVY_BLENDMODULATE_FoliageSMOOTH"
+	$blendmodulatetexture "soniccolours/ivy_blendmodulate_foliage_height_negative_test"
+	$translucent 1   $nocull 1   $vertexcolor 1   $vertexalpha 1
+}
+```
+
+`$vertexcolor` and `$vertexalpha` are parsed (`mat_vmt.c:742-745`) and consumed by exactly **one**
+material type: `UnlitGeneric`, which emits a real pass and can say `rgbGen vertex` / `alphaGen
+vertex` (`:1175`, `:1191`). Every other type emits a top-level `program` with no pass, where those
+keywords have nothing to attach to — the same problem `$alpha` had before P187's `#ALPHA` and
+`$color` before P188's `#COLOR`. So the material asked for per-vertex colour and opacity and was
+given neither.
+
+**This is a no-op everywhere except displacements.** `mod_vbsp.c` writes the painted per-vertex
+alpha only for displacement surfaces (`:2361`); every other surface gets white at alpha 1.0
+(`:2432`). The ivy is a displacement painted to fade from opaque to transparent, and the fade was
+being discarded — exactly the reported symptom. VBSP's own `_wvt_patch` clone of this material,
+which is what Source draws on the brush faces, is a `LightmappedGeneric` that keeps both keys:
+confirmation that vertex alpha here means opacity.
+
+The one thing that could have made this ambiguous does not occur. In a transition material vertex
+alpha is *also* the blend factor between `$basetexture` and `$basetexture2`, so a material wanting
+both would be asking one channel to do two jobs. A census of the map-embedded VMTs in all 1,362
+maps:
+
+| shape | materials | maps |
+|---|---|---|
+| WorldVertexTransition, `$vertexalpha`, **no** `$basetexture2` | 41 | 20 (surf_rise, surf_demise among them) |
+| WorldVertexTransition, `$vertexalpha`, **with** `$basetexture2` | **0** | **0** |
+| LightmappedGeneric with `$vertexalpha` | 494 | 111 |
+
+### The changes
+
+- **`mat_vmt.c`** — `#VERTEXCOL` / `#VERTEXALPHA` on the progargs string, for
+  `WorldVertexTransition` and `LightmappedGeneric` only, gated on the new `hl2_vertexcolor`
+  (default 1, `CVAR_SHADERSYSTEM`, the same kind of switch as `hl2_translucent` / `hl2_bumpmap` /
+  `hl2_animated`) so the old behaviour is one cvar away and the change is A/B-testable in place.
+- **`glsl/vmt/transition.glsl`** — the two multiplies, **after** the `#ifdef MASKLT` discard:
+  Source's alpha test reads the *texture's* alpha, so folding a painted fade in first would turn
+  the faded end of the ramp into a hole rather than a gradient.
+- **`glsl/vmt/lightmapped.glsl`** — same, plus the `vex_color` varying it did not have. Declared
+  and assigned **inside** `#if defined(VERTEXCOL) || defined(VERTEXALPHA)`, because this shader
+  draws every lightmapped world surface in the game and an always-on varying would spend an
+  interpolator on all of them to carry white.
+
+### Verified — `cfg/testrun/p232ab.cfg`, `logs/p232ab.log`, one session, same vantage
+
+```
+hl2_vertexcolor 0 -> program "vmt/transition#NOBLEND"                          screenshots 000/001
+hl2_vertexcolor 1 -> program "vmt/transition#VERTEXCOL#VERTEXALPHA#NOBLEND"    screenshots 002/003
+```
+
+Off: the ivy is a uniformly dense mat with a hard edge. On: it thins along the painted ramp and
+the ground shows through. **Control**, and deliberately the material next door —
+`soniccolours/ivy_basic`, same `$basetexture` and same `$bumpmap`, `LightmappedGeneric` with
+neither key — comes out `program "vmt/lightmapped"` with no `#VERTEX` argument at all, so the args
+are gated on the keys and not on the material type.
+
+**Deliberately not done:** routing `$blendmodulatetexture` into the opacity ramp for the
+no-`$basetexture2` case. `#BLENDMOD` and the `lowermap` emit are both gated on `*st->tex[1].name`
+(`mat_vmt.c:1247`, `:1257`) and the `smoothstep` already exists in the shader, so it is ~3 lines —
+but it changes appearance in a way worth looking at before committing to.
+
+**Also noticed, not fixed:** `transition.glsl`'s `lightmap_fragment()` multiplies by 0.75 and
+clamps at 1.5; `lightmapped.glsl` does neither. A transition surface is therefore darker than the
+same surface as `LightmappedGeneric`. Unrelated to this report, and written down so it is not
+rediscovered as one.
+
+---
+
+## FTESurf Build 36 (QC) — the HUD banner was giving the advice Patch 231 just removed  *(APPLIED, QC only — `build.ps1`)*
+
+`Gfx_DrawMissing` (`src/client/cl_gfx.qc:104-135`) carried its own copy of the two hardcoded
+`fs_load` lines, three lines high in the middle of the screen. On surf_demise the console said "no
+asset pack supplies these" while the banner said to mount CS:GO — and the banner is the one a
+player actually reads.
+
+It now reports the count and the first name, and points at `hl2_missing`, which is the single
+place that works out which of the four states is true. Verified on surf_demise: reads
+**"3 materials did not resolve on this map / first: liquidpack/water/unique/water_tar_beneath"**
+with no `fs_load` anywhere on screen or in the console.
+
+---
+
+## FTESurf Build 37 (QC) — the bhop platforms, and the wiring between entities  *(APPLIED, QC only — `build.ps1`)*
+
+> *"I have two maps, bhop maps were the bhop platforms don't work correctly,
+> bhop_futile and bhop_arcane, I left two "save-locks" right above the bhop
+> platforms that don't work.*
+>
+> *bhop_futile might have a trigger_multiple on the platform that triggers a
+> teleport? maybe we don't have the wiring for this so it simply teleports you?*
+>
+> *for arcane it seems like the platform simply isn't solid :? something about
+> the entity is making it not solid?"*
+
+Both readings were right, and they are two different bugs. One is a single
+entry in a list; the other is that FTESurf modelled **no entity I/O at all**.
+
+Every number below is from the two maps' own entity lumps, decompressed. That
+matters more than usual here — see *the census that was wrong twice*.
+
+### 37a. `bhop_arcane` — `func_bhop` was in the non-solid list
+
+`SV_OnEntityNoSpawnFunction`'s "decorative and rules brushwork" list forced
+`func_bhop` to `SOLID_NOT`. **bhop_arcane is 1122 of them**, and they are the
+floor.
+
+Under the user's save-lock:
+
+```
+func_bhop        *30   z 14272..14400   target stage1a   solidity 0
+trigger_teleport *135  z 14272..14336   target stage1a
+```
+
+The teleport sits **inside the block's own lower half**. Solid, you stand on
+the top and can never reach it. Non-solid, you drop through into it and are
+reset to `stage1a`. The blocks were always *drawn* — the catch-all calls
+`setmodel` before it reaches the non-solid list — so "the platform isn't solid"
+and "it teleports me" are one bug seen from two sides.
+
+**The justification beside the entry was wrong in both halves.** It read
+`func_bhop 94 / 2 maps base(trigger_momentum_bhop)`.
+
+- **The count was out by an order of magnitude**, and the same file already
+  explains why: the offline census behind these numbers read raw entity lumps,
+  and the library LZMA-compresses most of them. It is the identical flaw the
+  `zone_timer_*` note two paragraphs below it documents. It is also **not** a
+  newer-map special case — `bhop_futile` is a plain VBSP v20 and its lump is
+  compressed too, as are its geometry lumps.
+- **`base(trigger_momentum_bhop)` was read as evidence of a trigger.**
+  `momentum.fgd:10736` is `@SolidClass`, which is a solid brush that *also* has
+  trigger behaviour; the base class supplies `LandingLimit`/`TimeLimit` and its
+  own text says "Only full groundings count toward this, not just touching from
+  above". The map agrees — all 1122 write `solid 6`, `solidity 0`,
+  `startdisabled 0`.
+
+So `func_bhop` gets a real spawn function: `SOLID_BSP`, reading
+`solidity`/`Solidity` and `startdisabled`/`StartDisabled` through `SV_Key2`
+exactly as `func_brush` does. **arcane needs both spellings in one map** — 1117
+blocks write `solidity`, the other 5 write `Solidity`.
+
+**The dwell rule** comes with it, because a solid `func_bhop` that never
+teleports is a different wrong map. `TimeLimit` absent or 0 means
+`sv_bhop_time_limit`, new and defaulting to the FGD's 0.1 — and **none of
+arcane's 1122 blocks writes a `TimeLimit`**, so that one cvar is what the whole
+map runs on. Detection is in `PlayerPostThink` via `.groundentity`, not a
+`.touch`: a `SOLID_BSP` brush receives no touch from a player *standing* on it,
+which is the only state this rule is about. `.groundentity` is written only
+when pmove reports onground (`sv_user.c:8165`) and goes **stale** otherwise, so
+the `FL_ONGROUND` test guarding it is load-bearing rather than defensive.
+
+`LandingLimit` is implemented and unexercised: 0 is unlimited on every block of
+both maps. `-1` (per-gamemode `func_door` emulation) is censused, not guessed.
+
+### 37b. `bhop_futile` — the filter, and the entity I/O behind it
+
+futile's platform is ordinary world brush and was always fine. **35 of its 98
+`trigger_teleport`s carry a `filtername`**, and FTESurf read no filters at all,
+so every one fired on first touch: landing on platform 1 sent you to `start`.
+
+The map is an anti-backtrack chain:
+
+```
+trigger_multiple *9   OnEndTouch "!activator,AddOutput,targetname block2,0,-1"
+trigger_teleport *10  target start  filtername block1filter
+filter_activator_name block1filter  filtername block2  Negated 0
+```
+
+`block1filter` passes an activator **named `block2`**, and you only become
+`block2` by *leaving* platform 1. Arriving unnamed you are left alone; coming
+back after you have moved on, you are reset. Restoring that needs three things
+that did not exist: outputs, `AddOutput`, and filters.
+
+### 37c. The I/O layer
+
+`ED_ParseUnknownEpair` — the hook at `pr_cmds.c:487-506`, documented at
+`README.md:36`, present since the fork and **never defined by any QC in this
+project**. It is called once per unmatched key with `self` bound, which is the
+only way to see every output: `ED_ParseEdict` assigns by field name, so a
+declared `.string OnStartTouch` keeps only the **last** such key and futile's
+triggers carry several.
+
+Three things about it are worth writing down.
+
+- **The delimiter is not always a comma, and this would have been a silent
+  half-fix.** Newer Source compilers switched the separator to `0x1B` ESC so a
+  parameter could contain a comma. **futile's 38 outputs are all comma;
+  arcane's 23 are all ESC.** A parser that assumed either would produce
+  single-token garbage rather than an error — and the wired-count line in the
+  load report is exactly the instrument that catches it, because the wrong
+  delimiter reports **0 wired**, not a wrong parse.
+- **Nothing is spawned during the parse.** The hook accumulates a string on the
+  entity; `SV_EntityIOBuild` materialises `fs_output` entities afterwards,
+  beside `SV_RepairTargetCase`, which is also the earliest point at which every
+  entity on the map exists.
+- **Defining the hook silences 4,033 warnings per VBSP load.** `SV_BadField`
+  returns true whenever the hook exists and `pr_edict.c:1557` reads that as
+  "handled", skipping the `'%s' is not a field` DPrintf. Under `developer 1`
+  that spam was measured at **60.7 s to load a map whose BSP parses in 2.6 s**;
+  the same map without it is 8.3 s. A side effect, not the reason — but it is
+  why map loads under `developer` stop being unusable.
+
+Inputs implemented: `AddOutput`, `Enable`/`Disable`/`Toggle`, `Kill`,
+`ModifySpeed`, `SetDamageFilter`, `Add`/`SetValue`/`SetValueNoFire`,
+`TurnOn`/`TurnOff`, `Command`. An unrecognised input is **censused**, through
+the machinery `ent_census` already prints.
+
+**So is an output nothing fires.** That check is static — the output name is
+compared at build time against the list of names anything in this file actually
+raises — and it is the honest half of "reusable layer": an output parsed
+perfectly and never fired is invisible otherwise, and looks from outside
+exactly like one we got wrong. It immediately reported futile's **six `OnJump`
+boosters**, which are `AddOutput basevelocity`.
+
+> **CORRECTION, Patch 240.** This paragraph used to continue *"...which cannot
+> work: FTE's Source pmove has no basevelocity concept at all."* That was
+> **wrong**, and it is corrected here rather than deleted because the same claim
+> was written into `sv_entities.qc` twice and quoted from there. `pm_source.c`
+> reads `pmove.basevelocity` in **eleven** places. What did not exist was a
+> *writer* — the only one in the engine was Half-Life-specific — so the field sat
+> permanently at zero and the reads were dead code, which is what a grep from the
+> QC side looked like. Patch 240 adds the writer, fires `OnJump`, and implements
+> `AddOutput basevelocity`. The pads now work; see 240 for why they are still
+> almost imperceptible, which turns out to be a property of the ported map.
+
+**End-touch is synthesised**, because QuakeC has no such thing and **27 of
+futile's 33 renames are on `OnEndTouch`**. The touch stamps the toucher and the
+time; a think notices the stamp go stale after 0.05 s — five ticks at bhop's
+100 Hz, three at surf's 66.7 — and fires. It costs **nothing** on a trigger
+with no outputs: the first line returns before any state is written and no
+think is ever armed, which is what keeps this off the hot path of the 4,940
+`trigger_push` and 17,000-odd `trigger_teleport` entities that wire nothing.
+
+**`Command` is remote code execution by map, so it is allow-listed to
+`say`/`echo`/`print`.** Not a hypothetical: **bhop_futile's `logic_auto` fires
+`sv_airaccelerate 150` at map spawn**, and this game's leaderboard is a physics
+claim. Refusing it costs that map nothing, and that is checkable rather than
+hoped for — `cfg/mode_bhop.cfg` already sets `sv_airaccelerate 1000` for every
+bhop map and Patch 170's movement lock reverts any live write, so the map's line
+was already being undone twice over. This makes the refusal deliberate, and
+prints it. arcane's six `Command`s are all `say Secret N Found` and all run.
+
+### The regression this caught, which was mine
+
+`surf_kitsune` is not a passive control: **it wires 50 outputs**, and its
+`SecretTeleporter` carries `StartDisabled 1` with a `func_button` firing
+`SecretTeleporter Enable`.
+
+Before this build FTESurf ignored `StartDisabled` on a teleport, so that secret
+was permanently **on** — wrong, but reachable. Honouring `StartDisabled`
+*without* honouring the button would have made it permanently **off**: a secret
+nobody can reach, and nothing printed to say why. That is wrong in the harder
+direction, and the `teleports: N spawned DISABLED` line added for exactly this
+purpose is what surfaced it on the first regression run.
+
+So `+use` exists now. `.float button5` has been declared in `sv_entities.qc`
+since build 1, with an essay about which usercmd bit `+use` lands on under
+QuakeWorld, and **nothing had ever read it** — there was nothing for a press to
+do until outputs existed. `SV_UseFrame` traces 80 units (Source's
+`PLAYER_USE_RADIUS`) from the eye along `.v_angle` and fires `OnPressed`.
+
+### Filters fail OPEN, and both reasons are live
+
+Source's `CBaseFilter` lookup returns NULL for an unresolvable name and
+`PassesFilter` then returns true, so failing open is faithful rather than lazy:
+
+- **futile** — 6 `trigger_multiple` reference `boosterqwd`, which is not an
+  entity in the map at all.
+- **arcane** — 12 `trigger_teleport` and 4 `trigger_setspeed` reference
+  `filter_standing`, which *is* in the map, as a
+  `filter_momentum_surface_collision` — a class this build does not implement.
+
+Failing closed on the second would have killed twelve of arcane's teleports
+while fixing its blocks, turning one bug report into two. The unimplemented
+class is censused instead.
+
+**The key-name overload is a genuine trap and both maps use both senses.** On a
+*filter*, `filtername` is the name it matches; on a *trigger*, it is the
+*targetname of the filter*.
+
+### Verified — `ftesurf/cfg/testrun/b37a.cfg`, `b37b.cfg`, `b37c.cfg`
+
+**The arcane test had to be split in two, and that is the trap worth
+recording.** A working `func_bhop` teleports you if you dwell — that is its
+purpose — and it teleports you to `stage1a`, which is exactly where falling
+*through* it also puts you. "Drop and read the resting place" cannot tell fixed
+from broken: both answers are `stage1a`. `sv_bhop_time_limit` separates them.
+
+| | measured |
+|---|---|
+| arcane, `sv_bhop_time_limit 100`, drop from save001 | `1665.0 -1.5 14416.0` — **standing on the block**, and still there 4 s later |
+| arcane, `sv_bhop_time_limit 0.1`, same drop | `1472.0 0.0 14416.4` = `stage1a` — **the dwell rule fires** |
+| futile, drop from save003 onto platform 1 | `5439.3 1793.7 8448.0` — **not teleported** |
+| futile, leave platform 1 then return | `5408.0 272.0 11265.6` = `start` — **the anti-backtrack still fires** |
+
+The last row is the one worth two readings: a "fix" that only stopped the false
+teleport would have disabled the map's anti-skip and looked like a pass.
+
+`entity I/O: 23 output(s) wired` on arcane and `38` on futile is the delimiter
+proof — ESC and comma, one map each, and a wrong delimiter reports 0.
+
+**Regression.** `surf_kitsune` — `target case: 28 reference(s) repaired`
+unchanged, census unchanged but for the two new `output OnIn`/`OnOut` coverage
+lines, and the secret loop verified end to end: standing in the disabled volume
+does not teleport (`12288.0 3520.0 -2479.8`), and `+use` on the button then does
+(`0.0 -1964.0 408.8` = `spawn`). `bhop_ambience` — no wiring, no `func_bhop`,
+`props: 36 spawned (36 solid)`, census unchanged.
+
+**`fs_entity_io 0` reproduces the original bug on demand** — futile's drop goes
+back to `start` — which is what makes it a bisection switch rather than a
+comment. It gates the map's *wiring*: outputs **and** filters, since `AddOutput`
+writes the name and the filter reads it, and gating one without the other would
+leave a state neither build has ever been in.
+
+### Not done, deliberately
+
+`OnJump` (no jump hook, and no basevelocity to give it), `trigger_setspeed`,
+`filter_momentum_surface_collision`, `filter_multi`, `LandingLimit -1`,
+`trigger_momentum_progress` and the `ProgressTeleport` path (arcane sets
+`target` on every block, which the FGD says overrides it, and the map contains
+no progress trigger at all), `SetSpeed` as an input (it means rotation speed on
+`func_rotating` and player speed on `player_speedmod`; guessing which would be
+worse than censusing it), and doors opening. Each is censused rather than
+silently ignored.
+
+### Two stale comments corrected while in the area
+
+- `sh_zones.qc` said the `zone_*` classnames "appear in exactly zero shipped
+  maps". They appear in at least fifteen, as 189 brush entities; arcane alone
+  has 7. Same compressed-lump scan, same direction of error.
+- `sv_entities.qc` claimed `func_button` read Source's "Don't move" spawnflags.
+  It never did — the body reads no spawnflags and `SF_BUTTON_DONTMOVE` was
+  defined and never referenced. Harmless in effect, and worse than no comment,
+  because the next person reads it instead of the function.
+
+### Blast radius
+
+QC only; no engine change, and every builtin it needs already existed —
+`.groundentity`, `str2chr`/`chr2str`, `tokenizebyseparator`, `strstrofs`,
+`strcasecmp` are all in the shipped SSQC defs, and `ED_ParseUnknownEpair` is an
+engine hook that has been built and documented since the fork.
+
+Nothing outside `ftesurf/` is touched. `C:\FTEQuake` runs the `quakers` gamedir
+with its own `qwprogs.dat` and does not share these progs; the dual deploy is
+the engine binary and plugins, which this build does not rebuild.
+
+---
+
+## Patch 233 — a water material's `$bottommaterial` was read, thrown away, and then reported missing  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+Reported as the tail of Patch 231:
+
+> *"Ivy looks correct, but I still get missing texture reports on surf_aesthetic (1),
+> surf_demise (3), surf_sodacity (1). Idk if they are in the map file? or something? it's
+> not clearly stated the issue? can it be fixed?"*
+
+Five names, three unrelated causes. This patch is two of them; Patch 234 is the prop skins
+and Patch 235 is surf_sodacity.
+
+### What a `$bottommaterial` is, and why it goes missing
+
+A Source water VMT may name the material to draw on the UNDERSIDE of the water. VBSP does
+not keep that as a property of the water: it copies the string into the map's texdata string
+table and gives the underwater faces a texinfo pointing at it. The underside is therefore an
+ordinary world material and goes missing like any other one the mapper did not ship.
+
+Read out of the two maps' own pakfiles:
+
+```
+surf_demise    materials/liquidpack/water/unique/water_tar.vmt   ("LightmappedGeneric")
+                   "$bottommaterial" "liquidpack/water/unique/water_tar_beneath.vmf"
+                                                                       ^^^^  .vmf, for .vmt
+surf_aesthetic materials/nature/water_epic_clear.vmt             (Water)
+                   $bottommaterial "water/clear_beneath"
+```
+
+Neither bottom material exists in the map's pakfile, in CS:S, CS:GO, TF2, HL2 or Momentum,
+in either spelling. **Both are drawn**, measured from lumps 2/6/7/44 and confirmed twice by
+independent reads: 325 faces on surf_aesthetic, 7 on surf_demise, every one `SURF_WARP`, none
+`SURF_NODRAW` or `SURF_SKIP`.
+
+`mat_vmt.c:924` parsed `$bottommaterial` and discarded it. The engine was reading the link
+between the missing material and the material that defines it, and dropping it on the floor.
+
+**A name rule would have been wrong**, and this is the reason the table exists. Stripping
+`_beneath` finds surf_demise's parent (`…/water_tar`) and completely misses surf_aesthetic's,
+whose parent is `nature/water_epic_clear` — a different directory AND a different stem. The
+link exists only inside the VMT.
+
+### The changes
+
+- **`mat_vmt.c`** — `vmtstate_t` keeps `bottommaterial`; `VMT_BottomRecord` files
+  `normalise(value) -> filename` for every VMT that loaded and named one. Normalise drops a
+  `materials/` prefix and ANY extension, because one of the two real values ends `.vmf` and
+  the other has none. Cleared per map by `Mat_VMT_ResetStats`. Two exports beside it:
+  `Mat_VMT_BottomParent` and `Mat_VMT_CensusMissing`/`Mat_VMT_CensusForget`.
+- **`mod_vbsp.c`, `VBSP_GenerateMaterials`** — a second pass over `mod->textures[]`: a name
+  that is in the missing census AND is some VMT's `$bottommaterial` is re-registered under the
+  parent's name. `RegisterBasicShader` dedups on name, so the underside ends up sharing the
+  SAME shader object as the water it belongs to, which is what `$bottommaterial` means and
+  needs no new shader path. Both texinfos carry `SURF_WARP`, so the `#WARP` argument matches.
+  A second pass and not inline, because inline would depend on the parent's texdata entry
+  preceding the child's — it does on both maps (VBSP appends bottom materials last, 54 of 55
+  and 25 of 26) but nothing guarantees it.
+- **Gated on the census, not on the table.** A map that DOES ship its bottom material has a
+  link here too and must keep the material it shipped.
+- **`hl2_bottommaterial`** (default 1, `CVAR_SHADERSYSTEM`) so it is revertible in place.
+
+**Two name-matching traps, both found by testing rather than by reading:**
+
+1. The census stores the EXTENSION-STRIPPED spelling of a name with a foreign extension
+   (Patch 231, and `...water_tar_beneath.vmf` is exactly that), while the texdata table stores
+   the raw one. The lookup asks for both spellings and forgets whichever is present. Without
+   this the substitution silently never fired on surf_demise.
+2. `VBSP_MissFaces` had the same problem in reverse and reported a material on 7 faces as
+   being on none. It now steps over both a foreign extension and the `#WARP` argument.
+
+### And say what each one IS
+
+The part of the report that was actually about the message. Each name now carries its own
+reason, worked out while the world model is in hand:
+
+```
+maps/surf_demise.bsp: 3 material(s) did not resolve:
+    liquidpack/water/unique/water_tar_beneath  -- 7 world face(s), water -- only visible from in or under it
+    models/props_forest/firbranch02_singlemat_snowy.vmt -- a prop skin
+    models/elly/bones/Bone_Pearl.vmt           -- a prop skin
+```
+
+`a prop skin` from the `models/` prefix (exact — nothing else in a Source map is there);
+`N world face(s)` from a walk of `mod->surfaces`, which is the exposure itself; `water` from
+the texinfo's `SURF_WARP`, taken from the compiler's flag and not from the `_beneath`
+spelling, which is the mapper's; and `named by the map but drawn by no face` for a texdata
+entry no surface uses. `hl2_missing` prints the same column, and says so for names that
+arrived after the load rather than inventing a measurement for them.
+
+**`hl2_unresolved_visible`** counts the ones on a drawn face or a prop. FTESurf Build 38's
+banner draws on that instead of the raw count.
+
+### Verified — `cfg/testrun/p233off.cfg` + `p233on.cfg`, `logs/p233off.log`, `logs/p233on.log`
+
+| map | before | after |
+|---|---|---|
+| surf_demise | 3 | **0** |
+| surf_aesthetic | 1 | **0** |
+
+On the shipped build with every cvar at its default (`cfg/testrun/p233ship.cfg`, `logs/p233ship.log`): surf_demise, surf_aesthetic and surf_sodacity all report `hl2_unresolved 0` and `hl2_unresolved_visible 0` at the end of the map load, and no banner is drawn on any of them.
+
+with, on the "after" side,
+`surf_aesthetic.bsp: water/clear_beneath is the underside of maps/surf_aesthetic/nature/water_epic_clear_15584_13136_8384; drawing it as that`
+and the equivalent for surf_demise.
+
+**TWO SESSIONS, not two phases in one, and that is a finding in itself:** FTE keeps the loaded
+world model, so `map x` twice in a row does not reload it — `Mod_LoadVBSP` does not run, the
+census is not reset, `VBSP_GenerateMaterials` does not run, and the second half of an
+in-session A/B silently reports the first half's numbers. The first attempt (`p233b.cfg`) did
+exactly that and showed "no change" for a change that works. A fresh process per state also
+makes every map a FIRST visit, which matters because a shader already registered is not
+re-parsed on a revisit and the `translucent` counters undercount accordingly (19 -> 15 on
+surf_demise, 12 -> 4 on surf_aesthetic, purely from that). It does not affect the missing
+count — a FAILED shader is not cached and is retried every time, which is the whole of P231.
+
+**NOT verified: what it looks like.** Four scripted attempts failed to place a camera inside
+these maps' water looking at the surface — the vantages computed from the face centroids and
+then from the `CONTENTS_WATER` brush bounds both landed in the void or inside geometry, and
+surf_demise's underwater view is a red-black dither at any position tried, which changes with
+neither `hl2_bottommaterial` nor `hl2_water` and is therefore something else. The material,
+the face count and the shader are all confirmed; **whether the underside now looks right is a
+question for someone who can swim.** `hl2_bottommaterial 0` reverts it in place.
+
+---
+
+## Patch 234 — a model with four skins and one missing material has three  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+surf_demise's other two names. Both are alternate skins, and **no prop on the map selects
+either of them.** Measured from the MDL skin tables and the LZMA-compressed sprp gamelump,
+not inferred:
+
+```
+tree_douglasfir01*_opt_*   skin 0 -> firbranch02_singlemat        785 props
+                           skin 1 -> firbranch02_singlemat_snowy    0 props   <- reported missing
+models/elly/bones/*        skin 0 -> Bone_Charred  61   skin 1 -> Bone_Blight  34
+                           skin 2 -> Bone_Pearl     0   skin 3 -> Bone_Poison   7
+                                                    ^-- reported missing
+```
+
+2350 static props, skin histogram `{0: 2309, 1: 34, 3: 7}` — skin 2 does not occur once — and
+no `prop_dynamic_override` among the 1179 entities names either model. `_snowy` is the snow
+variant of a map with no snow. The mapper packed blight, charred and poison and not pearl
+because those are the skins they used, which is not a fault.
+
+`Mod_HL2_LoadVTX` walks every skin family the MDL declares, tries each `cdtexture` directory
+with `LocateFile`, and when none hits leaves `shadername` pointing at the LAST path it tried.
+That name then fails to register, which is the report.
+
+**The fix:** record per `(skin, slot)` pair whether anything resolved, then a second pass —
+a skin that found nothing adopts the `shadername` of the first skin of the SAME slot that did.
+Slots are already contiguous at `skin[t*skin_count + s]` (matching `surf->ofsskins`), so the
+pass reads only its own slot and a missing skin can never adopt a different material's
+texture. Not counted as a miss when it fires; reported under `developer 1` with both names.
+`hl2_skinfallback` (default 1) turns it off.
+
+Effect here: both reports disappear and nothing on screen changes, because no prop selects
+either skin. The value is the other case — a prop that DOES select an unshipped skin now
+draws as its sibling (a plain fir branch, a blight bone) instead of a grey default-wall slab.
+
+**Deliberately not done:** filtering skins by what the static-prop lump actually instantiates.
+The sprp `Skin` field says exactly which families are live, so that is the precise fix — but
+it means plumbing per-map prop data into a model loader whose cache is shared across maps,
+and the sibling gets the same visible result here with none of that coupling.
+
+**Verified** — `logs/p233on.log`: all 12 douglasfir models and all 27 `elly/bones` models log
+the substitution by name, and surf_demise's count goes 3 -> 0 together with Patch 233.
+
+---
+
+## Patch 235 — the asset cache promised 526 files and had written 464, and nothing downstream could tell  *(APPLIED, engine — `build.ps1 -Engine`)*
+
+surf_sodacity's single missing material:
+
+```
+models/props/de_venice/venice_streetlight_1/venice_streetlight_1_lamp_off.vmt
+```
+
+It **exists in CS:GO** (352 bytes, VertexlitGeneric) and it **was listed at line 295 of the
+map's own cache manifest**. It had never been written to the cache directory. 62 of the 526
+files that manifest promised were absent from disk, and the manifest said `state 1` anyway,
+so `fs_automount` trusted it and did not mount CS:GO.
+
+### The root cause: the write could not express the path
+
+`FS_Cache_CopySome` wrote with `FS_WriteFile(<packkey>/<name>, …, FS_GAMECACHE)`.
+`FS_WriteFile` goes through `FS_OpenVFS`, which cleans the name into a `char[MAX_QPATH]` —
+**128 bytes** (`fs.c:3287`). The destination is a 45-character pack key plus a Source content
+path, and Source content paths run to ninety-odd characters, so the sum crosses 128 for
+exactly the deep ones:
+
+```
+materials/models/props/de_venice/venice_streetlight_1/venice_streetlight_1.vmt        124   written
+materials/models/props/de_venice/…/venice_streetlight_1_lamp_off.vmt                  133   REFUSED
+materials/models/props/de_nuke/hr_nuke/chainlink_fence_001/chainlink_fence_001.vmt    128   REFUSED
+```
+
+`FS_GetCleanPath` refuses with a **throttled** "filename too long", so the failures were
+neither visible nor counted. Patch 197 introduced this when it prefixed the per-pack key onto
+the relative name; the length was never anybody's decision.
+
+The write now goes to the SYSTEM path directly, exactly as `FS_OpenWithFriends` does
+(`fs.c:3232-3240`): the pack DIRECTORY is short enough to survive cleaning, and the content
+name is appended afterwards. Reads were never affected — the cache directory is mounted as a
+searchpath, so the name the engine asks for is the content path alone.
+
+### And the manifest must be a claim about files, not about names
+
+The write bug was survivable; the bookkeeping made it permanent.
+`FS_Cache_WriteManifest` listed every name SEEN and computed `state` from *"was this name in
+the previous visit's manifest"*, never from *"is this file on disk"*, and `FS_Cache_PrevHas`
+then skipped it forever on the strength of the previous visit having listed it. One failed
+copy, permanently claimed.
+
+- Every noted name now carries `FS_HV_CACHED` (the bytes are in the cache),
+  `FS_HV_ELSEWHERE` (served by a searchpath that is not one of the packs we mounted — the
+  map's own pakfile, or the base gamedir, both of which are still there on a cached load) or
+  `FS_HV_UNKNOWN` (the copy did not happen).
+- The manifest lists only `CACHED`, and completeness requires every name to be `!UNKNOWN`
+  **and** the set to have settled, which is Patch 197's original subset test kept intact.
+- **Manifest v3.** `FS_Cache_LoadPrev` and `FS_Cache_MapIsComplete` accept only 3, so every
+  v2 manifest re-proves itself once and the cache self-heals with no `fs_cache_clear`. That
+  matters beyond sodacity: `surf_4am` and `surf_garden` were also at `state 1` with 1 and 4
+  files absent.
+- Every skip path now says which of the six reasons it was, under `Con_DPrintf`, and
+  `WriteManifest` prints the shape of the visit and names the first file blocking the proof.
+  The cause above was found with those lines and could not have been found without them.
+
+**Consequence, stated plainly:** a map whose files genuinely cannot all be copied will never
+claim completeness again and will mount its real pack every time — a slower load instead of a
+wrong picture.
+
+### Verified — `cfg/testrun/p235.cfg`, `logs/p235.log`
+
+```
+visit 1   526 noted (526 in the cache, 0 elsewhere, 0 not copied), 62 files (12.7971MB) copied
+visit 2   275 noted, all already filed                            -> proven
+visit 3   fs_automount: surf_sodacity is cached, fs_automount_state 2, 0 unresolved at load
+```
+
+**62 copied is exactly the 62 that were missing.** The manifest is now v3, `state 1`, 533
+files, and all 533 are on disk (checked by name against the two cache trees). surf_sodacity
+reports **0 unresolved materials at the end of the map load while being served from the
+cache**, which is the whole of the original complaint.
+
+**Testing note worth keeping:** engine-side `Con_DPrintf` output did not reach `logs/*.log`
+with `developer 1` alone — `log_developer 1` was needed. The first pass at this concluded
+"no copy failures" from their absence, which was wrong. Plugin-side `Con_DPrintf` is not
+subject to whatever that is.
+
+**Not verified:** the cost of the extra state bookkeeping on the worst map in the library
+(`what_is_this`, ~6,900 names) was not timed. It is one byte per name and no extra I/O, so
+there is no expected cost, but no expected cost is not a measurement.
+
+---
+
+## FTESurf Build 38 (QC) — the banner draws on what is visible, not on the count  *(APPLIED, QC only — `build.ps1`)*
+
+`Gfx_DrawMissing` returned early on `hl2_unresolved < 1`, which counts every name the loader
+could not resolve including ones that are in the texdata string table and on no surface at
+all. It now returns early on `hl2_unresolved_visible` (Patch 233) and reports the raw count
+once it has decided to draw — "3 materials did not resolve" and "1 of them is visible" are
+different claims and the banner makes the honest one. Its third line points at `hl2_missing`,
+which now says what each name IS rather than whether a pack would help.
+
+**Verified** — `cfg/testrun/p233banner.cfg`, two screenshots on surf_aesthetic in one session
+with a different map loaded between them: `hl2_bottommaterial 0` gives
+`hl2_unresolved 1 / hl2_unresolved_visible 1` and the banner reads
+**"1 material did not resolve on this map / first: water/clear_beneath"**; `hl2_bottommaterial 1`
+gives 0/0 and nothing is drawn.
+
+**Not verified:** the case the change is FOR — a map with a nonzero count and a zero visible
+count. No map in the three tested has a texdata name that no face uses, so the branch that
+hides the banner has never fired on real data. If one turns up, `hl2_missing` labels it
+`named by the map but drawn by no face`.
+
+## Patch 236 — every world decal lost its program, its lightmap and its blend, silently  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+> *"some maps like bhop_futile or surf_rise, has transparency/masked textures or sprites, that
+> don't appear properly, they are not masked or alphaed correctly, and sometimes have a weird
+> coloured tint... I placed the 3 latest save-locks in positions on bhop_futile that is facing
+> some decals/sprites and they are not being masked, and are tilted blue? or green?"*
+
+**The entity list in the report is a red herring on these two maps, and that was worth
+establishing first.** Censused from the maps' own LZMA-decompressed entity lumps:
+`bhop_futile` contains **zero** of `info_projecteddecal`, `infodecal`, `prop_detail_sprite`,
+`env_sprite`, `env_sprite_clientside`, `env_sprite_oriented`, `env_spritetrail`, `beam_spotlight`
+and `point_spotlight` — its 330 entities are 105 `light`, 98 `trigger_teleport`, 51
+`func_illusionary`, 35 `trigger_multiple`, 29 `filter_activator_name` and little else.
+`surf_rise` has exactly one `env_sprite`. So nothing being looked at is a sprite entity: **18 of
+`bhop_futile`'s 68 world textures are `DECALS/*`, `CS_ASSAULT/*` and `DE_TRAIN/DECALGRAFFITI*`,
+painted straight onto world brushes and onto those 51 `func_illusionary`.**
+
+All fourteen of the map's packed decal VMTs are one shape:
+
+```
+LightmappedGeneric
+{
+	$vertexcolor 1   $vertexalpha 1   $translucent 1
+	$basetexture "Decals/ivy02"   $decal 1   $decalscale 0.5
+}
+```
+
+### What was happening
+
+`mat_vmt.c:1736` read
+
+```c
+else if (!Q_strcasecmp(st->type, "VertexlitGeneric") || st->decal)
+```
+
+and `LightmappedGeneric` is tested **below** it, at `:1801`. So `$decal 1` alone was enough to send
+a lightmapped world material down the VertexlitGeneric arm — every world decal in the library.
+
+On its own that is a lighting error. What made it a *rendering* error is the interaction with
+**Patch 232**, landed the same day: P232 appends `#VERTEXCOL#VERTEXALPHA` to `progargs` for
+`LightmappedGeneric` and `WorldVertexTransition` (`:1286-1296`), and it makes that decision
+**before** this reroute. So the type was still `LightmappedGeneric` when the args were chosen and
+`vmt/vertexlit` by the time they were used — and `vertexlit.glsl` declares neither permutation
+(`grep -c VERTEXCOL` is **0** there, against **3** in `lightmapped.glsl`).
+
+**The program then failed to load, and failed silently — not one line in the log.** Measured with
+`r_shaderpasses`, before:
+
+```
+decals/ivy02                noLIGHTMAP   sort=6  passes=6  prog=<none>
+concrete/concretefloor024a  HASLIGHTMAP  sort=5  passes=6  prog=vmt/lightmapped
+```
+
+`prog=<none>` costs the surface its program, its lightmap **and** its `progblendfunc` together; it
+falls back to generated fixed-function passes and draws as a flat opaque rectangle of the base
+texture's RGB — whatever the artist happened to leave in the fully transparent texels. Olive for
+`ivy02`, black for the big `func_illusionary` panels. That is the whole of "not masked, and tinted".
+
+It also explains the one measurement that made no sense at first: `hl2_translucent 0` and
+`hl2_translucent 1` were **pixel-identical** on those surfaces. There was no blend to withhold.
+
+P232 is right about what it tested — `surf_rise`'s `ivy_blendmodulate` (a `WorldVertexTransition`)
+and `ivy_basic` (a `LightmappedGeneric` with no `$decal`). Neither is a decal, so the
+`LightmappedGeneric` + `$decal` combination was never exercised.
+
+### The change
+
+`mat_vmt.c:1736` — route on what the material **says it is** first:
+
+```c
+else if (!Q_strcasecmp(st->type, "VertexlitGeneric") ||
+         (st->decal && Q_strcasecmp(st->type, "LightmappedGeneric")))
+```
+
+A `LightmappedGeneric` decal keeps `vmt/lightmapped` — the shader that actually implements the
+permutations it was handed — and still gets its `polygonOffset` from `:1937`. `st->decal` stays as
+the fallback for materials whose type this chain does not otherwise recognise.
+`WorldVertexTransition` needs no exclusion: its arm is at `:1443`, above this test.
+
+### Verified — `cfg/testrun/tint01..05.cfg`, `logs/tint01..05.log`, `bhop_futile`, the user's own save-locks
+
+```
+before:  decals/ivy02                     noLIGHTMAP   sort=6   prog=<none>
+after:   decals/ivy02                     HASLIGHTMAP  sort=6   prog=vmt/lightmapped#VERTEXCOL#VERTEXALPHA
+         decals/ivy03                     HASLIGHTMAP  sort=6   prog=vmt/lightmapped#VERTEXCOL#VERTEXALPHA
+         decals/decalstain002a            HASLIGHTMAP  sort=6   prog=vmt/lightmapped#VERTEXCOL#VERTEXALPHA
+         cs_assault/assault_crate_decal_1 HASLIGHTMAP  sort=6   prog=vmt/lightmapped
+```
+
+**Controls, chosen as materials this patch must NOT move, and which did not:**
+
+```
+concrete/concretefloor024a  sort=5   prog=vmt/lightmapped                       (plain lit wall)
+de_nuke/nuke_metalgrate_01  sort=5   prog=vmt/lightmapped#MASK=0.5#MASKLT       ($alphatest, no $decal)
+glass/combineglass001a      sort=11  prog=vmt/lightmapped#ENVFROMMASK#ENVTINT=… ($envmap+$translucent)
+```
+
+On screen, at save007: three large opaque black rectangles became **graffiti tags and a climbing
+ivy plant**, masked, blended and lit by the wall's own lightmap. At save005 a flat block became a
+soft-edged plaster-decay decal over brick. Screenshots `tint02_A_default.png` (before) and
+`tint05_s5/s6/s7.png` (after).
+
+### Two notes for whoever tests next
+
+- **`setpos` does not leave you in noclip here.** FTESurf's QC shadows the engine's command
+  (`sv_player.qc:581`) and its comment lists *"it forces MOVETYPE_NOCLIP and leaves you in it"* as a
+  reason not to, so a scripted shot falls out of the sky before the screenshot lands. The first cut
+  of `tint02.cfg` did exactly that and its A/B was worthless: **96.3% of pixels differed between
+  every pair**, which is a camera moving, not a shader changing. Issue `noclip` **once**, before the
+  first `setpos`, never between shots — it is a toggle.
+- **`sl_goto` is not reachable from a config.** It is a pure client command
+  (`SV_ParseClientCommand`), and the CSQC registers only `saveloc`/`timer`/`viewpos`/`saveloc_menu`
+  (`cl_saveloc.qc:179-196`), so the console reports `Unknown command` and the shot is taken at
+  spawn. Use `setpos x y z pitch yaw roll` with the values out of the save-lock's own `state.txt`.
+- **`gl_shader.c:6506`'s `[shader] … sort … prog …` line did not print once** across these runs
+  despite `developer 1` being set before the map. `r_shaderpasses` answered the same question and is
+  a console command rather than a developer print, so it is the better instrument; but the
+  `[shader]` line not firing is a separate, unexplained gap in the Patch 219 instrumentation.
+
+
+## Patch 237 — `$alphatestreference` was parsed and never read, and `$envmaptint "[0 0 0]"` meant "reflect everything"  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+> *"...they are not masked or alphaed correctly, and sometimes have a weird coloured tint"* — the
+> `surf_rise` half of the same report Patch 236 fixed on `bhop_futile`.
+
+Two independent one-line-class defects, both of which land on the same surfaces, because
+`surf_rise` builds its fences and grates out of materials that trip both at once:
+
+```
+soniccolours/sonicfence.vmt        soniccolours/sonicwallgratea.vmt
+    $alphatest 1                       $alphatest 1
+    $alphatestreference 0.3            $alphatestreference 0.3
+    $envmap "env_cubemap"              $envmap "env_cubemap"
+    $envmaptint "[0 0 0]"              $envmaptint "[0.02 0.01 0.01]"
+```
+
+### 1. `$alphatestreference` was dead
+
+Parsed into `st->alphatestref` at `:789-790` and **never read again** — the cutoff was the constant
+`#MASK=0.5` (`:1175`) and `alphaFunc GE128` in the pass arm. Source's default is 0.5, so the
+constant was right for materials that stay silent and wrong for every material that says otherwise.
+A chainlink authored to survive down to alpha 0.3, cut at 0.5, loses its thin wires and opens holes
+— the "not masked correctly" half on that map.
+
+Now `#MASK=<ref>`, defaulting to 0.5 when the key is absent, clamped to `[0.01, 0.99]`: a material
+writing 0 would discard nothing and one writing ≥1 would discard everything, and neither is what
+an alpha-test reference means.
+
+### 2. `$envmaptint "[0 0 0]"` inverted into full white
+
+```c
+if (st->envmaptint_b > 0.0f)                       /* :1300, before */
+    Q_snprintfz(envmaptint, …, "#ENVTINT=%f,%f,%f", …);
+else
+    Q_snprintfz(envmaptint, …, "");
+```
+
+The test asks whether the value is non-zero, which cannot distinguish **"the mapper said nothing"**
+from **"the mapper said none"** — and those are opposite instructions. With no `#ENVTINT` emitted
+the shader falls back to its own `#ifndef ENVTINT #define ENVTINT 1.0,1.0,1.0`
+(`lightmapped.glsl:62-64`, `vertexlit.glsl:62-64`), and `diffuse_f.rgb += cube_t * refl`
+(`lightmapped.glsl:227`) then adds the cubemap **at full white on the material that asked for no
+reflection at all.** `surf_rise`'s cubemap is its own sky (`skybox/surfrisesky2*`), which is what
+made the wash blue.
+
+`sonicwallgratea` writes `[0.02 0.01 0.01]`, whose blue is non-zero, so it kept its tint and
+rendered correctly all along — which is exactly why this presented as "some surfaces and not
+others" rather than as one broken thing.
+
+Fixed by recording presence (`envmaptint_set`) rather than inferring it from the value.
+`$envmapsaturation` had the identical bug at `:1307` and additionally used the **red** component to
+decide for all three; `envmapsat_set` now carries it.
+
+### Verified — `cfg/testrun/tint06.cfg` / `tint07.cfg`, `logs/tint06.log` / `tint07.log`
+
+`surf_rise`, the cubemap-patched clones VBSP actually draws:
+
+```
+maps/surf_rise/…/sonicfence_8960_-4352_1280       prog=vmt/lightmapped#MASK=0.300000#MASKLT#ENVTINT=0.000000,0.000000,0.000000
+maps/surf_rise/…/sonicfence2_8960_-4352_1280      prog=vmt/lightmapped#MASK=0.300000#MASKLT#ENVTINT=0.000000,0.000000,0.000000
+maps/surf_rise/…/sonicwallgratea_8960_-4352_1280  prog=vmt/lightmapped#MASK=0.300000#MASKLT#ENVTINT=0.020000,0.010000,0.010000
+maps/surf_rise/…/sonicwallgrateagrey_…            prog=vmt/lightmapped#MASK=0.300000#MASKLT#ENVTINT=0.010000,0.010000,0.020000
+```
+
+Was `#MASK=0.5` on all four, and no `#ENVTINT` at all on the two fences.
+
+**Controls, on `bhop_futile`, which must not move:**
+
+```
+de_nuke/nuke_metalgrate_01  $alphatest 1, NO reference  -> #MASK=0.500000#MASKLT   (default preserved)
+decals/ivy02                Patch 236                   -> vmt/lightmapped#VERTEXCOL#VERTEXALPHA (still fixed)
+concrete/concretefloor024a  plain lit wall              -> vmt/lightmapped         (untouched)
+```
+
+On screen, `surf_rise`: the fence mesh masks correctly against the sky and the grates read as
+grates. **Stated plainly: there is no controlled before/after screenshot for `surf_rise` — no
+pre-patch capture exists from that vantage, so the shader-argument table above is the evidence and
+the screenshot (`tint06_rise_spawn.png`) is only consistent with it.**
+
+### Still open in this area, not done here
+
+- `mat_vmt.c:588-591` drops every VMT sub-block whose name begins `>` `<` `=` (`>=DX90` and
+  friends), parsing it with `st == NULL` at `:727`, so a `$translucent`/`$alphatest` written inside
+  a DX-level block is thrown away.
+- `mod_vbsp.c:1346` tests `out->flags & TIHL2_TRANS` before `out->flags` is written (`:1352`), so
+  `SURF_TRANS` has never done anything; the suffix it would append (`#ALPHA=1`) means opaque
+  anyway, and `:1383` lowercases the name while the GLSL define is case-sensitive.
+- `mat_vmt.c`'s `Sprite` arm is unconditionally `blendFunc add`, and `SpriteCard` is unrecognised
+  and degrades to `vmt/unlit`.
+- `img_vtf.c:41-42` loads DXT1 as `PTI_BC1_RGB` without reading `TEXTUREFLAGS_ONEBITALPHA`, and
+  `:70-71` returns a **non-NULL** texture with 0-byte mips for the fourteen formats it does not
+  handle, so an unsupported VTF is a silent degenerate rather than an error. Measured: **no texture
+  on `bhop_futile` or `surf_rise` is affected** — every one is DXT5 or plain DXT1.
+
+
+## Patch 238 — the kill switch Patch 236 should have shipped with  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+Patch 236 stopped `$decal` hijacking a `LightmappedGeneric` material into the model
+shader. It is the widest material change in this series — it moves **every decal
+material in the library** onto the lightmap: 18 of `bhop_futile`'s 68 world textures,
+plus every decal brush face in the 224 maps that also place `infodecal`. A change that
+broad should be answerable with a cvar and a map reload rather than a plugin rebuild,
+and 236 shipped without one.
+
+`hl2_decallit` (default 1, `CVAR_SHADERSYSTEM`, MAPOPTIONS, registered beside the other
+`hl2_*` switches in `mod_vbsp.c`):
+
+- **1** — a `LightmappedGeneric` decal keeps `vmt/lightmapped`, the shader that actually
+  implements the permutations it is handed.
+- **0** — route on `$decal` alone, exactly as every build before 236 did. Which is to say:
+  reproduce the bug on demand. Worth spelling out, because "off" here is not a cheaper
+  or plainer rendering path, it is the broken one — the surface loses its lightmap and,
+  since Patch 232 hands `vmt/vertexlit` two permutations it does not declare, its whole
+  program, and draws as a flat opaque rectangle of whatever the artist left in the
+  transparent texels.
+
+The guard is written into the existing condition rather than around it:
+
+```c
+else if (!Q_strcasecmp(st->type, "VertexlitGeneric") ||
+         (st->decal && (!hl2_decallit || !hl2_decallit->ival ||
+                        Q_strcasecmp(st->type, "LightmappedGeneric"))))
+```
+
+so with the cvar unregistered (the `!hl2_decallit` arm) the behaviour is 236's, not the
+old one — a plugin loaded before `mod_vbsp.c` registers its cvars does not silently
+regress.
+
+---
+
+## Patch 239 — the VTF loader returned a texture made of nothing, and said nothing  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+> *"...transparency/masked textures or sprites, that don't appear properly"* — the third
+> and largest cause behind that report, and the one the first census missed by looking at
+> only two maps.
+
+### The mechanism, which is the whole point
+
+An `IMAGE_FORMAT` the loader did not map returned `PTI_INVALID`. `PTI_INVALID`'s block
+size is **zero bytes** — `Image_BlockSizeForEncoding` starts its byte count at 0 and the
+`TF_INVALID` arm never writes it. Every mip level therefore computed `datasize` 0,
+`filedata` never advanced, and `Image_ReadVTFFile` returned a **non-NULL** texture
+containing nothing at all. Downstream, `GL_LoadTextureMips` found a null format entry,
+the texture was marked `TEX_FAILED`, and **not one line was printed by anybody**. The
+surface drew as the missing-texture placeholder and the log was silent.
+
+That is the worst available shape for a bug: indistinguishable from a texture the map
+forgot to pack.
+
+### Scale — measured across all 1310 maps, not sampled
+
+808 VTF instances in **112 of 1310 maps (8.5%)** took that path.
+
+| format | instances | now |
+|---|---:|---|
+| ABGR8888 (1) | 419 | `PTI_RGBA8`, bytes reversed in place |
+| Strata BC6H (71) | 193 | `PTI_BC6_RGB_UFLOAT` |
+| Strata BC7 (70) | 182 | `PTI_BC7_RGBA` |
+| BGRA4444, BGR565, A8, 2× \_BLUESCREEN, UVWQ8888, UVLX8888 | 14 | a **named error** instead of silence |
+
+Formats **70 and 71 are not in any published `IMAGE_FORMAT` enum** — they are Strata
+Source's, the VTF 7.6 branch Momentum Mod ships. They were identified from the files:
+both are 16 bytes per 4×4 block by exact file-size arithmetic, 70's blocks are 99.7%
+BC7 mode 6 with zero invalid blocks (a textbook encoder signature), and 71 appears only
+on `.hdr.vtf` cubemaps, which is BC6H's purpose.
+
+### Also fixed here
+
+- **`$alphatestreference` on the `Sprite` arm.** The arm emitted `map` / `rgbGen vertex` /
+  `blendFunc add` with no branch at all. That reads as "unconditionally additive" and
+  mostly is not: `progblendfunc` rewrites pass 0's blend on the way out, so `$translucent`
+  and `$additive` were already being corrected by accident. **`$alphatest` is the case with
+  nothing to correct it** — it sets no `st->blendfunc`, so no `progblendfunc` is emitted,
+  the pass keeps `blendFunc add`, and the `alphatest ge128` the tail writes is a
+  *top-level* directive that `gl_shader.c:5719` explicitly lists as a harmless no-op there.
+  A cutout was drawn as an unmasked additive glow: **217 of the 413 Sprite materials maps
+  pack (53%)**. `$vertexalpha` was dropped too — `rgbGen vertex` with no `alphaGen` beside it.
+  Note `alphaFunc` accepts only `gt0`/`lt128`/`ge128`; an unrecognised token *clears*
+  `SBITS_ATEST_BITS` and matches nothing, i.e. disables the test, so the reference is
+  quantised to the two thresholds that exist rather than written as a number.
+- **The 7.3+ resource table offset.** Valve's header ends `numResources` followed by
+  `pad5[8]`; the struct omitted the padding, so `filedata+sizeof(*vtf)` addressed the table
+  eight bytes — exactly one entry — early. Measured: `headerSize == 80 + numresources*8`
+  in **3807 of 3807** v7.3+ files, bytes 72..79 zero in all of them, first real tag at 80.
+  Harmless by luck so far (the short walk fell through to the `headerSize` path, which
+  computed a byte-identical offset every time); that luck ends at the first 7.6 file whose
+  image resource is last in the table.
+- **`DXT1 + TEXTUREFLAGS_ONEBITALPHA`.** vtex records cutout intent in the header flags and
+  keeps writing plain DXT1 — which is why `IMAGE_FORMAT_DXT1_ONEBITALPHA` (20), the case
+  already handled, appears **zero** times in the library while the flag appears on ordinary
+  DXT1. Honest scope: 2 instances, one file, and that file decodes no transparent texel.
+  Prevention, not a fix.
+- **The low-res format shift.** Byte 1 was shifted 16, colliding with byte 2, and the
+  little-end-first assembly was then wrapped in a redundant `LittleLong`. Exposure nil.
+- **`SURF_TRANS` deleted, not repaired** (`mod_vbsp.c`). `else if (out->flags & TIHL2_TRANS)`
+  read `out->flags` eight lines before the loop assigns it, and `out` comes from
+  `GMalloc → Z_Malloc → calloc` — so the test was `0 & 0x10` on every texinfo of every map
+  ever loaded. Not stale data: deterministically zero. Repairing the variable would still
+  be wrong — VBSP registers world textures through `Shader_DefaultBSPLM`, which reads no
+  `#` arguments, and `R_LoadShader` truncates the name at the first `#` before the material
+  loaders see it, so a map-side argument can never reach `mat_vmt.c`. Measured: correcting
+  it would rename **159,651 texinfos** and change zero pixels. And there is nothing left to
+  say — of SURF_TRANS materials whose VMT resolves, **95.5%** declare translucency in the
+  VMT, which `mat_vmt.c` already acts on.
+- **`r_texdiag` now reports every VTF** — version, format, flags, resulting `PTI_`, size.
+  The absence of exactly this is what let the bug live.
+
+### Verified — `cfg/testrun/tint08.cfg`, `logs/tint08.log`
+
+**Zero** `unsupported VTF image format` lines across four maps. Counts match the static
+census exactly:
+
+```
+surf_jumble    fmt=1  ABGR8888 x73   <- census said 73
+surf_frost     fmt=1  ABGR8888 x17   <- census said 17
+               fmt=70 BC7      x17   <- census said 17
+bhop_arcane    (regression control)  DXT1 x126, DXT5 x80, unchanged
+```
+
+**Byte order settled empirically, not by eye** — the risk with an in-place reverse is that
+getting it backwards looks plausible while swapping red and blue. Three `surf_frost`
+files whose names state their colour, decoded both ways:
+
+```
+neonbluelight.vtf   patch: R= 43 G= 78 B=255  (blue)   no-swap: R=255 G=255 B= 78 (yellow)
+neoncyanlight.vtf   patch: R=  0 G=255 B=255  (cyan)   no-swap: R=255 G=255 B=255 (white)
+dark_metal.vtf      patch: R= 14 G= 14 B= 14  (dark)   no-swap: R=255 G= 14 B= 14 (red)
+```
+
+`screenshots/tint08_frost.png` agrees: cyan neon strips and ice-brick (BC7) walls, drawing.
+
+### Stated plainly: BC6H is UNVERIFIED at runtime
+
+All 193 BC6H instances are baked `c<x>_<y>_<z>.hdr.vtf` cubemaps, and **FTE never requests
+the `.hdr` sibling for a cubemap** — the `$hdr:` prefix in `mat_vmt.c` exists only for
+`$hdrcompressedtexture` sky faces. `surf_epiphany` (68 BC6H) and `bhop_arcane` (14) both
+loaded **zero** of them. So the BC6H mapping is correct-by-construction and inert: it is
+prevention, and the 601 ABGR8888 + BC7 instances are the part that is actually fixed and
+actually measured.
+
+---
+
+## Patch 240 — `basevelocity` had eleven readers and no writer  *(APPLIED, engine — `build.ps1 -Engine`)*
+
+> *"booster pads don't boost ... Do we need to implement basevelocity for correctness?"*
+
+**The engine already implemented it.** `pm_source.c` consumes `pmove.basevelocity` in
+eleven places — the Z half-step in `PMSrc_StartGravity` and the add/move/subtract
+sandwiches around `PMSrc_WalkMove` and `PMSrc_AirMove`. The only writer in the whole tree
+is `svhl_game.c`'s, behind a `GT_HALFLIFE`-only `FL_BASEVELOCITY` test, so for a
+`GT_PROGS` game the field was permanently `0 0 0` and all eleven reads were dead code.
+That is what made it look absent: **two comments written in Build 37 claim
+`pm_source.c` has "not one reference" to it, and `ENGINE_PATCHES.md` repeated it.**
+Both are corrected in place rather than deleted, because the claim had been quoted onward.
+
+### The change
+
+An optional QC field, the `fs_forceduck` idiom: `sv_user.c` reads `.fs_basevelocity` into
+`pmove.basevelocity` immediately after `PMSrc_LoadState` and **zeroes the field as it
+reads it**. A mod that does not declare the field gets a cached NULL and nothing happens —
+`quakers`, sharing this tree, is unaffected.
+
+**The ordering is the entire design.** Within one `SV_RunCmd` the engine runs
+PlayerPreThink → move → touch loop → PlayerPostThink. Reading and clearing at the *load*
+means a trigger's `.touch` write is consumed by the *next* command and destroyed as it is
+consumed: one touch buys one command of push, and standing in the volume re-arms it every
+command. That is Source's "recomputed, not accumulated" with nothing having to remember to
+switch it off. Clear it after the touch loop instead and you erase what QC has just
+written — basevelocity reads zero forever while the code looks correct.
+
+**The else-branch is not optional.** `pmove` is a single global shared by every client's
+`SV_RunCmd`, and `pm_source.c` clears only `basevelocity[2]` — X and Y are never cleared
+there at all. Without it, client B inherits client A's booster and rides it forever, and
+it only appears with more than one player. Also cleared in the MVD-spectator setup, and in
+`cl_pred.c` (where it is otherwise a listen-server double-apply, since the client has just
+had the server write the local player's carrier into the same global).
+
+### QC side
+
+- `trigger_push`'s continuous arm is now `other.fs_basevelocity = dir * spd` — Source's
+  actual `SetBaseVelocity` — replacing the raise-the-along-component approximation that
+  stood in while basevelocity was believed unavailable. The `Once` arm still writes
+  `.velocity`: `ApplyAbsVelocityImpulse` is meant to stay with you.
+- **`.Speed`, and this one was live.** 885 `trigger_push` entities write the capitalised
+  spelling against 4608 lowercase, and the touch read `self.speed` bare — so **~16% of
+  every push in the library silently ran at the default of 100**. `.Speed` was declared and
+  read nowhere. The spawn function's `if (!self.speed) self.speed = 100;` had to move into
+  the touch as well: writing the default into `.speed` would make `SV_Key2` return it and
+  permanently shadow the capital spelling. (100 is right; the FGD's suggested 40 is not —
+  `CTriggerPush::Spawn` applies 100 when the key is absent.)
+- **`AddOutput basevelocity`** writes the field, targeting `!activator` (the player).
+- **`OnJump` is fired**, from `SV_TriggerIOTouch`, detected by comparing the pre-move ground
+  state `PlayerPreThink` stamps against the post-move state — so it fires on the exact
+  command the jump happens, and walking off a ledge fails the upward-velocity test.
+
+### Verified — `cfg/testrun/tint10.cfg` / `tint11.cfg`
+
+`bhop_arcane`'s `trigger_push` `*86`: speed 1800 along +Y, brush bounds read from the
+models lump as x 6848..6976, y 3072..3584, z −128..0. Player dropped in at y=3100:
+
+```
+t=0.0   6912.0  3406.0   -107.3     carried +306 in ~0.17s  ~= 1800 u/s
+t=0.3   6912.0  3604.0   -125.6     crossed the whole volume, 20 units past its edge
+t=0.6   6912.0  3604.0   -208.4     Y FROZEN, falling
+t=1.2   6912.0  3604.0   -590.0     Y frozen
+t=1.8   6912.0  3604.0  -1259.6     Y frozen
+```
+
+**That is the discriminating result.** The old code added to `.velocity`, so on leaving the
+volume the player would still carry 1800 u/s and gain ~1000 units of Y per sample. Instead
+Y is identical to the decimal across 1.5 s of falling: the carrier was withdrawn the
+instant the volume ended, and the player's own velocity was never touched. Nothing else in
+the engine writes `pmove.basevelocity` for a QuakeC game, so rising at all proves the field
+reaches pmove.
+
+`bhop_futile` census: `nothing fires 'OnJump'` and `AddOutput basevelocity` are both gone;
+7 unhandled remain (`func_illusionary`, `light`, `filter_damage_type`, `light_environment`,
+`env_fog_controller`, `water_lod_control`, and the deliberately blocked
+`sv_airaccelerate`, which confirms the map-command allow-list still refuses).
+
+### The number nobody will like, stated up front
+
+**`basevelocity` Z is an ACCELERATION in Source, not a velocity.** `StartGravity` does
+`velocity[2] += basevelocity[2] * frametime` and then zeroes Z, and FTE's port is faithful.
+So `bhop_futile`'s `basevelocity 0 0 1140` is worth 1140 × one tick — about **11 u/s at
+bhop's 100 Hz** — and not the 1140 u/s launch the number looks like. The six pads now fire,
+and they now do exactly what they would do in Source, which is *almost nothing*. That is a
+property of the ported map, not of this code: the port tool appears to have written a
+velocity where Source wants an acceleration, and the factor between them is the tick rate.
+Horizontal basevelocity has no such scaling, which is why `trigger_push` at speed 1800
+above is dramatic and the pads are not.
+
+### Not predicted, and saying so is part of shipping it
+
+`basevelocity` is not in `pmsourcestate_t` and is not networked; `cl_pred.c` has no
+reference to it. The client replays unacked commands without the push, so inside a volume
+the predicted origin trails the server's by roughly (push speed × unacked time) — very
+visible on entry and exit at speed 1800. It is **bounded, not cumulative**: the replay
+restarts from the last acked authoritative state every server packet. Predicting it needs
+the field in `pmsourcestate_t`, a network path for it, and CSQC knowledge of the volume —
+or `trigger_push` moved into the engine's physent set, which is what Source does and is a
+much larger job.
+
+
+## Patch 241 — the jump adds to a rise it was handed, and a teleport can hand it 140  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+Reported as: *"I believe I've gotten quake 2 double bounce / jumped before? where you jump, and I
+got teleported, and the next frame I guess I was on the floor and got 'bounced' even higher,
+combining 2 jumps, this isn't source accurate."*
+
+It is exactly that, it is reproducible on paper, and it is the other half of what Patch 168
+removed.
+
+**The mechanism.** Stock Source ASSIGNS the jump impulse when `ducked || ducking`
+(`gamemovement_momentummod.cpp:2474-2487`) and ADDS otherwise. That assign was doing two jobs:
+buying back the duplicate `FinishGravity` on a jump tick, and **capping the jump when you arrive
+already rising**. Patch 168 kept the first job — properly, by dropping the duplicate — and quietly
+dropped the second, so from Patch 168 to Patch 237 there was **no state in which the impulse was
+capped**, where stock Source capped it in exactly the state a surfer spends most of their time in.
+
+What that opens, with every step already in the tree:
+
+- `PMSrc_CategorizePosition` (`pm_source.c:1685`) calls you grounded with up to
+  `PMSRC_NON_JUMP_VELOCITY` = **140 u/s** of rise still on the clock.
+- `pm_groundtracedist` is 2, so you count as standing on a floor you are not touching.
+- `trigger_teleport_touch` (`sv_entities.qc:1632-1662`) places you **one unit** above the
+  destination with your velocity intact — which is Source's own `tmp.z++` and is correct.
+- `pm_autobunny 1` re-fires the jump on the first grounded tick with no button release, and
+  `pm_fixedges` self-disables while jump is held (`pm_source.c:1783-1784`).
+
+```
+apex = (inbound + 268.3281573)^2 / 1600
+    inbound   0  ->   45.0     the whole point of normalising
+    inbound 100  ->   84.8
+    inbound 140  ->  104.2     2.3x a jump, out of a teleport
+```
+
+**The fix is not an assign.** An unconditional assign is what Patch 168 was right to refuse — it
+deletes rise you *earned*. Instead `PMSrc_CheckJumpButton` undoes the half-step `StartGravity` just
+took, recovering the velocity the tick was entered with, and discards it only if it is upward:
+
+```c
+inbound = pmove.velocity[2] + (ent_gravity * movevars.gravity * 0.5f * pms_frametime);
+if (!movevars.jumpaddrise && inbound > 0)
+    pmove.velocity[2] -= inbound;
+pmove.velocity[2] += flMul;
+```
+
+From rest that subtracts exactly zero, so every pinned number is untouched; from a handed rise it
+collapses to the from-rest case. Only rises are discarded — a downward inbound cannot normally
+occur (`FullWalkMove`'s closing `if (onground) velocity[2] = 0`) and discarding it would be a buff.
+
+**`pm_jumpaddrise`**, `CVAR_SERVERINFO`, default **0** (clamp), `1` restores build 38 byte for
+byte. Registered exactly like `pm_normalizejump`: `sv_phys.c:107` declaration, `:2883` marshal,
+`sv_main.c:5929`/`:6042` extern and register, `pmove.h:199` field, `cl_main.c:3281-3286`
+serverinfo mirror. **It is in `pms_lockedmovevars[]`** (`sv_phys.c:2944`) — a cvar that changes
+jump height and that a server can quietly flip is the whole reason that table exists. The
+client-side read is a bare `Q_atof` and that is correct here because the default is 0, unlike the
+`pm_normalizejump` trap documented two lines above it; the comment says so, so it does not get
+"fixed".
+
+**A PINNED SELF-TEST NUMBER WAS DELIBERATELY CHANGED.** The case that read
+
+```
+normalized: adds to inbound rise    (100 + I)^2 / 2g  =  84.79102
+```
+
+asserted the old behaviour as correct, with a comment explaining why an assign would be wrong. The
+comment is still right about assigns and is preserved; the case is now `pm_jumpaddrise 1`'s, and
+the default gets four new ones. Measured, `pm_selftest`, twice in one session, identical:
+
+```
+ok  stock: standing jump height              43.01004     unchanged
+ok  stock: crouch-jump height                45.00000     unchanged
+ok  normalized: standing jump height         45.00000     unchanged
+ok  normalized: same height at 100Hz         45.00000     unchanged
+ok  clamped: inbound 100 still reaches 45    45.00000     new  (was 84.79)
+ok  clamped: inbound 140 still reaches 45    45.00000     new  (was 104.21)
+ok  clamped: from rest is unchanged          45.00000     new
+ok  clamped: a FALL is left alone            17.70898     new
+ok  addrise 1: build 38 adds to the rise     84.79102     the old case, under the cvar
+ok  addrise 1: from rest is still 45         45.00000     new
+```
+
+**The crouch hull was checked and is CORRECT — do not change it.** Reported belief: *"when you're
+in the air and duck, you lose hull from the top and bottom"*. `PMSrc_FinishDuck`
+(`pm_source.c:1897-1917`) raises the **feet** by the full 18 in air and leaves them alone on the
+ground, so the box shrinks from the bottom in air and from the top on the ground, never from both.
+`gamemovement_momentummod.cpp:4174-4203` does the same — `viewDelta = hullSizeNormal -
+hullSizeCrouch`, the **full** delta, not half. Nothing changed; eight cases were added so it cannot
+drift, the load-bearing one being `eye: drops by exactly the hull delta = 0`, which is what makes
+the absolute eye position not move during a mid-air crouch. The origin step itself is not pinned
+here: `FinishDuck` calls `CategorizePosition`, which traces, and `pm_selftest` runs with no map —
+the same reason `jumpzoffset` is held at 0 in the jump block.
+
+**Related, and the same belief was right:** `pm_normalizejump 1` makes every jump 45.0 units — the
+crouch-jump height — standing or ducked, free of tick rate. FTESurf already standardises on the
+number Momentum standardises on.
+
+**What the clamp costs.** Any rise you were carrying into a grounded tick is now worth nothing to a
+jump, and `rampoff` is *not* consulted — so a landing that clips you upward off a shallow ramp and
+still counts as standable no longer compounds. Stock Source caps that case too whenever you are
+ducked, which is most of surf, so this is closer to Source rather than further from it. If a route
+on a shipped map depended on it, `pm_jumpaddrise 1` is the way back and the self-test names the
+number it restores.
+
+**Not done, and deliberately:** exempting ramp-given rise by testing `pmove.rampoff <
+PMSRC_BOARD_AIRGATE`. It is a proxy for "the rise came from a ramp", not the thing itself, and it
+puts a 0.08 s cliff in the middle of a real surf situation — a player who leaves a ramp still
+rising and jumps 0.09 s later would be treated differently from one who jumps at 0.07 s.
+
+### Two placements that claimed ground contact they never made (QC, same build)
+
+Both are consistency fixes and **neither closes the jump hole** — `PMSrc_Tick` runs
+`CategorizePosition` (`pm_source.c:2732`) *before* `FullWalkMove`, so the flag `sv_user.c:7944`
+loads out of the edict is overwritten by a fresh trace before `CheckJumpButton` reads it. Nor does
+`trigger_teleport_touch:1662`, the sibling they are being made to match. What the flag really
+drives is the QC's own picture — `STAT_FS_FLAGS`, the HUD's ground regime, `Board_Frame`'s segment
+kind, the bhop dwell timer — plus a usercmd that runs zero ticks and reaches no
+`CategorizePosition` at all.
+
+- `trigger_teleport_relative_touch` (`sv_entities.qc:1894`) — clears `FL_ONGROUND` like both
+  siblings, and reads `SV_Key2(self.StartDisabled, self.startdisabled)` instead of the raw field,
+  which its own spawn function has always done. 276 instances across 44 maps.
+- `SV_SaveLocLoad` (`sv_saveloc.qc:1185`) — clears it after the placement. **In `Load`, not in
+  `Place`**, which is where it was first written and would have been wrong:
+  `SV_SaveLocHoldFrame:1517` re-calls `Place` every tick the origin has drifted, so the clear would
+  land mid-park and flicker the ground flag under a player who is demonstrably standing still.
+- `SV_ZoneMove` (`sv_zones.qc:444`) is deliberately left alone: it zeroes `.velocity`, so there is
+  no residual rise to convert into anything.
+
+## FTESurf Build 39 (QC) — the HUD had three clocks for two quantities  *(APPLIED, QC only — `build.ps1`)*
+
+Four reports, and the first three are one bug.
+
+> *"one will say I lost -169 e and the other will read -179 e and I don't know which is true? … the
+> energy reading in the center is slightly wrong when you are holding 'load' … it starts at 45~ and
+> counts up to 50 and then when I land it jumps back to zero … the ideal strafe speed indicator
+> doesn't update correctly when on ramps, it tells you the correct non-ramp speed."*
+
+### 39a — one clock
+
+`HUD_Draw` built its two inputs from three unrelated sources:
+
+```c
+vel = getstatf(STAT_FS_VELOCITY)            the SERVER's velocity, one snapshot old
+org = getproperty(VF_ORIGIN)                the renderer's PREDICTED eye
+org_z -= getstatf(STAT_VIEWHEIGHT)          ...minus the SERVER's eye height
+```
+
+`VF_ORIGIN` is `simorg_z + 1/16 + pv->viewheight + bob + pv->crouch` (`view.c:1677-1707`) and
+`pv->viewheight` is the **predicted** eye height (`cl_pred.c:1388`, Patch 132b) while
+`STAT_VIEWHEIGHT` is the server's — so the subtraction did not cancel. Energy is `z + |v|^2/2g`, so
+all of it landed in the readout: `pv->crouch` (FTE's stair smoothing, ±15, on every step), the eye
+lag through a duck, the `1/16` lift, and a term linear in `v_z` from the org/vel skew that sweeps
+one way across a jump arc.
+
+**The fix was already in the engine and this tree had never declared it.** FTE publishes the
+predicted player state to CSQC as `pmove_org` / `pmove_vel` / `pmove_onground`
+(`pr_cmds.c:13350`, written every frame in `CSQC_ChangeLocalPlayer`, `pr_csqc.c:174-189`).
+`pv->simorg` is the **feet** — no eye height, no bob, no smoothing — and `CL_PredictMove`
+(`cl_pred.c:1394-1427`) writes `simorg` and `simvel` from the same predicted state at the same
+simulation time, both from `to.state` or both lerped with one fraction. A matched pair by
+construction.
+
+A grep of the whole tree before this build found no mention of any of the three. The reason is a
+comment: `sv_main.qc:69-74` asserted *"Movement is engine-side, so CSQC has no predicted state to
+read from"*. The first half is true and the second does not follow. Corrected in place.
+
+New `HUD_Feet()` / `HUD_LiveVel()` in `cl_hud.qc`, used by `HUD_Draw` and `HUD_SplitSample` — which
+carried a hand copy of the same two lines, with a build-30 comment warning that a copy which stops
+matching its original is how the contract gets broken. It was right; both copies were wrong the
+same way, which is not the same as agreeing. **Call `HUD_Feet` first**: it sets `fs_src_pred`, and
+`HUD_LiveVel` reads that rather than deciding for itself, because taking one source for the origin
+and the other for the velocity is the exact skew this build removes. `onground` comes from
+`pmove_onground` for the same reason — `HUD_UpdateJumpRef` was latching `fs_jump_z` against a
+predicted origin and a lagged flag, which its own essay admits four units of.
+
+Unchanged and must stay so: the ghost path (`fs_gh_bodyfeet`), the replay path (`fs_wt_on`, whose
+`fs_wt_org` is already feet), and the save-lock `STAT_FS_HOLDVEL` substitution — the server really
+does zero `.velocity` every parked tick, so `pmove_vel` is a true zero for the same reason the stat
+is, and the substitution is applied *after* the source choice.
+
+`hud_predicted 0` restores build 38 exactly. **Set it after the map loads** — the HUD's cvars are
+registered by csprogs, so a pre-map `hud_predicted 0` is silently an unknown command and the run
+comes out on the default path while claiming to be the control. That is what the first attempt at
+the A/B did, and the new `src` debug row is what caught it.
+
+**Measured, two processes, same scripted arc, `surf_aesthetic`:**
+
+```
+                E across the arc (v_z from +193 to -166)
+hud_predicted 1   46  46  46  46  44        flat
+hud_predicted 0   44  48  46  24  40        the report
+```
+
+46 rather than 45 is correct: `pm_jumpzoffset 1.5` pins takeoff 1.5 units above the surface, so the
+apex is 45.0 + 1.5 above the ground `fs_jump_z` was latched from. Standing still the two sources
+disagree by 0.11 units, which is the `1/16` plus the eye residue, and is the size of what was
+removed.
+
+### 39b — which of -169 and -179 was true
+
+`board_losse` (`cl_board.qc:624`) is `(vin.n)^2/2g` — a closed form for an orthogonal projection,
+with no sampling in it. `seg_bd_de` was `Strafe_Energy(org,vel) - Strafe_Energy(org,vin)`. Those are
+not the two ends of one clip: the engine latches `boardvelocity` **inside** `TryPlayerMove`
+(`pm_source.c:1151`), after `StartGravity` and before `FinishGravity`, while `vel` is the
+end-of-tick value. Half a step of gravity sits between them, unpaired because both energies are
+evaluated at the same origin, so the height it was exchanged with is missing. With `G = g*dt = 12`:
+
+```
+e - eb  =  -(v.n)^2/2g  +  (G^2/4 - G*v'z)/2g  =  -(v.n)^2/2g + 0.0225 - 0.0075*v'z
+```
+
+`v'z` is large and negative on a board, so the column read systematically less negative than the
+panel, by ten units at a touchdown around -1330 u/s, and the error **grows with the speed of the
+landing** — worst exactly where the reading matters most. **The panel's -179 was true.**
+
+The comment at `cl_board.qc:1977` claimed the two "agree by construction rather than by
+coincidence". Corrected in place. Both now come out of one new function, `Board_StepE`, on the same
+latched pair; the segment boundary is `eb = e + board_stepe` and the row is `-board_stepe`, so the
+telescoping the surrounding essay cares about is exact (air closes at `e + stepe`, board step is
+`-stepe`, ramp opens at `e`). `Board_StepE` is also called for **every** board the engine counted,
+not only those past the 100/25 grading gate, which is the same reason `boarded` is ungated.
+`hud_board_exact 0` restores build 38.
+
+### 39c — the strafe target, instrumented rather than guessed
+
+The ramp gate (`cl_hud.qc:2246`) has four ways to fail and the else branch substituted the flat-air
+formula for all of them — a figure `sh_strafe.qc:289` puts at 1.8x to 6x the real ramp target, and
+it mis-scales the bar with it because `cscale` falls back to bare `aircap`. Which route fires had
+not been established, and guessing is what this project's own test notes warn against.
+
+**Instrumented first.** `fs_ramp_why` (`fresh`/`held`/`flipped`/`none`), `fs_ramp_riding`,
+`fs_strafe_regime`, `nz`, `wn`, and three new `hud_debug` rows — `src`, `str`, `plane`.
+
+**And the instrumentation is aimed at a specific suspect.** `HUD_RampNormal:1801` oriented the
+plane with `if (vel * n > 0) n = -n`. `cl_board.qc:584` uses the identical idiom and is **correct**
+there, because it orients against `vin` — the pre-clip velocity, for which `dot <= 0` is guaranteed
+by the trace having hit the plane. `HUD_RampNormal` is handed the post-clip, post-`FinishGravity`
+velocity, where nothing of the kind holds: `dot(vel, n) > 0` means "rising away from the face",
+which is a ramp exit at the lip or any frame `AirAccelerate` has pushed you off the plane. The flip
+then stores `n_z < 0`, the `nz >= 0.05` gate rejects it, and the panel falls back to flat **for the
+whole of `RAMPHOLD`, 0.25 s**, because the inverted value is what the hold hands back. The essay at
+`cl_hud.qc:1855` supposed this "costs one dot product and changes nothing". Now oriented by
+geometry (`if (n_z < 0)`), which is what the engine's own `fabs(nz)` band (`pm_source.c:1132`)
+admits and the only thing the flip was ever for. `hud_strafe_orient 0` restores the velocity test;
+`RW_FLIPPED` is published either way, so a ride settles it rather than this paragraph.
+
+**And when there is genuinely no plane, it now says nothing.** `hud_strafe_strict 1` blanks the
+target and prints the reason, using the path the widget already has for "air cap does not bind".
+The test is `fs_ramp_riding`, **not** the plane's provenance: `Board_RampHold` bridges 0.08 s while
+the plane is held for 0.25 s, so keying on "is a plane still held" would blank the target for a
+sixth of a second after every ramp exit — a new bug in the old one's clothes. `hud_strafe_strict 0`
+restores the flat fallback.
+
+**Not done:** the `onground` regime. `Strafe_IdealTurnGround` consults no normal at all, so every
+walkable slope is graded as flat ground — real, but a separate defect with no reference to port,
+and unreachable while surfing anyway (a surfable face has `nz < 0.7`, which
+`CategorizePosition:1740` refuses to stand on).
+
+### 39d — a replay's split energy was a different quantity from the live one
+
+`cl_watch.qc:1012` and `:1036` pushed **absolute** `Strafe_Energy(o, v, g)` into rows that
+`Timer_SplitsPushAt` shares with `HUD_SplitSample`'s **anchor-relative** value. Same column, same
+label, larger by the whole height of the anchor. Both now subtract `HUD_EnergyRef()`. The
+approximation is stated at the site: `Watch_Splits` rebuilds at the current playback position, so
+every row gets the reference in force *now* rather than at its own tick — exact for a whole leg at
+`hud_energy_ref 0`, and "energy above the reference you are looking at" at 1.
+
+### What is not verified
+
+- **The -169/-179 comparison has not been seen on screen.** It is now an identity — both numbers
+  are `Board_StepE(vin, n)` on the same latched pair, so they cannot differ — but that is
+  arithmetic, not a measurement. Four scripted attempts failed to board a ramp: holding `+jump`
+  from the first frame means `pm_autobunny` never lets you ground-accelerate, so the run sits on
+  the start block at the 30 u/s air cap; running flat first reaches 260 u/s and then walks into a
+  wall. Aiming a surf entry is not something a cfg can do.
+- **Which of the strafe gates actually fires**, including whether `RW_FLIPPED` is the answer. The
+  rows ship; one ride reads them.
+- **The save-lock reading.** The mechanism is understood and removed at the source, but the
+  specific "-20 down while holding load" was not reproduced end to end — it needs a save taken
+  while crouched.
+- The `hud_predicted` fallback has never fired in testing — `src` read `pred` on every frame of
+  every run.
+
+### Test artefacts
+
+`ftesurf/cfg/testrun/` — `p241sel.cfg` (pm_selftest, twice), `p241jump.cfg` / `p241jump0.cfg` (the
+A/B, one process each), `p241board.cfg` (the failed board attempt, kept because its header records
+why scripting a surf entry does not work), `p241ship.cfg` (three maps, all defaults).
+`ftesurf/logs/p241*.log`. `ftesurf/screenshots/p241_pred1/`, `p241_pred0/`, `p241_ab.png`.
+
+## Patch 242 — the notify overlay could only ever put the newest line at the bottom  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+**Reported as:** *"Can the console print start at the top, forever new command, and older
+commands go below it down the screen, fading out over time? or make an option for the same thing
+but the bottom left, so new commands come in from the bottom and push the old command up which
+fade out. I want to see the full list of errors if they appear and I don't have the console
+open."*
+
+### Most of this already existed and was never set
+
+`Con_DrawNotifyOne` (`console.c:2513`) is a complete notify surface already: `con_notifytime`
+holds a line, `con_notifyfade` fades it out, `con_notify_x/y/w` place the block,
+`con_notifylines` sizes it, `con_centernotify` centres it. With FTESurf's `con_window 1` a
+*closed* console is drawn by exactly this function at the HUD's top-left (`console.c:572-578`,
+`:4067-4073`), so it is already the surface the report is about. `default.cfg` set none of it,
+so the shipped behaviour was the stock 4 lines / 3 s / 1 s fade.
+
+### What did not exist is the order
+
+The gather loop walks `con->current` backwards through `->older`, filling `starts[]` from the
+top of the array **downward**:
+
+```c
+while (line --> 0 && lines > 0) { lines--; starts[lines] = starts[line]; ... }
+```
+
+so `starts[lines]` is the **oldest** line held and `starts[notif_l-1]` is the **newest**. The
+draw loop then ran that range forwards with `y += Font_CharHeight()` after each line — oldest at
+the top, newest at the bottom, block anchored at the top. Every notify surface in the engine
+does this and there has never been an alternative. `CONF_NOTIFY_BOTTOM` (`:2535`) shifts the
+whole block's origin so its *bottom* edge stays put, which is what the chat console
+(`cl_parse.c:6816`) and the frag tracker (`fragstats.c:319`) pass at `Con_Create` time — and
+nothing has ever set it on `con_main`, nor could a config reach it: the console command set
+(`console.c:1439-1451`) has no `con_set`, and `conecho`'s auto-created consoles get flags 0.
+
+**`con_notifystyle`**, on `con_main`:
+
+| | layout |
+|---|---|
+| 0 | oldest at the top, newest at the bottom, top-anchored — classic, and still what chat and the tracker do |
+| 1 | **newest at the top, older sliding down beneath it** |
+| 2 | newest at the bottom, older pushed up, bottom-anchored |
+
+Style 1 is a reversed walk of the same array — the loop now computes `i`/`step`/`stop` and `y`
+still only ever advances downward, so nothing else in the function has to know how many lines
+there are. Style 2 sets `CONF_NOTIFY_BOTTOM` for the frame rather than reimplementing the
+anchor; it is assigned in **both** directions each frame, because a flag that is only ever ORed
+in never comes back off.
+
+### Errors linger, and the signal was already in the text
+
+There is no print *level* in this engine — `Con_Printf` takes a string and nothing else — but
+there is a universal convention: an error begins with `CON_ERROR` (`"^&C0"`) and a warning with
+`CON_WARNING` (`"^&E0"`), and **438 call sites** already spell themselves that way. So
+`Con_PrintCon` tests that prefix on the **raw** text (before `COM_ParseFunString` turns it into
+colour bits on the first character, where telling "this is an error" from "this line starts red"
+would need a colour comparison any theme change could break) and sets a new `CONL_ERROR` line
+flag. `con_notifytime_error` then ages those lines instead of `con_notifytime`. Zero call sites
+changed.
+
+The mark is sticky on the *console*, not a local, because `Con_Printf` need not end in a
+newline: it has to survive to whichever call finally completes the line, and is cleared there.
+
+**And the walk had to stop breaking.** It ended at the first expired line, which was sound while
+every line aged at the same rate and is not once they do not: an ordinary line printed 8 s ago is
+finished while an error printed 10 s ago is not, and newest-first means the ordinary one is met
+first. An expired line is now skipped instead, and the walk is bounded by
+`max(notif_t, notif_t_err) + notif_fade` — nothing older than that can be live whatever its
+flags say.
+
+`NUM_CON_TIMES` 24 → 64. "The full list of errors" is more than 24 lines on a failing map load,
+and the old ceiling silently clamped `con_notifylines` with no indication it had. It sizes three
+arrays local to one function: about 1.3 KB of stack.
+
+### Files
+
+| File | Change |
+|---|---|
+| `engine/common/console.h` | `CONL_ERROR` (bit 4; 0-3 were in use); `notif_t_err`, `notif_style`, `pendingerror` on `console_t` |
+| `engine/client/console.c` | `con_notifystyle`, `con_notifytime_error` (+ registration); `NUM_CON_TIMES` 24→64; the prefix test in `Con_PrintCon`; per-line hold, the bounded walk and the ordering in `Con_DrawNotifyOne`; per-frame assignment in `Con_DrawNotify` |
+| `ftesurf/cfg/default.cfg` | the console block: style 1, 12 lines, 6 s / 20 s / 2 s, and the `notify_topleft` / `notify_bottomleft` aliases |
+
+### Reverting
+
+`con_notifystyle 0` is the historical layout; `con_notifytime_error 0` means "same as
+`con_notifytime`", which is the historical ageing. Both defaults in the engine are the old
+behaviour — only `default.cfg` opts in.
+
+---
+
+## Patch 243 — `CL_PredictMove` decided whether to predict using last frame's movetype  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+**Reported as:** *"When you hit your save lock key, it will say the wrong value for a frame, but
+switch to the correct value, and when you release the save lock, the same thing happens… I want
+accurate numbers over fake numbers."*
+
+### The read is before the write, in the same function
+
+`CL_PredictMove` disables prediction for a frozen player:
+
+```c
+/* cl_pred.c:1103 */
+if (cls.demoplayback==DPB_MVD || cl.intermissionmode != IM_NONE || cl.paused ||
+    pv->pmovetype == PM_NONE || pv->pmovetype == PM_FREEZE || CAM_ISLOCKED(pv))
+	nopred = true;
+```
+
+and `pv->pmovetype` is assigned only at `:1197` (`pv->pmovetype = to.state->pm_type;`) and again
+at `:1388` — **both below the test, in the same function.** So the value tested has always been
+the previous call's. One frame stale, and stale in both directions:
+
+* the frame a freeze **begins** still predicts, running pmove forward against a player the
+  server has already pinned;
+* the frame a freeze **ends** still takes the interpolating branch, which lerps `simorg` and
+  `simvel` between the frozen state and the released one with `frac < 1` (`:1433-1436`). The
+  128-unit teleport guard at `:1424` does not save it — a player released from a freeze has not
+  moved anywhere.
+
+`CSQC_ChangeLocalPlayer` publishes `simvel` to CSQC as `pmove_vel` (`pr_csqc.c:174-189`), which
+since FTESurf Build 39 is where the HUD's velocity comes from. So the release frame handed the
+readouts a blend between the parked velocity and the live one: a number that was neither, for
+exactly one frame, every single time — which is the report, precisely.
+
+A save-lock hold is `MOVETYPE_NONE` → `PM_NONE` (`cl_pred.c:823`), so this fires on every press
+and every release. It fires equally on the replay pin (`fs_watch`, also `MOVETYPE_NONE`) and on
+intermission.
+
+### The fix
+
+Refresh `pv->pmovetype` from the newest *valid* received player state immediately before the
+test. This invents nothing — it reads the same state `:1197` is about to assign, only earlier.
+The validity idiom (`playerstate[...].messagenum == cl.validsequence`) is already used in this
+function at `:1078`.
+
+Excluded, deliberately: camera-locked views, whose pmovetype legitimately comes from the
+*tracked* player's state and which `CAM_ISLOCKED` forces to `nopred` anyway; `nolocalplayer`
+protocols, which have no player state to read; and MVD playback, which picks its states
+differently.
+
+**`cl_predict_freshtype`**, default **1**, `0` restores the historical behaviour exactly. It is
+in the `cl_predictiongroup` with the other prediction cvars.
+
+### Files
+
+| File | Change |
+|---|---|
+| `engine/client/cl_pred.c` | `cl_predict_freshtype` (declaration, registration); the refresh before the `nopred` test in `CL_PredictMove` |
+
+### What this does not fix
+
+The **press** edge has a second, independent cause that lives on the wire and not here — see
+FTESurf Build 40, which guards both edges client-side.
+
+## FTESurf Build 40 (QC) — the strafe widget was reading a usercmd that had just been erased  *(APPLIED, QC only — `build.ps1`)*
+
+Four reports; two of them were bugs with root causes in the engine, and both of those engine
+causes are Patch 242/243's other half.
+
+### A. "on a ramp, no strafe key" while a strafe key is held
+
+> *"When I'm on a ramp, it says over the text of the ideal strafe speed in a really faded font I
+> can barely read 'on ramp, no strafe key' or something like that, but I definitely am pressing a
+> strafe key?"*
+
+`HUD_WishDir` built its vector from `input_movevalues`, and at draw time that global is not what
+its name suggests. `CSQC_ChangeLocalPlayer` republishes it every rendered frame from
+**`cl_pendingcmd`** — the usercmd currently being *accumulated*, not the last one sent
+(`pr_csqc.c:159-172`) — and `CSQC_DrawView` calls it immediately before `CSQC_UpdateView`
+(`:8951-8973`). Meanwhile `Host_Frame` runs `CL_SendCmd` **before** the screen update
+(`cl_main.c:7575` against `:7661`), and every full send ends in `CL_ClearPendingCommands`, which
+memsets `forwardmove`, `sidemove` and `upmove` to **zero** (`cl_input.c:1346-1358`, from `:2780`).
+
+So every rendered frame that followed a send read `'0 0 0'` with the key still physically held.
+**Duty cycle is `cl_netfps / framerate`** — about one frame in five at the shipped 66.6667 / 340,
+and approaching *every* frame as the frame rate falls toward the send rate. That is also why it
+read as a faint ghost *over* the numbers rather than instead of them: it was strobing at 20%, and
+drawn at `alpha 0.5` against their `0.95`.
+
+`cl_keys.qc`'s header caught this symptom for the key lights ("strobe on a held key") and blamed
+`CSQC_Input_Frame`'s rate. Right symptom, wrong mechanism — anything that function writes is
+overwritten from `cl_pendingcmd` before the next draw, so the replay-zeroing `HUD_WishDir`'s own
+comment cited could never have reached it either. Both comments are corrected.
+
+**The fix is the engine's own answer.** `getinputstate(clientcommandframe)` (#345, declared in
+`cl_defs.qc` and never called) republishes the input globals and already carries exactly the
+fallback this needs — it copies the pending command to a *local*, so `cl_pendingcmd` is not
+disturbed, and when that command has been cleared it substitutes the last one actually sent:
+
+```c
+/* pr_csqc.c:4217-4224 */
+cmd = &cl_pendingcmd[seat];
+tmp = *cmd;  cmd = &tmp;
+if (!cmd->msec)
+	*cmd = cl.outframes[(f-1)&UPDATE_MASK].cmd[seat];
+```
+
+`clientcommandframe` is current at draw time (`pr_csqc.c:8951`), so one call is the whole fix and
+no engine change was needed. It returns false while paused, which the keyboard fallback covers:
+if both axes come back empty, the wish is rebuilt from `Keys_Held(FSK_FWD/BACK/LEFT/RIGHT)` in
+`CL_BaseMove`'s sign convention. The fallback fires **only** when the engine has nothing to give,
+so a gamepad stick, `in_xflip`, `cl_forwardspeed` and the prestrafe W-release all still win.
+
+### The message had three more faults, all separate from the cause
+
+1. **It replaced a measurement.** The message and the two rate cells were `if / else if`, so a
+   frame with no *target* also stopped drawing **what you are actually turning at** — measured
+   from your own view angles, never unavailable, and the half of the pair you steer by. The live
+   rate is now drawn unconditionally; the message takes only the target's cell.
+2. **It was unreadable.** `'0.5 0.5 0.5'` at `alpha 0.5` against `0.95` for everything around it.
+   Now the same alpha as its neighbours, one size smaller, in neutral grey — a reason, not a
+   score — and in the target's slot rather than centred across both.
+3. **It blamed the wrong thing.** The chain asked about the plane once, the strafe key second,
+   and about the **band** — the gate that actually rejects most of them — not at all. So any
+   frame with both an empty wishdir and an unusable plane reported "no strafe key", and with the
+   wishdir strobing that was one frame in five. `RW_FLIPPED`, which this file calls the strongest
+   remaining suspect for the *original* ramp report, could never reach the screen: it was always
+   shadowed.
+
+New `HUD_StrafeWhy` asks the plane first and splits the key case into the three genuinely
+different things an empty wishdir means, read off the keyboard because the wish vector is exactly
+what is missing:
+
+| message | means |
+|---|---|
+| `ramp: no plane` / `ramp: no plane held` | `RW_NOPLANE`, or the hold expired |
+| `ramp: nz 0.03 out of band` / `ramp: nz 0.03 flipped` | outside [0.05, `PM_STANDABLE`]; the qualifier says the orientation test had inverted it |
+| `strafe keys cancel` | both held **and** they cancelled — see the `cl_iDrive` note below |
+| `turn keys do not strafe` | only `+left`/`+right`. They have no usercmd movement component at all — they reach sidemove only under `+strafe` (`:1480-1481`), which nothing in `default.cfg` binds |
+| `no strafe key held` | nothing held. The only case the old string was ever right about |
+
+`RW_FLIPPED` is reported as a qualifier on the band rather than as a cause, because the flip is a
+*correction*: `HUD_RampNormal` inverts the plane and then uses it. Reaching the message with it
+set means the flipped plane failed the band, which is a different sentence.
+
+### Found while measuring the above: `cl_iDrive` is on, and nobody chose it
+
+Writing the "strafe keys cancel" case, I asserted that `CL_BaseMove` subtracts left from right
+with no last-key-wins arbitration. **The trace says otherwise.** `hud_wishtrace` with A and D held
+together reads `raw 0/450`, not `0/0`: `KeyDown_Scan` auto-releases the opposing key
+(`cl_input.c:206-212`), gated on **`cl_iDrive`, which defaults to 1** (`cl_input.c:43`,
+`CVAR_SEMICHEAT`) and which nothing in `default.cfg` overrides. So on the shipped config the later
+strafe key simply wins and there is no dead time when you switch direction.
+
+That is a real movement behaviour nobody in this project has decided on, and it is worth deciding:
+a Source client has no such feature, so a player switching strafe direction there passes through a
+frame or two of zero sidemove unless they run a null-cancelling script. `cl_iDrive 0` is the
+strict setting. **Not changed here** — it is a feel change on a cvar that has been on for the
+life of the project, and it belongs to whoever owns the parity call, not to a HUD build.
+
+The comment in `HUD_StrafeWhy` was corrected to say what was measured rather than what was
+assumed. The message itself is unaffected: with iDrive on, both-keys-held produces a real wishdir
+and the string is simply never reached.
+
+### B. the save-lock press and release each showed one wrong frame
+
+> *"…it will say the wrong value for a frame, but switch to the correct value… I want accurate
+> numbers over fake numbers."*
+
+Two independent mechanisms, one at each edge. The server is not at fault: `SV_SaveLocHold` zeroes
+`.velocity`, sets `MOVETYPE_NONE` and publishes `fs_sl_holdvel` in one uninterrupted block
+(`sv_saveloc.qc:1305-1316`), and the release is equally atomic.
+
+* **Release** is Patch 243: the engine decided whether to predict using a movetype it only
+  assigned later in the same function, so the frame a hold ended still interpolated and handed
+  `pmove_vel` a blend between the frozen state and the released one.
+* **Press** is the wire. `SV_UpdateClientStats` walks stats in **ascending index order** and
+  breaks out at 32 tracked entries or a full datagram (`sv_send.c:2359-2374`,
+  `server.h:356`), deferring the rest to a later packet — while the zeroed velocity rides the
+  player delta in *this* one. `STAT_FS_HOLD` is **76** and `STAT_FS_HOLDVEL` **77-79**, the
+  highest in the mod and so the first casualties, against `STAT_FS_VELOCITY` at **32**. A
+  load-plus-hold is the largest stat storm here. For that snapshot the HUD sees "velocity 0, not
+  holding", `HUD_LiveVel`'s substitution does not fire, the speedometer prints 0 and `e` collapses
+  to bare height — build 30's original bug, for one frame.
+  **This one is reasoned, not measured:** nobody has counted the stats that change on that tick.
+  The guard below covers it either way, which is why it was worth doing before measuring.
+
+**The client knew the answer a round trip early and the HUD had never asked.** `fs_sl_holding` is
+set on the key-down edge in `CSQC_InputEvent` and cleared on the key-up (`cl_saveloc.qc`), while
+the HUD read only the stat. `HUD_UpdateLatch` now compares them, and while they disagree it
+**suppresses `fs_hl_tick`** — the once-per-input-frame latch every readout already keys on. The
+speedometer, `e` and both rate cells simply do not re-sample across the discontinuity: they hold
+their last *coherent* sample rather than printing an incoherent one. Nothing invented, nothing
+smoothed, nothing drawn that was not measured.
+
+Armed by the edge and disarmed by **evidence**, which is `fs_rs_armed`'s shape — its header
+records that a one-frame exemption was tried, measured and found insufficient because the event
+and the state it implies need not share a snapshot. Unlike `fs_rs_armed` it is also **bounded**,
+and by `HUD_UpdateLatch`'s existing 0.25 s stall floor rather than by a new constant: a hold the
+server *refuses* (`save: nothing saved on this map`) leaves `fs_sl_holding` true against a stat
+that will never rise, and a guard waiting on evidence that is not coming would freeze the HUD for
+as long as the key was held.
+
+**And `onground` stops coming from prediction while parked.** `pv->onground` is assigned only
+*inside* `CL_PredictMove`'s prediction branch (`cl_pred.c:1387`), and a hold is `MOVETYPE_NONE` —
+exactly what turns that branch off. So `pmove_onground` was frozen for the whole park, typically
+at "airborne" because you pressed the key mid-flight, while the server had you standing.
+`HUD_UpdateJumpRef` latches `fs_jump_z` off that flag and `fs_jump_z` is the reference the entire
+`e` readout is measured from, so a stuck flag moved every energy number on screen by an anchor.
+
+`fs_sl_holding` moved from `cl_saveloc.qc` to `cl_keys.qc`, because `cl_progs.src` compiles
+`cl_hud.qc` first — the same ordering constraint that block already exists to solve.
+
+### C. the zones
+
+> *"Make checkpoints/end zone/start zones/stage zones fully visible, quake/source uses BSP and can
+> you use PVS to decide if they are rendered?"*
+
+**PVS was never involved and is not what was hiding them.** The zones are not entities and are
+never networked: both VMs parse the same Momentum JSON independently at map load
+(`sv_zones.qc:5-7`), nothing in `C:\FTESurf\src` sets `.SendEntity`, so `SV_AddCSQCUpdate`
+(`sv_ents.c:266`) never takes a single FTESurf entity and no server-side PVS test has ever
+touched one. `.pvsflags` is declared in the defs and assigned nowhere.
+
+Three client-side things were hiding them, all independent:
+
+1. **A 4096-unit distance gate** (`cl_zones.qc:339`, `default.cfg`). About 78 metres, on maps
+   tens of thousands of units long — so the end zone and every stage past the first were simply
+   never drawn. `0` has always meant "no limit" to that test, so this is a **default change and
+   no new code**. Nothing is saved by the cull: the overlay is one or two batches whatever the
+   count, and the worst shipped map is 162 regions.
+2. **The depth test.** `R_BeginPolygon("")` resolves to `shader_draw_fill_trans`
+   (`pr_csqc.c:1602-1607`), which has no `nodepthtest`, and `Zone_Draw` runs before
+   `renderscene()` *so that* walls occlude it. Deliberate, and still the default.
+3. **They are a wireframe, not a volume.** `Zone_DrawOne` emitted three edges per ring point and
+   nothing else — no filled-face path existed in the file at all, where Momentum draws a
+   translucent solid.
+
+| cvar | default | |
+|---|---|---|
+| `zone_draw_dist` | **0** (was 4096) | no limit |
+| `zone_xray` | 0 | draw through the world |
+| `zone_fill` | 0 | add the side faces |
+| `zone_fill_alpha` | 0.10 | face alpha, separate from the edges' |
+
+**Measured, on surf_aesthetic from spawn:** `zone_debug` reports **4 of 19 zones passed the cull**
+at `zone_draw_dist 0` and **0 of 19** at 4096. Not "fewer" — *none*. Every timer zone on that map
+was beyond 78 metres, so the overlay had nothing to draw from the start block, which is the whole
+of the report.
+
+**There is no `zone_pvs`, and that is a result rather than an omission.** One was built, on
+`checkpvs` (#240, which is registered for CSQC and takes its world from the client's own), as the
+companion to `zone_xray` — show the zones in rooms you could see into, through whatever is in
+front of them. It culled **every** zone on the map including the four in front of the camera, in
+both of its forms: a `SOLID_NOT` probe, which `World_LinkEdict` never puts in the leaf tree at all
+so its `pvsinfo` stays empty, and a `SOLID_BBOX` one that *is* linked. `0 of 19` either way.
+It was removed rather than shipped disabled — a visibility switch that hides everything is worse
+than no switch, and one that is present but known-broken is worse than both, because somebody
+finds it in a config dump in six months and turns it on. If it is ever wanted, the things to chase
+are `PF_checkpvs` passing a NULL buffer to `ClusterPVS` and `VBSP_EdictInFatPVS`'s area test;
+neither was run down here.
+
+X-ray needs **no engine change**: a named shader given to `R_BeginPolygon` is looked up as a
+`.shader` script *first* and only falls back to the built-in generator if none matches
+(`gl_shader.c:8552-8565`), so the new `ftesurf/scripts/zones.shader` is `shader_draw_fill_trans`
+plus `nodepthtest` and `sort banner`. `portal.shader` beside it is the precedent for the
+mechanism; `shader_contrastup` (`r_2d.c:339-351`) is the precedent for the stage syntax. The
+fill's faces pass `DRAWFLAG_TWOSIDED` — without it the batch is single-sided
+(`pr_csqc.c:1640-1641`) and faces vanish from *inside* the zone, which is where a player stands
+when they most want to see where the box ends. `cl_defs.qc` gained the `DRAWFLAG_*` constants,
+which that defs dump had never named.
+
+`zone_debug` reports the new gates on its header line, so "I set `zone_xray` and nothing changed"
+is answerable without reading the file.
+
+### D, and two things found in the sweep
+
+`con_notifystyle` and the rest of the console overlay are Patch 242; `default.cfg` opts in.
+
+* **`hud_predicted`, `hud_strafe_strict`, `hud_strafe_orient` and `hud_board_exact` were
+  registered without `CVAR_ARCHIVE`** while every cvar around them has it, so all four of Build
+  39's revert switches forgot themselves on the next launch. Fixed. A revert switch that does not
+  persist is not a revert switch.
+* **`e` is bound twice in `default.cfg`** — `+use`, then `+left` six lines later, and the last
+  bind wins, so `+use` is currently unbound. **Left as it is** and commented instead: q/e as a
+  turn pair is a normal surf setup and may well be the intent. It matters here because those are
+  the keys the new `turn keys do not strafe` message is about.
+
+### New instruments
+
+`hud_debug 1` gains two rows:
+
+* **`hold`** — the keyboard's answer against the wire's, and `settling` while the guard is
+  holding the readouts still. It should be visible for two or three frames and never longer; an
+  amber that *stays* on means the guard armed and its evidence never arrived, and the stall floor
+  is releasing the display every 0.25 s instead of the stat doing it.
+* **`wish`** — the forward/side the engine handed the strafe target, and the yaw built from it.
+  Hold one strafe key on flat ground and the left half must be steady. This row is what makes
+  report A observable **without a ramp**, which matters because a ramp entry cannot be scripted.
+
+`hud_wishtrace <N>` dumps the next N frames of the same thing to the console and counts itself
+down, self-clearing like `zone_debug`. It exists because a HUD row is only as readable as what is
+behind it — on surf_aesthetic's white floor the value column is washed out in a screenshot, which
+is no way to prove a claim about one frame in five. The trace reaches the log, where it can be
+counted.
+
+### Files
+
+`src/client/cl_hud.qc`, `src/client/cl_keys.qc`, `src/client/cl_saveloc.qc`,
+`src/client/cl_zones.qc`, `src/defs/cl_defs.qc`, `ftesurf/scripts/zones.shader` (new),
+`ftesurf/cfg/default.cfg`.
+
+### Reverting
+
+`hud_strafe_strict 0` restores the unconditional flat fallback; `zone_draw_dist 4096`,
+`zone_xray 0`, `zone_fill 0`, `zone_pvs 0` restore the old overlay exactly; `con_notifystyle 0`
+and `con_notifytime_error 0` restore the old console; `cl_predict_freshtype 0` restores the old
+prediction decision. There is no switch for the wishdir source or for the save-lock guard —
+both replace a value that was wrong with one that is not, and neither has a defensible other
+setting.
+
+## Patch 244 — velocity was clamped as a magnitude, and the wire inverted it past 4096  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+**Files:** `engine/server/sv_phys.c` · `engine/server/sv_ents.c` · `engine/server/sv_main.c` ·
+`engine/client/cl_ents.c` · `engine/client/cl_main.c` · `engine/common/protocol.h`
+
+Three defects behind two reports. The first was measured by the player as *"when I reach 3500
+and start falling, I start losing horizontal velocity, which should never happen"*, the second
+as *"reach 4000 units of speed on an axis and the game visually starts to do weird positional
+per frame flickers, like a client/server desync"*.
+
+### 1. The clamp had the wrong shape and ran on the player
+
+`WPhys_CheckVelocity` (`sv_phys.c:188`) has always had two branches. `sv_nqplayerphysics 0` —
+FTESurf's setting — selects the **radial** one:
+
+```c
+if (Length(ent->v->velocity) > sv_maxvelocity.value)
+    VectorScale (velocity, sv_maxvelocity.value/Length(velocity), velocity);
+```
+
+`SV_RunCmd` calls it on the player every usercmd (`sv_user.c:7812`) **before** the velocity
+reaches the mover (`:7943`). So horizontal speed was capped at `sqrt(3500² - vz²)`: 36 u/s gone
+at 500 of fall, 146 at 1000, **628 at 2000**, re-applied 66.67 times a second. Source clamps
+each axis independently (`CGameMovement::CheckVelocity`, gamemovement.cpp:3060) and never
+couples the axes at all.
+
+Worse, it was server-only — `CL_PredictUsercmd` has no equivalent call — so it was also a
+permanent prediction miss, correcting every frame on top of eating the speed.
+
+`pm_source.c:472` already implemented the correct per-axis clamp. The radial one ran first and
+undid it.
+
+**Fix:** one condition, `sv_phys.c:192` — take the axial branch when Source physics is on:
+
+```c
+if (sv_nqplayerphysics.ival || movevars.physicsmode == PHYSMODE_SOURCE)
+```
+
+That branch (`:194-211`) was already byte-for-byte Source's `CheckVelocity`: NaN scrub plus a
+per-component bound. Gated on the mode rather than changed outright because `quakers`/nettest
+share this tree at `pm_physicsmode 0`, where radial is the long-standing behaviour.
+
+### 2. There were two velocity cvars and the wrong one was authoritative
+
+| | `sv_maxvelocity` | `pm_maxvelocity` |
+|---|---|---|
+| shape | radial | per-axis |
+| scope | every entity | player, Source mode only |
+| networked | **no** | yes |
+
+`pm_maxvelocity` was added by Patch 125 *because* `sv_maxvelocity` was the wrong shape, but
+nothing removed `sv_maxvelocity` from the player path. **Momentum has exactly one, and it is
+`sv_maxvelocity` at 3500** (`CGameModeBase::SetGameModeVars`, mom_system_gamemode.cpp:49).
+
+So `sv_maxvelocity` gains `CVAR_SERVERINFO`, `SV_SetSourceMoveVars` resolves
+`pm_maxvelocity > 0 ? pm_maxvelocity : sv_maxvelocity`, and `CL_ParseServerinfo` resolves the
+two keys in the same order. `pm_maxvelocity` defaults to **0** and survives only as a
+deprecated override. Before this the client could not read `sv_maxvelocity` at all, so a map
+that raised it desynced by construction — which is exactly what the second report was doing.
+
+### 3. `±4096` — the encoder wrote a float into a signed short with no bound
+
+`entity_state_t.u.q1.velocity` was `short … // 1/8th` (`protocol.h:1347`) and
+`SV_Snapshot_BuildStateQ1` did:
+
+```c
+state->u.q1.velocity[0] = ent->v->velocity[0] * 8;      /*sv_ents.c:3569, no bound()*/
+```
+
+32767/8 = **4095.875 u/s per axis**. At 4200: `4200*8 = 33600` → `-31936` → **-3992 u/s, sign
+inverted**. The client re-seeded prediction from that every packet (`cl_pred.c:851` → `:408`)
+and the QW path has no prediction-error accumulator — `CLQ2_CheckPredictionError` is Quake 2
+only — so it is a hard snap per frame, not a rubber-band. Exactly "positional flicker".
+
+Same defect class as the skeletal `pos*64`-into-a-short fixed earlier in this log.
+
+**Fix, in two independent layers:**
+
+* **`SV_EncodeVelocity`** (new, `sv_ents.c`) saturates instead of wrapping, and is written so a
+  NaN takes the clamp branch too. Both former call sites use it.
+* **`PEXT2_BIGVELOCITY` (`0x00004000`)** widens the wire field to 32 bits. The stored field
+  became `int` at the **same 1/8-unit scale**, so every consumer's `*8` and `*(1/8.0)` and the
+  delta-compression comparisons are untouched — only the range grew, to ±268 million. Chosen
+  over floats for exactly that reason.
+
+Without the extension the wire stays 16 bits and the encoder additionally clamps to what
+`MSG_WriteShort` will carry, so an old client or an existing demo degrades to a stop at 4095.875
+rather than inverting. Bit 14 was the first free one; used bits stopped at `0x2000`.
+
+**Diagnostic worth remembering:** stats are full floats, so past 4096 the HUD speedometer reads
+*correctly* while the predicted body flies the wrong way. That divergence between the number and
+the picture isolates the fault to the encoder and nothing else.
+
+### Reverting
+
+`pm_maxvelocity <n>` restores an independent player clamp. There is no switch for the axial
+branch or the saturating clamp: both replace a wrong value with a right one. A client that does
+not negotiate `PEXT2_BIGVELOCITY` gets the old 16-bit wire automatically.
+
+## Patch 245 — the Source port was made against Momentum's base class, so four constants and the unduck test were wrong  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+**Files:** `engine/common/pm_source.c` · `engine/common/pmove.h` · `engine/server/sv_phys.c` ·
+`engine/server/sv_main.c` · `engine/client/cl_main.c`
+
+### The finding that produced this patch
+
+Patch 125 ported the mover from `gamemovement.cpp`, and Patch 241 answered a bug report by
+quoting `gamemovement_momentummod.cpp`. **Both files are Momentum's BASE class,
+`CGameMovement`.** `CMomentumGameMovement` overrides `CanUnduck`, `Duck`, `FinishDuck`,
+`FinishUnDuck`, `Friction`, `CategorizePosition`, `TryPlayerMove` and `ClipVelocity`, and the
+constants live in `mom_gamerules.cpp` / `mom_system_gamemode.*` — none of which had been read.
+
+The real tree is Momentum Mod's public archive, **`mp/src`** in github.com/momentum-mod/game. `CGameMode_Surf` derives
+`CGameModeBase` and overrides **no** movement value, so surf inherits the base ones:
+
+| quantity | Momentum surf | shipped to build 40 |
+|---|---|---|
+| jump impulse | `sqrt(57*2*800)` = **301.9934** (57u) | 268.3282 (45u) |
+| standing hull | **62** | 72 |
+| ducked hull | **45** | 54 |
+| standing eye | 64 | 64 (correct) |
+| ducked eye | **47** | 46 |
+| `GetViewScale()` | **0.5** | (none — full delta) |
+| `sv_considered_on_ground` | **1** | 2 |
+| `sv_edge_fix` | **false** | 1 |
+
+### What that cost, in units
+
+**Every plain jump was 9.76 units too low.** Momentum reaches `54.76 + 1.5 = 56.26` above the
+takeoff surface; build 40 reached `45.00 + 1.5 = 46.50`. Any ledge between those two heights
+that Momentum clears without crouching was impossible here. This is the largest single physics
+divergence the port had and nobody had reported it, because you cannot see a jump you never
+make.
+
+Note 54.76, not 57: Momentum has **no** jump normalisation — searching its tree for
+`normalize_jump` returns nothing — so it pays stock Source's duplicated `FinishGravity` and a
+301.993 impulse lands short of its own nominal. FTESurf keeps `pm_normalizejump 1`, which
+recovers that, so the apex here is the full 57.
+
+**The crouch-jump, by coincidence, was nearly right.** The oversized 18-unit duck lift almost
+exactly compensated for the 12-unit-smaller impulse: reach was `45 + 1.5 + 18 = 64.50` against
+Momentum's `54.76 + 1.5 + 8.5 = 64.76`. Against a 64-unit wall that is 0.49 units of margin
+versus 0.76 — marginal in *both* games, which is why the report was *"only if pushing at the
+wall with a specific angle"* rather than "never". After this patch it is `57 + 1.5 + 8.5 = 67.0`,
+a 3-unit margin.
+
+### `pm_viewscale` — and a report that was answered wrongly
+
+`CMomentumGameMovement::FinishDuck` (mom_gamemovement.cpp:1114) moves the origin by
+`GetViewScale() * (hullSizeNormal - hullSizeCrouch)`, **not** by the whole difference. At 0.5 and
+a 17-unit shrink that is 8.5, so a mid-air duck raises the feet 8.5 **and drops the crown 8.5**.
+
+Patch 241 recorded the report *"when you're in the air and duck, you lose hull from the top and
+bottom"* and dismissed it, writing in `pm_source.c` that the base file uses "the FULL delta, not
+half". **The report was correct and the patch was not.** New `movevars.viewscale` / cvar
+`pm_viewscale` (0.5), consumed by a single `PMSrc_AirDuckShift()` used by `FinishDuck`,
+`FinishUnDuck` and `CanUnduck`.
+
+Visible consequence, which is correct behaviour and not a regression: ducking in mid-air now
+dips the eye by 8.5 units, where before it did not move at all.
+
+### The unduck test traced the box you were already in
+
+`PMSrc_CanUnduck` swapped in what it believed was the standing hull:
+
+```c
+VectorCopy (pms_standmins, pmove.player_mins);
+VectorCopy (pms_standmaxs, pmove.player_maxs);   /*[2] never recomputed*/
+```
+
+`pms_standmaxs` is captured raw from the entity at the top of `PMSrc_PlayerMove` (`:2869`), and
+the entity is resized to the **ducked** hull by the writeback at `sv_user.c:8134-8137` and read
+straight back at `:7926-7932`. So while ducked — precisely when the function is worth calling —
+`pms_standmaxs[2]` was the ducked height wearing the standing name. The test traced the box the
+player already occupied, always fitted, and `FinishUnDuck` then installed the tall hull inside
+the ceiling. Reported as *"uncrouching under a slanted ceiling caused the player to stand up
+into the ceiling"*; nothing about the slant was special, it fails under any ceiling with between
+`duckheight` and `standheight` of clearance.
+
+This is the exact circularity Patch 125's own notes warned about ("taking the standing height
+from the entity would be circular"), defeated in the one function that did not go through
+`PMSrc_ApplyHull`. Fixed by factoring **`PMSrc_ApplyStandHull()`** and using it in both places,
+so they cannot drift again. Momentum sidesteps it by passing the literal `VEC_HULL_MIN/MAX`
+constants to `UTIL_TraceHull` (mom_gamemovement.cpp:736).
+
+**The forced-crouch indicator was already correct and had simply never been reachable.**
+`cl_hud.qc` draws the `C` key cell amber (`KEY_FORCED`) when `PMF_DUCKED` is set without the key
+held; the engine's forced-crouch branch (`pm_source.c:2078`) is a faithful port of Source's. One
+bug had been suppressing both.
+
+### Quake BSP vs Source BSP
+
+Asked directly: *"is there a unit/size difference between quake bsp and source BSP?"* **No — one
+unit is one unit, and nothing scales VBSP geometry on load.** The plugin's only geometry multiply
+is `hl2_displacement_scale` (default 1); the only real unit conversion is `PHY_IVP2HL = 1/0.0254`
+in `mod_phy.c`, which applies to `.phy` prop hulls, not BSP.
+
+The difference is the **collision model**, and it is not decided by `SV_HullNumForPlayer` —
+`pmovetst.c:432` passes `forcehullnum = 0`, so `pmove.hullnum` is never consulted on the player
+trace. Source VBSP goes to `BIH_Trace`, which takes `mins`/`maxs` verbatim and clips against real
+brush planes: **any hull size is exact**, which is what makes 72→62 safe on every surf map. Quake
+BSP goes to `Q1BSP_ChooseHull` (`q1bsp.c:1527`), which snaps the request onto a *precompiled*
+hull: 62 lands on hull 1 (32×32×56), and 45 lands there too because Quake has no hull 3 — so on
+a Q1 map the player is the wrong size **and ducking has no collision effect at all**. A map
+compiled with `ericw-tools -wrbrushes` ships a BSPX `BRUSHLIST` lump, which makes `BIH_Build`
+overwrite `NativeTrace` and is exact again.
+
+`SV_ReportMoveVars` now prints a `CON_WARNING` on a Quake BSP saying so, rather than failing
+silently. It also prints the eye/viewscale line and the resolved per-axis cap.
+
+### Self-test
+
+`pm_selftest`'s reference set moved from CS:S's numbers to Momentum's, and the assertions with
+them — apex 57, stock standing 54.758, stock crouch 57.000, hull 62/45, shrink 17, mid-air shift
+8.5, reach 67.0, eyes 64/47.
+
+More importantly it gained the case that would have caught the `CanUnduck` bug: with `pmove`
+ducked and `pms_standmaxs` poisoned exactly the way the writeback poisons it, assert that
+`PMSrc_ApplyStandHull` still produces a 62-unit box. **There had been no `CanUnduck` coverage at
+all**, which is why a wrong hull in a trace survived a 20-case suite.
+
+### Reverting
+
+Every number is a `CVAR_SERVERINFO` cvar: `pm_jumpvelocity 268.3281572999747`,
+`pm_standheight 72`, `pm_duckheight 54`, `pm_duckviewheight 46`, `pm_viewscale 1`,
+`pm_groundtracedist 2`, `pm_fixedges 1` restores build 40's feel exactly. `pm_normalizejump 0`
+reproduces Momentum's *measured* 54.76 apex rather than its nominal 57. The `CanUnduck` fix has
+no switch — it replaces a test that could not fail with one that can.
+
+## FTESurf Build 41 (QC) — the mirrored movement constants, and the eye height measured instead of argued  *(APPLIED, QC only — `build.ps1`)*
+
+**Files:** `src/shared/sh_defs.qc` · `src/client/cl_hud.qc` · `ftesurf/cfg/default.cfg`
+
+`sh_defs.qc`'s hull and jump constants are documentation that QC-side helpers (`setsize` on
+spawn, the zone ground-snap traces, the strafe readouts) actually use, so they track Patch 245:
+`PM_HULL_MAXS` 72→62, `PM_DUCK_MAXS` 54→45, `PM_DUCK_VIEW_OFS` 46→47, `PM_JUMP_IMPULSE`
+268.328→301.9934, `PM_JUMP_APEX` 45→57. `PM_DUCK_FEET_LIFT 18` is replaced by
+`PM_DUCK_HULL_SHRINK 17` + `PM_DUCK_AIR_SHIFT 8.5`, because one number had been standing in for
+two different quantities and that conflation is what the whole patch is about. Its header's
+"authority order" now names the Momentum tree first and demotes the base-class copies with a
+note saying why.
+
+### The eye row
+
+Reported as *"viewhight is like 32units to high? I believe your eye-height is 64units in CSS /
+Momentum mod"*. Reading the code says it is not: `VF_ORIGIN` is `simorg + 1/16 + pv->viewheight`
+(+bob and +crouch, both 0 at rest), `simorg` is the feet because the hull's `mins.z` is 0, and
+`viewheight` is 64 — which is Momentum's `VEC_VIEW` exactly. No offset is applied twice anywhere
+in the camera path.
+
+But "the code says so" is what was said about the crouch-jump too, twice, and both times it was
+wrong — so this shipped a measurement rather than an argument. `hud_debug`'s new **`eye`** row
+prints the live eye height above the feet beside the current hull height and duck state, and goes
+amber when it disagrees with the shipped constant by more than 1.5 units. `hud_eyetrace <N>`
+dumps every term for N frames and counts itself down, like `hud_wishtrace`.
+
+**Measured on surf_aesthetic, and the report does not reproduce:**
+
+```
+eye: cam 209.062 org 145.000 -> eye 64.062 | stat 64.000 | ducked 0
+```
+
+The camera is **64.062** above the feet — Momentum's 64 plus `view.c`'s 1/16 node-line nudge —
+and `STAT_VIEWHEIGHT`, which is computed on the far side of the whole server/predict/stat path,
+independently says 64.000. Two sources that cannot both be wrong the same way. There is no
+32-unit error, and nothing in the camera path applies an offset twice.
+
+**A trap worth recording, because the first version of this row fell into it.** That version
+traced DOWN from the camera to "the floor", on the reasoning that it needed no origin and so
+could not be fooled by a bad one. It read **80.6** and went amber, which looked exactly like
+proof that the report was right. It was not: at surf_aesthetic's spawn the player stands on a
+**brush entity**, which CSQC's `traceline` does not collide, so the trace fell straight through
+it and found world geometry 16.5 units below. A floor trace is not a substitute for
+`cam - pmove_org`, and a diagnostic that is wrong in the same direction as the bug you are
+hunting is worse than none. The trace survives as a clearly labelled cross-check only.
+
+The candidate the row is really there to expose: the standing **hull** was 72 against Momentum's
+62, so the player was 10 units taller than Momentum with an identical eye height — in Momentum
+the eye sits 2 units *above* the crown, here it sat 8 *below* it. That is a real difference in how
+tall you are relative to the world and it reads a lot like "too high".
+
+Also corrected: two comments claiming the forced-crouch hull is "36 tall" and "54-unit", written
+14 lines apart and disagreeing with each other. Both are now 45, and the block records that the
+cell had been unreachable rather than merely rare.
+
+### Reverting
+
+The constants are `#define`s and follow the engine cvars; the `eye` row is part of
+`hud_debug 1` and costs one trace per frame only while that is on.
+
+---
+
+## Patch 246 — 230 maps ship baked decals the loader never read, and every Source decal was fullbright  *(APPLIED, engine + plugin — `build.ps1 -Engine`)*
+
+**Reported as:** *"I have some transparency sprite/texture issue with the imported Source Engine
+maps… can you ensure they are using fast rendering methods, and are all being masked and alpha'd
+correctly? audit."* — Stage C of that audit.
+
+Two independent faults, both omissions rather than mistakes.
+
+### 1. `LUMP_OVERLAYS` was never read
+
+Source has two kinds of decal. `infodecal` is an entity — a point and a material — and CSQC has
+placed those since Build 12. The other kind is not an entity at all: the mapper draws a rectangle
+on a face and VBSP bakes it into **lump 45** as an oriented quad with its own rotation, size,
+aspect and texture range. `mod_vbsp.c` had `// VLUMP_FOO = 45,` and nothing else.
+
+Censused over all 1310 shipped maps: **230 carry a non-empty lump 45, 9702 overlays in total**,
+and not one of them has ever been drawn. `surf_rise` alone has 105; `surf_theme` has 604.
+
+**The record layout is chosen by the LUMP's own version field, not the BSP header version.** This
+is the most important fact in the patch and it is easy to get wrong, because the two correlate:
+every version-1 and version-2 lump happens to sit in a Strata (v25) map, so "Strata uses a bigger
+stride" is true by coincidence and false as a rule — 69 of the 78 v25 maps carry no overlay lump at
+all, and the 9 that do are split across three different layouts.
+
+| lump 45 version | layout | maps | overlays |
+|---|---|---|---|
+| 0 | 352 bytes; `nTexInfo` int16, facecount+renderorder packed in a u16 | 221 | 9397 |
+| 1 | 356 bytes; the same struct with both header fields widened to int32, everything after +8 shifted by 4 | 3 | 156 |
+| 2 | 360 bytes; exactly version 1 plus a trailing int32 (always −1) | 1 | 4 |
+| 3 | not an array at all: `int numOverlays; int numFaceIndices; int aFaces[numFaceIndices];` then 108-byte records with 2D uv points and an explicit basis U | 5 | 145 |
+
+Three of the five version-3 lumps are an 8-byte `{0,0}` stub — an *empty* overlay lump that a
+stride test reads as garbage rather than as nothing.
+
+In versions 0/1/2 the tangent basis is smuggled into the Z components of the four uv points:
+`U = (uv[0].z, uv[1].z, uv[2].z)`, with `uv[3].z` a spare flag (0 on 8952 records, 1.0 on 445 —
+so it is *not* always zero, which an earlier note here claimed).
+
+**Rather than append real surfaces**, the loader decodes the lump and synthesises
+`{"classname" "info_overlay" …}` blocks onto the entity string, which the existing CSQC decal path
+consumes through `adddecal_static`. Appending `msurface_t`s would mean growing `mod->surfaces`,
+`nummodelsurfaces`, the marksurfaces array and every leaf's surface range in step — the exact
+coupling the guard comment in `VBSP_LoadFaces` documents after it produced a multi-GB heap
+corruption. This adds no builtin, no renderer path and no lump ordering constraint, and the failure
+mode of a bad record is a missing decal and a census line.
+
+**The trap that would have made all of it silently do nothing:** 1307 of the 1310 shipped maps
+store a **trailing NUL byte inside the entity lump**. Text appended after it is invisible — the
+engine's own `COM_ParseOut` and the CSQC `getentitytoken` path (`QCC_COM_Parse`) both stop dead at
+the first NUL and report no error. `VBSP_LoadEntities` now trims trailing NULs before appending,
+and only on that path, so `hl2_overlays 0` passes the original `filelen` through untouched.
+
+### 2. Every decal on a Source, Quake2/3 or CoD world was fullbright
+
+```c
+ctx->dolm = r_decal_lightmap.ival && cl.worldmodel &&
+            (cl.worldmodel->fromgame == fg_quake || cl.worldmodel->fromgame == fg_halflife);
+```
+
+VBSP sets `fromgame = fg_new` and was never in that list, so `dolm` was always false and every
+vertex got `lm = 0`. The rest of the machinery was already game-agnostic.
+
+The fix does not add `fg_new` to the list. `fg_new` is **shared** — Doom 3 and CoD set it too — so
+a game-id test admits Doom 3, which has `surfstyles` but never allocates a lightmap. Test the two
+properties the interpolation actually needs instead:
+
+```c
+ctx->dolm = r_decal_lightmap.ival && cl.worldmodel
+            && cl.worldmodel->lightmaps.surfstyles > 0 && cl.worldmodel->lightmaps.count > 0;
+```
+
+`surfstyles > 0` is exactly the condition under which `mesh->lmst_array[0]` is non-NULL;
+`count > 0` is exactly the condition under which the batch lightmap pages were rebased from
+model-local to global atlas indices. Doom 3 is still excluded, CoD is now correctly *included*, and
+the test cannot drift out of step with the loaders the way a game-id list did.
+
+### Three defects the widened gate exposed
+
+- **`DecalLM_Interp` hardcoded the trifan winding.** A Source displacement is an indexed
+  diamond-flipped quad grid that sets `istrifan = false` while still carrying real `lmst_array`
+  data, so fanning over it tested triangles that are not faces of the surface — for a 5×5
+  displacement, `(v0,v4,v5)` spans an entire grid row. Memory-safe, silently wrong lighting, on
+  **640 of 9557 overlays across 37 maps** (`surf_outra` 178 of 269). It now walks `mesh->indexes`,
+  exactly as the *clipper* already did.
+- **One unguarded NULL dereference.** The fallback did
+  `Vector2Copy(surf->mesh->lmst_array[0][0], out_lm)` on the path taken *because*
+  `lmst_array[0]` may be NULL. Unreachable only by the accident that the old Q1/HL gate implied it.
+- **Vertex alpha went negative and was never clamped.** It reaches 0 at `vradius/2` but geometry is
+  accepted out to `max(radius,vradius)/2`, and the decal shader is `blendfunc gl_one
+  gl_one_minus_src_alpha` with `alphagen vertex` — a negative alpha is a multiplicative
+  *brightening*. At the stock `fs_decal_size 32` / `DECAL_DEPTH 8` that is alpha −3 at the edge of
+  the clip box. This already affected infodecals; it is clamped now, which is also what makes a
+  shallow projection depth usable for overlays.
+
+### `adddecal_static` gained a texture range, and lost two parameters to pay for it
+
+The projection frame is a fixed **proper rotation** — `axis[1] × axis[2]` is identically
+`-axis[0]` — so a mirrored image is not reachable by any choice of `up`/`side`: negating `side`
+flips s *and* t (a 180° spin), and negating `up` inverts the projection direction, which
+`r_decal_noperpendicular` then rejects outright. And a hardwired 0..1 texture range cannot express
+a texture that repeats or that shows only part of itself. Measured over the library, overlays need
+all three: **6.3% mirrored, 17.8% tiled** (median 13×, max 344×), **1.4% cropped**.
+
+So the builtin now takes `srange` and `trange` — `(s0,s1,_)` and `(t0,t1,_)`, omitted meaning the
+0..1 identity every caller used implicitly before. Mirroring is `s1 < s0`; tiling is a span > 1;
+cropping is a sub-range. One mechanism, three problems.
+
+Paying for it: **a builtin can be handed at most eight arguments.** The call opcodes stop at
+`OP_CALL8`, and a ninth is not merely ignored, it is *invisible* — `callargc` reads 8 however many
+the QC wrote, and reading past the eighth slot returns unrelated globals. That was measured, not
+assumed: a ten-argument version compiled without a warning and arrived as `argc 8` with both extra
+vectors missing. `alpha`, `aspect` and `lifetime` therefore travel together in one vector to free
+the two slots the range needs.
+
+The range the *engine* must map is not `flU`/`flV` — the engine's s axis runs the opposite way
+across the quad whenever the overlay is mirrored. The plugin derives it by evaluating Source's own
+linear texture map at the four points the engine's frame puts s and t at, which comes out as the
+exact identity for both of the conventions that cover 99% of the library — which is the check that
+it is right.
+
+### Verified
+
+| check | result |
+|---|---|
+| `surf_rise`, lump version 0 | 105 synthesised, **103 placed**, 2 off-surface |
+| `bhop_canals`, lump **version 1** (356-byte) | 53 synthesised, 41 placed (9 list no faces, 3 off-surface) |
+| `bhop_arcane`, lump version 1 | 5 of 5 placed |
+| `surf_theme`, 604 overlays | 394 placed (2 no faces, 10 sheared, 198 off-surface) |
+| `bhop_futile`, **no lump 45** — the control | no overlay line at all, either setting |
+| infodecal regression, `bhop_canals` | **`decals: 81 of 416`, identical to before the signature change** |
+| `hl2_overlays 0` / `fs_overlays 0` | entity string byte-identical; infodecals unchanged |
+| `ent_census` | `info_overlay` never appears — the SSQC stub removes it |
+| orientation, both texture conventions | `surf_rise`'s wall digits render upright and correctly ordered in both the `flU=(0,1)` and `flU=(1,0)` families — a mirrored digit would be unmistakable and there is none |
+
+### What it still does not do
+
+- **198 of surf_theme's 604 find no geometry under them.** Not a structural limit — all 602
+  face-bearing overlays there are on world-model faces, so this is the clip failing, and it is not
+  yet diagnosed. `surf_rise` is 2 of 105 and `bhop_canals` 3 of 53, so it is map-dependent.
+- **9 of bhop_canals' 53 list zero faces**, and are skipped deliberately: Source draws nothing for
+  those either, so placing them would *add* decals the map never had. 289 such records library-wide.
+- **Sheared and trapezoidal quads** are drawn as their bounding rectangle within
+  `fs_overlay_shear` (default 0.1, which keeps 97.9% of the library) and skipped past it.
+- Two overlays in the library have material names longer than `persistdecal_t::shadername[64]` and
+  would fail to re-resolve their shader after a `vid_restart`.
+
+### Reverting
+
+`hl2_overlays 0` (map-latched) stops the synthesis and passes the entity lump through untouched.
+`fs_overlays 0` keeps the synthesis but places nothing. `r_decal_lightmap 0` restores fullbright
+decals. Each was tested at 0 and reproduces the previous behaviour exactly.
+
+---
+
+## Patch 247 — the player hull was replaced by a ±16 cube, so the eye stood 16 units above the floor  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+
+### The report
+
+> *"Almost perfect, but I swear standing eye-height SAYS 64, however in Momentum mod and
+> Counter-strike source, your eye-line [is] around the same height you can crouch jump, however in
+> my game i'm like 16units~ to high, and when I duck, THEN i'm the correct height for "standing"
+> next to boxes which are 64units :? the game says correct but I'm saying otherwise."*
+
+Both halves were exactly right, and both had been dismissed once before.
+
+### What was actually happening
+
+    eye: origin 145.00  hull -16..46  ducked 0
+         floor 128.03 via 'world'   feet-above-floor 16.97
+         EYE ABOVE FLOOR 80.97  (view_ofs 64.00, head 62.97)
+
+The hull was the right **height** — 62 — in the wrong **place**. `mins[2]` was `-16` instead of `0`,
+so the box ran `-16..46`. The feet rested on the floor correctly, which is why nothing looked
+broken and why gravity never resolved it, but the ORIGIN then sat 16 units above the floor, and
+`view_ofs` is measured from the origin. Standing eye = floor + **80.97**. Ducked = floor + **63.97**,
+which is why crouching looked like the correct standing height next to a 64-unit crate.
+
+### Root cause
+
+Six steps, and the fifth is what made it permanent:
+
+1. `worldspawn` sets `sv_gameplayfix_setmodelrealbox 1` and `sv_gameplayfix_setmodelsize_qw 1`
+   (Build 34) so that props receive their model's bounds — without them no prop was ever a
+   physent and Patch 229's collision fix was inert.
+2. With `setmodelsize_qw` set, `PF_setmodel` stamps a hardcoded ±16 cube onto any entity whose
+   model does not load — `pr_cmds.c:3181-3186`, the *"nq pretended that its models were all
+   +/- 16"* fallback.
+3. An **empty model string is exactly that case**. `PutClientInServer` called
+   `setsize(0..62)` and *then* `setmodel(self, "")`, so the ±16 cube landed on top of the CS:S
+   hull: `mins.z = -16`.
+4. `PMSrc_PlayerMove` captured the hull from the entity and `PMSrc_ApplyStandHull` derived the
+   TOP from that bottom — `player_maxs[2] = player_mins[2] + standheight` — giving `-16..46`.
+5. `sv_user.c:8134` writes the hull back to the entity every move, so the corruption was
+   re-seeded each tick and could never heal.
+6. `Q1BSP`/`VBSP` traces take `mins`/`maxs` verbatim, so the box genuinely collided at `-16..46`
+   and the player rested correctly on it. Nothing anywhere reported an error.
+
+`worldspawn`'s own comment asserted this was safe *because* "the player `setmodel("")`s then
+`setsize()`s itself explicitly". The order was the other way round. The comment named the exact
+hazard — *"setmodelsize_qw alone falls through to a hardcoded +/-16 fallback cube"* — one
+paragraph before relying on it not applying.
+
+**Live since Build 34**, i.e. every build that has had working prop collision.
+
+### Why Build 41 measured this and concluded the opposite
+
+Build 41 answered the same report with a CSQC readout of `camera − pmove_org` = **64.06** and
+called it not-reproducible. That number was true and useless: it proves the eye is 64 above the
+ORIGIN, which nobody doubted. It says nothing about where the origin is relative to the FLOOR.
+
+The floor trace that was supposed to close that gap ran in **CSQC**, where a `traceline` falls
+straight through brush entities. It reported **128.031** against an origin of 145 — a 16.97 gap,
+the correct answer — and that reading was then explained away as the known brush-entity trap
+recorded in memory. The trap is real; it simply was not what was happening. **A known failure
+mode is not a diagnosis**, and using one to discard a measurement that agrees with the user's
+report is how a proven bug got closed as unreproducible.
+
+### The fix
+
+**QC — `sv_player.qc`, `PutClientInServer`.** `setmodel(self, "")` now runs BEFORE the
+`setsize`, restoring the order `worldspawn` already claimed. The hull is set last, so nothing
+can stamp over it. Commented at both ends, with the failure spelled out, and `sv_main.qc`'s
+stale safety claim corrected in place.
+
+**Engine — `pm_source.c`, defence in depth.** In Source the origin *is* the feet, so the box
+bottom is `0` by definition; Momentum never derives it at all, passing literal
+`VEC_HULL_MIN`/`VEC_HULL_MAX` to `UTIL_TraceHull` (`mom_gamemovement.cpp:736`). Two changes:
+
+* `PMSrc_ApplyStandHull` now sets `player_mins[2] = 0` and `player_maxs[2] = StandHeight()`
+  outright. The mod still owns the WIDTH; it no longer owns the floor, and the top is no longer
+  derived from an inherited bottom.
+* `PMSrc_PlayerMove` pins a non-zero captured `mins[2]` to 0 and prints a one-shot
+  `CON_WARNING` naming the likely cause. Latched per session — this runs every usercmd.
+
+Any mod that gets this wrong now moves correctly and is told.
+
+### Verification
+
+`pm_selftest` gained five cases that poison `pms_standmins[2]` with `-16` exactly as
+`PF_setmodel` did, and check **both ends** of the resulting box — height alone cannot catch a box
+that is the right size in the wrong place, which is precisely why the existing 20-case suite and
+Patch 245's new `CanUnduck` coverage both missed it. All five pass; the suite is still
+`all checks passed`.
+
+Measured in-game on `surf_aesthetic`, same cfg, before and after:
+
+| | before | after |
+|---|---|---|
+| entity hull | `-16..46` | `0..62` |
+| feet above floor | 16.97 | **0.00** |
+| **standing eye above floor** | **80.97** | **64.00** |
+| ducked eye above floor | 63.97 | **47.00** |
+| head above floor | 62.97 | 62.00 |
+
+64.00 and 47.00 are Momentum's `g_ViewVectorsMom` values exactly
+(`mom_gamerules.cpp:34-46`).
+
+### Consequences
+
+* **The eye drops 17 units in world space.** That is the fix, and it is very visible.
+* **The world-space collision box barely moves** — it was `floor+0.97 .. floor+62.97`, it is now
+  `floor .. floor+62` — so zone and trigger contact is essentially unchanged.
+* **Origins recorded by the broken build are 16 units high.** Saved locations (`sl_save`) and
+  `.rec` replays from Build 34-41 will drop ~17 units on load. Times were already invalidated by
+  Patch 245.
+
+### The tool this needed
+
+`cmd fs_eyeinfo` (`sv_zones.qc`, beside `SV_Stuck`) reports the eye against a **server-side**
+floor trace, which collides brush entities, and — the half that was never measured — traces the
+crosshair and reports how high the thing you are aiming at actually is. *"I am 16 too high next
+to a 64 crate"* and *"I am correct next to a 48 crate"* produce an identical feeling and an
+identical 16; only the crate distinguishes them. Aim at a crate's top edge: `+0.00 vs eye` means
+it is level with your eye.
+
+### Reverting
+
+No cvar. Move `setmodel` back after `setsize` in `PutClientInServer` to restore the bug; the
+engine pin will then correct the movement and print the warning, which is the intended behaviour
+for a mod that gets this wrong.
+
+---
+
+## FTESurf Build 42 (QC) — the eye measured against the floor instead of against itself  *(APPLIED, QC only — `build.ps1`)*
+
+`SV_EyeInfo` / `cmd fs_eyeinfo`, the `setmodel`/`setsize` reorder in `PutClientInServer`, and the
+corrected safety comment in `worldspawn`. See Patch 247 — this half and the engine half were one
+fix and are documented there.
+
+Also corrected: `SV_Stuck`'s prose still said "the ducked hull is 54 tall and the standing one
+72", from before Patch 245 changed them to 45 and 62. The code beside it already used the
+`PM_*` defines and was correct.
+
+### Addendum — the menu row, and why it is on `fs_overlays`
+
+**Reported as:** *"hl2_overlays 0 doesn't seem to disable it, but fs_overlays 0 does. can you fix
+the hl2_overlays switch just for the gfx_menu"*
+
+Reproduced, and the cause is not in the cvar. `hl2_overlays` is read inside the BSP loader, and
+**the BSP loader does not re-run on a map restart.** `retry` — which is what gfx_menu key 7 issues,
+and the only reload gesture the menu has — is `map_restart`, which respawns the server and
+re-initialises CSQC but leaves the world model alone: `Mod_ForName` returns the cached model unless
+the `.bsp`'s mtime moved. So the entity string the loader synthesised on the *first* load is still
+there, overlays and all.
+
+Measured three ways on `surf_rise`, with the loader's own `developer 1` line as the probe:
+
+| gesture | `VBSP: … baked overlays synthesised` reprinted? | `hl2_overlays 0` applied? |
+|---|---|---|
+| `map surf_rise` again | no | no |
+| `retry` (menu key 7) | no | no |
+| load a different map, come back | **yes** | **yes** |
+
+That line prints exactly once per genuine load however many restarts follow, which is the direct
+evidence that nothing read at BSP-load time can change without one.
+
+So the menu row is **`fs_overlays`**, not `hl2_overlays`: it is read on CSQC's per-map entity walk,
+CSQC *is* re-initialised by a restart, and it therefore responds to key 7 — which is the whole
+requirement for a menu row. It is row 13, `*`-marked, at the head of page 3 ("what the map LOAD
+builds"), directly after Decals. Verified through the menu's own console handle so the real
+`Gfx_Cycle` path is what ran, not a shortcut around it:
+
+```
+  13 fs_overlays        Overlays       On            *needs map load
+gfx_menu cycle 13  ->   Off  ->  retry  ->  overlays: 105 found, none placed (fs_overlays 0)
+gfx_menu cycle 13  ->   On   ->  retry  ->  overlays: 103 of 105 placed
+```
+
+`hl2_overlays` keeps its job — proving what the entity string looks like without the synthesis —
+and its description now says outright that it needs a genuine map load, so it stops implying a
+restart will do. Console-only, for the same reason `hl2_displacement_scale` is.
+
+**A defect this exposed and did NOT fix.** The `*` mark means "needs a map load — press 7", and for
+every row whose cvar is read at BSP-load time that promise is false: pressing 7 cannot apply it.
+That is rows 15–19 (`hl2_hidetools`, `hl2_areaportals`, `hl2_propcollision`, `hl2_dispcollision`,
+`hl2_favour_ldr`) as well as `hl2_overlays`. The fix would be to make the reload path purge the
+world model when a `CVAR_MAPLATCH` cvar actually changed — `Cvar_ApplyLatches` already runs before
+`Mod_ForName` in `SV_SpawnServer`, so the hook exists — but that changes reload behaviour for five
+other rows and is not part of this patch. Recorded here so the next reader does not conclude the
+mark is simply wrong and delete it.
+
+## Patch 248 — 34909 sprite entities across 551 maps, none of which had ever drawn a pixel  *(APPLIED, QC only — `build.ps1`)*
+
+Stage D of the plan at `C:\Users\Lex\.claude\plans\i-m-developing-a-professional-scalable-planet.md`.
+Stage C (Patch 246) drew the map's baked decals; this draws the map's sprite ENTITIES — the
+light glows on every lamp, the god-rays from every ceiling fixture, the fires, the candle flames
+and the flat billboard trees.
+
+They were being dropped whole. Every one is a point entity, so SSQC's catch-all removed it as
+"nothing to preserve" (`SV_OnEntityNoSpawnFunction`), and nothing on the client ever looked for
+them. Patch 239 had already fixed the `Sprite` arm of `mat_vmt.c` and said in its own note that
+it was "the prerequisite for drawing env_sprite and friends at all — every one of those 217
+masked materials is referenced by a sprite ENTITY, and nothing spawns those yet." This is that.
+
+### The census, and two classes the plan did not know about
+
+Counted over all 1310 shipped maps, from their own LZMA-decompressed entity lumps:
+
+| class | instances | maps | |
+|---|---:|---:|---|
+| `point_spotlight` | 23666 | 413 | **drawn** — a light shaft |
+| `env_sprite` | 10947 | 276 | **drawn** — a camera-facing billboard |
+| `env_lightglow` | **3393** | **137** | declined — a view-space flare |
+| `env_spritetrail` | 2773 | 132 | declined — needs its parent's motion |
+| `env_sprite_oriented` | 284 | 8 | **drawn** — fixed to its own angles |
+| `beam_spotlight` | 11 | 2 | **drawn** — `point_spotlight`'s newer name |
+| `env_glow` | 1 | 1 | **drawn** — `env_sprite`'s older name |
+
+`env_lightglow` **was not in the plan's class list at all**, which was an omission: at 3393
+instances across 137 maps it is bigger than `env_spritetrail`, which was in it. It is declined
+anyway, for a better reason than being late — see below.
+
+The plan's cost estimate was also wrong, in the reassuring direction. "24k polys with a shared
+shader" is the LIBRARY total; the worst single map is **bhop_rpg at 862** drawables, then
+surf_grotto at 464. So there is no cap, no LOD and no budget logic here — a distance cull and a
+kill switch is the whole of it.
+
+### What decides a sprite's size, and why it needed a builtin
+
+A Source sprite's world size is its texture's size in PIXELS times `scale`: `spritemodel.cpp`
+:317-330 sets the quad's half-extents to `m_width/2` and `m_height/2` with no other factor, and
+`c_sprite.cpp`:102-105 multiplies those by `scale` alone. One texel is one unit at scale 1.
+
+QC cannot see a texture's dimensions — which is why `fs_decal_size` is a guess and says so. There
+is exactly one builtin that can: `drawgetimagesize`, which blocks until the image has loaded
+(`R_GetShaderSizes` with `blocktillloaded` true, `gl_shader.c:9442`). That is fine once per
+material at map load and unthinkable per sprite per frame, so `cl_sprites.qc` keeps a table of
+distinct materials and asks once. Measured live on bhop_rpg: 82 materials, real sizes —
+`nu/wizard1 128x128`, `nu/exclam 32x64`, `sprites/ledglow 64x64`.
+
+It resolves through `R_RegisterPic` while the draw resolves through `R_RegisterCustom`, so the two
+are separate shader objects on different usage flags. They still find the same VMT and therefore
+the same VTF: `R_LoadShader` calls `Shader_ParseShader` — which is what reaches the material
+loaders — BEFORE it ever consults the default generator (`gl_shader.c:8551-8564`), and that path
+does not depend on usage flags.
+
+### The material name, in three transformations
+
+Each is one Source itself performs, and all three are load-bearing on real maps:
+
+- lowercase and forward slashes — `"materials\Sprites\Glow.vmt"` occurs;
+- strip a leading `materials/` — 37 of 847 distinct names carry it, and `VMT_ReadVMT` adds its own
+  (`mat_vmt.c:2189`);
+- **strip the extension** — 122 of 847 name a `.spr`, the HL1 sprite container, and Source resolves
+  those by stem too (`spritemodel.cpp:252`, `Q_StripExtension` before the material lookup).
+
+That last one is the difference between working and not. Of 11232 sprite instances only **three**
+name a `.spr` with no matching `.vmt` beside it. Had the extension been kept,
+`sprites/glow01.spr` would have asked for `materials/sprites/glow01.spr.vmt` and the single most
+common sprite material in the library — 2132 instances, 19.5% of all of them — would have drawn
+nothing.
+
+Resolvability, weighted by instance: **62.0%** come from a mounted VPK, **33.3%** from the map's own
+pakfile, and **4.7%** resolve nowhere (358 of them `sprites/glow.vmt`, a name no mounted pack has
+ever contained). Those are skipped and counted, not drawn at a guessed size — `R_BeginPolygon`
+falls back to `Shader_PolygonShader` for an unknown name, and a solid 64-unit coloured square
+where a soft glow belongs is worse than the nothing that is there today.
+
+### Three rules that are not guessable from the entity
+
+**The start-on gate is not `spawnflags & 1`.** `Sprite.cpp`:208-216 turns a sprite off only if it
+has a targetname AND lacks the flag; an unnamed sprite is on whatever its spawnflags say. That
+distinction decides thousands: 49.2% of the library writes `spawnflags 1` and 50.8% writes 0, so
+reading the flag alone would blank half of every map. Only 8.7% carry a targetname, so the number
+actually turned off is small — measured on bhop_rpg as exactly **1 of 862**.
+
+`point_spotlight` is the opposite and IS a plain flag test (`point_spotlight.cpp:182`, and
+`Activate` at :262 only builds the beam if it is set). 3.3% of the library starts dark.
+
+**An oriented sprite's angles are not the angles in the lump.** `Sprite.cpp`:855-863:
+`CSpriteOriented::Spawn` saves the authored angles, calls `CSprite::Spawn` — which swaps yaw into
+roll whenever yaw is non-zero and roll is zero, commented "Worldcraft only sets y rotation" — and
+then restores the SAVED angles with 180 degrees added to the yaw, because "ORIENTED sprites
+'forward' vector points in the players 'view' direction, not the direction 'out' from the sprite
+(gah)". Net: authored angles, yaw + 180. Both halves matter; either one wrong turns bhop_murder's
+208 trees and wall lamps to face the walls they are mounted on.
+
+**The beam is not a cone.** `BeamInit(name, goalwidth)` sets the START width to `spotlightwidth`
+(`beam_shared.cpp:589-590`), and `ComputeRenderInfo` sets the END width to
+`goalwidth * (reached / intended)` (`point_spotlight.cpp:210-212`) — so a beam that reaches its
+full length is parallel-sided and one that stops short CONVERGES. The endpoint is a trace of
+**2×** `spotlightlength` (`SpotlightCurrentPos`, :341-347 — the double is not a typo), and
+`FBEAM_SHADEOUT` with a fade length equal to the reach becomes `brightness = 1 - fraction`
+(`beamdraw.cpp:359`): full at the source, zero at the far end. Alpha is fixed at 64/255 because
+`SetBrightness(64)` at :372 is unconditional — `renderamt`, which 91.6% of these entities write
+and 98.5% write as 255, never reaches the beam at all. Wiring it in would make every light shaft
+in the library four times too bright.
+
+### A bug this found, and the screenshot that found it
+
+The first cut ran texture V **upward**. Source's own quad pairs the top two corners with `flMinV`
+(`c_sprite.cpp:110-131`), so v=0 is the top of the image — the ordinary top-left origin.
+
+This is invisible on exactly the material you would reach for to test it. Nearly every sprite in
+the library is a radially symmetric glow; kz_anubis' six-digit timer display looked perfect with
+the bug in place, because a seven-segment "0" is symmetric in both axes. What caught it was
+bhop_murder, a quote map whose `env_sprite_oriented` are mostly TEXT — "(!) Climb", "(!) No jump",
+"stop" — which is asymmetric in both axes at once, so readable text proves the right/up basis, the
+yaw+180 and the V direction simultaneously.
+
+It also mattered more than cosmetically: the beams sample `glow_test02` along their length, and
+with V reversed surf_grotto's 464 light shafts were nearly invisible — only the bright lens end
+showed. The before/after screenshots are `spr02_grotto_on.png` and `spr03_grotto_on.png` from the
+same camera.
+
+### Verification
+
+Counts against the offline census of each map's own entity lump:
+
+| map | the loader said | the lump says |
+|---|---|---|
+| surf_rise | `sprites: 1 of 1 drawn` | 1 `env_sprite` |
+| bhop_rpg | `sprites: 861 of 862 drawn (1 off, 0 no material, 0 over cap)` | 819 + 43 = 862 |
+| surf_grotto | `spotlights: 464 of 464 drawn` | 464 `point_spotlight` |
+| bhop_murder | `sprites: 344 of 365 (21 no material)`, `spotlights: 25 of 25` | 157 + 208 = 365, 25 |
+| bhop_collective | `sprites: 62 of 62`, `declined 14 env_lightglow` | 62, 14 |
+| **bhop_futile** | **no sprite line at all** | **zero of every class — the control holds** |
+
+Pixels, at a matched camera both ways (`noclip` re-issued after each `retry`, because it does not
+survive a respawn — SPR02's OFF shot fell to the floor before the shutter):
+
+- `spr03_grotto_on/off.png` — identical frame, the only difference is 425 light shafts. That pair
+  also proves the gfx_menu row applies, because the OFF arm was reached by setting the cvar and
+  pressing the menu's own reload.
+- `spr04_climb.png` — "(!) Climb" upright and reading left to right.
+- `spr04_cypress.png` — five alpha-tested cypresses, trunks down, crisp against sky.
+- `spr03_digits.png` / `_behind.png` — the timer row upright from both sides, which is what
+  `DRAWFLAG_TWOSIDED` is there for.
+
+Frame cost, surf_grotto (densest in the library) from the same camera, 425 of 464 beams past the
+cull, `cl_maxfps 0` / `cl_yieldcpu 0`, `show_fps 1` (a one-second average), interleaved:
+
+| | sample 1 | sample 2 | best | ms/frame |
+|---|---:|---:|---:|---:|
+| shafts on | 1155.0 | 1265.5 | 1265.5 | 0.790 |
+| shafts off | 1471.9 | 1508.8 | 1508.8 | 0.663 |
+
+**≈0.13 ms/frame** for 425 large additive quads, and the two ranges do not overlap. Against the
+shipped `cl_maxfps 340` (2.94 ms/frame) that is 4%, and invisible; it is two samples an arm rather
+than five, so treat the magnitude as approximate and the direction as established.
+
+**The first attempt at that measurement was void and is worth recording.** `timerefresh` calls
+`R_RenderView()` in a loop (`gl_rmisc.c:462-490`) and never runs `CSQC_UpdateView`, so nothing
+`R_BeginPolygon` queues is in the scene it times — both arms timed the identical sprite-free
+frame. It also takes the frame count as its SECOND argument, so `timerefresh 512` is finish=512,
+frames=128. The tell was in the result: the arm with 425 extra additive quads came out FASTER.
+`cfg/testrun/spr05.cfg` is kept with that written across the top of it.
+
+### Declined, and counted rather than forgotten
+
+Neither gets a server stub, so both keep appearing in `ent_census` as the unimplemented classes
+they are. The census's whole job is to be the honest statement of what is still missing.
+
+**`env_spritetrail`** (2773 / 132 maps) is not a sprite at a place, it is a ribbon through a PATH.
+95.1% carry a `parentname` and the parents are called `spritetrial_rotate_end2`, `knife_spin`,
+`doorrottimer`, `rotating3` — brush entities that turn. The trail is the streak the sprite leaves
+as its parent swings it, and a trail whose points all coincide draws nothing in Source either. The
+honest options were a stationary blob where a moving streak belongs, or a line in the status
+print. Drawing it needs server-side parenting and the parent's motion replicated to the client.
+
+**`env_lightglow`** (3393 / 137 maps) is a lens flare, not a world quad. `glow_overlay.cpp`:330-331
+places it at a FIXED 100 units in front of the camera along the direction to the glow, scales it by
+70x–150x on the view dot product (:288-308), and gates it on an occlusion query (:313). Its
+apparent size does not change with distance. Half of it — a world quad at `HorizontalGlowSize`
+units — would be a small dull square where a large soft flare belongs. Every key it needs is
+present on 98.9% of them, so it is buildable; it is simply a second renderer.
+
+### Known limits, stated rather than discovered later
+
+- **8.5% of sprite instances sit on an `UnlitGeneric` material**, which does not emit
+  `rgbGen vertex`, so `rendercolor` and `renderamt` do not reach them and they draw at full
+  brightness. Only the `Sprite` arm emits it (86.6% of instances). Fixable in `mat_vmt.c`, but
+  `UnlitGeneric` is a world-surface material class and that is a wide blast radius for this.
+- **`$spriteorigin` is ignored.** `new/wall_lamp.vmt` writes `[0.00 0.50]`, which puts the quad
+  entirely to one side of the entity rather than centred; 41 instances on one map. The key is in
+  `mat_vmt.c`'s known-ignored list and QC has no channel to read it.
+- **Animated sprites do not animate.** `framerate` is parsed and unused; 97.1% write 10.0.
+- **The beam trace is CSQC's**, so it sees the world and not brush entities, where Source uses
+  `MASK_SOLID_BRUSHONLY` and sees both. A spotlight aimed at a door reaches past it to the wall
+  behind. One traceline per spotlight at map load, none afterwards.
+- **`fadescale` / `fademindist` / `fademaxdist`** (17.6% of `env_sprite`) are not honoured;
+  `fs_sprite_dist` is the global equivalent.
+
+### Files
+
+- `src/client/cl_sprites.qc` *(new)* — the whole feature.
+- `src/cl_progs.src` — after `cl_decals.qc`, before `cl_main.qc`.
+- `src/client/cl_main.qc` — four cvars, `Sprite_LoadFromWorld` in `CSQC_WorldLoaded`,
+  `Sprite_Draw` beside `Zone_Draw`.
+- `src/client/cl_gfx.qc` — rows 14 and 15, `GFX_ROWS` 24 → 26, rows 14-24 shifted to 16-26.
+- `src/server/sv_entities.qc` — five census stubs, and a note naming the two that deliberately
+  have none.
+
+### Cvars
+
+| | |
+|---|---|
+| `fs_sprites` | 1, archived. The billboards. gfx_menu row 14. |
+| `fs_spotlights` | 1, archived. The light shafts. gfx_menu row 15. |
+| `fs_sprite_dist` | 0 = unlimited. Culled on the centre less the sprite's own radius. |
+| `fs_sprite_debug` | one-frame dump of the material table and the cull result; clears itself. |
+
+Two switches rather than one because they are different purchases: 11232 small billboards that
+mostly cost fill, against 23677 large additive shafts that cover a lot of screen and are much more
+likely to be the thing somebody wants gone. Folding them together would have meant losing every
+glow to turn off the shafts.
+
+Both are read at map load, like the Decals and Overlays rows above them, so both are `*`-marked and
+both genuinely respond to the menu's reload — which is the thing Patch 246's addendum established
+is false for rows 17-21.
+
+---
+
+## FTESurf Build 43 (QC) — three replay bugs, two of them arithmetic and one of them a stale PVS  *(APPLIED, QC only — `build.ps1`)*
+
+Three reports against the demo player, all separate, none of them where they looked.
+
+The framing that decides all three: **FTESurf "demo playback" is not engine demo playback.** There
+is no `.dem`/`.mvd`/`.qwd` path anywhere in the QC. `replay` (`cl_watch.qc:2925`) loads a plain-text
+`.rec` and its `.view` sidecar into two strbufs and overrides the camera with
+`setproperty(VF_ORIGIN/VF_ANGLES)`; the map stays loaded and the player is pinned `MOVETYPE_NONE`.
+
+### A — "Demo lines in demos do not draw the entire demo, it stops at the last 10%"
+
+`Watch_BuildCurve` set its subdivision step from the path's total length over the point budget, then
+spent `ceil(len/step)` per span. **Ceil costs up to one extra point per span**, so the real spend was
+`budget + spans` against a table of `budget + 2`. When it filled, the guard at `:801` broke only the
+**inner** loop — the outer span loop kept running and emitted nothing — and the final control point
+was dropped too, because its append is conditional on the same full table.
+
+The comment at `:757-766` asserted this could not happen (*"Measuring the total length first and
+dividing fills the table once however long the run is"*). It was wrong and now says why.
+
+**Measured before writing anything.** `tools/pathcheck.py` (new) re-implements the control-point
+selection and the curve budget outside the game and runs them over every `.rec` on disk:
+
+| | build 42 | build 43 |
+|---|---|---|
+| files that truncate | **12 of 58** | **0 of 58** |
+| `surf_fiellu/main/0003991_pb` | 757 ctl, step 75.0, **86.6% drawn** | 757 ctl, step 97.9, **100%** |
+| worst | `surf_ace/main/last` at 82.6% | — |
+
+The fix reserves one point per span up front, so `total/step + spans == budget` bounds the spend
+exactly. That alone is *conservative* — reserving a whole point per span assumes every ceil rounds
+all the way up, where real spans round up by half on average — and left about a fifth of the table
+unused, which would have traded a line that stops early for a line that is faceted everywhere. So a
+second pass spends the slack: measure what the safe step costs, scale toward the budget, keep only a
+step that has been **counted and found to fit**, and bisect when the guess overshoots. Bisection and
+not proportion, because cost is a sum of ceils and falls in cliffs rather than smoothly — one
+proportional guess left `surf_fiellu` and `surf_utopia` stuck at the conservative value while
+helping every other file.
+
+Net: 14 of 58 files get a coarser step, and **12 of those 14 are exactly the 12 that used to be cut
+off.** They trade 20-30% coarser spacing for the last 4-17% of the run existing at all.
+
+`Watch_CurveCost` is a count-only mirror of the emit loop and must stay one; if they drift the
+refinement stops being safe. The emit guard stays where it is regardless — a refinement that has to
+be trusted is a refinement that can be wrong.
+
+### B — "demos don't have the starting viewangles before they leave the start zone"
+
+Exactly right, and reader-side only. `Watch_Sample` clamped the sidecar lookup tick to 0 for the
+whole negative-`t` approach, so `Watch_ViewBlock(0)` found the block at run tick 0 — the first
+recorded frame — and the sub-tick pick landed on its first line every frame, because the fraction of
+a clamped tick is always zero. The camera held the run's opening angle until the clock reached 0.
+
+The sidecar genuinely cannot cover that window: it opens on the `TF_RECORDING` edge, which **is**
+leaving the start zone, and its join key `STAT_FS_TIMERTICKS` reads 0 or — after a stopped attempt —
+the *previous* run's finish tick while armed, which `reccheck.py` already faults as a clock going
+backwards.
+
+**But the `.rec` has covered it since build 18.** `SV_RecPad` stores `v_angle_x`/`v_angle_y` into the
+pre-start ring every tick and `SV_RecOpen` flushes it in with negative timestamps. So the fix is to
+take the fallback branch that already exists for a file with *no* sidecar, and take it for the part
+of a file the sidecar does not reach. **No writer change, no format change, and it repairs every
+recording already on disk.**
+
+Verified against the file, `surf_fiellu`, seven points across the 129-sample pad:
+
+| t | `.rec` says | `replay status` prints |
+|---|---|---|
+| -1.9034 | -1.4 / -88.6 | `-1.40 -88.60` |
+| -1.0052 | 7.1 / -83.3 | `7.10 -83.30` |
+| -0.7039 | 45.4 / -65.1 | `45.40 -65.10` |
+| -0.1049 | 52.3 / -132.5 | `52.30 -132.50` |
+
+The first pad row is the wrap check: the engine writes `v_angle_y` in whichever range it holds, and
+that one row says `270.0` where every row after says about `-89`. Same angle, and anything that
+*differences* yaw would see a 359.5 degree turn on the first frame. It now reports `-90.00`.
+
+Also fixed while in the reader, latent rather than observed: `Rec_ViewFrame` interleaves a
+four-token `ghost <0|1> <cltime> <ticks>` record into the `.view`, and the reader did not filter
+records — `Watch_ViewBlock` would have read a cltime as a tick and handed the camera a tick count as
+its pitch. No file on disk carries one, because no ghosted run has ever been recorded. `FS_IsSample`
+has guarded all four of the `.rec`'s scans since build 24; the `.view`'s two never got it.
+
+### C — "surf_fiellu Demo playback, on some maps, doesn't show some of the models or ramps"
+
+The server builds a client's PVS from `client->edict` (`sv_ents.c:4375`) and drops every entity that
+fails it (`:4163`). During a replay `client->edict` is the body pinned where the key was pressed, and
+it never moves — while `sv_saveloc.qc:1331-1333` says, as a design statement, *"the server is never
+told where the recording goes"*. That is true for movement and was a bug for visibility. The world
+BSP keeps drawing because it is client-side and follows the overridden view, so what you get is a
+skeleton of world brushwork with the entity-built content punched out — and FTESurf spawns surf ramps
+as `func_brush`/`func_slide` and decorations as `prop_dynamic`, all networked. `prop_static` survives
+because it is not an entity at all.
+
+**Falsified before it was fixed**, `cfg/testrun/b43pvs.cfg`, four arms at three seek points:
+
+| arm | entities (brush entities) |
+|---|---|
+| baseline | 324 (**0**) -> 3 (**0**) -> 0 (**0**) |
+| `sv_nopvs 1` | 268 (**41**) -> 107 (**41**) -> 104 (**41**) |
+| `sv_nopvs 0` again | 164 (**0**) -> 0 (**0**) |
+| `r_novis 1` | 217 (**0**) -> 3 (**0**) -> 217 (**0**) |
+
+`r_novis` is the arm that makes it a diagnosis rather than a story: it is the **client's** world cull
+and it restored nothing.
+
+**The fix is an engine hook that already existed.** `sv_ents.c:4382` feeds a client's `.view2` to
+`SV_AddCameraEntity`, which *unions* a second origin and area into the PVS. FTESurf had never set it.
+So: one invisible non-solid marker (`SV_ViewEyeAt`, `sv_saveloc.qc`), moved to the camera by a new
+`fs_watchpos` client command, with `.view2` pointed at it. The client publishes from `Watch_Camera` —
+the single site the camera origin exists — throttled in `PVS_Publish` (`cl_keys.qc`, there because
+`cl_ghost.qc` compiles first and both need it): send when it has moved 128 units, never oftener than
+20 Hz, and once every 0.5 s regardless. PVS granularity is a whole visleaf, so this wants to be
+roughly right rather than exact.
+
+**Ghost mode has the same defect** and gets the same eye. It is milder there only because the body is
+still moving, so the stale PVS at least drifts — which is why the report came from the replay.
+
+One field for both modes, and the invariant that makes it safe is written at the declaration: a watch
+refuses under a save-lock hold and a ghost refuses under a watch, so the two callers can never both
+own it. This is a *resource* with one owner, not the shared *flag* the essay above it rightly warns
+against.
+
+**Verified for completeness, not just for effect** (`b43pvs3.cfg`). Comparing against `sv_nopvs 1`
+would be wrong — that sends every entity on the map, so its 41 is surf_fiellu's total and not what
+should be visible from anywhere. The right reference is a body standing at the camera's own position,
+which can be measured without noclip (noclip trips `r_voidvis` and inflates the arm) because opening
+a replay pins the player wherever they are. At t=12:
+
+| | entities (brush) |
+|---|---|
+| build 42 (`fs_watch_pvs 0`) | 3 (**0**) |
+| the eye (`fs_watch_pvs 1`) | 7 (**4**) |
+| **a body at the camera's position** | 7 (**4**) |
+
+Exact. The eye delivers what a player there would be sent, no more and no less.
+
+Bisect with `fs_watch_pvs` (1 default, 0 = build 42). It **detaches** rather than merely declining to
+move, so turning it off with a replay open puts the entity set back on the next snapshot instead of
+leaving the eye wherever it last was — a third state neither arm describes.
+
+### Not to be misled by the adjacent essay
+
+`cl_zones.qc:125-154` concludes *"PVS WAS NEVER WHAT WAS HIDING THEM"*. That is **true for zones**,
+which both VMs parse independently and which are never networked, and it does not transfer to props
+and brush entities, which are. It even leaves the lead this used: *"the thing to chase is
+VBSP_EdictInFatPVS's area test"*.
+
+### Files
+
+`cl_watch.qc`, `cl_keys.qc`, `cl_ghost.qc`, `sv_saveloc.qc`, `sv_player.qc`, `sv_timer.qc` (one
+`registercvar`), new `tools/pathcheck.py`, new `cfg/testrun/b43pvs.cfg`, `b43pvs2.cfg`,
+`b43pvs3.cfg`, `b43ang.cfg`.
+
+### Reverting
+
+`fs_watch_pvs 0` reverts C. A and B have no cvar and are unconditional, because both are the
+correction of an arithmetic error rather than a change of behaviour, and neither has a defensible
+old value.
+
+---
+
+### Addendum — the dead air, and a screen-space drawer that computes the right thing and does not draw
+
+**Reported as:** *"the UI of the demo playback should mark parts where the player doesn't move as
+red, and have a selectable option that simply skips those parts during playback"* and *"Make
+demolines 2d lines, they look so much better then the wavy slug like lines we have now."*
+
+#### The dead air — done
+
+Still stretches are found ONCE at load, inside the pass that already tokenizes every sample to
+choose control points, so the detection costs a compare. Per-frame was never on the table: the
+file header's own argument applies unchanged — a scrub runs the clock backwards, and re-deriving
+spans from t0 on every frame of a drag would be six thousand iterations per frame. Same shape as
+`Watch_BuildSeq`.
+
+Horizontal speed only (`hud_watch_idle_speed`, 20 u/s): hanging at the apex of a jump or riding a
+lift is not "not moving" in the sense the report means. `hud_watch_idle_time` is 0.5 s, looser than
+`SEG_MINTIME`'s 0.10 on purpose — half a second of standing still is deliberate, a tenth is a
+landing or a bad tick. The pre-start pad is excluded by default: the approach is *meant* to be slow.
+
+**A save-lock hold can never appear here, and that is correct.** The recorder freezes with the
+clock, so a hold costs the file no samples at all and leaves no gap in `t`. Only standing still
+*while the clock runs* is marked — the only kind that costs you a time. Worth writing down, because
+the opposite is the obvious guess.
+
+The test data was chosen by measurement rather than by hoping a run had a pause in it: modelling the
+same thresholds over all 58 recordings finds 9 with still time.
+
+| | expected from the model | `replay status` |
+|---|---|---|
+| `surf_rise/main/last.rec` | 3 spans (20.4 s, 0.7 s, 12.8 s of 51.9 s) | `still 3 stretch(es)` |
+| `bhop_monster_jam/…_shadow.rec` | 71 spans — over the 64 cap | `still 64 stretch(es) (+7 dropped)` plus the overflow warning |
+
+The 0.7 s span is the one that matters: it is over `hud_watch_idle_time` and must be kept, so "3"
+and not "2" is the pass condition. Overflow is **reported**, like the board cap and unlike the
+segment column's — a bar that quietly stops marking looks exactly like a run that stopped idling.
+
+Skip, measured from an identical start: from `t=1.0`, two seconds of play reaches **t=2.42** with
+`hud_watch_skipidle 0` and **t=24.16** with it on — clearing the 20.4 s span and the 0.7 s one.
+It goes through `Watch_Seek`, the single entry point that invalidates all four cursor caches;
+writing `fs_wt_time` directly would leave the segment column describing where the clock used to be.
+Only while playing: a pause is someone looking at a still frame, including one inside a parked
+stretch, and a scrub sets `fs_wt_time` without coming through here — so a scrub *into* a stretch
+stays put, which is what the marks on the bar are for.
+
+The panel carries a clickable `skip still (N)` toggle on the hint row, which costs no layout change.
+`hud_watch_info` shipped in build 25 defaulting to 0 with nothing naming it and was reported missing
+in build 26; the note then was *"A feature nobody can find has not shipped."* A switch that changes
+what playback **does** is a worse thing to hide than a panel.
+
+#### The 2D line — NOT done, and narrowed rather than abandoned
+
+`hud_watch_path_mode` 2 projects each path point with `project` (#311) and emits a screen-space quad
+strip. **It computes correct geometry and its polygons do not reach the screen.** It ships behind
+the cvar with the default left at 1, because a default that draws nothing is worse than the ribbon
+it was meant to replace.
+
+What is established, all measured:
+
+* `project()` is stable **and** correct. A probe 256 units dead ahead reads `960,600` of a
+  1920×1200 screen, identically before and after `renderscene` — so the matrices are neither stale
+  nor rebuilt against a different refdef. Note that this probe alone proves only *stability*: any
+  projection, however wrong, sends the point dead ahead to the centre.
+* The drawer runs and emits 900–1800 quads a frame with a bbox overlapping the viewport.
+* **A fixed magenta square, at a literal screen coordinate, through the identical four calls in the
+  identical place in the frame, renders.** `drawline` and `drawfill` from the same place render too.
+* The path's own quads, in the same batch, do not.
+
+So it is not the primitive, not the call site, not the matrices, not the near-plane clip. Two things
+were found and fixed along the way and neither was sufficient: `project()` returns the NDC depth in
+`z` and a 2D vertex carrying it is outside the 2D clip volume; and the near-plane clip legitimately
+produces stubs projecting to six-figure screen coordinates, which a guard band now drops
+(`wild` in `replay status`). What is left is that the quads are thin slivers and that there are
+eighteen hundred of them in one batch. Next: emit ONE hand-placed sliver to separate "thin" from
+"many", then instrument `PF_R_PolygonEnd`'s batch split (`pr_csqc.c:1718`) and `CSQC_PolyFlush`'s
+index arithmetic — noting in passing that its 2D branch sets
+`cl_numstrisidx = csqc_poly_origvert` (`pr_csqc.c:1619`), assigning a **vertex** offset to an
+**index** counter, which is a real bug whether or not it is this one.
+
+> **Landed — see "the 2D demo line was wound backwards" below.** Every measurement in this section
+> is still true and none of it is retracted. The conclusion drawn from them is what was wrong, and
+> it is worth being precise about how: the list of remaining differences above was taken to be
+> complete when it was not. **The quads' winding order was the difference, and neither call site
+> shows it** — the path was wound the opposite way from the probe and single-sided is the default,
+> so every quad was a back face. Thin-versus-fat and one-versus-many were the two differences that
+> were easy to see, so they were the two that got listed. Both "next" steps above would have come
+> back negative. The `pr_csqc.c:1619` aside is a real engine bug, is still unpatched, and was not
+> this one.
+
+`replay status` now prints `path mode / 2d quads / clipped / wild / first` and the two probes, so
+none of that has to be rediscovered.
+
+#### And the trap that cost three builds of it
+
+**`screenshot` captures the state one step behind the command that set it up**, even with `waitms`
+between. Proven twice: a shot named `_t35` showed a replay clock of `0:12.000`, and three probe
+shots 600 ms apart came back shifted by exactly one — `probe2.png` held probe **1**'s square and
+`probe3.png` held probe **2**'s line. That is why the 2D drawer read as "renders nothing" for three
+builds while a control square in the same batch was rendering fine. Every screenshot in
+`b43line.cfg` is now taken twice and the second is the evidence. A single screenshot is never
+evidence that a change did nothing.
+
+More generally: prefer a **number in the log** to a picture when one exists. The replay-PVS question
+and the still-stretch question were each settled in one pass by counters, after screenshots had
+failed to settle either.
+
+
+### Addendum — a stage you can fail, and a stage that is clean inside a dirty run
+
+**Reported as:** *"only record the stage time/demo/line that actually completes, don't record every
+fail of the stage, every fail should cause a 'time reset' for timing of that stage, and if a stage
+is done in practice mode, but the next one has been started legit … then that stage should be
+counted as legit and recorded."* The rule for what a fail IS was settled with the user: *"Re-entering
+the stage start zone, AND re-arming … stage times are counted with no pre-speed, so jump start, or
+walking out of the start zone."*
+
+#### A stage boundary becomes an arm and a start
+
+Build 24 timed a stage from the tick its boundary **plane** was crossed, and that crossing could not
+be taken back. Two things follow and both were reported. A boundary you *land on* was timing the
+standing-around; and a stage you fell out of and walked back to was still being timed from the first
+attempt, so the number written at the next boundary contained the failed attempt, the walk back and
+the good run — and that was the only number the stage board ever saw.
+
+So a boundary now uses the state machine the **run start** has always used, in the same three beats
+and with the same names: `SV_StageOpen` arms, `SV_StageStart` fires on leaving the box and rebases
+`fs_st_tick`, `SV_StageFail` fires on re-entering it and rebases the split. The run clock is not
+touched by any of it — build 12's decision, restated: you already paid for the failed attempt in the
+total, and that is the whole penalty.
+
+**A boundary you fly through is unaffected**, which is what keeps the change narrow: `fs_st_hold` is
+only set by a tick spent inside the box, so a plane crossed at 2000 u/s disarms and keeps build 24's
+measurement exactly. On the shipped maps that is most boundaries.
+
+**`fs_stagearm` retires the old stage times and that was taken as a decision, not a side effect.**
+31 of the 33 stage `.rec` files on disk and 22 `best.pb` rows are plane-to-plane; every one will be
+beaten on the first lap. It buys a real fix — `surf_kitsune/stage_3` currently ranks a deliberate
+stage run against two lifted ones in one list, comparing two different measurements in one
+`fs_pb_ticks` slot. The user's call, made explicitly: *"I don't mind my old times are wrong."*
+
+#### The taint is per stage, and its clear site is the boundary
+
+`SV_StageClose`'s `fs_t_flags & TF_PRACTICE` test becomes `fs_st_dirty`, a field destroyed at every
+`SV_StageOpen` — the exact opposite of `fs_t_dirty` and `fs_t_hopped`, which live outside
+`fs_t_flags` precisely so they *survive* the arm. "The next stage starts clean" is the feature.
+
+**The hole this would otherwise have shipped** is worth writing down because it passes every test
+anyone would think to write. `SV_NoclipWatch` is an **edge** detector: if the edge fired in stage 2
+and you are still noclipping when you cross into stage 3, `SV_StageOpen` clears the taint and stage 3
+is admitted as clean while you fly through it. A test that toggles noclip *inside* one stage reads
+correctly; only holding it *across* a boundary shows it. So the watcher sets the per-stage field at
+**level** and calls the run-level funnel only on the **edge**, and `SV_StageOpen` reads the level
+too. `sv_saveloc.qc`'s two direct writes were rerouted through `SV_TimerPractice` for the same
+reason — bypassing the funnel meant the one gesture the "segmented" category is named after would
+have been the one that never set the field.
+
+`SV_StageWrite`'s header stops copying the parent run's flags. Its build-24 comment — *"a stage
+lifted out of a tainted run is exactly as tainted as the run"* — is the sentence the request
+falsifies, and leaving the copy in would have shipped the feature and then labelled every file it
+produced `practice`. A sixth refusal was added for `fs_st_ghost` in the same breath: `TF_GHOST` does
+not imply `TF_PRACTICE`, so a ghosted run could already write a stage slice whose header
+`reccheck.py:618-620` would fault as disagreeing with its own body. No file trips it only because no
+ghost has ever been recorded; this change edits that very line, so the disagreement is now
+structurally impossible rather than merely absent.
+
+#### Two defects the scripted run caught, and it caught both in one pass
+
+A config cannot surf, so a stage boundary has never been crossable by a headless check and the whole
+build-24 filter shipped unobserved. **bhop_eazy makes it possible**: `zone_list` says its four zones
+sit on one plane (start `-352 -352 144`, stage 1 `2624 512 144`, end `2640 -1728 144`), so the route
+is a pure yaw and noclip flies it in a straight line. `cmd zone_goto <n> <yaw> <pitch>` arms it and
+`setpos` moves inside it without voiding the run.
+
+The first run wrote this, and the two lines are the bug:
+
+```
+stage   1 273
+restart 1 274
+```
+
+A **spurious fail on the tick after every boundary**. The point test and the swept test do not agree
+on the crossing tick and are not meant to — the event is swept precisely so a thin region cannot be
+missed, so it fires on the tick the movement *touched* the box while the point can still end up
+outside it. The stage armed, saw "outside and never held", called it a fly-through, disarmed — and
+the next tick, now genuinely inside, read as a re-entry and reset the stage the player had just
+legitimately reached. The disarm therefore needs *outside **and** not even touched*; the crossing
+tick is neither an entry nor an exit and the machine waits one tick before deciding which.
+
+The second was in the fix's own first draft. Deriving the boundary box inside the main zone scan
+**cannot work**: that loop runs *before* the event dispatch, so on a boundary tick `e.fs_t_seg` is
+still the old segment and the answer comes back -1 on exactly the tick it is needed. `SV_StageZone`
+resolves it after the dispatch instead, by identity, cached on the segment it answers for — so it
+walks the table once per boundary rather than once per tick.
+
+A third, cosmetic, from the same trace: segment 0 sat `armed 1` for the whole opening leg of every
+run, because the block that would clear it refuses segment 0. Harmless on the server and **not**
+harmless on the HUD, which now draws the word `armed` from that bit.
+
+#### Measured
+
+`cmd timer` grew two lines so this is readable as numbers rather than screenshots. Reading the trace
+by the **stringcmd** order — a local `echo` runs immediately while `cmd timer` is queued and sent on
+the next packet, so the echoes drift a block ahead, the same family of trap as the screenshot that
+lands one step behind:
+
+| where | `cmd timer` says |
+|---|---|
+| segment 0, mid-flight | `leg 0 from 0:00.000  armed 0 held 0 box -1` |
+| inside stage 1's box | `leg 1 from 0:02.720  armed 1 held 1 box 1 fails 0` |
+| one second later, past it | `leg 1 from 0:03.040  armed 0 held 0` — **the clock rebased by 0.32 s** |
+| `setpos` back into the box | `stage 2 reset (attempt 2)`, `fails 1 tp 1` |
+| still standing there 1.2 s on | `fails 1` — **fires once, not once per tick** |
+| `setpos` out again | `armed 0`, `from` later again |
+| noclip off, `setpos` back in | `practice 1` **and** `dirty 0` in one report |
+
+That last row is the request in one line: the run is unrecoverably practice and the stage inside it
+is clean. Before this build they were one field and could not disagree. Toggling noclip back on for
+the flight to the finish returns it to `dirty 1`, which is the level watcher doing its half.
+
+The `.rec` the run wrote, and `fs_stagearm 0` beside it as a real bisection rather than a claim:
+
+```
+fs_stagearm 1                     fs_stagearm 0
+  stage      1 272                  stage   1 273
+  stagestart 1 304                  restart 1 1234
+  restart    1 1233                 end 1704 1561 65 0
+  stagestart 1 1435
+  restart    1 1544
+  stagestart 1 1675
+  end 1925 1763 65 0
+```
+
+`fs_stagearm 0` writes no `stagestart` at all — the measurement stays at the plane crossing — while
+`restart` still fires. The two cvars are independent, which is what makes either one a bisection.
+
+#### The checker learned the grammar in the same change
+
+`reccheck.py` had `stage` and `restart` on a *tolerated* list with nothing looking at their fields.
+Both gained a second producer in this build, so all three records are now validated as the sequence
+they form: segments open in order, at most one `stagestart` per open stage naming the open stage and
+not before the boundary that opened it, and ticks that never go backwards — the run clock is
+deliberately not rewound by a fail, so a `restart` that went backwards would mean the writer had
+rewound something it promises not to.
+
+**Eleven fixtures, nine of which fault.** Built from a real file so everything but the stage records
+is known-good: the good sequence passes; a second `stagestart`, an orphan one, a wrong segment, a
+`stagestart` before its own boundary, a backwards tick, a skipped stage, a short field list, a
+non-numeric field and a negative segment all fault; an unknown record is a **note**, which is the
+existing rule and correctly still not a fault. Assertions that do not fire are decoration.
+
+Clean over all 59 recordings on disk. The three pre-existing faults are v4 board/sample-rate
+complaints on `surf_rise` and are untouched by this.
+
+`pm_selftest` and `zone_selftest`: 159 checks, 0 failures. `pm_selftest` matters here because
+`SV_StageJump` reads `fs_t_groundat` and `fs_t_dwell`, which are the movement code's own fields;
+`zone_selftest` because `SV_StageZone` is a new consumer of the zone table.
+
+#### Not done, and deliberately
+
+**`sv_cheats` is not watched.** The same level-vs-edge shape is wanted for it — it can be on for a
+whole session with no edge inside any given stage — but nothing in this build makes `sv_cheats`
+taint a run at all, and a *stage* rule stricter than the run rule around it would be a surprise with
+no word on screen to explain it. That is phase 4's `SV_CheatWatch`, alongside `TF_SEGMENT` and
+`TF_CHEAT`. `SF_*` bits 32 and 64 are left free for its per-stage half so the two cannot pick
+different numbers.
+
+**`fs_stagehop` is a cvar because a config cannot settle it.** Build 24 deliberately did not require
+the pre-strafe dwell for a stage, on the reasoning that a platform you bhop off is just a platform.
+That still holds and stays the default; the arm rule makes the question sharper, because a hop out of
+the box now decides where the clock *starts* as well as whether the stage is written. `bhop_eazy` is
+the map to decide it on and it has to be played.
+
+**`FS_JUMPIMPULSE 268.328`** at `sv_timer.qc:99` is still stale after build 41 moved the impulse to
+301.993. It does not misbehave — `sv_gravity` cancels out of the ratio, so the settle window still
+clears one jump and not two at every gravity — but the derivation reasons from a false premise, and
+fixing it lengthens the window by 8.4 ticks and newly flags some slow hop chains as hopped starts.
+It ships with `fs_settle_live` and is a behaviour change, not a cleanup.
+
+**`data/runs/bhop_eazy/main/last.rec`** and its `.view` are now this test's run rather than the
+user's most recent attempt. `last` means "the attempt I just did" and is overwritten by design, but
+it was overwritten by a machine and not by them. `best.pb` and every `_pb` file are untouched, and
+nothing this run did could move a personal best: it was practice from its first noclip.
+
+#### Files
+
+`sv_timer.qc` (the bulk), `sv_player.qc` (the level rule, the stat pack), `sv_saveloc.qc` (the
+funnel reroute, reopening the stage after a rewind), `sv_main.qc` (three stats), `sh_defs.qc`
+(stats 81–83, the `SF_*` bits), `cl_timer.qc` (the reset flash, `armed` / `attempt N`),
+`tools/reccheck.py`, `cfg/default.cfg`, new `cfg/testrun/b43zones.cfg`, `b43stage.cfg`, `b43self.cfg`.
+
+
+### Addendum — segmented, cheated, practice: one word became three
+
+**Reported as:** *"stitched runs are legit settings but save locked, anything else cheated,
+sv_cheats, noclipped is a cheated run."* … *"that needs to be labeled 'cheated run' not
+segmented."*
+
+There was one taint bit and the leaderboard drew one word for it — `stitched` — over noclip,
+setpos, `sv_cheats`, a save-lock load and a hopped start alike. Two of those are somebody
+practising with the ruleset's own physics and the rest are not.
+
+#### The shape: an umbrella, not a replacement
+
+`TF_SEGMENT` (128) and `TF_CHEAT` (256) join `TF_PRACTICE` (1), which stays and becomes the
+umbrella both of them imply. That implication is what makes the split free downstream:
+`SV_TimerFinish` and `fs_sb_best` already refuse `TF_PRACTICE`, so **ranking needed no new test
+anywhere** and every reader that only knew the old bit keeps working with a coarser answer.
+
+The precedence — cheat outranks segment outranks practice — is `FS_RunClass` in `sh_defs.qc`, one
+function, because **three** readers ask it and a run that both noclipped and loaded a save carries
+both bits: `cl_scores.qc`'s row word, `cl_watch.qc`'s replay panel and `cl_timer.qc`'s sub-label.
+Any of them testing segment first would put the gentler word on the worse run. Same argument
+`FS_TagName`'s own move made in build 23.
+
+**The residual is honest and is not guessed.** `practice` with neither reason has exactly one live
+cause — a hopped start — plus every file written before this build, where a noclip and a save-load
+are genuinely indistinguishable in the header. Of the archive: 31 × `flags 0` stay clean, 4 ×
+`flags 1` become **practice** (they used to read `stitched`), 3 × `flags 9` become **segmented**
+because `TF_SHADOW` is written by exactly one gesture. **No file is re-tagged or rewritten.**
+
+`setpos` is classified as a cheat and it is the one call that could honestly go either way: it is
+the mod's own deliberately ungated command, reached mid-run for "put me at that ramp". It hands you
+a position you did not earn, which is noclip's whole argument. One line either way, and the line is
+in the file so that moving it later is a decision.
+
+#### What the scripted traces caught that reading did not
+
+Four configs, all headless on `bhop_eazy`. The map matters twice: `zone_goto` drops you on the box
+**floor**, so `+forward` in `MOVETYPE_WALK` genuinely walks out of the start box — **the first
+clean, config-driven run this project has ever produced**, and the control every case is measured
+against. Without one clean row in the log, "this reads cheated" proves nothing.
+
+**1 — the class message never fired for either new class.** The print compared the class before and
+after inside `SV_TimerPractice`, but the two siblings set their bit *first*, so it compared a value
+with itself. The run went clean → segmented → cheated with **nothing on screen**. Moving the
+comparison out to the siblings then printed **twice** under `fs_runclass 0`. A remembered
+high-water mark (`fs_t_said`, cleared by the arm and the idle) answers both in one test — and a
+third case neither would have: a save-lock load restores `fs_t_flags` from the file, so the class
+can go *backwards* mid-attempt and a pairwise test would re-announce the same word climbing back.
+
+**2 — a save-load laundered a cheat.** Save while clean, noclip, load that save: the flags come out
+of the file and `TF_CHEAT` is gone, so the run finishes labelled `segmented`. A load rewinds the
+clock; it does not rewind your hands. `fs_t_cheat` survives (only the arm clears it) and is now
+re-applied over the restored word. Nothing about ranking turned on it — both classes are practice —
+but a label a gesture can remove is not a label, and labels are the whole of this build. It needs a
+save *before* a cheat and a load *after* one: three gestures in an order nobody writes down.
+
+**3 — a claim in this build's own comments was false.** The first cut asserted that holding the
+save-lock did not taint, and celebrated closing the hole. `SV_TimerFreeze` has marked a hold
+practice since **build 18**, with the sentence *"a stopped clock is not something a kept run may
+have"*. The hole had been closed for twenty-six builds. So the bit **renames an existing taint**;
+no gesture newly costs you a run at either cvar setting. The stitch is marked in `SV_SaveLocHold`
+and deliberately **not** one level down in `SV_TimerFreeze`, whose other caller is opening a replay
+mid-attempt — pausing to watch somebody's demo is plain practice, and moving it would have
+relabelled it on the strength of a shared implementation detail.
+
+#### The trace
+
+| gesture | on screen | `cmd timer` |
+|---|---|---|
+| walk out of the box | — | `class: clean (seg 0 cheat 0 cheatlatch 0)` |
+| `sl_save` + `sl_hold` | `^3segmented run` | `class: segmented (seg 1 …)`, `stage class: stitch 1 cheat 0` |
+| `sl_load` | *silent* | `segmented` — the class did not get worse |
+| `noclip` | `^3cheated run` | `class: cheated (seg 1 cheat 1 cheatlatch 1)` |
+| `sl_load` of the clean save | *silent* | **still** `cheated` — the launder blocked |
+| finish | — | header `flags 397`, `reccheck.py` reads `class cheated` |
+
+The `sv_cheats` latch, separately, in four readings: armed with cheats off → `cheatlatch 0 class
+clean`; `sv_cheats 1` → `cheatlatch 1 class cheated`; `sv_cheats 0` → **still** `cheatlatch 1`;
+re-arm → `cheatlatch 0 class clean`. The third without the fourth would be a taint you can never
+clear; the fourth without the third would be one that evaporates when you turn the cvar off. Either
+alone reads as working.
+
+`fs_runclass 0` was run as its own process: a single `practice run` line, `class: practice (seg 0
+cheat 0 cheatlatch 0)` and `stage class: stitch 0 cheat 0` throughout — with `sv_cheats 1` **and**
+`noclip 1` in the level columns. Build 43 exactly.
+
+The board's four filters, from `scores status`, which grew a per-row `*` and a pass count in this
+build precisely so a filter is checkable from a log instead of a screenshot: `all` 4, `clean` 1,
+`stitched` 1, `cheated` 2 — **1 + 1 + 2 = 4**, the invariant that every row shows under exactly one
+of the three. `reccheck.py`: 61 files clean but the 3 pre-existing surf_rise faults; nine
+hand-built header fixtures, of which `flags 128`, `flags 256` and `flags 384` fault on the missing
+umbrella and `flags 9` deliberately does **not** (it predates the format). `pm_selftest` and
+`zone_selftest` pass.
+
+#### What this stamp is actually claiming
+
+The authoritative predicate is the engine's `SV_MovementLocked()` =
+`pm_lockmovement.defaultstr && !sv_cheats`, and QC can see only half of it. QC must **not**
+re-derive the other half from `cvar("pm_lockmovement")` — that reads the *live* value, and the
+engine reads `defaultstr` precisely because the live one can be changed by the thing being policed.
+So the bit means **"cheats were off"**, not "the ruleset was locked". The correct fix is a one-line
+engine patch publishing `SV_MovementLocked()` as a `*ruleset` serverinfo key. Written down rather
+than assumed.
+
+`fs_cheatwatch 0` therefore does not mean cheats stop being marked: it makes `SV_TimerFinish` set
+`TF_PRACTICE` on **every** run. An install that is not watching cannot certify anything as clean,
+and pretending otherwise would turn one cvar into a route onto the clean board with the physics
+unlocked. That is what keeps it a bisection rather than a bypass.
+
+#### Not done, deliberately
+
+**`last.rec` is still clobberable by a cheated run.** It is never a PB and never `TF_SHADOW`, so it
+is tagged `RT_LAST` and overwrites that leg's most recent *ordinary* attempt — the identical defect
+build 17 fixed for shadow runs. The bit is the right classifier; the collision is a separate problem
+with a separate fix (`RT_CHEAT` = 4, `FS_TagArchived` FALSE). Carried as a named follow-on rather
+than shipped speculatively. **Landed — see the addendum below**, with the fix exactly as named
+here; what it did not predict is that the tag question was spelled twice in two different places,
+and that a `.hid` was never at risk.
+
+**The `retry` path's read-back of the new `cheat` save key is unverified.** The write is measured —
+a save taken while cheated lands `flags 263 / dirty 1 / cheat 1` on disk — and the reader is the
+same key-match loop with defaults that every other key uses, but the round trip needs a
+`map_restart` and was not driven.
+
+**Ghosting is still not a taint.** `sh_defs.qc` left that "to be decided later, by a leaderboard";
+the KIND column now has words for two kinds, so later has arrived and this build did not take it.
+
+#### Files
+
+`sh_defs.qc` (`TF_SEGMENT`/`TF_CHEAT`, `RC_*`, `FS_RunClass`, `FS_RunClassName`, `SF_STITCH`/
+`SF_CHEAT`), `sv_timer.qc` (`SV_CheatsOn`/`SV_CheatLevel`, `SV_TimerStitched`, `SV_TimerCheat`,
+`SV_TimerClassSay`, the `fs_t_cheat` and `fs_t_said` latches, the per-stage pair, the arm, the
+start, the finish, two report lines), `sv_player.qc` (one watcher for two states, `setpos`),
+`sv_saveloc.qc` (the hold, the load, the `cheat` save key, the launder fix),
+`cl_scores.qc` (the fourth chip, the row word, the pass count), `cl_watch.qc` (the panel word and
+its mask), `cl_timer.qc` (`TC_CHEAT`, the sub-label ladder, `stage clean`), `tools/reccheck.py`,
+`cfg/default.cfg`, new `cfg/testrun/b44class.cfg`, `b44cheat.cfg`, `b44off.cfg`, `b44board.cfg`.
+
+
+### Addendum — the cheated run took `last.rec` with it  *(APPLIED, QC only — `build.ps1`)*
+
+The follow-on named at the end of the section above, and it was the one loose end that could
+destroy data rather than merely mislabel it.
+
+**Build 44 classified the run correctly and then filed it on top of something.** A cheated run is
+practice, so it is never a personal best; it is not `TF_SHADOW` unless a save was *also* loaded; so
+the tag chain fell through to `RT_LAST` and the run was written as that leg's `last.rec`. Five
+seconds of noclip destroyed the recording of the ordinary attempt before it — and the file that
+replaced it is the one recording on the leg nobody will ever want to open. This is the identical
+defect build 17 fixed for shadow runs, one class further down, and it gets the identical fix:
+`RT_CHEAT` = 4, `FS_TagName` → `"cheat"`, its own file.
+
+**Not archived, and that is where it parts company with `RT_SHADOW`.** A shadow run is a
+deliberate practice attempt worth comparing, so it earns a stamped name and accumulates.
+`FS_TagArchived` is FALSE for a cheated run: one fixed `cheat.rec`, and the next cheated run on
+that leg replaces it. Written as the function's fall-through rather than two more tests, so that a
+fifth tag has to argue its way to TRUE rather than inherit it.
+
+**The precedence is not cosmetic — it decides what happens to the disk.** A run that loaded a save
+*and* noclipped carries both bits. `SV_TimerFinish` now tests `TF_CHEAT` before `TF_SHADOW`,
+matching `FS_RunClass`, and the reason is not that the word looks better: taken as a shadow the run
+takes a **stamped** name and accumulates one junk file per lap inside the archive the leaderboard
+ranks from. Same run, same two bits, and the ordering is the difference between one scratch slot
+and unbounded growth.
+
+**Two spellings of one question, found by adding the fourth tag.**
+
+* `SV_RecClose` computed `stamp` from a literal `tag == RT_PB || tag == RT_SHADOW` while
+  `FS_TagArchived` had existed since build 23 to answer exactly that. Adding a tag is precisely the
+  edit that updates one and not the other, and the failure is silent and compounding — the prune
+  below it is gated on the same `stamp`, so a cheated run under a stamped name would accumulate a
+  file per lap that nothing ever sweeps. Folded onto the shared function.
+* The *reverse* map, tag word → `RT_*`, existed twice: `cl_scores.qc`'s directory scan and
+  `cl_watch.qc`'s `replay <tag>`. New `FS_TagFromName` in `sh_defs.qc`, beside the forward map it
+  inverts, with `RT_NONE` as the "not one of ours" answer. The scoreboard has the sharp failure
+  mode: its parse **skips** any file whose word it cannot map, so a build that writes `cheat.rec`
+  without teaching the scan shows the run simply absent — no gap, no count, nothing to notice.
+  That is also the standing argument for the class being a header **bit**: an unknown bit degrades
+  to a wrong word, an unknown tag degrades to silence.
+
+**Measured, on bhop_eazy, each config its own process.**
+
+| | |
+|---|---|
+| noclip only, walked out clean first | `class: clean` → `^3cheated run` → `class: cheated (seg 0 cheat 1)`; log says `wrote data/runs/bhop_eazy/main/cheat.rec` |
+| the file | `flags 261` = practice\|havepb\|cheat — no shadow, no segment: the exact path that used to land on `last.rec` |
+| `last.rec`, `last.view`, all three `_pb` files | **byte-identical** to the pre-run snapshot, mtimes unmoved |
+| the precedence, re-running `b44class.cfg` | `flags 397` (shadow **and** cheat) → `cheat.rec`, and **zero** `_shadow` files; under build 44 that same config produced an archived one |
+| the board, `scores status` | all 3 = clean 1 + stitched 1 + cheated 1, drawn `clean` / `practice` / `cheated`; the cheated row is present, which is the whole point |
+| `replay cheat` / `last` / `pb` | opened `cheat.rec`, `last.rec`, `0005354_pb.rec` — the unstamped branch twice and the archived search once |
+| `reccheck.py`, full sweep | 158 files, 29 faults, **all** pre-existing user data (bhop_monster_jam's board counter and its ten save copies, surf_rise's two, surf_aesthetic's two); no new fault, none on a build-45 file |
+| the new assertion, on fixtures | `cheat.rec` with `TF_CHEAT` stripped **faults**; the same bytes named `last.rec` or `_shadow.rec` do **not** — build 44's cheated runs are correctly flagged and wrongly named, and faulting them would fault the archive for predating the fix |
+| regression | `pm_selftest` all checks passed, `zone_selftest` all 22 |
+
+**One direction of the name/flags agreement is asserted and the converse deliberately is not.**
+`cheat.rec` ⇒ `TF_CHEAT` is checkable because only build 45 and later write that name. `TF_CHEAT` ⇒
+named `cheat.rec` would fault every cheated run build 44 already wrote, which are sitting in
+`last.rec` files right now — correctly flagged, wrongly named. Same rule the `TF_SHADOW`/
+`TF_SEGMENT` note in this checker already states.
+
+**The plan's description of the blast radius was one file too wide.** It said a cheated run
+overwrote the leg's `.rec`, `.view` **and** `.hid`. `Rec_HidEnd` keeps the input journal for
+`RT_PB` only, so no cheated run has ever written a `.hid` and none was ever destroyed. Two files,
+not three.
+
+**No cvar.** `fs_runclass 0` already restores build 43's single-word behaviour and with it the old
+tag, because the chain reads `fs_t_flags` and that cvar is what stops the bit being set. A separate
+bisect switch here would only be a switch for putting the data loss back.
+
+#### Files
+
+`sh_defs.qc` (`RT_CHEAT`, `FS_TagName`, `FS_TagArchived`'s fall-through, new `FS_TagFromName`, two
+path essays), `sv_timer.qc` (the tag chain's precedence, `stamp` via `FS_TagArchived`),
+`cl_scores.qc` (the scan through `FS_TagFromName`, `Scores_Clean`'s tag fallback, the TAG column,
+the sort essay), `cl_watch.qc` (tag-from-path, the no-flags fallback, `replay <tag>` dispatched on
+`FS_TagArchived`), `tools/reccheck.py` (`TAGS`, `tag_from_name`, the one-direction assertion),
+`cfg/default.cfg`, new `cfg/testrun/b45tag.cfg`, `b45board.cfg`.
+
+
+### Addendum — the 2D demo line was wound backwards  *(APPLIED, QC only — `build.ps1`)*
+
+**"Make demolines 2d lines… can we have something similar that's low effect / low cpu expense if
+we need to print hundreads of runs at once?"** Build 43 wrote the drawer, and it drew nothing. It
+shipped switched off behind `hud_watch_path_mode`, defaulting to 1, for two builds. This is the
+one sign that was wrong.
+
+`side = (-dy, dx)` instead of `(dy, -dx)`. The quad sits symmetrically about the line either way —
+which is exactly why the sign looks arbitrary and gets picked by coin-flip — but the two orders
+wind the four vertices opposite ways round. An untextured 2D polygon gets `shader_draw_fill_trans`
+(`pr_csqc.c:1633`), whose shader text carries no `cull` line (`r_2d.c:328-338`), and a shader with
+no `cull` line defaults to `SHADER_CULL_FRONT` rather than to twosided (`gl_shader.c:8288`). So
+every quad in the path was a back face and the whole line was culled, silently, with every counter
+in the drawer reading correct.
+
+#### Why three builds of correct measurement did not find it
+
+Build 43 established — all of it true, none of it retracted — that `project()` was stable and
+right, that the drawer ran and emitted 900–1800 quads a frame with a screen bbox over the viewport,
+that a fixed magenta square through the **identical four calls in the identical place in the frame**
+rendered, and that the path's own quads did not. The conclusion it drew from that list was "so it is
+not the primitive, not the call site, not the matrices and not the clip; what is left is that the
+quads are thin and that there are eighteen hundred of them."
+
+The error is not in any of the measurements and not in the inference. It is that the list of
+remaining differences was taken to be complete when it was not. **Identical calls are not identical
+arguments.** Thin-versus-fat and one-versus-many were the two differences that were easy to see, so
+they were the two that got listed; the order the four vertices went round in was not visible at
+either call site and was never a candidate. The next steps it left behind — emit one hand-placed
+sliver, then instrument the batch split — would both have come back negative.
+
+**The answer was already written down in this tree.** `cl_defs.qc`'s build-40 note on the
+`R_BeginPolygon` flags says "TWOSIDED matters for any closed shape you can stand inside — without it
+the batch is single-sided and back faces disappear." It was written about a 3D box and read as being
+about 3D boxes. It is about any polygon whose winding you have not checked, and it has been amended
+to say so.
+
+#### The probe pair, which keeps it falsifiable
+
+`hud_watch_path_probe` gains 4 and 5: 4 is the known-good magenta square **wound the path's old
+way**, 5 is the same backwards square with `DRAWFLAG_TWOSIDED`. Same coordinates, same shader, same
+four builtins, same point in the frame — differing only in vertex order. Magenta pixels counted off
+the PNGs:
+
+| probe | what it is | magenta px |
+|---|---|---|
+| 1 | engine-standard winding, single-sided | 33 701 |
+| 4 | **same square wound backwards** | **0** |
+| 5 | probe 4 plus `DRAWFLAG_TWOSIDED` | 33 503 |
+| 3 | `drawfill` control | 36 140 |
+
+That is the diagnosis and it is not an inference from a working line. If 4 ever draws, this build's
+2D shader has stopped culling and the winding rule has stopped mattering — which is worth knowing
+and is not otherwise discoverable.
+
+The path also now passes `DRAWFLAG_TWOSIDED`. It is **belt to the sign's braces, not the fix**: the
+winding is correct on its own. It is there because a future mitre or a multi-run pool could easily
+emit the other way and the failure mode is the feature silently vanishing.
+
+#### Measured
+
+Screenshots, `surf_rise/main/last.rec` at seek 45, paused, same camera in both builds. Build 43's
+mode 2: no line. Build 45's: the route as a thin constant-width line coloured by speed, running
+through the ramp it passes behind. Mode 1 at the same camera shows the ribbon **occluded** by that
+ramp — the documented trade, and the reason mode 1 is kept.
+
+Cost, `cfg/testrun/b45perf.cfg`, `developer 0`, no frame cap, three modes interleaved four times
+(**not** three blocks — thermal drift charges a block layout to whichever arm ran last). Frame
+times, medians of four:
+
+| mode | | frame | drawer costs |
+|---|---|---|---|
+| 0 | off | 4.65 ms | — |
+| 2 | screen-space | 5.21 ms | **0.56 ms** |
+| 1 | ribbon | 7.39 ms | 2.75 ms |
+
+About five times cheaper. Two honest qualifications: the control **drifted** (3.63 ms on the first
+sample to 5.00 on the last), so the arm-minus-control figures are the shakiest numbers there — what
+is solid is mode1−mode2 measured *inside* each round, 2.48 / 1.92 / 2.14 / 2.05 ms with no overlap
+between the arms. And the two modes were not asked for the same work: mode 2 emitted 926 of the
+curve's 2021 spans at that camera, the rest going to the near clip and the guard band, while mode
+1's emitted count is not instrumented. So this is the cost of the feature at a representative
+camera, not a normalised cost per segment.
+
+`pm_selftest` and `zone_selftest` (all 22) pass.
+
+#### Two things the plan asked for that were not done, with reasons
+
+**The rescaled-viewport guard** — "compare `VF_SCREENVSIZE` against `VF_SIZE` and fall back to mode
+1 if they disagree" — is not written. As stated it would fire on a case that is already correct:
+`project()` ends with `out[0]*r_refdef.vrect.width + r_refdef.vrect.x` (`pr_csqc.c:2096-2097`), so it
+carries the viewport's offset as well as its size and a 3D viewport merely smaller than the screen
+projects correctly. The real hazard was measured instead. `r_renderscale` is the knob that rewrites
+`r_refdef.vrect.width` to `vid.fbvwidth*scale` (`gl_backend.c:6058-6059`); at `r_renderscale 2` the
+frame went 86.6 → 20.0 fps, so the arm certainly took effect, and the probe still projected to
+960,600 of a 1920×1200 screen — dead ahead lands at exactly half only if the two spaces agree — with
+the line unmoved. **One arm of that test proved nothing and is not counted:** `vid_conwidth` /
+`vid_conheight` are inert without a `vid_restart` and `VF_SCREENVSIZE` still read 1920×1200 after
+they were set, so that case is *untested*, not passed.
+
+**"Take the point arrays as parameters"** cannot be written: QuakeC has no array parameter and no way
+to pass a global array by reference. The pool version will index one flat array with an offset,
+which is the same refactor arriving from the other side.
+
+#### The mitre, now that the question can be asked at all
+
+At the default 3 px there is no visible faceting anywhere. At `hud_watch_path_px 8` the sweeping
+curves are still smooth and the one tight elbow in frame shows an obvious notch, several pixels of
+it, on the outside of the turn — exactly the `(width/2)·tan(θ/2)` wedge the essay predicts. So the
+threshold sits between 3 and 8, the default is comfortably under it, and a per-vertex 2D mitre stops
+being hypothetical the moment anyone raises that cvar far. Not written now.
+
+#### An engine bug found on the way and deliberately NOT patched
+
+`CSQC_PolyFlush`'s 2D branch ends with `cl_numstrisidx = csqc_poly_origvert` (`pr_csqc.c:1619`),
+assigning a **vertex** offset to an **index** counter where every neighbouring line uses
+`csqc_poly_origidx`. It is harmless whenever the two counters happen to agree — which is every frame
+whose 2D polygons are the first scene tris of that frame, i.e. all of FTESurf's — and it corrupts
+the index array of a following batch when they do not. It is not this bug, it was not reachable
+from here, and this is a shared tree: **logged, not patched.**
+
+#### Default flipped
+
+`hud_watch_path_mode` 1 → **2**, in `registercvar` and in `cfg/default.cfg`, which is what the plan
+intended before the drawer turned out not to draw. Mode 1 is not deprecated: it is the depth-tested
+one, and hidden-by-walls versus visible-through-walls is a real preference rather than a defect in
+either.
+
+#### Files
+
+`cl_watch.qc` (the perpendicular's sign, `DRAWFLAG_TWOSIDED`, probes 4 and 5, the `Watch_PathMode`
+and `Watch_Path2D` essays, the cvar default), `cl_defs.qc` (the build-40 TWOSIDED note amended),
+`cfg/default.cfg`, new `cfg/testrun/b45line.cfg`, `b45perf.cfg`, `b45scale.cfg`.
+
+
+### Addendum — a cvar named after the vocabulary was deciding the ruleset  *(APPLIED, QC only — `build.ps1`)*
+
+**Build 44 carried this as a documented hole and build 46 closes it, on the user's explicit call.**
+The note sat in `sv_timer.qc` in capitals: *"AT 0, sv_cheats ALONE STOPS BEING A TAINT AT ALL, so
+such a run is rankable"*, followed by *"Closing (2) is one line … and it is deliberately NOT taken
+here: it changes what ranks, which is a ruleset decision and not a comment fix."* It was the right
+call to leave and the wrong state to stay in. Asked, answered: not wanted.
+
+**The line.** `SV_CheatsOn` opened with `if (!fs_t_runclass) return FALSE;`. Gone. `fs_cheatwatch`
+still gates it, `sv_cheats` is still read live and still not cached.
+
+**Why the gate looked reasonable when it was written and is not.** `fs_runclass 0` was specified as
+*"build 43 exactly"*, and build 43 genuinely did not watch `sv_cheats` — so restoring build 43 meant
+restoring a ruleset in which typing `sv_cheats 1` mid-run cost nothing. The two halves of that cvar's
+job were never separated: it is supposed to bisect what a taint is **called**, and it was also
+deciding whether a taint **exists**. The split now has a one-line statement of who answers what —
+
+| | question | gated by |
+|---|---|---|
+| `SV_CheatsOn` / `SV_CheatLevel` | is this position earned? | `fs_cheatwatch` only |
+| `SV_TimerCheat` | what do we call it? | `fs_runclass` |
+
+— which is short enough to hold, where "the gate is in both and the second one is a bisection" was
+not.
+
+**A third gate had to be ADDED, and finding it is the only non-trivial part of the change.**
+`sv_saveloc.qc`'s `if (e.fs_t_cheat) fs_t_flags |= TF_CHEAT` — the line that stops a save-load
+laundering a cheat out of the flags word — is the third and last place `TF_CHEAT` is set, and it was
+safe ungated **only because `fs_t_cheat` could not be true at `fs_runclass 0`**: every source of the
+latch was gated upstream. Ungating the `sv_cheats` source makes it reachable, so without a new gate
+the bit would arrive at `fs_runclass 0` through a save-load and through nothing else — `cheated` from
+one gesture and `practice` from every other, which is worse than either answer.
+
+**Measured on bhop_eazy, `fs_runclass 0`, one process, `cfg/testrun/b46cheat.cfg`.** No noclip
+anywhere in the file: the point is a run that is *clean* at the moment the cvar is typed.
+
+| step | reading |
+|---|---|
+| 1. armed in the start box | `class: clean (seg 0 cheat 0 cheatlatch 0)` · `practice 0` · `dirty 0` · `cheats now 0` |
+| 2. walked out, clock running | **unchanged** — `class: clean`, `practice 0`, `dirty 0`, 391 samples recorded |
+| 3. `sv_cheats 1` | `^3practice run -- this run will not be saved` · `class: practice (seg 0 cheat 0 cheatlatch 0)` · `practice 1` · `dirty 1` · `stage class: stitch 0 cheat 1` |
+| 4. `sv_cheats 0` | `practice 1` · `dirty 1` — it does not wash off; only a re-arm forgives it |
+| 5. re-arm with cheats on | `cheatlatch 1`, `stage … dirty 1`, word still `clean` **because the run has not started** — `SV_TimerStart` consumes the latch |
+| 6. `sl_save` + `sl_load` | `class: practice (seg 0 cheat 0 cheatlatch 1)` — **the new gate**; without it this row reads `cheated (seg 0 cheat 1)` at the one setting whose whole promise is "no new bit" |
+
+**Before build 46, step 3 read identically to step 2 and step 4 identically to step 1.** Steps 5 and
+6 exist only to reach the `sv_saveloc.qc` line: mid-run the watcher sets the per-*stage* field and
+funnels to practice, but `fs_t_cheat` itself is written only by `SV_TimerArm` and the teleport path,
+so the save-load gate is unreachable without an arm taken with cheats already on.
+
+**`fs_runclass 1` — the shipped default — is provably untouched**, and this is one of the few places
+that claim is worth more than a test run: `if (!fs_t_runclass) return FALSE;` never returned at 1,
+and the added `if (fs_t_runclass)` is always true at 1. Both edits are textbook no-ops there. So
+`b44class.cfg` was **not** re-run, deliberately: it finishes a run and would have cost a leaderboard
+row and an archive file to clean up in exchange for confirming a no-op.
+
+**`b44off.cfg` asserted the bug as correct, and was rewritten rather than deleted.** Its final arm
+was headed *"and sv_cheats, which this cvar makes invisible"*. That arm's expectation is now stated
+as `cheats now 0 → 1` and `stage class: cheat 0 → 1` with the class word and both new bits
+unchanged, so the file still fails if the fix is reverted. Its other arms are untouched and must
+still read exactly as they did — the project's own rule is that a build which makes its own checker
+complain has taught everyone to ignore it.
+
+**What this does NOT fix, and it cannot be fixed from here.** At `fs_runclass 0` a cheated run still
+overwrites `last.rec`, because the `cheat.rec` filename is derived from `TF_CHEAT` and `TF_CHEAT` is
+the bit that cvar exists to withhold. No setting keeps the bisection and the filename both. That is
+consequence (1) of the build-44 note and it stays open, with the cvar re-described in the source as
+what it actually is: a development switch for bisecting build 44's classification code, shipping at
+1, not a ruleset knob. Ranking no longer turns on it either way, which was the whole complaint.
+
+`pm_selftest` and `zone_selftest` pass unchanged. Nothing was written to `data/runs` (newest file
+still 11:42, hours before the runs); the one `data/saves/bhop_eazy/save001` the assertion creates is
+deleted afterwards.
+
+#### Files
+
+`sv_timer.qc` (`SV_CheatsOn`, `SV_CheatLevel`'s comment, the build-44 cvar essay rewritten to record
+what was closed and what was not), `sv_player.qc` (`SV_NoclipWatch`'s essay — the paragraph that
+called the defect a feature), `sv_saveloc.qc` (the third gate), `cfg/testrun/b44off.cfg` (the arm
+whose expectation changed), new `cfg/testrun/b46cheat.cfg` and `b46self.cfg`.
+
+
+### Addendum — the mod moved out of the engine's filesystem namespace  *(APPLIED, QC + engine — `build.ps1 -Engine`)*
+
+**`fs_` is the filesystem's, and the mod had been squatting in it since build 1.** `fs_game`,
+`fs_basepath`, `fs_automount`, `fs_cache` and `fs_restart` are `fs.c`'s; `fs_stagehop` and
+`fs_runclass` were ours; and nothing in either name said which. Reported as "that's awful, it seems
+like filesystem", which is exactly right — and it is not a cosmetic complaint, because this tree
+already has a scar from it. `sv_player.qc`'s essay records the day the mod's own `fs_restart`
+command was unreachable by the obvious route: `bind x fs_restart` reached **the engine's
+filesystem-rebuild command** every time, the single most expensive thing in the build. That pair
+was renamed to `zone_restart`/`zone_reset` locally. This is the same fix applied to the other 704
+names instead of one more.
+
+**Four families, chosen by what the identifier does rather than who owns it** — the user asked for
+prefixes accurate to the type of command, not for a project label:
+
+| prefix | ids | what |
+|---|---|---|
+| `run_` | 128 | the timer, the ruleset, stages, zones, the movement assists |
+| `rec_` | 276 | recording, replay, ghosts, the save-lock, the leaderboard |
+| `vbsp_` | 97 | Source map content — props, sprites, decals, overlays, portals, entity I/O |
+| `ui_` | 202 | the HUD, the menu, fonts, the strafe board instrument |
+
+`hud_` (73 cvars), `zone_` and `ghost_` were already correct and were left alone. **5530
+occurrences in 126 files.** `fs_missingwarn` is the only mod name still on `fs_`, because it really
+is about missing files.
+
+**Done as a checked mapping rather than a sed, and the check earned its keep three times.** The map
+was generated from the tree, then refused to run until it reported zero unmapped identifiers, zero
+collisions (two old names landing on one new one would silently merge two subsystems) and zero
+shadows of an existing name. What that process caught:
+
+* **Seven fields the ENGINE resolves by name**, in `sv_user.c` via `GetEdictFieldValue` —
+  `fs_basevelocity`, `fs_forceduck`, `fs_boardnormal`, `fs_boardvelocity`, `fs_boardcount`,
+  `fs_rampcontact`, `fs_rampnormal`. The compiler cannot see this edge. Renaming the QC side alone
+  leaves everything compiling and running while the strafe bar, the board grade, the booster pads
+  and the save-lock duck go silently dead. This is why the change is `-Engine` and not QC-only.
+* **`fs_restart` and `fs_reset` appear in an essay that is QUOTING the engine**, so rewriting them
+  would have turned a true paragraph into a false one. Excluded as prose, not as code.
+* **`fs_addons` is not a cvar at all** — it is `ftesurf/fs_addons.txt`, a filename the engine reads.
+* The engine's own 33 `fs_` names were harvested **from the engine tree** rather than listed by
+  hand, which is how `fs_load` was kept from matching the front of the mod's `fs_load_maps`.
+
+**A compatibility shim, because a renamed cvar does not fail loudly.** A config setting the old name
+sets a cvar nobody reads — the "control that never ran" trap, where the run comes out on the default
+path while claiming to be the arm you asked for. `default.cfg` and all 145 testrun cfgs were
+rewritten with the source, but the player's saved `ftesurf.cfg` could not be. So `FS_CvarsMoved`
+forwards all 41 old names once, from `m_init` (earliest QC on a launch, before any `registercvar`
+can win) and again from `SV_TimerMapInit` (for a dedicated server, where `menu.dat` never loads).
+It prints only when a value would otherwise have been lost, and it empties the old name afterwards
+so it says its piece once in the life of the install. Observed doing exactly that:
+`fs_skyroom is now vbsp_skyroom (carried your 0 over)` — a real non-default setting that would
+otherwise have silently reverted.
+
+**Measured.**
+
+| | |
+|---|---|
+| QC build | 0 warnings × 3, all three progs |
+| `pm_selftest` / `zone_selftest` | all checks passed / all 22 checks passed |
+| `b46cheat.cfg` under the new names | unchanged — `run_class 0` behaves exactly as `fs_runclass 0` did |
+| **the engine link**, `b46ramp.cfg` on surf_rise | `board: count 0 → 1`, `plane 0.729 0.000 0.685`, `vin 856` — the engine wrote a real ramp face into the **renamed** fields |
+| the same counters in Sep-4 logs | `board: count 1  plane -0.759 0.168 0.629  vin 1620` — same shape, so this is the pre-existing behaviour and not a new reading |
+
+That single increment proves five of the seven at once: `pm_source.c:1136-1158` sets
+`rampcontact` and `rampnormal` and then, gated on a new arrival, `boardnormal`/`boardvelocity`/
+`boardcount` — all inside one block that only runs when `|normal_z|` is between 0.1 and 0.7.
+`run_basevelocity` and `run_forceduck` are separate lookups and were **not** exercised; they are
+renamed identically and read by the same function, which is inference rather than measurement.
+
+**One test was inconclusive and is kept, labelled, rather than deleted.** `b46link.cfg` asked the
+same question on bhop_eazy and got `board: count 0` after five real jumps — which looks like a
+failure and is not: flat ground is `normal_z` 1.0, outside the ramp band, so that branch never runs
+and a perfectly healthy link prints zero too. Its header now says so, because a test that reads as
+a failure for the wrong reason is worse than no test.
+
+**Two things went wrong on the way and were repaired.**
+
+* The rename script wrote `\n` where 21 files had been `\r\n`, converting `default.cfg` and ten QC
+  files to LF wholesale. Caught by a byte-level compare against the pre-change backup and restored.
+* A follow-up pass that re-aligned `default.cfg`'s value column touched 105 lines when only 20 had
+  drifted. The value column matches the original exactly; some comment columns moved by a space.
+
+**The plugin DLL was deliberately NOT rebuilt, against this file's own rule.** `plugins-rel` fails
+on a malformed `mat_vmt_progs.h` generated from a `vmt/transition.glsl` that the *other session* was
+editing at the time (18:22, two minutes before the build). The rule at the top of this file exists
+because a stale plugin against a new exe corrupts memory at map load — but that hazard is **header**
+drift, and `find engine -name '*.h' -newermt 14:37` returns nothing: no engine header has changed
+since the deployed plugin was built, and this change touches one `.c`. The plugin is ABI-identical.
+**It still needs rebuilding once that GLSL is finished**, and this note is here so that is not
+forgotten.
+
+#### Files
+
+Every `.qc` (704 identifiers), `cfg/default.cfg`, 145 `cfg/testrun/*.cfg`, `tools/reccheck.py`,
+`tools/fixstagepad.py`, the three `*.src` manifests, `engine/server/sv_user.c` (the seven by-name
+lookups), new `sh_defs.qc` `FS_CvarMoved`/`FS_CvarsMoved`, new `cfg/testrun/b46ramp.cfg` and
+`b46link.cfg`.
+
+
+## Patch 249 — basevelocity was ridden and never cashed out, so 2004 booster pads across 298 maps delivered 1.5% of their number  *(APPLIED, QC only — `build.ps1`)*
+
+**The report was "booster pads don't boost".** Patch 240 was written to answer it, wired
+`basevelocity` into the Source pmove, and closed with a note saying the pads *did* work and the
+numbers just looked bigger than they were. That note was wrong, and this is the other half.
+
+### What Patch 240 built, and the one thing it left out
+
+Patch 240 built `m_vecBaseVelocity` and the add/move/subtract sandwich around it. `pm_source.c` had
+consumed `pmove.basevelocity` in eleven places all along; the only writer in the tree was
+`GT_HALFLIFE`-only, so for a `GT_PROGS` game the field was permanently zero. Patch 240 added the
+writer. What it did not add is `CPlayerMove::CheckMovingGround` (`player_command.cpp:97-127`), which
+is where a carrier turns into speed you keep:
+
+```c
+if ( !( player->GetFlags() & FL_BASEVELOCITY ) )
+{
+    player->ApplyAbsVelocityImpulse( (1.0 + ( frametime * 0.5 )) * player->GetBaseVelocity() );
+    player->SetBaseVelocity( vec3_origin );
+}
+player->RemoveFlag( FL_BASEVELOCITY );
+```
+
+Basevelocity is not consumed by being ridden. It is **cashed out** into real velocity on the first
+tick that nothing re-armed it — and the flag, cleared unconditionally on the line after, is what
+"nothing re-armed it" means.
+
+### The two writers differ in exactly one bit
+
+| writer | sets the flag? | consequence |
+|---|---|---|
+| `trigger_push` (`triggers.cpp:2270-2271`) | **yes** | you ride it inside the volume with full strafe control, and collect the horizontal part on the way **out** |
+| `AddOutput basevelocity` (`baseentity.cpp:7440` → `saverestore_gamedll.cpp:80`) | **no** | the very next tick cashes it out in full |
+
+So `AddOutput basevelocity 0 0 650` is a **654.9 u/s launch**, not the 9.75 u/s Patch 240's note
+claimed. That note reached its number by reading `StartGravity`'s
+`velocity[2] += basevelocity[2] * frametime; basevelocity[2] = 0;` in isolation and concluding Z is
+an acceleration. It *is* an acceleration — for a carrier that a conveyor or a push re-arms every
+tick. For an `AddOutput` write, `CheckMovingGround` (`:472`) has already emptied basevelocity before
+`ProcessMovement` (`:515`) ever runs, so `StartGravity` never sees it.
+
+**Scale.** 2004 `AddOutput basevelocity` outputs across **298 of the 1310 maps**, carried by
+`OnEndTouch` (776), `OnStartTouch` (613) and `OnJump` (579). bhop_futile's six pads were never the
+story; they were the six we happened to be looking at. And every one of the 4924 `trigger_push` in
+613 maps lost its horizontal push entirely — a 2000 u/s booster moved you while you were inside it
+and left you with nothing.
+
+### The model, in QC — no engine change
+
+QC owns the vector and the flag; the engine field stays exactly what Patch 240 made it, a
+one-command hand-off.
+
+| field | Source | |
+|---|---|---|
+| `.fs_basevel` | `m_vecBaseVelocity` | survives across commands |
+| `.fs_basevel_armed` | `FL_BASEVELOCITY` | set by a touch, cleared every command |
+| `.fs_basevelocity` | — | the engine's read-and-clear window for this command |
+
+`SV_BaseVelocityFrame` is `CheckMovingGround` and runs first thing in `PlayerPreThink`: after last
+command's touches wrote the carrier, and before the engine reads the field at `sv_user.c:7994`.
+
+**The Z drain has to happen there too, and putting it after the move is wrong twice.** The obvious
+place to mirror `StartGravity` spending `basevelocity[2]` is `PlayerPostThink`. The touch loop runs
+between the move and PostThink, so a post-move drain (a) zeroes an `AddOutput basevelocity 0 0 500`
+written by a touch *on this command* before the next command's cash-out can see it — vertical boosts
+vanish entirely — and (b) eats a re-arming `trigger_push`'s fresh Z a tick early. Draining it on the
+value being handed over, inside `SV_BaseVelocityFrame`, is Source's ordering exactly.
+
+### trigger_push, four other corrections
+
+- **The class gate was missing entirely.** `PassesTriggerFilters` (`triggers.cpp:340-377`) tests the
+  toucher's class against spawnflags before `filtername` is consulted; a player needs bit 1
+  (`ALLOW_CLIENTS`) or bit 64 (`ALLOW_ALL`). **100 trigger_push in 39 maps** set neither — spawnflags
+  0, 8, 12, 1032, 1036 — and every one was pushing the player here while pushing nothing in Source.
+- **The within-command accumulate.** Source folds the existing carrier in only when the flag is
+  already set (`:2248-2251`), and the flag is cleared at the top of every command — so two
+  *overlapping* volumes sum in the tick they both touch, and one volume touching for a hundred
+  commands does not compound. Backwards, this is a rocket.
+- **The one-unit origin lift** on an upward push (`:2255-2257`), tested on the *net* push after the
+  accumulate. Absent from the `PUSH_ONCE` branch, which is deliberate in the original.
+- **`ApplyAbsVelocityImpulse`'s clamp** on `PUSH_ONCE` (`baseentity_shared.cpp:1121-1142`): above
+  4000 the vector is rescaled to length 4000, at 400000 it is discarded. Library `speed` values run
+  to 999999999999.
+
+### Case, which cost whole maps
+
+Source matches keyvalue names with `stricmp` (`saverestore_gamedll.cpp:46`) and input names with
+`stricmp` (`baseentity.cpp:3887`). Both were `==` here.
+
+- Of the 2004 basevelocity outputs, 1835 say `basevelocity`, **164 say `Basevelocity` and 5 say
+  `BaseVelocity`** — 8.4% missed, and missed whole maps, because a mapper picks one spelling and uses
+  it throughout. surf_breach, surf_strike and surf_inferno are capital-B and lost every boost.
+- Three outputs spell the input `AddOutPut`.
+
+`SV_ApplyInput` now folds the input name before dispatch and censuses under the map's own spelling.
+
+### Zero-fill, not rejection
+
+`UTIL_StringToVector` (`util_shared.cpp:916-946`) parses up to three floats and zero-fills the rest,
+so `AddOutput basevelocity 0 0 650` clears X and Y as a side effect and `basevelocity 450` is a
+450 u/s push along **+X**. 14 outputs in the library write fewer than three components, including one
+un-substituted Hammer instance parameter (`Basevelocity boostAmountY 1100`). Counted and dprinted,
+because a sideways launch from a value that reads like a height is exactly what gets reported as a
+bug in this code later.
+
+### Measured
+
+`fs_bv_debug 1` prints every cash-out. `cfg/testrun/bv02.cfg`, surf `pm_ticrate 0.015` so the
+factor is 1.0075:
+
+| map | authored | paid | expected |
+|---|---|---|---|
+| surf_minuet_ksf | `0 475 0` | h **+478.6** | 478.56 |
+| surf_stitched | `0 0 -3000` | v **-3022.5** | -3022.5 |
+| surf_stitched | `0 963 0` | h **+970.2** | 970.22 |
+
+Two axes, both signs, three values, exact to the printed digit.
+
+`cfg/testrun/bv03.cfg`, surf_kitsune `*64` (`speed 2000`, `pushdir "0 270 0"`): **ten consecutive
+commands with `armed 1` and no payout**, then one command with `armed 0` giving
+`paid '0 -2000 0' -> speed 2015.4`. It rode the carrier for ten commands without compounding — had
+the accumulate been per-command it would have reached 20000 — and cashed out at 2000 x 1.0075.
+
+**The first attempt at this measurement failed and is worth recording.** `bv01.cfg` tried
+bhop_futile's six `OnJump` pads. They were touched 125-147 times each and never fired, because
+landing a jump inside a 4-unit-thick brush on the exact command the jump condition holds is not
+something a script does reliably — other brushes stacked at the same spot *did* fire `OnJump` on
+those commands, which is what proves that path is alive. `OnStartTouch` volumes need no jump at all.
+
+A second false alarm cost a build cycle and is worth the same treatment: three runs appeared to show
+the cash-out never firing, because the grep pattern was `basevel:` and the payout line reads
+`basevel: paid #1 [...]` only after a later rename — it had been `basevel #1/1: paid`, which that
+pattern does not match. The Z-drain ordering bug above is real and was found by reasoning during
+that investigation, not by the test that appeared to show it.
+
+**Regressions**, all unchanged: surf_rise overlays 103 of 105 and sprites 1 of 1; bhop_canals decals
+81 of 416 and overlays 41 of 53; bhop_arcane func_bhop 1122 and overlays 5 of 5; surf_kitsune
+`target case: 28` and 50 outputs wired. The I/O layer was the thing most at risk — every input in the
+library now goes through a changed dispatch line.
+
+### Limits
+
+- **Still not predicted.** `basevelocity` is not in `pmsourcestate_t` and not networked, so the
+  client replays unacked commands without the carrier. The cash-out itself is a velocity write and
+  *is* replicated, so the exit boost is correct on the client one packet later; the ride through the
+  volume rubber-bands by roughly (speed x unacked time). Bounded, not cumulative.
+- A teleport out of a volume carries the held vector with it and cashes out on arrival. Source does
+  the same — `CTriggerPush` has no `EndTouch`, and Momentum's saveloc saves only
+  `m_afButtonDisabled` — so this is faithful rather than overlooked.
+- `PUSH_ONCE` here still refuses to push a noclipping player. Source's `PUSH_ONCE` branch runs before
+  the movetype switch and would push one. Deliberate: noclip is practice mode.
+- One of the three `bv02` probes (surf_fungus `*209`, `0 0 500`) never registered a touch and is
+  unexplained; the other two carried the measurement. Not chased, because two axes and both signs
+  were already covered by the volumes that did fire.
+- The engine's `SV_AntiKnockBack` and the spectator clear at `sv_user.c:7707` are untouched.
+
+### Files
+
+`src/server/sv_entities.qc` (the model, `SV_IOAddOutput`, `SV_ApplyInput`, `trigger_push_touch`),
+`src/server/sv_player.qc` (the `PlayerPreThink` hook and the respawn clear), `src/server/sv_main.qc`
+(`fs_bv_tick`, `fs_bv_debug`), `ftesurf/cfg/default.cfg` (`fs_bv_debug`).
+
+---
+
+## Patch 250 — displacements ignored the mapper's "no collision" flag, and the VMT key warning could never converge  *(APPLIED, plugin + engine — `build.ps1 -Engine`)*
+
+Two reports on `surf_demise` / `surf_boreas` / `surf_garden`: `developer 2` floods
+with `Unknown field` lines, and `elly/animated_smoke` "is visually wrong AND it's
+solid — there's a few props and things that end up being solid when they shouldn't."
+
+### The smoke: two wrong answers before the right one
+
+**Wrong answer 1: `func_illusionary`.** 1,527 instances across 48 of 90 sampled
+maps, and non-solid in Source. It is already in the hard-coded list at
+`sv_entities.qc:3543-3550`. Not it.
+
+**Wrong answer 2: "this is faithful, Source blocks you too."** The collision chain
+is contents-only — `LUMP_BRUSHES.contents` → `VBSP_TranslateContentBits` → BIH leaf
+→ `node->data.contents & tr->hitcontents` (`com_bih.c:843`) — and nothing about a
+material participates. The smoke's displacements carry
+`CONTENTS_WINDOW|CONTENTS_TRANSLUCENT`; `CONTENTS_WINDOW` **is** in Source's
+`MASK_PLAYERSOLID` (`bspflags.h:108`) and in FTE's `MASK_BOXSOLID` (`bspfile.h:683`).
+By the brush rules the smoke should stop you in both engines, so this looked like
+correct behaviour and was nearly closed as such.
+
+It is false for **displacements**, which have a second gate the brush path does not:
+
+```c
+bool CDispCollTree::AABBTree_SweepAABB( ... )
+{
+    if ( CheckFlags( CCoreDispInfo::SURF_NOHULL_COLL ) )
+        return false;                       //public/dispcoll_common.cpp:892-897
+```
+
+That flag lives in a field FTE reads as a tessellation level. VBSP overloads it:
+
+```c
+pDisp->minTess  = pMapDisp->flags;
+pDisp->minTess |= 0x80000000;               //utils/vbsp/disp_vbsp.cpp:326-327
+```
+```c
+if ( ( minTess & 0x80000000 ) != 0 )
+{   // If the high bit is set, this represents FLAGS (SURF_NOPHYSICS_COLL, etc.)
+    int nFlags = minTess;                   //public/builddisp.cpp:758-761
+```
+
+`mod_vbsp.c`'s `hl2ddisplacement_t` called it `minpower` and commented it
+`//ignored... FIXME: add lod...`.
+
+**All 552 `ELLY/ANIMATED_SMOKE` displacements carry `minTess 0x80000006`** —
+`NOPHYSICS|NOHULL`. The mapper ticked "no collision" in Hammer and vbsp wrote it
+down. So did 10 of surf_demise's terrain displacements, which is the "few props and
+things" half: mappers use it on detail geometry you should not snag on.
+
+Library-wide, a 90-map sample: **100% of displacements carry the magic bit**, so the
+field is never ambiguous, and **2,184 of 4,719 (46%) are NOHULL**, across 7 of the
+28 maps that use displacements at all. Every one has been an invisible wall.
+
+### What changed
+
+`VBSP_LoadDisplacements` reads the field into `dispinfo_t.collflags` (only when the
+magic bit is set — a bare `minTess` is a real tessellation level and means no
+opt-out). `VBSP_BuildBIHMain` then strips the player-solid bits from that
+displacement's BIH leaves. `hl2_dispflags 0` reproduces the old behaviour exactly.
+
+**The honest limit.** A BIH leaf carries one contents word and `BIH_RecursiveTrace`
+does a single `contents & hitcontents`, so there is nowhere to put "solid to bullets,
+not to the player". `NOHULL` therefore also stops point traces. 1,335 of the 2,184
+are NOHULL *without* NORAY, so this is a real divergence and not a theoretical one;
+in a surf game nothing shoots, and the alternative is the bug. Source's `MASK_OPAQUE`
+ray gate (`dispcoll_common.cpp:573`) is likewise not implemented. `NORAY` without
+`NOHULL` cannot be expressed at all, so it is **counted separately and named in the
+census line** rather than silently mishandled — surf_rise has some, which is how I
+found out the 90-map sample's "zero such cases" was wrong.
+
+### Measured
+
+`disp01.cfg`, nine probes on real displaced vertices, one map load per cvar value:
+
+| `hl2_dispflags` | result |
+|---|---|
+| 0 (pre-patch) | **all 9** → `playersolid=YES contents=0x10000002 [window\|translucent]` |
+| 1 (patched) | 5 → `playersolid=no`, first real blocker is terrain 30-112 units below; 2 now trace *through* to that terrain; 2 hit a playerclip brush / a teleporter |
+
+Terrain control (`rock_cliff_to_rockjungle`, 985 displacements at flags 0):
+`playersolid=YES contents=0x1 [solid]` in **both** passes. Census line: 604 flagged
+displacements on surf_demise, matching an offline count of 552 smoke + 42 skybox
+smoke + 10 terrain.
+
+**Two traps cost a run each and are written into the config.** Aiming at base-quad
+centres misses — a displacement is deformed hundreds of units off its own quad, so
+probes landed on a playerclip brush, on the terrain behind, and on the 2D skybox.
+And `map surf_demise` twice **does not reload**, so `hl2_dispflags` never re-latched
+and both halves of the A/B printed the same answer, which reads exactly like "the
+patch does nothing". The giveaway was one displacement census line in the log where
+there should have been two.
+
+### `solid_here`, because guessing was the actual cost
+
+`shader_here` answers "what material is this". The commonest follow-up on an imported
+map is "why does that stop me", and the two read different data. `solid_here` traces
+the world BIH twice along the same ray — once with `~0`, once with `MASK_PLAYERSOLID`
+— and prints both. When they disagree, the gap is the diagnosis: geometry is there
+and deliberately not blocking you. Contents are printed raw and decoded.
+
+It traces `cl.worldmodel` only, which covers world brushes, displacement triangles
+and static props — every candidate for an invisible wall. Brush *entities* are a
+different mechanism (`sv_entities.qc`'s classname list) and are deliberately not
+conflated; the cost is that it cannot be pointed at a `func_brush`.
+
+### The VMT key flood, and why an allow-list could never fix it
+
+Census of the maps' own packed VMTs: 387 files across the three maps, 114 distinct
+`$keys`, **45 unknown to this build**. Widening to 90 random maps: 11,096 VMTs, 371
+keys, **274 unknown**. Cross-checked against Source's own 441 `SHADER_PARAM`
+declarations:
+
+- **101 are real Source shader parameters** (692 uses) — enumerable.
+- **173 are not Source parameters at all** (2,021 uses) — material-proxy result
+  variables (`$distance`, `$distdiff`, `$original`, `$i`, `$temp`), engine-branch
+  extensions (`$envmaplightscale`, `$envmapanisotropy`, `$bumpscale`), and typos
+  (`$surcefaceprop`, `$moidel`).
+
+Source lets a mapper declare `$anything` at the top level for a proxy to write to,
+so the second group cannot be enumerated — which is why this is a class test
+(`VMT_IsKnownSourceParam`, 379 names generated from the SDK) rather than 45 more
+entries in `ig[]`.
+
+Four separate multipliers made it a flood rather than a list: the plugin's
+`Con_DPrintf` gates on `developer` being merely non-zero, a `replace`/`insert` block
+is walked twice, an `include` chain re-enters the parser per file, and a material
+that fails to resolve is re-attempted **per reference**. Measured live:
+`$treeSway` reports **36 uses from one material**. Sixteen keys × 36 lookups = 576
+lines from a single VMT.
+
+Keys are now recorded, deduped and split; `vmt_keys` prints both lists with counts
+and an example material each. `hl2_vmtkeys 1` prints each distinct key once per map,
+`2` restores the old per-occurrence spam.
+
+**Verified:** zero `Unknown field` lines at the default on all three maps, and
+`vmt_keys` lists what the offline census predicted. It also found materials the
+offline pass could not see — `proxychains/decay_props/bonecolor.vmt` and
+`speleothem3/rock_cliffvolcanic.vmt` come from VPKs rather than the map's pakfile,
+which is exactly why the run was worth doing rather than trusting the static list.
+`$treeSwayStatic` and `$reflect2dskybox` land in the not-a-Source-param bucket
+correctly: both are branch extensions absent from the 2013 SDK.
+
+### `$treeSway`: recorded, deliberately not implemented
+
+Sixteen keys, and on these maps **one material**. They are vertex wind animation
+(`stdshaders/tree_sway.h`, params `vertexlitgeneric_dx9.cpp:142-156`) that deforms
+geometry and touches no colour, mask or blend, driven by a global wind vector FTE
+has no equivalent of. Silenced as a class and listed by `vmt_keys`.
+
+### `$emissiveblend*` — implemented, NOT visually confirmed
+
+Source's scrolling self-illumination pass, six lines of shader
+(`emissive_scroll_blended_pass_ps20b.fxc:31-48`) blended `ONE ONE` (`helper:174`):
+`base.rgb * emissive(flow.xy + scroll*time).rgb * tint * strength`, alpha 0. Note the
+flow map **replaces** the texture coordinate rather than offsetting it — it is a
+lookup table into the emissive texture, not a perturbation of the surface's UV.
+
+Implemented as one arm rather than a second pass because **all six materials in the
+library that use it have `$basetexture` commented out** and set `$additive 1`: the
+base pass contributes nothing and the emissive pass *is* the material. So before this
+they drew as nothing at all, not merely unlit.
+
+New `glsl/vmt/emissive.glsl`; the three textures ride `diffusemap` / `lowermap` /
+`fullbrightmap`. `hl2_emissive 0` reverts.
+
+**What is verified:** the seven keys leave the `vmt_keys` census (28 distinct → 21),
+and the materials generate with `prog 1 sort 12`, i.e. a program is attached and
+bound. **What is not:** that it draws the right thing. Three scripted attempts failed
+to photograph it and the reason is geometry, not the shader — the three summoning
+circles are zero-thickness planes at z=14976.5 with the world floor at z=14977, so a
+camera above sees the floor and a camera below sees a backface, and `shader_here`
+cannot help because `CL_TraceShaderUnderCrosshair` traces `cl.worldmodel` only while
+every one of these is a brush entity. **This one needs a human to fly over and look.**
+
+### `hl2_animated`: the visual half of the report, and it is a cvar
+
+`elly/animated_smoke` is a 24 fps flipbook whose frames live in one 14 MB VTF.
+`hl2_animated` defaults to **0** — "draw frame 0" — so the smoke has always been a
+single still frame of an animation. Nothing about masking or alpha is involved.
+
+Routing verified on the exact reported material:
+
+| `hl2_animated` | program | binding |
+|---|---|---|
+| 0 | `vmt/transition#…#NOBLEND` | `diffusemap …smokeanimated.vtf` |
+| 1 | `vmt/animated#…#ANIMRATE=24.000000` | `map "$2darray:…smokeanimated.vtf"` |
+
+86% of pixels change on surf_demise when the cvar flips; surf_boreas and surf_garden
+are unaffected (0.01%), and nothing broke on either.
+
+**The default is NOT flipped, because it is not clean.** Six screenshots 250 ms
+apart with `hl2_animated 1` — six animation frames each at 24 fps — differ by
+0.00% to 0.35%, with `maxdelta` as low as **8**. The flipbook selects a frame and
+then never advances. That is invisible to both of the other tests: switching the
+cvar moves frame 0 to frame N, which is a large one-off change, and a still frame
+cannot show motion. It took a deliberate time series to see it.
+
+The shader math is right (`animated.glsl:109-112`):
+
+```glsl
+ivec3 sz = textureSize(s_anim, 0);
+float layer = mod(e_time * float(ANIMRATE), float(sz.z));
+diffuse_f = texture2D(s_anim, vec3(tex_c, layer));
+```
+
+so the suspect is `sz.z` being 1 — the array is bound with one layer, and the
+modulo then collapses to a constant. `img_vtf.c:398` sets `mips->mip[img].depth =
+faces` inside the loop that also serves the `PTI_2D_ARRAY` path, where the depth
+wants to be the layer count rather than the cubemap face count. **Diagnosed, not
+fixed**: that is Patch 195's loader, it is one hypothesis rather than a
+measurement, and changing an image loader on a hypothesis is how the next report
+gets written. Instrumenting `textureSize` is the next step.
+
+So the smoke on surf_demise still shows one still frame of a 24 fps animation, and
+that remains the answer to "visually wrong" — but the fix is a layer count in the
+VTF loader, not a cvar.
+
+### Dead work, measured rather than assumed
+
+`LUMP_DISP_TRIS` (48) is declared and never read, and Source's per-triangle
+`DISPTRI_TAG_REMOVE` would leave removed triangles both drawn and solid. Across
+**560,352 displacement triangles in 33 maps only three flag words ever occur** —
+`0x0000`, `0x0002`, `0x0006` — all walkability hints for NPC navigation. No removal
+bit is ever set. Not implemented, and the lump's field is now named for what it
+actually is (`m_iDispTriStart`, an index, not "two shorts per quad").
+
+### Also fixed, same file
+
+`VBSP_TranslateContentBits`'s nibble gate for bits 12-15 read `0x000000f00` — a
+copy-paste of the gate above it — so those bits were only translated when an
+unrelated bit 8-11 happened to be set. `CONTENTS_AREAPORTAL` is bit 15 and areaportal
+brushes carry nothing else, so it was dropped on essentially every one in the library.
+**Vis, not collision**: the bit is in no solid mask, and a gate can only remove bits,
+so this never made anything solid.
+
+### Files
+
+`plugins/hl2/mod_vbsp.c` (displacement flags, the census line, `hl2_dispflags`,
+`hl2_vmtkeys`, `hl2_emissive`, the areaportal mask), `plugins/hl2/mat_vmt.c` (the key
+census, `VMT_IsKnownSourceParam`, `vmt_keys`, the `$emissiveblend*` arm),
+`plugins/hl2/glsl/vmt/emissive.glsl` *(new)*, `plugins/hl2/Makefile`,
+`engine/client/view.c` (`solid_here`).
+
+## Patch 251 — 319 overlays a map drawn unlit because Patch 246 fixed the gate and left the switch off, plus $seamless_scale, $bumpmap2 and the water keys  *(APPLIED, plugin + engine + cfg — `build.ps1 -Engine`)*
+
+Two unrelated reports, both from the same session:
+
+- **"these textures appear fullbright"** on `surf_666`, with `shader_here` output naming
+  `dev/dev_concretefloor006a` and `brick/brickwall004a`.
+- **"continue with `$seamless_scale`, `$bumpmap2` and the water family"** — the three of the
+  four Stage 3 features Patch 250 did not reach.
+
+---
+
+### 1. The fullbright surfaces are OVERLAYS, and every instrument said otherwise
+
+`shader_here` reported two ordinary `LightmappedGeneric` materials on `vmt/lightmapped` with
+`usage=lightmapped`, and the BSP agreed with all of it: texinfo flags `0x0000`, styles
+`[0,255,255,255]`, a valid `lightofs` on 2835 of 2838 and 3866 of 3866 faces, LDR-only lighting
+(lump 8 is 9.9 MB, lump 53 is empty). Decoding lump 8 at the two probed faces gives a mean
+linear luminance of **0.013 and 0.052** — the map is dark there, and the screen was bright.
+
+**Neither material was the thing being looked at.** Parsing `LUMP_OVERLAYS` (348 records, 352-byte
+stride) and projecting both probe points into each overlay's basis frame puts both at
+|plane distance| **0.00**, inside an overlay footprint, and the pair is *crossed*:
+
+| probe | `shader_here` named | actually in front of it |
+|---|---|---|
+| `-1408 -13545 11148` | `dev/dev_concretefloor006a` | overlay #30 `666/brickwall004a_overlay`, 1792×1280, 512px tiled 14×9 |
+| `-416 -14722 11814` | `brick/brickwall004a` | overlay #19 `666/dev_concretefloor006a_overlay`, 896×576, tiled 7×4.5 |
+
+A brick overlay on the concrete face and a concrete overlay on the brick face. `shader_here`
+cannot do better: `CL_TraceShaderUnderCrosshair` reports
+`Mod_GetSurfaceNearPoint(cl.worldmodel, …)->texinfo->texture->name` (`view.c:2197-2203`), and an
+overlay is scenetris geometry with no `msurface_t` and no collision — the trace goes straight
+through it to the wall behind. A 512px texture tiled 14× across a wall and drawn unlit is exactly
+the flat, bright, high-frequency "noise" in the screenshot.
+
+**Why unlit — one default.** Both overlay VMTs are `LightmappedGeneric` + `$decal 1` with no
+`$translucent`, so they draw *opaque* over the base face, and `hl2_decallit` (default 1)
+correctly keeps them on `vmt/lightmapped`. But the decal batch never gets a lightmap page:
+
+- `r_part.c:603` — `r_decal_lightmap` defaults to **`"0"`**
+- `cl_ents.c:3722` — `ctx->dolm = r_decal_lightmap.ival && …`, so `adddecal_static` stores `lightmap[0] = -1`
+- `gl_alias.c:3200-3207` — every scenetris batch starts at `-1` and only copies a page when the shader has `SHADER_HASLIGHTMAP`
+- `gl_backend.c:1405` — `if ((unsigned short)curbatch->lightmap[0] >= numlightmaps) t = r_whiteimage;`
+
+`(unsigned short)-1` is 65535, so `s_lightmap` binds **white** and `lightmapped.glsl:185`
+multiplies the albedo by `1.0 * e_lmscale`. All 319 placed overlays on `surf_666`, and FTESurf's
+`cl_decals.qc` places every one of them through `adddecal_static`.
+
+**This does not rediscover a bug — it finishes Patch 246.** That patch is titled *"230 maps ship
+baked decals the loader never read, and every Source decal was fullbright"*, and its section 2 is
+this exact fault. It did all the hard work:
+
+- it replaced the game-id gate (`fromgame == fg_quake || fg_halflife`, which VBSP's `fg_new` was
+  never in) with the two properties the interpolation actually needs,
+  `lightmaps.surfstyles > 0 && lightmaps.count > 0` — chosen deliberately so Source worlds would be
+  included and Doom 3 still excluded;
+- and it fixed the three defects the widened gate exposed, every one of which only matters once
+  decals are lit: `DecalLM_Interp` hardcoding the trifan winding (wrong on 640 of 9557 overlays
+  across 37 maps, `surf_outra` 178 of 269), an unguarded NULL dereference on the very path taken
+  when `lmst_array[0]` is NULL, and unclamped negative vertex alpha brightening every decal's edge.
+
+Then the whole thing stayed switched off, because `ctx->dolm` is `r_decal_lightmap.ival && …` and
+that cvar's default is `"0"`. Patch 251 is the one line that turns on what Patch 246 built — which
+is also why the machinery behind it turned out to be in such good shape.
+
+**Fix:** `set r_decal_lightmap 1` in `ftesurf/cfg/default.cfg`, not in the engine. That cvar and
+its gate belong to nettest, which shares this engine tree; the gamedir is the right place for a
+game-specific default and it stays reversible.
+
+Measured, same frame, same vantage (the user's own `save005`), mean luminance:
+
+| region | `r_decal_lightmap 1` | `0` (shipped) |
+|---|---:|---:|
+| overlay, brick right | 21.9 | 141.7 |
+| overlay, brick low | 22.6 | 130.8 |
+| overlay, pale panel | 36.1 | 223.0 |
+| world, brown wall | 54.2 | 54.2 |
+| world, tiled floor | 53.9 | 53.9 |
+| world, ceiling | 31.4 | 32.7 |
+
+34.25% of the frame changes and all of it is inside an overlay footprint, which is the shape a
+correct fix has. Every earlier reading agrees in hindsight: `r_fullbright` never touched those
+regions (ratio 0.97–1.01) because their lightmap was *already* white; `gl_overbright` 0/1/2
+scaled them 71.0 / 141.7 / 244.0, near-linear, because `e_lmscale` was the only lighting term
+left; `r_drawentities` changed 0.01% because overlays are not entities; and `r_texdiag` reported
+no denied world surfaces because the world was innocent throughout.
+
+**Not done, and worth doing:** `gl_backend.c:1405` turns "this batch has no lightmap page" into
+"sample pure white" with no diagnostic, for any shader carrying `SHADER_HASLIGHTMAP`. That is
+what made this silent. Binding mid-grey, or refusing the lightmapped program, would make the next
+instance of this look like a bug instead of a lighting choice — but it is shared engine code on a
+path every game uses, so it is named here rather than changed.
+
+### 2. `light_here` — new diagnostic
+
+Five instruments each gave a confident answer about the wrong thing here, so there is now one that
+answers the actual question. `light_here [tag]` prints, for the world surface under the crosshair:
+the lightmap atlas page (`-1` = none, and it draws fully lit), the lightstyles and their
+`d_lightstylevalue`, `lmshift`/extents/luxels, `SHADER_HASLIGHTMAP` (which is *not* the
+`SUF_LIGHTMAP` that `shader_here` prints), and the decoded mean/peak of the surface's own lightmap
+block using the same E5BGR9 packing `mod_vbsp.c:2907-2911` writes.
+
+A mean near 1 blames the map; a mean near 0 with a bright picture blames the renderer. It is what
+showed every world face on `surf_666` was healthy (`lmpage=0/1`, `samples=yes`, block mean
+0.06–0.27) and pushed the search off the world entirely.
+
+### 3. `$seamless_scale` — Source's triplanar projection
+
+Valve's PC math exactly (`lightmappedgeneric_vs20.fxc:117`/`:212`,
+`common_lightmappedgeneric_fxc.h:103-130`):
+
+```
+coords = worldPos * $seamless_scale
+w      = normal * normal                       // sums to 1
+result = w.x*tex(coords.zy) + w.y*tex(coords.xz) + w.z*tex(coords.xy)
+```
+
+The X360 branch additionally does `max(w-0.3,0)` and renormalises; the PC branch does not, and
+does not need to. The `zy / xz / xy` pairing is load-bearing — swap two and a wall facing an axis
+still looks right while every slope goes wrong.
+
+In **both** `lightmapped.glsl` and `transition.glsl`, because roughly half the uses are
+`WorldVertexTransition`. World space via `m_model`, so a brush entity's texture stays put when the
+brush moves. One deliberate divergence: Valve skips `albedo *= vertexColor` under SEAMLESS because
+it has spent the colour register on the weights; this carries the weights in their own varying, so
+`$vertexcolor` keeps working.
+
+**Reach:** 367 materials across 89 of the library's 1310 maps. `surf_outra` 28, `surf_surreal` 24,
+`surf_fantasy` 18, `surf_demise` 13 (over 1221 terrain faces). Cvar `hl2_seamless`, default 1.
+
+### 4. `$bumpmap2` — the second normal map
+
+`lightmappedgeneric_ps2_3_x.h:378-382`: `vNormal.xyz = lerp(vNormal.xyz, vNormal2.xyz, blendfactor)`
+— the *same* factor as the two base textures, including the `$blendmodulatetexture` reshaping, on
+decompressed normals, not renormalised. `transition.glsl` already computed exactly that factor.
+
+Carried on the free `s_specular` slot (`specularmap`, `gl_shader.c:3531`), which `mat_vmt.c`
+emits for nothing else. Not `s_fullbright` — that goes to any material with `$selfillum`,
+transition materials included.
+
+**Honest scope:** `transition.glsl` reads the normal only to warp a cubemap reflection, so of the
+481 materials across 175 maps carrying `$bumpmap2`, only the **130 (27%)** that also carry
+`$envmap` look any different. The other 351 are correct and invisible until this shader lights
+from the normal. (`surf_demise` is 6 of 6; a 200-map sample first put the ratio at 6 of 42 and was
+not representative — the maps that lean on `$bumpmap2` are the ones that also bake cubemaps.)
+Cvar `hl2_bumpmap2`, default 1.
+
+### 5. The water family — keys the shader could always read
+
+`water.glsl` has declared `#defines` for `STRENGTH_REFR`/`STRENGTH_REFL`, `TINT_REFR`/`TINT_REFL`,
+`FOGTINT` and `TXSCALE1`/`TXSCALE2` since it was written, and `mat_vmt.c` only ever emitted
+`#LQWATER` or `#HQWATER` — so every water material in the library drew with the shader's built-in
+defaults no matter what its author wrote. Five keys were explicit "recognised but ignored" arms.
+
+Now wired: `$refractamount`, `$reflectamount`, `$refracttint`, `$reflecttint`, `$fogcolor` and
+`$scale`.
+
+**Reach:** 679 Water materials across 256 of 1310 maps — `$fogcolor` 679, `$refractamount` 677,
+`$scale` 639, `$reflectamount` 600, `$refracttint` 540, `$reflecttint` 527. Practically every
+water material writes something that was being discarded, which makes this the widest of the three
+by a long way. It also corrects the plan: it named `$waterdepth` at "34 of 90 maps" as the reason
+to do water, and `$waterdepth` turns up on **one material in the entire library**.
+
+**Two limits, stated rather than discovered later:**
+
+- **`hl2_water` defaults to `3`**, the dithered-flat mode, which uses none of this. Everything
+  above changes `hl2_water 1` and `2` only. `$fogcolor` and `$fogend` already fed modes 0 and 3.
+- **`#DEPTH` is deliberately not wired.** It is what would turn `$fogstart`/`$fogend` into a real
+  depth-graded fade, but its branch samples `s_refractdepth` and `water.glsl`'s `!!samps` line
+  declares only `refract` and `reflect`. Emitting `#DEPTH` without also declaring and binding that
+  sampler produces a shader that fails to compile.
+
+---
+
+### Verification, and what is not verified
+
+**Proven.** The generator is fully wired and both cvars control it. `shader_here` in five states on
+`maz/gravel01yellow_caverockyellow_blend` (surf_outra):
+
+| state | `prog=` |
+|---|---|
+| `hl2_seamless 1`, `hl2_bumpmap2 1` | `vmt/transition#SEAMLESS=0.001302#BLENDMOD#BUMP2` |
+| `hl2_seamless 0` | `vmt/transition#BLENDMOD#BUMP2` |
+| `hl2_seamless 1` | `vmt/transition#SEAMLESS=0.001302#BLENDMOD#BUMP2` |
+| `hl2_bumpmap2 0` | `vmt/transition#SEAMLESS=0.001302#BLENDMOD` |
+| both `0` | `vmt/transition#BLENDMOD` |
+
+Each toggle adds and removes exactly its own permutation and restores byte-identically. The load
+census counts 114 `$seamless_scale` and 112 `$bumpmap2` materials on surf_outra, 7 and 6 on
+surf_demise. No GLSL compile errors in any log, so both new permutations build.
+
+**FOUR RUNS MEASURED NOTHING, three different ways, and each looked like a result.** Recorded
+because the shapes recur:
+
+| run | map | what went wrong |
+|---|---|---|
+| seam01 | surf_demise | no noise floor at 2 of 3 vantages; every toggle 70% |
+| seam02 | surf_demise | floor finally taken: **72.82% between two identical states**. `elly/animated_smoke_skybox` carries `#SCROLL` and covered the frame |
+| seam03 | surf_outra | `slowmo 0` dropped the floor to 0.01% — but the camera was aimed at the *bounding-box centroid* of a 4109-unit displacement, i.e. inside the terrain. `shader_here` reported a brick wall |
+| seam04 | surf_outra | aimed properly at a displaced vertex, `shader_here` confirmed the right material — and the screenshots are **black**: surf_outra is an unlit cave |
+
+A diff at the noise floor is not a negative result until the frame is known to contain the thing
+under test, lit. `shader_here` naming the material and the frame's mean luminance are both
+preconditions for reading the number at all.
+
+**Not verified by me:** that the triplanar projection and the blended normal *look right*. The
+mechanism is Valve's, quoted line by line, and the permutations demonstrably reach the shader —
+but nobody has looked at a seamless cliff and judged it. `hl2_seamless` and `hl2_bumpmap2` are
+`CVAR_SHADERSYSTEM`, so they flip live with no reload.
+
+**Water: proven, by a new census line.** `shader_here` cannot answer this one — a water surface
+does not stop `CL_TraceShaderUnderCrosshair`, so a probe aimed down at a pool reports the
+`$bottommaterial` face *behind* it (measured: `juxxy/water_canals03_beneath#warp`, `prog=-`, on
+both surf_garden and surf_boreas). So the generator now records the permutation string of the last
+Water material it built, and the map census prints it:
+
+```
+surf_garden: #HQWATER#STRENGTH_REFR=0.500000#STRENGTH_REFL=1.000000
+             #FOGTINT=0.070588,0.054902,0.047059#TXSCALE1=1.000000#TXSCALE2=1.000000
+surf_boreas: #HQWATER#STRENGTH_REFR=0.500000#STRENGTH_REFL=1.000000
+             #TINT_REFR=0.862745,0.949020,0.937255#TINT_REFL=1.000000,1.000000,1.000000
+             #FOGTINT=0.039216,0.152941,0.262745#TXSCALE1=1.000000#TXSCALE2=1.000000
+```
+
+surf_garden omits both tints and surf_boreas carries them — exactly the keys each material writes,
+so the `_set` flags work and a written value stays distinguishable from silence.
+
+The first run of that census **truncated** surf_boreas at 192 characters, ending `#TXSCALE2=` with
+no value. The real string is 199 characters, which is the worst case for a Water material (all six
+keys, three of them vec3) and fits `progargs[256]` with 57 bytes to spare — so the shader was never
+truncated, only the diagnostic copy of it. The buffer is 256 now with the arithmetic written down
+beside it: a diagnostic that lies about the thing it exists to show is worse than none.
+
+Still unverified: whether the water *looks* better. `hl2_water` defaults to `3`, so seeing any of
+it needs `hl2_water 2` first.
+
+**Regressions — all four baselines match exactly.** These matter more than usual here: two shared
+world shaders changed (`lightmapped.glsl` draws every lightmapped world surface in the game,
+`transition.glsl` every `WorldVertexTransition` one), and `r_decal_lightmap 1` changes the
+*placement* path for every decal and overlay, not just their lighting — a fault there would drop
+decals rather than mis-light them.
+
+| map | baseline | measured |
+|---|---|---|
+| surf_rise | overlays 103 of 105, sprites 1 of 1 | 103 of 105 (0 no faces, 0 sheared, 2 off-surface), 1 of 1 |
+| bhop_canals | decals 81 of 416, overlays 41 of 53, sprites 74 of 97 | 81 of 416, 41 of 53, 74 of 97 |
+| bhop_arcane | func_bhop 1122, overlays 5 of 5, sprites 180 of 180 | 1122, 5 of 5, 180 of 180 |
+| surf_kitsune | target case 28 | 28 |
+
+No GLSL compile errors in any run, so `#SEAMLESS`, `#BUMP2` and the six water permutations all
+build.
+
+## Patch 252 — every third usercmd moved the player zero units, because the send rate was not a multiple of the physics tick  *(APPLIED, engine — `build.ps1 -Engine`)*
+
+Reported as *"the player's camera when moving smoothly will flicker per frame, back and forth …
+with 500~fps so it doesn't seem like it should. some levels are very smooth."* Two details from
+the reporter turned out to be the whole diagnosis, and both were initially doubted by the person
+reporting them:
+
+* *"I swear the mouse doesn't cause any jitters but player movement does."* Correct. View angles
+  are resampled per command by Patch 136 and never pass through the physics tick; the origin does.
+* *"alt-tabbing and retabbing caused the game to drift out again."* Also correct — a hitch pushes
+  a large `cmd.msec` through the tick loop and re-seeds `pmove.msec_carry`, moving the phase of
+  the cycle below.
+
+### The mechanism
+
+`PMSrc_PlayerMove` (`pm_source.c:2984`) accumulates `avail = msec_carry + cmd.msec` and runs
+**whole ticks only**, carrying the remainder. A usercmd therefore advances the player an integer
+number of ticks or not at all. When the command interval is not a multiple of `pm_ticrate`, the
+carry makes that integer cycle. 10 ms commands into a 15 ms mover is strictly periodic:
+
+```
+avail 0.010 -> 0 ticks, carry 0.010    <- the player does not move
+avail 0.020 -> 1 tick,  carry 0.005
+avail 0.015 -> 1 tick,  carry 0.000    -> repeats forever
+```
+
+A 33 Hz stop-go in **position only**, which is exactly what "the mouse is smooth and moving is
+not" sounds like from the inside.
+
+### It was already on disk, in files nobody had reason to re-read
+
+A `.rec` sample carries origin **and** velocity per packet, so ticks-of-motion per usercmd is
+computable from recordings that already existed. `tools`-side scratch script; three files:
+
+| file | packet interval | motion, in ticks |
+|---|---|---|
+| `data/runs/surf_rise/main/last.rec` | 10.0 ms | `011011011011…` |
+| `data/runs/surf_garden/stage_1/0000416_pb.rec` | 10.0 ms | `011011011011…` |
+| `data/saves/surf_4am/save002/run.rec` | 15.0 ms | `111111111111…` |
+
+and then, mid-investigation, the reporter's own fresh surf_4am stage_1 PB: 10.0 ms packets,
+`011011011…`, **388 of 1165 usercmds with no motion at all**, distance-to-nearest-whole-tick
+`0.000`.
+
+### How it shipped, and why no config could have fixed it
+
+`cfg/mode_bhop.cfg` is *right* to set `cl_netfps 100` — it also moves `pm_ticrate`, `sv_mintic`
+and `sv_maxtic` to `0.01`, so on a bhop map all four match and the motion reads `1111`. Its own
+header even works the arithmetic in the other direction ("66.667 usercmds a second feeding a
+100 Hz mover means most commands step one tick and some step two").
+
+But `cl_netfps` is a **client** cvar with **`CVAR_ARCHIVE`** (`cl_input.c:40`) while the gamemode
+overlay is applied server-side (`SV_ApplyModeFile`, `sv_phys.c:3399`), and there is deliberately
+no `mode_surf.cfg` to put it back (`default.cfg:116`). So **one bhop map poisons every surf map
+from then on**: the engine writes `100` into `ftesurf.cfg` on exit, and that file is exec'd
+*after* `default.fmf`'s forced `66.6667`. `mode_bhop.cfg` already flagged the hole — "KNOWN
+LIMIT: this is a client cvar, and the ruleset is applied server-side" — without anyone noticing
+what it cost.
+
+This also falsified `default.cfg:473-475`, which claimed the tick was forced by `default.fmf`
+"so a stale saved config can't desync the physics". **An archived cvar cannot be forced from a
+config that runs first.** That comment has been rewritten rather than deleted, because the claim
+is the kind that gets re-made.
+
+### The fix
+
+The tick is authoritative and the client already has it — `movevars.ticrate` arrives through
+serverinfo with the rest of the extended movevars, precisely so prediction and the server agree.
+So `CL_SendCmd` now rounds its usercmd interval to the **nearest whole number of ticks**.
+`cl_netfps` keeps its meaning as a requested packet *rate*: asking for fewer packets still gets
+fewer packets (2 ticks per command, or 3), just uniformly. Only the non-integer relationship is
+removed, because only the non-integer relationship stalls.
+
+**A rate could not express it, and the first attempt proved it.** `CL_FilterTime` tests the
+threshold with `ceil(1000/fps)` and then *consumes* the raw `1000/fps`; those are not the same
+number, and handing it exactly `1000/slot` leaves `1000/fps` sitting on an integer where a float
+hair decides between 15 and 16 ms. Aiming half a millisecond under the slot fixed the threshold
+and then banked 0.5 ms of unconsumed time every command — measured at **14.50 ms commands with a
+zero-tick command every ~30th, 8 of 242**. 33% of commands stalling became 3.3%, which is not a
+fix. The snapped path therefore states the interval directly in whole milliseconds through a new
+`CL_FilterTimeMS`, so threshold and consumption are the same number by construction. Both shipped
+tick rates are a whole number of ms by design (`default.cfg:144-147` chose 0.015 over 64-tick's
+15.625 for exactly this reason), so nothing rounds.
+
+`cl_netfps_snap` (default 1, archived) restores the old behaviour for bisection. A
+server-imposed packet ceiling is respected by taking *more* ticks per command, never by breaking
+the multiple. The snapped path is gated on `cls.state == ca_active`, so the 12.5 Hz connect-time
+keepalive is untouched.
+
+### Measured — `cfg/testrun/reg252.cfg`, surf_rise, three arms, one walk each
+
+| arm | `cl_netfps` | `_snap` | packet interval | motion, in ticks | stalled | stddev |
+|---|---|---|---|---|---|---|
+| A | 100 | 1 | **15.00 ms** | `111111111111…` | **0 of 234** | 0.013 |
+| B | 100 | 0 | 10.04 ms | `011011011011…` | 117 of 350 | 0.475 |
+| C | 33.3333 | 1 | **29.98 ms** | `222222222222…` | **0 of 117** | 0.040 |
+
+B is the control and it matters: without it, A proves only that the current build is fine, not
+that the cvar is doing anything. C is the "fewer packets" case — two whole ticks per command,
+uniform.
+
+### What this is NOT, recorded because it was measured first and is easy to re-suspect
+
+The judder was initially diagnosed as present-cadence jitter — sim time is sampled at frame start
+(`sys_win.c:5000`) and the swap happens a whole render later (`gl_screen.c:344`), so present
+spacing carries the frame-to-frame variance of render cost, which on a 360 Hz VRR panel reaches
+the eye 1:1. That effect is **real and measurable**: on surf_4am at a fixed viewpoint,
+`sys_framepacing 4` at `cl_maxfps 300` took present-cadence stddev from 179 µs to 37 µs, a 4.9×
+flattening (10.1× in an earlier run). **It did not fix the judder.** Two useful facts survive
+from it anyway:
+
+* `sys_framepacing` **1/2/3 are inert** whenever `cl_maxfps` does not bind — they only run from
+  `Host_Frame`'s "frame not due yet" branch (`cl_main.c:7473`), and `ftesurf.cfg` ships
+  `seta cl_maxfps "0"`. The tell is `sys_framepacing_stats` printing "no samples yet" for wait
+  accuracy. Anyone A/B-ing those modes in the shipped config is comparing one code path to itself.
+* **Mode 4 must be paired with a cap the map can hold.** It rounds every present up to the next
+  `1/cl_maxfps` slot (`sys_win.c:2198`); at `cl_maxfps 1000` on a map that cannot hold 1000 it
+  measured 466 µs stddev with the frame rate swinging 330/757/498 and one 103 ms interval —
+  worse than no pacing at all.
+
+### Files
+
+`engine/client/cl_input.c` (`cl_netfps_snap`, `CL_FilterTimeMS`, the snap in `CL_SendCmd`),
+`ftesurf/cfg/default.cfg` (the networking comment that claimed this could not happen),
+`ftesurf/cfg/netfix.cfg` (live A/B), `ftesurf/cfg/testrun/reg252.cfg` (the regression),
+`ftesurf/cfg/testrun/netv10b.cfg` + `netv15b.cfg` (the reproduction pair).
+
+**A test that cannot see this bug**: anything on a bhop map. `mode_bhop.cfg` matches the rates, so
+both arms read `1111` and the run looks like a null result — the first attempt at this measurement
+did exactly that, and the `.rec` header's own `tickrate` field is what gave it away.
+
+## Patch 253 — the flipbook was advancing all along, and switching it on would have darkened every animated sign in the library  *(APPLIED, plugin + cfg — `build.ps1 -Engine`)*
+
+Stage 4 of the VMT plan, plus the one Stage 1 item Patch 250 did not reach. Both
+turned on a measurement that had already been taken and read wrong.
+
+`hl2_animated` has defaulted to `0` since Patch 195 built the feature, so every
+AnimatedTexture flipbook in the game has drawn frame 0 forever: surf_demise's
+smoke is one still frame of a 331-frame 24 fps loop, and surf_the_internet's
+screens are 34 paused videos. This patch switches it on, after fixing the defect
+that would have made switching it on a regression for half the materials it
+touches.
+
+### 1. Patch 250's "it never advances" was a mis-measurement
+
+That patch flipped the cvar, measured 86% of pixels changing on surf_demise, then
+took six screenshots 250 ms apart, found them 0.00%–0.35% different with
+`maxdelta` as low as 8, and concluded the flipbook "selects a frame and then never
+advances". **250 ms at 24 fps is six frames of soft grey smoke**, which genuinely
+does look identical — and `maxdelta 8` is not zero. A small diff was read as no
+diff.
+
+Re-measured at a 3.5 s baseline (84 frames, a quarter of the loop) **with the
+control that run never took**. `elly/animated_smoke` also carries
+`#SCROLL=0.019924,0.001743`, so the frame is already moving under `hl2_animated 0`
+and a nonzero diff proves nothing on its own; the same three shots at the same
+spacing and the same vantage in both states do:
+
+| | consecutive-shot diff | mean delta |
+|---|---|---|
+| `hl2_animated 1` | 99.70% / 11.59% of pixels | 9.559 |
+| `hl2_animated 0` | 0.09% / 0.05% | 0.064 |
+
+An **87× ratio**. It advances, and it always did.
+
+Patch 250's named suspect was wrong too, and reading the file was enough to see
+it: `img_vtf.c:398`'s `mips->mip[img].depth = faces` sits inside
+`if (miplevel < miplevels && mips->type != PTI_2D_ARRAY)` — the **non-array**
+branch. The array branch is `:407-419` and sets `depth = frames` with
+`frames = vtf->numframes` (`:326`). "Fixing" 398 would have changed cubemap
+loading to address nothing. `r_imagelist` — which already prints `Array W*H*D` for
+any texture whose depth is not 1 (`image.c:15487`) — confirms it directly:
+
+```
+materials/elly/smokeanimated.vtf: 2D_ARRAY MIPCAP loaded (Array 256*256*331 BC1_RGB)
+```
+
+331 layers reach the GPU, so `textureSize(s_anim,0).z` cannot be 1 and the whole
+hypothesis is retired. The "instrument textureSize" step that patch asked for
+turned out to be a command that already shipped.
+
+### 2. The defect that was real, and nobody had looked for it
+
+Of the **927 materials across 269 maps** that `hl2_animated 1` actually reroutes,
+**456 — 49% — are `UnlitGeneric`**. `mat_vmt.c:2001` draws an unclaimed one as a
+plain **pass** with no program and no lightmap, because unlit means unlit.
+`vmt/animated` sampled one unconditionally.
+
+And `!!samps lightmap` is not a passive declaration. It sets
+`prog->defaulttextures |= 1<<S_LIGHTMAP0`; `Shader_Finish` then sets
+`SHADER_HASLIGHTMAP`; and `Mod_LightmapAllocSurf` gates on exactly that flag. So
+the surface was not merely multiplied by white — it was **handed a real lightmap
+page with the room's real lighting in it**. Every animated sign, screen and ad in
+the library would have gone dark the moment the default moved, and it would have
+read as "the flipbook is too dim" rather than as a lighting bug.
+
+The fix gates the **declaration**, not the use:
+
+```glsl
+!!samps !UNLIT lightmap
+!!samps !UNLIT =LIGHTSTYLED lightmap1 lightmap2 lightmap3
+```
+
+A leading `!` on a `!!samps` token means "only when this permutation is not set"
+(`gl_shader.c:2137-2143`). Skipping the sample in the fragment shader would have
+left `SHADER_HASLIGHTMAP` set and the page still allocated; removing the
+declaration is what stops it. `mat_vmt.c` reads `st->type` **before** overwriting
+it with `"vmt/animated"` and appends `#UNLIT` for `UnlitGeneric`.
+
+**Verified two-sided inside one build**, both permutations of the same shader,
+with `light_here`:
+
+| surface | program | lightmap |
+|---|---|---|
+| `tiktok/videos/dance11` (surf_the_internet) | `vmt/animated#ANIMRATE=6.000000#UNLIT` | `haslightmap=0  lmpage=-1,-1,-1,-1  samples=NULL` |
+| `tiktok/videos/dance5`, `dance6`, `discord/ramps/insane` | same, `#UNLIT` | same |
+| `elly/animated_smoke` (surf_demise) | `vmt/animated#…#ANIMRATE=24.000000` | `haslightmap=1  lmpage=221  mean 0.3074` |
+
+Note the unlit faces still report `usage=lightmapped` — the BSP *has* lighting for
+them, and only the permutation stops it being allocated. That is the control: one
+build, two permutations, opposite answers. Four of five aimed candidates landed;
+the fifth hit an occluder.
+
+### 3. What it costs: nothing measurable
+
+Three interleaved OFF/ON pairs at each of two vantages on surf_demise, the worst
+map for it — 552 `ELLY/ANIMATED_SMOKE` displacements forming a
+31552×27067×27067 shell around the entire map, additive and blended, so the camera
+is always inside it.
+
+| vantage | OFF (3 reps) | ON (3 reps) |
+|---|---|---|
+| A, smoke-covered overlook | 478.8 / 409.6 / 401.5 → **430.0** | 461.9 / 414.8 / 480.9 → **452.5** |
+| B, normal in-map view | 504.5 / 491.3 / 549.8 → **515.2** | 478.2 / 561.0 / 465.3 → **501.5** |
+
+ON is 5.2% *faster* at A and 2.7% *slower* at B. The sign flips between vantages
+and both gaps sit inside a within-condition spread of ~70 fps, so this is **below
+the noise floor of the measurement, not free**. 53% and 39% of pixels change when
+the cvar flips at those two vantages, which is how we know the feature was
+actually in the frames being timed rather than off-screen — anim05's first attempt
+differed by 0.01% because no flipbook was in shot at all.
+
+### 4. What it loses, honestly
+
+`vmt/animated` is deliberately narrow: no cubemap, no normal map, no selfillum. Of
+**668 distinct** routed materials:
+
+- **407 are unlit and lose nothing.** The pass path they use today cannot sample
+  `s_reflectcube` either — `mat_vmt.c:1609` says so in as many words — and an
+  unlit surface has no lighting for a normal map to perturb. Their `$envmap`,
+  `$bumpmap` and `$selfillum` were already inert.
+- **261 are lightmapped**, and that is where the real cost is:
+
+| | count |
+|---|---|
+| lose nothing — a pure flipbook | 205 |
+| `$selfillum` | 27 |
+| `$envmap` | 24 |
+| `$bumpmap` | 24 |
+| `$detail` | 5 |
+
+So roughly **56 materials trade a secondary shading term for an animation that was
+always meant to play**, against 668 that were frozen on frame 0.
+
+### 5. The default, and where it is set
+
+`set hl2_animated 1` in `ftesurf/cfg/default.cfg`, not in the plugin's cvar
+registration — `fteplug_hl2` is deployed to nettest as well, and the same
+reasoning put `r_decal_lightmap 1` there in Patch 251. `hl2_animated 0` puts every
+flipbook back on frame 0 exactly as it shipped.
+
+### 6. `VLUMP_DISP_TRIFLAGS` — measured, and deliberately not built
+
+The Stage 1 leftover. Lump 48 is declared at `mod_vbsp.c:289` and never read, and
+the plan's concern was that Source's per-triangle `DISPTRI_TAG_REMOVE` would leave
+removed triangles both drawn and solid.
+
+Patch 250 sampled 33 maps and found no removal bit. This extends that to the whole
+library and then finds the reason, which is stronger than the count:
+
+- Across **all 1310 maps, 178,459 displacements and 20,500,928 triangles, exactly
+  two tag words ever occur**: `0x0002` (WALKABLE, 856,856) and `0x0006`
+  (WALKABLE|BUILDABLE, 7,717,061). 41.8% of triangles carry one, so the lump is
+  populated and the zero is a real zero rather than an unwritten field.
+- **vbsp cannot emit the bit.** `utils/vbsp/map.cpp:1223` rebuilds the tag word
+  from scratch — `nTriTags = 0`, then `WALKABLE` and `BUILDABLE` and nothing else
+  — so `REMOVE`, `SURFACE` and the two `SURFPROP` flags are dropped by the
+  compiler before they ever reach a `.bsp`. Nothing in Source's own engine reads
+  `DISPTRI_TAG_REMOVE` either; the only `IsTriRemove` tests a *core* tag
+  (`COREDISPTRI_TAG_FORCE_REMOVE_BIT`) that lives in a different bit space and
+  never survives the collapse.
+
+Both surviving bits are NPC navigation hints this engine has no use for. Reading
+the lump would cost a per-triangle indirection on every displacement in the game
+to act on a bit that is never set. The struct field is now commented with that
+finding so the next person does not re-derive it.
+
+### 7. A limitation of the new census line, stated because it looks like a bug
+
+`mod_vbsp.c` now prints, per map, how many flipbooks were generated and how many
+took `#UNLIT`. It prints at the end of `Mod_LoadVBSP`, so it only ever sees
+**world** materials — a model's materials are generated later, when the model
+loads. Checked against a static census of each map's pakfile:
+
+| map | in the pak | world / model | census line |
+|---|---|---|---|
+| surf_the_internet | 41 | 41 / 0 | 39, 34 unlit |
+| bhop_avantasia | 50 | 44 / 6 | 37, 34 unlit |
+| surf_axil | 50 | **2 / 48** | 3, 3 unlit |
+| surf_demise | 4 | 4 / 0 | 3, 0 unlit |
+
+surf_axil reading 3 against a pak containing 50 is not a failure of the feature:
+48 of its 50 are `materials/models/kl/…`, outside the line's window. The residual
+1–7 gap on the others is VMTs shipped in the pak that no face references. The
+unlit split matched exactly on surf_the_internet (34/34), which is the number the
+patch turns on.
+
+Also worth recording because the plan named them: **surf_boreas and surf_garden
+have zero flipbooks between them.** They were the plan's validation maps for this
+stage and could not have said anything about it, which is why the map list changed
+to surf_the_internet / bhop_avantasia / surf_axil.
+
+Counting method, since it disagrees with the shipped help text: this census reads
+**map pakfiles only** and finds 1,829 materials with the proxy across 410 maps, of
+which 927 route. `hl2_animated`'s help text says 3,342 across 741 maps, from a
+wider earlier census; a pakfile read cannot see VPK-sourced materials (surf_garden
+pulls CS:GO via `data/mapdeps.txt`), and the loose `momentum/materials` tree holds
+only 320 VMTs with 8 proxies, so it does not account for the gap. **The two were
+not reconciled**; the routing numbers above are from the pakfile census and the
+help text is left as it was.
+
+### Regressions
+
+`reg253.cfg`, all exact against the reg250/reg251 baselines:
+
+| map | baseline | got |
+|---|---|---|
+| surf_rise | overlays 103/105, sprites 1/1, decals 0/9 | same |
+| bhop_canals | decals 81/416, overlays 41/53, sprites 74/97 | same |
+| bhop_arcane | func_bhop 1122, overlays 5/5, sprites 180/180 | same |
+| surf_kitsune | target case: 28 | same |
+
+No GLSL compile errors on any run, including `#UNLIT`, a permutation that had
+never been built before.
+
+### Files
+
+`plugins/hl2/glsl/vmt/animated.glsl` (the `!UNLIT` gate on the sampler
+declarations and the varyings), `plugins/hl2/mat_vmt.c` (`animunlit`,
+`vmt_stat_animunlit`), `plugins/hl2/mod_vbsp.c` (the census line, the
+`firsttriflags` finding), `ftesurf/cfg/default.cfg` (`set hl2_animated 1`).
+
+### Not done
+
+- **`$waterdepth` / `#DEPTH`.** The plan justified the water family on
+  `$waterdepth` at "34 of 90 maps"; it is one material in the whole library, and
+  its branch needs an `s_refractdepth` declaration `water.glsl` does not have. Not
+  worth a sampler for one material.
+- **Bump, envmap and selfillum for lightmapped flipbooks** — the 56 materials in
+  section 4. Doing it properly means `vmt/animated` growing toward a second copy
+  of `vmt/lightmapped`, which is the thing Patch 195 explicitly set out not to
+  build.
+- **The census line's model-material blind spot** (section 7). Fixing it means
+  counting at a point that does not exist yet — there is no "all materials are
+  now generated" moment — so it is documented rather than papered over.
+
+---
+
+## Patch 254 — 201 maps ship fog the engine could never have read, because Source puts it on an entity and FTE only looks at worldspawn  *(APPLIED, engine + QC + cfg — `build.ps1 -Engine`)*
+
+**Files:** `engine/client/cl_main.c` (`CL_BlendFog`) · `engine/gl/gl_warp.c` (`R_DrawSkyRoom`)
+· `engine/client/renderer.c` (`R_SetFrustum`) · `C:\FTESurf\src\client\cl_fog.qc` (new)
+· `cl_main.qc`, `cl_gfx.qc`, `cl_progs.src`, `shared/sh_defs.qc`, `server/sv_entities.qc`,
+`server/sv_main.qc` · `ftesurf/cfg/default.cfg`
+
+**Why:** every Source map that authors fog does it with an `env_fog_controller`
+entity, and the 3D skybox carries its own on `sky_camera`. FTE reads fog only
+from **worldspawn** keys (`wad.c:1011-1036`: `fog`/`_fog`/`waterfog`/`skyroomfog`).
+A census of the 1337-BSP library found worldspawn fog keys on **zero** of them,
+so that parser can never fire on this content. `CL_ResetFog` zeroes all three
+slots at map load (`cl_main.c:2443-2445`) and nothing on the VBSP path ever
+writes one — so every fogged map has rendered flat and over-lit since the Source
+loader landed.
+
+Measured: **194** maps carry a controller (302 entities), **174** with one
+enabled; **169** carry a `sky_camera`, and **27** of those are the map's *only*
+fog. ~**201** maps affected — 134 `surf_`, 29 `bhop_`. **54** maps switch fog at
+runtime, firing **397** `SetFogController` inputs (plus 8 `TurnOn` / 8 `TurnOff`);
+**no** map uses `trigger_fog`.
+
+**The mapping.** Source's fog is linear, FTE's default is exponential-by-density,
+and that looks like it needs a lossy conversion. It does not — `r_fog_linear 1`
+switches FTE to a branch that reuses the existing fields with Source's meanings
+(`gl_vidcommon.c`, built-in `sys/fog.h`):
+
+```glsl
+z   = gl_FragCoord.z / gl_FragCoord.w;
+fac = (w_fogdensity - z) / (w_fogdensity - w_fogdepthbias);
+fac = (1.0 - w_fogalpha) + (clamp(fac,0.0,1.0) * w_fogalpha);
+return mix(w_fogcolour, regularcolour, fac);
+```
+
+`density` is the fog END distance, `depthbias` the START, and `CL_Fog_f` already
+takes both (argv 5 → alpha, argv 6 → depthbias). **No change to `CL_Fog_f` or
+`fogstate_t` was needed**; the commented-out `start`/`end` fields at
+`render.h:225-226` are a red herring.
+
+**But the naive substitution is wrong, and this is the part worth remembering.**
+Source does not multiply by `fogmaxdensity`, it takes a `min()` — from the
+Momentum tree, `materialsystem/stdshaders/common_fxc.h:238-242`:
+
+```c
+float dist = distance( eyePos.xyz, worldPos.xyz );
+return min( flFogMaxDensity, saturate( (dist*flFogOORange) - flFogEndOverRange ) );
+```
+
+A multiply draws fog **6.7x too thin across the whole near field** at the census
+p10 of `fogmaxdensity 0.15`. 125 of the 244 enabled controllers sit at
+`maxdensity 1`, where multiply and `min()` agree exactly — which is precisely why
+the bug would survive a casual look at a few maps.
+
+The fix costs nothing and stays in QC. With `m = bound(0,fogmaxdensity,1)` and
+`R = fogend-fogstart`, emit `alpha := m` and `end' := fogstart + m*R`; FTE then
+computes `m*clamp01((z-start)/(m*R))`, which **is** `min(m,(z-start)/R)`. It also
+disposes of the `fogmaxdensity 2` maps for free — alpha can no longer exceed 1,
+so `mix()` can no longer extrapolate past the fog colour into negative RGB.
+
+**Selection rule.** The default controller is the one with `spawnflags&1`
+(`SF_FOG_MASTER`), else the **first in lump order**, *regardless of* `fogenable`.
+Not "the first enabled one": that is wrong on **34 of 194** maps, because **26**
+have a master deliberately set `fogenable 0` (usually named `fog_none`) so the map
+*starts* unfogged and triggers fog in later. `surf_minimumwage`'s only enabled
+controller is `fog_underwater`, so the naive rule drowns the map from spawn.
+
+**The three engine changes.**
+
+1. **`CL_BlendFog` — the one-second whiteout.** `CL_Fog_f` does `time += 1` when
+   `ca_active`, and the blend lerps `density` from the old state across that
+   second. Under exp semantics `density 0` means "no fog", so fading up from zero
+   is harmless. Under **linear** semantics `density` is the END DISTANCE, and
+   `end ~ 0` means *everything is fully fogged*. `PERMUTATION_FOG` engages as soon
+   as density is non-zero (`gl_backend.c:4377`), so every intermediate value runs
+   the shader: one frame in, the screen is solid fog colour, receding over ~1s —
+   on map load, on every I/O fog switch, **and in reverse when fog is turned off**
+   (8000 blends down through 100 before snapping to 0). So in linear mode the two
+   distances snap and only colour and alpha animate. Alpha is the right knob for
+   a fade anyway: alpha 0 is exactly "no fog", at any distance.
+2. **`R_DrawSkyRoom` — the unconditional `/64`.** Unlike its twin in
+   `gl_rmain.c:2704`, this one had no `r_fog_linear` guard, so a `skyroomfog` end
+   of 8000 became 125 and, with a start of 2000, the `(density-depthbias)`
+   denominator went to **-1875** — fog that *thins* with distance and inverts.
+   That constant was standing in for a real quantity: Source divides skybox fog
+   distances by the `sky_camera` scale (`viewrender.cpp`, `Enable3dSkyboxFog`:
+   `scale = 1/m_skybox3d.scale`, then `FogStart(GetSkyboxFogStart()*scale)`),
+   because the skybox geometry is built at 1/scale size. FTE's skyroom renders
+   that small geometry at true size and only moves the camera, so the division is
+   still needed — but the **gamecode** knows the scale, so the gamecode does it
+   and the engine stops guessing 64.
+3. **`R_SetFrustum` — the fog far-plane cull.** It solves the EXP/EXP2 equation
+   for the 2/255 cut-off, reading `density` as a rate. Under linear mode that
+   field is a distance, so with `fogend 12000` it yields
+   `sqrt(log(2/255)/-12000^2)` ~ **0.0004 units** and the far plane lands in front
+   of the eye — the whole world culled. The existing gate hides it under shipped
+   defaults (it wants `r_fog_cullentities 2` or `r_skyfog>=1`, neither set) and
+   the `!depthbias` term hides it again on most maps — but 22 of the 244
+   controllers have `fogstart 0`, so a player raising `r_skyfog` reaches it.
+
+**`r_skyfog 0` is not optional** (`cfg/default.cfg`). It defaults to `0.5` and was
+set in no config, so the moment fog switches on, every skybox gets
+`mix(sky, w_fogcolour, 0.5*w_fogalpha)` (`defaultsky.glsl:45`,
+`defaultskybox.glsl:45`) — a 50% wash toward the fog colour on all ~201 maps.
+Source does not fog the 2D skybox; it fogs the 3D skybox's *contents*, which is
+what `skyroomfog` does instead. Without this line the whole patch reads as "the
+fog change broke the sky".
+
+**Runtime switching** goes over a per-player **`EV_STRING` stat**
+(`STAT_FS_FOGCTRL 84`) carrying the controller's *targetname* — the game's first
+string stat. Deliberately **not** `stuffcmd("fog ...")`: that runs at
+`RESTRICT_SERVER`, which latches `cl.fog_locked` (`cl_main.c:5652`), after which
+the player's own `vbsp_fog` toggle is refused **silently** (`cl_main.c:5599` only
+prints when `Cmd_ExecLevel != RESTRICT_INSECURE`). Not serverinfo either: Source
+fires `SetFogController` at `!activator`, so fog is per-player and serverinfo is
+global. The I/O plumbing already existed — the parser handles both `,` and
+Source's ESC separator, `!activator` already resolves to the player, and the
+controller's name was already sitting unused in `pm = o.vbsp_io_param`. A name
+travels rather than an index so the two sides never have to agree on a numbering;
+the lookup mirrors `SV_FindByName`'s exact-then-`strcasecmp` rule, because
+`SV_RepairTargetCase` fixes `.target` but not `.targetname`.
+
+**Known-and-left:**
+- `fogblend`/`fogcolor2`/`fogdir` (40 controllers) blend two colours by view
+  angle; `fogstate_t` holds one. We use `fogcolor`.
+- Source measures **radial** distance and lerps by the fog factor **squared**, in
+  linear light space (`common_ps_fxc.h:271-272,349-352`); FTE uses planar eye
+  depth and lerps by the factor in gamma space. The two errors partly cancel and
+  the residue wants a screenshot against Momentum with `vid_srgb` pinned, not an
+  argument. Radial-vs-planar affects every map, not just the 13 setting
+  `fogradial`.
+- `TurnOn`/`TurnOff` fired *at* a controller (8 each, library-wide) still do
+  nothing: the controller is a point entity and is removed at spawn, so the
+  output finds no target. `SetFogController` — 397 of the 413 real inputs — is
+  what was worth wiring.
+- **`SetFogController` is written and built but NOT yet verified in-game.** It
+  needs a player to walk into a trigger, and `setpos`/`setangles` do not drive the
+  view from a cfg (see the traps below), so the scripted harness cannot reach it.
+  `bhop_angst` is the map to test it on: three controllers, master `fog_off`, and
+  `trigger_multiple`s that switch to `fog_cave` (`846.88 … a 0.26 bias 512`) and
+  `fog_blueen` (`1086.4 … a 0.6 bias 16`). Walk them and watch the `fog` command.
+- **D3D9 cannot do this and is not expected to.** `d3d_shader.c:182-190` has no
+  linear branch at all (`r_fog_exp2` is a hardcoded `1`) while `vid_d3d.c:1277`
+  still honours `r_fog_linear` for the `/64` skip, so `-d3d9` would get
+  `exp2(-(12000*dist)^2)` — solid fog. FTESurf ships the merged GL/VK target.
+- Underwater fog (`waterfog`, FOGTYPE_WATER) is **not** in this patch. On the
+  maps that care it already arrives via the I/O path above, as a controller
+  literally named `fog_underwater`; the generic material-driven case needs the
+  plugin to publish the water VMT's `$fogcolor`/`$fogend`, which it parses and
+  currently spends only on `hl2_water` dithering.
+- `farz`, `fog_volume`, `obb_volumefog` and `env_skypaint` remain unimplemented.
+
+**Verified** (`cfg/testrun/fog01`-`fog08`, logs in `ftesurf/logs/`). Bare `fog` /
+`skyroomfog` print the engine's live state, so these are read back rather than assumed,
+and every expected value was computed offline from the BSP entity lump first:
+
+| map | read back | what it proves |
+|---|---|---|
+| `surf_potatochip` | `8000 / .470588 .611765 .600000 / a 1 / bias 2000` | the map's own numbers arrive |
+| `surf_legends` | `2700 / .752941 x3 / a 1 / bias 0` | — |
+| `bhop_bowling` | **`500`** / `.650980 .850980 1` / a 0.1 / bias 0 | the `min()` reparametrisation: a multiply gives **5000** |
+| `surf_sidistic` | **`3493.5`** / a 0.97 / bias 50 | fractional `end' = 50 + 0.97*3550` |
+| `surf_huecomundo` | `skyroomfog` **`92.5`** / a 0.16 / bias **62.5** | reparametrisation *and* the ÷ sky_camera scale 32 |
+| `bhop_angst` | `fog 0`, "start on fog_off" | master/first rule, not first-enabled |
+| `surf_minimumwage` | `fog 0`, "start on fog_none (off)" | the map whose only enabled ctrl is `fog_underwater` |
+| `surf_beginner` | `fog 0`, `skyroomfog 0` | regression control, no fog anywhere |
+
+Underwater fog end-to-end on `surf_legends` (embeds `LIQUIDS/AZTECWATER_OLD`): the plugin
+published `hl2_waterfog "0.150000 0.100000 0.000000"`, `_start 5`, `_end 50`, and the
+gamecode turned it into `waterfog 50 (r:0.15 g:0.10 b:0.00, a:1, bias:5)`. `surf_kitsune`,
+whose water declares no fog, correctly left the slot at 0.
+
+Pixel-diffed on/off at a fixed vantage: `bhop_bowling` 99.8% of pixels changed,
+`surf_sidistic` 14.6%. Colours come back un-transformed (`.470588` is exactly 120/255), so
+`SRGBf` is identity here — this build is not `VID_SRGBAWARE`.
+
+**One map in fourteen renders no fog at all, and it is not this patch.** On
+`surf_legends`, `fog 1 1 0 0 1 0` — which makes every world pixel past ONE unit 100% red —
+leaves the frame untouched (0.7% red), and it fails **identically with `r_fog_linear 0`**,
+i.e. on the pre-existing exp path. The same probe on `bhop_bowling` goes 0% → 99.8%. Also
+ruled out: the materials (its VMTs are LightmappedGeneric/UnlitGeneric with **no** `$nofog`;
+only the six skybox faces carry it, correctly), the 3D skybox (`vbsp_skyroom 0` changes
+nothing), unresolved materials (it loads clean), and **load order** — `bhop_bowling` as the
+session's first map still scores 99.8%. A 14-map sweep with the same probe put every other
+map at 26–99.8%, including six with a `sky_camera`, so it is neither `sky_camera` nor
+first-load. Cause not found; it predates this work and is left documented rather than
+guessed at.
+
+Two testing traps found on the way, recorded so they are not trusted again: `setangles`
+does not move the view from a cfg (`shader_here` returned the *same* hit point at pitch 89
+and pitch 0, and `hit=nothing` on a floor being stood on), and a naive "% of red pixels"
+metric conflates correctly-unfogged **sky** with unfogged **world** — the 26–99.8% spread
+across the sweep is mostly sky-to-world ratio, not fog quality.
+
+---
+
+## Patch 255 — every Source prop drew unfogged, because vertexlit's fog call sat behind `#if 1`  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+**File:** `plugins/hl2/glsl/vmt/vertexlit.glsl`
+
+**Why:** reported against `surf_boreas` right after Patch 254 landed — the world
+fogged and the props standing on it did not. The whole of it:
+
+```glsl
+#if 1
+    gl_FragColor = diffuse_f;        // always taken
+#else
+    gl_FragColor = fog4(diffuse_f);  // dead code
+#endif
+```
+
+`vertexlit` is what `VertexLitGeneric` compiles to, i.e. **every `prop_static` and
+`prop_dynamic` in the library**, so the fog never reached a single Source model. The file
+already declared `!!permu NOFOG` at the top and never used it, and `animated.glsl`,
+`lightmapped.glsl` and `transition.glsl` all spell this exact test `#ifdef NOFOG` — so this
+is a leftover disable restored to the form the rest of the set already had. `$nofog` props
+still opt out.
+
+**How it was found, and what it was not.** The aim-free probe from Patch 254 — `fog 1 1 0 0
+1 0`, which makes every world pixel past ONE unit fully fogged — turned the mountain solid
+red and left the deck, the railings and the trees at full texture. `hl2_propdist 1` removed
+exactly those three and the rest of the frame went red, which named props as the class
+without needing to aim at anything.
+
+It was **not** the materials: `models/props_foliage/arbre01` is `VertexLitGeneric` with no
+`$nofog`, and the only `$nofog` materials on that map are the six skybox faces, two
+`refract` ones and three decorative `UnlitGeneric`s. It was **not** the batch's volume-fog
+field (`GLBE_GetTempBatch` nulls it, and `Mod_FogForOrigin` returns NULL with `numfogs 0`),
+and **not** the entity UBO (that block in `gl_backend.c` is commented out). `r_showshader`
+was the instrument that settled it — unlike `shader_here` it needs no aim — and it showed
+the prop on `vmt/vertexlit#MASK=0.500000#MASKLT`, a program whose generated header does
+carry `!!permu FOG`. That left the shader body as the only remaining place, and it was one
+line.
+
+**Verified:** the same probe on the same vantage after the fix — the deck and railings are
+solid red, and the foliage band that had been dark measures **97.1% red / 0.1% dark**. The
+12.4% non-red below the horizon is the 2D HUD text.
+
+**Brush entities were never the problem**, despite being in the report: they draw with the
+world's own material shaders (`vmt/lightmapped`, `vmt/transition`), which have always called
+`fog4`. The one thing still unfogged on `surf_boreas` after this is a thin tan structure that
+survives `r_drawentities 2` (no brush entities), `r_drawentities 3` (no props) **and**
+`vbsp_sprites 0` — so it is world geometry on one of that map's `$nofog` materials, which is
+what the mapper asked for and what Source draws too.
+
+**Known-and-left:** `plugins/hl2/glsl/vmt/refract.glsl` is the one shader in the set with no
+fog at all — it includes `sys/fog.h`, declares no `!!permu FOG` and never calls `fog4`, so
+refractive surfaces ignore fog entirely. Not fixed here: it is a different class from the
+report, adding a permutation to the refraction path risks the water/ice materials that use
+it, and on `surf_boreas` both `refract` materials carry `$nofog` anyway, so nothing visible
+would change. Also worth knowing: `transition.glsl` tests `#ifdef NOFOG` without declaring
+`!!permu NOFOG`, so a `$nofog` blend-transition world material would fog regardless — the
+harmless direction of the same inconsistency.
+
+## Patch 256 — a third of every displacement in the library had its collision slab on top of the terrain, and trigger_setspeed never existed  *(APPLIED, plugin + engine + QC + cfg — `build.ps1 -Engine`)*
+
+Six play reports, and the interesting thing about them is how many were already
+implemented and gated off rather than missing. Two of the six diagnoses I started
+with were wrong and are recorded here as wrong, because each would have produced
+a bad fix.
+
+### 1. The displacement seam snag
+
+> "Walking over the 'lip' where 2 planes join is pretty normal and what you would
+> expect, but I believe it's treating the player as a point? or they are over
+> extending, because you get caught on the planes between displacements when you
+> should just cleanly walk over them in momentum mod and counter-strike source."
+
+**A BIH collision triangle is a one-sided prism, and nothing ever told it which
+side.** `BIH_ClipToTriangle` (com_bih.c:252) builds its face plane as
+
+```c
+CrossProduct(edge1, edge2, planes[0].normal);      /* :305 */
+planes[1].dist = -planes[0].dist + 4;              /* :309 */
+```
+
+— four units of solid *behind* the face plane. Whether those four units are
+buried under the terrain or stacked on top of it is decided entirely by the
+triangle's winding, which the displacement loader inherits from the parent face,
+which Source winds around its **outward** normal — and a face's outward normal is
+`side ? -plane : +plane`, not the plane's own.
+
+So on every `dface_t` with `side` set (`SURF_PLANEBACK`, mod_vbsp.c:2495) the
+collision triangles arrive inside out.
+
+**Measured**, by reimplementing `VBSP_LoadDisplacements` over the whole map
+library and dotting `cross(p1-p2, p3-p2)` against `(side ? -plane : +plane)` —
+all 627 maps that have displacements, 178,459 displacements, 20,483,975
+collision triangles:
+
+| face | displacements | share | triangles outward | **inverted** |
+|---|---:|---:|---:|---:|
+| `side==0` | 129,219 | 72.4% | 14,722,027 (99.38%) | 92,491 (0.62%) |
+| `side==1` | 49,240 | 27.6% | 60,379 (1.06%) | **5,625,203 (98.94%)** |
+
+That is not a tendency, it is the discriminator, and **`side==1` is 27.6% of every
+displacement in the library — 49,240 of them**. The 178,459 total agrees to the
+unit with the independent `LUMP_DISP_TRIS` census in Patch 253, which is worth
+having as a cross-check because getting here took two stride mistakes:
+
+- the first pass measured **23 maps** and read 30.2%, because it assumed a 56-byte
+  `dface_t` and so silently skipped every Strata map (`LUMP_FACES_VERSION 2` widens
+  five fields to 32 bits, making the record 72 bytes — 683 of 1310 maps dropped
+  without a word);
+- fixing that produced 97.41%, which was still wrong, because `LUMP_EDGES_VERSION 1`
+  widens the edge lump's vertex indices from 16 to 32 bits too (`VBSP_LoadEdges`).
+  Reading an 8-byte record at 4 puts vertex 0 in every odd slot and quietly builds
+  degenerate base quads.
+
+Both are the same shape as the compressed-lump trap this file already records, one
+and two lumps over, and both were silent. The corrected figure is *cleaner* than
+either wrong one, which is the tell: a stride error adds noise, so a number that
+sharpens when you fix one was being diluted, not created, by it. On all of them the player has been resting
+`4/|n_z|` units above the visible surface — 4 flat, 5.7 on a 45° face — on an
+invisible slab, with a perfectly standable up normal, so nothing about it reads as
+a collision bug. Where such a displacement meets a correctly-wound neighbour, that
+is a 4–6 unit step with no visual cue at all. Which is the report.
+
+Fixed in the plugin with a **separate collision index array**, not a flip in
+place: `out->idx` is memcpy'd straight into the render mesh (mod_vbsp.c:2761) and
+the renderer is not part of this bug. `out->cidx` aliases `out->idx` unless the
+face is `SURF_PLANEBACK`, in which case it holds the same triangles with the last
+two indices of each swapped. Costs one `index_t` per index on the flipped third.
+`hl2_dispwinding 0` aliases them again and reproduces every build before this one.
+
+**Verified in the engine, not just in the census.** `run_eyeinfo`'s downward
+server-side traceline is a POINT trace, so it reads the collision surface without
+anything depending on the player falling or settling. Three states, three probes
+of each kind, on bhop_arcane (316 of its 606 displacements are re-wound):
+
+| probe | `hl2_dispwinding 1` | `0` | `hl2_dispcollision 0` | shift |
+|---|---:|---:|---:|---:|
+| re-wound 118 | −5182.09 | −5178.09 | −5631.97 | **+4.00** |
+| re-wound 122 | −5179.71 | −5156.80 | −5631.97 | startsolid |
+| re-wound 126 | −5181.66 | −5156.80 | −5631.97 | startsolid |
+| untouched 117 | −5121.85 | −5121.85 | −5135.97 | **0.00** |
+| untouched 121 | −5120.77 | −5120.77 | −5135.97 | **0.00** |
+| untouched 125 | −5120.77 | −5120.77 | −5135.97 | **0.00** |
+
+Probe 118 moves by exactly the predicted `4/|n_z|`. All three untouched controls
+move by exactly zero, which is what says the change touches only what it claims
+to. And `hl2_dispcollision 0` moves all six by 14 to 452 units, which is what says
+they are on displacements at all rather than on a brush in front of one — without
+that column the first two runs of this test were unreadable.
+
+122 and 126 are better than a clean number. In the OLD state their
+`feet-above-floor` reads **−1.00**: the probe point, sixteen units above the
+terrain, is INSIDE SOLID, so the trace returns its own start. That is the phantom
+sitting exactly where a player would be standing, which is the reported symptom
+rather than a proxy for it.
+
+**The coordinates had to come from the engine.** Two earlier versions of this test
+aimed at points computed by reimplementing the loader offline, and both missed
+every probe — `feet-above-floor 8192.00`, a full-length trace with no hit. Both
+misses were lump strides (above), and neither announced itself. The plugin now
+prints the centroid of its own flattest re-wound and untouched displacements at
+`developer 1`, which is where these six came from; that print is kept, because it
+is the instrument that made the fix falsifiable.
+
+**What this does NOT fix, and how to tell.** There is a second, independent defect
+in the same function, and it is real but not addressed here.
+`mplane_t planes[5]` (com_bih.c:257) is the whole non-axial plane budget: face
+front, face back, and three *in-plane* edge planes carrying `//FIXME: use adjacency
+info` at :312. An AABB-vs-triangle sweep needs the **nine edge×axis bevels** Source
+builds (`dispcoll_common.cpp:1363-1373`); FTE builds none of them. Checked against
+exact 13-axis SAT, FTE's 11-plane set reports contact where there is none at
+**8.89% of 8M sampled box positions**, up to 33 units out, and on collision meshes
+rebuilt from five maps the collision floor sits above the true one at 39% of
+samples — >4u at 10%, >18u (unsteppable) at 0.68%.
+
+That is a bigger change than this patch wants to make in the same build: it lowers
+the collision floor on 39% of walkable displacement area, so every recorded time,
+replay and zone trigger tuned against today's floor moves. `pm_dispprobe 1`
+(temporary, common.c) decides whether it is needed:
+
+- a clean 4–6 unit lip, normal `(0,0,1)`, that `hl2_dispwinding` toggles away →
+  the winding was the whole bug and there is nothing further to do;
+- a stop at `fraction<1` with a normal whose z sits between ~0.2 and 0.7 while the
+  ground underfoot is much flatter → the missing bevels, and `com_bih.c` needs the
+  other five planes in **both** `BIH_ClipToTriangle` and `BIH_TestToTriangle`
+  (they must change together, or a move can end where the unswept test still says
+  solid);
+- `startsolid` anywhere → both analyses are wrong, and that is worth knowing.
+
+**Two hypotheses I had and discarded, with the measurement that killed each.**
+*Unsewn displacement edges / a T-junction crack:* 75,218 of 76,660 shared-edge
+vertex pairs are bit-exact between neighbours (98.12%), and only 30 are more than
+0.1u apart. There is no crack. *A spurious `startsolid` cancelling `StepMove`'s
+18-unit lift:* the player is always positioned by FTE's own traces, so they rest
+**on** a phantom, never inside one, and `BIH_ClipToTriangle` only sets `startsolid`
+when the start point is behind all of its planes. The real chokepoint is
+pm_source.c:1415 discarding the step because the phantom hands it a genuinely steep
+normal — measured below `PMSrc_Standable()` at 42.3% of lifted samples.
+
+### 2. The pushes that never pushed
+
+> "on surf_bossfight, I believe there is a push trigger that never pushes you?"
+> "surf_prosurf b4 has a push that should push you, but doesn't? same with
+> surf_goliath b4"
+
+Three maps, three different answers, and the prime suspect was innocent on all
+three. `trigger_push` is implemented in depth, and its spawnflags class gate
+(`SV_TriggerTakesPlayers`) passes on every push on all three maps.
+
+- **surf_bossfight is `trigger_setspeed`**, which had no spawn function. It took
+  the `trigger_` prefix arm of `SV_OnEntityNoSpawnFunction` — which returns
+  *before* the "unknown classname and owns brushes" warning — so 372 volumes
+  across 94 maps have spawned inert since the beginning, in complete silence.
+  bossfight has 13: ten start-line pads at `HorizontalSpeed 5000`, three at
+  `HorizontalSpeedMode 4`, and one named `b_booster` at 3000 that fires
+  `!self,Disable` at itself 0.01s after the start touch.
+- **surf_goliath contains no push entity of any kind**, so whatever is not
+  pushing there, it is not a `trigger_push`.
+- **surf_prosurf's two pushes pass every gate.** Its residual is that the
+  continuous basevelocity carrier is not client-predicted — and 4,903 of the
+  library's 4,904 pushes are continuous. That needs a networked
+  `pmsourcestate_t` field and is deliberately not in this patch.
+
+`trigger_setspeed` is implemented here in both dialects, because **both are live
+in the library** and a build that handles one gets most of the maps wrong:
+
+| dialect | keys | entities | maps |
+|---|---|---:|---:|
+| mode | `HorizontalSpeedMode` / `VerticalSpeedMode` / `HorizontalSpeed` / `VerticalSpeed` / `HorizontalSpeedAngle` / `StrictMode` | 205 | 83 |
+| boolean | `keephorizontalspeed` / `keepverticalspeed` / `horizontalspeedamount` / `verticalspeedamount` / `direction` / `onthink` / `interval` / `everytick` | 167 + 7 | 12 |
+
+The old dialect is *this engine tree's own* `momentum.fgd`; the new one is the FGD
+shipped with the playtest build. Same entity, so the old keys are mapped onto the
+new modes rather than given a second code path.
+
+**The defaults are the trap.** An absent mode key reads as 0, and 0 is a valid
+*horizontal* mode ("set exact speed and direction") but not a valid *vertical* one
+— vertical starts at 4, Ignore. An old-dialect entity writes no mode keys at all,
+so read naively it means "set horizontal speed to 0" and stops the player dead on
+94 maps. The dialect has to be decided before the modes are; `Interval` is the
+discriminator (167 of 167 lowercase and 7 of 7 capitalised old-dialect entities
+write it; none of the 205 new-dialect ones do).
+
+Vertical increase/decrease are **signed**, not magnitudes — the shipped FGD spells
+it out: "Decrease only with a speed of -500 will ensure an entity is moving at
+least 500 units/sec downward". So they are `max()`/`min()` on signed z, while the
+horizontal pair operate on the speed, which is a length. `StrictMode` (155
+entities, 113 of them on) is censused, not built.
+
+This is `SetAbsVelocity` and is written straight to `.velocity` — deliberately not
+routed through `.run_basevel`. A carrier is cashed out and can be ridden; this is
+the map saying what your speed **is**.
+
+Also: **`trigger_push` never read `StartDisabled`**, which `trigger_teleport` has
+honoured since Build 37. 176 pushes across 63 maps set it and have been pushing
+from the first frame while Source waits for an Enable.
+
+### 3. func_rotating — the warning was right and its advice was wrong
+
+The "unknown and owns brushes -- made SOLID" line ends with *"If Source does not
+block the player with it, it belongs in the non-solid list"*. I wrote that, and for
+`func_rotating` it would have been a bug. `CFuncRotating::Spawn`
+(bmodels.cpp:618-632) is solid **unless** spawnflag 64 (`SF_ROTATING_NOT_SOLID`,
+bmodels.cpp:21, whose own comment names the case: "fake volumetric lights").
+
+Census, all 1310 maps: **2,937 `func_rotating` own a `*` model across 372 maps;
+1,614 of them across 262 maps carry bit 64** and have been invisible walls here.
+A blanket list entry would have unwalled those correctly and turned the other
+1,323 into holes. It needs a spawn function that tests the bit, and it has to keep
+the model in **both** branches — Source's non-solid rotator is still drawn, which
+is the entire point of the fake-volumetric-light case, and the non-solid list
+would have made it invisible too.
+
+Two more from the same sweep, both outright bugs rather than noise:
+
+- **`func_clip_vphysics`** is `SOLID_VPHYSICS | FSOLID_NOT_SOLID | EF_NODRAW` in
+  Source (bmodels.cpp:1337-1346) and only ever collides `MOVETYPE_VPHYSICS`
+  objects. Here it was a **visible solid wall** — 55 brushes on 8 maps.
+- **`func_reflective_glass` and `func_monitor`** are literally
+  `public CFuncBrush`, so the alias *is* the port. 29 of 148 glass and 7 of 24
+  monitors write `Solidity 1` = Never Solid; those 36 are walk-through mirrors and
+  screens in Source and were walls here.
+
+Plus 15 rules and effect volumes into the non-solid list, and
+`func_physbox_multiplayer` aliased to `func_physbox`.
+
+### 4. The three outputs nothing fired, and the one nobody reported
+
+`OnEndTouchAll`, `OnLockedUse` and `OnPass` were the reported ones. Measuring them
+turned up a fourth that is larger than all three together.
+
+- **`logic_timer` — 2,224 `OnTimer` outputs across 220 maps, none of which could
+  ever have fired.** It is a point entity with no spawn function, so the catch-all
+  removed it before `SV_EntityIOBuild` ran. Implemented with `RefireTime`,
+  `UseRandomTime`, `StartDisabled` and the `FireTimer`/`ResetTimer`/`RefireTime`
+  inputs; `SV_IOEnable` re-arms it, because a timer that stops its own think when
+  disabled would otherwise get exactly one Disable.
+- **`OnEndTouchAll`** (555 outputs / 40 maps) is one line, and it is one line
+  *because* of the one-toucher design rather than in spite of it: Source sweeps
+  `m_hTouchingEntities` and fires when none is left (triggers.cpp:481); we track
+  one toucher, so "the last one left" and "the one left" are the same event. Not a
+  duplicate of `OnEndTouch` — only 10 of the 555 owners declare both, so on 545 of
+  them this is the map's only leave notification. `OnStartTouchAll` (116) with it.
+- **`OnLockedUse`** (23 / 6 maps) at the existing `+use` site. All 23 carry
+  `SF_DOOR_LOCKED` at spawn, so the Lock/Unlock inputs are not needed for any of
+  them; four also carry the passable spawnflags, so `SV_SpawnDoor` makes them
+  `SOLID_NOT` and the traceline cannot reach them — noted rather than discovered
+  later.
+- **`OnPass` is not where anyone looks for it.** Source's
+  `CBaseFilter::PassesFilter` (filters.cpp:46-50) fires **nothing** — it is a pure
+  predicate. `m_OnPass`/`m_OnFail` fire only from the `TestActivator` and
+  `TestEntity` *input* handlers (filters.cpp:69-79). So the missing piece was an
+  input, not a fire site. 742 `TestActivator` inputs exist across 20 maps.
+  Scope, said plainly: of the library's 1,543 `OnPass`, **968 belong to
+  `path_track`** — a `func_tracktrain` mechanic that does not exist here — so this
+  closes the 425 on `filter_activator_name` and is not a step toward the rest.
+- **`AddOutput gravity` — 2,239 outputs across 208 maps**, three times the next
+  unimplemented key, and one assignment. `.float gravity` was declared, networked
+  (`svc_entgravity`), predicted (`cl_pred.c`) and consumed (`pm_source.c:511-532`)
+  and **never once written**. It is a multiplier on `sv_gravity`, and FTE's
+  zero-means-one guard matches `gamemovement.cpp:3113-3116` bit for bit, so
+  negative values give the 64 maps that write `gravity -1` real inverted gravity.
+  1,441 of the writes are the restore-to-1, which is why surf_4am's warning was
+  cosmetic — all three of its writes are `gravity 1`. Reset in
+  `PutClientInServer`, or 0.25 rides into the next map with nothing to explain it.
+- **Output names fold now.** Source resolves them through the same `stricmp`
+  datadesc lookup as inputs, which `SV_ApplyInput` already argued for one function
+  up. surf_paranoid_enigma writes `Onstarttouch` on five teleports and every one
+  was dead.
+
+### What this does not close
+
+Firing an output correctly is not the same as it doing something. A share of these
+aim at inputs still unimplemented — `Lock`, `Close`, `Open`, `Trigger`,
+`RunScriptCode` — so the visible result on many maps will be a fresh crop of
+`input X is not implemented` census lines rather than behaviour. That is the right
+failure: it is loud, counted, and names the next piece of work. The headline counts
+should not be read as that many things now happening.
+
+`trigger_gravity` (360 brushes / 78 maps) is the brush-entity twin of `AddOutput
+gravity` and would ride the same field, but it needs its own spawn function and
+touch. Counted, not built. The strafe HUD reads `sv_gravity` from serverinfo and
+does not see a per-player multiplier — a second, separate gap this opens.
+
+### Cost, and what changes for a recorded run
+
+`trigger_setspeed` and `AddOutput gravity` both let map content change the physics
+a run is set under. Neither is a cvar write, so the map-command allow-list is
+untouched — a setspeed pad and a per-entity gravity multiplier are ordinary map
+content, the same category as a `trigger_push`. But **runs recorded before and
+after this build are not comparable on those 94 + 208 maps**, and bossfight's
+start-line pads are 5,000 u/s. `run_setspeed 0` and the absence of a gravity write
+restore the old behaviour without a rebuild.
+
+The displacement winding change is the widest: it moves the collision floor down
+by 4–6 units on 30% of the library's displacements. That direction opens routes
+rather than closing them, but it is still a change to what those maps play like.
+
+### Regressions
+
+`reg256.cfg`, the reg253 baselines unchanged: surf_rise 103/105 overlays + 1/1
+sprites; bhop_canals 81/416 decals + 41/53 overlays + 74/97 sprites; bhop_arcane
+1122 func_bhop + 5/5 + 180/180; surf_kitsune `target case: 28`.
+
+### Files
+
+- `plugins/hl2/mod_vbsp.c` — `dispinfo_t.cidx`, the winding block in
+  `VBSP_LoadDisplacements`, the BIH leaf using `cidx`, `hl2_dispwinding`, the
+  re-wound count in the displacement census line.
+- `engine/common/common.c` — `pm_dispprobe` (temporary).
+- `engine/common/pm_source.c` — the two probe prints.
+- `C:\FTESurf\src\server\sv_entities.qc` — `func_rotating`, `func_clip_vphysics`,
+  the three aliases, 15 non-solid classnames, `AddOutput gravity`,
+  `OnStartTouchAll`/`OnEndTouchAll`, `OnLockedUse`, `SV_FilterPasses` +
+  `TestActivator`, `logic_timer`, output-name folding, `trigger_setspeed`,
+  `trigger_push` StartDisabled.
+- `C:\FTESurf\src\server\sv_player.qc` — reset `.gravity` on spawn.
+- `C:\FTESurf\src\server\sv_main.qc` — `run_setspeed`.
+- `C:\FTESurf\ftesurf\cfg\default.cfg` — `hl2_dispwinding`, `run_setspeed`.
+
+### Not done
+
+- The nine edge×axis bevels in `com_bih.c` — measured, argued, and left for
+  `pm_dispprobe` to justify.
+- Predicting the basevelocity carrier (surf_prosurf's real residual).
+- `func_ladder`: `CONTENTS_LADDER` reaches the trace on 242 maps / 1,750 brushes,
+  and 73% of those brushes are GRATE rather than SOLID — so Momentum's own
+  `LadderMask()` (`MASK_PLAYERSOLID & ~CONTENTS_PLAYERCLIP`) would drop 1,281 of
+  them, because FTE remaps Source GRATE to `PLAYERCLIP|MONSTERCLIP`. Its own patch.
+- surf_monolith's 44 materials whose VMT is in the map pak and whose VTF is not
+  (all CS:GO/CS:S families) and its skybox, whose six faces *are* in the pak.
+
+## Patch 257 — a static prop whose leaf list overflows is culled by an area record that could not be built; VRAD's baked prop lighting has never loaded on an HDR-compiled map; and 927 brush entities Source lets you walk through are walls here  *(APPLIED and CONFIRMED IN-GAME, plugin + QC — `build.ps1 -Engine`)*
+
+> **Read the RESOLUTION section at the end before section 4.** Section 4 was written
+> while the cause of the invisible hedge was still open and names two candidate
+> hypotheses; **both were wrong**. The cause was the area half of
+> `VBSP_EdictInFatPVS`, found by extending `prop_census` twice. The resolution
+> section also corrects section 1 with a measurement taken afterwards.
+
+Reported on `surf_garden`: "still missing models somehow? on stage 3 a barrier you
+need to avoid is invisible", with two screenshots of the same vantage — FTESurf and
+Momentum Mod, holding `+forward` from the stage-3 start. The screenshots carry two
+separate defects, and it is worth separating them before any code, because only one
+of them is solved here.
+
+### What the map is not
+
+The whole "missing asset" class is out, measured before anything was opened:
+
+- All **59** models the map references (57 `sprp` + 2 `prop_dynamic`) resolve **with**
+  their `.vvd` and a `.vtx`. MDL versions 44/48/49, inside FTE's supported v44–v49.
+- **All 59 have matching `.mdl`/`.vvd`/`.vtx` checksums.** That matters because it
+  rules out the one genuinely silent failure in the model loader: `mod_hl2.c:745`
+  and `:500` bail with a bare `return false` on a `revisionid` mismatch, and
+  `mod_hl2.c:1245-1254` then turns that into a *successful* load with zero meshes,
+  real `mins`/`maxs`/`radius` from the MDL header, and a BIH built from the `.phy` —
+  solid, correctly sized, drawing nothing, with no log line anywhere. It is the best
+  "solid but invisible" mechanism in the tree and it is **not** what is happening
+  here.
+- All 116 packed VTFs are ordinary v7.2/v7.4 DXT1/DXT5. `hedgey.vmt` is plain
+  `VertexLitGeneric` + `$alphatest 1 $model 1 $nocull 1`.
+- `sprp` is canonical **v10 @ 72**, 429 props, all 429 parsed and none skipped:
+  `FadeMinDist = FadeMaxDist = 0` and all four level bytes zero on every one, and
+  `hl2_propdist` defaults to 0. No fade cull, no level cull, no distance cull.
+- All 97 `func_brush` are `rendermode 0` / `renderamt 255` / `StartDisabled 0`, none
+  all-`SURF_NODRAW`. Only two are in the stage-3 lane and both are teleport pads.
+
+The barrier is a static prop: **`models/surfgarden/s3hedge2.mdl`, lump index 170**,
+one model carrying the clipped topiary, the low hedge box and the wooden trellis
+(its three materials are `hedgey`, `hedgeyflowers`, `archwood`). Its world AABB is
+`X[-14150,-10842] Y[6232,8230] Z[2648,3417]`, and that Y span matches the stage-3
+lane — `Y[6240,8224]`, from `trigger_teleport *87` and from Momentum's own
+`zones/online/surf_garden.json` — to within 8 units. The map has one such hedge per
+stage: `s3hedge2`, `s4hedge`, `s5hedge2` … `s10hedge`, plus three `bonushedge1`.
+
+### 1. `sp_hdr_N.vhv` — Patch 163 has been dead code on every HDR map
+
+This is the flat, over-bright foliage in the screenshot, and it is proven rather
+than argued.
+
+`VBSP_LoadPropBakedLight` asked for one filename:
+
+```c
+Q_snprintfz(name, sizeof(name), "sp_%u.vhv", lumpidx);
+```
+
+VRAD writes `sp_N.vhv` for an LDR compile and `sp_hdr_N.vhv` for an HDR one.
+surf_garden's embedded pakfile ships **428 `sp_hdr_N.vhv` and zero `sp_N.vhv`**;
+surf_demise ships **2350 `sp_N.vhv`** and no HDR set. That is the entire difference
+between the map where Patch 163 works and the map where it does nothing.
+
+**The line that says so was already being printed and nobody read it.**
+`ftesurf/logs/` contains `props: 0 of 298`, `props: 0 of 3126` sitting next to
+`props: 1587 of 1587` and surf_demise's `2350 of 2350`. A diagnostic is only worth
+what someone does with it.
+
+With no bake every prop falls back to the leaf ambient cube and the `hl2_lt_min`
+floor — which is exactly the condition Patch 163 was written to remove.
+
+Fixed by probing HDR then LDR, which is Source's own order in
+`CStaticProp::LoadLighting`. It has to be an *order* and not a choice: a map may
+ship both sets, and the HDR one is what VRAD lit the world with. Whichever file
+answers still goes through the existing version / vertexsize / offset validation —
+those checks were always what stood between us and a stale file from another
+mounted map, and they do not care which name found it.
+
+### 2. The lighting origin is trusted when it is uninitialised memory
+
+`m_LightingOrigin` is only meaningful when the prop sets
+`STATIC_PROP_USE_LIGHTING_ORIGIN` (0x02). Patch 152 added that flag test plus an
+all-zero guard. The all-zero guard is too narrow.
+
+Measured on surf_garden: **57 of 429 props set 0x02, and all 57 carry a lighting
+origin that is not a map coordinate.** Values include `(-1.778, -2.397e34, 2.164)`,
+`(0, nan, -20.73)`, `(nan, nan, nan)`, denormals around `1e-40`, and
+`(-0.0006571, -1.542, 0)` — finite, non-zero, and still nowhere near a map whose
+world box is `x[-16256,-416] y[192,16032]`.
+
+The flag byte is uninitialised *along with* it. Those same 57 records carry
+`0x3F / 0x7F / 0xBA / 0xBE / 0xBF / 0xFF` against a sane majority of
+`0x00`×170, `0x40`×100, `0x10`×85. So on this content `0x02` is necessary and not
+sufficient, and the sufficient half is cheap: a lighting origin is only usable if it
+is somewhere in the map.
+
+The box comes from `prv->cmodels[0]`, worldspawn's own, because `VBSP_LoadSubmodels`
+runs at `:6965` and the game lump at `:6989` — `mod->mins` is not set until `:7202`,
+after this. Written as a containment test rather than an `isfinite()` call on
+purpose: NaN fails every ordered comparison and both infinities fall outside any
+finite box, so one test rejects all three shapes.
+
+**Stated honestly: this is a real bug and it is not proven to be the missing hedge.**
+Patch 152's runtime guard (`mod_vbsp.c:6001`, fall back when the sample leaf carries
+no ambient) probably already absorbs most of these. It is fixed because trusting a
+`2.4e34` coordinate is indefensible, not because it was measured to be the cause.
+
+### 3. `0` means unset, and those four bytes are not always CPU/GPU levels
+
+The v8+ level test was
+
+```c
+skip |= (prop[0] > cpulevel || cpulevel > prop[1]);   /* cpulevel hardcoded 0 */
+```
+
+The second half can never fire against an unsigned byte, so the whole thing reduced
+to "drop every prop whose MinCPULevel is non-zero" — with no zero-guard, though the
+v6 branch immediately below has always had one. Source's own test is per-bound and
+1-based (`m_nMinCPULevel > 0 && m_nMinCPULevel-1 > nCPULevel`); 0 means the mapper
+set no bound.
+
+CENSUS, all 1310 maps: 564 carry a v8+ `sprp` and only **three** write a non-zero
+byte here at all —
+
+| map | records |
+|---|---|
+| `what_is_this` | 256 x `(90,0,0,0)`, 39 x `(95,0,0,0)`, 4 x `(0,0,90,0)` |
+| `surf_shoria` | 4 x `(95,0,0,0)` |
+| `surf_classics3` | 2 x `(0,1,0,1)` |
+
+**90 and 95 are not CPU levels.** Source's `cpu_level` runs 0-2 and `gpu_level` 0-3;
+60/70/80/81/90/95 are dxlevels. Those two maps carry the v6 `MinDXLevel`/`MaxDXLevel`
+ushort pair in the slot a v10 header says holds four level bytes, and reading them as
+CPU levels is what dropped 299 props on `what_is_this` and 4 on `surf_shoria`.
+`surf_classics3`'s `(0,1,0,1)` is the genuine CPU/GPU convention. Both shapes occur
+in the same lump version, so byte magnitude is what separates them — nothing below 16
+is a dxlevel and nothing at or above it is a cpu/gpu level.
+
+Each bound is now applied only if it was set. The 295 dxlevel-floor props come back
+(dxlevel 95 clears a floor of 90 or 95, and there is no ceiling); the 4 asking for a
+dx9.0 *ceiling* stay dropped, which is what Source does at dx95 — they are the
+low-hardware stand-ins.
+
+### What was investigated and deliberately NOT changed
+
+`m_DiffuseModulation` (v7+) and `m_FlagsEx` (v10) were reported as read in the wrong
+order, on the strength of a correlation: `dword@64` is `0x100` on 428 of surf_garden's
+props and `0x40` on exactly prop 169, and 169 is the sole prop with a
+`texelslighting_169.ppl` and no `sp_hdr_169.vhv` — so `@64` looked like the flags word
+carrying `NO_PER_TEXEL_LIGHTING`.
+
+It does not survive the cross-check. `dword@68` is `0x00200020` on exactly one prop,
+and `0x200020` is precisely the value Patch 200's essay documents as the *flags* word
+on surf_gigapede's ramp and surf_rise's five props. That matches the current layout.
+Two readings of the same bytes, one supported by a correlation and one by a value this
+tree has already identified by hand — so the field order is left alone. Current
+behaviour is harmless either way: the modulation guard is `if (prop[3])` and byte 67 is
+0 in every record, and `FlagsEx` is read into a local and dropped.
+
+### 4. `prop_census` — the diagnostic that did not exist
+
+`ent_census` reports entities with no spawn function; `hl2_missing` reports materials
+that would not resolve. A static prop that is solid and not drawn fell between them,
+and finding one meant flipping `r_novis` / `hl2_propdist` / `hl2_propcollision` by hand
+and watching the screen.
+
+Bare, it reports what the last frame did with every prop — drawn, and how many each
+cull dropped (not loaded, faded, `hl2_propdist`, PVS, frustum). With an argument — a
+lump index or a substring of a model name — it reports one prop's verdict together
+with the facts behind it: origin, solidity, fade pair, PVS leaf state, whether its
+lighting came from a `.vhv` or the ambient cube, and the model's radius and bounds.
+
+Aggregates alone cannot answer this report. "241 of 429 drawn" does not tell you about
+the one you are standing in front of, and on surf_garden the one that matters is 170.
+
+The per-prop PVS line names the three states explicitly, because one of them is a trap:
+`num_leafs == -1` is *not* "always visible", it means the leaf list overflowed and
+visibility now goes through the weaker `VBSP_HeadnodeVisible` test; and
+`num_leafs == 0` means the prop can never pass the PVS test at all.
+
+**Why that matters for s3hedge2.** `MAX_ENT_LEAFS` is 32 (`bspfile.h:964`), and
+`s3hedge2` has **`leafcount = 43`** — so at `mod_vbsp.c:3665` it takes the overflow
+path (`num_leafs = -2`) and is re-derived at first draw from an
+`origin ± model->radius` box. **Only two props on the whole map take that path:
+`s3hedge2` (43) and `s10hedge` (68).** Every other hedge fits — `s6hedge` 27,
+`s5hedge2` 22, `s8hedge`/`s7hedge` 10, `s4hedge` 6, `s9hedge` 4, `bonushedge1` 3.
+
+That gives two candidate causes with *different* signatures, which is what makes them
+separable rather than a matter of opinion:
+
+| cause | props affected | predicts hedges missing on |
+|---|---|---|
+| PVS overflow path | 2 | stages **3 and 10** only |
+| garbage lighting origin (2) | 57 | stages **3, 4, 7, 8, 10**; 5, 6, 9 fine |
+
+Both include stage 3. Stages 4, 7 and 8 are the discriminator, and `prop_census 170`
+plus `r_novis 1` settles it in one map load. **This patch does not claim to have fixed
+the missing hedge** — it fixes the lighting defect in the same report, removes three
+real loader bugs, and builds the instrument that names the remaining one.
+
+> **SUPERSEDED — both hypotheses in the table above were wrong.** The user reported
+> the hedge missing on stages 3 and 10 only, which matches the first row, but the
+> mechanism was not the headnode test: `prop_census` reported `headnode 0`, the tree
+> root, which passes. It was the AREA half of the same function, in two separate
+> defects. See the RESOLUTION section at the end of this patch. The table is left as
+> written because the discriminator it proposed is what produced the measurement —
+> the reasoning was sound and the conclusion was still wrong, which is the whole
+> argument for building the instrument instead of picking a hypothesis.
+
+### 5. The movers Source lets you fly through — QC, `sv_entities.qc`
+
+Same shape as Patch 256's `func_rotating`, and found the same way. Seven classes
+aliased `func_wall()`, which is unconditional `SOLID_BSP`, so none of them read a
+spawnflag. Four have a "not solid" bit and it is the same bit in all four:
+
+| class | flag | Source |
+|---|---|---|
+| `func_movelinear` | `SF_MOVELINEAR_NOTSOLID` 8 | `func_movelinear.cpp:22,109` |
+| `func_train` | `SF_TRACKTRAIN_PASSABLE` 8 | `trains.h:26`, `CFuncTrain::Spawn` `trains.cpp:1039,1061` |
+| `func_tracktrain` | `SF_TRACKTRAIN_PASSABLE` 8 | `trains.cpp:2693` |
+| `func_tanktrain` | `SF_TRACKTRAIN_PASSABLE` 8 | `CFuncTankTrain : CFuncTrackTrain`, `tanktrain.cpp:40,71` |
+
+Each does `SetSolid(...)`, `SetModel(...)`, then `AddSolidFlags(FSOLID_NOT_SOLID)` on
+the bit. **The model is kept in both branches**, for Patch 256's reason: Source's
+non-solid mover is still drawn, and dropping it would trade a wall you cannot walk
+through for a wall you cannot see.
+
+CENSUS, all 1310 maps, brush-owning instances / of those with bit 8:
+
+| class | owns a model | passable | maps |
+|---|---|---|---|
+| `func_movelinear` | 1563 | **507** | 63 |
+| `func_tracktrain` | 547 | **353** | 38 |
+| `func_tanktrain` | 249 | **65** | 15 |
+| `func_train` | 3 | **2** | 1 |
+
+**927 brush entities that Source walks through and this game has been stopping you
+on.** surf_garden's `frogy` (`*234`, `spawnflags 8`) is one.
+
+`func_lod` is left alone: all 1960 in the library write `spawnflags 0`, so there is
+nothing to read. `momentary_rot_button` and `button_target` are buttons, not movers.
+`func_water_analog` is excluded by Source itself (`func_movelinear.cpp:109`) and is
+already a separate spawn function here, so that exclusion was structurally honoured
+before this and still is.
+
+### 6. `trigger_once` was inert
+
+With no spawn function it took the catch-all's `trigger_` arm in
+`SV_OnEntityNoSpawnFunction`, which strips the model and sets `SOLID_NOT` so it can
+never be touched — correct for an unknown trigger, wrong for this one, whose whole job
+is to fire an output the first time you cross it.
+
+`CTriggerOnce::Spawn` is `BaseClass::Spawn()` plus `m_flWait = -1`
+(`triggers.cpp:950-955`), and the wait is what `ActivateMultiTrigger` branches on:
+`> 0` re-arms after the delay, anything else drops the touch and removes the entity
+(`:913-925`). So `trigger_multiple`'s touch already serves both and only the wait
+differs. The `-1` is written *after* the base spawn in Source, so an authored `wait`
+is overridden rather than respected; same here.
+
+Removal is deferred to a think for the reason Source states in its own comment at
+`:920` — "we can't just remove (self) here, because this is a touch function called
+while C code is looping through area links". `SOLID_NOT` plus a null touch make it
+inert immediately either way.
+
+CENSUS: 845 `trigger_once` own a brush model across 176 maps, and **841 of those wire
+at least one output**. Unlike `trigger_multiple` — where a wireless majority is exactly
+why the inert path stays — essentially every `trigger_once` in the library exists to
+fire something. surf_garden's `*244` is the local case: `OnStartTouch` ->
+`fountainaudiosource, PlaySound`.
+
+### Recorded, not fixed
+
+The entity audit the report asked for turned up point entities the catch-all deletes at
+`sv_entities.qc:4229`, silently, with only an `ent_census` row: on surf_garden that is
+31 `ambient_generic`, 13 `info_particle_system`, and one each of `env_soundscape`,
+`env_tonemap_controller`, `point_viewcontrol` and `water_lod_control`. Those mean map
+ambient sound and particle systems — a much larger piece of work, scoped out
+deliberately rather than overlooked.
+
+### Verification
+
+Unverified in-game at time of writing: the plugin built (444,303 bytes) but could not
+deploy because the game held the executable. QC built clean and deployed.
+
+- **1, by its own console line, then by screenshot.** `props: N of 429 lit from VRAD's
+  baked vertex lighting` must go from `0 of 429` to `428 of 429` — 428 and not 429,
+  because prop 169 ships a `.ppl` and no `.vhv`. Then retake the stage-3 `+forward`
+  screenshot against the Momentum reference: the foliage should darken and gain
+  shading.
+- **Regression on the maps that already worked**: surf_demise ships `sp_N.vhv` and
+  reports `2350 of 2350` today; it must still. Re-run the `props: N of M` line on
+  surf_boreas, bhop_ambience, surf_hektik and bhop_canals — Patch 228's table.
+- **3** on `what_is_this`: the prop count should rise by up to 299.
+- **4/5** on surf_garden: `prop_census 170` and `r_novis 1` to settle the table above,
+  and `frogy` must become passable.
+- **6**: surf_garden's `trigger_once` must fire its `fountainaudiosource` output once.
+
+### RESOLUTION of section 4 — it was the area walk, in two stages
+
+Section 4 above left two candidate causes and named the discriminator. The
+diagnostic settled it in two rounds, and the answer was neither of the two
+originally proposed: it was the AREA half of `VBSP_EdictInFatPVS`, not the
+headnode half and not the lighting origin.
+
+`prop_census` was extended twice to get there, which is the point of having built
+it: each round the instrument was made to answer the exact question the previous
+round raised, rather than a fix being guessed.
+
+**Round 1 — which half of the test?** `VBSP_EdictInFatPVS` has two independent
+rejection paths and "PVS culled" does not say which. A file-static
+`vbsp_pvs_why` (it cannot be an out-parameter; the function is published through
+`mod->funcs.EdictInFatPVS`) was set on every path out. Result:
+
+    verdict last frame : PVS culled -- rejected by the area walk
+    area               : areanum 0, areanum2 9, headnode 0
+
+`headnode 0` is the tree root, so `VBSP_HeadnodeVisible` would have descended the
+whole tree and passed. **The headnode hypothesis was wrong.** The area walk killed
+it first, and `areanum 0` named the defect.
+
+**The first defect: the null-area sentinel disagreed between producer and consumer.**
+`VBSP_FindTouchedLeafs` used `nullarea = -1`; `VBSP_EdictInFatPVS`, its only
+consumer, uses `nullarea = 0`. FTE's own Q2 BSP code does not have this bug
+because it derives the value from the format in BOTH functions --
+`gl_q2bsp.c:7232` and `:7282`, `(mod->fromgame == fg_quake2)?0:-1`. This plugin
+forked both and hardcoded each side to a different constant. VBSP is
+Quake2-derived and numbers real areas from 1 with 0 reserved for solid, so 0 is
+correct on both sides.
+
+The query box is `origin +/- model->radius` = +/-2451 around (-12656, 6640, 2984),
+reaching z 533 against a world floor of z 2304 -- so it swallowed solid leaves
+*outside the map*, whose area is 0. That 0 took slot 1 as though it were a real
+area, and the area the prop actually occupies never got a slot.
+
+**Round 2 — was that sufficient?** It was not, and the honest thing was to
+instrument the question rather than assume. `VBSP_FindTouchedLeafs` was made to
+count the distinct real areas its box spanned, and `prop_census` to print it:
+
+    verdict last frame : PVS culled -- rejected by the area walk
+    area               : areanum 4, areanum2 9, headnode 0
+    areas box spanned  : 16
+
+`areanum` had gone from 0 to a real area, so the sentinel fix worked. But
+`pvscache_t` holds exactly **two** area slots and this box spans **sixteen**.
+`{4, 9}` is an arbitrary two of them, chosen by leaf traversal order, and the
+player was standing in one of the other fourteen.
+
+Quake2's own comment in `VBSP_FindTouchedLeafs` states the assumption being
+violated: *"doors may legally straggle two areas, but nothing should ever need
+more than that"*. True of a door. Not true of a static prop queried with a
+bounding-sphere box.
+
+**The second defect, and the actual fix: an area record that could not be built
+must not be allowed to cull.** `num_leafs == -1` is the existing, precise
+statement of "this entity's traversal overflowed and the record is approximate".
+The area pair is produced by that same truncated walk, so it is unreliable for
+exactly the same reason and at exactly the same times. The area test is therefore
+skipped for those entities:
+
+```c
+if (areas && ent->num_leafs != -1)
+```
+
+FAIL OPEN, NOT CLOSED. Areas are a culling optimisation -- an areaportal lets the
+engine drop a whole room behind a closed door. Wrong in the permissive direction
+submits a few extra entities; wrong in the restrictive direction deletes geometry
+the player is looking at, and never shows up in a profile. The entities affected
+are only those big enough to overflow 32 clusters, which are the ones visible
+from most of the map anyway. They are still culled by the PVS
+(`VBSP_HeadnodeVisible`) and by the frustum test in the caller: this removes one
+unsound test, not all of them.
+
+**CONFIRMED IN-GAME.** The stage-3 hedge, topiary and trellis draw, matching the
+Momentum reference screenshot. Stage 10 returned with it, as predicted -- those
+two props are the only ones on the map whose sprp leafcount (43 and 68) exceeds
+`MAX_ENT_LEAFS` 32.
+
+### A correction to section 1, measured after the fact
+
+Section 1 says HDR maps ship `sp_hdr_N.vhv` and LDR maps ship `sp_N.vhv`. That is
+true, but it implies a difference in content that does not exist.
+
+**167 of the 1310 maps ship BOTH sets.** Comparing them per prop index, mean
+linear luminance collapsed the same way `VBSP_LoadPropBakedLight` collapses it:
+
+| map | LDR mean (gamma bytes) | HDR mean | ratio |
+|---|---|---|---|
+| surf_420 | 39.5 35.1 30.7 | 39.5 35.1 30.7 | 1.00 |
+| surf_agony | 49.7 34.3 41.6 | 49.7 34.3 41.6 | 1.00 |
+| de_nam | 98.4 77.3 54.5 | 98.4 77.3 54.5 | 1.00 |
+| surf_adrift_fix | 47.2 48.1 49.2 | 47.2 48.1 49.2 | 1.00 |
+| bhop_angst | 33.6 34.4 41.2 | 33.6 34.4 41.2 | 1.00 |
+
+Byte-identical. Two consequences worth recording:
+
+1. The HDR bake needs no different scale -- `hl2_lt_baked_scale` applies unchanged.
+2. **The HDR-first probe is a no-op on all 167 maps that ship both**, so it carries
+   no regression risk there. It changes behaviour only on the 64 HDR-only maps,
+   where the alternative was no bake at all.
+
+An RGBE encoding was hypothesised for the HDR set -- three mantissa bytes plus a
+shared exponent, which would have made the 4th byte meaningful. **Measured and
+refuted:** the 4th byte is 255 in every LOD0 colour of both sets. It is alpha.
+
+### Still open, and NOT a bug in this patch: props are ~1.7x too dark
+
+Reported after the fix landed, against the same Momentum screenshot: "they have
+much more intense lighting". They do, and it is the collapse Patch 163 documents
+as its own approximation, now measurable.
+
+Per-vertex luminance inside single surf_garden props, as gamma bytes, against the
+single mean this code renders them at:
+
+| prop | mean (rendered) | p50 | p90 | p99 | p90/mean |
+|---|---|---|---|---|---|
+| 170 `s3hedge2` | **71.5** | 46.0 | 120.0 | 130.0 | **1.68x** |
+| 164 `s10hedge` | 67.9 | 43.0 | 114.0 | 126.0 | 1.68x |
+| 102 `stew1` | 44.3 | **5.0** | 92.7 | 128.0 | **2.09x** |
+| 71 `arch1` | 75.7 | 62.7 | 115.2 | 138.2 | 1.52x |
+
+VRAD's bake is strongly bimodal -- bright vertices on the sunlit outside, near
+black ones buried inside the canopy, `stew1`'s median being 5. Averaging 15,447
+vertices into one colour drags the lit faces from ~120 down to ~71.5 and deletes
+the internal contrast entirely. That contrast is what reads as ambient occlusion
+in the reference shot.
+
+**It is not SSAO.** Momentum is Strata Source and does have it -- `r_ssao`,
+`r_ssao_falloff`, `r_ssao_quality`, `r_ssao_radius`,
+`r_ssao_resolution_scale` -- but its shipped `momentum/cfg/config.cfg` has
+`r_ssao "0"`. The occlusion in that screenshot is baked, and we are reading the
+very data that contains it before throwing the distribution away.
+
+Two ways forward, neither taken here:
+
+- **Cheap and principled**: keep the single-colour model but stop collapsing to
+  the mean. `HL2_RetintFromBaked` splits the mean into ambient and directional
+  with fixed constants (`FS_BAKED_DIR`, `dmean = 0.1761`); percentiles of the
+  distribution we already read would let lit faces reach ~p90 and shadowed ones
+  ~p25, recovering both the level and some of the contrast for no new
+  infrastructure. Changes prop lighting on every map with a bake, so it needs A/B
+  screenshots before it ships.
+- **Correct and large**: per-vertex prop lighting. Patch 163 states the obstacle
+  -- FTE lights a model with one ambient + directional term per ENTITY, and the
+  mesh is shared by every instance of that model, so per-instance vertex colours
+  need a per-instance vertex stream.
+
+## Patch 258 — the displacement seam snag was never the winding: an AABB sweep needs nine bevel planes com_bih.c has never built  *(APPLIED, engine — `build.ps1 -Engine`)*
+
+**Report.** After Patch 256 shipped: *"doesn't quite work with the test area I got
+stuck on originally, it didn't fix it"*, with `pm_dispprobe` output attached —
+`frac 0.0000 norm 0.506 -0.759 0.411 ss 0 as 0` and an origin that did not change
+from one frame to the next, plus `step-down REJECTED ... (need z >= 0.700)`.
+
+That is the plan's Bug B row exactly: fraction 0, a normal too steep to stand on
+or step onto, not startsolid. Patch 256 was a real bug — 27.6% of the library's
+displacements had four units of solid stacked on top of the terrain — and it was
+not this one.
+
+### Getting from a normal to a cause
+
+A normal alone cannot distinguish "the terrain there really is 66 degrees off
+flat" from "a plane is being applied outside the region where it is valid", and
+those want opposite work. So the probe was extended first
+(`BIH_TriangleBevels`' neighbours in `com_bih.c`): record WHICH plane of
+`BIH_ClipToTriangle`'s set won the trace, and the triangle it belonged to, and
+have `PMSrc_DispProbeWhy` print them.
+
+The record carries the winning normal alongside, and the reader compares it
+against the trace before believing it — a pmove trace is merged across several
+models and the last triangle to win an inner trace need not be the one that won
+the outer one. Both brush clippers clear the index for the same reason. That
+guard fired in practice and printed `via: unknown`, which is how it should read.
+
+**Finding the map cost more than fixing the bug.** The paste had an origin and no
+map name. Ruling it out mechanically: the world bbox must contain the point and
+the map must have displacements; then the closest reconstructed displacement
+vertex decides. Across all 1310 maps the global minimum was `bhop_monster_jam`
+at 107.5 units, and `conhistory.txt` confirmed it had been loaded. `surf_boreas`
+was tried first and ruled out in one run — `run_eyeinfo` put the origin 1307
+units in the air there. `bhop_monster_jam` gave `feet-above-floor 6.68`.
+
+### What the probe said
+
+```
+frac 0.0000 norm 0.506 -0.759 0.411  ss 0 as 0  org 10529.1 -324.1 5357.3
+  via plane 4 edge p3p1 of tri (10387.0 -368.0 5401.8)(10399.0 -284.0 5351.3)
+                               (10623.0 -256.0 5318.3)  face norm 0.063 0.508 0.859
+```
+
+- `plane 4` is one of the three IN-PLANE edge planes, the ones carrying
+  `//FIXME: use adjacency info`.
+- The triangle's own face normal is z **0.859** — comfortably standable.
+- `dot(face, contact)` is **-0.00013**. The contact plane lies in the triangle's
+  plane to within rounding; it is unambiguously an edge plane, not a face.
+- All three vertices match displacement **#89**, `side=0` power 2, to 0.04 units.
+  side=0 means Patch 256 correctly left it alone: the winding was never involved.
+
+### Why the plane set is wrong
+
+Sweeping a box against a triangle is a point query against the Minkowski sum of
+the two. That sum's faces are the two triangle face planes, the six box face
+planes, and one plane for each pairing of a triangle edge with a box edge
+direction — three edges by three axes, **nine**. `BIH_ClipToTriangle` built the
+first group (`planes[0..1]`), the second under `if (tr->shape)`, and in place of
+the nine it built three in-plane edge planes.
+
+Those three are valid supporting planes, so they can never over-tighten — which
+is why this has never manifested as falling through the world. What they leave
+behind is a swept volume that is a strict **superset** of the true sum, bulging
+along every edge. The player contacts the bulge, and the normal handed back is
+the edge plane's: perpendicular to the surface they are standing on.
+
+Proved rather than argued, at the reported position — exact separating-axis test,
+player hull `-16,-16,0 .. 16,16,72` (origin at the feet, `PMSrc_ApplyStandHull`):
+
+| position | SAT verdict | separating axis | gap |
+|---|---|---|---:|
+| `10529.1 -324.1 5357.3` (wedged) | **SEPARATED** | `edge2 x y` | 0.11 |
+| `10530.1 -326.0 5356.8` (frame before) | **SEPARATED** | `edge2 x z` | 2.09 |
+
+The box does not touch the triangle at all, and the axis that proves it is one of
+the nine that were missing. The nearest triangle point is the box's own
+min-x/max-y **corner** — exactly where a missing bevel bites.
+
+### The fix, and the part of it that is not obvious
+
+`BIH_TriangleBevels` builds the nine, and **both** clippers call it.
+`BIH_ClipToTriangle` and `BIH_TestToTriangle` must agree about what is solid or a
+move can end at a position the unswept test still calls solid — one shared
+function makes drifting apart impossible rather than merely discouraged.
+
+Each normal is `edge x axis`, signed so the off-vertex ends up inside, which is
+the same as taking the triangle's support in that direction. Bevels whose cross
+product degenerates (edge parallel to the axis) are skipped. Only for shaped
+traces: a point trace's Minkowski sum IS the prism, so the in-plane planes are
+already exact for it.
+
+**And the slab, which is the subtle part.** `planes[1]` gives every triangle four
+units of solid behind its face, so the shape these planes must contain is not the
+triangle but the prism. A bevel normal is not perpendicular to the face normal,
+so a plane that merely supports the triangle can slice the corners off the back
+of that prism — and a plane that cuts the solid volume is a **false exclusion**,
+i.e. falling through the world, a far worse failure than the snag being fixed.
+The distance is therefore the support of the whole prism: back vertices are
+`v - 4*facenormal`, shifting the plane by `-4*dot(n, facenormal)`, applied only
+when that shift is outward.
+
+On the triangle above, four of the nine need that correction (up to 3.97 units)
+and the one that does the work does not — so safety costs nothing here. It is not
+sampled safety: with it the construction cannot exclude a real contact at all.
+
+### Verified in the engine, twice, and modelled first
+
+The plane set was modelled offline before any C was written, and the model was
+held to reproducing the engine on the engine's own printed segments before its
+prediction was believed: segment 2 matched exactly (frac 0.0000), segment 1 gave
+0.9246 against the engine's 0.9199 — a gap fully accounted for by the log
+printing `endpos` to 0.1 units on a 2.2-unit delta. Under the model both segments
+become `miss, frac 1.0000` with the bevels. An 18-plane variant (both signs of
+each axis) was tested and is identical here, so the validated nine is what ships.
+
+**snag03**, one map load, `pm_trisoup_bevels` toggled between passes:
+
+| | in-plane edge-plane contacts | unstandable normals | step-down rejections |
+|---|---:|---:|---:|
+| bevels 0 | **111** (64 + 27 + 20) | **134** | **47** |
+| bevels 1 | **0** | **3** | **3** |
+
+Every remaining contact in the fixed pass is either `plane 0 FACE` or
+`bevel #7` — index 7 in build order is `e2 x y`, the exact axis the offline SAT
+named — whose normal is `0.334 -0.000 0.943`, **standable**, so the mover slides
+and steps instead of wedging. No startsolid in either pass.
+
+**snag04** measures getting across rather than mechanism, starting ON the wedge
+and reading `run_eyeinfo`'s `N away` (the crosshair points along the walk, so its
+drop is forward progress). Each state run twice:
+
+| pass | `away` before -> after | progress in 1.5s |
+|---|---|---:|
+| A1 / A2, bevels 0 | 2178 -> 2005 | **173 units** |
+| B1 / B2, bevels 1 | 2177 -> 1771 | **406 units** |
+
+A1 and A2 are identical to the decimal, as are B1 and B2 — zero noise, so 2.35x
+is signal.
+
+**A wrong reading that was nearly published.** snag03's raw travel distance said
+the OLD set went *further*. It did: it threw the player off the lip and they fell
+90 units down the slope. Distance is not the measurement — getting across is —
+and that is why snag04 starts on the wedge and measures along one axis.
+
+### Blast radius, stated plainly
+
+`BIH_ClipToTriangle` is every trisoup in the game: displacements, static prop
+collision meshes under `sv_prop_collision`, and Q2/Q3 patch surfaces. Collision
+gets **tighter** everywhere, so where a run today brushes a phantom it will not
+tomorrow — recorded times and replays on displacement maps are not comparable
+across this patch. That is the intended direction (Source's own displacement
+collision builds these bevels) but it is a change to what a run means.
+
+`pm_trisoup_bevels 0` restores the old 11-plane set exactly, for bisection. It is
+`CVAR_SERVERINFO` so a dedicated server publishes the value; publishing is all it
+does — a remote client does not adopt it, so the two must agree or prediction
+will disagree about geometry.
+
+Not measured: the cost of nine extra planes per triangle in the clip loop. The
+BIH culls to a handful of triangles per player trace so it should not be visible,
+but that is reasoning, not a measurement.
+
+### Files
+
+- `engine/common/com_bih.c` — `BIH_TriangleBevels`; `planes[5]` -> `planes[5+9]`
+  and `countof(planes)` -> `numplanes` in `BIH_ClipToTriangle` **and**
+  `BIH_TestToTriangle`; `bih_probe_plane/norm/tri` and the two brush clippers'
+  clears.
+- `engine/common/pm_source.c` — `PMSrc_DispProbeWhy`, called from both
+  `pm_dispprobe` sites.
+- `engine/common/common.c` — `pm_trisoup_bevels`, beside `pm_dispprobe` and for
+  the same reason: `com_bih.c` links into the client too.
+- `ftesurf/cfg/default.cfg` — `set pm_trisoup_bevels 1`.
+- `ftesurf/cfg/testrun/` — `snag01` (ruled surf_boreas out), `snag02` (found the
+  map), `snag03` (mechanism), `snag04` (getting across).
+
+## Patch 260 — ladders: the contents were always in the trace, but Source movement never looked, and 10% of the library's ladder brushes live in a model no player trace walks  *(APPLIED, engine — `build.ps1 -Engine -Full`)*
+
+**Report.** *"No `func_ladder`."* Second of the six play reports; deferred from
+Build 1 because pmove is the one file where a mistake costs every player every
+tick, in both games sharing this tree.
+
+### The precondition, and why it was not a formality
+
+The plan gated this build on a measurement: *"stand at a ladder face on one of
+the brush-only maps and read `trace.contents` back. If bit `0x4000` is set the
+mover port is the entire job; if not, the loader is the defect."*
+
+The QC's own ladder essay (`sv_entities.qc`, "Ladders -- and why there is no
+spawn function here any more") asserts the answer: VBSP consumes `func_ladder`
+at compile time and bakes its brushes into the world with `CONTENTS_LADDER`, the
+hl2 plugin maps that bit straight to `FTECONTENTS_LADDER`, and therefore those
+brushes "already report `FTECONTENTS_LADDER` to every trace ... the contents are
+already in the trace results waiting to be read."
+
+Two of those three steps hold. The third does not follow, and the reason is one
+line in `bspfile.h`:
+
+    MASK_PLAYERSOLID == MASK_BOXSOLID == SOLID | PLAYERCLIP | WINDOW | BODY
+
+`FTECONTENTS_LADDER` is `0x4000` and is not in that set. A solidmask in this
+engine does not filter what a trace REPORTS -- it decides which brushes the
+trace may visit at all:
+
+- `com_bih.c:990` -- `if (node->data.contents & tr->hitcontents)` gates whether a
+  brush is even handed to the clipper.
+- `com_bih.c:783` -- `tr->trace.contents = brush->contents;` reports the winning
+  brush's WHOLE word, unfiltered, once it is visited.
+
+So a ladder-only brush is not merely unreported, it is invisible: fraction 1,
+contents 0, indistinguishable from open air. That is exactly why
+`WPhys_CheckWater` (`sv_phys.c`) sets `hitcontentsmaski` to `~0` around its
+ladder trace and puts it back afterwards. Whether the bit arrives therefore
+depends on what ELSE the mapper put on the brush -- which is map data, and not
+answerable by reading.
+
+### Measured, not assumed
+
+`pm_ladderprobe` (temporary) fires the ladder-detection traces at the exact line
+in `PMSrc_Tick` where the real hook would go, three ways -- unmodified
+`MASK_PLAYERSOLID`, `MASK_PLAYERSOLID|LADDER`, and all bits -- plus
+`PM_ExtraBoxContents` for the entity path. It prints on a negative too: "nothing
+here" and "the probe never ran" must not look alike.
+
+Finding the map first: an offline census of all 1310 library maps found 1750
+ladder brushes across 242 maps and **zero ladder-only ones** -- 73.0% also GRATE,
+13.6% WINDOW, 12.9% SOLID. `bhop_monster_jam` was chosen because it was already
+proven to load (the Patch 258 map), has 5 `info_ladder` markers so its ladders
+are deliberate, and covers both big contents families.
+
+In-engine, at a real ladder face, under the UNMODIFIED mask:
+
+```
+[ladderprobe] org 6656.0 -4185.8 3776.4  yaw 90.0  onground 1
+  fwd24 PLAYERSOLID   frac 0.2423 ss 0  contents 0x10034000 LADDER|PLAYERCLIP|MONSTERCLIP
+```
+
+and on the WINDOW family, `0x10004002 WINDOW|LADDER`. Across 359 probe blocks the
+widened masks never once saw a ladder the default mask missed, and the control on
+open ground read `0x00000001 SOLID` -- no ladder -- so the positives are a
+measurement rather than an artefact. **Precondition passes: the mover port is the
+whole job.** The QC essay's claim is true, but by map-data accident rather than by
+construction; a map that ships a ladder-only brush will silently not work, and the
+essay above `PMSrc_LadderMove` says where to fix it if one ever does.
+
+### The scope claim that was wrong, and how it was caught
+
+That census, and the plan's, read `LUMP_BRUSHES` -- which is global and never says
+which BSP MODEL owns a brush. FTE builds one BIH per model (`VBSP_BuildBIHMain`
+over `cmodels[0]`'s brush range), so a ladder brush owned by a brush-entity
+submodel sits in a different tree entirely and no world trace can see it at any
+mask. An adversarial pass found this; three independent refuters converged on it,
+and it was then confirmed here two ways that do not depend on their parse:
+`surf_fungus`'s four ladder brushes have bboxes centred on the ORIGIN --
+submodel-local coordinates, not world -- and `surf_blastpit` / `surf_skatelife`
+have ZERO `CONTENTS_LADDER` brushes yet two `func_simpleladder` entities each, so
+their ladders are not contents-based at all.
+
+A second census walking `LEAFBRUSHES -> LEAFS -> headnode` per model. Three
+attempts produced garbage and the validation gate refused all three rather than
+reporting them; the real bug was that `LUMP_LEAFBRUSHES` is **17**, not 16, so it
+had been reading leaf FACES:
+
+| | brushes |
+|---|---:|
+| validated ladder brushes | 1702 |
+| reachable in the WORLD BIH | **1538 (90.4%)** |
+| owned by a brush-entity submodel | **164 (9.6%)** |
+
+7 maps are excluded because their parse did not validate -- excluded, never
+guessed. Of the submodel-owned, those on SOLID brush entities are still found:
+pmove DOES trace brush entities, unlike CSQC's traceline. Those the QC forces
+`SOLID_NOT` (`func_illusionary`, `func_simpleladder`, `func_brush` with Solidity
+"Never Solid") are in no BIH this trace walks and in no physent, so **no change in
+this file can reach them**. Eight maps have no world-reachable ladder brush at
+all, among them `surf_fungus`, `bhop_collective` and `bhop_rpg`. That is a QC fix
+and is explicitly not in this patch.
+
+`func_simpleladder` is the sharp one: it is Momentum's own ladder entity, and this
+QC lists it under "Decorative and rules brushwork -- walk straight through".
+
+### The port
+
+`PMSrc_LadderMove` transcribes `CMomentumGameMovement::LadderMove`
+(mom_gamemovement.cpp:494-681) and `PMSrc_FullLadderMove` Valve's
+`FullLadderMove` (gamemovement.cpp:2558), hooked in `PMSrc_Tick` **after**
+`PMSrc_Duck()` -- Source calls Duck at cpp:4577 and the ladder block at :4591, in
+that order, on every movetype.
+
+Four things a naive port gets wrong, all now load-bearing comments in the file:
+
+1. **Do not port `LadderMask()`.** It is `MASK_PLAYERSOLID & ~CONTENTS_PLAYERCLIP`,
+   and it is safe in Source only because Source's own `MASK_PLAYERSOLID` carries
+   `CONTENTS_GRATE` as a separate bit. **FTE has no GRATE bit at all** --
+   `mod_vbsp.c` remaps Source GRATE to `PLAYERCLIP|MONSTERCLIP`, and MONSTERCLIP
+   is not in `MASK_BOXSOLID`. So PLAYERCLIP is the ONLY thing making a GRATE
+   ladder eligible, and masking it out would blind **1281 of 1750** brushes
+   (1278 GRATE-only + 3 PLAYERCLIP+MONSTERCLIP). The probe confirms the remap
+   live: `0x10034000` carries both clip bits.
+2. **`onFloor` is a BIT TEST.** Source asks `GetPointContents(floor) ==
+   CONTENTS_SOLID`; equality is wrong here because FTE's remapped words carry
+   DETAIL and TRANSLUCENT alongside SOLID -- the probe read `0x08000001
+   SOLID|DETAIL` off ordinary brushwork, which `==` would call "not floor".
+3. **The state is carried in `pmsourcestate_t`, not `pmove.onladder`.** Four
+   callers hard-zero `pmove.onladder` immediately before `PM_PlayerMove` and a
+   fifth rebuilds it from a trigger touch, so a value stored there is destroyed on
+   every replayed command -- which, on the client, is every command. This matters
+   more than "you get dropped": `LadderDistance()` is 10 while attached and 2
+   while not, and the probe DIRECTION is the remembered normal while attached, so
+   a lost flag changes where the next trace even looks. `pmove.onladder` is still
+   WRITTEN each tick as an output so QC and CSQC keep seeing `PMF_LADDER`. This
+   sidesteps the plan's "guard four callers" entirely -- none of those four files
+   is touched.
+4. **The new `playermove_t` fields are APPENDED**, not placed beside `onladder`.
+   The struct's stride is baked into already-built plugins; a mid-struct insert
+   silently corrupts a stale one at map load. The header says so, and the first
+   draft did it anyway.
+
+Two adaptations that are NOT transcriptions, flagged as such in the file:
+
+- Momentum reads four discrete button bits for the climb (`IN_FORWARD` / `IN_BACK`
+  / `IN_MOVELEFT` / `IN_MOVERIGHT`) even though its wishdir comes from the analog
+  values. FTE's usercmd has no such bits -- QuakeWorld sends analog
+  forwardmove/sidemove and nothing else -- so the climb uses the SIGN of the
+  analog value. Identical on keyboard, which is the only way Source could produce
+  those bits, and it degrades sensibly on a stick instead of ignoring it.
+- A startsolid trace while ALREADY attached HOLDS the ladder rather than clearing
+  it. `PM_PlayerTrace` merges physents with `(trace.startsolid &&
+  !total.startsolid)`, which replaces the whole `trace_t` -- contents included --
+  and `BIH_ClipBoxToBrush`'s startsolid path returns BEFORE assigning contents,
+  leaving zero. So a correct ladder read on the world can be erased by clipping a
+  door frame. Without the guard that reads as "the ladder works except when I hug
+  the corner", and it would be hunted in this file rather than in the merge rule.
+
+`LadderLateralMultiplier` is deliberately NOT ported: it exists in Momentum but
+has no call site anywhere in that tree, so porting it would introduce a 0.5x
+lateral scale the reference game does not actually apply.
+
+### Verified in the engine
+
+`ladder01`, one map load, cvar toggled, each state twice, measuring eye z --
+climbing is the only thing at that spot that raises it:
+
+| pass | start z | after 3s forward |
+|---|---|---:|
+| A1 `pm_ladders 0` | 3776.76 | 3776.29 |
+| B1 `pm_ladders 1` | 3776.76 | **3968.03** |
+| A2 `pm_ladders 0` | 3776.76 | 3776.29 |
+| B2 `pm_ladders 1` | 3776.76 | **3968.03** |
+
+A1 = A2 and B1 = B2 to the decimal -- zero noise. The climb is **+191.3 units**
+against a brush 188 tall, i.e. the whole ladder, ending stood on the ledge.
+Descent returns to 3776.19. The control on open ground does not attach.
+
+`ladder02` tests the one interaction that could TRAP a player. Its first attempt
+was a bad test and is recorded as such: 1.2s at 200 u/s is 240 units against a
+188-unit ladder, so every sub-test topped out and measured a normal jump from
+ground. Re-run at 500ms (~95 units, genuinely mid-ladder):
+
+| test | mid-ladder | after |
+|---|---|---|
+| J1 jump mid-climb | 3858.32 (82.5 above floor) | **3773.50, feet-above-floor 0.88** |
+| J2 repeat | 3860.32 (84.5) | **3773.38, 0.88** |
+| H1 release all keys | 3860.32 | **3860.32 -> 3860.32 -> 3860.32** over 4s |
+
+Jumping detaches and drops the player to the ground; idling hangs dead still, no
+slide and no gravity -- Momentum's behaviour, since velocity is zeroed outright
+and `FullLadderMove` calls neither StartGravity nor Friction. Gravity is not
+zeroed and needs no restoring, because it never runs in this path at all.
+
+### Blast radius
+
+`pm_ladders` ships at **1**. It was written to ship at 0 and flipped on review:
+ladders are intended map content -- a mapper who textured a brush with
+CONTENTS_LADDER and put an info_ladder beside it meant it to be climbable, and 242
+library maps did -- so defaulting to 0 would have kept honouring the bug. 0
+bypasses the mover entirely and restores pre-260 behaviour exactly, which is the
+bisection handle if a ladder ever grabs someone who did not want it. It is
+`CVAR_SERVERINFO` and mirrored from serverinfo in `cl_main.c` with identical
+defaults, because a client that predicts a climb the server does not run
+rubber-bands every tick. It joins the Patch 170 ruleset lock, so moving it away
+from the shipped value needs `sv_cheats 1`.
+
+What the verification does NOT cover, stated plainly: it ran on one map, not on
+all 242. The failure mode to watch for is a false attach -- a ladder grabbing a
+player who was only walking past.
+
+Turning it on changes what a run MEANS on maps where a ladder is a shortcut:
+routes that were impossible become possible. That is the point of the build, but
+it is still a change to the meaning of a recorded time on those maps.
+
+Not measured: the per-tick cost of the ladder trace. It is one hull trace, and
+only when the player is asking to move or already attached -- but that is
+reasoning, not a measurement.
+
+### Files
+
+- `engine/common/pm_source.c` -- `PMSrc_LadderMove`, `PMSrc_FullLadderMove`, the
+  hook in `PMSrc_Tick`, the `pm_ladderprobe` instrument, and two Save/LoadState
+  lines.
+- `engine/common/pmove.h` -- `pmove.srcladder` / `srcladdernormal` (appended), and
+  `movevars.ladders` / `ladderdampen` / `ladderangle`.
+- `engine/common/protocol.h` -- the same two fields in `pmsourcestate_t`, which is
+  what actually carries them across a replayed command.
+- `engine/common/common.c` -- `pm_ladderprobe`, beside `pm_dispprobe` and for the
+  same linkage reason.
+- `engine/server/sv_phys.c` -- `pm_ladders` / `pm_ladderdampen` / `pm_ladderangle`,
+  `SV_SetSourceMoveVars`, and the ruleset-lock list.
+- `engine/server/sv_main.c` -- the three registrations.
+- `engine/client/cl_main.c` -- the serverinfo mirror.
+- `ftesurf/cfg/testrun/` -- `probe259` (the precondition), `ladder01` (climb A/B),
+  `ladder02` (dismount and hang).
+
+**Note on numbering.** Written as 259 and renumbered to 260 mid-build: the
+concurrent session took 259 while this was compiling. Its `vertexlit.glsl` was
+also mid-edit and briefly broke `plugins-rel`, which is why this build deployed
+the engine binary alone and left `fteplug_hl2_x64.dll` untouched -- the hl2 plugin
+includes neither `pmove.h` nor `protocol.h`, so the header changes here cannot
+affect its ABI.
+
+## Patch 261 — a `patch` VMT whose include is written the Windows way loads nothing, and the surface it names is drawn as a pink checkerboard  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+**Reported as:** *"surf_monolith b4 ... missing sky texture"*, and before that, one
+pink/black checkerboard photographed in the spawn room by `mono02_e_yaw270.png`
+during the Build 4 observation pass.
+
+### The defect
+
+`mat_vmt.c:VMT_ReadVMT` decided whether to prepend the mandatory `materials/`
+prefix with a raw byte compare:
+
+```c
+	//don't dupe the mandatory materials/ prefix
+	if (strncmp(fname, "materials/", 10))
+		prefix = "materials/";
+	if (strcmp(fsfuncs->GetExtension(fname, NULL), ".vmt"))
+		postfix = ".vmt";
+```
+
+surf_monolith ships `materials/effects/tp_refract_pink.vmt`:
+
+```
+patch
+{
+	include "materials\effects\tp_refract_algetic.vmt"
+	replace
+	{
+		"$REFRACTTINT" "{204 0 102}"
+	}
+}
+```
+
+That compare runs to index 9, finds `\` where it wants `/`, and concludes the
+name is un-prefixed — so a **second** `materials/` is glued on and the load asks
+for `materials/materials/effects/tp_refract_algetic.vmt`. `LoadFile` fails,
+`VMT_ReadVMT` returns false, the `include` arm in `VMT_ParseBlock` returns NULL,
+and `Shader_LoadVMT` reports the whole material as found-but-unparsed and falls
+back to `no_texture`.
+
+`EFFECTS/TP_REFRACT_PINK` is texdata **38** of surf_monolith's 175, so it is on
+real world faces: the map's teleporter refraction panels. A `Refract` shader
+drawn as `no_texture` is a flat magenta-and-black plane the size of a doorway.
+
+### What is NOT broken, which is what decides how large the fix is
+
+An include of `materials/agency\glass\glass01_break.vmt` **works today**. The
+compare matches at index 0, no second prefix is added, and `FS_GetCleanPath`
+(`fs.c:2868`) treats `\` as a segment separator and rewrites it to `/` on the way
+in. Every backslash the *filesystem* sees is already handled. Only the separator
+at index 9 matters, because `VMT_ReadVMT` decides before the filesystem is ever
+asked.
+
+That distinction is the difference between a scary number and a true one. The
+first count of this defect flagged every backslash-bearing include and reported
+**41 across a 219-map sample** — and most of those were names `FS_GetCleanPath`
+was already fixing. Rewriting the scan to reproduce the exact token the C builds,
+clean it the way the filesystem would, and ask whether *that* name is in the map's
+own pakfile gives the real answer.
+
+### Census — all 1310 maps, all 72,925 `include` directives
+
+| | |
+|---|---|
+| include directives in the library | **72,925** |
+| resolve differently once this is fixed | **23**, on **7** maps |
+| …because of a separator at index 9 | 20 |
+| …because of a capitalised prefix | 3 |
+| …whose target is present in the map's own pak (provably broken today) | **20** |
+
+| map | mismatches | target in pak |
+|---|---|---|
+| bhop_angst | 7 | 7 |
+| surf_valpect | 4 | 4 |
+| surf_doomsday | 3 | 3 |
+| surf_sinsane2 | 3 | 0 |
+| surf_zen2 | 3 | 3 |
+| surf_angst | 2 | 2 |
+| surf_monolith | 1 | 1 |
+
+Two spellings, one bug:
+
+```
+surf_monolith  include "materials\effects\tp_refract_algetic.vmt"
+surf_doomsday  include "MATERIALS/PK02/PK02_SAND01.vmt"
+```
+
+The second is why the fix is not just a backslash fold. `strncmp` is
+case-**sensitive**, so a capitalised prefix double-prefixes exactly as the
+backslash does, and surf_doomsday's three are real. The extension test alongside
+it has the same flaw (`foo.VMT` is asked for as `foo.VMT.vmt`); that half is
+fixed because the compare was wrong rather than because anything is failing —
+**zero** of the 72,925 includes end in a capitalised extension.
+
+surf_sinsane2's 3 are honest about their limit: its `GridBase_Diffuse` is in
+neither the map pak nor this fix's reach, so that material may still fail
+afterwards for an unrelated reason. Counted, not claimed.
+
+### The fix
+
+Normalise in `VMT_ReadVMT` — the single funnel, since `Shader_LoadVMT`'s
+top-level call, the `include` recursion and any future caller all arrive through
+it — following the idiom `VMT_BottomNormalise` already establishes in this file:
+fold `\` to `/`, compare the prefix case-blind.
+
+```c
+	Q_strlcpy(norm, fname, sizeof(norm));
+	for (c = norm; *c; c++)
+		if (*c == '\\')
+			*c = '/';
+	fname = norm;
+
+	//don't dupe the mandatory materials/ prefix
+	if (Q_strncasecmp(fname, "materials/", 10))
+		prefix = "materials/";
+	if (Q_strcasecmp(fsfuncs->GetExtension(fname, NULL), ".vmt"))
+		postfix = ".vmt";
+```
+
+**No cvar gate.** Neither change can regress a name that resolves today: a
+case-insensitive match is a strict superset of the exact one it replaces, and
+every name it newly matches is one that gets a second prefix glued on today —
+i.e. one that currently fails. The 23 are the complete list of behaviour changes
+in the library.
+
+### Verification
+
+`cfg/testrun/mono04.cfg`. The A/B is **across runs, not within one** — `map x`
+twice does not reload, and a plugin cannot be swapped mid-process — so the
+"before" half is an artefact that already existed on disk from the Build 4
+observation pass, taken at the identical `setpos 3856 -13872 13490 0 270 0`:
+
+| | |
+|---|---|
+| before | `screenshots/mono02_e_yaw270.png` — upper row, 4th teleporter doorway is a pink/black checkerboard |
+| after | `screenshots/mono04_a_spawn_yaw270.png` — same doorway shows the teleporter panel; the rest of the frame is unchanged |
+
+The generated material, which is the reading that does not depend on eyes.
+`effects/tp_refract_pink` now compiles to exactly what the base it includes
+compiles to:
+
+```
+effects/tp_refract_pink                    effects/tp_refract_algetic  (control)
+{                                          {
+    program "vmt/flatdither"                   program "vmt/flatdither"
+    map "materials/effects/aurora.vtf"         map "materials/effects/aurora.vtf"
+    alphagen const 0.250000                    alphagen const 0.250000
+}                                          }
+```
+
+No regression: `hl2_unresolved 0`, `hl2_unresolved_visible 0`, and the only two
+names in the did-not-resolve list are still `levelshots/surf_monolith` and
+`maps/surf_monolith`, both loaded after the map and both the loading-screen
+image.
+
+**What this fix does NOT do, stated because the two shots look like it does.**
+The two generated materials above are *identical*, and that is the point: FTE's
+`Refract` path never consumes `$REFRACTTINT`, so the `replace` block that makes
+this material pink is still discarded. The panel has stopped being a
+checkerboard; it has not become pink. It renders the same blue as
+`tp_refract_algetic`. That is a separate gap in the Refract translation, counted
+here and not fixed.
+
+**The case-insensitive half needed its own map.** surf_monolith exercises the
+backslash cause only, so `cfg/testrun/vmt261.cfg` loads surf_doomsday, whose
+three are `include "MATERIALS/PK02/PK02_SAND01.vmt"` — double-prefixed by case
+alone, no separator involved. Both of its patch materials now resolve, and they
+resolve to exactly the right thing: the base material plus the per-cubemap
+`reflectcube`, which is the only thing those generated `maps/<mapname>/…` VMTs
+exist to add.
+
+```
+maps/surf_doomsday/pk02/pk02_sand01_7464_-936_-1360   pk02/pk02_sand01  (control)
+{                                                     {
+    program "vmt/lightmapped#ENVFROMNORM#ENVTINT=…"       program "vmt/lightmapped#ENVFROMNORM#ENVTINT=…"
+    diffusemap "materials/pk02/pk02_sand01_C.vtf"        diffusemap "materials/pk02/pk02_sand01_C.vtf"
+    normalmap  "materials/pk02/pk02_sand01_N.vtf"        normalmap  "materials/pk02/pk02_sand01_N.vtf"
+    reflectcube "materials/maps/surf_doomsday/…vtf"  }
+}
+```
+
+The same run loads bhop_angst, the library's largest single case at 7:
+`effects/tp_refract_cyan` and `effects/tp_refract_green` both now match their
+base `effects/tp_refract_algetic`. Both maps report `hl2_unresolved 1`,
+`hl2_unresolved_visible 0`.
+
+So both causes are verified in-game, on three maps. The remaining four —
+surf_valpect, surf_zen2, surf_angst, surf_sinsane2 — are verified by the census
+only: the token they build changes, and (except surf_sinsane2's) the target is
+in their pak. Nobody has looked at them.
+
+### This patch does NOT close the bonus-4 report, and here is what that is
+
+The report that prompted it was *"surf_monolith b4 ... missing sky texture"*, and
+bonus 4 still looks wrong afterwards. It is a different bug, chased far enough
+here to hand over rather than left as "unexplained":
+
+* `shader_here` at the user's save004 vantage (`-10975.05 -5482.11 15936.03`,
+  yaw 178) names every wall, ceiling and far end `surf_minigolf/grid`. That
+  material is authored `UnlitGeneric` + `$translucent 1` + `$additive 1` +
+  `$color [0.33 0.33 0.33]`, and FTE compiles it faithfully — sort 12,
+  `blendFunc add`, `rgbGen const 0.33`, no lightmap pass. Its VTF is real
+  (128x128 I8, in the pak, and only 2044 of 22101 image bytes are non-zero —
+  thin lines on black; every mip from 64x64 down is pure black). Drawn additive,
+  black is invisible, so **the room's inner shell is see-through by
+  construction**. That is the mapper's intent, not a defect.
+* Walking the camera through it and asking again names what is behind:
+  `sky/tools/toolsskybox`, `size=64x64`, `usage=lightmapped`. 64x64 is
+  `R_GetShaderSizes`' dummy. So bonus 4's outer shell is the SKY brush, and it
+  is drawing as a flat salmon plane instead of sky138a.
+* **`r_fastsky 1` changes the picture not at all** (`mono06_fastsky_ceiling.png`
+  against `mono04_c_bonus4_up.png`). That is the reading: those faces are not
+  going through the sky path at any point, so no sky cvar can affect them.
+* The map has ONE skyname, `sky138a`, no `sky_camera`, and all six faces are in
+  its own pak with both `.vmt` and `.vtf`. `skybox_sky138a` is built (`sort 4
+  prog 0 passes 0`) and the sky demonstrably renders elsewhere in the map —
+  `mono03_a.png` is blue sky through a lattice ceiling. So the assets are fine
+  and the sky works; it is these particular faces that do not reach the sky
+  path.
+* One suspicious line at load, not yet chased: `texture "sky138a" did not
+  resolve from any wad or replacement - drawing it as no_texture`.
+
+Reproduces in one step: `!b 4` on surf_monolith, or setpos to the save above.
+
+## Patch 259 — VRAD bakes a colour for every vertex of every static prop and we averaged it away; the engine already had the per-instance vertex path, and the file was never in the order it looks like  *(APPLIED, plugin + engine — `build.ps1 -Engine -Full`)*
+
+Asked as a question about cost: *"Is Correct and large more intensive? It would be
+nice if we could 'turn it off' or switch to the cheap option if it's less CPU
+intensive?"*
+
+It is not more intensive, and the answer is worth stating before the patch,
+because it is why the patch is small.
+
+### What it costs, measured rather than assumed
+
+**Draw calls: identical.** Props are already submitted one `entity_t` per prop per
+frame (`VBSP_DrawProps`), FTE has no hardware instancing and does no cross-prop
+batching, so there was never a batch to lose by giving each prop its own colours.
+
+**Per-frame CPU: two pointer stores per surface.** The lighting solve is cached by
+`light_known` for the life of the map, and Patch 163's retint already ran inside
+that cache. Everything this patch adds — the scatter, the mode decision, the
+retint — happens in the same block, once per prop.
+
+**RAM: 4 bytes per prop vertex, at map load.** Over the 1310-map Momentum library
+that is 312 maps that ship a bake at all, mean 2.2 MiB each, worst
+`surf_chungus_fungus` at 25.0 MiB (531 props, 6,390,951 verts). Storing the
+multiplier as `vec4` floats the way the Quake-side path does would be 4x all of
+those — 97 MiB on that one map, re-read by the driver every frame — which is why
+this path is bytes and why the normalisation below is to the peak.
+
+### 70% of it already existed, and was Quake-only for no reason
+
+FTE has carried a complete per-instance per-vertex prop lighting path since the
+RGBPROPLIGHT work: `entity_t::vertlightcolors`, `PropLight_Find`, the `VC` shader
+permutation, and the bind in `R_GAlias_DrawBatch` that swaps one surface's colour
+attribute to a per-instance array while the positions stay in the model's shared
+VBO. None of it was Quake-specific. Three things kept HL2 props out:
+
+- `mod_hl2.c` never set `galiasinfo_t::firstvert`, so a surface could not find its
+  slice of a global-order colour array. Every HL2 surface claimed base 0, so only
+  a single-mesh model could ever have been coloured correctly.
+- `vmt/vertexlit.glsl` never declared `!!permu VC`, so `perm &= supportedpermutations`
+  stripped the permutation before it could run.
+- `VBSP_LoadPropBakedLight` read every vertex colour and threw the distribution
+  away one line later, keeping only the mean.
+
+### The mistake this patch made first, and what caught it
+
+The `.vhv` looks like one colour per `.vvd` LOD0 vertex, and on `surf_garden` it
+measures like one too: prop 170 has 15447 colours against `lodverts_count[0]` =
+15447, and its three LOD0 blocks `[2721, 4082, 8644]` are the MDL's own mesh
+layout. Four props checked, four matches, checksums equal. So the first build
+bound the file straight onto our vertex array.
+
+It drew the fountain covered in dark blotches.
+
+`surf_demise`'s `tree_douglasfir01d_opt_large` says why. Its LOD0 block is 2031
+colours; its `.vvd` says LOD0 has 2787 vertices. The file is not short or corrupt
+— its LOD3 block is 926, which *is* that model's `lodverts_count[3]`, and its
+checksum matches the `.mdl`. What 2031 is, exactly, is the sum of the `.vtx`'s
+LOD0 strip-group vertex counts. Checked across four models spanning both cases
+and every LOD they have, the `.vhv` block counts equal the `.vtx` strip-group
+counts every time — 2031/1857/1506/926 against 2031/1857/1506/926, and s3hedge2's
+2721/4082/8644 against the same three.
+
+**VRAD writes one colour per LOD0 VTX strip-group vertex, in strip order.** That
+is what Source renders. A strip group's vertex list is ordered for the
+post-transform cache, so colour *k* belongs to whatever `origMeshVertID` the
+*k*'th strip-group vertex names — which is not *k*, even when the totals agree.
+Equal counts were never evidence of equal order, and the four props that "proved"
+the identity had only ever proved the count.
+
+The blotches were caught by a screenshot, not by a metric: at that vantage the
+A/B pixel-diff noise floor (35% of pixels, foliage and water animating) exceeds
+the effect (30%), so the number said nothing and the crop said everything.
+
+### What it does now
+
+`Mod_HL2_BuildVhvMap` walks LOD0's strip groups at load in the same order VRAD
+does and keeps what the walk resolves: `vhvmap[k]` is our global vertex index for
+VRAD's colour *k*, composed exactly the way `Mod_HL2_LoadIndexes` composes it —
+`origMeshVertID` + the mesh's base, then the `.vvd` fixup table if the model has
+one. Scattering through it, `out[vhvmap[k]] = colour[k]`, is correct by
+construction instead of by a coincidence, and it subsumes the fixup case, which is
+just another indirection in the same composition.
+
+The scatter cannot happen at map load — the `.vhv` is read while the model is
+still a name, because models load on worker threads — so the colours stay in
+VRAD's order in `vcraw` until the first frame that lights the prop, which is the
+frame that already has the model and is already inside the `light_known` cache.
+Vertices the strip groups never name are prefilled with the byte that reproduces
+the plain mean, so an unreferenced vertex lands where mode 1 would put it rather
+than a stop brighter.
+
+**The normalisation is to the peak, not the mean.** A normalised ubyte carries
+0..1, and a mean-centred multiplier has to exceed 1 for every vertex above
+average, so the Quake path's "~1.0-centred, clamp to `r_propvertexlight_max`"
+cannot be expressed in bytes at all. Normalising to the peak makes the byte range
+exact: store `enc(lum_v)/enc(lum_peak)` in 0..1 and multiply the gain back into
+`baked`, which is the entity's base light. The product is `enc(lum_v)` either way,
+so nothing is scaled away, and the quantisation left over is +/-0.5/255 of the
+prop's brightest vertex — half a step of the 8-bit value VRAD itself wrote.
+
+Greyscale, for the reason the Quake path is: `baked` already carries this prop's
+colour from the mean of this same file, so a per-channel multiplier would apply
+that hue twice. What varies per vertex is where the light falls, which is a
+luminance.
+
+**The directional split goes to zero in this mode.** Patch 163's essay on
+`HL2_RetintFromBaked` is right that reproducing a single mean as a directional
+term would shade the prop twice, and keeps `FS_BAKED_DIR` at 0.30 only because a
+mean gives the geometry no other way to read as solid. With the prop's own
+per-vertex bake bound it has that form already — VRAD's, cosine and occlusion and
+all — so the honest fraction is exactly 0.
+
+### The toggle, which is what was actually asked for
+
+- `hl2_lt_baked` gains **2** and keeps 0 and 1 exactly as they were, so falling
+  back is instant and needs no other cvar to be found. 0 = leaf ambient cube,
+  1 = one colour per prop (Patch 163), 2 = per vertex (new default).
+  `CVAR_MAPLATCH`, because it decides what is read off disk.
+- `hl2_lt_baked_vc` — **live**, no map reload. Whether the loaded array is *used*
+  costs nothing to change, and being able to flip it at one vantage is the
+  difference between an A/B and two screenshots minutes apart. It invalidates
+  `light_known` on the frame it changes, because the retint that goes with it is
+  computed once per prop for the life of the map.
+- `prop_census` reports, per frame, how many of the props that DREW used the bake
+  and how many declined — the load-time line only says the files were read.
+
+### Verification
+
+| map | drawn | used per-vertex |
+|---|---|---|
+| surf_garden | 28 | **28** |
+| surf_demise | 463 | **463** |
+| conc_school | 3 | **3** |
+| surf_nyx | 18 | **18** |
+| surf_boreas | 91 | **89** (2 models have no scatter table) |
+
+Before the scatter those read 28/28, **132**/464 and **1**/3 — and the 28 were
+the scrambled ones. `hl2_lt_baked_vc 0` takes surf_garden to 0 of 28 and back to
+28 of 28 with no reload. surf_boreas, bhop_ambience, surf_hektik, bhop_canals and
+surf_nyx all load unchanged; the three that report `props: 0 of N` ship no `.vhv`
+of either name, which is pre-existing and not what this patch touches.
+
+**Not verified in game by a human yet** — the screenshots are from the scripted
+`vc06` run at surf_garden's spawn, not from play.
+
+### Found, not fixed: `surf_leesriize_ksf` crashes on load
+
+Access violation (0xC0000005) shortly after `FTESurf: worldspawn`, during static
+prop model loading. **Not this patch**: it crashes identically at `hl2_lt_baked 0`
+and with every one of this patch's `mod_hl2.c` changes neutralised in a control
+build. It is also the map with the most VVD-fixup props in the library (819),
+which is suggestive but was not pursued. Its own job.
+
+### Files
+
+- `engine/client/render.h` — `entity_t::vertlightbytes`, appended. Two forms
+  rather than one because the two producers store different things: RGBPROPLIGHT
+  keeps a multiplier that deliberately exceeds 1, which a normalised ubyte cannot
+  hold; the `.vhv` path normalises to peak 1 and folds the gain into the base.
+- `engine/common/com_mesh.h` — `galiasinfo_t::vhvmap/vhvmapcount/vhvmodelverts`,
+  appended; the scatter table, on the first surface.
+- `engine/gl/gl_alias.c` — bind the byte form; reject `firstvert < 0` explicitly
+  rather than letting -1 pass the bound and read off the front of the array.
+- `engine/gl/gl_backend.c` — `PERMUTATION_VC` for either form.
+- `plugins/hl2/mod_hl2.c` — `Mod_HL2_BuildVhvMap`; `surf->firstvert`.
+- `plugins/hl2/mod_vbsp.c` — retain the distribution in `VBSP_LoadPropBakedLight`;
+  the scatter and the mode decision in `VBSP_DrawProps`; `hl2_lt_baked` 2,
+  `hl2_lt_baked_vc`, the `prop_census` counters, the 256-entry sRGB decode table.
+- `plugins/hl2/glsl/vmt/vertexlit.glsl` — `!!permu VC` and `light.rgb *= v_colour.rgb`.
+  Its comment is `//` and not a block comment deliberately: `generatebuiltinsl`
+  emits a line beginning with a block-comment opener raw and then quotes the lines
+  after it, so a multi-line block comment produces an unterminated C comment in
+  `mat_vmt_progs.h` and the plugin will not compile.
+- `ftesurf/cfg/testrun/` — `vc01` (loads and allocates; caught the blotches),
+  `vc02`/`vc03` (isolating the surf_leesriize_ksf crash), `vc05` (the drawn-vs-used
+  assertion), `vc06` (the scatter), `vc07` (regression sweep).
+
+## Patch 262 — the per-vertex prop lighting never reached the GPU, and a third of the library's solid props collide against geometry Source does not collide  *(APPLIED, collision half CONFIRMED AGAINST MOMENTUM, plugin + engine — `build.ps1 -Engine`)*
+
+Two reports from playing, not from a script.
+
+### 1. "Is Correct and large more intensive?" — yes, and I had said no
+
+Patch 259 gave every static prop VRAD's own per-vertex bake and I costed it as
+"two pointer stores per surface". Measured at surf_boreas's start zone:
+
+| surf_boreas | fps | ms/frame |
+|---|---|---|
+| 3D skybox off, `hl2_lt_baked 1` | 1000 | 1.00 |
+| 3D skybox off, `hl2_lt_baked 2` | 300 | 3.33 |
+| 3D skybox on, `hl2_lt_baked 1` | 440 | 2.27 |
+| 3D skybox on, `hl2_lt_baked 2` | 35 | **28.57** |
+
+The two pointer stores are real; what they hand the driver is not free. The
+skybox-on control is what makes the 35fps row readable — the skyroom is a second
+scene render costing **1.27ms** of its own, and **24.0** of the remaining 26.3ms
+is the same per-prop cost paid again over the props the 3D skybox sees. One bug,
+charged twice. Without that control the 35 looks like a skyroom problem, which
+is what I would have chased.
+
+### It is a per-vertex cost, and that is what located it
+
+surf_garden's **28** drawn props cost **more** than surf_boreas's **91**:
+
+| | props drawn | extra ms | per prop |
+|---|---|---|---|
+| surf_boreas | 91 | 2.33 | 26 us |
+| surf_garden | 28 | 3.95 | 141 us |
+
+Draw-call overhead cannot rise 5.5x while the draw count falls 3.3x. What
+differs is vertices — garden draws the giant stage hedges (`s3hedge2` is 15,447
+verts, its ten biggest props 30,811 each, median 3,111) against boreas's median
+1,684. So the time is in a data path, not in submission.
+
+`gl_alias.c` bound the colours as **client memory** (`colours[0].gl.vbo = 0` plus
+a raw heap pointer). At `gl_backend.c:770-802` that becomes `GL_SelectVBO(0)`
+followed by `qglVertexAttribPointer` with a pointer into our heap. Colour sits
+*between* vertex and texcoord in `BE_ApplyAttributes`' walk order (`shader.h:404`),
+so the `currentvbo` redundancy filter stops collapsing anything and the driver
+gets two extra binds per prop; and with one attribute outside a buffer object it
+can no longer issue the draw from server-side state, so it copies the referenced
+vertex range out of our heap and revalidates the whole vertex-array state, per
+draw, per frame.
+
+Two things it is **not**, both checked rather than assumed, because either would
+have meant a different fix:
+
+- **Not lost VAO caching.** Alias models already re-specify every attribute on
+  every batch: `com_mesh.c:2371` and `gl_backend.c:5836` both stomp
+  `vaodynamic = ~0, vaoenabled = 0`. There was no cache here to lose.
+- **Not shared-VBO corruption.** `batch->vbo` is one process-wide scratch `vbo_t`
+  (`com_mesh.c:719`, handed out at `:2365`) refilled from the model's immutable
+  buffers every call, so Patch 259 writing into it was safe.
+
+### The fix, and the ownership problem inside it
+
+Upload once to a GPU buffer, bind an offset. `.gl.addr` becomes a byte offset
+where it was a heap pointer, and `offset + firstvert*4` is the same expression as
+`pointer + firstvert*4`, so one slice serves both and the no-buffer-object
+fallback needs no second branch.
+
+The awkward part is ownership. The `entity_t` the renderer sees is a **copy** —
+`mod_vbsp.c` does `ent = NewSceneEntity(); *ent = *src;` — so a buffer handle
+cached on it is thrown away every frame. The CPU pointer is stable for the life
+of the map, so that is the key, and the cache is a pointer-keyed open-addressed
+table in `gl_alias.c` with a one-entry memo (an entity's several surfaces share
+one array, so the per-surface lookups collapse to a pointer compare).
+
+Allocation goes through `BE_VBO_Begin`/`Data`/`Finish`, which every backend
+implements and which `Mod_GenerateMeshVBO` already uses for byte colours
+(`com_mesh.c:4630`). Two things it makes you handle: `BE_VBO_Finish` always
+allocates an index buffer too, hence a two-byte stub per prop; and its
+no-buffer-object path hands back `gl.vbo == 0` and a heap pointer, which is
+exactly Patch 259's arrangement and so is a non-speedup rather than a failure.
+
+Freeing needs its own list. **`BE_ClearVBO` does not free colours at all** —
+`GLBE_ClearVBO`'s delete loop runs `i < 7` over a list that does not include
+them (`gl_rsurf.c:31-71`). `Surf_DeInit` is the hook, and it covers both cases
+because `Surf_NewMap` calls it (`r_surf.c:4945`); the map-load one is not
+optional, because the CPU arrays the table is keyed on are `GMalloc`'d against
+the world model's memgroup and freed with it, so a recycled malloc address would
+otherwise find a stale entry and draw some other prop's light.
+
+### The crash I put in on the way
+
+The first version created the buffers in `R_GAlias_GenerateBatches`, which
+looked like the calmer place — nothing is half-built there. It crashed
+surf_boreas a second after the map finished loading, and it deserved to:
+`entity_t::vertlightbytes` is only cleared inside `R_CalcModelLighting`
+(`gl_alias.c:1459`), which sits **below** that function's `light_known`
+early-out and runs from `DrawBatch`. Before `DrawBatch` has touched an entity the
+field holds whatever the recycled `cl_visedicts` slot held last — for a player or
+a viewmodel, a dead prop's array from an earlier frame or an earlier map.
+Uploading `verts*4` bytes from that is an access violation whose stack points at
+the wrong module entirely.
+
+Read after `R_CalcModelLighting`, the field means what it says. And creating
+buffers mid-batch turns out to cost nothing in safety: every binding it moves —
+ARRAY, ELEMENT and the VAO — goes through `GL_SelectVBO` / `GL_SelectEBO` / the
+VAO cache, all of which the submission path re-establishes per draw
+(`gl_backend.c:3466`, `:3517`, `BE_ApplyAttributes`).
+
+### The leak the audit turned up on the way past
+
+`gl_alias.c` wrote `colours[0]` when it bound and never cleared it when it
+declined. `Alias_GAliasBuildMesh`'s early return (`com_mesh.c:2015`) hands back
+the scratch `vbo_t` without rewriting `colours[0]` at all, and neither of its
+paths ever clears `colours_bytes` (`:2346` memsets `colours[0]` only). So a
+surface that declined — same entity, larger `firstvert` — inherited the previous
+surface's slice pointer and read past the end of the array. Patch 259's comment
+said this could not happen; that was true of the path it looked at and not of
+the early return. Now it clears first and binds second.
+
+### Verification
+
+Same build, same vantage, `hl2_lt_baked_vc` toggled live, three alternations per
+skybox mode rather than one sample each — a single pair cannot separate a real
+difference from drift, three can, because drift does not reverse sign every time
+the cvar does:
+
+| surf_boreas, spawn | bound (vc 1) | control (vc 0) |
+|---|---|---|
+| skybox off | 937.2 / 988.1 / 953.9 | 980.7 / 980.6 / 949.9 |
+| skybox on | 398.5 / 421.9 / 431.6 | 433.9 / 431.2 / 429.8 |
+
+Means 959.7 vs 970.4 (1.1%) and 417.3 vs 431.6 (3.3%), with the sign reversing
+inside both sets. What is left is the one extra attribute binding per draw. The
+skybox-on figure was 35fps.
+
+The first attempt at this measurement is worth recording because it was
+worthless and did not look it: it read 496.5 / 442.0 / 95.0 / 166.5 / **910.7**
+for a sequence whose first and last steps were the *same* setting. An 83% gap
+between two identical configs means the instrument was measuring the map warming
+up — and it also read the skybox-on control as *slower* than the bound case,
+which is backwards. Six seconds of settling was not enough; twenty-five is.
+
+Visually unchanged: at surf_garden's spawn, `hl2_lt_baked_vc 1` still gives the
+fountain dark bowl undersides and a lit rim against `vc 0`'s flat wash, with the
+shading smooth across the bowls. That last part is the real check — the bowls are
+multi-surface, so a wrong slice offset would blotch them exactly the way the
+first Patch 259 build did.
+
+### Instancing and threads, since both were asked about
+
+Neither would help. At `hl2_lt_baked 1` the same 91 props draw at 1000fps, so
+draw submission is not the bottleneck and hardware instancing has nothing to win.
+The time was spent inside the driver's draw call on the submitting thread, so
+moving submission to another thread moves the cost rather than removing it. The
+lever was to stop generating the work.
+
+---
+
+### 2. Props that should not be solid — a third of the library
+
+`m_Solid` (lump offset 30) **is** read, at `mod_vbsp.c:3783`, into a field
+declared `qboolean solid`. Every use is truthiness (`:5514`, `:5588`, `:8050`),
+so `SOLID_NONE` was already honoured correctly and 1..6 were indistinguishable.
+Library-wide, over 1310 maps (822 carry props):
+
+| `m_Solid` | props | maps |
+|---|---|---|
+| 0 `SOLID_NONE` | 127,915 | 540 |
+| 1 `SOLID_BSP` | 1 | 1 |
+| 2 `SOLID_BBOX` | 1,005 | 21 |
+| 6 `SOLID_VPHYSICS` | 109,953 | 726 |
+
+So that was not it. What is: **34,514 of the 110,959 solid props, across 380
+maps, ask for a hull and ship no `.phy` at all.** `Mod_PHY_CollisionMesh` returns
+NULL for them (`mod_phy.c:551`) and `mod_hl2.c:1465` substitutes
+`mod->meshinfo` — the render mesh. Source requires collision data: no
+`$collisionmodel`, no vcollide, no entry in the collision list. The render mesh
+is not a coarser hull there, it is a hull where Source has none, made of exactly
+the geometry that should let you through. On **surf_garden 383 of 420** — 112
+ivory shrubs, 35 cypresses, 28 azaleas. Every shrub on the map a wall built out
+of its own leaf cards.
+
+A prop that asks for a hull and has no `.phy` now gets no BIH leaf.
+
+**`m_Solid` 2/3/4 are excluded on purpose**, and that exclusion is the whole
+reason the test lives in `mod_vbsp`'s leaf builder and not in the model loader.
+Those ask for the model's bounding box, which Source builds from the studio
+bounds with no `.phy` involved. The loader sees a model; two props sharing one
+model can ask for different things, and ten models across eight maps in the
+library actually do (`locks_large`, `du_window_bridge`, `windowframe11`,
+`handrail04_long` and six more, all `[2, 6]` except surf_delight's torch at
+`[1, 6]`). Scoping it at the leaf also leaves the render-mesh fallback in place
+for `prop_dynamic` entities, for `hl2_propcollision 3`, and for anything else
+using the same model.
+
+`hl2_propcollision_nophy`, `CVAR_MAPLATCH` — `0` Source-faithful (default), `1`
+the pre-262 render-mesh collision. Kept as a switch and not just as a fix because
+it changes collision on 380 maps, and collision parity with Momentum is the point
+of a timing game: if a surface is solid here and not there, a run that uses it is
+not comparable. This is the cvar that says which of the two you are running.
+
+`prop_census` gains the solidity totals and, per prop, the raw `m_Solid` with its
+name instead of `solid: yes/no` — printing 0 and 6 as the same "yes" is what hid
+1..6 all being treated as `SOLID_VPHYSICS`. The load-time line is a real
+`Con_Printf`, not a `Con_DPrintf`: it is the first thing to read when something
+that used to stop you stops stopping you.
+
+### The census was wrong the first time, and the engine caught it
+
+The offline census first said **60,650 props across 604 maps**, and reported
+bhop_canals at 2065 of 2065. The engine said 1. The census had probed only the
+map's own pakfile and the Momentum tree; CS:S, HL2, TF2 and CS:GO supply most
+props' `.phy` files, and canals is built almost entirely out of `props_wasteland`
+and `props_c17`. Re-probed across every mounted pack the two agree exactly —
+garden 383, demise 1525, boreas 0, nyx 0, canals 0 — which is the check worth
+having, because the two routes share nothing: one parses the `sprp` lump and
+walks VPK directories, the other loads the models.
+
+| map | solid | not solid |
+|---|---|---|
+| surf_garden | 420 | **383** |
+| surf_demise | 2334 | **1525** |
+| bhop_canals | 2065 | 0 |
+| surf_boreas | 11 | 0 |
+| surf_nyx | 798 | 0 |
+
+`hl2_propcollision_nophy 1` puts surf_garden back to 420 solid and no line at
+all, i.e. exactly the pre-262 behaviour.
+
+### The rule, confirmed against Momentum
+
+**Lex walked into surf_garden's shrubs in Momentum: they are walk-through
+there.** That is the evidence this patch was resting on, and it is the only
+place it could have come from.
+
+The runtime rule — no collision hull, no collision — is closed-engine behaviour
+and is **not** in `mp/src`. `utils/vbsp/staticprop.cpp:228-289` synthesises a
+convex hull from render geometry for *leaf assignment* only and says nothing
+about runtime solidity, so the rule was consistent with Source's
+`$collisionmodel` requirement and with what the maps look like, and still
+asserted rather than read. Shipping 380 maps' worth of collision change on that
+would have been a guess with a good story attached. The game itself was the
+cheaper oracle and it agreed.
+
+Note what this does and does not settle. It confirms **the rule** on the map
+with the most to say about it — garden is 383 of 420 — which is what licenses
+the default. It does not confirm the count on any other map; those rest on the
+engine's load-time print agreeing with an offline census that reaches the same
+number by a different route.
+
+### Still not verified
+
+Whether surf_garden's stage-3 lane is still bounded once `s3hedge2` stops
+colliding. If no clip brush replaces it, the barrier that started this whole
+line of work — Patch 257's invisible wall — becomes a hole instead. That is a
+finding about the map's clips rather than a reason to revert, but it is
+unmeasured and it is on the route the player actually takes.
+
+### Files
+
+- `engine/gl/gl_alias.c` — the pointer-keyed buffer cache, bind by offset, and
+  the clear-before-bind that closes the slice-pointer leak.
+- `engine/client/r_surf.c` — flush from `Surf_DeInit`, which covers both
+  `vid_restart` and every map load.
+- `plugins/hl2/mod_phy.c` — a note saying why the change is deliberately NOT
+  here, since this is where you would look for it.
+- `plugins/hl2/mod_vbsp.c` — `VBSP_ModelHasPhy` and the leaf skip,
+  `hl2_propcollision_nophy`, `staticprop_s::nocollide`, the `prop_census`
+  solidity lines and the raw `m_Solid` report.
+- `ftesurf/cfg/testrun/` — `p262a` (the measurement that did not work and why),
+  `p262b` (interleaved, the one that did), `p262c` (collision across five maps),
+  `p262d` (the restore switch).
+
+## Patch 263 — `WindowImposter`, the shader Source uses to fake a second skybox, was never implemented, and a class that is not implemented is drawn as the notexture checkerboard  *(APPLIED, plugin — `build.ps1 -Engine`)*
+
+**Reported as:** *"surf_monolith b4, placed a save there to `!b 4`, missing sky texture."*
+
+Patch 261 closed the other surf_monolith artefact and recorded, correctly, that it
+did not close this one. This is that one.
+
+The lead that cracked it came from the reporter's friend, and it was exact: *"maps
+that use more than one skybox use a WindowImposter."*
+
+### What is actually there
+
+A vertical probe inside bonus 4 (`x=-13500, y=-5400`) finds a two-unit slab laid
+**four units under the real sky**:
+
+```
+z 14560   PIETU/MONOLITH/CONCRETEFLOOR001A   flags=0x800   the floor
+z 16296   SURF_MINIGOLF/GRID                 flags=0x410   the additive lattice
+z 16300   FAKESKIES/MPA45                    flags=0x410   bottom of the slab
+z 16302   FAKESKIES/MPA45                    flags=0x410   top of the slab
+z 16304   TOOLS/TOOLSSKYBOX                  flags=0x404   the real sky brush
+```
+
+```
+materials/fakeskies/mpa45.vmt
+"WindowImposter"
+{
+"$envmap" "fakeskies/mpa45"
+"$nofog" "1"
+}
+```
+
+111 faces of it, all worldspawn (`*0`) — no entity to toggle — and one of them
+runs the full height of the wall (z 12164..16300), which is why the whole shell
+was wrong and not just the ceiling.
+
+**The skybox was never broken.** All six `sky138a` faces are present in the map's
+own pak, 1024×1024 BGR888, each `$baseTexture` naming its own face, no HDR keys,
+header+thumbnail+mipchain arithmetic exact on all six, and every one decodes blue
+— B > G > R at all 64 sample cells of all six. It was *occluded*.
+
+### The chain, and why nothing said a word
+
+1. `VMT_ReadVMT` takes the first token of a VMT as its shader class.
+   `Shader_GenerateFromVMT` dispatches on it through an `if / else if` chain.
+   `WindowImposter` appeared **nowhere in the tree**, so it fell into the terminal
+   `else` — which was **silent**: no warning, no census entry, nothing.
+2. That arm emits `program vmt/unlit` + a diffusemap. The material has no
+   `$basetexture`, so the default-fill at the top of the function had already
+   back-filled `st->tex[0].name` with **the material's own path**. Patch 190's
+   `nobasetex` → `$whiteimage` escape was gated `!Q_strcasecmp(st->type,
+   "UnlitGeneric")` and did not apply.
+3. So it asked for `materials/fakeskies/mpa45.vtf` — which **exists**, and which
+   `img_vtf.c` loads as `mips->type = (vtf->flags & 0x4000) ? PTI_CUBE : PTI_2D`,
+   i.e. a **cubemap**.
+4. `vmt/unlit` declares `!!samps diffuse` and does `texture2D(s_diffuse, tex_c)`.
+   A cube texture is not a loaded 2D base, so `gl_backend.c` substituted:
+   `case T_GEN_DIFFUSE: … else t = missing_texture;`
+5. `missing_texture` is `R_InitTextures`' 16×16 checkerboard of palette index 0
+   and index 0xff, and `default_quakepal` ends `159,91,83` — **`#9F5B53`**, a
+   dusty salmon. Minified across a large face it averages to a flat plane.
+
+Every step behaved as designed. The report said "missing sky texture" and the
+engine was, quite literally, drawing the missing-texture texture.
+
+### Three diagnostic traps, recorded because each produced a confident wrong answer
+
+* **~~`shader_here` does not report the surface the trace hit.~~ WITHDRAWN by
+  Patch 264 — this entry was written without reproducing it, and it is wrong.**
+  It said `CL_TraceShaderUnderCrosshair` re-derives a coplanar *neighbour* via
+  `Mod_GetSurfaceNearPoint` and so named `sky/tools/toolsskybox` where the
+  crosshair was really on the imposter. Six probes across three columns of bonus 4
+  (`cfg/testrun/shaderhere01.cfg`) say otherwise: every one stopped at z=16296 on
+  `surf_minigolf/grid` and `shader_here` named exactly that, `solid_here` agreeing
+  on endpoint and contents, and the downward control naming the floor. The
+  arithmetic says the same — `Mod_GetSurfaceNearPoint` ranks by squared distance
+  from the endpoint, `BIH_Trace` places that endpoint `DIST_EPSILON` = 0.03125 in
+  front of the plane it stopped on, and 0.03 against 4.03 is a factor of 128; it
+  cannot prefer the far face in either scan order.
+  What was really wrong is that **the command names one surface and stops**, while
+  bonus 4's ceiling is four surfaces inside eight units. The original report
+  named the sky because the ray reached the sky — a true answer to the question
+  asked, and a useless one. Patch 264 prints all four instead. The lesson is the
+  entry itself: **a diagnostic trap recorded without reproducing it is just
+  another confident wrong answer, filed where the next person will trust it.**
+* **`haspass=` in that same output is `SHADER_HASREFLECTCUBE`**, not the pass
+  count. An argument was built on reading it as "zero passes".
+* **`texture "sky138a" did not resolve from any wad or replacement` is benign.**
+  It is `R_SetSky`'s first speculative probe for a single equirect image, before
+  it tries the cubemap and six-face paths. `sky_cape_hill`, `qfont` and
+  `gfx/backtile` print the same line at startup. It was chased as the lead.
+
+One reading that was right and got second-guessed anyway: `r_fastsky 1` changing
+nothing **does** exonerate the sky path, because `if (r_fastsky.value)` is the
+first statement of `R_DrawSkyChain`, above `forcedsky` and everything else.
+
+### Census — all 1310 maps, 171,076 VMTs
+
+| | |
+|---|---|
+| `WindowImposter` materials | **155**, on **59** maps (4.5%) |
+| …that carry `$envmap` | **155 (100%)** |
+| …that carry `$basetexture` | **0** |
+| …that use the literal `env_cubemap` | **0** |
+| …whose `$envmap` resolves inside the map's own pak | **155 (100%)** |
+
+surf_polytron 22, bhop_angst 13, surf_angst 11, surf_illusion 7, surf_agony 6,
+surf_muerto 6; surf_monolith exactly 1. Other keys in use: `$nofog` 150,
+`$color` 25, `$alpha` 22, `$ignorez` 18, `$nocull` 6 — so ~30% say something
+about tint or opacity, and a fix ignoring them would draw those wrong.
+
+The `$envmap` names are overwhelmingly self-describing — `fakeskies/`,
+`fakeskybox/`, `fakesky/`, `fake_skybox/`. In this library `WindowImposter` is
+essentially always "a fake skybox painted on a brush".
+
+**And the blind spot is much larger than this one class.** 790 materials name one
+of **39** unimplemented classes, across **209 maps — one in six**. `SpriteCard`
+(335 / 53 maps) is bigger than `WindowImposter`; then ShatteredGlass 58, Grass 30,
+Wireframe 28, ParticleSphere 26, Cable 23, Eyes 16, Refract_DX90 15, PBR 14.
+
+### The fix
+
+**A. The arm** — `Shader_GenerateFromVMT`, beside `Water`/`Refract`:
+
+```c
+	else if (!Q_strcasecmp(st->type, "WindowImposter"))
+	{
+		vmt_stat_imposter++;
+		if (hl2_imposter && !hl2_imposter->ival)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tsurfaceparm nodraw\n");
+		else
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"vmt/imposter%s\"\n", progargs);
+	}
+```
+
+No basetexture is emitted. The shared tail already emits `reflectcube` for any
+`$envmap`, and its exclusion of the literal `env_cubemap` is correct rather than a
+gap: `T_GEN_REFLECTCUBE` then falls back to `curbatch->envmap`, the per-surface
+baked cubemap. Both spellings reach the sampler with no extra code.
+
+**B. `glsl/vmt/imposter.glsl`** — the one line that *is* this shader:
+
+```glsl
+	cubedir = (m_model * vec4(v_position.xyz - e_eyepos, 0.0)).xyz;
+	...
+	vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA));
+	imposter_f.rgb *= vec3(COLOR);
+```
+
+The sample direction is the **view ray**, not `reflect(view, normal)`. That is the
+documented behaviour — the face's orientation is not taken into account — and it
+is the whole trick: reflecting off the normal would make the pane a mirror and
+smear one texel across a flat ceiling. `$alpha`/`$color` arrive through the
+generic `progargs` as value defines. `$ignorez`/`$nocull` need nothing here — the
+shared tail already emits `nodepth` and `cull disable`.
+
+**C. Patch 190's escape, generalised.** `if (*st->envmap && !Q_strcasecmp(st->type,
+"UnlitGeneric"))` → `if (*st->envmap)`. The class test was never protecting
+anything; it described the one class its author had in front of him. It cannot
+regress a material that works today: it fires only where there is no
+`$basetexture` at all, and `$whiteimage` beats a name that was never a texture.
+
+**D. The silent arm now speaks.** A `Con_DPrintf` naming the material and the
+unrecognised class, plus `vmt_stat_unknown` / `vmt_stat_unknown_name[]` and two
+census lines in `mod_vbsp.c`. This is the change that would have found the bug
+from the console. `st->type` is overwritten on the very next line, so the class is
+captured before it, not after.
+
+**Cvar `hl2_imposter`**, `CVAR_SHADERSYSTEM`, default 1, seeded in `default.cfg`.
+0 emits `surfaceparm nodraw` — deliberately *not* the old behaviour, because a
+checkerboard is not a fallback worth keeping, and an invisible imposter is also
+the one-cvar way to see what a slab is hiding.
+
+### Two build traps this hit, both now commented in the files that caused them
+
+* **`plugins/hl2/Makefile` carries a hand-maintained `VMTPROGSBASE` list.**
+  Dropping a new `.glsl` into `glsl/vmt/` is not enough — make said *"Nothing to
+  be done for 'all'"*, the plugin compiled clean against the stale header, and the
+  program was simply absent from the DLL. `build.ps1` already warns in prose that
+  this step fails silently; what it did not say is that the list is explicit.
+* **Essays in a `.glsl` must use `//`, never `/* */`.** `generatebuiltinsl` passes
+  `//` lines through as C comments and turns everything else into string literals,
+  so a quotation mark inside a block comment breaks the generated header (`stray
+  '\' in program`, `missing terminating " character`). Every other shader in that
+  directory uses `//` for exactly this reason.
+
+### Verification
+
+`cfg/testrun/imposter01..04.cfg`. The A/B is **across runs** — a plugin cannot be
+swapped mid-process — so the "before" half is the artefact set already on disk
+from the diagnosis pass, at byte-identical vantages.
+
+The generated material, which is the reading that does not depend on eyes:
+
+```
+fakeskies/mpa45
+	program "vmt/imposter#NOFOG"
+	reflectcube "materials/fakeskies/mpa45.vtf"
+
+fakeskies/mpa45  flags=0x40808 noLIGHTMAP  sort=5  passes=1  prog=vmt/imposter#NOFOG
+```
+
+`prog=` naming the program is the check that matters: a program that fails to
+compile is reported as `prog=<none>` and falls back silently, which also stops
+being a checkerboard. "The artefact is gone" proves nothing on its own.
+
+| check | before | after |
+|---|---|---|
+| bonus 4, yaw 178 | `mono04_b_bonus4.png` — salmon/black checkerboard | `imp01_b_bonus4.png` — a full fake skybox: sunset cloud, horizon, mountains, a lava-red sea |
+| bonus 4, looking up | `mono04_c_bonus4_up.png` — one checker square | `imp01_c_bonus4_up.png` — the cloud zenith |
+| spawn room | `mono04_a_spawn_yaw270.png` | unchanged (see below) |
+
+**It is the cubemap, not a flat fill.** Same point, three yaws: B (178) shows sea
+and mountains, D (358) shows sun glow and pyramids — 94% of pixels differ between
+them. A failed sampler gives the same colour at every angle.
+
+**The imposter is an OCCLUDER and the sky was always fine.** `hl2_imposter 0` +
+reload at the same vantage (`imp02_monolith_nodraw_up.png`) shows sky138a: blue,
+with white cloud and mountains. That is the same room the report called "missing
+sky texture".
+
+Generic, not per-map: surf_polytron 22 imposter materials, bhop_angst 6, both
+loading clean; bhop_angst's `hl2_unresolved 1 / visible 0` still matches what
+Patch 261 recorded, so the include path is undisturbed. Note 6, not the census's
+13 — the census counts VMT **files in the pak**, and only 6 are referenced by the
+map's texdata. Files shipped is not materials used.
+
+The new class diagnostic immediately earned itself: `surf_polytron: 1 material(s)
+name a shader class this build does not implement: Wireframe`, and the same on
+bhop_angst for `Aftershock`.
+
+### A 35% regression that was the measurement, not the patch
+
+Recorded because it nearly went in the other direction. The spawn-room shot
+differed from the pre-patch one by **37% of pixels** at a >12 threshold, against a
+within-run noise floor of **0.04%**. Geometry identical, amplitude ~1%, spread
+over the whole frame.
+
+A code argument said it could not be this patch — surf_monolith has one imposter
+material and it is at bonus 4; `nobasetex` has a single reader inside the
+UnlitGeneric arm, so part C is inert for every other class; part D only prints.
+That argument was right and is *not* why we know:
+
+| comparison | result |
+|---|---|
+| `hl2_imposter` 0 vs 1, **identical config** | **0.02%** — at the noise floor |
+| imp01 vs imp04, both `hl2_imposter 1`, differing only in that imp01 ran `r_showshader` first | **35.59%** |
+| pre-patch vs `hl2_imposter 0` / vs `hl2_imposter 1` | 4.03% / 4.03% — identical |
+
+**The `r_showshader` calls in the verification config caused it.** They force
+shader and texture loads, which moves mip residency, which shifts every edge in
+the frame slightly — the amplified difference image is every texture edge in the
+scene lit up, and nothing else. A config that dumps materials before it takes its
+screenshots cannot be used as the "after" half of a pixel A/B. `imposter03.cfg`
+and `imposter04.cfg` exist to be that pair: same commands, one cvar different.
+
+Hygiene: none of the four runs wrote to `data/runs` or `data/saves`, and
+`data/saves/surf_monolith/save004/state.txt` — the reporter's own bonus-4 save —
+is intact.
+
+### Counted, not fixed
+
+* **`R_SetSky`'s six-face acceptance loop is dead code.** It tests
+  `farbox_textures[i] != missing_texture`, but `Shader_ParseSkySides` substitutes
+  **`r_blackimage`** on failure, so the test can never fail and a sky whose faces
+  all failed is retained and drawn black. The naive fix makes it worse: clearing
+  `forcedsky` on a VBSP map falls through to the `sky/…` shader
+  `VBSP_GenerateMaterials` hard-codes, which has no sides and no passes and
+  therefore draws *nothing* — and with `r_clear` defaulting to 0 that is
+  previous-frame smear. Black beats smear. The same dead test is in
+  `Shader_DefaultSkybox`, and `Shader_ParseSkySides`' `qboolean` return is
+  discarded by its only live caller.
+* ~~**`shader_here` naming the wrong coplanar surface**~~ — **DONE and WITHDRAWN
+  in Patch 264.** It never named the wrong surface; see the corrected trap entry
+  above. Patch 264 fixes the real gap, which is that it named only one.
+* **`surf_bikini_bottom`** ships `$envmap "fakeskies/bikini_bottom_night"` with
+  only `…night.hdr.vtf` present, so it wants an `X.vtf` → `X.hdr.vtf` fallback this
+  patch does not add. 1 map of the 59.
+* **`surf_autosave`'s `fakeskies/sky_purple.vtf`** is a flat 2D BC7 spheremap with
+  the ENVMAP flag unset — not a cubemap at all. 1 material of the 155.
+* **38 other unimplemented classes** (790 materials, 209 maps) — now counted and
+  named at load, still unimplemented. ~~`SpriteCard` is the obvious next one.~~
+  **Corrected by Patch 264: it is the obvious next one only by file count, and by
+  pixels it is worth nothing at all.** SpriteCard is on ZERO world faces in the
+  library, zero baked overlays, zero model skins and zero entity material keys;
+  all 334 are particle materials, 257 of them named only inside a `.pcf`, and
+  nothing in FTE reads `.pcf`. Measured twice by different routes. This line is
+  the exact trap it warns about — the largest number in a census quoted as the
+  biggest prize, when the census counted files and the prize is measured in
+  faces.
+* Two parser-robustness bugs the class census turned up: `bhop_go2australia` wraps
+  its class token in Unicode curly quotes and `surf_ori_l` in cp1252 0x93/0x94,
+  losing one material each; and 7 files in `kz_bhop_benchmark` /
+  `surf_sinister_evil` are binaries named `.vmt` being fed to the parser.
+
+**No collision, physics or entity behaviour changes.** Render-only: routes, times,
+replays and zone triggers are untouched, and the map-command allow-list
+(`say`/`echo`/`print` only) is not modified.
+
+## Patch 264 — the three items Patch 263 counted but did not fix: one was worth nothing, one was not the bug it was recorded as, and one was thirteen maps rather than the one it claimed  *(APPLIED, plugin + engine — `build.ps1 -Engine`)*
+
+Patch 263 ended with a "Counted, not fixed" list and three items were picked off
+it. Measuring them first changed two of the three, and the measurements are the
+substance of this patch.
+
+### A. `SpriteCard` — measured, and deliberately NOT implemented
+
+Patch 263 called it "the obvious next one": 335 materials across 53 maps, the
+largest unimplemented class in the library and bigger than the `WindowImposter`
+that patch had just fixed.
+
+**That is a count of `.vmt` files packed in pakfiles, and by pixels the class is
+worth nothing.** Measured twice, by two independently written parsers, and then
+attacked by a third that re-ran the parts it could:
+
+| | |
+|---|---|
+| SpriteCard on world faces | **0** of 23,735,419 faces in 1310 maps |
+| …on baked overlays (lump 45) | **0** of 9,702 |
+| …on model skins | **0** of 58,137 studiohdr texture-table entries |
+| …on entity material keys | **0** across all 1310 entity lumps |
+| …via `$bottommaterial` | **0** of 37 distinct values |
+| named in ANY texdata string table | **1** — `strafe/cig_smoke`, kz\_bhop\_yonkoma |
+| …and faces using it | **0** |
+| CONTROL, same walk: `WindowImposter` | **16,042 faces across 60 maps** |
+
+That last row is what makes the zero a measurement rather than a blind spot: the
+same code, the same lumps, the same resolution, one class on 16k faces and the
+other on none.
+
+**The reason is structural, not incidental.** `SpriteCard` is not a surface
+shader. It is the vertex-format contract between Source's CPU particle system and
+the GPU: `spritecard_vs20.fxc` reads sheet bounding UVs for two cross-faded
+frames, a blend factor, rotation, radius, yaw and a corner id, all written per
+particle from a `CSheet` built out of the VTF's sheet resource. No brush face
+carries any of that, and the frame layout lives in `VTF_RSRC_SHEET` — tag `0x10`,
+not an `SHT` fourCC — which `img_vtf.c` discards (it matches only `0x30`). 19 of
+the 56 base textures located do carry a real sheet with `numframes == 1`, so the
+`PTI_2D_ARRAY` path cannot see them either: a naive arm would paint a 64-frame
+sheet, or all 60 sequences of `vistasmokev1`, flat onto one quad.
+
+257 of the 334 are named only inside the maps' own `.pcf` files. Nothing in the
+engine or the plugin reads `.pcf`, and there are 4,105 `info_particle_system`
+entities across 52 of the 53 maps waiting on it. **That is a particle-system
+project, not a shader-class project**, and doing the shader class first buys
+exactly zero pixels.
+
+So the change here is the census comment in `mat_vmt.c` that recommended it —
+now carrying the pixel figures beside the file counts, and the sentence that the
+next person needs: *do not pick the largest number in this list without measuring
+what it is on first.* The corresponding claims in Patch 263 are struck.
+
+One correction inside the correction, from the adversarial pass: the first draft
+said SpriteCard is never even parsed. It is parsed exactly once, on
+kz\_bhop\_yonkoma, because **FTE registers a shader per TEXINFO, not per face** —
+`VBSP_GenerateMaterials` loops `mod->numtextures`, built from the texinfo lump.
+"1 material, 1 map, 0 pixels" is the honest headline and it supports the same
+conclusion without a false claim under it.
+
+### B. `shader_here` — the recorded bug does not exist; the real one is smaller
+
+Patch 263 recorded that `shader_here` named a coplanar *neighbour* of the face
+the trace hit, and reserved a patch for it. **That entry was written without
+reproducing it and it is wrong.** Six probes across three columns of bonus 4
+(`cfg/testrun/shaderhere01.cfg`, run before a line changed) all stopped at
+z=16296 on `surf_minigolf/grid` and named exactly that; `solid_here` agreed on
+endpoint and contents; the downward control named the floor. The arithmetic
+agrees: `Mod_GetSurfaceNearPoint` ranks by squared distance and `BIH_Trace` puts
+the endpoint `DIST_EPSILON` = 0.03125 in front of the plane it stopped on, so
+0.03 against 4.03 cannot go the wrong way.
+
+What is actually wrong is that **it names one surface**, and bonus 4's ceiling is
+four surfaces inside eight units:
+
+```
+z 16296  surf_minigolf/grid    the additive lattice you look through
+z 16300  fakeskies/mpa45       the imposter slab, bottom
+z 16302  fakeskies/mpa45       the imposter slab, top
+z 16304  tools/toolsskybox     the real sky brush
+```
+
+The original report named the sky because the ray reached the sky. True answer,
+useless answer, and no instrument in the tree could say "there is something else
+here". So: **print every face at the hit point**, with its signed offset off the
+hit plane, whether it faces the camera, whether its plane matches the one the
+trace stopped on, and which submodel owns it.
+
+```
+[shaderhere] tag=A texture=surf_minigolf/grid ... at=-11130 -5511 16296
+[shaderhere]   hitplane=0.000 0.000 -1.000 d=-16296.00 side=surf_minigolf/g nearpoint=surf_minigolf/grid
+[shaderhere]   cand0 surf=18382 tex=surf_minigolf/grid    sub=world off=-0.031 edge=0.00 back match=yes  <-- REPORTED
+[shaderhere]   cand1 surf=18379 tex=fakeskies/mpa45       sub=world off=-4.031 edge=0.00 back match=yes
+[shaderhere]   cand2 surf=18380 tex=fakeskies/mpa45       sub=world off=-6.031 edge=0.00 back match=yes
+[shaderhere]   cand3 surf=18378 tex=sky/tools/toolsskybox sub=world off=-8.031 edge=0.00 back match=yes
+```
+
+That is Patch 263's entire "What is actually there" section — a day of offline
+BSP probing — in four lines of console, and `off=-0.031` is `DIST_EPSILON`
+printing itself.
+
+**The pick is NOT changed and `Mod_GetSurfaceNearPoint` is NOT touched.** It is a
+published contract: QC builtin #438 `getsurfacenearpoint` returns the index it
+chooses (`pr_bgcmd.c`). `texture=` reports exactly what it reported before, on
+every vantage tested. This is additive output and nothing else.
+
+Three details that are load-bearing:
+
+* **The walk is `0..numsurfaces`, not the model's own window.** A brush entity's
+  faces live in the world's `surfaces` allocation and only
+  `firstmodelsurface`/`nummodelsurfaces` is narrowed, so a `func_brush` face is
+  listed and labelled with its submodel even where the ray could not stop on it.
+  That is the blind spot `CL_LightHere_f`'s own comment already recorded from the
+  other side, and the concurrent session has a live case of it: on surf\_boreas
+  the ray passes through a drawn `func_dustmotes` and reports world geometry 587
+  units behind it. Submodel faces are in model space and no entity transform is
+  applied — fine for Source brush entities authored at origin `0 0 0`, wrong for
+  a mover, and named in the output rather than silent.
+* **The depth slab and the in-plane tolerance are separate.** At a single 8 units
+  the listing printed three candidates and cut `tools/toolsskybox` at
+  `off=-8.031` — the last layer of a four-layer shell, missed by a thirty-second
+  of a unit. Depth is now 16; the in-plane tolerance stays at 2, because widening
+  *that* one does not find more layers, it finds the neighbouring floor tiles of
+  the face you are already on.
+* **`prv->surfaces[].c.name` was the literal string `"FIXME"`** for every texinfo
+  on every Source map (`VBSP_LoadSurfaces` writes it and nothing revisits it), so
+  `trace->surface->name` — the one identity a trace carries that is *not*
+  re-derived from the endpoint — has never been usable. `VBSP_LoadTexInfo` now
+  fills it. Index `i` is 1:1 because both loops take `count` from
+  `VLUMP_TEXINFO` through the same `hltexinfo_t` and `VBSP_LoadSurfaces` runs
+  first. `c.value` is deliberately left at 0: the Q2/Q3/CoD loaders keep CONTENTS
+  there.
+
+### C. `X.vtf` → `X.hdr.vtf`, and it is 13 maps, not one
+
+Patch 263 filed this as a surf\_bikini\_bottom quirk. Censused: **85 `$envmap`
+references, 3 distinct textures, 13 maps** — `cubemaps/blur_whitenebula` (83
+refs, 11 maps), `fakeskies/bikini_bottom_night`, and one baked ocean cube in
+kz\_bhop\_badg3s. Zero via `$basetexture` or any other texture-valued key, which
+is why the probe is on the envmap emission alone.
+
+The shape is an authoring omission, not a format problem. Source's convention is
+that the author writes the suffix into the value — `$envmap
+"cubemaps/blur_nebula.hdr"` — which already resolves, because the emission
+appends `.vtf` to whatever the value says. **surf\_ab spells it that way 82 times;
+surf\_agony names the same file 45 times with the `.hdr` left off and gets
+nothing.**
+
+**The obvious fix site does not work.** Adding `hdr.vtf` to the engine's image
+extension list would fix 0 of 85: `$envmap` becomes `reflectcube`, which carries
+`IF_TEXTYPE_CUBE` and lands on the `PTI_CUBE` branch of
+`Image_LoadHiResTextureWorker`, and that branch never reads `tex_extensions[]` —
+it uses a hardcoded `cubeexts[] = {"", ".ktx", ".dds"}`. It would also have been
+silently broken: `tex_extensions[].name` is `char[6]`, so `".hdr.vtf"` truncates
+to `".hdr."` with no warning. So the probe lives in the plugin.
+
+**A fallback, never an override**, and that distinction is the whole risk: 13,291
+baked cubemaps ship BOTH `cX_Y_Z.vtf` and `cX_Y_Z.hdr.vtf`, 56,132 references
+between them, and every one must keep taking the tone-mapped LDR bake. The probe
+runs only when the plain `.vtf` is absent, and when both are absent it emits the
+string it always emitted, so a miss still reads the same in the log.
+
+### Verification
+
+| check | result |
+|---|---|
+| the listing prints the whole shell | 4 candidates, `grid` / `mpa45` / `mpa45` / `sky/tools/toolsskybox` at `-0.031 / -4.031 / -6.031 / -8.031`, reproducing Patch 263's probe table |
+| `texture=` unregressed | identical to the pre-patch run at every vantage |
+| control, unambiguous floor | exactly **one** candidate at the 16-unit slab — the wider window buys no false neighbours |
+| `side=` cross-check agrees | `side=surf_minigolf/g` is a clean prefix of `nearpoint=surf_minigolf/grid` |
+| `.hdr.vtf` fires | surf\_agony 102 generations, surf\_bikini\_bottom 1 |
+| **and does not override** | **surf\_era: no census line at all** |
+
+### Two mistakes of my own, both the same shape
+
+* **The `side=` name was not lowercased.** `mod_vbsp.c` passes the texture name
+  through `Q_strlwr` four lines below the fill, so the first build printed
+  `side=SURF_MINIGOLF/G nearpoint=surf_minigolf/grid` — two spellings of one
+  surface, disagreeing on every Source material with a capital in it. Since the
+  stated point is that a disagreement is the finding, that turns the signal into
+  noise. It was in my own verification log and I read past it; the concurrent
+  session caught it. **A cross-check that reports a difference where there is
+  none manufactures exactly the false lead it exists to kill.**
+* **The census line said "material(s)".** surf\_agony reports 102 against an
+  offline census of 45, because the counter counts *generations* and a material
+  is regenerated for every model skin family naming it. Neither number is wrong;
+  they count different things. The line now says "generation(s)" — because
+  "material(s)" would have quietly invited the same packed-versus-drawn
+  conflation this patch exists to correct.
+
+### Harness, not code: `hit=nothing`
+
+Four probes returned `hit=nothing` at vantages that had hit cleanly twenty
+minutes earlier, and the identical config on the *same* binaries then hit every
+one. `hit=nothing` is `trace->fraction >= 1`, and the trace starts at
+`r_refdef.vieworg` — a RENDER value, so a `setpos` that has not been through a
+drawn frame traces from the previous position. The tell is a downward control
+missing a floor 64 units below: geometry cannot do that, a stale origin can.
+`waitms 1200` is not enough with a second engine competing for the GPU; 2500 is.
+
+It was blamed on a build regression twice first — once on my own `mod_vbsp.c`
+edit, once on a supposed uncompiled change — and a run died mid-`VBSP_LoadTexInfo`
+with exit code 0 and no dump, which is exactly what a heap overrun in that edit
+would look like. It was a second engine instance in the same gamedir. **Check the
+index bound, then list the gamedir by mtime, before debugging your own newest
+edit.**
+
+### Counted, not fixed
+
+* **38 unimplemented VMT classes remain.** The ones that are actually *reached*
+  are the ones worth ranking now — `ParticleSphere` is named 1,985 times by
+  entity keys — and file counts are no longer an acceptable proxy for any of them.
+* **`Mod_GetSurfaceNearPoint` has two real bugs on paths VBSP does not take**:
+  `pr_bgcmd.c` returns 0 for a mesh-less surface, which pins `bestdist` to 0 so
+  that surface wins every subsequent query; and the `fg_quake`/`fg_quake2` branch
+  does `VectorMA(point, dist, ...)`, moving the point away from the plane instead
+  of onto it (should be `-dist`). Both need their own patch and their own testing.
+* **`$envmap` HDR brightness is unverified.** RGBA16161616F cubemaps hold linear
+  values above 1.0 and this path is not tone-mapped; the 13 maps may read bright.
+  Nothing was rendered to check, and the argument that it is fine is by analogy to
+  the maps already doing it, not by observation.
+* **`Image_LoadCubemapTextureData` does read `tex_extensions[]`** on the same
+  PTI_CUBE branch, appending a face suffix. It does not change the conclusion
+  above, but the negative was originally asserted at the entry point rather than
+  grepped through the callee.
+
+**No collision, physics or entity behaviour changes.** Render- and
+diagnostic-only: routes, times, replays and zone triggers are untouched, and the
+map-command allow-list (`say`/`echo`/`print` only) is not modified.
+
+
+## Patch 265 — the sky-depth site Patch 140 missed, and a trigger-face rule that is right but is not the bug it was built for  *(APPLIED, engine + plugin — `build.ps1 -Engine`)*
+
+**Reported as:** three surf_boreas observations in one message. This patch closes
+the third, improves something adjacent to the second, and leaves the second's
+actual cause diagnosed but unfixed. That split is the point of this record.
+
+### Part 1 — the 3D skybox showing through solid rock  *(FIXED, verified)*
+
+> *"the save-lock before that is staring at a point in the map where turning on
+> the 3d skybox presents some sort of (skybox?) onto the stage making me see
+> though the stage itself, only there when I turn on 3d skybox"*
+
+`R_DrawSkyChain`'s `forcedsky` branch had the one `RDF_SKIPSKY` test Patch 140
+did not convert:
+
+```c
+if (r_refdef.flags & RDF_SKIPSKY)
+{
+    if (r_worldentity.model->fromgame != fg_quake3)   /* <- pre-140 literal */
+        GL_SkyForceDepth(batch);
+    return true;
+}
+```
+
+Patch 140 replaced that literal with `SKYMUSTBEMASKED` everywhere else in the
+file — the `else` branch's SKIPSKY return, the cubemap-sky return, and the one
+at the bottom of the function — because Source draws sky as a distant
+environment and must not write depth at the sky brush. This site kept the old
+test, so **whether a Source map masked its sky came down to whether worldspawn
+happened to name a `skyname`**: with one, `forcedsky` is set and you take this
+branch and mask; without one, you take the `else` and do not.
+
+surf_boreas declares `skyname "tendies_sky"`. At `10229.4 5262.8 14725.9`
+(p17.2 y139.4) a sky brush at y=6144 stands ~880 units in front of the mountain,
+so the mask wrote depth at the brush, the mountain behind it was depth-rejected,
+and the skyroom's cloud planes were painted over solid rock.
+
+**Why the skyroom recursion is not affected** — the case the note inside
+`GL_SkyForceDepth` warns about. `R_DrawSkyroom` clears `RDF_SKIPSKY` before
+recursing, so this branch cannot be entered from inside a skyroom at all. That
+was checked in the source before the edit, not assumed.
+
+#### Measured (1920x1200, HUD masked, `maxdelta 8`)
+
+Same-state noise floor at both vantages: **0 px**. Every number below is signal.
+
+| comparison | result |
+|---|---|
+| new default vs **old build** `r_sky_forcedepth 0` | **1,008 px (0.07%)** — the new default reproduces it |
+| new `r_sky_forcedepth 2` vs **old build** stock | **2,692 px (0.19%)** — 2 restores the old behaviour |
+| new default vs new `r_sky_forcedepth 2` | 136,513 px (9.74%) — the artefact, and it toggles |
+| new default vs old build stock | 134,744 px (9.61%) — the artefact, removed |
+| old stock vs skyroom off | 423,917 px (30.2%) |
+| new default vs skyroom off | 290,302 px (20.7%) — the 3D skybox is **kept** |
+
+The middle two rows are the ones that matter: `r_sky_forcedepth 2` reproduces
+the old picture to 0.19% and `0` reproduced the new one to 0.07%, so the branch
+this patch edits is demonstrably the one doing the work, in both directions.
+
+### Part 2 — SURF_TRIGGER faces are now hidden  *(APPLIED, but see Part 3)*
+
+VBSP flags a trigger brush's faces `SURF_TRIGGER` (0x40) and **not**
+`SURF_NODRAW` (0x80) — a TOOLS/TOOLSTRIGGER face carries 0x0440, trigger plus
+nolight. `hl2_hidetools` read only `TI_NODRAW`, so it never fired on one.
+`TIHL2_TRIGGER` now maps to `TI_NODRAW` alongside `TIHL2_NODRAW`.
+
+**This is a bigger change than it looks, and the number is stated rather than
+buried.** Censused over all 1310 maps: `SURF_TRIGGER` is on **1,914,568 of
+23,735,419 faces (8.1%) in 1194 maps**, and **not one of them also carries
+`SURF_NODRAW`** — so every one was drawn before and is not drawn now.
+
+On surf_boreas specifically: **0 faces carry `SURF_NODRAW` and 480 carry
+`SURF_TRIGGER`**, and the loader now reports `VBSP: 480 of 3884 faces hidden`.
+That zero is worth keeping: VBSP strips nodraw faces at compile time, so
+`TI_NODRAW` was **dead code on Source maps** and the hidetools path had never
+hidden a single face on one. This is the first thing that makes it do anything.
+
+Why on the face flag rather than a classname list: the list in
+`sv_entities.qc` already contained `func_dustmotes` and still did not fix
+anything, because that list makes things non-**solid**, and three of its members
+(`func_illusionary`, `func_detail_illusionary`, `func_static`) are decorative
+geometry that must stay **visible**. Non-solid is a class property; not-drawn is
+a material property. A comment in that file asserting the list also made things
+invisible was false and has been corrected in place — it is why this went
+unnoticed for four builds.
+
+54 distinct materials carry the flag. 53 are tools materials. **The 54th is a
+real exception**: `overlays/no_entry` (30 faces on bhop_recharge, rj_doom,
+surf_nameless, what_is_this) is TF2's respawn-room visualiser —
+`%compiletrigger 1` *and* a drawn UnlitGeneric with `$translucent`, `$outline`
+and a PlayerProximity fade. In TF2 it is visible on purpose, drawn by
+`func_respawnroomvisualizer`, a class that opts back into rendering. We have no
+such opt-in, so those 30 faces go dark. Accepted deliberately: a team barrier
+with no team to block, 30 faces against 1.9 million. The discriminator if it
+ever needs reverting is the entity class, not the flag.
+
+Still gated on `hl2_hidetools`, so `hl2_hidetools 0` draws them all again —
+which is Source's own `showtriggers_toggle`.
+
+### Part 3 — what Part 2 does NOT fix, and the misdiagnosis behind it
+
+> *"The last save-lock on the map is a noclip looking at a ramp, it's a brush
+> model so I can't f5 it to see what it is, but it doesn't have transparency or
+> translucency applied to any of the faces/textures like it should have. why?"*
+
+**Part 2 was built for this report and does not fix it.** Measured: at that
+vantage the patched build is **0 px** different from the pre-patch build. The
+480 faces it hides were already contributing nothing.
+
+The identification was wrong. It had been called `*29 func_dustmotes`, a
+6144 x 28160 x 4608 TOOLSTRIGGER box, on the strength of `r_drawentities 0`
+removing the object and the camera being inside that box. Both facts are true
+and neither one implicates it: the camera is inside `*29` because `*29` is
+enormous, and `r_drawentities 0` removes **every** non-world entity, static
+props included. Two true observations, one wrong conclusion, and no test that
+could separate them was run before writing the code.
+
+**What it actually is.** The object is a **surf ramp prop**, which is what the
+report said in its first eight words. `models/project_tendies/ramps/ramp_*.mdl`
+— nineteen on the map — are built from `ramp_wood01` (the dark beams) and
+`ice_transparent` (the panes), and **every one of the five ramp models binds
+`ice_transparent`**:
+
+```
+ramp_c2.mdl   v48  textures=['ice_transparent', 'ramp_wood01', 'ice01']
+ramp_c1.mdl   v48  textures=['ramp_wood01', 'ice01', 'ice_transparent']
+...
+```
+
+`project_tendies/models/ice_transparent.vmt` is `vertexlitgeneric` with
+`"$translucent" "1"`. The same material name also exists as a world/patch
+material, and **the two registrations do not agree**:
+
+```
+[vmt]    maps/surf_boreas/project_tendies/ice_transparent_13140_-9344_13440:
+             translucent 1  blendfunc src_alpha one_minus_src_alpha
+[shader] maps/surf_boreas/project_tendies/ice_transparent_13140_-9344_13440
+             sort 11  prog 1  passes 1  bits0 0x10065      <- translucent, correct
+
+[vmt]    project_tendies/models/ice_transparent.vmt:
+             translucent 1  blendfunc src_alpha one_minus_src_alpha
+[shader] project_tendies/models/ice_transparent.vmt
+             sort  5  prog 0  passes 6  bits0 0x10000      <- OPAQUE, no blend bits
+```
+
+The VMT is parsed correctly in both cases — the `[vmt]` lines are identical and
+both say `translucent 1`. The **model** registration then produces a 6-pass,
+program-less, `sort 5` shader with the blend bits gone. The translucency is
+computed and discarded somewhere between `Shader_GenerateFromVMT` and the
+shader that gets bound for an alias skin. Model skin shadernames are built in
+`Mod_LoadHL2Model` as texpath + texture + `".vmt"`, which is why the model
+registration carries a literal `.vmt` in its shader name and the world one does
+not; whether that naming is what diverts it is **not yet established**.
+
+**Not fixed here.** It is a different subsystem from either half of this patch,
+it wants its own before/after, and guessing again at the same report would be
+the same mistake twice. Reserved as the next patch.
+
+### Files
+
+- `engine/gl/gl_warp.c` — `SKYMUSTBEMASKED` at the `forcedsky` SKIPSKY return.
+- `plugins/hl2/mod_vbsp.c` — `TIHL2_TRIGGER` joins `TIHL2_NODRAW`.
+- `C:\FTESurf\src\server\sv_entities.qc` — comment only, no behaviour change:
+  corrects the false claim that the non-solid list also made things invisible.
+
+### Verification artefacts
+
+`cfg/testrun/v265a.cfg` (fix 1 A/B/C plus the save011 vantage) and
+`cfg/testrun/v265b.cfg` (`hl2_hidetools 0`, its own process because the cvar is
+`CVAR_MAPLATCH` and `map <same map>` twice does not reload). Logs
+`logs/v265a.log`, `logs/v265b.log`; screenshots `screenshots/v265{a,b}_*`.
+
+### Two corrections made during review, both recorded because both were the same shape
+
+- The first draft of this patch's own comment claimed the skyroom's sky stays
+  masked "for any game" via `RDF_DISABLEPARTICLES`. That clause is a
+  conjunction, `(RDF_DISABLEPARTICLES && r_ignoreentpvs.ival)`; the claim is
+  true only at the shipped `r_ignoreentpvs` default, and `r_ignoreentpvs 0` is
+  precisely what `v_skyroom`'s cvar description tells a skyroom user to set.
+  Pre-existing, not caused here, now recorded in the comment instead of asserted.
+- The census figure in the plugin comment was first written as "47,533 faces,
+  and every material carrying the flag is a tools material". Both halves were
+  wrong — the real count is 1,914,568 and there is one non-tools exception —
+  and the figure had been estimated from a truncated terminal listing rather
+  than read. Corrected before the number could be quoted anywhere else.
+
+## Patch 266 — two things a shader loses silently when it ends up without a GLSL program, and the cvar that was supposed to detect it was testing the wrong bit  *(CODE APPLIED AND COMPILING, NOT YET VERIFIED IN-GAME — engine only, `build.ps1 -Engine`)*
+
+**Reported as** two observations. The clouds on surf_boreas take no distance fog
+while everything around them does; and the ramp's ice panes have no transparency
+"applied to any of the faces/textures like it should have". The second is the
+report Patch 265 built its `SURF_TRIGGER` change for and **did not fix** — that
+change was correct on its own terms and measured 0 px at the vantage.
+
+Both are the same shape — a shader that ends up without a top-level GLSL program
+loses something, quietly — but they are two unrelated one-line defects.
+
+### Four premises that were wrong, corrected before any code was written
+
+Each of these would have produced a confident wrong fix, and two of them were
+mine from the previous session:
+
+- **`usage=lightmapped` with no lightmap stage is not a contradiction.** `usage=`
+  is the `usageflags` argument passed at *registration* (`SUF_LIGHTMAP` for every
+  VBSP world texture), not anything derived from the passes.
+- **`tag=noise` is not an engine token.** It is free text the operator typed:
+  `shader_here noise`. There is no enum behind it.
+- **The clouds are not a 3D-skybox problem.** They *are* skybox geometry — two
+  displacements at z −8000/−7232 inside the `toolsskybox2d` room, and
+  surf_boreas's `sky_camera` does carry its own fog. But the
+  WorldVertexTransition terrain **in the same room fogs correctly**. Region is
+  not the discriminator; material type is. The VMT does not set `$nofog` either
+  — the author copied Valve's CS:S `clouds.vmt` and deleted its `"$nofog" 1`.
+- **`ice_transparent` is two different files.** `project_tendies/ice_transparent.vmt`
+  is `lightmappedgeneric`, `project_tendies/models/ice_transparent.vmt` is
+  `vertexlitgeneric`; identical in every other key. The previous session's
+  suspicion of the trailing `".vmt"` in `Mod_LoadHL2Model`'s skin names was
+  wrong. **The Valve shader class is the discriminator.**
+
+### Part A — `progblendfunc` was writing the blend onto the wrong pass
+
+`mat_vmt.c`'s VertexlitGeneric arm emits its `program` **inside a pass**; the
+LightmappedGeneric arm emits a **top-level** one. Everything follows from that:
+
+1. A pass-level `program` leaves `shader->prog` NULL — the reported `prog 0`.
+2. `Shader_FixupProgPasses` inflates `passes[0].numMergedPasses` to
+   `numsamplers` plus one per declared default texture — **6** for
+   `vmt/vertexlit`, the reported pass count.
+3. `Shader_ProgBlendFunc` aims deliberately at `passes[0]`, and
+   `Shaderpass_BlendFunc` immediately moved the write away:
+
+   ```c
+   if (pass->numMergedPasses>1)
+       pass = ps->s->passes+ps->s->numpasses-1;	//nextbundle stuff.
+   ```
+
+   so the blend landed on `passes[5]`.
+4. Pass 0 kept no blend bits; the blend/sort scan in `Shader_Finish` reads only
+   **leader** passes, found none, assigned no sort, and fell through to the
+   default `SHADER_SORT_OPAQUE` with depthwrite force-enabled.
+
+Both registrations reconstruct exactly, in both directions:
+
+```
+[shader] maps/surf_boreas/.../ice_transparent_13140_-9344_13440  sort 11 prog 1 passes 1 bits0 0x10065
+[shader] project_tendies/models/ice_transparent.vmt              sort  5 prog 0 passes 6 bits0 0x10000
+```
+
+`0x10065` is `DEPTHWRITE|DSTBLEND_ONE_MINUS_SRC_ALPHA|SRCBLEND_SRC_ALPHA`;
+`0x10000` is `DEPTHWRITE` alone.
+
+**Nothing failed to load.** The frame that had to be discarded first was
+"the program didn't attach" — the `prog 0 / passes 6` shape is identical to the
+silent program-load failure Patch 236 measured, and that resemblance is a trap.
+Here the program loads fine and the blend simply lands one pass away.
+
+**The fix** is a `parsestate_t` flag set only across `Shader_ProgBlendFunc`'s
+delegation, suppressing the redirect for `progblendfunc` alone. The redirect is
+correct for an ordinary `blendfunc` written after several `map` lines; it is
+wrong for a directive whose whole documented job — its own keyword-table entry —
+is "overrides the first subpasses' blendmode".
+
+Third patch on this one directive: 195 stopped it being emitted twice, 219 fixed
+its guard, this fixes where it lands.
+
+**Scope:** 330 of 4,198 VertexlitGeneric materials carry `$translucent` or
+`$additive` — **7.9%, in 34 of 146 sampled maps (23%)** — so roughly 3,000
+materials across ~300 maps, every one of them drawing opaque today. Heaviest:
+surf_summer 65, surf_arcade 54, surf_sanguine 42, surf_surreal 29, surf_demise 24.
+
+### Part B — nothing without a GLSL program has ever taken distance fog
+
+`PERMUTATION_FOG` is set in exactly one place, inside `BE_RenderMeshProgram`, and
+`DrawMeshes` only calls that for the whole shader when `curshader->prog` is
+non-NULL. So a program-less shader cannot reach it *by construction*.
+`Shader_Programify` would give it a program but is never called (its site needs
+`r_forceprogramify`, default 0, or the DarkPlaces water/reflect/refract parse
+flag), and would bail on this stage shape anyway. The only fallback is the
+whole-scene `BEM_FOG` pass, which switches itself off whenever GLSL is available
+and draws with `DEPTHFUNC_EQUAL` so it could not tint a blend-sorted surface in
+any case. Its own comment is the specification for this patch:
+
+> *FIXME: should really be doing this on a per-shader basis, for custom shaders
+> that don't use glsl.*
+
+`project_tendies/cloods` is `UnlitGeneric`, and UnlitGeneric is the one arm of
+the translator that emits a real **pass** instead of a program.
+
+**Which of the two program-less paths is live was checked, not assumed** — and
+this is the part that would have wasted a build. There are two:
+
+| `gl_config_nofixedfunc` | path | fog today |
+|---|---|---|
+| true (core profile) | the `fixedemu` program | none — `fixedemu.glsl` declares no `FOG` |
+| **false (this machine)** | **`DrawPass`** | **none** |
+
+Every FTESurf log carries `Driver reports invalid profile, assuming
+compatibility support`, which is the branch that sets `nofixedfunc = false`. So
+`fixedemu` is **not used here**, and the obvious-looking fix of adding
+`!!permu FOG` to `fixedemu.glsl` would have changed nothing at all on this
+machine while looking entirely reasonable in the diff.
+
+**The fix** enables GL's own fixed-function fog around the `DrawPass` loop for
+shaders with no program, behind `r_fog_progless` (default 1; `0` restores the
+old behaviour exactly).
+
+Fixed-function fog rather than an extra fog pass **because of alpha**: a second
+pass over the same geometry, which is how the `mfog` volume path does it, has no
+access to the surface's own alpha, so on a translucent surface like these clouds
+it would paint fog across the fully transparent texels and put a fog-coloured
+rectangle in the sky. GL's fog is applied per fragment after texturing and
+touches RGB only — which is exactly what `sys/fog.h`'s `fog3()` does for the
+program shaders. It also cannot affect a shader that *has* a program, so it
+cannot double-fog anything that already works.
+
+**What this deliberately does not cover, with its number.** `alpha` is not a
+scale on the fog, it is a **cap** — the gamecode reparametrises Source's
+`min(fogmaxdensity, ramp)` into FTE's alpha plus a shortened end distance (see
+`cl_fog.qc`). GL's fixed-function fog always ramps to fully fogged and has no
+clamp, so a map with `fogmaxdensity < 1` is **declined and says so once** rather
+than being over-fogged past the cap. Measured: of 36 `env_fog_controller`s
+across a 146-map sample, **22 set fogmaxdensity below 1**. surf_boreas, where
+this was reported, is `fogmaxdensity 1` and is exact.
+
+Closing that remaining 61% means giving these shaders a real program — routing
+them through `fixedemu` with a FOG permutation would do it, and would cover the
+core-profile path this cannot reach either. Recorded as the follow-up rather
+than bolted on untested here.
+
+### Part C — `r_fog_permutation 0` has never disabled fog permutations
+
+```c
+if (!r_fog_permutation.ival)
+    nopermutation |= PERMUTATION_BIT_FOG;   /* the enum INDEX */
+if (!sh_config.max_gpu_bones)
+    nopermutation |= PERMUTATION_SKELETAL;  /* the MASK — the proof of intent */
+```
+
+`nopermutation` is a bitmask. `PERMUTATION_BIT_FOG` is the enum member, which
+with `SKELETALMODELS` defined sits at index 5, so `|= 5` set bits 0 and 2 —
+`PERMUTATION_BUMPMAP | PERMUTATION_UPPERLOWER` — and never once touched
+`PERMUTATION_FOG`, which is 32.
+
+So the cvar did not disable fog permutations. It stripped **normal mapping and
+upper/lower skins** from every program built while it was 0, silently, and
+`CVAR_SHADERSYSTEM` means that rebuild happens the moment you set it.
+
+This matters past the bug: `r_fog_permutation 0` is the control anyone reaches
+for to ask "is this surface unfogged because of the permutation path", and it
+has been answering a different question. It is why the clouds report's own
+"`r_fog_permutation 0` changed nothing" was not the evidence it appeared to be.
+The other session confirms none of their measurements used it.
+
+### Files
+
+- `engine/gl/gl_shader.c` — the `parsestate_t` flag and the redirect test
+  (Part A); the mask fix (Part C).
+- `engine/gl/gl_backend.c` — `BE_ProglessFogBegin`/`End` around the `DrawPass`
+  loop (Part B).
+- `engine/client/renderer.c` — `r_fog_progless`.
+
+`parsestate_t` lives in `gl_shader.c` rather than a header, so `-Engine` and not
+`-Full`. Engine-only: the hl2 plugin DLL does not change, which is why this did
+not collide with the other session's `mat_vmt.c` work.
+
+### Found, not taken
+
+- `plugins/hl2/glsl/vmt/refract.glsl` includes `sys/fog.h` but declares no
+  `!!permu FOG` and calls no fog function, so refract materials are unfogged
+  despite having a program. In the other session's file; they have declined it
+  too, so it is recorded here to keep it visible in one place.
+- `refl = 1.0 - diffuse_f.a` in `lightmapped.glsl` fires on materials that never
+  asked for a cubemap (the other session's finding, also not taken).
+- `hl2_envmap 0` does not gate the batch envmap; the only real gate is
+  `r_reflectcube`. A second cvar in the same family as Part C that looks like a
+  control and is not.
+
+### Verification — NOT YET DONE
+
+Deploy is blocked: the user's own `ftesurf64.exe` (PID 19860, 18:22:17) holds
+the file. Code compiles clean, nothing is measured yet. Planned:
+
+1. Part A has a direct instrument and needs no pixels — the `[shader]` line must
+   move `project_tendies/models/ice_transparent.vmt` from
+   `sort 5 prog 0 passes 6 bits0 0x10000` to `sort 11 … bits0 0x10065`.
+2. Part A in the picture at save011, noise floor first, with the parse flag as
+   the falsifier.
+3. Part B at the cloods vantage, `r_fog_progless 1` vs `0`, **with a control**:
+   the WorldVertexTransition terrain in the same room already fogs, so it must
+   not change, and a program shader must be pixel-identical (no double-fog).
+4. Part C: `r_fog_permutation 0` must stop removing normal mapping.
+5. Regression on surf_summer and surf_demise, plus a map with no translucent
+   VertexlitGeneric material, which must be unchanged.
