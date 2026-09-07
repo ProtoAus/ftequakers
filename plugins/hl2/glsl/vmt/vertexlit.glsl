@@ -6,6 +6,7 @@
 !!permu SKELETAL
 !!permu FULLBRIGHT
 !!permu AMBIENTCUBE
+!!permu VC			// FTESurf Patch 259: VRAD's own per-vertex bake for THIS prop instance (sp_N.vhv), as a multiplier over `light`
 !!permu REFLECTCUBEMASK
 !!samps diffuse
 !!samps =BUMP normalmap
@@ -21,6 +22,32 @@
 !!cvardf r_skipDiffuse
 
 #include "sys/defs.h"
+
+//ftesurf (P187): $alpha as a compile-time constant.  e_colourident cannot carry
+//it -- that is the entity's alpha, one value per entity -- and these materials
+//emit a top-level `program` with no pass, so `alphagen const` has nowhere to
+//go.  Applied LAST, after any envmap block, because $basealphaenvmapmask reads
+//the texture's own alpha and not the material's opacity.
+#ifndef ALPHA
+#define ALPHA 1.0
+#endif
+
+
+//ftesurf (P189): the TextureScroll proxy, as a constant velocity in texture
+//units per second.  Same idiom as defaultwall.glsl's FLOWV.
+#ifndef SCROLL
+#define SCROLL 0.0,0.0
+#endif
+
+
+//ftesurf (P188): $color / $color2, the per-material tint.  Source multiplies the
+//albedo by it; e_colourident cannot carry it because that is the entity's
+//colormod, one value for a whole entity, and this is per-material.  Not clamped
+//-- values above 1 are authored deliberately.
+#ifndef COLOR
+#define COLOR 1.0,1.0,1.0
+#endif
+
 
 varying vec2 tex_c;
 varying vec3 norm;
@@ -62,7 +89,7 @@ varying vec4 light;
 	void main (void)
 	{
 		vec3 n, s, t, w;
-		tex_c = v_texcoord;
+		tex_c = v_texcoord + e_time * vec2(SCROLL);
 		gl_Position = skeletaltransform_wnst(w,n,s,t);
 		norm = n = normalize(n);
 		s = normalize(s);
@@ -81,6 +108,31 @@ varying vec4 light;
 		#else
 			light.rgb += max(0.0,dot(n,e_light_dir)) * e_light_mul;
 		#endif
+	#endif
+
+	//FTESurf Patch 259.  v_colour carries VRAD's OWN per-vertex answer for this
+	//exact prop instance, read out of the map's sp_N.vhv and normalised so its
+	//brightest vertex is exactly 1.0 -- the gain that normalisation removed was
+	//folded back into e_light_ambient, so this multiply restores the absolute
+	//value rather than darkening the model.
+	//
+	//Greyscale on purpose (see VBSP_LoadPropBakedLight): light.rgb already
+	//carries the prop's colour from the same bake's mean, so a per-channel
+	//multiplier here would tint it twice.  This carries only where the light
+	//falls -- which is the whole difference between a hedge and a green blob.
+	//
+	//Multiplied over the WHOLE of light, ambient and directional alike, the same
+	//way defaultskin.glsl:115 does it.  In Patch 259's mode the directional half
+	//is zero anyway: VRAD already integrated N.L into these numbers, so applying
+	//ours on top would shade the prop twice.
+	//
+	//And the comment is // rather than /* */ deliberately: generatebuiltinsl
+	//emits a line beginning /* raw and then QUOTES the lines after it, so a
+	//multi-line block comment produces an unterminated C comment in
+	//mat_vmt_progs.h and the plugin will not compile.  Every other comment in
+	//these files is either // or a /* */ that opens and closes on one line.
+	#ifdef VC
+		light.rgb *= v_colour.rgb;
 	#endif
 
 /* CUBEMAPS ONLY */
@@ -112,6 +164,7 @@ varying vec4 light;
 	void main (void)
 	{
 		vec4 diffuse_f = texture2D(s_diffuse, tex_c);
+		diffuse_f.rgb *= vec3(COLOR);
 
 #ifdef MASKLT
 		if (diffuse_f.a < float(MASK))
@@ -180,7 +233,12 @@ varying vec4 light;
 	#endif
 
 
-	#if 1
+		diffuse_f.a *= float(ALPHA);
+
+	//FTESurf Patch 255: was #if 1, so the fog branch was dead and EVERY Source
+	//prop drew unfogged. NOFOG was declared above and never used; animated,
+	//lightmapped and transition all spell this test the same way. See P255.
+	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
 	#else
 		gl_FragColor = fog4(diffuse_f);

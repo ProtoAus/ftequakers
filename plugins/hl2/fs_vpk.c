@@ -30,6 +30,22 @@ typedef struct vpk_s
 
 	qbyte *treedata;	//raw file list
 	size_t treesize;
+	/*
+	FTESurf Patch 181: where this _dir.vpk's OWN file data starts.
+
+	An entry whose archiveindex is 0x7fff is not in a numbered sibling at all --
+	its payload sits in the _dir.vpk, after the tree (or, when archivesize is 0,
+	entirely in its preload bytes inside the tree).  FSVPK_OpenVFS used to treat
+	0x7fff as an out-of-range fragment index and return NULL, so every such file
+	was findable and unreadable: FindFile reports FF_FOUND and the right length,
+	the open then fails, and the caller can only conclude the file is missing.
+
+	That is 18,657 of CS:GO's 133,676 pak01 entries -- 14% -- including small
+	materials like concrete/tunnel_concretewall_01b.vmt, which is how this was
+	found: surf_tensor2 reported it unresolved even with CS:GO mounted, while
+	`flocate` cheerfully printed "File is 433 bytes ... inside pak01_dir.vpk".
+	*/
+	size_t databaseofs;
 
 	struct vpk_s	**fragments;
 	size_t numfragments;
@@ -298,9 +314,22 @@ static vfsfile_t *QDECL FSVPK_OpenVFS(searchpathfuncs_t *handle, flocation_t *lo
 		return NULL; //urm, unable to write/append
 
 	frag = (f->file->archiveindex[0]<<0)|(f->file->archiveindex[1]<<8);
-	if (frag >= pack->numfragments || !pack->fragments[frag])
+	/*
+	FTESurf Patch 181: 0x7fff means "in this _dir.vpk", not "fragment 32767".
+
+	Valve uses that sentinel for entries whose payload was kept in the directory
+	file -- typically small ones stored wholly in their preload bytes, where
+	archivesize is 0 and there is nothing to seek to at all.  Treating it as a
+	fragment index made every one of them unreadable (14% of CS:GO's pak01), and
+	unreadable in the most confusing possible way, since FSVPK_FLocate above
+	still answers FF_FOUND with the correct length.  See vpk_t::databaseofs.
+	*/
+	if (frag == 0x7fff)
+		;	//pack stays as the dir file; startpos is offset from its data section below
+	else if (frag >= pack->numfragments || !pack->fragments[frag])
 		return NULL;
-	pack = pack->fragments[frag];
+	else
+		pack = pack->fragments[frag];
 
 	vfs = plugfuncs->Malloc(sizeof(vfsvpk_t));
 
@@ -317,6 +346,8 @@ static vfsfile_t *QDECL FSVPK_OpenVFS(searchpathfuncs_t *handle, flocation_t *lo
 	vfs->preloadsize = (f->file->preloadsize[0]<<0) | (f->file->preloadsize[1]<<8);
 
 	vfs->startpos = (f->file->archiveoffset[0]<<0)|(f->file->archiveoffset[1]<<8)|(f->file->archiveoffset[2]<<16)|(f->file->archiveoffset[3]<<24);
+	if (frag == 0x7fff)
+		vfs->startpos += pack->databaseofs;	//FTESurf Patch 181: relative to the dir's data section, which begins after the tree
 	vfs->length = loc->len;
 	vfs->currentpos = 0;
 
@@ -436,6 +467,7 @@ static searchpathfuncs_t *QDECL FSVPK_LoadArchive (vfsfile_t *file, searchpathfu
 	qbyte			*tree;
 	unsigned int	frag;
 	unsigned int tablesize;
+	size_t			treestart = 0;	//FTESurf Patch 181: where the tree begins, so the data section after it can be located
 
 	packhandle = file;
 	if (packhandle == NULL)
@@ -462,6 +494,7 @@ static searchpathfuncs_t *QDECL FSVPK_LoadArchive (vfsfile_t *file, searchpathfu
 		if (header.magic == 7630198) {
 			VFS_SEEK(packhandle, 0);
 			tablesize = 1313113;
+			treestart = 0;
 		} else {
 			// try to load as vtmb vpk
 			return FSVVPK_LoadArchive(file, parent, filename, desc, prefix);
@@ -469,9 +502,9 @@ static searchpathfuncs_t *QDECL FSVPK_LoadArchive (vfsfile_t *file, searchpathfu
 	} else {
 		i = LittleLong(header.version);
 		if (i == 2)
-			;//VFS_SEEK(packhandle, 7*sizeof(int));
+			treestart = 7*sizeof(int);	//already there -- the header read above consumed exactly this much
 		else if (i == 1)
-			VFS_SEEK(packhandle, 3*sizeof(int));
+			VFS_SEEK(packhandle, 3*sizeof(int)), treestart = 3*sizeof(int);
 		else
 		{
 			Con_Printf("vpk %s is version %x (unspported)\n", desc, i);
@@ -488,6 +521,7 @@ static searchpathfuncs_t *QDECL FSVPK_LoadArchive (vfsfile_t *file, searchpathfu
 	vpk = (vpk_t*)plugfuncs->Malloc (sizeof (*vpk) + sizeof(*vpk->files)*(numpackfiles-1));
 	vpk->treedata = tree;
 	vpk->treesize = read;
+	vpk->databaseofs = treestart + tablesize;	//FTESurf Patch 181
 	vpk->numfiles = numpackfiles;
 	vpk->numfragments = 0;
 	vpk->numfiles = FSVPK_WalkTree(vpk, tree, tree+read);
