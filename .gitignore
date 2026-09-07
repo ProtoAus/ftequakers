@@ -48,3 +48,30 @@ engine/droid/project.properties
 
 # Flatpak build artifacts
 .flatpak-builder
+
+# ------------------------------------------------------------------------------
+#  ftequakers fork additions.  Kept at the END of the file so that merges from
+#  upstream never conflict with them.
+#
+#  NOTE: this fork deliberately has NO .gitattributes.  346 files in this
+#  history are committed with CRLF, so an `eol=lf` policy would renormalise
+#  them -- a huge diff on top of upstream's, and a conflict on every future
+#  `git merge upstream/master`.  The "LF will be replaced by CRLF" warnings are
+#  cosmetic; no file in this tree differs from HEAD by line endings alone.
+# ------------------------------------------------------------------------------
+
+# Windows build tools.  The rules above name the unix binaries and miss the .exe
+# siblings a Windows build produces.  generatebuiltinsl is a build tool, not part
+# of the engine, so no target builds or cleans it.
+engine/shaders/generatebuiltinsl.exe
+engine/shaders/makevulkanblob.exe
+
+# Local plugin/updater manifest, written by the running engine.
+engine/installed.lst
+
+# Editor and scratch copies.
+*.bak
+*.bak[0-9]*
+*.orig
+*.rej
+*~
