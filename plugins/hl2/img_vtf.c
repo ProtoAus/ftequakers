@@ -1,4 +1,9 @@
 #include "../plugin.h"
+#ifdef HAVE_ZSTD
+//FTESurf Patch 292: VTF 7.6 auxiliary compression (Strata) is Zstandard.  Linked statically from
+//msys2's ucrt64 libzstd.a by plugins/Makefile on win64; see Image_ReadVTFFile.
+#include <zstd.h>
+#endif
 
 static plugimagefuncs_t *imagefuncs;
 extern cvar_t *hl2_texdiag;	//FTESurf Patch 239, registered in mod_vbsp.c as "r_texdiag"
@@ -253,24 +258,42 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			(int)ImageVTF_VtfToFTE(vmffmt, vtf->flags), (int)vtf->width, (int)vtf->height);
 
 	mips = NULL;
+#define VTF_RES_AXC 0x00435841	//FTESurf Patch 292: 'A','X','C' -- Strata's auxiliary compression
+	size_t axcofs = 0;			//FTESurf Patch 292: where that resource's data is, 0 = none
+	qbyte *axcraw = NULL;		//FTESurf Patch 292: the inflated chain, when there was one
 	if (version >= 0x00070003)
 	{
 		int i;
+		size_t imgofs = 0;
+		qboolean haveimg = false;
 		struct
 		{
 			unsigned int rtype;
 			unsigned int rdata; //usually an offset.
 		} *restable = (void*)(filedata+sizeof(*vtf));
+		/*
+		FTESurf Patch 292: walk the WHOLE table.  This loop used to stop at the
+		high-res image, which was only safe while nothing else in the table could
+		change how that image is read.  Strata's 'AXC' resource does -- it says the
+		image is compressed -- and it can sit on either side of the image entry.
+		*/
 		for (i = 0; i < LittleLong(vtf->numresources); i++, restable++)
 		{
-			if ((LittleLong(restable->rtype) & 0x00ffffff) == 0x30)
+			unsigned int rtype = LittleLong(restable->rtype) & 0x00ffffff;
+			if (rtype == 0x30 && !haveimg)
 			{
-				mips = plugfuncs->Malloc(sizeof(*mips));
-				mips->extrafree = filedata;
-				filedata += LittleLong(restable->rdata);
-				break;
+				imgofs = LittleLong(restable->rdata);
+				haveimg = true;
 			}
+			else if (rtype == VTF_RES_AXC)
+				axcofs = LittleLong(restable->rdata);
 			//other unknown resource types.
+		}
+		if (haveimg)
+		{
+			mips = plugfuncs->Malloc(sizeof(*mips));
+			mips->extrafree = filedata;
+			filedata += imgofs;
 		}
 	}
 	if (!mips)
@@ -374,6 +397,97 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			plugfuncs->Free(mips);
 			return NULL;
 		}
+		/*
+		FTESurf Patch 292: Strata's auxiliary compression -- VTF 7.6's 'AXC' resource.
+
+		surf_fantasy's pine trees drew as solid black silhouettes, and the textures were
+		the cause, not the lighting.  Momentum's own mount/hl2_dir.vpk re-packs HL2 and
+		both episodes as VTF 7.6 with every mip level Zstandard-compressed:
+		models/props_foliage/arbre01.vtf is 2,140,743 bytes there against 5,592,664 for
+		the same 2048x2048 DXT5 chain in ep2.  This loader read the zstd frames straight
+		off as DXT5 blocks, because the 7.6 note at the version check assumed "the packed
+		7.6 textures seen so far carry an uncompressed high-res image resource".  They
+		did; the mount's do not.
+
+		The resource, measured on arbre01 (12 levels) and ferns01 (10):
+		    uint32  length of what follows       (4 + 4*mipmapcount)
+		    uint16  compression level            (22)
+		    uint16  method                       (93 = Zstandard)
+		    uint32  compressed size of each mip level, SMALLEST level first -- the
+		            file's own order, so entry k is level mipmapcount-1-k
+		and the image resource is those frames laid end to end: arbre01's twelve sizes
+		sum to its file length less the image offset, exactly.  One frame holds a whole
+		level -- every frame and face of it -- so the chain is inflated once into a
+		buffer laid out exactly as an uncompressed file's would be, and the loop below
+		walks it unchanged.
+
+		Only with HAVE_ZSTD.  Without it a compressed file fails LOUDLY here and draws
+		as the missing-texture placeholder with a console line, not as garbage.
+		*/
+		if (axcofs)
+		{
+#define AXC_LE32(p) ((unsigned int)(p)[0] | ((unsigned int)(p)[1]<<8) | ((unsigned int)(p)[2]<<16) | ((unsigned int)(p)[3]<<24))
+			const qbyte *axc = (const qbyte*)mips->extrafree + axcofs;
+			unsigned int nlevels = vtf->mipmapcount;
+			unsigned int axclen = 0, method;
+			if (axc + 8 > end || (axclen = AXC_LE32(axc)) < 4 + 4*nlevels || axc + 4 + axclen > end)
+			{
+				Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary-compression resource is truncated\n", fname);
+				plugfuncs->Free(mips);
+				return NULL;
+			}
+			method = axc[6] | ((unsigned int)axc[7]<<8);
+#ifndef HAVE_ZSTD
+			Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary compression (method %u) needs a build with zstd\n", fname, method);
+			plugfuncs->Free(mips);
+			return NULL;
+#else
+			if (method != 93)
+			{
+				Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary compression method %u is not implemented (93, Zstandard, is)\n", fname, method);
+				plugfuncs->Free(mips);
+				return NULL;
+			}
+			else
+			{
+				size_t total = 0, srcofs = 0, outofs = 0;
+				unsigned int k;
+				for (k = 0; k < nlevels; k++)
+				{
+					w = vtf->width>>k;	if (!w) w = 1;
+					h = vtf->height>>k;	if (!h) h = 1;
+					total += (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes;
+				}
+				axcraw = plugfuncs->Malloc(total);
+				for (k = 0; k < nlevels; k++)
+				{
+					unsigned int lvl = nlevels-1-k;	//the file's order: smallest level first
+					size_t csize = AXC_LE32(axc + 8 + 4*k), want, got;
+					w = vtf->width>>lvl;	if (!w) w = 1;
+					h = vtf->height>>lvl;	if (!h) h = 1;
+					want = (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes;
+					if (filedata + srcofs + csize > end)
+						break;
+					got = ZSTD_decompress(axcraw + outofs, want, filedata + srcofs, csize);
+					if (ZSTD_isError(got) || got != want)
+						break;
+					srcofs += csize;
+					outofs += want;
+				}
+				if (k < nlevels)
+				{
+					Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary-compressed mip level %u would not inflate\n", fname, nlevels-1-k);
+					plugfuncs->Free(axcraw);
+					plugfuncs->Free(mips);
+					return NULL;
+				}
+				filedata = axcraw;
+				end = axcraw + total;
+			}
+#endif
+#undef AXC_LE32
+		}
+
 		for (miplevel = vtf->mipmapcount; miplevel-- > 0;)
 		{	//smallest to largest, which is awkward.
 			qbyte *levelbase = filedata;	//Patch 195: frame 0 of THIS level
@@ -489,6 +603,19 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			mips->mip[m].needfree = true;
 		}
 		mips->encoding = PTI_RGBA32F;
+	}
+
+	/*
+	FTESurf Patch 292: the inflated chain becomes what the texture keeps.  Every mip[]
+	pointer above was set into axcraw, so the file buffer holds nothing the upload needs
+	any more -- only the header, which nothing past this point reads -- and it is freed
+	here instead of being carried to the upload with its compressed payload.
+	*/
+	if (mips && axcraw)
+	{
+		qbyte *file = mips->extrafree;
+		mips->extrafree = axcraw;
+		plugfuncs->Free(file);
 	}
 
 	return mips;

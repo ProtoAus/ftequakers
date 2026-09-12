@@ -5534,6 +5534,52 @@ static void SV_PauseChanged(void)
 double server_frametime;
 /*
 ==================
+SV_PerfDump_f					FTESurf Patch 273
+
+Divides by FRAMES, not by ticks, so the rows are directly comparable with
+r_speeds' `Server` row -- which is a per-SV_Frame average -- and with every other
+r_speeds bucket.  The three rows plus "other" must add up to that row, and if
+they do not, this instrument is wrong and the reading should be thrown away
+rather than explained.
+
+ticks/frame is the row that decides how to read the rest: at cl_maxfps 1000 with
+sv_mintic 0.015 it should sit near 0.0667, and a per-TICK cost is therefore ~15x
+its per-frame average.  A cheap thing that runs every frame and an expensive
+thing that runs every fifteenth look identical in the `Server` row; here they do
+not.
+==================
+*/
+sv_perf_t sv_perf;
+static void SV_PerfDump_f (void)
+{
+	unsigned int f = sv_perf.frames;
+	double sum;
+
+	if (!f)
+	{
+		Con_Printf("sv_perfdump: no server frames since the last dump (is a map running?)\n");
+		return;
+	}
+
+	sum = sv_perf.startframe + sv_perf.physics + sv_perf.send;
+	Con_Printf("---- sv_perfdump (us per SV_Frame, %u frames, %u ticks) ----\n", f, sv_perf.ticks);
+	Con_Printf("%12.2f QC StartFrame\n",      (sv_perf.startframe*1000*1000.0)/f);
+	Con_Printf("%12.2f Entity physics\n",     (sv_perf.physics   *1000*1000.0)/f);
+	Con_Printf("%12.2f Snapshot build\n",     (sv_perf.send      *1000*1000.0)/f);
+	Con_Printf("%12.2f  == measured total (r_speeds `Server` less this is unaccounted)\n",
+	                                          (sum               *1000*1000.0)/f);
+	Con_Printf("%12.4f ticks per frame (sv_mintic %g s; 1.0 means a tick every frame)\n",
+	           sv_perf.ticks/(double)f, sv_mintic.value);
+	if (sv_perf.ticks)
+		Con_Printf("%12.2f us per TICK for physics (the per-tick cost, not the smeared one)\n",
+		           (sv_perf.physics*1000*1000.0)/sv_perf.ticks);
+	Con_Printf("---- end sv_perfdump ----\n");
+
+	memset(&sv_perf, 0, sizeof(sv_perf));
+}
+
+/*
+==================
 SV_Frame
 
 ==================
@@ -5695,6 +5741,8 @@ float SV_Frame (void)
 		return delay;
 	}
 
+	sv_perf.frames++;
+
 // check timeouts
 	SV_CheckTimeouts ();
 
@@ -5807,7 +5855,7 @@ float SV_Frame (void)
 		SV_CheckVars ();
 
 // send messages back to the clients that had packets read this frame
-		SV_SendClientMessages ();
+		SV_PERF(sv_perf.send, SV_SendClientMessages ());
 
 #ifdef MVD_RECORDING
 		SV_SendMVDMessage();
@@ -5941,6 +5989,7 @@ void SV_InitLocal (void)
 	extern	cvar_t	pm_ladders;			//Patch 260
 	extern	cvar_t	pm_ladderdampen;
 	extern	cvar_t	pm_ladderangle;
+	extern	cvar_t	pm_slide;			//Patch 280
 	extern	cvar_t	pm_lockmovement;
 	extern	cvar_t	sv_gamemode;	//FTESurf Patch 224
 
@@ -6059,6 +6108,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&pm_ladders,				cvargroup_serverphysics);	//Patch 260
 	Cvar_Register (&pm_ladderdampen,		cvargroup_serverphysics);
 	Cvar_Register (&pm_ladderangle,			cvargroup_serverphysics);
+	Cvar_Register (&pm_slide,				cvargroup_serverphysics);	//Patch 280
 	Cvar_Register (&pm_lockmovement,		cvargroup_serverphysics);
 	Cvar_Register (&sv_gamemode,			cvargroup_serverphysics);
 
@@ -6164,6 +6214,8 @@ void SV_InitLocal (void)
 	Cvar_Register (&sv_nailhack, cvargroup_servercontrol);
 	Cvar_Register (&sv_debug_animrate, cvargroup_servercontrol);	//nettest Patch 155
 	Cvar_Register (&sv_nopvs, cvargroup_servercontrol);
+
+	Cmd_AddCommandD ("sv_perfdump", SV_PerfDump_f, "FTESurf Patch 273: split r_speeds' single `Server` row into the QC StartFrame chain, entity physics and the client snapshot build, in us/SV_Frame, then reset. Also prints ticks/frame, which says how much of the average is a rare physics tick smeared over many bookkeeping-only frames.");
 
 	Cmd_AddCommand ("sv_impulse", SV_Impulse_f);
 

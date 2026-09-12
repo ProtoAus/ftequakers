@@ -35,6 +35,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define ENVSAT 1.0,1.0,1.0\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: $envmapcontrast.  mat_vmt.c has always parsed this key and
+//then dropped it.  Source: specularLighting = lerp(s, s*s, g_EnvmapContrast)
+//(lightmappedgeneric_ps2_3_x.h:558-559), so 0.0 is "no contrast", which is today's
+//picture -- an absent #ENVCONTRAST must default to exactly that.
+"#ifndef ENVCONTRAST\n"
+"#define ENVCONTRAST 0.0\n"
+"#endif\n"
+
 "#include \"sys/defs.h\"\n"
 
 //ftesurf (P187): $alpha as a compile-time constant.  e_colourident cannot carry
@@ -263,6 +271,36 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 
+//FTESurf Patch 268 B: Source's own mask defaults, under #ENVSRCMASK.
+//  no mask key at all      -> specularFactor stays 1.0.  vNormal's default is
+//                             float4(0,0,1,1) (lightmappedgeneric_ps2_3_x.h:205),
+//                             so even the bNormalMapAlphaEnvmapMask-without-a-
+//                             bumpmap arm at :396-399 reads 1.0
+//  $basealphaenvmapmask    -> 1.0 - blendedAlpha, i.e. 1.0 - diffuse_f.a here
+//                             (:408-411, "Reversing alpha blows!").  Source
+//                             inverts THIS one and only this one
+//  $normalmapalphaenvmapmask -> the normalmap's alpha, uninverted (:391-394), and
+//                             only when there is a normalmap to read it from
+"#ifdef ENVSRCMASK\n"
+"#if defined(ENVFROMMASK)\n"
+//We have a dedicated reflectmask
+"#define refl texture2D(s_reflectmask, tex_c).r\n"
+"#else\n"
+"#if defined(ENVFROMBASE)\n"
+"#define refl 1.0 - diffuse_f.a\n"
+"#else\n"
+"#if defined(ENVFROMNORM) && defined(BUMP)\n"
+//ftesurf (P251): normal_f.a rather than a second fetch -- see
+//the note in the verbatim arm below.
+"#define refl normal_f.a\n"
+"#else\n"
+"#define refl 1.0\n"
+"#endif\n"
+"#endif\n"
+"#endif\n"
+//FTESurf Patch 268 B: without #ENVSRCMASK the arms below are today's, verbatim.
+"#else\n"
+
 "#if defined(ENVFROMMASK)\n"
 /* We have a dedicated reflectmask */
 "#define refl texture2D(s_reflectmask, tex_c).r\n"
@@ -285,17 +323,41 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: end of the ENVSRCMASK wrapper.
+"#endif\n"
+
 
 "vec3 cube_c = reflect(-eyevector, normal_f.rgb);\n"
 "vec3 cube_tint = vec3(ENVTINT);\n"
 "vec3 cube_sat = vec3(ENVSAT);\n"
 "cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];\n"
 "cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;\n"
+//FTESurf Patch 268 B: Source's envmap term, under #ENVSRCSPEC --
+//    spec  = cube * mask;
+//    spec *= tint;
+//    spec  = lerp(spec, spec*spec, contrast);
+//    spec  = lerp(luma(0.299,0.587,0.114), spec, saturation);
+//(lightmappedgeneric_ps2_3_x.h:553-561).  Today's order is the other way round --
+//saturation first, with Rec.709 weights, then the tint, and no contrast at all.
+//ENVSRCPOST is a no-op here: this shader already adds after the lightmap multiply
+//(:244), which is where Source adds it too.
+//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
+//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+"#ifdef ENVSRCSPEC\n"
+"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);\n"
+"spec *= cube_tint;\n"
+"spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
+"spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
+"diffuse_f.rgb += spec;\n"
+//FTESurf Patch 268 B: without #ENVSRCSPEC, today's term, verbatim.
+"#else\n"
 "vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb, cube_sat.r);\n"
 "cube_t.r *= cube_tint.r;\n"
 "cube_t.g *= cube_tint.g;\n"
 "cube_t.b *= cube_tint.b;\n"
 "diffuse_f.rgb += (cube_t * vec3(refl,refl,refl));\n"
+//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
+"#endif\n"
 "#endif\n"
 
 "#ifdef FULLBRIGHT\n"
@@ -307,7 +369,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#else\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4(diffuse_f);\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -430,6 +500,24 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //The #define is the same mechanism ENVTINT/ENVSAT already use.
 "#ifndef ALPHA\n"
 "#define ALPHA 1.0\n"
+"#endif\n"
+
+//FTESurf Patch 268 B: $envmaptint / $envmapsaturation / $envmapcontrast.  This
+//shader is the one VMT program that never applied any of them -- its envmap block
+//added the raw cube sample -- so it never needed the defaults either.  They live
+//here now, in the same spelling lightmapped.glsl uses (mat_vmt.c emits
+//"#ENVTINT=%f,%f,%f" and "#ENVSAT=%f,%f,%f"), and each default is the identity:
+//tint 1, saturation 1, contrast 0 reproduce today's picture exactly.
+"#ifndef ENVTINT\n"
+"#define ENVTINT 1.0,1.0,1.0\n"
+"#endif\n"
+
+"#ifndef ENVSAT\n"
+"#define ENVSAT 1.0,1.0,1.0\n"
+"#endif\n"
+
+"#ifndef ENVCONTRAST\n"
+"#define ENVCONTRAST 0.0\n"
 "#endif\n"
 
 "varying vec2 tex_c;\n"
@@ -671,6 +759,40 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec4 normal_f = vec4(0.0,0.0,1.0,0.0);\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: Source's own mask defaults, under #ENVSRCMASK.
+//  no mask key at all      -> specularFactor stays 1.0.  vNormal's default is
+//                             float4(0,0,1,1) (lightmappedgeneric_ps2_3_x.h:205),
+//                             so even the bNormalMapAlphaEnvmapMask-without-a-
+//                             bumpmap arm at :396-399 reads 1.0
+//  $basealphaenvmapmask    -> 1.0 - blendedAlpha, i.e. 1.0 - diffuse_f.a here --
+//                             and on THIS shader diffuse_f.a is already the
+//                             lerp of the two base alphas by `blend`, which is
+//                             exactly Source's blendedAlpha (:334, :408-411,
+//                             "Reversing alpha blows!").  Source inverts this
+//                             one and only this one
+//  $normalmapalphaenvmapmask -> the normalmap's alpha, uninverted (:391-394), and
+//                             only when there is a normalmap to read it from
+"#ifdef ENVSRCMASK\n"
+"#if defined(ENVFROMMASK)\n"
+//We have a dedicated reflectmask
+"#define refl texture2D(s_reflectmask, tex_c).r\n"
+"#else\n"
+"#if defined(ENVFROMBASE)\n"
+"#define refl 1.0 - diffuse_f.a\n"
+"#else\n"
+"#if defined(ENVFROMNORM) && defined(BUMP)\n"
+//ftesurf (P251): normal_f.a rather than a second fetch -- it may
+//be a $seamless_scale projection and/or a $bumpmap2 blend that a
+//plain tex_c re-fetch would not reproduce.
+"#define refl normal_f.a\n"
+"#else\n"
+"#define refl 1.0\n"
+"#endif\n"
+"#endif\n"
+"#endif\n"
+//FTESurf Patch 268 B: without #ENVSRCMASK the arms below are today's, verbatim.
+"#else\n"
+
 "#if defined(ENVFROMMASK)\n"
 /* We have a dedicated reflectmask */
 "#define refl texture2D(s_reflectmask, tex_c).r\n"
@@ -693,10 +815,37 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: end of the ENVSRCMASK wrapper.
+"#endif\n"
+
 "vec3 cube_c = reflect(normalize(-eyevector), normal_f.rgb);\n"
 "cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];\n"
 "cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;\n"
+//FTESurf Patch 268 B: Source's envmap term, under #ENVSRCSPEC --
+//    spec  = cube * mask;
+//    spec *= tint;
+//    spec  = lerp(spec, spec*spec, contrast);
+//    spec  = lerp(luma(0.299,0.587,0.114), spec, saturation);
+//(lightmappedgeneric_ps2_3_x.h:553-561).  This shader applies NONE of the three
+//today -- it adds the raw cube sample -- so the whole chain, and the ENVTINT /
+//ENVSAT / ENVCONTRAST defaults it now carries, arrive together under this switch.
+//ENVSRCPOST is a no-op here: this shader already adds after the lightmap multiply
+//(:263), which is where Source adds it too.
+//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
+//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+"#ifdef ENVSRCSPEC\n"
+"vec3 cube_tint = vec3(ENVTINT);\n"
+"vec3 cube_sat = vec3(ENVSAT);\n"
+"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);\n"
+"spec *= cube_tint;\n"
+"spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
+"spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
+"diffuse_f.rgb += spec;\n"
+//FTESurf Patch 268 B: without #ENVSRCSPEC, today's line, verbatim.
+"#else\n"
 "diffuse_f.rgb += (textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl));\n"
+//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
+"#endif\n"
 "#endif\n"
 
 //AFTER the envmap block on purpose: `refl` above is 1.0 - diffuse_f.a,
@@ -709,7 +858,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#else\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4(diffuse_f);\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -748,14 +905,33 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define COLOR 1.0,1.0,1.0\n"
 "#endif\n"
 
+//ftesurf (P300): $vertexcolor / $vertexalpha.  Until now these were the reason
+//an additive UnlitGeneric or Sprite had to stay on a PASS -- `rgbGen vertex` is
+//a pass keyword and this program had nowhere to put it.  Same idiom as
+//lightmapped.glsl:113-115,149-151,240-245, which is the arm that proved it.
+//
+//NOT the same thing as a pass's `rgbGen vertex`, strictly: that is
+//RGB_GEN_VERTEX_LIGHTING, which GenerateColourMods scales by
+//shaderstate.identitylighting, where v_colour here is the raw array.  They agree
+//at identitylighting 1, which is the case that GenerateColourMods short-circuits
+//to the raw VBO anyway (gl_backend.c:2430-2488).  The draws this arm exists for
+//are CSQC R_PolygonVertex sprites, which supply their colour per vertex and are
+//not lit at all.
+
 "#include \"sys/fog.h\"\n"
 
 "varying vec2 tex_c;\n"
+"#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
+"varying vec4 vex_color;\n"
+"#endif\n"
 
 "#ifdef VERTEX_SHADER\n"
 "void main ()\n"
 "{\n"
 "tex_c = v_texcoord + e_time * vec2(SCROLL);\n"
+"#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
+"vex_color = v_colour;\n"
+"#endif\n"
 "gl_Position = ftetransform();\n"
 "}\n"
 "#endif\n"
@@ -771,8 +947,45 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "discard;\n"
 "#endif\n"
 
+"#ifdef VERTEXCOL\n"
+"diffuse_f.rgb *= vex_color.rgb;\n"
+"#endif\n"
+"#ifdef VERTEXALPHA\n"
+"diffuse_f.a *= vex_color.a;\n"
+"#endif\n"
+
 "diffuse_f.a *= float(ALPHA);\n"
+
+"#ifdef NOFOG\n"
+//FTESurf Patch 300: $nofog, which these arms have been computing and then
+//throwing away.  mat_vmt.c:2346-2347 appends #NOFOG to progargs for EVERY
+//class, but the UnlitGeneric and Sprite arms emitted no program to carry it,
+//so a material that said "do not fog me" was fogged regardless.  Every
+//sibling program (animated, lightmapped, twotexture, vertexlit, transition)
+//already guards exactly this way; this one was the gap.
+"gl_FragColor = diffuse_f;\n"
+"#elif defined(ADDITIVE)\n"
+//FTESurf Patch 300: AN ADDITIVE SURFACE FADES TOWARD BLACK, NEVER TOWARD THE
+//FOG COLOUR.  This is the whole reason the patch exists: under gl_one/gl_one
+//a texel that should contribute nothing is black, and mixing black toward a
+//fog colour turns it into a value that is then ADDED -- so the mask stops
+//masking and the quad shows as a flat translucent rectangle.  fog4additive
+//is `c * vec4(fac,fac,fac,1.0)`.
+//
+//Note it leaves alpha alone, so the Patch 299 question below does not arise
+//on this branch: fog4additive never multiplied by alpha in the first place.
+"gl_FragColor = fog4additive( diffuse_f );\n"
+"#else\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4( diffuse_f );\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
+"#endif\n"
 "}\n"
 "#endif\n"
 },
@@ -796,6 +1009,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu FAKESHADOWS\n"
 "!!cvardf r_glsl_pcf\n"
 "!!cvardf r_glsl_rtenvsphere\n"
+//FTESurf Patch 304: the ramp between the two lighting slots, and the OTHER HALF
+//of mod_vbsp.c's hl2_lt_fold -- one cvar drives both so they cannot disagree.
+//The "=1" is only the fallback for a build where the hl2 plugin never registered
+//it; in FTESurf VBSP_Init has already done so by the time this compiles.
+"!!cvardf hl2_lt_fold=1\n"
 "!!samps =FAKESHADOWS shadowmap\n"
 
 // envmaps only
@@ -837,8 +1055,12 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 /* CUBEMAPS ONLY */
 "#ifdef REFLECTCUBEMASK\n"
 "varying vec3 eyevector;\n"
+"#endif\n"
+//FTESurf Patch 268 C: #BUMPCUBE needs invsurface too, to carry the normal map's
+//tangent-space normal back to model space -- and it has to work on a bumped prop with
+//no $envmap at all, which is exactly the prop that has no REFLECTCUBEMASK.
+"#if defined(REFLECTCUBEMASK) || defined(BUMPCUBE)\n"
 "varying mat3 invsurface;\n"
-
 "#endif\n"
 
 "#ifndef ENVTINT\n"
@@ -847,6 +1069,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifndef ENVSAT\n"
 "#define ENVSAT 1.0\n"
+"#endif\n"
+
+//FTESurf Patch 268 B: $envmapcontrast.  mat_vmt.c has always parsed this key and
+//then dropped it.  Source: specularLighting = lerp(s, s*s, g_EnvmapContrast)
+//(vertexlit_and_unlit_generic_bump_ps20b.fxc:305-306), so 0.0 is "no contrast",
+//which is today's picture -- an absent #ENVCONTRAST must default to exactly that.
+"#ifndef ENVCONTRAST\n"
+"#define ENVCONTRAST 0.0\n"
 "#endif\n"
 
 
@@ -884,7 +1114,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "nn.y * e_light_ambientcube[(norm.y<0.0)?3:2] +\n"
 "nn.z * e_light_ambientcube[(norm.z<0.0)?5:4];\n"
 "#else\n"
-"#ifdef HALFLAMBERT\n"
+//FTESurf Patch 304: half-lambert, because e_light_ambient is now the level
+//on the UNLIT side rather than the lit one (mod_vbsp.c, the split fold).
+//A plain lambert clamps flat at that base across the whole shadow
+//hemisphere while the true irradiance there keeps falling, so the two
+//choices are not interchangeable -- the fold and the ramp are one change
+//and are driven by one cvar.  Source uses half-lambert on models for the
+//same reason.  An undefined hl2_lt_fold evaluates to 0 here, which is the
+//legacy pair, so a missing define degrades to today rather than to a mix.
+"#if defined(HALFLAMBERT) || hl2_lt_fold\n"
 "light.rgb += max(0.0,halflambert(n,e_light_dir)) * e_light_mul;\n"
 "#else\n"
 "light.rgb += max(0.0,dot(n,e_light_dir)) * e_light_mul;\n"
@@ -917,8 +1155,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 /* CUBEMAPS ONLY */
-"#ifdef REFLECTCUBEMASK\n"
+//FTESurf Patch 268 C: invsurface for #BUMPCUBE as well; see its varying.
+"#if defined(REFLECTCUBEMASK) || defined(BUMPCUBE)\n"
 "invsurface = mat3(s, t, n);\n"
+"#endif\n"
+"#ifdef REFLECTCUBEMASK\n"
 
 "vec3 eyeminusvertex = e_eyepos - w.xyz;\n"
 "eyevector.x = dot(eyeminusvertex, s.xyz);\n"
@@ -956,14 +1197,61 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef BUMP\n"
 /* Source's normalmaps are in the DX format where the green channel is flipped */
 "vec3 normal_f = texture2D(s_normalmap, tex_c).rgb;\n"
+//FTESurf Patch 268 C: #BUMPGREENFIX drops this flip.  Source never flips G -- its bump
+//shaders take normalTexel*2-1 as it is and carry handedness on the binormal sign,
+//cross(N,T)*T.w -- and mod_hl2.c builds FTE's tangent basis from the same VVD tangent in
+//the same way, so on a model this flip mirrors the relief along V relative to Source.
+"#ifndef BUMPGREENFIX\n"
 "normal_f.g = 1.0 - normal_f.g;\n"
+"#endif\n"
 "normal_f = normalize(normal_f.rgb - 0.5);\n"
 "#else\n"
 "vec3 normal_f = vec3(0.0,0.0,1.0);\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: the reflection contribution now lives in `spec`.
+//Declared OUT HERE, not inside the block below, so that the ENVSRCPOST add
+//site under the lighting multiply still compiles when REFLECTCUBEMASK is
+//off -- there it stays vec3(0.0) and the add is a no-op.
+"vec3 spec = vec3(0.0);\n"
+
 /* CUBEMAPS ONLY */
 "#ifdef REFLECTCUBEMASK\n"
+
+//FTESurf Patch 268 B: Source's own mask defaults, under #ENVSRCMASK.
+//  no mask key at all      -> specularFactor stays 1.0
+//                             (vertexlit_and_unlit_generic_bump_ps20b.fxc:195;
+//                              the non-bump and world shaders reach the same
+//                              value through vNormal's float4(0,0,1,1) default,
+//                              lightmappedgeneric_ps2_3_x.h:205)
+//  $basealphaenvmapmask    -> 1.0 - baseColor.a.  Source inverts THIS one and
+//                             only this one (vertexlit_and_unlit_generic_ps20b
+//                             .fxc:332, "this blows!")
+//  $normalmapalphaenvmapmask -> the normalmap's alpha, uninverted, and only when
+//                             there is a normalmap to read it from
+"#ifdef ENVSRCMASK\n"
+"#if defined(ENVFROMMASK) && !defined(BUMP)\n"
+//A dedicated reflectmask -- and Source honours one only on an UNBUMPED
+//VertexLitGeneric: vertexlitgeneric_dx9_helper.cpp:187-199 SetUndefined()s
+//$envmapmask the moment a bumpmap is present, and the bumped fxc declares
+//no ENVMAPMASK combo at all.  A bumped material falls through below.
+"#define refl texture2D(s_reflectmask, tex_c).r\n"
+"#else\n"
+"#if defined(ENVFROMBASE) && !defined(BUMP)\n"
+//Likewise $basealphaenvmapmask, which the same helper CLEAR_FLAGS()es
+//when a bumpmap is present -- and which is the ONE mask Source inverts
+//(vertexlit_and_unlit_generic_ps20b.fxc:332, "this blows!").
+"#define refl 1.0 - diffuse_f.a\n"
+"#else\n"
+"#if defined(ENVFROMNORM) && defined(BUMP)\n"
+"#define refl texture2D(s_normalmap, tex_c).a\n"
+"#else\n"
+"#define refl 1.0\n"
+"#endif\n"
+"#endif\n"
+"#endif\n"
+//FTESurf Patch 268 B: without #ENVSRCMASK the arms below are today's, verbatim.
+"#else\n"
 
 "#if defined(ENVFROMMASK)\n"
 /* We have a dedicated reflectmask */
@@ -982,8 +1270,39 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#endif\n"
 
+//FTESurf Patch 268 B: end of the ENVSRCMASK wrapper.
+"#endif\n"
+
 "vec3 cube_tint = vec3(ENVTINT);\n"
 "vec3 cube_sat = vec3(ENVSAT);\n"
+
+//FTESurf Patch 268 B: Source's envmap term, under #ENVSRCSPEC --
+//    spec  = cube * mask;
+//    spec *= tint;
+//    spec  = lerp(spec, spec*spec, contrast);
+//    spec  = lerp(luma(0.299,0.587,0.114), spec, saturation);
+//(vertexlit_and_unlit_generic_bump_ps20b.fxc:302-308).  Today's order is the
+//other way round -- saturation first, with Rec.709 weights, then the tint, and
+//no contrast at all.  The rtenvsphere sample takes the same post-processing.
+//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
+//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+"#ifdef ENVSRCSPEC\n"
+"#if r_glsl_rtenvsphere == 1\n"
+"vec3 r = reflect(normalize(-eyevector), normal_f.rgb);\n"
+"vec2 sphereCoord = 0.5 + r.xy * 0.5;\n"
+"spec = texture2D(s_rtenvsphere, sphereCoord).rgb * 0.5;\n"
+"#else\n"
+"vec3 cube_c = reflect(-eyevector, normal_f.rgb);\n"
+"cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];\n"
+"cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;\n"
+"spec = textureCube(s_reflectcube, cube_c).rgb;\n"
+"#endif\n"
+"spec *= vec3(refl,refl,refl);\n"
+"spec *= cube_tint;\n"
+"spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
+"spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
+//FTESurf Patch 268 B: without #ENVSRCSPEC, today's term, verbatim.
+"#else\n"
 
 "#if r_glsl_rtenvsphere == 1\n"
 "vec3 r = reflect(normalize(-eyevector), normal_f.rgb);\n"
@@ -1000,13 +1319,60 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "cube_t.g *= cube_tint.g;\n"
 "cube_t.b *= cube_tint.b;\n"
 
-"diffuse_f.rgb += (cube_t * vec3(refl,refl,refl));\n"
+"spec = cube_t * vec3(refl,refl,refl);\n"
+
+//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
 "#endif\n"
 
-"diffuse_f.rgb *= light.rgb * e_colourident.rgb;\n"
+//FTESurf Patch 268 B: without #ENVSRCPOST the reflection lands exactly where it
+//always has -- before the lighting multiply, so the prop's own light dims it.
+"#ifndef ENVSRCPOST\n"
+"diffuse_f.rgb += spec;\n"
+"#endif\n"
+"#endif\n"
+
+//FTESurf Patch 268 C: per-pixel relief, as a ratio over the lighting the prop already has.
+//Source lights a bumped VertexLitGeneric per pixel, from the leaf's six-face ambient cube
+//and the BUMPED world-space normal (common_vertexlitgeneric_dx9.h).  FTE lights it per
+//vertex, and where the prop has VRAD's .vhv bake that vertex light carries the level and
+//the shadowing a cube cannot -- so keep it, and multiply in only what the bump changes,
+//    cube(n_bumped) / cube(n_vertex)
+//in LINEAR light (e_light_ambientcube is linear), taken to display space with the ~2.2
+//gamma the vertex light already went through.  A flat normal gives exactly 1.0, and so
+//does an empty cube (eps/eps) -- which r_cubelight 0 uploads and every entity without a
+//cube carries -- so off changes nothing to the bit.  Clamped, so a face the cube calls
+//black cannot divide the ratio into a blow-out.
+"vec3 lightrgb = light.rgb;\n"
+"#if defined(BUMPCUBE) && defined(BUMP)\n"
+"#ifndef CUBEEPS\n"
+"#define CUBEEPS 0.0005\n"
+"#endif\n"
+"vec3 nb = normalize(normal_f.x * invsurface[0] + normal_f.y * invsurface[1] + normal_f.z * invsurface[2]);\n"
+"nb = normalize((m_model * vec4(nb, 0.0)).xyz);\n"
+"vec3 ng = normalize((m_model * vec4(normalize(norm), 0.0)).xyz);\n"
+"vec3 nb2 = nb * nb;\n"
+"vec3 ng2 = ng * ng;\n"
+"vec3 cb = nb2.x * ((nb.x < 0.0) ? e_light_ambientcube[1] : e_light_ambientcube[0]) +\n"
+"nb2.y * ((nb.y < 0.0) ? e_light_ambientcube[3] : e_light_ambientcube[2]) +\n"
+"nb2.z * ((nb.z < 0.0) ? e_light_ambientcube[5] : e_light_ambientcube[4]);\n"
+"vec3 cg = ng2.x * ((ng.x < 0.0) ? e_light_ambientcube[1] : e_light_ambientcube[0]) +\n"
+"ng2.y * ((ng.y < 0.0) ? e_light_ambientcube[3] : e_light_ambientcube[2]) +\n"
+"ng2.z * ((ng.z < 0.0) ? e_light_ambientcube[5] : e_light_ambientcube[4]);\n"
+"lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);\n"
+"#endif\n"
+"diffuse_f.rgb *= lightrgb * e_colourident.rgb;\n"
 
 "#ifdef FAKESHADOWS\n"
 "diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);\n"
+"#endif\n"
+
+//FTESurf Patch 268 B: Source adds the envmap AFTER lighting and shadowing --
+//`result = diffuseComponent + specularLighting`, diffuseComponent being
+//albedo*lighting (vertexlit_and_unlit_generic_bump_ps20b.fxc:268,312).  No
+//e_colourident on it: the entity's colormod modulates the albedo, not the
+//reflection.  With REFLECTCUBEMASK off `spec` is vec3(0.0) and this is a no-op.
+"#ifdef ENVSRCPOST\n"
+"diffuse_f.rgb += spec;\n"
 "#endif\n"
 
 "#ifdef FULLBRIGHT\n"
@@ -1022,7 +1388,47 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#else\n"
+//FTESurf Patch 299: fog the COLOUR, and leave the alpha to the blender.
+//
+//fog4() is `vec4(fog3(rgb), 1.0) * regularcolour.a` (gl_vidcommon.c:1887)
+//-- it multiplies the fogged colour by the surface's own alpha.  That is
+//the correct arithmetic for a PREMULTIPLIED blend and the wrong one for
+//every material this plugin emits.
+//
+//Source does not treat base-texture alpha as opacity unless the material
+//says so.  On an opaque VertexLitGeneric it is a MASK -- $basealphaenvmapmask,
+//$selfillummask, $basemapalphaphongmask -- and the surface is fully solid.
+//With no fog nothing shows, because an opaque blend discards the alpha
+//entirely; the moment fog is on, that mask multiplies every pixel.
+//
+//Measured on surf_tensor2's 3D skybox at Lex's own save011 window vantage,
+//mean base-texture alpha of the eight building materials in frame:
+//   hill_cluster 0.030   gov_upscale 0.028   antenna 0.094
+//   long_building001a 0.920 (min 0.035)   buildingsheet_03a 0.963 (min 0.000)
+//   project_building02 0.984   project_building03 0.969   industrial 0.960
+//A clean bimodal split, and it matches the screen object for object: the
+//0.03 props drew at 3% of the fog colour -- a black cutout against a sky
+//that was itself correctly fogged, which is the reported "bright black"
+//buildings -- and the low-alpha WINDOW PANES inside the 0.92-0.96 textures
+//are the "black windows" half of the same report.  Under a white fog forced
+//to end at 1 unit, where saturation is 255, those props measured
+//137.7 147.4 163.3 with std 38.5; that std IS the alpha mask showing through.
+//
+//There is no premultiplied path here to protect.  mat_vmt.c:3719 and :3885
+//emit `src_alpha one_minus_src_alpha`, so GL already applies the alpha and
+//fog4() was applying it a SECOND time -- translucent Source surfaces have
+//been doubly darkened by their own alpha on every fogged map as well.
+//$alphatest is a discard, so its kept fragments were darkened by whatever
+//alpha survived the mask rather than drawn at full strength.  Additive keeps
+//fog4additive and water keeps fog4blend; neither ever multiplied, and
+//neither is touched.
+//
+//hl2_fog_alphamul 1 restores fog4() exactly, bit-for-bit.
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4(diffuse_f);\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -1240,7 +1646,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "void main ()\n"
 "{\n"
 "vec4 diffuse_f = texture2D( s_diffuse, fract(tex_c) );\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4( diffuse_f );\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
 "}\n"
 "#endif\n"
 },
@@ -1497,7 +1911,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#else\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4(diffuse_f);\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -1673,7 +2095,470 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "{\n"
 "vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA));\n"
 "imposter_f.rgb *= vec3(COLOR);\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
 "gl_FragColor = fog4( imposter_f );\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(imposter_f.rgb), imposter_f.a);\n"
+"#endif\n"
+"}\n"
+"#endif\n"
+},
+#endif
+#ifdef GLQUAKE
+{QR_OPENGL, 110, "vmt/twotexture",
+"!!ver 130-450\n"
+"!!permu FOG\n"
+"!!permu NOFOG\n"
+"!!cvarf hl2_twoframes\n"
+"!!samps !FRAMES diffuse upper\n"
+"!!samps =FRAMES shield:2DArray=0\n"
+
+// ftesurf: UnlitTwoTexture, and the material-proxy chain that animates it.
+//
+// Reported as: "the portals in the main spawn area are a solid glow web
+// texture. but in counter-strike they are not visible until you move closer to
+// them, and visually it looks like a mask moving diagonally, and maybe mipmap
+// coming in and showing you more as you get closer."
+//
+// Every one of those observations is a separate feature of one material,
+// effects/combineshield/comshieldwall.vmt, and mat_vmt.c's UnlitTwoTexture arm
+// implemented none of them -- it emitted a single pass with $basetexture and a
+// blendfunc, which is exactly "a solid glow web".
+//
+// WHAT THE MATERIAL ACTUALLY ASKS FOR, read out of the VMT rather than guessed:
+//
+//   $basetexture / $texture2   two layers, MULTIPLIED.  That is what
+//                              UnlitTwoTexture means, and drawing only the
+//                              first is why the web never moved.
+//   TextureScroll on
+//   $texture2transform         rate .1, angle -45 -> the second layer slides
+//                              diagonally across the first.  "a mask moving
+//                              diagonally", precisely.
+//   PlayerProximity 0.0009
+//     -> Subtract from $gnoise
+//     -> Sine -> $alpha         alpha ~= 0.9 - dist*0.0009, so it reaches zero
+//                              at about 1000 units.  "not visible until you
+//                              move closer".
+//   PlayerProximity 0.2
+//     -> Subtract 24 -> Clamp
+//     -> $frame                 comshieldwall.vtf has THIRTY-ONE frames, and
+//                              the frame index is chosen by DISTANCE, not by
+//                              time: frame 0 inside 120 units, frame 30 beyond
+//                              270.  That is the "mipmap coming in and showing
+//                              you more as you get closer" -- a good guess at
+//                              the effect from a wrong mechanism.
+//
+// THE FRAME RAMP, AND #FRAMES (Patch 286).  This was the one item on that list
+// that Patch 279 resolved and could not apply.  Sampling a flipbook needs a
+// sampler2DArray, which has to be filled by `map "$2darray:…"` -- a PASS
+// keyword -- and every arrangement of that with a SECOND texture was tried and
+// failed:
+//
+//   program inside the pass + top-level `uppermap`   both samplers came out
+//                                                    black (a red/green debug
+//                                                    build showed neither)
+//   top-level program + one pass per sampler         `prog 1 passes 2`, and the
+//                                                    surface stopped reaching
+//                                                    the rasteriser entirely --
+//                                                    a shader forced to output
+//                                                    opaque red drew nothing
+//
+// The way past that is to stop needing two samplers.  comshieldwall.vmt points
+// BOTH $basetexture and $texture2 at the same file, and it drives BOTH $frame
+// and $frame2 from the same Clamp proxy -- two identical Clamp blocks, one per
+// var, read out of the VMT.  So the material is one array read twice, at two
+// texcoords and one layer, and that is exactly vmt/animated's proven shape:
+// one pass, one `map "$2darray:…"`, `!!samps =FRAMES shield:2DArray=0`.
+//
+// 7 of the library's 48 UnlitTwoTexture materials are same-texture like this.
+// The rest -- including comshieldwall2, which pairs this 31-frame base with a
+// different single-frame texture -- keep the two-sampler, no-flipbook draw and
+// are counted as declined in the census line.  On surf_tensor2 that is 42 of
+// the 44 shield faces covered and 2 not.
+//
+// Without #FRAMES this draws frame 0, which is the CLOSE-UP frame and therefore
+// the right one to be stuck on.
+//
+// WHY THE PROXIES ARE COMPILED IN RATHER THAN EVALUATED.  A general Source
+// material-proxy interpreter would need a per-material scalar that the CPU
+// updates every frame and the shader can read, which FTE has no channel for.
+// But this whole chain is a pure function of two things the shader already has:
+// the distance from the eye, and time.  So mat_vmt.c walks the proxy graph once
+// at load, extracts the two coefficients, and bakes them in as #defines.  What
+// cannot be expressed that way is not attempted -- see the honest list at the
+// bottom of the UnlitTwoTexture arm in mat_vmt.c.
+//
+// PER-PIXEL, NOT PER-ENTITY, and that is a deliberate difference.  Source's
+// PlayerProximity is the distance from the player to the ENTITY, so a large
+// shield fades as one unit.  e_eyepos is the eye in model space, so
+// length(v_position - e_eyepos) is the distance to this fragment, and a shield
+// you stand beside fades in across its own surface instead of all at once.  It
+// is a better-looking answer to the same question and it costs nothing, but it
+// is not a transcription and should not be described as one.
+//
+// THE ARRAY SAMPLER IS THE SAME IDIOM vmt/animated USES (Patch 195): the frames
+// of one mip level are contiguous in a VTF, which is the 2D-array layout, and
+// `map "$2darray:name"` is what asks the loader for all of them.  Reused rather
+// than reinvented, including the textureSize() frame count so no permutation is
+// spent per frame count.  A single-frame VTF loads as a one-layer array and the
+// clamp below keeps the index at 0, so the same shader serves both.
+//
+// WHY THE NON-FRAMES PATH USES NO PASSES.  The first version of this shader
+// declared `base:2DArray=0` beside a bare `upper`, expecting the second layer to
+// arrive through the top-level `uppermap` default-texture slot while the program
+// sat in a pass -- and nothing arrived at all: the shield drew black, and a
+// debug build that painted the two samples into red and green came out black in
+// both channels.  The obvious repair, one pass per sampler with the program at
+// the top level, was worse: `prog 1 passes 2` and no rasterised fragments at
+// all.  What ships instead is a top-level program with `diffusemap` and
+// `uppermap` and NO passes -- default textures are shader-scoped, so the program
+// reads both without a pass list existing.  The samplers below are declared as
+// bare default names for that reason, not as `name:type=idx`.
+//
+// #FRAMES is the exception and it is a one-sampler shader, which is the only
+// arrangement that has ever bound an array here.  Its `shield:2DArray=0` pairs
+// with the single `{ program … map "$2darray:…" }` pass in mat_vmt.c.
+// vmt/animated has been running that exact shape on 927 materials.
+
+"#include \"sys/defs.h\"\n"
+
+"#ifndef SCROLL\n"
+"#define SCROLL 0.0,0.0\n"
+"#endif\n"
+"#ifndef SCROLL2\n"
+"#define SCROLL2 0.0,0.0\n"
+"#endif\n"
+"#ifndef COLOR\n"
+"#define COLOR 1.0,1.0,1.0\n"
+"#endif\n"
+"#ifndef ALPHA\n"
+"#define ALPHA 1.0\n"
+"#endif\n"
+
+//alpha = clamp(PROXBASE - PROXFADE*dist, 0, 1).  PROXFADE 0 disables it.
+"#ifndef PROXFADE\n"
+"#define PROXFADE 0.0\n"
+"#endif\n"
+"#ifndef PROXBASE\n"
+"#define PROXBASE 1.0\n"
+"#endif\n"
+
+//layer = clamp(PROXFRAME.x*dist - PROXFRAME.y, PROXFRAME.z, PROXFRAME.w)
+"#ifndef PROXFRAME\n"
+"#define PROXFRAME 0.0,0.0,0.0,0.0\n"
+"#endif\n"
+
+//the Sine proxy: amplitude, period in seconds.  0 amplitude disables it.
+"#ifndef FLICKER\n"
+"#define FLICKER 0.0,1.0\n"
+"#endif\n"
+
+"varying vec2 tex_c;\n"
+"varying vec2 tex2_c;\n"
+"varying float eyedist;\n"
+
+"#ifdef VERTEX_SHADER\n"
+"void main ()\n"
+"{\n"
+"tex_c  = v_texcoord + e_time * vec2(SCROLL);\n"
+"tex2_c = v_texcoord + e_time * vec2(SCROLL2);\n"
+//e_eyepos is the eye in MODEL space, so this is a world-unit distance
+//for a brush and for a moving entity alike, with no matrix of our own.
+"eyedist = length(v_position.xyz - e_eyepos);\n"
+"gl_Position = ftetransform();\n"
+"}\n"
+"#endif\n"
+
+"#ifdef FRAGMENT_SHADER\n"
+"#include \"sys/fog.h\"\n"
+
+//from !!cvarf at the top -- live, re-read every frame.  Declared
+//unconditionally rather than under #ifdef FRAMES because the !! directive
+//is scanned out of the whole file and the uniform exists in every
+//permutation; an unused uniform costs nothing.
+"uniform float cvar_hl2_twoframes;\n"
+
+"void main (void)\n"
+"{\n"
+"vec4 diffuse_f;\n"
+
+//THE MULTIPLY IS THE WHOLE POINT OF UnlitTwoTexture.  Source's
+//UnlitTwoTexture combines $basetexture and $texture2 and then modulates
+//by the vertex colour; with the second layer scrolling, the product is
+//an interference pattern that moves across a stationary web.  Drawing
+//layer one alone is a still image of the same texture, which is what
+//was on screen.
+"#ifdef FRAMES\n"
+//WHICH FRAME, and it is chosen by DISTANCE rather than by time -- the
+//one thing about this material that is not like every other flipbook.
+//frame 0 inside 120 units, frame 30 beyond 270, so the web gets DENSER
+//as you approach.  "mipmap coming in and showing you more as you get
+//closer" was a good description of the effect from a wrong mechanism.
+//
+//The layer count comes from textureSize rather than a define, the same
+//way vmt/animated does it, so no permutation is spent per frame count
+//and mat_vmt.c never has to open the VTF.  The second clamp is not
+//redundant with the material's own: Source's Clamp says 0..30 because
+//the author knew there were 31 frames, and a material whose proxy
+//outruns its texture would sample past the end of the array.
+//
+//ONE LAYER FOR BOTH READS, because the VMT drives $frame and $frame2
+//from two identical Clamp proxies.  That is transcription, not an
+//economy -- see the essay at the top.
+"vec4 pf = vec4(PROXFRAME);\n"
+"ivec3 sz = textureSize(s_shield, 0);\n"
+"float layer = clamp(pf.x * eyedist - pf.y, pf.z, pf.w);\n"
+"layer = clamp(layer, 0.0, float(sz.z - 1));\n"
+
+//THE A/B SWITCH, AND WHY IT HAD TO BE A LIVE UNIFORM.
+//
+//hl2_twoframes is read at MAP LOAD to choose this arm at all, and the
+//first attempt to verify the flipbook toggled it in the console and
+//compared screenshots.  It changed nothing: a plugin cvar's flags are
+//masked to `flags&1` on the way through Plug_Cvar_GetNVFDG, so
+//CVAR_SHADERSYSTEM never reaches Cvar_Get2 and no shader reload
+//happens.  Both arms of that A/B were the same arm, and the 12.5% of
+//the frame that differed was this material's own scroll and its 1.08s
+//alpha sine between the two shots.
+//
+//!!cvarf is re-read every frame, so 0 pins the layer at 0 -- exactly
+//what the load-time gate produces -- with the map still loaded and
+//nothing else changing between the pictures.  Fractional values are
+//useful too: .5 walks the ramp at half rate.
+"layer = layer * clamp(cvar_hl2_twoframes, 0.0, 1.0);\n"
+
+"diffuse_f  = texture2D(s_shield, vec3(tex_c,  layer));\n"
+"diffuse_f *= texture2D(s_shield, vec3(tex2_c, layer));\n"
+"#else\n"
+"diffuse_f  = texture2D(s_diffuse, tex_c);\n"
+"diffuse_f *= texture2D(s_upper,   tex2_c);\n"
+"#endif\n"
+
+"diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);\n"
+
+//THE DISTANCE FADE, and the reason the shield is invisible across the
+//room.  Clamped at both ends: Source's chain can produce a value above
+//1 when the noise term is high and the player is close.
+//
+//Unconditional rather than #ifdef'd on purpose -- the GLSL preprocessor
+//compares INTEGERS, so `#if PROXFADE != 0.0` is a syntax error and not
+//a switch.  With the defaults (fade 0, base 1) this is clamp(1,0,1),
+//which the compiler folds away, so the permutation is not worth its
+//risk of being written wrong.
+"float a = float(ALPHA);\n"
+"a *= clamp(float(PROXBASE) - float(PROXFADE) * eyedist, 0.0, 1.0);\n"
+"{\n"
+"vec2 fl = vec2(FLICKER);\n"
+"if (fl.x > 0.0)\n"
+"a *= 1.0 + fl.x * sin(e_time * 6.2831853 / max(fl.y, 0.001));\n"
+"}\n"
+
+//WHICH CHANNEL THE FADE GOES INTO DEPENDS ON THE BLEND, and writing it
+//into alpha alone was wrong for exactly the material this shader
+//exists for.
+//
+//Reported as "the scrolling effect doesn't really diminish over
+//distance", with the scroll itself visibly working -- so the two
+//layers and their transform had arrived and only the fade had not.
+//The reason is that comshieldwall is $additive 1, which becomes
+//blendFunc add, which is GL_ONE GL_ONE: the destination factor never
+//involves the source alpha, so `diffuse_f.a *= a` is discarded by the
+//blender and the shield is exactly as bright at 900 units as at 90.
+//
+//An additive surface fades by getting DARKER, an alpha-blended one by
+//getting more transparent.  The permutation comes from the material's
+//own $additive rather than a guess, because a material may write both
+//$additive and $translucent and Source resolves that the way
+//mat_vmt.c's blend chain does -- additive wins.
+//
+//NOTE FOR ANYONE EDITING THIS FILE: line comments only.  A /* */ block
+//breaks engine/shaders/generatebuiltinsl, which wraps the whole shader
+//in a C comment when it bakes it into mat_vmt_progs.h -- the first */
+//inside ends that comment early and the build dies on stray tokens
+//three lines later.  Every other vmt/*.glsl uses // for this reason.
+"#ifdef ADDITIVE\n"
+"diffuse_f.rgb *= a;\n"
+"#else\n"
+"diffuse_f.a *= a;\n"
+"#endif\n"
+
+"#ifdef NOFOG\n"
+"gl_FragColor = diffuse_f;\n"
+"#else\n"
+//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+//fog4() multiplies by regularcolour.a, which on a Source material is a
+//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+"#if #include \"cvar/hl2_fog_alphamul\"\n"
+"gl_FragColor = fog4(diffuse_f);\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);\n"
+"#endif\n"
+"#endif\n"
+"}\n"
+"#endif\n"
+},
+#endif
+#ifdef GLQUAKE
+{QR_OPENGL, 110, "vmt/ccorrect",
+"!!ver 130-450\n"
+"!!cvarf hl2_colourcorrection\n"
+"!!samps screen=0\n"
+"!!samps lut0:3D=1\n"
+"!!samps =LUT1 lut1:3D=2\n"
+"!!samps =LUT2 lut2:3D=3\n"
+"!!samps =LUT3 lut3:3D=4\n"
+
+// ftesurf Patch 288: Source's colour_correction, which FTE has never applied.
+//
+// Reported as part of "[the portal particles] are slightly to small and wayy to
+// blue.  maybe the hue is actually colourcorrection, maybe they actually white."
+//
+// The hunch was right and it is worth being precise about why.  The PCF really
+// is blue -- portal_blue's Color Random runs [51,51,80] to [0,96,255] -- and
+// particle_glow_01.vtf is provably neutral (its reflectivity is R=G=B exactly).
+// So the particles are not wrong.  What is wrong is everything AROUND them: in
+// Source, surf_tensor2 runs two color_correction entities over the whole frame
+// and the entire scene is graded cool, so the particles do not stand out.  In
+// FTE the scene was ungraded and they did.  Fixing the particles' colour would
+// have been fixing the wrong thing twice.
+//
+// WHAT SOURCE DOES, and it is a short list:
+//
+//     out = (1 - W) * in + sum( w[i] * LUT[i](in) ),  W = min(sum(w[i]), 1)
+//
+// with each LUT a 32x32x32 RGB lattice in a headerless .raw.  See img_ccraw.c
+// for the file, and its essay for how the axis order was established (a corner
+// probe gets it wrong; only a whole-volume correlation separates the six
+// possible orders).
+//
+// THE HALF-TEXEL INSET IS NOT OPTIONAL.  A 32-cube stores its values AT the grid
+// points, so input 0.0 must land on the centre of texel 0 and input 1.0 on the
+// centre of texel 31 -- (c*(N-1) + 0.5)/N.  Sampling with the raw colour instead
+// puts 1.0 half a texel past the last sample, where GL_CLAMP_TO_EDGE flattens
+// it: highlights lose their top end and read as "crushed", which is exactly the
+// artefact that would be blamed on the LUT rather than on the sampler.
+//
+// WHY THE WEIGHTS ARE #defineS AND NOT UNIFORMS.  color_correction has a
+// fadeInDuration and can be Enabled and Disabled by entity I/O, so in Source the
+// weights are live.  Nothing in this build implements that: the entities this
+// applies to are enabled at map spawn by a logic_auto and never touched again,
+// which is the common idiom and both of tensor2's.  Baking them means no uniform
+// plumbing between the plugin and the renderer at all, and a map that really
+// does animate its grade will hold the wrong weight rather than crash -- a
+// visible-but-small error, and counted in the map's census line.
+//
+// SAMPLER 0 IS THE SCREEN AND THE REST ARE PASSES.  A post-process shader with
+// more than one sampler is not a shape that has to be guessed at here:
+// scenepp_waterwarp (gl_rmain.c:110-126) is a shipped top-level program with
+// THREE passes and its underwaterwarp.glsl declares `!!samps screen=0 warp=1
+// edge=2`.  That is the precedent this follows exactly.  It is worth writing
+// down because the same shape FAILS for a world surface -- see the essay in
+// mat_vmt.c's UnlitTwoTexture arm, where it produced `prog 1 passes 2` and no
+// rasterised fragments at all.  Post-process and world are not the same case.
+//
+// NOTE FOR ANYONE EDITING THIS FILE: line comments only.  A /* */ block breaks
+// engine/shaders/generatebuiltinsl, which wraps the whole shader in a C comment
+// when it bakes it into mat_vmt_progs.h.
+
+"#include \"sys/defs.h\"\n"
+
+// the weight of each LUT.  0 is "not present", and with the defaults the whole
+// thing folds to `out = in`.
+"#ifndef W0\n"
+"#define W0 0.0\n"
+"#endif\n"
+"#ifndef W1\n"
+"#define W1 0.0\n"
+"#endif\n"
+"#ifndef W2\n"
+"#define W2 0.0\n"
+"#endif\n"
+"#ifndef W3\n"
+"#define W3 0.0\n"
+"#endif\n"
+
+"varying vec2 texcoord;\n"
+
+"#ifdef VERTEX_SHADER\n"
+"void main ()\n"
+"{\n"
+// same flip fxaa.glsl and underwaterwarp.glsl use: $sourcecolour is an FBO
+// and its origin is the other way up from the screen's.
+"texcoord = vec2(v_texcoord.x, 1.0 - v_texcoord.y);\n"
+"gl_Position = ftetransform();\n"
+"}\n"
+"#endif\n"
+
+"#ifdef FRAGMENT_SHADER\n"
+// !!cvarf gives a LIVE uniform, re-read every frame, not a #define that would
+// recompile.  That is what makes the A/B one command with the map already
+// loaded: hl2_colourcorrection 0 / 1 / 0 at a fixed vantage, with nothing else
+// changing between the three pictures.  Fractional values work and are useful --
+// .5 is "half the grade", which is how you tell a wrong LUT from a right LUT
+// applied too strongly.
+//
+// The same cvar ALSO gates generation at map load (mod_vbsp.c), so 0 at launch
+// costs nothing at all: no LUT textures, no post-process pass, no FBO round
+// trip.  Setting it to 1 afterwards needs a map load to build the shader; the
+// live path exists for a map that was loaded with it on.
+"uniform float cvar_hl2_colourcorrection;\n"
+
+"void main (void)\n"
+"{\n"
+"vec4 scene = texture2D(s_screen, texcoord);\n"
+"vec3 c = clamp(scene.rgb, 0.0, 1.0);\n"
+"vec3 uvw;\n"
+"vec3 graded = vec3(0.0);\n"
+"float n, w = 0.0;\n"
+
+// the lattice size is read from the texture rather than assumed, so the
+// shader cannot disagree with the loader about it.  Same idiom vmt/animated
+// uses for its frame count.
+"n = float(textureSize(s_lut0, 0).x);\n"
+"uvw = (c * (n - 1.0) + 0.5) / n;\n"
+
+"graded += float(W0) * texture2D(s_lut0, uvw).rgb;\n"
+"w += float(W0);\n"
+"#ifdef LUT1\n"
+"graded += float(W1) * texture2D(s_lut1, uvw).rgb;\n"
+"w += float(W1);\n"
+"#endif\n"
+"#ifdef LUT2\n"
+"graded += float(W2) * texture2D(s_lut2, uvw).rgb;\n"
+"w += float(W2);\n"
+"#endif\n"
+"#ifdef LUT3\n"
+"graded += float(W3) * texture2D(s_lut3, uvw).rgb;\n"
+"w += float(W3);\n"
+"#endif\n"
+
+// THE TOTAL WEIGHT IS WHAT SATURATES, not each one, and the normalise below
+// is the difference between saturating and over-brightening.  Three
+// corrections at .5 each are not 1.5x the grade: with w clamped to 1 the
+// scene term vanishes and the sum of the LUT terms would still be 1.5, so
+// the screen washes out.  Scaling the accumulator by 1/w when w > 1 keeps
+// this a convex combination for every possible set of weights.
+"if (w > 1.0)\n"
+"{\n"
+"graded /= w;\n"
+"w = 1.0;\n"
+"}\n"
+
+// the live switch, applied to the blend and not to the result, so 0 is
+// bit-for-bit the ungraded scene rather than "the scene, times something
+// that happens to be one".
+"{\n"
+"float on = clamp(cvar_hl2_colourcorrection, 0.0, 1.0);\n"
+"graded *= on;\n"
+"w *= on;\n"
+"}\n"
+
+"gl_FragColor = vec4((1.0 - w) * scene.rgb + graded, scene.a);\n"
 "}\n"
 "#endif\n"
 },

@@ -64,6 +64,13 @@ static int vbsp_surfsequence; //so we don't draw the same surface if its found m
 //so areakill is the geometry that vis WOULD have drawn and areas removed --
 //which is the only number that says whether area culling is costing anything.
 static int vbsp_leaf_invis, vbsp_leaf_areakill;
+/* FTESurf Patch 273: what the marking loop actually touched, so the cluster-bucket
+   claim is a measurement and not an assertion.  marks = calls that ran the loop
+   (i.e. cache misses); markleaves = leaves visited across them. */
+static int vbsp_mark_runs, vbsp_mark_leaves;
+/* FTESurf Patch 273: which recursion level's marks the node tree currently holds.
+   -1 means "a forcevis view's, i.e. nobody's", so every level re-marks. */
+static int vbsp_markowner = -1;
 
 r_qrenderer_t qrenderer = QR_OPENGL;
 
@@ -71,8 +78,12 @@ r_qrenderer_t qrenderer = QR_OPENGL;
 #define SURF_OFFNODE		SURF_DRAWBACKGROUND	//might as well just reuse that.
 
 static cvar_t *hl2_novis;
+static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
 static cvar_t *hl2_displacement_scale;
 static cvar_t *hl2_favour_ldr;
+static cvar_t *hl2_lumpretire;	//FTESurf Patch 298
+static cvar_t *hl2_lightmap_repack;	//FTESurf Patch 281: see VBSP_RepackLighting
+static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their per-style luxel-set stride, see VBSP_ProbeLightmapStride
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
@@ -110,8 +121,15 @@ extern cvar_t *hl2_bumpmap2;	//FTESurf Patch 251, the second normal map
 extern int vmt_stat_seamless, vmt_stat_bumpmap2;	//FTESurf Patch 251
 extern int vmt_stat_animated, vmt_stat_animunlit;	//FTESurf Patch 195, 253
 extern cvar_t *hl2_imposter;	//FTESurf Patch 263, WindowImposter
+extern cvar_t *hl2_twotexture;	//FTESurf, UnlitTwoTexture's second layer
+extern cvar_t *hl2_twoframes;	//FTESurf Patch 286, and its flipbook
+extern int vmt_stat_twotexture, vmt_stat_proxfade, vmt_stat_proxframe;	//FTESurf
+extern int vmt_stat_twoframes, vmt_stat_twoframesdecl;	//FTESurf Patch 286
 extern int vmt_stat_imposter;
 extern int vmt_stat_hdrenvmap;	//FTESurf Patch 264
+extern int vmt_stat_ignorez;	//FTESurf Patch 290
+extern int vmt_stat_addprog, vmt_stat_addpass;	//FTESurf Patch 300
+extern cvar_t *hl2_additivefog;	//FTESurf Patch 300
 extern int vmt_stat_unknown;	//FTESurf Patch 263, materials whose shader class is unimplemented
 extern char vmt_stat_unknown_name[4][64];
 extern char vmt_stat_waterargs[256];	//FTESurf Patch 251
@@ -131,6 +149,8 @@ void Mat_VMT_CensusForget(const char *name);
 static cvar_t *hl2_bottommaterial;
 cvar_t *hl2_skinfallback;		//FTESurf Patch 234: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest
 extern cvar_t *hl2_dither_alpha, *hl2_bumpmap, *hl2_envmap;	//FTESurf Build 13, all owned by mat_vmt.c
+extern cvar_t *hl2_envcubemap, *hl2_envmap_source;	//FTESurf Patch 268 B, likewise
+extern cvar_t *hl2_cubelight, *hl2_bumpgreenfix;	//FTESurf Patch 268 C, likewise
 extern cvar_t *hl2_dither_force;	//FTESurf Patch 174, likewise
 cvar_t *hl2_texdiag;	//FTESurf build 11: the engine's r_texdiag, borrowed -- see VBSP_GenerateMaterials.
 							//Patch 239 dropped `static`: img_vtf.c reports the per-file image format under it.
@@ -267,7 +287,7 @@ enum hllumps_e
 	VLUMP_EDGES			= LUMP_EDGES,
 	VLUMP_SURFEDGES		= LUMP_SURFEDGES,
 	VLUMP_MODELS		= LUMP_MODELS,
-//	VLUMP_FOO			= 15,
+	VLUMP_WORLDLIGHTS_LDR = 15,	//FTESurf Patch 302: dworldlight_t[], the direct lights VRAD used. See VBSP_LoadWorldLights.
 	VLUMP_LEAFFACES		= 16,
 	VLUMP_LEAFBRUSHES	= 17,
 	VLUMP_BRUSHES		= 18,
@@ -307,7 +327,7 @@ enum hllumps_e
 	VLUMP_LEAFLIGHTI_HDR= 51,	//indexes into VLUMP_LEAFLIGHTV_HDR, two shorts per leaf.
 	VLUMP_LEAFLIGHTI_LDR= 52,
 	VLUMP_LIGHTING_HDR	= 53,
-//	VLUMP_FOO			= 54,
+	VLUMP_WORLDLIGHTS_HDR = 54,	//FTESurf Patch 302
 	VLUMP_LEAFLIGHTV_HDR= 55,
 	VLUMP_LEAFLIGHTV_LDR= 56,
 //	VLUMP_FOO			= 57,
@@ -380,12 +400,42 @@ typedef struct dispinfo_s
 
 typedef struct vbspinfo_s
 {
+	/*
+	FTESurf Patch 273 -- ONE VIS CACHE PER RECURSION LEVEL.
+
+	This was a single slot, and on any map with a sky_camera two views want it
+	every frame: the player's (recurse 0) and the 3D skybox's (recurse 1).  They
+	evicted each other, so NEITHER ever hit and the leaf-marking loop ran twice a
+	frame standing still.  Patch 271 had to poison the slot after a recursed view
+	precisely because the ONE visbuf was shared -- its own essay says so:
+	"prv->vcache.visbuf is one buffer shared by every recursion level, so a
+	recursed view necessarily overwrites what the main view computed".
+
+	Giving each level its own buffer removes the hazard at the root instead of
+	working around it: the poison is no longer needed, both views cache, and the
+	buffers become STABLE and DISTINCT -- which is also what lets the headnode
+	memo below tell the two views apart by pointer.
+	*/
 	struct
 	{
 		qbyte *vis;
 		pvsbuffer_t visbuf;
 		int viewcluster[2];
-	} vcache;
+	} vcache[R_MAX_RECURSE];
+
+	/*
+	FTESurf Patch 273 -- leaves bucketed by cluster, so VBSP_MarkLeaves walks the
+	VISIBLE clusters instead of every leaf in the map.  See the essay above the
+	marking loop.  Built once at the tail of VBSP_LoadLeafs, allocated from
+	mod->memgroup so it is freed with the model and needs no teardown.
+
+	clusterfirstleaf == NULL means "not built", and every consumer keeps its
+	original whole-map loop as the fallback.  Strictly additive by design: if the
+	precompute is ever wrong, the old path is one branch away.
+	*/
+	unsigned int	*clusterfirstleaf;	//[numclusters+1], prefix offsets into clusterleafs
+	unsigned int	*clusterleafs;		//[numclusteredleafs] leaf indices, cluster-major
+	unsigned int	numclusteredleafs;
 
 	int				numbrushsides;
 	q2cbrushside_t *brushsides;
@@ -409,12 +459,14 @@ typedef struct vbspinfo_s
 	struct vbsptexinfo_s
 	{
 		vec4_t lmvecs[2];
+		qboolean bumped;	//FTESurf Patch 268 D1: SURF_BUMPLIGHT -- VRAD wrote NUM_BUMP_VECTS+1 = 4 luxel sets per lightstyle for this face
 	} *texinfo;
 
 	int				numareas;
 	int				floodvalid;
 	int				lastreportedarea;	//FTESurf Build 8: edge-detects the area print in VBSP_PrepareFrame
 	int				areastatframes;		//...and one-shots the area-cull cost report
+	int				markstatframes;		//FTESurf Patch 273: REPEATING window for the mark census
 	double			nextareareport;		//...and rate-limits it on an area boundary
 	careaflood_t	areaflood[MAX_VBSP_AREAS];
 	//areas have a list of portals that open into other areas.
@@ -438,6 +490,67 @@ typedef struct vbspinfo_s
 		} *point;
 		int count;
 	} *leaflight;
+
+	/*
+	FTESurf Patch 302 -- THE HALF OF SOURCE'S LIGHT CACHE WE NEVER IMPLEMENTED.
+
+	The leaf ambient cube above is BOUNCE ONLY.  VRAD puts a light into it only
+	when the light carries DWL_FLAGS_INAMBIENTCUBE, which IsLeafAmbientSurfaceLight
+	(utils/vrad/leaf_ambient_lighting.cpp:183-198) grants only to dim, unstyled
+	emit_surface lights -- on surf_tensor2 that is 0 of 603.  Source makes up the
+	difference at runtime: a static prop with no .vhv bake is lit by the light
+	cache, which is the ambient cube PLUS the direct contribution of every nearby
+	worldlight.  We had only the first half, so every .vhv-less prop on every map
+	drew at roughly a fifth of its Source brightness.
+
+	Measured, on the prop in Lex's surf_tensor2 save012 screenshot pair
+	(models/props/surf/tensor2/stage2_detail02.mdl): the block renders at 0.40x
+	the side wall beside it where CS:S renders it at 1.02x, while every other
+	surface in the same frame matches CS:S to within 5%.  Summing these lights
+	offline predicts a 4.44/4.66/4.77 boost; the screenshots demand 4.53/4.95/5.90.
+
+	Kept per map, filtered at load to the set that can contribute statically.
+	*/
+	struct vworldlight_s
+	{
+		vec3_t	origin;
+		vec3_t	intensity;
+		vec3_t	normal;			//emitting surface's normal, or the spot axis
+		int		cluster;
+		int		type;			//emittype_t, already filtered to 0/1/2
+		float	stopdot;		//start of a spotlight's penumbra
+		float	stopdot2;		//end of it
+		float	exponent;
+		float	radius;			//hard cutoff, 0 = none
+		float	constant_attn, linear_attn, quadratic_attn;
+	} *worldlights;
+	size_t		numworldlights;
+	//Suppressed for exactly one population: props whose .vhv bake already
+	//contains VRAD's direct light.  Set around the HL2_CalcModelLighting call in
+	//the prop loop, never anywhere else.  See the essay there.
+	qboolean	wl_suppress;
+	/*
+	FTESurf Patch 304: enabled for exactly one population -- static props, which
+	are the only models guaranteed to render through plugins/hl2/glsl/vmt/
+	vertexlit.glsl and therefore the only ones that get the matching HALF-lambert
+	ramp.  Set around the same HL2_CalcModelLighting call wl_suppress is.
+
+	Note the OPPOSITE sense to wl_suppress, and it is not an inconsistency.  Patch
+	302's term is consumer-agnostic: it is simply more light in the cube, and a
+	player model wants it as much as a prop does.  This one is a
+	RE-PARAMETERISATION of the same cube into the shader's two slots, and it is
+	only correct against the half-lambert ramp.  A consumer that reads these
+	fields with a plain lambert -- anything on engine/shaders/glsl/defaultskin.glsl
+	-- must keep the legacy fold or it gets the new base with the old ramp, which
+	measured WORSE than either (0.996 stops against today's 0.574 on bounce-only
+	cubes).  So the gate is per-consumer, and it is here because here is the only
+	place that knows which population the call belongs to.
+	*/
+	qboolean	fold_prop;
+	//A PVS row of our own, because VBSP_ClusterPVS's default buffer is a single
+	//file-scope static that the next caller overwrites (:6281).
+	pvsbuffer_t	wl_pvs;
+	int			wl_pvscluster;	//which cluster wl_pvs currently holds, -2 = none
 
 	size_t numdisplacements;
 	dispinfo_t *displacements;
@@ -501,6 +614,25 @@ typedef struct vbspinfo_s
 		qbyte	nareas;
 		entity_t ent;
 	} *staticprops;
+
+	/*
+	FTESurf Patch 281: the lighting lump as the FILE holds it -- Source's linear
+	ColorRGBExp32, 4 bytes a luxel -- and its length.  VBSP_LoadLighting converts
+	the whole lump into mod->lightdata as 4-byte E5BGR9 words counted from byte 0,
+	which is only right when every face's lightofs is a multiple of 4.  Nine maps
+	in the Momentum library break that, and VBSP_RepackLighting needs the raw
+	bytes back to convert those faces from where they really start.  Points into
+	mod_base (the file buffer, or the decompressed lump table on an LZMA map), so
+	it lives exactly as long as the load does; NULL when the map has no lighting
+	or the server loaded it.
+	lightrepacked is set only when VBSP_RepackLighting actually rewrote
+	mod->lightdata (not on its early returns, not on the hl2_lightmap_repack 0
+	arm), so VBSP_ProbeLightmapStride (Patch 268 D1) knows the layout is already
+	one luxel set per style and no stride tag applies.
+	*/
+	const qbyte		*lightraw;
+	size_t			lightrawsize;
+	qboolean		lightrepacked;
 
 	unsigned int contentsremap[32];
 } vbspinfo_t;
@@ -1177,6 +1309,336 @@ static size_t VBSP_EmitOverlayEnt(model_t *mod, const vbspoverlay_t *o, char *ou
 	return strlen(out);
 }
 
+/*
+================================================================================
+FTESurf Patch 288: color_correction -- the whole-screen grade FTE never applied.
+
+Reported as part of the portal-particle message: "they are slightly to small and
+wayy to blue.  maybe the hue is actually colourcorrection, maybe they actually
+white."
+
+The hunch was right, and it is the reason the particles are not retuned by hand.
+surf_tensor2's PCF genuinely is blue and its particle texture is provably neutral
+(reflectivity R=G=B exactly), so the particles are correct as authored.  What was
+missing is everything AROUND them: the map runs two color_correction entities
+over the whole frame, so in Source the entire scene is graded cool and they do
+not stand out.  Before this the only mention of the feature anywhere in the
+engine was $toolcolorcorrection sitting in mat_vmt.c's ignore list.
+
+WHAT IS IMPLEMENTED, and it is narrow on purpose:
+
+  minfalloff -1 / maxfalloff -1   global, no distance term -- weight is maxweight.
+                                  That is both of tensor2's and the common idiom.
+  StartDisabled 1 + a logic_auto  OnMapSpawn "<targetname>,Enable" counts as
+                                  enabled at load.  That is how tensor2 turns
+                                  both of its on and it is what a naive reader
+                                  would get wrong: taking StartDisabled at face
+                                  value produces a map with a grade that never
+                                  applies, and looks exactly like a map with no
+                                  grade.
+
+WHAT IS DECLINED, counted rather than ignored:
+
+  a real falloff                  needs a per-pixel distance to the entity, which
+                                  nothing has measured a need for.
+  color_correction_volume         needs a volume test; 4 maps in the library.
+  more than CC_MAX at once        4 is the library maximum; the counter says so
+                                  if that is ever wrong.
+  fadeInDuration / Disable at
+  runtime                         the weights are baked into the shader, so a map
+                                  that animates its grade holds the final value.
+
+A DECLINED FEATURE THAT DRAWS NOTHING IS INDISTINGUISHABLE FROM ONE THAT IS NOT
+THERE, which is why every one of those has a number in the census line.
+================================================================================
+*/
+#define CC_MAX			4		//the library's maximum simultaneously active
+#define CC_ENABLERS		16		//logic_auto Enable targets we will remember
+#define CC_KEY			64
+
+static cvar_t *hl2_colourcorrection;	//registered beside hl2_twoframes
+static char  cc_shader[MAX_QPATH];		//"" when this map has no grade
+static char  cc_script[1024];			//handed to the material loader on demand
+static float cc_w[CC_MAX];				//the accepted weights, in pass order
+static int   cc_n;						//how many LUTs the shader samples
+static int   cc_seen, cc_over, cc_falloff, cc_disabled, cc_volumes;
+
+//The generated shader is handed over by mat_vmt.c's material loader, because a
+//plugin has no other way to define a shader by name.  See Shader_LoadVMT.
+const char *VBSP_ColourCorrectScript(const char *name)
+{
+	if (!*cc_shader || strcmp(name, cc_shader))
+		return NULL;
+	return cc_script;
+}
+
+static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, size_t entlen)
+{
+	struct
+	{
+		char file[MAX_QPATH];
+		char target[CC_KEY];
+		float weight;
+		float minfall, maxfall;
+		int disabled;
+	} cc[CC_MAX*4];		//room to SEE more than we can use, so cc_over is honest
+	char enabler[CC_ENABLERS][CC_KEY];
+	char passes[768];
+	char tmp[MAX_QPATH+64];
+	int enablers = 0, found = 0;
+	char *text, *data;
+	char token[1024];
+	char key[CC_KEY];
+	unsigned int hash;
+	char base[MAX_QPATH];
+	int i, j;
+
+	passes[0] = 0;
+
+	cc_shader[0] = 0;
+	cc_script[0] = 0;
+	cc_n = cc_seen = cc_over = cc_falloff = cc_disabled = cc_volumes = 0;
+
+	//Cleared even when the feature is off, and this is not defensive noise: the
+	//cvar is machine-set and persists across a map change, so a map with no
+	//grade MUST write "" or it inherits the previous map's.
+	if (!hl2_colourcorrection || !hl2_colourcorrection->ival)
+	{
+		cvarfuncs->ForceSetString("r_colourcorrection", "");
+		return;
+	}
+
+	//A NUL-terminated copy, because 3 of the 1310 shipped maps do not store the
+	//terminator inside the lump and ParseToken would run off the end of it.
+	text = plugfuncs->Malloc(entlen+1);
+	if (!text)
+		return;
+	memcpy(text, entdata, entlen);
+	text[entlen] = 0;
+
+	data = text;
+	for (;;)
+	{
+		char classname[CC_KEY] = "";
+		char target[CC_KEY] = "";
+		char file[MAX_QPATH] = "";
+		char onmapspawn[CC_ENABLERS][CC_KEY];
+		int spawns = 0;
+		float weight = 1, minfall = -1, maxfall = -1;
+		int disabled = 0;
+
+		data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL);
+		if (!data)
+			break;
+		if (*token != '{')
+			continue;
+
+		for (;;)
+		{
+			data = cmdfuncs->ParseToken(data, key, sizeof(key), NULL);
+			if (!data || *key == '}')
+				break;
+			data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL);
+			if (!data)
+				break;
+
+			if (!Q_strcasecmp(key, "classname"))		Q_strlcpy(classname, token, sizeof(classname));
+			else if (!Q_strcasecmp(key, "targetname"))	Q_strlcpy(target, token, sizeof(target));
+			else if (!Q_strcasecmp(key, "filename"))	Q_strlcpy(file, token, sizeof(file));
+			else if (!Q_strcasecmp(key, "maxweight"))	weight = atof(token);
+			else if (!Q_strcasecmp(key, "minfalloff"))	minfall = atof(token);
+			else if (!Q_strcasecmp(key, "maxfalloff"))	maxfall = atof(token);
+			else if (!Q_strcasecmp(key, "StartDisabled"))	disabled = atoi(token);
+			else if (!Q_strcasecmp(key, "OnMapSpawn") && spawns < CC_ENABLERS)
+				Q_strlcpy(onmapspawn[spawns++], token, CC_KEY);
+		}
+
+		if (!Q_strcasecmp(classname, "logic_auto"))
+		{
+			/*
+			"<target>,<input>,<param>,<delay>,<times>" -- comma separated, and
+			the ONLY one that matters here is Enable.  Read rather than assumed:
+			tensor2's logic_auto fires four OnMapSpawn outputs and three of them
+			go to the env_tonemap_controller.
+			*/
+			for (i = 0; i < spawns; i++)
+			{
+				char *c = strchr(onmapspawn[i], ',');
+				if (!c)
+					continue;
+				*c++ = 0;
+				if (Q_strncasecmp(c, "Enable", 6) || (c[6] && c[6] != ','))
+					continue;
+				if (enablers < CC_ENABLERS && *onmapspawn[i])
+					Q_strlcpy(enabler[enablers++], onmapspawn[i], CC_KEY);
+			}
+			continue;
+		}
+		if (!Q_strcasecmp(classname, "color_correction_volume"))
+		{
+			cc_volumes++;
+			continue;
+		}
+		if (Q_strcasecmp(classname, "color_correction") || !*file)
+			continue;
+
+		cc_seen++;
+		if (found < countof(cc))
+		{
+			Q_strlcpy(cc[found].file, file, sizeof(cc[found].file));
+			Q_strlcpy(cc[found].target, target, sizeof(cc[found].target));
+			cc[found].weight = weight;
+			cc[found].minfall = minfall;
+			cc[found].maxfall = maxfall;
+			cc[found].disabled = disabled;
+			found++;
+		}
+	}
+	plugfuncs->Free(text);
+
+	//Resolve in a second pass, because a logic_auto may be written either side of
+	//the entity it enables and the lump has no ordering guarantee.
+	hash = 2166136261u;	//FNV-1a
+	for (i = 0; i < found; i++)
+	{
+		const char *s;
+
+		if (cc[i].minfall != -1 || cc[i].maxfall != -1)
+		{
+			cc_falloff++;
+			continue;
+		}
+		if (cc[i].disabled)
+		{
+			for (j = 0; j < enablers; j++)
+				if (*cc[i].target && !Q_strcasecmp(enabler[j], cc[i].target))
+					break;
+			if (j == enablers)
+			{
+				cc_disabled++;
+				continue;
+			}
+		}
+		if (cc[i].weight <= 0)
+			continue;	//an explicit zero is off, and not worth a sampler
+		if (cc_n >= CC_MAX)
+		{
+			cc_over++;
+			continue;
+		}
+
+		//$clamp because a LUT edge must NOT wrap -- a wrapped white would sample
+		//black -- and $linear because trilinear interpolation between the 32
+		//grid points is the entire reason a 32-cube is enough.
+		Q_snprintfz(tmp, sizeof(tmp),
+			"\t{\n\t\tmap \"$3d:$clamp:$linear:%s\"\n\t\tnodepthtest\n\t}\n", cc[i].file);
+		Q_strlcat(passes, tmp, sizeof(passes));
+		for (s = cc[i].file; *s; s++)
+			hash = (hash ^ (unsigned char)*s) * 16777619u;
+		hash = (hash ^ (unsigned int)(cc[i].weight * 10000)) * 16777619u;
+		cc_w[cc_n] = cc[i].weight;
+		cc_n++;
+	}
+
+	if (!cc_n)
+	{
+		cvarfuncs->ForceSetString("r_colourcorrection", "");
+		return;
+	}
+
+	/*
+	THE NAME HAS TO BE CONTENT-DERIVED.  R_LoadShader returns an EXISTING shader
+	when one already carries the name and discards the body it was handed, so a
+	fixed name would give the second graded map of a session the first one's
+	grade -- silently, and only on the second map, which is the worst way to find
+	a bug like that.  Map base name for legibility, FNV-1a of the files and their
+	weights for correctness.
+	*/
+	//"maps/surf_tensor2.bsp" -> "surf_tensor2".  COM_FileBase is engine-only --
+	//a plugin is a separately linked shared object and sees only the function
+	//tables, so calling it links but does not load.  Same open-coded strip
+	//VBSP_LoadCubemaps uses and records at :9061.
+	{
+		char *s = strrchr(loadmodel->name, '/');
+		Q_strlcpy(base, s ? s+1 : loadmodel->name, sizeof(base));
+		s = strrchr(base, '.');
+		if (s)
+			*s = 0;
+	}
+	Q_snprintfz(cc_shader, sizeof(cc_shader), "ftesurf/cc/%s_%08x", base, hash);
+
+	/*
+	The pass list was built above while the weights were being resolved; the
+	program line needs the final count, so the script is assembled only now.
+
+	NO `affine` AND NO `nomipmaps`, and the first version had both.  They are
+	copied from gl_rmain.c's own scenepp_gamma and scenepp_antialias scripts,
+	which is where anyone would look for the shape of a post-process shader --
+	and this parser does not know either of them at the top level:
+
+	    Unknown shader directive parsing ftesurf/cc/...: "affine"
+	    Unknown shader directive parsing ftesurf/cc/...: "nomipmaps"
+	    <code>: unexpected indentation in ftesurf/cc/...
+
+	That third line is the damage.  An unrecognised top-level token leaves the
+	parser positioned inside a PASS, so the next `{` is read as a nested brace
+	and gl_shader.c:5761 eats the whole block to resynchronise -- which silently
+	throws a pass away.  The shader came out `prog 0 passes 3` with no LUT ever
+	loaded and no colour change on screen at all.
+
+	Neither was needed: nothing here is affine-mapped, and a PTI_3D arrives with
+	mipcount 1 from a loader that cannot be asked for more ("we can't generate
+	3d mips" -- merged.h).
+	*/
+	{
+		char args[256];
+		int k;
+		args[0] = 0;
+		for (k = 0; k < cc_n; k++)
+		{
+			Q_snprintfz(tmp, sizeof(tmp), "#W%i=%f", k, cc_w[k]);
+			Q_strlcat(args, tmp, sizeof(args));
+			if (k)
+			{
+				Q_snprintfz(tmp, sizeof(tmp), "#LUT%i", k);
+				Q_strlcat(args, tmp, sizeof(args));
+			}
+		}
+		/*
+		NO OPENING BRACE, AND THAT IS THE WHOLE BUG THE FIRST TWO RUNS HAD.
+
+		gl_rmain.c's own post-process scripts are written as complete shaders --
+		"{\n program fxaa\n { map $sourcecolour } \n}\n" -- because they go
+		through R_RegisterShader.  A material loader's script does NOT: it
+		arrives at Shader_LoadMaterialString -> Shader_ReadShader, which begins
+		parsing INSIDE the shader body (gl_shader.c:8321-8325).  There, a `{` at
+		the top level opens a PASS and a `}` ends the shader.  So the body runs
+		from the first directive to a single closing brace, which is exactly the
+		shape every mat_vmt.c arm emits and why none of them start with one.
+
+		With the extra brace the whole shader became one pass: `program` is also
+		a pass keyword (:4847), so it bound pass->prog and left shader->prog
+		NULL; the next `{` was then a brace inside a pass, which :5761 eats to
+		resynchronise.  The symptom was exact and completely opaque --
+
+		    <code>: unexpected indentation in ftesurf/cc/surf_tensor2_ef3661e2
+		    [shader] ftesurf/cc/surf_tensor2_ef3661e2  sort 5 prog 0 passes 3
+
+		-- three passes, no program, no LUT ever requested, and not one pixel
+		different on screen with the grade "on".
+		*/
+		Q_snprintfz(cc_script, sizeof(cc_script),
+			"\tprogram \"vmt/ccorrect%s\"\n"
+			"\t{\n\t\tmap $sourcecolour\n\t\tnodepthtest\n\t}\n"
+			"%s"
+			"}\n",
+			args, passes);
+	}
+
+	cvarfuncs->ForceSetString("r_colourcorrection", cc_shader);
+	Con_DPrintf("[cc] %s generated as %s:\n%s", loadmodel->name, cc_shader, cc_script);
+}
+
 static qboolean VBSP_LoadEntities (model_t *loadmodel, qbyte *mod_base, vlump_t *lumps)
 {
 	vlump_t *l = &lumps[VLUMP_ENTITIES];
@@ -1187,6 +1649,16 @@ static qboolean VBSP_LoadEntities (model_t *loadmodel, qbyte *mod_base, vlump_t 
 	int count, i, emitted = 0;
 	char *buf;
 	qboolean ok;
+
+	/*
+	FTESurf Patch 288.  FIRST, and before every one of the four early returns
+	below -- the overlay path bails out on maps with no overlay lump, on a lump
+	whose layout does not match, and on a lump with zero records, and a map may
+	perfectly well have a colour grade and none of those.  Putting this after any
+	of them would grade some maps and not others for a reason that has nothing to
+	do with colour.
+	*/
+	VBSP_LoadColourCorrection(loadmodel, entdata, l->filelen);
 
 	if (!hl2_overlays || !hl2_overlays->value)
 		return modfuncs->LoadEntities(loadmodel, entdata, l->filelen);
@@ -1577,6 +2049,20 @@ static qboolean VBSP_LoadVisibility (model_t *mod, qbyte *mod_base, vlump_t *l)
 	mod->vis = prv->vis;
 
 	prv->vis->numclusters = LittleLong (prv->vis->numclusters);
+	if (prv->vis->numclusters == 0)
+	{	/* FTESurf Patch 277(b): a header with no rows is an unvised map, not a
+		   vised one in which nothing is visible.  Left as a 0-cluster vis,
+		   VBSP_LoadLeafs would bound every cluster by 0 and rewrite them all to
+		   -1, and the listen server would then send no entity at all.  No
+		   library map does this (census: none with numclusters 0). */
+		Con_Printf(CON_WARNING "%s: visibility lump has a header but 0 clusters -- treating the map as unvised\n", mod->name);
+		prv->numvisibility = 0;
+		prv->vis = NULL;
+		mod->vis = NULL;
+		mod->numclusters = 0;
+		mod->pvsbytes = 0;
+		return true;
+	}
 	if (prv->vis->numclusters < 0 ||
 		(size_t)prv->vis->numclusters > (l->filelen - offsetof(q2dvis_t, bitofs)) / sizeof(prv->vis->bitofs[0]))
 	{
@@ -1770,7 +2256,7 @@ typedef struct
 #define TIHL2_HINT		0x100
 #define TIHL2_SKIP		0x200
 #define TIHL2_NOLIGHT		0x400
-//#define TIHL2_BUMPLIGHT	0x800
+#define TIHL2_BUMPLIGHT		0x800	//FTESurf Patch 281 (VBSP_RepackLighting reads it from the raw lump) and Patch 268 D1 (VBSP_LoadTexInfo stores it, VBSP_ProbeLightmapStride uses it): VRAD wrote four luxel sets per lightstyle for this face (vrad/lightmap.cpp:3402-3411)
 //#define TIHL2_NOSHADOWS	0x1000
 //#define TIHL2_NODECALS	0x2000
 //#define TIHL2_NOCHOP		0x4000
@@ -1822,6 +2308,7 @@ static qboolean VBSP_LoadTexInfo (model_t *mod, qbyte *mod_base, vlump_t *lumps,
 			prv->texinfo[i].lmvecs[0][j] = LittleFloat (in->lmvecs[0][j]);
 		for (j=0 ; j<4 ; j++)
 			prv->texinfo[i].lmvecs[1][j] = LittleFloat (in->lmvecs[1][j]);
+		prv->texinfo[i].bumped = !!(flags & TIHL2_BUMPLIGHT);	//FTESurf Patch 268 D1
 
 		if (flags & (TIHL2_SKYBOX|TIHL2_SKYROOM))
 			Q_snprintfz(sname, sizeof(sname), "sky/%s", texturename);
@@ -2187,6 +2674,8 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 	qboolean	wide = (l->version >= 2);	//LUMP_LEAFS_VERSION 2 = Strata widened struct
 	size_t		insize;
 	struct leaflightpoint_s *lightpoint = NULL;
+	int			clusterbound;					//FTESurf Patch 277(b): exclusive upper bound on a leaf's cluster, see below
+	int			badclusters = 0, badleaf = 0, badvalue = 0;
 
 	if (wide)
 		insize = sizeof(strata_dleaf_t);	//56, but a different layout to v19's 56
@@ -2219,6 +2708,38 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 
 	mod->leafs = out;
 	mod->numleafs = count;
+
+	/*
+	FTESurf Patch 277(b) (Patch 273's open item b) -- A LEAF'S CLUSTER IS MAP DATA AND WAS NEVER CHECKED.
+
+	The loop below derives mod->numclusters as max(cluster)+1, so it cannot bound the
+	value against itself, and VBSP_ClusterPVS/PHS then index prv->vis->bitofs[cluster]
+	with that unchecked number.  On the Strata path the read is a raw signed int32
+	(a cluster of 0x7fffffff makes the +1 below signed overflow); on the classic path it
+	is a uint16 with only 0xffff mapped to -1, so 0..65534 all pass.
+
+	The bound that IS trustworthy here is the vis lump's own count: VBSP_LoadModel calls
+	VBSP_LoadVisibility four lines before VBSP_LoadLeafs, and it has already checked
+	numclusters against the lump length (and turned a 0-cluster header into "no vis").  When there is no vis lump prv->vis is NULL
+	and the clusters are only ever used as indices into arrays sized from their own
+	maximum, so the only hard bound is that a map cannot have more clusters than leafs
+	(vbsp assigns one cluster per non-solid leaf: prtfile.cpp:185-190, writebsp.cpp:130);
+	that keeps the unvised path working and stops a corrupt value from sizing the
+	Patch 273 bucket index in the gigabytes.
+
+	MEASURED, not assumed: a census of all 1310 library maps (lumps LZMA-decoded,
+	stride from the lump version) found NO leaf this rewrites -- 0 clusters >= the vis
+	count, 0 below -1, and on all 1261 vised maps max(cluster)+1 equals the vis count
+	exactly.  So on a shipped map this is inert and the output is byte-identical; it
+	exists for the map that is not shipped yet.  A rewritten leaf becomes -1 (no
+	cluster): it is never marked from a PVS row, and if the view is in it the whole
+	model is drawn (VBSP_MarkLeaves' clusters[0] == -1 branch).  If the rewritten leaf
+	was its cluster's only member the derived count drops below the vis count; that is
+	harmless (every row and bucket walk is sized from mod->numclusters) and it is why
+	the bucketed line on a fixture reads one cluster short.  Counted and reported ONCE
+	per map after the loop.
+	*/
+	clusterbound = prv->vis ? prv->vis->numclusters : count;
 
 	if (!wide && ver == 19)
 	{
@@ -2278,10 +2799,81 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			}
 		}
 
+		if (out->cluster < -1 || out->cluster >= clusterbound)
+		{	//FTESurf Patch 277(b): see the essay above the loop.  Counted here, reported once below.
+			if (!badclusters++)
+			{
+				badleaf = i;
+				badvalue = out->cluster;
+			}
+			out->cluster = -1;
+		}
+
 		if (out->cluster >= mod->numclusters)
 			mod->numclusters = out->cluster + 1;
 	}
 	mod->pvsbytes = ((mod->numclusters + 31)>>3)&~3;
+
+	if (badclusters)	//FTESurf Patch 277(b): one line per map, never per leaf
+		Con_Printf(CON_WARNING "%s: %i of %i leafs have a cluster outside 0..%i (first: leaf %i = %i) -- treated as -1 (no cluster)\n",
+			mod->name, badclusters, count, clusterbound - 1, badleaf, badvalue);
+
+	/*
+	FTESurf Patch 273 -- BUCKET THE LEAVES BY CLUSTER.
+
+	IT HAS TO BE HERE AND NOWHERE EARLIER, and that is not a style preference.
+	VBSP_LoadVisibility runs FIRST (see the load order in VBSP_LoadMap) and sets
+	mod->numclusters from the vis lump's own header; the loop directly above then
+	OVERWRITES it with max(leaf->cluster)+1.  Building the index against the
+	earlier value gives an array of the wrong length, and the failure mode is a
+	rare out-of-bounds write on some other map -- not a crash on load here.  The
+	line above this comment is the first point at which numclusters is final.
+
+	`out` has been walked off the end of the array by the loop, so re-derive from
+	mod->leafs rather than reusing it.
+
+	GMalloc is calloc-backed, so first[] starts zeroed and the histogram is a
+	straight ++.  Both arrays hang off mod->memgroup and die with the model.
+	*/
+	if (mod->numclusters > 0 && count > 0)
+	{
+		unsigned int *first;
+		unsigned int n = 0, k;
+		mleaf_t *lv = mod->leafs;
+		int c;
+
+		first = plugfuncs->GMalloc(&mod->memgroup, sizeof(*first) * (mod->numclusters + 1));
+
+		for (i = 0; i < count; i++)			//pass 1: histogram into first[c+1]
+		{
+			c = lv[i].cluster;
+			if (c >= 0 && c < mod->numclusters)
+			{	first[c+1]++;	n++;	}
+		}
+		for (i = 0; i < mod->numclusters; i++)	//pass 2: prefix sum
+			first[i+1] += first[i];
+
+		prv->clusterleafs = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->clusterleafs) * (n?n:1));
+
+		for (i = 0; i < count; i++)			//pass 3: scatter, first[] as cursor
+		{
+			c = lv[i].cluster;
+			if (c >= 0 && c < mod->numclusters)
+				prv->clusterleafs[first[c]++] = (unsigned int)i;
+		}
+		//pass 3 left first[c] == end-of-cluster-c, i.e. shifted one left.
+		//slide it back so first[c]..first[c+1] brackets cluster c again.
+		for (k = mod->numclusters; k > 0; k--)
+			first[k] = first[k-1];
+		first[0] = 0;
+
+		prv->clusterfirstleaf = first;
+		prv->numclusteredleafs = n;
+
+		Con_DPrintf("%s: %u of %i leafs bucketed into %i clusters (%u KB)\n",
+			mod->name, n, count, mod->numclusters,
+			(unsigned)((sizeof(*first)*(mod->numclusters+1) + sizeof(*prv->clusterleafs)*n) >> 10));
+	}
 
 	return true;
 }
@@ -2909,6 +3501,215 @@ static qboolean VBSP_LoadFaces_Vampire (model_t *mod, qbyte *mod_base, vlump_t *
 	return true;
 }
 
+#ifdef HAVE_CLIENT
+/*
+FTESurf Patch 281 -- one luxel, from Source's linear ColorRGBExp32 to the sRGB
+E5BGR9 the renderer wants.  This is VBSP_LoadLighting's loop body, lifted out
+unchanged so VBSP_RepackLighting can run the identical conversion a face at a
+time.
+*/
+static unsigned int VBSP_ConvertLuxel(const qbyte *src)
+{
+	int e = 0;
+	float m;
+	float scale;
+	unsigned int hdr;
+	vec3_t rgb;
+
+	//decode input
+	m = pow(2, (signed char)src[3])/255.0;
+	rgb[0] = m * src[0];
+	rgb[1] = m * src[1];
+	rgb[2] = m * src[2];
+
+	//rescale its gamma ramp to something we can actually use properly
+	rgb[0] = M_LinearToSRGB(rgb[0], 1.0);
+	rgb[1] = M_LinearToSRGB(rgb[1], 1.0);
+	rgb[2] = M_LinearToSRGB(rgb[2], 1.0);
+
+	//encode output
+	m = max(max(rgb[0], rgb[1]), rgb[2]);
+	if (m < 0)
+		m = 0;
+
+	if (m >= 0.5)
+	{	//positive exponent
+		while (m >= (1<<(e)) && e < 30-15)	//don't do nans.
+			e++;
+	}
+	else
+	{	//negative exponent...
+		while (m < 1/(1<<-e) && e > -14)	//don't do denormals.
+			e--;
+	}
+
+	scale = pow(2, e-9);
+	hdr = ((e+15)<<27);
+	hdr |= bound(0, (int)(rgb[0]/scale + 0.5), 0x1ff)<<0;
+	hdr |= bound(0, (int)(rgb[1]/scale + 0.5), 0x1ff)<<9;
+	hdr |= bound(0, (int)(rgb[2]/scale + 0.5), 0x1ff)<<18;
+	return hdr;
+}
+
+/*
+FTESurf Patch 281 -- faces whose lightmap does not start on a 4-byte boundary.
+
+THE CONTRACT.  Surf_BuildLightMap reads a face's E5BGR9 samples as
+((unsigned int*)src)[i] (engine/client/r_surf.c:1556, :1854) and r_texdiag's
+LUX census does the same (:4791), so surf->samples must be 4-byte aligned.
+VBSP_LoadFaces hands out mod->lightdata + lightofs with the file's byte
+offset unchanged, and VBSP_LoadLighting converted the lump as 4-byte words
+counted from byte 0.  Stock VRAD keeps every lightofs on that grid: a face
+block is 4 bytes of average colour per style followed by
+styles * sets * luxels * 4 bytes of samples (mp/src/utils/vrad/lightmap.cpp:3396,
+radial.cpp:739), all multiples of 4.
+
+NINE MAPS DO NOT.  bhop_24, surf_mjk, surf_at_the_limit, surf_windrunner,
+surf_swagtoast, surf_borderlands, surf_legends, surf_sup and surf_colours
+(1310 censused, 1199 of the 1208 parseable at exactly 0.0% misaligned) store
+one undocumented extra byte per luxel after each face's sample sets, so
+lightofs drifts off the grid and 69-75% of their lit faces land on residue
+1, 2 or 3.  Their lighting lump carries lumpVersion 1 like everyone else's,
+so there is no flag to read.  Measured on surf_borderlands: 2264 of 3154 lit
+faces misaligned, {0:890, 1:736, 2:809, 3:719}, uniformly across materials
+(DEV/VALUESAND40 76% of its area, the six SKYPPY3 metals 73-80%).
+
+WHAT A MISALIGNED FACE LOOKED LIKE.  Two misreads compound.  The whole-lump
+conversion, striding 4 from byte 0, takes a colour byte of one luxel as the
+exponent of the next, so inside those faces it writes words that are either
+saturated (E field 30) or dark; the reader then takes them at a further 1-3
+byte shift, so the exponent field it sees is 31 (51% of luxels at residue 1,
+12% at residue 2) or 0 (46% / 86% / 93% at residue 1/2/3).  E=31 makes
+264 * 2^7 * 2^7 * 511 = 2.2e9 per channel, which passes 2^31 in the unsigned
+blocklights accumulator, comes back into int r = *bl++ negative
+(r_surf.c:927) and Surf_PackE5BRG9 clamps it to zero; E=0 is 2^-24 and rounds
+to zero.  Replaying the exact path over the converted lump -- note that
+1/(1<<-e) in both exponent loops (mod_vbsp.c VBSP_ConvertLuxel, r_surf.c:803)
+is INTEGER division, so every value below 0.5 takes e = -1 -- gives 91% / 94%
+/ 96% of luxels at residue 1/2/3 EXACTLY zero and 8% / 6% / 2% blown to
+saturated primaries (the cyan and magenta streaks in the user's screenshot),
+against 81% normal and 0% blown for aligned faces; 1718 of the 3154 lit faces,
+61% of the lit area, are more than 90% exact zero.  So the map came out as
+smooth, exact-zero black on three fifths of its area with a lit face here and
+there -- the 28% of faces that happened to be aligned -- which is what was
+reported as "the textures are all messed up".
+
+THE FIX IS NOT "ROUND LIGHTOFS DOWN": that shifts every luxel of the face by
+up to three quarters of a sample and reads the previous face's tail as the
+first one.  Instead, when any lit face is off the grid, rebuild the lightmap
+one face at a time from the RAW lump: each face's samples are converted from
+where the file really puts them into a fresh buffer at a 4-byte position, and
+surf->samples is repointed.  Only set 0 of each style is copied -- the flat,
+non-directional set, which is what the reader consumes (radial.cpp:739 packs
+it first; r_surf.c:1563 advances one set per style) -- so a bumped face's
+block shrinks 4x and the per-style stride the reader assumes becomes true
+for it.  Where style k's set 0 sits is the stock formula
+lightofs + k*sets*luxels*4: measured on surf_sup's 2629 two-style faces, all
+71,229 exponent bytes at that offset are in VRAD's range, versus 43% out of
+range if the extra bytes were interleaved per style.  Bounds are checked per
+style against the raw lump; a style off the end is written black and counted.
+No map in the nine overruns.
+
+Nothing else reads lightdata by offset on this path: sunvisdata is set only by
+the Q1 BSPX loader (gl_model.c:2544) and deluxdata is never set for VBSP, so
+the byte positions can change freely.  The converted whole-lump buffer stays
+in the model's memgroup until the model is freed (there is no group free); on
+the nine maps that is 1-28 MB held for the map's lifetime, noted rather than
+hidden.
+
+DIAGNOSTIC, not gated: one Con_Printf naming the map, the count and the new
+size, on the nine maps only.  Every stock map returns silently at the first
+census.  hl2_lightmap_repack 0 is the A/B arm: it prints the same count and
+leaves the old read in place, so "bhop_24 is black" can be reproduced on
+demand.
+*/
+/* Luxels of one face, clamped at 0.  msurface_t.extents is a short filled from
+   the file's int extents; a lit face whose extents came through as -2 or less
+   would otherwise count negative, walk the pass-2 cursor backwards over the
+   previous face and hand memset a wrapped size.  VBSP_ProbeLightmapStride
+   (Patch 268 D1) guards the same case the same way.  A 0-luxel face keeps a
+   non-NULL samples pointer and Mod_LightmapAllocSurf gives it no lightmap. */
+static int VBSP_RepackLuxels(const msurface_t *surf)
+{
+	int smax = (surf->extents[0]>>surf->lmshift)+1;
+	int tmax = (surf->extents[1]>>surf->lmshift)+1;
+	return (smax > 0 && tmax > 0) ? smax*tmax : 0;
+}
+
+static void VBSP_RepackLighting(model_t *mod, qbyte *mod_base, vlump_t *lumps)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	const hltexinfo_t *tin = (const hltexinfo_t*)(mod_base + lumps[VLUMP_TEXINFO].fileofs);
+	msurface_t	*surf;
+	unsigned int *newdata, *dst;
+	size_t		surfnum, lit = 0, misaligned = 0, truncated = 0, words = 0, cursor = 0;
+	int			k, i, nst, sets, luxels;
+
+	if (!mod->lightdata || !prv->lightraw)
+		return;
+
+	//pass 1: the census, and the size of the dense one-set-per-style layout.
+	for (surfnum = 0; surfnum < mod->numsurfaces; surfnum++)
+	{
+		surf = mod->surfaces + surfnum;
+		if (!surf->samples)
+			continue;
+		lit++;
+		if ((surf->samples - mod->lightdata) & 3)
+			misaligned++;
+		for (nst = 0; nst < MAXCPULIGHTMAPS && surf->styles[nst] != INVALID_LIGHTSTYLE; nst++)
+			;
+		words += (size_t)nst * VBSP_RepackLuxels(surf);
+	}
+	if (!misaligned)
+		return;	//every stock VRAD map: nothing to do and nothing to say.
+
+	if (hl2_lightmap_repack && !hl2_lightmap_repack->ival)
+	{
+		Con_Printf("VBSP: %s: %u of %u lit faces have a lightofs off the 4-byte grid; hl2_lightmap_repack 0, left as-is (they draw black)\n",
+			mod->name, (unsigned)misaligned, (unsigned)lit);
+		return;
+	}
+
+	//pass 2: convert each face from where the file really keeps it.
+	newdata = plugfuncs->GMalloc(&mod->memgroup, words * sizeof(*newdata));
+	for (surfnum = 0; surfnum < mod->numsurfaces; surfnum++)
+	{
+		size_t rawofs;
+		surf = mod->surfaces + surfnum;
+		if (!surf->samples)
+			continue;
+		rawofs = surf->samples - mod->lightdata;	//== the file's lightofs: VBSP_LoadFaces added it unchanged
+		luxels = VBSP_RepackLuxels(surf);
+		for (nst = 0; nst < MAXCPULIGHTMAPS && surf->styles[nst] != INVALID_LIGHTSTYLE; nst++)
+			;
+		sets = (LittleLong(tin[surf->texinfo - mod->texinfo].flags) & TIHL2_BUMPLIGHT) ? 4 : 1;
+		dst = newdata + cursor;
+		for (k = 0; k < nst; k++, dst += luxels)
+		{
+			const qbyte *src = prv->lightraw + rawofs + (size_t)k * sets * luxels * 4;
+			if (rawofs + ((size_t)k * sets + 1) * luxels * 4 > prv->lightrawsize)
+			{	//off the end of the lump: black, which is what an unreadable style was before.
+				memset(dst, 0, luxels * sizeof(*dst));
+				truncated++;
+				continue;
+			}
+			for (i = 0; i < luxels; i++)
+				dst[i] = VBSP_ConvertLuxel(src + 4*i);
+		}
+		surf->samples = (qbyte*)(newdata + cursor);
+		cursor += (size_t)nst * luxels;
+	}
+
+	Con_Printf("VBSP: %s: %u of %u lit faces had a lightofs off the 4-byte grid -- lightmap repacked per face, %u -> %u bytes%s\n",
+		mod->name, (unsigned)misaligned, (unsigned)lit, (unsigned)mod->lightdatasize, (unsigned)(words * sizeof(*newdata)),
+		truncated ? " (some styles ran off the lump and were written black)" : "");
+	mod->lightdata = (qbyte*)newdata;
+	mod->lightdatasize = words * sizeof(*newdata);
+	prv->lightrepacked = true;	//tells VBSP_ProbeLightmapStride (Patch 268 D1) the layout is now one set per style
+}
+#endif
+
 static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, int version)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -3061,6 +3862,10 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 			out->flags |= SURF_DRAWTURB;
 	}
 
+#ifdef HAVE_CLIENT
+	VBSP_RepackLighting(mod, mod_base, lumps);	//FTESurf Patch 281: after every surf->samples is set, before anything reads one
+#endif
+
 	/*
 	FTESurf: how many faces the compiler marked invisible.
 
@@ -3075,6 +3880,160 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 
 	return true;
 }
+
+#ifdef HAVE_CLIENT
+/*
+FTESurf Patch 268 D1: how many luxel SETS does each lightstyle occupy in this map's
+lighting lump, and tell the engine's style walk.
+
+Source's VRAD writes a face flagged SURF_BUMPLIGHT as NUM_BUMP_VECTS+1 = 4 luxel sets per
+style -- the flat map and three radiosity-normal-map basis maps (vrad/lightmap.cpp:3401-3411;
+radial.cpp:700 loops k over styles and :739 lays a face out as [style][set][luxel]) -- and
+nstyles*4 bytes of per-face average colour BEFORE the block, which lightofs already skips
+(lightmap.cpp:3396-3399).  Surf_BuildLightMap (engine/client/r_surf.c) advanced one set per
+style, so on a bumped face with two styles it summed basis map 0 in as "style 1" -- at
+264/256, because nothing sets a style above 0 on a Source map (gl_rlight.c:187-189;
+sv_main.qc:440 sets style 0 only) -- and the REAL second style's map was never read.  Which
+way a face moves when that is fixed depends on the map: where the second style is a bright
+switchable light (surf_affliction style 37) the face gets about 2x BRIGHTER, where it is a
+dim one (bhop_orgrimmar style 32, bhop_floodwaters 32/35/36) the face darkens 30-50%.  Set 0
+of style 0 sits exactly at lightofs, so single-style bumped faces were always right; this
+is the style walk only.
+
+THE STRIDE IS PROBED, NOT ASSUMED.  Over the 1310-map library (Patch 268 record): 1117 maps
+store 1 set unbumped / 4 bumped; 150 (83 BSP v21, 67 Strata v25) store, after every style's
+sets, one extra 4-byte-per-luxel record that is not RGBE data (exponent bytes -119..124 on
+one face, all-zero or all-exponent-0 on others: bhop_floodwaters faces 1360, 550, 60); 9 v21
+maps store 1 / 4 and then append nstyles*luxels bytes (all zero on every face read) AFTER
+the last style -- a per-face trailer, which is why it is NOT a per-style extra here (surf_sup
+faces 22/31/792/795: style 1 decodes cleanly at lightofs + luxels*4 and reads garbage one
+luxel-count of bytes later); 26 are unlit; 8 fit nothing (7 Strata df_ maps whose faces
+share lightofs, and one 2/5 map with a single odd face).  Each candidate predicts the whole
+lump's size from nothing but the faces, so at most one can equal it; when none does, every
+surface is left untagged and the walk is exactly what it was.  That fallback is printed,
+never silent, and so is hl2_bumpstride 0, so the log always says which walk a screenshot
+came from.
+
+The verdict travels on each surface as SURF_LMSTRIDE (gl_model.h): extra bytes per luxel
+per style beyond E5BGR9's own four, i.e. what sits BETWEEN one style's flat map and the
+next's.  A face whose block would run past the lump is left untagged and counted; the loader
+never bounds-checked style 0 either, but tagging widens the read and must not widen it off
+the end.
+
+Those same nine trailer maps are also the ones whose lightofs values sit off the 4-byte
+grid, and VBSP_RepackLighting (Patch 281, run at the tail of VBSP_LoadFaces) has by now
+rebuilt their lightdata as one luxel set per style, copying only set 0 of each style.  On
+such a map the raw layout is gone, no candidate can match the new size, and the walk is
+already right -- so the probe says so and returns before it could print UNPROVEN.
+*/
+static void VBSP_ProbeLightmapStride (model_t *mod)
+{
+	vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
+	//candidate layouts: luxel sets per style unbumped / bumped, and trailer bytes per luxel
+	//per style that sit AFTER the last style (size proof only -- never walked, never tagged)
+	static const struct { int flat, bump, trailer; const char *name; } cand[3] =
+		{ {1,4,0,"1/4"}, {2,5,0,"2/5"}, {1,4,1,"1/4+trailer"} };
+	size_t predicted[3] = {0,0,0};
+	unsigned lit = 0, bumped = 0, styled = 0, bumpedstyled = 0, tagged = 0, clipped = 0;
+	int i, c, chosen = -1, nfit = 0;
+	const char *why;
+
+	if (!mod->lightdata || !mod->lightdatasize || !mod->surfaces || !mod->texinfo || !prv->texinfo)
+		return;	//unlit map (26 in the library ship a 0-byte lighting lump) or no renderer: no samples, nothing walked, nothing to print
+
+	if (prv->lightrepacked)
+	{	//Patch 281 rebuilt lightdata dense: set 0 of every style, nothing between styles, so the one-set walk is exact and there is no raw layout left to prove.
+		Con_Printf("VBSP: %s lightmap was repacked per face (Patch 281): one luxel set per lightstyle, no stride tag needed\n", mod->name);
+		return;
+	}
+
+	for (i = 0; i < mod->numsurfaces; i++)
+	{
+		msurface_t *surf = mod->surfaces + i;
+		int ns, smax, tmax;
+		size_t lux, base;
+		qboolean b;
+		if (!surf->samples)
+			continue;
+		for (ns = 0; ns < MAXCPULIGHTMAPS && surf->styles[ns] != INVALID_LIGHTSTYLE; ns++)
+			;
+		smax = (surf->extents[0]>>surf->lmshift)+1;
+		tmax = (surf->extents[1]>>surf->lmshift)+1;
+		if (!ns || smax <= 0 || tmax <= 0)
+			continue;	//gl_model.c:3960 denies these a lightmap anyway (surf_huecomundo has one)
+		lux = (size_t)smax*tmax;
+		base = (size_t)ns*lux*4;
+		b = prv->texinfo[surf->texinfo - mod->texinfo].bumped;
+		lit++;
+		if (b)
+			bumped++;
+		if (ns > 1)
+		{
+			styled++;
+			if (b)
+				bumpedstyled++;
+		}
+		for (c = 0; c < 3; c++)
+			predicted[c] += (size_t)ns*4 + base*(b?cand[c].bump:cand[c].flat) + (size_t)ns*lux*cand[c].trailer;
+	}
+	if (!lit)
+		return;
+	for (c = 0; c < 3; c++)
+	{
+		if (predicted[c] == (size_t)mod->lightdatasize)
+		{
+			chosen = c;
+			nfit++;
+		}
+	}
+
+	if (nfit != 1)
+	{
+		Con_Printf(CON_WARNING "VBSP: %s lightmap stride UNPROVEN -- lighting lump %u bytes; 1/4 predicts %u, 2/5 %u, 1/4+trailer %u (%u lit faces, %u bumped, %u lightstyled, %u bumped+lightstyled): style walk left at one luxel set\n",
+			mod->name, (unsigned)mod->lightdatasize, (unsigned)predicted[0], (unsigned)predicted[1], (unsigned)predicted[2],
+			lit, bumped, styled, bumpedstyled);
+		return;
+	}
+
+	if (!hl2_bumpstride->ival)
+		why = "hl2_bumpstride 0: style walk left at one luxel set";
+	else
+	{
+		for (i = 0; i < mod->numsurfaces; i++)
+		{
+			msurface_t *surf = mod->surfaces + i;
+			int ns, smax, tmax, extra;
+			size_t lux, ofs;
+			qboolean b;
+			if (!surf->samples)
+				continue;
+			for (ns = 0; ns < MAXCPULIGHTMAPS && surf->styles[ns] != INVALID_LIGHTSTYLE; ns++)
+				;
+			smax = (surf->extents[0]>>surf->lmshift)+1;
+			tmax = (surf->extents[1]>>surf->lmshift)+1;
+			if (!ns || smax <= 0 || tmax <= 0)
+				continue;
+			lux = (size_t)smax*tmax;
+			b = prv->texinfo[surf->texinfo - mod->texinfo].bumped;
+			extra = 4*((b?cand[chosen].bump:cand[chosen].flat) - 1);	//bytes between styles only; max 16, fits the 5-bit field.  The trailer is AFTER the last style and is never walked.
+			if (!extra)
+				continue;	//one set per style: today's walk is already right for this face
+			ofs = surf->samples - mod->lightdata;
+			if (ofs + (size_t)ns*lux*(4+extra) > (size_t)mod->lightdatasize)
+			{
+				clipped++;
+				continue;
+			}
+			surf->flags |= extra << SURF_LMSTRIDE_SHIFT;
+			tagged++;
+		}
+		why = tagged ? "style walk advances past the extra sets (hl2_bumpstride 1)" : "no face needs more than one set";
+	}
+	Con_Printf("VBSP: %s lightmap stride %s: %i luxel set(s) per lightstyle flat, %i bumped%s; %u lit faces, %u bumped, %u lightstyled (%u of those bumped); %u tagged, %u left untagged (block past lump) -- %s\n",
+		mod->name, cand[chosen].name, cand[chosen].flat, cand[chosen].bump, cand[chosen].trailer?" plus a per-face trailer of one byte per luxel per style after the last style":"",
+		lit, bumped, styled, bumpedstyled, tagged, clipped, why);
+}
+#endif
 #ifdef HAVE_CLIENT
 static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 {
@@ -3211,6 +4170,7 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 
 static void VBSP_LoadLighting (model_t *mod, qbyte *mod_base, vlump_t *ldr, vlump_t *hdr)
 {
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	qbyte *src;
 	unsigned int *out;
 	size_t count;
@@ -3230,49 +4190,16 @@ static void VBSP_LoadLighting (model_t *mod, qbyte *mod_base, vlump_t *ldr, vlum
 	mod->lightmaps.fmt = LM_E5BGR9;
 	mod->lightdata = (qbyte*)(out = plugfuncs->GMalloc(&mod->memgroup, mod->lightdatasize));
 
+	//FTESurf Patch 281: keep the raw lump.  This whole-lump pass assumes every
+	//face's lightofs is a multiple of 4; VBSP_RepackLighting (called at the end
+	//of VBSP_LoadFaces, once the faces say where they really start) redoes the
+	//faces of the nine maps for which that is false, from these bytes.
+	prv->lightraw = src;
+	prv->lightrawsize = mod->lightdatasize;
+
 	//convert from linear e8bgr8 to srgb e5bgr9
 	for (count = mod->lightdatasize/4; count --> 0; src+=4)
-	{
-		int e = 0;
-		float m;
-		float scale;
-		unsigned int hdr;
-		vec3_t rgb;
-
-		//decode input
-		m = pow(2, (signed char)src[3])/255.0;
-		rgb[0] = m * src[0];
-		rgb[1] = m * src[1];
-		rgb[2] = m * src[2];
-
-		//rescale its gamma ramp to something we can actually use properly
-		rgb[0] = M_LinearToSRGB(rgb[0], 1.0);
-		rgb[1] = M_LinearToSRGB(rgb[1], 1.0);
-		rgb[2] = M_LinearToSRGB(rgb[2], 1.0);
-
-		//encode output
-		m = max(max(rgb[0], rgb[1]), rgb[2]);
-		if (m < 0)
-			m = 0;
-
-		if (m >= 0.5)
-		{	//positive exponent
-			while (m >= (1<<(e)) && e < 30-15)	//don't do nans.
-				e++;
-		}
-		else
-		{	//negative exponent...
-			while (m < 1/(1<<-e) && e > -14)	//don't do denormals.
-				e--;
-		}
-
-		scale = pow(2, e-9);
-		hdr = ((e+15)<<27);
-		hdr |= bound(0, (int)(rgb[0]/scale + 0.5), 0x1ff)<<0;
-		hdr |= bound(0, (int)(rgb[1]/scale + 0.5), 0x1ff)<<9;
-		hdr |= bound(0, (int)(rgb[2]/scale + 0.5), 0x1ff)<<18;
-		*out++ = hdr;
-	}
+		*out++ = VBSP_ConvertLuxel(src);
 }
 #endif
 
@@ -3505,13 +4432,58 @@ typedef struct
 //every LOD0 vertex of every prop in the map (6.4M on the library's worst).  The input is a byte, so
 //there are only 256 answers; build them once.
 static float vbsp_srgb2lin[256];
-static void VBSP_InitSRGBTable(void)
+/*
+FTESurf Patch 296: VRAD'S ACTUAL CURVE, which is not sRGB.
+
+Settled by citation and then confirmed by a single measured number.  A .vhv byte
+is written by ConvertLinearToRGBA8888 (utils/vrad/lightmap.cpp:3583-3601) through
+LinearToVertexLight (public/mathlib/mathlib.h:1410-1428), which is a lookup into
+the table built at mathlib/color_conversion.cpp:233-261:
+
+	f = pow(i/1024.0, 1.0/gamma);  lineartovertex[i] = f * overbrightFactor;
+
+and VRAD initialises that with MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f, ...) at
+utils/vrad/vrad.cpp:2356 -- gamma 2.2, overbright 2, so overbrightFactor 0.5.
+The whole encode is therefore
+
+	byte = round(255 * min(1, 0.5 * pow(clamp(linear,0,4), 1/2.2)))
+
+THE CONFIRMING MEASUREMENT: the maximum colour byte over every LOD0 vertex of
+every prop is exactly 239, in BOTH the CS:S and the Momentum build of
+surf_fantasy.  round(255 * 0.5 * 4^(1/2.2)) = 239.  Nothing else produces that
+ceiling, so the exponent, the clamp and the 0.5 are all pinned by it -- and so,
+incidentally, is hl2_lt_baked_scale's default of 2, which is exactly
+1/overbrightFactor.  (The gl_overbright argument at the encode site below reaches
+the same number by a different route; both are true, this one is primary.)
+
+The inverse is pow(b/255 * 2, 2.2) = pow(b/127.5, 2.2), so the table runs to
+2^2.2 = 4.5948 rather than to 1 -- the 0.5 is undone here rather than clamped
+away.  vbsp_srgb2lin inverts sRGB instead (1/2.4 with a linear toe), which is a
+few percent out and worst in the shadows.
+
+vbsp_bytelin is the third arm: no decode at all, mean the bytes as written.  It
+exists because the level (acc[], decoded) and the per-vertex multiplier
+(encsum/encpeak, raw bytes) are derived in DIFFERENT SPACES, and that split is
+its own error -- a surf_boreas prop draws a median 1.66x brighter than 2x VRAD's
+byte at its own mean vertex, ranging 0.31x to 2.4x per prop.  Arm 2 is 1.000 by
+construction and so measures the size of that split directly.
+
+Three tables and a pointer rather than a branch: this loop runs over every LOD0
+vertex of every prop in the map, 6.4M on the library's worst.
+*/
+static float vbsp_vrad2lin[256];
+static float vbsp_bytelin[256];
+static void VBSP_InitBakeTables(void)
 {
 	unsigned int i;
 	if (vbsp_srgb2lin[255] != 0)
 		return;
 	for (i = 0; i < 256; i++)
+	{
 		vbsp_srgb2lin[i] = M_SRGBToLinear(i*(1/255.0f), 1);
+		vbsp_vrad2lin[i] = (float)pow(i*(1/127.5), 2.2);
+		vbsp_bytelin[i]  = (float)i;
+	}
 }
 static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent, unsigned int lumpidx, qboolean pervertex)
 {
@@ -3527,8 +4499,59 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 	//and it costs no pow().  encsum/encpeak below are in the same 0..255 units as the file.
 	double encsum = 0;
 	float encpeak = 0;
+	//FTESurf Patch 296: the file's vertex STRIDE, and how many colours that is.
+	unsigned int vsize, ncol;
+	static cvar_t *vhv12;
+	//FTESurf Patch 296: which decode curve, and the table that implements it.
+	static cvar_t *curve;
+	const float *dec;
+	int curvearm;
 
-	VBSP_InitSRGBTable();
+	VBSP_InitBakeTables();
+	/*
+	FTESurf Patch 296: DEFAULT 1.  It was 0, and the note that kept it there said
+	"1 is measured DARKER than today on surf_fantasy".  That measurement was real
+	and its reading was wrong, for two reasons that have both since been found:
+
+	  - it was a screen-pixel comparison, and turning the bake on ALSO flips the
+	    directional fraction from FS_BAKED_DIR to 0.0 at the apply site (:8451),
+	    so what it saw was largely props going FLAT, not props going dim; and
+	  - every prop-level number it was checked against came out of the PROPLIGHT
+	    census, which until this patch reported sent->baked AFTER the per-prop
+	    peak gain -- inflated 2.05x on fantasy and 20.98x on boreas.  See the
+	    note at the census itself.
+
+	The read was never in doubt; what was in doubt was whether three 4-byte
+	colours per vertex is really what a 12-byte .vhv holds.  It is, and this is
+	no longer an inference from hue statistics:
+
+	  - on 465 of surf_fantasy's 2345 props the 12 bytes are THREE BIT-IDENTICAL
+	    COPIES of one BGRA (17.98% of all 3,563,988 LOD0 vertices).  A 4x BGR
+	    reading cannot produce a period-4 repeat.
+	  - against the CS:S build of the same map, which ships ordinary 4-byte
+	    files for 2343 props, per-vertex Pearson r is 0.764 over 300
+	    checksum-matched props; a shuffled control (same prop against a random
+	    equal-vertex-count prop) is 0.236.
+	  - the MEAN of the three out-correlates every individual slot
+	    (0.654 / 0.658 / 0.692), which is the radiosity-normal signature and is
+	    the direct justification for averaging them.
+	  - the maximum colour byte is 239 in both builds -- the same
+	    LinearToVertexLight ceiling -- so the two are the same encode and take
+	    the same decode.
+
+	And it cannot regress a map that works today: the 67 maps this admits
+	currently get ZERO baked prop lighting, so the comparison is bake against
+	nothing, not bake against bake.  4-byte maps take the ncol == 1 branch below
+	whatever this says.  0 is still bit-for-bit the old picture.
+	*/
+	if (!vhv12) vhv12 = cvarfuncs->GetNVFDG("hl2_lt_vhv12", "1", 0, "Accept VRAD's 12-byte-per-vertex baked static prop lighting (three radiosity-normal basis colours), collapsing it to one colour by the mean that utils/vrad/lightmap.cpp:3479-3549 constructs them to satisfy. 67 maps ship it and lose all baked prop lighting with this off. 0 = the pre-Patch-296 picture.", "");
+	//Read at load, like hl2_lt_baked and hl2_bumpstride: an A/B needs a map
+	//change or a second process, because `map <the same name>` does not reload.
+	if (!curve) curve = cvarfuncs->GetNVFDG("hl2_lt_baked_curve", "1", 0, "Which curve decodes VRAD's baked static prop lighting.\n0: sRGB, the pre-Patch-296 behaviour, bit-for-bit.\n1: VRAD's own pow(b/127.5, 2.2), which is what utils/vrad wrote and the only one that round-trips a byte exactly (default).\n2: no decode -- mean the stored bytes. Diagnostic: the level and the per-vertex multiplier are then derived in the same space, so it measures how far apart 0 and 1 hold them.", "");
+	curvearm = curve ? curve->ival : 1;
+	if (curvearm < 0 || curvearm > 2)
+		curvearm = 1;
+	dec = (curvearm == 2) ? vbsp_bytelin : (curvearm == 1) ? vbsp_vrad2lin : vbsp_srgb2lin;
 
 	/*
 	FTESurf Patch 257: sp_hdr_N.vhv FIRST.  Patch 163 only ever asked for
@@ -3570,8 +4593,60 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 	//Validated rather than trusted: the map's pakfile is mounted as a plain
 	//searchpath and these names carry no map prefix, so a stale sp_N.vhv from
 	//another mounted map could in principle answer.  A file that is not
-	//version 2 with 4-byte colours and in-range mesh offsets is not one.
-	if (LittleLong(h->version) != 2 || LittleLong(h->vertexsize) != 4)
+	//version 2 with a KNOWN vertex stride and in-range mesh offsets is not one.
+	//(It was "4-byte colours" until Patch 296; that spelling of the test is what
+	//discarded every baked prop on 67 maps, so the stride is now a set.)
+	/*
+	FTESurf Patch 296.  VERTEXSIZE IS A STRIDE, NOT A FORMAT TAG, and rejecting
+	everything but 4 threw away every baked prop on surf_fantasy -- 2345 of 2345,
+	which is the whole of "props: 0 of 2345 lit from VRAD's baked vertex lighting"
+	sitting in the logs next to boreas's "1587 of 1587".
+
+	Measured, from the two maps' own pakfiles:
+	    boreas  sp_0.vhv      vertexsize 4   flags 0x4   0c 0b 0a ff
+	    fantasy sp_hdr_0.vhv  vertexsize 12  flags 0x2   27 53 63 00 2c 5e 70 00 25 4e 5e 00
+	Twelve bytes is THREE BGRA colours -- the three radiosity-normal-map basis
+	colours VRAD writes for a bumped prop, the same three the world's bumped
+	lightmap carries.
+
+	HOW THAT IS KNOWN, stated carefully because the obvious evidence is wrong.
+	In sp_hdr_0.vhv byte slots 3, 7 and 11 are 0 on all 1244 vertices, which looks
+	like three alpha bytes -- but ACROSS THE WHOLE MAP THEY ARE NOT: 14.05% of
+	surf_fantasy's 3,563,988 LOD0 vertices carry a nonzero one (slot 3 on 12.14%,
+	slot 7 on 8.00%, slot 11 on 13.50%, values to 144, smooth histogram, 687 of the
+	2345 props).  Do not rest the layout on those zeros.  What does establish it:
+	the fourth byte is not an RGBExp32 exponent (an exponent clusters at 0..5 and
+	246..255 as a signed char, not a smooth 1..144), it is not a multiplicative
+	alpha the engine honours (86% of vertices would be black), and the competing
+	4xBGR reading -- 12 = NUM_BUMP_VECTS+1 colours, which is exactly how the world
+	bumped lightmap is laid out -- is refuted by hue: the sample splits as
+	(39,83,99)(44,94,112)(37,78,94), three colours of ONE hue at relative magnitude
+	1.00/1.13/0.95, where 4xBGR would make three of the four carry a zero channel.
+	Across the map each colour's luminance against the mean of its three runs
+	p01 0.457 / p50 1.000 / p99 1.577, which is the RNM signature.
+
+	Gate on vertexsize and not on vertexflags, deliberately.  hardwareverts.h
+	defines no flag enum at all (0x2 vs 0x4 is undecoded here), and its own comment
+	on m_nVertexSize concedes the format is underspecified: "this won't be adequate,
+	need some concept of byte format i.e. rgbexp32 vs rgba8888".  The stride is the
+	one field Valve documents as meaning what it says, and it is what the reader
+	actually needs.
+
+	Collapsed to one colour by averaging the three, which is what a flat normal
+	sees: the basis vectors sit at equal angles to it, so the RNM weights are equal.
+	The linear average is taken in LINEAR for the same reason the loop below decodes
+	before it accumulates.  Keeping the three separately is what per-pixel bumped
+	prop lighting would want and is deliberately NOT done here -- that needs a
+	shader and a vertex format, and this is the read.
+	*/
+	vsize = LittleLong(h->vertexsize);
+	if (LittleLong(h->version) != 2)
+		goto reject;
+	if (vsize == 4)
+		ncol = 1;
+	else if (vsize == 12 && vhv12 && vhv12->ival)
+		ncol = 3;
+	else
 		goto reject;
 	if (h->nummeshes <= 0 || (size_t)LittleLong(h->nummeshes) > 1024)
 		goto reject;
@@ -3586,19 +4661,46 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 		const qbyte *c;
 		if (LittleLong(mesh[m].lod) != 0)
 			continue;
-		if (o > fsize || nv > (fsize-o)/4)
+		if (o > fsize || nv > (fsize-o)/vsize)
 			goto reject;
 		c = f + o;
-		for (k = 0; k < nv; k++, c += 4)
+		for (k = 0; k < nv; k++, c += vsize)
 		{	//BGRA, and DECODED before it is averaged.  VRAD writes these
 			//gamma-encoded; averaging encoded bytes averages the wrong
 			//quantity and biases a prop with any contrast on it upward.
-			float e;
-			acc[0] += vbsp_srgb2lin[c[2]];
-			acc[1] += vbsp_srgb2lin[c[1]];
-			acc[2] += vbsp_srgb2lin[c[0]];
-			//Patch 259: and the encoded luminance, for the per-vertex multiplier.
-			e = c[2]*0.299f + c[1]*0.587f + c[0]*0.114f;
+			//Patch 296: ncol of them, averaged -- see the note above.
+			float e = 0;
+			unsigned int sb = 0, sg = 0, sr = 0;
+			unsigned int q;
+			for (q = 0; q < ncol; q++)
+			{
+				const qbyte *p = c + q*4;
+				//AVERAGE THE STORED BYTES, NOT THE DECODED VALUES.  Source defines the
+				//flat reconstruction as the mean of what is stored: VRAD pre-scales the
+				//triple so the arithmetic mean of the three BYTES equals what a
+				//non-bumped compile would have written (LinearToBumpedLightmap,
+				//utils/vrad/lightmap.cpp), and the live combine divides by sum(dp) to
+				//match (lightmappedgeneric_ps2_3_x.h).  Decoding first and averaging
+				//after is a mean in the wrong space, and sRGB decode is convex, so it
+				//comes out BRIGHTER every time -- measured over all 2345 props of
+				//surf_fantasy: p50 +1.4%, p95 +10.0%, max +16.8%, against 4-byte maps
+				//that are unaffected.  That is a systematic brightening of exactly the
+				//maps this patch newly admits, relative to the ones hl2_lt_baked_scale
+				//was tuned on.
+				sr += p[2];
+				sg += p[1];
+				sb += p[0];
+				//Patch 259: and the encoded luminance, for the per-vertex multiplier.
+				//Already a linear form on the bytes, so it is the byte-mean's luminance
+				//and agrees with the collapse above by construction.
+				e += p[2]*0.299f + p[1]*0.587f + p[0]*0.114f;
+			}
+			//Patch 296: `dec` is the curve chosen at the top of this function.
+			//At arm 2 it is the identity, so acc[] is a mean of the bytes.
+			acc[0] += dec[(sr + ncol/2)/ncol];
+			acc[1] += dec[(sg + ncol/2)/ncol];
+			acc[2] += dec[(sb + ncol/2)/ncol];
+			e /= ncol;
 			encsum += e;
 			if (e > encpeak)
 				encpeak = e;
@@ -3643,8 +4745,28 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 		{
 			float lin = (float)(acc[j]/n);
 			if (lin < 0) lin = 0;
-			if (lin > 1) lin = 1;	//only reachable from a corrupt file: the source byte cannot exceed 1
-			sent->baked[j] = M_LinearToSRGB(lin, 1) * 255.0f * s;
+			//FTESurf Patch 296: the re-encode has to be the inverse of whichever
+			//decode ran, or the pair does not round-trip and the level moves for
+			//a reason that has nothing to do with the light.
+			switch (curvearm)
+			{
+			case 2:
+				//No curve at all: acc[] is already a mean of bytes.
+				sent->baked[j] = lin * s;
+				break;
+			case 1:
+				//VRAD's own.  A single byte b decodes to (b/127.5)^2.2 and comes
+				//back as exactly b, so this arm is lossless on a flat prop.  No
+				//clamp: lin tops out at 2^2.2 = 4.5948 and 127.5*4.5948^(1/2.2)
+				//is 255 exactly, which is the ceiling of the encode by
+				//construction rather than by luck.
+				sent->baked[j] = 127.5f * (float)pow(lin, 1.0/2.2) * s;
+				break;
+			default:
+				if (lin > 1) lin = 1;	//only reachable from a corrupt file: the source byte cannot exceed 1
+				sent->baked[j] = M_LinearToSRGB(lin, 1) * 255.0f * s;
+				break;
+			}
 		}
 
 		/*
@@ -3670,13 +4792,42 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 		if (pervertex && encpeak > 0 && encsum > 0)
 		{
 			float encmean = (float)(encsum/n);
-			float gain = encpeak/encmean;
+			float gainraw = encpeak/encmean;
+			float gain = gainraw;
 			float peakch = max(max(sent->baked[0], sent->baked[1]), sent->baked[2]);
 			float ceiling = 255.0f * s;
+			float overshoot;
 			if (peakch > 0 && gain*peakch > ceiling)
 				gain = ceiling/peakch;
 			if (gain < 1)
 				gain = 1;
+
+			/*
+			FTESurf Patch 296: AND THE CLAMP HAS TO MOVE vcraw WITH IT.
+
+			The clamp above caps the PEAK vertex.  But the per-vertex bytes below are
+			normalised to the UNCLAMPED encpeak while `baked` is multiplied by the
+			CLAMPED gain, and the draw is baked * vcraw/255 -- so at the mean vertex a
+			clamped prop lands on baked_pre * gain_clamped/gainraw.  The ENTIRE prop
+			darkens by the overshoot, not just its peak, which is the opposite of what
+			the essay above promises ("differs from mode 1 only in where the light sits,
+			never in how much of it there is").  The no-vc fallback divides by the
+			clamped gain and lands on baked_pre exactly, so the same prop is half a stop
+			darker with per-vertex lighting ON than OFF.
+
+			Measured: the clamp fires on 1.8% of surf_boreas's 1587 4-byte props and,
+			once Patch 296 admits them, 11.6% of surf_fantasy's 2345 -- the 12-byte maps
+			are simply more saturated, and gain is luminance-derived while baked is
+			per-channel.  Overshoot where it fires: p50 1.423x (-0.51 stops), p95 2.536x,
+			max 3.44x.  That is the darkening this patch was blamed for.
+
+			Scaling inv by the overshoot puts the MEAN back on baked_pre and lets the
+			bright vertices saturate their own byte instead, so the peak still draws at
+			exactly the ceiling.  When the clamp does not fire, overshoot is exactly
+			1.0f and `x * 1.0f` is bit-identical in IEEE -- so 98.2% of every existing
+			4-byte prop is untouched, by construction rather than by measurement.
+			*/
+			overshoot = gainraw/gain;
 
 			//Malloc, not GMalloc: this is VRAD's order, not ours, and it is freed
 			//the moment the scatter has moved it into ours.
@@ -3690,7 +4841,7 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 			//is what the model's vhvmap is indexed by.  Greyscale: `baked` above
 			//already carries this prop's colour, from the mean of this same file.
 			{
-				float inv = 255.0f/encpeak;
+				float inv = 255.0f/encpeak * overshoot;	//Patch 296: see THE CLAMP note above -- 1.0f exactly when unclamped
 				qbyte *out = sent->vcraw;
 				for (m = 0; m < (size_t)LittleLong(h->nummeshes); m++)
 				{
@@ -3698,9 +4849,19 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 					const qbyte *c = f + LittleLong(mesh[m].offset);
 					if (LittleLong(mesh[m].lod) != 0)
 						continue;
-					for (k = 0; k < nv; k++, c += 4, out += 4)
-					{
-						int b = (int)((c[2]*0.299f + c[1]*0.587f + c[0]*0.114f) * inv + 0.5f);
+					for (k = 0; k < nv; k++, c += vsize, out += 4)
+					{	//Patch 296: the same ncol-way average as the pass above, so
+						//the multiplier and the mean it is normalised against are
+						//derived from one quantity and cannot drift apart.
+						float e = 0;
+						unsigned int q;
+						int b;
+						for (q = 0; q < ncol; q++)
+						{
+							const qbyte *p = c + q*4;
+							e += p[2]*0.299f + p[1]*0.587f + p[0]*0.114f;
+						}
+						b = (int)((e/ncol) * inv + 0.5f);
 						if (b < 0) b = 0;
 						if (b > 255) b = 255;
 						out[0] = out[1] = out[2] = (qbyte)b;
@@ -5181,6 +6342,27 @@ static void VBSP_DecompressVis (model_t *mod, qbyte *in, qbyte *out, qboolean me
 static pvsbuffer_t	pvsrow;
 static pvsbuffer_t	phsrow;
 
+/*
+FTESurf Patch 277(b) (Patch 273's open item b): the query side of the same bound.
+
+Every cluster that reaches VBSP_ClusterPVS/PHS comes from a leaf (VBSP_LeafCluster,
+the pvscache leafnums, the refdef view clusters), and VBSP_LoadLeafs now clamps every
+leaf's cluster below prv->vis->numclusters -- so this should never fire, and the
+counter is how that is checked rather than assumed (vbsp_pvsstat prints it).  If it
+does fire the answer is ALL VISIBLE, the same answer an unvised map gets: drawing
+more can never cull the player's view against the wrong row, and a merge only ever
+widens.  Printed once per map load (reset with the Patch 273 counters), because a
+caller that gets this wrong gets it wrong every frame.
+*/
+static unsigned int vbsp_badclusterqueries;
+static void VBSP_BadClusterQuery (model_t *mod, int cluster, const char *what)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	if (!vbsp_badclusterqueries++)
+		Con_Printf(CON_WARNING "%s: %s queried for cluster %i but the vis lump has %i -- answered all-visible (printed once per map; vbsp_pvsstat counts)\n",
+			mod->name, what, cluster, prv->vis->numclusters);
+}
+
 
 
 static qbyte	*VBSP_ClusterPVS (model_t *mod, int cluster, pvsbuffer_t *buffer, pvsmerge_t merge)
@@ -5213,6 +6395,11 @@ static qbyte	*VBSP_ClusterPVS (model_t *mod, int cluster, pvsbuffer_t *buffer, p
 		if (merge != PVM_MERGE)
 			memset (buffer->buffer, 0, (mod->numclusters+7)>>3);
 	}
+	else if (cluster < -1 || cluster >= prv->vis->numclusters)
+	{	//FTESurf Patch 277(b): bitofs[] is numclusters long; anything else is a wild read.  See VBSP_BadClusterQuery.
+		VBSP_BadClusterQuery(mod, cluster, "PVS");
+		memset (buffer->buffer, 0xff, (mod->numclusters+7)>>3);
+	}
 	else
 		VBSP_DecompressVis (mod, ((qbyte*)prv->vis) + prv->vis->bitofs[cluster][DVIS_PVS], buffer->buffer, merge==PVM_MERGE);
 	return buffer->buffer;
@@ -5233,6 +6420,11 @@ static qbyte	*VBSP_ClusterPHS (model_t *mod, int cluster, pvsbuffer_t *buffer)
 		memset (buffer->buffer, 0xff, (mod->numclusters+7)>>3);
 	else if (cluster == -1)
 		memset (buffer->buffer, 0, (mod->numclusters+7)>>3);
+	else if (cluster < -1 || cluster >= prv->vis->numclusters)
+	{	//FTESurf Patch 277(b): same bound as VBSP_ClusterPVS; "no vis" means everything hearable too.
+		VBSP_BadClusterQuery(mod, cluster, "PHS");
+		memset (buffer->buffer, 0xff, (mod->numclusters+7)>>3);
+	}
 	else
 		VBSP_DecompressVis (mod, ((qbyte*)prv->vis) + prv->vis->bitofs[cluster][DVIS_PHS], buffer->buffer, false);
 	return buffer->buffer;
@@ -5294,11 +6486,36 @@ Returns true if any leaf under headnode has a cluster that
 is potentially visible
 =============
 */
+/*
+FTESurf Patch 273 -- the instrument for the single most expensive thing on this
+map.  MEASURED, surf_tensor2 spawn, sv_perfdump, A/B/A/B alternated:
+
+    Snapshot build   sv_nopvs 0 : 1761.01 / 1657.26 us per render frame
+                     sv_nopvs 1 :   32.31 /   30.39
+    real framerate              :  192.0 / 210.2  ->  398.1 / 411.8
+
+i.e. the per-entity visibility test is 98% of the whole `Server` bucket, and
+skipping it DOUBLES the real framerate.  sv_nopvs is a diagnostic, not a fix --
+it sends every entity to every client -- so the question these counters answer
+is which half of the test is expensive: the ordinary leaf-list compare, or this
+function, which descends the WHOLE node tree with no box test and no early-out
+for any entity whose leaf list overflowed (num_leafs -1, headnode = topnode,
+which is the ROOT for anything straddling it).
+
+`calls` is entries into the test from EdictInFatPVS; `hn` is entries into THIS
+function's recursion; `visits` counts every node/leaf it touches.  If visits/frame
+is on the order of entities x numleafs, the tree descent is the cost and the fix
+belongs in what FindTouchedLeafs records, not in the caller.
+*/
+static unsigned int vbsp_pvs_calls, vbsp_pvs_hn, vbsp_pvs_visits, vbsp_pvs_overflow;
+
 static qboolean VBSP_HeadnodeVisible (model_t *mod, int nodenum, const qbyte *visbits)
 {
 	int		leafnum;
 	int		cluster;
 	mnode_t	*node;
+
+	vbsp_pvs_visits++;
 
 	if (nodenum < 0)
 	{
@@ -5317,10 +6534,151 @@ static qboolean VBSP_HeadnodeVisible (model_t *mod, int nodenum, const qbyte *vi
 	return VBSP_HeadnodeVisible(mod, node->childnum[1], visbits);
 }
 
+/*
+FTESurf Patch 273 -- MEMOISE THE DESCENT.  It is a pure function, and it was
+being recomputed thousands of times a second for the same two arguments.
+
+VBSP_HeadnodeVisible(mod, nodenum, visbits) reads nothing else and writes
+nothing, so for a fixed model its answer depends only on (nodenum, visbits).
+Within one server frame every entity is tested against the SAME pvs buffer, and
+the entities that reach here are precisely the ones whose leaf list overflowed --
+which happens when their box spans the map, which means topnode is usually the
+ROOT.  So the server was asking the identical question, of the identical tree,
+with the identical visbits, dozens of times per frame.
+
+MEASURED before this cache, surf_tensor2 spawn, over a 4000ms window:
+
+    573,246 visibility tests, 31,104 headnode descents, 341,374,532 node visits
+    -- and with sv_nopvs 1 (server skipped, renderer's prop pass still running)
+       782,772 tests, 27,306 descents, 122,968,020 visits.
+
+    So the SERVER's share is ~3,800 descents and ~218 MILLION node visits per
+    second, i.e. ~57,000 visits per descent: whole-tree, every time.  The prop
+    pass's descents are shallow (~4,500) because a prop's topnode is deep.
+    `Snapshot build` was 1714us/frame with it and 28.7us without.
+
+The cache is direct-mapped on nodenum and thrown away whenever the visbits
+change.  Comparing the visbits costs one memcmp of pvsbytes (762 bytes on
+tensor2, ~95 words) -- three orders of magnitude less than the single descent it
+replaces, and it is exact rather than heuristic: same bits, same answer.
+
+Keyed on the model too, so a second VBSP model cannot be served another's answer.
+*/
+/*
+ONE SET PER PVS BUFFER, and that is the whole design -- MEASURED, twice.
+
+The first version kept a single table keyed on a memcmp of the visbits.  It took
+`Snapshot build` from 1922us to 160us, because the server's entities nearly all
+carry headnode 0 (the root) and so ask the identical question all frame.  But
+20,010 descents a second SURVIVED, at ~5,500 visits each, and they were in the
+renderer.  I assumed the 232 static props were colliding in a 64-entry
+direct-mapped table and raised it to 512.
+
+THAT CHANGED NOTHING: 20,560 descents against 20,010, World walking 481-497us
+against 496-507us.  The misses were never collisions.  Three DIFFERENT pvs
+buffers reach this function every frame -- the main view's, the 3D skybox's, and
+the server's snapshot -- and a single set means each one's contents fail the
+memcmp against the last caller's and wipe the table.  It is the same one-slot
+eviction bug as the vis cache in VBSP_MarkLeaves, in a second place, found the
+same way: by measuring a fix that should have worked and did not.
+
+So key on the BUFFER, not just its contents.  Each caller owns a stable buffer
+(surf_frustumvis[recurse] for the renderer, cameras->pvs.buffer for the server),
+so a pointer compare separates them for free, and the memcmp then only has to
+catch the view actually moving -- which is what it was for.  Four sets, because
+R_MAX_RECURSE views plus the server is three, and the fourth costs 3KB.
+
+Still exact.  VBSP_HeadnodeVisible reads nothing but its arguments and writes
+nothing, so for a fixed model the answer is a pure function of (nodenum,
+visbits); a hit is returned only when the model matches, the node matches, and
+the visbits compare equal byte for byte.
+*/
+#define HNV_CACHE 256		//power of two; direct-mapped on nodenum, per set
+#define HNV_SETS  4			//one per distinct pvs buffer in flight
+static model_t     *vbsp_hnv_mod;
+static unsigned int vbsp_hnv_next;	//round-robin victim
+static struct
+{
+	const qbyte	*owner;			//the caller's buffer, the cheap half of the key
+	qbyte		*bits;			//our copy of its contents, the exact half
+	size_t		 bitsize;
+	int			 node[HNV_CACHE];
+	qboolean	 res[HNV_CACHE];
+} vbsp_hnv[HNV_SETS];
+static unsigned int vbsp_pvs_hnhit;
+
+static qboolean VBSP_HeadnodeVisibleCached (model_t *mod, int nodenum, const qbyte *visbits)
+{
+	size_t n = mod->pvsbytes;
+	unsigned int slot, i, s;
+
+	if (!hl2_pvscache || !hl2_pvscache->ival)
+	{	//the A/B arm, and the escape hatch if this is ever suspected
+		vbsp_pvs_hn++;
+		return VBSP_HeadnodeVisible(mod, nodenum, visbits);
+	}
+
+	if (vbsp_hnv_mod != mod)
+	{	//new map: every set is about someone else's tree
+		for (i = 0; i < HNV_SETS; i++)
+			vbsp_hnv[i].owner = NULL;
+		vbsp_hnv_mod = mod;
+		vbsp_hnv_next = 0;
+	}
+
+	for (s = 0; s < HNV_SETS; s++)
+		if (vbsp_hnv[s].owner == visbits)
+			break;
+	if (s == HNV_SETS)
+	{	//a buffer we are not tracking: take the round-robin victim
+		s = vbsp_hnv_next++ & (HNV_SETS-1);
+		vbsp_hnv[s].owner = visbits;
+		vbsp_hnv[s].bitsize = 0;		//force the reload below
+	}
+
+	if (vbsp_hnv[s].bitsize < n)
+	{
+		vbsp_hnv[s].bits = plugfuncs->Realloc(vbsp_hnv[s].bits, n?n:1);
+		vbsp_hnv[s].bitsize = n;
+		memset(vbsp_hnv[s].node, 0xff, sizeof(vbsp_hnv[s].node));	//-1 == empty
+		if (n) memcpy(vbsp_hnv[s].bits, visbits, n);
+	}
+	else if (n && memcmp(vbsp_hnv[s].bits, visbits, n))
+	{	//this view moved to a different cluster: its cached answers are stale
+		memcpy(vbsp_hnv[s].bits, visbits, n);
+		memset(vbsp_hnv[s].node, 0xff, sizeof(vbsp_hnv[s].node));
+	}
+
+	slot = ((unsigned int)nodenum) & (HNV_CACHE-1);
+	if (vbsp_hnv[s].node[slot] == nodenum)
+	{
+		vbsp_pvs_hnhit++;
+		return vbsp_hnv[s].res[slot];
+	}
+
+	vbsp_pvs_hn++;
+	vbsp_hnv[s].res[slot] = VBSP_HeadnodeVisible(mod, nodenum, visbits);
+	vbsp_hnv[s].node[slot] = nodenum;
+	return vbsp_hnv[s].res[slot];
+}
+
+static void VBSP_PvsStat_f(void)
+{	//FTESurf Patch 273 -- see the essay above VBSP_HeadnodeVisible.
+	Con_Printf("vbsp_pvsstat: %u visibility tests, %u overflowed to the headnode test\n",
+		vbsp_pvs_calls, vbsp_pvs_overflow);
+	Con_Printf("              of those: %u cache HITS, %u actual tree descents (%u node visits, %.1f per descent)\n",
+		vbsp_pvs_hnhit, vbsp_pvs_hn, vbsp_pvs_visits,
+		vbsp_pvs_hn ? vbsp_pvs_visits/(double)vbsp_pvs_hn : 0.0);
+	Con_Printf("              %u out-of-range cluster queries since this map loaded (Patch 277b; must be 0)\n",
+		vbsp_badclusterqueries);	//FTESurf Patch 277(b): NOT reset here -- it re-arms the once-per-map warning, so it resets with the map
+	vbsp_pvs_calls = vbsp_pvs_hn = vbsp_pvs_visits = vbsp_pvs_overflow = vbsp_pvs_hnhit = 0;
+}
+
 static qboolean VBSP_EdictInFatPVS(model_t *mod, const pvscache_t *ent, const qbyte *pvs, const int *areas)
 {
 	int i,l;
 	int nullarea = 0;
+	vbsp_pvs_calls++;						//FTESurf Patch 273
 	vbsp_pvs_why = VBSP_PVSWHY_VISIBLE;		//FTESurf Patch 257, see the enum
 	/*
 	FTESurf Patch 257 -- AN AREA RECORD THAT COULD NOT BE BUILT MUST NOT CULL.
@@ -5389,7 +6747,8 @@ static qboolean VBSP_EdictInFatPVS(model_t *mod, const pvscache_t *ent, const qb
 
 	if (ent->num_leafs == -1)
 	{	// too many leafs for individual check, go by headnode
-		if (!VBSP_HeadnodeVisible (mod, ent->headnode, pvs))
+		vbsp_pvs_overflow++;	//FTESurf Patch 273
+		if (!VBSP_HeadnodeVisibleCached (mod, ent->headnode, pvs))
 		{
 			vbsp_pvs_why = VBSP_PVSWHY_HEADNODE;
 			return false;
@@ -5400,6 +6759,8 @@ static qboolean VBSP_EdictInFatPVS(model_t *mod, const pvscache_t *ent, const qb
 		for (i=0 ; i < ent->num_leafs ; i++)
 		{
 			l = ent->leafnums[i];
+			if (l < 0)
+				continue;	//FTESurf Patch 277(b): a static prop's list keeps -1 clusters verbatim (the game-lump loader stores lf->cluster as is), and pvs[-1] is the byte before the buffer
 			if (pvs[l >> 3] & (1 << (l&7) ))
 				break;
 		}
@@ -5446,6 +6807,38 @@ static void VBSP_BuildBIHSubmodel(model_t *mod, int submodel)
 	plugfuncs->Free(bihleaf);
 }
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir);
+//FTESurf Patch 268 C: the six faces of that same nearest sample, LINEAR, for #BUMPCUBE; defined beside it.
+static void VBSP_LightPointCube		(struct model_s *model, const vec3_t point, vec3_t res_cube[6]);
+//FTESurf Patch 268 C2: which way VBSP_LightPointValues points the model light direction it derives
+//from that cube.  Registered in VBSP_Init; read there and by the static-prop light cache invalidation.
+static cvar_t *hl2_lt_dirsign;
+static cvar_t *hl2_lt_baked_dir;	//FTESurf Patch 296
+//FTESurf Patch 302: add LUMP_WORLDLIGHTS' direct light to the leaf ambient cube
+//for models that have no VRAD bake.  Read in VBSP_LightPointValues and by the
+//static-prop light cache invalidation; registered in VBSP_Init.
+static cvar_t *hl2_lt_worldlight;
+//FTESurf Patch 308: the falsifier for the derived v21/Strata worldlight layout.
+//Read at LOAD, inside VBSP_LoadWorldLights, so an A/B needs a map change or a
+//second process -- there is no live arm and the description says so.
+static cvar_t *hl2_lt_wl21;
+/*
+FTESurf Patch 304: how the cube is folded into the shader's two slots.
+
+THIS CVAR IS READ TWICE, and that is the point of it.  The C below reads it to
+choose the fold, and plugins/hl2/glsl/vmt/vertexlit.glsl reads the SAME cvar
+through !!cvardf to choose the matching ramp.  gl_shader.c:2291-2294 Cvar_Gets
+the name and force-adds CVAR_SHADERSYSTEM, so changing it live recompiles the
+program and re-solves the cache in the same frame -- and, more importantly, the
+two halves cannot drift apart, because there is only one value.  A base computed
+for a half-lambert ramp and rendered with a lambert one is worse than either fold
+on its own; making that state unrepresentable is worth more than the cvar costs.
+
+0/1 ONLY.  The define reaches the preprocessor as "#define hl2_lt_fold %g", so a
+fractional value would emit a float literal into an #if, which is not legal
+there.  The same sharp edge already exists on r_glsl_rtenvsphere (vertexlit.glsl
+:283) and is inherited, not introduced.
+*/
+static cvar_t *hl2_lt_fold;
 /*
 FTESurf Patch 233: WHAT IS THIS NAME, AND WILL I EVER SEE IT.
 
@@ -6163,6 +7556,34 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		Con_DPrintf("%s: %i $envmap generation(s) resolved only as .hdr.vtf\n",
 			mod->name, vmt_stat_hdrenvmap);
 
+	//Patch 290.  Declined rather than emitted, because `nodepth` is a pass keyword
+	//and the generic tail has no pass to put it in -- see the essay at mat_vmt.c.
+	if (vmt_stat_ignorez)
+		Con_DPrintf("%s: %i material(s) ask for $ignorez -- declined, no top-level depth key\n",
+			mod->name, vmt_stat_ignorez);
+
+	/*
+	Patch 300.  Both numbers, not just the first: "moved" alone cannot tell a map
+	with no additive materials apart from a gate that declined every one of them.
+
+	"so far" is load-bearing and is not hedging.  This census runs at MAP LOAD and
+	therefore sees only the materials the BSP itself names.  A material the CSQC
+	asks for later -- every env_sprite and env_lightglow goes through
+	R_BeginPolygon, which resolves by name at DRAW time -- is translated after
+	this line has already printed, so it is counted in neither number.
+
+	surf_tensor2 is the case that matters and it prints NOTHING here: its 429
+	glow sprites are all CSQC-loaded and no world face references a sprite
+	material, so both counters are still 0 when this runs.  The three shaders do
+	move -- `[shader] sprites/light_glow03 ... prog 1` at developer 1 says so --
+	but this line cannot see them.  Anyone using this number to decide whether the
+	patch is active on a map will get the wrong answer on exactly the map it was
+	written for; read the per-material [shader] lines instead.
+	*/
+	if (vmt_stat_addprog || vmt_stat_addpass)
+		Con_DPrintf("%s: %i additive material(s) on vmt/unlit so they fog to black, %i left on a pass (world materials only, so far)\n",
+			mod->name, vmt_stat_addprog, vmt_stat_addpass);
+
 	if (vmt_stat_unknown)
 	{
 		int u;
@@ -6200,6 +7621,38 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			"%i of them unlit (#UNLIT, no lightmap page)\n",
 			mod->name, vmt_stat_animated, hl2_animated?hl2_animated->ival:0,
 			vmt_stat_animunlit);
+
+	/*
+	FTESurf.  UnlitTwoTexture, and how many of them got their proxy chain.
+
+	The second number is the one that can go wrong quietly.  A two-layer
+	material draws whether or not its PlayerProximity chain resolved, so a
+	shield with a broken graph walk looks like a shield -- just one that is
+	visible from across the map, which is what it looked like BEFORE any of
+	this.  "4 twotexture, 0 with a distance fade" is the shape of that failure
+	and it is not visible in a screenshot.
+	*/
+	if (vmt_stat_twotexture)
+		Con_DPrintf("%s: %i UnlitTwoTexture material(s) at hl2_twotexture %i, "
+			"%i with a distance fade, %i with a distance-driven frame "
+			"(%i sampling the flipbook at hl2_twoframes %i, %i declined)\n",
+			mod->name, vmt_stat_twotexture, hl2_twotexture?hl2_twotexture->ival:1,
+			vmt_stat_proxfade, vmt_stat_proxframe,
+			vmt_stat_twoframes, hl2_twoframes?hl2_twoframes->ival:1,
+			vmt_stat_twoframesdecl);
+
+	/*
+	FTESurf Patch 288.  Printed whenever the map mentions colour correction AT
+	ALL, including when nothing survives, because "0 active" and "no line" are
+	different states and only one of them is a bug.  A grade that silently fails
+	to load looks exactly like a map that was never graded.
+	*/
+	if (cc_seen || cc_volumes)
+		Con_DPrintf("%s: %i color_correction (%i active at hl2_colourcorrection %i, "
+			"%i declined for falloff, %i still disabled, %i over the %i cap), "
+			"%i color_correction_volume declined\n",
+			mod->name, cc_seen, cc_n, hl2_colourcorrection?hl2_colourcorrection->ival:1,
+			cc_falloff, cc_disabled, cc_over, CC_MAX, cc_volumes);
 
 #ifdef HAVE_CLIENT
 	/*
@@ -6387,41 +7840,212 @@ static qbyte *VBSP_MarkLeaves (model_t *model, int clusters[2])
 	qbyte *vis;
 
 	int portal = refdef->recurse;
+	//FTESurf Patch 273: each recursion level owns a cache slot. Clamped because
+	//gl_backend.c stops recursing AT R_MAX_RECURSE, not below it.
+	int lvl = (portal < 0) ? 0 : (portal >= R_MAX_RECURSE ? R_MAX_RECURSE-1 : portal);
 
 	if (refdef->forcevis)
 	{
 		vis = refdef->forcedvis;
-		prv->vcache.vis = NULL;
+		prv->vcache[lvl].vis = NULL;
 		if (!vis)	//nettest: forcedvis can be NULL (a degenerate portal/water mesh, or ClusterPVS returning NULL, leaves forcevis set but forcedvis NULL) — the vis[] deref below would SIGSEGV. Fall through to the whole-model "all surfaces" path (VBSP_PrepareFrame handles surfvis==NULL). This is the d1_canals spawn-in water-reflection crash.
 			return NULL;
 	}
-	else if (portal || hl2_novis->ival || clusters[0] == -1 || !model->vis)
+	else if (hl2_novis->ival || clusters[0] == -1 || !model->vis)
 		return NULL;	//use some blind whole-model thing
 	else
 	{
-		vis = prv->vcache.vis;
-		if (prv->vcache.viewcluster[0] == clusters[0] && prv->vcache.viewcluster[1] == clusters[1] && vis)
-			return vis;
+		/*
+		FTESurf Patch 271 -- `portal ||` USED TO BE THE FIRST TERM ABOVE, and it
+		made the 3D skybox draw the entire map.
+
+		refdef->recurse is non-zero for every recursed view.  Mirrors, portals and
+		water all hand one down together with a real PVS in refdef->forcedvis, so
+		they take the branch above and are unaffected.  R_DrawSkyroom does NOT:
+		gl_warp.c:361,364 clear forcevis and forcedvis before recursing, so the
+		skyroom arrived here with recurse=1 and nothing else, hit `portal ||`,
+		and returned NULL -- which VBSP_PrepareFrame answers by emitting EVERY
+		surface in the world model (:6595-6601 below) with no PVS, no frustum and
+		no area test.
+
+		MEASURED on surf_tensor2, whose sky_camera sits in cluster 1534:
+
+		    what the PVS at cluster 1534 admits .......      30 world faces
+		    what the skyroom pass emitted .............  24,762
+		    the worldspawn model's face count .........  24,762   <- exactly
+		    what the MAIN view emitted, same frame ....     506
+
+		824x what it should draw, and 49x the real view, on every frame.  The
+		engine's own [world] census (r_surf.c:3994) prints `vis yes` for that pass
+		and is NOT the tell -- VBSP_PrepareFrame reports *surfvis_out = frustumvis
+		(:6627), which is never NULL.  The mesh COUNT is the tell, and it matched
+		nummodelsurfaces to the face.
+
+		    spawn      236 -> 545 fps    draw indices 304,787 -> 12,605
+		    stage 5    320 -> 1061 fps
+		    surf_tensor (no sky_camera, 61% of the geometry)   1337 fps
+
+		THE FIX IS Q1BSP'S, VERBATIM IN SHAPE.  Q1BSP_MarkLeaves does not bail on
+		a recursed view: it skips the cache, POISONS it, and computes a real PVS
+		anyway (q1bsp.c:2225-2242).  That is all this does.  The poison is the
+		load-bearing half -- prv->vcache.visbuf is one buffer shared by every
+		recursion level, so a recursed view necessarily overwrites what the main
+		view computed, and leaving vcache.vis pointing at it would serve the sky
+		camera's PVS to the player's own view on the next frame.
+
+		Why overwriting it mid-frame is nonetheless safe: the main view finishes
+		consuming its own PVS before the skyroom can run.  entvis is read at
+		r_surf.c:4005 (CL_LinkStaticEntities), and BE_DrawWorld -- which is what
+		reaches gl_backend.c:7413 and calls R_DrawSkyroom -- is not until :4020.
+		surfvis is already per-recursion (surf_frustumvis[r_refdef.recurse],
+		r_surf.c:3957) and was never the problem.
+
+		Costs one extra PVS decompression per frame on a map with a skyroom,
+		against 24,762 surfaces.  A sky_camera in solid still gives cluster -1 and
+		still takes the whole-model path above, so the degenerate case is exactly
+		what shipped before.
+		*/
+		/*
+		PATCH 273 REPLACES THE POISON ABOVE WITH SOMETHING THAT CACHES BOTH VIEWS.
+
+		271's poison existed for one reason, which its own text states: the ONE
+		visbuf was shared by every recursion level, so leaving vcache.vis pointing
+		at it after a recursed view would serve the sky camera's PVS to the
+		player's view on the next frame.  vcache is now per level, so that hazard
+		is gone and both views can keep their decompressed PVS.
+
+		BUT NOT THEIR NODE MARKS, and this is the trap.  node->visframe is one int
+		and vbsp_nodesequence is one global, so the tree can only hold ONE view's
+		marks at a time -- whichever marked last.  Simply returning early on a vis
+		hit would let the main view draw against the sky camera's marks, which is
+		the exact regression the poison prevented and would look like chunks of the
+		map missing.  q1bsp.c:2211-2213 documents the same constraint.
+
+		So the two halves are cached separately, which is what they always should
+		have been:
+
+		  the PVS decompression   per level, hit whenever that level's cluster
+		                          pair is unchanged
+		  the node marking        redone whenever the tree's marks belong to a
+		                          different level than the one asking
+
+		On a sky_camera map that still re-marks twice a frame -- but a re-mark is
+		now ~82 leaf visits instead of 19,846, because of the cluster buckets
+		below, so it no longer matters.  Making the marking cheap is what makes
+		keeping the marks unnecessary.
+		*/
+		vis = prv->vcache[lvl].vis;
+		if (vis &&
+			prv->vcache[lvl].viewcluster[0] == clusters[0] &&
+			prv->vcache[lvl].viewcluster[1] == clusters[1])
+		{
+			if (vbsp_markowner == lvl)
+				return vis;			//our PVS *and* our marks: nothing to do
+			goto remark;			//our PVS, someone else's marks
+		}
 
 		if (clusters[1] != clusters[0])	// may have to combine two clusters because of solid water boundaries
 		{
-			vis = VBSP_ClusterPVS (model, clusters[0], &prv->vcache.visbuf, PVM_REPLACE);
-			vis = VBSP_ClusterPVS (model, clusters[1], &prv->vcache.visbuf, PVM_MERGE);
+			vis = VBSP_ClusterPVS (model, clusters[0], &prv->vcache[lvl].visbuf, PVM_REPLACE);
+			vis = VBSP_ClusterPVS (model, clusters[1], &prv->vcache[lvl].visbuf, PVM_MERGE);
 		}
 		else
-			vis = VBSP_ClusterPVS (model, clusters[0], &prv->vcache.visbuf, PVM_FAST);
-		prv->vcache.vis = vis;
-		prv->vcache.viewcluster[0] = clusters[0];
-		prv->vcache.viewcluster[1] = clusters[1];
+			vis = VBSP_ClusterPVS (model, clusters[0], &prv->vcache[lvl].visbuf, PVM_FAST);
+
+		prv->vcache[lvl].vis = vis;
+		prv->vcache[lvl].viewcluster[0] = clusters[0];
+		prv->vcache[lvl].viewcluster[1] = clusters[1];
 	}
+remark:
+	vbsp_markowner = refdef->forcevis ? -1 : lvl;	//forcevis marks belong to nobody
 
 	vbsp_nodesequence++;
+	vbsp_mark_runs++;
 
+	/*
+	FTESurf Patch 273 -- THIS LOOP WAS O(WHOLE MAP) TO LIGHT UP 3.6% OF IT.
+
+	Marking is proportional to what the PVS ADMITS, not to how big the map is, so
+	walk the visible clusters instead of every leaf.  The cluster->leaf buckets
+	are built once at the tail of VBSP_LoadLeafs.
+
+	WHY IT MATTERS SO MUCH MORE ON SOURCE MAPS THAN IT LOOKS.  The cache above
+	returns before this loop, so a stationary camera normally pays nothing --
+	surf_tensor measures 9.93us of `World walking`.  But a map with a sky_camera
+	renders TWO world views per frame, and the recursed one skips the cache and
+	poisons it (:6465-6470, Patch 271, and correct):
+
+	    [world] recurse 0: area 22 cluster 6000 vis yes -> 506 meshes
+	    [world] recurse 1: area  8 cluster 1534 vis yes ->  20 meshes
+
+	so on surf_tensor2 NEITHER view can ever hit, and this loop ran twice a frame,
+	standing perfectly still, for 39,692 leaf visits over 2.06MB of mleaf_t --
+	each hit then chasing node->parent through a separate 1.75MB array.  `visframe`
+	is at offset 4 and `cluster` at offset 72, different cache lines, so a hit
+	dirties a line the scan has already passed.
+
+	What it becomes at that same spawn: 762 byte tests (most zero, rejecting eight
+	clusters each), ~219 bucket lookups and ~714 leaf visits.  The PVS row itself
+	is 12 cache lines.
+
+	THE MARKED SET IS IDENTICAL, which is the whole point -- this is arithmetic,
+	not a policy change.  Every leaf with a set cluster bit is in exactly one
+	bucket; leaves with cluster -1 were skipped by the old loop and are never put
+	in a bucket by the precompute.  If the two ever disagree, this is a bug and
+	not a tuning question.
+
+	NOT DONE, deliberately: giving each recursion level its own cache slot.  That
+	needs node->visframe to become per-recursion, and R_MAX_RECURSE is 6
+	(render.h:272) on a field shared with Q1/Q2/Doom -- +20 bytes on both mnode_t
+	and mleaf_t, ~790KB here, an engine<->plugin ABI break, and it WIDENS the hot
+	field, making the cache behaviour above worse.  q1bsp.c:2211-2213 explains the
+	same trap ("we only have one 'visframe' field in nodes"), and gl_q2bsp.c has
+	the multi-slot cache already (:7831-7832) and is still wrong for this reason.
+	With the buckets, the double-marking simply stops being expensive.
+	*/
+	if (prv->clusterfirstleaf)
+	{
+		int nc = model->numclusters;
+		int nb = (nc + 7) >> 3;		//exactly the bytes the old loop could reach
+		int b, bit;
+		unsigned int k, e;
+
+		for (b = 0; b < nb; b++)
+		{
+			int bits = vis[b];
+			if (!bits)
+				continue;			//eight clusters rejected by one test
+			for (bit = 0; bit < 8; bit++)
+			{
+				if (!(bits & (1<<bit)))
+					continue;
+				cluster = (b<<3) + bit;
+				if (cluster >= nc)
+					break;			//padding bits in the final byte
+				k = prv->clusterfirstleaf[cluster];
+				e = prv->clusterfirstleaf[cluster+1];
+				vbsp_mark_leaves += e - k;
+				for ( ; k < e; k++)
+				{
+					node = (mnode_t *)&model->leafs[prv->clusterleafs[k]];
+					do
+					{
+						if (node->visframe == vbsp_nodesequence)
+							break;
+						node->visframe = vbsp_nodesequence;
+						node = node->parent;
+					} while (node);
+				}
+			}
+		}
+	}
+	else
 	for (i=0,leaf=model->leafs ; i<model->numleafs ; i++, leaf++)
 	{
 		cluster = leaf->cluster;
 		if (cluster == -1)
 			continue;
+		vbsp_mark_leaves++;
 		if (vis[cluster>>3] & (1<<(cluster&7)))
 		{
 			node = (mnode_t *)leaf;
@@ -6515,6 +8139,16 @@ qboolean HL2_CalcModelLighting(entity_t *e, model_t *clmodel, refdef_t *r_refdef
 	VectorCopy(shadelight, e->light_avg);
 	VectorCopy(ambientlight, e->light_range);
 
+	//FTESurf Patch 268 C: and the six faces themselves, for #BUMPCUBE.  Filled whatever
+	//hl2_cubelight says -- that cvar decides what is compiled, and this runs once per prop
+	//for the life of the map inside the light_known cache, so skipping it saves nothing.
+	//Sampled at the same point as the lines above, which for a static prop is its lighting
+	//origin (the caller swaps it into e->origin for exactly this call).
+	if (mod->funcs.LightPointValues == VBSP_LightPointValues)
+		VBSP_LightPointCube(mod, e->origin, e->light_cube);
+	else
+		memset(e->light_cube, 0, sizeof(e->light_cube));
+
 	e->light_known = 1;
 	return e->light_known-1;
 }
@@ -6579,6 +8213,27 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		   figure is noise, and the question is whether it is ever non-zero.
 		   Reported once, a few seconds in, so it lands after the map has
 		   settled and does not repeat. */
+		/* FTESurf Patch 273.  runs = how many times the vis cache MISSED and had to
+		   re-mark (2 per frame on a sky_camera map, ~0 on a map without one while
+		   standing still); leaves = how many leaves those runs touched.  Before the
+		   cluster buckets this was runs*numleafs by construction.
+
+		   REPEATING, unlike the area census beside it, and that is the point: the
+		   number is a property of the VANTAGE, not of the map.  A one-shot report at
+		   frame 300 would only ever describe wherever the player happened to spawn,
+		   and the vantage this patch most needs to check is the widest view on the
+		   map -- where most clusters are visible and the bucket walk could in
+		   principle be SLOWER than the loop it replaces.  Counters reset with each
+		   report so every window stands alone. */
+		if (++prv->markstatframes >= 300)
+		{
+			Con_DPrintf("mark/300f: %i runs, %i leaf visits (%.1f per run, of %i leafs; index %s)\n",
+				vbsp_mark_runs, vbsp_mark_leaves,
+				vbsp_mark_runs ? vbsp_mark_leaves/(float)vbsp_mark_runs : 0.0f,
+				(int)mod->numleafs, prv->clusterfirstleaf?"ON":"off (fallback loop)");
+			prv->markstatframes = 0;
+			vbsp_mark_runs = vbsp_mark_leaves = 0;
+		}
 		if (++prv->areastatframes == 300)
 			Con_DPrintf("area cull over 300 frames: dropped %i of %i vis-passing leafs (%.1f%%)\n",
 				vbsp_leaf_areakill, vbsp_leaf_invis,
@@ -6661,6 +8316,11 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			mod->loadstate == MLS_LOADED)
 		{
 			float mn = 0;
+			//FTESurf Patch 296: the second column, which is what this line
+			//printed BEFORE 296.  Kept so the first run after the change is
+			//self-checking -- it has to reproduce the old numbers exactly while
+			//the first column drops to the level that is actually drawn.
+			double pk_r = 0, pk_g = 0, pk_b = 0;
 			//Default MUST match the one in VBSP_LightPointValues: GetNVFDG
 			//creates the cvar on first call, and whichever of the two runs
 			//first decides its default for the session.
@@ -6671,6 +8331,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			for (i = 0; i < prv->numstaticprops; i++)
 			{
 				vec3_t dif, amb, dir, sample;
+				vec3_t lev, old;
 				float lum;
 
 				// The SAME choice the draw path makes, or the census measures
@@ -6689,13 +8350,53 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				//the cube proposed.  A census of a value the renderer overrides
 				//is exactly the kind of measurement that sent Build 13 chasing
 				//the wrong thing for a build.
+				//
+				//FTESurf Patch 296: ...and 163 then reported a value nothing
+				//draws either, in TWO independent ways, for four months.
+				//
+				//  1. sent->baked has already been multiplied by the per-prop
+				//     peak gain at :4670, so it is the value of the prop's
+				//     BRIGHTEST vertex, not its level.  The draw divides it
+				//     straight back out (:8469, and the v_colour multiply in
+				//     vertexlit.glsl), so the census was inflated by a factor
+				//     that varies per prop -- mean 20.98 on surf_boreas, 2.05
+				//     on surf_fantasy.  That is why boreas' props "measured"
+				//     3.2x fantasy's while storing 4.6x DARKER bytes.
+				//  2. for a prop with no bake it accumulated res_ambient, the
+				//     cube's six-face mean -- but HL2_CalcModelLighting puts
+				//     res_DIFFUSE into light_avg (:7906), which is the shader's
+				//     base, and res_ambient into light_range.  res_diffuse is
+				//     res_ambient plus the dominant-face deviation, so the
+				//     no-bake population was under-reported by exactly the
+				//     directional boost at the same time as the baked one was
+				//     over-reported by the gain.
+				//
+				//The two errors point opposite ways, which is precisely why
+				//comparing a baked map against an unbaked one through this line
+				//could not be corrected by scaling either side.
 				if (prv->staticprops[i].hasbaked)
-					VectorCopy(prv->staticprops[i].baked, amb);
+				{
+					//vcgain is seeded to 1 at :5225 and only ever written at
+					//:4668, so the divide is safe on every prop including every
+					//4-byte one at hl2_lt_baked 1.
+					float g = prv->staticprops[i].vcgain;
+					if (g <= 0) g = 1;
+					VectorCopy(prv->staticprops[i].baked, old);
+					VectorScale(prv->staticprops[i].baked, 1.0f/g, lev);
+				}
+				else
+				{
+					VectorCopy(amb, old);
+					VectorCopy(dif, lev);
+				}
 
-				prv->lit_r += amb[0];
-				prv->lit_g += amb[1];
-				prv->lit_b += amb[2];
+				prv->lit_r += lev[0];
+				prv->lit_g += lev[1];
+				prv->lit_b += lev[2];
 				prv->lit_n++;
+				pk_r += old[0];
+				pk_g += old[1];
+				pk_b += old[2];
 
 				lum = 0.3f*amb[0] + 0.59f*amb[1] + 0.11f*amb[2];
 				if (mn > 0 && lum <= mn*1.001f && !prv->staticprops[i].hasbaked)
@@ -6706,11 +8407,13 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				Con_Printf("[texdiag] PROPLIGHT %s: %u props,"
 					" %u lit from their own VRAD bake,"
 					" %u in a leaf with no ambient, %u at the hl2_lt_min floor"
-					" -- mean %.1f %.1f %.1f, R/B %.2f\n",
+					" -- mean %.1f %.1f %.1f, R/B %.2f"
+					" (pre-296 column %.1f %.1f %.1f)\n",
 					mod->name, (unsigned)prv->lit_n, (unsigned)prv->lit_baked,
 					(unsigned)prv->lit_solid, (unsigned)prv->lit_floor,
 					prv->lit_r/prv->lit_n, prv->lit_g/prv->lit_n, prv->lit_b/prv->lit_n,
-					(prv->lit_b > 0.001) ? (prv->lit_r/prv->lit_b) : 0.0);
+					(prv->lit_b > 0.001) ? (prv->lit_r/prv->lit_b) : 0.0,
+					pk_r/prv->lit_n, pk_g/prv->lit_n, pk_b/prv->lit_n);
 		}
 		int areas[2];	//nettest: same area set the displacement cull uses, but areas[] is scoped inside the else above, so rebuild it here.
 		areas[0] = 1;
@@ -6733,8 +8436,52 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		*/
 		{
 			int want = (hl2_lt_baked_vc && hl2_lt_baked_vc->ival) ? 1 : 0;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod)
+			//FTESurf Patch 268 C2: hl2_lt_dirsign changes light_dir inside the same once-per-prop
+			//cache, so flipping it has to invalidate that cache exactly as this switch does.  Its
+			//own static rather than a bit in vbsp_vc_live, which is read as a plain boolean below.
+			static int dirsign_live = -1;
+			int wantsign = (hl2_lt_dirsign && hl2_lt_dirsign->ival) ? 1 : 0;
+			//FTESurf Patch 296: hl2_lt_baked_dir lands in the same once-per-prop
+			//cache, so it needs the same treatment.  Float equality is right --
+			//an unchanged cvar yields a bit-identical value -- and the -1 seed
+			//is a value the clamp below can never produce, so frame 1
+			//invalidates exactly once and never again.
+			static float bakeddir_live = -1;
+			float wantdir = hl2_lt_baked_dir ? hl2_lt_baked_dir->value : 0.0f;
+			if (wantdir < 0) wantdir = 0;
+			if (wantdir > 1) wantdir = 1;
+			//FTESurf Patch 302: hl2_lt_worldlight lands in this same once-per-prop
+			//cache, so it needs the same treatment.  The -1 seed is a value the
+			//boolean below can never produce, so frame 1 invalidates exactly once.
+			//Without this the cvar would appear to do nothing until a map change,
+			//and the A/B would have to be two processes -- which is precisely the
+			//shape of test that cannot separate a real change from run-to-run drift.
+			static int worldlight_live = -1;
+			int wantwl = (hl2_lt_worldlight && hl2_lt_worldlight->ival) ? 1 : 0;
+			//FTESurf Patch 304: same cache, same treatment.  The shader half of
+			//this cvar reloads itself (CVAR_SHADERSYSTEM, added by gl_shader.c
+			//:2294), so without this line a live toggle would swap the RAMP while
+			//every prop kept the base and amp the old ramp was solved for -- the
+			//one state the single-cvar design exists to make unreachable.
+			static int fold_live = -1;
+			int wantfold = (hl2_lt_fold && hl2_lt_fold->ival) ? 1 : 0;
+			//FTESurf Patch 308: hl2_cubelight now decides whether the worldlight
+			//term goes into the cube of a BAKED prop, so it changes solved data and
+			//not merely which shader is compiled.  It already regenerates materials
+			//(CVAR_SHADERSYSTEM), and without this line the new shader would be
+			//handed the cube the old one was solved for -- the same disagreeing-pair
+			//failure hl2_lt_fold is written to make unreachable.  r_cubelight, which
+			//gates the UPLOAD rather than the solve, needs nothing here and is still
+			//the right knob for a live A/B within one arm.
+			static int cubelight_live = -1;
+			int wantcube = (hl2_cubelight && hl2_cubelight->ival) ? 1 : 0;
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live)
 			{
+				cubelight_live = wantcube;
+				fold_live = wantfold;
+				worldlight_live = wantwl;
+				bakeddir_live = wantdir;
+				dirsign_live = wantsign;
 				vbsp_vc_live = want;
 				vbsp_vc_mod = mod;
 				for (i = 0; i < prv->numstaticprops; i++)
@@ -6918,7 +8665,38 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 				VectorCopy(src->origin, tmp);
 				VectorCopy(sample, src->origin);
+				/*
+				FTESurf Patch 302 -- THE CONTROL ARM, ENFORCED BY CONSTRUCTION.
+
+				A prop with a .vhv already carries VRAD's direct light inside the
+				bake, so adding the worldlight term to it would count the same
+				lights twice.  It is tempting to argue the point is moot --
+				HL2_RetintFromBaked OVERWRITES light_avg and light_range rather
+				than accumulating (:8026-8027), so the inflated values would be
+				discarded a few lines below -- but two things survive that
+				overwrite: light_dir, which the bake path deliberately keeps from
+				the cube solve, and light_cube[6], which #AMBIENTCUBE and
+				#BUMPCUBE read.  On surf_boreas that is 1587 of 1587 props whose
+				lighting is already correct.
+
+				So the suppression is real and it is set here rather than tested
+				downstream, because here is the only place that knows which
+				population this call belongs to.  Cleared immediately after: every
+				OTHER caller of LightPointValues -- players, viewmodels, any
+				non-prop model -- SHOULD get the direct term, exactly as Source's
+				light cache gives it to them.
+				*/
+				prv->wl_suppress = sent->hasbaked;
+				//FTESurf Patch 304: and the split fold, on the same two conditions
+				//and for the same two reasons.  A static prop is the only model
+				//guaranteed to render through vertexlit.glsl, which is the only
+				//shader carrying the matching half-lambert ramp; and a prop with a
+				//.vhv already has VRAD's own shading per vertex, so re-splitting
+				//the cube under it would shade it twice.
+				prv->fold_prop = !sent->hasbaked;
 				HL2_CalcModelLighting(src, src->model, r_refdef, mod);
+				prv->wl_suppress = false;
+				prv->fold_prop = false;
 				VectorCopy(tmp, src->origin);
 
 				//FTESurf Patch 163: VRAD already answered this question for this
@@ -7002,9 +8780,21 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 					if (sent->vc && vbsp_vc_live)
 					{
+						//FTESurf Patch 296: the 0.0f is now a cvar, still
+						//defaulting to 0.0f.  It is here rather than hard-coded
+						//because this is the one arm the bumped-rock report
+						//lands on, and being able to move it live at a fixed
+						//vantage is worth more than the literal.  It cannot fix
+						//that report -- the term is per-VERTEX against the
+						//geometric normal (vertexlit.glsl:109-123), so no value
+						//of it reaches a normal map -- but it does decide
+						//whether a baked prop has any silhouette at all.
+						float bd = hl2_lt_baked_dir ? hl2_lt_baked_dir->value : 0.0f;
+						if (bd < 0) bd = 0;
+						if (bd > 1) bd = 1;	//above 1 makes light_avg negative
 						src->vertlightbytes = sent->vc;
 						src->vertlightverts = (int)sent->vcverts;
-						HL2_RetintFromBaked(src, sent->baked, 0.0f);
+						HL2_RetintFromBaked(src, sent->baked, bd);
 					}
 					else
 					{
@@ -7218,6 +9008,44 @@ static void VBSP_MarkShadows(model_t *model, dlight_t *dl, const qbyte *lvis)
 	{
 		//static
 		//variation on mark leaves
+		//FTESurf Patch 273: same cluster-bucket walk as VBSP_MarkLeaves (see the
+		//essay there), on shadowframe instead of visframe.  This one runs once per
+		//realtime light per frame, so on a map with several it multiplies.
+		vbspinfo_t *prv = (vbspinfo_t*)model->meshinfo;
+		if (prv->clusterfirstleaf)
+		{
+			int nc = model->numclusters;
+			int nb = (nc + 7) >> 3;
+			int b, bit;
+			unsigned int k, e;
+
+			for (b = 0; b < nb; b++)
+			{
+				int bits = lvis[b];
+				if (!bits)
+					continue;
+				for (bit = 0; bit < 8; bit++)
+				{
+					if (!(bits & (1<<bit)))
+						continue;
+					cluster = (b<<3) + bit;
+					if (cluster >= nc)
+						break;
+					for (k = prv->clusterfirstleaf[cluster], e = prv->clusterfirstleaf[cluster+1]; k < e; k++)
+					{
+						node = (mnode_t *)&model->leafs[prv->clusterleafs[k]];
+						do
+						{
+							if (node->shadowframe == vbsp_shadowsequence)
+								break;
+							node->shadowframe = vbsp_shadowsequence;
+							node = node->parent;
+						} while (node);
+					}
+				}
+			}
+		}
+		else
 		for (i=0,leaf=model->leafs ; i<model->numleafs ; i++, leaf++)
 		{
 			cluster = leaf->cluster;
@@ -7384,6 +9212,504 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 		prv->leaflight[i].point = point + (unsigned short)LittleShort(*in++);
 	}
 }
+
+/*
+FTESurf Patch 302 -- LUMP_WORLDLIGHTS, and why the leaf ambient cube was never
+going to be enough on its own.
+
+VRAD writes the lights it used into LUMP_WORLDLIGHTS (15, LDR) and
+LUMP_WORLDLIGHTS_HDR (54).  Source's light cache lights a static prop that has
+no .vhv bake from the ambient cube PLUS these; we had only the cube, which
+VRAD fills with bounce alone -- IsLeafAmbientSurfaceLight
+(utils/vrad/leaf_ambient_lighting.cpp:183-198) admits a light to the cube only
+if it is an unstyled emit_surface dim enough to pass a 1/512^2 test, and on
+surf_tensor2 that is 0 of 603 lights.  The other 603 simply never reached any
+model.
+
+WHAT IS KEPT, and each exclusion is a decision, not an oversight:
+
+  emit_surface/point/spotlight  KEPT.  These have real distance falloff, so a
+    light in another room contributes almost nothing even before the PVS test.
+
+  emit_skylight/emit_skyambient  DROPPED.  Both return 1.0 from
+    Engine_WorldLightDistanceFalloff -- no falloff at ANY distance -- so they
+    apply everywhere unless you can answer "does this point see sky".  Source
+    answers it with a trace that must end on a SURF_SKY face.  We have no such
+    trace yet, and the map's own LEAF_FLAGS_SKY cannot stand in for one: it
+    means "3D sky is somewhere in this leaf's PVS" (bspfile.h:741) and is set
+    on 52.8% of surf_tensor2's leaves including the sealed concrete room the
+    prop in the bug report stands in.  Measured, these two are 0.054 0.112
+    0.263 against 0.029 0.042 0.054 for every local light combined -- roughly
+    3x everything else, and blue.  Applying them wrongly indoors would be a
+    worse bug than the one being fixed.  See hl2_lt_worldlight's description.
+
+  style != 0  DROPPED.  A switchable or animated light's contribution is a
+    function of the lightstyle, and this term is solved once per prop.
+
+  DWL_FLAGS_INAMBIENTCUBE  DROPPED.  VRAD already put that light in the cube
+    we are adding to; counting it again would double it.
+
+  cluster < 0  DROPPED.  A light with no cluster cannot be PVS-tested, and
+    pvs[-1] reads the byte before the buffer (see :6702).
+
+THE LUMP VERSION -- and FTESurf Patch 308, which is where the 100-byte variant
+stopped being a guess.
+
+Patch 302 refused lump version 1 (a 100-byte stride, measured on surf_fantasy)
+because the extra 12 bytes are undocumented: public/bspfile.h caps at
+BSPVERSION 20 and worldlights is absent from its versioned-lumps enum, and
+Momentum's own client rejects such a lump outright
+(game/client/momentum/worldlight.cpp:161).  Refusing beat guessing.  It also
+claimed the refusal "costs nothing today, because v21 maps ship full .vhv
+bakes and take the baked path".  THAT PART WAS WRONG, and it is the reason
+this is a patch rather than a cleanup: the bake path suppresses this term for
+PROPS only (VBSP_AddWorldLightCube's prv->wl_suppress), while players,
+viewmodels and every unbaked prop on those maps were left on bounce-only
+lighting.  Measured over the installed library: 1314 maps, 123 of them
+lumpversion 1, 39,641 worldlights refused.  Patch 302 and Patch 304 were both
+inert on all 123.
+
+THE LAYOUT IS NOW DERIVED RATHER THAN GUESSED, and the key is that
+surf_fantasy ships TWICE -- CS:S (bsp v20, lump version 0, stride 88) and
+Momentum (bsp v21, lump version 1, stride 100) -- with the SAME 777 lights.
+Pairing the two builds by origin matches 777 of 777, which turns the v20 build
+into a Rosetta stone: for every v20 field, scan the v21 record for the offset
+that reproduces it across all 777 lights.  The answer is a single 12-byte
+insertion immediately after `normal`, everything below shifted by 12:
+
+    origin 0, intensity 12, normal 24, <12 NEW BYTES at 36>, cluster 48,
+    type 52, style 56, stopdot 60, stopdot2 64, exponent 68, radius 72,
+    constant_attn 76, linear_attn 80, quadratic_attn 84, flags 88,
+    texinfo 92, owner 96
+
+Element-wise agreement with the CS:S build, 777 paired lights:
+    origin, style, stopdot, stopdot2, exponent, radius, the attenuation
+    triple, texinfo, owner ....... 100.00%
+    intensity, normal, type ...... 99.74%  (2 lights; the map was RECOMPILED)
+    cluster ....................... 52.12%  (a function of the vis tree, which
+                                             must differ between two compiles)
+    flags ......................... 0.26%   (the v21 compile sets Strata's new
+                                             CASTENTITYSHADOWS bit, 0x2)
+Every field that has to survive a recompile does; the three that do not, do
+not for reasons that are themselves checkable.  The inserted 12 bytes read as
+three floats and are ALL ZERO on all 777 -- consistent with Strata's added
+`Vector shadow_cast_offset`, which is also what its name in the engine that
+writes them would predict, and which we have no use for either way.
+
+Validated beyond the one map it was derived from: across all 123 v21 maps in
+the library, the derived offsets give a type in 0..5 and a style in 0..63 for
+every light and a unit-length `normal` for every light, with ZERO maps
+failing.  That is 39,641 independent chances to disagree.
+
+hl2_lt_wl21 0 restores the refusal exactly, for a map where this is suspected.
+*/
+#define DWL_FLAGS_INAMBIENTCUBE	0x0001	//public/bspfile.h:910-911
+enum
+{	//public/bspfile.h:899-907
+	VWL_SURFACE = 0,
+	VWL_POINT = 1,
+	VWL_SPOTLIGHT = 2,
+	VWL_SKYLIGHT = 3,
+	VWL_QUAKELIGHT = 4,
+	VWL_SKYAMBIENT = 5
+};
+typedef struct
+{	//public/bspfile.h:914-935.  All members are 4 bytes, so this is 88 with no
+	//padding on any target we build for; the static assert below says so.
+	float	origin[3];
+	float	intensity[3];
+	float	normal[3];
+	int		cluster;
+	int		type;
+	int		style;
+	float	stopdot;
+	float	stopdot2;
+	float	exponent;
+	float	radius;
+	float	constant_attn;
+	float	linear_attn;
+	float	quadratic_attn;
+	int		flags;
+	int		texinfo;
+	int		owner;
+} dworldlight_t;
+/*
+FTESurf Patch 308: the v21/Strata record.  Spelled out as its own struct rather
+than as a stride plus offset arithmetic, because the ONE thing that can go wrong
+here is a field landing in the wrong slot, and a struct makes that a compile-time
+statement the reader can check against the table in the essay above.  The field
+names and order are identical to dworldlight_t apart from shadow_cast_offset;
+VBSP_WorldLight21 copies one into the other so there is a single parsing loop and
+no second copy of the filtering rules to drift.
+*/
+typedef struct
+{
+	float	origin[3];
+	float	intensity[3];
+	float	normal[3];
+	float	shadow_cast_offset[3];	//the 12 new bytes; zero on all 39,641 measured
+	int		cluster;
+	int		type;
+	int		style;
+	float	stopdot;
+	float	stopdot2;
+	float	exponent;
+	float	radius;
+	float	constant_attn;
+	float	linear_attn;
+	float	quadratic_attn;
+	int		flags;
+	int		texinfo;
+	int		owner;
+} dworldlight21_t;
+static void VBSP_WorldLight21 (const dworldlight21_t *in, dworldlight_t *out)
+{	//shadow_cast_offset is READ AND DROPPED: it offsets the shadow-casting origin
+	//for Strata's entity shadows, which this engine does not do, and it is zero on
+	//every light in the library anyway.
+	memcpy(out->origin,    in->origin,    sizeof(out->origin));
+	memcpy(out->intensity, in->intensity, sizeof(out->intensity));
+	memcpy(out->normal,    in->normal,    sizeof(out->normal));
+	out->cluster		= in->cluster;
+	out->type			= in->type;
+	out->style			= in->style;
+	out->stopdot		= in->stopdot;
+	out->stopdot2		= in->stopdot2;
+	out->exponent		= in->exponent;
+	out->radius			= in->radius;
+	out->constant_attn	= in->constant_attn;
+	out->linear_attn	= in->linear_attn;
+	out->quadratic_attn	= in->quadratic_attn;
+	out->flags			= in->flags;
+	out->texinfo		= in->texinfo;
+	out->owner			= in->owner;
+}
+//Source's cube face order, +x -x +y -y +z -z -- utils/vrad/leaf_ambient_lighting.cpp:20-28.
+static const vec3_t vbsp_boxdirections[6] =
+{
+	{ 1, 0, 0}, {-1, 0, 0},
+	{ 0, 1, 0}, { 0,-1, 0},
+	{ 0, 0, 1}, { 0, 0,-1}
+};
+static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, vlump_t *ldr, qboolean usehdr)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	vlump_t		*l;
+	dworldlight_t *in;
+	size_t		i, count, kept = 0, stride;
+	size_t		drop_sky = 0, drop_style = 0, drop_cube = 0, drop_cluster = 0;
+	qboolean	v21;
+
+	prv->wl_pvscluster = -2;	//GMalloc zeroes prv, and 0 is a real cluster number.
+
+	/*
+	The same three-way the ambient cube makes (:9014-9021) and for the same
+	reason: VRAD writes a full-size HDR lump of zeros on an LDR-only compile, so
+	the choice is by CONTENT and must agree with the lightmap's.  Note that this
+	FALLS BACK, which is exactly why neither half may be put on Patch 298's
+	retirement list while a renderer exists -- see the census at :9522.
+	*/
+	if (hdr && hdr->filelen && usehdr)
+		l = hdr;
+	else if (ldr && ldr->filelen)
+		l = ldr;
+	else if (hdr && hdr->filelen)
+		l = hdr;
+	else
+		return;
+
+	//FTESurf Patch 308: version 1 is Strata's 100-byte record, derived above.
+	//Anything else is still refused -- this accepts the two layouts it can name,
+	//it does not accept "whatever stride divides the lump", which is how a wrong
+	//guess would look from here.
+	v21 = (l->version == 1) && hl2_lt_wl21 && hl2_lt_wl21->ival;
+	if (l->version != 0 && !v21)
+	{	//Two different reasons land here and they want different words: a version
+		//nobody has a layout for, versus Strata's version 1 turned off by hand.
+		//Reading "unknown layout" in a log while holding hl2_lt_wl21 0 would send
+		//the next reader looking for a parser bug that is not there.
+		if (l->version == 1)
+			Con_DPrintf("%s: worldlights lump is Strata's version 1 -- skipped by hl2_lt_wl21 0"
+				CON_WARNING " (models fall back to bounce-only lighting)\n", mod->name);
+		else
+			Con_DPrintf("%s: worldlights lump is version %i -- skipped" CON_WARNING
+				" (only 0 and Strata's 1 have a known layout; models keep bounce-only lighting)\n",
+				mod->name, l->version);
+		return;
+	}
+	stride = v21 ? sizeof(dworldlight21_t) : sizeof(dworldlight_t);
+	if (sizeof(dworldlight_t) != 88 || sizeof(dworldlight21_t) != 100 || l->filelen % stride)
+	{
+		Con_Printf(CON_ERROR "VBSP_LoadWorldLights: funny lump size\n");
+		return;
+	}
+	count = l->filelen / stride;
+	if (!count)
+		return;	//GMalloc(0) returns a non-NULL zero-byte block (:1955), so guard first.
+
+	in = (dworldlight_t*)(mod_base + l->fileofs);
+	prv->worldlights = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->worldlights)*count);
+	for (i = 0; i < count; i++)
+	{
+		dworldlight_t rec;
+		int type, style, flags, cluster;
+		struct vworldlight_s *out;
+		int j;
+
+		//FTESurf Patch 308: one parsing loop for both layouts.  The v21 record is
+		//widened into the v20 one FIRST, so every filter, every field read and the
+		//census below are written once and cannot diverge between the two strides.
+		if (v21)
+			VBSP_WorldLight21((const dworldlight21_t*)((qbyte*)in + i*stride), &rec);
+		else
+			rec = in[i];
+
+		type = LittleLong(rec.type);
+		style = LittleLong(rec.style);
+		flags = LittleLong(rec.flags);
+		cluster = LittleLong(rec.cluster);
+
+		if (type != VWL_SURFACE && type != VWL_POINT && type != VWL_SPOTLIGHT)
+			{ drop_sky++; continue; }
+		if (style != 0)
+			{ drop_style++; continue; }
+		if (flags & DWL_FLAGS_INAMBIENTCUBE)
+			{ drop_cube++; continue; }
+		if (cluster < 0)
+			{ drop_cluster++; continue; }
+
+		out = &prv->worldlights[kept++];
+		for (j = 0; j < 3; j++)
+		{
+			out->origin[j]		= LittleFloat(rec.origin[j]);
+			out->intensity[j]	= LittleFloat(rec.intensity[j]);
+			out->normal[j]		= LittleFloat(rec.normal[j]);
+		}
+		out->cluster		= cluster;
+		out->type			= type;
+		out->stopdot		= LittleFloat(rec.stopdot);
+		out->stopdot2		= LittleFloat(rec.stopdot2);
+		out->exponent		= LittleFloat(rec.exponent);
+		out->radius			= LittleFloat(rec.radius);
+		out->constant_attn	= LittleFloat(rec.constant_attn);
+		out->linear_attn	= LittleFloat(rec.linear_attn);
+		out->quadratic_attn	= LittleFloat(rec.quadratic_attn);
+	}
+	prv->numworldlights = kept;
+
+	//One line per map.  The drop counts are here because "the props are still
+	//dark" and "every light was filtered out" look identical from inside the
+	//game, and that is the distinction this line exists to make.
+	//FTESurf Patch 308 adds the layout to it, because "v21 accepted" and "v21
+	//still refused" were previously distinguishable only by the ABSENCE of this
+	//line, and an absent line reads as "the map has no worldlights".
+	Con_DPrintf("%s: worldlights %s v%i (%u-byte%s), %u of %u usable (%u sky, %u styled, %u already in cube, %u clusterless)%s\n",
+		mod->name, (l == hdr) ? "HDR" : "LDR", l->version,
+		(unsigned)stride, v21 ? ", Strata" : "",
+		(unsigned)kept, (unsigned)count, (unsigned)drop_sky, (unsigned)drop_style,
+		(unsigned)drop_cube, (unsigned)drop_cluster,
+		kept ? "" : CON_WARNING" -- hl2_lt_worldlight can do nothing on this map");
+}
+
+/*
+FTESurf Patch 302 -- the direct term, added into a six-face cube.
+
+This is AddEmitSurfaceLights (utils/vrad/leaf_ambient_lighting.cpp:92-136) with
+the emitter test generalised from emit_surface to the three local types, and
+VRAD's per-light TestLine visibility replaced by a PVS test.
+
+WHAT THE PVS TEST IS AND IS NOT.  VRAD traces a ray to every light.  We test
+only whether the light's cluster is in the sample point's PVS, which is a
+strictly looser question: light will leak to a point that is around a corner
+but still in the visible set.  It is not a rounding detail -- ungated, the same
+sum at the surf_tensor2 prop comes out 38-55x instead of 4.4-4.8x, because 377
+of the map's lights "reach" that point geometrically and only the ones sharing
+its PVS are real.  So the PVS test is doing nearly all of the work here, and a
+per-light trace is the known next refinement rather than a nicety.
+*/
+/*
+FTESurf Patch 308, the second half: `ignoresuppress`.
+
+prv->wl_suppress means "this prop has a .vhv bake, so its direct light is already
+counted -- do not add it again".  That is right for VBSP_LightPointValues, whose
+output IS the prop's level.  It is WRONG for VBSP_LightPointCube, whose output is
+read by exactly one thing: vertexlit.glsl's #BUMPCUBE, which uses it as a RATIO,
+
+    light *= clamp(pow((cube(n_bumped)+eps) / (cube(n_geom)+eps), 1/2.2), 0, 4)
+
+A ratio of a cube against itself carries no level.  It is exactly 1.0 whenever the
+bumped normal equals the geometric one -- a flat normal map, an unbumped material,
+or an empty cube -- and it is invariant under scaling the cube, so it cannot
+double-count a bake no matter how bright the bake is.  What it CAN carry is the
+cube's anisotropy, and that is precisely what the suppression was starving it of.
+
+Measured, over 200 real leaf ambient cubes and the normal-tilt distribution of
+fan/moss_n.vtf (mean 6.8 deg), as a change in 0..255 levels on a mid-grey pixel:
+
+    bounce-only cube (what a baked prop gets today)   mean 1.72   above 3 levels on  11 of 200
+    with the direct term added                        mean 4.41   above 3 levels on 193 of 200
+
+i.e. the ratio sits BELOW the ~3-level threshold at which anything is visible on
+screen, and adding the light it was already allowed to see for unbaked props puts
+it above.  This is the same fact that made Patch 268 C measure nothing, read from
+the other end -- and note that 268 C's headline "mean ratio 0.9941" never was
+evidence for its conclusion: the mean of a ratio over a symmetric tilt
+distribution is ~1 by construction.  On a hard top-lit cube the mean is 1.6001
+while the MEDIAN pixel moves 0.22 levels.  Mean and spread are independent here;
+only the spread is visible.
+
+Gated on hl2_cubelight rather than on a cvar of its own, deliberately: that cvar
+is exactly "compile the shader that reads this cube", the cube has no other
+consumer that is ever injected, and one value driving both halves is the Patch 304
+lesson.  hl2_cubelight 0 is therefore bit-for-bit today, including this.
+*/
+static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cube[6], qboolean ignoresuppress)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	qbyte		*visbits;
+	int			leafnum, cluster;
+	size_t		i;
+	int			j, f;
+
+	if (!prv || !prv->worldlights || !prv->numworldlights)
+		return;
+	if (!hl2_lt_worldlight || !hl2_lt_worldlight->ival)
+		return;
+	if (prv->wl_suppress && !ignoresuppress)
+		return;
+
+	leafnum = VBSP_PointLeafnum(mod, point);
+	if (leafnum < 0 || leafnum >= mod->numleafs)
+		return;		//NOT leafnum=0 as :9073 does: leaf 0 is solid, and answering
+					//a lighting question from the solid leaf would invent light.
+	cluster = mod->leafs[leafnum].cluster;
+	if (cluster < 0 || cluster >= mod->numclusters)
+		return;
+
+	//PVM_REPLACE guarantees the return is our own buffer (gl_model.h:262-272),
+	//so the row survives whatever else calls VBSP_ClusterPVS this frame.
+	if (prv->wl_pvscluster != cluster)
+	{
+		VBSP_ClusterPVS(mod, cluster, &prv->wl_pvs, PVM_REPLACE);
+		prv->wl_pvscluster = cluster;
+	}
+	visbits = prv->wl_pvs.buffer;
+	if (!visbits)
+		return;
+
+	for (i = 0; i < prv->numworldlights; i++)
+	{
+		const struct vworldlight_s *wl = &prv->worldlights[i];
+		vec3_t	delta, dir;
+		float	d2, dist, falloff, angle, ratio;
+		int		c = wl->cluster;
+
+		if (c >= mod->numclusters || !(visbits[c>>3] & (1<<(c&7))))
+			continue;
+
+		VectorSubtract(wl->origin, point, delta);
+		d2 = DotProduct(delta, delta);
+
+		//Engine_WorldLightDistanceFalloff, worldlight.cpp:36-87.
+		if (wl->type == VWL_SURFACE)
+		{
+			if (wl->radius != 0 && d2 > wl->radius*wl->radius)
+				continue;
+			//InvRSquared (public/mathlib/vector.h:2176-2190) clamps the
+			//DENOMINATOR to a minimum of 1, so a light inside 1 unit saturates
+			//at 1.0 rather than exploding.  That clamp is load-bearing.
+			falloff = 1.0f / ((d2 > 1.0f) ? d2 : 1.0f);
+		}
+		else
+		{
+			dist = sqrt(d2);
+			if (wl->radius != 0 && dist > wl->radius)
+				continue;
+			falloff = wl->constant_attn + wl->linear_attn*dist + wl->quadratic_attn*d2;
+			if (falloff < 1e-6f)
+				falloff = 1e-6f;
+			falloff = 1.0f / falloff;
+		}
+		if (falloff <= 0)
+			continue;
+
+		if (d2 < 1e-8f)
+			continue;	//coincident with the light; no direction to give it.
+		dist = sqrt(d2);
+		VectorScale(delta, 1.0f/dist, dir);
+
+		/*
+		Engine_WorldLightAngle (leaf_ambient_lighting.cpp:57-73), emitter side
+		only.  VRAD calls it with the NORMALISED DELTA in the snormal slot for
+		cube work, which makes its first dot exactly 1 -- the receiving surface's
+		own cosine is applied per cube face below instead, which is the only way
+		a six-face cube can be built from a single call.
+		*/
+		if (wl->type == VWL_SURFACE)
+		{
+			angle = -DotProduct(dir, wl->normal);
+			if (angle <= 0.01f)		//ON_EPSILON/10; behind the emitting surface
+				continue;
+		}
+		else if (wl->type == VWL_SPOTLIGHT)
+		{
+			float dot2 = -DotProduct(dir, wl->normal);
+			if (dot2 <= wl->stopdot2)
+				continue;			//outside the penumbra entirely
+			if (dot2 >= wl->stopdot)
+				angle = 1.0f;		//inside the hot spot
+			else
+			{
+				float span = wl->stopdot - wl->stopdot2;
+				float e = (wl->exponent < 1.0f) ? 1.0f : wl->exponent;
+				if (span < 1e-6f)
+					span = 1e-6f;
+				angle = pow((dot2 - wl->stopdot2) / span, e);
+			}
+		}
+		else
+			angle = 1.0f;			//a point light emits equally in every direction
+
+		ratio = falloff * angle;
+		if (ratio <= 0)
+			continue;
+
+		for (f = 0; f < 6; f++)
+		{
+			float t = DotProduct(vbsp_boxdirections[f], dir);
+			if (t > 0)
+				for (j = 0; j < 3; j++)
+					cube[f][j] += wl->intensity[j] * (t * ratio);
+		}
+	}
+}
+
+/*
+FTESurf Patch 304: read the cube the way Source reads it -- the n^2 convex
+combination of the three faces a normal actually sees.
+
+    out = sum_i  dir[i]^2 * cube[ the face light arrives from on axis i ]
+
+Source's face order is +x -x +y -y +z -z, rgb[0] being light arriving FROM +x, so
+a normal with a positive component on an axis takes the even face of that pair.
+For a unit dir the three weights sum to 1, which makes this an interpolation and
+not a gain: it can never return more than the brightest face it touches.
+
+This is the same reconstruction the #AMBIENTCUBE path already performs in the
+vertex shader (vertexlit.glsl:113-116) and the one VRAD itself would have used to
+bake a .vhv for this prop, which is exactly why it is the right function to
+define "the level on the lit side" and "the level on the unlit side" with.
+*/
+static void VBSP_CubeAlongDir (vec3_t cube[6], const vec3_t dir, vec3_t out)
+{
+	int i;
+	VectorClear(out);
+	for (i = 0; i < 3; i++)
+	{
+		float w = dir[i]*dir[i];
+		if (w > 0)
+			VectorMA(out, w, cube[i*2 + ((dir[i] >= 0)?0:1)], out);
+	}
+}
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
@@ -7442,35 +9768,187 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		}
 
 
+		/*
+		FTESurf Patch 302 -- the direct light goes in HERE, into the cube, and
+		not into the entity fields further downstream.
+
+		Everything below this point -- the dominant-direction solve, the diffuse
+		split, hl2_lt_dirsign's two arms, the sRGB encode, hl2_lt_scale and
+		hl2_lt_min's colour-preserving floor -- is a decomposition OF THIS CUBE.
+		Adding the term here means all of it applies to the corrected cube
+		exactly as it would have if VRAD had written the light into the cube in
+		the first place, with no second copy of that arithmetic to drift.
+
+		It also puts the term on the correct side of a naming trap.  The two
+		fields this eventually feeds are transposed with respect to their names:
+		res_diffuse becomes light_avg -> e_light_ambient, the shader's FLAT base,
+		while res_ambient becomes light_range -> e_light_mul, the DIRECTIONAL
+		amplitude gated by max(0,dot(n,e_light_dir)) (gl_alias.c:1602-1605).  A
+		term written into one of those by hand lifts either only the lit faces or
+		only the flat base; written into the cube it correctly does both.
+
+		vbsp_wl_cube is a plain local: the six faces are small, this runs once per
+		prop inside the light_known cache, and leaving best->rgb untouched keeps
+		the loaded lump read-only so a second model sampling the same leaf is not
+		looking at someone else's accumulation.
+		*/
+		vec3_t lcube[6];
+		vec3_t *rgb = best->rgb;
+		if (prv->numworldlights && hl2_lt_worldlight && hl2_lt_worldlight->ival && !prv->wl_suppress)
+		{
+			for (j = 0; j < 6; j++)
+				VectorCopy(best->rgb[j], lcube[j]);
+			VBSP_AddWorldLightCube(model, point, lcube, false);	//the LEVEL: suppression stands
+			rgb = lcube;
+		}
+
 		VectorClear(res_ambient);
 		for (j = 0; j < 6; j++)
-			VectorAdd(res_ambient, best->rgb[j], res_ambient);
+			VectorAdd(res_ambient, rgb[j], res_ambient);
 		VectorScale(res_ambient, 1.0/6, res_ambient);
 
 		//try and figure out an average dir for the brightest direction
 		for (j = 0; j < 6; j++)
 		{
-			VectorSubtract(best->rgb[j], res_ambient, diff[j]);
+			VectorSubtract(rgb[j], res_ambient, diff[j]);
 			sig[j] = VectorLength(diff[j]);
 		}
-		for (j = 0; j < 3; j++)
-			res_dir[j] = sig[j*2+1] - sig[j*2];
-		VectorNormalize(res_dir);
-
-		//figure out how much light there should be in that direction.
-		VectorCopy(res_ambient, res_diffuse);
-		for (j = 0; j < 3; j++)
+		if (hl2_lt_fold && hl2_lt_fold->ival && prv->fold_prop)
 		{
-			if (res_dir[j]>=0)	//nettest: was res_dir[0] on all 3 axes — leaned every prop's shading toward the X faces; index per-axis
-				VectorMA(res_diffuse, res_dir[j], diff[j*2+1], res_diffuse);
+			/*
+			FTESurf Patch 304 -- WHICH END OF THE RAMP THE FLAT BASE IS.
+
+			The shader renders  base + w(n) * amp,  where base is e_light_ambient
+			and is applied to EVERY vertex regardless of which way it faces.  The
+			legacy fold below sets base = mean + the deviation toward the light --
+			that is, roughly the value of the BRIGHTEST face -- and amp = the plain
+			mean.  So a face turned away from every light in the map receives the
+			bright-side level, and a face turned toward the light receives the
+			bright side plus the mean on top of it.  Measured on tensor2's
+			stage2_detail02 against what VRAD would have baked: the lit faces ran
+			1.3-1.9x hot and the face pointing away from the light ran 13.6x hot.
+			That single prop spanned 0.99 to 13.6, which is why no global scale
+			could ever have fixed it.
+
+			The fix is to put the base at the OTHER end of the ramp.  base is the
+			level on the face turned away from the dominant direction, amp is the
+			difference to the face turned toward it, and w(n) carries the model
+			from one to the other.  Both levels are read with the same n^2 convex
+			combination VRAD and #AMBIENTCUBE use, so the two ends are answers to
+			the same question the rest of the engine asks, not new constants.
+
+			AND THE RAMP HAS TO CHANGE WITH IT.  w(n) is a HALF-lambert in this
+			mode -- 0.5+0.5*dot, which Source uses on models for exactly this
+			reason -- because a plain lambert clamps flat at the base over the
+			whole shadow hemisphere, and the true irradiance there keeps falling.
+			vertexlit.glsl reads this same cvar through !!cvardf to pick the ramp,
+			so the two halves cannot disagree.  Measured over a uniform sphere of
+			normals rather than the handful the camera sees:
+
+			            today      this fold     (mean |log2(rendered/truth)|)
+			  tensor2   1.037        0.283
+			  bounce    0.463        0.230       over 200 real leaf cubes
+			            and it beat the legacy fold on 200 of those 200.
+
+			The direction is taken from the SIGNED luminance difference of each
+			opposing pair unconditionally -- it is not hl2_lt_dirsign's choice
+			here.  This fold is a statement about which end of the ramp is which,
+			so a direction that points the wrong way does not merely shade the
+			wrong side, it swaps base and amp and inverts the model.  On the
+			unsigned direction the same measurement gives 0.825 instead of 0.283.
+			hl2_lt_dirsign still governs the legacy fold below, where it is a
+			preference; here it would be a correctness bug and is not offered.
+			*/
+			static const vec3_t lumw = {0.299f, 0.587f, 0.114f};
+			vec3_t lit, unlit, away;
+			float len;
+
+			for (j = 0; j < 3; j++)
+				res_dir[j] = DotProduct(rgb[j*2], lumw) - DotProduct(rgb[j*2+1], lumw);
+			len = VectorLength(res_dir);
+			if (len < 1e-9)
+			{
+				/*
+				A cube with no direction in it at all -- every face equal.  There
+				is no lit end and no unlit end, so the honest answer is the flat
+				level with NO directional half, which is also exactly what the n^2
+				reconstruction returns for such a cube from every normal.  res_dir
+				still has to be a unit vector because the consumer normalises it
+				and would otherwise divide by zero.
+				*/
+				VectorSet(res_dir, 0, 0, 1);
+				VectorCopy(res_ambient, res_diffuse);	//still the six-face mean at this point
+				VectorClear(res_ambient);
+			}
 			else
-				VectorMA(res_diffuse, -res_dir[j], diff[j*2+0], res_diffuse);
+			{
+				VectorScale(res_dir, 1.0f/len, res_dir);
+				VectorNegate(res_dir, away);
+				VBSP_CubeAlongDir(rgb, res_dir, lit);
+				VBSP_CubeAlongDir(rgb, away, unlit);
+				VectorCopy(unlit, res_diffuse);
+				//clamped at zero per channel: the direction is chosen on luminance,
+				//so a strongly tinted cube can have one channel darker on the lit
+				//side, and a negative amp would subtract light from the lit face.
+				for (j = 0; j < 3; j++)
+					res_ambient[j] = (lit[j] > unlit[j]) ? lit[j]-unlit[j] : 0;
+			}
+		}
+		else if (hl2_lt_dirsign && hl2_lt_dirsign->ival)
+		{
+			/*
+			FTESurf Patch 268 C2: point the direction TOWARD the light, which is what every
+			consumer assumes -- vertexlit.glsl and defaultskin.glsl add
+			max(0, dot(n, e_light_dir)) * e_light_mul, and gl_alias.c's inverse describes
+			light_dir as "pointing TOWARD the light".
+
+			The unsigned form in the else arm gets it backwards.  sig[] is the LENGTH of
+			each face's deviation from the mean, so for a cube lit from above (+z 1.0, the
+			other five 0.2, mean 0.333) sig[+z] is 0.667 and sig[-z] 0.133, and
+			sig[-z] - sig[+z] points DOWN.  A length also has no sign at all: a cube bright
+			on +x and dark on -x by the same amount gives equal lengths and no x component.
+			Source's cube order is +x -x +y -y +z -z, rgb[0] being light arriving FROM +x.
+
+			The signed luminance difference of each opposing pair fixes both, and the
+			diffuse level then takes the face the direction now points at.  Off by default:
+			on a map without per-vertex bakes this changes which side of every prop -- and
+			of the player model -- is the lit one.
+			*/
+			static const vec3_t lumw = {0.299f, 0.587f, 0.114f};
+			for (j = 0; j < 3; j++)
+				res_dir[j] = DotProduct(rgb[j*2], lumw) - DotProduct(rgb[j*2+1], lumw);
+			VectorNormalize(res_dir);
+
+			VectorCopy(res_ambient, res_diffuse);
+			for (j = 0; j < 3; j++)
+			{
+				if (res_dir[j]>=0)
+					VectorMA(res_diffuse, res_dir[j], diff[j*2+0], res_diffuse);
+				else
+					VectorMA(res_diffuse, -res_dir[j], diff[j*2+1], res_diffuse);
+			}
+		}
+		else
+		{
+			for (j = 0; j < 3; j++)
+				res_dir[j] = sig[j*2+1] - sig[j*2];
+			VectorNormalize(res_dir);
+
+			//figure out how much light there should be in that direction.
+			VectorCopy(res_ambient, res_diffuse);
+			for (j = 0; j < 3; j++)
+			{
+				if (res_dir[j]>=0)	//nettest: was res_dir[0] on all 3 axes — leaned every prop's shading toward the X faces; index per-axis
+					VectorMA(res_diffuse, res_dir[j], diff[j*2+1], res_diffuse);
+				else
+					VectorMA(res_diffuse, -res_dir[j], diff[j*2+0], res_diffuse);
+			}
 		}
 
 		if (forceface->ival >= 0)
 		{
-			VectorCopy(best->rgb[forceface->ival], res_diffuse);
-			VectorCopy(best->rgb[forceface->ival], res_ambient);
+			VectorCopy(rgb[forceface->ival], res_diffuse);
+			VectorCopy(rgb[forceface->ival], res_ambient);
 			VectorClear(res_dir);
 			res_dir[forceface->ival/3] = (forceface->ival&1)?-1:1;
 		}
@@ -7594,11 +10072,35 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		m = minamb->value;
 		if (m > 0)
 		{
-			lum = 0.3f*res_ambient[0] + 0.59f*res_ambient[1] + 0.11f*res_ambient[2];
+			/*
+			FTESurf Patch 304: WHICH VECTOR THE FLOOR IS ALLOWED TO ASK.
+
+			This floor exists so nothing renders pure black, so it has to key on
+			the darkest value the model will actually show.  Under the legacy fold
+			that is res_ambient, which is the six-face mean and a fair proxy for
+			"how bright is this sample".  Under the split fold res_ambient is the
+			directional AMPLITUDE -- a difference, not a level -- and it is
+			legitimately near zero for a bright, evenly-lit sample.  Reading it
+			there would send a perfectly well-lit prop down the lum<=0.001 branch
+			and clamp it flat to 16, and the lum<m branch would multiply a bright
+			base by m/amp.  The darkest value the split fold can render is base,
+			at w(n)=0, which is res_diffuse -- so that is what it asks.
+
+			Both vectors are still scaled by the SAME factor, which is what keeps
+			base:amp constant and so lifts the level without flattening the
+			shading.  Only the question changes, not the remedy.
+			*/
+			float *level = (hl2_lt_fold && hl2_lt_fold->ival && prv->fold_prop) ? res_diffuse : res_ambient;
+			lum = 0.3f*level[0] + 0.59f*level[1] + 0.11f*level[2];
 			if (lum <= 0.001f)
 			{	//no colour to preserve.
-				VectorSet(res_ambient, m, m, m);
 				VectorSet(res_diffuse, m, m, m);
+				//...but under the split fold the directional half is a difference
+				//that may be perfectly good -- a prop lit hard from one side has a
+				//genuinely black unlit face -- and overwriting it with the floor
+				//would delete the shading instead of flooring it.
+				if (level == res_ambient)
+					VectorSet(res_ambient, m, m, m);
 			}
 			else if (lum < m)
 			{
@@ -7637,6 +10139,73 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 }
 #endif
 
+/*
+FTESurf Patch 268 C: the ambient cube itself, for vertexlit.glsl's #BUMPCUBE.
+
+The same nearest sample VBSP_LightPointValues picks -- same leaf, same clamp, same
+255-grid search, same strict tie-break -- written out again rather than hoisted out
+of it, so that function is untouched and "hl2_cubelight 0 is today" needs no
+argument.  Outside the #if above on purpose: with no leaf lighting loaded,
+prv->leaflight is NULL and this answers zeros, which the shader turns into exactly 1.
+
+The six faces go out LINEAR, as the lump decoded them.  The shader takes the ratio
+of two evaluations of this one cube, which no scale could change, and applies the
+display gamma to the ratio.  No hl2_lt_min floor either: a floor is about the level,
+and the level still comes from VBSP_LightPointValues.
+*/
+static void VBSP_LightPointCube(struct model_s *model, const vec3_t point, vec3_t res_cube[6])
+{
+	vbspinfo_t *prv = (vbspinfo_t*)model->meshinfo;
+	struct mleaflight_s *leaflight;
+	struct leaflightpoint_s *best, *lp;
+	mleaf_t *leaf;
+	size_t i, d, bd = ~0;
+	int leafnum, xyz[3], j;
+
+	memset(res_cube, 0, sizeof(vec3_t)*6);
+	if (!prv || !prv->leaflight || model->numleafs <= 0)
+		return;
+	leafnum = VBSP_PointLeafnum(model, point);
+	if (leafnum < 0 || leafnum >= model->numleafs)
+		leafnum = 0;
+	leaf = model->leafs + leafnum;
+	leaflight = prv->leaflight + leafnum;
+	if (!leaflight->count)
+		return;
+
+	for (j = 0; j < 3; j++)
+		xyz[j] = 255*(point[j] - leaf->minmaxs[j]) / (leaf->minmaxs[3+j]-leaf->minmaxs[j]);
+	for (i = 0, best = lp = leaflight->point; i < (size_t)leaflight->count; i++, lp++)
+	{
+		int m[3];
+		m[0] = xyz[0] - lp->x;
+		m[1] = xyz[1] - lp->y;
+		m[2] = xyz[2] - lp->z;
+		d = DotProduct(m,m);
+		if (bd > d)
+		{
+			bd = d;
+			best = lp;
+		}
+	}
+	for (j = 0; j < 6; j++)
+		VectorCopy(best->rgb[j], res_cube[j]);
+	//FTESurf Patch 302: the same term VBSP_LightPointValues adds, so #AMBIENTCUBE
+	//(which REPLACES light.rgb outright, vertexlit.glsl:113-116) and #BUMPCUBE's
+	//ratio see the same light the flat path does.  Both are off by default; if
+	//they were fed the bounce-only cube while the flat path got the corrected
+	//one, turning either on would silently darken every prop back again.
+	//
+	//FTESurf Patch 308: and on a BAKED prop the term is added anyway when
+	//hl2_cubelight is on, because this cube feeds only a ratio and a ratio carries
+	//no level -- see the essay on VBSP_AddWorldLightCube.  Without this, every prop
+	//on a map that ships .vhv bakes (surf_fantasy: 2345 of 2345) gets a bounce-only
+	//cube, whose anisotropy is too small to see -- which is the whole reason
+	//"the rocks have no bumpmap relief" survived Patch 268 C and Patch 302 both.
+	VBSP_AddWorldLightCube(model, point, res_cube,
+		(hl2_cubelight && hl2_cubelight->ival) ? true : false);
+}
+
 
 
 
@@ -7656,29 +10225,139 @@ static void VBSP_ComputeChecksum(model_t *mod, void *data, size_t length)
 //(the malloc/free ISzAlloc vbsp_lzma_alloc is defined earlier, before VBSP_LoadGameLump, so the
 //game-lump sub-lump decompressor can share it with this top-level lump decompressor.)
 
+/*
+FTESurf Patch 298 -- what a lump's length will be AFTER decompression, computed BEFORE it.
+
+A compressed lump's filelen is its COMPRESSED size and its fourcc carries the uncompressed size;
+an uncompressed lump has fourcc 0 and a filelen that is already the real length.  Every "does this
+lump have any contents" test in VBSP_LoadModel used to run after the decompressor, where filelen
+is always the real length.  Patch 298 hoists those tests ABOVE the decompressor (it has to -- the
+answers decide what is worth decompressing), so they have to keep giving the same answer.  Reading
+the fourcc is what makes the hoist provably equivalent rather than merely usually right: a lump
+whose LZMA stream expands to zero bytes would otherwise flip a choice simply by being compressed.
+*/
+static unsigned int VBSP_LumpRealLen(qbyte *mod_base, size_t filelen, vlump_t *l)
+{
+	qbyte *d;
+	if (l->filelen <= 0 || (size_t)l->fileofs + l->filelen > filelen)
+		return 0;
+	if (l->filelen < 17)
+		return l->filelen;	//too short to carry the 17-byte Source LZMA header
+	d = mod_base + l->fileofs;
+	if (d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A')
+		return (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+	return l->filelen;
+}
+
 //Decompress every compressed TOP-LEVEL lump into one model-lifetime buffer and rewrite its fileofs/filelen,
 //so every Load* (which reads mod_base+fileofs) transparently sees plain data.  The whole file is copied
 //first, so uncompressed lumps AND the game lump's ABSOLUTE sub-offsets stay valid.  Returns the new base,
 //the original base if nothing was compressed (classic maps pay nothing), or NULL on a decode failure.
-static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen, dvbspheader_t *header)
+//
+/*
+FTESurf Patch 298 -- skiplump: DO NOT DECOMPRESS WHAT NOTHING IS GOING TO READ.
+
+Measured on a NanoPi R6C (rk3588, aarch64) running the dedicated server, gdb sampling a map load
+fourteen times:  every single sample was inside
+
+    VBSP_LoadMap -> VBSP_LoadModel -> VBSP_DecompressLumps -> LzmaDecode -> LzmaDec_DecodeReal_3
+
+with the four worker threads parked in futex_wait.  Map load on this engine is single-threaded LZMA
+and essentially nothing else.  Load time tracks LZMA OUTPUT BYTES at roughly 17 MB/s, which fits
+four maps spanning two orders of magnitude:
+
+    map               on-disk   decompressed   LZMA out   load
+    surf_affliction    200 MB       478 MB      ~350 MB   19.7 s
+    surf_reverie       187 MB       326 MB      ~189 MB   13.7 s
+    kz_bhop_badg3s     495 MB       495 MB         none    2.4 s   <-- biggest file, fastest load
+    surf_kitsune         4 MB        12 MB        ~9 MB    0.5 s
+
+kz_bhop_badg3s is the control: the largest map in the library loads in a tenth of surf_affliction's
+time because VBSP wrote none of its lumps compressed.  Static props were the original suspect and
+are innocent -- `hl2_propcollision 0`, which loads no prop model at all, moved surf_affliction from
+19450ms to 19507ms.
+
+WHAT IS BEING DECOMPRESSED.  On surf_affliction, LIGHTING and LIGHTING_HDR are 35 MB each on disk
+and 167 MB each expanded: 334 MB, 71% of the whole decompression bill, for a map whose collision
+and entities are a few MB.  A dedicated server has no renderer and cannot use a lightmap at all,
+and VBSP_LoadModel already knows that -- VBSP_LoadLighting sits behind `if (noerrors && haverenderer)`.
+The guard was simply applied twelve lines too late to save the expensive part.
+
+AND HALF OF IT IS WASTED ON THE CLIENT TOO.  VBSP_LoadLighting is an if/else-if: it reads exactly
+ONE of the LDR/HDR pair.  The other 167 MB was decompressed and never looked at on every machine
+that has ever loaded the map.  Same for the leaf ambient pair.
+
+WHAT MAY BE SKIPPED IS DECIDED BY THE CALLER, not here, and the rule it must obey is that a lump is
+only listed when the branch that would read it provably cannot be taken in THIS configuration --
+never merely "is probably unused".  VBSP_LoadLeafLight is the reason that distinction is written
+down: it falls back from HDR to LDR and then back to HDR again, so "the map is HDR" is NOT on its
+own sufficient to retire the LDR half.  See the skip table in VBSP_LoadModel.
+
+Only COMPRESSED lumps are ever retired.  An uncompressed one costs no decode time and no extra
+memory (it is already in the file buffer that was copied wholesale), so skipping it would buy
+nothing and would change behaviour on classic maps for no reason.
+
+A RETIRED LUMP'S DIRECTORY ENTRY IS LEFT EXACTLY AS THE FILE HAS IT -- not zeroed.  The first
+draft of this patch zeroed filelen, on the reasoning that a lump left pointing at an LZMA header
+would be read as struct data.  That is wrong here and the counter-example is load-bearing:
+VBSP_LoadFaces:3671 chooses between the LDR and HDR FACE lumps by probing
+
+    l2->filelen && !(hl2_favour_ldr->ival && lumps[VLUMP_LIGHTING_LDR].filelen)
+
+-- it reads LIGHTING_LDR's LENGTH as an existence flag, and it is NOT behind `haverenderer`,
+because faces are needed for surfaces and collision on a dedicated server too.  Zeroing
+LIGHTING_LDR would therefore have silently moved the SERVER onto the HDR face set while every
+client stayed on the LDR one: different geometry on the two sides of prediction, from a patch
+whose entire purpose is to not change what gets loaded.  Note also that this predicate is NOT the
+same question as usehdr below -- its first term is FACES_HDR, not LIGHTING_HDR -- so the hoisted
+value cannot simply be substituted into it either.
+
+Leaving the entry alone makes every existence probe in the file see precisely what it saw before
+the patch, which is the property that has to hold.  What makes it safe to leave a retired lump
+pointing at undecompressed bytes is the caller's invariant: a lump is only ever listed when no
+branch that reads its CONTENTS can be taken in this configuration.  The readers, all verified:
+LIGHTING_{LDR,HDR} -> VBSP_LoadLighting (behind haverenderer, and an if/else-if that takes one);
+LEAFLIGHT{I,V}_{HDR,LDR} -> VBSP_LoadLeafLight (behind haverenderer, three-way choice);
+CUBEMAPS -> VBSP_LoadCubemaps (behind haverenderer); DISP_LMALPHA and DISP_LMCOORDS -> nothing in
+this plugin reads them at all.  Anything added to the skip table later owes the same census.
+
+FTESurf Patch 302 paying that: WORLDLIGHTS_{LDR,HDR} -> VBSP_LoadWorldLights, behind haverenderer,
+sole reader, and no one reads their LENGTH either.  Retired on the !haverenderer arm ONLY.  They are
+deliberately NOT retired when drawing, even though the loader picks one: it picks by content and
+FALLS BACK LDR->HDR the way VBSP_LoadLeafLight does, which is the exact three-way this rule was
+written around, so "the map is HDR" does not make the LDR half dead.
+*/
+static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen, dvbspheader_t *header, const qboolean *skiplump)
 {
-	size_t i, extra = 0, tail;
-	int anycompressed = 0;
+	size_t i, extra = 0, tail, saved = 0;
+	int anycompressed = 0, numskipped = 0;
 	qbyte *newbase;
 
 	for (i = 0; i < HL2_MAXLUMPS; i++)
 	{
 		vlump_t *l = &header->lumps[i];
 		qbyte *d;
+		unsigned int actual;
 		if (l->filelen < 17 || (size_t)l->fileofs + l->filelen > filelen)
 			continue;
 		d = mod_base + l->fileofs;
 		if (d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A')
 		{
-			extra += (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+			actual = (unsigned)d[4] | ((unsigned)d[5]<<8) | ((unsigned)d[6]<<16) | ((unsigned)d[7]<<24);
+			if (skiplump && skiplump[i])
+			{	//Patch 298: retired -- costs no decode and no tail space.  The directory entry is
+				//deliberately left untouched; see the essay above for why zeroing it is wrong.
+				saved += actual;
+				numskipped++;
+				continue;
+			}
+			extra += actual;
 			anycompressed = 1;
 		}
 	}
+	if (numskipped)
+		Con_DPrintf("%s: %i compressed lump%s retired unread, %.1f MB not decompressed\n",
+					mod->name, numskipped, numskipped==1?"":"s", saved/(1024*1024.0));
 	if (!anycompressed)
 		return mod_base;	//uncompressed classic map: leave it exactly as-is
 
@@ -7695,6 +10374,9 @@ static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen
 		SRes res;
 		if (l->filelen < 17 || (size_t)l->fileofs + l->filelen > filelen)
 			continue;
+		if (skiplump && skiplump[i])
+			continue;	//Patch 298: retired above.  Its entry still describes the compressed bytes,
+						//which is what every existence probe in this file expects to see.
 		d = mod_base + l->fileofs;	//read the (compressed) source from the ORIGINAL file (never overwritten)
 		if (!(d[0]=='L' && d[1]=='Z' && d[2]=='M' && d[3]=='A'))
 			continue;
@@ -7909,7 +10591,11 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	qboolean noerrors = true;
 #ifdef HAVE_CLIENT
 	qboolean haverenderer = qrenderer != QR_NONE;
+#else
+	const qboolean haverenderer = false;	//Patch 298: a SERVERONLY build has no renderer by construction
 #endif
+	qboolean usehdr;						//Patch 298: hoisted above VBSP_DecompressLumps, see below
+	qboolean lumpskip[HL2_MAXLUMPS];
 
 	VBSP_TranslateContentBits_Setup(prv);
 
@@ -7928,9 +10614,78 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		//fixme: truncate lumps if they go off the end
 	}
 
+	/*
+	FTESurf Patch 298 -- the retirement list, built before anything is decompressed.
+
+	The rule for putting a lump on this list is not "it looks unused".  It is: NO BRANCH THAT READS
+	THIS LUMP'S CONTENTS CAN BE TAKEN IN THIS CONFIGURATION.  VBSP_LoadLeafLight is why that has to
+	be stated so carefully -- it chooses HDR, then falls back to LDR, then falls back to HDR again,
+	so "the map is being drawn in HDR" is NOT on its own enough to retire the LDR half: a map whose
+	HDR ambient lumps are VRAD's all-zero stubs (see Patch 152) reaches the LDR branch anyway.
+
+	The lengths come from VBSP_LumpRealLen rather than from filelen directly, because filelen is
+	still the COMPRESSED size at this point; that is what makes hoisting these tests above the
+	decompressor equivalent to leaving them below it.
+	*/
+	{
+		unsigned int lit_ldr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LIGHTING_LDR]);
+		unsigned int lit_hdr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LIGHTING_HDR]);
+		unsigned int ami_hdr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LEAFLIGHTI_HDR]);
+		unsigned int amv_hdr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LEAFLIGHTV_HDR]);
+		unsigned int ami_ldr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LEAFLIGHTI_LDR]);
+		unsigned int amv_ldr = VBSP_LumpRealLen(mod_base, filelen, &header.lumps[VLUMP_LEAFLIGHTV_LDR]);
+		qboolean ambhdr;
+
+		//VBSP_LoadLighting's own choice, verbatim, and the one the leaf ambient cube must agree with.
+		usehdr = lit_hdr && !(hl2_favour_ldr->ival && lit_ldr);
+		//VBSP_LoadLeafLight's FIRST branch, verbatim.  Only when this is true is the LDR half dead.
+		ambhdr = usehdr && ami_hdr && amv_hdr;
+
+		memset(lumpskip, 0, sizeof(lumpskip));
+		if (hl2_lumpretire && !hl2_lumpretire->ival)
+			;	//Patch 298 falsifier: retire nothing, i.e. exactly the pre-patch behaviour.
+				//`usehdr` above is still the value the load below uses either way.
+		else if (!haverenderer)
+		{	//A dedicated server draws nothing.  VBSP_LoadLighting, VBSP_LoadLeafLight and
+			//VBSP_LoadCubemaps are all behind `haverenderer` below, and the two displacement
+			//lightmap lumps have no reader anywhere in this plugin.  On surf_affliction this is
+			//334 MB of lightmap that was being expanded and held for a process that has no GL
+			//context to upload it to -- 71% of the map's entire decompression cost.
+			lumpskip[VLUMP_LIGHTING_LDR]	= true;
+			lumpskip[VLUMP_LIGHTING_HDR]	= true;
+			lumpskip[VLUMP_LEAFLIGHTI_HDR]	= true;
+			lumpskip[VLUMP_LEAFLIGHTI_LDR]	= true;
+			lumpskip[VLUMP_LEAFLIGHTV_HDR]	= true;
+			lumpskip[VLUMP_LEAFLIGHTV_LDR]	= true;
+			lumpskip[VLUMP_CUBEMAPS]		= true;
+			lumpskip[VLUMP_DISP_LMALPHA]	= true;
+			lumpskip[VLUMP_DISP_LMCOORDS]	= true;
+			//FTESurf Patch 302, and it owes this table the same census the rule
+			//demands: VLUMP_WORLDLIGHTS_{LDR,HDR} have exactly one reader,
+			//VBSP_LoadWorldLights, and it is inside the `if (noerrors &&
+			//haverenderer)` block below.  Nothing else in this plugin touches
+			//either lump -- not by contents and not by length, which is the
+			//distinction VBSP_LoadFaces:3671 makes load-bearing for LIGHTING_LDR.
+			//So on a dedicated server no branch that reads them can be taken.
+			//53 KB decompressed on surf_tensor2 for data a server cannot draw.
+			lumpskip[VLUMP_WORLDLIGHTS_LDR]	= true;
+			lumpskip[VLUMP_WORLDLIGHTS_HDR]	= true;
+		}
+		else
+		{	//Drawing: retire the half of each pair whose branch cannot be reached.  This is the
+			//half of the win that lands on the PLAYER's machine -- a map ships both lightmaps and
+			//the renderer has only ever used one of them.
+			lumpskip[usehdr ? VLUMP_LIGHTING_LDR : VLUMP_LIGHTING_HDR] = true;
+			if (ambhdr)
+				lumpskip[VLUMP_LEAFLIGHTI_LDR] = lumpskip[VLUMP_LEAFLIGHTV_LDR] = true;
+			else if (ami_ldr && amv_ldr)	//the LDR branch is the one that will be taken
+				lumpskip[VLUMP_LEAFLIGHTI_HDR] = lumpskip[VLUMP_LEAFLIGHTV_HDR] = true;
+		}
+	}
+
 	//nettest: transparently decompress any LZMA-compressed lumps (repoints mod_base + rewrites the lump
 	//table, so every Load* below sees plain data).  Must run before LoadMapArchive / the Load* calls.
-	mod_base = VBSP_DecompressLumps(mod, mod_base, filelen, &header);
+	mod_base = VBSP_DecompressLumps(mod, mod_base, filelen, &header, lumpskip);
 	if (!mod_base)
 		return false;
 
@@ -7951,6 +10706,10 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	if (noerrors)	//takes the whole lump table: it also reads VLUMP_OVERLAYS, and it must run after
 		VBSP_LoadEntities							(mod, mod_base, header.lumps);	//VBSP_LoadTexInfo so nTexInfo resolves to a material name
 	noerrors = noerrors && VBSP_LoadFaces			(mod, mod_base, header.lumps, header.version);
+#ifdef HAVE_CLIENT
+	if (noerrors && haverenderer)	//FTESurf Patch 268 D1: needs texinfo, faces and the lighting lump; before displacements only because nothing later moves samples or extents
+		VBSP_ProbeLightmapStride				(mod);
+#endif
 	noerrors = noerrors && VBSP_LoadDisplacements	(mod, mod_base, header.lumps);
 	noerrors = noerrors && VBSP_LoadMarksurfaces	(mod, mod_base, &header.lumps[VLUMP_LEAFFACES]);
 	noerrors = noerrors && VBSP_LoadVisibility		(mod, mod_base, &header.lumps[VLUMP_VISIBILITY]);
@@ -7972,11 +10731,19 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		still ships a full-size, all-zero HDR ambient lump, which is what used
 		to win here.  See VBSP_LoadLeafLight.
 		*/
-		qboolean usehdr = header.lumps[VLUMP_LIGHTING_HDR].filelen &&
-			!(hl2_favour_ldr->ival && header.lumps[VLUMP_LIGHTING_LDR].filelen);
+		//Patch 298: `usehdr` is now computed once, above VBSP_DecompressLumps, because the
+		//retirement list needs the answer before it can know which lumps are worth expanding.
+		//It is the same expression, off VBSP_LumpRealLen instead of raw filelen.
 
-		VBSP_LoadLeafLight							(mod, mod_base, &header.lumps[VLUMP_LEAFLIGHTI_HDR], &header.lumps[VLUMP_LEAFLIGHTI_LDR],
+		VBSP_LoadLeafLight						(mod, mod_base, &header.lumps[VLUMP_LEAFLIGHTI_HDR], &header.lumps[VLUMP_LEAFLIGHTI_LDR],
 																	&header.lumps[VLUMP_LEAFLIGHTV_HDR], &header.lumps[VLUMP_LEAFLIGHTV_LDR], header.version, usehdr);
+
+		//FTESurf Patch 302: after VBSP_LoadLeafLight because it answers the same
+		//HDR-or-LDR question and augments the very cube that loads, and before
+		//VBSP_LoadGameLump below, which is what parses the static props.  Called
+		//bare, like its two neighbours: a missing or malformed optional lighting
+		//lump must leave props on bounce-only light, never fail the map load.
+		VBSP_LoadWorldLights						(mod, mod_base, &header.lumps[VLUMP_WORLDLIGHTS_HDR], &header.lumps[VLUMP_WORLDLIGHTS_LDR], usehdr);
 
 		//after LoadFaces (needs surfaces + surfedges) and LoadDisplacements
 		//(needs surfdisp), before the batch builder reads surf->envmap.
@@ -8124,6 +10891,12 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	prv->areastatframes = 0;
 	prv->nextareareport = 0;
 	vbsp_leaf_invis = vbsp_leaf_areakill = 0;
+	vbsp_mark_runs = vbsp_mark_leaves = 0;	//FTESurf Patch 273
+	prv->markstatframes = 0;
+	vbsp_pvs_calls = vbsp_pvs_hn = vbsp_pvs_visits = vbsp_pvs_overflow = vbsp_pvs_hnhit = 0;
+	vbsp_badclusterqueries = 0;	//FTESurf Patch 277(b): the once-per-map cluster-query warning re-arms with the map
+	//and drop the headnode memo: its key is a model pointer, and this one is new.
+	vbsp_hnv_mod = NULL;
 
 	//FTESurf Build 8: the prop models load after this point (lazily, on worker
 	//threads, driven from VBSP_BuildBIHMain), so this is where their collision
@@ -8370,6 +11143,48 @@ static void VBSP_PropCensus_f(void)
 		Con_Printf("    lighting           : %s, sampled at %.1f %.1f %.1f\n",
 			sent->hasbaked ? "VRAD baked (.vhv)" : "leaf ambient cube",
 			sent->lightorg[0], sent->lightorg[1], sent->lightorg[2]);
+		//FTESurf Patch 296: the LEVEL, which nothing printed until now.  The old
+		//line said only which SOURCE the prop was lit from, so "these two pines
+		//are different brightnesses" could not be checked except by eye against a
+		//screenshot.  mean is what the prop draws at its average vertex (baked
+		//divided by the peak gain); peak is the stored sent->baked, which is what
+		//shader_here's `light avg` prints and is gain times larger.
+		if (sent->hasbaked)
+		{
+			float g = sent->vcgain;
+			if (g <= 0) g = 1;
+			Con_Printf("    baked level        : mean %.1f %.1f %.1f   peak %.1f %.1f %.1f (gain %.2f)\n",
+				sent->baked[0]/g, sent->baked[1]/g, sent->baked[2]/g,
+				sent->baked[0], sent->baked[1], sent->baked[2], g);
+		}
+		/*
+		FTESurf Patch 304: the SOLVED pair, for a prop with no bake -- which until
+		now printed which source it was lit from and not one number from it.
+
+		This is the instrument the fold change is judged with, and it exists
+		because the alternative is a screenshot.  A screenshot can only show the
+		faces pointing at the camera, and that is the population where this
+		error is smallest by a factor of ten: on tensor2's stage2_detail02 the
+		camera-facing faces ran 1.3x hot while the face turned away ran 13.6x.
+		Reading base and amp directly tests BOTH ends of the ramp at once,
+		because the unlit end IS base and the lit end IS base+amp -- no vantage
+		can hide half of it.
+
+		Printed in the 0-255 screen units VBSP_LightPointValues produced;
+		HL2_CalcModelLighting stores them scaled by 1/255, so this undoes that.
+		The direction is the entity's, i.e. already projected onto its axes.
+		*/
+		else
+			Con_Printf("    solved level       : base %.1f %.1f %.1f  directional %.1f %.1f %.1f\n"
+					   "                         lit end %.1f %.1f %.1f  dir %.2f %.2f %.2f  (fold %i)%s\n",
+				src->light_avg[0]*255, src->light_avg[1]*255, src->light_avg[2]*255,
+				src->light_range[0]*255, src->light_range[1]*255, src->light_range[2]*255,
+				(src->light_avg[0]+src->light_range[0])*255,
+				(src->light_avg[1]+src->light_range[1])*255,
+				(src->light_avg[2]+src->light_range[2])*255,
+				src->light_dir[0], src->light_dir[1], src->light_dir[2],
+				(hl2_lt_fold && hl2_lt_fold->ival) ? 1 : 0,
+				src->light_known ? "" : "  <-- STALE: this prop has not been solved since the last invalidation");
 		//FTESurf Patch 259.  Says whether the per-vertex array is there AND whether
 		//it is being drawn, because hl2_lt_baked_vc can turn the second off with the
 		//first still loaded, and "mine looks like mode 1" is exactly that case.
@@ -8493,6 +11308,8 @@ qboolean VBSP_Init(void)
 		copy-pasted, so `cvarlist r_novis` described the wrong cvar entirely.
 		*/
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
+		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
+		hl2_lumpretire = cvarfuncs->GetNVFDG("hl2_lumpretire", "1", CVAR_MAPLATCH, "FTESurf (P298): skip LZMA-decompressing the BSP lumps nothing in this configuration will read -- both lightmaps on a dedicated server, and the unused half of the LDR/HDR pair when drawing. Map load on this engine is single-threaded LZMA and almost nothing else, so this is most of it: 334 MB of the 350 MB surf_affliction expands is lightmap. 0 restores the old decompress-everything behaviour, which makes the whole patch a one-command A/B.", MAPOPTIONS);
 		/*
 		FTESurf Patch 223.  Was CVAR_RENDERERLATCH|CVAR_CHEAT -- two latch bits
 		at once, which is the very bug the essay below diagnoses and fixes for
@@ -8519,6 +11336,16 @@ qboolean VBSP_Init(void)
 		*/
 		hl2_favour_ldr = cvarfuncs->GetNVFDG("hl2_favour_ldr", "0", CVAR_MAPLATCH, "Which of a Source map's two lightmaps to load, when it ships both.\n0: HDR (default). Source pairs its HDR lightmaps with a tonemap and an autoexposure pass that we do not have, so a brightly-lit surface can come out washed out.\n1: LDR -- the same map lit for a fixed exposure, which is what a Source engine with HDR off would show.", MAPOPTIONS);
 		/*
+		FTESurf Patch 268 D1.  Default 1 because it is a correctness fix and nothing else:
+		the old walk read a bumped face's basis maps as if they were the next lightstyle's
+		flat map, and the per-map size proof in VBSP_ProbeLightmapStride refuses to tag any
+		map whose layout it cannot equate to its lighting lump, on which the walk stays
+		exactly as it was.  0 is the falsifier for an A/B, and the per-map print names
+		which walk was used either way.  MAPLATCH: the tags are written while the BSP is
+		read, so a map reload is when a change takes effect.
+		*/
+		hl2_bumpstride = cvarfuncs->GetNVFDG("hl2_bumpstride", "1", CVAR_MAPLATCH, "Walk a Source map's lightstyles at the stride VRAD wrote them: a $bumpmap face stores four luxel sets per style (flat plus three radiosity-normal-map basis maps), and 150 library maps add a non-lightmap record after every style's sets.\n0: the old walk, which summed a basis map in as the next lightstyle at full brightness and never read the real one, on ~67,000 faces across 153 library maps.\n1: probe the layout per map and skip the extra sets (default). Faces then show their real second style -- brighter where it is a bright switchable light, darker where it is dim. Maps whose layout cannot be proven from the lighting lump size fall back to 0 and say so in the console.", MAPOPTIONS);
+		/*
 		FTESurf: hide the brushes Source hides.
 
 		Clip, playerclip, nodraw, skip, hint and areaportal faces were all being
@@ -8533,6 +11360,13 @@ qboolean VBSP_Init(void)
 		MAPLATCH: all three are decided at load, so it needs a map reload.
 		*/
 		hl2_hidetools = cvarfuncs->GetNVFDG("hl2_hidetools", "1", CVAR_MAPLATCH, "Hide clip/nodraw/skip/hint tool brushes, as Source does. 0 draws them, which is occasionally useful for working out why a route is blocked.", MAPOPTIONS);
+		/*
+		FTESurf Patch 281: see VBSP_RepackLighting.  1 is the fix; 0 is the
+		pre-281 read, kept as the A/B arm so "bhop_24 draws black" can be
+		reproduced on demand.  MAPLATCH because the repack happens inside the
+		map load; a pure correctness fix, so it defaults ON.
+		*/
+		hl2_lightmap_repack = cvarfuncs->GetNVFDG("hl2_lightmap_repack", "1", CVAR_MAPLATCH, "FTESurf (P281): when a Source map's face lightmaps do not all start on a 4-byte boundary (nine Momentum maps store an undocumented extra byte per luxel), rebuild the lightmap one face at a time so every face's samples are aligned. 0 reads the lump the old way, which draws about 72% of those maps' faces black.", MAPOPTIONS);
 		/*
 		This one is CONSOLE-ONLY, and not for want of a menu row -- fs_overlays is
 		the row (gfx_menu page 3), because it is the only one of the two that a
@@ -8747,8 +11581,63 @@ qboolean VBSP_Init(void)
 		hl2_dither_force = cvarfuncs->GetNVFDG("hl2_dither_force", "0", CVAR_SHADERSYSTEM, "One coverage for EVERY dithered surface (hl2_water 3, hl2_refract 2), replacing the per-material derivation rather than scaling it.\n0: off -- each material keeps its own coverage, scaled by hl2_dither_alpha (default).\n0.03 to 1: that coverage, on all of them. Use this when a map's own $alpha values leave panes too faint to see.", MAPOPTIONS);
 		hl2_bumpmap = cvarfuncs->GetNVFDG("hl2_bumpmap", "1", CVAR_SHADERSYSTEM, "Load $bumpmap/$normalmap from Source materials.\n0: no normal maps -- flat lighting, and it also drops the per-pixel work that reads them.\n1: normal (default).", MAPOPTIONS);
 		hl2_envmap = cvarfuncs->GetNVFDG("hl2_envmap", "1", CVAR_SHADERSYSTEM, "Source $envmap reflections on world and model materials, INCLUDING named skybox cubemaps.\n0: no reflections at all; env-mapped surfaces draw as plain diffuse+lightmap.\n1: normal (default). See also hl2_cubemaps, which leaves the shader path alone and only controls the map's own baked env_cubemaps.", MAPOPTIONS);
+		//FTESurf Patch 268 B: the literal env_cubemap sentinel, and the Source-parity
+		//bits for the envmap term.  Both owned by mat_vmt.c, registered here with the
+		//rest.  SHADERSYSTEM because both decide what gets COMPILED into the material.
+		hl2_envcubemap = cvarfuncs->GetNVFDG("hl2_envcubemap", "0", CVAR_SHADERSYSTEM, "$envmap env_cubemap on models and unpatched brush faces reflects the map's nearest baked cubemap.\n0: today -- such a material reflects nothing UNLESS it also carries $envmapmask, which is the one spelling that already worked.\n1: on. Regenerates materials, so use r_envcubemap for a live A/B on a loaded map.", MAPOPTIONS);
+		hl2_envmap_source = cvarfuncs->GetNVFDG("hl2_envmap_source", "0", CVAR_SHADERSYSTEM, "Source parity for the envmap term, a bitmask; 0 = today's arithmetic.\n1: Source's mask rules -- no mask key means FULL strength rather than 1-alpha, only $basealphaenvmapmask is inverted, and both it and $envmapmask are ignored on a bumped VertexLitGeneric as Source's own helper does.\n2: $envmapcontrast (parsed and discarded before now) plus Source's tint->contrast->saturation order; this also hands WorldVertexTransition its $envmaptint/$envmapsaturation, which that shader has never applied at all.\n4: VertexLitGeneric adds the reflection AFTER lighting, so a dark prop no longer dims its own reflection.", MAPOPTIONS);
+		//FTESurf Patch 268 C: per-pixel ambient-cube relief on bumped props, and its two
+		//companions.  hl2_cubelight and hl2_bumpgreenfix are mat_vmt.c's and SHADERSYSTEM,
+		//because they decide what is compiled; hl2_lt_dirsign is this file's, and a plain
+		//cvar, because it only changes a cached light direction (see VBSP_PrepareFrame).
+		hl2_cubelight = cvarfuncs->GetNVFDG("hl2_cubelight", "0", CVAR_SHADERSYSTEM, "Per-pixel relief on bumped Source props: the leaf's six-face ambient cube evaluated with the NORMAL-MAPPED normal, as Source lights them, applied as a ratio over the prop's existing (baked) lighting.\n0: today -- a VertexLitGeneric with $bumpmap and no $envmap samples no normal map at all and draws flat.\n1: on. Regenerates materials, so use r_cubelight for a live A/B on a loaded map.", MAPOPTIONS);
+		hl2_bumpgreenfix = cvarfuncs->GetNVFDG("hl2_bumpgreenfix", "0", CVAR_SHADERSYSTEM, "Green channel of a bumped VertexLitGeneric's normal map.\n0: today -- flipped, which mirrors the relief along V relative to Source (Source never flips it; handedness rides on the tangent's w).\n1: unflipped, as Source. Also bends the Patch 268 B reflection the same way.", MAPOPTIONS);
+		hl2_lt_dirsign = cvarfuncs->GetNVFDG("hl2_lt_dirsign", "0", 0, "Direction of the model light derived from the leaf ambient cube.\n0: today -- from unsigned face deviations, which points AWAY from a single bright face and drops the sign of a symmetric pair.\n1: the signed luminance difference of each opposing face pair, pointing toward the light. Visible only on props with no .vhv bake, and on models that are not static props.", MAPOPTIONS);
+		//FTESurf Patch 296.  REGISTERED HERE AS WELL AS LAZILY IN THE LOADER, for the
+		//reason the essay below (:10261-10281) gives for the other four: the loader's
+		//own GetNVFDG does not run until the first prop of the first map is read, so
+		//until then the name does not exist, the menu's cvar() reads 0, and cvarlist
+		//cannot show it.  hl2_lt_face is the standing example of getting this wrong.
+		//GetNVFDG returns an existing cvar rather than minting a duplicate, so the two
+		//registrations are the same cvar and the defaults must agree -- so if you change
+		//one of the three below, change the copy in VBSP_LoadPropBakedLight with it.
+		cvarfuncs->GetNVFDG("hl2_lt_vhv12", "1", 0, "Accept VRAD's 12-byte-per-vertex baked static prop lighting: three radiosity-normal basis colours per vertex instead of one colour, which the loader rejected outright before Patch 296.\n67 of the library's maps ship it (27,178 props) and lose ALL their baked prop lighting without this -- surf_fantasy read \"props: 0 of 2345\" with 2345 .vhv files sitting in its own pakfile.\n0: reject it, as every build before Patch 296 did (bit-for-bit that picture).\n1: read it, averaging the three basis colours (default). That mean is not an approximation: utils/vrad/lightmap.cpp:3479-3549 SCALES the three so their arithmetic mean equals the unbumped value, and asserts it in a dead variable at :3533. Proven on the files as well -- on 465 of surf_fantasy's props the 12 bytes are three bit-identical copies of one BGRA, and against the CS:S build's ordinary 4-byte files the mean out-correlates every individual basis (r 0.764 matched, 0.236 shuffled).", MAPOPTIONS);
+		//FTESurf Patch 296: the decode curve, and the directional fraction for a
+		//baked prop.  Same two-site rule as above.
+		cvarfuncs->GetNVFDG("hl2_lt_baked_curve", "1", 0, "Which curve decodes VRAD's baked static prop lighting.\n0: sRGB -- the pre-Patch-296 behaviour, bit-for-bit.\n1: VRAD's own, pow(b/127.5, 2.2) (default). This is what utils/vrad actually wrote: LinearToVertexLight (public/mathlib/mathlib.h:1410-1428) over a pow(x, 1/2.2) table scaled by overbrightFactor 0.5 (mathlib/color_conversion.cpp:233-261, MathLib_Init at utils/vrad/vrad.cpp:2356). The stored-byte ceiling of 239, measured over every prop of two separate builds of surf_fantasy, is round(255*0.5*4^(1/2.2)) and pins all three terms.\n2: no decode -- mean the stored bytes. Diagnostic only: it puts the level in the same space as the per-vertex multiplier and so measures how far apart the other two hold them.\nRead at load; `map <the same name>` does not reload, so an A/B needs a different map in between or a second process.", MAPOPTIONS);
+		hl2_lt_baked_dir = cvarfuncs->GetNVFDG("hl2_lt_baked_dir", "0", 0, "Directional fraction given to a prop lit from its own VRAD .vhv bake, 0 to 1.\n0: today -- the bake is used flat, because VRAD already baked the light's direction into each vertex and re-applying a direction over it would shade it twice (default).\n1 (or any fraction): split that much of the level into a max(0,N.L) term along the leaf ambient cube's dominant direction, which gives a nearly-uniform bake some silhouette.\nNOTE: this is per-VERTEX against the geometric normal, so it can never produce relief on a bumpmapped prop -- hl2_cubelight is the knob for that. And at any non-zero value hl2_lt_dirsign 1 becomes a prerequisite, or it lights the wrong side.", MAPOPTIONS);
+
 		//FTESurf Patch 263: WindowImposter, Source's fake-second-skybox shader. See the arm in mat_vmt.c.
 		hl2_imposter = cvarfuncs->GetNVFDG("hl2_imposter", "1", CVAR_SHADERSYSTEM, "Source's WindowImposter shader -- a brush that draws a cubemap by VIEW DIRECTION, used to fake a second skybox in one room (155 materials across 59 maps).\n0: draw them nodraw, so whatever is behind shows through -- on a fake-sky slab that is the map's real sky.\n1: as authored (default). Before this existed the class was unimplemented and these surfaces drew as the notexture checkerboard.", MAPOPTIONS);
+		//FTESurf: UnlitTwoTexture's second layer and its material proxies. See the arm in mat_vmt.c.
+		cvarfuncs->GetNVFDG("hl2_fog_alphamul", "0", CVAR_SHADERSYSTEM, "FTESurf Patch 299: whether a fogged Source surface is multiplied by its own base-texture ALPHA.\n0: no (default). Fog the colour and leave the alpha to the blender, which is what Source does.\n1: yes -- the pre-Patch-299 picture, bit-for-bit. That is what the engine's fog4() has always done (gl_vidcommon.c:1887, `vec4(fog3(rgb),1.0) * regularcolour.a`), and it is correct only for a PREMULTIPLIED blend, which this plugin never emits.\nSource does not treat base alpha as opacity unless the material says so: on an opaque VertexLitGeneric it is a mask ($basealphaenvmapmask and friends) and the surface is solid. With no fog the opaque blend discards it, so nothing shows; the moment fog is on, the mask multiplies every pixel. Measured on surf_tensor2's 3D skybox, the mean base alpha of the eight building materials in frame splits cleanly into 0.028-0.094 and 0.920-0.984, and it matches the screen object for object -- the 0.03 props drew at 3% of the fog colour, a black cutout against a correctly fogged sky, which is the reported 'bright black' buildings, and the low-alpha window panes inside the 0.92-0.96 textures are the black windows beside them.\nTranslucent materials are affected too and in the same direction: mat_vmt.c:3719/3885 emit `src_alpha one_minus_src_alpha`, so GL already applies the alpha and fog4() was applying it a second time. Additive (fog4additive) and water (fog4blend) never multiplied and are unchanged either way.", MAPOPTIONS);
+
+		hl2_twotexture = cvarfuncs->GetNVFDG("hl2_twotexture", "1", CVAR_SHADERSYSTEM, "Source's UnlitTwoTexture shader, which MULTIPLIES two texture layers -- combine shields and force fields, HL2 monitors and displays, fog cards, and five of Momentum's own powerup props (48 materials in the mounted packs).\n0: draw $basetexture alone, which is what this did before the second layer existed -- a still image of one of the two layers.\n1: both layers, with the second one's TextureScroll proxy and the PlayerProximity distance fade and frame ramp compiled into the shader (default).", MAPOPTIONS);
+
+		//FTESurf Patch 286: the flipbook half of the above, switchable on its own
+		//so "denser as you approach" can be A/B'd without also losing the second
+		//layer -- hl2_twotexture 0 changes three things at once and is the wrong
+		//control for this one.
+		/*
+		FTESurf Patch 288.  READ IN TWO PLACES, on purpose.
+
+		At MAP LOAD it gates generation, so 0 at launch costs nothing at all --
+		no LUT textures, no post-process pass, no FBO round trip.  And it is a
+		LIVE uniform inside the shader (`!!cvarf hl2_colourcorrection`), so on a
+		map that was loaded with it on, 0 / 1 / 0 at a fixed vantage is a
+		three-picture A/B with nothing else changing between the frames.  That
+		matters here more than usual: `map x` twice does not reload, so an A/B
+		that needed a map change would be the kind of measurement this project
+		has already recorded getting wrong.
+
+		Fractional values work and are useful -- .5 is "half the grade", which is
+		how a wrong LUT is told apart from a right LUT applied too strongly.
+		*/
+		hl2_colourcorrection = cvarfuncs->GetNVFDG("hl2_colourcorrection", "1", CVAR_SHADERSYSTEM, "Source's color_correction entities -- a 32x32x32 lookup table applied to the whole frame, which is how a Source map's author set its colour.  FTE has never applied any of them, so every graded map in the library has been rendering ungraded.\nOnly the global form is implemented (minfalloff/maxfalloff -1, which is the common idiom); a correction with a real distance falloff, and color_correction_volume entirely, are counted and declined in the map's census line.\n0: no grade, the way every build before this one looked.  Live -- it takes effect on the current frame, and 0 is bit-for-bit the ungraded scene.\n1: apply the map's own grade (default).  Going from 0 to 1 needs a map load if the map was loaded with it off, because the shader is generated then.\nFractional values scale the grade: .5 is half of it.", MAPOPTIONS);
+
+		hl2_additivefog = cvarfuncs->GetNVFDG("hl2_additivefog", "1", CVAR_SHADERSYSTEM, "Draw ADDITIVE Source materials with a real GLSL program, so that fog fades them toward BLACK instead of toward the fog colour.\nA shader with no top-level program gets fixed-function GL fog, which mixes toward GL_FOG_COLOR on RGB and cannot know the surface is additive.  On a gl_one/gl_one sprite the only mask is black -- light_glow02/03.vtf are BGR888 with no alpha channel at all -- so a masked-out texel picks up fogcolour*(1-f) and is then ADDED, and the sprite draws as a flat translucent rectangle instead of a glow.  surf_tensor2 is the reported case: a negative fogstart (-2500) makes its fog factor 0.857 even at zero depth, so the lift is there at every distance.\nOnly ADDITIVE materials move, which is what keeps surf_boreas's cloud layer (Patch 266) out of it -- cloods.vmt has its $additive line commented out and is alpha-blended, so it never enters this path.\n0: keep every additive material on a pass, i.e. the pre-P300 behaviour, fog artefact included.\n1: give them vmt/unlit and the correct fog4additive (default).  1,659 additive UnlitGeneric and 838 additive Sprite materials in the library are eligible.", MAPOPTIONS);
+
+		hl2_twoframes = cvarfuncs->GetNVFDG("hl2_twoframes", "1", CVAR_SHADERSYSTEM, "The DISTANCE-DRIVEN FLIPBOOK on an UnlitTwoTexture material.  comshieldwall.vtf is 31 frames and its proxy chain picks one by how far away you are -- frame 0 inside 120 units, frame 30 beyond 270 -- so a combine shield gets DENSER as you approach and not merely brighter.\nOnly materials that point $basetexture and $texture2 at the SAME file can take it (7 of the 48 in the mounted packs), because a 2DArray sampler has to be filled by a pass and only a one-sampler shader has ever worked here; the rest are counted as declined in the map's census line.\n0: draw frame 0, which is the close-up frame and the right one to be stuck on.\n1: sample the frame the distance asks for (default).", MAPOPTIONS);
 
 		/*
 		FTESurf Patch 174: the four model-lighting cvars, registered HERE as well
@@ -8775,6 +11664,24 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient on Source/HL2 maps (0-255), applied by SCALING the colour rather than clamping each channel -- a per-channel clamp desaturates, which is what made every prop in a dim leaf render pale grey. 0 = off.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_scale", "255", 0, "Model-lighting brightness scale, applied after the encode. 255 maps a fully-lit luxel to white.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_srgb_mag", "1", 0, "sRGB-encode model lighting (0 = plain linear scale by hl2_lt_scale). Source's ambient cube is LINEAR light and needs a gamma encode to be displayed; a multiply is not one.", MAPOPTIONS);
+		//FTESurf Patch 302.  A plain cvar, not CVAR_MAPLATCH: the lump is loaded
+		//either way and this only decides whether the loaded data is used, which
+		//is the same distinction hl2_lt_baked (latched, decides what is READ) and
+		//hl2_lt_baked_vc (plain, decides whether it is USED) already draw.  Read
+		//in VBSP_LightPointValues and invalidated in VBSP_PrepareFrame, so it is
+		//live and A/B-able inside one process.
+		//FTESurf Patch 304.  Registered HERE, in VBSP_Init, which runs at plugin
+		//load and therefore before any material compiles a program -- so this
+		//default is the one vertexlit.glsl's !!cvardf finds already present
+		//(gl_shader.c:2291 Cvar_Gets the name and keeps an existing value).  The
+		//"=1" on the cvardf line is only the fallback for a build where this
+		//plugin never loaded, which is a build with no vertexlit.glsl either.
+		hl2_lt_fold = cvarfuncs->GetNVFDG("hl2_lt_fold", "1", 0, "How the leaf ambient cube is folded into the shader's two lighting slots, for static props with no .vhv bake.\n0: the legacy fold -- the flat base is the mean PLUS the deviation toward the light, so a face turned away from every light still receives the bright-side level. Measured 13.6x too bright on tensor2's worst face. This is the falsifier and is bit-for-bit the pre-304 behaviour.\n1: default. The flat base is the level on the face turned AWAY from the dominant direction, the directional half is the difference to the face turned toward it, and vertexlit.glsl ramps between them with a HALF-lambert, as Source does on models. Mean error over a uniform sphere of normals falls from 1.037 to 0.283 stops on tensor2, and from 0.463 to 0.230 over 200 real leaf cubes.\n0/1 ONLY -- the value is compiled into the shader as a preprocessor constant, and a fraction would emit a float literal into an #if.", MAPOPTIONS);
+		hl2_lt_worldlight = cvarfuncs->GetNVFDG("hl2_lt_worldlight", "1", 0, "Light models with no VRAD bake from the map's worldlights as well as the leaf ambient cube, as Source's light cache does.\n0: the leaf ambient cube alone, which VRAD fills with BOUNCE ONLY, so a prop with no .vhv draws at roughly a fifth of its Source brightness. This is the falsifier -- it is bit-for-bit the pre-302 behaviour.\n1: default. Add the direct contribution of every emit_surface/point/spotlight whose cluster is in the sample point's PVS. Sky lights are deliberately excluded until a sky-visibility trace exists -- they have no distance falloff, so without one they would light sealed indoor rooms at full sun. Does nothing to props that DO have a .vhv bake; their direct light is already in it.", MAPOPTIONS);
+		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
+		//latched: VBSP_LoadWorldLights reads it once per map load, so changing it
+		//needs a map change to take effect and the description has to say so.
+		hl2_lt_wl21 = cvarfuncs->GetNVFDG("hl2_lt_wl21", "1", 0, "Read the worldlights lump of a v21 (Strata) map, whose record is 100 bytes rather than 88.\n0: refuse it, the pre-308 behaviour. 123 of the 1314 installed maps ship this lump version, so hl2_lt_worldlight -- and with it Patch 304's fold -- silently did nothing on any of them, including surf_fantasy.\n1: default. The layout is a single 12-byte insertion after `normal` (Strata's shadow_cast_offset, zero on all 39,641 lights measured), derived by pairing the CS:S and Momentum builds of surf_fantasy light-for-light rather than guessed: every field that must survive a recompile agrees on 777 of 777, and across all 123 maps every light yields a valid type, a valid style and a unit normal.\nRead at map load -- an A/B needs a map change or a second process.", MAPOPTIONS);
 
 		/*
 		FTESurf Patch 174: the load result, published for the HUD.
@@ -8806,6 +11713,7 @@ qboolean VBSP_Init(void)
 		{
 			cmdfuncs->AddCommand("hl2_missing", VBSP_Missing_f, "ftesurf (P231): list every material the loaded map failed to resolve, and every one that was found but would not parse. The map-load warning shows the first 24 of the first list; this shows all of both.");
 			cmdfuncs->AddCommand("prop_census", VBSP_PropCensus_f, "ftesurf (P257): what the last frame did with the map's static props -- how many drew, and how many each cull dropped. `prop_census <index>` or `prop_census <part of a model name>` reports one prop's verdict together with the fade, PVS and lighting state behind it. Use it when something is solid but not drawn.");
+			cmdfuncs->AddCommand("vbsp_pvsstat", VBSP_PvsStat_f, "ftesurf (P273): how many entity visibility tests ran since the last call, how many of those fell back to the whole-tree headnode descent, and how many nodes that descent touched. sv_perfdump says the visibility test is ~98% of the server's cost on a big Source map; this says whether the tree descent is why.");
 		}
 
 		//The engine already owns r_texdiag; GetNVFDG hands back the existing cvar

@@ -1896,11 +1896,45 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 
 	CL_BaseMove (newmoves, plnum);
 
-	CL_AdjustAngles (plnum, frametime);
+	/*FTESurf Patch 305: capture what CL_AdjustAngles adds to the angle, by
+	  DIFFING the accumulator across the call rather than by re-deriving it.
+	  CL_AdjustAngles writes the keyboard turn (+left/+right, in_rotate) into
+	  viewanglechange -- the SAME accumulator IN_Move is about to add the mouse
+	  to -- so by the time Patch 293's 'v' record reads the resulting angle the
+	  two are already summed and nothing said so.  Measured on the first real
+	  run: 57.67% of frames failed the identity, all of them keyboard turn or
+	  float32 print noise.  See the essay on IN_Journal_ViewKeyboard.
+
+	  The diff is deliberate.  Everything CL_AdjustAngles can do -- cl_yawspeed,
+	  cl_anglespeedkey, CL_KeyState's sub-frame fractions, in_strafe, in_rotate,
+	  r_xflip, the FPD_LIMIT_YAW clamp -- lands in this vector, so taking the
+	  difference records all of it and cannot drift when any of them changes.
+	  Seat 0 only, matching the 'v' record below: the journal has no seat column.*/
+	{
+		vec3_t kbefore;
+		VectorCopy(cl.playerview[plnum].viewanglechange, kbefore);
+		CL_AdjustAngles (plnum, frametime);
+		if (plnum == 0)
+			IN_Journal_ViewKeyboard(
+				cl.playerview[plnum].viewanglechange[PITCH] - kbefore[PITCH],
+				cl.playerview[plnum].viewanglechange[YAW]   - kbefore[YAW]);
+	}
 	if (!cmd->msec)
 		VectorClear(mousemovements[plnum]);
 	IN_Move (mousemovements[plnum], newmoves, plnum, frametime);
 	CL_ClampPitch(plnum, frametime);
+
+	/*FTESurf Patch 293: the 'v' record.  AFTER CL_ClampPitch, because until it runs
+	  the frame's motion is still sitting in viewanglechange and viewangles holds the
+	  PREVIOUS frame's value -- logging there would pair this frame's counts with
+	  last frame's angle and make the invariant fail by one frame everywhere.
+	  viewangles rather than aimangles: aimangles is what goes on the wire after
+	  Patch 136's resampling, and the resampled angle is deliberately NOT the one the
+	  mouse produced this frame, which is the quantity under test here.
+	  Seat 0 only -- the journal has no seat column and splitscreen is not a ranked
+	  configuration.*/
+	if (plnum == 0)
+		IN_Journal_View(cl.playerview[plnum].viewangles);
 
 	/*Patch 136.  aimangles, not viewangles: CL_FinishMove:1722 writes aimangles
 	  on the first frame of a window and this used to write viewangles on frames

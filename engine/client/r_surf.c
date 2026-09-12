@@ -1378,6 +1378,13 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 	void		*stainsrc;
 	lightmapinfo_t *lm = lightmap[surf->lightmaptexturenums[map]];
 	qbyte		*src = surf->samples;
+	//FTESurf Patch 268 D1: bytes to skip per LIGHTSTYLE beyond one luxel set.  A Source
+	//bumped face stores 4 (some maps 5) luxel sets per style and this walk advanced by one,
+	//so "style 1" read basis map 0 of style 0 -- and summed it in at 264/256, because no
+	//style above 0 is ever set on a Source map (gl_rlight.c:187-189, sv_main.qc:440).
+	//0 for every non-VBSP surface and for any VBSP map whose layout the loader could not
+	//prove against its lighting lump (see VBSP_ProbeLightmapStride, mod_vbsp.c).
+	size_t		lmextra = size * (size_t)((surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT);
 
 	shift += 7; // increase to base value
 	surf->cached_dlight = (surf->dlightframe == r_dlightframecount);
@@ -1560,7 +1567,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 								blocklights[i*3+2] += scalergb[2] * e * ((l>>18)&0x1ff);
 							}
 						}
-						src += size*4;	// skip to next lightmap
+						src += size*4 + lmextra;	// skip to next lightmap (past any extra luxel sets: Patch 268 D1)
 					}
 					break;
 				case LM_RGB8:
@@ -1581,6 +1588,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 						}
 						else
 							src += size*3;	// skip to next lightmap
+						src += lmextra;	//Patch 268 D1 (always 0 here: only VBSP tags, and VBSP is E5BGR9)
 					}
 					break;
 
@@ -1604,6 +1612,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 						}
 						else
 							src += size;	// skip to next lightmap
+						src += lmextra;	//Patch 268 D1
 					}
 					break;
 				}
@@ -1685,7 +1694,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 							unsigned int lm = ((unsigned int *)src)[i];
 							blocklights[i] += max3(((lm>>0)&0x1ff),((lm>>9)&0x1ff),((lm>>18)&0x1ff)) * scale * (rgb9e5tab[lm>>27]*(1<<7));
 						}
-						src += size*4;	// skip to next lightmap
+						src += size*4 + lmextra;	// skip to next lightmap (Patch 268 D1)
 					}
 					break;
 				case LM_RGB8:
@@ -1696,7 +1705,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 						surf->cached_colour[maps] = cl_lightstyle[surf->styles[maps]].colourkey;
 						for (i=0 ; i<size ; i++)
 							blocklights[i] += max3(src[i*3],src[i*3+1],src[i*3+2]) * scale;
-						src += size*3;	// skip to next lightmap
+						src += size*3 + lmextra;	// skip to next lightmap (Patch 268 D1)
 					}
 					break;
 				case LM_L8:
@@ -1707,7 +1716,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 						surf->cached_colour[maps] = cl_lightstyle[surf->styles[maps]].colourkey;
 						for (i=0 ; i<size ; i++)
 							blocklights[i] += src[i] * scale;
-						src += size;	// skip to next lightmap
+						src += size + lmextra;	// skip to next lightmap (Patch 268 D1)
 					}
 					break;
 				}
@@ -2789,7 +2798,11 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 	//be wrong on any map big enough to auto-enable the temporal scene cache, where
 	//Surf_SimpleWorld_Q1BSP walks marksurfaces with no backface test and the
 	//world's two coincident water quads would both rasterize.)
-	if (ent->skinnum < 0)
+	//FTESurf Patch 280: a func_slide's skin tag (PMSLIDE_SKIN_MIN..MAX, pmove.h) is
+	//not a contents volume.  Left in, every tagged slide -- 484 of them on
+	//bhop_aberrant -- would draw both sides of every face and lose its
+	//transparency flag below, which is not what 'traces as a skin-0 brush' means.
+	if (ent->skinnum < 0 && !PMSLIDE_FLAGS_FROM_SKIN(ent->skinnum))
 	{
 		bef |= BEF_FORCETWOSIDED;
 
@@ -4970,6 +4983,7 @@ void Surf_NewMap (model_t *worldmodel)
 
 	TRACE(("dbg: Surf_NewMap: clear particles\n"));
 	P_ClearParticles ();
+	P_LoadedCensus("Surf_NewMap after P_ClearParticles");	//FTESurf Patch 272: effect-set census either side of the map change.
 	CL_RegisterParticles();
 
 	/*
@@ -5052,6 +5066,7 @@ TRACE(("dbg: Surf_NewMap: tp\n"));
 #ifdef RTLIGHTS
 	Sh_PreGenerateLights();
 #endif
+	P_LoadedCensus("Surf_NewMap end");	//FTESurf Patch 272
 }
 
 void Surf_PreNewMap(void)

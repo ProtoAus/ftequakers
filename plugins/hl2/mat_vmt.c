@@ -65,6 +65,16 @@ cvar_t *hl2_dither_alpha;	//FTESurf Build 13
 cvar_t *hl2_dither_force;	//FTESurf Patch 174, see VMT_DitherScale
 cvar_t *hl2_bumpmap;
 cvar_t *hl2_envmap;
+//FTESurf Patch 268 B: the literal $envmap "env_cubemap" -- emit the $envcubemap
+//sentinel so the engine's REFLECTCUBEMASK gate fires and T_GEN_REFLECTCUBE falls
+//through to the batch's nearest baked cubemap; and the Source-parity bits for the
+//envmap term itself.  Registered in mod_vbsp.c beside hl2_bumpmap/hl2_envmap.
+cvar_t *hl2_envcubemap;
+cvar_t *hl2_envmap_source;
+//FTESurf Patch 268 C: #BUMPCUBE (per-pixel ambient-cube relief on a bumped VertexLitGeneric)
+//and #BUMPGREENFIX (no green flip on that normal map).  Registered in mod_vbsp.c like the above.
+cvar_t *hl2_cubelight;
+cvar_t *hl2_bumpgreenfix;
 cvar_t *hl2_animated;	//FTESurf Patch 195, the AnimatedTexture proxy
 cvar_t *hl2_vertexcolor;	//FTESurf Patch 232, $vertexcolor/$vertexalpha on lit materials
 cvar_t *hl2_decallit;	//FTESurf Patch 238, whether a $decal material may keep its lightmap
@@ -73,11 +83,17 @@ cvar_t *hl2_emissive;	//FTESurf Patch 250, the $emissiveblend* scrolling self-il
 cvar_t *hl2_seamless;	//FTESurf Patch 251, $seamless_scale triplanar projection
 cvar_t *hl2_bumpmap2;	//FTESurf Patch 251, WorldVertexTransition's second normal map
 cvar_t *hl2_imposter;	//FTESurf Patch 263, WindowImposter -- Source's fake-second-skybox shader
+cvar_t *hl2_twotexture;	//FTESurf: UnlitTwoTexture's second layer + its proxy chain
+cvar_t *hl2_twoframes;	//FTESurf Patch 286: ...and its distance-driven flipbook
+cvar_t *hl2_additivefog;	//FTESurf Patch 300, additive materials onto a program so they fog toward black
 
 //How many of each this map actually loaded, for the census mod_vbsp.c prints.
 int vmt_stat_water, vmt_stat_refract, vmt_stat_translucent;
 int vmt_stat_imposter;	//FTESurf Patch 263
 int vmt_stat_hdrenvmap;	//FTESurf Patch 264, $envmap resolved via the .hdr.vtf fallback
+int vmt_stat_ignorez;	//FTESurf Patch 290, $ignorez materials that could not be honoured
+int vmt_stat_addprog;	//FTESurf Patch 300, additive materials moved from a pass onto vmt/unlit
+int vmt_stat_addpass;	//...and those that had to stay on a pass, so the census says which
 /*
 FTESurf Patch 263: materials whose SHADER CLASS this file does not implement.
 
@@ -135,6 +151,33 @@ int vmt_stat_animated;	//FTESurf Patch 195
 int vmt_stat_animunlit;	//FTESurf Patch 253: of those, how many are UnlitGeneric
 int vmt_stat_emissive;	//FTESurf Patch 250
 int vmt_stat_seamless, vmt_stat_bumpmap2;	//FTESurf Patch 251
+/*
+FTESurf: UnlitTwoTexture and its proxies, counted separately.
+
+Three numbers rather than one, because they answer three different questions
+and a single "twotexture N" would hide the interesting failure.  `twotexture`
+is how many materials took the two-layer path at all; `proxfade` and
+`proxframe` are how many of those had a proxy chain this could actually
+resolve.  A map where twotexture is 4 and proxfade is 0 means the graph walk
+declined every chain, which is a bug in the walk -- and it is invisible from
+the screen, because the shield still draws, just without its distance
+behaviour.
+*/
+int vmt_stat_twotexture, vmt_stat_proxfade, vmt_stat_proxframe;
+/*
+FTESurf Patch 286: of the ones with a distance-driven frame, how many could
+actually SAMPLE it, and how many were declined.
+
+`proxframe` counts a resolved proxy chain, which was already true before any
+frame was ever drawn -- Patch 279 resolved the coefficient and then threw it
+away.  So it cannot answer "is the flipbook on screen".  These two can:
+`twoframes` is the array path taken, `twoframesdecl` is a material that has a
+frame ramp and two DIFFERENT textures, which needs a second array sampler and
+is deliberately not attempted (see the arm).  On surf_tensor2 the numbers are
+1 and 1 -- comshieldwall (42 faces) and comshieldwall2 (2 faces).
+*/
+int vmt_stat_twoframes, vmt_stat_twoframesdecl;
+int vmt_stat_spritecard;	//FTESurf: Source's particle shader, see the arm
 /*
 FTESurf Patch 251: the permutation string of the last Water material generated.
 
@@ -452,9 +495,14 @@ void Mat_VMT_ResetStats(void)
 	vmt_stat_animated = vmt_stat_animunlit = 0;
 	vmt_stat_emissive = 0;
 	vmt_stat_seamless = vmt_stat_bumpmap2 = 0;
+	vmt_stat_twotexture = vmt_stat_proxfade = vmt_stat_proxframe = 0;	//FTESurf
+	vmt_stat_twoframes = vmt_stat_twoframesdecl = 0;	//FTESurf Patch 286
+	vmt_stat_spritecard = 0;	//FTESurf
 	//FTESurf Patch 263
 	vmt_stat_imposter = 0;
 	vmt_stat_hdrenvmap = 0;	//FTESurf Patch 264
+	vmt_stat_ignorez = 0;	//FTESurf Patch 290
+	vmt_stat_addprog = vmt_stat_addpass = 0;	//FTESurf Patch 300
 	vmt_stat_unknown = 0;
 	*vmt_stat_unknown_name[0] = 0;
 	*vmt_stat_waterargs = 0;
@@ -762,6 +810,35 @@ typedef struct
 	float animrate;
 	char animvar[64];
 	char animpass;	//the program went into a pass, so progblendfunc must not also be emitted
+	/*
+	FTESurf: the SECOND layer's scroll, and the proxy graph that animates a
+	UnlitTwoTexture.
+
+	Patch 189 modelled one TextureScroll and only when it drove
+	$basetextureTransform, because that is the one a lightmapped world surface
+	can use.  effects/combineshield/comshieldwall.vmt drives
+	$texture2Transform instead -- the second layer slides diagonally across a
+	stationary first one, and multiplying the two is what makes the pattern
+	move.  Declining it left the shield as a still image, which is exactly the
+	report ("a solid glow web").  So the two transforms now have separate slots
+	rather than one that is taken or declined.
+
+	The prox* fields are the compiled form of the material's proxy chain; see
+	VMT_ResolveProxies and the essay on the UnlitTwoTexture arm.  They are
+	COEFFICIENTS, not values: everything Source's chain computes here is a
+	function of eye distance and time, so the shader evaluates it per pixel and
+	nothing has to be updated per frame.
+	*/
+	float tex2scrollrate;
+	float tex2scrollangle;
+	char  tex2scrollvar[64];
+
+	float proxalpha;	//alpha falls by this much per world unit of eye distance
+	float proxalphabase;	//...starting from this, before the fade
+	float proxframe;	//frame index rises by this much per world unit...
+	float proxframebias;	//...less this
+	float proxframemin, proxframemax;
+	float flickeramp, flickerperiod;	//the Sine proxy on $alpha
 	char fogcolor[MAX_QPATH];	//FTESurf: what the water looks like at hl2_water 0
 	char color[MAX_QPATH];
 	char color2[MAX_QPATH];		//FTESurf Patch 188: $color2, which wins over $color where both are written
@@ -777,6 +854,11 @@ typedef struct
 	float envmapsat_b;
 	qboolean envmaptint_set;	//Patch 237: the key was PRESENT, as distinct from non-zero
 	qboolean envmapsat_set;
+	//FTESurf Patch 268 B: $envmapcontrast, which was recognised-and-dropped.  Same
+	//_set rule as the two above -- 0 is a legal value ("no contrast") and is not the
+	//same claim as silence, which the shader's own #ifndef default answers.
+	float envmapcontrast;
+	qboolean envmapcontrast_set;
 	float alphatestref;
 	float alphaval;		//FTESurf build 12: $alpha, 0 = not specified. The dither pass IS a pass, so a fractional one finally has somewhere to live.
 	float fogend;		//FTESurf build 12: $fogend, 0 = not specified. How far you can see INTO the water, which is the closest thing a Water VMT has to an opacity.
@@ -813,6 +895,10 @@ typedef struct
 	qboolean alphatest;
 	qboolean culldisable;
 	qboolean ignorez;
+	//FTESurf Patch 268 B: this material asked for the map's nearest baked cubemap
+	//($envmap "env_cubemap") on a class whose program can sample one, and
+	//hl2_envcubemap is on -- so the shared tail emits reflectcube "$envcubemap".
+	qboolean wantenvcube;
 	char *replaceblock;
 
 	char vertexcolor;
@@ -847,7 +933,58 @@ typedef struct
 	between the two exists -- see VMT_BottomRecord.
 	*/
 	char bottommaterial[MAX_QPATH];
+
+	/*
+	FTESurf: the material's proxy graph, as parsed, before it is resolved into
+	the prox* coefficients above.
+
+	Kept as a flat list of "this result variable is produced by this operation
+	on these inputs" rather than as a tree, because that is exactly the shape a
+	Proxies block has -- a sequence of assignments to $-variables -- and because
+	resolving it means walking BACKWARDS from $alpha and $frame, which a list
+	does as well as a tree and with no allocation.
+
+	The same list holds the material's NUMERIC $var declarations, as
+	VMTPRX_CONST, because a proxy chain reads its constants out of them
+	($frameminusten = $playerdistance2 - $ten, with "$ten" "24" declared at the
+	top level) and a resolver that cannot see them would produce a coefficient
+	with a term missing.
+
+	FORTY IS NOT ARBITRARY.  The largest chain in the mounted library is
+	comshieldwall.vmt's: nine proxies and thirteen numeric declarations.
+	Overflow is counted and reported rather than silently truncated, because a
+	truncated graph resolves to a plausible wrong coefficient instead of to
+	nothing at all.
+	*/
+#define VMT_MAXPROX 40
+	struct
+	{
+		char kind;		//VMTPRX_*
+		char result[48];
+		char src1[48];
+		char src2[48];
+		float a, b, c;	//scale / min / max / period, per kind
+	} prox[VMT_MAXPROX];
+	int numprox;
+	int proxoverflow;
 } vmtstate_t;
+
+//The proxy operations this understands.  Everything else is parsed for its
+//result variable alone, so a chain that passes through one is broken at that
+//point rather than resolved through a shape we cannot model.
+enum
+{
+	VMTPRX_OTHER = 0,
+	VMTPRX_PLAYERPROXIMITY,	//a = scale;  result = dist * scale
+	VMTPRX_SUBTRACT,		//result = src1 - src2
+	VMTPRX_ADD,				//result = src1 + src2
+	VMTPRX_MULTIPLY,		//result = src1 * src2
+	VMTPRX_CLAMP,			//a = min, b = max;  result = clamp(src1, a, b)
+	VMTPRX_SINE,			//c = period;  result oscillates between src1 and src2
+	VMTPRX_GAUSSIANNOISE,	//a = minVal, b = maxVal;  result is noise in that range
+	VMTPRX_EQUALS,			//result = src1
+	VMTPRX_CONST			//a = the material's own numeric declaration of `result`
+};
 
 
 static void VARGS Q_strlcatfz (char *dest, size_t *offset, size_t size, const char *fmt, ...) LIKEPRINTF(4);
@@ -1097,6 +1234,21 @@ static char *VMT_ParseTextureScroll(const char *fname, vmtstate_t *st, char *lin
 	com_tokentype_t ttype;
 	char key[MAX_OSPATH];
 	char value[MAX_OSPATH];
+	/*
+	FTESurf: buffered and then ROUTED, rather than written straight through.
+
+	A material may carry more than one TextureScroll, and which transform each
+	drives is decided by a key that can appear anywhere in the block -- so the
+	rate and angle cannot be assigned to a slot until the block is closed.
+	comshieldwall.vmt is the case: its single scroll drives $texture2Transform,
+	and Patch 189's code wrote the rate into the BASE slot regardless and then
+	let VMT_ScrollsBase decline it at emit time.  Declining is right for a
+	lightmapped surface with one texture; for UnlitTwoTexture the second layer
+	sliding across the first IS the effect, and it was being thrown away.
+	*/
+	char var[64] = "";
+	float rate = 0, angle = 0;
+
 	for(;line;)
 	{
 		line = cmdfuncs->ParseToken(line, key, sizeof(key), &ttype);
@@ -1109,11 +1261,29 @@ static char *VMT_ParseTextureScroll(const char *fname, vmtstate_t *st, char *lin
 			continue;
 		}
 		if (!Q_strcasecmp(key, "texturescrollvar"))
-			Q_strlcpy(st->scrollvar, value, sizeof(st->scrollvar));
+			Q_strlcpy(var, value, sizeof(var));
 		else if (!Q_strcasecmp(key, "texturescrollrate"))
-			st->scrollrate = atof(value);
+			rate = atof(value);
 		else if (!Q_strcasecmp(key, "texturescrollangle"))
-			st->scrollangle = atof(value);
+			angle = atof(value);
+	}
+
+	if (st)
+	{
+		//"texture2transform" and "texture2Transform" both appear; the test is a
+		//substring one for the same reason VMT_ScrollsBase' is.
+		if (!Q_strncasecmp(var, "$texture2", 9))
+		{
+			Q_strlcpy(st->tex2scrollvar, var, sizeof(st->tex2scrollvar));
+			st->tex2scrollrate = rate;
+			st->tex2scrollangle = angle;
+		}
+		else
+		{
+			Q_strlcpy(st->scrollvar, var, sizeof(st->scrollvar));
+			st->scrollrate = rate;
+			st->scrollangle = angle;
+		}
 	}
 	return line;
 }
@@ -1145,9 +1315,81 @@ static char *VMT_ParseAnimatedTexture(const char *fname, vmtstate_t *st, char *l
 	return line;
 }
 
-//The Proxies block itself.  Descended into only far enough to find
-//TextureScroll and AnimatedTexture; every other proxy is skipped with st==NULL
-//exactly as the wholesale skip did, so none of them start warning.
+/*
+FTESurf: one ARITHMETIC proxy -- PlayerProximity, Subtract, Add, Multiply,
+Clamp, Sine, GaussianNoise, Equals.
+
+These were skipped wholesale, which was the right call while nothing could use
+them: they compute per-frame scalars and FTE has no per-material scalar channel
+for the CPU to write into.  What makes them reachable now is that the ones the
+shield uses are pure functions of EYE DISTANCE and TIME, both of which a
+fragment shader already has -- so the graph is read once at load and compiled
+into shader constants rather than evaluated per frame.  See VMT_ResolveProxies.
+
+Every proxy is recorded, including the kinds not understood, because a chain
+that passes through an unmodelled operation must BREAK there rather than be
+resolved through a link that does not exist.  Recording it with kind
+VMTPRX_OTHER is what makes the backward walk stop instead of guessing.
+*/
+static char *VMT_ParseArithProxy(const char *fname, vmtstate_t *st, int kind, char *line)
+{
+	com_tokentype_t ttype;
+	char key[MAX_OSPATH];
+	char value[MAX_OSPATH];
+	int idx = -1;
+
+	if (st)
+	{
+		if (st->numprox < VMT_MAXPROX)
+		{
+			idx = st->numprox++;
+			memset(&st->prox[idx], 0, sizeof(st->prox[idx]));
+			st->prox[idx].kind = kind;
+		}
+		else
+			st->proxoverflow++;
+	}
+
+	for(;line;)
+	{
+		line = cmdfuncs->ParseToken(line, key, sizeof(key), &ttype);
+		if (ttype == TTP_RAWTOKEN && !strcmp(key, "}"))
+			break;
+		line = cmdfuncs->ParseToken(line, value, sizeof(value), &ttype);
+		if (ttype == TTP_RAWTOKEN && !strcmp(value, "{"))
+		{	//a proxy feeding another proxy inline; not a shape Source writes
+			//here, and not one we could name a result variable for.
+			line = VMT_ParseBlock(fname, NULL, line);
+			continue;
+		}
+		if (idx < 0)
+			continue;
+
+		if (!Q_strcasecmp(key, "resultVar"))
+			Q_strlcpy(st->prox[idx].result, value, sizeof(st->prox[idx].result));
+		else if (!Q_strcasecmp(key, "srcVar1"))
+			Q_strlcpy(st->prox[idx].src1, value, sizeof(st->prox[idx].src1));
+		else if (!Q_strcasecmp(key, "srcVar2"))
+			Q_strlcpy(st->prox[idx].src2, value, sizeof(st->prox[idx].src2));
+		else if (!Q_strcasecmp(key, "sinemin"))
+			Q_strlcpy(st->prox[idx].src1, value, sizeof(st->prox[idx].src1));
+		else if (!Q_strcasecmp(key, "sinemax"))
+			Q_strlcpy(st->prox[idx].src2, value, sizeof(st->prox[idx].src2));
+		else if (!Q_strcasecmp(key, "sineperiod"))
+			st->prox[idx].c = atof(value);
+		else if (!Q_strcasecmp(key, "scale"))
+			st->prox[idx].a = atof(value);
+		else if (!Q_strcasecmp(key, "min") || !Q_strcasecmp(key, "minVal"))
+			st->prox[idx].a = atof(value);
+		else if (!Q_strcasecmp(key, "max") || !Q_strcasecmp(key, "maxVal"))
+			st->prox[idx].b = atof(value);
+	}
+	return line;
+}
+
+//The Proxies block itself.  Descended into far enough to find TextureScroll,
+//AnimatedTexture, and the arithmetic chain; anything genuinely unrecognised is
+//still skipped with st==NULL, so nothing starts warning that did not before.
 static char *VMT_ParseProxies(const char *fname, vmtstate_t *st, char *line)
 {
 	com_tokentype_t ttype;
@@ -1165,12 +1407,196 @@ static char *VMT_ParseProxies(const char *fname, vmtstate_t *st, char *line)
 				line = VMT_ParseTextureScroll(fname, st, line);
 			else if (!Q_strcasecmp(key, "animatedtexture"))
 				line = VMT_ParseAnimatedTexture(fname, st, line);
+			else if (!Q_strcasecmp(key, "playerproximity"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_PLAYERPROXIMITY, line);
+			else if (!Q_strcasecmp(key, "subtract"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_SUBTRACT, line);
+			else if (!Q_strcasecmp(key, "add"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_ADD, line);
+			else if (!Q_strcasecmp(key, "multiply"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_MULTIPLY, line);
+			else if (!Q_strcasecmp(key, "clamp"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_CLAMP, line);
+			else if (!Q_strcasecmp(key, "sine"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_SINE, line);
+			else if (!Q_strcasecmp(key, "gaussiannoise") || !Q_strcasecmp(key, "uniformnoise"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_GAUSSIANNOISE, line);
+			else if (!Q_strcasecmp(key, "equals"))
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_EQUALS, line);
 			else
-				line = VMT_ParseBlock(fname, NULL, line);
+				line = VMT_ParseArithProxy(fname, st, VMTPRX_OTHER, line);
 			continue;
 		}
 	}
 	return line;
+}
+
+/*
+FTESurf: compile the proxy graph into shader coefficients.
+
+WHY THIS IS A BACKWARD WALK.  A Proxies block is a sequence of assignments and
+most of them are dead ends -- comshieldwall.vmt computes $largeamount and
+$envmaptint[1] and never uses either.  Walking forward means evaluating
+everything and hoping something lands on a variable that matters.  Walking back
+from the two variables that DO matter -- $alpha and $frame -- touches only the
+chain that feeds them, and stops the moment it meets an operation this does not
+model, which is the behaviour we want: an unrecognised link means "decline",
+not "assume".
+
+WHAT IT CAN RESOLVE, stated as the two shapes rather than as a general claim:
+
+    $alpha  <- Sine(min=X, max=Y)   or   X directly
+       X    <- Subtract(A, P)       where P is a PlayerProximity
+                                    => alpha = value(A) - dist*P.scale
+
+    $frame  <- Clamp(X, lo, hi)
+       X    <- Subtract(P, K)       where P is a PlayerProximity
+                                    => frame = dist*P.scale - value(K),
+                                       clamped to [lo, hi]
+
+Anything else leaves the coefficients at zero and the shader's defaults make
+them no-ops.  That is a narrow claim and it is meant to be: eleven materials in
+the mounted library carry a PlayerProximity at all, and all of them are the
+combine shield family, so a general evaluator would be built to serve one shape
+and then be trusted for shapes nobody checked.
+*/
+static int VMT_FindProx(vmtstate_t *st, const char *var, int notidx)
+{	//the LAST assignment wins, which is how a sequence of assignments works
+	int i, found = -1;
+	if (!var || !*var || *var != '$')
+		return -1;
+	for (i = 0; i < st->numprox; i++)
+	{
+		if (i == notidx)
+			continue;
+		//a CONST is only a fallback: a $var that is both declared at the top
+		//level and written by a proxy is a placeholder for the proxy's output.
+		if (!Q_strcasecmp(st->prox[i].result, var))
+		{
+			if (st->prox[i].kind == VMTPRX_CONST && found >= 0)
+				continue;
+			if (found >= 0 && st->prox[found].kind != VMTPRX_CONST &&
+			    st->prox[i].kind == VMTPRX_CONST)
+				continue;
+			found = i;
+		}
+	}
+	return found;
+}
+
+//The scalar value of a variable, for the constant side of a Subtract.  Only the
+//shapes that can be a constant: a literal number, a declaration, or a noise
+//proxy (whose mean is the only constant it has).
+static qboolean VMT_ProxValue(vmtstate_t *st, const char *var, float *out)
+{
+	int i;
+	char *end;
+	double v;
+
+	if (!var || !*var)
+		return false;
+	if (*var != '$')
+	{	//written inline as a number
+		v = strtod(var, &end);
+		if (end != var && !*end)
+		{
+			*out = v;
+			return true;
+		}
+		return false;
+	}
+	i = VMT_FindProx(st, var, -1);
+	if (i < 0)
+		return false;
+	if (st->prox[i].kind == VMTPRX_CONST)
+	{
+		*out = st->prox[i].a;
+		return true;
+	}
+	if (st->prox[i].kind == VMTPRX_GAUSSIANNOISE)
+	{	//a flicker: its mean is the part a baked coefficient can carry, and the
+		//Sine below supplies the wobble the noise would otherwise have given.
+		*out = (st->prox[i].a + st->prox[i].b) * 0.5f;
+		return true;
+	}
+	return false;
+}
+
+//"$X = something - dist*scale": the alpha shape.  Returns the scale, and the
+//constant term through *base.
+static qboolean VMT_ProxDistFade(vmtstate_t *st, const char *var, float *scale, float *base)
+{
+	int sub = VMT_FindProx(st, var, -1);
+	int pp;
+	if (sub < 0 || st->prox[sub].kind != VMTPRX_SUBTRACT)
+		return false;
+	pp = VMT_FindProx(st, st->prox[sub].src2, -1);
+	if (pp < 0 || st->prox[pp].kind != VMTPRX_PLAYERPROXIMITY)
+		return false;
+	if (st->prox[pp].a == 0)
+		return false;
+	if (!VMT_ProxValue(st, st->prox[sub].src1, base))
+		*base = 1.0f;
+	*scale = st->prox[pp].a;
+	return true;
+}
+
+static void VMT_ResolveProxies(vmtstate_t *st)
+{
+	int i, sub, pp;
+	float f;
+
+	if (!st->numprox)
+		return;
+
+	//---- $alpha
+	i = VMT_FindProx(st, "$alpha", -1);
+	if (i >= 0 && st->prox[i].kind == VMTPRX_SINE)
+	{
+		float lo = 0, hi = 0;
+		//The Sine oscillates between two variables.  Its LOW end carries the
+		//distance fade; the gap between them is the flicker's amplitude, and
+		//on every material in this family that gap is a small constant added by
+		//an Add proxy, so it is read as a value rather than followed.
+		if (VMT_ProxDistFade(st, st->prox[i].src1, &st->proxalpha, &st->proxalphabase))
+		{
+			st->flickerperiod = st->prox[i].c;
+			//amplitude: sinemax - sinemin, when both resolve to numbers.  An
+			//Add of a small constant is the only shape observed, so the
+			//amplitude is that constant and it is HALVED -- a sine spends its
+			//time centred between the two, not at the top.
+			sub = VMT_FindProx(st, st->prox[i].src2, -1);
+			if (sub >= 0 && st->prox[sub].kind == VMTPRX_ADD &&
+			    VMT_ProxValue(st, st->prox[sub].src2, &f))
+				st->flickeramp = fabs(f) * 0.5f;
+			(void)lo; (void)hi;
+		}
+	}
+	else if (i >= 0)
+		VMT_ProxDistFade(st, st->prox[i].result, &st->proxalpha, &st->proxalphabase);
+	if (st->proxalpha == 0)
+		VMT_ProxDistFade(st, "$alpha", &st->proxalpha, &st->proxalphabase);
+
+	//---- $frame
+	i = VMT_FindProx(st, "$frame", -1);
+	if (i >= 0 && st->prox[i].kind == VMTPRX_CLAMP)
+	{
+		sub = VMT_FindProx(st, st->prox[i].src1, -1);
+		if (sub >= 0 && st->prox[sub].kind == VMTPRX_SUBTRACT)
+		{
+			pp = VMT_FindProx(st, st->prox[sub].src1, -1);
+			if (pp >= 0 && st->prox[pp].kind == VMTPRX_PLAYERPROXIMITY &&
+			    st->prox[pp].a != 0)
+			{
+				if (!VMT_ProxValue(st, st->prox[sub].src2, &f))
+					f = 0;
+				st->proxframe     = st->prox[pp].a;
+				st->proxframebias = f;
+				st->proxframemin  = st->prox[i].a;
+				st->proxframemax  = st->prox[i].b;
+			}
+		}
+	}
 }
 
 static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
@@ -1224,6 +1650,38 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			}
 			else
 				memmove(key, qmark, strlen(qmark)+1);
+		}
+
+		/*
+		FTESurf: every NUMERIC $var, recorded for the proxy resolver.
+
+		A proxy chain reads its constants out of the material's own top-level
+		declarations: comshieldwall.vmt writes `"$ten" "24"` and then subtracts
+		$ten from a distance.  Without these the chain resolves to a coefficient
+		with a missing term, which is worse than not resolving at all -- it
+		would put the frame ramp in the wrong place rather than leave it off.
+
+		Recorded BEFORE the key dispatch, not in its unknown-key tail, because
+		some of these names are real Source parameters ($alpha, $frame) that the
+		dispatch claims; the resolver prefers a proxy result over a constant of
+		the same name, so a declaration that is only a placeholder for a proxy's
+		output cannot win.  Costs one strtod per key on materials with no
+		proxies at all, and nothing else.
+		*/
+		if (*key == '$' && st && st->numprox < VMT_MAXPROX)
+		{
+			char *end;
+			double v = strtod(value, &end);
+			while (*end == ' ' || *end == '\t')
+				end++;
+			if (end != value && !*end)
+			{
+				int c = st->numprox++;
+				memset(&st->prox[c], 0, sizeof(st->prox[c]));
+				st->prox[c].kind = VMTPRX_CONST;
+				Q_strlcpy(st->prox[c].result, key, sizeof(st->prox[c].result));
+				st->prox[c].a = v;
+			}
 		}
 
 		if (!*key || !st)
@@ -1438,8 +1896,14 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			Q_strlcpy(st->envmap, value, sizeof(st->envmap));
 		else if (!Q_strcasecmp(key, "$envmapmask"))
 			Q_strlcpy(st->envmapmask, value, sizeof(st->envmapmask));
+		//FTESurf Patch 268 B: kept rather than dropped.  Source applies it as
+		//lerp(spec, spec*spec, contrast) between the tint and the saturation
+		//(..._bump_ps20b.fxc:296-312), which is the second bit of hl2_envmap_source.
 		else if (!Q_strcasecmp(key, "$envmapcontrast"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+		{
+			st->envmapcontrast = atof(value);
+			st->envmapcontrast_set = true;
+		}
 		else if (!Q_strcasecmp(key, "$envmaptint"))
 		{
 			char tok[64];
@@ -1635,12 +2099,137 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		VMT_ParseBlock(fname, st, replace);
 	return line;
 }
+/*
+FTESurf Patch 300: may this additive material be drawn by a top-level `program`
+instead of a pass?
+
+WHY IT WANTS TO BE.  A shader with no TOP-LEVEL program takes
+BE_ProglessFogBegin (gl_backend.c), which enables fixed-function GL fog.  That
+fog mixes toward GL_FOG_COLOR on RGB and knows nothing about the batch's blend.
+On a gl_one/gl_one surface the only mask these textures have is BLACK --
+light_glow02/03.vtf are BGR888, no alpha channel at all -- and a black texel
+mixed toward the fog colour becomes fogcolour*(1-f), which is then ADDED.  So
+the masked-out part of the quad stops being masked and the sprite draws as a
+flat translucent rectangle.  Reported on surf_tensor2 as the light sprites
+"rendering a big square of translucent color".
+
+A top-level program skips that path entirely (two independent guards, both on
+shaderstate.curshader->prog) and reaches sys/fog.h's fog4additive() instead,
+which fades toward black -- the physically right answer for an emissive sprite,
+and what every program-carrying pass in the engine has always done.
+
+WHY IT IS GATED ON ADDITIVE AND NOT ON CLASS.  The control arm for this change
+is surf_boreas's cloud layer, which Patch 266 exists for.  cloods.vmt is
+UnlitGeneric, so a class-based gate would have moved it -- but its `$additive`
+line is COMMENTED OUT in the VMT (`//"$additive" 1`); it is $translucent, i.e.
+src_alpha/one_minus_src_alpha.  Keying on st->additive means those clouds never
+enter this branch at all, which is a stronger guarantee than a screenshot.
+
+THE TWO DECLINES are the only things a PASS can name that a top-level
+`diffusemap` cannot, and both were counted before being written off rather than
+assumed rare: across all 1,312 library maps plus the four shared packs, of 1,659
+additive UnlitGeneric rows exactly ONE uses `map $whiteimage`
+(df_precision2's sharq-liquids/water1) and ZERO use an HDR sky face.  They stay
+on the pass, keep today's behaviour, and are counted in vmt_stat_addpass so the
+census says so instead of the number quietly being wrong.
+*/
+static qboolean VMT_AdditiveProgramOK(vmtstate_t *st)
+{
+	if (!st->additive)
+		return false;
+	if (hl2_translucent && !hl2_translucent->ival)
+		return false;	//forced opaque -- it is not an additive surface any more, and #ADDITIVE was not emitted either
+	if (hl2_additivefog && !hl2_additivefog->ival)
+		return false;
+	if (st->nobasetex)
+		return false;	//`map $whiteimage`
+	if (*st->hdrbasetex || *st->hdrcompressedtex)
+		return false;	//`map "$hdr:..."`
+	return true;
+}
+
+/*
+FTESurf Patch 300: the same question for a Sprite, which cannot be asked the same
+way -- AND THIS IS THE ONE THAT DECIDES WHETHER THE PATCH REACHES THE REPORTED BUG.
+
+A Sprite is additive in TWO ways, and the reported case is the second:
+
+    if      (st->additive   && blendok)  blendFunc add
+    else if (st->translucent && blendok)  blendFunc blend
+    else if (!st->alphatest)              blendFunc add   <-- "no opinion in the
+                                                              VMT: keep what shipped"
+
+surf_tensor2's 233 lens flares are materials/sprites/light_glow03.vmt, whose
+entire contents are $spriteorientation, $spriteorigin and $basetexture.  It sets
+NO $additive.  So st->additive is 0, it is additive purely by falling to the
+bottom of that chain, and a gate written as `if (st->additive)` -- which is the
+correct gate for UnlitGeneric -- would have declined every single one of them and
+shipped a fix that left the actual complaint on screen.
+
+Worth being explicit about how close that was: the UnlitGeneric gate is right for
+light_glow02_add_noz.vmt, which is the env_lightglow material and DOES say
+$additive 1.  There are 166 of those and 263 of the others.  A patch gated only
+on st->additive would have fixed 39% of the map's sprites and looked, from a
+screenshot, like it had half worked.
+
+The two DECLINES here are the branches that are genuinely not additive: a
+$translucent sprite (alpha blend), and a pure cutout, which takes the
+`!st->alphatest` test and so emits no blendFunc at all.
+*/
+static qboolean VMT_SpriteAdditiveProgramOK(vmtstate_t *st)
+{
+	if (hl2_translucent && !hl2_translucent->ival)
+		return false;	//the tail declines to write progblendfunc, so a program would have no blend
+	if (hl2_additivefog && !hl2_additivefog->ival)
+		return false;
+	if (st->translucent && !st->additive)
+		return false;	//blendFunc blend
+	if (st->alphatest && !st->additive)
+		return false;	//cutout: no blendFunc at all
+	if (st->nobasetex || *st->hdrbasetex || *st->hdrcompressedtex)
+		return false;
+	return true;
+}
+
+/*
+FTESurf Patch 300: the vertex-colour arguments for a material moving from a pass
+to vmt/unlit.
+
+THIS IS THE SUBTLE HALF OF THE PATCH, and getting it wrong would have undone
+build 58's sprite-brightness work in the least obvious way possible.
+
+Both arms that this serves emit `rgbGen vertex` WITHOUT an `alphaGen` line -- the
+Sprite arm unconditionally (:3136), UnlitGeneric whenever $vertexcolor is set.
+That looks like "colour per vertex, alpha untouched".  It is not:
+gl_shader.c:4199-4203 defaults alphagen to ALPHA_GEN_VERTEX whenever rgbgen is
+vertex and alphagen is still unspecified.  So those passes have been consuming
+per-vertex ALPHA all along, silently.
+
+That alpha is not decoration.  It is how a sprite's brightness reaches the
+rasteriser: the CSQC draws pass DRAWFLAG_ADD, BEF_FORCEADDITIVE rewrites the
+blend to GL_SRC_ALPHA/GL_ONE (gl_backend.c:3289-3293), and the src factor IS the
+per-vertex alpha that cl_sprites.qc computes from rendermode/renderamt and the
+inverse-square fade.  Emit #VERTEXCOL without #VERTEXALPHA and every sprite on
+the map draws at full brightness regardless of what the entity asked for.
+
+Hence: if the pass would have said `rgbGen vertex`, the program gets BOTH.  Not
+gated on hl2_vertexcolor either -- that cvar governs the painted displacement
+colour on lit world materials (Patch 232), and switching it off must not silently
+turn every additive sprite up to full.
+*/
+static void VMT_AddVertexColourArgs(char *progargs, size_t progargssize)
+{
+	Q_strlcat(progargs, "#VERTEXCOL", progargssize);
+	Q_strlcat(progargs, "#VERTEXALPHA", progargssize);
+}
+
 static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char *shortname, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	size_t offset = 0;
 	char script[8192];
 	char envmaptint[128];
 	char envmapsat[128];
+	char envmapcontrast[64];	//FTESurf Patch 268 B, filled beside the two above
 	/*
 	FTESurf Patch 187: progargs is a BUFFER now, not a pointer to a literal.
 
@@ -1754,6 +2343,103 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		st->normalmap[0] = 0;
 
 	/*
+	FTESurf Patch 268 B: the Source-parity permutations, and the env_cubemap flag.
+
+	HERE, after the hl2_envmap kill switch above -- that switch clears st->envmap,
+	so hl2_envmap 0 emits none of this -- and BEFORE the type dispatch, where
+	st->type is still the VMT's OWN shader class; every arm below overwrites it
+	with a "vmt/..." program name.
+
+	Restricted to the three LIT classes whose programs sample s_reflectcube:
+	VertexlitGeneric (plus the decal materials its arm claims, tested exactly the
+	way that arm tests them), LightmappedGeneric and WorldVertexTransition.
+	Water, Refract and the unlit classes are deliberately excluded -- their
+	REFLECTCUBEMASK blocks were not audited for this patch, and hl2_water /
+	hl2_refract own those materials.
+
+	These three are BARE permutation flags, so they must only reach a program that
+	declares them (Patch 236's silent load failure).  The VALUE defines (#ENVTINT
+	and friends) go on at the emit sites instead, where the program is known.
+	*/
+	{
+		/*
+		The three class NAMES only.
+
+		The first draft also carried the `st->decal && ...` disjunct copied out of
+		the VertexlitGeneric arm's own condition, on the theory that whatever that
+		arm claims should be scoped the same way.  That is wrong here and three
+		reviewers caught it: the arm is the LAST `else if` of the dispatch chain, so
+		its decal clause only ever sees materials no earlier arm took, whereas this
+		test runs BEFORE the chain and sees every class.  `Q_strcasecmp(type,
+		"LightmappedGeneric")` is non-zero for `Water`, so a `Water` material with
+		`$decal 1` and `$envmap "env_cubemap"` would have been handed the sentinel
+		and the #ENVSRC flags -- and Water is the one excluded class whose program
+		really does sample s_reflectcube.
+
+		Cost of the narrower test: a $decal material of some OTHER class that would
+		have landed on the vertexlit arm does not get the sentinel.  That is the
+		safe direction, and decals carrying env_cubemap are not a population this
+		patch was measured against.
+		*/
+		qboolean envlitclass =
+			!Q_strcasecmp(st->type, "VertexlitGeneric") ||
+			!Q_strcasecmp(st->type, "LightmappedGeneric") ||
+			!Q_strcasecmp(st->type, "WorldVertexTransition");
+		//...and of those three, only vertexlit.glsl implements the post-lighting add.
+		qboolean envpostclass = !Q_strcasecmp(st->type, "VertexlitGeneric");
+
+		if (*st->envmap && envlitclass)
+		{
+			if (hl2_envmap_source && (hl2_envmap_source->ival & 1))
+				Q_strlcat(progargs, "#ENVSRCMASK", sizeof(progargs));
+			if (hl2_envmap_source && (hl2_envmap_source->ival & 2))
+				Q_strlcat(progargs, "#ENVSRCSPEC", sizeof(progargs));
+			//Only where a shader tests it.  lightmapped.glsl and transition.glsl
+			//already add the reflection after their lightmap multiply, so bit 4 has
+			//nothing to do there -- appending it anyway would mint a second,
+			//byte-identical program permutation for every world envmap material.
+			if (envpostclass && hl2_envmap_source && (hl2_envmap_source->ival & 4))
+				Q_strlcat(progargs, "#ENVSRCPOST", sizeof(progargs));
+
+			//The literal "env_cubemap" means "the nearest baked one", which is
+			//curbatch->envmap -- see the sentinel emit in the shared tail.
+			if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
+				st->wantenvcube = true;
+		}
+	}
+
+	/*
+	FTESurf Patch 268 C: per-pixel relief on a bumped VertexLitGeneric.
+
+	Model lighting in vertexlit.glsl is per VERTEX, from the vertex normal, and the
+	normal map is sampled only inside the REFLECTCUBEMASK block -- so a prop with a
+	$bumpmap and no $envmap (surf_fantasy's island rocks: `$basetexture fan/moss
+	$bumpmap fan/moss_n`, nothing else) samples no normal map at all and draws flat.
+	Source lights that prop per PIXEL: the leaf's six-face ambient cube evaluated
+	with the bumped world-space normal (common_vertexlitgeneric_dx9.h).
+
+	#BUMPCUBE does that as a RATIO over the lighting FTE already has,
+	    light *= cube(n_bumped) / cube(n_vertex)
+	so VRAD's per-vertex bake keeps its level and its shadows and the cube adds only
+	the per-pixel direction.  A flat normal makes the ratio exactly 1, and so does an
+	empty cube -- which is what r_cubelight 0 uploads, and what every entity the
+	plugin did not light carries.
+
+	#BUMPGREENFIX drops the green flip.  Its own switch because it also bends the
+	Patch 268 B reflection; see vertexlit.glsl.
+
+	Appended only where it fits whole: a truncated define would silently compile a
+	different program than its name claims (see vmt_stat_waterargs above).
+	*/
+	if (!Q_strcasecmp(st->type, "VertexlitGeneric") && *st->normalmap)
+	{
+		if (hl2_cubelight && hl2_cubelight->ival && strlen(progargs) + 9 < sizeof(progargs))
+			Q_strlcat(progargs, "#BUMPCUBE", sizeof(progargs));
+		if (hl2_bumpgreenfix && hl2_bumpgreenfix->ival && strlen(progargs) + 13 < sizeof(progargs))
+			Q_strlcat(progargs, "#BUMPGREENFIX", sizeof(progargs));
+	}
+
+	/*
 	FTESurf Patch 237: $alphatestreference, which was parsed and then never read.
 
 	`st->alphatestref` is filled at :789-790 and had no other reference in the
@@ -1787,6 +2473,24 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 	if (st->nofog)
 		Q_strlcat(progargs, "#NOFOG", sizeof(progargs));
+
+	/*
+	FTESurf Patch 300: #ADDITIVE, so a program can fog itself correctly.
+
+	sys/fog.h has had the right function all along -- fog4additive() is
+	`c * vec4(fac,fac,fac,1.0)`, i.e. fade toward BLACK -- and every
+	program-carrying pass in the ENGINE already calls the right variant.  What no
+	vmt program could do until now is find out that it is additive, because the
+	arms that know it emitted a pass and never a program.
+
+	Gated on hl2_translucent exactly as the blendfunc is (:3913 and the pass arms
+	above).  At hl2_translucent 0 an additive material is forced OPAQUE, and an
+	opaque surface must fog toward the fog colour like any other -- fading it to
+	black instead would make that switch darken the world rather than simplify it.
+	Reading the same condition in both places is what keeps those two in step.
+	*/
+	if (st->additive && (!hl2_translucent || hl2_translucent->ival))
+		Q_strlcat(progargs, "#ADDITIVE", sizeof(progargs));
 
 	/*
 	FTESurf Patch 188: $color/$color2 as a program define, because the emit this
@@ -1973,6 +2677,20 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_snprintfz(envmapsat, sizeof(envmapsat), "");
 	}
 
+	/*
+	FTESurf Patch 268 B: $envmapcontrast, emitted only under bit 2.
+
+	The contrast only means anything inside Source's own tint->contrast->saturation
+	order, which is what bit 2 installs; handing the shader a contrast while it is
+	still doing FTE's saturation-then-tint would be a third arithmetic that is
+	neither engine's.  With the bit off this stays empty and every program name is
+	the string it is today.
+	*/
+	if (st->envmapcontrast_set && hl2_envmap_source && (hl2_envmap_source->ival & 2))
+		Q_snprintfz(envmapcontrast, sizeof(envmapcontrast), "#ENVCONTRAST=%f", st->envmapcontrast);
+	else
+		*envmapcontrast = 0;
+
 	Q_strlcatfz(script, &offset, sizeof(script), "\n");
 
 	if (st->nodraw)
@@ -2114,8 +2832,57 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		st->additive = 1;
 		vmt_stat_emissive++;
 	}
+	/*
+	FTESurf Patch 300: an ADDITIVE UnlitGeneric goes onto vmt/unlit rather than a
+	pass, so that it fogs toward black instead of toward the fog colour.  See
+	VMT_AdditiveProgramOK above for why, and for why the gate is st->additive and
+	not the class name.
+
+	Nothing is lost by leaving the pass, and three things are regained.  The pass
+	arm's other keywords all have program spellings that mat_vmt.c HAS ALREADY
+	BUILT by this point and was throwing away, because this arm emitted no
+	program to carry them:
+	    tcMod scroll   -> #SCROLL   (:2414, Patch 189)
+	    rgbGen const   -> #COLOR    (:2371, Patch 188)
+	    alphaFunc      -> #MASK/#MASKLT, and at the material's exact
+	                      $alphatestreference rather than quantised to ge128/gt0
+	    $nofog         -> #NOFOG    (:2346) -- dead on this arm until now
+	    rgbGen vertex  -> #VERTEXCOL/#VERTEXALPHA (see VMT_AddVertexColourArgs)
+
+	TWO BEHAVIOUR CHANGES RIDE ALONG, both of them the VMT finally being obeyed,
+	and both stated here rather than discovered later:
+
+	1. $nofog starts working.  It is appended to progargs for every class and
+	   this arm never had a program to read it, so a material asking not to be
+	   fogged was fogged anyway.  surf_boreas's alch_symbols_alpha is one.
+
+	2. $alphatest starts working -- 108 rows across the library.  Today it is
+	   unreachable on an additive material because the pass arm's chain is
+	   `if additive ... else if translucent ... else if alphatest`, so the
+	   discard never emitted.  The visible delta is bounded and small by
+	   construction: on an ADDITIVE surface a discarded fragment and a black
+	   fragment are the same pixel, so this can only change texels where the
+	   author put visible colour inside a region they also marked transparent.
+
+	$color and $vertexcolor both apply here, where the pass could only have one
+	rgbgen and had to pick.  That is Source's own behaviour, not a liberty.
+	*/
+	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && VMT_AdditiveProgramOK(st))
+	{
+		if (st->vertexcolor)
+			VMT_AddVertexColourArgs(progargs, sizeof(progargs));
+		Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		//The blend itself still comes from the shared tail: st->additive makes it
+		//write `progblendfunc add` (:3913), which is the top-level spelling and the
+		//only pass-state directive a program with no pass block can use.
+		vmt_stat_addprog++;
+	}
 	else if (!Q_strcasecmp(st->type, "UnlitGeneric"))
 	{
+		if (st->additive)
+			vmt_stat_addpass++;	//additive but declined above -- $whiteimage or an HDR face
 		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
 		//nettest: HDR sky — prefer an HDR face over the LDR $basetexture (8-bit, bands).
 		//  $hdrbasetexture = RGBA16161616F (native float, used as-is); $hdrcompressedtexture
@@ -2227,7 +2994,19 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcat(progargs, "#BUMP2", sizeof(progargs));
 			vmt_stat_bumpmap2++;
 		}
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
+		/*
+		FTESurf Patch 268 B: this arm has never been handed #ENVTINT/#ENVSAT at
+		all, so a transition material's $envmaptint has always been ignored --
+		transition.glsl falls back to its own defaults.  Fixing that is part of
+		Source parity, not a free correctness win, so it rides on bit 2 with the
+		contrast: with the bit off the three strings are empty and the program
+		name is character-for-character the one emitted today.
+		*/
+		{
+			qboolean envsrcspec = (hl2_envmap_source && (hl2_envmap_source->ival & 2));
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s%s\"\n", st->type, progargs,
+				envsrcspec?envmaptint:"", envsrcspec?envmapsat:"", envsrcspec?envmapcontrast:"");
+		}
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 		if (*st->tex[1].name)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tuppermap \"%s%s.vtf\"\n", strcmp(st->tex[1].name, "materials/")?"materials/":"", st->tex[1].name);
@@ -2251,6 +3030,254 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		    (!hl2_bumpmap2 || hl2_bumpmap2->ival))
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tspecularmap \"%s%s.vtf\"\n", strcmp(st->bumpmap2, "materials/")?"materials/":"", st->bumpmap2);
 	}
+	else if (!Q_strcasecmp(st->type, "UnlitTwoTexture") && *st->tex[1].name &&
+	         (!hl2_twotexture || hl2_twotexture->ival))
+	{
+		/*
+		FTESurf: UnlitTwoTexture, with its second texture and its proxies.
+
+		Reported as: "the portals in the main spawn area are a solid glow web
+		texture. but in counter-strike they are not visible until you move
+		closer to them, and visually it looks like a mask moving diagonally,
+		and maybe mipmap coming in and showing you more as you get closer".
+
+		The arm this replaces emitted ONE pass, bound $basetexture to it, chose
+		a blendfunc and stopped.  $texture2 was parsed (:1436) and never used;
+		the material's TextureScroll was read and then declined because it
+		names $texture2Transform rather than the base (VMT_ScrollsBase); the
+		proxy chain was skipped wholesale.  So the shield was a still image of
+		one of its two layers, drawn at full brightness from any distance --
+		"a solid glow web", exactly.
+
+		SCOPE, MEASURED.  48 materials across the three mounted packs are
+		UnlitTwoTexture.  Four of them are the combine shield family that
+		surf_tensor2's portals use; the rest are HL2 monitors and displays
+		(alyxmonitor, combinedisplay, tvscreen_noise, masterinterface), fog
+		cards, the portal funnel -- and five of Momentum's OWN props:
+		powerup_airjump, powerup_flight, powerup_haste, powerup_slick and
+		mom_hologramfx.  Every one of them has been drawing one layer of two.
+
+		11 materials in the library carry a PlayerProximity proxy and all 11
+		are this family, so the distance behaviour is narrow; the two-layer
+		multiply is not, and it is the part that matters on 48 materials.
+
+		A PROGRAM IN A PASS, which is vmt/animated's shape (Patch 195) and for
+		the same reason: `map "$2darray:..."` is what asks the loader for every
+		frame of a multi-frame VTF, and `map` is a pass keyword.  The second
+		layer rides on `uppermap`, a top-level default-texture slot that
+		nothing on this material type uses -- the same trick Patch 251 plays
+		with `specularmap` for $bumpmap2.  Default textures are shader-scoped,
+		not pass-scoped, so a top-level uppermap and a program inside a pass
+		see each other.
+
+		THE FALLBACK IS THE OLD ARM, not a failure: a UnlitTwoTexture with no
+		$texture2 has nothing to multiply, and hl2_twotexture 0 restores the
+		single-layer draw for anyone who wants to compare.
+		*/
+		char t[256];
+		double a;
+		float sx = 0, sy = 0, s2x = 0, s2y = 0;
+		/*
+		FTESurf Patch 286: THE FLIPBOOK, at last.
+
+		Reported as "I swear the portals do fade in and out over distance? and
+		the masking effect also works, it doesn't MATCH source, but it's
+		'there'" -- the fade and the scrolling mask had landed in Patch 279 and
+		the third feature had not.  comshieldwall.vtf is 256x256 with THIRTY-ONE
+		frames and the proxy chain picks one by DISTANCE:
+
+		    $playerdistance2 = PlayerProximity * .2
+		    $frameminusten   = $playerdistance2 - $ten     ($ten is "24")
+		    $frame           = Clamp($frameminusten, 0, 30)
+
+		so frame 0 inside 120 units and frame 30 beyond 270.  Drawing frame 0
+		forever is why the web gets brighter as you approach but never denser.
+
+		AND THE VMT SETS BOTH FRAMES FROM THE SAME CLAMP.  It carries two
+		identical Clamp proxies, one writing $frame and one writing $frame2, so
+		BOTH layers step together -- read out of the file rather than assumed,
+		and it is why one array sampler read twice is not a shortcut but the
+		transcription.  (VMT_ResolveProxies only looks for $frame; the $frame2
+		twin is redundant by construction and is not parsed a second time.)
+
+		TAKEN ONLY WHEN THE TWO TEXTURES ARE THE SAME FILE, and that is a real
+		limit rather than a tidy special case.  A flipbook needs a 2DArray
+		sampler, a 2DArray sampler needs `map "$2darray:..."`, `map` is a PASS
+		keyword, and the shape that is PROVEN to work with a pass-level program
+		is vmt/animated's -- exactly one pass, exactly one sampler.  Two
+		different textures would need a second one, and both arrangements of
+		that were tried in Patch 279 and failed silently (see the essay at the
+		emit below, and the list at the top of twotexture.glsl).  7 of the
+		library's 48 UnlitTwoTexture materials point both keys at one file.
+
+		On surf_tensor2 that covers 42 of the 44 shield faces: comshieldwall is
+		the same-texture one, comshieldwall2 pairs the same 31-frame base with a
+		DIFFERENT single-frame texture and keeps the existing no-flipbook draw.
+		It is counted as declined rather than passed over in silence, because
+		"the portals still look wrong" needs to be answerable with a number.
+		*/
+		qboolean frames = (st->proxframe > 0 && *st->tex[0].name && *st->tex[1].name &&
+		                   !Q_strcasecmp(st->tex[0].name, st->tex[1].name) &&
+		                   (!hl2_twoframes || hl2_twoframes->ival));
+
+		if (st->scrollrate != 0 && VMT_ScrollsBase(st->scrollvar))
+		{
+			a = st->scrollangle * (3.14159265358979323846/180.0);
+			sx = st->scrollrate*cos(a);
+			sy = st->scrollrate*sin(a);
+		}
+		if (st->tex2scrollrate != 0)
+		{
+			a = st->tex2scrollangle * (3.14159265358979323846/180.0);
+			s2x = st->tex2scrollrate*cos(a);
+			s2y = st->tex2scrollrate*sin(a);
+		}
+		Q_snprintfz(t, sizeof(t), "#SCROLL=%f,%f#SCROLL2=%f,%f", sx, sy, s2x, s2y);
+		Q_strlcat(progargs, t, sizeof(progargs));
+
+		if (st->proxalpha > 0)
+		{
+			Q_snprintfz(t, sizeof(t), "#PROXFADE=%f#PROXBASE=%f",
+				st->proxalpha, st->proxalphabase);
+			Q_strlcat(progargs, t, sizeof(progargs));
+			vmt_stat_proxfade++;
+		}
+		if (st->proxframe > 0)
+		{
+			Q_snprintfz(t, sizeof(t), "#PROXFRAME=%f,%f,%f,%f",
+				st->proxframe, st->proxframebias, st->proxframemin, st->proxframemax);
+			Q_strlcat(progargs, t, sizeof(progargs));
+			vmt_stat_proxframe++;
+		}
+		if (st->flickeramp > 0)
+		{
+			Q_snprintfz(t, sizeof(t), "#FLICKER=%f,%f",
+				st->flickeramp, st->flickerperiod > 0 ? st->flickerperiod : 1.0f);
+			Q_strlcat(progargs, t, sizeof(progargs));
+		}
+		if (st->alphaval > 0 && st->alphaval < 1)
+		{
+			Q_snprintfz(t, sizeof(t), "#ALPHA=%f", st->alphaval);
+			Q_strlcat(progargs, t, sizeof(progargs));
+		}
+		/*
+		WHICH CHANNEL THE DISTANCE FADE GOES INTO.  An additive surface fades by
+		getting darker and an alpha-blended one by getting more transparent, and
+		putting it in the wrong one is silently a no-op rather than an error:
+		blendFunc add is GL_ONE GL_ONE, whose factors never touch the source
+		alpha, so a fade written into alpha is simply discarded by the blender.
+		That is what "the scrolling effect doesn't really diminish over
+		distance" was -- the two layers and the scroll had arrived and only the
+		fade had not.  Additive wins over translucent here for the same reason
+		it does in the blend chain below: Source resolves it that way.
+		*/
+		if (st->additive)
+			Q_strlcat(progargs, "#ADDITIVE", sizeof(progargs));
+
+		if (frames)
+			Q_strlcat(progargs, "#FRAMES", sizeof(progargs));
+		else if (st->proxframe > 0)
+			vmt_stat_twoframesdecl++;
+
+		Q_strlcpy(st->type, "vmt/twotexture", sizeof(st->type));
+
+		if (frames)
+		{
+			/*
+			vmt/animated's SHAPE, and it is the only one of the three that has
+			ever put pixels on the screen.
+
+			The program goes INSIDE the pass that carries the array, because
+			`map "$2darray:..."` (gl_shader.c:1022 -> IF_TEXTYPE_2D_ARRAY) is
+			what asks the loader for all 31 frames and `map` is a pass keyword.
+			One pass, one sampler, `!!samps =FRAMES shield:2DArray=0` -- the
+			same binding Patch 195 has been running on 927 materials.
+
+			The two arrangements that DID NOT work, both from Patch 279 and both
+			silent, so that nobody re-derives them:
+
+			  program in the pass + top-level `uppermap`   two samplers by two
+			      different mechanisms.  A debug build that painted the samples
+			      into red and green came out black in both channels.
+			  top-level program + one pass per sampler     `prog 1 passes 2`,
+			      and the surface stopped reaching the rasteriser at all -- a
+			      shader forced to output opaque red drew nothing.
+
+			The shipped no-flipbook path avoids both by using NO passes: a
+			top-level program with `diffusemap`/`uppermap`, which are shader-
+			scoped default-texture slots.  There is no default slot of array
+			type, which is why this case has to be a pass and why it can only
+			be one.
+
+			THE BLEND HAS TO BE THE PASS'S.  `progblendfunc` attaches to a
+			top-level program and there is none here; animpass suppresses that
+			emit down in the tail (:3703) and this spells it instead.  Getting
+			this wrong is what turned surf_demise's smoke into an opaque slab.
+			Additive wins over translucent, which is how Source resolves a
+			material that writes both -- and comshieldwall writes both.
+			*/
+			Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n");
+			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tprogram \"%s%s\"\n", st->type, progargs);
+			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"$2darray:%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+			if (st->additive && (!hl2_translucent || hl2_translucent->ival))
+				Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc add\n");
+			else if (st->translucent && (!hl2_translucent || hl2_translucent->ival))
+				Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc blend\n");
+			Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
+			//animpass also gets the generated script dumped at developer 1
+			//(:3744), which is the only way to read one of these back: the
+			//shield is on func_brush *19 and shader_here traces the world.
+			st->animpass = 1;
+			vmt_stat_twoframes++;
+			vmt_stat_twotexture++;
+		}
+		else
+		{
+		/*
+		A TOP-LEVEL PROGRAM WITH NO PASSES AT ALL, and two attempts got this
+		wrong in ways worth recording.
+
+		HEADING CORRECTED IN PATCH 286: this block used to be titled "a
+		top-level program with two passes", which is not what the three lines
+		below emit and never was.  They emit a top-level program and two
+		DEFAULT-TEXTURE slots; the engine synthesises the single pass.  The
+		wrong title was a theory that survived next to code that had already
+		disproved it, which is exactly the thing these essays exist to stop.
+
+		Attempt 1 -- vmt/animated's shape, the program INSIDE the pass that
+		carries `map "$2darray:..."`, with the second layer arriving on the
+		top-level `uppermap` slot.  The generated script was exactly as
+		intended, every proxy coefficient in it was correct, and the shield drew
+		NOTHING: `[shader] effects/combineshield/comshieldwall sort 12 prog 0
+		passes 2`.  A debug build that painted the two samples into red and
+		green came out black, so neither sampler had anything in it.
+
+		Attempt 2 -- a top-level program with one pass per sampler, reasoning
+		from gl_shader.c:1956-1959 that "numsamplers and the SYNTHESISED PASS
+		LIST are the same thing".  That got `prog 1 passes 2` and the surface
+		stopped reaching the rasteriser entirely: a shader forced to output
+		opaque red drew nothing.
+
+		So neither route to TWO textures through a pass works, and what ships is
+		the route that uses no pass: `diffusemap` and `uppermap` are
+		shader-scoped default slots and the program reads both.  The cost is
+		that there is no default slot of ARRAY type, which is why the flipbook
+		above has to be a one-sampler special case.
+		*/
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		//$texture2 rides on `uppermap`: S_UPPERMAP/s_upper is a real default
+		//sampler slot that nothing on this material type uses.  The same trick
+		//Patch 251 plays with s_specular for $bumpmap2 and Patch 187 with
+		//s_lower for $blendmodulatetexture.
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tuppermap \"%s%s.vtf\"\n", strcmp(st->tex[1].name, "materials/")?"materials/":"", st->tex[1].name);
+		//animpass stays 0: the program is TOP-LEVEL, so the tail's
+		//`progblendfunc` has something to attach to and is the right way to set
+		//the blend.  Shader_ProgBlendFunc rewrites pass 0's blend, which for a
+		//program shader is the pass the engine synthesises for it.
+		vmt_stat_twotexture++;
+		}
+	}
 	else if (!Q_strcasecmp(st->type, "UnlitTwoTexture"))
 	{
 
@@ -2265,8 +3292,54 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 		Q_strlcatfz(script, &offset, sizeof(script), "}\n");
 	}
+	/*
+	FTESurf Patch 300: an ADDITIVE Sprite onto vmt/unlit, for the same reason as
+	the UnlitGeneric arm above -- see VMT_AdditiveProgramOK -- and this is the arm
+	that carries the reported bug.
+
+	surf_tensor2 draws 263 env_sprite through here (233 sprites/light_glow03.vmt,
+	30 sprites/xen_ray_3.vmt) and every one is program-less today.  Their textures
+	are BGR888 with NO ALPHA CHANNEL, so black is the only mask they have, and
+	that is exactly the thing fixed-function fog destroys.
+
+	A NOTE ON THE CLASS, because the tree had it wrong and so did I: these are
+	shader class "Sprite", not UnlitGeneric.  The comment above
+	BE_ProglessFogBegin in gl_backend.c said UnlitGeneric, Patch 297's writeup
+	repeated it, and it survived because the CONCLUSION was right for the wrong
+	reason -- both arms emit a program-less pass, so both show the artefact.  It
+	only became load-bearing here, where the fix has to name an arm.  Verified
+	against the packs the map actually mounts: mapdeps.txt has one line for
+	surf_tensor2 (CS:GO), and the light_glow VMTs are byte-identical "Sprite" in
+	the HL2 and CS:GO copies alike.
+
+	THE BLEND HAS TO BE SET BY HAND HERE.  The shared tail writes `progblendfunc`
+	only when st->blendfunc is set, and it sets that from st->additive (:3913) --
+	but a default-additive Sprite has st->additive == 0 by definition.  So this
+	arm asserts it, the way the emissive arm does at its own :2686.  #ADDITIVE has
+	to be appended here too: the block that would normally emit it runs before
+	this dispatch, when st->additive was still 0.
+	*/
+	else if (!Q_strcasecmp(st->type, "Sprite") && VMT_SpriteAdditiveProgramOK(st))
+	{
+		if (!st->additive)
+		{
+			st->additive = 1;
+			Q_strlcat(progargs, "#ADDITIVE", sizeof(progargs));
+		}
+		//Unconditional, because this arm's pass says `rgbGen vertex`
+		//unconditionally -- and that implies alphaGen vertex too.  See
+		//VMT_AddVertexColourArgs; getting this wrong draws every sprite at full
+		//brightness.
+		VMT_AddVertexColourArgs(progargs, sizeof(progargs));
+		Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		vmt_stat_addprog++;
+	}
 	else if (!Q_strcasecmp(st->type, "Sprite"))
 	{
+		if (st->additive || (!st->translucent && !st->alphatest))
+			vmt_stat_addpass++;	//additive but declined -- see VMT_SpriteAdditiveProgramOK
 		/*
 		FTESurf Patch 239: a Sprite that asks to be MASKED was drawn as an
 		additive glow with no mask at all.
@@ -2335,6 +3408,67 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\talphaFunc %s\n", (mask >= 0.25f)?"ge128":"gt0");
 		}
 		Q_strlcatfz(script, &offset, sizeof(script), "}\n");
+	}
+	else if (!Q_strcasecmp(st->type, "SpriteCard"))
+	{
+		/*
+		FTESurf: SpriteCard -- Source's PARTICLE shader, and the reason
+		surf_tensor2's portal particles were white.
+
+		Reported as "they don't have a cool blue hue like in source", on
+		particles whose baked r_part block asks for rgb 51 51 80 ramping to
+		0 96 255.  The colour was not being dropped by the particle system: it
+		was being dropped by THIS material, and the route is worth writing down
+		because it is not visible from either end.
+
+		p_script.c:743 gives BM_BLEND an EMPTY shader-name postfix, so
+		P_LoadTexture's first move for `blend blendalpha` is
+		R_RegisterCustom("particle/particle_glow_01") -- the bare texture name,
+		with nothing appended.  A material of exactly that name exists, this
+		plugin answers with it, and the particle system takes it in preference
+		to its own template (:754, "try and load the shader, fail if we would
+		need to generate one").  The template it skipped is the one carrying
+		`rgbgen vertex` and `alphagen vertex` (:774-776).  So every Source
+		particle material in the library has been overriding the per-particle
+		colour with a flat white texture, and the effect looked like the
+		translation had lost the colour.
+
+		SpriteCard was reaching the unimplemented-class fallback, which emits
+		vmt/unlit with no rgbgen at all -- so the flat white was guaranteed.
+		180 materials across the three mounted packs are SpriteCard, and every
+		one of them is a particle.
+
+		$vertexcolor and $vertexalpha are LITERALLY IN THE VMT
+		(particle_glow_01.vmt writes both), so this is not an inference about
+		what a particle wants; it is the material saying so and nothing reading
+		it.  They are still tested rather than assumed, because a SpriteCard
+		that declines them is entitled to a flat colour.
+
+		nodepth, because that is what the particle template it displaces does
+		(p_script.c:777) and a particle that writes depth punches a hole in
+		everything drawn after it.
+		*/
+		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		if (st->vertexcolor || !*st->color)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
+		if (st->vertexalpha || st->translucent || st->additive)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\talphaGen vertex\n");
+		//Source's own order: additive wins, then translucency.  A SpriteCard
+		//with neither is still a particle, so it keeps an alpha blend rather
+		//than becoming an opaque quad.
+		if (st->additive)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tblendFunc add\n");
+		else
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tblendFunc blend\n");
+		//INSIDE the pass.  `nodepth` is a pass keyword; at the top level the
+		//parser prints "Unknown shader directive" and carries on, which is how
+		//the first version of this arm shipped a depth-writing particle and a
+		//console line nobody would connect to it.
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tnodepth\n");
+		Q_strlcatfz(script, &offset, sizeof(script), "}\n");
+		st->translucent = 0;	//the pass carries it; a progblendfunc would have no program to attach to
+		vmt_stat_spritecard++;
 	}
 	else if (!Q_strcasecmp(st->type, "Decal"))
 	{
@@ -2782,6 +3916,28 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				else
 					Q_strlcpy(st->type, "vmt/vertexlit#ENVFROMNORM", sizeof(st->type));
 			}
+			/*
+			FTESurf Patch 268 B: the dedicated $envmapmask arm this chain never had.
+
+			The lightmapped and transition arms both pick #ENVFROMMASK when a
+			material names an $envmapmask; the model arm falls through to the plain
+			program and reads the mask out of the normalmap's alpha instead, so a
+			VertexlitGeneric with a real mask texture has never used it.
+
+			Only with NO $bumpmap, because that is Source's own rule: the bumped
+			helper kills $envmapmask and $basealphaenvmapmask outright
+			(vertexlitgeneric_dx9_helper.cpp:187-199), and the unbumped pixel shader
+			is the one that samples the mask (_ps20b.fxc:327).  Under bit 1 only --
+			it changes which program a shipped material gets.
+			*/
+			else if (*st->envmap && *st->envmapmask && !*st->normalmap &&
+			         hl2_envmap_source && (hl2_envmap_source->ival & 1))
+			{
+				if (st->halflambert)
+					Q_strlcpy(st->type, "vmt/vertexlit#ENVFROMMASK#HALFLAMBERT", sizeof(st->type));
+				else
+					Q_strlcpy(st->type, "vmt/vertexlit#ENVFROMMASK", sizeof(st->type));
+			}
 			else
 			{
 				if (st->halflambert)
@@ -2827,7 +3983,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		of this build something finally answers it).  See VBSP_LoadCubemaps in
 		mod_vbsp.c for the measurement that started this.
 		*/
-		Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n\t\tprogram \"%s%s%s%s\"\n\t\tmap $rt:$linear:rtenvsphere\n\t}\n", st->type, progargs, envmaptint, envmapsat);
+		//FTESurf Patch 268 B: + envmapcontrast, which is empty unless the material
+		//wrote $envmapcontrast AND hl2_envmap_source bit 2 is on.
+		Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n\t\tprogram \"%s%s%s%s%s\"\n\t\tmap $rt:$linear:rtenvsphere\n\t}\n", st->type, progargs, envmaptint, envmapsat, envmapcontrast);
 
 	}
 	else if (!Q_strcasecmp(st->type, "LightmappedGeneric"))
@@ -2843,7 +4001,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			else /* take from normalmap */
 				Q_strlcpy(st->type, "vmt/lightmapped", sizeof(st->type));
 
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s\"\n", st->type, progargs, envmaptint, envmapsat);
+			//FTESurf Patch 268 B: + envmapcontrast, empty unless bit 2 is on.
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s%s\"\n", st->type, progargs, envmaptint, envmapsat, envmapcontrast);
 
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
@@ -3069,12 +4228,65 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 		Q_strlcatfz(script, &offset, sizeof(script),	"\treflectcube \"%s\"\n", cube);
 	}
+	/*
+	FTESurf Patch 268 B: the literal $envmap "env_cubemap" -- the sentinel.
+
+	The block above deliberately skips this spelling, because "env_cubemap" is not
+	a texture name: it means "the nearest baked cubemap", which is curbatch->envmap
+	and which gl_backend.c's T_GEN_REFLECTCUBE already falls back to.  What that
+	reasoning missed is the PERMUTATION GATE (gl_backend.c:4410), which tests only
+	TEXLOADED(curtexnums->reflectcube || reflectmask) and never curbatch->envmap --
+	so with no reflectcube line the whole REFLECTCUBEMASK block compiles out and
+	the batch's cubemap is never sampled at all.
+
+	"$envcubemap" is a real 1x1x6 mid-grey cube created by Shader_Init, so the gate
+	sees a loaded texture and fires; T_GEN_REFLECTCUBE recognises the sentinel
+	pointer and binds curbatch->envmap instead of it.  r_envcubemap is the live A/B
+	(a plugin-side switch alone cannot turn it off until the next map load --
+	Shader_Reset keeps defaulttextures across a regenerate).
+
+	st->wantenvcube is set far above, before the type dispatch, and only for the
+	three LIT classes: Water, Refract and the unlit classes are excluded because
+	their programs' REFLECTCUBEMASK blocks were not audited for this patch and
+	hl2_water / hl2_refract own those materials.  A material that already carries
+	$envmapmask + env_cubemap reflects today and is unchanged -- this line only
+	makes the gate fire, it does not alter the mask.
+	*/
+	else if (st->wantenvcube)
+		Q_strlcatfz(script, &offset, sizeof(script),	"\treflectcube \"$envcubemap\"\n");
 	if (st->alphatest)
 		Q_strlcatfz(script, &offset, sizeof(script), "\talphatest ge128\n");
 	if (st->culldisable)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tcull disable\n");
+	/*
+	FTESurf Patch 290: $ignorez IS NOT HONOURED HERE, AND SAYING SO IS THE FIX.
+
+	This used to emit "\tnodepth\n" at the top level.  `nodepth` is a PASS keyword
+	(gl_shader.c:4838) and its handler dereferences ps->pass, so at the top level
+	the parser prints a developer-only "Unknown shader directive", skips the rest
+	of the line and carries on -- the material rendered exactly as if the line had
+	never been written, and every log carried
+
+	    Unknown shader directive parsing sprites/light_glow02_add_noz: "nodepth"
+
+	which reads like a spelling mistake rather than a dropped feature.  The
+	SpriteCard arm in this same file (:3072-3076) already documents this trap and
+	puts its `nodepth` inside the pass; it is the only arm that got it right.
+
+	It is NOT simply moved into a pass here because this is the shared tail of the
+	generic emit, after every per-type arm has finished: some arms emit an explicit
+	pass, others emit a bare top-level program and let Shader_Finish back-fill one
+	(gl_shader.c:6221), and there is no top-level depth key to fall back on.
+	Emitting a pass just to carry this would change what those materials rasterise.
+
+	So it is counted and declined, like every other declined Source feature in this
+	plugin -- no behaviour change (it never worked), one honest census number
+	instead of a misleading warning.  The one place it would matter most is already
+	covered: the env_lightglow flares force DRAWFLAG_NODEPTHTEST from the CSQC draw
+	regardless of what their material says.
+	*/
 	if (st->ignorez)
-		Q_strlcatfz(script, &offset, sizeof(script), "\tnodepth\n");
+		vmt_stat_ignorez++;
 	//Patch 195: animpass means the program lives inside a PASS, and progblendfunc
 	//has no top-level program to attach to there -- the pass emitted its own
 	//blendFunc instead.  Emitting this as well would be a second, ignored
@@ -3107,6 +4319,21 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Con_DPrintf("[vmt] %s: alpha %.3f translucent %i additive %i animpass %i blendfunc %s\n",
 			shortname, st->alphaval, st->translucent, st->additive, st->animpass,
 			st->blendfunc ? st->blendfunc : "(NONE -- will not blend)");
+
+	/*
+	FTESurf: the generated script, verbatim, for the material types whose
+	program lives INSIDE A PASS.
+
+	There is otherwise no way to see what was emitted for one of these.
+	`shader_here` prints a shader body, but it traces the WORLD model, and the
+	materials that take this path are overwhelmingly on brush ENTITIES -- the
+	combine shield that motivated it is func_brush *19 -- so the crosshair goes
+	straight through and reports the wall behind.  Hunting that with screenshots
+	cost an hour; printing eight lines costs nothing and is only emitted at
+	`developer 1` for the handful of materials involved.
+	*/
+	if (st->animpass)
+		Con_DPrintf("[vmt] %s generated:\n%s", shortname, script);
 
 	LoadMaterialString(ps, script);
 
@@ -3238,9 +4465,37 @@ static qboolean VMT_ReadVMT(const char *fname, vmtstate_t *st)
 	}
 	return false;
 }
+const char *VBSP_ColourCorrectScript(const char *name);	//FTESurf Patch 288, mod_vbsp.c
+
 static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	vmtstate_t st;
+
+	/*
+	FTESurf Patch 288: the colour-correction post-process, which is not a
+	material and has no file.
+
+	It has to arrive HERE because a plugin has no other way to define a shader by
+	name -- Material_RegisterLoader's ReadMaterial hook is the only callback the
+	engine makes when a shader name does not resolve, and LoadMaterialString is
+	the only way back in.  mod_vbsp.c generates the script at map load from the
+	map's color_correction entities and hands it over on request; the name is
+	content-derived, so this can only ever match the grade it was built for.
+
+	FIRST, before VMT_ReadVMT, for cost rather than correctness: the miss counter
+	below deliberately does not count names with no '/' or with a "_glsl" suffix,
+	and this name has a '/' and would otherwise be reported as a Source material
+	the map needs and cannot find.
+	*/
+	{
+		const char *cc = VBSP_ColourCorrectScript(filename);
+		if (cc)
+		{
+			LoadMaterialString(ps, cc);
+			return true;
+		}
+	}
+
 	memset(&st, 0, sizeof(st));
 	st.savefile = NULL;//ps->saveshaderbody;
 	if (!VMT_ReadVMT(filename, &st))
@@ -3349,6 +4604,12 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	//here rather than in VMT_ParseBlock because that recurses through patch/include
 	//chains whose intermediate states are not materials in their own right.
 	VMT_BottomRecord(filename, st.bottommaterial);
+
+	//FTESurf: the proxy graph is complete only once every include and patch has
+	//been folded in, so it is compiled into coefficients HERE and not inside
+	//VMT_ParseBlock -- a chain whose PlayerProximity comes from a base material
+	//and whose Subtract comes from the patch that includes it is a real shape.
+	VMT_ResolveProxies(&st);
 
 	Shader_GenerateFromVMT(ps, &st, filename, LoadMaterialString);
 	return true;

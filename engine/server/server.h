@@ -1084,6 +1084,37 @@ typedef enum multicast_e
 
 //============================================================================
 
+/*
+FTESurf Patch 273 -- SPLITTING THE `Server` BUCKET, BECAUSE IT IS 37% OF THE FRAME
+AND NOBODY COULD SEE IT.
+
+r_speeds' `Server` row is one number wrapped around the whole of SV_Frame
+(cl_main.c:7457/7592/7663).  On surf_tensor2 it reads 1790us/frame against 37.9us
+on surf_tensor -- a 47x gap between two Source maps on the same listen server with
+one player -- and one number cannot say which half of SV_Frame owns it.
+
+Ruled out before writing this, so the instrument does not re-litigate them: it is
+not live edict count (tensor2 runs `entities 28 (brush 17)`, props 12), and it is
+not a free-running tick (sv_mintic/sv_maxtic are pinned to 0.015 in default.fmf,
+so physics is 66.67Hz even at 1000fps -- which ALSO means most SV_Frame calls do
+no tick at all and the average smears a rare expensive tick over many cheap
+frames.  `ticks` is here to measure exactly that smear).
+
+Accumulated in nanosecond-ish doubles rather than sampled, because the per-frame
+figure is noise and the question is the ratio.  `sv_perfdump` prints and clears.
+Zero cost when never dumped: two Sys_DoubleTime calls per tick, not per frame.
+*/
+typedef struct
+{
+	double	startframe;		//the QC's StartFrame chain (SV_ProgStartFrame)
+	double	physics;		//World_Physics_Frame -- entity movement and collision
+	double	send;			//SV_SendClientMessages -- snapshot build + PVS
+	unsigned int ticks;		//physics ticks actually run
+	unsigned int frames;	//SV_Frame calls (ticks/frames = how often a tick fires)
+} sv_perf_t;
+extern sv_perf_t sv_perf;
+#define SV_PERF(acc, call) do { double t_ = Sys_DoubleTime(); call; (acc) += Sys_DoubleTime() - t_; } while(0)
+
 extern	cvar_t	sv_mintic, sv_maxtic, sv_limittics;
 extern	cvar_t	sv_maxspeed;
 extern	cvar_t	sv_antilag;

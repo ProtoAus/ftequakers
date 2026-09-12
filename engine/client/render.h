@@ -181,6 +181,13 @@ typedef struct entity_s
 	//Whichever is set is bound to VATTR_COLOUR by R_GAlias_DrawBatch; vertlightverts is the length
 	//of either, in the model's GLOBAL vertex order. Never both.
 	qbyte					*vertlightbytes;
+	//FTESurf Patch 268 C: Source's six-face ambient cube for this entity -- LINEAR light, WORLD axes,
+	//+x -x +y -y +z -z.  Filled by the hl2 plugin for its static props (HL2_CalcModelLighting) and read
+	//only by vertexlit.glsl's #BUMPCUBE, as a ratio, so its scale is irrelevant and all zeros means
+	//"no cube", which the shader turns into exactly 1.0.  R_CalcModelLighting clears it, like
+	//vertlightbytes above and for the same recycled-slot reason.  APPEND-ONLY as above; being a header
+	//change, every plugin has to be rebuilt against it.
+	vec3_t					light_cube[6];
 } entity_t;
 
 #define MAX_GEOMSETS 32u

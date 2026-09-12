@@ -101,6 +101,13 @@ static cvar_t	in_dinput = CVARFD("in_dinput","0", CVAR_ARCHIVE, "Enables the use
 static cvar_t	in_xinput = CVARFD("in_xinput","1", CVAR_ARCHIVE, "Enables the use of xinput for controllers.\nNote that if you have a headset plugged in, that headset will be used for audio playback if no specific audio device is configured.");
 static cvar_t	in_builtinkeymap = CVARF("in_builtinkeymap", "0", CVAR_ARCHIVE);
 static cvar_t in_simulatemultitouch = CVAR("in_simulatemultitouch", "0");
+/*
+FTESurf Patch 268: whether "is this window active" means FOREGROUND or merely
+"owns its own thread's keyboard focus".
+
+Not static -- gl_vidnt.c's per-frame reconciliation reads it too.
+*/
+cvar_t	in_focusgrab = CVARFD("in_focusgrab", "1", CVAR_ARCHIVE, "Whether the mouse grab follows the foreground window.\n0: Pre-268 behaviour - vid.activeapp is set from WM_SETFOCUS/WM_KILLFOCUS alone, so a window that owns its thread's focus without being foreground grabs the mouse anyway.\n1: The window must actually be the foreground window. A background instance leaves your mouse alone.");
 static cvar_t	in_nonstandarddeadkeys = CVARD("in_nonstandarddeadkeys", "1", "Discard input events that result in multiple keys. Only the last key will be used. This results in behaviour that differs from eg notepad. To use a dead key, press it twice instead of the dead key followed by space.");
 
 static cvar_t	xinput_leftvibrator = CVARF("xinput_leftvibrator","0", CVAR_ARCHIVE);
@@ -309,6 +316,10 @@ static int ribuffersize;
 //                   mouse movement.
 static double rawbuttontime[5];
 static qboolean rawbuttondown[5];
+//FTESurf Patch 307: whether the CURRENT mouse registration carries RIDEV_NOLEGACY.
+//Declared here rather than beside its setter because INS_RawInput_DeInit and
+//INS_RawInput_MouseRegister both clear it and both come earlier in the file.
+static qboolean rawmouse_nolegacy;
 
 /*FTESurf Patch 204: default 1, and answers to Source's name for it.
 
@@ -336,6 +347,12 @@ static qboolean rawbuttondown[5];
 static cvar_t in_rawinput_mice = CVARAFD("in_rawinput", "1", "m_rawinput", CVAR_ARCHIVE, "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse), and reports mouse motion as the device sends it rather than as an OS-summed and OS-accelerated cursor delta.");
 static cvar_t in_rawinput_keyboard = CVARD("in_rawinput_keyboard", "0", "Enables rawinput support for keyboards in XP onwards as well as just mice.");
 static cvar_t in_rawinput_rdp = CVARD("in_rawinput_rdp", "0", "Activate Remote Desktop Protocol devices too.");
+/*FTESurf Patch 307.  DEFAULT 0 DELIBERATELY: this closes the injected-mouse-button
+  hole, and it costs a Windows precision touchpad every mouse button it has, because
+  such a device is a HID digitizer with no RI_MOUSE_BUTTON_* flags and the legacy
+  message is its only press.  A ranked profile can set it; a default cannot.  Applied
+  only while the mouse is grabbed -- see INS_RawInput_MouseSetLegacy.*/
+static cvar_t in_rawinput_nolegacy = CVARFD("in_rawinput_nolegacy", "0", CVAR_ARCHIVE, "Suppresses legacy mouse messages while the mouse is grabbed, so a synthesized (injected) click cannot reach the game through the legacy path. COSTS ALL MOUSE BUTTONS on a Windows precision touchpad, which has no raw button reports at all. Off by default; the .hid journal counts uncorroborated legacy presses either way.");
 
 void INS_RawInput_MouseDeRegister(void);
 int INS_RawInput_MouseRegister(void);
@@ -1097,11 +1114,15 @@ void INS_RawInput_DeInit(void)
 		INS_RawInput_KeyboardDeRegister();
 	rawmicecount = 0;
 	rawkbdcount = 0;
+	in_rawmice_live = 0;	//FTESurf Patch 301: kept in step with the two above
+	in_rawkbd_live = 0;
 	//nettest: forget what raw was accounting for. A device unplugged mid-press never sends
 	//its UP, and a latched rawbuttondown would suppress that button's legacy messages for
 	//good -- reinstating the very bug this tracking exists to fix.
 	memset(rawbuttondown, 0, sizeof(rawbuttondown));
 	memset(rawbuttontime, 0, sizeof(rawbuttontime));
+	rawmouse_nolegacy = false;	//FTESurf Patch 307: the registration is gone with it
+	in_raw_nolegacy_live = -1;	//...and with no registration there is no state to report
 	Z_Free(rawmice);
 	rawmice = NULL;
 	Z_Free(rawkbd);
@@ -1114,7 +1135,10 @@ void INS_RawInput_DeInit(void)
 
 #ifdef USINGRAWINPUT
 // raw input registration functions
-int INS_RawInput_MouseRegister(void)
+/*FTESurf Patch 307: registration flags are now a parameter, because the legacy
+  path has to be closable WITHOUT being closed by default.  Everything below is
+  unchanged for flags == 0, which is what every existing caller passes.*/
+static int INS_RawInput_MouseRegisterFlags(DWORD flags)
 {
 	// This function registers to receive the WM_INPUT messages
 	RAWINPUTDEVICE Rid; // Register only for mouse messages from wm_input.
@@ -1123,7 +1147,7 @@ int INS_RawInput_MouseRegister(void)
 	Rid.usUsagePage = 0x01;
 	Rid.usUsage = 0x02;
 	//note: we don't exclude legacy events any more. while we don't really want them, we also don't want to get confused about click states. this way we can track the states properly without breaking.
-	Rid.dwFlags = 0;//RIDEV_NOLEGACY; // adds HID mouse and also ignores legacy mouse messages
+	Rid.dwFlags = flags;//RIDEV_NOLEGACY adds HID mouse and also ignores legacy mouse messages
 	Rid.hwndTarget = NULL;
 
 	// Register to receive the WM_INPUT message for any change in mouse (buttons, wheel, and movement will all generate the same message)
@@ -1131,6 +1155,68 @@ int INS_RawInput_MouseRegister(void)
 		return 1;
 
 	return 0;
+}
+
+int INS_RawInput_MouseRegister(void)
+{
+	/*Patch 307: this is the flags-0 registration, so the latch must come back with
+	  it.  Every caller of this is a fresh start (init, or a re-register after a
+	  failure); leaving the latch set would make INS_RawInput_MouseSetLegacy believe
+	  NOLEGACY was still in force and skip re-applying it.*/
+	rawmouse_nolegacy = false;
+	in_raw_nolegacy_live = 0;
+	return INS_RawInput_MouseRegisterFlags(0);
+}
+
+/*FTESurf Patch 307: THE OPTIONAL BLOCK, and it is GRAB-SCOPED for two separate
+  reasons, only one of which is about cheating.
+
+  RIDEV_NOLEGACY stops the synthesized WM_*BUTTONDOWN that an injected click
+  relies on -- INS_MouseEvent's dedupe cannot be fooled by a message that is
+  never delivered.  That closes the hole outright rather than merely recording
+  it.
+
+  IT IS NOT FREE, AND THE COST IS ALREADY MEASURED IN THIS FILE.  A Windows
+  precision touchpad is a HID digitizer rather than a RIM_TYPEMOUSE: it emits no
+  RI_MOUSE_BUTTON_* flags whatever, so the legacy message is the ONLY press it
+  has and this setting takes every mouse button away from those users -- taps and
+  press-and-hold alike.  See the essay in INS_MouseEvent, which was written when
+  that bug was found the hard way.  So the default is 0 and this is a profile
+  decision, not a fix to apply blindly.
+
+  SCOPED TO THE GRAB because NOLEGACY also suppresses NON-CLIENT legacy messages,
+  which is how a windowed player drags, resizes and closes the window.  Applying
+  it while the mouse is free would make the title bar dead -- a far worse bug
+  than the one being fixed, and one the player could not escape without editing a
+  config.  While the mouse is grabbed there is no title bar to click, so the
+  window cost is zero and only the touchpad cost remains.
+
+  The state is latched so a re-register only happens on an actual transition;
+  RegisterRawInputDevices on every activate would be a syscall per alt-tab for
+  no reason, and on every frame would be worse.*/
+static void INS_RawInput_MouseSetLegacy(qboolean wantnolegacy)
+{
+	if (rawmicecount <= 0)
+		return;			//nothing registered to change
+	if (!!wantnolegacy == !!rawmouse_nolegacy)
+		return;			//already in that state
+
+	if (INS_RawInput_MouseRegisterFlags(wantnolegacy ? RIDEV_NOLEGACY : 0))
+	{	/*a refused re-register leaves the PREVIOUS registration standing, so the
+		  latch must not move -- claiming the new state while the old one is live
+		  would make the journal's account of this session wrong.*/
+		Con_DPrintf("Raw input: could not %s legacy mouse messages\n",
+			wantnolegacy ? "suppress" : "restore");
+		return;
+	}
+	rawmouse_nolegacy = !!wantnolegacy;
+	in_raw_nolegacy_live = rawmouse_nolegacy;
+	/*Printed rather than silent.  This setting's failure mode is that it quietly
+	  does NOT apply -- it is grab-scoped, so anything leaving the mouse ungrabbed
+	  leaves the hole open -- and a test with no way to see whether it took would
+	  read that as the block itself not working.*/
+	Con_DPrintf("Raw input: legacy mouse messages %s\n",
+		rawmouse_nolegacy ? "SUPPRESSED (injected clicks blocked)" : "allowed");
 }
 
 int INS_RawInput_KeyboardRegister(void)
@@ -1180,6 +1266,15 @@ void INS_RawInput_Init(void)
 	PRAWINPUTDEVICELIST pRawInputDeviceList;
 	int inputdevices, i, j, mtemp, ktemp;
 	char dname[MAX_RI_DEVICE_SIZE];
+
+	/*FTESurf Patch 301: publish what raw input ACTUALLY got, for the .hid header.
+	  Zeroed here rather than at the counters below, because every `return` between
+	  this line and there is a path on which raw input is unavailable -- a missing
+	  user32 export is as much "no raw input" as finding no devices, and leaving the
+	  mirrors at their -1 "backend does not report" seed would describe a failure as
+	  an unknown.  See in_generic.c's declaration for why they exist at all.*/
+	in_rawmice_live = 0;
+	in_rawkbd_live = 0;
 
 	// Return 0 if rawinput is not available
 	HMODULE user32 = LoadLibrary("user32.dll");
@@ -1339,6 +1434,24 @@ void INS_RawInput_Init(void)
 
 	Con_DPrintf("Raw input: initialized with %i mice and %i keyboards\n", rawmicecount, rawkbdcount);
 
+	//FTESurf Patch 301: the only place these become non-zero.  This is the success
+	//return, so anything that took an earlier one keeps the 0 set at entry.
+	in_rawmice_live = rawmicecount;
+	in_rawkbd_live = rawkbdcount;
+
+	//FTESurf Patch 306: lift the rejected-report counters out of "this backend does
+	//not count" and into "counted, none seen yet".  Conditional, so a vid_restart
+	//re-entering this function cannot reset a running total -- the journal reports
+	//deltas against a baseline and a counter that went backwards would emit a
+	//negative one.  Only ever raised from -1, never cleared, not even at DeInit:
+	//a journal open across an input restart must still see what happened.
+	if (in_raw_injected < 0)
+		in_raw_injected = 0;
+	if (in_raw_unenum < 0)
+		in_raw_unenum = 0;
+	if (in_raw_legacybtn < 0)
+		in_raw_legacybtn = 0;	//FTESurf Patch 307, same rule
+
 	return; // success
 }
 #endif
@@ -1450,6 +1563,7 @@ void INS_Init (void)
 	Cvar_Register (&in_builtinkeymap, "Input Controls");
 	Cvar_Register (&in_nonstandarddeadkeys, "Input Controls");
 	Cvar_Register (&in_simulatemultitouch, "Input Controls");
+	Cvar_Register (&in_focusgrab, "Input Controls");	//FTESurf Patch 268
 
 	Cvar_Register (&m_accel_noforce, "Input Controls");
 	Cvar_Register (&m_threshold_noforce, "Input Controls");
@@ -1482,6 +1596,7 @@ void INS_Init (void)
 	Cvar_Register (&in_rawinput_mice, "Input Controls");
 	Cvar_Register (&in_rawinput_keyboard, "Input Controls");
 	Cvar_Register (&in_rawinput_rdp, "Input Controls");
+	Cvar_Register (&in_rawinput_nolegacy, "Input Controls");	//FTESurf Patch 307
 #endif
 
 	INS_ScreenSaver_Init();
@@ -1564,7 +1679,23 @@ void INS_MouseEvent (int mstate)
 				if (!rawmicecount ||
 					(i < (int)countof(rawbuttontime) && !rawbuttondown[i] &&
 					 Sys_DoubleTime() - rawbuttontime[i] > 0.1))
+				{
+					/*FTESurf Patch 307: this press is being accepted although raw
+					  input -- which IS live, that is what rawmicecount says -- could
+					  not corroborate it.  Two causes, and the engine cannot tell them
+					  apart here: a pointer that is not a RIM_TYPEMOUSE (a precision
+					  touchpad emits no RI_MOUSE_BUTTON_* at all, see above), or an
+					  injected click, whose WM_INPUT was dropped at the hDevice test
+					  BEFORE the stamping below and so left no trace to match against.
+					  Counted rather than blocked: blocking is the in_rawinput_nolegacy
+					  trade, and it costs touchpad users every button they have.
+					  Bounded to the five buttons raw reports flags for -- past those
+					  the old blanket behaviour applies and a miss is not evidence.*/
+					if (rawmicecount && i < (int)countof(rawbuttontime) &&
+						in_raw_legacybtn >= 0)
+						in_raw_legacybtn++;
 					IN_KeyEvent (sysmouse.qdeviceid, true, K_MOUSE1 + i, 0);
+				}
 				else
 					mstate &= ~(1<<i);
 			}
@@ -1680,6 +1811,16 @@ INS_Move
 */
 void INS_Move (void)
 {
+#ifdef USINGRAWINPUT
+	/*FTESurf Patch 307.  ONE call site rather than one in each of ActivateMouse and
+	  DeactivateMouse, because those two would cover the grab transitions and miss the
+	  third case -- the player changing the cvar mid-session, which would then not take
+	  effect until the next alt-tab and would read as the setting not working.  Driving
+	  it from the live state instead makes all three the same event.  The latch inside
+	  makes this two compares on a frame where nothing changed.*/
+	INS_RawInput_MouseSetLegacy(mouseactive && in_rawinput_nolegacy.ival);
+#endif
+
 	if (vid.activeapp && !Minimized)
 	{
 		INS_MouseMove ();
@@ -1736,6 +1877,25 @@ void INS_Accumulate (void)
 	{
 		GetCursorPos (&current_mouse_pos);
 
+		/*
+		FTESurf Patch 268: an unfocused instance stops driving the cursor.
+
+		This branch runs unconditionally today -- INS_Move calls INS_Accumulate on
+		exactly the frames where we are NOT active, and snd_dma.c calls it again at
+		its own rate -- so a backgrounded copy of the game keeps feeding itself
+		absolute mouse positions.  That does not move the view (this is the absolute
+		path, so it drives mousecursor_x/y), but it does drag the menu cursor around
+		and it retypes the device as M_TOUCH in in_generic.c, which changes how that
+		mouse is interpreted for the rest of the session.
+
+		The GetCursorPos above deliberately stays OUTSIDE the test: current_mouse_pos
+		is written nowhere else, and INS_UpdateGrabs uses it for the windowed
+		"is the pointer inside our window" check.  Let it go stale and the grab can
+		fail to reinstate when you come back.
+		*/
+		if (in_focusgrab.ival && !vid.activeapp)
+			return;
+
 		IN_MouseMove(sysmouse.qdeviceid, true, current_mouse_pos.x-window_rect.left, current_mouse_pos.y-window_rect.top, 0, 0);
 		return;
 	}
@@ -1755,7 +1915,20 @@ void INS_RawInput_MouseRead(void)
 	}
 
 	if (i == rawmicecount) // we're not tracking this device
+	{
+		/*FTESurf Patch 306: count what we are about to throw away.  The dwType test
+		  is load-bearing, not defensive -- INS_RawInput_Read calls this for EVERY
+		  WM_INPUT including keyboard ones, and every keyboard report misses the mouse
+		  table, so without it the counter would tick on ordinary typing.*/
+		if (raw->header.dwType == RIM_TYPEMOUSE)
+		{
+			if (!raw->header.hDevice)
+				in_raw_injected++;
+			else
+				in_raw_unenum++;
+		}
 		return;
+	}
 	mouse = &rawmice[i];
 
 	if (mouse->qdeviceid == DEVID_UNSET)
@@ -1901,7 +2074,21 @@ void INS_RawInput_KeyboardRead(void)
 	}
 
 	if (i == rawkbdcount) // not tracking this device
+	{
+		/*FTESurf Patch 306: the keyboard half.  Note what this CANNOT see: with
+		  in_rawinput_keyboard 0 -- the shipped default -- rawkbdcount is 0, nothing
+		  is registered, no keyboard WM_INPUT ever arrives, and an injected keystroke
+		  takes the legacy WM_KEYDOWN path without passing through here at all.  This
+		  counts injected keys only in sessions that opted into raw keyboard.*/
+		if (raw->header.dwType == RIM_TYPEKEYBOARD)
+		{
+			if (!raw->header.hDevice)
+				in_raw_injected++;
+			else
+				in_raw_unenum++;
+		}
 		return;
+	}
 
 	if (rawkbd[i].qdeviceid == DEVID_UNSET)
 		rawkbd[i].qdeviceid = Keyboard_AllocateDevID();

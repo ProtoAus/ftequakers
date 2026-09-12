@@ -103,6 +103,11 @@ cvar_t	pm_standablenormal	 = CVARFD("pm_standablenormal", "0.7", CVAR_SERVERINFO
 cvar_t	pm_ladders			 = CVARFD("pm_ladders", "1", CVAR_SERVERINFO, "Climb brushes carrying Source's CONTENTS_LADDER, as Momentum does. 0 bypasses the ladder mover entirely and restores the pre-Patch-260 behaviour exactly. Note that roughly 10% of library ladder brushes belong to brush entities the QC forces non-solid (func_illusionary, func_simpleladder) and cannot be reached by any pmove trace at any setting -- that is a QC gap, not something this cvar controls.");
 cvar_t	pm_ladderdampen		 = CVARFD("pm_ladderdampen", "0.2", CVAR_SERVERINFO, "Momentum sv_ladder_dampen. How much sideways movement is damped when you meet the rungs at a glancing angle, so you climb instead of skating along the ladder's face.");
 cvar_t	pm_ladderangle		 = CVARFD("pm_ladderangle", "-0.707", CVAR_SERVERINFO, "Momentum sv_ladder_angle. Cosine of the incidence angle below which pm_ladderdampen applies; -0.707 is 135 degrees.");
+//FTESurf Patch 280.  func_slide, ON by default for the reason pm_ladders is: it is
+//intended map content (702 brushes across 17 library maps; bhop_aberrant is 484
+//of them and is nothing but slides), and 0 restores the pre-280 mover exactly --
+//no physent's flag byte is ever read, so no line of the slide path can run.
+cvar_t	pm_slide			 = CVARFD("pm_slide", "1", CVAR_SERVERINFO, "Honour func_slide as Momentum does: a brush the player slides on like a surf ramp even at shallow angles. Its faces are never ground (no friction, no walking, air acceleration only, gravity clipped along the face) and its stayonslide / allowjump / disablegravity keys apply. 0 makes every func_slide an ordinary solid brush again, which is exactly the pre-Patch-280 behaviour.");
 cvar_t	pm_sourcebounce		 = CVARFD("pm_sourcebounce", "0", CVAR_SERVERINFO, "sv_bounce equivalent: extra overbounce when an airborne player clips a wall, scaled by (1 - surfaceFriction).");
 cvar_t	pm_maxvelocity		 = CVARFD("pm_maxvelocity", "0", CVAR_SERVERINFO, "DEPRECATED override for the per-axis velocity clamp. 0 (the default) means follow sv_maxvelocity, which is the only such cvar Momentum has. Set non-zero only to make the player's clamp differ from every other entity's.");
 cvar_t	pm_standheight		 = CVARFD("pm_standheight", "62", CVAR_SERVERINFO, "Standing hull height. Momentum's g_ViewVectorsMom is 62 (mom_gamerules.cpp:36) - NOT CS:S's 72, which is what FTESurf shipped up to build 40. Note the eye at pm_viewheight 64 is deliberately ABOVE the crown.");
@@ -927,7 +932,8 @@ static qboolean WPhys_PushAngles (world_t *w, wedict_t *pusher, vec3_t move, vec
 
 		//some pushers are contents brushes, and are not solid. water cannot crush. the player just enters the water.
 		//but, the player will be moved along with the water if possible.
-		if (pusher->v->skin < 0)
+		//FTESurf Patch 280: a func_slide's skin tag is not a contents brush -- it pushes like any solid.
+		if (pusher->v->skin < 0 && !PMSLIDE_FLAGS_FROM_SKIN((int)pusher->v->skin))
 			continue;
 
 		if (check->v->solid == SOLID_NOT || check->v->solid == SOLID_TRIGGER)
@@ -1063,7 +1069,7 @@ qboolean WPhys_Push (world_t *w, wedict_t *pusher, vec3_t move, vec3_t amove)
 
 		// try moving the contacted entity
 		VectorAdd (check->v->origin, move, check->v->origin);
-		if (pusher->v->skin < 0)
+		if (pusher->v->skin < 0 && !PMSLIDE_FLAGS_FROM_SKIN((int)pusher->v->skin))	//FTESurf Patch 280: a slide tag is not a contents brush
 		{
 			pusher->v->solid = SOLID_NOT;
 			block = World_TestEntityPosition (w, check);
@@ -1121,7 +1127,8 @@ qboolean WPhys_Push (world_t *w, wedict_t *pusher, vec3_t move, vec3_t amove)
 
 		//these pushers are contents brushes, and are not solid. water cannot crush. the player just enters the water.
 		//but, the player will be moved along with the water.
-		if (pusher->v->skin < 0)
+		//FTESurf Patch 280: a func_slide's skin tag is not a contents brush -- it pushes like any solid.
+		if (pusher->v->skin < 0 && !PMSLIDE_FLAGS_FROM_SKIN((int)pusher->v->skin))
 			continue;
 
 		VectorCopy (pushorig, pusher->v->origin);
@@ -2783,7 +2790,8 @@ qboolean SV_Physics (void)
 
 		pr_global_struct->frametime = host_frametime;
 
-		SV_ProgStartFrame ();
+		sv_perf.ticks++;
+		SV_PERF(sv_perf.startframe, SV_ProgStartFrame ());
 
 		PR_RunThreads(&sv.world);
 
@@ -2798,7 +2806,7 @@ qboolean SV_Physics (void)
 #endif
 
 
-		World_Physics_Frame(&sv.world);
+		SV_PERF(sv_perf.physics, World_Physics_Frame(&sv.world));
 
 #ifdef VM_Q1
 		if (svs.gametype == GT_Q1QVM)
@@ -2940,6 +2948,7 @@ void SV_SetSourceMoveVars(void)
 	movevars.ladders			= pm_ladders.value;					//Patch 260
 	movevars.ladderdampen		= pm_ladderdampen.value > 0 ? pm_ladderdampen.value : 0.2;
 	movevars.ladderangle		= pm_ladderangle.value ? pm_ladderangle.value : -0.707;
+	movevars.slide				= pm_slide.value;					//Patch 280
 }
 
 /*
@@ -2971,6 +2980,7 @@ reason: it is the only one of the three that means what it says.
 ===========================================================================
 */
 extern cvar_t sv_cheats;
+extern cvar_t sv_gamespeed;	/*FTESurf Patch 294; declared sv_main.c:171, same idiom as sv_init.c:48*/
 
 static cvar_t *pms_lockedmovevars[] =
 {
@@ -2998,12 +3008,71 @@ static cvar_t *pms_lockedmovevars[] =
 	&pm_snaptoground,	&pm_groundquadrants,&pm_fixslopes,
 	&pm_fixedges,		&pm_fixrampbugs,	&pm_rampretrace,
 	&pm_ladders,		&pm_ladderdampen,	&pm_ladderangle,	//Patch 260
+	&pm_slide,												//Patch 280
 
 	/*FTE's anti-bunnyhop family. Having these off is a rule, not a taste.*/
 	&pm_bunnyspeedcap,	&pm_bunnyfriction,	&pm_ktjump,
 	&pm_walljump,		&pm_autobunny,		&pm_airstep,
 	&pm_pground,		&pm_stepdown,		&pm_slidefix,
 	&pm_slidyslopes,
+
+	/*FTESurf Patch 294: the server CLOCK, which is not a movement cvar and is
+	  worse than one.
+
+	  sv_main.c declares it CVARAF("sv_gamespeed", "1", "slowmo", 0) -- flags
+	  ZERO: not CVAR_CHEAT, not latched, not CVAR_NOTFROMSERVER -- and
+	  sv_main.c:5688 is
+
+	      sv.time = (Sys_DoubleTime() - sv.starttime) * sv.gamespeed;
+
+	  The QC run timer is `time - run_t_start` over exactly that clock, so
+	  `slowmo 0.1` is ten-times bullet-time WITH the run clock scaled to match:
+	  a world record typed into a console on any listen server, with the .rec,
+	  the .view and client prediction all showing a clean run.
+
+	  Nothing existing catches it.  Not SV_NoclipWatch (movetype and sv_cheats
+	  only).  Not sv_user.c's msec anti-speed-cheat, because the client divides
+	  its own frametime by the same gamespeed and the budget still balances 1:1.
+	  So the cheat is not that the player moves faster than the clock -- it is
+	  that the clock itself is slow, and every consistency check downstream is
+	  consistent.
+
+	  It is locked HERE rather than given CVAR_CHEAT because a cheat flag would
+	  be silently inert: see the essay above this table -- cls.allow_cheats and
+	  SV_MayCheat() both hand out cheats unconditionally to any single-slot
+	  server, which is every FTESurf session ever played.  This table is the one
+	  mechanism in the tree that reads sv_cheats.ival directly and therefore
+	  means what it says.
+
+	  `pause` is believed to be the same hole by a different route (sv_main.c
+	  rewinds sv.starttime so sv.time freezes, stopping the run clock with the
+	  world) and is NOT addressed here -- it is a command, not a cvar, so this
+	  table cannot reach it.
+
+	  VERIFIED 2026-09-13, both halves, and the answer is "real but unreachable".
+	  The MECHANISM is exactly as suspected -- sv_main.c, in the simulation-time
+	  block:
+
+	      if (sv.paused && sv.time > 1.5)
+	      {
+	          sv.starttime += (sv.time - oldtime)/sv.gamespeed;
+	          sv.time = oldtime;
+	      }
+
+	  -- so pausing freezes precisely the clock `time - run_t_start` is derived
+	  from.  But SV_Pause_f (sv_user.c) computes `maypause = !deathmatch.ival`
+	  when `pausable` is unset, `pausable` defaults to "" (sv_main.c:174), and
+	  FTESurf sets deathmatch 1 (sv_main.qc:470) -- so the command is refused
+	  with "Can't pause. Not allowed" before it reaches SV_TogglePause.
+
+	  IT IS CLOSED BY A SIDE EFFECT, NOT BY INTENT, which is the part worth
+	  writing down: ANYTHING THAT SETS `pausable 1` REOPENS IT, and nothing in
+	  this tree would notice.  If that ever becomes desirable, the run timer
+	  needs its own answer rather than relying on this.  The game's own
+	  clock-stop is already handled separately -- SV_TimerFreeze calls
+	  SV_TimerPractice, because "a bare `cmd sl_hold` from the console would
+	  otherwise pause a clean run for free, which is a leaderboard hole".*/
+	&sv_gamespeed,
 
 	/*NOT locked: pm_noclipspeed (noclip already voids the run, so how fast
 	  you fly while voided is a preference) and sv_spectatormaxspeed.*/
@@ -3060,6 +3129,117 @@ static qboolean SV_MovementLocked(void)
 	return !sv_cheats.ival;
 }
 
+/*
+===========================================================================
+FTESurf Patch 313: publish the lock predicate, because QC could only see half
+of it and was stamping runs with the half it had.
+
+WHAT WAS ACTUALLY WRONG.  sh_defs.qc's TF_CHEAT comment says it outright:
+"the authoritative predicate for 'were the physics locked' is the engine's
+SV_MovementLocked(), and QC can see only half of it... So this bit means
+'cheats were off', not 'the ruleset was locked'."  QC must not re-derive the
+missing half from cvar("pm_lockmovement") -- that reads the LIVE value, and
+SV_MovementLocked reads defaultstr precisely because the live one can be
+changed by the thing being policed.  The result is that a server whose
+pm_lockmovement default is 0 runs with cheats off, every mover cvar wherever
+the config left it, and every run on it stamped clean.
+
+WHY THIS IS THREE NUMBERS AND NOT THE ONE THE QC COMMENT ASKED FOR.  That
+comment said "a one-line engine patch publishing SV_MovementLocked()".  One
+line answers "is the lock engaged" and leaves the case the comment is actually
+worried about exactly as invisible as before: `locked 0` tells a reader the
+lock is off, it does not tell them whether the numbers were right anyway.  So:
+
+  *ruleset  "<locked> <off> <seq>"
+
+  locked  SV_MovementLocked(), 0 or 1.  BOTH halves, which is the whole point
+          of publishing it from here rather than letting QC assemble it.
+  off     how many cvars in pms_lockedmovevars[] currently differ from
+          SV_MovementCanonical().  Under locked 1 this is 0 by construction --
+          the callback below reverts them -- so it carries no information there
+          and all of it when the lock is off.  A server that never asked for
+          the lock but is running stock numbers is a different thing from one
+          running its own, and `locked` alone cannot tell them apart.
+  seq     a counter, incremented once every time any cvar in the table is set
+          to a value that differs from canonical, WHETHER OR NOT THE LOCK IS
+          ENGAGED.  See below.
+  breach  the subset of those that STOOD -- i.e. that happened while the lock
+          was off, so nothing reverted them.  See below.
+
+WHY seq EXISTS WHEN off ALREADY DOES.  `off` is a snapshot, and a snapshot
+cannot mark a span: a cvar moved and moved back inside a run reads 0 at both
+ends of it.  This tree has now recorded that same failure five times -- 301
+(a cvar is a request, not a grant), 306 (not-counted is not counted-zero), 307
+(true-at-start is not true-throughout), 310 (a snapshot is not a change) and
+312 (a sparse record cannot mark a span).  A counter differenced across the run
+answers the span question that neither end of it can.  It is counted under the
+lock too, and that is not redundant: the lock's revert is the very thing that
+makes `off` read 0, so without this an attempt would leave no trace anywhere
+except a console line nobody parses.
+
+It is never reset, not even at map spawn.  The only operation defined on it is
+a difference across a span, a run cannot span a map load, and a reset is one
+more thing to get wrong.
+
+WHY breach IS A SEPARATE COUNTER AND NOT JUST seq, which is the correction this
+patch took before its consumer shipped.  seq counts ATTEMPTS; under the lock an
+attempt is reverted inside the same Cvar_Set, so no physics tick ever sees the
+value and the run's physics WERE the ruleset's.  A reader that tainted on seq
+would therefore state something false about a player who mistyped a cvar name
+into the console -- the exact Patch 305 failure mode, one layer up.  But seq
+must not simply be narrowed to the ones that stood either, because a refused
+attempt is real evidence and the console line recording it is not parseable by
+anything.  So: two counters, two facts, which is the same rule this tree has
+been re-learning since 301.  The taint reads breach; the forensics read seq.
+
+breach is what makes the pair worth having at all, because QC's own sv_cheats
+watch is an EDGE (sv_player.qc:472-474, `if (sc) if (!e.run_lastcheats)`), so a
+toggle that goes 1 and back to 0 between two PlayerPostThink calls is invisible
+to it while every snapshot of this key still reads locked 1 / off 0.  A counter
+differenced across the run is the only thing that sees that window.
+
+WHY "0" AND NOT "" FOR THE UNLOCKED CASE, where *cheats uses "".
+PF_infokey_Internal falls through to svs.localinfo when the serverinfo value is
+empty (pr_cmds.c:6478-6479), so an empty *ruleset does not read as "unlocked",
+it reads as "go ask localinfo".  And the key being absent has to stay readable
+as its own third state -- "this engine predates 313 and cannot answer" -- which
+is the distinction Patch 306 exists to make.  *cheats gets to use "" because it
+is consumed as a presence test; this is not.
+
+WHAT IT DOES NOT COVER, said out loud so it is not mistaken for covered.
+pm_lockmovement's own defaultstr.  `exec cfg/default.cfg` is followed by an
+automatic cvar_lockdefaults 1 (cmd.c:1067-1070), so a second exec of a doctored
+default.cfg would rewrite the canonical value under this entire table with no
+callback anywhere and `off` would read 0 against the new numbers.  That is
+console access to the server process -- tier T3 -- which no patch in this
+series reaches and which is unreachable on an official server.  For the same
+reason: progs can overwrite any star key (PF_setserverkey, pr_cmds.c:6730), so
+this key is worth exactly what the server's progs are worth.  On the Ranked
+tier that is the point; on a listen server it is nothing, and nothing else on
+a listen server is worth any more.
+===========================================================================
+*/
+static unsigned int		pms_seq;
+static unsigned int		pms_breach;
+
+void SV_PublishRuleset(void)
+{
+	cvar_t **v;
+	int off = 0;
+	char val[64];
+
+	for (v = pms_lockedmovevars; *v; v++)
+	{
+		const char *canon = SV_MovementCanonical(*v);
+		if (canon && strcmp((*v)->string, canon))
+			off++;
+	}
+
+	Q_snprintfz(val, sizeof(val), "%i %i %u %u",
+				SV_MovementLocked()?1:0, off, pms_seq, pms_breach);
+	InfoBuf_SetStarKey(&svs.info, "*ruleset", val);
+}
+
 /*Fires after the value has already been committed (cvar.c:1041-1046), so this
   reverts rather than refuses.  Cvar_ForceSet re-enters us exactly once, and
   that pass returns at the strcmp below, so the recursion is bounded at one.*/
@@ -3068,9 +3248,32 @@ static void QDECL SV_MovementVar_Callback (struct cvar_s *var, char *oldvalue)
 	const char *canon;
 	if (sv.state != ss_active)
 		return;		/*not in a game yet; the map spawn re-applies anyway*/
-	if (!SV_MovementLocked())
-		return;
+
 	canon = SV_MovementCanonical(var);
+
+	/*Patch 313: COUNT FIRST, THEN DECIDE -- the 306 shape.  This has to sit
+	  above the SV_MovementLocked test, because the whole reason the key exists
+	  is the case where that test is false and nothing below here runs.  It is
+	  safe against the bounded re-entry the comment above describes: the
+	  re-entrant pass arrives with var->string already equal to canon, so it
+	  neither counts nor publishes and one off-canonical set costs exactly one.*/
+	if (canon && strcmp(var->string, canon))
+	{
+		pms_seq++;
+		/*...and separately, whether it STOOD.  Under the lock the revert below
+		  undoes it inside this same call, so no physics tick ever sees it and
+		  the run's physics really were the ruleset's; tainting on that would be
+		  a false statement about a player who mistyped into the console.  Only
+		  this counter may drive a taint.  See the essay above.*/
+		if (!SV_MovementLocked())
+			pms_breach++;
+	}
+
+	if (!SV_MovementLocked())
+	{
+		SV_PublishRuleset();
+		return;
+	}
 	if (!canon || !strcmp(var->string, canon))
 		return;
 
@@ -3079,6 +3282,7 @@ static void QDECL SV_MovementVar_Callback (struct cvar_s *var, char *oldvalue)
 			   "restored to \"%s\".\nUse \"sv_cheats 1\" first if you mean to "
 			   "change it; anything you set then is not a legal run.\n",
 			   var->name, canon);
+	SV_PublishRuleset();
 }
 
 void SV_LockMovementVars(void)
@@ -3336,19 +3540,30 @@ static char pms_appliedmode[32];	/*"" when the base ruleset is running*/
 static char pms_appliedsrc[16];		/*forced / mapmeta / name / none*/
 static char pms_appliedfile[MAX_QPATH];
 
-static qboolean SV_LoadGamemodeRuleset(const char *modename)
+/*FTESurf Patch 267: the per-map layer. Separate from pms_appliedfile so the
+  `movement` report can name both, and so "the mode set nothing" stays
+  distinguishable from "the map set nothing".*/
+static char pms_appliedmapfile[MAX_QPATH];
+static int  pms_mapover;		/*how many of pms_numover came from the map file*/
+
+/*
+FTESurf Patch 267: split out of SV_LoadGamemodeRuleset, which used to build the
+path itself. Nothing about the parse is mode-specific -- it is "read cvar/value
+pairs into the override table" -- and the per-map ruleset below needs exactly
+the same parse, the same refusal list and, above all, the same
+record-then-ForceSet ordering against the lock's callback. A second copy would
+be a second place for that ordering to be got wrong.
+*/
+static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 {
-	char path[MAX_QPATH], name[64];
+	char name[64];
 	char *file, *l, *e, *p;
 	size_t sz;
 	cvar_t *var;
 
-	Q_snprintfz(path, sizeof(path), "cfg/mode_%s.cfg", modename);
 	file = FS_LoadMallocFile(path, &sz);
 	if (!file)
 		return false;
-
-	Q_strncpyz(pms_appliedfile, path, sizeof(pms_appliedfile));
 
 	for (l = file; *l; l = e)
 	{
@@ -3389,8 +3604,8 @@ static qboolean SV_LoadGamemodeRuleset(const char *modename)
 		if (var == &pm_lockmovement || var == &sv_cheats || var == &sv_gamemode ||
 			(var->flags & (CVAR_CHEAT|CVAR_SEMICHEAT)))
 		{
-			Con_Printf(CON_WARNING"%s: \"%s\" may not be set by a gamemode "
-					   "ruleset - ignored\n", path, name);
+			Con_Printf(CON_WARNING"%s: \"%s\" may not be set by a %s "
+					   "- ignored\n", path, name, what);
 			continue;
 		}
 		if (pms_numover >= PMS_MAXOVERRIDE)
@@ -3414,6 +3629,77 @@ static qboolean SV_LoadGamemodeRuleset(const char *modename)
 	return true;
 }
 
+static qboolean SV_LoadGamemodeRuleset(const char *modename)
+{
+	char path[MAX_QPATH];
+
+	Q_snprintfz(path, sizeof(path), "cfg/mode_%s.cfg", modename);
+	if (!SV_LoadRulesetFile(path, "gamemode ruleset"))
+		return false;
+
+	Q_strncpyz(pms_appliedfile, path, sizeof(pms_appliedfile));
+	return true;
+}
+
+/*
+===========================================================================
+FTESurf Patch 267 -- cfg/map_<mapname>.cfg, the PER-MAP ruleset layer.
+
+WHY THIS EXISTS.  107 of the 1310 installed maps set sv_maxvelocity in their own
+entity lump -- a logic_auto firing `<targetname>,Command,sv_maxvelocity N` at
+OnMapSpawn -- and 80 of them RAISE it above the 3500 that cfg/default.cfg pins.
+surf_ofrenda asks for 6000, surf_colony 9000, and 33 maps ask for 10000.  None
+of them were getting it.  The map's own request goes through the entity I/O
+`Command` handler, which is allow-listed to say/echo/print (sv_entities.qc), and
+even if it were not, sv_maxvelocity is in pms_lockedmovevars above -- so the
+write would reach the lock's callback and be reverted on the spot.  The result
+was every one of those maps running at 3500 and being clipped where its author
+expected headroom.
+
+Momentum allows exactly this: CMomentumGameRules::RunPointServerCommandWhitelisted
+(mom_gamerules.cpp) whitelists sv_gravity, sv_maxvelocity, sv_airaccelerate and
+sv_accelerate for a map to set, gated on sv_allow_point_command.
+
+WHY A FILE AND NOT THE MAP'S OWN COMMAND.  Because the two are not the same
+trust boundary, and conflating them is how a timing game loses its leaderboard.
+A BSP is untrusted content -- it arrives with a download -- and this same
+whitelist of Momentum's is why surf_hope's logic_auto can and does fire
+`sv_airaccelerate 150` beside its sv_maxvelocity line, and surf_beyond's fires
+`sv_cheats 1;sv_airaccelerate 150;sv_enablebunnyhopping 1;...` as one string.
+Honouring the map directly would hand every one of those the physics its author
+happened to want, and a run's time is a claim about the physics it was set
+under.  A cfg in the gamedir is content the PLAYER installed, is diffable, and
+is named in the `movement` report beside every value it changed.  So the values
+are read out of the maps offline and shipped as data, and the map's live command
+stays refused.
+
+It is also the escape hatch the zone system already has in maps/zones/local/:
+any map's ruleset can be corrected without an engine build.
+
+ORDERING: after the mode file, so a map file wins a conflict -- the mode is the
+family and the map is the specific case.  It is applied on EVERY path, including
+the three the mode selection returns early on, because `surf` deliberately has no
+mode_surf.cfg (it is cfg/default.cfg) and all 107 of these maps are surf.
+Loading it only where a mode ruleset was found would have covered none of them.
+===========================================================================
+*/
+static void SV_LoadMapRuleset(const char *mapname)
+{
+	char path[MAX_QPATH];
+	int before = pms_numover;
+
+	pms_mapover = 0;
+	if (!mapname || !*mapname)
+		return;
+
+	Q_snprintfz(path, sizeof(path), "cfg/map_%s.cfg", mapname);
+	if (!SV_LoadRulesetFile(path, "map ruleset"))
+		return;
+
+	Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
+	pms_mapover = pms_numover - before;
+}
+
 /*
 Called from SV_SpawnServer, in the one window where it is both possible and
 correct: after the map name is known and the entities have spawned, and BEFORE
@@ -3422,17 +3708,34 @@ before any client sends `new` (SV_New_f writes movevars into the serverdata
 message, which is how a client learns what to predict with).  A tick later and
 the first map of a session would be predicted against the previous ruleset.
 */
-void SV_ApplyGamemode(const char *mapname)
+/*FTESurf Patch 267: the map name, stripped of any "maps/" and ".bsp". Was inline
+  in SV_ApplyGamemodeModes; factored out because the per-map ruleset needs the
+  same bare name to build its filename, and two spellings of "strip the map name"
+  is one more than can stay in agreement.*/
+static void SV_BareMapName(const char *in, char *out, size_t sz)
+{
+	size_t l;
+
+	if (!Q_strncasecmp(in, "maps/", 5))
+		in += 5;
+	Q_strncpyz(out, in, sz);
+	l = strlen(out);
+	if (l > 4 && !Q_strcasecmp(out+l-4, ".bsp"))
+		out[l-4] = 0;
+}
+
+static void SV_ApplyGamemodeModes(const char *mapname)
 {
 	char name[MAX_QPATH];
 	int mode = 0;
-	size_t l;
 	const char *src = "none", *cat;
 	svmapmeta_t meta;
 	qboolean havemeta;
 
 	SV_ClearGamemodeOverrides(true);
 	*pms_appliedmode = *pms_appliedsrc = *pms_appliedfile = 0;
+	*pms_appliedmapfile = 0;
+	pms_mapover = 0;
 	InfoBuf_SetValueForKey(&svs.info, "gamemode", "");
 	/*FTESurf Patch 227: cleared here with gamemode, so a map with no row cannot
 	  wear the previous map's tier.*/
@@ -3449,12 +3752,7 @@ void SV_ApplyGamemode(const char *mapname)
 	  spawn was given and a stray "maps/" or ".bsp" would silently defeat every
 	  prefix test below -- which fails as "no gamemode", the quietest possible
 	  wrong answer.*/
-	if (!Q_strncasecmp(mapname, "maps/", 5))
-		mapname += 5;
-	Q_strncpyz(name, mapname, sizeof(name));
-	l = strlen(name);
-	if (l > 4 && !Q_strcasecmp(name+l-4, ".bsp"))
-		name[l-4] = 0;
+	SV_BareMapName(mapname, name, sizeof(name));
 	mapname = name;
 
 	/*
@@ -3557,6 +3855,30 @@ void SV_ApplyGamemode(const char *mapname)
 }
 
 /*
+FTESurf Patch 267.  The mode selection above returns early on three separate
+paths -- `sv_gamemode none`, no gamemode detected, and no ruleset file for the
+mode that was detected -- and the per-map layer has to run on all of them.  The
+third is not an edge case: surf has no mode_surf.cfg by design, so EVERY surf map
+takes it, and every map this layer was written for is a surf map.  Hence a
+wrapper rather than a call bolted onto the end of the function.
+*/
+void SV_ApplyGamemode(const char *mapname)
+{
+	char name[MAX_QPATH];
+
+	SV_ApplyGamemodeModes(mapname);
+
+	if (!mapname || !*mapname)
+		return;
+	SV_BareMapName(mapname, name, sizeof(name));
+	SV_LoadMapRuleset(name);
+
+	if (pms_mapover)
+		Con_Printf("^5movement^7: %s adds %i cvar%s from %s\n",
+				   name, pms_mapover, (pms_mapover==1)?"":"s", pms_appliedmapfile);
+}
+
+/*
 `movement` -- what ruleset is running, where it came from, and every cvar that
 departs from cfg/default.cfg because of it.
 
@@ -3581,10 +3903,25 @@ void SV_Movement_f(void)
 			   *pms_appliedsrc?pms_appliedsrc:"nothing",
 			   *pms_appliedfile?va(" (%s)", pms_appliedfile):"");
 
+	/*Patch 267: named separately rather than folded into the line above. A
+	  per-map file is the one override source that is NOT the same for every map
+	  in a mode, so "which physics was this time set under" has to be able to
+	  name it -- and if it is absent, saying so is the answer to the same
+	  question.*/
+	if (*pms_appliedmapfile)
+		Con_Printf("  per-map: %s, %i cvar%s\n", pms_appliedmapfile,
+				   pms_mapover, (pms_mapover==1)?"":"s");
+
 	if (!SV_MovementLocked())
 		Con_Printf("  ^3the ruleset lock is off^7 - %s\n",
 				   sv_cheats.ival?"sv_cheats is 1, so no run here is legal"
 								 :"pm_lockmovement's default is 0");
+
+	/*Patch 313: print the published key rather than re-deriving it here, so
+	  this line is a test of what QC will actually read and not a second opinion
+	  that could agree while the key was stale.*/
+	Con_Printf("  *ruleset \"%s\"  (locked off seq breach)\n",
+			   InfoBuf_ValueForKey(&svs.info, "*ruleset"));
 
 	if (pms_numover)
 	{

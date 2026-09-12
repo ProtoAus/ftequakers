@@ -610,6 +610,8 @@ cvar_t r_particledesc	= CVARAF("r_particledesc",		"",			"r_particlesdesc",	CVAR_
 cvar_t r_particlesystem = CVARFC("r_particlesystem",	IFMINIMAL("classic", "script"), CVAR_SEMICHEAT|CVAR_ARCHIVE, R_ParticleSystem_Callback);
 cvar_t r_particledesc = CVARAF("r_particledesc",		"classic",	"r_particlesdesc", CVAR_SEMICHEAT|CVAR_ARCHIVE);
 #endif
+//FTESurf Patch 272: see R_Particles_KillAllEffects in p_script.c.
+cvar_t r_part_keepuser = CVARFD("r_part_keepuser", "1", CVAR_SEMICHEAT, "Effects parsed by an r_part command with an EMPTY namespace (console, exec, a CSQC localcmd exec, or a server-stuffed block: config \"\", loaded 2) survive r_particledesc callbacks, which the engine forces on every map load to pick up per-map sets. They still go with vid_restart, an r_particlesystem change, or being redefined. 0 restores the old behaviour, where every callback unloaded every effect; a server that disallows semicheats forces 0, as it does for r_particledesc itself. Effects parsed inside `r_part namespace X` belong to set X and are reset with it, as before.");
 extern cvar_t r_bouncysparks;
 extern cvar_t r_part_rain;
 extern cvar_t r_bloodstains;
@@ -655,6 +657,7 @@ void P_InitParticleSystem(void)
 
 	//particles
 	Cvar_Register(&r_particledesc, particlecvargroupname);
+	Cvar_Register(&r_part_keepuser, particlecvargroupname);	//FTESurf Patch 272
 	Cvar_Register(&r_bouncysparks, particlecvargroupname);
 	Cvar_Register(&r_part_rain, particlecvargroupname);
 
@@ -787,6 +790,19 @@ void P_Shutdown(void)
 	pe = NULL;
 
 	R_Clutter_Purge();
+}
+
+//FTESurf Patch 272: see PScript_LoadedCensus in p_script.c.  Callable from
+//anywhere on the client (prototype in common/particles.h); a no-op unless the
+//scripted system is the live one.
+void P_LoadedCensus(const char *where)
+{
+#ifdef PSET_SCRIPT
+	if (developer.ival < 2)	//the per-frame path ends here: one compare, no call into p_script.c.
+		return;
+	if (pe == &pe_script)
+		PScript_LoadedCensus(where);
+#endif
 }
 
 //traces against renderable entities

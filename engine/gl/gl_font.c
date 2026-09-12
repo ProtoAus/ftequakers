@@ -533,7 +533,13 @@ static void Font_Flush(void)
 		return;
 	if (fontplanes.planechanged)
 	{
-		Image_Upload(fontplanes.texnum[fontplanes.activeplane], TF_RGBA32, (void*)fontplanes.plane, NULL, PLANEWIDTH, PLANEHEIGHT, 1, IF_UIPIC|IF_NEAREST|IF_NOPICMIP|IF_NOMIPMAP|IF_NOGAMMA|IF_NOPURGE);
+		/*FTESurf Patch 297: honour r_font_linear.  This used to hardcode
+		  IF_NEAREST, while the plane texture is CREATED at :490 with
+		  (r_font_linear.ival?IF_LINEAR:IF_NEAREST) -- so r_font_linear 1 changed
+		  the creation flag, and the padding choice at :685 that reads it back,
+		  but never the sampler actually uploaded with.  The cvar silently did
+		  half of what it says.*/
+		Image_Upload(fontplanes.texnum[fontplanes.activeplane], TF_RGBA32, (void*)fontplanes.plane, NULL, PLANEWIDTH, PLANEHEIGHT, 1, IF_UIPIC|(r_font_linear.ival?IF_LINEAR:IF_NEAREST)|IF_NOPICMIP|IF_NOMIPMAP|IF_NOGAMMA|IF_NOPURGE);
 
 		fontplanes.planechanged = false;
 	}
@@ -599,7 +605,13 @@ void Font_FlushPlane(void)
 
 	if (fontplanes.planechanged)
 	{
-		Image_Upload(fontplanes.texnum[fontplanes.activeplane], TF_RGBA32, (void*)fontplanes.plane, NULL, PLANEWIDTH, PLANEHEIGHT, 1, IF_UIPIC|IF_NEAREST|IF_NOPICMIP|IF_NOMIPMAP|IF_NOGAMMA|IF_NOPURGE);
+		/*FTESurf Patch 297: honour r_font_linear.  This used to hardcode
+		  IF_NEAREST, while the plane texture is CREATED at :490 with
+		  (r_font_linear.ival?IF_LINEAR:IF_NEAREST) -- so r_font_linear 1 changed
+		  the creation flag, and the padding choice at :685 that reads it back,
+		  but never the sampler actually uploaded with.  The cvar silently did
+		  half of what it says.*/
+		Image_Upload(fontplanes.texnum[fontplanes.activeplane], TF_RGBA32, (void*)fontplanes.plane, NULL, PLANEWIDTH, PLANEHEIGHT, 1, IF_UIPIC|(r_font_linear.ival?IF_LINEAR:IF_NEAREST)|IF_NOPICMIP|IF_NOMIPMAP|IF_NOGAMMA|IF_NOPURGE);
 
 		fontplanes.planechanged = false;
 	}
@@ -713,7 +725,12 @@ static struct charcache_s *Font_LoadGlyphData(font_t *f, CHARIDXTYPE charidx, FT
 		fontplanes.planerowh = bmh+pad*2;
 	fontplanes.planerowx += bmw+pad*2;
 
-	out = &fontplanes.plane[c->bmx+((int)c->bmy-pad)*PLANEHEIGHT];
+	/*FTESurf Patch 297: row stride is PLANEWIDTH, not PLANEHEIGHT.  Every write
+	  loop below advances by PLANEWIDTH, so this start offset disagreed with the
+	  loops that use it.  Latent only because FIMAGEHEIGHT is #defined to
+	  FIMAGEWIDTH (:229-230), making the atlas square; it lands as a tripwire for
+	  whoever makes it non-square, not as a fix for anything visible today.*/
+	out = &fontplanes.plane[c->bmx+((int)c->bmy-pad)*PLANEWIDTH];
 	if (pixelmode == FT_PIXEL_MODE_GRAY)
 	{	//8bit font
 		for (y = -pad; y < 0; y++)
@@ -785,9 +802,27 @@ static struct charcache_s *Font_LoadGlyphData(font_t *f, CHARIDXTYPE charidx, FT
 					out[x] = ((union byte_vec4_u*)data)[x];
 				else
 				{
-					out[x].rgba[0] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+0])<<8;
-					out[x].rgba[1] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+1])<<8;
-					out[x].rgba[2] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+2])<<8;
+					/*FTESurf Patch 293b: >>8, not <<8.
+
+					  rgba[] is a BYTE.  a*c maxes at 255*255 = 65025, and <<8
+					  leaves zeros in the low eight bits for EVERY value of a and
+					  c -- so the byte store kept exactly 0 unconditionally.  Not
+					  a precision loss: every non-opaque texel of an
+					  FT_PIXEL_MODE_RGBA_SA glyph (i.e. a colour emoji) lost all
+					  of its colour and premultiplied to black, giving a dark
+					  fringe following the letterform.
+
+					  >>8 is a/256 rather than the strictly correct a/255, which
+					  is the usual premultiply approximation and is plainly what
+					  was meant -- the alpha row directly below is unscaled.
+
+					  NOT the cause of the grey boxes reported on surf_tensor2:
+					  this path is colour-emoji only, and a fringe that follows
+					  the glyph is a different shape from a uniform cell-sized
+					  rectangle.  Found while excluding it.*/
+					out[x].rgba[0] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+0])>>8;
+					out[x].rgba[1] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+1])>>8;
+					out[x].rgba[2] = (((unsigned char*)data)[x*4+3]*((unsigned char*)data)[x*4+2])>>8;
 					out[x].rgba[3] = ((unsigned char*)data)[x*4+3];
 				}
 			}
@@ -3322,10 +3357,14 @@ int Font_DrawChar(int px, int py, unsigned int charflags, unsigned int codepoint
 		}
 	}
 
+	/*FTESurf Patch 297: T divides by PLANEHEIGHT, not PLANEWIDTH.  Same latent
+	  confusion as the stride at :716, in both the scaled and unscaled draw
+	  paths, and equally invisible while the atlas is square.  Fixed together so
+	  a future non-square plane fails in one place rather than subtly in three.*/
 	s0 = (float)c->bmx/PLANEWIDTH;
-	t0 = (float)c->bmy/PLANEWIDTH;
+	t0 = (float)c->bmy/PLANEHEIGHT;
 	s1 = (float)(c->bmx+c->bmw)/PLANEWIDTH;
-	t1 = (float)(c->bmy+c->bmh)/PLANEWIDTH;
+	t1 = (float)(c->bmy+c->bmh)/PLANEHEIGHT;
 
 	switch(c->texplane)
 	{
@@ -3584,10 +3623,14 @@ float Font_DrawScaleChar(float px, float py, unsigned int charflags, unsigned in
 		}
 	}
 
+	/*FTESurf Patch 297: T divides by PLANEHEIGHT, not PLANEWIDTH.  Same latent
+	  confusion as the stride at :716, in both the scaled and unscaled draw
+	  paths, and equally invisible while the atlas is square.  Fixed together so
+	  a future non-square plane fails in one place rather than subtly in three.*/
 	s0 = (float)c->bmx/PLANEWIDTH;
-	t0 = (float)c->bmy/PLANEWIDTH;
+	t0 = (float)c->bmy/PLANEHEIGHT;
 	s1 = (float)(c->bmx+c->bmw)/PLANEWIDTH;
-	t1 = (float)(c->bmy+c->bmh)/PLANEWIDTH;
+	t1 = (float)(c->bmy+c->bmh)/PLANEHEIGHT;
 
 	if (c->texplane >= DEFAULTPLANE)
 	{

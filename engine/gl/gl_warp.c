@@ -75,10 +75,33 @@ cvar_t r_skyfog								= CVARD  ("r_skyfog", "0.5", "This controls an alpha-blen
 //masked.  World geometry is still hidden by the BSP's own PVS, which is why the
 //leak shows up as entities and never as walls.
 //
-//Default 1, because on a Quake or Half-Life BSP the mask is what the engine
-//already intends (SKYMUSTBEMASKED is true for both).  Set to 0 to get the old
-//behaviour back if a map turns out to depend on seeing through its own sky.
-cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "1", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox on Quake/Half-Life BSPs.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not (default).\n2: always mask, on every game.");
+/*
+Default 1, because on a Quake or Half-Life BSP the mask is what the engine
+already intends (SKYMUSTBEMASKED is true for both).  Set to 0 to get the old
+behaviour back if a map turns out to depend on seeing through its own sky.
+
+FTESurf Patch 296: DEFAULT 1 -> 2, ON A SOURCE MAP'S EVIDENCE.
+
+Reported as "I render a bunch of random crap out the windows, and on CS:S and
+Momentum I see nothing there" on surf_fantasy, and confirmed on screen by the
+reporter: 2 removes it.  What is showing through is not a 3D skybox -- that map
+has NO sky_camera at all, in either the Momentum or the CS:S build, so there is
+nothing behind its sky in any engine.  It is main-map geometry drawn over sky
+pixels that carry no depth, which is exactly the failure the 1 arm accepts.
+
+THIS IS A SOURCE-ONLY CHANGE BY CONSTRUCTION, not by intent.  The value is
+tested in exactly ONE place, the fg_new branch of R_SkyMaskWantedForGame below:
+fg_quake3 returns before it and Quake/Quake2/Half-Life return true after it
+regardless.  So 1 and 2 are behaviourally identical on every game except
+Source/Doom3/CoD, and no Quake-family map can move by a pixel.
+
+Two notes further down this file argue the other way and are the reason 1 was
+chosen originally -- masking can slice a prop that intersects a sky brush, and
+under RDF_SKIPSKY it can depth-reject the world behind one.  Both are real; both
+were weighed against a fault the reporter can see from spawn on a map he plays,
+and 1 remains one word away.
+*/
+cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "2", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not.\n2: always mask, on every game (default since Patch 296; on a Source map this is the only setting that stops the rest of the level drawing through the sky).");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;

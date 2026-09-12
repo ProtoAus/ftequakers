@@ -37,6 +37,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern texid_t missing_texture;
 texid_t r_whiteimage, r_blackimage;
+//FTESurf Patch 268 B: the $envcubemap sentinel.  A real 1x1x6 mid-grey cube whose
+//status is TEX_LOADED, so a material that wants the map's nearest BAKED cubemap can
+//pass the (TEXLOADED) permutation gate in gl_backend.c without naming a texture of
+//its own; T_GEN_REFLECTCUBE recognises this exact pointer and binds curbatch->envmap
+//instead.  Created in Shader_Init, below.
+texid_t r_envcubemap_tex;
 qboolean shader_reload_needed;
 static qboolean shader_rescan_needed;
 
@@ -2948,6 +2954,8 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"e_light_dir",				SP_E_L_DIR},		//lightgrid light dir. dotproducts should be clamped to 0-1.
 /**/{"e_light_mul",				SP_E_L_MUL},		//lightgrid light scaler.
 /**/{"e_light_ambient",			SP_E_L_AMBIENT},	//lightgrid light value for the unlit side.
+/**/{"e_light_ambientcube[0]",	SP_E_L_AMBIENTCUBE},	//FTESurf Patch 268 C: Source's six-face ambient cube, world axes, +x -x +y -y +z -z
+/**/{"e_light_ambientcube",		SP_E_L_AMBIENTCUBE},
 
 	{"s_colour",				SP_S_COLOUR},	//the rgbgen/alphagen stuff. obviously doesn't work with per-vertex ones.
 
@@ -3158,6 +3166,17 @@ static void Shader_ReflectCube(parsestate_t *ps, const char **ptr)
 {
 	char *token = Shader_ParseSensString(ptr);
 	unsigned int flags = Shader_SetImageFlags (ps, ps->pass, &token, IF_TEXTYPE_CUBE);
+	//FTESurf Patch 268 B: the sentinel spelling.  `reflectcube "$envcubemap"` means
+	//"reflect whatever baked cubemap the BATCH carries" -- the hl2 plugin emits it
+	//for a literal $envmap "env_cubemap", which names no file.  Without this the
+	//token would reach R_LoadHiResTexture, fail, and land in defaulttextures as a
+	//TEX_FAILED image that the TEXLOADED gate ignores.  Tested after
+	//Shader_SetImageFlags so a $nearest:/$cube: prefix spelling still matches.
+	if (!Q_stricmp(token, "$envcubemap"))
+	{
+		ps->s->defaulttextures->reflectcube = r_envcubemap_tex;
+		return;
+	}
 	ps->s->defaulttextures->reflectcube = Shader_FindImage(ps, token, flags);
 }
 static void Shader_ReflectMask(parsestate_t *ps, const char **ptr)
@@ -5015,13 +5034,46 @@ qboolean Shader_Init (void)
 	}
 	
 	if (!qrenderer)
+	{
 		r_whiteimage = r_nulltex;
+		r_envcubemap_tex = r_nulltex;	//FTESurf Patch 268 B: no renderer, no sentinel (and never a stale pointer into a destroyed image list)
+	}
 	else
 	{
 		memset(wibuf, 0xff, sizeof(wibuf));
 		r_whiteimage = R_LoadTexture("$whiteimage", 4, 4, TF_RGBA32, wibuf, IF_NOMIPMAP|IF_NOPICMIP|IF_NEAREST|IF_NOGAMMA|IF_NOPURGE);
 		memset(wibuf, 0, sizeof(wibuf));
 		r_blackimage = R_LoadTexture("$blackimage", 4, 4, TF_RGBA32, wibuf, IF_NOMIPMAP|IF_NOPICMIP|IF_NEAREST|IF_NOGAMMA|IF_NOPURGE);
+
+		/*
+		FTESurf Patch 268 B: the $envcubemap sentinel, created beside the other two
+		builtin images.  R_LoadTexture cannot make a CUBE, so this follows the cube
+		precedent in vk_init.c:2219-2227 instead: create, then upload 1x1x6.
+
+		Image_Upload sets tex->status = TEX_LOADED synchronously (image.c:15229),
+		which is the whole point -- TEXLOADED is what the permutation gate tests,
+		and D3D9 binds this cube for real.
+
+		FindTexture FIRST: Shader_Init runs again on vid_restart and
+		Image_CreateTexture happily makes duplicates (image.c:14973).  Re-uploading
+		an existing one is harmless (the "nothing changed" early-out only applies
+		when data is NULL) and re-arms TEX_LOADED after a renderer restart.
+		*/
+		{
+			//The flag set is spelled IDENTICALLY in all three calls.  Find and
+			//Create must agree or a vid_restart makes a second image; and the
+			//stored flags must match the upload's, or (under a VID_SRGBAWARE
+			//context) Image_CreateTexture_Internal stamps IF_SRGB on an image whose
+			//data was converted without it, and the "neutral grey" that
+			//r_reflectcube_nosky 1 binds stops being 0.502.
+			unsigned int greycube[6] = {0xff808080,0xff808080,0xff808080,0xff808080,0xff808080,0xff808080};	//RGBA8 little-endian: 128,128,128,255 per face
+			unsigned int cubeflags = IF_NEAREST|IF_NOMIPMAP|IF_NOPICMIP|IF_NOGAMMA|IF_NOSRGB|IF_TEXTYPE_CUBE|IF_NOPURGE;
+			r_envcubemap_tex = Image_FindTexture("$envcubemap", NULL, cubeflags);
+			if (!r_envcubemap_tex)
+				r_envcubemap_tex = Image_CreateTexture("$envcubemap", NULL, cubeflags);
+			if (r_envcubemap_tex)
+				Image_Upload(r_envcubemap_tex, TF_RGBA32, greycube, NULL, 1, 1, 6, cubeflags);
+		}
 	}
 
 	Shader_NeedReload(true);
@@ -6223,7 +6275,39 @@ static void Shader_Finish (parsestate_t *ps)
 		pass = &s->passes[s->numpasses++];
 		pass->tcgen = TC_GEN_BASE;
 		pass->texgen = T_GEN_DIFFUSE;
-		pass->shaderbits |= SBITS_MISC_DEPTHWRITE;
+		/*
+		FTESurf Patch 300: AN ADDITIVE SURFACE MUST NOT WRITE DEPTH, and this was
+		the one shape in the shader system where it did.
+
+		A real pass earns depthwrite by being opaque -- Shader_EndPass grants it
+		only when the blend is `ONE ZERO` (:5732-5736).  This back-fill, for a
+		top-level `program` with no pass block of its own, granted it
+		unconditionally.  The bits it is granting it ON TOP OF are not empty:
+		Shader_ProgBlendFunc aims at passes[0] before numpasses exists
+		(:3150-3162), so by the time we get here `progblendfunc add` has already
+		written SRCBLEND_ONE|DSTBLEND_ONE, and the `|=` below preserved it.  The
+		result was an additive surface that also stamped the depth buffer --
+		which, since SHADER_SORT_ADDITIVE draws after opaque, means every glow
+		occluded the glows and blended surfaces drawn behind it.
+
+		Reached today by vmt/emissive (Patch 250 -- mine, and it has had this
+		since it shipped), and it is what Patch 300 would have inflicted on the
+		1,659 additive UnlitGeneric and 838 additive Sprite materials it moves
+		onto a program.  The CSQC sprite draws are immune and always were:
+		BEF_FORCEADDITIVE clears SBITS_MISC_DEPTHWRITE outright
+		(gl_backend.c:3289-3293), which is exactly why the reported artefact was
+		a fog colour and not a depth hole.
+
+		NARROW ON PURPOSE -- additive only, not every blend.  A `progblendfunc
+		src_alpha one_minus_src_alpha` shader (every $translucent material that
+		emits a program: glass, and a lot of it) also writes depth here, and by
+		the same argument probably should not.  That is a bigger, older question
+		about sort order on a lot of maps, and it is not this patch's to answer;
+		changing it as a side effect of a fog fix is how a fog fix becomes a
+		regression report about glass.  Recorded, not acted on.
+		*/
+		if ((pass->shaderbits & SBITS_BLEND_BITS) != (SBITS_SRCBLEND_ONE|SBITS_DSTBLEND_ONE))
+			pass->shaderbits |= SBITS_MISC_DEPTHWRITE;
 		pass->rgbgen = RGB_GEN_IDENTITY;
 		pass->alphagen = ALPHA_GEN_IDENTITY;
 		pass->numMergedPasses = 1;

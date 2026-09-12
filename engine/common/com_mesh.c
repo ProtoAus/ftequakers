@@ -4141,6 +4141,15 @@ static qboolean Mod_Trace(model_t *model, int forcehullnum, const framestate_t *
 	return trace->fraction != 1;
 }
 
+//FTESurf Patch 291: see com_mesh.h.  Mod_Trace itself, with no axis (the caller is already in
+//model space) and every mesh solid to the ray -- shader_here wants what is VISIBLE, and for an hl2
+//static prop that is not what funcs.NativeTrace answers: mod_hl2.c builds that from the model's
+//.phy hull, or from nothing at all for a non-solid prop.
+qboolean Mod_TraceRenderMesh(model_t *model, const framestate_t *framestate, const vec3_t start, const vec3_t end, trace_t *trace)
+{
+	return Mod_Trace(model, 0, framestate, NULL, start, end, vec3_origin, vec3_origin, false, ~0u, trace);
+}
+
 static unsigned int Mod_Mesh_PointContents(struct model_s *model, const vec3_t axis[3], const vec3_t p)
 {	//trisoup doesn't have any actual volumes, thus we can't report anything...
 	return 0;

@@ -1458,6 +1458,10 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	e->vertlightcolors = NULL;
 	e->vertlightbytes = NULL;	//FTESurf Patch 259: the byte form, set by the hl2 plugin's static props
 	e->vertlightverts = 0;
+	//FTESurf Patch 268 C: and the ambient cube, for the same recycled-slot reason.  Only the
+	//hl2 plugin's static props fill it, inside their own light_known cache; a copy of one
+	//arrives here with light_known already set and has returned above with its cube intact.
+	memset(e->light_cube, 0, sizeof(e->light_cube));
 	if (r_propvertexlight.ival && clmodel && clmodel->type == mod_alias && cl.worldmodel && cl.worldmodel->proplights)
 		e->vertlightcolors = (vec4_t*)PropLight_Find(cl.worldmodel, clmodel->name, e->origin, e->angles, &e->vertlightverts, bakedmean);
 

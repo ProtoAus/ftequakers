@@ -3028,12 +3028,23 @@ void M_Menu_Video_f (void)
 	};
 #else
 	extern cvar_t vid_fullscreen;
-	static const char *fullscreenopts[] = {
+	//FTESurf Patch 268: the labels follow vid_fullscreen_order, because the VALUES
+	//are what the cvar stores and only their meaning moved.  Getting this wrong
+	//would leave the menu quietly selecting exclusive when you picked borderless.
+	extern cvar_t vid_fullscreen_order;
+	static const char *fullscreenopts_upstream[] = {
 		"Windowed",
 		"Fullscreen",
 		"Borderless Windowed",
 		NULL
 	};
+	static const char *fullscreenopts_ftesurf[] = {
+		"Windowed",
+		"Borderless Windowed",
+		"Fullscreen",
+		NULL
+	};
+	const char **fullscreenopts = vid_fullscreen_order.ival?fullscreenopts_ftesurf:fullscreenopts_upstream;
 	static const char *fullscreenvalues[] = {"0", "1", "2", NULL};
 #endif
 	extern cvar_t vid_renderer;

@@ -30,11 +30,269 @@ static cvar_t m_accel_senscap	= CVARAD("m_accel_senscap",	"0",	"cl_mouseSensCap"
 /*FTESurf Patch 202: the raw input journal.  The cvar lives up here with the rest of
   this file's cvars; the machinery it belongs to is a long way down, just above
   IN_Commands, because that is where it hooks in.*/
-static cvar_t in_journal_maxkb	= CVARD("in_journal_maxkb", "8192", "Memory cap on a raw input journal, in kilobytes. About 1.15 MB per minute at a 1000 Hz polling rate, so the default is roughly seven minutes; past that the file records a 'truncated' marker and stops.");
+/*FTESurf Patch 295: 8192 -> 262144.  The cap is a backstop now, not a budget.
+
+  A truncated journal is a THIRD state for the submission rule to carry: "no
+  .hid, no rank" is one condition, and a file that is present but stops early is
+  neither present nor absent.  Every consumer -- the submission gate, hidcheck,
+  the auditor reading it -- would need a branch for it, and the first time it
+  fired would be on someone's long run, i.e. exactly when it costs the most.
+  Cheaper to make it not happen: at ~1.15 MB/min of events plus the Patch 293 'v'
+  records, 256 MB is about 85 minutes, which no real run reaches.
+
+  It costs nothing to raise.  in_jrn_cap starts at 65536 and DOUBLES on demand
+  (IN_Journal_Raw), bounded by in_jrn_max -- so the allocation tracks what is
+  actually written and a short run still holds 64 KB.  What does scale with it is
+  the synchronous COM_WriteFile at run end (see the essay below): 8192 held that
+  to about 40 ms, so a journal that genuinely reached this cap would hitch for
+  something over a second.  That only happens on a run long enough that the
+  truncation would have been worse.*/
+static cvar_t in_journal_maxkb	= CVARD("in_journal_maxkb", "262144", "Memory cap on a raw input journal, in kilobytes. About 1.15 MB per minute at a 1000 Hz polling rate, so the default is roughly 85 minutes; past that the file records a 'truncated' marker and stops. Sized so a real run never truncates -- a truncated journal is a state the run-submission rule would otherwise have to carry.");
 static void IN_JournalBegin_f(void);
 static void IN_JournalEnd_f(void);
 static void IN_JournalNote_f(void);
 static void IN_JournalSynth_f(void);
+
+/*
+FTESurf Patch 301 -- WHAT THE INPUT STACK ACTUALLY GAVE US, not what was asked for.
+
+The .hid header has always recorded `rawinput` and `rawkbd` from the CVARS.  A cvar is
+a request.  It is granted by INS_RawInput_Init enumerating devices and binding them, and
+that can fail while the cvar still reads 1: no enumerable mouse, an RDP session (every
+device is the Terminal Services virtual one, excluded unless in_rawinput_rdp), a
+user32 export missing, or a RegisterRawInputDevices that simply refused.  In every one of
+those cases the engine falls back to INS_Accumulate's GetCursorPos/SetCursorPos recentre
+-- ONE already-OS-summed, OS-ACCELERATED delta per call, about twice a frame -- and the
+header said `rawinput 1` over the top of it.
+
+That is a false statement in an evidence file, and it is the worst kind: it is false
+exactly in the sessions where the data is least trustworthy, so it reads as a clean run
+recorded under the strict profile.  A reader checking Patch 293's yaw identity against
+such a file is checking arithmetic against OS-accelerated deltas and cannot tell.
+
+So the two numbers below carry the GRANT beside the request.  Both keys are kept --
+`rawinput` is still the cvar, `rawmice` is what it got -- because they answer different
+questions and a reader that only has one of them is missing half the picture: cvar 0 with
+a live count is impossible, cvar 1 with a count of 0 is the RDP case, and cvar 0 with a
+count of 0 is simply a player who turned it off.
+
+THREE STATES, AND -1 IS NOT ZERO.  -1 means this platform's backend does not report the
+figure -- in_generic.c is the cross-platform file and in_win.c is one of several backends,
+so an SDL or X11 build never touches these and must not be described as having found no
+mouse.  Zero is a measurement ("raw input ran and bound nothing"); -1 is the absence of
+one.  Collapsing them would put a fault on every non-Windows journal, and a reader that
+treats -1 as 0 would conclude the strictest thing about the least evidence.
+
+Defined HERE rather than in in_win.c because in_generic.o is in CLIENT_OBJS (every client
+build has it) while in_win.o is Windows-only; a backend that never assigns them leaves the
+honest -1 standing.  in_win.c maintains them at three sites, all marked Patch 301.
+*/
+int in_rawmice_live = -1;
+int in_rawkbd_live = -1;
+
+/*FTESurf Patch 306: THE REPORTS RAW INPUT THREW AWAY.
+
+INS_RawInput_MouseRead matches raw->header.hDevice against the enumerated device table
+and RETURNS if it is not there (in_win.c), and INS_RawInput_KeyboardRead does the same.
+That drop is the defence -- it is why an injected SendInput motion never reaches the
+view -- and it is completely SILENT.  So an audit of a .hid cannot today tell
+
+    nobody injected anything
+
+apart from
+
+    somebody injected forty thousand events and the engine discarded every one.
+
+Those two sessions produce byte-identical journals.  The defence working and the attack
+never happening look the same, which means the ONE piece of evidence a defeated attempt
+leaves behind is being deleted at the moment it is generated.  Counting it costs two ints
+and one branch on a path that was already returning.
+
+TWO COUNTERS, BECAUSE THEY ARE TWO FINDINGS AND COLLAPSING THEM WOULD ACCUSE.
+
+  in_raw_injected  a report with NO DEVICE HANDLE AT ALL (hDevice == NULL).  That is
+                   what the OS hands us for synthesized input -- SendInput and the
+                   journal-playback hooks -- and there is no innocent reading of it.
+
+  in_raw_unenum    a report carrying a REAL handle that is not in our table.  A mouse
+                   plugged in after INS_RawInput_Init enumerated, or a Terminal Services
+                   device excluded because in_rawinput_rdp is 0.  Entirely innocent, and
+                   ALSO a live usability bug: that device's motion is going nowhere.
+
+A reader given one number could not separate "you were attacked" from "you hot-plugged a
+mouse", and the first of those is an accusation about a person.  They stay apart.
+
+WHAT THIS DOES NOT PROVE, and the limits are larger than the counter.
+
+  - It says the injection was REJECTED, not that it was attempted and succeeded.  These
+    events did not reach the view; that is the whole reason they are countable.  A
+    non-zero count is evidence of an attempt that FAILED.
+  - It is blind to the two holes that are actually open.  Injected mouse BUTTONS still
+    arrive as legacy WM_*BUTTONDOWN, which in_win.c keeps deliberately (the comment at
+    the RIDEV_NOLEGACY line says click-state tracking needs them), and with
+    in_rawinput_keyboard 0 every keystroke is legacy.  Neither path passes through the
+    handle check, so neither is counted here.  This counter watches the door that is
+    shut, not the two that are open.
+  - A hardware replay device (Arduino/Pico/KMBox) enumerates as a genuine mouse and is
+    counted as neither.  It is indistinguishable here by construction.
+
+So this is a tripwire, honestly sized: it catches the unmodified public injector, and it
+turns a successful defence into a recorded one.  It is not a detector and nothing may
+auto-accuse from it.
+
+THREE STATES, AND -1 IS NOT ZERO -- the same rule as in_rawmice_live above, for the same
+reason.  -1 means this backend does not count; 0 is a measurement.  Defined here because
+in_generic.o is in every client build while in_win.o is Windows-only, so a backend that
+never assigns them leaves the honest -1 standing.  in_win.c lifts them to 0 when raw
+input actually binds, and they are monotone from there -- never reset, because the
+journal reports DELTAS against a baseline it took at begin, and a counter that restarts
+would hand it a negative one.*/
+int in_raw_injected = -1;
+int in_raw_unenum = -1;
+
+/*FTESurf Patch 307: THE BUTTON THAT GOT THROUGH.
+
+Patch 306 counts reports raw input REJECTED.  This counts one that it ACCEPTED without
+being able to corroborate, and that difference is the whole point: nothing 306 counts
+reached the game, while every one of these became a real K_MOUSE1..5 and was acted on.
+
+THE HOLE, and it is in shipped code rather than hypothetical.  in_win.c registers mouse
+raw input with dwFlags 0 -- RIDEV_NOLEGACY is written out and deliberately not used --
+so legacy WM_*BUTTONDOWN still flows alongside WM_INPUT.  An injected click's WM_INPUT
+is dropped at the hDevice check, which sits BEFORE the button stamping, so
+rawbuttondown[] is never set and rawbuttontime[] stays stale; INS_MouseEvent's dedupe
+then sees a legacy press that raw did not account for and passes it through as genuine.
+That is enough for scroll-bhop, for jump timing, and for the gate the sample cheat uses.
+
+WHY THE LEGACY PATH CANNOT SIMPLY BE CLOSED, measured and written down in this tree
+before this patch existed (see the essay on the dedupe in INS_MouseEvent): a Windows
+precision touchpad is a HID DIGITIZER, not a RIM_TYPEMOUSE, so it produces no
+RI_MOUSE_BUTTON_* flags at all and the legacy message is the ONLY press it has.  Closing
+the path costs those users every mouse button, for taps and for press-and-hold alike, and
+it presents as a dead hit-test rather than as missing input -- which is what made it hard
+to find the first time.  So the block is real but it is a TRADE, and it ships as an
+opt-in cvar rather than as a new default.
+
+WHICH MAKES COUNTING THE PRIMARY DEFENCE HERE, not the consolation prize.  The count is
+only ambiguous on a machine that has a non-RIM_TYPEMOUSE pointer.  The Patch 303 device
+table says whether one exists, so a reader holding both can separate the two cases: N
+uncorroborated presses on a session that enumerated two ordinary mice and nothing else is
+not a touchpad, and on the overwhelming majority of ranked machines this number is 0 for
+honest play by construction.
+
+WHAT IT STILL CANNOT SAY.  It cannot name the cause -- an on-screen keyboard, a remote
+desktop session, accessibility software and some vendor mouse utilities all click through
+the legacy path legitimately.  It is a NOTE and a reason to look, never an accusation,
+and hidcheck must treat it that way.
+
+-1 is "this backend does not count", as for the two above.*/
+int in_raw_legacybtn = -1;
+
+/*FTESurf Patch 307: the EFFECTIVE suppression state, beside the cvar in the header, for
+  exactly the reason Patch 301 put in_rawmice_live beside in_rawinput: the cvar is a
+  request and this is what happened.  in_rawinput_nolegacy 1 does nothing at all while
+  the mouse is ungrabbed (the setting is grab-scoped on purpose -- see in_win.c), and it
+  does nothing if the re-registration is refused.  A header that printed only the cvar
+  would describe a run as protected when it was not, which is the same false statement in
+  the same file that 301 exists to prevent.
+    -1  no registration, or a backend that does not report
+     0  legacy mouse messages are being delivered -- the injected-click path is OPEN
+     1  suppressed*/
+int in_raw_nolegacy_live = -1;
+
+/*FTESurf Patch 310: THE SETTINGS THAT CHANGE WHAT THE PLAYER COULD SEE.
+
+Patches 293/301/303 put the input pipeline's constants in this file because a record of
+mouse counts proves nothing without the numbers that turn them into an angle.  The same
+argument applies to the renderer and had not been made: a run recorded with the fog
+switched off, or the world drawn fullbright, is a different run from the one the .hid
+currently describes, and nothing in the evidence said so.
+
+r_fog_progless 0 is the concrete case.  It restores the pre-Patch-266 behaviour in which
+program-less surfaces took no distance fog -- which on a fogged map means seeing through
+the fog on a large share of the world.  It is CVAR_ARCHIVE and NOT CVAR_CHEAT, so it
+survives a restart and no server gate touches it.  Worse, r_fullbright and r_drawflat
+carry NO FLAGS AT ALL.
+
+WHY RECORD RATHER THAN BLOCK.  Blocking needs a client-cvar enforcement channel this game
+does not have yet, and a block with no record is unfalsifiable after the fact -- an
+auditor still could not tell what a run was played with.  Recording is the half that can
+ship today, it composes with a gate later, and it is the same architecture as every other
+column here: the file states what happened and the validator decides what that means.
+
+BOTH THE VALUE AND THE DEFAULT, on one line, for the P293 reason: a reader that knows only
+the value needs its own table of what is normal, that table drifts from the engine's, and
+the check silently starts measuring the wrong thing.  Writing `defaultstr` beside the
+value makes "differs from default" answerable with no model in the reader at all, and it
+stays correct when a default changes.
+
+CHANGES TOO, not just a snapshot -- the lesson Patch 307 paid for.  These are ordinary
+cvars a console can set mid-run.  Tracked by modifiedcount rather than by comparing
+values, which is both cheaper and STRICTER: it catches a set-and-set-back that a value
+comparison would report as nothing having happened.
+
+`-` where the cvar does not exist in this build.  Not 0, which is a real value.*/
+static const char *in_jrn_rendercvars[] =
+{
+	"r_fog_progless",			/*0 = program-less surfaces take no distance fog*/
+	"r_fog_linear", "r_fog_exp2",	/*change the fog curve, so how far you see*/
+	"r_fullbright",				/*no flags at all -- removes lighting entirely*/
+	"r_drawflat",				/*no flags -- flat colours, no texture detail*/
+	"r_drawentities",			/*no flags*/
+	"r_novis",					/*ARCHIVE -- draws leaves the PVS excluded*/
+	"r_lightmap_saturation",
+	"r_shadow_realtime_world",	/*a different lighting model altogether*/
+	"r_wireframe", "r_showbboxes",	/*CVAR_CHEAT, so recorded to CONFIRM they were off*/
+	NULL
+};
+#define MAX_JRN_RENDERCVARS 16
+
+/*FTESurf Patch 312: THE SETTINGS THAT CHANGE WHAT THE COUNTS BECOME.
+
+in_xflip is the one this patch had to have.  in_generic.c does `if(in_xflip.value) mx *= -1`
+one line after the counts leave the ring and long before either journal tap, and the cvar
+appeared NOWHERE in the .hid.  A player with it set therefore produced v.dx == -sum(m.dx)
+on every single frame -- a 100% failure of this patch's own check, from a cvar that is
+neither CVAR_CHEAT nor even CVAR_ARCHIVE.  MEASURED, arm B of the falsifier: identical
+synthetic input gave v.dx -157.5 against the control's +157.5.  Accusing that player is
+the Patch 305 failure mode exactly, and 305 cost 10,091 frames of a clean PB to learn.
+
+THE REST OF THE TABLE CLOSES A HOLE IN PATCH 293, not in this one, and it is here because
+it is the same two lines of machinery.  293 records sensitivity, m_yaw, m_filter and the
+m_accel family in the HEADER -- a snapshot taken at in_journal_begin.  They are ordinary
+cvars a console can set mid-run, and if one moves, 293's identity stops closing with
+nothing in the file to say why.  A reader would see the flagship check fail and have no
+way to tell a cheat from a player who nudged their sensitivity between attempts.  These
+stay in the header too, because six shipped recordings and hidcheck already read them
+there; the line here adds the DEFAULT beside the value and, more importantly, enrols them
+in the modifiedcount tracking that emits a 'c' record when one moves.
+
+That is the same lesson for the sixth time -- 301 cvar vs grant, 306 not-counted vs
+counted-zero, 307 true-at-the-start vs true-throughout, 310 snapshot vs change, 312's own
+'a'-record span problem, and now this.  A snapshot cannot describe something that changes.*/
+static const char *in_jrn_inputcvars[] =
+{
+	"in_xflip",					/*mx *= -1, upstream of both journal taps*/
+	"sensitivity", "m_yaw", "m_pitch",	/*the P293 identity's own constants...*/
+	"m_filter", "m_accel",				/*...and the two that make it inexact*/
+	"m_accel_style", "m_accel_power", "m_accel_offset", "m_accel_senscap",
+	"m_forcewheel", "m_forcewheel_threshold",	/*turn wheel motion into keypresses*/
+	/*Found by the red-team pass over this patch, all three invisible until now:*/
+	"leftisright",				/*r_xflip.  renderer.c declares it `cvar_t r_xflip =
+							  CVAR("leftisright", ...)`, so the C identifier and the
+							  console name differ -- the same alias trap Patch 310
+							  hit with r_wireframe/r_showtris.  It inverts the
+							  Patch 293 identity's SIGN downstream of both taps,
+							  and nothing in the file said so.*/
+	"cl_threadedphysics",		/*runs this whole pipeline on a second thread with
+							  the drain outside the lock: the one setting that can
+							  reorder the two ends of the window being compared*/
+	"dpcompat_csqcinputeventtypes",	/*gates CSQC_MouseMove, i.e. whether the mod's
+							  own progs may swallow the delta.  Defaults 999999 =
+							  always on, and this game ships CSQC panels.*/
+	NULL
+};
+#define MAX_JRN_TRACKEDCVARS 48
 
 void QDECL joyaxiscallback(cvar_t *var, char *oldvalue)
 {
@@ -512,23 +770,33 @@ frame is a pump artifact and no reader may treat it as anything else.
 the wndproc -- 1 ms resolution, which at 1000 Hz polling is one report per tick.
 Nothing in this engine calls it today.)
 
-AND IT DEPENDS ON in_rawinput.  That cvar defaults to 0 (in_win.c), as does
-in_dinput, and the fallback path is INS_Accumulate's GetCursorPos/SetCursorPos
-recentre -- ONE already-OS-summed delta per call, about twice a frame.  At the
-ENGINE default this file is a slightly finer .view and nothing more.
+AND IT DEPENDS ON in_rawinput.  The fallback path is INS_Accumulate's
+GetCursorPos/SetCursorPos recentre -- ONE already-OS-summed delta per call, about
+twice a frame.  On that path this file is a slightly finer .view and nothing more.
 
-Measured, on this machine, at the time of writing: BOTH games on this tree
-already run in_rawinput 1 -- FTESurf sets it in cfg/default.cfg:493, and quakers
-reports "1" (default), i.e. its own config value locked in by cvar_lockdefaults.
-So the case the engine default describes is a bare engine, not either game here.
-That is a fact about a config and not about this code, which is exactly why it is
-recorded in the FILE rather than assumed by the reader.
+CORRECTED, PATCH 301: this paragraph used to say "that cvar defaults to 0
+(in_win.c), as does in_dinput", and then spent a paragraph explaining that both
+games on this tree set it to 1 from their configs so the engine default described
+"a bare engine, not either game here".  `in_rawinput` now defaults to **1** --
+in_win.c declares it CVARAFD(... "1" ..., CVAR_ARCHIVE) and the same change
+removed cfg/default.cfg's `set in_rawinput 1`, because an archived cvar whose
+default.cfg also asserts a value can never be turned off by the player.  The old
+text was a fact about a config that has since moved into the engine, left standing
+in a comment that reads as a fact about this code.  `in_rawinput_keyboard` is
+still 0, and that half of the old warning stands.
 
-So the header records the mode, and both halves of it: `rawinput` for the mouse
-and `rawkbd` for in_rawinput_keyboard, which is separately defaulted off and
-which leaves keys on the legacy WM_KEYDOWN path -- that one AUTO-REPEATS, and a
-reader pairing downs with ups needs to know.  A tool drawing a timing conclusion
-without reading both keys is drawing it from the wrong data.
+So the header records the mode -- and since Patch 301, records it TWICE, because
+a cvar is a request and not a grant:
+  `rawinput` / `rawkbd`   the cvars: what this client ASKED for.
+  `rawmice`  / `rawkbds`  what INS_RawInput_Init actually bound (-1 if the
+                          platform backend does not report it).
+The pair that matters is `rawinput 1` with `rawmice 0`: the request was granted by
+the config and refused by the hardware, and every delta in the file is an
+OS-summed, OS-accelerated one.  See the declaration of in_rawmice_live below.
+
+`rawkbd` being 0 leaves keys on the legacy WM_KEYDOWN path -- that one AUTO-REPEATS,
+and a reader pairing downs with ups needs to know.  A tool drawing a timing
+conclusion without reading all four keys is drawing it from the wrong data.
 
 PRIVACY.  data/ is readable by any CSQC, and every server a player joins runs
 CSQC.  A journal written with the console open would contain the scancodes of an
@@ -557,6 +825,12 @@ rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
 	- <dt> <dev> <key>      key up
 	x <dt> <dev>            a key event whose scancode was suppressed
 	j <dt> <dev> <ax> <v>   joystick axis
+	d <dt> <rawdx> <rawdy>  Patch 312.  The counts the RING delivered this frame,
+	                        written ONLY when they differ from what reached the
+	                        view on the 'v' line that follows.  Its absence is
+	                        therefore the positive statement "the pipeline passed
+	                        the counts through untouched", which is the case on
+	                        45,384 of 45,384 measured frames of honest play.
 	# <dt> <text>           a note from the gamecode (save/load marks)
 	! <dt> <n>              n events were lost by the ring BEFORE this point
 	truncated <dt>          the cap was hit; nothing after this exists
@@ -595,9 +869,31 @@ static char			*in_jrn_buf;
 static size_t		in_jrn_len, in_jrn_cap, in_jrn_max;
 static double		in_jrn_base, in_jrn_last;
 static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_frames, in_jrn_hidden;
+static int			in_jrn_injbase, in_jrn_unenumbase;			/*Patch 306: taken at begin, so the journal reports only its own window*/
+static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per-frame records have caught up*/
+static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
+static int			in_jrn_nolegacyreported;					/*Patch 307: the last effective suppression state written*/
+/*Patch 310: the render-integrity cvars, resolved ONCE at begin.  Caching the
+  pointers is what makes the per-frame poll free -- a Cvar_FindVar per cvar per
+  frame would be a string hash lookup 800 times a second for nothing.*/
+static cvar_t		*in_jrn_rcv[MAX_JRN_TRACKEDCVARS];	/*Patch 312: render AND input*/
+static int			in_jrn_rcvmod[MAX_JRN_TRACKEDCVARS];
+static int			in_jrn_rcvcount;
 static qboolean		in_jrn_full, in_jrn_synth;
 static float		in_jrn_lastabs[MAXPOINTERS][2];
 static qboolean		in_jrn_haveabs[MAXPOINTERS];
+
+/*FTESurf Patch 293: the per-frame view record.  IN_MoveMouse adds each pointer's
+  final delta in here, IN_Journal_View emits one line once the angle it produced
+  is known.  See the essay above IN_Journal_View.*/
+static float		in_jrn_vdx, in_jrn_vdy;
+static float		in_jrn_vkpitch, in_jrn_vkyaw;	/*Patch 305: the non-mouse half*/
+/*Patch 312: the counts AS THE RING DELIVERED THEM, before any of the pipeline
+  touched them.  See the essay above IN_Journal_ViewRaw.*/
+static float		in_jrn_vrawx, in_jrn_vrawy;
+static int			in_jrn_vflags;
+static float		in_jrn_vlast[2];
+static qboolean		in_jrn_vhavelast;
 
 /*Raw append.  Grows by doubling; the caller has already decided the line fits.*/
 static void IN_Journal_Raw(const char *s)
@@ -747,7 +1043,50 @@ static void IN_Journal_Event(struct eventlist_s *ev)
 			IN_Journal_Line(ev->time, "x", tail);
 			break;
 		}
-		Q_snprintfz(tail, sizeof(tail), "%u %i", ev->devid, ev->keyboard.scancode);
+		/*FTESurf Patch 309: WAS THIS KEY ALREADY DOWN.
+
+		  MEASURED, on Lex's clean bhop_eazy PB (0004976_pb).  326 key-down
+		  records against 130 releases -- 196 downs, 60% of every press in the
+		  file, with no matching release.  They are OS auto-repeat, and nothing
+		  said so.  On the two turn keys alone (e and CapsLock, which is where
+		  this game's +left/+right live) it is 144 downs against 15 releases:
+		  129 of 144, EIGHTY-NINE POINT SIX PERCENT of the turn-key press
+		  records in an honest run, describing presses that never happened.
+
+		  A reader asking "how many times did the player press the turn key"
+		  got 144 for 15.  That is not a rounding error, it is a different
+		  story about the run -- and the shape it invents (a rapid, perfectly
+		  even press train) is precisely the shape a scripted turn would have.
+		  The record was manufacturing the signature it exists to look for.
+
+		  READ FROM keydown[] RATHER THAN TRACKED HERE, and that is deliberate.
+		  Key_Event computes the identical value one line into its own body
+		  (`wasdown`, keys.c) to block auto-repeat binds -- so the fact already
+		  exists and a second copy would be a second thing to get wrong.  The
+		  ordering is what makes it correct: IN_Commands calls this function
+		  BEFORE the switch that dispatches Key_Event, so keydown[] still holds
+		  the state from before this event -- exactly what Windows' lParam bit
+		  30 means, but derived rather than threaded, so it holds on every
+		  backend and on the raw path too instead of only on the Windows legacy
+		  one.  Key_Event also owns the scancode -1 'release everything' sweep,
+		  so a focus loss cannot leave this stale.
+
+		  ON THE RELEASE TOO, because the same bit answers a second question
+		  there: a '-' whose key was NOT down is an orphan -- a release with no
+		  press, which means a press was lost or a release was invented.  One
+		  field, one meaning ("the key was already down"), two findings.
+
+		  -1 where the question does not apply: scancode -1 is the release-
+		  everything pseudo-event and 0 is the unicode-only dead-key path, and
+		  neither is a key anyone pressed.  NOT 0, which is a real answer.*/
+		{
+			int prev = -1;
+			if (ev->keyboard.scancode > 0 && ev->keyboard.scancode < K_MAX &&
+				ev->devid < 32)
+				prev = !!(keydown[ev->keyboard.scancode] & (1u<<ev->devid));
+			Q_snprintfz(tail, sizeof(tail), "%u %i %i",
+				ev->devid, ev->keyboard.scancode, prev);
+		}
 		IN_Journal_Line(ev->time, (ev->type==IEV_KEYDOWN)?"+":"-", tail);
 		break;
 	case IEV_MOUSEDELTA:
@@ -798,6 +1137,128 @@ static void IN_Journal_Event(struct eventlist_s *ev)
 	}
 }
 
+/*FTESurf Patch 306: emit the rejected-report counters when they move.
+
+Same shape and same honesty as the '!' drop record below: the COUNT is known, the TIME
+IS NOT -- the backend discarded the report without stamping it -- so this says "n arrived
+somewhere before this line" and claims nothing finer.
+
+CALLED FROM TWO PLACES, AND THE SECOND IS THE ONE THAT MATTERS.  IN_Journal_Frame runs
+only on a NON-EMPTY drain, and a rejected report by definition produces no event to
+drain.  So an injection with no genuine input beside it -- which is exactly the session
+this record exists for -- would never reach a frame marker and would never be written at
+all.  IN_Journal_View runs once per accumulate frame regardless of the ring, so it closes
+that gap.  The delta test makes the second call free on every frame where nothing
+happened, and makes the order of the two irrelevant.*/
+static void IN_Journal_Rejected(double when)
+{
+	char tail[64];
+	int inj, une;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	if (in_raw_injected < 0 && in_raw_unenum < 0)
+		return;	/*this backend does not count -- stay silent rather than write a zero
+				  it cannot support.  See the essay at the declarations.*/
+
+	/*clamped independently: a backend that came to count only one of the two would
+	  otherwise have the other's -1 subtracted from a 0 baseline and print a delta of -1.*/
+	inj = (in_raw_injected < 0) ? 0 : in_raw_injected;
+	une = (in_raw_unenum  < 0) ? 0 : in_raw_unenum;
+
+	if (inj == in_jrn_injreported && une == in_jrn_unenumreported)
+		return;
+
+	Q_snprintfz(tail, sizeof(tail), "%i %i", inj - in_jrn_injreported, une - in_jrn_unenumreported);
+	in_jrn_injreported = inj;
+	in_jrn_unenumreported = une;
+	IN_Journal_Line(when, "i", tail);
+}
+
+/*FTESurf Patch 307: the uncorroborated legacy button, on its OWN record rather than as a
+  third field on 'i'.
+
+  They are not the same kind of fact and a reader must not be able to read them alike.
+  'i' counts input that was REJECTED -- it never reached the game, and a non-zero count
+  there is an attempt that failed.  'b' counts input that was ACCEPTED: every one of these
+  became a K_MOUSE1..5 and was acted on.  Sharing a line would invite exactly the
+  collapse that the two counters inside 'i' are already separated to prevent.*/
+/*FTESurf Patch 307: the effective legacy-suppression state CHANGES DURING A RUN, and a
+  header field cannot describe something that changes.
+
+  MEASURED, on this patch's own first falsifier run.  in_rawinput_nolegacy is grab-scoped
+  -- it has to be, because RIDEV_NOLEGACY also kills the non-client messages a windowed
+  player needs to move their own window -- so every grab transition flips it.  The test
+  harness stealing focus flipped it FOUR TIMES in three seconds, and the header, being a
+  snapshot taken at in_journal_begin, recorded `nolegacylive 0` for an arm in which the
+  block demonstrably worked (0 injected clicks through, against 20 and 16 on either
+  side).  The header was not wrong; it was answering a question the file could not ask.
+
+  So the transitions are recorded.  An auditor can then say WHICH SPANS of a run had the
+  legacy click path open, instead of inferring it from one value at one instant -- and in
+  ordinary play, where alt-tabbing is the only thing that flips it, the record is a couple
+  of lines long.
+
+  This is the third patch in a row to land on the same lesson: Patch 301 separated the
+  cvar from the grant, Patch 306 separated "not counted" from "counted zero", and this
+  separates "true at the start" from "true throughout".*/
+static void IN_Journal_Legacy(double when)
+{
+	char tail[32];
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	if (in_raw_nolegacy_live == in_jrn_nolegacyreported)
+		return;
+
+	Q_snprintfz(tail, sizeof(tail), "%i", in_raw_nolegacy_live);
+	in_jrn_nolegacyreported = in_raw_nolegacy_live;
+	IN_Journal_Line(when, "g", tail);
+}
+
+/*FTESurf Patch 310: emit a line when a render-integrity cvar is touched mid-journal.
+
+  modifiedcount rather than the value: a set-and-set-back leaves the value identical and
+  the count two higher, and "it was briefly something else" is exactly the fact a
+  snapshot-based reader would miss.  The header carries the opening values, so these are
+  changes FROM that, and a run where nobody touched anything writes none of them.*/
+static void IN_Journal_RenderCvars(double when)
+{
+	char tail[192];
+	char quoted[128];
+	int i;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	for (i = 0; i < in_jrn_rcvcount; i++)
+	{
+		if (!in_jrn_rcv[i] || in_jrn_rcv[i]->modifiedcount == in_jrn_rcvmod[i])
+			continue;
+		in_jrn_rcvmod[i] = in_jrn_rcv[i]->modifiedcount;
+		Q_snprintfz(tail, sizeof(tail), "%s %s", in_jrn_rcv[i]->name,
+			COM_QuotedString(in_jrn_rcv[i]->string, quoted, sizeof(quoted), false));
+		IN_Journal_Line(when, "c", tail);
+	}
+}
+
+static void IN_Journal_Bypassed(double when)
+{
+	char tail[64];
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	if (in_raw_legacybtn < 0)
+		return;
+	if (in_raw_legacybtn == in_jrn_lgbreported)
+		return;
+
+	Q_snprintfz(tail, sizeof(tail), "%i", in_raw_legacybtn - in_jrn_lgbreported);
+	in_jrn_lgbreported = in_raw_legacybtn;
+	IN_Journal_Line(when, "b", tail);
+}
+
 static void IN_Journal_Frame(void)
 {
 	char tail[64];
@@ -824,6 +1285,387 @@ static void IN_Journal_Frame(void)
 		in_jrn_dropreported = in_jrn_dropped;
 		IN_Journal_Line(first, "!", tail);
 	}
+
+	IN_Journal_Rejected(first);	/*Patch 306*/
+	IN_Journal_Legacy(first);	/*Patch 307*/
+	IN_Journal_RenderCvars(first);	/*Patch 310*/
+	IN_Journal_Bypassed(first);	/*Patch 307*/
+}
+
+/*
+==============================================================================
+
+FTESurf Patch 293: the per-frame view record ('v'), and why the journal had to
+carry BOTH halves of the identity itself.
+
+WHAT IT IS FOR.  With m_filter 0 and m_accel 0 the engine's mouse path is one
+exact line (IN_MoveMouse, below):
+
+    viewanglechange[YAW] -= m_yaw * (sensitivity * in_sensitivityscale) * mx
+
+so for an unmodified client the yaw a frame produces is a fixed multiple of the
+integer device counts that frame drained.  That is an ALGEBRAIC INVARIANT, not a
+heuristic, and it is the one test that separates "the player moved the mouse"
+from "something between the mouse and the angle changed the number".  A hook
+that mutates the accumulated delta -- which is where this class of cheat lives,
+because it is the only place the number is both final and still a mouse delta --
+breaks it on every frame it touches, at any strength.
+
+WHY NOT JUST CROSS-CHECK THE .hid AGAINST THE .view.  Because the two files
+cannot be aligned, and that is by design rather than by accident:
+
+  - the 'f' marker is emitted only on a NON-EMPTY drain (IN_Commands, below), so
+    .hid frames are a deliberate SUBSET of rendered frames;
+  - the only shared key is the command frame, and at 800 fps against cl_netfps
+    66 roughly fifteen .view rows carry the same one.
+
+Measured on this tree's own recordings before this patch existed:
+data/runs/surf_beginner/stage_2/0000279_pb has 3298 'f' records against 4177
+.view rows (246 vs 279 distinct command frames); the best index alignment agrees
+on 35.7% of frames, and surf_boreas/main/0002930_pb manages 8.5%.  The residual
+|dyaw - k*dx| then sits at 0.039 and 0.054 degrees -- around eight times .view's
+own 0.005 degree half-step, i.e. swamped by misalignment long before precision
+becomes the limit.  Raising .view's %.2f would not have fixed it.
+
+So this line carries the counts and the angle they produced TOGETHER, and the
+check needs no join at all.
+
+WHAT IS AND IS NOT ON THE LINE.  dx/dy are the counts as they enter the
+sensitivity pipeline: after in_xflip, after the Key_MouseShouldBeFree zeroing,
+after the touch and CSQC_MouseMove consumers, summed over every pointer -- i.e.
+exactly what m_filter/m_accel/sensitivity are about to be applied to, and
+nothing that was already discarded upstream.  pitch/yaw are the FINAL angles for
+the frame, read after CL_ClampPitch, because that is the only point at which
+viewanglechange has been folded in and clamped.
+
+flags exists because the identity does not hold on every frame and a reader must
+be told which: bit 1 says the counts went to sidemove instead of yaw (+strafe),
+bit 2 says the same for forwardmove/pitch, bit 4 says the cursor was free (a
+menu or the console had it) and the counts reached neither.
+
+THE EMIT RULE, and it is the whole of the size budget.  A line per rendered
+frame at 800 fps is about 1.9 MB a minute, which would roughly triple this file
+against the ~1.15 MB/min it already costs and would reach in_journal_maxkb
+inside a long run.  A frame with no counts AND no angle change says nothing an
+audit can use, so it is not written -- the same argument IN_MouseMove already
+makes for a zero delta, and IN_Journal_Event makes for an unchanged absolute.
+
+Note the second half of that test.  Dropping frames on "no counts" ALONE would
+throw away precisely the evidence this patch exists to collect: an angle that
+moved without counts behind it is the signature, not the noise.  So the rule is
+"no counts and the angle did not move", and either half alone keeps the line.
+
+==============================================================================
+*/
+void IN_Journal_View(const float *viewangles)
+{
+	char tail[128];
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+
+	/*Patch 306, and it goes ABOVE the emit rule deliberately.  A rejected report
+	  produces no counts and moves no angle, so every frame of a motion-injection
+	  attempt takes the quiet-frame return below -- the one case where the record
+	  must NOT be quiet.*/
+	IN_Journal_Rejected(Sys_DoubleTime());
+	IN_Journal_Legacy(Sys_DoubleTime());	/*Patch 307*/
+	IN_Journal_RenderCvars(Sys_DoubleTime());	/*Patch 310*/
+	IN_Journal_Bypassed(Sys_DoubleTime());	/*Patch 307*/
+
+	if (!in_jrn_vdx && !in_jrn_vdy &&
+	    !in_jrn_vkpitch && !in_jrn_vkyaw &&
+	    !in_jrn_vrawx && !in_jrn_vrawy &&
+	    in_jrn_vhavelast &&
+	    in_jrn_vlast[0] == viewangles[PITCH] &&
+	    in_jrn_vlast[1] == viewangles[YAW])
+	{	/*nothing moved and nothing turned -- see THE EMIT RULE above.
+		  Patch 305 adds the keyboard terms to this test: a turn that was exactly
+		  cancelled, or clamped away by CL_ClampPitch, leaves the angle equal and
+		  would otherwise drop the line that says a key was doing something.
+
+		  Patch 312 adds the RAW terms for the same reason, and it is the half the
+		  emit rule was missing.  That rule already argues that an angle which
+		  moved with no counts behind it is the signature rather than the noise;
+		  counts that arrived and moved no angle are the identical fact from the
+		  other side, and they were being dropped.  Without this a player who
+		  opens the console mid-run leaves 'm' records with no 'v' to carry them,
+		  they are orphaned into the NEXT window, and the check reports a break
+		  against someone who did nothing wrong.  MEASURED: arm D of this patch's
+		  falsifier orphaned exactly one 29-count batch on one console press.*/
+		in_jrn_vflags = 0;
+		return;
+	}
+
+	/*Patch 312: only when the pipeline changed the counts -- see the essay above
+	  IN_Journal_ViewRaw.  Written BEFORE the 'v' it describes so a reader that
+	  processes records in order already holds it when the 'v' arrives, the same
+	  order the '!' and 'i' records use against the 'f' they qualify.*/
+	if (in_jrn_vrawx != in_jrn_vdx || in_jrn_vrawy != in_jrn_vdy)
+	{
+		char rawtail[64];
+		Q_snprintfz(rawtail, sizeof(rawtail), "%g %g", in_jrn_vrawx, in_jrn_vrawy);
+		IN_Journal_Line(Sys_DoubleTime(), "d", rawtail);
+	}
+
+	/*Patch 305 appends kpitch/kyaw AFTER the existing five, so a pre-305 reader
+	  that splits on whitespace and takes fields 0..4 is unaffected and an old
+	  file simply has two fewer -- the same additive rule the header keys follow.*/
+	Q_snprintfz(tail, sizeof(tail), "%g %g %i %.6f %.6f %.6f %.6f",
+		in_jrn_vdx, in_jrn_vdy, in_jrn_vflags,
+		viewangles[PITCH], viewangles[YAW],
+		in_jrn_vkpitch, in_jrn_vkyaw);
+	IN_Journal_Line(Sys_DoubleTime(), "v", tail);
+
+	in_jrn_vlast[0] = viewangles[PITCH];
+	in_jrn_vlast[1] = viewangles[YAW];
+	in_jrn_vhavelast = true;
+	in_jrn_vdx = in_jrn_vdy = 0;
+	in_jrn_vkpitch = in_jrn_vkyaw = 0;
+	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
+	in_jrn_vflags = 0;
+}
+
+/*Called by IN_MoveMouse once per pointer, with the delta as it enters the
+  sensitivity pipeline.  Summed rather than assigned: two mice both turn the one
+  view, and the invariant is about the total.*/
+void IN_Journal_ViewDelta(float dx, float dy, int flags)
+{
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	in_jrn_vdx += dx;
+	in_jrn_vdy += dy;
+	in_jrn_vflags |= flags;
+}
+
+/*FTESurf Patch 312 (plan item P294b): THE OTHER END OF THE SAME WINDOW.
+
+WHAT PATCH 293 CANNOT DO, stated plainly because it is the reason this exists.
+293 put the counts and the angle they produced on one line and the identity
+    dyaw == -m_yaw*sensitivity*scale*dx
+holds exactly.  But BOTH of its sides are computed from the engine's own mx, so
+it tests the engine's multiplication and not the player.  A hook that rewrites
+the accumulated delta UPSTREAM of mx -- which is where this entire class of cheat
+lives, and is exactly what momentum.dll does to CInput::ApplyMouse -- gets a
+conforming 293 record for free.  293's own essay says so.
+
+The 'm' records are written by IN_Commands straight off the event ring.  mx is
+read out of mouse->delta[] in IN_MoveMouse.  Those are the two ends of precisely
+the window such a hook occupies, so A DISAGREEMENT BETWEEN THEM IS THAT HOOK.
+
+MEASURED BEFORE ANY OF THIS WAS WRITTEN, because the plan required it: assuming a
+frame correspondence is the mistake that made the .hid/.view cross-check
+impossible.  Across every journal in the tree -- 45,447 'v' records including one
+real 4976-tick PB -- the sum of the 'm' records in a window equals that window's
+'v' delta on 45,384 of 45,384 covered frames, 100.000000%.  So the join already
+worked and 'v' needed no sequence number.
+
+WHY A RECORD AT ALL, THEN.  Because the same measurement found three ways an
+HONEST player breaks it, and a check that accuses honest players is worse than no
+check -- that is the Patch 305 lesson, where the flagship identity called this
+game's core mechanic a cheat on 10,091 frames of a clean PB:
+
+  - in_xflip (:2071 below) does `mx *= -1` upstream of the tap.  A player with it
+    set produces v.dx == -sum(m.dx) on EVERY frame: a 100% break from a cvar that
+    is neither CVAR_CHEAT nor archived.  MEASURED: arm B of this patch's
+    falsifier, sum(m) 90 -> v.dx -157.5 against +157.5 in the control.
+  - Key_MouseShouldBeFree() (:2076) zeroes mx before the tap, so the counts reach
+    no angle, the quiet-frame return drops the 'v' line entirely, and the 'm'
+    records are ORPHANED into the next window.  MEASURED: arm D, one console
+    press orphaned exactly one 29-count batch.
+  - the M_TOUCH branch applies a hardcoded `mx *= 1.75` (:2143, "boost
+    sensitivity so that the default works okay").  MEASURED at exactly 1.75x.
+
+THE FIX IS NOT A TABLE OF EXEMPTIONS.  It was tempting to have the reader know
+about xflip and touch mode and the free cursor -- and that is precisely the
+mistake Patch 293 already diagnosed: a reader that needs its own model of the
+engine's internals drifts from the engine and silently starts measuring the wrong
+thing.  Worse, the obvious span marker does not work.  The 'a' record would say
+"absolute mode", but Patch 202 DEDUPES unchanged absolute positions for size, so
+a run spent entirely ungrabbed carries ONE 'a' record for a state that lasted the
+whole file.  A sparse record cannot mark a span -- the fifth time this tree has
+landed on that lesson, after 301, 306, 307 and 310.
+
+So the counts go in the file at the point they are still the ring's, and the
+reader compares two numbers it was given.  No transform table, no exemptions, no
+engine model.  Captured BEFORE the in_xflip flip deliberately: this is "what the
+ring delivered", and anything the pipeline then does to it -- including a legal
+sign flip -- is a difference the file states rather than one the reader assumes.
+
+EMITTED ONLY WHEN IT DIFFERS, which is the whole size budget.  On honest grabbed
+play raw == final on 100.000000% of measured frames, so the common case costs
+nothing and the record's ABSENCE is the positive claim.  The same rule the '!',
+'i', 'g', 'c' and 'b' records already follow.
+
+ONE TAP RATHER THAN A FLAG AT EVERY DISCARD, and a red-team pass over this patch
+is what settled it.  It found SEVEN more transforms between the 'm' record and
+Patch 293's tap, six of them silent on an honest client: the Key_Dest_Has
+(~kdm_game) zeroing, whose destinations are NOT all covered by flags bit 4
+(key_dest_absolutemouse omits kdm_message, so opening chat discards counts with
+flags reading 0); CSQC_MouseMove, which lets the mod's OWN progs swallow the
+delta frame by frame and is on by default; the two menu mousemove consumers; the
+weapon wheel, which returns true on the key alone regardless of its threshold;
+and the M_TOUCH 1.75 boost.  The obvious design -- a flag bit set at each discard
+site -- would have needed six correct edits, would have to be revisited by
+everyone who ever adds a seventh site, and fails SILENTLY when someone does not.
+Every one of those sites is DOWNSTREAM of this single line, so one tap covers all
+six and covers the seventh nobody has written yet.  That is the whole argument
+for putting it here instead.
+
+WHAT THIS DOES NOT COVER, stated plainly so the patch is not oversold.  The check
+spans the ring read and the delta read, so:
+  - a hook that rewrites ptr[].delta between the drain and IN_MoveMouse is CAUGHT,
+    and the residual is exactly the injected bias.  That is the bullet this patch
+    is for, and it is the FTE shape of what momentum.dll already does.
+  - a hook that edits the EVENT RING before the drain is NOT caught: the 'm'
+    record is transcribed from the ring slot, so the edit is recorded as truth and
+    both ends agree.  Same for the _GRID GetRawInputData pointer in in_win.c,
+    which is a single static that can be overwritten with a data write.
+  - anyone who can hook IN_Journal_Raw authors the whole file, 'm' records
+    included, and no in-band check survives that.  That is the T4 ceiling and it
+    is the reason this tree keeps three independent recordings rather than one.
+  - the plugin API cannot mutate, only inject, so the join HOLDS there by
+    construction and Patch 311's synth mark is the defence instead.
+
+REJECTED, and recorded so it is not re-proposed: the first 'v' of a file is short
+because in_journal_begin does not clear the pending ptr[].delta, and clearing it
+would make the join exact from line one.  It would also THROW AWAY COUNTS THE
+PLAYER ALREADY MADE.  The engine must not alter a player's aim, even by one
+frame, to make its own evidence tidier; a reader exempting one frame per file
+costs nothing and costs it in the right place.*/
+void IN_Journal_ViewRaw(float dx, float dy)
+{
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	in_jrn_vrawx += dx;
+	in_jrn_vrawy += dy;
+}
+
+/*FTESurf Patch 305: THE NON-MOUSE HALF OF THE ANGLE.
+
+  MEASURED ON THE FIRST REAL RUN, and it is the reason this exists.  On a clean
+  PB (bhop_eazy 0004976_pb, 42,973 'v' records) the Patch 293 identity
+      dyaw == -m_yaw*sensitivity*scale*dx
+  failed on 57.67% of frames.  Not noise: the residual is PERFECTLY BIMODAL with
+  a three-decade empty gap.  With no turn key held, 30,929 of 30,934 frames sit
+  under 1e-4 deg (median 2.0e-6).  With +left or +right held, 12,021 of 12,038
+  sit in 1e-2..0.25 and NOT ONE is below 1e-4.  Dividing the residual by
+  cl_yawspeed*elapsed gives a median of 1.0014, and the sign matches
+  CL_AdjustAngles' convention 8,433 times out of 8,437 under +left.
+
+  The angle was never wrong.  The RECORD was incomplete: 'v' logged the mouse
+  counts and the resulting yaw, while CL_AdjustAngles had already added a
+  keyboard turn to the same accumulator two lines earlier and nothing wrote it
+  down.  Pitch proves it -- with cl_pitchspeed 0 the pitch residual's median is
+  0.000000000 over the same 42,972 pairs, so the mouse path itself is exact to
+  float precision and only the yaw term was missing.
+
+  THIS IS NOT AN EXOTIC CASE.  +left/+right are SHIPPED DEFAULT BINDS
+  (cfg/default.cfg:794,805) and the tree's own prestrafe calibration
+  (default.cfg:409-425) is DERIVED from turning with them while holding a strafe
+  key.  Keyboard turn is how a bhop run starts.  Without this column the
+  flagship input check would have failed the opening second of essentially every
+  honest run on this game -- a false accusation on 10,093 frames of this one.
+
+  WHY THE DELTA AND NOT THE INGREDIENTS.  The obvious alternative is to log
+  cl_yawspeed and let the reader re-derive the term.  That is wrong, and
+  expensively so: a reader would have to re-implement CL_KeyState's 0/0.25/0.5/
+  0.75/1.0 sub-frame fractions, cl_anglespeedkey, the in_strafe gate, in_rotate,
+  r_xflip, the FPD_LIMIT_YAW/ruleset_allow_frj +-900 clamp, and the engine's
+  frametime -- which is NOT the journal's own wall-clock delta.  Every one of
+  those is a place for the reader and the engine to disagree, and it would break
+  again the moment any of them changed.  Logging the realised change instead
+  makes the identity exact arithmetic with no model in the reader at all:
+
+      dyaw  ==  -m_yaw*sensitivity*scale*dx  +  kyaw
+
+  BOTH AXES, though only yaw is broken today.  cl_pitchspeed defaults 0 here, so
+  the pitch term is always 0 on this configuration -- but it is a cvar, and a
+  reader must not have to know its value to trust the pitch column.  A field that
+  is always zero costs two bytes and removes a silent dependency.
+
+  IT IS NOT A TRUST BOUNDARY.  Like the P293 identity itself, both sides are
+  computed by the same engine, so this closes the arithmetic rather than
+  attesting the input.  What it buys is that a residual now MEANS something: with
+  the keyboard term accounted for, an unexplained yaw is once again the signature
+  the identity was written to surface, instead of being drowned by legitimate
+  play.*/
+void IN_Journal_ViewKeyboard(float dpitch, float dyaw)
+{
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	in_jrn_vkpitch += dpitch;
+	in_jrn_vkyaw += dyaw;
+}
+
+/*FTESurf Patch 303: DEVICE PROVENANCE.
+
+  Until now the journal recorded FTE's own devid and nothing else, so every device
+  in the file was an anonymous small integer.  "devid 0 moved 4000 counts" is not
+  evidence of anything: the reader cannot tell a real mouse from a virtual one,
+  and that distinction is the whole point of keeping the file.
+
+  Written through INS_EnumerateDevices rather than by reaching into in_win.c's
+  rawmice[]/rawkbd[] arrays.  Those are static to the backend, and this file is the
+  cross-platform one -- in_generic.o is in every client build while in_win.o is
+  Windows-only.  The enumeration is a declared backend API (input.h) that every
+  backend already implements, so this costs nothing on the platforms that have a
+  real answer and degrades to whatever they do know on the ones that do not.
+
+  THE CALLBACK MUST NOT WRITE THROUGH qdevid.  It is handed a pointer, and the
+  other consumer of this API in this file -- IN_DeviceIDs_DoRemap -- assigns
+  through it; a callback copied from that one would silently remap the player's
+  devices as a side effect of opening a journal.
+
+  THREE STATES, AND THEY ARE NOT TWO.  A NULL qdevid means the device cannot carry
+  one at all (the "system" pseudo-devices); DEVID_UNSET means it can but has not
+  been given one yet.  Neither is 0, and 0 is a real devid belonging to a real
+  device -- so they print as `-` and `unset`.  Collapsing either into 0 would
+  attribute one device's motion to another, which is the exact shape of error this
+  file exists to make impossible.
+
+  THE TABLE IS WRITTEN TWICE, AND THAT IS DELIBERATE.  Devids are allocated LAZILY
+  at first use (in_win.c's Mouse_AllocateDevID, reached only once a device actually
+  reports motion or a button), so at journal-begin almost every device still reads
+  `unset` and the begin table cannot answer "which device produced devid 0".  What
+  it does answer is what hardware was PRESENT when the run started, which is the
+  anti-tamper half -- an injector's virtual device is in that list from the first
+  line.  The `devmap` table at the end carries the resolved mapping.  A device that
+  appears in one table and not the other was plugged or unplugged mid-run, and a
+  reader should treat that as a fact about the run rather than as a parse error.
+
+  PRIVACY, STATED PLAINLY BECAUSE IT IS NOT NOTHING.  On Windows the name is the
+  device interface path -- VID, PID and an instance path that is stable for that
+  device on that machine.  That is a pseudonymous hardware identifier.  It is
+  recorded because it is precisely what makes provenance checkable, and it is
+  another reason this file is consent-gated and uploaded only on demand rather
+  than streamed.
+
+  WHAT IT DOES NOT PROVE.  A device name is self-reported by the device.  An
+  Arduino, Pico or KMBox presents whatever VID/PID string it likes and can clone a
+  real mouse's exactly, so a name that looks legitimate is not attestation that the
+  hardware is.  This raises the cost of the cheap end -- SendInput injection has no
+  enumerated device at all, and a virtual driver has a name that says so -- and it
+  leaves the hardware-replay ceiling exactly where it was.*/
+static void IN_Journal_DeviceLine(void *vctx, const char *type, const char *devicename, unsigned int *qdevid)
+{
+	const char *tag = vctx;
+	char quoted[2048];
+	char line[2200];
+	char id[16];
+
+	if (!qdevid)
+		Q_strncpyz(id, "-", sizeof(id));
+	else if (*qdevid == DEVID_UNSET)
+		Q_strncpyz(id, "unset", sizeof(id));
+	else
+		Q_snprintfz(id, sizeof(id), "%u", *qdevid);
+
+	/*quoted because a Windows device path carries backslashes, braces and #, and
+	  an unquoted one would need the reader to guess where the field ended.*/
+	Q_snprintfz(line, sizeof(line), "%s %s %s %s\n", tag, type, id,
+		COM_QuotedString(devicename, quoted, sizeof(quoted), false));
+	IN_Journal_Raw(line);
 }
 
 static void IN_JournalBegin_f(void)
@@ -834,7 +1676,8 @@ static void IN_JournalBegin_f(void)
 	  raw input at all.*/
 	cvar_t *raw = Cvar_FindVar("in_rawinput");
 	cvar_t *rawkbd = Cvar_FindVar("in_rawinput_keyboard");
-	char head[512];
+	cvar_t *nolegacy = Cvar_FindVar("in_rawinput_nolegacy");	/*Patch 307*/
+	char head[1024];
 
 	IN_Journal_Drop();
 
@@ -848,20 +1691,126 @@ static void IN_JournalBegin_f(void)
 	in_jrn_len = 0;
 	in_jrn_base = in_jrn_last = Sys_DoubleTime();
 	in_jrn_dropreported = in_jrn_dropbase = in_jrn_dropped;
+	/*Patch 306: clamped, so a backend that never counts leaves a 0 baseline and the
+	  emitter's own -1 test is the single place that decides to stay silent.*/
+	in_jrn_injreported = in_jrn_injbase = (in_raw_injected < 0) ? 0 : in_raw_injected;
+	in_jrn_unenumreported = in_jrn_unenumbase = (in_raw_unenum < 0) ? 0 : in_raw_unenum;
+	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
+	/*Patch 307: the header carries the state at begin, so only CHANGES from it are
+	  worth a line.  Seeding from the live value means a run that never alt-tabs
+	  writes no 'g' record at all.*/
+	in_jrn_nolegacyreported = in_raw_nolegacy_live;
+	in_jrn_vdx = in_jrn_vdy = 0;
+	in_jrn_vkpitch = in_jrn_vkyaw = 0;	/*Patch 305*/
+	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
+	in_jrn_vflags = 0;
+	in_jrn_vhavelast = false;
 
+	/*Patch 293: the scale terms are recorded because WITHOUT THEM THE 'v' LINE
+	  PROVES NOTHING.  The invariant is dyaw == -m_yaw*sensitivity*scale*dx, and a
+	  reader that does not know the three constants can only check that the ratio
+	  is SOME constant -- which a cheat holding a fixed multiplier would also pass.
+	  They go after `synth 0` so IN_JournalSynth_f's strstr for "\nsynth 0\n" still
+	  finds it; that rewrite is a fixed-width in-place poke and must not move.
+
+	  in_sensitivityscale is a plain float rather than a cvar and the plugin API can
+	  write it mid-run (plugin.h SetSensitivityScale), so this is its value AT THE
+	  START and a reader must treat a run whose ratio steps as suspect rather than
+	  as a measurement error.*/
 	Q_snprintfz(head, sizeof(head),
 		"FTESURF-HID 1\n"
 		"map %s\n"
 		"base %.6f\n"
 		"rawinput %i\n"
 		"rawkbd %i\n"
+		"rawmice %i\n"
+		"rawkbds %i\n"
+		"nolegacy %i\n"
+		"nolegacylive %i\n"
 		"synth 0\n"
-		"begin\n",
+		"sensitivity %.9g\n"
+		"sensitivityscale %.9g\n"
+		"m_yaw %.9g\n"
+		"m_pitch %.9g\n"
+		"m_filter %.9g\n"
+		"m_accel %.9g\n"
+		"m_accel_style %i\n"
+		"m_accel_power %.9g\n"
+		"m_accel_offset %.9g\n"
+		"m_accel_senscap %.9g\n",
 		InfoBuf_ValueForKey(&cl.serverinfo, "map"),
 		in_jrn_base,
 		raw?raw->ival:0,
-		rawkbd?rawkbd->ival:0);
+		rawkbd?rawkbd->ival:0,
+		in_rawmice_live,	/*Patch 301: the GRANT, beside the request above*/
+		in_rawkbd_live,
+		nolegacy?nolegacy->ival:0,	/*Patch 307: the request...*/
+		in_raw_nolegacy_live,		/*...and what it actually got*/
+		sensitivity.value,
+		in_sensitivityscale,
+		m_yaw.value,
+		m_pitch.value,
+		m_filter.value,
+		m_accel.value,
+		m_accel_style.ival,
+		m_accel_power.value,
+		m_accel_offset.value,
+		m_accel_senscap.value);
 	IN_Journal_Raw(head);
+
+	/*Patch 303: after the fixed block and before `begin`, so the header stays one
+	  run of key/value lines and a reader that stops at `begin` still sees them.
+	  `begin` therefore moves out of the snprintf above -- it cannot stay there,
+	  because these lines have to land in front of it and the device list is
+	  unbounded while that buffer is 1024 bytes.*/
+	INS_EnumerateDevices((void*)"dev", IN_Journal_DeviceLine);
+
+	/*Patch 310: the render-integrity table, beside the device table and before
+	  `begin` for the same reason -- a reader that stops at `begin` has seen the
+	  whole of what this run was played with.  Written as repeating `render`
+	  lines rather than as header keys because a key/value header is a dict to
+	  every reader that parses one, and a dict keeps the LAST of a repeated key:
+	  eleven cvars would arrive as one.  The `dev` table learned this first.*/
+	/*Patch 312 makes this two tables through one loop.  They are written under
+	  DIFFERENT KEYS -- `render` and `input` -- because they answer different
+	  questions (what the player could see, versus what their counts became) and a
+	  reader must be able to tell them apart without a table of its own.  They
+	  share the tracking arrays because 'c' is already generic over name+value, so
+	  a mid-run change to either needs no new record kind at all.*/
+	{
+		static const char *const tables[2] = {"render", "input"};
+		const char **names;
+		char line[256], qval[64], qdef[64];
+		int t, i;
+		in_jrn_rcvcount = 0;
+		for (t = 0; t < 2; t++)
+		{
+			names = t ? in_jrn_inputcvars : in_jrn_rendercvars;
+			for (i = 0; names[i] && in_jrn_rcvcount < MAX_JRN_TRACKEDCVARS; i++)
+			{
+				cvar_t *v = Cvar_FindVar(names[i]);
+				in_jrn_rcv[in_jrn_rcvcount] = v;
+				in_jrn_rcvmod[in_jrn_rcvcount] = v?v->modifiedcount:0;
+				in_jrn_rcvcount++;
+				if (!v)
+				{	/*the cvar does not exist in this build -- say so rather than
+					  write a 0, which is a real value and would read as a
+					  measurement.  Same rule as -1 on the counters above.*/
+					Q_snprintfz(line, sizeof(line), "%s %s - -\n",
+						tables[t], names[i]);
+				}
+				else
+					Q_snprintfz(line, sizeof(line), "%s %s %s %s\n",
+						tables[t], v->name,
+						COM_QuotedString(v->string, qval, sizeof(qval), false),
+						COM_QuotedString(v->defaultstr?v->defaultstr:v->enginevalue,
+							qdef, sizeof(qdef), false));
+				IN_Journal_Raw(line);
+			}
+		}
+	}
+
+	IN_Journal_Raw("begin\n");
 }
 
 static void IN_JournalEnd_f(void)
@@ -896,9 +1845,39 @@ static void IN_JournalEnd_f(void)
 	  reads -- which is a silly way to fail an exactness check that everything
 	  else in the format works to make exact.*/
 	now = Sys_DoubleTime();
-	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u",
+
+	/*Patch 306: catch up the per-frame record before the totals below are written, so
+	  the two agree.  Before the cap lift, for the same reason the devmap table is --
+	  on a file that hit in_journal_maxkb this is dropped and the trailer's totals then
+	  exceed the sum of the 'i' records.  That disagreement is not a fault: such a file
+	  already says `truncated`, and a reader must not demand the cross-check on one.*/
+	IN_Journal_Rejected(now);
+	IN_Journal_Legacy(now);		/*Patch 307*/
+	IN_Journal_RenderCvars(now);	/*Patch 310*/
+	IN_Journal_Bypassed(now);	/*Patch 307*/
+
+	/*The trailer carries the WHOLE-RUN totals beside the per-frame deltas on purpose:
+	  two independent statements of the same quantity, so a hand-edited journal has to
+	  be edited consistently in two places.  -1 is preserved rather than clamped -- on a
+	  backend that does not count, "no measurement" is the true answer and a 0 here would
+	  read as "none seen", which is the strictest conclusion drawn from the least
+	  evidence.  Appended AFTER the existing five fields, so a pre-306 reader that takes
+	  fields 0..4 is unaffected -- the same additive rule the 'v' line follows.*/
+	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u %i %i %i",
 		now - in_jrn_base, in_jrn_events, in_jrn_frames,
-		in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden);
+		in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden,
+		(in_raw_injected  < 0) ? -1 : in_raw_injected  - in_jrn_injbase,
+		(in_raw_unenum   < 0) ? -1 : in_raw_unenum    - in_jrn_unenumbase,
+		(in_raw_legacybtn < 0) ? -1 : in_raw_legacybtn - in_jrn_lgbbase);	/*Patch 307*/
+	/*Patch 303: the resolved devid->device mapping, which the header could not
+	  carry because devids are handed out lazily at first use -- see the essay on
+	  IN_Journal_DeviceLine.  DELIBERATELY BEFORE THE CAP IS LIFTED BELOW: the 1024
+	  bytes of headroom that lift buys exist for the `truncated` and `end` lines,
+	  and those outrank this table.  On a journal that hit the cap these lines are
+	  dropped by IN_Journal_Raw's own growth check rather than competing for it,
+	  and such a file already says `truncated`, so the loss is announced.*/
+	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
+
 	/*the trailer is written whether or not the cap was hit -- a truncated file
 	  still has to say how much it was missing.  in_jrn_max is lifted rather than
 	  in_jrn_full cleared, so a second truncated marker cannot appear.*/
@@ -937,6 +1916,64 @@ static void IN_JournalNote_f(void)
   cannot measure.  What makes it safe to ship is that it MARKS THE FILE: a journal
   containing injected events says synth 1 in its header and is inadmissible as
   evidence.  It does not need a cheat gate because it cannot forge a clean file.*/
+/*FTESurf Patch 311: THE POISON, MOVED TO THE INJECTION POINT.
+
+WHAT WAS WRONG.  in_jrn_synth was set by IN_JournalSynth_f because THE COMMAND set it,
+not because the INJECTION did.  So the flag described one known caller rather than the
+property it is named for, and every other way into IN_KeyEvent / IN_MouseMove produced a
+journal that says `synth 0` -- a clean evidence file -- over forged input.
+
+That is not hypothetical.  plugins/plugin.h:356-360 hands a plugin raw pointers to
+IN_KeyEvent, IN_MouseMove, IN_JoystickAxisEvent, IN_Accelerometer and IN_Gyroscope
+(common/plugin.c's input function table).  A plugin is an ordinary native DLL the player
+can drop in; it needs no cheat gate, no memory patching and no hook.  It calls the same
+function the Windows backend calls, the event lands in the same ring, and until now the
+journal could not tell the difference.
+
+SO THE MARK BELONGS WHERE THE EVENT ENTERS, and this function is that mark.  Anything
+that is not a platform backend calls it first.  It is idempotent and costs one branch.
+
+WHY NOT DETECT IT INSIDE IN_KeyEvent INSTEAD.  Because the honest test -- "did this come
+from a backend?" -- is not answerable there: the backend and the plugin call the identical
+function with identical arguments.  Any in-band answer would need every backend on every
+platform to set a flag first, which is a correctness burden spread across code this patch
+cannot test, and one missed backend silently poisons every honest journal on that
+platform.  Marking at the few non-backend entries instead is a smaller, checkable set, and
+it fails in the SAFE direction: a new injection route added later is un-marked (a gap to
+close) rather than every honest run being accused (an accusation that cannot be undone).
+
+WHAT IT STILL DOES NOT CATCH, and this is the ceiling rather than an oversight.  A native
+DLL that detours IN_MouseMove itself, or patches the ring, runs BELOW this mark and is not
+touched by it.  Neither is a hardware replay device.  This closes the SANCTIONED injection
+route -- the one that needs no skill -- and does not pretend to close the others.*/
+void IN_Journal_MarkSynth(const char *source)
+{
+	char note[64];
+
+	if (!in_jrn_buf || in_jrn_synth)
+		return;		/*no journal open, or already poisoned -- idempotent*/
+
+	/*rewrite the header's synth key in place -- it is a fixed-width "0" by
+	  construction, so this cannot move anything after it.*/
+	{
+		char *at = strstr(in_jrn_buf, "\nsynth 0\n");
+		if (at)
+			at[7] = '1';
+	}
+	in_jrn_synth = true;
+
+	/*NAME THE SOURCE.  `synth 1` alone says the file is inadmissible but not why,
+	  and "a developer ran in_journal_synth to test the format" and "a plugin
+	  forged input" are the same flag with very different meanings.  Written as a
+	  note rather than a new header key because the header is already closed by
+	  the time this can fire.*/
+	/*space-separated, not `source=plugin`: IN_Journal_Note's sanitiser allows
+	  only alphanumerics, space, _ . and -, so an '=' arrives as '?'.  Measured on
+	  the first run of this patch's own falsifier.*/
+	Q_snprintfz(note, sizeof(note), "SYNTH source %s", source?source:"unknown");
+	IN_Journal_Note(note);
+}
+
 static void IN_JournalSynth_f(void)
 {
 	int n = (Cmd_Argc() > 1) ? atoi(Cmd_Argv(1)) : 1;
@@ -947,14 +1984,7 @@ static void IN_JournalSynth_f(void)
 	if (n > 100000)
 		n = 100000;
 
-	if (in_jrn_buf && !in_jrn_synth)
-	{	/*rewrite the header's synth key in place -- it is a fixed-width "0" by
-		  construction, so this cannot move anything after it.*/
-		char *at = in_jrn_buf ? strstr(in_jrn_buf, "\nsynth 0\n") : NULL;
-		if (at)
-			at[7] = '1';
-		in_jrn_synth = true;
-	}
+	IN_Journal_MarkSynth("in_journal_synth");
 
 	for (i = 0; i < n; i++)
 	{
@@ -1233,6 +2263,17 @@ void IN_MoveMouse(struct mouse_s *mouse, float *movements, int pnum, float frame
 	my = mouse->delta[1];
 	mouse->delta[1]=0;
 
+	/*FTESurf Patch 312.  HERE, one line after the read and BEFORE the in_xflip
+	  flip below, because this is the last instant mx is still nothing but the sum
+	  of the reports the ring delivered.  Patch 293's tap is 150 lines down, at the
+	  other end of every transform; the gap between the two is exactly the window a
+	  delta-mutating hook occupies, and recording both ends is the whole patch.
+	  See the essay above IN_Journal_ViewRaw.
+
+	  Not moved above the two early-returns at the top of this function: a pointer
+	  this seat does not consume contributes nothing to this view, and counting it
+	  here would manufacture a disagreement on splitscreen that means nothing.*/
+	IN_Journal_ViewRaw(mx, my);
 
 	if(in_xflip.value) mx *= -1;
 
@@ -1375,6 +2416,16 @@ void IN_MoveMouse(struct mouse_s *mouse, float *movements, int pnum, float frame
 			my = 0;
 		}
 	}
+
+	/*FTESurf Patch 293.  HERE, and not at the `mx = mouse->delta[0]` grab far
+	  above, because between the two there are four places that legitimately
+	  discard the delta -- the Key_MouseShouldBeFree zeroing, the touch major-axis
+	  and weapon-wheel branches, the menu mousemove consumers, and CSQC_MouseMove --
+	  and counts logged before them would be counts the angle never saw, which reads
+	  as a broken invariant on a clean client.  This is the last point at which
+	  mx/my are still integer device counts and the first at which they are final.*/
+	IN_Journal_ViewDelta(mx, my,
+		(strafe_x?1:0) | (strafe_y?2:0) | (Key_MouseShouldBeFree()?4:0));
 
 	if (m_filter.value)
 	{

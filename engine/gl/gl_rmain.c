@@ -58,6 +58,8 @@ extern cvar_t	r_stereo_separation;
 extern cvar_t	r_stereo_convergence;
 extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
+extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
+static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
 
 extern cvar_t	gl_screenangle;
@@ -76,6 +78,7 @@ extern cvar_t r_tessellation_level;
 
 extern cvar_t r_portaldrawplanes;
 extern cvar_t r_portalonly;
+extern cvar_t r_portalareas;	//FTESurf Patch 287
 
 extern	cvar_t	scr_fov;
 
@@ -2062,6 +2065,42 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 		BE_Scissor(NULL);	//resolves against r_refdef; see GLBE_ApplyScissor
 	}
 
+	/*
+	  FTESurf Patch 287 -- THE FAR SIDE IS IN A DIFFERENT AREA THAN THE NEAR SIDE.
+
+	  r_refdef.vieworg has been moved to the far end of the link above
+	  (TransformCoord, :1838), but areabits has not been recomputed for it.  It is
+	  derived from vieworg and then LATCHED by areabitsknown -- r_surf.c:3676 for
+	  the engine's own loaders, mod_vbsp.c:7409 for Source -- so leaving the latch
+	  set makes the recursed view reuse the areabits of the room the player is
+	  standing in.  VBSP_RecursiveWorldNode then refuses every leaf whose area is
+	  not reachable from THERE (mod_vbsp.c:6994), and a doorway whose far side
+	  lives in another area draws nothing at all.
+
+	  Measured on surf_kitsune's exit doorway, developer 1:
+
+	      [world] recurse 0: area  4 cluster  68 vis yes ->  99 meshes  (the room)
+	      [world] recurse 1: area  6 cluster  99 vis yes -> 270 meshes  (skyroom)
+	      [world] recurse 1: area 11 cluster 131 vis yes ->   0 meshes  (the door)
+
+	  `vis yes` and a real cluster, and still nothing queued -- because the near
+	  view reported "area 6 of 13: 1 area(s) reachable" and area 11 was not it.
+	  The FBO read back as (0,0,0,255) throughout, which is the same fact from the
+	  other end.
+
+	  R_DrawSkyroom has cleared this latch since it was written (gl_warp.c:365,
+	  "recalculate areas clientside") and that is exactly why the 3D skybox in the
+	  middle row draws and the portal in the bottom row does not.  This is that
+	  line, for portals.
+
+	  Safe against leaking into the parent: r_refdef is restored wholesale from
+	  oldrefdef at :2085 below, and areabits/areabitsknown are members of it, so
+	  the near view's areas are put back with everything else.  A map with no
+	  areas has one area reachable from anywhere and is unaffected either way.
+	*/
+	if (r_portalareas.ival)
+		r_refdef.areabitsknown = false;
+
 	Surf_SetupFrame();
 	//FIXME: just call Surf_DrawWorld instead?
 	if (r_portaldebug.ival != 1)	//P206 bisect: aperture drawn, nothing rendered through it
@@ -2635,6 +2674,7 @@ void GLR_RenderView (void)
 	texid_t sourcetex = r_nulltex;
 	texid_t sourcedepth = r_nulltex;
 	shader_t *custompostproc = NULL;
+	shader_t *ccpostproc = NULL;	//FTESurf Patch 288
 	float renderscale;	//extreme, but whatever
 	int oldfbo = 0;
 	qboolean forcedfb = false;
@@ -2723,6 +2763,63 @@ void GLR_RenderView (void)
 				);
 		if (custompostproc)
 			r_refdef.flags |= RDF_CUSTOMPOSTPROC;
+
+		/*
+		FTESurf Patch 288: the map's colour grade, as its own stage.
+
+		Source maps carry color_correction entities naming a 32x32x32 LUT and a
+		weight, and FTE has never applied any of them -- the only mention of the
+		feature anywhere in the engine was $toolcolorcorrection sitting in the hl2
+		plugin's ignore list.  surf_tensor2 runs two, which is why its portal
+		particles read as "wayy to blue": the PCF really is blue, and in Source
+		the WHOLE SCENE is graded toward it so they do not stand out.
+
+		Registered exactly like custompostproc above, and deliberately NOT through
+		it: r_postprocshader belongs to the user and this string is generated per
+		map by the hl2 plugin, so sharing the cvar would mean a graded map silently
+		eating someone's setting and never giving it back.
+
+		Inside the RDF_NOWORLDMODEL guard with everything else here, which is what
+		keeps the grade off the HUD -- correct, and the thing that would look most
+		obviously wrong if it were not.
+		*/
+		if (*r_colourcorrection.string)
+			ccpostproc = R_RegisterCustom(NULL, r_colourcorrection.string, SUF_NONE, NULL, NULL);
+		/*
+		FTESurf Patch 290: THE STAGE IS ONLY SWITCHED ON IF THE SHADER CAN ACTUALLY
+		DRAW, and that test is not defensive programming -- it is a bug this patch
+		already shipped once.
+
+		A post-process stage that draws nothing does NOT leave the scene alone.
+		R_RenderPostProcess allocates a fresh render target (:2639), draws into it,
+		and returns it unconditionally (:2659); R2D_RT_Configure only re-uploads
+		when the size or format changed, so nothing ever clears it.  A shader that
+		failed to parse therefore hands the rest of the chain a texture that was
+		never written this frame -- black on the first frame and a frozen one after
+		that.  Patch 288 generated its script with an outer brace, which made the
+		whole body one pass, and the map loaded to a black screen with nothing in
+		the console but a warning about indentation.
+
+		BOTH halves are tested because they fail separately and neither implies the
+		other: the outer-brace bug left `prog` NULL with three passes intact, while
+		a program name that does not resolve leaves `prog` NULL too but a shader
+		with no passes at all still reaches here with prog set (Shader_Finish
+		back-fills a pass at gl_shader.c:6221 only when prog is non-NULL).
+
+		Failing to ungraded is always better than failing to blank: the grade is a
+		nicety, the picture is the game.
+		*/
+		if (ccpostproc && ccpostproc->prog && ccpostproc->numpasses)
+			r_refdef.flags |= RDF_COLOURCORRECT;
+		else if (ccpostproc && ccpostproc != cc_warned)
+		{	//once per shader, not once per frame -- this is inside the render loop
+			cc_warned = ccpostproc;
+			Con_Printf(CON_WARNING"colour correction disabled: shader \"%s\" has %s "
+					"(prog %i, passes %i).  The scene is drawn ungraded.\n",
+					r_colourcorrection.string,
+					!ccpostproc->prog?"no program":"no passes",
+					ccpostproc->prog?1:0, ccpostproc->numpasses);
+		}
 
 		if (r_hdr_framebuffer.ival && !(vid.flags & VID_FP16))	//primary use of this cvar is to fix q3shader overbrights (so bright lightmaps can oversaturate then drop below 1 by modulation with the lightmap
 			forcedfb = true;
@@ -2998,6 +3095,10 @@ void GLR_RenderView (void)
 		}
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_WATERWARP, scenepp_waterwarp, "rt/$waterwarped");
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_CUSTOMPOSTPROC, custompostproc, "rt/$postproced");
+		//FTESurf Patch 288.  AFTER the user's post-process shader, so a grade that
+		//the map author chose is the last thing applied to the scene's colour, and
+		//BEFORE fxaa, which wants to run on the pixels that will actually be shown.
+		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_COLOURCORRECT, ccpostproc, "rt/$colourcorrected");
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_ANTIALIAS, scenepp_antialias, "rt/$antialiased");
 		if (r_refdef.flags & RDF_BLOOM)
 			R_BloomBlend(sourcetex, r_refdef.vrect.x, r_refdef.vrect.y, r_refdef.vrect.width, r_refdef.vrect.height);

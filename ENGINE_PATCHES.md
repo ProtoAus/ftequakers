@@ -20372,7 +20372,7 @@ the same mistake twice. Reserved as the next patch.
   and the figure had been estimated from a truncated terminal listing rather
   than read. Corrected before the number could be quoted anywhere else.
 
-## Patch 266 — two things a shader loses silently when it ends up without a GLSL program, and the cvar that was supposed to detect it was testing the wrong bit  *(CODE APPLIED AND COMPILING, NOT YET VERIFIED IN-GAME — engine only, `build.ps1 -Engine`)*
+## Patch 266 — two things a shader loses silently when it ends up without a GLSL program, and the cvar that was supposed to detect it was testing the wrong bit  *(APPLIED AND VERIFIED, engine only — `build.ps1 -Engine`)*
 
 **Reported as** two observations. The clouds on surf_boreas take no distance fog
 while everything around them does; and the ramp's ice panes have no transparency
@@ -20563,19 +20563,7438 @@ not collide with the other session's `mat_vmt.c` work.
   `r_reflectcube`. A second cvar in the same family as Part C that looks like a
   control and is not.
 
+### Verified
+
+**Part A — the direct instrument.** The `[shader]` line, same map, two runs:
+
+```
+before  project_tendies/models/ice_transparent.vmt   sort  5 prog 0 passes 6 bits0 0x10000
+after   project_tendies/models/ice_transparent.vmt   sort 11 prog 0 passes 6 bits0 0x65
+world   maps/surf_boreas/.../ice_transparent_...     sort 11 prog 1 passes 1 bits0 0x10065  (UNCHANGED)
+```
+
+`prog` and `passes` do not move, exactly as predicted — they were never the
+defect. The world twin is byte-identical, which is the control: it never took
+the redirect. One prediction was wrong in the patch's favour: the record
+expected `0x10065`, and the real result is `0x65` — **depthwrite is now absent**,
+because the shader takes the blend branch instead of the branch that force-ORs
+`SBITS_MISC_DEPTHWRITE`. That is correct for a translucent surface.
+
+**Part A in the picture**, save011, ramp-glass region, 1920x1200:
+
+| | |
+|---|---|
+| noise floor, same crop | **0 px** |
+| post-266 vs pre-266 | **569,824 px (76.7%)** |
+
+Visually: the panes go from a flat opaque grey-blue wall to translucent glass
+with the snow slope, the rock, and the previously-invisible icicle decorations
+reading through them. The wooden beams do not change.
+
+**Part B.** `shader_here` confirms the crosshair is on `project_tendies/cloods`
+at both vantages, so the material under test is the reported one.
+
+A pixel count is impossible here and that had to be worked around rather than
+ignored: cloods carries `tcMod scroll`, so two frames of the *same state* differ
+by **824,123 px (58.8%)** purely from scroll phase. Measured instead by regional
+mean, with a scroll-only pair as the noise calibration:
+
+| | mean RGB delta |
+|---|---|
+| scroll noise (same state, different phase) | −1.08 −1.03 −1.00 |
+| `r_fog_progless` 1 vs 0, shallow (pitch −18) | **+6.75 +8.09 +7.69** |
+| `r_fog_progless` 1 vs 0, steep (pitch −55) | **+13.57 +16.60 +15.76** |
+
+Right sign — fog colour is 232 255 254, so fog raises the mean — at 7–16x the
+noise. Visually the cloud layer loses its hard dark streaks and hazes toward the
+fog colour, while the trees and rock silhouettes in the same frame, which have
+programs and already fogged, are unchanged.
+
+**Parts B and C discriminate each other, which is the strongest evidence here.**
+Split into eight bands from far to near, the two knobs move in opposite
+directions on disjoint parts of the screen:
+
+```
+band                     0      1      2      3      4      5      6      7
+r_fog_progless   1v0  +21.45 +15.17  +6.02  +3.89  +4.74  +8.66  +0.16  +0.00
+r_fog_permutation 0v1  +0.36  -2.03  +1.91  -3.14  -0.16  -0.42 -10.94 -21.30
+```
+
+B acts on the overhead cloud plane (program-less, newly fogged, mean up); C acts
+on the horizon terrain (WorldVertexTransition, a program, fog removed, mean
+down). Neither touches the other's surfaces. That is the no-double-fog control
+passing from both sides at once.
+
+**Part C** on its own: `r_fog_permutation 0` now moves the mean by
+**−4.17 −4.53 −4.70** against +1.0 scroll noise, in the correct direction. The
+before is the user's own report — setting it looked for a fog change and got
+nothing, because it was clearing BUMPMAP and UPPERLOWER instead.
+
+**Regression.** surf_demise loads and renders; 62 pass-program shaders are now
+BLEND-sorted, while the opaque VertexlitGeneric materials stay at
+`sort 5 … bits0 0x10000` — correct, since they emit no `progblendfunc` at all.
+No new `prog 0` where there was `prog 1`.
+
+### Two harness errors made and corrected during this verification
+
+Both are recorded because both produced numbers that looked like results:
+
+- **The first Part B run measured its noise floor at a different vantage from
+  its measurement.** save011's floor was 0 px, so the sky vantage was assumed
+  clean; it was not — the camera drifted between shots there (the two frames
+  align best at dy −10, dx +20) and the resulting "137,518 px" was partly camera
+  movement. Every screenshot now re-issues `setpos` immediately before it, and
+  the floor is taken at the vantage being used, with the same spacing as the
+  real pair. *A noise floor belongs to the vantage it was measured at* was
+  already written down from an earlier patch, and was still got wrong.
+- **The first Part A comparison inherited `vbsp_skyroom`/`r_sky_forcedepth`**
+  from whatever was archived, while the pre-266 baseline had them explicitly
+  set, so the background differed for a reason that had nothing to do with this
+  patch. Both are now set explicitly in the config.
+
+And one over-read, corrected: the Part B band profile was first described here
+as a distance gradient. It is not — it is a *material* distribution (clouds
+overhead, terrain at the horizon). The fix is right and the measurement stands,
+but the reasoning about why the profile has that shape was wrong.
+
+### Still open
+
+- `r_fog_progless` declines maps with `fogmaxdensity < 1` (22 of 36 controllers
+  sampled). The `fixedemu`+FOG route would close them and also cover the
+  core-profile path.
+- Unrelated, seen in the log and not chased:
+  `Error: empty directory name (models/project_tendies//icicles/icicle_01.mdl)`
+  — a doubled separator in a model path on surf_boreas.
+
+## Patch 267 — 80 maps ask for a higher velocity ceiling and none of them were getting it, because the only two ways to ask are both refused  *(APPLIED AND COMPILING, deployed exe pending — engine only, `sv_phys.c`)*
+
+**Reported as** "some maps like surf_sandtraps2 has a custom max velocity value,
+can you find this value 10000 can you find them and them to the maps that need
+them?"
+
+The premise had one thing wrong and it is worth correcting before anything else,
+because it is written into this engine's own source. `protocol.h:143` says "Surf
+maps that raise sv_maxvelocity past 3500 (surf_sandtraps2) reach that ceiling in
+normal play". **surf_sandtrap2 does not set sv_maxvelocity.** Neither does
+surf_sandtrap. Their entity lumps contain no `logic_` entity, no `Command`
+output and no occurrence of the string at all — checked against the decompressed
+lump, not a raw read. Whatever made that map fast on the wire, it was not a map
+setting; the PEXT2_BIGVELOCITY work the comment justifies stands on its own
+(the field wrapped at ±4096 regardless of who raised the cap), but the example
+attached to it is not real and should not be quoted again.
+
+### What is real
+
+Of the 1310 installed maps, **107 set `sv_maxvelocity` in their own entity lump**
+and **80 of them ask for more than the 3500 that `cfg/default.cfg` pins**:
+
+| asked for | maps |     | asked for | maps |
+|---|---|---|---|---|
+| 3500 (the default) | 27 | | 6000 | 4 |
+| 3850 | 1 | | 7500 | 2 |
+| 4000 | 4 | | 9000 | 1 |
+| 4500 | 1 | | 9999 | 2 |
+| 5000 | 32 | | 10000 | 33 |
+
+Every one of them was being held at 3500, and there are exactly two ways a map
+can ask, both of which refuse it:
+
+1. **The map's own entity output.** All 107 use the same Source idiom — a
+   `logic_auto` firing `OnMapSpawn <target>,Command,sv_maxvelocity N` at a
+   `point_servercommand`. `Command` reaches `SV_IOCommand` in
+   `src/server/sv_entities.qc`, which is allow-listed to `say`/`echo`/`print`.
+2. **Even if it were not**, `sv_maxvelocity` is in `pms_lockedmovevars`. The
+   write would reach the ruleset lock's callback and be reverted on the spot,
+   because `cfg/default.cfg` sets `pm_lockmovement 1`.
+
+So the value was refused twice over, and the map ran clipped where its author
+expected headroom.
+
+### Why the map's own command still does not get to do it
+
+Momentum allows exactly this — `CMomentumGameRules::RunPointServerCommandWhitelisted`
+(`mom_gamerules.cpp:282-288`) whitelists `sv_gravity`, `sv_maxvelocity`,
+`sv_airaccelerate` and `sv_accelerate` — so "just do what Momentum does" is an
+available answer. It is the wrong one here, and the maps say why themselves.
+The same `logic_auto` that carries the sv_maxvelocity line on surf_hope also
+fires `sv_airaccelerate 150` and `sv_enablebunnyhopping 1`; surf_beyond's fires
+`sv_cheats 1;sv_airaccelerate 150;sv_enablebunnyhopping 1;...` as one
+semicolon-separated string. A BSP arrives with a download. A run's time is a
+claim about the physics it was set under. Handing every downloaded map the
+physics its author happened to want gives that claim away.
+
+**So the values are read out of the maps offline and shipped as data.** The map's
+live `Command` stays refused and the allow-list is untouched.
+
+### The change
+
+`cfg/map_<mapname>.cfg`, a per-map ruleset layer, applied through the machinery
+`mode_<name>.cfg` already uses:
+
+- `SV_LoadGamemodeRuleset` split into `SV_LoadRulesetFile(path, what)` plus a
+  thin path-building wrapper. Nothing about the parse was mode-specific, and the
+  per-map layer needs the same refusal list (`sv_cheats`, `pm_lockmovement`,
+  `sv_gamemode`, any `CVAR_CHEAT`) and above all the same
+  record-then-`Cvar_ForceSet` ordering against the lock's callback. A second copy
+  would be a second place to get that ordering wrong.
+- `SV_ApplyGamemode` becomes a wrapper around the old body
+  (`SV_ApplyGamemodeModes`) so the per-map file is loaded on **every** path.
+  This is not tidiness: the mode selection returns early in three places, and one
+  of them is "no ruleset file for the detected mode" — which **every surf map
+  takes**, because surf deliberately has no `mode_surf.cfg` (it *is*
+  `cfg/default.cfg`). All 107 of these maps are surf maps. Bolting the call onto
+  the end of the function would have covered none of them.
+- The map name stripping is factored out as `SV_BareMapName`, since the per-map
+  layer needs the same bare name and two spellings of it would drift.
+- `movement` names the per-map file and its cvar count on its own line, and the
+  map-spawn report prints `%s adds %i cvars from %s`. A per-map file is the one
+  override source that is *not* the same for every map in a mode, so "which
+  physics was this time set under" has to be able to name it.
+
+### The generated files
+
+80 written (`scratchpad/genmapcfg.py`), 27 skipped because they ask for exactly
+the 3500 they would already get — a file setting a cvar to its current value is
+noise that still has to be read. Each file records the map's own output verbatim.
+Four needed a judgement and say so in the file:
+
+- **surf_ofrenda** has three `logic_auto`s, all `OnMapSpawn`, all delay 0, asking
+  6000 / 5000 / 6000. Source's firing order between same-delay outputs is not
+  defined, so there is no correct one to pick; the highest is taken, being the
+  one that cannot clip a run the author's own majority allowed.
+- **surf_pantheon** (`logic_relay` `OnTrigger`), **surf_vestige** (`OnSpawn`) and
+  **surf_colony** (`OnNewGame`) are not `OnMapSpawn`, so applying from map load
+  is an approximation — in Source the ceiling would rise only when that output
+  actually ran.
+
+A parsing note for anyone re-running the census: **compiled entity outputs may be
+`\x1b`-separated rather than comma-separated**, and VBSP emits both. Splitting on
+commas alone read surf_vestige's `serverSettings\x1bCommand\x1bsv_maxvelocity
+50000\x1b1` as the token `500001`. Any census that ignores this is wrong in the
+direction of nonsense values.
+
+### Not done, and deliberately
+
+**`mode_bhop.cfg` still leaves sv_maxvelocity at 3500, and Momentum's bhop value
+is 100000** (`CGameMode_Bhop::SetGameModeVars`; defrag is also 100000, conc 2000,
+kz and surf 3500). The file's existing comment declines to change it — "without a
+map that actually reaches it, that would be a number copied rather than a number
+chosen" — and that objection is now answered, since the number has a source. It
+is left alone because it is a whole-gamemode physics change on a different mode
+than the one reported, and it would move every bhop time. Flagged, not taken.
+
 ### Verification — NOT YET DONE
 
-Deploy is blocked: the user's own `ftesurf64.exe` (PID 19860, 18:22:17) holds
-the file. Code compiles clean, nothing is measured yet. Planned:
+The user's own `ftesurf64.exe` (PID 7116, 20:37) holds the file, so the built exe
+is not deployed. Compiles clean. Planned:
 
-1. Part A has a direct instrument and needs no pixels — the `[shader]` line must
-   move `project_tendies/models/ice_transparent.vmt` from
-   `sort 5 prog 0 passes 6 bits0 0x10000` to `sort 11 … bits0 0x10065`.
-2. Part A in the picture at save011, noise floor first, with the parse flag as
-   the falsifier.
-3. Part B at the cloods vantage, `r_fog_progless 1` vs `0`, **with a control**:
-   the WorldVertexTransition terrain in the same room already fogs, so it must
-   not change, and a program shader must be pixel-identical (no double-fog).
-4. Part C: `r_fog_permutation 0` must stop removing normal mapping.
-5. Regression on surf_summer and surf_demise, plus a map with no translucent
-   VertexlitGeneric material, which must be unchanged.
+1. `movement` on surf_null (asks 10000) must show the per-map line and
+   `sv_maxvelocity` live at 10000 against base 3500.
+2. `movement` on a map with no file must not show the per-map line at all, and
+   sv_maxvelocity must read 3500.
+3. A map file naming a refused cvar (`sv_cheats`) must be rejected with the
+   "may not be set by a map ruleset" warning and leave the rest of the file
+   working — the refusal list is shared with the mode loader and this is the
+   only new caller of it.
+4. Map A -> map B -> map A: `SV_ClearGamemodeOverrides` must not leak map A's
+   ceiling into B. `pms_over` is shared between the two layers.
+
+---
+
+## Patch 268 — a dither switch for the newly-transparent ramps, the gates hiding Source's reflections and bumpmapping, and two Windows client bugs  *(IN PROGRESS — reserved)*
+
+Reserved. Number taken because the peer session claimed 267 for the velocity-ceiling
+patch while this one was being planned.
+
+Six parts, all engine+plugin, every behavioural change behind its own cvar defaulting to
+today's behaviour -- except D1, a pure correctness fix whose per-map size proof falls back
+to today's walk and prints why, and whose cvar (hl2_bumpstride 0) is the falsifier:
+
+- **A** `hl2_dither_translucent` — dithered alternative to alpha-blended `$translucent`
+  Source materials, models and world.
+- **B** `r_envcubemap` / `hl2_envcubemap` / `hl2_envmap_source` / `r_reflectcube_nosky` —
+  `$envmap env_cubemap` on props reflects nothing, because the permutation gate never
+  consults `curbatch->envmap`. **APPLIED AND VERIFIED 2026-09-09** — and it was not
+  props-only: the same gate governs brush faces, and because these shaders read the
+  normalmap only inside the block it gates, it was also the reason those materials showed
+  no bumpmap. See Part B below.
+- **C** model lighting in five stages: `hl2_bumpgreenfix`, `hl2_lt_dirsign`,
+  `hl2_bumplight`, `hl2_halflambert_sq`/`hl2_lt_dmean`, `hl2_cubelight`.
+- **D** world bumped lightmaps: D1 the per-style stride fix (67,032 bumped+lightstyled
+  faces on 153 lit maps, plus 5,626 unbumped lightstyled faces on the 150 maps that store
+  two sets per style; the plan's 111,391/175 counted 38,733 faces on unlit maps),
+  D2 the RNM combine.
+- **E** `vid_fullscreen` renumbering to 0=maximized-windowed / 1=borderless /
+  2=exclusive, plus `vid_winmaximize` and `vid_minonfocusloss`.
+- **F** `in_focusgrab` — mouse grab follows the foreground window, not thread focus.
+
+Full plan: `C:\Users\Lex\.claude\plans\i-m-developing-a-professional-inherited-bird.md`
+
+---
+
+### Part D1 — bumped-lightmap style-walk stride  *(APPLIED AND VERIFIED 2026-09-09 — engine `gl/gl_model.h`, `client/r_surf.c`; plugin `plugins/hl2/mod_vbsp.c`; HEADER change, `build.ps1 -Engine -Full`)*
+
+**What was wrong.** VRAD stores a `SURF_BUMPLIGHT` face's lightmap as four luxel sets per
+lightstyle — the flat map plus three radiosity-normal-map basis maps
+(`vrad/lightmap.cpp:3401-3411`, laid out `[style][set][luxel]`: `radial.cpp:700` loops k over
+styles and `:739` addresses `lightofs + (k*bumpSampleCount + set)*numluxels*4`) — and
+`Surf_BuildLightMap` advanced one set per style (`r_surf.c`, the six "skip to next lightmap"
+lines and the luminance twin). So on a bumped face with styles (0, N) the walk summed basis
+map 0 in as style N, and because FTESurf's QC sets only style 0 (`sv_main.qc:440`) an unset
+style reads 264/256 (`gl_rlight.c:187-189`): those faces summed a basis map and never the real
+second style. Which way they move when fixed depends on that style's own map: on
+surf_affliction (style 37, a bright switchable light) faces 26797/33326 come out 2.05x/2.12x
+BRIGHTER with a red-to-warm hue shift; on bhop_orgrimmar 7742 and bhop_floodwaters 1364/1360
+they come out 0.50x/0.68x/0.52x. Over surf_affliction's 3,492 bumped+lightstyled world faces
+1,219 brighten and 1,419 darken by more than 20 percent (offline decode,
+`wf/refute268/luxels.py`). Set 0 of style 0 sits exactly at `lightofs`, so single-style bumped
+faces were always right; this is the style walk only. The 5,626 unbumped lightstyled faces on
+the 2/5 maps move in the BRIGHTER direction: today their "style 1" is the non-RGBE record,
+mostly zeros, and the fix reads the real style-1 map at 264/256.
+
+**The stride is probed, not assumed.** `VBSP_ProbeLightmapStride` (`mod_vbsp.c:3814`, called
+from the loader at `:9230` after `VBSP_LoadFaces`, before displacements) predicts the whole
+lighting lump's size from the faces for three layouts and tags surfaces only when exactly one
+equals it (`:3866-3881`). It models the `nstyles*4` bytes of per-face average colour that VRAD
+writes BEFORE each block (`lightmap.cpp:3396-3399`; the term at `:3862`) — without that term
+every map fits nothing, which is where the plan's first census went wrong — and skips a face
+whose `smax`/`tmax` is not positive (`:3847`), the same guard Patch 281's `VBSP_RepackLuxels`
+keeps. Library census (1310 maps, LZMA-aware, HDR lumps when present):
+
+| layout | maps | bumped+lightstyled faces (maps) |
+|---|---|---|
+| 1 set flat / 4 bumped | 1117 (4 v19, 1108 v20, 4 v21, 1 v25) | 62,307 (141) |
+| 2 / 5 — one extra 4-byte-per-luxel record after every style's sets, not RGBE (exponents -119..124 on bhop_floodwaters face 1360, all-zero or exponent-0 sparse elsewhere) | 150 (83 v21, 67 v25) | 4,536 (11) |
+| 1 / 4 plus a per-FACE trailer of `nstyles*luxels` zero bytes AFTER the last style — tagged exactly like 1/4, the trailer only enters the size proof (surf_sup faces 22/31/792/795 prove the placement) | 9 (all v21) | 189 (1: surf_sup); its 2,440 unbumped styled faces are correct today and stay untouched |
+| unlit (0-byte lighting lump) | 26 | 38,733 (18) — never walked |
+| fits nothing | 8 (7 Strata df_ maps with shared lightofs; surf_huecomundo, one odd face) | 0 |
+
+The third row is the correction that mattered: the drafts tagged those nine maps with one extra
+byte per luxel per STYLE, which would have put style 1 at `lightofs + lux*4 + lux` — exponents
+down to -128, 32-50 percent sane — on every lightstyled face of bhop_24, surf_at_the_limit,
+surf_borderlands, surf_colours, surf_legends, surf_mjk, surf_sup, surf_swagtoast and
+surf_windrunner, and degraded them at the default. surf_sup's unbumped two-style faces decode
+style 1 cleanly at `lightofs + lux*4` (exponents -11..0, 100 percent sane) and the last
+`ns*lux` bytes of every face block are all zero: a trailer, not a per-style stride.
+
+The tag is `SURF_LMSTRIDE` (`gl_model.h:420-421`: `SURF_LMSTRIDE_SHIFT 9`, `SURF_LMSTRIDE_MASK
+0x03e00`, bits 9-13 of `surf->flags`, previously unused by every loader and both plugins; no
+code compares a surface's flags word whole): extra bytes per luxel per style beyond E5BGR9's
+own four, i.e. what sits BETWEEN one style's flat map and the next's — 12 on a bumped face of
+a 1/4 map, 4/16 on a 2/5 map, 0 otherwise (`:3903`). `r_surf.c:1387` computes `lmextra =
+size * ((flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT)` and each of the six skips adds it
+(`:1570`, `:1591`, `:1615`, `:1697`, `:1708`, `:1719`). Because `extra` is non-zero for every
+bumped face on a 1/4 map and for every lit face on a 2/5 map, `tagged` equals the bumped count
+on the former and the lit count on the latter — a single-style bumped face wears a tag its
+walk never reaches, harmlessly — which is what the run's lines below read. `TIHL2_BUMPLIGHT
+0x800` is uncommented (`:2144`) and carried per texinfo in `prv->texinfo[].bumped` (the raw
+flags never survived into `texinfo->flags`). A face whose widened block would run past the
+lump is left untagged and counted (`:3907-3911`). Worker and deluxe walks are untouched:
+neither is reachable for `fg_new`, and leaving them byte-identical keeps Q1/HL lightmaps
+provably unchanged. When no candidate fits, every surface is left untagged and the walk is
+exactly what it was; that fallback is printed (`lightmap stride UNPROVEN ...`, `:3877`), never
+silent.
+
+**Cvar** `hl2_bumpstride` (plugin, `CVAR_MAPLATCH`, default 1 — a pure correctness fix with a
+per-map proof and a printed fallback; 0 is the falsifier). One `Con_Printf` per lit map states
+the layout, the counts and which walk was used (`:3917-3919`); it is not gated by the cvar, and
+it names the arm (`hl2_bumpstride 0: style walk left at one luxel set`, `:3884`) so a screenshot
+always has its provenance. Unlit maps and dedicated servers print no stride line — there is
+nothing to state, and a missing line there is not a stale plugin.
+
+**Same build as Patch 281, and the probe defers to the repack.** Patch 281's
+`VBSP_RepackLighting` runs at the tail of `VBSP_LoadFaces` and, on the nine `1/4+trailer` maps,
+rebuilds `mod->lightdata` dense — set 0 of every style, nothing between styles — and sets
+`prv->lightrepacked` (`:568`, written only at `:3594`, never on an early return or on the
+`hl2_lightmap_repack 0` arm). The probe checks that flag first (`:3829-3833`) and prints
+`lightmap was repacked per face (Patch 281): one luxel set per lightstyle, no stride tag
+needed`, tags nothing and returns: the one-set walk is exact for what the repack wrote, and
+there is no raw layout left to prove. The first draft of this record expected an `UNPROVEN`
+warning there; the code and the run (surf_sup, below) both say otherwise. The consequence for
+the census table is that the `1/4+trailer` candidate is reachable only with
+`hl2_lightmap_repack 0`, and the run did not take that arm on any of the nine, so that
+candidate's tagging rests on the offline size proof alone (see Not doing here).
+
+**Verified** — `cfg/testrun/p268d1_on.cfg` / `p268d1_off.cfg`, twins differing in the
+`hl2_bumpstride` line, the ARM echo and the screenshot prefixes; one process per arm, launched
+with `+set hl2_bumpstride N` as well; `r_drawentities 0`, `r_lightstylescale 1`; logs
+`logs/p268d1_on.log`, `logs/p268d1_off.log`, and for the re-shot control
+`cfg/testrun/p268d1_ctrl_off.cfg` / `p268d1_ctrl_on.cfg` with `logs/p268d1_ctrl_off.log` /
+`p268d1_ctrl_on.log`. The full render is the capture, not `r_lightmap 1`: `gl_shader.c:7410`
+sits inside `Shader_DefaultBSPLM`, which a resolved VMT material pre-empts. Per vantage:
+floor = ON second shot vs ON third (700 ms apart), floor2 the same on OFF, effect = OFF vs ON,
+centre crop; sign is the criterion, thresholds loose because the sRGB encode at
+`mod_vbsp.c:3331` compresses the linear ratios.
+
+Binaries: the ON arm ran in batch 1-2 (03:07, my 02:54 exe / 02:57 hl2 dll); the OFF arm's
+first attempt (03:03, same binaries) quit 2 s after its first setpos with a normal shutdown
+sequence and no screenshot — nothing in the twin cfg explains it, the ON arm ran the identical
+cfg through — and its re-run (07:59-08:02, batch 3) landed on a peer's redeploy, exe 04:17:59
+(8213751) and dll 03:26:34 (482095), built from the same tree for these hunks. So the OFF/ON
+pairs below straddle two binaries; the two vantages where the patch is inert by construction,
+sup1 and ctrlsup, came out 0.00% across that pair, which is the cross-binary control the
+pairing needs. The re-shot tomb control (batch 4, 08:23) ran both arms on the post-review build,
+exe 08:16:27 / dll 08:18:09.
+
+| map (lump) | stride line, ON arm | pixels, OFF vs ON |
+|---|---|---|
+| surf_affliction (v20; 175,153,780) | `stride 1/4 ... 32095 lit, 11939 bumped, 9222 lightstyled (3507 of those bumped); 11939 tagged, 0 left untagged` | affl1 `setpos -11580 219 -2116 0 180 0` (face 26797): floors 0.56%/0.55%, effect 22.64% changed, lum 9.7 -> 12.6 (x1.295), G/R 0.382 -> 0.505. affl2 `-10460 180 -6042 0 270 0` (face 33326): floors 0.00%/0.00%, effect 35.76%, lum 5.6 -> 11.1 (x1.991), G/R 0.271 -> 0.527. Both PASS: brighter and warmer, as the offline decode said |
+| bhop_floodwaters (v21; 4,896,540) | `stride 2/5 ... 9059 lit, 5130 bumped ... 9059 tagged` | flood1 `-2712 -4992 664 0 180 0` (face 1364): floors 0/0, 0.00% of pixels moved by more than 8, lum 25.3 -> 22.6 (x0.894, under the 0.90 asked for) — PASS, small, sign right. flood2 `-3320 -4992 664 0 180 0` (face 1360, three styles): floors 0.00/0.00, effect 59.86%, lum 29.9 -> 20.7 (x0.691) — PASS |
+| bhop_orgrimmar (v20; 21,055,868) | `stride 1/4 ... 9638 lit, 2281 bumped ... 2281 tagged` | org1 `-1330 1199 248 89 0 0` (face 7742): floors 0/0, effect 99.91%, lum 102.6 -> 47.1 (x0.459) — PASS |
+| surf_sup (v21; 1,561,910) | Patch 281's `5079 of 7223 ... lightmap repacked per face, 1561910 -> 929176` and then this probe's `repacked per face (Patch 281) ... no stride tag needed`; no stride tag | sup1 `-5650 2662 814 89 0 0` (face 6376) identical, 0.00% — both arms read the repacked data; ctrlsup `-280 4808 -3192 89 0 0` (face 5396, unbumped 2-style) identical, 0.00% — PASS |
+| surf_tomb_redone (v20; 6,227,348; control) | `stride 1/4 ... 0 bumped ... 0 tagged -- no face needs more than one set` | first pair 95% changed = a MOVED CAMERA: the cfg took the shot wherever the player stood 9 s after spawn (no setpos) and the arms sat 241 units apart (viewpos 3806.7 629.0 vs 4034.7 709.0). Re-shot with a pinned `setpos 4034.7 709 1024.8` (`*_ctrl2*`): both viewpos replies match, floors 0.00%/0.00%, effect 0.01% full frame / 0.00% centre, lum 78.3 on both — IDENTICAL, PASS |
+
+OFF arm on every map: the same counts and `0 tagged ... hl2_bumpstride 0: style walk left at
+one luxel set`. No `UNPROVEN` anywhere. D1: 8 of 8 vantages PASS. None of the FAIL signatures
+fired: no `0 bumped` on surf_affliction (`TIHL2_BUMPLIGHT` is carried), no `left untagged (block
+past lump)` above 0 on a proven map, no affected vantage inside its floor with `tagged > 0` in
+the log, no sign opposite to the prediction, and both controls at their floor (no tag leaked
+onto a one-set face). Not measured: the optional pre-patch-binary run of `p268d1_off.cfg`
+(pixel identity with the OFF arm, which would prove OFF really is today) was not run.
+
+**Not doing here:** identifying the 2/5 maps' per-style record or the v21 trailer (probed
+around, not explained; neither is RGBE so neither was ever a lightmap the walk should read);
+a `hl2_lightmap_repack 0` run of surf_sup in both D1 arms, the only way to see the
+`1/4+trailer` candidate chosen and its 1257 bumped faces tagged on a live map — the offline
+size proof is what stands behind that row; `R_LightPoint` (`gl_rlight.c:2770-2797`) still
+walks one set per style but only feeds the Quake2-protocol usercmd light level
+(`cl_input.c:2695`), unreachable here; unlit maps and dedicated servers print no stride line —
+there is nothing to state; D2. On D2: feasible but its own patch, and D1 is its prerequisite
+because the tag says where sets 1-3 sit; on 2/5 maps the record after each style's four sets
+is not RGBE, so a combine must address basis maps as `lightofs + (style*sets + set)*luxels*4`
+with `sets` from this probe, never assume four contiguous sets — and on the nine repacked
+maps Patch 281 has dropped sets 1-3 from `mod->lightdata` altogether, so D2 would read
+`prv->lightraw` there; the combine itself is `common_ps_fxc.h:118-120`, the atlas (surfstyles
+1, `mod_vbsp.c:3058`), the per-face-vs-per-material permutation and the lightmap-vector
+tangent frame (`prv->texinfo[].lmvecs`, not the texture vectors) are the work. "Specular on
+the ramps" is Part B's `env_cubemap` gate (`gl_backend.c:4410-4414`; `mat_vmt.c:3638` skips the
+literal `env_cubemap`), not a new part; Phong on `LightmappedGeneric` stays decided against
+(Patch 150). Also open, made more visible by this fix: FTESurf never issues a `lightstyle()`
+for styles 32+, so a Source switchable light that starts OFF is drawn ON; the summed basis maps
+used to mask it.
+
+**New cvar**
+
+    hl2_bumpstride   1   walk a Source map's lightstyles at the stride VRAD wrote them; the
+                         layout is proven per map from the lighting lump's size and printed.
+                         0 = the old walk (a basis map summed in as the next style at full
+                         brightness on ~67,000 faces across 153 maps). MAPLATCH.
+
+---
+
+### Part B — `$envmap "env_cubemap"` reflected nothing, and took the bumpmap down with it  *(APPLIED AND VERIFIED 2026-09-09 — engine `gl/gl_shader.c`, `gl/gl_backend.c`, `client/renderer.c`, `client/view.c`, `d3d/d3d_backend.c`, `d3d/d3d11_backend.c`, `vk/vk_backend.c`; plugin `plugins/hl2/mat_vmt.c`, `mod_vbsp.c`, `glsl/vmt/{vertexlit,lightmapped,transition}.glsl`; NO header touched, `build.ps1 -Engine` without `-Full`)*
+
+**What was wrong.** A Source material names its cubemap either by path or by the literal
+`env_cubemap`, meaning "the nearest baked one". The path form always worked. The literal
+form drew nothing: `mat_vmt.c` deliberately emits no `reflectcube` for it (there is no file
+to name), relying on `T_GEN_REFLECTCUBE`'s fallback to `curbatch->envmap` — but the
+permutation gate (`gl_backend.c:4441`) tests only `TEXLOADED(curtexnums->reflectcube ||
+reflectmask)` and **never `curbatch->envmap`**, so `PERMUTATION_REFLECTCUBEMASK` was never
+set and `#ifdef REFLECTCUBEMASK` compiled the whole block out. The batch had the right
+cubemap the entire time — `gl_alias.c:2431` gives every model batch
+`Mod_CubemapForOrigin`, `gl_model.c:3786` gives brush batches `surf->envmap` — and nothing
+ever read it. And because `vertexlit.glsl`, `lightmapped.glsl` and `transition.glsl` sample
+`s_normalmap` **only inside that block**, the same gate silently took the bumpmap too: "no
+reflection" and "no bump" were one bug. Patch 153's own record (`:5396`) already listed
+7,423 faces on surf_666 as reflecting "nothing at all" for exactly this reason and left it;
+the only spelling that worked was `env_cubemap` **plus** an `$envmapmask`, whose loaded mask
+texture passed the gate on its own.
+
+**The mechanism: a sentinel, because the one-line fix is wrong.** Every `vmt/*` program
+declares `!!samps =REFLECTCUBEMASK reflectmask reflectcube`, so every VMT material carries
+`SHADER_HASREFLECTCUBE` and every batch keeps an envmap; adding `|| curbatch->envmap` to the
+gate would switch reflections on for **every surface on the map**. There is no free
+`shader->flags` bit either. So the plugin emits `reflectcube "$envcubemap"`, `gl_shader.c`
+binds that token to a real 1×1×6 mid-grey cube whose status is `TEX_LOADED` (created beside
+`$whiteimage`/`$blackimage`, following `vk_init.c:2219-2227`), the existing gate fires
+unchanged, and `T_GEN_REFLECTCUBE` recognises the pointer and falls through to the batch's
+baked cubemap. The batch key (`gl_model.c:3728/3746`) is untouched and no GLSL change is
+needed for the reflection itself.
+
+**Verified on surf_boreas**, whose ramps are 19 `prop_static` wearing `ramp_wood01`
+(VertexLitGeneric, `$bumpmap`, `$envmap env_cubemap`, tint `[0.1 0.2 0.2]`) and
+`ice_transparent` (tint 0.66) on the same slope plane. The map bakes 32 cubemaps.
+
+| measurement | result |
+|---|---|
+| `envcube used` counter, off arm | **0** at all seven vantages |
+| `envcube used` / `gated`, live toggle at one camera | **55538 / 0** on → **0 / 666** off → **18 / 0** on |
+| ramp centre crop, reflection off → on | **98.4%** of pixels changed, luminance **×1.366** |
+| second camera on the same surface | 86.0% changed, ×1.338 — a *different* factor, i.e. view-dependent |
+| repeatability, on→on in one process | **0.00%**, means identical to 0.1 |
+| all-switches-off vs the pre-patch binary | **0.00%** centre, means identical, at both stable vantages |
+| Source-parity bits on top (`hl2_envmap_source 7`) | ramp ×0.977, and ×1.064 on a shadowed ramp — contrast darkens, the post-lighting add re-brightens |
+
+The wood beams turn visibly teal-green under `[0.1 0.2 0.2]` while the ice goes neutral-bright
+under 0.66, which is the per-material tint being applied correctly rather than a global wash.
+
+**THE MEASUREMENT TRAP, and it invalidated a whole arm before it was caught: the pixel noise
+floor must be measured ACROSS RUNS, not across frames.** Three shots 700 ms apart inside one
+run read 0.00% at most vantages, so the floor looked like zero. But two runs of the
+*identical binary and cfg* differ by **7-18% of the centre crop** at three of seven
+vantages, flipping between two stable states — the async texture load race
+(`VBSP_LoadCubemaps` reports "32 whose baked VTF is missing" at load in every boreas run;
+whether a given cube finishes before the first frame is a coin toss). A cross-process A/B
+therefore measured the race as well as the patch, and the first post-fix arm A read as a
+regression at those vantages until a repeat run landed back on the reference values exactly.
+**`r_envcubemap` exists partly for this**: it is a plain runtime cvar read per batch, so
+1/0/1 at a fixed `setpos` inside ONE process is an A/B with the same map load, the same
+texture states and the same particle phase. That is the arm this entry's numbers come from.
+`hl2_envcubemap` cannot do it (`CVAR_SHADERSYSTEM`, and `Shader_Reset` preserves
+`defaulttextures`, so a stale sentinel outlives the switch until the next map load).
+
+**Source parity, under `hl2_envmap_source` (bitmask, 0 = today's arithmetic).** Read out of
+`vertexlit_and_unlit_generic_bump_ps20b.fxc`, `vertexlit_and_unlit_generic_ps20b.fxc`,
+`lightmappedgeneric_ps2_3_x.h` and `vertexlitgeneric_dx9_helper.cpp` in the public
+momentum-mod tree:
+- **1** — the mask. No mask key means **1.0**, not `1.0 - alpha` (`_bump_ps20b.fxc:195`);
+  only `$basealphaenvmapmask` is inverted (`_ps20b.fxc:332`, "this blows!"); and both
+  `$envmapmask` and `$basealphaenvmapmask` are ignored on a **bumped** VertexLitGeneric,
+  because the helper `SetUndefined()`s them (`:187-199`) and the bumped fxc declares no
+  ENVMAPMASK combo. Provably inert on surf_boreas (see below), so it is set from Source's
+  source rather than from a picture — the one part of this patch without a positive test.
+- **2** — `$envmapcontrast`, which was parsed and thrown away (`mat_vmt.c:1894`), plus
+  Source's **tint → contrast → saturation** order with its own `(0.299,0.587,0.114)` weights;
+  FTE did saturation-then-tint with Rec.709 and no contrast. This also hands
+  WorldVertexTransition its `$envmaptint`/`$envmapsaturation`, which `transition.glsl` had
+  **never applied at all**.
+- **4** — VertexLitGeneric adds the reflection **after** lighting
+  (`result = diffuseComponent + specularLighting`, `:312`), so a dark prop stops dimming its
+  own reflection. Not appended to the world programs, which already add after their lightmap
+  multiply and would only mint a duplicate permutation.
+
+**Why bit 1 shows nothing on surf_boreas** (measured, not assumed): `ramp_wood01` is
+`$normalmapalphaenvmapmask` → `ENVFROMNORM`, which FTE already reads uninverted exactly as
+Source does, and its normalmap is **DXT1**, so the sampler returns alpha 1.0 either way;
+`ice_transparent` has no mask key and its bump (`alpine_snow01_normal`) has a **flat-0**
+alpha, so the old `1.0 - a` is also exactly 1.0. `alpine_blendrocksnow` is `ENVFROMNORM`
+too. Verifying bit 1 needs a map with a no-mask-key material whose bump alpha is neither 0
+nor 1 — the library census picked **surf_fantasy** (v21, 247 baked cubemaps all resolving,
+921 qualifying prop instances, and the only strong candidate carrying all three mask states
+at once). It was smoke-tested here: loads clean, all 247 cubemaps resolve, no regression, no
+grey wash. Its vantages were not aimed, so no visual measurement — that run is still owed.
+
+**Four review findings fixed before the numbers above were taken**, all caught by
+adversarial review rather than by the runs:
+- The class test copied the `st->decal` disjunct out of the VertexLitGeneric arm's own
+  condition. That arm is the **last** `else if` of the dispatch chain, so its decal clause
+  only sees what no earlier arm claimed; the same test run *before* the chain sees every
+  class, and `Q_strcasecmp("Water","LightmappedGeneric")` is non-zero — so a `Water`
+  material with `$decal` and `env_cubemap` would have been handed the sentinel, and Water is
+  the one excluded class whose program really does sample `s_reflectcube`. Now the three
+  class names only.
+- The D3D9 mirror added an unconditional `curbatch->envmap` arm that never existed there,
+  so that backend was **not** identity with every switch off. Restricted to the sentinel.
+- `r_envcubemap 0` also gated the materials that already reflected via `$envmapmask +
+  env_cubemap`, so the "live pre-patch picture" was over-broad and the counters impure. The
+  sentinel test now also requires `!TEXLOADED(reflectmask)`.
+- `#ENVSRCPOST` was appended for the world classes, whose shaders do not test it — a second,
+  byte-identical program permutation for every world envmap material.
+
+Vulkan and D3D11 were given the same sentinel skip so the grey cube can never be bound as if
+it were a reflection; Vulkan needed it in **two** places, and the second (the descriptor-set
+builder keyed on `S_REFLECTCUBE`) is the one a GLSL program actually samples through —
+patching only the pass path would have left the visible bug. Neither backend is in the win64
+target, so both are by inspection only.
+
+**Not doing / still open.** `r_reflectcube_nosky` is written and defaults **0** (today
+exactly: a missing or still-loading cubemap reflects black, an absent one reflects the sky);
+`1` gives both a neutral grey and is the better answer on the 26-of-61 maps that baked no
+cubemaps, but it has not been run on such a map. Water, Refract and the unlit classes are
+deliberately outside the sentinel's scope. The counters are incremented before
+`perm &= supportedpermutations`, so they are an upper bound — fine as the 0-vs-not-0
+falsifier they are used as. Part C (per-pixel relief on bumped props, Source's ambient cube)
+is the other half of the "no bump" symptom and is not in this patch.
+
+**New cvars**
+
+    hl2_envcubemap      1   emit the $envcubemap sentinel for a literal $envmap "env_cubemap"
+                            on VertexLitGeneric / LightmappedGeneric / WorldVertexTransition.
+                            0 = today (such a material reflects nothing unless it also
+                            carries $envmapmask). SHADERSYSTEM, so read at material build.
+    hl2_envmap_source   7   Source's arithmetic for the envmap term: 1 mask rules,
+                            2 $envmapcontrast + tint->contrast->saturation, 4 models add the
+                            reflection after lighting.  0 = today. SHADERSYSTEM.
+    r_envcubemap        1   the LIVE gate over sentinel batches only -- 0 restores the
+                            pre-268-B picture on a loaded map, which hl2_envcubemap cannot.
+    r_reflectcube_nosky 0   1 = neutral grey instead of black/sky when a batch's baked
+                            cubemap is missing or still loading. GL only.
+
+---
+
+### Part C — per-pixel relief on bumped props: built, measured, and NOT ADOPTED  *(APPLIED, DEFAULT OFF — engine `client/render.h`, `gl/shader.h`, `gl/gl_shader.c`, `gl/gl_vidcommon.c`, `gl/gl_backend.c`, `gl/gl_alias.c`, `d3d/d3d_backend.c`, `client/renderer.c`; plugin `mat_vmt.c`, `mod_vbsp.c`, `glsl/vmt/vertexlit.glsl`; HEADER CHANGE — `build.ps1 -Engine -Full`)*
+
+Reported as *"rocks with missing bumpmapping"* on surf_fantasy, with two savelocs. The
+material is real and the report was right:
+
+```
+materials/models/fan/island1cluster1/moss.vmt      (the map's own pakfile)
+"vertexlitgeneric"
+{
+	"$basetexture" "fan/moss"
+	"$bumpmap"     "fan/moss_n"
+	"$normalmapalphaenvmapmask" "1"
+}
+```
+
+A `$bumpmap` and **no `$envmap`**. Model lighting in `vertexlit.glsl` is per VERTEX from
+the vertex normal, and before this patch the normal map was sampled only to bend a
+reflection — so this prop sampled its normal map for nothing and drew flat.
+
+**What was built.** Source's own method is the leaf's six-face ambient cube evaluated per
+pixel with the bumped world-space normal (`common_vertexlitgeneric_dx9.h:41-50`). Rather
+than throw away VRAD's per-vertex bake, this was applied as a RATIO over the lighting FTE
+already has:
+
+```glsl
+light *= clamp(pow((cube(n_bumped) + eps) / (cube(n_vertex) + eps), 1.0/2.2), 0.0, 4.0)
+```
+
+so a flat normal or an empty cube gives exactly 1 and every unbumped material is
+pixel-identical by construction. `e_light_ambientcube[6]` is a new per-entity uniform
+(`entity_t::light_cube`, append-only tail); `VBSP_LightPointCube` fills it from the same
+leaf-ambient search `VBSP_LightPointValues` already does; `r_cubelight` is the live gate
+(0 = zero cube, 2 = a synthetic cube lit hard from above for testing).
+
+**It works, and it is invisible. Both halves are measured.**
+
+*On screen* (`p292b_fantasy`, 2026-09-12, two moss rocks filling the centre of frame at
+save002, `r_cubelight` 1/0/2/1 inside one process):
+
+| | changed >8/255 |
+|---|---|
+| off → on | **0.00%** |
+| repeat floor (on → on) | 0.00% |
+| off → synthetic top-lit cube | **0.00%** (mean abs 0.20) |
+
+save001 could not measure anything: it sits inside drifting particles, so its repeat floor
+is 28.97% against a 13.91% effect — noise larger than the signal, which is why the floor is
+taken at the same vantage every time.
+
+*Off screen*, from the real normal map (`scratchpad/wf2/cuberatio.py`, decoding
+`fan/moss_n.vtf`, 1024², DXT1): the moss normals are gentle — mean tilt **6.8°** from flat,
+median 6.4°, 95th percentile 13.5°. Feed those through the ratio under the **synthetic
+top-lit cube**, the most favourable input this code can ever receive:
+
+| | |
+|---|---|
+| ratio, mean | **0.9941** (1.0 = no change) |
+| change on a mid-grey 128 pixel, mean | **0.76 levels** |
+| 95th percentile | 2.25 levels |
+| pixels moving more than 8 levels | **0.02%** |
+| under a uniform cube | exactly 1.0000 |
+
+Predicted 0.02%, measured 0.00%. The two agree, and they agree because **the design cancels
+itself**: dividing a cube sample by the same cube sample at a slightly different normal is
+near 1 whenever the normal map is gentle, and `pow(1/2.2)` compresses what is left. Source
+looks different because it does not multiply the bake — it REPLACES vertex lighting with
+the per-pixel cube plus up to four local lights, and it is the per-pixel `N·L` against
+those lights, not the ambient cube, that carves the relief.
+
+**A flaw in the diagnostic, recorded because it nearly hid the above.** `r_cubelight 2`
+substitutes its test cube only for entities that ALREADY carry a non-zero cube, so on a map
+whose props have no leaf ambient it would have proved nothing while looking like a clean
+null. surf_fantasy is not such a map (`leaf ambient HDR, 59060 points, 57634 non-zero`;
+`props: 0 of 2345 lit from VRAD's baked vertex lighting`), so the null here is real — but
+the gate should be unconditional if this is ever revisited.
+
+**The counter is trustworthy, which is why the null is believable.**
+`GLSlang_ProgAutoFields` (gl_vidcommon.c:3035-3050) creates a parameter entry only when
+`glGetUniformLocation` returns `>= 0`, and an unused uniform is optimised out — so
+`cube uploads used=2112` at `r_cubelight 2` proves programs that really declare and USE
+`e_light_ambientcube` were bound with non-zero cubes. `#BUMPCUBE` and `BUMP` were both
+live; the arithmetic is what failed, not the plumbing.
+
+**Not adopted.** Every switch ships 0. What would actually work is a different patch: drop
+the ratio and light the bumped normal per pixel the way Source does, which needs the
+dominant-light term FTE does not cache per prop (`SP_E_SUNDIR` exists and is the obvious
+starting point). Left applied and off rather than reverted because the uniform, the cube
+fill and the GLSL are the prerequisites that work would need, and all of them are proven
+inert at their defaults.
+
+**C1 (`hl2_bumpgreenfix`)** and **C2 (`hl2_lt_dirsign`)** ride along unverified. C2 does
+change props measurably (surf_aura, 16.41% and 6.40% of centre against 0.00% floors) but
+"it changes pixels" is not "it changes them the right way", and the saddle test that would
+settle C1's green flip needs a visible bumped feature — which this patch cannot produce.
+
+**New cvars**
+
+    hl2_cubelight     0   compile #BUMPCUBE into a bumped VertexLitGeneric. SHADERSYSTEM.
+    hl2_bumpgreenfix  0   drop the green flip on a model normal map. SHADERSYSTEM.
+    hl2_lt_dirsign    0   signed luminance difference for the model light direction.
+    r_cubelight       1   live gate over the cube upload: 0 = zero cube (ratio exactly 1),
+                          2 = synthetic top-lit test cube.  Inert while hl2_cubelight is 0.
+
+---
+
+### Part E — `vid_fullscreen` renumbering  *(APPLIED AND VERIFIED)*
+
+`0` = windowed-and-maximized, `1` = borderless, `2` = exclusive. Upstream orders the
+last two the other way round.
+
+**Translated at the boundary, not renumbered.** `rendererstate_t::fullscreen` keeps
+upstream's numbering all the way down, so every backend, the fallback ladder in
+`R_ApplyRenderer` (which hardcodes 1→2→1→0), and D3D9's
+`d3dpp.Windowed = !info->fullscreen` — which treats the field as a **boolean** — keep
+meaning what they meant. `VID_InternalFullscreenMode` (`renderer.c`) is the only
+translator. There are **two** cvar boundaries, not one: `R_BuildRenderstate` and
+`R_ToggleFullscreen_f`; missing the second would have made F11 disagree with
+`vid_restart`.
+
+**`vid_fullscreen 0` was the reported "it goes fullscreen".** `VID_SetWindowedMode`
+builds a *client* rect of `vid_width`×`vid_height`, then `AdjustWindowRectEx` grows it
+by the border and `centerrect` centres it — 1936×1239 at (−8,−19) on a 1920×1200
+desktop. Title bar off the top, covering everything. `vid_winmaximize` fixes it.
+
+**`vid_winmaximize` needs its mode 2, and that is not over-engineering.** Mode 1
+("maximize only when no explicit size") is required by the screenshot harness — 154 of
+the 331 `cfg/testrun` scripts run `vid_fullscreen 0` and compare frames
+pixel-for-pixel. But `ftesurf.cfg` archives `vid_width 1920 / vid_height 1200`, so mode
+1 would *never* fire for the user and the feature would read as "it did nothing". Mode
+2 is the escape: one console token, no config migration, harness untouched.
+
+**Exclusive fullscreen now matches the display** (`vid_exclusive_desktopres`, default
+1). Exclusive is the only mode that really calls `ChangeDisplaySettings`, and it was
+taking a stale archived `vid_width` — measured: asking for exclusive on a 1920×1200
+desktop with `vid_width 1280` archived switched the monitor to 1280×800. It now reads
+the display's current mode, refresh rate included.
+
+**A bug this patch caused and then fixed.** The maximize went into
+`VID_SetWindowedMode`, but the WGL arm of `GLVID_SetMode` runs *afterwards* and called
+`ShowWindow(SW_SHOWNORMAL)` for `MS_WINDOWED`, restoring the window a moment later. The
+first verification run caught it: the maximized case came back at exactly 1280×800
+instead of the work area. Both halves ask the same question now — via
+`VID_WindowMaximizePolicy()` and the cached `vid_windowmaximized`, see the next
+section, which renamed `VID_WantMaximizedWindow()` out of existence.
+
+#### Verified — two independent instruments, neither of them a human looking at a picture
+
+Screenshot pixel dimensions, and the log's mode line (`Setting windowed mode W*H` /
+`Setting fullscreen windowed` / `Setting mode W*H bpp hz` name the three internal
+modes). The second instrument is needed because once exclusive matches the desktop,
+borderless and exclusive are the *same size*.
+
+| | screenshot | log | |
+|---|---|---|---|
+| E1 windowed, explicit 1280x800 | 1280x800 | `Setting windowed mode 1280*800` | harness safe |
+| E2 `vid_winmaximize 2` | **1920x1111** | windowed | work area |
+| E3 `vid_fullscreen 1` | 1920x1200 | `Setting fullscreen windowed` | borderless |
+| E4 **falsifier**: order 0, same value `1` | 1920x1200 | `Setting mode 1920*1200 360hz` | **exclusive** |
+| E5 `vid_fullscreen 2` | 1920x1200 | `Setting mode ... 360hz` | desktop res |
+| E6 `vid_exclusive_desktopres 0` | 1280x800 | `Setting mode 1280*800` | old behaviour |
+
+**E3 and E4 write the same number to `vid_fullscreen` and land in different modes** —
+that is the falsifier, and it is why this is not a relabelling. E5 vs E6 is the A/B for
+the exclusive-resolution change: same mode, same `vid_width`, opposite results. No
+`Trying ...` lines in the log, so the fallback ladder never silently rewrote a mode.
+
+Run: `cfg/testrun/v268e.cfg`, `logs/v268e.log`, `screenshots/v268e_*`.
+
+### `fullscreen_toggle` (F11) splits from `vid_toggle`  *(APPLIED AND VERIFIED)*
+
+Patch 211 gave `R_ToggleFullscreen_f` a second name because `bind f11 fullscreen` had
+been a silent no-op for six builds. One behaviour under two names was right then and
+wrong now: upstream's toggle goes to whatever `vid_fullscreen` names, so with the cvar
+at 2 the key produced a real exclusive mode switch. Now `vid_toggle` keeps upstream's
+meaning and `fullscreen_toggle` is windowed ↔ **borderless**, always. Toggling out of
+fullscreen also stops collapsing to 640×480 — it honours `vid_width`/`vid_height`.
+
+| | log |
+|---|---|
+| T1 windowed → `fullscreen_toggle` | `Setting fullscreen windowed` |
+| T2 borderless → `fullscreen_toggle` | `Setting windowed mode 1280*800` |
+| T3 `vid_fullscreen 2` set, → `fullscreen_toggle` | `Setting fullscreen windowed` |
+| T4 **same state**, → `vid_toggle` | `Setting mode 1920*1200` |
+
+T3 and T4 start identical and run different commands; they must and do differ.
+Run: `cfg/testrun/v268t.cfg`, `logs/v268t.log`.
+
+### Part E follow-up — a windowed window has to fit on the desktop  *(APPLIED AND VERIFIED)*
+
+**Reported against the build above**, and the report is the whole diagnosis:
+*"fullscreen_toggle causes the window to go windowed but it's at full res, so it looks
+like borderless fullscreen, so it's borderless fullscreen to borderless fullscreen."*
+
+Part E shipped `vid_winmaximize` mode 1 as **"maximize only when no explicit
+`vid_width`/`vid_height` was asked for"**, chosen to keep the screenshot harness exact.
+That rule is satisfied by the user's config — `ftesurf.cfg` archives `vid_width 1920 /
+vid_height 1200` — so it never fired for them, and the original defect walked straight
+back in through the toggle. `centerrect` sizes the **client** area, `AdjustWindowRectEx`
+then grows it by the border and caption, so 1920×1200 becomes a **1936×1239 window at
+(−8,−19)** on a 1920×1200 desktop: caption off the top, taskbar covered, client at full
+resolution. There is no way to tell that apart from borderless by looking at it.
+
+Mode 1 now means **"honour the requested size only if the decorated window fits the
+desktop work area"**. The work area, not the screen, because excluding the taskbar is
+half of what "windowed" means. A size that fits is still used exactly, and is
+additionally nudged fully inside the work area — a 1900×1150 window centred on a
+1200-tall screen "fits" and still sits 23px under the taskbar. Mode 0 skips both the
+maximize and the nudge, so the exact-size escape hatch stays byte-identical to upstream.
+
+The fit test is necessarily platform code, so the split is: `VID_WindowMaximizePolicy()`
+in `renderer.c` returns 0 (never) / 1 (caller must test) / 2 (always), and
+`VID_SetWindowedMode` runs the test on the decorated rect **immediately after
+`AdjustWindowRectEx`** — the only moment the real on-screen footprint is known, because
+`GetClientRect` overwrites `WindowRect` forty lines later. The answer is cached in a
+static `vid_windowmaximized` rather than recomputed, so the WGL arm's second
+`ShowWindow` cannot disagree with the first — that disagreement was Part E's own bug.
+
+#### Verified — and the log is *not* the instrument
+
+`Setting windowed mode 1920*1200` prints the **requested** size and is byte-identical
+whether the window then maximized or not (W1 and W2 log the same line and differ). Only
+the captured frame knows.
+
+| | screenshot | |
+|---|---|---|
+| W1 1920×1200 requested, `vid_winmaximize 1` | **1920x1111** | maximized — it cannot fit |
+| W2 **falsifier**: same, `vid_winmaximize 0` | 1920x1200 | upstream behaviour restored |
+| W3 **control**: 1280×800, `vid_winmaximize 1` | 1280x800 | it fits, so it is exact |
+| W4 **the reported case**: borderless → `fullscreen_toggle` | **1920x1111** | fixed |
+
+W3 is what stops W1 from being a disguised "always maximize", and W2 is what shows the
+new code is doing the work rather than something else in the build. W4's log confirms
+the transition was real — `Setting fullscreen windowed` then `Setting windowed mode
+1920*1200` — while its frame is 1111 tall.
+
+**Known consequence, not a regression but worth stating.** Harness cfgs that run
+`vid_fullscreen 0` while inheriting the archived 1920×1200 now capture 1920×1111 instead
+of 1920×1200. Nothing is cropped — the client is the work area — but a screenshot
+compared against a **stored** pre-268b baseline will mismatch on dimensions alone. Test
+cfgs that set their own `vid_width`/`vid_height` (1280×800 in every recent one) are
+unaffected, and `vid_winmaximize 0` pins the old size for any run that needs it.
+
+Run: `cfg/testrun/v268w.cfg`, `logs/v268w.log`, `screenshots/v268w_*`.
+
+### Part E follow-up 2 — windowed just means maximized  *(APPLIED AND VERIFIED)*
+
+The fit rule above failed the same user again, from the other direction: *"ok, but it
+windows at like 640x480, can't you make it windowed but full screen, but not
+boarderless? like with the top menu bar, but maximized?"* Something had left `vid_width`
+at a small value in their session, 640×480 fits the work area comfortably, so the rule
+dutifully honoured it.
+
+Both failures are one mistake — **inferring which window the player wants from
+`vid_width`**, which is a stale archived number, not a statement of present intent. The
+default for `vid_winmaximize` is therefore **2**: windowed is always maximized.
+`vid_width`/`vid_height` still fully control borderless and exclusive; they are ignored
+for the windowed mode only, and only at the default setting. Mode 1 (the fit rule) and
+mode 0 (exact size) are kept for the capture harness.
+
+**A raised default is not a delivered default.** `ftesurf.cfg:402` already carried an
+explicit `vid_winmaximize "1"`, written by a `cfg_save` while 1 was still the default,
+and an explicit config line beats an engine default — so the change would have been
+invisible to the very person who asked for it, for the third time in a row. Migrated to
+`"2"` in the same edit. A prior grep for this line searched `seta vid_winmaximize` and
+missed it: `cfg_save` writes non-`CVAR_ARCHIVE`-originated lines **without** the `seta`
+prefix, so `seta` is not a safe anchor when checking whether a cvar is overridden.
+
+#### An invalid test arm, and what it cost
+
+The first run (`v268x`) meant to test the new default by *not setting the cvar*. It read
+back `1` — the config line above — so that arm silently re-ran the old fit rule and
+returned 640×480. It agreed with its own falsifier because it **was** its own falsifier.
+Nothing was concluded from it; the corrected run is `v268y`, which echoes
+`vid_winmaximize` first and treats every arm as void unless it reads 2. `v268x`'s X4 arm
+set the cvar explicitly, was valid, and passed. **An arm that relies on a default has to
+prove the default is in effect** — the same class of error as the Part F harness that
+asserted a foreground window it never checked.
+
+| | screenshot | |
+|---|---|---|
+| Y0 `vid_winmaximize` echo | reads `2` | without this the rest is void |
+| Y1 **the reported case**: 640×480 requested, borderless → F11 | **1920x1111** | maximized |
+| Y2 **falsifier**: identical state, `vid_winmaximize 1` | 640x480 | the fit rule, on demand |
+| Y3 escape hatch: `vid_winmaximize 0` at 1920×1200 | 1920x1200 | exact capture still possible |
+
+Y1 and Y2 differ in that one cvar and nothing else, including the same `fullscreen_toggle`
+route in, and the log line is `Setting windowed mode 640*480` for both — it prints the
+requested size, and the maximize happens after it.
+
+Run: `cfg/testrun/v268y.cfg`, `logs/v268y.log`, `screenshots/v268y_*`.
+Superseded, kept for the record: `cfg/testrun/v268x.cfg` (X1 invalid, X4 valid).
+
+### Part F — mouse grab follows the foreground window  *(APPLIED, NOT VERIFIED)*
+
+`vid.activeapp` is set from `WM_SETFOCUS`/`WM_KILLFOCUS` and nothing else on this
+backend — `WM_ACTIVATE` is commented out at `gl_vidnt.c` and `WM_ACTIVATEAPP` appears
+nowhere in the tree. Those messages describe focus *within a thread's input queue*, not
+which application the user is looking at, and `VID_SetWindowedMode` unconditionally
+calls `SetFocus(dibwindow)`. `VID_ReconcileActiveApp` polls `GetForegroundWindow()`
+once per rendered frame, immediately before the `INS_UpdateGrabs` that consumes the
+answer. `in_focusgrab 0` restores the message-only behaviour.
+
+Raw input is **exonerated**: registered with `dwFlags 0` and `hwndTarget NULL`, and
+`RIDEV_INPUTSINK` appears nowhere. Adding `WM_ACTIVATE`/`WM_ACTIVATEAPP` would not have
+helped either — neither fires for a background `SetFocus`.
+
+Details that are easy to get wrong and are handled: `GetAncestor(GA_ROOT)` rather than a
+bare handle compare, or an embedded (`sys_parentwindow`) session would never grab at
+all; inert in `MS_FULLDIB`, because taking activeapp down there runs
+`ChangeDisplaySettings(NULL, 0)` and one transient disagreement would drop the user out
+of their video mode; `ClearAllStates()` on the transition, or a key held as focus went
+away stays latched; and `INS_Accumulate` keeps its `GetCursorPos` outside the new guard
+because `current_mouse_pos` is written nowhere else and `INS_UpdateGrabs` uses it.
+
+#### NOT VERIFIED, and why — two harness errors, both mine
+
+1. **The first harness tested at the console.** `INS_UpdateGrabs` asks
+   `Key_MouseShouldBeFree()`, which is true whenever key_dest wants an absolute cursor —
+   the console and menu both do. At the console *nothing* grabs, so the unpatched build
+   passed a test it should have failed. Fixed by loading a map.
+2. **The foreground check was meaningless.** It compared against
+   `Process.MainWindowHandle`, captured when `Start-Process` returns — before the engine
+   creates its window — so it is normally `IntPtr.Zero` and the comparison is false
+   whatever is actually in front. The two halves of the A/B were not necessarily in the
+   same foreground state. One run consequently reported the *patched* build grabbing and
+   the *unpatched* one behaving; both readings are discarded. v2 resolves the foreground
+   window to its owning PID and refuses a verdict unless the precondition held.
+
+With v2 both `in_focusgrab 0` and `1` leave the cursor alone, i.e. **the scenario does
+not reproduce the bug on either build.** That is explicable: a game launched behind
+another window never receives `WM_SETFOCUS` at all (a non-foreground thread's `SetFocus`
+defers), so it never latches active and never grabs — correct by accident, not by the
+fix. The stuck-true state needs the window to become foreground *and then* lose it
+without a `WM_KILLFOCUS`, which no script here has produced.
+
+So a `[focus]` diagnostic was added instead. It prints **only when the focus messages
+disagreed with the actual foreground**, i.e. exactly when the bug would have bitten, and
+stays silent through every normal alt-tab. The user reproduces on demand ("I moved over
+the window and the camera moved"); that line turns their repro into evidence.
+
+Harness: `cfg/testrun/v268m.cfg`, `scratchpad/focustest.ps1`.
+
+## Patch 269 — the speedometer's 0–4 flicker was never the extrapolation: the prediction blends its live velocity against a network field that stops being maintained the moment you stand still  *(APPLIED AND VERIFIED, engine only — `cl_pred.c`)*
+
+**Reported as** *"when I have 1400fps on colinblaster_69000 and tap a direction
+key, and wait, my unit position still doesn't know where to land? flickers
+between 0-4"*, and re-authorised after the earlier diagnosis with *"do it"*.
+
+### The earlier diagnosis was wrong, and this is the correction
+
+Build 47 reported this as the client's per-rendered-frame extrapolation — the
+partial command `cl_pred.c` runs once per rendered frame — and wrote that into
+`cfg/build47.cfg`, `cfg/testrun/jit02.cfg` and `jit03.cfg`. **It is not.** Across
+3,200 traced rendered frames in two separate runs the extrapolation block ran
+**zero times**; every frame reports `extrap none`. The evidence offered for it
+was real but circumstantial: `hud_predicted 0` genuinely does fix the symptom,
+and that was over-read as naming the mechanism. It names the *source of the
+number*, which is a different claim.
+
+Three further mechanisms were proposed from reading and all three are refuted by
+the source, which is worth recording so nobody re-proposes them:
+
+1. *"the pending command keeps a stale `forwardmove` after a send."* It does —
+   `cl_input.c:3457-3464` clears only `msec` and `impulse` — but
+   `CL_AccumlateInput`'s `nscale` (`cl_input.c:1893`) is 1 whenever `cmd->msec`
+   is 0, so the next accumulate frame **replaces** `forwardmove` outright.
+2. *"the extrapolation replays the last SENT command, which still carries the
+   key."* It does fall back to that (`cl_pred.c:1394-1397`), but a sent command's
+   `forwardmove` reaches 0 within one command frame of the release, and the
+   flicker persists indefinitely.
+3. *"a partial tick of friction manufactures speed."* Friction only removes, and
+   Source zeroes a sub-`stopspeed` velocity outright.
+
+A fourth guess would have been worth nothing, so the guessing stopped and
+`cl_predtrace` was written instead.
+
+### The instrument, and the trap it fell into first
+
+`cl_predtrace <n>` dumps, per rendered frame, how many commands were replayed,
+whether the extrapolated partial command ran and which usercmd it copied, that
+command's movement values, the two velocities being blended, the blend fraction,
+and the `simvel`/`simorg` CSQC is handed. CSQC's own `hud_veltrace` cannot see
+any of this: it is handed the answer, not the arithmetic.
+
+**The first version printed as it went and produced a clean result that was
+entirely an artifact of the instrument.** Four `Con_Printf`s per rendered frame
+throttled the client to 200 rendered frames against command frames 831..1030 —
+199 command frames, ~50fps, **one rendered frame per command**. That is the one
+regime in which this defect provably cannot appear, because the defect *is* many
+rendered frames sharing a command. 1 nonzero frame in 200 read like a pass and
+was a capture of the wrong thing. The trace now records to memory and dumps
+after the window closes, and every run prints frames-per-command as a
+self-check. This is the second time in this build a capture failed by not
+reaching the framerate the report is about (`jit01` ran at 200fps because an
+unfocused window is capped by `cl_idlefps`), which is why the check is now
+printed rather than remembered.
+
+### What it actually is
+
+At the end of `CL_PredictMovePNum` the final state is produced by blending two
+player states by `f = (simtime - from.time) / (to.time - from.time)`:
+
+```c
+pv->simorg[i] = (1-f)*from.state->origin[i]   + f*to.state->origin[i];
+pv->simvel[i] = (1-f)*from.state->velocity[i] + f*to.state->velocity[i];
+```
+
+The two endpoints do not have the same provenance:
+
+* `to.state` is the **predicted** state, freshly simulated this frame and
+  correct by construction;
+* `from.state` is the last **acked** state, taken from the network snapshot —
+  and under `PEXT2_REPLACEMENTDELTAS` the velocity field of your *own* player is
+  not maintained there. Nothing needs it: the client predicts its own velocity,
+  so the server has no reason to keep sending it, and the client's copy simply
+  stops being updated. **It freezes at whatever you were last moving at and
+  stays there indefinitely.**
+
+Measured — `logs/jit05.log`, 400 rendered frames at ~19 frames per command, one
+full second after a key release, standing still:
+
+| quantity | measured |
+|---|---|
+| `fromvel` | **frozen at 5.2500** on 380 of 400 frames — one value, never changing |
+| `tovel` | 0.0000 on all 400 |
+| `fromorg` vs `toorg` | **identical** on all 380 — the player provably did not move |
+| `f` | ramping 0.087, 0.135, 0.178, 0.221, 0.271 … per rendered frame |
+| `simvel` | sweeping **0 … 4.958** |
+
+`(1-f)*5.25` is the whole of it, and it closes to four decimals. The velocity
+being blended *from* produced no displacement whatsoever — friction had already
+zeroed it inside the tick, before the move ran — so the readout was reporting a
+speed that was dead on arrival while the position sat still.
+
+This explains every property of the report that the extrapolation theory only
+gestured at:
+
+* **why it scales with framerate.** `f` is recomputed per RENDERED frame. At 60
+  you sample the ramp once per command and it looks steady; at ~1300 you sample
+  it twenty times and see the whole sweep.
+* **why it needs a prior tap.** Until you move once the stale field is still 0.
+  The untouched control in the same run: **0 nonzero in 400 frames.**
+* **why the max is ~4.5.** It is the last velocity before friction killed it,
+  which is bounded by the friction floor `stopspeed*friction*tick = 75*4*0.015`.
+* **why `hud_predicted 0` fixed it.** `STAT_FS_VELOCITY` is the server's true
+  velocity, sent as a stat, not the unmaintained delta field.
+* **why jit02 saw the non-zero sample as the FIRST rendered frame of each
+  command.** Small `f` implies large `(1-f)*5.25`. The old theory had to explain
+  that away; this one predicts it.
+
+### The fix
+
+Do not blend velocity while predicting — take `to.state`'s value, which is the
+freshly predicted one:
+
+```c
+if (!nopred && !cl_predict_velblend.ival)
+    VectorCopy(to.state->velocity, pv->simvel);
+```
+
+**The origin blend is right and stays.** Position must be continuous across a
+rendered frame and both endpoints are real positions. Velocity is a different
+quantity with a different provenance.
+
+**Scoped to the predicting case on purpose.** When `nopred` is set we are
+interpolating somebody else's player between two genuine snapshots — both real
+network values at known times — and blending their velocity is meaningful. That
+path is untouched.
+
+It also makes the two branches agree: the `to.time == from.time` branch a few
+lines above already took `to.state`'s velocity wholesale, so which branch a
+frame happened to take was itself changing the answer.
+
+**This cannot move a run time.** Every consumer of `simvel` is a readout — the
+CSQC `pmove_vel` the HUD reads (`pr_csqc.c:186`), the engine speedometer
+(`sbar.c:3024`), audio doppler (`r_surf.c:2650`) and view bob/roll/kick
+(`view.c`). `pmove` runs off `to.state`, never off `simvel`; nothing feeds back
+into the mover.
+
+`cl_predict_velblend 1` restores the old behaviour for comparison, in the family
+of `cl_predict_freshtype` (Patch 243).
+
+### Verification — `cfg/testrun/jit06.cfg`, `logs/jit06.log`
+
+A/B/A with a no-regression control, all four sections in one run on one map:
+
+| section | nonzero | max | frames/cmd |
+|---|---|---|---|
+| 1 — `velblend 0`, after a tap | **0/400** | 0.0000 | 19.05 |
+| 2 — `velblend 1`, after a tap | **381/400** | 4.9483 | 19.05 |
+| 3 — `velblend 0` again | **0/400** | 0.0000 | 18.18 |
+| 4 — `velblend 0`, **key held** | **400/400** | **260.0000**, origin moving | 18.18 |
+
+Section 2 is what makes the rest mean anything: it reproduces the bug on demand
+at the same framerate in the same run, so a clean section 1 cannot be a capture
+that merely failed to reproduce — which is exactly how the first `cl_predtrace`
+fooled itself. Section 4 is the control a fix that simply zeroed the readout
+would fail: a real velocity is still reported in full, and the origin moves.
+
+### Files
+
+`engine/client/cl_pred.c` only — `cl_predict_velblend`, the `cl_predtrace`
+instrument, and the four-line change at the end of `CL_PredictMovePNum`.
+
+### Still open, and NOT fixed here
+
+* **The stale field itself.** `from.state->velocity` being frozen for the local
+  player under `REPLACEMENTDELTAS` is upstream of this and is arguably correct —
+  the client predicts its own velocity, so the server declining to send it is a
+  saving, not an oversight. This patch stops *misusing* the field rather than
+  changing the protocol. Anything else that blends against it is worth auditing.
+* **The duck camera flicker (issue E).** Untouched. Note that its leading
+  candidate was the same shape of bug — `simorg` blended by `f` while
+  `pv->viewheight` is taken wholesale (`cl_pred.c`, Patch 132b) — so this entry
+  is directly relevant to it, but it has not been measured and is not claimed.
+
+---
+
+## Patch 269b — the verification of 269 was run at a tenth of the reported framerate
+
+`engine/client/cl_pred.c`. No change to the 269 fix itself. Instrumentation, plus a
+correction to what 269's verification was entitled to claim.
+
+### What happened
+
+269 was reported as fixed and verified. The user loaded the patched exe, tapped
+`+forward` on `surf_colin_blaster_69000`, and reported the flicker again — then said
+*"uncap the framerate, it works best at 12000"*.
+
+**Every capture in this investigation ran below the regime it was about.** This is now
+the dominant failure mode here, not bad luck — four separate times, each with a
+different cause:
+
+| run | reached | cause |
+|---|---|---|
+| jit01 | 200 fps | `cl_idlefps` capped an unfocused window |
+| jit04 | ~50 fps | the instrument printed per frame and throttled the client |
+| jit05/06 | ~1270 fps | believed to be the ceiling; never questioned |
+| jit08/09/10 | ~1000–1400 fps | `+set vid_width` is overwritten by the archived `ftesurf.cfg` **after** it is applied, so three "low resolution" runs rendered at 1920x1111 |
+
+The user plays at ~12000 fps — about 180 rendered frames per command against the 19
+that 269 was verified at. A defect whose entire definition is *how many rendered
+frames share one command* was verified at a tenth of its reported regime. A second
+instance on this machine tops out near 1300 fps and that gap could not be closed, so
+**the machine that reproduces this is the user's, and the measurement has to run there.**
+
+### What 269's verification does and does not establish
+
+Measured at 340, 990, 1200, 1290, 1380 and 1400 fps, standing still one and five
+seconds after a release, on the reported map:
+
+- reported speed nonzero on **0 of 3000** frames with the fix;
+- **95%** of 3000 frames nonzero with `cl_predict_velblend 1` in the *same run at the
+  same framerate*, so the harness still sees the defect when it is put back;
+- `nopred` 0 and `extrap` 0 on ~15,000 recorded frames — neither gate is a hole;
+- `simorg` moves at most 0.004 units within a command frame, so the position blend
+  that 269 deliberately left alone is not flickering either;
+- the drawn panel screenshots as `xyspd 0.00 / zspd 0.00`, consecutive shots differing
+  only in the fps counter;
+- an eight-agent audit of every path from the prediction to the pixel — later writers
+  to `simvel`, the `nopred` gate, `HUD_Feet`/`ui_src_pred` source selection, the
+  `hud_update -1` latch, position-derived readouts, the server stat path, and the
+  focused/unfocused difference — refuted all eight.
+
+That is a real result. It is **not** a result about 12000 fps, and it should not be
+quoted as one.
+
+### The change
+
+1. **`nopred`, `viewheight`, `crouch` and the Z of every origin are now recorded.**
+   269's records omitted `nopred` — and the fix is gated on `!nopred`. A clean dump
+   could therefore have meant "fixed" or "the bad frames were never sampled", and
+   nothing in the record distinguished them. That was the hole in the verification,
+   independent of the framerate problem.
+
+2. **One line per record instead of five.** The five-line form took 100 seconds to
+   write 4096 records — ~5ms per `Con_Printf` with the console and log both in the
+   path — which ran past the script's waits and killed jit08 mid-capture. The dump is
+   outside the measured window so its cost cannot corrupt a *measurement*, but it can
+   destroy a *run*, which is the same problem wearing a different hat.
+
+3. **`PT_MAX` 512 → 4096.** At 12000 fps, 512 records span under three command frames;
+   a per-command pattern cannot appear in three samples of one.
+
+4. **A negative count prints a verdict instead of the rows** — six lines: measured fps
+   and frames-per-command, the `velblend`/`nopred`/`extrap` state, nonzero count and
+   max of the reported speed, the acked-vs-predicted pair, the within-command position
+   spread, and a green/red/yellow conclusion. Shipped as `b47_verdict` in
+   `cfg/build47.cfg`, because the person who can run it is the user.
+
+### Still open
+
+**The user's symptom.** It is not explained. It is not reproduced on this machine at
+any framerate reachable here, and every mechanism proposed for it has been refuted by
+measurement or by the code. The next fact needed is `b47_verdict`'s output from a
+session that is actually showing the flicker — specifically whether it says the engine
+is still producing it, and what it reports for rendered-frames-per-command.
+
+`cfg/build47.cfg`'s "now FIXED" heading has been corrected to say this rather than
+implying the report is closed.
+
+---
+
+## Patch 269c — 269 fixed the speed readout by breaking the energy readout
+
+`engine/client/cl_pred.c`, `engine/client/client.h` (header change: full rebuild required).
+
+### The regression, and it was 269's
+
+269 stopped blending the reported velocity across a rendered frame and **left the
+reported position blended**. That makes the two halves of the reported state two
+different instants. Almost nothing notices — except energy, which is defined as
+
+```
+E = z + |v|^2 / (2g)      (sh_strafe.qc:34, a height)
+```
+
+and therefore reads position and velocity together. The error is exactly
+
+```
+E_error = -(1-f) * v_z * dt
+```
+
+Measured per command frame across a jump (`logs/jit12.log`): reads **3.6 low** at
+takeoff (`v_z +278`), **0.28** at the apex (`v_z +25`), **4.1 high** on the way down
+(`v_z -286`). The sign flips at the apex, so it presents as a steady ~4-unit climb
+rather than as noise — which is how the user described it: *"a jump starts at 57 and
+rises to 60; Momentum holds 57."*
+
+57 is exact, not approximate: `pm_jumpvelocity = sqrt(2*800*57) = 301.9933774`, so the
+impulse's own apex is 57.0. The observed in-flight energy is ground+58.5, because
+`pm_jumpzoffset 1.5` pins the takeoff 1.5 units above the surface — and the measured
+`E@maxf` was flat at ground+58.500 in every mode, so **the mover conserves energy
+exactly and only the readout was wrong.**
+
+### Why 269's own verification missed it
+
+It measured the speed readout, which is what the report was about, and did not check
+the other consumer of the pair it had just desynchronised. The general form: *a fix to
+one half of a shared pair must be verified against every consumer of the pair, not
+against the consumer that motivated it.* The A/B/A that "proved" 269 could not have
+caught this — energy was never in it.
+
+### The fix
+
+The blend was never wrong; one of its two inputs was. `from.state` is the last acked
+player state; under `PEXT2_REPLACEMENTDELTAS` the **local** player's velocity field is
+not maintained there and freezes when you stand still — that is the 0–4 speed sweep.
+But during a jump the same field is correct (measured: 0 at the takeoff tick, 289.993
+at its end, which is what actually happened), and the blend built the right answer from
+it. **269 threw out a blend that was doing real work everywhere except the one case
+that motivated removing it.**
+
+269c keeps the blend and supplies a from-velocity that exists: the velocity this client
+predicted for that frame, carried in `playerview_t::prop` — the struct whose own
+comment says it is "for values that are propagated from one frame to the next"
+because they do not regenerate from networked state. `onground`, `jump_held`,
+`jump_msec`, `waterjumptime`, `pmsrc` and `gravitydir` are already carried there under
+the identical `from.frame == prop.sequence` guard. Velocity belongs in that set for the
+local player and needs no new bookkeeping.
+
+**It does not touch the mover.** `prop.velocity` is read only to build the reported
+value; `from.state` is left exactly as the network delivered it, so `CL_PredictUsercmd`
+still seeds from the server's state and no movement outcome or run time can move.
+
+`cl_predict_velblend` becomes a three-way switch, default **2**:
+
+| | speed after a tap | energy spread in flight |
+|---|---|---|
+| `0` — Patch 269 | 0 of 1200 ✓ | 2.52 mean, 5.55 worst ✗ |
+| `1` — pre-269 | 1144 of 1200, max 3.20 ✗ | 0.022 ✓ |
+| **`2` — 269c, default** | **0 of 1200 ✓** | **0.022 ✓** |
+
+One run, one map, one session (`logs/jit13.log`), plus a strafe-jump control so both
+halves of the blend are changing horizontally as well: 0.041 mean. The two *wrong* rows
+are as load-bearing as the right one — they are what shows the measurement can see a
+difference at all.
+
+Exposed as `b47_velfixed` / `b47_velblend` / `b47_vel269` and `b47_e_jump` in
+`cfg/build47.cfg`.
+
+## Patch 270 — public lobbies: the aarch64 dedicated server, and the plugin suffix that made every Source map look missing  *(IN PROGRESS — reserved)*
+
+FTESurf is being given public lobbies: join any map, see how many people are on it, see
+and hear each other, with no player-to-player interaction. The gameplay server is a
+headless FTE running FTE's own `mapcluster` on a NanoPi R6C (aarch64), forking a child
+server per map on demand, with a small Flask/SQLite service beside it for player counts,
+run telemetry and uploads.
+
+Full plan: `C:\Users\Lex\.claude\plans\i-m-developing-a-professional-inherited-bird.md`
+
+Almost none of this is netcode work — FTE already has ICE/WebRTC with NAT punch-through,
+an in-tree master/broker, Opus voice routed server-side, and delta-compressed entity
+networking with client-side interpolation. What follows are the engine-side pieces only.
+
+### Stage 0 — `plugins/Makefile` had no `__aarch64__` branch  *(APPLIED AND VERIFIED)*
+
+`plugins/Makefile` derives the plugin filename suffix by asking the compiler for its
+predefined macros. It tested `__amd64__`, `__i386__`, `__arm__`, `__ppc__`, `__ppc64__`
+and `__ppc64le__` (`:55-87`) — and nothing for aarch64. A native build on an arm64 box
+fell through to the bare fallback `PLUG_NATIVE_EXT?=.so` (`:104`) and produced
+`fteplug_hl2.so`.
+
+The engine looks for `PLUGINPREFIX "*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX`
+(`common/plugin.c:1283`), and on aarch64 `ARCH_CPU_POSTFIX` is `"arm64"`
+(`common/bothdefs.h:656-657`). So it wants **`fteplug_hl2_arm64.so`** and would never
+have found `fteplug_hl2.so`.
+
+**The failure mode is why this is worth a patch note rather than a one-line commit.** The
+plugin builds cleanly, links cleanly, and is then simply never loaded. With no hl2
+plugin there is no VPK mounting and no VBSP loader, so *every Source map reads as
+missing* — which looks like a content or path problem, not a build problem, and there is
+no error message anywhere that points at the filename.
+
+Fixed by adding the branch, tested **before** `__arm__` to match the order `bothdefs.h`
+uses (gcc does not define `__arm__` on aarch64, so the order is documentation rather than
+necessity):
+
+```make
+ifneq ($(shell echo|$(CC) -E -dM -|grep __aarch64__),)
+	PLUG_NATIVE_EXT=_arm64.so
+endif
+```
+
+#### Verified — and the instrument is the filename, not the build exit code
+
+A build that succeeds proves nothing here; the broken case also succeeded. The
+discriminator is what name the makefile chooses, read out of a dry run:
+
+```
+$ make -C engine plugins-rel FTE_TARGET=linux CC=gcc BITS=arm64 NATIVE_PLUGINS="hl2" -n \
+    | grep -o "fteplug_hl2[^ ]*"
+fteplug_hl2_arm64.so
+```
+
+and then that the engine actually loads it:
+
+```
+$basedir/fteplug_hl2_arm64.so: loaded
+```
+
+Before the fix that line would have read `fteplug_hl2.so` and the engine's scan would
+have skipped it silently.
+
+**Note the build is native, not cross.** `FTE_TARGET=linux_arm64` selects the
+`aarch64-linux-gnu-*` cross toolchain (`engine/Makefile:490-497`), which is not installed
+on the target. The documented native form is `FTE_TARGET=linux CC=other-gcc`
+(`engine/Makefile:16`):
+
+```
+make -C engine sv-rel      FTE_TARGET=linux CC=gcc BITS=arm64 -j6
+make -C engine plugins-rel FTE_TARGET=linux CC=gcc BITS=arm64 NATIVE_PLUGINS="hl2"
+```
+
+`NATIVE_PLUGINS="hl2"` is required — a bare `plugins-rel` dies on an unrelated ffmpeg
+target, the same trap already recorded for win64.
+
+**`zip` is a real but harmless build dependency.** `EMBEDMETA` (`plugins/Makefile:127-132`)
+appends a package-manager metazip to the finished `.so`. Without `zip` the recipe exits
+127 and make reports failure — *after* the `.so` has already been linked. The artefact is
+complete and loads; only the plugin-manager metadata is absent. The engine says so on
+startup (`unable to find end-of-central-directory (not a zip?)`) and loads it anyway.
+
+#### What the aarch64 server actually does — first boot, `surf_kitsune`
+
+```
+$basedir/fteplug_hl2_arm64.so: loaded
+hl2: TTH support unavailable
+hl2: VTF support unavailable
+hl2: VMT support unavailable
+movement: surf_kitsune is surf (name), base ruleset
+zones(sv): 39 on surf_kitsune (maps/zones/online)
+Server spawned.
+Momentum movement: 66.6667 Hz tick, accel 5, airaccel 150, aircap 30, friction 4,
+                   stopspeed 75, gravity 800, jump 301.993, hull 62/45, maxvel 3500/axis
+fs: maps/surf_kitsune.bsp in 480ms | 6 searchpaths, 1105 files indexed | hash valid
+```
+
+Three things worth reading carefully:
+
+- **The three "unavailable" lines are correct, not a failure.** `plugins/hl2/hl2.c:17-24`
+  inits each format independently and keeps going if one declines
+  (`somethingisokay`). TTH, VTF and VMT are the image and material subsystems and there
+  is no renderer in a `-DSERVERONLY` build. `VBSP_Init` sets `qrenderer = QR_NONE` when
+  there is no image interface (`mod_vbsp.c:8453-8459`) and skips every material pass. The
+  formats a server needs — VPK, MDL/PHY and VBSP — are the ones that loaded.
+- **`zones(sv): 39` is the load-bearing line.** Zone geometry does not come from the BSP;
+  it is Momentum JSON parsed by `sh_zones.qc`. Without `maps/zones/` on the server the
+  count is 0 and the run timer never arms — silently, with the map otherwise working.
+- **The movement line proves `cfg/default.cfg` was exec'd.** Those constants live there,
+  and `SV_ExecInitialConfigs` (`sv_main.c:6650-6665`) is an if/else ladder that stops
+  looking once it finds a config. There is deliberately no `cfg/server.cfg` on this host
+  yet: adding one silently *replaces* `cfg/default.cfg` and would take `pm_physicsmode`,
+  `pm_ticrate` and `sv_bigcoords` with it. When that file is added its first line must be
+  `exec cfg/default.cfg`.
+
+#### `props: 0 spawned` was not the failure it looked like
+
+The first boot printed `props: 0 spawned (0 solid, 0 scaled)` and the obvious reading --
+the Source `models/` tree is missing, so nothing is solid, so the client will rubber-band
+-- was wrong twice over.
+
+**First, that counter deliberately excludes static props.** `sv_entities.qc:1726-1730`
+says so: VBSP moves `prop_static` out of the entity lump into the `sprp` game lump, the
+engine loads it there (`VBSP_LoadStaticProps`, `mod_vbsp.c:3818`, commented *"present on
+server, because they're potentially solid"*) and the QC never sees it. A census of the
+library found zero `prop_static` entities across 1308 maps. So the QC line counts
+`prop_dynamic`/`prop_physics` only, and a surf map having none of those is ordinary.
+
+**Second, surf_kitsune genuinely has no static props either**, so it could not have tested
+the loader whatever the counter said. The engine's own census is a `Con_DPrintf`
+(`mod_vbsp.c:5566-5571`) and needs `developer 1`; on surf_kitsune it does not print at
+all, because `numstaticprops` is 0.
+
+Re-run on two maps that do have them:
+
+```
+maps/surf_borderlands.bsp: 7 static props, 7 solid (solidity 0:0 2:0 6:7 other:0)
+models/props_foliage/trees_cluster01.mdl has no collision info and must not be used
+  as a solid static prop
+
+maps/surf_boreas.bsp: 1587 static props, 11 solid (solidity 0:1576 2:0 6:11 other:0)
+```
+
+That is the loader working. The `trees_cluster01.mdl` line is the strongest evidence in
+the set: to say a model ships no `.phy`, the plugin had to find the `.mdl` inside a
+mounted CS:S VPK, open it, and look. VPK mounting, MDL parsing and PHY probing are all
+live on aarch64. boreas's 1576 non-solid props are `solidity 0` = Not Solid in the map's
+own data, not a load failure.
+
+**The lesson, and it is the same one as the `vid_winmaximize` runs:** a census that
+excludes the thing you are measuring reads exactly like the thing being broken. Pick the
+instrument that can distinguish them -- here, a map that actually has static props, and
+the engine's own count rather than the QC's.
+
+#### Not yet proven: collision AGREEMENT with a client
+
+Everything above is the server's own account of itself. It shows the hulls were built; it
+cannot show they match what the client predicts. The only instrument for that is a client
+connecting and walking a ramp and a prop, and watching for a rubber-band -- the failure
+Patch 229 records. That test is outstanding and is the last thing standing between Stage 0
+and done.
+
+
+
+---
+
+---
+
+### Stage 1b — you could see your own body, a disconnected player left one behind, and the rate had no readout  *(APPLIED AND VERIFIED)*
+
+Three things came out of the first hands-on session with Stage 1. One was reported, one
+was found by re-reading the code that had just shipped, and one was a request.
+
+#### 1. `.nodrawtoclient` — your own avatar was drawn inside your own head
+
+`Lobby_AvatarSpawn` created an avatar for every player including the one it mirrors, and
+nothing filtered it out of its owner's view. `setorigin` puts the avatar at the player's
+FEET origin while the eye sits at `origin + PM_VIEW_OFS`, so first person was a view from
+inside the model. It had never shown up before lobbies because the player edict has no
+model at all (`setmodel(self, "")`, `sv_player.qc:182`).
+
+The fix is one field, and picking it needed the engine rather than a guess:
+
+```c
+av.nodrawtoclient = p;
+```
+
+`sv_ents.c:4211-4214` is a hard `continue`:
+
+```c
+//DP_SV_NODRAWONLYTOCLIENT
+if (ent->xv->nodrawtoclient)
+    if (client->edict && ent->xv->nodrawtoclient == EDICT_TO_PROG(svprogfuncs, client->edict))
+        continue;
+```
+
+**The load-bearing structural fact is that this is in `SV_Snapshot_BuildQ1`, the SHARED
+per-client gather.** `sv_ents.c:4492` fills one `packet_entities_t`; `4503` and `4550`
+hand it to `SVFTE_EmitPacketEntities`, `4590` hands it to `SVQW_EmitPacketEntities`. So
+this is not a legacy-protocol mechanism that merely happens to compile — the entity is
+dropped before either writer sees it, and the owner pays nothing at all for their own body.
+
+Three alternatives were checked and rejected, recorded so they are not re-proposed:
+
+| mechanism | works? | why not |
+|---|---|---|
+| `.exteriormodeltoclient` | yes, both paths | only sets a render flag. `gl_alias.c:3596` culls solely when `!externalview && !chase_active`, so it **reappears** in chasecam, in mirrors and in `cl_portal.qc`'s portal views — and it is still fully networked and still casts a shadow unless `r_shadow_playershadows 0`. |
+| `.viewmodelforclient` | yes | exact inverse: only that client receives it, glued to their view as a weapon model (`sv_ents.c:4116-4119`). |
+| `dimension_see`/`seen` | yes, same gather (`:4231`) | costs a bit of an 8-bit mask per player, and a player's `dimension_see` **also** gates which multicasts and sounds reach them (`sv_send.c:751, 1017`) — narrowing it to hide a model would silently drop their events. The same class of mistake as `dimension_solid = 0`. |
+
+Behind `lobby_av_self` (default 0 = hidden), and the switch is not only symmetry for the
+house rule: `1` is the only way to inspect your own avatar's pose and duck swap solo.
+
+#### 2. `PVSF_NOREMOVE` made a disconnected player's body permanent — this shipped
+
+Stage 1 set `av.pvsflags = PVSF_IGNOREPVS | PVSF_NOREMOVE`, on the reasoning that an
+avatar should never receive a spurious remove. What it actually did was make an avatar
+**impossible to remove at all**, and it broke disconnect on the build that was handed over
+for testing.
+
+`ED_Free` (`qclib/pr_edict.c:174-210`) only marks the edict `ER_FREE` and stamps
+`freetime` — every field-clearing line inside it is commented out, so a removed entity
+keeps its fields. `SVFTE_EmitPacketEntities`' gap loop then reads that freed edict
+(`sv_ents.c:1630-1631`):
+
+```c
+e = EDICT_NUM_PB(svprogfuncs, o->number);
+if (!((int)e->xv->pvsflags & PVSF_NOREMOVE))
+{
+    client->pendingdeltabits[j] = UF_SV_REMOVE;
+    o->number = 0;    // dead
+```
+
+With the flag still set the `UF_SV_REMOVE` is suppressed **and** `o->number` is left
+non-zero, so the suppression repeats on every subsequent frame. A player who disconnected
+left their body standing frozen on every other client until the edict slot was recycled —
+and `ED_Alloc` (`pr_edict.c:105-146`) refuses to recycle a slot for 0.5 s and may never
+reach it at all.
+
+`PVSF_IGNOREPVS` alone is what this entity needs. Dropping `NOREMOVE` also makes
+`nodrawtoclient` safe to change at runtime rather than spawn-time-only, which is what
+`lobby_av_self` depends on.
+
+**The general lesson:** a flag meaning "never remove this" is not a safety measure on an
+entity that is ever removed. `remove()` in QC does not clear the fields.
+
+#### 3. `getdeltacount` — a client-side receive counter, because nothing existing was one
+
+The Stage 1 hand-off asked for `cl_shownet 3` and counting lines by eye. That is
+unreadable at 66 Hz and is not a measurement. Four replacements were checked in source,
+and **three would have produced a confident wrong number:**
+
+- **`deltalisten` (#371)** reads like exactly the right builtin and is the worst of the
+  four. Its callback is dispatched from `CL_LinkPacketEntities` (`cl_ents.c:5352`), a walk
+  over `cl.currentpackentities` once per RENDERED FRAME, and that pack contains entities
+  copied forward unchanged (`cl_ents.c:1234-1246`) — so unchanged entities are dispatched
+  too. Counting callbacks measures framerate x entity count. At the ~1800 fps these tests
+  ran at, a 15 Hz avatar would have read in the hundreds.
+- **`getentity` (#504)** exposes no sequence or update field; the `GE_` list ends at
+  `GE_TRAILEFFECTNUM` and the default case prints "field is not supported". `GE_ACTIVE`
+  means "present in the current snapshot", not "updated in it" (`cl_ents.c:4891-4895`).
+  It *is* the right tool for counting bodies, which is what it is used for.
+- **A server-side count of how often `Lobby_AvatarPose` runs.** Needs no engine change and
+  is worthless: it measures how often we MOVE the avatar, which we already know because we
+  wrote the loop. It cannot see delta suppression, PVS, choke or loss, and would have
+  reported a perfect 15.0 no matter what arrived.
+- `r_netgraph 2` -> `CL_ShowTrafficUsage` (`cl_parse.c:10207`) does already give
+  `svc_fte_updateentities` bytes/sec with zero patching. Real, and too coarse — there is
+  no per-model breakdown.
+
+So: one counter array plus one builtin. `cl_deltacount[MAX_PRECACHE_MODELS]`, incremented
+in `CLFTE_ReadDelta` — the one function entered exactly once per received delta — read by
+`getdeltacount`, cleared in `CL_ClearState`. Two details that are not obvious:
+
+- **The increment goes at the END of `CLFTE_ReadDelta`, not beside the `cl_shownet` line at
+  the top.** `news->modelindex` is not final until `UF_MODEL` has been parsed, so the
+  obvious placement would attribute every update to the entity's PREVIOUS model — and a
+  lobby avatar changes model on every duck, so the whole duck swap would land in the wrong
+  bucket.
+- **`newp == NULL` is the baseline case.** `CLFTE_ParseBaseline` (`cl_ents.c:1073-1079`)
+  borrows `CLFTE_ReadDelta` to read spawn baselines; counting those puts a spike on every
+  map load.
+
+The QC side is `client/cl_netmon.qc` (`hud_net`, default 0), guarded with `checkbuiltin` —
+a `#0:` builtin the engine does not know resolves to `PF_Fixme`, which errors **when
+called**, and `NM_Frame` calls it every frame. New progs against a pre-270 exe would not
+degrade to a missing panel; it would take the client down on the first frame of every map.
+
+#### Verified, with pictures, and with one client
+
+`cfg/testrun/p270_net.cfg` proves both features solo by using `lobby_av_self 1` to make
+the client receive its own avatar. `screenshots/p270_net_*.png`:
+
+| `lobby_av_rate` | `lobby_av_self` | bodies | upd/s | per body |
+|---|---|---|---|---|
+| 15 | 1 | 1 | 13.0 | **13.0** |
+| 5 | 1 | 1 | 5.0 | **5.0** |
+| 5 | 0 | **0** | 0.0 | – |
+
+The middle row is exact. The first reads 13.0 rather than 15.0 because the pose timer is
+`time + 1/rate` tested against a 66.7 Hz server frame, so 1/15 s = 4.44 ticks quantises up
+to 5 ticks = 13.3 Hz. **Both rows are the point:** neither is anywhere near 66.7, and the
+number follows the cvar. Had the avatar been networked the way a moving player edict is,
+`SVFTE_DeltaCalcBits` (`sv_ents.c:998-1006`) would have pinned it at the snapshot rate
+whatever `lobby_av_rate` said.
+
+The third row is the strongest single result in Stage 1b: with `lobby_av_self 0` the
+client cannot even *see* the entity in order to count it. `nodrawtoclient` removes it from
+the gather — the bandwidth is genuinely gone, not merely invisible.
+
+**Two traps found while building that harness, both of which produce plausible wrong
+pictures rather than errors:**
+
+1. **A `map` inside a startup `+exec` is silently dropped.** The exec is processed before
+   the mod is initialised — the log puts `execing ...` ABOVE
+   `------- FTESurf Initialized -------` — and putting `+map` on the command line does not
+   help either, because exec is hoisted ahead of it. The script then cheerfully screenshots
+   the engine's built-in fallback menu three times, which looks like a rendering failure
+   rather than a scripting one. One `wait` before the `map` line fixes it.
+2. **A stationary player reads `upd/s 0.0`, and that is correct.** An unchanging origin and
+   yaw means the delta compressor sends nothing, which is the entire reason a separate
+   entity was used. The harness holds `+left` down, because turning cannot be stopped by a
+   wall the way `+forward` can.
+
+---
+
+### Stage 3a — the directory heartbeat  *(APPLIED, running on the Pi)*
+
+`surfd`, a Flask+SQLite lobby directory on the NanoPi (`0.0.0.0:8084`, LAN only — nginx
+deliberately untouched, so it is **not** publicly reachable). Game servers POST a
+heartbeat every `lobby_master_rate` seconds; the menu GETs `/lobbies.json`.
+
+The master server cannot do this job, and that is why the service exists: `SV_Heartbeat`
+(`net_master.c:604`) returns immediately for any subserver, so once lobbies are mapcluster
+children they never advertise to any master at all.
+
+**The address is taken from the request's source IP, never from a client-supplied field.**
+Verified adversarially: a heartbeat carrying `addr=1.2.3.4:1234`, `ip=`, `host=` and a
+spoofed `X-Forwarded-For: 8.8.8.8` was recorded as the socket peer and every decoy was
+ignored. The deployment consequence is that the game server must heartbeat to the **LAN**
+URL rather than `127.0.0.1` — the first run advertised every lobby as `127.0.0.1:27500`,
+which is useless to a remote menu and looks exactly like the directory working perfectly.
+
+`lobby_master` is empty by default, so a listen server — i.e. every single-player session,
+running this same progs — sends nothing anywhere. The shared secret lives in
+`cfg/lobby_local.cfg` on the Pi (mode 0600, not in the repository).
+
+#### `uri_get`'s success code is 0, not 200 — and it silently breaks both callers
+
+`PR_uri_get_callback2` (`pr_bgcmd.c:6014`), verbatim:
+
+```c
+G_FLOAT(OFS_PARM1) = (replycode!=200)?replycode:0;	//for compat with DP, we change any 200s to 0.
+```
+
+**QC never sees 200.** The obvious `if (responsecode == 200)` is dead code that can never
+run, and the natural `if (responsecode != 200) { fail }` classifies every SUCCESS as a
+failure. That second form was written in the menu's poller and would have left the lobby
+browser permanently empty against a directory that was answering correctly.
+
+The second half of the trap hides the first: a QC global starts at 0, so a
+"has the status changed" test against a zero-initialised lastcode **also swallows the very
+first success**. The server's heartbeat loop was working perfectly and saying nothing at
+all — indistinguishable from one that was not running, which is precisely what a
+log-on-change was written to prevent. Hence an explicit `seen` flag rather than a sentinel
+value.
+
+---
+
+### Stage 6a — public lobbies in the map picker  *(APPLIED)*
+
+Up to three rows above the map list, each with the map's atlas thumbnail and a live player
+count; clicking connects. `menu/m_lobby.qc` polls and parses, `m_main.qc` draws — the
+dependency runs one way, because the drawing needs `ui_thumb` and `ms_name`.
+
+- **A fixed section above the list, not rows inside it.** The list's row ids are keyed to
+  the view index and every row does `real = stof(bufstr_get(ms_view, idx))`, which assumes
+  every index in the window is a map index. The list geometry is derived from `y`, so it
+  shrinks to fit by itself with no matching edit.
+- **`shared/sh_json.qc` was missing from `m_progs.src`** and had to be added. Its own header
+  claims FTE exposes the JSON builtins to SSQC and CSQC "both" — there is a third module:
+  `pr_menu.c:2463-2472` registers all ten in the MENU VM's own table.
+- **An uninstalled map is drawn dimmed and labelled, not hidden.** Hiding it makes a lobby
+  with people in it silently absent, which reads as a broken directory.
+- **The address is validated with an allow-list before it reaches `localcmd`.** It came off
+  the network from whatever host `lobby_dir` names, and it goes to the console — an address
+  of `1.2.3.4:1\nquit\n` would be remote code execution against anyone with the picker
+  open. `%S` quoting is worth having and is not what is being relied on.
+
+**`lobby_dir` is empty by default, and that is a consent decision rather than caution.**
+The shipped terms say, verbatim: *"Nothing is sent anywhere. FTESurf has no server to send
+it to and no code that uploads anything."* Polling a directory makes that false — an HTTP
+GET discloses the player's IP address. The proper fix is Stage 4 (`FS_TERMS_VERSION` -> 2),
+and **that has to land before this is ever shipped switched on.** An empty default keeps
+the sentence true for every install that has not opted in by hand.
+
+
+---
+
+### Stage 4 — the consent rewrite  *(APPLIED; layout not yet seen on screen)*
+
+*Recorded after Stage 6a because that is the order it was done in; it is the gate ON 6a
+and 6a stays off by default until this is confirmed on screen.*
+
+Public lobbies made one sentence of the shipped terms false: *"Nothing is sent anywhere.
+FTESurf has no server to send it to and no code that uploads anything."*
+
+#### A second tier, not a version bump — and the reason is not convenience
+
+The plan said `FS_TERMS_VERSION` -> 2. Writing it that way turned out to be wrong, because
+of what the existing machinery does with that number: `m_draw` forces the terms screen
+whenever the accepted version is below it, and `screen_terms` has no way off except
+accepting or quitting. Bumping it would therefore have **stopped an existing player from
+launching the offline game they had already agreed to, until they agreed to something
+else** — while every word of version 1 remained true of their offline session. Being
+re-prompted to carry on exactly as before, with quit as the only alternative, is the shape
+of a dark pattern even when the text is honest.
+
+So `FS_TERMS_VERSION` stays 1 (recording, and launching a map) and `FS_TERMS_ONLINE` 2 is
+required by anything that contacts a server. One text covers both; an acceptance stamps the
+higher number. A version-1 player is asked exactly when it becomes true of them.
+
+**Rule for next time:** add a tier when a change affects only some players; bump the version
+when it changes what happens to everyone.
+
+#### Three gates, and the third is the one that is easy to miss
+
+| path | requires |
+|---|---|
+| recording a run (`cl_replay.qc`), launching a map (`ui_launch`) | `FS_TERMS_VERSION` — unchanged |
+| joining a lobby (`ui_connect`) | `FS_TERMS_ONLINE` |
+| **polling `/lobbies.json` (`Lob_Poll`)** | `FS_TERMS_ONLINE` |
+
+The poll needs its own gate because a GET discloses an IP address **merely from opening the
+map picker** — before any lobby has been chosen, with nothing on screen to say a server was
+contacted. Gating only the join would put the first disclosure before the question, which
+makes the question decorative.
+
+#### Two dead ends the gates created, both fixed here
+
+1. **No way out but quitting.** A version-1 player who clicks a lobby row lands on a screen
+   whose only exits are accept and quit. `screen_terms` now grows a *"not now — play
+   offline"* button, shown only when the accepted version already clears
+   `FS_TERMS_VERSION`. Declining leaves them exactly where they were.
+2. **No way in at all.** With the poll gated, `lb_count` stays 0, so no lobby row is drawn,
+   so `ui_connect` — the thing that would have offered the terms — is unreachable. A player
+   who set `lobby_dir` would have got silence and no way to find out why, which is a worse
+   failure than the one the gate prevents. `Lob_Blocked()` now draws one row saying the
+   lobbies are off and what they send, and clicking it opens the terms. Only when
+   `lobby_dir` is set: someone who never asked for lobbies is never nagged about them.
+
+#### The panel comment was aspirational, and this patch made it true
+
+`screen_terms` carried a comment saying the panel is *"sized FROM the text rather than
+guessed at"*, explaining that an earlier 500 px box had put the accept button through the
+last three lines of "Turning it off" — *"the one screen where the reader has to be able to
+read everything before the control that says they did."* The panel had in fact been sized
+from the text **once, by hand**, and written down as the constants 580 / 486 / 516. Adding
+four lines about lobbies would have reproduced exactly the bug the comment warns about, in
+exactly the screen it says matters most. Now derived: footer 24 px below the last line,
+button 30 px below that, panel 34 px below the button.
+
+At 30 lines that is 640 px, leaving a 40 px margin at 720p — the smallest window this is
+expected to run in. Past ~34 lines it needs a scroll rather than a bigger box, and the
+honest fix at that point is shorter terms.
+
+#### What is verified, and what is not
+
+Checked without launching the client (the local GPU and gamedir were handed to another
+session mid-patch): all three progs compile with 0 warnings; the line indices are
+contiguous 0..29 with no hole to silently blank a line; the longest rendered line is 66
+characters, equal to the pre-existing maximum and therefore known to fit; the derived panel
+fits with margin at 720p through 1200p; and the three button rects do not overlap.
+
+**Not verified: what it actually looks like.** Every claim above is arithmetic. The screen
+has not been seen, and the four gate transitions (fresh install; version-1 offline; version-1
+declining; version-1 accepting) have not been walked. That is the outstanding work on this
+stage, and it is why Stage 6a stays off by default.
+
+> **SETTLED IN STAGE 2 — and the arithmetic was not enough.** The screen has now been
+> rendered (`screenshots/ui_menu_terms.png`, via a new `ui_bootcheck` step). The layout was
+> fine. What looking at it found was that the one actionable instruction on the page named
+> `fs_hid`, a cvar nothing has read since build 46, and that a fresh install had a single
+> button which granted the ONLINE tier — the "play offline" button was drawn only for
+> someone who had already accepted, which a fresh install has not. Both are fixed in Stage 2.
+> The lesson is the one the panel-sizing note above is already about: this screen is the one
+> where being nearly right is not good enough, and it needs looking at, not computing.
+
+
+---
+
+### Stage 2 — making one instance survivable for 32  *(APPLIED; compiles, nothing run)*
+
+Everything in this game was written for one player on their own machine. Stage 2 is the
+audit of what that assumption costs at 32, and the answers are mostly "it destroys data
+and says nothing".
+
+Engine side is one line, eight times. The rest is SSQC.
+
+#### The engine half — voice masks aliased in groups of four
+
+`client_t.voice_mute` is `unsigned char[(MAX_CLIENTS+7)/8]` (`server.h:653`) and
+`voice_ring_t.receiver` is the same shape (`sv_user.c:3021`) — **eight** bits per byte.
+Every one of the eight accesses indexed the byte with `>>3` and then the bit with
+`1<<(x&3)`, which is four. So bits 4-7 of every byte were unreachable and clients 4-7
+aliased onto 0-3, 12-15 onto 8-11, and so on.
+
+Harmless for `VT_ALL`, which is what a surf lobby uses, and invisible until somebody mutes
+someone: muting client 4 also mutes client 0. The MVD path two lines below the worst of
+them (`sv_user.c:3125-3128`) packs the four bytes into a 32-bit mask, which is the
+independent statement that eight-per-byte was the intent.
+
+`&3` -> `&7`, at `sv_user.c:3093, 3110, 3177, 3182, 3186, 3236, 3239, 3242`. **Needs an
+engine rebuild to take effect; not yet built** (see the note on MAX_CLIENTS below).
+
+#### `MAX_CLIENTS` stays at 32, deliberately
+
+The plan says raise it to 40 "if a spectator, MVD recorder or admin is wanted". None
+exists yet, and the change is not free in two ways worth recording rather than
+rediscovering:
+
+- `config_minimal.h` is included almost everywhere, so it forces a full engine rebuild.
+  A peer session asked for the local client to be left alone until three `surf_borderlands`
+  discriminators are done, and swapping `ftesurf64.exe` out mid-test is worse than the
+  thing they asked me to avoid.
+- `net_chan.c:285` is `if (MAX_CLIENTS != QWMAX_CLIENTS) mask |= PEXT2_MAXPLAYERS;` — so
+  raising it turns on a protocol extension that has **never been negotiated in this fork**,
+  and both ends have to be rebuilt or players above slot 32 are invisible to an old client.
+
+There is also a positive argument for 32: it is exactly the width of the trigger touch
+masks below, so there is no partially-covered 33-40 range for a bug to live in.
+
+#### `FS_MAXPLAYERS` 4 -> 32, but the recorder ring stays at 4 — measured
+
+`FS_MAXPLAYERS 4` is why the fifth player onward got a working clock with no splits, no
+checkpoints, no `.rec` and no message saying why. Raising it to 32 costs 6 KB of split and
+checkpoint rows.
+
+Raising the pre-start padding ring with it looked equally free and is not. fteqcc does not
+store a QC array as data: it emits an accessor whose dispatch is **O(the array's length)**.
+Changing nothing but the one define:
+
+| `FS_PADSLOTS` | `qwprogs.dat` |
+|---|---|
+| 4 | 1,078,102 bytes |
+| 8 | 1,641,738 bytes |
+
+563 KB for four more rings whose contents are 68 KB — about **8x** overhead on length. At
+32 it would have been megabytes, re-parsed by every mapcluster child. So the constant is
+split: `FS_MAXPLAYERS 32` for slots, splits and checkpoints; `FS_PADSLOTS 4` for the ring.
+Players 5+ lose only the 3.84 s of approach prepended to a recording, which is exactly
+today's behaviour, and in a lobby it is moot because `lobby_norec` turns the recorder off.
+
+`SV_RecPadBase` exists because the guard is now two-sided (`< 0` **and** `>= FS_PADSLOTS`)
+and an out-of-range QC array write is silent — it corrupts the next array rather than
+erroring.
+
+#### Four lobby policies, and what each one destroys
+
+All default 1, all ANDed with `lobby_enable` which is 0, so an offline session reaches none
+of them.
+
+| cvar | what it stops | how it fails without it |
+|---|---|---|
+| `lobby_nopb` | personal bests | `best.pb` has no player dimension and is rewritten WHOLE. One stranger's finish overwrites the host's entire history for that map, and every player is shown that stranger's time as their own. Silent both ways. |
+| `lobby_norec` | server-side `.rec` | 32 runs held as QC strings, ~50 MB, on a Pi with no swap. The failure is the OOM killer, and `<ticks>_<tag>.rec` collides on a tie. |
+| `lobby_nosaveloc` | save points | one shared list; any stranger's delete-all `fremove`s four files per row of the host's practice points. |
+| `lobby_retrigger` | `trigger_once` removal | the first player through removes it for the 32 behind them. 841 library `trigger_once`s wire an output, so on those maps that is the progression logic vanishing for whoever is slower. |
+
+`lobby_nopb` is gated at load, at save, at both write sites, **and at the accessor**. The
+read side was added after a review pointed out that gating only the load leaves a host who
+types `lobby_enable 1` mid-map showing their own bests to 32 strangers as those strangers'
+own. The split and checkpoint tables are read directly rather than through the accessor, so
+they carry their own copy of the test; missing them left a running "+2.31" against a
+stranger's ghost at every stage boundary.
+
+#### Per-player trigger state, and the three ways the first attempt was wrong
+
+`vbsp_touch_who` tracked exactly one toucher and the file said so, naming itself "the first
+thing that would need revisiting for real multiplayer". The replacement is four 32-bit
+masks on the trigger keyed on `num_for_edict(player) - 1` — not `run_t_slot`, which is
+declared in a later file and can be -1. A mask, because the correct structure is one record
+per (player, trigger) pair and QuakeC has nowhere to put one: no per-entity arrays, and an
+entity per pair means a `find()` that scans every edict, not every match.
+
+An adversarial review found three defects in the first version of this, all mine, and they
+are worth recording because each is a different flavour of the same mistake — arguing from
+the case I had in mind rather than the case the code allows.
+
+1. **The `wait` gate paired with an `.entity vbsp_io_next_who` was far worse than the bug
+   it fixed.** The field was rewritten on every touch, so it could only match when the SAME
+   player touched twice running. Two players standing in one volume overwrote it for each
+   other every command, so neither was ever gated: `OnTrigger` fired **twice per tick, ~200
+   times a second** against `wait 1`. I had written the residual down as affecting "two
+   players deliberately taking turns"; it needed no deliberation, only co-occupancy, which
+   is the normal lobby case. Now a per-player consumption mask over one shared window — and
+   the timer is pushed on **every** fire, not only when the window restarts, or a player who
+   entered late spent one window at 0.9 s and the next at 1.0 s and fired twice a tenth of a
+   second apart.
+
+2. **The grace window was argued from the wrong end.** I justified "absent for one sweep"
+   by its maximum latency (0.03-0.06 s against 0.05-0.07 s, "no worse"). But 0.05 was chosen
+   for the **minimum** — the file's own essay says "too short and one dropped frame fires a
+   spurious end-touch mid-platform". One window is 0.03 s, so any 0.030-0.049 s gap fired an
+   end-touch build 51 would not, then a start-touch on re-contact; on the seven maps where
+   `AddOutput targetname` is the progression logic that is a rename mid-crossing. It also
+   made the "no-op with one player" claim false, which broke the house rule rather than
+   merely being untidy. Now two consecutive windows (0.06-0.09 s), **longer at both ends on
+   purpose**: ending a touch late re-fires logic that is idempotent on these maps, ending it
+   early injects a pair that is not.
+
+3. **The bit is a slot, not a person.** The edict number is stable for the life of a
+   connection and `vbsp_once_done` outlives the connection — the entity is deliberately not
+   removed, so the bit is the only record. The engine hands the lowest free slot to the next
+   joiner (`sv_main.c:2516-2522`), so they inherited every `trigger_once` the previous
+   occupant had consumed, permanently, in silence. `SV_TouchForget` on disconnect releases
+   it. It clears **only** `vbsp_once_done` and `vbsp_io_gate_seen`: the sweep masks are left
+   alone so the departure still produces its `OnEndTouch`, which is what the legacy path
+   already does (a client edict is never freed, so the activator stays valid).
+
+`OnStartTouchAll` also had to move to first-entrant-only, matching the `OnEndTouchAll`
+correction — with one toucher "the first" and "every" are the same event, which is why the
+old code fired it unconditionally.
+
+**`vbsp_mp` is latched at map load, not per frame,** and that is a correction too. It does
+not change a behaviour, it changes which of two representations the occupancy state lives
+in. Flipping it live with someone inside a trigger injects a spurious `OnStartTouch` (masks
+say nobody is there) and later a spurious `OnEndTouch` (the abandoned `vbsp_touch_who` goes
+stale). A control that injects the events it is meant to measure is not a control.
+
+`func_bhop`'s landing count is per-player under **`vbsp_retrigger`**, not `vbsp_mp`: the two
+counters do not mean the same thing (`b.count` is cumulative per block, the per-player copy
+is consecutive-on-one-block), so hanging it on the always-on cvar would have changed offline
+behaviour while claiming to be a no-op. Invisible on the library either way — `LandingLimit`
+is 0 on all 1310 maps — so this is a latent bug closed before 32 players find it.
+
+#### Two gates that had holes, both found by review, both mine
+
+- **`Lobby_NoSaveLoc` gated `SV_SaveLocCreate` and I wrote down "so the list stays empty".**
+  `SV_SaveLocScan` is the other row-adder and runs at map init, so a host's saves from
+  earlier solo play loaded straight into the shared list. Then gating `SV_SaveLocDelete`
+  **hung the server**: `SV_SaveLocDeleteAll` is `while (rec_sl_n > 0) SV_SaveLocDelete(...)`
+  and its only termination condition is that the callee shrinks the list. The loop now
+  checks progress rather than trusting the callee, and the scan sets `rec_sl_scanned` so
+  `SV_SaveLocCreate` knows an empty list means "refused", not "empty disk" — without it
+  `SV_SaveFreeID` returns 1 and the next save overwrites `save01`.
+- **`SV_PBGet` returning 0 turned a filter off.** `SV_StageClose`'s "only if you beat it"
+  guard is `if (pb > 0) if (dur >= pb) return;`, so a PB of 0 stopped rejecting anything and
+  every stage would have cut a file and printed "first time on this stage" every lap for all
+  32 players. Refused at the top of that function instead: a stage record IS a personal
+  best.
+
+#### The consent screen could not be accepted offline
+
+Separately, `ui_consent_write` stamped `FS_TERMS_ONLINE` unconditionally, and the "play
+offline" button was drawn only when `ms_consent >= FS_TERMS_VERSION` — false on a fresh
+install. So a new player had exactly one button and pressing it opted them into contacting a
+server. A tier scheme whose lower tier is unreachable from the only screen that can grant it
+is not a tier scheme. Two buttons now, always both drawn, `ui_consent_write` takes the tier
+and refuses to downgrade.
+
+The panel is also clamped now. Deriving its height from the text made it 625 px, and
+centring that in a shorter window put the button row below the bottom edge — on the one
+screen with no ESC route and a `m_draw` gate that forces it back every frame, i.e. a fresh
+install in a small window could not start the game at all.
+
+#### The player model was inside out, and the selftest could not see it
+
+Found by a person looking at another player and saying the faces were on the inside. It is
+not lobby code at all — it is `tools/mkplayermodel.py`, and it has been wrong since that
+script replaced the hand-made model.
+
+`build_faces` emits polygons CCW seen from outside, which is the normal maths convention and
+is what makes `_face_normal` point outward. Fanning them in that order gives CCW triangles.
+FTE culls those: `GL_CullFace` (`gl_backend.c:1086-1089`) maps `SHADER_CULL_FRONT` to
+`qglCullFace(GL_FRONT)`, and **`qglFrontFace` is loaded but never called anywhere in the
+engine**, so GL's default `GL_CCW`=front stands. Culling the front therefore culls the CCW
+triangles and the visible ones are the CW ones. Every outward face of the player model was
+being discarded and what you saw was the inside of the far side.
+
+Measured rather than argued — the winding of each triangle against the direction away from
+the centroid, which needs no stored normals because the solid is convex:
+
+| model | before | after |
+|---|---|---|
+| `player_48.iqm` (the preserved hand-made original) | **16 CW** | 16 CW |
+| `player.iqm` | 16 CCW | **16 CW** |
+| `player_duck.iqm` | 16 CCW | **16 CW** |
+
+So the original was right and the generator inverted it. The fix is one index swap, and
+**only** the index order — reversing the polygon itself would flip the normals inward and
+break the lighting instead.
+
+The reason it survived: the selftest compared `unique_positions`, `num_triangles`, `bbox`
+and rigidity against the preserved original — everything except the order the indices are
+in. It now checks winding too, and that check was falsified in both directions (bug
+reinstated → `INSIDE OUT (16 CCW tris)`, selftest FAILED; restored → PASSED).
+
+#### What is verified, and what is still not
+
+Run, not argued:
+
+- **The registration trap is closed.** A launch with `log_developer 1` logs no
+  `Created QC Cvar` line for any `lobby_*` or `vbsp_*` name, where before the fix
+  `b51b.log:339/341/343` logged `vbsp_mp`, `lobby_retrigger` and `lobby_avatars`. A host
+  that enables the lobby by typing `lobby_enable 1` — the path that was broken — now reports
+  `"lobby_avatars" is "1" (default)`, i.e. the default landed rather than being supplied by
+  `cfg/lobby.cfg`.
+- **Two clients, one map.** A listen server on a private port plus a second client:
+  connected, `entered the game`, and `left the game` cleanly with no `Host_Error`,
+  `SV_Error` or crash in either log. The disconnect path is the one that used to leave a
+  frozen body standing on every other screen.
+- **The avatar reaches the other client.** `hud_net` read `bodies 1` on the guest — one
+  body, not two, which is also the check that `lobby_av_self 0` stops the client being
+  *sent* its own avatar rather than merely not drawing it.
+- **The terms screen has now been looked at** (`ui_menu_terms.png`, driven by a new
+  `ui_bootcheck` step and `ui_bootterms`, which fakes a fresh install for one frame without
+  touching `data/consent.txt`). 29 lines, three buttons in a row, no overlap, comfortable
+  margin at 720p. Looking at it is also what found the `fs_hid`/`rec_hid` line below.
+- **The engine is built and deployed** (17:04), so the voice-mask fix is live.
+
+Still not verified: **8 clients, and 32.** Stage 2's own pass criterion from the plan — 8
+clients for 10 minutes, every timer arming independently, no `best.pb` written, flat RSS —
+has not been attempted. The four `lobby_no*` switches remain reasoned rather than falsified;
+falsifying one means setting it to 0 and watching the failure with two people on a map.
+
+Known and deliberately not fixed: a lobby finish still draws as a personal best on the
+client's results card (`cl_results.qc`), because the client has no stat telling it this was
+a lobby run, and it is then contradicted by a rank taken against the player's own local
+archive that the lobby server never saw. That needs a new stat and belongs with Stage 3's
+telemetry.
+
+#### Two things the consent screen was saying that were not true
+
+Both found by rendering it rather than by reading the source.
+
+`fs_hid 0` was the only actionable instruction on the screen, and `fs_hid` has not been read
+since build 46 — `sh_defs.qc:1409` forwards it to `rec_hid`, which is what `cl_replay.qc`
+actually tests. The screen was telling people to set a dead cvar. Now `rec_hid 0`.
+
+And `ui_consent_write` stamped `FS_TERMS_ONLINE` unconditionally while the "play offline"
+button was drawn only when `ms_consent >= FS_TERMS_VERSION` — false on a fresh install. So a
+new player had exactly one button and pressing it opted them into contacting a server. A
+tier scheme whose lower tier is unreachable from the only screen that can grant it is not a
+tier scheme.
+
+## Patch 271 — the 3D skybox drew the whole map, because a recursed view got no PVS at all on the Source path  *(APPLIED AND VERIFIED, plugin only — `plugins/hl2/mod_vbsp.c`)*
+
+Reported as: *"fps_max 0 test surf_tensor2 … I get like 200-300 which seems fine however I think
+it's way lower than it should be. I believe the 3d skyboxes are rendering when they shouldn't?"*
+
+Right, and by a factor of 824.
+
+### The mechanism
+
+`R_DrawSkyroom` recurses to draw a map's 3D skybox, and on the way in it clears the only thing
+that could have told the world model what to cull against:
+
+```c
+r_refdef.recurse += 1;          // gl_warp.c:355
+r_refdef.forcevis  = false;     // :361
+r_refdef.forcedvis = NULL;      // :364
+```
+
+`VBSP_MarkLeaves` then took its first branch on `portal` — which is just `refdef->recurse` — and
+gave up:
+
+```c
+else if (portal || hl2_novis->ival || clusters[0] == -1 || !model->vis)
+    return NULL;    //use some blind whole-model thing
+```
+
+"Some blind whole-model thing" is `VBSP_PrepareFrame` emitting **every surface in the world model**
+with no PVS, no frustum and no area test (`mod_vbsp.c:6591-6601`).
+
+Mirrors, portals and water all recurse too and are **not** affected: they hand down a real PVS in
+`forcedvis` (`gl_rmain.c:1707-1728`), which the branch above honours. The skyroom is the one
+recursion that hands down nothing. And Q1BSP never had the bug — `Q1BSP_MarkLeaves` does not bail
+when recursing, it poisons its cache and computes a real PVS anyway (`q1bsp.c:2225-2242`).
+
+### The evidence, bit-exact
+
+surf_tensor2's `sky_camera` is at `-5824 14720 1920`. Decompressing the map's own VIS lump offline
+puts that in **cluster 1534**, whose PVS admits **30** of the map's 29,796 world faces.
+
+The engine's per-view world census (`r_surf.c:3994`, `developer 1` **and `log_developer 1`** — it is
+a `Con_DPrintf` and does not reach the log without the second):
+
+```
+BEFORE  [world] recurse 1: area 8 cluster 1534 vis yes -> 24762 meshes in 76 batches
+        [world] recurse 0: area 22 cluster 6000 vis yes ->   506 meshes in 23 batches
+AFTER   [world] recurse 1: area 8 cluster 1534 vis yes ->    20 meshes in  2 batches
+        [world] recurse 0: area 22 cluster 6000 vis yes ->   506 meshes in 23 batches
+```
+
+`24762` is not approximately the world model's size, it **is** it: `dmodel_t[0].numfaces` on
+surf_tensor2 is 24,762 exactly. That is the `for (i = 0; i < mod->nummodelsurfaces; i++)` loop
+running to completion, and it is what makes this a bug rather than a heuristic being pessimistic.
+The main view is unchanged to the mesh and to the batch, which is the other half of the check —
+the one that says the poison did not leak the sky camera's PVS into the player's view.
+
+**The `vis yes` in that census is a red herring and cost me an hour.** `VBSP_PrepareFrame` reports
+`*surfvis_out = frustumvis` (`:6627`), which is never NULL, so the census says `vis yes` even on the
+frame where `MarkLeaves` returned NULL. **The mesh count is the tell, not the label.**
+
+### Measured
+
+surf_tensor2 spawn, same vantage, same yaw, same settings, 1280x720:
+
+| | before | after |
+|---|---|---|
+| framerate | **236 fps** | **323 fps** |
+| Opaque Batches | 1500 us | **288 us** |
+| Draw Indicies | 304,787 | 83,013 |
+| Total refresh | 4228 us | 3094 us |
+
+Stage 5: 320 → 449 fps. The control — `surf_tensor`, same author, 18,300 faces, **no `sky_camera`**
+— is untouched at ~1337 fps and never took the path at all. `surf_colin_blaster_69000` likewise has
+no `sky_camera`, which is why the reporter sees 12,000 fps there and 236 here.
+
+### What it does NOT fix, and why that is now correct
+
+With the skyroom drawing its own room instead of the map, `vbsp_skyroom 0` is still worth about
+1.37x at the spawn. That residual is **not** the same bug. Bucketed at an open-sky vantage:
+
+| | skyroom on | off | delta |
+|---|---|---|---|
+| Total refresh | 3066 us | 1922 us | 1145 |
+| **Present** | **1101 us** | **257 us** | **844** |
+| CSQC Drawing | 1635 | 1529 | 106 |
+| World walking | 858 | 801 | 57 |
+
+The CPU buckets barely move; 844 of the 1145 us is `Present`, i.e. blocking on the GPU. The sky
+room's 20 surfaces fill the screen, so a 3D skybox costs a screen's worth of overdraw whatever its
+face count. **That is what a second scene render costs, and it is the price of the feature rather
+than a defect.**
+
+Worth knowing for this map specifically: `vbsp_skyroom 1` and `0` are **pixel-identical** at every
+vantage screenshotted. tensor2's 3D skybox contributes nothing visible and, before this patch, was
+charging 24,762 surfaces a frame for it.
+
+### The change
+
+`portal` is dropped from the bail condition; the cache is skipped and **poisoned** for a recursed
+view exactly as Q1BSP poisons `oldviewclusters`. The poison is load-bearing: `prv->vcache.visbuf`
+is one buffer shared by every recursion level, so the recursed view necessarily overwrites the main
+view's PVS, and leaving `vcache.vis` pointing at it would serve the sky camera's PVS to the player
+on the next frame.
+
+Overwriting it mid-frame is nonetheless safe, and the ordering is the argument: the main view reads
+`entvis` at `r_surf.c:4005` (`CL_LinkStaticEntities`), and `BE_DrawWorld` — which is what reaches
+`gl_backend.c:7413` and calls `R_DrawSkyroom` — is not until `:4020`. `surfvis` was already
+per-recursion (`surf_frustumvis[r_refdef.recurse]`, `:3957`) and was never the problem.
+
+Costs one extra PVS decompression per frame on a map with a skyroom, against 24,762 surfaces. A
+`sky_camera` in solid still yields cluster `-1` and still takes the whole-model path, so the
+degenerate case is exactly what shipped before.
+
+### Not chased
+
+`r_temporalscenecache` is **not** a lever here and the next person should not spend an afternoon on
+it: `R_GenWorldEBO` dispatches only on `fg_quake/fg_quake2/fg_quake3/fg_halflife` and hits a
+`//panic` no-op otherwise (`r_surf.c:3388-3400`), while VBSP is `fg_new` (`mod_vbsp.c:7919`). The
+auto-enable heuristic excludes it for the same reason, and its own leaf-count rule (`> 6000`, and
+tensor2 has 19,846) would otherwise have selected it. Setting it to 1 builds an empty cache.
+`ENGINE_PATCHES.md:11569` already recorded the gate; this is the performance consequence of it.
+
+Captures: `logs/t2perf.log` (before), `logs/t2vis.log` (the census, before), `logs/t2after.log`
+(after), `logs/t2look.log` (the bucket split and the pixel-identical screenshots). Configs are
+`cfg/testrun/t2perf.cfg`, `t2vis.cfg`, `t2after.cfg`, `t2look.cfg`.
+
+## Patch 272 — every map load unloaded the effect set the CSQC had just loaded, through four lines no grep could find, and the census that found them  *(APPLIED AND VERIFIED, engine only — `p_script.c`, `r_part.c`, `cl_parse.c`, `cl_main.c`, `r_surf.c`, `common/particles.h`; `build.ps1 -Engine -Full`, the header rule)*
+
+### The symptom
+
+FTESurf builds 49, 50 and 51 drew no emitter particles at all: `0 particles, 65536 free` with 33
+`env_smokestack` in frame. Build 51b found and fixed one cause — `cfg/default.cfg` exec'd
+`particles/ftesurf.cfg` before `Renderer_Start`, and `P_ParticleEffect_f` discards an `r_part`
+block in silence while `pe_script_enabled` is false — by moving the exec to a CSQC `localcmd` at
+`CSQC_WorldLoaded`. The 35 blocks then demonstrably parsed (their `ftesurf_dot_blend` shader was
+built in the same second) and `r_exportalleffects` eleven seconds later dumped all 35 with their
+names intact and **empty bodies**, which is `PScript_Query`'s output for `loaded == 0`.
+
+### The reading that failed
+
+Names intact rules out `PScript_Shutdown` (it frees the table). The only writer that zeroes `loaded`
+on every type and keeps the names is `R_Particles_KillAllEffects`, whose only caller on the connect
+path is `R_ParticleDesc_Callback` (the other is the `r_converteffectinfo` console command), which
+`Cvar_SetCore` runs only when the value *changes*
+(`cvar.c:1019-1046`). Every path to a changed value was closed on paper: `Cvar_ForceCheatVars` runs
+23 times per map load (once per serverinfo key) but re-sets `r_particledesc` to its own value;
+`ruleset_allow_semicheats` is 1; no config, QC or plugin writes the cvar; `Cvar_ApplyCallbacks` only
+visits flagged cvars. A settled-state run (`cfg/testrun/b51e.cfg`, first pass) then cleared, one
+trigger at a time, a serverinfo update, a full `flushshaders` rescan, a respawn and an unchanged
+`r_particledesc` set — all left the effect alive — while a changed set killed it, which proved the
+probe. And still the first engine-side probe after activation read dead.
+
+### The counting that worked
+
+`PScript_LoadedCensus` (developer 2) counts loaded types and prints only when the number changes.
+It is called once per frame from `Host_Frame` (loading screens included) and from `CL_MakeActive`
+(four steps), `CL_CheckServerInfo` and `Surf_NewMap`. The second `b51e` pass put the whole thing in
+five consecutive lines (one server-side `Client command: prespawn` line omitted here), ten
+shader-and-texture lines after the exec that had parsed the set:
+
+```
+execing particles/ftesurf.cfg
+  [ten lines of shader and texture loads]
+particles loaded types 0 -> 35 of 35, at frame
+particles r_particledesc callback: "classic" -> "classic" (cls.state 3)
+particles R_Particles_KillAllEffects: unloading 35 types (cls.state 3, r_particledesc "classic")
+Sending stringcmd prespawn 1 0 0
+particles loaded types 35 -> 0 of 35, at frame
+```
+
+An **unchanged** value reaching the callback means `Cvar_ForceCallback`, and there are four:
+
+| site | where | when |
+|---|---|---|
+| `cl_parse.c:1903` | `CL_RequestNextDownload`, world model loaded, just before `prespawn` | **the kill**: a few ms after `CSQC_WorldLoaded` |
+| `cl_parse.c:3453` | `CLQW_ParseServerData` | map change, before the CSQC exists |
+| `cl_parse.c:3865` | the other ParseServerData tail | same |
+| `cl_parse.c:4100` | `CLNQ_ParseServerData` | same |
+
+(Line numbers after this patch's own comment at the first site; they were 1896/3446/3858/4093
+before it.)
+
+All four are `Cvar_ForceCallback(Cvar_FindVar("r_particlesdesc"))` — the cvar's **alias**, with an
+extra `s` (`r_part.c:611`, `CVARAF`). A grep for `r_particledesc` does not match it. Their purpose
+is legitimate: the callback reloads `r_particledesc`'s sets plus a per-map `map_<name>` set once the
+map name is known. It just opens with `KillAllEffects`, which was written before CSQC mods loaded
+their own effects, and `CSQC_WorldLoaded` runs first. This is also why the per-map psys configs
+(`particles/<map>.cfg`, same exec point) read `0 particles` on surf_tensor2 in `logs/t2final.log`.
+
+### The change
+
+`R_Particles_KillAllEffects` spares a type parsed by an `r_part` with an **empty namespace**
+(`config ""`, `loaded == 2`): the console, an exec, a CSQC `localcmd` exec, or a server-stuffed
+block — under **`r_part_keepuser`** (default 1, `CVAR_SEMICHEAT` so a server that disallows
+semicheats forces it to 0 exactly as it does `r_particledesc`; **0 is the old engine**). An effect
+parsed inside `r_part namespace X` belongs to set X and is reset with it, as before; so are sets
+(`config != ""`), implicitly-loaded effects (`loaded == 1`), `loadedconfigs` and the classic
+fallback. `f_modified_particles` is cleared only if nothing survived, since a surviving
+console-loaded effect is still a modification (the flag has no reader in this tree today).
+
+Two hardenings that the keep made necessary, plus one upstream bug: the loop freed
+`part_type->ramp` (element 0) on every iteration instead of `part_type[i].ramp`; and since a killed
+type can still have particles in flight that the update loop ramps through `type->ramp` with no
+`loaded` gate, the kill now also clears `rampmode` and `rampindexes`, which the original never did
+for element 0 either. The kill sets `r_plooksdirty`, and the shared-looks alias loop at the top of
+`PScript_DrawParticleTypes` now skips unloaded types, so a kept type cannot draw through a dead
+type's looks after the next map's `P_LoadTexture` pass has handed that dead type a default shader.
+
+On the QC side `Emit_LoadForMap` clears a frame latch (`em_drawn`), and the first `Emit_Frame`
+after a load arms the self-heal's one-second deadline from its own `time` and skips the check.
+Whether the CSQC exec drains before the forced pass varies between loads (`b51b.log` 16:39:26 shows
+the exec after it), and a check on the first frame reads the precache slot before the draw has
+re-resolved it — one spurious re-exec, `reloads 1`, on a patched engine. The first version of this
+deferral set the deadline inside `CSQC_WorldLoaded`, where `time` is whatever the load left in it
+and the engine writes no time global for that callback, so a load longer than a second could already
+have passed the deadline on the first frame; the review caught it. With the latch `reloads 0` is
+unconditional, and measured below.
+
+Diagnostics, all developer-gated: the census above (developer 2; below that the per-frame path is
+one call into the `r_part.c` wrapper, one compare there, and no call into `p_script.c`; both census
+functions are prototyped in `common/particles.h`); `Con_DPrintf` in
+`R_Particles_KillAllEffects` — a line before the loop with the table size, `cls.state` and the cvar
+value, and the verdict after it, `unloaded N, kept M (r_part_keepuser X)`, so a pass that keeps
+everything never reads like a kill to someone grepping for "unloaded" — plus `R_ParticleDesc_Callback`
+(old → new value), `PScript_Shutdown`, `PScript_InitParticles` (fresh vs already inited, table size),
+and the silent discard path in `P_ParticleEffect_f` — the one that cost three builds — now prints
+`r_part <name>: discarded (...)` at developer 1. A comment at the `cl_parse.c:1896` site names the
+alias so the next reader finds it. `PScript_Shutdown` resets the census count, so a `vid_restart`
+logs `freeing 35 types` and later `0 -> 35` when the set comes back, never a `35 -> 0` blamed on the
+next frame. (The log excerpts quoted in this entry are from the 16:29 and 16:37 passes and carry
+the earlier wording, `unloading N types` / `kept N explicitly-loaded effects`; from the 16:53 pass
+on it is `N types in the table` then `unloaded N, kept M (r_part_keepuser X)`, where `unloaded`
+counts only types that were actually alive.)
+
+Also affected by the keep, and accepted: `r_converteffectinfo` (`P_ConvertEffectInfo_f`) calls
+`R_Particles_KillAllEffects` before importing effectinfo, so with the default cvar the explicitly
+loaded effects now survive into that conversion; the export loop that follows filters on
+`config == "effectinfo"`, so they do not appear in the written file.
+
+### Verified
+
+`cfg/testrun/b51e.cfg` on the 17:19 binary (exe built 17:19:16, deployed 17:24:23, and the shipped
+binary until Patch 273's 18:34 build, which the last paragraph of this section covers;
+`logs/b51e.log` 17:24:31–17:25:44, the seventh pass in that file), with the CSQC self-heal off
+(`set vbsp_emit_heal 0`): the map-load pass logs `unloaded 0, kept 35` and the census never drops
+(`:19772-19776`); all eleven fresh-cased probes from T+0 to T+8 s read `effect exists`
+(`:20054-20281`; before the patch all eleven read `EFFECT DOES NOT EXIST`); the changed-set control
+`S5` keeps 35 and its probe exists (`:20477-20480`); `S6` — `r_part_keepuser 0` then the same
+changed set — reproduces the old kill (`unloaded 35, kept 0`, census `35 -> 0`, probe `""`;
+`:20491-20495`). The real site is bisected on the same binary: `P2`, `r_part_keepuser 0` and a map
+change, gives `unloaded 35, kept 0` at the forced pass and a dead probe (`:20793`, `:21698`); `P3`,
+`r_part_keepuser 1` and another map change, gives `unloaded 0, kept 35`, census `0 -> 35`, a live
+probe and no `discarded` line from the CSQC re-exec redefining them (`:21926-21929`, `:22685`).
+Quitting logs `PScript_Shutdown: freeing 35 types` (`:22701`).
+
+`cfg/testrun/b51b.cfg`, the real path with the heal on and the frame latch in the CSQC
+(`csprogs.dat` 17:14:10; `logs/b51b.log` 17:26:27–17:27:43): every map change logs `unloaded 0,
+kept 35` at both forced passes (`:14180-14218`, `:15205-15239`); `emit_list` reads `reloads 0` on
+both maps (`:15054`, `:15955`; it was 2 before the patch); surf_boreas draws 801 snow particles
+(`:15061`) and surf_anubis 1381 torch particles (`:15964`), screenshots `b51b_boreas.png` /
+`b51b_anubis.png` (17:27). All three loads in this pass drained the CSQC exec before the forced
+pass, the order in which a stale first check could not have fired anyway; the other order has been
+seen once (`b51b.log` 16:39:26, third load), and the latch makes `reloads 0` independent of the
+order by construction rather than by measurement.
+
+Earlier passes, all on binaries older than the 17:19 one: `b51e` 16:37 (first pass with the keep,
+same picture under the old `unloading N types` wording), 16:49 (`P2`/`P3` added), 16:53 and 16:59
+(verdict wording, then the first round of review fixes); `b51b` 16:38 (`reloads 0`, 795 and 1389
+particles) and 17:01 (789 and 1373). Everything the review asked for — ramp hardening, alias skip,
+census reset, `CVAR_SEMICHEAT`, the header prototypes, the QC latch — is in the 17:19 binary and
+the 17:14 `csprogs.dat` that the two paragraphs above measure. Not exercised by any run, verified
+by reading only: the census reset across a mid-session `vid_restart` with types loaded, the ramp
+reset (no shipped set has a `ramp` line), the alias skip, and the semicheat force on a strict server.
+
+Re-verified on the binary the ftesurf-4b session shipped for Patch 273 (`ftesurf64.exe` 18:34:27,
+`fteplug_hl2_x64.dll` 18:34:36, `csprogs.dat` 18:34:20, all built by that session from the shared tree
+as it stood; none of the six engine files above, `cl_emit.qc` or `default.cfg` changed after 17:13).
+`b51e` eighth pass, `logs/b51e.log` 20:02:18–20:03:29: the map load logs `unloaded 0, kept 35`
+(`:24005-24008`), all eleven `P1` probes exist (`:24287-24532`), `S0`–`S4` exist (`:24552-24765`),
+`S5` keeps 35 with a live probe (`:24773-24784`), `S6` reproduces the kill (`unloaded 35, kept 0`,
+`35 -> 0`, `""`; `:24799-24812`), `P2` kills at the forced pass and its probe is dead (`:25105-25107`,
+`:26015`), `P3` ends alive (`:27013`), quitting frees 35 (`:27034`). This pass's `P3` ran in the other
+order (seen before only at `b51b.log` 16:39:26): the forced pass came before the CSQC exec (`unloaded
+0, kept 0` at `:26232-26234`, `prespawn` `:26239`, then `execing` `:26246` and `0 -> 35` at `:26250`),
+so the keep had nothing to do there and the set simply landed after the kill — the order the frame
+latch exists for — and it ended with the same live probe. `b51b` sixth pass, `logs/b51b.log`
+20:03:34–20:04:48, all three loads exec-first again: `unloaded 0, kept 35` at every forced pass
+(`:16823-16825`, `:17520-17522`, `:18561-18563`), `reloads 0` on both maps (`:18369`, `:19308`),
+1753 particles at the surf_anubis test spot (`:17294`), 799 snow (`:18378`) and 1374 torch (`:19318`);
+screenshots `b51b_boreas.png` / `b51b_anubis.png` (20:04) re-read, snow and torch flames drawn.
+Independent of these runs, the ftesurf-4b session reports (by message; it is not in the 273 text) that
+on the surf_tensor2 spawn `Particle phys/sort` went from 0.01us to about 460us and the draw index
+count rose by 16,863 between its pre-272 and post-272 binaries — the rain drawing — so every tensor2
+refresh figure in Patch 273 taken after 18:00 includes it.
+
+### What it means for the other game on this tree
+
+An effect parsed by an empty-namespace `r_part` now persists across map changes and across
+`r_particledesc` changes, and goes only with `vid_restart`, an `r_particlesystem` change,
+`r_part_keepuser 0` (which a strict server forces), or being redefined (a re-parse is idempotent:
+`P_ResetToDefaults` runs first). A mod that relied on `r_particledesc x` wiping console-defined
+effects gets that back with `r_part_keepuser 0`. Server-stuffed `r_part` blocks are in the same class
+(config `""`, loaded 2, and they never raised `f_modified_particles` because `P_SetModified` returns
+for insecure commands), so they now outlive the server that stuffed them until one of those events;
+accepted, and noted here because it is the one behaviour a QW anti-cheat reader would ask about.
+Memory: each persisted type is one `part_type_t`; a session that visits many maps with per-map psys
+bakes accumulates their definitions, which is a few hundred entries at most.
+
+Captures: `logs/b51e.log` (eight passes: 16:22 heal on, 16:29 heal off + census, 16:37 keep,
+16:49 `P2`/`P3`, 16:53 verdict wording, 16:59 review fixes, 17:24 the 17:19 binary, 20:02 the
+Patch 273 binary), `logs/b51b.log` (pre-fix 15:35, self-heal 15:46, patched 16:38, 17:01, 17:26 the
+17:19 binary, 20:03 the Patch 273 binary). Config: `cfg/testrun/b51e.cfg` is the regression test.
+
+
+## Patch 273 — the framerate counter hid a third of the frame, and the two things it was hiding cost more than everything else put together  *(APPLIED AND VERIFIED — engine `cl_screen.c`, `sv_main.c`, `sv_phys.c`, `server.h`; plugin `mod_vbsp.c`; `build.ps1 -Engine -Full`, the header rule)*
+
+surf_tensor2, spawn, same vantage and yaw as Patch 271's runs, developer OFF:
+
+|                        | before (t2after) | after (p273h) |
+|------------------------|-----------------:|--------------:|
+| `World walking`        |        1677.50us |     **73.92** |
+| `Server`               |        1790.68us |     **41.55** |
+| `Total refresh`        |        3094.03us |       1933.17 |
+| **real frame rate**    |     **204.7 fps**| **506.4 fps** |
+
+stage 5 **935.5 fps**, main END **673.2 fps**. Control surf_tensor (no sky_camera)
+`World walking` 9.93 -> 10.51us, 1564 fps: unchanged, as it must be.
+
+### 1. `r_speeds`' headline framerate excluded the listen server
+
+`RSPEED_TOTALREFRESH` closes around `SCR_UpdateScreen` alone (`cl_main.c:7761`).
+`SV_Frame` has its own bracket (`cl_main.c:7457`, `:7592`, `:7663`) and on a listen
+server runs BESIDE the refresh. `cl_screen.c` divided by the refresh bucket alone.
+
+Proved by reconciliation rather than by reading: the refresh sub-buckets sum to
+3093.31 against a reported 3094.03, so the accounting closes WITHOUT the 1790.68us
+server bucket. "323 fps" was really 1/(3094+1791) = 204.7, and the user had been
+reporting "200-300" on this map all along.
+
+`RSpeedShow` now prints `Framerate (INCL. SERVER)` under the old line, which is
+kept verbatim so historical numbers stay comparable, and `r_speeds_dump` also
+prints `REAL frame (refresh+server)` so the sum can be checked. Only those two
+brackets are top-level; a third added later must be added here or this line starts
+lying the same way.
+
+**Consequence for old measurements: any A/B that moved server work was invisible.**
+
+### 2. `sv_perfdump` — and the server bucket was one function
+
+New command; splits `SV_Frame` into the QC `StartFrame` chain, `World_Physics_Frame`
+and `SV_SendClientMessages`, with tick and frame counts. tensor2 vs surf_tensor:
+
+    QC StartFrame     16.46us     1.14us
+    Entity physics    15.46us     0.84us
+    Snapshot build  2079.21us    29.38us   <- 98.5% of it, and a 71x gap
+    r_speeds Server 2166.14us    34.08us   (97.5% accounted for)
+
+So the game QC and the physics tick were both exonerated, and it is entity
+visibility. `sv_nopvs 1` (which sets `cameras = NULL`, `sv_ents.c:4450`, skipping
+`EdictInFatPVS` entirely) confirmed it, alternated A/B/A/B:
+
+    Snapshot build   1761.01 / 1657.26  ->  32.31 / 30.39
+    real framerate     192.0 / 210.2    -> 398.1 / 411.8
+
+### 3. What it actually was: a whole-tree descent, thousands of times a second
+
+`VBSP_EdictInFatPVS` falls into `VBSP_HeadnodeVisible` -- a full recursive walk of
+the world node tree with no box test and no early-out -- for any entity whose leaf
+list overflowed (`num_leafs == -1`, `headnode = topnode`, which is the ROOT for
+anything straddling it). `vbsp_pvsstat`, tensor2 spawn, 4000ms window:
+
+    573,246 visibility tests, 31,104 headnode descents, 341,374,532 node visits
+    with sv_nopvs 1:  782,772 tests, 27,306 descents, 122,968,020 visits
+
+i.e. the SERVER's share was ~3,800 descents and ~218 MILLION node visits per
+second, ~57,000 per descent: the whole tree, every time. (The descents that remain
+under sv_nopvs are the renderer's static-prop cull, which reaches the same function
+and whose topnodes are deep, so they are shallow at ~4,500.)
+
+**The fix is a memo, because the function is pure.** It reads nothing but its
+arguments and writes nothing, so for a fixed model the answer depends only on
+(nodenum, visbits). `hl2_pvscache` (default 1, 0 restores the old path for a
+one-command A/B) keys on the model, on nodenum, and on a full memcmp of visbits --
+never on a frame counter or a hash. `Snapshot build` 1922 -> 160us.
+
+**Then two measurements that corrected the design, both recorded because both were
+wrong first:**
+
+- I assumed the surviving renderer descents were 232 props colliding in a 64-entry
+  direct-mapped table, and raised it to 512. **That changed nothing** -- 20,560
+  descents against 20,010, `World walking` 481-497 against 496-507. The misses were
+  never collisions.
+- The real cause was that three different pvs BUFFERS reach the function each frame
+  (the main view's, the 3D skybox's, the server's) and a single set meant each
+  wiped the others. Keying on the buffer pointer as well took `Snapshot build` to
+  **14.7us** -- but `World walking` still would not move, because the renderer's two
+  views SHARE one visbuf, so pointer keying cannot separate them either.
+
+### 4. So the real fix, at the root: one vis cache per recursion level
+
+`vbspinfo_t.vcache` was a single slot and two views wanted it every frame. Patch
+271's poison existed only because that one buffer was shared -- its own essay says
+so. Making it `vcache[R_MAX_RECURSE]` removes the hazard instead of working around
+it, and the poison is deleted with it.
+
+**The trap that makes this non-obvious, and it nearly shipped as a bug:**
+`node->visframe` is one int and `vbsp_nodesequence` one global, so the tree holds
+only ONE view's marks. Returning early on a vis-cache hit would let the main view
+draw against the sky camera's marks -- the exact regression 271 prevented, and what
+`q1bsp.c:2211-2213` warns about. So the two halves are cached separately, which is
+what they always should have been: the PVS decompression per level, the node
+marking redone whenever the tree's marks belong to a different level.
+
+That still re-marks twice a frame -- and no longer matters, because of:
+
+### 5. The marking loop was O(whole map) to light up 3.6% of it
+
+`VBSP_MarkLeaves` scanned all 19,846 leafs. Only **6,098 of them have a cluster at
+all**; the rest are solid. Leaves are now bucketed by cluster at the tail of
+`VBSP_LoadLeafs` and the loop walks set PVS bytes, rejecting eight clusters per
+test. Measured at the spawn: **82.5 leaf visits per run** against 19,846 scanned.
+Same edit applied to `VBSP_MarkShadows`, a duplicate of the loop on `shadowframe`.
+
+**The precompute's position is load-bearing.** `VBSP_LoadVisibility` runs first and
+sets `numclusters` from the vis lump; the leaf loop then overwrites it with
+`max(cluster)+1`. Built any earlier the index is silently the wrong length, and the
+failure is a rare out-of-bounds rather than a crash on load.
+
+**Not done: `visframe` per recursion.** `R_MAX_RECURSE` is 6 (`render.h:272`) on a
+field shared with Q1/Q2/Doom at 21 sites: +20 bytes on both `mnode_t` and `mleaf_t`,
+~790KB here, an engine<->plugin ABI break, and it WIDENS the hot field, making worse
+the cache behaviour that is the cost. `gl_q2bsp.c:7831-7832` already has the
+multi-slot cache one would propose and is still wrong for this reason.
+
+### Verified
+
+- `[world]` census byte-identical before and after: `recurse 0 -> 506 meshes`,
+  `recurse 1 -> 20`. Same meshes, so the cull did not change.
+- `Ent Batches` = 49 in all four `hl2_pvscache` A/B arms. A faster arm that sent
+  fewer entities would have broken the cull, and that is what this gate is for.
+- Six maps loaded and rendered: tensor2, 666 (14 areas), utopia, spectra, garden,
+  tensor. Every one built its index and drew.
+- Screenshots at spawn and stage 5.
+
+### A methodology error worth recording
+
+The first run of this patch measured WORSE than the baseline. Cause: I left
+`developer 1` + `log_developer 1` on, so my own new mark census printed 94 times
+inside the timed windows. The tell was `2d Elements` on the CONTROL map going
+29.06 -> 189.51us -- console text, which a renderer patch cannot cause. The
+baseline run turns both off before measuring. This is the trap this tree already
+documents about developer mode, walked into by adding a dprint and then measuring
+with dprints on.
+
+### Open items — found here, NOT fixed, logged at ftesurf-3d's request
+
+**(a) `gl_q2bsp.c` has the multi-slot vis cache and is still wrong.** `:7831-7832`
+declares `curframevis[R_MAX_RECURSE]`/`cvis[R_MAX_RECURSE]`, but the sequence is the
+single global `vissequence` (`:7648`, bumped `:7890`) and the main-view early return
+at `:7852-7856` hands back marks a recursed pass may have overwritten. Same hazard
+as above; Q1 avoids it by invalidating (`q1bsp.c:2211-2213`). Latent on Q2/Q3 maps
+with portals or a skyroom.
+FIXED in Patch 277 (2026-09-09).
+
+**(b) Map-data-driven out-of-bounds read in the VBSP loader.** On the Strata/wide
+leaf path `out->cluster = LittleLong(in->cluster)` is an unvalidated signed 32-bit
+read, and `numclusters` is then DERIVED from `max(cluster)+1`, so it cannot be
+bounds-checked against itself. Worse and pre-existing: `VBSP_ClusterPVS` indexes
+`prv->vis->bitofs[cluster]` with no bound against `vis->numclusters`. Maps come from
+a shared library and are not all trusted input. Fix: clamp `cluster` against
+`prv->vis->numclusters` (or reject the leaf) before the derivation.
+FIXED in Patch 277 (2026-09-09).
+
+### New cvars and commands
+
+    hl2_pvscache   1   memoise the headnode descent. 0 = old path, for A/B.
+    sv_perfdump        split the r_speeds `Server` row three ways, then reset.
+    vbsp_pvsstat       visibility tests, headnode descents, node visits, then reset.
+
+## Patch 274 — CSQC can ask for a polygon with no depth test, so a light glare can be a lens effect instead of a sticker  *(APPLIED AND VERIFIED — engine `common/pr_common.h`, `client/pr_csqc.c`; `build.ps1 -Engine -Full`, the header rule)*
+
+Reported as: *"there are a lot of 'lights' sprites in tensor2, the correct way to
+render them is over all of the world IF you can see the center point, when it gets
+covered by BSP it fades out. currently at the moment the 'light'/sprites simply
+rotate towards the camera and get cut by the world geometry."*
+
+Both halves of that are the same mistake, and the engine could not express the fix.
+
+`BEF_FORCENODEPTH` already existed and every backend already honoured it (gl, d3d8,
+d3d9, d3d11, vk). There was simply no way for CSQC to ask for it on a polygon. The
+only route was to name a gamedir `.shader` carrying `nodepthtest` -- which works,
+and `ftesurf/scripts/zones.shader` does exactly that -- but a shader fixes the
+texture, so it cannot say "this sprite's own material, drawn over the world". A map
+supplies its own glow materials, so that route could never have worked here.
+
+`DRAWFLAG_NODEPTHTEST` (0x1000, the first free bit) now maps to `BEF_FORCENODEPTH`
+in both `PF_R_PolygonBegin` and `PF_R_AddTrisoup`.
+
+**It is a rendering flag, not a visibility policy, and the distinction is the whole
+patch.** With no depth test the polygon is drawn through everything, so whatever
+uses it has to decide visibility itself. The gamecode half (build 52's
+`Sprite_Glare`) mirrors Source's `CGlowOverlay`: a traceline to the glow's centre
+backed off 4 units toward the camera, ramped +/- `frametime / 0.05s` and clamped,
+exactly `cl_sun_decay_rate` (`glow_overlay.cpp:59`, `:262`, `:274`), with the draw
+skipped outright at 0 (`:365`). Source's own material is literally
+`sprites/light_glow02_add_noz` (`:397`) -- the `_noz` is the trick this flag exposes.
+
+### Verified, by counting rather than by looking
+
+surf_tensor2, `vbsp_sprite_debug`, glare on vs off at three unrelated vantages:
+
+    vantage      drawn (off)   drawn (on)   hidden by the trace
+    spawn            244            8           233 of 241
+    stage 5           82            3            79 of 82
+    main END         256            9           247 of 256
+
+The off column is what shipped: `vbsp_sprite_dist` defaults to 0, so every one of
+the map's 263 sprites passes the distance test and roughly half pass the
+behind-camera test -- and most of those are in other rooms, drawn through the walls.
+That is also a partial answer to "do sprites follow PVS rules": they still do not,
+but an occlusion trace is a stricter test than a PVS one and it now runs.
+
+**The arm that actually proves the trace is what gates it** had to be built twice.
+The first attempt froze the traces after two arms had already run them, so every
+glow kept its last answer and stayed visible -- which is correct behaviour and
+proved nothing. A frozen cache is not an untraced one. Redone from a FRESH map load
+with the trace budget at 0, so nothing is ever traced: `241 in frame, 241 hidden`,
+nothing drawn. Untraced glares start hidden by design, because starting them
+visible would flash every glow on the map for one ramp on the first frame,
+including the ones behind walls.
+
+### What is deliberately NOT converted
+
+`spr_add` is the discriminator and it has to be. The same array holds
+bhop_murder's 208 billboard TREES and kz_anubis' timer digits; drawing those with
+no depth test would put them through walls on maps that work today. Source's glow
+materials are additive by construction, a tree is not. `SPRK_ORIENTED` is excluded
+too -- fixed world normal, a surface decoration, never a flare.
+
+### A correction to this tree's own notes, checked against the real source
+
+`cl_sprites.qc` said env_lightglow "scales it by 70x to 150x depending on the view
+dot product (:288-308)". That belongs to the SUN. Those constants are in the base
+`CGlowOverlay::CalcSpriteColorAndSize` (`glow_overlay.cpp:289-315`), and
+`C_LightGlowOverlay` OVERRIDES that method: `c_lightglow.cpp:19-22` takes the size
+straight from the entity's keys and never reads `flDot` at all. Only `CalcBasis`'s
+fixed 100-unit placement is inherited. The practical effect is that a glare is
+easier than that note implied -- the sizes are the raw keys, not keys times a
+view-dependent factor. Corrected in place with the citation.
+
+### New cvars (gamecode side, build 52)
+
+    vbsp_glare         1      ARCHIVE. 0 restores the sliced-by-geometry behaviour.
+    vbsp_glare_traces  8      tracelines per frame, round-robin. 0 freezes them.
+    vbsp_glare_decay   0.05   Source's cl_sun_decay_rate; a 50ms fade either way.
+
+### Known limit, stated rather than hidden
+
+A CSQC traceline runs against `csqc_world`, which holds the world model plus only
+entities the CSQC itself instantiated -- not the server's `func_*` brush entities.
+So a glow occluded by a moving door or a `func_brush` will not fade for it.
+Worldspawn, which is what occludes on essentially every surf map, is exact.
+
+---
+
+## Patch 278 — the player model was ten units taller than the hull it collides with, and had been for eleven builds  *(APPLIED, PARTLY UNVERIFIED — no engine change; `tools/mkplayermodel.py`, `tools/mkavatarfx.py` (new), `src/server/sv_lobby.qc`, `src/client/cl_main.qc`, `src/client/cl_ghost.qc`, `ftesurf/models/player*.iqm`, `ftesurf/models/player_luma.tga` (new), `ftesurf/particles/ftesurf_avatar.cfg` (new), `ftesurf/cfg/lobby.cfg`)*
+
+Asked for a crouching player model at crouch-hull size and a standing one at
+standing-hull size, per-player colours, and cheap effects. The first of those
+turned out to be a bug report.
+
+**The duck swap already worked; both models were simply the wrong size.**
+`tools/mkplayermodel.py:65-66` held `HEIGHT_STAND = 72.0` / `HEIGHT_DUCK = 54.0`
+and cited `sh_defs.qc` for both — but `sh_defs.qc:36-39` says **62** and **45**,
+the engine asserts 62.0/45.0 in its own selftests (`pm_source.c:4111-4112`), and
+`cfg/default.cfg` sets `pm_standheight 62` / `pm_duckheight 45`. 72/54 is CS:S's
+pair, and `sh_defs.qc:34-35` says outright that this game uses Momentum's numbers
+*"not CS:S's 72/54/46"*. The script was written in build 30 against the old hull
+and was never revisited when build 41 moved it. Confirmed by decoding the shipped
+IQMs: z-max **72.0** and **54.0** on disk.
+
+**The structural half matters more than the numbers.** The selftest re-cut the
+original at `HEIGHT_ORIG` and then checked each output came out at the height
+*the script itself asked for* — a test that passes for any pair of constants and
+therefore cannot fail. Same shape as the winding bug (a round-trip test that
+compared every property except the one that broke). It now parses `PM_HULL_MAXS`
+and `PM_DUCK_MAXS` out of `src/shared/sh_defs.qc` and **fails** — not skips — when
+they disagree or when the authority cannot be read. Falsified in five directions,
+including "authority file missing" and the `--no-hull-check` escape hatch.
+
+Stale 72/54 assertions corrected in the same pass: `sv_lobby.qc`, `cl_ghost.qc`,
+`sh_zones.qc:535`, `sv_saveloc.qc:43`, `cfg/default.cfg` (was blocked on 3d, done
+in Patch 275), and — the ones that would have reported the fix as a regression —
+the written pass criteria in `cfg/testrun/b30c.cfg` and `b30h.cfg`.
+
+### Colour: `.colormod`, and the skin is not neutral
+
+`.colormod` is 3 bytes on change and **0 bytes/frame** after (`UF_COLORMOD`, dirty
+test `sv_ents.c:1079-1080`), resolves to one shader multiply
+(`defaultskin.glsl:398`), and no client cvar can defeat it. The alternatives are
+dead ends worth recording: `.colormap`/topcolor needs 8-bit paletted skin texels
+an IQM never has (`gl_alias.c:808-813` bails) plus `_shirt`/`_pants` masks that do
+not exist, and any client can override it with `cl_enemytopcolor`/`gl_nocolors`.
+
+**The load-bearing measurement: `models/player.tga` is flat green, RGB
+(130, 236, 83)**, 93.9% one colour — measured by decoding the RLE, not assumed.
+`colormod` multiplies, so a palette entry must be **divided by the base** or every
+colour comes out green-shifted. Worst case is blue at `colormod_b = 3.08`, inside
+the 0..7.97 range (`sv_ents.c:3919-3930`, byte = qc x 32).
+
+**`'0 0 0'` is IDENTITY, not black** — `sv_ents.c:3919`/`:3931` substitute
+(32,32,32) when all three channels are zero. Black is not expressible; one
+quantisation step is 0.032. This bit twice: the "colours off" path wants `'0 0 0'`
+(correct — identity is today's green), and the "glow off" path emphatically does
+not, because there identity would light a full-white belt on every player and on
+the single-player ghost body. Both now write `'0.032 0.032 0.032'`.
+
+The 12-entry palette was chosen **by search against the real pipeline** (divide ->
+quantise -> decode -> multiply back), not by eye: the first hand-picked set had two
+entries 0.200 apart in rendered RGB, invisible on a distant box. The shipped set's
+closest pair is 0.505 and every entry keeps one channel >= 0.92.
+
+Assignment is `n = (num_for_edict(p) - 1) * 5 + lobby_shuffle`, mod 12. Stride 5 is
+coprime with 12, so it is a full permutation with 150-degree hue steps between
+adjacent slots. Simulated in Python and confirmed against 7 property groups,
+including "stable across sweeps" (no churn), "departed colours reclaimable" and
+"graceful at 20 players".
+
+### Effects, and the two engine facts they rest on
+
+`setinfo lobbyfx <mask>` — 1 trail, 2 motes, 4 belt — off until asked for, capped
+by `lobby_av_fxmax`.
+
+- **`step N` is one particle per N units of DISTANCE, not per second.**
+  `p_script.c:1418-1425` sets `countspacing = N` *and* `count = 1/N`. This is the
+  whole reason a trail is affordable: a stationary player emits nothing and the
+  cost scales with speed.
+- **`die` is a min and a max, not base+spread.** Found the honest way: exported the
+  live set with `r_exportalleffects` and read back `die 1.8 2.8` where `die 1.8 0.8`
+  had been written. My own export *checker* was also wrong first — it grepped for
+  `rgb`/`step` where the engine writes `rgbf` and a derived `count` — and reported
+  24 false mismatches before the one real defect.
+
+Blocks are generated by `tools/mkavatarfx.py` from the same palette table that
+emits the QC ladder, one source of truth. Loaded the Patch 272 way, by
+`localcmd("exec particles/ftesurf_avatar.cfg\n")` from CSQC at WorldLoaded.
+
+### Verified / not verified
+
+Verified: both IQMs re-parsed at 62.0/45.0 on disk; the whole particle chain end
+to end (no `Created QC Cvar` lines, `execing particles/ftesurf_avatar.cfg`, 59
+types loaded, `kept 59 (r_part_keepuser 1)`, a live mote effect counted by
+`r_partinfo`, and **zero** avatar effect lines after `lobby_av_fx 0` — the
+falsifier that matters, because an ignored master switch looks like success).
+
+**Not verified: nothing has looked at a rendered frame.** The crown-height
+sign-test was never framed, the two-client test timed out undiagnosed, and the
+glow belt has never been seen. The luma band is centred on v=0.5 so it lands at
+the waist regardless of UV orientation, which is a design precaution, not a
+measurement.
+
+### Two things found in passing
+
+- **`cl_lerp_maxdistance` caps lobby avatars at 3000 ups** — a pre-existing defect
+  in shipped Stage 1, not something this patch introduced. Fixed in Patch 275.
+- **FTE configs have no `/* */` block comments.** `cmd.c:493` only tests for `//`,
+  so every line inside a `/* */` pair executes as a console command, silently. My
+  own new test script fired ten stray commands including a bare `0` — and
+  `cfg/testrun/p270_2c_join.cfg` had been doing the same thing across six prior
+  runs (`logs/p270join.log`: `Unknown command "CAP"`, `Unknown command "*/"`).
+  `b23a`, `b25b`, `h4`, `tint01`, `tint02` still carry it.
+
+---
+
+## Patch 275 — the lobby list crashed the game on its second poll, advertised a player who had left, and only ever had one map  *(APPLIED AND VERIFIED — no engine change; `src/menu/m_lobby.qc`, `src/server/sv_lobby.qc`, `src/server/sv_main.qc`, `ftesurf/cfg/default.cfg`, `ftesurf/cfg/lobby.cfg`, `ftesurf/cfg/lobby{1,2,3}.cfg` (new), Pi `run.sh`/`runall.sh`/`stopall.sh`)*
+
+Number 275 was reserved by `ftesurf-3d` for two `mod_vbsp.c` fixes that never
+landed; `ftesurf-4b` confirmed 3d is gone and the number free, and took 279 for
+its own engine work.
+
+Reported as three symptoms — "reopen the create server menu and the game
+crashes", "the lobby still thinks it has 1 player in it", "it's on borderlands
+which is broken". The first two are one bug each and both were mine.
+
+### The crash: `bufstr_free` does not shrink the buffer
+
+The engine writes a QC core dump and it names the function.
+`ftesurf/menucore.txt` gives the stack as `Lob_Clear` <- `Lob_Parse` <-
+`URI_Get_Callback`, and `Lob_Clear` was:
+
+    while (buf_getsize(lb_map) > 0)
+        bufstr_free(lb_map, buf_getsize(lb_map) - 1);
+
+`PF_bufstr_free` (`pr_bgcmd.c:5602-5624`) frees the string and sets the slot to
+NULL. **There is no `used--` anywhere in it.** `buf_getsize` returns `used`
+(`:5356-5367`), so the condition is true forever, the runaway detector fires, and
+the menu progs go down — which from the player's side is the game dying on the map
+picker.
+
+**It cannot have worked once the list was ever non-empty.** The first poll of a
+session clears nothing (`used` is 0) and populates three rows; the *second* poll,
+`lobby_poll` seconds later, hangs. That is why it reads as "play a map, come back,
+crash" rather than as a bad reply — the reply was fine and `Lob_Parse` never got
+to look at it.
+
+**The project already knew.** `m_main.qc:1348-1351`, on the map list's own
+compaction: *"bufstr_free's contract about whether the buffer actually shrinks is
+not worth depending on for a compaction that costs nothing this way"* — and then
+this file depended on it. The note was in the right place and the wrong file.
+
+Second half of the same bug, which would have outlived the fix: `Lob_Parse` used
+`bufstr_add(..., TRUE)`, and `order` true means "append at `used`"
+(`PF_bufstr_add_internal`, `:5549-5556`) — the counter nothing decrements. So the
+first reply lands at 0,1,2 and the second at 3,4,5 while every accessor indexes
+from 0. The list would have frozen on the first poll of the session and gone on
+looking live. Both halves now bounded by `lb_count`, exactly as `ms_count` is, with
+index-addressed `bufstr_set` writes.
+
+### The phantom player: the classname walk counts the dead
+
+`Lobby_PlayerCount` was a bare `find(world, classname, "player")` loop. A client
+that disconnects does not release its edict and nothing clears the classname, so
+the answer is "how many edicts have ever been a player since the map loaded". One
+person joining and leaving left the directory advertising a permanently occupied
+lobby.
+
+**This file already said so, ninety lines down.** `Lobby_ClientDisconnect` clears
+`.lobby_colour` with the comment *"a disconnected client's edict is not freed — it
+is kept and recycled (`sv_main.c:2516-2522`)"*. The consequence was written down
+for the colour allocator and not applied to the counter directly above it.
+
+Fixed at the count, not by clearing the classname — the classname is load-bearing
+for the colour allocator and for `sv_entities.qc`'s trigger dispatch — using
+`clienttype()`, which is the engine's own liveness flag: `PF_clienttype`
+(`pr_cmds.c:4253-4271`) bounds-checks against `sv.allocated_client_slots` and reads
+`svs.clients[n].state` directly.
+
+### Three lobbies and a rotation
+
+There is no engine feature for this: FTE has no `sv_mapcycle`, no maplist, no
+timelimit that changes level. `changelevel` from QC is the whole mechanism.
+
+- `lobby_maps` — the rotation, space separated. `lobby_cycle` — seconds, 0 = off,
+  **floored at 60 in QC** because `lobby_cycle 30` reads as thirty *minutes* to
+  anyone who has just read the documentation for it.
+- **Neither global survives the change, and that is the point.** QW reloads the
+  server progs on every map, so the deadline re-latches by itself. It is stored
+  absolute rather than as a countdown because `time` restarts at 0 too — a
+  countdown carried across would be meaningless and an absolute deadline carried
+  across would fire instantly. Neither happens only because nothing is carried
+  across at all.
+- **`Lobby_NextMap` searches for the current map rather than keeping an index**, so
+  an rcon `changelevel` does not desync the rotation; land off the list entirely
+  and it resumes at the top. A one-entry list does not rotate — that is a reload,
+  not a rotation.
+- A shortened period applies **now**, only ever pulling the deadline in. Without
+  that, `lobby_cycle 60` over rcon does nothing for up to half an hour and then
+  starts working, which is indistinguishable from broken — and it is what makes
+  the feature testable at all.
+- Warnings at 60 s and 10 s, both naming the destination, and only when somebody
+  is there. An empty lobby rotates in silence.
+
+Three servers, one per tier, on 27500 / 27510 / 27520 with 18 maps copied to the
+Pi (all confirmed present with an online zone file). **The port is the identity**:
+the heartbeat sends `node="p<sv_port>"` and surfd's `lobbies` table has `node` as
+its PRIMARY KEY, so a shared port would mean one row flickering between two maps.
+The port is also what makes the id survive a map change, which a map-derived id
+would not — every rotation would leave the old map advertised beside the new one
+until surfd's 30 s TTL expired it. Spaced by ten to leave room for `sv_port+N`
+mapcluster children later.
+
+**Verified end to end:** all three lobbies live in `/lobbies.json` with distinct
+maps, ports and names and `players: 0` (it was stuck at 1); zones loaded on all
+three; and the rotation falsified by dropping lobby 3 to a 60 s cycle over rcon
+and watching `surf_shady -> surf_aeron` with the zone loader following it, while
+the other two stayed put — so it is per-server, not global.
+
+### `cl_lerp_maxdistance 512`, unblocked
+
+`cfg/default.cfg` was 3d's; with 3d gone it is free. The engine default of 200
+against `lobby_av_rate 15` puts the "that was a teleport, do not interpolate"
+threshold (`cl_ents.c:5013`, comment *"disable lerping (and indirectly trails)"*)
+at **3000 ups** — an ordinary surf speed. Above it every other body in a lobby has
+been stepping 15 times a second since Stage 1, with any trail on it dropped at
+`cl_ents.c:5921-5926`. 512 covers 7680 ups.
+
+**What it costs, stated rather than discovered:** a genuine teleport shorter than
+512 units is now smeared into a slide, for every entity, not just avatars — and
+surf maps teleport constantly (423 `trigger_teleport` on `surf_tensor2` alone).
+That is the trade. `200` reverts it; the ceiling can also be lifted from the server
+side with `lobby_av_rate`.
+
+### Not diagnosed
+
+**Why `surf_borderlands` plays badly.** It loads clean on the server, zones and
+all. It is out of the rotation rather than declared fixed, and so is its tier-3
+sibling `surf_borderlands_h`.
+
+## Patch 279 — UnlitTwoTexture draws both its textures, SpriteCard stops eating particle colours, and a material's proxy chain is compiled into the shader  *(engine `plugins/hl2/mat_vmt.c`, new `plugins/hl2/glsl/vmt/twotexture.glsl`, `plugins/hl2/Makefile`, three small hunks in `plugins/hl2/mod_vbsp.c`)*
+
+Reported, in one message: *"the portals in the main spawn area are a 'solid' glow
+web texture. but in counter-strike they are no visable until you move closer to
+them, and visually it looks like a mask moving diagonally, and maybe mipmap
+coming in and showing you more as you get closer"*, and separately *"the
+particles near the portals are very tiny and white and very inactive"*.
+
+Those turned out to be **three** faults in two materials, and the third was found
+only because the first two were fixed and the particles were still white.
+
+### 1. UnlitTwoTexture drew one of its two textures
+
+`effects/combineshield/comshieldwall.vmt` is what surf_tensor2 puts on the portal
+frames. Read rather than guessed:
+
+```
+"Unlittwotexture"
+{
+    $basetexture  Effects/Combineshield/comshieldwall     <- 31 FRAMES
+    $texture2     Effects/Combineshield/comshieldwall
+    $additive 1
+    Proxies {
+        PlayerProximity {$playerdistance2  scale .2}
+        Subtract {$playerdistance2 - $ten(24) -> $frameminusten}
+        Clamp    {$frameminusten 0..30       -> $frame}
+        PlayerProximity {$playerdistance   scale .0009}
+        GaussianNoise   {.8 .. 1            -> $gnoise}
+        Subtract {$gnoise - $playerdistance -> $alpharesultmin}
+        Add      {$alpharesultmin + .1      -> $alpharesultmax}
+        Sine     {period 1.08               -> $alpha}
+        TextureScroll {$texture2transform  rate .1  angle -45}
+    }
+}
+```
+
+alpha ≈ 0.9 − dist×0.0009, zero at ~1000 units — *"not visible until you move
+closer"*. The frame index is `clamp(dist×0.2 − 24, 0, 30)` over a **31-frame**
+VTF — *"showing you more as you get closer"*, which is a good guess at the effect
+from the wrong mechanism: it is frame animation, not mipmapping. The second layer
+scrolls at −45° — *"a mask moving diagonally"*, exactly.
+
+The old arm emitted one pass with `$basetexture` and a blendfunc. `$texture2` was
+parsed at :1436 and never used; the `TextureScroll` was read and then declined
+because `VMT_ScrollsBase` only accepts `$basetextureTransform` and this one drives
+`$texture2Transform`; the proxy block was skipped wholesale. One layer of two, at
+full brightness from any range: *a solid glowing web*.
+
+### The proxies are COMPILED, not evaluated
+
+A general proxy interpreter needs a per-material scalar the CPU rewrites each
+frame and the shader can read, and FTE has no channel for that. But this chain is
+a pure function of eye distance and time, both of which a fragment shader already
+has. So `VMT_ResolveProxies` walks the graph **once at load** and bakes the
+coefficients into `#define`s.
+
+It walks **backwards** from `$alpha` and `$frame`, and that is the design, not an
+optimisation. Forwards means evaluating every proxy and hoping one lands on
+something that matters — this material computes `$largeamount` and
+`$envmaptint[1]` and uses neither. Backwards touches only the live chain and
+**stops at the first operation that is not modelled**: an unrecognised link means
+decline, not assume. Unknown proxy kinds are still recorded, precisely so the
+walk can hit one and stop.
+
+Two shapes resolve, and the code says so out loud:
+
+```
+$alpha  <- Sine(min=X,max=Y) | X       X <- Subtract(A, P)   P a PlayerProximity
+$frame  <- Clamp(X, lo, hi)            X <- Subtract(P, K)
+```
+
+Everything else leaves the coefficients at zero, where the shader's defaults make
+them no-ops. Narrow on purpose: **11 materials in the whole mounted library carry
+a PlayerProximity and all 11 are this shield family.**
+
+The numeric `$var` capture is not optional — a chain reads its constants out of
+the material's own declarations (`"$ten" "24"`), and without them the frame chain
+resolves with a term missing, which is worse than not resolving: it puts the ramp
+in the wrong place rather than leaving it off.
+
+### THE FADE HAS TO GO IN THE RIGHT CHANNEL, and the first build put it in the wrong one
+
+Shipped with `diffuse_f.a *= a`, and reported back within minutes: *"scrolling
+effect doesn't really diminish over distance"* — the scroll visibly working, so
+the layers and the transform had arrived and only the fade had not.
+
+`$additive 1` becomes `blendFunc add` = GL_ONE GL_ONE. **Neither factor involves
+the source alpha**, so a fade written into alpha is discarded by the blender and
+the shield is exactly as bright at 900 units as at 90. An additive surface fades
+by getting DARKER. `#ADDITIVE` now comes from the material's own key and picks
+the channel.
+
+### Three shader shapes were tried and two of them fail silently
+
+Worth recording, because each failure looked like a different bug:
+
+| shape | result |
+|---|---|
+| program INSIDE the pass + top-level `uppermap` | `prog 0 passes 2`; a red/green debug build showed **both** samplers black |
+| top-level program + one pass per sampler | `prog 1 passes 2`, and the surface stopped reaching the rasteriser at all — a shader forced to output opaque red drew nothing |
+| top-level program + `diffusemap`/`uppermap` | `sort 12 prog 1 passes 1` — works |
+
+The third is `vmt/transition`'s shape and it is the one that ships. **The cost is
+the frame ramp**: sampling a flipbook needs `sampler2DArray`, which only
+`map "$2darray:…"` fills, and `map` is a pass keyword. So the shield draws frame
+0 — which is the CLOSE-UP frame, and therefore the right one to be stuck on. The
+coefficient is still resolved and still counted, so the census says how many
+materials would use it the day the array path works.
+
+### 2. SpriteCard was eating every Source particle's colour
+
+The portal particles stayed white after the baker was fixed, and the reason was
+not in the baker or in the particle system:
+
+`p_script.c:743` gives `BM_BLEND` an **empty** shader-name postfix, so
+`P_LoadTexture`'s first move for `blend blendalpha` is
+`R_RegisterCustom("particle/particle_glow_01")` — the bare texture name with
+nothing appended (:754, *"try and load the shader, fail if we would need to
+generate one"*). A material of exactly that name exists, this plugin answered
+with it, and the particle system took it in preference to its own template. The
+template it skipped is the one carrying `rgbgen vertex` and `alphagen vertex`
+(:774-776). And SpriteCard was hitting the unimplemented-class fallback, which
+emits `vmt/unlit` with no rgbgen at all — so a flat white texture was guaranteed.
+
+**180 materials across the three mounted packs are SpriteCard and every one of
+them is a particle.** `particle_glow_01.vmt` writes `$vertexcolor 1` and
+`$vertexalpha 1` explicitly, so this is not an inference about what a particle
+wants; it is the material saying so and nothing reading it.
+
+Measured, edge-on to the shield so its crackle web could not contaminate the
+sample (it is itself a field of bright isolated pixels, which is why every
+earlier measurement said "white" whatever the particles did): mean RGB of the
+bright isolated pixels **60 83 104**, individual samples (37,63,87), (35,62,85),
+(161,182,214). Blue.
+
+`nodepth` belongs INSIDE the pass. At the top level the parser prints "Unknown
+shader directive" and carries on, which is how the first version of this arm
+shipped a depth-writing particle and one console line nobody would connect to it.
+
+### Scope, measured before any of it was written
+
+18,033 VMTs across momentum, cstrike and hl2: 11,614 LightmappedGeneric, 2,495
+VertexlitGeneric, 2,045 UnlitGeneric, 448 Sprite, **180 SpriteCard**, 166 Refract,
+142 WorldVertexTransition, **48 UnlitTwoTexture**. Proxies: 306 TextureScroll,
+225 Sine, 217 AnimatedTexture, 40 GaussianNoise, 31 Subtract, 23 Multiply,
+14 Equals, 11 PlayerProximity, 10 Clamp, 10 Add.
+
+The 48 are not only shields: HL2's monitors and displays (`alyxmonitor`,
+`combinedisplay001a/b`, `tvscreen_noise001a/002a`, `masterinterface*`), the fog
+cards, the portal funnel, `vol_lightmask01/02` — **and five of Momentum's own
+props**: `powerup_airjump`, `powerup_flight`, `powerup_haste`, `powerup_slick`,
+`mom_hologramfx`. Every one had been drawing one layer of two.
+
+### New cvar and census
+
+```
+hl2_twotexture  1   0 restores the single-layer draw, for comparison
+```
+
+```
+<map>: N UnlitTwoTexture material(s) at hl2_twotexture 1, X with a distance fade,
+       Y with a distance-driven frame
+```
+
+Three numbers because the second fails quietly: a two-layer material draws
+whether or not its chain resolved, so a shield with a broken graph walk still
+looks like a shield — just one visible from across the map, which is what it
+looked like before. *"4 twotexture, 0 with a distance fade"* is the shape of that
+failure and no screenshot can show it.
+
+### Two traps for the next person
+
+* **`plugins/hl2/Makefile`'s `VMTPROGSBASE` is a hand-maintained list, not a
+  glob.** Dropping a new `.glsl` into `glsl/vmt/` is not enough: make says
+  "Nothing to be done for 'all'" and the program is simply missing from the DLL.
+* **Line comments only in a vmt `.glsl`.** `engine/shaders/generatebuiltinsl`
+  wraps the whole shader in a C comment when it bakes it into
+  `mat_vmt_progs.h`, so the first `*/` inside a `/* */` block ends that comment
+  early and the build dies on stray tokens three lines later. Every other
+  `vmt/*.glsl` uses `//` for this reason; now it is written down.
+
+Also added: the generated shader script is printed at `developer 1` for any
+material whose program lives in a pass. `shader_here` cannot reach these — it
+traces the WORLD model and these materials are overwhelmingly on brush ENTITIES
+(the shield is `func_brush *19`), so the crosshair goes straight through and
+reports the wall behind. Hunting that with screenshots cost an hour.
+
+---
+
+## Patch 276 — Steam in a place the engine never looked
+
+**APPLIED AND VERIFIED.** `engine/common/fs.c` only. Client and dedicated both
+rebuilt and both carry it.
+
+### The gap P182 left
+
+Patch 182 hoisted `Sys_SteamParseLibraries` out of the unix-only arm so Windows
+reads `libraryfolders.vdf` too. That fixed the common case — Steam on C:, games
+on D: — and it is genuinely fixed; nothing here changes it.
+
+What it did not fix is **Steam itself being somewhere the engine cannot find**,
+and on Windows that was a single point of failure:
+
+```c
+if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", ...) != ERROR_SUCCESS)
+    return false;
+...
+if (!*steampath)
+    return false;
+```
+
+Both of those `return false`s sat **above** the libraryfolders parse. One absent
+registry value and the entire resolver was dead, including for library folders
+the vdf lists perfectly well. That reaches a real player four ways: a portable /
+"no-install" Steam, games installed under a different Windows account, a Steam
+never launched by the current user, and a game folder simply copied off another
+machine with no Steam behind it at all.
+
+The consequence is worse than three failed mounts. `data/mapdeps.txt` is
+**generated** and its specs are `steam:` forms, so `fs_automount` goes with them:
+every map that needs the CS:GO or TF2 pack comes up untextured, and the absolute
+path a player might write into `fs_addons.txt` cannot fix that — `fs_addons.txt`
+is not what automount reads. **The override therefore has to live inside the
+resolver, not in the addon list.** That is the whole argument for the design.
+
+### What was added
+
+**`steam_libraries.txt`** — extra Steam roots, read before anything auto-detected.
+`<basedir>/steam_libraries.txt` then `<binarydir>/steam_libraries.txt` (an
+ordinary install has the exe in the basedir; identical paths are not read twice).
+One path per line, `#`/`//` comments, quotes and trailing separators tolerated.
+
+Read with `FS_MallocFile(..., FS_SYSTEM, ...)` and **never through the VFS**: this
+runs *during* searchpath construction — `FS_RemountAddons` is inside the rebuild —
+so the searchpaths cannot be consulted to find it.
+
+**Each line is tried two ways**, because the two things a player is likely to
+paste look nothing alike and neither is wrong:
+
+| form | built path | where it comes from |
+|---|---|---|
+| library root | `<line>/steamapps/common/<Game>` | the folder you added in Steam |
+| game-dir parent | `<line>/<Game>` | "Browse local files", one level up |
+
+The second is also the arm that works with **no Steam at all** — a folder holding
+copied game directories resolves every `steam:` spec whose game is present in it.
+
+**The registry reads are now advisory**, and there are two of them:
+`HKCU\SOFTWARE\Valve\Steam\SteamPath` (what a running Steam records) falling back
+to `HKLM\SOFTWARE\Valve\Steam\InstallPath` (what the *installer* writes,
+machine-wide). Steam is a 32-bit process, so on 64-bit Windows that HKLM key
+really lives under `WOW6432Node` — **`KEY_WOW64_32KEY` is what makes a 64-bit
+engine see it**, and without that flag the fallback would silently find nothing.
+Neither read aborts the function any more; a miss falls through to the vdf parse.
+
+**The unix arm was thin too.** It probed exactly two roots and one filename each.
+It now walks `.steam/steam`, `.local/share/Steam`, `.steam/root`,
+`.var/app/com.valvesoftware.Steam/.local/share/Steam` (flatpak) and
+`Library/Application Support/Steam` (macOS), against `steamapps/`, `config/` and
+the legacy capitalised `SteamApps/` — Steam keeps the vdf in more than one of
+those and keeps them all current. Each miss is one failed `open`.
+
+**`fs_steamlibs`** — the diagnostic, because *"steam game X not found/installed"*
+has four quite different causes and names none of them. With no argument it
+prints which override file is in play, whether each root in it is real (and where
+the games under it would be), and how **every** `fs_addons.txt` spec currently
+resolves — `ok` / `EMPTY` / `NOT FOUND` with the absolute path it landed on.
+`fs_steamlibs add <path>` appends a root: it refuses a path that resolves to
+nothing (a silently-saved typo is the failure this command exists to end), says
+so rather than duplicating one already listed, and takes the rest of the line
+verbatim so an unquoted Windows path with spaces survives.
+
+A failed `steam:` mount now also prints the two-line pointer at `fs_steamlibs`.
+
+### The bug in the first draft of that pointer
+
+It was written inside `FS_Addon_ResolveEx` behind a `static qboolean
+fs_saidsteamhint` said-once flag, so three failing mounts would not print it
+three times. **It never printed at all.** The string was in the binary and the
+warning beside it appeared; the hint did not.
+
+The filesystem is **rebuilt more than once during a boot**, and the flag was
+being spent on a pass whose console output nobody sees — by the time the pass in
+front of the player ran, the hint had already been "said". A once-per-process
+flag is the wrong shape for something that wants to be once *per pass*.
+
+It now lives in `FS_RemountAddons`, which counts `steam:` lines that failed and
+prints once after the loop, plus in `FS_Load_f` for a hand-typed spec. Simpler,
+and provably in the same console state as the warnings it follows.
+
+### Verification
+
+Falsified in both directions against the live install, using a fake game
+(`steam:P276TestGame/gamedir`) that no registry path can resolve, with the three
+real specs in the same run as the control:
+
+| arm | `steam_libraries.txt` | fake spec | the three real games |
+|---|---|---|---|
+| A | library-root form | `ok` → `…/fakelib/steamapps/common/P276TestGame/gamedir` | all `ok` |
+| B | game-dir-parent form | `ok` → `…/plainparent/P276TestGame/gamedir` | all `ok` |
+| C | absent | `NOT FOUND` + the hint | all `ok` |
+
+C is the one that matters: it proves the override, not something else, is what
+resolved the spec in A and B — and that adding it did not disturb the registry
+path, which still finds all three real games in every arm.
+
+`fs_steamlibs add` tested three ways in one run: a new path is written and the
+spec then resolves; the same path again says "already listed" and does not
+duplicate; `C:/definitely/not/here` is refused and nothing is written.
+
+`fs_addons.txt` was restored byte-identical afterwards and no
+`steam_libraries.txt` is left on this machine — this install resolves everything
+through the registry, as it did before.
+
+### Not done
+
+* **No menu-side surfacing.** A player whose Momentum mount failed sees a nearly
+  empty map picker with no explanation; the console says why, the UI does not.
+  That is Stage 6 work and wants a real "content missing" panel, not a toast.
+* **No `steam_libraries.default.txt`.** The file is absent unless somebody needs
+  it; shipping an empty commented one puts a file in the install that looks like
+  it must be edited.
+* **The Steam `appmanifest_*.acf` files are not read.** They would give the exact
+  installdir per appid and remove the game-folder-name guess entirely (a renamed
+  or non-English folder still misses). Bigger, and no reported case needs it yet.
+
+---
+
+## Patch 277 — the Q2/Q3 vis cache had one hole where the main view walked a mirror's marks and a Q3 cache that never hit on a mirror map; and the VBSP loader trusted a leaf's cluster it had no way to bound  *(APPLIED AND VERIFIED — engine `common/gl_q2bsp.c`; plugin `plugins/hl2/mod_vbsp.c`; no header touched, `build.ps1 -Engine` without `-Full`)*
+
+Patch 273's two open items, (a) and (b), logged there as "found here, NOT fixed". Both
+closed here, 2026-09-09, and the two one-line notes in that entry say so. The workflow drafts
+carried the numbers 275 and 280(b); every such string in the two files' comments, the two
+printed warnings, the `Cmd_AddCommandD` description and the `vbsp_pvsstat` line reads
+`Patch 277` / `Patch 277(b)`, and a grep of both files for the old strings finds nothing.
+
+### (a) What the code actually did — the finding was half right, and the half it missed was the Q3 cache
+
+Item (a), verbatim: *"`:7831-7832` declares `curframevis[R_MAX_RECURSE]`/`cvis[R_MAX_RECURSE]`,
+but the sequence is the single global `vissequence` (`:7648`, bumped `:7890`) and the
+main-view early return at `:7852-7856` hands back marks a recursed pass may have overwritten."*
+(Those are Patch 273's line numbers; the same code now sits at `:7967-7968`, `:7653` and
+`:7995-8019`.)
+
+The hazard is real in shape: `node->visframe` is one int, `vissequence` one global (bumped
+only inside the two markers), and both `Surf_RecursiveQ2WorldNode` and
+`Surf_RecursiveQ3WorldNode` walk whatever the tree holds. Within a frame that is safe —
+`CM_PrepareFrame` walks immediately after marking and entvis is consumed at `r_surf.c:4005`
+before `BE_DrawWorld` can recurse. The exposure is only across frames, through the early
+return.
+
+But `R_MarkLeaves_Q2` **already poisoned its key on every recursed pass**, and in its forcevis
+arm — which is what `q1bsp.c:2239-2241` does. So the next main view missed and re-marked. The
+one hole: the poison was `{-1,-1}`, and a main view in solid has clusters `{-1,-1}` too. That
+frame hit the poison and walked the tree with the recursed view's marks; and since
+`CM_LoadMap` initialised the key to the same pair, the first frame of a map with the camera in
+solid returned the previous map's `cvis[0]` as entvis over a tree with no marks at all.
+`r_surf.c:2578-2602` (Patch 138) keeps the last good cluster for the primary view, which is
+why nobody has seen it.
+
+`R_MarkLeaves_Q3`'s early return was never wrong: its key is the cluster alone, the marks are
+a pure function of the cluster, and a recursed pass wrote its own cluster into the same key,
+so a hit meant the marks were made from this cluster by whoever marked last. The cost of that
+accidental correctness is that on a mirror map the key flipped between the two views' clusters
+every frame and the main view recomputed and re-marked every frame. **It never cached where a
+cache matters.**
+
+Two smaller defects in the same functions, both pre-existing: the Q2 mark-everything arm
+returned `cvis[portal]` — the last pvs THIS level computed, for another cluster or the
+previous map — and `CL_LinkStaticEntities` culled static entities against it while the world
+was drawn in full (`cl_ents.c:4789` treats NULL as no cull, which is what the Q3 arm returns);
+and on both formats `r_novis 1 -> 0` while standing still did nothing until the next cluster
+change, because the key had been written before the everything-arm.
+
+### (a) The fix — the marks get an owner and a model, the way Patch 273 gave them an owner on VBSP
+
+`q23bsp_markowner` (`:7685`; the essay at `:7656-7684`): 0 when the main view marked the tree
+from its own cached pvs, -1 for anything else (a recursed view, a forcevis view, a
+mark-everything pass, nothing yet). The main-view early return now requires the key to match
+AND the owner to be 0 (Q3 `:7729-7742`, Q2 `:7997-8018`); on a key match with another owner
+it jumps to `remark:` and re-marks from the cached pvs without decompressing. No sequence
+check on top: every `vissequence` bump sits inside a marker and every marker writes the owner
+(`:7830`, `:8069`). A recursed pass no longer touches the main view's key on either format:
+the Q3 key is written only by level 0 (`:7795-7800`), and the Q2 key is written beside the
+pvs it describes and only by the main view (`:8035-8043`) — it used to be written at the top
+for any level, before the paths that return without computing a pvs, so a key could describe
+a `cvis[0]` that was never made for it. The sentinel is `{-1,-2}` (Q1's pair, `q1bsp.c:2219`)
+in `CM_LoadMap` (`:5215-5220`) and at every poison. The Q2 everything-arm is now a function,
+`R_MarkAll_Q2` (`:7947-7963`): it poisons the main key when level 0 takes it, sets the owner
+to -1 and returns NULL, so `r_novis 1 -> 0` takes effect on the frame it is set and static
+entities are no longer culled against a stale pvs; the Q3 everything-arm does the same in
+place (`:7760-7764`, `:7788`). A forcevis view whose `forcedvis` is NULL takes the
+everything-arm instead of dereferencing it (`:7988-7989`) — that pair should be unreachable
+today (`GLR_DrawPortal`'s refraction arm skips degenerate meshes before it sets forcevis,
+`gl_rmain.c:1713-1715`, and `CM_ClusterPVS` never returns NULL), so it is the same defensive
+guard the VBSP twin keeps, not a reachable case.
+
+**Post-review, the marks also get a model.** An adversarial review of the diff found that a
+bsp which stays referenced across a map change — precached as an entity model, or the same
+map restarted — keeps its key and its old marks while `CM_LoadMap` poisons only the new
+world's key, so an owner 0 left by the previous world could hit on that stale tree and draw
+nothing until the cluster changed. `q23bsp_markmodel` (`:7686`) is the model whose tree holds
+the marks, written by both markers beside the owner (`:7831`, `:8070`), and both hit tests
+require both (Q3 `:7734`, Q2 `:8020`). **Two of the review's items missed the 08:16 build**:
+the Q2 hit test had been left testing the owner alone (a replace-all that matched only the
+Q3 site's indentation), and the Q2 forcevis arm still poisoned the main view's key at every
+recursion level, where only the level-0 forced view (`r_voidvis`'s) should — a recursed
+forced pass (a water portal's refraction) writes `cvis[portal]`, not `cvis[0]`, and its owner
+write already forces a re-mark, so its poison only turned the main view's next remark into a
+full recompute for every frame the refraction was on screen. The patch-log transcription
+caught both; they went into `gl_q2bsp.c` at 08:57 (the forcevis poison under `if (!portal)`,
+`:7986-7999`) and were compiled by a forced incremental client+server make at 09:24 (the two
+`gl_q2bsp.o` deleted first, so the object could not be the 08:57:07 one a peer's `-Full` had
+built around the edit; 0 new warnings), deployed 09:24:51 as exe 09:24:37 (8213751,
+63DFB14203) to both installs. `p277a.cfg` re-run on that exe (09:25, appended to
+`logs/p277a.log`): A1 hit 0 / remark 3621 / recursed recompute 3621, owner -1; A2 hit 4793,
+owner 0; A3 hit 4889; A4 recompute 1 + mark-everything 293; leafs 517 / 222 — the same shape
+as the first run, as it must be (one model, so the model check changes nothing there, and a
+Q3 marker ignores forcevis).
+
+The marked set is unchanged by construction: every path marks from the same pvs for the same
+key as before. No cvar, therefore — the only behavioural changes are the correctness items
+above, and the A/B arm is `r_portalrecursion 0`, which removes the recursed pass and must
+turn the remark path into hits and move nothing else.
+
+### (a) Diagnostic — `q23bsp_markstat`
+
+`CM_MarkStat_f` (`:7698`, registered at `:8232`) prints and resets counts of hit / remark /
+recompute / mark-everything / forcevis, split main view vs recursed, plus the leafs lit by the
+last marking at each level (`q23bsp_marked`, `:7696`; `numleafs` for a mark-everything) and
+the current owner. Not cvar-gated (a diagnostic that only exists when a cvar says so is not
+there when the question is asked); one increment per call.
+
+### (b) VBSP: a leaf's cluster is bounded before it derives `numclusters`, and `bitofs[]` is bounded at the query
+
+`VBSP_LoadLeafs` read the cluster raw (int32 on the Strata path, `:2648`; uint16 with only
+0xffff -> -1 on the classic path, `:2664-2666`) and then derived `mod->numclusters =
+max(cluster)+1` (`:2697-2698`), so the value could not be checked against itself, and
+`VBSP_ClusterPVS`/`PHS` indexed `prv->vis->bitofs[cluster]` with no bound at all. The
+trustworthy bound is `prv->vis->numclusters` (`clusterbound`, `:2627`; the essay at
+`:2598-2626`): `VBSP_LoadModel` calls `VBSP_LoadVisibility` four lines before `VBSP_LoadLeafs`
+(the essay's first draft said `VBSP_LoadMap`; corrected in review) and it has already checked
+the count against the lump length (`:1951-1954`). With no vis lump, the bound is the leaf
+count — vbsp gives each non-solid leaf its own cluster (`mp/src/utils/vbsp/prtfile.cpp:185-190`,
+`writebsp.cpp:130`), so a map cannot have more clusters than leafs — which keeps the unvised
+path working and stops a corrupt value from sizing the Patch 273 bucket index in the
+gigabytes.
+
+Out-of-range -> -1 (`:2687-2695`), one `CON_WARNING` per map with the count and the first
+offender (`:2702-2704`). If the rewritten leaf was its cluster's only member the derived
+`numclusters` ends one below the vis count; harmless, because every row and both bucket walks
+are sized from `mod->numclusters`, and it is why the fixture lines below read one cluster
+short. The query side (`VBSP_BadClusterQuery`, `:5997-6015`; the tests at `:6049-6053` and
+`:6074-6078`) answers all-visible (the unvised answer) and prints once per map; `vbsp_pvsstat`
+reports the count (`:6323`), which is reset with the map (`:9408`) and not by the command, so
+the once-per-map warning re-arms with the map; it must read 0 because every cluster that
+reaches it now comes from a clamped leaf.
+
+**Post-review, two more holes of the same family.** A vis lump whose header claims 0 clusters
+is now treated as unvised (`:1937-1950`, with its own warning): left as a 0-cluster vis, every
+leaf would have been bounded by 0 and rewritten to -1, and the listen server would then have
+sent no entity at all — the first draft's Not-done list had it printing `outside 0..-1` and
+left it there. And `VBSP_EdictInFatPVS` skips a negative entry in a static prop's leaf list
+(`:6413-6414`): the game-lump loader stores `lf->cluster` verbatim, so a -1 there indexed
+`pvs[-1]`, the byte before the buffer. Two comments were corrected on the same pass: the one
+above (`VBSP_LoadModel`, not `VBSP_LoadMap`, calls `VBSP_LoadVisibility`) and
+`prv->lightraw`'s (`:552-560`), which points into the file buffer OR the decompressed lump
+table on an LZMA map.
+
+**The census is the falsifier, and it says the fix is inert on every shipped map.** All 1310
+library maps, lumps LZMA-decoded, leaf stride from the lump version ((19,0,56) x8,
+(20,1,32) x1128, (21,1,32) x96, (25,2,56) x78; the engine's `ver==19` rule agrees with the
+lump version on every map): 0 leaves with cluster >= vis numclusters, 0 with cluster < -1,
+0 unvised leaves with cluster >= numleafs, no vis lump claiming 0 clusters, and on all 1261
+vised maps `max(cluster)+1 == vis numclusters` exactly. 49 maps have no vis lump — the same
+49 Patch 209b counted, which cross-checks the decoder (two independent decoders,
+`cluster_census.py` and `refute275b/check.py`, agree to the unit). So the bucketed-leaf lines
+are byte-identical before and after on every real map, and the only way to see the clamp
+fire is a fixture made to (`make_badcluster2.py`): `p277_bad20` (surf_protopede v20, 310
+leafs, vis 114: leaf 96 -> 114, leaf 255 -> 117) and `p277_bad25` (surf_testballs v25 Strata,
+48 leafs, vis 17: leaf 11 -> -7, leaf 42 -> 2147483647 — the old derivation signed-overflowed
+on that one and ended at `numclusters` 0, `pvsbytes` 0).
+
+No cvar: a pure correctness fix, and there is no old behaviour worth keeping.
+
+### Verified — the binaries, first
+
+Both runs below are batch 3 of the day's run (08:02). A peer had redeployed between batches,
+so they ran on exe 04:17:59 (8213751) and hl2 dll 03:26:34 (482095), built from the same tree
+for these hunks (batches 1-2 had run on my 02:54 exe / 02:57 dll). The post-review hunks —
+the model check, the 0-cluster vis, the -1 leaf guard — went into the 08:16:27 exe / 08:18:09
+dll (deployed 08:19); the two Q2 items that missed that build went into the 09:24:37 exe
+(deployed 09:24:51, on which `p277a.cfg` was re-run, above). The (b) hunks were NOT re-run
+after 08:16: compile-verified only. `gl_q2bsp.c` after both builds carries 4 warnings, all
+pre-existing `variable 'i' set but not used` at `:670`/`:3027`/`:3131`, none in these hunks;
+`mod_vbsp.c` 0. Old arms: the 21:55 exe (copied
+to `ftesurf64_prev.exe`, since Start-Process will not run a `.prev`) for (a), and the 21:52
+hl2 dll (475593, hash F5A64E7A11) for (b).
+
+### Verified — (a) `cfg/testrun/p277a.cfg` on q3dm0, `logs/p277a.log` (drafted as `p275a.cfg`)
+
+The Quake 3 Arena install has it; there is no IBSP v38 map anywhere on this machine, so the
+Q2 arm is compile plus review. Assets copied into the gamedir for the run and removed after
+(both absent today): `maps/q3dm0.bsp` and `scripts/common.shader` (defines
+`textures/common/mirror2`, `:221`, portal keyword `:225`, AND `textures/sfx/portal_sfx`,
+`:279`, portal `:288`, `alphagen portal 256` `:317`; `sfx.shader` is not needed). q3dm0 has
+exactly two portal-keyword faces from the vantage; the disc does not recurse only because
+`GLR_PortalDrawableAt` (`gl_rmain.c:1207-1209`) refuses an alphagen-portal shader more than
+256 in front of its plane and the eye is 600 out — pinned by `r_portalmaxviews 1`. Vantage
+`-1154 -1277 55.5` yaw -90 is leaf 3081, cluster 1524, area 3: offline, PVS(1524) lights 511
+of 3330 leafs; the mirror's own pvsorigin (face centroid `-1154 -1341 55.5`) is cluster 1529,
+222 lit. `r_temporalscenecache 0` explicitly (with it on the main view never reaches
+MarkLeaves), `cfg_save_auto 0` (the cfg changes archived cvars).
+
+| arm | main hit | main remark | main recompute | recursed recompute | mark everything | owner |
+|---|---|---|---|---|---|---|
+| window before A1 (map load to the first readout; the mirror in view for part of it) | 2024 | 2917 | 2 | 2918 | not measured | -1 |
+| A1 mirror in view, `r_portalrecursion 1`, `r_portalmaxviews 1` | 0 | 3580 | 0 | 3580 | 0 | -1 |
+| A2 same vantage, `r_portalrecursion 0` | 4626 | 0 | 0 | 0 | 0 | 0 |
+| A3 both portal faces behind the camera (yaw 90) | 4840 | not measured | not measured | not measured | not measured | 0 |
+| A4 `r_novis 1` then 0, still, facing away | not measured | not measured | 1 | not measured | 272 | 0 |
+
+The developer line between the setpos and the A1 readout read `portals: depth 0, 1 in view,
+1 rendered, 0 closed` (a `2 in view` or `2 rendered` would have voided the recursed figure).
+Leafs lit by the last marking: main 517, recursed 222 — the recursed count is the offline
+prediction to the leaf; the main count is six above the offline 511, which the record notes
+and does not explain. A1's and A2's main leaf counts are equal, so a remark from the cached
+pvs lights the same set as a fresh recompute. Read against the FAIL signatures: A1 shows no
+main hit beside 3580 recursed recomputes (the early return does not fire under someone else's
+marks — the bug in its own shape is gone) and no main recompute (the recursed pass no longer
+clobbers the key; each frame the mirror pass recomputes, as a recursed view must, and the main
+view re-marks from its cache); A2 turns the remarks into 4626 hits with nothing else moving;
+A4's exactly-one recompute after 272 everything-marks is the poison working on the frame
+`r_novis` returns to 0; and the owner reads -1 after A1 and 0 after A2/A3/A4, as it must. Not
+measured: the zero table `q23bsp_markstat` should print with no map loaded, the `cmd viewpos`
+reply, the `portals: 1 scene renders last frame` line, and the old-vs-new pixel comparison of
+`p277a_a1.png` against the same-binary noise floor. Old arm (the 21:55 exe; its output is
+APPENDED to `logs/p277a.log` from 08:02:09 on, because the cfg sets `log_name p277a` itself
+and overrides the launcher's `+set log_name p277a_old`): `Unknown command q23bsp_markstat`
+(the command is new) and the same portal lines; no stat readout is possible on the old
+build, so the old arm proves only that the cfg and vantage are the same on both binaries.
+
+### Verified — (b) `cfg/testrun/p277b.cfg`, `logs/p277b.log` (drafted as `p280b.cfg`), controls first, the overflow fixture last
+
+| step | map | measured |
+|---|---|---|
+| 1 | surf_protopede | `115 of 310 leafs bucketed into 114 clusters`; no warning |
+| 2 | surf_testballs | `18 of 48 leafs bucketed into 17 clusters`; no warning |
+| 3 | surf_tensor2 | `6098 of 19846 leafs bucketed into 6089 clusters`; no warning |
+| 4 | p277_bad20 | `2 of 310 leafs have a cluster outside 0..113 (first: leaf 96 = 114)`, then `113 of 310 leafs bucketed into 113 clusters` (113, not 114: leaf 255 was cluster 113's only member) |
+| 5 | p277_bad25 | `2 of 48 leafs have a cluster outside 0..16 (first: leaf 11 = -7)`, then `16 of 48 leafs bucketed into 16 clusters` |
+| all | every `vbsp_pvsstat` | `0 out-of-range cluster queries`; the string `queried for cluster` appears nowhere |
+
+Old dll arm (21:52; its output is APPENDED to `logs/p277b.log` from 08:02:41 on, the cfg
+setting `log_name p277b` itself): steps 1-3 the same bucketed lines; step 4 NO warning and
+`115 of 310 leafs bucketed into 118 clusters` — both bad leaves passed the old `c < 118` filter, vis has
+114, so `bitofs[114..117]` were read out of the compressed rows — and on step 5 the process
+died with `0xC0000005` loading p277_bad25 (exit -1073741819), exactly the predicted crash,
+which is why it runs last. The wrapper restored the then-current dll afterwards (hash-verified
+by hand, 2517AB7DA5). The two fixtures were removed with the run (absent today); `p277b.cfg`
+stays with the other testrun cfgs.
+
+### Not done
+
+* (Closed the same morning: the Q2 hit test's model check and the level-0-only forcevis
+  poison, which had missed the 08:16 build, are in the 09:24 exe — see the post-review
+  paragraph above.)
+* `R_MarkLeaves_Q3` still ignores `r_refdef.forcevis` (mirrors and water portals hand one
+  down, `gl_rmain.c:1707-1728`); it keys on the recursed view's `r_viewcluster` instead. A
+  behaviour change, so not here.
+* `cvis[portal]` for a recursed level can hold a pointer into `GLR_DrawPortal`'s alloca
+  (`gl_rmain.c:1709`) and is handed back only by the `r_novis 2` lock path (`:8021-8022`),
+  as before.
+* On Q3 maps without a vis lump, or under `r_novis 1`, the main view now marks everything
+  every frame instead of hitting cached everything-marks; and a mirror whose pvsorigin shares
+  the camera's cluster remarks every frame where the old Q3 code hit. Perf-only, identical
+  drawn set; the owner is per level, not per cluster pair.
+* The Q2 mark-everything arm now returns NULL to `CL_LinkStaticEntities` instead of a stale
+  `cvis[portal]`: static entities wrongly culled against a stale pvs in the r_novis /
+  camera-in-solid case now draw. Correct, and untestable here for lack of a Q2 map.
+* `VBSP_DecompressVis` still trusts the `bitofs[]` VALUE and the row bytes; the merge branch
+  has no overrun check at all. `VBSP_SprpLeafRef` indexes `mod->leafs` with a map-supplied
+  leaf index that was not seen bounded against `mod->numleafs`. Both worth their own item.
+* `mod_vbsp.c`'s last write (08:25:35) postdates the 08:18 dll — a peer's Patch 286 hunks
+  share the file — so its line numbers above are as of that write.
+
+### New command and counter
+
+    q23bsp_markstat    hit / remark / recompute / mark-everything / forcevis counts, main vs
+                       recursed; leafs lit by the last marking at each level; owner. Prints
+                       and resets. Not cvar-gated.
+    vbsp_pvsstat       gains one line: out-of-range cluster queries since this map loaded
+                       (must be 0); reset with the map, not by the command.
+
+---
+
+## Patch 280 — func_slide: a brush the player slides on at any angle, predicted on both sides  *(APPLIED AND VERIFIED — engine `common/pmove.h`, `common/pm_source.c`, `server/sv_user.c`, `server/world.c`, `server/sv_phys.c`, `server/sv_main.c`, `server/svhl_game.c`, `client/cl_ents.c`, `client/cl_main.c`, `client/r_surf.c`; gamecode `sv_entities.qc`, `sv_zones.qc`, `sv_player.qc`, `default.cfg`; `build.ps1 -Engine -Full`, the header rule, plus the QC build)*
+
+Momentum's slide is a TRIGGER volume (`trigger_momentum_slide`, `mom_triggers.cpp:1665`):
+touching it sets `m_CurrentSlideTrigger` and the mover then (a) never grounds the player —
+`SetGroundEntity` drops the trace, `mom_gamemovement.cpp:2995-3010` — unless
+`AllowingJump && !StuckOnGround` and jump is pressed, (b) skips both gravity half-steps on
+`DisableGravity` (`:1883-1897`), (c) treats sliding as grounded for every duck rule, (d) snaps
+the player back onto the surface at tick end on `StuckOnGround` (`:2126-2129`, `StuckGround
+:2221-2297`) and (e) retraces a zero-fraction move while sliding (`:2904-2930`). The shipped
+game replaced the trigger with `func_slide`, a `func_brush` whose faces ARE the slide, keys
+`stayonslide` / `allowjump` / `disablegravity` (Steam `momentum.fgd:10041-10046`; not in the
+public tree, so its C++ is not public and the port maps "touching the trigger" onto "the
+ground probe hit a slide brush").
+
+The workflow drafts carried the number 276, which this file had already spent; every `276`
+in the ~40 comments, the `pm_slide` description, the QC and `default.cfg` reads 280.
+
+### The census, corrected
+
+Decompressed entity lumps, all 1310 maps: **702 func_slide across 17 maps**, not the "514 on
+four" the QC comment carried (a raw-lump undercount of the kind the vbsp-lumps-are-compressed
+note describes; the corrected count is now the comment, `sv_entities.qc:4061-4063`).
+bhop_aberrant is 484 of them and is nothing but slides; then rj_tattarrattat 58,
+bhop_retrowave 31, bhop_everfast 21, bhop_ithyphallophobia 19, bhop_mom_training_beta 19,
+surf_mom_training 16, bhop_frigpx 12, and nine maps with 7 or fewer. Keys are lowercase only.
+`stayonslide` 251 written / 35 set; `allowjump` 702 written / 21 set (the FGD default is 1;
+681 write 0 explicitly, so the QC reads it as a string and only an absent key takes 1);
+`disablegravity` 251 / 2. `startdisabled` is written 251 times, always 0; 48 say `solidity 2`
+and 200 say 0. Every one spawns solid; exactly one is named, so I/O can still disable it.
+
+### The tag, and why it is `.skin`
+
+`.skin` already reaches BOTH pmove feeds — `sv_user.c:7064` and `cl_ents.c:7405` via
+`state->skinnum`, which `sv_ents.c:3751` fills from `.skin` — and survives every wire path
+(`sv_ents.c:1346` +64 bias, `cl_ents.c:486` sign-extends 224..255). -32..-25 is free below
+`Q1CONTENTS_CORPSE` (-19); `SKIN_SLIDE_BASE -32` (`sv_entities.qc:36`) plus the flag byte
+(`PMSLIDE_STAYON 1`, `PMSLIDE_ALLOWJUMP 2`, `PMSLIDE_NOGRAVITY 4`, `PMSLIDE_ACTIVE 8` always
+set so a slide with every key 0 is still a slide; `func_slide` at `:4104-4125`). It is a tag,
+NOT a contents override: `sv_user.c`, `cl_ents.c`, `world.c:1330`, `world.c:2262` and the
+three `sv_phys.c` pusher tests all treat it as a skin-0 brush, and only `physent_t.slideflags`
+— a new byte in the padding after `isportal`, so the struct size and every offset are
+unchanged — remembers it. Left out of `world.c`, the `safedefault` arm turns the brush into a
+clean miss for every server-side trace (QC traceline/tracebox, the save-loc floor probe,
+`run_eyeinfo`), and `pointcontents` reads EMPTY.
+
+Also excluded from the renderer's negative-skin rule: `r_surf.c:2792` (`Surf_DrawBrushModel`)
+forces any negative skinnum two-sided and, unless `r_hlwater_entalpha`, opaque — the
+contents-volume look. Left in, every tagged slide — 484 of them on bhop_aberrant — would draw
+both sides of every face. A slide is drawn exactly as a skin-0 brush.
+
+`sv_ents.c:3643` sends ANY negative-skin brush as `ES_SOLID_BSP`, even `SOLID_NOT`, so the QC
+wears the tag only while solid (`vbsp_slide_skin`, `sv_entities.qc:329`, remembers it) and
+`SV_IOEnable` keeps the two in step (`:1264-1274`); a disabled slide would otherwise be
+predicted as a wall the server does not have.
+
+### The mover
+
+`pms_anyslide` (per command: `pm_slide` on and a slide physent present — one byte scan, so on
+the 1293 maps with no func_slide nothing below is reachable) gates all of it;
+`pms_slidecontact` is the flag byte under `CategorizePosition`'s probe, re-derived every tick
+and read AFTER the quadrant retest so a slide under one corner counts (`pm_source.c:2100-2102`);
+`pms_slidetick` latches it once per tick after the first categorize (`:3610-3614`) — no new
+predicted state, nothing added to `pmsourcestate_t` (the three, and their essay, at
+`:380-408`; `PMSrc_SlideFlagsOfTrace` `:413-418`, `PMSrc_SlideAllowsJumpNow` `:423-428`). A
+standable plane that belongs to a slide sets `onground = false` (`:2113-2141`;
+`surfacefriction` NOT quartered, as in the reference: that is the no-standable-plane arm,
+cpp:1739-1747, and here there is a real surface under us). No ground means no `Friction`, no
+`WalkMove`, `AirMove`'s 30 u/s cap, and gravity clipped along the face every tick — the whole
+of "slides at shallow angles".
+
+The landing decision (Patch 176, cpp:1750-1865) is SKIPPED on a slide, which is a named
+deviation (`:2125-2138`): in the reference it runs every slide tick and its slope-fix adoption
+(cpp:1857-1860) precedes the `SetGroundEntity` that drops the ground, compounding gravity
+along the face 1.5-2x per tick when the slider gains 2D speed. The shipped func_slide C++ is
+not public and that compounding is a quirk of the trigger's code path, so a slide here
+accelerates at `g*sin(theta)` along the face. The one-line literal port is written in the
+comment beside the arm.
+
+`StartGravity`/`FinishGravity` return on `disablegravity` (`:656-659`, `:675-678`; cpp:1883-1897,
+the second also covering `CheckJumpButton`'s own call, as the virtual override does); the
+four duck sites read `!onground && !pms_slidetick` (`:2270` cpp:722, `:2307` cpp:1124, `:2321`
+cpp:1065, and the duck timer's `:2402`, which cites cpp:949-955 / :1022 "(!bIsSliding &&
+bInAir)" — that citation corrected in review); `FullWalkMove` re-categorizes before
+`CheckJumpButton` on an `allowjump` slide (`:2972-2976`, cpp:1971-1976; `PMSrc_SlideAllowsJumpNow`
+is what lets that one call ground) and calls `PMSrc_StuckGround` (`:1552-1582`) at tick end on
+`stayonslide` (`:3028-3031`; not after a portal, the Patch 203 reason). StuckGround's reach is
+64: it only runs when the tick STARTED in contact, and one tick at 3500 x 0.015 opens at most
+52.5 units.
+
+**The zero-fraction retrace, rewritten in review** (`:1447-1492`, cpp:2904-2930, the
+bhop_w1s2 seam where the crease logic wedges a slider against an obtuse corner). A move that
+went nowhere is a dead stop — except while sliding, where the reference retraces to `end`.
+The first draft rebuilt bump 0's segment from the entry velocity; the arm now retraces the
+LOOP'S `end` — the reference's own variable, the post-clip "wanted direction" its comment
+means — and it repeats Patch 177's unswept re-test, `PMSrc_TraceHull (end, end)` (cpp:2654),
+before moving the player there and re-seating with `StayOnGround`. The re-test is the point:
+the one way the retrace CAN pass is a swept trace that reads clean while its end point is
+inside geometry, and without it this arm walked the player into the position Patch 177 had
+just refused. `startsolid` on the retrace counts as "found something", because this engine's
+trace reports fraction 1 for a start in solid that gets out (Source's does not), and a move
+launched from inside geometry is not one to keep. DEVIATION, written beside the code: the
+reference does not re-test and can tunnel. On a plain wedge the arm is inert — the loop's
+last trace ran from the same origin and can only answer differently after a Patch 177 nudge —
+and honest about it.
+
+**The ascent, found in review** (`:2031-2049`). `CategorizePosition`'s `vz > 140` arm
+(`PMSRC_NON_JUMP_VELOCITY`) skips the ground probe, and Momentum's slide state is the TRIGGER
+the player is inside, which an ascent does not leave; ours is what the probe found. So with
+`pms_anyslide` the probe still runs in that arm — for CONTACT only, never for ground — and a
+slider crossing 140 u/s of rise (the crest of any `stayonslide` or `disablegravity` ramp) keeps
+its gravity, jump and duck rules instead of falling back to the no-slide ones mid-slide. One
+hull trace per tick, only on a map that has a func_slide.
+
+**Not ported, and written down as such** (`:3016-3026`): the reference's cpp:2050-2068 "fixes
+some inaccuracies while going up slopes" block, which after WalkMove/AirMove traces old origin
+to new, calls `StepMove` from the NEW origin — a second full `velocity*frametime` move in the
+same tick — and keeps that result when the straight trace was blocked. It is a hack for the
+trigger slide's own inaccuracies, it double-moves the player in exactly the corner cases
+where a func_slide brush IS the geometry, and the shipped func_slide's C++ is not public; so
+a slide moves once per tick like everything else. If a slider ever hangs going up a slope,
+that is the block to revisit.
+
+`pm_slide` ships **1** for the Patch 260 reason (intended map content; bhop_aberrant is
+unplayable as designed without it), is `CVAR_SERVERINFO` (`sv_phys.c:110`), mirrored in
+`cl_main.c:3319-3321` with the same default (or a client would predict a slide the server does
+not run), latched into `movevars.slide` by `SV_SetSourceMoveVars` on every move (`:2951`), and
+in the Patch 170 lock (`:3010`; refused without `sv_cheats 1`). 0 is the pre-280 mover
+exactly: no flag byte is ever read. `pm_selftest` gains nine `slide skin ...` rows over
+`PMSLIDE_FLAGS_FROM_SKIN` (`pm_source.c:5047`).
+
+### The instrument
+
+`run_slideinfo` (`sv_zones.qc:596`, dispatched beside `run_eyeinfo` at `sv_player.qc:636`):
+two server-side lines, `slide: org x y z  vel x y z  speed2d S  onground G  ducked D` and
+`under 'classname' skin K normal.z N frac F`, from a traceline that collides brush entities.
+`onground` is the `FL_ONGROUND` bit `STAT_FS_FLAGS` carries to the HUD (`sv_main.qc:211`).
+With `pm_slide 0` the tag is still worn and still printed, which is what makes the A arm a
+control and not a different map.
+
+### Verified — `cfg/testrun/slide01.cfg`, `slide02.cfg`, `slide03.cfg`; `logs/slide01.log`, `slide02.log`, `slide03.log`
+
+Binaries: slide01 ran in batch 3 (08:03) on a peer's redeploy, exe 04:17:59 (8213751), built
+from the same tree for these hunks; slide02 (batch 4, 08:23) and slide03 (batch 5, 08:29) on
+the post-review exe 08:16:27, which carries the retrace and the ascent probe — neither arm is
+individually exercised by these vantages (no wedge; no crest over 140 u/s on a `stayonslide`
+or `disablegravity` brush), so both are compile-verified (`pm_source.c` 0 warnings). The hl2
+dll is not in this path; the QC under test is the progs deployed 04:20-04:21.
+
+**slide01, surf_mom_training — the design's vantages were inside speed triggers.** The design
+targeted `*54` (origin `7200 9824 1088`, `allowjump 0`, top normal `(0, -0.447, 0.894)` =
+26.6 degrees, standable under the 0.7 cut) with a probe 2 above the hull's rest (the hull is
+32 wide, `sh_defs.qc:36-37`, and rests on its uphill edge, so the origin obeys
+`z = 1160 + (y-9760)*0.5`), flat `*6` (`allowjump 1`, top z 1152) at `7008 2872 1154`, and the
+`info_player_start` as control. All three probes sat inside `trigger_setspeed` volumes the
+design's census had not seen: `*14` (1100 u/s along +y) covers `*6`'s y 2880..2912 and `*53`
+(1180 u/s at pitch 45 along +y) covers `*54`'s whole top. So the ramp arms were ballistic —
+`under 'world' frac 1.000` at 936.8 u/s in every arm — and say nothing about the ramp, and the
+rows taken as `*6` were really `*8` (`allowjump 0`, skin -32) reached at 1100 u/s. What slide01
+DID show, on flat `*8` at 1100 u/s: `pm_slide 1` -> `onground 0`, `under 'func_slide' skin
+-32`, velocity kept (1100 for 3 samples, no friction), `+forward` adds exactly 30.0 (the
+AirMove cap), `vel_z -6` (the FinishGravity half-step, clipped each tick); `pm_slide 0` ->
+`onground 1`, friction stops the player at y 3171.2 (299 units), walking at 260 u/s. CTL
+`under 'world' onground 1`. No `under world frac 1.000` at a resting slide vantage. The
+mechanism, on the flat lane, with the cvar the only variable.
+
+**slide02 — the probes re-placed; PASS on the slope, the allowjump pad and the control.** CTL
+at `-14080 12800 2562` (the real start floor): `under 'world' onground 1 speed 0`.
+bhop_everfast `*92` (20.5 degrees, normal.z 0.936, nothing else within 900 units), probe
+`16 7300 -861` yaw 90:
+
+| arm | measured |
+|---|---|
+| A1/A2 `pm_slide 0` | `onground 1`, `speed2d 0.0`, org constant `16 7300.5 -863.6` (predicted rest -863.5), `under 'func_slide' skin -32 normal.z 0.936 frac 0.413` — all three samples, both repeats identical |
+| B1/B2 `pm_slide 1` | `onground 0` on every sample; speed2d 64.4 / 119.7 / 174.9 (B2: 67.1 / 119.7 / 172.3), i.e. +55 per 200 ms = 275 u/s^2 against the 262 that `800*sin*cos` predicts for 20.5 degrees; y rising 7307 -> 7327 -> 7358; vel_z -28 / -49 / -70; z -873.6 at y 7327.0 and -885.3 at y 7358.2 — EXACTLY `-832 - 0.375*(y-16-7200)`, the face |
+| C `pm_slide 1`, `allowjump 0`, `+jump` while sliding | vel_z -34 / -50 / -71, speed still rising — no jump |
+
+surf_mom_training `*6` (`allowjump 1`), probe `7008 2850 1154` (clear of `*14`, which starts
+at y 2880):
+
+| arm | measured |
+|---|---|
+| G1 `pm_slide 1` | at rest `onground 0`, speed 0, `under 'func_slide' SKIN -30` (the ALLOWJUMP bit parsed); `+jump` -> vel_z 212, z 1152 -> 1180.2 -> 1208.2 — the allowjump grounding for the jump tick works |
+| G0 `pm_slide 0` | at rest `onground 1` (z 1152.6); `+jump` -> vel_z 206, z 1184.0. G1 and G0 differ ONLY in the resting onground bit |
+
+The flat `*8` probe at `6368 3500 1154` FROZE in every arm (z 1154.0, vel_z -6, no fall, no
+walk, `pm_slide 0` included): an embedded probe — only `*8` contains the point, and its top
+there is not a plain slab. Void, and it is the frozen-z signature the design named.
+
+**slide03 — the four flat `*8` arms at `7008 3200 1154`, the spot slide01's `pm_slide 0` run
+came to rest on.**
+
+| arm | measured |
+|---|---|
+| F1 `pm_slide 1` | at rest `onground 0`, speed 0, z 1152.0, `under 'func_slide' skin -32`; `+jump` -> nothing (z 1152, vel_z -6): the `allowjump 0` gate holds on the flat as on the slope |
+| F0 `pm_slide 0` | at rest `onground 1` (1152.6); `+jump` -> vel_z 218, z 1180.8 -> 1210.4 |
+| E1 `pm_slide 1`, `+forward` 700 ms | vel `30.0 0 -6` (the AirMove cap), `onground 0`, x 7008 -> 7029.2 -> 7038.2 |
+| E0 `pm_slide 0`, `+forward` 700 ms | vel 260 (walk), `onground 1`, x -> 7154.0, then friction to 70.9 |
+
+30 against 260 from identical input is the loudest discriminator, and the A/G0/F0/E0 arms
+are the falsifier: same build, same vantage, the tag still printed, the cvar the only
+variable. None of the FAIL signatures fired: no B row with `onground 1` / `speed2d 0.0`
+identical to A, no `under world frac 1.000` at a resting slope vantage, no A row with
+`onground 0`, and G1 jumped. Covered in full: A/B on the slope, the `allowjump 0` gate (slope
+and flat), the `allowjump 1` grounding, the air cap, friction against no friction, the
+control. Not measured: `pm_selftest`'s nine `slide skin ...` rows (not in the run record), the
+render check under `*44` (`setpos 4640 10864 1000 -89 0 0`; the `r_surf.c` hunk is verified by
+reading), and the ramp telemetry. The runs write `data/runs` rows on bhop_everfast and
+surf_mom_training; the record owes the removal of any row newer than 08:20.
+
+### Not done, deliberately
+
+* `stayonslide` and `disablegravity` are not covered: neither map used has such a brush. The
+  only `stayonslide 1` slides are flat-topped and `disablegravity 1` exists only on
+  bhop_tripportals `*180`/`*181`, whose up-face the census parser did not find (probably a
+  displacement). A follow-up cfg on `*180` (origin `6000 5888 256`) needs `facepoly.py` run on
+  that model first — and it is also the only vantage that can exercise the review's ascent
+  probe.
+* The retrace arm has no vantage yet either: it needs the bhop_w1s2 seam, or any obtuse
+  corner where a slider wedges. Compile-verified.
+* Sliding contact is the 2-unit ground probe plus the tick-start latch, so `disablegravity`
+  re-enables gravity as soon as you leave the face by more than 2 units; Momentum's trigger
+  keeps it off inside the volume above the surface. Two brushes in the library.
+* The ramp telemetry (Patch 131/137) still calls only `nz <= 0.7` a ramp, so a shallow slide
+  does not grade a board, and `pmove.surfing` is likewise unset on one.
+* The local-frame Y sign and the Momentum FGD's `allowjump` text ("still required to be on a
+  surface that is not too steep to stand on") are honoured as read; nothing else can confirm
+  the shipped C++ short of playing the maps.
+* `waitmap` takes seconds (`cmd.c:4723`); the drafts' `waitmap 1800` was a 30-minute cap.
+* The design's `trigger_setspeed` blindness: a probe census that reads only the brush being
+  tested will sit inside a volume it did not look for. slide01's three vantages did, and the
+  slope evidence had to come from another map.
+
+### New cvar and command
+
+    pm_slide         1   honour func_slide as Momentum does; serverinfo, client-mirrored, in
+                         the Patch 170 lock. 0 = the pre-280 mover exactly, on every map.
+    run_slideinfo        (cmd) what the mover sees under your feet, from the server. Ungated.
+
+---
+
+## Patch 281 — nine maps store a fifth byte per luxel, so three quarters of their faces read their lightmap off the 4-byte grid and drew black  *(APPLIED AND VERIFIED — plugin only, `plugins/hl2/mod_vbsp.c`; no header, `build.ps1 -Engine` without `-Full`)*
+
+The surf_borderlands report ("the textures are all messed up": ramps, walls and the
+foreground floor uniform black, a few lit tan tiles, a cyan strip and blue/white dots) IS the
+`lightofs` 4-byte misalignment, and the earlier conclusion that the misalignment did not
+explain the screenshot was wrong for a specific, now-measured reason: it modelled only one
+misread (the renderer's u32 read at `r_surf.c:1556`) and predicted 45% blinding-white
+confetti. The real path has TWO misreads that compound, and their product is exact zero.
+
+The workflow drafts carried the number 277, which this build assigns to the vis-cache /
+cluster-bound pair; every `Patch 277` / `P277` string in the `mod_vbsp.c` comments and in the
+`hl2_lightmap_repack` description reads 281.
+
+### The contract, and the nine maps that break it
+
+`Surf_BuildLightMap` reads a face's E5BGR9 samples as `((unsigned int*)src)[i]`
+(`r_surf.c:1556`, `:1854`) and `r_texdiag`'s LUX census does the same (`:4791`), so
+`surf->samples` must be 4-byte aligned. `VBSP_LoadFaces` hands out `mod->lightdata + lightofs`
+with the file's byte offset unchanged (no alignment or bounds check; the Q1 loader
+bounds-checks at `gl_model.c:5363`), and `VBSP_LoadLighting` (`:4075-4085`) converted the
+whole lump as 4-byte words counted from byte 0. Stock VRAD keeps every `lightofs` on that
+grid: a face block is 4 bytes of average colour per style followed by `styles * sets * luxels
+* 4` bytes of samples (`mp/src/utils/vrad/lightmap.cpp:3397-3414`, `radial.cpp:739`), all
+multiples of 4. The essay is at `mod_vbsp.c:3440-3510`.
+
+Nine maps do not — bhop_24 (75.2% of lit faces misaligned), surf_mjk (75.1%, HDR lump),
+surf_at_the_limit (75.0%, HDR), surf_windrunner (73.9%), surf_swagtoast (72.6%, HDR),
+surf_borderlands (71.8%), surf_legends (71.7%), surf_sup (70.3%), surf_colours (69.0%) — all
+VBSP v21 (so `hl2_favour_ldr` is no workaround), out of 1310 censused with 1199 of the 1208
+parseable at exactly 0.0%. Each stores one undocumented extra byte per luxel per style AFTER
+the face's sample sets: on surf_borderlands every one of the 3153 consecutive lit-face gaps
+equals the stock VRAD block plus exactly `luxels` bytes, and exponent bytes read at stride 4
+from `lightofs` are 99.8% inside VRAD's range against 40.7% if the extra bytes preceded the
+samples — so the samples do start at `lightofs`. Their lighting lump carries `lumpVersion 1`
+like everyone else's; there is no flag to read. Measured on surf_borderlands (VBSP 21,
+mapRevision 118, 4666 faces, LIGHTING lump 4,792,970 bytes, `%4 == 2`): 2264 of 3154 lit
+faces misaligned, `{0:890, 1:736, 2:809, 3:719}`; 1800 faces carry texinfo flag 0x800
+(exactly the eight `$bumpmap` materials); misalignment is uniform across materials by area
+(DEV/VALUESAND40 76%, the six SKYPPY3 metals 73-80%), which refutes the material-shaped
+alternative — the lit sand platform is simply aligned faces, and the verifier's own crop shows
+one continuous ramp split by a hard per-face boundary. bhop_24: 9046 lit, 6805 misaligned,
+ZERO bumped faces. surf_borderlands_h is a different revision (20, 4853 faces) with an HDR
+lump, 3266/3266 aligned and a 4-byte-per-luxel trailer instead. None of the nine overruns its
+lump; only surf_sup has multi-style lit faces (2629 two-style), and style 1's set 0 sits at the
+stock `lightofs + sets*luxels*4` (71,229 of 71,229 exponent bytes valid there, 30,999 out of
+range at the interleaved offset), so the extra bytes trail the whole face block.
+
+### What a misaligned face looked like
+
+Two misreads compound. The whole-lump conversion, striding 4 from byte 0, takes a colour
+byte of one luxel as the exponent of the next, so inside those faces it writes words that are
+either saturated (E field 30) or dark; the reader then takes them at a further 1-3 byte shift,
+so the exponent field it sees is 31 (51% of luxels at residue 1, 12% at residue 2) or 0 (46% /
+86% / 93% at residue 1/2/3). E=31 makes `264 * 2^7 * 2^7 * 511 = 2.2e9` per channel, which
+passes 2^31 in the unsigned `blocklights` accumulator (`r_surf.c:47`, `:1558`), comes back into
+`int r = *bl++` negative (`:927`) and `Surf_PackE5BRG9` (`:790-815`) clamps it to zero; E=0 is
+2^-24 and rounds to zero. Replaying the exact path over the converted lump — note that
+`1/(1<<-e)` in both exponent loops (`VBSP_ConvertLuxel`, `r_surf.c:803`) is INTEGER division,
+so every value below 0.5 takes `e = -1`; the drafts' float model gave weaker numbers — gives
+91% / 94% / 96% of luxels at residue 1/2/3 EXACTLY zero and 8% / 6% / 2% blown to saturated
+primaries (the cyan and magenta streaks in the screenshot), against 81% normal and 0% blown
+for aligned faces (aligned median 0.376); 1718 of the 3154 lit faces, 61% of the lit area, are
+more than 90% exact zero. So the map came out as smooth, exact-zero black on three fifths of
+its area with a lit face here and there — the 28% of faces that happened to be aligned. The
+user's own frame measures world-band (x 20-80%, y 30-75%) exact-black 0.288, mean RGB
+122/104/88; Momentum's shot from the same vantage is fully lit.
+
+### The fix is not "round lightofs down"
+
+That shifts every luxel of the face by up to three quarters of a sample and reads the previous
+face's tail as the first one. Instead `VBSP_RepackLighting` (`:3524-3595`), called at the end
+of `VBSP_LoadFaces` (`:3751`) once every `surf->samples` is set and before anything reads one:
+when any lit face is off the grid, rebuild the lightmap one face at a time from the RAW lump
+(kept as `prv->lightraw` / `lightrawsize`, `:552-567`, set at `:4082-4083`; it points into
+`mod_base` — the file buffer, or the decompressed lump table on an LZMA map — and is valid
+only during the load). Each face's samples are converted from where the file really puts them
+— by `VBSP_ConvertLuxel` (`:3391`), the old loop body lifted out unchanged — into a fresh
+buffer at a 4-byte position, and `surf->samples` is repointed (`:3585`). Only set 0 of each
+style is copied (the flat set, which is what the reader consumes: `radial.cpp:739` packs it
+first, `r_surf.c:1563` advances one set per style), so a bumped face's block shrinks 4x and
+the per-style stride the reader assumes becomes true for it; `TIHL2_BUMPLIGHT 0x800` is
+uncommented (`:2144`) and read from the raw `hltexinfo_t` lump (`:3571`; it never survived
+into `texinfo->flags`). Bounds are checked per style against the raw lump; a style off the end
+is written black and counted (`:3576-3581`), and the printed line grows a suffix if that ever
+happens (`:3589-3591`). `prv->lightrepacked` (`:3594`) tells Patch 268 D1's probe that the
+layout is now one set per style. Nothing else reads `lightdata` by offset on this path:
+`sunvisdata` is set only by the Q1 BSPX loader (`gl_model.c:2544`) and `deluxdata` never for
+VBSP. Every stock map returns silently at the first census (`:3549-3550`). On the nine maps
+the converted whole-lump buffer stays in the model's memgroup for the map's lifetime (4.8 MB
+on surf_borderlands, up to 27.6 MB on surf_mjk) — noted, not hidden.
+
+**Post-review: the luxel count is clamped at 0.** `VBSP_RepackLuxels` (`:3517-3522`) computes
+`smax*tmax` and returns 0 unless both are positive. `msurface_t.extents` is a short filled from
+the file's int extents; a lit face whose extents came through as -2 or less would otherwise
+have counted negative, walked pass 2's cursor backwards over the previous face and handed
+`memset` a wrapped size. The D1 probe already guarded the same case the same way
+(`:3847`); a 0-luxel face keeps a non-NULL samples pointer and `Mod_LightmapAllocSurf` gives
+it no lightmap.
+
+`hl2_lightmap_repack` (plugin, `CVAR_MAPLATCH`, default **1**, `:9837`): a pure correctness
+fix. 0 is the pre-281 read, kept as the A/B arm so "bhop_24 draws black" can be reproduced on
+demand; it prints the same census line followed by `hl2_lightmap_repack 0, left as-is (they
+draw black)` (`:3552-3557`). One ungated `Con_Printf` per affected map names the map, the
+counts and the new size.
+
+### Verified — `cfg/testrun/bl_a.cfg` (surf_borderlands), `bl_b.cfg` (surf_borderlands_h, the control), `bl_c.cfg` (bhop_24); `logs/bl_a0.log`, `bl_c0.log`, `bl_a.log`, `bl_b.log`, `bl_c.log`
+
+Binaries: all five arms ran in batch 1-2 (03:00-03:03) on my 02:54 exe / 02:57 hl2 dll. The
+post-review luxel clamp went into the 08:18:09 dll and was not re-run: compile-verified only
+(`mod_vbsp.c` 0 warnings), and no library face reaches it (every lit face's extents are
+positive on the nine, per the offline census). Every camera was checked offline
+(Moller-Trumbore over every world face) for enclosure in all six axis directions and for
+unobstructed rays to both faces of each pair and to their shared edge — two of the drafts'
+three V2 cameras were in the void with a skybox face across the ray. `bl_a0` and `bl_c0` are
+`bl_a.cfg` / `bl_c.cfg` launched with `+set hl2_lightmap_repack 0` (PNGs renamed `*0_*`), run
+first; then bl_a, bl_b, bl_c. Each arm its own process. `r_texdiag 1`, `r_novis 1`,
+`cfg_save_auto 0`; every shot twice, the second read. Noise floor: the last `_x` shot against
+its twin, 0.05% / 0.01% of the full frame. `hl2_unresolved_visible 0` on all three maps.
+
+| what | repack 0 (the old read) | repack 1 |
+|---|---|---|
+| the patch's own line, surf_borderlands | `2264 of 3154 lit faces have a lightofs off the 4-byte grid; hl2_lightmap_repack 0, left as-is` | `2264 of 3154 lit faces had a lightofs off the 4-byte grid -- lightmap repacked per face, 4792970 -> 1785560 bytes`, no truncation suffix, then D1's `lightmap was repacked per face (Patch 281)` line |
+| the line, bhop_24 | `6805 of 9046 ... left as-is` | `6805 of 9046 ... 9301919 -> 7412588 bytes` |
+| the line, surf_borderlands_h | (not run at 0) | NO repack line; D1's `stride 2/5` line, `3266 lit faces, 2022 bumped, 3266 tagged` |
+| `[texdiag] LUX maps/surf_borderlands.bsp` (over 308696 luxels) | `3599.8 3656.8 4564.3` — every channel > 100 (the offline model had predicted about 9700/10400/11300; the criterion, not the magnitude, was the test) | `0.423 0.415 0.321`, R/B 1.32 — every channel in 0.05..2.0 |
+| LUX bhop_24 | `1154.96 1230.36 1492.88` | `0.375 0.385 0.353` |
+| LUX surf_borderlands_h | — | `0.348 0.340 0.318` (a value > 100 here would have refuted the hypothesis outright) |
+| `bl_a_2_pair` — `setpos -1704 5440 1056 0 180 0`: LEFT face 1597 (SKYPPY3/METAL_PLATE01A, lightofs 3113219, off by 3), RIGHT face 1599 (aligned), shared edge y=5440 | LEFT exact-black 0.982, RIGHT 0.000 — same material, same normal, one shared edge: no material or shader cause can produce that | both 0.000; mean RGB 71.8/67.0/43.9 against 73.6/68.7/45.0, within 3% |
+| `bl_a_3_pair_lm` (`r_lightmap 1`) | the page itself is black on that face (the record's words: "lm shot identical (page black)") — loader side, as the design required; grey on both would have meant the shader side and the wrong fix | — |
+| `bl_a_4_sand` — `setpos -10624 -139.8 339.9 89 270 0`: LEFT face 1353 (DEV/VALUESAND40, aligned), RIGHT face 1355 (off by 1) | RIGHT exact-black 0.982, LEFT lit — the dark side opposite to V2, and the non-bumpmapped material | both lit, 135.3 against 135.6 |
+| `bl_a_1_spawn` (`setpos 10408 -16104.5 11369 0 90 0`, the user's vantage), world band | exact-black 0.359 | 0.000 |
+| `bl_b_*` (`bl_b_2_plate`: `setpos 6528 -2308 3232 0 270 0`, face 128) | — | spawn exact-black 0.000; the plate shots are a dark material at luminance 5-6 (lum<8 0.999, exact-black 0.000) — dark, not black |
+| `bl_c_2_floor` — `setpos -280 2576 -2400 89 180 0`: LEFT face 5501 (ECEL_CRETEFLOOR03B, off by 1), RIGHT 5503 (aligned) | LEFT exact-black 0.908; RIGHT 0.273, above the <= 0.05 the design expected of an aligned face and not explained by the record | both 0.000 (53.4 against 52.5 luminance) — bhop_24 has no bumped face, closing the bumpmap alternative independently |
+| `bl_c_1_spawn` | exact-black 0.737 | 0.000 |
+
+None of the FAIL signatures fired: repack 1 is not > 100 anywhere, the repack-0 arms did not
+come out lit (the `+set` reached the cvar), and no shot pair exceeded the 0.5% floor. Not
+measured: the `hl2_missing` / `r_showshader` / `r_shaderpasses` check that the named material
+prints a lightmapped vmt program on every arm (the record has only `hl2_unresolved_visible 0`).
+
+### Not done
+
+* The 4-byte-per-luxel trailer on surf_borderlands_h and the 1-byte array on the nine
+  (69.9% zero in the earlier sample) are unidentified; a Momentum/Strata VRAD change note would
+  name them. Not needed for the fix.
+* The blown-luxel gap: the replay puts ~8% of misaligned luxels at saturated values, the
+  user's frame shows a handful of marks. Large faces are almost entirely black with sparse
+  streaks, so the aggregate overstates what one face shows; the left half of `bl_a0_2_pair` is
+  where to count pixels above luminance 200.
+* The right half of `bl_c0_2_floor` at 0.273 exact-black on the old read: face 5503 is
+  aligned by the census, so either the crop takes in a neighbouring misaligned face or the
+  material is darker than the census assumed. Both halves are 0.000 with the repack on, so it
+  does not touch the verdict; it is the one number in the table the record does not explain.
+* The repack copies only set 0, so `mod->lightdata` no longer holds the three RNM sets for
+  bumped faces on the nine maps; Patch 268 D2 would have to read `prv->lightraw` there.
+* `VBSP_LoadCubemaps` builds the cubemapdefault path from the map name and never tries the
+  `.hdr.vtf` spelling; surf_borderlands packs `materials/maps/surf_borderlands_b/
+  cubemapdefault.hdr.vtf` under its pre-rename name, so its 7.3% envmapped area loses its
+  reflection. Real, small, separate.
+* The world-shader normal-map path (`lightmapped.glsl:244` uses the flat lightmap only; the
+  normal is sampled only under `REFLECTCUBEMASK`, `:247-292`, additive) is real but separate
+  and cannot zero anything.
+* **Interaction with Patch 268 D1, same build.** `VBSP_ProbeLightmapStride` runs after this
+  repack and checks `prv->lightrepacked` first: on the nine maps it prints `lightmap was
+  repacked per face (Patch 281): one luxel set per lightstyle, no stride tag needed`
+  (`:3829-3833`) and tags nothing — the correct walk for the dense layout, and NOT the
+  `UNPROVEN` warning the first draft of this entry expected. surf_sup in D1's run printed
+  exactly that after this patch's `5079 of 7223 ... 1561910 -> 929176` line. D1's
+  `1/4+trailer` candidate is reachable only with `hl2_lightmap_repack 0`; the two entries
+  should be read together.
+* `mod_vbsp.c`'s last write (08:25:35) postdates the 08:18 dll — a peer's Patch 286 hunks
+  share the file — so the line numbers above are as of that write.
+
+### New cvar
+
+    hl2_lightmap_repack   1   rebuild the lightmap per face when any lit face's lightofs is off
+                              the 4-byte grid (nine Momentum maps). 0 = the old read, about 72% of
+                              those maps' faces black. MAPLATCH. Stock maps: early return, no line.
+
+---
+
+## FTESurf Build 53 (QC) — three emitter bugs, two .pcf bakes the tool had been getting wrong in five ways, the build-48 stats read as numbers for the first time, and a checker that had never seen a ghost  *(APPLIED AND VERIFIED — QC + tools + data, `build.ps1` without `-Engine`; ships beside engine Patches 277, 280, 281 and 268 D1, which need `build.ps1 -Engine -Full` and are logged under their own headings)*
+
+### A — the three emitter findings (`cl_emit.qc`, `particles/ftesurf.cfg`)
+
+**1. An absent `SpawnRate` is not 40, and the skip is now named.** `Emit_Add` returned in
+silence on `rate <= 0` and the entity surfaced in `emit_list` only as an "unaccounted"
+residual. The proposed 40 fallback would have drawn what Source does not: entity memory is
+zeroed (`baseentity.cpp:3331`), `m_Spawner.Init(0)` (`c_func_dust.cpp:176`) makes
+`TimedEvent`'s period `1/0 = inf` (`timedevent.h:32`) and `NextEvent` fires exactly once
+(`:46-52`) — ONE particle, ever. The FGD's 40 (`momentum.fgd:1965`) is Hammer's editor
+default, and Hammer writes it: a decompressing census of all 1310 BSPs finds `spawnrate` on
+4999/4999 `func_dustmotes` and 529/529 `func_dustcloud`, none <= 0, so nothing shipped is
+invisible for this reason. Fix: a per-kind `em_norate[]` counter (`cl_emit.qc:186`, counted
+at `:654-658`), subtracted from the residual and printed as `N with a rate <= 0, skipped
+(Source: one particle, ever)` (`:1752-1756`).
+
+**2. `ftesurf_fire` never reddened.** `rgbdelta` latches its change window from `die` AT PARSE
+TIME (`p_script.c:1846-1856`: `rgbchangetime = ptype->die` if still 0), the type was just
+memset (`P_ResetToDefaults :1066`) and `die` is parsed later, so the window was 0 and the
+check at `:7612` was never true. Static proof: the live engine's `r_exportalleffects` dump of
+the block carried `rgbdeltaf` and no `rgbchangetime` line, which `:2500-2501` prints whenever
+it is non-zero. Fix: explicit `rgbdeltatime 1.1` (`ftesurf.cfg:568`, in the block at `:553`),
+the maximum life. Only `ftesurf_fire` used `rgbdelta`.
+
+**3. One bad frame latched a map emitter-free for the session.** `Emit_LoadForMap` wrote
+`vbsp_em_map = serverkey("map")` before `getentitytoken`; `serverkey` can lead the entity
+data by a frame, a walk that saw no `{` had already latched, `Emit_Frame`'s compare then
+matched forever and `emit_list` said 0 emitters with no reason. `cl_sprites.qc` already does
+it right (`:155` latch, `:817`/`:824` opened flag, `:947-949` guard before latch). Fix: latch
+at the END of the walk, only if the lump opened; write `""` on failure so a restart of the
+SAME map still retries; and both execs — `particles/ftesurf.cfg` and the map's own
+`particles/<map>.cfg` — move behind the guard so the per-frame retry cannot exec a config once
+per frame. `developer 1` shows `emit: entity lump not readable yet for X, will retry`
+(`:1375`).
+
+**`vbsp_emit_ratemax` (200, `:553`).** The per-emitter `SpawnRate` ceiling `EM_RATE_MAX`
+(`:87`) applied at load; surf_boreas's one `func_dustmotes` writes 333 and Source runs it at
+333, so 200 there is 60% of Source's live count. `em_ratemax` is initialised to `EM_RATE_MAX`
+so the report cannot read "to 0" before the first map (`:740-742`); read once per map load.
+
+### B — the snow re-judge, in Source's units
+
+Source's `func_dustmotes` has SCALEMOTES (`func_dust.cpp:131-134`): half-width is
+`S*depth/10000` in VIEW space (`c_func_dust.cpp:234`, `:73`; `particle_util.h:128-146` builds
+an axis-aligned square), a constant `S*0.048` px at 1280x720 and `S*0.072` px at 1080p under
+fov 90 (both engines use the 4:3-horizontal convention, `scr_fov_mode 4`) — which is why
+Source's motes read as 2-3 px specks. FTE's quad is a DIAMOND at `org -/+ scale*pup` and
+`org -/+ scale*pright` (`p_script.c:6368-6371`) after `pup`/`pright` were scaled by 1.5
+(`:7153-7154`), so the drawn half-width is `1.5/sqrt(2) = 1.061` times what `:6325-6336`
+computes (`0.25 + 0.001*depth*s` with `scalefactor 0`). Source-exact dustmotes are therefore
+`scalefactor 0`, `scale 0.94 1.89` for the FGD default 10/20; the shipped `scale 11.5 23 /
+scalefactor 0.87` is Source plus a constant `1.061*(0.25 + 0.2175*s)`, about 3.9 world units:
+1.9x Source at 2000 units, 1.4x at 5000, 15-30x near. The build-51 claim "1.0x Source at
+boreas" held only as depth -> infinity. `func_dustcloud` has no SCALEMOTES (`:79-83`):
+half-width = S world units; FTE with `scalefactor 1` draws `0.265*s`, so Source-exact is
+`scale 377 754` for the FGD 100/200 and the shipped `40 90` draws 11..24 units. The cfg's
+"both dust classes share SizeMin/SizeMax 10/20" is true of dustmotes only; dustcloud is
+bimodal in the library (1/5 x163/151, 100/200 x52/84). Frozen in Source is one shot of
+`SpawnRate` permanent, never-aged particles at alpha 1 (`:167-173`, `:183-184`, `:98-104`);
+build 51's per-second treatment draws ~4x the count, fading and drifting. The Source-exact
+family ships as `particles/ftesurf_src.cfg`, a test asset nothing execs, block for block by
+name so an exec mid-map A/Bs against the shipped blocks (blend per the design's VPK read of
+`particle/sparkles.vmt`, `UnlitGeneric $translucent 1`, not re-verified in review). Measured
+causes of "fewer specks" on boreas: the clamp, but only inside the brush — from the spawn the
+brush's nearest point is 16437 units away, past its DistMax 10240, and `c_func_dust.cpp:66`
+skips every particle past DistMax, so Source draws NO `func_dustmotes` at spawn while FTE's
+emitter-level cull (d=5810) does — and the map's real snow, `tendies_snow01`, had no bake (C).
+Its `func_dustcloud *30` is culled at both vantages (8998 / 14943 vs 4096).
+
+### C — the .pcf bake tool, and the two bakes
+
+A peer's Patch 279 had independently rewritten `tools/pcf.py` (Radius Scale composition,
+`scalefactor 1`, scale x4, `spawnmode ball` with radial `spawnvel`, Color Random as `rgbrand`);
+this build's changes were re-applied onto that file by exact old/new blocks — the drafts'
+drop-in copy would have reverted 279, and their velocity-spread name collided with the
+random-force scalar `spread` (`TypeError` on tensor2; renamed `vspread`). Five faults, three of
+which also afflicted the shipped surf_tensor2 bake:
+
+* **Orientation.** `Velocity Random` is in the CONTROL POINT's local frame (its key is
+  literally `speed_in_local_coordinate_system`), and control point 0 of an
+  `info_particle_system` carries the entity's angles (`c_particle_system.cpp:134`
+  PATTACH_ABSORIGIN_FOLLOW; `particle_property.cpp:644-645`, `:669`; angles networked at
+  `particle_system.cpp:24` / `c_particle_system.cpp:59`). `tendies_snow01` is local X
+  -256..-512 on an entity pitched -90, so forward is UP (`mathlib.c:373`, `forward_z =
+  -sin(pitch)`) and the snow FALLS at 384; its sibling pre-fill box runs 6000 units DOWN, 16 s
+  of that fall. Build 52 passed `(-384, 0, 0)` unrotated — sideways along world -X forever.
+  `Emit_PsysVel` (`cl_emit.qc:485`) now rotates the local column by `makevectors(angles)` and
+  adds a world column (wind, terminal speed) unrotated. The Y sign (`-v_right` = Source left)
+  is unverified; no baked system has a local Y. On tensor2 27 of 44 entities ARE yawed (the
+  drafts said none), harmlessly: they carry only portal/water_splash systems with zero local
+  velocity.
+* **min > max boxes.** Hammer lets the author type min > max and this library does;
+  `(max-min)/2` without `abs` made every half-extent negative, the `> 0.5` test failed, and the
+  1024x8192 snow sheet — plus tensor2's stage6_rain, stage9_rain01, bonus4_rain, bonus3_rain
+  (`surf_tensor2.cfg:122,159,196,214`) — baked as POINT emitters. Box centres were dropped too:
+  stage7_rain01 is a sheet 1000 above its entity, tendies_endparticle04 456 below, spawn_rain02
+  184 above. `abs` (`pcf.py:368`, `:461`), and a centre column QC adds to the origin.
+* **Movement Max Velocity** (`pcf.py:520-529`). Nine boreas systems pair gravity 999/99999 UP
+  with a cap of 4..512 — reached in `cap/g` = 0.004..0.5 s, then the particle RISES AT THE
+  CAP. FTE has no clamp, so the gravity alone turned a 64 u/s puff into a 6000 u/s rocket.
+  When the cap is reached inside the lifetime: a constant world velocity of `cap` along the
+  gravity vector and no gravity; otherwise the gravity stands and the cap bounds the initial
+  speed. Approximate: Source spends that first fraction of a second accelerating from rest.
+* **Children** (`pcf.py:690-704`). A definition's `children` start with the parent at the same
+  control points (`particles.h:1550-1554`). On boreas the visible end-zone effect IS the
+  children — `tendies_endparticle01` is six sparks at alpha 0.11; its four children are the
+  1600-unit glow and the 3000-unit laser — every alch system carries its sprite-trail child,
+  and tensor2's `water_splash01` carries `water_splash02`. One extra index line per link,
+  tagged with the parent's name; QC starts one emitter per tag behind
+  `vbsp_emit_psys_children` (`cl_emit.qc:567`, `:1336-1340`).
+* **The spread's frame** (`pcf.py:657-663`). `spawnvel`'s two values live in the EMIT
+  DIRECTION's frame (`axis[2] = normalize(dir)`, `p_script.c:4849-4857`, `:5336-5338`), so the
+  spread component along the mean velocity is the second number and the perpendicular ones
+  the first. For rain (spread on Z, falling along -Z) the old code got that by accident; for
+  the snow (spread on local X, falling along -X) it is the difference between a 128 u/s scatter
+  in fall speed and a 128 u/s sideways jitter. Oblique means keep the old mapping and are
+  reported.
+
+Also: the header named `tensor2_particles.pcf` for every map (`HEADER` hard-coded it); it now
+names the real file (`pcf.py:734`, `:799`). Three further portal-motion faults were fixed on
+the peer's report — Velocity Noise collapsed to a scalar, a random force baked as a persistent
+velocity, Alpha Fade In Random unread — their effect on the shipped blocks was not
+re-verified in the run. **The index line grows from ten columns to EIGHTEEN**:
+
+    psys <map> <name> <rate> <lx> <ly> <lz> <maxp> <die> <maxdist> <ox> <oy> <oz> <wx> <wy> <wz> <jit> <parent|->
+
+written by `psline` (`pcf.py:802-818`) and documented at `cl_emit.qc:313-330`; the reader
+(`:396-417`) takes columns 11-17 (offset, world velocity, jitter) and the parent only when
+`n >= 18`, so a ten-column line from an older bake still reads exactly as build 52 read it.
+`jit` is the isotropic `random_speed` plus the random-force walk, handed to `em_jit`.
+
+**surf_boreas (new bake).** One pcf, `particles/tendies_particles.pcf`; 13 systems translated,
+2 skipped (`tendies_snowinst01`, an `emit_instantaneously` 128-flake pre-fill at rate 0, once
+as a system and once as a dropped child), 7 child links, the only operator not understood
+`twist around axis`; 20 index lines. The snow block: `spawnmode box`, `spawnorg 1448.15 0`,
+`spawnvel 0 128`, no gravity, `scale 32 64` (279's 4x). Demand: 32.0/s for the nine entities
+(4x2.667 + 2x1 + 2.667 + 0.667 + 16) plus about 86/s of children, about 118/s against
+`vbsp_emit_budget` 2000, throttle 1.000; steady state about 330 parents (the snow 256 of that)
+plus about 130 children. Source's own snow is 16 flakes/s into one 1024x8192 sheet — it is thin
+there too — plus 128 pre-filled flakes for the first 16 s that are not emulated.
+
+**surf_tensor2 (re-baked).** Against the shipped cfg the ONLY block changes are the four rain
+systems gaining `spawnmode box` and `spawnorg 1639.51 1500 / 2752 1024 / 4698.63 1500 /
+1772.46 992` (four hunks, nothing else — the 279 output is otherwise byte-identical); 22 index
+lines with the wind moved to the world columns, and on the four fixed boxes it CHANGES as a
+side-effect of `t_eff` (400 200 -> 300 150 for stage6/bonus4; stage9_rain01 204.8 102.4;
+bonus3_rain 198.4 99.2); 2 child links. `data/mapparticles.txt`: 1+22 tensor2 and 1+20 boreas
+lines. With children on, tensor2 gains 11 `water_splash02` emitters at 40/s (+440/s demand,
++550 live) — which is why the cvar ships 0.
+
+### D — the build-48 stats, read as numbers
+
+Nothing printed stats 85-89 (`sh_defs.qc:459-468`; `sv_main.qc:354-357`, `:369`):
+`SV_TimerReport` had no `run_st_end*` / `run_t_pbwas` line and the CSQC `timer` command only
+forwarded. Two ungated diagnostics: the server prints `stage close: rec %g seg %g word %g
+ticks %g  pbwas %g` after `stage class:`, and the client prints its own reading first —
+`cl stats: endrec endseg endst endticks pbwas`, `cl splits: n over pend` with one
+`row i: kind seg ticks delta class` per split, `cl results: open ticks pb tag rank of` and
+`cl results: track startseg seen  toast seg ticks word` — so a value that is real on the server
+and 0 on the client is a stat that never reached the wire. bhop_eazy is the map: its three
+stages, end and bonus all sit on one plane at z 64..224. Every headless crossing there is a
+noclip flight (188 `func_door` blocks over fall teleports; the user's clean PB zigzags 665-1296
+units off every straight line), so every headless stage closes `SF_KNOWN|SF_CHEAT|SF_DIRTY`
+(200): the red `!` is provable; the `~` mark, a WRITTEN ghosted stage file and the
+`run_stageghost 0` falsifier are hand-only and handed over with a two-minute protocol. The tree
+is at build 52 and the card never auto-fired until build 51 renamed `ui_rs_armed` to
+`ui_rs_seen`, so b48d tests it for the first time. That noclip-only conclusion is bhop_eazy's;
+the other 1309 maps are uncensused.
+
+**Two defects found on the way, not fixed here.** (1) `cmd say !s N` drops the number:
+`Cmd_ForwardToServer_f` (`cmd.c:3074`) forwards `Cmd_Args` verbatim, the server tokenises so
+`argv(1)` is `!s` with an empty tail, and `n < 1` becomes 1 (`sv_zones.qc:972`). Measured in
+`p270s2.log:572-590`; the menu bootcheck at `m_main.qc:1769` uses exactly this route and has
+been printing `!s -- stage 1` for `!s 2`. Console `say` goes through `CL_Say` (`zqtp.c:3905-3912`)
+quoted, so the cfgs use `say`. (2) `Results_LegName` (`cl_results.qc:279-288`) prints
+`stage <startseg>` while `!s N` maps to seg N-1 (`sv_zones.qc:970-973`) and `FS_LegDir` names
+`stage_<startseg>`: a `!s 3` run's card reads `stage 2` and its file lands in `stage_2/`.
+Decision owed to Lex.
+
+### E — `tools/reccheck.py` had never seen a ghost in a `.view`
+
+Found by b48c, below: `check_view` knew only 6-column frames (`reccheck.py:963-964`), but the
+client writes the sidecar's own copy of the build-30 ghost edge, `ghost <0|1> <cltime>
+<ticks>`, into the `.view` when the camera detaches and re-attaches — a marker row with no
+angles, not a frame — so every ghosted run's `.view` faulted as `4 columns, expected 6`. The
+`.rec` side had always known its own two-field `ghost <0|1> <ticks>` (`:375-386`) and judged
+the windows (`:428-520`); the sidecar's rows were simply never taught. `check_view` now
+(`:935-962`) accepts the row, requires exactly three fields, all numeric, a state of 0 or 1
+and an alternation with the previous edge, and keeps them in `view_ghosts`; frames are read as
+before. A checker gap, not a build-48 regression, and the census below is unchanged by it.
+
+### Verified
+
+Binaries: `psboreas`, `em_boreas_a/b`, `em_shade`, `b48a/b/d` and b48c's first run were
+batch 3 (08:05-08:11), on a peer's redeploy — exe 04:17:59 (8213751), hl2 dll 03:26:34
+(482095), and progs 04:20-04:21 (csprogs 2676214, qwprogs 1087358, menu 177894: the peer's
+Patch 287 build, a superset of this build's QC checkpoint and c8's finished build-54 QC), so
+the QC under test is that superset. b48c's re-run (batch 4, 08:24) and `em_norate` (batch 5,
+08:30) ran on the post-review exe 08:16:27 with the same progs. Emitters read at V2
+`setpos 12160 0 11000 -20 90 0` (V1, the spawn, is a Source-draws-nothing control, recorded not
+graded); logs `logs/em_boreas_a.log`, `em_boreas_b.log`, `em_shade.log`, `psboreas.log`,
+`em_norate.log`, `b48a.log` .. `b48d.log`.
+
+| arm | measured |
+|---|---|
+| boreas A (`vbsp_emit_ratemax 200`) | `clamped 1 SpawnRate to 200 (vbsp_emit_ratemax)` — the func_dustmotes, 333 -> 200; `demand 232.002/sec` (the record does not decompose it; the clamped 200 plus the nine baked systems' 32.0/s from C accounts for it exactly); V2 pool 807 |
+| boreas B (`ratemax 1000`) | no clamped line; `demand 365.002/sec`; V2 pool 1336; B/A 1.66, inside the 1.5..1.8 band (near 1.0 would have meant the cvar not reaching `Emit_Add`); V3 (both emitters inside the cull) A 1916 (806+806+232), B 2441 (1335+795+237) |
+| boreas C (`exec particles/ftesurf_src.cfg`, Source-exact blocks by name) then D (re-exec `ftesurf.cfg`) | C: pool 105/63 right after the redefinition, 1322 after 8 s — back to B's count; D: V3 2467, V1 1622. Not measured: the pixel reading of C's specks against B's blobs |
+| shade S1 (cull on) / S2 (`vbsp_emit_dist 0`) / S3 / S4 | S1 `demand 565/sec, budget 2000, throttle 1.000`, pool 2267 (predicted ~2260); S2 `demand 4160/sec, budget 2000, throttle 0.481`, pool 8014 (predicted ~8000; S2/S1 3.5 — 7.4 would have meant the budget not applied); S3 7991; S4 back on shade `339 emitters`; one `execing particles/ftesurf.cfg` per map load (log lines 511 shade, 1273 boreas, 2596 shade), no `not readable` retry line |
+| finding 1, in the shipped data | neither map prints `unaccounted` or `with a rate <= 0` (none expected: every shipped entity carries `SpawnRate > 0`) |
+| finding 1, forced (`em_norate.cfg`, the LIVE `data/mapparticles.txt` edited for one run) | the first attempt zeroed the file's first tensor2 line, `water_splash02_short`, which NO entity on the map references (`seen 44 created 44`, no skip line — an uninformative edit, not a miss); the second zeroed `bonus4_rain` (line 10, rate 150 -> 0), which entities do reference: `emit: psys surf_tensor2_bonus4_rain -> handle -36 rate 0 dist 6000 ...`, `emit: 51 emitters on surf_tensor2: 8 func_dustmotes 43 info_particle_system`, `emit_list` `info_particle_system seen 44 created 43 off 0` and `1 with a rate <= 0, skipped (Source: one particle, ever)`, no `unaccounted` line. The live file was restored after both attempts, hash-verified (`chain4.log` / `chain5.log`) |
+| finding 2 | `r_exportalleffects` from the em_norate run writes `ftesurf_fire` with `rgbdeltaf -0.235294 -0.54902 -0.156863` followed by `rgbchangetime 1.1` (`particles/export.cfg:402-403`) — the static proof the refutation asked for. Not measured: the `emit_test fire 200` pixel reddening |
+| `psboreas.cfg` — rotation | `emit: psys surf_boreas_tendies_snow01 -> handle -40 rate 16 dist 100000 vel 1.67852e-05 0 -384 jit 384` — the rotated local velocity, straight down (`-384 0 0` would have been unrotated, `0 0 384` a pitch sign inverted) |
+| `psboreas.cfg` — children | OFF: `info_particle_system seen 9 created 9 off 0`; ON: `seen 9 created 20 off 0` (the eleven children) with the `child of` lines (alch02 of alch01 rate 1, endparticle02..05 of endparticle01). Not measured: the `psys: 13 baked system(s) + 7 child link(s)` and `demand 118.xx/sec` lines are not in the record |
+| `psboreas.cfg` — the snow falls | A: 335 particles 4000 units below the sheet after 14 s; B control (`vbsp_emit_psys 0`): 0; end zone D (children off) 158, C (children on) 386; `psboreas_a1.png`, from inside the column, shows the flakes looking up. Not measured: the signal-vs-floor pixel ratio, and the rewritten-to-world-X counter-arm |
+| b48a | steps 0/1 all zero on both sides; step 2 server `stage close: rec 1 seg 0 word 200 ticks 290 pbwas 0`, client `endrec 1 endseg 0 endst 200 endticks 290` — identical; step 3 `rec 2 seg 1 ticks 276` both sides, `toast seg 1 ticks 276 word 200`; step 4 unchanged. Nothing written by b48a |
+| b48b | `cl splits: n 2`, rows class 200/200; step 5 `timer: wrote data/runs/bhop_eazy/main/cheat.rec (829 samples, 79 padding)` and `0:10.410 (practice -- not saved)`; step 6 replay `n 1`, row class 0. `b48b_marks.png`: the split block is covered by console notify text in that cfg (`con_notifylines` not 0), so the red `!` glyph is proven by the class word, not the picture |
+| b48c | `ghost -- your body is still running; the clock has not stopped`; `ghost 1 ghosted 1`; `stage: ... dirty 1 ghosted 1`; `ghost 0 ghosted 1`; step 4 `stage close: rec 2 seg 1 word 216 ticks 499` (bits 16, 64, 128), client `endst 216 endticks 499`, `row 1: ... class 216`. Its `cheat.rec` was overwritten by b48d before reccheck could read it, so b48c was re-run in batch 4 with reccheck immediately after: `ok cheat.rec` (version 4, samples 1112, records 12, stagestarts 3, class cheated, ticks 1224) — the ghost-window and header-flag checks passed silently (reccheck records ghosts/ghosted in `r.info` but its summary printer does not list them; the header flags value is therefore not in the record). `FAIL cheat.view: line 317 has 4 columns, expected 6 / line 491 ...` — those two lines are the sidecar's own ghost edges, `ghost 1 7.4257 313` and `ghost 0 9.3323 503`, section E; after the fix `ok cheat.view`. Not measured: `run_stageghost 0` before `map` still showing bit 16 |
+| b48d (`best.pb` pre-step) | `0:07.010 (practice -- not saved)`, `main/cheat.rec` written, `cl results: open 1 ticks 701 pb 5354 tag 4`, `track 0 startseg 0 seen 0`, server `pbwas 5354`; `b48d_main.png` shows the card (hero 0:07.010, green -0:46.530, `bhop_eazy - main - cheated`, `local -- no local archive yet`, `world -- no board yet`, rows stage 1/2/3 with red `!` and finish, footer `f1 or mouse3 for cursor  esc to close`); `main_closed` shot after esc. Bonus: `!b -- bonus 1 (teleDestPos, -2112 -1720 64)`, `zone_goto: 5 -- start, track 1, segment 0`, `bonus_1/cheat.rec`, `open 1 ticks 55 pb 0 tag 4`, `track 1 startseg 0`. Stage: `!s -- stage 3 (teleDestPos, -376 -1728 64)`, armed, `zone_goto: 2 -- stage, track 0, segment 2`; 6a viewpos 154.4 (out of zone 2); 6b viewpos `setpos 2624.0 -864.0 144.0`, `stage_2/cheat.rec`, `stage close: rec 6 seg 2 word 200 ticks 172 pbwas 1389`, `cl results: open 1 ticks 172 pb 1389 tag 4`, `track 0 startseg 2`; no `timer: armed` after 6b — the card reads `stage 2` and the file lands in `stage_2/`, defect (2) above, as predicted. Not measured: the flight time and the `results` toggle's `open 0` line |
+| reccheck | `192 file(s) checked, 37 with faults` = the 188/37 baseline + 3 bhop_eazy `cheat.rec` + 1 `surf_boreas/main/cheat.rec` (written by the boreas runs' timer). Fault count unchanged; no FAIL naming a bhop_eazy path after section E's fix. The design had expected N + 5 files; the run made N + 4 |
+
+`data/runs/bhop_eazy` did not exist before batch 3 (created 08:09:35 by b48b); `best.pb` is
+the archive copy; `data/saves` nothing new. Cleanup: `data/runs/bhop_eazy` and
+`surf_boreas/main/cheat.rec` + `cheat.view` are gone today (the surf_boreas dir itself is
+Lex's and stays); `data/mapparticles.txt` was restored after both em_norate edits,
+hash-verified; the shared gamedir edit was announced to the peer before and after. Pixel
+positions assume 1920x1200 or are scaled from `hud_splits_x 0.045`, `hud_splits_y 0.20`,
+`hud_results_x 0.72`.
+
+### Files
+
+`cl_emit.qc`, `particles/ftesurf.cfg`, new `particles/ftesurf_src.cfg`, `cfg/default.cfg`
+(one comment), `tools/pcf.py`, `tools/reccheck.py`, new `particles/surf_boreas.cfg`,
+`particles/surf_tensor2.cfg`, `data/mapparticles.txt`, `sv_timer.qc`, `cl_main.qc`; new
+`cfg/testrun/em_boreas_a.cfg`, `em_boreas_b.cfg`, `em_shade.cfg`, `em_norate.cfg`,
+`psboreas.cfg`, `b48a.cfg` .. `b48d.cfg`.
+
+### New cvars, and reverting
+
+    vbsp_emit_ratemax        200  per-emitter SpawnRate ceiling at load; 0 or less = EM_RATE_MAX.
+    vbsp_emit_psys_children  0    start a baked .pcf parent's children with it. 0 = build 52.
+                                  Both read once per map load; a change needs a map change.
+
+The three emitter fixes, the tool fixes and the checker fix have no cvar: each corrects a read
+of Source, of the engine or of the client's own sidecar that had no defensible old value.
+`ftesurf_src.cfg` is not exec'd by anything.
+
+---
+
+## Patches 282-285 — why the HUD vanished, and why joined maps were untextured
+
+**APPLIED. 282, 284 and 285 VERIFIED against the live Pi. 283 is built and its
+prerequisite test passes; the flicker itself is unverified and needs a human.**
+
+Files: `engine/client/pr_csqc.c`, `cl_parse.c`, `cl_main.c`, `client.h`,
+`engine/server/sv_init.c`, `engine/common/pmovetst.c`, `common.c`,
+`ftesurf/cfg/default.cfg`.
+
+### The report
+
+> *"When connected to public lobbies the hud vanishes and you have Health and
+> Armor at the bottom of the screen sometimes? idk I think it depends on the
+> server or map the server is running?"*
+
+Both halves of that sentence turned out to be literally true, and for two
+different reasons.
+
+### Patch 282 — make the silence audible
+
+FTESurf's entire HUD is CSQC: `HUD_Draw` is called only from `CSQC_UpdateView`
+(`cl_hud.qc:3781`, `cl_main.qc:871`) and `cl_main.qc:768` sets
+`VF_DRAWENGINESBAR 0`. With no CSQC the engine takes the `V_RenderView` arm
+(`gl_screen.c:194`) and draws Quake's stock status bar — armour at x=24, health
+at x=136 (`sbar.c:2279-2338`). Exactly the reported symptom.
+
+`CSQC_Init` had six ways to fail and five of them printed nothing a player would
+see. The worst is not even an error path: with an empty `*csprogs` the caller
+passes a NULL name, `csqc_nogameaccess` is set, and **the load block is skipped
+entirely** — the client's own perfectly good `csprogs.dat` is never opened,
+`progs.dat` is tried and missing, and the function returns false having printed
+nothing at any developer level.
+
+Added `CSQC_FailReason()`, latched at each abort and printed **at the call site**
+(`cl_parse.c`), not in `CSQC_Init` — that function also runs for demos, csaddon
+and listen servers, where "no csprogs" is legitimate. The print names the
+advertised checksum and size beside the reason, and that pair is what
+distinguishes the two failure shapes from a player's console with no developer
+build. Server-side half in `sv_init.c`, reported only when `sv_csqc_progname` is
+non-empty so a mod without csqc stays quiet.
+
+Also ported Patch 30's self-heal to the **QuakeWorld** path, which never had one:
+`Sound_CheckDownloads` enqueues `csprogs.dat` once and never checks the bytes,
+and `CL_CheckOrEnqueDownloadFile` early-outs on any file that already exists — so
+a truncated or stale `csprogsvers/<crc>.dat` was permanent for the session. And
+the QW enqueue hardcoded `"csprogs.dat"` instead of honouring `*csprogsname`,
+which the NQ arm has always done.
+
+Cvars `csqc_warnfail` and `cl_download_csprogs_selfheal`, both default 0.
+`csqc_warnfail` must stay 0 upstream: a plain QuakeWorld server legitimately
+advertises no csqc, and erroring on every one would be noise on somebody else's
+game.
+
+### Patch 285 — THE ACTUAL CAUSE, and 282 is what found it
+
+The diagnostic printed, against our own Pi:
+
+```
+csqc: no client game -- the server advertised no csprogs (empty *csprogs ...)
+      Server advertised *csprogs "(empty)" size "(empty)".
+```
+
+while `rcon serverinfo` on that same server, at that same moment, showed
+
+```
+*csprogs      0x60a5a738
+*csprogssize  0x2708ee
+```
+
+Those two facts side by side are the whole bug. Measured within one connection:
+
+| when | `*csprogs` in `cl.serverinfo` |
+|---|---|
+| at the CSQC decision point | `""` |
+| two seconds later | `0x60a5a738` |
+
+**It is a race.** The client decides whether to start CSQC as soon as the
+modellist is complete. The server's serverinfo arrives as a `fullserverinfo`
+**stufftext** (`cl_parse.c:7262`), which goes through the command buffer and
+executes a frame later. Nothing retries: `CSQC_Init` is re-run only on the next
+`serverdata`, i.e. the next MAP.
+
+So whether you get a HUD is a coin flip, re-rolled on every map change — which is
+precisely why it read as *"sometimes, and it depends on the map"*. The user's own
+qualifier was the diagnosis.
+
+Fix: wait, bounded, and **only when the key is absent**, because an empty
+`*csprogs` is indistinguishable from "this server genuinely has no csqc" and
+therefore cannot be waited on by signal. `cl_csqc_waitforserverinfo`, default 0
+(the old race), 2 in `cfg/default.cfg`. A server with no csqc pays the two
+seconds once per connect and nothing afterwards.
+
+*Not* fixed by re-initing CSQC when the key later arrives: `CSQC_Init` has to run
+inside the staged load, before the world and the CSQC entity set are built, and
+hoisting it out is a far larger change than the bug warrants.
+
+### Patch 284 — `fs_automount` never ran for a joining player
+
+`FS_AutoMountForMap` had **exactly one call site in the entire engine**:
+`sv_ccmds.c:1091`, inside `SV_Map_f`. It is the only thing that reads
+`data/mapdeps.txt` and mounts the Steam game a map's materials live in. So it ran
+when you picked a map in your own menu and **never when you connected to a
+server**.
+
+FTESurf ships no maps; nine of the eighteen maps in the three lobby rotations
+additionally need TF2, CS:GO or Portal 2. All nine loaded untextured for every
+joining player — *including players who own the game*. The asset was never
+missing; the mount that finds it was not wired to the path a joining player takes.
+
+Not solved by adding those games to `fs_addons.txt`: measured and rejected in
+`fs_addons.default.txt:100-108` — mounting CS:GO and TF2 at boot cost **13 seconds
+of every launch** (339,103 files indexed against 48,537). Per-map is the whole
+point of `fs_automount`.
+
+**PLACEMENT WAS THE WHOLE JOB.** The first attempt put it in `CL_LoadModels`, and
+the test said so plainly: surf_utopia loaded, reported 8 unresolved materials, and
+only *then* printed `fs_automount: surf_utopia needs "steam:Team Fortress 2/tf"`.
+Right pack, right map, too late to matter — `CL_ParseModellist` pre-loads the
+worldmodel as the list arrives. Moved to `CL_ParseModellist` at `nummodels == 1`,
+ahead of the `*mappref` hint, since a hint cannot bias toward a searchpath that
+does not exist yet. `CL_LoadModels` keeps a late call as a net for other
+protocols; a name check stops the two calls running `FS_Cache_EndMap` twice
+across one map boundary.
+
+Cvar `cl_automount`, default 0. Inert on a listen server, where `SV_Map_f` has
+already done it.
+
+### Patch 283 — the kitsune portal flicker
+
+Two independent client/server asymmetries, both cvar'd, both **provably no-ops on
+the server**.
+
+**Order.** Client: world[0], CSQC portals, then packet entities. Server: world[0],
+grid entities, then portals **last**. Both `PM_TestPlayerPosition` and
+`PM_PlayerTrace` recover from `allsolid` by scanning **forward only** (`j = i+1`)
+for a portal to carve with. Fine when the thing you are stuck in is the world;
+wrong for anything else — and kitsune's doorways are cut through a `func_brush`.
+The server carves, the client does not, `PMSrc_CheckStuck` shoves the origin
+0.25-16 units every tick, and the rendered position alternates.
+`pm_portalcsg_scanall` scans all indices instead. A no-op on the server because
+portals are appended last, so every portal already satisfies `j > i`.
+
+**skipent.** `pmove.skipent` is the player's **SSQC** entity number while CSQC
+portal physents carry **CSQC** edict numbers, compared with `==`. `cl_ents.c`
+already documents the hazard and does nothing about it. It is not hypothetical:
+`Portal_LoadFromWorld` is the first thing `CSQC_WorldLoaded` does, so kitsune's 18
+doors take the lowest CSQC edicts — exactly the range a player's number occupies.
+**Which doors exist for prediction therefore depends on which player slot you
+joined in.** `pm_skipent_portals` refuses to let skipent hide a portal; a portal is
+never the entity you meant to skip. No-op on the server, where skipent is -1.
+
+Remote-only, and that is explained rather than assumed: at ~0 ping
+`CL_PredictMovePNum` replays **zero** commands, so the client's own pmove answer
+is never used. At 30-60ms it re-simulates 2-4 ticks per rendered frame.
+
+Rejected: moving `CL_AddCSQCPortalsToPmove` after the packet entities. That
+restores the hazard its own P203 comment names — a map with enough networked
+solids to reach `MAX_PHYSENTS` drops the portals, the physents a player can least
+afford to lose. Fixing the *scan* removes the ordering dependence on both sides.
+
+### Verification
+
+Live, against the Pi, surf_utopia (needs TF2) and surf_kitsune:
+
+| | before | after |
+|---|---|---|
+| `csqc: no client game` | fired every connect | not fired |
+| `hl2_unresolved` (surf_utopia) | **8** | **0** |
+| `N material(s) did not resolve` | present | absent |
+| `fs_automount_state` | 4 (did not run) | 1, then 2 (cache-served) |
+| client vs server portal count (kitsune) | — | **18 vs 18, agree** |
+
+The portal count match is T4 from the plan and it matters most as a *negative*:
+`cl_portal.qc:426-429` says a mismatch is the tell, so agreement eliminates the
+entire "the client built the wrong doors" family and leaves the physent array as
+the remaining explanation.
+
+### Still unverified
+
+* **The flicker itself.** 283 is built and both cvars are live, but "does it still
+  rubber-band between the doors" needs somebody standing in the doorway at real
+  latency. The A/B is one console command per side.
+* **The Pi has not been rebuilt.** 282's server-side print and 283's server half
+  are absent there. Neither matters for the fixes above — 283 is a client-side
+  no-op on the server by construction, and 285/284 are client-side entirely — but
+  the Pi will not report an unreadable csprogs until it is rebuilt.
+* **A second FTESurf client has never been on a server with these builds**, so
+  nothing has exercised the two-player paths.
+
+---
+
+## Patch 287 — a portal's far side is in a different AREA, and it was culled by the near side's  *(APPLIED AND VERIFIED, engine only — `gl_rmain.c`, `renderer.c`; `build.ps1 -Engine`)*
+
+Files: `engine/gl/gl_rmain.c`, `engine/client/renderer.c`, `ftesurf/cfg/default.cfg`.
+
+### The report
+
+> *"The kitsune teleports are not fighting me anymore, idk why, but they don't
+> visuallu portal correctly any more, no projection of the next level, not even
+> locally anymore."*  Later, unprompted: *"The black portal in the center should
+> show you a part of the next map but currently you see black, no red room"*.
+
+Lex also said *"I was making a tone of material edits, probs me"*. They were not.
+
+### What it is
+
+Source BSPs cut the world into **areas** joined by areaportals, and
+`r_refdef.areabits` records which are reachable from the camera. It is derived
+from `r_refdef.vieworg` **once** and then latched by `areabitsknown` —
+`r_surf.c:3676` for the engine's own loaders, `mod_vbsp.c:7409` for Source.
+
+`GLR_DrawPortal` moves `vieworg` to the far end of the link (`TransformCoord`,
+`gl_rmain.c:1838`) and **never cleared that latch**, so the recursed view was
+tested against the areas of the room the *player* is standing in.
+`VBSP_RecursiveWorldNode` then refuses every leaf whose area is not in that set
+(`mod_vbsp.c:6994`) and the far room draws nothing at all.
+
+**`R_DrawSkyroom` has always cleared it** — `gl_warp.c:365`, comment verbatim
+*"recalculate areas clientside"*. That is exactly why the 3D skybox works and
+portals did not. This patch is that one line, for portals.
+
+Measured on surf_kitsune's exit doorway (`setpos 0 -765 133 0 90 0`), developer 1:
+
+```
+[world] recurse 0: area  4 cluster  68 vis yes ->  99 meshes   the room
+[world] recurse 1: area  6 cluster  99 vis yes -> 270 meshes   3D skybox
+[world] recurse 1: area 11 cluster 131 vis yes ->   0 meshes   the door
+```
+
+A real cluster, `vis yes`, and nothing queued — because the near view reports
+`area 6 of 13: 1 area(s) reachable` and area 11 is not it.
+
+Safe against leaking into the parent: `r_refdef` is restored wholesale from
+`oldrefdef` at `gl_rmain.c:2085` and `areabits`/`areabitsknown` are members of it.
+
+### Two wrong turns, both instructive
+
+**`prog 0` in the shader census is not a fault.** `[shader] ftesurf_portal sort 3
+prog 0 passes 1` had me chasing a missing GLSL program. The census prints
+`s->prog`, and a `program` inside a **pass** block sets `pass->prog`
+(`Shaderpass_SLProgramName`, `gl_shader.c`), never `shader->prog`. It reads 0 for
+every such material and always has — it was constant across every log going back,
+which is what should have settled it the first time.
+
+**`fbo centre mean 63 max 255` is not "there is content".** The readback probe at
+`gl_backend.c:6310` sums **RGBA**, so 8×8 pixels of `(0,0,0,255)` average to
+`64*255/256 = 63.75` → prints 63. 63 with max 255 is the *signature of pure
+opaque black*, i.e. the probe's own "the recursion drew nothing" case, and I first
+read it as the opposite. The probe would be worth changing to print RGB and A
+separately.
+
+### The control that mattered
+
+`r_portalfbo 0` made the doorway show a white band and I concluded the far view
+was fine and the FBO paint was broken. **`vbsp_portal_render 0` renders that same
+doorway identically** — so the band was the wall *behind* the door and neither
+path was drawing anything. Without that control the patch would have gone into
+the FBO code, which was innocent. (Same shape as the flipbook-read-as-frozen
+entry in the A/B memory.)
+
+### Verification
+
+One run, one vantage, both directions (`cfg/testrun/p287f.cfg`):
+
+| | doorway |
+|---|---|
+| `r_portalareas 0` | black — reproduces the report on demand |
+| `r_portalareas 1` | the far room, red parasol and all |
+| `r_portalareas 0` again | black again |
+
+The parasol is the same object visible through this doorway in
+`screenshots/g12_kitsune_exit.png` from Patch 210 on 09-04, which is the last
+known-good picture of this portal.
+
+Ruled out first, each with a stated falsifier: **`scripts/common.shader`** (Lex's
+own new file — moved aside, pictures pixel-identical); **the 09-09 03:41 engine**
+(the 21:55 build renders byte-identically); **the material** (`r_showshader`
+reports `sort 3 (SHADER_SORT_PORTAL)`, one `$refraction` pass, `portalfbo`
+accepted); **the doors** (18 apertures, matching the server).
+
+Cvar `r_portalareas`, default **0** (today's behaviour exactly), **1** in
+`cfg/default.cfg`. A map with no areas has everything reachable from everywhere
+and is unaffected either way.
+
+### Not done here
+
+The **alpha ordering** half of the same report (*"the rainbow backdrop is being
+rendered in front of all the alphas sometimes"*) is untouched. `plugins/hl2/mat_vmt.c`
+currently carries ~656 uncommitted lines of another session's work that is
+actively reordering `additive` vs `translucent` and rewriting blendfuncs — the
+exact machinery that decides alpha draw order. That is theirs to finish; editing
+it concurrently would collide.
+
+## Patch 286 — the combine shield's flipbook, which Patch 279 resolved and could not draw, and the two shader shapes that had to be given up on first  *(APPLIED AND COMPILING, ON SCREEN UNVERIFIED — plugin only: `plugins/hl2/mat_vmt.c`, `plugins/hl2/glsl/vmt/twotexture.glsl`, two hunks + a cvar in `plugins/hl2/mod_vbsp.c`)*
+
+Reported, after 279 shipped: *"I swear the portals do fade in and out over
+distance? and the masking effect also works, it doesn't MATCH source, but it's
+'there'."*
+
+That is a precise bug report. Two of the material's three features had landed —
+the `PlayerProximity` alpha fade and the diagonally scrolling second layer — and
+the third had not. `comshieldwall.vtf` is 256×256 with **31 frames**, and the
+proxy chain picks one by **distance**:
+
+```
+$playerdistance2 = PlayerProximity × .2
+$frameminusten   = $playerdistance2 − $ten          ($ten is "24")
+$frame           = Clamp($frameminusten, 0, 30)
+```
+
+frame 0 inside 120 units, frame 30 beyond 270. We have been drawing frame 0
+forever, which is why the web gets **brighter** as you approach but never
+**denser** — and "denser vs brighter" is exactly the difference between "it's
+there" and "it matches".
+
+### The VMT sets both frames from the same clamp, and that is what makes this possible
+
+Read out of the file rather than assumed. `comshieldwall.vmt` carries **two
+identical `Clamp` proxies**, one writing `$frame` and one writing `$frame2`:
+
+```
+Clamp { srcVar1 $frameminusten  min 0  max 30  resultVar $frame2 }
+Clamp { srcVar1 $frameminusten  min 0  max 30  resultVar $frame  }
+```
+
+Both layers therefore step together. Combined with `$basetexture` and
+`$texture2` naming the **same file**, the whole material is *one array read
+twice, at two texcoords and one layer*. That is a one-sampler shader — and one
+sampler is the only arrangement that has ever bound an array here.
+
+(`VMT_ResolveProxies` only looks for `$frame`; the `$frame2` twin is redundant by
+construction and is not parsed a second time.)
+
+### The two shapes that were given up on, so nobody re-derives them
+
+Sampling a flipbook needs `sampler2DArray`, which is filled only by
+`map "$2darray:…"`, and `map` is a **pass** keyword. Patch 279 tried both ways of
+getting a pass and a second texture into the same program, and both failed
+**silently**:
+
+| shape | what happened |
+|---|---|
+| program inside the pass + top-level `uppermap` | `prog 0 passes 2`; a debug build that painted the two samples into red and green came out **black in both channels** |
+| top-level program + one pass per sampler | `prog 1 passes 2`, and the surface stopped reaching the rasteriser at all — a shader forced to output opaque red drew **nothing** |
+
+What 279 shipped instead avoids passes entirely: a top-level program with
+`diffusemap` and `uppermap`, which are shader-scoped **default-texture** slots
+the program reads without a pass list existing. Its cost is that there is no
+default slot of array type.
+
+**The heading on that block in `mat_vmt.c` said "a top-level program with two
+passes" and the code beneath it emitted no passes at all.** It was a theory left
+standing next to the code that had disproved it, and it is corrected here — that
+is precisely the failure these essays exist to prevent.
+
+### What Patch 286 does
+
+`#FRAMES`, a permutation of `vmt/twotexture`, taken only when a frame proxy
+resolved **and** `$basetexture` and `$texture2` name the same file. It emits
+`vmt/animated`'s proven shape — one pass, the program **inside** it, one
+`map "$2darray:…"`, `!!samps =FRAMES shield:2DArray=0` — the same binding Patch
+195 has been running on 927 materials:
+
+```
+{
+    program "vmt/twotexture#SCROLL=…#SCROLL2=…#PROXFADE=…#PROXFRAME=.2,24,0,30#ADDITIVE#FRAMES"
+    map "$2darray:materials/effects/combineshield/comshieldwall.vtf"
+    blendFunc add
+}
+```
+
+The samplers are permutation-gated at the **declaration** —
+`!!samps !FRAMES diffuse upper` / `!!samps =FRAMES shield:2DArray=0`
+(gl_shader.c:2142-2148) — so the non-`FRAMES` path's emit is unchanged byte for
+byte and the array path never declares the two default slots it does not use.
+
+The blend is the **pass's**, not `progblendfunc`'s: `animpass` suppresses the
+top-level emit at :3703, the same coupling Patch 195 records. Getting that wrong
+is what turned surf_demise's smoke into an opaque slab.
+
+Fragment side, with the layer count from `textureSize` so no permutation is spent
+per frame count:
+
+```glsl
+vec4  pf    = vec4(PROXFRAME);
+ivec3 sz    = textureSize(s_shield, 0);
+float layer = clamp(pf.x * eyedist - pf.y, pf.z, pf.w);
+layer       = clamp(layer, 0.0, float(sz.z - 1));
+diffuse_f   = texture2D(s_shield, vec3(tex_c,  layer));
+diffuse_f  *= texture2D(s_shield, vec3(tex2_c, layer));
+```
+
+The second clamp is not redundant with the material's own: Source's `Clamp` says
+0..30 because the author knew there were 31 frames, and a material whose proxy
+outruns its texture would sample past the end of the array.
+
+### Scope, measured rather than estimated
+
+**7 of the library's 48 `UnlitTwoTexture` materials** point both texture keys at
+one file, so only those change shape. On surf_tensor2 the two shield materials
+split like this:
+
+| material | second texture | faces | outcome |
+|---|---|---|---|
+| `effects/combineshield/comshieldwall` | itself, 31 frames | **42** | flipbook |
+| `effects/combineshield/comshieldwall2` | `comshieldwall_close`, 1 frame | **2** | declined, counted |
+
+42 of 44 shield faces. `comshieldwall2` needs a second array sampler and is
+**not attempted**, because that is one of the two shapes above.
+
+### Off switch and census
+
+New cvar **`hl2_twoframes`** (default 1), separate from `hl2_twotexture` on
+purpose: `hl2_twotexture 0` changes three things at once and is the wrong control
+for "does the web get denser as I approach". The map's census line gains the two
+numbers that can distinguish a resolved proxy from a drawn frame — `proxframe`
+counted a resolved chain and was already non-zero while nothing was animating:
+
+```
+surf_tensor2: 2 UnlitTwoTexture material(s) at hl2_twotexture 1, 2 with a
+distance fade, 2 with a distance-driven frame (1 sampling the flipbook at
+hl2_twoframes 1, 1 declined)
+```
+
+`animpass` also dumps the generated shader script at `developer 1`, which is the
+only way to read one of these back: the shield is on `func_brush *19` and
+`shader_here` traces the world model straight through it.
+
+### Not verified
+
+**No frame of this has been on screen.** Both edited sources pass
+`gcc -fsyntax-only` with the Makefile's own flags, zero warnings, and
+`mat_vmt_progs.h` regenerates; that is all that is proven. The verification owed
+is screenshots at 70 / 200 / 600 / 1000 units with `hl2_twoframes` 0 and 1 — the
+web must get **denser**, not merely brighter — plus the `[shader] … prog N
+passes M` line and the `developer 1` script dump, and a comparison against
+Momentum at the same four distances.
+
+## Patch 288 — the whole-screen colour grade a Source map ships and FTE has never applied, and why the particles were not the thing to fix  *(APPLIED AND COMPILING, ON SCREEN UNVERIFIED — engine `common/protocol.h`, `client/renderer.c`, `gl/gl_rmain.c`; plugin new `plugins/hl2/img_ccraw.c`, new `plugins/hl2/glsl/vmt/ccorrect.glsl`, `plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`, `plugins/hl2/hl2.c`, both Makefiles)*
+
+Reported, about the portals on surf_tensor2: *"they are slightly to small and wayy
+to blue. maybe the hue is actually colourcorrection, maybe they actually white."*
+
+The hunch was right, and following it is what stopped this from being fixed in the
+wrong place. `portal_blue`'s `Color Random` really does run `[51,51,80]` to
+`[0,96,255]`, and `particle_glow_01.vtf` is provably neutral — its `reflectivity`
+is R = G = B exactly. So the particles are correct as authored. What is missing is
+**everything around them**: surf_tensor2 runs two `color_correction` entities over
+the whole frame, so in Source the entire scene is graded cool and the particles do
+not stand out. Hand-tuning the particle colour would have been wrong twice — once
+for the particles, and once for every other surface on the map.
+
+**FTE had no colour correction of any kind.** The only mention of the feature
+anywhere in the engine was `$toolcolorcorrection` sitting in `mat_vmt.c`'s ignore
+list.
+
+### What the map actually asks for, read out of the lump
+
+```
+{ "classname" "logic_auto"  "OnMapSpawn" "map_correction,Enable,,0,-1"  … }
+{ "classname" "color_correction"  "targetname" "map_correction"
+  "StartDisabled" "1"  "minfalloff" "-1"  "maxfalloff" "-1"
+  "maxweight" ".25"  "filename" "materials/correction/tensor2_correction01.raw" }
+{ …the same, "maxweight" ".15", tensor2_correction02.raw }
+```
+
+`minfalloff`/`maxfalloff` `-1` means global — no distance term. **Both are
+`StartDisabled 1`,** and taking that at face value is the trap: they are switched
+on by a `logic_auto` at map spawn, which is the common idiom, and a reader that
+honours `StartDisabled` alone produces a map whose grade never applies and looks
+exactly like a map with no grade. So a `color_correction` that is `StartDisabled`
+**but named by a `logic_auto` `OnMapSpawn … Enable`** counts as enabled, and the
+two states are counted separately.
+
+Source's arithmetic is `out = (1−W)·in + Σ wᵢ·LUTᵢ(in)`, `W = min(Σwᵢ, 1)`.
+
+### The byte order is already GL's, and a corner probe gets that wrong
+
+A `.raw` is headerless: 98,304 bytes, 32×32×32×3. Nothing in it says which axis is
+which. The first attempt tested the cube's corners and **could not tell two of the
+six possible orders apart** — this grade crushes shadows so hard that its pure-red
+and pure-blue corners land on the same value and all three axes are byte-identical
+for their first eight steps.
+
+Correlating each output channel against each array axis over all 32,768 entries
+settles it in one measurement:
+
+| | stride 1 | stride 32 | stride 1024 |
+|---|---|---|---|
+| out R | **0.627** | 0.544 | 0.208 |
+| out G | 0.275 | **0.724** | 0.280 |
+| out B | 0.419 | 0.141 | **0.707** |
+
+so stride 1 is red, 32 is green, 1024 is blue — `((b*32 + g)*32 + r)*3`, which is
+exactly `(z*h + y)*w + x`. A straight copy, no reordering. The grey ramp through it
+is a clean monotonic S-curve (mid-grey 132 → `(42,66,101)`, white → `(203,217,250)`),
+and at the map's own weights the blend is mild: 132 → `(96,105,119)`.
+
+### The three pieces
+
+**`img_ccraw.c`, a `.raw` image loader.** `$3d:` is already a shader texture-name
+prefix (`gl_shader.c:1089` → `IF_TEXTYPE_3D`) and `PTI_3D` already uploads, so the
+only missing link was something to turn 98,304 bytes into a
+`struct pendingtextureinfo`. Registering it as a loader means the LUT arrives
+through the ordinary filesystem — which matters, because **both of tensor2's LUTs
+live inside the BSP's own pakfile**, which the plugin already mounts, so
+`materials/correction/…raw` resolves with no special case at all.
+
+It declines unless the size is exactly 98,304 **and** the name ends `.raw`: the
+loader is offered every image file the engine opens (`image.c:13974`), and one that
+claimed anything called `.raw` would silently eat unrelated files. Output is
+`PTI_RGBA8`, not `PTI_RGB8` — `Image_ChangeFormat` has no conversion *out of* RGB8,
+so a driver that cannot upload three-byte rows would fail with no message. The 33%
+is 32 KiB. The engine's generic `$3d:` path in `Image_GenMip0` is deliberately not
+used: it has a pointer-arithmetic bug that walks four times the data it should.
+
+**`vmt/ccorrect`, the post-process.** One `$sourcecolour` pass plus one
+`map "$3d:$clamp:$linear:…"` pass per LUT, weights baked as `#define`s.
+
+*A post-process shader with several samplers is not a shape that had to be guessed
+at.* `scenepp_waterwarp` (`gl_rmain.c:110-126`) is a shipped top-level program with
+**three** passes whose `underwaterwarp.glsl` declares `!!samps screen=0 warp=1
+edge=2`. That is the precedent followed exactly — and it is worth writing down
+because the same shape **fails** for a world surface, where Patch 279 got
+`prog 1 passes 2` and no rasterised fragments at all. Post-process and world are
+not the same case, and Patch 286's essay records the other half of that.
+
+The half-texel inset is not optional: `(c·(N−1) + 0.5)/N`. Sampling with the raw
+colour puts 1.0 half a texel past the last sample, where `CLAMP_TO_EDGE` flattens
+it — highlights lose their top end and read as "the LUT crushes", which is a
+sampler bug wearing a grading bug's clothes.
+
+The total weight is what saturates, and the accumulator is **normalised** when it
+exceeds 1. Clamping `W` alone would leave three corrections at .5 each summing to
+1.5× the LUT term with no scene term at all, and wash the screen out.
+
+**A dedicated render stage, not `r_postprocshader`.** `RDF_COLOURCORRECT`
+(`1u<<26`), a new `r_colourcorrection` cvar, and one line in the chain between
+`RDF_CUSTOMPOSTPROC` and `RDF_ANTIALIAS`. Sharing `r_postprocshader` would mean a
+graded map silently eating a setting that belongs to the user and never giving it
+back — the map's grade is set by the map, that cvar is set by the person. Inside
+the existing `RDF_NOWORLDMODEL` guard with everything else, which is what keeps the
+HUD ungraded.
+
+`r_colourcorrection` is machine-set: the plugin generates the script at map load and
+writes the name here, and writes `""` for a map with no grade. **Not archived** —
+saving a per-map generated shader name into `config.cfg` would apply one map's grade
+to the next one loaded. The name is **content-derived** (`ftesurf/cc/<map>_<fnv>`)
+because `R_LoadShader` returns an existing shader by name and discards the body it
+was handed, so a fixed name would give the second graded map of a session the first
+one's grade — silently, and only on the second map.
+
+The plugin has no way to define a shader by name, so the script arrives through
+`Shader_LoadVMT`: `Material_RegisterLoader`'s `ReadMaterial` hook is the only
+callback the engine makes for an unresolved shader name, and `LoadMaterialString` is
+the only way back in. Likewise the program itself ships in `mat_vmt_progs.h`,
+because a material loader's builtin-program list is searched for **every** program
+name in the engine (`gl_shader.c:2743-2748`), not only for its own materials.
+
+### Declined, and counted
+
+| | why |
+|---|---|
+| a real distance falloff | needs a per-pixel distance to the entity; nothing has measured a need |
+| `color_correction_volume` | needs a volume test; 4 maps in the library |
+| more than 4 active | 4 is the library maximum; the counter says so if that is ever wrong |
+| `fadeInDuration`, runtime `Disable` | the weights are baked, so an animated grade holds its final value |
+
+```
+surf_tensor2: 2 color_correction (2 active at hl2_colourcorrection 1, 0 declined
+for falloff, 0 still disabled, 0 over the 4 cap), 0 color_correction_volume declined
+```
+
+Printed whenever the map mentions colour correction **at all**, including when
+nothing survives: "0 active" and "no line" are different states and only one of them
+is a bug.
+
+### Off switch
+
+`hl2_colourcorrection`, default 1, read in **two** places on purpose. At map load it
+gates generation, so 0 at launch costs nothing — no textures, no pass, no FBO round
+trip. It is also a live uniform inside the shader (`!!cvarf`), so on a map loaded
+with it on, `0 / 1 / 0` at a fixed vantage is a three-picture A/B with nothing else
+changing between frames. That matters more than usual here: **`map x` twice does not
+reload**, so an A/B needing a map change is the kind of measurement this project has
+already recorded getting wrong. Fractional values scale the grade — `.5` is how a
+wrong LUT is told apart from a right LUT applied too strongly.
+
+### Not verified, and one thing that is not yet measured at all
+
+Nothing has been on screen. `gcc -fsyntax-only` is clean on all six edited sources
+with their own build flags, and `mat_vmt_progs.h` regenerates with `vmt/ccorrect` in
+it; that is all that is proven.
+
+**The exposure offset is still unmeasured, and it is the real risk.** Source applies
+correction *after* tonemapping, and tensor2 also carries an `env_tonemap_controller`
+(`SetBloomScale .2`, `SetAutoExposureMax 1.4`, `SetAutoExposureMin 0`) that FTE has
+no equivalent for — 318 of the 1310 maps carry one. So the input range reaching the
+LUT here may not be the range Source feeds it, and a correct implementation could
+still land in the wrong place. **Measure before concluding anything:** screenshot the
+same fixed vantage in Momentum and in FTESurf with `hl2_colourcorrection 0`, compare
+the mean and histogram of a flat well-lit wall — not the portals, whose colour is
+the thing under test — and only then turn the grade on. If the two disagree in a way
+a single exposure scale explains, that scale goes behind its own cvar and gets said
+out loud, rather than being folded into the LUT as a fudge.
+
+### Patch 288 addendum — the library census, run after the entry above was written
+
+The entry above was written from a scope estimate. Re-running it as the shipped
+code would resolve it — every `.bsp` in the library, applying this patch's own
+accept/decline rules — changes what the feature is expected to do, and one of the
+numbers is a live risk rather than a curiosity.
+
+**Only 15 of the 31 maps end up with a grade at all.**
+
+| | |
+|---|---|
+| maps scanned | 1310 |
+| maps with `color_correction` | 31 (35 entities) |
+| …of which end up with ≥1 **active** | **15** |
+| …of which get nothing | **20** |
+| entities declined for a real falloff | **16 of 35** — nearly half |
+| entities declined as still-disabled | 1 (`surf_hourglass`) |
+| maps with `color_correction_volume` | 4 (8 entities), all declined |
+| max simultaneously **active** on one map | **2** (surf_tensor2) |
+| max `color_correction` entities on one map | 4 (`bhop_collective` — and all four have a falloff, so it gets none) |
+| maps with `env_tonemap_controller` | 318 |
+
+So `CC_MAX 4` has double the headroom it needs, and the falloff decline is not the
+rare case the entry above implies — it is 16 entities across 16 maps, including
+surf_sodacity, surf_race, surf_lost and kz_iripino. That is the obvious next piece
+of this feature if it is ever wanted, and it is now sized.
+
+**THE PART THAT MATTERS FOR VERIFICATION: 13 of the 15 grade at weight 1.0.**
+surf_tensor2, at `.25 + .15`, is the *gentlest* graded map in the library — a 40%
+blend. Every one of bhop_aberrant, bhop_angst, surf_agony, surf_angst,
+surf_brodderlands, surf_demise, surf_epiphany, surf_joutsenlaulu, surf_jumble,
+surf_misc, surf_monolith, surf_valpect and what_is_this replaces its scene colour
+**entirely** with the LUT's.
+
+That inverts the risk in the section above. The unmeasured tonemapping/exposure
+offset is a 40%-weighted error on the map this was written for and a **100%**
+error on thirteen others — one of which, surf_demise, is a map this project
+already leans on for A/Bs. Verifying on tensor2 alone would be verifying on the
+one map where a wrong answer is hardest to see. Check at least one weight-1.0 map
+before concluding the grade is right.
+
+**surf_trihard carries `maxweight 3.0`**, which is not a typo to be tidied away: it
+is a real map exercising the total-weight normalise, and it is the only one that
+does. If the accumulator were not scaled it would render as a washed-out screen
+there and nowhere else.
+
+### Patch 286 verification — CONFIRMED ON SCREEN, and the control is what made it mean anything
+
+Two runs on surf_tensor2 with the 09:18 build. The first one produced a number
+that looked like a pass and was not evidence at all; the second one is the result.
+
+**The first A/B was a trap, and it is worth writing down before the answer.**
+`hl2_twoframes 1` against `0` at 70 units from the spawn portal moved **12.5% of
+the frame** — a large, obvious-looking difference. It was worth nothing:
+
+| | pixels differing |
+|---|---|
+| twoframes 1 vs 0, 70 units | 6.81% |
+| twoframes 1 vs **1 again**, same vantage | **6.72%** |
+
+`comshieldwall` scrolls its second layer at 0.1 and pulses its alpha on a 1.08 s
+sine, so two shots of it a second apart differ by that much with nothing changed.
+The A/B and its own noise floor are the same number.
+
+**And the switch was not switching.** The log settled that independently: setting
+`hl2_twoframes 0` regenerated nothing, and the shader script dumped before and
+after both carried `#FRAMES`. The cause is in the plugin API rather than in this
+patch — `Plug_Cvar_GetNVFDG` passes `flags&1` to `Cvar_Get2`, so `CVAR_SHADERSYSTEM`
+never survives the call and no plugin cvar can ask for a shader reload. Both arms
+of that A/B were the same arm.
+
+The fix is the same one Patch 288 uses: `!!cvarf hl2_twoframes`, a live uniform
+re-read every frame, pinning the layer to 0. Same result as the load-time gate,
+one command apart, with the map still loaded.
+
+**The result, with both directions predicted in advance.** The frame index is
+`clamp(dist*0.2 − 24, 0, 30)`, so at 200 units it is layer 16 and at 70 units it
+clamps to 0 — which means the *same* A/B must show a difference at one distance
+and none at the other. It does:
+
+| vantage | control (1 vs 1) | A/B (1 vs 0) | verdict |
+|---|---|---|---|
+| 200 units | 1.100% | **2.341%** | 2.1× the noise floor; mean 41.22 → 41.42 |
+| 70 units | 6.716% | 6.504% | inside the floor — **as required**, both arms are layer 0 |
+
+The negative control is the stronger half. A flipbook that was merely "different
+somehow" would not know to be identical at 70 units.
+
+Mechanically, from the same log: the generated script carries `#FRAMES` and
+`map "$2darray:materials/Effects/Combineshield/comshieldwall.vtf"`, the
+permutation compiles with no error, and the census reads
+
+```
+2 UnlitTwoTexture material(s) at hl2_twotexture 1, 2 with a distance fade,
+2 with a distance-driven frame (1 sampling the flipbook at hl2_twoframes 1, 1 declined)
+```
+
+**One correction to the Patch 279 entry above.** That entry reads
+`[shader] … prog 0 passes 2` as proof the program was missing. It is not: the
+census line prints `s->prog ? 1 : 0`, and `Shaderpass_SLProgramName`
+(gl_shader.c:4141-4150) assigns `pass->prog`, not `shader->prog`. Every
+program-inside-a-pass shader reads `prog 0`, including `vmt/animated`, which
+works. 279's failure was real — the surface drew nothing — but the number it was
+diagnosed with could not have said so either way.
+
+## Patch 290 — 288 shipped a black screen, and a stage that draws nothing is not a stage that does nothing
+
+`engine/gl/gl_rmain.c` (two hunks), `plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`.
+No header change; `-Engine` is enough. Reported as *"Tensor2 does a broken load
+now? I spawn into black"*, with two console lines and nothing else:
+
+```
+<code>: unexpected indentation in ftesurf/cc/surf_tensor2_ef3661e2
+<code>: unexpected indentation in ftesurf/cc/surf_tensor2_ef3661e2
+```
+
+### The brace
+
+Patch 288's generated script began with `{`. That is correct for a shader handed
+to `R_RegisterShader`, whose `Shader_DefaultScript` (gl_shader.c:7379-7391)
+*requires* a leading brace and strips exactly one — and silently parses nothing
+at all if it is missing. It is wrong for a script handed back by a material
+loader: `Shader_LoadMaterialString` (:8386-8390) strips nothing and begins
+parsing **inside** the shader body, where `{` opens a PASS.
+
+So the whole body became pass 0, `program` bound `pass->prog` rather than
+`shader->prog` (`Shaderpass_SLProgramName` :4111-4152, whose inline-body parser
+is commented out), and the next `{` reached the pass-level brace handler at
+:5758-5771. Two warnings rather than one because the shader system reparses on a
+reload, not because two braces were wrong.
+
+Worth recording about that handler: its skipper is off by one. `depth` starts at
+1 but the test is `if (depth-- == 0) break;`, so it eats the unexpected block
+**and one closing brace beyond it** — normally the enclosing pass's own. One
+stray brace can therefore swallow every remaining pass in a script.
+
+### Why it went black rather than merely ungraded
+
+This is the part that mattered more than the brace.
+
+`R_RenderPostProcess` (gl_rmain.c:2625-2660) allocates a fresh render target at
+:2639, draws into it, and returns it **unconditionally** at :2659.
+`R2D_RT_Configure` only re-uploads when the size or format changed, so nothing
+clears it. A stage whose shader draws nothing therefore hands the rest of the
+chain a texture that was never written this frame — black on the first frame,
+frozen after. And `RDF_COLOURCORRECT` was set whenever `R_RegisterCustom`
+returned anything at all, broken shader included.
+
+The fix is the brace; the *patch* is the gate:
+
+```c
+if (ccpostproc && ccpostproc->prog && ccpostproc->numpasses)
+    r_refdef.flags |= RDF_COLOURCORRECT;
+else if (ccpostproc && ccpostproc != cc_warned)
+    ... one warning, naming the shader and both numbers ...
+```
+
+Both halves are tested because they fail separately and neither implies the
+other: the brace bug left `prog` NULL with three passes intact, while an
+unresolved program name leaves no passes at all (`Shader_Finish` back-fills one
+at :6221 *only* when prog is non-NULL). Verified by pointing
+`r_colourcorrection` at a name that cannot resolve: the picture stays normal and
+one warning prints.
+
+### The measurement trap that hid all of this
+
+**`screenshot_mega` cannot see any post-processing.** It "massages the rendering
+code to redraw the screen with an fbo forced" (cl_screen.c:2941-2943) so it can
+capture above the monitor's resolution — and gl_rmain.c:2841-2845 reads that same
+`dofbo` and does
+
+```c
+r_refdef.flags &= ~(RDF_ALLPOSTPROC);   //block all of this stuff
+```
+
+So a mega screenshot contains no gamma stage, no waterwarp, no fxaa, no
+`r_postprocshader` and no grade. Every colour-correction A/B in this project had
+been shot with it, which is why patch 288's first verification run produced a
+perfectly normal picture from a build that black-screened on the actual display,
+and why the grade then measured as "0.123% of pixels against a 0.161% control" —
+a stage that was switched off for the duration of the capture.
+
+The tell was in the same run and was misread: `r_graphics 0` puts `postproc_ascii`
+on the screen, the mega shot of it was also unchanged, and ASCII art is not a
+subtle effect. "Both arms identical" and "the whole path is off" look the same
+until something unmistakable is put through it.
+
+Plain `screenshot` reads the backbuffer through `VID_GetRGBInfo` — the frame as
+presented. Use it for anything that lives after the scene.
+
+### What the grade actually does, now that it can be seen
+
+surf_tensor2 spawn, plain `screenshot`, `hl2_colourcorrection` 1 / 1 / 0 / 0.5:
+
+| | pixels differing |
+|---|---|
+| control, 1 vs 1 again | **0.424%** |
+| **A/B, 1 vs 0** | **91.665%** |
+| half, 1 vs 0.5 | 87.415% |
+
+and the white point moved where the LUT says it should, which is the half that is
+not merely "something changed":
+
+| | near-white mean (R,G,B) |
+|---|---|
+| ungraded | 251.7, 253.1, 253.6 |
+| **graded, measured** | **232.9, 239.2, 251.9** |
+| predicted, 0.6·white + 0.4·LUT(white) | 234.2, 239.8, 253.0 |
+
+within 1.3 on every channel. Shadows crush as expected (mean R 49.2 → 38.4).
+Census reads `prog 1 passes 3` and both LUTs load as `32x32x32`.
+
+### $ignorez, in passing
+
+`mat_vmt.c` emitted `nodepth` at the shader top level. It is a PASS key
+(gl_shader.c:4838) whose handler dereferences `ps->pass`, so at the top level it
+was a developer-only "Unknown shader directive" and a complete no-op — the line
+appeared in every log looking like a typo. It is not simply moved into a pass
+because that emit is the shared tail of the generic path, after each per-type arm
+has finished: some emit an explicit pass, others emit a bare top-level program
+and let `Shader_Finish` back-fill one, and there is no top-level depth key.
+Counted and declined instead, with a census line. No behaviour change — it never
+worked.
+
+## Patch 291 — `shader_here` over a model's render mesh, and why it still cannot name a Source static prop
+
+`engine/common/com_mesh.c` + `com_mesh.h` (new `Mod_TraceRenderMesh`), `engine/client/view.c`.
+No header rebuild needed beyond Part C's own. Written because `shader_here` answered every
+question about the surf_fantasy rocks with the terrain behind them.
+
+**The first build traced the wrong geometry.** It used `model->funcs.NativeTrace`, which for
+an HL2 prop is a BIH over the model's `.phy` COLLISION hull (`mod_hl2.c:1435-1466`), not its
+render mesh — so a non-solid prop is invisible to it and a solid one answers with a hull that
+may not resemble the silhouette. `Mod_TraceRenderMesh` exposes `com_mesh.c`'s existing
+render-triangle trace instead, and the model branch now prints the texture, the model, mesh
+and skin, the distance, `passN program=` for every pass carrying one (a VertexLitGeneric
+material's program lives in a PASS, so the `[shader]` census `prog` field cannot show it),
+the entity's lighting and all six ambient-cube faces.
+
+**MEASURED, and this is the part worth keeping: it still does not reach a `prop_static`.**
+Every probe on surf_fantasy reports `models traced: 2` (or 5) `, none in front of this
+surface`, while the map carries 2,345 props. Source static props are **not engine entities**:
+`mod_vbsp.c` keeps them in its own `prv->staticprops[]` array with an embedded `entity_t`
+and draws them itself, so `cl_visedicts` never contains one and no trace over that list can
+ever see one. The two entities traced are the viewmodel and the player.
+
+So 291 is correct and useful for real alias entities — players, viewmodels, `prop_physics` —
+and does nothing for the class the original question was about. Naming a static prop needs a
+plugin-side trace over `prv->staticprops[]`, which is where that work should start. The
+`ent_here` report that prompted this is the same fact from the other side: a static prop is
+not an entity lump entry either, so no entity command can name one.
+
+## Patch 292 — 83% of Momentum's own textures are Zstandard-compressed, and FTE drew them black
+
+`plugins/hl2/img_vtf.c` and one block in `plugins/Makefile` (win64 only). No header change.
+Reported as *"the trees are not rendering on that map? they just missing compared to
+counter-strike source"* — surf_fantasy's pines, ferns and fallen trees.
+
+Two faults in series, and the first one masked the second:
+
+1. **The models were unreachable.** They are HL2-episode content present in no mounted pack.
+   Momentum ships them in `mount/hl2_dir.vpk` at the same checksums as ep2, but `tools/mapdeps.py`
+   had no entry for `mount/` and `resolve_model` never followed an MDL's own material table.
+   Fixed there (ADDONS entry + `mdl_materials`), which put the trees on screen — as SOLID
+   BLACK silhouettes with a correct alpha cutout.
+
+2. **The textures are compressed.** VTF 7.6 with a Strata **`AXC`** auxiliary resource:
+
+       uint32  length            (4 + 4*mipmapcount)
+       uint16  compression level (22 seen)
+       uint16  method            (93 = Zstandard; frames begin 28 B5 2F FD)
+       uint32  compressed size per mip, SMALLEST level first
+
+   The high-res image resource is those zstd frames end to end, one per level. `img_vtf.c`
+   assumed 7.6 meant uncompressed — true of every map pakfile, which is all anyone had
+   censused — and uploaded the compressed bytes as DXT blocks **with no error at all**.
+
+**Census** (`scratchpad/wf2/axccensus.py`, header-only reads):
+
+| pack | VTFs that are 7.6 + AXC |
+|---|---|
+| `Momentum Mod Playtest/mount` | **5,589 of 6,748 (82.8%)** |
+| `Momentum Mod Playtest/momentum` | 25 of 438 (powerup props, `mom_knife`) — broken before any mapdeps change |
+| every map pakfile in the library | **0 of 112,687** |
+
+**The fix** decodes each mip with `ZSTD_decompress` under `HAVE_ZSTD`, linking msys2 ucrt64's
+static `libzstd.a` (1.5.7, verified in the built DLL). Without `HAVE_ZSTD` a compressed file
+now fails **loudly** — missing-texture placeholder plus a console line — instead of drawing
+garbage.
+
+**VERIFIED ON SCREEN**, 2026-09-12, `p292b_fantasy`, three vantages, same camera as the
+pre-patch run:
+
+| vantage | near-black pixels before | after |
+|---|---|---|
+| `tree_pine04` | 15.87% | **0.84%** |
+| `tree_pine_cluster` | 7.53% | **2.18%** |
+| `fern01` | 29.16% | 23.71% (that vantage is in deep shade; the leaves are textured) |
+
+and the screenshots say it plainly: black cut-outs before, bark and needles after
+(`screenshots/p268c_fan_tree_*` vs `p292b_fan_tree_*`). No `auxiliary`/zstd error line in the
+log. The 25 `momentum/` files are fixed by the same code.
+
+## Patch 293 — the yaw identity, and why the .hid and the .view could never be cross-checked  *(APPLIED, ENGINE ONLY — `client/in_generic.c`, `client/input.h` (HEADER CHANGE: rebuild with -Full), `client/cl_input.c`. IN-GAME UNVERIFIED: no run has been recorded with it yet.)*
+
+Anti-cheat. The first patch of the run-validation work, and the one the rest leans on.
+
+**THE INVARIANT.** With `m_filter 0` and `m_accel 0` the mouse path is one exact line
+(`in_generic.c`, `IN_MoveMouse`):
+
+    viewanglechange[YAW] -= m_yaw * (sensitivity * in_sensitivityscale) * mx
+
+so on an unmodified client a frame's yaw change is a FIXED multiple of the integer device
+counts that frame drained. That is algebra, not a statistic: a violation is arithmetic.
+
+**AND IT IS NOT ATTESTATION. READ THIS BEFORE QUOTING THE PARAGRAPH ABOVE.**
+The identity is computed by the engine from the engine's own `mx`, so it tests *the engine's
+multiplication*, not the player. Anything that alters the counts UPSTREAM of the capture gets a
+conforming record for free, because both sides of the equation are then derived from the same
+doctored number. Upstream includes, in increasing order of effort and all of them cheaper than
+what `test2.cpp` already does:
+
+  * `_GRID` (`in_win.c:296`) — a single `static` function pointer holding `GetRawInputData`,
+    through which every raw report passes. One 8-byte write puts an attacker beneath the whole
+    pipeline, passing the real call through and editing the result, real `hDevice` and all.
+  * `IN_MouseMove` / the event ring (`in_generic.c`) — where the `m` lines are also written.
+  * **`IN_MoveMouse` itself** — and this is the one that matters, because a port of
+    `momentum.dll` lands exactly here. It detours Source's `CInput::ApplyMouse`, whose FTE
+    analogue IS this function; a detour runs before the body, so it rewrites `mouse->delta[]`
+    before `mx` is read and therefore before this record is written. **A straight port of the
+    sample cheat defeats this patch.** Saying otherwise was the first draft of this entry and
+    it was wrong.
+
+What the record does buy, stated at its true size:
+
+  1. **The angle-without-counts case** — yaw moving with no counts behind it, i.e. a direct
+     `viewangles` write, the commonest and laziest shape. Reported as a note, never a fault:
+     a console `+left` and a server angle set look identical.
+  2. **Format integrity** — a hand-edited or offline-generated journal no longer passes by
+     being internally plausible; it must now also be arithmetically consistent with angles.
+  3. **It forces the cheat upstream, into the `m` lines.** Before this patch a delta-mutating
+     hook could leave the recorded raw reports pristine and human-shaped. It no longer can:
+     whatever it does to `mouse->delta[]` is what this record reports. That moves the problem
+     onto the statistics of the counts themselves, which is where it belongs — the identity's
+     real job is to CLOSE the free option, not to catch the cheat.
+
+**A CROSS-CHECK THIS ENABLES, NOT YET IMPLEMENTED AND NOT YET VERIFIED:** the `m` lines come
+from the event ring, the `v` line from `IN_MoveMouse` — opposite sides of exactly the window a
+delta-mutating hook occupies. If the counts summed from the `m` lines of a frame can be matched
+to that frame's `v`, a disagreement IS that hook. Whether the `f`-group / `v` correspondence
+holds is unproven, and this entry does not assume it: assuming a frame correspondence is
+precisely the mistake that made the `.hid`/`.view` cross-check impossible. Measure it first.
+
+The sample in `C:\FTESurf\test2.cpp` / `momentum.dll` is the delta-mutating shape: it detours
+`CInput::ApplyMouse` and rewrites `mouse_x` in place, then re-quantises onto the sensitivity
+lattice with `round(x/sensitivity)*sensitivity` — i.e. it was already built to satisfy a
+lattice-shaped check.
+
+**WHY A NEW RECORD AND NOT A CROSS-CHECK.** Patch 202 already journals every raw report, and
+`cl_replay.qc` already writes a per-frame angle to the `.view`. Pairing them looks free and is
+not possible:
+
+  * `IN_Commands` emits the `f` marker **only on a non-empty drain** — its own comment says so —
+    so `.hid` frames are a deliberate SUBSET of rendered frames;
+  * the only shared key is the command frame, and at ~811 fps against `cl_netfps` 66 about
+    fifteen `.view` rows carry the same one.
+
+Measured on this tree's own recordings, before this patch existed:
+
+| run | `f` records | `.view` rows | distinct cmdframes | best index alignment | residual \|dyaw − k·dx\| |
+|---|---|---|---|---|---|
+| `surf_beginner/stage_2/0000279_pb` | 3298 | 4177 | 246 vs 279 | 35.7% | median 0.039° |
+| `surf_boreas/main/0002930_pb` | 16165 | 17105 | — | 8.5% | median 0.054° |
+
+Those residuals are about eight times `.view`'s own 0.005° half-step, i.e. swamped by
+misalignment long before precision becomes the limit. **Raising `.view`'s `%.2f` would not have
+fixed it** — which was the first thing tried on paper, and it was wrong.
+
+So the record carries both halves of the equation on ONE line and needs no join:
+
+    v <dt> <dx> <dy> <flags> <pitch> <yaw>
+
+`dx`/`dy` are the counts as they enter the sensitivity pipeline — after `in_xflip`, after the
+`Key_MouseShouldBeFree` zeroing, after the touch/weapon-wheel branches, after the menu and
+`CSQC_MouseMove` consumers, summed over every pointer. Logging at the `mx = mouse->delta[0]`
+grab instead would record counts the angle never saw, which reads as a broken invariant on a
+clean client. `pitch`/`yaw` are read after `CL_ClampPitch`, the first moment the angle those
+counts produced actually exists — and they are `viewangles`, not `aimangles`, because Patch
+136's resampled angle is deliberately not the one the mouse produced this frame.
+
+`flags` exists because the identity does not govern every frame and a reader must be told
+which: 1 = counts went to sidemove (`+strafe`), 2 = to forwardmove, 4 = the cursor was free.
+
+**THE HEADER** gains `sensitivity`, `sensitivityscale`, `m_yaw`, `m_pitch`, `m_filter`,
+`m_accel` and the four accel terms, because without them a reader can only check that the ratio
+is SOME constant — which a cheat holding a fixed multiplier also passes. They are appended
+**after** `synth 0` so `IN_JournalSynth_f`'s `strstr(buf, "\nsynth 0\n")` in-place poke still
+finds it; that rewrite is fixed-width by construction and must not move. `head[]` 512 → 1024.
+
+**THE EMIT RULE** is the whole size budget. One line per rendered frame at the 811 fps measured
+above is ~1.9 MB/min, which would roughly triple this file against the ~1.15 MB/min it already
+costs. A frame with no counts AND no angle change says nothing an audit can use, so it is not
+written — the same argument `IN_MouseMove` makes for a zero delta. **Note the second half.**
+Dropping on "no counts" alone would discard exactly the evidence this patch exists to collect:
+an angle that moved with nothing behind it is the signature, not the noise.
+
+**THE FALSIFIER** is in `tools/hidcheck.py` (`check_identity`), extended rather than duplicated
+so there is one parser. It reports `identity: exact on all N governed frames`, or faults with
+the worst offending line. Confirmed to still pass on pre-293 files, where it now says plainly
+that the identity is NOT CHECKABLE and why. `v` is not an event kind, so the trailer's `events`
+count is unchanged and every existing check still holds.
+
+**WHAT THIS DOES NOT DO, and it must not be oversold.** It answers "did the angle come from the
+counts", and nothing else. A replayed or synthesised input stream satisfies it perfectly, and so
+does a cheat that injects extra synthetic raw *reports* rather than mutating the accumulated
+delta — that rewrite is the one to expect once this ships, and it is what the `synth`-at-the-
+injection-point and device-provenance patches are for.
+
+## Patch 294 — `sv_gamespeed` is a world record typed into a console, and a cheat flag would not have stopped it  *(APPLIED, ENGINE ONLY — one table entry + one extern in `server/sv_phys.c`. No header change. IN-GAME UNVERIFIED.)*
+
+Anti-cheat. Requested directly: "ensure sv_gamespeed that's not default game speed is also
+considered cheats."
+
+**THE HOLE.** `sv_main.c:171` declares it
+
+    cvar_t sv_gamespeed = CVARAF("sv_gamespeed", "1", "slowmo", 0);
+
+— flags **`0`**. Not `CVAR_CHEAT`, not latched, not `CVAR_NOTFROMSERVER`. And `sv_main.c:5688` is
+
+    sv.time = (Sys_DoubleTime() - sv.starttime) * sv.gamespeed;
+
+The QC run timer is `time - run_t_start` over exactly that clock (`SV_TimerTicks`, sv_timer.qc),
+so `slowmo 0.1` is ten-times bullet-time **with the run clock scaled to match**. On any listen
+server that is a world record for one console word, and the `.rec`, the `.view` and client
+prediction all record a perfectly clean run.
+
+**WHY NOTHING CAUGHT IT.** `SV_NoclipWatch` watches movetype and `sv_cheats`, neither of which
+moves. `sv_user.c`'s msec anti-speed-cheat does not fire either, and the reason is worth stating
+because it is the whole shape of the bug: the client divides its own frametime by the same
+gamespeed, so the msec budget still balances 1:1. The cheat is not that the player moves faster
+than the clock — **it is that the clock is slow and every consistency check downstream is
+consistent.** A checker that compares two things which are both scaled cannot see a scale.
+
+**WHY NOT `CVAR_CHEAT`.** Because it would have been silently inert, and this tree already found
+that out — the essay above `pms_lockedmovevars` (sv_phys.c) says it plainly: `cls.allow_cheats`
+(cl_main.c:3173) and `SV_MayCheat()` (sv_ccmds.c:36) both hand out cheats unconditionally to any
+server with a single client slot, *"which is every FTESurf session ever played"*. Patch 170's
+table is the one mechanism in the tree that reads `sv_cheats.ival` directly and therefore means
+what it says.
+
+**THE FIX** is consequently one line, by that table's own design: *"Hooked after registration
+rather than declared with CVARFC, so that adding a cvar to the table above is the only edit
+needed to lock it"* (`SV_HookMovementLock`). `&sv_gamespeed` joins `pms_lockedmovevars`, plus an
+`extern` beside the existing one for `sv_cheats`. Behaviour: reverted to `1` on any attempt,
+with the table's standard warning — *"Use sv_cheats 1 first if you mean to change it; anything
+you set then is not a legal run"* — and restored at every map spawn by `SV_LockMovementVars`.
+
+**THREE THINGS CHECKED BEFORE COMMITTING, because each would have made it inert or harmful:**
+
+  * **Hook order.** `SV_HookMovementLock()` runs at `sv_main.c:6118`; `sv_gamespeed` is not
+    registered until `:6202`, 84 lines later. Safe, but only because `Cvar_Register`
+    (cvar.c:1316) writes `next`, `restriction`, `string`, `defaultstr` and `name2` and **never
+    touches `callback`** — so the hook survives its own cvar being registered afterwards. Had it
+    memset the struct, this patch would have done nothing and printed nothing.
+  * **Canonical value.** `SV_MovementCanonical` returns the gamemode override or `defaultstr`;
+    nothing in `cfg/` sets `sv_gamespeed`, so `defaultstr` is the registered `"1"`.
+  * **Legitimate writers.** None. The only assignment is `sv_main.c:5672`
+    (`sv_gamespeed.value = sv.gamespeed = 1`), a direct field write of the canonical value that
+    does not go through `Cvar_Set` and so cannot fire the callback. QC never touches it; no cfg
+    sets it; it is read-only downstream (`STAT_MOVEVARS_TIMESCALE`, the CSQC `gamespeed` global).
+
+**NOT FIXED, AND DO NOT ASSUME IT IS.** `pause` is believed to be the same hole by another route
+— `sv_main.c` rewinds `sv.starttime` so `sv.time` freezes, which stops the run clock with the
+world and buys unlimited think-time mid-flight at zero run-time cost. It is a **command**, not a
+cvar, so this table cannot reach it. **UNVERIFIED** by me; it was reported by the red-team pass
+and I have not read the gating. It needs its own patch.
+
+Also not addressed: `rec_hid 0` still disables the raw-input journal from the console. It is a
+CSQC-registered *client* cvar, and `SV_MovementVar_Callback` early-returns unless
+`sv.state == ss_active`, so this table cannot lock it during remote lobby play — which is exactly
+the ranked case. That one needs the server to be told, not the client to be trusted.
+
+## Patch 293b — `gl_font.c` premultiply shifted the wrong way  *(APPLIED, ENGINE ONLY — three characters in `gl/gl_font.c`. No header change.)*
+
+`out[x].rgba[]` is a **byte**; `a*c` maxes at 255*255 = 65025; `<<8` leaves zeros in the low
+eight bits for every value of `a` and `c`, so the byte store kept exactly **0 unconditionally**.
+Not a precision loss — every non-opaque texel of an `FT_PIXEL_MODE_RGBA_SA` glyph (a colour
+emoji) premultiplied to black. `>>8` is `a/256` rather than the strictly correct `a/255`, which
+is the usual premultiply approximation and is plainly what was meant: the alpha row directly
+below it is unscaled.
+
+Found by a concurrent session while excluding font candidates for a reported grey-box artifact,
+and handed over because it is an engine file. **It is not that bug:** this path is colour-emoji
+only, and a fringe following the letterform is a different shape from a uniform cell-sized
+rectangle. Recorded here so the exclusion is not re-derived.
+
+## Patch 296 — VRAD's baked prop lighting, the curve that decodes it, and the census that had been lying about both  *(APPLIED — `plugins/hl2/mod_vbsp.c` and one cvar default in `engine/gl/gl_warp.c`. No header change. VERIFIED: 6-arm census run, 9 of 10 pre-registered numbers exact; screenshots at the reporter's own save-locks.)*
+
+Reported with side-by-side screenshots against CS:S and Momentum Mod, five faults in one
+message. Three of them are this patch:
+
+> *"the tree colours is a bit weird, being diffrent between models. The second one shows the
+> ramp being the wrong colour to counter-strike. Third one is showing the lack of shadow from
+> bumpmapping on the rocks."*
+
+**Numbering:** 293, 294 and 295 were all claimed by concurrent sessions while this was being
+written — 295 landed in `ENGINE.txt` between my reading that file and my editing it. That is why
+the verification run and its log are named `p294g_census` and the log's own second column is
+headed `pre-294`: same patch, two earlier names. The run artefacts were not renamed, because
+renaming evidence to match a number it was not produced under is worse than a footnote.
+
+### 1. The loader rejected the files
+
+`VBSP_LoadPropBakedLight` rejected any `.vhv` whose `vertexsize != 4`. surf_fantasy's Momentum
+build ships 2345 `sp_hdr_N.vhv` at `version 2, vertexsize 12, flags 0x2` — so it read
+**`props: 0 of 2345`** with 2345 bakes sitting in its own pakfile, and every prop fell back to
+the leaf ambient cube. 67 maps / 27,178 props across the library.
+
+**The 12 bytes are three BGRA basis colours, and that is now proven rather than inferred:**
+
+| test | result |
+|---|---|
+| layout — on an unbumped prop the 12 bytes are **three bit-identical copies of one BGRA** | 465 of 2345 props entirely; 17.98% of all 3,563,988 LOD0 vertices. A 4×BGR reading cannot produce a period-4 repeat. |
+| quantity — per-vertex Pearson r against the **CS:S** build's ordinary 4-byte files, 300 checksum-matched props | **0.764** |
+| — shuffled control (same prop vs a random equal-vertex-count prop) | 0.236 |
+| — vs each single basis slot | 0.654 / 0.658 / 0.692 — **the mean beats every individual slot**, which is the radiosity-normal signature |
+
+The collapse rule is Valve's own: `utils/vrad/lightmap.cpp:3479-3549` (`LinearToBumpedLightmap`)
+**scales** the three basis colours so their arithmetic mean equals the unbumped value, and
+asserts it in a dead `check` variable at `:3533`.
+
+`hl2_lt_vhv12` default `0` → **`1`**.
+
+### 2. The census was lying, in two opposite directions
+
+This is the reason the feature shipped off. The old note said *"1 is measured DARKER than
+today"*, and every prop-level number it was checked against came out of the `PROPLIGHT` line,
+which was wrong twice at once:
+
+- for a **baked** prop it copied `sent->baked[]` **after** `:4670` multiplies it by the per-prop
+  peak gain — mean **20.98×** on surf_boreas, **2.05×** on surf_fantasy. The draw divides that
+  straight back out. So boreas' props "measured" 3.2× fantasy's while storing 4.6× *darker*
+  bytes, and that impossible pair drove a whole session of wrong conclusions.
+- for an **un-baked** prop it accumulated `res_ambient` (the cube's six-face mean), while
+  `HL2_CalcModelLighting:7906` puts `res_diffuse` into `light_avg`, which is the shader's base.
+
+Fixed to report the drawn level, with the old figure kept as a second column so the first run
+after the change is self-checking. `prop_census` gains a per-prop `baked level` line, so "these
+two pines are different brightnesses" is now a number instead of an argument about a screenshot.
+
+### 3. The decode curve was the wrong curve
+
+VRAD is explicit once you read it. A `.vhv` byte is `ConvertLinearToRGBA8888`
+(`utils/vrad/lightmap.cpp:3583-3601`) → `LinearToVertexLight`
+(`public/mathlib/mathlib.h:1410-1428`) over the table at `mathlib/color_conversion.cpp:233-261`,
+and VRAD initialises it `MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f, ...)` (`utils/vrad/vrad.cpp:2356`):
+
+    byte = round(255 * min(1, 0.5 * pow(clamp(linear,0,4), 1/2.2)))
+
+**One measured number pins all three terms:** the maximum colour byte over every LOD0 vertex of
+every prop is **exactly 239**, in *both* the CS:S and the Momentum build of surf_fantasy.
+`round(255 * 0.5 * 4^(1/2.2)) = 239`. That also settles `hl2_lt_baked_scale`'s default of 2 —
+it is exactly `1/overbrightFactor`, which is a stronger justification than the `gl_overbright`
+argument the code carried (both are true; the VRAD one is primary).
+
+We were inverting **sRGB** instead. New cvar `hl2_lt_baked_curve`, default **1** = VRAD's own
+`pow(b/127.5, 2.2)`; `0` is the old sRGB pair bit-for-bit; `2` is no decode at all, a diagnostic
+that puts the level in the same space as the per-vertex multiplier.
+
+Arm 2 exists because the level (`acc[]`, decoded) and the multiplier (`encsum`/`encpeak`, raw
+bytes) are derived in **different spaces**, and that split is its own error: a boreas prop draws
+a median **1.66×** brighter than `2 × VRAD's byte` at its own mean vertex, ranging 0.31×–2.4×
+per prop. The new curve moves the 4-byte maps **+28%**; that is not a regression, it is the
+discovery that they have been drawing too bright.
+
+Also settled, and it removes a suspect that had been carried for two patches: `g_bHDR`
+(`utils/vrad/vradstaticprops.cpp:1540-1547`) changes **only the output filename**. No exposure,
+no divisor, no alternate encode. CS:S's `sp_N.vhv` and `sp_hdr_N.vhv` are byte-identical on
+2207 of 2208 matched props. Treating HDR and LDR the same after load is correct.
+
+### 4. Fault 3 is not any of the above, and `hl2_lt_baked_dir` cannot fix it
+
+The apply site at `:8451` passes a directional fraction of `0.0f` for a per-vertex-bound prop
+where the mean arm passes `FS_BAKED_DIR 0.30f`, so a baked prop draws with no normal-dependent
+term at all. That looked like the bumped-rock report. **It is not**, and the reason is worth
+recording so it is not chased again: the directional term is computed in the **vertex** shader
+against the **geometric** normal (`glsl/vmt/vertexlit.glsl:109-123`). The normal map is sampled
+only in the fragment shader and feeds `REFLECTCUBEMASK` and `#BUMPCUBE` (`:190-203`, `:327-356`).
+No value of any directional fraction ever reaches a normal map.
+
+The lever for fault 3 is `hl2_cubelight` / `#BUMPCUBE`, which already exists in the tree and is
+already in `mat_vmt_progs.h`. Its default is **not** changed here.
+
+`hl2_lt_baked_dir` is added anyway, default `0` = today exactly, because it decides whether a
+baked prop has any silhouette and being able to move it live at a fixed vantage is worth the
+cvar. It joins the `light_known` invalidation at `:8172-8187` in the existing `dirsign_live`
+shape. **At any non-zero value `hl2_lt_dirsign 1` becomes a prerequisite**, or it lights the
+wrong side of every prop.
+
+### 5. `r_sky_forcedepth` default 1 → 2  (`engine/gl/gl_warp.c:104`)
+
+> *"I render a bunch of random crap out the windows… on CS:S and Momentum mod I do not see any
+> 3d skybox out the windows, but there appears to be one in ours?"* — and, after testing,
+> *"r_sky_forcedepth 2 was correct"*.
+
+**surf_fantasy has no `sky_camera` at all**, in either the Momentum or the CS:S build (0 in both
+entity lumps; also 0 `env_fog_controller`, 0 `func_fog_volume`, and the substring `fog` does not
+occur in either lump). There is no 3D skybox in that map in any engine, which is exactly why
+CS:S shows nothing out those windows. What we were drawing is main-map geometry over sky pixels
+that carry no depth.
+
+**Source-only by construction, not by intent:** the cvar's value is tested in exactly one place,
+the `fg_new` branch of `R_SkyMaskWantedForGame`. `fg_quake3` returns before it and
+Quake/Quake2/Half-Life return `true` after it regardless, so `1` and `2` are behaviourally
+identical on every Quake-family game and none of them can move by a pixel.
+
+Two notes in that file argue the other way and are why `1` was chosen originally — masking can
+slice a prop that intersects a sky brush, and under `RDF_SKIPSKY` it can depth-reject the world
+behind one (Patch 265's surf_boreas artefact). Both are real; both were weighed against a fault
+the reporter can see from spawn on a map he plays, and `1` remains one word away.
+
+### Verification — `logs/p294g_census.log`, 2026-09-12
+
+Six arms in ONE process, alternating maps every load so each is a real `Mod_LoadVBSP` (`map <the
+same name>` twice does not reload — that is what voided run 294e). Ten numbers were written into
+the cfg **before** the run. Nine landed exactly:
+
+| arm | map / cvars | predicted | measured |
+|---|---|---|---|
+| 1 | boreas curve 0 vhv12 1 | `1587 of 1587`; mean `24.7 25.5 26.8`; old column `177.8 183.3 193.4` | **all three exact** |
+| 2 | fantasy curve 0 vhv12 1 | `2345 of 2345`; mean `77.3 79.4 65.9`; old ~`163 161 133` | **`77.3 79.4 65.9` / `163.4 160.6 133.1`** |
+| 3 | boreas curve 1 | mean `31.8 32.7 34.0` | **exact** |
+| 4 | fantasy curve 1 | mean `78.3 80.3 67.2` | **exact** |
+| 5 | boreas vhv12 0 | byte-identical to arm 1 | **identical** |
+| 6 | fantasy vhv12 0 | `0 of 2345`; old column `55.3 61.9 53.9` | **exact — reproduces run 294e** |
+| 6 | …its mean (`res_diffuse`) | **≥ `55.3 61.9 53.9`** | **`54.4 59.7 48.1` — LOWER. Prediction refuted.** |
+
+Arm 1 landing on both columns at once is what licenses the rest: the second column reproduces
+the pre-patch line exactly while the first drops to the offline emulator's figure, so the loader,
+the emulator and every number above are the same object.
+
+**The headline:** the bake is **42–48% brighter** than the fallback it replaces
+(`54.4 59.7 48.1` → `77.3 79.4 65.9` at curve 0, `78.3 80.3 67.2` at curve 1). Turning it on does
+not darken props. The screen agrees — `screenshots/p294g_a6_nobake_lex*` vs `p294g_a4_curve1_lex*`
+at the reporter's three save-locks show the rope-bridge planks, the mushroom caps and the island
+grass all lighter.
+
+**THE REFUTED PREDICTION, AND WHAT IT FOUND.** I predicted `res_diffuse >= res_ambient` because
+res_diffuse is res_ambient plus the dominant face's deviation. The premise is wrong: the
+deviation added is *signed* (`:9149-9161`), and at the default `hl2_lt_dirsign 0` the direction
+is built from unsigned deviation **lengths** and points AWAY from the bright face — so it
+systematically adds the **darker** face's deviation. That known Patch 268 C2 bug therefore does
+more than light the wrong side: it drags the base level of every un-baked prop **below the
+cube's own mean**, by −1.6% in red and **−11% in blue**, which is why R/B goes 1.03 → 1.13. New
+finding, and it makes the case for the bake stronger, since the bake bypasses this path entirely.
+
+### Still open (not this patch)
+
+- **The tensor2 `func_brush *101` reported as darker than CS:S.** Cleared this session: its
+  stored lighting is *not* darker (1.082× the world for the same material at the same place,
+  measured over its 2,860 luxels), HDR and LDR are bit-identical over it, all three of its
+  materials are `LightmappedGeneric` with valid `lightofs` and zero surface flags, `r_shadows` is
+  0, our fog matches Source's to 0.000000 at every distance *and* is the wrong sign, and the
+  `MDLF_NEEDOVERBRIGHT` factor-of-four is refuted statically (`mod_vbsp.c:9667` sets it before
+  the submodel loop copies it). Next candidates: the `r_texdiag` `LM`/`LUX` diff of
+  `*101:maps/surf_tensor2.bsp` against the world model, and Source's HDR **tonemapping**, which
+  `ENGINE.txt`'s Patch 288 entry already flags as an unmeasured offset — tensor2 runs an
+  `env_tonemap_controller` at `SetAutoExposureMin 0 / Max 1.4` and we do not tonemap at all,
+  which would show up on a dark object while the bright world around it matched.
+- **The second set of sky bleed** the reporter still sees with `r_sky_forcedepth 2`. Needs one
+  screenshot taken with the cvar already at 2.
+- `r_ignoreentpvs` is a **red herring** for static props: the hl2 plugin runs its own PVS and
+  area walk before emitting them (`mod_vbsp.c:6556-6577`), which is also why `*101` vanishes when
+  the camera enters the void — that is the camera's area, not the entity's.
+
+## Patch 297 — fixed-function fog was being applied to the 2D pass, and a negative fogstart is what made it visible  *(APPLIED — `gl/gl_backend.c` (two guards), `gl/gl_font.c` (three latent defects, none of them this bug). No header change. VERIFIED: live A/B/A on one process, arm difference (6,10,13) against a prediction of (5.86,9.43,12.86) registered before the run.)*
+
+Reported as "grey boxes behind console/HUD text on surf_tensor2", and hunted for most of a
+day inside `gl_font.c` by two sessions. It was never a font bug.
+
+`BE_ProglessFogBegin` gated on five things — fog density, `r_fog_progless`, a shader
+program, `SHADER_SKY`, the `qglFog*` bindings — but not on `shaderstate.force2d`, even
+though that field is declared at `:160`, set at `:513`, and used at `:3281` and `:5364`. A
+comment asserted the guard was unnecessary:
+
+> 2D is safe without a guard: it draws at an eye-space depth of ~0, where both fog modes
+> give a factor of 1, i.e. no fog.
+
+**True only for a non-negative fog start.** Linear fog is `f = (end - z)/(end - start)`, so
+at `z ~ 0` it is `f = end/(end - start)`, which is 1 only when `start >= 0`. Source maps
+set a negative `fogstart` freely, and `:5338` passes `globalfog.depthbias` to
+`GL_FOG_START` verbatim. On surf_tensor2 (`fogstart -2500`, `fogend 15000`,
+`fogcolor 41 66 90`):
+
+    f     = 15000 / (15000 - (-2500)) = 0.857143
+    added = (1 - f) * (41,66,90)      = (5.86, 9.43, 12.86)  ->  (6,9,13)
+
+added to every program-less 2D quad: console glyphs, HUD, menu. No free parameter.
+
+**What actually identified it was the channel ratio, not the magnitude.** Every font-side
+hypothesis — atlas content, blend state, a background quad, edge-texel bleed under
+magnification — can only produce a multiple of the text colour (224,227,231, near-neutral)
+or of `$whiteimage`. A *blue-dominant* residue equal to `fogcolour x 0.142857` on all three
+channels cannot come from any of them. Both sessions spent hours on magnitude and shape;
+one ratio ended it.
+
+Why the shape reports disagreed and both were right: the fog supplies the FILL, `gl_font.c`
+supplies the SHAPE, and there are two shape paths — `BITMAPPLANE` uses `advance x
+charheight` (whole cell), `SINGLEPLANE`/default use `bmw x bmh` (ink bbox). Console notify
+takes the first, a TTF console font the second. Cell-shaped boxes and ink-shaped boxes were
+measurements of different surfaces, not a contradiction.
+
+**SCOPE, STATED PRECISELY — this patch fixes 2D text on maps with a negative `fogstart`.
+It does NOT fix additive scene passes, which are affected on ANY fogged map.** The
+seven-map census below bounds the 2D half only; see the remaining-half section for why the
+additive half is roughly 303 maps rather than 7.
+
+**Not contrast, and not map-specific by accident.** Of 1339 library BSPs, exactly seven have
+`fogenable`, `maxdensity >= 1` and `fogstart < 0`: surf_tensor2 (-2500/15000, 14.3%, by far
+the worst), surf_kultur (-300/3500, fogcolor `0 47 185`, so a strongly blue box),
+what_is_this (-200/2800, yellow-brown), surf_aquaflow, surf_muerto, surf_doomsday, and
+surf_tensor — whose -100/15000 works out to 0.2/255, which is why Patch 273's control never
+showed it.
+
+### The fix
+
+- `BE_ProglessFogBegin` — `if (shaderstate.force2d) return false;` as the **first** gate, so
+  it cannot later be reordered behind a cvar test into irrelevance.
+- The permutation setter — `if (r_refdef.globalfog.density && !shaderstate.force2d)`. The
+  GLSL side applies the identical linear term through `sys/fog.h`, so fixing only the
+  fixed-function path would leave the bug alive wherever a 2D draw carries a program, and
+  alive everywhere in a core-profile context, which the fixed-function path cannot reach at
+  all.
+
+`r_fog_progless 0` is **not** the fix. It disables program-less fog globally and re-breaks
+exactly what Patch 266 exists for (the surf_boreas cloud layers).
+
+### Verification
+
+Live A/B/A in one process on surf_tensor2, muted vantage, FPS counter at 12x. Median RGB in
+the text band: A `(44,60,81)`, same-setting control `(44,60,81)` exactly, C-restore
+`(44,60,81)` exactly, B (`r_fog_progless 0`) `(38,50,68)`. **A - B = (6,10,13)** against the
+(5.86,9.43,12.86) predicted before the run. The exact agreement of the control and the
+restore is what makes the difference meaningful.
+
+Methodology note worth keeping: the first metric tried was a *lift* — text band minus a
+"clean" band above it — and read ~0 in every arm. That was not a null result but a broken
+reference: the band above the text is also program-less 2D and carries the same fog term, so
+it cancelled. Absolute medians showed it immediately.
+
+### Known remaining half — NOT fixed here, and the notes must not claim otherwise
+
+An **additive** scene pass has the same problem for a different reason: fixed-function fog
+mixes toward `GL_FOG_COLOR` on RGB, so on a `gl_one/gl_one` pass a black texel becomes the
+fog colour and is then ADDED — which is why `light_glow02/03` (UnlitGeneric, hence
+program-less) show their whole texture square faintly lit rather than masked. A scene-pass
+sprite is not `force2d`, so **297 does not fix it and the sprites are still wrong after
+this patch.**
+
+**AND IT IS FAR BROADER THAN THE 2D HALF — do not carry the seven-map census over to it.**
+The additive half needs no negative `fogstart` at all. `f < 1` at *any* distance under any
+fog, so `(1-f)*fogcolour` is added to a texel that should contribute nothing; a positive
+start merely moves where it begins rather than removing it. So:
+
+    2D half (297, fixed)        7 of 1339 maps -- requires fogstart < 0
+    additive half (OPEN)        every fogged map that draws additive sprites
+                                -- ~303 env_fog_controllers in the library
+
+MEASURED on the pre-297 binary (md5 331B51AC03BD), `b58spfog.cfg`, surf_tensor2 at the
+reporting vantage, sprites on at `vbsp_lightglow_scale 1`. Central region mean RGB:
+A `(41.25, 56.51, 74.87)`, same-setting control exact, C-restore exact, B
+(`r_fog_progless 0`) `(37.37, 50.07, 65.41)` — `B-A = (-3.88, -6.43, -9.46)` with 46.1% of
+pixels moved. Visually the large hard-edged translucent rectangles are plainly present in A
+and **gone entirely** in B. That is the "big square of translucent colour" from the original
+report, and it survives at `vbsp_lightglow_scale 1`, so a saved value of 10 was a separate
+compounding factor and not the cause.
+
+The named approach is forcing `GL_FOG_COLOR` black for additive passes — fading an additive
+contribution toward zero rather than toward the fog colour, which is the physically correct
+answer for an emissive pass regardless. It is a change to scene rendering that Patch 266's
+surf_boreas cloud layers depend on, so it does not ship without a boreas control arm proving
+those layers are unchanged. Repro harness: `cfg/testrun/b58spfog.cfg`.
+
+Unrelated but adjacent: `vbsp_lightglow_scale` defaults to Source-faithful 1; a saved value
+of 10 will blow the glows out independently of any fog bug.
+
+### Three latent `gl_font.c` defects fixed alongside — none of them this bug
+
+- `:716` used `PLANEHEIGHT` as the row stride while every write loop advances by
+  `PLANEWIDTH`; `:3344`/`:3346` divided T coordinates by `PLANEWIDTH`, in **both** the
+  scaled and unscaled draw paths (three sites, not one). All latent only because
+  `FIMAGEHEIGHT` is `#define`d to `FIMAGEWIDTH`, so the atlas is square. Fixed as tripwires
+  for whoever makes it non-square, not as fixes for anything visible today.
+- `:536`/`:614` hardcoded `IF_NEAREST` in the `Image_Upload` flags while the plane texture
+  is *created* at `:490` with `(r_font_linear.ival?IF_LINEAR:IF_NEAREST)`. So `r_font_linear
+  1` changed the creation flag — and the padding choice at `:685` that reads it back — but
+  never the sampler actually uploaded with. The cvar silently did half of what it says, and
+  any past A/B on it was not testing filtering.
+
+Deliberately **not** changed: `:685`'s `IF_LINEAR`-conditional padding (self-consistent once
+the uploads honour the cvar; changing pad policy with no failing test is the speculative fix
+this series keeps having to undo), and `:1443`'s missing `bm->pitch` on the resample path —
+real, but unreachable for any scalable face, and `Image_ResampleTexture` has **no stride
+parameter**, so the honest fix is a row repack rather than an extra argument. Own patch, own
+falsifier.
+
+## Patch 298 — map load is single-threaded LZMA and almost nothing else, and most of what it expands is a lightmap nobody will read  *(APPLIED — `plugins/hl2/mod_vbsp.c` only, plus one new cvar `hl2_lumpretire`. No header change. VERIFIED: A/B/A on one binary, dedicated 11806ms→4018/3797ms and 889MB→557/550MB, client 169.2MB retired; 414 log lines in every arm and the only diffs are the ones A-vs-C shows too. DEPLOYED to the NanoPi and re-verified on aarch64: 23604ms→6102/5705ms, 832.6MB→493.0/492.9MB, all five lobbies restarted onto it.)*
+
+Reported as "20 second map loads and 800 MB per server instance on the NanoPi", with static
+props as the suspect — 1206 of them on `surf_affliction`, 181 `.phy` hulls, 31142 collision
+triangles, and an apparent correlation between prop count and load time across three maps.
+
+**The props were innocent and the correlation was spurious.** `hl2_propcollision 0` loads no
+prop model at all and builds no prop collision; it moved `surf_affliction` from 19450ms to
+19507ms. Prop lighting off, `hl2_rigidprops 0`, `hl2_lt_baked 0` — all inside noise.
+
+Fourteen gdb samples through one load on the Pi, every one of them identical:
+
+```
+VBSP_LoadMap -> VBSP_LoadModel -> VBSP_DecompressLumps -> LzmaDecode -> LzmaDec_DecodeToDic -> LzmaDec_DecodeReal_3
+```
+
+with the four worker threads parked in `futex_wait`. Load time is LZMA output bytes at
+roughly 17 MB/s, and the lump census says where those bytes come from:
+
+| map | on-disk | decompressed | LIGHTING + LIGHTING_HDR | load (Pi) |
+|---|---|---|---|---|
+| surf_affliction | 200 MB | 478 MB | 35+35 → **167+167 MB** | 19.7 s |
+| surf_reverie | 187 MB | 326 MB | 25+25 → **80+80 MB** | 13.7 s |
+| kz_bhop_badg3s | **495 MB** | 495 MB | *no compressed lumps at all* | **2.4 s** |
+| surf_kitsune | 4 MB | 12 MB | 0.03 → 1 MB | 0.5 s |
+
+`kz_bhop_badg3s` is the control that kills the file-size theory and the prop theory at once:
+the largest map in the library loads in a tenth of `surf_affliction`'s time, because VBSP
+wrote none of its lumps compressed. It is also why the first capacity estimate given to the
+user was wrong — it was taken from the largest *file*, which happens to be the cheapest load.
+
+**The engine already knew not to use this data.** `VBSP_LoadLighting` sits behind
+`if (noerrors && haverenderer)` at `mod_vbsp.c:9692`, and `haverenderer` is computed at
+`:9658`. `VBSP_DecompressLumps` runs at `:9680` — twelve lines earlier. The guard was correct
+and was simply applied after the expensive part.
+
+**And half of it is wasted on the client too.** `VBSP_LoadLighting` is an `if`/`else if`: it
+reads exactly one of the LDR/HDR pair. On every machine that has ever loaded `surf_affliction`,
+167 MB was decompressed and never looked at.
+
+So `VBSP_DecompressLumps` now takes a `skiplump[]` from its caller. The rule for putting a lump
+on it is deliberately strict — **no branch that reads this lump's contents can be taken in this
+configuration** — not "it looks unused".
+
+Two things had to be got right, and the first draft got both wrong:
+
+- **`VBSP_LoadLeafLight` is a three-way choice, not two.** It takes HDR, else falls back to
+  LDR, else falls back to HDR again. So "the map is HDR" does *not* retire the LDR half: a map
+  whose HDR ambient lumps are VRAD's all-zero stubs (Patch 152) reaches the LDR branch anyway.
+  The predicate is the first branch copied verbatim, `usehdr && ami_hdr && amv_hdr`.
+- **A retired lump's directory entry must NOT be zeroed.** The draft set `filelen = 0` so a
+  stale LZMA header could not be read as struct data. That is wrong here, and the
+  counter-example is load-bearing: `VBSP_LoadFaces:3671` picks between the LDR and HDR *face*
+  lumps by probing `lumps[VLUMP_LIGHTING_LDR].filelen` as an existence flag — and it is **not**
+  behind `haverenderer`, because faces are needed for surfaces and collision on a server too.
+  Zeroing `LIGHTING_LDR` would have silently moved the *server* onto the HDR face set while
+  every client stayed on the LDR one: different geometry on the two sides of prediction, from a
+  patch whose entire purpose is to not change what gets loaded. Note also that this predicate is
+  not the same question as `usehdr` — its first term is `FACES_HDR`, not `LIGHTING_HDR` — so the
+  hoisted value cannot be substituted into it either. The entry is now left exactly as the file
+  has it; only the bytes go unexpanded.
+
+`usehdr` is hoisted above the decompressor because the retirement list needs the answer before
+it can know what is worth expanding. It reads lengths through a new `VBSP_LumpRealLen`, which
+returns the fourcc for a compressed lump — that is what makes the hoist *provably* equivalent
+rather than usually right, since filelen is still the compressed size at that point.
+
+### Verification
+
+`hl2_lumpretire` (default 1, `CVAR_MAPLATCH`) makes the whole patch a one-command A/B, which is
+also the escape hatch if a map ever misbehaves. `surf_affliction`, one binary, three arms:
+
+| arm | dedicated load | dedicated RSS | retired |
+|---|---|---|---|
+| A `hl2_lumpretire 1` | **4018 ms** | **557 MB** | 8 lumps, 338.9 MB |
+| B `hl2_lumpretire 0` | 11806 ms | 889 MB | — |
+| C `hl2_lumpretire 1` | **3797 ms** | **550 MB** | 8 lumps, 338.9 MB |
+
+2.9–3.1× faster and 332 MB lighter, C reproducing A. Client arm: 169.2 MB retired (3 lumps —
+`LIGHTING_LDR` plus the two LDR leaf-ambient lumps), ~14 s → ~11 s, 1463 MB → 1293/1346 MB.
+
+The correctness falsifier is the log: **414 lines in all three arms**, and the only differences
+are the `fs:` timing line and some thread-ordering churn in model skin warnings — *which A-vs-C
+shows too*, so it is run-to-run noise and not a patch effect. Everything that describes what was
+loaded is identical across arms, including the two lines that would move first if the retirement
+had picked wrong: `leaf ambient HDR, 77220 points, 76918 non-zero` and the `lightmap stride 1/4`
+census with its 32095 lit / 11939 bumped / 9222 lightstyled face counts.
+
+### Deployed to the NanoPi, and re-verified there on aarch64
+
+The Pi's engine tree is a separate, older checkout (`/srv/nvme/ftesurf-server/fteqw`, Sep 7, not a
+git repo, `mod_vbsp.c` 346389 bytes against this tree's 452021). It was **ported, not synced** —
+copying this tree's `mod_vbsp.c` wholesale would have dragged ~100 KB of unrelated later patches
+onto a box that had not been tested with them, for a change that touches one function and one
+cvar. The port is byte-for-byte the same patch: every attachment point already existed there
+(`VBSP_DecompressLumps`, the `VLUMP_*` enum, `haverenderer`, `hl2_favour_ldr`, and — the one that
+had to be checked before porting — the identical three-way HDR→LDR→HDR fallback in
+`VBSP_LoadLeafLight` and the identical `LIGHTING_LDR.filelen` existence probe in `VBSP_LoadFaces`).
+
+`zip` is not installed on the Pi, so `make plugins-rel` fails at the `EMBEDMETA` step *after*
+linking. That is pre-existing and harmless: the Sep 7 `.so` that had been serving five lobbies for
+five days has no zip trailer either (checked for `PK\x05\x06` in both). The `.so` was installed
+into `game/` by **atomic rename**, never `cp` over the live file — overwriting an mmap'd shared
+object in place can SIGBUS a running server, whereas a rename leaves the old inode alive for the
+processes already holding it.
+
+A/B/A on the Pi, one binary, `surf_affliction`, run strictly sequentially on port 27599 so the five
+live lobbies were never touched:
+
+| arm | `hl2_lumpretire` | load (engine's own `fs:` line) | RSS | peak |
+|---|---|---|---|---|
+| A | 1 | **6102 ms** | **493.0 MB** | 637.2 MB |
+| B | 0 | 23604 ms | 832.6 MB | 976.7 MB |
+| C | 1 | **5705 ms** | **492.9 MB** | 637.6 MB |
+
+**3.9–4.1× and −340 MB**, the saving exactly the 338.9 MB the retirement line reports. The
+falsifier holds on aarch64 as it did on x64: the A-vs-C control shows the *same class* of log
+difference (model-load thread ordering) as A-vs-B, and the two census lines that describe what the
+server actually built are byte-identical in all three arms — `1206 static props, 390 solid
+(solidity 0:816 2:0 6:390 other:0)` and `collision shapes — 181 .phy hull (31142 tris), 0 bbox,
+0 render mesh, 33 models with no .phy`. Collision geometry is what a dedicated server exists to
+compute, so that is the line that had to not move.
+
+All five lobbies were restarted onto it (`stopall.sh && runall.sh`, which delegate to
+`ftesurf@.service`). Each now logs its retirement; lobby 5 gives a same-map before/after across the
+restart, `bhop_benchpressed` **3652 ms → 2573 ms** with 12.9 MB retired. Resident totals went
+819.0 MB → 352.8 MB across the five, but **do not quote that as the patch's effect** — the "before"
+processes had been up 4.9 hours serving players and the "after" were 37 seconds old. The controlled
+A/B/A above is the attributable number; the lobby figure is confounded and is recorded here only so
+the next reader does not rediscover it and believe it.
+
+Two measurement traps cost a rerun here, both worth remembering. `timeout 180 cmd &` makes `$!` the
+pid of `timeout`, not of the engine, so the RSS sample read 0.7 MB and the `kill` left the engine
+running — three orphaned servers then competed for CPU and inflated each other's load times. And
+`pkill -f "sv_port 27599"` matches the *shell running the script*, whose own command line contains
+that string; it killed its own session (ssh exit 255). Match on the process name (`pgrep -x
+fteqw-svarm64`) and only then read `/proc/<pid>/cmdline`.
+
+### Known remaining half
+
+`mod_hl2.c` has **no** `isDedicated`/`QR_NONE` guard of any kind, so a dedicated server reads the
+whole `.mdl`, `.vtx` and `.vvd` of every solid prop and expands ~60 bytes per vertex — about 44
+of which nothing on a server can read — plus a tangent frame per vertex and index arrays for up
+to 8 LOD levels that `BIH_BuildAlias` then discards. Materials are already skipped
+(`Mod_LoadAliasShaders` is behind both `#ifndef SERVERONLY` and `qrenderer != QR_NONE`), and the
+`.phy` is read twice per model. Measured size of that half on `surf_affliction`: `hl2_propcollision 0`
+moved RSS 812 MB → 730 MB and load time not at all, so it is **~80 MB and ~0 s** — real, worth
+doing, and an order of magnitude smaller than what Patch 298 removes. Do not let the prop theory
+back in without a control.
+
+
+## Patch 299 — fog the colour, leave the alpha to the blender
+
+`plugins/hl2/glsl/vmt/{vertexlit,lightmapped,animated,transition,twotexture,unlit,rt,imposter}.glsl`
+plus one cvar in `plugins/hl2/mod_vbsp.c`. No engine change, but `make -C plugins/hl2` must
+regenerate `mat_vmt_progs.h` or the old baked strings ship.
+
+Every VMT program ended in `fog4(diffuse_f)`, and `fog4()` is
+
+    vec4(fog3(regularcolour.rgb), 1.0) * regularcolour.a      engine/gl/gl_vidcommon.c:1887
+
+— it multiplies the fogged colour by the surface's own alpha. That is the correct arithmetic for a
+**premultiplied** blend, and this plugin emits none: `mat_vmt.c:3719` and `:3885` write
+`src_alpha one_minus_src_alpha`, so GL was already applying the alpha and `fog4()` applied it a
+second time. Additive keeps `fog4additive` and water keeps `fog4blend`; neither ever multiplied.
+
+Source does not treat base-texture alpha as opacity unless the material says so. On an opaque
+`VertexLitGeneric` it is a **mask** — `$basealphaenvmapmask`, `$selfillummask` — and the surface is
+solid. With no fog the opaque blend discards the alpha, so nothing shows. The moment fog is on, the
+mask multiplies every pixel.
+
+### The report this closes
+
+Lex, on surf_tensor2 looking out a window: "all of the build windows are black and very visable, and
+the town building are 'bright black'", against a CS:S capture that is near-solid fog with only faint
+smokestack silhouettes.
+
+Mean base-texture alpha of the eight building materials in that frame, read out of the VTFs:
+
+| material | mean alpha | on screen |
+|---|---|---|
+| hill_cluster (`row_hill_cluster`) | **0.030** | black |
+| gov_upscale (`row_upscale`) | **0.028** | black |
+| antenna | 0.094 | black |
+| long_building001a | 0.920 (min 0.035) | fogged, dark window grid |
+| buildingsheet_03a | 0.963 (min 0.000) | fogged, dark window grid |
+| industrial | 0.960 | fogged |
+| project_building03 / 02 | 0.969 / 0.984 | fogged |
+
+Cleanly bimodal, and it matches the screen object for object — including the window grids, which are
+the low-alpha panes *inside* an otherwise high-alpha texture. The 0.03 props drew at 3% of the fog
+colour: a black cutout against a sky that was itself correctly fogged.
+
+`hl2_fog_alphamul`, default `0` = fixed; `1` restores `fog4()` bit-for-bit.
+
+### Verification
+
+`cfg/testrun/p299_verify.cfg`. The pixel noise floor on this vantage is **0.000% within a run and
+across separate processes**, so the restore arms are judged exactly, not by eye:
+
+| check | result |
+|---|---|
+| `hl2_fog_alphamul 1` vs the pre-fix run (`p298_a4_repeat`) | **0.000%** |
+| `hl2_fog_alphamul 1` white-fog vs pre-fix (`p298f_f2_white`) | **0.000%** |
+| repeat control G3 vs G1 | **0.000%** |
+| black props, before | `3.8 5.3 6.8` against a `21.9 35.2 50.4` sky |
+| black props, after | **`26.5 41.0 58.4`** — at sky level, not 5.8x below it |
+| correctly-fogged props, after | `27.0 42.0 59.8` — the two classes converge |
+
+The frame now matches the CS:S capture.
+
+### How it was found, and four hypotheses that died first
+
+The vantage is Lex's own `save011`, which is why this run was worth anything — two earlier attempts
+guessed cameras and were void. The instrument was painting the fog **magenta** rather than toggling
+it, which names *which pixels receive fog* instead of only whether the frame changed.
+
+Killed by measurement, in order: prop-vs-brush (`r_drawentities 0` removed the whole town, so both
+classes were entities); `$nofog` (not one of the eight VMTs sets it); per-material (`hill_cluster`
+and `gov_upscale` are the same material to the letter and behave oppositely... until the alpha
+explained both); and the envmap (`r_envcubemap 0` and `hl2_envmap_source 0` both changed **0.000%**).
+
+**My own first mask was also wrong**, and worth recording: I took the prop mask as
+`|default − props culled| > 12`, but a *correctly* fogged building is the same colour as the sky
+behind it, so culling it changes almost nothing and the threshold rejected it. The mask was biased
+toward exactly the broken objects. Retaken against the high-contrast magenta pair it came out
+`fogged NOT prop: 0.000%`, which is what finally made the picture consistent.
+
+The premise only broke when I stopped measuring and **magnified the pixels**: under a fog forced to
+end at 1 unit, with every surface 700+ units away, the buildings should be a flat wall of fog colour
+— and the entire texture was legible.
+
+### Still open, and separate
+
+Even with this fixed, a white fog forced to end at 1 unit reaches `148` and not `255`, and the
+skyroom pass sits at ~0.68x of the main view for identical fog. Fog not quite saturating is a
+second, smaller fault and is not this one.
+
+---
+
+## Patch 300 — additive surfaces were fogged toward the fog colour instead of toward black, and the material class the tree had written down was wrong  *(APPLIED AND VERIFIED — engine `gl/gl_shader.c` (one guard) and a comment correction in `gl/gl_backend.c`; plugin `plugins/hl2/mat_vmt.c`, `plugins/hl2/mod_vbsp.c`, `plugins/hl2/glsl/vmt/unlit.glsl`. No header change. VERIFIED: three-process A/B with a repeat arm for the floor; the effect's CHANNEL RATIO predicted before the run and landing 0.79° off.)*
+
+Reported as *"the lens flare lights ... now not rendering properly but a big square of
+transucent color? the texture has been resduced to flatness?"* on surf_tensor2.
+
+This is the second half of Patch 297. That one fixed fog leaking onto the **2D** pass; this one
+fixes it on **additive scene** passes, which 297's own note recorded as the larger of the two.
+
+### The mechanism
+
+`BE_ProglessFogBegin` enables fixed-function GL fog for any surface whose shader has no
+**top-level** program. Fixed-function fog mixes toward `GL_FOG_COLOR` on RGB and knows nothing
+about the batch's blend. On a `gl_one/gl_one` sprite the only mask is **black** —
+`light_glow02/03.vtf` are BGR888, no alpha channel at all — so a masked-out texel becomes
+`fogcolour*(1-fac)` and is then **added**. The mask stops masking and the quad draws as a flat
+translucent rectangle.
+
+Unlike the 2D half this needs no negative `fogstart`: `fac < 1` at any distance under any fog, so
+it affects every fogged map that draws additive sprites (~303 `env_fog_controller`s) rather than
+the seven maps with `fogstart < 0`.
+
+### The fix, and why it is the program route and not `GL_FOG_COLOR`
+
+`sys/fog.h` has had the right function all along — `fog4additive()` is `c * vec4(fac,fac,fac,1)`,
+fade toward black — and every program-carrying pass in the engine already calls the correct
+variant. The materials that break are precisely the ones with no program to call it from. So they
+are given one (`vmt/unlit` + `#ADDITIVE`) rather than teaching the fixed-function path about
+blends. That also works on a core profile, where `BE_ProglessFogBegin` is never called at all.
+
+### The class was wrong in the tree, including in my own comment
+
+`gl_backend.c` said *"light_glow02/03 (UnlitGeneric, hence program-less)"*. **They are class
+`Sprite`.** Only `light_glow02_add_noz.vmt` — the `env_lightglow` material, hardcoded in
+`cl_sprites.qc` — is UnlitGeneric. The error was invisible while the sentence only had to explain
+the artefact, because both arms emit a program-less pass and both show it. It became load-bearing
+the moment a fix had to name an arm.
+
+**And the obvious gate would still have missed them.** `light_glow03.vmt` sets no `$additive` at
+all; it is additive because the Sprite arm falls through to its *"no opinion in the VMT: keep what
+shipped"* branch. A patch gated on `st->additive` alone fixes 166 of surf_tensor2's 429 glows and
+looks, from a screenshot, like it half worked. Hence `VMT_SpriteAdditiveProgramOK`.
+
+### A latent defect found on the way, and it is Patch 250's
+
+A real pass earns depth-write by being opaque — `Shader_EndPass` grants it only for `ONE ZERO`.
+The back-fill at `gl_shader.c:6273`, for a top-level program with no pass block, granted it
+**unconditionally**, on top of blend bits `progblendfunc` had already written. So `progblendfunc
+add` produced an additive surface that also stamps the depth buffer, and since
+`SHADER_SORT_ADDITIVE` draws after opaque, every such glow occluded the glows behind it.
+`vmt/emissive` has done this since Patch 250. Narrowed to additive only — `src_alpha
+one_minus_src_alpha` program shaders (every `$translucent` glass material) still write depth here
+and probably should not, but changing sort behaviour on a few hundred maps is not a fog patch's
+business.
+
+### Two behaviour changes ride along, both the VMT finally being obeyed
+
+`$nofog` starts working on these arms (it is appended to `progargs` for every class and these arms
+had no program to read it), and `$alphatest` starts working on additive materials — 108 rows
+library-wide. The second is bounded by construction: on an additive surface a discarded fragment
+and a black fragment are the same pixel, so it can only change texels where the author put visible
+colour inside a region they also marked transparent.
+
+### Verified
+
+Binary `ftesurf64.exe` md5 `9A2530A8567E`, `fteplug_hl2_x64.dll` `355E50D6E4E1`.
+
+**The prediction, registered in `p300t2b.cfg` before any arm ran.** Per fragment, fix OFF is
+`c*fac + fogcolour*(1-fac)` and fix ON is `c*fac`. The `c*fac` term cancels exactly, so
+
+    OFF - ON = fogcolour * (1 - fac)
+
+and its **channel ratio is 41:66:90 = 1 : 1.610 : 2.195 independent of depth**, of which sprite, of
+overlap and of glow brightness, because `fac` cancels out of a ratio.
+
+| measurement | result |
+|---|---|
+| cross-process noise floor (two ON runs) | **0.0000** meanabs, 0.000% of px |
+| effect, OFF vs ON | 7.845 meanabs, **46.00%** of px move >3 |
+| mean (OFF − ON) | **+4.970 +7.726 +10.840** |
+| measured ratio | **1 : 1.555 : 2.181** (predicted 1 : 1.610 : 2.195) |
+| angle to the fog-colour vector in RGB | **0.79°** |
+| sign | OFF brighter on 46.011%, darker on **0.000%** |
+
+The residual green deviation, and the ratio's drift with threshold (1.555 → 1.540), are consistent
+with clipping at the bright end, which compresses the larger channels first.
+
+**Shader-level diff, which is stronger than any screenshot.** surf_tensor2: exactly **3** of 199
+shaders differ between arms, all `prog 0 → prog 1` — `light_glow03`, `xen_ray_3`,
+`light_glow02_add_noz`. All read `bits0 0x22`, i.e. ONE|ONE with **no** `SBITS_MISC_DEPTHWRITE`
+(`0x10000`), which is the `gl_shader.c` guard confirmed on screen.
+
+**The control arm, surf_boreas — Patch 266's cloud layer.** `cloods.vmt` has its `$additive` line
+**commented out** (`//"$additive" 1`), so it is `$translucent`, `src_alpha/one_minus_src_alpha`,
+and `VMT_AdditiveProgramOK` declines it at its first test. Measured rather than argued: exactly
+**4** of 106 shaders differ, all `prog 0 → prog 1` (`tendies_endsmoke`, `alch_symbols_alpha`,
+`particle_glow_04_additive`, `tendies_particles/laser`), and **`cloods` is not among them** — 102
+identical. Separately `r_fog_progless` still moves that map by **21.74** meanabs against a
+same-setting floor of 0.18–1.24, and reverts exactly, so the program-less path is intact.
+
+### Three runs that measured nothing and reported a number
+
+Logged because each one looked like a result:
+
+1. **`p300t2` arm A was warm-up.** Its three same-setting frames drifted *monotonically* (3.19 →
+   2.91 → 2.58 meanabs) toward the converged state while every later frame agreed to 0.01% of
+   pixels. The scene was still converging ~20 s after map load; the settle is now 25 s.
+2. **`p300t2b` toggled `hl2_additivefog` inside one process and every arm came back
+   pixel-identical, `0.0000`.** `CVAR_SHADERSYSTEM` is documented as *"change flushes shaders"*
+   and does recompile GLSL, but it does **not** re-run the hl2 material loader for an
+   already-loaded shader, so the generated script — where this patch's decision lives — was never
+   rebuilt. The log proves it: no second `[vmt] sprites/light_glow03` line after the toggle.
+   Hence three processes and a repeat arm.
+3. **The boreas cloud mask was aimed at a vantage with no clouds in it.** `setpos 0 0 -8600` was a
+   guess at the skybox room and actually stands in the playable area. Caught by *looking at the
+   screenshot*, after measuring it twice. The shader-level diff replaced it.
+
+### Census caveat, stated because the number is misleading exactly where it matters most
+
+`vmt_stat_addprog`/`addpass` are counted at **map load** and therefore see only the materials the
+BSP names. Every `env_sprite` and `env_lightglow` resolves through `R_BeginPolygon` at **draw**
+time, after the census has printed. surf_tensor2 prints **nothing** — both counters are still 0 —
+while its three sprite shaders do move. Read the per-material `[shader] ... prog N` lines instead.
+
+### Deploy note
+
+The verified pair above is what is deployed. A later rebuild at 20:23 picked up another session's
+in-flight `engine/client/client.h` change without `-Full`, and the build log showed the `.d`
+dependency files failing to regenerate, so that binary was rolled back rather than shipped. The
+source tree carries everything; only the binaries were reverted. The next engine build must be
+`build.ps1 -Engine -Full`.
+
+---
+
+## Patch 301 — the .hid header recorded the raw-input cvar, which is a request, not a grant  *(APPLIED — `engine/client/in_generic.c`, `engine/client/in_win.c`, `engine/client/client.h` (two `extern int`, no struct change), plus `tools/hidcheck.py`. VERIFIED: three arms on one binary, the new fault firing on exactly the contradictory one and neither honest one.)*
+
+### The defect
+
+`in_journal_begin` wrote the header from `Cvar_FindVar("in_rawinput")`. That cvar is a
+**request**. It is granted by `INS_RawInput_Init` enumerating devices and binding them, and that
+can fail while the cvar still reads 1:
+
+  * no enumerable mouse at all;
+  * an **RDP session** — every device is the Terminal Services virtual one, which
+    `INS_RawInput_IsRDPDevice` excludes unless `in_rawinput_rdp` (default 0);
+  * a missing `user32` export (`RegisterRawInputDevices`, `GetRawInputDeviceList`,
+    `GetRawInputDeviceInfoA`, `GetRawInputData` are all resolved dynamically and each has its own
+    bail-out);
+  * `RegisterRawInputDevices` simply refusing.
+
+On every one of those the engine falls back to `INS_Accumulate`'s `GetCursorPos`/`SetCursorPos`
+recentre — **one already-OS-summed, OS-ACCELERATED delta per call, about twice a frame** — and the
+journal said `rawinput 1` over the top of it.
+
+That is a false statement in an evidence file, and it is false in the worst possible place: the
+sessions where the data is *least* trustworthy are exactly the ones the header describes as
+recorded under the strict profile. A reader checking Patch 293's yaw identity against such a file
+is validating arithmetic against accelerated deltas and has nothing in the file to warn it.
+
+### The fix
+
+Two new header keys carrying the **grant** beside the request:
+
+    rawinput 1      <- the cvar: what this client asked for
+    rawkbd   0
+    rawmice  2      <- what INS_RawInput_Init actually bound
+    rawkbds  0
+
+Both keys are kept. They answer different questions and a reader holding only one is missing half
+the picture — `rawinput 1` + `rawmice 0` is the RDP case, `rawinput 0` + `rawmice 0` is a player
+who turned it off, and `rawinput 0` + `rawmice > 0` is impossible and now reports as such.
+
+**THREE STATES, AND -1 IS NOT ZERO.** `in_generic.c` is the cross-platform file; `in_win.c` is one
+backend of several. The globals are declared in `in_generic.c` (which is in `CLIENT_OBJS`, so every
+client build has it) seeded to **-1 = this backend does not report the figure**, and `in_win.c`
+maintains them at three sites. Zero is a measurement ("raw input ran and bound nothing"); -1 is the
+absence of one. Collapsing them would put a fault on every SDL/X11 journal ever written, and a
+reader that treated -1 as 0 would conclude the strictest possible thing from the least evidence.
+Same shape as the `infokey` three-state problem in QC build 58's `TF_NOJOURNAL`, hit twice in one
+evening from opposite directions.
+
+The zeroing happens at `INS_RawInput_Init`'s **entry**, not beside the `rawmicecount = 0` further
+down, because every `return` between those two points is a path on which raw input is unavailable —
+a missing `user32` export is as much "no raw input" as finding no devices — and leaving the seed
+standing would describe a hard failure as an unknown.
+
+`hidcheck.py` learns the keys (additive, so a pre-301 file simply has neither and the check is
+skipped) and **faults** on `rawinput 1` with `rawmice 0`. A fault rather than a note, unlike bare
+`rawinput 0`: a player who turns raw input off has made a visible choice and the file says so,
+whereas this is a file whose two statements about its own provenance contradict each other.
+
+### A stale comment corrected in passing
+
+`in_generic.c`'s own essay said *"that cvar defaults to 0 (in_win.c), as does in_dinput"* and then
+spent a paragraph explaining that both games on this tree set it to 1 from their configs, so the
+engine default described "a bare engine, not either game here". `in_rawinput` now defaults to **1**
+— `CVARAFD(... "1" ..., CVAR_ARCHIVE)` — and the same change deleted `cfg/default.cfg`'s
+`set in_rawinput 1`, because an archived cvar whose default.cfg also asserts a value can never be
+turned off by the player. The old text was a fact about a config that has since moved into the
+engine, left standing in a comment that read as a fact about this code. `in_rawinput_keyboard` is
+still 0 and that half of the warning stands.
+
+### Verification
+
+Three arms, one binary, `bhop_eazy`, `cfg/testrun/p301hid.cfg`. Which arm runs is decided on the
+**launch line**, because `in_rawinput` is read by `INS_RawInput_Init` at startup, long before any
+cfg runs — which is exactly what makes arm C constructible.
+
+| arm | launched | header | `hidcheck.py` |
+|---|---|---|---|
+| A | `+set in_rawinput 1` | `rawinput 1` `rawmice 2` | no rawmice fault |
+| B | `+set in_rawinput 0` | `rawinput 0` `rawmice 0` | no rawmice fault, pre-existing `rawinput 0` note |
+| C | `+set in_rawinput 0`, then `in_rawinput 1` set **after** the map | `rawinput 1` `rawmice 0` | **FAULT** |
+
+Arm C sets the cvar after startup so it changes without re-running `INS_RawInput_Init`, which
+reproduces the RDP/no-device shape exactly: requested, never granted. **Before this patch arm C's
+file was byte-indistinguishable from arm A's in everything a reader could check.** Arms A and B are
+what prove the check does not fire on honest files — the control that matters, since a fault there
+would be the patch stamping good journals.
+
+(A and B also carry a *pre-existing, unrelated* fault, "no frame markers — nothing was ever drained
+while the journal was open": a minimized scripted run produces no mouse motion. Not this patch, and
+present before it.)
+
+### Two harness notes from the run, both of which produced a wrong result first
+
+**The falsifier was run once against the wrong binary and reported cleanly.** All three arms came
+back with **no `rawmice` key at all** — they had run against a `ftesurf64.exe` that predated the
+feature, because a peer session rolled the deployed binaries back to its own verified pair while
+the arms were in flight. The artifact carried the evidence (a missing key, not a wrong value),
+which is the only reason it was caught. See `shared-tree-concurrency`: stamp the binary per batch.
+**A `.hid` that recorded the engine's build hash would turn this from a puzzle into one line.**
+
+**`build.ps1 -Engine`'s deploy fails while the game is running** — `Copy-Item ... build.ps1:240`,
+"the process cannot access the file because it is being used by another process" — and the build
+stages above it all report success first, so the exit code is the only sign that `C:\FTESurf` still
+holds the previous binary. The patch was verified by running
+`engine/release/fteqw64.exe -basedir C:\FTESurf` in place instead, which needs no deploy and cannot
+disturb a running instance.
+
+Also: the `EMBEDMETA` `zip` step at `plugins/Makefile:566` fails on this tree
+(`zip error: Could not create output file`) when two `make` runs touch `engine/release` in the same
+minute, and fails on the Pi for a different reason (`zip` is not installed). It runs **after** the
+link, so the `.so`/`.dll` is complete either way; on the Pi the metadata-less plugin has served
+five lobbies for five days.
+
+---
+
+## Patch 302 — a static prop with no VRAD bake was lit by bounce alone, because we implemented half of Source's light cache  *(APPLIED — `plugins/hl2/mod_vbsp.c` only, plus one new cvar `hl2_lt_worldlight`, DEFAULT 1 after Lex confirmed the result on his own vantage. No header change, no GLSL. VERIFIED: live A/B/A/B on one process, `cfg/testrun/p302a_worldlight.cfg` / `p302b_boreas.cfg` / `p302c_crossmap.cfg`. `hl2_lt_worldlight 0` is the falsifier and is bit-for-bit the pre-patch behaviour.)*
+
+Lex's fault report: the big block in `surf_tensor2`'s stage 2 is far darker than CS:S. He called it a
+`func_brush`. It is not a brush at all — it is `models/props/surf/tensor2/stage2_detail02.mdl`, a
+**static prop**, and the same bug as two of his other four faults.
+
+### The measurement that framed it
+
+His own same-vantage pair (save012, CS:S `surf_tensor20001.jpg` vs ours) measures:
+
+| region | CS:S | ours | ratio |
+|---|---|---|---|
+| **block** | `33.1 42.7 54.2` | `13.5 19.0 23.9` | **0.41** |
+| left wall | `32.5 42.2 53.9` | `34.1 45.6 59.2` | 1.05 |
+| ceiling / floor / far wall | — | — | 0.97 / 1.06 / 1.05 |
+
+Everything in the room matches CS:S to within 5%; only the block is wrong. Measured *inside* each
+shot, which is aspect-independent: **block ÷ side wall is 1.02 in CS:S and 0.40 in ours.**
+
+### The cause
+
+Both builds of the map are the same lighting data — BSP v20, **revision 797**, 603 worldlights,
+identical leaf ambient, identical static-prop flag histogram, and **zero `.vhv` in either pakfile**.
+So this is one of the rare maps where the CS:S screenshot is a *valid absolute reference*, not merely
+a relative one.
+
+With no bake, Source lights the prop from its **light cache**: the leaf ambient cube **plus** the
+direct contribution of nearby worldlights. We had only the cube. VRAD admits a light to the cube only
+under `DWL_FLAGS_INAMBIENTCUBE`, which `IsLeafAmbientSurfaceLight`
+(`utils/vrad/leaf_ambient_lighting.cpp:183-198`) grants only to dim unstyled `emit_surface` lights —
+on `surf_tensor2` that is **0 of 603**. The cube is pure bounce, and the engine said so all along:
+`props: 0 of 232 lit from VRAD's baked vertex lighting`.
+
+`hl2_lt_vhv12` cannot help here. There is no bake to switch on.
+
+### The term, and where it goes
+
+`VBSP_LoadWorldLights` parses `LUMP_WORLDLIGHTS` (15 LDR / 54 HDR) behind `haverenderer`;
+`VBSP_AddWorldLightCube` is `AddEmitSurfaceLights` (`leaf_ambient_lighting.cpp:92-136`) with the
+emitter test generalised to `emit_surface`/`point`/`spotlight` and VRAD's per-light `TestLine`
+replaced by a PVS test.
+
+**It is added into the ambient cube, before the existing decomposition** — not into the entity fields
+downstream. Everything below that point (the dominant-direction solve, the diffuse split,
+`hl2_lt_dirsign`'s two arms, the sRGB encode, `hl2_lt_scale`, `hl2_lt_min`'s colour-preserving floor)
+is a decomposition *of that cube*, so the term inherits all of it with no second copy to drift. It
+also lands on the right side of a naming trap: `res_diffuse` becomes `light_avg` → `e_light_ambient`,
+the shader's **flat base**, while `res_ambient` becomes `light_range` → `e_light_mul`, the
+**directional** amplitude gated by `max(0,dot(n,e_light_dir))` (`gl_alias.c:1602-1605`). A term
+hand-written into one of those lifts only the lit faces or only the base.
+
+### What is deliberately excluded
+
+**Sky lights.** `emit_skylight` and `emit_skyambient` both return `1.0` from
+`Engine_WorldLightDistanceFalloff` — no falloff at any distance — so they apply everywhere unless you
+can answer "does this point see sky". Source answers it with a trace ending on a `SURF_SKY` face.
+The map's own `LEAF_FLAGS_SKY` **cannot** stand in for one: it means "3D sky is in this leaf's PVS"
+(`bspfile.h:741`) and is set on **52.8%** of `surf_tensor2`'s leaves *including the sealed concrete
+room this prop stands in*. Measured, the two sky lights are `0.054 0.112 0.263` against
+`0.029 0.042 0.054` for every local light combined — **3× everything else, and blue**. Applying them
+wrongly indoors would be a worse bug than the one being fixed. That is Stage B and it needs the trace.
+
+Also excluded: styled lights (solved once, so a lightstyle cannot be honoured),
+`DWL_FLAGS_INAMBIENTCUBE` lights (already in the cube), and clusterless lights (`pvs[-1]` reads the
+byte before the buffer, `:6702`).
+
+**Lump version 0 only.** A v21 map carries a 100-byte stride instead of 88 — measured on
+`surf_fantasy`, 777 lights, every type/style field plausible at 100 and not at 88. What the extra 12
+bytes are is *not documented in the reference tree* (`public/bspfile.h` caps at `BSPVERSION 20` and
+worldlights is absent from its versioned-lump enum), and Momentum's own client rejects such a lump
+outright (`game/client/momentum/worldlight.cpp:161`). So the loader refuses it rather than guessing a
+layout it cannot verify. That costs nothing: the v21 maps in the library ship full bakes.
+
+### Verification
+
+Reference implementation in numpy over all 232 props **before** the build, and the loader reproduced
+its filter exactly: `worldlights HDR, 601 of 603 usable (2 sky, 0 styled, 0 already in cube, 0
+clusterless)`.
+
+| | worldlight 0 | worldlight 1 |
+|---|---|---|
+| **block** | `13 19 24` | `42 56 72` |
+| left wall / ceiling / floor / far wall | — | **all ×1.00** |
+
+**block ÷ wall 0.379 → 1.212**, against CS:S's 0.99. The world does not move by one level, which is
+the check that this cannot reach brush lighting. The two `off` arms are **bit-identical (0.000%)**, so
+the live cache invalidation works and this map has no harness noise floor at all.
+
+**The control arm is `surf_boreas` and it is the one that matters** — 1587 of 1587 props baked, every
+one of which must take the `hasbaked` branch. `prop_census` reports them character-for-character
+identical between arms (`rock04_epic mean 42.5 47.2 53.1 peak 236.1 262.5 295.0 gain 5.56`;
+`tree_pine05 mean 54.8 56.2 56.8 peak 408.9 419.5 423.6 gain 7.46`), and with a same-cvar repeat arm
+the pixel effect equals the noise floor (0.01% vs 0.01%).
+
+### Three things stated against interest
+
+**It overshoots, and I attributed it to the wrong thing.** 1.21 where CS:S is 0.99, ~23% high. I
+first wrote that down as the PVS test standing in for VRAD's trace, reasoning from the fact that at
+this prop every contributing light is beyond 800 units and 77% of the added light comes from beyond
+1500. That fact is true and the inference from it was wrong.
+
+Prompted by a peer session pointing out that a scale error and a visibility error have the same
+symptom at a single sample point and want opposite fixes, I implemented the occlusion trace offline
+(`scratchpad/occl.py`, segment-vs-world-face against 23,786 solid faces) and measured it:
+
+| | light surviving a real trace |
+|---|---|
+| **the prop in the bug report** | **100.0%** — 0 of its 18 lights occluded |
+| 38 sampled props, median | 92.5% |
+| 38 sampled props, aggregate | 90.9%, i.e. PVS-only is **1.10×** hot |
+
+The tracer is not stuck returning "visible": it finds 43% of the light blocked at the
+`stage3_detail02` props. So at the very prop the fault was reported on, occlusion removes **nothing**,
+and PVS-only visibility is **1.000× hot there**. It cannot be the cause of a 1.22× error.
+
+**FOUND, offline, after the peer pointed out the round-trip model had earned the right to be used**
+(it predicted dirsign1/dirsign0 = 1.327 before the engine measured 1.399). Re-running it on the
+**real 18 lights at save012 at their real intensities and distances**, against the block's real
+face normals, reproduces the fault without a rebuild:
+
+| face normal | pipeline | truth | ratio |
+|---|---|---|---|
+| `(0,-1,0)` camera-facing | `89 108 120` | `90 109 122` | **0.987** |
+| `(-0.71,-0.71,0)` camera-facing | `89 108 120` | `84 101 114` | **1.060** |
+| `(-1,0,0)` camera-facing | `107 129 145` | `58 68 79` | **1.879** |
+| `(0,1,0)` facing AWAY from the light | `140 169 190` | `9 13 15` | **13.6** |
+
+Camera-facing mean **1.309** where the engine measures **1.19** at dirsign 0, and **1.552** where it
+measures **1.662** at dirsign 1. Same magnitude, same direction, both arms.
+
+**The mechanism is the unconditional flat base.** `light_avg` is `res_diffuse` — the cube mean plus
+the directional deviation — and the shader applies it to *every* face regardless of orientation
+(`vertexlit.glsl:109`), with only `light_range` gated by `max(0,dot(n,dir))`. So a face pointing
+directly away from every light, which should be nearly black, still receives the full base: truth 9,
+rendered 140. That is where the 2.83× hemisphere-energy excess lives, and it is why the error is
+wildly face-dependent (0.99 to 13.6 across one prop) rather than a uniform scale. Direction was never
+going to fix it; direction only decides which faces receive the excess.
+
+**The fix this implies** (not written, needs its own patch and Lex's go): the flat base should carry
+the *bounce* only, with the direct term riding the directional half — rather than folding direct
+light into a mean that then floods the shadow side. Testable entirely in the numpy harness above
+before any C is written, which is where it should be settled.
+
+The earlier reasoning, kept because it was wrong in an instructive way:
+this term spreads each light over six faces as `intensity * max(0,dot(axis,l))`, whose six-face mean
+is direction-dependent — 0.167 for a light on an axis, 0.289 for one on a diagonal, a 1.73× spread
+for the same light. Source's light cache instead keeps the brightest few lights as *real* lights
+evaluated per-vertex and puts only the remainder in the cube. That is a scale question, not a
+visibility one, and it is the next thing to measure rather than to assume.
+
+The per-light occlusion trace is still worth having — 1.10× aggregate is real, and it rises to 1.75×
+on the worst props — but it is a second-order correction here, not the fix for this number.
+
+**The default PAIR was new tonight, so it was measured as a pair.** `hl2_lt_worldlight` now defaults
+1; `hl2_lt_dirsign` still defaults 0. A peer session flagged that 302's default-on is what makes
+dirsign's default load-bearing, so they are one decision rather than two. A numpy round trip of the
+fold through the reconstruction this path actually performs — an unweighted six-face mean plus one
+dominant direction, **not** Valve's n² convex combination, which lives only under `#AMBIENTCUBE` and
+is gated off — says the default arm recovers a direction that is **never less than 90° wrong and
+averages 130°**. So it was tested in-engine at Lex's save012:
+
+| | block ÷ wall (CS:S = **0.99**) |
+|---|---|
+| **worldlight 1 + dirsign 0 — what ships** | **1.188** |
+| worldlight 1 + dirsign 1 | 1.662 |
+| worldlight 0 + dirsign 1 | 0.693 |
+| worldlight 0 + dirsign 0 — pre-302 | 0.383 |
+
+**The shipping pair is the better one**, and `hl2_lt_dirsign 1` roughly doubles the error rather than
+fixing it. No default change. `LEFT WALL` and `floor` are unchanged to the level across all five arms,
+which is the instrument check — and it is a real control, not an assumption: every caller of
+`LightPointValues` across the engine (`cl_ents.c:5864`, `gl_rlight.c:95`, `r_part.c:144/329`,
+`pr_csqc.c:5382`, `pr_cmds.c:4320`, `sv_user.c:7798`) point-samples for a model, a particle or a QC
+query. No world-surface path reaches it; brush faces are lit from lightmaps.
+
+**Two things I got wrong here, both recorded because the run was designed to catch them.** I
+pre-registered that correcting a 130° direction error must *redistribute* — faces toward the light
+brighter, faces away darker — since a scale change moves both the same way. **It failed:** both
+visible faces of the block brightened (×1.30 and ×1.50). The prediction assumed the two faces
+straddle the dominant direction and they do not. And I had written that dirsign was harmless before
+302 because a bounce-only cube is near-isotropic; the `worldlight 0` pair falsifies that too — dirsign
+moves the pre-patch block by **1.6–2.0×** on its own. The bounce cube has plenty of direction in it.
+
+**My first control arm asked the wrong question and I nearly reported it as a failure.** It asserted
+the whole boreas frame must be bit-identical; it came back 96.9% differing. That assertion was wrong
+twice over — boreas has falling snow, so no whole-frame equality test can pass there, and the patch is
+*supposed* to change non-prop models, since Source's light cache lights those from worldlights too.
+The claim was only ever "baked props do not move".
+
+**And a bare `prop_census` prints only its usage line.** It needs an index or part of a model name.
+Called bare from a cfg it emits no per-prop data at all, and the arm reads as "ran fine, nothing to
+report" rather than "produced nothing" — the same shape as a narrow output filter reading a failed
+deploy as a clean build. That is what made the first control run's decisive evidence simply absent.
+
+**One number never got explained.** Re-running with the noise floor the first run lacked, and again
+reproducing the exact cross-map sequence (tensor2 first, cvar left at 1 across the map change), the
+effect came in *below* the floor both times — and `p302a_b1_off`, `p302b_c1_off`, `p302b_c3_on` and
+`p302c_e2_off` all agree to 0.01% across three processes. Only p302a's two `ON` frames disagree, by a
+uniform +0.23 levels. It did not reproduce under deliberate attempt. I cannot name it, and it is
+recorded here rather than rounded away.
+
+---
+
+## Patch 303 — the journal recorded an anonymous integer where it needed to name the hardware  *(APPLIED — `engine/client/in_generic.c` only (one callback, two call sites, one literal moved), plus `tools/hidcheck.py`. VERIFIED: two arms on one binary, `engine/release/fteqw64.exe` 8A1F3F51113D, `cfg/testrun/p303dev.cfg`.)*
+
+Until now the `.hid` recorded FTE's own `devid` and nothing else, so every device in the file was an
+anonymous small integer. **"devid 0 moved 4000 counts" is not evidence of anything**: a reader cannot
+tell a real mouse from a virtual one, and that distinction is the only question the file is kept to
+answer. This is the plan's P295, renumbered — its own numbers collide with 294 and 295, which this
+tree has already spent on `sv_gamespeed` and `in_journal_maxkb`.
+
+The header now carries, between the Patch 293 scale terms and `begin`:
+
+```
+dev keyboard - "system"
+dev mouse unset "\\?\HID#VID_33E4&PID_3617&MI_00#7&1d971b2b&0&0000#{378de44c-...}"
+dev mouse unset "\\?\HID#VID_19F5&PID_FD50&MI_02&Col02#8&46900d3&0&0001#{378de44c-...}"
+dev mouse - "system"
+dev joy unset "xi0"
+```
+
+and the same table again as `devmap` immediately before the trailer.
+
+### Written through `INS_EnumerateDevices`, not by reaching into `in_win.c`
+
+`rawmice[]`/`rawkbd[]` are static to the backend and `in_generic.c` is the cross-platform file —
+`in_generic.o` is in every client build, `in_win.o` is Windows-only. `INS_EnumerateDevices` is a
+declared backend API (`input.h:79`) that **every** backend already implements, so this costs nothing
+where there is a real answer and degrades to whatever the platform knows elsewhere. No new globals,
+unlike Patch 301, which needed them because a *count* has no enumeration to ride on.
+
+**The callback must not write through `qdevid`.** It is handed a pointer, and the other consumer of
+this API in the same file — `IN_DeviceIDs_DoRemap` — assigns through it. A callback copied from that
+one would silently remap the player's devices as a side effect of opening a journal.
+
+### Three states, and they are not two — for the fourth time in this tree
+
+`NULL qdevid` means the device cannot carry one at all (the `system` pseudo-devices); `DEVID_UNSET`
+means it can but never produced an event. They print `-` and `unset`. **Neither is 0, and 0 is a real
+devid owned by a real device** — collapsing either would attribute one device's motion to another,
+which is the exact error the table exists to prevent. `IN_DeviceIDs_Enumerate` at `:395` already had
+this right for the console command and was the model.
+
+### Why the table is written twice
+
+Devids are allocated **lazily at first use** — `in_win.c:1809`'s `Mouse_AllocateDevID()`, reached only
+once a device reports motion or a button (the condition at `:1806-1807` includes `lLastX || lLastY`, so
+motion counts; my first reading that it needed a *click* was wrong). So at journal-begin almost every
+device still reads `unset` and the opening table cannot answer "which device produced devid 0". What it
+*can* answer is what hardware was **present** when the run started, which is the anti-tamper half — an
+injector's virtual device is in that list from the first line. `devmap` at the end carries the resolved
+mapping. **A device in one table and not the other was plugged or unplugged mid-run**, and that is a
+fact about the run rather than a parse error.
+
+`devmap` is deliberately emitted **before** the cap is lifted for the trailer: those 1024 bytes of
+headroom exist for the `truncated` and `end` lines, which outrank this table. On a journal that hit the
+cap the `devmap` lines are dropped by `IN_Journal_Raw`'s own growth check rather than competing for that
+headroom — and such a file already says `truncated`, so the loss is announced rather than silent.
+
+### `begin` had to move, and that is what arm B tests
+
+The device list is unbounded and the header's `Q_snprintfz` buffer is 1024 bytes, so `begin\n` came out
+of that literal block and is now a separate `IN_Journal_Raw`. That edited **the exact literal
+`IN_JournalSynth_f` depends on**: it finds the poison line with a `strstr` for `"\nsynth 0\n"` and
+overwrites it in place, fixed width. Had `synth 0` shifted or lost a newline the poke would silently
+find nothing and **every future forged-input journal would have reported itself as clean**. A patch
+about evidence integrity that breaks the poison flag is worse than no patch, so arm B exists solely to
+prove `synth 1` still lands. It does.
+
+### Verified
+
+| arm | file | result |
+|---|---|---|
+| A | plain journal | device table present and correctly shaped; every pre-303 header key unchanged |
+| B | `+ in_journal_synth 3` | `synth 1` — the in-place poke survived `begin` moving |
+
+Three pre-303 journals under `data/runs/` still validate clean, so the additive rule holds and a file
+without the tables reports `devices: not recorded (pre-303 journal)` rather than "no devices found".
+
+**Patch 301 and Patch 303 cross-confirm, which neither could do alone.** Both arms show `rawmice 2`
+against exactly two `dev mouse` lines carrying real device paths, and `rawkbds 0` against zero real
+`dev keyboard` lines. The count and the table are written from the same `rawmice[]` array; agreement
+between them is a check on both.
+
+### Two results that were not pre-registered
+
+**Arm A faults, and the fault is correct and not this patch's.** It reads "no frame markers — nothing
+was ever drained while the journal was open", because a *scripted* arm produces no real input and
+`in_generic.c:984` emits the `f` marker only on a non-empty drain. I failed to predict it. Arm A's
+registration is therefore **tightened rather than waived**: it must fault on that line and nothing
+else, and any other fault there is a real failure.
+
+**The attribution check caught the synthetic events by itself**, which is not what it was written for.
+Arm B reports *"devid 0 produced 4 events but no device in the table claims it"* — injected events carry
+a devid no enumerated device owns, so they are flagged **independently of the `synth` flag**. That is a
+second, unrelated witness against the plugin-injection vector, arriving free. It must not be
+overstated: it fires on "events from a devid nothing enumerates", which injected events happen to have,
+and it stays a **note** rather than a fault because a device unplugged mid-run leaves the same trace.
+
+### What it does not prove
+
+A device name is **self-reported by the device**. An Arduino, Pico or KMBox presents whatever VID/PID
+string it likes and can clone a real mouse's exactly, so a legitimate-looking name is not attestation
+that the hardware is legitimate. This raises the cost of the cheap end — SendInput injection has no
+enumerated device at all, and a virtual driver has a name that says so — and leaves the hardware-replay
+ceiling exactly where the plan's threat model puts it.
+
+### Privacy, stated plainly because it is not nothing
+
+On Windows the name is the device interface path: VID, PID, and an instance path stable for that device
+on that machine. **That is a pseudonymous hardware identifier.** It is recorded because it is precisely
+what makes provenance checkable, and it is another reason the file is consent-gated and uploaded on
+demand rather than streamed. This belongs in the disclaimer the plan's Part 7 already calls for.
+
+### A latent bug in `hidcheck.py`, found while adding to it
+
+`emit()` prints from a **fixed key list**, and Patch 301's `rawmice`/`rawkbds` were never added to it —
+so the grant was parsed, checked, and then not displayed. The faults still fired, which is why 301's
+falsifier passed and nobody noticed; but a reader looking at a clean file could not see the pair. Both
+are in the list now. A fixed key list silently drops whatever nobody remembers to add, which is the
+same failure mode as the narrow output filter that let a failed deploy read as a clean build the night
+before.
+
+### What a scripted arm cannot test
+
+The devid column **resolving to a number** needs real mouse motion, and a second physical mouse
+appearing as a second device needs a second physical mouse. Both are Lex's to check on a played run.
+That run is now the single input that unblocks the most: it is also what P293's identity check and the
+`m`-vs-`v` correspondence measurement have been waiting on.
+
+### CORRECTION to this patch's reader, 2026-09-13 (tools only, no engine change)
+
+The attribution check this table exists for was asking the wrong question of keyboard events, and
+had been since it was written.
+
+On the legacy keyboard path — `in_rawinput_keyboard 0`, **the shipped default** — every key event is
+dispatched with a **hardcoded devid 0** (`gl_vidnt.c` passes the literal to `INS_TranslateKeyEvent`),
+while the enumerated system keyboard is written `-`, meaning "cannot carry a devid at all". So devid
+0 is used by every keystroke and claimed by no keyboard.
+
+That produced two failures, and the quiet one is worse:
+
+- **Loud.** When nothing else holds devid 0 — raw input off, so the mouse is the `system`
+  pseudo-device with no devid — the check reported the player's own keyboard as hardware the file
+  could not account for. Demonstrated before and after on one synthetic file: the pre-fix code says
+  *"devid 0 produced 4 events but no device in the table claims it — it was unplugged mid-run, or
+  the file is not describing its own hardware"* about four ordinary keystrokes.
+- **Silent, and the reason this was worth chasing.** When a mouse *has* devid 0 — the common case,
+  it is the first one handed out — the table positively asserts that devid 0 **is that mouse**, by
+  VID/PID. Every keystroke in the file then reads as having come from it. On Lex's bhop_eazy PB that
+  is **456 key events attributed to a named piece of hardware that did not produce them**, and
+  nothing warned, because nothing looked.
+
+**The record kind already separated them**, which is what makes the fix cheap and honest: a
+`+`/`-`/`x` is a key and an `m`/`a`/`j` is a pointer, whatever devid they share. So the pointer
+question is now asked only of pointer events. Key devids are checked against the table **only when
+`rawkbds > 0`**, i.e. when raw keyboard is actually bound and the devid is a real identity;
+otherwise the report states plainly that key attribution is unavailable and that devid 0 **is not**
+the mouse that may hold devid 0.
+
+**A narrowing can silently become a deletion**, and that failure would look exactly like a clean
+file — so the suite pins the other direction too: an unclaimed *pointer* devid must still be
+reported. Three cases added; **65 checks, 0 failed.**
+
+
+## Patch 304 — the flat base sat at the lit end of the ramp, so a face turned away from every light got the bright-side level  *(APPLIED — `plugins/hl2/mod_vbsp.c` and `plugins/hl2/glsl/vmt/vertexlit.glsl`, plus the regenerated `mat_vmt_progs.h`. One new cvar `hl2_lt_fold`, DEFAULT 1, read by BOTH files. No engine file, no exe rebuild. VERIFIED: eight arms on one process, `cfg/testrun/p304a_fold.cfg` + `p304b_props.cfg`, plugin `3768C2ADAC11`.)*
+
+Patch 302 put VRAD's direct light into the leaf ambient cube and took tensor2's `stage2_detail02` from
+0.38 to 1.19 against CS:S's 0.99. **The residual 1.19 was not a level error and no scale could have
+fixed it**: measured against what VRAD would have baked, that one prop spanned **0.99 on its best face
+to 13.6 on its worst**.
+
+The cause is the fold. The shader renders `base + w(n) * amp`, where `base` is `e_light_ambient` and is
+applied to every vertex *regardless of which way it faces*. The legacy fold set `base` = the six-face
+mean **plus the deviation toward the light** — roughly the value of the brightest face — and `amp` = the
+plain mean. So a face turned away from every light in the map received the bright-side level, and a face
+turned toward the light received the bright side *plus* the mean on top.
+
+### The fix, and why the ramp had to change with it
+
+`base` moves to the **other end** of the ramp: the level on the face turned *away* from the dominant
+direction, with `amp` the difference to the face turned *toward* it. Both ends are read with the same
+n² convex combination VRAD and `#AMBIENTCUBE` use (`VBSP_CubeAlongDir`), so they are answers to a
+question the engine already asks rather than new constants.
+
+**And `w(n)` becomes a half-lambert**, which is what Source uses on models. A plain lambert clamps flat
+at `base` across the whole shadow hemisphere while the true irradiance there keeps falling — so the fold
+and the ramp are one change. `vertexlit.glsl` reads the *same cvar* through `!!cvardf`; `gl_shader.c:2291-2294`
+`Cvar_Get`s the name and force-adds `CVAR_SHADERSYSTEM`, so a live toggle recompiles the program, and the
+static-prop light cache invalidates on it too. **A base computed for one ramp and rendered with the other
+is worse than either fold alone, and one value makes that state unrepresentable.**
+
+Mean `|log2(rendered/truth)|` over a **uniform sphere of normals** — not the handful the camera sees:
+
+| | legacy fold | Patch 304 |
+|---|---|---|
+| tensor2 `stage2_detail02` | 1.037 | **0.283** |
+| 200 real leaf cubes, bounce only | 0.463 | **0.230** |
+
+and it beat the legacy fold on **200 of those 200 cubes**. Worst-case error falls 2.115 → 0.888 stops.
+
+### Scoped to static props, on purpose
+
+`VBSP_LightPointValues` also feeds players and viewmodels through the engine's `R_CalcModelLighting`, and
+those render with `engine/shaders/glsl/defaultskin.glsl` — **plain lambert, and an engine file shared with
+every other FTE game**. The split fold *without* the half-lambert measured 0.996 stops against today's
+0.574 on bounce-only cubes, i.e. worse than doing nothing. So `prv->fold_prop` gates the new fold to the
+one population guaranteed to reach `vertexlit.glsl`. Note the **opposite sense to `wl_suppress`**, set at
+the same line: 302's term is consumer-agnostic (it is simply more light in the cube, and a player wants it
+too), while this is a re-parameterisation that is only correct against the matching ramp.
+
+`hl2_lt_dirsign` is **not** consulted here. The legacy fold treats direction as a preference; this fold
+uses it to decide *which end of the ramp is which*, so a direction pointing the wrong way does not shade
+the wrong side, it swaps `base` and `amp` and inverts the model. On the unsigned direction the same
+measurement gives 0.825 instead of 0.283. The signed solve is taken unconditionally.
+
+### One downstream interaction that would have broken it silently
+
+`hl2_lt_min`'s colour-preserving floor keyed on `res_ambient`, which under the legacy fold is the six-face
+mean and a fair proxy for "how bright is this sample". Under the split fold `res_ambient` is the directional
+**amplitude** — a difference, not a level — and is legitimately near zero for a bright, evenly-lit sample.
+Left alone, the `lum <= 0.001` branch would have clamped well-lit props flat to 16 and the `lum < m` branch
+would have multiplied a bright base by `m/amp`. The floor now asks whichever vector is the level, and still
+scales both by the same factor so the shading is not flattened. It fired at ×1.14 on the target prop.
+
+### Verification
+
+`prop_census` gained a **`solved level`** line for props with no bake, printing `base`, `directional` and the
+`lit end` — because the alternative is a screenshot, and a screenshot only shows faces pointing at the
+camera, which is the population where this error is smallest by a factor of ten. Reading the pair tests
+both ends of the ramp at once and no vantage can flatter it.
+
+All nine numbers hit the pre-registration **exactly**, in both arms:
+
+```
+ fold 1  predicted  base 13.0 16.9 19.6   directional 102.6 121.6 134.1   lit end 115.6 138.4 153.7
+         engine     base 13.0 16.9 19.6   directional 102.6 121.6 134.1   lit end 115.6 138.4 153.7
+ fold 0  predicted  base 89.0 107.6 120.4 directional  54.0  65.5  74.2   lit end 143.0 173.1 194.6
+         engine     base 89.0 107.6 120.4 directional  54.0  65.5  74.2   lit end 143.0 173.1 194.6
+```
+
+- **base falls 89.0 → 13.0 while the lit end holds 143.0 → 115.6** — a re-anchoring, not a dimming.
+- `hl2_lt_fold 0` is the falsifier and reproduces pre-304 exactly. Shader reloads fire at each `fold`
+  boundary in the log and **not** when only `dirsign` changes, so the falsifier uses the legacy ramp too.
+- G3 reproduces G1 at **0.01%** differing pixels; fold 1 with `dirsign` 0 vs 1 is also **0.01%** (the
+  direction is not consulted), while fold 0 with `dirsign` 0 vs 1 moves **41.13%**.
+- The left wall is **bit-identical in all seven arms** — it is a lightmapped world brush and nothing here
+  can reach it.
+- Accuracy on the three props the engine actually solved, each at its own sample point with its own cube
+  and its own lights: `stage5_detail01` **1.97×** better, `stage2_detail02` **2.96×**, `stage9_detail01` **1.26×**.
+
+### Five things I got wrong, kept because each cost a real detour
+
+1. **My first proposal was falsified by my own harness.** The split fold with a plain lambert lands at
+   **0.56 of truth**, worse than what shipped. The shape was right and the ramp was missing.
+2. **I blamed the ambient cube's n² quantisation for that undershoot** — a light on a face diagonal
+   deposits into two faces and reads back at 0.707. Measured over the real 18 lights the
+   irradiance-weighted recovery is **0.938**, a 6% loss, not the 42% worst case. The energy-correcting
+   variant moved nothing and was dropped.
+3. **A lambert-only route exists and is not good enough.** Half-lambert's lit hemisphere is algebraically
+   a lambert with `base+amp/2, amp/2`, needing no shader edit. It ties on bounce-only cubes (0.240 vs
+   0.230) but scores **0.674 against 0.283 on the prop Lex actually reported**, leaving his block at 1.36×
+   where CS:S says 0.99. It would have fixed the library and not the bug.
+4. **Patch 302's `block/wall` metric is structurally blind to this patch and must not be used for it.** It
+   averages two regions that moved in *opposite* directions (`block upper` 53.7 → 50.7, `block lower`
+   48.4 → 50.9), cancelling a 35% pixel change to 1.213 → 1.203. The per-region split and the census are
+   the instruments here.
+5. **`p304b`'s pre-registration was mis-stated.** I wrote "base falls and the lit end moves far less",
+   generalising the *shape* of the change from the one prop the fold was designed against. On
+   `stage9_detail01` base and lit fell together — the shape I had declared a failure mode — while being
+   **1.26× more accurate**. The shape was never the claim worth making; accuracy was.
+
+### Still open
+
+The `#AMBIENTCUBE` path (`hl2_cubelight`) reads the cube with n² directly and never touches this fold, so
+it is unaffected and untested here. A dynamic hl2 model rendered outside the static-prop loop would get
+the new ramp with the legacy fold; none was observed on these maps, and closing it properly needs a
+per-draw signal the two-uniform interface does not have. Only 3 of 29 censused props had been solved at
+the test vantage — `STALE` is reported rather than zeroed, so the population claim rests on those three
+plus the 200-cube offline study, not on 29.
+
+---
+
+## Patch 305 — the yaw identity failed 57.67% of an honest run, because the record was missing the keyboard half  *(APPLIED — `engine/client/in_generic.c`, `engine/client/cl_input.c`, `engine/client/input.h` (one declaration, no struct change), plus `tools/hidcheck.py`. VERIFIED: three arms on one binary, `engine/release/fteqw64.exe` B523C7213CBB, `cfg/testrun/p305kbd.cfg`, plus a zeroed-column control.)*
+
+**The first real recorded run broke the flagship check, and the check was wrong, not the run.**
+
+Lex recorded `bhop_eazy` main (`0004976_pb`, 49.78 s, a clean PB, 42,973 `v` records). Patch 293's
+identity — `dyaw == -m_yaw*sensitivity*scale*dx` — **failed on 57.67% of frames**. `hidcheck.py`
+printed `YAW IDENTITY BROKEN on 22,844 of 42,972 governed frames. The angle did not come from the
+counts.` on a run with no cheat anywhere near it.
+
+### The residual is bimodal, which is what made it diagnosable
+
+| | frames | median residual | note |
+|---|---|---|---|
+| no turn key held | 30,934 | 2.0e-6 deg | 30,929 of them under 1e-4 |
+| turn key held | 12,038 | 0.0558 deg | **not one below 1e-4** |
+
+There is an empty three-decade gap between 1e-4 and 1e-2. That is not a tolerance problem, it is two
+different mechanisms. Bucketed:
+
+```
+bucket          none      left     right  leftright
+<1e-6          12495         3         3         0
+1e-6..5e-6     10873         2         1         0
+5e-6..2e-5      7196         4         1         0
+2e-5..1e-4       365         0         0         0
+1e-4..1e-3         0         0         0         0     <- empty
+1e-3..1e-2         0         0         0         0     <- empty
+1e-2..0.25         0      8429      3347       245
+>0.25              5         2         1         0
+```
+
+Three independent confirmations that the second population is `+left`/`+right`:
+
+- **Sign.** Under `+left` the residual is positive **8,433 times out of 8,437**; under `+right`
+  negative **3,348 of 3,349**. That is exactly `viewanglechange[YAW] += quant*KeyState(in_left)` and
+  `-= quant*KeyState(in_right)` (`cl_input.c:1398-1405`).
+- **Magnitude.** Residual divided by `cl_yawspeed * elapsed` has median **1.0014** (`+left`) and
+  **1.0006** (`+right`), against `cl_yawspeed 60` (`default.cfg:869`).
+- **Coverage.** Of the 1,938 frames where yaw moved with *zero* mouse counts, **1,054 fall inside a
+  `+left` hold and 921 inside a `+right` hold. Zero fall under neither.** 100% attributed.
+
+**And pitch is the control that proves the mouse path was never the problem.** Over the same 42,972
+pairs the pitch residual's median is `0.000000000`, p99 2.0e-6, because `cl_pitchspeed` is 0
+(`default.cfg:868`). The mouse-to-angle arithmetic is exact to float precision. Only the *record* was
+incomplete.
+
+### Why the engine had to change, rather than the checker
+
+`CL_AdjustAngles` writes the keyboard turn into `viewanglechange[YAW]` — **the same accumulator
+`IN_Move` then adds the mouse to** — and `CL_ClampPitch` folds both into `viewangles` before Patch
+293's `v` record reads the result. So `v` logged the mouse counts and an angle that already contained
+something else, and nothing wrote that something down. Grep for `yawspeed` in the `.hid` and the
+`.view`: zero hits in both.
+
+### THIS IS NOT AN EDGE CASE — it is how a run starts
+
+`+left`/`+right` are **shipped default binds** (`cfg/default.cfg:794,805`, q and e; Lex has them on
+e and CapsLock). The tree's own prestrafe calibration (`default.cfg:409-425`) *derives* FTESurf's
+ground speed from "turning at `cl_yawspeed` with one strafe key held" — that essay is why
+`pm_groundspeed` is 260 and not 250. Keyboard turn is the prestrafe, and the prestrafe is the opening
+move of every bhop run. Shipped as a ranking gate, this check would have failed the first second of
+essentially every honest run on this game. **This was invisible from the source** — `cl_input.c` shows
+the mechanism but nothing says it is standard practice. Lex said so in one sentence and it changed the
+patch.
+
+### The fix: log the realised change, not the ingredients
+
+New columns on the `v` line, appended after the existing five:
+
+```
+v <dt> <dx> <dy> <flags> <pitch> <yaw> <kpitch> <kyaw>
+```
+
+Captured in `CL_AccumlateInput` by **diffing `viewanglechange` across the `CL_AdjustAngles` call**.
+The obvious alternative — record `cl_yawspeed` and let the reader re-derive — is wrong and expensively
+so: a reader would have to re-implement `CL_KeyState`'s 0/0.25/0.5/0.75/1.0 sub-frame fractions,
+`cl_anglespeedkey`, the `in_strafe` gate, `in_rotate`, `r_xflip`, the `FPD_LIMIT_YAW`/`ruleset_allow_frj`
+±900 clamp, and the engine's `frametime` — which is **not** the journal's own wall-clock delta (that
+mismatch is the whole of the 0.965–1.037 spread above). Every one of those is a place for reader and
+engine to disagree, and it would break again the moment any of them changed. The diff records all of
+it and cannot drift.
+
+Both axes are logged even though only yaw is broken today: `cl_pitchspeed` is a cvar, and a reader
+must not have to know its value to trust the pitch column.
+
+### Verified — and the falsifier is a real one
+
+`+left`/`+right` are console **commands**, so unlike the mouse half this patch is fully scriptable.
+
+| arm | kyaw sum | expected | result |
+|---|---|---|---|
+| A — no turning | 0.0000 | 0 | all `v` lines 9 fields, kyaw 0 |
+| B — `+left` 1.5 s | **+89.9668** | +90.0 (`cl_yawspeed 60` × 1.5 s) | 150 of 151 positive |
+| C — `+right` 1.5 s | **−90.3000** | −90.0 | 151 of 152 negative |
+
+`kpitch` summed exactly 0 in all three, as `cl_pitchspeed 0` requires. The identity is visible on the
+raw lines — yaw stepping 0.300 → 0.900 → 1.500 with `kyaw` 0.6 each and `dx` 0.
+
+**The control that matters** — because "the check now passes" cannot by itself distinguish a fixed
+check from a weakened one. Arm B's own file, with the `kyaw` column forced to 0 and nothing else
+changed:
+
+| | frames with no recorded cause |
+|---|---|
+| arm B as written | **0** |
+| arm B, kyaw zeroed | **150** — every turning frame |
+
+So the column does the work; it is not decorative.
+
+Regression: the real run and three pre-303 journals all validate clean.
+
+### `hidcheck.py`, and a second defect that was hiding inside the first
+
+**The epsilon was below the float32 floor.** `EPS` was a flat `2e-6`, reasoned from the `%.6f` print
+step. That is right about the print and wrong about the value: `viewangles` is a float32 whose ulp at
+|yaw| = 180 is **1.526e-5**, seven times the epsilon. **12,751 of the 22,844 faults (55.8%) had no
+turn key held at all** — they were float32 ulps being reported as evidence of a cheat, the worst being
+2.30e-5 deg, or 0.0021 of one mouse count. Now `max(2e-6, |yaw| * 2**-22)`.
+
+So the 22,844 decompose exactly: 12,751 arithmetic noise + 10,093 legitimate keyboard turn, and
+**zero real findings**.
+
+**A pre-305 file gets a note, not a fault.** Absent is not zero: a file with no `kyaw` column cannot
+settle whether a residual was a keyboard turn, so it says so instead of accusing. Post-305, a yaw that
+moves with no counts *and* no recorded turn is once again the signature the check was written for.
+
+**A reporting bug, found twice, now fixed as a class.** `emit()` printed from a *fixed key list*, so
+anything not named there was silently dropped. It had swallowed Patch 301's `rawmice`/`rawkbds`, and
+it was swallowing `identity` — meaning a **passing** identity check printed nothing at all, and the
+only way to see the check existed was to break it. Both survived their own falsifiers because faults
+print unconditionally. The list is now an *ordering*; unknown keys print after it.
+
+**And the identity check was unreachable on exactly the files this patch produces.** `check_identity`
+sat below an `if not frames: return r`, conflating two independent things — `v` records are written
+per accumulate-frame, `f` markers per non-empty event drain. A journal in which the view turned but no
+input event arrived is precisely what a `+left` arm produces, so the check that had to be tested was
+the one being skipped, and its silence read as "nothing to say".
+
+**One reporting contradiction the falsifier exposed.** The zeroed control printed `exact on all 150
+governed frames` *and* `150 frames with no recorded cause` — about the same 150. Ghosts are excluded
+from `violations` because they are a different shape of wrong; they must not then be counted as
+passes. Fixed.
+
+### What it does not do
+
+Both sides are still computed by the same engine, so this closes the arithmetic, it does not attest
+the input. A hook upstream of `IN_MoveMouse` still gets a conforming record, exactly as Patch 293's
+entry says. What it buys is that a residual **means** something again, instead of being drowned by
+10,093 frames of legitimate play.
+
+### Pre-registration correction
+
+I registered arm B's control as "violations MUST reappear". They reappeared as **ghosts** — the
+bucket for "no counts and no recorded cause" — which is the correct classification and not what I
+predicted. The discrimination is total either way (0 vs 150), but the prediction named the wrong
+bucket and that is recorded rather than quietly reworded.
+
+## Patch 306 — raw input was already rejecting synthesized events, and deleting the only evidence that it had  *(APPLIED — `engine/client/in_generic.c`, `engine/client/in_win.c`, `engine/client/client.h` (two `extern int`, no struct change), plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. VERIFIED: four runs on one binary, `engine/release/fteqw64.exe` DE6476AE6FFB, `cfg/testrun/p306inj.cfg`, with an external SendInput harness and three separate zero-injection controls.)*
+
+`INS_RawInput_MouseRead` matches `raw->header.hDevice` against the enumerated device table and
+returns if it is not there. That drop is the defence — it is the reason an injected `SendInput`
+motion never reaches the view — and it is **completely silent**. So a `.hid` from a session where
+nobody cheated and a `.hid` from a session where forty thousand synthesized events were thrown away
+were byte-identical.
+
+That is the wrong shape for an evidence file. The defence working and the attack never happening
+are different facts, and the one artifact a defeated attempt produces was being destroyed at the
+instant it was generated. The fix is two ints and one branch on a path that was already returning.
+
+**TWO COUNTERS, AND COLLAPSING THEM WOULD ACCUSE.**
+
+| | meaning | reading |
+|---|---|---|
+| `in_raw_injected` | `hDevice == NULL` | synthesized input. No innocent reading of the handle itself. |
+| `in_raw_unenum` | a real handle not in our table | a mouse plugged in after `INS_RawInput_Init`, or an RDP device excluded by `in_rawinput_rdp`. Innocent — **and a live usability bug**, because that device's motion is going nowhere. |
+
+A reader given one number could not separate "you were attacked" from "you hot-plugged a mouse".
+The second is an accusation about a person, so they stay apart in the format, not just in the
+report.
+
+**THREE STATES, AND -1 IS NOT ZERO** — the same rule Patch 301 set for `in_rawmice_live`, for the
+same reason. `-1` means this backend does not count; `0` is a measurement. Defined in `in_generic.c`
+because `in_generic.o` is in every client build while `in_win.o` is Windows-only, so a backend that
+never assigns them leaves the honest `-1` standing. `in_win.c` lifts them to 0 only on the raw-input
+init success return, conditionally, so a `vid_restart` cannot reset a running total and hand the
+journal a negative delta.
+
+**THE RECORD.** `i <dt> <injected> <unenum>`, emitted when either counter moves — the same shape and
+the same honesty as the existing `!` drop marker: the count is known, the **time is not** (the
+backend discarded the report without stamping it), so it says "n arrived somewhere before this line"
+and claims nothing finer. The `end` trailer additionally carries the whole-run totals, appended
+after the existing five fields, so the file states one quantity twice and a hand-edit has to be made
+consistently in two places.
+
+**IT IS EMITTED FROM TWO PLACES AND THE SECOND IS THE ONE THAT MATTERS.** `IN_Journal_Frame` runs
+only on a **non-empty drain**, and a rejected report by definition produces no event to drain. So an
+injection with no genuine input beside it — precisely the session this record exists for — would
+never reach a frame marker and would never be written at all. `IN_Journal_View` runs once per
+accumulate frame regardless of the ring, and the call sits **above** its quiet-frame early return
+for the same reason. The delta test makes the second call free.
+
+### Falsifier — measured, and three of the four runs failed in ways worth keeping
+
+`cfg/testrun/p306inj.cfg`, three arms, driven by an external `SendInput` harness. The harness is
+**deliberately not checked into `tools/`** — a ready-made input injector is the one thing this
+subsystem exists to stop, and `tools/` ships with the game. It is specified in full in the cfg so an
+auditor can rebuild it in forty lines.
+
+| arm | synthesized | counted | `i` records | genuine `m` in the same window | `unenum` |
+|---|---|---|---|---|---|
+| A (control) | 0 | 0 | 0 | 0 | 0 |
+| B | 200 | **200** | 20 × 10 | 1,100 | 0 |
+| C | 50 | **50** | 5 × 10 | 0 | 0 |
+
+Exact on both arms, `B:C` exactly 4.00 as pre-registered, and the trailer total equals the sum of
+the `i` deltas in each. The record structure matching the **burst** structure (twenty bursts of ten,
+five bursts of ten) is a stronger statement than the totals: the counter tracks events, not
+occasions.
+
+**The control I could not have scripted.** Arm B carried 1,100 genuine mouse reports — a real hand
+on the mouse during the run — and not one touched either counter. That they are not the injection
+leaking through by some other path is settled by their shape: 650 of the 1,100 have `dy != 0` and
+the values span −7..+4, while every injected event was `dy == 0, dx == ±3`. Only 48 of 1,100
+coincide with the injection signature, against the 200 that would appear if it were being accepted.
+So: **50 injected → 50 counted; 1,559 honest (both runs) → 0 counted.** Perfect discrimination in
+both directions, measured rather than argued.
+
+**And the view was not perturbed.** hidcheck reports arm B as `ok` with the Patch 293 identity
+**exact on all 133 governed frames** while 200 synthesized reports were being rejected. The
+injection is now counted *and* still dead.
+
+Three earlier runs are kept because each failed informatively:
+
+- **Run 0** — a backtick inside a PowerShell double-quoted here-string was read as an escape and
+  broke the C# compile, so nothing fired. All three arms therefore ran with zero injection: a wider
+  control than arm A alone, and all three read `0 0`.
+- **Run 1** — arm B's `SetForegroundWindow` was refused, so its 200 events went to the PowerShell
+  window. **The journal recorded 0, which is the correct answer**, and is a better control than the
+  arm it replaced: 200 events were synthesized *on the machine* and the engine did not claim to have
+  seen them. The counter reports what reached this process, not what happened on the desktop. Arm C
+  landed and gave 50 → 50.
+- **Run 2** — `AttachThreadInput` reported success and delivered nothing. The raise is granted and
+  silently lost before the events are sent. This is why the final harness re-confirms focus around
+  *every* burst rather than once per arm.
+
+**PRE-REGISTRATION CORRECTION, recorded rather than reworded.** The B arm was registered as "about
+four times C" and came out at exactly four — but only on the fourth attempt. The first three
+produced 0, and would have read as "the patch does nothing" to anyone who stopped there. What
+separated them was not the engine but whether the events reached the process at all. That is a
+warning about this class of test, not about this patch.
+
+### A regression in the validator's own suite, surfaced by running it
+
+`tools/test_hidcheck.py` went to **3 of 17 failing**, and the three were not caused by this patch —
+they were caused by **Patch 305** and had gone unnoticed because that patch's own falsifier passed.
+
+Patch 305 made the yaw identity a **note** rather than a **fault** on a file with no keyboard
+column, which is correct: without it a residual cannot be told from `+left`/`+right`, and those are
+shipped default binds this game's prestrafe is calibrated around. But the suite's fixtures all
+emitted the old seven-field `v` line, so after 305 every fixture was a *pre-305 file* — on which no
+identity fault can be raised. The suite was asserting faults on files that can no longer produce
+them. **The tool was right and the tests were stale**, which is the more dangerous of the two
+directions: a green suite would have meant nothing.
+
+Fixed by defaulting the fixture to the current grammar, keeping `view_pre305()` for the old one, and
+adding `case_pre305_downgrade` so the downgrade is **pinned deliberately** instead of existing by
+accident. Four new Patch 306 cases as well: counting, the trailer cross-check as a fault, a pre-306
+file reported as unaskable rather than clean, and a `-1` backend reported as silent rather than
+zero. **31 checks, 0 failed.**
+
+This is the third time in three patches that a reporting or test path has failed silently while the
+thing it reported on worked (Patch 301's `rawmice` never printed; Patch 305's `check_identity` sat
+under an early return; now the suite testing the wrong grammar). The common shape is that **faults
+print unconditionally, so a broken check looks exactly like a clean file.**
+
+### WHAT THIS DOES NOT DO, and the limits are larger than the counter
+
+- A non-zero count means an injection was **rejected**. These events did not reach the view — that
+  is why they were countable. It is evidence of an attempt that **failed**.
+- It has **innocent causes**. Remote desktop, accessibility tools, screen sharing, and some tablet
+  and macro drivers all synthesize input legitimately. `hidcheck` reports it as a **note** and must
+  never auto-reject on it: auto-rejecting here would accuse a named person over their screen reader.
+- It is **blind to the two holes that are actually open**. Injected mouse *buttons* still arrive as
+  legacy `WM_*BUTTONDOWN`, which `in_win.c` keeps deliberately for click-state tracking, and with
+  `in_rawinput_keyboard 0` every keystroke is legacy. Neither passes the handle check, so neither is
+  counted. This counter watches the door that is shut.
+- A hardware replay device (Arduino/Pico/KMBox) enumerates as a genuine mouse and is counted as
+  neither. That remains the ceiling, as it was before.
+
+## Patch 307 — the injected mouse button was reaching the game, and the fix for it costs a device class its buttons  *(APPLIED — `engine/client/in_generic.c`, `engine/client/in_win.c`, `engine/client/client.h` (two `extern int`, no struct change), one new cvar `in_rawinput_nolegacy` DEFAULT 0, plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. VERIFIED: two runs of four arms on one binary, `engine/release/fteqw64.exe` 66B0F51FCFF9, `cfg/testrun/p307btn.cfg`.)*
+
+`in_win.c` registers mouse raw input with `dwFlags = 0` — `RIDEV_NOLEGACY` is written out in
+the source and deliberately not used — so legacy `WM_*BUTTONDOWN` still flows beside `WM_INPUT`.
+An injected click's `WM_INPUT` is dropped at the `hDevice` test, which sits **before** the button
+stamping, so `rawbuttondown[]` is never set and `rawbuttontime[]` stays stale. `INS_MouseEvent`'s
+dedupe then sees a legacy press that raw did not account for and passes it through as a genuine
+`K_MOUSE1`. That is enough for scroll-bhop, for jump timing, and for the gate the sample cheat uses.
+
+**Arm B demonstrates this rather than asserting it: twenty synthesized clicks became twenty real
+`K_MOUSE1` presses inside the game.** This was shipped behaviour.
+
+### Why it is not simply closed
+
+This tree had already measured the cost, before this patch existed — see the essay on the dedupe in
+`INS_MouseEvent`. **A Windows precision touchpad is a HID digitizer, not a `RIM_TYPEMOUSE`**, so it
+emits no `RI_MOUSE_BUTTON_*` flags at all and the legacy message is the *only* press it has.
+`RIDEV_NOLEGACY` takes every mouse button from those users — taps and press-and-hold alike — and it
+presents as a dead hit-test rather than as missing input, which is what made it hard to find the
+first time.
+
+So the patch is in two halves with different risk profiles:
+
+- **The counter is always on.** `in_raw_legacybtn` counts presses accepted while raw input was live
+  and could not corroborate them. Costs nothing, breaks nothing, and on the overwhelming majority of
+  ranked machines it is 0 for honest play by construction.
+- **The block is opt-in.** `in_rawinput_nolegacy`, **default 0**, `CVAR_ARCHIVE`. A ranked profile
+  can set it; a default cannot.
+
+**It is also grab-scoped, and that is not only about cheating.** `RIDEV_NOLEGACY` suppresses
+*non-client* legacy messages too, which is how a windowed player drags, resizes and closes the
+window. Applied while the mouse is free it would make the title bar dead — a worse bug than the one
+being fixed, and one the player could not escape without editing a config. While the mouse is
+grabbed there is no title bar to click, so the window cost is zero and only the touchpad cost
+remains. Driven from `INS_Move` off the live state rather than from `INS_ActivateMouse`, so a player
+changing the cvar mid-session is the same event as a grab transition — otherwise the setting would
+appear not to work until the next alt-tab.
+
+### Falsifier — four arms, and the fourth is the one that matters
+
+| arm | `nolegacy` | clicks fired | `b` sum | `g` changes | `injected` (P306) |
+|---|---|---|---|---|---|
+| A (control) | 0 | 0 | 0 | 0 | 0 |
+| B | 0 | 20 confirmed | **20** | 0 | 40 |
+| C | 1 | 18 confirmed | **0** | 8 | 38 |
+| D | 0 | 18 confirmed | **15** | 0 | 38 |
+
+**The clean argument for arm C is not "C had zero"** — zero is also what a dead harness produces.
+It is that **the clicks still arrived**: Patch 306's injected counter reads 38 in arm C, i.e. ~19
+clicks × 2 (down+up) of handle-less `WM_INPUT`, almost exactly arm D's 38. Same arrivals, same
+machine, minutes apart — 0 accepted with the block on, 20 and 15 with it off. The cvar is the only
+thing that differed.
+
+**Arm D is why there are four arms.** Without it, arm C's zero is equally well explained by the
+harness having stopped working, which is not hypothetical: the Patch 306 falsifier lost three of
+four runs to a silently refused `SetForegroundWindow`, and every one of them looked exactly like
+success.
+
+**D's 15 against 18 confirmed is expected and worth writing down.** The `INS_MouseEvent` dedupe
+suppresses a legacy press within 100 ms of a genuine raw transition on the same button, and arm D
+ran with 919 real input events. So an injected click landing inside one of those windows is
+swallowed as a duplicate — by the anti-duplicate logic, not by this patch. **The counter is a floor
+on injected clicks, never a ceiling**, which is the safe direction for it to be wrong in.
+
+### What run 1 found, and it changed the patch
+
+Arm C blocked the clicks but its header said `nolegacylive 0`, so the file could not prove the block
+was the cause. The log showed why: **the state flipped four times in three seconds.** The setting is
+grab-scoped, so every grab transition flips it, and a harness stealing focus flips it repeatedly.
+A header field is a snapshot and **cannot describe something that changes**.
+
+Hence the `g` record — every change to the effective suppression state, so an auditor can say *which
+spans* of a run had the legacy click path open instead of inferring it from one instant. Run 2 shows
+it working: arm C logs 8 transitions, arms B and D log none (with the cvar off there is no state to
+change), and in ordinary play, where alt-tab is the only thing that flips it, the record is a couple
+of lines long.
+
+**This is the third patch running to land on the same lesson.** Patch 301 separated the cvar from
+the grant; Patch 306 separated "not counted" from "counted zero"; this separates "true at the start"
+from "true throughout". Each time, the failure was a record that could not express the question.
+
+### PRE-REGISTRATION CORRECTION, recorded rather than reworded
+
+Arm C was registered as "there MUST be zero `+` records". It has **ten**, and the registration was
+simply wrong: `+` counts every key and button press, including the real ones from the hand that was
+on the mouse throughout (arms B/C/D carried 900–1600 genuine input events each). `+` can never
+separate an injected click from a real one and should not have been named as the criterion. The
+metric that does separate them is `b`, which read 20 / 0 / 15 exactly as predicted. **Naming a
+quantity that could not answer the question is a different error from getting the answer wrong, and
+a worse one** — it would have failed a working patch.
+
+### Reader side
+
+`hidcheck.py` parses `b` and `g`, reads the `nolegacy`/`nolegacylive` header pair, widens the
+trailer to 7 (pre-306) / 9 (pre-307) / 10 fields, and cross-checks the `b` deltas against the
+trailer total. `legacy_path` is reported as "suppressed for the whole journal" **only** when the
+header *and* every `g` record agree — a run with a single gap gets a note instead, never the clean
+description.
+
+A non-zero count is a **note** pointing at the Patch 303 device table, never a fault. An on-screen
+keyboard, a remote-desktop session, accessibility software, some vendor mouse utilities and a
+precision touchpad all click through the legacy path legitimately. `test_hidcheck.py` gains five
+cases, including the mid-run reopen a header alone cannot answer: **45 checks, 0 failed.**
+
+### Still open after this
+
+- With `in_rawinput_keyboard 0` (the shipped default) no keyboard `WM_INPUT` is registered at all,
+  so an injected **keystroke** passes both this counter and the block untouched. That default was
+  examined during Patch 305 and kept: raw keyboard does not remove auto-repeat, and switching to it
+  would destroy the repeat bit the legacy path already carries.
+- A hardware replay device enumerates as a genuine mouse, corroborates its own clicks through raw
+  input, and is counted as nothing. That remains the ceiling.
+
+## Patch 308 — the v21/Strata worldlights lump, and why fault 3 is not a shader problem  *(APPLIED — `plugins/hl2/mod_vbsp.c` only. One new cvar `hl2_lt_wl21`, DEFAULT 1. No shader change, no engine file, no exe rebuild. VERIFIED: three arms, plugin `E3F536EEE5D7`, `cfg/testrun/p308a_wl21.cfg`.)*
+
+### Part 1 — 123 maps on which Patch 302 and Patch 304 were doing nothing
+
+Patch 302 refused any worldlights lump whose version is not 0, because the v21 (Strata) record is 100
+bytes instead of 88 and the extra 12 are undocumented. **Refusing beat guessing, and that judgement
+was right.** What was wrong is the sentence after it: *"that costs nothing today, because the v21 maps
+in the library ship full .vhv bakes and take the baked path."* The bake suppresses this term for
+**props** only (`prv->wl_suppress`); players, viewmodels and every unbaked prop on those maps were
+left on bounce-only lighting. Measured over the install: **1314 maps, 123 of them lumpversion 1,
+39,641 worldlights refused.** `surf_fantasy` is one of them — which is why every measurement of 302
+and 304 was taken on tensor2 and boreas, and why `hl2_lt_worldlight` had never once fired on the map
+in the bug report.
+
+**The layout is DERIVED, not guessed, and the key is that surf_fantasy ships twice.** CS:S has it at
+bsp v20 / lump version 0 / stride 88; Momentum at v21 / version 1 / stride 100 — the same 777 lights,
+paired **777 of 777** by origin. That turns the v20 build into a Rosetta stone: for each v20 field,
+scan the v21 record for the offset that reproduces it across all 777 lights. The answer is a single
+12-byte insertion immediately after `normal`, everything below shifted by 12 — Strata's added
+`Vector shadow_cast_offset`, which reads as three floats and is **zero on all 39,641 lights measured**.
+
+    origin 0, intensity 12, normal 24, <12 NEW BYTES at 36>, cluster 48, type 52, style 56,
+    stopdot 60, stopdot2 64, exponent 68, radius 72, constant_attn 76, linear_attn 80,
+    quadratic_attn 84, flags 88, texinfo 92, owner 96
+
+| agreement with the CS:S build, 777 paired lights | |
+|---|---|
+| origin, style, stopdot, stopdot2, exponent, radius, attn triple, texinfo, owner | **100.00%** |
+| intensity, normal, type | **99.74%** — 2 lights; the map was RECOMPILED |
+| cluster | 52.12% — a function of the vis tree, which *must* differ between two compiles |
+| flags | 0.26% — the v21 compile sets Strata's new `CASTENTITYSHADOWS` bit (0x2) |
+
+Every field that has to survive a recompile does; the three that do not, do not for reasons that are
+themselves checkable. Validated beyond the map it was derived from: across **all 123** v21 maps the
+derived offsets give a type in 0..5, a style in 0..63 and a unit `normal` for every light, **zero maps
+failing** — 39,641 independent chances to disagree.
+
+**Verified in-engine, three arms, all pre-registered from `p308_pred.py` (which reimplements the
+loader's four filters against the derived offsets) before the build was run:**
+
+```
+ A1  fantasy, wl21 1   worldlights HDR v1 (100-byte, Strata), 767 of 777 usable
+                                       (2 sky, 7 styled, 0 already in cube, 1 clusterless)   HIT
+ A2  fantasy, wl21 0   worldlights lump is Strata's version 1 -- skipped by hl2_lt_wl21 0     HIT
+ B   tensor2 (v20)     worldlights HDR v0 (88-byte), 601 of 603 usable
+                                       (2 sky, 0 styled, 0 already in cube, 0 clusterless)   HIT
+```
+
+All five drop counts land exactly on fantasy. A wrong layout does not reach 767 by accident — it
+would have to reproduce the type, style, flags **and** cluster filters simultaneously from misaligned
+bytes. Arm B is the regression control: the 88-byte path is untouched.
+
+### Part 2 — `wl_suppress` was gating a ratio that carries no level  *(correct, and MEASURED TOO SMALL TO SEE — see part 3)*
+
+`VBSP_AddWorldLightCube` gained an `ignoresuppress` argument. The suppression means "this prop has a
+`.vhv`, its direct light is already counted" — right for `VBSP_LightPointValues`, whose output *is* the
+prop's level, and wrong for `VBSP_LightPointCube`, whose output is read by exactly one thing:
+`#BUMPCUBE`'s **ratio**. A ratio of a cube against itself is exactly 1.0 whenever the bumped normal
+equals the geometric one and is invariant under scaling the cube, so it cannot double-count a bake
+however bright the bake is. Gated on `hl2_cubelight` — that cvar is precisely "compile the shader that
+reads this cube", so `hl2_cubelight 0` (the default) is bit-for-bit today, and one value drives both
+halves, per Patch 304's lesson. `hl2_cubelight` also joins the `light_known` invalidation, because as
+of this patch it changes solved data and not merely which program is compiled.
+
+### Part 3 — fault 3 is the missing SUN, and this is the part worth keeping
+
+The rock has no bumpmap relief. Four independent designs were generated and adversarially judged, and
+every one of them was killed by a number **nobody had measured**: `P`, the rendered level of the rock.
+
+**`P = 33.5`** (luma mean at save002, p50 32.4, p90 41.0), not the 90–128 that every effect estimate —
+mine included — had assumed. Every multiplicative relief term scales with `P`, so all of them were
+overstated 3–4×. Re-scored on screen from `p292b_fan_s2_*.png`, which had been on disk since the 268 C
+run and which nobody had reopened:
+
+| at the fault's own rock | relative modulation | levels | px > 3 levels |
+|---|---|---|---|
+| real leaf cube | 0.48% | 0.17 | 0.20% |
+| `r_cubelight 2`, synthetic 50:1 cube — **the kernel's ceiling** | 4.50% | **1.47** | 6.48% |
+| noise floor (`on2 − on1`, same cvar, same process) | | 0.037 | |
+
+So even a maximally anisotropic cube yields 1.47 levels here. Source-parity RNM lands at 3.3% → ~1.1
+levels; the two N·L candidates at ~2–3% → 0.7–1.0. **Every candidate lands in the same band already
+rejected as null.** And `P = 33.5` is faithful, not a bug: `fan/moss.vtf` decodes to albedo luma 54.2,
+so the rock is lit at 62% of white. It is dark because the moss texture is dark.
+
+**Why it is dark AND flat, in one fact.** `VBSP_LoadWorldLights` keeps `emit_surface/point/spotlight`
+and drops `emit_skylight`/`emit_skyambient`, because neither has distance falloff and there is no
+sky-visibility trace — admitting them would sunlight sealed indoor rooms at full sun. On an indoor map
+that is a small loss. **surf_fantasy is an outdoor island**, and it carries
+
+    light_environment  _light 254 249 152 500   _ambient 104 202 249 50   pitch -70
+
+Arriving at save001 — the island rock itself — the local lights we keep sum to **0.2335** under
+1/r², while the sky lights we drop, which have no falloff at all, sum to **1.8434**. **The dropped sun
+is ~8× everything we keep**, before occlusion and N·L.
+
+That single fact explains both halves of the report. A rock whose dominant light source is absent is
+flat *because* there is no dominant direction left in its cube, and dark *because* 8/9ths of its
+illumination is missing — and being dark is what puts every relief kernel below the visibility bar.
+**Fault 3 is not a shader problem and no relief kernel fixes it.** The fix is the sky-visibility trace,
+which Patch 302's own notes already named as the precondition ("they stay excluded until a real trace
+exists"), and which is now the highest-value item in this area rather than a nicety.
+
+### Six things I got wrong, kept because each cost a real detour
+
+1. **I suspected the cube ratio was permanently dead and said so.** It is not: the kernel is fine, it
+   is *stationary only at axis-aligned normals* and `vertexlit.glsl:358` evaluates the denominator at
+   the real geometric normal, so the shader was never pinned at the stationary point. Refuted by
+   re-scoring existing screenshots.
+2. **I quoted 4.41 levels for part 2 against a mid-grey `P = 128` reference.** At the rock's actual
+   `P = 33.5` that is 1.15 levels — below the bar, and in agreement with the on-screen 1.47 ceiling. I
+   had the right arithmetic and the wrong reference, which is the same error as 268 C's.
+3. **268 C's "mean ratio 0.9941" never was evidence for its conclusion,** and I nearly inherited it as
+   one. The mean of a ratio over a symmetric tilt distribution is ≈1 by construction: on a hard top-lit
+   cube it is **1.6001** while the median pixel moves **0.22 levels**. Mean and spread are independent
+   here and only the spread is visible.
+4. **I predicted `hl2_cubelight 1` would "just work" post-302.** It could not have: surf_fantasy is v21
+   so `numworldlights` was 0, and `wl_suppress` was true on all 2345 props regardless. Two independent
+   gates, both of which had to be found before the lever could even be tested.
+5. **"`e_light_mul` is exactly (0,0,0) on every surf_fantasy prop" is false in general** and three of
+   four candidates asserted it. `mod_vbsp.c:8788-8805` is a second arm that passes `FS_BAKED_DIR 0.30f`,
+   giving `light_range = 1.70*m`. That population is `vbsp_propstat.vcdeclined` and `prop_census`
+   already prints it — **still unread on surf_fantasy.**
+6. **`waitmap <n>` takes a timeout in SECONDS, not frames.** `waitmap 600` — copied from
+   `p268c_live.cfg`, where it has been sitting for several runs — blocks the command buffer for ten
+   minutes. It cost a capture run here and it is silently costing wall-clock in every cfg that uses it.
+
+### Still open
+
+The sky-visibility trace (the real fault-3 fix). `vcdeclined` on surf_fantasy, which decides how many
+rocks already have a directional term. Part 2's `ignoresuppress` is correct but unmeasurable at
+`P = 33.5` and ships behind `hl2_cubelight 0`; it should be re-measured once the sun exists, when the
+rock is bright enough for a 4.5% modulation to clear the bar. The 12 inserted bytes are *inferred* to
+be `shadow_cast_offset` from their position and from being identically zero — nothing reads them, so a
+wrong name costs nothing, but it is a name and not a citation.
+## Patch 309 — 89.6% of the turn-key press records in an honest run described presses that never happened  *(APPLIED — `engine/client/in_generic.c` only (one block inside `IN_Journal_Event`), plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. No header change, no new cvar, no backend change. VERIFIED: three runs of four arms on one binary, `engine/release/fteqw64.exe` B8C976C60728, `cfg/testrun/p309rep.cfg`.)*
+
+Measured on Lex's clean bhop_eazy PB (`data/runs/bhop_eazy/main/0004976_pb`):
+
+| | `+` (down) | `-` (release) | phantom |
+|---|---|---|---|
+| e (101) — `+left` | 118 | 9 | 109 |
+| CapsLock (129) — `+right` | 26 | 6 | 20 |
+| **turn keys** | **144** | **15** | **129 = 89.6%** |
+| whole file | 326 | 130 | 196 = 60.1% |
+
+196 key-downs — **60% of every press record in the file** — have no matching release, because they
+are OS auto-repeat and nothing said so. A reader asking how many times the player pressed the turn
+key got **144 for 15**.
+
+**That is not a rounding error, it is a different story about the run.** The shape auto-repeat
+invents — a fast, perfectly even train of presses — is precisely the shape a scripted turn would
+have. The record was manufacturing the signature it exists to look for, on every honest run. The
+only reason nobody had been accused by it is that nothing was reading the column yet — which is the
+same latent-failure shape as Patch 301's unprinted `rawmice` and Patch 305's unreachable
+`check_identity`, and the third instance in this file of a check that would have fired wrongly the
+first time someone relied on it.
+
+### The fix is four lines, because the value already existed
+
+`Key_Event` computes the identical thing one line into its own body — `wasdown = !!(keydown[key] &
+devbit)`, `keys.c` — to block auto-repeat *binds*. The journal simply never recorded it.
+
+The ordering is what makes reading it correct: `IN_Commands` calls `IN_Journal_Event` **before** the
+switch that dispatches `Key_Event`, so `keydown[]` still holds the state from before this event —
+exactly what Windows' `lParam` bit 30 means. **Derived rather than threaded from the wndproc**, so
+it holds on every backend and on the raw-input path too, not only on the Windows legacy one, and
+`Key_Event`'s scancode -1 "release everything" sweep keeps it from going stale across a focus loss.
+A second copy of this state maintained in the journal would have been a second thing to get wrong,
+and would have needed its own release-everything handling.
+
+**On the release as well as the press**, because the same bit answers a second question there: a `-`
+whose key was *not* down is an **orphan** — a release with no press, meaning a press was lost or a
+release invented. One field, one meaning, two findings. `-1` where the question does not apply
+(scancode -1 is the sweep, 0 the unicode-only dead-key path) — **not 0**, which is a real answer.
+
+### Falsifier, and the arm that failed is the one worth reading
+
+Injected via SendInput as F12 with its real scancode. Filtered to that keycode, so nothing below is
+the real hand that was on the machine throughout:
+
+- **A** (control) — no key records at all. As registered.
+- **B** (down, up) — `+ prev=0` then `- prev=1`. As registered.
+- **C** (1 press + 9 repeats, up) — `prev` = **0 1 1 1 1 1 0 1 1 1**, release `prev=0`.
+- **D** (release only) — one `- prev=0`, the orphan, and no `+`. As registered.
+
+**PRE-REGISTRATION CORRECTION, recorded rather than reworded.** Arm C was registered as "the first
+`prev` 0 and the other nine `prev` 1", release `prev` 1. It produced **two** zeros among the downs
+and a zero on the release.
+
+**The record explains itself**, which is the part worth keeping. Both unexpected zeros sit
+immediately after a `- -1` release-everything sweep, caused by the harness stealing focus to deliver
+the keys; `Key_Event`'s sweep clears `keydown[]` for every key, so the next down genuinely *was* a
+fresh press and the column says so. The registration assumed an uninterrupted hold; the column
+tracked reality instead, **including a state change the test itself caused**. A naive "count the
+downs and subtract one" would have reported 9 repeats and been wrong twice over.
+
+**What the falsifier cannot show**, stated so the result is not overread: real typematic repeat is
+generated by the keyboard for a physically held key and SendInput does not produce it. But the
+column is not read from any OS repeat flag — it is derived from "a down arrived for a key already
+down" — so a hardware repeat and an injected second down take the identical path. The 89.6% figure
+is not from the cfg; it is measured on the real recording above and reproduced by running hidcheck
+over it.
+
+### Two harness failures worth keeping, both about the test and not the patch
+
+- **Run 1 fired nothing on two arms.** PowerShell variable names are **case-insensitive**, so
+  `$seq = $SEQ[$arm[1]]` destroyed the lookup table with its own first result. Arm B had already run
+  before the collision, so it presented as a data problem rather than a syntax one.
+- **Run 2 fired correctly and was unreadable.** The injected key was `b`, and the machine is in
+  active use — `a`, `d`, `w` and both mouse buttons appear in every arm from a real hand — so an
+  injected letter could not be told from a typed one. Switched to F12, and to setting `wScan` as
+  well as `wVk`: FTE's `MapKey` reads the **scancode** out of `lParam`, not the virtual key, so a
+  vk-only injection arrives as scancode 0 and journals as the dead-key path.
+
+### Reader side
+
+`hidcheck.py` widens `+`/`-` to 4 (pre-309) or 5 fields, counts presses and repeats separately,
+reports the repeat percentage, surfaces orphan releases as a note, and excludes scancode -1 from
+both. A pre-309 file is told explicitly that its `+` records are a **mixture** and cannot be counted
+as presses — absent is not zero, again. Four new suite cases: **58 checks, 0 failed.**
+
+## Patch 310 — the record described how the player aimed and not what they could see  *(APPLIED — `engine/client/in_generic.c` only, plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. No new cvar, no backend change, no header struct change. VERIFIED first attempt: four arms on one binary, `engine/release/fteqw64.exe` 83D007EA974E, `cfg/testrun/p310render.cfg`.)*
+
+Patches 293/301/303 put the input pipeline's constants in the `.hid` because a record of mouse
+counts proves nothing without the numbers that turn them into an angle. **The same argument applies
+to the renderer and had never been made.** A run recorded with the fog switched off, or the world
+drawn fullbright, is a different run from the one the journal described — and nothing in the
+evidence said so.
+
+`r_fog_progless 0` is the concrete case: it restores the pre-Patch-266 behaviour in which
+program-less surfaces take no distance fog, which on a fogged map means seeing through the fog
+across a large share of the world. It is **`CVAR_ARCHIVE` and not `CVAR_CHEAT`**, so it survives a
+restart and no server gate touches it. Worse, checked while building this: **`r_fullbright` and
+`r_drawflat` carry no flags at all.**
+
+**Record rather than block, and the reason is not timidity.** Blocking needs a client-cvar
+enforcement channel this game does not have yet, and a block with no record is unfalsifiable after
+the fact — an auditor still could not tell what a run was played with. Recording ships today,
+composes with a gate later, and is the same architecture as every other column here: the file states
+what happened and the validator decides what it means. `hidcheck` reports off-default values as
+**notes and never faults**.
+
+**Both the value and the default on one line**, for the P293 reason: a reader that knows only the
+value needs its own table of what is normal, that table drifts from the engine's, and the check
+silently starts measuring the wrong thing. With `defaultstr` beside the value, "differs from
+default" is answerable with no model in the reader at all, and it stays correct when a default
+changes.
+
+**Changes too, not just a snapshot — the lesson Patch 307 paid for.** These are ordinary cvars a
+console can set mid-run. Tracked by the engine's `modifiedcount` rather than by comparing values,
+which is cheaper *and* strictly stronger.
+
+### Falsifier — four arms, first attempt, no external harness
+
+Cvars are console commands, so unlike the mouse and button patches this one is fully scriptable.
+
+| arm | header `r_fog_progless` | `c` records |
+|---|---|---|
+| A — all default | `"1" "1"` | 0 |
+| B — set 0 **before** the journal | `"0" "1"` | 0 |
+| C — changed **during** | `"1" "1"` | 1 (`"0"`) |
+| D — set **and set back** | `"1" "1"` | 2 (`0 -> 1`) |
+
+All four as pre-registered. **Arm D is the result worth reading:** its header says 1 and its final
+value is 1, so a reader comparing start against end sees *nothing happened* — and the fog was off
+for half a second in the middle. A value-comparison design would have passed that arm while being
+wrong.
+
+**The engine corrected the table, which is worth writing down.** The source asks for `r_wireframe`;
+the file records `r_showtris`. `renderer.c:162` is `cvar_t r_wireframe = CVARAFD("r_showtris", …)` —
+the C identifier and the console name differ, and the lookup found it by its alias. Recording
+`cvar->name` rather than the string we asked for means the file always names the cvar the engine
+actually has. A reader grepping a `.hid` for `r_wireframe` will not find it, and that is correct.
+
+### Reader side
+
+`render` is collected as a **repeating header line**, like `dev` — a key/value header is a dict to
+every reader that parses one, and a dict keeps the last of a repeated key, so eleven cvars would
+have arrived as one. `-` is handled as "no such cvar in that build", **not** as 0. Five new suite
+cases including the set-and-set-back guard: **80 checks, 0 failed.**
+
+### Not done here, and deliberately
+
+`$nofog` is still ignored on the program-less pass, which is the one legitimate reason a player
+might reach for `r_fog_progless 0`. Two things stopped me touching it: the `shader_t.flags` bitfield
+is **full** (`SHADER_HASDISPLACEMENT` occupies bit 31), so a `SHADER_NOFOG` needs a new field rather
+than a spare bit; and `gl_backend.c`'s fog path plus the hl2 VMT materials are where the concurrent
+session's Patches 300/302/304/308 all live. Patch 300 already fixed the additive half by giving
+those materials real programs. The remaining gap is non-additive program-less materials carrying
+`$nofog`, and it should be sized before it is patched.
+
+## Patch 311 — a plugin could forge input through the engine's own published API and the journal called the file clean  *(APPLIED — `engine/client/in_generic.c`, `engine/client/input.h` (one declaration), `engine/common/plugin.c` (five shims, one table), plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. No struct change, no cvar. VERIFIED: a real before/after on two shipped binaries — Patch 310 `83D007EA974E` and Patch 311 `5A2A722CD7AA` — with `cfg/testrun/p311synth.cfg` and a purpose-built test plugin.)*
+
+`in_jrn_synth` was set by `IN_JournalSynth_f` because **the command** set it, not because the
+**injection** did. So the flag described one known caller rather than the property it is named for,
+and every other way into `IN_KeyEvent`/`IN_MouseMove` produced a journal saying `synth 0` — a clean
+evidence file — over forged input.
+
+**That is not hypothetical.** `plugins/plugin.h:356-360` hands a plugin raw pointers to
+`IN_KeyEvent`, `IN_MouseMove`, `IN_JoystickAxisEvent`, `IN_Accelerometer` and `IN_Gyroscope` (the
+input table in `common/plugin.c`). A plugin is an ordinary native DLL a player can drop in: **no
+cheat gate, no memory patching, no hook.** It calls the same function the Windows backend calls, the
+event lands in the same ring, and until now the journal could not tell.
+
+### Measured — a real before/after on two shipped binaries
+
+| arm | pre-311 (Patch 310) | post-311 |
+|---|---|---|
+| A — control, nothing injected | `synth 0` | `synth 0` |
+| B — `in_journal_synth 32` | `synth 1` | `synth 1` + *SYNTH source in_journal_synth* |
+| C — **plugin injects 32** | **`synth 0`** | **`synth 1`** + *SYNTH source plugin* |
+
+**Arm C pre-311 is the whole point.** Thirty-two forged mouse events entered the engine through its
+own published API, were drained into the same ring the mouse uses, and the journal declared itself
+clean evidence over the top of them.
+
+Arm A is the control that says the mark does not fire on its own; arm B is the regression arm, since
+the poison was refactored out of the command into `IN_Journal_MarkSynth`.
+
+### Why the mark goes at the entry points and not inside `IN_KeyEvent`
+
+The honest test — "did this come from a backend?" — is **not answerable** there: the backend and the
+plugin call the identical function with identical arguments. Any in-band answer would need every
+backend on every platform to set a flag first, which is a correctness burden spread across code this
+patch cannot test, and **one missed backend silently poisons every honest journal on that
+platform**. Marking at the few non-backend entries instead is a smaller, checkable set, and it fails
+in the safe direction: a new injection route added later is *un-marked* (a gap to close) rather than
+every honest run being accused (an accusation that cannot be undone).
+
+All five input entries are shimmed, including `Accelerometer` and `Gyroscope`, which are not
+journalled today — the point is the mark, and leaving two of five un-marked would be a gap that is
+invisible until someone uses them.
+
+### The source is named, because one flag was covering two very different facts
+
+"A developer ran `in_journal_synth` to test the format" and "a plugin forged input" were the same
+`synth 1`. The source now arrives as a note.
+
+**And that widened the world in a way the reader had to be corrected for.** `hidcheck` used to say
+every synth-flagged journal came from `in_journal_synth` — true when written, and a **false
+attribution** the moment a plugin could set the same flag. A pre-311 file now says the source is
+**not recorded** rather than naming the innocent one. Same shape as "absent is not zero": a message
+that was accurate becomes a wrong answer when the set of possible causes grows.
+
+### The test plugin, and why it had to exist
+
+Nothing in the tree exercises that path on this machine — `openxr.c:1648` is the only in-tree caller
+and needs a VR runtime. **A test that cannot reach the code under test is not a test**, so
+`plugins/p311test/` is ~40 lines with one console command. It is built **standalone with gcc**,
+never through `make plugins-rel`, which would rebuild the concurrent session's hl2 plugin. **The
+built DLL is deleted after the run** and is not kept in the game directory — an input-injecting DLL
+sitting next to the game is precisely what this subsystem exists to notice. The source stays so the
+falsifier can be rebuilt; the exact command line is in the cfg.
+
+### One defect in the patch, found by running it
+
+The note came out as `SYNTH source?plugin` on the first build: `IN_Journal_Note`'s sanitiser allows
+only alphanumerics, space, `_`, `.` and `-`, and turned the `=` into `?`. Space-separated since.
+Worth keeping because the sanitiser is doing its job — a note is gamecode-supplied text and must not
+be able to forge a record line — and an engine-internal caller has to live within the same rule.
+
+### What this does not catch
+
+A native DLL that detours `IN_MouseMove` itself, or patches the event ring, runs **below** this mark;
+so does a hardware replay device. This closes the **sanctioned** injection route — the one that needs
+no skill at all — and does not pretend to close the others. Three new suite cases: **88 checks, 0
+failed.**
+
+---
+
+## Patch 312 — the yaw identity tests the engine's multiplication, not the player; this tests the player  *(APPLIED — `engine/client/in_generic.c`, `engine/client/input.h` (one declaration), plus `tools/hidcheck.py` and `tools/test_hidcheck.py`. No struct change, no cvar. VERIFIED: a real before/after on two binaries — pre-312 `25253344A8B8` and Patch 312 `B88F71EA1A8D` — with `cfg/testrun/p312mvsv.cfg`, four arms, each prediction registered before the run.)*
+
+Plan item **P294b**, and the plan called it *"the check that would catch what P293 cannot."*
+
+**The gap, in one sentence.** Patch 293 proves `Δyaw == -m_yaw·sensitivity·scale·mx` exactly — but it
+computes **both sides from the engine's own `mx`**, so it tests the engine's multiplication and not
+the player. A hook that rewrites the accumulated delta *upstream* of `mx` gets a conforming 293 record
+for free, because the engine then multiplies the doctored number correctly. That is the FTE shape of
+what `momentum.dll` already does to `CInput::ApplyMouse`, and 293's own essay says so.
+
+**The other end of the window.** The `m` records are transcribed straight off the event ring during
+`IN_Commands`; `mx` is read out of `mouse->delta[]` in `IN_MoveMouse`. Those are the two ends of
+exactly the window such a hook occupies, so **a disagreement between them is that hook.**
+
+**Measured before any code was written, because the plan required it** — assuming a frame
+correspondence is the mistake that made the `.hid`/`.view` cross-check impossible. Across every
+journal in the tree (45,447 `v` records, including one real 4976-tick PB) the join **already held on
+45,384 of 45,384 covered frames, 100.000000%**. So `v` needed no sequence number and this patch adds
+no join key.
+
+**What it catches, demonstrated rather than asserted.** Applying *the faithful hook* to a real
+journal — `v.dx += 1` **and** `yaw -= k`, which is what a real hook produces because the engine does
+its own arithmetic on the doctored value — hidcheck reports:
+
+```
+identity   exact on all 1 governed frames      <- Patch 293 sees NOTHING
+FAULT      COUNTS JOIN BROKEN ... sum(m)=(90,-2) but raw=(91,-2)
+```
+
+One count in ninety. At scale against the same PB, a hook touching 93.68% of frames moves 293's
+median residual from **0.121000° to 0.121001°** — the sixth decimal — and moves this check from
+**0.00% to 93.68%**. Detection is integer-exact per frame against a measured false-positive floor of
+zero, so the threshold is a single frame.
+
+**Three things had to be recorded first, all of which would have ACCUSED AN HONEST PLAYER** — the
+Patch 305 failure mode, which cost 10,091 frames of a clean PB:
+
+- **`in_xflip`.** `in_generic.c` does `if(in_xflip.value) mx *= -1` upstream of both taps, and the
+  cvar appeared **nowhere** in the file. Measured (arm B): identical synthetic input, `v.dx -157.5`
+  against the control's `+157.5`, with no key in the header to say why. It is neither `CVAR_CHEAT`
+  nor even `CVAR_ARCHIVE`.
+- **Counts discarded while the cursor is free.** `mx` is zeroed before the tap, so the quiet-frame
+  return dropped the `v` line entirely while the `m` records had already been written — orphaning
+  them into the next window. Measured (arm D): one console press orphaned exactly one 29-count batch.
+- **The `M_TOUCH` path's hardcoded `mx *= 1.75`** (*"boost sensitivity so that the default works
+  okay"*). Found as an unexplained 1.75× ratio in the residuals before the line was located.
+
+**The fix is one tap, not a table of exemptions.** The raw counts go in the file at the point they are
+still the ring's, and the reader compares two numbers it was given — no transform table, no engine
+model in the validator. A red-team pass over the patch found **seven** more transforms between the
+`m` record and 293's tap, six silent on an honest client: the `Key_Dest_Has(~kdm_game)` zeroing (whose
+destinations are **not** all covered by flags bit 4 — opening chat discards counts with flags reading
+0), `CSQC_MouseMove` (on by default, and this game ships CSQC panels), the two menu consumers, the
+weapon wheel (which returns true on the key alone regardless of its threshold), and the touch boost.
+**All six are downstream of the single tap**, so one line covers them and covers the seventh nobody
+has written yet. A flag bit per discard site would have needed six correct edits and would fail
+silently when someone adds a seventh.
+
+**The `d` record is emitted only when raw differs from final**, so honest grabbed play — 100.000000%
+of measured frames — costs nothing and the record's *absence* is the positive claim.
+
+**A sparse record cannot mark a span**, the fifth time this tree has landed on that lesson after 301,
+306, 307 and 310. The obvious design marked touch mode with the `a` record; Patch 202 **dedupes**
+unchanged absolute positions for size, so a run spent entirely ungrabbed carries **one** `a` record
+for a state that lasts the whole file. That design would have exempted one window and faulted every
+other. The final falsifier run proved the replacement by accident: the launcher left the window
+unfocused, so every frame took the 1.75 boost — `d 90 -2` against `v 157.5 -3.5` — and the join still
+closed, because it is made against the value the engine **stated**.
+
+**REJECTED, recorded so it is not re-proposed.** The first `v` of a file is short because
+`in_journal_begin` does not clear the pending `ptr[].delta`, and clearing it would make the join exact
+from line one. It would also **throw away counts the player already made.** The engine must not alter
+a player's aim, even by one frame, to tidy its own evidence; a reader exempting one frame per file
+costs nothing and costs it in the right place.
+
+**What it does not cover, so it is not oversold.** An edit to the **event ring before the drain** is
+transcribed by the `m` record as truth, so both ends agree; the same goes for an overwrite of the
+`_GRID` `GetRawInputData` pointer, which is a single static and therefore a data write rather than a
+code patch. Anyone who can hook `IN_Journal_Raw` authors the whole file. This check spans the ring
+read to the delta read and claims nothing outside it — and it is **complementary** to 293 rather than
+a replacement: a hook that faithfully re-emits the counts and mutates only the angle passes this one
+and fails 293 instead.
+
+The patch also enrols the input pipeline's own constants (`sensitivity`, `m_yaw`, `m_filter`, the
+`m_accel` family) in the existing `modifiedcount` change tracking, closing a hole in **293** rather
+than this one: they were header snapshots, and if one moved mid-run 293 stopped closing with nothing
+in the file to say why. Plus `leftisright` (the console name of `r_xflip`, which inverts 293's sign
+downstream — the same alias trap Patch 310 hit with `r_wireframe`/`r_showtris`),
+`dpcompat_csqcinputeventtypes` and `cl_threadedphysics`.
+
+hidcheck's `check_counts_join` sits **beside** `check_identity`, not inside it: that function's early
+returns all concern the sensitivity pipeline *downstream* of `v.dx` and would have suppressed this
+check on exactly the files it exists for. A pre-312 file reports the join as **unanswerable** rather
+than broken — without a `d` record an honest `in_xflip` player and a sign-flipping hook produce
+byte-identical files. Six new suite cases: **104 checks, 0 failed**; all 7 real `.hid` recordings
+still validate.
+
+## Patch 313 — QC was stamping runs with half a predicate, and the missing half was the whole ruleset  *(APPLIED — `engine/server/sv_phys.c`, `engine/server/sv_init.c`, `engine/server/sv_ccmds.c`, `engine/common/world.h` (one declaration, no struct change), plus QC build 62 (`shared/sh_defs.qc`, `server/sv_timer.qc`) and `tools/reccheck.py`. No new cvar, no backend change. VERIFIED: a real before/after on two binaries — pre-313 `C61844E3BE15` and Patch 313 `1628C06E3426` — with `cfg/testrun/p313ruleset.cfg`, four arms, each prediction registered before the run.)*
+
+Plan item **P296**, the last open item in the anti-cheat plan's Phase 1.
+
+**What was actually wrong.** `sh_defs.qc`'s `TF_CHEAT` comment had been saying it for builds:
+*"the authoritative predicate for 'were the physics locked' is the engine's `SV_MovementLocked()` =
+`pm_lockmovement.defaultstr && !sv_cheats`, and QC can see only half of it."* QC must **not**
+re-derive the other half from `cvar("pm_lockmovement")` — that reads the **live** value, and Patch
+170 reads `defaultstr` precisely because the live one can be changed by the thing being policed. So
+`TF_CHEAT` meant *"cheats were off"*, not *"the ruleset was locked"*, and a server whose
+`pm_lockmovement` default is 0 runs with cheats off, every mover cvar wherever the config left it,
+and every run on it stamped clean.
+
+The patch publishes `*ruleset "<locked> <off> <seq>"` into `svs.info`. SSQC reads it straight out of
+`svs.info` via `serverkey()` (`PF_sv_serverkeystring`) — no network, no `InfoBuf_Clone`, no client
+involvement.
+
+**Why four fields and not the one the QC comment asked for.** That comment said *"a one-line engine
+patch publishing `SV_MovementLocked()`"*. One field answers "is the lock engaged" and leaves the case
+the comment is actually worried about exactly as invisible as before: `locked 0` says the lock is
+off, it does not say whether the numbers were right anyway.
+
+- `locked` — `SV_MovementLocked()`, **both** halves, which is the point of publishing from inside the
+  engine rather than letting QC assemble it from what it can reach.
+- `off` — how many cvars in `pms_lockedmovevars[]` currently differ from `SV_MovementCanonical()`.
+  Under `locked 1` it is 0 by construction and carries no information; under `locked 0` it carries
+  all of it. A server that never asked for the lock but is running stock numbers is a different thing
+  from one running its own.
+- `seq` — a counter incremented on every set of a table cvar to an off-canonical value, **whether or
+  not the lock is engaged**, and never reset.
+- `breach` — the subset of those that **stood**, i.e. happened while the lock was off so nothing
+  reverted them. This is the only field a taint may read; see the correction below.
+
+**Why `seq` when `off` already exists, and the arm that proves it.** `off` is a snapshot, and a
+snapshot cannot mark a span: a cvar moved and moved back inside a run reads 0 at both ends. That is
+the sixth instance of this tree's recurring lesson — 301 (a cvar is a request, not a grant), 306
+(not-counted is not counted-zero), 307 (true-at-start is not true-throughout), 310 (a snapshot is not
+a change), 312 (a sparse record cannot mark a span). **ARM C measured it:**
+
+```
+sv_cheats 1        *ruleset "0 0 1 0"   lock disengages, nothing moved yet
+sv_airaccelerate   *ruleset "0 1 2 1"   NOT reverted now; off and breach move
+sv_cheats 0        *ruleset "1 0 2 1"   re-latch restores; off back to 0
+```
+
+Sampled at the two ends of that window — which is all a run does — `off` says nothing happened and
+`seq` says it did. **ARM B** is the same point under the lock: the revert is what makes `off` read 0,
+so `1 0 0 0` → `1 0 1 0` is the only record anywhere that the attempt happened, outside a console
+line nobody parses — and `breach` staying 0 across it is what keeps QC from calling that run unruled. Counting therefore sits **above** the `SV_MovementLocked()` test in the callback — the
+306 shape — and is safe against the bounded re-entry, because `Cvar_ForceSet`'s re-entrant pass
+arrives with `var->string` already equal to canon and so neither counts nor publishes.
+
+**ARM D is the arm that decides whether it ships.** `mode_bhop.cfg` overrides six cvars in the locked
+table (`sv_airaccelerate` 1000 vs a `defaultstr` of 150, `pm_ticrate` 0.01 vs 0.015, …). Those are
+the ruleset on a bhop map, not a departure from it. Measured: `*ruleset "1 0 2 1"` with all six rows
+live-equals-base. **`off` is 0, not 6.** Had the census compared against `defaultstr` instead of
+`SV_MovementCanonical()` it would have refused every bhop run on a correctly configured server —
+the Patch 305 failure mode exactly, where the flagship check called the game's own core mechanic a
+cheat.
+
+**Why `"0"` and not `""` for the unlocked case, where `*cheats` uses `""`.** `PF_infokey_Internal`
+falls through to `svs.localinfo` when the serverinfo value is empty (`pr_cmds.c:6478-6479`), so an
+empty `*ruleset` does not read as "unlocked", it reads as "go ask localinfo". And the key being
+**absent** has to stay readable as its own third state — *"this engine predates 313 and cannot
+answer"* — which is the distinction Patch 306 exists to make. `*cheats` may use `""` because it is
+consumed as a presence test; this is not. Measured on the pre-313 binary: the key is absent from the
+`serverinfo` dump and `movement` prints no line for it.
+
+**What it does not cover, said out loud so it is not mistaken for covered.** `pm_lockmovement`'s own
+`defaultstr`. `exec cfg/default.cfg` is followed by an automatic `cvar_lockdefaults 1`
+(`cmd.c:1067-1070`), so a second exec of a doctored `default.cfg` would rewrite the canonical value
+under this entire table with no callback anywhere and `off` would read 0 against the new numbers.
+That is console access to the server process — tier T3 — which no patch in this series reaches and
+which is unreachable on an official server. For the same reason: progs can overwrite any star key
+(`PF_setserverkey`, `pr_cmds.c:6730`), so this key is worth exactly what the server's progs are
+worth. On the Ranked tier that is the point; on a listen server it is nothing, and nothing else on a
+listen server is worth any more.
+
+**THE CORRECTION THAT PRODUCED THE FOURTH FIELD, found by asking what the bit claims rather than by
+a test failing.** The first cut had QC taint on `seq` moving across the run. But `seq` counts
+*attempts*, and under the lock an attempt is reverted inside the same `Cvar_Set`, so no physics tick
+ever sees the value — the run's physics **were** the ruleset's. A bit whose documented meaning is
+*"not provably the ruleset's"* would then have been set on a run where they provably were, because
+somebody mistyped a cvar name into the console. That is the Patch 305 failure mode one layer up. The
+fix is not to narrow `seq` — a refused attempt is real evidence and the console line recording it is
+not parseable by anything — but to publish both: **`seq` counts attempts, `breach` counts the ones
+that stood.** Two facts, two numbers, which is the same rule this tree has been re-learning since
+301. The taint reads `breach`; the forensics read `seq`.
+
+**And the check that the counter was needed at all**, made before adding a second mechanism for one
+gesture: QC already watches `sv_cheats`, so is `breach` redundant? No — that watch is an **edge**
+(`sv_player.qc:472`, `if (sc) if (!e.run_lastcheats)`) sampled once per `PlayerPostThink`, so a
+toggle that goes 1 and back to 0 between two of them sets no `TF_CHEAT` while every snapshot of this
+key still reads `locked 1` / `off 0` either side of it. **Measured, in the arm built to isolate
+exactly that** — all three commands on one line so they run in a single command-buffer flush:
+
+```
+class:   clean (seg 0 cheat 0 cheatlatch 0)  cheats now 0
+ruleset: key "1 0 3 2"  breachat 1  noruleset 0  would 1
+```
+
+A run every existing mechanism in the game calls clean, whose physics left the ruleset, seen by
+nothing but the counter.
+
+**The consumer shipped with it — QC build 62.** `TF_NORULESET` (1024), built on the `TF_NOJOURNAL`
+precedent — *recorded, read by the archive, implying none of the three taint classes* — and
+deliberately **not** folded into `SV_CheatsOn()`. An unlocked ruleset is a hole in the certification,
+not something the player did, and this tree's rule is that *a quiet gate survives a false negative
+where an accusation does not*; folding it into `TF_CHEAT` would print `cheated` in red at a player
+whose install was merely misconfigured. `SV_RulesetBroken` is a **pure** predicate with no side
+effect, called both by the latch (`SV_TimerRuleset`, at start and at finish, `SV_TimerJournal`'s
+shape exactly) and by `cmd timer`'s report — one copy of the rule, and a report that does not mark
+the run it is asked about. That split is forced by the harness rather than by taste: **a run cannot
+be finished from a config on a zoned map** (`zone_goto`/`setpos` both route through
+`SV_TimerWarped`, which voids the attempt), so without a live `would` column the finish half of the
+latch would not be observable headlessly at all. Build 58 lost four launches to that wall and wrote
+down the lesson — *add a report line instead of chasing the finish*.
+
+Five QC arms on `cfg/testrun/p313qc.cfg`, every prediction registered first:
+
+| arm | what | class | key | noruleset | would |
+|---|---|---|---|---|---|
+| 1 | control, clean armed run | clean | `1 0 0 0` | 0 | 0 |
+| 2 | **the plan's named falsifier** — armed with the ruleset unlocked | cheated | `0 0 0 0` | **1** | 1 |
+| 3 | a **refused** console set mid-run | clean | `1 0 1 0` | 0 | **0** |
+| 4 | unlock / move / re-lock mid-run | cheated | `1 0 2 1` | 0 | **1** |
+| 5 | the same within one command flush | **clean** | `1 0 3 2` | 0 | **1** |
+
+Arm 3 is the one the fourth field bought: `seq` moves to 1, `breach` stays 0, and the run is still
+clean. Arm 5 is the one that proves the counter is not redundant with `TF_CHEAT`.
+
+`reccheck.py` gains the constant and reports it the way it reports the journal bit — **never as a
+fault**, and with "unknown" for the clear case, because an engine older than Patch 313 publishes no
+key and every run recorded before this build is in exactly that state.

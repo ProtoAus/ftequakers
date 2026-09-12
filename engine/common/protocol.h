@@ -1729,8 +1729,12 @@ typedef struct q1usercmd_s
 #define RDF_DISABLEPARTICLES	(1u<<23)	//mostly for skyrooms
 #define RDF_SKIPSKY				(1u<<24)	//we drew a skyroom, skip drawing sky chains for this scene.
 #define RDF_SKYROOMENABLED		(1u<<25)	//skyroom position is known, be prepared to draw the skyroom if its visible.
+//FTESurf Patch 288: a colour-correction LUT, r_colourcorrection.  Its own stage
+//rather than a use of RDF_CUSTOMPOSTPROC, because a Source map's grade is set BY
+//THE MAP and r_postprocshader is set by the user -- one must not evict the other.
+#define RDF_COLOURCORRECT		(1u<<26)
 
-#define RDF_ALLPOSTPROC			(RDF_BLOOM|RDF_FISHEYE|RDF_WATERWARP|RDF_CUSTOMPOSTPROC|RDF_ANTIALIAS|RDF_SCENEGAMMA)	//these flags require rendering to an fbo for the various different post-processing shaders.
+#define RDF_ALLPOSTPROC			(RDF_BLOOM|RDF_FISHEYE|RDF_WATERWARP|RDF_CUSTOMPOSTPROC|RDF_COLOURCORRECT|RDF_ANTIALIAS|RDF_SCENEGAMMA)	//these flags require rendering to an fbo for the various different post-processing shaders.
 
 
 

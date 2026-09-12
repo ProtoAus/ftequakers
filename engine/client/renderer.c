@@ -372,6 +372,20 @@ cvar_t r_reflectcube						= CVARAFD ("r_reflectcube", "1", NULL, CVAR_ARCHIVE,
 													"Cubemap and envmap reflections on world and model surfaces.\n"
 													"0: off everywhere, whatever the material or the map asks for.\n"
 													"1: normal (default).");
+//FTESurf Patch 268 B: the same runtime-gate argument, one level down.  These two
+//sit beside r_reflectcube because they are read in the same two places it is
+//(the permutation gate and T_GEN_REFLECTCUBE in the backends).
+cvar_t r_envcubemap							= CVARAFD ("r_envcubemap", "1", NULL, CVAR_ARCHIVE,
+													"$envmap env_cubemap materials reflect the map's nearest baked cubemap when the hl2 plugin asks for it. 0 = compile the reflection out, as before Patch 268 B.");
+cvar_t r_reflectcube_nosky					= CVARAFD ("r_reflectcube_nosky", "0", NULL, CVAR_ARCHIVE,
+													"1 = when a surface's nearest baked cubemap is missing or not yet loaded, reflect neutral grey instead of the sky/black.");
+//FTESurf Patch 268 C: the same runtime-gate argument again.  hl2_cubelight decides what
+//the plugin COMPILES (#BUMPCUBE); this decides, at the uniform upload, whether the cube
+//the shader reads is the entity's or all zeros.  An all-zero cube makes the shader's
+//ratio e/e -- exactly 1.0 -- so 0 is the pre-268-C picture to the bit, on a loaded map,
+//with no regenerate and no reload.
+cvar_t r_cubelight							= CVARAFD ("r_cubelight", "1", NULL, CVAR_ARCHIVE,
+													"Per-pixel ambient-cube relief on bumped Source props, where the hl2 plugin compiles it in (hl2_cubelight). 0 = upload an empty cube, which makes the shader's ratio exactly 1 -- the picture before Patch 268 C. 2 = a synthetic cube lit hard from above, to check the bumped-normal path works at all where the map's own cube is nearly uniform (a diagnostic, not a look).");
 cvar_t r_part_rain							= CVARFD ("r_part_rain", "0",
 												CVAR_ARCHIVE,
 												"Enable particle effects to emit off of surfaces. Mainly used for weather or lava/slime effects.");
@@ -387,6 +401,22 @@ cvar_t r_renderscale						= CVARFD("r_renderscale", "1", CVAR_ARCHIVE, "Provides
 cvar_t r_fxaa								= CVARFD("r_fxaa", "0", CVAR_ARCHIVE, "Runs a post-procesing pass to strip the jaggies.");
 cvar_t r_graphics							= CVARFD("r_graphics", "1", CVAR_ARCHIVE, "Turning this off will result in ascii-style rendering.");
 cvar_t r_postprocshader						= CVARD("r_postprocshader", "", "Specifies a custom shader to use as a post-processing shader");
+/*
+FTESurf Patch 288: the colour-correction stage's shader name.
+
+MACHINE-SET, not a setting.  A Source map's colour_correction entities name one
+or more 32x32x32 LUTs and a weight for each, so the shader that applies them is
+per-map and content-derived; the hl2 plugin generates it at map load and writes
+its name here, and clears this back to "" for a map that has none.  It is a cvar
+rather than an internal pointer because the renderer and the plugin have no other
+channel, and it is SEPARATE from r_postprocshader for the reason recorded beside
+RDF_COLOURCORRECT: a user who has set a post-process shader must not lose it the
+moment they load a graded map.
+
+Not CVAR_ARCHIVE: saving a per-map generated shader name into config.cfg would
+apply one map's grade to the next one loaded.
+*/
+cvar_t r_colourcorrection					= CVARAD("r_colourcorrection", "", "r_colorcorrection", "Names the shader used by the colour-correction post-process stage.  Set by the hl2 plugin from a Source map's color_correction entities; setting it by hand is supported but it is overwritten at the next map load.  Switch the feature off with hl2_colourcorrection 0, which is what leaves this empty.");
 cvar_t r_wallcolour							= CVARAF ("r_wallcolour", "128 128 128",
 													  "r_wallcolor", CVAR_RENDERERCALLBACK|CVAR_SHADERSYSTEM);//FIXME: broken
 //cvar_t r_walltexture						= CVARF ("r_walltexture", "",
@@ -502,8 +532,16 @@ cvar_t vid_desktopsettings					= CVARFD ("vid_desktopsettings", "0",
 #ifdef FTE_TARGET_WEB
 cvar_t vid_fullscreen						= CVARF ("vid_fullscreen", "0",	CVAR_ARCHIVE|CVAR_VIDEOLATCH);
 #else
-cvar_t vid_fullscreen						= CVARFD ("vid_fullscreen", "2",	CVAR_ARCHIVE|CVAR_VIDEOLATCH, "Specifies whether the game should be fullscreen or not (requires vid_restart).\n0: Run in a resizable window, which can be manually maximized (with borders).\n1: Traditional fullscreen-exclusive video mode with mode switching and everything.\n2: Simply maximize the window and hide any borders without interfering with any other parts of the system.");
+//FTESurf Patch 268: the numbering is borderless-before-exclusive now.  See
+//VID_InternalFullscreenMode below for why the value is translated rather than
+//the engine renumbered, and vid_fullscreen_order for how to get the old order.
+cvar_t vid_fullscreen						= CVARFD ("vid_fullscreen", "1",	CVAR_ARCHIVE|CVAR_VIDEOLATCH, "Specifies whether the game should be fullscreen or not (requires vid_restart).\n0: Windowed. Maximized to the desktop work area unless a vid_width/vid_height was asked for - see vid_winmaximize.\n1: Borderless fullscreen. Fills the screen without changing the display mode or interfering with anything else.\n2: Traditional fullscreen-exclusive video mode, with a real mode switch.\nSet vid_fullscreen_order 0 to get FTE's upstream numbering instead, where 1 and 2 are the other way round.");
 #endif
+//FTESurf Patch 268
+cvar_t vid_fullscreen_order					= CVARFD ("vid_fullscreen_order", "1", CVAR_ARCHIVE, "Which numbering vid_fullscreen uses.\n0: FTE upstream - 0 windowed, 1 exclusive, 2 borderless.\n1: FTESurf - 0 windowed, 1 borderless, 2 exclusive.\nOnly the cvar's meaning changes; the engine's internal modes are the same either way.");
+cvar_t vid_winmaximize						= CVARFD ("vid_winmaximize", "2", CVAR_ARCHIVE, "Whether a windowed session (vid_fullscreen 0, and anything that toggles back to windowed) is maximized.\n2: Always maximize - a normal window with a title bar, filling the desktop, with the taskbar still visible. vid_width/vid_height are ignored for this mode only; they still control borderless and exclusive fullscreen.\n1: Maximize when no size was asked for, or when the requested size plus its border and caption will not fit on the usable desktop. A size that does fit is used exactly.\n0: Never. A window whose client area is exactly vid_width*vid_height, even if that is larger than the screen and puts its title bar out of reach.\nUse 1 or 0 if you need a windowed capture at a specific resolution.");
+cvar_t vid_minonfocusloss					= CVARFD ("vid_minonfocusloss", "1", CVAR_ARCHIVE, "Minimize the window when it loses focus.\n0: Never - alt-tabbing out of a borderless window leaves it where it is.\n1: Minimize whenever the window is not a plain window, which includes borderless.\n2: Minimize only for a real exclusive-fullscreen mode switch, which is the only mode that has to give the display back.");
+cvar_t vid_exclusive_desktopres				= CVARFD ("vid_exclusive_desktopres", "1", CVAR_ARCHIVE|CVAR_VIDEOLATCH, "What resolution exclusive fullscreen uses.\n0: Whatever vid_width/vid_height say, which will mode-switch the monitor if that is not what it is already running.\n1: Detect the display's current resolution and refresh rate and use that, so going exclusive does not change your mode. vid_width/vid_height still apply to the other modes.");
 cvar_t vid_height							= CVARFD ("vid_height", "0",
 												CVAR_ARCHIVE | CVAR_VIDEOLATCH, "The screen height to attempt to use, in physical pixels. 0 means use desktop resolution.");
 cvar_t vid_multisample						= CVARAFD ("vid_multisample", "0", "vid_samples",
@@ -711,6 +749,19 @@ cvar_t r_portalscissor						= CVARFD ("r_portalscissor", "1", CVAR_ARCHIVE, "Cli
    change without the vid_reload that reparses the shaders, so what the cvar says
    and what the materials were built for can never disagree. */
 cvar_t r_portalfbo							= CVARFD ("r_portalfbo", "1", CVAR_ARCHIVE|CVAR_RENDERERLATCH, "Portal materials declaring `portalfbo` render their far view to a texture and paint it on the aperture polygon, exactly filling the doorway. 0 falls back to the Patch 206-208 design: the far view is painted over the whole screen and masked back off, bounded by r_portalscissor. Read when materials are parsed, so a change applies on vid_reload.");
+/* FTESurf Patch 287 -- a portal's far view was culled by the NEAR view's areas.
+   Source BSPs partition the world into areas joined by areaportals, and
+   r_refdef.areabits says which are reachable from the camera.  It is computed
+   once per view, from r_refdef.vieworg, and latched by areabitsknown
+   (r_surf.c:3676 for the engine loaders, mod_vbsp.c:7409 for Source).
+   GLR_DrawPortal moves vieworg to the far side of the link but never cleared
+   that latch, so the recursed view inherited the areabits belonging to the room
+   the player is standing in -- and every leaf on the far side whose area is not
+   reachable from HERE was refused, leaving the doorway black.
+   R_DrawSkyroom has always cleared it (gl_warp.c:365, "recalculate areas
+   clientside"), which is why the 3D skybox never had this and portals did.
+   0 is the old behaviour exactly.  Not RENDERERLATCH: it is read per frame. */
+cvar_t r_portalareas						= CVARFD ("r_portalareas", "0", CVAR_ARCHIVE, "Recompute Source areaportal visibility from a portal's own far-side viewpoint. 0 inherits the near view's areabits, which culls any far-side area that is not reachable from where the player stands (a black doorway). Has no effect on maps without areas.");
 cvar_t r_noaliasshadows						= CVARF ("r_noaliasshadows", "0", CVAR_ARCHIVE);
 cvar_t r_lodscale							= CVARFD ("r_lodscale", "5", CVAR_ARCHIVE, "Scales the level-of-detail reduction on models (for those that have lod).");
 cvar_t r_lodbias							= CVARFD ("r_lodbias", "0", CVAR_ARCHIVE, "Biases the level-of-detail on models (for those that have lod).");
@@ -835,6 +886,7 @@ void GLRenderer_Init(void)
 	Cvar_Register (&r_portaldebug, GLRENDEREROPTIONS);
 	Cvar_Register (&r_portalscissor, GLRENDEREROPTIONS);
 	Cvar_Register (&r_portalfbo, GLRENDEREROPTIONS);	//FTESurf Patch 210
+	Cvar_Register (&r_portalareas, GLRENDEREROPTIONS);	//FTESurf Patch 287
 	Cvar_Register (&r_noaliasshadows, GLRENDEREROPTIONS);
 
 	Cvar_Register (&r_lodscale, GRAPHICALNICETIES);
@@ -958,7 +1010,106 @@ static void R_ShowBatches_f(void)
 }
 #endif
 
-void R_ToggleFullscreen_f(void)
+/*
+FTESurf Patch 268: vid_fullscreen's numbering, translated at the boundary.
+
+The user-facing order is 0=windowed, 1=borderless, 2=exclusive -- borderless
+ahead of exclusive, because borderless is what you want almost always and
+exclusive is the one you reach for deliberately.  FTE upstream numbers the last
+two the other way round.
+
+The translation happens HERE and at the two other places that read the CVAR, and
+nowhere else.  rendererstate_t::fullscreen keeps upstream's numbering all the way
+down, so every backend, the fallback ladder in R_ApplyRenderer (which hardcodes
+1->2->1->0), and D3D9's `d3dpp.Windowed = !info->fullscreen` -- which treats the
+field as a boolean -- keep meaning exactly what they meant.  Renumbering the
+internals instead would have touched five files and would have silently handed
+D3D9 an exclusive mode whenever borderless was asked for.
+
+vid_fullscreen_order 0 restores upstream's numbering.  That is what makes the
+change falsifiable: with it off, the same cvar value must produce the old mode.
+*/
+int VID_InternalFullscreenMode(int userval)
+{
+	if (!vid_fullscreen_order.ival)
+		return userval;		//upstream numbering, untouched
+	switch(userval)
+	{
+	case 1:		return 2;	//user "borderless" is upstream's 2
+	case 2:		return 1;	//user "exclusive"  is upstream's 1
+	default:	return userval;	//0 is windowed either way
+	}
+}
+
+/*
+FTESurf Patch 268: does a windowed session want to start maximized?
+
+vid_fullscreen 0 used to build a window whose CLIENT area was vid_width by
+vid_height, then grow it by the border and caption with AdjustWindowRectEx and
+centre it.  At 1920x1200 on a 1920x1200 desktop that is a 1936x1239 window at
+(-8,-19): the title bar is off the top of the screen and it covers everything,
+which is why "windowed" looked like a broken fullscreen.
+
+Mode 1 was first written as "maximize only when no explicit size was asked for",
+to keep the screenshot harness exact.  That was too weak, and it shipped the bug
+back: ftesurf.cfg archives vid_width 1920 / vid_height 1200, so BOTH a windowed
+startup and `fullscreen_toggle` on the way out of borderless asked for a
+1920x1200 client, never maximized, and produced the off-screen-bordered window
+described above.  The report was "fullscreen_toggle goes windowed but it's at
+full res, so it's borderless to borderless".
+
+Mode 1 was then rewritten as "honour the requested size only if the DECORATED
+window fits on the usable desktop", and that failed the SAME user a second time,
+from the other direction: something had left vid_width at 640x480 in their
+session, 640x480 fits comfortably, so the rule dutifully honoured it and F11
+produced a postage stamp.  Report: "it windows at like 640x480, can't you make it
+windowed but full screen, but not boarderless? like with the top menu bar, but
+maximized?"
+
+Both failures are the same mistake -- inferring intent from vid_width, which is a
+stale archived number, not a statement about the window the player wants right
+now.  So the DEFAULT is now 2, maximize outright, which is what was asked for both
+times and what "windowed" means for a game rather than a tool.  vid_width and
+vid_height still fully control the exclusive and borderless modes; they are only
+ignored for the windowed one, and only at the default setting.
+
+Mode 1 is kept because the fit rule is genuinely the right answer for a capture
+harness that wants an exact window when it can have one, and mode 0 is kept as the
+never-touch-it escape hatch.  The fit test is necessarily platform code; this
+function only says which of the three answers to use.
+
+	0 = never maximize (exact size, wherever it lands -- upstream's behaviour)
+	1 = the caller must run the fit test and decide
+	2 = maximize outright
+*/
+int VID_WindowMaximizePolicy(void)
+{
+	if (vid_winmaximize.ival >= 2)
+		return 2;
+	if (vid_winmaximize.ival <= 0)
+		return 0;
+	if (!(vid_width.ival > 0 && vid_height.ival > 0))
+		return 2;	//no size asked for at all -- nothing to honour
+	return 1;		//a size was asked for: honour it if it fits, maximize if it cannot
+}
+
+/*
+FTESurf Patch 268: vid_toggle and fullscreen_toggle stop being the same thing.
+
+Patch 211 gave R_ToggleFullscreen_f a second name because `bind f11 fullscreen`
+had been a silent no-op for six builds.  One behaviour under two names was right
+then and is wrong now: upstream's toggle goes to whatever vid_fullscreen says, so
+with the cvar at 2 a user pressing F11 gets a real exclusive mode switch out of a
+key they pressed expecting the window to grow.
+
+	vid_toggle			windowed <-> your configured vid_fullscreen mode
+	fullscreen_toggle	windowed <-> BORDERLESS, always
+
+Borderless is the mode worth a keybind: nothing is mode-switched, there is no
+display to hand back, alt-tab stays instant, and it is what "make this fill the
+screen" means to anyone not thinking about video modes.
+*/
+static void R_SetFullscreenMode(int targetinternal)
 {
 	double time;
 	rendererstate_t newr;
@@ -975,12 +1126,7 @@ void R_ToggleFullscreen_f(void)
 	Cvar_ApplyLatches(CVAR_VIDEOLATCH|CVAR_RENDERERLATCH, false);
 
 	newr = currentrendererstate;
-	if (newr.fullscreen)
-		newr.fullscreen = 0;	//if we're currently any sort of fullscreen then go windowed
-	else if (vid_fullscreen.ival)
-		newr.fullscreen = vid_fullscreen.ival;	//if we're normally meant to be fullscreen, use that
-	else
-		newr.fullscreen = 2;	//otherwise use native resolution
+	newr.fullscreen = targetinternal;
 	if (newr.fullscreen)
 	{
 		int dbpp, dheight, dwidth, drate;
@@ -992,19 +1138,24 @@ void R_ToggleFullscreen_f(void)
 			drate = 0;
 		}
 
-		if (newr.fullscreen == 1 && vid_width.ival>0)
+		//FTESurf Patch 268: vid_exclusive_desktopres makes exclusive match the display
+		//here too, or vid_toggle would mode-switch where a vid_restart would not.
+		if (newr.fullscreen == 1 && vid_width.ival>0 && !vid_exclusive_desktopres.ival)
 			newr.width = vid_width.ival;
 		else
 			newr.width = dwidth;
-		if (newr.fullscreen == 1 && vid_height.ival>0)
+		if (newr.fullscreen == 1 && vid_height.ival>0 && !vid_exclusive_desktopres.ival)
 			newr.height = vid_height.ival;
 		else
 			newr.height = dheight;
 	}
 	else
 	{
-		newr.width = DEFAULT_WIDTH;
-		newr.height = DEFAULT_HEIGHT;
+		//FTESurf Patch 268: honour the configured window size instead of dropping to
+		//640x480 every time you toggle out of fullscreen.  VID_WantMaximizedWindow
+		//still decides whether it opens maximized.
+		newr.width = (vid_width.ival > 0)?vid_width.ival:DEFAULT_WIDTH;
+		newr.height = (vid_height.ival > 0)?vid_height.ival:DEFAULT_HEIGHT;
 	}
 
 	time = Sys_DoubleTime();
@@ -1012,6 +1163,25 @@ void R_ToggleFullscreen_f(void)
 	Con_DPrintf("main thread video restart took %f secs\n", Sys_DoubleTime() - time);
 //	COM_WorkerFullSync();
 //	Con_Printf("full video restart took %f secs\n", Sys_DoubleTime() - time);
+}
+
+//vid_toggle: upstream's behaviour, windowed <-> whatever vid_fullscreen names.
+void R_ToggleFullscreen_f(void)
+{
+	int target;
+	if (currentrendererstate.fullscreen)
+		target = 0;					//any sort of fullscreen -> windowed
+	else if (vid_fullscreen.ival)
+		target = VID_InternalFullscreenMode(vid_fullscreen.ival);	//the SECOND cvar boundary, easily missed
+	else
+		target = 2;					//internal 2 is borderless
+	R_SetFullscreenMode(target);
+}
+
+//fullscreen_toggle (F11): windowed <-> borderless, regardless of vid_fullscreen.
+void R_ToggleBorderless_f(void)
+{
+	R_SetFullscreenMode(currentrendererstate.fullscreen?0:2);
 }
 
 //nettest: a real "flushshaders" command.  Drops the shader cache + rescans the filesystem so freshly-written
@@ -1063,8 +1233,9 @@ void Renderer_Init(void)
 	//engine -- the only hit anywhere in the tree is sys_plugfte.c's browser-plugin
 	//parameter table, which maps the WORD "fullscreen" onto the vid_fullscreen
 	//cvar and has nothing to do with the console.  So F11 has been a silent no-op.
-	//Same function as vid_toggle, deliberately: two names, one behaviour.
-	Cmd_AddCommandD("fullscreen_toggle", R_ToggleFullscreen_f, "Switches between fullscreen and windowed immediately, without needing a vid_restart.");
+	//FTESurf Patch 268: no longer the same function as vid_toggle.  This one is
+	//windowed <-> BORDERLESS specifically -- see R_SetFullscreenMode.
+	Cmd_AddCommandD("fullscreen_toggle", R_ToggleBorderless_f, "Switches between windowed and borderless fullscreen immediately, without needing a vid_restart. Unlike vid_toggle this never enters an exclusive video mode, so it will not mode-switch your display.");
 
 #ifdef RTLIGHTS
 	R_EditLights_RegisterCommands();
@@ -1107,6 +1278,9 @@ void Renderer_Init(void)
 	Cvar_Register (&r_voidvis, GLRENDEREROPTIONS);
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
 	Cvar_Register (&r_reflectcube, GLRENDEREROPTIONS);
+	Cvar_Register (&r_envcubemap, GLRENDEREROPTIONS);			//FTESurf Patch 268 B
+	Cvar_Register (&r_reflectcube_nosky, GLRENDEREROPTIONS);	//FTESurf Patch 268 B
+	Cvar_Register (&r_cubelight, GLRENDEREROPTIONS);			//FTESurf Patch 268 C
 
 	//but register ALL vid_ commands.
 	Cvar_Register (&gl_driver, VIDCOMMANDGROUP);
@@ -1124,6 +1298,10 @@ void Renderer_Init(void)
 	Cvar_Register (&vid_renderer_opts, VIDCOMMANDGROUP);
 
 	Cvar_Register (&vid_fullscreen, VIDCOMMANDGROUP);
+	Cvar_Register (&vid_fullscreen_order, VIDCOMMANDGROUP);	//FTESurf Patch 268
+	Cvar_Register (&vid_winmaximize, VIDCOMMANDGROUP);		//FTESurf Patch 268
+	Cvar_Register (&vid_minonfocusloss, VIDCOMMANDGROUP);	//FTESurf Patch 268
+	Cvar_Register (&vid_exclusive_desktopres, VIDCOMMANDGROUP);	//FTESurf Patch 268
 	Cvar_Register (&vid_bpp, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_depthbits, VIDCOMMANDGROUP);
 
@@ -1216,6 +1394,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_refract_fbo, GRAPHICALNICETIES);
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
+	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288
 	Cvar_Register (&r_fxaa, GRAPHICALNICETIES);
 	Cvar_Register (&r_graphics, GRAPHICALNICETIES);
 	Cvar_Register (&r_renderscale, GRAPHICALNICETIES);
@@ -2350,7 +2529,7 @@ qboolean R_BuildRenderstate(rendererstate_t *newr, char *rendererstring)
 	newr->multisample = vid_multisample.value;
 	newr->bpp = vid_bpp.value;
 	newr->depthbits = vid_depthbits.value;
-	newr->fullscreen = vid_fullscreen.value;
+	newr->fullscreen = VID_InternalFullscreenMode(vid_fullscreen.ival);	//FTESurf Patch 268: the main cvar boundary
 	newr->rate = vid_refreshrate.value;
 	newr->stereo = (r_stereo_method.ival == 1);
 	newr->srgb = vid_srgb.ival;
@@ -2498,10 +2677,43 @@ qboolean R_BuildRenderstate(rendererstate_t *newr, char *rendererstring)
 			newr->rate = 0;
 		}
 
+		/*
+		FTESurf Patch 268: exclusive fullscreen matches the display it takes over.
+
+		Exclusive is the one mode that performs a real ChangeDisplaySettings, so a
+		width/height that disagrees with the desktop makes the monitor physically
+		switch mode and then rescale everything.  Every other mode ignores
+		vid_width/vid_height anyway (only the internal exclusive mode reads them),
+		which meant a stale archived resolution silently became the mode you got --
+		measured: with vid_width 1280 archived, asking for exclusive on a 1920x1200
+		desktop switched the display to 1280x800.
+
+		So by default exclusive asks the display what it is currently running and
+		takes that, refresh rate included.  vid_exclusive_desktopres 0 restores
+		honouring vid_width/vid_height, which is what you want if you are
+		deliberately dropping resolution for framerate.
+
+		newr->fullscreen is the INTERNAL mode here -- the cvar was translated at the
+		top of this function -- so 1 is exclusive regardless of vid_fullscreen_order.
+		*/
+		if (newr->fullscreen == 1 && vid_exclusive_desktopres.ival && !isPlugin)
+		{
+			int dbpp, dheight, dwidth, drate;
+			if (Sys_GetDesktopParameters(&dwidth, &dheight, &dbpp, &drate))
+			{
+				newr->width = dwidth;
+				newr->height = dheight;
+				if (newr->bpp <= 0)
+					newr->bpp = dbpp;
+				if (newr->rate <= 0)
+					newr->rate = drate;
+			}
+		}
+
 		if (newr->width <= 0 || newr->height <= 0 || newr->bpp <= 0)
 		{
 			int dbpp, dheight, dwidth, drate;
-			
+
 			if (!newr->fullscreen || isPlugin || !Sys_GetDesktopParameters(&dwidth, &dheight, &dbpp, &drate))
 			{
 				dwidth = DEFAULT_WIDTH;

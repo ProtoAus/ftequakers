@@ -176,11 +176,17 @@ extern cvar_t		vid_preservegamma;
 static int			window_x, window_y;
 static int			window_width, window_height;
 
+//FTESurf Patch 268: decided once in VID_SetWindowedMode and read again on the way
+//out of the WGL arm, so the two ShowWindow calls cannot disagree.  Only ever
+//consulted while modestate == MS_WINDOWED.
+static qboolean		vid_windowmaximized;
+
 
 static LONG WINAPI GLMainWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static qboolean GLAppActivate(BOOL fActive, BOOL minimize);
 static void ClearAllStates (void);
 static void VID_UpdateWindowStatus (HWND hWnd);
+static void VID_ReconcileActiveApp (void);	//FTESurf Patch 268
 
 static BOOL (WINAPI *qGetDeviceGammaRamp)(HDC hDC, void *ramp);
 static BOOL (WINAPI *qSetDeviceGammaRamp)(HDC hDC, void *ramp);
@@ -1057,6 +1063,61 @@ static qboolean VID_SetWindowedMode (rendererstate_t *info)
 	if (!sys_parentwindow)
 		AdjustWindowRectEx(&WindowRect, WindowStyle, FALSE, 0);
 
+	/*
+	FTESurf Patch 268: settle "maximized or exact" here, on the DECORATED rect.
+
+	centerrect sized the CLIENT area, and AdjustWindowRectEx has just grown that
+	rect by the border and caption -- so this is the first and only point where the
+	real on-screen footprint is known.  It has to be captured now, because line
+	~1105 reassigns WindowRect to the client rect.
+
+	The work area, not the screen, is the thing to fit inside: it excludes the
+	taskbar, which is half of what "actually windowed" means.  SPI_GETWORKAREA
+	reports the primary monitor, matching the SM_CXSCREEN/SM_CYSCREEN the sizing
+	above already uses.
+
+	A window that fits is left at exactly its requested size and merely nudged
+	fully inside the work area -- a 1900x1150 window centred on a 1200-tall screen
+	is 23px under the taskbar even though it "fits".  Policy 0 skips the nudge as
+	well as the maximize, so the escape hatch stays byte-identical to upstream.
+	*/
+	vid_windowmaximized = false;
+	if (!sys_parentwindow)
+	{
+		extern int VID_WindowMaximizePolicy(void);
+		int policy = VID_WindowMaximizePolicy();
+
+		if (policy == 1)
+		{
+			RECT wa;
+			if (!SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0))
+			{
+				wa.left = 0;
+				wa.top = 0;
+				wa.right = GetSystemMetrics(SM_CXSCREEN);
+				wa.bottom = GetSystemMetrics(SM_CYSCREEN);
+			}
+
+			if ((WindowRect.right - WindowRect.left) > (wa.right - wa.left) ||
+				(WindowRect.bottom - WindowRect.top) > (wa.bottom - wa.top))
+				policy = 2;		//cannot be shown intact at this size -- maximize instead
+			else
+			{	//it fits; shove it fully inside the work area and keep the size
+				int shift;
+				policy = 0;
+				if ((shift = wa.right - WindowRect.right) < 0)
+					WindowRect.left += shift, WindowRect.right += shift;
+				if ((shift = wa.bottom - WindowRect.bottom) < 0)
+					WindowRect.top += shift, WindowRect.bottom += shift;
+				if ((shift = wa.left - WindowRect.left) > 0)
+					WindowRect.left += shift, WindowRect.right += shift;
+				if ((shift = wa.top - WindowRect.top) > 0)
+					WindowRect.top += shift, WindowRect.bottom += shift;
+			}
+		}
+		vid_windowmaximized = (policy == 2);
+	}
+
 	// Create the DIB window
 	if (WinNT)
 	{
@@ -1129,7 +1190,22 @@ static qboolean VID_SetWindowedMode (rendererstate_t *info)
 #endif
 	}
 
-	ShowWindow (dibwindow, SW_SHOWNORMAL);
+	/*
+	FTESurf Patch 268: "windowed" now actually means windowed.
+
+	The window built above has a CLIENT area of info->width by info->height, which
+	AdjustWindowRectEx then grows by the border and caption before centerrect
+	centres it.  At 1920x1200 on a 1920x1200 desktop that is 1936x1239 at
+	(-8,-19) -- title bar off the top, covering the whole screen.  That is why
+	vid_fullscreen 0 was reported as putting the game into fullscreen.
+
+	SW_SHOWMAXIMIZED lets Windows size the client to the work area instead, so the
+	taskbar and the caption both stay reachable.  DIBWidth/DIBHeight read above are
+	stale after this, which is harmless: GLVID_SetMode copies them into
+	window_width/height and then immediately calls VID_UpdateWindowStatus, which
+	re-reads GetClientRect and overwrites both (and vid.pixelwidth with them).
+	*/
+	ShowWindow (dibwindow, vid_windowmaximized?SW_SHOWMAXIMIZED:SW_SHOWNORMAL);
 	SetFocus(dibwindow);
 
 //	ShowWindow (dibwindow, SW_SHOWDEFAULT);
@@ -1536,10 +1612,20 @@ static int GLVID_SetMode (rendererstate_t *info, unsigned char *palette)
 			return false;
 		}
 
-		if (modestate == MS_FULLWINDOW)
+		/*
+		FTESurf Patch 268: this runs AFTER VID_SetWindowedMode and used to undo it.
+
+		VID_SetWindowedMode decides whether a windowed session starts maximized, then
+		this line -- reached for every mode, on the way out of the WGL arm -- called
+		SW_SHOWNORMAL for MS_WINDOWED and restored the window a moment later.  The
+		symptom was that vid_winmaximize appeared to do nothing at all: measured, the
+		maximized run came back at exactly the requested 1280x800 instead of the work
+		area.  Both halves have to agree, so the same question is asked here.
+		*/
+		if (modestate == MS_FULLWINDOW || (modestate == MS_WINDOWED && vid_windowmaximized))
 			ShowWindow (dibwindow, SW_SHOWMAXIMIZED);
 		else
-			ShowWindow (dibwindow, SW_SHOWNORMAL);	
+			ShowWindow (dibwindow, SW_SHOWNORMAL);
 
 		if (!GL_Init(info, getglfunc))
 			return false;
@@ -2233,6 +2319,7 @@ void GLVID_SwapBuffers (void)
 
 // handle the mouse state when windowed if that's changed
 
+	VID_ReconcileActiveApp();	//FTESurf Patch 268: before the grab, not after it
 	INS_UpdateGrabs(modestate != MS_WINDOWED, vid.activeapp);
 }
 
@@ -2772,6 +2859,94 @@ static qboolean GLAppActivate(BOOL fActive, BOOL minimize)
 	return true;
 }
 
+/*
+FTESurf Patch 268: make "is the game active" mean what it says.
+
+vid.activeapp is set from WM_SETFOCUS/WM_KILLFOCUS and nothing else on this
+backend -- WM_ACTIVATE is commented out further down and WM_ACTIVATEAPP is not
+handled anywhere in the tree.  Those messages are about focus WITHIN A THREAD'S
+INPUT QUEUE, not about which application the user is actually looking at, and
+VID_SetWindowedMode unconditionally calls SetFocus(dibwindow) on the way up.  So a
+process that Windows declines to bring to the foreground -- started from a script
+or a launcher, a second instance, or you clicked elsewhere while it loaded -- ends
+up holding its own thread's focus, never receives a WM_KILLFOCUS (nothing in that
+thread ever took the focus away), and reports itself active for the rest of its
+life.  INS_UpdateGrabs then re-asserts SetCapture + ClipCursor +
+SetCursorPos(centre) every frame off that stuck flag.  That is the reported "my
+mouse controls the game when it is not the active window", and note that it needs
+no RIDEV_INPUTSINK -- raw input here is registered with dwFlags 0 and a NULL
+hwndTarget, so it is not the culprit.
+
+Adding WM_ACTIVATE or WM_ACTIVATEAPP does NOT fix it: neither fires for a
+background SetFocus either.  They would make alt-tab prompter, not more correct.
+The only reliable thing is to ask rather than wait to be told, so this polls once
+per rendered frame immediately before the grab that consumes the answer.  One
+GetForegroundWindow is a user-mode read of window-manager state and is far cheaper
+than the SetCursorPos it prevents.
+
+Deliberately inert in MS_FULLDIB.  Taking activeapp down there runs
+ChangeDisplaySettings(NULL, 0) in GLAppActivate above, so one transient
+disagreement would drop the user out of their exclusive video mode -- and
+exclusive fullscreen gets trustworthy focus messages anyway, because losing it
+really does move the focus.  The bug being fixed is a windowed/borderless one.
+
+Bidirectional on purpose.  Once the flag has been forced down, the WM_SETFOCUS
+that would raise it again may never arrive, because from the thread's point of
+view focus never left.  The same poll therefore has to raise it when we do become
+foreground, or the window would be permanently deaf after the first correction.
+*/
+static void VID_ReconcileActiveApp (void)
+{
+	extern cvar_t in_focusgrab;
+	HWND fg, self;
+	qboolean foreground;
+
+	if (!in_focusgrab.ival)
+		return;				//pre-268 behaviour: messages only
+	if (!mainwindow || vid_initializing)
+		return;
+	if (modestate == MS_FULLDIB)
+		return;				//see above
+
+	//With sys_parentwindow set, mainwindow is a WS_CHILDWINDOW and can never itself
+	//BE the foreground window; compare against the top-level window it lives inside
+	//or an embedded session would never grab at all.
+	self = GetAncestor(mainwindow, GA_ROOT);
+	if (!self)
+		self = mainwindow;
+
+	//A NULL foreground is the secure desktop (UAC prompt, lock screen,
+	//ctrl+alt+del).  Reading that as "not us" is right; it only means the grab is
+	//released and retaken around every elevation prompt.
+	fg = GetForegroundWindow();
+	foreground = (fg == self);
+
+	if (foreground == (vid.activeapp?true:false))
+		return;
+
+	//FTESurf Patch 268: say so, once per transition.  The reported bug could not be
+	//reproduced from a script -- a game launched behind another window never gets a
+	//WM_SETFOCUS in the first place, so it never latches active and never grabs, on
+	//patched and unpatched builds alike.  This line is what turns "I moved over the
+	//window and the camera moved" into evidence: if it appears in the log, the
+	//message path had the wrong answer and the poll corrected it.
+	//Con_Printf, not Con_DPrintf, and it is not noise: on a NORMAL alt-tab the focus
+	//messages arrive and agree with the foreground, so this poll finds nothing to do
+	//and stays silent.  A line here means the messages were WRONG and the grab was
+	//about to be left in the wrong state -- i.e. it prints exactly when the bug would
+	//have bitten.  Capped in case a future change ever makes the two ping-pong.
+	{
+		static int moaned = 0;
+		if (moaned++ < 20)
+			Con_Printf("[focus] window is %s but the focus messages said %s -- correcting (in_focusgrab 0 to disable)\n",
+						foreground?"foreground":"NOT foreground",
+						vid.activeapp?"active":"inactive");
+	}
+
+	if (GLAppActivate(foreground, Minimized))
+		ClearAllStates();	//else a key held as the foreground went away stays latched
+}
+
 #ifndef TWF_WANTPALM
 typedef struct _TOUCHINPUT {
   LONG      x;
@@ -2919,8 +3094,28 @@ static LONG WINAPI GLMainWndProc (
 			GLAppActivate(FALSE, Minimized);//FIXME: thread
 			ClearAllStates ();	//FIXME: thread
 #endif
-			if (modestate != MS_WINDOWED)
-				ShowWindow(mainwindow, SW_SHOWMINNOACTIVE);
+			/*
+			FTESurf Patch 268: which modes owe the desktop anything on focus loss.
+
+			Only MS_FULLDIB has actually taken something -- it called
+			ChangeDisplaySettings and is holding the display in a mode nothing else
+			asked for, so it has to get out of the way.  MS_FULLWINDOW is just a
+			borderless window; minimizing it is a choice, not an obligation, and it
+			is the reason alt-tabbing out of borderless yanks the window down.
+
+			vid_minonfocusloss 1 keeps that behaviour because it is what every build
+			up to here did; 2 restricts it to the mode that genuinely needs it.
+			*/
+			{
+				extern cvar_t vid_minonfocusloss;
+				if (vid_minonfocusloss.ival >= 2)
+				{
+					if (modestate == MS_FULLDIB)
+						ShowWindow(mainwindow, SW_SHOWMINNOACTIVE);
+				}
+				else if (vid_minonfocusloss.ival && modestate != MS_WINDOWED)
+					ShowWindow(mainwindow, SW_SHOWMINNOACTIVE);
+			}
 			break;
 		case WM_SETFOCUS:
 #ifdef WTHREAD

@@ -41,6 +41,24 @@ typedef enum {
 #define PMF_LADDER				2	//pmove flags. seperate from flags
 #define PMF_DUCKED				4	//FTESurf: pm_source.c is holding the ducked hull
 
+/*FTESurf Patch 280: func_slide.  The QC tags a SOLID slide brush with .skin in
+  PMSLIDE_SKIN_MIN..PMSLIDE_SKIN_MAX, the "content override" channel that already
+  carries ladders (-16) and water (-3) through sv_user.c AddEntityToPmove,
+  cl_ents.c CL_SetSolidEntities and world.c World_ClipMoveToEntity, and the
+  skinnum wire encoding (sv_ents.c:1346 biases by +64; cl_ents.c:486 sign-extends
+  224..255 on the vanilla byte path, so -32 is the lowest value every path can
+  carry; -25 keeps clear of Q1CONTENTS_CORPSE, -19).  skin - MIN is the flag
+  byte.  Unlike the contents overrides it is NOT a contents value: every one of
+  those sites must trace the brush exactly as a skin-0 SOLID_BSP and only
+  remember the byte in physent_t.slideflags for pm_source.c.*/
+#define PMSLIDE_STAYON			1	//func_slide "stayonslide": snap back onto a face that curves away
+#define PMSLIDE_ALLOWJUMP		2	//func_slide "allowjump": +jump on a standable slide face grounds and jumps
+#define PMSLIDE_NOGRAVITY		4	//func_slide "disablegravity": no StartGravity/FinishGravity while in contact
+#define PMSLIDE_ACTIVE			8	//always set on a slide physent, so a slide with every key 0 is still a slide
+#define PMSLIDE_SKIN_MIN		(-32)
+#define PMSLIDE_SKIN_MAX		(-25)
+#define PMSLIDE_FLAGS_FROM_SKIN(s)	(((s) >= PMSLIDE_SKIN_MIN && (s) <= PMSLIDE_SKIN_MAX) ? (PMSLIDE_ACTIVE | ((s) - PMSLIDE_SKIN_MIN)) : 0)
+
 #define	MAX_PHYSENTS	2048
 typedef struct
 {
@@ -52,6 +70,9 @@ typedef struct
 	qbyte		nonsolid;		//contributes to contents, but does not block. FIXME: why not just use the contentsmask directly?
 	qbyte		notouch;		//don't trigger touch events. FIXME: why are these entities even in the list?
 	qbyte		isportal;		//special portal traversion required
+	qbyte		slideflags;		//FTESurf Patch 280: PMSLIDE_* of a func_slide brush, 0 for everything else.
+								//Occupies the padding byte after isportal (three qbytes then a 4-aligned
+								//unsigned int), so sizeof(physent_t) and every later offset are unchanged.
 	unsigned int forcecontentsmask;
 	float		scale;		//nettest Patch 57: prop scale for convex-hull collision (<=0 treated as 1)
 //	framestate_t framestate;
@@ -236,6 +257,8 @@ typedef struct {
 								//damped when you approach the rungs at a glancing angle.
 	float	ladderangle;		//Momentum sv_ladder_angle, -0.707 (cos 135). The incidence
 								//cosine below which ladderdampen starts applying.
+	float	slide;				//FTESurf Patch 280. pm_slide: honour func_slide. 0 leaves every slide
+								//physent's flag byte unread, which is the pre-280 mover exactly.
 } movevars_t;
 
 #define PHYSMODE_QUAKEWORLD	0

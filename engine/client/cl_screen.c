@@ -38,6 +38,43 @@ extern cvar_t con_textsize;
 //with -condebug this lands in qconsole.log as exact text, which is what the reconciliation
 //arithmetic actually needs.  One-shot: set the flag, next RSpeedShow prints and clears it.
 static int rspeed_dumpreq;
+
+/*
+FTESurf Patch 273 -- "Framerate (refresh only)" MEANT IT, AND NOBODY READ IT.
+
+RSPEED_TOTALREFRESH is closed around SCR_UpdateScreen alone (cl_main.c:7761).
+The listen server gets its OWN bracket around SV_Frame, three of them
+(cl_main.c:7457, :7592, :7663), and SV_Frame is called once per Host_Frame
+BESIDE the refresh, not inside it.  So the headline framerate this table has
+always printed is 1/refresh, and on a listen server -- which is every single
+-player session this game has -- it omits the server entirely.
+
+MEASURED on surf_tensor2 at the spawn, post-Patch-271, uncapped.  The refresh
+sub-buckets reconcile against their parent, which is how we know Server is the
+one sitting outside:
+
+    CSQC Drawing 2590.94 + 2d 256.78 + Present 178.27 + Protocol 3.76
+      + overhead 58.92 + setup 0.55 + composite 0.11 + GL reset 3.40
+      + Audio 0.58                                    = 3093.31
+    Total refresh (reported)                            3094.03   <- closed
+    Server                                              1790.68   <- OUTSIDE
+
+    "Framerate (refresh only)"   323 fps
+    what the frame actually is   1/(3094+1791) = 205 fps
+
+The user reported "200-300" on this map and the counter said 323.  The counter
+was not wrong, it was answering a different question, and the 1790us of server
+-- 37% of the frame, the single largest item -- was invisible to every A/B this
+project has ever run.  That is why this prints BOTH: the old number stays so
+old measurements remain comparable, and the honest one sits under it in caps.
+
+Deliberately just refresh+server rather than a sum over every bucket: those two
+are the only top-level brackets in the host frame, and summing the array would
+double-count every nested child.  If a third top-level bracket is ever added,
+add it here or this line quietly starts lying the same way.
+*/
+#define RSPEED_REALFRAME(a) ((a)[RSPEED_TOTALREFRESH] + (a)[RSPEED_SERVER])
+
 static void RSpeed_Dump_f(void)
 {
 	if (r_speeds.ival <= 1)
@@ -144,6 +181,8 @@ void RSpeedShow(void)
 	{
 		s = va("%f %-24s", (frameinterval*1000*1000.0f)/samplerspeeds[RSPEED_TOTALREFRESH], "Framerate (refresh only)");
 		Draw_FunStringWidthFont(font_console, 0, (i+RSPEED_MAX)*tsize, s, vid.width, true, false);
+		s = va("%f %-24s", (frameinterval*1000*1000.0f)/RSPEED_REALFRAME(samplerspeeds), "Framerate (INCL. SERVER)");
+		Draw_FunStringWidthFont(font_console, 0, (i+RSPEED_MAX+1)*tsize, s, vid.width, true, false);
 	}
 	memcpy(rquant, savedsamplerquant, sizeof(rquant));
 
@@ -159,6 +198,11 @@ void RSpeedShow(void)
 				Con_Printf("%12u %s\n", samplerquant[i]/frameinterval, RQntNames[i]);
 		if (samplerspeeds[RSPEED_TOTALREFRESH])
 			Con_Printf("%12.2f %s\n", (frameinterval*1000*1000.0f)/samplerspeeds[RSPEED_TOTALREFRESH], "Framerate (refresh only)");
+		if (RSPEED_REALFRAME(samplerspeeds))
+		{
+			Con_Printf("%12.2f %s\n", RSPEED_REALFRAME(samplerspeeds)/(float)frameinterval, "REAL frame (refresh+server)");
+			Con_Printf("%12.2f %s\n", (frameinterval*1000*1000.0f)/RSPEED_REALFRAME(samplerspeeds), "Framerate (INCL. SERVER)");
+		}
 		Con_Printf("---- end r_speeds_dump ----\n");
 	}
 

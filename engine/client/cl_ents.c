@@ -622,6 +622,49 @@ void FlushEntityPacket (void)
 	}
 }
 
+/*
+FTESurf Patch 270 -- per-modelindex count of RECEIVED entity deltas.
+
+The public-lobby design (sv_lobby.qc) rests on one claim that has to be
+measurable FROM THE CLIENT: an avatar that is a non-client entity moved at
+lobby_av_rate Hz costs lobby_av_rate updates a second, and not the 66.7 that
+SVFTE_DeltaCalcBits (sv_ents.c:998-1006) forces onto a moving PLAYER edict with
+delta compression deliberately bypassed.  Getting that wrong is a 4.5x
+bandwidth error that looks perfectly fine on a LAN with two clients and falls
+over at 32.  It needs a number, not an impression.
+
+Nothing already in the engine answers it:
+  - cl_shownet 3 prints a line per update (line 640 below).  Correct, and
+    unreadable -- which is what prompted this.
+  - r_netgraph 2 -> CL_ShowTrafficUsage (cl_parse.c:10207) gives
+    svc_fte_updateentities BYTES/sec, with no per-model breakdown.
+  - CSQC getentity() exposes no sequence or update field; the GE_ list ends at
+    GE_TRAILEFFECTNUM (pr_common.h:1022-1059) and the default case prints
+    "field is not supported".
+  - deltalisten() (#371) looks like the answer and is not.  Its callback is
+    dispatched from CL_LinkPacketEntities (cl_ents.c:5352), a per-RENDERED-FRAME
+    walk over cl.currentpackentities, so counting invocations measures framerate
+    times entity count -- it would have read ~500 for a 15 Hz avatar and looked
+    like a catastrophic bandwidth bug.
+
+CLFTE_ReadDelta is the one function that runs exactly once per received delta.
+64 KB of counters (MAX_PRECACHE_MODELS is 16384, bothdefs.h:933) matches what
+pr_csqc.c:5742-5743 already spends on deltafunction[]/deltaflags[].
+*/
+unsigned int cl_deltacount[MAX_PRECACHE_MODELS];
+
+void CL_ClearDeltaCounts(void)
+{
+	memset(cl_deltacount, 0, sizeof(cl_deltacount));
+}
+
+unsigned int CL_GetDeltaCount(unsigned int modelindex)
+{
+	if (modelindex >= MAX_PRECACHE_MODELS)
+		return 0;
+	return cl_deltacount[modelindex];
+}
+
 void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *olds, entity_state_t *baseline, packet_entities_t *newp, packet_entities_t *oldp)
 {
 	unsigned int predbits = 0;
@@ -1068,6 +1111,19 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 	{
 		Host_EndGame("ent update bit %#x\n", UF_UNUSED1);
 	}
+
+	//FTESurf Patch 270.  Counted at the END of the function on purpose:
+	//news->modelindex is not final until UF_MODEL has been parsed above, so
+	//incrementing next to the cl_shownet line at the top would attribute every
+	//update to the entity's PREVIOUS model -- and a lobby avatar changes model
+	//on every duck (sv_lobby.qc, Lobby_AvatarPose), so the whole duck swap
+	//would land in the wrong bucket.
+	//
+	//newp is NULL only when CLFTE_ParseBaseline (just below) borrows this
+	//function to read a spawn baseline.  A baseline is not a received update
+	//and counting it would put a spike on every map load.
+	if (newp && news->modelindex < MAX_PRECACHE_MODELS)
+		cl_deltacount[news->modelindex]++;
 }
 
 void CLFTE_ParseBaseline(entity_state_t *es, qboolean numberisimportant)
@@ -7345,6 +7401,15 @@ void CL_SetSolidEntities (void)
 			break;
 		VectorCopy(state->origin, pent->origin);
 		pent->info = state->number;
+
+		/* FTESurf Patch 280: func_slide.  The tag rides in skinnum exactly as the
+		   ladder/water overrides below do, but it is not a contents value: no
+		   case below matches it, so the physent stays SOLID with
+		   forcecontentsmask 0 -- byte-for-byte what a skin-0 brush gets -- and
+		   only the flag byte is kept for pm_source.c.  The server feeds its own
+		   pmove the identical byte from the identical .skin (sv_user.c
+		   AddEntityToPmove), which is what makes the slide predictable. */
+		pent->slideflags = PMSLIDE_FLAGS_FROM_SKIN((int)state->skinnum);
 
 		switch((int)state->skinnum)
 		{

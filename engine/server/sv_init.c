@@ -1254,6 +1254,28 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 	}
 	else
 	{
+		/*
+		  ftesurf (P282): the server half of the silent HUD loss.
+
+		  Publishing "" here tells every connecting client "this server has no
+		  client gamecode", and the client then never even opens its OWN copy --
+		  see CSQC_Init's csqc_nogameaccess branch. For a game whose entire HUD is
+		  CSQC that means the player gets the engine's status bar instead, with
+		  nothing said on either side.
+
+		  This runs inside SV_SpawnServer, i.e. on EVERY map load. So a deploy
+		  that is not atomic -- an scp landing while a rotation happens to be
+		  changing map -- reads a half-written file, publishes "", and recovers
+		  on the next map. "Sometimes, and it depends on the map" is exactly what
+		  that looks like from the player's side.
+
+		  Only the could-not-read case is reported. A server deliberately running
+		  without CSQC has an empty sv_csqc_progname and is not a misconfiguration.
+		*/
+		if (*csprogsname)
+			Con_Printf(CON_ERROR"csprogs: \"%s\" could not be read -- connecting clients "
+					   "will get NO client gamecode (and so no HUD) until this is fixed.\n",
+					   csprogsname);
 		sv.csqcchecksum = 0;
 		InfoBuf_SetValueForStarKey(&svs.info, "*csprogs", "");
 		InfoBuf_SetValueForStarKey(&svs.info, "*csprogssize", "");
@@ -1921,6 +1943,14 @@ MSV_OpenUserDatabase();
 	//refresh below reads it, so a map always starts on this game's numbers
 	//however the previous one ended.  Inert unless the game asked for it.
 	SV_LockMovementVars();
+
+	//FTESurf Patch 313: publish the lock predicate AFTER the restore above and
+	//after the gamemode/per-map overrides are in, because *ruleset's `off`
+	//field is a census against SV_MovementCanonical and both of those move it.
+	//The spawn write is the one that matters most: it is the only one that can
+	//report an off-canonical value nobody set during the run, which is exactly
+	//the state an unlocked ruleset inherits from the config it was started with.
+	SV_PublishRuleset();
 
 	//some mods stuffcmd these, and it would be a shame if they didn't work. we still need the earlier call in case the mod does extra stuff.
 	SV_SetMoveVars();

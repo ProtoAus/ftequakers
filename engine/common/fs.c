@@ -6189,25 +6189,31 @@ static void FS_ReloadPackFiles_f(void)
 	((defined(_WIN32) && !(defined(FTE_SDL)&&!defined(FTE_SDL3)) && !defined(WINRT) && !defined(_XBOX)) || \
 	 ((defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)))
 static int QDECL FS_DirDoesHaveGame(const char *fname, qofs_t fsize, time_t modtime, void *ctx, searchpathfuncs_t *subdir);	//ftesurf (P182): defined further down, next to the other gamedir probes
-static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *librarypath, char *steamdir, char *fname)	//fills in the base system path
-{
-	char clean[MAX_OSPATH];
-	char *s;
-	vfsfile_t *f;
 
-	//libraryfolders.vdf on Windows stores "D:\\SteamLibrary".  COM_ParseCString has
-	//already turned the escaped pair back into one backslash (common.c, case '\\'),
-	//but the rest of the engine wants forward slashes -- normalise once here rather
-	//than at every call site.  Trailing separators are stripped so "D:\\" cannot
-	//produce a doubled slash further down.
-	Q_strncpyz(clean, librarypath, sizeof(clean));
+//libraryfolders.vdf on Windows stores "D:\\SteamLibrary".  COM_ParseCString has
+//already turned the escaped pair back into one backslash (common.c, case '\\'),
+//but the rest of the engine wants forward slashes -- normalise once here rather
+//than at every call site.  Trailing separators are stripped so "D:\\" cannot
+//produce a doubled slash further down.  ftesurf (P276) also runs hand-typed
+//steam_libraries.txt lines through this, where the backslashes are the user's own.
+static void Sys_SteamCleanRoot(char *clean, size_t cleansize, const char *librarypath)
+{
+	char *s;
+	Q_strncpyz(clean, librarypath, cleansize);
 	for (s = clean; *s; s++)
 		if (*s == '\\')
 			*s = '/';
 	while (s > clean && s[-1] == '/')
 		*--s = 0;
+}
+//ftesurf (P276): "<root>/<Game>" exists?  `root` is already cleaned.  Split out of
+//Sys_SteamLibraryHasFile so an extra root can be probed BOTH as a Steam library
+//(root + /steamapps/common) and as the game-folder parent directly.
+static qboolean Sys_SteamRootHasFile(char *basepath, int basepathlen, const char *root, const char *steamdir, const char *fname)
+{
+	vfsfile_t *f;
 
-	Q_snprintfz(basepath, basepathlen, "%s/steamapps/common/%s", clean, steamdir);
+	Q_snprintfz(basepath, basepathlen, "%s/%s", root, steamdir);
 
 	if (*fname)
 	{
@@ -6219,6 +6225,15 @@ static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *l
 	}
 	//false => the callback cancelled the walk => the directory has >=1 entry => it is there.
 	return !Sys_EnumerateFiles(basepath, "*", FS_DirDoesHaveGame, NULL, NULL);
+}
+static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *librarypath, char *steamdir, char *fname)	//fills in the base system path
+{
+	char clean[MAX_OSPATH];
+	char common[MAX_OSPATH];
+
+	Sys_SteamCleanRoot(clean, sizeof(clean), librarypath);
+	Q_snprintfz(common, sizeof(common), "%s/steamapps/common", clean);
+	return Sys_SteamRootHasFile(basepath, basepathlen, common, steamdir, fname);
 }
 static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*basepath),void*ctx, char *libraryfile, char *steamdir, char *fname)	//returns the base system path
 {
@@ -6268,6 +6283,125 @@ static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*base
 	FS_FreeFile(libraryfile);
 	return success;
 }
+
+//=================================================================
+//ftesurf (P276): steam_libraries.txt -- the manual override
+//=================================================================
+// P182 taught the resolver to read libraryfolders.vdf, which covers the ordinary
+// multi-drive case: Steam on C:, games on D:.  It does NOT cover the case where
+// STEAM ITSELF is somewhere the engine cannot find it, and on Windows that is a
+// single point of failure -- Sys_SteamDirsWithFile begins with
+// HKCU\SOFTWARE\Valve\Steam\SteamPath and returned false immediately if the key
+// was absent, taking the libraryfolders parse with it.  A portable/"no-install"
+// Steam, a machine where the games were installed under a different Windows
+// user, a Steam that has never been run by the current user, a game folder
+// copied off another machine with no Steam behind it at all -- every one of
+// those produced "steam game not found/installed" for all three of FTESurf's
+// mounts and, worse, silently disarmed fs_automount for every map in
+// mapdeps.txt.  Absolute paths in fs_addons.txt fix the first of those and not
+// the second, because mapdeps.txt is GENERATED and its specs are steam: forms.
+//
+// So the override goes where BOTH read it: one list of extra roots, consulted by
+// the resolver itself.
+//
+//   <basedir>/steam_libraries.txt      (beside ftesurf.bat -- the usual place)
+//   <binarydir>/steam_libraries.txt    (beside the exe, if that is elsewhere)
+//
+// One path per line; blank lines and #/// comments ignored.  Each line is tried
+// TWO ways, because the two things a player is likely to paste look nothing
+// alike and neither is wrong:
+//
+//   as a Steam LIBRARY root     <line>/steamapps/common/<Game>
+//   as the game folder's PARENT <line>/<Game>
+//
+// The second is what you get from "Browse local files" one level up, and it is
+// also the form that works with no Steam at all -- a folder holding copied game
+// directories resolves every steam: spec whose game is present in it.
+//
+// Read with FS_MallocFile(FS_SYSTEM) rather than through the VFS on purpose:
+// this runs DURING searchpath construction (FS_RemountAddons is inside the
+// rebuild), so the searchpaths cannot be consulted to find it.
+#define FS_STEAMLIBS_FILE "steam_libraries.txt"
+#define FTESURF_STEAMLIBS 1		//the guard above is long; this records that the helpers below exist
+
+//probe one root both ways.  `basepath` receives the resolved game dir on success.
+static qboolean Sys_SteamRootHasGame(char *basepath, int basepathlen, const char *root, const char *steamdir, const char *fname)
+{
+	char clean[MAX_OSPATH];
+
+	if (Sys_SteamLibraryHasFile(basepath, basepathlen, (char*)root, (char*)steamdir, (char*)fname))
+		return true;
+
+	Sys_SteamCleanRoot(clean, sizeof(clean), root);
+	return Sys_SteamRootHasFile(basepath, basepathlen, clean, steamdir, fname);
+}
+static qboolean Sys_SteamExtraRootsFile(void(*callback)(void*ctx,const char*basepath),void*ctx, char *listfile, char *steamdir, char *fname)
+{
+	char basepath[MAX_OSPATH];
+	char *line, *nl, *e;
+
+	if (!listfile)
+		return false;
+	for (line = listfile; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'||e[-1]=='"'); )
+			*--e = 0;
+		while (*line == '"')
+			memmove(line, line+1, strlen(line));	//a pasted Windows path often arrives quoted
+		if (!*line || *line == '#' || (line[0]=='/' && line[1]=='/'))
+			continue;
+
+		if (Sys_SteamRootHasGame(basepath,sizeof(basepath), line, steamdir, fname))
+		{
+			callback(ctx, basepath);
+			FS_FreeFile(listfile);
+			return true;
+		}
+	}
+	FS_FreeFile(listfile);
+	return false;
+}
+//The two places the override may live, by index.  Neither base is guaranteed to
+//carry (or to lack) a trailing separator -- com_gamepath has one here and
+//host_parms.binarydir always does -- so join defensively: this path gets PRINTED
+//by fs_steamlibs and "C:\FTESurf//steam_libraries.txt" reads as a bug even though
+//Windows opens it fine.  Returns false when the candidate does not apply.
+static qboolean FS_SteamLibsFilePath(char *out, size_t outsize, int idx)
+{
+	const char *base = idx ? host_parms.binarydir : com_gamepath;
+	size_t l;
+	if (!base || !*base)
+		return false;
+	Q_strncpyz(out, base, outsize);
+	l = strlen(out);
+	if (l && out[l-1] != '/' && out[l-1] != '\\')
+		Q_strncatz(out, "/", outsize);
+	Q_strncatz(out, FS_STEAMLIBS_FILE, outsize);
+	return true;
+}
+static qboolean Sys_SteamExtraRoots(void(*callback)(void*ctx,const char*basepath),void*ctx, char *steamdir, char *fname)
+{
+	char p[MAX_OSPATH], prev[MAX_OSPATH];
+	int idx;
+
+	*prev = 0;
+	for (idx = 0; idx < 2; idx++)
+	{
+		if (!FS_SteamLibsFilePath(p, sizeof(p), idx))
+			continue;
+		if (!Q_strcasecmp(p, prev))
+			continue;	//an ordinary install has the exe in the basedir; do not read it twice
+		Q_strncpyz(prev, p, sizeof(prev));
+		if (Sys_SteamExtraRootsFile(callback,ctx, FS_MallocFile(p, FS_SYSTEM, NULL), steamdir, fname))
+			return true;
+	}
+	return false;
+}
 #endif
 
 #ifdef NOSTDIO
@@ -6302,13 +6436,43 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 	char basepath[MAX_OSPATH];
 	char libdirs[MAX_OSPATH];	//ftesurf (P182)
 
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", 0, STANDARD_RIGHTS_READ|KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-		return false;
-	resultlen = sizeof(suckysucksuck);
-	suckysucksuck[0] = 0;
-	RegQueryValueExW(key, L"SteamPath", NULL, NULL, (void*)suckysucksuck, &resultlen);
-	RegCloseKey(key);
-	narrowen(steampath,sizeof(steampath), suckysucksuck);
+	//0. ftesurf (P276): the user's own steam_libraries.txt, ahead of anything
+	//   auto-detected.  That file only ever exists because somebody put it there,
+	//   so it outranks a registry key that may point at a Steam they no longer use
+	//   -- and it is the ONLY arm that works when there is no Steam here at all.
+	if (Sys_SteamExtraRoots(callback,ctx, steamdir, fname))
+		return true;
+
+	//ftesurf (P276): this read USED TO `return false` on failure, which took the
+	//libraryfolders parse below down with it -- one missing registry value and the
+	//whole resolver was dead, including for games on drives the vdf lists.  Both
+	//reads are now advisory.  HKCU\...\SteamPath is where a running Steam records
+	//itself; HKLM\...\InstallPath is what the INSTALLER writes machine-wide, and is
+	//the fallback when the current user's hive has no Steam in it (games installed
+	//under another Windows account, or a Steam never launched by this user).
+	//Steam is a 32-bit process, so on 64-bit Windows its HKLM key really lives under
+	//WOW6432Node -- KEY_WOW64_32KEY is what makes a 64-bit engine see it.
+	*steampath = 0;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", 0, STANDARD_RIGHTS_READ|KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
+	{
+		resultlen = sizeof(suckysucksuck);
+		suckysucksuck[0] = 0;
+		RegQueryValueExW(key, L"SteamPath", NULL, NULL, (void*)suckysucksuck, &resultlen);
+		RegCloseKey(key);
+		narrowen(steampath,sizeof(steampath), suckysucksuck);
+	}
+	if (!*steampath)
+	{
+		key = NULL;
+		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam", 0, STANDARD_RIGHTS_READ|KEY_QUERY_VALUE|KEY_WOW64_32KEY, &key) == ERROR_SUCCESS)
+		{
+			resultlen = sizeof(suckysucksuck);
+			suckysucksuck[0] = 0;
+			RegQueryValueExW(key, L"InstallPath", NULL, NULL, (void*)suckysucksuck, &resultlen);
+			RegCloseKey(key);
+			narrowen(steampath,sizeof(steampath), suckysucksuck);
+		}
+	}
 	if (!*steampath)
 		return false;
 
@@ -6602,17 +6766,39 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 	Find where Valve's Steam distribution platform is installed.
 	Then take a look at that location for the relevent installed app.
 	*/
+	//ftesurf (P276): where to look for a libraryfolders.vdf, relative to $HOME.  The
+	//first two are what was here before; the rest are what real machines use -- the
+	//flatpak build lives under .var/app, .steam/root is the usual symlink, and macOS
+	//puts it in Library/Application Support.  Steam keeps a copy of the vdf in BOTH
+	//steamapps/ and config/ and keeps both current, so probe both (plus the legacy
+	//capitalised SteamApps, which the second line here used to spell that way and
+	//which still matters on a case-sensitive filesystem).  Each miss is one failed
+	//open, so the whole table costs nothing when the first entry hits.
+	static const char *steamhomes[] = {
+		".steam/steam",
+		".local/share/Steam",
+		".steam/root",
+		".var/app/com.valvesoftware.Steam/.local/share/Steam",
+		"Library/Application Support/Steam",
+	};
+	static const char *steamsubs[] = {"steamapps", "config", "SteamApps"};
 	char libdirs[MAX_OSPATH];
 	char *userhome = getenv("HOME");
+	unsigned int i, j;
+
+	//ftesurf (P276): the user's own list first.  See the FS_STEAMLIBS_FILE block.
+	if (Sys_SteamExtraRoots(callback,ctx, steamdir, fname))
+		return true;
+
 	if (userhome && *userhome)
 	{
-		Q_snprintfz(libdirs,sizeof(libdirs), "%s/.steam/steam/steamapps/libraryfolders.vdf", userhome);
-		if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
-			return true;
-
-		Q_snprintfz(libdirs,sizeof(libdirs), "%s/.local/share/Steam/SteamApps/libraryfolders.vdf", userhome);
-		if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
-			return true;
+		for (i = 0; i < sizeof(steamhomes)/sizeof(steamhomes[0]); i++)
+			for (j = 0; j < sizeof(steamsubs)/sizeof(steamsubs[0]); j++)
+			{
+				Q_snprintfz(libdirs,sizeof(libdirs), "%s/%s/%s/libraryfolders.vdf", userhome, steamhomes[i], steamsubs[j]);
+				if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
+					return true;
+			}
 	}
 	return false;
 }
@@ -9021,6 +9207,18 @@ note: does not actually load any packs, just makes sure the basedir+cvars+etc is
 // persists across launches.  Replaces always-mounted `basegame steam:...` lines
 // (which mount at HIGH priority and hijack the mod's conback + video mode).
 #define FS_ADDONS_FILE "fs_addons.txt"
+//ftesurf (P276): "not found/installed" on its own sends a player looking for a
+//game they can plainly see installed, on a drive the engine never looked at.  Say
+//where to go next -- ONCE PER PASS, from the caller that knows a pass happened.
+//(It lived inside FS_Addon_ResolveEx behind a said-once flag first.  That never
+//printed: the filesystem is built more than once during boot, and the flag was
+//spent on a pass whose console output nobody sees.  Counting failures in the loop
+//is both simpler and provably in the same console state as the warnings.)
+static void FS_SteamHint(void)
+{
+	Con_Printf("^7run ^2fs_steamlibs^7 to see where it looked, and\n"
+			   "^2fs_steamlibs add ^7<path> to point it at another drive or folder.\n");
+}
 
 //`quiet` suppresses the not-installed warning for SPECULATIVE resolves - specs the engine
 //invents rather than ones the user asked for.  FS_Addon_MountHD probes "<spec>_hd" for every
@@ -9250,6 +9448,7 @@ static void FS_Addon_MountHD(const char *spec, unsigned int loadstuff)
 static void FS_RemountAddons(unsigned int loadstuff)
 {
 	char *file, *line, *nl, *e;
+	int steamfails = 0;	//ftesurf (P276)
 
 	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
 	if (!file)
@@ -9268,8 +9467,12 @@ static void FS_RemountAddons(unsigned int loadstuff)
 		FS_Addon_MountHD(line, loadstuff);	//nettest: above its own base game, see the helper
 		if (FS_Addon_Mount(line, loadstuff))
 			Con_DPrintf("fs_load: re-mounted addon \"%s\"\n", line);
+		else if (!strncmp(line, "steam:", 6))
+			steamfails++;	//ftesurf (P276): a Steam game the resolver could not see
 	}
 	BZ_Free(file);
+	if (steamfails)
+		FS_SteamHint();
 }
 
 //=================================================================
@@ -10913,7 +11116,11 @@ static void FS_Load_f(void)
 		return;
 	}
 	if (!FS_Addon_Mount(arg, ~0u))
+	{
+		if (!strncmp(arg, "steam:", 6))
+			FS_SteamHint();	//ftesurf (P276)
 		return;
+	}
 	FS_Addon_SaveList(arg, NULL);
 	com_fschanged = true;
 	Con_Printf("fs_load: \"%s\" mounted (low priority) and saved; auto-remounts next launch\n", arg);
@@ -10953,6 +11160,189 @@ static void FS_LoadList_f(void)
 	BZ_Free(file);
 }
 
+#ifdef FTESURF_STEAMLIBS
+//=================================================================
+//ftesurf (P276): fs_steamlibs -- say WHERE it looked, and let the player fix it
+//=================================================================
+// "fs_load: steam game "Momentum Mod Playtest/momentum" not found/installed" has
+// four quite different causes -- no Steam key in this user's registry, a library
+// folder Steam does not list, the game genuinely not installed, or the game
+// folder renamed -- and the message distinguishes none of them.  With no
+// argument this prints the whole search: which override file is in play, whether
+// each root in it is real, and how every fs_addons.txt spec currently resolves.
+// `add <path>` appends a root, which is the one-line fix.
+static qboolean FS_SteamRootLooksReal(const char *root, char *out, size_t outsize)
+{	//"real" = it is a directory with at least one entry, tried both ways round.
+	char clean[MAX_OSPATH];
+	Sys_SteamCleanRoot(clean, sizeof(clean), root);
+	Q_snprintfz(out, outsize, "%s/steamapps/common", clean);
+	if (!Sys_EnumerateFiles(out, "*", FS_DirDoesHaveGame, NULL, NULL))
+		return true;
+	Q_strncpyz(out, clean, outsize);
+	return !Sys_EnumerateFiles(out, "*", FS_DirDoesHaveGame, NULL, NULL);
+}
+static void FS_SteamLibs_ShowFile(const char *path)
+{
+	char probe[MAX_OSPATH];
+	char *file, *line, *nl, *e;
+	int roots = 0;
+
+	file = FS_MallocFile(path, FS_SYSTEM, NULL);
+	if (!file)
+	{
+		Con_Printf("  %s ^7(absent)\n", path);
+		return;
+	}
+	Con_Printf("  %s:\n", path);
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'||e[-1]=='"'); )
+			*--e = 0;
+		while (*line == '"')
+			memmove(line, line+1, strlen(line));
+		if (!*line || *line == '#' || (line[0]=='/' && line[1]=='/'))
+			continue;
+		roots++;
+		if (FS_SteamRootLooksReal(line, probe, sizeof(probe)))
+			Con_Printf("    ^2ok^7      %s  ^h(games in %s)\n", line, probe);
+		else
+			Con_Printf("    ^1missing^7 %s\n", line);
+	}
+	if (!roots)
+		Con_Printf("    ^h(no roots -- every line is blank or a comment)\n");
+	FS_FreeFile(file);
+}
+static void FS_SteamLibs_f(void)
+{
+	char path[MAX_OSPATH];
+	char resolved[MAX_OSPATH];
+	char *file, *line, *nl, *e;
+	const char *args = Cmd_Args();
+	int i;
+
+	if (!Q_strcasecmp(Cmd_Argv(1), "add") && Cmd_Argc() > 2)
+	{
+		vfsfile_t *f;
+		char root[MAX_OSPATH];
+		char probe[MAX_OSPATH];
+
+		//take everything after "add" verbatim: an unquoted Windows path with spaces
+		//arrives as several tokens and re-joining Cmd_Argv would lose the runs.
+		while (*args && *args != ' ' && *args != '\t')
+			args++;
+		while (*args == ' ' || *args == '\t')
+			args++;
+		Q_strncpyz(root, args, sizeof(root));
+		for (e = root+strlen(root); e > root && (e[-1]==' '||e[-1]=='\t'||e[-1]=='"'); )
+			*--e = 0;
+		while (*root == '"')
+			memmove(root, root+1, strlen(root));
+		if (!*root)
+		{
+			Con_Printf("usage: fs_steamlibs add <path to a Steam library, or to the folder your game dirs sit in>\n");
+			return;
+		}
+		if (!FS_SteamLibsFilePath(path, sizeof(path), 0) && !FS_SteamLibsFilePath(path, sizeof(path), 1))
+		{
+			Con_Printf(CON_ERROR"fs_steamlibs: nowhere to write %s yet\n", FS_STEAMLIBS_FILE);
+			return;
+		}
+		//Refuse to write a root that resolves to nothing.  A silently-saved typo is
+		//the failure mode this command exists to end, not one to add.
+		if (!FS_SteamRootLooksReal(root, probe, sizeof(probe)))
+		{
+			Con_Printf(CON_ERROR"fs_steamlibs: \"%s\" is not a readable directory.\n", root);
+			Con_Printf("give either a Steam library root (the folder CONTAINING steamapps),\n"
+					   "or the folder your game directories sit in (…/steamapps/common).\n");
+			return;
+		}
+
+		file = FS_MallocFile(path, FS_SYSTEM, NULL);
+		if (file)
+		{	//already listed?  saying so beats a file that grows a duplicate per attempt.
+			for (line = file; line && *line; line = nl)
+			{
+				nl = strchr(line, '\n');
+				if (nl)
+					*nl++ = 0;
+				for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+					*--e = 0;
+				if (!Q_strcasecmp(line, root))
+				{
+					Con_Printf("fs_steamlibs: \"%s\" is already listed\n", root);
+					FS_FreeFile(file);
+					return;
+				}
+			}
+			FS_FreeFile(file);
+		}
+		f = VFSOS_Open(path, "ab");
+		if (!f)
+		{
+			Con_Printf(CON_ERROR"fs_steamlibs: could not write %s\n", path);
+			return;
+		}
+		VFS_PRINTF(f, "%s\n", root);
+		VFS_CLOSE(f);
+		Con_Printf("fs_steamlibs: added \"%s\" to %s\n", root, path);
+		Con_Printf("run ^2fs_restart^7 (or relaunch) to mount what it finds.\n");
+		return;
+	}
+	if (Cmd_Argc() > 1)
+	{
+		Con_Printf("usage: fs_steamlibs [add <path>]\n");
+		return;
+	}
+
+	Con_Printf("^2Steam library overrides^7 (tried before the registry / libraryfolders.vdf):\n");
+	*resolved = 0;
+	for (i = 0; i < 2; i++)
+	{
+		if (!FS_SteamLibsFilePath(path, sizeof(path), i))
+			continue;
+		if (!Q_strcasecmp(path, resolved))
+			continue;
+		Q_strncpyz(resolved, path, sizeof(resolved));
+		FS_SteamLibs_ShowFile(path);
+	}
+
+	Con_Printf("^2%s^7 (what those roots are searched FOR):\n", FS_ADDONS_FILE);
+	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
+	if (!file)
+	{
+		Con_Printf("  ^h(none)\n");
+		return;
+	}
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		while (*line == ' ' || *line == '\t' || *line == '\r')
+			line++;
+		for (e = line + strlen(line); e > line && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
+			*--e = 0;
+		if (!*line || *line == '#' || (line[0]=='/' && line[1]=='/'))
+			continue;
+		if (!FS_Addon_ResolveEx(line, resolved, sizeof(resolved), true))
+			Con_Printf("  ^1NOT FOUND^7 %s\n", line);
+		else if (Sys_EnumerateFiles(resolved, "*", FS_DirDoesHaveGame, NULL, NULL))
+			Con_Printf("  ^1EMPTY^7     %s  ^h-> %s\n", line, resolved);
+		else
+			Con_Printf("  ^2ok^7        %s  ^h-> %s\n", line, resolved);
+	}
+	BZ_Free(file);
+	Con_Printf("a ^1NOT FOUND^7 line means the engine cannot see that Steam game.  Fix it with\n"
+			   "  ^2fs_steamlibs add D:\\SteamLibrary^7      (the folder containing steamapps)\n"
+			   "or by replacing the steam: line in %s with the game's absolute path.\n", FS_ADDONS_FILE);
+}
+#endif
+
 //nettest (P8): true if `name`'s highest-priority instance lives in a low-priority
 //fs_load ADDON dir.  Lets the startup config-exec SKIP a foreign config.cfg/autoexec.cfg
 //that a mounted game (valve/cstrike/cod) ships when the mod itself has none — which would
@@ -10980,6 +11370,9 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("fs_load",    FS_Load_f,    "nettest: mount an external game (steam:Game/dir, an absolute path, or a relative dir) at LOW priority for its assets/maps; saved + auto-remounted next launch.");
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
+#ifdef FTESURF_STEAMLIBS
+	Cmd_AddCommandD("fs_steamlibs",FS_SteamLibs_f,"ftesurf (P276): show where the engine looked for your Steam games and how every fs_addons.txt spec resolved. `fs_steamlibs add <path>` records an extra Steam library root in steam_libraries.txt -- the fix when Steam is somewhere the registry and libraryfolders.vdf do not mention.");
+#endif
 	Cmd_AddCommandD("fs_cache_info", FS_Cache_Info_f, "ftesurf (P186/P197): report how much disk the runtime asset cache is using. Reports the whole cache regardless of which packs happen to be mounted.");
 	Cmd_AddCommandD("fs_cache_clear",FS_Cache_Clear_f,"ftesurf (P186/P197): empty the runtime asset cache. With a map name, forgets just that map -- it keeps its cached files but must re-prove them, which is the fix if one map ever looks short. With no argument, deletes the lot.");
 	Cmd_AddCommandD("fs_indexmaps",FS_IndexMaps_f,"nettest (P25): rebuild data/maps_index.txt — the offline per-game map list the lazy-mount create-server menu reads.");

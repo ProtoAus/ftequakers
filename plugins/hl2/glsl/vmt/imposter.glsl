@@ -88,6 +88,14 @@ void main ()
 {
 	vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA));
 	imposter_f.rgb *= vec3(COLOR);
-	gl_FragColor = fog4( imposter_f );
+	//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+	//fog4() multiplies by regularcolour.a, which on a Source material is a
+	//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+	//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+	#if #include "cvar/hl2_fog_alphamul"
+		gl_FragColor = fog4( imposter_f );
+	#else
+		gl_FragColor = vec4(fog3(imposter_f.rgb), imposter_f.a);
+	#endif
 }
 #endif

@@ -1295,6 +1295,60 @@ static void Model_CheckDownloads (void)
 #endif
 }
 
+/*
+=================================================================
+ftesurf (P284): CL_AutoMountForConnectedMap
+=================================================================
+fs_automount reads data/mapdeps.txt and mounts the Steam game whose pack holds a
+given map's materials.  It had exactly ONE call site in the whole engine --
+sv_ccmds.c:1091, inside SV_Map_f -- so it ran when you started a map yourself and
+NEVER when you joined somebody else's server.
+
+FTESurf ships no maps; the library is mounted out of a Momentum Mod install, and
+nine of the eighteen maps in the three lobby rotations additionally need TF2,
+CS:GO or Portal 2 for their textures.  All nine therefore loaded untextured for
+every joining player -- including players who own the game.  The asset was never
+missing.  The mount that finds it simply was not wired to the path a joining
+player takes.
+
+Called from two places, and the name check is what makes that safe: the real one
+is CL_ParseModellist (before the worldmodel is pre-loaded, which is the only
+placement that actually helps), and CL_LoadModels keeps a late call as a net for
+protocols that reach it by another route.  A second call for the same map would
+otherwise run FS_Cache_EndMap twice across one map boundary, closing out a
+harvest that is already closed.
+=================================================================
+*/
+static char cl_automounted_map[MAX_QPATH];
+static double cl_csqc_waitdeadline;	//ftesurf (P285); reset per connection, see CL_AutoMountForget
+static void CL_AutoMountForConnectedMap(const char *worldname)
+{
+	extern cvar_t cl_automount;
+	qboolean localserver = false;
+#ifndef CLIENTONLY
+	localserver = (sv.state != ss_dead);	//SV_Map_f already did all of this
+#endif
+	if (!cl_automount.ival || localserver || cls.demoplayback)
+		return;
+	if (!worldname || !*worldname)
+		return;
+	if (!strcmp(cl_automounted_map, worldname))
+		return;								//already mounted for this map
+	Q_strncpyz(cl_automounted_map, worldname, sizeof(cl_automounted_map));
+	FS_AutoMountForMap(worldname);
+	FS_AutoUnmountStale();					//or packs pile up, one per map, forever
+	COM_FlushFSCache(false, true);			//SV_Map_f does this for the same reason:
+											//a searchpath added after the cache was
+											//built is invisible to the next locate
+}
+void CL_AutoMountForget(void)
+{	//a disconnect may have dropped the packs; do not trust the cached name across one.
+	//P285's wait deadline is reset here too -- it is per connection, and a stale one
+	//from a previous server would make the next connect skip the wait entirely.
+	cl_automounted_map[0] = 0;
+	cl_csqc_waitdeadline = 0;
+}
+
 static int CL_LoadModels(int stage, qboolean dontactuallyload)
 {
 	int i;
@@ -1380,6 +1434,8 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 		unsigned int chksum;
 		size_t progsize;
 		const char *progsname;
+		extern cvar_t csqc_warnfail, cl_download_csprogs_selfheal, cl_nocsqc;	//ftesurf (P282)
+		extern cvar_t cl_csqc_waitforserverinfo;								//ftesurf (P285)
 		anycsqc = atoi(InfoBuf_ValueForKey(&cl.serverinfo, "anycsqc"));
 		if (cls.demoplayback)
 			anycsqc = true;
@@ -1396,8 +1452,115 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 		}
 		progsname = *s?InfoBuf_ValueForKey(&cl.serverinfo, "*csprogsname"):NULL;
 		SCR_SetLoadingFile("csprogs");
+
+		/*
+		  ftesurf (P285): WAIT FOR THE SERVERINFO. THIS IS THE HUD BUG.
+
+		  Measured, against a real dedicated server that was advertising csprogs
+		  perfectly well:
+
+		      at this point       *csprogs = ""            -> CSQC never loads
+		      two seconds later   *csprogs = "0x60a5a738"  -> it was there all along
+
+		  The server publishes the key in its serverinfo, and the client receives
+		  it as a `fullserverinfo` STUFFTEXT (:7262). A stufftext goes through the
+		  command buffer and executes on a later frame -- but this stage runs as
+		  soon as the modellist is complete. So whether CSQC starts is a race
+		  between two unordered halves of the handshake, and nothing ever retries:
+		  CSQC_Init is only re-run on the next serverdata, i.e. the next MAP.
+
+		  That is precisely the reported bug. FTESurf's entire HUD is CSQC, so
+		  losing the race means the player gets the engine's 1996 health-and-armour
+		  bar for the whole map -- and because it is a race it is intermittent, and
+		  because a map change re-rolls it, "it depends on the map" is exactly how
+		  it presents.
+
+		  The fix is to wait, briefly, ONLY when the key is absent -- an empty
+		  *csprogs is indistinguishable from "the server genuinely has no csqc",
+		  so it has to be bounded by time rather than by a signal. A server with no
+		  csqc costs cl_csqc_waitforserverinfo seconds of extra connect time, once,
+		  and then behaves exactly as before. Default 0 = off = today's race.
+
+		  Not fixed by re-initing CSQC when the key later arrives: CSQC_Init has to
+		  run inside this staged load, before the world and the CSQC entity set are
+		  built, and hoisting it out is a far larger change than the bug warrants.
+		*/
+		if (cl_csqc_waitforserverinfo.value > 0 && !*s && !cls.demoplayback && !cl_nocsqc.ival
+#ifndef CLIENTONLY
+			&& sv.state == ss_dead		//a listen server's serverinfo cannot be late
+#endif
+			)
+		{
+			if (!cl_csqc_waitdeadline)
+				cl_csqc_waitdeadline = Sys_DoubleTime() + cl_csqc_waitforserverinfo.value;
+			if (Sys_DoubleTime() < cl_csqc_waitdeadline)
+				return -1;	//re-enter this stage; the stufftext may not have run yet
+			Con_DPrintf("csqc: gave up waiting %.1fs for *csprogs in the serverinfo\n",
+						cl_csqc_waitforserverinfo.value);
+		}
+		cl_csqc_waitdeadline = 0;
+
+		/*
+		  ftesurf (P282): THE SELF-HEAL, FOR QUAKEWORLD.
+
+		  Patch 30 added one of these and put it in the NetQuake arm above, where
+		  a validate step already existed to hang it on.  The QW path has none:
+		  Sound_CheckDownloads enqueues csprogs.dat once, never checks the bytes,
+		  and CL_CheckOrEnqueDownloadFile early-outs on any file that already
+		  exists (:955-959).  So a truncated, corrupt or simply WRONG
+		  csprogsvers/<crc>.dat is permanent for the session -- the client
+		  re-validates the same bad bytes forever, loses CSQC, and falls back to
+		  the engine status bar with (before this patch) no output at all.
+
+		  FTESurf hits this the moment a rebuilt csprogs is deployed to a running
+		  server, which is routine.  Same shape as Patch 30, same actionable
+		  error when a second attempt fails, guarded so NQ does not do it twice.
+		*/
+		if (cl_download_csprogs_selfheal.ival && *s && chksum &&
+			cls.protocol != CP_NETQUAKE && !cls.demoplayback && !cl_nocsqc.ival &&
+			!CSQC_CheckDownload(progsname&&*progsname?progsname:"csprogs.dat", chksum, progsize))
+		{
+			extern cvar_t cl_download_csprogs;
+			if (cl_download_csprogs.ival)
+			{
+				char *str = va("csprogsvers/%x.dat", chksum);
+				if (CL_IsDownloading(str))
+					return -1;	//still fetching it; do not advance the stage
+				if (CL_CheckDLFile(str))
+				{
+					static unsigned int csprogs_redl_hash_qw;	//hash we have already force-re-pulled once
+					if (csprogs_redl_hash_qw == chksum)
+						Host_EndGame("csprogs checksum mismatch: the server is serving a different csprogs.dat than the client.\nRebuild + RESTART the dedicated server with the current csprogs.dat (a recompiled csprogs needs a server restart), then reconnect.");
+					csprogs_redl_hash_qw = chksum;
+					FS_Remove(str, FS_GAMEONLY);	//drop the stale cache so the re-pull is clean
+					if (CL_CheckOrEnqueDownloadFile(progsname&&*progsname?progsname:"csprogs.dat", str, DLLF_REQUIRED|DLLF_OVERWRITE))
+						return -1;
+				}
+			}
+		}
+
 		if (!CSQC_Init(anycsqc, progsname, chksum, progsize))
 		{
+			/*
+			  ftesurf (P282): say so.  For FTESurf the whole HUD is CSQC, so this
+			  is the difference between "my HUD vanished and I have Quake's
+			  health and armour bar" and a line naming the cause.
+
+			  Printing the ADVERTISED checksum and size beside the reason is what
+			  separates the two failure shapes from the player's console with no
+			  developer build: empty means the server could not read its own
+			  csprogs.dat and published nothing; a value means we have it and
+			  ours does not match.
+			*/
+			if (csqc_warnfail.ival)
+			{
+				const char *cscrc = InfoBuf_ValueForKey(&cl.serverinfo, "*csprogs");
+				const char *cssize = InfoBuf_ValueForKey(&cl.serverinfo, "*csprogssize");
+				Con_Printf(CON_ERROR"csqc: no client game -- %s.\n", CSQC_FailReason());
+				Con_Printf(CON_ERROR"      You will get the engine's status bar, not this game's HUD.\n");
+				Con_Printf(CON_ERROR"      Server advertised *csprogs \"%s\" size \"%s\".\n",
+						   *cscrc?cscrc:"(empty)", *cssize?cssize:"(empty)");
+			}
 			Sbar_Start();	//try and start this before we're actually on the server,
 							//this'll stop the mod from sending so much stuffed data at us, whilst we're frozen while trying to load.
 							//hopefully this'll make it more robust.
@@ -1406,6 +1569,58 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 		endstage();
 	}
 #endif
+
+	/*
+	=================================================================
+	ftesurf (P284): a late safety net; the real call is in CL_ParseModellist
+	=================================================================
+	Kept because CL_LoadModels is the common path for every protocol, and the
+	helper no-ops when the modellist already mounted for this map. It is NOT the
+	load-bearing call: by the time we get here CL_ParseModellist has usually
+	already pre-loaded the worldmodel, which is exactly what needed the mount.
+	Measured: with the mount only here, surf_utopia still reported 8 unresolved
+	materials and the automount line printed AFTER the BSP had loaded.
+	=================================================================
+	FS_AutoMountForMap had exactly ONE call site in the entire engine --
+	sv_ccmds.c:1091, inside SV_Map_f. It is the only thing that reads
+	data/mapdeps.txt and mounts the Steam game a given map's materials actually
+	live in. So it ran when you picked a map in your own menu, and NEVER when
+	you connected to a server.
+
+	For FTESurf that is most of "the public servers look broken". The gamedir
+	ships no maps at all; the library is mounted out of a Momentum Mod install,
+	and 9 of the 18 maps in the three lobby rotations additionally need TF2,
+	CS:GO or Portal 2 for their textures. Those nine loaded UNTEXTURED for every
+	connecting player -- including players who own the game -- while the same map
+	started locally looked perfect. The asset was never missing; the mount that
+	finds it just was not wired to the path a joining player takes.
+
+	WHY NOT SIMPLY PUT THE GAMES IN fs_addons.txt: measured, and written up in
+	ftesurf/fs_addons.default.txt. Mounting CS:GO and TF2 at boot cost 13 seconds
+	of EVERY launch (14 archives / 339,103 files / 12.0s boot, against 6 / 48,537
+	/ 3.0s without). fs_automount exists precisely so that cost is paid per map,
+	by the maps that need it. This restores the design; it does not widen it.
+
+	ONLY WHEN THE SERVER IS SOMEONE ELSE'S. On a listen server SV_Map_f has
+	already done all of this, and calling it again would run FS_Cache_EndMap a
+	second time across one map boundary -- closing out a harvest that is already
+	closed. The bug is remote-only, so the fix is too.
+
+	PLACED HERE, immediately before Surf_PreNewMap and the model loop, because
+	that loop is what loads maps/<name>.bsp at i==1 and everything it drags in.
+	COM_FlushFSCache afterwards for the same reason SV_Map_f does it
+	(sv_ccmds.c:1093): a searchpath added after the cache was built is invisible
+	to the very next locate without it.
+	*/
+	if (atstage())
+	{
+		if (cl.model_name[1] && *cl.model_name[1])
+		{
+			SCR_SetLoadingFile("automount");
+			CL_AutoMountForConnectedMap(cl.model_name[1]);
+		}
+		endstage();
+	}
 
 	if (atstage())
 	{
@@ -1686,8 +1901,17 @@ static void Sound_CheckDownloads (void)
 			}
 			else if (cl_download_csprogs.ival)
 			{
+				//ftesurf (P282): ask for the name the server actually advertised.
+				//This said "csprogs.dat" unconditionally, so a server using
+				//sv_csqc_progname to serve anything else had its *csprogsname
+				//ignored here and the request went out for a file it does not
+				//have. The NetQuake arm has honoured the key since it was
+				//written (:1320-1325); this is the same two lines.
+				const char *csname = InfoBuf_ValueForKey(&cl.serverinfo, "*csprogsname");
 				char *str = va("csprogsvers/%x.dat", chksum);
-				CL_CheckOrEnqueDownloadFile("csprogs.dat", str, DLLF_REQUIRED);
+				if (!*csname)
+					csname = "csprogs.dat";
+				CL_CheckOrEnqueDownloadFile(csname, str, DLLF_REQUIRED);
 			}
 			else
 			{
@@ -1893,6 +2117,13 @@ void CL_RequestNextDownload (void)
 			return;
 		}
 
+		//FTESurf Patch 272: this forced pass -- the world is loaded, so per-map
+		//particle sets can be picked up -- opens with R_Particles_KillAllEffects
+		//(p_script.c) and ran a few milliseconds AFTER CSQC_WorldLoaded, which
+		//is where the game execs its own effects.  Every map load unloaded them
+		//again, for three shipped builds.  The fix is in KillAllEffects
+		//(r_part_keepuser); this note is here because the ALIAS name below is
+		//why no grep for r_particledesc ever found this line.
 		Cvar_ForceCallback(Cvar_FindVar("r_particlesdesc"));
 
 #ifdef Q2CLIENT
@@ -3645,6 +3876,7 @@ static void CLQW_ParseServerData (void)
 
 #ifdef CSQC_DAT
 	CSQC_Shutdown();	//revive it when we get the serverinfo saying the checksum.
+	CL_AutoMountForget();	//ftesurf (P284/P285): new map, new mount decision and a fresh wait deadline
 #endif
 }
 
@@ -4724,6 +4956,26 @@ static void CL_ParseModellist (qboolean lots)
 			cl_gib2index = nummodels;
 		if (!strcmp(cl.model_name[nummodels],"progs/gib3.mdl"))
 			cl_gib3index = nummodels;
+
+		/*
+		  ftesurf (P284): MOUNT BEFORE THE FIRST BYTE OF THE MAP IS LOOKED FOR.
+
+		  This is the moment the client first learns the map's name, and the last
+		  moment before anything of the map is located: the async pre-load just
+		  below opens the BSP, and the entire point of the mount is that the
+		  BSP's materials live inside the pack it mounts.
+
+		  The mount was originally only in CL_LoadModels, which is LATER, and the
+		  test said so plainly -- surf_utopia loaded, reported 8 unresolved
+		  materials, and only THEN printed "fs_automount: surf_utopia needs
+		  steam:Team Fortress 2/tf". Right pack, right map, too late to matter.
+
+		  Ahead of the *mappref hint below on purpose: the hint biases which copy
+		  of a same-named map is chosen, and it cannot bias towards a searchpath
+		  that does not exist yet.
+		*/
+		if (nummodels == 1)
+			CL_AutoMountForConnectedMap(cl.model_name[nummodels]);
 
 		//we have the names, we might as well START loading them now.
 		if (COM_HasWorkers(WG_LOADER))

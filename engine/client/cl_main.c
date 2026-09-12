@@ -215,6 +215,25 @@ cvar_t	cl_proxyaddr			= CVAR("cl_proxyaddr", "");
 cvar_t	cl_sendguid				= CVARD("cl_sendguid", "", "Send a randomly generated 'globally unique' id to servers, which can be used by servers for score rankings and stuff. Different servers will see different guids. Delete the 'qkey' file in order to appear as a different user.\nIf set to 2, all servers will see the same guid. Be warned that this can show other people the guid that you're using.");
 cvar_t	cl_downloads			= CVARAFD("cl_downloads", "1", /*q3*/"cl_allowDownload", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Allows you to block all automatic downloads.");
 cvar_t	cl_download_csprogs		= CVARFD("cl_download_csprogs", "1", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Download updated client gamecode if available. Warning: If you clear this to avoid downloading vm code, you should also clear cl_download_packages.");
+//ftesurf (P282): two halves of "why did my HUD vanish".  Both default OFF so a
+//stock build is byte-identical; cfg/default.cfg turns them on for FTESurf, where
+//the whole HUD is CSQC and losing it silently is a bug report rather than a
+//curiosity.  csqc_warnfail must stay 0 by default because a plain QuakeWorld
+//server legitimately advertises no csprogs, and erroring on every one of those
+//would be noise on somebody else's game.
+cvar_t	csqc_warnfail			= CVARFD("csqc_warnfail", "0", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "ftesurf (P282): print one line naming WHY the client gamecode did not start, instead of silently falling back to the engine status bar. Off by default because a server with no csqc is normal.");
+cvar_t	cl_download_csprogs_selfheal = CVARFD("cl_download_csprogs_selfheal", "0", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "ftesurf (P282): if the cached csprogsvers/<crc>.dat does not match what the server advertises, delete it and re-download ONCE rather than re-validating the same bad bytes forever. A second failure aborts with an actionable message instead of losing the HUD. QuakeWorld only -- the NetQuake path has had this since Patch 30.");
+//ftesurf (P284): the client half of fs_automount. Off by default = today's
+//behaviour exactly, which is that a joining player never mounts the map's
+//dependency pack and gets an untextured map even though they own the game.
+cvar_t	cl_automount			= CVARFD("cl_automount", "0", CVAR_ARCHIVE, "ftesurf (P284): when CONNECTING to someone else's server, mount the joined map's extra asset pack from data/mapdeps.txt, the same way starting the map locally does. Without this, a map whose materials live in another Steam game loads untextured for every connecting player. No effect on a listen server, where SV_Map_f has already done it.");
+//ftesurf (P285): the client decides whether to start CSQC as soon as the modellist
+//is complete, but the server's *csprogs key arrives as a fullserverinfo STUFFTEXT
+//that runs a frame later -- so whether the client game loads is a race, nothing
+//retries it, and losing it costs the whole map's HUD. Measured: "" at the decision
+//point, "0x60a5a738" two seconds afterwards, same connection. Seconds to wait when
+//the key is absent; 0 = off = the old race.
+cvar_t	cl_csqc_waitforserverinfo = CVARFD("cl_csqc_waitforserverinfo", "0", CVAR_ARCHIVE, "ftesurf (P285): wait up to this many seconds for the server's *csprogs serverinfo key before concluding it has no client gamecode. Costs a connecting player this long, once, on a server that genuinely has none. 0 restores the race.");
 cvar_t	cl_download_redirection	= CVARFD("cl_download_redirection", "2", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Follow download redirection to download packages instead of individual files. Also allows the server to send nearly arbitary download commands.\n2: allows redirection only to named packages files (and demos/*.mvd), which is a bit safer.");
 cvar_t	cl_download_packages	= CVARFD("cl_download_packages", "1", CVAR_NOTFROMSERVER, "0=Do not download packages simply because the server is using them. 1=Download and load packages as needed (does not affect games which do not use this package). 2=Do download and install permanently (use with caution!)");
 cvar_t	requiredownloads		= CVARAFD("cl_download_wait", "1", /*old*/"requiredownloads", CVAR_ARCHIVE, "0=join the game before downloads have even finished (might be laggy). 1=wait for all downloads to complete before joining.");
@@ -442,6 +461,8 @@ void CL_MakeActive(char *gamename)
 		Con_DPrintf("%i additional FS searches\n", fs_finds);
 		fs_finds = 0;
 	}
+	P_LoadedCensus("CL_MakeActive begin");	//FTESurf Patch 272: the effect-set census at each step of activation.
+
 	cl.matchgametimestart = 0;
 	cls.state = ca_active;
 
@@ -453,13 +474,16 @@ void CL_MakeActive(char *gamename)
 
 	//kill models left over from the last map.
 	Mod_Purge(MP_MAPCHANGED);
+	P_LoadedCensus("CL_MakeActive after Mod_Purge");
 
 	//and reload shaders now if needed (this was blocked earlier)
 	shader_reload_why = "CL_ParseServerData/ca_active";
 	Shader_DoReload();
+	P_LoadedCensus("CL_MakeActive after Shader_DoReload");
 
 	//and now free any textures that were not still needed.
 	Image_Purge();
+	P_LoadedCensus("CL_MakeActive after Image_Purge");
 
 	SCR_EndLoadingPlaque();
 	CL_UpdateWindowTitle();
@@ -2337,6 +2361,12 @@ void CL_ClearState (qboolean gamestart)
 	  longer exists.*/
 	IN_Journal_Drop();
 
+	/*FTESurf Patch 270: the received-delta counters are indexed by modelindex,
+	  and modelindices are only meaningful within one map's precache list.  Not
+	  clearing them here would carry the previous map's counts across, so the
+	  first second on a new map would read a rate that never happened.*/
+	CL_ClearDeltaCounts();
+
 	CL_AllowIndependantSendCmd(false);	//model stuff could be a problem.
 
 	S_StopAllSounds (true);
@@ -3286,6 +3316,10 @@ void CL_CheckServerInfo(void)
 		movevars.ladderdampen = (*s && Q_atof(s) > 0)?Q_atof(s):0.2;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ladderangle");
 		movevars.ladderangle = (*s && Q_atof(s))?Q_atof(s):-0.707;
+		//FTESurf Patch 280: same default as SV_SetSourceMoveVars (pm_slide ships 1),
+		//or a client would predict a slide the server does not run, or vice versa.
+		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_slide");
+		movevars.slide = *s?Q_atof(s):1;
 		movevars.bounce = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_sourcebounce"));
 		//FTESurf: resolved in the same order as SV_SetSourceMoveVars -- pm_maxvelocity
 		//is an optional override and sv_maxvelocity is the real knob, as in Momentum.
@@ -3481,6 +3515,8 @@ void CL_CheckServerInfo(void)
 		Shader_NeedReload(false);
 
 	CSQC_ServerInfoChanged();
+
+	P_LoadedCensus("CL_CheckServerInfo");	//FTESurf Patch 272: effect-set census after every serverinfo change.
 }
 
 /*
@@ -6096,6 +6132,10 @@ void CL_Init (void)
 
 	Cvar_Register (&cl_downloads, cl_controlgroup);
 	Cvar_Register (&cl_download_csprogs, cl_controlgroup);
+	Cvar_Register (&csqc_warnfail, cl_controlgroup);				//ftesurf (P282)
+	Cvar_Register (&cl_download_csprogs_selfheal, cl_controlgroup);	//ftesurf (P282)
+	Cvar_Register (&cl_automount, cl_controlgroup);					//ftesurf (P284)
+	Cvar_Register (&cl_csqc_waitforserverinfo, cl_controlgroup);		//ftesurf (P285)
 	Cvar_Register (&cl_download_redirection, cl_controlgroup);
 	Cvar_Register (&cl_download_packages, cl_controlgroup);
 
@@ -7709,6 +7749,7 @@ double Host_Frame (double time)
 				RSpeedMark();
 				vid.ime_allow = false;
 				vrui.enabled |= cl_vrui_force.ival || (vrflags&VRF_UIACTIVE);
+				P_LoadedCensus("frame");	//FTESurf Patch 272: effect-set census once per frame, loading screens included.
 				if (SCR_UpdateScreen())
 					fps_count += 1+max(0, cl_fakeframes.ival);
 				//nettest: connect-time water renders see-through until a shader reload happens AFTER the first frame.
@@ -7986,6 +8027,10 @@ void CL_ArgumentOverrides(void)
 	int i;
 	if (COM_CheckParm ("-window") || COM_CheckParm ("-startwindowed"))
 		Cvar_Set(Cvar_FindVar("vid_fullscreen"), "0");
+	//FTESurf Patch 268: "1" is deliberate and unchanged. Under the default
+	//vid_fullscreen_order it now selects BORDERLESS rather than exclusive, which is
+	//the better reading of a bare -fullscreen: it fills the screen without taking
+	//the display mode away from everything else. Either numbering gives a fullscreen.
 	if (COM_CheckParm ("-fullscreen"))
 		Cvar_Set(Cvar_FindVar("vid_fullscreen"), "1");
 

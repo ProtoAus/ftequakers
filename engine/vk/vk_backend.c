@@ -58,6 +58,7 @@ static void R_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist
 
 extern texid_t r_whiteimage, missing_texture_gloss, missing_texture_normal;
 extern texid_t r_blackimage, r_blackcubeimage, r_whitecubeimage;
+extern texid_t r_envcubemap_tex;	//FTESurf Patch 268 B: the $envcubemap sentinel cube (gl_shader.c)
 
 static void BE_RotateForEntity (const entity_t *fte_restrict e, const model_t *fte_restrict mod);
 static void VKBE_SetupLightCBuffer(dlight_t *l, vec3_t colour, vec3_t axis[3]);
@@ -1588,7 +1589,14 @@ static texid_t SelectPassTexture(const shaderpass_t *pass)
 		// A black cube is "no reflection" as exactly as a missing one.
 		if (!r_reflectcube.ival)
 			return r_blackcubeimage;
-		if (TEXLOADED(shaderstate.curtexnums->reflectcube))
+		// FTESurf Patch 268 B: the $envcubemap sentinel (gl_shader.c) is a REAL
+		// loaded mid-grey cube, so without the second term it would bind here and
+		// stop -- every sentinel surface reflecting flat grey, which is a WRONG
+		// picture rather than a missing feature.  It means "use the batch's baked
+		// cubemap", so skip it and fall into the two arms that were already here.
+		// Strict no-op otherwise: TEXLOADED implies non-NULL, so when no sentinel
+		// was built (r_envcubemap_tex NULL) the added term is always true.
+		if (TEXLOADED(shaderstate.curtexnums->reflectcube) && shaderstate.curtexnums->reflectcube != r_envcubemap_tex)
 			return shaderstate.curtexnums->reflectcube;
 		else if (shaderstate.curbatch->envmap)
 			return shaderstate.curbatch->envmap;
@@ -3173,7 +3181,13 @@ static qboolean BE_SetupMeshProgram(program_t *p, shaderpass_t *pass, unsigned i
 			BE_SetupTextureDescriptor(shaderstate.curtexnums->paletted, r_blackimage, set, descs, desc++, img++);
 		if (p->defaulttextures & (1u<<S_REFLECTCUBE))
 		{
-			if (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->reflectcube))
+			//FTESurf Patch 268 B: same sentinel skip as SelectPassTexture above, and
+			//this is the site that matters -- a GLSL program samples s_reflectcube
+			//through this descriptor, not through the fixed-function pass path.  The
+			//two arms below already prefer the batch's baked cubemap, so excluding
+			//the sentinel here is the whole fix.  No sentinel (or r_envcubemap_tex
+			//NULL, which TEXLOADED already excludes) leaves this line as it was.
+			if (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->reflectcube) && shaderstate.curtexnums->reflectcube != r_envcubemap_tex)
 				t = shaderstate.curtexnums->reflectcube;
 			else if (shaderstate.curbatch->envmap)
 				t = shaderstate.curbatch->envmap;

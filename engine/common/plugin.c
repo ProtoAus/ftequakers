@@ -1899,6 +1899,48 @@ plugcorefuncs_t plugcorefuncs =
 	ZG_FreeGroup,
 };
 
+/*FTESurf Patch 311: the plugin input API poisons the journal.
+
+  plugin.h:356-360 previously handed out RAW POINTERS to IN_KeyEvent, IN_MouseMove,
+  IN_JoystickAxisEvent, IN_Accelerometer and IN_Gyroscope.  A plugin is an ordinary
+  native DLL a player can drop in -- no cheat gate, no memory patching, no hook -- and
+  it called the same functions the platform backend calls, so its forged input landed
+  in the same event ring and the .hid recorded `synth 0` over the top of it.  The
+  journal's poison flag was set by the in_journal_synth COMMAND rather than by the act
+  of injecting, so it described one known caller instead of the property it is named
+  for.
+
+  These five shims are the whole fix: mark first, then do exactly what the raw pointer
+  did.  No behaviour changes for an honest plugin; its input still works, and the file
+  it was recorded into now says so.  Accelerometer and Gyroscope are included even
+  though neither is journalled today -- the point is the mark, and leaving two of five
+  entries un-marked would be a gap that is invisible until someone uses them.*/
+static void QDECL Plug_IN_KeyEvent(unsigned int devid, int down, int keycode, int unicode)
+{
+	IN_Journal_MarkSynth("plugin");
+	IN_KeyEvent(devid, down, keycode, unicode);
+}
+static void QDECL Plug_IN_MouseMove(unsigned int devid, int abs, float x, float y, float z, float size)
+{
+	IN_Journal_MarkSynth("plugin");
+	IN_MouseMove(devid, abs, x, y, z, size);
+}
+static void QDECL Plug_IN_JoystickAxisEvent(unsigned int devid, int axis, float value)
+{
+	IN_Journal_MarkSynth("plugin");
+	IN_JoystickAxisEvent(devid, axis, value);
+}
+static void QDECL Plug_IN_Accelerometer(unsigned int devid, float x, float y, float z)
+{
+	IN_Journal_MarkSynth("plugin");
+	IN_Accelerometer(devid, x, y, z);
+}
+static void QDECL Plug_IN_Gyroscope(unsigned int devid, float pitch, float yaw, float roll)
+{
+	IN_Journal_MarkSynth("plugin");
+	IN_Gyroscope(devid, pitch, yaw, roll);
+}
+
 static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t structsize)
 {
 	if (!strcmp(interfacename, plugcorefuncs_name))
@@ -2242,11 +2284,11 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			utf8_encode,
 
 			IN_GetKeyDest,
-			IN_KeyEvent,
-			IN_MouseMove,
-			IN_JoystickAxisEvent,
-			IN_Accelerometer,
-			IN_Gyroscope,
+			Plug_IN_KeyEvent,			//FTESurf Patch 311: was IN_KeyEvent
+			Plug_IN_MouseMove,			//FTESurf Patch 311: was IN_MouseMove
+			Plug_IN_JoystickAxisEvent,	//FTESurf Patch 311: was IN_JoystickAxisEvent
+			Plug_IN_Accelerometer,		//FTESurf Patch 311: was IN_Accelerometer
+			Plug_IN_Gyroscope,			//FTESurf Patch 311: was IN_Gyroscope
 
 			IN_SetHandPosition,
 		};

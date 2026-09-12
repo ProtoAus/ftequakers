@@ -67,7 +67,12 @@ engine/shaders/generatebuiltinsl.exe
 engine/shaders/makevulkanblob.exe
 
 # Local plugin/updater manifest, written by the running engine.
+# It lands wherever the engine was run from, not only under engine/ -- a launch
+# from the repo root writes /installed.lst and a plugin build writes
+# plugins/hl2/installed.lst.  Same file, same reason, three paths.
 engine/installed.lst
+/installed.lst
+plugins/*/installed.lst
 
 # Editor and scratch copies.
 *.bak

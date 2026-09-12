@@ -3090,7 +3090,12 @@ void SV_VoiceReadPacket(void)
 		}
 		else if (vt == VT_NONMUTED)
 		{
-			if (host_client->voice_mute[j>>3] & (1<<(j&3)))
+			//FTESurf Patch 270: &7, not &3.  The array is (MAX_CLIENTS+7)/8
+			//bytes, i.e. EIGHT bits per byte, and >>3 already picked the byte --
+			//so the bit index has to be the low THREE bits.  With &3 only bits
+			//0-3 of each byte are ever touched and clients 4-7 alias onto 0-3,
+			//12-15 onto 8-11, and so on.  Eight sites, all of them this typo.
+			if (host_client->voice_mute[j>>3] & (1<<(j&7)))
 				continue;
 		}
 		else if (vt == VT_SPECSELF)
@@ -3107,7 +3112,7 @@ void SV_VoiceReadPacket(void)
 				continue;
 		}
 
-		ring->receiver[j>>3] |= 1<<(j&3);
+		ring->receiver[j>>3] |= 1<<(j&7);	//FTESurf Patch 270: &7 -- see above
 	}
 
 #ifdef MVD_RECORDING
@@ -3174,16 +3179,16 @@ void SV_VoiceSendPacket(client_t *client, sizebuf_t *buf)
 
 		/*figure out if it was for us*/
 		send = false;
-		if (ring->receiver[clno>>3] & (1<<(clno&3)))
+		if (ring->receiver[clno>>3] & (1<<(clno&7)))	//FTESurf Patch 270: &7
 			send = true;
 
 		/*if you're spectating, you can hear whatever your tracked player can hear*/
 		if (host_client->spectator && host_client->spec_track && host_client->spec_track <= sv.allocated_client_slots)
-			if (ring->receiver[(host_client->spec_track-1)>>3] & (1<<((host_client->spec_track-1)&3)))
+			if (ring->receiver[(host_client->spec_track-1)>>3] & (1<<((host_client->spec_track-1)&7)))	//FTESurf Patch 270: &7
 				send = true;
 
 
-		if (client->voice_mute[ring->sender>>3] & (1<<(ring->sender&3)))
+		if (client->voice_mute[ring->sender>>3] & (1<<(ring->sender&7)))	//FTESurf Patch 270: &7
 			send = false;
 
 		if (ring->sender == clno && !sv_voip_echo.ival)
@@ -3233,13 +3238,13 @@ void SV_Voice_Ignore_f(void)
 	switch(type)
 	{
 	case -1:
-		host_client->voice_mute[other>>3] &= ~(1<<(other&3));
+		host_client->voice_mute[other>>3] &= ~(1<<(other&7));	//FTESurf Patch 270: &7
 		break;
 	case 0:
-		host_client->voice_mute[other>>3] ^= (1<<(other&3));
+		host_client->voice_mute[other>>3] ^= (1<<(other&7));	//FTESurf Patch 270: &7
 		break;
 	case 1:
-		host_client->voice_mute[other>>3] |= (1<<(other&3));
+		host_client->voice_mute[other>>3] |= (1<<(other&7));	//FTESurf Patch 270: &7
 	}
 }
 void SV_Voice_Target_f(void)
@@ -7057,6 +7062,14 @@ static qboolean AddEntityToPmove(world_t *w, wedict_t *player, wedict_t *check)
 	pe->nonsolid = solid == SOLID_TRIGGER;
 	pe->isportal = solid == SOLID_PORTAL;
 	q1contents = (int)check->v->skin;
+	/* FTESurf Patch 280: a func_slide.  Its skin is a TAG, not a contents
+	   override -- the brush must collide exactly as a skin-0 SOLID_BSP does, so
+	   the switch below is fed 0 (safedefault: forcecontentsmask 0, solid) and
+	   only the flag byte remembers what it was.  pe is not memset (see the
+	   Patch 203 note below), so this is written on every path through here. */
+	pe->slideflags = PMSLIDE_FLAGS_FROM_SKIN((int)q1contents);
+	if (pe->slideflags)
+		q1contents = 0;
 	if (solid == SOLID_LADDER)
 		q1contents = Q1CONTENTS_LADDER;	//legacy crap
 	else if (solid == SOLID_CORPSE)

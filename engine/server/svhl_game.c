@@ -2130,6 +2130,7 @@ static void SVHL_RunCmdR(hledict_t *ed, usercmd_t *ucmd)
 				continue;
 
 			pe = &pmove.physents[pmove.numphysent];
+			pe->slideflags = 0;	/*FTESurf Patch 280: pe is not memset here; the byte must not be stale*/
 			switch(other->v.skin)
 			{
 			case Q1CONTENTS_EMPTY:

@@ -89,6 +89,7 @@ static float psintable[256];
 
 static qboolean P_LoadParticleSet(char *name, qboolean implicit, qboolean showwarning);
 static void R_Particles_KillAllEffects(void);
+static int pscript_census_last;	//FTESurf Patch 272: see PScript_LoadedCensus; reset by PScript_Shutdown
 
 static void buildsintable(void)
 {
@@ -434,6 +435,7 @@ static void FinishParticleType(part_type_t *ptype);
 static void QDECL R_ParticleDesc_Callback(struct cvar_s *var, char *oldvalue);
 
 extern cvar_t r_particledesc;
+extern cvar_t r_part_keepuser;	//FTESurf Patch 272
 extern cvar_t r_part_rain_quantity;
 extern cvar_t r_particle_tracelimit;
 extern cvar_t r_part_splashlimit;
@@ -1150,6 +1152,11 @@ void P_ParticleEffect_f(void)
 	if (!pe_script_enabled || (part_parseweak && ptype->loaded==2))
 	{
 		int depth = 1;
+		//FTESurf Patch 272: this silence cost three shipped builds -- a config
+		//exec'd from default.cfg lands here before Renderer_Start and nothing
+		//says so.  Still silent at developer 0, by design (r_part.c: "suck up
+		//stray r_part commands"), but not at developer 1.
+		Con_DPrintf("r_part %s: discarded (%s)\n", var, pe_script_enabled?"weak parse, a user-loaded effect of that name exists":"the scripted particle system is not running yet");
 		while(1)
 		{
 			buf = Cbuf_GetNext(Cmd_ExecLevel, false);
@@ -3483,6 +3490,12 @@ static qboolean PScript_InitParticles (void)
 {
 	int		i;
 
+	//FTESurf Patch 272: say which case this is.  Only "fresh" reaches the
+	//forced r_particledesc callback below, and it starts from an empty table
+	//(PScript_Shutdown frees part_type and zeroes r_numparticles together);
+	//"already inited" returns before it.  The count is here so a log reader
+	//can see that, rather than have to trust it.
+	Con_DPrintf("^5particles^7 PScript_InitParticles: %s, %i types in the table\n", r_numparticles?"already inited":"fresh", numparticletypes);
 	if (r_numparticles)	//already inited
 		return true;
 
@@ -3553,6 +3566,8 @@ static qboolean PScript_InitParticles (void)
 
 static void PScript_Shutdown (void)
 {
+	//FTESurf Patch 272: frees the whole type table, names included.
+	Con_DPrintf("^5particles^7 PScript_Shutdown: freeing %i types\n", numparticletypes);
 	pe_script_enabled = false;
 
 	if (fallback)
@@ -3600,6 +3615,7 @@ static void PScript_Shutdown (void)
 	part_type = NULL;
 	part_run_list = NULL;
 	fallback = NULL;
+	pscript_census_last = 0;	//FTESurf Patch 272: the census counts from an empty table again.
 
 	BZ_Free (particles);
 	BZ_Free (beams);
@@ -3773,25 +3789,108 @@ static qboolean P_LoadParticleSet(char *name, qboolean implicit, qboolean showwa
 	return true;
 }
 
+/*
+  FTESurf Patch 272: WHO UNLOADED THE EFFECTS.
+
+  Build 51b's effect set (particles/ftesurf.cfg, 35 types) parsed at
+  CSQC_WorldLoaded and was dead by the first active frame: r_exportalleffects
+  dumped all 35 with their names intact and EMPTY bodies, which is loaded == 0
+  (PScript_Query, above).  Names intact rules out PScript_Shutdown.  Every
+  writer of the flag was read and none can run in that window on paper, and a
+  settled-state run (ftesurf/cfg/testrun/b51e.cfg) cleared, one trigger at a
+  time, the serverinfo burst (Cvar_ForceCheatVars re-sets r_particledesc to
+  its own value, and an unchanged set never reaches the callback), a full
+  shader rescan+reload, a respawn, and an unchanged r_particledesc set.
+
+  So count instead of arguing.  This runs once per frame and from the
+  connect-sequence chokepoints (P_LoadedCensus in r_part.c) and prints only
+  when the number of loaded types CHANGES, so the log line above it is the
+  culprit.  developer 2; one integer compare per frame otherwise.
+*/
+//pscript_census_last is declared at the top of the file and reset by PScript_Shutdown, so a
+//vid_restart is blamed on its own "freeing" line and not on the next frame.
+void PScript_LoadedCensus(const char *where)
+{
+	int i, n = 0;
+	if (developer.ival < 2)
+		return;
+	for (i = 0; i < numparticletypes; i++)
+		if (part_type[i].loaded)
+			n++;
+	if (n != pscript_census_last)
+	{
+		Con_Printf("^5particles^7 loaded types %i -> %i of %i, at %s\n", pscript_census_last, n, numparticletypes, where);
+		pscript_census_last = n;
+	}
+}
+
 static void R_Particles_KillAllEffects(void)
 {
-	int i;
+	int i, kept = 0, unloaded = 0;
 	pcfg_t *cfg;
+
+	//FTESurf Patch 272: the only writer that zeroes loaded on every type and
+	//keeps the names.  Say so when it runs; the log line above names the caller.
+	//The verdict line comes AFTER the loop, so that a pass which keeps every
+	//type never reads like a kill to someone grepping for "unloaded".
+	Con_DPrintf("^5particles^7 R_Particles_KillAllEffects: %i types in the table (cls.state %i, r_particledesc \"%s\")\n", numparticletypes, cls.state, r_particledesc.string);
 
 	for (i = 0; i < numparticletypes; i++)
 	{
+		/*
+		  FTESurf Patch 272: an effect defined by an explicit `r_part` -- from
+		  the console, an exec, or a CSQC localcmd exec (config "", loaded 2)
+		  -- belongs to no set that r_particledesc names, so a change of set
+		  does not unload it.
+
+		  Without this, the four cl_parse.c sites that force this callback on
+		  every map load to pick up per-map sets (all four by the cvar's ALIAS,
+		  r_particlesdesc, which no grep for r_particledesc finds) unloaded
+		  the 35 effects the CSQC had just exec'd at CSQC_WorldLoaded, a few
+		  milliseconds earlier in CL_RequestNextDownload.  ftesurf/logs/b51e.log:
+		      loaded types 0 -> 35 of 35, at frame
+		      r_particledesc callback: "classic" -> "classic" (cls.state 3)
+		      R_Particles_KillAllEffects: unloading 35 types
+		      Sending stringcmd prespawn 1 0 0
+		      loaded types 35 -> 0 of 35, at frame
+		  Three shipped builds drew no particles because of it, and it is why
+		  the per-map psys configs read 0 particles too.  Sets (config != "")
+		  and implicitly-loaded effects (loaded 1) are reset exactly as before.
+		  r_part_keepuser 0 is the old engine.
+		*/
+		if (r_part_keepuser.ival && part_type[i].loaded == 2 && !*part_type[i].config)
+		{
+			kept++;
+			continue;
+		}
+		if (part_type[i].loaded)
+			unloaded++;	//only what was actually alive; a table that was already dead reads "unloaded 0"
 		*part_type[i].texname = '\0';
 		part_type[i].scale = 0;
 		part_type[i].loaded = 0;
-		if (part_type->ramp)
-			BZ_Free(part_type->ramp);
-		part_type->ramp = NULL;
+		if (part_type[i].ramp)	//FTESurf Patch 272: was part_type->ramp -- element 0, every iteration.
+			BZ_Free(part_type[i].ramp);
+		part_type[i].ramp = NULL;
+		//FTESurf Patch 272: a killed type can still have particles in flight,
+		//and the update loop ramps them through type->ramp with no loaded
+		//gate -- so the mode goes with the table, or the free above is a NULL
+		//dereference waiting for a ramped set to be swapped mid-map.
+		part_type[i].rampmode = RAMP_NONE;
+		part_type[i].rampindexes = 0;
 	}
+	Con_DPrintf("^5particles^7 R_Particles_KillAllEffects: unloaded %i, kept %i (r_part_keepuser %i)\n", unloaded, kept, r_part_keepuser.ival);
 //	numparticletypes = 0;
 //	BZ_Free(part_type);
 //	part_type = NULL;
 
-	f_modified_particles = false;
+	if (!kept)	//FTESurf Patch 272: a surviving console-loaded effect is still a modification.
+		f_modified_particles = false;
+
+	//FTESurf Patch 272: texnames changed, so the shared-looks aliasing at the
+	//top of PScript_DrawParticleTypes must be redone -- and that loop now skips
+	//unloaded types, so a kept type never draws through a dead one's looks
+	//after the next map's P_LoadTexture pass hands the dead one a default shader.
+	r_plooksdirty = true;
 
 	if (fallback)
 	{
@@ -3817,6 +3916,10 @@ static void QDECL R_ParticleDesc_Callback(struct cvar_s *var, char *oldvalue)
 
 	if (qrenderer == QR_NONE)
 		return; // don't bother parsing early
+
+	//FTESurf Patch 272: this callback fires only on a CHANGED value (Cvar_SetCore)
+	//or a forced callback (PScript_InitParticles, textedit).  Name the transition.
+	Con_DPrintf("^5particles^7 r_particledesc callback: \"%s\" -> \"%s\" (cls.state %i)\n", oldvalue?oldvalue:"", var->string, cls.state);
 
 	R_Particles_KillAllEffects();
 
@@ -7027,7 +7130,7 @@ static void PScript_DrawParticleTypes (void)
 			part_type[i].slooks = &part_type[i].looks;
 			for (j = i-1; j-- > 0;)
 			{
-				if (!memcmp(&part_type[i].looks, &part_type[j].looks, sizeof(plooks_t)))
+				if (part_type[j].loaded && !memcmp(&part_type[i].looks, &part_type[j].looks, sizeof(plooks_t)))	//FTESurf Patch 272: never alias a live type to a dead one's looks
 				{
 					part_type[i].slooks = part_type[j].slooks;
 					break;

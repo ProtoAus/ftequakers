@@ -82,6 +82,13 @@ static void QDECL SV_Cheats_Callback (struct cvar_s *var, char *oldvalue)
 		//off while you were still playing on your own numbers.
 		SV_LockMovementVars();
 	}
+
+	//FTESurf Patch 313: sv_cheats is the live half of SV_MovementLocked(), so
+	//*ruleset has to move with it in BOTH directions -- same argument the
+	//comment above makes for the re-latch.  Placed after the branch rather than
+	//in each arm so the two can never drift apart.
+	SV_PublishRuleset();
+
 #ifndef SERVERONLY
 	//the local client caches its own copy of serverinfo and derives
 	//cls.allow_cheats from it; without this the cvar changes and nothing that

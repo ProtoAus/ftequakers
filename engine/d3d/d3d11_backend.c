@@ -1028,6 +1028,7 @@ static texid_t T_Gen_CurrentRender(void)
 static void SelectPassTexture(unsigned int tu, const shaderpass_t *pass)
 {
 	extern texid_t r_whiteimage, missing_texture_gloss, missing_texture_normal;
+	extern texid_t r_envcubemap_tex;	//FTESurf Patch 268 B: the $envcubemap sentinel cube (gl_shader.c); declared here beside the others rather than in a header, so this stays an -Engine-only change
 	switch(pass->texgen)
 	{
 	default:
@@ -1057,7 +1058,33 @@ static void SelectPassTexture(unsigned int tu, const shaderpass_t *pass)
 		BindTexture(tu, shaderstate.curtexnums->fullbright);
 		break;
 	case T_GEN_REFLECTCUBE:
-		BindTexture(tu, shaderstate.curtexnums->reflectcube);
+		/*
+		FTESurf Patch 268 B: the $envcubemap sentinel (gl_shader.c) is a REAL loaded
+		mid-grey cube, so the bare bind below would hand it to the sampler as if it
+		were a reflection -- every sentinel surface reflecting flat grey, a WRONG
+		picture rather than a missing feature.  It means "use the batch's baked
+		cubemap", so bind that instead.
+
+		The sentinel test is the FIRST term and the old line is the else, so this is
+		a strict no-op: with no sentinel built (r_envcubemap_tex NULL) the leading
+		term is false and the bind is byte-identical to what it was, including for a
+		material whose reflectcube is itself NULL.
+
+		r_nulltex, not r_whiteimage, for the no-envmap case: unlike D3D9 this backend
+		had no fallback here at all, and r_whiteimage is a 2D image that would be the
+		wrong view type for a TextureCube slot.  r_nulltex is what this same function
+		already binds for "nothing here" (see T_GEN_DELUXMAP), and a null SRV samples
+		zero -- no reflection, which is what a sentinel with no baked cube deserves.
+		*/
+		if (r_envcubemap_tex && shaderstate.curtexnums->reflectcube == r_envcubemap_tex)
+		{
+			if (shaderstate.curbatch && TEXLOADED(shaderstate.curbatch->envmap))
+				BindTexture(tu, shaderstate.curbatch->envmap);
+			else
+				BindTexture(tu, r_nulltex);
+		}
+		else
+			BindTexture(tu, shaderstate.curtexnums->reflectcube);
 		break;
 	case T_GEN_REFLECTMASK:
 		BindTexture(tu, shaderstate.curtexnums->reflectmask);

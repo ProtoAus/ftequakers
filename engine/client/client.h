@@ -776,6 +776,15 @@ struct playerview_s
 		qboolean	jump_held;
 		int			jump_msec;		// hack for fixing bunny-hop flickering on non-ZQuake servers
 		pmsourcestate_t	pmsrc;		//FTESurf: pm_source.c duck/tick state
+		vec3_t		velocity;		//FTESurf Patch 269c: the velocity this client
+									//PREDICTED for `sequence`.  Belongs in this
+									//struct by its own definition -- under
+									//PEXT2_REPLACEMENTDELTAS the local player's
+									//velocity is not maintained in the acked
+									//playerstate, so it does NOT regenerate from
+									//networked state and has to be carried.  Read
+									//only to build the REPORTED velocity; the mover
+									//still seeds from from.state as delivered.
 
 		int			sequence;
 	} prop;
@@ -1297,6 +1306,16 @@ extern 	kbutton_t 	in_strafe;
 extern 	kbutton_t 	in_speed;
 
 extern	float in_sensitivityscale;
+/*FTESurf Patch 301: the raw-input GRANT, as opposed to the in_rawinput* cvars, which are
+  the request.  -1 means the platform backend does not report it; 0 means raw input ran and
+  bound nothing (so the legacy OS-summed path is live).  Maintained by in_win.c, declared in
+  in_generic.c -- see the essay there.*/
+extern	int in_rawmice_live;
+extern	int in_rawkbd_live;
+extern	int in_raw_injected;	/*Patch 306: WM_INPUT reports with NO device handle -- synthesized input, rejected*/
+extern	int in_raw_unenum;		/*Patch 306: ...and reports from a real device we never enumerated, also rejected*/
+extern	int in_raw_legacybtn;	/*Patch 307: legacy mouse buttons ACCEPTED with no raw corroboration -- these DID reach the game*/
+extern	int in_raw_nolegacy_live;	/*Patch 307: whether legacy mouse messages are ACTUALLY suppressed right now (-1 unknown)*/
 
 void CL_MakeActive(char *gamename);
 void CL_UpdateWindowTitle(void);
@@ -1526,6 +1545,9 @@ void CL_ParseClientPersist(void);
 //these last ones are needed for csqc handling of engine-bound ents.
 void CL_ClearEntityLists(void);
 void CL_FreeVisEdicts(void);
+//FTESurf Patch 270: received-delta counters, for the CSQC getdeltacount builtin.
+void CL_ClearDeltaCounts(void);
+unsigned int CL_GetDeltaCount(unsigned int modelindex);
 void CL_LinkViewModel(void);
 void CL_LinkPlayers (void);
 void CL_LinkPacketEntities (void);
@@ -1543,6 +1565,7 @@ qboolean CSQC_UnconnectedOkay(qboolean inprinciple);
 qboolean CSQC_UnconnectedInit(void);
 qboolean CSQC_CheckDownload(const char *name, unsigned int checksum, size_t checksize);	//reports whether we already have a usable csprogs.dat
 qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int checksum, size_t progssize);
+const char *CSQC_FailReason(void);	//ftesurf (P282): why the last CSQC_Init returned false, for the caller that knows the consequence
 qboolean CSQC_ConsoleLink(char *text, char *info);
 void	 CSQC_RegisterCvarsAndThings(void);
 qboolean CSQC_SetupToRenderPortal(int entnum);

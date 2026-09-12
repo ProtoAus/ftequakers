@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale);
+extern cvar_t pm_portalcsg_scanall;	//FTESurf Patch 283, defined in common.c
+extern cvar_t pm_skipent_portals;	//FTESurf Patch 283, defined in common.c
 int Q1BSP_HullPointContents(hull_t *hull, vec3_t p);
 static	hull_t		box_hull;
 static	mclipnode_t	box_clipnodes[6];
@@ -893,7 +895,9 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 	{
 		pe = &pmove.physents[i];
 
-		if (pe->info == pmove.skipent)
+		//FTESurf Patch 283: skipent must not be able to hide a portal. See the
+		//essay over the identical test in PM_PlayerTrace.
+		if (pe->info == pmove.skipent && !(pm_skipent_portals.ival && pe->isportal))
 			continue;
 
 		if (pe->nonsolid)
@@ -931,11 +935,23 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 					continue;
 				if (trace.allsolid)
 				{
-					for (j = i+1; j < pmove.numphysent && trace.allsolid; j++)
+					/*
+					  FTESurf Patch 283: scan ALL physents for a portal to carve
+					  with, not only those after this one. Same reasoning as the
+					  copy of this loop in PM_PlayerTrace, where the essay lives.
+					  Provably a no-op on the server; only the client's physent
+					  order differs. `pp` rather than reusing `pe`, because the
+					  old loop left `pe` pointing at the last portal it examined
+					  and that is a trap waiting for the next edit.
+					*/
+					int jstart = pm_portalcsg_scanall.ival ? 0 : i+1;
+					for (j = jstart; j < pmove.numphysent && trace.allsolid; j++)
 					{
-						pe = &pmove.physents[j];
-						if (pe->isportal)
-							PM_PortalCSG(pe, j, pmove.player_mins, pmove.player_maxs, pos, pos, &trace);
+						physent_t *pp = &pmove.physents[j];
+						if (j == i)
+							continue;
+						if (pp->isportal)
+							PM_PortalCSG(pp, j, pmove.player_mins, pmove.player_maxs, pos, pos, &trace);
 					}
 					if (trace.allsolid)
 						return false;
@@ -1018,7 +1034,29 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 
 		if (pe->nonsolid)
 			continue;
-		if (pe->info == pmove.skipent)
+		/*
+		  FTESurf Patch 283: A PORTAL IS NEVER THE ENTITY YOU MEANT TO SKIP.
+
+		  pmove.skipent exists so you do not collide with your own body (or the
+		  player you are tracking). On the client it is set from the player's
+		  SSQC entity number (cl_pred.c), while CSQC portal physents carry CSQC
+		  edict numbers (cl_ents.c) -- two unrelated numbering spaces compared
+		  with ==. cl_ents.c already documents the hazard and does nothing about
+		  it: "A CSQC portal that happened to share that number would be skipped."
+
+		  It is not hypothetical here. Portal_LoadFromWorld is the FIRST thing
+		  CSQC_WorldLoaded does, so surf_kitsune's eighteen doors take the lowest
+		  free CSQC edict numbers -- precisely the 1..maxclients range a player's
+		  skipent occupies. Which doors vanish from prediction therefore depends
+		  on WHICH PLAYER SLOT YOU JOINED IN, which is a wonderfully confusing
+		  bug and a very cheap thing to test for.
+
+		  The skip runs before the isportal branch below, so a collision removes
+		  the portal from the client's prediction entirely while the server still
+		  has it. No-op on the server, where skipent is -1 and no physent carries
+		  info -1.
+		*/
+		if (pe->info == pmove.skipent && !(pm_skipent_portals.ival && pe->isportal))
 			continue;
 		if (pe->forcecontentsmask && !(pe->forcecontentsmask & solidmask))
 			continue;
@@ -1086,10 +1124,47 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 
 			if (trace.allsolid)
 			{
-				for (j = i+1; j < pmove.numphysent && trace.allsolid; j++)
+				/*
+				  FTESurf Patch 283 -- THE ORDER-DEPENDENT PORTAL CARVE.
+
+				  We are inside a solid and looking for a portal to carve it with,
+				  so that a doorway cut through a wall is not treated as wall. The
+				  scan only ever looked FORWARD, at j > i. That is fine when the
+				  thing we are stuck in is the world (i == 0, everything is after
+				  it) and wrong for anything else -- and the two sides of the wire
+				  build their physent arrays in OPPOSITE orders:
+
+				    client  world[0], then CSQC portals, then packet entities
+				            (CL_AddCSQCPortalsToPmove, from CL_SetSolidEntities)
+				    server  world[0], then grid entities, then portals LAST
+				            (AddAllLinksToPmove -> AddPortalsToPmove)
+
+				  So for a networked brush entity the server finds every portal
+				  above it and the client finds none below it. surf_kitsune's
+				  portal doorways are cut through a func_brush, which is exactly
+				  that case: the server carves and the client does not, the client
+				  concludes it is stuck, PMSrc_CheckStuck shoves the origin 0.25
+				  to 16 units every tick, and the rendered position alternates.
+
+				  Invisible on a listen server, which is why this went unnoticed:
+				  at ~0 ping CL_PredictMovePNum replays zero commands, so the
+				  client's own pmove result is never actually used.
+
+				  A NO-OP ON THE SERVER, provably: portals are appended last, so
+				  for any non-portal i every portal already satisfies j > i; and
+				  when i IS a portal this branch is not reached at all.
+
+				  Not fixed by moving CL_AddCSQCPortalsToPmove later -- that would
+				  restore the hazard its own P203 comment names, where a map with
+				  enough networked solids to reach MAX_PHYSENTS drops the portals,
+				  which are the physents the player can least afford to lose.
+				  Fixing the SCAN removes the ordering dependence on both sides.
+				*/
+				int jstart = pm_portalcsg_scanall.ival ? 0 : i+1;
+				for (j = jstart; j < pmove.numphysent && trace.allsolid; j++)
 				{
 					pe = &pmove.physents[j];
-					if (pe->isportal)
+					if (j != i && pe->isportal)
 						PM_PortalCSG(pe, j, pmove.player_mins, pmove.player_maxs, start, end, &trace);
 				}
 				pe = &pmove.physents[i];

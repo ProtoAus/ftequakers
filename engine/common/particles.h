@@ -213,12 +213,14 @@ struct msurface_s;
 void P_InitParticleSystem(void);
 void P_ShutdownParticleSystem(void);
 void P_Shutdown(void);
+void P_LoadedCensus(const char *where);	/*FTESurf Patch 272: developer 2 census of loaded effect types, prints on change. No-op below developer 2.*/
 void P_LoadedModel(struct model_s *mod);	/*checks a model's various effects*/
 void P_DefaultTrail (unsigned int entityeffects, unsigned int modelflags, int *trailid, int *trailpalidx);
 void P_EmitEffect (vec3_t pos, vec3_t orientation[3], unsigned int modeleflags, int type, trailkey_t *tsk);//this is just a wrapper
 int P_FindParticleType(const char *efname);
 #ifdef PSET_SCRIPT
 void PScript_ClearSurfaceParticles(struct model_s *mod);
+void PScript_LoadedCensus(const char *where);	/*FTESurf Patch 272: the scripted system's half of P_LoadedCensus*/
 #endif
 
 #define P_RunParticleEffectTypeString pe->RunParticleEffectTypeString

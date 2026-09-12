@@ -1616,6 +1616,10 @@ static const char *glsl_hdrs[] =
 				"uniform vec3 e_light_dir;"
 				"uniform vec3 e_light_mul;"
 				"uniform vec3 e_light_ambient;"
+				//FTESurf Patch 268 C: Source's six-face ambient cube, +x -x +y -y +z -z in WORLD
+				//axes, for vertexlit.glsl's #BUMPCUBE.  Here and not in the u_entityinfo block
+				//above: USEUBOS is never defined, and a std140 array would reshuffle that block.
+				"uniform vec3 e_light_ambientcube[6];"
 
 				/*rtlight properties, use with caution*/
 				"uniform vec2	l_lightscreen;"

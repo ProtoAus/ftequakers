@@ -54,6 +54,7 @@ extern LPDIRECT3DDEVICE9 pD3DDev9;
 #define MAX_TC_TMUS 4
 
 extern texid_t r_whiteimage;
+extern texid_t r_envcubemap_tex;	//FTESurf Patch 268 B: the $envcubemap sentinel cube (gl_shader.c)
 extern float d3d_trueprojection_std[16];
 extern float d3d_trueprojection_view[16];
 
@@ -862,8 +863,23 @@ static void SelectPassTexture(unsigned int tu, shaderpass_t *pass)
 			BindTexture(tu, r_blackimage);
 		break;
 	case T_GEN_REFLECTCUBE:
-		if (TEXLOADED(shaderstate.curtexnums->reflectcube))
+		/*
+		FTESurf Patch 268 B: a STRICT no-op guard, and the middle arm is written the
+		long way round to keep it that way.
+
+		D3D9 never had a batch-envmap fallback, so an unconditional
+		`else if (curbatch->envmap)` would be a behaviour CHANGE on this backend
+		with every switch off -- which three reviewers flagged, correctly: the
+		promise of this patch is that all-defaults is byte-identical everywhere, not
+		just on GL.  So the batch envmap is consulted ONLY for a material carrying
+		the sentinel, which nothing emits unless hl2_envcubemap is on.  With no
+		sentinel present these three lines reduce to the two that were here before.
+		*/
+		if (TEXLOADED(shaderstate.curtexnums->reflectcube) && shaderstate.curtexnums->reflectcube != r_envcubemap_tex)
 			BindTexture(tu, shaderstate.curtexnums->reflectcube);
+		else if (r_envcubemap_tex && shaderstate.curtexnums->reflectcube == r_envcubemap_tex &&
+				 shaderstate.curbatch && TEXLOADED(shaderstate.curbatch->envmap))
+			BindTexture(tu, shaderstate.curbatch->envmap);
 		else
 			BindTexture(tu, r_whiteimage);
 		break;
@@ -2080,6 +2096,7 @@ static void BE_ApplyUniforms(program_t *prog, struct programpermu_s *perm)
 		case SP_E_NOSHADOWRECV:	//nettest: GL-only (viewmodel fake-shadow suppress); unhandled here = uniform stays 0 = normal receive (fail-safe)
 		case SP_E_SUNDIR:		//nettest: GL-only (per-entity dominant light dir); unhandled here = shader's length guard falls back to the global sun
 		case SP_E_SUNSHADE:		//nettest Patch 120c: GL-only (per-entity sun-shade fraction); unhandled here = uniform stays 0 = full sun terms (fail-safe)
+		case SP_E_L_AMBIENTCUBE:	//FTESurf Patch 268 C: GL-only (vertexlit.glsl's #BUMPCUBE); the VMT programs never bind here
 		case SP_FAKESHADOWMATRIX://nettest P110: GL-only (multi-direction fake shadow atlas); FAKESHADOWS itself is GL-only, so these never bind here
 		case SP_FAKESHADOWCELL:
 		case SP_M_INVVIEWPROJECTION:

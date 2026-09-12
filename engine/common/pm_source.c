@@ -377,6 +377,56 @@ static qboolean pms_portalcrossed;
    portals it is one early-out and nothing changes. */
 static qboolean pms_haveportals;
 
+/* ---- FTESurf Patch 280: func_slide -------------------------------------------
+
+   Momentum's slide is a TRIGGER (trigger_momentum_slide, mom_triggers.cpp:1665):
+   touching it sets m_pPlayer->m_CurrentSlideTrigger, and the mover then treats
+   the player as never grounded (SetGroundEntity, mom_gamemovement.cpp:2995-3010),
+   skips gravity if the trigger says so (:1883-1897), lets a jump through only
+   when AllowingJump && !StuckOnGround (:1971-1976, :3006) and snaps the player
+   back onto the surface at the end of the tick when StuckOnGround (:2126-2129,
+   StuckGround :2221).  The shipped game replaced the trigger with func_slide, a
+   SOLID brush whose faces ARE the slide (momentum.fgd:10041-10046 in the Steam
+   install: stayonslide / allowjump / disablegravity, the same three keys).  So
+   "touching the trigger" becomes "the ground probe hit a slide brush":
+
+     pms_anyslide     per command: pm_slide is on AND some physent is a slide.
+                      One byte scan; on the 1293 maps with no func_slide nothing
+                      below is reachable, whatever pm_slide says.
+     pms_slidecontact the flag byte of the slide face under the most recent
+                      CategorizePosition probe (0: none).
+     pms_slidetick    the same, latched once per tick after the tick's first
+                      CategorizePosition -- Momentum's trigger state is constant
+                      for a tick (touches are processed after the move), and the
+                      gravity/jump/duck/stick gates all read this one.
+
+   Nothing here is carried between ticks or commands: it is re-derived from the
+   trace every tick, so there is no new prediction state and nothing to add to
+   pmsourcestate_t. */
+static qboolean pms_anyslide;
+static int      pms_slidecontact;
+static int      pms_slidetick;
+
+static void PMSrc_StayOnGround (void);	/* defined below; TryPlayerMove's slide retrace needs it first */
+
+/* The slide flag byte of the physent a trace hit, or 0. */
+static int PMSrc_SlideFlagsOfTrace (const trace_t *tr)
+{
+	if (!pms_anyslide || tr->fraction >= 1.0f || tr->entnum <= 0 || tr->entnum >= pmove.numphysent)
+		return 0;
+	return pmove.physents[tr->entnum].slideflags;
+}
+
+/* SetGroundEntity's exception (cpp:3003-3009): the slide allows jumping, is not
+   stuck-on-ground ("stuckonground jumps instantly shoot you up slopes"), and the
+   jump is being asked for this tick -- edge-triggered, or held with autobunny. */
+static qboolean PMSrc_SlideAllowsJumpNow (int flags)
+{
+	qboolean pressed = (pmove.cmd.buttons & BUTTON_JUMP) &&
+	                   (movevars.autobunny || !(pmove.oldbuttons & BUTTON_JUMP));
+	return (flags & PMSLIDE_ALLOWJUMP) && !(flags & PMSLIDE_STAYON) && pressed;
+}
+
 /* Momentum's CloseEnough(Vector, Vector, FLT_EPSILON), which the ramp fix uses
    everywhere it asks "is this the same plane" or "is this plane empty".  An
    exact VectorCompare would do for the empty test -- a cleared vector really is
@@ -602,6 +652,12 @@ static void PMSrc_CheckVelocity (void)
 static void PMSrc_StartGravity (void)
 {
 	float ent_gravity = movevars.entgravity;
+
+	/* FTESurf Patch 280: func_slide "disablegravity".  cpp:1891-1897 returns
+	   before the base class, so basevelocity is not applied either. */
+	if (pms_slidetick & PMSLIDE_NOGRAVITY)
+		return;
+
 	if (!ent_gravity)
 		ent_gravity = 1.0;
 
@@ -615,6 +671,11 @@ static void PMSrc_StartGravity (void)
 static void PMSrc_FinishGravity (void)
 {
 	float ent_gravity = movevars.entgravity;
+
+	/* FTESurf Patch 280: cpp:1883-1889.  Also covers CheckJumpButton's own
+	   FinishGravity call, as the virtual override does in Momentum. */
+	if (pms_slidetick & PMSLIDE_NOGRAVITY)
+		return;
 
 	if (pmove.waterjumptime)
 		return;
@@ -1384,7 +1445,51 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 	}
 
 	if (allFraction == 0)
-		VectorClear (pmove.velocity);
+	{
+		/* FTESurf Patch 280, cpp:2904-2930.  A move that went nowhere is a dead
+		   stop -- except while sliding, where Momentum retraces to `end`, the
+		   destination the loop last tried (post-clip: the "wanted direction" its
+		   comment means, for the slope-to-flat seam on bhop_w1s2 where the crease
+		   logic wedges a slider against an obtuse corner): clear means go there
+		   and re-seat, anything else is the usual stop.  `end` is the loop's own,
+		   as in the reference.  It has been computed whenever a bump ran, and a
+		   bump runs whenever the entry velocity is non-zero (the only exit above
+		   :1124 on bump 0 is that zero check), hence the primal_velocity guard.
+
+		   Two things the reference does not say.  The loop's last trace of this
+		   segment ran from pmove.origin, or from the nudged fixed_origin under
+		   Patch 177 recovery; a retrace from pmove.origin can only answer
+		   differently after such a nudge, which is also the only way the
+		   reference's two traces differ, so on a plain wedge this arm is inert
+		   and honest about it.  And the one way the retrace CAN pass is the one
+		   it must not act on: a swept trace that reports clean while its end
+		   point is inside geometry, the case the unswept re-test at :1256 refuses
+		   (Patch 177, cpp:2654).  Without the same re-test this arm walked the
+		   player into the position that re-test had just rejected.  DEVIATION:
+		   the re-test is repeated here; the reference does not, and can tunnel.
+		   startsolid counts as "found something" because this engine's trace
+		   reports fraction 1 for a start in solid that gets out (Source's does
+		   not), and a move launched from inside geometry is not one to keep. */
+		if (pms_slidetick && (primal_velocity[0] || primal_velocity[1] || primal_velocity[2]))
+		{
+			pm = PMSrc_TraceHull (pmove.origin, end);
+			if (pm.fraction < 1.0f || pm.startsolid)
+				VectorClear (pmove.velocity);
+			else
+			{
+				trace_t stuck = PMSrc_TraceHull (end, end);
+				if (stuck.startsolid || stuck.fraction != 1.0f)
+					VectorClear (pmove.velocity);
+				else
+				{
+					VectorCopy (end, pmove.origin);
+					PMSrc_StayOnGround ();
+				}
+			}
+		}
+		else
+			VectorClear (pmove.velocity);
+	}
 
 	return blocked;
 }
@@ -1440,6 +1545,40 @@ static void PMSrc_StayOnGround (void)
 		if (delta > (1.0f / 64.0f))
 			VectorCopy (trace.endpos, pmove.origin);
 	}
+}
+
+/*
+==================
+PMSrc_StuckGround   (cpp:2221)   -- FTESurf Patch 280, func_slide "stayonslide"
+
+Momentum traces 8192 down and accepts only if the surface it finds is the
+trigger's own bottom face (its B-C test), so the real reach is the trigger's
+height above the surface.  A func_slide has no volume: the brush IS the surface,
+so the test is "the thing below is a stayonslide brush" and the reach is a
+constant.  64 covers every case that can arise: this only runs when the tick
+STARTED in contact (pms_slidetick), and one tick at sv_maxvelocity 3500 x
+pm_ticrate 0.015 can open at most 52.5 units of gap.
+==================
+*/
+#define PMSRC_SLIDE_STICK_DIST	64.0f
+
+static void PMSrc_StuckGround (void)
+{
+	trace_t	tr;
+	vec3_t	end;
+	float	d;
+
+	VectorCopy (pmove.origin, end);
+	end[2] -= PMSRC_SLIDE_STICK_DIST;
+	tr = PMSrc_TraceHull (pmove.origin, end);
+	if (tr.fraction >= 1.0f || tr.startsolid || !(PMSrc_SlideFlagsOfTrace (&tr) & PMSLIDE_STAYON))
+		return;
+
+	/* cpp:2286-2291: onto the surface, reject the velocity normal to it, seat. */
+	VectorCopy (tr.endpos, pmove.origin);
+	d = DotProduct (pmove.velocity, tr.plane.normal);
+	VectorMA (pmove.velocity, -d, tr.plane.normal, pmove.velocity);
+	PMSrc_StayOnGround ();
 }
 
 /*
@@ -1893,6 +2032,20 @@ static void PMSrc_CategorizePosition (void)
 	{
 		pmove.onground = false;
 		VectorClear (pmove.groundnormal);
+
+		/* FTESurf Patch 280: Momentum's slide state is the TRIGGER the player is
+		   inside, which an ascent does not leave; ours is what the ground probe
+		   found, and this arm skips the probe.  So probe anyway -- for contact
+		   only, never for ground -- or a slider crossing 140 u/s of rise (the
+		   crest of any stayonslide or disablegravity ramp) would have gravity,
+		   jump and duck fall back to their no-slide rules mid-slide.  One hull
+		   trace per tick, and only on a map that has a func_slide. */
+		pms_slidecontact = 0;
+		if (pms_anyslide)
+		{
+			pm = PMSrc_TraceHull (pmove.origin, point);
+			pms_slidecontact = PMSrc_SlideFlagsOfTrace (&pm);
+		}
 	}
 	else
 	{
@@ -1944,6 +2097,10 @@ static void PMSrc_CategorizePosition (void)
 			pm = best;
 		}
 
+		/* FTESurf Patch 280: what is under the probe.  Read AFTER the quadrant
+		   retest so a slide found under one corner counts, as it would ground. */
+		pms_slidecontact = PMSrc_SlideFlagsOfTrace (&pm);
+
 		if (pm.fraction == 1.0f || pm.plane.normal[2] < standable)
 		{
 			pmove.onground = false;
@@ -1952,6 +2109,35 @@ static void PMSrc_CategorizePosition (void)
 			/* Moving up while airborne: quarter friction.  cpp:3868. */
 			if (pmove.velocity[2] > 0.0f)
 				pmove.surfacefriction = 0.25f;
+		}
+		else if (pms_slidecontact && !PMSrc_SlideAllowsJumpNow (pms_slidecontact))
+		{
+			/* FTESurf Patch 280: a standable plane that belongs to a func_slide.
+			   Momentum's SetGroundEntity (cpp:2995-3010) is handed pm and drops
+			   it -- ground stays NULL -- unless the slide allows the jump being
+			   asked for right now, in which case grounding proceeds below so
+			   CheckJumpButton finds a floor.  surfacefriction is NOT quartered:
+			   that is the no-standable-plane arm above (cpp:1739-1747), and here
+			   there is a real surface under us.  This is the whole of "slides at
+			   shallow angles": no ground means no Friction, no WalkMove, AirMove's
+			   30 u/s cap, and gravity clipped along the face every tick.
+
+			   DELIBERATE DEVIATION, so nobody re-ports it by accident: in the
+			   reference the landing decision (cpp:1750-1865) runs first, on every
+			   slide tick, and its slope-fix adoption of the clipped NEXT-tick
+			   velocity (cpp:1857-1860) precedes the SetGroundEntity that drops
+			   the ground -- so a trigger slide re-adopts a half-gravity-projected
+			   velocity every tick it gains 2d speed, on top of both gravity
+			   half-steps.  The shipped func_slide's C++ is not public, that
+			   compounding is a quirk of the trigger's code path rather than a
+			   documented rule, and it would make the B arm's acceleration
+			   unpredictable; so the landing block is skipped here and a slide
+			   accelerates at exactly g*sin(theta) along the face.  To port the
+			   reference literally instead: delete this arm and, at the end of
+			   the Patch 176 block, before 'if (!grounded)', add
+			   'if (pms_slidecontact && !PMSrc_SlideAllowsJumpNow (pms_slidecontact)) grounded = false;'. */
+			pmove.onground = false;
+			VectorCopy (pm.plane.normal, pmove.groundnormal);
 		}
 		else
 		{
@@ -2079,7 +2265,9 @@ static qboolean PMSrc_CanUnduck (void)
 
 	VectorCopy (pmove.origin, newOrigin);
 
-	if (!pmove.onground)
+	/* Patch 280: sliding counts as grounded here (cpp:722) -- the FGD's
+	   "ducking and unducking while sliding work the same as on normal ground". */
+	if (!pmove.onground && !pms_slidetick)
 	{
 		/* Standing up in mid-air drops the origin back down by the same amount
 		   ducking raised it, so test the move that would actually happen. */
@@ -2116,7 +2304,7 @@ static void PMSrc_FinishDuck (void)
 	   the origin comes UP by the view-scaled half of the hull difference --
 	   this is the crouch-jump, and at 0.5 the box also loses the other half
 	   off the TOP. */
-	if (!pmove.onground)
+	if (!pmove.onground && !pms_slidetick)	/* Patch 280: cpp:1124, sliding ducks like ground */
 		pmove.origin[2] += PMSrc_AirDuckShift ();
 
 	/* In mid-air the eye SNAPS here.  Unlike build 40, that IS visible: the
@@ -2130,7 +2318,7 @@ static void PMSrc_FinishDuck (void)
 
 static void PMSrc_FinishUnDuck (void)
 {
-	if (!pmove.onground)
+	if (!pmove.onground && !pms_slidetick)	/* Patch 280: cpp:1065 */
 		pmove.origin[2] -= PMSrc_AirDuckShift ();
 
 	pmove.ducked = false;
@@ -2211,7 +2399,7 @@ static void PMSrc_Duck (void)
 	int buttonsChanged  = (pmove.oldbuttons ^ pmove.cmd.buttons);
 	int buttonsPressed  = buttonsChanged & pmove.cmd.buttons;
 	int buttonsReleased = buttonsChanged & pmove.oldbuttons;
-	qboolean bInAir  = !pmove.onground;
+	qboolean bInAir  = !pmove.onground && !pms_slidetick;	/* Patch 280: cpp:949-955 and :1022, "(!bIsSliding && bInAir)" -- sliding counts as ground for the duck timer */
 	qboolean bInDuck = pmove.ducked;
 	qboolean wantduck = (pmove.cmd.buttons & BUTTON_DUCK) ? true : false;
 
@@ -2780,7 +2968,15 @@ static void PMSrc_FullWalkMove (void)
 	}
 
 	if (pmove.cmd.buttons & BUTTON_JUMP)
+	{
+		/* FTESurf Patch 280, cpp:1971-1976: on a slide that allows jumping,
+		   re-categorize first so the jump test sees the ground the slide
+		   otherwise hides.  PMSrc_SlideAllowsJumpNow inside CategorizePosition
+		   is what lets it ground on this call and not on the others. */
+		if ((pms_slidetick & PMSLIDE_ALLOWJUMP) && !(pms_slidetick & PMSLIDE_STAYON))
+			PMSrc_CategorizePosition ();
 		PMSrc_CheckJumpButton ();
+	}
 	else
 		pmove.oldbuttons &= ~BUTTON_JUMP;
 
@@ -2816,6 +3012,23 @@ static void PMSrc_FullWalkMove (void)
 
 	if (pmove.onground)
 		pmove.velocity[2] = 0;
+
+	/* FTESurf Patch 280, DEVIATION, not ported: cpp:2050-2068, the reference's
+	   "fixes some inaccuracies while going up slopes" block.  After WalkMove /
+	   AirMove, while sliding, it traces old origin -> new origin, calls StepMove
+	   from the NEW origin (a second full velocity*frametime move in the same
+	   tick), restores the velocity, and keeps the StepMove result only when that
+	   straight trace was blocked (a clipped path around a corner).  It is a hack
+	   for the trigger slide's own inaccuracies, it double-moves the player in
+	   exactly the corner cases where a func_slide brush IS the geometry, and the
+	   shipped func_slide's C++ is not public; so a slide moves once per tick like
+	   everything else.  If a slider ever hangs going up a slope, this is the
+	   block to revisit. */
+
+	/* FTESurf Patch 280, cpp:2125-2129: stayonslide.  Not after a portal, for
+	   the reason StayOnGround is not (Patch 203). */
+	if ((pms_slidetick & PMSLIDE_STAYON) && !pms_portalcrossed)
+		PMSrc_StuckGround ();
 }
 
 /* ------------------------------------------------------------ stuck check */
@@ -3374,6 +3587,10 @@ static void PMSrc_Tick (void)
 	   file consults it, and the physent set does not change inside a move. */
 	pms_haveportals = PM_AnyPortals ();
 
+	/* Patch 280: cleared here so a noclip or frozen tick, which never reaches
+	   the latch below, cannot inherit the previous tick's slide. */
+	pms_slidetick = 0;
+
 	if (pmove.pm_type == PM_SPECTATOR || pmove.pm_type == PM_OLD_SPECTATOR ||
 		pmove.pm_type == PM_FLY || pmove.pm_type == PM_6DOF)
 	{
@@ -3389,6 +3606,12 @@ static void PMSrc_Tick (void)
 
 	PMSrc_CheckStuck ();
 	PMSrc_CategorizePosition ();
+
+	/* FTESurf Patch 280: latch the slide state for this tick.  Everything
+	   downstream (gravity, the jump gate, the duck hull rules, StuckGround)
+	   reads pms_slidetick, so a mid-tick re-categorize cannot change the rules
+	   half way through -- Momentum's trigger state is likewise fixed for a tick. */
+	pms_slidetick = pms_slidecontact;
 
 	PMSrc_Duck ();
 
@@ -3448,6 +3671,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	float tick = movevars.ticrate;
 	float avail;
 	int iters = 0;
+	int i;
 
 	if (tick < 0.001f)
 		tick = 0.015f;
@@ -3459,6 +3683,24 @@ void PMSrc_PlayerMove (float gamespeed)
 
 	pms_frametime = tick;
 	pms_surfed = false;
+
+	/* FTESurf Patch 280: once per command -- the physent set does not change
+	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
+	   a byte scan and nothing in the slide path is reachable. */
+	pms_anyslide = false;
+	if (movevars.slide)
+	{
+		for (i = 1; i < pmove.numphysent; i++)
+		{
+			if (pmove.physents[i].slideflags)
+			{
+				pms_anyslide = true;
+				break;
+			}
+		}
+	}
+	pms_slidecontact = 0;
+	pms_slidetick = 0;
 
 	if (pmove.surfacefriction <= 0)
 		pmove.surfacefriction = 1.0f;
@@ -4801,6 +5043,17 @@ static void PMSrc_SelfTest_f (void)
 	PMSrc_Check ("crouch-jump feet lift", PMSrc_AirDuckShift(), 8.5f, 0.001f);
 	PMSrc_Check ("standable normal", PMSrc_Standable(), 0.7f, 0.0001f);
 	PMSrc_Check ("crouch-jump reach", 57 + 1.5f + PMSrc_AirDuckShift(), 67, 0.001f);
+
+	/* --- Patch 280: the func_slide skin tag -------------------------------- */
+	PMSrc_Check ("slide skin -32 (no keys)", PMSLIDE_FLAGS_FROM_SKIN(-32), PMSLIDE_ACTIVE, 0);
+	PMSrc_Check ("slide skin -31 (stayonslide)", PMSLIDE_FLAGS_FROM_SKIN(-31), PMSLIDE_ACTIVE|PMSLIDE_STAYON, 0);
+	PMSrc_Check ("slide skin -30 (allowjump)", PMSLIDE_FLAGS_FROM_SKIN(-30), PMSLIDE_ACTIVE|PMSLIDE_ALLOWJUMP, 0);
+	PMSrc_Check ("slide skin -28 (disablegravity)", PMSLIDE_FLAGS_FROM_SKIN(-28), PMSLIDE_ACTIVE|PMSLIDE_NOGRAVITY, 0);
+	PMSrc_Check ("slide skin -25 (all three)", PMSLIDE_FLAGS_FROM_SKIN(-25), PMSLIDE_ACTIVE|7, 0);
+	PMSrc_Check ("skin -24 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(-24), 0, 0);
+	PMSrc_Check ("skin -33 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(-33), 0, 0);
+	PMSrc_Check ("ladder skin -16 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(-16), 0, 0);
+	PMSrc_Check ("skin 0 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(0), 0, 0);
 
 	/* --- restore -------------------------------------------------------- */
 	movevars = savemv;

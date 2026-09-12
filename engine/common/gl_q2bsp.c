@@ -5212,7 +5212,12 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 	mod->nummodelsurfaces = prv->cmodels[0].numsurfaces;
 
 #ifdef HAVE_CLIENT
-	prv->oldclusters[0] = prv->oldclusters[1] = -1;
+	//FTESurf Patch 277: {-1,-2}, not {-1,-1}.  A view in solid has clusters {-1,-1}
+	//and used to HIT this on the first frame of a map, returning the previous map's
+	//pvs pointer and a tree with no marks at all.  Same pair as q1bsp.c:2219.
+	prv->oldclusters[0] = -1;
+	prv->oldclusters[1] = -2;
+	prv->oldvis = NULL;
 	if (qrenderer != QR_NONE)
 	{
 		builddata_t *bd = NULL;
@@ -7646,6 +7651,61 @@ static qbyte *frustumvis;
 static vec3_t modelorg;
 static unsigned int scenesequence;
 static unsigned int vissequence;
+
+/*
+FTESurf Patch 277 -- WHOSE MARKS THE TREE HOLDS.
+
+node->visframe is one int per node and vissequence one global (bumped only inside
+the two markers below), so the world tree holds exactly ONE view's marks at a time:
+whichever view marked last.  Each recursion level has its own decompressed-pvs
+slot (curframevis[R_MAX_RECURSE]) but there is no per-level copy of the marks, so
+a cached pvs is only half of what a cache hit needs -- the other half is that the
+tree still carries the marks that pvs produced.  A mirror, portal or skyroom pass
+marks the tree from ITS cluster between two main-view frames.
+
+q23bsp_markowner says which level's cached pvs the current marks were made from:
+0 when the main view marked from its own cache (prv->oldclusters + cvis[0], or
+prv->oldvis on Q3), -1 for anything else -- a recursed view, a forcevis view, a
+mark-everything pass, or nothing yet.  The main view may skip marking only while
+this reads 0; on any other value it re-marks from its cached pvs without
+decompressing it again ("remark" below).  No sequence check is needed on top:
+every vissequence bump sits in a marker and every marker writes the owner.
+
+Same design as vbsp_markowner (mod_vbsp.c VBSP_MarkLeaves, Patch 273).  q1bsp.c
+:2211-2213 meets the same constraint by poisoning its cache on every recursed
+pass, which is correct but never hits on a map with a mirror or skyroom.  Shared
+by the Q2 and Q3 markers because they share vissequence and never both run (one
+world model, one fromgame).  q23bsp_markmodel is the model whose tree holds the
+marks, and a hit needs both: a map load poisons the per-model key (CM_LoadMap),
+but a bsp that stays referenced across a map change (precached as an entity
+model, or the same map restarted) keeps its key and its old marks, and without
+the model check a 0 left by the previous world could hit on that stale tree and
+draw nothing until the cluster changed.
+*/
+static int q23bsp_markowner = -1;
+static model_t *q23bsp_markmodel;
+
+/*
+FTESurf Patch 277: the q23bsp_markstat readout -- what each MarkLeaves call did,
+by [main view / recursed][action], printed and reset by the command.  Not gated
+by a cvar: a diagnostic that only exists when a cvar says so is not there when
+the question is asked.  Cost is one increment per call.
+*/
+enum { MS_HIT, MS_REMARK, MS_RECOMPUTE, MS_ALL, MS_FORCED, MS_COUNT };
+static unsigned int q23bsp_markstat[2][MS_COUNT];
+static unsigned int q23bsp_marked[2];	//leafs the LAST marking at that level lit (numleafs for a mark-everything).  A pre/post A/B at one vantage must agree on this number.
+#define MARKSTAT(portal,action) (q23bsp_markstat[(portal)?1:0][action]++)
+static void CM_MarkStat_f(void)
+{
+	static const char *names[MS_COUNT] = {"hit (nothing to do)", "remark (cached pvs)", "recompute (pvs+marks)", "mark everything", "forcevis"};
+	int i;
+	Con_Printf("q23bsp_markstat: %-24s %10s %10s\n", "action", "main view", "recursed");
+	for (i = 0; i < MS_COUNT; i++)
+		Con_Printf("                 %-24s %10u %10u\n", names[i], q23bsp_markstat[0][i], q23bsp_markstat[1][i]);
+	Con_Printf("                 %-24s %10u %10u\n", "leafs lit by last mark", q23bsp_marked[0], q23bsp_marked[1]);
+	Con_Printf("                 marks currently owned by level %i\n", q23bsp_markowner);
+	memset(q23bsp_markstat, 0, sizeof(q23bsp_markstat));
+}
 /*
 ===============
 R_MarkLeaves
@@ -7667,7 +7727,19 @@ qbyte *R_MarkLeaves_Q3 (model_t *mod, int clusters[2])
 	if (!portal)
 	{
 		if (prv->oldclusters[0] == clusters[0] && !r_novis.value && clusters[0] != -1)
-			return prv->oldvis;
+		{
+			/* FTESurf Patch 277: the cached pvs is ours; the marks are ours only
+			   if nothing marked the tree since we did.  A mirror or skyroom pass
+			   in between marks it from ITS cluster.  See q23bsp_markowner. */
+			if (q23bsp_markowner == 0 && q23bsp_markmodel == mod)
+			{
+				MARKSTAT(portal, MS_HIT);
+				return prv->oldvis;
+			}
+			vis = prv->oldvis;
+			MARKSTAT(portal, MS_REMARK);
+			goto remark;
+		}
 	}
 
 	// development aid to let you run around and see exactly where
@@ -7675,11 +7747,22 @@ qbyte *R_MarkLeaves_Q3 (model_t *mod, int clusters[2])
 //		if (r_lockpvs->value)
 //			return;
 
-	vissequence++;
-	prv->oldclusters[0] = clusters[0];
-
 	if (r_novis.ival || clusters[0] == -1 || !mod->vis )
 	{
+		/* FTESurf Patch 277: two things used to happen here that both broke the
+		   cache.  The key was written for EVERY level, so a recursed view (a
+		   mirror's cluster) overwrote the main view's key and the main view
+		   never hit on a mirror map.  And the main view kept a real key while
+		   holding "everything" marks, so r_novis 1 -> 0 only took effect on the
+		   next cluster change.  Neither view's everything-pass is cacheable:
+		   poison the main key (-1 is excluded from the hit test above) and let
+		   the owner say the marks are nobody's. */
+		if (!portal)
+		{
+			prv->oldclusters[0] = -1;
+			prv->oldvis = NULL;
+		}
+		vissequence++;
 		vis = NULL;
 		// mark everything
 		for (i=0,leaf=mod->leafs ; i<mod->numleafs ; i++, leaf++)
@@ -7702,35 +7785,50 @@ qbyte *R_MarkLeaves_Q3 (model_t *mod, int clusters[2])
 			r_vischain = leaf;
 #endif
 		}
+		q23bsp_markowner = -1;
+		q23bsp_marked[portal?1:0] = mod->numleafs;
+		MARKSTAT(portal, MS_ALL);
+		return vis;
 	}
-	else
+
+	vis = CM_ClusterPVS (mod, clusters[0], &curframevis[portal], PVM_FAST);
+	if (!portal)
+	{	/* FTESurf Patch 277: only the main view owns the key.  A recursed view's
+		   pvs lives in its own curframevis slot and is recomputed every pass. */
+		prv->oldclusters[0] = clusters[0];
+		prv->oldvis = vis;
+	}
+	MARKSTAT(portal, MS_RECOMPUTE);
+
+remark:
+	vissequence++;
+	q23bsp_marked[portal?1:0] = 0;
+	for (i=0,leaf=mod->leafs ; i<mod->numleafs ; i++, leaf++)
 	{
-		vis = CM_ClusterPVS (mod, clusters[0], &curframevis[portal], PVM_FAST);
-		for (i=0,leaf=mod->leafs ; i<mod->numleafs ; i++, leaf++)
+		cluster = leaf->cluster;
+		if (cluster == -1)// || !leaf->nummarksurfaces)
 		{
-			cluster = leaf->cluster;
-			if (cluster == -1)// || !leaf->nummarksurfaces)
-			{
-				continue;
-			}
-			if (vis[cluster>>3] & (1<<(cluster&7)))
-			{
+			continue;
+		}
+		if (vis[cluster>>3] & (1<<(cluster&7)))
+		{
+			q23bsp_marked[portal?1:0]++;
 #if 1
-				for (node = (mnode_t*)leaf; node; node = node->parent)
-				{
-					if (node->visframe == vissequence)
-						break;
-					node->visframe = vissequence;
-				}
-#else
-				leaf->visframe = vissequence;
-				leaf->vischain = r_vischain;
-				r_vischain = leaf;
-#endif
+			for (node = (mnode_t*)leaf; node; node = node->parent)
+			{
+				if (node->visframe == vissequence)
+					break;
+				node->visframe = vissequence;
 			}
+#else
+			leaf->visframe = vissequence;
+			leaf->vischain = r_vischain;
+			r_vischain = leaf;
+#endif
 		}
 	}
-	prv->oldvis = vis;
+	q23bsp_markowner = portal ? -1 : 0;
+	q23bsp_markmodel = mod;
 	return vis;
 }
 
@@ -7826,6 +7924,44 @@ start:
 #endif
 
 #ifdef Q2BSPS
+/*
+FTESurf Patch 277: the "no pvs, draw everything" arm of R_MarkLeaves_Q2, shared
+by the r_novis / camera-in-solid / unvised-map case and by a forcevis view whose
+forcedvis is NULL.  No current caller produces that pair: gl_rmain.c:1713-1715
+set forcevis only for a mesh that then gets a forcedvis, r_surf.c:2575 derives
+forcevis from forcedvis, and CM_ClusterPVS (:7096) never returns NULL.  The
+check is the one mod_vbsp.c:6659 has, where VBSP_ClusterPVS CAN return NULL;
+here it is defensive and costs one compare.  Marks with the CURRENT sequence,
+as before, so the walk that follows visits every node.
+
+Returns NULL, where it used to return cvis[portal].  NULL is what the Q3 arm
+returns for the same case and what CL_LinkStaticEntities reads as "no cull"
+(cl_ents.c:4789); cvis[portal] was the last pvs THIS LEVEL computed -- for a
+different cluster, or for the previous map, sized for that map's pvsbytes -- and
+static entities were culled against it while the world was drawn in full.
+
+Poisons the main view's key so the next frame cannot hit on "everything" marks:
+this is what makes r_novis 1 -> 0 take effect on the frame it is set rather than
+on the next cluster change.
+*/
+static qbyte *R_MarkAll_Q2 (model_t *mod, cminfo_t *prv, int portal)
+{
+	int i;
+	for (i=0 ; i<mod->numleafs ; i++)
+		mod->leafs[i].visframe = vissequence;
+	for (i=0 ; i<mod->numnodes ; i++)
+		mod->nodes[i].visframe = vissequence;
+	q23bsp_markowner = -1;
+	q23bsp_marked[portal?1:0] = mod->numleafs;
+	if (!portal)
+	{
+		prv->oldclusters[0] = -1;
+		prv->oldclusters[1] = -2;
+	}
+	MARKSTAT(portal, MS_ALL);
+	return NULL;
+}
+
 qbyte *R_MarkLeaves_Q2 (model_t *mod, int viewclusters[2])
 {
 	static pvsbuffer_t	curframevis[R_MAX_RECURSE];
@@ -7844,38 +7980,58 @@ qbyte *R_MarkLeaves_Q2 (model_t *mod, int viewclusters[2])
 	{
 		vis = cvis[portal] = r_refdef.forcedvis;
 
-		prv->oldclusters[0] = -1;
-		prv->oldclusters[1] = -1;
+		/* FTESurf Patch 277: -2 in the second slot, not -1.  A view in solid has
+		   clusters {-1,-1}; a sentinel it can equal is a cache hit on marks that
+		   were never made for it.  q1bsp.c:2219 uses the same pair.
+
+		   Only the level-0 forced view (r_voidvis's, Surf_DrawWorld) poisons: it
+		   overwrote cvis[0], which the key describes.  A recursed forced pass (a
+		   water portal's refraction) wrote cvis[portal], and the owner write at
+		   the end already makes the next main view re-mark; poisoning here too
+		   made it recompute every frame on any Q2 map with a water portal. */
+		if (!portal)
+		{
+			prv->oldclusters[0] = -1;
+			prv->oldclusters[1] = -2;
+		}
+		if (!vis)
+			return R_MarkAll_Q2(mod, prv, portal);
+		MARKSTAT(portal, MS_FORCED);
 	}
 	else
 	{
 		vis = cvis[portal];
-		if (!portal)
+		if (!portal && !r_novis.ival)
 		{
 			if (prv->oldclusters[0] == viewclusters[0] && prv->oldclusters[1] == viewclusters[1])
-				return vis;
+			{
+				/* FTESurf Patch 277: the cached pvs is ours (the key is written
+				   only together with cvis[0], below).  The marks are ours only
+				   while nothing marked the tree since we did; a mirror, portal or
+				   skyroom pass in between marked it from ITS pvs.  Then re-mark
+				   from the cached pvs -- no decompression -- instead of walking
+				   the tree with someone else's marks.  See q23bsp_markowner.
 
-			prv->oldclusters[0] = viewclusters[0];
-			prv->oldclusters[1] = viewclusters[1];
-		}
-		else
-		{
-			prv->oldclusters[0] = -1;
-			prv->oldclusters[1] = -1;
+				   This used to poison the key on every recursed pass (which is
+				   Q1's answer and was correct) EXCEPT that the poison was {-1,-1},
+				   which a main view in solid matches: that frame walked the tree
+				   with the recursed view's marks.  !r_novis.ival on the hit test
+				   is Q3's and Q1's rule, so r_novis 1 takes effect at once. */
+				if (q23bsp_markowner == 0 && q23bsp_markmodel == mod)
+				{
+					MARKSTAT(portal, MS_HIT);
+					return vis;
+				}
+				MARKSTAT(portal, MS_REMARK);
+				goto remark;
+			}
 		}
 
 		if (r_novis.ival == 2)
-			return vis;
+			return vis;		//locked: whatever marks the tree holds stay, for every view, and the key is left alone
 
 		if (r_novis.ival || r_viewcluster == -1 || !mod->vis)
-		{
-			// mark everything
-			for (i=0 ; i<mod->numleafs ; i++)
-				mod->leafs[i].visframe = vissequence;
-			for (i=0 ; i<mod->numnodes ; i++)
-				mod->nodes[i].visframe = vissequence;
-			return vis;
-		}
+			return R_MarkAll_Q2(mod, prv, portal);
 
 		if (viewclusters[1] != viewclusters[0])	// may have to combine two clusters because of solid water boundaries
 		{
@@ -7885,9 +8041,21 @@ qbyte *R_MarkLeaves_Q2 (model_t *mod, int viewclusters[2])
 		else
 			vis = CM_ClusterPVS (mod, viewclusters[0], &curframevis[portal], PVM_FAST);
 		cvis[portal] = vis;
+		if (!portal)
+		{	/* FTESurf Patch 277: the key is written HERE, beside the pvs it
+			   describes, and only by the main view.  It used to be written at
+			   the top for any level -- before the paths that return without
+			   computing a pvs, so a key could describe a cvis[0] that was never
+			   made for it -- and a recursed view used to poison it. */
+			prv->oldclusters[0] = viewclusters[0];
+			prv->oldclusters[1] = viewclusters[1];
+		}
+		MARKSTAT(portal, MS_RECOMPUTE);
 	}
 
+remark:
 	vissequence++;
+	q23bsp_marked[portal?1:0] = 0;
 
 	for (i=0,leaf=mod->leafs ; i<mod->numleafs ; i++, leaf++)
 	{
@@ -7896,6 +8064,7 @@ qbyte *R_MarkLeaves_Q2 (model_t *mod, int viewclusters[2])
 			continue;
 		if (vis[cluster>>3] & (1<<(cluster&7)))
 		{
+			q23bsp_marked[portal?1:0]++;
 			node = (mnode_t *)leaf;
 			do
 			{
@@ -7906,6 +8075,8 @@ qbyte *R_MarkLeaves_Q2 (model_t *mod, int viewclusters[2])
 			} while (node);
 		}
 	}
+	q23bsp_markowner = (!portal && !r_refdef.forcevis) ? 0 : -1;
+	q23bsp_markmodel = mod;
 	return vis;
 }
 static void Surf_RecursiveQ2WorldNode (mnode_t *node)
@@ -8066,6 +8237,9 @@ void CM_Init(void)	//register cvars.
 	Cvar_Register(&map_autoopenportals, MAPOPTIONS);
 	Cvar_Register(&q3bsp_surf_meshcollision_flag, MAPOPTIONS);
 	Cvar_Register(&q3bsp_surf_meshcollision_force, MAPOPTIONS);
+#ifdef HAVE_CLIENT
+	Cmd_AddCommandD("q23bsp_markstat", CM_MarkStat_f, "FTESurf Patch 277: how many Q2/Q3 MarkLeaves calls hit their vis cache, re-marked from it, recomputed, or marked everything, split main view / recursed views; prints and resets.");
+#endif
 	Cvar_Register(&q3bsp_mergeq3lightmaps, MAPOPTIONS);
 	Cvar_Register(&q3bsp_ignorestyles, MAPOPTIONS);
 	Cvar_Register(&q3bsp_bihtraces, MAPOPTIONS);

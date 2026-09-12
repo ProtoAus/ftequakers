@@ -40,11 +40,14 @@ extern texid_t missing_texture_normal;
 extern texid_t scenepp_postproc_cube;
 extern texid_t r_whiteimage;
 extern texid_t r_blackimage;	//nettest: SUNVIS fallback — black = zero sun occlusion = shadows behave as before
+extern texid_t r_envcubemap_tex;	//FTESurf Patch 268 B: the $envcubemap sentinel cube (gl_shader.c)
 
 //FTESurf Patch: declared here rather than in render.h, following the texid_t
 //externs directly above.  Two backends and renderer.c is not worth a header
 //change, which would turn a -Engine build of a shared tree into a -Full one.
 extern cvar_t r_reflectcube;
+extern cvar_t r_envcubemap;			//FTESurf Patch 268 B: runtime gate for sentinel-only reflections
+extern cvar_t r_reflectcube_nosky;	//FTESurf Patch 268 B: neutral grey instead of sky/black when the batch envmap is missing
 
 /*
 FTESurf Patch: the census behind r_reflectcube, and it is the CONSUMER that is
@@ -59,6 +62,17 @@ over a second of frames is a clear signal and costs one increment per batch.
 */
 int r_reflectcube_used;		//batches that took a cubemap reflection
 int r_reflectcube_gated;	//batches that would have, and were stopped
+//FTESurf Patch 268 B: the same pair for the $envcubemap sentinel alone, so
+//"the ramp reflects now" is a countable subset of the line above rather than a
+//number that moved for some other reason.
+int r_envcubemap_used;		//of those, ones whose reflectcube was the sentinel
+int r_envcubemap_gated;		//sentinel batches stopped by r_envcubemap 0
+//FTESurf Patch 268 C: uploads of a non-empty ambient cube, and the ones r_cubelight 0 replaced
+//with zeros.  Counted per uniform upload rather than per batch, so read it as a 0-versus-not-0
+//falsifier, not a tally.  The cvar is declared here beside its counters for the reason above.
+extern cvar_t r_cubelight;
+int r_cubelight_used;
+int r_cubelight_gated;
 
 #ifdef GLQUAKE
 static texid_t shadowmap[3];
@@ -1455,10 +1469,23 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 		t = (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->fullbright)) ? shaderstate.curtexnums->fullbright : r_nulltex;	//nettest: guard the curtexnums deref like every other T_GEN_* case — an unresolved Source material/prop skin on frame 1 has curtexnums==NULL and crashed here
 		break;
 	case T_GEN_REFLECTCUBE:
-		if (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->reflectcube))
+		/*
+		FTESurf Patch 268 B: same chain as before, with two arms inserted.
+
+		The sentinel (`reflectcube "$envcubemap"`, gl_shader.c) is a real loaded
+		cube, so the first test would otherwise bind mid-grey and stop.  It means
+		"use the batch's baked cubemap", so skip it and fall through.
+
+		r_reflectcube_nosky 0 is the old second line EXACTLY -- an envmap that is
+		still loading (or failed) binds GL name 0 and samples black, and a NULL one
+		falls to the sky.  1 sends both of those to the neutral grey instead.
+		*/
+		if (shaderstate.curtexnums && TEXLOADED(shaderstate.curtexnums->reflectcube) && shaderstate.curtexnums->reflectcube != r_envcubemap_tex)
 			t = shaderstate.curtexnums->reflectcube;
-		else if (shaderstate.curbatch->envmap)
+		else if (shaderstate.curbatch->envmap && (TEXLOADED(shaderstate.curbatch->envmap) || !r_reflectcube_nosky.ival))
 			t = shaderstate.curbatch->envmap;
+		else if (r_reflectcube_nosky.ival && r_envcubemap_tex)
+			t = r_envcubemap_tex;
 		else
 			t = shaderstate.tex_reflectcube;
 		break;
@@ -4313,6 +4340,50 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			else
 				qglUniform3fvARB(ph, 1, (float*)shaderstate.curentity->light_avg);
 			break;
+		case SP_E_L_AMBIENTCUBE:
+			/*
+			FTESurf Patch 268 C: Source's six-face ambient cube, +x -x +y -y +z -z in world
+			axes, for vertexlit.glsl's #BUMPCUBE ratio.  r_cubelight 0 uploads zeros, and the
+			shader's (cube(n_bump)+e)/(cube(n_geom)+e) is then e/e, exactly 1.0 -- so the gate
+			is bit-exact without a second permutation.  The entity field is zero on anything
+			the hl2 plugin did not fill (R_CalcModelLighting clears it), which gives the same
+			exact 1.0.  Counted only when there is a cube to act on, so used=0 gated=0 means
+			"nothing here carries one" rather than "the gate did nothing".
+			*/
+			{
+				static const float zerocube[6*3];
+				const float *cube = (const float*)shaderstate.curentity->light_cube;
+				int k;
+				for (k = 0; k < 6*3 && !cube[k]; k++)
+					;
+				if (k < 6*3)
+				{
+					if (r_cubelight.ival)
+					{
+						r_cubelight_used++;
+						//r_cubelight 2: a synthetic cube, lit hard from above and nearly black
+						//below, on every entity that has a real one.  It answers the one question
+						//the map's own cube cannot: does the bumped-normal path work at all?  A
+						//leaf cube can be close to uniform, and then a working ratio and a broken
+						//one draw the same picture.  A diagnostic, never a look.
+						if (r_cubelight.ival == 2)
+						{
+							static const float testcube[6*3] = {
+								0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
+								0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
+								1.00f,1.00f,1.00f,	0.02f,0.02f,0.02f};
+							cube = testcube;
+						}
+					}
+					else
+					{
+						r_cubelight_gated++;
+						cube = zerocube;
+					}
+				}
+				qglUniform3fvARB(ph, 6, cube);
+			}
+			break;
 
 		case SP_E_TIME:
 			qglUniform1fARB(ph, shaderstate.curtime);
@@ -4374,7 +4445,14 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		perm |= PERMUTATION_FULLBRIGHT;
 	if ((TEXLOADED(shaderstate.curtexnums->loweroverlay) || TEXLOADED(shaderstate.curtexnums->upperoverlay)))
 		perm |= PERMUTATION_UPPERLOWER;
-	if (r_refdef.globalfog.density)
+	/*FTESurf Patch 297: the same 2D guard as BE_ProglessFogBegin, on the GLSL
+	  side.  sys/fog.h applies the identical linear term, so a 2D shader that
+	  DOES carry a program -- and every 2D draw in a core-profile context, which
+	  the fixed-function path cannot reach at all -- picks up the same
+	  (1-f)*fogcolour lift from a negative fogstart.  Fixing only the
+	  fixed-function path would leave the bug alive wherever there is a program,
+	  i.e. exactly where the renderer is going.*/
+	if (r_refdef.globalfog.density && !shaderstate.force2d)
 		perm |= PERMUTATION_FOG;
 //	if (TEXLOADED(shaderstate.curtexnums->bump) && shaderstate.curbatch->lightmap[0] >= 0 && lightmap[shaderstate.curbatch->lightmap[0]]->hasdeluxe)
 //		perm |= PERMUTATION_DELUXE;
@@ -4406,16 +4484,45 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	trusted to have happened.  perm is masked against supportedpermutations two
 	lines on and simply selects an already-compiled permutation, so this costs
 	one integer test per batch and caches nothing.
+
+	FTESurf Patch 268 B adds a SECOND switch inside the same test, for exactly
+	the same staleness reason.  A material whose reflectcube is the $envcubemap
+	sentinel (gl_shader.c) named no texture of its own: the hl2 plugin emitted it
+	for a literal $envmap "env_cubemap", and T_GEN_REFLECTCUBE will bind the
+	batch's baked cubemap for it.  Those are the batches Part B turns on, so
+	r_envcubemap gates them alone -- 0 restores the pre-268-B picture on a live
+	map, which hl2_envcubemap 0 cannot do (defaulttextures outlives a
+	regenerate).  The outer test, and everything r_reflectcube 0 does, is
+	unchanged; a sentinel batch is counted in BOTH used counters.
 	*/
 	if ((TEXLOADED(shaderstate.curtexnums->reflectcube) || TEXLOADED(shaderstate.curtexnums->reflectmask)))
 	{
-		if (r_reflectcube.ival)
+		/*
+		"Sentinel" here means a batch Part B actually turned ON, which is NOT the
+		same as "carries the sentinel image", and the difference is the reflectmask.
+
+		A material with $envmapmask AND $envmap "env_cubemap" already reflected
+		before this patch: mat_vmt.c emits the reflectmask unconditionally, and a
+		loaded reflectmask alone passes the outer test.  Part B additionally hands
+		it the sentinel, so without the !TEXLOADED(reflectmask) term below,
+		r_envcubemap 0 would switch that population off too -- and it is supposed to
+		mean "the pre-268-B picture", which for those materials is reflecting.  The
+		test also keeps the counters honest: envcube used/gated then counts only the
+		batches whose reflection is new.
+		*/
+		qboolean sentinel = (r_envcubemap_tex && shaderstate.curtexnums->reflectcube == r_envcubemap_tex &&
+							 !TEXLOADED(shaderstate.curtexnums->reflectmask));
+		if (!r_reflectcube.ival)
+			r_reflectcube_gated++;
+		else if (sentinel && !r_envcubemap.ival)
+			r_envcubemap_gated++;
+		else
 		{
 			perm |= PERMUTATION_REFLECTCUBEMASK;
 			r_reflectcube_used++;
+			if (sentinel)
+				r_envcubemap_used++;
 		}
-		else
-			r_reflectcube_gated++;
 	}
 #if MAXRLIGHTMAPS > 1
 	if (shaderstate.curbatch->lightmap[1] >= 0)
@@ -5198,8 +5305,68 @@ reported bug needs and is recorded as the follow-up rather than guessed at here.
 A silent approximation is the failure mode this patch series keeps having to
 undo, so the decline is loud.
 
-2D is safe without a guard: it draws at an eye-space depth of ~0, where both
-fog modes give a factor of 1, i.e. no fog.
+FTESurf Patch 297: 2D IS NOT SAFE WITHOUT A GUARD.  The claim that used to sit
+here -- "it draws at an eye-space depth of ~0, where both fog modes give a
+factor of 1, i.e. no fog" -- is true only for a POSITIVE fog start.  Linear fog
+is f = (end - z)/(end - start), so at z~0 it is f = end/(end - start), which is
+1 only when start is 0 or positive.  A NEGATIVE start makes f < 1 at zero depth
+and every program-less 2D quad on the screen picks up (1-f)*fogcolour.
+
+Source maps set a negative fogstart freely.  surf_tensor2's env_fog_controller
+is fogstart -2500, fogend 15000, fogcolor 41 66 90, and :5338 below passes
+depthbias to GL_FOG_START verbatim, so:
+
+    f     = 15000 / (15000 - (-2500)) = 0.857143
+    added = (1 - f) * (41,66,90)      = (5.86, 9.43, 12.86)  ->  (6,9,13)
+
+added to every console glyph, HUD quad and menu element, with no free parameter
+to tune it away.  Measured at (6,9,13) exactly on a frozen scene, and matching
+fogcolour x 0.142857 on all three channels -- a blue-dominant residue no font,
+blend mode or atlas defect can produce, since those can only scale the text
+colour.  Of 1339 library maps, seven have fogenable, maxdensity >= 1 and a
+negative fogstart; surf_tensor2 is by far the worst and surf_tensor's -100 is
+0.2/255, which is why the original Patch 273 control never showed it.
+
+The guard is one line and the field was already here (:160, set at :513, used
+at :3281 and :5364).  Nothing drawn in 2D has a world-space depth to fog.
+
+THE OTHER HALF -- FIXED IN PATCH 300, not here.  An ADDITIVE scene pass has the
+same problem for a different reason.  Fixed-function fog mixes toward
+GL_FOG_COLOR on RGB, so on a gl_one/gl_one pass a black texel becomes the fog
+colour and is then ADDED -- which is why light_glow02/03 show their whole
+texture square faintly lit rather than masked.
+
+CORRECTION, and it is the reason this note is being rewritten rather than
+ticked off: THIS COMMENT HAD THE SHADER CLASS WRONG.  light_glow02.vmt,
+light_glow03.vmt and xen_ray_3.vmt are class "Sprite" (mat_vmt.c's Sprite arm),
+not UnlitGeneric.  Only light_glow02_add_noz.vmt -- the env_lightglow material,
+hardcoded in cl_sprites.qc -- is UnlitGeneric.  The error was invisible for as
+long as the sentence only had to explain the artefact, because BOTH arms emit a
+program-less pass and both show it; it became load-bearing the moment a fix had
+to name an arm, and a patch written from this sentence would have corrected 166
+of surf_tensor2's 429 glows and left 263 on screen.
+
+Patch 300 takes the OTHER route named below -- give those materials a real
+top-level program, so they leave this path entirely and reach sys/fog.h's
+fog4additive(), which fades toward black.  That is better than forcing
+GL_FOG_COLOR black here: it also works on a core profile, where this function is
+not called at all, and it lets $nofog and the exact $alphatestreference finally
+reach materials that have been computing both and discarding them.  Gating it on
+the material being additive is what keeps Patch 266's surf_boreas clouds out of
+it -- cloods.vmt has its $additive line commented out and is alpha-blended, so
+it stays on this path exactly as before.
+
+r_fog_progless 0 was never the fix for either half -- it re-breaks exactly what
+Patch 266 exists for.
+
+DO NOT CARRY THE SEVEN-MAP CENSUS ABOVE OVER TO THAT HALF.  The negative start
+is what makes the 2D half visible, because 2D sits at depth ~0 and needs f < 1
+THERE.  An additive pass needs no such thing: f < 1 at any distance under any
+fog, so (1-f)*fogcolour is added to a texel that should contribute nothing, and
+a positive start only moves where it begins.  Measured at 46.1% of pixels on
+surf_tensor2 with sprites on.  The 2D half is 7 of 1339 maps; the additive half
+is every fogged map that draws additive sprites, ~303 env_fog_controllers.  It
+is the larger bug of the two and it is still open.
 */
 static qboolean BE_ProglessFogBegin(void)
 {
@@ -5207,6 +5374,8 @@ static qboolean BE_ProglessFogBegin(void)
 	static qboolean moaned = false;
 	float col[4];
 
+	if (shaderstate.force2d)
+		return false;	//Patch 297: 2D has no world depth to fog.  See above.
 	if (!r_refdef.globalfog.density || !r_fog_progless.ival)
 		return false;
 	if (shaderstate.curshader->prog)

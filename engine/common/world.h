@@ -420,6 +420,7 @@ void SV_SetSourceMoveVars(void);	//FTESurf: pm_source.c parameters, refreshed pe
 void SV_ReportMoveVars(void);		//FTESurf: the once-per-map-load movement banner (Patch 133)
 void SV_LockMovementVars(void);		//FTESurf: restore the locked movement ruleset (Patch 170)
 void SV_HookMovementLock(void);		//FTESurf: arm the lock's per-cvar callbacks (Patch 170)
+void SV_PublishRuleset(void);		//FTESurf: write the *ruleset serverinfo key, the half of the lock predicate QC cannot derive (Patch 313)
 void SV_ApplyGamemode(const char *mapname);	//FTESurf: pick this map's ruleset (Patch 224)
 void SV_Movement_f(void);			//FTESurf: the `movement` console handle (Patch 224)
 void WPhys_RunNewmis (world_t *w);

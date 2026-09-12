@@ -110,6 +110,18 @@ cvar_t	pm_trisoup_bevels		= CVARFD("pm_trisoup_bevels", "1", CVAR_SERVERINFO, "F
 //which is map data, not code.  Measure it before porting a mover against it.
 cvar_t	pm_ladderprobe			= CVARFD("pm_ladderprobe", "0", CVAR_NOSAVE, "FTESurf Patch 260, temporary instrument. Fire the ladder-detection traces a Source-mode mover would fire, at the point in PMSrc_Tick where the ladder hook would live, and print what each one sees: a zero-length box trace at the origin and a forward trace, each run under MASK_PLAYERSOLID, under MASK_PLAYERSOLID|LADDER, and under an all-bits mask, plus PM_ExtraBoxContents for the entity path. Answers three questions at once -- does a ladder brush exist here, does the default mask hit it, and does trace.contents carry the LADDER bit when it does. 4Hz, and it prints even when nothing is hit so a negative is legible.");
 cvar_t	scr_usekfont			= CVARD("scr_usekfont"/*kex*/, "0", "Exists for compat with the quake rerelease, changing the behaviour of QC's sprint/bprint/centerprint builtins.");
+
+/*
+  FTESurf Patch 283 -- the two halves of the portal-doorway rubber-band.
+
+  Both default 0, i.e. today's behaviour byte for byte, and BOTH ARE PROVABLY
+  NO-OPS ON THE SERVER -- see the essays at their use sites in pmovetst.c. Only
+  the client's prediction can change, which is exactly where the bug lives:
+  at ~0 ping the client replays zero commands and any pmove disagreement is
+  arithmetically invisible, so this only ever showed up on a real server.
+*/
+cvar_t	pm_portalcsg_scanall	= CVARFD("pm_portalcsg_scanall", "0", CVAR_SERVERINFO, "FTESurf Patch 283. When a solid goes allsolid, look for a portal to carve it with among ALL physents rather than only those after it in the array. The client builds portals BEFORE packet entities and the server builds them LAST, so a forward-only scan means a networked brush entity can be carved on the server and not on the client -- which is a per-tick position disagreement exactly in a portal doorway. 0 restores the forward-only scan.");
+cvar_t	pm_skipent_portals		= CVARFD("pm_skipent_portals", "0", CVAR_SERVERINFO, "FTESurf Patch 283. Never let pmove.skipent skip a SOLID_PORTAL. skipent is the player's own entity number so that you do not collide with yourself, but on the client it is an SSQC number compared against CSQC edict numbers, so a portal that happens to share the number vanishes from prediction entirely. A portal is never the entity you are trying to skip. 0 restores the old test.");
 #endif
 
 qboolean	com_modified;	// set true if using non-id files
@@ -6878,6 +6890,8 @@ void COM_Init (void)
 	Cvar_Register (&pm_dispprobe, NULL);	//Patch 256, temporary
 	Cvar_Register (&pm_trisoup_bevels, NULL);	//Patch 258
 	Cvar_Register (&pm_ladderprobe, NULL);	//Patch 260, temporary
+	Cvar_Register (&pm_portalcsg_scanall, NULL);	//Patch 283
+	Cvar_Register (&pm_skipent_portals, NULL);		//Patch 283
 #endif
 	Cvar_Register (&com_highlightcolor, "Internationalisation");
 	com_parseutf8.ival = 1;

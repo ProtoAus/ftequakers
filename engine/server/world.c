@@ -1327,9 +1327,15 @@ static trace_t World_ClipMoveToEntity (world_t *w, wedict_t *ent, vec3_t eorg, v
 	}
 	else if (solid == SOLID_CORPSE && w->usesolidcorpse)
 		goto scorpse;
-	else if (ent->v->skin < 0)
+	else if (ent->v->skin < 0 && !PMSLIDE_FLAGS_FROM_SKIN((int)ent->v->skin))
 	{	//if forcedcontents is set, then ALL brushes in this model are forced to the specified contents value.
 		//we achive this by tracing against ALL then forcing it after.
+		//FTESurf Patch 280: a func_slide's skin (PMSLIDE_SKIN_MIN..MAX, pmove.h) is a
+		//tag for pm_source.c, not a contents value, and is excluded above so the
+		//brush traces exactly as a skin-0 brush.  Left in, it would take safedefault
+		//below -- forcedcontents 0, a clean miss -- and every server-side trace
+		//(QC traceline/tracebox, the save-loc floor probe, run_eyeinfo) would fall
+		//straight through the thing the player is sliding on.
 		int forcedcontents;
 		safeswitch((enum q1contents_e)(int)ent->v->skin)
 		{
@@ -2259,9 +2265,11 @@ static unsigned int World_ContentsOfLinks (world_t *w, areagridlink_t *node, vec
 		else
 			c = model->funcs.PointContents(model, NULL, pos_l);
 
-		if (c && touch->v->skin < 0)
+		if (c && touch->v->skin < 0 && !PMSLIDE_FLAGS_FROM_SKIN((int)touch->v->skin))
 		{	//if forcedcontents is set, then ALL brushes in this model are forced to the specified contents value.
 			//we achive this by tracing against ALL then forcing it after.
+			//FTESurf Patch 280: same exclusion as World_ClipMoveToEntity -- a slide tag
+			//would otherwise read as EMPTY to pointcontents().
 			unsigned int forcedcontents;
 			safeswitch((enum q1contents_e)(int)touch->v->skin)
 			{

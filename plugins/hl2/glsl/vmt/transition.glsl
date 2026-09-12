@@ -60,6 +60,24 @@
 #define ALPHA 1.0
 #endif
 
+//FTESurf Patch 268 B: $envmaptint / $envmapsaturation / $envmapcontrast.  This
+//shader is the one VMT program that never applied any of them -- its envmap block
+//added the raw cube sample -- so it never needed the defaults either.  They live
+//here now, in the same spelling lightmapped.glsl uses (mat_vmt.c emits
+//"#ENVTINT=%f,%f,%f" and "#ENVSAT=%f,%f,%f"), and each default is the identity:
+//tint 1, saturation 1, contrast 0 reproduce today's picture exactly.
+#ifndef ENVTINT
+#define ENVTINT 1.0,1.0,1.0
+#endif
+
+#ifndef ENVSAT
+#define ENVSAT 1.0,1.0,1.0
+#endif
+
+#ifndef ENVCONTRAST
+#define ENVCONTRAST 0.0
+#endif
+
 varying vec2 tex_c;
 varying vec4 vex_color;
 
@@ -299,6 +317,40 @@ varying vec2 lm1, lm2, lm3;
 		vec4 normal_f = vec4(0.0,0.0,1.0,0.0);
 	#endif
 
+	//FTESurf Patch 268 B: Source's own mask defaults, under #ENVSRCMASK.
+	//  no mask key at all      -> specularFactor stays 1.0.  vNormal's default is
+	//                             float4(0,0,1,1) (lightmappedgeneric_ps2_3_x.h:205),
+	//                             so even the bNormalMapAlphaEnvmapMask-without-a-
+	//                             bumpmap arm at :396-399 reads 1.0
+	//  $basealphaenvmapmask    -> 1.0 - blendedAlpha, i.e. 1.0 - diffuse_f.a here --
+	//                             and on THIS shader diffuse_f.a is already the
+	//                             lerp of the two base alphas by `blend`, which is
+	//                             exactly Source's blendedAlpha (:334, :408-411,
+	//                             "Reversing alpha blows!").  Source inverts this
+	//                             one and only this one
+	//  $normalmapalphaenvmapmask -> the normalmap's alpha, uninverted (:391-394), and
+	//                             only when there is a normalmap to read it from
+	#ifdef ENVSRCMASK
+		#if defined(ENVFROMMASK)
+			//We have a dedicated reflectmask
+			#define refl texture2D(s_reflectmask, tex_c).r
+		#else
+			#if defined(ENVFROMBASE)
+				#define refl 1.0 - diffuse_f.a
+			#else
+				#if defined(ENVFROMNORM) && defined(BUMP)
+					//ftesurf (P251): normal_f.a rather than a second fetch -- it may
+					//be a $seamless_scale projection and/or a $bumpmap2 blend that a
+					//plain tex_c re-fetch would not reproduce.
+					#define refl normal_f.a
+				#else
+					#define refl 1.0
+				#endif
+			#endif
+		#endif
+	//FTESurf Patch 268 B: without #ENVSRCMASK the arms below are today's, verbatim.
+	#else
+
 	#if defined(ENVFROMMASK)
 		/* We have a dedicated reflectmask */
 		#define refl texture2D(s_reflectmask, tex_c).r
@@ -321,10 +373,37 @@ varying vec2 lm1, lm2, lm3;
 		#endif
 	#endif
 
+	//FTESurf Patch 268 B: end of the ENVSRCMASK wrapper.
+	#endif
+
 		vec3 cube_c = reflect(normalize(-eyevector), normal_f.rgb);
 		cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];
 		cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;
+	//FTESurf Patch 268 B: Source's envmap term, under #ENVSRCSPEC --
+	//    spec  = cube * mask;
+	//    spec *= tint;
+	//    spec  = lerp(spec, spec*spec, contrast);
+	//    spec  = lerp(luma(0.299,0.587,0.114), spec, saturation);
+	//(lightmappedgeneric_ps2_3_x.h:553-561).  This shader applies NONE of the three
+	//today -- it adds the raw cube sample -- so the whole chain, and the ENVTINT /
+	//ENVSAT / ENVCONTRAST defaults it now carries, arrive together under this switch.
+	//ENVSRCPOST is a no-op here: this shader already adds after the lightmap multiply
+	//(:263), which is where Source adds it too.
+	//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
+	//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+	#ifdef ENVSRCSPEC
+		vec3 cube_tint = vec3(ENVTINT);
+		vec3 cube_sat = vec3(ENVSAT);
+		vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);
+		spec *= cube_tint;
+		spec = mix(spec, spec*spec, float(ENVCONTRAST));
+		spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);
+		diffuse_f.rgb += spec;
+	//FTESurf Patch 268 B: without #ENVSRCSPEC, today's line, verbatim.
+	#else
 		diffuse_f.rgb += (textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl));
+	//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
+	#endif
 #endif
 
 		//AFTER the envmap block on purpose: `refl` above is 1.0 - diffuse_f.a,
@@ -337,7 +416,15 @@ varying vec2 lm1, lm2, lm3;
 #ifdef NOFOG
 		gl_FragColor = diffuse_f;
 #else
-		gl_FragColor = fog4(diffuse_f);
+		//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+		//fog4() multiplies by regularcolour.a, which on a Source material is a
+		//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+		//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+		#if #include "cvar/hl2_fog_alphamul"
+			gl_FragColor = fog4(diffuse_f);
+		#else
+			gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);
+		#endif
 #endif
 	}
 #endif

@@ -1665,6 +1665,8 @@ void QCBUILTIN PF_R_PolygonBegin(pubprogfuncs_t *prinst, struct globalvars_s *pr
 		beflags = BEF_NOSHADOWS;
 	if (csqc_isdarkplaces || (qcflags & DRAWFLAG_TWOSIDED))
 		beflags |= BEF_FORCETWOSIDED;
+	if (qcflags & DRAWFLAG_NODEPTHTEST)
+		beflags |= BEF_FORCENODEPTH;	//FTESurf Patch 274, see pr_common.h
 
 	shader = PR_R_PolygonShader(shadername, twod);
 
@@ -1931,6 +1933,8 @@ void QCBUILTIN PF_R_AddTrisoup_Simple(pubprogfuncs_t *prinst, struct globalvars_
 		beflags |= BEF_FORCETWOSIDED;
 	if (qcflags & DRAWFLAG_LINES)
 		beflags |= BEF_LINES;
+	if (qcflags & DRAWFLAG_NODEPTHTEST)
+		beflags |= BEF_FORCENODEPTH;	//FTESurf Patch 274, as PF_R_PolygonBegin
 
 	shader = PR_R_PolygonShader(shadername, twod);
 
@@ -5955,6 +5959,40 @@ static void QCBUILTIN PF_DeltaListen(pubprogfuncs_t *prinst, struct globalvars_s
 	}
 }
 
+/*
+FTESurf Patch 270 -- float(float modelindex) getdeltacount
+
+Returns the running total of entity deltas RECEIVED for that modelindex since
+the last map load.  Free-running and monotonic on purpose: the caller samples
+it twice and divides by the elapsed time, which is the only shape that cannot
+be fooled by the sampler's own framerate.
+
+It sits next to PF_DeltaListen because that is the builtin everyone reaches for
+first, and it is the wrong one.  deltalisten's callback is driven from
+CL_LinkPacketEntities (cl_ents.c:5352), once per rendered frame per matching
+entity -- so it measures the framerate, not the network.  This counter is
+incremented in CLFTE_ReadDelta, which is entered exactly once per delta
+actually parsed out of a packet.
+
+Two things the caller has to get right, neither of them obvious:
+  - The count is per MODEL, not per entity, so N bodies sharing one model
+    advance it N times as fast.  Divide.
+  - A model index is only valid for the map that precached it, and
+    CL_ClearState zeroes the counters on every map change (cl_main.c) -- so
+    resolve the index per map, not once at startup.
+*/
+static void QCBUILTIN PF_cs_getdeltacount (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float mi = G_FLOAT(OFS_PARM0);
+
+	//G_FLOAT is a float and QC has no unsigned type, so a negative argument
+	//would otherwise wrap to a huge index inside CL_GetDeltaCount's bound test.
+	if (mi < 0)
+		G_FLOAT(OFS_RETURN) = 0;
+	else
+		G_FLOAT(OFS_RETURN) = CL_GetDeltaCount((unsigned int)mi);
+}
+
 static void AngleVectorsIndex (const vec3_t angles, int modelindex, vec3_t forward, vec3_t right, vec3_t up)
 {
 	vec3_t fixedangles;
@@ -7188,6 +7226,7 @@ static struct {
 //	{"readserverentitystate",	PF_ReadServerEntityState,		369},	// #369 void(float flags, float simtime) readserverentitystate (EXT_CSQC_1)
 //	{"readsingleentitystate",	PF_ReadSingleEntityState,		370},
 	{"deltalisten",				PF_DeltaListen,					371},		// #371 float(string modelname, float flags) deltalisten  (EXT_CSQC_1)
+	{"getdeltacount",			PF_cs_getdeltacount,			0},		//FTESurf Patch 270
 
 	{"dynamiclight_spawnstatic",PF_R_DynamicLight_AddStatic,0},
 	{"dynamiclight_get",		PF_R_DynamicLight_Get,		372},
@@ -8119,6 +8158,44 @@ pbool PDECL CSQC_CheckHeaderCrc(pubprogfuncs_t *progs, progsnum_t num, int crc, 
 	return true;
 }
 
+/*
+=================================================================
+ftesurf (P282): why CSQC did not start
+=================================================================
+CSQC_Init has SIX ways to fail and, before this, five of them were reachable
+without printing anything a player would ever see.  The worst is not even an
+error path: when the server advertises no *csprogs at all, csqc_nogameaccess is
+set below and the load block at :8329 is SKIPPED ENTIRELY -- the client's own
+csprogs.dat is never even attempted, progs.dat is tried and missing, and the
+function returns false having printed exactly nothing, at any developer level.
+
+For FTESurf that is not a cosmetic gap.  The entire HUD is CSQC (HUD_Draw is
+called only from CSQC_UpdateView, cl_main.qc:871) and cl_main.qc:768 sets
+VF_DRAWENGINESBAR 0 -- so with no CSQC the engine falls through to Sbar_Draw and
+the player gets Quake's 1996 health-and-armour bar. That is a bug report we
+received, twice, and it cost a full investigation to answer a question the
+engine could have answered in one line.
+
+WHY THE REASON IS RECORDED HERE AND PRINTED AT THE CALL SITE.  CSQC_Init is also
+called for demo playback, for csaddon/editor mode, and on a listen server, where
+"no csprogs" is perfectly legitimate; an unconditional print here would be noise
+in three places to fix one.  cl_parse.c's CSQC stage is exactly "we are joining
+a server and there is no client game", which for this game is never fine.  So
+the reason is latched and the consequence is announced.
+*/
+static char csqc_failreason[256];
+static void CSQC_SetFailReason(const char *fmt, ...)
+{
+	va_list argptr;
+	va_start(argptr, fmt);
+	Q_vsnprintfz(csqc_failreason, sizeof(csqc_failreason), fmt, argptr);
+	va_end(argptr);
+}
+const char *CSQC_FailReason(void)
+{
+	return *csqc_failreason ? csqc_failreason : "no reason recorded";
+}
+
 double  csqctime;
 qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int checksum, size_t progssize)
 {
@@ -8127,6 +8204,8 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 	csqcedict_t *worldent;
 	char *cheats;
 	qboolean csdatenabled = true;
+	//ftesurf (P282): a stale reason from a previous connect is worse than none.
+	CSQC_SetFailReason("no reason recorded");
 	if (!csprogsname)
 	{
 		csdatenabled = false;
@@ -8163,11 +8242,13 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 
 	if (qrenderer == QR_NONE)
 	{
+		CSQC_SetFailReason("no renderer");	//ftesurf (P282); normal on a dedicated server
 		return false;
 	}
 
 	if (cl_nocsqc.value)
 	{
+		CSQC_SetFailReason("disabled by %s", cl_nocsqc.name);	//ftesurf (P282)
 		if (checksum || progssize)
 			Con_Printf(CON_WARNING"Server is using csqc, but its disabled via %s\n", cl_nocsqc.name);
 		return false;
@@ -8275,6 +8356,11 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 
 		if (setjmp(csqc_abort))
 		{
+			//ftesurf (P282): a QC error during init longjmps here. Do NOT overwrite
+			//a reason that was already set -- PR_LoadProgs' own error is more
+			//specific than anything we could say from the landing pad.
+			if (!strcmp(csqc_failreason, "no reason recorded"))
+				CSQC_SetFailReason("the client game aborted while starting up");
 			CSQC_Shutdown();
 			return false;
 		}
@@ -8293,7 +8379,39 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 			if (csprogsnum >= 0)
 				Con_DPrintf("Loaded csprogs.dat\n");
 			else if (csprogs_checksum || csprogs_checksize)
+			{
+				//ftesurf (P282): the server named a checksum and we could not
+				//produce a matching file. Either the download has not happened
+				//yet or the cached copy is wrong -- and the QW arm has no
+				//self-heal, so a wrong cached copy is permanent for the session.
+				//cl_parse.c's self-heal is what turns this from fatal to a retry.
+				CSQC_SetFailReason("no csprogs matching the server's checksum %#x "
+								   "(%u bytes) -- csprogsvers/%x.dat is missing or wrong",
+								   csprogs_checksum, (unsigned)csprogs_checksize,
+								   csprogs_checksum);
 				Con_Printf(CON_WARNING"Unable to load \"csprogsvers/%x.dat\"\n", csprogs_checksum);
+			}
+			else
+				CSQC_SetFailReason("\"%s\" could not be loaded", csprogs_checkname);
+		}
+		else
+		{
+			/*
+			  ftesurf (P282): THE SILENT ONE.  csqc_nogameaccess is set because
+			  csdatenabled is false, which happens when the caller passed a NULL
+			  csprogsname -- which cl_parse.c does when the server's *csprogs
+			  serverinfo key is EMPTY.  The block above is skipped entirely, so
+			  the client's own perfectly good csprogs.dat is never even opened,
+			  and every remaining print on this path is a Con_DPrintf.
+
+			  The server publishes "" whenever it could not read csprogs.dat at
+			  SV_SpawnServer time (sv_init.c:1255-1261), and it re-reads on EVERY
+			  map load -- so a non-atomic deploy that lands mid-rotation produces
+			  exactly this, for one map, and then recovers. "Sometimes, depends
+			  on the map" is the shape of the bug this line explains.
+			*/
+			CSQC_SetFailReason("the server advertised no csprogs (empty *csprogs "
+							   "in serverinfo), so the client game was never loaded");
 		}
 		
 		if (csprogsnum >= 0 && !Q_strcasecmp(csprogs_checkname, "csaddon.dat"))
@@ -8323,6 +8441,10 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 
 		if (csqc_nogameaccess && !PR_FindFunction (csqcprogs, "CSQC_DrawHud", PR_ANY) && !PR_FindFunction (csqcprogs, "CSQC_DrawScores", PR_ANY))
 		{	//simple csqc module is not csqc. abort now.
+			//ftesurf (P282): keep the reason set above -- "the server advertised
+			//no csprogs" is the useful half. This branch is only reached BECAUSE
+			//of that, and "progs.dat has no CSQC_DrawHud" describes the fallback
+			//rather than the cause.
 			CSQC_Shutdown();
 			Con_DPrintf("progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud\n");
 			return false;

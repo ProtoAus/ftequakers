@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "winquake.h"
 #include "glquake.h"
 #include "shader.h"
+#include "com_mesh.h"	//FTESurf Patch 291: galiasinfo_t and Mod_ShaderForSkin, so shader_here can name a model's material
 
 #include <ctype.h> // for isdigit();
 
@@ -2422,6 +2423,8 @@ them is a race and the other is the thing being diagnosed.
 //of a tree that is shared with another game; see gl_backend.c.
 extern cvar_t r_reflectcube;
 extern int r_reflectcube_used, r_reflectcube_gated;
+extern int r_envcubemap_used, r_envcubemap_gated;	//FTESurf Patch 268 B
+extern int r_cubelight_used, r_cubelight_gated;		//FTESurf Patch 268 C
 
 static const char *CL_ShaderHereTex(texid_t t)
 {
@@ -2432,6 +2435,101 @@ static const char *CL_ShaderHereTex(texid_t t)
 	if (!TEXLOADED(t))
 		return va("~%s", t->ident);
 	return t->ident;
+}
+
+/*
+FTESurf Patch 291: shader_here on a MODEL.
+
+"It's an entity, so I can't tell you the texture and the ent_here is broken" -- Lex,
+aiming at surf_fantasy's island rocks.  They are static props, and nothing could name
+one:
+
+  - the trace goes through csqc_world, which holds brush entities and CSQC entities
+    but not the hl2 plugin's static props -- those are scene entities it submits every
+    frame, not edicts -- so a non-solid prop is invisible to it, and a solid one is hit
+    only as its .phy HULL, which has no material;
+  - the name then came from Mod_GetSurfaceNearPoint, which searches the WORLD, so the
+    line named whichever brush face lay nearest the impact (on fantasy, the grass
+    displacement under the rock) or "the unknown";
+  - and ent_here reads the entity lump, where a static prop does not appear at all.
+
+So the frame's model entities are traced too, along the same ray, against their actual
+TRIANGLES (Mod_Trace, the mesh trace hitmodel uses) -- never by origin or bounding box,
+because a ramp prop's origin can sit 2000 units off the crosshair while its geometry
+fills the screen.  cl_visedicts still holds the last frame's scene when a console
+command runs: FTESurf's CSQC clears and renders the scene once per frame, and the
+plugin adds its props into that same list.
+*/
+typedef struct
+{
+	entity_t *ent;
+	int mesh;			//index into the model's galiasinfo_t chain
+	float frac;			//along the same ray as the world trace
+	vec3_t endpos;
+	shader_t *shader;
+	int considered;		//model entities actually traced -- 0 says the list was empty, not that nothing was hit
+} shmodelhit_t;
+
+static qboolean CL_SH_TraceModels(const vec3_t start, const vec3_t end, shmodelhit_t *out)
+{
+	int i, k, m;
+
+	memset(out, 0, sizeof(*out));
+	out->frac = 1;
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t *e = &cl_visedicts[i];
+		model_t *mod = e->model;
+		galiasinfo_t *inf;
+		vec3_t d0, d1, ls, le;
+		trace_t tr;
+		float sc = 1, s2;
+
+		if (!mod || mod->loadstate != MLS_LOADED || mod->type != mod_alias || !mod->meshinfo)
+			continue;
+		out->considered++;
+		if (e->flags & (RF_WEAPONMODEL|RF_EXTERNALMODEL|RF_DEPTHHACK))
+			continue;	//the view's own models, which nobody is pointing at
+
+		//Into the model's own space, dividing out both kinds of scale the renderer
+		//applies -- a scaled axis and e->scale -- so the triangles are where they draw.
+#ifdef PEXT_SCALE
+		if (e->scale > 0)
+			sc = e->scale;
+#endif
+		VectorSubtract(start, e->origin, d0);
+		VectorSubtract(end, e->origin, d1);
+		for (k = 0; k < 3; k++)
+		{
+			s2 = DotProduct(e->axis[k], e->axis[k]);
+			if (s2 <= 0)
+				break;
+			ls[k] = DotProduct(d0, e->axis[k]) / (s2*sc);
+			le[k] = DotProduct(d1, e->axis[k]) / (s2*sc);
+		}
+		if (k < 3)
+			continue;
+
+		memset(&tr, 0, sizeof(tr));
+		//The RENDER triangles, not funcs.NativeTrace: an hl2 prop's NativeTrace is a BIH over its
+		//.phy hull (mod_hl2.c), or over nothing for a non-solid one, and the first build of this
+		//asked that and went straight through surf_fantasy's island rocks.
+		Mod_TraceRenderMesh(mod, &e->framestate, ls, le, &tr);
+		if (tr.fraction >= out->frac)
+			continue;
+
+		//The local segment is an affine image of the world one, so the fraction carries over.
+		for (m = 0, inf = Mod_Extradata(mod); inf; inf = inf->nextsurf, m++)
+			if (tr.surface == &inf->csurface)
+				break;
+		out->ent = e;
+		out->mesh = inf ? m : 0;
+		out->frac = tr.fraction;
+		for (k = 0; k < 3; k++)
+			out->endpos[k] = start[k] + tr.fraction*(end[k] - start[k]);
+		out->shader = Mod_ShaderForSkin(mod, out->mesh, e->skinnum, r_refdef.time, NULL);
+	}
+	return out->ent != NULL;
 }
 
 static void CL_ShaderHere_f(void)
@@ -2445,28 +2543,93 @@ static void CL_ShaderHere_f(void)
 	char *body, *line, *nl;
 	const char *tag = (Cmd_Argc() > 1) ? Cmd_Args() : "-";
 	int width = 0, height = 0;
+	qboolean worldhit, modelhit;	//FTESurf Patch 291
+	shmodelhit_t mh;
+	vec3_t targ;
 
-	if (!CL_TraceShaderUnderCrosshair(&trace, &shadername, &shader))
+	worldhit = CL_TraceShaderUnderCrosshair(&trace, &shadername, &shader);
+
+	//FTESurf Patch 291: the same ray against the frame's models.  A model wins when its
+	//triangle is in front of the world hit, or up to 32 units behind it: a solid prop's
+	//.phy hull encloses its mesh, so the world trace stops on the hull a few units short
+	//of the triangles it stands in for.  Both hits are printed, so the slack can never
+	//hide which one it was.
+	VectorMA(r_refdef.vieworg, 8192, vpn, targ);
+	modelhit = CL_SH_TraceModels(r_refdef.vieworg, targ, &mh) &&
+	           (!worldhit || mh.frac <= trace.fraction + 32.0f/8192);
+
+	if (!worldhit && !modelhit)
 	{
 		Con_Printf("[shaderhere] tag=%s hit=nothing\n", tag);
 		return;
 	}
 
-	if (shader)
-		R_GetShaderSizes(shader, &width, &height, false);
+	if (modelhit)
+	{
+		const entity_t *e = mh.ent;
+		const char *base = COM_SkipPath(e->model->name);
+		const char *worldname = worldhit ? shadername : "nothing";	//kept before the model's name replaces it
 
-	Con_Printf("[shaderhere] tag=%s texture=%s size=%ix%i usage=%s world=%s at=%.0f %.0f %.0f\n",
-		tag, shadername, width, height,
-		!shader ? "noshader" :
-			(shader->usageflags & SUF_LIGHTMAP) ? "lightmapped" :
-			(shader->usageflags & SUF_2D) ? "2d" : "auto",
-		cl.worldmodel->name,
-		trace.endpos[0], trace.endpos[1], trace.endpos[2]);
+		shader = mh.shader;
+		shadername = shader ? shader->name : "the unknown";
+		if (shader)
+			R_GetShaderSizes(shader, &width, &height, false);
 
-	//FTESurf Patch 264: and everything ELSE at that point.  The line above names
-	//one surface; on a Source fake-sky shell there are four inside eight units
-	//and the interesting one is usually not the one the ray stopped on.
-	CL_SH_PrintCandidates(cl.worldmodel, &trace, vpn, "[shaderhere]");
+		Con_Printf("[shaderhere] tag=%s texture=%s size=%ix%i usage=%s model=%s mesh=%i skin=%i dist=%.0f at=%.0f %.0f %.0f\n",
+			tag, shadername, width, height,
+			!shader ? "noshader" :
+				(shader->usageflags & SUF_LIGHTMAP) ? "lightmapped" :
+				(shader->usageflags & SUF_2D) ? "2d" : "auto",
+			e->model->name, mh.mesh, e->skinnum, mh.frac*8192,
+			mh.endpos[0], mh.endpos[1], mh.endpos[2]);
+		//The program lives on the PASS for most VMT materials (vertexlit emits `{ program ... }`),
+		//so shader->prog -- all the refl line below and the load-time [shader] census look at --
+		//reads empty for exactly the materials this is asked about.  Name every pass's.
+		{
+			int p;
+			for (p = 0; shader && p < shader->numpasses; p++)
+				if (shader->passes[p].prog)
+					Con_Printf("[shaderhere]   pass%i program=%s\n", p,
+						shader->passes[p].prog->name ? shader->passes[p].prog->name : "?");
+			Con_Printf("[shaderhere]   models traced: %i\n", mh.considered);
+		}
+		Con_Printf("[shaderhere]   entity origin=%.0f %.0f %.0f  behind it: %s at dist=%.0f  (a static prop? try: prop_census %s)\n",
+			e->origin[0], e->origin[1], e->origin[2],
+			worldname, worldhit ? trace.fraction*8192 : 0.0f,
+			base);
+		//What the entity's lighting holds -- the numbers Patch 268 C's ratio reads.
+		Con_Printf("[shaderhere]   light avg=%.3f %.3f %.3f mul=%.3f %.3f %.3f dir=%.2f %.2f %.2f cube +x=%.4f %.4f %.4f -x=%.4f %.4f %.4f +y=%.4f %.4f %.4f -y=%.4f %.4f %.4f +z=%.4f %.4f %.4f -z=%.4f %.4f %.4f\n",
+			e->light_avg[0], e->light_avg[1], e->light_avg[2],
+			e->light_range[0], e->light_range[1], e->light_range[2],
+			e->light_dir[0], e->light_dir[1], e->light_dir[2],
+			e->light_cube[0][0], e->light_cube[0][1], e->light_cube[0][2],
+			e->light_cube[1][0], e->light_cube[1][1], e->light_cube[1][2],
+			e->light_cube[2][0], e->light_cube[2][1], e->light_cube[2][2],
+			e->light_cube[3][0], e->light_cube[3][1], e->light_cube[3][2],
+			e->light_cube[4][0], e->light_cube[4][1], e->light_cube[4][2],
+			e->light_cube[5][0], e->light_cube[5][1], e->light_cube[5][2]);
+	}
+	else
+	{
+		if (shader)
+			R_GetShaderSizes(shader, &width, &height, false);
+
+		Con_Printf("[shaderhere] tag=%s texture=%s size=%ix%i usage=%s world=%s at=%.0f %.0f %.0f\n",
+			tag, shadername, width, height,
+			!shader ? "noshader" :
+				(shader->usageflags & SUF_LIGHTMAP) ? "lightmapped" :
+				(shader->usageflags & SUF_2D) ? "2d" : "auto",
+			cl.worldmodel->name,
+			trace.endpos[0], trace.endpos[1], trace.endpos[2]);
+
+		//FTESurf Patch 264: and everything ELSE at that point.  The line above names
+		//one surface; on a Source fake-sky shell there are four inside eight units
+		//and the interesting one is usually not the one the ray stopped on.
+		CL_SH_PrintCandidates(cl.worldmodel, &trace, vpn, "[shaderhere]");
+		//FTESurf Patch 291: say whether any model was even in the running, so "the world won"
+		//and "the entity list was empty when this ran" stop reading the same.
+		Con_Printf("[shaderhere]   models traced: %i, none in front of this surface\n", mh.considered);
+	}
 
 	body = shader ? Shader_GetShaderBody(shader, fname, countof(fname)) : NULL;
 
@@ -2493,16 +2656,38 @@ static void CL_ShaderHere_f(void)
 	            whether hl2_cubemaps really emptied mod->envmaps for this map,
 	            which it cannot do for a BSP that was already resident
 	  defenv    R_GetDefaultEnvmap(), i.e. whether the fallback is the skybox
+
+	FTESurf Patch 268 B: cube=$envcubemap is the sentinel -- the material named no
+	cubemap of its own and takes the batch's baked one; those batches are counted
+	separately as "envcube used/gated" on the next line and gated by r_envcubemap.
 	*/
 	tn = shader ? shader->defaulttextures : NULL;
-	surf = Mod_GetSurfaceNearPoint(cl.worldmodel, trace.endpos);
+	//FTESurf Patch 291: a model has no msurface_t.  Its batch takes the baked cubemap nearest the
+	//ENTITY's origin (gl_alias.c, R_GAlias_GenerateBatches), so that is what surfenv shows for one.
+	surf = modelhit ? NULL : Mod_GetSurfaceNearPoint(cl.worldmodel, trace.endpos);
+
+	/*
+	FTESurf Patch 268 C: the ambient-cube census, the same shape as the reflection one
+	below -- uploads of a non-empty cube since the last ask, and how many of those
+	r_cubelight 0 replaced with zeros.  used=0 gated=0 means nothing drawn in that span
+	carried a cube (no bumped prop compiled with #BUMPCUBE, or none the plugin lit), which
+	is a finding rather than a failed measurement.
+	*/
+	{
+		extern cvar_t r_cubelight;
+		Con_Printf("[shaderhere]   cube uploads since last: used=%i gated=%i cvar=%i\n",
+			r_cubelight_used, r_cubelight_gated, r_cubelight.ival);
+		r_cubelight_used = r_cubelight_gated = 0;
+	}
+
 	Con_Printf("[shaderhere]   refl gen=%i cube=%s mask=%s haspass=%i prog=%s surfenv=%s defenv=%s cvar=%i\n",
 		shader && shader->generator ? 1 : 0,
 		tn ? CL_ShaderHereTex(tn->reflectcube) : "-",
 		tn ? CL_ShaderHereTex(tn->reflectmask) : "-",
 		shader && (shader->flags & SHADER_HASREFLECTCUBE) ? 1 : 0,
 		(shader && shader->prog && shader->prog->name) ? shader->prog->name : "-",
-		surf ? CL_ShaderHereTex(surf->envmap) : "-",
+		modelhit ? CL_ShaderHereTex(Mod_CubemapForOrigin(cl.worldmodel, mh.ent->origin)) :
+			surf ? CL_ShaderHereTex(surf->envmap) : "-",
 		CL_ShaderHereTex(R_GetDefaultEnvmap()),
 		r_reflectcube.ival);
 
@@ -2513,9 +2698,22 @@ static void CL_ShaderHere_f(void)
 	the crosshair happens to be on -- and that is a finding, not a failure to
 	measure.  Zeroed on read so two presses a second apart bracket a known span.
 	*/
-	Con_Printf("[shaderhere]   refl batches since last: used=%i gated=%i\n",
-		r_reflectcube_used, r_reflectcube_gated);
+	/*
+	FTESurf Patch 268 B: `envcube used` is a SUBSET of `used` -- a sentinel batch
+	increments both.  `envcube gated` is DISJOINT from `gated`: r_reflectcube 0 is
+	tested first and takes the whole population, so a batch stopped by r_envcubemap
+	counts only in the envcube column.  The four therefore do not sum, on purpose.
+
+	Read it as a 0-versus-not-0 falsifier rather than an exact tally: both used
+	counters are incremented before `perm &= p->supportedpermutations`, so a batch
+	whose program has no REFLECTCUBEMASK block still counts.  That makes them an
+	upper bound on what is actually drawn (pre-existing for the r_reflectcube pair;
+	Part B is just the first thing to lean on the number).
+	*/
+	Con_Printf("[shaderhere]   refl batches since last: used=%i gated=%i envcube used=%i gated=%i\n",
+		r_reflectcube_used, r_reflectcube_gated, r_envcubemap_used, r_envcubemap_gated);
 	r_reflectcube_used = r_reflectcube_gated = 0;
+	r_envcubemap_used = r_envcubemap_gated = 0;	//FTESurf Patch 268 B
 
 	if (!body)
 		return;

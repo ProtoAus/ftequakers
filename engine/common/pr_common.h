@@ -446,6 +446,20 @@ void QCBUILTIN PF_cvar_description (pubprogfuncs_t *prinst, struct globalvars_s 
 #define DRAWFLAG_2D			(1u<<2)
 #define DRAWFLAG_TWOSIDED	0x400
 #define DRAWFLAG_LINES		0x800
+/*
+FTESurf Patch 274: draw this polygon with NO DEPTH TEST, i.e. over the world.
+
+BEF_FORCENODEPTH already exists and every backend already honours it (gl, d3d8,
+d3d9, d3d11, vk); there was simply no way for CSQC to ask for it on a polygon.
+The only route was to name a gamedir .shader carrying `nodepthtest` -- which
+works, and ftesurf's zones.shader does exactly that -- but a shader is a fixed
+texture, so it cannot express "this sprite's own material, drawn over the world".
+
+That is precisely what a light glare needs: Source draws its glows with
+sprites/light_glow02_add_noz, and the _noz suffix is the whole trick.  With this
+flag the QC can do it per polygon and keep the map's own material.
+*/
+#define DRAWFLAG_NODEPTHTEST 0x1000
 void QCBUILTIN PF_SubConGetSet (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_SubConPrintf (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_SubConDraw (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

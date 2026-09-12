@@ -60,6 +60,20 @@ qboolean IN_SetHandPosition(const char *devname, vec3_t org, vec3_t ang, vec3_t 
 //be an orphan.  Note is the gamecode's hook for marking save/load points.
 void IN_Journal_Drop(void);
 void IN_Journal_Note(const char *text);
+/*FTESurf Patch 311: called by every input entry point that is NOT a platform
+  backend -- the plugin input API and the in_journal_synth test command -- so the
+  journal is poisoned by the INJECTION rather than by one known caller.  See the
+  essay above the definition for what it does and does not cover.*/
+void IN_Journal_MarkSynth(const char *source);
+
+//FTESurf Patch 293: the per-frame view record.  ViewDelta is fed by IN_MoveMouse
+//once per pointer; View is called ONCE per seat-0 accumulate frame, from
+//CL_AccumlateInput immediately after CL_ClampPitch, because that is the first
+//moment the angle those counts produced actually exists.
+void IN_Journal_ViewDelta(float dx, float dy, int flags);
+void IN_Journal_ViewRaw(float dx, float dy);	/*Patch 312: the counts as the RING delivered them, before in_xflip and every other transform -- the other end of the window a delta-mutating hook occupies*/
+void IN_Journal_ViewKeyboard(float dpitch, float dyaw);	/*Patch 305: the non-mouse angle change, so the P293 identity closes on a keyboard turn*/
+void IN_Journal_View(const float *viewangles);
 
 //system-specific functions
 void INS_Move (void);

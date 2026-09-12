@@ -339,6 +339,9 @@ void Alias_FlushCache(void);
 void Alias_Shutdown(void);
 void Alias_Register(void);
 shader_t *Mod_ShaderForSkin(model_t *model, int surfaceidx, int num, float time, texnums_t **out_texnums);
+//FTESurf Patch 291: a point ray against a model's RENDER triangles in model space, whatever its
+//funcs.NativeTrace was set to -- an hl2 prop's is a BIH over its .phy collision hull.
+qboolean Mod_TraceRenderMesh(model_t *model, const framestate_t *framestate, const vec3_t start, const vec3_t end, trace_t *trace);
 const char *Mod_SkinNameForNum(model_t *model, int surfaceidx, int num);
 const char *Mod_SurfaceNameForNum(model_t *model, int num);
 const char *Mod_FrameNameForNum(model_t *model, int surfaceidx, int num);

@@ -28,6 +28,14 @@
 #define ENVSAT 1.0,1.0,1.0
 #endif
 
+//FTESurf Patch 268 B: $envmapcontrast.  mat_vmt.c has always parsed this key and
+//then dropped it.  Source: specularLighting = lerp(s, s*s, g_EnvmapContrast)
+//(lightmappedgeneric_ps2_3_x.h:558-559), so 0.0 is "no contrast", which is today's
+//picture -- an absent #ENVCONTRAST must default to exactly that.
+#ifndef ENVCONTRAST
+#define ENVCONTRAST 0.0
+#endif
+
 #include "sys/defs.h"
 
 //ftesurf (P187): $alpha as a compile-time constant.  e_colourident cannot carry
@@ -256,6 +264,36 @@ varying vec2 lm1, lm2, lm3;
 	#endif
 
 
+	//FTESurf Patch 268 B: Source's own mask defaults, under #ENVSRCMASK.
+	//  no mask key at all      -> specularFactor stays 1.0.  vNormal's default is
+	//                             float4(0,0,1,1) (lightmappedgeneric_ps2_3_x.h:205),
+	//                             so even the bNormalMapAlphaEnvmapMask-without-a-
+	//                             bumpmap arm at :396-399 reads 1.0
+	//  $basealphaenvmapmask    -> 1.0 - blendedAlpha, i.e. 1.0 - diffuse_f.a here
+	//                             (:408-411, "Reversing alpha blows!").  Source
+	//                             inverts THIS one and only this one
+	//  $normalmapalphaenvmapmask -> the normalmap's alpha, uninverted (:391-394), and
+	//                             only when there is a normalmap to read it from
+	#ifdef ENVSRCMASK
+		#if defined(ENVFROMMASK)
+			//We have a dedicated reflectmask
+			#define refl texture2D(s_reflectmask, tex_c).r
+		#else
+			#if defined(ENVFROMBASE)
+				#define refl 1.0 - diffuse_f.a
+			#else
+				#if defined(ENVFROMNORM) && defined(BUMP)
+					//ftesurf (P251): normal_f.a rather than a second fetch -- see
+					//the note in the verbatim arm below.
+					#define refl normal_f.a
+				#else
+					#define refl 1.0
+				#endif
+			#endif
+		#endif
+	//FTESurf Patch 268 B: without #ENVSRCMASK the arms below are today's, verbatim.
+	#else
+
 	#if defined(ENVFROMMASK)
 		/* We have a dedicated reflectmask */
 		#define refl texture2D(s_reflectmask, tex_c).r
@@ -277,18 +315,42 @@ varying vec2 lm1, lm2, lm3;
 			#endif
 		#endif
 	#endif
-	
+
+	//FTESurf Patch 268 B: end of the ENVSRCMASK wrapper.
+	#endif
+
 
 		vec3 cube_c = reflect(-eyevector, normal_f.rgb);
 		vec3 cube_tint = vec3(ENVTINT);
 		vec3 cube_sat = vec3(ENVSAT);
 		cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];
 		cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;
+	//FTESurf Patch 268 B: Source's envmap term, under #ENVSRCSPEC --
+	//    spec  = cube * mask;
+	//    spec *= tint;
+	//    spec  = lerp(spec, spec*spec, contrast);
+	//    spec  = lerp(luma(0.299,0.587,0.114), spec, saturation);
+	//(lightmappedgeneric_ps2_3_x.h:553-561).  Today's order is the other way round --
+	//saturation first, with Rec.709 weights, then the tint, and no contrast at all.
+	//ENVSRCPOST is a no-op here: this shader already adds after the lightmap multiply
+	//(:244), which is where Source adds it too.
+	//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
+	//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+	#ifdef ENVSRCSPEC
+		vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);
+		spec *= cube_tint;
+		spec = mix(spec, spec*spec, float(ENVCONTRAST));
+		spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);
+		diffuse_f.rgb += spec;
+	//FTESurf Patch 268 B: without #ENVSRCSPEC, today's term, verbatim.
+	#else
 		vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb, cube_sat.r);
 		cube_t.r *= cube_tint.r;
 		cube_t.g *= cube_tint.g;
 		cube_t.b *= cube_tint.b;
 		diffuse_f.rgb += (cube_t * vec3(refl,refl,refl));
+	//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
+	#endif
 #endif
 
 	#ifdef FULLBRIGHT
@@ -300,7 +362,15 @@ varying vec2 lm1, lm2, lm3;
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
 	#else
-		gl_FragColor = fog4(diffuse_f);
+		//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
+		//fog4() multiplies by regularcolour.a, which on a Source material is a
+		//MASK ($basealphaenvmapmask and friends), not opacity.  Reasoning and
+		//measurements in vertexlit.glsl.  hl2_fog_alphamul 1 restores fog4().
+		#if #include "cvar/hl2_fog_alphamul"
+			gl_FragColor = fog4(diffuse_f);
+		#else
+			gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);
+		#endif
 	#endif
 	}
 #endif
