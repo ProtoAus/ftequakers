@@ -1417,8 +1417,36 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 
 	VectorCopy(ctx.header->mins, mod->mins);
 	VectorCopy(ctx.header->maxs, mod->maxs);
+	/*
+	  FTESurf: mod->meshinfo CAN BE NULL HERE, and this line used to dereference
+	  it unconditionally.
+
+	  Mod_HL2_LoadVVD returns false without touching the buffer when the .vvd is
+	  missing or unreadable (`fsize < sizeof(*header)` is true for a NULL buffer,
+	  because LoadFile leaves fsize 0), and Mod_HL2_LoadVTX does the same.  When
+	  both decline, nothing allocates mod->meshinfo.  The block just above only
+	  rescues the case where the model HAS a rig -- `ctx.header->num_bones &&
+	  !mod->meshinfo` -- so a model with num_bones == 0 and no readable .vvd
+	  falls straight through to this line with meshinfo NULL.  A $staticprop is
+	  exactly that shape: studiomdl collapses its rig, which is what
+	  HL2MDL_STATIC_PROP asserts and what ctx.rigid above is testing for.
+
+	  `result` is never checked either, so a failed load is not an early return.
+
+	  This is a real crash on a model whose .mdl is present and whose .vvd is
+	  not -- a broken or partial install, an archive mounted without its
+	  companion files, or a server that has the .mdl for collision and nothing
+	  else.  The engine dies inside model loading with no message naming the
+	  model, which is about as unhelpful as a fault gets.
+
+	  Left as a plain guard rather than an early return: the bounds above are
+	  already copied and are useful on their own, and BIH_BuildAlias below
+	  handles a NULL chain by leaving the model non-solid, which is the correct
+	  outcome for a model we could not read the geometry of.
+	*/
 	galias = (galiasinfo_t*)mod->meshinfo;
-	Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations);
+	if (galias)
+		Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations);
 
 	mod->type = mod_alias;
 	mod->radius = RadiusFromBounds(mod->mins, mod->maxs);
