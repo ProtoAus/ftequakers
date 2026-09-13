@@ -27998,3 +27998,80 @@ clean. Arm 5 is the one that proves the counter is not redundant with `TF_CHEAT`
 `reccheck.py` gains the constant and reports it the way it reports the journal bit — **never as a
 fault**, and with "unknown" for the clear case, because an engine older than Patch 313 publishes no
 key and every run recorded before this build is in exactly that state.
+
+---
+
+## Patch 316 -- a QC write that actually reaches the disk
+
+`engine/common/pr_common.h`, `engine/common/pr_bgcmd.c`. **314 and 315 are claimed by a concurrent
+session (cluster, and the OpenAL stereo downmix in `snd_al.c`); this took the next free number.**
+
+QC has never been able to stream a file to disk, and the mode that looks like it can does not.
+`FRIK_FILE_WRITE` gets an 8 KB `BZ_Malloc` at `fopen` that `PF_fresizebuffer_internal` grows on every
+`fputs`; `PF_fclose_i` is the first and only thing that touches the file, with one `COM_WriteFile` of
+the whole accumulated buffer. `FRIK_FILE_APPEND` is not the way around it either -- it
+`FS_LoadMallocFile`s the existing file back IN at open, so a chunked writer re-reads and re-writes
+everything it has produced so far on every chunk.
+
+**This tree has already paid for that once.** The run recorder used to `fputs` into `<leg>.part` and
+rename at the end; the build-15 comment over `rec_rec_buf` records what was really happening --
+*"that looked like streaming and never was ... the engine was already buffering the whole run in
+memory and the .part file was zero bytes until the moment it was closed."* The strbuf that replaced
+it was honest about holding everything, not smaller.
+
+That is the ceiling on server-side recording. A run costs ~98 bytes per physics sample at ~65 Hz,
+about **6.5 KB per second of play** (measured over 83 real `.rec` files, mean 285 KB). One player is
+nothing; the recorder's own 200,000-line cap allows a 50-minute run at ~26 MB, and thirty-two of
+those on an SBC with no swap is why `lobby_norec` defaults to 1 and `SV_RecEnabled` refuses inside a
+lobby regardless.
+
+**Almost all of the fix was already here and reachable only for sockets.** `PF_fwrite_internal`
+already write-throughs with `VFS_WRITE` for `FRIK_FILE_STREAM`, `PF_fclose_i` already `VFS_CLOSE`s
+it, and `PF_fseek64` already operates on any handle that has a `.file`. What was missing was an
+`fopen` mode that opens a FILE that way. So the patch is a mode constant, one case in `PF_fopen`
+mirroring `COM_WriteFile`'s own two lines (`FS_CreatePath` then `"wb"` under `FS_GAMEONLY`), and
+three one-line inclusions.
+
+**It is a DISTINCT accessmode rather than reusing `FRIK_FILE_STREAM`**, and that is not tidiness. A
+network stream is bidirectional and this is not, so `fgets` on it should fail and does -- only the
+write side names the new mode. And a file written into the gamedir has to tell the filesystem hash
+it now exists (`FS_FlushFSHashWritten`, which `COM_WriteFile` does) while a `tcp://` stream must
+never do that. Reusing the value would have made both of those wrong quietly.
+
+`FS_CreatePath` matters more than it looks: the buffered modes get it for free at close, so without
+it the first recording into a map directory that does not exist yet would fail **at open** -- which
+reads as "recording is broken" rather than "the folder was not there".
+
+**fseek works on it**, which is the one thing streaming is usually assumed to cost. A writer can
+still reserve a header field and go back to correct it once the run has ended -- exactly what the
+`.rec` header's `flags` line needs, since a run cannot be known to be practice until it is over.
+
+### The falsifier, and why it is half outside the engine
+
+Nothing inside the VM can tell the two modes apart. `fseek` reports the same position, the same
+lines went in, and both read back correctly after close -- because the buffered mode produces a
+perfectly good file that has simply not been handed to the OS yet. The single observable difference
+is **the size on disk while the handle is still open**, and only another process can read that.
+
+So `ui_fstream` (menu QC, `m_main.qc`) writes 2000 lines, performs the seek-back rewrite, and then
+HOLDS the handle open across frames -- two commands rather than one, because a busy wait long enough
+for the shell to look is long enough to trip the VM's runaway-loop abort. `cfg/testrun/b316.cfg`
+provides the window with `waitms` and the run script polls both files once a second.
+
+Measured 2026-09-13, patched `fteqw64.exe`, both arms in one process:
+
+| | buffered (mode 2, control) | stream (mode 9) |
+|---|---|---|
+| bytes written before the hold | 162,000 | 162,000 |
+| **on disk during the 14 s hold** | **file does not exist** | **162,000** |
+| on disk one second after close | 162,000 | 162,000 (unchanged) |
+| line 0 read back | `XXXXX ...` | `XXXXX ...` |
+| line 1999 read back | `01999 ...` | `01999 ...` |
+
+The control arm is not decoration: it reproduces the `.part` failure above on purpose, so a run in
+which both arms measure the same is a broken harness rather than a passing patch.
+
+**Not yet consumed.** `sv_timer.qc`'s recorder still uses the strbuf. Three things that buffer does
+which a stream does not do for free have to be settled first -- a discard is currently `buf_del`, a
+stage demo is a RANGE of the same buffer lifted out, and a save state writes a PREFIX of it -- and
+the last two are features rather than implementation details.

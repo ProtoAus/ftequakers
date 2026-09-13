@@ -916,6 +916,42 @@ typedef enum
 #define FRIK_FILE_READ_DELAY (7) /*internal special mode where the file is not read until the first read. this avoids extra slowness with xonotic (where it uses fopen to see if (large) binary file exists, resulting in large binary files getting decompressed repeatedly then discarded without reading)*/
 #define FRIK_FILE_STREAM	(8) /*access goes via the vfs, we don't need to track the read/write info here*/
 
+/*
+  FTESurf Patch 316 -- write-only, STRAIGHT TO DISK.  Requestable from QC.
+
+  FRIK_FILE_WRITE does not stream and never has: PF_fopen gives it an 8 KB
+  BZ_Malloc that PF_fresizebuffer_internal grows on every fputs, and the file is
+  not touched until PF_fclose_i calls COM_WriteFile with the whole thing.  So a
+  QC writer that runs for minutes holds its entire output in engine memory until
+  the moment it finishes, and there is no way to ask it not to.  FRIK_FILE_APPEND
+  is worse rather than better -- it FS_LoadMallocFile's the existing file in at
+  open, so a chunked writer re-reads and re-writes everything it has produced so
+  far on every chunk.
+
+  That is a real ceiling and not a tidiness complaint.  FTESurf records a run as
+  a line of text per physics sample, ~98 bytes at ~65 Hz -- about 6.5 KB per
+  second of play, measured over 83 real recordings.  One player is nothing.
+  Thirty-two players on a public lobby, on an SBC with no swap, is not: the
+  recorder's own line cap allows a 50-minute run, which is ~26 MB each, and the
+  reason server-side recording is switched off on every lobby today is that
+  nobody wanted to find out what 32 of those does to the box.
+
+  Everything needed to do it properly was already here and only reachable for
+  sockets: PF_fwrite_internal already write-throughs with VFS_WRITE for
+  FRIK_FILE_STREAM, PF_fclose_i already VFS_CLOSEs it, and PF_fseek64 already
+  works on any handle with a .file -- so a writer can even seek back and correct
+  a header field it reserved, which is the one thing a stream is usually assumed
+  to give up.  What was missing was an fopen mode that opens a FILE this way.
+
+  It is a DISTINCT accessmode rather than reusing FRIK_FILE_STREAM, for two
+  reasons that are both about not quietly changing the socket path: a network
+  stream is bidirectional and this is not (fgets on it should fail, and it does,
+  because only the write side names this mode), and a file written into the
+  gamedir has to tell the filesystem hash it now exists -- FS_FlushFSHashWritten,
+  which COM_WriteFile does and which a tcp:// stream must never do.
+*/
+#define FRIK_FILE_WRITESTREAM (9) /*write-only, no buffering: every fputs is a VFS_WRITE. For a writer that runs for a long time and does not know its final size.*/
+
 #define MASK_DELTA 1
 #define MASK_STDVIEWMODEL 2
 

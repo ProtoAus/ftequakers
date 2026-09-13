@@ -2823,6 +2823,27 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
 		pf_fopen_files[i].prinst = prinst;
 		break;
+
+	//FTESurf Patch 316: write-only, straight to disk -- see pr_common.h.
+	//Mirrors COM_WriteFile's own two lines (FS_CreatePath then "wb" under
+	//FS_GAMEONLY), because that is exactly what the buffered modes do at
+	//fclose and a stream that landed somewhere else would be a second rule.
+	//FS_CreatePath matters more here than it looks: the buffered modes get
+	//it for free at close, and without it the first recording into a map
+	//directory that does not exist yet would fail at OPEN -- which reads as
+	//"recording is broken" rather than "the folder was not there".
+	case FRIK_FILE_WRITESTREAM:
+		FS_CreatePath(pf_fopen_files[i].name, FS_GAMEONLY);
+		pf_fopen_files[i].file = FS_OpenVFS(pf_fopen_files[i].name, "wb", FS_GAMEONLY);
+		if (!pf_fopen_files[i].file)
+			break;			//leaves accessmode set but prinst NULL, i.e. the slot stays free
+		pf_fopen_files[i].data = NULL;
+		pf_fopen_files[i].bufferlen = 0;
+		pf_fopen_files[i].len = 0;
+		pf_fopen_files[i].ofs = 0;
+		G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
+		pf_fopen_files[i].prinst = prinst;
+		break;
 	case FRIK_FILE_INVALID:
 		pf_fopen_files[i].bufferlen = 0;
 		pf_fopen_files[i].data = "";
@@ -2955,6 +2976,15 @@ void PF_fclose_i (int fnum)
 	case FRIK_FILE_STREAM:
 	case FRIK_FILE_READ_DELAY:
 		VFS_CLOSE(pf_fopen_files[fnum].file);
+		break;
+
+	//FTESurf Patch 316.  The bytes are already on disk; what is left is the
+	//bookkeeping COM_WriteFile does for the buffered modes and a socket must
+	//not -- tell the filesystem hash the file now exists, or the very next
+	//fopen-for-read of a file this VM just wrote can miss it.
+	case FRIK_FILE_WRITESTREAM:
+		VFS_CLOSE(pf_fopen_files[fnum].file);
+		FS_FlushFSHashWritten(pf_fopen_files[fnum].name);
 		break;
 
 	case FRIK_FILE_READ:
@@ -3151,7 +3181,12 @@ static int PF_fwrite_internal (pubprogfuncs_t *prinst, int fnum, const char *msg
 		return 0;	//this just isn't ours.
 	}
 
-	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM)
+	//FTESurf Patch 316 adds WRITESTREAM here, which is the whole of its write
+	//path: no buffer to grow, no size-overflow test below to reach, just the
+	//bytes going out.  Everything else in this function exists to manage a
+	//buffer these two modes do not have.
+	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM ||
+		pf_fopen_files[fnum].accessmode == FRIK_FILE_WRITESTREAM)
 		return VFS_WRITE(pf_fopen_files[fnum].file, msg, len);
 
 	if (pf_fopen_files[fnum].ofs + len < pf_fopen_files[fnum].ofs)
@@ -3381,6 +3416,7 @@ void PF_fcloseall (pubprogfuncs_t *prinst)
 		switch(pf_fopen_files[i].accessmode)
 		{
 		case FRIK_FILE_STREAM:
+		case FRIK_FILE_WRITESTREAM:	//FTESurf Patch 316
 		case FRIK_FILE_APPEND:
 		case FRIK_FILE_WRITE:
 		case FRIK_FILE_MMAP_RW:
