@@ -28605,3 +28605,118 @@ there inert until that tree is committed and build 73 can be rebuilt on top of
 it -- which is also fine, because the feature cannot activate until a client
 release anyway. Verification of the QC half was done against a throwaway
 `b73test` gamedir on port 27599 that never touched the live one.
+
+
+## Patch 322 -- can the mover leave the machine it was built on?  (plan experiment E4)  *(APPLIED -- `engine/server/sv_ccmds.c` (a new console command, +252 lines) and a comment-only block in `engine/common/com_bih.c`. NO behaviour change: this patch is an instrument, and the one code change it tried was measured and REVERTED, see below. No cvar, no struct change, no ABI bump. MEASURED: six arms across x86-64/msvcrt and aarch64/glibc, `cfg/testrun/p322det.cfg`.)*
+
+The plan's Phase 3 wants a headless verifier that **re-computes** a submitted
+run's time by replaying its usercmd stream, so the leaderboard never trusts a
+claimed number. That rests entirely on the mover being deterministic, and the
+plan is explicit that client prediction agreeing with the server proves
+determinism **on one binary** and is routinely cited as if it proved more. E4
+exists to answer the rest: same map, same fixed inputs, two architectures, do
+the bits agree?
+
+### The instrument
+
+`pm_dettest [traces] [ticks]` drives a fixed, integer-derived input set through
+three things and prints **three separate hashes**, because "they differ" is not
+a finding -- the three suspects need completely different remedies:
+
+| hash | what it covers | why separate |
+|---|---|---|
+| `libm` | sin/cos/atan2/sqrt over 4096 fixed inputs | `sqrt` is IEEE-754 correctly-rounded and portable; the other three are libm's, and the plan assumed they were the problem |
+| `trace` | 4096 traces against the world model only -- no libm, no mover | the collision/BIH path, which has a named suspect in it |
+| `mover` | 2048 ticks of `PM_PlayerMove`, world-only physents | everything above plus the arithmetic; the answer that matters |
+
+Every input is derived from a uint32 LCG and used as small integers or
+powers-of-two scalings, so no input can differ between platforms for a reason
+that has nothing to do with what is being measured. `movevars` are pinned rather
+than read from the running config, for the reason `pm_selftest`'s own comment
+gives. Output is raw IEEE bit patterns, not `%f` -- rounding is exactly where a
+one-ulp difference hides. `mapcrc` (engine Patch 321) prints first as the
+control: if the two arms disagree there they were not looking at the same
+geometry and nothing below means anything.
+
+### The answer
+
+Fully matched arms -- same committed source, same plugin build, same map:
+
+| | Windows x86-64 / msvcrt | Pi aarch64 / glibc | |
+|---|---|---|---|
+| `mapcrc` | `676de275` | `676de275` | control, **match** |
+| `libm` | `5e749b8a83b44107` | `5e749b8a83b44107` | **match** |
+| `mover` | `b4d8e3a39a1fcdb8` | `b4d8e3a39a1fcdb8` | **match** |
+| `trace` | `6a973cc78743fdca` | `f7958b04dbcd1008` | **differ** |
+
+**1. The mover IS portable, and it takes one compiler flag.** Out of the box the
+two disagreed; the per-tick dump showed velocity drifting by a single ulp from
+tick 1 while tick 0 was identical, which is the signature of fused multiply-add
+rather than of a discrete branch. Rebuilding the aarch64 side with
+**`-ffp-contract=off`** made the mover **bit-identical over 2048 ticks**. aarch64
+has FMA in its baseline so GCC's default `-ffp-contract=fast` fuses; x86-64
+without an FMA baseline does not. That is the whole of it.
+
+**2. libm was NOT the problem, which is the opposite of what the plan assumed.**
+The plan says sin/cos/atan2 "are not [portable] -- libm differs by platform and
+version" and proposes in-tree replacements. Measured over 4096 inputs across
+glibc/aarch64 and msvcrt/x86-64, the hashes are identical. That is a real saving:
+**in-tree trig is not on the critical path for Phase 3.** (It is not a proof for
+all libms forever -- it is a measurement on the two that matter here.)
+
+**3. A residual lives in the collision sort, and it is characterised.** See the
+essay now sitting on `BIH_Sort_X`. Short version: the comparators return
+`am > bm` -- 0 or 1, never negative -- so equal-key order is
+implementation-defined, and the trace tie-breaks with `enterfrac <=` at three
+sites, so among surfaces hit at the same fraction the last one visited wins.
+
+**The obvious fix was tried, measured, and reverted, and that is the most useful
+thing in this entry.** `return (am > bm) - (am < bm);`:
+
+- moved the x86-64 trace hash (`3486c2f3` -> `26640d5b`), i.e. it really does
+  change which surface wins a tie, i.e. it changes physics and would invalidate
+  standing records on tie geometry;
+- did **not** move the aarch64 hash at all -- glibc's merge sort already produced
+  the corrected order, msvcrt's quicksort did not;
+- and left the two **still disagreeing**.
+
+Because the sign is not the whole problem: **qsort is not stable**, and these
+comparators return 0 for equal keys, so equal-key order stays
+implementation-defined however the sign is spelled. Cross-libc determinism needs
+a *total* order -- lexicographic on all six bounds then `type` -- or a stable
+sort written in-tree. A sign fix buys no determinism and costs a physics change,
+which is the worst available trade, so the code is unchanged and only the
+analysis is committed.
+
+### The confound that nearly produced a wrong answer
+
+The first comparison was run between a Windows binary carrying patches 317, 318
+and 320 and a Pi binary carrying none of them -- **two different collision
+implementations**, which would have made any `trace` difference unattributable.
+It was caught because the numbers were too good: the `mover` hashes matched
+*exactly* despite the collision code differing, which cannot happen unless the
+mover's path never touches the changed geometry. Controlled two ways: the three
+patches gated off by their own cvars on the Windows side (the trace hash moved,
+proving the gates took, and the mover hash did not, proving this map's mover path
+touches no props, bevels or rotated submodels), and then properly by shipping the
+committed HEAD to a fresh Pi tree and building **engine and plugin together**, so
+both arms ran byte-identical source. Only the last of those is quoted in the
+table above.
+
+### What this means for Phase 3
+
+- **Re-simulation can leave the client's architecture.** The verifier may run on
+  the Pi, provided the mover is built `-ffp-contract=off` on both ends and the
+  flag is pinned, not inherited.
+- **`-march=native` must go** for any binary whose output is compared with
+  another machine's (`CMakeLists.txt:312` adds it; confirm what the shipped
+  Makefile actually uses, as the plan already notes).
+- **The trace residual is not yet closed**, and it is the remaining blocker for a
+  verifier that must agree on *every* geometry rather than on the paths one
+  2048-tick run happened to take. The fix is a total order in the BIH sort; it
+  perturbs tie resolution, so it wants its own patch, its own falsifier and a
+  decision about standing records.
+- Note what E4 does **not** say: it compares two binaries of the same source, not
+  two *versions*. Re-simulating a run recorded by an older client is a separate
+  question, and `mapcrc` in the `.rec` header (Patch 321) is what will make it
+  answerable.

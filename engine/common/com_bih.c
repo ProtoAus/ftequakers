@@ -2105,6 +2105,43 @@ static unsigned int BIH_NativeContents(struct model_s *mod, int hulloverride, co
 
 
 #if defined(BIH_USEBIH) || defined(BIH_USEBVH)
+/*
+  ftesurf Patch 322 (plan experiment E4): READ THIS BEFORE "FIXING" THESE THREE.
+
+  They return `am > bm` -- 0 or 1, NEVER NEGATIVE -- which does not satisfy
+  qsort's contract, so the order of equal-key leaves is implementation-defined.
+  That makes the BIH TREE'S SHAPE a property of the libc that built the binary
+  rather than of the map, and the trace then tie-breaks with
+  `enterfrac <= truefraction` at three sites (:271, :820, :1047), so among
+  surfaces hit at the same fraction THE LAST ONE VISITED WINS -- and which is
+  last follows the shape.
+
+  THE OBVIOUS FIX IS A HALF-FIX AND WAS MEASURED AND REVERTED, which is the only
+  reason this comment is longer than the patch would have been.  Writing
+  `return (am > bm) - (am < bm);` was tried on both architectures:
+
+    x86-64/msvcrt  the trace hash MOVED (3486c2f3 -> 26640d5b), i.e. it really
+                   does change which surface wins ties, i.e. it changes physics
+                   and would invalidate standing records on tie geometry.
+    aarch64/glibc  the trace hash did NOT move at all.  glibc's merge sort
+                   already produced the corrected order; msvcrt's quicksort did
+                   not.  So the bug's effect is libc-specific, and the fix's
+                   effect is too.
+    together       the two STILL disagreed afterwards (6a973cc7 vs f7958b04),
+                   with identical source, identical plugin and contraction off.
+
+  Because the sign is not the whole problem: qsort is NOT STABLE, and these
+  comparators return 0 for equal keys, so equal-key order stays
+  implementation-defined however the sign is spelled.  Cross-libc determinism
+  needs a TOTAL order -- lexicographic on all six bounds and then `type`, or a
+  stable sort written in-tree -- not a sign.  A sign fix buys no determinism and
+  costs a physics change, which is the worst available trade, so it is not here.
+
+  What E4 did establish: with -ffp-contract=off on aarch64 the MOVER is
+  bit-identical across the two architectures over 2048 ticks
+  (b4d8e3a39a1fcdb8), and libm (sin/cos/atan2/sqrt) agrees too.  The residual
+  lives in this sort.  See ENGINE_PATCHES.md Patch 322 and cfg/testrun/p322det.cfg.
+*/
 static int QDECL BIH_Sort_X (const void *va, const void *vb)
 {
 	const struct bihleaf_s *a = va, *b = vb;
@@ -2112,7 +2149,7 @@ static int QDECL BIH_Sort_X (const void *va, const void *vb)
 	float bm = b->maxs[0]+b->mins[0];
 	if (am == bm)
 		return 0;
-	return am > bm;
+	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
 }
 static int QDECL BIH_Sort_Y (const void *va, const void *vb)
 {
@@ -2121,7 +2158,7 @@ static int QDECL BIH_Sort_Y (const void *va, const void *vb)
 	float bm = b->maxs[1]+b->mins[1];
 	if (am == bm)
 		return 0;
-	return am > bm;
+	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
 }
 static int QDECL BIH_Sort_Z (const void *va, const void *vb)
 {
@@ -2130,7 +2167,7 @@ static int QDECL BIH_Sort_Z (const void *va, const void *vb)
 	float bm = b->maxs[2]+b->mins[2];
 	if (am == bm)
 		return 0;
-	return am > bm;
+	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
 }
 #endif
 static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s **freenodes, struct bihleaf_s *leafs, size_t numleafs)

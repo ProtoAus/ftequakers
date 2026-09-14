@@ -3712,6 +3712,249 @@ static void SV_MapFrom_f (void)
 }
 
 /*
+================================================================================
+  pm_dettest -- FTESurf Patch 322.  The anti-cheat plan's experiment E4.
+
+  THE QUESTION, AND WHY IT GATES A WHOLE PHASE.  The plan's Phase 3 wants a
+  headless verifier that RE-COMPUTES a submitted run's time by replaying its
+  usercmd stream, so the leaderboard never has to trust a claimed number.  That
+  rests on the mover being deterministic.  Client prediction agreeing with the
+  server proves determinism on ONE BINARY and is cited as if it proved more;
+  it does not.  Until this command answers, "the mover is deterministic" is a
+  claim, and Phase 3's deployment story -- can the verifier run on the Pi, or
+  must it run on the player's own architecture? -- has no basis either way.
+
+  THREE HASHES, NOT ONE, BECAUSE "THEY DIFFER" IS NOT A FINDING.  A single
+  end-to-end number tells you something moved and nothing about what, and the
+  three suspects need completely different remedies:
+
+    trace   NativeTrace against the world model only.  No libm, no mover.  This
+            is the collision/BIH path, and there is a NAMED suspect in it (see
+            below), so this hash existing separately is the whole point.
+    libm    sin/cos/atan2/sqrt over fixed inputs, nothing else.  sqrt is
+            IEEE-754 correctly-rounded and therefore portable; the other three
+            are NOT -- they are libm's, and libm differs by platform, version
+            and optimisation level.
+    mover   PM_PlayerMove for real, world-only physents.  Everything above plus
+            the arithmetic, so it is the answer that actually matters and the
+            other two localise it.
+
+  THE NAMED SUSPECT, verified by reading before this was written.
+  BIH_Sort_X/Y/Z (com_bih.c:2108-2133) end in `return am > bm;` -- 0 or 1,
+  NEVER negative.  That violates qsort's strict-weak-ordering contract, so the
+  order of equal-key leaves is implementation-defined and the BIH tree's SHAPE
+  depends on which libc sorted it: glibc on the Pi, msvcrt via mingw here.  The
+  trace then tie-breaks with `enterfrac <= tr->trace.truefraction` at three
+  sites, so among surfaces hit at the same fraction the LAST ONE VISITED wins --
+  and which is last is decided by that shape.  Ties are not exotic: coplanar
+  brush faces and abutting .phy hulls are most of a surf ramp.
+
+  SO THE TRACE HASH DELIBERATELY INCLUDES brush_id / brush_face / surface_id /
+  triangle_id, not just the geometry.  A tie-break difference returns the SAME
+  fraction and endpos off a DIFFERENT surface; a hash over the numbers alone
+  would call that identical and report determinism that is not there.  This is
+  the one design decision in the file that the mechanism forced.
+
+  EVERY INPUT IS DERIVED FROM INTEGERS, which is what makes a difference in the
+  OUTPUT mean something.  The LCG is uint32 arithmetic (exact everywhere), and
+  the floats it produces are small integers optionally scaled by powers of two
+  -- exactly representable, so no input can differ between platforms for a
+  reason that has nothing to do with what is being measured.  The probe volume
+  comes from floor()/ceil() of the world bounds, which are exact.
+
+  movevars ARE PINNED HERE rather than read from the running config, for the
+  reason pm_selftest's own comment gives: otherwise two machines with different
+  cfgs disagree for a boring reason and the result reads as non-determinism.
+
+  OUTPUT IS RAW BITS.  %f rounds, and rounding is exactly where a one-ulp
+  difference hides.  The per-sample lines print the IEEE bit pattern so a
+  mismatch can be localised to a sample rather than merely detected.
+================================================================================
+*/
+static unsigned long long SV_DetHash (unsigned long long h, const void *p, size_t n)
+{	/* FNV-1a.  Not a checksum -- we only need "did any bit move". */
+	const unsigned char *b = (const unsigned char*)p;
+	while (n--)
+	{
+		h ^= *b++;
+		h *= 1099511628211ull;
+	}
+	return h;
+}
+#define SV_DETHASH_INIT 14695981039346656037ull
+
+static unsigned int SV_DetRand (unsigned int *s)
+{	/* Numerical Recipes LCG.  uint32 wraparound is defined and identical on
+	   every target; a float RNG here would be measuring itself. */
+	*s = (*s * 1664525u) + 1013904223u;
+	return *s;
+}
+
+/* An integer in [lo,hi], from the LCG, with no float anywhere. */
+static int SV_DetRange (unsigned int *s, int lo, int hi)
+{
+	unsigned int span = (unsigned int)(hi - lo) + 1u;
+	if (!span)
+		return lo;
+	return lo + (int)(SV_DetRand(s) % span);
+}
+
+static void SV_DetTest_f (void)
+{
+	model_t *world = sv.state?sv.world.worldmodel:NULL;
+	unsigned long long htrace = SV_DETHASH_INIT;
+	unsigned long long hlibm  = SV_DETHASH_INIT;
+	unsigned long long hmover = SV_DETHASH_INIT;
+	unsigned int seed = 20260914u;
+	int ntrace = atoi(Cmd_Argv(1));
+	int ntick  = atoi(Cmd_Argv(2));
+	int lo[3], hi[3], i, k;
+	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
+
+	if (ntrace <= 0) ntrace = 4096;
+	if (ntick  <= 0) ntick  = 2048;
+
+	if (!world || world->loadstate != MLS_LOADED)
+	{
+		Con_Printf(CON_ERROR "pm_dettest: no map loaded.  This measures the mover"
+		                     " against real geometry; with no world there is nothing"
+		                     " to be deterministic about.\n");
+		return;
+	}
+
+	Con_Printf("^5pm_dettest^7  %s  map \"%s\"  traces %i  ticks %i\n",
+	           PLATFORM " " ARCH_CPU_POSTFIX, world->name, ntrace, ntick);
+
+	/* ---- 1. libm, on its own. ------------------------------------------- */
+	for (i = 0; i < 4096; i++)
+	{
+		double a = (double)SV_DetRange(&seed, -31416, 31416) / 10000.0;
+		double b = (double)SV_DetRange(&seed, -31416, 31416) / 10000.0;
+		float  r[4];
+		r[0] = (float)sin(a);
+		r[1] = (float)cos(a);
+		r[2] = (float)atan2(a, b);
+		r[3] = (float)sqrt(a < 0 ? -a : a);
+		hlibm = SV_DetHash(hlibm, r, sizeof(r));
+	}
+
+	/* ---- 2. the collision tree, on its own. ----------------------------- */
+	for (i = 0; i < 3; i++)
+	{
+		lo[i] = (int)floor(world->mins[i]);
+		hi[i] = (int)ceil (world->maxs[i]);
+		if (hi[i] <= lo[i]) hi[i] = lo[i] + 1;
+	}
+	for (i = 0; i < ntrace; i++)
+	{
+		vec3_t s1, e1;
+		trace_t tr;
+		for (k = 0; k < 3; k++)
+		{
+			s1[k] = (float)SV_DetRange(&seed, lo[k], hi[k]);
+			e1[k] = (float)SV_DetRange(&seed, lo[k], hi[k]);
+		}
+		memset(&tr, 0, sizeof(tr));
+		world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1,
+		                         tmins, tmaxs, false, MASK_PLAYERSOLID, &tr);
+
+		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
+		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
+		htrace = SV_DetHash(htrace, tr.endpos,        sizeof(tr.endpos));
+		htrace = SV_DetHash(htrace, tr.plane.normal,  sizeof(tr.plane.normal));
+		htrace = SV_DetHash(htrace, &tr.plane.dist,   sizeof(tr.plane.dist));
+		htrace = SV_DetHash(htrace, &tr.contents,     sizeof(tr.contents));
+		htrace = SV_DetHash(htrace, &tr.allsolid,     sizeof(tr.allsolid));
+		htrace = SV_DetHash(htrace, &tr.startsolid,   sizeof(tr.startsolid));
+		/* WHICH surface won, not just where.  See the essay above. */
+		htrace = SV_DetHash(htrace, &tr.brush_id,     sizeof(tr.brush_id));
+		htrace = SV_DetHash(htrace, &tr.brush_face,   sizeof(tr.brush_face));
+		htrace = SV_DetHash(htrace, &tr.surface_id,   sizeof(tr.surface_id));
+		htrace = SV_DetHash(htrace, &tr.triangle_id,  sizeof(tr.triangle_id));
+
+		if (i < 4)
+			Con_Printf("  trace[%i] frac %08x  norm %08x %08x %08x  brush %i face %i surf %i\n",
+			           i, *(unsigned int*)&tr.fraction,
+			           *(unsigned int*)&tr.plane.normal[0],
+			           *(unsigned int*)&tr.plane.normal[1],
+			           *(unsigned int*)&tr.plane.normal[2],
+			           tr.brush_id, tr.brush_face, tr.surface_id);
+	}
+
+	/* ---- 3. the mover, for real. ---------------------------------------- */
+	{
+		movevars_t savemv = movevars;
+		playermove_t savepm = pmove;
+
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.numphysent = 1;
+		pmove.physents[0].model = world;
+		VectorSet(pmove.player_mins, -16, -16, -24);
+		VectorSet(pmove.player_maxs,  16,  16,  32);
+		pmove.pm_type = PM_NORMAL;
+		pmove.surfacefriction = 1.0f;
+
+		/* Pinned, not the running config -- see the header. */
+		movevars.physicsmode   = PHYSMODE_SOURCE;
+		movevars.gravity       = 800;
+		movevars.friction      = 4;
+		movevars.stopspeed     = 75;
+		movevars.accelerate    = 5;
+		movevars.airaccelerate = 1000;
+		movevars.maxairspeed   = 30;
+		movevars.jumpvelocity  = 289.0f;
+		movevars.maxspeed      = 320;
+		movevars.entgravity    = 1;
+
+		/* Start in the middle of the world's box, well above the floor, so the
+		   first few ticks are a fall onto whatever is there rather than a
+		   stuck-in-solid no-op. */
+		for (k = 0; k < 3; k++)
+			pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
+
+		for (i = 0; i < ntick; i++)
+		{
+			pmove.cmd.msec         = 15;
+			pmove.cmd.forwardmove  = (short)(SV_DetRange(&seed, -40, 40) * 8);
+			pmove.cmd.sidemove     = (short)(SV_DetRange(&seed, -40, 40) * 8);
+			pmove.cmd.upmove       = 0;
+			pmove.cmd.buttons      = (SV_DetRand(&seed) & 8) ? BUTTON_JUMP : 0;
+			pmove.cmd.angles[0]    = (short)SV_DetRange(&seed, -4096, 4096);
+			pmove.cmd.angles[1]    = (short)SV_DetRange(&seed, -32768, 32767);
+			pmove.cmd.angles[2]    = 0;
+			pmove.angles[0] = pmove.cmd.angles[0] * (360.0f/65536.0f);
+			pmove.angles[1] = pmove.cmd.angles[1] * (360.0f/65536.0f);
+			pmove.angles[2] = 0;
+
+			PM_PlayerMove(1.0f);
+
+			hmover = SV_DetHash(hmover, pmove.origin,   sizeof(pmove.origin));
+			hmover = SV_DetHash(hmover, pmove.velocity, sizeof(pmove.velocity));
+			hmover = SV_DetHash(hmover, &pmove.onground, sizeof(pmove.onground));
+
+			if (i < 4 || i == ntick-1)
+				Con_Printf("  tick[%i] org %08x %08x %08x  vel %08x %08x %08x  ground %i\n",
+				           i,
+				           *(unsigned int*)&pmove.origin[0],
+				           *(unsigned int*)&pmove.origin[1],
+				           *(unsigned int*)&pmove.origin[2],
+				           *(unsigned int*)&pmove.velocity[0],
+				           *(unsigned int*)&pmove.velocity[1],
+				           *(unsigned int*)&pmove.velocity[2],
+				           pmove.onground);
+		}
+
+		movevars = savemv;
+		pmove = savepm;
+	}
+
+	Con_Printf("^5pm_dettest^7 mapcrc %08x\n", (unsigned int)world->checksum);
+	Con_Printf("^5pm_dettest^7 libm   %016llx\n", hlibm);
+	Con_Printf("^5pm_dettest^7 trace  %016llx\n", htrace);
+	Con_Printf("^5pm_dettest^7 mover  %016llx\n", hmover);
+}
+
+/*
 ==================
 SV_InitOperatorCommands
 ==================
@@ -3827,6 +4070,15 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommand ("pin_add", SV_Pin_Add_f);
 
 	Cmd_AddCommand("sv_meminfo", SV_MemInfo_f);
+
+	//FTESurf Patch 322 -- the anti-cheat plan's E4.  Needs a map loaded.
+	Cmd_AddCommandD("pm_dettest", SV_DetTest_f,
+	                "FTESurf: cross-build determinism falsifier (plan E4).  "
+	                "pm_dettest [traces] [ticks].  Runs a fixed, integer-derived "
+	                "input set through the collision tree, libm and the mover, and "
+	                "prints three separate hashes so that a difference between two "
+	                "builds says WHICH of the three moved.  Run it on two "
+	                "architectures with the same map and diff the three lines.");
 
 //	Cmd_AddCommand ("reallyevilhack", SV_ReallyEvilHack_f);
 }
