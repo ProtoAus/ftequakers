@@ -3799,12 +3799,39 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 	return lo + (int)(SV_DetRand(s) % span);
 }
 
+/*
+  FTESurf Patch 325 -- the tick length the mover arm is pinned to.
+
+  IT WAS NOT PINNED AT ALL BEFORE THIS, and that was a hole in the instrument
+  rather than in the engine.  The mover divides each command's msec by this to
+  decide how many ticks to run, so `mover` is a function of it -- and pm_dettest
+  took whatever the running config happened to hold.  p322det.cfg runs on
+  bhop_eazy, whose NAME PREFIX puts the server in bhop mode, which sets
+  pm_ticrate 0.010.  So every mover reading recorded against patches 322, 323 and
+  324 was taken at 0.010 while reading as though it were the shipped 0.015, and
+  nothing printed the difference.
+
+  The cross-build result those patches reached is NOT invalidated -- both
+  architectures ran the same map and therefore the same rate, which is what that
+  comparison needed.  But an arm run on a surf map, or on a box where the mode
+  overlay had not applied, would have produced a different hash from identical
+  source and read as a determinism FAILURE.
+
+  Measured on one binary, both values, so the old readings stay interpretable:
+      bhop_eazy, ticrate 0.010 -> mover b4d8e3a39a1fcdb8   (the 322/324 figure)
+      bhop_eazy, ticrate 0.015 -> mover 3d136f8de25c9c2c   (pinned, from here on)
+  Printed in the header line as well, so this can never be invisible again.
+*/
+#define PMDET_TICRATE 0.015f
+
 static void SV_DetTest_f (void)
 {
 	model_t *world = sv.state?sv.world.worldmodel:NULL;
 	unsigned long long htrace = SV_DETHASH_INIT;
 	unsigned long long hlibm  = SV_DETHASH_INIT;
 	unsigned long long hmover = SV_DETHASH_INIT;
+	unsigned long long htick  = SV_DETHASH_INIT;	//FTESurf Patch 325
+	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u;
 	int ntrace = atoi(Cmd_Argv(1));
 	int ntick  = atoi(Cmd_Argv(2));
@@ -3822,8 +3849,11 @@ static void SV_DetTest_f (void)
 		return;
 	}
 
-	Con_Printf("^5pm_dettest^7  %s  map \"%s\"  traces %i  ticks %i\n",
-	           PLATFORM " " ARCH_CPU_POSTFIX, world->name, ntrace, ntick);
+	/* FTESurf Patch 325: ticrate is printed because `mover` is a function of it
+	   and for three patches it was not -- see PMDET_TICRATE above. */
+	Con_Printf("^5pm_dettest^7  %s  map \"%s\"  traces %i  ticks %i  ticrate %g\n",
+	           PLATFORM " " ARCH_CPU_POSTFIX, world->name, ntrace, ntick,
+	           (double)PMDET_TICRATE);
 
 	/* ---- 1. libm, on its own. ------------------------------------------- */
 	for (i = 0; i < 4096; i++)
@@ -3896,6 +3926,17 @@ static void SV_DetTest_f (void)
 
 		/* Pinned, not the running config -- see the header. */
 		movevars.physicsmode   = PHYSMODE_SOURCE;
+		/* FTESurf Patch 325 -- A HARNESS HOLE THAT PREDATES THIS PATCH.
+		   ticrate was NOT pinned, and it is the one variable this whole command
+		   is a function of: the mover divides the command's msec by it to decide
+		   how many ticks to run.  So `mover` was only comparable between two
+		   machines that happened to share a pm_ticrate, and nothing printed it.
+		   On a surf server it is 0.015 and the Patch 322/323 readings were taken
+		   there, so pinning it here does not move those hashes -- it makes them
+		   mean what they were always reported to mean.  A box that had loaded
+		   cfg/mode_bhop.cfg (0.010) would previously have produced a different
+		   `mover` from identical source and read as a determinism failure. */
+		movevars.ticrate       = PMDET_TICRATE;
 		movevars.gravity       = 800;
 		movevars.friction      = 4;
 		movevars.stopspeed     = 75;
@@ -3932,6 +3973,13 @@ static void SV_DetTest_f (void)
 			hmover = SV_DetHash(hmover, pmove.velocity, sizeof(pmove.velocity));
 			hmover = SV_DetHash(hmover, &pmove.onground, sizeof(pmove.onground));
 
+			/* FTESurf Patch 325.  Kept OUT of hmover deliberately: folding it in
+			   would change a hash whose measured values are recorded against
+			   patches 322/323, and a determinism control you cannot compare with
+			   the readings that established it is worth less than a second line. */
+			ticktotal += pmove.ticksrun;
+			htick = SV_DetHash(htick, &pmove.ticksrun, sizeof(pmove.ticksrun));
+
 			if (i < 4 || i == ntick-1)
 				Con_Printf("  tick[%i] org %08x %08x %08x  vel %08x %08x %08x  ground %i\n",
 				           i,
@@ -3948,10 +3996,86 @@ static void SV_DetTest_f (void)
 		pmove = savepm;
 	}
 
+	/* ---- 3b. FTESurf Patch 325: the tick count, and the control that makes it
+	   a measurement rather than a smoke test. -------------------------------
+
+	   Counting ticks and counting COMMANDS give the same answer at the shipped
+	   config -- pm_ticrate 0.015 with Patch 252 snapping the client's usercmd
+	   interval to one whole tick -- so a test run only there cannot tell a
+	   correct patch from one that increments once per call.  These three arms
+	   are chosen so the expected counts differ:
+
+	     ticrate 0.015, msec 15 -> 1,1,1,...      total n      (the live case)
+	     ticrate 0.010, msec 15 -> 1,2,1,2,...    total 3n/2   (two ticks in one
+	                                                            command: only a
+	                                                            real tick count
+	                                                            can produce this)
+	     ticrate 0.015, msec 10 -> 0,1,1,0,1,1,.. total 2n/3   (a command that
+	                                                            runs NO ticks --
+	                                                            the carry case,
+	                                                            and the shape the
+	                                                            Patch 252 essay
+	                                                            measured as a
+	                                                            33 Hz stall)
+
+	   PASS is all three exact.  Any arm off by one, or all three equal to n,
+	   fails it -- and prints which, so the failure names itself. */
+	{
+		movevars_t savemv = movevars;
+		playermove_t savepm = pmove;
+		static const float arm_tick[3] = {0.015f, 0.010f, 0.015f};
+		static const float arm_msec[3] = {15, 15, 10};
+		const int census_n = 90;	/*divisible by 2 and 3, so no arm rounds*/
+		int a;
+
+		for (a = 0; a < 3; a++)
+		{
+			unsigned int got = 0, want;
+			float carry;
+
+			memset(&pmove, 0, sizeof(pmove));
+			pmove.numphysent = 1;
+			pmove.physents[0].model = world;
+			VectorSet(pmove.player_mins, -16, -16, -24);
+			VectorSet(pmove.player_maxs,  16,  16,  32);
+			pmove.pm_type = PM_NONE;	/*no traces of consequence: this arm is
+										  about the accumulator, not the physics,
+										  and PM_NONE still runs the tick -- which
+										  is itself worth pinning here.*/
+			pmove.surfacefriction = 1.0f;
+			movevars = savemv;
+			movevars.physicsmode = PHYSMODE_SOURCE;
+			movevars.ticrate     = arm_tick[a];
+			for (k = 0; k < 3; k++)
+				pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
+
+			for (i = 0; i < census_n; i++)
+			{
+				pmove.cmd.msec = arm_msec[a];
+				PM_PlayerMove(1.0f);
+				got += pmove.ticksrun;
+			}
+			carry = pmove.msec_carry;
+
+			want = (unsigned int)((census_n * arm_msec[a] * 0.001f) / arm_tick[a] + 0.5f);
+			Con_Printf("^5pm_dettest^7 tickcensus ticrate %g msec %g: %u ticks over %i cmds, want %u, carry %g -- %s\n",
+			           arm_tick[a], arm_msec[a], got, census_n, want, carry,
+			           (got == want) ? "^2ok^7" : "^1FAIL^7");
+		}
+
+		movevars = savemv;
+		pmove = savepm;
+	}
+
 	Con_Printf("^5pm_dettest^7 mapcrc %08x\n", (unsigned int)world->checksum);
 	Con_Printf("^5pm_dettest^7 libm   %016llx\n", hlibm);
 	Con_Printf("^5pm_dettest^7 trace  %016llx\n", htrace);
 	Con_Printf("^5pm_dettest^7 mover  %016llx\n", hmover);
+	/* FTESurf Patch 325.  `tick` is the per-command tick-count sequence hashed,
+	   and `ticks` its total -- at the pinned 0.015 with msec 15 that total MUST
+	   equal the tick count asked for, which is the cheapest possible statement
+	   of "the mover ran the simulation it was asked to run". */
+	Con_Printf("^5pm_dettest^7 tick   %016llx  ticks %u/%i\n", htick, ticktotal, ntick);
 }
 
 /*

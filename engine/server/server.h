@@ -748,6 +748,25 @@ typedef struct client_s
 	int hideentity;
 	qboolean hideplayers;
 #endif
+
+	/*FTESurf Patch 325: mover ticks run for this client since the map loaded.
+
+	  APPENDED, not inserted: this struct is compiled by the hl2 plugin through
+	  quakedef.h, and engine and plugin demonstrably reach a player out of step on
+	  this project, so nothing above may shift.
+
+	  A DOUBLE, deliberately, and the reason is the publish and not the counter.
+	  QC floats are 32-bit, so a value handed to QC is exact only to 2^24 ticks --
+	  69.9 h at pm_ticrate 0.015, 46.6 h at the 0.010 a bhop map uses.  Keeping the
+	  accumulator itself in double means the engine side can never be the limit
+	  (2^53 ticks is millions of years), and RESETTING IT PER MAP rather than per
+	  connection means the published float never approaches its ceiling either:
+	  client_t is memset at CONNECT, not at map change, so a counter left to run
+	  for the life of a connection would cross every map a lobby cycles through.
+	  Above 2^24 the failure is not a frozen counter but a QUANTISING one -- it
+	  would step 0,2,4 and bias every run by a tick or so, silently, which is
+	  strictly worse than stopping.  Hence the per-map reset in SV_SpawnServer. */
+	double			movetickcount;
 } client_t;
 
 #if defined(NQPROT) || defined(Q2SERVER) || defined(Q3SERVER)

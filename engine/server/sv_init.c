@@ -1473,6 +1473,15 @@ MSV_OpenUserDatabase();
 		svs.clients[i].edict = NULL;
 		svs.clients[i].name = svs.clients[i].namebuf;
 		svs.clients[i].team = svs.clients[i].teambuf;
+		/*FTESurf Patch 325: the mover-tick counter is PER MAP, not per connection.
+		  client_t is memset at connect, so leaving this to run would carry it
+		  across every map a lobby cycles through -- and the value is published to
+		  QC as a 32-bit float, exact only to 2^24 ticks (69.9 h at 0.015, 46.6 h
+		  at 0.010).  Past that it quantises rather than stops, biasing every run
+		  silently, which is worse than a counter that visibly dies.  Resetting
+		  here costs nothing: QC re-latches per run and the edicts are respawned
+		  anyway, so no run can straddle this.*/
+		svs.clients[i].movetickcount = 0;
 		InfoSync_Clear(&svs.clients[i].infosync);	//we'll mark all the info as dirty at some point while connecting.
 	}
 

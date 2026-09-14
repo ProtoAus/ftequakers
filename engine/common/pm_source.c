@@ -3757,6 +3757,32 @@ void PMSrc_PlayerMove (float gamespeed)
 		avail = 0;
 	pmove.msec_carry = avail;
 
+	/*FTESurf Patch 325: publish the tick count for this command.
+
+	  `iters` is the only place in the tree this number has ever existed, and it
+	  was discarded at function exit.  It is the honest unit of a run: the run
+	  clock has always been SAMPLED off sv.time, which advances once per SERVER
+	  FRAME, so every usercmd inside one frame reads the same clock and a run time
+	  cannot be reproduced by re-simulating the inputs that produced it.  This
+	  number can be.
+
+	  COUNTED UNCONDITIONALLY, including for spectators, dead, noclipping and
+	  frozen players.  The pm_type dispatch lives INSIDE PMSrc_Tick, so by the
+	  time a noclip or a MOVETYPE_NONE pin is recognised the tick has already been
+	  spent -- and that is the right meaning to publish: "ticks of simulation this
+	  command ran", a fact about the mover, with no policy in it.  Whether a
+	  frozen tick should count towards a RUN is a question about runs, and it is
+	  answered in QC beside the existing freeze, which is the only side that knows
+	  a run is happening.  Stated because the next reader will assume the opposite.
+
+	  Note the count scales with gamespeed exactly as sv.time does (see `avail`
+	  above), so this closes no part of the sv_gamespeed hole -- pms_lockedmovevars
+	  stays load-bearing.  What it IS invariant to is a client under-reporting
+	  cmd.msec: fewer ticks is both a slower player and a slower clock, where a
+	  wall clock would keep running. */
+	pmove.ticksrun = (unsigned int)iters;
+	pmove.tickused = tick;	/*the rate travels with the count -- see pmove.h*/
+
 	pmove.surfing = pms_surfed;
 
 	/* Hand the mod the hull we settled on, so the server can resize the

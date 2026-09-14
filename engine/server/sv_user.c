@@ -66,6 +66,7 @@ not on that list.  Every other evalc_t in the tree is a local, zeroed per use.
 evalc_t	evalc_bnorm, evalc_bvel, evalc_bcount, evalc_rcontact, evalc_rnorm;
 evalc_t	evalc_forceduck;	//FTESurf Patch 142
 evalc_t	evalc_basevel;		//FTESurf Patch 240
+evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
 
 void SV_FS_ResetFieldCaches(void)
 {
@@ -76,6 +77,9 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_rnorm,     0, sizeof(evalc_rnorm));
 	memset(&evalc_forceduck, 0, sizeof(evalc_forceduck));
 	memset(&evalc_basevel,   0, sizeof(evalc_basevel));
+	memset(&evalc_mtick,     0, sizeof(evalc_mtick));		//FTESurf Patch 325
+	memset(&evalc_mtickrate, 0, sizeof(evalc_mtickrate));	//FTESurf Patch 325
+	memset(&evalc_mcarry,    0, sizeof(evalc_mcarry));		//FTESurf Patch 325
 }
 
 void QDECL SV_NQPhysicsUpdate(cvar_t *var, char *oldvalue)
@@ -8201,6 +8205,54 @@ if (sv_player->v->health > 0 && before && !after )
 			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_rampnormal", ev_vector, &evalc_rnorm);
 			if (ev)
 				VectorCopy(pmove.rampnormal, ev->_vector);
+
+			/*
+			  FTESurf Patch 325 -- THE RUN CLOCK, COUNTED.
+
+			  The run clock has always been SAMPLED: SV_TimerTicks is
+			  floor((time - run_t_start)/tick + 0.5), `time` in a think hook is
+			  sv.time, and sv.time advances ONCE PER SERVER FRAME.  So every
+			  usercmd inside one frame reads the same clock, and the stored time
+			  is a function of when packets happened to arrive and where the
+			  frame loop happened to land -- neither of which is in the input
+			  stream.  A run time therefore cannot be reproduced by re-simulating
+			  the usercmds that produced it, which is what a verifier must do.
+			  It is worse than one frame, too: PlayerPostThink is called from
+			  SV_PostRunCmd, which sits OUTSIDE the per-usercmd loop, so the QC
+			  timer runs once per PACKET.
+
+			  This is the same run measured in the unit the mover actually works
+			  in.  Accumulated HERE, in the caller, because `pmove` is one global
+			  shared by every client -- see the note on playermove_t.ticksrun.
+
+			  THREE FIELDS, NOT ONE, and the second is the one that prevents a
+			  silent disaster.  A tick count is not a duration without a rate,
+			  and QC gets its rate from `cvar("pm_ticrate")` with a compile-time
+			  fallback of 0.015 while the mover uses movevars.ticrate with a
+			  fallback of its own.  While the clock was seconds, a disagreement
+			  cost rounding; once the stored quantity IS ticks, the same
+			  disagreement MULTIPLIES every leaderboard time by their ratio.
+			  This tree has already shipped that bug once in the other direction
+			  (build 64, bhop maps at 0.01 read against a 0.015 constant), so the
+			  rate the mover really used is published beside the count rather than
+			  left to be re-derived.  The third is the sub-tick remainder, which
+			  is what lets an elapsed SECONDS reading stay exact -- without it a
+			  counted clock can only answer in whole ticks, and the recorder's
+			  timestamps and the save-state resume both need finer than that.
+
+			  OUTPUT ONLY and optional, on the Patch 131 precedent: a mod that
+			  does not declare these fields gets NULL and nothing is written.
+			*/
+			host_client->movetickcount += pmove.ticksrun;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movetick", ev_float, &evalc_mtick);
+			if (ev)
+				ev->_float = host_client->movetickcount;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movetickrate", ev_float, &evalc_mtickrate);
+			if (ev)
+				ev->_float = pmove.tickused;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movecarry", ev_float, &evalc_mcarry);
+			if (ev)
+				ev->_float = pmove.msec_carry;
 		}
 	}
 

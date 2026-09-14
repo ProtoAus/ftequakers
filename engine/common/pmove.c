@@ -1443,6 +1443,16 @@ void PM_PlayerMove (float gamespeed)
 	frametime = pmove.cmd.msec * 0.001*gamespeed;
 	pmove.numtouch = 0;
 
+	/*FTESurf Patch 325: zeroed HERE, above the PHYSMODE_SOURCE dispatch, and not
+	  in PMSrc_PlayerMove.  `pmove` is one global shared by eight call sites and
+	  only the Source path ever writes ticksrun, so a QuakeWorld move -- or one of
+	  the builtins that drives this with no PMSrc bracketing at all -- would
+	  otherwise hand its caller the PREVIOUS mover's count as if it were its own.
+	  Zeroing at the single common entry makes "no Source move ran" read as 0
+	  rather than as stale, for every present and future caller. */
+	pmove.ticksrun = 0;
+	pmove.tickused = 0;
+
 	// take angles directly from command
 	pmove.angles[0] = SHORT2ANGLE(pmove.cmd.angles[0]);
 	pmove.angles[1] = SHORT2ANGLE(pmove.cmd.angles[1]);

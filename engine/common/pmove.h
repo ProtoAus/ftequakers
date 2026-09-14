@@ -179,6 +179,39 @@ typedef struct
 	  seeing PMF_LADDER. */
 	qboolean	srcladder;
 	vec3_t		srcladdernormal;
+
+	/*FTESurf Patch 325: how many fixed mover ticks THIS command ran.
+
+	  OUTPUT ONLY, and per-command rather than cumulative, for two reasons that
+	  both come from `pmove` being a single global (pmove.c) shared by every
+	  client's SV_RunCmd, by the demo-playback spectator, by the runplayerphysics
+	  builtins and by SV_AntiKnockBack.  A cumulative counter here would be a
+	  different player's total on the very next move -- the Patch 240 basevelocity
+	  bug exactly.  So this module publishes the count and the CALLER, which is
+	  the only side that knows whose move it just ran, does the accumulating.
+
+	  NOT in pmsourcestate_t, and that is the interesting half.  It does not need
+	  to be: msec_carry is already carried there, and the carry is what makes the
+	  tick count invariant under command splitting -- SV_RunCmd chops a command
+	  over 50ms into halves, and because `avail` is conserved across the pieces,
+	  sum(ticksrun) over the halves equals the ticksrun of the whole.  So the
+	  count needs no predicted state of its own.
+
+	  Zeroed at the top of PM_PlayerMove, so the QuakeWorld path -- which never
+	  writes it -- cannot leave a stale value for a reader to believe. */
+	unsigned int ticksrun;
+
+	/*FTESurf Patch 325: the tick length those ticks were, in seconds.
+
+	  Published rather than re-derived because a tick count is NOT a duration
+	  without its rate, and the rate has two definitions in this codebase: the
+	  mover takes movevars.ticrate with a 0.015 fallback, QC takes
+	  cvar("pm_ticrate") with a compile-time 0.015 fallback of its own.  While the
+	  run clock was seconds a disagreement between them cost rounding.  Once the
+	  stored quantity is TICKS it multiplies every recorded time by their ratio --
+	  so the rate the mover actually used travels with the count, from the one
+	  line that decided it. */
+	float		tickused;
 } playermove_t;
 
 typedef struct {

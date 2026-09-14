@@ -28930,3 +28930,179 @@ trace only through `Mod_Trace` on MD5/Zymotic/DPM models, and it cannot touch
 surf world geometry at all -- hl2 props copy VVD positions verbatim with no
 accumulation. Left for its own patch rather than folded in here, because it wants
 its own falsifier and this one is already answered by its own.
+
+## Patch 325 -- the run clock was never a function of the run  *(APPLIED -- `engine/common/pmove.h` (two appended fields), `engine/common/pmove.c` (two zeroing lines), `engine/common/pm_source.c` (two publishing lines), `engine/server/server.h` (one appended field), `engine/server/sv_init.c` (a per-map reset), `engine/server/sv_user.c` (three optional-field publishes plus their caches), `engine/server/sv_ccmds.c` (`pm_dettest` gains a pinned ticrate, a tick hash and a three-arm census). NO behaviour change: every new field is OUTPUT ONLY and nothing reads them yet. No new cvar, no struct insert, no ABI bump, no protocol change. MEASURED: `cfg/testrun/p325tick.cfg` (offline, three census arms) and `cfg/testrun/p325live.cfg` (a real run, with QC build 74).)*
+
+**FTESurf's run clock has never been a function of the player's inputs, and this
+is the patch that makes it possible for it to become one.**
+
+`SV_TimerTicks` is `floor((time - run_t_start)/run_t_tick + 0.5)`. In a think hook
+QC's `time` is `pr_global_struct->time`, which `sv_user.c:7880`/`:8382` assign from
+`sv.time` -- and `sv.time` is assigned in exactly two places (`sv_main.c:5688`,
+`sv_phys.c:3026`), both **once per server frame**. Nothing in `SV_RunCmd` moves it.
+
+It is coarser still than that, and this part was not previously written down
+anywhere in the tree: **`PlayerPostThink` runs once per PACKET, not once per
+usercmd.** `SVFTE_ExecuteClientMove` calls `SV_RunCmd` inside its
+`for (frame...)` loop but `if (ran) SV_PostRunCmd();` sits **outside** it
+(`sv_user.c:8731-8732`), and the legacy `clc_move` path at `:9012` is the same
+shape. `PlayerPreThink` is per usercmd (`:7900`, inside `SV_RunCmd`); its partner
+is not. So the whole QC timer -- the zone tests, the jump watch, the recorder's
+per-sample write -- runs once per packet, and several QC comments describing it
+as "per tick" or "the usercmd's own clock" are relative statements against
+`physicstime` rather than absolute ones.
+
+**The consequence is the one that matters for the anti-cheat plan: a stored run
+time is a function of when packets arrived and where the server's frame loop
+landed, so re-simulating the usercmd stream cannot reproduce it.** That is the
+blocker under Phase 3, and it was previously asserted rather than proven.
+
+**WHAT THIS PATCH DOES, AND WHAT IT DELIBERATELY DOES NOT.** It publishes the
+number the mover has always computed and always thrown away: `iters` in
+`PMSrc_PlayerMove`, the count of fixed ticks a command ran. Three optional QC
+fields on the Patch 131 idiom -- `run_movetick` (cumulative per map),
+`run_movetickrate` (the tick length the mover divided by) and `run_movecarry`
+(the sub-tick remainder). **It changes no behaviour and nothing ranks on it.**
+Flipping the clock is a migration -- it moves every stored time by up to a tick,
+rewrites `best.pb` on every install, re-bases every archived run filename, and
+splits the `.rec`'s two clocks -- and the size of the gap it would be paying for
+had never been measured. This patch is the instrument that measures it, in the
+same spirit as Patch 322.
+
+**THE COUNT IS PER COMMAND, NOT CUMULATIVE, AND THAT IS FORCED.** `pmove` is one
+global shared by eight call sites -- every client's `SV_RunCmd`, the demo-playback
+spectator, the `runplayerphysics` builtins, `SV_AntiKnockBack`, the client's
+prediction and `pm_dettest` itself. A cumulative counter there would be another
+player's total on the next move, which is the Patch 240 basevelocity bug exactly.
+So `pm_source` publishes, and `SV_RunCmd` -- the only side that knows
+`host_client` -- accumulates.
+
+**AND IT NEEDS NO PREDICTED STATE, which is the pleasant surprise.** `msec_carry`
+is already carried in `pmsourcestate_t`, and the carry is what makes the tick
+count invariant under command splitting: `SV_RunCmd` chops a command over 50 ms
+into halves, and because `avail` is conserved across the pieces, `sum(ticksrun)`
+over the halves equals the whole. So `pmsourcestate_t` is untouched -- which also
+sidesteps the APPEND ONLY constraint that shaped Patch 323, since that struct sits
+*mid*-struct inside both `client_t` and `playerpredprop_s`.
+
+**THE RATE TRAVELS WITH THE COUNT, and this is the half that would have caused a
+silent disaster.** A tick count is not a duration without a rate, and this
+codebase has two definitions: the mover uses `movevars.ticrate`, QC uses a cached
+`cvar("pm_ticrate")` with a compile-time fallback of its own. While the clock is
+seconds a disagreement costs display rounding. The day the stored quantity is
+ticks, the same disagreement **multiplies every leaderboard time by their ratio**
+-- and this tree has already shipped that class of bug once, in build 64, reading
+bhop maps at a 0.015 constant when they run at 0.01. So the mover publishes the
+rate it actually used, from the one line that decided it, and QC compares rather
+than assumes. `reccheck.py` now faults on a disagreement.
+
+### The falsifier, and why the obvious one would have proved nothing
+
+At the shipped config -- `pm_ticrate 0.015` with Patch 252 snapping the client's
+usercmd interval to exactly one tick -- **"count the ticks" and "count the
+commands" give the same answer on every command of every run.** A patch that
+simply did `count++` once per call would look perfect in game. So the
+discriminator has to be a config the live game never runs. `pm_dettest` gains a
+three-arm census, all three exact:
+
+| ticrate | cmd msec | ticks over 90 cmds | what only this arm can see |
+|---|---|---|---|
+| 0.015 | 15 | **90** | the live case |
+| 0.010 | 15 | **135** | TWO ticks in one command -- a command counter reads 90 |
+| 0.015 | 10 | **60** | a command that runs NO ticks (the carry case) |
+
+plus `ticks 2048/2048` on the main mover loop, and `tick` as its own hash beside
+`mover` -- kept *out* of `mover` deliberately, so the hashes recorded against
+patches 322/323/324 stay comparable.
+
+### A hole in the instrument, found by the control failing
+
+The registered prediction said `mover` must not move. **It did** --
+`3d136f8de25c9c2c` against the recorded `b4d8e3a39a1fcdb8` -- and the cause was
+the harness, not the patch.
+
+**`pm_dettest` pinned ten movevars and not `ticrate`** -- the one variable the
+whole command is a function of, since the mover divides each command's msec by it.
+`p322det.cfg` runs on `bhop_eazy`, whose **name prefix** puts the server in bhop
+mode, which sets `pm_ticrate 0.010`. So every mover reading recorded against
+patches 322, 323 and 324 was taken at **0.010** while reading as though it were
+the shipped 0.015, and nothing printed the difference.
+
+Confirmed directly rather than argued: pinning the harness to 0.010 reproduces
+`b4d8e3a39a1fcdb8` **exactly**, and the tick total goes 2048 -> 3072, which is the
+1.5x a 15 ms command must give at a 10 ms tick.
+
+**Those cross-build results still stand.** Both architectures ran the same map and
+therefore the same rate, which is all that comparison needed. What was wrong is
+that the number depended on something nothing printed -- so an arm run on a *surf*
+map would have differed from identical source and read as a determinism failure.
+`ticrate` is now pinned at `PMDET_TICRATE`, printed in the header line, and both
+values are recorded there so the old readings stay interpretable.
+
+### Measured
+
+`p325live.cfg`, a real run on `bhop_eazy` with QC build 74, reading both clocks
+from `cmd timer`:
+
+| | counted | sampled | gap |
+|---|---|---|---|
+| before the start | -- (`not latched`) | | |
+| during | 134 | 135 | **1** |
+| during | 335 | 336 | **1** |
+| during | 535 | 535 | 0 |
+| after the end zone | 985 | 986 | **1** |
+
+`rate 0.01`, no mismatch, `frz 0`. **That the rate resolved to a non-default value
+is the strong form of the proof** that the optional-field route works: 0.01 is
+bhop mode's `pm_ticrate`, a number only the engine could have supplied, and a
+failed `GetEdictFieldValue` writes nothing and leaves a zero that is
+indistinguishable from a mover that ran no ticks.
+
+**The gap is 1 tick on three of four readings, on a local loopback noclip flight
+-- the most favourable case there is: no network, no contention, one client.**
+That is the defect being present on nearly every sample under the best possible
+conditions, not a rare tail event. It is NOT yet a measurement of the gap on a
+real run over a real network, which is what build 74 is deployed to collect.
+
+### The thing a counted clock does not cost you
+
+The obvious objection is that a counted clock stops when a client stops sending,
+buying free thinking time mid-flight. Two reasons it does not:
+
+- `sv_send.c:3483-3514` is an anti-hover back-fill for exactly this: once a
+  client's unspent budget passes 1000 ms the server force-runs 13 ms usercmds with
+  the last held angles and zeroed movement, which reach the mover and produce real
+  ticks. The window is about a second, not unbounded.
+- More fundamentally, **a dropped usercmd costs the movement of that tick as well
+  as the tick.** You cannot reach an end zone without the ticks that carry you
+  there, so losing simulation does not shorten a run, it only slows the wall clock
+  -- which is precisely the property that makes a counted clock fair to a laggy
+  player and invariant to a client under-reporting its command msec.
+
+It is *not* invariant to `sv_gamespeed`, which scales the mover's tick budget
+exactly as it scales `sv.time`, so `pms_lockedmovevars` stays load-bearing.
+
+### What is still owed before the clock can actually be flipped
+
+Build 74 measures; it does not migrate. An adversarial review of every path the
+unit touches found these, and they are the real cost of the change:
+
+- **`SV_TimerElapsed` must come from the same counter**, or one `.rec` carries two
+  clocks -- an integer one in its `cp`/`stage`/`end` records and a wall-clock one
+  in every sample's `t` column. That is what `run_movecarry` is published for.
+- **The pre-start padding ring** stamps `rec_pad_t[s] = time` and flushes it as
+  `rec_pad_t[s] - run_t_start`; under a counted origin that subtraction is
+  incommensurable and every padded file fails `reccheck`'s backwards-time check.
+- **`SV_TimerResume` takes unrounded SECONDS on purpose** and its essay is an
+  explicit, tool-enforced argument against restoring from a rounded tick. A
+  counted clock is exact, which inverts the argument -- but the carry has to be
+  saved beside the tick or it comes straight back.
+- **`SV_TimerFreezeFrame`'s off-by-one cancellation proof is about the sampled
+  clock** and must be re-derived. Build 74 already subtracts frozen ticks, because
+  the mover runs them for a `MOVETYPE_NONE` player.
+- **`best.pb` on every install, and every archived run's FILENAME**, carry
+  old-clock tick counts with no version marker. The board being empty does not
+  help here.
+- **The start-hop dwell rule** (`time - run_t_groundat >= want`) stays on the
+  frame-quantised clock, so the run would have a reproducible NUMBER attached to
+  an irreproducible VERDICT.
