@@ -28839,3 +28839,94 @@ E4's remaining line in the plan is now closed, but two honest limits:
 - It compares two builds of the **same source**, not two *versions*.
   Re-simulating a run recorded by an older client is a separate question, and
   `mapcrc` in the `.rec` header (Patch 321) is what makes it answerable.
+
+## Patch 324 -- the flag the whole determinism result rested on was in nobody's build  *(APPLIED -- `engine/Makefile` (a new `FPDETERMINISM` variable, added to `BASE_CFLAGS`, plus a warning comment on the msvc `/fp:fast` lines) and `CMakeLists.txt` (the same flag, and a warning that its `-march=native` disqualifies a CMake build from any determinism comparison). No source change, no cvar, no ABI bump. MEASURED: four arms on two architectures, `cfg/testrun/p322det.cfg`.)*
+
+Found by an adversarial audit of the collision path run alongside Patch 323 --
+i.e. by looking for what the sort fix would **not** close.
+
+### The hole
+
+`grep -rn ffp-contract` over the whole tree hit exactly two things: this document,
+and a prose comment inside `com_bih.c`. **Not one build file.** The flag that
+patches 322 and 323 both rest on was typed on the command line for each
+experiment and existed nowhere else, so no shipping build has ever carried it --
+not the client in the release archive, and not the binary running the twelve
+lobbies.
+
+That is not a tidiness complaint, because the default is not symmetric. GCC's
+gnu-mode default is `-ffp-contract=fast`: `a*b+c` may fuse into one FMA and round
+once instead of twice. **AArch64 has FMADD/FMSUB in its mandatory base FP ISA and
+fuses at -O1+; baseline x86-64 is SSE2, has no FMA instruction, and cannot.** And
+the shape is everywhere that matters -- `DotProduct` (`mathlib.h:72`) is
+`a*b+c*d+e*f`, it is every plane distance in `com_bih.c`'s trace, and it appears
+48 times in `pm_source.c`'s mover.
+
+### What it was costing, measured
+
+Same source, same machine, the flag the **only** difference (`pm_dettest`,
+bhop_eazy, on the Pi):
+
+| | with `-ffp-contract=off` | without (the shipped default) |
+|---|---|---|
+| `trace` | `f7958b04dbcd1008` | `2cf4b709c5eb929f` |
+| `mover` | `b4d8e3a39a1fcdb8` | `c625b345aa4b712d` |
+
+The left column is what a Windows client computes. So **every lobby server has
+been simulating movement with different arithmetic from every client predicting
+it** -- continuously, on every map, since the fleet existed. Patch 322 saw this
+(its first aarch64 arm reported exactly `c625b345aa4b712d`) and read it as a
+property of the experiment rather than of the deployment.
+
+### The fix, and why it went in `BASE_CFLAGS`
+
+`BASE_CFLAGS` is the one variable that reaches **both binaries**: the engine
+through `ALL_CFLAGS`, and the hl2 plugin through the `BASE_CFLAGS=` that
+`plugins-rel`/`plugins-dbg` forward. That second half matters -- the plugin is
+where the VBSP brush bevels (Patch 318) and the `.phy` hull winding (Patch 317)
+are computed, i.e. the collision geometry the engine then traces. Debug builds
+get it too, deliberately: a determinism flag that applies to only one
+configuration is a flag you cannot test with.
+
+### The falsifier, and the control
+
+| arm | how built | `trace` | `mover` |
+|---|---|---|---|
+| Pi | plain `make sv-rel`, **nothing on the command line** | `f7958b04dbcd1008` | `b4d8e3a39a1fcdb8` |
+| Windows | plain `build.ps1 -Engine` | `f7958b04dbcd1008` | `b4d8e3a39a1fcdb8` |
+
+Both identical, and identical to the hand-flagged arms of Patch 323. **So a stock
+build of this tree on either machine now produces bit-identical collision and
+movement, with nothing passed by hand.**
+
+The Windows row is also the control: x86-64 cannot fuse, so the pin had to be a
+**no-op** there, and it was -- the hashes are unchanged from Patch 323's arm. A
+flag that changed the client too would have meant it was doing something other
+than what it says.
+
+### Two things deliberately left alone, both recorded rather than fixed
+
+- **msvc's `/fp:fast`** (`Makefile:1451-1452`) is contraction *and* reassociation,
+  the exact opposite of this patch, and that branch reassigns `BASE_CFLAGS` so it
+  does not inherit the pin either. msvc32/64 is neither shipping target and
+  `/fp:precise` is a behaviour change nobody here can test -- but anyone building
+  the Phase 3 verifier with `cl` must fix it first. A verifier that rounds
+  differently from the server is worse than no verifier.
+- **`CMakeLists.txt`'s `-march=native`** now carries the flag as well, but the
+  `-march` line stays, with a warning: it makes the *build machine's* ISA part of
+  the output, so on a modern x86-64 host it grants the very FMA this patch relies
+  on x86 lacking. A CMake build is not comparable with a shipped one and must
+  never be an arm of a determinism measurement.
+
+### And the one the audit found that is NOT fixed here
+
+`Alias_BuildGPUWeights` (`com_mesh.c:1738`) sorts bone influences with `qsort`
+and a comparator that returns 0 for ties, then accumulates vertex positions in
+that order with `+=` -- the Patch 323 defect class at a second site, and a stable
+sort in `com_bih.c` does nothing for it. It survives adversarial verification but
+narrowly: it needs **three or more** influences on one vertex with a tie (two tied
+influences commute from a zeroed accumulator and cannot diverge), it reaches a
+trace only through `Mod_Trace` on MD5/Zymotic/DPM models, and it cannot touch
+surf world geometry at all -- hl2 props copy VVD positions verbatim with no
+accumulation. Left for its own patch rather than folded in here, because it wants
+its own falsifier and this one is already answered by its own.

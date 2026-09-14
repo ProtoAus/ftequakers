@@ -36,6 +36,41 @@ STRIPFLAGS?=--strip-unneeded --remove-section=.comment
 VISIBILITY_FLAGS=-fvisibility=hidden	#just assume this for sanities sake. disable only for compilers that error.
 CPUOPTIMIZATIONS=-Os
 
+#FTESurf Patch 324: DO NOT REMOVE THIS, AND DO NOT ASSUME IT IS A MICRO-OPTIMISATION.
+#
+#GCC's default in gnu mode is -ffp-contract=fast, i.e. `a*b+c` MAY fuse into a
+#single FMA and round once instead of twice.  That default is not symmetric
+#between the two targets this game ships on: AArch64 has FMADD/FMSUB in its
+#MANDATORY base FP ISA and fuses at -O1+, while baseline x86-64 is SSE2 with no
+#FMA instruction at all and cannot.  So the SAME SOURCE at the SAME -O produces
+#different arithmetic on the Pi and on a Windows client -- and the engine's hot
+#paths are made of exactly the contractable shape: DotProduct (mathlib.h:72) is
+#a*b+c*d+e*f and appears in every plane distance in com_bih.c's trace and 48
+#times in pm_source.c's mover.
+#
+#MEASURED on the Pi, same source, same machine, this flag the ONLY difference
+#(`pm_dettest` on bhop_eazy, engine patch 323):
+#
+#            with -ffp-contract=off      without (the old default)
+#  trace     f7958b04dbcd1008            2cf4b709c5eb929f
+#  mover     b4d8e3a39a1fcdb8            c625b345aa4b712d
+#
+#and the left column is what a Windows client computes.  So before this line
+#existed, every lobby server on the Pi was simulating movement with different
+#arithmetic from every client predicting it -- continuously, on every map.
+#
+#Patch 322 measured that and Patch 323 closed the other half of it, but the flag
+#itself was passed BY HAND on the command line for those experiments and existed
+#nowhere in the tree, so no shipping build ever carried it.  It goes in
+#BASE_CFLAGS below rather than RELEASE_CFLAGS because BASE_CFLAGS is the one
+#variable that reaches BOTH binaries: the engine via ALL_CFLAGS, and the hl2
+#plugin via the BASE_CFLAGS= that plugins-rel/plugins-dbg forward -- and the
+#plugin is where the VBSP brush bevels and the .phy hull winding are computed,
+#i.e. the collision geometry the engine then traces.  A debug build gets it too,
+#deliberately: a determinism flag that only applies to one configuration is a
+#flag you cannot test with.
+FPDETERMINISM=-ffp-contract=off
+
 COMPILE_SYS:=$(shell uname -o 2>&1)
 
 #canonicalize the source path. except emscripten warns about that like crazy. *sigh*
@@ -661,7 +696,7 @@ endif
 SDL_INCLUDES=
 #-I$(LIBS_DIR)/sdl/include -I/usr/include/SDL -I$(LIBS_DIR)/sdl/include/SDL
 BASE_INCLUDES=-I$(CLIENT_DIR) -I$(SERVER_DIR) -I$(COMMON_DIR) -I$(GL_DIR) -I$(D3D_DIR) -I$(PROGS_DIR) -I. 
-BASE_CFLAGS=$(WARNINGFLAGS) $(GNUC_FUNCS) $(BASE_INCLUDES) -I$(LIBS_DIR)/dxsdk9/include -I$(LIBS_DIR)/dxsdk7/include $(SDL_INCLUDES) $(SVNREVISION)
+BASE_CFLAGS=$(WARNINGFLAGS) $(GNUC_FUNCS) $(FPDETERMINISM) $(BASE_INCLUDES) -I$(LIBS_DIR)/dxsdk9/include -I$(LIBS_DIR)/dxsdk7/include $(SDL_INCLUDES) $(SVNREVISION)
 CLIENT_ONLY_CFLAGS=-DCLIENTONLY
 SERVER_ONLY_CFLAGS=-DSERVERONLY
 JOINT_CFLAGS=
@@ -1448,6 +1483,14 @@ ifeq ($(findstring msvc,$(FTE_TARGET)),msvc)
 	SERVERLDDEPS=
 
 	#override various flags that expected gcc.
+	#FTESurf Patch 324: /fp:fast is contraction AND reassociation, i.e. the
+	#opposite of $(FPDETERMINISM) above, and this branch re-assigns BASE_CFLAGS
+	#below so it does not inherit it either.  Left alone ON PURPOSE: msvc32/64
+	#is neither of the two targets this game ships (mingw x86-64 and gcc
+	#aarch64), and swapping it for /fp:precise is a behaviour change nobody here
+	#can test.  But anyone building the Phase 3 re-simulation verifier with cl
+	#must fix this first -- a verifier that rounds differently from the server
+	#is worse than no verifier.
 	DEBUG_CFLAGS = -Od $(CPUOPTIMIZATIONS) /fp:fast
 	RELEASE_CFLAGS = -O2 -Gy -GS- $(CPUOPTIMIZATIONS) /fp:fast
 	RELEASE_LDFLAGS = /LTCG

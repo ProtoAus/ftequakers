@@ -305,7 +305,21 @@ IF(CMAKE_C_COMPILER_ID MATCHES "GNU")
 	#SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-function")			#
 #	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wswitch-enum")					#to warn about omitted enums despite default.
 
+	#FTESurf Patch 324: the Makefile pins this in BASE_CFLAGS and this file has to
+	#pin it too, because a CMake build shares none of that.  GCC's gnu-mode
+	#default fuses a*b+c into an FMA, which AArch64 can do in its base ISA and
+	#baseline x86-64 cannot, so the same source computes different collision
+	#arithmetic per target unless contraction is off.  See engine/Makefile.
+	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffp-contract=off")
+
 	#might as well do this, public builds use the regular Makefile.
+	#FTESurf Patch 324, READ BEFORE COMPARING A CMAKE BUILD WITH ANY OTHER:
+	#-march=native makes the BUILD MACHINE'S ISA part of the output.  On a
+	#modern x86-64 host it grants FMA, which is precisely the instruction the
+	#line above exists to keep out of the comparison -- contraction off stops
+	#the compiler fusing, but -march=native still changes what it may emit
+	#elsewhere.  A binary built here is therefore NOT comparable with a shipped
+	#one, and must not be used as an arm of a determinism measurement.
 	IF(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le" OR CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64")
 		SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=native")
 	ELSE()
