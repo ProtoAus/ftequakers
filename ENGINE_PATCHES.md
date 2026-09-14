@@ -29082,7 +29082,14 @@ buying free thinking time mid-flight. Two reasons it does not:
 It is *not* invariant to `sv_gamespeed`, which scales the mover's tick budget
 exactly as it scales `sv.time`, so `pms_lockedmovevars` stays load-bearing.
 
-### What is still owed before the clock can actually be flipped
+### ~~What is still owed before the clock can actually be flipped~~ — DONE, QC build 76, 2026-09-14
+
+**Kept for the estimate rather than deleted, because four of the six cost less
+than it says and one cost was missed entirely.** Read the list below as what was
+predicted, then the corrections after it. This is the same drift
+`ftesurf-audit-the-tree-not-the-plan` warns about, so the heading moves rather
+than the text: a log that still says "owed" about work that shipped is how a
+later reader concludes it never happened.
 
 Build 74 measures; it does not migrate. An adversarial review of every path the
 unit touches found these, and they are the real cost of the change:
@@ -29106,6 +29113,36 @@ unit touches found these, and they are the real cost of the change:
 - **The start-hop dwell rule** (`time - run_t_groundat >= want`) stays on the
   frame-quantised clock, so the run would have a reproducible NUMBER attached to
   an irreproducible VERDICT.
+
+#### How that list actually came out — QC build 76, deployed to all twelve lobbies
+
+The engine did not move: build 76 is QC only, against the Patch 325 fields
+already on the fleet. What it cost:
+
+| predicted | actual |
+|---|---|
+| `SV_TimerElapsed` from the same counter | `SV_ClockSec = movetick*rate + movecarry`, which is *exactly* the cumulative `cmd.msec` the mover consumed, so it telescopes and is monotone by construction. With no engine counter it returns `time`, so one accessor serves both models and a pre-325 server behaves as build 75 did — those runs carry the new `TF_NOCLOCK` and surfd demotes them. |
+| the padding ring is "incommensurable" | **It needed no new array and no new field.** The stamp was always a number subtracted from the run's origin at flush, and *both clocks are seconds* — so the same float in the same slot carries the new unit. One right-hand side. The predicted parallel tick ring would have been the single most expensive line in the change (four extra QC rings once cost 563 KB of progs for 68 KB of data). |
+| `SV_TimerResume` inverts, and "the carry has to be saved beside the tick" | Right about the inversion, wrong about the carry. Seconds and ticks are now two *independent exact* readings, neither a rounding of the other, so both restore straight into their own origins — the function got **shorter**, and the `run_t_tick <= 0` guard went with the division it protected. |
+| the freeze proof must be re-derived | Re-derived, and the model inverted with it: the clock was an ORIGIN re-derived on every frozen tick (three assignments, three branches); it now ACCUMULATES the interval into `run_t_frzticks` and `run_t_frzsec` from one delta on adjacent lines. The origin is written exactly twice in the file now. Cancellation still holds — `T_p+1..T_r` removed against `T_p..T_r-1` pinned — and now for the same reason in both units. Measured: `counted` reads 83, 83, 83 across a 3 s hold while `frz` climbs 70/0.7000 → 303/3.0240. |
+| `best.pb` and every archived FILENAME need version markers | `best.pb` → `FTESURF-PB 3`, and it is the only bump in that file's history that cannot be migrated in memory (v1→v2 moved a *key*; this moves the *values*). The filename half was **not needed**: `FTESURF-REC 5` is the marker and `Scores_ReadHeader` has parsed it per row since build 23 with nothing drawing it. One `else if` in the Local tab's TAG column — which is empty on exactly the archived rows whose ordering this can distort. |
+| the dwell rule | Moved to `SV_ClockSec` (`run_t_groundsec`/`run_t_airsec`). The 0 sentinel **stays**, and that is not a contradiction of build 75's `-1` lesson: there, 0 was a value the counter genuinely holds and differencing invented a four-figure number; here, reading 0 gives a dwell of zero, which *refuses* to qualify the hop. The sentinel that bites is the one whose failure invents a number. |
+
+**AND THE ONE THIS LIST MISSED, which was the most dangerous line in the
+migration.** `Lobby_SubmitRun` sent `tickrate` from `cvar("pm_ticrate")`. That
+was *correct* while `ticks` counted `sv.time` intervals — the same number
+produced the count. It is wrong the moment they are the mover's, because surfd
+stores `millis = ticks*1000/tickrate` and ranks on it: a disagreement puts every
+stored millisecond out by their ratio, silently, on a board that looks entirely
+normal. **That is the build-64 defect this patch's own essays warn about**, and
+it was found by grepping for what *consumes* a tick rather than by reasoning
+about the clock — as was the lifted-stage writer, a real recording with a body
+whose `t` column is the parent run's samples verbatim, under a v4 header.
+
+Verified on three arms: two loopback (`b76clock.cfg`, `b76frz.cfg`) with
+`reccheck.py` clean over 437 samples / 165 padding and again across a three-second
+clock hold, and one against a live public lobby (`b76net.cfg`) reading
+`ranks counted` with `rate 0.01` and writing nothing to the board.
 
 ### Deployed, and the reading this patch exists for
 
@@ -29158,20 +29195,39 @@ recording and no board row; `/api/board` was confirmed still empty afterwards.
 | loopback listen server | 1, 1, 0, 1 |
 | live lobby, run 1 | 0, 0, 0, 1, 0, 1, 0 |
 | live lobby, run 2 | 1, 1, 1, 1, **2**, 1, 0 |
+| loopback, build 76 arm 1 | 1, 0, **-1**, 0, 0, 0, 0, **-1** |
+| loopback, build 76 arm 2 | 1, 1, 0, 1, 1, 2, 0 |
+| live lobby, build 76 arm 3 | 0, 0, 0, 0, **-1**, 0, **-1**, 0 |
 
-**A BOUND WAS ASSERTED AT ELEVEN READINGS AND FALSIFIED AT EIGHTEEN.** After run 1
-this log's working note said the gap "is never 2, never negative -- that bounds the
-defect". The next run, same script and same lobby, measured 2. What the eighteen
-readings actually support:
+**FOUR CLAIMS ABOUT THIS GAP HAVE NOW BEEN WITHDRAWN, EACH BY THE NEXT BATCH OF
+READINGS. Do not assert a fifth.**
 
-- the gap is 0, 1 or 2 ticks, and the observed maximum is **not** a known bound,
-  because the identical claim at 1 survived exactly one more run;
-- **sampled is always >= counted**, 18 of 18. The sampled clock has been giving
-  players times that are too LONG, so the migration makes every stored time
-  slightly *faster* -- which is the direction that makes an empty board cheap and
-  a populated one expensive;
-- the frequency is **not stable between identical runs** (2-of-7 then 6-of-7), so
-  no per-run rate may be quoted as a property of the system.
+1. At eleven readings this log's working note said the gap "is never 2, never
+   negative -- that bounds the defect". The next run measured **2**.
+2. It retreated to "0..2, and **sampled is always >= counted**, 18 of 18 -- so the
+   migration makes every stored time slightly *faster*". QC build 76's own
+   verification arm measured **-1**, twice.
+3. That retraction came with an explanation, written into three files the same
+   hour: `floor(x + 0.5)` rounds both ways, and the eighteen one-way readings were
+   all over a *real network*, where late packets let `sv.time` run ahead of the
+   mover -- a bias that vanishes with the network. **Falsified forty minutes
+   later** by `b76net.cfg`, a live lobby through the router, which read -1 twice
+   itself.
+4. So "every stored time gets faster" is withdrawn with it. A run can come out one
+   tick slower.
+
+**What survives across 41 readings on three machines:** every one is in -1..2, and
+the distribution is not stable between identical runs (2-of-7, then 6-of-7, then
+mostly 0, same script and map). Half the formula survives too, and it is the
+useful half: `floor(x + 0.5)` rounds both ways, so a sampled clock **cannot** be
+one-sided by construction -- which says a -1 needs no explaining, while the
+original 18-of-18 does and **has none**.
+
+The transferable part is not "be more careful with bounds". It is that a STANDING
+instrument is what turns each of these into a correction rather than a belief,
+which is why `SV_TickReport` survived the migration it was written to inform --
+and needed a report-only `run_t_startwall`, since build 76 removed the last
+`sv.time` origin from that file.
 
 #### The instrument shipped the hazard it documented
 
