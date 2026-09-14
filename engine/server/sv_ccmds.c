@@ -4166,6 +4166,32 @@ typedef struct
 	int    fl;			/* SV_RecFlags: 1 onground, 2 ducked, 4 jump, 8 attack, 16 ramp */
 } recsim_sam_t;
 
+/*
+  FTESurf Patch 328 -- the `warp` record, QC build 83's answer to what E3 found.
+
+  A warp is state imposed on the player from OUTSIDE the mover: a teleport, a
+  setspeed pad, a push.  Patch 327 measured their absence -- ten of the fifteen
+  packets the open loop could not reproduce were trigger_teleport, ~250 u of
+  position with velocity carried through exactly, and the recording held the
+  CONSEQUENCE with no statement of the EVENT.  So arm 3 died at the first one
+  and everything after it was noise.
+
+  APPLYING ONE IS NOT THE SAME AS PINNING.  Arm 2 already snaps to the sample at
+  every packet boundary, which papers over a teleport by construction; that is
+  why its numbers were good and arm 3's were not.  A warp is applied in BOTH
+  arms because it is evidence the file states rather than a correction the
+  harness makes -- which is exactly the distinction that makes arm 3 worth
+  running at all.
+*/
+typedef struct
+{
+	int    pk;
+	int    mt;			/* the mover tick the imposition happened at */
+	vec3_t org;			/* POST-event state, which is what a verifier re-seeds from */
+	vec3_t vel;
+	char   kind[16];	/* tele telerel bhop speed push -- and whatever comes next */
+} recsim_warp_t;
+
 static int SV_RecSim_CmpF (const void *a, const void *b)
 {	/*3-way on purpose.  See Patch 323: a comparator that can only say "greater"
 	  is not an ordering, and this file has paid for that once already.*/
@@ -4204,9 +4230,12 @@ static void SV_RecSim_f (void)
 	qboolean      havecrc = false, inbody;
 	float         rate = 0;
 	int           instart_mt = -1, instart_run = -1;
-	int           nin = 0, nsam = 0, i, pass;
+	int           nin = 0, nsam = 0, nwarp = 0, i, pass;
 	recsim_in_t  *ins = NULL;
 	recsim_sam_t *sam = NULL;
+	recsim_warp_t*wrp = NULL;
+	float         sjrule = -1, sjoff[3] = {0,0,0};
+	int           filever = 0;
 
 	if (!*fname)
 	{
@@ -4235,7 +4264,7 @@ static void SV_RecSim_f (void)
 	   rather than a typo. */
 	for (pass = 0; pass < 2; pass++)
 	{
-		int cin = 0, csam = 0;
+		int cin = 0, csam = 0, cwarp = 0;
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
@@ -4255,6 +4284,19 @@ static void SV_RecSim_f (void)
 						{ filecrc = (unsigned int)strtoul(ln+7, NULL, 16); havecrc = true; }
 					else if (!strncmp(ln, "instart ", 8))
 						sscanf(ln+8, "%i %i", &instart_mt, &instart_run);
+					else if (!strncmp(ln, "FTESURF-REC ", 12))
+						filever = atoi(ln+12);
+					/* Patch 328: the randomized start.  Read and REPORTED and
+					   never applied -- the recording's first sample is already
+					   post-displacement, because SV_TimerStart moves the player
+					   before SV_RecOpen and SV_TimerRecFrame samples after both.
+					   So the seed carries it for free and the key's job here is
+					   to EXPLAIN the offset between the last padding sample and
+					   the first run sample, which would otherwise read as an
+					   unexplained 2-unit physics step. */
+					else if (!strncmp(ln, "startjit ", 9))
+						sscanf(ln+9, "%f %f %f %f", &sjrule,
+						       &sjoff[0], &sjoff[1], &sjoff[2]);
 				}
 				continue;
 			}
@@ -4292,10 +4334,36 @@ static void SV_RecSim_f (void)
 				}
 				cin++;
 			}
+			/* Patch 328.  Before this, an unknown record was not "skipped with a
+			   count" -- it was INVISIBLE: the two-pass allocator counted only
+			   samples and `in` rows, so nothing in the output would have revealed
+			   that the file carried records this harness ignored.  The tool that
+			   found the teleport problem could not see the record written to fix
+			   it until this branch existed. */
+			else if (!strncmp(ln, "warp ", 5))
+			{
+				if (pass == 1 && cwarp < nwarp)
+				{
+					recsim_warp_t *w = &wrp[cwarp];
+					float d[6];
+					char  kb[32];
+					if (sscanf(ln+5, "%i %i %31s %f %f %f %f %f %f",
+					           &w->pk, &w->mt, kb, &d[0], &d[1], &d[2],
+					           &d[3], &d[4], &d[5]) == 9)
+					{
+						VectorSet(w->org, d[0], d[1], d[2]);
+						VectorSet(w->vel, d[3], d[4], d[5]);
+						Q_strncpyz(w->kind, kb, sizeof(w->kind));
+					}
+					else
+						w->mt = -1;
+				}
+				cwarp++;
+			}
 		}
 		if (pass == 0)
 		{
-			nin = cin; nsam = csam;
+			nin = cin; nsam = csam; nwarp = cwarp;
 			if (!nin)
 			{
 				Con_Printf(CON_ERROR "pm_recsim: \"%s\" carries no `in` records."
@@ -4307,6 +4375,7 @@ static void SV_RecSim_f (void)
 			}
 			ins = Z_Malloc(sizeof(*ins) * nin);
 			sam = Z_Malloc(sizeof(*sam) * (nsam?nsam:1));
+			wrp = Z_Malloc(sizeof(*wrp) * (nwarp?nwarp:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4329,8 +4398,33 @@ static void SV_RecSim_f (void)
 		           : "^1DIFFERENT MAP -- every number below is meaningless^7");
 	else
 		Con_Printf("  map pin   ^3none in the header^7 (predates build 73)\n");
-	Con_Printf("  body      %i in rows, %i samples, %i packets\n",
-	           nin, nsam, nin?(ins[nin-1].pk - ins[0].pk + 1):0);
+	Con_Printf("  body      %i in rows, %i samples, %i packets, %i warps\n",
+	           nin, nsam, nin?(ins[nin-1].pk - ins[0].pk + 1):0, nwarp);
+
+	/* Patch 328.  The two v7 facts, printed whether or not they are there --
+	   because "this file predates the record" and "nothing imposed any state on
+	   this run" are the same bytes without a version, and that distinction is
+	   the whole reason build 83 bumped one. */
+	if (sjrule >= 0)
+		Con_Printf("  startjit  rule %g u, applied %.4f %.4f %.4f%s\n",
+		           sjrule, sjoff[0], sjoff[1], sjoff[2],
+		           (sjoff[0]==0 && sjoff[1]==0)
+		           ? "  ^3(blocked -- nothing was applied)^7" : "");
+	else
+		Con_Printf("  startjit  ^3no key^7 -- the rule was off, or this file"
+		           " predates build 83\n");
+	if (!nwarp)
+	{
+		if (filever >= 7)
+			Con_Printf("  warps     none, and the file is v%i, so that is a"
+			           " STATEMENT: nothing imposed state on this run.\n", filever);
+		else
+			Con_Printf("  warps     none, and the file is v%i -- which says"
+			           " NOTHING.  The writer did not exist.\n"
+			           "            An open loop across a teleport here will"
+			           " diverge and that is the format, not the mover.\n",
+			           filever);
+	}
 
 	/* ---- the arms -------------------------------------------------------- */
 	{
@@ -4343,6 +4437,7 @@ static void SV_RecSim_f (void)
 		int    open_first_1u = -1, open_first_01u = -1;
 		float  open_last = 0;
 		int    seeded = -1, mode, nbad = 0;
+		int    wcur = 0, wapplied = 0;		/* Patch 328 */
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
@@ -4410,6 +4505,7 @@ static void SV_RecSim_f (void)
 			else if (!mode)
 				Con_Printf("  seed      ^1no sample precedes the first `in` row^7\n");
 			pmove.msec_carry = ins[0].carry;
+			wcur = 0;			/* Patch 328: each pass replays the warps */
 
 			for (i = 0; i < nin; i++)
 			{
@@ -4446,6 +4542,45 @@ static void SV_RecSim_f (void)
 				VectorCopy(r->ang, pmove.angles);
 
 				PM_PlayerMove(1.0f);
+
+				/*
+				  PATCH 328: APPLY ANY STATE THE FILE SAYS WAS IMPOSED HERE.
+
+				  A warp is stamped with the mover tick as it stood AFTER the
+				  engine advanced it for the command whose touch fired -- while an
+				  `in` row carries the counter BEFORE its own move.  So a warp
+				  belongs after the row whose post-move tick reaches it, which is
+				  the row whose successor states that tick.  Walked with a cursor
+				  rather than searched, because both sequences are monotone and a
+				  search would invite an off-by-one of exactly the kind this
+				  command has already paid for once.
+
+				  IN BOTH ARMS, and that is the point.  Arm 2 snaps to the sample
+				  at every packet boundary and so papered over teleports by
+				  construction; arm 3 never corrects and died at the first one.
+				  Applying the record is neither -- it is reading what the file
+				  says happened, which is the difference between a harness that
+				  hides a gap and a format that closes it.
+				*/
+				while (wcur < nwarp)
+				{
+					if (wrp[wcur].mt < 0)
+						{ wcur++; continue; }	/* a malformed row, already noted */
+					if (wrp[wcur].mt > ins[i+1].mt)
+						break;
+					VectorCopy(wrp[wcur].org, pmove.origin);
+					VectorCopy(wrp[wcur].vel, pmove.velocity);
+					if (!mode)
+					{
+						wapplied++;
+						if (wapplied <= 6)
+							Con_Printf("  warp  row %i  mt %i  %s  -> org %.2f"
+							           " %.2f %.2f\n", i, wrp[wcur].mt,
+							           wrp[wcur].kind, wrp[wcur].org[0],
+							           wrp[wcur].org[1], wrp[wcur].org[2]);
+					}
+					wcur++;
+				}
 
 				/* ARM 1.  The mover's own tick count against the file's delta.
 				   Counted on the open pass only -- it is a property of the
@@ -4565,6 +4700,22 @@ static void SV_RecSim_f (void)
 			Con_Printf("^5ARM 3^7  open loop: first packet past 0.1 u at row %i,"
 			           " past 1 u at row %i, last %.4f u\n",
 			           open_first_01u, open_first_1u, open_last);
+
+			/* PATCH 328: ARM 3 IS THE ONE THAT ANSWERS THE FORMAT QUESTION.
+			   Arm 2 is pinned and would look fine over a hole; only an open loop
+			   can say whether the file contains enough to cross one.  -1 means
+			   it never diverged at all. */
+			if (nwarp)
+				Con_Printf("        %i warp record%s applied.  If arm 3 now runs"
+				           " to the end, the format carries\n        what E3 said"
+				           " it did not -- the EVENT and not only its"
+				           " consequence.\n",
+				           wapplied, wapplied==1?"":"s");
+			else if (filever < 7)
+				Con_Printf("        ^3and there were no warp records to apply."
+				           "  On a map with teleports arm 3 CANNOT\n        run to"
+				           " the end from a v%i file, whatever the mover does."
+				           "^7\n", filever);
 		}
 		else
 			Con_Printf("^5ARM 2/3^7  no packet boundary carried a sample to compare against.\n");
@@ -4581,6 +4732,7 @@ static void SV_RecSim_f (void)
 
 	Z_Free(ins);
 	Z_Free(sam);
+	Z_Free(wrp);
 }
 
 /*

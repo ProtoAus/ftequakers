@@ -29458,3 +29458,107 @@ is 0.0000.
 Needs the recording's own map loaded -- it re-simulates against real collision
 geometry, and prints the file's `mapcrc` beside the world's so a mismatch is
 visible rather than silently producing numbers about the wrong map.
+
+## Patch 328 -- `pm_recsim` learns the record that closes E3's hole
+
+Patch 327 answered experiment E3 and its answer was mostly a list of what the
+`.rec` could not say. The largest item:
+
+> Ten of the fifteen divergent packets are `trigger_teleport` -- ~250 u of
+> position with velocity preserved EXACTLY, landing on the run's own start
+> coordinates. **The recording records the CONSEQUENCE and never the EVENT.**
+
+QC build 83 writes the event: a `warp` record, emitted by the handler that
+imposed the state, and a `startjit` header key for the randomized start, which
+is the same class of event applied by the server one instant earlier. This patch
+is the other half -- the harness that measures whether the format now carries
+enough to cross a hole it previously died at.
+
+**THREE CHANGES, AND THE FIRST IS THE ONE THAT MATTERED.**
+
+**1. The parser had no `else`.** `SV_RecSim_f`'s two-pass reader recognised
+samples and `in` rows and nothing else -- so an unrecognised record was not
+"skipped with a count", it was **invisible**. The allocator counted only the two
+types it knew, so nothing in the command's output would have revealed that a
+file contained records the harness ignored. *The tool that found the teleport
+problem could not have seen the record written to fix it.* That is the
+sv_mapcheck shape one level up: a reader and a writer agreeing about a fact
+neither of them holds.
+
+**2. `warp <pk> <mt> <kind> <ox oy oz> <vx vy vz>` is parsed and APPLIED, in
+both arms.** Arm 2 already snaps origin and velocity to the sample at every
+packet boundary, which papers over a teleport by construction -- that is exactly
+why its numbers looked good in E3 while the format was missing something. A warp
+is applied in both because it is *evidence the file states*, not a correction
+the harness makes, and that distinction is the whole reason arm 3 is worth
+running.
+
+Walked with a cursor rather than searched: both sequences are monotone in `<mt>`,
+and a search would invite an off-by-one of exactly the kind this command has
+already paid for once (Patch 327's median of exactly 8.0000 u/s).
+
+Note the stamping asymmetry, because a reader who expects the two to match will
+"fix" the wrong one: an `in` row carries the mover tick BEFORE its own move,
+while a `warp` carries it as the engine had already advanced it for the command
+whose touch fired. A warp therefore sits one tick above its own input row by
+construction.
+
+**3. `startjit` is read, reported, and deliberately never applied.** The
+recording's first sample is already post-displacement -- `SV_TimerStart` moves
+the player before `SV_RecOpen`, and `SV_TimerRecFrame` samples after both -- so
+the seed carries the offset for free. The key's job here is to EXPLAIN the offset
+between the last padding sample and the first run sample, which would otherwise
+read as an unexplained two-unit physics step.
+
+**IT ALSO PRINTS WHAT SILENCE MEANS, which is the point of the version bump.**
+A v6 file with no `warp` records and a v7 file with none are the same bytes and
+mean opposite things: in v6 the writer did not exist, in v7 nothing imposed state
+on the run. Re-simulation must trust the second and refuse the first, so the
+command says which it is holding rather than leaving it to be inferred.
+
+### MEASURED, with a control that was required to fail
+
+`cfg/testrun/b83run.cfg`, bhop_eazy, both files replayed in one process minutes
+apart under this binary.
+
+|                        | SUBJECT (v7)     | CONTROL (v6)    |
+|------------------------|------------------|-----------------|
+| warp records           | 10               | 0               |
+| startjit               | 2 (1.65 1.00 0)  | no key          |
+| ARM 1 tick arithmetic  | 1749/1749 exact  | 1339/1339 exact |
+| ARM 2 pinned, median   | 0.0049 u         | 0.0046 u        |
+| ARM 2 at the floor     | 1687 of 1734     | 1307 of 1324    |
+| **ARM 3 open loop dies** | **row 817**    | **row 149**     |
+
+The control is `data/e3trace.rec`, the build-82 recording E3 itself was measured
+on, kept for exactly this. **The open loop crossed six `trigger_teleport`s it
+could not previously cross even one of, and ran 5.5x further before diverging;
+the control still dies at 149.** A harness that had merely got looser -- wider
+tolerances, a skipped comparison, a reseed nobody noticed -- would have improved
+both, which is why a control that must still fail is the only kind worth having
+here. Same argument E3 made with build 82's noclip flight.
+
+**And the control reproduces Patch 327's numbers to the digit** -- 1339 of 1339,
+median 0.0046, p90 0.0087, 1307 at the floor, 15 diverged, arm 3 at 149 -- under
+a different binary. So this patch moved nothing it was not supposed to move.
+
+**What stops the open loop now is not a missing fact.** Row 817 is four rows
+before arm 2's first divergence at 821, whose velocity error is 301.99 against a
+jumpvelocity of 301.993: one tick of disagreement about when a landing became a
+jump. Chaos at a discrete boundary, which E3 already named as expected rather
+than wrong, and which no format can record away. The point is that it now fails
+for a physics reason instead of a bookkeeping one.
+
+**ONE RESIDUAL, RECORDED AND NOT EXPLAINED.** Three consecutive arm-2 packets
+(rows 1430-1432) read an origin error of **exactly 16.00 u** with velocity errors
+under 5 u/s, at a landing. Sixteen is the player hull's half-width, and a summary
+statistic on a round constant is usually a systematic offset rather than a
+spread. It is **not this patch**: those rows carry movetick 2084-2089 and the
+nearest warp records are at 1857 and 2168, so nothing was applied within two
+hundred mover ticks of them, and the residual is absent from the control under
+the same binary. What it is, is not known, and a fourth explanation is not being
+offered -- 3 packets of 1734, in the pinned arm, moving neither headline number.
+
+    pm_recsim <file.rec> [stop after N packets]
+
+Needs the recording's own map loaded, as before.
