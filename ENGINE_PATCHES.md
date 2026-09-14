@@ -29325,3 +29325,136 @@ itself truthfully, and the run ranked. Every remaining route requires stating so
 false. Making a false statement cost more than one console line is a separate problem --
 CSQC cannot currently tell that the server's copy of the key is not the one it sent --
 and nothing here addresses it.
+
+---
+
+## Patch 327 -- a recording that says what the mover was handed, replayed back into the mover  *(APPLIED -- `engine/server/sv_ccmds.c` only: a new `pm_recsim` console command beside `pm_dettest`, two file-scope structs and two static helpers. No behaviour change to any code path the game runs: it is a measurement command that reads a file, runs the mover against a saved/restored `pmove` and `movevars`, and prints. No cvar, no struct change, no protocol change, no ABI bump. MEASURED: `ftesurf/cfg/testrun/e3recsim.cfg` (capture) and `e3run.cfg` (replay), on a real clean bhop run of 1340 input rows.)*
+
+**This is the anti-cheat plan's experiment E3**, and it is the last of the three
+Phase 0 experiments to become answerable. The plan is exact about why it gates
+everything after it:
+
+> Replay one recorded usercmd stream through `PMSrc_PlayerMove` offline and
+> compare to the `.rec`. If it does not reproduce exactly on the same binary,
+> the verifier is not yet possible and that must be understood first.
+
+Until QC build 82 there was no usercmd stream in a `.rec` to replay -- every
+recording this tree had ever written was a STATE trace. Build 82 added the input
+trace, so E3 became attemptable for the first time, and this command is the
+attempt.
+
+**IT IS AN EXPERIMENT AND NOT A VERIFIER, deliberately.** It re-simulates and
+MEASURES. It tests no zone, recomputes no run time, and refuses nothing. What it
+exists to produce is the list of things a verifier would still be missing --
+while the format is young enough to change and the board is empty enough that
+changing it costs nothing.
+
+### The answer: YES, to the limit of what the file can express
+
+Measured on a real, clean (`flags 0`), never-finished bhop run of bhop_eazy --
+1340 input rows over 1325 packets, captured by `e3recsim.cfg`:
+
+| arm | result |
+|---|---|
+| **1 tick arithmetic** | **1339 of 1339 moves exact.** 0 off by any amount. |
+| **2 pinned loop** | **1307 of 1324 packets at the file's own printing floor.** Origin error median **0.0046 u**, p90 0.0087 u; velocity error median **0.0000**, p90 0.0093 u/s. |
+| **3 open loop** | holds to row 149, which is the first `trigger_teleport`. |
+
+**ARM 1 SETTLES A DESIGN DECISION RATHER THAN CONFIRMING ONE.** Build 82 refused
+to store a frametime column, on the grounds that the duration of a move is exactly
+`(next mt - mt)*rate + (next carry - carry)` and a column would be a third copy of
+a two-copy fact. That was arithmetic on paper. Arm 1 hands the mover the derived
+duration and asks how many ticks it ran; 1339 of 1339 match the file's own
+movetick delta. So the refusal holds **and** `%.5f` on `<carry>` is enough
+precision to survive the round trip -- which was not obvious, because a tick
+boundary sits 0.01 away from a number printed to 1e-5, and `test_reccheck.py`
+already pins a legal carry that renders as exactly one tick.
+
+**ARM 2's MEDIAN IS THE RESULT AND ITS MAXIMUM IS THE FINDING.** A sample is
+written at `%.2f`, so ±0.005 u is the best any re-simulation could possibly score;
+the measured median is 0.0046 u and the velocity median is 0.0000. The mover
+reproduces the recorded trajectory exactly, and the residue is the file's own
+printing. Fifteen packets do not, and they are not simulation failures.
+
+### What it found, which is the point
+
+**1. TELEPORTS ARE INVISIBLE TO THE TRACE, AND THIS IS THE BIG ONE.** Ten of the
+fifteen divergent packets carry a position discontinuity of ~250 units **with
+velocity preserved exactly**, landing on the run's own start coordinates. That
+signature is `trigger_teleport` -- `sv_entities.qc:4632` calls them *"stage/bonus
+teleports, and the 'you fell off' resets"*. The `.rec` records the CONSEQUENCE
+(the next sample is somewhere else) and never the EVENT.
+
+So a verifier cannot distinguish a legitimate stage teleport from a cheat that
+simply moved the player, and on any map with teleports an open-loop re-simulation
+diverges at the first one and everything after it is noise. The plan's "known hard
+parts" list mentions trigger state as a *simulation* difficulty; this is sharper
+and different: **the trace has no record of state imposed from outside the mover
+at all.** `trigger_push` and `trigger_setspeed` are the same class through
+velocity rather than position, and this run never touched one.
+
+**2. THE FINAL MOVE'S DURATION IS NOT DERIVABLE.** 1340 rows give 1339 durations:
+the last row has no successor to difference against. It is also, exactly, the move
+the finish is latched on -- `instart` states the horizon at the START of a
+recording and nothing states the one at the end. Worth 1-2 ticks on the stored
+time, which is a rank.
+
+**3. THE FILE PINS THE MAP AND THE ZONES AND NOT THE PHYSICS.** A `.rec` carries
+`mapcrc` (build 73) and `zonesrc`/`zonecrc`/`zonerule` (build 81). It does not
+carry the movement parameters, the player hull, or `pm_type`. This command takes
+all three from the running server, which is legitimate for an experiment against
+the same build on the same map and is exactly what a real verifier could not do.
+Patch 313's `*ruleset` publishes a breach COUNTER, so a verifier is told whether
+the ruleset held and never what it was.
+
+### The controls
+
+**THE NEGATIVE CONTROL IS THE BUILD-82 RECORDING**, and it is worth more than it
+looks. That file is half a noclip flight, because the only way a config can cross
+an end zone is to fly through the level. `pm_type` is not in the format, so
+`pm_recsim` assumes `PM_NORMAL`, collides with walls the flight passed through,
+and reports exactly that -- velocity errors over 1000 u/s from row 223, which is
+where the real run went into noclip. **A command that reproduced both files
+equally well would be measuring nothing**, and this is what says it can tell a
+reproduction from a non-reproduction.
+
+**AND ONE CORRECTION TO THE BUILD-82 RECORD, found by reading the same file
+again.** Build 82 measured "2 packets of 4 rows" on a quiet loopback and recorded
+its own pre-registration as falsified: *"a local loopback client sends one command
+per packet"* was said to be wrong. It was not wrong. Both 4-row packets carry four
+rows of **exactly 48.0 ms and exactly 50.0 ms**, which is `SV_RunCmd`'s
+`msec > 50` chop halving twice (192 -> 96 -> 48, and 200 -> 100 -> 50), not four
+commands. The arithmetic closes: the `.view` recorded 410 usercmds, the `.rec` 410
+packets and 416 moves, and the six extra moves are the two chops. The *conclusion*
+survives untouched -- a packet really can contain several moves, which is the
+property `<pk>` exists for, and the zone test really is taken once after all of
+them. The *mechanism* attributed to it does not, and build 82's own essay had
+already documented the chop two paragraphs away without connecting the two.
+
+### Two defects in this command, both caught by its own output
+
+**The first cut ran ONE simulation and printed it twice.** Arms 2 and 3 are
+described as a pinned loop and an open loop; the code read the error at each
+packet boundary and never snapped anything back, so both reported the same
+open-loop numbers under two names. Fixed by running two passes with an explicit
+mode. Note what is still deliberately not re-seeded on the pinned pass: the
+mover's carried state (`pmsourcestate_t` -- `ducktime`, `ducked`, `oldbuttons`,
+`groundnormal`, `stamina`, `surfing`, the ladder pair). None of it is in the
+`.rec` and no sample implies it, so re-seeding it would be inventing evidence.
+
+**The second was an off-by-one, and the number is what named it.** A row's `nsam`
+is how many samples PRECEDED it, so the group `{nsam == k}` is bracketed by
+`sample[k-1]` before and `sample[k]` after; the code compared the simulated
+post-move state against `sample[k-1]`, i.e. against the state it had started from.
+The tell was that the velocity error's median was **exactly 8.0000 u/s** -- one
+tick of gravity at 800 u/s² and 0.01 s. A median that lands on a round physical
+constant is a systematic offset and not a distribution. With it fixed the median
+is 0.0000.
+
+### Usage
+
+    pm_recsim <file.rec> [stop after N packets]
+
+Needs the recording's own map loaded -- it re-simulates against real collision
+geometry, and prints the file's `mapcrc` beside the world's so a mismatch is
+visible rather than silently producing numbers about the wrong map.
