@@ -28720,3 +28720,122 @@ table above.
   two *versions*. Re-simulating a run recorded by an older client is a separate
   question, and `mapcrc` in the `.rec` header (Patch 321) is what will make it
   answerable.
+
+## Patch 323 -- the collision tree's shape was a property of the libc, not of the map  *(APPLIED -- `engine/common/com_bih.c` only: the three comparators become 3-way, `qsort` becomes an in-tree stable merge sort, and `BIH_BuildNode` gains a scratch parameter. No new cvar, no struct change, NO ABI BUMP -- see why that constraint decided the design. MEASURED: eight arms across x86-64/msvcrt and aarch64/glibc on two maps, `cfg/testrun/p322det.cfg` and `cfg/testrun/p323big.cfg`, plus `cfg/testrun/p323self.cfg` as the mover regression gate.)*
+
+Patch 322 measured E4 and left exactly one residual: with `-ffp-contract=off` the
+mover is bit-identical across the two architectures and libm agrees, but the
+`trace` hash does not. It named the suspect, tried the obvious fix, measured it,
+and **reverted** it. This patch closes it.
+
+### The mechanism, restated
+
+`BIH_Sort_X/Y/Z` returned `am > bm` -- 0 or 1, never negative -- which does not
+satisfy `qsort`'s contract. On top of that `qsort` is not required to be
+**stable**, and these comparators return 0 for equal keys. Either fault alone
+leaves equal-key leaf order implementation-defined, so the BIH tree's shape
+followed the sort algorithm rather than the map. The trace then tie-breaks with
+`enterfrac <= tr->trace.truefraction` at three sites -- among surfaces hit at the
+*same* fraction the last one visited wins -- and which is last follows the shape.
+Ties are not exotic: coplanar brush faces and abutting `.phy` hulls are most of a
+surf ramp.
+
+### Why the fix is a stable sort and not a sign, and not an index either
+
+A sign was tried in 322: it moved x86-64, did not move aarch64, and left the two
+still disagreeing. It bought no determinism and cost a physics change.
+
+The obvious total order is "tie-break on the leaf's original index", i.e. a new
+field on `struct bihleaf_s`. **That is not available.** The struct crosses the
+plugin ABI: `plugins/cod/codbsp.c` and the hl2 VBSP loader both fill leaf arrays
+and call `modfuncs->BIH_Build`, and the engine and the hl2 plugin ship as two
+separate binaries that can reach a player independently -- which is exactly the
+skew window Patch 321 and QC build 73 had to measure a month's worth of care
+around. Widening a struct both sides stride through would be a layout break with
+no version to catch it. A pointer tie-break is worse still: addresses are not
+portable and not stable run to run.
+
+So the order comes from **stability** instead. `BIH_SortLeafs` is a bottom-up
+merge sort that takes the left run whenever the comparator does not say
+"greater". Stability makes the output a pure function of (input array,
+comparator); equal keys keep their input order, which is the map file's order,
+which is the same on every machine. That is a total order with no unique key and
+no struct change. The comparators are made proper 3-way as well -- that is not
+what buys the determinism, but a 0/1 comparator is a loaded gun for the next
+person who hands one to `qsort`. NaN deliberately falls through both tests to 0
+so a degenerate bound keeps input order rather than making the comparator
+inconsistent with itself.
+
+Cost: one scratch array of `numleafs` entries allocated once in `BIH_Build` and
+threaded down, so the recursion never allocates; same O(n log n).
+
+### The answer
+
+`pm_dettest` trace hash, fully matched arms (same commit, same plugin,
+`-ffp-contract=off` on aarch64):
+
+| | bhop_eazy | surf_affliction |
+|---|---|---|
+| Windows x86-64, before | `dd79174b95e2e3f8` | `04952f47d2caa12b` |
+| Windows x86-64, after | **`f7958b04dbcd1008`** | `04952f47d2caa12b` |
+| Pi aarch64, before | `f7958b04dbcd1008` | `04952f47d2caa12b` |
+| Pi aarch64, after | **`f7958b04dbcd1008`** | `04952f47d2caa12b` |
+
+`mapcrc` matched per map on both machines (`676de275`, `34bd7f78`) -- the
+control. `libm 5e749b8a83b44107` and the per-map `mover` hash
+(`b4d8e3a39a1fcdb8`, `801425979c8d1f6a`) were identical in every arm.
+
+**1. The two architectures now agree.** That was the whole point, and with the
+mover and libm already matching it means E4 is answered in full: the verifier
+Phase 3 wants MAY run on the Pi rather than on the player's own architecture.
+
+**2. THE PI DID NOT MOVE, so standing records stand.** Every record on the board
+was set on the Pi's lobbies, and the server's collision is bit-identical before
+and after on both maps. This is the outcome the 322 entry could not promise, and
+it is not luck: the Pi runs **glibc 2.36**, whose `qsort` is `msort_with_tmp`, a
+merge sort -- so the order it was already producing *is* the stable order. The
+entire physics change lands on the Windows **client**, which was the side quietly
+disagreeing with the server it predicts for. So this is a prediction fix as much
+as a determinism fix, and the direction of the fix is the right way round.
+
+**3. And not patching had a cost that was invisible.** glibc 2.37 replaced
+`qsort` with an in-place introsort, which is **not** stable. Left alone, a
+routine `apt upgrade` on the Pi would have silently changed which surface wins a
+tie on every map in the library -- no code change, no version bump, nothing to
+point at, and every standing record quietly set under different physics from
+every new one.
+
+### What the second map was for, and why its premise was wrong
+
+`p323big.cfg` was written on the assumption that the heaviest map would have the
+most ties. **It does not.** surf_affliction -- one of the largest in the library
+-- produced the *same* hash on all four arms, before and after, so it cannot
+discriminate and never could. Size is not the property that matters; tie geometry
+is, and bhop_eazy has it while surf_affliction does not. Had this been the only
+map measured, the patch would have read as a no-op and the real result would have
+been missed. The file keeps its registered prediction and carries the correction
+underneath it.
+
+What the map does still buy: a second architecture-agreement point, evidence that
+the patch is **not gratuitous** (it changes results only where the old comparator
+was genuinely producing a different order and leaves everything else
+bit-identical), and the cost reading -- 6014 ms to load before, 6054 ms after,
+one sample each, i.e. indistinguishable.
+
+### Regression gate
+
+`pm_selftest` shares no input with the trace hash -- it pins `PM_PlayerMove` with
+no map loaded -- so it can only fail if this patch broke something it had no
+business touching. `cfg/testrun/p323self.cfg`: **all checks passed**.
+
+### What is still open
+
+E4's remaining line in the plan is now closed, but two honest limits:
+
+- This is a measurement on **two** maps and two libcs, not a proof over 1312 maps
+  and every libc. What makes it more than that is the mechanism: the output no
+  longer depends on the sort algorithm at all, so there is nothing left for a
+  third libc to disagree about *in this sort*.
+- It compares two builds of the **same source**, not two *versions*.
+  Re-simulating a run recorded by an older client is a separate question, and
+  `mapcrc` in the `.rec` header (Patch 321) is what makes it answerable.

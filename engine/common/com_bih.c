@@ -2106,19 +2106,78 @@ static unsigned int BIH_NativeContents(struct model_s *mod, int hulloverride, co
 
 #if defined(BIH_USEBIH) || defined(BIH_USEBVH)
 /*
-  ftesurf Patch 322 (plan experiment E4): READ THIS BEFORE "FIXING" THESE THREE.
+  ftesurf Patch 323: THE COLLISION TREE'S SHAPE IS NO LONGER A PROPERTY OF THE
+  LIBC THAT BUILT THE BINARY.  Read the Patch 322 history below before touching
+  any of this -- it is the record of a fix that looked obvious, was measured,
+  and was reverted.
 
-  They return `am > bm` -- 0 or 1, NEVER NEGATIVE -- which does not satisfy
-  qsort's contract, so the order of equal-key leaves is implementation-defined.
-  That makes the BIH TREE'S SHAPE a property of the libc that built the binary
-  rather than of the map, and the trace then tie-breaks with
-  `enterfrac <= truefraction` at three sites (:271, :820, :1047), so among
-  surfaces hit at the same fraction THE LAST ONE VISITED WINS -- and which is
-  last follows the shape.
+  THE MECHANISM, unchanged from 322.  These three comparators fed `qsort`, and
+  they returned `am > bm` -- 0 or 1, NEVER NEGATIVE -- which does not satisfy
+  qsort's contract; on top of that qsort is not required to be STABLE, and they
+  return 0 for equal keys.  Either fault alone leaves equal-key leaf order
+  implementation-defined, so the tree's shape followed the sort algorithm rather
+  than the map.  The trace then tie-breaks with `enterfrac <= truefraction` at
+  three sites (:271, :820, :1047) -- among surfaces hit at the SAME fraction the
+  last one visited wins -- and which is last follows the shape.  Ties are not
+  exotic here: coplanar brush faces and abutting .phy hulls are most of a surf
+  ramp.
 
-  THE OBVIOUS FIX IS A HALF-FIX AND WAS MEASURED AND REVERTED, which is the only
-  reason this comment is longer than the patch would have been.  Writing
-  `return (am > bm) - (am < bm);` was tried on both architectures:
+  THE FIX IS A STABLE SORT, NOT A SIGN, and the distinction is the whole patch.
+  `BIH_SortLeafs` below is an in-tree bottom-up merge sort that takes the LEFT
+  run whenever the comparator does not say "greater".  Stability is what makes
+  the output a pure function of (input array, comparator): equal keys keep their
+  input order, which is the map file's order, which is the same on every
+  machine.  That is a TOTAL order without needing a unique key -- and a unique
+  key was not available anyway, because the obvious one is the leaf's index and
+  `struct bihleaf_s` CROSSES THE PLUGIN ABI (plugins/cod/codbsp.c and the hl2
+  VBSP loader both fill leaf arrays and call `modfuncs->BIH_Build`), so widening
+  it would be a layout break between two binaries that ship separately and can
+  reach a player independently.  A pointer tie-break is worse: addresses are not
+  portable and not even stable run to run.
+
+  The comparators are now proper 3-way as well.  That is not what buys the
+  determinism -- the stable merge does -- but a 0/1 comparator is a loaded gun
+  for the next person who hands one to qsort.  NaN deliberately falls through
+  both tests to 0, so a degenerate bound keeps input order instead of making the
+  comparator inconsistent with itself.
+
+  COST, and why it is the cheapest available: one scratch array of numleafs
+  entries for the duration of the build, and the same O(n log n).  It is
+  allocated once in BIH_Build and threaded down, so the recursion does not
+  allocate per node.  surf_affliction's map load measured 6014ms before and
+  6054ms after on the Pi (one sample each, i.e. indistinguishable).
+
+  MEASURED, `pm_dettest` trace hash, both architectures, fully matched arms:
+
+                              bhop_eazy           surf_affliction
+    Windows x86-64, before    dd79174b95e2e3f8    04952f47d2caa12b
+    Windows x86-64, after     f7958b04dbcd1008    04952f47d2caa12b
+    Pi aarch64, before        f7958b04dbcd1008    04952f47d2caa12b
+    Pi aarch64, after         f7958b04dbcd1008    04952f47d2caa12b
+
+  Read the second column first, because it is the one that stops this being
+  over-claimed: on surf_affliction NOTHING MOVED AT ALL, on either machine.
+  Size is not the discriminator -- surf_affliction is one of the heaviest maps
+  in the library and it has no tie the two sorts resolved differently.  What
+  discriminates is tie geometry, and bhop_eazy has it.
+
+  THE PI DID NOT MOVE ON EITHER MAP, and that is the result that matters to
+  players: every standing record was set on the Pi's lobbies, and the server's
+  collision is bit-identical before and after.  It is not luck -- the Pi runs
+  glibc 2.36, whose qsort is `msort_with_tmp`, a MERGE sort, so the order it was
+  already producing IS the stable order.  The entire physics change lands on the
+  Windows CLIENT, which was the side quietly disagreeing with the server it
+  predicts for; so this is a prediction fix as much as a determinism one.
+
+  And note what that implies about NOT patching: glibc 2.37 replaced qsort with
+  an in-place introsort, which is not stable.  Left alone, a routine `apt
+  upgrade` on the Pi would have silently changed which surface wins a tie on
+  every map in the library, with no code change and nothing to point at.
+
+  ---------------------------------------------------------------------------
+  ftesurf Patch 322 (plan experiment E4), KEPT AS HISTORY: the obvious fix was
+  tried, measured, and reverted.  Writing `return (am > bm) - (am < bm);` and
+  nothing else:
 
     x86-64/msvcrt  the trace hash MOVED (3486c2f3 -> 26640d5b), i.e. it really
                    does change which surface wins ties, i.e. it changes physics
@@ -2127,50 +2186,86 @@ static unsigned int BIH_NativeContents(struct model_s *mod, int hulloverride, co
                    already produced the corrected order; msvcrt's quicksort did
                    not.  So the bug's effect is libc-specific, and the fix's
                    effect is too.
-    together       the two STILL disagreed afterwards (6a973cc7 vs f7958b04),
-                   with identical source, identical plugin and contraction off.
+    together       the two STILL disagreed afterwards, with identical source,
+                   identical plugin and contraction off.
 
-  Because the sign is not the whole problem: qsort is NOT STABLE, and these
-  comparators return 0 for equal keys, so equal-key order stays
-  implementation-defined however the sign is spelled.  Cross-libc determinism
-  needs a TOTAL order -- lexicographic on all six bounds and then `type`, or a
-  stable sort written in-tree -- not a sign.  A sign fix buys no determinism and
-  costs a physics change, which is the worst available trade, so it is not here.
-
-  What E4 did establish: with -ffp-contract=off on aarch64 the MOVER is
-  bit-identical across the two architectures over 2048 ticks
-  (b4d8e3a39a1fcdb8), and libm (sin/cos/atan2/sqrt) agrees too.  The residual
-  lives in this sort.  See ENGINE_PATCHES.md Patch 322 and cfg/testrun/p322det.cfg.
+  That is why a sign alone was rejected: it bought no determinism and cost a
+  physics change, the worst available trade.  What E4 did establish is that with
+  -ffp-contract=off on aarch64 the MOVER is bit-identical across the two
+  architectures over 2048 ticks (b4d8e3a39a1fcdb8) and libm agrees too, so this
+  sort was the whole residual.  See ENGINE_PATCHES.md patches 322 and 323, and
+  cfg/testrun/p322det.cfg, which is the falsifier for both.
 */
 static int QDECL BIH_Sort_X (const void *va, const void *vb)
 {
 	const struct bihleaf_s *a = va, *b = vb;
 	float am = a->maxs[0]+a->mins[0];
 	float bm = b->maxs[0]+b->mins[0];
-	if (am == bm)
-		return 0;
-	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
+	if (am < bm) return -1;		/*ftesurf P323: 3-way, and NaN falls to 0*/
+	if (am > bm) return  1;
+	return 0;
 }
 static int QDECL BIH_Sort_Y (const void *va, const void *vb)
 {
 	const struct bihleaf_s *a = va, *b = vb;
 	float am = a->maxs[1]+a->mins[1];
 	float bm = b->maxs[1]+b->mins[1];
-	if (am == bm)
-		return 0;
-	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
+	if (am < bm) return -1;		/*ftesurf P323: 3-way, and NaN falls to 0*/
+	if (am > bm) return  1;
+	return 0;
 }
 static int QDECL BIH_Sort_Z (const void *va, const void *vb)
 {
 	const struct bihleaf_s *a = va, *b = vb;
 	float am = a->maxs[2]+a->mins[2];
 	float bm = b->maxs[2]+b->mins[2];
-	if (am == bm)
-		return 0;
-	return am > bm;		/*ftesurf P322: DELIBERATELY UNCHANGED -- see BIH_Sort_X*/
+	if (am < bm) return -1;		/*ftesurf P323: 3-way, and NaN falls to 0*/
+	if (am > bm) return  1;
+	return 0;
+}
+
+/*
+ftesurf Patch 323: a stable bottom-up merge sort, replacing qsort.
+
+`<= 0 takes the left run` is the stability, and stability is the whole point:
+equal-key leaves come out in the order they went in, which is the order the map
+file gave them, which is the same on every machine.  No libc is consulted.
+
+Bottom-up rather than recursive so there is one scratch buffer for the whole
+build and no per-node allocation; `scratch` must hold `numleafs` entries and is
+owned by BIH_Build.
+*/
+static void BIH_SortLeafs (struct bihleaf_s *leafs, size_t numleafs, struct bihleaf_s *scratch,
+                           int (QDECL *cmp) (const void *va, const void *vb))
+{
+	size_t width, i;
+	for (width = 1; width < numleafs; width *= 2)
+	{
+		for (i = 0; i < numleafs; i += width*2)
+		{
+			size_t l = i, lend = i+width, r = i+width, rend = i+width*2, o = i;
+			if (lend > numleafs) lend = numleafs;
+			if (r    > numleafs) r    = numleafs;
+			if (rend > numleafs) rend = numleafs;
+			while (l < lend && r < rend)
+			{
+				if (cmp(&leafs[l], &leafs[r]) <= 0)
+					scratch[o++] = leafs[l++];
+				else
+					scratch[o++] = leafs[r++];
+			}
+			while (l < lend)
+				scratch[o++] = leafs[l++];
+			while (r < rend)
+				scratch[o++] = leafs[r++];
+		}
+		memcpy(leafs, scratch, numleafs*sizeof(*leafs));
+	}
 }
 #endif
-static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s **freenodes, struct bihleaf_s *leafs, size_t numleafs)
+/*ftesurf P323: `scratch` (numleafs entries, owned by BIH_Build) is the stable
+  sort's workspace -- threaded down rather than allocated per node.*/
+static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s **freenodes, struct bihleaf_s *leafs, size_t numleafs, struct bihleaf_s *scratch)
 {
 	struct bihbox_s bounds;
 	if (numleafs == 1)	//the leaf just gives the brush pointer.
@@ -2248,13 +2343,13 @@ static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s *
 				node->type = BIH_Z;*/
 		}
 #endif
-		qsort(leafs, numleafs, sizeof(*leafs), sorts[node->type-BIH_X]);
+		BIH_SortLeafs(leafs, numleafs, scratch, sorts[node->type-BIH_X]);	/*ftesurf P323: was qsort*/
 
 		cnodes = *freenodes;
 		*freenodes += 2;
 		node->bihnode.firstchild = cnodes - node;
-		left = BIH_BuildNode (cnodes+0, freenodes, leafs, numleft);
-		right = BIH_BuildNode (cnodes+1, freenodes, &leafs[numleft], numright);
+		left = BIH_BuildNode (cnodes+0, freenodes, leafs, numleft, scratch);
+		right = BIH_BuildNode (cnodes+1, freenodes, &leafs[numleft], numright, scratch);
 
 		node->bihnode.cmin[0] = left.min[node->type-BIH_X];
 		node->bihnode.cmax[0] = left.max[node->type-BIH_X];
@@ -2326,13 +2421,13 @@ static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s *
 				node->type = BVH_Z;*/
 		}
 #endif
-		qsort(leafs, numleafs, sizeof(*leafs), sorts[node->type-BVH_X]);
+		BIH_SortLeafs(leafs, numleafs, scratch, sorts[node->type-BVH_X]);	/*ftesurf P323: was qsort*/
 
 		cnodes = *freenodes;
 		*freenodes += 2;
 		node->bvhnode.firstchild = cnodes - node;
-		left = BIH_BuildNode (cnodes+0, freenodes, leafs, numleft);
-		right = BIH_BuildNode (cnodes+1, freenodes, &leafs[numleft], numright);
+		left = BIH_BuildNode (cnodes+0, freenodes, leafs, numleft, scratch);
+		right = BIH_BuildNode (cnodes+1, freenodes, &leafs[numleft], numright, scratch);
 
 		node->bvhnode.min[0] = min(left.min[0], right.min[0]);
 		node->bvhnode.min[1] = min(left.min[1], right.min[1]);
@@ -2360,10 +2455,10 @@ static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s *
 		node->group.firstchild = cnodes - node;
 		node->group.numchildren = numleafs;
 
-		bounds = BIH_BuildNode(cnodes+0, freenodes, leafs+0, 1);
+		bounds = BIH_BuildNode(cnodes+0, freenodes, leafs+0, 1, scratch);
 		for (i = 1; i < numleafs; i++)
 		{
-			cb = BIH_BuildNode(cnodes+i, freenodes, leafs+i, 1);
+			cb = BIH_BuildNode(cnodes+i, freenodes, leafs+i, 1, scratch);
 			AddPointToBounds(cb.min, bounds.min, bounds.max);
 			AddPointToBounds(cb.max, bounds.min, bounds.max);
 		}
@@ -2442,6 +2537,7 @@ void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 {
 	size_t numnodes;
 	struct bihnode_s *nodes, *tmpnodes;
+	struct bihleaf_s *scratch;
 
 	if (!numleafs)
 	{	//if we don't actually have anything solid, we still need SOMETHING so we don't crash.
@@ -2456,7 +2552,13 @@ void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 		nodes = ZG_Malloc(&mod->memgroup, sizeof(*nodes)*numnodes);
 
 		tmpnodes = nodes+1;
-		BIH_BuildNode(nodes, &tmpnodes, leafs, numleafs);
+		/*ftesurf P323: ONE scratch array for the whole recursive build -- the
+		  stable sort's workspace, threaded down so no node allocates.  Freed
+		  before we return; the tree lives in mod->memgroup and never points
+		  into it.*/
+		scratch = BZ_Malloc(sizeof(*scratch)*numleafs);
+		BIH_BuildNode(nodes, &tmpnodes, leafs, numleafs, scratch);
+		BZ_Free(scratch);
 		if (tmpnodes > nodes+numnodes)
 			Sys_Error("CM_BuildBIH: generated wrong number of nodes");
 	}
