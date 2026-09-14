@@ -159,7 +159,15 @@ cvar_t *hl2_rigidprops;			//FTESurf Patch 230: read by Mod_LoadHL2Model in mod_h
 
 extern volatile int phy_stat_hull, phy_stat_nofile, phy_stat_jointed;
 extern volatile int phy_stat_rejected, phy_stat_bbox, phy_stat_tris;
+extern volatile int phy_stat_tris_outward, phy_stat_tris_inverted;	//FTESurf Patch 317
 void Mod_PHY_ResetStats (void);
+cvar_t *hl2_phywinding;	//FTESurf Patch 317: read by Mod_LoadHL2Model in mod_hl2.c, registered here beside hl2_dispwinding
+/*FTESurf Patch 318 -- see the essay above VBSP_AddBrushBevels.  Up here because
+  VBSP_LoadBrushes resets the counters and sits well above the generator. */
+static cvar_t *hl2_brushbevels;
+static volatile int vbsp_stat_bevelbrushes;	//brushes that gained at least one plane
+static volatile int vbsp_stat_bevelplanes;	//planes added in total
+static volatile int vbsp_stat_bevelfull;	//brushes left alone for want of room
 static cvar_t *hl2_dispcollision;
 static cvar_t *hl2_dispflags;	//FTESurf Patch 250
 static cvar_t *hl2_dispwinding;	//FTESurf Patch 256
@@ -762,7 +770,7 @@ static q2mapsurface_t	nullsurface;
 
 static int		VBSP_NumInlineModels (model_t *model);
 static cmodel_t	*VBSP_InlineModel (model_t *model, char *name);
-static void VBSP_FinalizeBrush(q2cbrush_t *brush);
+static void VBSP_FinalizeBrush(model_t *mod, q2cbrush_t *brush);
 static void	FloodAreaConnections (vbspinfo_t	*prv);
 
 /*
@@ -1841,13 +1849,18 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 
 	prv->numbrushes = count;
 
+	/*Patch 318: reset here rather than at map load, because this is the one
+	  place the counters are filled and submodel brushes come out of the same
+	  lump -- there is no second pass to double-count. */
+	vbsp_stat_bevelbrushes = vbsp_stat_bevelplanes = vbsp_stat_bevelfull = 0;
+
 	for (i=0 ; i<count ; i++, out++, in++)
 	{
 		//FIXME: missing bounds checks
 		out->brushside = &prv->brushsides[LittleLong(in->firstside)];
 		out->numsides = LittleLong(in->numsides);
 		out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
-		VBSP_FinalizeBrush(out);
+		VBSP_FinalizeBrush(mod, out);
 	}
 
 	return true;
@@ -6065,12 +6078,227 @@ BOX TRACING
 ===============================================================================
 */
 
-static void VBSP_FinalizeBrush(q2cbrush_t *brush)
+/*
+==================
+VBSP_AddBrushBevels			FTESurf Patch 318
+
+The brush edge bevels the map was compiled without, and that BIH_ClipBoxToBrush
+has therefore never had.
+
+THE DEFECT.  Sweeping an AABB against a convex brush is a point query against
+the Minkowski sum of the two.  That sum's faces are: the brush's own face
+planes, the six box face planes, and ONE PLANE PER PAIRING of a brush edge with
+a box edge direction.  BIH_ClipBoxToBrush builds the first group (the brush's
+sides) and the second (the `if (tr->shape)` axial block against absmins/absmaxs)
+and has never had the third.  What is left is a strict SUPERSET of the true sum,
+bulging outward along every slanted edge -- the same defect, on the same
+argument, that Patch 258 fixed for triangles with BIH_TriangleBevels.  The brush
+path was not touched then.
+
+Quake 2 and Source both know this, and both solve it at COMPILE time: qbsp3 and
+VBSP's AddBrushBevels (utils/vbsp/map.cpp:501 in the Momentum tree) append the
+missing planes to the brush as extra sides, so the runtime clipper needs no
+adjacency information.  The runtime is therefore only ever as correct as the
+compile was -- and a map can simply not have them.
+
+WHAT IT COST, measured.  surf_boreas brush 170 is a PLAYERCLIP|DETAIL wedge at
+the foot of the lock-11 ramp: 7 real faces plus 5 axial bevels, twelve sides,
+and NO edge bevels.  It has a 51-degree top face meeting two 45-degree vertical
+faces, so the bulge is enormous.  Riding the ramp at 11494.4 -13173.5 2575.9 the
+clipper reports the player 0.107 units INSIDE it and stops them dead on side
+1509, whose normal is (-0.707 -0.707 0) -- z of zero, so not a surface you slide
+along, a wall.  An exact separating-axis test over the brush's 38 hull vertices
+puts the player 10.5 units CLEAR of it.  The wall is not there.  It is a phantom
+that persists for about 24 units of travel, and the first REAL contact, further
+in, is against the top face, whose normal z of 0.625 is a surface you surf.
+
+Running VBSP's own algorithm offline over that brush produces the planes it
+should have carried -- chiefly (0 0.870 0.492) and (-0.870 0 0.492) -- and with
+them the clipper agrees with the exact test to within 0.004 units at every
+sample along the approach.  So this is not a new heuristic; it is the missing
+half of a construction Source already specifies, run at load instead of at
+compile because we cannot recompile other people's maps.
+
+WHY IT IS SAFE, which is the part that matters.  Every candidate here must pass
+the same test VBSP applies: it is kept only if EVERY vertex of the hull is
+behind it.  A plane that supports the hull cannot cut solid out of it, so this
+can only ever SHRINK the swept volume toward the true Minkowski sum, never below
+it.  Falling through the world is the failure mode to fear, and the support test
+rules it out by construction rather than by sampling.
+
+Two deliberate departures from VBSP:
+  - VBSP walks only sides 6..n (its axial pass swaps the axial planes to the
+    front first).  We walk every side.  Extra candidates still have to pass the
+    support test, so this can only add planes that were always valid, and it
+    does not depend on our side order matching VBSP's.
+  - VBSP skips axial EDGES, and so do we: an axial edge's bevels are the axial
+    planes, which BIH_ClipBoxToBrush already applies at runtime from
+    absmins/absmaxs.  Generating them again would be pure cost.
+
+A brush that runs out of room is left exactly as it was -- correct-as-before
+rather than half-beveled, since a partial set is still a superset and the
+counters say it happened.  The first caps tried here (512 winding points, 96
+bevels) were hit on five of the first six maps swept, which is a cap too tight
+and not a map being strange; these are sized so the sweep reports zero.  The
+buffers are heap, not stack: 4096 vecV_t is 64K and models can load on worker
+threads, which is the crash com_mesh.c:3310 is about.
+==================
+*/
+#define VBSP_MAXBRUSHSIDES	256		/*the existing planes[] cap in FinalizeBrush*/
+#define VBSP_MAXWINDVERTS	4096	/*total winding points over one brush*/
+#define VBSP_MAXBEVELS		512		/*extra sides one brush may gain*/
+
+static qboolean VBSP_PlaneKnown (const vec4_t *list, int count, const vec3_t normal, float dist)
+{
+	int i;
+	for (i = 0; i < count; i++)
+		if (fabs(list[i][0]-normal[0]) < 0.01 && fabs(list[i][1]-normal[1]) < 0.01 &&
+		    fabs(list[i][2]-normal[2]) < 0.01 && fabs(list[i][3]-dist)   < 0.01)
+			return true;
+	return false;
+}
+
+static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes)
+{
+	vecV_t		   *wverts;
+	int				wfirst[VBSP_MAXBRUSHSIDES], wcount[VBSP_MAXBRUSHSIDES];
+	vec4_t		   *bevels;
+	int				numbevels = 0, nverts = 0;
+	int				i, j, k, a, dir, v;
+	q2cbrushside_t *nside;
+	mplane_t	   *nplane;
+	vec3_t			edge, axis, normal;
+	float			dist, len;
+
+	wverts = plugfuncs->Malloc(sizeof(*wverts)*VBSP_MAXWINDVERTS);
+	bevels = plugfuncs->Malloc(sizeof(*bevels)*VBSP_MAXBEVELS);
+	if (!wverts || !bevels)
+	{
+		plugfuncs->Free(wverts);
+		plugfuncs->Free(bevels);
+		return;
+	}
+
+	/*windings first.  The edge walk needs each face's own ring and the support
+	  test needs every point on the hull, and both come from the same pass. */
+	for (i = 0; i < brush->numsides; i++)
+	{
+		wfirst[i] = nverts;
+		wcount[i] = modfuncs->ClipPlaneToBrush(wverts+nverts, VBSP_MAXWINDVERTS-nverts,
+		                                       planes, sizeof(planes[0]), brush->numsides, planes[i]);
+		nverts += wcount[i];
+		if (nverts >= VBSP_MAXWINDVERTS)
+		{	/*no room to be sure the support test sees the whole hull, and a
+			  support test that cannot see every point is not a support test. */
+			vbsp_stat_bevelfull++;
+			goto done;
+		}
+	}
+
+	for (i = 0; i < brush->numsides; i++)
+	{
+		for (j = 0; j < wcount[i]; j++)
+		{
+			k = (j+1) % wcount[i];
+			VectorSubtract (wverts[wfirst[i]+j], wverts[wfirst[i]+k], edge);
+			len = VectorLength (edge);
+			if (len < 0.5)
+				continue;
+			VectorScale (edge, 1/len, edge);
+			for (a = 0; a < 3; a++)
+			{	/*snap, so a hair off axial still reads as axial*/
+				if (fabs(edge[a] - 1) < 0.001)	edge[a] =  1;
+				if (fabs(edge[a] + 1) < 0.001)	edge[a] = -1;
+				if (fabs(edge[a])     < 0.001)	edge[a] =  0;
+			}
+			if (edge[0] == 1 || edge[0] == -1 ||
+			    edge[1] == 1 || edge[1] == -1 ||
+			    edge[2] == 1 || edge[2] == -1)
+				continue;	/*axial edge -- the runtime axial block already has these*/
+
+			for (a = 0; a < 3; a++)
+			for (dir = -1; dir <= 1; dir += 2)
+			{
+				VectorClear (axis);
+				axis[a] = dir;
+				CrossProduct (edge, axis, normal);
+				if (VectorNormalize (normal) < 0.5)
+					continue;	/*edge parallel to this axis; there is no such face*/
+				dist = DotProduct (wverts[wfirst[i]+j], normal);
+
+				if (VBSP_PlaneKnown (planes, brush->numsides, normal, dist))
+					continue;
+				if (VBSP_PlaneKnown (bevels, numbevels, normal, dist))
+					continue;
+
+				/*THE SUPPORT TEST.  Every point on the hull must be behind it.*/
+				for (v = 0; v < nverts; v++)
+					if (DotProduct (wverts[v], normal) - dist > 0.1)
+						break;
+				if (v != nverts)
+					continue;	/*it cuts the brush -- not part of the outer hull*/
+
+				if (numbevels == VBSP_MAXBEVELS)
+				{
+					vbsp_stat_bevelfull++;
+					numbevels = 0;
+					goto done;	/*all or nothing; a partial set is still a superset*/
+				}
+				VectorCopy (normal, bevels[numbevels]);
+				bevels[numbevels][3] = dist;
+				numbevels++;
+			}
+		}
+	}
+
+	if (!numbevels)
+		goto done;
+
+	/*brushside[] points into the shared lump array, so the brush cannot grow in
+	  place -- give this one its own.  Planes likewise: the lump's are shared. */
+	nside  = plugfuncs->GMalloc(&mod->memgroup, sizeof(*nside)  * (brush->numsides + numbevels));
+	nplane = plugfuncs->GMalloc(&mod->memgroup, sizeof(*nplane) * numbevels);
+	if (!nside || !nplane)
+		goto done;
+	memcpy (nside, brush->brushside, sizeof(*nside) * brush->numsides);
+
+	for (i = 0; i < numbevels; i++)
+	{
+		VectorCopy (bevels[i], nplane[i].normal);
+		nplane[i].dist = bevels[i][3];
+		/*A bevel is non-axial by construction (an axial one would have been the
+		  edge's own axis and was skipped), so PLANE_ANYX is right -- and giving
+		  it a type < 3 it does not have would make PlaneDiff read one component
+		  in place of the dot product.  signbits still has to be honest. */
+		nplane[i].type = 3;
+		nplane[i].signbits = (nplane[i].normal[0] < 0 ? 1 : 0) |
+		                     (nplane[i].normal[1] < 0 ? 2 : 0) |
+		                     (nplane[i].normal[2] < 0 ? 4 : 0);
+
+		nside[brush->numsides+i].plane   = &nplane[i];
+		/*BIH_ClipBoxToBrush dereferences leadside->surface->c for the trace's
+		  surface, so this may not be NULL.  A bevel is not a real face and has
+		  no texture of its own; borrowing side 0's is what VBSP does too. */
+		nside[brush->numsides+i].surface = brush->brushside[0].surface;
+	}
+
+	brush->brushside = nside;
+	brush->numsides += numbevels;
+	vbsp_stat_bevelbrushes++;
+	vbsp_stat_bevelplanes += numbevels;
+done:
+	plugfuncs->Free(wverts);
+	plugfuncs->Free(bevels);
+}
+
+static void VBSP_FinalizeBrush(model_t *mod, q2cbrush_t *brush)
 {
 	vecV_t verts[256];
-	vec4_t planes[256];
+	vec4_t planes[VBSP_MAXBRUSHSIDES];
 	int i, j;
 	ClearBounds(brush->absmins, brush->absmaxs);
+	if (brush->numsides > VBSP_MAXBRUSHSIDES)
+		return;
 	for (i = 0; i < brush->numsides; i++)
 	{
 		VectorCopy(brush->brushside[i].plane->normal, planes[i]);
@@ -6098,6 +6326,12 @@ static void VBSP_FinalizeBrush(q2cbrush_t *brush)
 				AddPointToBounds(verts[j], brush->absmins, brush->absmaxs);
 		}
 	}
+
+	/*Patch 318.  After the bounds, because the runtime axial block reads
+	  absmins/absmaxs and those must describe the brush, not the beveled side
+	  list -- the bevels support the same hull, so the bounds do not change. */
+	if (!hl2_brushbevels || hl2_brushbevels->ival)
+		VBSP_AddBrushBevels(mod, brush, planes);
 }
 
 /*
@@ -7258,6 +7492,50 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			mod->name, phy_stat_hull, phy_stat_tris, phy_stat_bbox,
 			phy_stat_rejected, phy_stat_rejected, phy_stat_jointed,
 			phy_stat_nofile);
+
+	/*
+	FTESurf Patch 317.  The winding census for this map's .phy hulls, and the
+	line that says the hulls just moved.
+
+	A Con_Printf rather than a DPrintf for the same reason Patch 262's is: on a
+	map whose route runs over prop ramps this changes where the floor is by
+	4/|n_z| units, so every recorded time on it stops being comparable, and this
+	is the line the player whose PB just broke needs to find.  Only printed when
+	something was actually re-wound.
+
+	`outward` here counts faces that were ANTICLOCKWISE from outside, i.e. the
+	ones that were wrong for the BIH and have been flipped.  If that is not
+	essentially 100% of the total, the premise of this patch does not hold on
+	this map -- say so rather than trusting the default.
+	*/
+	if (hl2_phywinding->ival && (phy_stat_tris_outward || phy_stat_tris_inverted))
+	{
+		int tot = phy_stat_tris_outward + phy_stat_tris_inverted;
+		Con_Printf("%s: .phy collision hulls re-wound (hl2_phywinding %i) -- %i of %i faces "
+			"(%.1f%%) were inside out and their four-unit slab has moved off the visible "
+			"surface. Times on this map are not comparable with a build before Patch 317.\n",
+			mod->name, hl2_phywinding->ival, phy_stat_tris_outward, tot,
+			tot ? (100.0*phy_stat_tris_outward)/tot : 0.0);
+	}
+
+	/*
+	FTESurf Patch 318, and a Con_Printf for the same reason as the line above:
+	this one moves WORLD collision, so it is the line the player whose time just
+	changed needs to find.  Only printed when a brush actually gained a plane.
+
+	`bevelfull` is not a warning to ignore: a brush that ran out of room kept the
+	superset it had, which is correct-as-before but still capable of the phantom.
+	If it is ever non-zero on a real map the caps in VBSP_AddBrushBevels are too
+	tight and should be raised rather than explained away.
+	*/
+	if (vbsp_stat_bevelbrushes || vbsp_stat_bevelfull)
+		Con_Printf("%s: brush edge bevels generated (hl2_brushbevels %i) -- %i planes across "
+			"%i brushes the map compiled without them%s. Box sweeps against those brushes no "
+			"longer bulge along their slanted edges; times on this map are not comparable with "
+			"a build before Patch 318.\n",
+			mod->name, hl2_brushbevels?hl2_brushbevels->ival:1,
+			vbsp_stat_bevelplanes, vbsp_stat_bevelbrushes,
+			vbsp_stat_bevelfull ? va(", and %i MORE were left alone for want of room", vbsp_stat_bevelfull) : "");
 
 	/*
 	FTESurf Patch 262, and a real Con_Printf rather than a DPrintf: this is the
@@ -10990,7 +11268,25 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	threadfuncs->AddWork(WG_MAIN, VBSP_BuildBIHMain, wmod, NULL, 0, 0);
 
 	//main thread should have a load of work to do now. worker thread should now be free to compute the hash before its finally marked as loaded and the temp file memory goes away.
-	VBSP_ComputeChecksum(mod, filein, filelen);
+	/*
+	  ftesurf Patch 321: WMOD, NOT MOD.  `mod` is the loop variable -- the submodel
+	  loop above reassigns it on every iteration (:11216) -- so on any map with brush
+	  entities this wrote the map's hash onto the LAST submodel, "*1398:surf_x", and
+	  the world model kept the zero Mod_FindName's memset left it.
+
+	  Nothing read a submodel's checksum, and everything that matters reads the world
+	  model's: sv_mapcheck compares sv.world.worldmodel->checksum against what the
+	  client sends, and the client sends cl.worldmodel->checksum2.  Both were zero, on
+	  both machines, so the comparison passed for every client and every map -- the
+	  check did not fail, it was INERT, which is why five years of servers never
+	  noticed.  sv_mapcheck defaults 1, so it looked switched on the whole time.
+
+	  Measured before fixing: of the 1312 maps in the library, 1287 have more than one
+	  submodel and took the broken path; the 25 with exactly one never entered the loop
+	  and had been hashing correctly all along.  That is also why it cannot be caught by
+	  spot-checking -- pick df_map and it works.
+	*/
+	VBSP_ComputeChecksum(wmod, filein, filelen);
 	return true;
 }
 
@@ -11433,6 +11729,10 @@ qboolean VBSP_Init(void)
 		hl2_rigidprops = cvarfuncs->GetNVFDG("hl2_rigidprops", "1", CVAR_MAPLATCH, "Load models compiled $staticprop as rigid geometry instead of as one-bone skeletal models.\n0: what shipped before -- every Source model carries bone weights, so com_mesh.c's rigid static-VBO path is unreachable and any prop surface whose material is not VertexLitGeneric is re-skinned on the CPU and re-uploaded every frame.\n1: emit no skinning data for a model studiomdl has already flattened (default). Measured: 73 of 73 prop models on surf_demise, 54 of 54 on surf_garden and 220 of 238 on ahop_coast are one-bone $staticprop with no animations, so the skinning they pay for is an identity transform. Models with a real rig -- ragdolls, NPCs, viewmodels -- are unaffected either way.", MAPOPTIONS);
 
 		hl2_propcollision = cvarfuncs->GetNVFDG("hl2_propcollision", "1", CVAR_MAPLATCH, "How props collide.\n0: props are non-solid -- use this to find out whether a prop is what is blocking a route.\n1: against their .phy VPhysics hull, as Source does, falling back to the visible mesh when there is no usable hull (default).\n2: against the model's bounding box (Source's \"solid\" 2).\n3: against the visible mesh -- stricter than Source, and what shipped before build 8.", MAPOPTIONS);
+
+		hl2_phywinding = cvarfuncs->GetNVFDG("hl2_phywinding", "1", CVAR_MAPLATCH, "Whether a .phy VPhysics hull's COLLISION triangles are re-wound to face outward.\nA BIH triangle is a one-sided prism with four units of solid behind its face plane, and that plane's direction comes from the winding: com_bih.c takes cross(p1-p2, p3-p2), so it needs CLOCKWISE-from-outside. IVP's compactledge triangles are ANTICLOCKWISE from outside, and mod_phy.c's (x, z, -y) conversion is a determinant +1 rotation that preserves that -- so every .phy hull in the game has been inside out since Build 8, with its four units of solid stacked ON TOP of the visible surface. Measured over 166 .phy files: 25181 of 25182 faces anticlockwise, 0 clockwise. The effect is that you stand 4/|n_z| units above the model (4 flat, 6.81 on the 54-degree surf_boreas ramp) with a perfectly standable-looking normal, and the model's interior is hollow. Where such a hull meets correctly-wound brush or displacement geometry, that step is the seam snag.\nThis is Patch 256's displacement defect on the other geometry path -- and the path Patch 256's own text named as also affected, then did not touch.\n0: leave the file's winding alone (every build from 8 to 316).\n1: re-wind for collision (default). The render mesh is untouched either way; only NativeTrace changes.\n2: measure each ledge and let it vote. Robust to a file that disagrees with the census. The vote is per LEDGE, never per triangle: two adjacent coplanar triangles with slabs on opposite sides would be a real 4-8 unit step in the middle of a flat face.\nhl2_propcollision 2 (bounding box) and 3 (render mesh) are NOT affected -- both of those windings were checked and are already correct.", MAPOPTIONS);
+
+		hl2_brushbevels = cvarfuncs->GetNVFDG("hl2_brushbevels", "1", CVAR_MAPLATCH, "Whether the missing EDGE BEVELS are generated for world brushes at load.\nSweeping a bounding box against a convex brush is a point query against the Minkowski sum of the two, whose faces are the brush's own planes, the six box planes, and one plane per pairing of a brush edge with a box axis. BIH_ClipBoxToBrush has the first two groups and has never had the third, so the volume it sweeps is a strict SUPERSET of the truth, bulging outward along every slanted edge -- the same defect, on the same argument, that Patch 258 fixed for triangles.\nQuake 2 and Source both solve this at COMPILE time (VBSP's AddBrushBevels), so the runtime is only ever as correct as the compile was -- and maps ship without them. surf_boreas brush 170, the PLAYERCLIP wedge at the foot of the lock-11 ramp, is one: twelve sides, no edge bevels, a 51-degree top face meeting 45-degree walls. Riding the ramp there the clipper calls the player 0.107 units inside it and stops them dead on a normal with z of zero -- a wall, not a surface you slide along -- while an exact separating-axis test over the brush's 38 hull vertices puts them 10.5 units clear. The phantom lasts about 24 units of travel.\n0: leave brushes exactly as the map compiled them (every build before this one).\n1: generate the missing planes at load, using VBSP's own algorithm (default). A candidate is kept only if EVERY vertex of the hull is behind it, so it can only shrink the swept volume toward the true sum, never below it -- it cannot open a hole. With them the clipper agrees with the exact test to within 0.004 units.\nThis changes world collision, so times set before it are not comparable on maps where the count below is non-zero.", MAPOPTIONS);
 
 		/*
 		FTESurf Patch 262.  Mode 1's "falling back to the visible mesh when there is

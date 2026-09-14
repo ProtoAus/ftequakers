@@ -6473,6 +6473,56 @@ char *PF_infokey_Internal (int entnum, const char *key)
 			value = "2.40";
 		else if (!strcmp(key, "modelname"))	//for compat with mvdsv.
 			value = sv.modelname;
+		/*
+		  ftesurf Patch 321: the map hash, to QC, on BOTH sides of the comparison.
+
+		  The engine has always had the numbers -- SVQW_PreSpawn_f stores what the
+		  client claimed in host_client->checksum, and the world model carries what
+		  the server loaded -- but the only consumer was sv_mapcheck's kick, which
+		  is a refusal and not a fact.  A ranked run wants the fact: it must be able
+		  to record "this run was set on a copy of the map that was not ours" and
+		  demote quietly, on the TF_NOJOURNAL/TF_NORULESET/TF_NOPROFILE precedent,
+		  WITHOUT throwing the player off the server.
+
+		  Hex, fixed width, and deliberately a STRING on both sides.  QC must compare
+		  these with strcmp and never with stof: a QC float has a 24-bit mantissa and
+		  a checksum is 32 bits, so ~255 of every 256 distinct hashes are not
+		  representable and a numeric compare would report equal for maps that
+		  differ.  That is the %g truncation trap of build 66 (R4) in a form where
+		  the failure is silent AND says "clean".
+
+		  NOT published into svs.info, unlike *csprogs.  Serverinfo reaches every
+		  client, and handing a patched client the expected answer is exactly what
+		  it would need to echo one back.  The honest client never needs to be told:
+		  it computes the hash from the bytes it loaded.
+
+		  A ZERO CHECKSUM IS REPORTED AS UNKNOWN ("") AND NEVER AS THE HASH 0, on
+		  BOTH subjects, and this is the line that keeps the patch deployable.  A
+		  model loader that sets no checksum leaves the field at the zero
+		  Mod_FindName's memset put there, so zero means "nobody computed one" --
+		  which is a different fact from any hash, and the odds of a real map
+		  folding its md4 to exactly 0 are 2^-32.
+
+		  Without it the deploy order would demote the entire player base.  The
+		  client half of this fix lives in the hl2 PLUGIN, which only reaches a
+		  player in a client release, while the server half lands on the lobbies
+		  the day it is built.  In that window a patched server would hold a real
+		  hash and every unpatched client would claim 0, so a straight comparison
+		  would mark EVERY RUN BY EVERY PLAYER as set on a foreign map until they
+		  updated -- the LB_MAX lead-time trap again, in the direction that
+		  accuses.  Reported as unknown, the check simply stays dormant per client
+		  and switches itself on as each one updates.
+		*/
+		else if (!strcmp(key, "*mapcrc"))
+		{
+			value = ov;
+			if (!sv.world.worldmodel || sv.world.worldmodel->loadstate != MLS_LOADED)
+				value = "";	//no map loaded.
+			else if (!sv.world.worldmodel->checksum)
+				value = "";	//see below: zero is UNKNOWN, never a hash.
+			else
+				sprintf(ov, "%08x", (unsigned int)sv.world.worldmodel->checksum);
+		}
 		else
 		{
 			if ((value = InfoBuf_ValueForKey(&svs.info, key)) == NULL || !*value)
@@ -6536,6 +6586,32 @@ char *PF_infokey_Internal (int entnum, const char *key)
 					break;
 				}
 			}
+		}
+		else if (!strcmp(key, "*mapcrc"))
+		{
+			/*
+			  ftesurf Patch 321: what THIS client says its copy of the map hashes to.
+
+			  Three states, and they are three different facts, so they must not
+			  collapse into one:
+			    - "" because the client has not reached the map-check stage yet.  A
+			      run cannot start before spawn, so QC only ever sees this if it
+			      asks early; reading it as a mismatch would fault every connect.
+			    - "" because the client is on a protocol that never sends one.
+			      SVNQ_PreSpawn_f stores ~0u precisely so this case is marked, and
+			      says so itself: "sv_mapcheck cannot be enforced on player %s".
+			      An unknown is a hole in the certification, NOT a wrong map -- the
+			      same distinction TF_NOJOURNAL draws for a missing .hid.
+			    - a hash, which is a claim and nothing more: the client computed it.
+			      It catches an unmodified client that loaded different bytes (T2),
+			      which is the tier this pins.  A patched client can say anything,
+			      and that is T4's problem, not this key's.
+			*/
+			if (controller->prespawn_stage <= PRESPAWN_MAPCHECK ||
+				controller->checksum == ~0u || !controller->checksum)
+				value = "";	//not yet asked / a protocol that never says / no loader hash
+			else
+				sprintf(ov, "%08x", (unsigned int)controller->checksum);
 		}
 		else if (!strcmp(key, "challenge"))
 			sprintf(ov, "%u", pl->challenge);

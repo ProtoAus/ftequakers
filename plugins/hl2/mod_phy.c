@@ -122,11 +122,20 @@ volatile int phy_stat_jointed;   /* multi-solid -- a SUBSET of phy_stat_rejected
 volatile int phy_stat_rejected;  /* had a .phy, did not use it (any reason) */
 volatile int phy_stat_bbox;      /* hl2_propcollision 2 */
 volatile int phy_stat_tris;      /* total collision triangles from hulls */
+/*FTESurf Patch 317.  The winding census, so "every .phy in the library is inside
+  out" is a number this build printed rather than a claim from an offline script.
+  _inv counts faces already CLOCKWISE from outside (correct for the BIH as
+  shipped); _out counts ANTICLOCKWISE ones (the ones that need re-winding).  If
+  _out is not ~100% of the total on a real map, the premise of the patch is
+  wrong and the cvar should go back to 0. */
+volatile int phy_stat_tris_outward;   /* anticlockwise from outside -> was inverted for the BIH */
+volatile int phy_stat_tris_inverted;  /* already clockwise -> was correct */
 
 void Mod_PHY_ResetStats (void)
 {
 	phy_stat_hull = phy_stat_nofile = phy_stat_jointed = 0;
 	phy_stat_rejected = phy_stat_bbox = phy_stat_tris = 0;
+	phy_stat_tris_outward = phy_stat_tris_inverted = 0;
 }
 
 typedef struct
@@ -166,6 +175,15 @@ typedef struct
 	index_t         *idx;
 	size_t           numverts, maxverts;
 	size_t           numidx,   maxidx;
+
+	/* FTESurf Patch 317.  0 = emit the file's own order, 1 = re-wind for
+	   collision, 2 = decide per ledge from its own geometry.  Carried on the
+	   context rather than in a global because models load on WORKER THREADS
+	   (see the note at the top of this file) -- a file-scope mutable here is two
+	   props racing over one variable. */
+	int              winding;
+	/* measured, per file, for the census the cvar description quotes */
+	int              tris_outward, tris_inverted;
 } phyctx_t;
 
 static unsigned int PHY_ReadU32 (const qbyte *p)
@@ -351,13 +369,101 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 		}
 	}
 
-	for (t = 0; t < ntri; t++)
+	/*
+	  FTESurf Patch 317 -- THE WINDING.
+
+	  BIH_ClipToTriangle (com_bih.c) takes its face plane as
+	      planes[0].normal = cross(p1-p2, p3-p2)
+	  and then hands it four units of solid BEHIND that plane
+	      planes[1].dist = -planes[0].dist + 4
+	  so planes[0].normal must point OUT of the model.  Since
+	      cross(p1-p2, p3-p2) == -cross(p2-p1, p3-p1)
+	  the engine's convention is CLOCKWISE as seen from outside.
+
+	  IVP's compactledge triangles are ANTICLOCKWISE from outside, and the
+	  (x, z, -y) map above is a determinant +1 rotation, so it preserves that.
+	  Measured over 166 .phy files: 25181 of 25182 faces anticlockwise, 0
+	  clockwise.  Every .phy hull in the game has therefore been inside out since
+	  Build 8: the four-unit slab sits ON TOP of the visible surface instead of
+	  under it, the player rides 4/|n_z| units up (4 flat, 6.81 on the 54-degree
+	  surf_boreas ramp) with a perfectly standable-looking normal, and the model's
+	  interior is hollow.
+
+	  This is the same defect Patch 256 fixed for displacements -- and this is the
+	  path its own text (ENGINE_PATCHES.md:18715) named as also affected, and then
+	  did not touch.  Where such a hull meets correctly-wound terrain, the step is
+	  the seam snag, which is what surf_boreas's ramps do.
+
+	  The flip is in place, not into a second array: Patch 256 needed a separate
+	  array because its indices are memcpy'd into the RENDER mesh, and it says so.
+	  These indices have exactly one consumer -- Mod_PHY_CollisionMesh's return
+	  value goes to BIH_BuildAlias and nowhere else -- so there is nothing to
+	  protect, and copying that shape would be cargo-culting the structure without
+	  the reason.
+
+	  Do NOT decide this per triangle.  Two adjacent coplanar triangles with slabs
+	  on opposite sides make a real 4-8 unit step in the middle of a flat face
+	  with no visual cue -- far worse than the uniform offset being fixed.  Mode 2
+	  therefore measures every triangle and lets the LEDGE vote.
+	*/
 	{
-		const qbyte *tp = ctx->base + lo + PHY_LEDGE_HEADER_SIZE + (size_t)t*PHY_TRI_SIZE;
-		for (k = 0; k < 3; k++)
+		int flip = (ctx->winding == 1);
+		int outward = 0, inverted = 0;
+
+		if (ctx->winding)
+		{	/*measure: is cross(p2-p1,p3-p1) pointing away from the ledge's own
+			  interior?  A convex combination of a convex body's vertices is an
+			  interior point, so the incidence-weighted centroid is a valid one. */
+			vec3_t cen = {0,0,0};
+			float inv = 1.0f / (float)(ntri*3);
+			for (t = 0; t < ntri; t++)
+			{
+				const qbyte *tp = ctx->base + lo + PHY_LEDGE_HEADER_SIZE + (size_t)t*PHY_TRI_SIZE;
+				for (k = 0; k < 3; k++)
+				{
+					unsigned e = PHY_ReadU32(tp + 4 + k*4) & 0xffff;
+					float *v = ctx->xyz[firstvert + e];
+					cen[0] += v[0]; cen[1] += v[1]; cen[2] += v[2];
+				}
+			}
+			VectorScale(cen, inv, cen);
+
+			for (t = 0; t < ntri; t++)
+			{
+				const qbyte *tp = ctx->base + lo + PHY_LEDGE_HEADER_SIZE + (size_t)t*PHY_TRI_SIZE;
+				unsigned e0 = PHY_ReadU32(tp + 4 + 0*4) & 0xffff;
+				unsigned e1 = PHY_ReadU32(tp + 4 + 1*4) & 0xffff;
+				unsigned e2 = PHY_ReadU32(tp + 4 + 2*4) & 0xffff;
+				float *a = ctx->xyz[firstvert + e0];
+				float *b = ctx->xyz[firstvert + e1];
+				float *c = ctx->xyz[firstvert + e2];
+				vec3_t u, v, n, r;
+				VectorSubtract(b, a, u);
+				VectorSubtract(c, a, v);
+				CrossProduct(u, v, n);
+				VectorSubtract(a, cen, r);
+				if (DotProduct(n, r) > 0)
+					outward++;		/*anticlockwise from outside -> INVERTED for the BIH*/
+				else
+					inverted++;		/*already clockwise -> correct for the BIH*/
+			}
+			ctx->tris_outward  += outward;
+			ctx->tris_inverted += inverted;
+
+			if (ctx->winding == 2)
+				flip = (outward > inverted);
+		}
+
+		for (t = 0; t < ntri; t++)
 		{
-			unsigned e = PHY_ReadU32(tp + 4 + k*4) & 0xffff;
-			ctx->idx[ctx->numidx++] = (index_t)(firstvert + e);
+			const qbyte *tp = ctx->base + lo + PHY_LEDGE_HEADER_SIZE + (size_t)t*PHY_TRI_SIZE;
+			static const int korder[2][3] = {{0,1,2},{0,2,1}};
+			const int *ko = korder[flip?1:0];
+			for (k = 0; k < 3; k++)
+			{
+				unsigned e = PHY_ReadU32(tp + 4 + ko[k]*4) & 0xffff;
+				ctx->idx[ctx->numidx++] = (index_t)(firstvert + e);
+			}
 		}
 	}
 
@@ -484,7 +590,7 @@ done:
   long as the model does and is freed with it.
 ===========================================================================
 */
-galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode,
+galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
                                      unsigned int contents)
@@ -577,6 +683,7 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode,
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.base    = file;
 	ctx.filelen = filelen;
+	ctx.winding = winding;	/*Patch 317; see the essay in PHY_ReadLedge*/
 
 	ok = PHY_Parse(&ctx, mod->name);
 	plugfuncs->Free(file);
@@ -628,6 +735,8 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode,
 	}
 	phy_stat_hull++;
 	phy_stat_tris += (int)(ctx.numidx/3);
+	phy_stat_tris_outward  += ctx.tris_outward;		/*Patch 317*/
+	phy_stat_tris_inverted += ctx.tris_inverted;
 
 	/* Copy out of the grow buffers into the model's own memgroup, so this
 	   lives and dies with the model rather than with the loader. */

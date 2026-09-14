@@ -208,86 +208,20 @@ extern cvar_t pm_noround;
 extern cvar_t pm_dispprobe;	//FTESurf Patch 256, temporary -- defined in common.c
 extern cvar_t pm_ladderprobe;	//FTESurf Patch 260, temporary -- defined in common.c
 
-/*FTESurf Patch 258: com_bih.c's record of WHICH plane of BIH_ClipToTriangle's
-  set stopped the last triangle clip, and which triangle it belonged to.  See the
-  essay above BIH_ClipToTriangle; PMSrc_DispProbeWhy is the reader. */
-extern int    bih_probe_plane;
-extern vec3_t bih_probe_norm;
-extern vec3_t bih_probe_tri[3];
+/*FTESurf Patch 258 put the reader here; Patch 317 moved it to com_bih.c as
+  BIH_ProbeReport, because that file owns the bih_probe_* record and is linked
+  into the client as well as the server -- so the mover and `solid_here` now
+  print the same line, and the record can name the MODEL a triangle came from
+  rather than only which of the five planes won.
 
-/*Print the second line of the probe: the identity of the plane that stopped the
-  trace, and the triangle's own face normal so the two candidate explanations can
-  be told apart at a glance.
-
-  plane 0 with a steep face normal  -> the terrain there really is that steep and
-                                       the bevels are innocent.
-  plane 2/3/4 with a FLAT face normal -> an in-plane edge plane is stopping the
-                                       player over ground the triangle itself
-                                       says is walkable.  That is Bug B.
-  plane 1                           -> the +4 back slab, i.e. still a winding or
-                                       thickness problem, not a bevel one.
-
-  The record is only believed when its normal matches the trace being reported;
-  a pmove trace is merged across models and the last triangle to win an inner
-  trace need not be the one that won this one. */
-static void PMSrc_DispProbeWhy (trace_t *t)
-{
-	/*Index space is com_bih.c's: 0..4 are the original five, 5..13 are Patch
-	  258's edge-cross-axis bevels in build order, and 100..105 are the axial
-	  bevels the `if (tr->shape)` block adds. */
-	static const char *planename[5] = {
-		"FACE", "BACK-SLAB(+4)", "edge p1p2", "edge p2p3", "edge p3p1"};
-	static const char *axialname[6] = {
-		"axial +x", "axial +y", "axial +z", "axial -x", "axial -y", "axial -z"};
-	const char *what;
-	char bevelbuf[32];
-	vec3_t e1, e2, n;
-	float len;
-
-	if (bih_probe_plane < 0)
-	{
-		Con_Printf ("[dispprobe]   via: not a trisoup triangle (brush/patch, or nothing hit)\n");
-		return;
-	}
-	if (bih_probe_plane < 5)
-		what = planename[bih_probe_plane];
-	else if (bih_probe_plane < 14)
-	{	/*Patch 258's bevels, in build order (edge-major).  Deliberately NOT
-		  labelled "edge N x axis M": a bevel whose cross product degenerates is
-		  skipped, so the index is a position in the list, not a fixed pairing.
-		  The normal on the line above identifies it exactly. */
-		Q_snprintfz (bevelbuf, sizeof(bevelbuf), "bevel #%i", bih_probe_plane-5);
-		what = bevelbuf;
-	}
-	else if (bih_probe_plane >= 100 && bih_probe_plane < 106)
-		what = axialname[bih_probe_plane-100];
-	else
-		what = "?";
-	if (fabs(bih_probe_norm[0] - t->plane.normal[0]) > 0.002 ||
-	    fabs(bih_probe_norm[1] - t->plane.normal[1]) > 0.002 ||
-	    fabs(bih_probe_norm[2] - t->plane.normal[2]) > 0.002)
-	{
-		Con_Printf ("[dispprobe]   via: unknown -- last triangle record (%.3f %.3f %.3f) "
-		            "is not this trace's plane\n",
-		            bih_probe_norm[0], bih_probe_norm[1], bih_probe_norm[2]);
-		return;
-	}
-
-	VectorSubtract (bih_probe_tri[0], bih_probe_tri[1], e1);
-	VectorSubtract (bih_probe_tri[2], bih_probe_tri[1], e2);
-	CrossProduct (e1, e2, n);
-	len = VectorLength (n);
-	if (len > 0)
-		VectorScale (n, 1/len, n);
-
-	Con_Printf ("[dispprobe]   via plane %i %s of tri "
-	            "(%.1f %.1f %.1f)(%.1f %.1f %.1f)(%.1f %.1f %.1f)  face norm %.3f %.3f %.3f\n",
-	            bih_probe_plane, what,
-	            bih_probe_tri[0][0], bih_probe_tri[0][1], bih_probe_tri[0][2],
-	            bih_probe_tri[1][0], bih_probe_tri[1][1], bih_probe_tri[1][2],
-	            bih_probe_tri[2][0], bih_probe_tri[2][1], bih_probe_tri[2][2],
-	            n[0], n[1], n[2]);
-}
+  Declared here rather than by including com_bih.h: that header has no include
+  guard and pulls in the whole q2cbrush_t/bihleaf_s family, none of which this
+  file has any business seeing.  Patch 258 declared its three the same way.  The
+  canonical copies are in com_bih.h beside the prototype. */
+extern int		bih_probe_plane;
+extern int		bih_probe_kind;
+extern model_t *bih_probe_model;
+void BIH_ProbeReport (const trace_t *t, const char *tag);
 
 /* pmove.c owns these; we reuse its touch list so trigger_push / teleports
    fire exactly as they do in the QuakeWorld path. */
@@ -1213,16 +1147,70 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 		       it cannot happen from normal locomotion.
 
 		   Only grounded and only when the sweep is actually stopped, or it
-		   prints every frame of every jump. */
-		if (pm_dispprobe.ival && pmove.onground && pm.fraction < 1)
+		   prints every frame of every jump.
+
+		   ---- FTESurf Patch 317: and THAT is why it never said anything about a
+		   surf ramp.  `pmove.onground` is set by CategorizePosition only when the
+		   surface under you has normal.z >= standable (0.7).  A surf ramp is
+		   steeper than that by definition -- the boreas ramp measures 0.587, i.e.
+		   54 degrees -- so a player RIDING one is airborne, and mode 1 is switched
+		   off for exactly the case under investigation.  Patch 258's snag01 run
+		   probed surf_boreas, printed nothing, and the map was ruled out.
+
+		   So mode 1 is left alone (every existing script keeps its meaning) and
+		   the ungrounded case gets its own modes:
+		     1 = grounded only, every stopped tick          (Patch 256 behaviour)
+		     2 = grounded or not, CHANGE-LATCHED            (use this for surf)
+		     3 = grounded or not, every tick                (the firehose)
+		     4 = grounded or not, HARD STOPS ONLY, latched  (use this to find a wall)
+		   Mode 2 exists because a surfer clips every single tick -- gravity keeps
+		   pushing into the face -- so an unlatched print here really is 66 lines a
+		   second, which is the thing the warning above pms_warned_hullfloor is
+		   about.  The latch carries the run length with it, because a latch that
+		   hides duration is worse than no latch.
+
+		   Mode 4 is the one to reach for when the question is "what stopped me".
+		   Riding a ramp clips every tick at a HEALTHY fraction -- 0.4 to 0.8 -- and
+		   those lines are the ones that bury the interesting one.  A wall is a
+		   fraction at or near zero, or a startsolid.  Filtering to those turned a
+		   210 KB log with 190 contacts into the four lines that mattered. */
+		if (pm_dispprobe.ival && pm.fraction < 1 &&
+		    (pmove.onground || pm_dispprobe.ival >= 2) &&
+		    (pm_dispprobe.ival != 4 || pm.fraction < 0.05 || pm.startsolid))
 		{
-			Con_Printf ("[dispprobe] frac %.4f norm %.3f %.3f %.3f  ss %i as %i  "
-			            "org %.1f %.1f %.1f -> %.1f %.1f %.1f\n",
-			            pm.fraction, pm.plane.normal[0], pm.plane.normal[1],
-			            pm.plane.normal[2], pm.startsolid, pm.allsolid,
-			            pmove.origin[0], pmove.origin[1], pmove.origin[2],
-			            pm.endpos[0], pm.endpos[1], pm.endpos[2]);
-			PMSrc_DispProbeWhy (&pm);	//FTESurf Patch 258
+			static int			lastplane, lastkind, lastheld;
+			static const void   *lastmodel;
+			static vec3_t		lastnorm;
+			qboolean			changed;
+
+			changed = (pm_dispprobe.ival != 2 && pm_dispprobe.ival != 4) ||
+			          lastplane != bih_probe_plane ||
+			          lastkind  != bih_probe_kind ||
+			          lastmodel != (const void*)bih_probe_model ||
+			          fabs(lastnorm[0]-pm.plane.normal[0]) > 0.001 ||
+			          fabs(lastnorm[1]-pm.plane.normal[1]) > 0.001 ||
+			          fabs(lastnorm[2]-pm.plane.normal[2]) > 0.001;
+
+			if (!changed)
+				lastheld++;
+			else
+			{
+				if ((pm_dispprobe.ival == 2 || pm_dispprobe.ival == 4) && lastheld)
+					Con_Printf ("[dispprobe]   (the previous contact held %i more ticks)\n", lastheld);
+				lastheld = 0;
+				lastplane = bih_probe_plane;
+				lastkind  = bih_probe_kind;
+				lastmodel = (const void*)bih_probe_model;
+				VectorCopy (pm.plane.normal, lastnorm);
+
+				Con_Printf ("[dispprobe] frac %.4f norm %.3f %.3f %.3f  ss %i as %i  onground %i  "
+				            "org %.1f %.1f %.1f -> %.1f %.1f %.1f\n",
+				            pm.fraction, pm.plane.normal[0], pm.plane.normal[1],
+				            pm.plane.normal[2], pm.startsolid, pm.allsolid, pmove.onground?1:0,
+				            pmove.origin[0], pmove.origin[1], pmove.origin[2],
+				            pm.endpos[0], pm.endpos[1], pm.endpos[2]);
+				BIH_ProbeReport (&pm, "[dispprobe]");	//Patch 258, rewritten by Patch 317
+			}
 		}
 
 		/* Only from the second bump on, and only in the air.  On the first bump
@@ -1658,7 +1646,7 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 		            "(need z >= %.3f)  ss %i\n",
 		            t.plane.normal[0], t.plane.normal[1], t.plane.normal[2],
 		            PMSrc_Standable(), t.startsolid);
-		PMSrc_DispProbeWhy (&t);	//FTESurf Patch 258
+		BIH_ProbeReport (&t, "[dispprobe]");	//Patch 258, rewritten by Patch 317
 	}
 
 	/* If we didn't land on something standable, the step was pointless. */

@@ -28075,3 +28075,533 @@ which both arms measure the same is a broken harness rather than a passing patch
 which a stream does not do for free have to be settled first -- a discard is currently `buf_del`, a
 stage demo is a RANGE of the same buffer lifted out, and a save state writes a PREFIX of it -- and
 the last two are features rather than implementation details.
+
+## Patch 317 -- every .phy prop hull in the game was inside out, and the probe could not say so  *(APPLIED -- `plugins/hl2/mod_phy.c`, `plugins/hl2/mod_hl2.c`, `plugins/hl2/mod_vbsp.c`, `engine/common/com_bih.c`, `engine/common/com_bih.h`, `engine/common/pm_source.c`, `engine/common/common.c`. One new cvar `hl2_phywinding` DEFAULT 1. No struct change, no ABI bump. VERIFIED: two arms on one binary, exe `4D431542B51097D3`, plugin `DCCBAD01EEE37E36`, `cfg/testrun/p317a.cfg` / `p317b.cfg`.)*
+
+The report was "on surf_boreas I slide on a ramp and stop, like an invisible wall,
+where CS:S and Momentum let you through". The reporter's own guess was that the ramp
+is "secretly 2 parts" whose collisions do not line up, and that it is brushwork --
+`C:\FTESurf\report:69` still says "surf_boreas has ramp bugs on some brushes".
+
+It is not brushwork. There is no brush entity within 200 units of the spot. The ramps
+on that map are **`prop_static`**, `models/project_tendies/ramps/ramp_c1m.mdl` and
+friends, `m_Solid 6` (SOLID_VPHYSICS) -- which is why they vanish under
+`r_drawentities 0`, the observation that started this. And the ramp is not two parts
+but **sixteen**: `ramp_c1m.phy` is one IVP solid holding 16 convex leaf ledges of 8
+triangles each.
+
+**The defect.** `BIH_ClipToTriangle` (com_bih.c:423-430) takes its face plane as
+`cross(p1-p2, p3-p2)` and then hands it four units of solid BEHIND it
+(`planes[1].dist = -planes[0].dist + 4`), so that normal must point OUT of the model.
+Since `cross(p1-p2, p3-p2) == -cross(p2-p1, p3-p1)`, the engine's convention is
+CLOCKWISE seen from outside. IVP `compactledge` triangles are ANTICLOCKWISE from
+outside, and `mod_phy.c`'s `(x, z, -y)` conversion is a determinant `+1` rotation, so
+it preserves that. `PHY_ReadLedge` passed them through untouched.
+
+So since Build 8 the four-unit slab of every `.phy` hull has sat ON TOP of the visible
+surface instead of under it: you ride `4/|n_z|` units up -- 4 on the flat, **6.81** on
+the 54-degree boreas ramp -- on the *back* of a slab, with a perfectly standable-looking
+normal, and the model's interior is empty.
+
+**This is Patch 256's displacement defect on the other geometry path, and Patch 256's
+own text (`:18715`) names `BIH_ClipToTriangle` as covering "displacements, static prop
+collision meshes..." and then fixes only displacements.**
+
+**Measured, two arms on one binary, differing only by the cvar:**
+
+| | p317a (`hl2_phywinding 0`) | p317b (`1`) |
+|---|---|---|
+| `run_eyeinfo` floor at `10116.12 -14549.43` | **2923.17** | **2916.35** |
+| contact plane | `via plane 1 BACK-SLAB(+4)` | `via plane 0 FACE` |
+| triangle face normal | `0.401 -0.703 -0.587` | `-0.401 0.703 0.587` |
+| feet-above-floor on the spawn deck (also a prop) | **5.33** | **0.00** |
+
+delta **-6.82** against a pre-registered **-6.81** (`4/0.587`). The engine's own census
+on the map: **`488 of 488 faces (100.0%) were inside out`**. An independent parse of 166
+`.phy` files under `ftesurf_cache/` agrees: 25,181 of 25,182 ledge faces anticlockwise,
+0 clockwise.
+
+**The witness that settles which way is right, and it is in the same file.** The
+hand-written `boxidx[36]` table for `hl2_propcollision 2` (mod_phy.c:521-526) is
+**12/12 correctly wound** for `cross(p1-p2, p3-p2)`. Two paths in one file disagreed
+about winding; only one could be right, and the one somebody wrote out by hand is the
+one that matches the clipper. The render-mesh path (mode 3) is correct too: FTE defaults
+shaders to `SHADER_CULL_FRONT` -> `qglCullFace(GL_FRONT)` against GL's `GL_CCW` default,
+so the engine draws exactly the winding the BIH wants. `.phy` was the only wrong one.
+
+**WHY IT SURVIVED TWO PATCHES, which is the more useful half of this entry.** Patch
+258's `snag01.cfg` probed this exact map, printed `via: not a trisoup triangle`, wrote
+it down as "a brush", and **ruled surf_boreas out** (`:18742`). Three separate reasons,
+all fixed here:
+
+- **`pm_dispprobe` was gated on `pmove.onground`** (pm_source.c). `onground` is only set
+  when the surface normal is >= `pm_standablenormal` 0.7. A surf ramp is steeper than
+  that *by definition* -- boreas measures 0.587 -- so a player RIDING one is airborne
+  and the probe was switched off for every surf ramp in the game. New modes: `1` is
+  Patch 256's behaviour unchanged, `2` drops the gate and change-latches (carrying
+  `(the previous contact held N more ticks)`, because a latch that hides duration is
+  worse than none), `3` is the per-tick firehose.
+- **A prop's record never made it out of the submodel.** `BIH_MODEL` runs the submodel's
+  own `BIH_Trace`, which works in MODEL space; `bih_probe_norm`/`_tri` were written
+  inside it and never rotated back, while `trace.plane.normal` was. For `ramp_c1m` at
+  yaw -135 the reader's 0.002 match test therefore compared model space against world
+  space, failed, and printed `via: unknown`. It was not silent -- it was saying the one
+  thing guaranteed to be discarded. `BIH_ProbeToWorld` now applies the same
+  `Matrix3x3_RM_Invert_Simple` the inner trace uses on the plane normal.
+- **A losing submodel clobbered the winner's record**, and a brush win cleared the index
+  and put nothing in its place, so "a brush won", "a patch won" and "nothing was hit"
+  were one indistinguishable message. `bih_probe_seq` is now a staleness token snapshot
+  across the nested call; `BIH_ClipBoxToBrush` records its surface name, contents and
+  plane while still honestly leaving `bih_probe_plane` at -1.
+
+The reader moved from `pm_source.c` to `com_bih.c` as `BIH_ProbeReport` -- that file
+owns the record and is linked into client and server -- and now prints the model name,
+the prop origin and the triangle's vertex-index triple. The triple is the identity
+because there is no ordinal to be had: `bihdata_s`'s `tri` arm holds only the index
+pointer, and keeping a mesh base would grow every leaf, including one per displacement
+triangle on an 11k-triangle terrain map. It is the better identifier anyway --
+`PHY_ReadLedge`'s numbering is deterministic, so the triple maps straight onto an
+offline dump. It did: the engine's `540/542/543` is tri 97, ledge 12 of an independent
+Python parse, the same triangle that parse had already picked out.
+
+**WHAT THIS PATCH DOES NOT DO.** It does not yet explain the reporter's stop. With the
+probe armed, the blocking triangles on the scripted ride are `540/542/543`,
+`265/264/268` and `68/67/69` -- ledges 12, 8 and 3 -- and **none of them is one of the
+30 faces that are interior to a neighbouring ledge**, which was the other hypothesis
+(the 16 convex ledges are flattened to 128 independent one-sided triangles by
+`BIH_BuildAlias`, and Source/IVP can never touch an interior face). So the interior
+faces are a real cost and a real divergence from Source, but they are **not** what
+stops this player at these points, and a convex-ledge rework should not be sold as the
+fix for this report. The scripted ride has no strafe input and slides off the ramp
+before reaching the reported wall; naming it needs a human at the controls with
+`pm_dispprobe 2` (`cfg/testrun/p317probe.cfg`).
+
+**Blast radius, stated plainly.** `hl2_propcollision` defaults to 1 and static props are
+`BIH_MODEL` leaves in the world BIH serviced by `BIH_Trace` -- there is no convex-hull
+escape (`numhullplanes` is 0 on every Source model; nothing in `plugins/` builds one).
+A 150-map random sample of the 1315-map library: **82 maps (54.7%) carry at least one
+solid static prop**, averaging 165 each. So the floor moves 4-7 units on about half the
+library, and times on those maps stop being comparable with any build before this one.
+That is why the map-load line is a `Con_Printf` and not a `DPrintf`, and why it says so
+in words. Ghost replays recorded before this will float. `data/runs/surf_boreas/best.pb`
+(`best 0 0 2930`) is on the old geometry.
+
+`hl2_phywinding 0` reproduces every build from 8 to 316 exactly. `2` measures each ledge
+and lets it vote -- per LEDGE, never per triangle: two adjacent coplanar triangles with
+slabs on opposite sides would be a real 4-8 unit step in the middle of a flat face, which
+is worse than the uniform offset being fixed here. `hl2_propcollision` 2 and 3 are
+untouched, both having been checked.
+
+## Patch 318 -- the brush edge bevels no map ever compiled, and the invisible wall on surf_boreas  *(APPLIED -- `plugins/hl2/mod_vbsp.c` only. One new cvar `hl2_brushbevels` DEFAULT 1. No engine change, no ABI bump, plugin-only. VERIFIED: pre-registered five-point A/B on one binary, `cfg/testrun/p318a.cfg` / `p318b.cfg`, plugin md5 `076A9DF5658F17B8962532B5B8217861`, exe `ftesurf64_p318.exe`.)*
+
+This is the patch that finally names the reported bug. Patch 317 was real and is
+confirmed below, but it was not the wall -- it is what EXPOSED the wall.
+
+**The report, again.** "On surf_boreas I slide on a ramp and stop, like an
+invisible wall, where CS:S and Momentum let you through." With Patch 317's probe
+armed and the reporter actually surfing the line (rather than the hands-off
+scripted ride, which drifts off the route), the log is unambiguous: they ride the
+curved prop ramp through six facets, normal rotating `-0.460 0.644 0.611` ->
+`-0.537 0.568 0.624`, and then at `11494.4 -13173.5 2576.0` every tick alternates
+between the ramp face and `BIH_BRUSH surface "tools/toolsnodr" contents
+0x08010000 norm -0.707 -0.707 0.000`. Normal z of ZERO. That is not a surface you
+slide along, it is a wall, and they are wedged in the crease against it.
+
+**The defect.** `BIH_ClipBoxToBrush` (`com_bih.c:935`) sweeps the player's AABB
+against a convex brush using the brush's own side planes, plus a runtime axial
+block against `absmins`/`absmaxs`. Sweeping a box against a polytope is a point
+query against the Minkowski sum of the two, and that sum's faces are three
+groups: the brush's planes, the six box planes, and ONE PLANE PER PAIRING of a
+brush EDGE with a box axis. The third group has never existed on this path. What
+is left is a strict SUPERSET of the true sum, bulging outward along every slanted
+edge.
+
+**This is Patch 258's defect, on the other clipper.** Patch 258 made exactly this
+argument for triangles and added `BIH_TriangleBevels` -- nine edge-cross-axis
+planes. Its essay says the old set "leaves the swept volume a strict SUPERSET of
+the true sum, bulging along every edge". The brush path was never touched.
+
+Quake 2 and Source both know about this and both solve it at COMPILE time:
+qbsp3's and VBSP's `AddBrushBevels` (`utils/vbsp/map.cpp:501` in the Momentum
+tree) appends the missing planes to the brush as extra sides. So the runtime is
+only ever as correct as the compile was -- and maps simply ship without them.
+
+**Measured, on the brush the reporter hits.** surf_boreas BSP brush 170 is a
+worldspawn `PLAYERCLIP|DETAIL` wedge at the foot of the lock-11 ramp: twelve
+sides -- seven real faces plus five axial bevels -- and no edge bevels. Its top
+face `(-0.5522 0.5522 0.6247)` is a 51-degree plane meeting two 45-degree
+vertical walls, so the bulge is enormous. Riding the ramp:
+
+| x+y | engine face-only test | exact SAT over the hull | binding side |
+|---|---|---|---|
+| -1680 | +0.600 clear | +10.97 clear | 1509 |
+| **-1679** | **-0.107 BLOCKED** | **+10.52 clear** | 1509 (norm z 0) |
+| -1674 | -3.643 BLOCKED | +8.28 clear | 1509 |
+| -1670 | -4.374 BLOCKED | +6.49 clear | 1514 |
+| -1660 | -4.528 BLOCKED | +2.02 clear | 1514 |
+| -1650 | -4.683 | -2.45 real overlap | 1514 (norm z 0.625) |
+
+The phantom runs about 24 units of travel, and the FIRST REAL contact -- further
+in -- is the top face, whose normal z of 0.625 is a surface you surf up and over.
+So the map is fine and the player should have kept going.
+
+The exact column is a separating-axis test against the brush's 38 hull vertices,
+enumerated in exact rationals. It had to be: a first pass using float plane
+intersection with a 0.05 tolerance silently produced an 8-vertex parallelepiped
+with the tilted face contributing nothing, and would have "confirmed" the same
+conclusion for the wrong reason. Coordinates are ~13000; the tolerance was the
+bug. The corrected polytope has every one of the twelve planes touching it,
+passes an inside/outside control pair, and is what the table above uses.
+
+**The fix is Source's own algorithm, run at load because we cannot recompile
+other people's maps.** `VBSP_AddBrushBevels` in `mod_vbsp.c` walks each side's
+winding (`modfuncs->ClipPlaneToBrush`, already exported and already used two
+lines above it for the brush bounds), takes every non-axial edge, crosses it with
+each of the six axis directions, and keeps the plane only if EVERY vertex of the
+hull is behind it. Running that offline against brush 170 yields chiefly
+`(0 0.870 0.492)` and `(-0.870 0 0.492)`, and with them the face test agrees with
+the exact test to within **0.004 units at every sample**.
+
+**Why it cannot open a hole, which is the only failure worth fearing.** A
+candidate is kept only if it supports the whole hull. A supporting plane cannot
+cut solid out of a convex body, so this construction can only ever SHRINK the
+swept volume toward the true Minkowski sum, never past it. That is by
+construction, not by sampling -- the same standard Patch 258 set for the
+triangle bevels' four-unit-slab correction.
+
+Two deliberate departures from VBSP: we walk every side rather than VBSP's
+`i=6..numsides` (its axial pass swaps axial planes to the front first, and our
+side order is the file's, not VBSP's -- extra candidates still face the support
+test, so this can only add planes that were always valid); and we skip axial
+edges exactly as VBSP does, because their bevels are the axial planes
+`BIH_ClipBoxToBrush` already applies at runtime.
+
+**VERIFICATION -- pre-registered, five points, one binary, one cvar.**
+`p318a.cfg` (`hl2_brushbevels 0`) against `p318b.cfg` (`1`). The player is placed
+2 units ABOVE the surface the prop holds them on, deliberately: the binding plane
+in arm A is side 1509, whose normal z is zero, so the lift cannot weaken the
+phantom but does take the prop's own hull out of the answer. `cmd stuck` does a
+zero-length `tracebox`, which reaches the same brush planes.
+
+| point | arm A (bevels 0) | arm B (bevels 1) |
+|---|---|---|
+| x+y -1679 | startsolid **1** | startsolid **0** |
+| x+y -1674 | startsolid **1** | startsolid **0** |
+| x+y -1670 | startsolid **1** | startsolid **0** |
+| x+y -1665 | startsolid **1** | startsolid **0** |
+| x+y -1660 | startsolid **1** | startsolid **0** |
+| CONTROL, deep inside brush 170 | startsolid 1 | startsolid **1** |
+| CONTROL, spawn deck | startsolid 0, eye 64.00 | startsolid 0, eye 64.00 |
+
+Five for five, and **the control deep inside the brush stays solid in both arms**
+-- the bevels did not open a hole. Arm A prints no census line; arm B prints
+`596 planes across 113 brushes`.
+
+**Blast radius.** Six-map sweep (`p318c.cfg`): kz_bhop_badg3s 27625 planes /1465
+brushes, surf_summer_ksf 15015/1738, surf_fortum_fix 17906/2494, surf_jumble
+6485/842, bhop_circlejerk 8255/1203, surf_progress_fix 13380/2989. Every map
+tested has thousands of under-beveled brushes, so this moves world collision
+essentially library-wide and times are not comparable across it. That is why the
+census is a `Con_Printf` and says so in words.
+
+Load cost is inside the noise: interleaved A/B over the same six maps, bevels OFF
+93.4 s / 92.3 s, ON 92.0 s / 93.1 s.
+
+**The first caps were wrong and the sweep caught it.** 512 winding points and 96
+bevels per brush produced the "left alone for want of room" clause on FIVE of the
+first six maps -- a cap too tight, not a map being strange, and exactly what that
+counter exists to say. Raised to 4096/512, at which the clause disappears from
+all six. The buffers moved to the heap in the same change: 4096 `vecV_t` is 64K
+and models can load on worker threads, which is the crash `com_mesh.c:3310`
+records.
+
+**WHAT THIS SAYS ABOUT PATCH 317, which is the part worth keeping.** 317 is
+correct and stays, and this patch is the proof rather than a retraction. Two
+independent confirmations landed while chasing this: the raw `.phy` faces are
+**128 of 128** anticlockwise-from-outside when tested against their own ledge
+centroid, and the re-wound collision plane sits on the VISIBLE mesh -- the render
+verts of that facet are a **median 0.002** units from it (min -0.005). So the
+hull is where the model is.
+
+But 317 is what put the player INTO the phantom's reach. Riding 6.81 units proud
+of the ramp, the box cleared brush 170's leading edge entirely; on the true
+surface it grazes it. The reporter's wall was always there, waiting under a
+floating player. Two wrongs had been cancelling, and fixing the first one alone
+made the visible symptom worse -- which is the shape of this whole session and
+the reason the "it didn't work" report was right and my reading of it was not.
+
+**And what is NOT the cause, so it does not get re-investigated.** Not the map:
+brush 170 is byte-identical in the CS:S and Momentum builds of surf_boreas --
+same brush index, same twelve planes, same distances to three decimals. Not the
+ramp being "secretly 2 parts": it is 16 convex ledges, but the blocking contact
+was never one of the 30 interior faces. Not framerate: the 20 fps arm is
+line-for-line identical. Not Defect B (the flattened ledges) -- that remains a
+real cost and a real divergence from Source, but it is not this bug, and Stage 2
+of the plan should be re-costed on its own merits rather than sold as a fix.
+
+**For the record, on the route.** All three of the reporter's recorded runs pass
+that corridor 40 to 265 units ABOVE the ramp surface, and the PB's nearest
+approach to brush 170 is 0.029 units on its TOP face -- the clip wedge is the
+intended riding surface where the prop ends. Lock 11 is a much lower line than
+they actually play, which is why a PB exists over geometry that also contains
+this wall.
+
+## Patch 320 -- the player's box never rotated into a rotated prop's frame  *(APPLIED -- `engine/common/com_bih.c`, `engine/common/common.c`. One new cvar `pm_rotatedboxhulls` DEFAULT 1, CVAR_SERVERINFO. No struct change on the wire, no ABI bump. VERIFIED: pre-registered 4-point A/B in ONE process, `cfg/testrun/p320.cfg`, exe `ftesurf64_p320.exe` md5 `150cb18c13c92af1edf7d258b792d833`.)*
+
+This is the one the reporter guessed: "is it not the ramp we bump into, but the
+previous ramp not bulging out enough?" Yes. Exactly that, by 7.73 units.
+
+**The defect.** `BIH_RecursiveTrace`'s `BIH_MODEL` case runs the submodel's trace in
+MODEL space: it rotates `startpos`/`endpos` through the prop's axis and passes
+`tr->size.min`/`max` -- the player's box -- straight through untouched. An AABB has
+no way to express "rotated", so inside a prop placed at a diagonal yaw the player's
+box effectively rotates WITH the prop. The error is exactly zero at yaw 0/90/180/270,
+which is why it survived this long, and worst at 45.
+
+**Measured, on the ramp the reporter rides.** surf_boreas's ramps are `prop_static`
+at yaw **-135**. The ramp facet under the player has world normal
+`(-0.5367 0.5676 0.6243)`; in model space that same plane is
+`(-0.0218 -0.7809 0.6243)` -- same z, rotated 135 degrees in xy. Pushing the plane
+out by the box:
+
+| | offset along the normal |
+|---|---|
+| engine, from the MODEL-space normal | 12.843 |
+| correct, from the WORLD-space normal | 17.669 |
+
+4.826 units of plane, and 4.826 / 0.6243 = **7.731 units of ride height**. An
+independent offline sweep -- our triangle-soup model against the exact convex-ledge
+Minkowski sum, complete facet set (faces + 6 box planes + every edge x axis) -- gives
+a dead constant **-7.731** at every sample down 260 units of ramp. Two derivations,
+three decimal places.
+
+**What it explains, which is the whole session.** Before Patch 317 the inside-out
+`.phy` slab held the player **+6.41** units too HIGH (4/|n_z|); this held them
+**-7.73** too LOW. Net **-1.32**: almost right, by accident. Fixing 317 removed the
+cancelling error and left the full 7.73, which is what drops the player under the lip
+of the `PLAYERCLIP` wedge (brush 170) at the foot of the ramp -- the "bounce". Patch
+318 is unrelated to it and stays: the reporter's own four `getpos` readings taken
+inside Momentum Mod land on that brush's box-expanded hull to **+0.02..0.03 units**,
+which is a direct measurement that Source expands the brush exactly as we do.
+
+**The fix.** Pushing a plane out by a box is a support-function query, `dist +=
+h_B(n)`. For a box aligned to the same frame as the plane that is
+`sum(extent_i * |n_i|)`, which is what the old code computed. For the oriented box it
+really is, it is `sum(extent_j * |dot(u_j, n)|)` over the box's own axes -- and those
+axes are just the world axes expressed in model space, i.e. the COLUMNS of the
+rotation the trace already has in hand. Three dots and three fabs, and it reduces to
+the old expression exactly when the axes are identity, so the unrotated path is kept
+verbatim rather than folded in.
+
+Two things fixed alongside it, both latent and both found by writing the essay:
+- The recentring offset (origin -> box centre, `(0,0,31)` for a standing player) was
+  being added to an already-rotated `startpos` without being rotated itself. Yaw-only
+  props leave `(0,0,z)` alone, which is why nothing showed; a pitched or rolled prop
+  would have moved the player bodily.
+- The trace bounds were the UNROTATED box's. Those bounds only ever cull, so too
+  small is a missed collision -- now the exact enclosing box of the rotated one,
+  up to sqrt(2) larger at 45 degrees.
+
+**VERIFICATION -- pre-registered, one process, one cvar** (`pm_rotatedboxhulls` is
+not latched, so both arms ran back to back on one map load). At XY
+`(11494.4 -13173.5)` the ramp holds the player's feet at z **2575.93** with the fix
+off -- the recorded stop in `p317probe.log` was z 2576.0 -- and at z **2583.66** with
+it on, which is EXACTLY the independent convex-ledge figure. A zero-length tracebox
+at 2580 therefore has to flip:
+
+| probe | arm A (0) | arm B (1) |
+|---|---|---|
+| z 2570, below both surfaces | startsolid 1 | startsolid 1 |
+| **z 2580, between them** | **startsolid 0** | **startsolid 1** |
+| z 2595, above both | startsolid 0 | startsolid 0 |
+| spawn deck, UNROTATED world brushes | startsolid 0 | startsolid 0 |
+
+Four for four. The brackets pin the surface from both sides, and the spawn deck
+proves the change reaches rotated submodels only and leaves the world alone.
+
+**Blast radius, and it is large.** Every solid `prop_static` not placed on a cardinal
+yaw, in every Source map -- a 150-map sample put solid props on 54.7% of the library
+at ~165 each -- plus every rotated brush submodel (`func_` entities at an angle).
+Times are not comparable across this patch. `pm_rotatedboxhulls 0` restores the old
+behaviour exactly for A/B, and it is CVAR_SERVERINFO because client and server must
+agree or prediction will disagree about where every diagonal prop's surface is.
+
+**Also shipped here: `r_showbrushes` (Patch 319)**, which is how this was found. A
+nodraw PLAYERCLIP brush has no faces in the BSP at all -- VBSP strips them -- so no
+render toggle can show one, and "turning on tool brushes shows me nothing" is the
+correct result rather than a missing setting. Mode 1 draws the brush, mode 2 draws
+the SWEPT hull (every plane offset by the player box's support), which is the surface
+the origin is actually stopped by. Mode 2 is what made the wedge visible and let the
+reporter say "it's in the way" with a screenshot.
+
+
+## Patch 321 -- the map hash the server compares was never the map's  *(APPLIED -- `engine/server/pr_cmds.c` (76 added lines, ZERO removed) and `plugins/hl2/mod_vbsp.c` (one token plus a comment), with QC build 73 (`shared/sh_defs.qc`, `server/sv_timer.qc`, `client/cl_online.qc`), `tools/reccheck.py`, `surfd/surfd.py` and `surfd/test_board.py`. No new cvar, no struct change, no ABI bump, no protocol change. VERIFIED: a four-arm before/after, two of them across a real network between x86-64 and aarch64 -- `cfg/testrun/p321map.cfg` and `cfg/testrun/p321live.cfg`, plugins `94FC3DE01048E94E3852AA3F6BAFF406` (before) and `411F3187842B0878C872F7E05657AAE0` (after) against one exe `A3198D8F497C2CA13735F74E69A73838`.)*
+
+`sv_mapcheck` has shipped in QuakeWorld since 1996, it DEFAULTS TO 1, and
+`SVQW_PreSpawn_f` drops any client whose map hash disagrees with the server's.
+So every audit of this tree -- the anti-cheat plan's own Layer 1 entry included,
+which lists "BSP hashes pinned for ranked" as not started -- could read that cvar
+and move on. It had never once fired.
+
+**`mod` is the loop variable.** `VBSP_LoadModel` takes the world model in `mod`,
+saves it as `wmod`, and then the submodel loop at :11209 **reassigns `mod` on
+every iteration**. The hash was computed 60 lines later:
+
+```c
+	VBSP_ComputeChecksum(mod, filein, filelen);   /* the LAST SUBMODEL */
+```
+
+so the map's hash landed on `*1398:surf_x` and the world model kept the zero
+`Mod_FindName`'s `memset` left there. Nothing reads a submodel's checksum.
+Everything that matters reads `sv.world.worldmodel->checksum`.
+
+**It did not fail. It was INERT, which is strictly worse.** Both ends did the
+same thing, so the server compared its own 0 against the client's 0, they
+agreed, and every client was let through. From outside, "the check passed
+because the maps match" and "the check passed because neither side computed
+anything" are the same observation -- which is exactly why this survived five
+years of servers and an explicit audit.
+
+**Measured before fixing, because the fix is a one-token change and a one-token
+change needs its premise checked rather than argued.** Across the full library
+on the Pi -- 1312 BSPs, lump 14 read from the header, LZMA-compressed lumps
+taken from their uncompressed size:
+
+| submodels | maps | what happened |
+|---|---|---|
+| >1 | **1287** | loop ran, `mod` reassigned, world model left at 0 |
+| 1 | 25 | loop never ran, `mod == wmod`, **hashing correctly all along** |
+
+So a spot check could have confirmed either answer depending on which map it
+picked. `df_map` works; `bhop_arcane` (1399 submodels) does not.
+
+### The other half: the numbers existed and QC could not see either of them
+
+The engine has always held both -- `SVQW_PreSpawn_f` stores what the client
+claimed in `host_client->checksum`, and the world model carries what the server
+loaded -- and the only consumer was the kick. A kick is a refusal, not a fact,
+and a ranked run needs the fact. So `PF_infokey_Internal` grows **one key with
+two subjects**:
+
+    infokey(world, "*mapcrc")   the hash of the BSP THIS SERVER loaded
+    infokey(player, "*mapcrc")  the hash THAT CLIENT claimed at prespawn
+
+Three decisions in there, each of which would have been a bug the other way:
+
+- **Not published into `svs.info`,** unlike `*csprogs`. Serverinfo reaches every
+  client, and handing a patched client the expected answer is precisely what it
+  would need to echo one back. The honest client never needs telling; it
+  computes the hash from the bytes it loaded.
+- **Hex strings, and QC compares them with `strcmp`.** A checksum is 32 bits and
+  a QC float has a 24-bit mantissa, so ~255 of every 256 distinct hashes have no
+  exact float and a numeric compare would report differing maps as equal --
+  silently, and in the direction that RANKS the run. Build 66 paid for this once
+  when a seven-digit byte count shipped as `1.12889e+06`; that one at least
+  looked wrong.
+- **A zero checksum is reported as `""` (unknown), never as the hash 0, on both
+  subjects.** This is the line that makes the patch deployable at all -- see
+  below.
+
+### The deploy-order trap, which would have demoted every player on earth
+
+The client half of this fix lives in the **hl2 plugin**, which only reaches a
+player in a client release; the server half lands on the lobbies the day it is
+built. In that window a patched server holds a real hash while every unpatched
+client still claims 0. A straight comparison would mark **every run by every
+player** as set on a foreign map until they updated -- the `LB_MAX` lead-time
+trap again, in the direction that accuses. Reported as unknown, the check stays
+dormant per client and switches itself on as each one updates.
+
+And the same window is worse for the kick, which is why `cfg/lobby.cfg` now
+carries **`set sv_mapcheck 0`** as an explicit gate, appended before the plugin
+was installed. Left at 1, the fleet would have stopped accepting connections the
+second the new `.so` landed -- not just players with a wrong map, *all* of them.
+This is the `pm_slide 0` lesson from the Patch 316 deploy: a fix that wakes a
+dormant mechanism ships a behaviour change nobody asked for unless it is gated
+in the same moment.
+
+**It stays 0 after the client release too.** A kick is the wrong instrument even
+when working: much the likeliest cause of a mismatch is a map file one repack
+out of date, and the penalty for that must not be "the game will not let you
+in". QC build 73 carries the same fact as **`TF_NOMAP` (4096)** instead, on the
+`TF_NOJOURNAL`/`TF_NORULESET`/`TF_NOPROFILE` precedent -- the run does not rank,
+the player keeps playing, nobody is accused, and `surfd`'s `certifiable()`
+demotes it to the community board. The board's `why` column reads **`other map`**,
+not "wrong map".
+
+**What it actually catches, said honestly.** On a lobby the server owns
+collision and owns the zone triggers, so a differing client map did not give
+anybody faster physics -- it gave them a desynchronised prediction, which is a
+punishment. What it costs is *checkability*: the `.view` the client wrote
+describes a different world from the one the `.rec` recorded, so the two can no
+longer be cross-checked. On a listen server -- the whole Community tier -- the
+host's BSP **is** the physics, and there the bit is about the run itself. It is
+client-asserted, so it is T2 and not T4, exactly like `TF_NOPROFILE`.
+
+The T4 answer is the other half of build 73: `SV_RecOpen` now writes **`mapcrc
+<hash>`** into the recording header -- the SERVER's own hash, which no client can
+influence -- so a stored run names the exact bytes its physics ran on. A map name
+is not a map: six maps in this library are one name at two different builds, and
+a recompile keeps the name while changing every ramp. Re-simulating a claimed
+time (the plan's Layer 2) cannot begin without knowing which bytes to
+re-simulate against. Additive by the header's own rule; `tools/reccheck.py`
+learns it, and learns `leg` at the same time, which it has been recording as an
+unexpected key on every file written since build 57 -- visible only under
+`--verbose`, which is why nobody saw it.  Confirmed with a control: a genuinely
+unknown key still notes.
+
+### Verification -- four arms, and each one exists to kill a different answer
+
+1. **A/B on one exe, listen server** (`p321map.cfg`). Only the plugin DLL
+   differs. Before: `ours "" theirs ""` -- and an earlier run on the
+   pre-zero-rule engine printed the raw value, `00000000`, which is the direct
+   evidence that the world model's checksum really is zero. After:
+   `ours "676de275" theirs "676de275"`.
+2. **The number is right, not merely non-zero.** `676de275` is what
+   `scratchpad/mapcrc.py` computes for `bhop_eazy.bsp` from the SPEC -- md4 of
+   the whole file, folded the way `hashfunc_terminate_uint` folds it -- written
+   from `mod_vbsp.c`/`plugin.c`/`sha1.c` and never from the engine's own answer,
+   with its MD4 self-tested against six RFC 1320 vectors first. (Its first cut
+   had one vector mistranscribed and accused a correct MD4; a self-test is only
+   worth having if its constants are copied rather than remembered.)
+3. **Across a real network, two architectures** (`p321live.cfg`). aarch64 server
+   on the Pi, x86-64 client here, two separate copies of the file, two
+   separately-built plugins: `ours "676de275" theirs "676de275"`. This is also
+   the first evidence in this tree that the hash is stable across architecture.
+4. **The mismatch, which arm 3 is the control for.** One byte appended to the
+   client's copy only: `ours "676de275" theirs "a45a1f9d" nomap 0 would 1` --
+   and `a45a1f9d` is again the independent value. `nomap 0` is correct and
+   predicted: the bit latches at `SV_TimerStart` and no run was started, which
+   is why the pure predicate is reported as `would` beside it.
+5. **The gate is load-bearing, not precautionary.** The same client against the
+   same server with `sv_mapcheck 1`: *"Map model file does not match
+   (maps/bhop_eazy.bsp), 0XA45A1F9D != 0X676DE275/0X676DE275"* and dropped at
+   prespawn. That is the lockout every player would have met.
+
+`COM_BlockSequenceCheckByte` -- the QW packet check byte seeded with the map
+checksum -- was checked before deploying and has **no callers** in this engine;
+the packet path uses the unseeded `COM_BlockSequenceCRCByte`. A live hash could
+otherwise have invalidated every client's packets.
+
+### Deployed, and what deliberately was not
+
+The Pi runs the patched engine and plugin as of 2026-09-13 23:33 UTC; all twelve
+lobbies restarted onto them, 12/12 active, 12 directory rows, no load errors.
+**Both halves are genuinely one-patch deploys, which took checking:** the engine
+was rebuilt in `/srv/nvme/b316build`, the same tree the live binary came from,
+and `pr_cmds.c` ported as 76 added / 0 removed lines; the plugin was rebuilt in
+`/srv/nvme/ftesurf-server/fteqw`, the Sep-7 lineage tree whose `.so` is
+**md5-identical to the deployed one**. Rebuilding the plugin from the newer
+`b316build` tree instead would have carried **6,384 insertions across 17 files**,
+and taking it from the Windows tree would have added patches 317 and 318 -- i.e.
+`.phy` hull winding and brush edge bevels, collision changes, onto twelve live
+public lobbies with standing records.
+
+**QC build 73 is NOT deployed to the Pi and that is deliberate.** The live
+`qwprogs.dat`/`csprogs.dat` are 5 KB and 67 KB *larger* than a clean build of git
+HEAD plus build 73, i.e. they carry the other session's uncommitted work, live.
+Shipping build 73 over them would silently revert it. So the server half sits
+there inert until that tree is committed and build 73 can be rebuilt on top of
+it -- which is also fine, because the feature cannot activate until a client
+release anyway. Verification of the QC half was done against a throwaway
+`b73test` gamedir on port 27599 that never touched the live one.

@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "particles.h"
 #include "shader.h"
 #include "glquake.h"
+#include "com_bih.h"	//FTESurf Patch 319: r_showbrushes walks the world BIH for BIH_BRUSH leaves
 
 extern	cvar_t	cl_predict_players;
 extern	cvar_t	cl_predict_players_frac;
@@ -3583,6 +3584,148 @@ void CLQ1_AddVisibleHulls(void)
 	}
 }
 
+/*
+==================================================
+r_showbrushes				FTESurf Patch 319
+
+Draw WORLD BRUSH collision hulls as wireframe.
+
+Why this had to exist.  The surf_boreas invisible wall is a worldspawn PLAYERCLIP
+brush textured nodraw, and VBSP strips nodraw faces out of the face lump
+altogether -- the brush has no surface, no texture and no renderable geometry of
+any kind.  "Turning on tool brushes shows me nothing" is therefore the correct
+result, not a missing setting: there is nothing there to show.  The only surviving
+description of the shape is the collision hull, so the only way to see it is to
+draw that.
+
+Two modes, and the difference between them is the whole point:
+  1  the BRUSH, as it sits in the map.  What the mapper built.
+  2  the SWEPT hull -- every plane pushed out by the player box's support in that
+     direction, which is exactly what BIH_ClipBoxToBrush's `boxdist` macro does.
+     This is the surface your ORIGIN is stopped by, so it hangs below the brush by
+     the hull height and out by 16 in x/y, and looks wrong until you remember the
+     origin is at your feet.  Mode 2 is what makes Patch 318 visible: without the
+     edge bevels the swept hull bulges past the true Minkowski sum along every
+     slanted edge (13.93 units on boreas brush 170), and toggling hl2_brushbevels
+     on a fresh map load visibly shrinks it.
+
+A bevel plane contributes a degenerate winding in mode 1 -- it supports the hull
+along an edge, so it has no face of its own -- which is why mode 1 looks identical
+with bevels on and off.  That is correct and is the reason mode 2 exists.
+==================================================
+*/
+cvar_t r_showbrushes			= CVARFD("r_showbrushes", "0", CVAR_CHEAT, "FTESurf Patch 319. Draw world brush COLLISION hulls as wireframe, for brushes that have no renderable faces (nodraw clip brushes are invisible by construction -- VBSP emits no faces for them). 1 = the brush as built. 2 = the SWEPT hull, every plane offset by the player box support, i.e. the surface your origin is actually stopped by -- this is the one that shows what hl2_brushbevels changes. Orange = PLAYERCLIP, green = SOLID, blue = anything else.");
+cvar_t r_showbrushes_dist		= CVARFD("r_showbrushes_dist", "768", CVAR_CHEAT, "r_showbrushes: only draw brushes within this many units of the view. A whole map's brush hulls will overflow the line buffer and then nothing draws at all.");
+cvar_t r_showbrushes_mask		= CVARFD("r_showbrushes_mask", "0", CVAR_CHEAT, "r_showbrushes: if non-zero, only draw brushes whose contents share a bit with this mask. 65536 (0x10000) is PLAYERCLIP alone, which is usually what you want -- 0 draws every solid brush near you and is unreadable indoors.");
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+struct brushviz_s
+{
+	shader_t	*shader;
+	unsigned int mask;
+	int			expand;		//mode 2: offset each plane by the player box support
+	vec3_t		hullmins, hullmaxs;
+	int			brushes, faces;
+};
+static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
+{
+	struct brushviz_s *v = ctx;
+	vec4_t	planes[512];
+	vecV_t	verts[64];
+	int		i, j;
+	size_t	n;
+	float	r, g, b;
+
+	if (v->mask && !(brush->contents & v->mask))
+		return;
+	if (brush->numsides < 4 || brush->numsides > countof(planes))
+		return;
+
+	for (i = 0; i < brush->numsides; i++)
+	{
+		VectorCopy(brush->brushside[i].plane->normal, planes[i]);
+		planes[i][3] = brush->brushside[i].plane->dist;
+		if (v->expand)
+		{	/*the same offset BIH_ClipBoxToBrush's boxdist macro applies: the box's
+			  support in -normal, i.e. the corner that touches this plane first. */
+			vec3_t ofs;
+			for (j = 0; j < 3; j++)
+				ofs[j] = (planes[i][j] < 0) ? v->hullmaxs[j] : v->hullmins[j];
+			planes[i][3] -= DotProduct(ofs, planes[i]);
+		}
+	}
+
+	if (brush->contents & FTECONTENTS_PLAYERCLIP)	{r=1.0; g=0.35; b=0.10;}
+	else if (brush->contents & FTECONTENTS_SOLID)	{r=0.25; g=0.80; b=0.25;}
+	else											{r=0.40; g=0.55; b=1.00;}
+
+	for (i = 0; i < brush->numsides; i++)
+	{
+		n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
+		if (n < 3)
+			continue;	/*a supporting bevel has no face of its own -- expected*/
+		v->faces++;
+		for (j = 0; j < (int)n; j++)
+			CLQ1_DrawLine(v->shader, verts[j], verts[(j+1)%n], r, g, b, 1);
+	}
+	v->brushes++;
+}
+#endif
+void CLQ1_AddVisibleBrushes(void)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	static int lastshow = 0;
+	struct brushviz_s v;
+	vec3_t mins, maxs;
+	float d;
+
+	if (!r_showbrushes.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+	{
+		lastshow = 0;
+		return;
+	}
+	if (R2D_Flush)
+		R2D_Flush();
+
+	memset(&v, 0, sizeof(v));
+	/*same shader as r_showhull: opaque lines with polygonoffset so they do not
+	  z-fight the surface they hug, rgbgen vertex for the per-contents colour. */
+	v.shader = R_RegisterShader("hullshader", SUF_NONE,
+		"{\n"
+			"polygonoffset\n"
+			"{\n"
+				"map $whiteimage\n"
+				"rgbgen vertex\n"
+			"}\n"
+		"}\n");
+	v.mask = (unsigned int)r_showbrushes_mask.ival;
+	v.expand = (r_showbrushes.ival == 2);
+	/*the player hull, so mode 2 draws the volume THIS player's origin is stopped
+	  by. pm_source's defaults; a ducked or otherwise resized player differs, and
+	  that is honest -- the swept hull is per-hull, not a property of the brush. */
+	VectorSet(v.hullmins, -16, -16, 0);
+	VectorSet(v.hullmaxs,  16,  16, 62);
+
+	d = r_showbrushes_dist.value;
+	if (d <= 0)
+		d = 768;
+	VectorSet(mins, r_refdef.vieworg[0]-d, r_refdef.vieworg[1]-d, r_refdef.vieworg[2]-d);
+	VectorSet(maxs, r_refdef.vieworg[0]+d, r_refdef.vieworg[1]+d, r_refdef.vieworg[2]+d);
+
+	BIH_EnumBrushes(cl.worldmodel, mins, maxs, CLQ1_DrawOneBrush, &v);
+
+	/*one-shot readout on (re)enable: a blank screen should say WHY. "0 brushes"
+	  with a mask set is a mask problem; "0 faces" would be a winding problem. */
+	if (r_showbrushes.ival != lastshow)
+	{
+		lastshow = r_showbrushes.ival;
+		Con_Printf("r_showbrushes %i: %i brush(es), %i face(s) within %g units, mask 0x%x%s\n",
+			r_showbrushes.ival, v.brushes, v.faces, d, v.mask,
+			v.expand?" (SWEPT hull: offset by the 32x32x62 player box, so it hangs below the brush)":"");
+	}
+#endif
+}
+
 extern cvar_t r_decal_lightmap;	//nettest
 
 typedef struct
@@ -5968,6 +6111,7 @@ void CL_LinkPacketEntities (void)
 
 	CLQ1_AddVisibleBBoxes();
 	CLQ1_AddVisibleHulls();
+	CLQ1_AddVisibleBrushes();	//FTESurf Patch 319
 
 #ifdef RTLIGHTS
 	R_EditLights_DrawLights();

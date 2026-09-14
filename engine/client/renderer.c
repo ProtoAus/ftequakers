@@ -1539,6 +1539,14 @@ void Renderer_Init(void)
 	Cvar_Register (&r_showbboxes, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showhull, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showhull_maxdist, GLRENDEREROPTIONS);
+	{	//FTESurf Patch 319. Defined in cl_ents.c next to the BIH walk they drive,
+		//because the essay explaining why a nodraw clip brush cannot be drawn any
+		//other way belongs with the code, not with the registration.
+		extern cvar_t r_showbrushes, r_showbrushes_dist, r_showbrushes_mask;
+		Cvar_Register (&r_showbrushes, GLRENDEREROPTIONS);
+		Cvar_Register (&r_showbrushes_dist, GLRENDEREROPTIONS);
+		Cvar_Register (&r_showbrushes_mask, GLRENDEREROPTIONS);
+	}
 	Cvar_Register (&r_showfields, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showshaders, GLRENDEREROPTIONS);
 #ifdef BEF_PUSHDEPTH

@@ -111,4 +111,34 @@ struct galiasinfo_s;
 
 //generates a BIH tree and updates mod->funcs.NativeTrace|NativeContents funcs
 void BIH_Build (model_t *mod, struct bihleaf_s *items, size_t numitems);
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+//FTESurf Patch 319: hand every BIH_BRUSH leaf overlapping a box to a callback, so
+//r_showbrushes can draw collision hulls that have no renderable faces at all (a
+//nodraw PLAYERCLIP brush is invisible by construction -- VBSP emits no faces for
+//it). The brush array is plugin-private and struct bihnode_s is private to
+//com_bih.c, so this is the only way in.
+void BIH_EnumBrushes (model_t *mod, const vec3_t mins, const vec3_t maxs,
+					  void (*cb)(void *ctx, const q2cbrush_t *brush), void *ctx);
+#endif
 void BIH_BuildAlias (model_t *mod, struct galiasinfo_s *meshes);
+
+//FTESurf Patch 317: print the identity of whatever stopped the last trace --
+//leaf type, model, triangle, surface, and which of BIH_ClipToTriangle's planes.
+//com_bih.c owns the bih_probe_* record, and is linked into client and server, so
+//the mover (pm_source.c) and solid_here (view.c) can both print the same line.
+void BIH_ProbeReport (const trace_t *t, const char *tag);
+
+//...and the record itself, for a caller that wants to LATCH on it rather than
+//print every tick (pm_dispprobe 2 does; a surfer clips every single tick).
+//Patch 258 declared these as bare externs inside pm_source.c; they are here now
+//so the two readers cannot drift apart.
+extern int			bih_probe_plane;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
+extern int			bih_probe_kind;		/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
+extern index_t		bih_probe_idx[3];
+extern model_t	   *bih_probe_model;	/*NULL = world/top level, else the submodel (the prop)*/
+extern vec3_t		bih_probe_norm;
+extern vec3_t		bih_probe_tri[3];
+extern vec3_t		bih_probe_modelorg;
+extern unsigned int	bih_probe_contents;
+extern unsigned int	bih_probe_seq;

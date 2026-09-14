@@ -408,6 +408,41 @@ static cvar_t s_al_distancemodel = CVARFCD("s_al_distancemodel", legacyval("2","
 static cvar_t s_al_reference_distance = CVARD("s_al_reference_distance", "120", "This is the distance at which the sound is audiable with standard volume in the inverse distance models. Nearer sounds will be louder than the original sample.");
 static cvar_t s_al_velocityscale = CVARD("s_al_velocityscale", "1", "Rescales velocity values, before doppler can be calculated.");
 static cvar_t s_al_static_listener = CVAR("s_al_static_listener", "0");	//cheat
+/*
+  FTESurf Patch 315.  OpenAL will not position a STEREO buffer.  A source with a
+  two-channel buffer ignores AL_POSITION, AL_MAX_DISTANCE and the distance model
+  entirely and plays flat, 2d, at full AL_GAIN, no matter where the listener is.
+
+  That is a spec-level property of OpenAL, not a driver bug, and OpenAL Soft's
+  answer to it is the AL_SOFT_source_spatialize extension -- which is what
+  oali->can_source_spatialise tests for.  Creative's "Generic Software"
+  implementation, still the default on plenty of Windows machines, does not have
+  that extension, so on those drivers EVERY stereo sample in the game is
+  un-attenuated and audible across the whole map at once.
+
+  It is worth saying how this presents, because it is nothing like a volume bug:
+  the loudness maths upstream is all correct and all discarded.  Half-Life 2's
+  ambient beds are frequently stereo -- ambient/levels/citadel/field_loop3.wav
+  and ambient/levels/canals/dam_water_loop2.wav both are -- and surf_tensor2
+  places 30 of those two samples around the map.  Every one played at full scale
+  simultaneously, 21 of them phase-offset copies of the same waveform, which
+  comb-filters: the result is harsh rather than merely loud, and no amount of
+  correct attenuation arithmetic changes it, because the driver never reads it.
+
+  So: downmix to mono when, and only when, a sound is actually being used as a
+  positional source and the driver cannot spatialise stereo for us.  A mono
+  buffer costs the sample's stereo width -- which a point source in 3d space
+  does not have anyway, since its position is what decides the panning -- and
+  buys back the distance attenuation, which is the whole point.  The stereo
+  buffer is kept alongside it, so the same sample played 2d (menu sound, music,
+  a sound on the listener's own entity) is completely unaffected.
+*/
+static cvar_t s_al_downmix3d = CVARD("s_al_downmix3d", "1",
+	"OpenAL cannot apply distance attenuation to a stereo sample -- it plays flat and unattenuated wherever you stand.\n"
+	"0: never downmix. Stereo samples used as 3d sounds stay stereo, and stay audible across the entire map.\n"
+	"1: downmix a stereo sample to mono when it is used as a positional sound AND the driver lacks AL_SOFT_source_spatialize (the default; OpenAL Soft is left alone).\n"
+	"2: always downmix positional stereo samples, even where the extension exists.\n"
+	"Buffers are cached, so a change takes effect on the next map load or snd_restart.");
 extern cvar_t snd_doppler;
 
 enum distancemodel_e
@@ -443,6 +478,12 @@ typedef struct
 	{
 		ALuint buffer;
 		qbyte allocated;	//again no guarentee.
+		//FTESurf Patch 315: the mono downmix of a stereo sample, built lazily and
+		//only for samples that are actually used as positional sources.  Kept
+		//beside the stereo buffer rather than replacing it so that the same
+		//sample played 2d still gets its two channels.
+		ALuint monobuffer;
+		qbyte monoallocated;
 	} *sounds;
 	size_t max_sounds;
 
@@ -659,6 +700,120 @@ static qboolean OpenAL_LoadCache(oalinfo_t *oali, unsigned int *bufptr, sfxcache
 	return true;
 }
 
+/*
+  FTESurf Patch 315, part 1 of 2: fold a two-channel sfxcache down to one.
+
+  sfxcache_t::length is a count of FRAMES, not of sample values -- OpenAL_LoadCache
+  above sizes a stereo 16bit buffer as length*4 and a mono one as length*2 -- so a
+  stereo cache holds 2*length values and the output holds length of them.
+
+  The average of the two channels is the right fold here rather than a sum: these
+  are ambient beds whose two channels are near-identical, so summing would add up
+  to 6dB of gain on exactly the sounds this patch exists to quieten down, and a
+  sample whose channels are genuinely decorrelated would clip.  Nothing is
+  normalised afterwards; the caller's own volume is applied by OpenAL_LoadCache.
+
+  Returns false, having touched nothing, for anything it cannot fold -- the caller
+  then keeps the stereo buffer, which is the pre-patch behaviour.
+*/
+static qboolean OpenAL_FoldToMono(sfxcache_t *in, sfxcache_t *out, void **tofree)
+{
+	usamplepos_t i, n = in->length;
+
+	*tofree = NULL;
+	if (!in->data || in->numchannels != 2 || !n)
+		return false;
+
+	memcpy(out, in, sizeof(*out));
+	out->numchannels = 1;
+
+	switch(in->format)
+	{
+	case QAF_S8:
+		{
+			signed char *dst = malloc(n * sizeof(*dst));
+			signed char *src = (signed char*)in->data;
+			if (!dst)
+				return false;
+			for (i = 0; i < n; i++)
+				dst[i] = (src[i*2] + src[i*2+1]) / 2;
+			out->data = (qbyte*)dst;
+		}
+		break;
+	case QAF_S16:
+		{
+			short *dst = malloc(n * sizeof(*dst));
+			short *src = (short*)in->data;
+			if (!dst)
+				return false;
+			for (i = 0; i < n; i++)
+				dst[i] = (src[i*2] + src[i*2+1]) / 2;
+			out->data = (qbyte*)dst;
+		}
+		break;
+#ifdef MIXER_F32
+	case QAF_F32:
+		{
+			float *dst = malloc(n * sizeof(*dst));
+			float *src = (float*)in->data;
+			if (!dst)
+				return false;
+			for (i = 0; i < n; i++)
+				dst[i] = (src[i*2] + src[i*2+1]) * 0.5f;
+			out->data = (qbyte*)dst;
+		}
+		break;
+#endif
+	default:
+		return false;	//QAF_BLOB and friends: leave it alone.
+	}
+
+	*tofree = out->data;
+	return true;
+}
+
+/*
+  FTESurf Patch 315, part 2 of 2: pick the buffer this channel should actually use.
+
+  Called on the spatialised path only.  Returns the stereo buffer it was given
+  whenever downmixing is off, unnecessary or impossible, so every failure mode is
+  simply the old behaviour.
+*/
+static ALuint OpenAL_PositionalBuffer(oalinfo_t *oali, int sndnum, sfx_t *sfx, ALuint stereobuf)
+{
+	sfxcache_t *sc = sfx->decoder.buf;	//a void* in the decoder, like the call site at the unstreamed path
+	sfxcache_t mono;
+	void *tofree;
+	ALuint buf;
+
+	if (!s_al_downmix3d.ival)
+		return stereobuf;
+	//mode 1 defers to the driver wherever the driver can actually do the job.
+	if (s_al_downmix3d.ival == 1 && oali->can_source_spatialise)
+		return stereobuf;
+	if (!sc || sc->numchannels != 2)
+		return stereobuf;
+
+	if (oali->sounds[sndnum].monoallocated)
+		return oali->sounds[sndnum].monobuffer;
+
+	if (!OpenAL_FoldToMono(sc, &mono, &tofree))
+		return stereobuf;
+
+	if (OpenAL_LoadCache(oali, &buf, &mono, 1, sfx->loopstart))
+	{
+		oali->sounds[sndnum].monobuffer = buf;
+		oali->sounds[sndnum].monoallocated = true;
+		//Loud on purpose at developer level: this is the line that says whether
+		//the patch actually engaged on a given map, and it names the sample, so
+		//a log can be counted rather than guessed at.
+		Con_DPrintf("OpenAL: downmixed \"%s\" to mono so it can be positioned\n", sfx->name);
+	}
+	free(tofree);
+
+	return oali->sounds[sndnum].monoallocated ? oali->sounds[sndnum].monobuffer : stereobuf;
+}
+
 static void QDECL OpenAL_CvarInit(void)
 {
 	Cvar_Register(&s_al_disable, SOUNDVARS);
@@ -672,6 +827,7 @@ static void QDECL OpenAL_CvarInit(void)
 //	Cvar_Register(&s_al_rolloff_factor, SOUNDVARS);
 	Cvar_Register(&s_al_velocityscale, SOUNDVARS);
 	Cvar_Register(&s_al_static_listener, SOUNDVARS);
+	Cvar_Register(&s_al_downmix3d, SOUNDVARS);	//FTESurf Patch 315
 	Cvar_Register(&s_al_speedofsound, SOUNDVARS);
 }
 
@@ -1109,6 +1265,12 @@ static void OpenAL_ChannelUpdate(soundcardinfo_t *sc, channel_t *chan, chanupdat
 				return;
 			}
 #endif
+			//FTESurf Patch 315.  A stereo buffer cannot be positioned, so a
+			//channel that wants spatialisation is given the mono fold instead.
+			//srcrel channels are deliberately left alone -- they are 2d by
+			//intent, and stereo is exactly what they want.
+			if (!srcrel)
+				buf = OpenAL_PositionalBuffer(oali, sndnum, sfx, buf);
 			palSourcei(src, AL_BUFFER, buf);
 			if (oali->can_source_spatialise)	//force spacialisation as desired, if supported (this solves browsers forcing stereo on mono files which should mean static audio is full volume...)
 				palSourcei(src, AL_SOURCE_SPATIALIZE_SOFT, !srcrel);
@@ -1615,6 +1777,11 @@ static void OpenAL_Shutdown (soundcardinfo_t *sc)
 		{
 			palDeleteBuffers(1,&oali->sounds[i].buffer);
 			oali->sounds[i].allocated = false;
+		}
+		if (oali->sounds[i].monoallocated)	//FTESurf Patch 315
+		{
+			palDeleteBuffers(1,&oali->sounds[i].monobuffer);
+			oali->sounds[i].monoallocated = false;
 		}
 	}
 

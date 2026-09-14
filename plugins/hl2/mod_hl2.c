@@ -18,11 +18,12 @@ static plugfsfuncs_t *fsfuncs;
 //FTESurf Build 8: the model's COLLISION shape, which is not its render mesh.
 //See mod_phy.c.  hl2_propcollision is registered by VBSP_Init in mod_vbsp.c and
 //selects between the .phy hull, a bounding box and the render mesh.
-galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode,
+galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
                                      unsigned int contents);
 extern cvar_t *hl2_propcollision;
+extern cvar_t *hl2_phywinding;	//FTESurf Patch 317, registered by VBSP_Init beside hl2_dispwinding.
 extern cvar_t *hl2_rigidprops;	//FTESurf Patch 230, registered by VBSP_Init beside the others.
 extern cvar_t *hl2_skinfallback;	//FTESurf Patch 234, likewise.
 
@@ -1476,18 +1477,29 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	  are usable; the rest are jointed bodies whose solids are bone-relative).
 
 	  Note that the RENDER mesh is untouched either way: only mod->funcs.Native-
-	  Trace changes.  And hl2_propcollision is RENDERERLATCH, so a change to it
-	  needs a map reload -- models are cached, and a cached model keeps the tree
-	  it was built with.
+	  Trace changes.  And hl2_propcollision is MAPLATCH (the comment here used to
+	  say RENDERERLATCH; the registration in mod_vbsp.c has always been MAPLATCH),
+	  so a change to it needs a map reload -- and even that is not enough on its
+	  own, because models are CACHED and a cached model keeps the tree it was
+	  built with.  A clean A/B of anything decided here wants a fresh process, or
+	  a bounce through an unrelated map.  The `collision shapes` line VBSP_Build-
+	  BIHMain prints at developer 1 is the gate: if it is missing on the second
+	  load, the models came from cache and the arm is not measuring the cvar.
+
+	  FTESurf Patch 317 adds hl2_phywinding here for the same reason: it is
+	  consumed inside PHY_ReadLedge, which runs exactly once, at model load.
 	*/
 	{
 		galiasinfo_t *collision = NULL;
 		int mode = hl2_propcollision ? hl2_propcollision->ival : 1;
+		int winding = hl2_phywinding ? hl2_phywinding->ival : 1;
 
 		if (mode < 0 || mode > 3)
 			mode = 1;
+		if (winding < 0 || winding > 2)
+			winding = 1;
 		if (mode != 0)		//0 is mod_vbsp's business (no prop leaves at all)
-			collision = Mod_PHY_CollisionMesh(mod, mode, filefuncs, modfuncs,
+			collision = Mod_PHY_CollisionMesh(mod, mode, winding, filefuncs, modfuncs,
 			                                  FTECONTENTS_BODY);
 
 		modfuncs->BIH_BuildAlias(mod, collision ? collision : mod->meshinfo);

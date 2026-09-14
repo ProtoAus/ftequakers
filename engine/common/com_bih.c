@@ -52,6 +52,16 @@ struct bihtrace_s
 	vec3_t capsulesize;	//radius, up, down
 	qboolean negativedir[3];
 
+	/*FTESurf Patch 320.  When this trace runs inside a ROTATED submodel the
+	  positions are rotated into model space but the box is not -- it cannot be,
+	  an AABB has no way to express "rotated".  boxaxis[j] is world axis j
+	  expressed in MODEL space, which is all the support function needs to treat
+	  the box as the oriented box it really is.  Identity (and boxrotated false)
+	  for the world and for any unrotated submodel, where the old code was already
+	  right. */
+	qboolean boxrotated;
+	vec3_t boxaxis[3];
+
 	enum {
 		shape_ispoint,
 		shape_isbox,
@@ -74,9 +84,36 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 
 #define PlaneDiff(point,plane) (((plane)->type < 3 ? (point)[(plane)->type] : DotProduct((point), (plane)->normal)) - (plane)->dist)
 
+/*FTESurf Patch 320.  Pushing a plane out by the box is a support-function query:
+  dist += h_B(n), the furthest the box reaches along the plane's normal.  For a box
+  axis-aligned in the SAME frame as the plane that is sum(extent_i * |n_i|), which is
+  what the unrotated branch below computes (the box is recentred before we get here,
+  so size.max IS the half-extent and size.min is -it).
+
+  Inside a ROTATED submodel that is wrong, and silently so.  BIH_RecursiveTrace's
+  BIH_MODEL case rotates startpos/endpos into model space but hands the box through
+  untouched, so an AABB in world space gets treated as an AABB in model space -- the
+  player's box effectively rotates with the prop.  The error is zero at 0/90/180/270
+  and worst at 45: on surf_boreas's ramps (yaw -135, surface normal
+  (-0.5367 0.5676 0.6243)) the engine computed an offset of 12.843 where the true
+  one is 17.669, and 4.826/0.6243 = 7.73 units of ride height.  Every solid prop in
+  the game placed at a diagonal yaw sat that much too deep.
+
+  The fix is the standard oriented-box support: sum(extent_j * |dot(u_j, n)|) over
+  the box's OWN axes u_j, which here are the world axes expressed in model space.
+  With u_j identity it reduces to the unrotated formula exactly, which is why the
+  old path is kept verbatim rather than folded in -- it is the hot one. */
 #define boxdist(dist,plane)	\
 		default:			\
 		case shape_isbox:	\
+			if (tr->boxrotated)	\
+			{	\
+				dist = plane->dist	\
+					+ tr->size.max[0]*fabs(DotProduct(tr->boxaxis[0], plane->normal))	\
+					+ tr->size.max[1]*fabs(DotProduct(tr->boxaxis[1], plane->normal))	\
+					+ tr->size.max[2]*fabs(DotProduct(tr->boxaxis[2], plane->normal));	\
+				break;	\
+			}	\
 			/* FIXME: needs special case for axial */	\
 			for (j=0 ; j<3 ; j++)	\
 			{	\
@@ -274,7 +311,230 @@ int		bih_probe_plane = -1;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel,
 vec3_t	bih_probe_norm;
 vec3_t	bih_probe_tri[3];
 
+/*FTESurf Patch 317.  The record above can say WHICH PLANE stopped a trisoup
+  triangle, and nothing else -- not which triangle, not which model, and for a
+  brush not even that a brush won rather than nothing at all.  On surf_boreas
+  that is the difference between a diagnosis and two patches of dead end:
+  Patch 258's snag01 probed the map, got "not a trisoup triangle", wrote it down
+  as "a brush", and ruled surf_boreas out (ENGINE_PATCHES.md:18742).  The ramps
+  there are prop_static .phy hulls, which ARE trisoup -- reached through a
+  BIH_MODEL leaf, whose record never made it back out.  Three separate reasons:
+
+    1. BIH_MODEL (BIH_RecursiveTrace, below) runs the submodel's own BIH_Trace,
+       which works in MODEL space.  bih_probe_norm/_tri are written inside that
+       inner trace and never rotated back, while trace.plane.normal IS
+       (the Matrix3x3_RM_Invert_Simple block at the end of BIH_Trace).  So for a
+       rotated prop -- ramp_c1m on surf_boreas sits at yaw -135 -- the reader's
+       0.002 match test compares model space against world space, fails, and
+       prints "via: unknown".  It is not that the probe said nothing; it is that
+       it said the one thing guaranteed to be ignored.
+    2. The inner trace writes the globals whether or not the submodel goes on to
+       win the OUTER truefraction compare, so a losing prop overwrites the record
+       of the brush that won.
+    3. A brush win clears bih_probe_plane and records nothing in its place, so
+       "brush", "patch" and "nothing hit" are one indistinguishable message.
+
+  _seq is the staleness token: snapshot it around a nested trace and you can tell
+  "the submodel recorded nothing" from "the submodel recorded this".  _idx is the
+  triangle's identity -- there is no ordinal to be had, because bihdata_s's tri
+  arm holds only the index pointer and BIH_BuildAlias does not keep the mesh base
+  (adding one would grow every leaf, and a displacement map has one leaf per
+  terrain triangle).  The vertex-index triple is deterministic in the loader's
+  own numbering, so it maps straight onto an offline dump of the same file. */
+int				bih_probe_kind;		/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
+index_t			bih_probe_idx[3];
+model_t		   *bih_probe_model;	/*NULL = world/top level, else the submodel (the prop)*/
+vec3_t			bih_probe_modelorg;
+unsigned int	bih_probe_contents;
+char			bih_probe_surf[32];
+unsigned int	bih_probe_seq;
+
+/*Patch 317.  A nested BIH_MODEL trace clobbers the record whether or not it goes
+  on to win, so the two callers snapshot it across the call and put it back when
+  the submodel loses.  ~100 bytes of stack, and only on a BIH_MODEL node. */
+struct bihproberec_s
+{
+	int				plane;
+	int				kind;
+	index_t			idx[3];
+	model_t		   *model;
+	vec3_t			norm;
+	vec3_t			tri[3];
+	vec3_t			modelorg;
+	unsigned int	contents;
+	unsigned int	seq;
+	char			surf[32];
+};
+static void BIH_ProbeSave (struct bihproberec_s *s)
+{
+	s->plane = bih_probe_plane;
+	s->kind = bih_probe_kind;
+	s->idx[0] = bih_probe_idx[0]; s->idx[1] = bih_probe_idx[1]; s->idx[2] = bih_probe_idx[2];
+	s->model = bih_probe_model;
+	VectorCopy(bih_probe_norm, s->norm);
+	VectorCopy(bih_probe_tri[0], s->tri[0]);
+	VectorCopy(bih_probe_tri[1], s->tri[1]);
+	VectorCopy(bih_probe_tri[2], s->tri[2]);
+	VectorCopy(bih_probe_modelorg, s->modelorg);
+	s->contents = bih_probe_contents;
+	s->seq = bih_probe_seq;
+	memcpy(s->surf, bih_probe_surf, sizeof(s->surf));
+}
+static void BIH_ProbeRestore (const struct bihproberec_s *s)
+{
+	bih_probe_plane = s->plane;
+	bih_probe_kind = s->kind;
+	bih_probe_idx[0] = s->idx[0]; bih_probe_idx[1] = s->idx[1]; bih_probe_idx[2] = s->idx[2];
+	bih_probe_model = s->model;
+	VectorCopy(s->norm, bih_probe_norm);
+	VectorCopy(s->tri[0], bih_probe_tri[0]);
+	VectorCopy(s->tri[1], bih_probe_tri[1]);
+	VectorCopy(s->tri[2], bih_probe_tri[2]);
+	VectorCopy(s->modelorg, bih_probe_modelorg);
+	bih_probe_contents = s->contents;
+	bih_probe_seq = s->seq;
+	memcpy(bih_probe_surf, s->surf, sizeof(bih_probe_surf));
+}
+/*Rotate a record written by an inner (model-space) trace out into world space,
+  with the SAME inverse BIH_Trace itself uses on the plane normal at the bottom
+  of this file -- if the two ever disagree the reader's match test starts
+  rejecting props again, which is the failure this whole block exists to end. */
+static void BIH_ProbeToWorld (model_t *submod, const struct bihtransform_s *trn)
+{
+	vec3_t iaxis[3], v;
+	int i;
+
+	bih_probe_model = submod;
+	VectorCopy(trn->origin, bih_probe_modelorg);
+
+	Matrix3x3_RM_Invert_Simple((const void *)trn->axis, iaxis);
+
+	VectorCopy(bih_probe_norm, v);
+	bih_probe_norm[0] = DotProduct(v, iaxis[0]);
+	bih_probe_norm[1] = DotProduct(v, iaxis[1]);
+	bih_probe_norm[2] = DotProduct(v, iaxis[2]);
+
+	for (i = 0; i < 3; i++)
+	{
+		VectorCopy(bih_probe_tri[i], v);
+		bih_probe_tri[i][0] = DotProduct(v, iaxis[0]) + trn->origin[0];
+		bih_probe_tri[i][1] = DotProduct(v, iaxis[1]) + trn->origin[1];
+		bih_probe_tri[i][2] = DotProduct(v, iaxis[2]) + trn->origin[2];
+	}
+}
+
+/*
+==================
+BIH_ProbeReport			FTESurf Patch 317
+
+Print the identity of whatever stopped the last trace.  Lives here rather than in
+pm_source.c (where Patch 258 put the first version) because this file OWNS the
+record and is linked into the client as well as the server, so the mover and
+`solid_here` can both call it and print the same line.
+
+The plane-name tables are Patch 258's, unchanged -- that naming is the whole
+value of the thing.  What is new is the line above them saying WHAT was hit, so
+that "a brush won", "a patch won", "a prop's triangle won" and "nothing was
+recorded" stop being one message.
+
+Every record is checked against the trace being printed before it is believed: a
+pmove trace is merged across models and the last thing to win an INNER trace need
+not be the one that won this one.
+==================
+*/
+void BIH_ProbeReport (const trace_t *t, const char *tag)
+{
+	/*Index space: 0..4 are Patch 258's original five, 5..13 its edge-cross-axis
+	  bevels in build order, 100..105 the axial bevels the `if (tr->shape)` block
+	  adds.  A point trace builds neither of the last two groups. */
+	static const char *planename[5] = {
+		"FACE", "BACK-SLAB(+4)", "edge p1p2", "edge p2p3", "edge p3p1"};
+	static const char *axialname[6] = {
+		"axial +x", "axial +y", "axial +z", "axial -x", "axial -y", "axial -z"};
+	const char *what;
+	char bevelbuf[32];
+	vec3_t e1, e2, n;
+	float len;
+	qboolean matches;
+
+	matches = (fabs(bih_probe_norm[0] - t->plane.normal[0]) <= 0.002 &&
+	           fabs(bih_probe_norm[1] - t->plane.normal[1]) <= 0.002 &&
+	           fabs(bih_probe_norm[2] - t->plane.normal[2]) <= 0.002);
+
+	switch (bih_probe_kind)
+	{
+	case 0:
+		Con_Printf ("%s   hit: nothing recorded (zero-length test, terrain, or nothing hit)\n", tag);
+		return;
+	case 2:
+	case 3:
+		Con_Printf ("%s   hit: %s  surface \"%s\"  contents 0x%08x  norm %.3f %.3f %.3f  (matches this trace: %s)\n",
+		            tag, (bih_probe_kind==2)?"BIH_BRUSH":"BIH_PATCHBRUSH",
+		            bih_probe_surf, bih_probe_contents,
+		            bih_probe_norm[0], bih_probe_norm[1], bih_probe_norm[2],
+		            matches?"yes":"NO");
+		return;
+	default:
+		break;
+	}
+
+	/*A triangle.  bih_probe_model is NULL for one in the world tree (a
+	  displacement); non-NULL means it came out of a BIH_MODEL leaf and has been
+	  rotated into world space on the way out. */
+	if (bih_probe_model)
+		Con_Printf ("%s   hit: BIH_TRIANGLE  model \"%s\"  origin %.1f %.1f %.1f  contents 0x%08x\n",
+		            tag, bih_probe_model->name,
+		            bih_probe_modelorg[0], bih_probe_modelorg[1], bih_probe_modelorg[2],
+		            bih_probe_contents);
+	else
+		Con_Printf ("%s   hit: BIH_TRIANGLE  world (displacement/trisoup)  contents 0x%08x\n",
+		            tag, bih_probe_contents);
+
+	if (bih_probe_plane < 0)
+		what = "?";
+	else if (bih_probe_plane < 5)
+		what = planename[bih_probe_plane];
+	else if (bih_probe_plane < 14)
+	{	/*Patch 258's bevels, in build order (edge-major).  Deliberately NOT
+		  labelled "edge N x axis M": a bevel whose cross product degenerates is
+		  skipped, so the index is a position in the list, not a fixed pairing.
+		  The normal on the line below identifies it exactly. */
+		Q_snprintfz (bevelbuf, sizeof(bevelbuf), "bevel #%i", bih_probe_plane-5);
+		what = bevelbuf;
+	}
+	else if (bih_probe_plane >= 100 && bih_probe_plane < 106)
+		what = axialname[bih_probe_plane-100];
+	else
+		what = "?";
+
+	VectorSubtract (bih_probe_tri[0], bih_probe_tri[1], e1);
+	VectorSubtract (bih_probe_tri[2], bih_probe_tri[1], e2);
+	CrossProduct (e1, e2, n);
+	len = VectorLength (n);
+	if (len > 0)
+		VectorScale (n, 1/len, n);
+
+	Con_Printf ("%s         tri idx %i/%i/%i  (%.1f %.1f %.1f)(%.1f %.1f %.1f)(%.1f %.1f %.1f)  face norm %.3f %.3f %.3f\n",
+	            tag, (int)bih_probe_idx[0], (int)bih_probe_idx[1], (int)bih_probe_idx[2],
+	            bih_probe_tri[0][0], bih_probe_tri[0][1], bih_probe_tri[0][2],
+	            bih_probe_tri[1][0], bih_probe_tri[1][1], bih_probe_tri[1][2],
+	            bih_probe_tri[2][0], bih_probe_tri[2][1], bih_probe_tri[2][2],
+	            n[0], n[1], n[2]);
+
+	/*The face normal above is cross(p1-p2, p3-p2) -- the same expression
+	  BIH_ClipToTriangle uses for planes[0], so it is the SOLID-SIDE normal and
+	  should point OUT of the model.  A surface you are standing on that reports
+	  `via plane 1 BACK-SLAB(+4)` with a face norm pointing DOWN is the winding
+	  inversion: you are resting on the back of the four-unit slab, 4/|n_z| units
+	  above the visible surface. */
+	Con_Printf ("%s   via plane %i %s  norm %.3f %.3f %.3f  (matches this trace: %s)\n",
+	            tag, bih_probe_plane, what,
+	            bih_probe_norm[0], bih_probe_norm[1], bih_probe_norm[2],
+	            matches?"yes":"NO");
+}
+
 extern cvar_t pm_trisoup_bevels;	//FTESurf Patch 258, defined in common.c
+extern cvar_t pm_rotatedboxhulls;	//FTESurf Patch 320, defined in common.c
 
 /*
 ==================
@@ -581,6 +841,21 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 			VectorCopy(p1, bih_probe_tri[0]);
 			VectorCopy(p2, bih_probe_tri[1]);
 			VectorCopy(p3, bih_probe_tri[2]);
+
+			/*Patch 317.  Same branch, so nothing is paid on the losing path.
+			  model stays NULL here on purpose: a triangle in the WORLD bih is a
+			  displacement and genuinely has no model, and the BIH_MODEL frame is
+			  the only thing that knows otherwise -- it fills this in on the way
+			  back out, along with the rotation into world space. */
+			bih_probe_kind = 1;
+			bih_probe_idx[0] = info->tri.indexes[0];
+			bih_probe_idx[1] = info->tri.indexes[1];
+			bih_probe_idx[2] = info->tri.indexes[2];
+			bih_probe_contents = info->contents;
+			bih_probe_model = NULL;
+			VectorClear(bih_probe_modelorg);
+			bih_probe_surf[0] = 0;
+			bih_probe_seq++;
 		}
 	}
 }
@@ -782,6 +1057,22 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			tr->trace.surface = &(leadside->surface->c);
 			tr->trace.contents = brush->contents;
 			bih_probe_plane = -1;	//FTESurf Patch 258: a brush won, so any triangle record is stale.
+
+			/*Patch 317.  bih_probe_plane STAYS -1: there is no triangle plane
+			  here and the five-plane naming table does not apply to a brush
+			  side.  What it must stop doing is being the ONLY thing said -- the
+			  reader could not tell "a brush won" from "a patch won" from
+			  "nothing was hit", and reported all three as the first one.  With
+			  the normal recorded the reader can run the same match test it runs
+			  on triangles and state which of the three it was. */
+			bih_probe_kind = 2;
+			VectorCopy(clipplane->normal, bih_probe_norm);
+			bih_probe_contents = brush->contents;
+			Q_strncpyz(bih_probe_surf, leadside->surface->c.name, sizeof(bih_probe_surf));
+			bih_probe_model = NULL;
+			VectorClear(bih_probe_modelorg);
+			bih_probe_idx[0] = bih_probe_idx[1] = bih_probe_idx[2] = 0;
+			bih_probe_seq++;
 		}
 	}
 }
@@ -1022,6 +1313,8 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 			trace_t sub;
 			vec3_t start_l;
 			vec3_t end_l;
+			struct bihproberec_s probesave;	//Patch 317
+			unsigned int probeseq;
 
 			model_t *submod = node->data.mesh.model;
 
@@ -1043,6 +1336,8 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 
 			VectorSubtract (tr->startpos, node->data.mesh.tr->origin, start_l);
 			VectorSubtract (tr->endpos, node->data.mesh.tr->origin, end_l);
+			BIH_ProbeSave(&probesave);	//Patch 317
+			probeseq = bih_probe_seq;
 			submod->funcs.NativeTrace(submod, 0, NULLFRAMESTATE, node->data.mesh.tr->axis, start_l, end_l, tr->size.min, tr->size.max, tr->shape==shape_iscapsule, tr->hitcontents, &sub);
 
 			if (sub.truefraction < tr->trace.truefraction)
@@ -1056,11 +1351,27 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 				tr->trace.startsolid |= sub.startsolid;
 				tr->trace.allsolid = sub.allsolid;
 				VectorAdd (sub.endpos, node->data.mesh.tr->origin, tr->trace.endpos);
+
+				/*Patch 317: the submodel WON, so its record is the live one --
+				  but it is in model space.  If the seq did not move, the
+				  submodel won through a path that taps nothing (terrain, or a
+				  leaf type with no hook): say so rather than promoting whatever
+				  was in there from some earlier trace. */
+				if (bih_probe_seq == probeseq)
+				{
+					bih_probe_kind = 0;
+					bih_probe_plane = -1;
+					bih_probe_model = submod;
+					VectorCopy(node->data.mesh.tr->origin, bih_probe_modelorg);
+				}
+				else
+					BIH_ProbeToWorld(submod, node->data.mesh.tr);
 			}
 			else
 			{
 				tr->trace.startsolid |= sub.startsolid;
 				tr->trace.allsolid &= sub.allsolid;
+				BIH_ProbeRestore(&probesave);	//Patch 317: it lost; do not let it overwrite the winner
 			}
 		}
 		return;
@@ -1442,12 +1753,25 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 		VectorSet(tr.startpos, DotProduct(start, axis[0]), DotProduct(start, axis[1]), DotProduct(start, axis[2]));
 		VectorSet(tr.endpos,   DotProduct(end,   axis[0]), DotProduct(end,   axis[1]), DotProduct(end,   axis[2]));
 		VectorSet(tr.up, axis[0][2], -axis[1][2], axis[2][2]);
+		/*FTESurf Patch 320.  The positions just moved into model space; the box did
+		  not and cannot.  Record the world axes IN MODEL SPACE -- the transform above
+		  is p_model[i] = dot(p_world, axis[i]), so world axis j lands on the j'th
+		  COLUMN of that matrix -- and let boxdist do an oriented-box support instead
+		  of an axis-aligned one. */
+		tr.boxrotated = pm_rotatedboxhulls.ival?true:false;
+		VectorSet(tr.boxaxis[0], axis[0][0], axis[1][0], axis[2][0]);
+		VectorSet(tr.boxaxis[1], axis[0][1], axis[1][1], axis[2][1]);
+		VectorSet(tr.boxaxis[2], axis[0][2], axis[1][2], axis[2][2]);
 	}
 	else
 	{	//axial bboxes. woo.
 		VectorCopy(start, tr.startpos);
 		VectorCopy(end, tr.endpos);
 		VectorSet(tr.up, 0, 0, 1);
+		tr.boxrotated = false;
+		VectorSet(tr.boxaxis[0], 1, 0, 0);
+		VectorSet(tr.boxaxis[1], 0, 1, 0);
+		VectorSet(tr.boxaxis[2], 0, 0, 1);
 	}
 
 
@@ -1467,8 +1791,22 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 			VectorAdd(tr.size.max, tr.size.min, point);
 			VectorScale(point, 0.5, point);
 
-			VectorAdd(tr.startpos, point, tr.startpos);
-			VectorAdd(tr.endpos, point, tr.endpos);
+			if (tr.boxrotated)
+			{	/*FTESurf Patch 320: the offset from the origin to the box centre is a
+				  WORLD-space vector (0,0,31 for a standing player), and startpos is
+				  already in model space -- so it has to make the same trip. Yaw-only
+				  props happen to leave (0,0,z) alone, which is why this was invisible;
+				  a pitched or rolled prop would have moved the player bodily. */
+				vec3_t pm;
+				VectorSet(pm, DotProduct(point, axis[0]), DotProduct(point, axis[1]), DotProduct(point, axis[2]));
+				VectorAdd(tr.startpos, pm, tr.startpos);
+				VectorAdd(tr.endpos, pm, tr.endpos);
+			}
+			else
+			{
+				VectorAdd(tr.startpos, point, tr.startpos);
+				VectorAdd(tr.endpos, point, tr.endpos);
+			}
 			VectorSubtract(tr.size.min, point, tr.size.min);
 			VectorSubtract(tr.size.max, point, tr.size.max);
 		}
@@ -1517,19 +1855,43 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 		}
 		else
 		{
-			VectorAdd (tr.startpos, tr.size.min, point);
+			/*FTESurf Patch 320: bounds must cover the box as it really sits. Rotated,
+			  its model-space AABB half-extent along axis i is sum_j(extent_j *
+			  |boxaxis[j][i]|) -- up to sqrt(2) larger than the unrotated one at 45
+			  degrees. These bounds only ever CULL, so too small is a missed collision
+			  and too large is just wasted work; this is the exact enclosing box, and
+			  it collapses to size.min/max when boxaxis is identity. */
+			vec3_t bmin, bmax;
+			if (tr.boxrotated)
+			{
+				int a;
+				for (a = 0; a < 3; a++)
+				{
+					bmax[a] = tr.size.max[0]*fabs(tr.boxaxis[0][a])
+							+ tr.size.max[1]*fabs(tr.boxaxis[1][a])
+							+ tr.size.max[2]*fabs(tr.boxaxis[2][a]);
+					bmin[a] = -bmax[a];
+				}
+			}
+			else
+			{
+				VectorCopy(tr.size.min, bmin);
+				VectorCopy(tr.size.max, bmax);
+			}
+
+			VectorAdd (tr.startpos, bmin, point);
 			AddPointToBounds (point, tr.bounds.min, tr.bounds.max);
-			VectorAdd (tr.startpos, tr.size.max, point);
+			VectorAdd (tr.startpos, bmax, point);
 			AddPointToBounds (point, tr.bounds.min, tr.bounds.max);
-			VectorAdd (tr.endpos, tr.size.min, point);
+			VectorAdd (tr.endpos, bmin, point);
 			AddPointToBounds (point, tr.bounds.min, tr.bounds.max);
-			VectorAdd (tr.endpos, tr.size.max, point);
+			VectorAdd (tr.endpos, bmax, point);
 			AddPointToBounds (point, tr.bounds.min, tr.bounds.max);
 
 			tr.shape = shape_isbox;
-			tr.expand[0] = ((-tr.size.min[0] > tr.size.max[0]) ? -tr.size.min[0] : tr.size.max[0])+1;
-			tr.expand[1] = ((-tr.size.min[1] > tr.size.max[1]) ? -tr.size.min[1] : tr.size.max[1])+1;
-			tr.expand[2] = ((-tr.size.min[2] > tr.size.max[2]) ? -tr.size.min[2] : tr.size.max[2])+1;
+			tr.expand[0] = ((-bmin[0] > bmax[0]) ? -bmin[0] : bmax[0])+1;
+			tr.expand[1] = ((-bmin[1] > bmax[1]) ? -bmin[1] : bmax[1])+1;
+			tr.expand[2] = ((-bmin[2] > bmax[2]) ? -bmin[2] : bmax[2])+1;
 		}
 
 		tr.bounds.min[0] -= 1.0;
@@ -1971,6 +2333,73 @@ static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s *
 	}
 	return bounds;
 }
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+/*
+==================================================
+BIH_EnumBrushes				FTESurf Patch 319
+
+Hand every BIH_BRUSH leaf overlapping a box to a callback.
+
+This exists because a nodraw PLAYERCLIP brush is invisible BY CONSTRUCTION and no
+render toggle can ever show one: VBSP strips nodraw faces out of the face lump
+entirely, so there is no surface, no texture and nothing for `r_wireframe` or a
+tool-texture toggle to draw.  The only thing that still describes the brush is the
+collision hull, and that is unreachable from anywhere else -- for a VBSP map the
+q2cbrush_t array is private to the hl2 plugin, and `struct bihnode_s` is private to
+this file.  So the walk has to live here.
+
+Deliberately NOT a trace: no plane tests, no enter/leave fractions, just the leaf
+bounds.  A debug view that reused the sweep would show what the sweep already
+believes, which is precisely what is in question when someone is stopped by
+something they cannot see.
+==================================================
+*/
+static void BIH_EnumBrushes_r (struct bihnode_s *node, const vec3_t mins, const vec3_t maxs,
+							   void (*cb)(void *ctx, const q2cbrush_t *brush), void *ctx)
+{
+	int i;
+	switch (node->type)
+	{
+	case BIH_GROUP:
+		for (i = 0; i < node->group.numchildren; i++)
+			BIH_EnumBrushes_r (node+node->group.firstchild+i, mins, maxs, cb, ctx);
+		break;
+#ifdef BIH_USEBIH
+	case BIH_X:
+	case BIH_Y:
+	case BIH_Z:
+		BIH_EnumBrushes_r (node+node->bihnode.firstchild+0, mins, maxs, cb, ctx);
+		BIH_EnumBrushes_r (node+node->bihnode.firstchild+1, mins, maxs, cb, ctx);
+		break;
+#endif
+#ifdef BIH_USEBVH
+	case BVH_X:
+	case BVH_Y:
+	case BVH_Z:
+		BIH_EnumBrushes_r (node+node->bvhnode.firstchild+0, mins, maxs, cb, ctx);
+		BIH_EnumBrushes_r (node+node->bvhnode.firstchild+1, mins, maxs, cb, ctx);
+		break;
+#endif
+	case BIH_BRUSH:
+		/*the brush's own bounds, not the leaf's -- Patch 318 deliberately leaves
+		  absmins/absmaxs describing the un-beveled brush, and they are what the
+		  sweep's own cull uses, so this sees exactly the set a trace would. */
+		if (BIH_BoundsIntersect (node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs))
+			cb (ctx, node->data.brush);
+		break;
+	default:
+		break;	/*triangles, patches and submodels are not brushes; not our job*/
+	}
+}
+void BIH_EnumBrushes (model_t *mod, const vec3_t mins, const vec3_t maxs,
+					  void (*cb)(void *ctx, const q2cbrush_t *brush), void *ctx)
+{
+	if (!mod || !mod->cnodes || !cb)
+		return;
+	BIH_EnumBrushes_r ((struct bihnode_s*)mod->cnodes, mins, maxs, cb, ctx);
+}
+#endif
 
 void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 {
