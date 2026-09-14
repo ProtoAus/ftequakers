@@ -29310,9 +29310,18 @@ treats -1 as unknown, and unknown stays rankable. `<= 0` would have concluded th
 strictest thing about the least evidence and demoted every non-Windows player the
 moment their engine gained the cvar.
 
-**What it does not do.** It does not close the hole against a patched client: the
-profile is userinfo and a forged key still passes, exactly as a forged `have` mask
-always has. What changes is the price. The bypass was two console commands over a
-completely truthful key -- nothing on the wire was false, the fact simply was not on
-it -- and it now costs an assertion the engine did not make. T2 becomes T4. Layer 1
-was never a defence against a patched client and does not become one here.
+**What it does not do, stated correctly on the second attempt.** The first version of
+this paragraph said the bypass now "costs an assertion the engine did not make. T2
+becomes T4." An audit refuted it against the patch's own fixture: `b77grant.cfg` arm D
+is the single console line `setinfo inprof "1 7 1 0 0 0"`, a v1 key whose grant is
+therefore unknown, measured at `would 0`. That is not a patched client, so the threat
+class does not move -- and it did not move before this patch either, since `e1prof.cfg`
+had already measured a forged `have` mask defeating all three original clauses from the
+console. The key is userinfo and has always been assertable.
+
+The accurate claim is narrower and still worth the patch: **the route that needed no lie
+is gone.** A player typed two ordinary commands, the client reported every field about
+itself truthfully, and the run ranked. Every remaining route requires stating something
+false. Making a false statement cost more than one console line is a separate problem --
+CSQC cannot currently tell that the server's copy of the key is not the one it sent --
+and nothing here addresses it.
