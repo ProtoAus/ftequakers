@@ -29248,3 +29248,71 @@ That the rate reads `0.01` there and `no engine value` in run 1 is the three-sta
 report earning its keep: run 1's pre-run reading was taken before the mover had
 published anything, and a two-state check would have printed MISMATCH in red at a
 perfectly healthy server.
+
+## Patch 326 -- the input profile published the request and never the grant  *(APPLIED -- `engine/client/in_generic.c` only: two `CVAR_NOSET|CVAR_NOSAVE` cvars declared beside the Patch 301 variables they mirror, registered in `IN_Init`, republished once per frame from `IN_Commands`. No struct change, no protocol change, no ABI bump, and no behaviour change to any input path -- the cvars are output only. MEASURED with QC build 77: `ftesurf/cfg/testrun/b77grant.cfg`, eight arms in one process.)*
+
+`in_rawinput` is a **request**. It is granted by `INS_RawInput_Init` enumerating
+devices and binding them, and Patch 301 already recorded both numbers in the `.hid`
+header precisely because the two can disagree. What 301 could not do is answer the
+question *during* a run: `in_rawmice_live` was a C int with one reader, the header
+writer, so the ranked input profile QC publishes as userinfo carried the cvar and
+nothing else.
+
+**That is a live bypass and it was measured rather than reasoned about.** `in_win.c`
+reads `in_rawinput_mice.ival` only inside `INS_RawInput_Init`, so the request and the
+enumeration can be made to disagree and then left that way:
+
+    in_rawinput 0 ; in_restart ; in_rawinput 1
+
+re-enumerates with raw input off, then restores the cvar without re-enumerating. The
+cvar reads 1, `rawmicecount` is 0, `INS_Accumulate`'s `GetCursorPos`/`SetCursorPos`
+recentre is live, and injected motion lands in full. Four arms in one process at a
+strafe optimiser's own magnitude (84 counts per event, 200 events per burst):
+
+| arm | `in_rawinput` | `rawmice` | injected | rejected | reaching the view | view travel | server |
+|---|---|---|---|---|---|---|---|
+| A | 1 | 2 | 0 | 0 | 0 | 0.000 deg | ranks |
+| B | 1 | 2 | 16,800 | 200 ev | 2 | 0.022 deg | ranks |
+| C | 0 | 0 | 16,800 | 0 | 21,405 | -235.455 deg | demoted |
+| D | **1** | **0** | 16,800 | 0 | 21,089 | **-231.979 deg** | **RANKS** |
+
+Arm B is raw input doing its job: 184 degrees of steering per burst arrives and the
+view moves two counts. Arm D is the hole, and the part that made it worth an engine
+patch is that **it needs no lie**. The client reported its cvar honestly. The Patch
+293 yaw identity held *exactly* over the injected motion (worst residual 1.5e-5 deg),
+because on the legacy path the injected delta simply *is* the mouse input by the time
+any tap sees it, and `hidcheck` passed the file. Every cross-check in the tree agreed
+the run was clean, and every one of them was right about the question it was asked.
+
+**A cvar rather than a new channel.** CSQC already reads `in_rawinput` and `m_accel`
+through `cvar_type()`/`cvar()`; this is the same kind of fact about the same input
+stack, so it takes the same route. `CVAR_NOSET` makes `Cvar_ForceSetValue` the only
+writer, on `cl_servername`'s precedent, and `CVAR_NOSAVE` keeps derived state from
+coming back out of a config describing a previous session's hardware.
+
+**Published from `IN_Commands`, and deliberately not from `in_win.c`'s three
+assignment sites.** Mirroring at the assignments is the smaller edit and it is the one
+that rots: it would be correct until somebody adds a fourth site or a second backend
+starts reporting, and it would then go stale **in the direction that ranks a run** --
+a cvar still holding the last good count while the grant had gone to zero. Reading the
+variable once a frame, from the file that declares it, cannot miss a writer. It sits
+after `INS_Commands()` so a backend that re-enumerated this frame is already
+reflected, and before the journal's frame marker so the `.hid` and the cvar can never
+disagree within a frame. Guarded on inequality because `Cvar_ForceSetValue` rebuilds
+the string and runs callbacks, and this path runs at several hundred fps while the
+value changes about twice a session.
+
+**Three states, and -1 is still not zero.** The default is `"-1"`, so a backend that
+never assigns `in_rawmice_live` publishes the honest unknown rather than a measurement
+of nothing -- which is why these variables are declared in `in_generic.c` (in every
+client build) and not in `in_win.c` (Windows only). QC faults a grant of exactly 0 and
+treats -1 as unknown, and unknown stays rankable. `<= 0` would have concluded the
+strictest thing about the least evidence and demoted every non-Windows player the
+moment their engine gained the cvar.
+
+**What it does not do.** It does not close the hole against a patched client: the
+profile is userinfo and a forged key still passes, exactly as a forged `have` mask
+always has. What changes is the price. The bypass was two console commands over a
+completely truthful key -- nothing on the wire was false, the fact simply was not on
+it -- and it now costs an assertion the engine did not make. T2 becomes T4. Layer 1
+was never a defence against a patched client and does not become one here.

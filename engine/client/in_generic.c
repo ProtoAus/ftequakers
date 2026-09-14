@@ -90,6 +90,53 @@ honest -1 standing.  in_win.c maintains them at three sites, all marked Patch 30
 int in_rawmice_live = -1;
 int in_rawkbd_live = -1;
 
+/*
+FTESurf Patch 326 -- THE GRANT, WHERE QC CAN READ IT.
+
+Patch 301 put these two numbers in the .hid header, which answers the question AFTER the
+fact, for a human auditor holding the file.  Nothing could ask them DURING a run, and the
+ranked input profile -- the userinfo key the server latches TF_NOPROFILE from -- therefore
+published `in_rawinput`, the request, with no way to publish the grant beside it.
+
+THAT IS A LIVE BYPASS AND IT WAS MEASURED, not inferred.  in_win.c reads in_rawinput_mice
+ONLY inside INS_RawInput_Init, so the cvar and the enumeration can be made to disagree and
+then left that way:
+
+    in_rawinput 0 ; in_restart ; in_rawinput 1
+
+re-enumerates with raw input off, then sets the cvar back without re-enumerating.  The cvar
+reads 1, rawmicecount is 0, INS_Accumulate's GetCursorPos/SetCursorPos fallback is live, and
+injected SendInput motion lands in full.  Measured over four arms in one process at a strafe
+optimiser's own magnitude: with raw input genuinely live, 16,800 injected counts moved the
+view 0.022 degrees and every event was counted as rejected; after the sequence above, the
+same injection moved it 232 degrees and the server still reported the run rankable.
+
+THE POINT IS THAT IT NEEDS NO LIE.  The client reports its cvar honestly; the fact that
+decides whether the evidence means anything simply was not on the wire.  Everything else in
+that key is a claim a patched client could forge, and this was not even that.  So the fix is
+not a new check, it is publishing a number the engine has had all along.
+
+A CVAR RATHER THAN A NEW CHANNEL, because CSQC already reads in_rawinput and m_accel through
+cvar_type()/cvar() and this is the same kind of fact about the same input stack.  CVAR_NOSET
+so a console cannot assign it -- Cvar_ForceSetValue is the only writer, on cl_servername's
+precedent -- and CVAR_NOSAVE because it is derived state that must never come back from a
+config file describing a previous session's hardware.
+
+PUBLISHED FROM IN_Commands, WHICH IS THE CROSS-PLATFORM PER-FRAME PUMP, AND DELIBERATELY NOT
+FROM in_win.c's THREE ASSIGNMENT SITES.  Mirroring at the assignment sites is the cheaper
+edit and it is the one that rots: the mirror would be correct until somebody adds a fourth
+site or a second backend starts reporting, and it would then go stale IN THE DIRECTION THAT
+RANKS A RUN -- a cvar still reading the last good count while the grant had gone to zero.
+Reading the variable once a frame from the file that DECLARES it cannot miss a writer.
+
+THREE STATES, AND -1 IS STILL NOT ZERO.  The default is "-1", so a backend that never
+assigns in_rawmice_live publishes the honest unknown rather than a measurement of nothing --
+which is the whole reason these variables live in in_generic.c and not in in_win.c.  QC
+reads 0 as a fault and -1 as unknown, and unknown stays rankable.
+*/
+static cvar_t in_rawmice = CVARFD("in_rawmice", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many mice raw input actually enumerated and bound, as against in_rawinput, which is only the request. -1 means this platform's input backend does not report the figure; 0 means raw input ran and bound nothing, so mouse motion is taking the OS-summed, OS-accelerated legacy path.");
+static cvar_t in_rawkbds = CVARFD("in_rawkbds", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many keyboards raw input actually enumerated and bound, as against in_rawinput_keyboard. -1 means this backend does not report the figure; 0 means none are bound and keystrokes are taking the legacy WM_KEYDOWN path.");
+
 /*FTESurf Patch 306: THE REPORTS RAW INPUT THREW AWAY.
 
 INS_RawInput_MouseRead matches raw->header.hDevice against the enumerated device table
@@ -699,6 +746,14 @@ void IN_Init(void)
 	  server "stuffcmd set" would write another.  A cvar also cannot express
 	  "discard" distinctly from "write to an empty path".*/
 	Cvar_Register (&in_journal_maxkb, "input controls");
+
+	/*FTESurf Patch 326: the grant, beside the request.  Registered here rather than
+	  in in_win.c for the same reason the variables behind them are declared in this
+	  file: every client build has in_generic.o, so a backend that reports nothing
+	  still offers the cvar reading -1, and a QC reader can tell "this platform does
+	  not say" apart from "there is no such cvar on this engine".*/
+	Cvar_Register (&in_rawmice, "input controls");
+	Cvar_Register (&in_rawkbds, "input controls");
 	Cmd_AddCommandD ("in_journal_begin", IN_JournalBegin_f, "Start an in-memory journal of raw input events.  Discards any journal already open.");
 	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal under data/ and close it.  With no path, discard it.");
 	Cmd_AddCommandD ("in_journal_note", IN_JournalNote_f, "Append a comment line to the open input journal.");
@@ -2005,6 +2060,18 @@ void IN_Commands(void)
 	struct eventlist_s *ev;
 
 	INS_Commands();
+
+	/*FTESurf Patch 326: republish the grant, AFTER INS_Commands so a backend that
+	  re-enumerated this frame is already reflected and before the journal's frame
+	  marker below, so the .hid and the cvar can never disagree within a frame.
+
+	  Guarded on inequality because Cvar_ForceSetValue rebuilds the string and runs
+	  the callbacks: this path runs every frame at several hundred fps and the value
+	  changes about twice per session.*/
+	if (in_rawmice.ival != in_rawmice_live)
+		Cvar_ForceSetValue(&in_rawmice, in_rawmice_live);
+	if (in_rawkbds.ival != in_rawkbd_live)
+		Cvar_ForceSetValue(&in_rawkbds, in_rawkbd_live);
 
 	/*Patch 202: the frame marker, and the per-event append below, both sit ABOVE
 	  the IEV_MOUSEDELTA case's ptr[].delta summation -- which is the whole point.
