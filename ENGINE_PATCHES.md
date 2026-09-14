@@ -29106,3 +29106,89 @@ unit touches found these, and they are the real cost of the change:
 - **The start-hop dwell rule** (`time - run_t_groundat >= want`) stays on the
   frame-quantised clock, so the run would have a reproducible NUMBER attached to
   an irreproducible VERDICT.
+
+### Deployed, and the reading this patch exists for
+
+All twelve lobbies run this patch as of 2026-09-14 (`5f2b50f2`, rollback
+`fteqw-svarm64.pre325-20260914-050650`), beside QC build 75.
+
+**It landed as exactly one patch, and that was checked rather than assumed.** The
+Pi's 324 lineage is `/srv/nvme/p323det` -- identified by hashing its built artefact
+against the live binary, not by mtime. All seven source files hashed identical to
+local `3f15ace09` before anything was copied, and the per-file diff counts on the
+Pi afterwards matched `git diff --numstat` exactly (`+26 +10 +33 +19 +126/-2 +9
++52`). Note the trees differ in line endings -- the Pi's is CRLF from a Windows
+`git archive` -- so the files are converted on the way, or the diff reports every
+line changed and can prove nothing.
+
+**No plugin rebuild was needed, despite `playermove_t` and `client_t` both
+growing.** No plugin includes `pmove.h` or names `playermove_t`, and every
+`client_t` grep hit in `plugins/` is an `ircclient_t` substring. Worth checking
+before an APPEND-ONLY struct change drags the two-lineage plugin problem in with
+it.
+
+#### Cross-architecture, at the shipped rate, for the first time
+
+Every `mover` hash recorded before this patch was taken at 0.010. With
+`PMDET_TICRATE` pinned, Windows x86-64/msvcrt and the Pi's aarch64/glibc agree on
+**all five** hashes and on the census carry residuals to the last digit:
+
+| | Windows x86-64 | Pi aarch64 |
+|---|---|---|
+| `mapcrc` | `676de275` | `676de275` |
+| `libm` | `5e749b8a83b44107` | `5e749b8a83b44107` |
+| `trace` | `f7958b04dbcd1008` | `f7958b04dbcd1008` |
+| `mover` | `3d136f8de25c9c2c` | `3d136f8de25c9c2c` |
+| `tick` | `93e8615d81c26325` | `93e8615d81c26325` |
+| census | 90 / 135 / 60 | 90 / 135 / 60 |
+
+`trace` unchanged from 324 is the control: this patch observed the mover without
+perturbing it.
+
+#### The gap, over a real network
+
+`cfg/testrun/p325net.cfg` -- a live public lobby through the router, on a box
+running twelve servers. `sv_cheats` is false there, so the run has to be started
+by *playing*: walk, dwell past `run_t_dwell`, jump inside the start box. It cannot
+finish, so `SV_RecClose` (one call site) is never reached and the arm writes no
+recording and no board row; `/api/board` was confirmed still empty afterwards.
+
+| arm | gaps, sampled minus counted |
+|---|---|
+| loopback listen server | 1, 1, 0, 1 |
+| live lobby, run 1 | 0, 0, 0, 1, 0, 1, 0 |
+| live lobby, run 2 | 1, 1, 1, 1, **2**, 1, 0 |
+
+**A BOUND WAS ASSERTED AT ELEVEN READINGS AND FALSIFIED AT EIGHTEEN.** After run 1
+this log's working note said the gap "is never 2, never negative -- that bounds the
+defect". The next run, same script and same lobby, measured 2. What the eighteen
+readings actually support:
+
+- the gap is 0, 1 or 2 ticks, and the observed maximum is **not** a known bound,
+  because the identical claim at 1 survived exactly one more run;
+- **sampled is always >= counted**, 18 of 18. The sampled clock has been giving
+  players times that are too LONG, so the migration makes every stored time
+  slightly *faster* -- which is the direction that makes an empty board cheap and
+  a populated one expensive;
+- the frequency is **not stable between identical runs** (2-of-7 then 6-of-7), so
+  no per-run rate may be quoted as a property of the system.
+
+#### The instrument shipped the hazard it documented
+
+QC build 74's own commit essay explains that `run_t_starttick` uses -1 because 0 is
+a *legal* counter value -- `run_movetick` resets per map. It then wrote that
+sentinel in `SV_TimerArm` alone, so a player who had never armed held the QC
+default of 0, and `cmd timer` on the live lobby reported
+
+    tick: counted 0 sampled 9033 gap 9033  frz 0  rate --/0.01 (no engine value)
+
+a confident four-figure number about a run that does not exist. Nothing consumes
+the counter yet, so nothing was ranked wrongly -- luck, not design. This is the
+`sv_mapcheck` failure shape: a comparison whose two sides are not comparable,
+answering anyway. QC build 75 seeds it in `SV_TimerIdle`, and the same arm minutes
+later reads `tick: not latched  rate 0.01`.
+
+That the rate reads `0.01` there and `no engine value` in run 1 is the three-state
+report earning its keep: run 1's pre-run reading was taken before the mover had
+published anything, and a two-state check would have printed MISMATCH in red at a
+perfectly healthy server.
