@@ -30283,6 +30283,49 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 364 — FTESURF-REC 10: a rewound run continues in a new session  *(APPLIED -- engine `server/sv_ccmds.c` (pm_recsim and pm_verify both refuse REC > 9); FTESurf `src/server/sv_timer.qc` (SV_RecPause, SV_RecSession, SV_RecSeed, SV_RecTrailer, SV_RecNextSerial; SV_RecRecount recounts pauses/sessions and restores the packet ordinal; grammar block), `sv_saveloc.qc` (the pause on a cold rewind), `sv_main.qc` (rec_serial), `cl_watch.qc` (reads 10); `tools/reccheck.py`, `tools/test_reccheck.py`. VERIFIED: `cfg/test/p364rewind.cfg`, `cfg/test/p364rsim.cfg`.)*
+
+**Problem.** A `retry` (a map_restart) or a load whose buffer was gone reads the
+save's prefix back off disk and appends the rest of the run to it.  The mover
+counter and the packet ordinal restart with the map, so every such file failed
+reccheck ("packet ordinal goes backwards, 1 after 87", "movetick goes
+backwards"), and a re-simulation had no seed for the imposed state.
+
+**Change.** Two records, v10.  `pause <mt> <carry> <ticks> <why>` (why: retry |
+load; Multi-Session will add drop | rotate | server) is written after a cold
+rewind; `session <n> <mt> <carry> <ticks>` plus a `seed` is written before the
+first line that stamps the new counter.  `in`/`warp`/`ride` <mt>, `board` <n>
+and the pm/pe/portal floors restart per session; <pk>, <row>, sample <t> and
+the clock run on.  `end` gains <sessions>.  A file is v10 exactly when it holds
+a `pause` (the buffer's line 0 is rewritten); every other file stays 9.
+
+Engine: pm_verify refused REC > 9 (Patch 356), but plain pm_recsim read a v10
+file and seeded session 1 from the LAST `seed` (pass 0 overwrites).  The
+refusal moves ahead of the replay, same REFUSE text, for both commands, until
+the replay learns sessions.
+
+Review finds, fixed: the rewind serial was a global, so PR_Deinit restarted it
+on every map load; a retry's buffer got serial 1 again, a save from before it
+matched, and the load rewound WARM across the counter restart with no pause.
+It is now the `rec_serial` cvar, based once per process on the clock.  A
+prefix that ends inside a pause is not paused twice; one saved before its
+first `in` row parks at `instart`.
+
+**Verified.** surf_666 listen server: warm load v9 ok; retry v10 ok,
+`pause 1339 .. 88 retry` / `session 2 0 .. 88`, 88 + inend 329 = end 417; cold
+load v10 ok, 68 + (794 - 534) = 328.  Control: the retry file minus
+pause/session/seed faults.  Arm D (retry, save, retry, load) FAILED before the
+serial fix ("movetick goes backwards, 94 after 316") and passes after
+(`pauses retry, load`, 2 sessions).  test_reccheck 150/150; corpus sweep
+unchanged (404 files, 94 with faults, identical).  The first cut of the
+cold-load arm failed on `pause 530 2.81259418e-07` -- the checker's %.9g
+exponent allowance lacked the new <carry> columns.  Engine: pm_recsim on the three v10
+files prints "is FTESURF-REC 10; its sessions ... not replayed yet" and
+pm_verify "REFUSE a newer format"; the v9 control still replays ("EXACT
+REPLAY", exact to the save-load at t 1.02) and pm_verify refuses it for its own
+reason.  Before, pm_recsim seeded the v10 retry file from the session's seed
+and diverged at row 0 (306 u).
+
 ## Patch 363 — the counted clock survives a counter restart (`retry`)  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_TimerResume, SV_TickCounted, SV_TimerFreezeFrame; run_t_tickcarry / run_t_resumesec). VERIFIED: `cfg/test/p363retry.cfg`.)*
 
 **Problem.** SV_TimerResume rebased the run's start to `run_movetick - ticks`.

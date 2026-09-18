@@ -4641,6 +4641,18 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Z_Free(pms); Z_Free(pes); Z_Free(prt);
 		return;
 	}
+	/* Patch 364: v10's `pause`/`session` restart the mover counter and each
+	   session restates the `seed` (pass 0 keeps the last one).  One session is
+	   all this replays, so both commands refuse rather than mis-seed session 1. */
+	if (filever > 9)
+	{
+		RECSIM_REFUSE("a newer format (this verifier reads FTESURF-REC 9)");
+		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i; its sessions"
+		                     " (Patch 364) are not replayed yet.\n", fname, filever);
+		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt);
+		return;
+	}
 	if (hdrtick <= 0)
 		hdrtick = rate;
 
@@ -4727,11 +4739,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	{
 		const char *refuse = NULL;
 		char zbuf[128], zhere[128];
-		/* Patch 356: unknown records are skipped, so a newer format's could
-		   change what the run is (v10 plans multi-session) and still PASS. */
-		if (filever > 9)
-			refuse = "a newer format (this verifier reads FTESURF-REC 9)";
-		else if (!exact)
+		/* Patch 356: a newer format is refused above (Patch 364), before any
+		   unknown record could be skipped into a PASS. */
+		if (!exact)
 			refuse = "not exact: no seed or no full pin (recorder before QC build 87, or engine before Patch 346)";
 		else if (!haveend || inend_mt < 0)
 			refuse = "unfinished: no `inend`/`end`";
