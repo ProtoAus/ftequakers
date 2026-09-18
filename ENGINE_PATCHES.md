@@ -30341,6 +30341,12 @@ floor lines moved above the pause HOLD state at row 122; retry, unknown
 reason, no session, 10-with-no-pause, a malformed session all REFUSE.  v9
 b352fin / p356_v9extra still PASS 660.  Control: the Patch 364 binary REFUSEs
 the buffered file ("a newer format").  reccheck: both files ok, 150/150.
+Pi: built natively from 7c0e48cfe (`fteqw-svarm64` md5 217bd182, 0 warnings);
+pm_dettest on bhop_eazy prints the same hashes as Windows and the 655006a43
+binary; a live PASS file still PASSes (surf_mesa_revo, 4030); a bhop_eazy
+Multi-Session finish (FTESurf `cfg/test/p367ms.cfg`) PASSes 958 with the same
+session line on both platforms, and the old binary REFUSEs it.  Sweeper since
+2026-09-18 20:24 UTC, all 12 lobbies since 20:28 UTC (with 365/366's progs).
 
 ## Patch 366 — the lobby rotation waits for runs in progress  *(APPLIED -- mod-side only, no engine change: `src/server/sv_lobby.qc` (Lobby_Cycle: the hold, capped by `lobby_cycle_hold`), `sv_resume.qc` (publishes a run in progress; parks as `rotate`), `lobby.cfg`. VERIFIED: `cfg/test/ms2sv.cfg` + `ms2cl.cfg`.)*
 
