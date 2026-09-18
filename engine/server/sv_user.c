@@ -1644,6 +1644,11 @@ void SV_SendClientPrespawnInfo(client_t *client)
 	}
 #endif
 
+	//FTESurf Patch 362: the list stages write straight into the message, so without this they
+	//overtake a fullserverinfo that went to the backbuf.  The client's csprogs download check and
+	//CSQC start both read serverinfo when the lists complete, and found none (measured: 0 keys).
+	if (client->num_backbuf)
+		return;
 	if (client->prespawn_stage == PRESPAWN_SOUNDLIST)
 	{
 		if (ISQWCLIENT(client))
@@ -1783,6 +1788,8 @@ void SV_SendClientPrespawnInfo(client_t *client)
 	}
 #endif
 
+	if (client->num_backbuf)
+		return;	//Patch 362: see PRESPAWN_SOUNDLIST
 	if (client->prespawn_stage == PRESPAWN_MODELLIST)
 	{
 		if (ISQWCLIENT(client))

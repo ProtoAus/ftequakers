@@ -30345,6 +30345,59 @@ meaningless gap.
 ranks sampled"; after, "counted 707 sampled 706 gap -1 ... ranks counted" and
 907/906 two seconds on -- the no-retry control's shape.
 
+## Patch 362 — a joining client fetches the server's csprogs when none is cached  *(APPLIED -- `server/sv_user.c` (SV_SendClientPrespawnInfo: the list stages wait out a backbuf), `client/cl_parse.c` (Sound_CheckDownloads skips a download the local copy satisfies; CL_LoadModels' P282 QW self-heal pulls a wrong OR missing copy once per map and waits for it; paths in local buffers). VERIFIED: FTESurf `cfg/test/p362csqc.cfg`.)*
+
+**Problem.** A client whose csprogs.dat is not the server's, joining a map it
+has installed with no `csprogsvers/<crc>.dat` cached, never downloaded the
+server's copy and ran without CSQC: no HUD, and a run demoted because nothing
+reported its journal or input profile.  Every released client hit it once a
+progs deploy changed the fleet's csprogs.  The only request is
+Sound_CheckDownloads when the modellist completes, and an instrumented client
+had 0 serverinfo keys there.  The cause is server-side: the SERVERINFO stage's
+fullserverinfo spills to the backbuf, and the same call's SOUNDLIST/MODELLIST
+stages write straight into the message, so the lists go out first.  A join that
+must download the map did fetch csprogs (lobby 9, not traced), and a client
+built from the deployed tree matches, which is why it went unseen.
+
+P282's self-heal could not catch it.  It acted only on a cached copy that
+exists; it tested CL_CheckOrEnqueDownloadFile inverted (false means a download
+started), so CSQC_Init ran before the re-pull landed; it removed from
+FS_GAMEONLY while downloads land in FS_GAMEDOWNLOADS; and its path came from
+va(), which FS_Remove's loader-thread restart overwrote, so the re-pull was
+saved as `loadworker_3`.
+
+**Change.** SV_SendClientPrespawnInfo returns while a backbuf is pending before
+the SOUNDLIST and MODELLIST stages, so the serverinfo reaches the client first.
+Sound_CheckDownloads now sees `*csprogs`, so it skips the download when
+CSQC_CheckDownload says the local csprogs.dat already matches (which also caches
+it).  The CSQC stage pulls a wrong or missing copy once per checksum per map
+(`cl_csprogs_pulled`, reset at serverdata), removes it from both roots, waits for
+it, and ends the game only if the copy it pulled is still wrong.
+
+A first cut sent the three csprogs keys early from SV_New_f.  An adversarial
+review found it made P285's wait see `*csprogs` early, so CSQC_Init ran on 3
+keys, and it cost matching clients a download.  It was replaced.  Left alone:
+the NetQuake arm (~1366) keeps the same inverted test and va() use.  Open after
+a second review, both client-side: the Sound_CheckDownloads gate reads a stale
+`csprogs_promiscuous` after an engine demo in the same session (that map loads
+no CSQC), and a `skipdl` of csprogs is pulled once more by the self-heal.
+
+**Verified.** `p362csqc.cfg` against throwaway servers on the Pi (LAN,
+surf_utopia, lobby.cfg) on the 358 and 362 binaries, cache state set per arm:
+- 358 server, no cache: the 358 client and the 0.1.7 release client load no
+  CSQC (also on lobby 1); the 362 client pulls it at the CSQC stage and loads.
+- 362 server: instrumented, 56 keys at Sound_CheckDownloads and at CSQC_Init
+  (0 and 56 on the 358 server).  No cache: the 358, 0.1.7 and 362 clients all
+  download and load.  Wrong bytes or good cache: the 362 client loads, with one
+  download or none.
+- Local csprogs.dat equal to the server's, no cache: the 362 client downloads
+  nothing and caches its own; a 358 client downloads it once.
+- Wrong bytes cached, 358 server: the 358 client loads none.  The 362 client
+  before the va() fix downloaded to `loadworker_3` and then ended the game;
+  after it, one download to the right name, loaded.
+Pi: built natively (`fteqw-svarm64` md5 0191dfb3, 0 warnings); pm_dettest on
+bhop_eazy prints the same 21 lines as the 358 binary.
+
 ## Patch 361 — the completion banner  *(APPLIED -- mod-side only, no engine change: new `src/client/cl_banner.qc`; `cl_results.qc` (card held behind the banner, Results_Drawn, toast clear), `cl_lobbytime.qc` (LT_Keeps, LT_StatsAreMine from the owner stat), `cl_main.qc`, `cl_hudedit.qc`/`cl_hud.qc` (editor row, HE_MAX/HUDE_MAX 20); server stat 99 STAT_FS_STAGEENDPBWAS (`sv_timer.qc` SV_StageClose) and stat 102 STAT_FS_STATOWNER (`sv_player.qc`), `sv_main.qc`; `default.cfg` hud_banner block; `tools/seed_csprogs.py` keeps other hashes. VERIFIED: `cfg/test/p361bn{syn,listen,lob}.cfg`.)*
 
 **Problem.** A finish said nothing across the screen: the card sat in a corner,

@@ -1321,6 +1321,7 @@ harvest that is already closed.
 */
 static char cl_automounted_map[MAX_QPATH];
 static double cl_csqc_waitdeadline;	//ftesurf (P285); reset per connection, see CL_AutoMountForget
+static unsigned int cl_csprogs_pulled;	//ftesurf (P362); the csprogs checksum pulled for this map
 static void CL_AutoMountForConnectedMap(const char *worldname)
 {
 	extern cvar_t cl_automount;
@@ -1347,6 +1348,7 @@ void CL_AutoMountForget(void)
 	//from a previous server would make the next connect skip the wait entirely.
 	cl_automounted_map[0] = 0;
 	cl_csqc_waitdeadline = 0;
+	cl_csprogs_pulled = 0;
 }
 
 static int CL_LoadModels(int stage, qboolean dontactuallyload)
@@ -1523,19 +1525,27 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 			extern cvar_t cl_download_csprogs;
 			if (cl_download_csprogs.ival)
 			{
-				char *str = va("csprogsvers/%x.dat", chksum);
+				//Patch 362: a local copy, not va().  FS_Remove below restarts the loader threads,
+				//whose names come from va(), and the re-pull was saved as "loadworker_3".
+				char str[MAX_QPATH];
+				const char *csname = progsname&&*progsname?progsname:"csprogs.dat";
+				Q_snprintfz(str, sizeof(str), "csprogsvers/%x.dat", chksum);
 				if (CL_IsDownloading(str))
 					return -1;	//still fetching it; do not advance the stage
-				if (CL_CheckDLFile(str))
+				//Patch 362: one pull per checksum per map, cached copy wrong OR missing (a server
+				//without 362's list-order fix never let Sound_CheckDownloads see the key).  The copy can
+				//be in either root.  FALSE means the download started, so wait; this tested true, and
+				//CSQC_Init ran below before the file came.
+				if (cl_csprogs_pulled != chksum)
 				{
-					static unsigned int csprogs_redl_hash_qw;	//hash we have already force-re-pulled once
-					if (csprogs_redl_hash_qw == chksum)
-						Host_EndGame("csprogs checksum mismatch: the server is serving a different csprogs.dat than the client.\nRebuild + RESTART the dedicated server with the current csprogs.dat (a recompiled csprogs needs a server restart), then reconnect.");
-					csprogs_redl_hash_qw = chksum;
-					FS_Remove(str, FS_GAMEONLY);	//drop the stale cache so the re-pull is clean
-					if (CL_CheckOrEnqueDownloadFile(progsname&&*progsname?progsname:"csprogs.dat", str, DLLF_REQUIRED|DLLF_OVERWRITE))
+					cl_csprogs_pulled = chksum;
+					FS_Remove(str, FS_GAMEONLY);
+					FS_Remove(str, FS_GAMEDOWNLOADS);
+					if (!CL_CheckOrEnqueDownloadFile(csname, str, DLLF_REQUIRED|DLLF_OVERWRITE))
 						return -1;
 				}
+				else if (CL_CheckDLFile(str))	//pulled for this map and still wrong
+					Host_EndGame("csprogs checksum mismatch: the server is serving a different csprogs.dat than the client.\nRebuild + RESTART the dedicated server with the current csprogs.dat (a recompiled csprogs needs a server restart), then reconnect.");
 			}
 		}
 
@@ -1908,10 +1918,14 @@ static void Sound_CheckDownloads (void)
 				//have. The NetQuake arm has honoured the key since it was
 				//written (:1320-1325); this is the same two lines.
 				const char *csname = InfoBuf_ValueForKey(&cl.serverinfo, "*csprogsname");
-				char *str = va("csprogsvers/%x.dat", chksum);
+				char str[MAX_QPATH];
+				Q_snprintfz(str, sizeof(str), "csprogsvers/%x.dat", chksum);
 				if (!*csname)
 					csname = "csprogs.dat";
-				CL_CheckOrEnqueDownloadFile(csname, str, DLLF_REQUIRED);
+				//Patch 362: a matching local csprogs.dat needs no download (and CSQC_CheckDownload
+				//caches it).  Until 362's list-order fix this ran with no serverinfo, so never here.
+				if (!CSQC_CheckDownload(csname, chksum, strtoul(InfoBuf_ValueForKey(&cl.serverinfo, "*csprogssize"), NULL, 0)))
+					CL_CheckOrEnqueDownloadFile(csname, str, DLLF_REQUIRED);
 			}
 			else
 			{
