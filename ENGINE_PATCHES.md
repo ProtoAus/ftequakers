@@ -30353,7 +30353,8 @@ prints no trace-cvar line where a leaked `.value` would print one, and a
 `pm_dettest` trace hash on the map (507c8b94f2e56ef7 at 1, 2158fa44d1cf01a5
 at 0) reads the same before and after each verify.  p349verify, p352slots,
 p356newer and pm_dettest (bhop_eazy hashes) are unchanged against the 356
-binary.  Not yet built on the Pi.
+binary.  Pi: built natively (`fteqw-svarm64` md5 bc7ed807, 0 warnings, same
+pm_dettest hashes) and running on all 12 lobbies since 2026-09-18.
 
 ## Patch 357 — the leaderboard follows a finish and refreshes once the row lands  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (ob_gen/Online_MarkStale, Online_Shows, Online_Asked, Online_Poll, ob_mine), `cl_scores.qc` (follow/seek/highlight/pinned own row, `scores note|landed` test hooks), `cl_players.qc` (room-list refetch gating; ping/time overlap), `cl_results.qc` (Results_BoardWatch), `cl_main.qc`; test stub `surfd/p357board.py`. VERIFIED: `cfg/test/p357ref{sv,cl}.cfg`.)*
 
