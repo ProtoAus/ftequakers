@@ -4206,6 +4206,16 @@ typedef struct
 	vec3_t bv;
 } recsim_ride_t;
 
+/* Patch 345: the `in` row prints SHORT2ANGLE(wire short) at %.4f.  ANGLE2SHORT
+   truncates into a short, so ~46% of rows came back one step (0.0055 deg) low;
+   rounding recovers every one.  Wrapped explicitly: a server-set .v_angle can
+   sit outside [-180,180). */
+static short SV_RecSim_AngleShort (float a)
+{
+	int s = (int)floor(a * (65536/360.0) + 0.5);
+	return (short)(unsigned short)(s & 0xffff);
+}
+
 static int SV_RecSim_CmpF (const void *a, const void *b)
 {	/*3-way on purpose.  See Patch 323: a comparator that can only say "greater"
 	  is not an ordering, and this file has paid for that once already.*/
@@ -4626,15 +4636,15 @@ static void SV_RecSim_f (void)
 					ndur++;
 
 				pmove.cmd.msec        = dt * 1000.0f;
-				pmove.cmd.forwardmove = (short)r->mv[0];
-				pmove.cmd.sidemove    = (short)r->mv[1];
-				pmove.cmd.upmove      = (short)r->mv[2];
+				pmove.cmd.forwardmove = (int)r->mv[0];	/* Patch 345: the wire field is int, not short */
+				pmove.cmd.sidemove    = (int)r->mv[1];
+				pmove.cmd.upmove      = (int)r->mv[2];
 				pmove.cmd.buttons     = ((r->bt & 1) ? BUTTON_JUMP  : 0) |
 				                        ((r->bt & 2) ? BUTTON_DUCK  : 0) |
 				                        ((r->bt & 4) ? BUTTON_SPEED : 0);
-				pmove.cmd.angles[0]   = ANGLE2SHORT(r->ang[0]);
-				pmove.cmd.angles[1]   = ANGLE2SHORT(r->ang[1]);
-				pmove.cmd.angles[2]   = ANGLE2SHORT(r->ang[2]);
+				pmove.cmd.angles[0]   = SV_RecSim_AngleShort(r->ang[0]);
+				pmove.cmd.angles[1]   = SV_RecSim_AngleShort(r->ang[1]);
+				pmove.cmd.angles[2]   = SV_RecSim_AngleShort(r->ang[2]);
 				VectorCopy(r->ang, pmove.angles);
 
 				PM_PlayerMove(1.0f);

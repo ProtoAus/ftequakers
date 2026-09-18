@@ -30283,6 +30283,27 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 345 — `pm_recsim` rounds the recorded angle back onto the wire grid  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + SV_RecSim_AngleShort). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p345angle.cfg`, before/after on two exes, the p344 subjects and controls.)*
+
+**Problem.** The `in` row prints SHORT2ANGLE(wire short) at %.4f, and pm_recsim
+rebuilt the short with ANGLE2SHORT, which truncates into a short.  Mirrored
+offline (float32, %.4f, sscanf %f), 30134 of the 65536 shorts came back one step
+(0.0055 deg) low; rounding recovers all 65536.  So about half of every replayed
+row handed the mover a wrong wishdir.  Movement was also cast to short; the
+usercmd fields are int.
+
+**Change.** Round to the nearest short and wrap explicitly (a server-set
+.v_angle can be outside [-180,180)).  Movement keeps its int.
+
+**Verified.** ARM 1 identical on all eight files; no file gains a diverged
+packet.  ARM 2 velocity-error p90 falls wherever the yaw moves: surf_trance
+0.2060 -> 0.0084 u/s, kitsune 0.2387 -> 0.0077, b83 0.0099 -> 0.0060, e3 0.0093
+-> 0.0058.  kitsune's open loop now holds to row 287, its first portal (was 184).
+The e3 control still dies at its first teleport (149) and b83 still at 817, so
+b83's death is not angle error.  One thing not pre-registered: surf_trance moved
+3 packets out of the floor band while its median and p90 improved.  0 new
+warnings.
+
 ## Patch 344 — `pm_recsim` crosses a booster: it reads `ride` and `inend`  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + one struct). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p344ride.cfg`, before/after on two exes, three subjects and five controls.)*
 
 First committed as "Patch 343" (3e97624e2), colliding with the mod-side 343
