@@ -30283,6 +30283,43 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 348 — QC build 87: FTESURF-REC 9, a recording that carries exact state  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (grammar block, SV_RecOpen, SV_TimerInFrame, SV_RecWarp, SV_RecRide, SV_RecState, SV_RecClose, SV_RecRecount, the `cmd timer` rows line), `sv_player.qc` (two SV_RecState calls), `sv_entities.qc` (`lift` warp), `sv_zones.qc` (`zone` warp), `src/client/cl_watch.qc` (knows 9), `tools/reccheck.py`, `tools/test_reccheck.py`, `AGENTS.md`. Needs engine Patch 346 to write the pin and state records; on an older engine it writes v9 without them. VERIFIED: `cfg/test/b87warp.cfg`, `b87ride.cfg`, `b87rewind.cfg`, `p347exact.cfg`.)*
+
+**Problem.** An audit of every input to one SV_RunCmd found why E3's and b83's
+open loops died: the file was short of state, not the mover chaotic.  The seed
+and every warp/ride vector were %.2f; pm_source's carried state was absent;
+`in` angles were .v_angle, which SV_RunCmd leaves stale under fixangle while
+the mover reads the usercmd; the physics were unpinned.  Also:
+trigger_push's +1 u lift and `!r`'s stage-restart teleport wrote no record, and
+a save-state rewind carried the row counters across, over-counting <inputs>
+since v6.
+
+**Change.** `FTESURF-REC 9`.
+- Header `pmpin` (after `flags`): the engine's snapshot, copied only when
+  `run_pmepoch > 0` and the text passes a charset check.
+- `seed` right after `begin`: origin/velocity %.9g plus the carried state.
+- `in` gains `<fl>` (onground, teleport_time, movetype), takes its angles from
+  input_angles, and prints carry %.9g and movement as integers.
+- `warp` gains `<row>` and `<fl>`, plus two new kinds, `lift` and `zone`.
+- `ride` and `inend` go to %.9g.
+- New `pm`/`pe`/`portal` records are written on change from the top of
+  PreThink, before the PostThink sample, and at close, each bound to the
+  `<row>` whose move produced it.
+- `end` grows `<pms> <pes> <portals>`.
+- After a rewind, SV_RecRecount recounts every row-bound record from the kept
+  prefix and clears the sentinels.
+- The grammar's "a `pay` is always followed by `arm 0`" is corrected, and
+  `<row>` -1 is defined (a warp imposed on the seed).
+
+**Verified.** reccheck.py 111 checks 0 failed (was 56); corpus sweep unchanged
+at 154 files / 62 with faults; both v9 captures 0 faults.  Engine Patch 347
+replays b87warp (1667/1667 packets text-identical) and b87ride (148/148) exactly.
+b87rewind: the input count after a load reads 301 against 367 before it, where
+the old count could only have grown.  One pre-registered line in that cfg failed
+on harness timing and is recorded there.  NOT verified: a `portal` record (no
+crossing captured), `lift` and `zone` warps (sites exist, not yet driven), and a
+multi-command `ride` span.  0 new warnings.
+
 ## Patch 347 — `pm_recsim` replays a v9 recording exactly  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_f: v9 parse, exact path, ARM 4), `server/sv_user.c` (SV_PMPinParse / SV_PMPinApply / SV_PMStateParse beside the fill; SV_PhysentDigest exported), `server/server.h` (declarations). Measurement command; no game path, protocol or ABI change. VERIFIED: `cfg/test/p347exact.cfg` on QC build 87 captures (`b87warp.cfg`, `b87ride.cfg`).)*
 
 **Problem.** QC build 87 (FTESURF-REC 9) records the pin, an exact seed with
