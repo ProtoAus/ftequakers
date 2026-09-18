@@ -4195,7 +4195,15 @@ typedef struct
 	int    row;			/* Patch 347, v9: the `in` row whose move it followed; -1 = v8, bind by <mt> */
 	int    fl;			/* v9: 1 = FL_ONGROUND after it */
 	int    preseed;		/* Patch 367: written before session N's first row: imposed on its seed */
+	qboolean post;		/* Patch 369: written after its row's packet sample -- between packets (`!r`) */
 } recsim_warp_t;
+/* Patch 369: a `restart` (SV_TimerRestartSeg) -- the zone latches reset.  Bound
+   like a warp: the row before it, and whether it came after that packet's sample. */
+typedef struct
+{
+	int      row;
+	qboolean post;
+} recsim_restart_t;
 
 /* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
    SV_BaseVelocityFrame's order, before the move it precedes in the file: `pay`
@@ -4351,6 +4359,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	func_t        vf_step = 0;
 	/* Patch 367: v10 sessions */
 	recsim_sess_t *ses = NULL;
+	recsim_restart_t *rst = NULL;	/* Patch 369 */
+	func_t        vf_restart = 0;
 	int           nses = 0, npause = 0;
 	const char   *sesbad = NULL;		/* a structure this replay cannot follow */
 	char          pausewhys[64] = "";
@@ -4389,7 +4399,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		int cin = 0, csam = 0, cwarp = 0, cride = 0, cpm = 0, cpe = 0, cportal = 0;
 		/* Patch 367: from a `pause` to the next `in` row, state records are the
 		   next session's floor: they apply from its first row, whatever <row> says. */
-		int cses = 0, ppmt = 0, pptk = 0;
+		int cses = 0, ppmt = 0, pptk = 0, crst = 0;
 		float ppc = 0;
 		qboolean floorwin = false, openpause = false;
 		p = buf; end = buf + fsz; inbody = false;
@@ -4522,6 +4532,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						Q_strncpyz(w->kind, kb, sizeof(w->kind));
 					}
 					w->preseed = 0;
+					w->post = !floorwin && cin > 0 && csam > ins[cin-1].nsam;
 					if (floorwin && w->mt >= 0)
 						{ w->row = cin; w->preseed = openpause ? cses + 1 : cses; }
 				}
@@ -4576,8 +4587,15 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				nresume++;
 			else if (!strncmp(ln, "ghost ", 6) && pass == 0)
 				nghost++;
-			else if (!strncmp(ln, "restart ", 8) && pass == 0)
-				nrestart++;
+			else if (!strncmp(ln, "restart ", 8))
+			{
+				if (pass == 1 && crst < nrestart)
+				{
+					rst[crst].row = cin - 1;
+					rst[crst].post = cin > 0 && csam > ins[cin-1].nsam;
+				}
+				crst++;
+			}
 			/* Patch 347: v9's exact seed and its three state tracks.  Patch 367: the
 			   first is the run's; each later one belongs to the session before it. */
 			else if (!strncmp(ln, "seed ", 5) && (cses ? pass == 1 : pass == 0))
@@ -4720,6 +4738,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			nin = cin; nsam = csam; nwarp = cwarp; nride = cride;
 			npm = cpm; npe = cpe; nportal = cportal;
 			nses = cses;
+			nrestart = crst;
 			if (openpause && !sesbad)
 				sesbad = "a `pause` no `session` answers (the run is still parked)";
 			if (!nin)
@@ -4740,6 +4759,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			pes = Z_Malloc(sizeof(*pes) * (npe?npe:1));
 			prt = Z_Malloc(sizeof(*prt) * (nportal?nportal:1));
 			ses = Z_Malloc(sizeof(*ses) * (nses?nses:1));
+			rst = Z_Malloc(sizeof(*rst) * (nrestart?nrestart:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4750,7 +4770,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
 		return;
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
@@ -4769,7 +4789,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		RECSIM_REFUSE(sesbad);
 		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i: %s.\n", fname, filever, sesbad);
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
 		return;
 	}
 	if (hdrtick <= 0)
@@ -4874,8 +4894,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "a save-state resume or retry";
 		else if (nghost)
 			refuse = "a ghost window";
-		else if (nrestart)
-			refuse = "a stage restart";
+		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
+			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
 			refuse = "a different map";
 		else if (hdrpin[0] != PMSRC_VERSION)
@@ -4922,7 +4942,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			Con_Printf("VERIFY %s REFUSE %s\n", fname, refuse);
 			Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
+			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
 			return;
 		}
 	}
@@ -4960,6 +4980,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* Patch 367: the session being replayed, and what its boundaries found */
 		int    scur = 0, sbase_mt = instart_run, sbase_ticks = 0;
+		int    rscur = 0, nrsapplied = 0;	/* Patch 369: restarts */
 		int    sclk_n = -1, sclk_trace = 0, sclk_pause = 0, sclk_sess = 0;
 		int    sjmp_n = -1, sjmp_row = -1;
 		float  sjmp_o = 0, sjmp_v = 0;
@@ -5110,6 +5131,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			rcur = 0;			/* Patch 344: and the carrier */
 			VectorClear(carrier);
 			scur = 0;			/* Patch 367: and the session */
+			rscur = 0;			/* Patch 369: and the restarts */
 			sbase_mt = instart_run;
 			sbase_ticks = 0;
 
@@ -5349,6 +5371,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					{	/* Patch 347: v9 binds by <row> */
 						if (wrp[wcur].row > i)
 							break;
+						if (wrp[wcur].post)
+							break;	/* Patch 369: after this packet's scan and sample, below */
 					}
 					else if (wrp[wcur].mt > next_mt)
 						break;
@@ -5359,7 +5383,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					/* Patch 349: SV_TimerWarped moves the sweep origin for these,
 					   gated on run_teleport_warp exactly as the handlers are. */
 					if (zs_twarp && (!strcmp(wrp[wcur].kind, "tele") || !strcmp(wrp[wcur].kind, "telerel")
-					                 || !strcmp(wrp[wcur].kind, "bhop")))
+					                 || !strcmp(wrp[wcur].kind, "bhop") || !strcmp(wrp[wcur].kind, "zone")))	/* Patch 369: zone, per the grammar */
 						VectorCopy(wrp[wcur].org, vlastp);
 					if (!mode)
 					{
@@ -5372,6 +5396,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					}
 					wcur++;
 				}
+
+				/* Patch 369: a restart inside the move (a teleport back to the stage's
+				   start) resets the zone latches before this packet's scan. */
+				for (; rscur < nrestart && rst[rscur].row <= i && !rst[rscur].post; rscur++)
+					if (verify && !mode && vf_restart)
+						{ PR_ExecuteProgram(svprogfuncs, vf_restart); nrsapplied++; }
 
 				/* Patch 349: the live timer runs once per PACKET, in PostThink,
 				   after the packet's last move and its touches.  So does this. */
@@ -5498,8 +5528,31 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						if (open_first_1u  < 0 && derr > 1.0f) open_first_1u  = i;
 					}
 				}
+
+				/* Patch 369: between packets (`!r`, SV_ZoneMove) -- written after this
+				   packet's sample, so after its scan and its sample check here too. */
+				for (; filever >= 9 && wcur < nwarp && wrp[wcur].post && wrp[wcur].row <= i; wcur++)
+				{
+					if (wrp[wcur].mt < 0)
+						continue;
+					VectorCopy(wrp[wcur].org, pmove.origin);
+					VectorCopy(wrp[wcur].vel, pmove.velocity);
+					if (exact && wrp[wcur].fl >= 0)
+						pmove.onground = (wrp[wcur].fl & 1) != 0;
+					if (zs_twarp && (!strcmp(wrp[wcur].kind, "tele") || !strcmp(wrp[wcur].kind, "telerel")
+					                 || !strcmp(wrp[wcur].kind, "bhop") || !strcmp(wrp[wcur].kind, "zone")))
+						VectorCopy(wrp[wcur].org, vlastp);
+					if (!mode)
+						wapplied++;
+				}
+				for (; rscur < nrestart && rst[rscur].row <= i; rscur++)
+					if (verify && !mode && vf_restart)
+						{ PR_ExecuteProgram(svprogfuncs, vf_restart); nrsapplied++; }
 			}
 		}
+
+		if (nrestart && verify)
+			Con_Printf("  restarts  %i of %i applied to the zone latches (SV_VerifyRestart)\n", nrsapplied, nrestart);
 
 		/* ARM 1 ------------------------------------------------------------- */
 		Con_Printf("^5ARM 1^7  %i moves: %i exact, %i off (worst by %i tick%s)\n",
@@ -5637,6 +5690,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	Z_Free(pes);
 	Z_Free(prt);
 	Z_Free(ses);
+	Z_Free(rst);
 }
 
 static void SV_RecSim_f (void)

@@ -30283,6 +30283,31 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 369 — pm_verify follows a stage restart  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `restart` records bound to their row, the QC hook SV_VerifyRestart; warps and restarts written after their packet's sample act after its scan and sample check; `zone` joins the sweep-origin warp kinds); FTESurf `src/server/sv_timer.qc` (SV_VerifyRestart; grammar note). VERIFIED: FTESurf `cfg/test/p369verify.cfg`, `p369ctl.cfg`.)*
+
+**Problem.** A `restart` record (a stage restarted mid-run; the run clock never
+stops) was a blanket REFUSE, and it was the largest single reason a live v9 run
+went unbadged: 10 of the 27 on the board.  Two latent faults sat behind the
+refusal: a `!r` restart arrives between packets, but its `zone` warp was applied
+before that packet's zone scan and sample check (the sample predates it), and
+`zone` was missing from the kinds that move the sweep origin, which the grammar
+lists.
+
+**Change.** Each `restart` binds to the row before it and calls the progs'
+SV_VerifyRestart (SV_TimerRestartSeg's latch reset); progs without it still
+REFUSE.  A warp or restart written after its row's packet sample -- a census of
+the live corpus puts all 191 tele/speed warps before it and all 4 zone warps
+after -- is applied after the packet's scan and sample check.  `zone` moves the
+sweep origin under run_teleport_warp.
+
+**Verified.** All ten live restart runs PASS at their trailer ticks, ARM 4
+exact on every packet (aarch64 recordings replayed on x64), including
+surf_deathstar's `!r`.  Controls: the `!r` pair moved above its sample HOLDs
+(row 1564); a teleport moved 16 u HOLDs; the 364-era binary REFUSEs.  Deleting
+every `restart` line still PASSes: the latch reset decides no verdict on these
+files, so the refusal was over-cautious, and removing the records gains nothing
+(the clock never stopped).  P367/P356 suites and eazy.rec unchanged.
+
 ## Patch 368 — a lobby `retry` keeps its recording  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_RecDestream; SV_RecClose reports a buffered file's size), `src/server/sv_saveloc.qc` (SV_RetryPoint destreams before the save). VERIFIED: FTESurf `cfg/test/rt1sv.cfg` + `rt1cl.cfg`, `p364rewind.cfg`.)*
 
 **Problem.** Measured on a lobby-config server with the stub surfd: a `retry`
