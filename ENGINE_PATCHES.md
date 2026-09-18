@@ -30283,6 +30283,32 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 357 — the leaderboard follows a finish and refreshes once the row lands  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (ob_gen/Online_MarkStale, Online_Shows, Online_Asked, Online_Poll, ob_mine), `cl_scores.qc` (follow/seek/highlight/pinned own row, `scores note|landed` test hooks), `cl_players.qc` (room-list refetch gating; ping/time overlap), `cl_results.qc` (Results_BoardWatch), `cl_main.qc`; test stub `surfd/p357board.py`. VERIFIED: `cfg/test/p357ref{sv,cl}.cfg`.)*
+
+**Problem.** Nothing ever refetched or rescanned the leaderboard after a finish:
+`Online_Need` never re-asked a board it had, and holding TAB never rescanned
+Local, so a player could not see the time they had just set.
+
+**Change.**
+- `Results_BoardWatch` (after LT_Frame) owns FINREC/STAGEENDREC latches. A finish
+  marks Local stale and, with the board shut, makes the next open follow to that
+  leg; the tab moves only when the current one cannot hold the run (uncertified or
+  non-ranked -> Local, remembered so a later certified finish can move it back).
+- When `*wrank` for that finish leaves PENDING and the row stored, `ob_gen` bumps
+  and `Online_Need` re-asks ONCE; rows stay visible while the same board refetches
+  (and on a failed refresh); a superseded or late answer also marks stale.
+- The player's own row is highlighted and scrolled to once; past the 64-row page
+  it is pinned under the list from `*wrank` (rank + standing time).
+- The room list refetches after a finish only when the board is not on another
+  online leg, under the shared deadline; its ping no longer overdraws the time.
+
+**Verified.** Dedicated server + `p357board.py`: a setpos stage-1 finish (unranked:
+sv_cheats breaks the ruleset) followed to "stage 1" on the Local tab with the new
+row highlighted; a board pinned on main did not jump; the online half (hooks +
+server probe) showed `gen 1 asked 0` with the board shut and no GET until the
+hold, then one GET, own row highlighted; seed 70 -> the pinned "71 0:12.340" row
+and "(top 64 of 71 shown)". NOT verified: a certified finish end to end on a lobby.
+
 ## Patch 356 — `pm_verify` REFUSEs a format newer than FTESURF-REC 9  *(APPLIED -- `server/sv_ccmds.c` only. VERIFIED: `cfg/test/p356newer.cfg`.)*
 
 **Problem.** pm_recsim skips records it does not know, and pm_verify had no
