@@ -4713,7 +4713,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	{
 		const char *refuse = NULL;
 		char zbuf[128], zhere[128];
-		if (!exact)
+		/* Patch 356: unknown records are skipped, so a newer format's could
+		   change what the run is (v10 plans multi-session) and still PASS. */
+		if (filever > 9)
+			refuse = "a newer format (this verifier reads FTESURF-REC 9)";
+		else if (!exact)
 			refuse = "not exact: no seed or no full pin (recorder before QC build 87, or engine before Patch 346)";
 		else if (!haveend || inend_mt < 0)
 			refuse = "unfinished: no `inend`/`end`";

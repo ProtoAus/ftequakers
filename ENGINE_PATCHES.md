@@ -30283,6 +30283,19 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 356 — `pm_verify` REFUSEs a format newer than FTESURF-REC 9  *(APPLIED -- `server/sv_ccmds.c` only. VERIFIED: `cfg/test/p356newer.cfg`.)*
+
+**Problem.** pm_recsim skips records it does not know, and pm_verify had no
+version gate.  A v10 file (multi-session is planned for v10) would be verified
+as one continuous run: with only its header changed, b352fin still PASSed.
+
+**Change.** In verify mode, `FTESURF-REC` above 9 is REFUSEd with "a newer
+format".  Unknown records inside a v9 file are still skipped.
+
+**Verified.** Dedicated fteqwsv64: b352fin PASS ticks 660; the same file as
+v10, and v10 plus a `session` row, REFUSE; v9 plus an unknown `stagepost` row
+PASS 660.  Control: the Patch 354 binary PASSes the v10 file.
+
 ## Patch 354 — `pm_verify` prints a verdict on every exit; the surfd sweeper  *(APPLIED -- engine `server/sv_ccmds.c`; FTESurf `surfd/sweep.py`, `surfd/test_sweep.py`, `surfd/README.md` (FTESurf 44c3545).)*
 
 **Problem.** The first sweep of the live ledger recorded one ERROR ("no VERIFY
