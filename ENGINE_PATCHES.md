@@ -30283,6 +30283,22 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 350 — the map selector's public lobbies are a 4 x 3 grid in a narrower panel  *(APPLIED -- mod-side only, no engine change: `src/menu/m_main.qc` (screen_create, bootcheck layout line), `src/menu/m_lobby.qc` (comment). VERIFIED: `cfg/test/p350grid{720,1080,860}.cfg`.)*
+
+**Problem.** Lobby cells were one row per `Lob_Count()` columns, capped at two
+rows: 2 x 6 at 1080p and 2 x 5 at 720p, where two of the 12 lobbies were not
+drawn at all. The panel was 1400 wide.
+
+**Change.** `LOB_COLS 4`, `LOB_ROWS_MAX 3`, `lcols = min(LOB_COLS, Lob_Count())`
+with the LOB_MIN_COL fallback kept. Panel cap 1400 x 760 → 1100 x 808; the extra
+48 px pays for the third lobby row, so 1080p keeps 8 map rows (720p is
+screen-clamped: 6 → 5). The bootcheck prints `layout panel WxH lcols lshow rows`.
+
+**Verified.** 720p: panel 1100x688, lcols 4, lshow 12, rows 5. 1080p: 1100x808,
+4, 12, 8. Control at 860 wide: the fallback drops to 3 columns (lshow 9). Its
+predicted 4 rows was wrong (5): the chip row fits at inner 796, so the ~925 px
+figure in the old essay was an overestimate. Screenshots read for all three.
+
 ## Patch 349 — `pm_verify`: recompute a run's finish from its inputs  *(APPLIED -- engine: `server/sv_ccmds.c` (SV_RecSim_f becomes SV_RecSim_Run with a verify mode; `pm_verify`; the QC hook call). QC build 88: `src/server/sv_timer.qc` (SV_ZoneScan moved verbatim out of SV_TimerFrame; SV_VerifyZonePin / SV_VerifyBegin / SV_VerifyStep; the `zseed` record), `tools/reccheck.py`, `tools/test_reccheck.py`. No protocol or ABI change; the live timer's scan is byte-identical, only relocated. VERIFIED: `cfg/test/b88fin.cfg` (capture), `cfg/test/p349verify.cfg`.)*
 
 **Problem.** Patch 347 proves a v9 file is the mover's own output, but nothing
