@@ -30283,6 +30283,43 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 361 — the completion banner  *(APPLIED -- mod-side only, no engine change: new `src/client/cl_banner.qc`; `cl_results.qc` (card held behind the banner, Results_Drawn, toast clear), `cl_lobbytime.qc` (LT_Keeps, LT_StatsAreMine from the owner stat), `cl_main.qc`, `cl_hudedit.qc`/`cl_hud.qc` (editor row, HE_MAX/HUDE_MAX 20); server stat 99 STAT_FS_STAGEENDPBWAS (`sv_timer.qc` SV_StageClose) and stat 102 STAT_FS_STATOWNER (`sv_player.qc`), `sv_main.qc`; `default.cfg` hud_banner block; `tools/seed_csprogs.py` keeps other hashes. VERIFIED: `cfg/test/p361bn{syn,listen,lob}.cfg`.)*
+
+**Problem.** A finish said nothing across the screen: the card sat in a corner,
+and a stage passed mid-run was a one-line toast that the RUNNING clear killed on
+its next frame.
+
+**Change.**
+- `cl_banner.qc`: a full-width angled ribbon on the FINREC edge (MAP / STAGE k /
+  BONUS t COMPLETE): time, delta to the PB, and the placement from `*wrank` --
+  "#N of M" + WR / TOP 10 / TOP n% (WR and gold only when stored == 1), "PB
+  STANDS", "UNRANKED / <reason>", LOCAL from this disk when no board answers.
+  A compact strip per stage of a main run (`*srank`; replaces the toast); the
+  final stage becomes a tail under the ribbon.  Slides in 0.25 s, holds
+  `hud_banner_hold`, waits up to 2 s for an answer, yields to a new attempt
+  after 1.2 s.  The card waits until the banner leaves (F1/MOUSE3/`results`
+  skip to it; ESC still reaches the menu).
+- A delta claims NEW PB / FIRST TIME only where the run was kept: the clean
+  class, a PB source (the server's table, or lobby files this disk keeps --
+  `LT_Keeps`), for a stage its STAGEREC edge, and never beside a board answer
+  that says the standing PB is at least as fast (the sound waits for it too).
+- Server stats: 99 = a stage close's PB before the close (chained `!s N` runs
+  read it: their PBWAS is zeroed by the re-arm); 102 = the entity number the
+  stats describe, so a spectator's target switch re-seeds on the right frame
+  and wall-cam spectating is not "mine".
+- Sound: `hud_banner_snd_end/_pb/_wr` (sound/ftesurf/*.wav, none ship),
+  probed once per map, missing files skipped silently.
+
+**Verified.** Synthetic arms (fake keys, `banner test|stage`): every placement,
+tier word, class, the 5001-tick falsifier, the 800-wide fit fallback, the
+timeline and a tie with the PB standing.  Listen server on the p360sf zones:
+stat 99 = 1241 (surf_666's leg-2 PB before the close), "-0:17.715  NEW PB",
+LOCAL placement, full + tail, the yield, `hud_banner_stages 0` keeps the toast.
+Lobby + stub: "..." then "#3 of 17 / TOP 10" on the strip, full + tail,
+`!s 2` "STAGE 2 COMPLETE", the card held then shown, `results` during the hold.
+Adversarial review: 16 findings confirmed and fixed, 2 refuted.  NOT verified:
+two-client spectating (the owner stat), and the look at 1080p on a live lobby.
+
 ## Patch 360 — main-run stages post to the stage boards when primed  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_StageTakeoff/SV_StageLaunch/SV_StageFillable/SV_StageSubmitFlags, the SV_StageClose post, JumpWatch takeoff latch, opening-stage judgement, SV_RecKeepEvidence/SV_EvidenceSweep, the evidence close in SV_RecClose, `runid` per run, part files keyed by port on a lobby, grammar `stagepost`/`abandon`), `sv_lobby.qc` (Lobby_RunBody/Lobby_NextRunId split, Lobby_SubmitStage and `*srank`, reply routing incl. one older stage), `sv_main.qc` (QC `SV_Shutdown`), `sv_saveloc.qc`, `sh_defs.qc` (SF_PRIMED 512, SF_POSTED 1024, stat 100), `tools/reccheck.py` + `test_reccheck.py`, `default.cfg`. VERIFIED: `cfg/test/p360sf{sv,cl}.cfg`, `p360sf2{sv,cl}.cfg` (+ `p360sf.zones.json`), `p360sweep.cfg`.)*
 
 **Problem.** A stage cleared during a main run never reached that stage's online
