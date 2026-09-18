@@ -30283,7 +30283,7 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
-## Patch 354 — `pm_verify` prints a verdict on every exit  *(APPLIED -- `server/sv_ccmds.c` only.)*
+## Patch 354 — `pm_verify` prints a verdict on every exit; the surfd sweeper  *(APPLIED -- engine `server/sv_ccmds.c`; FTESurf `surfd/sweep.py`, `surfd/test_sweep.py`, `surfd/README.md` (FTESurf 44c3545).)*
 
 **Problem.** The first sweep of the live ledger recorded one ERROR ("no VERIFY
 line") for a v5 file with no input trace.  pm_recsim's early exits (no map, an
@@ -30291,11 +30291,15 @@ unreadable file, no `in` rows, no movetickrate) return before the verify
 block, so they printed the measurement tool's error and no verdict.
 
 **Change.** Each early exit prints `VERIFY <file> REFUSE <reason>` in verify
-mode.
+mode.  surfd side: `sweep.py` runs `pm_verify` over each unchecked `replays`
+row, one headless verifier per map at idle CPU/IO priority, and stores each
+attempt in its own `verdicts` table (PASS / HOLD / REFUSE, or ERROR retried 3
+times).  Nothing reads the table yet.  Cron, every 5 minutes, under flock.
 
 **Verified.** Dedicated fteqwsv64: a v4 file with no trace gives `REFUSE no
 input trace`, a missing file `REFUSE cannot read the file`, and b352fin still
-`PASS ticks 660`.
+`PASS ticks 660`.  `surfd/test_sweep.py` 0 failed on the Pi (engine stubbed;
+the quiet-import check fails with its fix removed).
 
 ## Patch 353 — surfd: the run reply names its board, stage legs get their own budget  *(APPLIED -- surfd only, no engine or QC change: `surfd/surfd.py` (submit_run), `surfd/test_board.py` (sections 8, 12, 13), `surfd/b65stub.py` (`cert` mode), `surfd/README.md`. VERIFIED: test_board / test_replays / test_surfd / test_join, locally in a venv.)*
 
