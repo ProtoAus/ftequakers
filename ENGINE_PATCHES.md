@@ -30341,6 +30341,21 @@ HEAD's, and the live timer finished the capture at the same 662 the verifier
 recomputed.  pm_recsim's own output is unchanged (p347exact re-run).
 reccheck 115 checks 0 failed; corpus 154/62 unchanged.  0 new warnings.
 
+## Patch 349, addendum — `pm_verify` on a server with no clients  *(APPLIED -- `server/sv_ccmds.c` only.)*
+
+**Problem.** The exact replay built physents around a spawned client, which it
+excludes the way SV_RunCmd excludes the mover's own player.  A verifier
+process has no clients, so it fell back to world-only physents and would have
+missed every solid brush entity.
+
+**Change.** With no spawned client, a scratch edict stands in for the recorded
+player.  It is unlinked, SOLID_NOT and has dimension_default bits, and it is
+freed at the end.  With no client there is nobody else to leave out.
+
+**Verified.** Dedicated fteqwsv64 with no client, bhop_eazy: b88fin PASS ticks
+662, physents 634/634 against the recorded digest ("around a scratch player
+edict"); the 0.01 u sample edit still HOLDs at row 200.
+
 ## Patch 348 — QC build 87: FTESURF-REC 9, a recording that carries exact state  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (grammar block, SV_RecOpen, SV_TimerInFrame, SV_RecWarp, SV_RecRide, SV_RecState, SV_RecClose, SV_RecRecount, the `cmd timer` rows line), `sv_player.qc` (two SV_RecState calls), `sv_entities.qc` (`lift` warp), `sv_zones.qc` (`zone` warp), `src/client/cl_watch.qc` (knows 9), `tools/reccheck.py`, `tools/test_reccheck.py`, `AGENTS.md`. Needs engine Patch 346 to write the pin and state records; on an older engine it writes v9 without them. VERIFIED: `cfg/test/b87warp.cfg`, `b87ride.cfg`, `b87rewind.cfg`, `p347exact.cfg`.)*
 
 **Problem.** An audit of every input to one SV_RunCmd found why E3's and b83's

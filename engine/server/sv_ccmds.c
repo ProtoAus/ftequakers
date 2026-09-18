@@ -4784,6 +4784,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		/* Patch 347 */
 		float  gamespeed = 1.0f, svmaxvel = sv_maxvelocity.value;
 		wedict_t *proxy = NULL;
+		qboolean scratchproxy = false;
 		int    pmcur = 0, pecur = 0, portcur = 0, k;
 		unsigned int pecrc = 0;
 		qboolean pehave = false;
@@ -4836,9 +4837,22 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			for (i = 0; i < sv.allocated_client_slots; i++)
 				if (svs.clients[i].state >= cs_spawned && svs.clients[i].edict)
 					{ proxy = (wedict_t*)svs.clients[i].edict; break; }
-			Con_Printf("  physents  %s\n", proxy
-			           ? "built as the server builds them, around a spawned player who is left out"
-			           : "^3world only -- no spawned client to build them around^7");
+			/* Patch 349: a verifier process has no clients.  A scratch edict --
+			   unlinked, non-solid, a player's default dimension bits -- stands in
+			   for the recorded player; with no client there is nobody to leave out. */
+			if (!proxy)
+			{
+				proxy = (wedict_t*)ED_Alloc(svprogfuncs, false, 0);
+				if (proxy)
+				{
+					proxy->v->solid = SOLID_NOT;
+					proxy->xv->dimension_hit = proxy->xv->dimension_solid = pr_global_struct->dimension_default;
+					scratchproxy = true;
+				}
+			}
+			Con_Printf("  physents  %s\n", !proxy ? "^3world only -- no edict to build them around^7"
+			           : scratchproxy ? "built as the server builds them, around a scratch player edict"
+			           : "built as the server builds them, around a spawned player who is left out");
 		}
 		else
 		{
@@ -5356,6 +5370,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		}
 
 		Z_Free(eo); Z_Free(ev);
+		if (scratchproxy)
+			ED_Free(svprogfuncs, (edict_t*)proxy);
 		movevars = savemv;
 		pmove = savepm;
 	}
