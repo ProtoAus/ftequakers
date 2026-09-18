@@ -6613,6 +6613,21 @@ char *PF_infokey_Internal (int entnum, const char *key)
 			else
 				sprintf(ov, "%08x", (unsigned int)controller->checksum);
 		}
+		else if (!strncmp(key, "*pmpin", 6) || !strncmp(key, "*pmstate", 8))
+		{
+			/* FTESurf Patch 346: what the mover was handed on this client's last
+			   move (*pmpinN) and the pm_source state it carried out of it
+			   (*pmstateN), as name=value %.9g text in <=240-char chunks; "" past
+			   the last chunk, and always "" before the engine has published
+			   (pmepoch 0).  Answered here so an unknown key can never fall
+			   through to the client's own userinfo below. */
+			char text[2048];
+			qboolean st = !strncmp(key, "*pmstate", 8);
+			*ov = 0;
+			if (pl->pmepoch && (st ? SV_PMStateText(&pl->pmsrc, text, sizeof(text))
+			                       : SV_PMPinText(pl->pmpin, text, sizeof(text))))
+				SV_PMTextChunk(text, atoi(key + (st?8:6)), ov, sizeof(ov));
+		}
 		else if (!strcmp(key, "challenge"))
 			sprintf(ov, "%u", pl->challenge);
 		else if (!strcmp(key, "*userid"))

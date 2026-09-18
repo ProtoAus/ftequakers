@@ -1482,6 +1482,7 @@ MSV_OpenUserDatabase();
 		  here costs nothing: QC re-latches per run and the edicts are respawned
 		  anyway, so no run can straddle this.*/
 		svs.clients[i].movetickcount = 0;
+		svs.clients[i].portalx = 0;	//FTESurf Patch 346: same float ceiling, same reset
 		InfoSync_Clear(&svs.clients[i].infosync);	//we'll mark all the info as dirty at some point while connecting.
 	}
 

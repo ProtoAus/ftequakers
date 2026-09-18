@@ -456,6 +456,8 @@ enum serverprotocols_e
 	//note, nq is nq+
 };
 
+#define SV_PMPIN_COUNT 70	//FTESurf Patch 346: entries in sv_pmpin_names (sv_user.c)
+
 typedef struct client_s
 {
 	client_conn_state_t	state;
@@ -767,6 +769,16 @@ typedef struct client_s
 	  would step 0,2,4 and bias every run by a tick or so, silently, which is
 	  strictly worse than stopping.  Hence the per-map reset in SV_SpawnServer. */
 	double			movetickcount;
+
+	/* FTESurf Patch 346: what the mover was handed on this client's last move, for
+	   the recorder (see SV_PMPinFill in sv_user.c).  pmepoch is 0 until the first
+	   Source move and then bumps whenever pmpin changes -- QC reads a nonzero
+	   epoch as "this engine publishes the pin", which a client cannot forge. */
+	float			pmpin[SV_PMPIN_COUNT];
+	unsigned int	pmepoch;
+	unsigned int	physcrc;		//24-bit digest of the last move's physent list
+	unsigned int	portalx;		//linked-portal crossings, cumulative; reset per map
+	vec3_t			portalorg, portalvel;	//post-move state of the last crossing move
 } client_t;
 
 #if defined(NQPROT) || defined(Q2SERVER) || defined(Q3SERVER)
@@ -1445,6 +1457,11 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse);
 void SV_PostRunCmd(void);
 void SV_RunCmdCleanup(void);
 void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
+//FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
+extern const char *sv_pmpin_names[SV_PMPIN_COUNT];
+size_t SV_PMPinText(const float *v, char *out, size_t outsz);
+size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
+qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);
 
 void SV_SendClientPrespawnInfo(client_t *client);
 void SV_ClientProtocolExtensionsChanged(client_t *client);

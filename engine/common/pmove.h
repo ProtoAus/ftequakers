@@ -212,7 +212,18 @@ typedef struct
 	  so the rate the mover actually used travels with the count, from the one
 	  line that decided it. */
 	float		tickused;
+
+	/* FTESurf Patch 346: linked-portal crossings committed by this call, at both
+	   sites that set pm_source.c's pms_portalcrossed.  That flag is per tick and
+	   static; this survives the call so the caller can publish it.  Zeroed with
+	   ticksrun. */
+	int			portalcrossings;
 } playermove_t;
+
+/* FTESurf Patch 346: bump on ANY change to pm_source.c or the trace layer that can
+   alter a trajectory.  Recordings pin it (`pmsrcver` in the pin text); a verifier
+   running a different number cannot vouch for a replay and must say so. */
+#define PMSRC_VERSION 1
 
 typedef struct {
 	//standard quakeworld

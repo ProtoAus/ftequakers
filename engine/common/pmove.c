@@ -1452,6 +1452,7 @@ void PM_PlayerMove (float gamespeed)
 	  rather than as stale, for every present and future caller. */
 	pmove.ticksrun = 0;
 	pmove.tickused = 0;
+	pmove.portalcrossings = 0;	//FTESurf Patch 346
 
 	// take angles directly from command
 	pmove.angles[0] = SHORT2ANGLE(pmove.cmd.angles[0]);

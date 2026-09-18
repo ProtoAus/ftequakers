@@ -67,9 +67,15 @@ evalc_t	evalc_bnorm, evalc_bvel, evalc_bcount, evalc_rcontact, evalc_rnorm;
 evalc_t	evalc_forceduck;	//FTESurf Patch 142
 evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
+evalc_t	evalc_pmepoch, evalc_physcrc, evalc_portalx, evalc_portalorg, evalc_portalvel;	//FTESurf Patch 346
 
 void SV_FS_ResetFieldCaches(void)
 {
+	memset(&evalc_pmepoch,   0, sizeof(evalc_pmepoch));		//FTESurf Patch 346
+	memset(&evalc_physcrc,   0, sizeof(evalc_physcrc));
+	memset(&evalc_portalx,   0, sizeof(evalc_portalx));
+	memset(&evalc_portalorg, 0, sizeof(evalc_portalorg));
+	memset(&evalc_portalvel, 0, sizeof(evalc_portalvel));
 	memset(&evalc_bnorm,     0, sizeof(evalc_bnorm));
 	memset(&evalc_bvel,      0, sizeof(evalc_bvel));
 	memset(&evalc_bcount,    0, sizeof(evalc_bcount));
@@ -80,6 +86,145 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_mtick,     0, sizeof(evalc_mtick));		//FTESurf Patch 325
 	memset(&evalc_mtickrate, 0, sizeof(evalc_mtickrate));	//FTESurf Patch 325
 	memset(&evalc_mcarry,    0, sizeof(evalc_mcarry));		//FTESurf Patch 325
+}
+
+/*
+  FTESurf Patch 346 -- THE PIN: every value PM_PlayerMove is handed that the usercmd
+  does not carry, snapshotted per move from the variables the mover actually reads
+  (movevars/pmove after SV_SetSourceMoveVars), never from cvars: five movevars are
+  latched at spawn and entgravity/maxspeed lag by a send frame.  One table, one
+  order, one text form, shared by the recorder's infokeys and by pm_recsim.
+  APPEND ONLY: a reader matches tokens by name, but the fill order is the table.
+*/
+extern cvar_t sv_maxvelocity, pm_trisoup_bevels, pm_rotatedboxhulls, pm_portalcsg_scanall;
+const char *sv_pmpin_names[SV_PMPIN_COUNT] =
+{
+	"pmsrcver", "physmode", "pmtype", "gamespeed",
+	"hullx0", "hully0", "hullx1", "hully1", "capsule",
+	"svmaxvel", "trisoup", "rotboxes", "portalcsg",
+	"gravity", "stopspeed", "maxspeed", "spectatormaxspeed", "accelerate",
+	"airaccelerate", "wateraccelerate", "friction", "waterfriction", "flyfriction",
+	"entgravity", "bunnyspeedcap", "watersinkspeed", "ktjump", "edgefriction",
+	"walljump", "slidefix", "airstep", "pground", "stepdown",
+	"slidyslopes", "autobunny", "bunnyfriction", "stepheight", "ticrate",
+	"maxairspeed", "jumpvelocity", "standablenormal", "bounce", "maxvelocity",
+	"standheight", "duckheight", "duckspeed", "viewheight", "duckviewheight",
+	"noclipspeed", "stamina", "staminajumpcost", "staminalandcost", "staminarecovery",
+	"normalizejump", "jumpaddrise", "jumpzoffset", "walkspeed", "groundtracedist",
+	"bumpcount", "snaptoground", "groundquadrants", "fixslopes", "fixedges",
+	"fixrampbugs", "rampretrace", "viewscale", "ladders", "ladderdampen",
+	"ladderangle", "slide"
+};
+
+static void SV_PMPinFill(float *v)
+{
+	float *o = v;
+	*o++ = PMSRC_VERSION;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
+	*o++ = pmove.player_mins[0];	*o++ = pmove.player_mins[1];
+	*o++ = pmove.player_maxs[0];	*o++ = pmove.player_maxs[1];	*o++ = pmove.capsule;
+	*o++ = sv_maxvelocity.value;	*o++ = pm_trisoup_bevels.value;	*o++ = pm_rotatedboxhulls.value;	*o++ = pm_portalcsg_scanall.value;
+	*o++ = movevars.gravity;	*o++ = movevars.stopspeed;	*o++ = movevars.maxspeed;	*o++ = movevars.spectatormaxspeed;
+	*o++ = movevars.accelerate;	*o++ = movevars.airaccelerate;	*o++ = movevars.wateraccelerate;	*o++ = movevars.friction;
+	*o++ = movevars.waterfriction;	*o++ = movevars.flyfriction;	*o++ = movevars.entgravity;	*o++ = movevars.bunnyspeedcap;
+	*o++ = movevars.watersinkspeed;	*o++ = movevars.ktjump;	*o++ = movevars.edgefriction;	*o++ = movevars.walljump;
+	*o++ = movevars.slidefix;	*o++ = movevars.airstep;	*o++ = movevars.pground;	*o++ = movevars.stepdown;
+	*o++ = movevars.slidyslopes;	*o++ = movevars.autobunny;	*o++ = movevars.bunnyfriction;	*o++ = movevars.stepheight;
+	*o++ = movevars.ticrate;	*o++ = movevars.maxairspeed;	*o++ = movevars.jumpvelocity;	*o++ = movevars.standablenormal;
+	*o++ = movevars.bounce;	*o++ = movevars.maxvelocity;	*o++ = movevars.standheight;	*o++ = movevars.duckheight;
+	*o++ = movevars.duckspeed;	*o++ = movevars.viewheight;	*o++ = movevars.duckviewheight;	*o++ = movevars.noclipspeed;
+	*o++ = movevars.stamina;	*o++ = movevars.staminajumpcost;	*o++ = movevars.staminalandcost;	*o++ = movevars.staminarecovery;
+	*o++ = movevars.normalizejump;	*o++ = movevars.jumpaddrise;	*o++ = movevars.jumpzoffset;	*o++ = movevars.walkspeed;
+	*o++ = movevars.groundtracedist;	*o++ = movevars.bumpcount;	*o++ = movevars.snaptoground;	*o++ = movevars.groundquadrants;
+	*o++ = movevars.fixslopes;	*o++ = movevars.fixedges;	*o++ = movevars.fixrampbugs;	*o++ = movevars.rampretrace;
+	*o++ = movevars.viewscale;	*o++ = movevars.ladders;	*o++ = movevars.ladderdampen;	*o++ = movevars.ladderangle;
+	*o++ = movevars.slide;
+	if (o - v != SV_PMPIN_COUNT)
+		Sys_Error("SV_PMPinFill: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
+}
+
+//name=value, %.9g: every float32 round-trips.  Returns 0 if it would not fit.
+static size_t SV_PMTokens(const char *const *names, const float *v, int n, char *out, size_t outsz)
+{
+	size_t len = 0;
+	int i;
+	for (i = 0; i < n; i++)
+	{
+		if (Q_snprintfz(out+len, outsz-len, "%s%s=%.9g", i?" ":"", names[i], v[i]))
+			{ *out = 0; return 0; }	//truncated
+		len += strlen(out+len);
+	}
+	return len;
+}
+size_t SV_PMPinText(const float *v, char *out, size_t outsz)
+{
+	return SV_PMTokens(sv_pmpin_names, v, SV_PMPIN_COUNT, out, outsz);
+}
+size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz)
+{
+	static const char *names[] = {"surfacefriction", "ducktime", "ducking", "ducked",
+		"msec_carry", "oldbuttons", "stamina", "rampoff", "boardcount", "rampcontact",
+		"srcladder", "ladnx", "ladny", "ladnz"};
+	float v[countof(names)];
+	v[0] = st->surfacefriction;	v[1] = st->ducktime;	v[2] = st->ducking;	v[3] = st->ducked;
+	v[4] = st->msec_carry;	v[5] = st->oldbuttons;	v[6] = st->stamina;	v[7] = st->rampoff;
+	v[8] = st->boardcount;	v[9] = st->rampcontact;	v[10] = st->srcladder;
+	VectorCopy(st->srcladdernormal, v+11);
+	return SV_PMTokens(names, v, countof(names), out, outsz);
+}
+
+//Chunk idx of text, split at spaces, each at most 240 chars: infokey's buffer is 256.
+qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz)
+{
+	const char *s = text, *e, *brk;
+	*out = 0;
+	for (;;)
+	{
+		if (!*s)
+			return false;
+		e = s;
+		brk = NULL;
+		while (*e && e - s < 240)
+		{
+			if (*e == ' ')
+				brk = e;
+			e++;
+		}
+		if (*e && brk)
+			e = brk;	//cut at the last token boundary
+		if (!idx--)
+		{
+			if ((size_t)(e - s) >= outsz)
+				return false;
+			memcpy(out, s, e - s);
+			out[e - s] = 0;
+			return true;
+		}
+		s = (*e == ' ') ? e+1 : e;
+	}
+}
+
+//FNV-1a over the physent list AddAllLinksToPmove built (the world, [0], is fixed),
+//field by field so struct padding cannot enter it.  Folded to 24 bits: QC floats.
+static unsigned int SV_PhysentDigest(void)
+{
+	unsigned int h = 2166136261u;
+	int i;
+#define PD(p,n) do { const qbyte *b_ = (const qbyte*)(p); size_t n_ = (n); while (n_--) { h ^= *b_++; h *= 16777619u; } } while(0)
+	PD(&pmove.onladder, sizeof(pmove.onladder));
+	for (i = 1; i < pmove.numphysent; i++)
+	{
+		const physent_t *pe = &pmove.physents[i];
+		const char *mn = pe->model ? pe->model->name : "";
+		PD(&pe->info, sizeof(pe->info));
+		PD(&pe->nonsolid, 1);	PD(&pe->isportal, 1);	PD(&pe->slideflags, 1);
+		PD(&pe->forcecontentsmask, sizeof(pe->forcecontentsmask));
+		PD(pe->origin, sizeof(vec3_t));	PD(pe->angles, sizeof(vec3_t));
+		PD(pe->mins, sizeof(vec3_t));	PD(pe->maxs, sizeof(vec3_t));
+		PD(&pe->scale, sizeof(pe->scale));
+		PD(mn, strlen(mn));
+	}
+#undef PD
+	return (h ^ (h >> 24)) & 0xffffff;
 }
 
 void QDECL SV_NQPhysicsUpdate(cvar_t *var, char *oldvalue)
@@ -8100,6 +8245,20 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 		pmove.onladder = false;
 
 	pmove.world = &sv.world;
+
+	//FTESurf Patch 346: snapshot what the mover is about to be handed -- after every
+	//input above is final, so the pin is what ran and not what was configured.
+	if (movevars.physicsmode == PHYSMODE_SOURCE)
+	{
+		float pin[SV_PMPIN_COUNT];
+		SV_PMPinFill(pin);
+		if (!host_client->pmepoch || memcmp(pin, host_client->pmpin, sizeof(pin)))
+		{
+			memcpy(host_client->pmpin, pin, sizeof(pin));
+			host_client->pmepoch++;
+		}
+		host_client->physcrc = SV_PhysentDigest();
+	}
 #if 0
 {
 	int before, after;
@@ -8253,6 +8412,30 @@ if (sv_player->v->health > 0 && before && !after )
 			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movecarry", ev_float, &evalc_mcarry);
 			if (ev)
 				ev->_float = pmove.msec_carry;
+
+			//FTESurf Patch 346: the pin's epoch, the physent digest, and the
+			//portal crossings the mover committed (with their post-move state).
+			host_client->portalx += pmove.portalcrossings;
+			if (pmove.portalcrossings)
+			{
+				VectorCopy(pmove.origin, host_client->portalorg);
+				VectorCopy(pmove.velocity, host_client->portalvel);
+			}
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_pmepoch", ev_float, &evalc_pmepoch);
+			if (ev)
+				ev->_float = host_client->pmepoch;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_physcrc", ev_float, &evalc_physcrc);
+			if (ev)
+				ev->_float = host_client->physcrc;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_portalx", ev_float, &evalc_portalx);
+			if (ev)
+				ev->_float = host_client->portalx;
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_portalorg", ev_vector, &evalc_portalorg);
+			if (ev)
+				VectorCopy(host_client->portalorg, ev->_vector);
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_portalvel", ev_vector, &evalc_portalvel);
+			if (ev)
+				VectorCopy(host_client->portalvel, ev->_vector);
 		}
 	}
 

@@ -1126,6 +1126,7 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 			AngleVectors (pmove.angles, pms_forward, pms_right, pms_up);
 
 			pms_portalcrossed = true;
+			pmove.portalcrossings++;	/*Patch 346*/
 		}
 
 		/* ---- FTESurf Patch 256: the displacement-seam probe -----------------
@@ -2862,6 +2863,7 @@ static void PMSrc_WalkMove (void)
 			VectorSubtract (pmove.velocity, pmove.basevelocity, pmove.velocity);
 			AngleVectors (pmove.angles, pms_forward, pms_right, pms_up);
 			pms_portalcrossed = true;
+			pmove.portalcrossings++;	/*Patch 346*/
 			/* No StayOnGround: it traces 2 up then stepheight+2 down and snaps
 			   the player to whatever it finds, which one tick after emerging
 			   from a doorway is a floor they have no relationship to yet. */

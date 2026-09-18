@@ -30283,6 +30283,40 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 346 — the engine publishes what the mover was handed  *(APPLIED -- `common/pmove.h` (PMSRC_VERSION; playermove_t gains `portalcrossings`, appended), `common/pmove.c` (zeroed with ticksrun), `common/pm_source.c` (counted at both crossing sites), `server/server.h` (client_t gains the pin snapshot, epoch, physent digest and portal state, appended; SV_PMPIN_COUNT), `server/sv_user.c` (the pin table/fill/text, the physent digest, snapshot before PM_PlayerMove, five optional QC fields after it), `server/pr_cmds.c` (`*pmpinN` / `*pmstateN` per-client infokeys), `server/sv_init.c` (per-map reset), `server/sv_ccmds.c` (`pm_pin`). No protocol change, no ABI bump, no behaviour change to any move. VERIFIED: `cfg/test/p346pin.cfg`; regression `p322det.cfg`, `p345angle.cfg`.)*
+
+**Problem.** A recording pins the map, the zones and the inputs, but not the
+physics: which movevars, hull, pm_type and trace settings the mover ran under.
+pm_recsim took them from the running server.  QC cannot state them honestly
+either: five movevars are copied into `movevars` only at spawn, and per-client
+entgravity/maxspeed reach the mover a send frame after QC writes them, so a
+`cvar()` or edict read can name a value the run never used.
+
+**Change.** In SV_RunCmd, after every input is final and just before
+PM_PlayerMove, the engine fills a 70-value snapshot of what the mover is handed:
+all of movevars, pm_type, gamespeed, hull x/y, capsule, the raw sv_maxvelocity
+the pre-move clamp uses, the three unlocked trace cvars, and PMSRC_VERSION (a
+constant to bump on any trajectory-affecting change).  A per-client epoch
+starts at 1 and bumps when the snapshot changes (memcmp; the fill writes every
+slot).  A 24-bit FNV digest covers the ordered physent list AddAllLinksToPmove
+built.  After the move, optional fields publish `run_pmepoch`, `run_physcrc`,
+`run_portalx` (cumulative linked-portal crossings) and `run_portalorg` /
+`run_portalvel` (post-move state of the crossing move).  `infokey(player,
+"*pmpinN")` / `"*pmstateN"` return the snapshot and the carried pm_source state
+as `name=value` %.9g text in chunks of 240 characters or less.  They return ""
+before the first move, and they never fall through to client userinfo.  Text is
+formatted only when asked for, not per move.  `pm_pin [slot]` prints all of it.
+
+**Verified.** bhop_eazy listen server: epoch 2 and physent digest a87ef2,
+identical on a second idle read.  After `sv_friction 8`, the pin still says
+friction=4 with the epoch unchanged (spawn-latched: the pin is the mover's
+value).  `pm_jumpvelocity 300`, `sv_maxspeed 300` and `pm_jumpvelocity 0` each
+move the epoch by exactly one and show the new value.  Not predicted:
+entgravity=0, which pm_source.c treats as 1.  pm_dettest hashes are identical
+before and after and equal to Patch 325's record.  pm_recsim output is
+byte-identical.  NOT exercised: the portal counter (no crossing in the
+harness).  0 new warnings.
+
 ## Patch 345 — `pm_recsim` rounds the recorded angle back onto the wire grid  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + SV_RecSim_AngleShort). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p345angle.cfg`, before/after on two exes, the p344 subjects and controls.)*
 
 **Problem.** The `in` row prints SHORT2ANGLE(wire short) at %.4f, and pm_recsim

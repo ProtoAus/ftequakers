@@ -4850,6 +4850,33 @@ static void SV_RecSim_f (void)
 	Z_Free(rid);
 }
 
+/* FTESurf Patch 346: print what each client's mover was handed on its last move --
+   the text QC copies into a recording -- plus the epoch, physent digest and portal
+   count.  `pm_pin [slot]`. */
+static void SV_PMPin_f (void)
+{
+	char text[2048];
+	int i, only = Cmd_Argc() > 1 ? atoi(Cmd_Argv(1)) : -1;
+	for (i = 0; i < sv.allocated_client_slots; i++)
+	{
+		client_t *cl = &svs.clients[i];
+		if (cl->state < cs_spawned || (only >= 0 && i != only))
+			continue;
+		Con_Printf("pm_pin %i \"%s\"  epoch %u  physcrc %06x  portalx %u\n",
+		           i, cl->name, cl->pmepoch, cl->physcrc, cl->portalx);
+		if (!cl->pmepoch)
+			continue;
+		if (SV_PMPinText(cl->pmpin, text, sizeof(text)))
+			Con_Printf("  pin   %s\n", text);
+		if (SV_PMStateText(&cl->pmsrc, text, sizeof(text)))
+			Con_Printf("  state %s\n", text);
+		if (cl->portalx)
+			Con_Printf("  last crossing: org %.9g %.9g %.9g  vel %.9g %.9g %.9g\n",
+			           cl->portalorg[0], cl->portalorg[1], cl->portalorg[2],
+			           cl->portalvel[0], cl->portalvel[1], cl->portalvel[2]);
+	}
+}
+
 /*
 ==================
 SV_InitOperatorCommands
@@ -4984,6 +5011,12 @@ void SV_InitOperatorCommands (void)
 	                "produced them, applying its warp/ride/inend records, and "
 	                "measures whether the trajectory comes back. "
 	                "Measures only -- it tests no zone and refuses no run.");
+
+	//FTESurf Patch 346
+	Cmd_AddCommandD("pm_pin", SV_PMPin_f,
+	                "FTESurf: pm_pin [slot].  Prints what each client's mover was "
+	                "handed on its last move (the pin a recording states), its "
+	                "epoch, the physent digest and the portal-crossing count.");
 
 //	Cmd_AddCommand ("reallyevilhack", SV_ReallyEvilHack_f);
 }
