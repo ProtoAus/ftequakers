@@ -30283,6 +30283,28 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 353 — surfd: the run reply names its board, stage legs get their own budget  *(APPLIED -- surfd only, no engine or QC change: `surfd/surfd.py` (submit_run), `surfd/test_board.py` (sections 8, 12, 13), `surfd/b65stub.py` (`cert` mode), `surfd/README.md`. VERIFIED: test_board / test_replays / test_surfd / test_join, locally in a venv.)*
+
+**Problem.** The `/api/run` reply did not say which board the run landed on,
+so a run demoted by `certifiable()` could only be shown to its player as a
+rank on a board they never see. Stage legs posted from main runs (the coming
+stage fill-in) would share the 120/min loopback budget with every finish, and
+one row cap with main runs.
+
+**Change.** The reply adds `tier` (after demotion) and `prevms` (the standing
+row before the submit, or 0). Run posts are bucketed `run` (leg 0) / `stage`
+(leg > 0); trusted sources get `RUN_RATE_MAX_TRUSTED` (3840), others keep 120.
+Main rows count against `MAX_RUNS`, stage rows against `MAX_STAGE_RUNS`
+(1,000,000). b65stub gains `cert` (tier by the posted cert bits); `rank`/
+`norank` are unchanged, as the old-surfd controls.
+
+**Verified.** New sections 12-13, each with a control: tier/prevms on first,
+demoted, slower and faster submits; a stage flood refused at the trusted cap
+while leg 0 still stores (leg-0 flood does refuse leg 0); 12 lobbies x 30 stage
+posts a minute from loopback pass, and the same traffic at the old cap is
+refused; an untrusted source still stops at 120; the stage row cap leaves main
+rows alone. Live DB before deploy: 9 rows (7 main, 2 stage), all ranked.
+
 ## Patch 352 — the physent digest no longer depends on the player slot count  *(APPLIED -- `server/sv_user.c` (SV_PhysentDigest), `server/sv_ccmds.c` (a malformed successor row). No protocol or ABI change; changes what `pe` records mean, so files from engines 346-351 no longer match a 352 replay's digest (their trajectory lines are unaffected). VERIFIED: `cfg/test/p352slots.cfg`, and live on the Pi after deploy.)*
 
 **Problem.** A live lobby recording replayed on the Pi matched every sample
