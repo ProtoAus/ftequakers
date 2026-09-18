@@ -30283,6 +30283,28 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 351 — three online-board bugs: a capitalised map, the room list's absorb, `*wrank` ticks  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (Online_Parse), `src/client/cl_scores.qc` (status witnesses), `src/server/sv_lobby.qc` (Lobby_RankPending). VERIFIED: `cfg/test/p351case.cfg`.)*
+
+**Problem.**
+- surfd lowercases the map it echoes; `Online_Describes` compared that with
+  `serverkey("map")`, so a map whose file has capitals sat on "asking the
+  leaderboard…" forever.
+- `Online_Parse` called `Players_AbsorbBoard` before setting `OBS_OK`, and the
+  absorb gates on Describes, which needs OK: the room list never took a row
+  (p340pi.log's `rows 0`).
+- `Lobby_RankPending` wrote `*wrank`'s ticks with `%g`, so 1000000+ ticks went
+  to exponent form and the client's exact subject match could never fire.
+
+**Change.** Keep our spelling when the echo differs only in case (strcasecmp);
+set OK before the absorb; `%d` ticks. `scores status` prints `shows N` and
+`room list: N best time(s)`.
+
+**Verified.** A/B against a csprogs of 0d872fa plus only the witness lines.
+Bhop_Mukiology (with a borrowed local zone file, since no capitalised map ships
+zones): shows 1 and "no ranked clean times" vs shows 0 and "asking…".
+bhop_eazy: room list 1 vs 0, shows 1 in both. The `%d` fix is not exercised
+(a 1M-tick run cannot be scripted).
+
 ## Patch 350 — the map selector's public lobbies are a 4 x 3 grid in a narrower panel  *(APPLIED -- mod-side only, no engine change: `src/menu/m_main.qc` (screen_create, bootcheck layout line), `src/menu/m_lobby.qc` (comment). VERIFIED: `cfg/test/p350grid{720,1080,860}.cfg`.)*
 
 **Problem.** Lobby cells were one row per `Lob_Count()` columns, capped at two
