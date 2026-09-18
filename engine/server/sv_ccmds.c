@@ -4192,7 +4192,7 @@ typedef struct
 	char   kind[16];	/* tele telerel bhop speed push -- and whatever comes next */
 } recsim_warp_t;
 
-/* Patch 343: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
+/* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
    SV_BaseVelocityFrame's order, before the move it precedes in the file: `pay`
    adds (1 + tickrate*0.5)*bv to velocity, `arm` sets pmove.basevelocity from
    this move on.  Keyed to the `in` row it precedes, not to <mt>: a move that
@@ -4252,7 +4252,7 @@ static void SV_RecSim_f (void)
 	float         sjrule = -1, sjoff[3] = {0,0,0};
 	int           filever = 0;
 	float         hdrtick = 0;					/* header `tickrate`: the cash-out's TICK_INTERVAL */
-	int           inend_mt = -1;				/* Patch 343: v8 closing horizon */
+	int           inend_mt = -1;				/* Patch 344: v8 closing horizon */
 	float         inend_carry = 0;
 
 	if (!*fname)
@@ -4460,7 +4460,7 @@ static void SV_RecSim_f (void)
 	else
 		Con_Printf("  startjit  ^3no key^7 -- the rule was off, or this file"
 		           " predates build 83\n");
-	/* Patch 343: E5 measured the v7 form false (surf_trance: zero warps, ten
+	/* Patch 344: E5 measured the v7 form false (surf_trance: zero warps, ten
 	   boosters).  v7 can only vouch for what it can express; v8 adds the carrier.
 	   Neither expresses a linked_portal_door crossing, which the mover commits. */
 	if (!nwarp)
@@ -4505,7 +4505,7 @@ static void SV_RecSim_f (void)
 		float  open_last = 0;
 		int    seeded = -1, mode, nbad = 0;
 		int    wcur = 0, wapplied = 0;		/* Patch 328 */
-		int    rcur = 0, rapplied = 0, rskew = 0;	/* Patch 343 */
+		int    rcur = 0, rapplied = 0, rskew = 0;	/* Patch 344 */
 		vec3_t carrier;
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* The mover's carried state at the top of a run: every field at its
@@ -4575,7 +4575,7 @@ static void SV_RecSim_f (void)
 				Con_Printf("  seed      ^1no sample precedes the first `in` row^7\n");
 			pmove.msec_carry = ins[0].carry;
 			wcur = 0;			/* Patch 328: each pass replays the warps */
-			rcur = 0;			/* Patch 343: and the carrier */
+			rcur = 0;			/* Patch 344: and the carrier */
 			VectorClear(carrier);
 
 			for (i = 0; i < nin; i++)
@@ -4588,7 +4588,7 @@ static void SV_RecSim_f (void)
 				if (stopat > 0 && r->pk - ins[0].pk >= stopat)
 					break;
 
-				/* PATCH 343: the carrier, in SV_BaseVelocityFrame's order -- the
+				/* PATCH 344: the carrier, in SV_BaseVelocityFrame's order -- the
 				   cash-out, then the hand-over -- before this row's move. */
 				for (; rcur < nride && rid[rcur].row <= i; rcur++)
 				{
@@ -4612,7 +4612,7 @@ static void SV_RecSim_f (void)
 					continue;
 
 				/* THE DURATION, DERIVED from the successor row -- or, for the
-				   last row, from `inend` (Patch 343; v8).  Without it the final
+				   last row, from `inend` (Patch 344; v8).  Without it the final
 				   move, the one the finish is latched on, cannot be run. */
 				if (i+1 < nin)
 					{ next_mt = ins[i+1].mt; next_carry = ins[i+1].carry; }
@@ -4813,7 +4813,7 @@ static void SV_RecSim_f (void)
 				           "  On a map with teleports arm 3 CANNOT\n        run to"
 				           " the end from a v%i file, whatever the mover does."
 				           "^7\n", filever);
-			/* Patch 343.  rskew counts records whose <mt> disagrees with the row
+			/* Patch 344.  rskew counts records whose <mt> disagrees with the row
 			   they precede -- the grammar says they must match, so nonzero is a
 			   writer or ordering fault, not a physics result. */
 			if (nride)

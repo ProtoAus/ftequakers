@@ -30283,33 +30283,10 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
-## Patch 343 — a replay's segment column draws its own rows, not the run's last one  *(APPLIED -- mod-side only, no engine change: `src/client/cl_watch.qc`, fixture `cfg/test/b86c.cfg`.)*
+## Patch 344 — `pm_recsim` crosses a booster: it reads `ride` and `inend`  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + one struct). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p344ride.cfg`, before/after on two exes, three subjects and five controls.)*
 
-**Problem.** `rec_wt_sq*` captured eight columns and never gained `seq_eend`
-(build 65) or `seq_sub` (build 66). `Watch_SeqApply` refilled only what it had,
-so every replayed row drew its absolute and its Jump/Bhop word from whatever the
-BUILD PASS had left in the live ring -- the run's last rows, pinned against
-whichever rows happened to be on screen. It read as plausible data: on
-bhop_eazy's pb every row said `Bhop:` and the absolutes climbed 351 -> 386 -> 418
-while every delta beside them was negative, which is arithmetically impossible
-and is the signature to look for.
-
-**Change.** Two capture columns, `rec_wt_sqeend` / `rec_wt_sqsub` (512 floats
-against the 2048 already there), written in `Watch_SeqRow` from row `p` like
-every column beside them -- which makes a merge right for free, since the
-decrement above points at the row being rewritten and `Seq_Push` has already put
-the later half's answer there -- and read back in `Watch_SeqApply`. The absolute
-is now the file's and the zero stays the viewer's (`seq_eref = HUD_EnergyRef()`),
-which is exactly the approximation `Watch_Splits` has documented since build 39.
-The park pair (`Watch_SeqSave`/`Restore`) already carried all three from 342.
-
-**Verified.** `cfg/test/b86c.cfg`, A/B against a stash of the patch, same replay
-position (0:13.39 / 0:13.41) on bhop_eazy's pb: before, ten rows all reading
-`Bhop:` with the rising-absolute/negative-delta contradiction; after, `Jump:` and
-`Bhop:` interleaved with per-row absolutes. `replay stop` returns the player's
-own column intact. 0 new warnings (cl_hud.qc:2007 pre-existing).
-
-## Patch 343 — `pm_recsim` crosses a booster: it reads `ride` and `inend`  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + one struct). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p343ride.cfg`, before/after on two exes, three subjects and five controls.)*
+First committed as "Patch 343" (3e97624e2), colliding with the mod-side 343
+above; renumbered, code unchanged.
 
 **Problem.** QC build 85 (FTESURF-REC 8) records the basevelocity carrier
 (`ride <pk> <mt> arm|pay <bx by bz>`) and the closing horizon (`inend <mt>
@@ -30341,6 +30318,32 @@ surf_kitsune v7, b83trace v7, e3trace v6): every ARM, DIVERGED, seed and warp
 line is byte-identical before and after.  NOT verified: a multi-command `arm`
 span.  No such recording exists yet (the fleet is on v7), and it needs a
 hand-played run over a booster.  0 new warnings.
+
+## Patch 343 — a replay's segment column draws its own rows, not the run's last one  *(APPLIED -- mod-side only, no engine change: `src/client/cl_watch.qc`, fixture `cfg/test/b86c.cfg`.)*
+
+**Problem.** `rec_wt_sq*` captured eight columns and never gained `seq_eend`
+(build 65) or `seq_sub` (build 66). `Watch_SeqApply` refilled only what it had,
+so every replayed row drew its absolute and its Jump/Bhop word from whatever the
+BUILD PASS had left in the live ring -- the run's last rows, pinned against
+whichever rows happened to be on screen. It read as plausible data: on
+bhop_eazy's pb every row said `Bhop:` and the absolutes climbed 351 -> 386 -> 418
+while every delta beside them was negative, which is arithmetically impossible
+and is the signature to look for.
+
+**Change.** Two capture columns, `rec_wt_sqeend` / `rec_wt_sqsub` (512 floats
+against the 2048 already there), written in `Watch_SeqRow` from row `p` like
+every column beside them -- which makes a merge right for free, since the
+decrement above points at the row being rewritten and `Seq_Push` has already put
+the later half's answer there -- and read back in `Watch_SeqApply`. The absolute
+is now the file's and the zero stays the viewer's (`seq_eref = HUD_EnergyRef()`),
+which is exactly the approximation `Watch_Splits` has documented since build 39.
+The park pair (`Watch_SeqSave`/`Restore`) already carried all three from 342.
+
+**Verified.** `cfg/test/b86c.cfg`, A/B against a stash of the patch, same replay
+position (0:13.39 / 0:13.41) on bhop_eazy's pb: before, ten rows all reading
+`Bhop:` with the rising-absolute/negative-delta contradiction; after, `Jump:` and
+`Bhop:` interleaved with per-row absolutes. `replay stop` returns the player's
+own column intact. 0 new warnings (cl_hud.qc:2007 pre-existing).
 
 ## Patch 342 — `say <text>` sends again, the board's release closes it, per-row energy zeros, the air family goes green, the clock shows PB pace  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc`, `cl_scores.qc`, `cl_board.qc`, `cl_hud.qc`, `cl_watch.qc`, `cl_timer.qc`, `cl_results.qc`, `cl_hudedit.qc`, `cl_main.qc`, `src/menu/m_main.qc`, `ftesurf/cfg/default.cfg`, fixtures `cfg/test/b86{a,b}.cfg`.)*
 
