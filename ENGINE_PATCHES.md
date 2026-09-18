@@ -30296,6 +30296,33 @@ format".  Unknown records inside a v9 file are still skipped.
 v10, and v10 plus a `session` row, REFUSE; v9 plus an unknown `stagepost` row
 PASS 660.  Control: the Patch 354 binary PASSes the v10 file.
 
+## Patch 355 — no Community chip; a demoted run is told and kept in Local  *(APPLIED -- mod-side, no engine change: `src/shared/sh_defs.qc` (WR_UNRANKED, WRT_*, TF_UNCERT, FS_CertWhy), `src/server/sv_lobby.qc` (RankPending/RankAnswer gain the key and three fields, Lobby_SayUnranked, probe 3), `src/client/cl_results.qc` (Results_KeyRank, class-aware PB/rank), `cl_lobbytime.qc` (certified/uncertified split, `lobbytime` hook), `cl_scores.qc`/`cl_online.qc`/`cl_players.qc` (OB_TIER), `cl_main.qc`; `surfd/surfd.py` bucket fix. VERIFIED: `cfg/test/p355{unrsv,unrcl,keep,rk}.cfg`.)*
+
+**Problem.** The board's ranked/community chip showed a tier that only ever
+held runs from our own lobbies that `certifiable()` demoted (0 live rows). With
+the chip gone such a run would vanish; the card could also show a community
+position as "#N of M".
+
+**Change.**
+- `*wrank` = `map track leg ticks state rank of stored prevms tier` (%d ticks and
+  prevms); `Results_KeyRank` folds a community answer into client-only
+  `WR_UNRANKED` and the card draws "--  unranked: <FS_CertWhy>".
+- A demoted, stored run gets a PRINT_CHAT line "board: unranked (<reason>)".
+- Local keeps the best certified and the best uncertified `_lobby.rec` per leg,
+  classed by the header `flags` (stage stubs now carry the run's TF_UNCERT
+  bits); lobby.pb stays certified; the card's PB/rank compare within the class.
+- The chip, its state and its console word are gone; boards draw OB_TIER.
+- surfd picks the run/stage bucket from the parsed leg ("00" was a second budget).
+
+**Verified.** Dedicated server + b65stub `cert`: probe 1 -> "... 1 3 17 1 20000
+0", "#3 of 17"; probe 3 -> "... 20000 1", state 5, "unranked: input mode" + the
+chat line; the 1235 subject never matched; old `rank` stub reads #3 of 17.
+`lobbytime keep` arms K0-K6 (certified 5000 survives a faster unranked 4000;
+lobby.pb only ever certified; a stale uncertified pb line dropped). Screenshots:
+Local "input mode"/"lobby" tags; online tab without tier chips. test_board
+passes. NOT verified: a real demoted lobby finish end to end (needs a human
+with m_accel on a lobby), and the pending state (samples too sparse).
+
 ## Patch 354 — `pm_verify` prints a verdict on every exit; the surfd sweeper  *(APPLIED -- engine `server/sv_ccmds.c`; FTESurf `surfd/sweep.py`, `surfd/test_sweep.py`, `surfd/README.md` (FTESurf 44c3545).)*
 
 **Problem.** The first sweep of the live ledger recorded one ERROR ("no VERIFY
