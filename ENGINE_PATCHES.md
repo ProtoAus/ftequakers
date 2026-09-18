@@ -30283,6 +30283,31 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 368 — a lobby `retry` keeps its recording  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_RecDestream; SV_RecClose reports a buffered file's size), `src/server/sv_saveloc.qc` (SV_RetryPoint destreams before the save). VERIFIED: FTESurf `cfg/test/rt1sv.cfg` + `rt1cl.cfg`, `p364rewind.cfg`.)*
+
+**Problem.** Measured on a lobby-config server with the stub surfd: a `retry`
+mid-run submitted `flags=0 tier=ranked rec=` -- a clean ranked run with no
+replay.  A lobby streams, a stream has no prefix for the retry slot (build 66
+assumed lobbies had no save points; per-player saves came in Patch 333), and
+the map_restart ended it; a retry keeps a clean run clean by design.  So a
+retry shed the run's recording and the time still ranked.
+
+**Change.** SV_RetryPoint reads the stream back into a buffer before writing
+the retry state (SV_RecDestream: close, buf_loadfile, line count must match,
+remove the part file; a failed read drops the recording, the old outcome).
+The retry then takes P364's buffered path: prefix, cold rewind, `pause retry`,
+`session`.  Only the retry does it -- it needs the player alone on the server;
+every lobby save doing it would buffer 32 runs.  SV_RecClose's buffered branch
+now reports its size (a one-argument fseek), so the replay row is not -1.
+
+**Verified.** rt1cl.cfg, three finishes on one lobby.  Before: clean `rec`
+64 KB; save-load flags 137 `rec=`; retry flags 0 `rec=`.  First cut read the
+OPEN part file: "0 of 358 lines" (stdio-buffered), retry unchanged.  After:
+retry flags 0, `rec=0000356_..._run.rec`, recbytes 68652 = the file's size,
+v10 `pause .. 88 retry` / `session 2`, reccheck ok, 88 + 268 = 356; pm_verify
+REFUSE (retry pauses are not replayed).  p364rewind: all four arms as before.
+NOT FIXED: a lobby save-load still drops the recording (segmented, no replay).
+
 ## Patch 367 — pm_verify replays a Multi-Session run (FTESURF-REC 10)  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `pause`/`session`/per-session `seed`, the floor window, the session clock and resume checks); FTESurf `src/server/sv_timer.qc` (grammar block only). VERIFIED: FTESurf `cfg/test/p367verify.cfg`, `p356newer.cfg`, `p367ctl.cfg`.)*
 
 **Problem.** pm_recsim and pm_verify refused every v10 file (Patch 364), so a
