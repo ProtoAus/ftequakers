@@ -30395,8 +30395,11 @@ surf_utopia, lobby.cfg) on the 358 and 362 binaries, cache state set per arm:
 - Wrong bytes cached, 358 server: the 358 client loads none.  The 362 client
   before the va() fix downloaded to `loadworker_3` and then ended the game;
   after it, one download to the right name, loaded.
-Pi: built natively (`fteqw-svarm64` md5 0191dfb3, 0 warnings); pm_dettest on
-bhop_eazy prints the same 21 lines as the 358 binary.
+Pi: built natively from 655006a43 (`fteqw-svarm64` md5 cb063eac, 0 warnings);
+pm_dettest on bhop_eazy prints the same 21 lines as the 358 binary, and
+pm_verify still PASSes a live surf_kitsune file (5491 ticks).  On all 12 lobbies
+since 2026-09-18 19:04 UTC: the 0.1.7 client with no cache downloads the
+fleet's csprogs from lobby 1 and loads CSQC.  The client half ships in 0.1.8.
 
 ## Patch 361 — the completion banner  *(APPLIED -- mod-side only, no engine change: new `src/client/cl_banner.qc`; `cl_results.qc` (card held behind the banner, Results_Drawn, toast clear), `cl_lobbytime.qc` (LT_Keeps, LT_StatsAreMine from the owner stat), `cl_main.qc`, `cl_hudedit.qc`/`cl_hud.qc` (editor row, HE_MAX/HUDE_MAX 20); server stat 99 STAT_FS_STAGEENDPBWAS (`sv_timer.qc` SV_StageClose) and stat 102 STAT_FS_STATOWNER (`sv_player.qc`), `sv_main.qc`; `default.cfg` hud_banner block; `tools/seed_csprogs.py` keeps other hashes. VERIFIED: `cfg/test/p361bn{syn,listen,lob}.cfg`.)*
 
