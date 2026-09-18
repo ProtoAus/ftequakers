@@ -30283,6 +30283,40 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 367 — pm_verify replays a Multi-Session run (FTESURF-REC 10)  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `pause`/`session`/per-session `seed`, the floor window, the session clock and resume checks); FTESurf `src/server/sv_timer.qc` (grammar block only). VERIFIED: FTESurf `cfg/test/p367verify.cfg`, `p356newer.cfg`, `p367ctl.cfg`.)*
+
+**Problem.** pm_recsim and pm_verify refused every v10 file (Patch 364), so a
+Multi-Session run (Patch 365) could only rank unbadged.  Reading one also
+turned up two facts the grammar did not state: a Multi-Session `pause` carries
+the counter AFTER the last move (a closing horizon, as `inend`), where a
+retry/load pause carries the last row's pre-move counter; and the `pm`/`pe`
+floor records written as a session opens name the previous session's last row
+(`rec_rec_in - 1`), so read as written they put the countdown's pin
+(pmtype 5) on a move that ran normally.
+
+**Change.** Each session is replayed on its own counter: the last row before a
+pause takes its duration from the pause, the session reseeds from its `seed`
+(carried state included), the carrier clears, the sweep origin restarts at the
+seed, and the clock runs as `<ticks> + (mt - <mt>)`.  State records between a
+`pause` and the next `in` row bind to that row; a warp there is imposed on the
+seed.  At each pause the replay checks the clock (the trace's ticks at the
+pause's horizon = the pause's = the session's) and the resume (the seed within
+0.0001 u and u/s of the replayed state -- the save state is written at %.4f);
+either failing is a HOLD, named before the divergence it causes.  REFUSE: a
+retry/load pause (no duration for the move before it), an unknown reason, a
+pause no session answers, a malformed session, 10 with no pause, above 10.
+The grammar block now states both pause meanings and the floor rule.
+
+**Verified.** ms1listen.cfg's two finishes (buffered, streamed): PASS ticks 404
+rows 386 and 447 rows 441; ARM 1 all moves exact, ARM 4 every packet; resume
+gaps 0 u / 4.6e-05 u/s and 0 / 1.5e-05 (the %.4f velocity).  Derived: pause
+and session ticks -10 (end to match) HOLD "the trace parks the clock at 123,
+the pause says 113"; the seed moved 16 u HOLD "session 2 resumes 16 u"; the
+floor lines moved above the pause HOLD state at row 122; retry, unknown
+reason, no session, 10-with-no-pause, a malformed session all REFUSE.  v9
+b352fin / p356_v9extra still PASS 660.  Control: the Patch 364 binary REFUSEs
+the buffered file ("a newer format").  reccheck: both files ok, 150/150.
+
 ## Patch 366 — the lobby rotation waits for runs in progress  *(APPLIED -- mod-side only, no engine change: `src/server/sv_lobby.qc` (Lobby_Cycle: the hold, capped by `lobby_cycle_hold`), `sv_resume.qc` (publishes a run in progress; parks as `rotate`), `lobby.cfg`. VERIFIED: `cfg/test/ms2sv.cfg` + `ms2cl.cfg`.)*
 
 **Problem.** A timed rotation changed the map under whoever was mid-run.

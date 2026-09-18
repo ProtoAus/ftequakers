@@ -4194,6 +4194,7 @@ typedef struct
 	char   kind[16];	/* tele telerel bhop speed push -- and whatever comes next */
 	int    row;			/* Patch 347, v9: the `in` row whose move it followed; -1 = v8, bind by <mt> */
 	int    fl;			/* v9: 1 = FL_ONGROUND after it */
+	int    preseed;		/* Patch 367: written before session N's first row: imposed on its seed */
 } recsim_warp_t;
 
 /* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
@@ -4231,6 +4232,22 @@ typedef struct
 	int    row, n;
 	vec3_t org, vel;
 } recsim_portal_t;
+/* Patch 367: a v10 session and the Multi-Session pause that closed the one before
+   it.  That pause's <mt> <carry> are the closing horizon, as `inend`; a retry/load
+   pause states the last row's PRE-move counter instead, so it cannot be replayed. */
+typedef struct
+{
+	int    row;			/* its first `in` row */
+	int    pmt, pticks;	/* the pause */
+	float  pcarry;
+	int    n, mt, ticks;	/* `session` */
+	float  carry;
+	qboolean seeded, stateok;
+	vec3_t org, vel;
+	int    ground;
+	pmsourcestate_t st;
+} recsim_sess_t;
+#define RECSIM_SESS_TOL 0.0001f	/* the save state's %.4f (sv_saveloc.qc SV_SaveWriteState) */
 
 static short SV_RecSim_AngleShort (float a)
 {
@@ -4332,6 +4349,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	int           endticks = -1, nresume = 0, nghost = 0, nrestart = 0;
 	char          hdrzsrc[32] = "", hdrzcrc[32] = "", hdrzrule[32] = "";
 	func_t        vf_step = 0;
+	/* Patch 367: v10 sessions */
+	recsim_sess_t *ses = NULL;
+	int           nses = 0, npause = 0;
+	const char   *sesbad = NULL;		/* a structure this replay cannot follow */
+	char          pausewhys[64] = "";
 
 	if (!*fname)
 	{
@@ -4365,6 +4387,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	for (pass = 0; pass < 2; pass++)
 	{
 		int cin = 0, csam = 0, cwarp = 0, cride = 0, cpm = 0, cpe = 0, cportal = 0;
+		/* Patch 367: from a `pause` to the next `in` row, state records are the
+		   next session's floor: they apply from its first row, whatever <row> says. */
+		int cses = 0, ppmt = 0, pptk = 0;
+		float ppc = 0;
+		qboolean floorwin = false, openpause = false;
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
@@ -4460,6 +4487,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					r->nsam = csam;
 				}
 				cin++;
+				floorwin = false;
 			}
 			/* Patch 328.  Before this, an unknown record was not "skipped with a
 			   count" -- it was INVISIBLE: the two-pass allocator counted only
@@ -4493,6 +4521,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						VectorSet(w->vel, d[3], d[4], d[5]);
 						Q_strncpyz(w->kind, kb, sizeof(w->kind));
 					}
+					w->preseed = 0;
+					if (floorwin && w->mt >= 0)
+						{ w->row = cin; w->preseed = openpause ? cses + 1 : cses; }
 				}
 				cwarp++;
 			}
@@ -4547,22 +4578,93 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				nghost++;
 			else if (!strncmp(ln, "restart ", 8) && pass == 0)
 				nrestart++;
-			/* Patch 347: v9's exact seed and its three state tracks. */
-			else if (!strncmp(ln, "seed ", 5) && pass == 0)
+			/* Patch 347: v9's exact seed and its three state tracks.  Patch 367: the
+			   first is the run's; each later one belongs to the session before it. */
+			else if (!strncmp(ln, "seed ", 5) && (cses ? pass == 1 : pass == 0))
 			{
 				const char *q = ln + 5;
-				int k;
-				if (sscanf(q, "%f %f %f %f %f %f %i", &seedorg[0], &seedorg[1], &seedorg[2],
-				           &seedvel[0], &seedvel[1], &seedvel[2], &seedground) == 7)
+				vec3_t so, sv;
+				int k, sg;
+				if (sscanf(q, "%f %f %f %f %f %f %i", &so[0], &so[1], &so[2],
+				           &sv[0], &sv[1], &sv[2], &sg) == 7)
 				{
-					haveseed = true;
 					for (k = 0; k < 7 && *q; k++)
 					{
 						while (*q && *q != ' ') q++;
 						while (*q == ' ') q++;
 					}
-					seedstate_ok = SV_PMStateParse(q, &seedstate);
+					if (!cses && !haveseed)
+					{
+						haveseed = true;
+						VectorCopy(so, seedorg);
+						VectorCopy(sv, seedvel);
+						seedground = sg;
+						seedstate_ok = SV_PMStateParse(q, &seedstate);
+					}
+					else if (cses && cses <= nses && !ses[cses-1].seeded)
+					{
+						recsim_sess_t *s = &ses[cses-1];
+						s->seeded = true;
+						VectorCopy(so, s->org);
+						VectorCopy(sv, s->vel);
+						s->ground = sg;
+						s->stateok = SV_PMStateParse(q, &s->st);
+					}
 				}
+			}
+			else if (!strncmp(ln, "pause ", 6))
+			{
+				char why[16];
+				floorwin = true;
+				if (openpause && pass == 0 && !sesbad)
+					sesbad = "a second `pause` before its `session`";
+				openpause = true;
+				if (sscanf(ln+6, "%i %f %i %15s", &ppmt, &ppc, &pptk, why) != 4)
+				{
+					if (pass == 0 && !sesbad)
+						sesbad = "a malformed `pause`";
+				}
+				else if (pass == 0)
+				{
+					npause++;
+					if (strlen(pausewhys) + strlen(why) + 2 < sizeof(pausewhys))
+					{
+						if (*pausewhys)
+							Q_strncatz(pausewhys, " ", sizeof(pausewhys));
+						Q_strncatz(pausewhys, why, sizeof(pausewhys));
+					}
+					if (!sesbad && (!strcmp(why, "retry") || !strcmp(why, "load")))
+						sesbad = "a cold rewind (`pause retry|load`): the move before it has no stated duration";
+					else if (!sesbad && strcmp(why, "drop") && strcmp(why, "rotate") && strcmp(why, "server"))
+						sesbad = "a `pause` reason this replay does not know";
+				}
+			}
+			else if (!strncmp(ln, "session ", 8))
+			{
+				int sn, smt, stk;
+				float scy;
+				if (sscanf(ln+8, "%i %i %f %i", &sn, &smt, &scy, &stk) != 4)
+				{
+					if (pass == 0 && !sesbad)
+						sesbad = "a malformed `session`";
+				}
+				else if (!openpause)
+				{
+					if (pass == 0 && !sesbad)
+						sesbad = "a `session` with no `pause` before it";
+				}
+				else
+				{
+					if (pass == 1 && cses < nses)
+					{
+						recsim_sess_t *s = &ses[cses];
+						s->row = cin;
+						s->pmt = ppmt; s->pcarry = ppc; s->pticks = pptk;
+						s->n = sn; s->mt = smt; s->carry = scy; s->ticks = stk;
+					}
+					cses++;
+				}
+				openpause = false;
 			}
 			else if (!strncmp(ln, "pm ", 3))
 			{
@@ -4574,6 +4676,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					memcpy(m->pin, cpm ? pms[cpm-1].pin : hdrpin, sizeof(m->pin));
 					if (sscanf(q, "%i %i", &pk, &m->row) != 2)
 						m->row = -1;
+					else if (floorwin)
+						m->row = cin;
 					for (k = 0; k < 2 && *q; k++)
 					{
 						while (*q && *q != ' ') q++;
@@ -4590,6 +4694,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					int pk;
 					if (sscanf(ln+3, "%i %i %u", &pk, &pes[cpe].row, &pes[cpe].crc) != 3)
 						pes[cpe].row = -1;
+					else if (floorwin)
+						pes[cpe].row = cin;
 				}
 				cpe++;
 			}
@@ -4603,6 +4709,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					           &o->org[0], &o->org[1], &o->org[2],
 					           &o->vel[0], &o->vel[1], &o->vel[2]) != 9)
 						o->row = -1;
+					else if (floorwin)
+						o->row = cin;
 				}
 				cportal++;
 			}
@@ -4611,6 +4719,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			nin = cin; nsam = csam; nwarp = cwarp; nride = cride;
 			npm = cpm; npe = cpe; nportal = cportal;
+			nses = cses;
+			if (openpause && !sesbad)
+				sesbad = "a `pause` no `session` answers (the run is still parked)";
 			if (!nin)
 			{
 				RECSIM_REFUSE("no input trace (recorder before QC build 82, or a lifted stage)");
@@ -4628,6 +4739,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			pms = Z_Malloc(sizeof(*pms) * (npm?npm:1));
 			pes = Z_Malloc(sizeof(*pes) * (npe?npe:1));
 			prt = Z_Malloc(sizeof(*prt) * (nportal?nportal:1));
+			ses = Z_Malloc(sizeof(*ses) * (nses?nses:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4638,19 +4750,26 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
 		return;
 	}
-	/* Patch 364: v10's `pause`/`session` restart the mover counter and each
-	   session restates the `seed` (pass 0 keeps the last one).  One session is
-	   all this replays, so both commands refuse rather than mis-seed session 1. */
-	if (filever > 9)
+	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
+	   its restarted counter.  Anything this replay cannot follow is refused. */
+	if (filever > 10)
+		sesbad = "a newer format (this verifier reads FTESURF-REC 10)";
+	else if (!sesbad && npause && filever < 10)
+		sesbad = "a `pause` under a header below FTESURF-REC 10";
+	else if (!sesbad && !npause && filever == 10)
+		sesbad = "FTESURF-REC 10 with no `pause` (the header is 10 exactly when one is written)";
+	for (i = 0; !sesbad && i < nses; i++)
+		if (ses[i].row >= nin)
+			sesbad = "a session with no `in` row after it";
+	if (sesbad)
 	{
-		RECSIM_REFUSE("a newer format (this verifier reads FTESURF-REC 9)");
-		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i; its sessions"
-		                     " (Patch 364) are not replayed yet.\n", fname, filever);
+		RECSIM_REFUSE(sesbad);
+		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i: %s.\n", fname, filever, sesbad);
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
 		return;
 	}
 	if (hdrtick <= 0)
@@ -4676,6 +4795,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	   state and every pinned input -- then the replay is the mover, not a model
 	   of it, and any sample it disagrees with is the file's fault. */
 	exact = haveseed && seedstate_ok && pinfound == SV_PMPIN_COUNT;
+	for (i = 0; exact && i < nses; i++)	/* Patch 367: every session must restate its state */
+		if (!ses[i].seeded || !ses[i].stateok)
+			exact = false;
+	if (nses)
+		Con_Printf("  sessions  %i after the first (pauses: %s) -- each reseeded from its own `seed`\n",
+		           nses, pausewhys);
 	if (filever >= 9 || pinfound || haveseed)
 		Con_Printf("  v9 state  pin %i/%i names, seed %s, %i pm, %i pe, %i portal -- %s\n",
 		           pinfound, SV_PMPIN_COUNT,
@@ -4739,7 +4864,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	{
 		const char *refuse = NULL;
 		char zbuf[128], zhere[128];
-		/* Patch 356: a newer format is refused above (Patch 364), before any
+		/* Patch 356: a newer format is refused above (Patch 364/367), before any
 		   unknown record could be skipped into a PASS. */
 		if (!exact)
 			refuse = "not exact: no seed or no full pin (recorder before QC build 87, or engine before Patch 346)";
@@ -4797,7 +4922,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			Con_Printf("VERIFY %s REFUSE %s\n", fname, refuse);
 			Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-			Z_Free(pms); Z_Free(pes); Z_Free(prt);
+			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses);
 			return;
 		}
 	}
@@ -4833,6 +4958,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		vec3_t vlastp;
 		int    vfin_row = -1, vfin_ticks = -1, vcancel_row = -1, vrearm_row = -1;
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
+		/* Patch 367: the session being replayed, and what its boundaries found */
+		int    scur = 0, sbase_mt = instart_run, sbase_ticks = 0;
+		int    sclk_n = -1, sclk_trace = 0, sclk_pause = 0, sclk_sess = 0;
+		int    sjmp_n = -1, sjmp_row = -1;
+		float  sjmp_o = 0, sjmp_v = 0;
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
 		   recording and can never recover it anywhere else, which is the whole
@@ -4979,6 +5109,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			VectorCopy(pmove.origin, vlastp);	/* Patch 349: SV_TimerFrame's run_t_lastorg */
 			rcur = 0;			/* Patch 344: and the carrier */
 			VectorClear(carrier);
+			scur = 0;			/* Patch 367: and the session */
+			sbase_mt = instart_run;
+			sbase_ticks = 0;
 
 			for (i = 0; i < nin; i++)
 			{
@@ -4989,6 +5122,68 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 
 				if (stopat > 0 && r->pk - ins[0].pk >= stopat)
 					break;
+
+				/* Patch 367: a session starts on this row.  Its pause parked the
+				   clock and the state the last one ended in; the resume must take
+				   up both, to the save state's %.4f.  Then reseed, as at `begin`. */
+				while (scur < nses && ses[scur].row == i)
+				{
+					recsim_sess_t *s = &ses[scur];
+					int   clk = sbase_ticks + (s->pmt - sbase_mt);
+					float dorg = 0, dvel = 0;
+					for (k = 0; k < 3; k++)
+					{
+						if (fabs(pmove.origin[k] - s->org[k]) > dorg)
+							dorg = fabs(pmove.origin[k] - s->org[k]);
+						if (fabs(pmove.velocity[k] - s->vel[k]) > dvel)
+							dvel = fabs(pmove.velocity[k] - s->vel[k]);
+					}
+					if (!mode)
+					{
+						Con_Printf("  session %i  row %i: parked at clock %i (pause %i, session %i)",
+						           s->n, i, clk, s->pticks, s->ticks);
+						if (s->seeded)
+							Con_Printf(", resumed %.6g u / %.6g u/s from the replay's state\n", dorg, dvel);
+						else
+							Con_Printf(", ^3no seed^7\n");
+						if (sclk_n < 0 && (clk != s->pticks || s->ticks != s->pticks))
+							{ sclk_n = s->n; sclk_trace = clk; sclk_pause = s->pticks; sclk_sess = s->ticks; }
+						if (sjmp_n < 0 && s->seeded && (dorg > RECSIM_SESS_TOL || dvel > RECSIM_SESS_TOL))
+							{ sjmp_n = s->n; sjmp_row = i; sjmp_o = dorg; sjmp_v = dvel; }
+					}
+					if (s->seeded)
+					{
+						if (exact)
+							PMSrc_LoadState(&s->st);
+						VectorCopy(s->org, pmove.origin);
+						VectorCopy(s->vel, pmove.velocity);
+						pmove.onground = (s->ground & 1) != 0;
+					}
+					else if (r->nsam > 0)
+					{
+						recsim_sam_t *sm = &sam[r->nsam - 1];
+						VectorCopy(sm->org, pmove.origin);
+						VectorCopy(sm->vel, pmove.velocity);
+						pmove.onground = (sm->fl & 1) != 0;
+					}
+					if (!exact)
+						pmove.msec_carry = s->carry;
+					VectorClear(carrier);
+					sbase_mt = s->mt;
+					sbase_ticks = s->ticks;
+					scur++;
+					for (; wcur < nwarp && wrp[wcur].preseed == scur; wcur++)
+						if (wrp[wcur].mt >= 0)
+						{
+							VectorCopy(wrp[wcur].org, pmove.origin);
+							VectorCopy(wrp[wcur].vel, pmove.velocity);
+							if (wrp[wcur].fl >= 0)
+								pmove.onground = (wrp[wcur].fl & 1) != 0;
+							if (!mode)
+								wapplied++;
+						}
+					VectorCopy(pmove.origin, vlastp);	/* SV_TimerFrame restamps run_t_lastorg every frame */
+				}
 
 				if (exact)
 				{
@@ -5046,7 +5241,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				/* THE DURATION, DERIVED from the successor row -- or, for the
 				   last row, from `inend` (Patch 344; v8).  Without it the final
 				   move, the one the finish is latched on, cannot be run. */
-				if (i+1 < nin && ins[i+1].mt >= 0)	/* Patch 352: a malformed successor is no successor */
+				if (scur < nses && ses[scur].row == i+1)	/* Patch 367: the pause closes this session */
+					{ next_mt = ses[scur].pmt; next_carry = ses[scur].pcarry; }
+				else if (i+1 < nin && ins[i+1].mt >= 0)	/* Patch 352: a malformed successor is no successor */
 					{ next_mt = ins[i+1].mt; next_carry = ins[i+1].carry; }
 				else if (inend_mt >= 0)
 					{ next_mt = inend_mt; next_carry = inend_carry; }
@@ -5182,7 +5379,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				{
 					int code = SV_RecSim_Step(vf_step, vlastp, pmove.origin, pmove.player_maxs);
 					if (code == 1 && vfin_row < 0)
-						{ vfin_row = i; vfin_ticks = next_mt - instart_run; }
+						{ vfin_row = i; vfin_ticks = sbase_ticks + (next_mt - sbase_mt); }
 					else if (code == 2 && vcancel_row < 0)
 						vcancel_row = i;
 					else if (code == 3 && vrearm_row < 0)
@@ -5390,7 +5587,15 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			char why[160];
 			*why = 0;
-			if (x_bad)
+			/* Patch 367: a session boundary is named before the divergence it causes;
+			   the clock check is counter arithmetic and needs no trajectory. */
+			if (sclk_n >= 0)
+				Q_snprintfz(why, sizeof(why), "session %i: the trace parks the clock at %i, the pause says %i, the session %i",
+				            sclk_n, sclk_trace, sclk_pause, sclk_sess);
+			else if (sjmp_n >= 0 && (!x_bad || x_first >= sjmp_row))
+				Q_snprintfz(why, sizeof(why), "session %i resumes %.4g u / %.4g u/s from where the last one parked",
+				            sjmp_n, sjmp_o, sjmp_v);
+			else if (x_bad)
 				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
 			else if (pe_bad)
 				Q_snprintfz(why, sizeof(why), "physents: %i row(s) differ, first at row %i", pe_bad, pe_first);
@@ -5431,6 +5636,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	Z_Free(pms);
 	Z_Free(pes);
 	Z_Free(prt);
+	Z_Free(ses);
 }
 
 static void SV_RecSim_f (void)
@@ -5609,7 +5815,7 @@ void SV_InitOperatorCommands (void)
 
 	//FTESurf Patch 349
 	Cmd_AddCommandD("pm_verify", SV_RecVerify_f,
-	                "FTESurf: pm_verify <file.rec>.  Replays a finished FTESURF-REC 9 "
+	                "FTESurf: pm_verify <file.rec>.  Replays a finished FTESURF-REC 9 or 10 "
 	                "recording exactly on this map and asks the timer's own zone "
 	                "scan where it finishes.  Prints VERIFY <file> PASS|HOLD|REFUSE "
 	                "<reason>.");
