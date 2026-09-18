@@ -4266,6 +4266,20 @@ static char *SV_RecSim_Line (char **pp, char *end, char *out, size_t outsz)
 extern vec3_t pmove_mins, pmove_maxs;
 extern cvar_t sv_maxvelocity, pm_trisoup_bevels, pm_rotatedboxhulls, pm_portalcsg_scanall;
 
+//Patch 358: pin slots 10-12.  The trace code reads .ival (com_bih.c, pmovetst.c);
+//.value is what the next verify's mismatch check reads.  Not Cvar_ForceSet: these are
+//serverinfo, and a pm_verify on a live lobby would push the change to clients.
+static cvar_t *const recsim_tracecv[3] = {&pm_trisoup_bevels, &pm_rotatedboxhulls, &pm_portalcsg_scanall};
+static void SV_RecSim_TraceCvars (const float *pin)
+{
+	int i;
+	for (i = 0; i < 3; i++)
+	{
+		recsim_tracecv[i]->value = pin[10+i];
+		recsim_tracecv[i]->ival = (int)pin[10+i];
+	}
+}
+
 /* Patch 349: the verifier's QC hooks (QC build 88), called by name. */
 static int SV_RecSim_Step (func_t f, const vec3_t lastp, const vec3_t p, const vec3_t pmaxs)
 {
@@ -4782,6 +4796,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	{
 		movevars_t   savemv = movevars;
 		playermove_t savepm = pmove;
+		float  savetv[3];	/* Patch 358: this server's trace cvars */
+		int    saveti[3];
 		float *eo = Z_Malloc(sizeof(float) * (nin+1));
 		float *ev = Z_Malloc(sizeof(float) * (nin+1));
 		int    neo = 0;
@@ -4813,6 +4829,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		   reason ARM 2 may not re-seed it mid-run. */
 		pmsourcestate_t zerostate;
 		memset(&zerostate, 0, sizeof(zerostate));
+		for (k = 0; k < 3; k++)
+		{
+			savetv[k] = recsim_tracecv[k]->value;
+			saveti[k] = recsim_tracecv[k]->ival;
+		}
 
 		memset(&pmove, 0, sizeof(pmove));
 		pmove.numphysent = 1;
@@ -4830,6 +4851,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		if (exact)
 		{	/* Patch 347: the physics the file says ran, not this server's. */
 			SV_PMPinApply(hdrpin);
+			SV_RecSim_TraceCvars(hdrpin);
 			pmove.player_mins[2] = 0;
 			pmove.player_maxs[2] = movevars.standheight;
 			gamespeed = hdrpin[3];
@@ -4839,12 +4861,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			           movevars.gravity, movevars.friction, movevars.accelerate,
 			           movevars.airaccelerate, movevars.maxairspeed, movevars.maxspeed,
 			           movevars.jumpvelocity, movevars.ticrate);
-			if (hdrpin[10] != pm_trisoup_bevels.value || hdrpin[11] != pm_rotatedboxhulls.value
-			    || hdrpin[12] != pm_portalcsg_scanall.value)
-				Con_Printf("  ^1trace cvars: the file ran %g %g %g, this server %g %g %g --"
-				           " the replay traces with this server's^7\n",
-				           hdrpin[10], hdrpin[11], hdrpin[12], pm_trisoup_bevels.value,
-				           pm_rotatedboxhulls.value, pm_portalcsg_scanall.value);
+			if (hdrpin[10] != savetv[0] || hdrpin[11] != savetv[1] || hdrpin[12] != savetv[2])
+				Con_Printf("  ^3trace cvars: the file ran %g %g %g, this server %g %g %g --"
+				           " replaying with the file's^7\n",
+				           hdrpin[10], hdrpin[11], hdrpin[12], savetv[0], savetv[1], savetv[2]);
 			for (i = 0; i < sv.allocated_client_slots; i++)
 				if (svs.clients[i].state >= cs_spawned && svs.clients[i].edict)
 					{ proxy = (wedict_t*)svs.clients[i].edict; break; }
@@ -4903,6 +4923,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			if (exact)
 			{	/* Patch 347: the file's own exact seed and carried state. */
 				SV_PMPinApply(hdrpin);
+				SV_RecSim_TraceCvars(hdrpin);
 				pmove.player_mins[2] = 0;
 				pmove.player_maxs[2] = movevars.standheight;
 				gamespeed = hdrpin[3];
@@ -4966,6 +4987,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						if (pms[pmcur].row >= 0)
 						{
 							SV_PMPinApply(pms[pmcur].pin);
+							SV_RecSim_TraceCvars(pms[pmcur].pin);
 							pmove.player_mins[2] = 0;
 							pmove.player_maxs[2] = movevars.standheight;
 							gamespeed = pms[pmcur].pin[3];
@@ -5385,6 +5407,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			ED_Free(svprogfuncs, (edict_t*)proxy);
 		movevars = savemv;
 		pmove = savepm;
+		for (k = 0; k < 3; k++)
+		{
+			recsim_tracecv[k]->value = savetv[k];
+			recsim_tracecv[k]->ival = saveti[k];
+		}
 	}
 
 	Z_Free(ins);

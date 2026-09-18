@@ -30325,6 +30325,36 @@ test_reccheck 130 checks, 0 failed; the corpus output is byte-identical to HEAD'
 fixture), the one-tick opening-stage landing window, and a human prestrafe
 against the 290 cap on a live lobby.
 
+## Patch 358 — `pm_verify` replays with the file's trace cvars  *(APPLIED -- `server/sv_ccmds.c` only (SV_RecSim_TraceCvars; SV_RecSim_Run saves, applies and restores them). VERIFIED: `cfg/test/p358trace.cfg`, subject from `cfg/test/p358cap.cfg`.)*
+
+**Problem.** A v9 pin records `trisoup`, `rotboxes` and `portalcsg` (slots
+10-12), but SV_PMPinApply leaves them to the caller, so pm_verify replayed
+with the server's values and only warned.  A finished bhop_monster_jam file
+recorded at `pm_trisoup_bevels 1` HOLDs on a server at 0: 2675 packets differ,
+first at row 74.
+
+**Change.** Every pin application (the header, each pass, each `pm` row) also
+writes the three cvars' `.ival`, the only field the trace code reads
+(com_bih.c:712/935/1761, pmovetst.c:947/1163), and `.value`, which the next
+verify's mismatch check reads.  They are written directly rather than through
+Cvar_Set, so serverinfo is never rewritten, not even for a moment.  Both come back when the replay ends.  The warning now reads
+"replaying with the file's".
+
+**Verified.** Dedicated fteqwsv64, subject `p358seam.rec` (v9, finished; noclip
+flights and a walk across displacement #89's seam): server at 1, the 356 and
+358 binaries both PASS ticks 2786 rows 2756; server at 0, 356 HOLDs (2675, row
+74) and 358 PASSes.  The subject with its pin edited to `trisoup=0` HOLDs the
+same 2675 / row 74 on 358 at either server value; 356 PASSes it on a server
+at 1.  With only its three `pm` rows edited (header pin still 1), 358 HOLDs
+1421 packets from row 1331, 48 rows into the walk, at either server value; 356
+PASSes that on a server at 1.  Serverinfo reads the same after every verify,
+and a verify restores both fields (measured on `pm_trisoup_bevels`): the verify after it
+prints no trace-cvar line where a leaked `.value` would print one, and a
+`pm_dettest` trace hash on the map (507c8b94f2e56ef7 at 1, 2158fa44d1cf01a5
+at 0) reads the same before and after each verify.  p349verify, p352slots,
+p356newer and pm_dettest (bhop_eazy hashes) are unchanged against the 356
+binary.  Not yet built on the Pi.
+
 ## Patch 357 — the leaderboard follows a finish and refreshes once the row lands  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (ob_gen/Online_MarkStale, Online_Shows, Online_Asked, Online_Poll, ob_mine), `cl_scores.qc` (follow/seek/highlight/pinned own row, `scores note|landed` test hooks), `cl_players.qc` (room-list refetch gating; ping/time overlap), `cl_results.qc` (Results_BoardWatch), `cl_main.qc`; test stub `surfd/p357board.py`. VERIFIED: `cfg/test/p357ref{sv,cl}.cfg`.)*
 
 **Problem.** Nothing ever refetched or rescanned the leaderboard after a finish:
