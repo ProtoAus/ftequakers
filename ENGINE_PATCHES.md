@@ -30307,6 +30307,12 @@ surf_deathstar's `!r`.  Controls: the `!r` pair moved above its sample HOLDs
 every `restart` line still PASSes: the latch reset decides no verdict on these
 files, so the refusal was over-cautious, and removing the records gains nothing
 (the clock never stopped).  P367/P356 suites and eazy.rec unchanged.
+Pi: built natively from 5c13a679e (`fteqw-svarm64` md5 a865b8b8, 0 warnings),
+pm_dettest unchanged, kitsune still PASS with 8/8 portals; the old progs made
+a restart file REFUSE "no SV_VerifyRestart" (the fallback), FTESurf 3fc688f's
+progs PASS it.  Live 2026-09-18 21:10 UTC (sweeper and all 12 lobbies).  The
+ten REFUSE "a stage restart" replays were re-queued (the owner re-check) and
+the sweeper returned PASS 10: 26 of the 27 v9 runs on the board now verify.
 
 ## Patch 368 — a lobby `retry` keeps its recording  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_RecDestream; SV_RecClose reports a buffered file's size), `src/server/sv_saveloc.qc` (SV_RetryPoint destreams before the save). VERIFIED: FTESurf `cfg/test/rt1sv.cfg` + `rt1cl.cfg`, `p364rewind.cfg`.)*
 
