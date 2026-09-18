@@ -30283,6 +30283,25 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 363 — the counted clock survives a counter restart (`retry`)  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_TimerResume, SV_TickCounted, SV_TimerFreezeFrame; run_t_tickcarry / run_t_resumesec). VERIFIED: `cfg/test/p363retry.cfg`.)*
+
+**Problem.** SV_TimerResume rebased the run's start to `run_movetick - ticks`.
+The mover counter restarts per map, and `retry` is a map_restart, so the start
+went negative, SV_TickCounted reported "not latched", and the restored run fell
+back to the sampled clock (and would finish TF_NOCLOCK).  The resume also runs
+from PutClientInServer, before the engine has written the edict's mover fields.
+
+**Change.** The start latches `run_movetick` and the restored ticks ride in
+`run_t_tickcarry`, which SV_TickCounted adds.  When the mover fields are not live
+at the resume (rate 0), the latch -- and the seconds' origin, which was still
+`time` -- waits for the first live packet (SV_TimerFreezeFrame).  The `cmd timer`
+report's wall origin is rebased too; it never was, so every save-load printed a
+meaningless gap.
+
+**Verified.** bhop_eazy, a run, `cmd rec_retry`: before, "tick: not latched ...
+ranks sampled"; after, "counted 707 sampled 706 gap -1 ... ranks counted" and
+907/906 two seconds on -- the no-retry control's shape.
+
 ## Patch 361 — the completion banner  *(APPLIED -- mod-side only, no engine change: new `src/client/cl_banner.qc`; `cl_results.qc` (card held behind the banner, Results_Drawn, toast clear), `cl_lobbytime.qc` (LT_Keeps, LT_StatsAreMine from the owner stat), `cl_main.qc`, `cl_hudedit.qc`/`cl_hud.qc` (editor row, HE_MAX/HUDE_MAX 20); server stat 99 STAT_FS_STAGEENDPBWAS (`sv_timer.qc` SV_StageClose) and stat 102 STAT_FS_STATOWNER (`sv_player.qc`), `sv_main.qc`; `default.cfg` hud_banner block; `tools/seed_csprogs.py` keeps other hashes. VERIFIED: `cfg/test/p361bn{syn,listen,lob}.cfg`.)*
 
 **Problem.** A finish said nothing across the screen: the card sat in a corner,
