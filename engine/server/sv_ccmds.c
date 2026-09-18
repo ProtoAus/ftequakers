@@ -5003,7 +5003,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				/* THE DURATION, DERIVED from the successor row -- or, for the
 				   last row, from `inend` (Patch 344; v8).  Without it the final
 				   move, the one the finish is latched on, cannot be run. */
-				if (i+1 < nin)
+				if (i+1 < nin && ins[i+1].mt >= 0)	/* Patch 352: a malformed successor is no successor */
 					{ next_mt = ins[i+1].mt; next_carry = ins[i+1].carry; }
 				else if (inend_mt >= 0)
 					{ next_mt = inend_mt; next_carry = inend_carry; }

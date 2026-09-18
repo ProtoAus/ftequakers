@@ -30283,6 +30283,26 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 352 — the physent digest no longer depends on the player slot count  *(APPLIED -- `server/sv_user.c` (SV_PhysentDigest), `server/sv_ccmds.c` (a malformed successor row). No protocol or ABI change; changes what `pe` records mean, so files from engines 346-351 no longer match a 352 replay's digest (their trajectory lines are unaffected). VERIFIED: `cfg/test/p352slots.cfg`, and live on the Pi after deploy.)*
+
+**Problem.** A live lobby recording replayed on the Pi matched every sample
+(ARM 4 exact) and mismatched the physent digest on every row.  Re-run with
+`sv_playerslots 32` it matched 1126/1126.  Map entities are numbered after the
+reserved client slots (32 on a lobby, 2 in default.cfg), and the digest hashed
+that absolute number.  The physics never depended on it; the digest did.  Also,
+the replay derived a duration from a malformed successor row: a part file
+copied mid-write ends in half a line, and ARM 1 read "off by 2127 ticks".
+
+**Change.** Hash entity numbers relative to sv.allocated_client_slots (client
+edicts tagged separately).  A successor row that failed to parse is treated as
+no successor.
+
+**Verified.** New captures (b352warp, b352fin, 2-slot listen server) replayed
+on client-less dedicated servers at 2 AND 32 slots: b352fin PASS ticks 660,
+physents 630/630; b352warp 1667/1667, physents 1682/1682, at both counts.  The
+pre-352 control b88fin mismatches physents on all 634 rows at both counts and
+HOLDs on physents alone.  0 new warnings.
+
 ## Patch 351 — three online-board bugs: a capitalised map, the room list's absorb, `*wrank` ticks  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (Online_Parse), `src/client/cl_scores.qc` (status witnesses), `src/server/sv_lobby.qc` (Lobby_RankPending). VERIFIED: `cfg/test/p351case.cfg`.)*
 
 **Problem.**

@@ -297,7 +297,14 @@ unsigned int SV_PhysentDigest(void)
 	{
 		const physent_t *pe = &pmove.physents[i];
 		const char *mn = pe->model ? pe->model->name : "";
-		PD(&pe->info, sizeof(pe->info));
+		/* Patch 352: numbered from the first non-client edict, not absolutely --
+		   map entities follow the reserved player slots (32 on a lobby, 2 by
+		   default), and a digest that changes with the slot count checks nothing. */
+		{
+			unsigned int rel = pe->info > (unsigned int)sv.allocated_client_slots
+			                 ? pe->info - sv.allocated_client_slots : (pe->info | 0x80000000u);
+			PD(&rel, sizeof(rel));
+		}
 		PD(&pe->nonsolid, 1);	PD(&pe->isportal, 1);	PD(&pe->slideflags, 1);
 		PD(&pe->forcecontentsmask, sizeof(pe->forcecontentsmask));
 		PD(pe->origin, sizeof(vec3_t));	PD(pe->angles, sizeof(vec3_t));
