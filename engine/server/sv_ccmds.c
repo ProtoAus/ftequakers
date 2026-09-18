@@ -4277,6 +4277,9 @@ static int SV_RecSim_Step (func_t f, const vec3_t lastp, const vec3_t p, const v
 	return (int)G_FLOAT(OFS_RETURN);
 }
 
+/* Patch 354: every early exit still owes the sweeper a verdict line. */
+#define RECSIM_REFUSE(why) do { if (verify) Con_Printf("VERIFY %s REFUSE %s\n", fname, why); } while (0)
+
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -4323,6 +4326,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	}
 	if (!world || world->loadstate != MLS_LOADED)
 	{
+		RECSIM_REFUSE("no map loaded");
 		Con_Printf(CON_ERROR "pm_recsim: no map loaded.  Re-simulation needs the"
 		                     " collision geometry the run was made against --"
 		                     " load the recording's own map first.\n");
@@ -4332,6 +4336,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	buf = FS_LoadMallocFile(fname, &fsz);
 	if (!buf)
 	{
+		RECSIM_REFUSE("cannot read the file");
 		Con_Printf(CON_ERROR "pm_recsim: cannot read \"%s\"\n", fname);
 		return;
 	}
@@ -4594,6 +4599,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			npm = cpm; npe = cpe; nportal = cportal;
 			if (!nin)
 			{
+				RECSIM_REFUSE("no input trace (recorder before QC build 82, or a lifted stage)");
 				Con_Printf(CON_ERROR "pm_recsim: \"%s\" carries no `in` records."
 				                     "  It predates QC build 82, or it is a lifted"
 				                     " stage (SV_StageLine drops them on purpose --"
@@ -4614,6 +4620,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 
 	if (rate <= 0)
 	{
+		RECSIM_REFUSE("no movetickrate in the header");
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
