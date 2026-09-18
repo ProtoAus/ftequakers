@@ -30283,6 +30283,48 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 360 — main-run stages post to the stage boards when primed  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (SV_StageTakeoff/SV_StageLaunch/SV_StageFillable/SV_StageSubmitFlags, the SV_StageClose post, JumpWatch takeoff latch, opening-stage judgement, SV_RecKeepEvidence/SV_EvidenceSweep, the evidence close in SV_RecClose, `runid` per run, part files keyed by port on a lobby, grammar `stagepost`/`abandon`), `sv_lobby.qc` (Lobby_RunBody/Lobby_NextRunId split, Lobby_SubmitStage and `*srank`, reply routing incl. one older stage), `sv_main.qc` (QC `SV_Shutdown`), `sv_saveloc.qc`, `sh_defs.qc` (SF_PRIMED 512, SF_POSTED 1024, stat 100), `tools/reccheck.py` + `test_reccheck.py`, `default.cfg`. VERIFIED: `cfg/test/p360sf{sv,cl}.cfg`, `p360sf2{sv,cl}.cfg` (+ `p360sf.zones.json`), `p360sweep.cfg`.)*
+
+**Problem.** A stage cleared during a main run never reached that stage's online
+board; only a `!s N` run did.  Posting every stage would let speed carried
+through a boundary count as a stage time.
+
+**Change.**
+- A stage of a lobby MAIN run is posted at its close (`*srank`, its own reply id)
+  only when it started PRIMED: grounded for `run_prestrafe_time` (the dwell that
+  releases +forward), then a jump or a walk-out, at <= `run_stagecap` (290) u/s --
+  speed at takeoff for a jump, at the exit for a walk-out.  Never primed: a
+  flown-through boundary, a ghost since the boundary, a ramp touch after the
+  takeoff (read from `run_boardcount`, so a mid-packet clip counts), an opening
+  takeoff from before the arm.  No post without a live recording where runs are
+  recorded.  Flags = stage taint + the run's certification holes (TF_UNCERT).
+- `stagepost <seg> <dur> <launch>` in the recording (additive, no REC bump);
+  posts and the finish carry the run's `runid`.
+- A run that posted keeps its recording in `data/evidence/<map>/<runid>.rec`
+  (swept after `run_evidence_days`) when it is abandoned (`abandon <ticks>` +
+  trailer), finishes under a fixed-name tag (last/cheat), loads a save (kept
+  before the restore rewrites its clock) or meets a map change (QC
+  `SV_Shutdown`).  Lobby part files are `data/parts/p<port>-<slot>.rec`: the
+  lobbies share one data dir.
+- A stage reply that lands after the next stage was posted is still told (never
+  written to `*srank`); a demoted stage's "unranked" line is said once per reason.
+- reccheck checks both records; `results wrank` prints `*srank`.
+
+**Verified.** surf_666 start room with a 4-stage zone fixture, dedicated server
+as a real lobby and as a plain server, against `b65stub.py cert`: walk-outs posted
+legs 1, 2, 4 and not the flown-through leg 3; a primed jump out of START posted
+leg 1 at its 121 u/s takeoff; hopping through, `run_stagecap 200` and
+`run_prestrafe_time 30` posted no stage; a ghost in the box refused the next
+post; after a save-load nothing posted and the evidence kept the pre-load clock;
+a practice finish, an abandon and a map reload each kept their evidence file;
+with a 2 s reply delay every stage line still arrived; with `m_accel 1` the stage
+"unranked" line appeared once.  Every recording passed reccheck (0 faults); the
+sweep removed a 48-day file and kept an 8-day one and an undated control.
+test_reccheck 130 checks, 0 failed; the corpus output is byte-identical to HEAD's
+(404 files, 94 with faults).  NOT verified: a mid-packet ramp clip (no ramp in the
+fixture), the one-tick opening-stage landing window, and a human prestrafe
+against the 290 cap on a live lobby.
+
 ## Patch 357 — the leaderboard follows a finish and refreshes once the row lands  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (ob_gen/Online_MarkStale, Online_Shows, Online_Asked, Online_Poll, ob_mine), `cl_scores.qc` (follow/seek/highlight/pinned own row, `scores note|landed` test hooks), `cl_players.qc` (room-list refetch gating; ping/time overlap), `cl_results.qc` (Results_BoardWatch), `cl_main.qc`; test stub `surfd/p357board.py`. VERIFIED: `cfg/test/p357ref{sv,cl}.cfg`.)*
 
 **Problem.** Nothing ever refetched or rescanned the leaderboard after a finish:
