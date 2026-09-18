@@ -30283,6 +30283,23 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 366 — the lobby rotation waits for runs in progress  *(APPLIED -- mod-side only, no engine change: `src/server/sv_lobby.qc` (Lobby_Cycle: the hold, capped by `lobby_cycle_hold`), `sv_resume.qc` (publishes a run in progress; parks as `rotate`), `lobby.cfg`. VERIFIED: `cfg/test/ms2sv.cfg` + `ms2cl.cfg`.)*
+
+**Problem.** A timed rotation changed the map under whoever was mid-run.
+
+**Change.** At the deadline Lobby_Cycle holds while any run is in progress
+(sv_resume.qc stamps `lobby_cyc_runseen` each PostThink), for at most
+`lobby_cycle_hold` seconds (7200; 0 = the old behaviour), with a one-minute
+warning.  The hold's start survives until the map changes, so taking turns
+cannot extend it.  At the cap the change goes ahead and SV_Shutdown parks the
+runs as `rotate` (Patch 365); runs that end inside the hold get ten seconds.
+
+**Verified.** Dedicated lobby, `lobby_cycle 60` / `lobby_cycle_hold 120`, a
+client standing inside a run: the hold line at 60 s, the minute warning at
+120 s, the change at 180 s parking the run `rotate`; the idle control on the
+next map rotated on time with no hold; back on the first map the run resumed
+and finished -- v10, `pauses rotate`, 0 faults, flags 16384.
+
 ## Patch 365 — Multi-Session: a run parked when its player leaves, resumed on return  *(APPLIED -- mod-side only, no engine change: new `src/server/sv_resume.qc`; hooks in `sv_player.qc` (connect, disconnect, spawn, PostThink, `!resume`/`!discard`, `ms_resume`/`ms_discard`), `sv_main.qc` (SV_Shutdown parks; stat 101; `run_resume*` cvars; the sweep), `sv_timer.qc` (SV_RecParkLine; run_st_ms -- a stage spanning a pause never qualifies; no zone acts while a restore runs), `sv_saveloc.qc` (retry 2 leaves the recorder to the resume); `sh_defs.qc` (TF_MULTISESSION 16384, SLOP_RESUME, STAT_FS_MSSESSION 101, FS_RunKindName); client `cl_timer.qc` (offer prompt, F2, latch seed, split rows back), `cl_replay.qc` (no sidecars), `cl_board.qc`, `cl_banner.qc`, kind word "multi"; `lobby.cfg`; surfd TF_MULTISESSION pin + tests. VERIFIED: `cfg/test/ms1listen.cfg`, `ms1sv.cfg`+`ms1cl.cfg`, `ms1quit*.cfg`.)*
 
 **Problem.** A long run died with its connection: a drop, a map change or a
