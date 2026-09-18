@@ -4192,6 +4192,20 @@ typedef struct
 	char   kind[16];	/* tele telerel bhop speed push -- and whatever comes next */
 } recsim_warp_t;
 
+/* Patch 343: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
+   SV_BaseVelocityFrame's order, before the move it precedes in the file: `pay`
+   adds (1 + tickrate*0.5)*bv to velocity, `arm` sets pmove.basevelocity from
+   this move on.  Keyed to the `in` row it precedes, not to <mt>: a move that
+   runs zero ticks leaves two rows sharing one <mt>. */
+typedef struct
+{
+	int    pk;
+	int    mt;			/* pre-move, must equal the following row's <mt> */
+	int    row;			/* index of the `in` row this record precedes */
+	qboolean pay;
+	vec3_t bv;
+} recsim_ride_t;
+
 static int SV_RecSim_CmpF (const void *a, const void *b)
 {	/*3-way on purpose.  See Patch 323: a comparator that can only say "greater"
 	  is not an ordering, and this file has paid for that once already.*/
@@ -4230,12 +4244,16 @@ static void SV_RecSim_f (void)
 	qboolean      havecrc = false, inbody;
 	float         rate = 0;
 	int           instart_mt = -1, instart_run = -1;
-	int           nin = 0, nsam = 0, nwarp = 0, i, pass;
+	int           nin = 0, nsam = 0, nwarp = 0, nride = 0, i, pass;
 	recsim_in_t  *ins = NULL;
 	recsim_sam_t *sam = NULL;
 	recsim_warp_t*wrp = NULL;
+	recsim_ride_t*rid = NULL;
 	float         sjrule = -1, sjoff[3] = {0,0,0};
 	int           filever = 0;
+	float         hdrtick = 0;					/* header `tickrate`: the cash-out's TICK_INTERVAL */
+	int           inend_mt = -1;				/* Patch 343: v8 closing horizon */
+	float         inend_carry = 0;
 
 	if (!*fname)
 	{
@@ -4264,7 +4282,7 @@ static void SV_RecSim_f (void)
 	   rather than a typo. */
 	for (pass = 0; pass < 2; pass++)
 	{
-		int cin = 0, csam = 0, cwarp = 0;
+		int cin = 0, csam = 0, cwarp = 0, cride = 0;
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
@@ -4280,6 +4298,8 @@ static void SV_RecSim_f (void)
 						Q_strncpyz(mapname, ln+4, sizeof(mapname));
 					else if (!strncmp(ln, "movetickrate ", 13))
 						rate = atof(ln+13);
+					else if (!strncmp(ln, "tickrate ", 9))
+						hdrtick = atof(ln+9);
 					else if (!strncmp(ln, "mapcrc ", 7))
 						{ filecrc = (unsigned int)strtoul(ln+7, NULL, 16); havecrc = true; }
 					else if (!strncmp(ln, "instart ", 8))
@@ -4360,10 +4380,31 @@ static void SV_RecSim_f (void)
 				}
 				cwarp++;
 			}
+			else if (!strncmp(ln, "ride ", 5))
+			{
+				if (pass == 1 && cride < nride)
+				{
+					recsim_ride_t *d = &rid[cride];
+					char kb[16];
+					d->row = cin;
+					if (sscanf(ln+5, "%i %i %15s %f %f %f", &d->pk, &d->mt, kb,
+					           &d->bv[0], &d->bv[1], &d->bv[2]) == 6
+					    && (!strcmp(kb, "arm") || !strcmp(kb, "pay")))
+						d->pay = !strcmp(kb, "pay");
+					else
+						d->mt = -1;
+				}
+				cride++;
+			}
+			else if (!strncmp(ln, "inend ", 6) && pass == 0)
+			{
+				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
+					inend_mt = -1;
+			}
 		}
 		if (pass == 0)
 		{
-			nin = cin; nsam = csam; nwarp = cwarp;
+			nin = cin; nsam = csam; nwarp = cwarp; nride = cride;
 			if (!nin)
 			{
 				Con_Printf(CON_ERROR "pm_recsim: \"%s\" carries no `in` records."
@@ -4376,6 +4417,7 @@ static void SV_RecSim_f (void)
 			ins = Z_Malloc(sizeof(*ins) * nin);
 			sam = Z_Malloc(sizeof(*sam) * (nsam?nsam:1));
 			wrp = Z_Malloc(sizeof(*wrp) * (nwarp?nwarp:1));
+			rid = Z_Malloc(sizeof(*rid) * (nride?nride:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4384,9 +4426,11 @@ static void SV_RecSim_f (void)
 	{
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
-		Z_Free(ins); Z_Free(sam);
+		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
 		return;
 	}
+	if (hdrtick <= 0)
+		hdrtick = rate;
 
 	Con_Printf("^5pm_recsim^7  %s\n", fname);
 	Con_Printf("  header    map \"%s\"  movetickrate %g  instart %i %i\n",
@@ -4398,8 +4442,11 @@ static void SV_RecSim_f (void)
 		           : "^1DIFFERENT MAP -- every number below is meaningless^7");
 	else
 		Con_Printf("  map pin   ^3none in the header^7 (predates build 73)\n");
-	Con_Printf("  body      %i in rows, %i samples, %i packets, %i warps\n",
-	           nin, nsam, nin?(ins[nin-1].pk - ins[0].pk + 1):0, nwarp);
+	Con_Printf("  body      %i in rows, %i samples, %i packets, %i warps, %i rides\n",
+	           nin, nsam, nin?(ins[nin-1].pk - ins[0].pk + 1):0, nwarp, nride);
+	if (inend_mt >= 0)
+		Con_Printf("  inend     %i %.5f -- the final move's duration is stated\n",
+		           inend_mt, inend_carry);
 
 	/* Patch 328.  The two v7 facts, printed whether or not they are there --
 	   because "this file predates the record" and "nothing imposed any state on
@@ -4413,11 +4460,19 @@ static void SV_RecSim_f (void)
 	else
 		Con_Printf("  startjit  ^3no key^7 -- the rule was off, or this file"
 		           " predates build 83\n");
+	/* Patch 343: E5 measured the v7 form false (surf_trance: zero warps, ten
+	   boosters).  v7 can only vouch for what it can express; v8 adds the carrier.
+	   Neither expresses a linked_portal_door crossing, which the mover commits. */
 	if (!nwarp)
 	{
-		if (filever >= 7)
-			Con_Printf("  warps     none, and the file is v%i, so that is a"
-			           " STATEMENT: nothing imposed state on this run.\n", filever);
+		if (filever >= 8)
+			Con_Printf("  warps     none, and the file is v%i: no map entity wrote"
+			           " origin or velocity on this run.\n", filever);
+		else if (filever == 7)
+			Con_Printf("  warps     none, and the file is v7: nothing THIS FORMAT"
+			           " CAN EXPRESS imposed state.\n"
+			           "            v7 has no record for a basevelocity carrier,"
+			           " so a booster here is invisible.\n");
 		else
 			Con_Printf("  warps     none, and the file is v%i -- which says"
 			           " NOTHING.  The writer did not exist.\n"
@@ -4425,6 +4480,18 @@ static void SV_RecSim_f (void)
 			           " diverge and that is the format, not the mover.\n",
 			           filever);
 	}
+	if (filever >= 8)
+	{
+		int npay = 0;
+		for (i = 0; i < nride; i++)
+			npay += rid[i].pay;
+		Con_Printf("  rides     %i arm, %i pay; cash-out scale 1 + %g*0.5 (header"
+		           " tickrate -- not yet pinned as the carrier's own)\n",
+		           nride - npay, npay, hdrtick);
+	}
+	else
+		Con_Printf("  rides     ^3v%i cannot carry them^7 -- a booster in this file"
+		           " is unexplained displacement\n", filever);
 
 	/* ---- the arms -------------------------------------------------------- */
 	{
@@ -4438,6 +4505,8 @@ static void SV_RecSim_f (void)
 		float  open_last = 0;
 		int    seeded = -1, mode, nbad = 0;
 		int    wcur = 0, wapplied = 0;		/* Patch 328 */
+		int    rcur = 0, rapplied = 0, rskew = 0;	/* Patch 343 */
+		vec3_t carrier;
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
@@ -4506,26 +4575,53 @@ static void SV_RecSim_f (void)
 				Con_Printf("  seed      ^1no sample precedes the first `in` row^7\n");
 			pmove.msec_carry = ins[0].carry;
 			wcur = 0;			/* Patch 328: each pass replays the warps */
+			rcur = 0;			/* Patch 343: and the carrier */
+			VectorClear(carrier);
 
 			for (i = 0; i < nin; i++)
 			{
 				recsim_in_t *r = &ins[i];
 				float dt;
-				int   wantticks;
+				int   wantticks, next_mt;
+				float next_carry;
 
 				if (stopat > 0 && r->pk - ins[0].pk >= stopat)
 					break;
+
+				/* PATCH 343: the carrier, in SV_BaseVelocityFrame's order -- the
+				   cash-out, then the hand-over -- before this row's move. */
+				for (; rcur < nride && rid[rcur].row <= i; rcur++)
+				{
+					recsim_ride_t *d = &rid[rcur];
+					if (d->mt < 0)
+						continue;
+					if (!mode)
+					{
+						rapplied++;
+						if (d->mt != r->mt)
+							rskew++;
+					}
+					if (d->pay)
+						VectorMA(pmove.velocity, 1 + hdrtick*0.5f, d->bv, pmove.velocity);
+					else
+						VectorCopy(d->bv, carrier);
+				}
+				VectorCopy(carrier, pmove.basevelocity);
+
 				if (r->mt < 0)
 					continue;
 
-				/* THE DURATION, DERIVED.  The last row has no successor, so the
-				   file cannot state how long the final move ran -- and the final
-				   move is the one the finish is latched on.  Reported below
-				   rather than guessed at here. */
-				if (i+1 >= nin)
+				/* THE DURATION, DERIVED from the successor row -- or, for the
+				   last row, from `inend` (Patch 343; v8).  Without it the final
+				   move, the one the finish is latched on, cannot be run. */
+				if (i+1 < nin)
+					{ next_mt = ins[i+1].mt; next_carry = ins[i+1].carry; }
+				else if (inend_mt >= 0)
+					{ next_mt = inend_mt; next_carry = inend_carry; }
+				else
 					break;
-				dt = (ins[i+1].mt - r->mt) * rate + (ins[i+1].carry - r->carry);
-				wantticks = ins[i+1].mt - r->mt;
+				dt = (next_mt - r->mt) * rate + (next_carry - r->carry);
+				wantticks = next_mt - r->mt;
 				if (!mode)
 					ndur++;
 
@@ -4566,7 +4662,7 @@ static void SV_RecSim_f (void)
 				{
 					if (wrp[wcur].mt < 0)
 						{ wcur++; continue; }	/* a malformed row, already noted */
-					if (wrp[wcur].mt > ins[i+1].mt)
+					if (wrp[wcur].mt > next_mt)
 						break;
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
@@ -4614,7 +4710,8 @@ static void SV_RecSim_f (void)
 				   lands on a round physical constant is a systematic offset, not
 				   a distribution.  The last group has no sample after it (the run
 				   ended inside that packet) and is skipped by `nsam < nsam`. */
-				if (ins[i+1].nsam != r->nsam && r->nsam >= 0 && r->nsam < nsam)
+				if ((i+1 >= nin || ins[i+1].nsam != r->nsam)
+				    && r->nsam >= 0 && r->nsam < nsam)
 				{
 					recsim_sam_t *s = &sam[r->nsam];
 					vec3_t d;
@@ -4716,14 +4813,21 @@ static void SV_RecSim_f (void)
 				           "  On a map with teleports arm 3 CANNOT\n        run to"
 				           " the end from a v%i file, whatever the mover does."
 				           "^7\n", filever);
+			/* Patch 343.  rskew counts records whose <mt> disagrees with the row
+			   they precede -- the grammar says they must match, so nonzero is a
+			   writer or ordering fault, not a physics result. */
+			if (nride)
+				Con_Printf("        %i ride record%s applied (%i off their row's"
+				           " <mt>).\n", rapplied, rapplied==1?"":"s", rskew);
 		}
 		else
 			Con_Printf("^5ARM 2/3^7  no packet boundary carried a sample to compare against.\n");
 
-		Con_Printf("\n  NOT MEASURED, because the file cannot say: the duration of"
-		           " the FINAL move.\n  %i rows give %i durations -- the last row"
-		           " has no successor to difference\n  against, and it is the move"
-		           " the finish is latched on.\n", nin, nin-1);
+		if (inend_mt < 0)
+			Con_Printf("\n  NOT MEASURED, because the file cannot say: the duration of"
+			           " the FINAL move.\n  %i rows give %i durations -- the last row"
+			           " has no successor to difference\n  against, and it is the move"
+			           " the finish is latched on.\n", nin, nin-1);
 
 		Z_Free(eo); Z_Free(ev);
 		movevars = savemv;
@@ -4733,6 +4837,7 @@ static void SV_RecSim_f (void)
 	Z_Free(ins);
 	Z_Free(sam);
 	Z_Free(wrp);
+	Z_Free(rid);
 }
 
 /*
@@ -4865,8 +4970,9 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommandD("pm_recsim", SV_RecSim_f,
 	                "FTESurf: re-simulate a recording's input trace (plan E3).  "
 	                "pm_recsim <file.rec> [stop after N packets].  Feeds the `in` "
-	                "records of a FTESURF-REC 6 file back through the mover that "
-	                "produced them and measures whether the trajectory comes back. "
+	                "records of a FTESURF-REC 6+ file back through the mover that "
+	                "produced them, applying its warp/ride/inend records, and "
+	                "measures whether the trajectory comes back. "
 	                "Measures only -- it tests no zone and refuses no run.");
 
 //	Cmd_AddCommand ("reallyevilhack", SV_ReallyEvilHack_f);

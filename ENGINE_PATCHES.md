@@ -30309,6 +30309,39 @@ position (0:13.39 / 0:13.41) on bhop_eazy's pb: before, ten rows all reading
 `Bhop:` interleaved with per-row absolutes. `replay stop` returns the player's
 own column intact. 0 new warnings (cl_hud.qc:2007 pre-existing).
 
+## Patch 343 — `pm_recsim` crosses a booster: it reads `ride` and `inend`  *(APPLIED -- `engine/server/sv_ccmds.c` only (SV_RecSim_f + one struct). Measurement command; no game path, cvar, struct, protocol or ABI change. VERIFIED: `cfg/test/p343ride.cfg`, before/after on two exes, three subjects and five controls.)*
+
+**Problem.** QC build 85 (FTESURF-REC 8) records the basevelocity carrier
+(`ride <pk> <mt> arm|pay <bx by bz>`) and the closing horizon (`inend <mt>
+<carry>`), but pm_recsim still ignored both, so a re-simulation could not cross a
+booster and could never run the final move -- the one the finish is latched on.
+It also still printed build 83's v7 claim, "no warps = nothing imposed state",
+which E5 measured false (surf_trance: zero warps, ten boosters).
+
+**Change.** `ride` records are parsed and keyed to the `in` row they precede
+(not to `<mt>`: a zero-tick move leaves two rows sharing one), then replayed in
+SV_BaseVelocityFrame's order before that row's move: `pay` adds
+`(1 + tickrate*0.5) * bv` to velocity (header `tickrate`, i.e. run_bv_tick's
+cvar; not yet pinned), `arm` sets pmove.basevelocity from that move on.  Records
+whose `<mt>` disagrees with their row are counted and printed.  `inend` supplies
+the last row's successor, so the final move is run and compared.  The warps
+sentence now says what each version can vouch for: v7 "nothing THIS FORMAT CAN
+EXPRESS"; v8 "no map entity wrote origin or velocity".  Neither version can
+express a linked_portal_door crossing.  The early-return path also leaked `wrp`.
+
+**Verified.** b85ride.part (surf_ecosystem, v8; `pay -1700` on the first row):
+before, arm 2 diverged on packet 0 by 25.69 u / 1712.75 u/s and arm 3 left at
+row 0; after, 26/26 packets at the printing floor, arm 3 never past 0.1 u, 2
+rides applied, 0 off their `<mt>`.  The same file with `inend 733` (the true
+successor) runs 27/27 moves at the floor.  With `inend 734` it fails at row 26 by
+30.27 u.  Arm 1 still reads 27/27 exact there, against the pre-registration:
+arm 1 checks dt against the same `<mt>` delta it is derived from, so only the
+trajectory catches a wrong `inend`.  Controls (e5trace v7, surf_trance v7,
+surf_kitsune v7, b83trace v7, e3trace v6): every ARM, DIVERGED, seed and warp
+line is byte-identical before and after.  NOT verified: a multi-command `arm`
+span.  No such recording exists yet (the fleet is on v7), and it needs a
+hand-played run over a booster.  0 new warnings.
+
 ## Patch 342 — `say <text>` sends again, the board's release closes it, per-row energy zeros, the air family goes green, the clock shows PB pace  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc`, `cl_scores.qc`, `cl_board.qc`, `cl_hud.qc`, `cl_watch.qc`, `cl_timer.qc`, `cl_results.qc`, `cl_hudedit.qc`, `cl_main.qc`, `src/menu/m_main.qc`, `ftesurf/cfg/default.cfg`, fixtures `cfg/test/b86{a,b}.cfg`.)*
 
 **Problem.** Patch 341's CSQC_ChatSay took `say` with text as well as bare
