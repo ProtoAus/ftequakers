@@ -975,6 +975,43 @@ static void Cmd_Exec_f (void)
 		return;
 	}
 
+	/*
+	  FTESurf Patch 330 -- bare-name exec.
+
+	  The mod's configs live in cfg/, cfg/test/ and cfg/maps/ (663 test fixtures,
+	  ~400 per-map ruleset files), and every one of them used to be reachable
+	  only by its full relative path: `exec cfg/test/p329a`.  Asked for from the
+	  console: "make it so you can just run configs with exec <configname>".
+	  So when the name as typed resolves to nothing, retry it under the three
+	  directories the mod keeps configs in, in order, before giving up -- the
+	  same two attempts each (as typed, then with .cfg appended) that the root
+	  lookup gets.  A name that DOES resolve at the root is untouched, so no
+	  existing exec changes meaning, and a server-restricted exec gains
+	  nothing: every fallback is inside the gamedir, and the "../" guard above
+	  already ran.
+
+	  The resolved path is written back into `name`, so the "execing ... from
+	  ..." line and the completion both speak the path that actually worked --
+	  the console populates with the real thing, not the abbreviation.
+	*/
+	{
+		static const char *const execfallback[] = {"", "cfg/", "cfg/test/", "cfg/maps/", "cfg/lobby/"};
+		char resolved[sizeof(name)];
+		unsigned int fi;
+		*resolved = 0;
+		for (fi = 0; fi < sizeof(execfallback)/sizeof(execfallback[0]); fi++)
+		{
+			if (FS_FLocateFile(va("%s%s", execfallback[fi], name), FSLF_IFFOUND|FSLF_IGNOREPURE, &loc) ||
+			    FS_FLocateFile(va("%s%s.cfg", execfallback[fi], name), FSLF_IFFOUND, &loc))
+			{
+				Q_snprintfz(resolved, sizeof(resolved), "%s%s", execfallback[fi], name);
+				break;
+			}
+		}
+		if (*resolved && strcmp(resolved, name))
+			Q_strncpyz(name, resolved, sizeof(name));
+	}
+
 	if (FS_FLocateFile(name, FSLF_IFFOUND|FSLF_IGNOREPURE, &loc) || FS_FLocateFile(va("%s.cfg", name), FSLF_IFFOUND, &loc))
 	{
 		file = FS_OpenReadLocation(name, &loc);
@@ -1181,6 +1218,40 @@ static int QDECL CompleteExecList (const char *name, qofs_t flags, time_t mtime,
 	ctx->cb(name, NULL, NULL, ctx);
 	return true;
 }
+/*
+  FTESurf Patch 330: the completion half of bare-name exec.  COM_EnumerateFiles
+  hands the callback the BASE name inside the pattern's directory, so each
+  subdirectory the exec fallback searches gets a callback that puts its own
+  directory back on the front -- the console then populates with a path that
+  works whether or not the fallback is what resolves it.  A partial that
+  already carries a directory ("cfg/test/p32") is served by the root
+  enumeration below, whose pattern is a path; the prefixed enumerations simply
+  match nothing for it.
+*/
+static int QDECL CompleteExecListCfg (const char *name, qofs_t flags, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct xcommandargcompletioncb_s *ctx = parm;
+	ctx->cb(va("cfg/%s", name), NULL, NULL, ctx);
+	return true;
+}
+static int QDECL CompleteExecListCfgTest (const char *name, qofs_t flags, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct xcommandargcompletioncb_s *ctx = parm;
+	ctx->cb(va("cfg/test/%s", name), NULL, NULL, ctx);
+	return true;
+}
+static int QDECL CompleteExecListCfgMaps (const char *name, qofs_t flags, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct xcommandargcompletioncb_s *ctx = parm;
+	ctx->cb(va("cfg/maps/%s", name), NULL, NULL, ctx);
+	return true;
+}
+static int QDECL CompleteExecListCfgLobby (const char *name, qofs_t flags, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct xcommandargcompletioncb_s *ctx = parm;
+	ctx->cb(va("cfg/lobby/%s", name), NULL, NULL, ctx);
+	return true;
+}
 static void Cmd_Exec_c(int argn, const char *partial, struct xcommandargcompletioncb_s *ctx)
 {
 	if (argn == 1)
@@ -1188,6 +1259,10 @@ static void Cmd_Exec_c(int argn, const char *partial, struct xcommandargcompleti
 		COM_EnumerateFiles(va("configs/%s*.cfg", partial), CompleteExecList, ctx);
 		COM_EnumerateFiles(va("%s*.cfg", partial), CompleteExecList, ctx);
 		COM_EnumerateFiles(va("%s*.rc", partial), CompleteExecList, ctx);
+		COM_EnumerateFiles(va("cfg/%s*.cfg", partial), CompleteExecListCfg, ctx);
+		COM_EnumerateFiles(va("cfg/test/%s*.cfg", partial), CompleteExecListCfgTest, ctx);
+		COM_EnumerateFiles(va("cfg/maps/%s*.cfg", partial), CompleteExecListCfgMaps, ctx);
+		COM_EnumerateFiles(va("cfg/lobby/%s*.cfg", partial), CompleteExecListCfgLobby, ctx);
 	}
 }
 

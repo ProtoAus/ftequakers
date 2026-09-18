@@ -2736,12 +2736,25 @@ void GLR_RenderView (void)
 	if (!r_refdef.globalfog.density)
 	{
 		extern cvar_t r_fog_linear;
+		extern cvar_t r_voidfog;	//FTESurf Patch 329 -- deliberately no render.h change, see the essay in renderer.c
 
 		int fogtype = ((r_refdef.flags & RDF_UNDERWATER) && cl.fog[FOGTYPE_WATER].density)?FOGTYPE_WATER:FOGTYPE_AIR;
 		CL_BlendFog(&r_refdef.globalfog, &cl.oldfog[fogtype], realtime, &cl.fog[fogtype]);
 
 		if (!r_fog_linear.ival)
 			r_refdef.globalfog.density /= 64;	//FIXME
+
+		/*
+		  FTESurf Patch 329: the void view gets no fog.  r_voidview is the
+		  per-primary-view answer Surf_SetupFrame already computed -- in the
+		  void, noclipping, r_voidvis on -- and density 0 is the renderer's
+		  own "no fog" state: it is what gates PERMUTATION_FOG, so this frame
+		  compiles no fog at all rather than blending a transparent one.
+		  cl.fog itself is never touched; the frame back inside the map
+		  blends the map's own fog again with nothing to re-emit.
+		*/
+		if (r_voidview && r_voidfog.ival)
+			r_refdef.globalfog.density = 0;
 	}
 
 	if (!(r_refdef.flags & RDF_NOWORLDMODEL))

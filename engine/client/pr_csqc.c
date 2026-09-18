@@ -241,6 +241,11 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.pmove_org = NULL;	//can't make aimbots if you don't know where you're aiming from.
 		csqcg.pmove_vel = NULL;	//no dead reckoning please
 		csqcg.pmove_mins = csqcg.pmove_maxs = csqcg.pmove_jump_held = csqcg.pmove_waterjumptime = csqcg.pmove_onground = NULL; //I just want to kill theses
+		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
+		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
+		csqcg.predmove_bvfired = NULL;
+		csqcg.predmove_onground = csqcg.predmove_pmtype = csqcg.predmove_buttons = csqcg.predmove_fixangle = NULL;
+		csqcg.predmove_mins = csqcg.predmove_maxs = csqcg.predmove_anglesnap = csqcg.predmove_cmdangles = NULL;
 		csqcg.input_sequence = NULL;
 		csqcg.input_angles = csqcg.input_movevalues = csqcg.input_buttons = csqcg.input_impulse = csqcg.input_lightlevel = csqcg.input_servertime = NULL;
 		csqcg.input_weapon = NULL;
@@ -8623,6 +8628,13 @@ void CSQC_WorldLoaded(void)
 	csqcmapentitydataloaded = true;
 	csqcmapentitydata = Mod_GetEntitiesString(csqc_world.worldmodel);
 
+	/*FTESurf Patch 335: a predicted angle snap belongs to the map it fired on.
+	  Patch 337: and so does every held basevelocity -- a new map must never
+	  inherit a cash-out.*/
+	for (tmp = 0; tmp < MAX_SPLITS; tmp++)
+		CSQC_PredictAngleFlush(tmp);
+	CSQC_PredictBaseVelFlush();
+
 	World_RBE_Start(&csqc_world);
 
 	worldent = (csqcedict_t *)EDICT_NUM_PB(csqcprogs, 0);
@@ -9432,6 +9444,35 @@ qboolean CSQC_ConsoleCommand(int seat, const char *cmd)
 	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_ConsoleCommand);
 	return G_FLOAT(OFS_RETURN);
 }
+/*
+FTESurf Patch 341: the client's `say` offered to csprogs before the engine
+sends it.  FTESurf's chatbox draws its own typing line and the engine's
+kdm_message corner input is exactly what the feature replaced, but `say`
+ typed at the console is an engine command (cmd beats alias beats cvar,
+ cmd.c:3326) so no QC-side claim could ever reach it.  Name-bound like every
+ other csqc globalfunction: an old csprogs without CSQC_ChatSay simply never
+ gets asked, and an old engine never asks -- both directions degrade to the
+ engine's own prompt.
+*/
+qboolean CSQC_ChatSay(qboolean team, const char *args)
+{
+	void *pr_globals;
+	if (!csqcprogs || !csqcg.CSQC_ChatSay)
+		return false;
+#ifdef TEXTEDITOR
+	if (editormodal)
+		return false;
+#endif
+
+	CSQC_ChangeLocalPlayer(CL_TargettedSplit(false));
+
+	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+	(((string_t *)pr_globals)[OFS_PARM0] = PR_TempString(csqcprogs, args));
+	((float *)pr_globals)[OFS_PARM1] = team;
+
+	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_ChatSay);
+	return G_FLOAT(OFS_RETURN);
+}
 static void CSQC_GameCommand_f(void)
 {
 	void *pr_globals;
@@ -9690,6 +9731,334 @@ qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta)
 
 	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_Parse_SetAngles);
 	return G_FLOAT(OFS_RETURN);
+}
+
+/*
+===========================================================================
+  FTESurf Patch 335 -- the per-command prediction hook.
+
+  Server QC touches (trigger_teleport, trigger_push, trigger_setspeed and the
+  rest of the Source IO graph) run inside SV_RunCmd and reach the client only
+  as the snapshot that follows, so every imposed state change costs a round
+  trip and arrives as an origin correction the renderer refuses to lerp.  The
+  client already replays each unacked usercmd through the same deterministic
+  mover; what it could not do is run the TRIGGERS, because nothing called back
+  into CSQC at the point in the replay where a server-side touch would have
+  fired.
+
+  CSQC_PredictPlayerMove is that callback: once per predicted usercmd,
+  immediately after PM_PlayerMove and before the post-move state is written
+  back, with the whole pmove result exposed read-write through the predmove_*
+  globals.  QC that does not export the entry point pays nothing: every field
+  is looked up by name and the wrapper is inert when the function or the
+  globals are absent, so an old csprogs.dat on a new engine and a new
+  csprogs.dat on an old engine both behave exactly as they did before.
+
+  THREE SEMANTICS THAT HAD TO MATCH THE SERVER RATHER THAN BE INVENTED:
+
+  1. The basevelocity carrier.  predmove_basevel is NOT applied to the command
+     that wrote it; it is folded into pmove.basevelocity at the top of the
+     NEXT predicted command and zeroed as it is read -- the same one-command
+     read-and-clear window engine Patch 240 gives .run_basevelocity on the
+     server, so the cash-out in PMSrc_StartGravity lands on the same command
+     on both sides.  Keyed by command sequence, not by call, because
+     CL_PredictUsercmd recurses over 50ms splits and the halves of one command
+     must consume once, like the server's one SV_RunCmd.
+
+  2. The angle snap.  A predicted trigger_teleport that snaps the view cannot
+     simply write pv->viewangles and wait for the server to agree: the server
+     computes its svcfte_setangledelta against ITS lastcmd, and a client that
+     already rotated would rotate a second time when the delta lands.  So the
+     snap is applied as the rotation (snap - the triggering command's angles)
+     through the same CSQC_Parse_SetAngles funnel every server-side fixangle
+     uses (which keeps the ghost camera logic in cl_ghost.qc in charge of WHO
+     gets rotated), and the rotation is remembered in a small ring.  When the
+     server's delta arrives, the remembered rotation is subtracted from it
+     before application: what is left is exactly the turn the player made
+     between the teleport command and the server's lastcmd, which is the part
+     the local snap could not have known.  No value matching, no epsilon --
+     the arithmetic is exact by construction and degrades to the unmodified
+     delta when no snap is outstanding.
+
+  3. The listen server.  With a local server active the SSQC touch functions
+     run in the same process and the hook is skipped outright, which is the
+     Patch 240 precedent: prediction must be honestly ignorant rather than
+     right twice.
+===========================================================================
+*/
+extern cvar_t cl_predict_qchook;
+
+static struct {
+	vec3_t rot;
+	double time;
+	qboolean used;
+} predsnaps[MAX_SPLITS][4];
+/*FTESurf Patch 337: the basevelocity state machine, client side.
+
+  The server's model (Patch 240/249, sv_entities.qc): trigger_push_touch
+  WRITES a held carrier (.run_basevel) and sets a flag (.run_basevel_armed)
+  every command the player is inside; SV_BaseVelocityFrame, running PreThink
+  BEFORE the move, (a) CASHES OUT the held carrier into real velocity --
+  velocity += (1 + pm_ticrate*0.5) * held -- on the first command nothing
+  re-armed it, (b) clears the flag unconditionally, (c) hands the held vector
+  to the engine's one-command window (.run_basevelocity -> pmove.basevelocity,
+  '0 0 0' on exactly the command the money is paid), and (d) spends the held
+  Z, because PMSrc_StartGravity is about to spend the window's.
+
+  The client mirror runs from the same two hooks around the same PM: the
+  frame half here (restore, cash out, hand over, spend Z), the touch half in
+  QC (TG_FirePush writes predmove_basevel / predmove_bvfired).  The state is
+  a RING keyed by the sequence of the command that produced it, because the
+  chain restarts from the acked state on EVERY rendered frame: a single slot
+  cleared at chain start loses the first replayed command's push (a stable
+  4.00 u error on 400 u/s boosters, measured twice in play on
+  bhop_mom_training_beta), and no cash-out at all loses the whole exit
+  impulse (errors growing 4 u per command, also measured).  Stale entries
+  self-invalidate -- the restore only accepts tag == sequence-1 -- and
+  CSQC_WorldLoaded flushes the ring so a new map never inherits a cash-out.
+
+  The 50 ms-split halves both run the frame half against the same restored
+  state; the server's second half would run against its first half's touch.
+  That differs only when a split command crosses a volume boundary -- rare,
+  bounded by one command, and the pre-337 seq-dedupe was wrong there too.*/
+#define PRED_BVEL_RING 64
+static struct {
+	vec3_t held;
+	qboolean armed;
+	unsigned int seq;
+	qboolean used;
+} pred_bvring[MAX_SPLITS][PRED_BVEL_RING];
+static vec3_t pred_bv_held[MAX_SPLITS];
+static qboolean pred_bv_armed[MAX_SPLITS];
+
+void CSQC_PredictBaseVelFlush(void)
+{
+	memset(pred_bvring, 0, sizeof(pred_bvring));
+	memset(pred_bv_held, 0, sizeof(pred_bv_held));
+	memset(pred_bv_armed, 0, sizeof(pred_bv_armed));
+}
+static int pred_snap_lastseq[MAX_SPLITS];	/*-1 = none; the chain replays every unacked cmd on every rendered frame, so an angle snap must be applied to the live view ONCE per command sequence, not once per replay*/
+
+void CSQC_PredictAngleFlush(int seat)
+{
+	int i;
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	for (i = 0; i < countof(predsnaps[seat]); i++)
+		predsnaps[seat][i].used = true;
+	pred_snap_lastseq[seat] = -1;
+}
+
+/* Apply one locally-predicted angle snap: rotate the live view by
+   (snap - the triggering command's angles), through the same funnel every
+   server fixangle uses, and remember the rotation for the delta correction. */
+static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercmd_t *cmd)
+{
+	playerview_t *pv = &cl.playerview[seat];
+	vec3_t newang, rot;
+	double oldest;
+	int i, slot = 0;
+
+	/*the same command replays on every rendered frame until it is acked; only
+	  the first pass may rotate the live view*/
+	if (pred_snap_lastseq[seat] >= 0 && cmd->sequence <= pred_snap_lastseq[seat])
+		return;
+	pred_snap_lastseq[seat] = cmd->sequence;
+
+	for (i = 0; i < 3; i++)
+	{
+		rot[i] = snap[i] - SHORT2ANGLE(cmd->angles[i]);
+		rot[i] -= 360 * floor((rot[i] + 180) / 360);	/* -> [-180,180), like Ghost_NormAngle's contract */
+		newang[i] = pv->viewangles[i] + rot[i];
+	}
+
+	if (!CSQC_Parse_SetAngles(seat, newang, true))
+	{
+		VectorCopy(newang, pv->viewangles);
+		VectorCopy(newang, pv->simangles);
+		VectorCopy(pv->viewangles, pv->intermissionangles);
+	}
+
+	/* record the rotation, oldest slot first so the ring stays chronological */
+	oldest = 1e30;
+	for (i = 0; i < countof(predsnaps[seat]); i++)
+	{
+		if (predsnaps[seat][i].time < oldest)
+		{
+			oldest = predsnaps[seat][i].time;
+			slot = i;
+		}
+	}
+	VectorCopy(rot, predsnaps[seat][slot].rot);
+	predsnaps[seat][slot].time = realtime;
+	predsnaps[seat][slot].used = false;
+}
+
+void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
+{
+	double oldest;
+	int i, slot = -1;
+
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+
+	oldest = realtime - 1.5;	/* a server delta more than 1.5s behind the snap is not the snap's */
+	for (i = 0; i < countof(predsnaps[seat]); i++)
+	{
+		if (predsnaps[seat][i].used || predsnaps[seat][i].time < oldest)
+			continue;
+		if (slot < 0 || predsnaps[seat][i].time < predsnaps[seat][slot].time)
+			slot = i;
+	}
+	if (slot >= 0)
+	{
+		predsnaps[seat][slot].used = true;
+		VectorSubtract(delta, predsnaps[seat][slot].rot, delta);
+	}
+}
+
+void CSQC_PredictConsumeBaseVel(int seat, int sequence)
+{
+	int slot;
+	if (!csqcg.predmove_basevel || !cl_predict_qchook.ival)
+		return;
+#ifdef HAVE_SERVER
+	if (sv.state != ss_dead)
+		return;
+#endif
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+
+	/* restore the state as of the end of the previous command */
+	slot = (unsigned int)(sequence - 1) & (PRED_BVEL_RING - 1);
+	if (pred_bvring[seat][slot].used && pred_bvring[seat][slot].seq == (unsigned int)(sequence - 1))
+	{
+		VectorCopy(pred_bvring[seat][slot].held, pred_bv_held[seat]);
+		pred_bv_armed[seat] = pred_bvring[seat][slot].armed;
+	}
+	else
+	{
+		VectorClear(pred_bv_held[seat]);
+		pred_bv_armed[seat] = false;
+	}
+
+	/* (a) the cash-out: horizontal only, because (d) spent the Z already */
+	if (!pred_bv_armed[seat] &&
+		(pred_bv_held[seat][0] || pred_bv_held[seat][1] || pred_bv_held[seat][2]))
+	{
+		float scale = 1 + movevars.ticrate * 0.5f;
+		VectorMA(pmove.velocity, scale, pred_bv_held[seat], pmove.velocity);
+		VectorClear(pred_bv_held[seat]);
+	}
+	/* (b) */
+	pred_bv_armed[seat] = false;
+	/* (c) the window: overwrite, as the server's sv_user.c consume does */
+	VectorCopy(pred_bv_held[seat], pmove.basevelocity);
+	/* (d) */
+	pred_bv_held[seat][2] = 0;
+}
+
+/*FTESurf Patch 337: CSQC_PredictResetChain is GONE.  It cleared the carrier at
+  every chain restart -- i.e. every rendered frame -- which is precisely the bug
+  the ring above fixes: nothing about the carrier is chain-scoped state any
+  more.  The angle-snap ring was already frame-surviving by design. */
+
+
+void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin)
+{
+	vec3_t oldorg, oldvel;
+	void *pr_globals;
+
+	if (!csqcprogs || !csqcg.CSQC_PredictPlayerMove || !cl_predict_qchook.ival)
+		return;
+	if (!csqcg.predmove_org || !csqcg.predmove_vel || !csqcg.predmove_onground)
+		return;
+#ifdef HAVE_SERVER
+	/* Listen server: SSQC touches are the authority in this process, so the
+	   mirror must stay honestly ignorant rather than fire twice (the Patch 240
+	   precedent).  NOT sv.active: that field is never written anywhere in this
+	   tree -- every existing `if (sv.active)` on the client is dead code, which
+	   the p335a run proved by printing hook-alive on a live listen server.
+	   sv.state is the live one (sv_init.c:1820). */
+	if (sv.state != ss_dead)
+		return;
+#endif
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+
+	CSQC_ChangeLocalPlayer(seat);
+
+	if (csqcg.predmove_org0)
+		VectorCopy(preorigin, csqcg.predmove_org0);
+	VectorCopy(pmove.origin, csqcg.predmove_org);
+	VectorCopy(pmove.velocity, csqcg.predmove_vel);
+	*csqcg.predmove_onground = pmove.onground;
+	if (csqcg.predmove_mins)
+		VectorCopy(pmove.player_mins, csqcg.predmove_mins);
+	if (csqcg.predmove_maxs)
+		VectorCopy(pmove.player_maxs, csqcg.predmove_maxs);
+	if (csqcg.predmove_pmtype)
+		*csqcg.predmove_pmtype = pmove.pm_type;
+	if (csqcg.predmove_buttons)
+		*csqcg.predmove_buttons = cmd->buttons;
+	if (csqcg.predmove_cmdangles)
+		VectorCopy(pmove.angles, csqcg.predmove_cmdangles);
+	if (csqcg.predmove_fixangle)
+		*csqcg.predmove_fixangle = 0;
+	if (csqcg.predmove_basevel)
+		VectorClear(csqcg.predmove_basevel);
+	if (csqcg.predmove_bvfired)
+		*csqcg.predmove_bvfired = 0;
+
+	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+	((float *)pr_globals)[OFS_PARM0] = seat;
+	((float *)pr_globals)[OFS_PARM1] = cmd->sequence;
+	((float *)pr_globals)[OFS_PARM2] = cmd->msec / 1000.0f;
+	VectorCopy(pmove.origin, oldorg);
+	VectorCopy(pmove.velocity, oldvel);
+
+	PR_ExecuteProgram(csqcprogs, csqcg.CSQC_PredictPlayerMove);
+
+	if (IS_NAN(csqcg.predmove_org[0]) || IS_NAN(csqcg.predmove_org[1]) || IS_NAN(csqcg.predmove_org[2]) ||
+		IS_NAN(csqcg.predmove_vel[0]) || IS_NAN(csqcg.predmove_vel[1]) || IS_NAN(csqcg.predmove_vel[2]))
+	{
+		Con_DPrintf("CSQC_PredictPlayerMove returned NaN; ignored\n");
+		VectorCopy(oldorg, csqcg.predmove_org);
+		VectorCopy(oldvel, csqcg.predmove_vel);
+		*csqcg.predmove_onground = pmove.onground;
+	}
+
+	VectorCopy(csqcg.predmove_org, pmove.origin);
+	VectorCopy(csqcg.predmove_vel, pmove.velocity);
+	pmove.onground = *csqcg.predmove_onground;
+
+	if (csqcg.predmove_fixangle && *csqcg.predmove_fixangle && csqcg.predmove_anglesnap)
+	{
+		*csqcg.predmove_fixangle = 0;
+		CSQC_PredictAngleApplySnap(seat, csqcg.predmove_anglesnap, cmd);
+	}
+
+	/*FTESurf Patch 337: the touch half of the basevelocity machine -- what
+	   QC's TG_FirePush wrote IS the server's trigger_push_touch write (the net
+	   of every volume overlapping this command; QC accumulates exactly like
+	   the server's armed-flag sum).  Take it into the held state and snapshot
+	   the ring slot for this sequence, so the next chain's replay of
+	   sequence+1 -- possibly after an ack restart, possibly a different
+	   rendered frame -- restores the same state the server's PreThink saw.*/
+	if (csqcg.predmove_basevel)
+	{
+		qboolean fired = csqcg.predmove_bvfired ? (*csqcg.predmove_bvfired != 0) : (csqcg.predmove_basevel[0] != 0 || csqcg.predmove_basevel[1] != 0 || csqcg.predmove_basevel[2] != 0);
+		int slot = (unsigned int)cmd->sequence & (PRED_BVEL_RING - 1);
+		if (fired)
+		{
+			VectorCopy(csqcg.predmove_basevel, pred_bv_held[seat]);
+			pred_bv_armed[seat] = true;
+		}
+		VectorCopy(pred_bv_held[seat], pred_bvring[seat][slot].held);
+		pred_bvring[seat][slot].armed = pred_bv_armed[seat];
+		pred_bvring[seat][slot].seq = cmd->sequence;
+		pred_bvring[seat][slot].used = true;
+	}
 }
 
 void CSQC_Input_Frame(int seat, usercmd_t *cmd)

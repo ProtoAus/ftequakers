@@ -2950,11 +2950,16 @@ void	VK_R_RenderView				(void)
 	if (!r_refdef.globalfog.density)
 	{
 		extern cvar_t r_fog_linear;
+		extern cvar_t r_voidfog;	//FTESurf Patch 329 -- deliberately no render.h change, see the essay in renderer.c
 
 		int fogtype = ((r_refdef.flags & RDF_UNDERWATER) && cl.fog[FOGTYPE_WATER].density)?FOGTYPE_WATER:FOGTYPE_AIR;
 		CL_BlendFog(&r_refdef.globalfog, &cl.oldfog[fogtype], realtime, &cl.fog[fogtype]);
 		if (!r_fog_linear.ival)
 			r_refdef.globalfog.density /= 64;	//FIXME
+
+		//FTESurf Patch 329: no fog while noclipping in the void -- see gl_rmain.c.
+		if (r_voidview && r_voidfog.ival)
+			r_refdef.globalfog.density = 0;
 	}
 
 	custompostproc = NULL;

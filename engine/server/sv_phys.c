@@ -3348,7 +3348,8 @@ HOW THE MODE IS DECIDED, best evidence first:
 Nothing else is consulted, and in particular the BSP is not: a map that is not
 in the index and does not say what it is in its name has nothing to read.
 
-WHERE THE NUMBERS LIVE: cfg/mode_<name>.cfg in the gamedir, not in a table
+WHERE THE NUMBERS LIVE: cfg/lobby/mode_<name>.cfg in the gamedir, not in a table
+(P330 moved the mode and lobby layers into cfg/lobby/ together)
 here.  That is the same argument Patch 170 makes for defaultstr -- "what this
 game considers correct, maintained in one readable file rather than duplicated
 into a table" -- and it means a ruleset can be tuned, diffed and reviewed
@@ -3633,7 +3634,7 @@ static qboolean SV_LoadGamemodeRuleset(const char *modename)
 {
 	char path[MAX_QPATH];
 
-	Q_snprintfz(path, sizeof(path), "cfg/mode_%s.cfg", modename);
+	Q_snprintfz(path, sizeof(path), "cfg/lobby/mode_%s.cfg", modename);	//P330: was cfg/mode_%s.cfg; the mode and lobby layers share cfg/lobby/ now
 	if (!SV_LoadRulesetFile(path, "gamemode ruleset"))
 		return false;
 
@@ -3643,7 +3644,9 @@ static qboolean SV_LoadGamemodeRuleset(const char *modename)
 
 /*
 ===========================================================================
-FTESurf Patch 267 -- cfg/map_<mapname>.cfg, the PER-MAP ruleset layer.
+FTESurf Patch 267 -- cfg/maps/map_<mapname>.cfg, the PER-MAP ruleset layer.
+(P330 moved it from cfg/ into cfg/maps/ with the render layer beside it; the
+trust argument below is unchanged by the directory.)
 
 WHY THIS EXISTS.  107 of the 1310 installed maps set sv_maxvelocity in their own
 entity lump -- a logic_auto firing `<targetname>,Command,sv_maxvelocity N` at
@@ -3692,7 +3695,7 @@ static void SV_LoadMapRuleset(const char *mapname)
 	if (!mapname || !*mapname)
 		return;
 
-	Q_snprintfz(path, sizeof(path), "cfg/map_%s.cfg", mapname);
+	Q_snprintfz(path, sizeof(path), "cfg/maps/map_%s.cfg", mapname);	//P330: was cfg/map_%s.cfg
 	if (!SV_LoadRulesetFile(path, "map ruleset"))
 		return;
 

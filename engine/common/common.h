@@ -693,8 +693,8 @@ enum fs_relative{
 	FS_BASEGAMEONLY,	//fte/
 	FS_PUBGAMEONLY,		//$gamedir/ or qw/ but not fte/
 	FS_PUBBASEGAMEONLY,	//qw/ (fixme: should be the last non-private basedir)
-	FS_GAMEDOWNLOADS,	//nettest P38: $gamedir_downloads/ - sibling of the active gamedir; client downloads land here so the gamedir stays pure.
-	FS_GAMECACHE		//ftesurf P186: $gamedir_cache/ - another sibling; the runtime asset cache writes here so a map that needed a big Steam pack can be replayed without mounting it.
+	FS_GAMEDOWNLOADS,	//nettest P38, ftesurf P330: $gamedir/downloads/ - inside the active gamedir; client downloads land here, in their own directory (was the <gamedir>_downloads sibling until P330 folded it in).
+	FS_GAMECACHE		//ftesurf P186, P330: $gamedir/cache/ - the runtime asset cache writes here so a map that needed a big Steam pack can be replayed without mounting it (was the <gamedir>_cache sibling until P330).
 };
 
 qboolean COM_WriteFile (const char *filename, enum fs_relative fsroot, const void *data, int len);

@@ -1143,6 +1143,7 @@ enum
 	globalfunction(CSQC_Parse_Event,		"void()")	\
 	globalfunction(CSQC_Parse_Damage,		"float(float save, float take, vector inflictororg)")	\
 	globalfunction(CSQC_Parse_SetAngles,	"float(vector angles, float isdelta)")	\
+	globalfunction(CSQC_PredictPlayerMove,	"void(float seat, float cmdsequence, float msec)")/*FTESurf Patch 335: per-predicted-usercmd trigger hook*/	\
 	globalfunction(CSQC_PlayerInfoChanged,	"void(float playernum)")	\
 	globalfunction(CSQC_ServerInfoChanged,	"void()")	\
 	globalfunction(CSQC_InputEvent,			"float(float evtype, float scanx, float chary, float devid)")	\
@@ -1150,6 +1151,7 @@ enum
 	globalfunction(CSQC_RendererRestarted,	"void(string rendererdescription)")	\
 	globalfunction(CSQC_GenerateMaterial,	"string(string shadername)")	\
 	globalfunction(CSQC_ConsoleCommand,		"float(string cmd)")	\
+	globalfunction(CSQC_ChatSay,			"float(string args, float team)")	/*FTESurf Patch 341: csprogs' own chat draft takes `say`*/	\
 	globalfunction(CSQC_ConsoleLink,		"float(string text, string info)")	\
 	globalfunction(GameCommand,				"void(string cmdtext)")	/*DP extension*/\
 	\
@@ -1225,6 +1227,20 @@ enum
 	globalfloat (pmove_jump_held)			/*deprecated. read/written by runplayerphysics*/ \
 	globalfloat (pmove_waterjumptime)		/*deprecated. read/written by runplayerphysics*/ \
 	globalfloat (pmove_onground)			/*deprecated. read/written by runplayerphysics*/ \
+	\
+	globalvector(predmove_org0)				/*FTESurf P335: origin at the START of the predicted command (ro)*/ \
+	globalvector(predmove_org)				/*FTESurf P335: origin after PM_PlayerMove; QC may rewrite (rw)*/ \
+	globalvector(predmove_vel)				/*FTESurf P335: velocity after PM_PlayerMove; QC may rewrite (rw)*/ \
+	globalvector(predmove_basevel)			/*FTESurf P335: this command's net trigger_push write; the engine holds it across commands as the mirror of the server's .run_basevel and pays the Patch 249 cash-out (w)*/ \
+	globalfloat (predmove_bvfired)			/*FTESurf P337: set nonzero when a continuous push fired this command, even if the net vector cancelled to zero -- the server's armed flag is set unconditionally by the touch (w)*/ \
+	globalfloat (predmove_onground)			/*FTESurf P335: rw*/ \
+	globalvector(predmove_mins)				/*FTESurf P335: player hull (ro)*/ \
+	globalvector(predmove_maxs)				/*FTESurf P335: player hull (ro)*/ \
+	globalfloat (predmove_pmtype)			/*FTESurf P335: pmove.pm_type of the command just run (ro)*/ \
+	globalfloat (predmove_buttons)			/*FTESurf P335: cmd.buttons of the command just run (ro)*/ \
+	globalvector(predmove_cmdangles)		/*FTESurf P335: pmove.angles of the command just run, i.e. the usercmd's own view angles (ro)*/ \
+	globalvector(predmove_anglesnap)		/*FTESurf P335: absolute view angles, applied when predmove_fixangle is set (w)*/ \
+	globalfloat (predmove_fixangle)			/*FTESurf P335: set to 1 to apply predmove_anglesnap; engine clears (w)*/ \
 	\
 	globalfloat (input_sequence)			/*float		filled by getinputstate, read by runplayerphysics*/ \
 	globalfloat (input_timelength)			/*float		filled by getinputstate, read by runplayerphysics*/ \

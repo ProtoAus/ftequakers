@@ -297,6 +297,48 @@ cvar_t r_voidvis							= CVARFD ("r_voidvis", "1", CVAR_ARCHIVE,
 												"1: Draw the whole world, with the frustum and area culls kept.\n"
 												"Has no effect anywhere except in the void while noclipping.");
 /*
+FTESurf Patch 329: no fog while the view is in the void.
+
+r_voidvis draws the WHOLE world for a noclipping player out in the void, and
+fog then does the one thing that undoes it.  Source fog is authored for the
+playable space -- surf_tensor2 runs a negative fogstart, and the census' p90
+fogend is a few thousand units -- so from a vantage thousands of units ABOVE
+the map, every surface of it sits past fogend and the player who flew out to
+look at the map sees a silhouette in fog colour instead.  The complaint: "if
+you noclip into the void with a foggy map, the game leaves the fog on, making
+it really hard to see the part of the map you're noclipping to."
+
+The fog is not something the map can be re-authored around, and it is not a
+bug in the fog maths either -- cl_fog.qc reproduces Source's min() curve
+exactly, and Source itself would draw the same soup from this vantage.  It is
+a vantage Source never lets you have.  So the void view, which is already a
+deliberate departure from Source (r_voidvis), departs once more: while
+r_voidview is true the frame's blended globalfog density is zeroed, which is
+not merely transparent fog -- density 0 is what gates PERMUTATION_FOG, so the
+fog is not compiled into the shaders at all that frame.
+
+Gated on r_voidview and not on a fresh contents test because every input to
+"in the void, noclipping, and being shown the whole world" is already fused
+there, once per primary view, in Surf_SetupFrame: a player who merely FELL out
+of the map keeps their fog (and their Patch 138 last-good-cluster view), and
+recursive views -- skyrooms, mirrors, portals -- never inherit the main view's
+answer.  Zeroed per frame AFTER CL_BlendFog rather than by touching cl.fog,
+so the player's fog state is never modified: fly back inside and the very
+next frame blends and draws the map's own fog again, with no edge to re-emit
+and nothing for the QC in cl_fog.qc to know about.
+
+Deliberately NOT declared in render.h: the two readers (gl_rmain.c, vk_init.c)
+carry a local extern beside their existing `extern cvar_t r_fog_linear` in the
+same block, so this patch changes no engine header and an incremental m-rel
+build is trustworthy -- the makefiles do not track header deps, and a cvar
+that costs one line per backend is not worth a forced full recompile.
+*/
+cvar_t r_voidfog							= CVARFD ("r_voidfog", "1", CVAR_ARCHIVE,
+												"Whether fog is drawn while the view is in the void and the player is noclipping.\n"
+												"0: keep the map's fog -- everything you flew out to see is past fogend, so it is fog colour.\n"
+												"1: no fog in the void (default).  Fog returns the frame you are back inside.\n"
+												"Has no effect anywhere r_voidvis does not.");
+/*
 FTESurf Patch 218: blended world surfaces were drawn FRONT-TO-BACK.
 
 Every BSP world walk in this engine visits the near child of a node first, then
@@ -1276,6 +1318,7 @@ void Renderer_Init(void)
 
 	Cvar_Register (&r_novis, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidvis, GLRENDEREROPTIONS);
+	Cvar_Register (&r_voidfog, GLRENDEREROPTIONS);	//FTESurf Patch 329
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
 	Cvar_Register (&r_reflectcube, GLRENDEREROPTIONS);
 	Cvar_Register (&r_envcubemap, GLRENDEREROPTIONS);			//FTESurf Patch 268 B
@@ -1542,10 +1585,11 @@ void Renderer_Init(void)
 	{	//FTESurf Patch 319. Defined in cl_ents.c next to the BIH walk they drive,
 		//because the essay explaining why a nodraw clip brush cannot be drawn any
 		//other way belongs with the code, not with the registration.
-		extern cvar_t r_showbrushes, r_showbrushes_dist, r_showbrushes_mask;
+		extern cvar_t r_showbrushes, r_showbrushes_dist, r_showbrushes_mask, r_showbrushes_fill;
 		Cvar_Register (&r_showbrushes, GLRENDEREROPTIONS);
 		Cvar_Register (&r_showbrushes_dist, GLRENDEREROPTIONS);
 		Cvar_Register (&r_showbrushes_mask, GLRENDEREROPTIONS);
+		Cvar_Register (&r_showbrushes_fill, GLRENDEREROPTIONS);	//FTESurf Patch 331
 	}
 	Cvar_Register (&r_showfields, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showshaders, GLRENDEREROPTIONS);

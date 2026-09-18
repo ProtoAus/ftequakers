@@ -3766,6 +3766,14 @@ void CL_Say (qboolean team, char *extra)
 	char	text[2048], sendtext[2048], *s;
 	playerview_t *pv = &cl.playerview[CL_TargettedSplit(false)];
 
+	/*
+	FTESurf Patch 341: csprogs' chat draft gets the command first, bare `say`
+	and `say text` alike -- see CSQC_ChatSay in pr_csqc.c.  `extra` is the
+	/me prefix (CL_SayMe_f), which is not chat the draft owns.
+	*/
+	if (!isDedicated && !extra && CSQC_ChatSay(team, Cmd_Args()))
+		return;
+
 	if (Cmd_Argc() < 2)
 	{
 		/*

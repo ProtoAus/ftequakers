@@ -784,7 +784,12 @@ struct playerview_s
 									//playerstate, so it does NOT regenerate from
 									//networked state and has to be carried.  Read
 									//only to build the REPORTED velocity; the mover
-									//still seeds from from.state as delivered.
+					//still seeds from from.state as delivered.
+		vec3_t		origin;			//FTESurf Patch 335: the origin this client
+									//PREDICTED for `sequence`, kept only so the
+									//ack can be compared against it -- the
+									//snap-back meter (cl_prederror).  Never
+									//read by the mover.
 
 		int			sequence;
 	} prop;
@@ -1584,10 +1589,17 @@ void	 CSQC_ServerInfoChanged(void);
 void	 CSQC_PlayerInfoChanged(int player);
 qboolean CSQC_Parse_Damage(int seat, float save, float take, vec3_t source);
 qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta);
+//FTESurf Patch 335: per-predicted-usercmd CSQC trigger hook.
+void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin);
+void	 CSQC_PredictConsumeBaseVel(int seat, int sequence);
+void	 CSQC_PredictBaseVelFlush(void);
+void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
+void	 CSQC_PredictAngleFlush(int seat);
 void	 CSQC_Input_Frame(int seat, usercmd_t *cmd);
 void	 CSQC_WorldLoaded(void);
 qboolean CSQC_ParseTempEntity(void);
 qboolean CSQC_ConsoleCommand(int seat, const char *cmd);
+qboolean CSQC_ChatSay(qboolean team, const char *args);
 qboolean CSQC_KeyPress(int key, int unicode, qboolean down, unsigned int devid);
 qboolean CSQC_MouseMove(float xdelta, float ydelta, unsigned int devid);
 qboolean CSQC_MousePosition(float xabs, float yabs, unsigned int devid);
@@ -1610,6 +1622,11 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_UnconnectedInit() false
 #define CSQC_UseGamecodeLoadingScreen() false
 #define CSQC_Parse_SetAngles(seat,newangles,wasdelta) false
+#define CSQC_PredictPlayerMove(seat,cmd,preorigin)
+#define CSQC_PredictConsumeBaseVel(seat,sequence)
+#define CSQC_PredictBaseVelFlush()
+#define CSQC_PredictAngleCorrect(seat,delta)
+#define CSQC_PredictAngleFlush(seat)
 #define CSQC_ServerInfoChanged()
 #define CSQC_PlayerInfoChanged(player)
 #endif

@@ -8146,7 +8146,12 @@ void CLQW_ParseServerMessage (void)
 			break;
 		case svcfte_setangledelta:
 			for (i=0 ; i<3 ; i++)
-				ang[i] = cl.playerview[destsplit].viewangles[i] + MSG_ReadAngle16 ();
+				ang[i] = MSG_ReadAngle16 ();
+			/*FTESurf Patch 335: subtract the rotation a locally-predicted angle
+			  snap already applied, so the server's delta cannot rotate twice.*/
+			CSQC_PredictAngleCorrect(destsplit, ang);
+			for (i=0 ; i<3 ; i++)
+				ang[i] += cl.playerview[destsplit].viewangles[i];
 			if (!CSQC_Parse_SetAngles(destsplit, ang, true))
 				VectorCopy (ang, cl.playerview[destsplit].viewangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].simangles);
@@ -8179,10 +8184,15 @@ void CLQW_ParseServerMessage (void)
 					ang[i] = MSG_ReadAngle();
 				if (fixtype == 1)
 				{	//relative
+					CSQC_PredictAngleCorrect(destsplit, ang);	//FTESurf Patch 335
 					VectorAdd(ang, cl.playerview[destsplit].viewangles, ang);
 					VectorSubtract(ang, cl.outframes[cls.netchan.incoming_sequence&UPDATE_MASK].cmd->angles, ang);
 				}
-				else fixtype = 2;	//snap
+				else
+				{
+					fixtype = 2;	//snap
+					CSQC_PredictAngleFlush(destsplit);	//FTESurf Patch 335: absolute overrides predicted snaps
+				}
 				if (!CSQC_Parse_SetAngles(destsplit, ang, fixtype==1))
 				{
 					inf->packet_entities.fixangles[destsplit] = true;
@@ -10136,7 +10146,10 @@ void CLNQ_ParseServerMessage (void)
 			break;
 		case svcfte_setangledelta:
 			for (i=0 ; i<3 ; i++)
-				ang[i] = cl.playerview[destsplit].viewangles[i] + MSG_ReadAngle16 ();
+				ang[i] = MSG_ReadAngle16 ();
+			CSQC_PredictAngleCorrect(destsplit, ang);	//FTESurf Patch 335
+			for (i=0 ; i<3 ; i++)
+				ang[i] += cl.playerview[destsplit].viewangles[i];
 			if (!CSQC_Parse_SetAngles(destsplit, ang, true))
 				VectorCopy (ang, cl.playerview[destsplit].viewangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].simangles);
@@ -10149,6 +10162,7 @@ void CLNQ_ParseServerMessage (void)
 					MSG_ReadByte();	//0=unknown, 1=tele, 2=spawn
 				for (i=0 ; i<3 ; i++)
 					ang[i] = MSG_ReadAngle();
+				CSQC_PredictAngleFlush(destsplit);	//FTESurf Patch 335: an absolute set overrides every predicted snap
 				if (!CSQC_Parse_SetAngles(destsplit, ang, false))
 				{
 					inf->packet_entities.fixangles[destsplit] = true;

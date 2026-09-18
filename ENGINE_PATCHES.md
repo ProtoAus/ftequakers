@@ -29562,3 +29562,845 @@ offered -- 3 packets of 1734, in the pinned arm, moving neither headline number.
     pm_recsim <file.rec> [stop after N packets]
 
 Needs the recording's own map loaded, as before.
+
+## Patch 329 -- the fog followed the player out of the map, and the void is the one place it should not reach  *(APPLIED -- `engine/client/renderer.c` (one new cvar `r_voidfog` DEFAULT 1, defined beside `r_voidvis` and registered beside it), `engine/gl/gl_rmain.c` and `engine/vk/vk_init.c` (one gate each, inside the existing per-view fog blend block). NO engine header change, NO struct change, NO ABI bump, NO protocol change, NO QC change -- qcbuild stays 83. VERIFIED: a pre-registered two-arm A/B on ONE binary, `cfg/testrun/p329a.cfg` / `p329b.cfg`, three screenshots per arm, numbers below.)*
+
+**The report.** "If you noclip into the void with a foggy map, the game leaves
+the fog on, making it really hard to see the part of the map you're noclipping
+to."  Not a bug in the fog maths: `cl_fog.qc` reproduces Source's
+`min(maxdensity, linear ramp)` curve exactly, and Source itself would draw the
+same soup from this vantage -- it is a vantage Source never lets you have.
+Source fog is authored for the playable space (surf_tensor2's controller runs a
+NEGATIVE fogstart, so its fog factor is 0.857 at zero depth), and from a few
+thousand units above the map every surface of it sits past fogend.  The player
+who flew out to look at the map sees a silhouette in fog colour.
+
+**The hook already existed.** Build 17's `r_voidview` is, once per primary
+view, exactly the question "in the void, AND noclipping, AND r_voidvis agrees,
+AND the whole world is being drawn for you" -- Surf_SetupFrame fuses
+`r_viewcluster == -1` with the pmovetype test and writes it.  It existed to
+force whole-world vis; fog was simply never asked.  So this patch adds one
+gate per backend, immediately after `CL_BlendFog` in the fog block of
+`GLR_RenderView` and of the VK equivalent:
+
+    if (r_voidview && r_voidfog.ival)
+        r_refdef.globalfog.density = 0;
+
+**WHY density 0 AND NOT alpha 0.** Density 0 is the renderer's own "no fog"
+state -- it is what gates `PERMUTATION_FOG`, so the frame compiles no fog into
+the shaders at all rather than blending a transparent one.  It is also the
+state the QC's `fog 0` produces, so every downstream consumer (the far-plane
+solve in `R_SetFrustum`, `r_fog_cullentities`) already treats it as "fog off".
+
+**WHY PER-FRAME, AFTER THE BLEND, AND NOT BY TOUCHING cl.fog.** The gate zeroes
+the frame's blended copy only.  `cl.fog[FOGTYPE_AIR]` is never modified, the QC
+never re-emits, there is no edge to detect and nothing for `cl_fog.qc` to know
+about: the frame the player is back inside the map, the blend runs again and
+the map's own fog is on the screen.  Measured -- the return shot is the indoor
+shot.
+
+**WHY NOT THE QC.** `Fog_Frame` in `cl_fog.qc` is edge-triggered and speaks to
+the engine through `localcmd`; making it poll the void would add a per-frame
+contents test on the QC side, fight the server's own `SetFogController` stat
+for ownership of the fog state, and latch through `cl.fog_locked` in ways the
+player's `vbsp_fog` toggle would then have to unwind.  The renderer already
+knows; asking it twice is the bug.
+
+**WHY NO HEADER CHANGE.** The two readers carry a local `extern cvar_t
+r_voidfog;` beside the `extern cvar_t r_fog_linear;` that was already in the
+same block, so this patch touches no engine header -- and the makefiles do not
+track header deps, so a cvar that costs one line per backend is not worth a
+forced full recompile of 213 objects.  `r_voidview` was already exported from
+`render.h` by build 17.
+
+**WHAT IS DELIBERATELY UNTOUCHED.** A player who FELL into the void keeps both
+Patch 138's last-good-cluster view and its fog -- `r_voidview` is false without
+noclip, and the fall is the case Patch 138 exists to keep playable.  Recursive
+views (skyrooms, mirrors, portals) clear `r_voidview` at the top of every
+`Surf_SetupFrame`, so a skybox seen from inside the map keeps its
+`skyroomfog`.  The SW backend has no `globalfog` consumer and is not touched;
+the mod ships GL and VK.
+
+**VERIFIED, pre-registered before either arm ran.** One binary (the deployed
+`ftesurf64.exe`), surf_tensor2 -- the map this file's fog essay already cites,
+one enabled controller (`master_fog`) plus sky_camera fog -- noclip to
+`-11776 -13632 24000` looking straight down, ~10,300 units above the spawn
+deck:
+
+  * BOTH logs carry Surf_VoidVisReport's `cluster -1  pmovetype 2 (noclip 1)
+    r_voidvis 1  -> VOID VIEW` at the vantage, and `off` at the spawn: the void
+    state is identical in both arms, so the arms differ only in `r_voidfog`.
+  * INDOOR CONTROL at the spawn, both arms: mean per-pixel |A-B| **0.03** on a
+    160x120 downscale, local contrast 1.89/1.78 vs 1.91/1.78 -- the patch does
+    not touch fog inside the map.
+  * VOID VANTAGE, map region: local contrast (mean absolute neighbour
+    difference, i.e. visible texture) **dx 3.35 / dy 3.46 with the patch against
+    1.14 / 0.71 without** -- 2.9x and 4.9x -- and region sd 20.0 against 10.9.
+    The screenshots say it plainer: `p329a_void.png` is concrete, windows and
+    rooftops; `p329b_void.png` is a flat steel-blue field with the map as a
+    faint silhouette in it.  (An earlier pre-registration guessed saturation
+    would separate the arms and got the DIRECTION wrong -- the fog colour is
+    itself a saturated blue, so the fogged arm reads MORE saturated.  Contrast
+    is the discriminator the question actually asks for.)
+  * RETURN to the spawn, both arms: mean |A-B| **0.13** -- fog is back the
+    frame the player is inside, from an unmodified `cl.fog`.
+
+One command A/B, as ever: `r_voidfog 0` is the pre-329 picture exactly.
+
+## Patch 330 -- the install root carried two directories that belonged to the mod but were not in it  *(APPLIED -- `engine/common/fs.c` (the two FS_NativePath cases that compose either path, plus the downloads read-mount), `engine/common/common.h` (comment only, no layout change), `engine/common/cmd.c` (bare-name exec fallback + completion), `engine/server/sv_phys.c` (the per-map ruleset path). Mod side: `ftesurf_cache/` -> `ftesurf/cache/`, `ftesurf_downloads/` -> `ftesurf/downloads/`, `cfg/testrun/` -> `cfg/test/`, the 80 `map_*.cfg` + 2 `render_*.cfg` -> `cfg/maps/`, with `src/client/cl_main.qc` (render layer path), `src/release/release.ps1` (ship glob + deny tripwire), `.gitignore`, README and surfd docs following. One new behaviour, no new cvar. NO struct change, NO ABI bump, NO protocol change. qcbuild stays 83 until the cl_main.qc line lands in a Build 84 commit. VERIFIED: `cfg/test/p330check.cfg`, exec'd BY BARE NAME, two maps, one run.)*
+
+**The complaint.** "Fix game folders structure."  The root of the install held
+`ftesurf/` beside `ftesurf_cache/` beside `ftesurf_downloads/` -- the last
+containing exactly one subdirectory, `csprogsvers/` -- and inside the gamedir
+`cfg/` held 663 per-patch test fixtures, 80 per-map ruleset files and the
+render layer all flat in one 90-entry listing.  None of it was wrong by
+accident: P38 and P186 put the caches OUTSIDE the gamedir so the gamedir would
+"stay pure", and the cfg/ flatness is just history.  But purity was never the
+point, deletability was, and `ftesurf/cache` deletes exactly as wholesale as
+`ftesurf_cache` did.
+
+**WHAT MOVED IN THE ENGINE.** Both paths are composed in exactly one place --
+the `FS_GAMEDOWNLOADS` and `FS_GAMECACHE` cases of `FS_NativePath` -- so the
+move is four `Q_snprintfz` format strings (`"%s%s_downloads/%s"` and
+`"%s%s_cache/%s"` become `"%s%s/downloads/%s"` and `"%s%s/cache/%s"`), the
+downloads read-mount in `FS_ReloadPackFilesFlags` (`"%s_downloads"` becomes
+`"%s/downloads"`), and the comments that argued the sibling layout.  The mount
+is still needed and now more than before: a searchpath root is a directory
+whose CONTENTS address the filesystem root, so `ftesurf/downloads` is not
+reachable as `csprogsvers/<crc>.dat` by merely being inside the gamedir -- the
+mount is what makes that true, exactly as the sibling mount did.
+
+**THE ADDON SIBLING CONVENTION IS UNTOUCHED, deliberately.** A Steam game's
+own `cstrike_downloads` is Valve's layout, not ours: the probes in
+`FS_Addon_Mount` and `FS_IndexArchive` still use `"%s_downloads"` on the
+ADDON's syspath, and two comments that conflated the two were rewritten to say
+`<syspath>_downloads`.  Only the gamedir's own two directories folded in.
+
+**BARE-NAME EXEC, the console half of the same complaint.** `exec p329a` used
+to die with "couldn't exec" because the fixtures live a directory or two down.
+`Cmd_Exec_f` now retries a name that resolves to nothing under `cfg/`,
+`cfg/test/` and `cfg/maps/` -- the same two attempts each (as typed, then with
+`.cfg` appended) the root lookup gets -- and writes the resolved path back into
+`name`, so the "execing ... from ..." line and the console both speak the path
+that actually worked.  `Cmd_Exec_c` gains three enumerations with
+directory-prepending callbacks, so TAB from `exec p3` populates
+`cfg/test/p329a.cfg`.  A name that resolves at the root is untouched, and the
+`../` guard runs before any of this, so a server-restricted exec gains nothing.
+
+**THE PER-MAP LAYERS.** Patch 267's ruleset layer reads
+`cfg/maps/map_<mapname>.cfg` now (sv_phys.c), and build 61's client render
+layer execs `cfg/maps/render_<mapname>.cfg` over `cfg/maps/render_default.cfg`
+(cl_main.qc).  The trust argument in both essays is unchanged by the directory.
+
+**RELEASE PACKAGING WOULD HAVE SILENTLY DROPPED THE RULESETS.** release.ps1's
+ship glob takes `ftesurf/cfg` top-level only -- "excluded by not recursing" was
+how 663 fixtures stayed out of the zip.  The maps/ move put 82 SHIPPING files
+(map rulesets, the render layer) one level down, i.e. out of the glob: a
+release would have booted every map at the default ruleset with nothing in the
+archive to say why.  The glob gains an explicit `ftesurf/cfg/maps` entry and
+the deny tripwire's `(^|/)testrun/` becomes `(^|/)(testrun|test)/` so the
+fixtures stay denied at both the old and the new name.
+
+**VERIFIED.** One binary, one run, `+exec p330check` -- the bare name is itself
+the first assertion, since the file is `cfg/test/p330check.cfg`:
+  * the file ran (its first echo is line 1 of the log);
+  * surf_ardon's fullserverinfo carries `sv_maxvelocity\5000` against
+    surf_tensor2's `3500` -- `cfg/maps/map_surf_ardon.cfg` applied from its new
+    home, while the map's own entity-I/O attempt at the same value is still
+    refused on the line beside it;
+  * `render: per-map layer cfg/maps/render_surf_tensor2.cfg applied over
+    cfg/maps/render_default.cfg`;
+  * `fs_cache_info` resolves `C:\FTESurf/ftesurf/cache: 2645 files,
+    0.651371GB` -- the harvested packs, found an hour after being
+    `ftesurf_cache/`.
+
+**AND THE BUILD WENT PARALLEL WHILE IT WAS HERE.** build.ps1 called make bare,
+so a full rebuild compiled 213 objects one at a time.  It gains `-Jobs`
+(default 8), passed quoted -- `"-j$Jobs"` -- because PowerShell hands an
+unquoted `-j$Jobs` to a native command as two arguments and make dies on the
+bare flag.  A full `-Engine -Full -Jobs 8` (every object and all four plugin
+DLLs from scratch) is 2m03s and deployed clean; the LTO link picks the
+jobserver up too, since the release link is `-flto=jobserver`.
+
+## Patch 330, addendum -- the lobby and the mode layer went to cfg/lobby/ too  *(APPLIED -- `engine/server/sv_phys.c` (the mode ruleset path), `engine/common/cmd.c` (cfg/lobby/ joins the exec fallback and the completion). Mod side: 13 `lobby*.cfg` + `mode_bhop.cfg` -> `cfg/lobby/`, with `surfd/server/run.sh` (existence test, rotation read, both +exec lines), `src/build.ps1` (the -Pi lobby probe), `src/release/release.ps1` (ship glob), surfd/README, admin.py/rcon.py/surfd.py comments and the QC prose following. VERIFIED: `cfg/test/p330lobby.cfg`, one run.)*
+
+The cfg root held thirteen `lobby*.cfg` and `mode_bhop.cfg` beside default.cfg,
+which is the same flatness the maps/ and test/ moves fixed.  They share a
+directory now because they are one layer: `lobby.cfg` is what turns a server
+into a lobby, `lobbyN.cfg` is one lobby's port and rotation, and `mode_bhop.cfg`
+is the ruleset the bhop lobbies (4 and 5) run -- the mode layer is a server
+layer, and every other server layer file is in that directory.
+
+`lobby_local.cfg` STAYS at the cfg top, deliberately.  It is the one file that
+is a machine secret rather than a layer member -- the Pi's rcon password and
+local binds -- it is not in this repository at all, and run.sh's third +exec
+still names `cfg/lobby_local.cfg`.  Moving it would mean moving a file on a
+remote machine that no diff in this tree can reach, for a tidy root that
+already reads clean without it.
+
+THE PI NEEDS A HAND-MOVE, and this is the one part of P330 a build cannot
+deploy: run.sh and the lobby cfgs live in the Pi's gamedir, not in a prog.
+After pulling this tree,
+`mkdir -p .../game/ftesurf/cfg/lobby && mv .../game/ftesurf/cfg/{lobby,lobby[0-9]*,mode_bhop}.cfg .../game/ftesurf/cfg/lobby/`
+and the new run.sh, then restart the lobbies.  run.sh REFUSES to start a lobby
+whose cfg is missing (exit 2, loud), so a half-done sync fails visibly rather
+than binding port 27500.
+
+**VERIFIED.** `+exec mode_bhop +exec p330lobby` -- two bare names, the first
+resolving through the new cfg/lobby/ leg of the fallback and the second through
+cfg/test/ -- then bhop_24: `movement: bhop_24 is bhop (mapmeta), 6 cvars from
+cfg/lobby/mode_bhop.cfg`, against pm_ticrate 0.015 on every surf map.  The only
+"couldn't" in the log is the stock gfx.wad probe.
+
+## Patch 331 -- the inspector stopped taking the mouse, and the invisible got a stipple  *(APPLIED -- engine: `client/cl_ents.c` (CLQ1_DrawPolyFan, the fill arm of CLQ1_DrawOneBrush, CLQ1_AddHoverBrushes, `r_showbrushes_fill`), `client/renderer.c` (its registration -- the first build shipped the cvar defined but unregistered, and the console said "Unknown command", which is the only symptom an unregistered cvar has). Mod: `glsl/ftesurf_ditherfill.glsl`, `client/cl_entview.qc` (hover card, ent_cursor/ent_panel/ent_report/ent_copy, ESC and MOUSE3), `client/cl_main.qc` (card pass, gesture comment), fixtures b56a/b56b renamed to ent_panel. NO struct change, NO ABI bump, NO protocol change. VERIFIED: `cfg/test/p331.cfg`, one map, six screenshots, numbers below.)*
+
+**The request.** "Make ent_cursor work without taking control of the player's
+mouse, just display a transparent overlay with whatever you're pointing at
+telling you what it is and the functions, like a teleport, where does it go?
+what does a trigger do when you touch it? and have a ability to turn it off."
+Plus dither on the hovered brush entity's faces and on r_showbrushes, because
+"a blended surface cannot write depth" applies double to a debug overlay.
+
+**WHAT ent_cursor IS NOW.** The passive overlay: boxes, labels, and a new
+crosshair-anchored card, and the mouse never leaves the game.  It toggles
+(`ent_cursor`, `ent_cursor 0/1`), and it turns off three ways -- the command,
+ESC, and MOUSE3 -- which answers "have a ability to turn it off, because I
+don't think you can": it always could (ESC, or the command again), but only
+once you knew, and now the card's own last line says `ESC off` while it is up.
+The click-to-copy inspector it used to open is untouched one name over at
+`ent_panel`, for whoever wants the mouse half; the b56 fixtures moved with it.
+
+**THE CARD.** Rebuilt only when the hovered row changes, because Ev_Key is a
+tokenize plus a scan and Ev_FindRowByName walks every row: per-frame it costs
+one probe trace and one float compare.  It says, in order: classname and
+targetname in the family colour; `brush *N  W x H x D u` when it is a brush;
+then the function half -- for `target`, resolved against the lump's own
+targetnames with the destination's classname and origin, so the teleport
+question reads `goes to "bonus4" (info_teleport_destination) at 2240 -15680
+544` (screenshot p331_tele, taken standing inside that exact volume, found by
+reading the BSP's entity and model lumps offline); then up to three authored
+`On*` outputs as `OnStartTouch > target . Input(args)` with `+ N more outputs`
+and `ent_report` for the whole block.  A dangling target prints `NOT IN LUMP`
+rather than nothing, because a dangling target is a finding.
+
+**THE DITHER.** One new gamedir program, glsl/ftesurf_ditherfill.glsl: the
+4x4 Bayer from the hl2 plugin's flatdither (Patch 151) with the base-texture
+sample and the fog removed -- a debug fill that fogged itself would fade at
+exactly the distances it was turned on for.  `!!fixed` is load-bearing exactly
+as flatdither's essay records: without it GenerateColourMods never runs and
+v_colour is whatever the previous draw left bound.  Two materials reach it,
+both inline scripts in cl_ents.c like hullshader's own: ftesurf_brushfill
+(polygonoffset, depth-tested) for r_showbrushes' faces behind the new
+`r_showbrushes_fill` cvar (default 0.25 = four of sixteen screen pixels, 0 =
+the Patch 319 wireframe exactly), and ftesurf_enthover (nodepthtest, sort
+banner) for the hovered brush entity's exact faces from its own submodel BIH
+-- nodepthtest because a trigger's faces are inside geometry by construction
+and a depth-tested fill of one would show nothing at all.  The alpha is dither
+COVERAGE, not a blend factor: forty overlapping faces of one hull stipple over
+each other with no sort decision, which is the whole reason it is not a
+translucent blend.
+
+**VERIFIED, pre-registered.** surf_tensor2, one run: `ent_cursor: on -- 1997
+entities (622 brush, 1375 point)` with no cursor claim anywhere in the log;
+the card screenshot above; `r_showbrushes 1: 67 brush(es), 425 face(s)` and a
+green-excess over the floor region of **17.2** with the fill against **5.95**
+without -- and `r_showbrushes_fill 0` measures 5.95 too, byte-identical to the
+overlay-off shot, so the wireframe arm of Patch 319 is provably untouched.
+`ent_cursor 0` prints off and leaves neither card nor stipple.
+
+## Patch 331, addendum -- the in-view set gets the stipple too, and three wrong ways to resolve "*N"  *(APPLIED -- `client/cl_ents.c` (CLQ1_AddHoverBrushes gains the in-view pass + a one-shot census; CLQ1_DrawOneBrush gains nolines), `client/cl_entview.qc` (Ev_Draw publishes `ent_view_models`, the space-separated "*N" of every brush entity its box walk drew, capped at 48, empty when the overlay is off). NO struct change, NO ABI bump. VERIFIED: `cfg/test/p331.cfg`, screenshot p331_tele, census lines in the log.)*
+
+"I was sort of expecting the trigger_ and like func_ladders to also be dither
+filled, but they are not."  Correct: the first cut made the fill a spotlight on
+the hovered entity only.  Now every brush entity the overlay's own box walk
+drew this frame carries its exact faces at 3/16, with the hover at 6/16 on top
+-- faint enough that the world stays the picture, present enough that a
+trigger volume reads as a volume from across the room, which is the half of
+the feature that helps you FIND the next thing to point at.
+
+**THREE WRONG ROUTES, MEASURED, before the right one.** Resolving a lump
+"*N" from C to a model_t has exactly one correct answer in this engine, and
+the three obvious ones each failed differently, each with its own screenshot
+that looked identical (nothing drawn) and its own census that looked healthy
+(faces submitted):
+
+  * `cl.model_precache[N]` is the Nth PRECACHE SLOT, not lump *N.  The winding
+    it produced sat at (-1664 -32 320) while the view stood at the spawn --
+    ten thousand units of nothing, drawn faithfully somewhere else.
+  * `worldmodel->submodels[N].brushes` is not populated by the hl2 plugin at
+    all.  Segfault, one build, thrown away.
+  * A submodel model_t's own `mins`/`maxs` are garbage (`0 0 0 / 3 -12504
+    -14400`, differing between two calls a frame apart), so any enumeration
+    box derived from them is a coin flip.
+
+The right route is the one `setmodel` already uses, because it is the one
+route that has to be right for every inline model in every map:
+`Mod_ForName(Mod_FixName("*N", worldmodel->publicname), MLV_WARN)` -- FixName
+rewrites to the submodel's registered name (`BeginSubmodelLoad` named it
+"*N:<worldname>") and ForName returns the already-loaded model_t, which is
+also the only object carrying the brushes, world-space, in a BIH of BIH_BRUSH
+leaves.  The enumeration box is then the whole coordinate space on purpose:
+that BIH holds only this submodel's brushes, so the box is not a cull, it is
+the question "which of your brushes", and the answer is all.
+
+**THE KNOWN LIMIT, stated rather than discovered later.** A brush entity that
+HAS rendered surfaces (func_brush, func_detail solids) renders them with
+`pushdepth` -- gl_model.h's own anti-z-fight bias for coplanar bsp submodels --
+which puts its rendered faces in FRONT of any polygon-offsetted hull face on
+the same plane.  So those entities' fill loses the depth fight exactly where
+their visible skin is, and only shows on faces the skin does not cover.  The
+nodraw set -- trigger_*, zone_*, func_ladder, the teleports -- has no rendered
+surfaces at all, which is why they were invisible before this patch and why
+they stipple correctly now.  Losing see-through-walls (the first cut's
+nodepthtest attempt rasterised nothing from a scenetris batch, measured at
+1.1/255 mean difference with 148 faces submitted) is the same class of
+trade: what remains is every face that bounds open space, which is what a
+trigger volume is made of.
+
+**THE CENSUS**, one-shot on change like r_showbrushes' own: `entview fill: N
+model(s), M face(s) in view`.  Every dead end above was dead in a different
+layer, and a log that says whether the list arrived, whether the walk found
+brushes, and how many faces went out, is the difference between four build
+cycles and forty.
+
+---
+
+## Patch 332 — the saveloc anchor lands with the teleport
+
+**THE REPORT.** "Every time I load a saveloc it often glitches out the energy
+value that was saved upon creation of the saveloc... loading from the start
+zone often gets it messed up until I jump or move too." Build 26 made a load
+restore the jump anchor (`ui_jump_z`, `ui_ground_z`, the onground pair) and
+build 65 stopped the *displayed* number flickering while the restore is in
+flight, by holding the last matched-pair value dimmed until the arm clears.
+What neither did was make the anchor itself survive the flight as the one the
+save was created against. Two holes remained, and the report is both of them.
+
+**HOLE ONE: HALF THE REFERENCE NEVER TRAVELLED.** `hud_energy_ref 0` measures
+the speedometer's `e` from `ui_anchor_z` — the zone floor — and
+`ui_anchor_zone` decides whether a zone may move it. Both lived in cl_hud.qc,
+which compiles *after* cl_board.qc, so the save machinery could not see them:
+`Seq_Mark` snapshotted the jump half and the file carried only `anchor`, and a
+load put back half of a two-part reference. Anyone running the zone-floor
+reference had the other half recomputed from wherever the load-side zone
+occupancy happened to leave it — the "glitches out the energy value" half.
+
+**HOLE TWO: THE FLIGHT WINDOW OUTLIVES THE LOAD.** `Seq_AnchorRestore` writes
+at event time; the position step arrives frames later, and between the two sit
+the hold park's onground edges, the start-zone floor rule (deliberately *not*
+suspended by `ui_rs_armed` — build 47 wants it for a load into the box), and
+the fixed-but-fragile frame order between `HUD_UpdateJumpRef` and the disarm.
+Any of those can write `ui_jump_z` after the restore and before the arrival,
+and each such write outlived the load — the "messed up until I jump" half,
+because a jump or a ground contact is exactly what overwrites it again.
+
+**THE FIX, four moves.** The two anchor globals moved to cl_board.qc, the same
+move build 26 made for `ui_jump_*`, with pointer comments left in cl_hud.qc;
+every reader there is unchanged. `Seq_Mark` and the file writer carry them as
+a new `zanchor` key on its own line — own line for the varargs-cap reason
+`board` and `anchorpos` already have, and a reader older than this skips the
+key, which is the grammar's contract. `Seq_AnchorRestore` grew two parameters
+(five to seven, under QC's ceiling of eight) and stashes an in-flight copy of
+everything it wrote in `ui_rs_*`. And the arrival frame — `Board_Frame`'s
+disarm, `vlen(org - ui_rs_dest) <= SEG_JUMPDIST` — calls the new
+`Seq_AnchorReassert`, which puts the saved values back one last time after
+both guards have read the flag and before the next frame's dt. From then on
+only a jump, a ground contact or a zone occupancy moves the anchor: the
+ordinary life of the number. The deadline expiry does *not* reassert: a
+restore that never arrived (the retry path's respawn at the start) has no
+business overwriting the reference of the place you actually are.
+
+**VERIFIED.** `cfg/test/p332.cfg` on surf_tensor2, `hud_energy_ref 1` forced
+for the run — this machine's ftesurf.cfg archives `hud_energy_ref 0`, and in
+zone-floor mode with no zones loaded the e-line draws its grey "-- no start
+zone" placeholder by design, so no number would ever appear to verify against;
+worth knowing that the placeholder people see offline is that line and not a
+broken readout. Three arms, screenshots `p332_air/loaded/startload.png`:
+mid-air at the apex the readout shows `E 58`, the height above the take-off
+floor; the save file for that save reads `anchor 13681.0000 13681.0000 0 1`
+with `anchorpos ... 13710.543` and `zanchor 0.0000 -1` — the anchor recorded
+at creation is the take-off floor, not the mid-air z, and the new key is on
+disk. Loading that save while standing 520 units higher and letting the fall
+land reads `E -1` at 0/s, the -1 being build 31's latch residue on the settling
+frame; a re-based anchor would have read `E -519`, the whole teleport, which is
+precisely the number in the report. Loading the standing start-zone save from
+away reads `E -1` standing in the box — no negative offset waiting for a jump
+to clear it. QC-only change; qwprogs/csprogs rebuilt clean, engine pin moves
+for the record, not for code.
+
+---
+
+## Patch 333 — the saveloc list grew a player dimension
+
+**THE REPORT.** "every map you play is a online server making save-locks
+impossible -- save: save points are off in a public lobby -- the list is
+shared, so a save here would be everyone's."  The message was patch 270's, and
+patch 270 was right about the disease and wrong about the cure: it refused
+saves in a lobby because `rec_sl_*` was ONE list with thirty-two cursors on it,
+where a delete-all reaches across players.  Refusal is what you do when a
+structure cannot be owned; the structure can be owned.
+
+**THE SHAPE OF IT.** Three things had to grow a player dimension together or
+not at all.  The in-memory list, because `SV_SaveLocSync` mirrors rows into
+per-player stats every tick and a shared transient list would mirror player
+A's rows into player B's menu.  The disk, because a slot is four files and two
+VMs spell their paths.  And the client, because CSQC writes two of those four
+files -- seq.txt from cl_board.qc, run.view from cl_replay.qc -- and had to
+spell the same directory the server chose.
+
+**THE LIST.** One flat array, partitioned: block 0 is the old shared list, used
+exactly when the lobby is off, so a private server's saves stay a property of
+the map as the original essay argues; blocks 1..32 are per-client, 24 rows
+each, because a lobby save is a practice pocket for one session and not an
+archive.  The block is a property of the CALLER, not the row, which is why the
+arrays stayed flat and every row consumer -- Place, ReadLight, the holdrow
+field -- keeps passing flat indices.  Each block carries its own row count,
+its own seq counter and its own scan stamp; the stamp is `Lobby_Active()+1` at
+scan time, because a block read from one root is stale the moment the operator
+flips the lobby and the root moves.  `SV_SaveLocSync` watches that flip: one
+loop on the frame the cvar moves drops every hold and every stamp, so the move
+is a rescan and never a misread -- a hold parked on a row of the old block
+would otherwise re-place its player at somebody else's save forever.
+
+**THE DISK.** `data/saves/<map>/@<guid>/saveNNN/`, where the guid is the same
+certificate identity the leaderboard attributes runs with (`infokey(e,
+"guid")`, keyed by sv_guidkey), sanitised to alphanumerics so a hostile or
+absent certificate can neither escape the directory nor collide with a slot
+folder -- the `@` is a character the sanitiser cannot produce.  Two refusals
+remain and both are honest: the operator's `lobby_nosaveloc`, whose default
+flipped from 1 to 0 because the thing it protected against no longer exists,
+and the missing certificate, without which a per-player save cannot be
+attributed to anyone and would be a shared list by another name.
+
+**THE CLIENT.** The server is the only place that knows the lobby state, the
+guid and the map name at once, so it spells the root once per operation and
+stuffcmds it: `set cl_saveroot "..."`.  The two client path functions read that
+cvar and fall back to the old map-root spelling, which is what a non-lobby
+server sends anyway.  No formula duplicated across VMs, no drift.
+
+**WHAT DID NOT CHANGE.** Off-lobby everything: same directories, same shared
+list, same 999 rows, same messages.  Retry, which was already refused while
+anyone else is connected because it map_restarts the server, now merely spells
+its slot 0 under the same root as everything else.  And the cursor, which was
+already per-player -- patch 270's own sentence, "the rows are global and only
+the cursor is not", is the sentence this patch deletes.
+
+**VERIFIED.** Two headless runs on surf_tensor2.  Lobby on with sv_guidkey
+set: `save 1 (slot 001)` -- the player's own list, starting at one while
+twenty shared rows sat unread in a block that is not his -- and on disk
+`data/saves/surf_tensor2/@7256b4f2.../save001/` with state.txt and seq.txt;
+the screenshot's console shows the stuffcmd arriving (`set cl_saveroot
+"data/saves/surf_tensor2/@7256b4f2..."`) and the CLIENT's board writing and
+then reading back `@.../save001/seq.txt` under it, which is the two-VM agreement
+being observed rather than assumed; after loading from 520 units up the view is
+the saved standing floor at `E 0`.  Lobby off: `sl_delall` removed all 22
+accumulated test rows from the shared list, a fresh save took slot 001 and
+loaded clean -- the old behaviour, bit for bit.  QC-only; the pin moves for the
+record.
+
+---
+
+## Patch 334 — the map picker stopped connecting before the map exists
+
+**THE REPORT.** "When using the map picker, the game will request surf_aura
+and then just slot you into a server unrelated... until it decided to put
+tensor2 on beginner (it's not, it's tier 8)."  Both halves of that sentence
+are one race, and the surfd journal of 2026-09-16 reads it like a flight
+recorder: `assigning p27510 (was surf_aesthetic)`, then three seconds later
+`dropping claim on p27510 for surf_aura -- 1 player(s) arrived`.  The player
+who arrived was the one the join reply had just sent.
+
+**THE HANDSHAKE, AS DESIGNED.** /api/join has three answers.  Somebody already
+hosts the map: here is its address.  A claim for it is already loading: here
+is the same address.  Otherwise: pick the lowest-numbered IDLE lobby, file a
+claim, and hand back THAT LOBBY'S CURRENT ADDRESS with `state:"loading"` --
+because the lobby only learns about the claim from its next heartbeat reply,
+up to five seconds away, and then needs four more to load the map.  The
+directory row flips when the first heartbeat from the new map lands.  Nothing
+about that is wrong.  What was wrong is that the menu parsed `addr`, `why` and
+`timed` out of that reply and ignored `state` and `wait` entirely, then ran
+`localcmd(connect)` on the spot.
+
+**THE RACE, STATED PRECISELY.** The connect lands one to three seconds after
+the claim is filed; the lobby reads the claim zero to five seconds after that.
+Whichever loses, loses badly.  If the player arrives first, surfd's idle rule
+-- "a lobby with anybody on it is never moved", the entire anti-abuse surface
+of a public unauthenticated endpoint that can order map loads -- sees
+players==1 on a node holding a pending claim and DROPS THE CLAIM, so the lobby
+never switches and the player sits on surf_aesthetic with nothing on screen to
+explain why.  If the heartbeat wins, the switch completes and the player
+connects into it a moment late, which is why the same picker "sometimes"
+worked.  And when a claim did survive to fulfilment on lobby 1, the directory
+honestly reported tensor2 at the beginner lobby's address, because that is
+where the idle rule's lowest-node-wins policy had put it -- the tier in the
+row's name is the lobby's default rotation, not a promise about what it may
+host; "every map someone plays is a lobby" means exactly that.
+
+**THE FIX IS IN THE MENU, WHERE THE MISTAKE WAS.** The reply's own `wait`
+field becomes a new join state, LJ_WAIT: hold the connect, poll the directory
+once a second, and promote to ready only when the row for that address reads
+the map that was asked for.  The directory is the one witness both halves of
+the handshake already trust, so no new channel and no new protocol.  Three
+details earned their keep in testing: an empty directory is not evidence (the
+first scan can land before the session's first lobbies.json reply, and calling
+that "the server left" is the false verdict this patch exists to avoid
+wearing), the wait drives Lob_Poll itself because a wait can outlive the
+picker screen that started it, and the deadline falls back to the offline
+launch with the directory's own sentence rather than to a silent wrong map.
+Twenty seconds of cap: heartbeat five, load four, refresh one, and a player
+watching a busy button deserves the remainder as margin, not as suspense.
+
+**THE GHOST, WHILE WE WERE IN THERE.** A crashed player haunts a lobby for
+sixty-five seconds -- the engine's `timeout` default -- as a row in the
+directory's player count and, worse, as a NON-IDLE lobby in the broker's
+eyes, because players==0 cannot tell a crash from a crowd.  lobby.cfg now
+sets `timeout 30`: half the haunting, and thirty seconds of silence is a dead
+connection by any measure a player would thank us for enforcing.
+
+**VERIFIED.** Headless against the live fleet, three runs.  The first two
+reproduced both failure shapes of the report on the old menu logic (immediate
+false "server left" verdict on an unpolled directory; a full twenty-second
+wait blind because the poll lives in the picker's draw loop).  The third,
+with the wait fixed: `is switching to surf_kitsune -- waiting for it to come
+live`, five seconds later `has surf_kitsune live now`, then and only then
+`joining play.proto.bar:27510`, and the screenshot reads surf_kitsune, nine
+stages, E 0 on the deck -- the map that was asked for.  The journal for the
+same window shows `assigning p27510` then `p27510 arrived at 'surf_kitsune'`
+with no claim drop between them, which is the race seen closed from the other
+side.  Menu QC only; the pin moves, qcbuild stays 83 until the Build 84
+commit.
+
+## Patch 335 — the triggers moved inside client prediction  *(APPLIED -- engine: `common/pr_common.h` (csqcglobals: CSQC_PredictPlayerMove + the predmove_* block), `client/pr_csqc.c` (the hook wrapper, the basevelocity carrier, the predicted-angle-snap ring and its delta correction), `client/cl_pred.c` (call sites, `cl_pred_localchain`, `cl_predict_qchook`, `cl_prederror`, prop.origin), `client/cl_parse.c` (both svcfte_setangledelta sites corrected, both svc_setangle sites flush), `client/client.h` (declarations + prop.origin).  Mod: `src/client/cl_triggers.qc` (new), `cl_progs.src`, `cl_main.qc`, fixtures `cfg/test/p335{a,b,c,d,e,f,g,sv}.cfg`.  One struct grows (playerpredprop_s +vec3); no protocol change, no ABI bump.  VERIFIED: p335a listen-gate + load census; p335b/e against fteqwsv64 on 27666: hook alive only against a real server, exact-brush containment agreeing with the server's ent_info on both tested points, zero false fires walking bhop_arcane, zero prederr standing still 10 s, a real crossing fired with vel_z -852 = sqrt(2*800*451) freefall onto the *24 box top, and ONE measured 195-203 u prederr per run, explained below and left open as Patch 328's class.)*
+
+**Problem.**  Every Source trigger touch was a round trip.  The client already
+replayed each unacked usercmd through the same deterministic mover, but
+sv_entities.qc's touches (trigger_teleport / trigger_push / trigger_setspeed)
+ran only inside SV_RunCmd, so a booster or a fall-reset arrived as an origin
+correction the renderer refuses to lerp, and the push carrier was not
+networked at all -- Patch 240's own essay says the client "rubber-bands on
+entry and exit by roughly (speed * unacked time)".
+
+**Change.**
+- CSQC_PredictPlayerMove(seat, cmdsequence, msec): one call per predicted
+  usercmd, after PM_PlayerMove and before the writeback, with the pmove
+  result exposed read-write through predmove_* globals.  A csprogs that does
+  not export it pays nothing; an old csprogs on a new engine and the reverse
+  both behave exactly as before.
+- predmove_basevel is a ONE-COMMAND carrier: written by the hook for cmd N,
+  folded into pmove.basevelocity at the top of cmd N+1 and zeroed as it is
+  read -- Patch 240's run_basevelocity window on the client, so Patch 249's
+  PMSrc_StartGravity cash-out lands on the same command on both sides.
+  Keyed by sequence because CL_PredictUsercmd's 50 ms split halves must
+  consume once.
+- THE LISTEN-SERVER GATE IS `sv.state != ss_dead`, NOT `sv.active`: sv.active
+  is never assigned anywhere in this tree -- every existing `if (sv.active)`
+  client check is dead code -- which p335a proved by printing hook-alive on a
+  live listen server before the fix.  In-process, SSQC touches remain the
+  authority (Patch 240's precedent).
+- The hook fires only for the seat's own replay chain (cl_pred_localchain):
+  cl_ents.c pose-predicts every other predicted entity through the same
+  CL_PredictUsercmd with a synthetic command whose sequence is 0, and its
+  "fires" poisoned the QC's chain state before the gate existed.
+- A predicted angle snap cannot just write the view: the server computes its
+  svcfte_setangledelta against ITS lastcmd, so a client that already rotated
+  would rotate twice.  The snap is applied as (snap - the triggering cmd's
+  angles) through the same CSQC_Parse_SetAngles funnel every server fixangle
+  uses (the ghost keeps deciding WHO rotates), remembered per seat+sequence,
+  and subtracted from the wire delta when that delta arrives -- what is left
+  is exactly the turn made between the teleport command and the server's
+  lastcmd.  Absolute svc_setangle flushes the ring.  Sequence dedupe stops
+  the per-frame chain replay from rotating the live view twice.
+- cl_prederror (default 4): one line per acked command whose server origin
+  differs from what was predicted for it by more than N units -- the
+  snap-back, as a quotable number instead of a feeling.
+- The mod half (cl_triggers.qc, a sixth lump walk) mirrors the three
+  stateless classes from static keys and clips REAL BRUSHES: tracebox with
+  MOVE_TRIGGERS|MOVE_OTHERONLY against a SOLID_BSPTRIGGER edict, zero-length
+  at the command's END position -- the server's dispatch shape
+  (World_LinkEdict -> World_TouchAllLinks -> World_ClipMoveToEntity at the
+  final origin, sv_user.c:8350).  Filtered, StartDisabled and IO-toggled
+  triggers are deliberately NOT predicted; the server stays their authority.
+
+**Verified.**  Two measurements changed the code before it shipped, and both
+are kept here because each looked plausible right up to the run that killed
+it: (1) the first cut left the trigger edicts SOLID_NOT -- and
+World_ClipMoveToEntity resolves the submodel only for SOLID_BSP/BSPTRIGGER/
+PORTAL, falling back to the BOUNDING BOX for everything else, so surf_rise's
+3858x3426-unit fall-reset fired from everywhere under it, forever, an
+infinite client-only teleport loop; (2) the first cut swept [org0..org1] per
+command while the server tests only the endpoint, and one graze of a brush
+edge the server never saw cost a 203-unit prederr -- parity beats
+completeness, so the probe is zero-length at the endpoint, and if the server
+can miss a thin volume at speed the client now misses it identically.
+OPEN, MEASURED AND NAMED: bhop_arcane's stage1a pad sits as a 66-unit brush
+band under a step lip at x~1668 and self-loops (teleport -> land -> walk
+196 u -> step off -> fall through the band -> teleport; an exact 88-command
+cycle).  Once per run the two sims arrive at the lip with a sub-4-unit
+trajectory difference -- under the cl_prederror threshold, so silent -- and
+the lip, being discrete, puts one sim over the edge a command before the
+other; the band's teleport amplifies that one-unit flip into a ~201-unit
+prederr.  The next ack correction snaps the client onto the server's cycle
+and the two run in phase from then on: the system self-heals in exactly one
+correction, which is predict-and-correct working as designed.  The residual
+question -- why the two x86 sims' trajectories differ by units at all -- is
+Patch 328's class (mover determinism between separately compiled binaries,
+pmsrc seeding), deferred to the open-loop verifier effort; it is now visible
+as a prederr line rather than a shrug.
+
+## Patch 336 — the filter mirror, or: failing open is a static property  *(APPLIED -- mod only, no engine files: `src/client/cl_triggers.qc` (TF_* filter table and evaluator, skip ledger, raw-spelling key capture), fixtures `cfg/test/p335{h,i}.cfg`.  Engine tree unchanged since Patch 335.  VERIFIED: bhop_arcane census goes 98/15/2 -> 110/15/6 predicted, exactly the twelve teleports and four setspeeds sv_entities.qc's own filter essay names; bhop_futile keeps all 35 blockNfilter-gated teleports server-only (0 resolved static) because they test the player's runtime targetname; p335e rerun against fteqwsv64 shows the same one discrete-lip prederr per run and the same self-heal, no new divergences; p335a listen-gate regression clean.)*
+
+**Problem.**  Patch 335 skipped every trigger with a filtername, on the theory
+that a filter can test state the client cannot see.  But the server's own
+filter essay (sv_entities.qc:1144) says the opposite for most of the library:
+MISSING AND UNIMPLEMENTED FILTERS BOTH PASS -- Source's CBaseFilter lookup
+fails open, faithfully mirrored -- and the two implemented classes
+(filter_activator_name, filter_multi) are lump-static except for one input:
+the activator's targetname, which outputs rewrite at runtime (bhop_futile
+renames the player block1..block26; that renaming IS its anti-backtrack).
+Blanket-skipping cost sixteen predicted triggers on bhop_arcane alone.
+
+**Change.**  A sixth lump table (TF_*, 64 rows) records every filter_*
+entity: name, class, its own filtername, negated/Negated and Filter01..08
+captured from their RAW spellings before the parser's strtolower pass --
+ED_ParseEdict is case-sensitive and SV_KeyS2 prefers the capital side, so a
+lowercasing mirror would read keys the server never saw.  TF_EvalD walks
+SV_FilterPassesD's exact shape three-valued: missing name PASS, unimplemented
+class PASS, filter_multi combines subs by filtertype with the depth-4 guard
+and the empty-multi pass, negated inverts a definite verdict.  The one
+dynamic leaf -- filter_activator_name -- returns UNKNOWN, and UNKNOWN or
+FAIL demotes the trigger at load (edict freed, box inverted, ledger row
+written); only a static PASS is predicted.  A TF_MAX overflow poisons every
+filtered verdict to UNKNOWN, the safe direction.  Resolution runs after the
+walk because futile's filters follow their triggers in the lump -- the same
+reason the server resolves on first touch and caches.  trig_dump grew the
+skip ledger and a "filtered resolved static" census line.
+
+**Verified.**  Above.  Residual risk named: if `vbsp_entity_io` is ever 0 on
+a server, the server passes ALL filters while the client still demotes
+UNKNOWN ones -- under-prediction, i.e. the old lag, never a snap-back.
+
+## Patch 337 — the push carrier became a state machine, because it always was one  *(APPLIED -- engine: `common/pr_common.h` (predmove_bvfired), `client/pr_csqc.c` (the ring, the SV_BaseVelocityFrame mirror, the flush), `client/cl_pred.c` (ResetChain call removed, comments), `client/client.h` (CSQC_PredictBaseVelFlush + stub, ResetChain gone).  Mod: `src/client/cl_triggers.qc` (predmove_bvfired extern + set, header comment).  Fixtures `cfg/test/p335k{,0..5}.cfg`.  VERIFIED: p335k5 -- walk-mode drop onto mom_training pad #17 (*123, pushdir +x, speed 400): the client fires the push every command, the ride holds a bounded 4-8 u entry-edge transient, the EXIT pays the cash-out on both sides and converges under the 2 u meter within two commands, and the following 664-unit clean walk prints nothing.  Pre-fix, the same geometry produced the two failure signatures from the user's playtest on the same pad: a stable 4.00 u cascade and a growing 4-per-command error.  p335e teleport regression rerun clean.)*
+
+**Problem.**  The first playtest on bhop_mom_training_beta's boosters printed
+two signatures the headless walker had never crossed: cascades of prederrs of
+EXACTLY 4.00 units -- one 10 ms command of the pad's 400 u/s push -- stable
+across consecutive acks, and errors growing 4 u per command through a pad
+exit.  Patch 335's carrier was a single predmove_basevel slot, cleared at
+every chain restart; but the chain restarts from the acked state on EVERY
+rendered frame, so the first replayed command never saw the push its acked
+predecessor wrote -- the server's copy of that command rode it.  And the
+deeper half: the server's trigger_push is not a one-command carrier at all.
+Patch 249's model HOLDS .run_basevel with an .run_basevel_armed flag, and
+SV_BaseVelocityFrame -- PreThink, before the move -- CASHES THE HELD VECTOR
+OUT INTO REAL VELOCITY, `velocity += (1 + pm_ticrate*0.5) * held`, on the
+first command nothing re-armed it, then hands the window to the engine and
+spends the held Z.  A client that only rides the window never pays the exit
+money: the server leaves the pad ~403 u/s faster and the gap grows 4 u every
+command until something else resets it.
+
+**Change.**  The carrier became a per-seat ring of (held, armed) keyed by the
+sequence of the command whose hook produced it -- 64 slots, stale entries
+self-invalidating (the restore only accepts tag == sequence-1), flushed at
+CSQC_WorldLoaded so a new map never inherits a cash-out.  Per predicted
+command, before PM_PlayerMove, the engine now runs the exact
+SV_BaseVelocityFrame shape: restore from the ring, cash out if !armed &&
+held, clear armed, hand held to pmove.basevelocity, zero held_z.  The scale
+uses movevars.ticrate, which the client already learns from serverinfo
+(cl_main.c:3305) with the server's own fallback -- the same number the
+server's run_bv_tick latched.  After the hook, the QC write is taken into
+held/armed and snapshotted to the ring.  predmove_bvfired (new csqcglobal)
+covers the cancelled-push corner: two opposing volumes summing to exactly
+zero still ARM on the server (the touch sets the flag unconditionally), and a
+nonzero-test alone would miss it.  CSQC_PredictResetChain is gone -- nothing
+the hook leaves behind is chain-scoped state any more.  The 50 ms-split
+halves both restore the same ring entry; the server's second half would see
+its first half's touch instead, a difference only when a split command
+crosses a volume boundary, bounded by one command.
+
+**Verified.**  Above, plus the two harness traps the runs cost, kept here
+because each one produced an hour of confidently wrong data: (1) `cmd
+noclip` after the setpos cheat is processed TWICE -- the engine's
+SV_Noclip_f flips NOCLIP->WALK, then the mod's QC ClientCommand handler
+(sv_player.qc:645) sees WALK and flips back to NOCLIP, printing "noclip ON"
+-- so every "walk" test that toggled once was noclip flight, where the
+server's touch skips MOVETYPE_NOCLIP and the mirror skips spectators, i.e.
+both sides silent and nothing tested; the harness issues the toggle twice and
+proves WALK by the z-drop to the floor.  (2) A cvar `set` BEFORE the connect
+is reset by CSQC's registercvar default -- cl_trigdebug must be armed after
+the connection, or fires happen invisibly.  OPEN, and now the ONLY residue
+on a push ride: the 4-8 u entry-edge transient, where the two separately
+compiled x86 binaries land the hull one command apart on the slab boundary --
+Patch 328's discrete-boundary class, bounded, self-healing in one or two
+corrections, and the same residue the stage1a lip shows on bhop_arcane.
+
+## Patch 338 — the IO mirror: Enable/Disable state, replicated  *(APPLIED -- mod-side only, no engine change: `src/client/cl_triggers.qc` (the io_* table, TG_IO* machinery, TG_EVENT slots, seed/commit in TG_ChainStart, Trig_IOMapSpawn), fixtures `cfg/test/p338{a..e}.cfg`, tool `tools/seed_csprogs.py`.  VERIFIED on bhop_mom_training_beta dedicated: TELEPORT_SEND_PLAYER (mapspawn-enabled, the 6956 u snapback from real play) fires locally with no correction; push_prevent_backtrack_t1 runs the full cycle -- warp-in Enable, gated setspeed, exit-grace Disable, re-entry Enable -- with ZERO prederrs through the loop; 7 teleport_safeguard instances correctly stay server-only (their trigger_userinput enablers are a class the server itself never implemented).  Regressions: arcane E2E unchanged, push cash-out unchanged, listen gate holds, surf_rise keeps all 105 teleports.)*
+
+**Problem.**  Phase 1 skipped every StartDisabled trigger and every trigger
+IO could rewrite, because the state lives on the server.  Real play on
+bhop_mom_training_beta priced that in: its live teleport network is IO-gated
+(68 Enable / 41 Disable wirings), and crossing TELEPORT_SEND_PLAYER -- which
+logic_auto enables 0.5 s after mapspawn and nothing ever disables -- produced
+a 6956-unit single-ack snapback, the worst class of jolt prediction exists
+to end.
+
+**Change.**  The client captures the output graph from the same lump walk
+(the server's own rule: case-sensitive "On" prefix, ESC-or-comma separator,
+SV_EntityIOBuild's five fields) and mirrors the SAFE SUBSET: Enable/Disable
+with zero delay, fired from events the client can see for certain --
+OnStartTouch/OnEndTouch of predicted slots and of trigger_multiples kept as
+event-only slots (TG_EVENT, including trigger_once retirement as a
+self-Disable through the ring), plus logic_auto OnMapSpawn on a schedule off
+client `time`.  Everything else keeps its targets server-authoritative via a
+demotion fixpoint: stateful outputs (Enable/Disable/Toggle/Kill/AddOutput/
+ModifySpeed) from events nobody mirrors (relays, buttons, timers, counters,
+OnTrigger/OnJump/OnLand, the multiplayer-dependent All-variants), any delay,
+or owners the fixpoint already demoted.  StartDisabled slots are admitted
+only with at least one mirrored enabler.  AddOutput basevelocity/gravity or
+ModifySpeed at !activator demotes the OWNER (player movement the mirror
+cannot carry); AddOutput targetname at !activator is kept -- the rename only
+feeds name filters, already UNKNOWN.  Runtime state is Patch 337's idiom
+twice over: a sequence-keyed ring of pending events, committed to the
+persistent gate array at each chain restart, and -- because the chain
+restarts EVERY rendered frame -- edge seeding by a persistent last-overlap
+stamp that distinguishes a continuous stay (START committed, do not re-fire;
+the first cut re-fired it 200x/second, measured) from a warp-in (gap: the
+server's touch-bits are empty and DO fire START; the probe-only cut swallowed
+it, also measured).  OnEndTouch mirrors the 0.05 s sweep grace on absolute
+command time (tbase + chain clock), replay-invariant; a pending END survives
+restarts.
+
+**Verified.**  Above, plus the harness trap that cost the afternoon and is
+now `tools/seed_csprogs.py`: after a csprogs rebuild the test client kept
+running a STALE `downloads/csprogsvers/<hash>.dat` copy -- old code, silently,
+no download line -- so two rounds of "the fix didn't work" measured the
+previous build.  Reseed (or clear) the cache on every rebuild; the seeder
+computes the folded MD4 in pure Python (verified bit-exact against the
+engine's advertisement) and deletes stale cache entries.  OPEN RESIDUE, both
+bounded and both the Patch-328 discrete-edge class: a setspeed enter-edge
+suppressed by chain-start seeding while hovering a boundary prints one 12 u
+correction per crossing, and a speculatively-committed IO event would need a
+correction to erase it AND to flip the overlap -- if a map ever mis-gates,
+look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
+whole graph and its live state.
+
+## Patch 342 — `say <text>` sends again, the board's release closes it, per-row energy zeros, the air family goes green, the clock shows PB pace  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc`, `cl_scores.qc`, `cl_board.qc`, `cl_hud.qc`, `cl_watch.qc`, `cl_timer.qc`, `cl_results.qc`, `cl_hudedit.qc`, `cl_main.qc`, `src/menu/m_main.qc`, `ftesurf/cfg/default.cfg`, fixtures `cfg/test/b86{a,b}.cfg`.)*
+
+**Problem.** Patch 341's CSQC_ChatSay took `say` with text as well as bare
+`say`, so every `say !r` / `!m` / `!s N` opened a prefilled draft and sent
+NOTHING -- default.cfg binds r and m to exactly that, so the restart keys were
+dead, and six cfg/test fixtures had been silently driving no runs.  `-showscores`
+cleared only sc_held, so a board pinned with MOUSE2 stayed up after the key came
+back -- and MOUSE2 is +jump, so jumping while peeking pinned it by accident.  The
+segment column referenced seq_eend against the LIVE anchor at draw time, so every
+committed row restated itself each time the anchor re-based -- once a second on a
+bhop map.  Air rows (Jump/Bhop/Air) were light yellow.  The running clock was flat
+white and said nothing about your own PB.
+
+**Change.** CSQC_ChatSay now declines a non-empty argument and lets CL_Say send
+it (its one quote pair is the one SV_Say strips, so `!s 2` keeps its number);
+bare `say` still opens the draft.  `-showscores` calls Scores_Close (cursor claim
+and pending replay included) and MOUSE2-unpin restores sc_held, so the key owns
+the board and the pin owns the cursor.  New `seq_eref[SEQ_MAX]` -- a tenth
+parallel array -- stamps HUD_EnergyRef() at push time and the drawer subtracts
+the row's own zero; carried through the scroll, Seq_Mark/Unmark, Seq_Load, a
+`rowref` line, and the replay park pair (which also gained the seq_eend/seq_sub it
+had been dropping since builds 65/66).  A file with no `rowref` is stamped with
+the live reference AFTER Seq_AnchorRestore, so old saves draw as before.
+HUD_SeqColor returns mint `'0.40 0.90 0.70'` for SEG_AIR.  Timer_Color takes a
+three-state `pace` (0 none / -1 ahead / +1 behind) riding stv_z, latched from the
+stage and checkpoint deltas the client already receives and held between gates;
+TC_AHEAD/TC_BEHIND replace four copies of the same two literals.  `hud_timer_pace`
+(archived, default 1), a layout-editor row, and a `cl pace:` line in `timer`.
+
+**Verified.** b86a on bhop_eazy: `say "!r"` transmits and the server answers
+`!r -- start of the map`, viewpos 30/45 -> 0/0, and `say "!s 2"` lands on stage 2
+(not stage 1, the `cmd say` tail loss); `scores status` reads pinned ->
+pinned+held -> closed across +showscores/-showscores; two shots either side of a
+64->344 anchor move show the five committed rows' absolutes UNCHANGED (0e 50e -2e
+50e 0e) while the live `e` follows 0 -> 96, with every Jump:/Bhop: row green.
+b86b: a running clock with `pb 0:49.760` draws GREEN at hud_timer_pace 1 and WHITE
+at 0, same frame otherwise.  NOT reachable headlessly and left for a live run: the
+BEHIND half, which needs a gate crossed slower than the PB (teleporting to one
+aborts the run).  0 new warnings (cl_hud.qc:2007 pre-existing).
+
+## Patch 341 — csprogs owns `say`; chat draft, hold-to-peek board, exact RGB  *(APPLIED -- one engine hook, rest mod-side: `engine/common/pr_common.h` + `engine/client/pr_csqc.c`/`client.h`/`zqtp.c` (CSQC_ChatSay), `src/client/cl_chat.qc`, `cl_scores.qc`, `cl_avatar.qc`, `cl_players.qc`, `src/server/sv_lobby.qc`, fixtures.)*
+
+**Problem.** The chat draft submitted `say %S`: one quote pair too many --
+the client's legacy wire wrap adds a pair and SV_Say (sv_user.c:4385) strips
+exactly one, so every drafted message wore quotes. Console `say` was an
+engine command no QC claim could reach (cmd beats alias beats cvar,
+cmd.c:3326) and opened the corner input the chatbox replaced. The draft line
+only existed while typing, so the box jumped by a line. TAB toggled the board
+on every press. The customizer leaked text over its own border, cut the
+preview model at the window bottom, and offered only on/off chips and a
+12-swatch palette.
+
+**Change.** CL_Say offers the whole command to a new name-bound csqc
+globalfunction CSQC_ChatSay(args, team) before sending (old engine or old
+csprogs: never asked, engine prompt as before). The draft submits through a
+quoted cvar (`set cl_safetmp %S; cmd say $cl_safetmp`): the buffer's
+split is quote-aware so `;` in chat is inert, expansion happens after the line
+is cut, and `cmd` forwards past CL_Say -- whose new hook would otherwise
+reopen the draft with its own text -- reaching SV_Say unquoted and clean;
+the name field commits the same way. The draft line is always reserved (blank
+when idle -- a blinking idle underscore read as a stuck draft, white `>` line
+while typing) and messages sit above it permanently.
++showscores arms sc_held (hold to peek; the input chain offers
+Scores_InputEvent while held OR open, or the pin click never arrives), MOUSE2
+while held pins/unpins,
+esc drops both. `setinfo lobbyrgb "r g b"` wears an exact body colour:
+the 1 Hz loop parses it, keeps the NEAREST palette index in .lobby_colour
+for the pre-generated particles and chat tc, applies the exact triple via
+Lobby_ColourModRGB/GlowModRGB, and publishes `lrgb` beside `lc`; the
+customizer gains R/G/B and trail/motes/glow sliders (sui_slidercontrol plus
+a cl_watch-style knob), wraps its prose, and clamps the preview viewport to
+the screen at fov 50.
+
+**Verified.** p340a on 27667: three `cmd say` lines arrive quote-free at the
+new defaults with the reserved line under them; panel shows sliders at
+0/255/0 for granted green, trail=long, wrapped footer inside the border,
+model floating with margin in a clamped viewport. p340pi against a live
+lobby post-deploy: hook alive, ranked board fetched, a real player's swatch
+drawn from `lrgb`, no prederr. 0 new warnings (cl_hud.qc:2007 pre-existing).
+
+## Patch 340 — player customization phase 2: name gate, chatbox, customizer, room list, player hash  *(APPLIED -- mod-side only, no engine change: `src/shared/sh_defs.qc` (FS_GuidId), `src/server/sv_lobby.qc` (random colour + latch, `tc`/`lc`/`*phash` publishes, `lobbytrail`, FS_AVFX_TRAILONG), `src/menu/m_main.qc` (SCREEN_NAME gate, `ui_name`, `ui_close`), new `src/client/cl_chat.qc` / `cl_avatar.qc` / `cl_players.qc`, wiring in `cl_scores.qc`/`cl_online.qc`/`cl_ghost.qc`/`cl_main.qc`/`cl_progs.src`, `tools/mkavatarfx.py`, fixtures `cfg/test/p340{sv,a,b,m,pi}.cfg`.)*
+
+**Problem.** Joiners are the engine's factory "Player"/"(1)Player"; the slot
+stride handed them a colour with no say; chat lived only in console notify and
+its input was the corner line; the Patch 278 `setinfo lobbycolor/lobbyfx`
+channels had no in-game surface; runs are filed by sha256(guid) while nothing
+showed that string; the room list showed join order with no times; and ghost
+mode drew the replay stand-in in identity white whatever you had picked.
+
+**Change.** Menu gates ui_launch/ui_connect on a default name (SCREEN_NAME,
+real cancel, skipped for ui_bootcheck). Server rolls a random free colour,
+latches it while held, publishes `tc` (the engine's own chat-name colour key)
++ `lc` and the hash as `*phash` via forceinfokey -- not stuffed `set`:
+Cvar_LockFromServer latches server-set cvars and cvar_string returns the
+LATCHED string to QC (measured: "" over an effective 70e95ebc). Client:
+CSQC_Parse_Print (once defined it takes ALL prints, so other levels are
+re-printed) feeds a bottom-left chatbox (defaults x .05 / y .95 / size 24)
+that stacks, fades on hud_chat_*, and -- stealing the messagemode bind in
+CL_InputChain, since the engine's `say` beats CSQC_ConsoleCommand -- grows a
+wrapped typing line with a blinking cursor that pushes the box up.
+`hud_player` opens the customizer: font-ladder sizes, draggable title bar
+(hud_player_x/y), a name field committing through `name`, colour/trail
+swatches, fx chips, the hash line, and a second renderscene (VF_VIEWPORT +
+VF_DRAWWORLD 0) beside the panel showing the player model oscillating in
+your colour and effects; Av_GhostDress dresses cl_ghost's stand-in in the
+same look. The room list ranks by best main time absorbed from the online
+board's rows, matched by FS_GuidId(row.player) == *phash (rename-proof),
+gold/silver/bronze plates on the podium; the board's own dead right-hand
+slack was the 50%-of-screen width floor, dropped to 42% with SBW_TAG 11->10.
+Spectate stays a stub by decision.
+
+**Verified.** p340m: Player/player/(1)Player/unnamed/quake read default,
+Lex/TestPilot chosen; screen screenshot clean. p340sv+p340a on 27667:
+cl_pcolour rolled 3/2/11/9/12/8 over six connects and tracked `lobbycolor 5`
+within the 1 Hz resolve; chatbox stacks three lines at the new defaults with
+the third's own ^3 winning; customizer shows hash 70c95cbc, granted swatch
+and the oscillating preview; room list shows plate column, swatch,
+tc-coloured name, ping, voice icon. p340b listen: colour resolves, hash line
+reads "no id". p340pi against a live lobby post-deploy: hook alive, ranked
+board fetched and absorbed, a real second player's row correct, no prederr.
+0 new warnings across the three progs.

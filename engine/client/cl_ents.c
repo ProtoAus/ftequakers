@@ -2926,6 +2926,79 @@ void CLQ1_DrawLine(shader_t *shader, vec3_t v1, vec3_t v2, float r, float g, flo
 	t->numidx = cl_numstrisidx - t->firstidx;
 	cl_numstrisvert += 2;
 }
+/*
+FTESurf Patch 331 -- the triangle half of the hull visualiser.
+
+CLQ1_DrawLine's sibling for FACES: one trifan per convex winding, batched
+exactly like the lines but without BEF_LINES, so the same scenetris path
+rasterises it as geometry.  The shader is expected to be an ordered-dither
+program (scripts/hover.shader -> glsl/ftesurf_ditherfill.glsl): the alpha
+argument is the dither COVERAGE, not a blend factor, which is what lets forty
+overlapping faces of one hull stipple over each other without a single sort
+decision.  Vertices carry the colour and the coverage because rgbgen vertex
+plus the default ALPHA_GEN_VERTEX put both in v_colour, which is all the
+program reads.
+
+n<3 is the caller's degeneracy answer (a supporting bevel plane has no face of
+its own) and is re-tested here so the helper is safe on its own.
+*/
+void CLQ1_DrawPolyFan(shader_t *shader, vecV_t *verts, int n, float r, float g, float b, float a)
+{
+	scenetris_t *t;
+	int flags = BEF_NODLIGHT|BEF_NOSHADOWS;
+	int i, idx;
+
+	if (!shader || n < 3)
+		return;
+
+	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader && cl_stris[cl_numstris-1].flags == flags
+		&& cl_stris[cl_numstris-1].numvert + n <= MAX_INDICIES)
+		t = &cl_stris[cl_numstris-1];
+	else
+	{
+		if (cl_numstris == cl_maxstris)
+		{
+			cl_maxstris += 8;
+			cl_stris = BZ_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
+		}
+		t = &cl_stris[cl_numstris++];
+		t->shader = shader;
+		t->numidx = 0;
+		t->numvert = 0;
+		t->firstidx = cl_numstrisidx;
+		t->firstvert = cl_numstrisvert;
+		t->flags = flags;
+	}
+	if (cl_numstrisvert + n > cl_maxstrisvert)
+		cl_stris_ExpandVerts(cl_numstrisvert + n);
+	if (cl_maxstrisidx < cl_numstrisidx+3*(n-2))
+	{
+		cl_maxstrisidx = cl_numstrisidx+3*(n-2);
+		cl_strisidx = BZ_Realloc(cl_strisidx, sizeof(*cl_strisidx)*cl_maxstrisidx);
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		VectorCopy(verts[i], cl_strisvertv[cl_numstrisvert+i]);
+		cl_strisvertt[cl_numstrisvert+i][0] = 0;
+		cl_strisvertt[cl_numstrisvert+i][1] = 0;
+		cl_strisvertc[cl_numstrisvert+i][0] = r;
+		cl_strisvertc[cl_numstrisvert+i][1] = g;
+		cl_strisvertc[cl_numstrisvert+i][2] = b;
+		cl_strisvertc[cl_numstrisvert+i][3] = a;
+	}
+	for (i = 1; i+1 < n; i++)
+	{
+		idx = cl_numstrisvert - t->firstvert;
+		cl_strisidx[cl_numstrisidx++] = idx+0;
+		cl_strisidx[cl_numstrisidx++] = idx+i;
+		cl_strisidx[cl_numstrisidx++] = idx+i+1;
+	}
+
+	t->numvert += n;
+	t->numidx = cl_numstrisidx - t->firstidx;
+	cl_numstrisvert += n;
+}
 void CLQ1_AddSpriteQuad(shader_t *shader, vec3_t mid, float radius)
 {
 	float r=1, g=1, b=1;
@@ -3617,6 +3690,7 @@ with bevels on and off.  That is correct and is the reason mode 2 exists.
 cvar_t r_showbrushes			= CVARFD("r_showbrushes", "0", CVAR_CHEAT, "FTESurf Patch 319. Draw world brush COLLISION hulls as wireframe, for brushes that have no renderable faces (nodraw clip brushes are invisible by construction -- VBSP emits no faces for them). 1 = the brush as built. 2 = the SWEPT hull, every plane offset by the player box support, i.e. the surface your origin is actually stopped by -- this is the one that shows what hl2_brushbevels changes. Orange = PLAYERCLIP, green = SOLID, blue = anything else.");
 cvar_t r_showbrushes_dist		= CVARFD("r_showbrushes_dist", "768", CVAR_CHEAT, "r_showbrushes: only draw brushes within this many units of the view. A whole map's brush hulls will overflow the line buffer and then nothing draws at all.");
 cvar_t r_showbrushes_mask		= CVARFD("r_showbrushes_mask", "0", CVAR_CHEAT, "r_showbrushes: if non-zero, only draw brushes whose contents share a bit with this mask. 65536 (0x10000) is PLAYERCLIP alone, which is usually what you want -- 0 draws every solid brush near you and is unreadable indoors.");
+cvar_t r_showbrushes_fill		= CVARFD("r_showbrushes_fill", "0.25", CVAR_CHEAT, "FTESurf Patch 331. r_showbrushes: shade each brush FACE with an ordered dither as well as edging it, so a hull reads as a volume and not as a wire cage. The value is the dither COVERAGE in 0..1 (1/16 steps: 0.25 is four of sixteen screen pixels), not a blend alpha -- the fill is opaque geometry with a discard, so forty overlapping faces of one hull stipple over each other with no sort decision. 0 = the wireframe only, the Patch 319 picture.");
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
 struct brushviz_s
@@ -3626,6 +3700,13 @@ struct brushviz_s
 	int			expand;		//mode 2: offset each plane by the player box support
 	vec3_t		hullmins, hullmaxs;
 	int			brushes, faces;
+	/*FTESurf Patch 331: the dither FILL under the wireframe.  NULL = lines only,
+	  the Patch 319 picture exactly.  When set, every face winding also goes out
+	  as a triangle fan through an ordered-dither program, and fillalpha is the
+	  dither COVERAGE (a bayer threshold fraction), not a blend factor.*/
+	shader_t	*fill;
+	float		fillalpha;
+	int		nolines;	//Patch 331 addendum: fill-only pass (the in-view set)
 };
 static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 {
@@ -3665,8 +3746,11 @@ static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 		if (n < 3)
 			continue;	/*a supporting bevel has no face of its own -- expected*/
 		v->faces++;
-		for (j = 0; j < (int)n; j++)
-			CLQ1_DrawLine(v->shader, verts[j], verts[(j+1)%n], r, g, b, 1);
+		if (!v->nolines)
+			for (j = 0; j < (int)n; j++)
+				CLQ1_DrawLine(v->shader, verts[j], verts[(j+1)%n], r, g, b, 1);
+		if (v->fill)
+			CLQ1_DrawPolyFan(v->fill, verts, (int)n, r, g, b, v->fillalpha);
 	}
 	v->brushes++;
 }
@@ -3698,6 +3782,22 @@ void CLQ1_AddVisibleBrushes(void)
 				"rgbgen vertex\n"
 			"}\n"
 		"}\n");
+	/*Patch 331: the dither fill.  Inline script like hullshader's own; the GLSL
+	  program it names lives in the gamedir (glsl/ftesurf_ditherfill.glsl), which
+	  is the half the mod can retune.*/
+	if (r_showbrushes_fill.value > 0)
+	{
+		v.fill = R_RegisterShader("ftesurf_brushfill", SUF_NONE,
+			"{\n"
+				"polygonoffset\n"
+				"{\n"
+					"program ftesurf_ditherfill\n"
+					"map $whiteimage\n"
+					"rgbgen vertex\n"
+				"}\n"
+			"}\n");
+		v.fillalpha = r_showbrushes_fill.value;
+	}
 	v.mask = (unsigned int)r_showbrushes_mask.ival;
 	v.expand = (r_showbrushes.ival == 2);
 	/*the player hull, so mode 2 draws the volume THIS player's origin is stopped
@@ -3723,6 +3823,163 @@ void CLQ1_AddVisibleBrushes(void)
 			r_showbrushes.ival, v.brushes, v.faces, d, v.mask,
 			v.expand?" (SWEPT hull: offset by the 32x32x62 player box, so it hangs below the brush)":"");
 	}
+#endif
+}
+
+/*
+==================================================
+The hovered brush entity		FTESurf Patch 331
+
+The crosshair half of the inspector.  CSQC publishes the "*N" of whichever
+brush entity the probe trace is on this frame in the ent_hover_model cvar
+(empty when nothing is hovered or the overlay is off), and this draws THAT
+submodel's brushes -- exact faces, from its own BIH, not a bounding box --
+with the dither fill through ftesurf_enthover, whose nodepthtest + sort banner
+put the stipple OVER the walls that hide the trigger.  That is the whole
+reason it is a separate material from r_showbrushes' fill: a trigger's faces
+are inside geometry by construction, so a depth-tested fill of a trigger shows
+nothing at all.
+
+The wireframe edges come along for free from the same visitor, so the volume
+reads as faces AND edges, and the per-contents palette (orange PLAYERCLIP,
+green SOLID, blue other) is shared with r_showbrushes so one colour language
+covers both views.
+
+Distance and mask culls are deliberately absent: the hover is ONE submodel,
+chosen by the player's own aim, so the unreadable-everything case that
+r_showbrushes_dist exists for cannot arise.
+==================================================
+*/
+void CLQ1_AddHoverBrushes(void)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	static cvar_t *hm, *vm;
+	static shader_t *fillsh, *linesh;
+	struct brushviz_s v;
+	vec3_t mins, maxs;
+	model_t *mod;
+	const char *s;
+	char *end;
+	int idx, drawn;
+
+	if (!hm)
+	{
+		hm = Cvar_FindVar("ent_hover_model");	//QC registercvar's these; absent until first use
+		vm = Cvar_FindVar("ent_view_models");
+	}
+	if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+		return;
+
+	if (!fillsh)
+	{
+		/*Same shape as ftesurf_brushfill -- polygonoffset, depth-tested, default
+		  sort -- because that is the shape MEASURABLY draws from a scenetris
+		  batch.  Two see-through attempts were tried and both rasterised
+		  nothing: sort banner (a 2D sort slot; the batch is never drawn in a 3D
+		  view) and nodepthtest (mean|on-off| over the floor region 1.1/255 with
+		  the census reporting 148 faces submitted).  What is lost is the
+		  through-walls view of a trigger buried in solid; what is kept is every
+		  face that bounds open space, which is what a trigger volume is made
+		  of, pushed toward the eye by the offset so a face flush with a wall
+		  still wins it.*/
+		fillsh = R_RegisterShader("ftesurf_enthover", SUF_NONE,
+			"{\n"
+				"polygonoffset\n"
+				"{\n"
+					"program ftesurf_ditherfill\n"
+					"map $whiteimage\n"
+					"rgbgen vertex\n"
+				"}\n"
+			"}\n");
+		linesh = R_RegisterShader("hullshader", SUF_NONE,
+			"{\n"
+				"polygonoffset\n"
+				"{\n"
+					"map $whiteimage\n"
+					"rgbgen vertex\n"
+				"}\n"
+			"}\n");
+	}
+
+	/*
+	  Patch 331 addendum -- THE IN-VIEW SET.  CSQC publishes the "*N" of every
+	  brush entity its box walk drew this frame (ent_view_models, capped at 48,
+	  empty when the overlay is off), and each one gets its exact faces dithered
+	  at 3/16 -- faint enough to see the world through, present enough to say
+	  "this volume is here, and this is its shape".  That is the answer to "I
+	  was expecting the trigger_ and like func_ladders to also be dither
+	  filled": the hover alone made the feature a spotlight, and an inspector
+	  that only lights what you already point at cannot help you FIND the next
+	  one.  No lines for these: 48 hulls of wireframe is the unreadable case,
+	  and the stipple alone reads as a volume.
+	*/
+	if (vm && *vm->string)
+	{
+		static int lastmodels = -2, lastfaces = -2;
+		int totfaces = 0;
+		s = vm->string;
+		drawn = 0;
+		while (*s && drawn < 64)
+		{
+			idx = (int)strtol(s, &end, 10);
+			if (end == s)
+				break;
+			s = end;
+			while (*s == ' ')
+				s++;
+			if (hm && *hm->string && idx == atoi(hm->string+1))
+				continue;	//the hover gets the brighter pass below, not two fills
+			/*RESOLVE "*N" THE WAY setmodel DOES: Mod_FixName rewrites it to the
+			  submodel's registered name ("*N:<worldname>", the name
+			  BeginSubmodelLoad gave it) and Mod_ForName finds the already-loaded
+			  model_t.  Two measured faults forced this route: cl.model_precache[N]
+			  is the Nth PRECACHE SLOT, not lump *N (the winding it produced sat
+			  ten thousand units from the view), and worldmodel->submodels[N] does
+			  not carry the plugin's brush array at all (segfault).  The submodel
+			  model_t is the one object that has the brushes, world-space, in a
+			  BIH of BIH_BRUSH leaves -- VBSP_BuildBIHSubmodel builds it at load.
+			  The box is the whole coordinate space on purpose: that BIH holds
+			  only this submodel's brushes, so the box is the question "which of
+			  your brushes", and the answer is all.*/
+			mod = Mod_ForName(Mod_FixName(va("*%i", idx), cl.worldmodel->publicname), MLV_WARN);
+			if (!mod || mod->loadstate != MLS_LOADED || !mod->cnodes)
+				continue;
+			memset(&v, 0, sizeof(v));
+			v.shader = linesh;
+			v.nolines = 1;
+			v.fill = fillsh;
+			v.fillalpha = 0.1875;	//3/16: present, but the world stays the picture
+			VectorSet(mins, -131072, -131072, -131072);
+			VectorSet(maxs,  131072,  131072,  131072);
+			BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
+			totfaces += v.faces;
+			drawn++;
+		}
+		/*one-shot readout on change, like r_showbrushes' own: a blank screen
+		  should say whether the list arrived empty or the walk found nothing.*/
+		if (drawn != lastmodels || totfaces != lastfaces)
+		{
+			lastmodels = drawn;
+			lastfaces = totfaces;
+			Con_Printf("entview fill: %i model(s), %i face(s) in view\n", drawn, totfaces);
+		}
+	}
+
+	/*THE HOVER, brighter and edged: the one volume you are asking about.*/
+	if (!hm || !*hm->string || hm->string[0] != '*')
+		return;
+	idx = atoi(hm->string+1);
+	mod = Mod_ForName(Mod_FixName(va("*%i", idx), cl.worldmodel->publicname), MLV_WARN);
+	if (!mod || mod->loadstate != MLS_LOADED || !mod->cnodes)
+		return;
+
+	memset(&v, 0, sizeof(v));
+	v.shader = linesh;
+	v.fill = fillsh;
+	v.fillalpha = 0.375;	//6/16: the hover out-reads the in-view set
+	VectorSet(mins, -131072, -131072, -131072);
+	VectorSet(maxs,  131072,  131072,  131072);
+	BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
 #endif
 }
 
@@ -6112,6 +6369,7 @@ void CL_LinkPacketEntities (void)
 	CLQ1_AddVisibleBBoxes();
 	CLQ1_AddVisibleHulls();
 	CLQ1_AddVisibleBrushes();	//FTESurf Patch 319
+	CLQ1_AddHoverBrushes();	//FTESurf Patch 331
 
 #ifdef RTLIGHTS
 	R_EditLights_DrawLights();

@@ -77,6 +77,11 @@ static double pt_time0 = 0;	/*Patch 269b: wall clock at the first record, so the
   CL_PredictMovePNum.*/
 static cvar_t	cl_predict_velblend = CVARD("cl_predict_velblend","2", "How the REPORTED velocity is interpolated across a rendered frame. 2 (default, Patch 269c) blends between the velocity this client PREDICTED for the earlier state and the freshly predicted one, so the reported speed and the reported position are the same instant and energy is conserved to 0.02 units across a jump. 1 blends against the last acked network velocity instead, which is what builds before Patch 269 did: correct while you are moving, but that field is not maintained for your own player and freezes when you stand still, making the speed readout sweep 0..5 at high framerates. 0 does not blend at all (Patch 269): the speed readout is clean, but the reported position is still interpolated, so energy is read from two different instants and climbs about 4 units over a jump.");
 static cvar_t	cl_predict_freshtype = CVARD("cl_predict_freshtype","1", "Take the decision to predict or interpolate from the newest received player state rather than from the previous frame's copy of it. 0 restores the historical one-frame-stale behaviour, in which the frame a freeze (MOVETYPE_NONE, PM_FREEZE) begins still predicts and the frame it ends still interpolates.");
+/*FTESurf Patch 335: master gate on the CSQC per-command prediction hook. The
+  hook itself is inert unless the csprogs exports CSQC_PredictPlayerMove; this
+  cvar exists so an engine-side 0 is still a bisectable answer.*/
+cvar_t	cl_predict_qchook = CVARD("cl_predict_qchook","1", "Call CSQC_PredictPlayerMove once per predicted usercmd, letting CSQC run map triggers inside client prediction (FTESurf Patch 335). 0 restores the historical behaviour where only the server's touches exist and every trigger costs a round trip.");
+static cvar_t	cl_prederror = CVARD("cl_prederror","4", "Print one line per acked command whose server origin differs from what this client predicted for it by more than this many units (FTESurf Patch 335). 0 disables. The line IS the snap-back report: it names the sequence and both origins, so a disagreement between the client's trigger mirror and the server's is a quotable number instead of a feeling.");
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
 
 extern float	pm_airaccelerate;
@@ -425,6 +430,14 @@ void CL_NudgePosition (void)
 CL_PredictUsercmd
 ==============
 */
+/*FTESurf Patch 335: CL_PredictUsercmd runs for MORE than the local player --
+  cl_ents.c pose-predicts every other predicted entity through it with a
+  synthetic command whose sequence is 0, and pr_csqc's runplayerphysics has
+  its own copy.  The CSQC trigger hook must fire ONLY for the seat's own
+  replay chain: its angle snap writes the real view, and its per-chain state
+  is keyed on the chain's sequences.  Set around the two calls in
+  CL_PredictMovePNum and tested beside the hook.*/
+static qboolean cl_pred_localchain;
 void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u)
 {
 	// split up very long moves
@@ -465,6 +478,13 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	instead of wrong.
 	*/
 	VectorClear (pmove.basevelocity);
+	/*FTESurf Patch 337: the frame half of the basevelocity mirror -- restore
+	  the held carrier/armed state the previous command's hook left in the
+	  sequence-keyed ring, pay the Patch 249 cash-out if nothing re-armed it,
+	  and hand the window to pmove.basevelocity, exactly as the server's
+	  SV_BaseVelocityFrame does in PreThink before SV_RunCmd.*/
+	if (cl_pred_localchain)
+		CSQC_PredictConsumeBaseVel(pnum, u->sequence);
 	VectorCopy (from->gravitydir, pmove.gravitydir);
 
 	if (IS_NAN(pmove.velocity[0]))
@@ -496,6 +516,13 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	VectorCopy(from->szmaxs, pmove.player_maxs);
 
 	PM_PlayerMove (cl.gamespeed);
+
+	/*FTESurf Patch 335: the CSQC trigger hook, between the move and the
+	  writeback, so anything QC imposes on predmove_* lands in to->state and
+	  propagates down the rest of the replay chain.  Local chain only -- see
+	  cl_pred_localchain.*/
+	if (cl_pred_localchain)
+		CSQC_PredictPlayerMove(pnum, u, from->origin);
 
 	to->waterjumptime = pmove.waterjumptime;
 	to->jump_held = pmove.jump_held;
@@ -1375,6 +1402,13 @@ void CL_PredictMovePNum (int seat)
 	if (!nopred)
 	{
 		int stopframe;
+		/*FTESurf Patch 337: no chain reset here any more.  The chain restarts
+		  every rendered frame, and everything the hook leaves behind -- the
+		  basevelocity ring, the angle-snap ring -- is keyed by command sequence
+		  precisely so restarts cannot corrupt it.  Patch 335's ResetChain call
+		  cleared the carrier every frame and cost the first replayed command
+		  one command of push (a stable 4.00 u error on 400 u/s boosters,
+		  measured in play on bhop_mom_training_beta).*/
 		//Con_Printf("Pred %i to %i\n", to.frame+1, min(from.frame+UPDATE_BACKUP, cl.movesequence));
 
 		//fix up sequence numbers for nq
@@ -1401,6 +1435,31 @@ void CL_PredictMovePNum (int seat)
 
 			if (from.frame == pv->prop.sequence && pv->prop.sequence)
 			{
+				/*FTESurf Patch 335: THE SNAP-BACK METER.  from.state here is the
+				  server's own state for a command this client already predicted,
+				  and pv->prop.origin is what the prediction said -- so their
+				  difference IS the correction the renderer is about to swallow.
+				  Small is the ordinary residue of packet quantisation; big is
+				  the two simulations disagreeing, which on a game whose whole
+				  promise is "a snap-back is a bug" has to be a NUMBER somebody
+				  can quote, not a vibe.  One line per acked command, gated on
+				  cl_prederror (units, 0 = off).*/
+				if (cl_prederror.value > 0)
+				{
+					static int pt_err_lastseq[MAX_SPLITS];
+					vec3_t perr;
+					float e;
+					VectorSubtract(from.state->origin, pv->prop.origin, perr);
+					e = DotProduct(perr, perr);
+					if (e > cl_prederror.value * cl_prederror.value && pt_err_lastseq[seat] != from.frame)
+					{
+						pt_err_lastseq[seat] = from.frame;
+						Con_Printf("prederr: seq %i origin off by %.2f (predicted %.1f %.1f %.1f, server %.1f %.1f %.1f)\n",
+								from.frame, sqrt(e),
+								pv->prop.origin[0], pv->prop.origin[1], pv->prop.origin[2],
+								from.state->origin[0], from.state->origin[1], from.state->origin[2]);
+					}
+				}
 				if (!(cls.z_ext & Z_EXT_PF_ONGROUND))
 					from.state->onground = pv->prop.onground;
 				if (!(cls.z_ext & Z_EXT_PM_TYPE))
@@ -1422,7 +1481,9 @@ void CL_PredictMovePNum (int seat)
 				if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 					VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 			}
+			cl_pred_localchain = true;	//FTESurf Patch 335
 			CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
+			cl_pred_localchain = false;
 			pt_replays++;	//FTESurf Patch 269
 			if (i <= validsequence && simtime >= to.time)
 			{	//this frame is final keep track of our propagated values.
@@ -1433,6 +1494,7 @@ void CL_PredictMovePNum (int seat)
 				PMSrc_SaveState(&pv->prop.pmsrc);	//FTESurf
 				VectorCopy(pmove.gravitydir, pv->prop.gravitydir);
 				VectorCopy(pmove.velocity, pv->prop.velocity);	//FTESurf Patch 269c
+				VectorCopy(to.state->origin, pv->prop.origin);	//FTESurf Patch 335: for cl_prederror
 				pv->prop.sequence = i;
 			}
 		}
@@ -1478,7 +1540,9 @@ void CL_PredictMovePNum (int seat)
 						VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 				}
 //				Con_DPrintf(" extrap %i: %f-%f (%g)\n", toframe, fromtime, simtime, simtime-fromtime);
+				cl_pred_localchain = true;	//FTESurf Patch 335
 				CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
+				cl_pred_localchain = false;
 			}
 		}
 		pv->onground = pmove.onground;
@@ -1896,6 +1960,8 @@ void CL_InitPrediction (void)
 	Cvar_Register (&cl_predtrace,	cl_predictiongroup);	//FTESurf Patch 269
 	Cvar_Register (&cl_predict_velblend,	cl_predictiongroup);	//FTESurf Patch 269
 	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
+	Cvar_Register (&cl_predict_qchook,	cl_predictiongroup);	//FTESurf Patch 335
+	Cvar_Register (&cl_prederror,	cl_predictiongroup);	//FTESurf Patch 335
 	Cvar_Register (&cl_predict_extrapolate,	cl_predictiongroup);
 	Cvar_Register (&cl_predict_timenudge,	cl_predictiongroup);
 	Cvar_Register (&cl_lerp_smooth,	cl_predictiongroup);

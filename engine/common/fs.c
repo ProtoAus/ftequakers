@@ -258,14 +258,14 @@ static cvar_t fs_automount			= CVARFD	("fs_automount", "1", CVAR_ARCHIVE, "ftesu
 //ftesurf (P186): the third and last lever on map load time.  fs_automount mounts a map's Steam
 //pack, fs_autounmount gives it back -- but a REPEAT visit still pays the mount again, and that
 //mount is ~1.4s of directory walk and 14MB of allocation for TF2 whether the map reads six files
-//out of it or six thousand.  This copies the files the map actually opened into <gamedir>_cache
+//out of it or six thousand.  This copies the files the map actually opened into <gamedir>/cache
 //and, once it can prove the copy is complete, skips the mount entirely.
 //
 //NOT named fs_cache: that name is already taken by com_fs_cache, the filesystem NAME HASH.
 //
 //ftesurf (P197): the three faults P186 listed here are closed.
 //  * The ordering inversion is gone because there is no global cache searchpath any more.
-//    Files are namespaced per pack (<gamedir>_cache/<packkey>/...) and that directory is
+//    Files are namespaced per pack (<gamedir>/cache/<packkey>/...) and that directory is
 //    mounted only on a proven load, from FS_AutoMountForMap, in the exact slot the pack it
 //    replaces would have occupied.  Nothing above or below it moves, so it cannot shadow the
 //    fs_addons.txt games -- not by a rule, but because there is nowhere else for it to go.
@@ -273,7 +273,7 @@ static cvar_t fs_automount			= CVARFD	("fs_automount", "1", CVAR_ARCHIVE, "ftesu
 //    same path) is gone with the namespacing.
 //  * The exit crash was never this feature's: see Patch 196.  FS_AddPathHandle wrote into the
 //    filesystem name hash without checking com_fschanged, i.e. while that table still held
-//    buckets belonging to a freed pack.  A populated <gamedir>_downloads reproduces it with
+//    buckets belonging to a freed pack.  A populated <gamedir>/downloads reproduces it with
 //    fs_assetcache 0.
 //
 //Completeness is now a NAME SET comparison -- visit 1 records what it harvested in the
@@ -282,7 +282,7 @@ static cvar_t fs_automount			= CVARFD	("fs_automount", "1", CVAR_ARCHIVE, "ftesu
 //
 //STILL DEFAULT 0.  It is a disk-writing cache keyed on observed behaviour; it should be
 //switched on deliberately, and `fs_cache_clear <map>` is the repair if one ever looks short.
-static cvar_t fs_assetcache			= CVARFD	("fs_assetcache", "0", CVAR_ARCHIVE, "ftesurf (P186/P197): copy the files a map actually loads out of an fs_automount'ed Steam pack into <gamedir>_cache/<pack>/, and once a later visit proves the copy complete, mount that directory in the pack's place instead of opening the pack at all. Saves ~1.4s and ~14MB per proven pack per visit. Defaults off; fs_cache_info reports the size, fs_cache_clear [map] empties it or makes one map re-prove itself.");
+static cvar_t fs_assetcache			= CVARFD	("fs_assetcache", "0", CVAR_ARCHIVE, "ftesurf (P186/P197): copy the files a map actually loads out of an fs_automount'ed Steam pack into <gamedir>/cache/<pack>/, and once a later visit proves the copy complete, mount that directory in the pack's place instead of opening the pack at all. Saves ~1.4s and ~14MB per proven pack per visit. Defaults off; fs_cache_info reports the size, fs_cache_clear [map] empties it or makes one map re-prove itself.");
 static cvar_t fs_autounmount		= CVARFD	("fs_autounmount", "1", CVAR_ARCHIVE, "ftesurf (P183): when fs_automount mounts a pack for one map, give it back on the first later map that does not need it. Only ever drops packs fs_automount itself mounted -- an fs_addons.txt game, or one you fs_load'ed by hand, is never touched. 0 = keep every pack for the rest of the session (the old behaviour); costs ~6s on the next map load per pack carried, and buys back the ~3s remount when you return to a map that wants it.");
 /* ftesurf (P231): what fs_automount actually did for the map now loading, published so that
 the material census in the hl2 plugin can stop guessing.
@@ -296,7 +296,7 @@ engine knew better at that moment and simply had no way to say so.
 
   0  mapdeps.txt was read and names no pack for this map       -> mounting anything is futile
   1  the pack(s) it names are mounted from disk
-  2  the pack(s) it names are served from <gamedir>_cache      -> the ONE state where a short
+  2  the pack(s) it names are served from <gamedir>/cache      -> the ONE state where a short
                                                                   cache is worth suspecting
   3  it names a pack that did not resolve (game not installed) -> the ONLY state in which
                                                                   `fs_load` is right
@@ -3155,21 +3155,21 @@ static qboolean FS_NativePath(const char *fname, enum fs_relative relativeto, ch
 		else
 			nlen = Q_snprintfz(out, outlen, "%s%s/%s", fordisplay?"$basedir/":com_gamepath, last, fname);
 		break;
-	case FS_GAMEDOWNLOADS:	//nettest P38: $gamedir_downloads/ - client downloads land in a sibling of the active gamedir so the gamedir stays pure. Mirror FS_GAMEONLY but append _downloads; must match the mount derived from gamedirfile in FS_ReloadPackFilesFlags.
+	case FS_GAMEDOWNLOADS:	//nettest P38, ftesurf P330: $gamedir/downloads/ - client downloads land INSIDE the active gamedir, in their own directory. Mirror FS_GAMEONLY plus one path component; must match the mount derived from gamedirfile in FS_ReloadPackFilesFlags.
 		if (!*gamedirfile)
 			return false;
 		if (com_homepathenabled)
-			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
+			nlen = Q_snprintfz(out, outlen, "%s%s/downloads/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
 		else
-			nlen = Q_snprintfz(out, outlen, "%s%s_downloads/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
+			nlen = Q_snprintfz(out, outlen, "%s%s/downloads/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
 		break;
-	case FS_GAMECACHE:	//ftesurf P186: $gamedir_cache/ - the runtime asset cache. Same shape as _downloads for the same reason: it is a sibling of the gamedir, so the gamedir stays pure and the cache can be deleted wholesale without touching mod content. Must match the mount in FS_ReloadPackFilesFlags.
+	case FS_GAMECACHE:	//ftesurf P186, P330: $gamedir/cache/ - the runtime asset cache, inside the gamedir in its own directory. Must match the mount in FS_ReloadPackFilesFlags.
 		if (!*gamedirfile)
 			return false;
 		if (com_homepathenabled)
-			nlen = Q_snprintfz(out, outlen, "%s%s_cache/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
+			nlen = Q_snprintfz(out, outlen, "%s%s/cache/%s", fordisplay?"$homedir/":com_homepath, gamedirfile, fname);
 		else
-			nlen = Q_snprintfz(out, outlen, "%s%s_cache/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
+			nlen = Q_snprintfz(out, outlen, "%s%s/cache/%s", fordisplay?"$basedir/":com_gamepath, gamedirfile, fname);
 		break;
 	default:
 		Sys_Error("FS_NativePath case not handled\n");
@@ -4655,7 +4655,7 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 		writer did not, and that asymmetry is the whole bug.  It is the Patch 27
 		dangling-bucket signature, and the comment at fs.c:6032 describes this exact crash --
 		that fix moved a FS_FlushFSHashReally to just above FS_RemountAddons, but the
-		<gamedir>_downloads mount at :5786 and the P186 <gamedir>_cache mount at :5827 both
+		<gamedir>/downloads mount at :5786 and the P186 <gamedir>/cache mount at :5827 both
 		run EARLIER in the same reload and were left on the wrong side of it.
 
 		Reproduced, symbolised and controlled rather than reasoned about; see the P196 entry
@@ -5835,9 +5835,35 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		}
 	}
 
-	//nettest P38: mount <gamedir>_downloads as a LOW-priority (read) searchpath so loose files the client
-	//downloads there (DL_Begun -> FS_GAMEDOWNLOADS) are found by FS_FLocateFile and load with the game,
-	//while the gamedir itself stays pure. Rebuilt every reload like the gamedirs (persists across maps).
+	/*
+	  FTESurf Patch 330 -- the cache and the downloads came inside the gamedir.
+
+	  P38 and P186 put them at <gamedir>_downloads and <gamedir>_cache, SIBLINGS of
+	  the gamedir, so the gamedir would "stay pure".  Eighty builds later the
+	  install root carried two directories that belong to the mod but are not in
+	  it, and the mod's own folder structure was the thing that looked broken:
+	  ftesurf/ beside ftesurf_cache/ beside ftesurf_downloads/, the last holding
+	  exactly one subdirectory (csprogsvers/).  Purity was never the point --
+	  deletability was -- and <gamedir>/cache and <gamedir>/downloads delete just
+	  as wholesale as the siblings did, with nothing of the mod's outside it.
+
+	  WHAT MOVED: the two FS_NativePath cases above (the single place either path
+	  is ever composed), the read mount below, and the directories on disk.  The
+	  addon sibling convention is UNTOUCHED and must stay so: a Steam game's own
+	  cstrike_downloads is Valve's layout, not ours, and the probes at
+	  FS_Addon_Mount / FS_IndexArchive still use "%s_downloads" on the ADDON's
+	  syspath.  Only the gamedir's own two directories folded in.
+
+	  MOUNT STILL NEEDED, and now more than before: a searchpath root is a
+	  directory whose CONTENTS address the filesystem root, so ftesurf/downloads
+	  is not reachable as "csprogsvers/<crc>.dat" by merely being inside the
+	  gamedir -- the mount is what makes that true, exactly as the sibling mount
+	  did.  SPF_ADDON keeps it below the mod, so a stale download can still never
+	  shadow a mod asset.
+	*/
+	//nettest P38: mount <gamedir>/downloads as a LOW-priority (read) searchpath so loose files the client
+	//downloads there (DL_Begun -> FS_GAMEDOWNLOADS) are found by FS_FLocateFile and load with the game.
+	//Rebuilt every reload like the gamedirs (persists across maps).
 	//Low-level add (FS_GetOldPath/VFSOS_OpenPath + FS_AddPathHandle) so we do NOT clobber gamedirfile/
 	//pubgamedirfile/gameonly_gamedir the way FS_AddSingleGameDirectory/FS_AddGameDirectory would. Base
 	//follows com_homepathenabled to match the FS_GAMEDOWNLOADS write path. SPF_ADDON => appended at the
@@ -5853,7 +5879,7 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		const char *dlbase = com_homepathenabled ? com_homepath : com_gamepath;
 		unsigned int keptflags = 0;
 		searchpathfuncs_t *dlhandle;
-		Q_snprintfz(dldir, sizeof(dldir), "%s_downloads", gamedirfile);
+		Q_snprintfz(dldir, sizeof(dldir), "%s/downloads", gamedirfile);	//ftesurf P330: was the <gamedir>_downloads sibling
 		if (FS_FixupFileCase(dlpath, sizeof(dlpath), dlbase, dldir, true))
 		{
 			dlhandle = FS_GetOldPath(&oldpaths, dlpath, &keptflags);
@@ -5864,7 +5890,7 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		}
 	}
 
-	/* ftesurf (P186/P197): <gamedir>_cache is deliberately NOT mounted here any more.
+	/* ftesurf (P186/P197): <gamedir>/cache is deliberately NOT mounted here any more.
 
 	P186 mounted it at this point, one line below _downloads, on the reasoning that
 	SPF_ADDON appends at the tail so it must be below everything real.  That reasoning was
@@ -9299,7 +9325,7 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 	//SPF_ADDON => appended at the TAIL (lowest priority); COPYPROTECTED+PRIVATE => not networked/redistributed.
 	FS_AddPathHandle(&oldpaths, arg, syspath, handle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
 
-	//nettest: also mount the sibling <gamedir>_downloads (Steam/GoldSrc downloads custom
+	//nettest: also mount the sibling <syspath>_downloads (Steam/GoldSrc downloads custom
 	//content there, e.g. cstrike -> cstrike_downloads) at the same low addon priority, so
 	//downloaded maps + their assets load with the game.  Only when it exists + isn't already
 	//mounted -- VFSOS_OpenPath does NOT validate the dir, so probe it first with the same
@@ -9612,7 +9638,7 @@ void FS_IndexAddonMaps(void)
 			Sys_EnumerateFiles(syspath, "*.pk4", FS_IndexArchive_Visit, &ctx, NULL);
 			Sys_EnumerateFiles(syspath, "*.pak", FS_IndexArchive_Visit, &ctx, NULL);
 
-			//nettest: also index the sibling <gamedir>_downloads — Steam/GoldSrc downloads
+			//nettest: also index the sibling <syspath>_downloads — Steam/GoldSrc downloads
 			//custom content (maps) there (e.g. cstrike -> cstrike_downloads).  Tagged with the
 			//SAME game so its maps land on the same menu tab; Sys_EnumerateFiles silently
 			//no-ops when the sibling doesn't exist.
@@ -9791,7 +9817,7 @@ neither fixes is that a REPEAT visit pays the mount again, and the mount is a
 fixed cost -- ~1.4s of directory walk and ~14MB of allocation for TF2's
 147,457-entry pak01_dir.vpk -- regardless of whether the map reads six files out
 of it or six thousand.  Every measured surf map reads a few hundred.  So: copy
-the ones it actually reads into <gamedir>_cache, and once we can PROVE the copy
+the ones it actually reads into <gamedir>/cache, and once we can PROVE the copy
 is complete, stop mounting the pack for that map at all.
 
 WHY OBSERVE INSTEAD OF PREDICT.  The plan for this step was to re-implement
@@ -9809,7 +9835,7 @@ textures, which is complaint #1 of this entire workstream.  So a map is never
 trusted on the strength of one harvest.
 
   visit 1  pack mounted.  Every file whose top hit is INSIDE the pack is copied
-           to <gamedir>_cache.  Manifest written with state 0.
+           to <gamedir>/cache.  Manifest written with state 0.
   visit 2  manifest is state 0, so the pack is mounted AGAIN.  But the cache
            outranks it (see the mount in FS_ReloadPackFilesFlags), so every file
            visit 1 caught now resolves from the cache and is NOT harvested.  The
@@ -9872,7 +9898,7 @@ the previous visit having LISTED it.  One failed copy, permanently claimed.
 
 So each name now carries what became of it, and the manifest is written from that. */
 #define FS_HV_UNKNOWN	0	//not copied, for any of the reasons below: blocks completeness
-#define FS_HV_CACHED	1	//the bytes are in <gamedir>_cache/<packkey>/<name>
+#define FS_HV_CACHED	1	//the bytes are in <gamedir>/cache/<packkey>/<name>
 #define FS_HV_ELSEWHERE	2	//served by a searchpath that is NOT one of the packs we mounted -- the map's
 							//own pakfile, or the base gamedir -- so it will still be there on a cached
 							//load and the cache does not need a copy.  Not listed, does not block.
@@ -9934,7 +9960,7 @@ static void FS_Cache_ManifestName(const char *map, char *out, size_t outsize)
 
 /* ftesurf (P197): one directory per pack, instead of one flat tree for all of them.
 
-P186 wrote every harvested file to <gamedir>_cache/<name>, so TF2's and CS:GO's copies of
+P186 wrote every harvested file to <gamedir>/cache/<name>, so TF2's and CS:GO's copies of
 the same filename landed on the same path with nothing left to tell them apart and the last
 writer winning.  The key below namespaces them.
 
