@@ -1462,6 +1462,10 @@ extern const char *sv_pmpin_names[SV_PMPIN_COUNT];
 size_t SV_PMPinText(const float *v, char *out, size_t outsz);
 size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
 qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);
+int SV_PMPinParse(const char *text, float *v);
+void SV_PMPinApply(const float *v);
+qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st);
+unsigned int SV_PhysentDigest(void);
 
 void SV_SendClientPrespawnInfo(client_t *client);
 void SV_ClientProtocolExtensionsChanged(client_t *client);

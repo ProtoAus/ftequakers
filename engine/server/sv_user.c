@@ -203,9 +203,91 @@ qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz)
 	}
 }
 
+/* The reader's half (pm_recsim).  Tokens matched BY NAME; returns how many of
+   the table's names the text supplied (missing ones keep *v's prior value). */
+int SV_PMPinParse(const char *text, float *v)
+{
+	int i, found = 0;
+	char tok[64];
+	const char *s = text;
+	while (*s)
+	{
+		const char *e = s, *eq;
+		while (*e && *e != ' ') e++;
+		if (e - s > 0 && e - s < (int)sizeof(tok))
+		{
+			memcpy(tok, s, e - s);
+			tok[e - s] = 0;
+			eq = strchr(tok, '=');
+			if (eq)
+				for (i = 0; i < SV_PMPIN_COUNT; i++)
+					if (!strncmp(tok, sv_pmpin_names[i], eq - tok) && !sv_pmpin_names[i][eq - tok])
+						{ v[i] = atof(eq + 1); found++; break; }
+		}
+		s = *e ? e + 1 : e;
+	}
+	return found;
+}
+
+//The inverse of SV_PMPinFill, for a replay: movevars and the pmove inputs.
+//gamespeed, svmaxvel and the trace cvars are the caller's (not movevars).
+void SV_PMPinApply(const float *v)
+{
+	const float *o = v + 4;
+	movevars.physicsmode = v[1];	pmove.pm_type = v[2];
+	pmove.player_mins[0] = *o++;	pmove.player_mins[1] = *o++;
+	pmove.player_maxs[0] = *o++;	pmove.player_maxs[1] = *o++;	pmove.capsule = *o++;
+	o += 4;	//svmaxvel trisoup rotboxes portalcsg
+	movevars.gravity = *o++;	movevars.stopspeed = *o++;	movevars.maxspeed = *o++;	movevars.spectatormaxspeed = *o++;
+	movevars.accelerate = *o++;	movevars.airaccelerate = *o++;	movevars.wateraccelerate = *o++;	movevars.friction = *o++;
+	movevars.waterfriction = *o++;	movevars.flyfriction = *o++;	movevars.entgravity = *o++;	movevars.bunnyspeedcap = *o++;
+	movevars.watersinkspeed = *o++;	movevars.ktjump = *o++;	movevars.edgefriction = *o++;	movevars.walljump = *o++;
+	movevars.slidefix = *o++;	movevars.airstep = *o++;	movevars.pground = *o++;	movevars.stepdown = *o++;
+	movevars.slidyslopes = *o++;	movevars.autobunny = *o++;	movevars.bunnyfriction = *o++;	movevars.stepheight = *o++;
+	movevars.ticrate = *o++;	movevars.maxairspeed = *o++;	movevars.jumpvelocity = *o++;	movevars.standablenormal = *o++;
+	movevars.bounce = *o++;	movevars.maxvelocity = *o++;	movevars.standheight = *o++;	movevars.duckheight = *o++;
+	movevars.duckspeed = *o++;	movevars.viewheight = *o++;	movevars.duckviewheight = *o++;	movevars.noclipspeed = *o++;
+	movevars.stamina = *o++;	movevars.staminajumpcost = *o++;	movevars.staminalandcost = *o++;	movevars.staminarecovery = *o++;
+	movevars.normalizejump = *o++;	movevars.jumpaddrise = *o++;	movevars.jumpzoffset = *o++;	movevars.walkspeed = *o++;
+	movevars.groundtracedist = *o++;	movevars.bumpcount = *o++;	movevars.snaptoground = *o++;	movevars.groundquadrants = *o++;
+	movevars.fixslopes = *o++;	movevars.fixedges = *o++;	movevars.fixrampbugs = *o++;	movevars.rampretrace = *o++;
+	movevars.viewscale = *o++;	movevars.ladders = *o++;	movevars.ladderdampen = *o++;	movevars.ladderangle = *o++;
+	movevars.slide = *o++;
+	if (o - v != SV_PMPIN_COUNT)
+		Sys_Error("SV_PMPinApply: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
+}
+
+//pm_source's carried state from SV_PMStateText's tokens; false if any is missing.
+qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st)
+{
+	static const char *names[] = {"surfacefriction", "ducktime", "ducking", "ducked",
+		"msec_carry", "oldbuttons", "stamina", "rampoff", "boardcount", "rampcontact",
+		"srcladder", "ladnx", "ladny", "ladnz"};
+	float v[countof(names)];
+	int i, found = 0;
+	for (i = 0; i < (int)countof(names); i++)
+	{
+		const char *p = text;
+		size_t n = strlen(names[i]);
+		v[i] = 0;
+		while ((p = strstr(p, names[i])))
+		{
+			if ((p == text || p[-1] == ' ') && p[n] == '=')
+				{ v[i] = atof(p + n + 1); found++; break; }
+			p += n;
+		}
+	}
+	memset(st, 0, sizeof(*st));
+	st->surfacefriction = v[0];	st->ducktime = v[1];	st->ducking = v[2] != 0;	st->ducked = v[3] != 0;
+	st->msec_carry = v[4];	st->oldbuttons = v[5];	st->stamina = v[6];	st->rampoff = v[7];
+	st->boardcount = v[8];	st->rampcontact = v[9];	st->srcladder = v[10] != 0;
+	VectorCopy(v+11, st->srcladdernormal);
+	return found == (int)countof(names);
+}
+
 //FNV-1a over the physent list AddAllLinksToPmove built (the world, [0], is fixed),
 //field by field so struct padding cannot enter it.  Folded to 24 bits: QC floats.
-static unsigned int SV_PhysentDigest(void)
+unsigned int SV_PhysentDigest(void)
 {
 	unsigned int h = 2166136261u;
 	int i;

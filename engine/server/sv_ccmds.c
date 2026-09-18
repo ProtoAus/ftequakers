@@ -4156,6 +4156,7 @@ typedef struct
 	vec3_t ang;			/* pitch yaw roll */
 	int    bt;			/* the three bits pm_source reads: 1 jump 2 duck 4 speed */
 	int    nsam;		/* samples that preceded this row in the file */
+	int    fl;			/* v9: 1 onground as the engine read it, 2 teleport_time, 4 not WALK; -1 absent */
 } recsim_in_t;
 
 typedef struct
@@ -4164,6 +4165,7 @@ typedef struct
 	vec3_t org;
 	vec3_t vel;
 	int    fl;			/* SV_RecFlags: 1 onground, 2 ducked, 4 jump, 8 attack, 16 ramp */
+	char   txt[6][20];	/* Patch 347: the file's own %.2f text of org and vel */
 } recsim_sam_t;
 
 /*
@@ -4190,6 +4192,8 @@ typedef struct
 	vec3_t org;			/* POST-event state, which is what a verifier re-seeds from */
 	vec3_t vel;
 	char   kind[16];	/* tele telerel bhop speed push -- and whatever comes next */
+	int    row;			/* Patch 347, v9: the `in` row whose move it followed; -1 = v8, bind by <mt> */
+	int    fl;			/* v9: 1 = FL_ONGROUND after it */
 } recsim_warp_t;
 
 /* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
@@ -4210,6 +4214,24 @@ typedef struct
    truncates into a short, so ~46% of rows came back one step (0.0055 deg) low;
    rounding recovers every one.  Wrapped explicitly: a server-set .v_angle can
    sit outside [-180,180). */
+/* Patch 347: v9's state records.  `pm` is APPLIED from its row on; `pe` and
+   `portal` are CHECKED against what the replay builds and does. */
+typedef struct
+{
+	int    row;
+	float  pin[SV_PMPIN_COUNT];
+} recsim_pm_t;
+typedef struct
+{
+	int          row;
+	unsigned int crc;
+} recsim_pe_t;
+typedef struct
+{
+	int    row, n;
+	vec3_t org, vel;
+} recsim_portal_t;
+
 static short SV_RecSim_AngleShort (float a)
 {
 	int s = (int)floor(a * (65536/360.0) + 0.5);
@@ -4241,6 +4263,9 @@ static char *SV_RecSim_Line (char **pp, char *end, char *out, size_t outsz)
 	return out;
 }
 
+extern vec3_t pmove_mins, pmove_maxs;
+extern cvar_t sv_maxvelocity, pm_trisoup_bevels, pm_rotatedboxhulls, pm_portalcsg_scanall;
+
 static void SV_RecSim_f (void)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -4248,7 +4273,7 @@ static void SV_RecSim_f (void)
 	int           stopat = atoi(Cmd_Argv(2));
 	char         *buf, *p, *end, *ln;
 	size_t        fsz = 0;
-	char          line[512];
+	char          line[4096];		/* Patch 347: a v9 `pmpin`/`pm` line is ~1.3 KB */
 	char          mapname[64];
 	unsigned int  filecrc = 0;
 	qboolean      havecrc = false, inbody;
@@ -4264,6 +4289,17 @@ static void SV_RecSim_f (void)
 	float         hdrtick = 0;					/* header `tickrate`: the cash-out's TICK_INTERVAL */
 	int           inend_mt = -1;				/* Patch 344: v8 closing horizon */
 	float         inend_carry = 0;
+	/* Patch 347: v9's exact state */
+	float         hdrpin[SV_PMPIN_COUNT];
+	int           pinfound = 0, npm = 0, npe = 0, nportal = 0, nlong = 0;
+	qboolean      haveseed = false, seedstate_ok = false;
+	vec3_t        seedorg = {0,0,0}, seedvel = {0,0,0};
+	int           seedground = 0;
+	pmsourcestate_t seedstate;
+	recsim_pm_t  *pms = NULL;
+	recsim_pe_t  *pes = NULL;
+	recsim_portal_t *prt = NULL;
+	qboolean      exact;
 
 	if (!*fname)
 	{
@@ -4285,6 +4321,8 @@ static void SV_RecSim_f (void)
 		return;
 	}
 	mapname[0] = 0;
+	memset(hdrpin, 0, sizeof(hdrpin));
+	memset(&seedstate, 0, sizeof(seedstate));
 
 	/* Two passes: count, then fill.  Parsed FROM THE GRAMMAR in sv_timer.qc's
 	   block comment, not from the writer -- the same rule reccheck.py is written
@@ -4292,12 +4330,14 @@ static void SV_RecSim_f (void)
 	   rather than a typo. */
 	for (pass = 0; pass < 2; pass++)
 	{
-		int cin = 0, csam = 0, cwarp = 0, cride = 0;
+		int cin = 0, csam = 0, cwarp = 0, cride = 0, cpm = 0, cpe = 0, cportal = 0;
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
 			if (!*ln)
 				continue;
+			if (pass == 0 && strlen(ln) >= sizeof(line)-1)
+				nlong++;	/* Patch 347: truncated, and said so below */
 			if (!inbody)
 			{
 				if (!strcmp(ln, "begin"))
@@ -4316,6 +4356,8 @@ static void SV_RecSim_f (void)
 						sscanf(ln+8, "%i %i", &instart_mt, &instart_run);
 					else if (!strncmp(ln, "FTESURF-REC ", 12))
 						filever = atoi(ln+12);
+					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
+						pinfound = SV_PMPinParse(ln+6, hdrpin);
 					/* Patch 328: the randomized start.  Read and REPORTED and
 					   never applied -- the recording's first sample is already
 					   post-displacement, because SV_TimerStart moves the player
@@ -4347,6 +4389,18 @@ static void SV_RecSim_f (void)
 					}
 					else
 						s->fl = -1;
+					{	/* Patch 347: keep the %.2f text of tokens 1..6 for ARM 4 */
+						const char *q = ln;
+						int k;
+						for (k = 0; k < 7; k++)
+						{
+							const char *e2 = q;
+							while (*e2 && *e2 != ' ') e2++;
+							if (k && e2 - q < (int)sizeof(s->txt[0]))
+								{ memcpy(s->txt[k-1], q, e2 - q); s->txt[k-1][e2 - q] = 0; }
+							q = *e2 ? e2 + 1 : e2;
+						}
+					}
 				}
 				csam++;
 			}
@@ -4355,11 +4409,14 @@ static void SV_RecSim_f (void)
 				if (pass == 1 && cin < nin)
 				{
 					recsim_in_t *r = &ins[cin];
-					if (sscanf(ln+3, "%i %i %f %f %f %f %f %f %f %i",
+					int nf = sscanf(ln+3, "%i %i %f %f %f %f %f %f %f %i %i",
 					           &r->pk, &r->mt, &r->carry,
 					           &r->mv[0], &r->mv[1], &r->mv[2],
-					           &r->ang[0], &r->ang[1], &r->ang[2], &r->bt) != 10)
+					           &r->ang[0], &r->ang[1], &r->ang[2], &r->bt, &r->fl);
+					if (nf < 10)
 						r->mt = -1;
+					if (nf < 11)
+						r->fl = -1;	/* v6-v8: no <fl> column */
 					r->nsam = csam;
 				}
 				cin++;
@@ -4377,16 +4434,25 @@ static void SV_RecSim_f (void)
 					recsim_warp_t *w = &wrp[cwarp];
 					float d[6];
 					char  kb[32];
-					if (sscanf(ln+5, "%i %i %31s %f %f %f %f %f %f",
+					w->row = -1;
+					w->fl = -1;
+					if (filever >= 9)
+					{	/* Patch 347: v9, bound by <row> */
+						if (sscanf(ln+5, "%i %i %i %31s %f %f %f %f %f %f %i",
+						           &w->pk, &w->mt, &w->row, kb, &d[0], &d[1], &d[2],
+						           &d[3], &d[4], &d[5], &w->fl) != 11)
+							w->mt = -1;
+					}
+					else if (sscanf(ln+5, "%i %i %31s %f %f %f %f %f %f",
 					           &w->pk, &w->mt, kb, &d[0], &d[1], &d[2],
-					           &d[3], &d[4], &d[5]) == 9)
+					           &d[3], &d[4], &d[5]) != 9)
+						w->mt = -1;
+					if (w->mt >= 0)
 					{
 						VectorSet(w->org, d[0], d[1], d[2]);
 						VectorSet(w->vel, d[3], d[4], d[5]);
 						Q_strncpyz(w->kind, kb, sizeof(w->kind));
 					}
-					else
-						w->mt = -1;
 				}
 				cwarp++;
 			}
@@ -4411,10 +4477,70 @@ static void SV_RecSim_f (void)
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
 			}
+			/* Patch 347: v9's exact seed and its three state tracks. */
+			else if (!strncmp(ln, "seed ", 5) && pass == 0)
+			{
+				const char *q = ln + 5;
+				int k;
+				if (sscanf(q, "%f %f %f %f %f %f %i", &seedorg[0], &seedorg[1], &seedorg[2],
+				           &seedvel[0], &seedvel[1], &seedvel[2], &seedground) == 7)
+				{
+					haveseed = true;
+					for (k = 0; k < 7 && *q; k++)
+					{
+						while (*q && *q != ' ') q++;
+						while (*q == ' ') q++;
+					}
+					seedstate_ok = SV_PMStateParse(q, &seedstate);
+				}
+			}
+			else if (!strncmp(ln, "pm ", 3))
+			{
+				if (pass == 1 && cpm < npm)
+				{
+					recsim_pm_t *m = &pms[cpm];
+					const char *q = ln + 3;
+					int k, pk;
+					memcpy(m->pin, cpm ? pms[cpm-1].pin : hdrpin, sizeof(m->pin));
+					if (sscanf(q, "%i %i", &pk, &m->row) != 2)
+						m->row = -1;
+					for (k = 0; k < 2 && *q; k++)
+					{
+						while (*q && *q != ' ') q++;
+						while (*q == ' ') q++;
+					}
+					SV_PMPinParse(q, m->pin);
+				}
+				cpm++;
+			}
+			else if (!strncmp(ln, "pe ", 3))
+			{
+				if (pass == 1 && cpe < npe)
+				{
+					int pk;
+					if (sscanf(ln+3, "%i %i %u", &pk, &pes[cpe].row, &pes[cpe].crc) != 3)
+						pes[cpe].row = -1;
+				}
+				cpe++;
+			}
+			else if (!strncmp(ln, "portal ", 7))
+			{
+				if (pass == 1 && cportal < nportal)
+				{
+					recsim_portal_t *o = &prt[cportal];
+					int pk;
+					if (sscanf(ln+7, "%i %i %i %f %f %f %f %f %f", &pk, &o->row, &o->n,
+					           &o->org[0], &o->org[1], &o->org[2],
+					           &o->vel[0], &o->vel[1], &o->vel[2]) != 9)
+						o->row = -1;
+				}
+				cportal++;
+			}
 		}
 		if (pass == 0)
 		{
 			nin = cin; nsam = csam; nwarp = cwarp; nride = cride;
+			npm = cpm; npe = cpe; nportal = cportal;
 			if (!nin)
 			{
 				Con_Printf(CON_ERROR "pm_recsim: \"%s\" carries no `in` records."
@@ -4428,6 +4554,9 @@ static void SV_RecSim_f (void)
 			sam = Z_Malloc(sizeof(*sam) * (nsam?nsam:1));
 			wrp = Z_Malloc(sizeof(*wrp) * (nwarp?nwarp:1));
 			rid = Z_Malloc(sizeof(*rid) * (nride?nride:1));
+			pms = Z_Malloc(sizeof(*pms) * (npm?npm:1));
+			pes = Z_Malloc(sizeof(*pes) * (npe?npe:1));
+			prt = Z_Malloc(sizeof(*prt) * (nportal?nportal:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4437,6 +4566,7 @@ static void SV_RecSim_f (void)
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt);
 		return;
 	}
 	if (hdrtick <= 0)
@@ -4457,6 +4587,22 @@ static void SV_RecSim_f (void)
 	if (inend_mt >= 0)
 		Con_Printf("  inend     %i %.5f -- the final move's duration is stated\n",
 		           inend_mt, inend_carry);
+
+	/* Patch 347: v9.  EXACT means the file states the seed, the carried mover
+	   state and every pinned input -- then the replay is the mover, not a model
+	   of it, and any sample it disagrees with is the file's fault. */
+	exact = haveseed && seedstate_ok && pinfound == SV_PMPIN_COUNT;
+	if (filever >= 9 || pinfound || haveseed)
+		Con_Printf("  v9 state  pin %i/%i names, seed %s, %i pm, %i pe, %i portal -- %s\n",
+		           pinfound, SV_PMPIN_COUNT,
+		           haveseed ? (seedstate_ok ? "exact" : "^3carried state incomplete^7") : "^3absent^7",
+		           npm, npe, nportal,
+		           exact ? "^2EXACT REPLAY^7" : "^3approximate (the file lacks state)^7");
+	if (pinfound && hdrpin[0] != PMSRC_VERSION)
+		Con_Printf("  ^1pmsrcver %g in the file, %i in this engine -- a different mover;"
+		           " an exact replay cannot vouch for this file^7\n", hdrpin[0], PMSRC_VERSION);
+	if (nlong)
+		Con_Printf("  ^1%i line(s) over %i bytes were truncated^7\n", nlong, (int)sizeof(line)-1);
 
 	/* Patch 328.  The two v7 facts, printed whether or not they are there --
 	   because "this file predates the record" and "nothing imposed any state on
@@ -4517,6 +4663,16 @@ static void SV_RecSim_f (void)
 		int    wcur = 0, wapplied = 0;		/* Patch 328 */
 		int    rcur = 0, rapplied = 0, rskew = 0;	/* Patch 344 */
 		vec3_t carrier;
+		/* Patch 347 */
+		float  gamespeed = 1.0f, svmaxvel = sv_maxvelocity.value;
+		wedict_t *proxy = NULL;
+		int    pmcur = 0, pecur = 0, portcur = 0, k;
+		unsigned int pecrc = 0;
+		qboolean pehave = false;
+		int    pe_ok = 0, pe_bad = 0, pe_first = -1;
+		unsigned int pe_file = 0, pe_ours = 0;
+		int    port_ok = 0, port_bad = 0, port_first = -1;
+		int    x_ok = 0, x_bad = 0, x_shown = 0;
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
@@ -4538,16 +4694,44 @@ static void SV_RecSim_f (void)
 
 		movevars.physicsmode = PHYSMODE_SOURCE;
 		movevars.ticrate     = rate;		/* the FILE's, not the server's */
-		Con_Printf("  hull      %g %g %g .. %g %g %g\n",
-		           pmove.player_mins[0], pmove.player_mins[1], pmove.player_mins[2],
-		           pmove.player_maxs[0], pmove.player_maxs[1], pmove.player_maxs[2]);
-		Con_Printf("  movevars  ^3taken from the running server -- the .rec does not"
-		           " carry them^7\n");
-		Con_Printf("            grav %g fric %g stop %g acc %g airacc %g maxair %g"
-		           " maxspd %g jump %g\n",
-		           movevars.gravity, movevars.friction, movevars.stopspeed,
-		           movevars.accelerate, movevars.airaccelerate,
-		           movevars.maxairspeed, movevars.maxspeed, movevars.jumpvelocity);
+		if (exact)
+		{	/* Patch 347: the physics the file says ran, not this server's. */
+			SV_PMPinApply(hdrpin);
+			pmove.player_mins[2] = 0;
+			pmove.player_maxs[2] = movevars.standheight;
+			gamespeed = hdrpin[3];
+			svmaxvel = hdrpin[9];
+			Con_Printf("  movevars  ^2from the file's pin^7: grav %g fric %g acc %g airacc %g"
+			           " maxair %g maxspd %g jump %g tic %g\n",
+			           movevars.gravity, movevars.friction, movevars.accelerate,
+			           movevars.airaccelerate, movevars.maxairspeed, movevars.maxspeed,
+			           movevars.jumpvelocity, movevars.ticrate);
+			if (hdrpin[10] != pm_trisoup_bevels.value || hdrpin[11] != pm_rotatedboxhulls.value
+			    || hdrpin[12] != pm_portalcsg_scanall.value)
+				Con_Printf("  ^1trace cvars: the file ran %g %g %g, this server %g %g %g --"
+				           " the replay traces with this server's^7\n",
+				           hdrpin[10], hdrpin[11], hdrpin[12], pm_trisoup_bevels.value,
+				           pm_rotatedboxhulls.value, pm_portalcsg_scanall.value);
+			for (i = 0; i < sv.allocated_client_slots; i++)
+				if (svs.clients[i].state >= cs_spawned && svs.clients[i].edict)
+					{ proxy = (wedict_t*)svs.clients[i].edict; break; }
+			Con_Printf("  physents  %s\n", proxy
+			           ? "built as the server builds them, around a spawned player who is left out"
+			           : "^3world only -- no spawned client to build them around^7");
+		}
+		else
+		{
+			Con_Printf("  hull      %g %g %g .. %g %g %g\n",
+			           pmove.player_mins[0], pmove.player_mins[1], pmove.player_mins[2],
+			           pmove.player_maxs[0], pmove.player_maxs[1], pmove.player_maxs[2]);
+			Con_Printf("  movevars  ^3taken from the running server -- the .rec does not"
+			           " carry them^7\n");
+			Con_Printf("            grav %g fric %g stop %g acc %g airacc %g maxair %g"
+			           " maxspd %g jump %g\n",
+			           movevars.gravity, movevars.friction, movevars.stopspeed,
+			           movevars.accelerate, movevars.airaccelerate,
+			           movevars.maxairspeed, movevars.maxspeed, movevars.jumpvelocity);
+		}
 
 		Con_Printf("\n^5ARM 1^7  tick arithmetic -- no geometry, no seed.\n");
 		Con_Printf("^5ARM 2^7  pinned loop -- org/vel snapped to the sample each packet.\n");
@@ -4568,7 +4752,27 @@ static void SV_RecSim_f (void)
 			pmove.onground = false;
 			VectorClear(pmove.origin);
 			VectorClear(pmove.velocity);
-			if (ins[0].nsam > 0)
+			pmcur = pecur = portcur = 0;
+			pehave = false;
+			if (exact)
+			{	/* Patch 347: the file's own exact seed and carried state. */
+				SV_PMPinApply(hdrpin);
+				pmove.player_mins[2] = 0;
+				pmove.player_maxs[2] = movevars.standheight;
+				gamespeed = hdrpin[3];
+				svmaxvel = hdrpin[9];
+				PMSrc_LoadState(&seedstate);
+				VectorCopy(seedorg, pmove.origin);
+				VectorCopy(seedvel, pmove.velocity);
+				pmove.onground = (seedground & 1) != 0;
+				seeded = ins[0].nsam - 1;
+				if (!mode)
+					Con_Printf("  seed      ^2exact^7 org %.9g %.9g %.9g  vel %.9g %.9g %.9g"
+					           "  ducked %i  carry %.9g\n",
+					           seedorg[0], seedorg[1], seedorg[2], seedvel[0], seedvel[1],
+					           seedvel[2], seedstate.ducked, seedstate.msec_carry);
+			}
+			else if (ins[0].nsam > 0)
 			{
 				recsim_sam_t *s = &sam[ins[0].nsam - 1];
 				VectorCopy(s->org, pmove.origin);
@@ -4583,7 +4787,8 @@ static void SV_RecSim_f (void)
 			}
 			else if (!mode)
 				Con_Printf("  seed      ^1no sample precedes the first `in` row^7\n");
-			pmove.msec_carry = ins[0].carry;
+			if (!exact)
+				pmove.msec_carry = ins[0].carry;
 			wcur = 0;			/* Patch 328: each pass replays the warps */
 			rcur = 0;			/* Patch 344: and the carrier */
 			VectorClear(carrier);
@@ -4597,6 +4802,31 @@ static void SV_RecSim_f (void)
 
 				if (stopat > 0 && r->pk - ins[0].pk >= stopat)
 					break;
+
+				if (exact)
+				{
+					/* Patch 347: a changed pin is in force from its row on. */
+					for (; pmcur < npm && pms[pmcur].row <= i; pmcur++)
+						if (pms[pmcur].row >= 0)
+						{
+							SV_PMPinApply(pms[pmcur].pin);
+							pmove.player_mins[2] = 0;
+							pmove.player_maxs[2] = movevars.standheight;
+							gamespeed = pms[pmcur].pin[3];
+							svmaxvel = pms[pmcur].pin[9];
+						}
+					/* WPhys_CheckVelocity, which SV_RunCmd runs BEFORE PreThink:
+					   NaN to zero, then each axis to sv_maxvelocity (Source mode). */
+					for (k = 0; k < 3; k++)
+					{
+						if (IS_NAN(pmove.velocity[k]))
+							pmove.velocity[k] = 0;
+						if (pmove.velocity[k] > svmaxvel)
+							pmove.velocity[k] = svmaxvel;
+						else if (pmove.velocity[k] < -svmaxvel)
+							pmove.velocity[k] = -svmaxvel;
+					}
+				}
 
 				/* PATCH 344: the carrier, in SV_BaseVelocityFrame's order -- the
 				   cash-out, then the hand-over -- before this row's move. */
@@ -4620,6 +4850,10 @@ static void SV_RecSim_f (void)
 
 				if (r->mt < 0)
 					continue;
+
+				/* Patch 347: the ground flag the engine read (v9 <fl>). */
+				if (exact && r->fl >= 0)
+					pmove.onground = (r->fl & 1) != 0;
 
 				/* THE DURATION, DERIVED from the successor row -- or, for the
 				   last row, from `inend` (Patch 344; v8).  Without it the final
@@ -4647,7 +4881,61 @@ static void SV_RecSim_f (void)
 				pmove.cmd.angles[2]   = SV_RecSim_AngleShort(r->ang[2]);
 				VectorCopy(r->ang, pmove.angles);
 
-				PM_PlayerMove(1.0f);
+				if (exact && proxy)
+				{	/* Patch 347: physents as SV_RunCmd builds them, then CHECKED
+					   against the digest the server published for this row. */
+					int oldpf = proxy->xv->pmove_flags;
+					unsigned int crc;
+					pmove.numphysent = 1;
+					pmove.physents[0].model = world;
+					for (k = 0; k < 3; k++)
+					{
+						pmove_mins[k] = pmove.origin[k] - 256;
+						pmove_maxs[k] = pmove.origin[k] + 256;
+					}
+					proxy->xv->pmove_flags = oldpf & ~PMF_LADDER;
+					AddAllLinksToPmove(&sv.world, proxy);
+					pmove.onladder = ((int)proxy->xv->pmove_flags & PMF_LADDER) != 0;
+					proxy->xv->pmove_flags = oldpf;
+					pmove.world = &sv.world;
+					crc = SV_PhysentDigest();
+					for (; pecur < npe && pes[pecur].row <= i; pecur++)
+						if (pes[pecur].row >= 0)
+							{ pecrc = pes[pecur].crc; pehave = true; }
+					if (!mode && pehave)
+					{
+						if (crc == pecrc)
+							pe_ok++;
+						else if (pe_bad++ == 0)
+							{ pe_first = i; pe_file = pecrc; pe_ours = crc; }
+					}
+				}
+
+				PM_PlayerMove(exact ? gamespeed : 1.0f);
+
+				if (exact)
+				{	/* Patch 347: crossings the file says this move made, CHECKED. */
+					int want = 0;
+					qboolean same = true;
+					for (; portcur < nportal && prt[portcur].row <= i; portcur++)
+						if (prt[portcur].row == i)
+						{
+							want += prt[portcur].n;
+							same = same && VectorCompare(prt[portcur].org, pmove.origin)
+							            && VectorCompare(prt[portcur].vel, pmove.velocity);
+						}
+					if (!mode && (want || pmove.portalcrossings))
+					{
+						if (want == pmove.portalcrossings && same)
+							port_ok++;
+						else if (port_bad++ == 0)
+						{
+							port_first = i;
+							Con_Printf("  portal DISAGREES  row %i: file %i crossing(s), replay %i\n",
+							           i, want, pmove.portalcrossings);
+						}
+					}
+				}
 
 				/*
 				  PATCH 328: APPLY ANY STATE THE FILE SAYS WAS IMPOSED HERE.
@@ -4672,10 +4960,17 @@ static void SV_RecSim_f (void)
 				{
 					if (wrp[wcur].mt < 0)
 						{ wcur++; continue; }	/* a malformed row, already noted */
-					if (wrp[wcur].mt > next_mt)
+					if (wrp[wcur].row >= 0)
+					{	/* Patch 347: v9 binds by <row> */
+						if (wrp[wcur].row > i)
+							break;
+					}
+					else if (wrp[wcur].mt > next_mt)
 						break;
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
+					if (exact && wrp[wcur].fl >= 0)
+						pmove.onground = (wrp[wcur].fl & 1) != 0;
 					if (!mode)
 					{
 						wapplied++;
@@ -4731,6 +5026,29 @@ static void SV_RecSim_f (void)
 					derr = VectorLength(d);
 					VectorSubtract(pmove.velocity, s->vel, d);
 					verr = VectorLength(d);
+
+					if (exact && !mode)
+					{	/* Patch 347, ARM 4: the replay printed the way the writer
+						   prints it must BE the file's text, all six numbers. */
+						char tb[32];
+						int bad = -1;
+						for (k = 0; k < 6 && bad < 0; k++)
+						{
+							Q_snprintfz(tb, sizeof(tb), "%.2f", k < 3 ? pmove.origin[k] : pmove.velocity[k-3]);
+							if (strcmp(tb, s->txt[k]))
+								bad = k;
+						}
+						if (bad < 0)
+							x_ok++;
+						else
+						{
+							x_bad++;
+							if (x_shown++ < 6)
+								Con_Printf("  arm4 MISMATCH  row %i  packet %i  t %.4f  %s%c: file %s, replay %s\n",
+								           i, r->pk, s->t, bad < 3 ? "org" : "vel", "xyz"[bad%3],
+								           s->txt[bad], tb);
+						}
+					}
 
 					if (mode)
 					{
@@ -4829,6 +5147,22 @@ static void SV_RecSim_f (void)
 			if (nride)
 				Con_Printf("        %i ride record%s applied (%i off their row's"
 				           " <mt>).\n", rapplied, rapplied==1?"":"s", rskew);
+			if (exact)
+			{	/* Patch 347 */
+				Con_Printf("^5ARM 4^7  exact: %i of %i packets reproduce the file's own"
+				           " %%.2f text in all six numbers%s\n", x_ok, x_ok + x_bad,
+				           x_bad ? "" : " -- ^2the replay IS the recording^7");
+				Con_Printf("        physents: %i rows match the recorded digest, %i do not",
+				           pe_ok, pe_bad);
+				if (pe_bad)
+					Con_Printf(" (first row %i: file %06x, replay %06x)", pe_first, pe_file, pe_ours);
+				Con_Printf("%s\n", proxy ? "" : "  ^3(not built)^7");
+				Con_Printf("        portals: %i crossing move(s) agree, %i disagree",
+				           port_ok, port_bad);
+				if (port_bad)
+					Con_Printf(" (first row %i)", port_first);
+				Con_Printf("\n");
+			}
 		}
 		else
 			Con_Printf("^5ARM 2/3^7  no packet boundary carried a sample to compare against.\n");
@@ -4848,6 +5182,9 @@ static void SV_RecSim_f (void)
 	Z_Free(sam);
 	Z_Free(wrp);
 	Z_Free(rid);
+	Z_Free(pms);
+	Z_Free(pes);
+	Z_Free(prt);
 }
 
 /* FTESurf Patch 346: print what each client's mover was handed on its last move --

@@ -30283,6 +30283,40 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 347 — `pm_recsim` replays a v9 recording exactly  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_f: v9 parse, exact path, ARM 4), `server/sv_user.c` (SV_PMPinParse / SV_PMPinApply / SV_PMStateParse beside the fill; SV_PhysentDigest exported), `server/server.h` (declarations). Measurement command; no game path, protocol or ABI change. VERIFIED: `cfg/test/p347exact.cfg` on QC build 87 captures (`b87warp.cfg`, `b87ride.cfg`).)*
+
+**Problem.** QC build 87 (FTESURF-REC 9) records the pin, an exact seed with
+pm_source's carried state, %.9g warps and rides bound to their `in` row, the
+usercmd's own angles, the ground flag the engine read, the physent digest and
+portal crossings.  pm_recsim read none of it, so its open loop still started
+from a %.2f sample with zeroed mover state, under this server's movevars, with
+the world as its only physent.
+
+**Change.** When a file carries `seed` (with a full carried state) and a
+70-name `pmpin`, the replay is EXACT.  It seeds from `seed` with
+PMSrc_LoadState, takes movevars/pm_type/hull/gamespeed from the pin, and applies
+`pm` records from their row.  Before each move it runs WPhys_CheckVelocity's
+per-axis clamp with the pinned sv_maxvelocity and takes onground from the row's
+`<fl>`.  It builds physents as SV_RunCmd does (AddAllLinksToPmove around a
+spawned player, who is left out) and checks each row's digest against `pe`.
+It checks crossings against `portal`, and binds warps by `<row>` (applying
+their `<fl>`).  ARM 4 prints the replayed origin and velocity at %.2f and
+requires the file's own text in all six numbers at every packet.  pmsrcver and
+the trace cvars are compared with this engine and reported.  Line buffer
+4096; truncated lines are counted.  v6-v8 files take the old path unchanged.
+
+**Verified.** b87warp (bhop_eazy, 1683 rows, 7 teleports): EXACT REPLAY, 1667
+of 1667 packets text-identical, physents 1682/1682, open loop never past 0.1 u
+-- the scripted route whose v7 recording (b83) the open loop lost at row 817.
+b87ride (surf_ecosystem): 148 of 148.  Negative controls: a warp origin moved
+0.01 u mismatches from its row; gravity 800 -> 799 in the pin mismatches at row
+0; one `pe` digest altered flags physents from row 197 while ARM 4 stays exact.
+Not caught, and recorded as findings: airaccelerate 1000 -> 999 (physically
+inert at bhop settings -- both saturate the 30 u/s air cap), and a one-ulp
+warp velocity edit (below the %.2f samples' resolution before the next teleport
+re-imposes velocity).  v6-v8 controls are identical to Patch 345's output.
+0 new warnings.
+
 ## Patch 346 — the engine publishes what the mover was handed  *(APPLIED -- `common/pmove.h` (PMSRC_VERSION; playermove_t gains `portalcrossings`, appended), `common/pmove.c` (zeroed with ticksrun), `common/pm_source.c` (counted at both crossing sites), `server/server.h` (client_t gains the pin snapshot, epoch, physent digest and portal state, appended; SV_PMPIN_COUNT), `server/sv_user.c` (the pin table/fill/text, the physent digest, snapshot before PM_PlayerMove, five optional QC fields after it), `server/pr_cmds.c` (`*pmpinN` / `*pmstateN` per-client infokeys), `server/sv_init.c` (per-map reset), `server/sv_ccmds.c` (`pm_pin`). No protocol change, no ABI bump, no behaviour change to any move. VERIFIED: `cfg/test/p346pin.cfg`; regression `p322det.cfg`, `p345angle.cfg`.)*
 
 **Problem.** A recording pins the map, the zones and the inputs, but not the
