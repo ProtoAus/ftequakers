@@ -4266,11 +4266,20 @@ static char *SV_RecSim_Line (char **pp, char *end, char *out, size_t outsz)
 extern vec3_t pmove_mins, pmove_maxs;
 extern cvar_t sv_maxvelocity, pm_trisoup_bevels, pm_rotatedboxhulls, pm_portalcsg_scanall;
 
-static void SV_RecSim_f (void)
+/* Patch 349: the verifier's QC hooks (QC build 88), called by name. */
+static int SV_RecSim_Step (func_t f, const vec3_t lastp, const vec3_t p, const vec3_t pmaxs)
+{
+	globalvars_t *pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	VectorCopy(lastp, G_VECTOR(OFS_PARM0));
+	VectorCopy(p, G_VECTOR(OFS_PARM1));
+	VectorCopy(pmaxs, G_VECTOR(OFS_PARM2));
+	PR_ExecuteProgram(svprogfuncs, f);
+	return (int)G_FLOAT(OFS_RETURN);
+}
+
+static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
-	const char   *fname = Cmd_Argv(1);
-	int           stopat = atoi(Cmd_Argv(2));
 	char         *buf, *p, *end, *ln;
 	size_t        fsz = 0;
 	char          line[4096];		/* Patch 347: a v9 `pmpin`/`pm` line is ~1.3 KB */
@@ -4300,6 +4309,12 @@ static void SV_RecSim_f (void)
 	recsim_pe_t  *pes = NULL;
 	recsim_portal_t *prt = NULL;
 	qboolean      exact;
+	/* Patch 349: pm_verify */
+	int           zs_ev = -1, zs_az = -1, zs_track = 0, zs_startseg = 0, zs_stagerun = 0, zs_twarp = 0;
+	qboolean      havezseed = false, haveend = false;
+	int           endticks = -1, nresume = 0, nghost = 0, nrestart = 0;
+	char          hdrzsrc[32] = "", hdrzcrc[32] = "", hdrzrule[32] = "";
+	func_t        vf_step = 0;
 
 	if (!*fname)
 	{
@@ -4358,6 +4373,12 @@ static void SV_RecSim_f (void)
 						filever = atoi(ln+12);
 					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
 						pinfound = SV_PMPinParse(ln+6, hdrpin);
+					else if (!strncmp(ln, "zonesrc ", 8))	/* Patch 349 */
+						Q_strncpyz(hdrzsrc, ln+8, sizeof(hdrzsrc));
+					else if (!strncmp(ln, "zonecrc ", 8))
+						Q_strncpyz(hdrzcrc, ln+8, sizeof(hdrzcrc));
+					else if (!strncmp(ln, "zonerule ", 9))
+						Q_strncpyz(hdrzrule, ln+9, sizeof(hdrzrule));
 					/* Patch 328: the randomized start.  Read and REPORTED and
 					   never applied -- the recording's first sample is already
 					   post-displacement, because SV_TimerStart moves the player
@@ -4477,6 +4498,36 @@ static void SV_RecSim_f (void)
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
 			}
+			/* Patch 349: the timer latches the start packet left (QC build 88). */
+			else if (!strncmp(ln, "zseed ", 6) && pass == 0)
+			{
+				const char *q = ln + 6;
+				havezseed = true;
+				while (*q)
+				{
+					int v;
+					char name[32];
+					if (sscanf(q, "%31[^=]=%i", name, &v) == 2)
+					{
+						if (!strcmp(name, "evzone"))		zs_ev = v;
+						else if (!strcmp(name, "azone"))	zs_az = v;
+						else if (!strcmp(name, "track"))	zs_track = v;
+						else if (!strcmp(name, "startseg"))	zs_startseg = v;
+						else if (!strcmp(name, "stagerun"))	zs_stagerun = v;
+						else if (!strcmp(name, "twarp"))	zs_twarp = v;
+					}
+					while (*q && *q != ' ') q++;
+					while (*q == ' ') q++;
+				}
+			}
+			else if (!strncmp(ln, "end ", 4) && pass == 0)
+				{ haveend = true; endticks = atoi(ln+4); }
+			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
+				nresume++;
+			else if (!strncmp(ln, "ghost ", 6) && pass == 0)
+				nghost++;
+			else if (!strncmp(ln, "restart ", 8) && pass == 0)
+				nrestart++;
 			/* Patch 347: v9's exact seed and its three state tracks. */
 			else if (!strncmp(ln, "seed ", 5) && pass == 0)
 			{
@@ -4649,6 +4700,73 @@ static void SV_RecSim_f (void)
 		Con_Printf("  rides     ^3v%i cannot carry them^7 -- a booster in this file"
 		           " is unexplained displacement\n", filever);
 
+	/* Patch 349: what v1 of the verifier will vouch for, and what it will not.
+	   REFUSE is "cannot say", never a judgement on the run. */
+	if (verify)
+	{
+		const char *refuse = NULL;
+		char zbuf[128], zhere[128];
+		if (!exact)
+			refuse = "not exact: no seed or no full pin (recorder before QC build 87, or engine before Patch 346)";
+		else if (!haveend || inend_mt < 0)
+			refuse = "unfinished: no `inend`/`end`";
+		else if (nresume)
+			refuse = "a save-state resume or retry";
+		else if (nghost)
+			refuse = "a ghost window";
+		else if (nrestart)
+			refuse = "a stage restart";
+		else if (!havecrc || filecrc != (unsigned int)world->checksum)
+			refuse = "a different map";
+		else if (hdrpin[0] != PMSRC_VERSION)
+			refuse = "a different mover (pmsrcver)";
+		else if (!havezseed)
+			refuse = "no `zseed` (recorder before QC build 88)";
+		else if (nlong)
+			refuse = "a truncated line";
+		else if (instart_mt != instart_run)
+			refuse = "the start tick is not the trace's horizon";
+		else if (!svprogfuncs || !(vf_step = PR_FindFunction(svprogfuncs, "SV_VerifyStep", PR_ANY)))
+			refuse = "these progs have no verifier hooks (QC build 88)";
+		else
+		{
+			func_t fpin = PR_FindFunction(svprogfuncs, "SV_VerifyZonePin", PR_ANY);
+			func_t fbeg = PR_FindFunction(svprogfuncs, "SV_VerifyBegin", PR_ANY);
+			globalvars_t *pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+			*zhere = 0;
+			if (fpin)
+			{
+				PR_ExecuteProgram(svprogfuncs, fpin);
+				Q_strncpyz(zhere, PR_GetString(svprogfuncs, G_INT(OFS_RETURN)), sizeof(zhere));
+			}
+			Q_snprintfz(zbuf, sizeof(zbuf), "%s %s %s", hdrzsrc, hdrzcrc, hdrzrule);
+			if (!fpin || !fbeg)
+				refuse = "these progs have no verifier hooks (QC build 88)";
+			else if (strcmp(zbuf, zhere))
+			{
+				Con_Printf("  zone pin  file \"%s\"  here \"%s\"\n", zbuf, zhere);
+				refuse = "a different zone table or rule";
+			}
+			else
+			{
+				pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+				G_FLOAT(OFS_PARM0) = zs_ev;
+				G_FLOAT(OFS_PARM1) = zs_az;
+				G_FLOAT(OFS_PARM2) = zs_track;
+				G_FLOAT(OFS_PARM3) = zs_stagerun;
+				G_FLOAT(OFS_PARM4) = zs_startseg;
+				PR_ExecuteProgram(svprogfuncs, fbeg);
+			}
+		}
+		if (refuse)
+		{
+			Con_Printf("VERIFY %s REFUSE %s\n", fname, refuse);
+			Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
+			Z_Free(pms); Z_Free(pes); Z_Free(prt);
+			return;
+		}
+	}
+
 	/* ---- the arms -------------------------------------------------------- */
 	{
 		movevars_t   savemv = movevars;
@@ -4672,7 +4790,10 @@ static void SV_RecSim_f (void)
 		int    pe_ok = 0, pe_bad = 0, pe_first = -1;
 		unsigned int pe_file = 0, pe_ours = 0;
 		int    port_ok = 0, port_bad = 0, port_first = -1;
-		int    x_ok = 0, x_bad = 0, x_shown = 0;
+		int    x_ok = 0, x_bad = 0, x_shown = 0, x_first = -1;
+		/* Patch 349 */
+		vec3_t vlastp;
+		int    vfin_row = -1, vfin_ticks = -1, vcancel_row = -1, vrearm_row = -1;
 		int    band[4] = {0,0,0,0};		/* <=0.02 u, <=0.1, <=1, worse */
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
@@ -4743,7 +4864,7 @@ static void SV_RecSim_f (void)
 		   boundary without snapping would be one simulation reported twice under
 		   two names.  (It was, in the first cut of this command.)
 		   mode 0 = open, mode 1 = pinned. */
-		for (mode = 0; mode < 2; mode++)
+		for (mode = 0; mode < (verify ? 1 : 2); mode++)	/* Patch 349: the verifier is the open loop */
 		{
 			/* Seed from the sample immediately before the first `in` row.  NOT
 			   from `instart`, which is a HORIZON and not a state: it says which
@@ -4790,6 +4911,16 @@ static void SV_RecSim_f (void)
 			if (!exact)
 				pmove.msec_carry = ins[0].carry;
 			wcur = 0;			/* Patch 328: each pass replays the warps */
+			/* Patch 347: a v9 warp at row -1 came between open and the first
+			   command, so it is imposed on the seed. */
+			for (; filever >= 9 && wcur < nwarp && wrp[wcur].mt >= 0 && wrp[wcur].row < 0; wcur++)
+			{
+				VectorCopy(wrp[wcur].org, pmove.origin);
+				VectorCopy(wrp[wcur].vel, pmove.velocity);
+				if (wrp[wcur].fl >= 0)
+					pmove.onground = (wrp[wcur].fl & 1) != 0;
+			}
+			VectorCopy(pmove.origin, vlastp);	/* Patch 349: SV_TimerFrame's run_t_lastorg */
 			rcur = 0;			/* Patch 344: and the carrier */
 			VectorClear(carrier);
 
@@ -4960,7 +5091,7 @@ static void SV_RecSim_f (void)
 				{
 					if (wrp[wcur].mt < 0)
 						{ wcur++; continue; }	/* a malformed row, already noted */
-					if (wrp[wcur].row >= 0)
+					if (filever >= 9)
 					{	/* Patch 347: v9 binds by <row> */
 						if (wrp[wcur].row > i)
 							break;
@@ -4971,6 +5102,11 @@ static void SV_RecSim_f (void)
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
 					if (exact && wrp[wcur].fl >= 0)
 						pmove.onground = (wrp[wcur].fl & 1) != 0;
+					/* Patch 349: SV_TimerWarped moves the sweep origin for these,
+					   gated on run_teleport_warp exactly as the handlers are. */
+					if (zs_twarp && (!strcmp(wrp[wcur].kind, "tele") || !strcmp(wrp[wcur].kind, "telerel")
+					                 || !strcmp(wrp[wcur].kind, "bhop")))
+						VectorCopy(wrp[wcur].org, vlastp);
 					if (!mode)
 					{
 						wapplied++;
@@ -4981,6 +5117,20 @@ static void SV_RecSim_f (void)
 							           wrp[wcur].org[1], wrp[wcur].org[2]);
 					}
 					wcur++;
+				}
+
+				/* Patch 349: the live timer runs once per PACKET, in PostThink,
+				   after the packet's last move and its touches.  So does this. */
+				if (verify && !mode && (i+1 >= nin || ins[i+1].pk != r->pk))
+				{
+					int code = SV_RecSim_Step(vf_step, vlastp, pmove.origin, pmove.player_maxs);
+					if (code == 1 && vfin_row < 0)
+						{ vfin_row = i; vfin_ticks = next_mt - instart_run; }
+					else if (code == 2 && vcancel_row < 0)
+						vcancel_row = i;
+					else if (code == 3 && vrearm_row < 0)
+						vrearm_row = i;
+					VectorCopy(pmove.origin, vlastp);
 				}
 
 				/* ARM 1.  The mover's own tick count against the file's delta.
@@ -5042,6 +5192,8 @@ static void SV_RecSim_f (void)
 							x_ok++;
 						else
 						{
+							if (!x_bad)
+								x_first = i;
 							x_bad++;
 							if (x_shown++ < 6)
 								Con_Printf("  arm4 MISMATCH  row %i  packet %i  t %.4f  %s%c: file %s, replay %s\n",
@@ -5147,31 +5299,61 @@ static void SV_RecSim_f (void)
 			if (nride)
 				Con_Printf("        %i ride record%s applied (%i off their row's"
 				           " <mt>).\n", rapplied, rapplied==1?"":"s", rskew);
-			if (exact)
-			{	/* Patch 347 */
-				Con_Printf("^5ARM 4^7  exact: %i of %i packets reproduce the file's own"
-				           " %%.2f text in all six numbers%s\n", x_ok, x_ok + x_bad,
-				           x_bad ? "" : " -- ^2the replay IS the recording^7");
-				Con_Printf("        physents: %i rows match the recorded digest, %i do not",
-				           pe_ok, pe_bad);
-				if (pe_bad)
-					Con_Printf(" (first row %i: file %06x, replay %06x)", pe_first, pe_file, pe_ours);
-				Con_Printf("%s\n", proxy ? "" : "  ^3(not built)^7");
-				Con_Printf("        portals: %i crossing move(s) agree, %i disagree",
-				           port_ok, port_bad);
-				if (port_bad)
-					Con_Printf(" (first row %i)", port_first);
-				Con_Printf("\n");
-			}
 		}
-		else
+		else if (!verify)	/* Patch 349: the verifier runs the open loop only */
 			Con_Printf("^5ARM 2/3^7  no packet boundary carried a sample to compare against.\n");
+		if (exact)
+		{	/* Patch 347 */
+			Con_Printf("^5ARM 4^7  exact: %i of %i packets reproduce the file's own"
+			           " %%.2f text in all six numbers%s\n", x_ok, x_ok + x_bad,
+			           x_bad ? "" : " -- ^2the replay IS the recording^7");
+			Con_Printf("        physents: %i rows match the recorded digest, %i do not",
+			           pe_ok, pe_bad);
+			if (pe_bad)
+				Con_Printf(" (first row %i: file %06x, replay %06x)", pe_first, pe_file, pe_ours);
+			Con_Printf("%s\n", proxy ? "" : "  ^3(not built)^7");
+			Con_Printf("        portals: %i crossing move(s) agree, %i disagree",
+			           port_ok, port_bad);
+			if (port_bad)
+				Con_Printf(" (first row %i)", port_first);
+			Con_Printf("\n");
+		}
 
 		if (inend_mt < 0)
 			Con_Printf("\n  NOT MEASURED, because the file cannot say: the duration of"
 			           " the FINAL move.\n  %i rows give %i durations -- the last row"
 			           " has no successor to difference\n  against, and it is the move"
 			           " the finish is latched on.\n", nin, nin-1);
+
+		/* Patch 349: the verdict.  PASS: the replay IS the file, and the live
+		   timer's own zone scan finishes it on its last packet at its stated
+		   tick.  HOLD: something disagrees -- a reason for a human, never an
+		   accusation. */
+		if (verify)
+		{
+			char why[160];
+			*why = 0;
+			if (x_bad)
+				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
+			else if (pe_bad)
+				Q_snprintfz(why, sizeof(why), "physents: %i row(s) differ, first at row %i", pe_bad, pe_first);
+			else if (port_bad)
+				Q_snprintfz(why, sizeof(why), "portals: %i move(s) disagree, first at row %i", port_bad, port_first);
+			else if (vcancel_row >= 0)
+				Q_snprintfz(why, sizeof(why), "a cancel zone is crossed at row %i", vcancel_row);
+			else if (vfin_row < 0)
+				Q_snprintfz(why, sizeof(why), "no finish: the zones never end this run");
+			else if (vfin_row != nin-1)
+				Q_snprintfz(why, sizeof(why), "finish at row %i but the file runs to row %i", vfin_row, nin-1);
+			else if (vfin_ticks != endticks)
+				Q_snprintfz(why, sizeof(why), "ticks: the zones say %i, the file says %i", vfin_ticks, endticks);
+			if (vrearm_row >= 0)
+				Con_Printf("  note      the replay re-enters this track's START at row %i\n", vrearm_row);
+			if (*why)
+				Con_Printf("VERIFY %s HOLD %s\n", fname, why);
+			else
+				Con_Printf("VERIFY %s PASS ticks %i rows %i\n", fname, vfin_ticks, nin);
+		}
 
 		Z_Free(eo); Z_Free(ev);
 		movevars = savemv;
@@ -5185,6 +5367,18 @@ static void SV_RecSim_f (void)
 	Z_Free(pms);
 	Z_Free(pes);
 	Z_Free(prt);
+}
+
+static void SV_RecSim_f (void)
+{
+	SV_RecSim_Run(Cmd_Argv(1), atoi(Cmd_Argv(2)), false);
+}
+
+//FTESurf Patch 349: the verifier -- pm_recsim's exact open loop plus the live
+//timer's zone scan, ending in one VERIFY line.
+static void SV_RecVerify_f (void)
+{
+	SV_RecSim_Run(Cmd_Argv(1), 0, true);
 }
 
 /* FTESurf Patch 346: print what each client's mover was handed on its last move --
@@ -5348,6 +5542,13 @@ void SV_InitOperatorCommands (void)
 	                "produced them, applying its warp/ride/inend records, and "
 	                "measures whether the trajectory comes back. "
 	                "Measures only -- it tests no zone and refuses no run.");
+
+	//FTESurf Patch 349
+	Cmd_AddCommandD("pm_verify", SV_RecVerify_f,
+	                "FTESurf: pm_verify <file.rec>.  Replays a finished FTESURF-REC 9 "
+	                "recording exactly on this map and asks the timer's own zone "
+	                "scan where it finishes.  Prints VERIFY <file> PASS|HOLD|REFUSE "
+	                "<reason>.");
 
 	//FTESurf Patch 346
 	Cmd_AddCommandD("pm_pin", SV_PMPin_f,

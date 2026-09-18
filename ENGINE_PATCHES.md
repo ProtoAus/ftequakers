@@ -30283,6 +30283,48 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 349 — `pm_verify`: recompute a run's finish from its inputs  *(APPLIED -- engine: `server/sv_ccmds.c` (SV_RecSim_f becomes SV_RecSim_Run with a verify mode; `pm_verify`; the QC hook call). QC build 88: `src/server/sv_timer.qc` (SV_ZoneScan moved verbatim out of SV_TimerFrame; SV_VerifyZonePin / SV_VerifyBegin / SV_VerifyStep; the `zseed` record), `tools/reccheck.py`, `tools/test_reccheck.py`. No protocol or ABI change; the live timer's scan is byte-identical, only relocated. VERIFIED: `cfg/test/b88fin.cfg` (capture), `cfg/test/p349verify.cfg`.)*
+
+**Problem.** Patch 347 proves a v9 file is the mover's own output, but nothing
+recomputed the TIME.  The finish is decided by the timer's per-packet zone scan
+(swept or hulled tests, END outranking STAGE, track filter, edge latches) in
+QC, so a verifier that re-implemented it in C would be a second copy of the
+rule that decides a rank.
+
+**Change.** QC build 88 moves SV_TimerFrame's zone-scan loop verbatim into
+`SV_ZoneScan(lastp, p, mn, mx)`, which the live timer calls.  Three name-bound
+hooks sit beside it:
+- `SV_VerifyZonePin` returns the loaded table and rules as the header states them.
+- `SV_VerifyBegin` seeds a private latch set.
+- `SV_VerifyStep` runs the same scan and SV_TimerEvent's finish rule.
+
+A `zseed` record (additive) carries the latches the start packet left, plus
+run_teleport_warp; it is written at the end of that packet's SV_TimerFrame.
+
+Engine `pm_verify <file>` runs Patch 347's exact open loop.  At each packet end,
+after that packet's warps, it calls SV_VerifyStep with the replayed origin and
+the sweep origin (moved by tele/telerel/bhop warps when twarp is set).  It
+prints one line: `VERIFY <file> PASS ticks <n> rows <n>`, or
+`HOLD <reason>`, or `REFUSE <reason>`.
+
+- PASS: every packet exact, physents and portals agree, and the finish falls on
+  the file's last packet at the file's tick.
+- REFUSE: out of scope (v1): not exact, unfinished, resumed, ghosted, stage
+  restart, a different map/mover/zone table, or no hooks.
+
+**Verified.** b88fin (a finished v9 capture that switches to noclip mid-run):
+PASS ticks 662, 627/627 packets exact across the `pm` switch, physents
+634/634.  Negative controls:
+- `end` +1 tick gives HOLD "ticks";
+- a zonecrc edit gives REFUSE "zone table";
+- the last 40 rows cut (inend and end rewritten) gives HOLD "no finish";
+- one sample moved 0.01 u gives HOLD "state ... row 200".
+
+v6-v8 and unfinished files REFUSE.  The moved scan loop is byte-identical to
+HEAD's, and the live timer finished the capture at the same 662 the verifier
+recomputed.  pm_recsim's own output is unchanged (p347exact re-run).
+reccheck 115 checks 0 failed; corpus 154/62 unchanged.  0 new warnings.
+
 ## Patch 348 — QC build 87: FTESURF-REC 9, a recording that carries exact state  *(APPLIED -- mod-side only, no engine change: `src/server/sv_timer.qc` (grammar block, SV_RecOpen, SV_TimerInFrame, SV_RecWarp, SV_RecRide, SV_RecState, SV_RecClose, SV_RecRecount, the `cmd timer` rows line), `sv_player.qc` (two SV_RecState calls), `sv_entities.qc` (`lift` warp), `sv_zones.qc` (`zone` warp), `src/client/cl_watch.qc` (knows 9), `tools/reccheck.py`, `tools/test_reccheck.py`, `AGENTS.md`. Needs engine Patch 346 to write the pin and state records; on an older engine it writes v9 without them. VERIFIED: `cfg/test/b87warp.cfg`, `b87ride.cfg`, `b87rewind.cfg`, `p347exact.cfg`.)*
 
 **Problem.** An audit of every input to one SV_RunCmd found why E3's and b83's
