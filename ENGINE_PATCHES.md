@@ -30283,6 +30283,36 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 365 — Multi-Session: a run parked when its player leaves, resumed on return  *(APPLIED -- mod-side only, no engine change: new `src/server/sv_resume.qc`; hooks in `sv_player.qc` (connect, disconnect, spawn, PostThink, `!resume`/`!discard`, `ms_resume`/`ms_discard`), `sv_main.qc` (SV_Shutdown parks; stat 101; `run_resume*` cvars; the sweep), `sv_timer.qc` (SV_RecParkLine; run_st_ms -- a stage spanning a pause never qualifies; no zone acts while a restore runs), `sv_saveloc.qc` (retry 2 leaves the recorder to the resume); `sh_defs.qc` (TF_MULTISESSION 16384, SLOP_RESUME, STAT_FS_MSSESSION 101, FS_RunKindName); client `cl_timer.qc` (offer prompt, F2, latch seed, split rows back), `cl_replay.qc` (no sidecars), `cl_board.qc`, `cl_banner.qc`, kind word "multi"; `lobby.cfg`; surfd TF_MULTISESSION pin + tests. VERIFIED: `cfg/test/ms1listen.cfg`, `ms1sv.cfg`+`ms1cl.cfg`, `ms1quit*.cfg`.)*
+
+**Problem.** A long run died with its connection: a drop, a map change or a
+quit threw it away.
+
+**Change.** A RUNNING run of at least `run_resume_min` seconds is parked -- on
+ClientDisconnect (`drop`) and in QC `SV_Shutdown` (`server`: every map change
+and quit; not a `retry`) -- to `data/resume/<map>/@<guid|local>/save000/`: a
+save state, the recording (a stream is renamed in, a buffer written as its
+prefix) and `ms.txt` with every recorder counter, written last.  The next spawn
+offers it; `!resume` / F2 claims it (ms.txt is renamed, so two lobbies cannot
+resume one slot), voids any fresh run, parks the player, copies a streamed
+run.rec into the new part file (line 0 -> 10, the flags offset re-taken),
+counts down, and applies: SV_SaveApplyState(e,0,2), TF_MULTISESSION, the
+start-style evidence latches, the recorder attached, the open stage reopened at
+its original tick and refused.  The .rec carries `pause ... drop|server` and
+Patch 364's `session` + `seed`.  A fresh run drops a standing offer after
+`run_resume_grace` s; expired slots are swept at worldspawn; a discarded slot
+that posted stages is kept as evidence.  surfd ranks the bit as clean.
+
+**Verified.** Listen, buffered and streamed: park on a map reload, offer,
+resume, finish -- v10, `pauses server`, `sessions 1`, 0 faults; 123 + (482 -
+188) = 417 and 122 + (512 - 188) = 446 ticks; the files minus `session`/`seed`
+fault.  Lobby (dedicated + client): drop, reconnect, restore, resume, finish
+submitted with flags 16384; stage 4 posted after the resume; discard keeps
+evidence only for the dropped slot.  Quit parks, a new process resumes; an aged
+slot is swept.  surfd suite on the Pi: 218 ok, 0 failed (control 210/0).  Two
+first-cut defects, fixed: the resumed-line overlay sat on the timer's
+sub-label, and a consumed slot was also copied to evidence.
+
 ## Patch 364 — FTESURF-REC 10: a rewound run continues in a new session  *(APPLIED -- engine `server/sv_ccmds.c` (pm_recsim and pm_verify both refuse REC > 9); FTESurf `src/server/sv_timer.qc` (SV_RecPause, SV_RecSession, SV_RecSeed, SV_RecTrailer, SV_RecNextSerial; SV_RecRecount recounts pauses/sessions and restores the packet ordinal; grammar block), `sv_saveloc.qc` (the pause on a cold rewind), `sv_main.qc` (rec_serial), `cl_watch.qc` (reads 10); `tools/reccheck.py`, `tools/test_reccheck.py`. VERIFIED: `cfg/test/p364rewind.cfg`, `cfg/test/p364rsim.cfg`.)*
 
 **Problem.** A `retry` (a map_restart) or a load whose buffer was gone reads the
