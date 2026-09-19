@@ -30396,6 +30396,51 @@ gap documented):**
 
 `sh_defs.qc`'s "an X11 build leaves the honest unknown" is now historical.
 
+## Patch 385 — spectate anyone from the room list, and resume the run  *(APPLIED -- mod-side only, needs Patches 380/382/383: FTESurf new `src/client/cl_spectate.qc` (the camera, input, HUD, `spectate` command); `cl_keys.qc` (Spec_Active, Keys_TurnBind, Keys_BindNow), `cl_main.qc` (the input chain, Spec_InputFrame, the `cl_btn_down` repeat gate, Spec_Frame after Body_Frame), `cl_hud.qc`/`cl_timer.qc` (the target's speed, keys and clock), `cl_players.qc`/`cl_scores.qc` (the row click, `scores pick`), `cl_ghost.qc`/`cl_watch.qc` (refuse under spectate), `cl_saveloc.qc`, `cl_hudedit.qc`, `src/server/sv_player.qc` (no eye claim in the countdown), `ftesurf/cfg/default.cfg` (`spec_dist`), `tools/spectrace.py`. VERIFIED: FTESurf `cfg/test/p385view.cfg` (+ `p385sv`, `p385own`, `p385two`), `p385hid.cfg` (+ `p385t`), `p385rec.cfg`, `p385verify.cfg`, `p384spc.cfg`.)*
+
+**Problem.** The room list's "spectate" was a stub, and Patch 382's hold had no
+client: nothing drew a target, moved a camera or took the keys.
+
+**Change.** A row click (or `spectate <name|#slot|next|prev|off>`) asks the server
+for `rec_spec`.  First person draws the target's streamed eye; third person orbits
+on the mouse, pulled in by the map at once and eased out (`spec_dist`); freecam
+flies with Ghost_Fly.  MOUSE1/MOUSE2 retarget, SPACE cycles the three, ESC starts
+the server's 3-2-1.  The camera integrates IE_MOUSEDELTA itself and never writes
+VF_CL_VIEWANGLES, so the body's aim cannot move.  While spectate owns the input
+(Spec_Active: asking, leaving, watching, counting, or the stat says so) a key press
+runs only an allow-listed bind, looked up for the modifiers held (#342's modifier
+argument; an unbound right-hand modifier as its left twin), a key with a turn in
+any modifier slot is swallowed, and the turn buttons are released every frame; the
+ghost, the replay and the save-lock's angle lock stand down.  Two routes stay
+open, both outside CSQC: a `+left` typed at the console, and an F-key pressed
+under the engine menu (keys.c:4027-4064); the next frame's release cuts a held
+turn from either, not a force_centerview.  Spec_InputFrame zeroes the usercmd and
+its time for the whole window, so the server's anti-hover forces moves (zeroed by
+the hold) and, after the release, about one round trip of no-input moves until a
+timed usercmd arrives.  `in_journal_note spec 1|0` marks the .hid.
+
+**Verified.** `p385view` (a dedicated Patch 380 server, the viewer and two
+targets), `spectrace.py`, run 5 on the final build: all 29 predictions PASS and
+every control fails its gate -- entry 26 ms after the request; your own eye moves
+0.0014 u and the aim 0.00000 deg over 3808 frames while 12 looks turn the camera;
+first person on the stream's eye to 0.000 u; the yaw rate within 0.8-1.2 of the
+target's sampled rate on 100% of 2820 frames with no stall (`cl_body_raw 1`: 1.7%
+and 32%); third person clear on 5808 frames, pulled in by the map, eased out in
+0.39 s; one mode step per SPACE; the countdown at 1.0 s steps; an alias-bound
+turn, a `shift+` turn, +klook and an unbound right Alt swallowed while watching and
+not otherwise, a quoted `;` chat bind let through.  Independent review, round 1
+(two reviewers, two verifiers): nine defects, all fixed and armed (P17 windowed,
+P24-P27, `p385rec`); round 2 on the fixes: four lows, three fixed and armed
+(P28, P29), one engine-side (above).  Run 4 failed P24 as then written -- the
+all-slots turn test swallows a key whose shift slot turns -- and it was revised
+before run 5.  `p385rec`: a run recorded
+across a window on the 385 path passes reccheck and pm_verify ("1 window(s), 0
+line(s) inside"); `spec 0`'s <mt> + 1 HOLDs; after the release the file carries
+one forced 13 ms move on a local host.  `p385hid`: `spec 1`/`spec 0` in the
+journal and no 'v' record inside the window.  Falsified: `p385view` P4c's first
+control gate (>= 25% no-step) at ~65 fps against the 66.7 Hz stream.  Not yet on
+the Pi.
+
 ## Patch 386 — Linux: libraries by soname; Snap, Debian and XDG Steam  *(APPLIED -- `gl/gl_vidlinuxglx.c` (libXxf86vm.so.1, libXrandr.so.2, libXxf86dga.so.1 before the bare names), `gl/gl_videgl.c` (libGLESv2.so.2, libEGL.so.1, non-Windows only), `common/fs.c` (Sys_SteamVdfPath: the libraryfolders.vdf candidates incl. `~/snap/steam/common/...`, `~/.steam/debian-installation`, `$XDG_DATA_HOME/Steam`; `fs_steamlibs` lists the ones that exist); FTESurf `ftesurf/cfg/default.cfg` (`if $sys_platform == Linux set vid_renderer gl`), `tools/linux/rig-*.sh`. VERIFIED: FTESurf `cfg/test/p386lin.cfg` in a runtime-only Debian 13 WSL distro.)*
 
 **Problem.** Five libraries were dlopened by their unversioned name
