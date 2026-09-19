@@ -68,6 +68,7 @@ evalc_t	evalc_forceduck;	//FTESurf Patch 142
 evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
 evalc_t	evalc_pmepoch, evalc_physcrc, evalc_portalx, evalc_portalorg, evalc_portalvel;	//FTESurf Patch 346
+evalc_t	evalc_pmhold;		//FTESurf Patch 380
 
 void SV_FS_ResetFieldCaches(void)
 {
@@ -86,6 +87,7 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_mtick,     0, sizeof(evalc_mtick));		//FTESurf Patch 325
 	memset(&evalc_mtickrate, 0, sizeof(evalc_mtickrate));	//FTESurf Patch 325
 	memset(&evalc_mcarry,    0, sizeof(evalc_mcarry));		//FTESurf Patch 325
+	memset(&evalc_pmhold,    0, sizeof(evalc_pmhold));		//FTESurf Patch 380
 }
 
 /*
@@ -7844,6 +7846,7 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 	int			i, n;
 	int			oldmsec;
 	qboolean jumpable;
+	qboolean held = false;	//FTESurf Patch 380
 	vec3_t new_vel;
 	vec3_t old_vel;
 
@@ -8259,6 +8262,11 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 			VectorClear(pmove.basevelocity);
 	}
 
+	{
+		eval_t *ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_pmhold", ev_float, &evalc_pmhold);
+		held = ev && ev->_float;
+	}
+
 	//FTESurf Patch 142 -- let QC hand the duck state back.
 	//
 	//pmove.ducked is carried across commands inside host_client->pmsrc and is
@@ -8301,6 +8309,11 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 	pmove.numphysent = 1;
 	pmove.physents[0].model = sv.world.worldmodel;
 	pmove.cmd = *ucmd;
+	//FTESurf Patch 380: a held body (QC .run_pmhold, a spectate) runs ZERO mover ticks.
+	//Zeroed here, after the anti-hover debit above, so the budget and back-fill are
+	//untouched; with no tick nothing in pmsrc, origin, velocity or the tick count moves.
+	if (held)
+		pmove.cmd.msec = 0;
 	pmove.skipent = -1;
 	pmove.capsule = (sv_player->xv->geomtype == GEOMTYPE_CAPSULE);
 
@@ -8344,7 +8357,8 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 
 	//FTESurf Patch 346: snapshot what the mover is about to be handed -- after every
 	//input above is final, so the pin is what ran and not what was configured.
-	if (movevars.physicsmode == PHYSMODE_SOURCE)
+	//Not while held (Patch 380): the pin carries pmtype, and a held move is not a move.
+	if (movevars.physicsmode == PHYSMODE_SOURCE && !held)
 	{
 		float pin[SV_PMPIN_COUNT];
 		SV_PMPinFill(pin);
@@ -8625,8 +8639,8 @@ if (sv_player->v->health > 0 && before && !after )
 
 	if (!host_client->spectator)
 	{
-		// link into place and touch triggers
-		World_LinkEdict (&sv.world, (wedict_t*)sv_player, true);
+		// link into place and touch triggers -- none while held (Patch 380)
+		World_LinkEdict (&sv.world, (wedict_t*)sv_player, !held);
 
 /*		for (i = 0; i < pmove.numphysent; i++)
 		{

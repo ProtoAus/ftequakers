@@ -6523,6 +6523,8 @@ char *PF_infokey_Internal (int entnum, const char *key)
 			else
 				sprintf(ov, "%08x", (unsigned int)sv.world.worldmodel->checksum);
 		}
+		else if (!strcmp(key, "*pmhold"))
+			value = "1";	//FTESurf Patch 380: SV_RunCmd honours .run_pmhold. An older engine says "".
 		else
 		{
 			if ((value = InfoBuf_ValueForKey(&svs.info, key)) == NULL || !*value)

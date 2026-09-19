@@ -4214,6 +4214,18 @@ typedef struct
 	int      on, ticks;
 } recsim_ghost_t;
 #define RECSIM_GHOST_LAG 1.0f	/* s: an honest client empties its usercmd one RTT after `ghost 1` */
+/* Patch 380: a `spec` edge -- the body HELD for a spectate (zero mover ticks, no
+   touches).  Bound like a ghost edge, to the `in` row before it.  Nothing may sit
+   between a 1 and its 0; both edges state the counters and the body, which must be
+   the trace's there and each other's. */
+typedef struct
+{
+	int      row;
+	int      wbefore;		/* warps above it in the file: it acts between them */
+	int      on, ticks, mt, fl;
+	float    carry;
+	vec3_t   org, vel;
+} recsim_spec_t;
 
 /* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
    SV_BaseVelocityFrame's order, before the move it precedes in the file: `pay`
@@ -4326,6 +4338,49 @@ static int SV_RecSim_Step (func_t f, const vec3_t lastp, const vec3_t p, const v
 	return (int)G_FLOAT(OFS_RETURN);
 }
 
+/* Patch 380: one `spec` edge against the replay where it sits.  The counter and
+   pair checks are arithmetic (why); the body check depends on the trajectory, so it
+   goes to bwhy and is reported only if the replay had not diverged before it. */
+static void SV_RecSim_SpecEdge (const recsim_spec_t *e, const recsim_spec_t *prev, int tk,
+                                int next_mt, float next_carry, const vec3_t org, const vec3_t vel,
+                                char *why, size_t whysz, char *bwhy, size_t bwhysz, int *brow)
+{
+	float dorg = 0, dvel = 0;
+	int k;
+	for (k = 0; k < 3; k++)
+	{
+		if (fabs(org[k] - e->org[k]) > dorg)
+			dorg = fabs(org[k] - e->org[k]);
+		if (fabs(vel[k] - e->vel[k]) > dvel)
+			dvel = fabs(vel[k] - e->vel[k]);
+	}
+	if (!*why)
+	{
+		if (e->ticks != tk)
+			Q_snprintfz(why, whysz, "spec at row %i: the file says tick %i, the trace %i", e->row, e->ticks, tk);
+		else if (e->mt != next_mt || e->carry != next_carry)	/* both %.9g of one float */
+			Q_snprintfz(why, whysz, "spec at row %i: the edge states mover %i %.9g, the trace %i %.9g",
+			            e->row, e->mt, e->carry, next_mt, next_carry);
+		else if (!e->on && prev && (prev->ticks != e->ticks || prev->mt != e->mt || prev->carry != e->carry
+		         || !VectorCompare(prev->org, e->org) || !VectorCompare(prev->vel, e->vel) || prev->fl != e->fl))
+			Q_snprintfz(why, whysz, "spec at row %i: the window's two edges disagree -- the held body changed", e->row);
+	}
+	if (!*bwhy && (dorg > RECSIM_SESS_TOL || dvel > RECSIM_SESS_TOL))
+	{
+		Q_snprintfz(bwhy, bwhysz, "spec at row %i: the edge states the body %.4g u / %.4g u/s from the replay",
+		            e->row, dorg, dvel);
+		*brow = e->row;
+	}
+}
+
+/* Patch 380: check every edge bound at or above row `rmax` that sits above warp `wlim`
+   in the file.  A macro: it needs the replay's locals. */
+#define RECSIM_SPEC_UPTO(rmax, wlim, tk, nmt, ncy) \
+	for (; spcur < nspec && spc[spcur].row <= (rmax) && spc[spcur].wbefore <= (wlim); spcur++) \
+		if (!mode) \
+			SV_RecSim_SpecEdge(&spc[spcur], spcur ? &spc[spcur-1] : NULL, (tk), (nmt), (ncy), \
+			                   pmove.origin, pmove.velocity, spwhy, sizeof(spwhy), spbwhy, sizeof(spbwhy), &spbrow)
+
 /* Patch 354: every early exit still owes the sweeper a verdict line. */
 #define RECSIM_REFUSE(why) do { if (verify) Con_Printf("VERIFY %s REFUSE %s\n", fname, why); } while (0)
 
@@ -4372,6 +4427,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	recsim_restart_t *rst = NULL;	/* Patch 369 */
 	recsim_ghost_t *gho = NULL;		/* Patch 373 */
 	const char   *ghostbad = NULL;
+	recsim_spec_t *spc = NULL;		/* Patch 380 */
+	const char   *specbad = NULL;
+	int           nspec = 0, nspinside = 0, spinside_row = -1;
+	char          spinside_kind[16] = "";
 	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
 	float         mcdx = 0, mcdy = 0;
 	func_t        vf_restart = 0;
@@ -4414,6 +4473,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		/* Patch 367: from a `pause` to the next `in` row, state records are the
 		   next session's floor: they apply from its first row, whatever <row> says. */
 		int cses = 0, ppmt = 0, pptk = 0, crst = 0, cgho = 0, gopen = 0;
+		int cspc = 0, sopen = 0;	/* Patch 380 */
 		float ppc = 0;
 		qboolean floorwin = false, openpause = false;
 		p = buf; end = buf + fsz; inbody = false;
@@ -4462,6 +4522,16 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						       &sjoff[0], &sjoff[1], &sjoff[2]);
 				}
 				continue;
+			}
+			/* Patch 380: nothing is written inside a held window. */
+			if (sopen && strncmp(ln, "spec ", 5) && pass == 0)
+			{
+				if (spinside_row < 0)
+				{
+					spinside_row = cin;
+					sscanf(ln, "%15s", spinside_kind);
+				}
+				nspinside++;
 			}
 			/* FS_IsSample: a body line starting '-' or a digit is a sample.  So
 			   "in " can never be one, which is why the trace needed no escape. */
@@ -4626,9 +4696,40 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					gho[cgho].on = on;
 					gho[cgho].ticks = tk;
 				}
+				if (sopen && pass == 0 && !specbad)
+					specbad = "a ghost edge inside a spec window";
 				if (on == 0 || on == 1)
 					gopen = on;
 				cgho++;
+			}
+			else if (!strncmp(ln, "spec ", 5))
+			{	/* Patch 380 */
+				recsim_spec_t e;
+				float wall;
+				char  why[16];
+				int   nf;
+				memset(&e, 0, sizeof(e));
+				e.on = -1;
+				nf = sscanf(ln+5, "%i %i %i %f %f %f %f %f %f %f %i %f %15s", &e.on, &e.ticks, &e.mt, &e.carry,
+				            &e.org[0], &e.org[1], &e.org[2], &e.vel[0], &e.vel[1], &e.vel[2], &e.fl, &wall, why);
+				if ((e.on != 0 && e.on != 1) || nf != (e.on ? 12 : 13))
+				{
+					if (pass == 0 && !specbad)
+						specbad = "a malformed `spec`";
+				}
+				else if (pass == 0 && e.on == sopen && !specbad)
+					specbad = e.on ? "`spec 1` inside an open window" : "`spec 0` with no window open";
+				else if (pass == 0 && gopen && !specbad)
+					specbad = "a spec edge inside a ghost window";
+				else if (pass == 1 && cspc < nspec)
+				{
+					e.row = cin - 1;
+					e.wbefore = cwarp;
+					spc[cspc] = e;
+				}
+				if (e.on == 0 || e.on == 1)
+					sopen = e.on;
+				cspc++;
 			}
 			else if (!strncmp(ln, "restart ", 8))
 			{
@@ -4681,6 +4782,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					sesbad = "a second `pause` before its `session`";
 				if (gopen && pass == 0 && !ghostbad)
 					ghostbad = "a ghost window open across a `pause` (a park un-ghosts first)";
+				if (sopen && pass == 0 && !specbad)
+					specbad = "a spec window open across a `pause` (a park releases first)";
 				openpause = true;
 				if (sscanf(ln+6, "%i %f %i %15s", &ppmt, &ppc, &pptk, why) != 4)
 				{
@@ -4787,6 +4890,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			nghost = cgho;
 			if (gopen && !ghostbad)
 				ghostbad = "a ghost window open at the finish";
+			nspec = cspc;
+			if (sopen && !specbad)
+				specbad = "a spec window open at the finish";
 			if (openpause && !sesbad)
 				sesbad = "a `pause` no `session` answers (the run is still parked)";
 			if (!nin)
@@ -4809,6 +4915,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			ses = Z_Malloc(sizeof(*ses) * (nses?nses:1));
 			rst = Z_Malloc(sizeof(*rst) * (nrestart?nrestart:1));
 			gho = Z_Malloc(sizeof(*gho) * (nghost?nghost:1));
+			spc = Z_Malloc(sizeof(*spc) * (nspec?nspec:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4819,7 +4926,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho); Z_Free(spc);
 		return;
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
@@ -4838,7 +4945,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		RECSIM_REFUSE(sesbad);
 		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i: %s.\n", fname, filever, sesbad);
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho); Z_Free(spc);
 		return;
 	}
 	if (hdrtick <= 0)
@@ -4943,6 +5050,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "a save-state resume or retry";
 		else if (ghostbad)
 			refuse = ghostbad;
+		else if (specbad)
+			refuse = specbad;
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
@@ -4991,7 +5100,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			Con_Printf("VERIFY %s REFUSE %s\n", fname, refuse);
 			Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
+			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho); Z_Free(spc);
 			return;
 		}
 	}
@@ -5035,6 +5144,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		qboolean ghosting = false, gempty = false;
 		int    gtick_row = -1, gtick_file = 0, gtick_trace = 0;
 		int    ginput_row = -1, ginput_late = 0;
+		int    spcur = 0, spbrow = -1;	/* Patch 380 */
+		char   spwhy[160], spbwhy[160];
 		int    sclk_n = -1, sclk_trace = 0, sclk_pause = 0, sclk_sess = 0;
 		int    sjmp_n = -1, sjmp_row = -1;
 		float  sjmp_o = 0, sjmp_v = 0;
@@ -5044,6 +5155,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		   reason ARM 2 may not re-seed it mid-run. */
 		pmsourcestate_t zerostate;
 		memset(&zerostate, 0, sizeof(zerostate));
+		*spwhy = *spbwhy = 0;
 		for (k = 0; k < 3; k++)
 		{
 			savetv[k] = recsim_tracecv[k]->value;
@@ -5172,10 +5284,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			if (!exact)
 				pmove.msec_carry = ins[0].carry;
 			wcur = 0;			/* Patch 328: each pass replays the warps */
+			spcur = 0;			/* Patch 380 */
 			/* Patch 347: a v9 warp at row -1 came between open and the first
 			   command, so it is imposed on the seed. */
 			for (; filever >= 9 && wcur < nwarp && wrp[wcur].mt >= 0 && wrp[wcur].row < 0; wcur++)
 			{
+				RECSIM_SPEC_UPTO(-1, wcur, ins[0].mt - instart_run, ins[0].mt, ins[0].carry);
 				VectorCopy(wrp[wcur].org, pmove.origin);
 				VectorCopy(wrp[wcur].vel, pmove.velocity);
 				if (wrp[wcur].fl >= 0)
@@ -5191,6 +5305,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				ghosting = gho[gcur].on;
 			gwin_mt = ins[0].mt;
 			gempty = false;
+			/* Patch 380: an edge before the first command states the seed's counters. */
+			RECSIM_SPEC_UPTO(-1, nwarp, ins[0].mt - instart_run, ins[0].mt, ins[0].carry);
 			sbase_mt = instart_run;
 			sbase_ticks = 0;
 
@@ -5435,6 +5551,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					}
 					else if (wrp[wcur].mt > next_mt)
 						break;
+					RECSIM_SPEC_UPTO(i, wcur, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
 					if (exact && wrp[wcur].fl >= 0)
@@ -5610,6 +5727,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				{
 					if (wrp[wcur].mt < 0)
 						continue;
+					/* Patch 380: `!r` releasing a hold writes `spec 0` above its warp */
+					RECSIM_SPEC_UPTO(i, wcur, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
 					if (exact && wrp[wcur].fl >= 0)
@@ -5636,6 +5755,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					else
 						VectorCopy(pmove.origin, vlastp);	/* SV_GhostSet -> SV_TimerWarped */
 				}
+				/* Patch 380: a spec edge after this packet states the counters after this
+				   move, which the next counter-bearing line restates, and this body. */
+				RECSIM_SPEC_UPTO(i, nwarp, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
 			}
 		}
 
@@ -5643,6 +5765,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			Con_Printf("  restarts  %i of %i applied to the zone latches (SV_VerifyRestart)\n", nrsapplied, nrestart);
 		if (nghost && verify)
 			Con_Printf("  ghost     %i edge(s), %i packet scan(s) skipped while detached\n", nghost, nghskip);
+		if (nspec)
+			Con_Printf("  spec      %i window(s), %i line(s) inside\n", nspec/2, nspinside);
 		if (!nmc)
 			Con_Printf("  counts    none -- the client predates Patch 376\n");
 		else if (!mcbad)
@@ -5750,6 +5874,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				Q_snprintfz(why, sizeof(why), "ghost at row %i: the file says tick %i, the trace %i", gtick_row, gtick_file, gtick_trace);
 			else if (ginput_row >= 0)
 				Q_snprintfz(why, sizeof(why), "ghost: input at row %i, %i ticks into a detached window", ginput_row, ginput_late);
+			else if (spinside_row >= 0)	/* Patch 380 */
+				Q_snprintfz(why, sizeof(why), "spec: a `%s` line inside a held window (before row %i)", spinside_kind, spinside_row);
+			else if (*spwhy)
+				Q_strncpyz(why, spwhy, sizeof(why));
+			else if (*spbwhy && (!x_bad || x_first >= spbrow))	/* not an earlier divergence */
+				Q_strncpyz(why, spbwhy, sizeof(why));
 			else if (mcbad)	/* Patch 376: a delta rewritten between the ring and the read */
 				Q_snprintfz(why, sizeof(why), "counts: the view read mouse counts the device did not send (%i record(s), first at row %i)", mcbad, mcrow);
 			else if (x_bad)
@@ -5796,6 +5926,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	Z_Free(ses);
 	Z_Free(rst);
 	Z_Free(gho);
+	Z_Free(spc);
 }
 
 static void SV_RecSim_f (void)

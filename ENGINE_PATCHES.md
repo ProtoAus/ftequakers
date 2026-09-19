@@ -30306,6 +30306,41 @@ XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
 Not verified: DGA (XWayland has none), the VidMode line (never printed), native
 distros other than Debian.
 
+## Patch 380 — a spectating runner's body is held, and pm_verify reads the hold  *(APPLIED -- `server/sv_user.c` (SV_RunCmd: the optional QC field `run_pmhold` zeroes the command's msec after the anti-hover debit, skips the Patch 346 pin/physent snapshot, links the player without touching triggers), `server/pr_cmds.c` (`infokey(world, "*pmhold")` is "1"), `server/sv_ccmds.c` (SV_RecSim_Run reads `spec`: structure REFUSEs; counter and pair HOLDs; the body against the replay, bound in file order between the row's warps and reported only when the replay had not diverged first); FTESurf `ftesurf/cfg/test/p380verify.cfg`, `p382*.cfg` (Patch 382 drives the hold). VERIFIED: see below.)*
+
+**Problem.** Spectating mid-run must leave the body exactly where it was and hand the
+run back ranked.  A MOVETYPE_NONE pin is not a hold: PMSrc_Tick still runs
+ReduceTimers, rampoff and categorize before it dispatches PM_NONE, so stamina and the
+duck timer decay under it, and the counted clock needs QC arithmetic to take the
+pinned ticks back out.
+
+**Change.** While QC sets `.run_pmhold`, SV_RunCmd runs every command with msec 0:
+zero mover ticks, so pmsrc, origin, velocity and `run_movetick` stay put and the
+counted clock stops by construction.  No trigger is touched and no pin epoch is
+minted.  An older engine answers `*pmhold` with "" and the progs refuse a ranked
+hold.  pm_verify reads `spec 1|0 <ticks> <mt> <carry> <org> <vel> <fl> <wall> [why]`
+from the grammar: REFUSE a malformed or unpaired edge, a window open at the finish or
+across a `pause`, a ghost edge inside one; HOLD any line inside a window, counters
+that are not the trace's (the next counter-bearing line restates them, exactly), two
+edges that disagree, or a body off the replay by more than RECSIM_SESS_TOL.  An edge
+is checked where it sits among its row's warps (a `!r` release writes `spec 0` above
+its zone warp), and a body mismatch after an earlier divergence is reported as that
+divergence.
+
+**Verified.** Derived from a PASS file (bhop_eazy): the pair PASSes after the row's
+warp and before the first command; mt+1, a line inside, a missing edge, org +16,
+carry +0.001, a ghost inside, a pause inside, tick +1, fl changed, a malformed edge,
+and the pair moved above the warp it states all HOLD or REFUSE; the 377 binary PASSes
+them.  p373/p369/p367verify and p356newer are unchanged.  Live, under Patch 382 on the
+listen host: `*pmstate` byte-identical at both edges with a duck timer running (the
+`rec_watch` control decays it) and with forward, strafe, jump and duck held; a func_bhop
+dwell does not fire inside a hold; real spectated files -- a mid-air hold, a release
+through `!r`, a disconnect park resumed as a second session, a notarget release --
+PASS, and edits of them HOLD/REFUSE where the 377 binary PASSes them.  An independent
+review (three lenses, two skeptics each) found the warp-order false HOLD, the
+divergence blame and a carry tolerance on a false comment; all three fixed and
+re-run.  Not yet: the Pi aarch64 build.
+
 ## Patch 383 — every lobby body at 66 Hz, tick-stamped and interpolated  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/server/sv_pose.qc` and `src/client/cl_body.qc`; `sv_lobby.qc` (SendEntity avatars, `lobby_av_stream`, `lobby_av_budget`, the whole-tick cap), `sv_player.qc`/`sv_main.qc` (Pose_Capture per packet, Pose_Frame), `cl_main.qc` (Body_Frame), `cl_keys.qc`, `cl_netmon.qc`, `lobby.cfg` (`lobby_av_rate 0`), `tools/bodytrace.py`. VERIFIED: FTESurf `cfg/test/p383view.cfg` (+ `p383sv`, `p383own`), `p270_net`, `p278b`.)*
 
 **Problem.** Other players were engine avatars posed on a float-time gate -- 13.3 Hz
