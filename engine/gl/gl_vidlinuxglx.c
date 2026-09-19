@@ -1364,6 +1364,7 @@ typedef struct
 #define XISlaveKeyboard		4
 #define XIAllDevices		0
 #define XIAllMasterDevices	1
+#define XI_HierarchyChanged	11
 #define XI_RawButtonPress	15
 #define XI_RawButtonRelease	16
 #define XI_RawMotion		17
@@ -1431,6 +1432,8 @@ static struct
 			float old;
 		} axis[2]; //the meaning of any other axis is unknown. beware that they DO happen.
 		qboolean abs;
+		qboolean xtest;	//Patch 387: an XTEST slave -- synthesized input, rejected
+		qboolean known;	//Patch 387: classified against the live device; cleared on hierarchy change
 	} *deviceinfo;
 	int nextqdev;
 
@@ -1439,7 +1442,13 @@ static struct
 	XIDeviceInfo *(*pXIQueryDevice)(Display *dpy, int deviceid, int *ndevices_return);
 	void (*pXIFreeDeviceInfo)(XIDeviceInfo *info);
 } xi2;
-static struct xidevinfo *XI2_GetDeviceInfo(int devid)
+//Patch 387: Xext/xtest.c posts core XTEST requests (xdotool) on "<master> XTEST pointer"; only those are caught by name. A real device borrowing the name only gets itself rejected.
+static qboolean XI2_IsXTest(const char *n)
+{
+	size_t l = n?strlen(n):0;
+	return l >= 14 && !strcmp(n+l-14, " XTEST pointer");
+}
+static struct xidevinfo *XI2_Slot(int devid)
 {
 	if (devid >= xi2.ndeviceinfos)
 	{
@@ -1448,40 +1457,50 @@ static struct xidevinfo *XI2_GetDeviceInfo(int devid)
 		Z_Free(xi2.deviceinfo);
 		xi2.deviceinfo = n;
 		while (xi2.ndeviceinfos <= devid)
+			xi2.deviceinfo[xi2.ndeviceinfos++].qdev = DEVID_UNSET;	//zeroed: known = false
+	}
+	return &xi2.deviceinfo[devid];
+}
+//Patch 387: (re)classify from a live XIDeviceInfo, keeping qdev. NULL = the device is gone.
+static void XI2_ClassifyInfo(struct xidevinfo *d, int devid, XIDeviceInfo *dev)
+{
+	int j;
+	for (j = 0; j < countof(d->axis); j++)
+	{	//keep .old: it fills an absolute event's missing axis, and zeroing it on every hot-plug snapped the pointer to an edge
+		d->axis[j].abs = false;
+		d->axis[j].min = d->axis[j].max = 0;
+	}
+	d->abs = d->xtest = false;
+	d->known = !!dev;
+	if (!dev)
+		return;
+	d->xtest = XI2_IsXTest(dev->name);
+	for (j = 0; j < dev->num_classes; j++)
+	{
+		if (dev->classes[j]->sourceid == devid && dev->classes[j]->type == XIValuatorClass)
 		{
-			xi2.deviceinfo[xi2.ndeviceinfos].qdev = DEVID_UNSET;
-			if (devid >= 2)
+			XIValuatorClassInfo *v = (XIValuatorClassInfo*)dev->classes[j];
+			if (v->mode == XIModeAbsolute && v->number >= 0 && v->number < countof(d->axis))
 			{
-				int devs;
-				XIDeviceInfo *dev = xi2.pXIQueryDevice(vid_dpy, xi2.ndeviceinfos, &devs);
-				if (dev)
-				{
-					if (devs==1)
-					{
-						int j;
-						for (j = 0; j < dev->num_classes; j++)
-						{
-							if (dev->classes[j]->sourceid == xi2.ndeviceinfos && dev->classes[j]->type == XIValuatorClass)
-							{
-								XIValuatorClassInfo *v = (XIValuatorClassInfo*)dev->classes[j];
-								if (v->mode == XIModeAbsolute && v->number >= 0 && v->number < countof(xi2.deviceinfo[xi2.ndeviceinfos].axis))
-								{
-									xi2.deviceinfo[xi2.ndeviceinfos].abs = xi2.deviceinfo[xi2.ndeviceinfos].axis[v->number].abs = true;
-									xi2.deviceinfo[xi2.ndeviceinfos].axis[v->number].min = v->min;
-									xi2.deviceinfo[xi2.ndeviceinfos].axis[v->number].max = v->max;
-								}
-							}
-						}
-					}
-					xi2.pXIFreeDeviceInfo(dev);
-				}
+				d->abs = d->axis[v->number].abs = true;
+				d->axis[v->number].min = v->min;
+				d->axis[v->number].max = v->max;
 			}
-			
-			xi2.ndeviceinfos++;
 		}
 	}
-		
-	return &xi2.deviceinfo[devid];
+}
+static struct xidevinfo *XI2_GetDeviceInfo(int devid)
+{
+	struct xidevinfo *d = XI2_Slot(devid);
+	if (!d->known && devid >= 2)
+	{	//ids 0/1 are XIAllDevices/XIAllMasterDevices, never a source
+		int devs;
+		XIDeviceInfo *dev = xi2.pXIQueryDevice(vid_dpy, devid, &devs);
+		XI2_ClassifyInfo(d, devid, (dev && devs == 1)?dev:NULL);
+		if (dev)
+			xi2.pXIFreeDeviceInfo(dev);
+	}
+	return d;
 }
 static qboolean XI2_Init(void)
 {
@@ -1535,6 +1554,7 @@ static qboolean XI2_Init(void)
 		XISetMask(maskbuf, XI_RawMotion);
 		XISetMask(maskbuf, XI_RawButtonPress);
 		XISetMask(maskbuf, XI_RawButtonRelease);
+		XISetMask(maskbuf, XI_HierarchyChanged);	//Patch 387: reclassify on hot-plug/create-master
 /*		if (xi2.vmajor >= 2 && xi2.vminor >= 2)
 		{
 			XISetMask(maskbuf, XI_RawTouchBegin);
@@ -1545,6 +1565,40 @@ static qboolean XI2_Init(void)
 		return true;
 	}
 	return false;
+}
+
+//Patch 387: the X11 grant (in_rawmice, in_generic.c Patch 301/326). XI2: enabled relative non-XTEST
+//slave pointers; core/DGA: 0, OS-summed and OS-accelerated. Every cached id is reclassified, so a
+//reused id (xinput create-master) cannot keep a stale "mouse". Keys are core KeyPress: rawkbd 0.
+static void X11_PublishGrant(void)
+{
+	int n = 0, i, devs;
+	if (x11_input_method == XIM_XI2 && vid_dpy)
+	{
+		XIDeviceInfo *dev = xi2.pXIQueryDevice(vid_dpy, xi2.devicegroup, &devs);
+		for (i = 0; i < xi2.ndeviceinfos; i++)
+			xi2.deviceinfo[i].known = false;
+		for (i = 0; dev && i < devs; i++)
+		{
+			struct xidevinfo *d;
+			if (dev[i].deviceid < 2)
+				continue;
+			d = XI2_Slot(dev[i].deviceid);
+			XI2_ClassifyInfo(d, dev[i].deviceid, &dev[i]);
+			if (!dev[i].enabled || dev[i].use != XISlavePointer)
+				continue;
+			Con_DPrintf("XInput2: %s \"%s\"\n", d->xtest?"xtest":d->abs?"tablet":"mouse", dev[i].name);
+			if (!d->xtest && !d->abs)
+				n++;
+		}
+		if (dev)
+			xi2.pXIFreeDeviceInfo(dev);
+		if (in_raw_injected < 0)
+			in_raw_injected = 0;	//monotone, as in_win.c. in_raw_unenum stays -1: not counted here
+	}
+	in_rawmice_live = n;
+	in_rawkbd_live = 0;
+	Con_DPrintf("X11 input grant: %i raw mice\n", n);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -2747,6 +2801,7 @@ XKEY_QUAKE_MAP()
 	}
 }
 
+static unsigned int x11_corepressed;	//Patch 387: X buttons whose press arrived as a core ButtonPress
 static void install_grabs(void)
 {
 	if (!mouse_grabbed)
@@ -2902,10 +2957,19 @@ static void GetEvent(void)
 					if (mouse_grabbed)
 					{
 						XIRawEvent *raw = event.xcookie.data;
-						int *qdev = &XI2_GetDeviceInfo(raw->sourceid)->qdev;
+						int *qdev;
+						struct xidevinfo *devi;
 						int button = raw->detail;	//1-based
 						if (raw->sourceid != raw->deviceid)
-							return;	//ignore master devices to avoid dupes.
+							break;	//ignore master devices to avoid dupes. (Patch 387: break, so XFreeEventData runs)
+						devi = XI2_GetDeviceInfo(raw->sourceid);
+						if (devi->xtest || !devi->known)
+						{	//Patch 387: X11's SendInput, rejected before it can take a qdev. !known = the device is already gone: dropped uncounted.
+							if (devi->xtest && in_raw_injected >= 0)
+								in_raw_injected++;
+							break;
+						}
+						qdev = &devi->qdev;
 						if (*qdev == DEVID_UNSET)
 							*qdev = xi2.nextqdev++;
 						switch(button)
@@ -2934,12 +2998,19 @@ static void GetEvent(void)
 					if (mouse_grabbed)
 					{
 						XIRawEvent *raw = event.xcookie.data;
-						struct xidevinfo *dev = XI2_GetDeviceInfo(raw->sourceid);
+						struct xidevinfo *dev;
 						double *val, *raw_val;
 						double axis[2] = {0, 0};
 						int i;
 						if (raw->sourceid != raw->deviceid)
-							return;	//ignore master devices to avoid dupes (we have our own device remapping stuff which should be slightly more friendly).
+							break;	//ignore master devices to avoid dupes (we have our own device remapping stuff which should be slightly more friendly).
+						dev = XI2_GetDeviceInfo(raw->sourceid);
+						if (dev->xtest || !dev->known)
+						{	//Patch 387: as for buttons above
+							if (dev->xtest && in_raw_injected >= 0)
+								in_raw_injected++;
+							break;
+						}
 						if (dev->qdev == DEVID_UNSET)
 							dev->qdev = xi2.nextqdev++;
 						val = raw->valuators.values;
@@ -2969,6 +3040,9 @@ static void GetEvent(void)
 						}
 						IN_MouseMove(dev->qdev, dev->abs, axis[0], axis[1], 0, 0);
 					}
+					break;
+				case XI_HierarchyChanged:	//Patch 387: hot-plug, create/remove-master, enable/disable, attach/detach
+					X11_PublishGrant();
 					break;
 				default:
 					Con_Printf("Unknown xinput event %u!\n", event.xcookie.evtype);
@@ -3054,6 +3128,8 @@ static void GetEvent(void)
 	case ButtonPress:
 		if (x11_input_method == XIM_XI2 && mouse_grabbed)
 			break;	//no dupes!
+		if (event.xbutton.button < 32)
+			x11_corepressed |= 1u<<event.xbutton.button;	//Patch 387: its release must get through even if a grab starts first
 		b=-1;
 		if (event.xbutton.button == 1)
 			b = K_MOUSE1;
@@ -3099,6 +3175,12 @@ static void GetEvent(void)
 		break;
 
 	case ButtonRelease:
+		//Patch 387: as ButtonPress -- XI_RawButtonRelease carries it (an XTEST one is rejected there) --
+		//unless the press itself came through here (ungrabbed), or its devid-0 key would stay held.
+		if (x11_input_method == XIM_XI2 && mouse_grabbed && !(event.xbutton.button < 32 && (x11_corepressed & (1u<<event.xbutton.button))))
+			break;
+		if (event.xbutton.button < 32)
+			x11_corepressed &= ~(1u<<event.xbutton.button);
 		b=-1;
 		if (event.xbutton.button == 1)
 			b = K_MOUSE1;
@@ -3526,6 +3608,9 @@ static void GLVID_Shutdown(void)
 	}
 
 	currentpsl = PSL_NONE;
+	x11_input_method = XIM_ORIG;	//Patch 387: the grant dies with the display, as in_win.c
+	in_rawmice_live = 0;
+	in_rawkbd_live = 0;
 }
 
 void GLVID_DeInit(void)	//FIXME:....
@@ -4527,6 +4612,7 @@ static qboolean X11VID_Init (rendererstate_t *info, unsigned char *palette, int 
 		x11_input_method = XIM_ORIG;
 		Con_DPrintf("Using X11 mouse\n");
 	}
+	X11_PublishGrant();	//Patch 387
 	XCursor_Init();
 	X11Xss_Init();
 
@@ -5026,6 +5112,12 @@ void Sys_SendKeyEvents(void)
 }*/
 
 
+#ifdef WAYLANDQUAKE
+//Patch 387, gl_vidwayland.c: both return false unless Wayland is the live backend
+qboolean WL_PublishGrant(void);
+qboolean WL_EnumerateDevices(void *ctx, void(*callback)(void *ctx, const char *type, const char *devicename, unsigned int *qdevid));
+#endif
+
 //these are done from the x11 event handler. we don't support evdev.
 void INS_Move(void)
 {
@@ -5037,14 +5129,28 @@ void INS_Init(void)
 {
 }
 void INS_ReInit(void)
-{
+{	//Patch 387: in_restart and vid_restart republish the grant
+#ifdef WAYLANDQUAKE
+	if (WL_PublishGrant())
+		return;
+#endif
+#ifndef NO_X11
+	if (vid_dpy)
+		X11_PublishGrant();
+#endif
 }
 void INS_Shutdown(void)
 {
 }
 void INS_EnumerateDevices(void *ctx, void(*callback)(void *ctx, const char *type, const char *devicename, unsigned int *qdevid))
 {
+#ifdef WAYLANDQUAKE
+	if (WL_EnumerateDevices(ctx, callback))
+		return;	//Patch 387
+#endif
 #ifndef NO_X11
+	if (!vid_dpy)
+		return;	//Patch 387: x11_input_method used to outlive the display, reaching XIQueryDevice(NULL)
 	callback(ctx, "keyboard", "x11", NULL);
 	switch(x11_input_method)
 	{
@@ -5067,7 +5173,7 @@ void INS_EnumerateDevices(void *ctx, void(*callback)(void *ctx, const char *type
 					if (/*dev[i].use == XIMasterPointer ||*/ dev[i].use == XISlavePointer)
 					{
 						struct xidevinfo *devi = XI2_GetDeviceInfo(dev[i].deviceid);
-						callback(ctx, devi->abs?"tablet":"mouse", dev[i].name, &devi->qdev);
+						callback(ctx, devi->xtest?"xtest":devi->abs?"tablet":"mouse", dev[i].name, &devi->qdev);	//Patch 387: xtest
 					}
 //					else if (dev[i].use == XIMasterKeyboard || dev[i].use == XISlaveKeyboard)
 //					{

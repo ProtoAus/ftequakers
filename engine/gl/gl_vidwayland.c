@@ -1184,6 +1184,27 @@ static const struct wl_keyboard_listener keyboard_listener =
 	WL_keyboard_handle_key,
 	WL_keyboard_handle_modifiers
 };
+/*Patch 387: Wayland's grant (in_generic.c Patch 301/326). 1 = relative-pointer and pointer-constraints
+  exist, so a LOCKED pointer reads unaccelerated deltas. Unlocked (menus, in_windowed_mouse 0, a refused
+  lock) the view takes absolute, compositor-accelerated drag-look -- the same caveat as in_windowed_mouse 0
+  on X11 and Windows. One merged seat: injection cannot be told apart, so the counters stay -1.*/
+qboolean WL_PublishGrant(void)
+{
+	if (!w.display)
+		return false;
+	in_rawmice_live = (w.pointer && w.relative_pointer && w.pointer_constraints)?1:0;
+	in_rawkbd_live = 0;
+	return true;
+}
+qboolean WL_EnumerateDevices(void *ctx, void(*callback)(void *ctx, const char *type, const char *devicename, unsigned int *qdevid))
+{
+	if (!w.display)
+		return false;
+	callback(ctx, "keyboard", "wayland", NULL);
+	if (w.pointer)	//NULL: every Wayland pointer event is sent as devid 0, so in_deviceids must say it cannot be remapped
+		callback(ctx, "mouse", (in_rawmice_live > 0)?"wayland-relative-pointer":"wayland", NULL);
+	return true;
+}
 static void WL_seat_handle_capabilities(void *data, struct wl_seat *seat, enum wl_seat_capability caps)
 {
 	struct wdisplay_s *s = data;
@@ -1207,6 +1228,7 @@ static void WL_seat_handle_capabilities(void *data, struct wl_seat *seat, enum w
 		{
 			pwl_proxy_marshal((struct wl_proxy *) w.relative_pointer, ZWP_RELATIVE_POINTER_V1_DESTROY);
 			pwl_proxy_destroy((struct wl_proxy *) w.relative_pointer);
+			w.relative_pointer = NULL;	//Patch 387: was left dangling
 		}
 	}
 
@@ -1220,6 +1242,7 @@ static void WL_seat_handle_capabilities(void *data, struct wl_seat *seat, enum w
 		pwl_keyboard_destroy(s->keyboard);
 		s->keyboard = NULL;
 	}
+	WL_PublishGrant();	//Patch 387
 }
 static const struct wl_seat_listener seat_listener =
 {
@@ -1539,6 +1562,7 @@ static qboolean WLVK_SetupSurface(void)
 
 static qboolean WL_NameAndShame(void)
 {
+	WL_PublishGrant();	//Patch 387
 	//called after the renderer has been initialised, so these messages should be more prominant.
 	if (!w.relative_pointer)
 		Con_Printf(CON_WARNING "WARNING: Wayland server does not support %s, "CON_ERROR"mouse grabs are not supported\n", WP_RELATIVE_POINTER_MANAGER_NAME);
@@ -1808,6 +1832,8 @@ static void WL_DeInit(void)
 	}
 	Z_Free(w.csdcaption);
 	memset(&w, 0, sizeof(w));
+	in_rawmice_live = 0;	//Patch 387: the grant dies with the display
+	in_rawkbd_live = 0;
 }
 static qboolean WL_ApplyGammaRamps(unsigned int gammarampsize, unsigned short *ramps)
 {

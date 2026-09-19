@@ -88,7 +88,7 @@ build has it) while in_win.o is Windows-only; a backend that never assigns them 
 honest -1 standing.  in_win.c maintains them at three sites, all marked Patch 301.
 */
 int in_rawmice_live = -1;
-int in_rawkbd_live = -1;
+int in_rawkbd_live = -1;	//Patch 387: gl_vidlinuxglx.c (X11) and gl_vidwayland.c maintain these too
 
 /*
 FTESurf Patch 326 -- THE GRANT, WHERE QC CAN READ IT.
@@ -194,8 +194,8 @@ never assigns them leaves the honest -1 standing.  in_win.c lifts them to 0 when
 input actually binds, and they are monotone from there -- never reset, because the
 journal reports DELTAS against a baseline it took at begin, and a counter that restarts
 would hand it a negative one.*/
-int in_raw_injected = -1;
-int in_raw_unenum = -1;
+int in_raw_injected = -1;	//Patch 387: X11 XI2 counts XTEST here too
+int in_raw_unenum = -1;	//Patch 387: ...but leaves this at -1
 
 /*FTESurf Patch 307: THE BUTTON THAT GOT THROUGH.
 
@@ -1727,9 +1727,9 @@ static void IN_Journal_DeviceLine(void *vctx, const char *type, const char *devi
 static void IN_JournalBegin_f(void)
 {
 	/*Read by name rather than linked: both live in the platform backend
-	  (in_win.c) as statics, and this file is the cross-platform one.  A missing
-	  cvar reports as 0, which is the truthful answer on a platform that has no
-	  raw input at all.*/
+	  (in_win.c) as statics, and this file is the cross-platform one.  Patch 387:
+	  a missing cvar reports as -1 (no such request on this backend), not 0,
+	  which read as "raw input turned off" on every Linux journal.*/
 	cvar_t *raw = Cvar_FindVar("in_rawinput");
 	cvar_t *rawkbd = Cvar_FindVar("in_rawinput_keyboard");
 	cvar_t *nolegacy = Cvar_FindVar("in_rawinput_nolegacy");	/*Patch 307*/
@@ -1796,11 +1796,11 @@ static void IN_JournalBegin_f(void)
 		"m_accel_senscap %.9g\n",
 		InfoBuf_ValueForKey(&cl.serverinfo, "map"),
 		in_jrn_base,
-		raw?raw->ival:0,
-		rawkbd?rawkbd->ival:0,
+		raw?raw->ival:-1,
+		rawkbd?rawkbd->ival:-1,
 		in_rawmice_live,	/*Patch 301: the GRANT, beside the request above*/
 		in_rawkbd_live,
-		nolegacy?nolegacy->ival:0,	/*Patch 307: the request...*/
+		nolegacy?nolegacy->ival:-1,	/*Patch 307: the request...*/
 		in_raw_nolegacy_live,		/*...and what it actually got*/
 		sensitivity.value,
 		in_sensitivityscale,

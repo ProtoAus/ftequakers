@@ -30283,6 +30283,70 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 387 — Linux: X11 and Wayland publish the raw-input grant; core XTEST is rejected and counted  *(APPLIED -- `gl/gl_vidlinuxglx.c` (live XI2 classification: `xtest` by the " XTEST pointer" suffix and `known`; XI2_ClassifyInfo keeps `axis[].old`; select XI_HierarchyChanged; X11_PublishGrant at init, INS_ReInit and every hierarchy event; XTEST rejected+counted before qdev assignment; dupe tests `break`; core ButtonPress and ButtonRelease guarded under XIM_XI2+grabbed, except the release of a button pressed before the grab; GLVID_Shutdown resets; INS_EnumerateDevices defers to Wayland and guards vid_dpy), `gl/gl_vidwayland.c` (WL_PublishGrant, WL_EnumerateDevices with a NULL pointer devid, relative pointer NULLed, WL_DeInit reset), `client/in_generic.c` (−1 for a missing request cvar); FTESurf `tools/hidcheck.py`, `tools/test_hidcheck.py`. VERIFIED on the portable chroot build: FTESurf `cfg/test/p387xi2`, `p387noxi2`, `p387span`, `p387wl`, `p387inj` (arms A/A'/B/C/D/E/H + controls F/G) and `p387xi2dev` (arm X).)*
+
+**Problem.** Nothing on Linux assigned the grant. `in_rawmice` stayed −1
+(unknown, still rankable), so `x11_allow_xi2 0; vid_restart` ran the view on
+OS-accelerated core deltas and the run ranked. Core XTEST raw events passed the
+master-dupe test and moved the view uncounted. The `.hid` header wrote 0 for
+Windows-only request cvars, and hidcheck read that as a GetCursorPos recentre.
+
+**Change.** Under XI2 the grant is the count of enabled, relative, non-XTEST
+slave pointers; core and DGA give 0, Wayland gives 1 only with relative-pointer
+and pointer-constraints. It is republished at init, on in_restart and on every
+hierarchy change, reclassifying every cached id so a reused id
+(`xinput create-master`) cannot stay "mouse". Core XTEST motion and buttons are
+rejected while grabbed and counted in `in_raw_injected`; `unenum` stays −1. No
+version bump, no QC change.
+
+**Verified.** Portable chroot build 7cb1179f1, Debian rig as `surf` under Xvfb,
+against the pre-387 build 23f1ce06b:
+
+| Arm | Patched | Pre-387 |
+|---|---|---|
+| XI2 | grant 1, would 0 | — |
+| `x11_allow_xi2 0` + vid_restart | 0, would 1 | −1, would 0 (the hole) |
+| second vid_restart | back to 1, would 0 | — |
+| `-noxi2` | 0, would 1 | — |
+| XI2 off+on mid-run (WSLg) | .rec flags 2048 | honest restarts: no 2048 |
+| X11→Wayland | grant 1 + Wayland table | crashes in XIQueryDevice(NULL) |
+| core XTEST motion, grabbed (B/C) | 0 `m`, injected 200/50 | 200/50 `m`, ranks |
+| core XTEST clicks, grabbed (D) | injected 50, no button record | accepted as clicks |
+| XTEST keystrokes (E) | 20 key, injected 0 (accepted) | 20 key |
+| reused-master XTEST (H) | 0 `m`, injected 200 | 200 `m`, ranks |
+| device XTEST on the real slave (X) | 200 `m`, accepted (bypass) | 200 `m` |
+
+hidcheck is byte-identical to HEAD over all 93 `.hid` files on disk;
+test_hidcheck 150/0, test_reccheck 229/0.
+
+**Ceiling — accepted and not counted (rank by Lex's decision of 2026-09-19,
+gap documented):**
+- **Pre-387 / self-built clients** report grant −1 and still rank. The QC
+  enforces `grant != 0`, and 387 adds no marker CSQC can read, so an unknown
+  backend cannot be told from an old Linux one. Lex chose *rank, gap documented*
+  over *demote unknown clients* (which would also demote SDL/macOS).
+- **Device-targeted XTEST** (arm X): `XTestFakeDeviceMotionEvent` /
+  `...ButtonEvent` against a real slave's id post AS that device, so the name
+  check misses them — the patch catches **core XTEST requests only** (xdotool).
+- **Compositor-level injection:** wlroots virtual-pointer, KDE fake-input, GNOME
+  RemoteDesktop / libei, including **Xwayland's XTEST over libei**; ydotool.
+- **uinput:** Steam's udev rules make `/dev/uinput` user-writable, so a virtual
+  relative mouse of any name is counted and accepted — no hardware, often no root.
+- **User-run X servers** (rootless Xorg, Xwayland, nested): a patched build can
+  post anything as a "physical" slave.
+- **Driver-level acceleration** (synaptics, libinput without unaccel values):
+  acceleration lands in the raw values.
+- **Ungrabbed drag-look** (`in_windowed_mouse 0`, shared with Windows) and
+  **xwayland-pointer absolute drag deltas** when the pointer is not locked.
+- **XTEST / XSendEvent keystrokes** arrive as core KeyPress and are accepted.
+- **Native Wayland with the lock refused** (e.g. sway `pointer_constraint
+  disable`): the grant stays 1 while the view takes compositor-accelerated
+  absolute motion.  Config-inducible; FTESurf prefers GLX on Linux (Patch 386).
+- A **mid-run hot-unplug of the only relative pointer** drops the grant to 0 and
+  demotes the run (TF_NOPROFILE).
+
+`sh_defs.qc`'s "an X11 build leaves the honest unknown" is now historical.
+
 ## Patch 386 — Linux: libraries by soname; Snap, Debian and XDG Steam  *(APPLIED -- `gl/gl_vidlinuxglx.c` (libXxf86vm.so.1, libXrandr.so.2, libXxf86dga.so.1 before the bare names), `gl/gl_videgl.c` (libGLESv2.so.2, libEGL.so.1, non-Windows only), `common/fs.c` (Sys_SteamVdfPath: the libraryfolders.vdf candidates incl. `~/snap/steam/common/...`, `~/.steam/debian-installation`, `$XDG_DATA_HOME/Steam`; `fs_steamlibs` lists the ones that exist); FTESurf `ftesurf/cfg/default.cfg` (`if $sys_platform == Linux set vid_renderer gl`), `tools/linux/rig-*.sh`. VERIFIED: FTESurf `cfg/test/p386lin.cfg` in a runtime-only Debian 13 WSL distro.)*
 
 **Problem.** Five libraries were dlopened by their unversioned name
