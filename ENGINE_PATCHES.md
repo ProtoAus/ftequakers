@@ -30283,6 +30283,49 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 398 — a teleport without a landmark snaps the angles whatever UseLandmarkAngles says  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_touch), `src/client/cl_triggers.qc` (its prediction mirror). VERIFIED: FTESurf `cfg/test/p398tele.cfg`.)*
+
+**Problem.** "The player doesn't take the teleport destination's view angles."
+Both sides read `UseLandmarkAngles "0"` as "keep my angles" in non-landmark mode;
+Source and Momentum (mom_triggers.cpp:930) snap whenever there is no landmark,
+the key speaks to landmark mode only.  A census of the installed maps: 3,596
+non-landmark teleports on 131 maps write it 0 (surf_dragon 511).  The same line
+lost `&& !(spawnflags & 32)` to fteqcc's `x = a && b` parse, so the 6 teleports
+with PRESERVE_ANGLES turned you.
+
+**Change.** snapang = !(spawnflags & 32) without a landmark, on both sides.
+Landmark mode is unchanged (it snaps only on UseLandmarkAngles 1).
+
+**Verified.** p398tele (listen server): surf_colours *7 (yaw 45 -> 90) and
+surf_island *55 (45 -> -90) turn you; HEAD keeps 45 on all three.  *11 (200 ->
+90) lands at 89.0: the engine's delta fixangle truncates (sv_send.c `int newa`,
+Patch 396).
+
+## Patch 394 — trigger_teleport_relative uses Source's rule  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_relative_touch). VERIFIED: FTESurf `cfg/test/p394a.cfg`, `p394b.cfg`, `p394rec.cfg`, `p394verify.cfg`.)*
+
+**Problem.** surf_4am `!s 2`..`!s 7` left you inside the floor.  Their
+destinations sit in 128x128x192 relative boxes; FTESurf added teleportoffset to
+the player's origin and kept velocity, while Source's
+CTriggerTeleportRelative::Touch (triggers.cpp:2305-2315; Momentum does not
+override it) moves you to the TRIGGER's WorldSpaceCenter() + offset, velocity
+zeroed.  The boxes landed 76 u inside the floor.
+
+**Change.** Centre (the absmin/absmax midpoint) + offset, velocity 0, angles
+untouched, lifted 1 u only if resting there is solid.  The planned SV_ZoneDest
+change (no floor snap inside a box) was dropped: the control showed the box
+fires from the snapped point anyway.  Every relative trigger now zeroes
+velocity, including the non-box maps (surf_colony's 43 slabs, bhop_collective's
+doorways, surf_ofrenda): Source parity, not yet playtested.
+
+**Verified.** p394a: surf_4am s2-s7 and b6 rest on their floors (s2 3424 -4000
+-4800), startsolid 0, the clock armed then running; HEAD: 76 u in the floor,
+startsolid 1.  p394b: all three sirius triggers land on one point; a
+bhop_collective doorway lands at x 0 wherever you enter.  p394rec/p394verify:
+a surf_sirius run crossing one (fixture zones): the warp is `telerel -384 -832
+-448 0 0 0`, reccheck 0 faults, pm_verify PASS 50/50 and the warp z+8 copy HOLDs
+"19 packet(s) differ, first at row 30", identically on the Pi's aarch64 binary.
+No old-rule recording could be verified (the Pi's three are REC 7).
+
 ## Patch 392 — Source's `cl_showfps`, and `chat_open`  *(APPLIED -- mod-side only, no engine change: FTESurf `ftesurf/cfg/default.cfg` (`alias cl_showfps show_fps`), `src/client/cl_chat.qc` (`chat_open`), `cl_spectate.qc` (SPEC_CMDS). VERIFIED: FTESurf `cfg/test/p392cmd.cfg`.)*
 
 **Problem.** Players who know Source type `cl_showfps`; FTE's cvar is `show_fps`,
