@@ -30283,6 +30283,29 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 386 — Linux: libraries by soname; Snap, Debian and XDG Steam  *(APPLIED -- `gl/gl_vidlinuxglx.c` (libXxf86vm.so.1, libXrandr.so.2, libXxf86dga.so.1 before the bare names), `gl/gl_videgl.c` (libGLESv2.so.2, libEGL.so.1, non-Windows only), `common/fs.c` (Sys_SteamVdfPath: the libraryfolders.vdf candidates incl. `~/snap/steam/common/...`, `~/.steam/debian-installation`, `$XDG_DATA_HOME/Steam`; `fs_steamlibs` lists the ones that exist); FTESurf `ftesurf/cfg/default.cfg` (`if $sys_platform == Linux set vid_renderer gl`), `tools/linux/rig-*.sh`. VERIFIED: FTESurf `cfg/test/p386lin.cfg` in a runtime-only Debian 13 WSL distro.)*
+
+**Problem.** Five libraries were dlopened by their unversioned name
+(`libEGL.so`, ...), which only exists where the `-dev` package is installed: a
+player's machine had no Wayland renderer (`libEGL library not loadable`) and no
+XRandR.  Steam installed as a snap, by Debian's steam-installer, or under
+`$XDG_DATA_HOME` was not found.  Native Wayland would also be a second input
+path beside XInput2.
+
+**Change.** Soname first, bare name as the fallback.  The vdf search is one
+ordered list, three layouts longer.  default.cfg prefers GLX on Linux; the
+engine still falls back to Wayland when GLX fails.
+
+**Verified.** Portable builds (tools/linux, bullseye) of 3dd8f93c5 (pre) and
+this commit (post) in a Debian 13 distro with no `-dev` package: X11 pre
+`XRandR library not available`, post none; Wayland pre `libEGL library not
+loadable`, post `OpenGL (Wayland) renderer initialized`; default boot GLX, and
+with `vid_renderer ""` (control) Wayland.  Steam, one layout per fake HOME:
+pre resolves only `~/.steam/steam`, post also snap, debian-installation and
+XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
+Not verified: DGA (XWayland has none), the VidMode line (never printed), native
+distros other than Debian.
+
 ## Patch 384 — SPACE pairs its release; the ghost's flight and stand-in are reusable  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_main.qc` (CLB_SPC in CL_ButtonBit), `src/client/cl_ghost.qc` (Ghost_Fly, Ghost_DrawBodyAt). VERIFIED: FTESurf `cfg/test/p384spc.cfg`.)*
 
 **Problem.** The build-56 release gate paired only the mouse buttons.  SPACE is

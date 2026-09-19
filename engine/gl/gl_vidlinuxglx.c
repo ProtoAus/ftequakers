@@ -549,6 +549,8 @@ static qboolean VMODE_Init(void)
 		return false;
 	}
 	
+	if (!vm.lib)	//ftesurf (P386): the soname first; the bare name exists only with -dev packages
+		vm.lib = Sys_LoadLibrary("libXxf86vm.so.1", vm_functable);
 	if (!vm.lib)
 		vm.lib = Sys_LoadLibrary("libXxf86vm", vm_functable);
 
@@ -831,6 +833,8 @@ static qboolean XRandR_Init(void)
 	if (!X11_CheckFeature("xrandr", true))
 		return false;
 
+	if (!xrandr.lib)	//ftesurf (P386): see libXxf86vm
+		xrandr.lib = Sys_LoadLibrary("libXrandr.so.2", xrandr_functable);
 	if (!xrandr.lib)
 		xrandr.lib = Sys_LoadLibrary("libXrandr", xrandr_functable);
 
@@ -1330,6 +1334,8 @@ static qboolean DGAM_Init(void)
 		return false;
 	}
 	
+	if (!dgam.lib)	//ftesurf (P386): see libXxf86vm
+		dgam.lib = Sys_LoadLibrary("libXxf86dga.so.1", dgam_functable);
 	if (!dgam.lib)
 		dgam.lib = Sys_LoadLibrary("libXxf86dga", dgam_functable);
 	return !!dgam.lib;

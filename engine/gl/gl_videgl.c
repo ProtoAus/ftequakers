@@ -171,7 +171,11 @@ qboolean EGL_LoadLibrary(char *driver)
 		(android's EGL bugs out if you use eglGetProcAddress for core functions too, note that EGL_KHR_get_all_proc_addresses fixes that.)
 	*/
 	Sys_Printf("Attempting to dlopen libGLESv2... ");
-	eslibrary = Sys_LoadLibrary("libGLESv2", NULL);
+#ifndef _WIN32
+	eslibrary = Sys_LoadLibrary("libGLESv2.so.2", NULL);	//ftesurf (P386): the soname; bare libGLESv2.so needs -dev
+	if (!eslibrary)
+#endif
+		eslibrary = Sys_LoadLibrary("libGLESv2", NULL);
 	if (!eslibrary)
 	{
 		Sys_Printf("failed\n");
@@ -200,7 +204,11 @@ qboolean EGL_LoadLibrary(char *driver)
 		Sys_Printf("unable to load some libGL\n");
 
 	Sys_Printf("Attempting to dlopen libEGL... ");
-	egllibrary = Sys_LoadLibrary("libEGL", qeglfuncs);
+#ifndef _WIN32
+	egllibrary = Sys_LoadLibrary("libEGL.so.1", qeglfuncs);	//ftesurf (P386): as libGLESv2
+	if (!egllibrary)
+#endif
+		egllibrary = Sys_LoadLibrary("libEGL", qeglfuncs);
 	if (!egllibrary)
 	{
 		Sys_Printf("failed\n");

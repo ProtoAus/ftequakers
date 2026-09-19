@@ -6786,46 +6786,68 @@ static void Sys_FindBaseDirs(const char *poshname, const char *gamename, void (*
 //ftesurf (P182): Sys_SteamLibraryHasFile and Sys_SteamParseLibraries used to be defined
 //here, unix-only.  They are now shared with the Win32 branch and live above the whole
 //#if chain; the probe no longer uses `access` so it builds on both.  See the P182 block.
+//ftesurf (P276): where to look for a libraryfolders.vdf, relative to $HOME.  The
+//first two are what was here before; the rest are what real machines use -- the
+//flatpak build lives under .var/app, .steam/root is the usual symlink, and macOS
+//puts it in Library/Application Support.  Steam keeps a copy of the vdf in BOTH
+//steamapps/ and config/ and keeps both current, so probe both (plus the legacy
+//capitalised SteamApps, which the second line here used to spell that way and
+//which still matters on a case-sensitive filesystem).  Each miss is one failed
+//open, so the whole table costs nothing when the first entry hits.
+//ftesurf (P386): + Canonical's Steam snap (its HOME is ~/snap/steam/common), Debian's
+//steam-installer without the ~/.steam/steam symlink, and $XDG_DATA_HOME/Steam.
+//Returns 1 with a candidate in `out`, 0 for an index with none (no $HOME), -1 past the end.
+static int Sys_SteamVdfPath(unsigned int idx, char *out, size_t outsize)
+{
+	static const char *steamhomes[] = {
+		".steam/steam",
+		".local/share/Steam",
+		".steam/root",
+		".var/app/com.valvesoftware.Steam/.local/share/Steam",
+		"snap/steam/common/.local/share/Steam",
+		"snap/steam/common/.steam/steam",
+		".steam/debian-installation",
+		"Library/Application Support/Steam",
+	};
+	static const char *steamsubs[] = {"steamapps", "config", "SteamApps"};
+	const unsigned int nh = countof(steamhomes), ns = countof(steamsubs);
+	const char *home = getenv("HOME"), *xdg = getenv("XDG_DATA_HOME");
+
+	if (idx < nh*ns)
+	{
+		if (!home || !*home)
+			return 0;
+		Q_snprintfz(out, outsize, "%s/%s/%s/libraryfolders.vdf", home, steamhomes[idx/ns], steamsubs[idx%ns]);
+		return 1;
+	}
+	idx -= nh*ns;
+	if (idx < ns)
+	{
+		if (!xdg || !*xdg)
+			return 0;
+		Q_snprintfz(out, outsize, "%s/Steam/%s/libraryfolders.vdf", xdg, steamsubs[idx]);
+		return 1;
+	}
+	return -1;
+}
+#define FTESURF_STEAMVDF 1	//fs_steamlibs lists these candidates
 static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callback)(void*ctx,const char*basepath),void*ctx)	//returns the base system path
 {
 	/*
 	Find where Valve's Steam distribution platform is installed.
 	Then take a look at that location for the relevent installed app.
 	*/
-	//ftesurf (P276): where to look for a libraryfolders.vdf, relative to $HOME.  The
-	//first two are what was here before; the rest are what real machines use -- the
-	//flatpak build lives under .var/app, .steam/root is the usual symlink, and macOS
-	//puts it in Library/Application Support.  Steam keeps a copy of the vdf in BOTH
-	//steamapps/ and config/ and keeps both current, so probe both (plus the legacy
-	//capitalised SteamApps, which the second line here used to spell that way and
-	//which still matters on a case-sensitive filesystem).  Each miss is one failed
-	//open, so the whole table costs nothing when the first entry hits.
-	static const char *steamhomes[] = {
-		".steam/steam",
-		".local/share/Steam",
-		".steam/root",
-		".var/app/com.valvesoftware.Steam/.local/share/Steam",
-		"Library/Application Support/Steam",
-	};
-	static const char *steamsubs[] = {"steamapps", "config", "SteamApps"};
 	char libdirs[MAX_OSPATH];
-	char *userhome = getenv("HOME");
-	unsigned int i, j;
+	unsigned int i;
+	int r;
 
 	//ftesurf (P276): the user's own list first.  See the FS_STEAMLIBS_FILE block.
 	if (Sys_SteamExtraRoots(callback,ctx, steamdir, fname))
 		return true;
 
-	if (userhome && *userhome)
-	{
-		for (i = 0; i < sizeof(steamhomes)/sizeof(steamhomes[0]); i++)
-			for (j = 0; j < sizeof(steamsubs)/sizeof(steamsubs[0]); j++)
-			{
-				Q_snprintfz(libdirs,sizeof(libdirs), "%s/%s/%s/libraryfolders.vdf", userhome, steamhomes[i], steamsubs[j]);
-				if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
-					return true;
-			}
-	}
+	for (i = 0; (r = Sys_SteamVdfPath(i, libdirs, sizeof(libdirs))) >= 0; i++)
+		if (r && Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
+			return true;
 	return false;
 }
 #else
@@ -11336,6 +11358,25 @@ static void FS_SteamLibs_f(void)
 		Q_strncpyz(resolved, path, sizeof(resolved));
 		FS_SteamLibs_ShowFile(path);
 	}
+#ifdef FTESURF_STEAMVDF
+	{	//ftesurf (P386): which of Steam's own library lists exist here
+		int r, found = 0, probed = 0;
+		for (i = 0; (r = Sys_SteamVdfPath(i, path, sizeof(path))) >= 0; i++)
+		{
+			vfsfile_t *vf;
+			if (!r)
+				continue;
+			probed++;
+			if ((vf = VFSOS_Open(path, "rb")))
+			{
+				VFS_CLOSE(vf);
+				Con_Printf("  ^2found^7     %s\n", path);
+				found++;
+			}
+		}
+		Con_Printf("  %i of %i libraryfolders.vdf locations exist\n", found, probed);
+	}
+#endif
 
 	Con_Printf("^2%s^7 (what those roots are searched FOR):\n", FS_ADDONS_FILE);
 	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
