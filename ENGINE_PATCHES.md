@@ -30283,6 +30283,41 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 373 — pm_verify replays a ghost window  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `ghost` edges bound to their row and paired, no zone scan while detached with the sweep origin following the body, the tick and input checks; a physent digest mismatch under an exact trajectory is a note, not a HOLD); FTESurf `src/server/sv_saveloc.qc` (no ghost during a Multi-Session restore), `src/server/sv_timer.qc` (grammar: the position rule). VERIFIED: FTESurf `cfg/test/p373verify.cfg`, `p373ctl.cfg`.)*
+
+**Problem.** A `ghost` record was a blanket REFUSE.  One live v9 run carried one
+(surf_derpis, 16195 ticks), and it was the last v9 run on the board that did not
+verify.  Ghosting detaches the camera; the body keeps running on an emptied
+usercmd and SV_TimerFrame's ghost branch runs no zone scan, restamping the sweep
+origin each packet instead.
+
+**Change.** Each `ghost` binds to the row before it.  It is a client command, so
+it always arrives between packets and acts after that packet's scan, as a post
+restart does.  While detached no scan runs and the sweep origin follows the body.
+Unpaired edges, a window open across a `pause` and a window open at the finish
+REFUSE.  Two HOLDs: the edge's `<ticks>` must equal the trace's counter after
+its row, and the rows must be empty once they have gone empty, and from 1 s in
+(the client empties them one RTT late; the server trusts it, and a live zone
+scan does not run to catch steering).  SV_GhostSet refuses during a
+Multi-Session restore, which voids the run first and would leave the later
+`ghost 0` unpaired.
+
+**Physents.** The subject then HOLDs on the physent digest: live gains a physent
+9 rows from the end, and the replay's list stays one func_brush (dumped).  The
+replay runs no triggers or map I/O, so map state the live run changed digests
+differently.  With every packet exact, that difference cannot have touched the
+trajectory, and a live world that made the run easier would have changed the
+path and failed ARM 4.  So a digest mismatch is now a note when ARM 4 is exact
+on every packet, and still a HOLD when nothing was compared.
+
+**Verified.** derpis PASS ticks 16195: 401 scans skipped, 23 restarts, ARM 4
+16194/16194.  Controls: `ghost 0` one packet late HOLDs on the tick (7080 vs
+7081); either edge removed REFUSEs; a speed bit after the window went empty
+HOLDs (row 6879), as do 80 rows of it from the start (HOLD 67 ticks in); 3 rows
+of it (the RTT lag) PASS; forwardmove 450 inside the window HOLDs on state; a
+flipped `pe` digest PASSes with the note.  The 369 binary REFUSEs "a ghost
+window".  P369's ten, P367's and P356's suites and eazy.rec unchanged.
+
 ## Patch 370 — the chatbox wraps downward and never cuts a line that fits  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc` (Chat_Wrap and its unit/carry helpers, the per-slot wrap cache, Chat_Draw's top-down draft and message blocks, `chat_say <text>`, `chat_rows`). VERIFIED: FTESurf `cfg/test/p370wrap.cfg`.)*
 
 **Problem.** A draft longer than a row wrapped UPWARD (piece n drawn at

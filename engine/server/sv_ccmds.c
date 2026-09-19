@@ -4204,6 +4204,16 @@ typedef struct
 	int      row;
 	qboolean post;
 } recsim_restart_t;
+/* Patch 373: a `ghost` edge.  A client command, so always between packets: it
+   acts after its row's packet scan, like a post restart.  While a window is open
+   the live timer runs no zone scan and restamps its sweep origin every packet
+   (SV_TimerFrame's ghost branch). */
+typedef struct
+{
+	int      row;
+	int      on, ticks;
+} recsim_ghost_t;
+#define RECSIM_GHOST_LAG 1.0f	/* s: an honest client empties its usercmd one RTT after `ghost 1` */
 
 /* Patch 344: the basevelocity carrier (QC build 85, FTESURF-REC 8).  Replayed in
    SV_BaseVelocityFrame's order, before the move it precedes in the file: `pay`
@@ -4360,6 +4370,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	/* Patch 367: v10 sessions */
 	recsim_sess_t *ses = NULL;
 	recsim_restart_t *rst = NULL;	/* Patch 369 */
+	recsim_ghost_t *gho = NULL;		/* Patch 373 */
+	const char   *ghostbad = NULL;
 	func_t        vf_restart = 0;
 	int           nses = 0, npause = 0;
 	const char   *sesbad = NULL;		/* a structure this replay cannot follow */
@@ -4399,7 +4411,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		int cin = 0, csam = 0, cwarp = 0, cride = 0, cpm = 0, cpe = 0, cportal = 0;
 		/* Patch 367: from a `pause` to the next `in` row, state records are the
 		   next session's floor: they apply from its first row, whatever <row> says. */
-		int cses = 0, ppmt = 0, pptk = 0, crst = 0;
+		int cses = 0, ppmt = 0, pptk = 0, crst = 0, cgho = 0, gopen = 0;
 		float ppc = 0;
 		qboolean floorwin = false, openpause = false;
 		p = buf; end = buf + fsz; inbody = false;
@@ -4585,8 +4597,26 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				{ haveend = true; endticks = atoi(ln+4); }
 			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
 				nresume++;
-			else if (!strncmp(ln, "ghost ", 6) && pass == 0)
-				nghost++;
+			else if (!strncmp(ln, "ghost ", 6))
+			{
+				int on = -1, tk = -1;
+				if (sscanf(ln+6, "%i %i", &on, &tk) != 2 || (on != 0 && on != 1))
+				{
+					if (pass == 0 && !ghostbad)
+						ghostbad = "a malformed `ghost`";
+				}
+				else if (pass == 0 && on == gopen && !ghostbad)
+					ghostbad = on ? "`ghost 1` inside an open window" : "`ghost 0` with no window open";
+				else if (pass == 1 && cgho < nghost)
+				{
+					gho[cgho].row = cin - 1;
+					gho[cgho].on = on;
+					gho[cgho].ticks = tk;
+				}
+				if (on == 0 || on == 1)
+					gopen = on;
+				cgho++;
+			}
 			else if (!strncmp(ln, "restart ", 8))
 			{
 				if (pass == 1 && crst < nrestart)
@@ -4636,6 +4666,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				floorwin = true;
 				if (openpause && pass == 0 && !sesbad)
 					sesbad = "a second `pause` before its `session`";
+				if (gopen && pass == 0 && !ghostbad)
+					ghostbad = "a ghost window open across a `pause` (a park un-ghosts first)";
 				openpause = true;
 				if (sscanf(ln+6, "%i %f %i %15s", &ppmt, &ppc, &pptk, why) != 4)
 				{
@@ -4739,6 +4771,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			npm = cpm; npe = cpe; nportal = cportal;
 			nses = cses;
 			nrestart = crst;
+			nghost = cgho;
+			if (gopen && !ghostbad)
+				ghostbad = "a ghost window open at the finish";
 			if (openpause && !sesbad)
 				sesbad = "a `pause` no `session` answers (the run is still parked)";
 			if (!nin)
@@ -4760,6 +4795,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			prt = Z_Malloc(sizeof(*prt) * (nportal?nportal:1));
 			ses = Z_Malloc(sizeof(*ses) * (nses?nses:1));
 			rst = Z_Malloc(sizeof(*rst) * (nrestart?nrestart:1));
+			gho = Z_Malloc(sizeof(*gho) * (nghost?nghost:1));
 		}
 	}
 	FS_FreeFile(buf);
@@ -4770,7 +4806,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Con_Printf(CON_ERROR "pm_recsim: no `movetickrate` in the header, so the"
 		                     " duration of a move cannot be reconstructed.\n");
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
 		return;
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
@@ -4789,7 +4825,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		RECSIM_REFUSE(sesbad);
 		Con_Printf(CON_ERROR "pm_recsim: \"%s\" is FTESURF-REC %i: %s.\n", fname, filever, sesbad);
 		Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
+		Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
 		return;
 	}
 	if (hdrtick <= 0)
@@ -4892,8 +4928,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "unfinished: no `inend`/`end`";
 		else if (nresume)
 			refuse = "a save-state resume or retry";
-		else if (nghost)
-			refuse = "a ghost window";
+		else if (ghostbad)
+			refuse = ghostbad;
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
@@ -4942,7 +4978,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			Con_Printf("VERIFY %s REFUSE %s\n", fname, refuse);
 			Z_Free(ins); Z_Free(sam); Z_Free(wrp); Z_Free(rid);
-			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst);
+			Z_Free(pms); Z_Free(pes); Z_Free(prt); Z_Free(ses); Z_Free(rst); Z_Free(gho);
 			return;
 		}
 	}
@@ -4981,6 +5017,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		/* Patch 367: the session being replayed, and what its boundaries found */
 		int    scur = 0, sbase_mt = instart_run, sbase_ticks = 0;
 		int    rscur = 0, nrsapplied = 0;	/* Patch 369: restarts */
+		/* Patch 373: ghost windows */
+		int    gcur = 0, nghskip = 0, gwin_mt = 0;
+		qboolean ghosting = false, gempty = false;
+		int    gtick_row = -1, gtick_file = 0, gtick_trace = 0;
+		int    ginput_row = -1, ginput_late = 0;
 		int    sclk_n = -1, sclk_trace = 0, sclk_pause = 0, sclk_sess = 0;
 		int    sjmp_n = -1, sjmp_row = -1;
 		float  sjmp_o = 0, sjmp_v = 0;
@@ -5132,6 +5173,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			VectorClear(carrier);
 			scur = 0;			/* Patch 367: and the session */
 			rscur = 0;			/* Patch 369: and the restarts */
+			ghosting = false;	/* Patch 373: a window opened before the first command */
+			for (gcur = 0; gcur < nghost && gho[gcur].row < 0; gcur++)
+				ghosting = gho[gcur].on;
+			gwin_mt = ins[0].mt;
+			gempty = false;
 			sbase_mt = instart_run;
 			sbase_ticks = 0;
 
@@ -5403,9 +5449,25 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					if (verify && !mode && vf_restart)
 						{ PR_ExecuteProgram(svprogfuncs, vf_restart); nrsapplied++; }
 
+				/* Patch 373: inside a window the body is flown by nobody.  Once the
+				   client has emptied its usercmd it stays empty until `ghost 0`. */
+				if (ghosting && !mode)
+				{
+					qboolean empty = !r->mv[0] && !r->mv[1] && !r->mv[2] && !(r->bt & 7);
+					if (empty)
+						gempty = true;
+					else if (ginput_row < 0 && (gempty || (r->mt - gwin_mt) * rate >= RECSIM_GHOST_LAG))
+						{ ginput_row = i; ginput_late = r->mt - gwin_mt; }
+				}
+
 				/* Patch 349: the live timer runs once per PACKET, in PostThink,
 				   after the packet's last move and its touches.  So does this. */
-				if (verify && !mode && (i+1 >= nin || ins[i+1].pk != r->pk))
+				if (verify && !mode && ghosting && (i+1 >= nin || ins[i+1].pk != r->pk))
+				{	/* Patch 373: no zone scan; the sweep origin follows the body */
+					nghskip++;
+					VectorCopy(pmove.origin, vlastp);
+				}
+				else if (verify && !mode && (i+1 >= nin || ins[i+1].pk != r->pk))
 				{
 					int code = SV_RecSim_Step(vf_step, vlastp, pmove.origin, pmove.player_maxs);
 					if (code == 1 && vfin_row < 0)
@@ -5548,11 +5610,26 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				for (; rscur < nrestart && rst[rscur].row <= i; rscur++)
 					if (verify && !mode && vf_restart)
 						{ PR_ExecuteProgram(svprogfuncs, vf_restart); nrsapplied++; }
+				/* Patch 373: a ghost edge after this packet.  Its <ticks> is
+				   SV_TimerTicks there: the counter after this move. */
+				for (; gcur < nghost && gho[gcur].row <= i; gcur++)
+				{
+					int tk = sbase_ticks + (next_mt - sbase_mt);
+					if (!mode && gtick_row < 0 && gho[gcur].ticks != tk)
+						{ gtick_row = i; gtick_file = gho[gcur].ticks; gtick_trace = tk; }
+					ghosting = gho[gcur].on;
+					if (ghosting)
+						{ gwin_mt = next_mt; gempty = false; }
+					else
+						VectorCopy(pmove.origin, vlastp);	/* SV_GhostSet -> SV_TimerWarped */
+				}
 			}
 		}
 
 		if (nrestart && verify)
 			Con_Printf("  restarts  %i of %i applied to the zone latches (SV_VerifyRestart)\n", nrsapplied, nrestart);
+		if (nghost && verify)
+			Con_Printf("  ghost     %i edge(s), %i packet scan(s) skipped while detached\n", nghost, nghskip);
 
 		/* ARM 1 ------------------------------------------------------------- */
 		Con_Printf("^5ARM 1^7  %i moves: %i exact, %i off (worst by %i tick%s)\n",
@@ -5650,10 +5727,14 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				            sjmp_n, sjmp_o, sjmp_v);
 			else if (x_bad)
 				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
-			else if (pe_bad)
+			else if (pe_bad && !x_ok)
 				Q_snprintfz(why, sizeof(why), "physents: %i row(s) differ, first at row %i", pe_bad, pe_first);
 			else if (port_bad)
 				Q_snprintfz(why, sizeof(why), "portals: %i move(s) disagree, first at row %i", port_bad, port_first);
+			else if (gtick_row >= 0)
+				Q_snprintfz(why, sizeof(why), "ghost at row %i: the file says tick %i, the trace %i", gtick_row, gtick_file, gtick_trace);
+			else if (ginput_row >= 0)
+				Q_snprintfz(why, sizeof(why), "ghost: input at row %i, %i ticks into a detached window", ginput_row, ginput_late);
 			else if (vcancel_row >= 0)
 				Q_snprintfz(why, sizeof(why), "a cancel zone is crossed at row %i", vcancel_row);
 			else if (vfin_row < 0)
@@ -5664,6 +5745,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				Q_snprintfz(why, sizeof(why), "ticks: the zones say %i, the file says %i", vfin_ticks, endticks);
 			if (vrearm_row >= 0)
 				Con_Printf("  note      the replay re-enters this track's START at row %i\n", vrearm_row);
+			/* Patch 373: the replay runs no triggers or map I/O, so map state the live run
+			   changed digests differently (surf_derpis: live gains a physent 9 rows from
+			   the end, the replay's list stays one func_brush).  With every packet exact,
+			   nothing that differs touched the run. */
+			if (pe_bad && x_ok && !x_bad)
+				Con_Printf("  note      physents: %i row(s) differ from the live digest, first at row %i;"
+				           " every packet is exact, so the difference touched nothing\n", pe_bad, pe_first);
 			if (*why)
 				Con_Printf("VERIFY %s HOLD %s\n", fname, why);
 			else
@@ -5691,6 +5779,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	Z_Free(prt);
 	Z_Free(ses);
 	Z_Free(rst);
+	Z_Free(gho);
 }
 
 static void SV_RecSim_f (void)
