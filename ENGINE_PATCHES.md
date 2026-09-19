@@ -30306,6 +30306,41 @@ XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
 Not verified: DGA (XWayland has none), the VidMode line (never printed), native
 distros other than Debian.
 
+## Patch 379 — the replay viewer interpolates every frame  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_watch.qc` (Watch_Sample: Hermite feet with linear fallback and the split snap, the crouch-slide eye, shortest-arc angles by the .view's cltime map or between .rec samples, the parse cache; Watch_Frame's banked clframetime clock; Watch_Camera's eye; Watch_Seek resets every cursor), `tools/watchtrace.py`. VERIFIED: FTESurf `cfg/test/p379wsm.cfg`, `p379wsmfps.cfg`.)*
+
+**Problem.** Position was lerped, but the angles were held for a whole packet --
+0.1 deg steps at the packet rate on every board-downloaded replay (no .view), a
+floor() pick on an even grid with one -- the eye stepped 17 u late on every crouch,
+and a teleport smeared across its interval.
+
+**Change.** Feet on a cubic through the recorded velocities, linear when
+Interp_Fit or a hull change says so, and exactly one jump at a snap (records plus
+the kinematic test, `ride` spans veto).  The eye follows PMSrc_Duck's slide (0.4 s
+down, 0.2 s up) with the pmpin's eye heights.  Angles on the shortest arc, from the
+.view by its own cltime spans and knots, else between .rec samples, held across a
+step over 45 deg.  The frame clock advances by clframetime and banks the cltime
+difference.
+
+**Verified.** Synthetic frames (kitsune v7 with its .view, monster_jam v4, a rewind
+fixture; 1x and 0.25x, with and without the sidecar): 42 verdicts as registered,
+the QC agreeing with its Python model over 22075 frames.  Real frames: yaw ratio
+1.0 with no frozen frame, against 3-13x steps and 52-91 % frozen frames on the 378
+control.  Falsified in the control only: 378 does not match its own model on 142
+frames (0.37 u) -- the model of the old code, not the new code.
+
+## Patch 378 — replay instrumentation: traces, interpolation tables, noview  *(APPLIED -- mod-side only, no engine change: FTESurf `src/shared/sh_interp.qc` (new), `src/cl_progs.src`, `src/client/cl_watch.qc` (the snap, duck-slide and .view time-map tables, `replay trace`, `replay <path> noview`, counters in `replay status`), `tools/watchtrace.py` (new). VERIFIED: the control arm of FTESurf `cfg/test/p379wsm.cfg`.)*
+
+**Problem.** Nothing measured the replay's per-frame pose, so "the demo steps" had
+no number.
+
+**Change.** Shared interpolation helpers (sh_interp.qc: Interp_Wrap/Arc/View/
+Smooth/Hermite/Fit) for the replay and the coming body stream; the tables Patch 379
+draws from, counted in `replay status`; synthetic and real frame traces.  Nothing
+drawn changes.
+
+**Verified.** Its counters equal `watchtrace.py --model` on kitsune and monster_jam;
+every gate 379 fixes fails on it as registered.
+
 ## Patch 384 — SPACE pairs its release; the ghost's flight and stand-in are reusable  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_main.qc` (CLB_SPC in CL_ButtonBit), `src/client/cl_ghost.qc` (Ghost_Fly, Ghost_DrawBodyAt). VERIFIED: FTESurf `cfg/test/p384spc.cfg`.)*
 
 **Problem.** The build-56 release gate paired only the mouse buttons.  SPACE is
