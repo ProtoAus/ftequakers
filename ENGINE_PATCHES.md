@@ -30320,6 +30320,13 @@ and the note would have hidden exactly this drift from the sweeper, which keeps
 only the verdict line.  Reverted: physents stay a HOLD.  The missing entity is
 not identified; ghost harness arms that must PASS run on the Pi.
 
+**Pi.** Built natively from af86b63e9 (`fteqw-svarm64` md5 81588e25, 0 warnings),
+pm_dettest unchanged on bhop_eazy, bhop_eazy 4903 and kitsune 5491 (8/8 portals)
+still PASS.  Live 2026-09-19 01:27 UTC on the sweeper and all 12 lobbies, with
+FTESurf a0bccbf's progs; rollback `fteqw-svarm64.pre373-20260919-012659`.  The
+ghost run (replay 25) was re-queued and the sweeper returned PASS 16195: all 27
+v9 runs on the board now verify.
+
 ## Patch 370 — the chatbox wraps downward and never cuts a line that fits  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc` (Chat_Wrap and its unit/carry helpers, the per-slot wrap cache, Chat_Draw's top-down draft and message blocks, `chat_say <text>`, `chat_rows`). VERIFIED: FTESurf `cfg/test/p370wrap.cfg`.)*
 
 **Problem.** A draft longer than a row wrapped UPWARD (piece n drawn at
