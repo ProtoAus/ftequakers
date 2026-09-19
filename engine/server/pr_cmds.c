@@ -12407,6 +12407,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 
 	//wrath extras...
 	{"fcopy",			PF_fcopy,			0,		0,		0,		650,	D("float(string src, string dst)",	"Equivelent to fopen+fread+fwrite+fclose from QC (ie: reads from $gamedir/data/ or $gamedir, but always writes to $gamedir/data/ )")},
+	{"fcopyrange",		PF_fcopyrange,		0,		0,		0,		0,	D("int(string src, int ofs, int len, string dst, float append)", "FTESurf Patch 375: copies len bytes of src from ofs onto dst (appended, or replacing it). Returns the bytes copied or -1.")},
+	{"fappendrange",	PF_fappendrange,	0,		0,		0,		0,	D("int(filestream fh, string src, int ofs, int len)", "FTESurf Patch 375: appends len bytes of src from ofs to an open FILE_WRITESTREAM. Returns the bytes copied or -1.")},
 	{"frename",			PF_frename,			0,		0,		0,		651,	D("float(string src, string dst)",	"Renames the file, returning 0 on success. Both paths are relative to the data/ subdir.")},
 	{"fremove",			PF_fremove,			0,		0,		0,		652,	D("float(string fname)",	"Deletes the named file - path is relative to data/ subdir, like fopen's FILE_WRITE. Returns 0 on success.")},
 	{"fexists",			PF_fexists,			0,		0,		0,		653,	D("float(string fname)",	"Returns true if it exists inside the default writable path. Use whichpack for greater portability.")},

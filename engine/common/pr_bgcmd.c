@@ -3350,6 +3350,16 @@ void QCBUILTIN PF_fseek32 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	PF_fseek64(prinst, pr_globals);
 	G_INT(OFS_RETURN) = G_INT64(OFS_RETURN);
 }
+//FTESurf Patch 375: the OS truncate for the file types QC write streams use.
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT) && !defined(_XBOX)
+qboolean VFSW32_TruncateOS(vfsfile_t *file, qofs_t len);
+#define VFS_TRUNCATEOS VFSW32_TruncateOS
+#elif !defined(_WIN32) && !defined(FTE_TARGET_WEB)
+qboolean VFSSTDIO_TruncateOS(vfsfile_t *file, qofs_t len);
+#define VFS_TRUNCATEOS VFSSTDIO_TruncateOS
+#else
+#define VFS_TRUNCATEOS(f,l) false
+#endif
 void QCBUILTIN PF_fsize64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	int fnum = G_FLOAT(OFS_PARM0) - FIRST_QC_FILE_INDEX;
@@ -3382,6 +3392,19 @@ void QCBUILTIN PF_fsize64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 
 	if (pf_fopen_files[fnum].file)
 	{
+		//FTESurf Patch 375: a write stream flushes first, so the size is what is on disk,
+		//and can be cut back (a lobby save-load rewinds its streamed recording).
+		if (pf_fopen_files[fnum].accessmode == FRIK_FILE_WRITESTREAM)
+		{
+			VFS_FLUSH(pf_fopen_files[fnum].file);
+			if (prinst->callargc>1 && G_INT64(OFS_PARM1) >= 0)
+			{
+				if (!VFS_TRUNCATEOS(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1)))
+					PF_Warningf(prinst, "PF_fsize: cannot truncate %s\n", pf_fopen_files[fnum].name);
+				G_INT64(OFS_RETURN) = VFS_GETLEN(pf_fopen_files[fnum].file);
+				return;
+			}
+		}
 		G_INT64(OFS_RETURN) = VFS_GETLEN(pf_fopen_files[fnum].file);
 		if (prinst->callargc>1 && G_INT64(OFS_PARM1) >= 0)
 			PF_Warningf(prinst, "PF_fsize: truncation/extension is not supported for stream file types\n");
@@ -3476,6 +3499,85 @@ void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 			}
 		}
 	}
+}
+/* FTESurf Patch 375: a byte range of one file onto another (fcopyrange) or onto an
+   open write stream (fappendrange).  A lobby streams its recordings: a save copies
+   the stream's prefix a chunk per frame, and a load that cannot truncate rebuilds
+   the stream from that copy.  The source is read by OS path (FS_GAMEONLY), not the
+   name hash, because another lobby process may have written it.  Both return the
+   bytes moved, or -1. */
+static int PF_CopyRange_Internal(vfsfile_t *src, qofs_t ofs, int len, vfsfile_t *dst)
+{
+	char buffer[65536];
+	int got, want, done = 0;
+	if (!VFS_SEEK(src, ofs))
+		return -1;
+	while (done < len)
+	{
+		want = len - done;
+		if (want > (int)sizeof(buffer))
+			want = sizeof(buffer);
+		got = VFS_READ(src, buffer, want);
+		if (got <= 0)
+			break;
+		if (VFS_WRITE(dst, buffer, got) != got)
+			return -1;
+		done += got;
+	}
+	return done;
+}
+void QCBUILTIN PF_fcopyrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char *srcname = PR_GetStringOfs(prinst, OFS_PARM0);
+	int ofs = G_INT(OFS_PARM1), len = G_INT(OFS_PARM2);
+	const char *dstname = PR_GetStringOfs(prinst, OFS_PARM3);
+	qboolean append = G_FLOAT(OFS_PARM4) != 0;
+	const char *fallback;
+	vfsfile_t *src, *dst;
+	G_INT(OFS_RETURN) = -1;
+	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback) || !QC_FixFileName(dstname, &dstname, &fallback))
+		return;
+	src = FS_OpenVFS(srcname, "rb", FS_GAMEONLY);
+	if (!src)
+	{
+		Con_DPrintf("fcopyrange: cannot read %s\n", srcname);
+		return;
+	}
+	FS_CreatePath(dstname, FS_GAMEONLY);
+	dst = FS_OpenVFS(dstname, append ? "ab" : "wb", FS_GAMEONLY);
+	if (dst)
+	{
+		G_INT(OFS_RETURN) = PF_CopyRange_Internal(src, ofs, len, dst);
+		VFS_CLOSE(dst);
+	}
+	else
+		Con_DPrintf("fcopyrange: cannot write %s\n", dstname);
+	VFS_CLOSE(src);
+}
+void QCBUILTIN PF_fappendrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int fnum = G_FLOAT(OFS_PARM0) - FIRST_QC_FILE_INDEX;
+	const char *srcname = PR_GetStringOfs(prinst, OFS_PARM1);
+	int ofs = G_INT(OFS_PARM2), len = G_INT(OFS_PARM3);
+	const char *fallback;
+	vfsfile_t *src;
+	G_INT(OFS_RETURN) = -1;
+	if (fnum < 0 || fnum >= MAX_QC_FILES || pf_fopen_files[fnum].prinst != prinst
+	    || pf_fopen_files[fnum].accessmode != FRIK_FILE_WRITESTREAM || !pf_fopen_files[fnum].file)
+	{
+		PF_Warningf(prinst, "PF_fappendrange: not an open write stream\n");
+		return;
+	}
+	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback))
+		return;
+	src = FS_OpenVFS(srcname, "rb", FS_GAMEONLY);
+	if (!src)
+	{
+		Con_DPrintf("fappendrange: cannot read %s\n", srcname);
+		return;
+	}
+	G_INT(OFS_RETURN) = PF_CopyRange_Internal(src, ofs, len, pf_fopen_files[fnum].file);
+	VFS_CLOSE(src);
 }
 void QCBUILTIN PF_frename (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {

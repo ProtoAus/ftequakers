@@ -107,6 +107,23 @@ static qboolean QDECL VFSSTDIO_Close(vfsfile_t *file)
 	return success;
 }
 
+#if !defined(_WIN32) && !defined(WEBSVONLY)
+#include <unistd.h>
+//FTESurf Patch 375: cut an open file of this type to len and put the pointer
+//there (a lobby save-load rewinds its streamed recording).  false for any other
+//vfsfile_t: this type is known by its Close.
+qboolean VFSSTDIO_TruncateOS(vfsfile_t *file, qofs_t len)
+{
+	vfsstdiofile_t *intfile = (vfsstdiofile_t*)file;
+	if (file->Close != VFSSTDIO_Close)
+		return false;
+	fflush(intfile->handle);
+	if (ftruncate(fileno(intfile->handle), (off_t)len))
+		return false;
+	return VFSSTDIO_Seek(file, len);
+}
+#endif
+
 #ifdef _WIN32
 static qboolean QDECL VFSSTDIO_CloseTemp(vfsfile_t *file)
 {

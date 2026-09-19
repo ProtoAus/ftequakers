@@ -319,6 +319,18 @@ static qboolean QDECL VFSW32_Close(vfsfile_t *file)
 	Z_Free(file);
 	return true;
 }
+//FTESurf Patch 375: cut an open file of this type to len and put the pointer
+//there (a lobby save-load rewinds its streamed recording).  false for any other
+//vfsfile_t, or a mapped one: this type is known by its Close.
+qboolean VFSW32_TruncateOS(vfsfile_t *file, qofs_t len)
+{
+	vfsw32file_t *intfile = (vfsw32file_t*)file;
+	if (file->Close != VFSW32_Close || intfile->mmap)
+		return false;
+	if (!VFSW32_Seek(file, len))
+		return false;
+	return SetEndOfFile(intfile->hand) != 0;
+}
 static qboolean QDECL VFSW32_CloseTemp(vfsfile_t *file)
 {
 	vfsw32file_t *intfile = (vfsw32file_t*)file;
@@ -419,10 +431,10 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		else if ((write && read) || append)
 			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,	NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		else if (write)
-			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, 0,					NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		else if (read)
-			h = CreateFileA(osname, GENERIC_READ,				FILE_SHARE_READ,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		else if (write)	//FTESurf Patch 375: FILE_SHARE_READ, as the NT branch; sv_sys_win.c never sets WinNT, so the dedicated server always comes here
+			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,	NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		else if (read)	//FTESurf Patch 375: FILE_SHARE_WRITE, so a reader can copy a file another handle is still writing
+			h = CreateFileA(osname, GENERIC_READ,				FILE_SHARE_READ|FILE_SHARE_WRITE,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		else
 			h = INVALID_HANDLE_VALUE;
 	}
@@ -447,8 +459,8 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 			h = CreateFileW(wide, GENERIC_READ|GENERIC_WRITE,	FILE_SHARE_READ|FILE_SHARE_DELETE,	NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		else if (write)
 			h = CreateFileW(wide, GENERIC_READ|GENERIC_WRITE,	FILE_SHARE_READ|FILE_SHARE_DELETE,	NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		else if (read)
-			h = CreateFileW(wide, GENERIC_READ,					FILE_SHARE_READ|FILE_SHARE_DELETE,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		else if (read)	//FTESurf Patch 375: FILE_SHARE_WRITE, so a reader can copy a file another handle is still writing
+			h = CreateFileW(wide, GENERIC_READ,					FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		else
 			h = INVALID_HANDLE_VALUE;
 	}

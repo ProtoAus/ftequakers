@@ -386,6 +386,8 @@ int PR_QCFile_From_Buffer (pubprogfuncs_t *prinst, const char *name, void *buffe
 void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
 void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_fcopyrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);	//FTESurf Patch 375
+void QCBUILTIN PF_fappendrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_frename (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_fremove (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_fexists (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
