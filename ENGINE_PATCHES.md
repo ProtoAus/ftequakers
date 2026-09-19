@@ -30283,6 +30283,25 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 384 — SPACE pairs its release; the ghost's flight and stand-in are reusable  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_main.qc` (CLB_SPC in CL_ButtonBit), `src/client/cl_ghost.qc` (Ghost_Fly, Ghost_DrawBodyAt). VERIFIED: FTESurf `cfg/test/p384spc.cfg`.)*
+
+**Problem.** The build-56 release gate paired only the mouse buttons.  SPACE is
++jump and three handlers swallow it (the chat draft, the replay's pause, and the
+coming spectate cycle), so a SPACE held when one of them opened lost its release
+to that handler and +jump stayed down.  Spectate's freecam also needs the ghost's
+flight step and its body stand-in at a position of its own.
+
+**Change.** `CLB_SPC` joins the mask: an unpaired SPACE up goes to the game and
+-jump runs.  Ghost_Frame's flight maths moved into `Ghost_Fly(org, ang, move, btn,
+dt)` (plus `move_z` for +moveup/+movedown, zero on every default bind) and
+Ghost_DrawBody into `Ghost_DrawBodyAt(feet, yaw)`; ghost mode calls both.
+
+**Verified.** `vote key 32 0` with a chat draft open (the chain's verdict, which
+decides whether keys.c runs -jump): pre-384 csprogs took 1, new took 0; a paired
+down/up took 1/1 on both.  A synthetic IN_KeyEvent does not reach the bind path in
+a minimized headless client, so the verdict is probed rather than the hop.  Ghost
+flew 1047 u and 1041 u in 1 s on the two builds (ghost speed 1040).
+
 ## Patch 377 — exec never runs a mounted game's config  *(APPLIED -- `common/cmd.c` (Cmd_ExecLocate: a hit in an SPF_ADDON searchpath counts as missing, in the P330 fallback and the final lookup; "not execing ... it belongs to a mounted game" under cl_warncmd/developer); FTESurf `ftesurf/fs_addons.default.txt` (cut to what a player needs). VERIFIED: FTESurf `cfg/test/p377boot.cfg`, `p377fresh.cfg`.)*
 
 **Problem.** Every boot ran Momentum's `cfg/config.cfg`.  The startup's
