@@ -30361,6 +30361,82 @@ silent), one leave; the finisher gets ten lines, the slow answer's 3 s after
 its post.  One prediction failed and is the banner's: after the board went
 away mid-map, a run tying the last one's ticks matched the stale `*wrank`.
 
+## Patch 376 — the client's mouse counts ride the usercmd  *(APPLIED -- `client/in_generic.c` (a per-device ring sum folded with the read at IN_MoveMouse; IN_CountsGet), `client/cl_input.c` (CL_SendCounts: the prydon cursor floats, to a server whose serverinfo says fs_counts 1), `server/sv_ccmds.c` (pm_verify reads `mc` and HOLDs on ring != read); FTESurf `src/server/sv_timer.qc` (the `mc` record, `serverinfo fs_counts 1`, `cmd timer`'s count line), `tools/reccheck.py`. VERIFIED: FTESurf `cfg/test/p376cl.cfg` + `p376sv.cfg`, three client builds.)*
+
+**Problem.** Patch 312's counts join -- what the input ring delivered against
+what IN_MoveMouse read -- is the check that sees a momentum.dll-style hook, which
+rewrites the accumulated delta upstream of everything Patch 293 compares.  It
+ran only on the client's `.hid`, which never leaves the player's machine.
+
+**Change.** The client keeps, per seat, the ring's sum and the read's sum since
+it started (the ring's share of a pointer is carried beside `delta` and folded
+at the read, so an honest client's two sums are equal by construction).  To a
+server whose serverinfo says `fs_counts 1` it sends them in the prydon cursor
+block -- six float32s every packet, handed to SSQC for the command being run --
+wrapped at 2^20, with the reports raw input rejected (Patch 306).  The progs
+write an `mc` record after the `in` row it came with, when it changed.
+pm_verify HOLDs on any `mc` whose ring and read differ; a file with none says
+"counts none" (a client before 376) and is otherwise unchanged.
+
+**Verified.** Three client builds, one finish each, 60 synthetic events on the
+ring mid-run (`in_journal_synth`): the 376 client wrote two `mc`, ring = read,
+PASS; a build with a test hook adding one count at IN_MoveMouse's entry (never
+committed) wrote `read 235` against `ring 234`, HOLD "counts: the view read
+mouse counts the device did not send"; a client before 376 wrote none, PASS.
+reccheck notes the disagreement; test_reccheck 153/153.  P369's ten, eazy and
+b352fin unchanged.  **Ceiling:** a patched client can forge both sums; this
+makes a single-function hook insufficient, not forgery impossible.  It needs a
+client release to reach players.
+
+## Patch 375 — a lobby save-load keeps its streamed recording  *(APPLIED -- `common/pr_bgcmd.c` (fsize flushes a FILE_WRITESTREAM and truncates it with a new size; fcopyrange/fappendrange), `common/fs_stdio.c` + `common/fs_win32.c` (the OS truncates; Win32 read opens share FILE_SHARE_WRITE, and the 9x write branch the dedicated server uses shares FILE_SHARE_READ), `server/pr_cmds.c`; FTESurf `src/server/sv_timer.qc` (SV_RecSnapshot, SV_RecCopyStep/Flush/Drop, SV_RecRewindStream, the lineage test), `src/server/sv_saveloc.qc`, `src/server/sv_resume.qc`. VERIFIED: FTESurf `cfg/test/p375sv.cfg` + `p375cl.cfg`, `p375bsv.cfg` + `p375bcl.cfg`, on Windows and on the Pi's aarch64 build.)*
+
+**Problem.** A lobby streams each run to its part file, and a stream cannot
+rewind, so a lobby save-load dropped the recording: a segmented run with no
+replay (rt1cl.cfg).  Holding every saving player's run in memory instead would
+cost up to ~100 MB each.
+
+**Change.** A save flushes the stream, takes its byte size as an int (a float is
+exact only to 16 MB) and queues a copy of that prefix to the slot's run.rec, a
+512 KB chunk per packet ("written to disk after a bit").  The save states every
+counter a load needs, since nothing can rescan a stream.  A load whose save is
+this stream's lineage truncates it in place with `fsize(fh, n)`; any other load
+rebuilds a new stream from the slot's copy (line 0 rewritten to 10 for the
+`pause load`), requiring the copy to end exactly at its stated size.  Every site
+that closes, renames, truncates or reopens the part file first finishes the
+player's pending copies, as does server shutdown.  The file a load produces is
+the one the buffered path writes.
+
+**The lineage** is the serial, the runid and a per-run record of warm cuts: a
+save is warm only if no warm rewind since it cut below its mark.  The runid is
+needed because serials are per process and twelve lobbies share one data dir:
+two lobbies seeded to the same serial handed one guid's save from lobby A to a
+run in lobby B, which the serial alone would have truncated at A's byte count.
+The buffered path takes the same test, which FIXES A MEASURED LATENT DEFECT on
+listen servers: save S1, save S2, load S1, run past S2's mark, load S2 loaded S2
+warm with S1's second attempt as its prefix (p375bcl: 20 lines differ before,
+S2's run.rec exactly after).
+
+**Review** (three independent lenses, each finding refuted or confirmed by a
+fourth agent) found five that stood, all fixed and re-run: the cross-process
+serial above; a load during a Multi-Session restore opened the part file the
+resume's copy owns (two handles on one file on Linux; loads now refuse during a
+restore); pending copies at shutdown; a dropped connection's queue finishing a
+copy into a slot since deleted (drops now reach every queue, and a cold load
+requires the exact size); the part file's name followed the live lobby_enable
+(it is fixed when the stream opens).
+
+**Verified.**  Four arms on a lobby-config server: a warm load (v9, one
+`resume`); a save loaded after an earlier save's warm load (cold on lineage,
+v10 `pause .. load`); a load after `!r` (cold); a save and load in one packet
+(the copy is finished first, then warm).  Every submit carried a replay whose
+size is recbytes, every slot copy equals the file's prefix but for the flags
+line, reccheck 0 faults; a 64 KB-chunk build caught a copy mid-way and was exact.
+The Pi's aarch64 build (a test server on another port, removed after) did the
+same through ftruncate.  Arm P: a save loaded after a posted stage is always
+cold (Patch 360 keeps the stream as evidence first).  Found on the way: the
+Windows dedicated server never sets WinNT, so every write it opened was
+exclusive; that was also the likelier cause of Patch 368's "0 of 358 lines".
+
 ## Patch 374 — the in-game board marks a Verified run  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (`ver` parsed per row, board_status says "verified"), `src/client/cl_scores.qc` (Scores_Tick after "watch" in the replay cell). VERIFIED: FTESurf `cfg/test/p374ver.cfg` against the live board.)*
 
 **Problem.** The web board showed Verified since Patch 359; the in-game board
