@@ -30346,6 +30346,51 @@ setangles stay up to 1 deg short until its binary has float newa), a live lobby,
 teleport to a DIFFERENT target on a command sampled before the first snap still
 adds both rotations, as 335 did.  No independent review.
 
+**Review fixes.** The independent review confirmed two of its four findings
+(refuted: the exact path's legacy fallback, which needs a packet carrying no
+move and active QW play never sends one; the `cl_threadedphysics` history race,
+which is Patch 335's own unlocked viewangles write).
+
+*Problem.* skip-self only covered a crossing a correction moved 1-2 commands
+later.  Moved 3 or more, onto a command sampled before the first snap, ApplySnap
+rotated from that command's pre-snap angles again -- the view doubled and the
+matched delta kept it.  And CSQC_PredictAngleAbsolute marked EVERY slot used and
+forced the view to the absolute target, so an absolute answering teleport B
+cancelled an already-predicted C.
+
+*Change.* A replayed crossing now rotates from its command's angles PLUS every
+live snap applied after that command was sampled (slot time >= its outframe's
+senttime; an unsent command is sampled this frame, before the chain) -- the test
+the rebase branch already used.  Within PRED_SNAP_TOL of the target that base is
+skip-self at any distance; a chained teleport to a DIFFERENT target now lands
+exactly on the new target instead of adding both rotations (335's remaining
+known limitation).  An absolute setangle retires the snaps up to its basis (and
+the one it matches, as a delta does); a newer live snap stays and the view ends
+on its target, so the absolute only re-bases older state.
+
+*Verified.* New arm `cfg/test/p396p.cfg` provokes the first defect directly
+(surf_aircontrol, 300 fps, cl_delay_packets 120, cl_netfps 300 with
+cl_netfps_snap 0 so a command is a third of a tick, cl_predict_timenudge -0.03 so
+the chain runs behind the newest command): the committed-396 client doubled 10 of
+12 reps, each dump reading "snap N ... 0 -> 90 applied" and 20 ms later "snap
+N+4|N+5 cmd 0.000 rot 90.000 view 90 -> 180 applied", then "match -> 0.000".  The
+same cell on this build is 12/12 PASS and reads "skip-self (slot seq N, cmd
+0.000 base 90.000)" at d = 4-5 in 9 reps (3 of those take rebase, the slot's new
+sequence being 3 past the delta's basis).  Delay 120 alone moves no crossing
+(12/12 both builds); at cl_netfps 300 without the nudge the old client's cell is
+void (11 NO-CROSS: it crossed and turned before the server reached the trigger).
+Regression: p396a 60/60 32 PASS + 4 NO-CROSS over three runs of 12 (skip-self 3,
+each one command later), 300/60 12/12, C1L 7 UNDO + 3 PASS + 2 straddle and no
+DOUBLE; p396c 300/0 12/12 (skip-acked 7, match 5), C1L 6 DOUBLE + 6 PASS; p396d
+12/12 with its zone_goto 12/12 at 45; p401guard G2 12/12 on the guarded csprogs.
+Not verified: the absolute change has no arm -- the harness's only absolutes are
+the spawn one (no live slot) and p396b's setpos pair; a chained teleport to a
+DIFFERENT target (every destination on this map is yaw 90); mouse movement
+during a snap.  Not covered: an absolute that is not a teleport's answer (a zone
+move inside the lock window) with a newer live snap now ends on that snap's
+target rather than the server's angle, and a late reliable absolute delivered
+with or after a newer delta is wrong with prediction off too.
+
 ## Patch 397 — `status` on an FTE QW server prints the server's answer  *(APPLIED -- `server/sv_ccmds.c` (SV_Status_f). VERIFIED: FTESurf `cfg/test/p397e.cfg`.)*
 
 **Problem.** `status` typed while connected to a lobby printed "Server is not

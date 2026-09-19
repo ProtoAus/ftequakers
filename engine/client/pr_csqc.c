@@ -9917,10 +9917,10 @@ void CSQC_PredictAngleFlush(int seat)
 static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercmd_t *cmd)
 {
 	playerview_t *pv = &cl.playerview[seat];
-	vec3_t newang, rot, target, before;
+	vec3_t newang, rot, target, before, base;
 	qboolean exact = PredAngExact();
 	double oldest;
-	int i, slot = 0;
+	int i, slot = 0, self = -1;
 
 	/*the same command replays on every rendered frame until it is acked; only
 	  the first pass may rotate the live view*/
@@ -9946,24 +9946,38 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-server (basis %i)", realtime, cmd->sequence, target[YAW], predsrv[seat].basis);
 		return;
 	}
-	//Patch 396: the same crossing, moved 1-2 commands later by a prediction correction. A live
-	//slot already put the view on this absolute target, and this command's angles may predate
-	//that snap, so rotating again would double it. An earlier-moved crossing never gets here
-	//(lastseq above).
-	for (i = 0; exact && i < PRED_SNAP_RING; i++)
+	//Patch 396 review: live snaps applied after this command was sampled (sent: its senttime;
+	//unsent: this frame, before the chain ran) are on screen but not in its angles -- a correction
+	//moved the crossing later, or a chained teleport.  Rotate from its angles plus theirs.
+	for (i = 0; i < 3; i++)
+		base[i] = SHORT2ANGLE(cmd->angles[i]);
+	if (exact)
 	{
-		predsnap_t *s = &predsnaps[seat][i];
-		int d = (int)(cmd->sequence - s->seq);
-		if (s->used || realtime - s->time > PRED_SNAP_LIFE || d < 1 || d > PRED_SNAP_NEWWIN || !PredAngClose(s->target, target))
-			continue;
-		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-self (slot seq %u)", realtime, cmd->sequence, target[YAW], s->seq);
-		s->seq = cmd->sequence;	//the crossing as now predicted; CSQC_PredictAngleCorrect windows on it
+		const outframe_t *of = &cl.outframes[cmd->sequence & UPDATE_MASK];
+		double sampled = of->cmd_sequence == cmd->sequence ? of->senttime : realtime;
+		for (i = 0; i < PRED_SNAP_RING; i++)
+		{
+			predsnap_t *s = &predsnaps[seat][i];
+			if (s->used || realtime - s->time > PRED_SNAP_LIFE)
+				continue;
+			if (s->time >= sampled)
+				VectorAdd(base, s->rot, base);
+			if (PredAngClose(s->target, target) && (self < 0 || (int)(s->seq - predsnaps[seat][self].seq) > 0))
+				self = i;
+		}
+	}
+	//skip-self: a live snap already put the view on this target (the same crossing moved later,
+	//any distance, comes out at 0 up to the mouse).
+	if (self >= 0 && PredAngClose(base, target))
+	{
+		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-self (slot seq %u, cmd %.3f base %.3f)", realtime, cmd->sequence, target[YAW],
+			predsnaps[seat][self].seq, SHORT2ANGLE(cmd->angles[YAW]), base[YAW]);
+		predsnaps[seat][self].seq = cmd->sequence;	//CSQC_PredictAngleCorrect windows on it
 		return;
 	}
-
 	for (i = 0; i < 3; i++)
 	{
-		rot[i] = PredAngNorm(target[i] - SHORT2ANGLE(cmd->angles[i]));
+		rot[i] = PredAngNorm(target[i] - base[i]);
 		newang[i] = pv->viewangles[i] + rot[i];
 	}
 	VectorCopy(pv->viewangles, before);
@@ -9991,8 +10005,8 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 	predsnaps[seat][slot].seq = cmd->sequence;
 	predsnaps[seat][slot].time = realtime;
 	predsnaps[seat][slot].used = false;
-	PA_Log("predangle: %.4f snap seq %u tgt %.3f cmd %.3f rot %.3f view %.3f -> %.3f %s", realtime, cmd->sequence, target[YAW],
-		SHORT2ANGLE(cmd->angles[YAW]), rot[YAW], before[YAW], pv->viewangles[YAW], exact ? "applied" : "legacy-applied");
+	PA_Log("predangle: %.4f snap seq %u tgt %.3f cmd %.3f base %.3f rot %.3f view %.3f -> %.3f %s", realtime, cmd->sequence, target[YAW],
+		SHORT2ANGLE(cmd->angles[YAW]), base[YAW], rot[YAW], before[YAW], pv->viewangles[YAW], exact ? "applied" : "legacy-applied");
 }
 
 /*Patch 335's arithmetic, kept for cl_predict_angleexact 0: subtract the oldest live rotation.*/
@@ -10118,10 +10132,13 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 }
 
 /*Patch 396: an absolute svc_setangle.  Patch 335 flushed here, and clearing lastseq let the next
-  stale-base replay fire the snap again on top of it.*/
-void CSQC_PredictAngleAbsolute(int seat, const vec3_t ang)
+  stale-base replay fire the snap again on top of it.  Review fix: it retires the snaps up to its
+  basis (and the one it matches, as a delta does); a newer snap the server has not run stays live
+  and the view ends on its target, so the absolute only re-bases older state.*/
+void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 {
-	int i;
+	int i, K, m = -1, n = -1;
+	unsigned int upto;
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return;
 	if (!PredAngExact())
@@ -10129,15 +10146,38 @@ void CSQC_PredictAngleAbsolute(int seat, const vec3_t ang)
 		CSQC_PredictAngleReset(seat);
 		return;
 	}
-	for (i = 0; i < PRED_SNAP_RING; i++)
-		predsnaps[seat][i].used = true;
+	K = cls.netchan.incoming_acknowledged;
 	for (i = 0; i < 3; i++)
 		predsrv[seat].target[i] = PredAngNorm(ang[i]);
-	predsrv[seat].basis = cls.netchan.incoming_acknowledged;
+	for (i = 0; i < PRED_SNAP_RING; i++)
+	{	//m as CSQC_PredictAngleCorrect picks it
+		predsnap_t *s = &predsnaps[seat][i];
+		int d = (int)(s->seq - (unsigned int)K);
+		if (!s->used && realtime - s->time <= PRED_SNAP_LIFE && d <= PRED_SNAP_NEWWIN && PredAngClose(s->target, predsrv[seat].target) &&
+			(m < 0 || (int)(s->seq - predsnaps[seat][m].seq) > 0))
+			m = i;
+	}
+	upto = K;
+	if (m >= 0 && (int)(predsnaps[seat][m].seq - upto) > 0)
+		upto = predsnaps[seat][m].seq;
+	for (i = 0; i < PRED_SNAP_RING; i++)
+	{
+		predsnap_t *s = &predsnaps[seat][i];
+		if (s->used)
+			continue;
+		if (realtime - s->time > PRED_SNAP_LIFE || (int)(s->seq - upto) <= 0)
+			s->used = true;
+		else if (n < 0 || (int)(s->seq - predsnaps[seat][n].seq) > 0)
+			n = i;
+	}
+	if (n >= 0)
+		VectorCopy(predsnaps[seat][n].target, ang);
+	predsrv[seat].basis = K;
 	predsrv[seat].time = realtime;
 	predsrv[seat].valid = true;
 	pred_trace_until[seat] = realtime + 1;
-	PA_Log("predangle: %.4f absolute %.3f basis %i", realtime, predsrv[seat].target[YAW], predsrv[seat].basis);
+	PA_Log("predangle: %.4f absolute %.3f basis %i %s seq %i -> %.3f", realtime, predsrv[seat].target[YAW], K,
+		n >= 0 ? "abs-keep-newer" : m >= 0 ? "abs-match" : "abs-server", n >= 0 ? (int)predsnaps[seat][n].seq : m >= 0 ? (int)predsnaps[seat][m].seq : -1, ang[YAW]);
 }
 
 void CSQC_PredictConsumeBaseVel(int seat, int sequence)

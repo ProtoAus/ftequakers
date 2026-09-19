@@ -1596,7 +1596,7 @@ void	 CSQC_PredictConsumeBaseVel(int seat, int sequence);
 void	 CSQC_PredictBaseVelFlush(void);
 void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
 void	 CSQC_PredictAngleFlush(int seat);
-void	 CSQC_PredictAngleAbsolute(int seat, const vec3_t ang);	//FTESurf Patch 396
+void	 CSQC_PredictAngleAbsolute(int seat, vec3_t ang);	//FTESurf Patch 396: may redirect ang to a newer predicted snap
 void	 CSQC_Input_Frame(int seat, usercmd_t *cmd);
 void	 CSQC_WorldLoaded(void);
 qboolean CSQC_ParseTempEntity(void);
