@@ -30283,6 +30283,47 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 390 — the mouse pad left of the key block  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/client/cl_mouse.qc` (MPad_Track/Frame/Draw, `mousepad`); `cl_hud.qc` (HUD_KeysGeom, shared by HUD_DrawKeys), `cl_main.qc` (register, the observer after Vote_Track, MPad_Draw after HUD_Draw, the console hook), `cl_hudedit.qc` (the "Mouse" row, Width/Trail options), `src/cl_progs.src`, `ftesurf/cfg/default.cfg`, `defaultuser.cfg`. VERIFIED: FTESurf `cfg/test/p390mouse.cfg`.)*
+
+**Problem.** Lex (2026-09-20) asked for a 2D mouse display left of the key
+display: a 16:10 box, a dot that moves with the mouse and leaves a fading
+trail, wrapping pac-man style at the edges; a faint dark background and a 1 px
+edge.  Decided: the dot moves by turn angle, so every DPI looks the same, and
+replays and spectate show it too, from the view angles.
+
+**Change.** MPad_Track sums IE_MOUSEDELTA at the top of CL_InputChain and
+returns nothing, so the chain's return value (the only thing the engine reads,
+in_generic.c:2494) and the .hid journal are unchanged.  Live, the counts are
+turned into degrees the way the engine turns them into view angles
+(x sensitivity x |m_yaw|, |m_pitch| down, in_xflip undone; m_accel and m_filter
+not modelled), so the dot follows the hand even for inverted players.  In a
+replay (`rec_wt_*`) or spectating (`spc_tang`) it follows per-frame view-angle
+deltas; teleports (a step over WT_ASNAP, a replay snap in the frame's slice of
+the recording, BP_SNAP) move nothing, and a new source/target/file, a seek or
+a clock going back recentres it.
+Width = `hud_mouse_span` degrees (default 90), height 10/16 of that; the trail
+(`hud_mouse_trail` s, default 0.5) is a 128-sample ring faded on the HUD clock,
+drawn as batched 2D quads under the clip area, a stroke crossing an edge drawn
+on both sides.  `hud_mouse_x/y -1` attach it one gap left of the key block at
+its height (HUD_KeysGeom, which HUD_DrawKeys now uses too: same numbers at
+hud_scale 1 and 2; the label size is now taken on the UI face, so off-ladder
+scales such as 1.25 snap to the ladder); a drag in `hud_edit` detaches it and
+reset re-attaches, and the attached pad is no snap target while the keys are
+dragged.  Keys at the left edge put it on their right.  `mousepad` prints its
+state; `mousepad reset` recentres.
+
+**Verified.** p390mouse (listen server, 1280x720, `spectate look` injections):
+box 970 605 166 104 at hud_scale 2, 1068 605 83 52 at 1, 458 with hud_keys_x
+0.5, 128 72 at fractions 0.1; unit, wrap (both axes, 1.25 panels = one
+break), in_xflip, negative m_pitch, sensitivity and trail-lifetime arms exact;
+every injection `took 0`; `hud_edit reset`/`resetall` restore -1 and 90; the
+replay arm matches `replay trace` to 4 places, recentres on seek, and fades on
+the recording clock.  An independent review (3 lenses, each finding checked by
+a skeptic) found nothing on the input path; its four pad findings are fixed and
+the arms re-run identical.  Not verified headless: how a real mouse feels (a
+first run caught real deltas moving it), spectate (needs two clients), m_accel
+users, 4K.
+
 ## Patch 391 — a clean run refuses the save-lock load keys  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_saveloc.qc` (SaveLoc_RunLocked / LoadsOn / Refuse, the refused-key latch, the panel row, the 8 repeat guard), `cl_timer.qc` (the flash), `cl_banner.qc` (`hud_snd_error`, Bn_ErrorSound), `cl_main.qc` (`saveloc` prints the gate), `ftesurf/cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p391lock.cfg`.)*
 
 **Problem.** An accidental `2` mid-run ended the run: SV_SaveLocLoad replaces
@@ -30314,7 +30355,9 @@ CS:S `weapon_cant_buy.wav` (1) and not the missing default (0), with no
 Couldn't-load lines; after a console `cmd sl_load` (segmented) key `2` loads; a
 held 8 keeps its arm and a fresh 8 deletes.  Not covered: the ~1 RTT after the
 start before the client sees TS_RUNNING (a press there still loads), whether
-the sound is audible.
+the sound is audible.  Independent review: a lapsed refusal latch now clears
+on the next press (arm M: a later 3 with the panel closed keeps its bind's
+release), and a refusal while spectating or in a replay sets no flash.
 
 ## Patch 389 — only Windows clients rank during the Linux beta  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc` (SV_ProfileBroken: a profile report without IPH_RAW is broken). VERIFIED: FTESurf `cfg/test/p387xi2.cfg` on Linux, `b78event.cfg` on Windows.)*
 
