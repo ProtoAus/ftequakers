@@ -886,6 +886,31 @@ static const char *defaulttouchcfg =
 	;
 #endif
 
+//FTESurf Patch 377: a config whose winning copy is in an fs_load addon mount (Momentum, CS:S,
+//HL2, <gamedir>/downloads) belongs to that game and counts as missing.  Momentum's
+//cfg/config.cfg (`unbindall`, then its own binds) ran at every boot via the P330 fallback.
+static qboolean Cmd_ExecLocate(const char *name, flocation_t *loc, char *skipped, size_t skippedsize)
+{
+	char withcfg[MAX_OSPATH];
+	if (FS_FLocateFile(name, FSLF_IFFOUND|FSLF_IGNOREPURE, loc))
+	{
+		if (!(loc->search->flags & SPF_ADDON))
+			return true;
+		if (!*skipped)
+			Q_snprintfz(skipped, skippedsize, "%s/%s", loc->search->logicalpath, name);
+	}
+	Q_snprintfz(withcfg, sizeof(withcfg), "%s.cfg", name);
+	if (FS_FLocateFile(withcfg, FSLF_IFFOUND, loc))
+	{
+		if (!(loc->search->flags & SPF_ADDON))
+			return true;
+		if (!*skipped)
+			Q_snprintfz(skipped, skippedsize, "%s/%s", loc->search->logicalpath, withcfg);
+	}
+	memset(loc, 0, sizeof(*loc));
+	return false;
+}
+
 /*
 ===============
 Cmd_Exec_f
@@ -896,6 +921,7 @@ static void Cmd_Exec_f (void)
 	char	*f, *s;
 	char	name[256];
 	char	buf[512];
+	char	skipped[MAX_OSPATH];	//P377: first addon-mount hit, for the message
 	flocation_t loc;
 	qboolean untrusted;
 	vfsfile_t *file;
@@ -994,6 +1020,9 @@ static void Cmd_Exec_f (void)
 	  ..." line and the completion both speak the path that actually worked --
 	  the console populates with the real thing, not the abbreviation.
 	*/
+	//P377: "inside the gamedir" above was not true -- the searchpaths include the addon mounts,
+	//which Cmd_ExecLocate now skips.
+	*skipped = 0;
 	{
 		static const char *const execfallback[] = {"", "cfg/", "cfg/test/", "cfg/maps/", "cfg/lobby/"};
 		char resolved[sizeof(name)];
@@ -1001,18 +1030,16 @@ static void Cmd_Exec_f (void)
 		*resolved = 0;
 		for (fi = 0; fi < sizeof(execfallback)/sizeof(execfallback[0]); fi++)
 		{
-			if (FS_FLocateFile(va("%s%s", execfallback[fi], name), FSLF_IFFOUND|FSLF_IGNOREPURE, &loc) ||
-			    FS_FLocateFile(va("%s%s.cfg", execfallback[fi], name), FSLF_IFFOUND, &loc))
-			{
-				Q_snprintfz(resolved, sizeof(resolved), "%s%s", execfallback[fi], name);
+			Q_snprintfz(resolved, sizeof(resolved), "%s%s", execfallback[fi], name);
+			if (Cmd_ExecLocate(resolved, &loc, skipped, sizeof(skipped)))
 				break;
-			}
+			*resolved = 0;
 		}
 		if (*resolved && strcmp(resolved, name))
 			Q_strncpyz(name, resolved, sizeof(name));
 	}
 
-	if (FS_FLocateFile(name, FSLF_IFFOUND|FSLF_IGNOREPURE, &loc) || FS_FLocateFile(va("%s.cfg", name), FSLF_IFFOUND, &loc))
+	if (Cmd_ExecLocate(name, &loc, skipped, sizeof(skipped)))
 	{
 		file = FS_OpenReadLocation(name, &loc);
 		if (!file)
@@ -1028,6 +1055,12 @@ static void Cmd_Exec_f (void)
 		VFS_CLOSE(file);
 
 		untrusted = !!(loc.search->flags&SPF_UNTRUSTED);
+	}
+	else if (*skipped)
+	{	//P377: silent at boot, where cl_warncmd is 0
+		if (cl_warncmd.ival || developer.ival)
+			Con_Printf("not execing %s: it belongs to a mounted game\n", skipped);
+		return;
 	}
 #if defined(HAVE_LEGACY) && defined(HAVE_CLIENT)
 	else if (!strcmp(name, "default.cfg"))	//the q1 rerelease lacks a default.cfg (which I suppose is kinda handy, but oh well)

@@ -30283,6 +30283,29 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 377 — exec never runs a mounted game's config  *(APPLIED -- `common/cmd.c` (Cmd_ExecLocate: a hit in an SPF_ADDON searchpath counts as missing, in the P330 fallback and the final lookup; "not execing ... it belongs to a mounted game" under cl_warncmd/developer); FTESurf `ftesurf/fs_addons.default.txt` (cut to what a player needs). VERIFIED: FTESurf `cfg/test/p377boot.cfg`.)*
+
+**Problem.** Every boot ran Momentum's `cfg/config.cfg`.  The startup's
+`exec config.cfg` found no root file, and Patch 330's bare-name fallback
+resolved it to `cfg/config.cfg`, which only the Momentum mount has.  That file
+is `unbindall` plus Momentum's binds and cvars (~570 lines), so a first boot
+lost FTESurf's binds (`r` became `mom_restart_stage`) and cfg_save_auto wrote
+Momentum's into ftesurf.cfg (this machine's carries ten `mom_*` binds).  P8's
+FS_FileIsAddonOnly guard checked only the root name.
+
+**Change.** Cmd_Exec_f treats a config whose winning copy is in an addon mount
+(Momentum, CS:S, HL2, `<gamedir>/downloads`) as missing, at every fallback
+directory and for a path typed in full.  The mainconfig insertion runs before
+the lookup, so ftesurf.cfg still execs.
+
+**Verified.** Same boot before/after: `execing cfg/config.cfg` with 499
+"Unknown command" lines, then "not execing .../momentum/cfg/config.cfg" with 0.
+`exec cfg/autoexec.cfg` (Momentum-only) is refused; the control `exec p377echo`
+still reaches cfg/test/ through the fallback; fs_steamlibs resolves all three
+mounts from the shortened list.  The planned SHIFT observable could not move:
+this machine's ftesurf.cfg saves LSHIFT.  Binds a player's ftesurf.cfg already
+absorbed stay until rebound.  Needs a client release to reach players.
+
 ## Patch 372 — the map clock: time left, warnings, and votes to extend or change map  *(APPLIED -- mod-side only, no engine change: new `src/server/sv_vote.qc` (the votes, the serverinfo publisher, the chat commands and `cmd` twins), `sv_lobby.qc` (Lobby_Cycle: the vote-forced branch, extensions in the pull-in cap, Lobby_CycleGo, Lobby_WarnLvl, warnings and hold lines in chat; Lobby_NextMap honours a voted map), `sv_player.qc`, `sv_main.qc`, `sv_progs.src`; `src/shared/sh_defs.qc` (the key grammar, VOTE_*), `sh_time.qc` (Time_Clock); new `src/client/cl_vote.qc` (the vote box, its digit capture, `vote` handles), `cl_hud.qc` (HUD_SK, MapClock_*, the map-info rows), `cl_scores.qc` (the header clock), `cl_main.qc`, `cl_hudedit.qc`, `cl_chat.qc` (rows stop below the box), `cl_banner.qc` (an owed finish line said before a change), `cl_progs.src`; `default.cfg`, `cfg/lobby/lobby.cfg`. VERIFIED: FTESurf `cfg/test/p372vote.cfg`, `p372sv.cfg` + `p372va.cfg` + `p372vb.cfg`.)*
 
 **Problem.** The lobbies rotate every 30 minutes (Lobby_Cycle), but nothing
