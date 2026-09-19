@@ -30306,6 +30306,25 @@ XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
 Not verified: DGA (XWayland has none), the VidMode line (never printed), native
 distros other than Debian.
 
+## Patch 381 — the evidence tools read the `spec` record  *(APPLIED -- tools only, no engine or progs change: FTESurf `tools/reccheck.py`, `tools/test_reccheck.py`, `surfd/surfd.py` (TF_SPEC pin), `surfd/recplot.py`, `surfd/templates/admin_run.html`, `surfd/test_recplot.py`, `surfd/test_board.py`. VERIFIED: FTESurf `cfg/test/p381tools.cfg`.)*
+
+**Problem.** Patch 382 declares a spectate hold with `spec 1|0` edges and TF_SPEC
+(32768).  An old reccheck calls them unknown records and passes a doctored window;
+surfd would not show the mark.
+
+**Change.** reccheck, written from the grammar: a malformed or unpaired edge, any
+line inside a window, edges that disagree on <ticks>..<fl>, and a next `in` row or
+drop|rotate|server `pause` that does not restate <mt> <carry> are faults; so are a
+`spec` after the trailer, between a `pause` and its `session`, or inside a ghost
+window; in a finished file TF_SPEC without a window (or the reverse) and a window
+left open.  An unknown <why> is a note.  surfd pins the bit and ranks on as before;
+recplot and the admin page mark the window.
+
+**Verified.** test_reccheck 229/229 (76 spec checks, 13 mutants of the rules all
+killed); the pre-381 reccheck fails 62 of the 76.  Old vs new over all 578 local
+.rec/.part: faults and notes differ only on Patch 380's 13 fixtures.  test_recplot
+0 failed; the pre-381 recplot fails 4 of 5 spec arms.  test_board runs on the Pi.
+
 ## Patch 379 — the replay viewer interpolates every frame  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_watch.qc` (Watch_Sample: Hermite feet with linear fallback and the split snap, the crouch-slide eye, shortest-arc angles by the .view's cltime map or between .rec samples, the parse cache; Watch_Frame's banked clframetime clock; Watch_Camera's eye; Watch_Seek resets every cursor), `tools/watchtrace.py`. VERIFIED: FTESurf `cfg/test/p379wsm.cfg`, `p379wsmfps.cfg`.)*
 
 **Problem.** Position was lerped, but the angles were held for a whole packet --
