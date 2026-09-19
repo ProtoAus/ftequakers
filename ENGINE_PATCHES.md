@@ -30283,6 +30283,41 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 392 — Source's `cl_showfps`, and `chat_open`  *(APPLIED -- mod-side only, no engine change: FTESurf `ftesurf/cfg/default.cfg` (`alias cl_showfps show_fps`), `src/client/cl_chat.qc` (`chat_open`), `cl_spectate.qc` (SPEC_CMDS). VERIFIED: FTESurf `cfg/test/p392cmd.cfg`.)*
+
+**Problem.** Players who know Source type `cl_showfps`; FTE's cvar is `show_fps`,
+and its one alias slot is taken by `scr_showfps` (cl_screen.c:323).  Nothing was
+called `chat_open`.
+
+**Change.** A one-token alias passes its arguments on (cmd.c:3425-3431), so
+`cl_showfps 1` sets show_fps and a bare `cl_showfps` prints it.  `chat_open` is
+`chat_say` under a plainer name: typed, or as a key's whole bind, it opens the
+chat draft; spectate lets both through.
+
+**Verified.** p392cmd (bhop_eazy listen): `cl_showfps 1` / bare / `0` read
+show_fps 1 / 1 / 0; typed `chat_open` gives typing 1 and ESC closes it;
+`bind t chat_open` plus the key: took 1, typing 1; a non-chat bind on t: took 0.
+Control (the pre-392 csprogs): Unknown command "chat_open", the key not taken.
+
+## Patch 393 — the strafe bar's sensitivity  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_hud.qc` (`hud_strafe_sens`, the fill, `hud_strafe_probe`), `cl_main.qc` (the probe's dispatch), `cl_hudedit.qc` (the strafe pane's Sensitivity row), `ftesurf/cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p393sens.cfg`.)*
+
+**Problem.** Full deflection was 100% off the ideal turn rate, which at 2600-3500
+u/s is only +-44 to +-33 deg/s, so hand jitter pinned the bar.  hud_edit offered
+band 0.5/1/2.  Lex (2026-09-20): a sensitivity multiplier with today's bar at 4x,
+and a wider range to pick from.
+
+**Change.** frac = err * hud_strafe_sens / (4 * hud_strafe_band).  Default 1 (a
+turn at 5x the ideal fills the bar); 4 is the old bar exactly (the x4 and /4 are
+exact).  hud_edit's Band row became Sensitivity 0.5x/1x/2x/3x/4x; the band stays
+a console knob.  The colour is still the grade, so below 4x it leads the fill,
+and the slow side stops at sens/4 because a turn rate cannot go below zero (Lex
+chose linear knowing this).  `hud_strafe_probe` prints the last drawn err/frac.
+
+**Verified.** p393sens (bhop_eazy, the fill driven by replay 16.rec): the
+default reads 1; 9 in-air probes at sens 4 give frac == err, 9 at sens 1 give
+frac == err/4 (-0.53990 -> -0.13498, -1.00000 -> -0.25000); the pane's third
+row reads 1x (screenshot).
+
 ## Patch 390 — the mouse pad left of the key block  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/client/cl_mouse.qc` (MPad_Track/Frame/Draw, `mousepad`); `cl_hud.qc` (HUD_KeysGeom, shared by HUD_DrawKeys), `cl_main.qc` (register, the observer after Vote_Track, MPad_Draw after HUD_Draw, the console hook), `cl_hudedit.qc` (the "Mouse" row, Width/Trail options), `src/cl_progs.src`, `ftesurf/cfg/default.cfg`, `defaultuser.cfg`. VERIFIED: FTESurf `cfg/test/p390mouse.cfg`.)*
 
 **Problem.** Lex (2026-09-20) asked for a 2D mouse display left of the key
