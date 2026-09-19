@@ -1585,7 +1585,7 @@ void SV_SendFixAngle(client_t *client, sizebuf_t *msg, int fixtype, qboolean rol
 			MSG_WriteByte (msg, svcfte_setangledelta);
 			for (i=0 ; i < 3 ; i++)
 			{
-				int newa = ang[i] - SHORT2ANGLE(client->lastcmd.angles[i]);
+				float newa = ang[i] - SHORT2ANGLE(client->lastcmd.angles[i]);	//FTESurf Patch 396: was int, so every delta landed up to 1 deg short
 				MSG_WriteAngle16 (msg, newa);
 				client->lastcmd.angles[i] = ANGLE2SHORT(ang[i]);
 			}

@@ -81,6 +81,8 @@ static cvar_t	cl_predict_freshtype = CVARD("cl_predict_freshtype","1", "Take the
   hook itself is inert unless the csprogs exports CSQC_PredictPlayerMove; this
   cvar exists so an engine-side 0 is still a bisectable answer.*/
 cvar_t	cl_predict_qchook = CVARD("cl_predict_qchook","1", "Call CSQC_PredictPlayerMove once per predicted usercmd, letting CSQC run map triggers inside client prediction (FTESurf Patch 335). 0 restores the historical behaviour where only the server's touches exist and every trigger costs a round trip.");
+cvar_t	cl_predict_angleexact = CVARD("cl_predict_angleexact","1", "Reconcile a predicted teleport's view snap with the server's setangle by absolute target and command sequence (FTESurf Patch 396). 0 restores Patch 335's arithmetic, which rotates twice or not at all depending on frame rate and timing.");
+cvar_t	cl_predict_angledebug = CVARD("cl_predict_angledebug","0", "FTESurf Patch 396: 1 records every predicted-snap and setangle decision into a memory log; 2 also each sent command's yaw and the view yaw for 1 s after each. predangle_dump prints and clears it. Nothing prints while recording.");
 static cvar_t	cl_prederror = CVARD("cl_prederror","4", "Print one line per acked command whose server origin differs from what this client predicted for it by more than this many units (FTESurf Patch 335). 0 disables. The line IS the snap-back report: it names the sequence and both origins, so a disagreement between the client's trigger mirror and the server's is a quotable number instead of a feeling.");
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
 
@@ -1962,6 +1964,8 @@ void CL_InitPrediction (void)
 	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
 	Cvar_Register (&cl_predict_qchook,	cl_predictiongroup);	//FTESurf Patch 335
 	Cvar_Register (&cl_prederror,	cl_predictiongroup);	//FTESurf Patch 335
+	Cvar_Register (&cl_predict_angleexact,	cl_predictiongroup);	//FTESurf Patch 396
+	Cvar_Register (&cl_predict_angledebug,	cl_predictiongroup);	//FTESurf Patch 396
 	Cvar_Register (&cl_predict_extrapolate,	cl_predictiongroup);
 	Cvar_Register (&cl_predict_timenudge,	cl_predictiongroup);
 	Cvar_Register (&cl_lerp_smooth,	cl_predictiongroup);

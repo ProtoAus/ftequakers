@@ -8894,9 +8894,11 @@ void PR_CSProfile_f(void)
 }
 
 static void CSQC_GameCommand_f(void);
+static void CSQC_PredAngDump_f(void);
 void CSQC_RegisterCvarsAndThings(void)
 {
 	Cmd_AddCommand("coredump_csqc", CSQC_CoreDump);
+	Cmd_AddCommandD("predangle_dump", CSQC_PredAngDump_f, "Prints and clears the cl_predict_angledebug log (FTESurf Patch 396).");
 	Cmd_AddCommand ("extensionlist_csqc", PR_CSExtensionList_f);
 	Cmd_AddCommandD("cl_cmd", CSQC_GameCommand_f, "Calls the csqc's GameCommand function");
 	Cmd_AddCommand("breakpoint_csqc", CSQC_Breakpoint_f);
@@ -9776,9 +9778,9 @@ qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta)
      server's delta arrives, the remembered rotation is subtracted from it
      before application: what is left is exactly the turn the player made
      between the teleport command and the server's lastcmd, which is the part
-     the local snap could not have known.  No value matching, no epsilon --
-     the arithmetic is exact by construction and degrades to the unmodified
-     delta when no snap is outstanding.
+     the local snap could not have known.  Patch 396: that was NOT exact -- the
+     delta's basis is often not the snap's command, and the snap can fire after
+     the delta landed; it now matches by value (CSQC_PredictAngleCorrect).
 
   3. The listen server.  With a local server active the SSQC touch functions
      run in the same process and the hook is skipped outright, which is the
@@ -9787,12 +9789,65 @@ qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta)
 ===========================================================================
 */
 extern cvar_t cl_predict_qchook;
+extern cvar_t cl_predict_angleexact, cl_predict_angledebug;	/*cl_pred.c, Patch 396*/
 
-static struct {
-	vec3_t rot;
+/*FTESurf Patch 396: a snap keeps its absolute target and command sequence, so a server
+  setangle is matched by value.  ENGINE_PATCHES.md has the timing cases.*/
+#define PRED_SNAP_RING 8
+#define PRED_SNAP_TOL 1.05	/*deg: the 16-bit wire step + an unpatched server's int newa*/
+#define PRED_SNAP_OLDWIN 16	/*the delta was built up to this many commands after the snap's (choke, bunching, c2s loss)*/
+#define PRED_SNAP_NEWWIN 2	/*...or the local crossing came up to this many commands late*/
+#define PRED_SNAP_LIFE 1.5	/*s*/
+typedef struct {
+	vec3_t target, rot;
+	unsigned int seq;
 	double time;
 	qboolean used;
-} predsnaps[MAX_SPLITS][4];
+} predsnap_t;
+static predsnap_t predsnaps[MAX_SPLITS][PRED_SNAP_RING];
+static struct {
+	vec3_t target;	/*the last server setangle, absolute*/
+	int basis;
+	double time;
+	qboolean valid;
+} predsrv[MAX_SPLITS];
+static double pred_trace_until[MAX_SPLITS];	/*cl_predict_angledebug 2 logs sent commands until then*/
+
+static float PredAngNorm(float a)
+{
+	return a - 360*floor((a + 180) / 360);	/* -> [-180,180) */
+}
+static qboolean PredAngClose(const vec3_t a, const vec3_t b)
+{
+	return fabs(PredAngNorm(a[PITCH] - b[PITCH])) <= PRED_SNAP_TOL && fabs(PredAngNorm(a[YAW] - b[YAW])) <= PRED_SNAP_TOL;
+}
+static qboolean PredAngExact(void)
+{	//QW only: the command sequence is the netchan sequence (cl_input.c CLQW_SendCmd)
+	return cl_predict_angleexact.ival && cls.protocol == CP_QUAKEWORLD && !cls.demoplayback;
+}
+
+/*Recorded, never printed while recording: a Con_Printf costs ~5 ms (Patch 269b) and would
+  change the frame timing under test.*/
+static char pa_log[512][128];
+static int pa_log_n;
+static void VARGS PA_Log(const char *fmt, ...) LIKEPRINTF(1);
+static void VARGS PA_Log(const char *fmt, ...)
+{
+	va_list argptr;
+	if (!cl_predict_angledebug.ival || pa_log_n >= countof(pa_log))
+		return;
+	va_start(argptr, fmt);
+	Q_vsnprintfz(pa_log[pa_log_n++], sizeof(pa_log[0]), fmt, argptr);
+	va_end(argptr);
+}
+static void CSQC_PredAngDump_f(void)
+{
+	int i;
+	for (i = 0; i < pa_log_n; i++)
+		Con_Printf("%s\n", pa_log[i]);
+	Con_Printf("predangle: %i lines%s\n", pa_log_n, pa_log_n >= countof(pa_log) ? " (RING FULL)" : "");
+	pa_log_n = 0;
+}
 /*FTESurf Patch 337: the basevelocity state machine, client side.
 
   The server's model (Patch 240/249, sv_entities.qc): trigger_push_touch
@@ -9839,23 +9894,31 @@ void CSQC_PredictBaseVelFlush(void)
 }
 static int pred_snap_lastseq[MAX_SPLITS];	/*-1 = none; the chain replays every unacked cmd on every rendered frame, so an angle snap must be applied to the live view ONCE per command sequence, not once per replay*/
 
-void CSQC_PredictAngleFlush(int seat)
+static void CSQC_PredictAngleReset(int seat)
 {
 	int i;
-	if ((unsigned int)seat >= MAX_SPLITS)
-		return;
-	for (i = 0; i < countof(predsnaps[seat]); i++)
+	for (i = 0; i < PRED_SNAP_RING; i++)
 		predsnaps[seat][i].used = true;
 	pred_snap_lastseq[seat] = -1;
+	predsrv[seat].valid = false;
+	pred_trace_until[seat] = 0;
+}
+
+void CSQC_PredictAngleFlush(int seat)
+{
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	CSQC_PredictAngleReset(seat);
 }
 
 /* Apply one locally-predicted angle snap: rotate the live view by
    (snap - the triggering command's angles), through the same funnel every
-   server fixangle uses, and remember the rotation for the delta correction. */
+   server fixangle uses, and remember it for the server's setangle. */
 static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercmd_t *cmd)
 {
 	playerview_t *pv = &cl.playerview[seat];
-	vec3_t newang, rot;
+	vec3_t newang, rot, target, before;
+	qboolean exact = PredAngExact();
 	double oldest;
 	int i, slot = 0;
 
@@ -9864,13 +9927,46 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 	if (pred_snap_lastseq[seat] >= 0 && cmd->sequence <= pred_snap_lastseq[seat])
 		return;
 	pred_snap_lastseq[seat] = cmd->sequence;
+	pred_trace_until[seat] = realtime + 1;
+
+	for (i = 0; i < 3; i++)
+		target[i] = PredAngNorm(snap[i]);
+	//Patch 396: the server already answered this command, so its angle rode that reply (or was
+	//lost with it). Only the stale-base replay (cl_pred.c, prop.sequence behind the ack) gets here.
+	if (exact && (int)cmd->sequence <= cls.netchan.incoming_acknowledged)
+	{
+		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-acked (ack %i)", realtime, cmd->sequence, target[YAW], cls.netchan.incoming_acknowledged);
+		return;
+	}
+	//Patch 396: the server crossed a command or two earlier and its angle already landed.
+	if (exact && predsrv[seat].valid && realtime - predsrv[seat].time <= PRED_SNAP_LIFE &&
+		(int)cmd->sequence - predsrv[seat].basis > 0 && (int)cmd->sequence - predsrv[seat].basis <= PRED_SNAP_NEWWIN &&
+		PredAngClose(predsrv[seat].target, target))
+	{
+		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-server (basis %i)", realtime, cmd->sequence, target[YAW], predsrv[seat].basis);
+		return;
+	}
+	//Patch 396: the same crossing, moved 1-2 commands later by a prediction correction. A live
+	//slot already put the view on this absolute target, and this command's angles may predate
+	//that snap, so rotating again would double it. An earlier-moved crossing never gets here
+	//(lastseq above).
+	for (i = 0; exact && i < PRED_SNAP_RING; i++)
+	{
+		predsnap_t *s = &predsnaps[seat][i];
+		int d = (int)(cmd->sequence - s->seq);
+		if (s->used || realtime - s->time > PRED_SNAP_LIFE || d < 1 || d > PRED_SNAP_NEWWIN || !PredAngClose(s->target, target))
+			continue;
+		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-self (slot seq %u)", realtime, cmd->sequence, target[YAW], s->seq);
+		s->seq = cmd->sequence;	//the crossing as now predicted; CSQC_PredictAngleCorrect windows on it
+		return;
+	}
 
 	for (i = 0; i < 3; i++)
 	{
-		rot[i] = snap[i] - SHORT2ANGLE(cmd->angles[i]);
-		rot[i] -= 360 * floor((rot[i] + 180) / 360);	/* -> [-180,180), like Ghost_NormAngle's contract */
+		rot[i] = PredAngNorm(target[i] - SHORT2ANGLE(cmd->angles[i]));
 		newang[i] = pv->viewangles[i] + rot[i];
 	}
+	VectorCopy(pv->viewangles, before);
 
 	if (!CSQC_Parse_SetAngles(seat, newang, true))
 	{
@@ -9878,10 +9974,11 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 		VectorCopy(newang, pv->simangles);
 		VectorCopy(pv->viewangles, pv->intermissionangles);
 	}
+	CL_AngleHistoryFollow(seat, before);
 
-	/* record the rotation, oldest slot first so the ring stays chronological */
+	/* record the snap, oldest slot first so the ring stays chronological */
 	oldest = 1e30;
-	for (i = 0; i < countof(predsnaps[seat]); i++)
+	for (i = 0; i < PRED_SNAP_RING; i++)
 	{
 		if (predsnaps[seat][i].time < oldest)
 		{
@@ -9889,21 +9986,23 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 			slot = i;
 		}
 	}
+	VectorCopy(target, predsnaps[seat][slot].target);
 	VectorCopy(rot, predsnaps[seat][slot].rot);
+	predsnaps[seat][slot].seq = cmd->sequence;
 	predsnaps[seat][slot].time = realtime;
 	predsnaps[seat][slot].used = false;
+	PA_Log("predangle: %.4f snap seq %u tgt %.3f cmd %.3f rot %.3f view %.3f -> %.3f %s", realtime, cmd->sequence, target[YAW],
+		SHORT2ANGLE(cmd->angles[YAW]), rot[YAW], before[YAW], pv->viewangles[YAW], exact ? "applied" : "legacy-applied");
 }
 
-void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
+/*Patch 335's arithmetic, kept for cl_predict_angleexact 0: subtract the oldest live rotation.*/
+static void CSQC_PredictAngleCorrectLegacy(int seat, vec3_t delta)
 {
 	double oldest;
 	int i, slot = -1;
 
-	if ((unsigned int)seat >= MAX_SPLITS)
-		return;
-
-	oldest = realtime - 1.5;	/* a server delta more than 1.5s behind the snap is not the snap's */
-	for (i = 0; i < countof(predsnaps[seat]); i++)
+	oldest = realtime - PRED_SNAP_LIFE;	/* a server delta more than 1.5s behind the snap is not the snap's */
+	for (i = 0; i < PRED_SNAP_RING; i++)
 	{
 		if (predsnaps[seat][i].used || predsnaps[seat][i].time < oldest)
 			continue;
@@ -9914,7 +10013,131 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 	{
 		predsnaps[seat][slot].used = true;
 		VectorSubtract(delta, predsnaps[seat][slot].rot, delta);
+		PA_Log("predangle: %.4f delta basis %i legacy minus rot %.3f (seq %u) -> %.3f", realtime, cls.netchan.incoming_acknowledged,
+			predsnaps[seat][slot].rot[YAW], predsnaps[seat][slot].seq, delta[YAW]);
 	}
+	else
+		PA_Log("predangle: %.4f delta basis %i din %.3f legacy no-slot", realtime, cls.netchan.incoming_acknowledged, delta[YAW]);
+}
+
+/*Patch 396: rebuild the server's absolute target from the command it answered (its lastcmd is
+  the acked outframe's) and compare that with the snaps, instead of assuming the delta's basis
+  is the snap's command.*/
+void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
+{
+	outframe_t *of = NULL;
+	vec3_t ssrv, din;
+	const char *verdict;
+	int i, j, K = 0, m = -1, r = -1;
+
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	pred_trace_until[seat] = realtime + 1;
+	if (!PredAngExact())
+	{
+		CSQC_PredictAngleCorrectLegacy(seat, delta);
+		return;
+	}
+	for (i = 0; i < 4 && !of; i++)
+	{	//a packet without a move leaves its outframe stale; the server's lastcmd is then the move before it
+		K = cls.netchan.incoming_acknowledged - i;
+		if (cl.outframes[K & UPDATE_MASK].cmd_sequence == K)
+			of = &cl.outframes[K & UPDATE_MASK];
+	}
+	if (!of)
+	{
+		CSQC_PredictAngleCorrectLegacy(seat, delta);
+		return;
+	}
+	VectorCopy(delta, din);
+	for (i = 0; i < 3; i++)
+		ssrv[i] = PredAngNorm(SHORT2ANGLE(of->cmd[seat].angles[i]) + delta[i]);
+
+	//m = the newest live snap the server's target confirms; r = the newest live snap
+	for (j = 0; j < PRED_SNAP_RING; j++)
+	{
+		predsnap_t *s = &predsnaps[seat][j];
+		if (s->used)
+			continue;
+		if (realtime - s->time > PRED_SNAP_LIFE || (int)(s->seq - (unsigned int)K) < -PRED_SNAP_OLDWIN)
+		{
+			s->used = true;
+			continue;
+		}
+		if (r < 0 || (int)(s->seq - predsnaps[seat][r].seq) > 0)
+			r = j;
+		if ((int)(s->seq - (unsigned int)K) <= PRED_SNAP_NEWWIN && PredAngClose(s->target, ssrv) &&
+			(m < 0 || (int)(s->seq - predsnaps[seat][m].seq) > 0))
+			m = j;
+	}
+
+	if (m >= 0)
+	{	//already on screen: only a newer snap the server ran past without making is undone
+		unsigned int upto = predsnaps[seat][m].seq;
+		if ((int)((unsigned int)K - upto) > 0)
+			upto = K;
+		if (r != m && (int)(predsnaps[seat][r].seq - (unsigned int)K) <= 0)
+		{
+			for (i = 0; i < 3; i++)
+				delta[i] = PredAngNorm(ssrv[i] - predsnaps[seat][r].target[i]);
+			verdict = "match-undo-newer";
+		}
+		else
+		{
+			VectorClear(delta);
+			verdict = "match";
+		}
+		for (j = 0; j < PRED_SNAP_RING; j++)
+			if (!predsnaps[seat][j].used && (int)(predsnaps[seat][j].seq - upto) <= 0)
+				predsnaps[seat][j].used = true;
+		PA_Log("predangle: %.4f delta basis %i base %.3f din %.3f srv %.3f %s seq %u -> %.3f", realtime, K,
+			SHORT2ANGLE(of->cmd[seat].angles[YAW]), din[YAW], ssrv[YAW], verdict, predsnaps[seat][m].seq, delta[YAW]);
+	}
+	else
+	{
+		//no snap matches: the server's angle wins.  A live snap applied after K was sampled is
+		//on screen but not in A_K, so re-base on it; otherwise A_K carries it and the delta is right.
+		if (r >= 0 && predsnaps[seat][r].time >= of->senttime)
+		{
+			for (i = 0; i < 3; i++)
+				delta[i] = PredAngNorm(ssrv[i] - predsnaps[seat][r].target[i]);
+			verdict = "rebase";
+		}
+		else
+			verdict = r >= 0 ? "plain-inbase" : "plain";
+		PA_Log("predangle: %.4f delta basis %i base %.3f din %.3f srv %.3f %s seq %i -> %.3f", realtime, K,
+			SHORT2ANGLE(of->cmd[seat].angles[YAW]), din[YAW], ssrv[YAW], verdict, r >= 0 ? (int)predsnaps[seat][r].seq : -1, delta[YAW]);
+		for (j = 0; j < PRED_SNAP_RING; j++)
+			predsnaps[seat][j].used = true;
+	}
+
+	VectorCopy(ssrv, predsrv[seat].target);
+	predsrv[seat].basis = K;
+	predsrv[seat].time = realtime;
+	predsrv[seat].valid = true;
+}
+
+/*Patch 396: an absolute svc_setangle.  Patch 335 flushed here, and clearing lastseq let the next
+  stale-base replay fire the snap again on top of it.*/
+void CSQC_PredictAngleAbsolute(int seat, const vec3_t ang)
+{
+	int i;
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	if (!PredAngExact())
+	{
+		CSQC_PredictAngleReset(seat);
+		return;
+	}
+	for (i = 0; i < PRED_SNAP_RING; i++)
+		predsnaps[seat][i].used = true;
+	for (i = 0; i < 3; i++)
+		predsrv[seat].target[i] = PredAngNorm(ang[i]);
+	predsrv[seat].basis = cls.netchan.incoming_acknowledged;
+	predsrv[seat].time = realtime;
+	predsrv[seat].valid = true;
+	pred_trace_until[seat] = realtime + 1;
+	PA_Log("predangle: %.4f absolute %.3f basis %i", realtime, predsrv[seat].target[YAW], predsrv[seat].basis);
 }
 
 void CSQC_PredictConsumeBaseVel(int seat, int sequence)
@@ -10079,6 +10302,9 @@ void CSQC_Input_Frame(int seat, usercmd_t *cmd)
 	cs_set_input_state(cmd);
 	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_Input_Frame);
 	cs_get_input_state(cmd);
+
+	if (cl_predict_angledebug.ival >= 2 && (unsigned int)seat < MAX_SPLITS && realtime < pred_trace_until[seat])	//Patch 396
+		PA_Log("predangle: %.4f cmd %u yaw %.4f view %.4f", realtime, cmd->sequence, SHORT2ANGLE(cmd->angles[YAW]), cl.playerview[seat].viewangles[YAW]);
 }
 
 //this protocol allows up to 32767 edicts.

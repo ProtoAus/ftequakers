@@ -30283,6 +30283,69 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 396 — a predicted teleport's view snap and the server's setangle agree  *(APPLIED -- `client/pr_csqc.c` (predsnaps keep target + sequence; ApplySnap's skip-acked / skip-server / skip-self; CSQC_PredictAngleCorrect matches by value; CSQC_PredictAngleAbsolute; `predangle_dump`), `client/cl_pred.c` (`cl_predict_angleexact`, `cl_predict_angledebug`), `client/cl_input.c` (CL_AngleHistoryFollow), `client/cl_parse.c`, `client/client.h`, `server/sv_send.c` (float newa). VERIFIED: FTESurf `cfg/test/p396c.cfg`, `p396a`, `p396d`, `p396d2`, `p396b`, `p396r` (+ `p396sv`, `p396pro`, `p396find`).)*
+
+**Problem.** Teleports "don't take the angle", and `!s` after one can face
+backwards.  Patch 335 subtracted the oldest live predicted rotation from the
+server's delta, assuming the delta was built on the snap's command N.  Measured
+on surf_aircontrol (every destination yaw 90), Patch 335's arithmetic:
+- M2 (fps above cl_netfps, low RTT): the reply to N parses with no slot, then the
+  stale-base replay (cl_pred.c: prop.sequence behind the ack) fires the snap on
+  acked N -- rotated twice (3-4/12 at 300 fps; the shipped client 7/12).
+- M1 (the server's lastcmd K > N: choke, bunched packets, c2s loss): A_K already
+  holds the snap and the subtraction undoes it (c2spps 33 + 60 ms: 6-11/12).
+- M3: M2's unused slot is subtracted from the next setangle within 1.5 s
+  (`zone_goto` read 45 - 90 on exactly the doubled reps).  M5: an absolute
+  setangle cleared lastseq, so a later replay re-fired the snap on top of it.
+- A prediction correction moving the crossing to a later command whose angles
+  were sampled before the first snap rotates again (60 fps: 15.6 u noclip errors).
+- The command straddling a forced rotation went out lerped across it (Patch 136
+  resample; sent at 81.77).  And `int newa` (sv_send.c) landed every delta
+  fixangle up to 1 deg short (12.6 read 13.0).
+
+**Change.** A slot keeps the absolute target, rot, sequence and time.  ApplySnap
+skips a command the server already acked (skip-acked), a crossing the server's
+setangle confirmed 1-2 commands earlier (skip-server), and a crossing a live,
+unconfirmed slot made 1-2 commands earlier to the same target (skip-self; the
+slot takes the new sequence).  CSQC_PredictAngleCorrect rebuilds the server's
+absolute target from the acked outframe's angles + the delta: a live slot that
+matches it within 1.05 deg applies 0 (only a newer snap the server ran past is
+undone); none matches -> the server wins, re-based on a live snap applied after
+K was sampled.  An absolute setangle marks the slots used and keeps lastseq.
+Every forced rotation also rotates the resample history (CL_AngleHistoryFollow).
+QW only; `cl_predict_angleexact 0` restores 335.  `cl_predict_angledebug 1|2`
+logs decisions to memory (a Con_Printf per line would move the timing under
+test); `predangle_dump` prints them.
+
+skip-self cannot swallow a real second teleport: it needs the target a live slot
+already put on screen, so the view already holds it; a second teleport there
+15-30 ms later wants exactly that view, and a rotation from a command sampled
+before the first snap is wrong whatever caused it.  It drops at most the mouse
+between the two commands, as a matched delta already does.  The opposite move
+(a crossing corrected to an EARLIER command) needs no rule: lastseq refuses any
+sequence at or below one already snapped, and the slot's later sequence stays
+inside CSQC_PredictAngleCorrect's window for the server's earlier basis.
+
+**Verified.** Graded PASS/DOUBLE/UNDO at +1 s; C1L = this binary with
+`cl_predict_angleexact 0`, C0 = the shipped client.  Final build:
+- p396a (M1) 300/60: 12/12 PASS; C1L 6 UNDO, 3 PASS, 3 at 30-53 (M1 + the
+  straddle; C1L runs without the history follow); C0 11 UNDO.  60/60: 32 PASS +
+  4 NO-CROSS over 36 reps; skip-self on 4, each on a command whose angles
+  predate the first snap (the delta's base read 0), all PASS.
+- p396c (M2) 300/0: 12/12 (skip-acked on 7); C1L 3 DOUBLE, each "no-slot" then
+  "legacy-applied"; C0 7 DOUBLE.  60/60: 12/12; C1L 12/12.
+- p396d (M3): teleport 12/12, the zone_goto after it 12/12 at 45.
+Before skip-self the same design failed one rep (p396a 60/60 rep 7: the gap
+skip-self closes) and passed every other: p396c's four cells (60/0 included),
+p396d2 (all 45 after 1.7 s), p396b (12/12 on the int-newa server where the
+controls read 89.6; the float server reads 12.6 36/36), p396r (re-base ran once).
+Falsified: the design's "controls pass at delay 60 and at 60 fps" (M1 and moved
+crossings fail them) and its NO-CROSS test.  Not verified: the Pi (server-only
+setangles stay up to 1 deg short until its binary has float newa), a live lobby,
+100-tick maps, mouse movement during a snap, cl_threadedphysics, NQ.  A chained
+teleport to a DIFFERENT target on a command sampled before the first snap still
+adds both rotations, as 335 did.  No independent review.
+
 ## Patch 397 — `status` on an FTE QW server prints the server's answer  *(APPLIED -- `server/sv_ccmds.c` (SV_Status_f). VERIFIED: FTESurf `cfg/test/p397e.cfg`.)*
 
 **Problem.** `status` typed while connected to a lobby printed "Server is not

@@ -7963,7 +7963,7 @@ void CLQW_ParseServerMessage (void)
 	unsigned int u;
 	int			i, j;
 	int			destsplit;
-	vec3_t ang;
+	vec3_t ang, angbefore;
 	float f;
 	qboolean	suggestcsqcdebug = false;
 	inframe_t	*inf;
@@ -8161,15 +8161,17 @@ void CLQW_ParseServerMessage (void)
 		case svcfte_setangledelta:
 			for (i=0 ; i<3 ; i++)
 				ang[i] = MSG_ReadAngle16 ();
-			/*FTESurf Patch 335: subtract the rotation a locally-predicted angle
-			  snap already applied, so the server's delta cannot rotate twice.*/
+			/*FTESurf Patch 335/396: reconcile with a locally-predicted angle snap,
+			  so the server's delta cannot rotate twice (pr_csqc.c).*/
 			CSQC_PredictAngleCorrect(destsplit, ang);
+			VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
 			for (i=0 ; i<3 ; i++)
 				ang[i] += cl.playerview[destsplit].viewangles[i];
 			if (!CSQC_Parse_SetAngles(destsplit, ang, true))
 				VectorCopy (ang, cl.playerview[destsplit].viewangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].simangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].intermissionangles);
+			CL_AngleHistoryFollow(destsplit, angbefore);	//FTESurf Patch 396
 			break;
 		case svc_setangle:
 			if (cls.demoplayback == DPB_MVD)
@@ -8196,6 +8198,7 @@ void CLQW_ParseServerMessage (void)
 					fixtype = MSG_ReadByte();	//0=unknown, 1=tele, 2=spawn
 				for (i=0 ; i<3 ; i++)
 					ang[i] = MSG_ReadAngle();
+				VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
 				if (fixtype == 1)
 				{	//relative
 					CSQC_PredictAngleCorrect(destsplit, ang);	//FTESurf Patch 335
@@ -8205,7 +8208,7 @@ void CLQW_ParseServerMessage (void)
 				else
 				{
 					fixtype = 2;	//snap
-					CSQC_PredictAngleFlush(destsplit);	//FTESurf Patch 335: absolute overrides predicted snaps
+					CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				}
 				if (!CSQC_Parse_SetAngles(destsplit, ang, fixtype==1))
 				{
@@ -8214,6 +8217,7 @@ void CLQW_ParseServerMessage (void)
 					VectorCopy (ang, inf->packet_entities.fixedangles[destsplit]);
 				}
 				VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].intermissionangles);
+				CL_AngleHistoryFollow(destsplit, angbefore);	//FTESurf Patch 396
 			}
 			break;
 
@@ -9738,7 +9742,7 @@ void CLNQ_ParseServerMessage (void)
 	char		*s;
 	unsigned int u;
 	int			i, j;
-	vec3_t		ang;
+	vec3_t		ang, angbefore;
 	unsigned int cmdstart;
 
 //	cl.last_servermessage = realtime;
@@ -10162,12 +10166,14 @@ void CLNQ_ParseServerMessage (void)
 			for (i=0 ; i<3 ; i++)
 				ang[i] = MSG_ReadAngle16 ();
 			CSQC_PredictAngleCorrect(destsplit, ang);	//FTESurf Patch 335
+			VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
 			for (i=0 ; i<3 ; i++)
 				ang[i] += cl.playerview[destsplit].viewangles[i];
 			if (!CSQC_Parse_SetAngles(destsplit, ang, true))
 				VectorCopy (ang, cl.playerview[destsplit].viewangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].simangles);
 			VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].intermissionangles);
+			CL_AngleHistoryFollow(destsplit, angbefore);	//FTESurf Patch 396
 			break;
 		case svc_setangle:
 			{
@@ -10176,7 +10182,8 @@ void CLNQ_ParseServerMessage (void)
 					MSG_ReadByte();	//0=unknown, 1=tele, 2=spawn
 				for (i=0 ; i<3 ; i++)
 					ang[i] = MSG_ReadAngle();
-				CSQC_PredictAngleFlush(destsplit);	//FTESurf Patch 335: an absolute set overrides every predicted snap
+				VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
+				CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				if (!CSQC_Parse_SetAngles(destsplit, ang, false))
 				{
 					inf->packet_entities.fixangles[destsplit] = true;
@@ -10184,6 +10191,7 @@ void CLNQ_ParseServerMessage (void)
 					VectorCopy (ang, inf->packet_entities.fixedangles[destsplit]);
 				}
 				VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].intermissionangles);
+				CL_AngleHistoryFollow(destsplit, angbefore);	//FTESurf Patch 396
 				VRUI_SnapAngle();
 			}
 			break;

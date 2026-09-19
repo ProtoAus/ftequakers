@@ -1882,6 +1882,22 @@ static void CL_AngleAt(int plnum, double when, vec3_t out)
 	VectorCopy(cl_anghist[plnum][newer].ang, out);
 }
 
+extern cvar_t cl_predict_angleexact;	/*cl_pred.c*/
+/*FTESurf Patch 396: a forced rotation (either setangle, or a predicted snap) rotates the
+  history with it, or the command whose window straddles it is sent lerped across the jump.*/
+void CL_AngleHistoryFollow(int plnum, const vec3_t before)
+{
+	vec3_t rot;
+	int i;
+	if (!cl_predict_angleexact.ival || (unsigned int)plnum >= MAX_SPLITS)
+		return;
+	VectorSubtract(cl.playerview[plnum].viewangles, before, rot);
+	if (!rot[0] && !rot[1] && !rot[2])
+		return;
+	for (i = 0; i < CL_ANGHIST; i++)
+		VectorAdd(cl_anghist[plnum][i].ang, rot, cl_anghist[plnum][i].ang);
+}
+
 static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, float framemsecs/*total accumulated*/, float cmdlag/*ms this cmd's nominal end is behind now*/)
 {
 	usercmd_t *cmd = &cl_pendingcmd[plnum];

@@ -1334,6 +1334,7 @@ qboolean IN_WeaponWheelIsShown(void);	//to decide when the game should be auto-p
 void CL_InitInput (void);
 void CL_SendCmd (double frametime, qboolean mainloop);
 void CL_SendMove (usercmd_t *cmd);
+void CL_AngleHistoryFollow(int plnum, const vec3_t before);	//FTESurf Patch 396
 #ifdef NQPROT
 void CL_ParseTEnt (qboolean nqprot);
 #else
@@ -1595,6 +1596,7 @@ void	 CSQC_PredictConsumeBaseVel(int seat, int sequence);
 void	 CSQC_PredictBaseVelFlush(void);
 void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
 void	 CSQC_PredictAngleFlush(int seat);
+void	 CSQC_PredictAngleAbsolute(int seat, const vec3_t ang);	//FTESurf Patch 396
 void	 CSQC_Input_Frame(int seat, usercmd_t *cmd);
 void	 CSQC_WorldLoaded(void);
 qboolean CSQC_ParseTempEntity(void);
@@ -1627,6 +1629,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_PredictBaseVelFlush()
 #define CSQC_PredictAngleCorrect(seat,delta)
 #define CSQC_PredictAngleFlush(seat)
+#define CSQC_PredictAngleAbsolute(seat,ang)
 #define CSQC_ServerInfoChanged()
 #define CSQC_PlayerInfoChanged(player)
 #endif
