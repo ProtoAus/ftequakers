@@ -30427,6 +30427,41 @@ surf_island *55 (45 -> -90) turn you; HEAD keeps 45 on all three.  *11 (200 ->
 90) lands at 89.0: the engine's delta fixangle truncates (sv_send.c `int newa`,
 Patch 396).
 
+## Patch 395 — a stage row plays the run it was set in; the online cache sorted by map and leg  *(APPLIED -- mod-side and surfd, no engine change: FTESurf `surfd/surfd.py`, `sweep.py`, `admin.py`, `README.md`, tests (fafd4bc, review fixes 654e212 and eb51bdf); `src/client/cl_online.qc`, `cl_scores.qc`, `cl_watch.qc`, `cl_main.qc`, `tools/onlinecache.py` (69d4ecd); `src/server/sv_lobby.qc` (a comment). VERIFIED: surfd's nine suites; FTESurf `cfg/test/p395win.cfg`, `p395cache.cfg`, `p395stub.cfg`; `p395stage.cfg` is post-deploy.)*
+
+**Problem.** "Watch" on an online stage row said no recording was kept.  Stage
+times a main run posts (Patch 360) carry the run's runid but no leaf, and nothing
+linked a stage row to its parent: `replays` had no runid and `runs.runid` is
+overwritten on improvement.  Lex also wanted stage times from runs the player
+never finished (kept only as the lobby's 30-day evidence) and the cache of
+downloaded replays, flat `data/online/<id>.rec`, sorted by map and leg.
+
+**Change.** surfd schema 6: `replays.runid` and `kind` ('run' | 'evidence'); board
+rows gain `run`, the parent recording of a stage row with none of its own; the
+5-minute sweep indexes lobby evidence files that back such a row, hard-links them
+into surfd's own store and garbage-collects them when no row names them; every
+ranked-run query filters kind 'run'.  Runids are trusted only from trusted
+submitters; a runid is never read from a file header.  Client: a stage row opens
+its parent 1 s before the stage and pauses once at its end (stagepost dur back
+from the next stage/end tick); an `abandon` record shows "(abandoned)" and no
+finish; the cache is `data/online/<map>/<legdir>/<MMmSS.mmms>_<name>[_dnf]_r<id>.rec`,
+named from the file's own header, looked up by the id suffix, old flat files
+moved one per frame.
+
+**Verified.** On copies of the live DB and evidence: 66 of 66 stage rows with a
+runid get a `run` (59 through kind-'run' replays, 7 through the two evidence
+files).  Nine surfd suites 0 FAIL; the new cases fail on HEAD.  p395win: every
+window equals tools/onlinecache.py's (surf_aura r18 stage 2 = 7.8750..17.2350 s),
+one pause each; p395cache: the 13 real files moved byte-identical, rerun no-op;
+p395stub: a stage row downloads and opens its parent at the window.  Controls
+fail as registered.  Two reviews: the first found four surfd defects (a header
+runid backfill that could link a stage row to a save-load continuation, runids
+from untrusted submitters, a torn `end` crashing the sweep, GC unlinking lobby
+files under one misconfiguration), the second two more (legacy shadow rows; an
+`end` torn inside its digits); all fixed with regression cases.  Accepted: a
+legacy parent no runs row names stays unlinked; an exact-tie finish before schema
+6 would link to the tie's file (0 such rows in the live DB, and migrate runs once).
+
 ## Patch 394 — trigger_teleport_relative uses Source's rule  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_relative_touch). VERIFIED: FTESurf `cfg/test/p394a.cfg`, `p394b.cfg`, `p394rec.cfg`, `p394verify.cfg`.)*
 
 **Problem.** surf_4am `!s 2`..`!s 7` left you inside the floor.  Their
