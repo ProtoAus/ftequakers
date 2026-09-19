@@ -30306,6 +30306,28 @@ XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
 Not verified: DGA (XWayland has none), the VidMode line (never printed), native
 distros other than Debian.
 
+## Patch 383 — every lobby body at 66 Hz, tick-stamped and interpolated  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/server/sv_pose.qc` and `src/client/cl_body.qc`; `sv_lobby.qc` (SendEntity avatars, `lobby_av_stream`, `lobby_av_budget`, the whole-tick cap), `sv_player.qc`/`sv_main.qc` (Pose_Capture per packet, Pose_Frame), `cl_main.qc` (Body_Frame), `cl_keys.qc`, `cl_netmon.qc`, `lobby.cfg` (`lobby_av_rate 0`), `tools/bodytrace.py`. VERIFIED: FTESurf `cfg/test/p383view.cfg` (+ `p383sv`, `p383own`), `p270_net`, `p278b`.)*
+
+**Problem.** Other players were engine avatars posed on a float-time gate -- 13.3 Hz
+at `lobby_av_rate 15` -- yaw only, and lerped by packet arrival, so they stepped at
+speed and nothing carried the view angles a spectator needs.
+
+**Change.** The avatar is a CSQC entity.  A sample (about 20 B) carries the owner's
+`run_movetick`, origin at 1/64 u, 16-bit pitch/yaw, eye, flags and a teleport serial;
+a viewer spectating the owner also gets velocity, keys and the run clock (+15 B).
+Published every moved tick, capped in whole ticks and by `lobby_av_budget`, with a
+rest marker and a 0.5 s keepalive when still or held.  The client rings 32 samples per
+body and renders at an owner-clock estimate less about 1.5 sample intervals, Hermite
+and shortest-arc (sh_interp.qc), snapping on the serial.  `lobby_av_stream 0` is the
+old path, byte for byte.
+
+**Verified.** 62.7 samples/s per moving body; each teleport drawn in one frame; rests
+held to the resume tick; 0 CSQC misreads; `lobby_av_rate` 15 / 22.2 / 66.67 give 13.3 /
+22.1 / 66.3 and the budget cap gap 3; the stream-off control fails the smoothness and
+teleport gates.  Falsified: the speed-CV gates assumed a constant-speed owner (its
+sampled speed varies 4.3%, the render 4.5%) and the control's rate at 66.67 (53, not
+25-45).  The first run found `mv = !first && (...)` parsing as `(mv = !first) && ...`.
+
 ## Patch 381 — the evidence tools read the `spec` record  *(APPLIED -- tools only, no engine or progs change: FTESurf `tools/reccheck.py`, `tools/test_reccheck.py`, `surfd/surfd.py` (TF_SPEC pin), `surfd/recplot.py`, `surfd/templates/admin_run.html`, `surfd/test_recplot.py`, `surfd/test_board.py`. VERIFIED: FTESurf `cfg/test/p381tools.cfg`.)*
 
 **Problem.** Patch 382 declares a spectate hold with `spec 1|0` edges and TF_SPEC
