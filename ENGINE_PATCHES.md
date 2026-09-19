@@ -30461,7 +30461,8 @@ through `!r`, a disconnect park resumed as a second session, a notarget release 
 PASS, and edits of them HOLD/REFUSE where the 377 binary PASSes them.  An independent
 review (three lenses, two skeptics each) found the warp-order false HOLD, the
 divergence blame and a carry tolerance on a false comment; all three fixed and
-re-run.  Not yet: the Pi aarch64 build.
+re-run.  The Pi's aarch64 build (the three files onto its 376 tree) prints Windows'
+pm_dettest hashes and the same p380verify verdicts; not yet swapped in.
 
 ## Patch 383 — every lobby body at 66 Hz, tick-stamped and interpolated  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/server/sv_pose.qc` and `src/client/cl_body.qc`; `sv_lobby.qc` (SendEntity avatars, `lobby_av_stream`, `lobby_av_budget`, the whole-tick cap), `sv_player.qc`/`sv_main.qc` (Pose_Capture per packet, Pose_Frame), `cl_main.qc` (Body_Frame), `cl_keys.qc`, `cl_netmon.qc`, `lobby.cfg` (`lobby_av_rate 0`), `tools/bodytrace.py`. VERIFIED: FTESurf `cfg/test/p383view.cfg` (+ `p383sv`, `p383own`), `p270_net`, `p278b`.)*
 
