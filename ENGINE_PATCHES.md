@@ -30309,6 +30309,24 @@ starts a sample and a stroke blends from its older sample's colour to its own.
 note) -- parenthesised.  Not verified: a real keyboard (the harness feeds
 `vote key`, whose bind never runs).
 
+## Patch 400 — a zone move clears the push carrier  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_zones.qc` (SV_ZoneMove). VERIFIED: FTESurf `cfg/test/p400push.cfg`.)*
+
+**Problem.** Found by the Patch 394 review.  SV_ZoneMove (`!r`, `!s`, `!b`, `!m`,
+zone_goto) zeroed .velocity and kept .run_basevel/.run_basevel_armed, so `!r`
+typed inside a trigger_push handed the carrier to the mover on the next command
+and cashed it out on the one after: a booster launch from the start, recorded as
+an ordinary `ride` and so verified.  Momentum's restart goes through
+TeleportEntity, which also does SetBaseVelocity(0).
+
+**Change.** SV_ZoneMove clears both.  No format change: SV_BaseVelocityFrame's
+change test writes `ride arm 0 0 0` on the next command, which pm_verify replays.
+
+**Verified.** p400push (bhop_arcane, *86 pushes +y at 1800): `!r` from inside it
+rests at the start (1408 0 14400); HEAD slid 443 u (the launch, slowed by ground
+friction; this map's timer starts on a jump, so the prediction "leaves the zone
+and runs" was falsified as written).  Not verified: a recorded same-stage `!s`
+inside a push through pm_verify.
+
 ## Patch 398 — a teleport without a landmark snaps the angles whatever UseLandmarkAngles says  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_touch), `src/client/cl_triggers.qc` (its prediction mirror). VERIFIED: FTESurf `cfg/test/p398tele.cfg`.)*
 
 **Problem.** "The player doesn't take the teleport destination's view angles."
@@ -30351,6 +30369,13 @@ a surf_sirius run crossing one (fixture zones): the warp is `telerel -384 -832
 -448 0 0 0`, reccheck 0 faults, pm_verify PASS 50/50 and the warp z+8 copy HOLDs
 "19 packet(s) differ, first at row 30", identically on the Pi's aarch64 binary.
 No old-rule recording could be verified (the Pi's three are REC 7).
+
+**Review fix (2145a32).** The 394 review found relative teleports never called
+SV_PassesFilter or SV_TriggerIOTouch (Source's Touch opens with
+PassesTriggerFilters; StartTouch fires the outputs), so surf_race's two filtered
+stage-5 lanes sent everyone one way and AddOutput gravity/speedmod outputs never
+fired.  Both calls added, as in trigger_teleport_touch.  p394flt: unnamed /
+s5_left / s5_right land +5056 / -5056 / +5056; the control sends all three +5056.
 
 ## Patch 392 — Source's `cl_showfps`, and `chat_open`  *(APPLIED -- mod-side only, no engine change: FTESurf `ftesurf/cfg/default.cfg` (`alias cl_showfps show_fps`), `src/client/cl_chat.qc` (`chat_open`), `cl_spectate.qc` (SPEC_CMDS). VERIFIED: FTESurf `cfg/test/p392cmd.cfg`.)*
 
