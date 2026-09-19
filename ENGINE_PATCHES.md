@@ -30283,6 +30283,51 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 372 — the map clock: time left, warnings, and votes to extend or change map  *(APPLIED -- mod-side only, no engine change: new `src/server/sv_vote.qc` (the votes, the serverinfo publisher, the chat commands and `cmd` twins), `sv_lobby.qc` (Lobby_Cycle: the vote-forced branch, extensions in the pull-in cap, Lobby_CycleGo, Lobby_WarnLvl, warnings and hold lines in chat; Lobby_NextMap honours a voted map), `sv_player.qc`, `sv_main.qc`, `sv_progs.src`; `src/shared/sh_defs.qc` (the key grammar, VOTE_*), `sh_time.qc` (Time_Clock); new `src/client/cl_vote.qc` (the vote box, its digit capture, `vote` handles), `cl_hud.qc` (HUD_SK, MapClock_*, the map-info rows), `cl_scores.qc` (the header clock), `cl_main.qc`, `cl_hudedit.qc`, `cl_chat.qc` (rows stop below the box), `cl_banner.qc` (an owed finish line said before a change), `cl_progs.src`; `default.cfg`, `cfg/lobby/lobby.cfg`. VERIFIED: FTESurf `cfg/test/p372vote.cfg`, `p372sv.cfg` + `p372va.cfg` + `p372vb.cfg`.)*
+
+**Problem.** The lobbies rotate every 30 minutes (Lobby_Cycle), but nothing
+showed the time left, the two warnings reached only the console, and players
+had no say in what came next or when.
+
+**Change.** The deadline, its state (counting, held for runs, changing), the
+next map and any running vote go out as serverinfo (grammar in sh_defs.qc),
+written only by Vote_Publish -- every key each 0.25 s or on a change, so the
+first compose of a map clears what the last map left.  The map-info block and
+the scoreboard header show `time left m:ss` (yellow under a minute, red under
+ten seconds) and the next map.  Warnings go to chat at 5:00, one minute and ten
+seconds, with the hold lines.  Votes: an end-of-map map vote at
+lobby_vote_start (nominations first, then the rotation, plus Extend while
+lobby_extend_max allows); !extend (yes/no, the caller counts yes); !rtv at
+lobby_rtv_ratio of the players, then a map vote whose result -- or a map
+already voted -- changes the map in ten seconds WITHOUT the Patch 366 hold (runs
+park as `rotate`, so !resume continues them); !nominate <map> from this
+lobby's lobby_maps (case-insensitive, original case kept); !timeleft,
+!nextmap.  Most votes wins, a tie goes to the option listed first, no votes
+keeps the rotation.  Every change a vote decides is executed by Lobby_Cycle
+from StartFrame, which is what keeps lobby_cyc_moving TRUE into SV_Shutdown.
+The box (left, 0.018/0.30) takes digits 1..n and 0 only while asking: from
+0.75 s after it opens until you pick (plus 0.5 s), never during a save-load
+hold, again after `vote`; the chatbox's rows stop below it.
+
+**Verified.** p372vote (listen, `vote fake` / `vote key` through the real
+input chain): every clock state's text; the save key votes while the box
+asks and saves again after (STAT_FS_SAVECOUNT); a chat draft takes digits
+first; keypad digits and a held repeat.  p372sv/va/vb (dedicated, two voters,
+four maps): nominations and their refusals; !extend refused 1-1 then passed
+with the deadline exactly +120.0; an end-of-map tie won by the first option;
+the voted map waiting under the hold; !rtv in the hold forcing it with the run
+parked `(rotate,`; an RTV map vote with no Extend; no stale keys after an admin
+changelevel; lobby_vote 0 opening nothing.  Run 1 found the box drawn over
+long chat and a "2 minutes left" at 60 s; both fixed.  A review then fixed a
+ten-second warning naming the rotation's map while a late vote was still open,
+a second extension after a hold replacing the time instead of adding, a voted
+map surviving a cleared lobby_maps, a pending !rtv passing when the ratio is
+set to 0, a failed change keeping the hold's state (votes off for a period),
+mouse motion read as digits, and silently dropped rate-limited commands; run 3
+passed every arm again.  The real keyboard path
+(a physical key press) was not injected: the chain ORDER is proven by `vote
+key`, the key delivery is the engine's.
+
 ## Patch 371 — chat announcements: joins, leaves, your finish, others' new bests  *(APPLIED -- mod-side only, no engine change: `src/server/sv_lobby.qc` (the announcement block before Lobby_Frame: Lobby_ChatName, Lobby_SayOthers, the `*ann` join key, Lobby_AnnGate; Lobby_BoardAnswers; Lobby_SayBoardPB from Lobby_RunReply; the unranked notice once per reason), `sv_player.qc` (ClientConnect/ClientDisconnect), `sv_timer.qc` (the server-best line in SV_TimerFinish), `src/client/cl_banner.qc` (Bn_ChatSay/Bn_ChatFrame, `banner chat`), `cl_hudedit.qc`, `default.cfg` (hud_banner_chat), `cfg/lobby/lobby.cfg` (lobby_announce, lobby_announce_gap); `surfd/p371stub.py`. VERIFIED: FTESurf `cfg/test/p371annl.cfg`, `p371sv.cfg` + `p371a.cfg` + `p371b.cfg`.)*
 
 **Problem.** Only PRINT_CHAT reaches the chatbox (cl_chat.qc:315), and every
