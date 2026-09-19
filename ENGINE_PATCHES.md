@@ -30283,6 +30283,32 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 370 — the chatbox wraps downward and never cuts a line that fits  *(APPLIED -- mod-side only, no engine change: `src/client/cl_chat.qc` (Chat_Wrap and its unit/carry helpers, the per-slot wrap cache, Chat_Draw's top-down draft and message blocks, `chat_say <text>`, `chat_rows`). VERIFIED: FTESurf `cfg/test/p370wrap.cfg`.)*
+
+**Problem.** A draft longer than a row wrapped UPWARD (piece n drawn at
+`yb - lh*(n+1)`, so the second row sat above the first), and a received line
+wider than the box was cut with ".." by Chat_Fit.
+
+**Change.** Chat_Wrap word-wraps to the box width, cutting an over-long word
+between whole units (a markup code as COM_ParseFunString sizes it, a UTF-8
+run, a byte) and starting each continuation row with the state codes seen so
+far (`^d` resets, a link restores its opening state).  The draft is drawn
+top-down with the cursor always in the wrap, so the blink cannot re-wrap it;
+received messages draw top-down in their own blocks, cached per ring slot and
+re-wrapped when the width, size or font changes.  hud_chat_lines still counts
+messages; the rows are capped at max(lines, 10) and at the room above the
+draft, older messages show only whole, and only a newest message taller than
+that room is cut.  Chat_Fit (the player panels) is unchanged.
+`chat_say <text>` opens the draft prefilled; `chat_rows` dumps the wrap and
+the drawn y of every block.
+
+**Verified.** p370wrap at 1280x720: the long line wraps to 5 rows whose
+widths all fit, the yellow and `{..}` spans carry across breaks (log and
+shot); a 128-char draft is 3 rows with y0 586.8 < yl 651.6 = bottom - lh and
+the message block ending exactly on the draft's top; `hud_chat_size 16` and
+`hud_chat_lines 1` re-wrap and cap; a 707-char line draws whole in its 17
+rows at `hud_chat_y 0.95` and is the one cut (9 rows, "..") at 0.5.
+
 ## Patch 369 — pm_verify follows a stage restart  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `restart` records bound to their row, the QC hook SV_VerifyRestart; warps and restarts written after their packet's sample act after its scan and sample check; `zone` joins the sweep-origin warp kinds); FTESurf `src/server/sv_timer.qc` (SV_VerifyRestart; grammar note). VERIFIED: FTESurf `cfg/test/p369verify.cfg`, `p369ctl.cfg`.)*
 
 **Problem.** A `restart` record (a stage restarted mid-run; the run clock never
