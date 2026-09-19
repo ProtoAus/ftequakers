@@ -30283,6 +30283,39 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 391 — a clean run refuses the save-lock load keys  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_saveloc.qc` (SaveLoc_RunLocked / LoadsOn / Refuse, the refused-key latch, the panel row, the 8 repeat guard), `cl_timer.qc` (the flash), `cl_banner.qc` (`hud_snd_error`, Bn_ErrorSound), `cl_main.qc` (`saveloc` prints the gate), `ftesurf/cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p391lock.cfg`.)*
+
+**Problem.** An accidental `2` mid-run ended the run: SV_SaveLocLoad replaces
+it with the save's (segmented, shadow, or re-armed in the start box), and 3-6
+with the panel open teleport the same way.  Lex (2026-09-20): refuse loads on
+a clean run, with a small warning and an error sound; no sound file exists yet.
+Also, holding 8 with the panel open deleted every save: key repeats reach CSQC
+as key-downs, so the first repeat confirmed its own arm.
+
+**Change.** SaveLoc_Key refuses `2`, and `3`-`6` with the panel open, while
+TS_RUNNING, FS_RunClass == RC_CLEAN and LT_StatsAreMine (an unknown owner
+fails open).  Practice, segmented and shadow runs still load, so
+fail-and-reload works; `cmd sl_load` from the console is not gated.  A refusal
+is consumed, latched until its key-up (repeats stay silent; the latch lapses
+after 1.5 s of quiet like the hold's deadman), disarms 8, prints
+"no loads mid-run -- R restarts the run" (the key bound to `say !r`), flashes
+the same text under the clock (newest of lock/fail/split wins) and plays
+`hud_snd_error` (default `sound/ftesurf/error.wav`, probed with the banner's
+sounds, silent while missing).  The open panel shows a "no loads mid-run" row.
+8 now acts only on a fresh press.  When a sound file ships, add
+`!/ftesurf/sound/` to .gitignore and a release.ps1 ShipGlobs row; not before,
+because release.ps1 fails on a missing ship directory.
+
+**Verified.** p391lock, listen server bhop_eazy, arms A-L all as predicted:
+loads in the start box still work; mid-run `2` and `3`-`6` are refused with one
+line each, the clock keeps running clean, and 1 still saves mid-run; the latch
+lapses after 2 s; `rec_savelock 0` passes the keys through; the probe finds
+CS:S `weapon_cant_buy.wav` (1) and not the missing default (0), with no
+Couldn't-load lines; after a console `cmd sl_load` (segmented) key `2` loads; a
+held 8 keeps its arm and a fresh 8 deletes.  Not covered: the ~1 RTT after the
+start before the client sees TS_RUNNING (a press there still loads), whether
+the sound is audible.
+
 ## Patch 389 — only Windows clients rank during the Linux beta  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc` (SV_ProfileBroken: a profile report without IPH_RAW is broken). VERIFIED: FTESurf `cfg/test/p387xi2.cfg` on Linux, `b78event.cfg` on Windows.)*
 
 **Problem.** Patch 387 closes the Linux bypasses the engine can see, but device-
