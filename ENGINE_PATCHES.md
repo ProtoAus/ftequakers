@@ -30283,6 +30283,39 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 371 — chat announcements: joins, leaves, your finish, others' new bests  *(APPLIED -- mod-side only, no engine change: `src/server/sv_lobby.qc` (the announcement block before Lobby_Frame: Lobby_ChatName, Lobby_SayOthers, the `*ann` join key, Lobby_AnnGate; Lobby_BoardAnswers; Lobby_SayBoardPB from Lobby_RunReply; the unranked notice once per reason), `sv_player.qc` (ClientConnect/ClientDisconnect), `sv_timer.qc` (the server-best line in SV_TimerFinish), `src/client/cl_banner.qc` (Bn_ChatSay/Bn_ChatFrame, `banner chat`), `cl_hudedit.qc`, `default.cfg` (hud_banner_chat), `cfg/lobby/lobby.cfg` (lobby_announce, lobby_announce_gap); `surfd/p371stub.py`. VERIFIED: FTESurf `cfg/test/p371annl.cfg`, `p371sv.cfg` + `p371a.cfg` + `p371b.cfg`.)*
+
+**Problem.** Only PRINT_CHAT reaches the chatbox (cl_chat.qc:315), and every
+join, finish, PB and placement line was PRINT_HIGH (console and notify only).
+"entered the game" also fired for every player on every changelevel, because
+ClientConnect runs at each level begin.
+
+**Change.** System lines are PRINT_CHAT spelled `^C word:^7 text`, so the
+engine can never attribute one to a player.  A join is announced once per
+connection: a `*ann` userinfo star key outlives changelevel and map_restart
+(parms would not: map_restart skips SetChangeParms), and the line waits 1.5 s
+so the name carries its `tc` colour.  Others hear `joined` / `left`; the joiner
+gets a welcome.  Your own finish is one client-side line built from the
+banner's Bn_Delta/Bn_Place (time, delta or NEW PB / FIRST TIME, placement
+including LOCAL), waiting up to 5 s for the board and independent of the
+ribbon being drawn (`hud_banner_chat`).  Others hear a new best only: from
+Lobby_RunReply when the ranked board stored a clean full run (first time, PB,
+world record), or from SV_TimerFinish's server best where no board answers,
+one site per server; Lobby_AnnGate holds a player to one line a minute
+(`lobby_announce_gap`) unless it is a world record or a climb into the top
+ten.  `lobby_announce 0` silences the server lines.
+
+**Verified.** p371annl (listen): the seven banner formats read exactly as the
+ribbon's (NEW PB, WR, PB STANDS, UNRANKED, PRACTICE, stage 3); a real fixture
+finish writes one `finish: 0:04.500  FIRST TIME  #1 of 1  LOCAL`, the host is
+neither welcomed nor told its own best.  p371sv/a/b (dedicated, scripted stub,
+ten walks): the listener hears one join across a changelevel and a map_restart
+and no "entered the game", exactly the six predicted board lines (a stored-0,
+a paced rank 12, a world record under lobby_announce 0 and a slower run all
+silent), one leave; the finisher gets ten lines, the slow answer's 3 s after
+its post.  One prediction failed and is the banner's: after the board went
+away mid-map, a run tying the last one's ticks matched the stale `*wrank`.
+
 ## Patch 374 — the in-game board marks a Verified run  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (`ver` parsed per row, board_status says "verified"), `src/client/cl_scores.qc` (Scores_Tick after "watch" in the replay cell). VERIFIED: FTESurf `cfg/test/p374ver.cfg` against the live board.)*
 
 **Problem.** The web board showed Verified since Patch 359; the in-game board
