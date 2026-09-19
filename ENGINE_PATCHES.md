@@ -30391,6 +30391,23 @@ starts a sample and a stroke blends from its older sample's colour to its own.
 note) -- parenthesised.  Not verified: a real keyboard (the harness feeds
 `vote key`, whose bind never runs).
 
+## Patch 401 — predict a teleport's view snap only on an engine with Patch 396  *(APPLIED -- mod-side only: FTESurf `src/client/cl_triggers.qc` (TG_FireTeleport). VERIFIED: FTESurf `cfg/test/p401guard.cfg`.)*
+
+**Problem.** The shipped client (0.1.11) reconciles a predicted angle snap with
+Patch 335's arithmetic, which doubles or undoes it at fps above cl_netfps
+(p396c: 7 of 12 DOUBLE at 300 fps on a LAN).  csprogs ships from the lobbies at
+once; the engine fix (396) needs a client release, and Patch 398 makes 3,596 more
+teleports snap.
+
+**Change.** predmove_fixangle is set only when checkcommand("predangle_dump") ==
+1, the command Patch 396 registers.  Older engines take the server's delta alone:
+the right angle, one round trip late.  A cvar_type ENGINE test was tried first
+and failed its own control: FTE's `set` marks any cvar user-created (cmd.c:4375).
+
+**Verified.** p401guard (surf_aircontrol, 300 fps, the 396 server): the shipped
+client 12/12 PASS on the guarded csprogs against 7/12 DOUBLE on the control
+csprogs; the 396 client still predicts (6 applied+match, 6 skip-acked), 12/12.
+
 ## Patch 400 — a zone move clears the push carrier  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_zones.qc` (SV_ZoneMove). VERIFIED: FTESurf `cfg/test/p400push.cfg`.)*
 
 **Problem.** Found by the Patch 394 review.  SV_ZoneMove (`!r`, `!s`, `!b`, `!m`,
@@ -30408,6 +30425,16 @@ rests at the start (1408 0 14400); HEAD slid 443 u (the launch, slowed by ground
 friction; this map's timer starts on a jump, so the prediction "leaves the zone
 and runs" was falsified as written).  Not verified: a recorded same-stage `!s`
 inside a push through pm_verify.
+
+**Review fixes (4dc06fb).** The 400 review found the same launch through `setpos`
+and a save-lock load (not cheat-gated; arming in the start box clears their
+taint, so a clean verified run started at push speed), and Momentum-parity gaps
+in relative teleports and VelocityMode 1-3.  SV_ClearCarrier now runs wherever a
+placement sets velocity (SV_ZoneMove, setpos, SV_SaveLocPlace, the retry restore,
+both teleport kinds); p400b: setpos / sl_load / `!r` rest at the start, the
+control slides 443 u in all three.  Left, as Source does it: a map output already
+due on the player can refill the carrier after a move, and there is no start
+speed cap (Momentum's limitStartGroundSpeed).
 
 ## Patch 398 — a teleport without a landmark snaps the angles whatever UseLandmarkAngles says  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_touch), `src/client/cl_triggers.qc` (its prediction mirror). VERIFIED: FTESurf `cfg/test/p398tele.cfg`.)*
 
