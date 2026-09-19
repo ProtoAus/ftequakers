@@ -30346,6 +30346,15 @@ setangles stay up to 1 deg short until its binary has float newa), a live lobby,
 teleport to a DIFFERENT target on a command sampled before the first snap still
 adds both rotations, as 335 did.  No independent review.
 
+**Deployed (server half only), 2026-09-20.** The Pi's `game/fteqw-svarm64` was
+rebuilt from `/srv/nvme/p349build` with this patch's `sv_send.c` (float newa):
+sha256 51f951b3, the old binary kept as `.pre396-20260919-230549`.  Gates passed --
+pm_dettest on bhop_eazy prints the Windows hashes (mapcrc 676de275, libm
+5e749b8a83b44107, trace f7958b04dbcd1008, mover 3d136f8de25c9c2c, tick
+93e8615d81c26325), and a known PASS file verifies identically on the old and new
+binaries.  The client half waits for a release; until then FTESurf's csprogs does
+not predict the snap at all (Patch 401).
+
 **Review fixes.** The independent review confirmed two of its four findings
 (refuted: the exact path's legacy fallback, which needs a packet carrying no
 move and active QW play never sends one; the `cl_threadedphysics` history race,
@@ -30452,6 +30461,8 @@ and failed its own control: FTE's `set` marks any cvar user-created (cmd.c:4375)
 **Verified.** p401guard (surf_aircontrol, 300 fps, the 396 server): the shipped
 client 12/12 PASS on the guarded csprogs against 7/12 DOUBLE on the control
 csprogs; the 396 client still predicts (6 applied+match, 6 skip-acked), 12/12.
+DEPLOYED 2026-09-20: every live client now gets the server's angle instead of a
+doubled one, one round trip late.
 
 ## Patch 400 — a zone move clears the push carrier  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_zones.qc` (SV_ZoneMove). VERIFIED: FTESurf `cfg/test/p400push.cfg`.)*
 
@@ -30477,7 +30488,7 @@ taint, so a clean verified run started at push speed), and Momentum-parity gaps
 in relative teleports and VelocityMode 1-3.  SV_ClearCarrier now runs wherever a
 placement sets velocity (SV_ZoneMove, setpos, SV_SaveLocPlace, the retry restore,
 both teleport kinds); p400b: setpos / sl_load / `!r` rest at the start, the
-control slides 443 u in all three.  Left, as Source does it: a map output already
+control slides 443 u in all three.  DEPLOYED 2026-09-20.  Left, as Source does it: a map output already
 due on the player can refill the carrier after a move, and there is no start
 speed cap (Momentum's limitStartGroundSpeed).
 
@@ -30498,6 +30509,9 @@ Landmark mode is unchanged (it snaps only on UseLandmarkAngles 1).
 surf_island *55 (45 -> -90) turn you; HEAD keeps 45 on all three.  *11 (200 ->
 90) lands at 89.0: the engine's delta fixangle truncates (sv_send.c `int newa`,
 Patch 396).
+DEPLOYED 2026-09-20.  The Pi's server engine carries 396's float newa since the same
+day, so the 1 deg is gone on the lobbies; a listen server keeps it until the client
+release.
 
 ## Patch 395 — a stage row plays the run it was set in; the online cache sorted by map and leg  *(APPLIED -- mod-side and surfd, no engine change: FTESurf `surfd/surfd.py`, `sweep.py`, `admin.py`, `README.md`, tests (fafd4bc, review fixes 654e212 and eb51bdf); `src/client/cl_online.qc`, `cl_scores.qc`, `cl_watch.qc`, `cl_main.qc`, `tools/onlinecache.py` (69d4ecd); `src/server/sv_lobby.qc` (a comment). VERIFIED: surfd's nine suites; FTESurf `cfg/test/p395win.cfg`, `p395cache.cfg`, `p395stub.cfg`; `p395stage.cfg` is post-deploy.)*
 
@@ -30533,6 +30547,10 @@ files under one misconfiguration), the second two more (legacy shadow rows; an
 `end` torn inside its digits); all fixed with regression cases.  Accepted: a
 legacy parent no runs row names stays unlinked; an exact-tie finish before schema
 6 would link to the tie's file (0 such rows in the live DB, and migrate runs once).
+DEPLOYED 2026-09-20: surfd reloaded onto schema 6 (DB backup
+data/surfd.db.pre395-20260919-230400), the first cron sweep logged "evidence +2 -0"
+and hard-linked both files, /api/board serves `run` on all 66 stage rows.  Live arms
+p395stage S1-S4 held, including two stage rows served from an abandoned run's evidence.
 
 ## Patch 394 — trigger_teleport_relative uses Source's rule  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_relative_touch). VERIFIED: FTESurf `cfg/test/p394a.cfg`, `p394b.cfg`, `p394rec.cfg`, `p394verify.cfg`.)*
 
@@ -30558,6 +30576,9 @@ a surf_sirius run crossing one (fixture zones): the warp is `telerel -384 -832
 -448 0 0 0`, reccheck 0 faults, pm_verify PASS 50/50 and the warp z+8 copy HOLDs
 "19 packet(s) differ, first at row 30", identically on the Pi's aarch64 binary.
 No old-rule recording could be verified (the Pi's three are REC 7).
+DEPLOYED 2026-09-20 (with the review fix below).  Not playtested live: the 5 maps
+whose relative triggers are not stage boxes (surf_colony, bhop_collective,
+surf_chungus_fungus, surf_ofrenda, surf_sirius) now lose speed on them, as Source does.
 
 **Review fix (2145a32).** The 394 review found relative teleports never called
 SV_PassesFilter or SV_TriggerIOTouch (Source's Touch opens with
@@ -30581,6 +30602,7 @@ chat draft; spectate lets both through.
 show_fps 1 / 1 / 0; typed `chat_open` gives typing 1 and ESC closes it;
 `bind t chat_open` plus the key: took 1, typing 1; a non-chat bind on t: took 0.
 Control (the pre-392 csprogs): Unknown command "chat_open", the key not taken.
+DEPLOYED 2026-09-20 with 393-395, 398, 400 and 401 (progs 7c7220a to all 12 lobbies).
 
 ## Patch 393 — the strafe bar's sensitivity  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_hud.qc` (`hud_strafe_sens`, the fill, `hud_strafe_probe`), `cl_main.qc` (the probe's dispatch), `cl_hudedit.qc` (the strafe pane's Sensitivity row), `ftesurf/cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p393sens.cfg`.)*
 
@@ -30600,6 +30622,8 @@ chose linear knowing this).  `hud_strafe_probe` prints the last drawn err/frac.
 default reads 1; 9 in-air probes at sens 4 give frac == err, 9 at sens 1 give
 frac == err/4 (-0.53990 -> -0.13498, -1.00000 -> -0.25000); the pane's third
 row reads 1x (screenshot).
+DEPLOYED 2026-09-20.  A player who had hud_strafe_band saved keeps it; the bar is
+sens/4 of what it was.
 
 ## Patch 390 — the mouse pad left of the key block  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/client/cl_mouse.qc` (MPad_Track/Frame/Draw, `mousepad`); `cl_hud.qc` (HUD_KeysGeom, shared by HUD_DrawKeys), `cl_main.qc` (register, the observer after Vote_Track, MPad_Draw after HUD_Draw, the console hook), `cl_hudedit.qc` (the "Mouse" row, Width/Trail options), `src/cl_progs.src`, `ftesurf/cfg/default.cfg`, `defaultuser.cfg`. VERIFIED: FTESurf `cfg/test/p390mouse.cfg`.)*
 
