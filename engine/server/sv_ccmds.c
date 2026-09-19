@@ -5725,16 +5725,17 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			else if (sjmp_n >= 0 && (!x_bad || x_first >= sjmp_row))
 				Q_snprintfz(why, sizeof(why), "session %i resumes %.4g u / %.4g u/s from where the last one parked",
 				            sjmp_n, sjmp_o, sjmp_v);
-			else if (x_bad)
-				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
-			else if (pe_bad && !x_ok)
-				Q_snprintfz(why, sizeof(why), "physents: %i row(s) differ, first at row %i", pe_bad, pe_first);
-			else if (port_bad)
-				Q_snprintfz(why, sizeof(why), "portals: %i move(s) disagree, first at row %i", port_bad, port_first);
+			/* Patch 373: counter arithmetic and file content, like the session checks */
 			else if (gtick_row >= 0)
 				Q_snprintfz(why, sizeof(why), "ghost at row %i: the file says tick %i, the trace %i", gtick_row, gtick_file, gtick_trace);
 			else if (ginput_row >= 0)
 				Q_snprintfz(why, sizeof(why), "ghost: input at row %i, %i ticks into a detached window", ginput_row, ginput_late);
+			else if (x_bad)
+				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
+			else if (pe_bad)
+				Q_snprintfz(why, sizeof(why), "physents: %i row(s) differ, first at row %i", pe_bad, pe_first);
+			else if (port_bad)
+				Q_snprintfz(why, sizeof(why), "portals: %i move(s) disagree, first at row %i", port_bad, port_first);
 			else if (vcancel_row >= 0)
 				Q_snprintfz(why, sizeof(why), "a cancel zone is crossed at row %i", vcancel_row);
 			else if (vfin_row < 0)
@@ -5745,13 +5746,6 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				Q_snprintfz(why, sizeof(why), "ticks: the zones say %i, the file says %i", vfin_ticks, endticks);
 			if (vrearm_row >= 0)
 				Con_Printf("  note      the replay re-enters this track's START at row %i\n", vrearm_row);
-			/* Patch 373: the replay runs no triggers or map I/O, so map state the live run
-			   changed digests differently (surf_derpis: live gains a physent 9 rows from
-			   the end, the replay's list stays one func_brush).  With every packet exact,
-			   nothing that differs touched the run. */
-			if (pe_bad && x_ok && !x_bad)
-				Con_Printf("  note      physents: %i row(s) differ from the live digest, first at row %i;"
-				           " every packet is exact, so the difference touched nothing\n", pe_bad, pe_first);
 			if (*why)
 				Con_Printf("VERIFY %s HOLD %s\n", fname, why);
 			else
