@@ -30306,6 +30306,31 @@ XDG; no Steam stays NOT FOUND on both.  Windows build: p377boot unchanged.
 Not verified: DGA (XWayland has none), the VidMode line (never printed), native
 distros other than Debian.
 
+## Patch 382 — spectate holds the body and keeps the run ranked  *(APPLIED -- mod-side, needs Patch 380's engine: FTESurf `src/server/sv_saveloc.qc` (SV_SpecStart/Watch/Frame/Release/Forget, fs_spec, the PVS eye), `sv_timer.qc` (SV_TimerSpecMark; the `spec` grammar entry), `sv_player.qc` (`rec_spec`, the held Pre/PostThink branches, the release funnels), `sv_entities.qc` (the trigger gate), `sv_main.qc`, `sv_resume.qc`, `sv_zones.qc`, `sh_defs.qc` (TF_SPEC 32768, STAT_FS_SPEC 103), `cl_banner.qc`/`cl_timer.qc` ("spectated"). VERIFIED: FTESurf `cfg/test/p382a.cfg`, `p382c.cfg`, `p382d.cfg` (+ `p382t`, `p382e`), `p382verify.cfg`.)*
+
+**Problem.** Leaving a run to watch someone meant the replay pin: velocity zeroed,
+the mover's timers decaying under MOVETYPE_NONE, and the run marked practice.
+
+**Change.** `cmd rec_spec <entnum>` sets `.run_pmhold` (Patch 380: zero mover ticks, no
+touches).  Refused while a trigger touches the body or has not seen it leave, under a
+save-lock hold, replay, ghost, Multi-Session restore or forced duck, and ranked on an
+engine without `*pmhold`.  The recorder writes `spec 1|0` and TF_SPEC, a marker: the run
+stays ranked.  `rec_spec 0` starts a countdown; the release rolls back origin,
+velocity and ground, rebases the world-time latches and writes `spec 0 <why>`.  Every
+exit releases first (disconnect, shutdown and rotation, retry, load, zone moves,
+setpos, respawn, engine noclip, a lost target).  A held run still holds the rotation.
+
+**Verified.** On the Patch 380 listen host: mover state byte-identical at both edges
+with a duck timer running and with movement held (the `rec_watch` control decays it);
+a func_bhop dwell does not fire inside a hold and fires on schedule after it; entry
+refused on a push pad, in a trigger_multiple and setspeed, and 40 ms after leaving
+one; each exit's `spec 0` and the park's `pause` restating it; the stage spanning a
+window never qualifies.  pm_verify PASSes a mid-air hold, a duck hold, a held-input
+hold, a nudged-and-rolled-back hold, a release through `!r`, a notarget release and a
+resumed Multi-Session run; the doctored copies HOLD/REFUSE and the 377 verifier
+passes them.  Falsified: one `cmd timer` gap prediction (drift before entry).  An
+independent review found no state-machine defect.  Not yet on the Pi.
+
 ## Patch 380 — a spectating runner's body is held, and pm_verify reads the hold  *(APPLIED -- `server/sv_user.c` (SV_RunCmd: the optional QC field `run_pmhold` zeroes the command's msec after the anti-hover debit, skips the Patch 346 pin/physent snapshot, links the player without touching triggers), `server/pr_cmds.c` (`infokey(world, "*pmhold")` is "1"), `server/sv_ccmds.c` (SV_RecSim_Run reads `spec`: structure REFUSEs; counter and pair HOLDs; the body against the replay, bound in file order between the row's warps and reported only when the replay had not diverged first); FTESurf `ftesurf/cfg/test/p380verify.cfg`, `p382*.cfg` (Patch 382 drives the hold). VERIFIED: see below.)*
 
 **Problem.** Spectating mid-run must leave the body exactly where it was and hand the
