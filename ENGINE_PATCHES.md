@@ -30438,8 +30438,11 @@ across a window on the 385 path passes reccheck and pm_verify ("1 window(s), 0
 line(s) inside"); `spec 0`'s <mt> + 1 HOLDs; after the release the file carries
 one forced 13 ms move on a local host.  `p385hid`: `spec 1`/`spec 0` in the
 journal and no 'v' record inside the window.  Falsified: `p385view` P4c's first
-control gate (>= 25% no-step) at ~65 fps against the 66.7 Hz stream.  Not yet on
-the Pi.
+control gate (>= 25% no-step) at ~65 fps against the 66.7 Hz stream.  DEPLOYED
+2026-09-20 (progs c06c375; `p385pia`/`p385pib` on live lobby 1): entry 0.45 s after
+the request, the countdown at 0.99/1.01/0.99 s, the viewer's aim unchanged, and the
+other client's held body within 0.051 u of its own `viewpos` on 499 frames.  Not
+armed live: a finish (p385verify covers the Pi's verdict on one).
 
 ## Patch 386 — Linux: libraries by soname; Snap, Debian and XDG Steam  *(APPLIED -- `gl/gl_vidlinuxglx.c` (libXxf86vm.so.1, libXrandr.so.2, libXxf86dga.so.1 before the bare names), `gl/gl_videgl.c` (libGLESv2.so.2, libEGL.so.1, non-Windows only), `common/fs.c` (Sys_SteamVdfPath: the libraryfolders.vdf candidates incl. `~/snap/steam/common/...`, `~/.steam/debian-installation`, `$XDG_DATA_HOME/Steam`; `fs_steamlibs` lists the ones that exist); FTESurf `ftesurf/cfg/default.cfg` (`if $sys_platform == Linux set vid_renderer gl`), `tools/linux/rig-*.sh`. VERIFIED: FTESurf `cfg/test/p386lin.cfg` in a runtime-only Debian 13 WSL distro.)*
 
@@ -30487,7 +30490,8 @@ window never qualifies.  pm_verify PASSes a mid-air hold, a duck hold, a held-in
 hold, a nudged-and-rolled-back hold, a release through `!r`, a notarget release and a
 resumed Multi-Session run; the doctored copies HOLD/REFUSE and the 377 verifier
 passes them.  Falsified: one `cmd timer` gap prediction (drift before entry).  An
-independent review found no state-machine defect.  Not yet on the Pi.
+independent review found no state-machine defect.  DEPLOYED 2026-09-20 with
+Patch 380's engine and Patch 385's progs (c06c375).
 
 ## Patch 380 — a spectating runner's body is held, and pm_verify reads the hold  *(APPLIED -- `server/sv_user.c` (SV_RunCmd: the optional QC field `run_pmhold` zeroes the command's msec after the anti-hover debit, skips the Patch 346 pin/physent snapshot, links the player without touching triggers), `server/pr_cmds.c` (`infokey(world, "*pmhold")` is "1"), `server/sv_ccmds.c` (SV_RecSim_Run reads `spec`: structure REFUSEs; counter and pair HOLDs; the body against the replay, bound in file order between the row's warps and reported only when the replay had not diverged first); FTESurf `ftesurf/cfg/test/p380verify.cfg`, `p382*.cfg` (Patch 382 drives the hold). VERIFIED: see below.)*
 
@@ -30523,7 +30527,12 @@ PASS, and edits of them HOLD/REFUSE where the 377 binary PASSes them.  An indepe
 review (three lenses, two skeptics each) found the warp-order false HOLD, the
 divergence blame and a carry tolerance on a false comment; all three fixed and
 re-run.  The Pi's aarch64 build (the three files onto its 376 tree) prints Windows'
-pm_dettest hashes and the same p380verify verdicts; not yet swapped in.
+pm_dettest hashes and the same p380verify verdicts.  DEPLOYED 2026-09-20: swapped
+in as game/fteqw-svarm64 (sha256 99712221..., the 375 binary kept as
+.pre380-20260919-143629 UTC) after two live PASS files verified on both binaries;
+the lobbies restarted onto it with the Patch 385 progs.  On the Pi binary, over an
+overlay basedir carrying the fixture zones, p382verify and p385verify give every
+Windows verdict and tick count.
 
 ## Patch 383 — every lobby body at 66 Hz, tick-stamped and interpolated  *(APPLIED -- mod-side only, no engine change: FTESurf new `src/server/sv_pose.qc` and `src/client/cl_body.qc`; `sv_lobby.qc` (SendEntity avatars, `lobby_av_stream`, `lobby_av_budget`, the whole-tick cap), `sv_player.qc`/`sv_main.qc` (Pose_Capture per packet, Pose_Frame), `cl_main.qc` (Body_Frame), `cl_keys.qc`, `cl_netmon.qc`, `lobby.cfg` (`lobby_av_rate 0`), `tools/bodytrace.py`. VERIFIED: FTESurf `cfg/test/p383view.cfg` (+ `p383sv`, `p383own`), `p270_net`, `p278b`.)*
 
@@ -30546,6 +30555,8 @@ held to the resume tick; 0 CSQC misreads; `lobby_av_rate` 15 / 22.2 / 66.67 give
 teleport gates.  Falsified: the speed-CV gates assumed a constant-speed owner (its
 sampled speed varies 4.3%, the render 4.5%) and the control's rate at 66.67 (53, not
 25-45).  The first run found `mv = !first && (...)` parsing as `(mv = !first) && ...`.
+DEPLOYED 2026-09-20 (progs c06c375, lobby.cfg `lobby_av_rate 0`, `lobby_av_budget
+24000`): a live lobby streamed a circling client to another at 63.6 samples/s.
 
 ## Patch 381 — the evidence tools read the `spec` record  *(APPLIED -- tools only, no engine or progs change: FTESurf `tools/reccheck.py`, `tools/test_reccheck.py`, `surfd/surfd.py` (TF_SPEC pin), `surfd/recplot.py`, `surfd/templates/admin_run.html`, `surfd/test_recplot.py`, `surfd/test_board.py`. VERIFIED: FTESurf `cfg/test/p381tools.cfg`.)*
 
@@ -30565,6 +30576,9 @@ recplot and the admin page mark the window.
 killed); the pre-381 reccheck fails 62 of the 76.  Old vs new over all 578 local
 .rec/.part: faults and notes differ only on Patch 380's 13 fixtures.  test_recplot
 0 failed; the pre-381 recplot fails 4 of 5 spec arms.  test_board runs on the Pi.
+DEPLOYED 2026-09-20: surfd.py, recplot.py, sweep.py (a docstring from 373),
+templates/admin_run.html and the two tests, from HEAD, after all eight suites
+passed in a Pi stage; data/surfd.db backed up first (surfd.db.pre381-*).
 
 ## Patch 379 — the replay viewer interpolates every frame  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_watch.qc` (Watch_Sample: Hermite feet with linear fallback and the split snap, the crouch-slide eye, shortest-arc angles by the .view's cltime map or between .rec samples, the parse cache; Watch_Frame's banked clframetime clock; Watch_Camera's eye; Watch_Seek resets every cursor), `tools/watchtrace.py`. VERIFIED: FTESurf `cfg/test/p379wsm.cfg`, `p379wsmfps.cfg`.)*
 
