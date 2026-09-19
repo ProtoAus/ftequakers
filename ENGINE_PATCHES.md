@@ -30283,6 +30283,32 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 399 — the key display: no letters, the overridden strafe key in yellow; the pad's trail turns orange on A/D  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_hud.qc` (HUD_Key without labels; the strafe-order latch in HUD_DrawKeys; W-release as KEY_FORCED), `cl_mouse.qc` (the per-sample strafe colour, `mousepad` prints the latch). VERIFIED: FTESurf `cfg/test/p399keys.cfg`.)*
+
+**Problem.** Lex (2026-09-20): drop the letters from the key display; tint
+the strafe key the other one overrides, in the forced-crouch colour; show a
+prestrafe-released W in that colour too; and turn the mouse pad's trail
+orange while +moveleft/+moveright is held.
+
+**Change.** A key cell is a plain fill: dark up, white pressed, yellow
+(KEY_FORCED) when the game overrides your hand -- a crouch it holds, W let go
+for the prestrafe flight (was yellow-on-dark KEY_RELEASED, removed), or the
+earlier of A/D while both are down with `cl_iDrive` on (the engine's default:
+the later press wins, KeyDown_Scan).  Which went down last is read off the
+frames' rising edges, so it works on a replay's key mask too; spectate only
+carries the winner, and two presses in one frame tint nothing.  The block's
+size is unchanged.  Each trail sample stores whether A or D was held (live
+Keys_Held, a replay's mask, the watched player's keys); a change of state
+starts a sample and a stroke blends from its older sample's colour to its own.
+
+**Verified.** p399keys: A, D over A (A yellow), D up, D then A again (D yellow),
+`cl_iDrive 0` (both white); the replay at 0.02 (W yellow, PSREL), 0.645 and
+1.26 (the older key yellow each way); trail orange while A is held (105 px,
+0 blue), blue without, D alone counts.  The first run tinted nothing:
+`ra = ka && !ui_kb_pa` parses as `(ra = ka) && ...` (AGENTS.md's fteqcc
+note) -- parenthesised.  Not verified: a real keyboard (the harness feeds
+`vote key`, whose bind never runs).
+
 ## Patch 398 — a teleport without a landmark snaps the angles whatever UseLandmarkAngles says  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (trigger_teleport_touch), `src/client/cl_triggers.qc` (its prediction mirror). VERIFIED: FTESurf `cfg/test/p398tele.cfg`.)*
 
 **Problem.** "The player doesn't take the teleport destination's view angles."
