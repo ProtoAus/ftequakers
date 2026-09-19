@@ -30283,6 +30283,39 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 388 — Linux: the name hash no longer crashes the log, loses new files or goes stale on a first map  *(APPLIED -- `common/fs.c` (FS_AddFileHash / FS_AddFileHashUnsafe return while com_fschanged is set, except in FS_RebuildFSHash's own fill; FS_FreePaths clears gameonly_homedir/gamedir; the FS_GAMEONLY homedir branch tested gameonly_gamedir's CreateFile), `common/fs_stdio.c` (a new file is hashed by its game-relative name, as fs_win32.c does), `common/net_ssl_gnutls.c` (rebuild the hash once after writing a new key+cert). VERIFIED: FTESurf `cfg/test/p388crash.cfg`, `p388save.cfg`, `p386first.cfg`.)*
+
+**Problem.** With `log_enable 1` and `log_developer 1` the Linux client died in
+Hash_GetInsensitiveBucket at vid_restart and at quit.  Every log line opens the
+log "ab", and FSSTDIO_OpenVFS called the stored AddFileHash on every write or
+append; FS_AddFileHash walked filesystemhash without the P196 check, and
+COM_FlushTempoaryPacks (vid_restart) and the fs_restart that plugin close runs
+at quit free packs whose buckets stay linked until the rebuild.  Windows inserts
+only on creation (fs_win32.c:470).  Also: stdio keyed that insert by the
+absolute OS path, so on Linux a file created this session in an existing folder
+(`writeip` -> `listip.cfg`) was invisible to hashed lookups until the next
+rebuild; and FS_FreePaths left gameonly_* pointing at freed searchpaths, which
+FS_GAMEONLY log writes dereference.  And a fresh install's first map ran on a
+stale hash: GnuTLS creating privkey.pem/fullchain.pem mid-SV_SpawnServer flushes
+it, and a stale hash is exact-case on Linux (Patch 386's case rig: mixed-case CS:S
+materials drew as defaults on that one load).
+
+**Change.** Both inserters return while com_fschanged is set, except while
+FS_RebuildFSHash fills the table it just flushed (a stale hash scans every
+searchpath and the rebuild indexes the file, so nothing is lost).  stdio keys
+the game-relative name.  FS_FreePaths clears gameonly_*.  The cert writer
+rebuilds the hash once, right after the write.
+
+**Verified.** WSL, gdb, pre/post: vid_restart after surf_666 pre SIGSEGV
+(R_ApplyRenderer -> Log_String), post survives; quit pre SIGSEGV
+(Plug_Close -> fs_restart), post exits with the reload logged; `log_developer
+0` control exits either way.  `writeip; flocate listip.cfg`: pre Not found,
+post found.  Wrong-case lookups of loose files unchanged (found on a valid
+hash, not on a stale one).  Windows: b78event, b77grant (identical to 0.1.10's exe
+arm for arm) and p306inj A on a build of this commit.  Not changed: any other
+stale-hash window is still exact-case on Linux, and `exec` never folds case
+there (FSLF_IGNOREPURE); neither was seen to fail in the rig.
+
 ## Patch 387 — Linux: X11 and Wayland publish the raw-input grant; core XTEST is rejected and counted  *(APPLIED -- `gl/gl_vidlinuxglx.c` (live XI2 classification: `xtest` by the " XTEST pointer" suffix and `known`; XI2_ClassifyInfo keeps `axis[].old`; select XI_HierarchyChanged; X11_PublishGrant at init, INS_ReInit and every hierarchy event; XTEST rejected+counted before qdev assignment; dupe tests `break`; core ButtonPress and ButtonRelease guarded under XIM_XI2+grabbed, except the release of a button pressed before the grab; GLVID_Shutdown resets; INS_EnumerateDevices defers to Wayland and guards vid_dpy), `gl/gl_vidwayland.c` (WL_PublishGrant, WL_EnumerateDevices with a NULL pointer devid, relative pointer NULLed, WL_DeInit reset), `client/in_generic.c` (−1 for a missing request cvar); FTESurf `tools/hidcheck.py`, `tools/test_hidcheck.py`. VERIFIED on the portable chroot build: FTESurf `cfg/test/p387xi2`, `p387noxi2`, `p387span`, `p387wl`, `p387inj` (arms A/A'/B/C/D/E/H + controls F/G) and `p387xi2dev` (arm X).)*
 
 **Problem.** Nothing on Linux assigned the grant. `in_rawmice` stayed −1

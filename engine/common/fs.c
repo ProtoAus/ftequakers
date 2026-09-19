@@ -2104,6 +2104,7 @@ struct fsbucketblock
 	qbyte data[1];
 };
 static struct fsbucketblock *fs_hash_filebuckets;
+static qboolean fs_hash_rebuilding;	//Patch 388: FS_RebuildFSHash is filling a freshly flushed table
 
 static void FS_FlushFSHashReally(qboolean domutexes)
 {
@@ -2136,6 +2137,8 @@ static void QDECL FS_AddFileHashUnsafe(int depth, const char *fname, fsbucket_t 
 	//threading stuff is fucked.
 	fsbucket_t *old;
 
+	if (com_fschanged)
+		return;	//Patch 388: see FS_AddFileHash
 	old = Hash_GetInsensitiveBucket(&filesystemhash, fname);
 
 	if (old)
@@ -2180,6 +2183,11 @@ static void QDECL FS_AddFileHash(int depth, const char *fname, fsbucket_t *fileh
 {
 	fsbucket_t *old;
 
+	//Patch 388: drivers keep this pointer and call it from OpenVFS (fs_stdio.c:282 on every
+	//write or append, i.e. every log line on Linux).  P196: while com_fschanged is set the table
+	//may still link a freed searchpath's buckets; the next rebuild indexes the file anyway.
+	if (com_fschanged && !fs_hash_rebuilding)
+		return;
 	old = Hash_GetInsensitiveBucket(&filesystemhash, fname);
 
 	if (old)
@@ -2249,6 +2257,7 @@ static void FS_RebuildFSHash(qboolean domutex)
 	fs_hash_dups = 0;
 	fs_hash_files = 0;
 
+	fs_hash_rebuilding = true;
 	if (com_purepaths)
 	{	//go for the pure paths first.
 		for (search = com_purepaths; search; search = search->nextpure)
@@ -2263,6 +2272,7 @@ static void FS_RebuildFSHash(qboolean domutex)
 			search->handle->BuildHash(search->handle, depth++, FS_AddFileHash);
 		}
 	}
+	fs_hash_rebuilding = false;
 
 	com_fschanged = false;
 	com_fsneedreload = false;
@@ -3335,7 +3345,7 @@ vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_rela
 		{
 			if (gameonly_homedir)
 			{
-				if ((*mode == 'w' && gameonly_gamedir->handle->CreateFile)
+				if ((*mode == 'w' && gameonly_homedir->handle->CreateFile)	//Patch 388: was gameonly_gamedir's, which may be NULL here
 						? gameonly_homedir->handle->CreateFile(gameonly_homedir->handle, &loc, filename)
 						: gameonly_homedir->handle->FindFile  (gameonly_homedir->handle, &loc, filename, NULL))
 					vfs = gameonly_homedir->handle->OpenVFS   (gameonly_homedir->handle, &loc, mode);
@@ -7018,6 +7028,10 @@ static void FS_FreePaths(void)
 		Z_Free (com_searchpaths);
 		com_searchpaths = next;
 	}
+	//Patch 388: FS_GAMEONLY opens (every log line) go straight through these; a print between
+	//here and the next FS_ReloadPackFilesFlags (FS_ChangeGame, a plugin closing after FS_Shutdown)
+	//would write through freed searchpaths.
+	gameonly_homedir = gameonly_gamedir = NULL;
 
 	com_fschanged = true;
 

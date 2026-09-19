@@ -279,7 +279,12 @@ static vfsfile_t *QDECL FSSTDIO_OpenVFS(searchpathfuncs_t *handle, flocation_t *
 
 	f = VFSSTDIO_Open(loc->rawname, mode, &needsflush);
 	if (needsflush && sp->AddFileHash)
-		sp->AddFileHash(sp->depth, loc->rawname, NULL, sp);
+	{	//Patch 388: key the game-relative name, as fs_win32.c does; the OS path was never looked up,
+		//so a file created this session was invisible to hashed lookups until the next rebuild.
+		size_t rl = strlen(sp->rootpath);
+		if (!strncmp(loc->rawname, sp->rootpath, rl) && loc->rawname[rl] == '/')
+			sp->AddFileHash(sp->depth, loc->rawname+rl+1, NULL, sp);
+	}
 	return f;
 }
 

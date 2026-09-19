@@ -987,6 +987,9 @@ static qboolean SSL_LoadPrivateCert(gnutls_certificate_credentials_t cred)
 			pubf = SSL_OpenPubKey(NULL, 0);
 
 			Con_Printf("Certificate generated\n");
+			//Patch 388: creating the two files flushed the name hash, mid-map-load on a fresh
+			//install; a stale hash is exact-case on Linux, so rebuild it now, once.
+			COM_FlushFSCache(false, true);
 		}
 	}
 
