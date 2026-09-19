@@ -2442,8 +2442,10 @@ static void SV_Status_f (void)
 #endif
 
 #ifndef SERVERONLY
-	if (!sv.state && cls.state >= ca_connected && !cls.demoplayback && cls.protocol == CP_NETQUAKE)
-	{	//nq can normally forward the request to the server.
+	if (!sv.state && cls.state >= ca_connected && !cls.demoplayback && (cls.protocol == CP_NETQUAKE ||
+		(cls.protocol == CP_QUAKEWORLD && ((cls.fteprotocolextensions & PEXT_CSQC) || (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)))))
+	{	//nq can normally forward the request to the server. FTESurf Patch 397: so can an FTE QW server
+		//(ucmds "status" -> SVNQ_Status_f); gated on FTE extensions so other QW servers keep the local answer.
 		Cmd_ForwardToServer();
 		return;
 	}

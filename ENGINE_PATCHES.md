@@ -30283,6 +30283,25 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 397 — `status` on an FTE QW server prints the server's answer  *(APPLIED -- `server/sv_ccmds.c` (SV_Status_f). VERIFIED: FTESurf `cfg/test/p397e.cfg`.)*
+
+**Problem.** `status` typed while connected to a lobby printed "Server is not
+running": SV_Status_f forwarded to the server only on NQ, although an FTE QW
+server answers the ucmd (`{"status", SVNQ_Status_f}`, sv_user.c:6906).
+
+**Change.** Also forward on QW when the server negotiated PEXT_CSQC or
+PEXT2_REPLACEMENTDELTAS.  A non-zero extension mask is not enough: mvdsv
+negotiates FTE1 bits too (chunked downloads), and its `status` is not this one.
+A listen server and other QW servers keep the local answer.
+
+**Verified.** p397e against a dedicated build of this tree: the client printed
+host/version/map, "players: 1 active (2 max)" and the `#1` row ("prot fteqw
+<version>", no addresses), no "Server is not running"; the shipped client
+printed "Server is not running"; both clients' listen-server `status` printed
+"cpu utilization".  (The first run read "players: 2": the previous client's
+disconnect was still in its `cl_delay_packets` queue at quit.)  Not verified:
+a live Pi lobby, an mvdsv server.
+
 ## Patch 399 — the key display: no letters, the overridden strafe key in yellow; the pad's trail turns orange on A/D  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_hud.qc` (HUD_Key without labels; the strafe-order latch in HUD_DrawKeys; W-release as KEY_FORCED), `cl_mouse.qc` (the per-sample strafe colour, `mousepad` prints the latch). VERIFIED: FTESurf `cfg/test/p399keys.cfg`.)*
 
 **Problem.** Lex (2026-09-20): drop the letters from the key display; tint
