@@ -30309,7 +30309,7 @@ flew 1047 u and 1041 u in 1 s on the two builds (ghost speed 1040).
 resolved it to `cfg/config.cfg`, which only the Momentum mount has.  That file
 is `unbindall` plus Momentum's binds and cvars (~570 lines), so a first boot
 lost FTESurf's binds (`r` became `mom_restart_stage`) and cfg_save_auto wrote
-Momentum's into ftesurf.cfg (this machine's carries ten `mom_*` binds).  P8's
+Momentum's into ftesurf.cfg (this machine's carried 27 of its bind lines).  P8's
 FS_FileIsAddonOnly guard checked only the root name.
 
 **Change.** Cmd_Exec_f treats a config whose winning copy is in an addon mount
