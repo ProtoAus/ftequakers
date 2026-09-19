@@ -579,6 +579,7 @@ static struct mouse_s
 	vec2_t heldpos;		//position the cursor was at when the button was held (touch-start pos)
 	float moveddist;	//how far it has moved while held. this provides us with our emulated mouse1 when they release the press
 	vec2_t delta;		//how far its moved recently
+	vec2_t rawpend;		//FTESurf Patch 376: what the ring added to delta since IN_MoveMouse last read it
 	vec2_t old_delta;	//how far its moved previously, for mouse smoothing
 	float wheeldelta;
 	double touchtime;	//0 when not touching, otherwise start time of touch.
@@ -2167,6 +2168,8 @@ void IN_Commands(void)
 				}
 				ptr[ev->devid].delta[0] += ev->mouse.x;
 				ptr[ev->devid].delta[1] += ev->mouse.y;
+				ptr[ev->devid].rawpend[0] += ev->mouse.x;	//Patch 376
+				ptr[ev->devid].rawpend[1] += ev->mouse.y;
 
 				//if we're emulating a cursor, make sure that's updated too.
 				if (touchcursor < 0 && !vrui.enabled && Key_MouseShouldBeFree())
@@ -2226,6 +2229,8 @@ void IN_Commands(void)
 				{	//only do this when its actually held in some form...
 					m->delta[0] += ev->mouse.x - m->oldpos[0];
 					m->delta[1] += ev->mouse.y - m->oldpos[1];
+					m->rawpend[0] += ev->mouse.x - m->oldpos[0];	//Patch 376
+					m->rawpend[1] += ev->mouse.y - m->oldpos[1];
 		
 					m->moveddist += fabs(ev->mouse.x - m->oldpos[0]) + fabs(ev->mouse.y - m->oldpos[1]);
 				}
@@ -2269,6 +2274,19 @@ void IN_Commands(void)
 		}
 		events_used++;
 	}
+}
+
+/*FTESurf Patch 376: per seat, since the process began: what the ring delivered, what
+  IN_MoveMouse read, and the reports raw input rejected (Patch 306).  cl_input.c
+  sends them in-band, so the Patch 312 counts join runs on the server's own file.*/
+static double in_cntring[MAX_SPLITS][2], in_cntread[MAX_SPLITS][2];
+void IN_CountsGet(int pnum, double *ring, double *read, int *rejected)
+{
+	ring[0] = in_cntring[pnum][0];
+	ring[1] = in_cntring[pnum][1];
+	read[0] = in_cntread[pnum][0];
+	read[1] = in_cntread[pnum][1];
+	*rejected = (in_raw_injected > 0 ? in_raw_injected : 0) + (in_raw_unenum > 0 ? in_raw_unenum : 0);
 }
 
 void IN_MoveMouse(struct mouse_s *mouse, float *movements, int pnum, float frametime)
@@ -2341,6 +2359,15 @@ void IN_MoveMouse(struct mouse_s *mouse, float *movements, int pnum, float frame
 	  this seat does not consume contributes nothing to this view, and counting it
 	  here would manufacture a disagreement on splitscreen that means nothing.*/
 	IN_Journal_ViewRaw(mx, my);
+
+	/*FTESurf Patch 376: the same two ends, summed for the server.  An honest client
+	  reads exactly what the ring delivered, so the sums are equal; a hook that
+	  rewrites delta between the drain and this read is their difference.*/
+	in_cntring[pnum][0] += mouse->rawpend[0];
+	in_cntring[pnum][1] += mouse->rawpend[1];
+	mouse->rawpend[0] = mouse->rawpend[1] = 0;
+	in_cntread[pnum][0] += mx;
+	in_cntread[pnum][1] += my;
 
 	if(in_xflip.value) mx *= -1;
 

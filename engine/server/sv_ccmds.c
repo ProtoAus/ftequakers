@@ -4372,6 +4372,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	recsim_restart_t *rst = NULL;	/* Patch 369 */
 	recsim_ghost_t *gho = NULL;		/* Patch 373 */
 	const char   *ghostbad = NULL;
+	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
+	float         mcdx = 0, mcdy = 0;
 	func_t        vf_restart = 0;
 	int           nses = 0, npause = 0;
 	const char   *sesbad = NULL;		/* a structure this replay cannot follow */
@@ -4597,6 +4599,17 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				{ haveend = true; endticks = atoi(ln+4); }
 			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
 				nresume++;
+			else if (!strncmp(ln, "mc ", 3) && pass == 0)
+			{	/* Patch 376: ring (what the device sent) against read (what the view used) */
+				int pk, row;
+				float rx, ry, ax, ay;
+				if (sscanf(ln+3, "%i %i %f %f %f %f", &pk, &row, &rx, &ry, &ax, &ay) == 6)
+				{
+					nmc++;
+					if ((rx != ax || ry != ay) && mcbad++ == 0)
+						{ mcrow = row; mcdx = ax - rx; mcdy = ay - ry; }
+				}
+			}
 			else if (!strncmp(ln, "ghost ", 6))
 			{
 				int on = -1, tk = -1;
@@ -5630,6 +5643,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			Con_Printf("  restarts  %i of %i applied to the zone latches (SV_VerifyRestart)\n", nrsapplied, nrestart);
 		if (nghost && verify)
 			Con_Printf("  ghost     %i edge(s), %i packet scan(s) skipped while detached\n", nghost, nghskip);
+		if (!nmc)
+			Con_Printf("  counts    none -- the client predates Patch 376\n");
+		else if (!mcbad)
+			Con_Printf("  counts    %i record(s): what the input ring delivered is what the view read\n", nmc);
+		else
+			Con_Printf("  counts    ^1%i of %i record(s) disagree^7, first at row %i (read - ring %g %g)\n",
+			           mcbad, nmc, mcrow, mcdx, mcdy);
 
 		/* ARM 1 ------------------------------------------------------------- */
 		Con_Printf("^5ARM 1^7  %i moves: %i exact, %i off (worst by %i tick%s)\n",
@@ -5730,6 +5750,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				Q_snprintfz(why, sizeof(why), "ghost at row %i: the file says tick %i, the trace %i", gtick_row, gtick_file, gtick_trace);
 			else if (ginput_row >= 0)
 				Q_snprintfz(why, sizeof(why), "ghost: input at row %i, %i ticks into a detached window", ginput_row, ginput_late);
+			else if (mcbad)	/* Patch 376: a delta rewritten between the ring and the read */
+				Q_snprintfz(why, sizeof(why), "counts: the view read mouse counts the device did not send (%i record(s), first at row %i)", mcbad, mcrow);
 			else if (x_bad)
 				Q_snprintfz(why, sizeof(why), "state: %i packet(s) differ, first at row %i", x_bad, x_first);
 			else if (pe_bad)

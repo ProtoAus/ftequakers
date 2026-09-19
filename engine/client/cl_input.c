@@ -2088,6 +2088,37 @@ static qboolean CLFTE_SendVRCmd (sizebuf_t *buf, unsigned int seats)
 }
 
 
+/*FTESurf Patch 376: the mouse counts, in-band, to a server that asks (serverinfo
+  fs_counts 1, which FTESurf's progs set).  The prydon cursor block carries six
+  float32s every packet, and the server hands them to QC for the command being
+  run, which is where the recorder writes its `in` row.  Cumulative, so a lost
+  packet loses nothing; wrapped at 2^20 so a float32 holds them to 1/8 count.
+    cursor_start   ring x, ring y, 1 (the payload version; never all zero)
+    cursor_impact  read x, read y, reports raw input rejected (Patch 306)
+  ring == read on an honest client (in_generic.c IN_CountsGet).*/
+void IN_CountsGet(int pnum, double *ring, double *read, int *rejected);
+static float CL_CountWrap(double v)
+{
+	v = fmod(v, 1048576.0);
+	if (v < 0)
+		v += 1048576.0;
+	return (float)v;
+}
+static void CL_SendCounts(usercmd_t *cmd, int pnum)
+{
+	double ring[2], read[2];
+	int rejected;
+	IN_CountsGet(pnum, ring, read, &rejected);
+	Vector2Clear(cmd->cursor_screen);
+	cmd->cursor_start[0] = CL_CountWrap(ring[0]);
+	cmd->cursor_start[1] = CL_CountWrap(ring[1]);
+	cmd->cursor_start[2] = 1;
+	cmd->cursor_impact[0] = CL_CountWrap(read[0]);
+	cmd->cursor_impact[1] = CL_CountWrap(read[1]);
+	cmd->cursor_impact[2] = CL_CountWrap(rejected);
+	cmd->cursor_entitynumber = 0;
+}
+
 void CL_UpdatePrydonCursor(usercmd_t *from, int pnum)
 {
 	int hit;
@@ -3430,6 +3461,8 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 			if (((cls.fteprotocolextensions2 & PEXT2_PRYDONCURSOR)||(cls.protocol == CP_NETQUAKE && cls.protocol_nq >= CPNQ_DP6)) && 
 				(*cl_prydoncursor.string && cl_prydoncursor.ival >= 0) && cls.state == ca_active)
 				CL_UpdatePrydonCursor(cmd, plnum);
+			else if (cls.state == ca_active && atoi(InfoBuf_ValueForKey(&cl.serverinfo, "fs_counts")) == 1)
+				CL_SendCounts(cmd, plnum);	//FTESurf Patch 376
 			else
 			{
 				Vector2Clear(cmd->cursor_screen);
