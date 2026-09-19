@@ -30283,6 +30283,22 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 389 — only Windows clients rank during the Linux beta  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc` (SV_ProfileBroken: a profile report without IPH_RAW is broken). VERIFIED: FTESurf `cfg/test/p387xi2.cfg` on Linux, `b78event.cfg` on Windows.)*
+
+**Problem.** Patch 387 closes the Linux bypasses the engine can see, but device-
+targeted XTEST (unprivileged, plain Xorg) posts as the real mouse and nothing can
+tell it apart; compositor injection and uinput are the same.  Lex chose (2026-
+09-19) to ship the Linux beta with its runs unranked.
+
+**Change.** `in_rawinput` exists only in in_win.c, so a report without IPH_RAW is
+a Linux, macOS or SDL client: SV_ProfileBroken returns TRUE and the run gets
+TF_NOPROFILE (uncertifiable).  csprogs is untouched (byte-identical to the
+lobbies'), so no client downloads anything.
+
+**Verified.** Linux 387+388 build, p387xi2: honest XInput2 arm A `would 1` (was
+0), every arm 1.  Windows b78event arm for arm identical to the build before
+(arm A `would 0`).  To lift it: delete the three lines.
+
 ## Patch 388 — Linux: the name hash no longer crashes the log, loses new files or goes stale on a first map  *(APPLIED -- `common/fs.c` (FS_AddFileHash / FS_AddFileHashUnsafe return while com_fschanged is set, except in FS_RebuildFSHash's own fill; FS_FreePaths clears gameonly_homedir/gamedir; the FS_GAMEONLY homedir branch tested gameonly_gamedir's CreateFile), `common/fs_stdio.c` (a new file is hashed by its game-relative name, as fs_win32.c does), `common/net_ssl_gnutls.c` (rebuild the hash once after writing a new key+cert). VERIFIED: FTESurf `cfg/test/p388crash.cfg`, `p388save.cfg`, `p386first.cfg`.)*
 
 **Problem.** With `log_enable 1` and `log_developer 1` the Linux client died in
