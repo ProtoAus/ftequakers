@@ -30324,7 +30324,10 @@ a second extension after a hold replacing the time instead of adding, a voted
 map surviving a cleared lobby_maps, a pending !rtv passing when the ratio is
 set to 0, a failed change keeping the hold's state (votes off for a period),
 mouse motion read as digits, and silently dropped rate-limited commands; run 3
-passed every arm again.  The real keyboard path
+passed every arm again.  Live on the Pi 2026-09-19 06:36 UTC with 371 (qwprogs
+199e59f8, csprogs 0dc574c0, from a clean worktree of FTESurf 69d8516; the
+lobby.cfg adds only sets equal to the progs defaults); `cfg/test/p372pi.cfg`
+against lobby 1 read the clock, the next map and both replies.  The real keyboard path
 (a physical key press) was not injected: the chain ORDER is proven by `vote
 key`, the key delivery is the engine's.
 
