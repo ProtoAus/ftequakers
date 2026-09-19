@@ -30283,6 +30283,21 @@ correction to erase it AND to flip the overlap -- if a map ever mis-gates,
 look there first; the seed trace (cl_trigdebug 2) and `trig_io` show the
 whole graph and its live state.
 
+## Patch 374 — the in-game board marks a Verified run  *(APPLIED -- mod-side only, no engine change: `src/client/cl_online.qc` (`ver` parsed per row, board_status says "verified"), `src/client/cl_scores.qc` (Scores_Tick after "watch" in the replay cell). VERIFIED: FTESurf `cfg/test/p374ver.cfg` against the live board.)*
+
+**Problem.** The web board showed Verified since Patch 359; the in-game board
+did not, although /api/board already carried `ver` (VER_SQL).
+
+**Change.** The client reads `ver` and draws a tick after "watch".  None of the
+three faces (Roboto, GoogleMed, Bebas Neue) has U+2713 or U+2714, and the engine
+draws a missing glyph as a box holding its hex code, so the tick is two
+drawlines.  "watch" plus the tick fits the 7-character replay column in Roboto,
+so the column did not widen and the narrow-window drop rule is unchanged.
+
+**Verified.** Live board, 2026-09-19: surf_ace's two PASS rows draw the tick; a
+pre-v9 REFUSE row (surf_aesthetic) draws "watch" alone; a row with no recording
+reads "none".
+
 ## Patch 373 — pm_verify replays a ghost window  *(APPLIED -- `server/sv_ccmds.c` (SV_RecSim_Run: `ghost` edges bound to their row and paired, no zone scan while detached with the sweep origin following the body, the tick and input checks); FTESurf `src/server/sv_saveloc.qc` (no ghost during a Multi-Session restore), `src/server/sv_timer.qc` (grammar: the position rule). VERIFIED: FTESurf `cfg/test/p373verify.cfg` (on the Pi binary), `p373ctl.cfg`.)*
 
 **Problem.** A `ghost` record was a blanket REFUSE.  One live v9 run carried one
