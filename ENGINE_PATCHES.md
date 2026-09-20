@@ -32685,11 +32685,30 @@ lands below the zone and build 47's start-box taint laundering never fires — 3
 48 sampled regions. Closing that would extend the `sl_load` velocity payload to the
 other 11; the velocity has to be answered first.
 
+**LIVE 2026-09-20, the two lobby-only paths** (verifier session, at Lex's request;
+`cfg/test/p415lobA.cfg` + `p415lobB.cfg` against lobby 4, bhop_eazy, progs
+`8c09730`).  A saved while moving inside the box: its own row reads **204 u/s**;
+`!r` answers `start of the map (your save, -366 -352 64)`; a save taken
+immediately after reads **0 u/s at the same origin**.  Armed and `class: clean`
+throughout.  So the placement hands back an origin and not the velocity on a
+lobby too, which is the arm p415reset could only run on a listen server.
+B is a SECOND PLAYER from a separate install, and the control is that the lobby
+log shows two guids (`f8dc54d0…` against A's `9fb676fd…`) — without it the pair
+would have measured one player twice: B's `sl_list` says `nothing saved on this
+map` and its `!r` lands on `teleDestPos, -336 -352 64`.  SL_Blk's per-player
+split holds; A's save is never offered to B.
+`lobby_nosaveloc` could NOT be driven on the fleet — setting it needs rcon, and
+only the 12 lobby ports are reachable off-LAN — so `p415nosave.cfg` ran against a
+dedicated server at `lobby_enable 1`: `sl_save` refused with "save points are off
+in this lobby", `!r` still lands on `teleDestPos`, clean.  That is the gate, not
+the fleet.  The refusal prints twice, which is the double-processed `cmd` path.
+Still not driven live: Patch 414 on a map whose progression depends on OnJump.
+
 **DEPLOYED 2026-09-20 ~05:30 UTC** (by the verifier session, on Lex's instruction):
 progs at FTESurf `8c09730` to all 12 lobbies.  NEW IN THIS ONE: Patches 413-415.
 403-412 and `run_startcap 0` were ALREADY LIVE, and the "everything since
 `7c7220a`" this was measured against is stale by one deploy -- `c3cf81c` (Patch
-412) went to all 12 lobbies earlier on 2026-09-20 from the anti-cheat session,
+412) went to all 12 lobbies earlier on 2026-09-20 from the session that wrote it,
 qwprogs.dat 1478930 bytes, csprogs byte-identical to Patch 411's and re-seeded as
 `cb29261c.dat`, verified 12 active / 0 players.  Corrected here rather than left,
 because a fleet record that understates what was already running is how the next
