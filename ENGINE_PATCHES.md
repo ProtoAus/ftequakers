@@ -30445,6 +30445,72 @@ starts a sample and a stroke blends from its older sample's colour to its own.
 note) -- parenthesised.  Not verified: a real keyboard (the harness feeds
 `vote key`, whose bind never runs).
 
+## Patch 403 — a push may not carry a run out of the start box  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc` (SV_StartCapClamp, SV_TimerFrame, SV_TimerStart) + `cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p403cap0.cfg`, `p403capverify.cfg`, `p403compat.cfg`; the bug itself in `p403stage.cfg`.)*
+
+**Problem.** A clean ranked personal best could begin at 1800 u/s, and pm_verify
+PASSed it.  Measured on HEAD (Patch 400 included), sv_cheats 0, `!r` the only
+input, a start box drawn around bhop_arcane's *88 booster: `flags 4` (TF_HAVEPB
+alone -- not practice, not cheat), a main PB and a stage PB written, and
+`VERIFY ... PASS`.  Patch 400 does clear the carrier on the `!r` placement; the
+push re-arms it on the very next tick, because the body was put down inside it.
+
+Nothing between there and the board looks at the speed, and the reason is that
+THE SPEED IS NOT IN `.velocity`.  A trigger_push arms `.run_basevel` and the
+engine rides it as pmove.basevelocity; it only becomes velocity on the first
+command nothing re-armed it (sv_entities.qc:992).  So the recording reads
+`seed ... 0 0 0 1` -- velocity zero, on the ground -- while the samples step
+54 u per 0.03 s.  The gate we already ship reads the same zero: SV_StageLaunch
+takes `hv = e.velocity` (sv_timer.qc:6533) and logged
+`prime 1 launch 0 tk 1 tkspd 1809 cap 290`.
+
+It is not fixture-deep.  23 start zones on the 93-map rotation contain an enabled
+trigger_push; 5 have a horizontal component >= 300 u/s, including surf_666's
+bonus-3 start (four at 3000) and surf_ember stage 3 (500).  Every one of them
+carries `limitStartGroundSpeed: true` in Momentum's own zone data, which this
+parser reads past.
+
+**Change.** `run_startcap` (u/s, default 290 beside run_stagecap; 0 disables).
+`SV_StartCapClamp` takes the EFFECTIVE horizontal speed -- `.velocity` plus the
+carrier at the cash-out's own scale `1 + run_bv_tick*0.5` -- and pays the excess
+out of the carrier.  Two call sites: per tick while TS_ARMED and still inside the
+box, which is Momentum's rule exactly; and once at the latch in SV_TimerStart
+above the taint chain, which is what a push volume reaching PAST the box needs.
+
+Ground only, as Momentum's is.  CARRIER ONLY: `.velocity` is never written.  That
+second restriction is measured, not tidy -- across the Pi's 43,369 grounded
+sample rows 16.2% sit at 250-299 u/s and 1.0% are above 300 (bhop landings,
+slope slides), so clamping the player's own speed would take prespeed off every
+bhop start, which is what `limitStartGroundSpeed: false` exists to permit and is
+set on 15 of the rotation's 17 bhop maps.
+
+Applied on every map rather than reading the per-segment key: the key is false on
+bhop_arcane's start segment, so honouring it would exempt the exact case this
+exists for.  Clamp rather than taint, so the run still ranks, at a legal speed.
+Both Lex's calls, 2026-09-20.
+
+**Verified.** p403cap0 (CONTROL, `run_startcap 0`) reproduces HEAD: `seed ... 0 0
+0 1`, `ride 0 370 arm ... 1400`, a clean ranked PB.  p403stage on the patch:
+`ride 0 373 arm -0.549864292 288.565186` -- 1400 clamped to 288.57, effective
+289.3 against the 290 cap -- and the seed is no longer a standing start.  The run
+still ranks and still verifies (p403capverify PASS, ticks 64 rows 47).
+
+**And old files keep their verdicts.** p403compat: a recording made with the cap
+OFF, replayed by progs with the cap ON, is `VERIFY data/p403cap0.rec PASS ticks
+64 rows 47` -- agreement to the last tick.  The clamp does not run inside
+pm_verify; the verifier replays the recorded `ride` values.  That is why this
+needed no new record and no REC bump: the carrier reaches a file only through
+`ride arm`, written from .run_basevelocity in the NEXT PreThink
+(sv_entities.qc:1053), i.e. after the clamp, so the file states the clamped
+number.  Both call sites are outside any recording anyway -- TS_ARMED means no
+run is open, and the latch call runs before SV_RecOpen, so it lands in `seed`.
+
+**Left open, deliberately.** SV_StageLaunch still reads `.velocity`, so a stage
+boundary crossed MID-RUN on a booster is still judged as a standing start; the
+start is now capped but that gate is not, and fixing it is a separate decision
+because it would stop stage rows posting.  (Measured exposure: only 9 of the live
+corpus's 58 `ride` records carry anything at all.)  Momentum also clamps inside
+stage boxes during a full run; this patch does not.
+
 ## Patch 401 — predict a teleport's view snap only on an engine with Patch 396  *(APPLIED -- mod-side only: FTESurf `src/client/cl_triggers.qc` (TG_FireTeleport). VERIFIED: FTESurf `cfg/test/p401guard.cfg`.)*
 
 **Problem.** The shipped client (0.1.11) reconciles a predicted angle snap with
