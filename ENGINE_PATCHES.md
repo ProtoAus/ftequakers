@@ -32393,3 +32393,50 @@ placement 300 u off the pad, stays silent on both builds. `p414lift.cfg` records
 that bonus 1's vertical `trigger_push` was never broken (1162 u of lift) and that
 its pre-registered detector was the wrong one — a purely vertical carrier can
 never print a cash-out. Regression: `p409hop`, `p412speed`.
+
+## Patch 415 — `!r` puts you back on the spot you left in the start box  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_saveloc.qc`, `sv_timer.qc`, `sv_zones.qc`. Fixtures `cfg/test/p415reset.cfg`, `p415snap.cfg`.)*
+
+**Problem.** `!r` teleports to the map's authored destination and zeroes velocity.
+If you had already placed a save in that start box, that save is the start you
+wanted and `!r` ignored it.
+
+**Change.** On the RESET path only — `SV_TimerWouldRestartSeg`, lifted out of
+`SV_TimerTeleported` so `!r` can ask before the move instead of inferring after —
+`SV_SaveLocPickInZone` returns the ORIGIN, yaw and pitch of the newest save taken
+with the clock stopped whose position `SV_ZoneOcc` puts inside the leg's own zone.
+`SV_ZoneMoveAt` is the old `SV_ZoneMove` body with a destination override, so the
+velocity zero, `SV_ClearCarrier`, void-or-restart, `SV_TimerWarped`, the `warp`
+record, the leg latch and the arm all still run; `SV_ZoneMove(n)` is a wrapper.
+The picked point is ground-snapped and hull-tested with `SV_ZoneDest`'s shape but
+a REFUSAL instead of its fall-back-to-itself.
+
+**IT IS NOT A SAVE LOAD, and that is the design.** The first cut called
+`SV_SaveLocLoad`; three independent reviews (predicate/control-flow, evidence,
+what-a-cheater-gains) each rejected it. A load restores `.velocity`, so carrying
+speed into a start box — re-entering one while running ARMS you, no file editing —
+and saving with the clock at 0 made every `!r` a prespeed injection into a freshly
+armed, laundered attempt whose `.rec` opens with that velocity in the seed, no
+lead-in and no warp record, so `pm_verify` PASSes it. Also rejected: `state.txt`
+deciding the LEG, `SV_ZoneStartAt` re-deriving the zone and taking the first
+matching start (surf_aircontrol's bonus-2 start is byte-identical to its main), a
+stage leg getting no arm and running practice-tainted and silent, a failed load
+leaving a live run neither voided nor restarted, and `ticks > 0` admitting a
+hand-edited negative count. A second round caught the same exploit returning as
+free HEIGHT (start zones: 1771 regions, median 352 units tall, max 2760; the
+start cap only ever touches the carrier, never `.velocity`, so a fall is invisible
+to it) — hence the ground snap — plus the lobby policy gates being skipped
+whenever the row cache was fresh, which on a lobby is always.
+
+**Verified.** `p415reset.cfg` on bhop_eazy: `!r` with no save unchanged; with one,
+lands on its origin, yaw and pitch, `class: clean`; a save carrying 204 u/s comes
+back at 0 u/s; a stage leg stays clean; another leg's `!r` ignores it.
+`p415snap.cfg` on surf_cement (start box 320 tall, starts on leave): a save taken
+47 units up lands on the floor. Regressions `b57stage` (D arm, the stage restart
+that keeps the clock), `p409hop`, `p412speed`; `tools/test_reccheck.py` 229/0 and
+the `data/runs` corpus unmoved at 12 notes over 237 files.
+
+**Found and deliberately NOT fixed**, documented in place: `state.txt` stores
+`origin %.4f`, so on a map whose start zone bottom IS its floor the placed origin
+lands below the zone and build 47's start-box taint laundering never fires — 37 of
+48 sampled regions. Closing that would extend the `sl_load` velocity payload to the
+other 11; the velocity has to be answered first.
