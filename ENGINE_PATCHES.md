@@ -32440,3 +32440,12 @@ the `data/runs` corpus unmoved at 12 notes over 237 files.
 lands below the zone and build 47's start-box taint laundering never fires — 37 of
 48 sampled regions. Closing that would extend the `sl_load` velocity payload to the
 other 11; the velocity has to be answered first.
+
+**DEPLOYED 2026-09-20 ~05:30 UTC** (by the verifier session, on Lex's instruction):
+progs at FTESurf `8c09730` to all 12 lobbies -- everything since `7c7220a`, i.e.
+Patches 403-415 and `run_startcap 0`.  qwprogs sha256 `cdaa6d30…`, csprogs
+`9b3cd497…` (folded `eb1da7bf`).  Progs only: the Pi's default.cfg, surfd and
+engine already matched.  Checked after: 12 units active, 5 s heartbeats, no log
+errors, a client connect to lobby 1 loads CSQC, and a 0.1.7 client with no cache
+downloads `csprogsvers/eb1da7bf.dat` and loads it (Patch 362's path, on a real
+deploy).  The 403-415 entries keep their own arms; this is the fleet record.
