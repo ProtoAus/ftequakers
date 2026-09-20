@@ -32326,3 +32326,34 @@ tc-coloured name, ping, voice icon. p340b listen: colour resolves, hash line
 reads "no id". p340pi against a live lobby post-deploy: hook alive, ranked
 board fetched and absorbed, a real second player's row correct, no prederr.
 0 new warnings across the three progs.
+
+## Patch 413 — the Air/Bhop/Jump percentage measured its two halves from different moments  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_board.qc`, `src/client/cl_hudedit.qc`, `ftesurf/cfg/default.cfg`. Fixture `cfg/test/p413air.cfg`.)*
+
+**Problem.** `seq_pct` is `100 * de / emax`. `emax` was the strafe ceiling alone;
+`de`'s origin was whichever render frame first saw `!onground`, and its end
+whichever first saw `onground`. Neither edge is the physics edge, so a jump's
+`v^2/2g` (57 units of height at the shipped tuning) landed inside `de` or outside
+it by accident, and the landing was usually sampled after the engine had already
+zeroed the fall. The same hop read 139% or 0%. Across `ftesurf/data/saves`, 571 of
+1482 air rows are over 100% and the median `Jump` row is 250%.
+
+**Change.** Both halves now start at the launch point. `seg_ground_e` latches the
+energy on the last grounded frame and becomes `seg_e0` for a segment opened from
+the ground (`seg_sub != SEQSUB_NONE`); `Board_JumpEnergy` seeds `seg_emax` with
+the jump's own energy when that takeoff was upward, read from
+`pm_jumpvelocity`/`sv_gravity` rather than the `PM_JUMP_APEX` define. An air time
+ending on flat ground closes at the previous frame's energy (`seg_laste`) — the
+same decision build 19 made for a ramp arrival, which already had it. A ramp exit
+is untouched: no ground phase, no jump term, `eb` unchanged. One float either way,
+so `Seq_OpenRestore`, `Seq_Mark`, the `seq.txt` `open` line and the carry are
+unchanged, and no eleventh parallel array.
+
+**Verified.** `cfg/test/p413air.cfg`, three single hops on bhop_eazy, patched
+against a control built from HEAD (csprogs 4956958 vs 4956134). Control `de`
+−59.5168 / −0.0025 / −0.0102, all reading 0%. Patched 58.5289 / 58.4977 / 58.4977
+reading 58.85 / 58.98 / 59.07 — numerator spread 59.5 → 0.03 on identical inputs.
+`emax` rose by exactly 57.00 per row after the airtime difference is removed at
+the map's own rate. The pre-registered control prediction (">100% on the control")
+was WRONG and is recorded in the fixture: over-100 and stuck-at-0 are the two ends
+of one defect. Not covered: mid-air boosters inject energy no ceiling models, so
+ramp-exit rows can still exceed 100%.
