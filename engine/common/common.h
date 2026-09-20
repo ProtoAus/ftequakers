@@ -995,6 +995,16 @@ extern hashfunc_t hash_crc16;		//aka ccitt, required for qw's clc_move and vario
 extern hashfunc_t hash_crc16_lower;
 extern hashfunc_t hash_blake2b_256;	//quakers: the content-distribution manifest names every object by this hash. see common/blake2b.c
 #define hash_certfp hash_sha2_256	//This is the hash function we're using to compute *fp serverinfo. we can detect 1/2-256/2-512 by sizes, but we need consistency to avoid confusion in clientside things too.
+
+/*FTESurf Patch 417: Ed25519 (RFC 8032), in common/ed25519.c, for the run
+  receipt -- a player's key never leaves their machine, so the primitive has to
+  exist wherever the client runs and the TLS backends cannot supply it (gnutls
+  is Linux-only here, SChannel cannot sign, and Windows CNG has no Ed25519).
+  `sk` is the 64-byte NaCl layout, seed(32) || pubkey(32).  hash_sha2_512 above
+  is the hash it uses; this file is the curve and nothing else.*/
+void Ed25519_FromSeed(qbyte pk[32], qbyte sk[64], const qbyte seed[32]);
+void Ed25519_Sign(qbyte sig[64], const qbyte *m, size_t mlen, const qbyte sk[64]);
+qboolean Ed25519_Verify(const qbyte sig[64], const qbyte *m, size_t mlen, const qbyte pk[32]);
 //wrap a writable file so that VFS_CLOSE fails unless the bytes written match both the
 //expected size and the expected (hex) digest. lives in common/fs.c.
 vfsfile_t *FS_Hash_ValidateWrites(vfsfile_t *f, const char *fname, qofs_t needsize, hashfunc_t *hashfunc, const char *hash);

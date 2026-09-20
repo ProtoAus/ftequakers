@@ -32824,3 +32824,161 @@ for `ticks`. And `cl_lobbytime.qc` writes a client-side `FTESURF-REC 5` whose
 flags come from a stat, so it can carry TF_NONCE with no key to match: harmless
 today (local files, and reccheck's cross-check is gated at v9), worth knowing
 before anything treats the bit as meaningful in a file it did not write.
+
+## Patch 417 — a key that never leaves the player's machine, and a receipt no other server can wear  *(APPLIED -- engine: `common/ed25519.c` (new), `client/cl_receipt.c` (new), `client/in_generic.c`, `client/cl_main.c`, `client/client.h`, `common/common.h`, `Makefile`; FTESurf `src/server/sv_timer.qc`, `sv_player.qc`, `sv_lobby.qc`, `src/client/cl_replay.qc`, `tools/ed25519.py` (new), `tools/rcptcheck.py` (new). Fixtures `cfg/test/p417ed.cfg`, `p417sign.cfg`, `p417stale.cfg`, `p417probe.cfg`.)*
+
+**Problem.** The plan's Phase 2 identity item, unstarted since it was written: "a
+local keypair at first launch; public key = player id; runs signed." Until now a
+player is a `guid` derived from `qkey`, and nothing committed a client's evidence
+to a moment — a journal or a sidecar could be authored at leisure afterwards.
+
+**Change.** At the first signature the client makes an Ed25519 keypair and keeps
+the seed as hex in `fskey`, beside `qkey`, in the install root. At the end of a
+run it signs five lines — the server it is connected to, that server's run nonce
+(Patch 416), the tick count it saw, and the SHA-256 of its own `.hid` and
+`.view` — and sends the public key and signature to the server, which writes
+`data/evidence/<map>/<runid>.rcpt`: its own facts above the client's signed
+block. `tools/rcptcheck.py` verifies it offline, joins it to the `.rec` by runid,
+compares both tick counts, and hashes the files it is pointed at against what was
+committed to.
+
+**What it buys, in the words the review left standing.** The first version of
+this section claimed three things and two were wrong in the direction that
+flatters the patch.
+
+- **It does not prove honesty.** A patched client signs what it likes, and the
+  player holds the key — so a player signing a false statement about their own
+  run need not patch anything at all.
+- **It fixes the digests at the finish.** The gamecode signs at the run-end edge
+  and the server refuses a receipt while the run is still recording, so the
+  commitment cannot be made before the evidence exists. A forger's fake journal
+  has to be ready by the finish line rather than produced afterwards. Real cost;
+  not a wall.
+- **It is an identity that cannot be harvested by asking, and a signature that is
+  not portable.** The first cut said "an identity a server operator cannot wear",
+  and that was FALSE as written — see the relay below.
+
+**THE WORST FINDING, AND IT WAS AN ATTACK RATHER THAN A DEFECT.** `rec_sign` was
+reachable from a server's stufftext, like every command CSQC can reach. So any
+server could mint the key file on a client that had never played a ranked run and
+read back its public key — and worse, it made a LIVE RELAY work: start a run on
+the real server B, take B's nonce, have a victim's client sign it on your own
+server A, then post the victim's key and signature to B as your own run's
+receipt. B checked shapes and TF_NONCE and never that the key belonged to the
+sender. The forged receipt verified.
+
+Two lines close it, and both are measured in `p417probe.cfg`:
+
+- **A server may not ask.** `Cmd_FromGamecode()` is refused, and the client says
+  so on its own console. The gamecode's `localcmd` runs one restriction level
+  below, so the only caller there is keeps working.
+- **The statement names the server.** The address comes from the client's own
+  netchan, not from anything the gamecode said, so a signature made on A does not
+  read as a receipt on B. A hostile server still owns the client's CSQC and can
+  drive the command from gamecode it wrote — that line is what makes it worthless
+  anywhere else.
+
+**Six more findings, all from the three review lenses and none from re-reading
+the code.**
+
+- **A run with no journal signed the LAST run's digest.** The engine keeps the
+  digest so a receipt can sign it after the buffer is freed, and nothing said it
+  belonged to this run. Named use: play one clean PB so a real journal is
+  latched, set `rec_hid 0`, and every later run commits to the clean run's bytes.
+  Closed at both ends — the gamecode says whether this run journalled, and a
+  journal that ends with none open forgets the last one. `p417stale.cfg` keeps
+  the pre-fix receipt as its control.
+- **A discarded journal's digest was over a PREFIX.** It was taken before the
+  trailer was composed, so no file that could ever be written would hash to it —
+  and a lobby discards every journal, which made the commitment unfalsifiable on
+  exactly the servers it is for. One digest point now, after the trailer,
+  whichever way the journal ends.
+- **The receipt could be sent at tick one**, burning the one-per-run latch so the
+  honest receipt was refused, recording a server tick count of zero, and
+  committing to whatever digests were lying around. Refused while recording.
+- **Receipts were written into a flat `data/receipts/` that nothing ever swept**,
+  by twelve lobbies sharing one data dir. They live beside the evidence now and
+  `SV_EvidenceSweep`'s `run_evidence_days` reaps them on the same clock.
+- **A player name could inject lines into the receipt.** `SV_FixupName` strips
+  what QuakeC trips on, not what Python's `splitlines()` breaks on (`\v`, `\f`,
+  the file separators, U+2028). The receipt's text fields are cleaned to
+  printable ASCII.
+- **The verifier called a receipt that commits to nothing VALID.** It rebuilt the
+  message from whatever `signed ` lines it found, so a receipt with none at all —
+  a signature over the version line — reported ok, and `--tamper` had nothing to
+  tamper with and passed too. The signed block is now required to be exactly its
+  five lines, in order, and the version line is taken verbatim rather than parsed
+  and re-rendered.
+
+**Three crypto defects that no published vector and no random cross-check could
+reach**, because no honest signature goes near any of them:
+
+- **A small-order public key verifies everything.** `[k]A` is the identity for
+  every `k`, so verification collapses to `R == [s]B`, which anyone satisfies
+  with no secret. Ordinary Ed25519 code does not care — one key, one signer —
+  but here the key is a player's IDENTITY, so it would be a name eight people
+  can wear at once. A forgery was crafted and confirmed to verify under the
+  pre-fix equation; both implementations refuse it now, and the control (a real
+  key) still verifies. Computed as `[8]A == identity` rather than tabulated: a
+  wrong byte in a blacklist fails silently in the direction that accepts.
+- **`s < L` was checked to three bits.** `sig[63] & 224` refuses only
+  `s >= 2^253`, so `(R, s+L)` verified in C and was rejected by the Python
+  arbiter — the two accepted DIFFERENT SETS of signatures, invisibly.
+- **A non-canonical `y` gave one key two spellings**, which anything keying a
+  player on the hex text would read as two people.
+
+**The primitive is ours, and the reason is portability.** gnutls can sign and is
+Linux-only here, SChannel cannot sign, Windows CNG has no Ed25519. Two OS
+backends would be more code than one portable file and neither would run
+headless. `common/ed25519.c` is the compact tweetnacl formulation on the engine's
+own SHA-512.
+
+**Checked four ways.** RFC 8032 §7.1's three vectors in the shipping binary
+(`ed25519_selftest`, including the tampered-signature arm a
+returns-true-unconditionally verifier would fail); 40 random (seed, message)
+pairs against an independent pure-Python implementation, both directions, message
+lengths 0 to 1024; the three classes above, each with a crafted positive attack;
+and a receipt from this patch's own arm carried to the Pi and verified there by
+both `tools/ed25519.py` and python-cryptography 38.0.4.
+
+**Four defects the harness found before the reviewers did**, each recorded in the
+fixture that found it: the selftest reported a defect it had caused itself (four
+results computed inside one `Con_Printf` argument list, and C does not define
+evaluation order); a missing printf argument crashed the client at every finish;
+"malformed field" did not say which field; and the field was `ticks -1`, which is
+CORRECT — `STAT_FS_RUNTICKS` is -1 on a run the server does not keep. A fifth
+came from the last run of all: a QuakeC `tokenize()` treats a colon as its own
+token, so the unquoted address `QLoopBack:0` arrived as `QLoopBack` and the
+signature verified against nothing. And a sixth, which is the oldest mistake in
+the file: the flag saying "this run journalled" was cleared BELOW the call that
+sets it, so every receipt reported no journal while the engine held a good digest.
+
+**Verified.** `p417ed.cfg`: three vectors, four arms each, all ok.
+`p417sign.cfg` (G1-G5): a receipt beside the evidence, signature VALID over the
+message rebuilt from the file alone, nonce and ticks agreeing with the `.rec` and
+the server, `signed hid f8ecd07c… 1897 0` for the journal that closed at the
+finish, `signed view 685639de…` matching the file byte for byte, and `--tamper`
+invalidating all five signed lines. `p417stale.cfg` (S1-S2) with its pre-fix
+control. `p417probe.cfg` (P1-P5): the console form reaches the server and is
+refused by name; the STUFFED form is refused on the client and never reaches the
+server at all — same command, same arguments, four seconds apart in one log.
+`test_reccheck` 248/0, `test_hidcheck` 154/0, `ed25519.py --selftest` 0 failed,
+the `data/runs` corpus unmoved at 153 with faults.
+
+**Not deployed, and the server half is progs-only.** `ed25519.o` and
+`cl_receipt.o` are in CLIENT_OBJS, so a dedicated server binary is unchanged and
+the Pi needs no engine deploy for this.
+
+**Also fixed here, because Patch 416 spent its margin**: `sv_lobby.qc` submitted
+`&flags=%g`, exact only while the flags word stays under seven significant
+digits. With TF_NONCE the maximum is 262143; the bit after the next one makes it
+2097151, which `%g` sends as `2.09715e+06` and surfd's `strict_int` refuses — a
+run arriving with no flags at all. It is `%d` now, the same conversion `ticks` and
+`recbytes` already had.
+
+**What is still open**, and it is why the digests are worth signing at all: the
+journals do not leave the player's machine. On a lobby the `.hid` is discarded at
+the end of the run and the `.view` is never written (`Rec_ServerIsRemote`), so a
+live receipt today commits to bytes nobody else holds and names one file that
+does not exist. That is the next patch, and it is also why `kept` is recorded
+beside the digest rather than left to be inferred.

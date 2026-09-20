@@ -1064,6 +1064,50 @@ void IN_Journal_Note(const char *text)
 	IN_Journal_Line(in_jrn_last, "#", clean);
 }
 
+/*
+FTESurf Patch 417 -- THE JOURNAL'S DIGEST, KEPT AFTER THE BUFFER IS NOT.
+
+The run receipt signs what this client's evidence hashed to, and it is signed at
+the end of the run -- by which time in_journal_end has already freed the buffer,
+and on a lobby has DISCARDED it (Rec_HidEnd keeps a .hid only for a PB).  So the
+hash is taken at the moment the journal closes, whichever way it closes, and the
+32 bytes outlive it.
+
+`kept` IS RECORDED BESIDE IT AND IS NOT THE SAME FACT.  A digest of a file that
+was written can be checked against that file; a digest of one that was discarded
+is a commitment to bytes nobody holds.  Both are worth signing -- the second
+becomes checkable the moment the capture policy keeps ranked journals -- but a
+reader must never be left to guess which it has.
+*/
+static qbyte		in_jrn_digest[32];
+static size_t		in_jrn_digestlen;
+static qboolean		in_jrn_digestkept;
+static qboolean		in_jrn_digestok;
+
+static void IN_Journal_Digest(qboolean kept)
+{
+	in_jrn_digestok = false;
+	if (!in_jrn_buf || !in_jrn_len)
+		return;
+	CalcHash(&hash_sha2_256, in_jrn_digest, sizeof(in_jrn_digest),
+			 (const qbyte*)in_jrn_buf, in_jrn_len);
+	in_jrn_digestlen = in_jrn_len;
+	in_jrn_digestkept = kept;
+	in_jrn_digestok = true;
+}
+
+qboolean IN_Journal_LastDigest(qbyte digest[32], size_t *len, qboolean *kept)
+{
+	if (!in_jrn_digestok)
+		return false;
+	memcpy(digest, in_jrn_digest, sizeof(in_jrn_digest));
+	if (len)
+		*len = in_jrn_digestlen;
+	if (kept)
+		*kept = in_jrn_digestkept;
+	return true;
+}
+
 void IN_Journal_Drop(void)
 {
 	if (in_jrn_buf)
@@ -1737,6 +1781,10 @@ static void IN_JournalBegin_f(void)
 
 	IN_Journal_Drop();
 
+	/*Patch 417: the last journal's digest belongs to the last run.  A receipt
+	  signed after this point must never be able to report it.*/
+	in_jrn_digestok = false;
+
 	in_jrn_max = in_journal_maxkb.value * 1024;
 	if (in_jrn_max < 4096)
 		in_jrn_max = 4096;
@@ -1874,26 +1922,38 @@ static void IN_JournalEnd_f(void)
 	const char *name, *fallback;
 	char tail[128];
 	double now;
+	qboolean discard;	/*Patch 417: decided here, acted on after the trailer*/
 
 	if (!in_jrn_buf)
 	{
+		/*Patch 417: AND FORGET THE LAST ONE'S DIGEST.  A run that ends with no
+		  journal open must not leave the previous run's 32 bytes available to be
+		  signed as its own -- which is what "play one clean PB, then set
+		  rec_hid 0" would otherwise buy.  The gamecode says whether this run
+		  journalled (rec_sign's fourth argument); this is the same fact enforced
+		  at the other end.*/
+		in_jrn_digestok = false;
 		if (Cmd_Argc() > 1)
 			Con_Printf("in_journal_end: no journal open\n");
 		return;
 	}
 
-	if (Cmd_Argc() < 2 || !*Cmd_Argv(1))
-	{	/*no path means discard, and the discard branch is not optional -- without
-		  it an abandoned run's buffer stays resident until the next begin.
+	/*
+	  PATCH 417: THE DISCARD DECISION IS TAKEN AFTER THE TRAILER, NOT BEFORE IT.
 
-		  It prints, because this is the branch a non-PB run takes and a headless
-		  test otherwise has no way at all to see that the gamecode's end edge
-		  fired: a discard leaves no file to inspect.*/
-		Con_DPrintf("in_journal_end: discarded, %u events / %u frames\n",
-			in_jrn_events, in_jrn_frames);
-		IN_Journal_Drop();
-		return;
-	}
+	  The first cut returned here, having hashed a buffer with no `end` record in
+	  it -- so a discarded journal's committed digest was over a PREFIX, and no
+	  file that could ever be written would hash to it.  Since a lobby discards
+	  every journal (Rec_HidEnd keeps a .hid only for a PB), that made the
+	  commitment unfalsifiable on exactly the servers it exists for.  The trailer
+	  is composed either way now and the digest is taken at one point, below.
+
+	  The discard itself is still not optional -- without it an abandoned run's
+	  buffer stays resident until the next begin -- and it still prints, because
+	  it is the branch a non-PB run takes and a headless test otherwise has no
+	  way to see that the gamecode's end edge fired at all.
+	*/
+	discard = (Cmd_Argc() < 2 || !*Cmd_Argv(1));
 
 	/*ONE clock read, used for both halves.  Two calls here put the absolute in
 	  the trailer and the dt that leads to it a couple of microseconds apart, so
@@ -1947,14 +2007,34 @@ static void IN_JournalEnd_f(void)
 	  QC_FixFileName is the same sandbox PF_fopen uses, AND a data/ prefix is required
 	  on top of it, because QC_FixFileName alone also accepts cfg/ and a journal must
 	  not be able to overwrite a config.*/
-	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5))
+	/*Patch 417: ONE DIGEST POINT, over the complete buffer -- trailer, devmap
+	  table and all -- whichever way this journal ends.  `kept` is the only
+	  difference between the two, and it is recorded rather than implied.*/
+	if (discard)
 	{
-		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/\n", Cmd_Argv(1));
+		Con_DPrintf("in_journal_end: discarded, %u events / %u frames\n",
+			in_jrn_events, in_jrn_frames);
+		IN_Journal_Digest(false);
 		IN_Journal_Drop();
 		return;
 	}
 
-	COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, in_jrn_len);
+	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5))
+	{
+		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/\n", Cmd_Argv(1));
+		IN_Journal_Digest(false);	/*complete bytes; nobody kept them*/
+		IN_Journal_Drop();
+		return;
+	}
+
+	IN_Journal_Digest(true);	/*the bytes as written*/
+	if (!COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, in_jrn_len))
+	{
+		/*A `kept 1` digest for a file that is not there would be the one kind
+		  of commitment nobody can ever check and everybody would believe.*/
+		Con_Printf(CON_WARNING"in_journal_end: %s was not written\n", name);
+		IN_Journal_Digest(false);
+	}
 	Con_DPrintf("in_journal_end: %s, %u events / %u frames / %u dropped / %u hidden, %uk\n",
 		name, in_jrn_events, in_jrn_frames, in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden, (unsigned)(in_jrn_len/1024));
 	IN_Journal_Drop();

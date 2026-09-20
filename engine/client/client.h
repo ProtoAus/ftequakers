@@ -1200,6 +1200,10 @@ extern	qboolean	nomaster;
 // cl_main
 //
 void CL_InitDlights(void);
+//FTESurf Patch 417: client/cl_receipt.c -- the run-signing key, `rec_sign` and
+//the primitive's own selftest.  Registers commands only; the key is made lazily
+//at the first signature, so an install that never plays a ranked run never has one.
+void CL_Receipt_Init(void);
 void CL_FreeDlights(void);
 dlight_t *CL_AllocDlight (int key);	//allocates or reuses the light with the specified key index
 dlight_t *CL_AllocDlightOrg (int keyidx, vec3_t keyorg); //reuses the light at the specified origin...

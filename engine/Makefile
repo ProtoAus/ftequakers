@@ -781,6 +781,8 @@ CLIENT_OBJS = \
 	clq2_ents.o	\
 	cl_input.o	\
 	in_generic.o	\
+	cl_receipt.o	\
+	ed25519.o	\
 	cl_main.o	\
 	cl_parse.o	\
 	cl_pred.o	\

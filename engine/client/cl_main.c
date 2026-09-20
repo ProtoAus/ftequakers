@@ -6027,6 +6027,7 @@ void CL_Init (void)
 	CL_InitDlights();
 	PM_Init ();
 	TP_Init();
+	CL_Receipt_Init();	/*FTESurf Patch 417: the run-signing key and rec_sign*/
 
 //
 // register our commands
