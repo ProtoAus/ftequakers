@@ -32357,3 +32357,39 @@ the map's own rate. The pre-registered control prediction (">100% on the control
 was WRONG and is recorded in the fixture: over-100 and stuck-at-0 are the two ends
 of one defect. Not covered: mid-air boosters inject energy no ceiling models, so
 ramp-exit rows can still exceed 100%.
+
+## Patch 414 — OnJump had never fired once, on any map  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc`, `src/server/sv_player.qc`. Fixtures `cfg/test/p414jump.cfg`, `p414jumpwalk.cfg`, `p414lift.cfg`.)*
+
+**Problem.** Build 37 fired `OnJump` from inside `SV_TriggerIOTouch`, where the
+pre-move/post-move comparison is exact — and unreachable. That function runs only
+on a command the trigger was touched, and the server dispatches touches at the
+command's END position with no sweep. A jump leaves the brush on the very command
+the test would pass: `pm_jumpzoffset` lifts the body 1.5 u as the ground is
+released and the tick adds `pm_jumpvelocity * pm_ticrate` (4.53 u) on top. Every
+earlier command still has `FL_ONGROUND`. Reported as surf_prosurf bonus 4's start
+pad doing nothing. It is not one map: 1352 OnJump outputs on 123 maps, median
+brush height 1.0 u, 1101 of them shorter than one tick of jump rise — bhop_futile's
+six boosters, the pads the output was implemented for, among them.
+
+**Change.** `SV_EntityIOBuild` gains a second pass chaining every source entity
+that owns an `onjump` row onto `vbsp_onjump_head`. `SV_TriggerJumpEdge` walks that
+chain for one player and fires at any trigger whose touch set holds them —
+Patch 270's per-player masks, or the legacy single-toucher — which is Source's
+own rule (Momentum fires against `m_hTouchingEntities`, a set that persists).
+`PlayerPreThink` calls it on the PREVIOUS command's jump edge, the last moment
+`.run_wasground` still holds that command's pre-move ground state while `.flags`
+and `.velocity` hold its post-move state; above `SV_BaseVelocityFrame`, so a
+carrier armed there still reaches the mover on the same command as before.
+`OnLand` stays in the touch and is correct there — landing puts you into the
+trigger. Nothing here writes velocity: the carrier still cashes out through
+`SV_BaseVelocityFrame`, which marks `run_pushed` as it has since Patch 409.
+
+**Verified.** `cfg/test/p414jump.cfg` places the body inside surf_prosurf bonus
+4's 2 u slab (`setpos` + `noclip` twice, z-drop proven) and jumps. Control
+(qwprogs 1478930): 14 jumps, no dprint, no cash-out, x never moves. Patched
+(1479506): `basevel: OnJump from *744 vz 290`, `paid #1 [AddOutput 1]
+'2000 0 0' -> speed 2015.0 (h +2015.0)`, x −15696 → −14940. Arm E, the control
+placement 300 u off the pad, stays silent on both builds. `p414lift.cfg` records
+that bonus 1's vertical `trigger_push` was never broken (1162 u of lift) and that
+its pre-registered detector was the wrong one — a purely vertical carrier can
+never print a cash-out. Regression: `p409hop`, `p412speed`.
