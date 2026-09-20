@@ -32718,3 +32718,109 @@ engine already matched.  Checked after: 12 units active, 5 s heartbeats, no log
 errors, a client connect to lobby 1 loads CSQC, and a 0.1.7 client with no cache
 downloads `csprogsvers/eb1da7bf.dat` and loads it (Patch 362's path, on a real
 deploy).  The 403-415 entries keep their own arms; this is the fleet record.
+
+## Patch 416 — the server picks a number a client cannot know, and asks for it back  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc`, `sv_resume.qc`, `sv_saveloc.qc`, `sv_player.qc`, `src/client/cl_replay.qc`, `cl_main.qc`, `src/shared/sh_defs.qc`, `tools/reccheck.py`, `tools/test_reccheck.py`, `surfd/recplot.py`. Fixtures `cfg/test/p416nonce.cfg`, `p416ctl.cfg`, `p416ms.cfg`, `p416twice.cfg`, `p416rewind.cfg`, `p416verify.cfg`.)*
+
+**Problem.** Every taint bit this game records is a statement about what the
+CLIENT claimed — its ruleset, its map hash, its input profile — and so is worth
+exactly what the client is worth. There was nothing in the evidence chain that a
+client could not produce on its own, which meant two silences could not be told
+apart: a run whose client COULD NOT send evidence (any older build) and one whose
+client WOULD NOT. A demotion that cannot separate those demotes every legacy
+client, which is the skew window `sv_mapcheck` shipped for a decade.
+
+**Change.** `SV_RecOpen` draws 128 bits, writes `nonce <hex32>` into the `.rec`
+header (additive, no version bump) and stuffs it to the one client running the
+run. That client answers `cmd rec_nack <hex>` and the server sets **TF_NONCE
+(131072)** — a MARKER, like TF_MULTISESSION and TF_SPEC: not a class, not in
+TF_UNCERT, not in surfd's `certifiable()`, and nothing is refused for its
+absence. A Multi-Session resume can be a different machine days later, so
+`SV_MsRecAttach` draws a fresh one and writes it into the body as `nonce <mt>
+<hex32>`; `<mt>` is the NEW session's epoch, because the mover counter resets
+with the map. The client also notes it into its raw input journal, where the
+engine stamps it at a stream position.
+
+**What it is worth, stated where it cannot be mistaken for more.** The attacker
+picks which silence they present: echoing the number is free for a patched client
+and so is staying quiet and sitting in the legacy bucket. So the bit does not
+separate honest from dishonest and must never be asked to — what it separates is
+a POPULATION, and only once pre-416 clients are gone. The journal note is a LOWER
+bound on when a journal was authored and nothing more: `in_journal_note` is an
+ungated console command, so on a hostile client the note's position is chosen by
+the attacker too. Both limits are written into the code beside the mechanism.
+
+**And the strength paragraph was wrong in the direction that flattered the
+patch**, which the review lens caught: it claimed the draw count was unknown. It
+is published two lines above, in the same header — `startjit` writes the
+randomized start at four decimals and with `run_startjitter 2` a draw's step is
+4/32768 = 0.000122, so each printed dx and dy names its own `random()` exactly,
+twice per run. A player does not even need the file; the offset is applied to
+their own body. **The collateral is bigger than the nonce**: enough observed
+draws recover glibc's stream from a `srand(time(0))` seeded once at COM_Init, and
+that makes `startjit` itself predictable — the control that exists so a run
+cannot be replayed from a known start. Pre-existing, found here, not fixed here;
+the answer for both is an engine patch exposing `Sys_RandomBytes` to the server
+VM.
+
+**Six defects found by review, five of them in the first cut's own reasoning.**
+Three reviewers, each given a different lens and none given the author's
+conclusions (predicate and control flow; consequences for recorded evidence; what
+a cheater gains):
+
+- **The frame order was inverted.** The note was written in `Rec_HidBegin` on the
+  claim that the server's stuffcmd runs first. `Host_Frame` runs `Cbuf_Execute`
+  (cl_main.c:7607) BEFORE `CL_ReadPackets` (:7639, :7705) and before
+  `SCR_UpdateScreen` (:7743), so a stuffcmd parsed this frame waits for the next
+  frame's buffer. The note could therefore only ever carry the PREVIOUS run's
+  number — measured, `p416twice.cfg`'s control: two notes in run 2's journal, the
+  first belonging to a recording already archived. Fixed by clearing the held
+  nonce at the run-end edge, which is what made the line safe to keep.
+- **TF_NONCE survived a resume through the parked save's flags** on four paths
+  that never reach the issuer, one of them (`run_ms_norec`) a session that
+  finishes and SUBMITS with a bit asserting an answer nobody was asked for.
+- **A save-load destroyed it permanently.** A save taken inside the answer's
+  round trip records the bit clear; the load restored that and the client, still
+  holding the same number, would never say it again. TF_NONCE now joins
+  TF_RECORDING and TF_FROZEN as a thing no file may assert (`sv_saveloc.qc`,
+  both directions), and a rewind re-publishes.
+- **A retry left the run unanswerable.** A retry is a `map_restart`: it destroys
+  the CSQC VM and the client's copy with it, and nothing re-issued.
+- **A cold load kept a nonce the file does not state.** It rebuilds the recording
+  from a save slot, header and all, so the server now ADOPTS the nonce that
+  buffer's header states rather than the one it drew.
+- **`strzone("")` never latches.** On an engine whose `digest_hex` refuses
+  SHA256 the seed guard `== ""` compares CONTENT, so a real allocation that is
+  still empty re-allocated one per run open, forever. Latched on length instead.
+
+**Verified.** `p416nonce.cfg` (S1-S5): header `nonce`, `flags 131329`, the same
+32 characters in the journal at stream position 0, reccheck 0 faults, no body
+record. **CONTROL** `p416ctl.cfg`, the same route with csprogs built from HEAD:
+`flags 257` — the bit is the client's answer and nothing else. `p416ms.cfg`
+(M1-M5): v10, `pause ... server` / `nonce 466 <hex>` / `session 2 466`, the body
+record inside the open pause, `flags 147713`. `p416twice.cfg` (T1-T3) and its
+first-cut control, above. `p416rewind.cfg` (R1-R4) — a save, a load and a retry
+in one run: **R3 failed twice** and both failures are recorded in the fixture;
+the second fix (the client asking, `cmd rec_nonce_ask`) did not fix it and is
+kept because it is the right mechanism for a lost stuffcmd. `p416verify.cfg`:
+ms/s/c/twice all PASS, `rewind.rec` REFUSEs — Patch 367's retry rule, controlled
+by stripping the `nonce` line and getting the identical verdict. `test_reccheck`
+248 checks / 0 failed; the `data/runs` corpus unmoved at 153 files with faults
+over 237.
+
+**reccheck** learns the key, the record and the one invariant the pair makes
+checkable: TF_NONCE set with no nonce anywhere is a FAULT, v9 and up. The
+converse is not and may not become one — a file can state a nonce and carry no
+bit for the most ordinary reason there is. `surfd/recplot.py`'s header allowlist
+too, so the key does not show as unknown on an owner's run page.
+
+**Not deployed.** Progs-only, so it ships with a normal `-Pi` deploy whenever
+Lex wants it; nothing here changes physics, the clock or any ranking decision.
+
+**Found and NOT fixed** (one line each, deliberately): `sv_lobby.qc`'s submission
+posts `&flags=%g`, which is exact at six significant digits — TF_NONCE takes the
+all-bits value to 262143 and the bit AFTER the next one puts it at seven, where
+`%g` starts sending `2.09715e+06`. Same trap the essay above that line documents
+for `ticks`. And `cl_lobbytime.qc` writes a client-side `FTESURF-REC 5` whose
+flags come from a stat, so it can carry TF_NONCE with no key to match: harmless
+today (local files, and reccheck's cross-check is gated at v9), worth knowing
+before anything treats the bit as meaningful in a file it did not write.
