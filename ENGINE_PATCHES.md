@@ -30447,6 +30447,10 @@ note) -- parenthesised.  Not verified: a real keyboard (the harness feeds
 
 ## Patch 403 — a push may not carry a run out of the start box  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_timer.qc` (SV_StartCapClamp, SV_TimerFrame, SV_TimerStart) + `cfg/default.cfg`. VERIFIED: FTESurf `cfg/test/p403cap0.cfg`, `p403capverify.cfg`, `p403compat.cfg`; the bug itself in `p403stage.cfg`.)*
 
+**DEPLOYED 2026-09-20** -- twice over: `c3cf81c` (Patch 412) carried it to all 12
+lobbies earlier that day, and `8c09730` re-shipped it at ~05:30 UTC.  `run_startcap`
+is 0 on the fleet, which is this patch's clamp OFF; see the note at the cvar.
+
 **Problem.** A clean ranked personal best could begin at 1800 u/s, and pm_verify
 PASSed it.  Measured on HEAD (Patch 400 included), sv_cheats 0, `!r` the only
 input, a start box drawn around bhop_arcane's *88 booster: `flags 4` (TF_HAVEPB
@@ -32358,6 +32362,11 @@ was WRONG and is recorded in the fixture: over-100 and stuck-at-0 are the two en
 of one defect. Not covered: mid-air boosters inject energy no ceiling models, so
 ramp-exit rows can still exceed 100%.
 
+**DEPLOYED 2026-09-20 ~05:30 UTC** with `8c09730`; fleet record under Patch 415.
+csprogs-only, so this is the patch in that deploy that needed `seed_csprogs.py` --
+the Patch 412 deploy before it did not, csprogs being byte-identical to 411's.
+The seeded name on the fleet is now `eb1da7bf.dat`.
+
 ## Patch 414 — OnJump had never fired once, on any map  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc`, `src/server/sv_player.qc`. Fixtures `cfg/test/p414jump.cfg`, `p414jumpwalk.cfg`, `p414lift.cfg`.)*
 
 **Problem.** Build 37 fired `OnJump` from inside `SV_TriggerIOTouch`, where the
@@ -32393,6 +32402,12 @@ placement 300 u off the pad, stays silent on both builds. `p414lift.cfg` records
 that bonus 1's vertical `trigger_push` was never broken (1162 u of lift) and that
 its pre-registered detector was the wrong one — a purely vertical carrier can
 never print a cash-out. Regression: `p409hop`, `p412speed`.
+
+**DEPLOYED 2026-09-20 ~05:30 UTC** with `8c09730`; fleet record under Patch 415.
+WATCH THIS ONE: 123 maps now fire an output that had never fired once, and only
+surf_prosurf bonus 4 was driven before the deploy.  If a map's progression
+misbehaves from here, suspect an OnJump that now lands -- `run_bv_debug 1` prints
+`basevel: OnJump from <model>` at the moment it does.
 
 ## Patch 415 — `!r` puts you back on the spot you left in the start box  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_saveloc.qc`, `sv_timer.qc`, `sv_zones.qc`. Fixtures `cfg/test/p415reset.cfg`, `p415snap.cfg`.)*
 
@@ -32442,8 +32457,14 @@ lands below the zone and build 47's start-box taint laundering never fires — 3
 other 11; the velocity has to be answered first.
 
 **DEPLOYED 2026-09-20 ~05:30 UTC** (by the verifier session, on Lex's instruction):
-progs at FTESurf `8c09730` to all 12 lobbies -- everything since `7c7220a`, i.e.
-Patches 403-415 and `run_startcap 0`.  qwprogs sha256 `cdaa6d30…`, csprogs
+progs at FTESurf `8c09730` to all 12 lobbies.  NEW IN THIS ONE: Patches 413-415.
+403-412 and `run_startcap 0` were ALREADY LIVE, and the "everything since
+`7c7220a`" this was measured against is stale by one deploy -- `c3cf81c` (Patch
+412) went to all 12 lobbies earlier on 2026-09-20 from the anti-cheat session,
+qwprogs.dat 1478930 bytes, csprogs byte-identical to Patch 411's and re-seeded as
+`cb29261c.dat`, verified 12 active / 0 players.  Corrected here rather than left,
+because a fleet record that understates what was already running is how the next
+rollback picks the wrong target.  qwprogs sha256 `cdaa6d30…`, csprogs
 `9b3cd497…` (folded `eb1da7bf`).  Progs only: the Pi's default.cfg, surfd and
 engine already matched.  Checked after: 12 units active, 5 s heartbeats, no log
 errors, a client connect to lobby 1 loads CSQC, and a 0.1.7 client with no cache
