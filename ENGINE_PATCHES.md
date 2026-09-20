@@ -30472,16 +30472,44 @@ parser reads past.
 **Change.** `run_startcap` (u/s, default 290 beside run_stagecap; 0 disables).
 `SV_StartCapClamp` takes the EFFECTIVE horizontal speed -- `.velocity` plus the
 carrier at the cash-out's own scale `1 + run_bv_tick*0.5` -- and pays the excess
-out of the carrier.  Two call sites: per tick while TS_ARMED and still inside the
-box, which is Momentum's rule exactly; and once at the latch in SV_TimerStart
-above the taint chain, which is what a push volume reaching PAST the box needs.
+out of the carrier.  Two call sites: from PlayerPreThink per USERCMD while
+TS_ARMED and still inside run_t_armzone, which is Momentum's rule; and once at
+the latch in SV_TimerStart above the taint chain.
 
-Ground only, as Momentum's is.  CARRIER ONLY: `.velocity` is never written.  That
-second restriction is measured, not tidy -- across the Pi's 43,369 grounded
-sample rows 16.2% sit at 250-299 u/s and 1.0% are above 300 (bhop landings,
-slope slides), so clamping the player's own speed would take prespeed off every
-bhop start, which is what `limitStartGroundSpeed: false` exists to permit and is
-set on 15 of the rotation's 17 bhop maps.
+CARRIER ONLY: `.velocity` is never written.  That restriction is measured, not
+tidy -- across the Pi's 43,369 grounded sample rows 16.2% sit at 250-299 u/s and
+1.0% are above 300 (bhop landings, slope slides), so clamping the player's own
+speed would take prespeed off every bhop start, which is what
+`limitStartGroundSpeed: false` exists to permit and is set on 15 of the
+rotation's 17 bhop maps.
+
+**Three things the first cut got wrong, all found by the pre-deploy review.**
+- It hung off `SV_TimerFrame`, i.e. PlayerPostThink, which the engine runs once
+  per PACKET (sv_user.c:9331 brackets the per-usercmd loop) while
+  trigger_push_touch re-arms the whole push once per COMMAND.  It trimmed the
+  last command of each bunch and left the rest at full value -- and a client
+  setting its own packet rate set the ratio.  Now called per command from
+  PlayerPreThink, above SV_BaseVelocityFrame so the clamped carrier is what is
+  cashed out, handed to the mover, and stated by `ride arm`.
+- It had a GROUND GATE, which was unimplementable as written: `FL_ONGROUND` is
+  read after the move and after the touch loop, and both a jump and any
+  upward-tilted push clear it, so a booster exempted itself and every bhop start
+  was a structural no-op.  Removed.  Momentum needs a ground condition because
+  Momentum clamps VELOCITY; clamping the carrier instead makes the question moot
+  -- prespeed is `.velocity` and is never touched, and a jump pad's vertical
+  carrier survives because only x/y are written.
+- A carrier BRAKING a player already over the cap was discarded, which RAISED
+  the start speed.  Guarded with `if (own >= sp) return;`.
+
+**What it does NOT do.**  A push volume reaching PAST the start box re-arms its
+full value on the first command of the run, and nothing clamps once the state is
+TS_RUNNING -- measured in p403cap0 (`ride 1 431 arm ... 1400`, one command after
+a latch clamped to 288.56).  The run BEGINS at the cap and then accelerates on
+the map, which is what happens in Momentum too: its clamp also stops at the zone
+edge.  What is closed is building or inheriting speed inside the box; what is not
+closed is a booster drawn across the start plane.  No rotation map is known to do
+that -- p403b666 measured the one candidate, surf_666 bonus 3, whose restart
+destination arms no carrier at all.
 
 Applied on every map rather than reading the per-segment key: the key is false on
 bhop_arcane's start segment, so honouring it would exempt the exact case this
@@ -30489,10 +30517,21 @@ exists for.  Clamp rather than taint, so the run still ranks, at a legal speed.
 Both Lex's calls, 2026-09-20.
 
 **Verified.** p403cap0 (CONTROL, `run_startcap 0`) reproduces HEAD: `seed ... 0 0
-0 1`, `ride 0 370 arm ... 1400`, a clean ranked PB.  p403stage on the patch:
-`ride 0 373 arm -0.549864292 288.565186` -- 1400 clamped to 288.57, effective
-289.3 against the 290 cap -- and the seed is no longer a standing start.  The run
-still ranks and still verifies (p403capverify PASS, ticks 64 rows 47).
+0 1`, `ride 0 372 arm ... 1400`, a clean ranked PB.  p403stage on the patch:
+`ride 0 430 arm -1.26132345e-05 288.55722` -- 1400 clamped to 288.56, which at
+the 1.005 cash-out scale is the 290 cap exactly.  The run still ranks and still
+verifies (p403capverify PASS, ticks 65 rows 45).
+
+p403tick measures the per-command fix directly: with `cl_c2spps 10` bunching
+three commands into each packet, the clamp fires **74 times in one wall-clock
+second** at cl_maxfps 100 -- command rate.  The per-packet version would have
+given about ten.
+
+p403plain: an ordinary start on a booster-free fixture is unchanged, and so are
+mid-run boosters.  Both arms finish in exactly 410 ticks with the same seed
+velocity to the digit, the first ride record is `arm 0 0 0` in both, and every
+later arm carries its full value either side of the cvar (600, 1600, 1000, 1400,
+3200, 1800, pay 1800).
 
 **And old files keep their verdicts.** p403compat: a recording made with the cap
 OFF, replayed by progs with the cap ON, is `VERIFY data/p403cap0.rec PASS ticks
