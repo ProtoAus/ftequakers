@@ -33113,6 +33113,47 @@ first two rounds. The ones that mattered:
   negative length passes; `snap` did not clear `uploadnext`; and the log said
   "refused snap" when a player declined to send a run's evidence.
 
+**A fourth round, on the version the third produced — because that version
+shipped without anyone having read it.** Two reviewers, control flow and
+evidence consequences. Both independently found the same worst one:
+
+- **An unanswerable request blocked the NEXT runs' evidence for two minutes.**
+  A client that cannot answer — nothing armed for that run, or a journal over
+  its own 4 MiB cap, which at `run_evidence_ul 2` is every run past ~38 seconds
+  — simply said nothing, and the in-flight guard then refused every later
+  request behind the dead destination. Turning journals on made SIDECAR
+  collection worse. The client declines out loud now (the `snap` stringcmd,
+  which is QuakeWorld's existing "no" and reaches the same teardown), and the
+  expiry has two clocks: 15 s for a destination nobody has answered, 120 s of
+  silence for one with bytes arriving.
+- **"One chunk per request" was not true within a datagram.** The flag is set
+  when `nextul` is QUEUED, and the clc loop runs every command in a packet
+  before any of it is sent — so two chunks in one packet both passed it, and the
+  second could land in a destination promoted by the first. It is keyed on the
+  packet sequence now.
+- Also: `uploadrec` and the nonce survived a successful completion, so a later
+  `snap` logged "refused evidence upload" about a player who had sent theirs;
+  the arm table evicted by index while clearing by match, so index order stopped
+  being age order; the nonce validator accepted uppercase that the client's
+  match would never find; a rename failure printed "completed" on the next line
+  and orphaned the `.part`; and a listen server asked its own loopback client
+  for a file that client never arms, once per run.
+- **`rcptcheck` now counts what it used to pass over**: a receipt that commits to
+  a digest with no file beside it prints `commits to a <kind> digest, and no
+  <kind> is on this host`, and the summary counts them. Not a fault — an upload
+  can legitimately not arrive — but until now a client that signed digests and
+  handed nothing over was indistinguishable from a host with uploads off.
+
+**And one finding that was not one, recorded because the reasoning was better
+than the verdict.** A reviewer traced `rec_rp_ulkeep = rec_rp_nonce` in the
+gamecode to a use-after-free — the nonce is a zoned string the same block frees
+forty lines later — and predicted the race arm would show the previous run's
+staged files deleted. It does not, in three runs: `strunzone` is a no-op
+whenever `QCGC` is defined (`pr_bgcmd.c:4963`), which it unconditionally is. The
+assignment zones its own copy now anyway. The measurement said the code was
+right and the only thing making it right was a `#define` in a file this tree
+does not own.
+
 Two claims in this entry's own first draft were wrong and are corrected above: a
 journal is 6.6 MB per minute rather than "a megabyte a minute", and a sidecar
 that "takes seconds in a lobby" takes 25 to 80 of them. The second error is the

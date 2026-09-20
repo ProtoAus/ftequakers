@@ -3192,9 +3192,23 @@ void VARGS OutofBandPrintf(netadr_t *where, char *fmt, ...)
   client never answers stops being writable.
 */
 #define SV_UPLOADWAIT	120
+#define SV_UPLOADASK	15	/*...and how long an ASKED-FOR one waits for its first chunk*/
 
 qboolean SV_UploadStale (client_t *cl)
 {
+	/*
+	  TWO CLOCKS, because two different things are being waited on.
+
+	  With a handle open, bytes really are arriving and the wait is the rest of
+	  the transfer: 120 s of SILENCE, refreshed by every chunk.  With no handle
+	  the wait is one round trip, and a client that is never going to answer --
+	  a journal over its own 4 MiB cap, a staged file already swept, a run whose
+	  evidence it simply declines -- would otherwise hold the destination for
+	  the full two minutes AND, through the in-flight guard, block the next
+	  runs' evidence behind it.  At twenty seconds a run that is six runs.
+	*/
+	if (!cl->upload)
+		return realtime - cl->uploadat > SV_UPLOADASK;
 	return realtime - cl->uploadat > SV_UPLOADWAIT;
 }
 
@@ -3258,6 +3272,7 @@ void SV_UploadCancel (client_t *cl)
 	cl->uploadat = 0;
 	cl->uploadrec = false;
 	cl->uploadwant = false;
+	cl->uploadseq = -1;
 	*cl->uploadnonce = 0;
 }
 
@@ -3335,6 +3350,23 @@ void SV_NextUpload (void)
 		return;
 	}
 	host_client->uploadwant = false;
+
+	/*
+	  AND ONE CHUNK PER PACKET, WHICH IS NOT THE SAME TEST.  `uploadwant` is set
+	  when `nextul` is QUEUED into the reliable buffer, and the clc loop runs
+	  every command in a datagram before any of it is sent -- so two chunks in
+	  one packet both passed the flag, and the second could be written into a
+	  destination the server had not asked about yet (the completion of the
+	  first promotes the second destination in the same loop).  The sequence
+	  number is what makes "one per request" true rather than intended.
+	*/
+	if (host_client->uploadseq == host_client->netchan.incoming_sequence)
+	{
+		Con_DPrintf("%s: second upload chunk in one packet, ignored\n", host_client->name);
+		MSG_ReadSkip(size);
+		return;
+	}
+	host_client->uploadseq = host_client->netchan.incoming_sequence;
 
 	if (!host_client->upload)
 	{
@@ -3428,9 +3460,17 @@ void SV_NextUpload (void)
 		{
 			FS_Remove(host_client->uploadfn, FS_GAMEONLY);
 			if (!FS_Rename(part, host_client->uploadfn, FS_GAMEONLY))
-				Con_Printf("%s: cannot rename %s into place\n", host_client->name, part);
-			Con_Printf("%s upload completed, %i bytes.\n",
-				host_client->uploadfn, host_client->uploadgot);
+			{	/*AND THEN IT IS NOT COMPLETED.  Printing both lines said the
+				  file was in place on the line after saying it could not be put
+				  there, and left a `.part` that nothing could find again --
+				  `uploadfn` is cleared two lines below.*/
+				Con_Printf("%s: cannot rename %s into place -- discarded\n",
+					host_client->name, part);
+				FS_Remove(part, FS_GAMEONLY);
+			}
+			else
+				Con_Printf("%s upload completed, %i bytes.\n",
+					host_client->uploadfn, host_client->uploadgot);
 		}
 
 		if (host_client->remote_snap)
@@ -3472,6 +3512,19 @@ void SV_NextUpload (void)
 			host_client->remote_snap = false;
 			host_client->uploadwant = true;
 			SV_UploadAsk(host_client);
+		}
+		else
+		{	/*NOTHING FOLLOWS, so the rest of the state goes too.  `uploadfn` was
+			  cleared above and the other five were not, which left `uploadrec`
+			  true with nothing armed -- so a later `snap` from that client
+			  logged "refused evidence upload" about a player who had in fact
+			  sent theirs.*/
+			host_client->uploadgot = 0;
+			host_client->uploadat = 0;
+			host_client->uploadrec = false;
+			host_client->uploadwant = false;
+			host_client->uploadseq = -1;
+			*host_client->uploadnonce = 0;
 		}
 	}
 }

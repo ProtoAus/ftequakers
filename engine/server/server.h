@@ -643,6 +643,7 @@ typedef struct client_s
 	qboolean		uploadrec;	//...and whether this one is run evidence rather than a screenshot
 	qboolean		uploadwant;	//...and whether we have an outstanding request: one chunk per ask, no more
 	char			uploadnonce[36];	//...and which run it belongs to, so a late answer cannot be the next run's file
+	int				uploadseq;	//...and the packet the last chunk came in, because one request takes one chunk
 	netadr_t		snap_from;
 	qboolean		remote_snap;
 

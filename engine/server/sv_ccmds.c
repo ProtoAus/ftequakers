@@ -3453,10 +3453,12 @@ static void SV_RecUpload_f(void)
 	}
 	/*The nonce is stuffed back to the client, so it is checked like any other
 	  text that leaves this process: hex, and short enough to be a nonce.*/
+	/*LOWERCASE ONLY, because `rec_sign` writes lowercase and the client matches
+	  the staged filename with strncmp -- an uppercase nonce would be validated
+	  here and then match nothing there, silently.*/
 	for (i = 0; nonce[i]; i++)
 		if (!((nonce[i] >= '0' && nonce[i] <= '9') ||
-		      (nonce[i] >= 'a' && nonce[i] <= 'f') ||
-		      (nonce[i] >= 'A' && nonce[i] <= 'F')))
+		      (nonce[i] >= 'a' && nonce[i] <= 'f')))
 			break;
 	if (!i || nonce[i] || i > 32)
 	{
@@ -3478,6 +3480,15 @@ static void SV_RecUpload_f(void)
 		if (!ISQWCLIENT(cl))
 		{
 			Con_DPrintf("%s: client %i is not a QW client\n", Cmd_Argv(0), ent);
+			return;
+		}
+		if (cl->netchan.remote_address.type == NA_LOOPBACK)
+		{	/*A LISTEN SERVER ALREADY HAS THE FILE.  The client writes its
+			  sidecar locally when the recording is its own process
+			  (Rec_ServerIsRemote), so it arms nothing -- and asking anyway left
+			  a dead destination and a "never sent" line once per run, about the
+			  person running the server.*/
+			Con_DPrintf("%s: %i is on loopback; its evidence is already here\n", Cmd_Argv(0), ent);
 			return;
 		}
 		/*
@@ -3513,7 +3524,9 @@ static void SV_RecUpload_f(void)
 			  that two runs overlapped at all.  (Con_DPrintf reaches the log file
 			  only under log_developer -- measured, the first cut of
 			  cfg/test/p418race.cfg proved the fix and logged nothing.)*/
-			Con_Printf("%s: %i is still sending %s -- not asking again\n", Cmd_Argv(0), ent, cl->uploadfn);
+			Con_Printf("%s: %i %s %s -- not asking again\n", Cmd_Argv(0), ent,
+				cl->upload ? "is still sending" : "has not yet answered for",
+				cl->uploadfn);
 			return;
 		}
 		if (*cl->uploadfn)
@@ -6246,7 +6259,7 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommand ("sv_settimer", SV_SetTimer_f);
 	Cmd_AddCommand ("stuffcmd", SV_StuffToClient_f);
 	Cmd_AddCommandD ("sv_recupload", SV_RecUpload_f,
-		"FTESurf Patch 418: sv_recupload <entnum> <path> -- ask one client for the run evidence its gamecode armed, and write it to <path>.");
+		"FTESurf Patch 418: sv_recupload <entnum> <nonce> <path> [path2] -- ask one client for the run evidence its gamecode armed for that run, and write it to <path>.");
 
 	Cmd_AddCommand ("pin_save", SV_Pin_Save_f);
 	Cmd_AddCommand ("pin_reload", SV_Pin_Reload_f);

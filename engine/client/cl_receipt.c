@@ -556,6 +556,22 @@ void CL_Receipt_Disarm(void)
 		*rcpt_ularm[i] = 0;
 }
 
+/*
+  SAYING NO, OUT LOUD.
+
+  A client that cannot answer a request -- nothing armed for that run, or a file
+  over its own cap -- used to simply not answer, and the server then held the
+  destination for its full stale timeout AND refused the next runs' requests
+  behind it.  `snap` is the stringcmd QuakeWorld already has for "I decline the
+  upload you asked for" (SV_NoSnap_f), and it performs exactly the teardown the
+  server needs: close nothing, delete the partial, clear the destination.
+*/
+static void CL_Receipt_ULDecline(void)
+{
+	if (cls.state >= ca_onserver)
+		Cbuf_AddText("cmd snap\n", RESTRICT_LOCAL);
+}
+
 static void CL_Receipt_ULSend_f(void)
 {
 	const char *nonce, *kind, *base, *dot;
@@ -607,6 +623,7 @@ static void CL_Receipt_ULSend_f(void)
 	if (i == RCPT_ULSLOTS)
 	{
 		Con_DPrintf("rec_ul_send: nothing armed for %s %s\n", nonce, kind);
+		CL_Receipt_ULDecline();
 		return;
 	}
 	/*
@@ -621,9 +638,19 @@ static void CL_Receipt_ULSend_f(void)
 	  destination nobody would ever write to.  The player can see that their
 	  file was not sent; the receipt still commits to its digest either way.*/
 	if (!CL_StartUploadFile(rcpt_ularm[i], RCPT_ULMAX))
+	{
 		Con_Printf(CON_WARNING "rec_ul_send: %s not sent -- missing, empty, or over the %i byte cap\n",
 				   rcpt_ularm[i], RCPT_ULMAX);
+		CL_Receipt_ULDecline();
+	}
 	*rcpt_ularm[i] = 0;		/*one arming, one send*/
+	/*AND THE SLOTS COMPACT, so index order stays age order.  The eviction below
+	  drops slot 0 as "the oldest", which stops being true the moment a middle
+	  slot is consumed out of order -- a run armed two runs ago could then
+	  outlive one armed since.*/
+	for (; i + 1 < RCPT_ULSLOTS; i++)
+		Q_strncpyz(rcpt_ularm[i], rcpt_ularm[i+1], sizeof(rcpt_ularm[i]));
+	*rcpt_ularm[RCPT_ULSLOTS-1] = 0;
 }
 
 void CL_Receipt_Init(void)
