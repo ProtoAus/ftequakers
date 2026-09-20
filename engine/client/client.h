@@ -1204,6 +1204,8 @@ void CL_InitDlights(void);
 //the primitive's own selftest.  Registers commands only; the key is made lazily
 //at the first signature, so an install that never plays a ranked run never has one.
 void CL_Receipt_Init(void);
+//FTESurf Patch 418: forget any evidence file armed for the server we are leaving.
+void CL_Receipt_Disarm(void);
 void CL_FreeDlights(void);
 dlight_t *CL_AllocDlight (int key);	//allocates or reuses the light with the specified key index
 dlight_t *CL_AllocDlightOrg (int keyidx, vec3_t keyorg); //reuses the light at the specified origin...
@@ -1486,6 +1488,9 @@ void Sound_CheckDownload(const char *s); /*checkorenqueue a sound file*/
 qboolean CL_IsUploading(void);
 void CL_NextUpload(void);
 void CL_StartUpload (qbyte *data, int size);
+//FTESurf Patch 418: the run evidence, from the file the gamecode armed.  See
+//the essay above it in cl_parse.c for why the QuakeWorld `-fileul` gate is gone.
+qboolean CL_StartUploadFile(const char *filename, int maxsize);
 void CL_StopUpload(void);
 
 qboolean CL_CheckBaselines (int size);

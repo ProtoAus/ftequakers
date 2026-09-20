@@ -148,6 +148,18 @@ cvar_t sv_reportheartbeats	= CVARD("sv_reportheartbeats", "2", "Print a notice e
 cvar_t sv_heartbeat_interval = CVARD("sv_heartbeat_interval", "110", "Interval between heartbeats. Low values are abusive, high values may cause NAT/ghost issues.");
 cvar_t sv_heartbeat_checks	= CVARD("sv_heartbeat_checks", "1", "Report when sv_public 1 fails due to PROBABLE router/NAT issues.");
 cvar_t sv_highchars			= CVAR("sv_highchars", "1");
+/*FTESurf Patch 418: the ceiling on one client-driven upload.  The run evidence
+  this exists for is a few hundred KB; the cap is generous so a long run's
+  sidecar is never silently truncated, and finite because twelve lobbies sharing
+  one data directory must not be fillable by a client that keeps sending.  0
+  removes the limit, which is an operator's decision and not a default.*/
+/*THE DEFAULT IS A PLAIN NUMBER AND NOT "8m", which is what it said first and is
+  a trap: CvarPostfixKMG converts a postfix when the cvar is SET, and a default
+  registered with one is never set -- so the cap read 8 BYTES and every upload
+  was dropped on its second chunk.  Measured, not reasoned about: "upload from 1
+  exceeded 8 bytes -- dropped".  The callback stays, so an operator can still
+  write 16m.*/
+cvar_t sv_uploadmax			= CVARCD("sv_uploadmax", "8000000", CvarPostfixKMG, "Maximum size of a single client upload -- run evidence, or a snap. 0 for no limit.");
 cvar_t sv_maxrate			= CVARCD("sv_maxrate", "50000", CvarPostfixKMG, "This controls the maximum number of bytes any indivual player may receive (when not downloading). The individual user's rate will also be controlled by the user's rate cvar.");
 cvar_t sv_maxdrate			= CVARAFCD("sv_maxdrate", "500000",
 									"sv_maxdownloadrate", 0, CvarPostfixKMG, "This cvar controls the maximum number of bytes sent to each player per second while that player is downloading.\nIf this cvar is set to 0, there will be NO CAP for download rates (if the user's drate is empty/0 too, then expect really fast+abusive downloads that could potentially be considered denial of service attacks)");
@@ -640,12 +652,18 @@ void SV_DropClient (client_t *drop)
 		VFS_CLOSE (drop->download);
 		drop->download = NULL;
 	}
-	if (drop->upload)
+	if (drop->upload || *drop->uploadfn)
 	{
-		VFS_CLOSE (drop->upload);
-		drop->upload = NULL;
+		/*
+		  FTESurf Patch 418: AND THE PART FILE GOES WITH IT.  An interrupted
+		  upload leaves bytes that are not the file the client signed a digest
+		  for, and a truncated `.view` sitting beside a recording is worse than
+		  no `.view` at all: the checker reports "does not match the committed
+		  digest", which is the shape of an accusation, about a player whose
+		  connection dropped.  Incomplete evidence is not evidence.
+		*/
+		SV_UploadCancel(drop);
 	}
-	*drop->uploadfn = 0;
 
 #ifdef HAVE_CLIENT
 	if (drop->netchan.remote_address.type == NA_LOOPBACK)
@@ -6205,6 +6223,7 @@ void SV_InitLocal (void)
 
 	Cvar_Register (&pausable,	cvargroup_servercontrol);
 
+	Cvar_Register (&sv_uploadmax, cvargroup_servercontrol);	//FTESurf Patch 418
 	Cvar_Register (&sv_maxrate, cvargroup_servercontrol);
 	Cvar_Register (&sv_maxdrate, cvargroup_servercontrol);
 	Cvar_ForceCallback(&sv_maxrate);

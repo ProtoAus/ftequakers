@@ -32982,3 +32982,185 @@ the end of the run and the `.view` is never written (`Rec_ServerIsRemote`), so a
 live receipt today commits to bytes nobody else holds and names one file that
 does not exist. That is the next patch, and it is also why `kept` is recorded
 beside the digest rather than left to be inferred.
+
+## Patch 418 — the run's evidence leaves the player's machine  *(APPLIED -- engine: `client/cl_parse.c`, `client/cl_receipt.c`, `client/client.h`, `server/sv_ccmds.c`, `server/sv_main.c`, `server/sv_user.c`, `server/server.h`; FTESurf `src/client/cl_replay.qc`, `src/server/sv_timer.qc`, `ftesurf/cfg/default.cfg`, `tools/rcptcheck.py`. Fixtures `cfg/test/p418sv.cfg` + `p418cl.cfg`, `p418ctl.cfg`, `p418hidsv.cfg` + `p418hid.cfg`, `p418race.cfg`, `p418sweep.cfg`.)*
+
+**Problem.** A run has three recordings and, on a public server, exactly one of
+them existed anywhere but the player's own disk. `Rec_ViewEnd` drops the angle
+sidecar whenever the recording is remote — it has no local `.rec` to pair with —
+and `Rec_HidEnd` keeps a journal only for a personal best, which a lobby never
+has (`lobby_nopb`). So the cross-file consistency the whole evidence design rests
+on was, on the servers that matter, a claim about a directory nobody else could
+see; and Patch 417's receipt committed to digests of bytes nobody else held.
+
+**Change.** At the run-end edge the client writes its evidence to
+`data/staged/<nonce>.{view,hid}` and ARMS it (`rec_ul_arm`, engine). After that
+run's signed receipt arrives, the server asks for it (`sv_recupload <ent>
+<nonce> <path> [path2]`, which sets the client's upload destination and stuffs
+`rec_ul_send <nonce> <kind>`) and stores it as
+`data/evidence/<map>/<runid>.{view,hid}`, under the same `run_evidence_days`
+retention as the recordings. The transport is the QuakeWorld `clc_upload` path —
+in the tree since 1996, behind `#if 0` and a `-fileul` commandline flag, with a
+comment reading "in case we ever want to add any uploads other than snaps". This
+is that case.
+
+**THE ASYMMETRY IS THE SECURITY ARGUMENT.** The client arms; the server asks.
+The request carries **no path the client reads** — it names the run (the Patch
+416 nonce, which both ends already have) and the kind, and `sv_recupload` names
+only where the server's own copy lands. So a server cannot reach into a player's
+directory, and `rec_ul_arm` refuses anything arriving at RESTRICT_SERVER, which
+is the rule Patch 417's `rec_sign` learned the hard way. A hostile server still
+ships the client's CSQC and can arm one of its own files; what it cannot do is
+name a file the gamecode did not choose, and CSQC could already read those files
+outright with QC's own `fopen`.
+
+**Sidecar by default, journal by the operator, and the arithmetic is why.**
+Measured: a `.view` is **2.93 KB per second of run** (20 KB for 7 s), a `.hid` is
+**110 KB** (8.38 MB for 76 s, 2.06 MB gzipped) — 38× by rate. The transport is
+one ≤768-byte chunk per server request, so a two-minute run's sidecar is 459
+round trips: 25 s at 30 ms RTT, 80 s at 150 ms. The same run's journal is 17,000
+round trips, and the client's own 4 MiB cap refuses any journal from a run past
+~38 seconds. So `run_evidence_ul 1` takes the sidecar, `2` also takes the journal
+**and is a LAN and short-run switch, not a way to collect journals from a public
+lobby**, the client has its own switch (`rec_upload`), and `sv_uploadmax` caps
+what any one upload may cost the server.
+
+**What it buys, against the receipt.** The uploaded bytes are checked against
+the digest the client SIGNED at the finish: `rcptcheck` now hashes the `.view`
+and `.hid` sitting beside a receipt automatically, rather than only when an
+operator typed their paths. So the server does not have to trust that what
+arrived is what was recorded — and `hidcheck` reads the uploaded journal's
+`nonce` note and finds the same number the `.rec` header states. Three files, two
+machines, one run, joined by a number the client could not have known in advance.
+
+**What it does not buy** is the sentence Patch 417 already carries: a patched
+client can still produce a consistent set of fakes. What changed is that the set
+now has to be consistent across three files, one of which the server wrote, and
+produced within the run rather than afterwards.
+
+**Item 4's stated blocker never had to be answered.** The plan assumed an HTTP
+upload to surfd and stalled on `MAX_BODY` (16 KiB), the nginx cap and surfd's
+deliberately single-worker gunicorn. The netchan needs none of them: the
+connection is already authenticated, already knows which run this is, and adds
+no public write endpoint.
+
+**Four defects the harness found.** The cap was eight bytes (`sv_uploadmax`
+registered with a default of `"8m"`, and `CvarPostfixKMG` converts a postfix when
+a cvar is SET — a default registered with one is never set, so every upload died
+on its second chunk); `serverinfo fs_ul` was published as a boolean, so an
+operator asking for journals at 2 told every client 1; the client compared that
+key as a string, so turning journals on turned sidecars off; and a run's armed
+slots were never cleared, so a request never answered blocked the next run's.
+
+**Then independent review, three rounds, and this is the part worth reading.**
+Round one — control flow, consequences for recorded evidence, and what a cheater
+gains, one reviewer each and none of them given my reasoning — found eight.
+Round two, on the version those produced, found five more. Round three, on the
+version THOSE produced, found eight more, two of them worse than anything in the
+first two rounds. The ones that mattered:
+
+- **One packet from any connected client hung the server.** The length clamp went
+  in after round two — but only on the path that writes. The "nothing armed" exit
+  still read the raw sign-extended short to drain the packet, and
+  `MSG_ReadSkip(-4)` does not fail: it moves the read cursor BACKWARDS, onto the
+  `clc_upload` byte it just consumed, and only sets `msg_badread` if the cursor
+  goes below zero. The parse loop then reads the same command forever. A fix that
+  covered one of two exits is how a sign-extension bug became a denial of
+  service; the length is read and clamped once now, above every branch.
+- **A late answer was the next run's file, and this one left an artefact.** The
+  request used to be a bare `rec_ul_send` and the client answered with whatever
+  it had armed last. But a run's SECOND file is asked for only when its first has
+  arrived — tens of seconds later — and the next run's `rec_ul_arm -` has
+  re-armed both slots by then. Measured, on an ordinary two-run arm with no cheat
+  and no crafted client: `data/evidence/bhop_eazy/20260921-063713-0.hid` arrived
+  2109 bytes long, opening `FTESURF-VIEW 2`, hashing to `decfdcb9635833ac…` —
+  which is exactly the `signed view` digest in the NEXT run's receipt. `rcptcheck`
+  duly reported a digest mismatch about a player who had done nothing but finish
+  two runs. The request names the run and the kind now, the client answers only
+  from the slot that matches, it holds four slots (two runs), and `data/staged/`
+  keeps two runs' files instead of deleting the one still being asked for.
+- **Both "already sending" guards tested the wrong thing.** They tested the open
+  file handle, which appears with the client's FIRST CHUNK — a round trip after
+  the ask. In that window a second request, or an operator `snap`, replaced the
+  destination and the answer to the first request was written into the second
+  request's file. An ARMED destination counts now, at both sites.
+- **One packet also bought permanent exemption from evidence collection.** Send a
+  single chunk and then go silent: the handle stays open, and the only thing that
+  refused a new request was that handle. Every later run was refused, across map
+  changes, with a log line that reads exactly like the benign overlap. The
+  expiry is tested at the request sites now, not only where the client speaks.
+- **`percent` is the client's word.** A one-byte chunk declaring 100% closed the
+  file and printed "upload completed". The count is in the line now, an empty
+  upload is discarded, and the file is written to `<name>.part` and renamed at
+  the end — which is what the recorder does with `data/parts/`, and for the same
+  reason: a SIGKILL is the one teardown that cannot delete its own partial.
+- **The rate was the client's too.** The protocol is one chunk per request, but
+  the server took any chunk whenever a destination was armed, so a modified
+  client could push at its full upstream into a destination bounded only by
+  `sv_uploadmax` — which a new run resets. The handshake is enforced now.
+- **The whole-tree retention sweep was the wrong scope.** Round two found that
+  `run_evidence_days` only ever applied to maps in rotation, so a map that left
+  the pool kept its evidence forever; the fix swept the whole tree once a day,
+  and round three pointed out that the tree is shared by twelve lobbies, so that
+  imposes one process's retention on all of them. It is `run_evidence_sweepall`
+  now, for exactly one process.
+- Smaller, all real: the `FS_OpenVFS` failure path returned without draining the
+  chunk, leaving the client's file data to be parsed as protocol; the promoted
+  second destination inherited `uploadrec`/`remote_snap` from whatever came
+  before, which could turn a decline into a broadcast about a screenshot and a
+  completion into a `download data/evidence/…` line sent to an rcon holder; a
+  negative `VFS_READ` on the client reached `SZ_Write`, whose bounds check a
+  negative length passes; `snap` did not clear `uploadnext`; and the log said
+  "refused snap" when a player declined to send a run's evidence.
+
+Two claims in this entry's own first draft were wrong and are corrected above: a
+journal is 6.6 MB per minute rather than "a megabyte a minute", and a sidecar
+that "takes seconds in a lobby" takes 25 to 80 of them. The second error is the
+one that mattered — every defect in the second and third rounds above is
+downstream of assuming the answer would be prompt.
+
+**Verified, all arms re-measured on the shipping build.** `p418cl.cfg` +
+`p418sv.cfg` (U1-U4, two processes): the client stages its sidecar instead of
+dropping it, the server ends up with `data/evidence/bhop_eazy/<runid>.view`,
+`rcptcheck` reports `matches the committed digest (18903 bytes)`, the file is
+byte-identical to the client's staged copy, and the signed `server` line reads
+`127.0.0.1:27696` — Patch 417's address binding over a real connection rather
+than a loopback name. **CONTROL** `p418ctl.cfg` (`rec_upload 0`): nothing staged,
+`signed view -`, no `Receiving` line, no file. `p418hid.cfg` + `p418hidsv.cfg`
+(H1-H4, `run_evidence_ul 2`): both files staged under one nonce, both uploaded,
+both digests matching, `kept 1`, and `hidcheck` on the uploaded journal reporting
+the same nonce the server's `.rec` header states. `p418race.cfg` (R1-R5) with a
+**negative control** — the same arm against a build with the in-flight guard
+compiled out reproduces that defect exactly, two different run ids on the
+`Receiving` and `completed` lines, and the file the server says completed does
+not exist — and a second pass at `run_evidence_ul 2` where run A's journal
+arrives as a journal (`FTESURF-HID 1`, 1901 bytes, digest matching) while run B
+is refused mid-stream. `p418sweep.cfg` (S1-S4): three per-map sweeps, one
+whole-tree sweep, the stamp in localinfo and not serverinfo, and **zero**
+whole-tree sweeps with the switch off. `rcptcheck` over the whole evidence tree:
+24 receipts, 0 faults. `test_reccheck` 248/0, `test_hidcheck` 154/0.
+
+**Four harness traps worth stating**, one run lost each: `set run_evidence_ul 2`
+inside the server's `+exec` cfg is TOO LATE (the serverinfo key is published at
+map init, before the exec); a RUNNING dedicated server holds `fteqwsv64.exe`, so
+the deploy step fails and the next arm silently measures the previous binary; a
+second server started on a port another one holds logs "Server spawned" and then
+sees no clients, so the run lands in the other log file; and `Con_DPrintf` never
+reaches a log file unless `log_developer` is set, so a falsifier that greps a
+server log for a DPrint measures nothing.
+
+**Not deployed.** The server half needs an engine deploy this time, unlike 417 —
+`sv_recupload`, the upload cap, the teardown and the second-destination queue are
+all in the dedicated-server build.
+
+**Still open.** The `.hid` default stays off, and the arithmetic above says the
+netchan is the wrong transport for journals at all. `SVRANKING`'s
+`sv_cmdlikercon` path executes a ranked client's command at that client's
+trustlevel, so if a deployment ever sets both, a high-trust client reaches
+`sv_recupload` — FTESurf sets neither, and the test there is on level rather than
+on provenance. Nothing yet cross-checks the uploaded `.view`'s angles against the
+`.rec`'s — that check is now POSSIBLE server-side for the first time and is
+deliberately not written here, because the only data that exists for it is a
+scripted harness run whose yaw never moves, and a detector this tree cannot
+calibrate is one it does not ship. And `surfd/sweep.py` still reads neither
+receipts nor uploaded evidence.

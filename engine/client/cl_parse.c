@@ -3431,7 +3431,10 @@ void CL_NextUpload(void)
 	else if (upload_file)
 	{
 		r = VFS_READ(upload_file, buffer, r);
-		if (r == 0)
+		/*FTESurf Patch 418: `<= 0`.  A NEGATIVE read reached MSG_WriteShort and
+		  SZ_Write, whose space check is `cursize + length > maxsize` -- which a
+		  negative length passes -- and then memcpy with (size_t)-1.*/
+		if (r <= 0)
 		{
 			CL_StopUpload();
 			return;
@@ -3496,35 +3499,54 @@ void CL_StopUpload(void)
 	upload_pos = upload_size = 0;
 }
 
-#if 0	//in case we ever want to add any uploads other than snaps
-static qboolean CL_StartUploadFile(char *filename)
-{
-	if (!COM_CheckParm("-fileul"))
-	{
-		Con_Printf("You must currently use the -fileul commandline parameter in order to use this functionality\n");
-		return false;
-	}
+/*
+FTESurf Patch 418 -- THE FILE UPLOAD, taken off the shelf.
 
+This function has been here since QuakeWorld, behind `#if 0` and a `-fileul`
+commandline gate, with a comment reading "in case we ever want to add any
+uploads other than snaps".  The run evidence is that case: the client's own
+angle sidecar has to reach the server that recorded the run, because today a
+lobby's `.rec` is the only file of the three that exists anywhere but the
+player's disk -- and the receipt (Patch 417) commits to digests of bytes nobody
+else holds.
+
+WHAT CHANGED AND WHY IT IS SAFE ENOUGH TO UNGATE.  The `-fileul` gate existed
+because the server names the file: `snap` uploads whatever `uploadfn` says.  It
+still does -- but the CALLER here is not the server.  cl_receipt.c holds a path
+the GAMECODE armed, checks it through the QC sandbox, requires a `data/` prefix
+and an evidence extension, and refuses a server-issued command outright.  The
+server chooses only WHERE ITS OWN COPY LANDS, which was always its business.
+
+A hostile server owns the client's CSQC, so it can arm any evidence file under
+data/ -- and could already read one outright with QC's own fopen.  This adds no
+reach it did not have; what it adds is a cap and a refusal path.
+*/
+qboolean CL_StartUploadFile(const char *filename, int maxsize)
+{
 	if (cls.state < ca_onserver)
-	{
-		Con_Printf("not connected\n");
-		return false; // gotta be connected
-	}
+		return false;			// gotta be connected
 
 	CL_StopUpload();
 
-	upload_file = FS_OpenVFS(filename, "rb", FS_ROOT);
+	upload_file = FS_OpenVFS(filename, "rb", FS_GAMEONLY);
+	if (!upload_file)
+		return false;
 	upload_size = VFS_GETLEN(upload_file);
 	upload_pos = 0;
-
-	if (upload_file)
+	if (upload_size <= 0 || (maxsize > 0 && upload_size > maxsize))
 	{
-		CL_NextUpload();
-		return true;
+		/*A cap on OUR side as well as the server's, because the cost of an
+		  oversized upload is paid here first: every chunk is a reliable
+		  message, so a file nobody wanted still walks through this client's
+		  netchan a packet at a time.*/
+		Con_DPrintf("upload: %s is %i bytes, cap is %i\n", filename, upload_size, maxsize);
+		CL_StopUpload();
+		return false;
 	}
-	return false;
+
+	CL_NextUpload();
+	return true;
 }
-#endif
 
 /*
 =====================================================================

@@ -2679,6 +2679,7 @@ void CL_Disconnect (const char *reason)
 	cls.signon=0;
 #endif
 	CL_StopUpload();
+	CL_Receipt_Disarm();	//FTESurf Patch 418: an offer to one server, not the next
 
 	CL_FlushClientCommands();
 

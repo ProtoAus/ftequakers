@@ -431,6 +431,201 @@ static void CL_Receipt_SelfTest_f(void)
 	Con_Printf("ed25519 selftest: %s\n", bad ? "FAILED" : "all vectors ok");
 }
 
+/*
+  PATCH 418 -- HANDING THE SIDECAR OVER.
+
+  A lobby's `.rec` is the only one of the three evidence files that exists
+  anywhere but the player's disk: Rec_ViewEnd drops the angle sidecar whenever
+  the recording is on a remote server, and Rec_HidEnd keeps a journal only for a
+  PB.  So the receipt of Patch 417 commits to digests of bytes nobody can check,
+  and the cross-file consistency the whole design rests on is an offline claim
+  about the player's own directory.
+
+  THE CLIENT ARMS, THE SERVER ASKS, AND THE TWO NAME DIFFERENT THINGS.  The
+  gamecode arms the file it has just written (`rec_ul_arm`), which is the only
+  path this end will ever send; the server then asks for it (`rec_ul_send`,
+  stuffed) and names only where ITS OWN copy lands.  A server that asks for a
+  file this client did not arm gets nothing -- the request carries no path at
+  all.
+
+  WHY THE NETCHAN AND NOT HTTP.  The connection is already authenticated and
+  already knows which run this is; an HTTP endpoint would need a new public
+  write surface, a nonce to authenticate it, a raised body cap and a second
+  retention story.
+
+  WHAT IT COSTS, IN THE NUMBERS AND NOT THE ADJECTIVES.  A sidecar is 2.93 KB/s
+  of run (20 KB for 7 s, measured), so a 2-minute run is ~352 KB.  The transport
+  is one <=768-byte chunk per SERVER REQUEST -- CL_NextUpload sends one and
+  returns, and only the reliable `nextul` stufftext re-enters it -- so that run
+  is 459 round trips: about 25 s at 30 ms RTT and 80 s at 150 ms.  Upstream
+  volume is ~371 KB total, ~15 KB/s, which is nothing; the WALL CLOCK is the
+  cost, and the first draft of this paragraph said "seconds in a lobby", which
+  was wrong by a factor of ten and is the reason the server had to learn what to
+  do when the next run finishes first (see SV_RecUpload_f).
+
+  THE JOURNAL DOES NOT FIT THROUGH HERE AT ALL.  It is 110 KB/s of run (8.38 MB
+  for 76 s, measured) -- 38x the sidecar by rate -- so the 4 MiB cap below
+  refuses anything past about 38 seconds of run, and even a run that fits is
+  17,000 round trips: 16 minutes at 30 ms, 50 at 150 ms.  `run_evidence_ul 2`
+  is therefore a LAN and short-run switch, not a way to collect journals from a
+  public lobby; anything else needs a transport that is not this one.
+*/
+#define RCPT_ULMAX	(4*1024*1024)
+
+/*
+  FOUR SLOTS: TWO RUNS OF TWO FILES.
+
+  It was two, which is one run -- and one run is not enough, because the server
+  asks for a run's second file only when its first has ARRIVED.  A sidecar is
+  one chunk per round trip (25 s at 30 ms RTT, 80 s at 150 ms for a two-minute
+  run) and the next run can easily finish inside that, so the arms for the run
+  still being asked about have to survive the next one.  Two runs is the bound
+  the transport actually needs; the oldest arming is dropped when a fifth
+  arrives, and a slot that is never asked for costs a path and nothing else.
+
+  Which slot answers a request is decided by the run and the kind the server
+  names, not by position -- see CL_Receipt_ULSend_f.
+*/
+#define RCPT_ULSLOTS 4
+static char rcpt_ularm[RCPT_ULSLOTS][MAX_QPATH];
+
+static void CL_Receipt_ULArm_f(void)
+{
+	const char *name, *fallback;
+	size_t l;
+	int i;
+
+	if (Cmd_FromGamecode())
+	{	/*the same rule rec_sign has: a server may not choose what this client
+		  sends, even though the gamecode it wrote can arm one of its own.*/
+		Con_Printf("rec_ul_arm: a server cannot arm this client's evidence upload. Refused.\n");
+		return;
+	}
+	if (Cmd_Argc() < 2 || !*Cmd_Argv(1) || !strcmp(Cmd_Argv(1), "-"))
+	{	/*disarming is not an error: a run with no evidence says so*/
+		for (i = 0; i < RCPT_ULSLOTS; i++)
+			*rcpt_ularm[i] = 0;
+		return;
+	}
+
+	/*THE SAME SANDBOX in_journal_end USES, plus a `data/` prefix, plus an
+	  evidence extension.  Anything else is not this game's evidence and has no
+	  business leaving the machine.*/
+	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5))
+	{
+		Con_DPrintf("rec_ul_arm: refused %s\n", Cmd_Argv(1));
+		return;
+	}
+	l = strlen(name);
+	if (l < 6 || (strcmp(name + l - 5, ".view") && strcmp(name + l - 4, ".hid")))
+	{
+		Con_DPrintf("rec_ul_arm: %s is not evidence\n", name);
+		return;
+	}
+	for (i = 0; i < RCPT_ULSLOTS; i++)
+	{
+		if (!*rcpt_ularm[i])
+		{
+			Q_strncpyz(rcpt_ularm[i], name, sizeof(rcpt_ularm[i]));
+			Con_DPrintf("rec_ul_arm[%i]: %s\n", i, name);
+			return;
+		}
+	}
+	/*FULL: the OLDEST offer goes, not this one.  Refusing the new arming was
+	  the old behaviour and it is the wrong end to drop from -- the run being
+	  armed is the one whose receipt was just signed.*/
+	Con_DPrintf("rec_ul_arm: slots full, dropping %s for %s\n", rcpt_ularm[0], name);
+	for (i = 1; i < RCPT_ULSLOTS; i++)
+		Q_strncpyz(rcpt_ularm[i-1], rcpt_ularm[i], sizeof(rcpt_ularm[i-1]));
+	Q_strncpyz(rcpt_ularm[RCPT_ULSLOTS-1], name, sizeof(rcpt_ularm[RCPT_ULSLOTS-1]));
+}
+
+/*
+  PATCH 418: FORGET WHAT WAS ARMED, ON DISCONNECT.
+
+  An arming is an offer to ONE server about ONE run.  Left standing across a
+  disconnect it becomes an offer to whoever is asked next: join a server that
+  ships no csprogs -- so nothing in the gamecode ever clears it -- and a single
+  stuffed `rec_ul_send` would hand it the previous server's run evidence, with
+  no run of its own involved.  Called from CL_Disconnect, beside CL_StopUpload.
+*/
+void CL_Receipt_Disarm(void)
+{
+	int i;
+	for (i = 0; i < RCPT_ULSLOTS; i++)
+		*rcpt_ularm[i] = 0;
+}
+
+static void CL_Receipt_ULSend_f(void)
+{
+	const char *nonce, *kind, *base, *dot;
+	int i;
+
+	/*
+	  THE REQUEST NAMES THE RUN AND THE KIND, AND STILL NO PATH.
+
+	  It used to name nothing at all and this took the LOWEST armed slot, which
+	  is right only while the answer is prompt.  It is not: a sidecar goes out
+	  at one chunk per round trip, so the next run routinely ends first, clears
+	  both slots (`rec_ul_arm -`) and re-arms them with its own files.  The
+	  server's request for run A's JOURNAL was then answered with run B's
+	  SIDECAR -- stored under run A's runid, where the checker holds it against
+	  run A's signed journal digest and reports a mismatch about a player who
+	  did nothing wrong.  Two reviewers derived that independently and neither
+	  needed a cheat to do it.
+
+	  The nonce is this run's own, which both ends already have (Patch 416), and
+	  the kind is the extension of the destination the SERVER chose.  Neither
+	  says anything about this machine's filesystem, so the asymmetry the whole
+	  design rests on is untouched.
+	*/
+	if (Cmd_Argc() < 3)
+	{
+		Con_DPrintf("rec_ul_send: needs a run and a kind\n");
+		return;
+	}
+	nonce = Cmd_Argv(1);
+	kind = Cmd_Argv(2);
+	if (CL_IsUploading())
+	{
+		Con_DPrintf("rec_ul_send: already sending\n");
+		return;
+	}
+	for (i = 0; i < RCPT_ULSLOTS; i++)
+	{
+		if (!*rcpt_ularm[i])
+			continue;
+		base = strrchr(rcpt_ularm[i], '/');
+		base = base ? base + 1 : rcpt_ularm[i];
+		dot = strrchr(base, '.');
+		if (!dot || strcmp(dot + 1, kind))
+			continue;		/*a .view asked for, a .hid armed*/
+		if ((size_t)(dot - base) != strlen(nonce) || strncmp(base, nonce, dot - base))
+			continue;		/*armed, but for a different run*/
+		break;
+	}
+	if (i == RCPT_ULSLOTS)
+	{
+		Con_DPrintf("rec_ul_send: nothing armed for %s %s\n", nonce, kind);
+		return;
+	}
+	/*
+	  THE PATH IS OURS.  The server can ask, at a moment of its choosing, for
+	  the file the gamecode armed for the run it names -- and for nothing else.
+	  One arming is good for one send; a second request gets nothing until the
+	  gamecode arms again.
+	*/
+	/*SAID OUT LOUD.  This used to be Con_DPrintf, so the one case that actually
+	  happens -- a journal over the cap, which is any run past ~38 seconds --
+	  was invisible on a shipping client AND left the server holding a
+	  destination nobody would ever write to.  The player can see that their
+	  file was not sent; the receipt still commits to its digest either way.*/
+	if (!CL_StartUploadFile(rcpt_ularm[i], RCPT_ULMAX))
+		Con_Printf(CON_WARNING "rec_ul_send: %s not sent -- missing, empty, or over the %i byte cap\n",
+				   rcpt_ularm[i], RCPT_ULMAX);
+	*rcpt_ularm[i] = 0;		/*one arming, one send*/
+}
+
 void CL_Receipt_Init(void)
 {
 	Cmd_AddCommandD("rec_sign", CL_Receipt_Sign_f,
@@ -439,6 +634,12 @@ void CL_Receipt_Init(void)
 					"Print this install's run-signing public key, which is the identity a ranked board knows you by.");
 	Cmd_AddCommandD("ed25519_selftest", CL_Receipt_SelfTest_f,
 					"Check the signing primitive against RFC 8032's published vectors.");
+	/*Patch 418: the evidence upload.  Arm is the gamecode's; send is the
+	  server's, and carries no path -- see CL_Receipt_ULArm_f.*/
+	Cmd_AddCommandD("rec_ul_arm", CL_Receipt_ULArm_f,
+					"rec_ul_arm <path> -- offer this run's evidence file for upload.  Called by the gamecode.");
+	Cmd_AddCommandD("rec_ul_send", CL_Receipt_ULSend_f,
+					"rec_ul_send <nonce> <view|hid> -- send the evidence the gamecode armed for that run.  The server asks; the file is this client's choice.");
 }
 
 #endif

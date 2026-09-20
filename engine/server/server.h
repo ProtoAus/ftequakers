@@ -637,6 +637,12 @@ typedef struct client_s
 
 	vfsfile_t		*upload;
 	char			uploadfn[MAX_QPATH];
+	int				uploadgot;	//FTESurf Patch 418: bytes taken, against sv_uploadmax
+	char			uploadnext[MAX_QPATH];	//...and where the NEXT one goes, if two were asked for
+	double			uploadat;	//...and when we asked (or last took a chunk), so an unanswered request expires
+	qboolean		uploadrec;	//...and whether this one is run evidence rather than a screenshot
+	qboolean		uploadwant;	//...and whether we have an outstanding request: one chunk per ask, no more
+	char			uploadnonce[36];	//...and which run it belongs to, so a late answer cannot be the next run's file
 	netadr_t		snap_from;
 	qboolean		remote_snap;
 
@@ -1226,6 +1232,9 @@ float SV_Frame (void);
 void SV_ReadPacket(void);
 void SV_FinalMessage (char *message);
 void SV_DropClient (client_t *drop);
+void SV_UploadCancel (client_t *cl);	//FTESurf Patch 418: close, delete the partial, clear the destination
+qboolean SV_UploadStale (client_t *cl);	//...has the client stopped answering?
+void SV_UploadAsk (client_t *cl);	//...ask for the armed file, naming the run and the kind
 void SV_DropClient_ByAddress (netadr_t *addr);
 struct quakeparms_s;
 void SV_Init (struct quakeparms_s *parms);

@@ -3177,6 +3177,91 @@ void VARGS OutofBandPrintf(netadr_t *where, char *fmt, ...)
 }
 
 /*
+  FTESurf Patch 418: ONE TIDY END FOR AN UPLOAD, because there are three ways
+  out and before this they did three different subsets of the same four things:
+  `snap` cleared the name and left the handle open with the part file on disk,
+  the drop path closed the handle and removed whatever the name said BY THEN,
+  and a new request overwrote the name from under a live stream.  The partial
+  goes for the reason SV_DropClient gives: a truncated sidecar beside a
+  recording is read as a digest mismatch, which is the shape of an accusation.
+*/
+/*
+  Silence, not duration: refreshed by every chunk taken below.  A sidecar is one
+  768-byte chunk per round trip -- 25s at 30ms, 80s at 150ms, measured off the
+  netchan -- so a slow link is nowhere near this, and an armed destination the
+  client never answers stops being writable.
+*/
+#define SV_UPLOADWAIT	120
+
+qboolean SV_UploadStale (client_t *cl)
+{
+	return realtime - cl->uploadat > SV_UPLOADWAIT;
+}
+
+/*
+  THE REQUEST STILL CARRIES NO PATH -- it carries the RUN and the KIND.
+
+  `rec_ul_send` used to be a bare word, and the client answered with the lowest
+  file it had armed.  That is wrong whenever the answer is late, which two
+  reviewers derived independently and which the transport makes ORDINARY: a run
+  ends, its sidecar goes out one chunk per round trip, the next run ends and
+  re-arms both slots, and the server's request for run A's JOURNAL is then
+  answered with run B's SIDECAR -- filed under run A's runid, where the checker
+  holds it against run A's signed journal digest and reports a mismatch about a
+  player who did nothing wrong.
+
+  The nonce is the run's own, which both ends already have (Patch 416), and the
+  kind comes from the extension of the destination the SERVER chose.  Neither
+  says anything about the client's filesystem.
+*/
+void SV_UploadAsk (client_t *cl)
+{
+	const char *kind = "";
+	size_t l = strlen(cl->uploadfn);
+
+	if (l > 5 && !strcmp(cl->uploadfn + l - 5, ".view"))
+		kind = "view";
+	else if (l > 4 && !strcmp(cl->uploadfn + l - 4, ".hid"))
+		kind = "hid";
+	if (!*kind || !*cl->uploadnonce)
+	{	/*SV_RecUpload_f validates both; this is the belt for a future caller*/
+		Con_DPrintf("SV_UploadAsk: %s has no run to ask about\n", cl->uploadfn);
+		return;
+	}
+	cl->uploadwant = true;
+	ClientReliableWrite_Begin (cl, svc_stufftext, 64);
+	ClientReliableWrite_String (cl, va("rec_ul_send %s %s\n", cl->uploadnonce, kind));
+}
+
+void SV_UploadPartName (client_t *cl, char *buf, size_t bufsize)
+{
+	Q_snprintfz(buf, bufsize, "%s.part", cl->uploadfn);
+}
+
+void SV_UploadCancel (client_t *cl)
+{
+	char part[MAX_QPATH+8];
+
+	if (cl->upload)
+	{
+		VFS_CLOSE(cl->upload);
+		cl->upload = NULL;
+		if (*cl->uploadfn)
+		{
+			SV_UploadPartName(cl, part, sizeof(part));
+			FS_Remove(part, FS_GAMEONLY);
+		}
+	}
+	*cl->uploadfn = 0;
+	*cl->uploadnext = 0;
+	cl->uploadgot = 0;
+	cl->uploadat = 0;
+	cl->uploadrec = false;
+	cl->uploadwant = false;
+	*cl->uploadnonce = 0;
+}
+
+/*
 ==================
 SV_NextUpload
 ==================
@@ -3185,32 +3270,97 @@ void SV_NextUpload (void)
 {
 	int		percent;
 	int		size;
+	extern cvar_t sv_uploadmax;	//FTESurf Patch 418
 
-	if (!*host_client->uploadfn)
+	/*
+	  FTESurf Patch 418: THE LENGTH IS THE CLIENT'S AND IS TREATED AS SUCH, AND
+	  IT IS READ AND CLAMPED BEFORE ANY BRANCH.
+
+	  MSG_ReadShort SIGN-EXTENDS, so 0xffff arrives as -1.  That decremented the
+	  byte counter the cap below depends on and handed VFS_WRITE a negative
+	  length; nothing checked it against the bytes actually in the packet
+	  either, so a large positive size copied whatever followed the message --
+	  net_message_buffer is one 64 KB global shared by every inbound datagram --
+	  into an evidence file.
+
+	  The first fix clamped only the path that WRITES, and the "nothing armed"
+	  exit below still read the raw short to drain the packet.  That was worse
+	  than the bug it left: MSG_ReadSkip(-4) REWINDS the read cursor four bytes,
+	  back onto the clc_upload byte it just consumed, and sets msg_badread only
+	  if the cursor goes below zero -- which it does not.  The clc parse loop
+	  then reads the same command forever.  ONE PACKET FROM ANY CONNECTED
+	  CLIENT, AT ANY TIME, AND THE SERVER SPINS AT 100% UNTIL IT IS KILLED.
+	  Reading and clamping once, above every exit, is the only shape of this
+	  that stays correct when someone adds a third exit.
+	*/
+	size = MSG_ReadShort ();
+	percent = MSG_ReadByte ();
+	if (size < 0)
+		size = 0;
+	if (size > net_message.cursize - MSG_GetReadCount())
+		size = net_message.cursize - MSG_GetReadCount();
+	if (size < 0)
+		size = 0;
+
+	/*
+	  AN UNANSWERED REQUEST EXPIRES.  `sv_recupload` arms a destination and then
+	  waits on the client; before this it waited for the rest of the connection.
+	  The two request sites test the same age (SV_UploadStale), because a client
+	  that goes silent AFTER opening the file cannot be reached from here at
+	  all -- it never sends again, which was one packet's worth of permanent
+	  exemption from evidence collection.
+	*/
+	if (*host_client->uploadfn && SV_UploadStale(host_client))
+	{
+		Con_Printf("%s: %s stopped sending -- destination dropped\n",
+			host_client->name, host_client->uploadfn);
+		SV_UploadCancel(host_client);
+	}
+
+	/*
+	  AND A CHUNK WE DID NOT ASK FOR IS NOT TAKEN.  The protocol is strictly one
+	  chunk per request -- the client sends one and waits for `nextul` -- so the
+	  server has no reason to accept a second before it asks, and accepting them
+	  was the whole rate story: a modified client could push at its full
+	  upstream into a destination bounded only by sv_uploadmax, which a new run
+	  resets.  With the handshake enforced the rate is one chunk per server
+	  frame, which is what the honest client already does.
+	*/
+	if (!*host_client->uploadfn || !host_client->uploadwant)
 	{
 		SV_ClientTPrintf(host_client, PRINT_HIGH, "Upload denied\n");
 		ClientReliableWrite_Begin (host_client, svc_stufftext, 8);
 		ClientReliableWrite_String (host_client, "stopul\n");
-
-		// suck out rest of packet
-		size = MSG_ReadShort ();	MSG_ReadByte ();
 		MSG_ReadSkip(size);
 		return;
 	}
-
-	size = MSG_ReadShort ();
-	percent = MSG_ReadByte ();
+	host_client->uploadwant = false;
 
 	if (!host_client->upload)
 	{
-		FS_CreatePath(host_client->uploadfn, FS_GAMEONLY);
-		host_client->upload = FS_OpenVFS(host_client->uploadfn, "wb", FS_GAMEONLY);
+		/*
+		  WRITTEN TO `<name>.part` AND RENAMED AT THE END, which is what the
+		  recorder does with `data/parts/` and for the same reason: a file that
+		  stops halfway is not the file the client signed a digest for, and a
+		  truncated `.view` sitting beside a recording reads as "does not match
+		  the committed digest" -- an accusation about a player whose power went
+		  out.  Every clean teardown already deleted the partial; a SIGKILL or a
+		  crash cannot, and the rename is what covers those.
+		*/
+		char part[MAX_QPATH+8];
+		SV_UploadPartName(host_client, part, sizeof(part));
+		FS_CreatePath(part, FS_GAMEONLY);
+		host_client->upload = FS_OpenVFS(part, "wb", FS_GAMEONLY);
 		if (!host_client->upload)
 		{
-			Sys_Printf("Can't create %s\n", host_client->uploadfn);
+			Sys_Printf("Can't create %s\n", part);
 			ClientReliableWrite_Begin (host_client, svc_stufftext, 8);
 			ClientReliableWrite_String (host_client, "stopul\n");
-			*host_client->uploadfn = 0;
+			/*AND THE PAYLOAD IS STILL DRAINED.  Returning without the skip left
+			  the client's file data to be parsed as protocol by the clc loop --
+			  the one exit of the three that forgot it.*/
+			MSG_ReadSkip(size);
+			SV_UploadCancel(host_client);
 			return;
 		}
 		Con_Printf("Receiving %s from %d...\n", host_client->uploadfn, host_client->userid);
@@ -3218,20 +3368,70 @@ void SV_NextUpload (void)
 			OutofBandPrintf(&host_client->snap_from, "Server receiving %s from %d...\n", host_client->uploadfn, host_client->userid);
 	}
 
+	/*
+	  FTESurf Patch 418: A CAP, because this is now reachable for something
+	  other than a screenshot.  Declared here rather than in a header on the
+	  file's own precedent -- sv_minping and sv_listen_nq do the same.  The client decides how many chunks it sends and
+	  the server wrote every one of them; on a twelve-lobby box sharing one data
+	  directory, "as many bytes as the client feels like" is a disk the operator
+	  does not own.  The evidence this exists for is a few hundred KB, the
+	  client's own cap is 4 MB, and a client that walks past this one has
+	  stopped being the client we asked.
+	*/
+	host_client->uploadgot += size;
+	if (host_client->uploadgot > sv_uploadmax.ival && sv_uploadmax.ival > 0)
+	{
+		Con_Printf("%s upload from %d exceeded %i bytes -- dropped\n",
+			host_client->uploadfn, host_client->userid, sv_uploadmax.ival);
+		SV_UploadCancel(host_client);	/*one teardown, not a fourth copy of it*/
+		ClientReliableWrite_Begin (host_client, svc_stufftext, 8);
+		ClientReliableWrite_String (host_client, "stopul\n");
+		MSG_ReadSkip(size);
+		return;
+	}
+
+	host_client->uploadat = realtime;	/*a chunk landed; the silence timer restarts*/
 	VFS_WRITE (host_client->upload, net_message.data + MSG_GetReadCount(), size);
 	MSG_ReadSkip(size);
 
 	if (percent != 100)
 	{
+		host_client->uploadwant = true;
 		ClientReliableWrite_Begin (host_client, svc_stufftext, 8);
 		ClientReliableWrite_String (host_client, "nextul\n");
 	}
 	else
 	{
+		char part[MAX_QPATH+8];
+		SV_UploadPartName(host_client, part, sizeof(part));
 		VFS_CLOSE (host_client->upload);
 		host_client->upload = NULL;
 
-		Con_Printf("%s upload completed.\n", host_client->uploadfn);
+		/*
+		  `percent` IS THE CLIENT'S BYTE AND THE SERVER HAS NO EXPECTED LENGTH,
+		  so "completed" means "the client says so".  The count goes in the line
+		  because without it a one-byte upload and a real sidecar read the same
+		  in a log, and an EMPTY one is thrown away: nothing legitimate produces
+		  it (CL_StartUploadFile refuses a zero-length file), and a zero-byte
+		  file under a runid is the digest mismatch this patch keeps saying it
+		  will not manufacture.  Anything else that arrives short is kept and
+		  fails the digest, which is the honest outcome -- the checker is the
+		  place that judgement belongs.
+		*/
+		if (!host_client->uploadgot)
+		{
+			Con_Printf("%s: %s completed with no data -- discarded\n",
+				host_client->name, host_client->uploadfn);
+			FS_Remove(part, FS_GAMEONLY);
+		}
+		else
+		{
+			FS_Remove(host_client->uploadfn, FS_GAMEONLY);
+			if (!FS_Rename(part, host_client->uploadfn, FS_GAMEONLY))
+				Con_Printf("%s: cannot rename %s into place\n", host_client->name, part);
+			Con_Printf("%s upload completed, %i bytes.\n",
+				host_client->uploadfn, host_client->uploadgot);
+		}
 
 		if (host_client->remote_snap)
 		{
@@ -3245,6 +3445,34 @@ void SV_NextUpload (void)
 				host_client->uploadfn, p);
 		}
 		*host_client->uploadfn = 0;	//don't let it get overwritten again
+
+		/*
+		  FTESurf Patch 418: THE SECOND FILE, IF ONE WAS ASKED FOR.  An upload
+		  is a single stream through one netchan, so a run's two evidence files
+		  go one after the other -- and the moment to ask for the second is the
+		  moment the first finishes, which is here and nowhere else.  The client
+		  chooses WHICH file that is, out of what its gamecode armed; this only
+		  names where the server's copy lands.
+		*/
+		if (*host_client->uploadnext)
+		{
+			/*THE PROMOTED DESTINATION SETS ITS OWN STATE rather than inheriting
+			  whatever the last one left.  Only sv_recupload ever fills
+			  `uploadnext`, so this is always evidence and never a screenshot --
+			  but an operator `snap` landing in the request window used to leave
+			  `uploadrec` false and `remote_snap` true, which turned the
+			  completion into a `download data/evidence/...` line sent to
+			  whoever held the rcon, and turned a decline into a broadcast
+			  about a screenshot nobody asked for.*/
+			Q_strncpyz(host_client->uploadfn, host_client->uploadnext, sizeof(host_client->uploadfn));
+			*host_client->uploadnext = 0;
+			host_client->uploadgot = 0;
+			host_client->uploadat = realtime;
+			host_client->uploadrec = true;
+			host_client->remote_snap = false;
+			host_client->uploadwant = true;
+			SV_UploadAsk(host_client);
+		}
 	}
 }
 
@@ -5329,12 +5557,26 @@ void SV_ShowServerinfo_f (void)
 
 void SV_NoSnap_f(void)
 {
-	SV_LogPlayer(host_client, "refused snap");
+	/*The log line says WHICH of the two this was.  It used to say "refused
+	  snap" for both, so the one case worth reading -- a player declining to
+	  send their own run's evidence -- was recorded as a screenshot refusal.*/
+	SV_LogPlayer(host_client, host_client->uploadrec ? "refused evidence upload" : "refused snap");
 
-	if (*host_client->uploadfn)
+	if (*host_client->uploadfn || host_client->upload)
 	{
-		*host_client->uploadfn = 0;
-		SV_BroadcastTPrintf (PRINT_HIGH, "%s refused remote screenshot\n", host_client->name);
+		/*
+		  FTESurf Patch 418: `snap` IS A CLIENT STRINGCMD AND IT CAN NOW MEET AN
+		  EVIDENCE UPLOAD.  It cleared the name and walked away, which left the
+		  handle open and a truncated `.view` the drop path could no longer find
+		  -- it removes by `uploadfn` -- so one console command left exactly the
+		  file the checker reports as not matching its digest.  The broadcast
+		  stays on the screenshot path: a player declining to send a sidecar is
+		  not chat, and saying "refused remote screenshot" about it is a lie.
+		*/
+		qboolean evidence = host_client->uploadrec;
+		SV_UploadCancel(host_client);
+		if (!evidence)
+			SV_BroadcastTPrintf (PRINT_HIGH, "%s refused remote screenshot\n", host_client->name);
 	}
 }
 

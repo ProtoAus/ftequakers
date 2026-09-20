@@ -3355,7 +3355,24 @@ static void SV_Snap (int uid)
 		Con_TPrintf ("Snap: Couldn't create a file, clean some out.\n");
 		return;
 	}
+	/*FTESurf Patch 418: the same in-flight rule as sv_recupload and for the same
+	  reason -- an operator snap used to rename a live evidence stream's
+	  destination out from under it, and the reverse: a snap armed and not yet
+	  answered used to be replaced by the next run's request, so the SCREENSHOT
+	  arrived and was filed as that run's sidecar.  An ARMED destination counts,
+	  not just an open handle: the window between the ask and the first chunk is
+	  a round trip, which is where both of those live.*/
+	if ((cl->upload || *cl->uploadfn) && !SV_UploadStale(cl))
+	{
+		Con_TPrintf ("User %d is already sending %s\n", uid, cl->uploadfn);
+		return;
+	}
+	SV_UploadCancel(cl);		/*stale, or nothing: either way start clean*/
 	strcpy(cl->uploadfn, checkname);
+	cl->uploadgot = 0;
+	cl->uploadat = realtime;
+	cl->uploadrec = false;
+	cl->uploadwant = true;
 
 	memcpy(&cl->snap_from, &net_from, sizeof(net_from));
 	if (sv_redirected != RD_NONE)
@@ -3373,6 +3390,155 @@ static void SV_Snap (int uid)
 SV_Snap_f
 ================
 */
+/*
+FTESurf Patch 418 -- LET THE GAMECODE ASK FOR A CLIENT'S EVIDENCE.
+
+The upload machinery has always been driven by the server setting
+`host_client->uploadfn` and stuffing a command; only `snap` ever did it, from an
+operator's console.  QuakeC cannot set that field, so this is the one line it
+was missing: the timer decides a run's evidence is worth having, names where the
+server's copy goes, and this arms it.
+
+THE SERVER NAMES ITS OWN COPY AND NOTHING ELSE.  The stuffed `rec_ul_send`
+carries no path: the client sends the file ITS gamecode armed, or nothing.  So
+this command cannot reach into a player's directory, and a compromised server
+gains no more than it already had by shipping its own csprogs.
+
+NOT RCON.  A plain Cmd_AddCommandD leaves `restriction` at 0, which means the
+command falls back to `rcon_level` (20) -- so the first cut of this said "not
+rcon by default" in a comment while being exactly that.  An rcon holder could
+name any data path ending .view or .hid and have a connected client's armed evidence written
+there, i.e. a real run's sidecar filed under a runid of their choosing.  The
+level is tested here instead: a console is RESTRICT_LOCAL (29) and the server
+gamecode's localcmd is RESTRICT_INSECURE (30), and both are above rcon.
+*/
+static qboolean SV_RecUpload_Path(const char *path)
+{	/*Under data/, and an evidence extension.  The caller is our own gamecode,
+	  so this is belt and braces -- but the field it writes into is one the
+	  client's bytes land in, and "our own gamecode" has been wrong before.*/
+	size_t l = strlen(path);
+	if (strncmp(path, "data/", 5) || strstr(path, "..") ||
+		l >= MAX_QPATH || l < 6 ||
+		(strcmp(path + l - 5, ".view") && strcmp(path + l - 4, ".hid")))
+		return false;
+	return true;
+}
+
+static void SV_RecUpload_f(void)
+{
+	client_t *cl;
+	int		i, ent;
+	const char *path, *path2, *nonce;
+
+	if (Cmd_Argc() < 4)
+	{
+		Con_Printf("%s <entnum> <nonce> <path> [path2] -- ask a client for its run evidence\n", Cmd_Argv(0));
+		return;
+	}
+	if (Cmd_ExecLevel < RESTRICT_LOCAL)
+	{
+		Con_Printf("%s: console or gamecode only\n", Cmd_Argv(0));
+		return;
+	}
+
+	ent = atoi(Cmd_Argv(1));
+	nonce = Cmd_Argv(2);
+	path = Cmd_Argv(3);
+	path2 = (Cmd_Argc() > 4) ? Cmd_Argv(4) : "";
+
+	if (!SV_RecUpload_Path(path) || (*path2 && !SV_RecUpload_Path(path2)))
+	{
+		Con_Printf("%s: refused %s\n", Cmd_Argv(0), path);
+		return;
+	}
+	/*The nonce is stuffed back to the client, so it is checked like any other
+	  text that leaves this process: hex, and short enough to be a nonce.*/
+	for (i = 0; nonce[i]; i++)
+		if (!((nonce[i] >= '0' && nonce[i] <= '9') ||
+		      (nonce[i] >= 'a' && nonce[i] <= 'f') ||
+		      (nonce[i] >= 'A' && nonce[i] <= 'F')))
+			break;
+	if (!i || nonce[i] || i > 32)
+	{
+		Con_Printf("%s: refused nonce\n", Cmd_Argv(0));
+		return;
+	}
+
+	for (i = 0, cl = svs.clients; i < svs.allocated_client_slots; i++, cl++)
+	{
+		if (cl->state < cs_connected)
+			continue;
+		/*INVERTED IN THE FIRST CUT: `cl->edict && ...!= ent` let a client with
+		  no edict match EVERY entity number and be asked in place of the one
+		  named.  Not reachable today, because the edict is assigned as the
+		  client connects -- which is exactly the kind of "not reachable today"
+		  that stops being true quietly.*/
+		if (!cl->edict || NUM_FOR_EDICT(svprogfuncs, cl->edict) != ent)
+			continue;
+		if (!ISQWCLIENT(cl))
+		{
+			Con_DPrintf("%s: client %i is not a QW client\n", Cmd_Argv(0), ent);
+			return;
+		}
+		/*
+		  AN UPLOAD IN FLIGHT IS NOT INTERRUPTED, AND THE NEWER RUN LOSES.
+
+		  Overwriting the destination under an open handle was the COMMON case
+		  and not an attack: a sidecar is one 768-byte chunk per round trip (25s
+		  at 30ms RTT, 80s at 150ms, measured off the netchan) and a bhop run is
+		  twenty seconds, so run B's request routinely landed while run A was
+		  still on the wire.  Run A's bytes then finished into a file the server
+		  had renamed to B, printed "B upload completed", and filed every later
+		  file one destination out of step -- which the verifier reports as a
+		  digest mismatch against a player who did nothing wrong.  It also reset
+		  the byte cap once per run, so the cap bounded a run, not a disk.
+
+		  Dropping the NEWER request is the cheaper half of the trade: one run
+		  arrives with no sidecar, which rcptcheck reads as an absent sibling
+		  and not a fault, and the receipt still carries the digest.  Aborting
+		  the older one loses a run either way and spends the bytes already on
+		  the wire as well.  A request the client never ANSWERS is a different
+		  case and expires in SV_NextUpload.
+		*/
+		if ((cl->upload || *cl->uploadfn) && !SV_UploadStale(cl))
+		{
+			/*AN ARMED DESTINATION COUNTS, NOT ONLY AN OPEN HANDLE.  The handle
+			  appears with the client's FIRST CHUNK, a round trip after the ask,
+			  and in that window this test used to pass: the next run's request
+			  overwrote the destination and the answer to the FIRST request --
+			  the previous run's sidecar -- was written into the new run's file
+			  and reported as its digest mismatch.
+			  Con_Printf and not DPrintf: this is the line that tells an operator
+			  why a run has a receipt and no sidecar, and it is the only record
+			  that two runs overlapped at all.  (Con_DPrintf reaches the log file
+			  only under log_developer -- measured, the first cut of
+			  cfg/test/p418race.cfg proved the fix and logged nothing.)*/
+			Con_Printf("%s: %i is still sending %s -- not asking again\n", Cmd_Argv(0), ent, cl->uploadfn);
+			return;
+		}
+		if (*cl->uploadfn)
+		{	/*armed, answered by nobody, and now replaced: SAID OUT LOUD, because
+			  it is the only record that a run's evidence was asked for and never
+			  arrived.  Declining is a player's right and costs them nothing --
+			  it should not also be invisible.*/
+			Con_Printf("%s: %s never sent %s -- destination replaced\n",
+				Cmd_Argv(0), cl->name, cl->uploadfn);
+		}
+		SV_UploadCancel(cl);
+		Q_strncpyz(cl->uploadfn, path, sizeof(cl->uploadfn));
+		Q_strncpyz(cl->uploadnext, path2, sizeof(cl->uploadnext));
+		Q_strncpyz(cl->uploadnonce, nonce, sizeof(cl->uploadnonce));
+		cl->uploadgot = 0;
+		cl->uploadat = realtime;
+		cl->uploadrec = true;
+		cl->remote_snap = false;
+		SV_UploadAsk(cl);
+		Con_DPrintf("%s: asked %i for %s\n", Cmd_Argv(0), ent, path);
+		return;
+	}
+	Con_DPrintf("%s: no client at entity %i\n", Cmd_Argv(0), ent);
+}
+
 static void SV_Snap_f (void)
 {
 	int			uid;
@@ -6079,6 +6245,8 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommandAD ("sv_gamedir", SV_Gamedir, SV_Gamedir_c, "Change the gamedir reported to clients, without changing any actual paths on the server.");
 	Cmd_AddCommand ("sv_settimer", SV_SetTimer_f);
 	Cmd_AddCommand ("stuffcmd", SV_StuffToClient_f);
+	Cmd_AddCommandD ("sv_recupload", SV_RecUpload_f,
+		"FTESurf Patch 418: sv_recupload <entnum> <path> -- ask one client for the run evidence its gamecode armed, and write it to <path>.");
 
 	Cmd_AddCommand ("pin_save", SV_Pin_Save_f);
 	Cmd_AddCommand ("pin_reload", SV_Pin_Reload_f);
