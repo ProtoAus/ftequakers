@@ -32409,6 +32409,20 @@ surf_prosurf bonus 4 was driven before the deploy.  If a map's progression
 misbehaves from here, suspect an OnJump that now lands -- `run_bv_debug 1` prints
 `basevel: OnJump from <model>` at the moment it does.
 
+**POST-DEPLOY CENSUS**, because the blast radius that matters is the rotation and
+not the library.  Across the 93 maps the 12 lobby cfgs actually serve, 28 carry an
+OnJump and 937 outputs went from inert to live -- but ~734 of those are Momentum's
+own `AddContext _mom_leftground` bookkeeping, and only ~190 are `AddOutput`.  The
+anti-cheat question is the subset writing `basevelocity` with a big Z, because
+Patch 409's gate is `if (!run_pushed || run_jumpcmd)` and on an OnJump pad the
+player is pressing jump BY CONSTRUCTION -- run_jumpcmd is always TRUE, the gate
+always passes, and a big rise inside a start zone would read as a hopped start and
+taint an honest run.  Measured: 202 OnJump basevelocity outputs on the rotation,
+114 over PM_NONJUMP_VEL, and ZERO with any overlap volume against a start zone.
+Not reachable.  `tools/census/onjumpstart.py` re-runs it off the lobby cfgs when
+the rotation changes.  The biggest live ones are bhop_tripportals at
+`basevelocity 0 0 8000` and bhop_furret at 3000, both well clear of their starts.
+
 ## Patch 415 — `!r` puts you back on the spot you left in the start box  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_saveloc.qc`, `sv_timer.qc`, `sv_zones.qc`. Fixtures `cfg/test/p415reset.cfg`, `p415snap.cfg`.)*
 
 **Problem.** `!r` teleports to the map's authored destination and zeroes velocity.
