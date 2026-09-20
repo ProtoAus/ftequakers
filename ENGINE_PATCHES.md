@@ -32331,6 +32331,221 @@ reads "no id". p340pi against a live lobby post-deploy: hook alive, ranked
 board fetched and absorbed, a real second player's row correct, no prederr.
 0 new warnings across the three progs.
 
+## Patch 409 — a booster is not a jump, the jump button is  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc`, `sv_player.qc`, `sv_timer.qc`. Fixture `cfg/test/p409hop.cfg`.)*
+
+**Problem.** Reported live on surf_666 bonus 3: *"When you fall onto the booster
+at the start of B3 you still get pred error AND you get flagged for practice! you
+have to 'fall' there is a pit you need to fall into and this caused it to believe
+you 'hopped'?"* `SV_TimerJumpWatch` has exactly one way to see a jump --
+`velocity_z` crossing `PM_NONJUMP_VEL` -- and one exclusion, `run_rampcontact`. A
+`trigger_push` produces the rise by the same path a ramp does:
+`PMSrc_TryPlayerMove` clips velocity+basevelocity against the plane and only the
+carrier is subtracted back out, so every unit of Z the clip made stays in
+`.velocity`. But `pm_source.c` sets rampcontact only for `|n_z|` in [0.1, 0.7] and
+B3's pit floor is STANDABLE at 26.57 degrees, so nothing excused it. From the
+player's own prederr log the server is doing (133, 2920, 1453) u/s -- the map's
+3000 u/s pad clipped 2:1 -- decaying at ~240 u/s² against gravity's 800, i.e. a
+body held on a surface, not one that jumped. Census over 1316 bsps: 21 maps have
+a `trigger_push` overlapping a start zone and 36 more within 300 units.
+
+**Change.** Gate the hopped-start accusation on the INPUT rather than the number:
+`!run_pushed || run_jumpcmd`. `CheckJumpButton` is the only path to a commanded
+rise and it needs the jump button and pre-move ground; a body falling into a pit
+has neither, and no floor angle changes that. `.run_pushed` is set on every
+command the mover was handed a carrier, on a cash-out, and in the `SF_PUSH_ONCE`
+arm; `.run_jumpcmd` is latched per command beside the `run_wasground` stamp. Both
+are read once per packet by the hopped-start branch alone and cleared at the foot
+of `SV_TimerJumpWatch`. `jumped` itself is untouched, so the bhop launch latch,
+`run_t_jumps`, `SV_StageTakeoff` and `SV_StageJump` are unchanged.
+
+TWO DRAFTS WERE REVIEWED OUT, both by reviewers who saw the code and not the
+conclusion. `!run_pushed` alone is far too wide -- a continuous pad re-arms the
+carrier every command you touch it, so it switched the hop rule OFF for as long as
+you stood in the volume and a deliberate bhop start on those 21 maps would have
+ranked. `vz <= PM_JUMP_IMPULSE * 1.05` is beaten -- `CheckJumpButton` runs BEFORE
+`AirMove`, which is where the carrier is added, clipped and subtracted back, so
+the impulse and the clip's gain land in the same tick and ADD: a bhop out of this
+very start box reads ~1259 (296 of jump, ~963 of clip) against a bound of 317.
+
+**Verified.** `cfg/test/p409hop.cfg`, both arms on the patched build, differing in
+one input with the verdict flipping: J1 carrier, no jump -> jumps 1, ramp contact
+0, hopped 0; J2 carrier, +jump held -> jumps 2, hopped 1. Draft 1 gives hopped 0
+on both and an unpatched build gives hopped 1 on both, so only this gate separates
+them. J2 also prints `basevel: OnJump ... vz 290`, an independent witness that the
+jump was commanded at a value draft 2's bound could not distinguish.
+
+**Known residual**, stated in the source: grounded on a pad with jump held while
+the clip lifts you is still read as a hop. That is the genuinely ambiguous case
+and it keeps the pre-409 answer. The harness drives the gesture with `setpos`
+rather than by falling down the pit, so a human retest of B3 is the confirmation
+that matters.
+
+**DEPLOYED 2026-09-20** with `c3cf81c` (the Patch 412 deploy) to all 12 lobbies,
+and re-shipped at ~05:30 UTC with `8c09730`; fleet record under Patch 415.
+
+## Patch 410 — the client's push accumulator compounded; the server's never did  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_triggers.qc`, `ftesurf/cfg/default.cfg`. No harness arm -- see Verified.)*
+
+**Problem.** The prediction error the same player reported on surf_666 bonus 3,
+and NOT what commit `341341b` blamed it on: turning `run_startcap` off did not fix
+it because the cap was never causing it -- the server was doing 3243 u/s past a
+cap of 290, so the clamp was not engaging at all.
+`CSQC_PredictPlayerMove` cleared `tg_pusharmed`/`tg_pushvec` only on
+`seq != tg_pushseq`, while the server clears `run_basevel_armed` UNCONDITIONALLY
+every command and the comment on that line reads *"Drop it and a push compounds
+forever"*. The accumulator exists to sum OVERLAPPING pads within ONE command --
+written and re-read inside the trigger loop of a single call, read by nothing
+outside it -- so keying it on the sequence assumed one hook call per sequence. The
+engine makes two kinds of repeat call: `CL_PredictUsercmd` splits any command over
+50 ms and recurses with the SAME sequence, and the `pt_extrap=2` branch re-runs the
+last replayed command verbatim. Each repeat folded the previous call's push into
+the new one.
+
+**Change.** Clear the mirror unconditionally, as the server does. `tg_pushseq` is
+deleted; nothing else referenced it. `default.cfg`'s `run_startcap` note is
+corrected in the same commit because it is where a future reader would go and it
+asserted the wrong cause; the cvar stays 0, since capping the map's intended
+booster is still the wrong half.
+
+**Verified -- BY ARITHMETIC, NOT BY AN ARM, and that is the weakest part of it.**
+From the player's own 15 consecutive acked commands, each error vector divided by
+one command of the pad's ramp-clipped carrier, (0, 36, 18) u at `pm_ticrate`
+0.015: 9, 7, 9, 8, 8, 8, 9, 0, 8, 0, 8, 0, 8, 0, -1 -- integers on both components
+to three decimal places. `dx` is exactly 0.0 on all fifteen, which kills the
+alternative I had favoured: a client running ahead in TIME would have shown 2.007 u
+of x error per command. The offset is parallel to the CARRIER, not to the
+trajectory, and the large error begins and ends exactly at the boundary of the
+pad's real brush box. Plus the player's retest. This patch has no `cfg/test/` arm.
+
+**NOT FIXED HERE**, recorded in the source beside the change: the same repeat calls
+have two older victims. `TG_FirePush`'s once arm tests `seq > tg_onceseq[i]`, so a
+repeat call at the same seq re-adds a one-shot impulse the server fires once ever;
+and `if (seq <= tg_lastseq) TG_ChainStart(seq)` reads a repeat call as a new chain,
+so `TG_IOCommit` folds still-unacked IO edges into the committed state permanently.
+Both need a hitch or an extrapolated frame to fire, so neither is the reported bug,
+and both want their own falsifier.
+
+**DEPLOYED 2026-09-20** with `c3cf81c` to all 12 lobbies, re-shipped with
+`8c09730`; fleet record under Patch 415. csprogs-side, so it reached players only
+once `seed_csprogs.py` had run.
+
+## Patch 411 — an upward pad takes the ground flag before the jump test can read it  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc`, `sv_player.qc`, `sv_timer.qc`. Fixture `cfg/test/p411push.cfg`, which records a FAILED harness.)*
+
+**Problem.** Patch 409 gates the accusation on `!run_pushed || run_jumpcmd`, and
+`run_jumpcmd` is latched in PlayerPreThink as `run_wasground && button2`.
+`trigger_push_touch` strips `FL_ONGROUND` on an upward push -- both arms, the
+continuous one and `SF_PUSH_ONCE` -- and the touch loop runs AFTER the move, so the
+next command's `run_wasground` stamp reads FALSE for a body the mover re-grounds
+inside pmove anyway (`PMSrc_Tick` -> `CategorizePosition`, a 2 u ground band
+against the 1 u lift). `run_jumpcmd` never latches, the gate reads
+`!TRUE || FALSE`, and the hop rule is switched off for the whole ride: draft 1's
+hole by another route, in code that shipped that morning.
+
+**Change.** `.run_pushlift` is set in each strip and spent one command later beside
+the stamp it repairs, including on the `run_pmhold` path, whose two early returns
+sit above both clears. Also `SV_StageTakeoff`, which Patch 407 missed: it stored
+bare `.velocity` as `run_st_tkspd` while `SV_StageLaunch` -- fixed by 407 one
+function below -- reads its launch speed straight back out of it on the airborne
+branch. That moves `stagepost <launch>`, so: no grammar or REC change (still three
+fields, reccheck never recomputes it), byte-identical on maps with no push, and
+P407's corpus scan does NOT transfer, because it sampled the box exit and not the
+takeoff.
+
+**Verified -- AND THE FIXTURE RECORDS A FAILURE, DELIBERATELY.**
+`cfg/test/p411push.cfg`'s arms printed the predicted flip and are worthless: the
+pad never armed (zero basevel lines, `run_pushed` FALSE throughout), because
+surf_polygon's brush does not fill model `*198`'s 2048³ AABB -- the same lesson
+surf_666 taught p409hop. So `run_pushlift` is verified BY CONSTRUCTION ONLY. What
+the run does establish is the regression that matters: p409hop on this build is
+unchanged -- J1 pad armed at 3000 u/s and hopped 0, J2 hopped 1 -- so 411 does not
+disturb 409 on the map the player retested. Follow-up `452cef4` withdrew the
+reachability claim outright: a 45-point viewpos sweep finds surf_polygon's pad
+inert everywhere in its box, so the census figure "4 upward pads on 3 maps" is an
+AABB claim and no map is currently known where a human could test this. It also
+records the detector trap that cost two attempts -- `basevel: paid` prints on
+CASH-OUT only, and `setpos`-ing out of a volume clears the carrier rather than
+cashing it, so both earlier harnesses printed nothing on a pad that demonstrably
+works. Read the player's position back instead.
+
+**NOT DONE**, deliberately, and written up where the code is: a booster is still
+credited as a stage start. A clear reading `run_pushed && !run_jumpcmd` was
+implemented and withdrawn on review, for two reasons worth keeping. It was not
+takeoff-scoped -- `SV_TimerJumpWatch` runs every packet while `run_st_tkok` lives
+from takeoff to landing, `run_pushed` is set by the cash-out one command AFTER you
+leave a volume, and `run_jumpcmd` cannot latch airborne, so jumping honestly out of
+a stage box that holds a pad silently deleted the split with no way to restore it.
+And it does not survive the sign flip: for 409 `run_jumpcmd` TRUE means "press on
+with the accusation", but reused for CREDIT it means "grant it", so holding +jump
+on a pad buys the mover's rise. What it needs is a takeoff-scoped refusal that
+never consults the jump button, and the cost has to be measured first -- the 409
+census counted pushes overlapping START zones, not STAGE boundaries.
+
+**DEPLOYED 2026-09-20** with `c3cf81c` to all 12 lobbies, re-shipped with
+`8c09730`; fleet record under Patch 415.
+
+## Patch 412 — a setspeed pad forces velocity_z, and the hop rule called it a jump  *(APPLIED -- mod-side only, no engine change: FTESurf `src/server/sv_entities.qc`, `sv_timer.qc` (comments), `tools/census/`. Fixture `cfg/test/p412speed.cfg`.)*
+
+**Problem.** `trigger_setspeed_touch` writes `other.velocity_z` directly and was
+not a `run_pushed` writer, so Patch 409's gate passed on a rise nobody commanded.
+`SSV_SET` forces the value whatever you arrived with. AND IT NEEDS NO GROUND
+CONTACT, which is what makes it ordinary rather than exotic: dwell is 0 when
+`run_t_groundsec` is 0, and 0 < want (0.25). So an AIRBORNE player who crosses the
+pad is accused -- jump legitimately inside the start box, fly through the curtain,
+get told "hopped start". No bhop, no timing, no ground phase at all.
+
+**Change.** The pad marks itself when its own write both crosses
+`PM_NONJUMP_VEL` and RAISED the value. THE PREDICATE IS A CONJUNCTION and each
+half alone was a draft that failed. `vel_z > other.velocity_z` alone is TRUE for
+any DESCENDING player, and 25 of the start-overlapping pads SET a small or
+negative vertical (`verticalspeed -6` is the common authoring), so it switched the
+hop rule off on almost every approach -- both reviewers caught that.
+`vel_z > PM_NONJUMP_VEL` alone marks a player whose OWN jump put them over 140:
+`vel_z` is untouched under `SS_IGNORE` and unchanged under `SS_INCREASE` when they
+arrive higher than the pad's value, so a real bhop across a horizontal-only pad in
+a start box would have bought its own acquittal.
+
+**Census** (`tools/census/`, committed with this patch so the numbers stay
+checkable; its README grades AABB claims). 376 setspeed pads, 217 write a positive
+vertical, 183 over 140. Of those 183: 38 touch a start zone, 8 of them only on a
+zero-width plane, 30 have real overlap volume, and **16 across 9 maps lie ENTIRELY
+INSIDE a start zone** -- surf_cement, surf_fruits, surf_illumination,
+surf_minigolf, surf_forgotten, surf_monolith, surf_leesriize, surf_christmas,
+surf_tripportals. That last figure is the one to quote: containment is the only
+claim an AABB can make safely. P411's "4 upward pads" was a gap-zero figure like
+the 38, and two of its three maps proved unreachable. Reachability here is proven
+from real data rather than geometry: `p369/surf_deoa.rec` holds 9 `speed` warp rows
+at `vel_z` 245.8, with the recorded origins one hull-radius outside the pad's box
+in x and squarely inside in y and z.
+
+**Verified.** `cfg/test/p412speed.cfg` on surf_cement, patched against a control
+built from HEAD (qwprogs 1478930 vs 1478882). K1b (`jumps 3`) reads hopped 1 on the
+control and hopped 0 patched; both builds print `stage fill: tkspd 2060`, the pad's
+own authored horizontalspeed, so the pad fired identically and the one line in
+`trigger_setspeed_touch` is the only difference. K1 discriminates nothing and the
+reason is the harness's, not the build's -- it `setpos`es in from a grounded spot,
+so dwell was already ~0.9 s. THE PRE-REGISTERED DETECTOR WAS THE WRONG ONE and that
+is recorded: `cmd viewpos` read the same position before and after, because
+`setpos` into that brush leaves the body embedded. Two better witnesses in the same
+log carry it -- the `trigger_setspeed: StrictMode is not implemented` dprint from
+inside the touch, and `tkspd 2060` against `tkspd 0` at the baseline. Regression:
+p409hop unchanged, so 412 disturbs neither 409 nor 411.
+
+**NOT DONE, and it is the bigger half** -- written up in the source beside the fix.
+A pad writing only HORIZONTAL speed still has it clipped into `velocity_z` off a
+standable slope ONE PACKET LATER, after `run_pushed` is cleared. 25 such pads over
+300 u/s sit inside start zones on 13 maps, nine of them surf_bossfight's at 5000
+u/s (`tools/census/ssd1.py`). A flag set in the toucher cannot reach it: the
+carrier path survives only because it re-arms every command, and a site that writes
+once has nothing to re-arm. Also raised in review and not yet measured: 409's
+`run_jumpcmd` override is weaker than its own comment implies, because
+`run_wasground` is a PRE-MOVE sample and a bhop's ground phase is mid-move, so only
+the first hop of an autohop chain latches.
+
+**DEPLOYED 2026-09-20** with `c3cf81c` to all 12 lobbies -- `build.ps1 -Jobs 8 -Pi`,
+0 players on all 12, swapped keeping `.prev`, all 12 restarted, verified 1478930
+bytes and 12 active. `seed_csprogs.py` produced `cb29261c.dat`, the same name as
+Patch 411's, because csprogs.dat was byte-identical (412 is server-only).
+Re-shipped with `8c09730`; fleet record under Patch 415.
+
 ## Patch 413 — the Air/Bhop/Jump percentage measured its two halves from different moments  *(APPLIED -- mod-side only, no engine change: FTESurf `src/client/cl_board.qc`, `src/client/cl_hudedit.qc`, `ftesurf/cfg/default.cfg`. Fixture `cfg/test/p413air.cfg`.)*
 
 **Problem.** `seq_pct` is `100 * de / emax`. `emax` was the strafe ceiling alone;
