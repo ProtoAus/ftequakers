@@ -33296,3 +33296,25 @@ Pi.
 can be made to fail gives a known start regardless of where the numbers come
 from. And `guid` — client userinfo — is still an unsanitised field in the nonce's
 hash preimage, harmless only because 128 bits of OS random sit beside it.
+
+## Patch 422 — first key wins: the admin flags a second key, a shared key, and a player who stops signing  *(APPLIED -- mod-side only, no engine change: FTESurf `surfd/admin.py`, `surfd/surfd.py` (schema 8), `surfd/sweep.py`, `surfd/templates/admin_run.html`, `admin_runs.html`, `_admin_style.html`; suites `test_admin.py`, `test_board.py`, `test_sweep.py`.)*
+
+**Problem.** Patch 417 puts a key on every run and surfd schema 7 recorded the (key, player) pairs, but nothing said what a second key means. Lex, 2026-09-21, until real accounts or Steam IDs: a player's first key is theirs, and differences are flagged in the admin backend and nowhere else.
+
+**Change.** Per board run, admin only: `new` (not the player's first key), `shared` (the key first signed for another player), `unsigned` (no verified signature from a player who has signed before). First = earliest `.rcpt` mtime (`receipts.signed_at`; a resumed run keeps session one's runid), then runid; a receipt counts when its signature verified (`receipts.sig`), FAULT or not. `unsigned` is judged only below `sweepmeta.receipts_through` less 300 s -- the sweeper's watermark, which stops short of the oldest never-read receipt and does not move on a pass that raised -- so "not read yet" never reads as "not signed". Not judged, and labelled so: no runid, segmented runs (a save-load can clear the nonce), pre-8 receipts until re-read. Owner decisions on (key, player): accept (permanent for a key; for `('', player)` only up to the watermark's bound at the click), reject (flagged, out of "first", still counts as having signed). The two "first" lookups are ROW_NUMBER derived tables: 0.13 s for 6000 signed runs, where per-row subqueries took 12.7 s at 10k. Schema 8 is `receipts_v8()`, idempotent and run by every migrate(). VER_SQL and every public surface are untouched.
+
+**Review.** Six rounds, two lenses each (predicate/migration; attacker/exposure; round 6 one reviewer on a two-line fix), 28 defects, every fix with a test and a mutation that fails it. The ones that mattered: quadratic list (R1); "not read yet" read as "not signed", which would have flagged every signer during the 2026-09-21 receipt-step outage (R2); accept waiving unsigned runs forever and for anyone on a public guid (R2, R3); a flood freezing the watermark (R3); an honest segmented run with no possible receipt read "unsigned" (R4).
+
+**Also.** `46f69c9`: the admin run page had not run its script since `f19d477` (a redeclared `const dl`); test_admin now `node --check`s the admin pages and prints a skip where node is absent.
+
+**Not done.** The sweeper does not check the signed server (`rcptcheck.join_server`), so a relayed nonce can make a new player's key read `shared`; enforcing it needs the addresses real clients sign (lobbies advertise `play.proto.bar`), measured first. Stage rows from abandoned runs are outside the flags.
+
+**Verified.** All 9 surfd suites on Windows and on the Pi stage (test_admin's two rcon checks fail on Windows only). **DEPLOYED 2026-09-21 11:23 UTC** (FTESurf `d74af07`): 7 files swapped under `flock /tmp/surfd-sweep.lock`, DB backup `data/surfd.db.pre422-20260921-112220`, rollback `*.pre422-20260921-112220`, HUP -> `schema migrated 7 -> 8`. The 11:25 sweep re-read the fleet's one receipt (sig 1, signed_at = its mtime 01:16:01, stale 0) and set `receipts_through` 11:15:01. Migration on a copy of the live DB first: 0.29 s; the Key flags list 6 ms.
+
+## Patch 423 — the admin warns when the data drive fills  *(APPLIED -- mod-side only: FTESurf `surfd/surfd.py`, `surfd/admin.py`, `surfd/sweep.py`, `surfd/templates/admin.html`.)*
+
+**Problem.** `run_evidence_days 0` (2026-09-21, Lex: keep everything) leaves nothing bounding `data/`, and Lex asked to be warned.
+
+**Change.** `surfd.disk_status()` warns below max(20 GB, 10% of the drive holding RUNS_DIR); only then does it size `data/{runs,evidence,resume,parts}`, cached 10 min. The fleet page shows a status line or a red card; `sweep.log` gets a `DISK LOW` line; an unreadable drive says so. The Pi at deploy: 77 GB free of 458 GB, floor 45.8 GB, quiet.
+
+**Verified.** test_admin drives both floors and the unreadable case; test_sweep the line order and the failure line. Deployed with 422.
