@@ -33205,3 +33205,94 @@ deliberately not written here, because the only data that exists for it is a
 scripted harness run whose yaw never moves, and a detector this tree cannot
 calibrate is one it does not ship. And `surfd/sweep.py` still reads neither
 receipts nor uploaded evidence.
+
+## Patch 419 — the server gamecode gets the entropy the master-server code already had  *(APPLIED -- engine: `server/pr_cmds.c`; FTESurf `src/server/sv_timer.qc`. Fixtures `cfg/test/p419a.cfg` + `p419b.cfg`.)*
+
+**Problem.** Two things in the mod were drawn from QuakeC `random()`, which is
+`(rand()&0x7fff)/32768 + 0.5/32768` off a `rand()` seeded once from `time(0)` at
+`COM_Init` (`common.c:6861` — and for a dedicated server that is the only live
+seeding in the tree): the per-run nonce of Patch 416, and the randomized start
+offset `run_startjitter`. The second one **publishes its draws**. `startjit
+<units> <dx> <dy> <dz>` goes into every recording's header at four decimals, and
+at `run_startjitter 2` a draw's step is 4/32768 = 1.22e-4 — larger than the print
+resolution, so each printed value names its own `random()` output to within one
+count. A player does not even need the file: the offset is applied to their own
+body.
+
+**And the attack did not reproduce, which is recorded rather than buried.**
+`cfg/test/p419a.cfg` pre-registered "two servers booted in the same second draw
+the same offsets". They did not — 10:06:04 on both, `0.9614 1.5100` against
+`-0.4312 -0.5104`. A reviewer then checked the *premise* rather than the
+conclusion and found it sound (the other three `srand` sites are a debug ifdef, a
+path that runs only when `Sys_RandomBytes` fails, and the http interface), which
+leaves one explanation: the two processes were at different stream positions,
+because the arm ran its clients sequentially and the mod draws `random()` on
+connections, spawns and map timers that the script does not control. **Draw
+position was the arm's uncontrolled variable, so the verdict is NOT DEMONSTRATED,
+not "safe"** — and that argues for the patch. The stronger attack (invert a
+published pair, brute-force the 17 unknown bits of an msvcrt LCG state, roll
+forward) gave 10 candidates — which is what the ±1 tolerance on two observations
+produces, so the count confirms nothing — and 3,000,000 draws of roll-forward did
+not place the next run's pair in the stream. A negative from an unconfirmed model
+is weak evidence and is filed as that.
+
+**Change.** Two builtins expose `Sys_RandomBytes` — the source `sv_master.c`
+already uses for challenges, present on both platforms — to the server VM:
+`string(float bytes) fs_randomhex` and `float() fs_randomf`. Both are registered
+with builtin number 0, so the gamecode reaches them by name (`#0:fs_randomhex`)
+and no FTE number is claimed. `fs_randomf` takes 24 bits over 2^24: exactly
+representable in a QC float, uniform on [0,1), stateless. The gamecode prefers
+them through `SV_Rand01`/`SV_RandHex`, gated on `checkbuiltin`, and the nonce now
+carries `SV_RandHex(16)` — 128 bits of fresh OS entropy per run, which makes
+every other input to that hash irrelevant to predicting it.
+
+**What the reviews found.**
+
+- **The fallback warning was unreachable, on exactly the deploy it was for.**
+  `run_t_osrand` is a progs global, so it loads as 0 — the same value the
+  fallback branch set — and the `!= 0` test never fired. New progs on a pre-419
+  engine took `checkbuiltin` false, ran the whole map on `random()`, and said
+  **nothing**, while the healthy branch announced itself. Two reviewers found it
+  independently. There is a separate say-once latch now, initialised at map init,
+  and the bad news is a `print` while the good news stays a `dprint`.
+- **And it would then have flapped.** `Sys_RandomBytes` opens `/dev/urandom` per
+  call, so a refusal is intermittent rather than sticky, and one flag latching
+  both messages would print on every transition — up to eight draws per start
+  attempt, per player, unrated.
+- **I stole a `static`.** The insertion point for the two new functions was the
+  line `static BuiltinList_t BuiltinList[] = {`; the match took everything after
+  `static`, so the storage class ended up on my first function and `BuiltinList`
+  gained external linkage in every build of `pr_cmds.c`. The duplicate-`static`
+  compile error that followed was "fixed" by deleting the wrong one. It links
+  today only because the CSQC and menu tables declare their own `static`.
+- **`SV_RandHex` disagreed with itself outside 1..64** (the builtin clamps, the
+  fallback loop did not), and the fallback's `rint(x*255)` gave 0 and 255 half
+  the weight of every other byte. Both latent; both closed.
+- **The patch does not make the rule whole, and the comment now says so.** The
+  accepted offset is uniform only *conditioned* on the placement tests, with a
+  point mass at exactly (0,0) when every try fails — which the header states as
+  `startjit <u> 0 0 0`. The geometry is the player's choice: stand where the loop
+  cannot succeed and the start is known on every run. Entropy cannot fix a
+  conditioned distribution.
+
+**Verified.** `p419a.cfg`/`p419b.cfg` (J1-J5). Post-fix: `timer: randomness from
+the OS (Patch 419)` once and zero degraded prints; four consecutive offsets
+`(-1.7104, -0.6400) (1.3246, 1.3000) (1.0783, 0.4673) (1.8389, -1.0794)`, all
+inside ±2; `reccheck` ok on the `.rec` and its `.view`, 0 faults; and
+`VERIFY … PASS ticks 829 rows 815` on re-simulation — the offset is recorded and
+replayed exactly as before, only its source moved. **The degraded branch is
+measured too**, by rebuilding with the two builtins unregistered — which is the
+rollout case, new progs on an older engine — and running the same arm with
+`developer` unset: the warning appears once, at normal verbosity, and the run
+still records. `SV_RecOpen` also dprints `timer: startjit <u> <dx> <dy>` now, so
+the fixture leaves its own evidence in the log instead of in a `.rec` somebody
+has to keep.
+
+**Not deployed.** The engine half is a server-VM builtin, so it needs an engine
+deploy; the QC half is inert without it and says so out loud. Neither is on the
+Pi.
+
+**Still open.** The candidate rule, not the entropy: a start box whose four tries
+can be made to fail gives a known start regardless of where the numbers come
+from. And `guid` — client userinfo — is still an unsanitised field in the nonce's
+hash preimage, harmless only because 128 bits of OS random sit beside it.

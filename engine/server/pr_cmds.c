@@ -11246,6 +11246,65 @@ static void QCBUILTIN PF_promptchoice_qex(pubprogfuncs_t *prinst, struct globalv
 #else
 	#define D(p,d) p,d
 #endif
+/*
+  FTESurf Patch 419: REAL ENTROPY FOR THE SERVER GAMECODE.
+
+  QuakeC `random()` is `(rand()&0x7fff)/32768` (pr_bgcmd.c) and `rand()` is
+  seeded once per process.  Two things in this mod need better than that: the
+  per-run nonce (Patch 416) and the randomized start offset (`run_startjitter`),
+  whose whole purpose is that a run cannot be planned against a known start --
+  and whose value is PUBLISHED to four decimals in every recording's header, so
+  each printed offset names its own draw to within one count.
+
+  `Sys_RandomBytes` is the same source the master-server challenge code uses
+  (sv_master.c), present on both platforms (sv_sys_unix.c, sv_sys_win.c).  It
+  can fail, and both builtins say so rather than quietly falling back -- the
+  gamecode decides what to do about it, because only the gamecode knows whether
+  the caller needed entropy or just a number.
+*/
+static void QCBUILTIN PF_fs_randomhex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	static const char hexd[] = "0123456789abcdef";
+	qbyte buf[64];
+	char out[sizeof(buf)*2+1];
+	int n = G_FLOAT(OFS_PARM0);
+	int i;
+
+	if (n < 1)
+		n = 1;
+	if (n > (int)sizeof(buf))
+		n = sizeof(buf);
+	if (!Sys_RandomBytes(buf, n))
+	{
+		RETURN_TSTRING("");
+		return;
+	}
+	for (i = 0; i < n; i++)
+	{
+		out[i*2+0] = hexd[(buf[i] >> 4) & 15];
+		out[i*2+1] = hexd[buf[i] & 15];
+	}
+	out[n*2] = 0;
+	RETURN_TSTRING(out);
+}
+
+static void QCBUILTIN PF_fs_randomf (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	qbyte buf[4];
+	unsigned int v;
+
+	if (!Sys_RandomBytes(buf, sizeof(buf)))
+	{
+		G_FLOAT(OFS_RETURN) = -1;
+		return;
+	}
+	v = (buf[0]<<24) | (buf[1]<<16) | (buf[2]<<8) | buf[3];
+	/*24 bits into the float's 24-bit mantissa: every value is exact, and the
+	  result is uniform on [0,1) with a step of 1/16777216 -- 512x finer than
+	  random()'s 1/32768, which is the step that made an offset name its draw.*/
+	G_FLOAT(OFS_RETURN) = (float)(v >> 8) / 16777216.0f;
+}
+
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},
 
@@ -12413,6 +12472,11 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"fappendrange",	PF_fappendrange,	0,		0,		0,		0,	D("int(filestream fh, string src, int ofs, int len)", "FTESurf Patch 375: appends len bytes of src from ofs to an open FILE_WRITESTREAM. Returns the bytes copied or -1.")},
 	{"frename",			PF_frename,			0,		0,		0,		651,	D("float(string src, string dst)",	"Renames the file, returning 0 on success. Both paths are relative to the data/ subdir.")},
 	{"fremove",			PF_fremove,			0,		0,		0,		652,	D("float(string fname)",	"Deletes the named file - path is relative to data/ subdir, like fopen's FILE_WRITE. Returns 0 on success.")},
+//FTESurf Patch 419: the server VM gets the OS entropy the master-server code
+//already uses.  Numbered 0, so the gamecode reaches them by NAME (`#0:fs_...`)
+//and no FTE builtin number is claimed.
+	{"fs_randomhex",	PF_fs_randomhex,	0,		0,		0,		0,		D("string(float bytes)",	"FTESurf: `bytes` of OS entropy as lowercase hex, or \"\" if the OS refused. 1..64.")},
+	{"fs_randomf",		PF_fs_randomf,		0,		0,		0,		0,		D("float()",				"FTESurf: a uniform float in [0,1) from OS entropy, or -1 if the OS refused.")},
 	{"fexists",			PF_fexists,			0,		0,		0,		653,	D("float(string fname)",	"Returns true if it exists inside the default writable path. Use whichpack for greater portability.")},
 	{"rmtree",			PF_rmtree,			0,		0,		0,		654,	D("float(string path)",		"Dangerous, but sandboxed to data/")},
 	{"walkmovedist",	PF_walkmovedist,	0,		0,		0,		655,	D("DEP float(float yaw, float dist, optional float settraceglobals)", "Attempt to walk the entity at a given angle for a given distance.\nif settraceglobals is set, the trace_* globals will be set, showing the results of the movement.\nThis function will trigger touch events."), true},
