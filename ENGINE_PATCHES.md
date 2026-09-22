@@ -33372,3 +33372,11 @@ hash preimage, harmless only because 128 bits of OS random sit beside it.
 **Verified.** p428cl on a Windows server and a Pi test server: 999 taken and the 1000th refused; #1/#30/#999 load to three distinct points before and after a forced rescan, rows 500-529 matching their creation slot and clock; the sweep answers mid-way and refuses a save. Rescan of 999 (profile_ssqc): 237 ms Windows, 157 ms Pi. p428slota/b: control reproduces, fix clean. Regression: p426ccl (L1, L2 signed; L2 flags 131072) and p426cl (both abandons and the finish signed).
 
 **Known.** A delete costs ~3.5 ms on the Pi (FS_Remove re-walks every search path for the name hash), so a 999 delete-all takes ~5 s and ~7 ms a frame. A player joining with hundreds of saves on the current map costs that scan once (157 ms at 999 on the Pi). The first cuts of the delete-all (one call, then a batch a packet) each stalled the server ~3.5 s; see p428cl's header.
+
+## Patch 429 — the player being spectated sees who is watching  *(APPLIED -- mod-side only: FTESurf `src/server/sv_pose.qc` (Pose_SpecBy), `sv_main.qc`, `src/client/cl_spectate.qc` (Spec_DrawWatchers), `cl_main.qc`, `cl_hudedit.qc`, `ftesurf/cfg/default.cfg`, `defaultuser.cfg`. Arm `cfg/test/p429t.cfg` + `p429w.cfg` against `p429sv.cfg`.)*
+
+**Problem.** A watched player had no way to know it: STAT_FS_SPEC and the SPEC pose bits go only to the watcher, and the server's per-target count (`pb_specn`) went nowhere.
+
+**Change.** Server, 4 Hz from StartFrame: each player's watchers (`pb_watch`, so not a countdown and not a developer `pose_watch`) as entnums on that player's `*specby` star key, compared against the live key so a recycled slot cannot keep a stale one. Client: a small right-anchored "Spec:" box listing the names under the map info (`hud_specby`, `_x`, `_y`; a hidden hud_edit row for drag and reset, and a "Who's watching" toggle in the Spectate pane). Not drawn while you spectate or watch a replay. HE_MAX 20 -> 24 (the new row filled the last spare).
+
+**Verified.** p429t/p429w on a Windows lobby-mode server: no key and no box before, `*specby 2` and the box while watched, key kept and box hidden at `hud_specby 0`, both gone after `spectate off`. Two watchers at once not run.
