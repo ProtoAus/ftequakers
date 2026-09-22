@@ -4441,6 +4441,19 @@ void SV_BeginDownload_f(void)
 	extern	cvar_t	allow_download_anymap, allow_download_pakcontents;
 	flocation_t loc;
 	int result;
+	char joined[MAX_OSPATH];
+
+	//FTESurf P427: a QW download takes one argument, so more than one is a pre-427 client's
+	//unquoted name cut at its spaces. Rejoin it: a reply naming the fragment never matches
+	//the client's pending download, and its queue waits on it for good.
+	if (host_client->protocol == SCP_QUAKEWORLD && Cmd_Argc() > 2)
+	{
+		size_t n;
+		Q_strncpyz(joined, Cmd_Args(), sizeof(joined));
+		for (n = strlen(joined); n > 0 && (joined[n-1] == ' ' || joined[n-1] == '\t'); )
+			joined[--n] = 0;
+		name = joined;
+	}
 
 	/*if (ISNQCLIENT(host_client) && host_client->protocol != SCP_DARKPLACES7)
 	{

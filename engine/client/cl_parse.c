@@ -790,7 +790,9 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 		CL_SendClientCommand(true, "download %s 0 udp-zlib", filename);
 	else
 #endif
-		CL_SendClientCommand(true, "download %s", filename);
+		//FTESurf P427: quoted, as dlsize is -- unquoted, a name with a space is cut at it, the
+		//server's error names the fragment, CL_DownloadFailed never matches, and the join stalls.
+		CL_SendClientCommand(true, "download \"%s\"", filename);
 
 	dl->method = DL_QWPENDING;
 	dl->percent = 0;
