@@ -33625,3 +33625,97 @@ next occurrence names its own cause.
 
 **Not deployed.** `build.ps1 -Pi` restarts all 12 lobbies, and this moves collision geometry on
 97 maps, so it is the operator's call. 0 new warnings, both engine targets.
+
+## Patch 460 — a plugin's cvar flags were masked down to CVAR_ARCHIVE, so prop collision could be switched off client-side  *(APPLIED, engine + plugin + QC — `build.ps1 -Engine`)*
+
+"Maps must have prop collision for this surf game to work. Please ensure its defaulted to
+on, and can't be turned off client side" — unless `sv_cheats` is on, "then it's fine".
+
+That is `CVAR_CHEAT` exactly (`cvar.h:126`, "latch to the default, unless cheats are
+enabled"), enforced at `cvar.c:1159-1166` by force-setting the cvar to
+`var->enginevalue` on connect. Marking the three collision cvars with it was the whole
+intended change. It did nothing, and finding out why is the patch.
+
+### Root cause — `flags&1`
+
+```c
+return Cvar_Get2(name, defaultvalue, flags&1, description, groupname);
+```
+
+`Plug_Cvar_GetNVFDG` (`common/plugin.c:479`) masked a plugin's cvar flags to bit 0, and
+`CVAR_ARCHIVE` is `(1<<0)`. **Every other flag any plugin has ever declared was silently
+discarded.** In the hl2 plugin alone: `CVAR_SHADERSYSTEM` 25 times, `CVAR_MAPLATCH` 14,
+`CVAR_NOSAVE` 6, `CVAR_CHEAT` 4, `CVAR_RENDERERLATCH` once.
+
+Not a latent defect — a load-bearing one that has been reasoned about in comments.
+`mod_hl2.c:1480` argues at length about `hl2_propcollision` being MAPLATCH ("the
+registration in mod_vbsp.c has always been MAPLATCH"), and the registration does say so,
+and this line dropped it. `cl_gfx.qc`'s whole `*` "needs a reload" convention is the mod
+compensating on its own side for latches that were never applied, without knowing that was
+why.
+
+### Fix — the restrictive flags only, and the rest recorded rather than smuggled
+
+`#define PLUG_CVAR_FLAGS (CVAR_ARCHIVE|CVAR_CHEAT|CVAR_SEMICHEAT)`.
+
+`CVAR_CHEAT` and `CVAR_SEMICHEAT` can only ever **refuse** a change, so honouring them
+cannot alter what any existing cvar reads or when. Honouring `MAPLATCH` and
+`SHADERSYSTEM` in the same patch would change the read-back behaviour of 39 cvars: a
+MAPLATCH set stops updating the value until a reload, so every menu row over one would
+redraw the number the user did not choose — precisely the confusion `Gfx_Inert` exists to
+prevent. That half is in BACKLOG.md. Still excluded on purpose: `CVAR_NOTFROMSERVER` and
+`CVAR_NOUNSAFEEXPAND` are security flags, `CVAR_SERVERINFO` publishes to every client, and
+`SERVEROVERRIDE`/`CONFIGDEFAULT`/`USERCREATED` are the engine's bookkeeping.
+
+**Plugin (`mod_vbsp.c`):** `hl2_propcollision`, `hl2_propcollision_nophy` and
+`hl2_dispcollision` move from `CVAR_MAPLATCH` to `CVAR_CHEAT` (only one latch flag is
+allowed, `CVAR_LATCHMASK`), and their help text says so. Their registration defaults are
+already **1, 0, 1** — collision on and `.phy`-or-nothing — which is the only reason the
+flag is usable here: **a `set` in default.cfg does not become a cvar's default**
+(`CVAR_CONFIGDEFAULT` is defined and nothing ever assigns it), so a cheat cvar snaps to
+what the C registered, not to what the config says. That also rules the flag out for
+`sv_prop_collision`, whose compiled default is 2 while FTESurf wants 1 — left in BACKLOG.
+
+**Mod (`cl_gfx.qc`):** the two collision rows stay at 19 and 20 and report
+`needs sv_cheats` through `Gfx_Inert`. They are NOT deleted: the block above row 27 states
+that these rows are addressed BY NUMBER (`gfx_menu cycle N`, and `ui_gfx_page` remembers a
+position across builds), so removing two would move every row below them under someone's
+cursor. Saying so on the row is also the honest answer — otherwise it accepts a keypress,
+redraws the value the engine snapped back, and reads as broken. The inert test uses
+serverinfo `*cheats`, the engine's own published signal (the same key `cl_main.c:3246`
+reads), plus the local `sv_cheats` because a listen server allows cheats from its own cvar.
+
+`default.cfg` and `defaultuser.cfg` pin all three, as stated intent rather than as the
+enforcement.
+
+### Verified — the pre-fix engine is the control, and the readback is a trap
+
+`cfg/test/p460lock.cfg` + `tools/p460lock.py`, six grades, all green.
+
+**The discriminating power is measured, not argued.** The first run of this arm was against
+the `flags&1` engine and every set LANDED — no latch message, no `Effective value` line,
+`hl2_propcollision` reading 0, 2 and 3 as asked — with L5 and L6 green. L1-L4 red before,
+all six green after. That failure is what found the mask.
+
+| | |
+|---|---|
+| L1/L2 | `hl2_propcollision` 0, 2, 3 all refused, effective **1** |
+| L3 | `hl2_dispcollision` 0 refused, effective **1** |
+| L4 | `hl2_propcollision_nophy` 1 refused, effective **0** |
+| L5 | with `sv_cheats 1` the same set **lands** — a latch, not a constant |
+| L6 | **CONTROL** `hl2_propdist`, same family and menu page, not a cheat cvar, still sets |
+
+L6 is not decoration: without it an engine that froze every plugin cvar passes L1-L4.
+
+**`maxclients 4` is load-bearing in the cfg.** `cl_main.c:3253` allows cheats
+unconditionally on a listen server with one slot, so at the default slot count the arm
+measures nothing. That is also the honest caveat: **the lock does not engage for someone
+hosting solo**, and does not need to. A lobby runs 32.
+
+**A latched cheat cvar still prints the value you asked for.** `"hl2_propcollision" is "0"`
+followed by `Effective value is "1"` — the first line is the request, the second is the
+answer. The grader keys on the second, because keying on the first would pass a build where
+collision can be switched off. Recorded because it is the same trap as every other entry in
+this series: the number that looks like the result is not the result.
+
+**Not deployed.**

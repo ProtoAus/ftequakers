@@ -476,11 +476,39 @@ static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfacept
 	return false;
 }
 
+/*
+  FTESurf Patch 460: `flags&1` threw away every flag a plugin declared except
+  CVAR_ARCHIVE, which is (1<<0).
+
+  Found by an arm that expected CVAR_CHEAT to refuse a set and watched it succeed.
+  It is not one flag: the hl2 plugin declares CVAR_SHADERSYSTEM 25 times,
+  CVAR_MAPLATCH 14, CVAR_NOSAVE 6, CVAR_CHEAT 4 and CVAR_RENDERERLATCH once, and
+  none of them has ever been in force.  mod_hl2.c:1480 reasons at length about
+  hl2_propcollision being MAPLATCH; the registration says so and this line dropped
+  it.  cl_gfx.qc's `*` convention is the mod compensating on its own side without
+  knowing why it had to.
+
+  WIDENED TO THE RESTRICTIVE FLAGS ONLY, deliberately, and the rest is left in
+  BACKLOG.  CVAR_CHEAT and CVAR_SEMICHEAT can only ever REFUSE a change, so
+  honouring them cannot alter what any existing cvar reads or when; they were also
+  the ones asked for -- a surf map needs its prop collision and a client must not
+  be able to switch it off.  Honouring MAPLATCH and SHADERSYSTEM at the same time
+  would change the read-back behaviour of 39 cvars in a patch about collision:
+  a MAPLATCH set stops updating the value until a reload, so every menu row over
+  one would redraw the number the user did not choose -- the exact confusion
+  cl_gfx.qc's Gfx_Inert exists to prevent.  One thing at a time.
+
+  Still excluded on purpose: CVAR_NOTFROMSERVER and CVAR_NOUNSAFEEXPAND are
+  security flags, CVAR_SERVERINFO publishes to every client, and
+  CVAR_SERVEROVERRIDE / CVAR_CONFIGDEFAULT / CVAR_USERCREATED are the engine's
+  bookkeeping, not a plugin's to assert.
+*/
+#define PLUG_CVAR_FLAGS (CVAR_ARCHIVE|CVAR_CHEAT|CVAR_SEMICHEAT)
 static cvar_t *QDECL Plug_Cvar_GetNVFDG(const char *name, const char *defaultvalue, unsigned int flags, const char *description, const char *groupname)
 {
 	if (!defaultvalue)
 		return Cvar_FindVar(name);
-	return Cvar_Get2(name, defaultvalue, flags&1, description, groupname);
+	return Cvar_Get2(name, defaultvalue, flags&PLUG_CVAR_FLAGS, description, groupname);
 }
 
 static void QDECL Plug_Cmd_TokenizeString(const char *text)
