@@ -4583,6 +4583,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	recsim_ride_t*rid = NULL;
 	float         sjrule = -1, sjoff[3] = {0,0,0};
 	int           filever = 0;
+	int           filepropr = 0;				/* header `proprule`: which prop geometry built this run's collision world */
 	float         hdrtick = 0;					/* header `tickrate`: the cash-out's TICK_INTERVAL */
 	int           inend_mt = -1;				/* Patch 344: v8 closing horizon */
 	float         inend_carry = 0;
@@ -4682,6 +4683,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						sscanf(ln+8, "%i %i", &instart_mt, &instart_run);
 					else if (!strncmp(ln, "FTESURF-REC ", 12))
 						filever = atoi(ln+12);
+					else if (!strncmp(ln, "proprule ", 9))
+						filepropr = atoi(ln+9);
 					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
 						pinfound = SV_PMPinParse(ln+6, hdrpin);
 					else if (!strncmp(ln, "zonesrc ", 8))	/* Patch 349 */
@@ -5310,6 +5313,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		unsigned int pecrc = 0;
 		qboolean pehave = false;
 		int    pe_ok = 0, pe_bad = 0, pe_first = -1;
+		/* FTESurf: rows that differ on a file recorded before the prop-scale rule
+		   (header `proprule`).  The THIRD VERDICT -- a digest built from different
+		   geometry cannot answer the question, and answering "differs" anyway is an
+		   accusation this check is not entitled to make.  Counted and printed, never
+		   folded into `why`. */
+		int    pe_nc = 0;
 		unsigned int pe_file = 0, pe_ours = 0;
 		int    port_ok = 0, port_bad = 0, port_first = -1;
 		int    x_ok = 0, x_bad = 0, x_shown = 0, x_first = -1;
@@ -5669,6 +5678,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					{
 						if (crc == pecrc)
 							pe_ok++;
+						else if (filepropr < 1)
+							pe_nc++;	/* recorded under older prop geometry -- see pe_nc */
 						else if (pe_bad++ == 0)
 							{ pe_first = i; pe_file = pecrc; pe_ours = crc; }
 					}
@@ -6020,6 +6031,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			           pe_ok, pe_bad);
 			if (pe_bad)
 				Con_Printf(" (first row %i: file %06x, replay %06x)", pe_first, pe_file, pe_ours);
+			/* Says WHICH rule, so "not comparable" cannot be read as "not checked". */
+			if (pe_nc)
+				Con_Printf(", ^3%i not comparable^7 (file is proprule %i, this build"
+				           " builds prop geometry to rule 1)", pe_nc, filepropr);
 			Con_Printf("%s\n", proxy ? "" : "  ^3(not built)^7");
 			Con_Printf("        portals: %i crossing move(s) agree, %i disagree",
 			           port_ok, port_bad);

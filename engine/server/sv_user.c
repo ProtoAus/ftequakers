@@ -7737,14 +7737,28 @@ static qboolean AddEntityToPmove(world_t *w, wedict_t *player, wedict_t *check)
 		pe->angles[0] *= r_meshpitch.value;
 		pe->angles[2] *= r_meshroll.value;
 
-		//The value the CLIENT DECODES, not the raw float: sv_ents.c:3909-3912 sends
-		//`!scale ? 16 : bound(1, scale*16, 255)` and cl_ents.c:7251 divides by 16.
+		//The value the CLIENT DECODES, not the raw float: sv_ents.c:3950-3953 sends
+		//`!scale ? 16 : bound(1, scale*16, 255)` and cl_ents.c:7791 divides by 16.
 		//Using the raw float here would desync any non-dyadic modelscale by up to
 		//1/16 -- and 52% of the props in this library carry a modelscale != 1.
+		//
+		//THE (int) IS THE WHOLE POINT AND IT WAS MISSING.  entity_state_t::scale is
+		//a qbyte (protocol.h:1434), so the wire value is trunc(scale*16); without
+		//the cast this computed the right EXPRESSION at the wrong PRECISION and the
+		//comment above described a parity the line did not deliver.  modelscale 1.4
+		//predicted as 1.3750 on the client and moved against 1.4000 here.  Measured
+		//at 1970 solid props across 97 maps, worst surf_spacemonkeys at 174
+		//(FTESurf tools/census/propsolid.py).
+		//
+		//FTESurf's SV_SpawnProp now floors .scale to 1/16 at the source, which makes
+		//this cast a no-op there and brings World_Move (world.c:1405, :1420, :1428,
+		//raw float) into line as well -- three readers no QC can reach from here.
+		//The cast stays because it is what makes the ENGINE self-consistent for a
+		//mod that does not quantise, and it is idempotent for one that does.
 		if (!check->xv->scale)
 			pe->scale = 1;
 		else
-			pe->scale = bound(1, check->xv->scale*16, 255) / 16.0;
+			pe->scale = (float)(int)bound(1, check->xv->scale*16, 255) / 16.0;
 
 		//Kept for the model-less case: PM_PlayerTrace falls back to a box, exactly
 		//as the client does when its own model_precache slot is not loaded yet.

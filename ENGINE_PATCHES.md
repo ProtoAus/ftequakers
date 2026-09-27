@@ -33532,3 +33532,96 @@ Patches 420-438 are all mod-side, so no engine binary content changed for this r
 **Verified.** 0 new warnings. Both builds, the control a `git worktree` at the commit before this one, driver exit 0 each way (qwprogs 725E18EF7AE4B60D control, 78FCAB85E475B805 fixed). J (the fixture, ARMED, `velocity 0 0 302`, inside the lowered slab of `cfg/test/p435.zones.json`): control reads `timer: running  practice 0  class: clean` at all three reads; fixed reads `running  practice 1  class: segmented` -- the run still starts, it starts as the stitched attempt the load made it. R, the regression control and the point of the arm: a REAL save taken standing in the start box, its velocity written by the engine rather than by a fixture, reads `velocity 0.0000 0.0000 0.0000` and still arms `practice 0  class: clean` on BOTH builds. That zero is what makes a three-component test safe for the case the gate exists for. Two predictions were falsified and are written up in the cfg: J reads `running` rather than `armed` (start on jump), and `arm zone` does not discriminate at all, because the gate's -1 lasts one tick and the next scan writes the box back before `cmd timer` can be asked. Regression set on this build, all exit 0: p435pre `--arm pre` and `--arm mode`, p441void `--arm rest/fast/norec/mid`, p434rew, p436pend, p439smoke.
 
 **Known.** Not deployed. This is the narrow half of BACKLOG.md's prespeed entry: the gate can no longer be told a rising body is at rest, but a load carrying speed still hands that speed back (as a segmented run), and the entry's own answer -- zero the inherited speed at the placement under a tolerant box test, or a load-scoped mark SV_TimerArm refuses to launder -- is still open. `sl_list`'s `standing` column still comes from the duck flag, so a row taken airborne reads `standing` with a speed beside it. On the 6 regions where Patch 415's `%.4f` rounding puts the placed body below the slab, neither the defect nor this fix engages.
+
+## Patch 458 — the client and the server collided against different-sized props  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+
+Reported as "some props let you walk into them like they have no collision but the client
+side is still trying to push you out". Patch 229 fixed one shape of that (the server had no
+prop in its own pmove list at all); this is a second, narrower one that survived it, and the
+disagreement is about SIZE rather than presence.
+
+### Root cause — one number, four readers, three precisions
+
+`.scale` is a plain QuakeC float and **nothing clamps it on write**. `PF_setmodel` does not,
+there is no write barrier in `pr_cmds.c`, and the SSQC documentation's claim that the field is
+"limited to 1/16th precision" (`sv_defs.qc:401`) describes the WIRE, not the field. So:
+
+| reader | expression | `modelscale 1.4` |
+|---|---|---|
+| wire → client pmove | `bound(1, scale*16, 255)` as a **qbyte** (`sv_ents.c:3953`, `protocol.h:1434`), `/16` on arrival (`cl_ents.c:7791`) | **1.3750** |
+| renderer | the same byte (`cl_ents.c:6122`) | **1.3750** |
+| server pmove | `bound(1, scale*16, 255)/16.0`, **no truncation** (`sv_user.c:7747`) | **1.4000** |
+| `World_Move` | the raw float (`world.c:1405`, `:1420`, `:1428`) | 1.4000 |
+
+`AddEntityToPmove`'s own comment says it deliberately uses "the value the CLIENT DECODES" — it
+took the right expression and omitted the integer truncation that *makes* it that value. Since
+the renderer uses the wire byte too, the client's prediction agreed with what was DRAWN and the
+authoritative collision stuck out past the model: a player is stopped a unit or two short of a
+surface they can see, and released when the server's reconcile lands.
+
+**Measured population** (`FTESurf tools/census/propsolid.py`, 1316 maps): 34,058 props carry a
+`modelscale`; 4,026 have one whose ×16 is not whole; **1,970 of those are solid** and the other
+2,056 cannot be felt. 97 maps. Worst: surf_spacemonkeys 174, surf_angelinaaa 131,
+surf_diet_mountain_dew 130, surf_sinner_ksf 112, surf_angelina 101. The commonest offenders are
+the ordinary decimals a mapper types — 1.4, 1.2, 1.8, 1.3, 0.8 — plus 790 props above
+`SV_SpawnProp`'s 15.9 clamp, whose ×16 is 254.4. Deltas 0.0125–0.05 in scale.
+
+### Fix — quantise at the source, and make the engine self-consistent
+
+**QC (`src/server/sv_entities.qc`, `SV_SpawnProp`):** `sc = floor(sc*16)` then `max(1, …)/16`
+before `self.scale = sc`. A multiple of 1/16 is exact in float32, so once the field is on that
+grid **all four readers compute the same number** and nothing is left to round — including
+`World_Move` and `SV_PhysentDigest`, neither of which any engine-side cast could reach. `floor`
+rather than `rint` because the wire truncates; `max(1, …)` mirrors its `bound(1, …)` floor,
+because 26 props in the library write a scale below 1/16 and a plain `floor` sends those to 0,
+which both `sv_ents.c:3950` and `sv_user.c:7744` read as `!scale` and substitute **1** — a 100×
+prop instead of a small one.
+
+**Engine (`server/sv_user.c`):** `pe->scale = (float)(int)bound(1, scale*16, 255) / 16.0`. A
+no-op under the QC above, and idempotent, but it is the actual engine defect and it makes pmove
+parity hold for a mod that does not quantise.
+
+**Engine (`server/sv_ccmds.c`) — the evidence half, and it is not optional.**
+`SV_PhysentDigest` hashes `pe->scale` (`sv_user.c:292-318`), so on those 97 maps a run recorded
+before this change rebuilds to a different digest on a build that has it. Nothing is wrong with
+either the file or the replay: the geometry definition moved underneath them. Left alone that
+reads out as `VERIFY … HOLD physents: N row(s) differ` on **honest runs**, which is this
+codebase's oldest trap — a check that cannot measure returning the maximum-severity answer.
+So the recorder writes a new additive header key `proprule 1` (FTESurf `sv_timer.qc`, and the
+`.rec` grammar block documents it), and `pm_recsim` parses it into `filepropr`, still compares
+every row, and **downgrades** a mismatch on a pre-rule file to a counted `pe_nc` — printed as
+"N not comparable (file is proprule 0, this build builds prop geometry to rule 1)" and never
+folded into `why`. The third verdict, not a better threshold.
+
+### Verified — and the mutation names which grade does the work
+
+`cfg/test/p458prop.cfg` + `tools/p458prop.py`, six maps, three grades:
+
+- **P1 the count.** The spawn's own `props: N spawned (…), M requantised` against the grader's
+  independent read of the same question out of the BSP entity lump. 257/225, 232/109, 176/28,
+  273/46 — exact on all four. **Two controls**: `ahop_coast` has 284 props and none needing the
+  floor, `bhop_eazy` has none at all, and both must print **no clause**; they do. A counter that
+  always fires proves nothing, so the silent maps are the arm.
+- **P2 the arithmetic.** Every `propscale <raw> -> <scale>` line must satisfy
+  `scale == floor(raw*16)/16`. 408 lines checked, 0 wrong.
+- **P3 coverage.** Lines must equal the reported count, per map, so a floor that ran on one prop
+  and skipped 224 cannot pass P2 on its single line.
+
+**Mutation, pre-registered in the cfg:** deleting the floor outright takes P1 down with P2,
+because the counter tests `raw != sc` and a deleted floor makes that always false — that proves
+the pair fires together, not that P2 measures arithmetic. The isolating mutation is
+`floor(sc*16 + 0.5)`: population unchanged, so **P1 PASS, P3 PASS, P2 FAIL** on exactly the
+scales whose sixteenth-fraction is ≥ 0.5 — 56/28/9/17 wrong across the four maps, first
+`1.3 -> 1.3125 want 1.25`. Observed exactly as predicted. Reverting rebuilt `qwprogs.dat` to
+`6F69C0ABA58E7AF946E20224EAF4DC88`, byte-identical to the pre-mutation build, so the green run
+and the graded build are provably the same bytes.
+
+**A defect in the arm, found by its own numbers and worth recording.** The first cut graded
+`surf_dune` as 176 props against an expected 344 and called the server wrong. The server was
+right: `tools/census/*` read the Momentum install and the game loads `ftesurf/maps`, and for
+that map those are **different builds**. This repo's own `mapcrc` note says it — a map name is
+not a map. The grader now prefers the gamedir copy and **prints which source it used**, so the
+next occurrence names its own cause.
+
+**Not deployed.** `build.ps1 -Pi` restarts all 12 lobbies, and this moves collision geometry on
+97 maps, so it is the operator's call. 0 new warnings, both engine targets.
