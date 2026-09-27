@@ -4565,6 +4565,113 @@ static void SV_RecSim_SpecEdge (const recsim_spec_t *e, const recsim_spec_t *pre
 /* Patch 354: every early exit still owes the sweeper a verdict line. */
 #define RECSIM_REFUSE(why) do { if (verify) Con_Printf("VERIFY %s REFUSE %s\n", fname, why); } while (0)
 
+/*
+  Patch 463: compare the zone pin FIELD BY FIELD, and not on the source path.
+
+  It used to be a string compare that INCLUDED the directory the zone table was
+  loaded from, so moving a byte-identical table from maps/zones/online/ to
+  maps/zones/local/ -- which the loader explicitly supports (sv_zones.qc:177-181)
+  and which is the only way to edit one -- refused every recording of that map as
+  "a different zone table or rule".  The maximum verdict, on a correct file.
+
+  Three reasons the source does not belong in a pin:
+
+  * zonecrc already IS the table.  Zone_Hash (sh_zones.qc:264) hashes per zone
+    the type, track, seg, cp, z-band and every point at %.3f, which is exactly
+    what SV_ZoneScan reads.  A directory cannot change a crossing.
+  * QC's resume gate has shipped pinning it this way: sv_resume.qc:106-108 writes
+    zonecrc and zonerule and no source, and SV_MsStale answers "the zones
+    changed" and "the zone rules changed" separately.  This agrees with it.
+  * hdrzsrc is read out of the .rec header, so it is whatever the recording
+    server wrote.  Anyone able to doctor a zone table can equally type "online".
+    It never detected a forgery; it detected an admin moving a file.
+
+  WHY THE COMPARISON CHANGED AND THE FORMAT DID NOT.  SV_VerifyZonePin still
+  returns "<src> <crc> <swept> <hull> <live>" and this still reads all five.  The
+  pin is built in two repos with two build steps -- here from header keys, there
+  from live state -- so dropping the field on one side alone would compare four
+  tokens against five, which never matches: EVERY file would refuse, presenting
+  as "the patch did nothing".  Accepting both widths means the two can never be
+  out of step whichever ships first.  Credit to ftesurf-a1, who found that trap
+  by reading both sites before the patch was written.
+
+  Returns NULL to accept, else the verdict.  `shown` gets the parsed fields for
+  the operator line, so a refusal still says what it compared.
+*/
+static const char *SV_VerifyZoneCmp (const char *here, const char *fsrc,
+                                     const char *fcrc, const char *frule,
+                                     char *shown, size_t shownsz)
+{
+	char  buf[128];
+	char *tok[8];
+	char *s;
+	int   n = 0, i;
+	int   fa, fb, fc, ha, hb, hc;
+
+	(void)fsrc;	/* read and REPORTED, never compared -- see above */
+
+	/* Neither side has a table: a map with no zones cannot be timed, so this is
+	   unreachable from a real recording, but "cannot compare" must not come out
+	   as an accusation.  Same guard shape as SV_MsStale's two `!= ""` tests. */
+	if (!*here && !*fcrc && !*frule)
+	{
+		Q_strncpyz(shown, "no zone table either side", shownsz);
+		return NULL;
+	}
+	if (!*here != !*fcrc)
+	{
+		Q_snprintfz(shown, shownsz, "a table on one side only (file crc \"%s\", here \"%s\")",
+		            fcrc, here);
+		return "a zone table on one side only";
+	}
+
+	Q_strncpyz(buf, here, sizeof(buf));
+	for (s = buf; n < 8; )
+	{
+		while (*s == ' ')
+			s++;
+		if (!*s)
+			break;
+		tok[n++] = s;
+		while (*s && *s != ' ')
+			s++;
+		if (*s)
+			*s++ = 0;
+	}
+
+	/* Five is what QC writes today; four is a build that has dropped the source.
+	   Anything else is unreadable, which is its own verdict and not a forgery. */
+	if (n == 5)
+		i = 1;
+	else if (n == 4)
+		i = 0;
+	else
+	{
+		Q_snprintfz(shown, shownsz, "%d field(s) in \"%s\"", n, here);
+		return "an unreadable zone pin";
+	}
+
+	/* The rule triple is compared as NUMBERS, so neither side's spacing can
+	   manufacture a mismatch. */
+	if (sscanf(frule, "%d %d %d", &fa, &fb, &fc) != 3)
+	{
+		Q_snprintfz(shown, shownsz, "zonerule \"%s\" is not three integers", frule);
+		return "an unreadable zonerule";
+	}
+	ha = atoi(tok[i+1]);
+	hb = atoi(tok[i+2]);
+	hc = atoi(tok[i+3]);
+
+	Q_snprintfz(shown, shownsz, "crc file \"%s\" here \"%s\"  rule file %d %d %d here %d %d %d",
+	            fcrc, tok[i], fa, fb, fc, ha, hb, hc);
+
+	if (strcmp(fcrc, tok[i]))
+		return "a different zone table";
+	if (fa != ha || fb != hb || fc != hc)
+		return "the same zones under different zone rules";
+	return NULL;
+}
+
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -5223,7 +5330,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	if (verify)
 	{
 		const char *refuse = NULL;
-		char zbuf[128], zhere[128];
+		const char *zwhy;
+		char zbuf[192], zhere[128];	/* zbuf now holds the parsed fields, not the pin */
 		/* Patch 356: a newer format is refused above (Patch 364/367), before any
 		   unknown record could be skipped into a PASS. */
 		if (!exact)
@@ -5261,13 +5369,16 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				PR_ExecuteProgram(svprogfuncs, fpin);
 				Q_strncpyz(zhere, PR_GetString(svprogfuncs, G_INT(OFS_RETURN)), sizeof(zhere));
 			}
-			Q_snprintfz(zbuf, sizeof(zbuf), "%s %s %s", hdrzsrc, hdrzcrc, hdrzrule);
 			if (!fpin || !fbeg)
 				refuse = "these progs have no verifier hooks (QC build 88)";
-			else if (strcmp(zbuf, zhere))
+			else if ((zwhy = SV_VerifyZoneCmp(zhere, hdrzsrc, hdrzcrc, hdrzrule,
+			                                 zbuf, sizeof(zbuf))) != NULL)
 			{
-				Con_Printf("  zone pin  file \"%s\"  here \"%s\"\n", zbuf, zhere);
-				refuse = "a different zone table or rule";
+				/* The source is still stated, because an operator chasing a
+				   refusal wants to know which directory served the table -- it is
+				   just not what decided the verdict. */
+				Con_Printf("  zone pin  %s  (file src \"%s\")\n", zbuf, hdrzsrc);
+				refuse = zwhy;
 			}
 			else
 			{

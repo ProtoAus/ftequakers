@@ -33793,3 +33793,120 @@ construction or cheat-locked. Re-run after all four: p458prop 16/16, p458phy 195
 p460lock 6/6, p461box 4 maps + 1 declared-unexercised.
 
 **Not deployed.** These move collision geometry on ~100 maps; `-Pi` restarts all 12 lobbies.
+
+## Patch 463 -- the zone pin compared the SOURCE DIRECTORY, so editing a zone file refused every recording of that map
+
+*(APPLIED -- `engine/server/sv_ccmds.c`: new `SV_VerifyZoneCmp` above `SV_RecSim_Run`, and the call site in the pm_verify refusal chain. No QC change. Arm `ftesurf/cfg/test/p463pin.cfg`, driver `tools/p463pin.py`.)*
+
+### The defect
+
+`pm_verify` built its zone pin as a string and compared the whole thing:
+
+```c
+Q_snprintfz(zbuf, sizeof(zbuf), "%s %s %s", hdrzsrc, hdrzcrc, hdrzrule);
+...
+else if (strcmp(zbuf, zhere))
+        refuse = "a different zone table or rule";
+```
+
+`hdrzsrc` is the `.rec` header's `zonesrc` -- which of `local`/`online`/`bsp` served the
+table. The zone loader tries `maps/zones/local/<map>.json` first precisely so that a copy
+there overrides Momentum's shipped file (`sv_zones.qc:177-181`, and `cl_zones.qc:293-295`
+says it is "the whole point of the directory"). So the one supported way to edit a zone
+changed the pin, and every existing recording of that map was refused -- at maximum
+severity, with a message accusing the table.
+
+Measured on a pre-463 build with a **byte-identical** copy installed at
+`maps/zones/local/bhop_eazy.json`:
+
+```
+zone pin  file "online c50cfd70 1 1 0"  here "local c50cfd70 1 1 0"
+VERIFY data/b88fin.rec REFUSE a different zone table or rule
+```
+
+Same crc, same rule, one word different -- and **all five** of `p349verify.cfg`'s subjects
+refused, not just the subject. On the fleet that is every recording for any map whose zone
+file had ever been touched.
+
+### Why the source does not belong in a pin
+
+- **`zonecrc` already is the table.** `Zone_Hash` (`sh_zones.qc:264`) hashes, per zone, the
+  type, track, seg, cp, z-band and every point at `%.3f` -- exactly what `SV_ZoneScan`
+  reads. A directory cannot change a crossing, so for the property the pin exists to test
+  the crc is necessary and sufficient and the path is neither.
+- **QC's own resume gate has shipped pinning it this way.** `sv_resume.qc:106-108` writes
+  `zonecrc` and `zonerule` and no source; `SV_MsStale` (`:215-232`) answers "the zones
+  changed" and "the zone rules changed" separately, and guards both with `!= ""` so absence
+  is not a fault. This makes `pm_verify` agree with a gate that was already correct.
+- **The field is attacker-supplied.** `hdrzsrc` is read out of the header, which is whatever
+  wrote the file. Anyone able to doctor a zone table can equally type `online`. It never
+  detected a forgery; it detected an honest admin moving a file.
+
+### The trap this patch was written around
+
+The pin is built in **two repos with two build steps**:
+
+| | |
+|---|---|
+| engine | `sv_ccmds.c` -- from the header keys `hdrzsrc` / `hdrzcrc` / `hdrzrule` |
+| QC | `sv_timer.qc:12686` `SV_VerifyZonePin` -> `"<src> <crc> <swept> <hull> <live>"` |
+
+`hdrzrule` holds the last three, so both sides are five tokens. **Dropping the field on one
+side only compares four against five, `strcmp` never matches, and every file refuses** --
+strictly worse than the bug, and it presents as "the patch did nothing". Found by
+ftesurf-a1, reading both sites, before this was written.
+
+So the **wire format is unchanged** and only the comparison moved. `SV_VerifyZoneCmp` parses
+the QC pin and accepts five fields (with source) or four (without), which means the two
+repos can never be out of step whichever ships first, and a newer engine works against
+today's QC with no coordination at all.
+
+### Also fixed while in there
+
+- **The verdict is split.** A crc mismatch is "a different zone table"; a rule mismatch is
+  "the same zones under different zone rules". Different causes, different remedies, and the
+  code already printed both strings -- only the verdict merged them. `SV_MsStale`'s pair is
+  the shape.
+- **The rule triple is compared as integers**, so neither side's spacing can manufacture a
+  mismatch.
+- **"Cannot compare" is no longer an accusation.** Both sides empty is accepted (a map with
+  no zones cannot be timed, so it is unreachable from a real recording, but the old code's
+  `strcmp("  ", "")` would have refused it); an unparsable pin says so; a table on one side
+  only says that.
+- The refusal line still prints `zonesrc`, because an operator chasing one wants to know
+  which directory served the table. It is stated and not compared.
+
+### Deliberately NOT done
+
+**The crc is not widened.** It is 8 hex -- 32 bits, `substring(digest_hex("SHA256",...),0,8)`.
+Accidental collision is a non-issue at ~600 tables; adversarially it is grindable, but the
+source string was never protecting that either, so removing it does not move the adversarial
+position and widening is a separate decision. Widening would change every existing pin and
+refuse every recording -- this bug again -- so it needs the additive shape Patch 458's
+`proprule` uses: a rule key in the header, older files compared at the old width and reported
+"not comparable" rather than refused.
+
+### Verified
+
+`ftesurf/cfg/test/p463pin.cfg` + `tools/p463pin.py`, which runs the game twice -- with and
+without a byte-identical mirror -- because a patch that merely stopped checking zones would
+pass the first run and fail the second.
+
+| | |
+|---|---|
+| P1 | source is `maps/zones/online` then `maps/zones/local`, **crc `c50cfd70` both ways** |
+| P2 | `data/b88fin.rec` PASS ticks 662 rows 634 in **both** runs |
+| P3 | `data/p349_zcrc.rec` REFUSE "a different zone table" in both -- and not "or rule" |
+| P4 | the diagnostic names crc and rule as separate fields |
+
+`p349verify.cfg` re-run whole: every one of its 2026-09-18 pre-registered outcomes
+reproduces (subject PASS 662/634; N1 HOLD ticks; N2 REFUSE table; N3 HOLD no finish; N4 HOLD
+state at row 200; the three out-of-scope files REFUSE).
+
+**Control build**, from reverting only `sv_ccmds.c` -- the sole uncommitted engine change, so
+458/460/461 stay in -- quoted above. Note the exe hash changes on *every* rebuild whatever
+the source, because the binary embeds `SVNREVISION` and a stash dirties the tree; the control
+was therefore confirmed by behaviour, not by hash.
+
+**Not deployed.** This is the verifier, so it needs the independent review AGENTS.md requires
+before it reaches the fleet, and the lobbies run the old comparison until then.
