@@ -33986,3 +33986,87 @@ now ahead of each.
 `tools/p463pin.py`'s P3 also stopped matching loosely: `"zone table" in reason` also matched
 *"a zone table on one side only"*, so a real difference degrading into a cannot-compare
 would have stayed green.
+
+### Round 4 -- the fix's own fix, and one defect that was platform-specific
+
+Two more reviewers on the round-2 code. Neither found a way for a crafted `.rec` to PASS;
+both found the same root defect from opposite ends.
+
+**Two parsers, two overflow behaviours, disagreeing on identical text.** The live side used
+`strtol` with the range test `v < -2147483647L - 1 || v > 2147483647L`, which is
+**tautologically false where `long` is 32 bits** -- this Windows build, and any 32-bit Linux
+one -- because strtol's ERANGE clamp lands exactly on the boundary the test cannot see.
+Measured: `2147483648` accepted as `2147483647` here, rejected on a 64-bit-`long` build. *The
+same recording got a different verdict per platform*, in a tool whose product is a
+reproducible verdict. And the C89-safe spelling of that constant is also the one that
+suppresses `-Wtype-limits`, so nothing warned, even at `-Wextra`.
+
+Meanwhile the file side used `sscanf("%d")`, which is undefined behaviour on overflow and in
+practice truncates. Measured end to end: **`zonerule 4294967297 1 0` compared EQUAL to a live
+`1 1 0`** -- and the evidence line then printed `rule file 1 1 0`, so a PASS misreported the
+file's own bytes, and `tools/reccheck.py`'s `isdigit()` test passed it too. One input,
+both independent readers fooled, in the same direction.
+
+Both are gone: one hand-rolled parser over the engine's own `qint64_t`, used for every field
+on both sides. No new header, no saturation to detect, and `'+'` is rejected deliberately so
+`reccheck.py` and `pm_verify` agree about what a rule looks like.
+
+**One splitter for all three fields**, which is the shape round 2 should have had. It had
+normalised only the live pin -- `fcrc` went through a raw `strcmp` and `frule` through
+`sscanf` -- three parsing styles over one record, and two findings were exactly that:
+
+- a header line `zonecrc c50cfd70 ` with **one trailing space** refused a BYTE-IDENTICAL
+  table as "a different zone table". This patch's own bug class, one field over.
+- `\v` and `\f` were not separators while `%d` skips them, so a live pin containing one
+  tokenized short and the **source tag was compared as the crc**.
+
+**Also fixed:** a missing `zonerule` said "the file states no zone table" -- a file that
+states a table and omits the rule does state a table, and round 1 got that right by accident
+before round 2 lost it. The "too long" diagnostic printed `strlen` *after* the truncating
+copy, so it reported `127 bytes` for a pin of 127, 128 or 4000 -- a number describing this
+code, not its input. The length test was one too strict (`>= sizeof - 1` refuses a 127-byte
+pin that fits exactly). The field count printed "8+" for exactly eight. An `if (verify)` sat
+inside a block already guarded by `if (verify)`.
+
+**A correction to round 2's own commit message, which overclaimed.** It presented `i = n - 4`
+as closing the "a fourth rule term refuses every file" hazard. Measured: on the domain this
+accepts, `{4,5}`, it is the same function round 1's if/else was, and a six-field pin still
+refuses. What it buys is that a build dropping the source needs no coordination with this
+one. The hazard is **documented, not fixed**, and the code now says so where the commit did
+not. Widening the rule still needs `proprule`'s additive shape.
+
+### Round 4, mod side: a zone file that loads nothing must not cost you the map
+
+`Zone_LoadJson` (`sh_zones.qc`) returned TRUE unconditionally, *after* `Zone_Clear()`. So
+valid JSON that adds no zones -- a `tracks` key deleted or misspelled, which is what a
+hand-edit gets wrong -- wiped the table, reported success, and `SV_ZoneLoad` therefore did
+**not** fall back to `online/` or to the BSP. The map goes silently untimeable, and under
+this patch every recording of it refuses because the server cannot state a pin.
+
+That is a trap aimed precisely at `maps/zones/local/`, the directory this work exists to open
+up on 543 maps. It now returns FALSE when nothing loaded and says so; falling through is safe
+because `Zone_Clear()` has already run. Verified: a `{"formatVersion":1}` file installed for
+`bhop_eazy` prints *"loaded no zones -- ignoring it and trying the next source"*, `online/`
+loads its 7 zones at crc `c50cfd70`, and `b88fin.rec` still PASSes 662/634.
+
+(The reviewer reached this through `ok` being computed and discarded. `ok` is dead for a
+different reason -- `Zone_AddRegion` has no FALSE path at all, since a degenerate region and
+a cap hit both return TRUE and keep loading -- so it is returned rather than deleted, to stop
+a real failure being discarded a third time.)
+
+### Round 4 verification
+
+`p463pin` grew three cases, each a regression test for a round-3 finding:
+
+| | |
+|---|---|
+| `p463_rulebig` `zonerule 4294967297 1 0` | REFUSE *an unreadable zonerule* -- **round 2 ACCEPTED this** |
+| `p463_crcpad` `zonecrc c50cfd70 ` | **PASS** -- round 2 refused a byte-identical table |
+| `p463_ruleplus` `zonerule +1 1 0` | REFUSE, agreeing with `reccheck.py` |
+
+18 grades pass. `p463_norule`'s expectation changed with the fix, and the arm caught that
+itself rather than being told. `tools/reccheck.py` stops faulting a pin whose only missing
+field is `zonesrc` -- it notes it instead, because the grammar block now calls that field
+informational and `pm_verify` deliberately accepts it; the two readers were otherwise in
+disagreement on the very fixture this arm calls its core claim. `test_reccheck.py`: 295
+checks, 0 failed.
