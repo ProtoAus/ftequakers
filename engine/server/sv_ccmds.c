@@ -4598,6 +4598,21 @@ static void SV_RecSim_SpecEdge (const recsim_spec_t *e, const recsim_spec_t *pre
   Returns NULL to accept, else the verdict.  `shown` gets the parsed fields for
   the operator line, so a refusal still says what it compared.
 */
+/* strtol with the endptr test atoi cannot do: rejects "", "1junk" and "x". */
+static qboolean SV_ParseInt (const char *s, int *out)
+{
+	char *e;
+	long  v;
+
+	if (!s || !*s)
+		return false;
+	v = strtol(s, &e, 10);
+	if (*e || v < -2147483647L - 1 || v > 2147483647L)
+		return false;
+	*out = (int)v;
+	return true;
+}
+
 static const char *SV_VerifyZoneCmp (const char *here, const char *fsrc,
                                      const char *fcrc, const char *frule,
                                      char *shown, size_t shownsz)
@@ -4605,62 +4620,105 @@ static const char *SV_VerifyZoneCmp (const char *here, const char *fsrc,
 	char  buf[128];
 	char *tok[8];
 	char *s;
+	char  extra[2];
 	int   n = 0, i;
 	int   fa, fb, fc, ha, hb, hc;
 
 	(void)fsrc;	/* read and REPORTED, never compared -- see above */
 
-	/* Neither side has a table: a map with no zones cannot be timed, so this is
-	   unreachable from a real recording, but "cannot compare" must not come out
-	   as an accusation.  Same guard shape as SV_MsStale's two `!= ""` tests. */
-	if (!*here && !*fcrc && !*frule)
+	/*
+	  ROUND 2: BOTH SIDES EMPTY MUST REFUSE, NOT ACCEPT.
+
+	  The first cut accepted it, reasoning that "cannot compare" must not be an
+	  accusation and citing SV_MsStale's `!= ""` guards.  Both halves were wrong
+	  and three reviewers said so independently.
+
+	  REFUSE IS ALREADY THE THIRD VERDICT HERE -- ":5329: REFUSE is 'cannot say',
+	  never a judgement on the run", four lines from the call site, and sweep.py
+	  repeats it.  Patch 421's rule was satisfied by refusing all along.  And
+	  SV_MsStale does not transfer: it tolerates an empty side because zones load
+	  after PutClientInServer and SV_MsApply ASKS AGAIN (sv_resume.qc:221-232).
+	  pm_verify runs after the map is fully loaded and cannot ask again.
+
+	  The accept was also reachable and inverted: Zone_Hash leaves zone_crc ""
+	  when buf_create() fails (sh_zones.qc:277-279) WITH a working table, and in
+	  that state an honest recording -- which carries a pin, because its recorder
+	  hashed fine -- refused, while a crafted one that simply omits the three
+	  lines was accepted.  Exactly the wrong way round.
+	*/
+	if (!*here)
 	{
-		Q_strncpyz(shown, "no zone table either side", shownsz);
-		return NULL;
+		Q_snprintfz(shown, shownsz, "this server states no zone pin (file crc \"%s\")", fcrc);
+		return "this server cannot state its own zone pin";
 	}
-	if (!*here != !*fcrc)
+	if (!*fcrc || !*frule)
 	{
-		Q_snprintfz(shown, shownsz, "a table on one side only (file crc \"%s\", here \"%s\")",
-		            fcrc, here);
-		return "a zone table on one side only";
+		Q_snprintfz(shown, shownsz, "file crc \"%s\" rule \"%s\", here \"%s\"",
+		            fcrc, frule, here);
+		return "the file states no zone table";
 	}
 
 	Q_strncpyz(buf, here, sizeof(buf));
 	for (s = buf; n < 8; )
 	{
-		while (*s == ' ')
+		/* Tab and the line endings count as separators too.  They cannot occur in
+		   today's pin, but treating only ' ' as one turned a stray \n into
+		   "a different zone table" -- a wrong verdict rather than an unreadable
+		   one, which is the failure this whole patch is about. */
+		while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')
 			s++;
 		if (!*s)
 			break;
 		tok[n++] = s;
-		while (*s && *s != ' ')
+		while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n')
 			s++;
 		if (*s)
 			*s++ = 0;
 	}
 
-	/* Five is what QC writes today; four is a build that has dropped the source.
-	   Anything else is unreadable, which is its own verdict and not a forgery. */
-	if (n == 5)
-		i = 1;
-	else if (n == 4)
-		i = 0;
-	else
-	{
-		Q_snprintfz(shown, shownsz, "%d field(s) in \"%s\"", n, here);
-		return "an unreadable zone pin";
-	}
+	/*
+	  READ THE CRC FROM THE END, not from the front.  The pin is
+	  "[<src>] <crc> <swept> <hull> <live>", so the crc is always four from the
+	  end whether or not the source is present, and a build that drops the source
+	  needs no coordination with this one.
 
-	/* The rule triple is compared as NUMBERS, so neither side's spacing can
-	   manufacture a mismatch. */
-	if (sscanf(frule, "%d %d %d", &fa, &fb, &fc) != 3)
+	  A WIDER PIN STILL REFUSES, AND THAT IS DELIBERATE RATHER THAN OVERLOOKED.
+	  If the rule ever grows a fourth term, n grows too and `n - 4` silently reads
+	  the wrong token -- so an unexpected width must not be guessed at.  It refuses
+	  and names itself, and widening the rule needs the additive shape Patch 458's
+	  `proprule` uses: a rule key in the header, older files compared at the old
+	  width and reported "not comparable" rather than refused.  Refusing loudly
+	  beats mis-indexing quietly; this is the one place the format is not
+	  future-proof and it says so instead of pretending.
+	*/
+	if (n < 4 || n > 5)
 	{
-		Q_snprintfz(shown, shownsz, "zonerule \"%s\" is not three integers", frule);
+		Q_snprintfz(shown, shownsz, "%d%s field(s) in \"%s\" -- this build reads 4 or 5",
+		            n, (n == 8) ? "+" : "", here);
+		return "a zone pin this build cannot read";
+	}
+	i = n - 4;
+
+	/*
+	  The rule triple is compared as NUMBERS so neither side's spacing can
+	  manufacture a mismatch -- but the `%1s` sentinel is what stops the FILE side
+	  silently swallowing a fourth term while the pin side refuses it.  Without it
+	  the two disagree about what a valid rule is, in opposite directions.
+	*/
+	if (sscanf(frule, "%d %d %d %1s", &fa, &fb, &fc, extra) != 3)
+	{
+		Q_snprintfz(shown, shownsz, "zonerule \"%s\" is not exactly three integers", frule);
 		return "an unreadable zonerule";
 	}
-	ha = atoi(tok[i+1]);
-	hb = atoi(tok[i+2]);
-	hc = atoi(tok[i+3]);
+	/* strtol, not atoi: atoi has no error channel and answers 0 for garbage, so
+	   "x y z" and "0 0 0" were the same pin. */
+	if (!SV_ParseInt(tok[i+1], &ha) || !SV_ParseInt(tok[i+2], &hb) ||
+	    !SV_ParseInt(tok[i+3], &hc))
+	{
+		Q_snprintfz(shown, shownsz, "this server's zone rule is not three integers: \"%s\"",
+		            here);
+		return "an unreadable zonerule";
+	}
 
 	Q_snprintfz(shown, shownsz, "crc file \"%s\" here \"%s\"  rule file %d %d %d here %d %d %d",
 	            fcrc, tok[i], fa, fb, fc, ha, hb, hc);
@@ -5363,14 +5421,30 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			func_t fpin = PR_FindFunction(svprogfuncs, "SV_VerifyZonePin", PR_ANY);
 			func_t fbeg = PR_FindFunction(svprogfuncs, "SV_VerifyBegin", PR_ANY);
 			globalvars_t *pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+			qboolean zlong = false;
 			*zhere = 0;
+			*zbuf = 0;	/* the callee writes it on every path; do not rely on that */
 			if (fpin)
 			{
+				const char *zq;
 				PR_ExecuteProgram(svprogfuncs, fpin);
-				Q_strncpyz(zhere, PR_GetString(svprogfuncs, G_INT(OFS_RETURN)), sizeof(zhere));
+				zq = PR_GetString(svprogfuncs, G_INT(OFS_RETURN));
+				/* Q_strncpyz truncates SILENTLY, and a cut that lands on a field
+				   boundary turns a 5-field pin into a 4-field one -- which then
+				   parses, with the source tag read as the crc, and refuses as
+				   "a different zone table".  A wrong verdict from our own buffer.
+				   Checked here because this is where the buffer's size is known. */
+				zlong = (strlen(zq) >= sizeof(zhere) - 1);
+				Q_strncpyz(zhere, zq, sizeof(zhere));
 			}
 			if (!fpin || !fbeg)
 				refuse = "these progs have no verifier hooks (QC build 88)";
+			else if (zlong)
+			{
+				Con_Printf("  zone pin  %u bytes, buffer is %u\n",
+				           (unsigned)strlen(zhere), (unsigned)sizeof(zhere));
+				refuse = "this server's zone pin is too long to read";
+			}
 			else if ((zwhy = SV_VerifyZoneCmp(zhere, hdrzsrc, hdrzcrc, hdrzrule,
 			                                 zbuf, sizeof(zbuf))) != NULL)
 			{
@@ -5382,6 +5456,14 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			}
 			else
 			{
+				/* SAY SO ON THE SUCCESS PATH TOO.  Without this a PASS is silent
+				   about zones and reads identically to a PASS that skipped the
+				   comparison -- which is how the first cut's fail-open would have
+				   looked in a log.  proprule prints on its success path for the
+				   same reason. */
+				if (verify)
+					Con_Printf("  zone pin  matched: %s  (file src \"%s\")\n",
+					           zbuf, hdrzsrc);
 				pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
 				G_FLOAT(OFS_PARM0) = zs_ev;
 				G_FLOAT(OFS_PARM1) = zs_az;

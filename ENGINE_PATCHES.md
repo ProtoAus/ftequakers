@@ -33910,3 +33910,79 @@ was therefore confirmed by behaviour, not by hash.
 
 **Not deployed.** This is the verifier, so it needs the independent review AGENTS.md requires
 before it reaches the fleet, and the lobbies run the old comparison until then.
+
+### Round 2 -- three reviewers, nine defects, and one of them was a fail-open I added
+
+Reviewed under three lenses and none given the author's reasoning. The control-flow
+reviewer compiled `SV_VerifyZoneCmp` standalone against the engine's own `Q_strncpyz` and
+warning flags and ran ~45 inputs with a canary; the other two read the corpus and the
+attack surface. Bounds, `shown`-always-written and `zwhy`-always-assigned all came back
+clean and measured, as did 0 compiler warnings. What did not:
+
+**THE ONE THAT MATTERS: the both-empty branch accepted where the old code refused.** Two
+reviewers found it independently. The first cut reasoned that "cannot compare must not be
+an accusation" and cited `SV_MsStale`. Both halves were wrong:
+
+- **REFUSE is already the third verdict here**, said four lines from the call site --
+  `sv_ccmds.c:5329`, *"REFUSE is 'cannot say', never a judgement on the run"* -- and
+  `sweep.py` repeats it. Patch 421's rule was satisfied by refusing all along.
+- **The precedent does not transfer.** `SV_MsStale` tolerates an empty side because zones
+  load after `PutClientInServer` and `SV_MsApply` *asks again* (`sv_resume.qc:221-232`).
+  `pm_verify` runs after the map is fully loaded and cannot ask again.
+
+And it was reachable and inverted. `Zone_Hash` leaves `zone_crc` empty when `buf_create()`
+fails (`sh_zones.qc:277-279`) **with a working table**; in that state an honest recording --
+which carries a pin, because its recorder hashed fine -- refused, while a crafted one that
+simply omits the three lines was accepted. Exactly the wrong way round. Now both sides
+refuse: `this server cannot state its own zone pin` and `the file states no zone table`.
+
+**The mirror image of the original bug, found by the adversarial lens.** At six fields the
+pin returned "unreadable", so the day QC adds a fourth rule term -- which this note itself
+calls the next move -- **every file would refuse on every map**. The crc is now read four
+from the END, so the source-present and source-absent forms both parse with no coordination
+between the repos. A *wider* pin still refuses, deliberately: `n - 4` would silently read
+the wrong token, and refusing loudly beats mis-indexing quietly. Widening the rule needs
+`proprule`'s additive shape and the code says so instead of pretending.
+
+**The rest, each with the input that triggers it:**
+
+| | |
+|---|---|
+| truncation could masquerade as a real difference | `Q_strncpyz` cuts `zhere` silently; a cut landing on a field boundary turned 5 fields into 4, read the SOURCE TAG as the crc and refused "a different zone table". Now checked in the caller, where the buffer size is known |
+| `atoi` answered 0 for garbage | `"x y z"` and `"0 0 0"` were the same pin. `strtol` with an endptr test |
+| `sscanf` swallowed a fourth rule term | the file side accepted `1 1 0 9` while the pin side refused it -- the two readers disagreeing in opposite directions. `%1s` sentinel |
+| only `' '` separated tokens | a stray `
+` gave 4 fields and "a different zone table" -- a wrong verdict, not an unreadable one |
+| the field count printed was capped at 8 | 20 fields reported as `8 field(s)`; now `8+` |
+| `zbuf` was uninitialised | correct only by an undocumented every-path contract in the callee |
+| **a PASS said nothing about zones** | indistinguishable from a PASS that skipped the check -- which is exactly how the fail-open above would have read in a log. `proprule` prints on its success path; this now does too |
+
+**Out of scope, logged in BACKLOG rather than ridden in on this patch:** `pm_verify` takes
+`pr_globals` *before* `PR_ExecuteProgram` and reads `G_INT(OFS_RETURN)` through it
+(`:5423-5428`) while the sibling branch re-fetches it four lines later -- one of the two is
+wrong, and it dates to Patch 349. Also `surfd/sweep.py:236-238` marks any non-ERROR verdict
+`checked = 1`, so **deploying this repairs nothing retroactively**: every run already
+refused for this reason stays refused until somebody clicks `recheck`, one at a time.
+
+### Round 2 verification
+
+The arm exercised 2 of 6 returns, which the evidence reviewer flagged. It now derives six
+one-edit fixtures from `b88fin.rec` -- bytes in, bytes out, because the header is LF and the
+tail is binary -- and grades all of them:
+
+| | |
+|---|---|
+| `p463_nosrc` (zonesrc line deleted) | **PASS** 662/634 -- the patch's core claim, tested directly |
+| `p463_rule` (`zonerule 1 1 1`) | REFUSE *the same zones under different zone rules* |
+| `p463_nocrc` / `p463_norule` (line deleted) | REFUSE *the file states no zone table* -- the fail-open, closed |
+| `p463_rule4` (`1 1 0 1`) / `p463_rulejunk` (`1 1 x`) | REFUSE *an unreadable zonerule* |
+
+15 grades pass; P7 reports the three live-side branches as NOT DEMONSTRATED, because
+reaching them needs a doctored `SV_VerifyZonePin` rather than a header edit, and an
+untested branch nobody has written down reads exactly like a tested one. `p349verify`
+re-run whole: all eight pre-registered outcomes reproduce, with a `zone pin matched:` line
+now ahead of each.
+
+`tools/p463pin.py`'s P3 also stopped matching loosely: `"zone table" in reason` also matched
+*"a zone table on one side only"*, so a real difference degrading into a cannot-compare
+would have stayed green.
