@@ -33719,3 +33719,77 @@ collision can be switched off. Recorded because it is the same trap as every oth
 this series: the number that looks like the result is not the result.
 
 **Not deployed.**
+
+## Patch 461 — a `solid 2` prop is traced against its `.phy`, because the wire cannot carry the box Source asks for  *(APPLIED — mod-side only, no engine change: FTESurf `src/server/sv_entities.qc` (SV_SpawnProp's SRCSOLID_BBOX promotion, `vbsp_prop_bboxphy_n`, and the re-cut fallback with `vbsp_prop_bbox_n`). Arm `cfg/test/p461box.cfg`, driver `tools/p461box.py`.)*
+
+The last of the four client/server prop disagreements, and the only one whose first fix
+was measured to be worse than the defect.
+
+### Root cause — the encoding truncates AND symmetrises
+
+A `SOLID_BBOX` entity's bounds reach the client through `COM_EncodeSize` /
+`COM_DecodeSize` (`common/common.c:1340-1385`):
+
+```c
+maxs[0] = maxs[1] = solid & 255;   mins[0] = mins[1] = -maxs[0];
+```
+
+Each extent is truncated to a whole unit, and **the box is forced symmetric in x and y**
+from `-mins[0]` alone. The server's own pmove uses the raw `mins`/`maxs` (the final `else`
+in `AddEntityToPmove`). So a prop wider in y than in x arrived at the client as a narrow
+column while the server kept the wide box — walk into its side, get pushed out.
+
+### The first fix was wrong, and the arm is what said so
+
+Re-cutting the entity's box to one the encoding reproduces exactly (integer extents,
+symmetric, rounded outward so it contains the studio box) agreed perfectly and was
+unusable. Measured on the only map that matters: **all 144 of surf_lax's solid-2 props are
+one model**, `models/props/de_inferno/railingspikedgate.mdl`, whose bounds are **9.65 wide
+in x and 138.6 long in y**. Symmetrising to the larger extent makes each railing a
+**142 × 142 block — a 14.7× inflation, 144 times**, which would wreck the map. Symmetrising
+to the smaller turns a 138-unit fence into an 8-unit post and lets players through it.
+
+Neither is a rounding question. **An asymmetric box has no faithful symmetric form**, so
+the choice was between two wrong shapes until the model was asked what it actually has.
+
+### The fix — promote to the hull, which the wire carries exactly
+
+`railingspikedgate.phy` exists: 3409 bytes in `cstrike_pak_dir.vpk`. So a solid-2 prop whose
+model ships a `.phy` becomes `SOLID_PHYSICS_TRIMESH`, which crosses as `ES_SOLID_BSP` **with
+no bounds at all** — both sides load the same model and run the same narrowphase, and there
+is nothing left to quantise.
+
+**A deliberate deviation from Source, stated rather than hidden:** Source would collide this
+prop against its studio AABB and this collides it against its VPhysics hull. That is a
+smaller and more accurate shape than the box, it is the same data Source uses for every
+solid-6 prop on the map, and it is the only option that keeps the two sides in agreement —
+which was the defect. The box is precisely the thing that cannot be transmitted.
+
+### Verified — and the second run emptied the fallback
+
+`cfg/test/p461box.cfg` + `tools/p461box.py`. Counts graded against the driver's own read of
+the BSP entity lump:
+
+| | |
+|---|---|
+| surf_lax | **144 of 144** solid-2 props promoted, 0 re-cut |
+| bhop_collective | **1 of 1** |
+| surf_mate | **1 of 1** |
+| ahop_coast | **CONTROL** — 284 props, no solid-2, both clauses silent |
+
+144 + 1 + 1 = **146, the entire library's solid-2 population**, and all 146 promote. So the
+re-cut fallback **has never run on a shipped map**, and the driver reports it as
+NOT DEMONSTRATED rather than as passing — an arm whose condition never occurred proves
+nothing. It stays in the code because Source builds a solid-2 box from studio bounds with no
+`.phy` involved, so a future model without one is still legitimately a box, and an inflated
+box both sides agree on beats a box they disagree about. The grade it would face is written
+down: integer extents, symmetric in x/y, containing the old box.
+
+### What the four patches add up to
+
+458 scale, 459 `.phy`-or-nothing, 460 the cvar lock, 461 the box. Every path by which a
+client's prop collision could differ from the server's is now either identical by
+construction or cheat-locked. Re-run after all four: p458prop 16/16, p458phy 195/195,
+p460lock 6/6, p461box 4 maps + 1 declared-unexercised.
+
+**Not deployed.** These move collision geometry on ~100 maps; `-Pi` restarts all 12 lobbies.
