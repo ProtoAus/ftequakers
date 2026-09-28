@@ -34297,3 +34297,50 @@ checked against a known-good control (`localcmd_local` present, `checkbuiltin` p
 invented name absent). The one real compiler warning in the engine build,
 `cl_parse.c:1735 -Waddress` on `cl.model_csqcname`, is pre-existing upstream code: both
 hunks of this patch are at 733 and 1967, and `model_csqcname` appears nowhere in the diff.
+
+### Patch 465, second cut — the interrupted download, found by finally testing the first cut
+
+The entry above was written from a build that compiled and a feature that was
+never run. Driving it with `tools/p465dl.py` found a defect in the first cut
+within two runs, and it is the kind that does not announce itself.
+
+**`httpclient.c` NEVER RENAMES.** It opens its localname directly with `"w+b"`
+(`http/httpclient.c:639-642`) and writes the body straight into it. The netchan
+path has always downloaded to `<name>.tmp` and renamed in `DL_Abort`'s
+`QDL_COMPLETED` arm — but that arm is gated on `DLLF_BEGUN`, and a web download
+never sets it. So an http transfer interrupted by a quit or a dropped link left
+a SHORT FILE UNDER THE REAL NAME.
+
+For a map that is the worst available shape. It reads as installed, so
+`ui_dl_load` stops offering it and the Download button disappears; and a
+truncated bsp is a mapcrc mismatch, which is a silent `TF_NOMAP` on every run
+played on it — the exact failure the brief warns about under the map roster.
+
+Found by measurement, not by reading: the first throttled run was cut off by its
+own wait budget and left 3,531,250 of 4,774,571 bytes sitting there as
+`p465test.bsp`, and the grader reported it as a truncation rather than glossing
+it as "close enough".
+
+The fix fetches to `<name>.tmp` and renames in `CL_WebDownloadFinished` —
+on failure it removes the partial instead. **The rename is deliberately NOT done
+by handing `DL_Abort` a tempname**, which would have been the smaller diff: that
+arm also calls `FS_Remove(dl->dclname + dl->prefixbytes)`, and both fields are
+set only on the netchan path (`cl_parse.c:2363-2374`), so a web qdownload
+carries `""` there and the behaviour of `FS_Remove("")` is nobody's documented
+contract.
+
+**What the arms measured, and the control that makes them mean anything.**
+Subject, against a mirror throttled to 250000 B/s: `idle -> active x8 -> ok x3
+-> idle x4`, 15 of 16 rate samples non-zero with a maximum of exactly 250000,
+the bsp on disk at 4,774,571 bytes with a sha1 matching the source, no leftover
+`.tmp`. Control, the same mirror on the same port with the same config answering
+404: `idle -> failed x2 -> idle`, no bsp, no `.tmp`, one refused request. They
+differ in every graded dimension.
+
+**Two things the run settled that this entry previously asserted.** The engine
+takes the `sv_dlURL` layout and never `cl_download_mapsrc` — the latter is an
+`else if` on dlURL being empty (`cl_parse.c:1005`) and `sv_dlURL` is the same
+cvar on a client, so it is dead configuration while that line exists. And
+`DL_HOLD` is 6 s, so the arm's original 8 s probe interval stepped over the
+completion banner entirely and reported `active -> idle` with the map on disk,
+which reads exactly like a download that never finished.

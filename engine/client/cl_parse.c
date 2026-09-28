@@ -720,6 +720,17 @@ static void CL_WebDownloadFinished(struct dl_download *dl)
 			CL_DownloadFailed(dl->url, &dl->qdownload, DLFAIL_SERVERFILE);
 		else	//other stuff is PROBABLY 403forbidden, but lets blame the server's config if its a tls issue etc.
 			CL_DownloadFailed(dl->url, &dl->qdownload, DLFAIL_SERVERCVAR);
+		/*Patch 465: the partial goes, whatever we do next. A .tmp left behind is
+		  harmless where a truncated .bsp is not, but a stale one would also be
+		  resumed-into by a later attempt that assumed it was its own.*/
+		if (dl->file)
+		{
+			VFS_CLOSE(dl->file);
+			dl->file = NULL;
+		}
+		if (*dl->qdownload.tempname)
+			FS_Remove(dl->qdownload.tempname, dl->fsroot);
+
 		if (dl->qdownload.flags & DLLF_ALLOWWEB)	//re-enqueue it if allowed, but this time not from the web server.
 			CL_EnqueDownload(dl->qdownload.localname, dl->qdownload.localname, dl->qdownload.flags & ~(DLLF_ALLOWWEB|DLLF_TRYWEB));
 	}
@@ -728,6 +739,19 @@ static void CL_WebDownloadFinished(struct dl_download *dl)
 		if (dl->file)
 			VFS_CLOSE(dl->file);
 		dl->file = NULL;
+		/*Patch 465: whole file, so put it where it was asked for. DL_Abort's own
+		  rename is skipped for a web download -- DLLF_BEGUN is never set on one --
+		  so this is the only one, and it must happen before CL_DownloadFinished
+		  goes looking for the model by its real name.*/
+		if (*dl->qdownload.tempname &&
+			Q_strcasecmp(dl->qdownload.tempname, dl->qdownload.localname))
+		{
+			if (dl->qdownload.flags & DLLF_OVERWRITE)
+				FS_Remove(dl->qdownload.localname, dl->fsroot);
+			if (!FS_Rename(dl->qdownload.tempname, dl->qdownload.localname, dl->fsroot))
+				Con_Printf("Couldn't rename %s to %s\n",
+						dl->qdownload.tempname, dl->qdownload.localname);
+		}
 		CL_DownloadFinished(&dl->qdownload);
 	}
 
@@ -756,9 +780,31 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 #ifdef WEBCLIENT
 	if (flags & DLLF_TRYWEB)
 	{
-		struct dl_download *wdl = HTTP_CL_Get(filename, localname, CL_WebDownloadFinished);
+		/*FTESurf Patch 465: fetch to a .tmp and put it in place only when whole.
+		  httpclient.c opens its localname directly with "w+b" and never renames
+		  (httpclient.c:639-642), so an http download interrupted by a quit or a
+		  dropped link leaves a TRUNCATED file under the REAL name. For a map that
+		  is the worst shape available: it reads as installed, the download button
+		  stops offering it, and a short bsp is a mapcrc mismatch -- ie a silent
+		  TF_NOMAP on every run played on it. The netchan path below has always
+		  used a tempname for exactly this reason.
+		  The rename is done in CL_WebDownloadFinished rather than by handing
+		  DL_Abort a tempname, because DL_Abort's QDL_COMPLETED arm also does
+		  FS_Remove(dl->dclname) and dclname/prefixbytes are set only on the
+		  netchan path -- a web qdownload carries "" there.*/
+		char webtmp[MAX_QPATH];
+		COM_StripExtension(localname, webtmp, sizeof(webtmp)-5);
+		Q_strncatz(webtmp, ".tmp", sizeof(webtmp));
+
+		struct dl_download *wdl = HTTP_CL_Get(filename, webtmp, CL_WebDownloadFinished);
 		if (wdl)
 		{
+			/*HTTP_CL_Get copied webtmp into qdownload.localname; put the real name
+			  back, so CL_DownloadFinished reloads the right model and a fallback
+			  re-enqueue asks the game server for the map rather than for a .tmp.*/
+			Q_strncpyz(wdl->qdownload.localname, localname, sizeof(wdl->qdownload.localname));
+			Q_strncpyz(wdl->qdownload.tempname, webtmp, sizeof(wdl->qdownload.tempname));
+
 			if (flags & DLLF_NONGAME)
 			{
 				wdl->fsroot = FS_ROOT;
