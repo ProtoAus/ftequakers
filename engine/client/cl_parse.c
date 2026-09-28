@@ -730,6 +730,14 @@ static void CL_WebDownloadFinished(struct dl_download *dl)
 		dl->file = NULL;
 		CL_DownloadFinished(&dl->qdownload);
 	}
+
+	/*FTESurf Patch 464: drain the rest of the queue with no server to do it for us.
+	  CL_DownloadFinished does not chain, and every other caller of
+	  CL_RequestNextDownload sits on a connection path, so a second queued map would
+	  sit there forever after the first finished. Harmless when connected: the call
+	  returns immediately while cls.download is still set.*/
+	if (cls.state < ca_connected && !cl.sendprespawn)
+		CL_RequestNextDownload();
 }
 #endif
 
@@ -1955,6 +1963,27 @@ void CL_RequestNextDownload (void)
 	/*already downloading*/
 	if (cls.download && !cls.demoplayback)
 		return;
+
+	/*FTESurf Patch 464: an http download needs no server, so don't make it wait for one.
+	  The queue below only drains while connecting or connected, which is right for a
+	  netchan download -- it has nowhere to send the request otherwise. A DLLF_TRYWEB one
+	  does: HTTP_CL_Think is pumped from the top of Host_Frame regardless of connection
+	  state, so the map browser can fetch a missing bsp while the player sits in the menu.
+	  Only TRYWEB entries qualify; everything else still waits, and the ordering rules
+	  below (NONGAME, then REQUIRED) are left untouched for the connected case.*/
+	if (cls.state < ca_connected && !cl.sendprespawn && cl.downloadlist)
+	{
+		downloadlist_t *wdl;
+		for (wdl = cl.downloadlist; wdl; wdl = wdl->next)
+		{
+			if (wdl->flags & DLLF_TRYWEB)
+			{
+				CL_SendDownloadStartRequest(wdl);
+				return;
+			}
+		}
+		return;
+	}
 
 	/*request downloads only if we're at the point where we've received a complete list of them*/
 	if (cl.sendprespawn || cls.state == ca_active)

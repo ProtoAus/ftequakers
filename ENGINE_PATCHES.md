@@ -34217,3 +34217,70 @@ command. The text read as fluent prose with the load-bearing nouns removed. Thir
 the same fault in one session -- heredoc backslash collapse, then a heredoc eating a fix,
 then this -- and the standing rule is already written down: compose escape-bearing text with
 a file write, never inside a shell string.
+
+## Patch 464 — the map browser can fetch a map you do not have, over http, with no server  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+
+Three engine changes, all client-side, plus the QC that uses them. The feature asked for
+was "a download button on the right of the map list"; most of the work was that none of
+the four paths it needed existed end to end.
+
+**Why a builtin and not `localcmd("download …")`.** `PF_localcmd` adds to the command
+buffer at `RESTRICT_INSECURE` (`common/pr_bgcmd.c:7413`), and it does that for every VM —
+menuqc and a server's stuffcmd are indistinguishable at that level. So the console
+`download` command takes its *server-initiated* branch (`client/cl_main.c:5481`), which is
+wrong for a menu button twice over: it calls `CL_AllowArbitaryDownload`, and
+`cl_download_redirection` defaults to `2`, which permits only `demos/*.mvd` and
+`package/*.pak` and refuses a bare map outright; and it enqueues with
+`DLLF_REQUIRED|DLLF_VERBOSE` and no `DLLF_ALLOWWEB`, so even when allowed the transfer
+ignores `sv_dlURL` and crawls over the netchan. Relaxing `cl_download_redirection` was the
+obvious alternative and is the wrong one — its own description says it "allows the server
+to send nearly arbitary download commands", so buying a menu button with it would weaken
+every player's client against every server they join.
+
+`PF_m_downloadmap` (`client/pr_menu.c`, registered as `downloadmap`, ebfsnum 0) is reachable
+only from our own `menu.dat`. It takes a **bare map name**, not a path, and composes
+`maps/<name>.bsp` itself after rejecting anything outside `[A-Za-z0-9_-]` — so no caller can
+steer it, and the validation is a whitelist rather than the blacklist `CL_AllowArbitaryDownload`
+has to use. Returns 0 refused, 1 started, 2 already present.
+
+**`CL_RequestNextDownload` would never have started it.** The queue is drained only under
+`if (cl.sendprespawn || cls.state == ca_active)`, which is correct for a netchan download —
+there is nowhere to send the request otherwise — but the map browser is a *menu* screen and
+the player is usually connected to nothing. An http download has no such dependency:
+`HTTP_CL_Think` is pumped from the top of `Host_Frame` (`client/cl_main.c:7433`) regardless
+of connection state, and `CL_EnqueDownload`'s `cls.state < ca_connected` bail is already
+inside its non-web branch only (`client/cl_parse.c:569`). So a `DLLF_TRYWEB` entry is now
+started while disconnected, and nothing else is: the ordering rules below it (NONGAME, then
+REQUIRED) are untouched for the connected case.
+
+**And it would have started exactly one.** `CL_DownloadFinished` does not chain, and every
+other caller of `CL_RequestNextDownload` sits on a connection path, so a second queued map
+would have waited forever behind the first. `CL_WebDownloadFinished` now re-pumps when
+disconnected. Harmless when connected — the call returns immediately while `cls.download`
+is still set.
+
+**What is NOT an engine change, and was the surprise.** The progress bar, the percentage
+and the KB/s readout needed nothing: `serverkey("dlstate")` already returns
+`files-remaining total-size unknown-flag localname remotename percent rate received total`,
+and `PF_cl_serverkey_internal` reads `cls.download` directly rather than through a VM, so
+menuqc can ask (`client/pr_clcmd.c:1433-1447`). The 1 MB/s cap needed nothing either —
+`sv_maxdrate` already exists and already defaults to `500000`, which is the real answer to
+"do we get full uncapped speeds": we did not, we got half the asked-for figure, and only on
+the fallback path. The http path is capped by nginx (`surfd/maps.nginx`, `limit_rate 1m`),
+because that is where the bytes actually go.
+
+QC side: `src/defs/m_defs.qc` declares `downloadmap` as `#0:downloadmap` and feature-detects
+with `checkbuiltin`, exactly as `localcmd_local` above it does — on an older binary the
+button never draws rather than the menu failing to load. `src/menu/m_main.qc` gains
+`ui_dl_load` (reads `data/mapdl.txt`, appends the maps the Pi serves and this install lacks),
+`Dl_Tick` (polled from `m_draw` **outside** the `menu_active` gate, because a download
+survives an ESC and the only thing that notices it finished is that tick), and the gutter
+that draws the button, the bar and the rate.
+
+**The verification that matters and the one that does not.** 0 fteqcc warnings and a clean
+engine link say nothing about whether the builtin *binds* — a `#0` with no `:name` compiles
+perfectly and resolves to nothing, which is the bug this patch had until `menu.dat` was
+checked against a known-good control (`localcmd_local` present, `checkbuiltin` present, an
+invented name absent). The one real compiler warning in the engine build,
+`cl_parse.c:1735 -Waddress` on `cl.model_csqcname`, is pre-existing upstream code: both
+hunks of this patch are at 733 and 1967, and `model_csqcname` appears nowhere in the diff.

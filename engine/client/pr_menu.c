@@ -2430,6 +2430,49 @@ static void QCBUILTIN PF_m_clipboard_get(pubprogfuncs_t *prinst, struct globalva
 	Sys_Clipboard_PasteText(cliptype, PF_m_clipboard_got, prinst);
 }
 
+//FTESurf Patch 464: the map browser's download button.
+//menuqc's localcmd runs at RESTRICT_INSECURE (pr_bgcmd.c PF_localcmd), so a
+//`download maps/foo.bsp` from the menu takes CL_Download_f's SERVER-INITIATED
+//branch, and that branch is wrong for us twice over: cl_download_redirection
+//defaults to 2, which permits only demos/*.mvd and package/*.pak and refuses a
+//bare map outright; and its flags carry no DLLF_ALLOWWEB, so even when allowed it
+//ignores sv_dlURL and crawls over the netchan at sv_maxdrate (500KB/s default).
+//A builtin is reachable only from our own menu.dat and never from a server, so it
+//can take the user's intent at face value. We compose the path from a validated
+//BARE NAME rather than accepting one, so no caller can steer it.
+//Returns 0 refused, 1 started, 2 already present.
+static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char *name = PR_GetStringOfs(prinst, OFS_PARM0);
+	char rel[MAX_QPATH];
+	const char *c;
+
+	G_FLOAT(OFS_RETURN) = 0;
+
+	if (!name || !*name || strlen(name) > MAX_QPATH-16)
+		return;
+	for (c = name; *c; c++)
+		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+		      (*c >= '0' && *c <= '9') || *c == '_' || *c == '-'))
+			return;	//a map name, not a path: no dot, slash, colon or backslash reaches here
+
+	Q_snprintfz(rel, sizeof(rel), "maps/%s.bsp", name);
+
+	if (COM_FCheckExists(rel))
+	{
+		G_FLOAT(OFS_RETURN) = 2;
+		return;
+	}
+
+	//CL_CheckOrEnqueDownloadFile returns TRUE for "do not wait" -- already held, a
+	//local server, or the enqueue failed -- and FALSE once it is really queued.
+	if (!CL_CheckOrEnqueDownloadFile(rel, rel, DLLF_USEREXPLICIT|DLLF_REQUIRED|DLLF_VERBOSE|DLLF_ALLOWWEB))
+	{
+		CL_RequestNextDownload();	//nothing pumps the queue from the menu; see the Patch 464 block there
+		G_FLOAT(OFS_RETURN) = 1;
+	}
+}
+
 static struct {
 	char *name;
 	builtin_t bifunc;
@@ -2808,6 +2851,7 @@ static struct {
 //	{NULL,						PF_Fixme,					501},
 //	{NULL,						PF_Fixme,					502},
 	{"whichpack",				PF_whichpack,				503},
+	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 464
 															//gap
 	{"uri_escape",				PF_uri_escape,				510},
 	{"uri_unescape",			PF_uri_unescape,			511},
