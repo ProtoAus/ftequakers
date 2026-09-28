@@ -34183,28 +34183,37 @@ Held in the 458/460/463 deploy at its author's request, because its only network
 not work and a lobby is the only configuration that matters for a client-side stat. Shipped
 once that arm moved.
 
-**The reading that changed the answer**, measured by ftesurf-a1 on  at commit
-46f0588: the server's own  after the run-up reads , and the
-trainer's first strafe reads .  agrees with the server EXACTLY at a
+**The reading that changed the answer**, measured by ftesurf-a1 on `fteqwsv64` at commit
+46f0588: the server's own `viewpos` after the run-up reads `velocity 0 -260 0`, and the
+trainer's first strafe reads `v 260->282`. `Trn_Speed` agrees with the server EXACTLY at a
 NON-ZERO value across the wire. The earlier cut agreed at zero, which a stat that never
 arrived produces too -- so the first agreement was worth nothing and this one is the whole
-case. Also  measuring , a ramp-touching
-strafe graded 120 ms of its 165 ms, an ungradeable strafe drawn grey with  rather than a
+case. Also `cl_yawspeed 420` measuring `rate 420.0 ideal 425.8 q 0.995`, a ramp-touching
+strafe graded 120 ms of its 165 ms, an ungradeable strafe drawn grey with "-" rather than a
 zero, and 0 client-VM error lines over ~10 s with the panel on.
 
-Their own root cause is worth recording:  loads the map and exits,
-and the server half of the arm had been a second  -- a LISTEN server, which
-brings its own local player. One log carried both  and
-: two bodies, and the test client's was not the one being driven.
-The server half is  now.
+Their own root cause is worth recording: `ftesurf64.exe -dedicated` loads the map and exits,
+and the server half of the arm had been a second `ftesurf64.exe` -- a LISTEN server, which
+brings its own local player. One log carried both "client Proto connected" and
+"client (1)Proto connected": two bodies, and the test client's was not the one being driven.
+The server half is `fteqwsv64.exe` now.
 
 **Verified here before shipping rather than on the report**: 0 fteqcc warnings, csprogs
-4,827,514 bytes matching their figure exactly, and  re-run in this
-tree -- 0  lines (the rule they added to AGENTS.md after finding that
+4,827,514 bytes matching their figure exactly, and `cfg/test/p462trn.cfg` re-run in this
+tree -- 0 "Unknown command" lines (the rule they added to AGENTS.md after finding that
 config files have no block comments and were feeding their own prose to the command
 interpreter), and trainer rows carrying moving non-zero velocities rather than the zeros a
 dead stat gives.
 
- again found a row for each of the 12 lobbies and 0 players on every one. csprogs
-94b2f7c6..., qwprogs unchanged at 8f74c5f9... -- correct, 462 is client-only. Previous pair
-kept as .
+`build.ps1 -Pi` again found a row for each of the 12 lobbies and 0 players on every one.
+csprogs 94b2f7c6..., qwprogs unchanged at 8f74c5f9... -- correct, 462 is client-only.
+Previous pair kept as .prev.
+
+**A note on how this entry was first written, because it is the session's recurring trap.**
+The paragraphs above landed gutted the first time: the append ran through a bash-quoted
+Python string, and every backticked term was taken as command substitution, so `fteqwsv64`,
+`viewpos`, `Trn_Speed` and a dozen others were replaced by the empty output of a failed
+command. The text read as fluent prose with the load-bearing nouns removed. Third variant of
+the same fault in one session -- heredoc backslash collapse, then a heredoc eating a fix,
+then this -- and the standing rule is already written down: compose escape-bearing text with
+a file write, never inside a shell string.
