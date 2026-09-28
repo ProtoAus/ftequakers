@@ -34176,3 +34176,35 @@ until `release.ps1`. The 543 zone mirrors are local to Lex's disk on purpose. An
 already recorded against a run does not re-verify itself (`sweep.py` marks any non-ERROR
 verdict `checked = 1` and there is no bulk re-check), so 463 helps runs verified from now
 on and not the ones it would have rescued.
+
+## Patch 462 deployed to the 12 lobbies, 2026-09-28
+
+Held in the 458/460/463 deploy at its author's request, because its only networked arm did
+not work and a lobby is the only configuration that matters for a client-side stat. Shipped
+once that arm moved.
+
+**The reading that changed the answer**, measured by ftesurf-a1 on  at commit
+46f0588: the server's own  after the run-up reads , and the
+trainer's first strafe reads .  agrees with the server EXACTLY at a
+NON-ZERO value across the wire. The earlier cut agreed at zero, which a stat that never
+arrived produces too -- so the first agreement was worth nothing and this one is the whole
+case. Also  measuring , a ramp-touching
+strafe graded 120 ms of its 165 ms, an ungradeable strafe drawn grey with  rather than a
+zero, and 0 client-VM error lines over ~10 s with the panel on.
+
+Their own root cause is worth recording:  loads the map and exits,
+and the server half of the arm had been a second  -- a LISTEN server, which
+brings its own local player. One log carried both  and
+: two bodies, and the test client's was not the one being driven.
+The server half is  now.
+
+**Verified here before shipping rather than on the report**: 0 fteqcc warnings, csprogs
+4,827,514 bytes matching their figure exactly, and  re-run in this
+tree -- 0  lines (the rule they added to AGENTS.md after finding that
+config files have no block comments and were feeding their own prose to the command
+interpreter), and trainer rows carrying moving non-zero velocities rather than the zeros a
+dead stat gives.
+
+ again found a row for each of the 12 lobbies and 0 players on every one. csprogs
+94b2f7c6..., qwprogs unchanged at 8f74c5f9... -- correct, 462 is client-only. Previous pair
+kept as .
