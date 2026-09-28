@@ -34218,7 +34218,20 @@ the same fault in one session -- heredoc backslash collapse, then a heredoc eati
 then this -- and the standing rule is already written down: compose escape-bearing text with
 a file write, never inside a shell string.
 
-## Patch 464 — the map browser can fetch a map you do not have, over http, with no server  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+## Patch 464 is claimed elsewhere and has no entry here  *(BOOKKEEPING)*
+
+`lextest.md` §2g ("The segment percentage, and the air rows are yellow now")
+already calls its change Patch 464, and that number never reached this file. So
+the highest number HERE was 463 while the highest number IN USE was 464, and the
+obvious way to pick the next one -- scan this ledger for the maximum -- hands you
+a number that is already taken. This session did exactly that and had to
+renumber to 465 after the fact.
+
+Anything that allocates a patch number should grep the whole tree, not just this
+file: `grep -rn "Patch 4[0-9][0-9]" --include=*.md --include=*.qc --include=*.c`.
+If 464 later gets a real write-up, it goes here under this heading.
+
+## Patch 465 — the map browser can fetch a map you do not have, over http, with no server  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
 
 Three engine changes, all client-side, plus the QC that uses them. The feature asked for
 was "a download button on the right of the map list"; most of the work was that none of

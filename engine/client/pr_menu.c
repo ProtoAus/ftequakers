@@ -2430,7 +2430,7 @@ static void QCBUILTIN PF_m_clipboard_get(pubprogfuncs_t *prinst, struct globalva
 	Sys_Clipboard_PasteText(cliptype, PF_m_clipboard_got, prinst);
 }
 
-//FTESurf Patch 464: the map browser's download button.
+//FTESurf Patch 465: the map browser's download button.
 //menuqc's localcmd runs at RESTRICT_INSECURE (pr_bgcmd.c PF_localcmd), so a
 //`download maps/foo.bsp` from the menu takes CL_Download_f's SERVER-INITIATED
 //branch, and that branch is wrong for us twice over: cl_download_redirection
@@ -2468,7 +2468,7 @@ static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars
 	//local server, or the enqueue failed -- and FALSE once it is really queued.
 	if (!CL_CheckOrEnqueDownloadFile(rel, rel, DLLF_USEREXPLICIT|DLLF_REQUIRED|DLLF_VERBOSE|DLLF_ALLOWWEB))
 	{
-		CL_RequestNextDownload();	//nothing pumps the queue from the menu; see the Patch 464 block there
+		CL_RequestNextDownload();	//nothing pumps the queue from the menu; see the Patch 465 block there
 		G_FLOAT(OFS_RETURN) = 1;
 	}
 }
@@ -2851,7 +2851,7 @@ static struct {
 //	{NULL,						PF_Fixme,					501},
 //	{NULL,						PF_Fixme,					502},
 	{"whichpack",				PF_whichpack,				503},
-	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 464
+	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 465
 															//gap
 	{"uri_escape",				PF_uri_escape,				510},
 	{"uri_unescape",			PF_uri_unescape,			511},

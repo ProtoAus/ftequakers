@@ -731,7 +731,7 @@ static void CL_WebDownloadFinished(struct dl_download *dl)
 		CL_DownloadFinished(&dl->qdownload);
 	}
 
-	/*FTESurf Patch 464: drain the rest of the queue with no server to do it for us.
+	/*FTESurf Patch 465: drain the rest of the queue with no server to do it for us.
 	  CL_DownloadFinished does not chain, and every other caller of
 	  CL_RequestNextDownload sits on a connection path, so a second queued map would
 	  sit there forever after the first finished. Harmless when connected: the call
@@ -1964,7 +1964,7 @@ void CL_RequestNextDownload (void)
 	if (cls.download && !cls.demoplayback)
 		return;
 
-	/*FTESurf Patch 464: an http download needs no server, so don't make it wait for one.
+	/*FTESurf Patch 465: an http download needs no server, so don't make it wait for one.
 	  The queue below only drains while connecting or connected, which is right for a
 	  netchan download -- it has nowhere to send the request otherwise. A DLLF_TRYWEB one
 	  does: HTTP_CL_Think is pumped from the top of Host_Frame regardless of connection
