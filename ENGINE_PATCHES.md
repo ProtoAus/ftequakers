@@ -34298,6 +34298,88 @@ invented name absent). The one real compiler warning in the engine build,
 `cl_parse.c:1735 -Waddress` on `cl.model_csqcname`, is pre-existing upstream code: both
 hunks of this patch are at 733 and 1967, and `model_csqcname` appears nowhere in the diff.
 
+### Patch 466 — having the FILE and having the RIGHT BUILD are different facts
+
+Patch 465 gave the map browser a Download button and asked one question of each
+map: `COM_FCheckExists("maps/<name>.bsp")`. That is a question about a NAME. The
+question that matters is about a BUILD, and the gap between them is not academic
+— it is the single case the whole feature could not help with, and it is the
+case a server kicks you for.
+
+Reported from a laptop, verbatim: *"it still doesn't download the map? Should
+it?"* It should not have, and did not, and that was correct: the map was on
+disk. What followed in the same log was the real event.
+
+```
+Map model file does not match (maps/surf_666.bsp), 0XC6702B74 != 0X77D2E0BD
+You have been kicked due to the file maps/surf_666.bsp being modfied,
+  located at .../Momentum Mod Playtest/momentum/maps/surf_666.bsp
+```
+
+Measured rather than assumed: the Pi and this workstation both hold
+`cb5343da145f636f459d04729a587e7760d99e0e` for surf_666, which is the roster's
+pin with 53 demo attestations. The server was serving the right build. The
+reporter's Momentum install held a different one, and the browser had no way to
+say so and no way to replace it.
+
+**`downloadmap(name, force)`** — force skips the presence test and adds
+`DLLF_OVERWRITE`, whose real meaning is "ignore any local files"
+(client.h:609's own note) rather than "clobber". The result does not touch the
+user's Steam content: this path leaves `fsroot` at `HTTP_CL_Get`'s default
+`FS_GAMEONLY` (only `DLLF_NONGAME` forces `FS_ROOT`, cl_parse.c:810), so the
+file lands in `ftesurf/maps/` and SHADOWS the lower mount. With Patch 465's
+.tmp-then-rename, a re-get that fails leaves the old build rather than no map.
+Traced through the field rather than reasoned from the flag's name, because the
+failure mode if it were wrong is deleting content out of a Steam install.
+
+**`mapfilekb(name)`** — the size, in KB, of the `maps/<name>.bsp` the engine
+would actually LOAD, via `FS_FLocateFile`, ie the mount order.
+
+Two things in that sentence are load-bearing.
+
+*Not `search_getfilesize`.* That answers for whichever duplicate the search
+listed first, and NAMESORT is an explicitly unstable qsort (pr_bgcmd.c:3592-98),
+so with the same map in two mounts it can describe the copy the engine will NOT
+load — which is precisely the configuration this exists for. The test proves the
+difference rather than asserting it: with a truncated shadow planted in
+`ftesurf/maps/`, `mapfilekb` reports 483 KB, the shadow, not the 965 KB Momentum
+copy underneath it.
+
+*Kilobytes, not bytes.* A QC float is 32-bit and exact only to 2^24; maps here
+run past 200 MB and surf_666 alone is 21,644,745 bytes, already past the point
+where a byte count survives the trip into QC. KB also matches
+`data/mapdl.txt`'s own column, so the two compare as authored. The first draft
+of the C wrote `(double)(loc.len + 1023) / 1024`, which is a ratio and not a
+ceiling; the integer divide has to happen first.
+
+**A size difference is conclusive proof of a different build. Equal sizes prove
+nothing.** So this under-reports by construction and never accuses a correct
+install, which is the right way round for a check whose action is to spend the
+player's bandwidth. The honest limit: two builds of the same size are missed.
+
+**What the arms measured.** `tools/p466reget.py`, and the control is the
+interesting one.
+
+    CONTROL  nothing planted   wrongbuild 2 (= baseline), state idle throughout,
+                               nothing written, mirror served 0
+    SUBJECT  483 KB shadow     wrongbuild 3, localkb 483 (the SHADOW, not the
+                               965 KB copy under it), idle -> active -> ok,
+                               987533 bytes afterwards, sha1 == the served file,
+                               no .tmp, and wrongbuild falls back to 2
+
+**The baseline is 2, not 0, and assuming otherwise would have made the control
+meaningless.** Those two are `surf_dune` and `surf_fantasy` — the CS:S builds
+lextest 2i has been asking about, found here by a completely different signal
+(size against the Pi) from the one that found them originally (hash
+attestation). Two independent methods, same two maps.
+
+**And the first cut of the arm graded a reading that could only ever be zero.**
+`ui_load_maps` is lazy, so a bare `ui_dlmap` at startup reports `list 0`; the
+grader took the FIRST wrongbuild figure, which was always that one, and the
+control passed while measuring an empty list. The cfg now calls `ui_maplist`
+first and the grader discards any row whose list is 0. Same family as Patch
+453's stride and the sparse `.rec` dump: the sample never contained the thing.
+
 ### Patch 465, second cut — the interrupted download, found by finally testing the first cut
 
 The entry above was written from a build that compiled and a feature that was
