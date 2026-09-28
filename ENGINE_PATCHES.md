@@ -34070,3 +34070,109 @@ field is `zonesrc` -- it notes it instead, because the grammar block now calls t
 informational and `pm_verify` deliberately accepts it; the two readers were otherwise in
 disagreement on the very fixture this arm calls its core claim. `test_reccheck.py`: 295
 checks, 0 failed.
+
+## Patches 458, 460 and 463 deployed to the 12 lobbies, 2026-09-28
+
+Lex: *"Do whatever you need, don't be scared to restart lobbies... We're in development."*
+
+**The engine binary on the fleet was older than every one of these.** The newest swap
+backup was `fteqw-svarm64.pre427-20260922`, so 458, 460 and 463 had never been on a lobby.
+461 is mod-side and rode the progs.
+
+### What went out
+
+| | |
+|---|---|
+| `engine/server/sv_user.c` | 458 -- the pmove scale quantised, so client and server collide against the same prop |
+| `engine/common/plugin.c` | 460 -- plugin cvar flags stop being masked to `CVAR_ARCHIVE` |
+| `engine/server/sv_ccmds.c` | 463 -- the zone pin stops comparing the source directory |
+| `plugins/hl2/mod_vbsp.c` | 460 -- the three hl2 collision cvars become `CVAR_CHEAT` |
+| `qwprogs.dat` / `csprogs.dat` | the prop work, the zone loader's no-zones fallback |
+| 66 zone files | maps that could not be timed at all now can |
+
+### The Pi tree was at exactly the pre-458 baseline, and that was checked rather than assumed
+
+`/srv/nvme/p349build` is hand-maintained and not a git checkout, so AGENTS.md says to
+`git hash-object` before assuming anything is current. All four files hashed to
+`65d937ba6^` exactly, so sending HEAD's versions gave precisely 458 + 460 + 463 with no
+unrelated patch riding along. After the transfer all four hashed to HEAD.
+
+### The gate
+
+`pm_dettest` on `bhop_eazy`, arm64 against Windows -- **every hash identical**, including
+`libm`:
+
+```
+mapcrc 676de275   libm 5e749b8a83b44107   trace f7958b04dbcd1008
+mover 3d136f8de25c9c2c   tick 93e8615d81c26325  ticks 2048/2048
+```
+
+Then `pm_verify` on a real 15232-tick recording from the Pi's own `data/runs`:
+`PASS ticks 15232 rows 15232`, `physents: 15232 rows match the recorded digest, 0 do not`,
+and Patch 463's new line reading `zone pin matched: crc file "01800a51" here "01800a51"
+rule file 1 1 0 here 1 1 0`. That is the patch working on live evidence rather than on a
+fixture.
+
+**Three things the gate caught that a swap-and-hope would not have:**
+
+- A dedicated server needs `+map` on the command line; a `map` line inside the cfg is too
+  late and it dies with *"Couldn't load a map"*. AGENTS.md says so and the first run proved
+  it.
+- `make plugins-rel` builds every plugin, and ffmpeg (no `libswscale`) and quake3/xmpp (no
+  `zip`) fail on this Pi. The broken `fteplug_quake3_arm64.so` they left in
+  `engine/release` **segfaulted the engine on load**. Building from the game dir instead of
+  the build dir is what the live configuration actually is; the broken artefacts were
+  deleted.
+- `NATIVE_PLUGINS=hl2` builds the one plugin needed. Its `EMBEDMETA` step also fails for
+  want of `zip` -- and the deployed plugin is byte-for-byte the same size, so that step has
+  never run on this Pi. It embeds a plugin description for a browser UI, nothing
+  functional. The new `.so` hashes differently from the old and carries `CHEAT-LATCHED`
+  three times where the old carries it zero times, so the change is in.
+
+### One risk checked before shipping 460
+
+`CVAR_CHEAT` force-sets to the ENGINE default (`cvar.c:1159-1166`), so if the plugin's
+declared default disagreed with `default.cfg` the lock would have overridden the config --
+and for `hl2_propcollision` that means turning prop collision OFF on 12 lobbies. Measured:
+the plugin declares `"1"`, `"0"`, `"1"` and `default.cfg` sets `1`, `0`, `1`. A no-op,
+which is what the `default.cfg` comment claimed and what nobody had verified.
+
+### Patch 462 was HELD, at its author's request
+
+`build.ps1 -Pi` ships whatever the tree builds, so HEAD's csprogs contained ftesurf-a1's
+strafe trainer. Asked; the answer was hold, with the reasoning that its only networked arm
+does not work yet (the body never moves against a remote server, not root-caused) so the
+one configuration a lobby runs is the one untested. Built from a `git worktree` at HEAD with
+`git revert --no-commit 6a9fc9d` applied **there only**, plus `git rm` of three test cfgs
+that later commits had modified -- their tested recipe. Result: 0 `Trn_`/`cl_trainer`
+references, `cl_trainer.qc` absent, `HUDE_MAX` back to 20, and csprogs 4,773,902 bytes
+against 4,827,514 with the trainer. Worktree removed after.
+
+### Sequencing that mattered
+
+The sweeper picks up a new binary **immediately** on swap; the lobbies keep the old one
+until restarted. So `pm_verify` behaviour changed for every queued run at swap time, before
+any lobby restarted -- which is why the gate ran first and on port 27750/27751/27752, never
+27698. Backups kept as `fteqw-svarm64.pre463-20260928-005626` and
+`fteplug_hl2_arm64.so.pre460-20260928-005626`.
+
+`-Pi` refused nothing: its own check found a row for each of the 12 lobbies and 0 players on
+every one. All 12 restarted.
+
+### Verified live afterwards
+
+```
+zones(sv): 6 on surf_utopia_njv (maps/zones/local) crc 4260ad9c
+```
+
+on the fleet's own binary and zone files -- the same crc the local arm measured for that
+donation. That map had no start, no end and no clock before today.
+
+### Not deployed, and stated so it is not assumed
+
+The **client** half of 460 reaches players only through a release, not through `-Pi`: the
+cheat lock on `hl2_propcollision` binds the client's own engine, and a player keeps theirs
+until `release.ps1`. The 543 zone mirrors are local to Lex's disk on purpose. And a REFUSE
+already recorded against a run does not re-verify itself (`sweep.py` marks any non-ERROR
+verdict `checked = 1` and there is no bulk re-check), so 463 helps runs verified from now
+on and not the ones it would have rescued.
