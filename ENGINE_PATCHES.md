@@ -34426,3 +34426,56 @@ cvar on a client, so it is dead configuration while that line exists. And
 `DL_HOLD` is 6 s, so the arm's original 8 s probe interval stepped over the
 completion banner entirely and reported `active -> idle` with the map on disk,
 which reads exactly like a download that never finished.
+
+## Patch 467 — the milk visualizer: a raymarched 3D menu, a visualizer sky, and `snd_getvis` analysing the mix  *(APPLIED, engine + QC — `build.ps1 -Engine`)*
+
+**Problem.** QC could not see what the game was playing (`getchannellevel` reads one
+channel's source sample), so nothing could react to music or to the game's own sounds;
+there was no way to muffle the game under the menu; and the menu was two flat screens.
+
+**Change — engine.** `client/snd_vis.c` (new), hooked from `snd_mix.c`, `snd_dma.c`, both
+VM builtin tables and `pr_cmds.c`'s docs. `S_PaintChannels` copies the head card's mono mix
+(16-bit scale, before device conversion) into a 32768-frame ring just before
+`S_TransferPaintBuffer`. Analysis runs lazily when QC asks, on a fixed AUDIO-time grid
+(`snd_vis_rate`, catching up after frame hitches — analysing once per frame dropped 13 of 16
+kicks under stalls): Hann + 1024-point FFT, MilkDrop's bass/mid/treb/vol against a
+long-term average, onsets (bass 1.35 / 0.18 s, treble 1.5 / 0.12 s), and a log-spectrum
+RGBA8 image. The window ends at the DirectSound play cursor recorded in `S_Update_`
+(WASAPI: its queue length), so visuals do not lead the audio by `s_mixahead`.
+`snd_fx_lowpass` is a 2-pole Butterworth AFTER the tap, gliding in log-frequency and
+crossfading to a bit-exact bypass; the mixer reads only values latched under `mixermutex`.
+QC: `float(float *out, float count) snd_getvis`, `float(string imagename, float bands)
+snd_visimage`; console `snd_visinfo`. OpenAL (`QSF_EXTERNALMIXER`) has no mix to tap and
+reports that instead of zeros that look like silence.
+
+**Change — QC.** `src/milk_sys.qc` (menu.dat and csprogs.dat) is a MilkDrop-style feedback
+renderer on existing builtins only — targets via `setproperty(VF_RT_DESTCOLOUR, name, fmt,
+size)`, per-tick data via `VF_USERDATA` -> `w_user[16]`, materials via `shaderforname`,
+sprites via 2D `R_BeginPolygon`. One tick at a FIXED 60 Hz (MilkDrop applies zoom/decay per
+frame, which at `cl_maxfps 1000` would run 16x fast): scene, feedback warp
+(zoom/rot/wobble/slime/kaleidoscope, decay), sprites, bloom at 1/2 and 1/4, ACES composite;
+the only per-frame pass is the present. `src/menu/m_milk.qc`: four stations raymarched in
+`glsl/milk_scene.glsl` (cube lattice, spectrum tower field, ring tunnel, orb pool), a camera
+flight between them on every screen change, mouse-look, the hovered row drawn INTO the
+feedback so it glows and leaves a ghost, and new VISUALS / MUSIC screens. Only while
+disconnected — over a live run the old translucent backdrop stays. `src/client/cl_milk.qc`:
+`r_skybox milk` draws every sky surface from `$rt:ms_out` via the script shader
+`skybox_milk` (R_LoadShader prefers script shaders to R_SetSky's generated text,
+`gl_shader.c:8710-8723`; `gfx/env/milk.png` exists only so R_SetSky takes that branch),
+driven by the mix, speed and landings — no input, angle or recording path is touched.
+GL only (`Milk_Supported`): Vulkan's 2D target switch is an empty function.
+
+**Verified.** Engine, standalone core: FFT against a direct DFT 1.2e-7; kicks 20/20 at 30,
+120 and 1000 analyses/s; identical from -6 to -46 dBFS; the 500 Hz filter -49.8 dB at
+8 kHz, bit-exact bypass, no click. Real mixer, DirectSound and WASAPI
+(`cfg/test/p467sndvis*.cfg`, graded by `tools/p467visprobe.py --grade`): every kick and hat
+detected, 0 extras; the analysis identical with the filter on and off while the filter
+measured -39.4 dB on the hats; ~20-55 us per analysis. QC, 0 warnings;
+`cfg/test/p467milk.cfg` photographs all four stations; two shots of one station 6 s apart
+differ in 61% of the lattice region (the sim runs); `cfg/test/p467perf.cfg` on an Intel N100
+iGPU at 2256x1380, uncapped, against the flat backdrop: q1 +1.3 ms, q2 +3.3 ms, q3 +18.8 ms
+per frame (after rendering the raymarch at 0.75x and one tick a frame past 25 ms; before:
+2.6 / 8.7 / 33 ms); `cfg/test/p467sky.cfg` on surf_rookie: 100% of sky pixels differ from
+the map's own sky; `vid_renderer vk` falls back to the flat backdrop with the menu working.
+NOT verified: the OpenAL path (no OpenAL DLL on the test machine), any non-Intel GPU, and
+mouse-look (a minimized harness has no cursor).

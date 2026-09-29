@@ -819,6 +819,7 @@ CLIENT_OBJS = \
 	snd_dma.o	\
 	snd_mem.o	\
 	snd_mix.o	\
+	snd_vis.o	\
 	snd_flac.o	\
 	snd_minimp3.o	\
 	snd_mp3.o	\

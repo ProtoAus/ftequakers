@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_mix.c -- portable code to mix sounds for snd_dma.c
 
 #include "quakedef.h"
+#include "snd_vis.h"
 
 #ifdef HAVE_MIXER
 
@@ -408,6 +409,10 @@ void S_PaintChannels(soundcardinfo_t *sc, int endtime)
 		}
 
 	// transfer out according to DMA format
+#ifndef MIXER_PAINT_F32
+		SNDVIS_Tap(sc, paintbuffer[0].s, MAXSOUNDCHANNELS, end - sc->paintedtime);	//before the filter: visuals see the dry mix
+		SNDVIS_Lowpass(sc, paintbuffer[0].s, MAXSOUNDCHANNELS, end - sc->paintedtime);
+#endif
 		S_TransferPaintBuffer(sc, end);
 		sc->paintedtime = end;
 	}

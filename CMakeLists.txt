@@ -950,6 +950,7 @@ SET(FTE_CLIENT_FILES
 	engine/client/snd_dma.c
 	engine/client/snd_mem.c
 	engine/client/snd_mix.c
+	engine/client/snd_vis.c
 	engine/client/snd_mp3.c
 	engine/client/snd_ov.c
 	engine/client/textedit.c

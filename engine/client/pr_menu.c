@@ -2,6 +2,7 @@
 
 #include "pr_common.h"
 #include "shader.h"
+#include "snd_vis.h"
 
 #ifdef GLQUAKE
 #include "glquake.h"
@@ -2920,6 +2921,8 @@ static struct {
 															//gap
 	{"log",						PF_Logarithm,				532},
 //	{"getsoundtime",			PF_Fixme,					533},
+	{"snd_getvis",				PF_snd_getvis,				0},	//FTESurf: snd_vis.c
+	{"snd_visimage",			PF_snd_visimage,			0},
 	{"soundlength",				PF_soundlength,				534},
 	{"buf_loadfile",			PF_buf_loadfile,			535},
 	{"buf_writefile",			PF_buf_writefile,			536},

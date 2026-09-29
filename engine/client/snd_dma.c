@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_dma.c -- main control for any streaming sound output devices
 
 #include "quakedef.h"
+#include "snd_vis.h"
 
 #ifdef __GNUC__
 	#define fte_weakstruct __attribute__((weak))
@@ -2363,6 +2364,7 @@ void S_Init (void)
 	Cvar_Register(&snd_ignorecueloops, "Sound controls");
 	Cvar_Register(&snd_linearresample, "Sound controls");
 	Cvar_Register(&snd_linearresample_stream, "Sound controls");
+	SNDVIS_Init();
 
 #ifdef VOICECHAT
 	S_Voip_Init();
@@ -3972,10 +3974,12 @@ void S_Update (void)
 	soundcardinfo_t *sc;
 	RSpeedMark();
 	S_LockMixer();
+	SNDVIS_Latch();
 	for (sc = sndcardinfo; sc; sc = sc->next)
 		S_UpdateCard(sc);
 	S_UnlockMixer();
 	RSpeedEnd(RSPEED_AUDIO);
+	SNDVIS_Frame();
 }
 
 void S_ExtraUpdate (void)
@@ -4060,6 +4064,7 @@ static void S_Update_(soundcardinfo_t *sc)
 		sc->Restore(sc);
 
 	S_PaintChannels (sc, endtime);
+	SNDVIS_NoteMixTime(sc, soundtime);	//for memory-mapped cards soundtime is still the play cursor here
 
 	sc->Submit(sc, soundtime, endtime);
 }

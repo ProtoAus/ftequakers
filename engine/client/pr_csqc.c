@@ -35,6 +35,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "shader.h"
 
 #include "pr_common.h"
+#include "snd_vis.h"
 
 extern usercmd_t cl_pendingcmd[MAX_SPLITS];
 extern cvar_t sv_demo_write_csqc;
@@ -7479,6 +7480,8 @@ static struct {
 	{"soundupdate",				PF_soundupdate,				0},
 	{"getsoundtime",			PF_getsoundtime,			533},
 	{"getchannellevel",			PF_getchannellevel,			0},
+	{"snd_getvis",				PF_snd_getvis,				0},	//FTESurf: snd_vis.c
+	{"snd_visimage",			PF_snd_visimage,			0},
 	{"soundlength",				PF_soundlength,				534},
 	{"buf_loadfile",			PF_buf_loadfile,			535},
 	{"buf_writefile",			PF_buf_writefile,			536},
