@@ -5556,6 +5556,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				   can run without verify, which it cannot. */
 				Con_Printf("  zone pin  matched: %s  (file src \"%s\")\n",
 					           zbuf, hdrzsrc);
+				/* Redundant, not a guard: the globals move only if the VM may
+				   relocate (pr_ssqc_memsize -2, pr_cmds.c; default -1), and then
+				   every pre-call pointer here is stale alike -- the zone pin read
+				   above and SV_RecSim_Step's per-tick return included. */
 				pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
 				G_FLOAT(OFS_PARM0) = zs_ev;
 				G_FLOAT(OFS_PARM1) = zs_az;
