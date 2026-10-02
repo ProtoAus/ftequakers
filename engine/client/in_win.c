@@ -318,11 +318,14 @@ static int ribuffersize;
   and never to a mouse.  The gate is a presence test, not a motion test: every
   digitizer report re-arms it, a resting finger included, so a synthesised report timed
   inside it passes at whatever size and rate its sender chooses and becomes counts on
-  the touchpad device, which the journal names.  Reviewed 2026-10-02 (three lenses):
-  the devid allocator must see padmouse, a release is accepted outside the window so
-  an accepted press cannot latch, the wheel flag is dropped (the legacy WM_MOUSEWHEEL
-  still carries the pad's scroll and gl_vidnt.c has no raw gate on it), and the
-  digitizer reports are counted so the journal shows when the window was armed.*/
+  the touchpad device, which the journal names.  Reviewed 2026-10-02 (three lenses,
+  three rounds): the devid allocator must see padmouse; a release for a button the pad
+  pressed is accepted outside the window so an accepted press cannot latch, and such a
+  report is stripped to those release bits (round 3: whole-report acceptance let one
+  touch seed a hands-off chain of UP|DOWN|motion reports); the wheel flag is dropped
+  (the legacy WM_MOUSEWHEEL still carries the pad's scroll and gl_vidnt.c has no raw
+  gate on it); the digitizer reports and the releases are counted so the journal shows
+  when the window was armed and bounds the releases by the pad's presses.*/
 static HANDLE rawpad[4];
 static int rawpadcount;
 static double rawpad_lasttime = -1;	/*-1 until a digitizer report: 0 is a real time on a process-relative clock*/
@@ -1149,7 +1152,7 @@ static void INS_RawInput_PadRegister(void)
 	Rid.hwndTarget = NULL;
 	rawpad_registered = (*_RRID)(&Rid, 1, sizeof(Rid)) != 0;
 	rawpad_lasttime = -1;
-	in_rawpads_live = rawpad_registered ? rawpadcount : 0;	/*the header says bound, not enumerated*/
+	in_rawpads_live = rawpad_registered ? 1 : 0;	/*the header says bound, not enumerated; one padmouse, one table line, however many collections*/
 	memset(padbuttondown, 0, sizeof(padbuttondown));
 	Con_DPrintf("Raw input: precision touchpad %s -- handle-less motion accepted within %g s of its reports\n",
 		rawpad_registered ? "registered" : "registration FAILED", RAWPAD_WINDOW);
@@ -1552,6 +1555,8 @@ void INS_RawInput_Init(void)
 		in_raw_touchpad = 0;	//FTESurf Patch 468, same rule
 	if (in_raw_padreports < 0)
 		in_raw_padreports = 0;
+	if (in_raw_padrelease < 0)
+		in_raw_padrelease = 0;
 	//in_rawpads_live is published by INS_RawInput_PadRegister: bound, not merely enumerated
 
 	return; // success
@@ -2013,7 +2018,10 @@ void INS_Accumulate (void)
   after lift-off here; on a slower timer it would miss the window, leave rawbuttondown[]
   set, and INS_MouseEvent's dedupe would then swallow every later legacy press on that
   button -- the latch INS_RawInput_DeInit's comment names.  Only buttons the pad itself
-  pressed qualify, so a synthesised release cannot lift a real mouse's held button.*/
+  pressed qualify, so a synthesised release cannot lift a real mouse's held button, and
+  the admitted report is stripped to those release bits before it is applied (see the
+  accept branch), so it carries no motion and presses nothing.  Not gated on the cvar:
+  turning in_rawinput_touchpad off while a pad button is held must still release it.*/
 static qboolean INS_RawInput_PadReleases(void)
 {
 	int b;
@@ -2052,14 +2060,34 @@ void INS_RawInput_MouseRead(void)
 				  inside the window -- the OS synthesised this report from that contact.
 				  Accepted onto padmouse and counted apart from the rejections.*/
 				double now = Sys_DoubleTime();
-				if (rawpadcount > 0 && in_rawinput_touchpad.ival && rawpad_lasttime >= 0
-					&& (now - rawpad_lasttime <= RAWPAD_WINDOW || INS_RawInput_PadReleases()))
+				qboolean inwindow = rawpadcount > 0 && in_rawinput_touchpad.ival && rawpad_lasttime >= 0
+					&& now - rawpad_lasttime <= RAWPAD_WINDOW;
+				qboolean release = !inwindow && rawpadcount > 0 && INS_RawInput_PadReleases();
+				if (inwindow || release)
 				{
 					int b;
 					if (!in_raw_touchpad)
 						Con_DPrintf("Raw input: first handle-less report accepted as touchpad motion, %.1f ms after the digitizer\n", (now - rawpad_lasttime) * 1000);
 					in_raw_touchpad++;
 					mouse = &padmouse;
+					if (release)
+					{
+						/*Admitted for the release alone (round 3): everything else in the
+						  report is stripped, so a report that can only be a late tap-up
+						  carries no motion and presses no other button, which would re-arm
+						  this rule with no finger on the pad.  Only the UP bits of buttons
+						  the pad pressed survive; the extra-button word is left unchanged.*/
+						unsigned short keep = 0;
+						for (b = 0; b < (int)countof(padbuttondown); b++)
+							if (padbuttondown[b])
+								keep |= padbtn_up[b];
+						raw->data.mouse.usButtonFlags &= keep;
+						raw->data.mouse.usFlags = 0;
+						raw->data.mouse.lLastX = raw->data.mouse.lLastY = 0;
+						raw->data.mouse.ulRawButtons = padmouse.oldbuttons & RI_RAWBUTTON_MASK;
+						if (in_raw_padrelease >= 0)
+							in_raw_padrelease++;
+					}
 					for (b = 0; b < (int)countof(padbuttondown); b++)
 					{
 						if (raw->data.mouse.usButtonFlags & padbtn_down[b])

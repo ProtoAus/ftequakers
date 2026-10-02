@@ -34532,7 +34532,8 @@ mouse's. `in_rawinput_touchpad` (default 1, archived) is in the journal's tracke
 table, so the value in force is in every journal.
 
 **What a cheater gains.** A synthesised report timed inside the window, while a finger rests
-on the pad, is accepted — by construction, the window cannot tell them apart. It then becomes
+on the pad, is accepted — by construction, the window cannot tell them apart (the release
+rule adds nothing: a release-admitted report is stripped to release bits). It then becomes
 ordinary counts on the `touchpad` device, which the counts identity, the journal and the turn
 statistics judge like any other motion, with the device table saying a touchpad was in use.
 A machine without a precision touchpad takes the old branch exactly (`rawpadcount` 0).
@@ -34564,10 +34565,12 @@ longer includes them (its essay and `in_rawinput_nolegacy`'s text say so now). A
 a button the pad pressed is accepted outside the window too, so a late up cannot latch the
 button. The first cut of this entry said the opposite about taps; round 2 corrected it.
 
-**The journal's `p` record** (`p <dt> <accepted> <digitizer>`, deltas, from the same two call
-sites as `i`) and the tenth trailer field (digitizer reports) make the accepted count a
-quantity stated three times: the trailer, the sum of the `p` records, and the pointer events
-on the touchpad's devid, which the accepted count must cover. hidcheck checks all three.
+**The journal's `p` record** (`p <dt> <accepted> <digitizer> <released>`, deltas, from the
+same three call sites as `i`: frame, view, end) and the tenth trailer field (digitizer
+reports) make the accepted count a quantity stated three times: the trailer, the sum of the
+`p` records, and the motion events on the touchpad's devid, which the accepted count must
+cover. The released count is bounded by the pad's own presses. hidcheck checks all of it,
+including the direction of both totals on a truncated file.
 
 **What the server sees.** Nothing new. `IN_CountsGet` still sends injected+unenumerated, so a
 pad machine's `rej` column now reads near 0 and says nothing about the gate; the accepted
@@ -34612,3 +34615,30 @@ the game repo's reader on every host that reads journals before any 468 client e
 
 Round 2 build `567b63b5e685`: 0 errors, the same 31 pre-existing warnings in untouched files, the
 `p468smoke.cfg` lines unchanged; `test_hidcheck.py` 170 checks, 0 failed.
+
+### Round 3 — two reviewers on round 2 (control flow and the new release rule; evidence)
+
+Found and fixed: a report admitted by the release rule was then applied in full, so its
+motion and any other DOWN bit it carried went through -- one touch of the pad, ever, could
+seed a hands-off chain of `UP(4)|DOWN(5)|motion` / `UP(5)|DOWN(4)|motion` reports (CONFIRMED
+by trace). Such a report is now stripped to the UP bits of pad-pressed buttons with zero
+motion and an unchanged extra-button word, so it can only release; the releases are counted
+(`in_raw_padrelease`, the third field of `p`) and the reader bounds them by the pad's own
+presses. The release rule was gated on `in_rawinput_touchpad`, so flipping the cvar off while
+a pad button was held would have latched it -- no longer gated. `rawpads` published the
+collection count (up to four) against one `touchpad` table line -- it is 0 or 1 now. Reader:
+the legacy-press note keyed only on the trailer field and told a reviewer the pad could not
+explain the count on a file whose own input table says the acceptance was off -- it reads the
+cvar and `rawpads`; a truncated file's digitizer total was not held to the direction rule --
+it is; a digitizer total of -1 beside `p` records carrying digitizer counts passed -- a fault;
+a negative `p` delta balanced a trailer -- a fault; a pad's raw taps on a devid other than 0
+drew the pre-468 "key events carry devid(s) other than 0" note -- mouse-button events are
+attributed to their pointer, not to a keyboard. Grader: it counted keys and legacy clicks
+sharing devid 0 with the pad as pad events on arms B and C -- motion only now, and the
+"no frame markers" fault is the only one allowed there, not required. Comments that said
+"two call sites" (three) and "acceptance only while the pad was reporting" (releases pass
+outside) are corrected. A wheel-only accepted report produces nothing and is the third
+no-`m` class, now named in the reader.
+
+Round 4 build `1d1f09387abe`: 0 errors, the same 31 pre-existing warnings in untouched files, the
+`p468smoke.cfg` lines unchanged; `test_hidcheck.py` 181 checks, 0 failed.

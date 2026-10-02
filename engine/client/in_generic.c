@@ -201,6 +201,7 @@ int in_raw_unenum = -1;	//Patch 387: ...but leaves this at -1
   the Patch 306 pair (IN_CountsGet); the trailer carries it as a field of its own.*/
 int in_raw_touchpad = -1;
 int in_raw_padreports = -1;	/*Patch 468: reports from the digitizer collection itself -- what armed the window*/
+int in_raw_padrelease = -1;	/*Patch 468: handle-less reports accepted OUTSIDE the window as a release of a pad-pressed button, stripped to that*/
 int in_rawpads_live = -1;	/*Patch 468: digitizer collections bound at raw-input init, for the header*/
 
 /*FTESurf Patch 307: THE BUTTON THAT GOT THROUGH.
@@ -897,9 +898,11 @@ rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
 	                        therefore the positive statement "the pipeline passed
 	                        the counts through untouched", which is the case on
 	                        45,384 of 45,384 measured frames of honest play.
-	p <dt> <acc> <dig>      Patch 468.  Handle-less reports ACCEPTED as touchpad input
-	                        and the digitizer reports that armed the window, since
-	                        the last such line.  An annotation, not an event.
+	p <dt> <acc> <dig> <rel> Patch 468.  Handle-less reports ACCEPTED as touchpad input,
+	                        the digitizer reports that armed the window, and the
+	                        releases admitted outside it, since the last such line.
+	                        An annotation, not an event; rel is at most the pad's
+	                        own presses over a file.
 	# <dt> <text>           a note from the gamecode (save/load marks)
 	! <dt> <n>              n events were lost by the ring BEFORE this point
 	truncated <dt>          the cap was hit; nothing after this exists
@@ -949,6 +952,7 @@ static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
 static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
 static int			in_jrn_prbase, in_jrn_prreported;			/*...and the digitizer reports that armed the window*/
+static int			in_jrn_prlbase, in_jrn_prlreported;			/*...and the releases admitted outside it*/
 static int			in_jrn_nolegacyreported;					/*Patch 307: the last effective suppression state written*/
 /*Patch 310: the render-integrity cvars, resolved ONCE at begin.  Caching the
   pointers is what makes the per-frame poll free -- a Cvar_FindVar per cvar per
@@ -1380,15 +1384,17 @@ static void IN_Journal_Bypassed(double when)
 	IN_Journal_Line(when, "b", tail);
 }
 
-/*FTESurf Patch 468: 'p <accepted> <digitizer>', deltas, when either moved.  The same two
-  call sites as 'i' and for the same reason: an accepted report that carried no motion
-  (a tap's button edges, a report while the mouse was free) drains no event, and the
-  digitizer's own reports never do.  The digitizer count is what armed the window, so a
-  reader can see that acceptance happened only while the pad was reporting.*/
+/*FTESurf Patch 468: 'p <accepted> <digitizer> <released>', deltas, when any moved.  The
+  same three call sites as 'i' (frame, view, end) and for the same reason: an accepted
+  report that carried no motion (a tap's button edges, a wheel report, a report while
+  the mouse was free) drains no event, and the digitizer's own reports never do.  The
+  digitizer count is what armed the window; the released count is the one rule that
+  admits a report outside it, so over a file it is at most the pad's own presses, and a
+  reader holds it to that.*/
 static void IN_Journal_Pad(double when)
 {
 	char tail[64];
-	int acc, rep;
+	int acc, rep, rel;
 
 	if (!in_jrn_buf || in_jrn_full)
 		return;
@@ -1396,11 +1402,13 @@ static void IN_Journal_Pad(double when)
 		return;
 	acc = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;
 	rep = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
-	if (acc == in_jrn_padreported && rep == in_jrn_prreported)
+	rel = (in_raw_padrelease < 0) ? 0 : in_raw_padrelease;
+	if (acc == in_jrn_padreported && rep == in_jrn_prreported && rel == in_jrn_prlreported)
 		return;
-	Q_snprintfz(tail, sizeof(tail), "%i %i", acc - in_jrn_padreported, rep - in_jrn_prreported);
+	Q_snprintfz(tail, sizeof(tail), "%i %i %i", acc - in_jrn_padreported, rep - in_jrn_prreported, rel - in_jrn_prlreported);
 	in_jrn_padreported = acc;
 	in_jrn_prreported = rep;
+	in_jrn_prlreported = rel;
 	IN_Journal_Line(when, "p", tail);
 }
 
@@ -1852,6 +1860,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
 	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
 	in_jrn_prreported = in_jrn_prbase = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
+	in_jrn_prlreported = in_jrn_prlbase = (in_raw_padrelease < 0) ? 0 : in_raw_padrelease;
 	/*Patch 307: the header carries the state at begin, so only CHANGES from it are
 	  worth a line.  Seeding from the live value means a run that never alt-tabs
 	  writes no 'g' record at all.*/
