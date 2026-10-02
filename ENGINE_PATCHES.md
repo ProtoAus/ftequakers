@@ -34747,3 +34747,21 @@ shows its target drawn at the logged value. `p469plane` re-run on this build: un
 **Not done** (BACKLOG): the Segments column's three `pm_ticrate` reads in cl_board.qc and the
 debug energy readout still use the server's tick in a replay; the replay reads `tickrate` and
 never `movetickrate`; the other eight movevars still come from the server (`pmpin`).
+
+## Patch 471 — `sl_list` rounded away the 1 u/s line the start-box gate reads  *(APPLIED — mod-side only, no engine change: FTESurf `src/server/sv_saveloc.qc`)*
+
+**Problem.** A start-box load arms only when the row's speed is under `SL_ARM_SPEED` (1 u/s,
+Patch 435), and `SV_SaveLocList` printed that speed `%4.0f`: a row at 0.6 (arms) and one at
+1.4 (does not) both read `1 u/s`. Patch 442 widened the column to the whole vector, which is
+what made it worth reading, and the rounding hid the one distinction it was read for.
+
+**Change.** `%6.1f`, and ` at rest` after the unit when `SL_RowSpeed` is under the gate. The
+marker is needed as well as the decimal: 0.99 prints `1.0`. `tools/p435pre.py` and
+`p441void.py` read the column with `(\d+) u/s`; they now take `(\d+)(?:\.\d)? u/s`, the same
+integer for the values they grade (checked on sample lines, not by running them: their map,
+bhop_eazy, is not on this machine).
+
+**Verified.** `tools/p471list.py` + `cfg/test/p471list.cfg` stage four saves at 0.6, 0.99,
+1.06 and 1.4 u/s (the last with a vertical component) and put the save root back as found.
+Fixed qwprogs `271B367694668A3E`: `0.6 u/s at rest`, `1.0 u/s at rest`, `1.1 u/s`, `1.4 u/s`.
+Control `F53EBB0795E4E7F5`: `1 u/s` on all four.
