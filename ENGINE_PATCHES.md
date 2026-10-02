@@ -34787,3 +34787,23 @@ is inf on all three, which is why the arm uses `1e999`. The function's comment n
 one) and restore the save root. Fixed qwprogs `34ECFDC6A1F6E80A`: the real row loads, the
 other two are refused with the position message and the body stays put. Control
 `271B367694668A3E`: inf refused as "changed on disk", 1e9 placed.
+
+## Patch 473 — a replay's Segments column was built at the server's tick  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_board.qc`, `cl_watch.qc`)*
+
+**Problem.** Patch 470's residue. `Watch_BuildSeq` runs the live segment machine over the
+file, and its three tick reads -- `Board_AirCeiling` (the air ceiling a row's % divides by),
+the touchdown row's duration, the air row's slack -- read the server's `pm_ticrate`. A 0.01
+file on a 0.015 lobby got its column measured at 0.015. (Patch 470's note also named the
+debug energy readout; wrong -- that chain is skipped outright during a replay.)
+
+**Change.** `Board_Tick()`: `board_ov_tick` while `rec_wt_build`, else the server's. The
+build pass sets `board_ov_tick = rec_wt_tickrate`, as it sets the other `board_ov_*` --
+cl_board.qc compiles before cl_watch.qc and cannot read the replay's state. `replay seq`
+now prints each row's ceiling and percentage too (nested sprintf, the varargs cap).
+
+**Verified.** `tools/p473seq.py` + `cfg/test/p473seq.cfg`: Patch 470's re-ticked fixture
+(0.01) opened twice in one session, server `pm_ticrate` 0.015 then 0.01 -- `sv_cheats 1`
+first, the movement lock's own way off, since it reverts a typed tick. Fixed csprogs
+`EF78D1D34178CB53`: the two columns identical, 19 rows, 0 differ, row 0's ceiling 99.281 both
+times. Control `567E80F25E1DA377` (the one build-pass line removed): 14 of 19 rows differ,
+row 0's ceiling 85.500 against 99.281 -- which is also the proof the client saw the change.
