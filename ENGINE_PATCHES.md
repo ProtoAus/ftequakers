@@ -34479,3 +34479,88 @@ per frame (after rendering the raymarch at 0.75x and one tick a frame past 25 ms
 the map's own sky; `vid_renderer vk` falls back to the flat backdrop with the menu working.
 NOT verified: the OpenAL path (no OpenAL DLL on the test machine), any non-Intel GPU, and
 mouse-look (a minimized harness has no cursor).
+
+## Patch 468 — a Windows precision touchpad could not turn the view: raw input was rejecting its motion as injected  *(APPLIED — `engine/client/in_win.c`, `engine/client/in_generic.c`, `engine/client/client.h`; the reader side is `tools/hidcheck.py` + `tools/test_hidcheck.py` in the game repo. VERIFIED on the owner's laptop: build, enumeration and registration (`cfg/test/p468smoke.cfg`, log quoted below). NOT YET VERIFIED: the acceptance itself, which needs a hand on the pad — `cfg/test/p468pad.cfg`, graded by `tools/p468pad.py`.)*
+
+**Problem.** On the owner's laptop the trackpad did not move the view in game, and the one
+recording from that machine (keyboard-only play, pitch 0.0000 on every row, mouse counters
+never moving) carried 14.7 rejected raw-input reports per second with no mouse attached.
+Measured outside the game with a raw-input probe (a hidden window, `RIDEV_INPUTSINK` on
+usage page 1 usage 2 and on page 0x0D usage 5, 180 s of ordinary pointer use, 2026-10-02):
+
+| device | collection | reports in 180 s |
+|---|---|---|
+| Pixart 093a:0255 `HID#XXXX0000&Col01` | RIM_TYPEMOUSE (2 buttons) | **0** |
+| the same device, `&Col02` | HID page 0x0D usage 0x05, the precision-touchpad digitizer | 8746 |
+| no device, `hDevice == NULL` | RIM_TYPEMOUSE motion and button reports, `usFlags 0`, `ulExtraInformation 0` | **2137 of 2137** |
+
+So the pad's own mouse collection is enumerated and never speaks; Windows reads the digitizer
+collection itself, synthesises the cursor motion, and delivers it to raw input with no device
+handle. That is exactly the shape Patch 306 counts as `in_raw_injected` and returns on — and
+because the pad's mouse collection makes `rawmicecount` 1, the legacy `GetCursorPos` path is
+off as well (`if (!rawmicecount)`). Net: with `in_rawinput 1` the pad cannot turn the view at
+all, and every honest swipe is recorded as a defeated injection attempt. The gap from a digitizer
+report to the motion it produced:
+
+| gap | reports |
+|---|---|
+| under 1 ms | 1707 |
+| 1 to 5 ms | 71 |
+| 5 to 20 ms | 325 |
+| 20 to 50 ms | 9 |
+| 50 to 100 ms | 8 |
+| over 100 ms (all 17 are a tap's synthesised button-up, 203 to 268 ms after the lift-off report) | 17 |
+
+**Change.** `INS_RawInput_Init` also notes every `RIM_TYPEHID` device whose `RIDI_DEVICEINFO`
+says page 0x0D usage 0x05 (`rawpad[]`, up to four collections; `padmouse` is the one device
+they drive, named by the first). `INS_RawInput_MouseRegister` registers that usage beside the
+mouse, with the same focus-following NULL target and never with NOLEGACY (the OS must keep
+synthesising). `INS_RawInput_PadRead` stamps `rawpad_lasttime` on each digitizer report and
+parses nothing — the report layout is device-specific and the time is the whole fact. In
+`INS_RawInput_MouseRead` a `RIM_TYPEMOUSE` report with no handle is accepted onto `padmouse`
+when a pad is present, `in_rawinput_touchpad` is on, and the last digitizer report is within
+`RAWPAD_WINDOW` = 0.5 s; otherwise it is counted as injected exactly as before. Half a second
+because the worst honest gap measured is 0.268 s and there is no security difference between
+0.3 and 0.5 s: both mean "while a finger is on the pad".
+
+Counting follows the Patch 306 rules: `in_raw_touchpad` starts at -1 (backend does not count),
+is lifted to 0 on the raw-input success return, is never reset, and is ACCEPTED input, so it is
+never summed into `IN_CountsGet`'s rejected total and never shares the `i` record. It is the
+ninth `end` field, appended after Patch 307's; the header gains `rawpads <n>`; the device
+tables carry `touchpad <devid> "<digitizer path>"`, so a reader can tell a pad's motion from a
+mouse's. `in_rawinput_touchpad` (default 1, archived) is in the journal's tracked input-cvar
+table, so the value in force is in every journal.
+
+**What a cheater gains.** A synthesised report timed inside the window, while a finger rests
+on the pad, is accepted — by construction, the window cannot tell them apart. It then becomes
+ordinary counts on the `touchpad` device, which the counts identity, the journal and the turn
+statistics judge like any other motion, with the device table saying a touchpad was in use.
+A machine without a precision touchpad takes the old branch exactly (`rawpadcount` 0).
+
+**Measured.** `cfg/test/p468smoke.cfg` on this laptop, build `cccb6c312db4` (previous
+`1b6e034cd23a`), `logs/p468smoke.log`:
+
+```
+Raw input: precision touchpad [6] \\?\HID#XXXX0000&Col02#5&173917db&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}
+Raw input type 0: [10] \\?\HID#XXXX0000&Col01#5&173917db&0&0000#
+Raw input: initialized with 1 mice, 0 keyboards and 1 touchpads
+Raw input: precision touchpad registered -- handle-less motion accepted within 0.5 s of its reports
+"in_rawinput_touchpad" is "1" (default)
+```
+
+Build: mingw64 `make m-rel`, 0 errors; 0 compiler warnings in the lines this patch adds. The
+log carries 31 pre-existing compiler warnings in untouched code (`gl/ltface.c:798`,
+`gl/gl_rsurf.c:197`, `d3d/d3d_backend.c:1961`, `client/in_win.c:2720`, `:2724`, `:2874`, …)
+and 179 make "pattern recipe did not update peer target" lines, counted here because a build
+filter is how warnings get missed. `tools/test_hidcheck.py` 162 checks, 0 failed (four new:
+accepted-with-device, accepted-without-device is a FAULT, a 10-field trailer makes no claim, -1
+makes no claim).
+
+**Not verified, stated so it is not overread.** The acceptance in game (arms A, B, C of
+`p468pad.cfg`: the view turns with the cvar on and not with it off, accepted equals the
+touchpad's `m` records, injected stays near 0, nothing ticks hands-off). Taps: the synthesised
+button reports still arrive without a handle and outside the window, so a tap's click still
+reaches the game through the legacy path and is still counted by Patch 307 as uncorroborated;
+corroborating those by the same window is a follow-up. A pad plugged in after init is not
+re-enumerated, like a mouse. Only one `padmouse` exists however many digitizer collections
+are found.

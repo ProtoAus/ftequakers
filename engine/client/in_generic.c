@@ -196,6 +196,11 @@ journal reports DELTAS against a baseline it took at begin, and a counter that r
 would hand it a negative one.*/
 int in_raw_injected = -1;	//Patch 387: X11 XI2 counts XTEST here too
 int in_raw_unenum = -1;	//Patch 387: ...but leaves this at -1
+/*FTESurf Patch 468: handle-less reports ACCEPTED because a Windows precision touchpad
+  had reported contact inside in_win.c's RAWPAD_WINDOW.  Accepted, so never summed into
+  the Patch 306 pair (IN_CountsGet); the trailer carries it as a field of its own.*/
+int in_raw_touchpad = -1;
+int in_rawpads_live = -1;	/*Patch 468: digitizer collections bound at raw-input init, for the header*/
 
 /*FTESurf Patch 307: THE BUTTON THAT GOT THROUGH.
 
@@ -324,6 +329,7 @@ static const char *in_jrn_inputcvars[] =
 	"m_filter", "m_accel",				/*...and the two that make it inexact*/
 	"m_accel_style", "m_accel_power", "m_accel_offset", "m_accel_senscap",
 	"m_forcewheel", "m_forcewheel_threshold",	/*turn wheel motion into keypresses*/
+	"in_rawinput_touchpad",		/*Patch 468: whether handle-less reports become counts on a touchpad laptop*/
 	/*Found by the red-team pass over this patch, all three invisible until now:*/
 	"leftisright",				/*r_xflip.  renderer.c declares it `cvar_t r_xflip =
 							  CVAR("leftisright", ...)`, so the C identifier and the
@@ -891,6 +897,12 @@ rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
 	! <dt> <n>              n events were lost by the ring BEFORE this point
 	truncated <dt>          the cap was hit; nothing after this exists
 	end <dt> <abs> <events> <frames> <dropped> <hidden>
+	                        [<injected> <unenum> [<legacybtn> [<touchpad>]]]
+	                        Patches 306, 307 and 468 appended, additively; a
+	                        missing field is "not counted", never 0.
+	dev <type> <devid> "<name>"   Patch 303, in the header; `devmap` repeats it
+	                        before `end`.  type: keyboard, mouse, joy, or
+	                        touchpad (Patch 468: the synthesised motion's device).
 
 <dt> is integer MICROSECONDS since the previous line, whatever kind it was.
 Every line carries one, and only 'f' also carries an absolute -- so a reader can
@@ -928,6 +940,7 @@ static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_
 static int			in_jrn_injbase, in_jrn_unenumbase;			/*Patch 306: taken at begin, so the journal reports only its own window*/
 static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per-frame records have caught up*/
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
+static int			in_jrn_padbase;								/*Patch 468: accepted touchpad reports at begin*/
 static int			in_jrn_nolegacyreported;					/*Patch 307: the last effective suppression state written*/
 /*Patch 310: the render-integrity cvars, resolved ONCE at begin.  Caching the
   pointers is what makes the per-frame poll free -- a Cvar_FindVar per cvar per
@@ -1800,6 +1813,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_injreported = in_jrn_injbase = (in_raw_injected < 0) ? 0 : in_raw_injected;
 	in_jrn_unenumreported = in_jrn_unenumbase = (in_raw_unenum < 0) ? 0 : in_raw_unenum;
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
+	in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
 	/*Patch 307: the header carries the state at begin, so only CHANGES from it are
 	  worth a line.  Seeding from the live value means a run that never alt-tabs
 	  writes no 'g' record at all.*/
@@ -1829,6 +1843,7 @@ static void IN_JournalBegin_f(void)
 		"rawkbd %i\n"
 		"rawmice %i\n"
 		"rawkbds %i\n"
+		"rawpads %i\n"
 		"nolegacy %i\n"
 		"nolegacylive %i\n"
 		"synth 0\n"
@@ -1848,6 +1863,7 @@ static void IN_JournalBegin_f(void)
 		rawkbd?rawkbd->ival:-1,
 		in_rawmice_live,	/*Patch 301: the GRANT, beside the request above*/
 		in_rawkbd_live,
+		in_rawpads_live,	/*Patch 468: precision touchpad digitizer collections bound*/
 		nolegacy?nolegacy->ival:-1,	/*Patch 307: the request...*/
 		in_raw_nolegacy_live,		/*...and what it actually got*/
 		sensitivity.value,
@@ -1979,12 +1995,13 @@ static void IN_JournalEnd_f(void)
 	  read as "none seen", which is the strictest conclusion drawn from the least
 	  evidence.  Appended AFTER the existing five fields, so a pre-306 reader that takes
 	  fields 0..4 is unaffected -- the same additive rule the 'v' line follows.*/
-	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u %i %i %i",
+	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u %i %i %i %i",
 		now - in_jrn_base, in_jrn_events, in_jrn_frames,
 		in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden,
 		(in_raw_injected  < 0) ? -1 : in_raw_injected  - in_jrn_injbase,
 		(in_raw_unenum   < 0) ? -1 : in_raw_unenum    - in_jrn_unenumbase,
-		(in_raw_legacybtn < 0) ? -1 : in_raw_legacybtn - in_jrn_lgbbase);	/*Patch 307*/
+		(in_raw_legacybtn < 0) ? -1 : in_raw_legacybtn - in_jrn_lgbbase,	/*Patch 307*/
+		(in_raw_touchpad < 0) ? -1 : in_raw_touchpad - in_jrn_padbase);	/*Patch 468: accepted on a touchpad's say-so, same additive rule*/
 	/*Patch 303: the resolved devid->device mapping, which the header could not
 	  carry because devids are handed out lazily at first use -- see the essay on
 	  IN_Journal_DeviceLine.  DELIBERATELY BEFORE THE CAP IS LIFTED BELOW: the 1024
