@@ -34765,3 +34765,25 @@ bhop_eazy, is not on this machine).
 1.06 and 1.4 u/s (the last with a vertical component) and put the save root back as found.
 Fixed qwprogs `271B367694668A3E`: `0.6 u/s at rest`, `1.0 u/s at rest`, `1.1 u/s`, `1.4 u/s`.
 Control `F53EBB0795E4E7F5`: `1 u/s` on all four.
+
+## Patch 472 — a save load placed a body at an origin that is not on any map  *(APPLIED — mod-side only, no engine change: FTESurf `src/server/sv_saveloc.qc`)*
+
+**Problem.** `SV_SaveOriginSane` (a negated range test, +-65536) guarded only the `!r`
+picker; `SV_SaveLocLoad` placed whatever `state.txt` held. Measured on the control: an origin
+of x `1e999` (stof: inf) was refused only by accident -- `SV_SaveRowIs`'s distance test sees
+inf - inf = NaN and answers "that save changed on disk", the wrong reason -- and a finite
+x `1e9` was PLACED there. Owner-file only (a lobby's save root is the server's), so hardening.
+
+**Change.** The load runs the same test before anything else touches the row and refuses
+with "that save's position is not a place on any map". The hold needs a successful load of
+its row in the same frame, so it is covered too.
+
+**Found doing it:** `stof` is the C runtime's `atof`, and `nan` is runtime-dependent -- this
+laptop's mingw64 build (msvcrt) reads it as **0**, so a hand-edited `nan` row listed as
+`0 0 0` and loaded there; ucrt (the main rig) and glibc (the Pi) give a real NaN. An overflow
+is inf on all three, which is why the arm uses `1e999`. The function's comment now says so.
+
+**Verified.** `tools/p472org.py` + `cfg/test/p472org.cfg` stage three saves (inf, 1e9, a real
+one) and restore the save root. Fixed qwprogs `34ECFDC6A1F6E80A`: the real row loads, the
+other two are refused with the position message and the body stays put. Control
+`271B367694668A3E`: inf refused as "changed on disk", 1e9 placed.
