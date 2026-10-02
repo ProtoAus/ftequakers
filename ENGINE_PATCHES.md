@@ -34682,3 +34682,33 @@ cvar string that is zero but not spelled 0 read as on. The suite's 91 journals r
 under the pre-468 reader and this one except the touchpad fixtures, and a two-raw-mice file
 loses only the old reader's false "does not match the engine" note on the second mouse's
 raw clicks.
+
+## Patch 469 — a board comparison line was graded against a zero ground plane  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_watch.qc`)*
+
+**Problem.** The board-line job (`Watch_LineJobStep`) read a sample's plane only when
+`tokenize(s) > WT_C_V4N`. `WT_C_V4N` is 17 and a conforming v4+ sample has exactly 17 columns,
+so the test was always false: slots 1-8 were built with a zero plane and `Line_Grade`'s ramp
+branch never fired there. With `hud_watch_path_color 4` every ramp sample on a board line was
+graded against the flat-air ideal. The replay's own scan (slot 0) spells the test `>=` and was
+right all along.
+
+**Change.** `>` to `>=`.
+
+**Verified.** `cfg/test/p469plane.cfg` + `tools/p469plane.py`: one file in slot 0 (the replay)
+and slot 1 (`scores lineat`, the real job), both dumped at stride 1 and graded against the
+`.rec` with p453q's model, run twice — with the file's planes and with them zeroed.
+surf_colin_blaster_69000, 8084 samples, 873 carrying a plane; the N100 laptop.
+
+| | fixed `C8750BFA78E71E0E` | control `B58F0E8EE93603F3` (game `9a9ec07`) |
+|---|---|---|
+| slot 1 against the file, 7828 points | 0 wrong | 789 wrong |
+| slot 1 against slot 0, grade and `ln_col` | 0 differ | 789 differ |
+| points where the plane moves the grade | 789 | 789 |
+| of those, slot 1 matching the zero-plane model | 0 | 789 |
+| slot 0 against the file, 8084 points | 0 wrong | 0 wrong |
+
+Not verified: on a second file or map (one local recording exists on this machine), and by
+pixels — both slots draw the same path, so the screenshot shows ink and not which slot's.
+
+**Found on the way, not fixed here:** the same job calls `Line_Tick` before it has read the
+header, so a board slot's energy ceiling always uses the 0.015 default. Patch 470.
