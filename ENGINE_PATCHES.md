@@ -34556,11 +34556,59 @@ filter is how warnings get missed. `tools/test_hidcheck.py` 162 checks, 0 failed
 accepted-with-device, accepted-without-device is a FAULT, a 10-field trailer makes no claim, -1
 makes no claim).
 
+**Taps.** The synthesised click of a tap is two handle-less button reports: the down 0 to
+22 ms after a digitizer report, the up 203 to 268 ms after the lift-off report, both inside
+the window. So on this build the pad's taps are RAW presses on the touchpad devid, deduped
+against the legacy message like any raw press, and Patch 307's uncorroborated-button count no
+longer includes them (its essay and `in_rawinput_nolegacy`'s text say so now). A release for
+a button the pad pressed is accepted outside the window too, so a late up cannot latch the
+button. The first cut of this entry said the opposite about taps; round 2 corrected it.
+
+**The journal's `p` record** (`p <dt> <accepted> <digitizer>`, deltas, from the same two call
+sites as `i`) and the tenth trailer field (digitizer reports) make the accepted count a
+quantity stated three times: the trailer, the sum of the `p` records, and the pointer events
+on the touchpad's devid, which the accepted count must cover. hidcheck checks all three.
+
+**What the server sees.** Nothing new. `IN_CountsGet` still sends injected+unenumerated, so a
+pad machine's `rej` column now reads near 0 and says nothing about the gate; the accepted
+count and `rawpads` are not on the wire. The in-band split planned for the next phase carries
+them; until then a reader of the `.rec` alone cannot tell a touchpad session from a mouse one.
+
 **Not verified, stated so it is not overread.** The acceptance in game (arms A, B, C of
-`p468pad.cfg`: the view turns with the cvar on and not with it off, accepted equals the
-touchpad's `m` records, injected stays near 0, nothing ticks hands-off). Taps: the synthesised
-button reports still arrive without a handle and outside the window, so a tap's click still
-reaches the game through the legacy path and is still counted by Patch 307 as uncorroborated;
-corroborating those by the same window is a follow-up. A pad plugged in after init is not
-re-enumerated, like a mouse. Only one `padmouse` exists however many digitizer collections
-are found.
+`p468pad.cfg`: the view turns with the cvar on and not with it off, the touchpad's `m`
+records are covered by the accepted count, injected stays near 0, nothing ticks hands-off).
+A pad plugged in after init is not re-enumerated, like a mouse. Only one `padmouse` exists
+however many digitizer collections are found. Whether Windows synthesises two-finger scroll
+as a handle-less `RI_MOUSE_WHEEL` report is unmeasured (the probe saw no wheel reports); the
+raw copy is dropped either way, so the pad's scroll goes on arriving through the legacy
+`WM_MOUSEWHEEL` exactly as before.
+
+### Round 2 — three reviewers on the committed tree (control flow; evidence consequences; what a cheater gains)
+
+Found and fixed: `Mouse_AllocateDevID` scanned `rawmice[]` only, so the pad and a real mouse
+could share devid 0 and hidcheck faulted the journal ("claimed by two devices") -- the
+allocator now sees `padmouse`. A tap's click was inside the window after all (above), and an
+accepted down with a rejected up would have latched `rawbuttondown[]` -- releases for
+pad-pressed buttons pass outside the window. `rawpad_lasttime` seeded 0 held the gate open
+for the first 0.5 s of process time -- sentinel -1. `rawpads` published the enumerated count
+before registration -- it now says bound (0 when the registration call fails). A handle-less
+wheel report would have been a second notch beside the legacy one -- dropped. The accepted
+count had no body record and no bound -- the `p` record and the tenth field. The grader
+required `accepted == m records` and a fault-free hidcheck on arms whose journals hold no
+events (hidcheck faults "no frame markers" there by design) -- `m <= accepted`, and that
+one fault is expected on B and C. hidcheck's note said "not an injection", a verdict the
+file cannot support -- reworded. This entry, `in_rawinput_nolegacy`'s text and the Patch 307
+essay said a pad has no raw button reports -- true before 468, corrected.
+
+Accepted, not fixed, stated: the gate is a presence test (a resting finger re-arms it at the
+pad's report rate, 725 digitizer reports in one 5 s rest in the probe); a device presenting
+page 0x0D usage 5 opens it on any machine, which is the hardware class Patches 303 and 306
+already concede and the device table names; a touchscreen's or pen's synthesised report
+inside the window is attributed to the pad; the server does not see the gate (above).
+
+**Deployment rule.** A pre-468 `hidcheck.py` reads every 468 journal as never closed ("'end'
+has 12 fields", then "no 'end' trailer"); the reader's length set is strict on purpose. Put
+the game repo's reader on every host that reads journals before any 468 client exists.
+
+Round 2 build `567b63b5e685`: 0 errors, the same 31 pre-existing warnings in untouched files, the
+`p468smoke.cfg` lines unchanged; `test_hidcheck.py` 170 checks, 0 failed.

@@ -1327,6 +1327,7 @@ extern	int in_raw_injected;	/*Patch 306: WM_INPUT reports with NO device handle 
 extern	int in_raw_unenum;		/*Patch 306: ...and reports from a real device we never enumerated, also rejected*/
 extern	int in_raw_legacybtn;	/*Patch 307: legacy mouse buttons ACCEPTED with no raw corroboration -- these DID reach the game*/
 extern	int in_raw_touchpad;	/*Patch 468: handle-less reports ACCEPTED on a precision touchpad's say-so -- these DID reach the game*/
+extern	int in_raw_padreports;	/*Patch 468: reports from the digitizer collection -- what armed the window*/
 extern	int in_rawpads_live;	/*Patch 468: precision touchpad digitizer collections raw input bound (-1 not reported)*/
 extern	int in_raw_nolegacy_live;	/*Patch 307: whether legacy mouse messages are ACTUALLY suppressed right now (-1 unknown)*/
 

@@ -315,13 +315,22 @@ static int ribuffersize;
   to the motion it produced: 0.2 ms median, 15 ms p90, 268 ms worst (a tap's
   synthesised button-up, delivered after lift-off).  Accepted motion lands on
   padmouse, a device of its own, so the journal attributes it to a `touchpad` entry
-  and never to a mouse.  A SendInput tool gains only what a finger on the pad gives
-  it, and that finger is in the journal as the touchpad device.*/
+  and never to a mouse.  The gate is a presence test, not a motion test: every
+  digitizer report re-arms it, a resting finger included, so a synthesised report timed
+  inside it passes at whatever size and rate its sender chooses and becomes counts on
+  the touchpad device, which the journal names.  Reviewed 2026-10-02 (three lenses):
+  the devid allocator must see padmouse, a release is accepted outside the window so
+  an accepted press cannot latch, the wheel flag is dropped (the legacy WM_MOUSEWHEEL
+  still carries the pad's scroll and gl_vidnt.c has no raw gate on it), and the
+  digitizer reports are counted so the journal shows when the window was armed.*/
 static HANDLE rawpad[4];
 static int rawpadcount;
-static double rawpad_lasttime;
+static double rawpad_lasttime = -1;	/*-1 until a digitizer report: 0 is a real time on a process-relative clock*/
 static qboolean rawpad_registered;
 static mouse_t padmouse;
+static qboolean padbuttondown[5];	/*buttons an ACCEPTED pad report pressed: only their releases pass outside the window*/
+static const unsigned short padbtn_down[5] = {RI_MOUSE_BUTTON_1_DOWN, RI_MOUSE_BUTTON_2_DOWN, RI_MOUSE_BUTTON_3_DOWN, RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN};
+static const unsigned short padbtn_up[5] = {RI_MOUSE_BUTTON_1_UP, RI_MOUSE_BUTTON_2_UP, RI_MOUSE_BUTTON_3_UP, RI_MOUSE_BUTTON_4_UP, RI_MOUSE_BUTTON_5_UP};
 #define RAWPAD_WINDOW 0.5
 //nettest: what raw input has accounted for, per button, for the five buttons it has
 //usButtonFlags for.  Read only by INS_MouseEvent, to tell a genuine duplicate legacy
@@ -372,7 +381,7 @@ static cvar_t in_rawinput_rdp = CVARD("in_rawinput_rdp", "0", "Activate Remote D
   such a device is a HID digitizer with no RI_MOUSE_BUTTON_* flags and the legacy
   message is its only press.  A ranked profile can set it; a default cannot.  Applied
   only while the mouse is grabbed -- see INS_RawInput_MouseSetLegacy.*/
-static cvar_t in_rawinput_nolegacy = CVARFD("in_rawinput_nolegacy", "0", CVAR_ARCHIVE, "Suppresses legacy mouse messages while the mouse is grabbed, so a synthesized (injected) click cannot reach the game through the legacy path. COSTS ALL MOUSE BUTTONS on a Windows precision touchpad, which has no raw button reports at all. Off by default; the .hid journal counts uncorroborated legacy presses either way.");
+static cvar_t in_rawinput_nolegacy = CVARFD("in_rawinput_nolegacy", "0", CVAR_ARCHIVE, "Suppresses legacy mouse messages while the mouse is grabbed, so a synthesized (injected) click cannot reach the game through the legacy path. Before Patch 468 this COST ALL MOUSE BUTTONS on a Windows precision touchpad (it has no raw button reports of its own); with it the pad's clicks arrive through raw input while a finger is on the pad. Off by default; the .hid journal counts uncorroborated legacy presses either way.");
 static cvar_t in_rawinput_touchpad = CVARFD("in_rawinput_touchpad", "1", CVAR_ARCHIVE, "Accept raw mouse reports that carry no device handle while a Windows precision touchpad has reported contact within the last half second. The OS synthesises a touchpad's cursor motion with no handle, which is otherwise rejected as injected input (Patch 306) and never turns the view. 0 restores the rejection.");	//FTESurf Patch 468
 
 void INS_RawInput_MouseDeRegister(void);
@@ -633,7 +642,7 @@ static int Mouse_AllocateDevID(void)
 			if (rawmice[j].qdeviceid == id)
 				break;
 		}
-		if (j == rawmicecount)
+		if (j == rawmicecount && !(rawpadcount > 0 && padmouse.qdeviceid == id))	//FTESurf Patch 468: padmouse is not in the table
 		{
 			if (id > cl_splitscreen.ival && !*cl_splitscreen.string)
 				cl_splitscreen.ival = id;
@@ -1139,7 +1148,9 @@ static void INS_RawInput_PadRegister(void)
 	Rid.dwFlags = 0;
 	Rid.hwndTarget = NULL;
 	rawpad_registered = (*_RRID)(&Rid, 1, sizeof(Rid)) != 0;
-	rawpad_lasttime = 0;
+	rawpad_lasttime = -1;
+	in_rawpads_live = rawpad_registered ? rawpadcount : 0;	/*the header says bound, not enumerated*/
+	memset(padbuttondown, 0, sizeof(padbuttondown));
 	Con_DPrintf("Raw input: precision touchpad %s -- handle-less motion accepted within %g s of its reports\n",
 		rawpad_registered ? "registered" : "registration FAILED", RAWPAD_WINDOW);
 }
@@ -1168,6 +1179,7 @@ void INS_RawInput_DeInit(void)
 	rawpadcount = 0;
 	in_rawpads_live = 0;
 	padmouse.qdeviceid = DEVID_UNSET;
+	memset(padbuttondown, 0, sizeof(padbuttondown));
 	rawmicecount = 0;
 	rawkbdcount = 0;
 	in_rawmice_live = 0;	//FTESurf Patch 301: kept in step with the two above
@@ -1335,6 +1347,7 @@ void INS_RawInput_Init(void)
 	  an unknown.  See in_generic.c's declaration for why they exist at all.*/
 	in_rawmice_live = 0;
 	in_rawkbd_live = 0;
+	in_rawpads_live = 0;	//FTESurf Patch 468: same rule
 
 	// Return 0 if rawinput is not available
 	HMODULE user32 = LoadLibrary("user32.dll");
@@ -1537,7 +1550,9 @@ void INS_RawInput_Init(void)
 		in_raw_legacybtn = 0;	//FTESurf Patch 307, same rule
 	if (in_raw_touchpad < 0)
 		in_raw_touchpad = 0;	//FTESurf Patch 468, same rule
-	in_rawpads_live = rawpadcount;
+	if (in_raw_padreports < 0)
+		in_raw_padreports = 0;
+	//in_rawpads_live is published by INS_RawInput_PadRegister: bound, not merely enumerated
 
 	return; // success
 }
@@ -1779,6 +1794,9 @@ void INS_MouseEvent (int mstate)
 					  trade, and it costs touchpad users every button they have.
 					  Bounded to the five buttons raw reports flags for -- past those
 					  the old blanket behaviour applies and a miss is not evidence.*/
+					/*FTESurf Patch 468: a precision touchpad's own taps now arrive through raw
+					  input (accepted inside its window, see padmouse) and are deduped above
+					  like any raw press, so on such a build this count no longer includes them.*/
 					if (rawmicecount && i < (int)countof(rawbuttontime) &&
 						in_raw_legacybtn >= 0)
 						in_raw_legacybtn++;
@@ -1990,6 +2008,23 @@ void INS_Accumulate (void)
 }
 
 #ifdef USINGRAWINPUT
+/*FTESurf Patch 468: a handle-less report that RELEASES a button an accepted pad report
+  pressed is accepted outside the window too.  A tap's synthesised up arrives 0.2-0.27 s
+  after lift-off here; on a slower timer it would miss the window, leave rawbuttondown[]
+  set, and INS_MouseEvent's dedupe would then swallow every later legacy press on that
+  button -- the latch INS_RawInput_DeInit's comment names.  Only buttons the pad itself
+  pressed qualify, so a synthesised release cannot lift a real mouse's held button.*/
+static qboolean INS_RawInput_PadReleases(void)
+{
+	int b;
+	for (b = 0; b < (int)countof(padbuttondown); b++)
+	{
+		if ((raw->data.mouse.usButtonFlags & padbtn_up[b]) && padbuttondown[b])
+			return true;
+	}
+	return false;
+}
+
 void INS_RawInput_MouseRead(void)
 {
 	int i, tbuttons, j;
@@ -2017,12 +2052,25 @@ void INS_RawInput_MouseRead(void)
 				  inside the window -- the OS synthesised this report from that contact.
 				  Accepted onto padmouse and counted apart from the rejections.*/
 				double now = Sys_DoubleTime();
-				if (rawpadcount > 0 && in_rawinput_touchpad.ival && now - rawpad_lasttime <= RAWPAD_WINDOW)
+				if (rawpadcount > 0 && in_rawinput_touchpad.ival && rawpad_lasttime >= 0
+					&& (now - rawpad_lasttime <= RAWPAD_WINDOW || INS_RawInput_PadReleases()))
 				{
+					int b;
 					if (!in_raw_touchpad)
 						Con_DPrintf("Raw input: first handle-less report accepted as touchpad motion, %.1f ms after the digitizer\n", (now - rawpad_lasttime) * 1000);
 					in_raw_touchpad++;
 					mouse = &padmouse;
+					for (b = 0; b < (int)countof(padbuttondown); b++)
+					{
+						if (raw->data.mouse.usButtonFlags & padbtn_down[b])
+							padbuttondown[b] = true;
+						if (raw->data.mouse.usButtonFlags & padbtn_up[b])
+							padbuttondown[b] = false;
+					}
+					/*the legacy WM_MOUSEWHEEL still delivers the pad's scroll exactly as before
+					  this patch, and gl_vidnt.c fires it with no raw gate; the raw copy would be
+					  a second notch.  Dropped here, so scrolling on the pad is unchanged.*/
+					raw->data.mouse.usButtonFlags &= ~RI_MOUSE_WHEEL;
 				}
 				else
 					in_raw_injected++;
@@ -2176,6 +2224,8 @@ static void INS_RawInput_PadRead(void)
 		if (rawpad[i] == raw->header.hDevice)
 		{
 			rawpad_lasttime = Sys_DoubleTime();
+			if (in_raw_padreports >= 0)
+				in_raw_padreports++;
 			return;
 		}
 	}

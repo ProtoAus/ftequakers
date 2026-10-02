@@ -200,6 +200,7 @@ int in_raw_unenum = -1;	//Patch 387: ...but leaves this at -1
   had reported contact inside in_win.c's RAWPAD_WINDOW.  Accepted, so never summed into
   the Patch 306 pair (IN_CountsGet); the trailer carries it as a field of its own.*/
 int in_raw_touchpad = -1;
+int in_raw_padreports = -1;	/*Patch 468: reports from the digitizer collection itself -- what armed the window*/
 int in_rawpads_live = -1;	/*Patch 468: digitizer collections bound at raw-input init, for the header*/
 
 /*FTESurf Patch 307: THE BUTTON THAT GOT THROUGH.
@@ -219,7 +220,10 @@ That is enough for scroll-bhop, for jump timing, and for the gate the sample che
 WHY THE LEGACY PATH CANNOT SIMPLY BE CLOSED, measured and written down in this tree
 before this patch existed (see the essay on the dedupe in INS_MouseEvent): a Windows
 precision touchpad is a HID DIGITIZER, not a RIM_TYPEMOUSE, so it produces no
-RI_MOUSE_BUTTON_* flags at all and the legacy message is the ONLY press it has.  Closing
+RI_MOUSE_BUTTON_* flags at all and the legacy message is the ONLY press it has (Patch
+468 changes this on a build that has it: the OS-synthesised raw reports are accepted while
+a finger is on the pad, the pad's taps become raw presses, and this count no longer
+includes them).  Closing
 the path costs those users every mouse button, for taps and for press-and-hold alike, and
 it presents as a dead hit-test rather than as missing input -- which is what made it hard
 to find the first time.  So the block is real but it is a TRADE, and it ships as an
@@ -893,11 +897,14 @@ rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
 	                        therefore the positive statement "the pipeline passed
 	                        the counts through untouched", which is the case on
 	                        45,384 of 45,384 measured frames of honest play.
+	p <dt> <acc> <dig>      Patch 468.  Handle-less reports ACCEPTED as touchpad input
+	                        and the digitizer reports that armed the window, since
+	                        the last such line.  An annotation, not an event.
 	# <dt> <text>           a note from the gamecode (save/load marks)
 	! <dt> <n>              n events were lost by the ring BEFORE this point
 	truncated <dt>          the cap was hit; nothing after this exists
 	end <dt> <abs> <events> <frames> <dropped> <hidden>
-	                        [<injected> <unenum> [<legacybtn> [<touchpad>]]]
+	                        [<injected> <unenum> [<legacybtn> [<touchpad> <padreports>]]]
 	                        Patches 306, 307 and 468 appended, additively; a
 	                        missing field is "not counted", never 0.
 	dev <type> <devid> "<name>"   Patch 303, in the header; `devmap` repeats it
@@ -940,7 +947,8 @@ static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_
 static int			in_jrn_injbase, in_jrn_unenumbase;			/*Patch 306: taken at begin, so the journal reports only its own window*/
 static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per-frame records have caught up*/
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
-static int			in_jrn_padbase;								/*Patch 468: accepted touchpad reports at begin*/
+static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
+static int			in_jrn_prbase, in_jrn_prreported;			/*...and the digitizer reports that armed the window*/
 static int			in_jrn_nolegacyreported;					/*Patch 307: the last effective suppression state written*/
 /*Patch 310: the render-integrity cvars, resolved ONCE at begin.  Caching the
   pointers is what makes the per-frame poll free -- a Cvar_FindVar per cvar per
@@ -1372,6 +1380,30 @@ static void IN_Journal_Bypassed(double when)
 	IN_Journal_Line(when, "b", tail);
 }
 
+/*FTESurf Patch 468: 'p <accepted> <digitizer>', deltas, when either moved.  The same two
+  call sites as 'i' and for the same reason: an accepted report that carried no motion
+  (a tap's button edges, a report while the mouse was free) drains no event, and the
+  digitizer's own reports never do.  The digitizer count is what armed the window, so a
+  reader can see that acceptance happened only while the pad was reporting.*/
+static void IN_Journal_Pad(double when)
+{
+	char tail[64];
+	int acc, rep;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	if (in_raw_touchpad < 0 && in_raw_padreports < 0)
+		return;
+	acc = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;
+	rep = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
+	if (acc == in_jrn_padreported && rep == in_jrn_prreported)
+		return;
+	Q_snprintfz(tail, sizeof(tail), "%i %i", acc - in_jrn_padreported, rep - in_jrn_prreported);
+	in_jrn_padreported = acc;
+	in_jrn_prreported = rep;
+	IN_Journal_Line(when, "p", tail);
+}
+
 static void IN_Journal_Frame(void)
 {
 	char tail[64];
@@ -1400,6 +1432,7 @@ static void IN_Journal_Frame(void)
 	}
 
 	IN_Journal_Rejected(first);	/*Patch 306*/
+	IN_Journal_Pad(first);	/*Patch 468*/
 	IN_Journal_Legacy(first);	/*Patch 307*/
 	IN_Journal_RenderCvars(first);	/*Patch 310*/
 	IN_Journal_Bypassed(first);	/*Patch 307*/
@@ -1481,7 +1514,11 @@ void IN_Journal_View(const float *viewangles)
 	  produces no counts and moves no angle, so every frame of a motion-injection
 	  attempt takes the quiet-frame return below -- the one case where the record
 	  must NOT be quiet.*/
-	IN_Journal_Rejected(Sys_DoubleTime());
+	{
+		double t = Sys_DoubleTime();
+		IN_Journal_Rejected(t);
+		IN_Journal_Pad(t);	/*Patch 468*/
+	}
 	IN_Journal_Legacy(Sys_DoubleTime());	/*Patch 307*/
 	IN_Journal_RenderCvars(Sys_DoubleTime());	/*Patch 310*/
 	IN_Journal_Bypassed(Sys_DoubleTime());	/*Patch 307*/
@@ -1813,7 +1850,8 @@ static void IN_JournalBegin_f(void)
 	in_jrn_injreported = in_jrn_injbase = (in_raw_injected < 0) ? 0 : in_raw_injected;
 	in_jrn_unenumreported = in_jrn_unenumbase = (in_raw_unenum < 0) ? 0 : in_raw_unenum;
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
-	in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
+	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
+	in_jrn_prreported = in_jrn_prbase = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
 	/*Patch 307: the header carries the state at begin, so only CHANGES from it are
 	  worth a line.  Seeding from the live value means a run that never alt-tabs
 	  writes no 'g' record at all.*/
@@ -1936,7 +1974,7 @@ static void IN_JournalBegin_f(void)
 static void IN_JournalEnd_f(void)
 {
 	const char *name, *fallback;
-	char tail[128];
+	char tail[192];	/*Patch 468: ten trailer fields*/
 	double now;
 	qboolean discard;	/*Patch 417: decided here, acted on after the trailer*/
 
@@ -1984,6 +2022,7 @@ static void IN_JournalEnd_f(void)
 	  exceed the sum of the 'i' records.  That disagreement is not a fault: such a file
 	  already says `truncated`, and a reader must not demand the cross-check on one.*/
 	IN_Journal_Rejected(now);
+	IN_Journal_Pad(now);		/*Patch 468*/
 	IN_Journal_Legacy(now);		/*Patch 307*/
 	IN_Journal_RenderCvars(now);	/*Patch 310*/
 	IN_Journal_Bypassed(now);	/*Patch 307*/
@@ -1995,13 +2034,14 @@ static void IN_JournalEnd_f(void)
 	  read as "none seen", which is the strictest conclusion drawn from the least
 	  evidence.  Appended AFTER the existing five fields, so a pre-306 reader that takes
 	  fields 0..4 is unaffected -- the same additive rule the 'v' line follows.*/
-	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u %i %i %i %i",
+	Q_snprintfz(tail, sizeof(tail), "%.6f %u %u %u %u %i %i %i %i %i",
 		now - in_jrn_base, in_jrn_events, in_jrn_frames,
 		in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden,
 		(in_raw_injected  < 0) ? -1 : in_raw_injected  - in_jrn_injbase,
 		(in_raw_unenum   < 0) ? -1 : in_raw_unenum    - in_jrn_unenumbase,
 		(in_raw_legacybtn < 0) ? -1 : in_raw_legacybtn - in_jrn_lgbbase,	/*Patch 307*/
-		(in_raw_touchpad < 0) ? -1 : in_raw_touchpad - in_jrn_padbase);	/*Patch 468: accepted on a touchpad's say-so, same additive rule*/
+		(in_raw_touchpad < 0) ? -1 : in_raw_touchpad - in_jrn_padbase,	/*Patch 468: accepted on a touchpad's say-so, same additive rule*/
+		(in_raw_padreports < 0) ? -1 : in_raw_padreports - in_jrn_prbase);	/*...and the digitizer reports that armed the window*/
 	/*Patch 303: the resolved devid->device mapping, which the header could not
 	  carry because devids are handed out lazily at first use -- see the essay on
 	  IN_Journal_DeviceLine.  DELIBERATELY BEFORE THE CAP IS LIFTED BELOW: the 1024
