@@ -901,8 +901,7 @@ rule FTESURF-REC 3 and FTESURF-VIEW already follow.  Then:
 	p <dt> <acc> <dig> <rel> Patch 468.  Handle-less reports ACCEPTED as touchpad input,
 	                        the digitizer reports that armed the window, and the
 	                        releases admitted outside it, since the last such line.
-	                        An annotation, not an event; rel is at most the pad's
-	                        own presses over a file.
+	                        An annotation, not an event; rel <= acc on every line.
 	# <dt> <text>           a note from the gamecode (save/load marks)
 	! <dt> <n>              n events were lost by the ring BEFORE this point
 	truncated <dt>          the cap was hit; nothing after this exists
@@ -952,7 +951,7 @@ static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
 static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
 static int			in_jrn_prbase, in_jrn_prreported;			/*...and the digitizer reports that armed the window*/
-static int			in_jrn_prlbase, in_jrn_prlreported;			/*...and the releases admitted outside it*/
+static int			in_jrn_prlreported;							/*...and the releases admitted outside it (no trailer total: bounded by acc per line)*/
 static int			in_jrn_nolegacyreported;					/*Patch 307: the last effective suppression state written*/
 /*Patch 310: the render-integrity cvars, resolved ONCE at begin.  Caching the
   pointers is what makes the per-frame poll free -- a Cvar_FindVar per cvar per
@@ -1389,8 +1388,11 @@ static void IN_Journal_Bypassed(double when)
   report that carried no motion (a tap's button edges, a wheel report, a report while
   the mouse was free) drains no event, and the digitizer's own reports never do.  The
   digitizer count is what armed the window; the released count is the one rule that
-  admits a report outside it, so over a file it is at most the pad's own presses, and a
-  reader holds it to that.*/
+  admits a report outside it, so it is at most the accepted DOWN reports since the
+  process began -- which a file cannot count: a press made under a menu is an 'x', one
+  made unfocused or before the journal began is nothing.  A reader compares it with the
+  pad's journalled presses and says so; it never faults on it.  Each line holds
+  rel <= acc, since a release-admitted report counts in both.*/
 static void IN_Journal_Pad(double when)
 {
 	char tail[64];
@@ -1860,7 +1862,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
 	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
 	in_jrn_prreported = in_jrn_prbase = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
-	in_jrn_prlreported = in_jrn_prlbase = (in_raw_padrelease < 0) ? 0 : in_raw_padrelease;
+	in_jrn_prlreported = (in_raw_padrelease < 0) ? 0 : in_raw_padrelease;
 	/*Patch 307: the header carries the state at begin, so only CHANGES from it are
 	  worth a line.  Seeding from the live value means a run that never alt-tabs
 	  writes no 'g' record at all.*/

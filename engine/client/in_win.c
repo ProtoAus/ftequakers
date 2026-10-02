@@ -2068,7 +2068,8 @@ void INS_RawInput_MouseRead(void)
 					int b;
 					if (!in_raw_touchpad)
 						Con_DPrintf("Raw input: first handle-less report accepted as touchpad motion, %.1f ms after the digitizer\n", (now - rawpad_lasttime) * 1000);
-					in_raw_touchpad++;
+					if (in_raw_touchpad >= 0)
+						in_raw_touchpad++;
 					mouse = &padmouse;
 					if (release)
 					{

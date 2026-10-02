@@ -34569,8 +34569,10 @@ button. The first cut of this entry said the opposite about taps; round 2 correc
 same three call sites as `i`: frame, view, end) and the tenth trailer field (digitizer
 reports) make the accepted count a quantity stated three times: the trailer, the sum of the
 `p` records, and the motion events on the touchpad's devid, which the accepted count must
-cover. The released count is bounded by the pad's own presses. hidcheck checks all of it,
-including the direction of both totals on a truncated file.
+cover. The released count is at most the accepted count on every `p` line, and a reader
+compares it with the pad's journalled presses without faulting on it (a press made under a
+menu is an `x`, one made unfocused or before the journal began is nothing). hidcheck checks
+all of it, including the direction of both totals on a truncated file.
 
 **What the server sees.** Nothing new. `IN_CountsGet` still sends injected+unenumerated, so a
 pad machine's `rej` column now reads near 0 and says nothing about the gate; the accepted
@@ -34642,3 +34644,28 @@ no-`m` class, now named in the reader.
 
 Round 4 build `1d1f09387abe`: 0 errors, the same 31 pre-existing warnings in untouched files, the
 `p468smoke.cfg` lines unchanged; `test_hidcheck.py` 181 checks, 0 failed.
+
+### Round 5 — two reviewers on round 4 (the release strip; the reader's bounds)
+
+No defect in the strip: every field the rest of the read path consumes is covered, a
+stripped report can neither allocate a devid nor return early with state half-cleared, a
+release-admitted report always carries at least one UP and re-arms nothing. Found and fixed:
+the reader's "releases at most presses" was a FAULT, and the file cannot count every press --
+one made under a menu or the console is an `x` record, one made unfocused or before the
+journal began writes nothing -- so on hardware whose tap-up misses the window an honest
+file would have read guilty (the third-verdict rule). It is a note now, with those reasons,
+and each `p` line is held to `rel <= acc` instead, which the writer guarantees. The
+write-only baseline for the release count is gone (no trailer total; it is bounded per
+line). The acceptance counter carries the same `>= 0` guard as the other two. Noted, not
+fixed: an extra button (K_MOUSE7 and up) set on `padmouse` by an in-window report's raw
+button word stays held after the finger lifts, since the strip leaves that word alone --
+reachable only by in-window injection of those bits, the conceded trade. "The release rule
+adds nothing" means: one key-up per pad-pressed button at the sender's chosen time, which a
+finger lift gives too, and a `rawbuttontime` stamp that can only suppress a legacy DOWN for
+100 ms.
+
+The reader side of round 5 (game repo `a9cbde9`): mouse-button events on a devid no pointer
+claims are said; a hidden tap on a pointer's devid is not read as a keyboard; only the five
+buttons count as presses; the cvar state is read over the whole journal; the reader floor is
+`fde8420` (the five-field `p`), which the working brief now names. Round 6 build `f784777b42fd`: 0
+errors, the same 31 pre-existing warnings, smoke unchanged; `test_hidcheck.py` 190 checks.
