@@ -34657,8 +34657,9 @@ file would have read guilty (the third-verdict rule). It is a note now, with tho
 and each `p` line is held to `rel <= acc` instead, which the writer guarantees. The
 write-only baseline for the release count is gone (no trailer total; it is bounded per
 line). The acceptance counter carries the same `>= 0` guard as the other two. Noted, not
-fixed: an extra button (K_MOUSE7 and up) set on `padmouse` by an in-window report's raw
-button word stays held after the finger lifts, since the strip leaves that word alone --
+fixed: an extra raw button (the raw path dispatches `ulRawButtons` bits j >= 6 as `K_MOUSE1 + j`,
+which keys.h names K_MWHEELUP and K_JOY1..3) set on `padmouse` by an in-window report stays
+held after the finger lifts, since the strip leaves that word alone --
 reachable only by in-window injection of those bits, the conceded trade. "The release rule
 adds nothing" means: one key-up per pad-pressed button at the sender's chosen time, which a
 finger lift gives too, and a `rawbuttontime` stamp that can only suppress a legacy DOWN for
@@ -34668,4 +34669,16 @@ The reader side of round 5 (game repo `a9cbde9`): mouse-button events on a devid
 claims are said; a hidden tap on a pointer's devid is not read as a keyboard; only the five
 buttons count as presses; the cvar state is read over the whole journal; the reader floor is
 `fde8420` (the five-field `p`), which the working brief now names. Round 6 build `f784777b42fd`: 0
-errors, the same 31 pre-existing warnings, smoke unchanged; `test_hidcheck.py` 190 checks.
+errors, an incremental build whose log shows the three pre-existing `in_win.c` warnings, smoke
+unchanged; `test_hidcheck.py` 190 checks.
+
+### Round 7 — one reviewer on round 6: no defect
+
+Nits fixed in the docs and the fixture: the working brief's floor sentence (an efc4627 reader
+passes a journal whose pad never fired and faults every `p` line of one that did; fde8420 is
+the floor); three comments that still said the retracted bound; the fixture's `x` records
+were not carried into its trailer's hidden count, so two checks ran on a faulting file; a
+cvar string that is zero but not spelled 0 read as on. The suite's 91 journals read the same
+under the pre-468 reader and this one except the touchpad fixtures, and a two-raw-mice file
+loses only the old reader's false "does not match the engine" note on the second mouse's
+raw clicks.
