@@ -34712,3 +34712,38 @@ pixels — both slots draw the same path, so the screenshot shows ink and not wh
 
 **Found on the way, not fixed here:** the same job calls `Line_Tick` before it has read the
 header, so a board slot's energy ceiling always uses the 0.015 default. Patch 470.
+
+## Patch 470 — a replay was graded at the server's tick, not the recording's  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_lines.qc`, `cl_watch.qc`, `cl_hud.qc`)*
+
+**Problem.** Three readers of one number. `Line_Grade` (the run line's air-control colour)
+used the live server's `pm_ticrate` while the energy colour two hundred lines on used the
+file's (`ln_tick`); the strafe bar used the server's too; and a board slot never had the
+file's at all — the line job called `Line_Tick` before it had read the header, handing it 0
+and so the 0.015 default. On this fleet the error is the tick ratio alone (the 30 u/s cap
+saturates the gain at both rates): a 0.01 file watched on a 0.015 lobby got a target 1.5x
+too low and read better than it was strafed.
+
+**Change.** `Line_Grade` reads `ln_tick[s]`; `ln_mv_tick` is gone. The job hands the slot
+its tick in `Watch_LineJobWindow`, after the header. `HUD_DrawStrafe` takes
+`rec_wt_tickrate` while a replay is open. `replay colours` prints the slot's tick in `lnmv`,
+and `replay status` prints the bar's `bar tick/ideal/speed/regime` (new; nothing could read
+the bar before).
+
+**Verified.** `tools/p470tick.py` + `cfg/test/p470tick.cfg`: the fixture's samples staged
+under a header re-ticked to 0.01 on a 0.015 server (synthetic: it grades the arithmetic),
+in slot 0 and slot 1; the staged file is removed and the directory listed after. Control =
+this tree with the three behaviour hunks reverted and the prints kept.
+
+| | fixed `0A64AF906B245665` | control `9CE0C4186E1071B8` |
+|---|---|---|
+| T1 slot ticks | 0.010 / 0.010 | 0.010 / 0.015 (the job order, slot 1 only) |
+| T2 grades at the file's tick | 0 wrong of 4042 / 3914 | 428 wrong each, all matching the server-tick model |
+| T3 slot 1 energy colour = slot 0's | 0 of 1951 differ | 261 differ |
+| T4 the bar, 4 flat-air seeks | tick 0.01, ideal exact | tick 0.015 at every seek |
+
+The bar's ideal at 2080 u/s is 82.632 fixed and 55.088 control (ratio 1.5), and the screenshot
+shows its target drawn at the logged value. `p469plane` re-run on this build: unchanged.
+
+**Not done** (BACKLOG): the Segments column's three `pm_ticrate` reads in cl_board.qc and the
+debug energy readout still use the server's tick in a replay; the replay reads `tickrate` and
+never `movetickrate`; the other eight movevars still come from the server (`pmpin`).
