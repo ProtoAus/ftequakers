@@ -34829,3 +34829,23 @@ cap, the trigger fires near the end and not at the top. Control `680143FF276EDAB
 fail (64 rows, `Unknown command`). A mutant without the four append guards fails E, an
 imported page landing on the ranked board; reply order is not controlled, so E is a race the
 guards win rather than a proof. Not run: a real mouse wheel (the handle sets the same scroll).
+
+## Patch 475 — your own run's line, drawn live  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_trail.qc` (new), `cl_lines.qc`, `cl_main.qc`, `cl_hudedit.qc`, `cl_progs.src`, both shipped cfgs)*
+
+**Problem.** Every run line was fed from a file: slot 0 the replay, 1..8 the board's. Lex
+asked for the line to follow the player during a run, stay after a fail, and fade when the
+next run starts -- the first piece of the rewind feature.
+
+**Change.** Two more slots (LN_SLOTS 9 -> 11, +6.5 MiB of arenas) fed from `pmove_org`
+and `pmove_vel`, one sample per command frame while STAT_FS_TIMERSTATE is running. A
+finished or cancelled run keeps its line; the next run's start swaps the two slot indices
+and the old one fades over `hud_trail_fade`. `Line_End` runs every 16 samples. A picture
+only: nothing is sent and nothing is evidence. `hud_trail`, `hud_trail_prev`,
+`hud_trail_fade` with hud_edit rows and cfg lines; `trail` reports both slots. Written by
+the session the 2026-09-29 restart killed; finished, renumbered and measured here.
+
+**Verified.** `tools/p475trail.py` + `cfg/test/p475trail.cfg` on surf_dune. Fixed csprogs
+`7AA2DD878BDC665A`: 7 of 7 -- 235 samples on the clock, kept and not growing after a cancel,
+the old run fading at the next start and gone 3 s later, 821 pixels between the line on and
+off at one pose against 0 between two off shots. Control `48D1E28C63E5EE52` (Patch 474):
+6 fail, `trail` unknown, 16 pixels. A teleport draws as a long segment (BACKLOG).
