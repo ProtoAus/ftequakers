@@ -34807,3 +34807,25 @@ first, the movement lock's own way off, since it reverts a typed tick. Fixed csp
 `EF78D1D34178CB53`: the two columns identical, 19 rows, 0 differ, row 0's ceiling 99.281 both
 times. Control `567E80F25E1DA377` (the one build-pass line removed): 14 of 19 rows differ,
 row 0's ceiling 85.500 against 99.281 -- which is also the proof the client saw the change.
+
+## Patch 474 — the online board stopped at 64 rows; it now pages as the list scrolls  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_online.qc`, `cl_scores.qc`)*
+
+**Problem.** The in-game board asked surfd for one page (`limit=64`, no offset), so rank 65
+of a board holding 15,866 (surf_utopia, imported) could not be shown. surfd and the web
+board already paged.
+
+**Change.** The first page is 100 rows; within 20 rows of the end the list asks for the next
+(`Online_FetchMore`, `offset` = rows held) and appends, up to 1,000. The append has its own
+request id and never touches `ob_state`, so a scroll does not blank the list to "asking...";
+it lands only on the board it was asked for (an epoch bumped by every clear) and directly
+after the rows it follows (the reply's `offset`). The ten row arrays moved to `memalloc`:
+as globals they took csprogs past fteqcc's limit (131,418 against 131,072). Handles:
+`board_more`, `scores tab imported`, `scores oscroll <row>`; `board_status` prints
+`more/append/held`.
+
+**Verified.** `tools/p474page.py` + `cfg/test/p474page.cfg` against the Pi's surfd on
+surf_utopia. Fixed csprogs `48D1E28C63E5EE52`: 10 of 10 -- contiguous ranks to the 1,000
+cap, the trigger fires near the end and not at the top. Control `680143FF276EDAB3`: 9 of 10
+fail (64 rows, `Unknown command`). A mutant without the four append guards fails E, an
+imported page landing on the ranked board; reply order is not controlled, so E is a race the
+guards win rather than a proof. Not run: a real mouse wheel (the handle sets the same scroll).
