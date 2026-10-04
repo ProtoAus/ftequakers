@@ -35539,14 +35539,23 @@ restriction level, and a CLIENT process runs that too because it can host - so a
 remote server's stufftext reaches all three, and none of the handlers tested the
 caller.
 
-**TWO OF THE THREE CITATIONS IN THAT FILE WERE WRONG**, and re-deriving them from
-source is what made the arm measurable. Item 5 said `cl_main.c:3725`; `gamedir` is
-`SV_Gamedir_f`, in `server/sv_ccmds.c`. Item 9 said `cl_parse.c:4791`; that line is
-`CL_ParseClientdata`'s stat parsing and has nothing to do with maps - `mapfrom` is
-`SV_MapFrom_f`, also in sv_ccmds.c. Item 6 said `fs.c:8951`; `fs_restart` is
-registered at fs.c:11501 to `FS_ReloadPackFiles_f`. A traced-only list whose line
-numbers have drifted is a list nobody can check, which is how three routes stayed
-"traced" instead of becoming measured.
+**CORRECTION, AND IT IS ABOUT THIS ENTRY RATHER THAN THE CODE.** The first version
+of this entry claimed that two of ENGINE_SECURITY.md's three citations were wrong
+(`cl_main.c:3725` for gamedir, `cl_parse.c:4791` for mapfrom) and drew a conclusion
+from it about a traced-only list whose line numbers had drifted. THE FILE SAYS NO
+SUCH THING. It cites `sv_ccmds.c:3256 -> COM_Gamedir` and `sv_ccmds.c:3891`, and
+both are exact: 3256 is SV_Gamedir_f's definition, and 3891 is the
+`Cbuf_AddText(va("fs_useaddons %s\n", mount), Cmd_ExecLevel)` line the item is
+about. Item 6 names `FS_ReloadPackFiles_f` by function rather than by line, which is
+the citation style AGENTS.md asks for and the reason it did not drift.
+The wrong numbers came from A COMPACTED SESSION SUMMARY, and were asserted against
+the file without opening it. Item 9 had also already said the important part -- "its
+fs_useaddons leg is refused by 481, its `map \"@spec/map\"` prefer-hint leg still
+mounts the game" -- so the leg this patch closes was traced before the arm ran. What
+the arm added is the MEASUREMENT: that leg does not merely mount, it prints
+`SpawnServer`, i.e. a remote server makes the client HOST. A wrong reason under a
+right conclusion is exactly what this file exists to catch, and this one was pushed
+before it was caught.
 
 **THE FINDING IS mapfrom, AND IT IS A PARTIAL FIX THAT LEFT THE DANGEROUS HALF
 OPEN.** `SV_MapFrom_f` re-queues TWO commands at `Cmd_ExecLevel`, so both inherit
