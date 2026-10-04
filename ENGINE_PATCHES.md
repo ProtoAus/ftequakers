@@ -35226,19 +35226,42 @@ END over its START).
 
 ## Patch 480 — the map browser asks which games a map's packs belong to, and whether you have them  *(APPLIED — engine `common/fs.c`, `common/common.h`, `client/pr_menu.c`; FTESurf `src/defs/m_defs.qc`, `src/menu/m_main.qc` (ROADMAP 6). 479 is reserved for the noclip gate in FTESurf's lextest.)*
 
-**Problem.** data/mapdeps.txt names the Steam game each of ~540 maps needs beyond the
-boot mounts (CS:GO 269, TF2 145, Portal 2 62, Momentum's mount/ 52, Portal 17), and only
+**Problem.** data/mapdeps.txt names the Steam games ~420 maps need beyond the boot mounts
+(560 lines after the 4 Oct rebuild, over 419 maps; on 12 Sep's 545: CS:GO 269, TF2 145,
+Portal 2 62, Momentum's mount/ 52, Portal 17), and only
 FS_AutoMountForMap read it, at map load: the browser could not say "this map needs TF2,
 which you do not have" before you picked it and met a checkerboard.
 
 **Fix.** `int FS_AddonState(const char *spec)` beside FS_Addon_IsMounted: 0 when the spec
 does not resolve (a steam: game not installed), 2 when a mounted search path is its
 family, else 1 for a steam: spec. A relative or absolute spec resolves without
-FS_Addon_ResolveEx looking, so it reads 2 or 0, never a guessed 1. Quiet: a missing game
+FS_Addon_ResolveEx looking, so it reads 2 or -1 ("cannot tell", drawn dim) -- never a
+guessed 1, and since the review never a red 0 for a folder that exists; a spec longer
+than a path is -1 too. Quiet: a missing game
 is the normal case. The menu builtin `fs_addonstate(string spec)` (menu VM only, #0 by
 name) returns it; the menu feature-detects it with checkbuiltin.
 
 **Verified.** The menu's own load line on this PC: 538 needs, TF2=1 CS:GO=1 Portal 2=1
 MOM mount=1 Portal=1. With a test mapdeps.txt (restored by hash after): a game that does
-not exist read 0, Momentum's boot-mounted pack 2, TF2 1. Built with no new compiler
+not exist read 0, Momentum's boot-mounted pack 2, TF2 1, an absolute path -1. Built with no new compiler
 warnings in the three files; exe f0fd4056 (local install only -- 0.1.21 ships 467).
+
+## Patch 481 — a server cannot make the client mount, save or delete through the fs_ commands  *(APPLIED — engine `common/fs.c`)*
+
+**Problem.** Found by Patch 480's review. fs_load, fs_unload, fs_useaddons, fs_steamlibs,
+fs_cache_clear and fs_indexmaps had no Cmd_IsInsecure check, unlike fs_changemod
+(FS_ChangeMod_f) and fs_restart's game switch. A server's stufftext (cl_parse.c ->
+Cbuf at INSECURE) and a csprogs or menu localcmd run at INSECURE, which a command
+registered at restriction 0 admits -- so a server could mount any host folder and save
+it to fs_addons.txt, add a Steam library root to steam_libraries.txt (steering every
+steam: resolve after it), or wipe the asset cache. Driven on the pre-481 engine
+(e847d3ae): `stuffcmd` from a listen server's console made the client run fs_useaddons
+and fs_load (both reached the resolver) and print fs_steamlibs' listing.
+
+**Fix.** FS_RefuseInsecure() at the top of all six: "Blocking insecure command: <cmd>
+<args>", the wording FS_ChangeMod_f uses. Typed at the console or exec'd from a local cfg
+they run as before. No FTESurf QC sends any of them.
+
+**Verified.** The same arm on the 481 build: the three stuffed commands print "Blocking
+insecure command", the typed fs_useaddons reaches its handler. Engine a7dd361b (local
+install).

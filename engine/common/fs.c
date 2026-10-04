@@ -9701,8 +9701,23 @@ void FS_IndexAddonMaps(void)
 		BZ_Free(ctx.buf);
 }
 
+//ftesurf (Patch 481): fs_load, fs_unload, fs_useaddons, fs_steamlibs, fs_cache_clear
+//and fs_indexmaps mount, save or delete on the host, and a server's stufftext or a
+//csprogs/menu localcmd runs at INSECURE -- so a server could mount any folder and
+//save it to fs_addons.txt.  Refused there, as FS_ChangeMod_f refuses; typed or exec'd
+//locally they run as before.
+static qboolean FS_RefuseInsecure(void)
+{
+	if (!Cmd_IsInsecure())
+		return false;
+	Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
+	return true;
+}
+
 static void FS_IndexMaps_f(void)
 {
+	if (FS_RefuseInsecure())
+		return;
 	FS_IndexAddonMaps();
 	Con_Printf("fs_indexmaps: %s rebuilt\n", FS_MAPS_INDEX);
 }
@@ -9716,6 +9731,8 @@ static void FS_IndexMaps_f(void)
 static void FS_UseAddons_f(void)
 {
 	int i, argc = Cmd_Argc();
+	if (FS_RefuseInsecure())
+		return;
 	if (!fs_lazyaddons.ival)
 	{	//eager mode: fs_addons.txt is already all-mounted; nothing to add.
 		Con_DPrintf("fs_useaddons: ignored (fs_lazyaddons 0)\n");
@@ -9812,9 +9829,9 @@ static qboolean FS_Addon_IsMounted(const char *syspath)
 	return false;
 }
 //ftesurf (Patch 480): the map browser's badge for one mapdeps.txt spec -- 0 not
-//installed, 1 installed, 2 mounted now.  QUIET: most players lack most games.
-//Only a steam: spec is checked for existence (ResolveEx answers a relative or
-//absolute one without looking), so any other spec is 2 or 0.
+//installed, 1 installed, 2 mounted now, -1 cannot tell.  QUIET: most players lack
+//most games.  Only a steam: spec is checked for existence (ResolveEx answers a
+//relative or absolute one without looking), so any other spec is 2 or -1.
 int FS_AddonState(const char *spec)
 {
 	char syspath[MAX_OSPATH];
@@ -9822,7 +9839,7 @@ int FS_AddonState(const char *spec)
 		return 0;
 	if (FS_Addon_IsMounted(syspath))
 		return 2;
-	return strncmp(spec, "steam:", 6) ? 0 : 1;
+	return strncmp(spec, "steam:", 6) ? -1 : 1;
 }
 //ftesurf (P184): has this pack been adopted into fs_addons.txt since we mounted it?
 //`fs_load` can promote an automounted pack to a permanent one behind our back (its
@@ -10817,6 +10834,9 @@ static void FS_Cache_Clear_f(void)
 	char root[MAX_OSPATH];
 	searchpathfuncs_t *h;
 
+	if (FS_RefuseInsecure())
+		return;
+
 	/* With a map name, forget just that map instead of purging everything.
 
 	This is the answer to the one failure this design cannot detect on its own: a map is
@@ -11184,7 +11204,10 @@ static const char *FS_Addon_Arg(void)
 
 static void FS_Load_f(void)
 {
-	const char *arg = FS_Addon_Arg();
+	const char *arg;
+	if (FS_RefuseInsecure())
+		return;
+	arg = FS_Addon_Arg();
 	if (!*arg)
 	{
 		Con_Printf("usage: fs_load <steam:Game/dir | C:\\path\\to\\game | reldir>\n");
@@ -11203,7 +11226,10 @@ static void FS_Load_f(void)
 
 static void FS_Unload_f(void)
 {
-	const char *arg = FS_Addon_Arg();
+	const char *arg;
+	if (FS_RefuseInsecure())
+		return;
+	arg = FS_Addon_Arg();
 	if (!*arg)
 	{
 		Con_Printf("usage: fs_unload <name-exactly-as-loaded>  (see fs_loadlist)\n");
@@ -11299,6 +11325,9 @@ static void FS_SteamLibs_f(void)
 	char *file, *line, *nl, *e;
 	const char *args = Cmd_Args();
 	int i;
+
+	if (FS_RefuseInsecure())
+		return;
 
 	if (!Q_strcasecmp(Cmd_Argv(1), "add") && Cmd_Argc() > 2)
 	{

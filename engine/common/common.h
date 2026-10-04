@@ -611,7 +611,7 @@ int FS_FLocateFile(const char *filename, unsigned int flags, flocation_t *loc);
 qboolean FS_FileIsAddonOnly(const char *name);	//nettest: file's top hit is in a low-priority fs_load addon dir
 void FS_SetPreferHint(const char *spec);		//nettest (P26 Part 2): bias the NEXT locate to a game spec's resolved dir
 void FS_ClearPreferHint(void);					//nettest (P26 Part 2): stop biasing (call right after the BSP load)
-int FS_AddonState(const char *spec);			//ftesurf (Patch 480): 0 not installed, 1 installed, 2 mounted
+int FS_AddonState(const char *spec);			//ftesurf (Patch 480): 0 not installed, 1 installed, 2 mounted, -1 cannot tell
 void FS_AutoMountForMap(const char *mapname);	//ftesurf (P175): mount this map's extra asset pack, per data/mapdeps.txt
 void FS_AutoUnmountStale(void);					//ftesurf (P184): give back packs the map now loading does not want. MUST be called only once the load is committed -- see the essay above FS_AutoUnmountStale
 void FS_LoadStats_Begin(void);					//ftesurf (P180): bracket a map load and report what it cost the filesystem
