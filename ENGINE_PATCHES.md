@@ -35214,8 +35214,12 @@ leaves no paused run), G15 (`!s 1`, setpos above stage 2's box: the handed-over 
 nothing) and G17 (setpos 1 u off stage 2's side face, walk in: stage 2 handed over
 `cheated`; round 10: `armed` in the box, the point's arm), each with a mutant failing it:
 G1-G17 and D pass on qwprogs 740789EB; round 11 adds G18 (a retry keeps the carry) and
-G19 (a ghost's entry drops the handover), and at the deploy G1-G19 and D pass on the
-combined 477+478 qwprogs 80CBD45C. The driven fixes were each proven by a mutant failing its
-own check, as listed above. The
+G19 (a ghost's entry drops the handover), and G1-G19 and D pass on the combined 477+478
+qwprogs 80CBD45C. There the seam move also took a load's own region, the one arm Patch
+435 grants a load at rest (p477rewind R7 read `segmented`); it now takes only another
+region of the box (FTESurf 0624df9), and on that deployed qwprogs 88BBF15F G1-G19 and D
+pass (4 Oct; the arm's retries now wait on the reconnect -- a 9.3 s load had put G7's
+read a second before the restore). The driven fixes were each proven by a mutant failing
+its own check, as listed above. The
 held-stage shape and the off-clock refresh are code-read only (no track in the arm has an
 END over its START).
