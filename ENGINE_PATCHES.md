@@ -35265,3 +35265,13 @@ they run as before. No FTESurf QC sends any of them.
 **Verified.** The same arm on the 481 build: the three stuffed commands print "Blocking
 insecure command", the typed fs_useaddons reaches its handler. Engine a7dd361b (local
 install).
+
+## The replay's Segments column cap deployed to the 12 lobbies, 2026-10-04
+
+FTESurf `d0e765a` via `build.ps1 -Jobs 8 -Pi` (the script's player check passed: nobody on
+any lobby). Mod-side, client only: `d7f7fe4` puts the replay Segments column's ten arrays
+on the heap (memalloc, 2048 rows; csprogs had hit fteqcc's 131072-global cap) and prints
+"segment row(s) past the 2048 cap were dropped" rather than dropping them silently.
+qwprogs `b5d07c97` is byte-identical to the build it replaced; csprogs `f3f44782` ->
+`caf1bc53`, the previous pair kept as `.prev`. All 12 units active after the restart,
+and both live files hash to the local build.
