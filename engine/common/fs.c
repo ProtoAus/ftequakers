@@ -8742,6 +8742,22 @@ static void FS_ChangeGame_f(void)
 	if (cmd_blockwait)
 		return;
 
+	//RELOCATED, not added: this test used to sit BELOW the two forms that RETURN, so
+	//neither ever reached it and a server's stufftext could switch to any installed
+	//mod by index, or drive FS_ModInstall -- which switches to an already-installed
+	//mod with no prompt at all.  Strict, like FS_RefuseInsecure and Patch 481's fs_*
+	//gates, and for the reason 481's own comment gives: a server's stufftext and a
+	//csprogs/menu localcmd BOTH run at INSECURE and these macros cannot tell them
+	//apart.  So QC loses fs_changegame too; typed or exec'd locally it is unchanged
+	//(RESTRICT_LOCAL).  Do NOT narrow this with !Cmd_FromGamecode(): the levels are
+	//ordered LOCAL 29 < INSECURE 30 < SERVER 31, so that reads as "block untrusted,
+	//allow QC" and means "block QC, allow the server" -- measured, Patch 483.
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
+		return;
+	}
+
 	if ((i = strtol(arg, &end, 10)) && !*end)
 	{	//for use by qc. loading mods by number...
 		mod = Mods_GetMod(--i);
@@ -8773,11 +8789,8 @@ static void FS_ChangeGame_f(void)
 		FS_ModInstall(arg, Cmd_Argv(2));
 		return;
 	}
-	else if (Cmd_IsInsecure())
-	{
-		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
-		return;
-	}
+	//the Cmd_IsInsecure() branch that stood here is now unreachable: the same
+	//test runs before the two early-return forms above.
 	else if (!*arg)
 	{
 		Con_Printf("Valid games/mods are:\n");

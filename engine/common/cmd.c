@@ -4546,7 +4546,13 @@ static void Cmd_WriteConfig_f(void)
 
 		if (!strncmp(fname, "data/", 5) || !strncmp(fname, "cfg/", 4))
 			nohidden = true;	//we're writing to a dir mods may potentially read (see QC_FixFileName). don't write any settings they're not allowed to see.
-		else if (Cmd_IsInsecure())
+		//that exemption restricts the CONTENT of the file, it is not a grant of
+		//PERMISSION to write one: as an else-if it meant a data/ or cfg/ path never
+		//reached this test, so a server's stufftext could write a config there --
+		//and data/ is where the gamecode reads its own data files from.  Strict, to
+		//match the cfg_save branch below: one command, one permission rule.
+		//(Patch 483)
+		if (Cmd_IsInsecure())
 		{
 			Con_Printf ("%s %s: not allowed\n", Cmd_Argv(0), Cmd_Args());
 			return;

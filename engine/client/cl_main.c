@@ -3696,6 +3696,15 @@ void CL_SetInfoBlob_f (void)
 		return;
 	}
 
+	//a server has no business choosing which of the client's files become its
+	//userinfo: this reads any gamedir-readable file (up to 64mb) and puts the
+	//CONTENTS on the wire as a base64 blob.  Same shape as condump.  (Patch 483)
+	if (Cmd_IsInsecure())
+	{
+		Con_TPrintf ("%s: not allowed (from server)\n", Cmd_Argv(0));
+		return;
+	}
+
 	data = FS_MallocFile(Cmd_Argv(2), FS_GAME, &fsize);
 	if (!data)
 	{

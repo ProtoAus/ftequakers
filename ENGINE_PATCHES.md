@@ -35338,3 +35338,83 @@ NOT verified in the running client: no board row on proto.bar currently carries 
 serve), so there was no live string to watch change. The host test decodes the same
 function the builtin calls, but a name rendered on the board is a further step and
 was not measured.
+
+## Patch 483 - three command gates a server's stufftext walked past, and the macro ordering that inverts one of them  *(APPLIED - engine `common/cmd.c`, `common/fs.c`, `client/cl_main.c`)*
+
+**Problem.** Three of the routes ENGINE_SECURITY.md still listed as traced-only, two
+of them already measured by the Patch 482 arms:
+
+- *item 8, `saveconfig`* (`common/cmd.c`, `Cmd_WriteConfig_f`): the exemption for a
+  `data/` or `cfg/` prefix was an `else if` on the `Cmd_IsInsecure()` test, so an
+  exempt path never reached it. The exemption exists to restrict the CONTENT of the
+  file (`nohidden`, "don't write any settings they're not allowed to see") and was
+  instead acting as a grant of PERMISSION to write one. A server's stufftext could
+  plant a real 64 KB config in the two directories the gamecode reads its own data
+  from - `data/mapdl.txt`, `data/mapmeta.txt`, `data/saves/**`.
+- *item 7, `setinfoblob`* (`client/cl_main.c`, `CL_SetInfoBlob_f`): no check at all.
+  It reads any gamedir-readable file (up to 64 MB) into the player's userinfo, which
+  is sent to the server, so one stuffed line turns the client into a file reader for
+  whoever it is connected to.
+- *item 4, `fs_changegame`* (`common/fs.c`, `FS_ChangeGame_f`): the numeric and the
+  2-argument forms both RETURN above the function's own `Cmd_IsInsecure()` test, so
+  neither ever reached it. The numeric form switches to any installed mod by index;
+  the 2-argument form drives `FS_ModInstall`, whose download leg does prompt but
+  whose already-installed leg calls `FS_ChangeGame` with NO prompt at all.
+
+**Change.** `cmd.c`: `else if` becomes `if`, strict, matching the `cfg_save` branch
+of the same function - one command, one permission rule. `cl_main.c`: a strict gate
+before the file is opened, the shape `condump` already uses. `fs.c`: the existing
+test RELOCATED above the two early-return forms rather than duplicated, strict like
+`FS_RefuseInsecure` and Patch 481's `fs_*` gates, and the branch that became
+unreachable deleted instead of left as dead code.
+
+**THE TRAP, and it is the reason this entry is longer than the diff.** The first cut
+of the `fs.c` gate read `Cmd_IsInsecure() && !Cmd_FromGamecode()`, intending "block a
+server, allow QC" - because the numeric form's own comment says "for use by qc" and
+`pr_clcmd.c` hands QC exactly that string. Both macros are thresholds over ONE
+ordered value (`cmd.h`): `RESTRICT_LOCAL` 29 < `RESTRICT_INSECURE` 30 <
+`RESTRICT_SERVER` 31, `Cmd_IsInsecure()` is `>=30` and `Cmd_FromGamecode()` is
+`>=31`. The conjunction is therefore exactly level 30: **it blocks QC and admits the
+server.** Measured, not reasoned - the arm's stuffed `fs_changegame 1` switched
+games, tore the listen server down and crashed the client, with no `Blocking` line,
+while the strict `saveconfig` gate in the same run refused correctly. A server's
+stufftext arrives at `RESTRICT_SERVER`, which `Cmd_FromGamecode()` counts as
+gamecode, so these two macros cannot separate "a remote server" from "ssqc" - which
+is exactly why Patch 481's comment refuses both. QC loses `fs_changegame`; nothing
+in this tree calls it (grepped `src/`), and the engine's own mod menu uses
+`RESTRICT_LOCAL` (`m_options.c`), which was never insecure.
+
+**Verified.** Arm and driver in the private repo (`poc/p483/p483a.cfg`,
+`run_p483a.py`), 7 pre-registered predictions, a listen server stuffing each command
+at its own client so it arrives the way a remote server's does.
+
+- SUBJECT (fixed): ALL PASS, exit 0. `saveconfig cfg/p483a_cfg.cfg: not allowed`,
+  `saveconfig data/p483a_data.cfg: not allowed`, `setinfoblob: not allowed (from
+  server)`, `Blocking insecure command: fs_changegame 1`, and no file on disk for
+  either refused write.
+- CONTROL (the same three files at HEAD, everything else byte-identical -
+  `in_generic.o` was left at its previous compile because a concurrent session's
+  uncommitted `in_generic.c` does not build, so the two binaries differ ONLY in
+  these three files): P2/P3 printed `Wrote $basedir/ftesurf/cfg/p483a_cfg.cfg` and
+  `.../data/p483a_data.cfg`, P6 switched games (`Clearing memory`), P7 read the
+  planted canary with no refusal. Four failures, the four the patch closes.
+- **P1 and P4 pass in BOTH runs, and that is the point.** P1 is a gate that already
+  existed (a non-exempt path was always refused), so it proves a stuffed command
+  reaches the handler at all; P4 is the same `saveconfig` typed at the local
+  console, which still writes its 64118 bytes. A fix that moved either would be a
+  regression, and a grader that only counted refusals would not have seen it.
+- The canary is planted by the driver and removed afterwards, and the removal is
+  checked. The driver also removes the local-console file P4 legitimately writes.
+
+**Not verified.** Item 7's EXFILTRATION leg: showing the bytes on the wire needs a
+dedicated server advertising `_pext_infoblobs`, which is the Patch 482 arm's
+measurement, not this one. This arm grades the refusal, which happens before the
+file is opened, so on the fixed engine the file is never read at all. Items 5
+(`gamedir`), 6 (`fs_restart`), 9 (`mapfrom`'s prefer-hint leg) and 10 (`ssv` /
+`mapcluster`) remain traced-only. Not in a shipped binary; a client on the 467
+engine keeps all three holes.
+
+**Number collision.** A concurrent session's uncommitted `client/in_generic.c`
+carries `FTESurf Patch 482` comments, which is the number this repo's committed
+`common/json.c` change already holds and pushed. 482 cannot move down, so that work
+needs 484 or later.
