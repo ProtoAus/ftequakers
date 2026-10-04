@@ -137,6 +137,27 @@ reads 0 as a fault and -1 as unknown, and unknown stays rankable.
 static cvar_t in_rawmice = CVARFD("in_rawmice", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many mice raw input actually enumerated and bound, as against in_rawinput, which is only the request. -1 means this platform's input backend does not report the figure; 0 means raw input ran and bound nothing, so mouse motion is taking the OS-summed, OS-accelerated legacy path.");
 static cvar_t in_rawkbds = CVARFD("in_rawkbds", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many keyboards raw input actually enumerated and bound, as against in_rawinput_keyboard. -1 means this backend does not report the figure; 0 means none are bound and keystrokes are taking the legacy WM_KEYDOWN path.");
 
+/*FTESurf Patch 484: the journal's own verdict, published as read-only cvars in
+  the shape Patch 301 set for in_rawmice -- CVAR_NOSET so a console cannot
+  assign them, CVAR_NOSAVE so they are never archived, and a live int the cvar
+  mirrors once a frame.  -1 means "no journal has run in this process", which
+  is not 0 and is not a measurement of nothing: QC reads -1 as unknown, and
+  unknown stays rankable, exactly as it does for in_rawmice.
+
+  A client can lie about these, and that is not a hole this closes -- it is
+  the same position `rechid` and `inprof` are in, and the same answer: a
+  patched engine is out of scope for a client-side check, and what these buy is
+  that an HONEST client's verdict reaches the server without a 38-second cap
+  and without a transport that does not exist.  The counters are also written
+  into the recording's header, which is the file pm_verify replays, so a claim
+  is bound to the evidence it describes.
+*/
+static cvar_t in_jrn484_frames = CVARFD("in_jrn484_frames", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many rendered frames this process has checked the input angle identity over. -1 means no journal has run here, which is not 0.");
+static cvar_t in_jrn484_ghosts = CVARFD("in_jrn484_ghosts", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames where the view angle moved with zero device counts AND zero recorded keyboard turn. A server angle set looks like this and so does injected motion, so it corroborates rather than accuses. Counted per FRAME, not per axis. -1 means no journal has run here.");
+static cvar_t in_jrn484_violations = CVARFD("in_jrn484_violations", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames where device counts were present and did not add up to the angle they produced. No legitimate path makes this nonzero. Counted per FRAME, not per axis -- a frame that breaks both axes is one unexplained motion. -1 means no journal has run here.");
+static cvar_t in_jrn484_badframes = CVARFD("in_jrn484_badframes", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames that broke the identity on at least one axis, ghosts and violations together. This is the number a threshold wants, because it is the count of frames anything went wrong on. -1 means no journal has run here.");
+static cvar_t in_jrn484_skipped = CVARFD("in_jrn484_skipped", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames the identity did not govern -- cursor free, m_filter or m_accel on, zero sensitivity, or governed by neither axis. Counted rather than silent, so a reader can tell a clean 40 of 40 from a clean 2 of 40. -1 means no journal has run here.");
+
 /*FTESurf Patch 306: THE REPORTS RAW INPUT THREW AWAY.
 
 INS_RawInput_MouseRead matches raw->header.hDevice against the enumerated device table
@@ -766,6 +787,11 @@ void IN_Init(void)
 	  not say" apart from "there is no such cvar on this engine".*/
 	Cvar_Register (&in_rawmice, "input controls");
 	Cvar_Register (&in_rawkbds, "input controls");
+	Cvar_Register (&in_jrn484_frames, "input controls");	/*Patch 484*/
+	Cvar_Register (&in_jrn484_ghosts, "input controls");
+	Cvar_Register (&in_jrn484_violations, "input controls");
+	Cvar_Register (&in_jrn484_badframes, "input controls");
+	Cvar_Register (&in_jrn484_skipped, "input controls");
 	Cmd_AddCommandD ("in_journal_begin", IN_JournalBegin_f, "Start an in-memory journal of raw input events.  Discards any journal already open.");
 	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal under data/ and close it.  With no path, discard it.");
 	Cmd_AddCommandD ("in_journal_note", IN_JournalNote_f, "Append a comment line to the open input journal.");
@@ -1513,6 +1539,158 @@ moved without counts behind it is the signature, not the noise.  So the rule is
 
 ==============================================================================
 */
+/*FTESurf Patch 484: THE IDENTITY, COMPUTED WHERE IT IS PRODUCED.
+
+  Patch 293 put the counts and the angle they produced on one line of the
+  journal and hidcheck.py closed the identity over it.  That works, and it is
+  still the right place for the full arithmetic -- but the journal is the one
+  evidence file that reaches no server.  `run_evidence_ul` is 1 on the fleet,
+  which uploads the .view and not the .hid, and the 4 MiB staging cap refuses
+  any journal past about 38 seconds of run at 110 KB/s.  Measured on the live
+  host: 19 receipts, 14 sidecars, 4 recordings and ZERO journals.  So every
+  input check the tree built -- the angle identity on both axes, the
+  injection counters, the counts join, the device-provenance table -- ran only
+  when an operator typed a path at a file that is not there.
+
+  These three counters are the same verdict as a handful of integers, and
+  they are computed HERE because this is the only place that can: the
+  identity is a statement about the counts an angle was built from, and a
+  rewrite that sits where the usercmd is built changes the angle with no
+  counts and no recorded keyboard turn behind it.  Below this line the two
+  are indistinguishable from each other, and above it the counts do not exist
+  yet.  A cheat that hooks anywhere the mod can see is downstream of this
+  tap, which is the whole property.
+
+  THE SAME ABSTENTIONS hidcheck.py makes, for the same reasons, because a
+  counter that accuses an honest player is worse than no counter:
+    - a frame whose counts were spent elsewhere is not governed.  The flags
+      are the ones written into the 'v' line two records below: 1 is
+      strafe_x (sidemove, not yaw), 2 is strafe_y (forwardmove, not pitch),
+      4 is the cursor being free.
+    - m_filter and m_accel both change the counts between here and the angle,
+      so the identity is vacuous while either is nonzero.  The ranked-profile
+      gate already refuses those settings; this refuses to guess at them.
+    - PITCH IS CLAMPED AND YAW IS NOT (cl_input.c applies cl.minpitch /
+      cl.maxpitch after the angle change), so a truncated dpitch is not a
+      broken identity and there is no flag to say it happened.  A frame whose
+      predicted pitch would land outside the envelope is skipped and counted.
+      The bound is not a cvar and not in the file: cl_main.c reads it out of
+      SERVERINFO, the engine default is -70/+80 and cfg/default.cfg sets
+      -89/+89.  GUESSING IT IS NOT A SMALL ERROR -- with -70/+80 assumed
+      against journals recorded at +-89, the same arithmetic produced 910
+      pitch failures of which 892 were pitch-ONLY, i.e. 892 false accusations
+      on one honest recording, against 18 with the bound read off the client.
+    - the quiet-frame return above is not a frame: nothing moved and nothing
+      turned, so there is no angle to account for.
+
+  GHOST AND VIOLATION ARE DIFFERENT FACTS and are counted separately, exactly
+  as hidcheck separates them.  A ghost is an angle that moved with zero counts
+  AND zero recorded keyboard term -- the signature of motion the engine never
+  saw, and ALSO of a server angle set, so it corroborates rather than
+  accuses.  A violation has counts behind it and they do not add up, which no
+  legitimate path produces.
+
+  MEASURED BEFORE THIS WAS WRITTEN, over all 113 journals in the tree (107
+  with a usable header, 210,678 governed frames): 18 frames fail the pitch
+  identity and ALL 18 also fail yaw, i.e. pitch-only 0.  The 18 are large
+  instantaneous jumps with no input behind them -- a server angle set --
+  which is why they land in the ghost counter and not the violation one.
+*/
+static unsigned int in_jrn_vcount;
+static unsigned int in_jrn_violations[2];	/*[PITCH], [YAW]: counts present and they do not add up*/
+static unsigned int in_jrn_ghosts[2];		/*[PITCH], [YAW]: the angle moved and nothing was recorded behind it*/
+static unsigned int in_jrn_vskip;		/*frames governed by nothing: see the abstentions above*/
+static unsigned int in_jrn_vbad;		/*frames where at least one axis broke -- the number a gate wants, since a whole-angle event breaks both*/
+static qboolean in_jrn_ran;			/*a journal has been opened in this process, so the counters below are measurements rather than unknowns*/
+
+static void IN_Journal_CheckIdentity(const float *viewangles)
+{
+	float sens, pred, got, eps;
+	int axis, axes = 0, broke = 0, ghosted = 0;
+
+	if (!in_jrn_vhavelast)
+		return;	/*the first view of a journal has no previous angle to differ from*/
+	if (in_jrn_vflags & 4)
+	{	in_jrn_vskip++;	return; }	/*the cursor was free; the counts reached neither axis*/
+	if (m_filter.value || m_accel.value)
+	{	in_jrn_vskip++;	return; }	/*the identity is vacuous: see the essay above*/
+
+	sens = sensitivity.value * in_sensitivityscale;
+	if (!sens)
+	{	in_jrn_vskip++;	return; }
+
+	in_jrn_vcount++;
+
+	/*Two axes, opposite signs, and the r_xflip term belongs to yaw alone --
+	  all three read off IN_MoveMouse rather than assumed.*/
+	for (axis = 0; axis < 2; axis++)
+	{
+		if (axis == PITCH)
+		{
+			if (in_jrn_vflags & 2)
+				continue;	/*strafe_y: the counts went to forwardmove, not pitch*/
+			pred = m_pitch.value * sens * in_jrn_vdy + in_jrn_vkpitch;
+			if (pred > cl.maxpitch - in_jrn_vlast[PITCH] ||
+			    pred < cl.minpitch - in_jrn_vlast[PITCH])
+				continue;	/*the clamp may have truncated it: this axis abstains*/
+			got = viewangles[PITCH] - in_jrn_vlast[PITCH];
+		}
+		else
+		{
+			if (in_jrn_vflags & 1)
+				continue;	/*strafe_x: the counts went to sidemove, not yaw*/
+			pred = -m_yaw.value * sens * (r_xflip.ival ? -in_jrn_vdx : in_jrn_vdx)
+			     + in_jrn_vkyaw;
+			got = viewangles[YAW] - in_jrn_vlast[YAW];
+		}
+
+		while (got > 180)
+			got -= 360;
+		while (got < -180)
+			got += 360;
+
+		/*hidcheck's tolerance: the float32 ulp of the two printed angles, plus a
+		  relative term for the predicted product.  NOT a flat epsilon -- at 86
+		  degrees the ulp alone is ~7.6e-6, which is four times a flat 2e-6, and a
+		  flat bound measured 12,751 false breaks on one honest file.*/
+		eps = (fabsf(in_jrn_vlast[axis]) > fabsf(viewangles[axis])
+		        ? fabsf(in_jrn_vlast[axis]) : fabsf(viewangles[axis])) * (1.0f/4194304.0f);
+		if (eps < 2e-6f)
+			eps = 2e-6f;
+		eps += fabsf(pred) * 1e-6f;
+
+		if (fabsf(got - pred) <= eps)
+		{	axes++;	continue; }
+
+		/*Counted per FRAME, not per axis.  A frame that breaks both axes is
+		  one unexplained motion and must not read as two: measured over the
+		  tree's 113 journals, every frame that failed did so on BOTH axes
+		  (11 pitch failures, 11 yaw failures, and the two sets are the same
+		  frames), so a per-axis sum reports 22 for 11 events -- exactly twice
+		  the number of frames anything actually went wrong on.  The per-axis
+		  split stays in the .hid, where hidcheck reports it; the counters a
+		  server sees are per frame, which is the unit a gate thresholds on.
+
+		  `axes` counts the axes this frame DID govern, so a frame where both
+		  abstained is not counted as governed either.*/
+		axes++;
+		broke++;
+		if (!in_jrn_vdx && !in_jrn_vdy && !in_jrn_vkpitch && !in_jrn_vkyaw)
+			ghosted = 1;	/*nothing was recorded behind this motion at all*/
+	}
+
+	if (!axes)
+	{	in_jrn_vcount--;	in_jrn_vskip++;	return; }	/*governed by neither axis*/
+	if (broke)
+	{
+		in_jrn_vbad++;
+		if (ghosted)
+			in_jrn_ghosts[0]++;
+		else
+			in_jrn_violations[0]++;
+	}
+}
+
 void IN_Journal_View(const float *viewangles)
 {
 	char tail[128];
@@ -1567,6 +1745,11 @@ void IN_Journal_View(const float *viewangles)
 		Q_snprintfz(rawtail, sizeof(rawtail), "%g %g", in_jrn_vrawx, in_jrn_vrawy);
 		IN_Journal_Line(Sys_DoubleTime(), "d", rawtail);
 	}
+
+	/*FTESurf Patch 484: the identity, computed where it is produced.  Above the
+	  'v' line and below the quiet-frame return, so it sees exactly the frames the
+	  journal does and never a frame where nothing moved.*/
+	IN_Journal_CheckIdentity(viewangles);
 
 	/*Patch 305 appends kpitch/kyaw AFTER the existing five, so a pre-305 reader
 	  that splits on whitespace and takes fields 0..4 is unaffected and an old
@@ -1872,6 +2055,13 @@ static void IN_JournalBegin_f(void)
 	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
 	in_jrn_vflags = 0;
 	in_jrn_vhavelast = false;
+	in_jrn_vcount = 0;											/*Patch 484*/
+	in_jrn_vskip = 0;
+	in_jrn_violations[PITCH] = in_jrn_violations[YAW] = 0;
+	in_jrn_ghosts[PITCH] = in_jrn_ghosts[YAW] = 0;
+	in_jrn_vbad = 0;
+	in_jrn_ran = true;	/*stays true for the process: the counters describe the last journal, and -1 is only ever "never measured"*/
+
 
 	/*Patch 293: the scale terms are recorded because WITHOUT THEM THE 'v' LINE
 	  PROVES NOTHING.  The invariant is dyaw == -m_yaw*sensitivity*scale*dx, and a
@@ -2221,6 +2411,51 @@ void IN_Commands(void)
 		Cvar_ForceSetValue(&in_rawmice, in_rawmice_live);
 	if (in_rawkbds.ival != in_rawkbd_live)
 		Cvar_ForceSetValue(&in_rawkbds, in_rawkbd_live);
+
+	/*Patch 484: publish the identity counters the same way, on the same guard.
+
+	  ALL FOUR read -1 until a journal has been opened in this process, because
+	  -1 means "never measured" and 0 means "measured, and found nothing".  Those
+	  are different facts about a player and collapsing them is the failure Patch
+	  301's essay warns about -- a reader who sees 0 violations on a client that
+	  never journalled anything has been told the input was checked.
+
+	  THE FLAG, NOT THE COUNTERS.  The first cut of this gated on
+	  `!in_jrn_vcount && !in_jrn_vskip` and ARM A of cfg/test/p482ident.cfg caught
+	  it: ghosts and violations were published unguarded and read 0 before any
+	  journal had run.  A counter cannot say whether it has been measured, and a
+	  journal whose frames were ALL skipped -- every one with the cursor free, or
+	  m_filter on -- is a journal that ran and governed nothing, which must read
+	  as 0 governed and not as unknown.  So the state gets its own variable, which
+	  is what in_rawmice_live is for in_rawmice.
+
+	  Guarded on inequality for the same reason as the pair above.*/
+	if (!in_jrn_ran)
+	{
+		if (in_jrn484_frames.ival != -1)
+			Cvar_ForceSetValue(&in_jrn484_frames, -1);
+		if (in_jrn484_ghosts.ival != -1)
+			Cvar_ForceSetValue(&in_jrn484_ghosts, -1);
+		if (in_jrn484_violations.ival != -1)
+			Cvar_ForceSetValue(&in_jrn484_violations, -1);
+		if (in_jrn484_badframes.ival != -1)
+			Cvar_ForceSetValue(&in_jrn484_badframes, -1);
+		if (in_jrn484_skipped.ival != -1)
+			Cvar_ForceSetValue(&in_jrn484_skipped, -1);
+	}
+	else
+	{
+		if ((int)in_jrn484_frames.ival != (int)in_jrn_vcount)
+			Cvar_ForceSetValue(&in_jrn484_frames, in_jrn_vcount);
+		if ((int)in_jrn484_ghosts.ival != (int)(in_jrn_ghosts[PITCH] + in_jrn_ghosts[YAW]))
+			Cvar_ForceSetValue(&in_jrn484_ghosts, in_jrn_ghosts[PITCH] + in_jrn_ghosts[YAW]);
+		if ((int)in_jrn484_violations.ival != (int)(in_jrn_violations[PITCH] + in_jrn_violations[YAW]))
+			Cvar_ForceSetValue(&in_jrn484_violations, in_jrn_violations[PITCH] + in_jrn_violations[YAW]);
+		if ((int)in_jrn484_badframes.ival != (int)in_jrn_vbad)
+			Cvar_ForceSetValue(&in_jrn484_badframes, in_jrn_vbad);
+		if ((int)in_jrn484_skipped.ival != (int)in_jrn_vskip)
+			Cvar_ForceSetValue(&in_jrn484_skipped, in_jrn_vskip);
+	}
 
 	/*Patch 202: the frame marker, and the per-event append below, both sit ABOVE
 	  the IEV_MOUSEDELTA case's ptr[].delta summation -- which is the whole point.

@@ -35418,3 +35418,115 @@ engine keeps all three holes.
 carries `FTESurf Patch 482` comments, which is the number this repo's committed
 `common/json.c` change already holds and pushed. 482 cannot move down, so that work
 needs 484 or later.
+
+## Patch 484 — the input angle identity, computed where it is produced  *(APPLIED — engine `client/in_generic.c`; FTESurf `tools/hidcheck.py`, `tools/rcptcheck.py`, `tools/p484ident.py`, `cfg/test/p484ident.cfg`, `surfd/sweep.py`, `surfd/surfd.py`, `surfd/admin.py`, `surfd/templates/admin_run.html`)*
+
+**Problem.** Patch 293 put the device counts and the angle they produced on one
+line of the `.hid` journal, and `hidcheck.py` closes the identity over it — but
+the journal is the ONE evidence file that reaches no server. `run_evidence_ul` is
+1 on the fleet, which uploads the `.view` and not the `.hid`, and the client's
+4 MiB staging cap refuses any journal past ~38 s of run at 110 KB/s. Measured on
+the live host while this was written: 19 receipts, 14 sidecars, 4 recordings and
+**ZERO journals**. So every input check the tree built — the angle identity on
+both axes, the injection counters, the counts join, the device-provenance table —
+ran only when an operator typed a path at a file that is not there. Two of them
+were also never called by anything: `hidcheck.py` had no caller outside `tools/`
+and `cfg/test/`, and `rcptcheck.join_hid` checks the DIGEST the signature commits
+to, not the file's contents.
+
+**Change.** `IN_Journal_CheckIdentity()` runs inside `IN_Journal_View`, and
+publishes five read-only cvars in the shape Patch 301 set for `in_rawmice`
+(`CVAR_NOSET|CVAR_NOSAVE`, a live int mirrored once a frame, `-1` = never
+measured): `in_jrn484_frames`, `_ghosts`, `_violations`, `_badframes`,
+`_skipped`. Per-journal, reset in `IN_JournalBegin_f` — these counters belong in
+a recording's header, and one that survived a journal begin would attribute one
+run's ghosts to the next.
+
+**Why HERE and not in the progs.** The identity is a statement about the counts an
+angle was built from, and a rewrite that sits where the usercmd is built changes
+the angle with no counts and no recorded keyboard turn behind it. Below this line
+the two are indistinguishable; above it the counts do not exist yet. That is the
+same argument Patch 376 made for the mouse counters.
+
+**The abstentions are the patch.** A counter that accuses an honest player is
+worse than no counter, so a frame is not governed when the cursor was free
+(flags & 4), when `m_filter` or `m_accel` is on, when sensitivity is 0, or when
+neither axis governed. Per axis: `strafe_y` removes pitch and `strafe_x` removes
+yaw, and **a pitch prediction that would leave the clamp envelope is skipped and
+counted, never modelled** — pitch is clamped (`cl_input.c`) and yaw is not, and
+the bound is a SERVERINFO value the file does not carry (`cl_main.c` reads
+minpitch/maxpitch out of `cl.serverinfo`; the engine default is −70/+80 and
+FTESurf's `default.cfg` sets −89/+89). Sweeping the corpus with −70/+80 ASSUMED
+against files recorded at ±89 produced 910 pitch failures of which **892 were
+pitch-only — 892 false accusations on one honest PB**, against 18 with the bound
+read off the client. The engine reads its own `cl.maxpitch`/`cl.minpitch`.
+
+**Counted per FRAME, not per axis.** The first cut summed the two axes, and
+`tools/p484ident.py` Part 2 caught it: over the tree's 113 journals every frame
+that failed did so on BOTH axes (11 pitch, 11 yaw, the same 11 frames), so a
+per-axis sum reports 22 for 11 events. The per-axis split stays in the `.hid`,
+where hidcheck reports it; the counters a server sees are per frame, which is the
+unit a gate thresholds on.
+
+**Sign, measured rather than read.** Sweeping all eight combinations of (angle
+column, key column, count column, sign) over two PBs, exactly two fit at ~0
+failures — pitch from dy with kpitch, POSITIVE; yaw from dx with kyaw, NEGATIVE —
+and the wrong sign gives 38,744 failures against 0. `hidcheck.py`'s own comment
+says the opposite ("The sign convention is the OPPOSITE of what it looks like")
+and that comment is wrong; the check was always right. Recorded here so the next
+reader does not re-derive it.
+
+**Verified.** `cfg/test/p484ident.cfg` + `tools/p484ident.py`: 18 checks, 0
+failed. `tools/test_hidcheck.py` 216 checks (was 191), `test_reccheck` 295,
+`test_sweep` and `test_web`/`test_board`/`test_evidence`/`test_replays`/`test_join`
+all pass; `test_admin` fails the same two rcon arms at HEAD and at this commit
+(verified by restoring both files and re-running — real UDP, Windows-only).
+
+- ARM A: all five cvars read −1 with no journal open. **FAILED ON THE FIRST RUN,
+  and the failure was the finding** — ghosts and violations read 0, because the
+  first cut published them unguarded while frames/skipped were guarded on
+  `!count && !skip`. An unmeasured state wearing a clean measurement's clothes.
+  The guard is now a "journal has been opened" flag, because a counter cannot say
+  whether it has been measured, and a journal whose frames were ALL skipped has
+  run and governed nothing and must read 0, not unknown.
+- ARM A2: all five refuse `set` ("variable … is readonly") and still read −1.
+  This is the property that makes the channel mean anything — a counter a console
+  can assign is one a server's stufftext can assign, and then an attacker
+  publishes 0 violations.
+- ARM B FAILED ITS OWN PREDICTION (frames > 0). Measured frames 0 / skipped 180,
+  because ALL 181 of the journal's `v` rows carry flags 4: `Key_MouseShouldBeFree()`
+  is true with no window focus and a minimized harness has none (`ui_close` does
+  not change that). **The counter was correct and abstaining on every frame, which
+  is indistinguishable by number from a dead counter** — the tree's "prove the
+  subject acted" rule firing on this patch. What it does prove by agreement:
+  skipped 180 EQUALS hidcheck's own `not_governed` for the same file.
+- ARM D: a fresh journal resets rather than continues.
+- PART 2 supplies the coverage ARM B could not: a transcription of the C gates run
+  over all 113 journals (210,678 governed frames). It agrees with hidcheck on ALL
+  THREE counters on EVERY file, zero mismatches. Corpus: governed 210678, skipped
+  364, ghosts 152, violations 11, badframes 163. **3 of 113 files carry any
+  violation, 11 frames in 210,678 (0.0052%), and on every one yaw and pitch are
+  EQUAL and are the SAME frames — pitch-only 0.** They are large instantaneous
+  jumps with no input behind them (dpitch −41.8, −28.1, −49.0 against predictions
+  of ~0.02 deg), i.e. server angle sets the yaw rule has faulted on since 293.
+
+**Not verified.** NO ARM HERE CAN MAKE `in_jrn484_violations` NONZERO. A minimized
+harness receives no real mouse motion and cannot fire a WM_INPUT, so the subject —
+injected or rewritten motion — cannot be driven from inside the cfg. The arm that
+would is p306inj's external SendInput harness, and even that path is rejected and
+COUNTED upstream by Patch 306 rather than reaching the identity. What is proven is
+that the counters are alive, publish, resist assignment, reset per journal, abstain
+on exactly the frames hidcheck abstains on, and that the C gates are the gates
+calibrated on 210,678 real frames.
+
+**Not done, deliberately: nothing consumes these cvars yet.** They are published
+and unverified in the field, and a gate that reads a counter nobody has ever seen
+nonzero is a gate nobody can calibrate. The consumer — a QC publish beside
+`inprof`, a header key in the `.rec`, and a `pm_verify` HOLD — is BACKLOG, and it
+needs the fleet to be collecting journals at all first.
+
+**Number collision, resolved forward.** A concurrent session's committed
+`common/json.c` change already holds 482 and its `cmd.c`/`fs.c` gates hold 483, so
+this patch and its five cvars were renumbered 482 → 484 before anything shipped.
+The cvar name carries the patch number so a future reader can date it; renaming a
+published cvar is a compatibility break, and this was the last free moment.
