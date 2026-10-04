@@ -35275,3 +35275,66 @@ on the heap (memalloc, 2048 rows; csprogs had hit fteqcc's 131072-global cap) an
 qwprogs `b5d07c97` is byte-identical to the build it replaced; csprogs `f3f44782` ->
 `caf1bc53`, the previous pair kept as `.prev`. All 12 units active after the restart,
 and both live files hash to the local build.
+## Patch 482 - the JSON reader decoded every \uXXXX escape from the wrong buffer, and its surrogate range was half too small  *(APPLIED - engine `common/json.c`)*
+
+**Problem.** `JSON_ReadBody`'s `case 'u'` read the escape's four hex digits from
+`out[]` - the DESTINATION - where it means `in[]`, the source. `in` still points at
+the first digit when that case runs (the switch's `*in++` consumed the `u`), and the
+`in += 4` immediately below is the proof of where the digits are. Eight call sites
+were affected: the four that read the code point and the four in the low-surrogate
+lookahead, which read `out[4..9]` where the pair's second escape is at `in[0..5]`.
+So the decoded value came from whatever tail of already-decoded text happened to sit
+in the output buffer: `Chri` followed by `\u0073` read the `s` out of `Chri` and
+produced `Chriis`, and an escape with nothing decodable behind it failed all four
+`dehex` tests, fell through to `default`, and was left as literal text. BACKLOG's
+report of a box drawn for an o-stroke was that fall-through, not a glyph-missing
+case - which is what kept the hunt pointed at fonts.
+
+This is the decoder behind the QC `jsondecode` builtin (`common/pr_bgcmd.c`), so it
+reaches every name, map title and string the client reads off the web board. The
+other `dehex` users in the tree (`common.c`'s `^Uxxxx` colour markup,
+`gl_heightmap.c`, `sv_main.c`'s auth challenge) all read the source correctly, so
+the defect is confined to `json.c`.
+
+Fixing that exposed a **second, independent defect in the same expression**: the
+low-surrogate test was `low >= 0xdc00 && low < 0xde00`, but the range is
+U+DC00..U+DFFF. The bound refuses to pair any astral character whose low surrogate
+is in the top half - U+1F600 is D83D **DE00**, the first case anyone would reach
+for, and it does not pair. The high-surrogate bound beside it (D800..DBFF) is
+correct; only this one was wrong. It was unreachable while the digits came from
+`out[]`, since nothing paired at all, so it could only be found after the first fix.
+
+**Change.** Read the digits from `in[0..3]` and the lookahead from `in[0..5]`, and
+widen the low-surrogate bound to `0xe000`. `in += 4` moved inside the success
+branch, which is where it always belonged: on failure the code falls through to
+`default`, which re-reads the backslash from `in-1` and emits it literally, and
+skipping four digits first would have dropped them. No behaviour change on the
+success path, which is the only path that reaches it.
+
+**Verified.** A host-side test compiles the engine's own `utf8_encode`, `dehex` and
+`JSON_ReadBody` verbatim - `C:/FTESurf-private/poc/p483/`, extracted by
+`mkjsontest.py` so the fragment cannot drift from the engine - and grades 18 cases.
+Six controls that involve no `\u` escape (plain text, `\n`, `\t`, `\\`,
+empty) pass on the unfixed engine too, so a suite that failed everything would not
+look like a fix. Both fixes: 0 failures. Mutants, each caught by exactly the cases
+that should catch it:
+
+| engine state | failures |
+|---|---|
+| neither fix (baseline `798fda84b`) | 6 |
+| `out[]`->`in[]` only | 2 - U+1F600 and U+10FFFF, the top-half surrogates |
+| range bound only | 10 - every escape case |
+| bound widened past DFFF (`0x10000`) | 1 - `\ud83d\ue000` |
+| both fixes | 0 |
+
+The last mutant is why there are two "must not pair" cases and not one. A first cut
+had only `\ud83d\u0041`, which sits BELOW the range and grades the lower bound;
+an over-wide upper bound passed the whole suite. `\ue000` - the first code point
+above DFFF - is the only one of the two that can fail it, and a control that cannot
+fail the bug it names is decoration.
+
+NOT verified in the running client: no board row on proto.bar currently carries a
+`\uXXXX` escape (20 of 21 unpaired files are bonus legs the viewer does not
+serve), so there was no live string to watch change. The host test decodes the same
+function the builtin calls, but a name rendered on the board is a further step and
+was not measured.

@@ -293,18 +293,41 @@ size_t JSON_ReadBody(json_t *t, char *out, size_t outsize)
 					case 'u':
 						{
 							unsigned int code = 0, low = 0;
-							if (dehex(out[0], &code, 12) &&	//javscript escapes are strictly 16bit...
-								dehex(out[1], &code, 8) &&
-								dehex(out[2], &code, 4) &&
-								dehex(out[3], &code, 0) )
+							//THE DIGITS ARE IN `in`, NOT IN `out`.  The switch's *in++ consumed
+							//the 'u', so in[0..3] are the four hex digits and the `in += 4`
+							//below is what steps over them -- which is also the proof of where
+							//they live.  This read out[0..3], the DESTINATION, so the decoded
+							//code point came from whatever tail of already-decoded text
+							//happened to sit in the output buffer: `\u0073` after "Chri" read
+							//the 's' from "Chri" and produced "Chriis", and an escape with
+							//nothing decodable behind it fell through to the default and was
+							//left as literal text.  Every \uXXXX in every name the board
+							//served was wrong; Patch 482.
+							//The low-surrogate lookahead has the same defect at out[4..9],
+							//where the pair's second escape is at in[0..5].
+							if (dehex(in[0], &code, 12) &&	//javscript escapes are strictly 16bit...
+								dehex(in[1], &code, 8) &&
+								dehex(in[2], &code, 4) &&
+								dehex(in[3], &code, 0) )
 							{
-								in += 4;
 								//and as its actually UTF-16 we need to waste more cpu cycles on this insanity when its a high-surrogate.
-								if (code >= 0xd800u && code < 0xdc00u && out[4] == '\\' && out[5] == 'u' &&
-									dehex(out[6], &low, 12) &&
-									dehex(out[7], &low, 8) &&
-									dehex(out[8], &low, 4) &&
-									dehex(out[9], &low, 0) && low >= 0xdc00 && low < 0xde00)
+								in += 4;
+								if (code >= 0xd800u && code < 0xdc00u && in[0] == '\\' && in[1] == 'u' &&
+									dehex(in[2], &low, 12) &&
+									dehex(in[3], &low, 8) &&
+									dehex(in[4], &low, 4) &&
+								//THE LOW-SURROGATE RANGE IS U+DC00..U+DFFF, so the upper bound is
+								//0xe000.  It was 0xde00, which silently refuses to pair every
+								//astral character whose low surrogate is in the top half of the
+								//range -- U+1F600 (D83D DE00) is the first one anyone would
+								//think to test, and it does not pair.  The high-surrogate bound
+								//one line up is correct (D800..DBFF); only this one was wrong.
+								//UNREACHABLE UNTIL THE out[]/in[] FIX ABOVE: while the digits
+								//were being read from the destination buffer nothing paired at
+								//all, so this bound never decided anything.  Fixing one bug
+								//made the next one live, which is why the surrogate case is in
+								//the test rather than assumed to follow from the first fix.
+									dehex(in[5], &low, 0) && low >= 0xdc00 && low < 0xe000)
 								{
 									in += 6;
 									code = 0x10000 + (code-0xd800)*0x400 + (low-0xdc00);
