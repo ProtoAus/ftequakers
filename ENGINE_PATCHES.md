@@ -35622,3 +35622,122 @@ which is what the least-destructive-first ordering bought.
 listen server, so `SpawnServer` is the local host). Item 10 (`ssv` / `mapcluster`)
 is now the only traced-only route left. Not in a shipped binary; a client on the 467
 engine keeps all three holes.
+
+## Patch 486 - the journal identity's consumer: the counters reach the server  *(MOD-SIDE ONLY - no engine C in this patch; it consumes Patch 484's cvars.  FTESurf `src/client/cl_replay.qc`, `src/server/sv_timer.qc`, `src/shared/sh_defs.qc`, `tools/p486injrn.py`, `tools/p486mut.py`, `cfg/test/p486injrn.cfg`, `cfg/test/p486sv.cfg`)*
+
+**Problem.** Patch 484 computes the `.hid`'s own angle identity inside
+`IN_Journal_View` and publishes five read-only cvars, and shipped with NO
+CONSUMER - deliberately, because a gate that reads a counter nobody has ever seen
+nonzero is a gate nobody can calibrate.  But an unconsumed counter reaches nobody
+at all, and the reason it matters is that THE JOURNAL DOES NOT REACH THE SERVER:
+measured on the live host 2026-10-05, 19 receipts, 14 sidecars, 4 recordings and
+ZERO `.hid`, with both lobby cfgs at `run_evidence_ul 1` (which uploads the
+`.view` and not the `.hid`).  Raising it to 2 does not help either - at 110 KB/s
+the client's 4 MiB staging cap refuses any journal past ~38 s of run, and the
+transport is one <=768-byte chunk per round trip.  So every input check the tree
+built over the `.hid` ran only when an operator typed a path at a file that is not
+there.  Two of them had no caller at all until Patch 484 wired them in.
+
+**Change.** The verdict travels instead of the file, over the channel build 78/79
+established.  `cl_replay.qc`'s `Rec_JrnIdentReport` reads the five through
+`Rec_InputCvar` (the one accessor that asks `cvar_type` before reading, because
+`cvar()` autocreates and this tree has been bitten by that four times) and sends
+`sendevent("injrn", "ffffff", have, frames, ghosts, viol, bad, skip)`.
+`sv_timer.qc` stores them on the player entity, clears them in `SV_CSQCForget`
+(the one place, per that function's own stated rule), and `cmd timer` prints a
+`jrnident:` line.  The grammar is written once in `sh_defs.qc` as `IJ_*`, because
+`FS_TagName`'s lesson is that two copies of a field order is how the two ends
+drift.
+
+THREE DECISIONS WORTH STATING, since each was a fork:
+
+* SIX FIELDS IS `sendevent`'s CEILING AND THIS IS EXACTLY AT IT, so - as the
+  `CSEv_inprof_ffffff` comment already states - THE VERSION IS NOT SENT: it is
+  carried by the function name the engine composes from the argument types.  A
+  server without `CSEv_injrn_ffffff` answers silence, which is the version check
+  for free and with no way to get it wrong.  A seventh field needs packing into
+  vectors ("vvf" is nine), not dropping one.
+* A SEPARATE EVENT, NOT A WIDENING OF `rechid`, and the reason is bandwidth:
+  `rechid` rides a cache keyed on one value that changes essentially never, while
+  these five change on any governed frame, so folding them in would make it a wire
+  message per frame per player - which `Rec_ProfileReport`'s own comment calls a
+  bandwidth bug rather than a safety margin.
+* NO DIAGNOSTIC `setinfo` COPY, unlike both reports above.  Those keys exist so
+  `cmd timer` can print what the console CLAIMS beside what the CSQC reported, the
+  two disagreeing being the signature of a forgery.  These counters have nothing
+  to disagree with - the only other source is the `.hid`, which the server does not
+  have - so a key would publish six numbers a console can set and no reader that
+  can catch it.
+
+`-1` IS PASSED THROUGH UNCHANGED AND NEVER NORMALISED TO 0.  The temptation is to
+tidy it, and that would re-introduce one layer up the exact defect Patch 484's arm
+A caught: an unmeasured state wearing a clean measurement's clothes.  A client
+that journalled nothing must stay distinguishable from one that journalled and
+found nothing, and `-1` against `0` is the only place that distinction survives.
+
+STILL NOT A GATE, AND THAT IS THE POINT RATHER THAN AN OMISSION.  No reader
+latches a `TF_` bit or demotes a run.  Over the 113 local journals the honest
+corpus carries 11 violations on 3 files and every one is a yaw-and-pitch frame on
+a large instantaneous jump - the shape a server angle set has, which the yaw rule
+has faulted on since Patch 293.  A threshold from 11 events on 3 files is a guess,
+and this tree's rule is that a check which faults an honest run is worse than no
+check.  The gate is BACKLOG item C and needs a corpus, which needs this.
+
+**Verified.** `cfg/test/p486injrn.cfg` (client) against `cfg/test/p486sv.cfg`
+(dedicated, `fteqwsv64.exe` of Sep 28 - PRE-484 ON PURPOSE, because the consumer
+is QC in the two `.dat` files both processes share, so a server binary that
+predates the engine half still exercises all of it).  `tools/p486injrn.py`:
+**37 checks, 0 failed.**
+
+* ARM 1, no journal open: `said 1  have 16  frames -1  ghosts -1  viol -1  bad -1
+  skip -1`.  `-1` AND NOT `0`, so the consumer did not re-introduce the arm-A
+  defect one layer up.
+* ARM 2, one journal: `frames 181`, which EQUALS the engine's own
+  `in_jrn484_frames` printed three lines later in the same arm - two ends of one
+  channel, independently printed, agreeing exactly rather than approximately.
+  `viol 0  ghosts 0`, so honest input is not accused.  ARM 1 read `-1` and ARM 2
+  reads 181, which is the falsifier for a dead channel.
+* ARM 3, THE STRONGEST RESULT: the log shows `SETINFO Proto: injrn=0 999999 0 0 0
+  0` - the console really did write the hostile key - and the server's next line
+  reads `frames 181`.  Not 999999.
+* ARM 4, a fresh journal: `frames 0` against ARM 2's 181, so the reset propagates;
+  a cache that never re-sent would have left the server holding 181.  And `0`, not
+  `-1`: measured clean against never measured.
+
+THE GRADER IS ITSELF GRADED.  `tools/p486mut.py` mutates the log six ways - each a
+defect this patch could really have - and all six are caught with a named failure,
+with the unmutated log as a control that must pass: the console forging the fact,
+ARM 1 reading 0 instead of -1, a dead channel, a reset that never propagates, the
+two ends drifting by one, and an honest run accused.  **THE FIRST CUT OF THAT
+SCRIPT HARD-CODED `frames 183` AND THE RUN IT WAS POINTED AT HAD PRODUCED 181**,
+so three mutants mutated NOTHING, the grader passed them, and the script reported
+"3 not caught" while looking like a grader bug.  A mutant that does not mutate is
+the same false green as a grader that does not grade and it is silent in the same
+way; it now reads the numbers out of the log.
+
+Build: all three progs, `Done. 0 warnings` each.  `cfgguard` clean.
+
+**Not verified.** NOTHING HERE CAN MAKE `viol` NONZERO - the same gap Patch 484
+has and for the same reason: a minimized harness cannot fire a `WM_INPUT`, so
+injected or rewritten motion cannot be driven from inside a cfg.  This proves the
+counters are CARRIED, honest about what they have not measured, and unforgeable
+from a console.  It does not prove a server can see a violation; coverage of the
+rule itself is `tools/p484ident.py` Part 2, over 113 real journals.
+
+**Known, and not this patch's.** The journal ARM 2 wrote has 182 `v` records and
+ZERO `f` records, and its end line reads `0 frames` against an identity counter
+that governed 181.  A census of all 123 journals in the tree says this is COMMON
+AND OLD rather than a regression: 61 have `f=0` and 62 have `f>0`, and the empty
+half includes `p305_*`, `p385_*` and THREE real gameplay recordings
+(`0000007_pb`, `0000008_pb`, `0000009_pb`).  Any check built on `f` therefore
+silently covers about half the corpus.  In BACKLOG with the census, beside the
+cosmetic finding that every journal names itself `loadworker_3` on its own end
+line - the engine `va()` trap AGENTS.md already records, reaching
+`IN_Journal_End`'s print.
+
+**Number collision, resolved forward.** A concurrent session's uncommitted
+`sv_ccmds.c`/`fs.c` gates hold 485, so this consumer and its five files were
+renumbered 485 -> 486 before anything shipped.  Found by reading
+ENGINE_PATCHES.md's headings before claiming rather than after, which is the
+second collision in two patches and the reason AGENTS.md says to check untracked
+`cfg/test/pNNN*` files too - a claim shows up there first.
