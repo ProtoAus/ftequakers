@@ -35530,3 +35530,86 @@ needs the fleet to be collecting journals at all first.
 this patch and its five cvars were renumbered 482 → 484 before anything shipped.
 The cvar name carries the patch number so a future reader can date it; renaming a
 published cvar is a compatibility break, and this was the last free moment.
+
+## Patch 485 - gamedir, mapfrom and fs_restart refuse a server's stufftext, and mapfrom's second leg was the hole  *(APPLIED - engine `server/sv_ccmds.c`, `common/fs.c`)*
+
+**Problem.** The last three traced-only command routes in ENGINE_SECURITY.md
+(items 5, 6, 9). All three are registered by `SV_InitOperatorCommands` with NO
+restriction level, and a CLIENT process runs that too because it can host - so a
+remote server's stufftext reaches all three, and none of the handlers tested the
+caller.
+
+**TWO OF THE THREE CITATIONS IN THAT FILE WERE WRONG**, and re-deriving them from
+source is what made the arm measurable. Item 5 said `cl_main.c:3725`; `gamedir` is
+`SV_Gamedir_f`, in `server/sv_ccmds.c`. Item 9 said `cl_parse.c:4791`; that line is
+`CL_ParseClientdata`'s stat parsing and has nothing to do with maps - `mapfrom` is
+`SV_MapFrom_f`, also in sv_ccmds.c. Item 6 said `fs.c:8951`; `fs_restart` is
+registered at fs.c:11501 to `FS_ReloadPackFiles_f`. A traced-only list whose line
+numbers have drifted is a list nobody can check, which is how three routes stayed
+"traced" instead of becoming measured.
+
+**THE FINDING IS mapfrom, AND IT IS A PARTIAL FIX THAT LEFT THE DANGEROUS HALF
+OPEN.** `SV_MapFrom_f` re-queues TWO commands at `Cmd_ExecLevel`, so both inherit
+the caller's level. Patch 481 already refuses the first (`fs_useaddons`). Measured
+on the unfixed build, a stuffed `mapfrom ftesurf bhop_eazy` printed `Blocking
+insecure command: fs_useaddons "ftesurf"` and then **`SpawnServer: bhop_eazy`** -
+the second leg ran, and a remote server made the client HOST a map. In the generic
+branch `prefer` is the caller's own `argv(1)` with no validation at all, so the
+server also chose the addon the map resolves through. Gating one leg of a
+two-leg command is not gating the command.
+
+`fs_restart` is a denial of service before it is anything else: it rebuilds the
+whole filesystem from an arbitrary flag word, and the mod's own `sv_player.qc`
+calls it "the single most expensive command in the build" while noting "the
+dangling-bucket crash the engine's own comment in fs.c documents". On the control
+one stuffed line printed an `is no longer needed` line for every mounted package.
+`gamedir` reaches `COM_Gamedir`, the same filesystem restart as `fs_changegame`
+(Patch 483) from a different command; its argv validation already refuses `..`,
+both slashes and `:`, so it is not a path traversal - it switches to any SIBLING
+directory by bare name.
+
+**Change.** One `Cmd_IsInsecure()` gate in each of the three handlers, strict, with
+the reason Patch 483's note gives (INSECURE covers a server's stufftext AND a
+csprogs/menu localcmd and `Cmd_FromGamecode()` cannot separate them). For
+`gamedir` and `mapfrom` the gate sits BELOW their read-only branches - the argc==1
+gamedir print and the usage line - because both write to the client's own console
+and so tell a server nothing it does not already have. That differs from 483, which
+gated `fs_changegame` above its no-arg form: that one LISTS WHAT COULD BE SWITCHED
+TO. `fs_restart` has no read-only branch and is gated at the top.
+
+**Verified.** Arm and driver in the private repo (`poc/p485/p485a.cfg`,
+`run_p485a.py`), six pre-registered predictions, a listen server stuffing each
+command at its own client. None had to be revised.
+
+- SUBJECT: ALL PASS, rc=0. `Blocking insecure command:` for each of `fs_restart`,
+  `mapfrom ftesurf bhop_eazy` and `gamedir ftesurf`.
+- CONTROL (both files at HEAD = Patch 484, everything else byte-identical): P4/P5/P6
+  FAIL, and its log shows what they did - the pack teardown, and `SpawnServer`
+  behind mapfrom's refused first leg.
+- **P1, P2 AND P3 PASS ON BOTH BUILDS, and that is the design.** P1 and P2 are
+  HARMLESS probes - a stuffed `gamedir` and `mapfrom` with no arguments, which hit
+  the read-only branches and return - so they prove a stuffed command reaches these
+  handlers at all and a subject's silence cannot be read as a refusal. P3 is the
+  same `gamedir` from the LOCAL console, which still prints: a gate that also
+  stopped the user would not be a fix.
+- **THE LOG SIZE IS A SECOND MEASUREMENT**: 147735 bytes / 1645 lines on the control
+  against 88790 / 1037 on the subject. The difference is the filesystem teardown.
+- `Blocking insecure command: fs_useaddons` is PRESENT on the control and ABSENT on
+  the subject - 485's gate returns before mapfrom queues anything, an independent
+  sign the gate is above the `Cbuf_AddText` calls rather than below them.
+- Every internal caller of all three re-queues at `RESTRICT_LOCAL` (fs.c:422,
+  fs.c:11252, cl_main.c:7950, sv_main.c:6809), and no QC or shipped cfg calls any of
+  them - `sv_player.qc` RENAMED AWAY from `fs_restart` precisely because the name
+  collided with the engine's. So nothing loses these.
+
+**Grading note.** The driver grades a subject whose own marker never appeared as
+NOT-REACHED, which is neither a pass nor a fail, and exits 2 rather than 1. Patch
+483's first run lost a measurement to a crash and reported it as a failure; a
+grader that cannot tell the two apart will eventually "fix" a gate that was already
+holding. Both builds reached all six markers here, so nothing was NOT-REACHED -
+which is what the least-destructive-first ordering bought.
+
+**Not verified.** `mapfrom`'s effect on a client that is NOT hosting (the arm is a
+listen server, so `SpawnServer` is the local host). Item 10 (`ssv` / `mapcluster`)
+is now the only traced-only route left. Not in a shipped binary; a client on the 467
+engine keeps all three holes.

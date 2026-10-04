@@ -3270,6 +3270,25 @@ static void SV_Gamedir_f (void)
 		return;
 	}
 
+	//FTESurf Patch 485: refuse an insecure caller.  Registered by
+	//SV_InitOperatorCommands with no restriction level, and a CLIENT runs that
+	//too because it can host -- so a remote server's stufftext reaches this.
+	//The argv validation below already refuses "..", both slash characters and
+	//":", so this is not a path traversal; what it is, is COM_Gamedir, which
+	//restarts the filesystem into any SIBLING directory by bare name --
+	//fs_changegame's class (Patch 483) reached from a different command.  The
+	//gate sits BELOW the argc==1 read, which prints the gamedir to the client's
+	//own console and so tells a server nothing it does not already have;
+	//fs_changegame's no-arg form lists what could be switched TO, which is why
+	//483 gated above it.  Strict, for the reason 483's note gives: INSECURE
+	//covers a server's stufftext AND a csprogs/menu localcmd, and the two cannot
+	//be told apart.  Every internal caller uses RESTRICT_LOCAL.
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
+		return;
+	}
+
 	if (argc == 2)
 		dir = Z_StrDup(Cmd_Argv(1));
 	else
@@ -3877,6 +3896,20 @@ static void SV_MapFrom_f (void)
 	if (Cmd_Argc() < 3 || !*nick || !*mapname)
 	{
 		Con_Printf("usage: mapfrom <game> <mapname>   games: css cs hl hl2 cod cod2 (or a full \"steam:Game/dir\" spec)\n");
+		return;
+	}
+
+	//FTESurf Patch 485: refuse an insecure caller.  This re-queues TWO commands
+	//at Cmd_ExecLevel, so both inherit the caller's level: Patch 481 catches the
+	//fs_useaddons leg, and before this the SECOND one still ran -- measured, a
+	//stuffed `mapfrom ftesurf bhop_eazy` printed `Blocking insecure command:
+	//fs_useaddons` and then `SpawnServer: bhop_eazy`.  A remote server made the
+	//client HOST a map.  In the generic branch argv(1) is unvalidated, so it also
+	//chose the addon the map resolves through.  Below the usage read for the
+	//reason given at SV_Gamedir_f.  Strict; see Patch 483's note.
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
 		return;
 	}
 

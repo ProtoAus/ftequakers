@@ -6180,6 +6180,18 @@ void FS_ReloadPackFiles(void)
 
 static void FS_ReloadPackFiles_f(void)
 {
+	//FTESurf Patch 485: refuse an insecure caller.  Registered with no restriction
+	//level, and it rebuilds the whole filesystem from an arbitrary flag word.  The
+	//mod's own sv_player.qc calls it "the single most expensive command in the
+	//build" and notes the dangling-bucket crash this file documents, so one stuffed
+	//line is a denial of service before it is anything else.  Every internal caller
+	//re-queues it at RESTRICT_LOCAL and is unaffected.
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
+		return;
+	}
+
 	if (Sys_LockMutex(fs_thread_mutex))
 	{
 		if (*Cmd_Argv(1))
