@@ -35223,3 +35223,22 @@ read a second before the restore). The driven fixes were each proven by a mutant
 its own check, as listed above. The
 held-stage shape and the off-clock refresh are code-read only (no track in the arm has an
 END over its START).
+
+## Patch 480 — the map browser asks which games a map's packs belong to, and whether you have them  *(APPLIED — engine `common/fs.c`, `common/common.h`, `client/pr_menu.c`; FTESurf `src/defs/m_defs.qc`, `src/menu/m_main.qc` (ROADMAP 6). 479 is reserved for the noclip gate in FTESurf's lextest.)*
+
+**Problem.** data/mapdeps.txt names the Steam game each of ~540 maps needs beyond the
+boot mounts (CS:GO 269, TF2 145, Portal 2 62, Momentum's mount/ 52, Portal 17), and only
+FS_AutoMountForMap read it, at map load: the browser could not say "this map needs TF2,
+which you do not have" before you picked it and met a checkerboard.
+
+**Fix.** `int FS_AddonState(const char *spec)` beside FS_Addon_IsMounted: 0 when the spec
+does not resolve (a steam: game not installed), 2 when a mounted search path is its
+family, else 1 for a steam: spec. A relative or absolute spec resolves without
+FS_Addon_ResolveEx looking, so it reads 2 or 0, never a guessed 1. Quiet: a missing game
+is the normal case. The menu builtin `fs_addonstate(string spec)` (menu VM only, #0 by
+name) returns it; the menu feature-detects it with checkbuiltin.
+
+**Verified.** The menu's own load line on this PC: 538 needs, TF2=1 CS:GO=1 Portal 2=1
+MOM mount=1 Portal=1. With a test mapdeps.txt (restored by hash after): a game that does
+not exist read 0, Momentum's boot-mounted pack 2, TF2 1. Built with no new compiler
+warnings in the three files; exe f0fd4056 (local install only -- 0.1.21 ships 467).

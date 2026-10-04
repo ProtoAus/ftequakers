@@ -9811,6 +9811,19 @@ static qboolean FS_Addon_IsMounted(const char *syspath)
 			return true;
 	return false;
 }
+//ftesurf (Patch 480): the map browser's badge for one mapdeps.txt spec -- 0 not
+//installed, 1 installed, 2 mounted now.  QUIET: most players lack most games.
+//Only a steam: spec is checked for existence (ResolveEx answers a relative or
+//absolute one without looking), so any other spec is 2 or 0.
+int FS_AddonState(const char *spec)
+{
+	char syspath[MAX_OSPATH];
+	if (!spec || !*spec || !FS_Addon_ResolveEx(spec, syspath, sizeof(syspath), true))
+		return 0;
+	if (FS_Addon_IsMounted(syspath))
+		return 2;
+	return strncmp(spec, "steam:", 6) ? 0 : 1;
+}
 //ftesurf (P184): has this pack been adopted into fs_addons.txt since we mounted it?
 //`fs_load` can promote an automounted pack to a permanent one behind our back (its
 //dup-skip returns true, so FS_Load_f saves the line and reports success), and after

@@ -2525,6 +2525,15 @@ static void QCBUILTIN PF_m_mapfilekb(pubprogfuncs_t *prinst, struct globalvars_s
 		G_FLOAT(OFS_RETURN) = (float)((loc.len + 1023) / 1024);	//integer divide FIRST: this is a ceiling, not a ratio
 }
 
+//FTESurf Patch 480: which of a map's extra packs this player has, for the map
+//browser's badges -- FS_AddonState on one data/mapdeps.txt spec
+//("steam:Team Fortress 2/tf"): 0 not installed, 1 installed, 2 mounted.
+static void QCBUILTIN PF_m_fs_addonstate(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char *spec = PR_GetStringOfs(prinst, OFS_PARM0);
+	G_FLOAT(OFS_RETURN) = (spec && strlen(spec) < MAX_OSPATH) ? FS_AddonState(spec) : 0;
+}
+
 static struct {
 	char *name;
 	builtin_t bifunc;
@@ -2905,6 +2914,7 @@ static struct {
 	{"whichpack",				PF_whichpack,				503},
 	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 465
 	{"mapfilekb",				PF_m_mapfilekb,				0},	//FTESurf Patch 466
+	{"fs_addonstate",			PF_m_fs_addonstate,			0},	//FTESurf Patch 480
 															//gap
 	{"uri_escape",				PF_uri_escape,				510},
 	{"uri_unescape",			PF_uri_unescape,			511},
