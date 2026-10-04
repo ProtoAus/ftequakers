@@ -34849,3 +34849,373 @@ the session the 2026-09-29 restart killed; finished, renumbered and measured her
 the old run fading at the next start and gone 3 s later, 821 pixels between the line on and
 off at one pose against 0 between two off shots. Control `48D1E28C63E5EE52` (Patch 474):
 6 fail, `trail` unknown, 16 pixels. A teleport draws as a long segment (BACKLOG).
+
+## Patch 476 — the one-frame angle rule allows the tick's own turn  *(REVERTED the same day, never deployed — tools only: FTESurf `tools/reccheck.py`, `tools/test_reccheck.py`)*
+
+Committed as 4809cfb and reverted in dc1ab48 after two independent reviews: the cut used
+the turn INTO the move while the frame sits in the turn OUT of it, it mixed yaw and pitch,
+and the lag search still scored with the flat cut, so remote clients got the wrong join
+and faulted anyway. It also cleared deviations inside turning ticks that the flat rule
+caught -- a decision for the operator, not a threshold. The measurements and what a retry
+needs are in FTESurf's BACKLOG.md under the one-frame rule's entry.
+
+## Patch 477 — rewind along your own run, resume or save there  *(APPLIED — mod-side only, no engine change: FTESurf `src/client/cl_rewind.qc` (new), `cl_trail.qc`, `cl_saveloc.qc`, `cl_replay.qc`, `cl_main.qc`, `cl_progs.src`; `src/server/sv_saveloc.qc`, `sv_player.qc`, `sv_timer.qc`, `sv_resume.qc`; both shipped cfgs)*
+
+**Problem.** Lex: "hit a rewind button that lets them slide back on the run like the demo
+display and allow continuing from any point/tick with the same velocity and angles. Count
+the player down when they want to resume and allow placing save states during the rewind".
+Patch 475 drew the run's own line live; nothing could go back along it.
+
+**Change.** BACKSPACE pins the body with the replay's pin (`rec_watch 1 rw`) and scrubs a
+cursor along the live line; S saves there, ENTER resumes there after a 3 s countdown, ESC
+on a run that is on the clock resumes at the head with its speed (refused, it stops there)
+and ends the run's clock either way -- a thaw would carry the run past a freeze the .rec
+never records (the held-run fault), so any running run asks first. The state comes from a
+server ring of the player's own samples (2 minutes, one every 2 run ticks, 160 KB a
+player), never from a client position: the client's position only picks among the
+server's samples within 0.5 s of the asked tick. `sl_saveat <ticks> [x y z [go]]` writes
+the demoted save shape with `velocity 0 0 0` and the kept speed in `rwvel` + `rewound 1`
+(an older build reads a demoted save at rest); `go` releases the pin, loads and holds in
+one server call, so a refused save loads nothing, and costs two rate tokens.
+SV_SaveLoadTag decides what any load does to the hopped-start tag: an IDLE load (every
+rewind resume) faster than a walk or a jump raises it, an armed, finished or running load
+raises only when fast and its file says hopped, and a load at rest outside a run forgives
+it unless the map still owes the body something. A resume's row is replaced by the next
+resume's. The live line restarts when a load winds the clock back, as the ring does. A warp
+the server serves under the rewind's pin (`!r/!m/!s/!b`, zone_goto/restart/reset, setpos)
+voids the frozen run once it has moved the body, and a run it starts wipes the ring;
+`retry`, a Multi-Session park and a lobby flip under it void the run too. The pin holds no speed (velocity and push
+carrier zeroed every packet and at the release), and a load under it is refused.
+
+**Found in review (twenty-seven rounds, three lenses each).** Round 1: the `rewound` tag was per
+row, so a plain save off a rewind load shed it; old builds would read rewind files as
+untagged speed; pinning an ARMED timer tainted the next honest run; rewind rows pushed
+real saves out of the lobby copy window; key repeats saved per repeat; `busy = !rw_on ||
+...` was `(busy = !rw_on) || ...` (measured with `fteqcc64 -Fwasm`). Round 2: the tag
+rule tagged honest walkers; a `!r` while browsing was undone; and a PRE-EXISTING hole the
+pin sat on -- `cmd rec_watch 1`, `kill`, run, `cmd rec_watch 0` froze a CLEAN run's clock
+while the body ran and ranked the shortened time; respawn and the Multi-Session paths now
+release the pin, and a run that starts under a pending freeze is practice. Round 3: the
+tag only rose, so one fast load made every later start practice. Round 4: the pending-
+output check read `== 2`, which an earlier trigger masks; `rec_watch 0 void` read argv
+after a tokenizing call. Round 5: round 4's client warp check voided runs at 200 ms+ ping
+(the pin's own landing read as a warp) and on func_bhop teleports; round 3's speed test on
+RUNNING loads made honest bhop save practice come out practice, because a start entered
+from RUNNING arms only through the jump commit -- taken back (BACKLOG, beside the unmerged
+Patch 455). Round 6: round 5's replacement -- close the mode on a key bound to a warp --
+could not work: CSQC's localcmd runs at a later command-buffer level than a default.cfg
+bind, so the warp reached the server before the close; the server voids instead. Round 7:
+round 6's void ran BEFORE the warp, so a refused warp (`!s 9`, `zone_goto 99`) ended the
+run and `!r`'s leg was decided after the run was gone; it also hit the plain replay
+viewer; and a warp out of a start box restarts the run within one packet, so the client
+saw no state change and resumed the old head (the ring had not been cleared). Also: the
+pin did not hold velocity at zero, so a repeating `OnTrigger` basevelocity booster (20 in
+the library) paid a pinned body in the start box once per firing and the release kept it
+-- round 1's removal of the ARMED taint had widened that to a clean run; an S save while
+browsing wrote the whole live .view as its slot's prefix; a refused keep-window demote's
+in-memory mark kept the row's stale speed. Round 8: round 7's ring wipe also hit warps
+that start no run, leaving a browse open on a ring that refused every point -- a warp now
+only marks the ring's run over and the next start wipes it; the HUD's segment column was
+still written for an S save; round 7's client-side delete of a rewind row's .view path
+could remove another save's file (a remote server's ids on the local tree, a spectator's
+tracked player) -- dropped, and a demoted row's load now leaves the sidecar alone; a lobby
+flip, a Multi-Session park and `retry` let go of the rewind's pin without ending its run.
+Round 9: `retry` restored the voided run's camera into an idle client (the next idle save
+wrote it as its prefix); a plain `rec_watch 0` still thawed; a server release the client
+did not ask for left it browsing a free body (the pin became a stat); a fast idle load made
+a hop chain's tag forgivable at rest. Round 10: a frozen kept abandon's `inend` sat at the
+release, so pm_verify's last row ran the whole browse and a finish latched in it read the
+pause as ticks (a false HOLD on honest posted stages) -- the freeze now latches the
+horizon; a replay opened mid-countdown ran over an unpinned body. Round 11: the replay
+handover ran a frame late, so a key could still drive the rewind's go under the open
+replay -- Watch_Open now hands over first; and the pin stat became the client's own open
+serial, so a reopen inside one round trip cannot latch an earlier open's pin. Round 12:
+the ask before pinning a running run read the client's state a round trip old, so a run
+that started in that window was pinned and voided unasked -- the pin carries the client's
+state at the open and the server leaves a RUNNING run alone when it was asked from
+anything else; SV_RecState wrote pe/pm/portal while frozen, bound to the last real `in`
+row (a door near the pinned body read as that move's physents, a HOLD on an honest kept
+abandon). Round 13: a stage chain or a finish into the start box ends one run and starts
+the next inside a frame, so the state matched -- the pin carries the run ticks too; the
+ask was tied to no run (a second press opened on the next one). Round 14: those numbers
+went out with `%g`, which rounds past 10^6 ticks (4 h) and refused 15-45% of opens
+silently -- `%d`, and a refusal is published as -<serial> and closes the client; a save
+or load in the round trip changed the run without lowering its ticks, so the pin carries
+the SLSEQ as well; the pin's velocity zero was not in the .rec, so a replay flew the
+packet it landed in at the old speed (a finish the body never reached, or a physents box
+gathered where it never was) -- it writes `warp ... pin`, which pm_verify applies like
+any warp and reccheck knows; SV_RewindFind passed a NaN tick; the keep window demotes at
+most two rows a call. Round 15: the pin left the push carrier, so the replay's pinned
+packet still paid a trigger_push; a refusal was wiped by the next release before the
+client read it, and SV_WatchHold's own refusals published none; a resume sent behind a
+refused pin matched the newer run's ring and ended it -- `go` needs the rewind's pin; the
+pin's warp is one a server frame and none on a run already frozen. Round 16: that cap was
+the wrong rule -- a pin, release, moves and re-pin share one server frame, and a save-lock
+release hands its speed back before the freeze flag catches up, so a real speed was zeroed
+unrecorded; the warp is now written whenever the pin zeroes some speed or carrier (which is
+also what bounds it). A pin taken and let go between two snapshots was invisible to the
+client -- a release publishes -serial as a refusal does. Left for the engine: pm_verify
+flies the pin packet's pinned moves as PM_NORMAL, so a push re-armed during one moves the
+replay 15-45 u (BACKLOG). Round 17: a press an earlier handler took -- the chat draft's
+ENTER or ESC -- reached the rewind on its auto-repeat as a fresh press (an unasked resume),
+and a release the draft swallowed left a scrub running: Rewind_Track now marks the six keys
+down at the top of CSQC_InputEvent, whoever takes the press, and the frame lets go of what
+it no longer sees held; the pin seeds a pending Multi-Session session before its zero; the
+grammar's coverage sentences admit `zone`, the other client-commanded warp. Round 18: R18J
+called the tracker itself, so it passed with the real wiring deleted -- it now drives the
+whole input chain (`vote key`) with a real chat draft open; ENTER pressed again in the
+countdown reached `bind enter say` and opened a draft over the release, whose swallowed
+releases left movement keys running -- the countdown keeps ENTER from a non-`+` bind.
+Round 19: in the countdown the save-lock keys still reached their map (`2` took the
+countdown's hold over and was let go under it; `4` deleted the resume row) -- they are
+swallowed there as while browsing; ESC's repeat after the mode it closed reached the
+engine's menu over a body just released (Rewind_AfterTook keeps a key the mode took until
+let go); a `mom_saveloc_*` bind on S or an arrow made it dead in the mode; a pin that never
+showed (an `observe` inside the round trip) left the mode up -- RW_LOST after the open
+closes it. Round 20: the mode's own keys still passed to save-lock binds in the countdown;
+a capturing vote let through digits it would not take (`Vote_Takes`); and round 19's own
+check pressed `1`, which the server refuses under the hold -- its mutant passed, so it
+presses `4` now.
+Round 21: a digit the mode swallowed was remembered only while it was up, so held across
+the countdown's end its repeats reached the save-lock map (`4` deleted the resume row,
+then real saves) -- a key the mode swallowed is its own until let go, open or not; the
+vote's test skipped the vote's repeat latch; an alias of an `sl_` command passed the
+key-level test, so the client's save-lock commands wait for the rewind; a QW spectator
+that dropped holding the replay's eye left it orphaned (pre-existing); a fast load of a
+hop chain's file onto an armed, finished or running row became forgivable at rest.
+Round 22: 0 was both the countdown hold's "no key" and the swallowed-key table's empty
+slot, and a real key reports 0 (the ISO `<>` key, dead keys) -- its tap let the counted
+body go, and its release emptied the table; a swallowed key whose release the chat draft
+took stayed swallowed through its next press; and a load raising a hop chain's tag left a
+forgiveness already pending (a fast idle load's, a hopped finish's), so rest in the box
+lifted the chain's tag. Round 23 found nothing in round 22 and four older defects: a chat
+draft took every key-up, so a `+` bind's stored release never ran (a `+sl_hold` held into
+a draft left the player pinned; movement keys kept running); `rec_savelock 0` let any key
+event go of a `+sl_hold` hold; the open emptied the swallowed-key table its own releases
+now maintain; and `sl_save` under the replay pin wrote an at-rest row wherever the body
+hung (BACKLOG since Patch 443). Round 24 found nothing in round 23 and three older
+defects of the same family: the draft passed only `+` binds' releases, so the save-lock's
+`2` held into a draft stayed held -- it now swallows only the releases of presses it took
+itself; `sl_save` was still accepted in a resume phase, the same freeze; and the rewind
+swallowed a save-lock key without a word.  Round 25 found nothing in round 24 and two
+of the same family: a key held into a draft repeats into it, and the draft recorded the
+repeat as its own press, so it swallowed the release after all (`2` stayed held); and with
+`bind enter messagemode` the rewind's ENTER opened a draft instead of going -- the draft
+now yields the rewind's own keys while the rewind is up.  Round 26: that yield held only
+while the rewind was up, so ENTER on messagemode held through the countdown opened a draft
+on its first repeat after the release, over the body just let go -- a repeat never opens a
+draft; in the countdown only ENTER and ESC are the mode's, so the yield is the phase's keys;
+a `+` bind on S held with a go in flight is handed back; and, older than 477, a ghost's view
+entity outlived its player at a disconnect.  Round 27: round 26's hand-back with a go in
+flight also passed a view turn and a save-lock bind (a stored `-sl_hold` later let go of an
+unrelated hold), so only movement binds pass; the wheel is the browsing rewind's against a
+chat bind; and, older than 477 and a remote crash, a client the engine had not spawned yet
+could make a view eye per `spawn` cycle until the entity cap ended the lobby process --
+the eye spawner adopts the one the player owns, and the save-lock commands wait for
+PutClientInServer.  The loop then stopped on Lex's 4 Oct rule: stop when a round finds
+nothing that could rank an unearned run, corrupt a recording or harm the server (rounds
+21-27 found none of the first two).
+
+**Verified.** At the deploy, R2-R27 and Q (58 checks) pass on csprogs DF2455A6 with the
+combined 477+478 qwprogs 80CBD45C, and each round's fixes were proven by a mutant failing its
+own check (the list below).  The first cut: `tools/p477rewind.py` + `cfg/test/p477rewind.cfg` on surf_dune and
+surf_embrace, R2-R19 and Q (33 checks) on csprogs 7D164B23 / qwprogs EC9CB7F0: the ask on a
+clean run; `rwvel` on disk (505 u/s) and the speed back out of it; walking speed untagged,
+505 u/s tagged, a fast running load untagged; the laundering chain re-tagged; a fast load
+tagging and an at-rest load forgiving; the armed pin untainted; a 2:10 run past the ring's
+wrap, its old cursor refused with the body unmoved; ESC resuming at the head; the resume
+row replaced (5 rows, 8 without); the restarted line's first point 4.6 u from the server's
+sample (389 u with the stale head kept); `!r` while browsing closing the mode; the kill hole
+closed; a setpos under the rewind ending the frozen run, its ring kept (the old head
+resumable after); a held S saving once; `zone_goto 99` (refused) ending nothing; a typed
+`sl_goto` under the pin refused; an S save leaving no run.view and no seq.txt where R12's
+plain running save has both; a replay opened mid-browse taking the pin in the same frame
+(the go on the same line never leaves); a replay's pin keeping its run through a setpos; a
+typed `rec_watch 0` voiding, and closing an idle rewind; a hop chain's tag surviving a fast
+load and rest; `retry` while
+rewinding ending the run, the restart restoring an idle body, and the open at the head of a
+new line that had the last resume's slot and sample count; on surf_embrace, a
+repeating basevelocity trigger firing 15 times on the pinned body with the body at 0.0 u/s
+pinned and released (the same trigger then paid the free body 105.8 a firing); pins whose
+state (R18F), ticks (R18G) or SLSEQ (R18H) is not the running run's refused with the run
+clean and on the clock; the browsed run's record counts showing the pin's `warp` (R15); a
+`go` with no pin refused (R18I). `tools/test_reccheck.py` 295 checks, 0 failed.
+Control (dc1ab48, byte-identical to the Pi's live pair): every arm fails, 22 Unknown
+command. Mutants, one fix compiled out each, each failing its arm: no raise on load (R4B),
+the old freeze (R5B, R7), no row replacement (R8, 6/6), no line restart (R9, 197 -> 318
+samples, 109.6 u), no pin release at respawn (R11, clock stuck at 0.015), no close on a
+state change (R10), the round-1 threshold (R4), no at-rest forgiveness (R5C), no
+running-load test (R12, as it then stood), no close on a warp key (R13, as it then stood),
+no repeat latch (R14, 2 saves), no void at a setpos (R13), round 7's ring wipe at a warp
+(R13B, refused where the ring was kept), a warp that moved nothing voiding (R15), no load
+refusal under the pin (R16), the live .view written for an S save (R17), a replay's pin
+voiding at a warp (R18), the pin keeping a trigger's payout (R19: 1586.8 u/s pinned, 1692.6
+released), round 7's ring wipe put back (R13B), the segment column written for a rewind row
+(R17), retry keeping the frozen run (R18B: "run restored at 0:01.380"), the line told by its
+slot (R18B: resume 1), an idle retry restoring the sidecar (R18B: the next idle save's
+run.view), a plain `rec_watch 0` only thawing (R18C: timer running), no close on an unasked
+release (R18D), a fast load making any tag forgivable (R18E: hopped 0), no replay refusal at
+all (R13B: Moby's 1:08.130 opened over the countdown), the handover a frame late (R17B:
+"resumed" under the open replay), a pin on a run that started since the ask (R18F: made
+practice), the ticks check out (R18G), the SLSEQ check out (R18H), the pin's warp not
+written (R15: warps 0), a `go` with no pin (R18I), the pin's warp blind to the state
+(R18W: 2), a repeat acting (R18J: the go counting), no let-go (R18J: cursor 0), a release
+publishing 0 (R18D: pin 0), no tracker call (R18J), ENTER passed in the countdown (R13C:
+took 0), the after-close guard off (R18K: ESC took 0), the save-lock block on the mode's
+keys (R18L: no save), the save-lock commands
+under the rewind (R18M: saves 11, 10, 10, not said), a swallowed digit's repeats once the
+mode closes (R18M: 11, 11, 10), key 0 as the countdown hold's key (R22A: the tap ended the
+count), key 0 emptying the swallowed-key table (R22B: saves 8 then 7), a release the chat
+draft took leaving the key swallowed (R22C: no save), a chain's tag from a load keeping a
+pending forgiveness (R22D: hopped 0 after rest), a chat draft swallowing a `+` bind's
+release (R23A: took 1), `rec_savelock 0` letting go of any hold (R23B: released by
+another key), `sl_save` under the pin (R23C: a save made), the draft swallowing a release it did
+not press (R24A: still held after it), a save-lock key swallowed without a word (R24B: said
+0), the draft recording a held key's repeat as its press (R25A: still held), a messagemode
+bind opening a draft on the rewind's ENTER (R25B: browsing after ENTER), a repeat opening a draft after the
+count (R26A: `w` took 1), the countdown yielding all six keys (R26C: S took 0), S's `+back`
+swallowed with a go in flight (R26B: took 1). Two arms were corrected by their own mutants: R18B's
+timer read raced the retry's spawn and is graded on the retry's own line; M32 (one of the
+two replay refusals out) failed on wording while the other refusal held, so R13B takes
+either. One arm was
+shown by its mutant to test the wrong thing (round 4's R13 setpos landed in the start box)
+and was replaced. Not driven: the two-connection keep-window case; the client's close and the
+server's ring wipe when a warp starts a run in one packet (no start on surf_dune puts the
+body outside its box); the park and lobby-flip voids; a demoted row's load skipping the
+sidecar; a reopen inside one round trip (the open serial); the go's round trip before the
+hold exists (the busy refusal); a run past 10^6 ticks (the `%d`); the carrier cleared at
+the pin (no push on surf_dune); the pin warp's once-a-frame dedupe. Heap
+measured on the Pi with `sv_meminfo`: 6.8-9.6 MB used of 2 GB reserved on all 12 lobbies.
+
+## Patch 478 — a ghost that carries the body out of a start box starts no run where it ends  *(APPLIED — mod-side only, no engine change: FTESurf `src/server/sv_timer.qc`, `sv_resume.qc`, `sv_saveloc.qc`, `sv_zones.qc`, `sv_player.qc`)*
+
+**Problem.** Found by Patch 477's round-9 integrity review, traced, carried in BACKLOG
+as the top ranking hole. `rec_ghost 1` (the `ghost` key) detaches the camera and leaves
+the body running unattended, and SV_TimerFrame's ghost branch returns before every zone
+test -- so nothing noticed an ARMED body leaving its box. It stayed armed, and on the
+packet after the unghost the start test fired wherever the ghost had carried it:
+a CLEAN clock (SV_StageOpen re-reads the ghost flag as off), and pm_verify does not ask
+where a run began. Driven first, with an unmodified client on surf_dune: +forward 0.55 s,
+`ghost` at y 760 with the hull still in the box (the hull line is 785), and the body
+coasted out and slid down the ramp -- at y 1347, 480 u lower, `cmd timer` still said
+`armed`; the unghost at y 1352 began `running`, class clean, its clock at the unghost.
+A typed `cmd rec_ghost 1` does not walk the body out instead: the client follows the
+server's ghost and sends empty moves, so the coast is the only route (0.4 s of +forward
+coasted 722 -> 774 and stopped inside).
+
+**Change.** While ghosting, a body out of a box whose exit starts a clock disarms it: an
+armed timer goes idle and says so ("no run -- your body is out of its start box as a
+ghost"), a finished stage run drops its handover box, and a stage held in its own box
+inside a full run (3b) is disarmed and cannot qualify until a fail reopens it -- the old
+code rebased its clock to the unghost, the ghost's travel untimed, and a ghost-marked stage
+still qualifies at run_stageghost 1. The unghost takes the start latch of where the body
+stands, so it arms no box (round 6). SV_StageLaunch re-reads the ghost flag at a start: a
+ghost taken standing in the box had left it set into the start, unpriming stage 1 so the run
+never posted it -- and the premise of that kill, an exit judged at the unghost, is what this
+patch removes. And the same shape through another door: a `!r` in a Multi-Session resume
+phase armed the leg while SV_MsFrame held the body at the park point, and an abort (an
+expired slot, a second connection's claim) stood it up there ARMED, so SV_MsAbort idles the
+timer.
+
+**Found in review (twelve rounds: eleven with three lenses, the last integrity alone).** Round 1: the held stage's stated reason
+was wrong (its SV_StageStart never re-reads the flag); the stage-1 post a ghost in the box
+cost; the Multi-Session door; messages that said more than the code. Round 2: `retry` was a
+second exit from the same phase -- it wrote and restored the ARMED state at the park point,
+skipping SV_MsAbort -- so the arm itself is refused there now: SV_MsBusy turns away every
+zone command in a resume phase and SV_RetryPoint refuses too, as a save, a load and the ghost
+already did; the held-stage disarm is gated on run_stagearm, where a held exit starts nothing.
+Round 3: `retry` then `!resume` in one packet stranded the claim the same way (the accept
+refuses while a retry's restart is pending), and an abort left -1 latches at a park point
+inside a box (Patch 443's free-fall arm by another door). Round 4: round 3's scan ran
+wherever the body was, and a `kill` in the phase reaches the abort with the body at its
+spawn -- whose start box then never armed, on 209 of 608 zoned maps -- so only the apply's
+own failure exits take the park point's latches; and an IDLE save wrote its live latches,
+-1 after a resume's void or a ghost's disarm, so its load armed a box at rest mid-air: an
+idle save's latches are now where the body stands. Round 5: the ghost's FINISHED disarm
+left the same -1 in a box, and rows the live build had already written in a resume phase
+held it too -- so a load off the clock takes the latches of where it put the body, ahead of
+Patch 435's grounded gate, which still grants the one arm a load may take. Round 6: the
+unghost itself armed the box the body stood in, and nothing had judged the ghost's travel
+-- the server trusts the client to send a ghost empty moves, so a modified client bhopped
+the box idle, or armed off a load's settled start (the gate's arm waiting out a ghost
+taken in the same packet), and the unghost's arm zeroed every taint: a clean start at
+speed built in the box. The unghost now arms nothing, and `retry` turns the ghost off
+before it writes its point; the save writer is verbatim again. Round 7: a running
+save under a ghost kept the stale start latch, so its load re-armed a START at the saved
+speed -- saves and loads under a ghost are refused (a load there also rewound the
+recording below the window's `ghost 1`), and a running load takes its start latch; the
+unghost fired the splits, checkpoints and finishes the ghost reached (a stage finish
+handing the next stage a clean start) -- it takes every latch now, ends a running run that
+lands in a START on surf maps as entering one does, and resets a bhop map's pending
+attempt; and, older than 478, a `setpos` while a stage run stood finished kept its
+handover, whose arm re-read the class as clean and started the next stage wherever the
+setpos put the body -- every stage of a map postable with an unmodified client; a setpos
+drops it. Round 8: round 7's unghost cost honest ghosted runs -- a body come to rest in
+the next stage's box lost that split and every later one, and pm_verify, whose latches
+stay as the ghost left them, HELD the file -- so a running run's event latches stay at the
+unghost again and fire at re-attach; a load takes every latch of where it puts the body (a
+row with a stale event latch finished its stage at the load); older than 478, the stage
+handover's arm re-read the class from the movetype alone, so a setpos into or above the
+boundary, noclip let go of in the box, or a running save loaded short of it started the
+next stage clean -- the finished stage's taint now carries across; the park unghosted after
+its eligibility check, so a run the unghost ended was parked as a slot every connect
+offered and every accept refused; and a rewind `go` under a ghost is refused up front.
+Round 9: off the clock a stale event latch fired at the start's own packet (on a track
+whose END is its START, a steered ghost could start and finish in one packet), so the
+unghost refreshes them there; round 8's carry took the dirty latch, so a replay opened
+mid-stage made every later handed-over stage practice -- it carries the class bits instead
+(TF_CHEAT, and TF_SEGMENT/TF_SHADOW as a stitched next stage); and, older than 478, the
+point arriving a packet after the hull fired the finish armed the next stage through
+SV_TimerTryArm, clean -- that box was given to the handover. Round 10: which skipped the
+hop rule for a slow side entry (stop in the box, bhop, leave: a clean ranked stage), so the
+point's arm is back, hop-checked, and both routes arm through one helper that carries the
+cheat bit; on 11 abutting stage boxes the skip started the next stage at an internal seam,
+so the handover and the ghost tests ask about the whole box; and the segment carry, which
+made every later stage segmented after a load at rest, travels only with a fast load's
+speed (cleared at rest), with practice carried at run_class 0. Round 11: a retry or a Multi-Session resume gave a
+fast load's speed back without its latch, the carry ran down the whole chain, a seam
+re-arm lost it, legacy maps' start rooms read as one box, and a ghost's entry into the
+next box reopened the unpoliced handover -- the carry is now a latch of what the stage's
+own gestures did (set at the gesture, cleared by every arm, saved for retry and
+Multi-Session), a seam moves the arm's region, same-box regions must touch, and a ghost's
+entry drops the handover. Round 12 (integrity only, the last by Lex's 4 Oct rule) found
+no route beyond BACKLOG's and nothing that harms the server; its note -- the carry holds
+only while the handover stands -- is in BACKLOG with its fix. Left in BACKLOG: the engine
+should zero a ghost's moves; `noclip` is ungated on the lobbies (Patch 479), and lifts the
+replay pin's freeze; a ghost crosses cancel
+zones (and a START it spans) on a running run; a finished stage's handover box is not
+policed for hops; pm_verify's latches are not refreshed at `ghost 0`.
+
+**Verified.** `tools/p478ghost.py` + `cfg/test/p478ghost.cfg` on surf_dune, both builds'
+logs kept: the control (ccc99f8) fails G1 ("ghosted out to y 841 (state armed), unghosted
+at y 842: running class clean at 0:01.290") and G2 ("prime 0"); the patch passes G1
+("state idle ... idle, said True"), G2 (a ghost in the box keeps the arm and the start is
+clean and primed, "prime 1") and D (data/ untouched). G3, the Multi-Session door: the
+control's `!r` in the resume countdown armed the start and its `retry` came back "back where
+you were", then running, class clean; the patch refuses both and the resume applies. The
+driver parks data/saves/surf_dune and data/resume/surf_dune, and D compares the whole data/
+tree, files and directories. G4 drives round 3's order (control: offered once, claim
+stranded); G5 a `kill` in a bhop_eazy resume countdown -- armed after the respawn, and its
+mutant (round 3's scan for every caller) reads idle. G8 (round 5): idle outside the box, a
+`setpos` 100 u up inside it and a save in one packet write a row latched -1 mid-air (its
+own file: state 0, azone -1, z 15152); the live box arms the falling body, and the load of
+that row reads idle -- its mutant (no load rescan) reads armed. G6 (round 6): a slow,
+grounded save loaded with `rec_ghost 1` in the same packet reads `practice 1`, `arm zone
+-1` under the ghost and `practice 1` after the unghost -- its mutant (no latch refresh at
+the unghost) reads `practice 0`, `start ok 0`, the box re-armed clean. G7: the same, then
+`retry`: `practice 1` after the restore; its mutant (the point written under the ghost)
+reads `practice 0`. The driver lists and cleans only this arm's two maps' folders and
+records each save row's state, latch and origin. qwprogs 4D5BFD8A on bd0ac8a. Rounds 7-9
+add G9 (no save or load under a ghost), G10 (a running load's start latch), G11 (an unghost
+in a START ends a running run), G12 (a setpos drops a finished stage's handover), G13 (a
+full run's split fires at re-attach in stage 2's box), G14 (a run the park's unghost ended
+leaves no paused run), G15 (`!s 1`, setpos above stage 2's box: the handed-over stage is
+`cheated`), G16 (a running row behind a setpos into stage 2's box: its load finishes
+nothing) and G17 (setpos 1 u off stage 2's side face, walk in: stage 2 handed over
+`cheated`; round 10: `armed` in the box, the point's arm), each with a mutant failing it:
+G1-G17 and D pass on qwprogs 740789EB; round 11 adds G18 (a retry keeps the carry) and
+G19 (a ghost's entry drops the handover), and at the deploy G1-G19 and D pass on the
+combined 477+478 qwprogs 80CBD45C. The driven fixes were each proven by a mutant failing its
+own check, as listed above. The
+held-stage shape and the off-clock refresh are code-read only (no track in the arm has an
+END over its START).
