@@ -35899,3 +35899,74 @@ control.
 
 **Client-side only.** No server behaviour changes, so no lobby deploy is implied; it
 ships with the next client release.
+
+## Patch 489 - `allskins` no longer copies a server-supplied string past the end of its buffer  *(APPLIED - engine `client/skin.c`)*
+
+**Problem.** ENGINE_SECURITY.md item 3, the last driven-and-open item:
+`Skin_AllSkins_f` was
+
+    strcpy (allskins, Cmd_Argv(1));
+
+into `char allskins[128]`, and `qwskin_t skins[MAX_CACHED_SKINS]` is declared
+IMMEDIATELY AFTER it, so the bytes past 128 land in the skin cache.  The command is
+registered with no restriction level and the handler has no `Cmd_IsInsecure` check, so
+a server's stufftext reaches it.  Unlike the rest of that audit's list, this one MUST
+stay server-reachable: forcing skins is a legitimate QuakeWorld server feature, and
+the audit says so in terms ("the command exists FOR a server to call").  So the fix is
+the bound, not a gate.
+
+**Change.** `Q_strncpyz (allskins, Cmd_Argv(1), sizeof(allskins))`.  127 characters
+are still accepted whole; anything longer was already invisible downstream, where
+`qwskin_t::name[64]` truncates the value to 63 characters before it is ever used, so
+no legitimate server loses anything it could express.  `strcpy` was the only unbounded
+copy in the file (audited: `grep -n "strcpy\|strcat\|sprintf" client/skin.c`), and the
+same sweep over `client/*.c` and `common/*.c` for a copy fed directly by `Cmd_Argv`
+found two others, both already bounded and both verified rather than trusted --
+`zqtp.c`'s `msg_trigger` checks `strlen >= countof(trig->string)` and `strlen(name) >
+31` before its two `strcpy`s (and refuses insecure callers outright), and `cmd.c`'s
+`Cmd_Alias_f` concatenates into a 65536-byte buffer, which is a separate question
+recorded in the game repo's BACKLOG rather than folded into this patch.
+
+**Verified.** Built win64 `m-rel` + `sv-rel`, exit 0, no new warnings.  Driven over
+FOUR BUILDS with two jobs, five pre-registered predictions, ALL MET ON ALL FOUR
+(`C:/FTESurf-private/poc/p489/`, `run_p489a.py` + `cfg/p489a.cfg`):
+
+THE DETECTOR.  `p482c` could not distinguish a fix from no fix, because it grades the
+loader line and `qwskin_t::name[64]` truncates that to 63 characters downstream -- its
+own RESULT says the overrun is NOT measured and needs a canary build.  So this arm is
+that canary build: `mkcanary.py` generates BOTH variants from one pristine `skin.c`,
+placing a guard word (`0x50489489`) at offset 128 and printing it before and after the
+copy, and ASSERTS the two differ in exactly one line so the instrumentation cannot be
+what separates them.  The handler prints `arglen N` with each reading, so every
+reading is self-attributing and no verdict depends on log position.
+
+| argument | canary-control (`strcpy`) | canary-subject (`Q_strncpyz`) |
+|---|---|---|
+| 15 chars | guard intact | guard intact |
+| 127 chars (the largest that fits) | guard intact | guard intact |
+| 300 chars | **guard = `0x62626262`** | **guard intact** |
+| client | **died, rc 0xC0000005** | reached the end, rc 0 |
+
+The corrupted guard holds the argument's own bytes (`0x62` = `b`), and the log ends on
+the line after it -- so the client died inside `Skin_Skins_f()`, the statement
+immediately after the copy, consuming the skin cache the overflow had written through.
+THE REGRESSION ARM, on the binaries that actually ship (control `b36fafc9` = Patch 488
+with no 489, subject `73fc1c1f`): both behaved IDENTICALLY -- a stuffed
+`allskins p489short_reach` still reached the loader, the 127-character name still
+reached it truncated to 63 characters, and both survived the 300-character argument.
+Provenance by string rather than by stamp: the driver refuses to run a canary build
+that lacks the guard print or a real build that contains it.
+
+**NOT VERIFIED, and the distinction matters.** The crash above is a property of the
+INSTRUMENTED layout, where a guard word sits at offset 128 in place of whatever the
+linker put there; the uninstrumented build survived the same argument (`p482c`, and
+real-control here).  So the claim this patch earns is "an unbounded write of a
+server-supplied string past a 128-byte global, demonstrated to reach at least 172
+bytes and to be fatal once the bytes past the buffer are load-bearing" -- NOT "a
+server can always crash a client with `allskins`".  The audit deliberately did not
+quote an impact class beyond the bound being absent, and that restraint still holds.
+Also Windows only; the change is one line of portable C, but no Linux build was
+driven.
+
+**Client-side only.** No server behaviour changes, so no lobby deploy is implied; it
+ships with the next client release.

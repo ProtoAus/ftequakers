@@ -617,7 +617,17 @@ Sets all skins to one specific one
 */
 void	Skin_AllSkins_f (void)
 {
-	strcpy (allskins, Cmd_Argv(1));
+	//FTESurf Patch 489: this was a bare strcpy of a server-supplied string into
+	//`char allskins[128]`, and `qwskin_t skins[MAX_CACHED_SKINS]` is declared
+	//immediately after it, so the bytes past 128 landed in the skin cache.  The
+	//command is registered with no restriction level and had no Cmd_IsInsecure check,
+	//so a server's stufftext reached it -- measured: a 300-character argument left a
+	//canary word at offset 128 holding the argument's own bytes and the client died in
+	//Skin_Skins_f(), the next statement.  THE FIX IS THE BOUND, NOT A GATE: forcing
+	//skins is a legitimate QuakeWorld server feature, so this command must stay
+	//server-reachable.  127 characters is still accepted whole, and anything longer was
+	//already invisible downstream, where qwskin_t::name[64] truncates it to 63.
+	Q_strncpyz (allskins, Cmd_Argv(1), sizeof(allskins));
 	Skin_Skins_f ();
 }
 
