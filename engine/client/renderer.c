@@ -561,8 +561,10 @@ cvar_t vid_conheight						= CVARFD ("vid_conheight", "0",
 cvar_t vid_conwidth							= CVARFD ("vid_conwidth", "0",
 												CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, "Specifies the virtual width of the screen. Should generally be left as 0 to allow the correct aspect to be used despite video mode changes.");
 //see R_RestartRenderer_f for the effective default 'if (newr.renderer == -1)'.
+//Patch 494: NOTFROMSERVER -- an archived value is loaded at RESTRICT_LOCAL on the
+//next launch, so a server-written "gl <dll>" here outlived Patch 488's gate.
 cvar_t vid_renderer							= CVARFD ("vid_renderer", "",
-													 CVAR_ARCHIVE | CVAR_VIDEOLATCH, "Specifies which backend is used. Values that might work are: sv (dedicated server), headless (null renderer), vk (vulkan), gl (opengl), egl (opengl es), d3d9 (direct3d 9), d3d11 (direct3d 11, with default hardware rendering), d3d11 warp (direct3d 11, with software rendering).");
+													 CVAR_ARCHIVE | CVAR_VIDEOLATCH | CVAR_NOTFROMSERVER, "Specifies which backend is used. Values that might work are: sv (dedicated server), headless (null renderer), vk (vulkan), gl (opengl), egl (opengl es), d3d9 (direct3d 9), d3d11 (direct3d 11, with default hardware rendering), d3d11 warp (direct3d 11, with software rendering).");
 cvar_t vid_renderer_opts					= CVARFD ("_vid_renderer_opts", NULL, CVAR_NOSET|CVAR_NOSAVE, "The possible video renderer apis, in \"value\" \"description\" pairs, for gamecode to read.");
 
 cvar_t vid_bpp								= CVARFD ("vid_bpp", "0",
@@ -3072,7 +3074,8 @@ void R_SetRenderer_f (void)
 			Cvar_Set(&vid_bpp, Cmd_Argv(2));
 	}
 
-	if (newr.renderer->rtype != QR_HEADLESS && !strstr(param, "headless"))	//don't save headless in the vid_renderer cvar via the setrenderer command. 'setrenderer headless;vid_restart' can then do what is most sane.
+	//Patch 494: never persisted from an insecure caller -- see vid_renderer.
+	if (newr.renderer->rtype != QR_HEADLESS && !strstr(param, "headless") && !Cmd_IsInsecure())	//don't save headless in the vid_renderer cvar via the setrenderer command. 'setrenderer headless;vid_restart' can then do what is most sane.
 		Cvar_ForceSet(&vid_renderer, param);
 
 	if (!r_blockvidrestart)

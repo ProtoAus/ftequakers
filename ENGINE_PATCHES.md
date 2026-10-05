@@ -36132,3 +36132,16 @@ Lex, 5 Oct: surf_voyager is a hands-off map -- the geometry flies you for 66 s -
 With all three the debug build matched the recording to 0.013 units of position for the first 11 s and stayed within ~1 unit to 46 s; today's game left it in the first second.  The rest is float rounding of positions (a random walk of ~0.0005/tick at x ~ 8700), which decides grazing contacts at the 1/32 boundary and is not a rule this patch can name.
 
 The trace rules apply only while `bih_sourceclip` is set, which PMSrc_PlayerMove does from `movevars.fixrampbugs >= 2` and clears on exit -- QC traces, rendering and every other caller keep the old test.  pm_verify and pm_recsim reach the mover through PMSrc_PlayerMove after SV_PMPinApply, so a replay traces by its own file's value.
+
+## Patch 494 - three holes left by Patches 485 and 488, and `toggle`  *(APPLIED - engine `common/fs.c`, `common/cmd.c`, `client/renderer.c`, `server/sv_ccmds.c`)*
+
+Found by an independent review of Patches 480-491 on 5 Oct, each driven on a listen server stuffing its own client (`stuffcmd *`, which reaches only a spawned client -- wait as `poc/p485a.cfg` does, and prove delivery with a stuffed `echo` first).
+
+1. **`fs_game` / `game` walked around Patch 485.**  A server could set the cvar, and its callback re-issues `gamedir` at RESTRICT_LOCAL, below 485's gate.  Measured on the unfixed build: `Server taking control of cvar fs_game`, and the switch CREATED the sibling directory and moved the client's log into it.  Now CVAR_NOTFROMSERVER.
+2. **`toggle` checked neither CVAR_NOTFROMSERVER nor CVAR_NOSET**, unlike `set`, `seta` and `inc`, so `toggle game <dir>` or `toggle <any NOTFROMSERVER cvar>` from a server bypassed every such cvar.  Measured: a stuffed `toggle cfg_save_auto` turned the harness's `cfg_save_auto 0` into 1.  Now the same two checks as `set`.
+3. **`vid_renderer` outlived Patch 488.**  488 blocks an insecure in-session renderer load, but `setrenderer` still wrote the whole `gl <dll>` string into this ARCHIVE cvar, and a server could also set the cvar directly; the next cold start loads it at RESTRICT_LOCAL (the reviewer ran a canary's DllMain that way).  Now CVAR_NOTFROMSERVER, and an insecure `setrenderer` does not persist.
+4. **`SV_Map_f` copied a command argument into `spot[MAX_QPATH]` with strcpy.**  Bounded with Q_strncpyz; a 300-character start spot now loads the map.
+
+**Measured after:** each stuffed probe prints `Server tried setting <cvar> cvar` and the value stays; `setrenderer` still prints `Blocking insecure renderer` and no longer persists.
+
+**The unfixed control exploited the owner's install.**  Its `toggle cfg_save_auto` succeeded, so it auto-saved on quit and wrote the stuffed `vid_renderer` into C:\FTESurf\ftesurf\ftesurf.cfg; the next launch tried to load the (nonexistent) DLL and fell back.  Repaired from the 19 Sep backup's value (only `vid_renderer` differed), and the sibling gamedir it created was removed.  Run any control for a client-security patch on a COPY of the install.

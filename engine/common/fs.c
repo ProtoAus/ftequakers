@@ -322,7 +322,9 @@ static cvar_t fs_automount_spec		= CVARFD	("fs_automount_spec", "", CVAR_NOSAVE,
 static cvar_t fs_hdmodels			= CVARFD	("fs_hdmodels", "0", CVAR_ARCHIVE, "nettest: prefer Half-Life's high-definition model pack. Mounts the \"<game>_hd\" sibling of every fs_addons.txt game just ABOVE that game, so valve_hd/bshift_hd override valve/bshift. Needs an fs_restart to take effect.");
 static cvar_t fs_noreexec			= CVARD		("fs_noreexec", "0", "Disables automatic re-execing configs on gamedir switches.\nThis means your cvar defaults etc may be from the wrong mod, and cfg_save will leave that stuff corrupted!");
 static cvar_t cfg_reload_on_gamedir = CVAR		("cfg_reload_on_gamedir", "1");
-static cvar_t fs_game				= CVARAFCD	("fs_game"/*q3*/, "", "game"/*q2/qs*/, CVAR_NOSAVE|CVAR_NORESET, fs_game_callback, "Provided for Q2 compat. Contains the subdir of the current mod.");
+//Patch 494: NOTFROMSERVER -- the callback re-issues `gamedir` at RESTRICT_LOCAL, so a
+//server setting this cvar walked around Patch 485's gate on `gamedir` itself.
+static cvar_t fs_game				= CVARAFCD	("fs_game"/*q3*/, "", "game"/*q2/qs*/, CVAR_NOSAVE|CVAR_NORESET|CVAR_NOTFROMSERVER, fs_game_callback, "Provided for Q2 compat. Contains the subdir of the current mod.");
 static cvar_t fs_gamepath			= CVARAFD	("fs_gamepath"/*q3ish*/, "", "fs_gamedir"/*q2*/, CVAR_NOUNSAFEEXPAND|CVAR_NOSET|CVAR_NOSAVE, "Provided for Q2/Q3 compat. System path of the active gamedir.");
 static cvar_t fs_basepath			= CVARAFD	("fs_basepath"/*q3*/,    "", "fs_basedir"/*q2*/, CVAR_NOUNSAFEEXPAND|CVAR_NOSET|CVAR_NOSAVE, "Provided for Q2/Q3 compat. System path of the base directory.");
 static cvar_t fs_homepath			= CVARAFD	("fs_homepath"/*q3ish*/, "", "fs_homedir"/*q2ish*/, CVAR_NOUNSAFEEXPAND|CVAR_NOSET|CVAR_NOSAVE, "Provided for Q2/Q3 compat. System path of the base directory.");

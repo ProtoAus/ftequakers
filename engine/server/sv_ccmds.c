@@ -1013,12 +1013,12 @@ void SV_Map_f (void)
 
 	if (startspot)
 	{
-		strcpy(spot, startspot);
+		Q_strncpyz(spot, startspot, sizeof(spot));	//Patch 494: was strcpy
 		startspot = spot;
 	}
 	else if ((startspot = strchr(level, '$')))
 	{
-		strcpy(spot, startspot+1);
+		Q_strncpyz(spot, startspot+1, sizeof(spot));
 		*startspot = '\0';
 		startspot = spot;
 	}
