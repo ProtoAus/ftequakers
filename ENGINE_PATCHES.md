@@ -36421,3 +36421,45 @@ rounding to zero prints `0:00.000` rather than `-0:00.000`, because an int has n
 zero -- pinned as a case, and no caller passes fractional ticks (every one rounds first).
 `cl_online.qc`'s cache NAME keeps the old chain deliberately, because every cached `.rec`
 on disk is named by it; the cost is stated in BACKLOG.
+
+## Patch 497 - a replay turns ticks into seconds at the MOVER's rate  *(APPLIED - MOD-SIDE ONLY, no engine C: FTESurf `src/client/cl_watch.qc`, `tools/p497tick.py`, `ftesurf/cfg/test/p497tick.cfg`)*
+
+**Problem.** The `.rec` grammar (the block over `SV_RecOpen`) states two tick keys and a
+rule for them: `tickrate` is "what the recorder's samples are spaced at" and
+`movetickrate` is "the rate the MOVER divided by", and "A reader that turns ticks into
+seconds must prefer this one when it is present" (0 = the engine stated no value).  Three
+QC header scanners read those keys and only one followed the rule: `cl_online.qc:913`
+already preferred the mover's (with the grammar quoted in its own comment), while
+`cl_watch.qc`'s two -- `Watch_Scan` (the replay) and `Watch_LineJobStep` (the board-line
+job) -- took `tickrate` alone.  Those two feed `rec_wt_tickrate` and `ln_tick[]`, i.e.
+the replay's clock, its seek index, its window, the run line's time axis and the strafe
+bar's ideal turn rate (Patch 470 made all of them the file's own), so a file whose two
+keys disagreed would have been replayed and graded at a rate its board row beside it was
+not formatted at.  Nothing in the tree writes such a file: measured over all 6056 `.rec`
+under `ftesurf/data`, 5569 state both keys equal, 487 predate `movetickrate` and state
+only `tickrate`, and **0 differ** -- so this is the rule being kept rather than a visible
+defect being fixed, and the two readers agreeing is what makes the third one's comment
+true of the format instead of of one caller.
+
+**Change.** Both scanners read `movetickrate` and prefer it when it is > 0, falling back
+to `tickrate` and then to `PM_TICK` exactly as before; the board-line job keeps its own
+copy (`wt_lj_mtick`) because it is a separate pass over the same header.  No writer, no
+format and no version change -- the key has been in the grammar since v4 (build 74).
+
+**Verified.** `cfg/test/p497tick.cfg` + `tools/p497tick.py` (both new), 6 checks, 0
+failed.  The driver stages two synthetic headers over one real recording of the map it
+loads, with THREE rates in play so every verdict names one cause: the server runs 0.01
+(`pm_ticrate` is a locked mover cvar, so `default.cfg`'s 0.015 does not reach it),
+`p497diff.rec` says `tickrate 0.025` / `movetickrate 0.008`, `p497same.rec` says 0.02 for
+both.  On the subject all four observables read the mover's rate -- `replay status`'s
+`bar tick`, `replay colours`' `lnmv` for slot 0 (the replay) and slot 1 (the board-line
+job, a separate hunk), `replay seq`'s `lnsb` -- and T5/T6 hold: the same-key file reads
+0.02 in all four, so the arm cannot pass by printing a constant, and no observable reads
+the server's 0.01, so nothing fell back to `PM_TICK`.  CONTROL, required to fail and did:
+the csprogs from `git worktree add C:\tmp\ctl497 HEAD` compiled by hand
+(`fteqcc64 cl_progs.src`, 0 warnings, sha256 9D5ED103... against the subject's
+F70C4AA2...) read **0.02500 in all four** and still passed T5/T6 -- the control cannot
+tell the two files' mover rates apart, which is the defect.  `tools/cfgguard.py` passes.
+NOT VERIFIED: nothing here exercises a real file whose keys disagree, because none
+exists; the subject's own motion is not graded either (the fixture is replayed at a rate
+it never flew at, deliberately -- only the printed rates are read).
