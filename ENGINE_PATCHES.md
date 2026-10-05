@@ -36302,3 +36302,77 @@ per-step evaluation), and mass-only crowns measured SLOWER at ultra (30.6 ms) th
 lobed ones, because disjoint spheres let a ray weave into every surface behind them.
 NOT VERIFIED on the N100: no such machine here; the cfg states the advice that ultra
 was already the slow setting there and quality 3 draws the same wood for a fraction.
+
+## Patch 496 - run times are exact milliseconds, and a QC integer literal is a float  *(APPLIED - MOD-SIDE ONLY, no engine C: FTESurf `src/shared/sh_time.qc`, `src/client/{cl_main,cl_scores,cl_online}.qc`, `src/menu/{m_board,m_main}.qc`, `src/server/sv_player.qc`, `tools/p496time.py`, `ftesurf/cfg/test/p496time.cfg`)*
+
+**Problem.** Every run time this game prints -- the finish line in chat, the save list,
+the board, the WR column, a split against a PB -- went through one float32 expression,
+`ms = floor(ticks * tickrate * 1000 + 0.5)`.  That chain rounds twice and a float32
+carries ~7 significant digits, so it prints 1-3 ms off on most values past 4,096,003 ms
+(68 minutes).  Re-derived here rather than quoted (`tools/p496time.py --stats`): **9,149,677
+of the 16,777,216 ms values below 2^24 are wrong through the `Time_TickString(ms, 0.001)`
+idiom**, which three board paths used because milliseconds happen to be ticks of a
+0.001 s rate -- and 0.001 is not a float32, so that is the chain at its worst rate.  On
+the tick path, 329,580 of the first 1.2M ticks differ at rate 0.015 (first wrong 546,152
+= 2 h 17 m) and 446,140 at `f32(1/66.6667)`, whose first wrong tick is **64,220 = 16
+minutes**.  That last rate is not hypothetical: `cl_online.qc:1683` and `cl_scores.qc:1818`
+pass `1 / ob_rate[i]` with `ob_rate` in ticks per SECOND, so every online board row is
+formatted at the worst of the real rates.  Momentum boards hold hours-long runs, so the
+rows this affects are the ones anybody looks at.
+
+**Change.** `sh_time.qc` gains `Time_TickMs` (an exact compensated product -- Dekker's
+two-product, `4097 = 2^12+1` splitting a 24-bit mantissa -- so `p + err` IS the real
+product of the two float32 inputs, with only the sub-second remainder scaled) and
+`Time_MsString` (the one formatter, integer throughout, so the h:mm:ss split is exact at
+10 hours as well as at 10 seconds).  `Time_TickString` is their pair and keeps its
+signature, so its ~20 call sites are untouched; the three ms call sites now call
+`Time_MsString` directly instead of pretending milliseconds are ticks, and `Mlb_MsString`
+in `m_board.qc` -- which had its own integer split, written to dodge this chain -- is now
+that function plus the board's own `--` for a row with no time.  Clamped at 2147483 s
+(24 days) where `sec * 1000` would wrap the int, and at 1e15 ticks where the 4097 split
+would overflow: neither is reachable from a run, both from a corrupt header, and a
+wrapped int prints as a negative time.  Residual, measured: 6 of 463,116 modelled cases
+differ by 1 ms from float64, every one an exact half-millisecond tie at 233 hours where
+the rate the caller passed is itself 50 ms uncertain.
+
+**AND THE REASON THIS TOOK THREE RUNS: A QC INTEGER LITERAL IS A FLOAT.** `ms = ms + sec
+* 1000` with `sec` an `int` promotes the product to float32 and stores a quantised value
+back into the int -- measured in both VMs, `2144999 * 1000 + 952` gives **2144999936 with
+bare literals and 2144999952 with `1000i`/`952i`**.  The exact product this patch exists
+to compute was therefore undone above 2^24 by the line that added it to the seconds, with
+NO warning from fteqcc.  Every integer literal in both functions now carries an `i`
+suffix, and the rule is in AGENTS.md's pitfalls.  What gave it away was the compiler's
+own F324, `%i requires int at arg N (got float)`, on a throwaway diagnostic print -- so
+fteqcc does type-check sprintf's arguments, and `%i` on a value is a type assertion worth
+making.  (`m_board.qc` had spelled its literals `3600000i` all along; that file was right
+and this one was not.)
+
+**Verified.** `cfg/test/p496time.cfg` + `tools/p496time.py`, a listen server on
+surf_rookie: the client registers `timefmt` and the server answers `cmd timefmt`, and
+because `sh_time.qc` is compiled into both VMs one run grades both copies of the file and
+tags say which printed.  **Subject: 24 checks, 0 failed** over 12,642 lines -- 6,310 cases
+printed by BOTH VMs and all agreeing (the invariant that file exists for, now measured
+rather than asserted), every ms the exact product of the two float32 inputs, every string
+that ms split correctly, and 4,214 of the cases ones the old chain prints differently.
+17 explicit edges pinned, including 64,220 @ `f32(1/66.6667)` -> 963,299 where the old
+chain reads 963,300 and 4,096,003 ms -> `1:08:16.003` where it reads `...004`.
+**Control: 25 checks, 0 failed.** `--control` rewrites `Time_TickMs`'s body -- and only
+that body, one asserted block replacement -- back into the naive chain, rebuilds
+warning-clean, runs the same cfg, and requires the arm to reproduce the modelled old
+chain on EVERY case while disagreeing with the exact answer on the same 4,214; then it
+restores by hash and rebuilds.  That is the leg which proves the arm measures arithmetic
+rather than printing, and that this script's Python model of the old QC is faithful to it.
+Two pre-registered predictions were falsified and are corrected in the cfg header, both
+from the same cause: the reference itself rounded the product to float32 before scaling,
+i.e. it carried the defect under test, and the first run read "2,210 cases differ" against
+a build that was correct.  BACKLOG's modelled tick-path figures (first wrong 273,085;
+619k of 1.2M) did not reproduce at either rate and are not repeated; its ms-idiom figures
+reproduced exactly.
+
+**NOT VERIFIED.** No screenshot of a board row past an hour: the observable here is a
+digit in a string and the arm reads it from the same formatter the draw calls, so a pixel
+arm would measure the font.  The one intended behaviour change is that a negative time
+rounding to zero prints `0:00.000` rather than `-0:00.000`, because an int has no negative
+zero -- pinned as a case, and no caller passes fractional ticks (every one rounds first).
+`cl_online.qc`'s cache NAME keeps the old chain deliberately, because every cached `.rec`
+on disk is named by it; the cost is stated in BACKLOG.
