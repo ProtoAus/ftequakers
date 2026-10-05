@@ -36463,3 +36463,78 @@ tell the two files' mover rates apart, which is the defect.  `tools/cfgguard.py`
 NOT VERIFIED: nothing here exercises a real file whose keys disagree, because none
 exists; the subject's own motion is not graded either (the fixture is replayed at a rate
 it never flew at, deliberately -- only the printed rates are read).
+
+## Patch 499 - the rewind's pin owns the movetype, and a resume row stops outliving its run  *(APPLIED - MOD-SIDE ONLY, no engine C: FTESurf `src/server/sv_player.qc`, `src/server/sv_saveloc.qc`, `ftesurf/cfg/test/p477rewind.cfg`, `tools/p477rewind.py`)*
+
+**Problem.** Two defects the Patch 477 review logged and left in BACKLOG, both in the
+rewind's server half.
+
+**(1) THE PIN HELD THE VELOCITY AND NOT THE BODY.** `SV_WatchHold` wrote MOVETYPE_NONE once,
+at the press, and `SV_WatchRelease` handed the stored one back; between the two nothing held
+it. `SV_WatchFrame` re-asserts the zero velocity and the cleared carrier every packet but not
+the movetype, so one `cmd noclip` left a PINNED body in MOVETYPE_NOCLIP for the rest of the
+pin. The engine's own `SV_Noclip_f` answers that command -- this mod's `noclip` branch is dead
+code on every build, as its own comment says -- and needs only `SV_MayCheat`, which `sv_cheats`
+satisfies; the mod's ungated branch (BACKLOG, Patch 479's item) is the lobby-reachable route to
+the same state. `SV_NoclipWatch` is a LEVEL check in PlayerPostThink, so a frozen, recording run
+then read `class: cheated (seg 0 cheat 1 cheatlatch 1)`. Under a REPLAY's pin -- which keeps its
+run through warps and thaws on release (Patch 477) -- that mark survives into the run the player
+goes on to finish.
+
+WHAT IT IS NOT, measured rather than assumed: BACKLOG called this "a body can creep through a
+stage with the clock frozen". It cannot, from the client's own keys. The pinned body moved
+**0.0 u** over 900 ms of `+forward` with noclip ON, because the client sends an EMPTY usercmd
+while browsing (`cl_main.qc`'s `rw_on && !rw_cd` branch) and `SV_WatchFrame` zeroes the velocity
+every packet. The exposure is the taint and the movetype state, not the distance.
+
+**(2) A RESUME ROW OUTLIVED THE RUN THAT WROTE IT.** `rw_goid` -- "the next resume replaces this
+row" -- was cleared in `ClientDisconnect` only, which AGENTS.md already calls the wrong place for
+a map change. A `retry` therefore left it pointing at a row whose run was gone, and the next
+ENTER's `go` DELETED that row instead of making a new one (`SV_RewindDropGo`, "makes way"): a save
+the player had, gone because they restarted.
+
+**Change.** (1) `SV_WatchHoldMove` (sv_saveloc.qc, beside `SV_WatchFrame`) re-imposes
+MOVETYPE_NONE while the pin is held, and is called from BOTH thinks in one spelling so the two
+cannot drift: PlayerPreThink, per USERCMD and ahead of the mover, so no command is ever moved with
+a movetype the pin did not choose (`cl_c2spps` puts several commands in a packet, which is why
+per-packet is not enough there); and PlayerPostThink ahead of `SV_NoclipWatch`, for a packet that
+carries the stringcmd and no usercmd at all. The mod's dead `noclip` branch refuses under the pin
+too, for the client that reaches it. (2) `SV_RewindReset` clears `rw_goid` and `rw_goseq` as well:
+it is the documented wipe and it runs at a run START, not only at a disconnect. The ROW is kept --
+it is a real position and speed the player can load or delete -- and only the "the next resume
+replaces it" claim, which is a property of a run, is given up. `ClientDisconnect`'s separate clear
+became redundant and is gone.
+
+**Verified.** `cfg/test/p477rewind.cfg` + `tools/p477rewind.py`, four new sections (R28A-D):
+61 checks, 0 failed on the subject build (qwprogs E98A1F2F02B2BE28,
+csprogs 1D414A51910BE43B).
+
+* R28A is the CONTROL leg and flies with no pin: 951.6 u, which is what proves the detector can
+  see a state change at all (936.0 u on the control-build run: the gesture is not repeatable to
+  the unit, which is why the threshold is 50 and not a number).
+* R28B, the same gesture under the pin: the body moved 0.00 u, `cmd timer` read `noclip 0` and the
+  pin was still on afterwards. (The class read is NOT this arm's discriminator: the leg needs
+  `sv_cheats 1` for the engine's noclip, and that alone marks the run cheated on either build.
+  `noclip N` is the movetype the fix controls.)
+* R28C/R28D grade the resume row across a `retry`: no "makes way", and the list grows by the two
+  rows the two sections make (each makes a `rewind save` and the leave's resume).
+
+CONTROL BUILD, REQUIRED TO FAIL, and it did: HEAD's two server files (`git checkout --`, rebuilt,
+0 warnings, my refusal string absent from the .dat) failed exactly R28B and R28D and passed the
+other 59. R28B read `noclip 1` and `class: cheated (seg 0 cheat 1 cheatlatch 1)` on a run still
+recording; R28D printed `rewind: save 16, the last resume point, makes way` naming R28C's row and
+grew the list by 1, not 2.
+
+Two existing arms moved with the fix and were re-derived, not renumbered: R5C named the at-rest
+save absolutely (`sl_goto 4`) and a resume row that is no longer dropped moved it to 5, so it now
+loads "the newest row" (`sl_goto 9999`, which `SV_SaveLocLoad` clamps to the count) with the save's
+own row number beside the count as a CHECKED premise; and R8's `saves: 5/5` conjunct WAS that
+dropped row, so it is gone -- R28C/R28D grade the rule now, and R8 keeps its own subject (the leave
+resumes at the head). Both pass on the subject and on the control build, which is the point: an arm
+whose premise is an absolute row index is an arm that breaks on an unrelated fix.
+
+NOT VERIFIED: the lobby-reachable route (the mod's ungated `noclip` branch with `sv_cheats 0`) is
+not exercised -- R28A/B need `sv_cheats 1` for the engine's handler, and the ungated branch is dead
+for `cmd noclip` on this build. Patch 479's item still covers it. No arm watches a pin survive a
+`map_restart` either (AGENTS.md: QC globals are zeroed at a map load, so `rec_wt_hold` dies with
+them and the pin cannot survive one; the client's `rw_on` is closed by the stat going to 0).
