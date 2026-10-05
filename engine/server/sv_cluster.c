@@ -512,6 +512,33 @@ void MSV_MapCluster_Setup(const char *landingmap, qboolean use_database, qboolea
 	extern cvar_t sv_playerslots;
 	int plslots;	//not really used, but affects whether we open public sockets or not.
 
+	//FTESurf Patch 491: refuse an insecure caller, and refuse it HERE rather than in
+	//MSV_MapCluster_f, because this function is the choke point for TWO command legs
+	//and gating one is not gating the command (Patch 485's finding).  The legs are
+	//`mapcluster` itself and SV_Map_f's auto-offload, which a server reaches in two
+	//steps: `sv_autooffload` is a plain CVARD with no CVAR_NOTFROMSERVER, so a server
+	//can set it, and a stuffed `map <name>` then lands here with singleplayer=true.
+	//Both are registered by SV_InitOperatorCommands with no restriction level, and a
+	//CLIENT runs that too because it can host -- so neither needs the victim to be
+	//hosting anything when the command arrives.
+	//WHAT IT COSTS IF MISSED is not a read or a write: CL_Disconnect(NULL) below runs
+	//unconditionally, then SV_UnspawnServer, then this process becomes a cluster master
+	//(sv.state = ss_clustermode, NET_InitServer opening sockets) with a landing map of
+	//the caller's choosing.  A remote server therefore gets to drop the player from its
+	//own server and re-purpose the client process, and the subserver fork that follows
+	//is CreateProcessW.
+	//A local console, a config or a command line is RESTRICT_LOCAL and never insecure,
+	//so the legitimate uses -- a dedicated server's cfg, the single-player offload
+	//`sv_autooffload` exists for, and the engine's own menu -- are all unaffected.
+	//Nothing in the FTESurf mod calls this: the lobbies only mention mapcluster in
+	//comments about future work, and they are dedicated, which the auto-offload leg
+	//excludes anyway (!isDedicated).
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure command: %s\n", Cmd_Argv(0));
+		return;
+	}
+
 	//this command will likely be used in configs. don't ever allow subservers to act as entire new clusters
 	if (SSV_IsSubServer())
 		return;

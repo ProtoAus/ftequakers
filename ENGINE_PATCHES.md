@@ -36034,3 +36034,89 @@ and both become this defect the moment someone adds an FS call or a diagnostic
 print to them, so the `extern` in `in_generic.c` now states the rule and names the
 audit.  Comment-only; rebuilt `m-rel` exit 0 and the arm re-run at 8 checks 0
 failed, which is what confirms a comment did not become code.
+
+## Patch 491 - a remote server may no longer turn a connected client into a cluster master  *(APPLIED - engine `server/sv_cluster.c`)*
+
+**Problem.** ENGINE_SECURITY.md item 10, the last unarmed item in that audit, and its
+own note about it was WRONG IN THE DIRECTION THAT MATTERED: it said the route "needs a
+local/listen server first".  It does not.  `mapcluster`, `ssv` and `ssv_all` are
+registered by `SV_InitOperatorCommands` with NO restriction level, and a CLIENT runs
+that function too because it can host -- the same fact Patch 485's `gamedir` note
+records.  So a remote server's stufftext reached `MSV_MapCluster_f` and then
+`MSV_MapCluster_Setup`, whose FIRST unconditional act is `CL_Disconnect(NULL)`, after
+which the victim's process becomes a cluster master: `SV_UnspawnServer`,
+`sv.state = ss_clustermode`, `NET_InitServer` opening sockets, and a landing map of the
+caller's choosing.  The subserver fork that follows is `CreateProcessW`.  Measured, not
+traced: the victim was dropped (server-side `Client "Proto" removed`) and
+`Operating in databaseless mode` printed on a plain client that had only ever connected
+to somebody else's server.
+
+**THE SECOND LEG, and why the gate is where it is.** `MSV_MapCluster_Setup` has TWO
+command legs, and gating one is not gating the command -- Patch 485's finding, from a
+handler that ended in `Cbuf_AddText`.  Leg 2 is `SV_Map_f`'s auto-offload, which a
+server reaches in two steps: `sv_autooffload` is a plain `CVARD` with no
+`CVAR_NOTFROMSERVER`, so a stuffed `set` takes it, and a stuffed two-argument
+`map <name>` then lands in the same function.  The gate therefore sits in
+`MSV_MapCluster_Setup` itself, before `CL_Disconnect`, and refuses `Cmd_IsInsecure()`
+with `Blocking insecure command: %s` naming `Cmd_Argv(0)` -- so it prints `mapcluster`
+on one leg and `map` on the other, which is the observable proof that both are covered.
+`ssv`/`ssv_all` were left alone: `MSV_SubServerCommand_f`'s write path is inert without
+a cluster (it prints `No node for index.`) and its no-argument listing prints only to
+the victim's own console, so it is a harmless reachability probe rather than a hole --
+the same reasoning Patch 485 used to leave `gamedir`'s argc==1 read available.
+
+A local console, a config or a command line is `RESTRICT_LOCAL` and never insecure, so
+the legitimate uses are untouched: a dedicated server's cfg, the single-player offload
+`sv_autooffload` exists for, and the engine's own menu.  Nothing in the FTESurf mod
+calls this -- the lobbies only mention `mapcluster` in comments about future work, and
+they are dedicated, which the auto-offload leg excludes anyway (`!isDedicated`).
+
+**Verified.** Built win64 `m-rel` + `sv-rel`, exit 0, no new warnings.  Driven over a
+MATCHED pair differing ONLY in `server/sv_cluster.c` -- control `2309fccb` (HEAD
+`af6610e7e` with the file reverted) and subject `4dd856be` -- four runs (two legs x
+control/subject), four pre-registered predictions each, ALL MET ON ALL FOUR
+(`C:/FTESurf-private/poc/p491/`, `run_p491.py --leg mapcluster|autooffload`):
+
+| | leg 1 control | leg 1 subject | leg 2 control | leg 2 subject |
+|---|---|---|---|---|
+| reachability / precondition | `ssv` listing x1 | **x1** | effective value 1 x1 | **x1** |
+| `MSV_MapCluster_Setup` ran | **x1** | x0 | **x1** | x0 |
+| gate fired | x0 | **`mapcluster` x1** | x0 | **`map` x1** |
+| server could still address the client | **x0 (dropped)** | x2 | **x0 (dropped)** | x2 |
+
+The two legs cannot share a process, and the reason is in the code: leg 1 sets
+`sv.state`, and leg 2's condition requires `!sv.state`, so whichever ran first would
+mask the other.  Disconnection is evidenced by a marker the server stuffs AFTER the
+attempt -- a `stuffcmd` with no client to address vanishes with no message anywhere
+(AGENTS.md), so its ABSENCE is the evidence and its presence proves the client stayed.
+That is a stronger observable than reading connection state, because it is produced by
+the party doing the dropping, and leg 1's control corroborates it server-side with
+`Client "Proto" removed`.  The reachability prediction is deliberately separate from
+the verdict and must pass on BOTH builds, so "the gate works" cannot be confused with
+"the command was never reachable".
+
+**Two harness bugs the NOT-REACHED mechanism caught, both in the precondition control,
+and in the second case the arm would otherwise have reported NO VERDICT for a leg that
+had in fact fired.**  (1) The first cut matched `"sv_autooffload" is "1"`, but a
+server-set cvar is `Cvar_LockFromServer`'d, so the client prints three lines and THE
+FIRST ONE LIES: `"sv_autooffload" is "0"` / `Effective value is "1"` / `Default: "0"`.
+That is exactly the latched-string-vs-effective-value split AGENTS.md records for
+string mirrors, here in the engine's own cvar readback.  (2) The second cut required
+those two lines to be ADJACENT, and every log line carries a `YYYY-MM-DD HH:MM:SS `
+prefix, so the pattern could never match.  The final pattern was derived against the
+real bytes rather than guessed a third time.
+
+**NOT VERIFIED.** The subserver fork itself (`CreateProcessW`, `sys_win_threads.c`):
+both legs were stopped at `MSV_MapCluster_Setup`, which is before the fork, so what
+this patch proves is that a remote server could DROP a connected client and RE-PURPOSE
+its process into a cluster master with a landing map of the server's choosing -- not
+that it could make one spawn children.  Also: an earlier control run was killed by the
+driver's 150 s timeout after the client printed `done` and re-initialised `menu.dat`,
+which read as "the re-purposed process stopped honouring quit"; on the matched pair the
+same control exits rc=0 in 48 s, so that was not reproducible and is not claimed.  That
+first cut also quoted binaries built before the peer's Patch 490 follow-up landed --
+the pair above is the one these numbers come from, and re-running all four arms after
+the tree moved is the reason the numbers are quotable at all.
+
+**Client-affecting but SERVER-side code.** No QC and no cfg depends on it, so no lobby
+deploy is implied by this patch alone; it ships with the next client release.
