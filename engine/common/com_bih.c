@@ -819,15 +819,10 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	}
 	if (enterfrac <= leavefrac)
 	{
-		if (bih_sourceclip && nearfrac < 0)
-			nearfrac = 0;
-		//Patch 492 review: under the Source clip a triangle decides on what it reports, as brushes do
-		if (enterfrac > -1 && (bih_sourceclip ? nearfrac < tr->trace.fraction : enterfrac <= tr->trace.truefraction))
+		if (enterfrac > -1 && enterfrac <= tr->trace.truefraction)
 		{
 			if (enterfrac < 0)
 				enterfrac = 0;
-			if (bih_sourceclip)
-				enterfrac = nearfrac;
 
 			tr->trace.fraction = nearfrac;
 			tr->trace.truefraction = enterfrac;
@@ -987,8 +982,13 @@ static void BIH_TestToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
      an enter counts once it is above NEVER_UPDATED, not -1: a box starting
      inside the epsilon on a short move gets an enter below -1, which Quake 2's
      test skipped (ending the move inside the brush) and Source takes at 0;
-   - every primitive competes on the fraction it reports, strictly, so the
-     first tested wins a tie and a later hit can never raise the fraction.
+   - a brush compares its unclamped enter strictly and is clamped to 0 after,
+     as Source's is, so of two brushes the box starts inside the epsilon of,
+     the later tested wins.
+  It compares against truefraction, which a brush sets to its adjusted enter, so
+  among brushes that is Source's own test; triangles, patches and embedded models
+  keep Quake 2's test on their true fractions, and the two meet on the one number
+  the tree also culls by.  Source's displacement rules for them are BACKLOG.
   A global, not a trace flag: the mover's traces run on the main thread and
   nothing else traces while it does. */
 static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbrush_t *brush)
@@ -1065,7 +1065,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	}
 	if (bih_sourceclip ? enterfrac < leavefrac : enterfrac <= leavefrac)
 	{
-		if (enterfrac > (bih_sourceclip ? NEVER_UPDATED : -1) && (bih_sourceclip ? enterfrac < tr->trace.fraction : enterfrac <= tr->trace.truefraction))
+		if (enterfrac > (bih_sourceclip ? NEVER_UPDATED : -1) && (bih_sourceclip ? enterfrac < tr->trace.truefraction : enterfrac <= tr->trace.truefraction))
 		{
 			if (enterfrac < 0)
 				enterfrac = 0;
@@ -1199,15 +1199,11 @@ static void BIH_ClipBoxToPatch (struct bihtrace_s *fte_restrict tr, q2cbrush_t *
 
 	if (nearfrac <= leavefrac)
 	{
-		if (bih_sourceclip && nearfrac < 0)
-			nearfrac = 0;
 		if (leadside && leadside->surface
-			&& (bih_sourceclip ? nearfrac < tr->trace.fraction : enterfrac <= tr->trace.truefraction))
+			&& enterfrac <= tr->trace.truefraction)
 		{
 			if (enterfrac < 0)
 				enterfrac = 0;
-			if (bih_sourceclip)
-				enterfrac = nearfrac;
 			tr->trace.truefraction = enterfrac;
 			tr->trace.fraction = nearfrac;
 			tr->trace.plane.dist = clipplane->dist;
@@ -1367,9 +1363,9 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 			probeseq = bih_probe_seq;
 			submod->funcs.NativeTrace(submod, 0, NULLFRAMESTATE, node->data.mesh.tr->axis, start_l, end_l, tr->size.min, tr->size.max, tr->shape==shape_iscapsule, tr->hitcontents, &sub);
 
-			if (bih_sourceclip ? sub.fraction < tr->trace.fraction : sub.truefraction < tr->trace.truefraction)
+			if (sub.truefraction < tr->trace.truefraction)
 			{
-				tr->trace.truefraction = bih_sourceclip ? sub.fraction : sub.truefraction;
+				tr->trace.truefraction = sub.truefraction;
 				tr->trace.fraction = sub.fraction;
 				tr->trace.plane.dist = sub.plane.dist;
 				VectorCopy(sub.plane.normal, tr->trace.plane.normal);

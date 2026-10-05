@@ -5486,15 +5486,16 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		           exact ? "^2EXACT REPLAY^7" : "^3approximate (the file lacks state)^7");
 	/* Patch 492: each pin's pmsrcver must be the mover its own fixrampbugs runs
 	   here -- the header's and every `pm` restatement the replay applies. */
-	pinbad = (pinfound && hdrpin[0] != SV_PMSrcVer(hdrpin)) ? hdrpin : NULL;
+	pinbad = (pinfound && !(SV_PMSrcVer(hdrpin) && hdrpin[0] == SV_PMSrcVer(hdrpin))) ? hdrpin : NULL;
 	for (i = 0; !pinbad && pms && i < npm; i++)
-		if (pms[i].row >= 0 && pms[i].pin[0] != SV_PMSrcVer(pms[i].pin))
+		if (pms[i].row >= 0 && !(SV_PMSrcVer(pms[i].pin) && pms[i].pin[0] == SV_PMSrcVer(pms[i].pin)))
 			pinbad = pms[i].pin;
 	if (pinbad)
 		Con_Printf("  ^1pmsrcver %g at fixrampbugs %g: %s; an exact replay cannot vouch"
 		           " for this file^7\n", pinbad[0], pinbad[SV_PMPIN_FIXRAMPBUGS],
 		           (pinbad[0] == 1 && SV_PMSrcVer(pinbad) == 2)
-		           ? "a pre-492 engine, which ran 2 as 1" : "not a mover this engine has");
+		           ? "an engine that pinned 1 at 2 ran other rules (pre-492, or 492's first cut)"
+		           : "not a mover this engine has");
 	if (nlong)
 		Con_Printf("  ^1%i line(s) over %i bytes were truncated^7\n", nlong, (int)sizeof(line)-1);
 
@@ -5568,7 +5569,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "a different map";
 		else if (pinbad)
 			refuse = (pinbad[0] == 1 && SV_PMSrcVer(pinbad) == 2)
-			         ? "a pre-492 mover (pmsrcver 1 at fixrampbugs 2)" : "a different mover (pmsrcver)";
+			         ? "a mover before Patch 492's review (pmsrcver 1 at fixrampbugs 2)" : "a different mover (pmsrcver)";
 		else if (!havezseed)
 			refuse = "no `zseed` (recorder before QC build 88)";
 		else if (nlong)

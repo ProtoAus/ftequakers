@@ -782,7 +782,7 @@ static qboolean PMSrc_IsValidMovementTrace (trace_t *tr)
 	   lets a fraction-0 hit reach the two-plane crease, as stock Source does:
 	   surf_voyager's start pocket and V troughs end where its recording does
 	   only that way.  0.8.7's rule nudged 0.2 off the face instead. */
-	if (fabs(tr->fraction) <= FLT_EPSILON && movevars.fixrampbugs < 2)
+	if (fabs(tr->fraction) <= FLT_EPSILON && !(movevars.fixrampbugs >= 2))	//the clip's and the pin's test, so a NaN partitions alike
 		return false;
 
 	if (!PMSrc_PlaneIsSane (tr->plane.normal))

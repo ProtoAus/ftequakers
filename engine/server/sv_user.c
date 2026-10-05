@@ -119,12 +119,17 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 };
 
 //Patch 492: the mover a pin's numbers need.  Below fixrampbugs 2, version 1
-//replays them identically, so older verifiers still can.  Pre-492 engines ran
-//2 as 1 and pinned 1, so a 1 beside a 2 names one of their files.  A bump that
-//moves runs below 2 as well edits this.
+//replays them identically, so older verifiers still can.  An engine that
+//pinned 1 at 2 ran other rules (pre-492, or 492's first cut).  0 is no mover:
+//a NaN, which no cvar holds and only an edited file can.  A bump that moves
+//runs below 2 as well edits this.  The name check is here so the verifier,
+//which never fills a pin, makes it too.
 int SV_PMSrcVer(const float *pin)
 {
-	return pin[SV_PMPIN_FIXRAMPBUGS] >= 2 ? PMSRC_VERSION : 1;
+	float f = pin[SV_PMPIN_FIXRAMPBUGS];
+	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
+		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
+	return f >= 2 ? PMSRC_VERSION : f < 2 ? 1 : 0;
 }
 
 static void SV_PMPinFill(float *v)
@@ -151,8 +156,6 @@ static void SV_PMPinFill(float *v)
 	*o++ = movevars.slide;
 	if (o - v != SV_PMPIN_COUNT)
 		Sys_Error("SV_PMPinFill: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
-	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
-		Sys_Error("SV_PMPinFill: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
 	v[0] = SV_PMSrcVer(v);
 }
 
