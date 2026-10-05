@@ -1663,6 +1663,29 @@ char *Cmd_AliasExist(const char *name, int restrictionlevel)
 	return NULL;
 }
 
+//Returns the execlevel the named alias's body must run at, or 0 -- which is the
+//alias table's own spelling of "the caller's level" (Cmd_Alias_f sets 0 for a
+//locally created alias and RESTRICT_SERVER for a server-created one, and
+//Cmd_ExecuteString's alias branch resolves it the same way).
+//A caller that has just fetched the body through Cmd_AliasExist cannot distinguish
+//"no such alias" from "run at my level", and does not need to.
+//Matching is !strcmp, deliberately the same as Cmd_AliasExist: two lookups of one
+//name that could disagree would be worse than either.
+int Cmd_AliasExecLevel(const char *name, int restrictionlevel)
+{
+	cmdalias_t	*a;
+	for (a = cmd_alias ; a ; a=a->next)
+	{
+		if (!strcmp(name, a->name))
+		{
+			if ((a->restriction?a->restriction:rcon_level.ival) > restrictionlevel)
+				return 0;	//not at this level...
+			return a->execlevel;
+		}
+	}
+	return 0;
+}
+
 static void Cmd_AliasLevel_f (void)
 {
 	cmdalias_t	*a;

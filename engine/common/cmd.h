@@ -233,6 +233,7 @@ int Cmd_CheckParm (const char *parm);
 // where the given parameter apears, or 0 if not present
 
 char *Cmd_AliasExist(const char *name, int restrictionlevel);
+int Cmd_AliasExecLevel(const char *name, int restrictionlevel);	//the level an alias's BODY must run at; 0 = the caller's own. Every site that executes a body must ask, or a server-created alias runs with the user's privileges.
 void Alias_WipeStuffedAliases(void);
 
 void Cmd_AddMacro(char *s, char *(*f)(void), int disputableintentions);

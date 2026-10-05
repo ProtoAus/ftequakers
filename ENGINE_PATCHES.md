@@ -35741,3 +35741,82 @@ renumbered 485 -> 486 before anything shipped.  Found by reading
 ENGINE_PATCHES.md's headings before claiming rather than after, which is the
 second collision in two patches and the reason AGENTS.md says to check untracked
 `cfg/test/pNNN*` files too - a claim shows up there first.
+
+## Patch 487 - a teamplay trigger alias now runs at the ALIAS's own execlevel, which is what makes Patch 481 a boundary again  *(APPLIED - engine `client/zqtp.c`, `common/cmd.c`, `common/cmd.h`)*
+
+**Problem.** ENGINE_SECURITY.md item 1, the one item that defeats every other fix in
+this batch: `TP_ExecTrigger` looked a trigger alias up with
+`Cmd_AliasExist(name, RESTRICT_LOCAL)` and then ran its BODY as raw text at
+`RESTRICT_LOCAL`, ignoring the alias's own `execlevel`.  A server-stuffed alias is
+created at level 31 with `execlevel = RESTRICT_SERVER` ("server-set aliases MUST run
+at the server's level", `Cmd_Alias_f`), so a server that stuffed
+`alias f_newmap "<anything>"` got that anything back with the USER's privileges.
+That is not one gated command slipping through: `Cmd_ExecuteString`'s
+`Cmd_IsInsecure()` test reads `Cmd_ExecLevel`, and this path set it to 29, so every
+gate Patches 481/483/485 added was bypassed by a single stuffed alias.  481 was a
+delivery-path fix, not a boundary, and this is the second delivery path.
+`TP_SearchForMsgTriggers` had the same shape.
+
+**Change.** `Cmd_AliasExecLevel(name, level)` returns the named alias's `execlevel`
+(0 = the alias table's own spelling of "the caller's level"), matching with the same
+`!strcmp` as `Cmd_AliasExist` so two lookups of one name cannot disagree.  Both
+executing sites in `zqtp.c` now resolve the level once and use it for the whole body,
+`Cbuf_AddText` and `Cmd_ExecuteString` alike, falling back to `RESTRICT_LOCAL` when
+the alias carries none - identical to the old constant for a locally defined alias.
+This is the convention `Cmd_ExecuteString`'s alias branch already follows
+(`if (a->execlevel) execlevel = a->execlevel; else execlevel = level;`), applied to
+the two sites that resolved the body themselves and so never reached it.
+
+All six `Cmd_AliasExist` call sites were read, not just the two that were vulnerable,
+because Patch 485's finding was that gating one leg of a two-leg command is not
+gating it.  `cl_parse.c`'s `//exectrigger` and `cl_screen.c`'s `f_centerprint` pass
+the alias NAME to the dispatcher or the cbuf, so the alias branch applies its own
+level; `keys.c` only prints the body into the bindings listing and `menu.c` only
+tests existence.  Resolving the body and executing it as text was unique to `zqtp.c`.
+
+**Verified.** `C:/FTESurf-private/poc/p487/` (PRIVATE - a working recipe for a hole
+every shipped engine still has, so it stays beside the audit): `run_p487a.py` drives
+a dedicated server and a remote client through three changelevels and grades the
+client log.  Control `ce6705f8` and subject `8647d382`, both `fteqw64.exe`, all six
+pre-registered predictions met on both builds:
+
+| evidence in the client log | control | subject |
+|---|---|---|
+| planted alias ran (`Steam library overrides`) | **4** | **0** |
+| planted alias refused (`Blocking insecure command: fs_steamlibs`) | 0 | **3** |
+| local alias ran (`usage: fs_unload`) | 2 | 2 |
+| local alias refused | 0 | 0 |
+| directly stuffed `fs_load` refused (Patch 481 live) | 1 | 1 |
+| `aliaslist server` | `( 1)(31) f_newmap` | `( 1)(31) f_newmap` |
+
+The regression control is identical on both builds, so the change moved only what a
+SERVER-planted alias may do; a user's own trigger alias still runs its body at
+`RESTRICT_LOCAL`.  Every payload is a gated `fs_*` command that is read-only at these
+arguments (`fs_unload`/`fs_load` with no argument print a usage line; `fs_steamlibs`
+lists), so the arm writes nothing to the install.
+
+**WHAT THE ARM DOES NOT DRIVE, stated rather than left to be assumed.** The planted
+alias is single-command, so its verdict comes from `TP_ExecTrigger`'s
+`Cmd_ExecuteString` branch.  The `Cbuf_AddText` branch (a body containing `;`) cannot
+be planted from a server console at all: `stuffcmd` refuses any string with `;` or
+`
+` ("You're not allowed to stuffcmd that", `sv_ccmds.c:2341`, measured).  That
+filter is in the console COMMAND, not in the wire path, so a server sending
+`svc_stufftext` itself - or its own QC's `stuffcmd` - still reaches that branch.  The
+fix sets the level for both branches; only one is driven, and the local-alias control
+is what exercises the other.
+
+**Three harness facts measured on the way, and they are why the grader attributes by
+string rather than by segment or count.**  (1) A multi-command alias body's execution
+is DEFERRED - the local alias queued at one changelevel drained ~94 s later, during
+the client's own quit - so a marker's position says nothing about which phase produced
+it.  (2) The client's `quit` reloads the menu and the map, and those reloads fire
+`f_newmap` AGAIN (two extra payload runs after the client printed its own "done"), so
+counts differ between builds for reasons that are not the fix (4 vs 3 above) and only
+presence/absence is a verdict.  (3) `cmd viewpos`'s reply is asynchronous and a shader
+reload (~150 lines) landed between request and answer, so a fixed byte window read it
+as "not connected" - a false verdict on the one prediction that validates all the
+others; the grader now bounds that window by the client's own done marker.
+
+**Client-side only.** A dedicated server never runs `TP_ExecTrigger`, so no lobby
+deploy is implied by this patch; it ships with the next client release.

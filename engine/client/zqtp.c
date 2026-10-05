@@ -288,6 +288,19 @@ void TP_ExecTrigger (char *s, qboolean indemos)
 	{
 		char *p;
 		qbool quote = false;
+		//Run the body at the ALIAS's own level, not at ours.  A server-created
+		//alias carries execlevel RESTRICT_SERVER ("server-set aliases MUST run at
+		//the server's level", Cmd_Alias_f) and Cmd_ExecuteString's alias branch
+		//honours it -- this path ran every trigger alias at RESTRICT_LOCAL
+		//instead, so a server that stuffed `alias f_newmap "<anything>"` got that
+		//anything back with the USER's privileges.  That defeats every
+		//Cmd_IsInsecure() gate in the engine, Patch 481's included, and f_newmap
+		//is merely the trigger that is easy to arm from a server console.
+		//0 means "the user's level", so a locally defined trigger alias -- the
+		//whole point of the feature -- is unchanged.
+		int alev = Cmd_AliasExecLevel(s, RESTRICT_LOCAL);
+		if (!alev)
+			alev = RESTRICT_LOCAL;
 
 		for (p=astr ; *p ; p++)
 		{
@@ -296,13 +309,13 @@ void TP_ExecTrigger (char *s, qboolean indemos)
 			if (!quote && *p == ';')
 			{
 				// more than one command, add it to the command buffer
-				Cbuf_AddText (astr, RESTRICT_LOCAL);
-				Cbuf_AddText ("\n", RESTRICT_LOCAL);
+				Cbuf_AddText (astr, alev);
+				Cbuf_AddText ("\n", alev);
 				return;
 			}
 		}
 		// a single line, so execute it right away
-		Cmd_ExecuteString (astr, RESTRICT_LOCAL);
+		Cmd_ExecuteString (astr, alev);
 		return;
 	}
 }
@@ -1962,11 +1975,19 @@ void TP_SearchForMsgTriggers (char *s, int level)
 			string = Cmd_AliasExist (t->name, RESTRICT_LOCAL);
 			if (string)
 			{
+				//The alias's own level, not ours: see TP_ExecTrigger.  Narrower
+				//than that hole, because msg_trigger itself refuses an insecure
+				//caller, so the trigger is always the user's -- but a server can
+				//still OVERWRITE the alias the user named, and a chat line the
+				//server sends is what fires it.
+				int alev = Cmd_AliasExecLevel(t->name, RESTRICT_LOCAL);
+				if (!alev)
+					alev = RESTRICT_LOCAL;
 #ifdef QUAKESTATS
 				Q_strncpyz(vars.lasttrigger_match, s, sizeof (vars.lasttrigger_match));
 #endif
-				Cbuf_AddText (string, RESTRICT_LOCAL);
-				Cbuf_AddText ("\n", RESTRICT_LOCAL);
+				Cbuf_AddText (string, alev);
+				Cbuf_AddText ("\n", alev);
 //				Cbuf_ExecuteLevel (RESTRICT_LOCAL);
 			}
 			else
