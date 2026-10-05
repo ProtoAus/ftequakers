@@ -222,8 +222,10 @@ typedef struct
 
 /* FTESurf Patch 346: bump on ANY change to pm_source.c or the trace layer that can
    alter a trajectory.  Recordings pin it (`pmsrcver` in the pin text); a verifier
-   running a different number cannot vouch for a replay and must say so. */
-#define PMSRC_VERSION 1
+   running a different number cannot vouch for a replay and must say so.
+   Patch 492: 2 is the Source clip, which runs only at fixrampbugs >= 2, so a
+   pin's number follows that cvar (SV_PMSrcVer) and runs below 2 still say 1. */
+#define PMSRC_VERSION 2
 
 typedef struct {
 	//standard quakeworld

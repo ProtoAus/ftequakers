@@ -4038,6 +4038,53 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 */
 #define PMDET_TICRATE 0.015f
 
+extern int bih_sourceclip;	//Patch 492, com_bih.c
+
+//pm_dettest's collision-tree sweep: ntrace random box traces, every field that
+//decides a move hashed.  A function since Patch 492's review, to run it twice.
+static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, qboolean print)
+{
+	unsigned long long htrace = SV_DETHASH_INIT;
+	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
+	int i, k;
+	for (i = 0; i < ntrace; i++)
+	{
+		vec3_t s1, e1;
+		trace_t tr;
+		for (k = 0; k < 3; k++)
+		{
+			s1[k] = (float)SV_DetRange(seed, lo[k], hi[k]);
+			e1[k] = (float)SV_DetRange(seed, lo[k], hi[k]);
+		}
+		memset(&tr, 0, sizeof(tr));
+		world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1,
+		                         tmins, tmaxs, false, MASK_PLAYERSOLID, &tr);
+
+		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
+		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
+		htrace = SV_DetHash(htrace, tr.endpos,        sizeof(tr.endpos));
+		htrace = SV_DetHash(htrace, tr.plane.normal,  sizeof(tr.plane.normal));
+		htrace = SV_DetHash(htrace, &tr.plane.dist,   sizeof(tr.plane.dist));
+		htrace = SV_DetHash(htrace, &tr.contents,     sizeof(tr.contents));
+		htrace = SV_DetHash(htrace, &tr.allsolid,     sizeof(tr.allsolid));
+		htrace = SV_DetHash(htrace, &tr.startsolid,   sizeof(tr.startsolid));
+		/* WHICH surface won, not just where.  See the essay above. */
+		htrace = SV_DetHash(htrace, &tr.brush_id,     sizeof(tr.brush_id));
+		htrace = SV_DetHash(htrace, &tr.brush_face,   sizeof(tr.brush_face));
+		htrace = SV_DetHash(htrace, &tr.surface_id,   sizeof(tr.surface_id));
+		htrace = SV_DetHash(htrace, &tr.triangle_id,  sizeof(tr.triangle_id));
+
+		if (print && i < 4)
+			Con_Printf("  trace[%i] frac %08x  norm %08x %08x %08x  brush %i face %i surf %i\n",
+			           i, *(unsigned int*)&tr.fraction,
+			           *(unsigned int*)&tr.plane.normal[0],
+			           *(unsigned int*)&tr.plane.normal[1],
+			           *(unsigned int*)&tr.plane.normal[2],
+			           tr.brush_id, tr.brush_face, tr.surface_id);
+	}
+	return htrace;
+}
+
 static void SV_DetTest_f (void)
 {
 	model_t *world = sv.state?sv.world.worldmodel:NULL;
@@ -4045,12 +4092,12 @@ static void SV_DetTest_f (void)
 	unsigned long long hlibm  = SV_DETHASH_INIT;
 	unsigned long long hmover = SV_DETHASH_INIT;
 	unsigned long long htick  = SV_DETHASH_INIT;	//FTESurf Patch 325
+	unsigned long long hsrctrace, hsrcmover = SV_DETHASH_INIT;	//Patch 492
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
-	unsigned int seed = 20260914u;
+	unsigned int seed = 20260914u, seedrerun;
 	int ntrace = atoi(Cmd_Argv(1));
 	int ntick  = atoi(Cmd_Argv(2));
-	int lo[3], hi[3], i, k;
-	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
+	int lo[3], hi[3], i, k, pass;
 
 	if (ntrace <= 0) ntrace = 4096;
 	if (ntick  <= 0) ntick  = 2048;
@@ -4089,46 +4136,27 @@ static void SV_DetTest_f (void)
 		hi[i] = (int)ceil (world->maxs[i]);
 		if (hi[i] <= lo[i]) hi[i] = lo[i] + 1;
 	}
-	for (i = 0; i < ntrace; i++)
-	{
-		vec3_t s1, e1;
-		trace_t tr;
-		for (k = 0; k < 3; k++)
-		{
-			s1[k] = (float)SV_DetRange(&seed, lo[k], hi[k]);
-			e1[k] = (float)SV_DetRange(&seed, lo[k], hi[k]);
-		}
-		memset(&tr, 0, sizeof(tr));
-		world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1,
-		                         tmins, tmaxs, false, MASK_PLAYERSOLID, &tr);
-
-		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
-		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
-		htrace = SV_DetHash(htrace, tr.endpos,        sizeof(tr.endpos));
-		htrace = SV_DetHash(htrace, tr.plane.normal,  sizeof(tr.plane.normal));
-		htrace = SV_DetHash(htrace, &tr.plane.dist,   sizeof(tr.plane.dist));
-		htrace = SV_DetHash(htrace, &tr.contents,     sizeof(tr.contents));
-		htrace = SV_DetHash(htrace, &tr.allsolid,     sizeof(tr.allsolid));
-		htrace = SV_DetHash(htrace, &tr.startsolid,   sizeof(tr.startsolid));
-		/* WHICH surface won, not just where.  See the essay above. */
-		htrace = SV_DetHash(htrace, &tr.brush_id,     sizeof(tr.brush_id));
-		htrace = SV_DetHash(htrace, &tr.brush_face,   sizeof(tr.brush_face));
-		htrace = SV_DetHash(htrace, &tr.surface_id,   sizeof(tr.surface_id));
-		htrace = SV_DetHash(htrace, &tr.triangle_id,  sizeof(tr.triangle_id));
-
-		if (i < 4)
-			Con_Printf("  trace[%i] frac %08x  norm %08x %08x %08x  brush %i face %i surf %i\n",
-			           i, *(unsigned int*)&tr.fraction,
-			           *(unsigned int*)&tr.plane.normal[0],
-			           *(unsigned int*)&tr.plane.normal[1],
-			           *(unsigned int*)&tr.plane.normal[2],
-			           tr.brush_id, tr.brush_face, tr.surface_id);
-	}
+	/* Patch 492: `srctrace` repeats these traces under the Source clip, which only
+	   the mover turns on, so nothing else here reaches it.  Same draws, so the
+	   seed leaves both calls equal and `mover` keeps its recorded value. */
+	seedrerun = seed;
+	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true);
+	bih_sourceclip = 1;
+	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false);
+	bih_sourceclip = 0;
 
 	/* ---- 3. the mover, for real. ---------------------------------------- */
+	/* Patch 492: pass 0 is `mover`, pinned to fixrampbugs 1, the value every
+	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2. */
+	seedrerun = seed;
+	for (pass = 0; pass < 2; pass++)
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
+		unsigned long long *hm = pass ? &hsrcmover : &hmover;
+
+		if (pass)
+			seed = seedrerun;
 
 		memset(&pmove, 0, sizeof(pmove));
 		pmove.numphysent = 1;
@@ -4160,6 +4188,7 @@ static void SV_DetTest_f (void)
 		movevars.jumpvelocity  = 289.0f;
 		movevars.maxspeed      = 320;
 		movevars.entgravity    = 1;
+		movevars.fixrampbugs   = pass ? 2 : 1;
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
@@ -4183,14 +4212,16 @@ static void SV_DetTest_f (void)
 
 			PM_PlayerMove(1.0f);
 
-			hmover = SV_DetHash(hmover, pmove.origin,   sizeof(pmove.origin));
-			hmover = SV_DetHash(hmover, pmove.velocity, sizeof(pmove.velocity));
-			hmover = SV_DetHash(hmover, &pmove.onground, sizeof(pmove.onground));
+			*hm = SV_DetHash(*hm, pmove.origin,   sizeof(pmove.origin));
+			*hm = SV_DetHash(*hm, pmove.velocity, sizeof(pmove.velocity));
+			*hm = SV_DetHash(*hm, &pmove.onground, sizeof(pmove.onground));
 
 			/* FTESurf Patch 325.  Kept OUT of hmover deliberately: folding it in
 			   would change a hash whose measured values are recorded against
 			   patches 322/323, and a determinism control you cannot compare with
 			   the readings that established it is worth less than a second line. */
+			if (pass)
+				continue;
 			ticktotal += pmove.ticksrun;
 			htick = SV_DetHash(htick, &pmove.ticksrun, sizeof(pmove.ticksrun));
 
@@ -4290,6 +4321,10 @@ static void SV_DetTest_f (void)
 	   equal the tick count asked for, which is the cheapest possible statement
 	   of "the mover ran the simulation it was asked to run". */
 	Con_Printf("^5pm_dettest^7 tick   %016llx  ticks %u/%i\n", htick, ticktotal, ntick);
+	/* Patch 492.  Equal to `trace`/`mover` says this map's sample never met a case
+	   where the rules differ, not that the clip is idle. */
+	Con_Printf("^5pm_dettest^7 srctrace %016llx\n", hsrctrace);
+	Con_Printf("^5pm_dettest^7 srcmover %016llx\n", hsrcmover);
 }
 
 /*
@@ -4870,6 +4905,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	float         inend_carry = 0;
 	/* Patch 347: v9's exact state */
 	float         hdrpin[SV_PMPIN_COUNT];
+	const float  *pinbad;	/* Patch 492 */
 	int           pinfound = 0, npm = 0, npe = 0, nportal = 0, nlong = 0;
 	qboolean      haveseed = false, seedstate_ok = false;
 	vec3_t        seedorg = {0,0,0}, seedvel = {0,0,0};
@@ -5448,9 +5484,17 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		           haveseed ? (seedstate_ok ? "exact" : "^3carried state incomplete^7") : "^3absent^7",
 		           npm, npe, nportal,
 		           exact ? "^2EXACT REPLAY^7" : "^3approximate (the file lacks state)^7");
-	if (pinfound && hdrpin[0] != PMSRC_VERSION)
-		Con_Printf("  ^1pmsrcver %g in the file, %i in this engine -- a different mover;"
-		           " an exact replay cannot vouch for this file^7\n", hdrpin[0], PMSRC_VERSION);
+	/* Patch 492: each pin's pmsrcver must be the mover its own fixrampbugs runs
+	   here -- the header's and every `pm` restatement the replay applies. */
+	pinbad = (pinfound && hdrpin[0] != SV_PMSrcVer(hdrpin)) ? hdrpin : NULL;
+	for (i = 0; !pinbad && pms && i < npm; i++)
+		if (pms[i].row >= 0 && pms[i].pin[0] != SV_PMSrcVer(pms[i].pin))
+			pinbad = pms[i].pin;
+	if (pinbad)
+		Con_Printf("  ^1pmsrcver %g at fixrampbugs %g: %s; an exact replay cannot vouch"
+		           " for this file^7\n", pinbad[0], pinbad[SV_PMPIN_FIXRAMPBUGS],
+		           (pinbad[0] == 1 && SV_PMSrcVer(pinbad) == 2)
+		           ? "a pre-492 engine, which ran 2 as 1" : "not a mover this engine has");
 	if (nlong)
 		Con_Printf("  ^1%i line(s) over %i bytes were truncated^7\n", nlong, (int)sizeof(line)-1);
 
@@ -5522,8 +5566,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
 			refuse = "a different map";
-		else if (hdrpin[0] != PMSRC_VERSION)
-			refuse = "a different mover (pmsrcver)";
+		else if (pinbad)
+			refuse = (pinbad[0] == 1 && SV_PMSrcVer(pinbad) == 2)
+			         ? "a pre-492 mover (pmsrcver 1 at fixrampbugs 2)" : "a different mover (pmsrcver)";
 		else if (!havezseed)
 			refuse = "no `zseed` (recorder before QC build 88)";
 		else if (nlong)

@@ -457,6 +457,7 @@ enum serverprotocols_e
 };
 
 #define SV_PMPIN_COUNT 70	//FTESurf Patch 346: entries in sv_pmpin_names (sv_user.c)
+#define SV_PMPIN_FIXRAMPBUGS 63	//Patch 492: "fixrampbugs" in that table; SV_PMPinFill checks the name
 
 typedef struct client_s
 {
@@ -1469,6 +1470,7 @@ void SV_RunCmdCleanup(void);
 void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
 //FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
 extern const char *sv_pmpin_names[SV_PMPIN_COUNT];
+int SV_PMSrcVer(const float *pin);
 size_t SV_PMPinText(const float *v, char *out, size_t outsz);
 size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
 qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);

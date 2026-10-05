@@ -118,10 +118,19 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 	"ladderangle", "slide"
 };
 
+//Patch 492: the mover a pin's numbers need.  Below fixrampbugs 2, version 1
+//replays them identically, so older verifiers still can.  Pre-492 engines ran
+//2 as 1 and pinned 1, so a 1 beside a 2 names one of their files.  A bump that
+//moves runs below 2 as well edits this.
+int SV_PMSrcVer(const float *pin)
+{
+	return pin[SV_PMPIN_FIXRAMPBUGS] >= 2 ? PMSRC_VERSION : 1;
+}
+
 static void SV_PMPinFill(float *v)
 {
 	float *o = v;
-	*o++ = PMSRC_VERSION;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
+	*o++ = 0;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
 	*o++ = pmove.player_mins[0];	*o++ = pmove.player_mins[1];
 	*o++ = pmove.player_maxs[0];	*o++ = pmove.player_maxs[1];	*o++ = pmove.capsule;
 	*o++ = sv_maxvelocity.value;	*o++ = pm_trisoup_bevels.value;	*o++ = pm_rotatedboxhulls.value;	*o++ = pm_portalcsg_scanall.value;
@@ -142,6 +151,9 @@ static void SV_PMPinFill(float *v)
 	*o++ = movevars.slide;
 	if (o - v != SV_PMPIN_COUNT)
 		Sys_Error("SV_PMPinFill: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
+	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
+		Sys_Error("SV_PMPinFill: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
+	v[0] = SV_PMSrcVer(v);
 }
 
 //name=value, %.9g: every float32 round-trips.  Returns 0 if it would not fit.
