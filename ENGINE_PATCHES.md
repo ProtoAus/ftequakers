@@ -36120,3 +36120,102 @@ the tree moved is the reason the numbers are quotable at all.
 
 **Client-affecting but SERVER-side code.** No QC and no cfg depends on it, so no lobby
 deploy is implied by this patch alone; it ships with the next client release.
+
+## Patch 493 - the move columns get a bound, a marker and a reader that checks both  *(APPLIED - MOD-SIDE ONLY, no engine C)*
+
+`src/shared/sh_defs.qc` (TF_MOVEOOR), `src/server/sv_timer.qc` (SV_MoveBoundFrame, the
+`movebnd` header key, `cmd timer`), `src/server/sv_player.qc` (one call in PreThink),
+`src/client/cl_scores.qc` (the header bound 24 -> 32), `ftesurf/cfg/default.cfg`,
+`tools/reccheck.py`, `tools/test_reccheck.py`, `tools/p493move.py`,
+`ftesurf/cfg/test/p493{move,off}.cfg`.  No engine file is touched and no engine
+builtin is used, so this is version-skew safe against the older Pi engine.
+
+**Problem.** A usercmd's move triple reaches the server with NO RANGE TEST ANYWHERE: the
+engine's server side is a bare `sv_player->xv->movement[0] = ucmd->forwardmove;` and the
+only bound on the client is `cl_input.c`'s `bound(-32768, ..., 32767)`, a wire bound
+rather than a plausibility one.  The physics never needed one -- `PMSrc_WishDir` clamps
+wishspeed to `pms_maxspeed` -- which is exactly why an impossible value here is free
+evidence rather than a hazard.  And the corpus says the impossible value is the shape
+this class of cheat writes: two of the samples in `C:/FTESurf-private/Cheats` fly a body
+back to a recording's start with `cmd->forwardmove = dist;`, a DISTANCE, which is in the
+thousands on any map that respawns away from its start.  Nothing in this tree had ever
+looked at the column.
+
+**Change.** `run_movebound` (2000, 0 = off) is latched per map in `SV_TimerMapInit`
+beside `run_startcap`, and `SV_MoveBoundFrame` -- called from PreThink BESIDE
+`SV_TimerInFrame` and not inside it, because that function returns early on three counts
+and a run whose recorder is not live still submits its flags -- compares each command's
+largest |axis| against it.  It counts the commands over (`run_t_moveoor`), keeps the
+largest value the attempt sent AT ALL (`run_t_movebig`, tracked before the bound test so
+an honest run reads `worst 450` and not a dead `worst 0`), and sets **TF_MOVEOOR
+(262144)**.  `SV_RecOpen` states the bound as a `movebnd` header key from the same
+latch, so a file cannot state one bound and judge its rows against another; `cmd timer`
+prints `movebnd: bound N over N worst N moveoor N`.
+
+MARKER ONLY, on the `SV_RecCounts` precedent (Patch 405): no class, not in TF_UNCERT,
+not in surfd's `style_of`/`certifiable`, not named by `FS_CertWhy`, nothing demoted.
+THREE HONEST ROUTES PAST THE BOUND are written into the bit's essay and are why it marks
+rather than accuses -- the four move cvars are plain archived cvars (`cl_movespeedkey`'s
+ENGINE default is 2.0 where default.cfg ships 1, so an honest +speed sends 900);
+**A GAMEPAD WITH +speed HELD IS UNBOUNDED**, found by reading rather than measuring,
+because `in_generic.c`'s IN_MoveJoystick scales jstrafe by `360 * cl_movespeedkey` and
+then multiplies by `cl_forwardspeed` without re-normalising, reaching 450*360 and stopped
+only by the wire bound; and mouse-strafe adds `m_side * mouse_x` per command.  A
+demotion on this axis would land on an honest gamepad player first, which is the Patch
+305 failure mode.  The strictly better form -- pinning the four move cvars in the ranked
+input profile beside the four it already pins, then judging against the config the client
+reported -- is BACKLOG, and this marker is the measurement that says whether it is needed.
+
+`tools/reccheck.py` gains the two-directional cross-check: `movebnd` joins HEAD_V9, the
+bound is counted as the rows stream past, and **rows over the stated bound with the bit
+clear is a FAULT** (the trace and the marker are written by the same command) while the
+converse is a NOTE, because two honest writers produce it and the tool can see neither
+(the `in`-row line cap, and a `pause` epoch).  Absence of the key abstains in both
+directions, on the `proprule` precedent -- this tree's own Patch 358 fixtures carry
+`side=2325 / fwd=-1067` and no bit, because a harness drove them.
+
+**Verified.** `tools/test_reccheck.py` 306 checks, 0 failed (was 295; `case_movebnd` adds
+11, including the gate below).  A corpus sweep over the 266 `.rec` in `data/runs` is
+unchanged at 169 files with faults and adds no `movebnd` finding to any of them -- every
+pre-Patch-493 file abstains.  Driven by `tools/p493move.py`, **26 checks, 0 failed**: the
+control phase at the shipped `cl_forwardspeed 450` reads `bound 2000 over 0 worst 450
+moveoor 0` on three samples; the subject at 5000 reads `over 120 worst 5000 moveoor 1`
+and then `over 283`, i.e. a count of commands growing as registered; the closed file
+carries `movebnd 2000` and `flags 395013` with the bit present, reccheck faults nothing
+and reports `284 of 1938 over 2000 (worst 5000)`; the two tamper directions fault and the
+weak one notes; and `+set run_movebound 0` on the command line gives `bound 0 over 0
+worst 0 moveoor 0` on five samples with a file that carries NO `movebnd` key, which
+reccheck reports as `not stated (no bound applied)` and `not judged` rather than as a
+clean verdict.
+
+**THE PREDICTION THAT FAILED WAS THE ONE THAT MATTERED, and it produced a real defect in
+the first cut of the reader.** This patch's own harness was written to grade a
+Multi-Session PARK, on the argument that `SV_MsEligible` gates on elapsed time only and
+so a tainted attempt would still close its file with the real flags word.  It does close
+the file -- and the flags word in it is `flags 0` beside 284 rows over the bound, because
+`SV_RecFlagLine` reserves a fixed width at open and only `SV_RecClose` /
+`SV_RecKeepEvidence` seek back to rewrite it.  A marker set after the open is therefore
+absent from a parked file and from a save-state prefix, and the ungated cross-check
+FAULTED that file, i.e. accused a recording the writer never finished.  The check is now
+gated on `end` like every other header-bit cross-check in reccheck, `case_movebnd` pins
+the gate with a `run.rec`-named fixture, and the arm finishes its run instead (b88fin's
+route, which the zone scan's server-side point test makes reachable by a noclip flight).
+
+Two harness failures worth keeping, both of which read as a passing arm.  (1) The first
+run of `p493move.cfg` produced no diagnostic at all because `map bhop_eazy` with no
+`waitms` before it and no `waitmap` after it left every later command running while the
+engine was still initialising -- the whole log was `Can't "cmd", not connected`, and an
+arm graded on the ABSENCE of a marker would have reported the feature working.  (2) The
+second produced a real file and still archived nothing, because phases A and B move the
+body (B at 5000 u/s) so the flight started 2785 units down +x and never crossed the end
+region (`checkpoints: 0 crossed`); the flight now re-launches from b88fin's `setpos`
+first, which adds a `warp` record and taints an attempt that was already tainted, and
+does NOT re-arm -- only `zone_goto` does that -- so the counters under measurement
+survive it.
+
+**NOT VERIFIED.** Nothing here can make a real cheat produce the marker: no sample in
+`C:/FTESurf-private/Cheats` runs against this engine, so the subject is an ordinary
+archived cvar set to 5000, which measures the observation and not the accusation.  The
+bound's value is a judgement over one corpus (1,342,728 axis values in 63 fleet runs,
+max exactly 450, plus a 5,571-file local corpus whose only values above it are 11,460 in
+three harness files) and no joystick player appears in either.
