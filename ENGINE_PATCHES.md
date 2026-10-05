@@ -36369,6 +36369,51 @@ a build that was correct.  BACKLOG's modelled tick-path figures (first wrong 273
 619k of 1.2M) did not reproduce at either rate and are not repeated; its ms-idiom figures
 reproduced exactly.
 
+**AND THE FLEET, which needed a correction this entry would otherwise not have
+carried.** `Time_Print` first used `print` -- correct -- but the harness handle had
+been written against a LISTEN server, where a server QC `print()` shows up in the
+client's own log because it is one process. On a lobby it does not: `print` is
+builtin 339, Con_Printf on the SERVER's console, and Con_Printf reaches a connected
+client only where the qc sends it there (`sprint`/`bprint`). So `cfg/test/deploy496smoke.cfg`
+sent `cmd timefmt` to ftesurf@1 three times and read no answer, with no error
+anywhere, while `cmd viewpos` and `cmd timer` in the same run answered normally --
+because those two reply with `sprint(self, PRINT_HIGH, ...)`. The same silence also
+swallowed `cmd ent_census`, a pre-existing command that answers with `print()`, which
+is what made it diagnosable: one control in the same channel and the same second.
+Read from the lobby's side instead -- `log_name`/`log_dir`/`log_enable 1` over rcon
+(one cvar per `execute()` call), drive the cfg, then `log_enable 0` and delete the
+file -- and ftesurf@1 prints
+
+    tf sv 273085 0.0149999997 4096275 1:08:16.275
+    tf sv 64220 0.0149999922 963300 16:03.300
+    ent_census: 3 unhandled classnames/inputs on surf_kitsune
+
+4096275 is this patch's answer; the pre-496 progs would have printed 4096276. Both
+.dat files were sha256-verified ON THE PI against the local build before the run
+(`73d14674...`, `9d5ed103...`), all twelve `ftesurf@` units were active after the
+swap, and `-Pi` refused to swap until it had read twelve rows of 0 players. `dprint`
+would have been worse than useless here: it is Con_DPrintf, which returns before
+formatting unless the host has `developer` or `log_developer`, and a lobby has
+`log_enable 0`, `log_developer 0`, `developer 1` (measured over rcon). The rcon
+console cannot drive it either -- `SV_ParseClientCommand` is the `cmd`/stringcmd
+hook, not a console command, so rcon answers `Unknown command "timefmt"` even on the
+build that has it. That smoke cfg also cost two false readings worth keeping: port
+27698 is the sweep server and not a lobby (the fleet is 27510, 27520..27620), and a
+fixed 20 s wait after `connect` sends stringcmds into surf_kitsune's prop lighting
+and nav pass, where they vanish without an error.
+
+Separately, and not this patch: `build.ps1 -Pi` mis-binds its own parameters when its
+output is redirected to a FILE. `pwsh -NoProfile -Command "./build.ps1 -Jobs 8 -Pi"
+*>&1 > x.txt` arrives at the Pi step with `$PiGame = 'cl_progs.src'` -- a string that
+exists nowhere else in the script except as the middle element of its own compile
+list -- and its guard then throws. The same command piped, bare, or via `-File` binds
+correctly and deploys. Probes pin the corruption to the window between `Push-Location`
+and `if ($Pi)`: the value is correct at script start, at `Step "QuakeC"`, after the
+push and inside the compile loop. Nothing assigns it, and a minimal faithful
+reproduction does not reproduce it, so it is a pwsh host fault and the fix is not in
+the script's logic. Its `$PiGame` regex guard is the reason this cost one run and not
+a corrupt fleet, which is why AGENTS.md now says never to remove it.
+
 **NOT VERIFIED.** No screenshot of a board row past an hour: the observable here is a
 digit in a string and the arm reads it from the same formatter the draw calls, so a pixel
 arm would measure the font.  The one intended behaviour change is that a negative time
