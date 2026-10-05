@@ -2175,6 +2175,7 @@ static void IN_JournalBegin_f(void)
 static void IN_JournalEnd_f(void)
 {
 	const char *name, *fallback;
+	char namelocal[MAX_QPATH];	/*Patch 490: a copy that survives COM_WriteFile*/
 	char tail[192];	/*Patch 468: ten trailer fields*/
 	double now;
 	qboolean discard;	/*Patch 417: decided here, acted on after the trailer*/
@@ -2286,6 +2287,26 @@ static void IN_JournalEnd_f(void)
 	}
 
 	IN_Journal_Digest(true);	/*the bytes as written*/
+	/*Patch 490: COPY THE NAME BEFORE THE WRITE, not after the failure.
+
+	  QC_FixFileName returns either its argument (a Z_Malloc'd Cmd_Argv copy,
+	  stable) or `va("data/%s", name)` -- a pointer into the engine's small
+	  rotating buffer, taken whenever the caller passed a BARE name with no
+	  data/ prefix.  COM_WriteFile then walks the filesystem, which restarts the
+	  loader threads, whose names come from va() -- so on the bare-name path the
+	  pointer this function still holds describes a loader thread by the time it
+	  prints.  Measured: every `in_journal_end <name>.hid` in cfg/test prints
+	  `loadworker_3`, and every `in_journal_end data/runs/<...>` prints its own
+	  name, including the gamecode's, which always spells the data/ prefix.
+
+	  THE FILE WAS ALWAYS WRITTEN CORRECTLY -- the write happens on the good
+	  pointer -- so no journal is misnamed on disk and no evidence is affected.
+	  What was wrong is the two prints below, and the second one is the reason
+	  this is worth fixing rather than tolerating: it is the WARNING that the
+	  journal was not written, i.e. precisely the line where a reader needs to
+	  know which file was lost.*/
+	Q_snprintfz(namelocal, sizeof(namelocal), "%s", name);
+	name = namelocal;
 	if (!COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, in_jrn_len))
 	{
 		/*A `kept 1` digest for a file that is not there would be the one kind

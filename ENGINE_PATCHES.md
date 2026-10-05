@@ -35970,3 +35970,57 @@ driven.
 
 **Client-side only.** No server behaviour changes, so no lobby deploy is implied; it
 ships with the next client release.
+
+## Patch 490 - `in_journal_end` prints the journal it wrote, not a loader thread's name  *(APPLIED - engine `client/in_generic.c`)*
+
+**Problem.** `IN_JournalEnd_f` held `name` across `COM_WriteFile` and printed it
+afterwards.  `QC_FixFileName` returns EITHER its argument -- a `Z_Malloc`'d
+`Cmd_Argv` copy, stable for the whole command -- OR `va("data/%s", name)`, a pointer
+into the engine's small rotating `va()` buffer, and it takes the `va()` branch
+whenever the caller passed a BARE name with no `data/` prefix.  `COM_WriteFile` walks
+the filesystem, which restarts the loader threads, whose names come from `va()` -- so
+on the bare-name path the pointer this function still holds describes a loader thread
+by the time it prints.  The same pointer feeds the `Con_Printf(CON_WARNING
+"in_journal_end: %s was not written\n")` a few lines below, which is precisely the
+line where a reader needs to know WHICH journal was lost.
+
+**Change.** Copy the name into a `char namelocal[MAX_QPATH]` before `COM_WriteFile`
+and print the copy.  Twenty-one lines, one file, no behaviour change on any path that
+was already correct.
+
+**NOT an evidence defect, and the arm measures that rather than asserting it.**
+`COM_WriteFile` runs on the good pointer, before the clobber, so every journal was
+always written under its real name.  Over the tree's `ftesurf/logs/` corpus: 117
+`in_journal_end:` lines name a file, **17 read `loadworker_3`** and 100 read their own
+`data/<name>.hid` -- and the split is exactly the argument shape, not luck.  The 17
+are every harness that called it with a bare name (`p484ident.cfg` says
+`in_journal_end p484_B.hid` and its log says `loadworker_3`); the 100 include the
+GAMECODE's own caller (`cl_replay.qc`'s `localcmd(sprintf("in_journal_end %s\n",
+dst))`), which always spells the `data/` prefix through `FS_RunPath` and so never
+took the branch.  No `was not written` warning exists in the corpus, so the load-
+bearing half of the fix has never fired in anger -- it is the reason to fix this
+rather than tolerate it, not a claim that it has cost anything yet.
+
+**Verified.** Built win64 `m-rel`, exit 0, no new warnings.  Subject and control are
+ONE FILE APART, which is what makes the diff attributable: the control is
+`a5d9019a6` (Patch 489, no 490) built `m-rel` (`d1106cb7…`), the subject is the same
+tree plus this change (`5ec1992b…`).  Both were built in the same session from the
+same objects, and `git diff --stat` on the subject reads `1 file changed, 21
+insertions(+)`.  Driven by `cfg/test/p490jname.cfg` and graded by
+`tools/p490jname.py` (game repo), three pre-registered arms, no server and no map --
+the journal is the input layer's own and begins at the menu:
+
+- **arm 1, the subject path** (`in_journal_end p490_A.hid`, a bare name): control
+  printed `loadworker_3`, subject printed `data/p490_A.hid`.  The control's failure
+  is its PASS; a pre-490 binary that printed the real name would mean the mechanism
+  was misdiagnosed and the patch fixes nothing.
+- **arm 2, the already-prefixed path** (`data/p490_B.hid`): printed identically on
+  both.  This is the half that proves the fix did not break the working path,
+  including the gamecode's own caller, which is this shape.
+- **arm 3, the files and not the print**: `p490_A.hid` 1776 bytes and `p490_B.hid`
+  2127 bytes on BOTH binaries, and nothing on disk under a loader-thread name.  This
+  is the prediction that bounds the incident -- had it failed on the control the
+  defect would have been an evidence defect and this would be a different patch.
+
+The shipped `ftesurf64.exe` (488-era) was run as a second control and failed arm 1
+identically, so the defect is not new in 489.
