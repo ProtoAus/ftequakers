@@ -148,13 +148,13 @@ static cvar_t in_rawkbds = CVARFD("in_rawkbds", "-1", CVAR_NOSET|CVAR_NOSAVE, "R
   the same position `rechid` and `inprof` are in, and the same answer: a
   patched engine is out of scope for a client-side check, and what these buy is
   that an HONEST client's verdict reaches the server without a 38-second cap
-  and without a transport that does not exist.  The counters are also written
-  into the recording's header, which is the file pm_verify replays, so a claim
-  is bound to the evidence it describes.
+  and without a transport that does not exist.  They are not written into any
+  recording: the server keeps each client's latest report (sv_timer.qc
+  run_t_ij*, printed by `cmd timer`), and nothing binds it to a .rec.
 */
 static cvar_t in_jrn484_frames = CVARFD("in_jrn484_frames", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: how many rendered frames this process has checked the input angle identity over. -1 means no journal has run here, which is not 0.");
 static cvar_t in_jrn484_ghosts = CVARFD("in_jrn484_ghosts", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames where the view angle moved with zero device counts AND zero recorded keyboard turn. A server angle set looks like this and so does injected motion, so it corroborates rather than accuses. Counted per FRAME, not per axis. -1 means no journal has run here.");
-static cvar_t in_jrn484_violations = CVARFD("in_jrn484_violations", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames where device counts were present and did not add up to the angle they produced. No legitimate path makes this nonzero. Counted per FRAME, not per axis -- a frame that breaks both axes is one unexplained motion. -1 means no journal has run here.");
+static cvar_t in_jrn484_violations = CVARFD("in_jrn484_violations", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames where device counts were present and did not add up to the angle they produced. A teleport on a frame that also carried counts or a keyboard turn lands here too, so honest teleport maps read nonzero. Counted per FRAME, not per axis -- a frame that breaks both axes is one unexplained motion. -1 means no journal has run here.");
 static cvar_t in_jrn484_badframes = CVARFD("in_jrn484_badframes", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames that broke the identity on at least one axis, ghosts and violations together. This is the number a threshold wants, because it is the count of frames anything went wrong on. -1 means no journal has run here.");
 static cvar_t in_jrn484_skipped = CVARFD("in_jrn484_skipped", "-1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: frames the identity did not govern -- cursor free, m_filter or m_accel on, zero sensitivity, or governed by neither axis. Counted rather than silent, so a reader can tell a clean 40 of 40 from a clean 2 of 40. -1 means no journal has run here.");
 
@@ -1604,14 +1604,14 @@ moved without counts behind it is the signature, not the noise.  So the rule is
   as hidcheck separates them.  A ghost is an angle that moved with zero counts
   AND zero recorded keyboard term -- the signature of motion the engine never
   saw, and ALSO of a server angle set, so it corroborates rather than
-  accuses.  A violation has counts behind it and they do not add up, which no
-  legitimate path produces.
+  accuses.  A violation has counts behind it and they do not add up, which a
+  server angle set on a frame that carried input also produces.
 
   MEASURED BEFORE THIS WAS WRITTEN, over all 113 journals in the tree (107
   with a usable header, 210,678 governed frames): 18 frames fail the pitch
-  identity and ALL 18 also fail yaw, i.e. pitch-only 0.  The 18 are large
-  instantaneous jumps with no input behind them -- a server angle set --
-  which is why they land in the ghost counter and not the violation one.
+  identity and ALL 18 also fail yaw, i.e. pitch-only 0.  The 18 are
+  teleports: 11 had counts behind them and land in the violation counter,
+  7 in the ghost counter (corrected by Patch 494's review, 5 Oct).
 */
 static unsigned int in_jrn_vcount;
 static unsigned int in_jrn_violations[2];	/*[PITCH], [YAW]: counts present and they do not add up*/
