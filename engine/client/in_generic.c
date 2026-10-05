@@ -965,7 +965,24 @@ rename hazard, stream to .part and accept the other failure mode.
 ==============================================================================
 */
 /*QC_FixFileName lives in common/pr_bgcmd.c and no header declares it; the local
-  extern with a source note is the idiom cl_input.c:1815 already uses.*/
+  extern with a source note is the idiom cl_input.c:1815 already uses.
+
+  Patch 490, and the rule every caller of it is under: THE `*result` IT HANDS BACK
+  MAY BE A `va()` POINTER.  It returns either its argument -- a Z_Malloc'd
+  Cmd_Argv copy, stable for the whole command -- or `va("data/%s", name)` from the
+  branch that adds the missing prefix, i.e. exactly when the caller passed a BARE
+  name.  That buffer is the engine's small rotating one, so ANY later va() anywhere
+  invalidates it, and the invalidator does not have to look related: a filesystem
+  walk restarts the loader threads, whose names come from va().  So copy the name
+  before crossing a call that can touch the filesystem, and never print it after.
+
+  Audited all three call sites when 490 landed.  in_generic.c's IN_JournalEnd_f was
+  the live defect (it held the name across COM_WriteFile and printed it after).
+  cl_receipt.c:197 hashes a path it was handed and calls nothing between the return
+  and the read; cl_receipt.c:514 (`rec_ul_arm`) strlens, suffix-checks and
+  Q_strncpyz's into its slot array with no filesystem call in between, so both are
+  safe AS WRITTEN -- and both become defects the moment someone adds an FS call or
+  a diagnostic print to them.*/
 qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
 
 static char			*in_jrn_buf;

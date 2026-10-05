@@ -36024,3 +36024,13 @@ the journal is the input layer's own and begins at the menu:
 
 The shipped `ftesurf64.exe` (488-era) was run as a second control and failed arm 1
 identically, so the defect is not new in 489.
+
+**Follow-up, same session: all three `QC_FixFileName` call sites audited and the
+rule written at its `extern`.**  The other two are `cl_receipt.c:197` (hashes a
+path it was handed, calls nothing between the return and the read) and
+`cl_receipt.c:514` (`rec_ul_arm`, which strlens, suffix-checks and `Q_strncpyz`s
+into its slot array with no filesystem call in between).  Both are safe AS WRITTEN
+and both become this defect the moment someone adds an FS call or a diagnostic
+print to them, so the `extern` in `in_generic.c` now states the rule and names the
+audit.  Comment-only; rebuilt `m-rel` exit 0 and the arm re-run at 8 checks 0
+failed, which is what confirms a comment did not become code.
