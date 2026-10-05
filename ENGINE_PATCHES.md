@@ -36538,3 +36538,98 @@ not exercised -- R28A/B need `sv_cheats 1` for the engine's handler, and the ung
 for `cmd noclip` on this build. Patch 479's item still covers it. No arm watches a pin survive a
 `map_restart` either (AGENTS.md: QC globals are zeroed at a map load, so `rec_wt_hold` dies with
 them and the pin cannot survive one; the client's `rw_on` is closed by the stat going to 0).
+
+## Patch 500 - the menu's text fields: a keyboard route in, and the navigation keys back  *(APPLIED - MOD-SIDE ONLY, no engine C: FTESurf `src/sui_sys.qc`, `src/menu/m_main.qc`, `tools/p498keys.py`, `ftesurf/cfg/test/p498keys.cfg`)*
+
+**Problem.** BACKLOG's "Cosmetic / low" bullet *"Typing w/a/s/d into a menu text field
+moves sui's keyboard cursor, and Enter clicks wherever it landed"* -- and, beside it, the
+fields could not be reached by keyboard at all.  Both are halves of one rule.  sui moves its
+cursor by hit test (`_cursor_kb_move` looks `_action_elements` up by screen position) and a
+text field is not an element the cursor can land on and click, so with the mouse parked off
+it no key the menu VM consumes can focus a field -- and `sui_text_input_focused`, the flag
+that suppresses the WASD navigation keys, is set from a MOUSE hit (`sui_is_last_clicked`),
+so it reads FALSE and w/a/s/d keep moving the cursor.  The fields are unreachable by
+keyboard, and the flag that would suppress navigation while someone typed in one was only
+ever set by a mouse.  No engine file is touched: keys.c already gives every non-F1..F15 key
+to `Menu_KeyEvent` and returns (`keys.c:4056-4063`), so with the menu up a bind never runs
+and the whole question is menuqc's.
+
+BACKLOG's own diagnosis of the w/a/s/d half was right about the mechanism and wrong about
+the site: it read `sui_input_dir` as the only consumer and `sui_input_event` as dropping its
+result.  `sui_input_dir` DOES gate on the focus flag, and the cursor demonstrably does not
+move -- but `sui_menu_nav`'s four `sui_listen_*` calls classify a key by its BIND, read out
+of the SAME BUFFER the field types from, so w/a/s/d were consumed by the navigation before
+`sui_text_input` could see them.  Measured with the focus gate live and the field focused:
+`nav focus 1 up 1 down 0 left 0 right 0` for exactly the one frame the `w` was in, and the
+field's text still empty afterwards.  The buffer is a queue, and reading it is consuming it.
+
+**Change.**  A CLAIM rather than a flag, because the flag is per-frame (`sui_begin` clears
+it) and that is measured, not assumed: the first cut set it from the key handler and got
+exactly ONE frame with it set out of 899 draws in the 9 s before the next keystroke, so the
+keystroke arrived after `sui_begin` had cleared it and the field never consumed the buffer
+-- and that one frame was worse than useless, because the buffered TAB is bound to
+`+showscores`, so `sui_listen_command("+forward")` reported a navigation key,
+`sui_block_listened` returned TRUE and `Menu_KeyEvent` told keys.c the VM had HANDLED it.
+So: `sui_field_focus(id)` records a claim, `sui_text_input` takes it on the field's own
+draw (setting the flag and the id), `sui_input_dir` asks `sui_text_focus()` instead of
+reading the flag, and the owner drops the claim when its panel goes away
+(`sui_text_unfocus`, called from both ESC routes).  TAB is the key, because it is sui's own
+text-focus key and is bound to nothing here.  And `sui_menu_nav` returns early while a field
+is focused, which is the BACKLOG item's own fix ("skip the bound moves in sui_menu_nav while
+a field is focused, keeping the arrows and pad") -- the arrows and the pad keep working
+because `sui_input_dir` classifies them by SCAN as well as by bind.  Four harness handles
+went in with it, none of which existed: `ui_key` (one synthetic press through
+`Menu_InputEvent`, the function keys.c calls), `ui_focus`, `ui_cursor`/`ui_element` and
+`ui_click`.
+
+**Verified.**  `cfg/test/p498keys.cfg` + `tools/p498keys.py` (both new), 16 checks, 0
+failed, menu.dat `14200595A3457882`.  CONTROL, required to fail and did, and run twice
+(once before the `sui_menu_nav` gate went in and once after, same verdict): menu.dat
+`C86E8EC399D018F1` built by hand in `git worktree add C:\tmp\ctl500 HEAD` (0 warnings,
+and zero mentions of `sui_text_focus` or `ui_key` in either source file) returned CANNOT
+GRADE with 36 unrecognised lines, naming all four handles as `Unknown command` -- a
+different exit code from a subject that ran and was wrong.  The check that would catch a
+regression of the buffer half alone is B7: w/a/s/d typed into the field leave it reading
+"watwasd", and those four letters are BOTH binds and printable, so a build whose
+`sui_menu_nav` still drains the buffer reads "wat" there and still passes B5.  The subject's own observables: a click focuses the field
+(held 1) and RIGHT then does NOT move the cursor while it moved for RIGHT/LEFT/UP with
+nothing focused; `w`/`a`/`t` typed into it produce text `wat` caret 3; ENTER commits the
+name; TAB claims the create screen's field under its own id; both ESC routes drop the claim
+and navigation works again afterwards.  `tools/cfgguard.py` passes and both VMs compile at
+0 warnings.
+
+Four predictions failed on the way and each was a finding rather than a grader bug; all four
+are written into the cfg's RESULT block, and three are general enough to be worth repeating
+here.  (1) `ui_key enter` reads `took 0` on the name screen even with nothing focused,
+because `sui_input_is_confirm` is reached only through `sui_block_menu_navigation` -- the
+UNUSED sibling of `sui_block_input_fn` (`var` initialised to `sui_block_listened`, never
+reassigned, no caller anywhere in `src/`) -- so "a key the VM consumes" is not a property of
+ENTER in general.  (2) A navigation key with no element in its direction is
+INDISTINGUISHABLE from a suppressed one: `_cursor_kb_move` scored (226,474) for both `w` and
+`a` on a four-element main menu, and the main menu's four elements are a vertical list at
+x 144..352 so RIGHT has nowhere to go from `mm_play` while DOWN moves.  Every suppression
+check is therefore paired with a direction measured to move on that screen.  (3) The first
+navigation key after a click is SPENT, not suppressed: `_cursor_kb_move` only moves from an
+element's centre and a click leaves the cursor inside a box but off-centre (probe read `dir
+scan 131 focus 1 flag 1 kb 0 0` -- gate live, move vector zero).
+
+**NOT VERIFIED, and one real finding left behind.**  The create screen's field is reachable
+by TAB's claim and by nothing else: its scroll view calls `sui_reread_input` and DRAINS THE
+INPUT BUFFER every frame, so a keystroke is consumed before `sui_text_input` can read it --
+measured, the TAB that claimed the focus was eaten by the frame that claimed it, and that
+screen has 58 elements (one per visible map row) against the name screen's 3.  A player
+cannot type in the map-search box without a mouse.  In BACKLOG with the measurement.  Also
+unverified: the two screens are the only ones with fields, so no other panel was exercised,
+and the arm never runs a real mouse -- `ui_click` drives `_sui_mouse_move` +
+`Menu_InputEvent(IE_KEYDOWN/UP, K_MOUSE1)`, which is the code a real click runs but is not
+one.
+
+**Two compiler traps this cost hours on, both silent.**  A braceless `for` binds ONE
+statement, so a second print ran outside the loop with the index at its end value -- past
+the array -- and **fteqcc (git-6681-5662b3a23) SEGFAULTED**: no message, no output file,
+exit 139, which reads as a hung build rather than as a rejected construct.  And sui's own
+`#define printf(x, ...) print(sprintf(x, __VA_ARGS__))` makes a bare `printf("...\n")` a
+syntax error (`")" - not a name`) because sprintf needs at least one vararg.  The same hunt
+also produced a wrong comment that had to be retracted: a float index into a struct array
+was blamed for that segfault and is not the cause, which is exactly the failure CLAUDE.md
+forbids -- a claim written down without the measurement that would have shown it false.
