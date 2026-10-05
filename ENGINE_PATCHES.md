@@ -36261,3 +36261,44 @@ archived cvar set to 5000, which measures the observation and not the accusation
 bound's value is a judgement over one corpus (1,342,728 axis values in 63 fleet runs,
 max exactly 450, plus a 5,571-file local corpus whose only values above it are 11,460 in
 three harness files) and no joystick player appears in either.
+
+## Patch 495 - the monolith's forest terrace, rebuilt  *(APPLIED - MOD-SIDE ONLY, no engine C: FTESurf `ftesurf/glsl/milk_monolith.glsl`, `ftesurf/cfg/test/p495forest.cfg`)*
+
+**Problem.** The menu's monolith world draws a forest terrace, and from inside it the
+canopy arrived holed, faceted and cut into vertical combs of missing leaf that moved
+as the camera moved; from the balcony it was a dozen lollipops on a flat green slab.
+Two causes, both in `milk_monolith.glsl`.  (1) `trees()` looked at four grid cells, so
+a crown near a cell boundary was in the field or not depending on where the sample
+point sat: at each window shift a crown a metre from the ray left the distance field
+and `march()` stepped straight through it -- the combs, and the sectioning.  (2) The
+crown's distance divided by 1.67 where its own gradient needed 2.8, i.e. it
+over-estimated, which `milk_cone.h` and `march()` both forbid; rays over-stepped the
+leaves and the canopy came back holed.
+
+**Change.** Trees on a 14 m grid with a reach of 6.9 m (<= half the cell), looked up
+over NINE cells, and the returned distance capped at 1.2 * CELL so the field stays
+continuous as the window slides; crowns are a soft-unioned mass plus three lobes, each
+ellipsoid divided by its own smallest semi-axis (the only normalisation an ellipsoid
+may take), smin never over-estimates; trunks are smooth in the SDF with the bark in
+the normal and albedo, because a ripple round a 0.6 m trunk spends the march's step
+size on bark.  Mossy boulders on a second grid, a hummocked floor, and light that
+agrees with the geometry: one `forestDens` field feeds the trees, the canopy shade and
+dappled sun pools, so the wood's edge is a feathered noise and not a box seam.  Below
+high quality the crown is the mass alone and the terrace keeps no boulders.  Every
+cell is rejected by a squared-distance test before any hash and the density field is
+read once per march step, not once per cell -- four reads a step was a fifth of the
+frame.
+
+**Verified.** `cfg/test/p495forest.cfg` (new): bootcheck 7 photographs the four
+stations at the owner's own archived settings (monolith, quality 4, res 1, panels 0)
+and bootcheck 10 sweeps six head turns inside the wood.  Before/after shots: the combs
+and holes are gone in all six sweep views and the balcony view reads as a wood with a
+floor, a stream and boulders.  Cost on an RTX 2080 SUPER at PLAY, q4, every tick:
+2.02 ms before, 17-21 ms after (two samples); q3 (raymarch every other tick) 2.75-5.56
+ms a frame, q2 2.20 ms; with the forest removed from `map()` the world is 7.7 ms, so
+~6 ms is the terrace and its light and ~13 the trees.  Two predictions were falsified
+and are recorded in the cfg: removing the crown ripple changed nothing (the cost was
+per-step evaluation), and mass-only crowns measured SLOWER at ultra (30.6 ms) than
+lobed ones, because disjoint spheres let a ray weave into every surface behind them.
+NOT VERIFIED on the N100: no such machine here; the cfg states the advice that ultra
+was already the slow setting there and quality 3 draws the same wood for a fraction.
