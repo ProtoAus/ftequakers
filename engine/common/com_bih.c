@@ -970,6 +970,17 @@ static void BIH_TestToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 }
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
+/*FTESurf Patch 492: Source's brush test, set by the Source mover around its own
+  traces (PMSrc_PlayerMove) when movevars.fixrampbugs >= 2, so a replay of an
+  older recording traces exactly as it was recorded.  Three rules differ from
+  the Quake 2 code below; each was the first tick a Momentum recording of
+  surf_voyager disagreed with us (ENGINE_PATCHES.md, Patch 492):
+   - the early-out is "both ends in front of the face", not "moving away";
+   - a hit is decided on the DIST_EPSILON-adjusted enter/leave fractions;
+   - brushes tie strictly on the reported fraction, so the first tested wins.
+  A global, not a trace flag: the mover's traces run on the main thread and
+  nothing else traces while it does. */
+int bih_sourceclip;
 static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbrush_t *brush)
 {
 	int			i, j;
@@ -1009,7 +1020,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			startout = true;
 
 		// if completely in front of face, no intersection
-		if (d1 > 0 && d2 >= d1)
+		if (bih_sourceclip ? (d1 > 0 && d2 > 0) : (d1 > 0 && d2 >= d1))
 			return;
 
 		if (d1 <= 0 && d2 <= 0)
@@ -1018,7 +1029,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 		// crosses face
 		if (d1 > d2)
 		{	// enter
-			f = (d1) / (d1-d2);
+			f = bih_sourceclip ? (d1-DIST_EPSILON) / (d1-d2) : (d1) / (d1-d2);
 			if (f > enterfrac)
 			{
 				enterfrac = f;
@@ -1029,7 +1040,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 		}
 		else
 		{	// leave
-			f = (d1) / (d1-d2);
+			f = bih_sourceclip ? (d1+DIST_EPSILON) / (d1-d2) : (d1) / (d1-d2);
 			if (f < leavefrac)
 				leavefrac = f;
 		}
@@ -1042,12 +1053,14 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			tr->trace.allsolid = true;
 		return;
 	}
-	if (enterfrac <= leavefrac)
+	if (bih_sourceclip ? enterfrac < leavefrac : enterfrac <= leavefrac)
 	{
-		if (enterfrac > -1 && enterfrac <= tr->trace.truefraction)
+		if (enterfrac > -1 && (bih_sourceclip ? enterfrac < tr->trace.fraction : enterfrac <= tr->trace.truefraction))
 		{
 			if (enterfrac < 0)
 				enterfrac = 0;
+			if (bih_sourceclip)
+				nearfrac = enterfrac;	//already pulled back by DIST_EPSILON
 
 			tr->trace.fraction = nearfrac;
 			tr->trace.truefraction = enterfrac;

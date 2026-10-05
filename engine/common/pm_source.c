@@ -205,6 +205,7 @@ static float pms_maxspeed;
 static qboolean pms_surfed;
 
 extern cvar_t pm_noround;
+extern int bih_sourceclip;	//Patch 492, com_bih.c
 extern cvar_t pm_dispprobe;	//FTESurf Patch 256, temporary -- defined in common.c
 extern cvar_t pm_ladderprobe;	//FTESurf Patch 260, temporary -- defined in common.c
 
@@ -777,7 +778,11 @@ static qboolean PMSrc_IsValidMovementTrace (trace_t *tr)
 	if (tr->allsolid || tr->startsolid)
 		return false;
 
-	if (fabs(tr->fraction) <= FLT_EPSILON)
+	/* Patch 492: not on fixrampbugs 2.  Current Momentum (mom_mv_fix_slide_bugs)
+	   lets a fraction-0 hit reach the two-plane crease, as stock Source does:
+	   surf_voyager's start pocket and V troughs end where its recording does
+	   only that way.  0.8.7's rule nudged 0.2 off the face instead. */
+	if (fabs(tr->fraction) <= FLT_EPSILON && movevars.fixrampbugs < 2)
 		return false;
 
 	if (!PMSrc_PlaneIsSane (tr->plane.normal))
@@ -3673,6 +3678,7 @@ void PMSrc_PlayerMove (float gamespeed)
 
 	pms_frametime = tick;
 	pms_surfed = false;
+	bih_sourceclip = (movevars.fixrampbugs >= 2);	//Patch 492: cleared at the end
 
 	/* FTESurf Patch 280: once per command -- the physent set does not change
 	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
@@ -3794,6 +3800,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	/* ...and the eye height that goes with it.  Derived from the carried duck
 	   state rather than written during the ticks -- see PMSrc_DuckFraction. */
 	PMSrc_SetDuckedEyeOffset (PMSrc_DuckFraction ());
+	bih_sourceclip = 0;
 }
 
 /*
