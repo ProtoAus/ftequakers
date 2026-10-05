@@ -2706,7 +2706,41 @@ qboolean R_BuildRenderstate(rendererstate_t *newr, char *rendererstring)
 
 	rendererstring = COM_Parse(rendererstring);
 	if (*com_token)
-		Q_strncpyz(newr->subrenderer, com_token, sizeof(newr->subrenderer));
+	{
+		//FTESurf Patch 488: THE SUBRENDERER TOKEN IS A DLL NAME, AND A SERVER COULD
+		//CHOOSE IT.  GLInitialise passes it to Sys_LoadLibrary (gl_vidnt.c) and the
+		//Vulkan path passes it straight to LoadLibrary (`*info->subrenderer ?
+		//LoadLibrary(info->subrenderer) : NULL`), so whatever ends up here is native
+		//code inside the client process.  The path filter on the gl_driver branch
+		//beside this one already says why that matters ("don't allow this to contain
+		//paths. that would be too exploitable"), but it never ran on an EXPLICIT
+		//token -- and `setrenderer` is registered with no restriction level, so a
+		//remote server's stufftext reaches R_SetRenderer_f and hands argv(1) here.
+		//Driven: the canary DLL's DllMain ran in the client's pid, and a
+		//non-existent path proved the string reaches LoadLibrary verbatim.
+		//FILTERING ON A PATH SEPARATOR IS NOT ENOUGH: a bare name is also a DLL
+		//name, and LoadLibrary resolves it through the standard search order (which
+		//includes the client's own cwd), so the token is refused whole rather than
+		//screened for slashes.  The caller keeps every renderer it may legitimately
+		//pick -- the renderer NAME above is untouched, and an empty token falls
+		//through to gl_driver and then the system opengl32, so the client still
+		//comes up.  A local console or cfg caller is RESTRICT_LOCAL and is never
+		//insecure, so this costs the user nothing.
+		//NOT gated on vid_renderer's CVAR_SERVEROVERRIDE, deliberately: that would
+		//refuse a LOCAL user's own explicit `setrenderer gl <path>` for as long as a
+		//server held that cvar, and the route it would defend was MEASURED as not
+		//reaching the loader (p482b's B1: the cvar took the path, GLInitialise
+		//printed `Reusing renderer dll`, the canary did not run).  A gate whose cost
+		//is a local false positive, defending a route measured dead, is the wrong
+		//trade; it is in BACKLOG with that measurement and a falsifier instead.
+		if (Cmd_IsInsecure())
+		{
+			Con_Printf("Blocking insecure renderer: %s\n", com_token);
+			*newr->subrenderer = 0;
+		}
+		else
+			Q_strncpyz(newr->subrenderer, com_token, sizeof(newr->subrenderer));
+	}
 	else if (newr->renderer && newr->renderer->rtype == QR_OPENGL)
 	{
 		Q_strncpyz(newr->subrenderer, gl_driver.string, sizeof(newr->subrenderer));

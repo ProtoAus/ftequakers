@@ -35820,3 +35820,82 @@ others; the grader now bounds that window by the client's own done marker.
 
 **Client-side only.** A dedicated server never runs `TP_ExecTrigger`, so no lobby
 deploy is implied by this patch; it ships with the next client release.
+
+## Patch 488 - a server may no longer name the DLL the client's renderer loads  *(APPLIED - engine `client/renderer.c`)*
+
+**Problem.** ENGINE_SECURITY.md item 2, the last route to arbitrary native code
+execution from a remote server, and CONFIRMED rather than traced: `p482b`'s canary
+had its `DllMain` run inside the client's pid.  `R_BuildRenderstate` stored an
+EXPLICIT subrenderer token with no filter at all
+(`Q_strncpyz(newr->subrenderer, com_token, ...)`), while the path filter immediately
+beside it -- "don't allow this to contain paths. that would be too exploitable - this
+often takes the form of dll/so names" -- ran only on the `gl_driver` FALLBACK branch.
+That token is a DLL name: `GLInitialise` passes it to `Sys_LoadLibrary`, and the
+Vulkan path passes it straight to `LoadLibrary` (`*info->subrenderer ?
+LoadLibrary(info->subrenderer) : NULL`, `gl/gl_vidnt.c`).  `setrenderer` is
+registered with no restriction level, so a server's stufftext reaches
+`R_SetRenderer_f`, which hands `Cmd_Argv(1)` here.  A non-existent path in the same
+arm printed `Loading renderer dll "<that path>"`, which is what makes the canary an
+execution and not a coincidence: the string arrives verbatim.
+
+**Change.** Refuse an explicit subrenderer token when the caller is insecure
+(`Cmd_IsInsecure()`), print `Blocking insecure renderer: <token>`, and leave
+`subrenderer` empty so the existing fallback chain runs (`gl_driver`, then the system
+`opengl32`).  THE TOKEN IS REFUSED WHOLE RATHER THAN SCREENED FOR SLASHES, and that
+is the part worth keeping: a BARE name is also a DLL name, and `LoadLibrary`
+resolves it through the standard search order, which includes the client's own cwd --
+so copying the sibling branch's `strchr('/') || strchr('\')` test would have been
+the incomplete version of this fix, closing the absolute path p482b drove and leaving
+a dropped-file route open.  The renderer NAME is untouched, so a server may still ask
+for `gl`/`vk`/`sw`; only the choice of library is the user's.  A local console or cfg
+caller is `RESTRICT_LOCAL` and never insecure, so this costs the user nothing --
+measured, not assumed (L1 below).
+
+**NOT gated on `vid_renderer`'s `CVAR_SERVEROVERRIDE`, deliberately.** That would
+also refuse a LOCAL user's own explicit `setrenderer gl <path>` for as long as a
+server held that cvar, and the route it would defend was measured as not reaching the
+loader (`p482b` B1: the cvar took the planted path and the engine logged `Server
+taking control of cvar vid_renderer`, but `GLInitialise` printed `Reusing renderer
+dll` and the canary did not run).  A gate whose cost is a local false positive,
+defending a route measured dead, is the wrong trade; it is in the game repo's BACKLOG
+with that measurement and a falsifier instead.
+
+**Verified.** Built win64 `m-rel` + `sv-rel`, exit 0, no new warnings.  Driven
+subject/control, ONE process (a listen server, with the engine's own `stuffcmd` as
+the delivery, which is what `p482b` used -- stufftext to the local client seat
+arrives at `RESTRICT_SERVERSEAT(0)` = 31, so `Cmd_IsInsecure()` is true).  Five
+pre-registered predictions, ALL MET ON BOTH BUILDS.  Control `b36fafc9` (Patch 487,
+no 488), subject `2c08576e`, 63 s each:
+
+| evidence | control | subject |
+|---|---|---|
+| local token reached the loader | yes | **yes** (unchanged) |
+| stuffed token reached the loader | **yes** | no |
+| stuffed token refused | no | **yes** |
+| stuffed canary reached the loader | **yes** | no |
+| stuffed canary refused | no | **yes** |
+| `marker.txt` lines | **1** (`DllMain ran in pid 16268`) | **0** |
+
+Three distinct path strings (a locally typed one, a stuffed non-existent one, the
+stuffed canary) mean every line names its own cause, and the stuffed non-existent
+path is the discriminator that needs no DLL: it separates "the token was refused"
+from "the load failed".  Provenance is by STRING rather than by stamp -- the stamps
+in this tree are stale by construction -- and the driver refuses to run if the
+subject lacks the gate string or the control has it.  Arm:
+`C:/FTESurf-private/poc/p488/` (`run_p488a.py`, `cfg/p488a.cfg`), private because it
+is a working recipe for native code execution that every shipped engine still has
+(0.1.22 = patch 467).
+
+**NOT VERIFIED.** (a) The `vid_renderer` + `vid_restart` route was measured dead by
+`p482b` B1 and is not re-driven here, so this patch's claim is about the
+`setrenderer` command route only.  (b) Windows only.  The gate is in common client
+code, so a Linux `.so` token is refused by the same test, but no Linux build was
+driven.  (c) A harness bug found on the way is recorded in the arm rather than left
+implicit: `setrenderer gl <path>` UNQUOTED hands the handler `argv(1) == "gl"` alone,
+so no token is parsed and nothing is logged -- a regression control written that way
+measures a different code path from the subject's, and would have read as "the fix
+broke local renderer selection" on the subject while passing vacuously on the
+control.
+
+**Client-side only.** No server behaviour changes, so no lobby deploy is implied; it
+ships with the next client release.
