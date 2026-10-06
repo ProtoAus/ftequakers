@@ -36682,3 +36682,53 @@ integration/retry behavior, not device/model calibration or cheat conviction.
 Permanent loss pauses unsigned coverage pending operator reconciliation. A
 repeated reread request does not supersede an in-flight partial reread: finish
 it, then request a new reinterpretation. Other evidence-lifecycle work remains.
+
+## Patch 503 - hash and content analysis share one evidence observation  *(APPLIED - READERS ONLY, no engine C or game progs)*
+
+**Problem.** Receipt joins hashed a sidecar/journal and then reopened its path
+for content analysis. Replacement between reads could produce an angle fault
+from unsigned replacement bytes, or hide a signed journal's pitch fault. The
+recording's runid header, session nonces and angles also came from separate opens.
+
+**Change.** Capture uploaded/explicit evidence once per receipt report, including
+absence and I/O errors; digest validation and content parsers consume those same
+bytes. Reject digest-unbound content before claiming a signed-content verdict.
+Capture the selected recording's decoded text through its original handle, and
+share it with nonce and angle analysis; unrelated recordings still cost only a
+header scan. reccheck/hidcheck accept keyword-only `data=` and preserve UTF-8
+replacement/universal-newline semantics, including empty bytes. No schema,
+ranked policy, detector math, engine pin/tag, build number or rewind changes.
+
+**Verified.** Final clean frozen FTESurf `4303a0e`: 74 snapshot falsifiers,
+262 sweep checks, reader 306 and HID 263: zero failures. Close-time replacements
+prove the hook acted and require one captured read; both hiding a signed pitch
+fault and creating an unsigned angle fault are tested, with next-observation
+digest rejection. Parser equivalence covers LF/CRLF/CR, invalid UTF-8, Unicode
+separators and empty bytes. I/O arms cover selected recording tails, CLI nonzero
+exit, stale preservation/recovery, independent digest faults, known versus
+unknown sibling presence, and removal before an ACTED partial recovery.
+Counterfactual final-suite attempts: original `4f16963` has 26 failures; first
+candidate `17da49b` has 7. Some cases abort on unavailable APIs, so these are not
+comparable error rates. Both source-only independent reviewers approve the final
+snapshot; their findings drove the I/O and non-acting-control corrections.
+Runs-only corpus: 267 recordings / 170 with faults before and at completion,
+no increase. Syntax checks clean; LSP records no diagnostics. No QC/engine build.
+
+**Published/deployed, 2026-10-06 09:52:46 UTC.** Exact `4303a0e` published to
+FTESurf main. Nine app suites plus snapshot/recording/HID reader suites pass in
+isolated staging on the Pi. Under the sweep lock, backed up the DB owner-only
+and each existing destination; installed only three readers plus their unchanged
+crypto dependency. All four Pi blob hashes match the commit, and exact tooling
+bytes match both Windows installs; crypto selftests pass in both. Installed
+caller ACTED on a generated signed journal (OK) and changed-digest control
+(FAULT), never stored in the live DB/evidence directories. Real receipt step:
+0 new reads / 0 faults; health ok before and after. No games, worker/lobby
+restart, progs swap or historical reread. Initial post-copy probe failed on a
+private-helper quoting error after all hashes matched; corrected embedded scripts
+were syntax-checked and the full staging/deploy/probe sequence passed. Original
+pre-deploy rollback copies remain retained.
+
+**Limits.** This fixes a report's hash-to-parse binding, not atomic filesystem
+reads, persisted receipt identity, post-timeout arrival scheduling, engine/HID
+attestation or model calibration. Historical rows are not automatically reread.
+Deploy all three readers together because the captured-byte parser API is shared.
