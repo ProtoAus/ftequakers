@@ -37160,3 +37160,25 @@ explain an observation, not whether a player cheated; detector/device calibratio
 remains separate. An initial partial fault's existing automatic journal-only retry
 preserves the deferred angle observation; a completed explicit full reread can
 replace it. No scheduling behavior was changed to manufacture a new measurement.
+
+## Patch 512 — journal mouse-coverage measurements
+
+**Problem.** A journal's identity summary did not say how many judged frames
+carried counts on the axis actually checked, or how much contiguous checked
+input carried none. Presence alone is not a coverage measurement.
+
+**Change.** tools/hidcheck.py reports relevant-axis mouse frames, no-mouse
+frames, percentage of the judged union, and longest contiguous judged no-mouse
+span. An unjudged frame breaks the span; these are frame counts, not elapsed
+seconds or hardware attestation. tools/rcptcheck.py retains the measurements in
+journal_detail. Existing OK/BLIND/FAULT policy and ranking are unchanged.
+Engine code/binary pins and QC build remain unchanged.
+
+**Verified.** Clean published-base worktree: five grammar-built tests cover
+active input, sparse/no mouse, pitch-only counts, diverted axes, excluded-frame
+interruptions, verbose output, receipt digest/content join and fault precedence.
+Published base fails four of those tests for missing metrics. Existing hidcheck
+263, receipt reader 74 and reccheck 306 checks pass with zero failures. Recording
+snapshot: 269 recordings / 360 sources, 170 fault sources / 173 existing faults;
+all per-source faults identical to baseline. No new fault or threshold claimed.
+Deployment and independent batch review are recorded separately after completion.
