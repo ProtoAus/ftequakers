@@ -37288,8 +37288,8 @@ errors). Existing HID 263, receipt 74 and recording 306 checks pass. Identical
 captured bytes from 269 recordings, 91 views and 124 journals retain every
 pre-existing info value, ordered note/fault list and journal classification:
 173 recording/view faults; journals 37 OK, 84 BLIND, 3 FAULT. This is diagnostic
-preservation, not hardware attestation or field calibration. Batch review and
-deployment will be recorded after they complete.
+preservation, not hardware attestation or field calibration. Completed batch
+review and deployment are recorded below Patch 517.
 
 ## Patch 516 — branch-faithful journal exclusion ledgers
 
@@ -37317,7 +37317,8 @@ six new ledger tests with absent-field errors. Existing HID 263, receipt 74 and
 recording 306 checks remain green. The same captured 269 rec / 91 view / 124 hid
 sources preserve every pre-existing info value, ordered note/fault list and
 journal state. These are emitted-record partitions, not render-frame coverage,
-input attribution or calibration. Batch review/deployment remain pending.
+input attribution or calibration. Completed batch review/deployment are recorded
+below Patch 517.
 
 ## Patch 517 — counts-join opportunity ledger
 
@@ -37345,5 +37346,29 @@ receipt 74 and recording 306 checks pass; the same captured 269 rec / 91 view /
 124 hid sources preserve every pre-existing info value, ordered note/fault list
 and journal state. Opportunities are emitted-record windows, not render frames,
 elapsed time or proof of physical input. Durable receipt metric snapshots require
-separate schema/history-lifecycle work and remain deferred. Batch review and
-deployment will be recorded separately after completion.
+separate schema/history-lifecycle work and remain deferred.
+
+**Completed batch review/deployment — P515–517, 2026-10-06.** An independent
+read-only reviewer inspected the exact published-base-to-final diff, source,
+controls and frozen execution evidence; no issues found, verdict OK. The parent
+also compared 500 deterministic synthetic streams against the published reader:
+every existing result, ordered fault/note and info value was identical, while
+both new denominator equations reconciled. Review is not field calibration.
+
+Frozen product source `5390bc1f8a287b3ff6f4f60ebed04ac7933a5998` passed all 18
+staged Pi reader/application/receipt-lifecycle suites before deployment. The
+paired four-reader set (only hidcheck.py changed) was installed under the sweep
+lock with source and mode-0600 database backups. All destination hashes and
+actual reader/caller import paths matched the frozen source. Installed controls
+ran all 32 diagnostics plus generated signed receipts and SQLite checks against
+the destination readers, on the Pi and both Windows installs. Pi verification
+completed at 21:57:40 UTC; Windows verification at 21:57:41 UTC. Gunicorn master
+remained unchanged and health stayed OK with 12 lobbies. The primary checkout
+branch/HEAD/index and unrelated edits were preserved; its reader overlays were
+accepted only after exact predecessor-byte checks. No engine/progs/config/cvar,
+schema, historical reread, service reload or release was deployed.
+
+The real receipt pass read zero new receipts and reported zero faults. The
+installed signed synthetic controls proved execution and integration, not a
+new live field journal or device calibration. Sparse/no-mouse thresholds,
+server corroboration and durable receipt metric snapshots remain open.
