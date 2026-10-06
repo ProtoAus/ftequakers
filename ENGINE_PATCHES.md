@@ -37290,3 +37290,31 @@ pre-existing info value, ordered note/fault list and journal classification:
 173 recording/view faults; journals 37 OK, 84 BLIND, 3 FAULT. This is diagnostic
 preservation, not hardware attestation or field calibration. Batch review and
 deployment will be recorded after they complete.
+
+## Patch 516 — branch-faithful journal exclusion ledgers
+
+**Problem.** Existing governed/unjudged counts describe different populations
+and cannot explain how each emitted view record participated in the current
+reader. Inferring pitch eligibility independently would invent comparisons
+suppressed by the existing yaw-shaped global gates.
+
+**Change.** tools/hidcheck.py adds separate yaw/pitch exclusion dictionaries.
+For a valid scale-bearing view stream, each dictionary plus that axis's actual
+judged count accounts for every emitted v record once. Normal paths distinguish
+mode routing, predecessor seed, nonlinear/unusable profile, zero scale, missing
+pitch keyboard term, inactive pitch path and possible pitch clamp. Earlier global
+profile/zero-yaw/short-stream gates account for unexecuted records as gates, not
+measured zeroes. Yaw mode takes precedence over pitch mode, then missing pitch
+term. Pre-305 yaw comparisons are not relabelled exclusions. Existing fields,
+comparison predecessors, faults, notes and verdict policy are unchanged.
+No evidence grammar, engine binary pin, QC build, schema or enforcement change.
+
+**Verified.** Twenty-six diagnostic tests pass; seven ledger tests reconcile
+actual comparisons plus exclusions on active, leading/overlapping mode flags,
+mid-run profile/axis-scale changes, clamp, pre-305 grammar, missing/zero pitch
+constant, global gate-order and absent/invalid-profile controls. Patch 515 fails
+six new ledger tests with absent-field errors. Existing HID 263, receipt 74 and
+recording 306 checks remain green. The same captured 269 rec / 91 view / 124 hid
+sources preserve every pre-existing info value, ordered note/fault list and
+journal state. These are emitted-record partitions, not render-frame coverage,
+input attribution or calibration. Batch review/deployment remain pending.
