@@ -36888,6 +36888,74 @@ ready log and health confirmed. No lobby/progs/binary or Windows tooling swap.
 This verifies scheduling/integration, not fleet detector/device calibration.
 
 
+## Patch 507 - schedule views observed missing before a late upload  *(APPLIED - SURFD ONLY, no engine C or game progs)*
+
+**Problem.** A completed receipt could capture no view and never check a final
+upload which arrived later. Journal retries sometimes hashed a later view, but
+neither source-specific readiness nor the late view/recording angle join existed.
+A general full reread could clear findings from sources pruned since observation.
+
+**Change.** Complete full reads persist captured missing-view readiness in existing
+sweep scheduling metadata. A final regular view wakes an identity-checked retry
+which hashes only the view and joins available recording/angles, never HID. Only
+new monotonic view findings move; earlier primary fault reasons and angle FAULT,
+journal columns, signing/observation timestamps, identity and key sightings remain
+unchanged. Co-ready HID/view sources alternate within the same durable attempt
+budget; a separately scheduled view is excluded from that journal retry so I/O in
+one source cannot block the other. Journal-only selection requires current journal
+readiness. If queued source eligibility disappears, consume/rotate the bounded
+attempt without any evidence read, never falling through to an unrelated or full
+reread. Unknown historical readiness and initial partial full reads are not
+backfilled; explicit full reads can establish readiness but
+cannot waive receipt binding. Missing receipts cannot be reconstructed from a
+view; incomplete listing never reaps readiness. No schema/reader/engine pin/tag,
+progs/build/ranked policy or detector thresholds change. Rec-only arrival and
+completed-source replacement scheduling remain separate; BLIND is abstention.
+
+**Verified locally.** Final 268 late-view checks pass, versus 102 failures on
+untouched prior source with the same final suite. The original 232-check candidate
+passed but both independent reviewers found a missed source-selection race which
+could erase a completed journal finding. The expanded suite reproduced it with
+12 failures before correction; disappearance/stat-loss controls now preserve both
+completed OK and FAULT journals and prove stable-view recovery ACTS. Independent
+reader controls discriminate matching OK, legacy BLIND, signed off-angle FAULT,
+digest/unsigned-sibling FAULT and missing recording without an invented angle
+verdict. Controls ACT on receipt
+replacement refusal/restoration, preserved signature/nonce/angle/journal findings,
+row- and source-level I/O fairness, partial measured faults and recovery, captured
+absence races, co-arrival and disappearance, unknown readiness/identity, explicit
+baselines, missing receipt cleanup and incomplete enumeration. Existing identity
+68, late-HID 156 and sweep 262 checks pass. Reader suites: recording 306, HID 263,
+snapshot 74, zero failures; seven other local app suites pass. Explicit runs corpus
+269 recordings, 170 faults, unchanged. Python syntax checks pass; LSP records no
+diagnostics, not a Python type/build proof. No QC/engine rebuild.
+
+**Re-reviewed / published / deployed, 2026-10-06 15:28:23 UTC.** Both resumed
+independent reviewers verified the original blocker is closed and found no
+remaining issues at clean held-still FTESurf `ff9d7d2`. Reviews were source-only;
+parent executed final gates. Published the exact inspected correction. All fourteen
+app suites and three reader suites pass in isolated Pi staging against the final
+commit, including during deployment. Installed only sweep and its new test;
+destination hashes and seven unchanged paired files match that commit. Owner-only
+DB and old-source backups retained. Installed-caller controls ACTED on matching
+late-view pairing, signed off-angle FAULT, identity replacement refusal, unchanged
+journal/key history, source-level I/O fairness, and lost-eligibility deferral with
+completed journal FAULT preserved plus stable-view recovery. Fixtures used only
+temporary files and in-memory DB. Real pass: zero reads/faults; two bound rows and
+zero view-wait observations before/after, no automatic legacy readiness backfill.
+Gunicorn master/CWD preserved, replacement worker and fresh ready line proven;
+health good. No lobby/progs/binary/Windows tooling swap or peer uncommitted ship.
+This verifies scheduling/integration, not detector/device/model calibration.
+
+**Deployment limit found and handled.** The first checked 10.6k script sent as an
+SSH command argument truncated after the copy/early probes; a remote heredoc EOF
+warning and missing final sentinels disproved the helper's zero-exit success line.
+Did not recopy. A finish-only body streamed through SSH stdin reverified all nine
+installed/paired hashes and retained backup mode, ran all remaining controls and
+reload/health/UTC gates, and required their sentinels plus exit zero. AGENT_NOTES
+records the transport pitfall. Source copy and fully verified deployment are
+separate events; the timestamp above is the latter.
+
 ## Patch 508 — floor Source model ambient without amplifying direct light
 
 **Problem.** The minimum-brightness safeguard keyed on the dark-side base but
