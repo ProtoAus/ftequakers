@@ -36838,3 +36838,51 @@ backup attempt was not treated as complete. The longer retry copied verified
 bytes, then private probe setup failed (duplicate temporary table, then missing
 temporary migration). Corrected the helper and resumed only hash checks, probes
 and reload, not another source copy. All final controls acted successfully.
+
+## Patch 505 - check journals that arrive after the wait expires  *(APPLIED - SURFD ONLY, no engine C or game progs)*
+
+**Problem.** Once a missing input journal timed out to ABSENT, the receipt sweep
+never checked a later HID upload. A first observation after the wait expired had
+the same blind spot. ABSENT described an observation but was treated as final.
+
+**Change.** A final regular HID sibling now queues a bound ABSENT receipt through
+the existing identity-checked, budgeted journal-only reread. PENDING still expires
+against the original signing-time observation; absence alone never wakes ABSENT.
+Only journal columns and a monotonic receipt fault may move. Prior recording and
+angle findings, key sightings, identity and timestamps remain unchanged. Unknown
+legacy binding is never reconstructed automatically; missing receipts cannot be
+recovered from journals alone. No schema, reader, engine pin/tag, progs, build
+number, ranked policy or detector thresholds change. Late view/recording arrivals
+and calibration remain separate work; BLIND is abstention, not a clean verdict.
+
+**Verified locally.** 156 late-HID checks, 68 receipt-identity checks and 262 sweep
+checks pass, including in a clean frozen worktree. The same final 156-check
+suite has 36 failures on untouched prior source. Reader controls discriminate OK,
+BLIND, content FAULT, digest mismatch and an unsigned sibling contradiction.
+Controls cover initial
+ABSENT and expired PENDING, silence/partial/directory uploads, replacement receipt
+refusal before joins and original restoration, prior signature/nonce/angle faults,
+pruned recording/view pairs, unknown legacy binding, lost receipts, bounded I/O
+attempts and fair recovery without key recounting. Reader suites: recording 306,
+HID 263, snapshot 74 checks, zero failures; seven other app suites pass. Explicit
+run corpus: 269 recordings, 170 with faults (no fault increase over the prior
+170); the default command also reached an unrelated protected save fixture and
+stopped on PermissionError, so the explicit runs-only pass is the corpus evidence.
+Python syntax checks pass; LSP records no diagnostics, not a Python type/build
+proof. No QC/engine rebuild.
+
+**Reviewed / published / deployed, 2026-10-06 14:28:40 UTC.** Two fresh independent
+source reviewers found no defects at frozen FTESurf `a0c6fe1`, with distinct
+scheduling/control-flow and historical-evidence/attribution lenses. Source-only
+reviews do not attest executable validation; parent ran the commands above.
+Published the exact inspected commit. All thirteen app suites and three reader
+suites pass in isolated Pi staging, both before and during deployment. Installed
+only sweep and its two changed test files under the sweep lock, with owner-only
+DB and per-file backups. All three destination SHA256s and five unchanged paired
+files match the frozen commit. Installed-caller controls ACTED on post-timeout
+HID recovery to OK, replacement rejection without historical changes, no repeated
+completed read and late digest contradiction to receipt/journal FAULT, using only
+temporary files and an in-memory DB. Real pass: zero reads/faults, two bound rows
+before/after. Proven gunicorn master and CWD preserved; replacement worker, fresh
+ready log and health confirmed. No lobby/progs/binary or Windows tooling swap.
+This verifies scheduling/integration, not fleet detector/device calibration.
