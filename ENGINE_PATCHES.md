@@ -36633,3 +36633,52 @@ syntax error (`")" - not a name`) because sprintf needs at least one vararg.  Th
 also produced a wrong comment that had to be retracted: a float index into a struct array
 was blamed for that segfault and is not the cause, which is exactly the failure CLAUDE.md
 forbids -- a claim written down without the measurement that would have shown it false.
+
+## Patch 501 - receipt read failures are retryable, not evidence  *(APPLIED - SURFD ONLY, no engine C or game progs: FTESurf `surfd/sweep.py`, `surfd/test_sweep.py`)*
+
+**Problem.** A settled receipt or sibling-digest I/O failure could become a
+permanent evidence FAULT. Coverage also advanced over unread fresh files, and
+glob silently hid unreadable map directories. Separately, the live sweeper's
+reader API did not match its installed readers: the receipt step was throwing,
+not measuring evidence. Missing observations cannot establish unsigned runs.
+
+**Change.** Defer unmeasured I/O, but retain independent measured faults. Keep
+partial-reread provenance so completing joins after source removal cannot clear
+a recorded fault or erase old measured content. Bound coverage before ALL
+unread fresh files, independently of attempt order; unknown ages or lost
+unobserved identities retain prior coverage. A durable per-path FIFO in existing
+sweepmeta provides bounded progress despite persistent errors, arrivals and
+queue compaction. Explicitly enumerate both directory levels. No schema columns,
+ranked policy, engine pin/tag, build number, rewind state or progs changes.
+
+**Verified.** Clean frozen FTESurf `4f16963`: 262 sweep checks, 0 failed; both
+independent reviewers approve the final source. Tests require independent healthy
+reads, recovery/key binding, persistent fresh/stale failure progress, queue churn,
+unknown first stat, disappearance/restoration, mixed measured faults plus I/O,
+and stale completion after the fault's source disappears. Counterfactuals failed:
+original `6a153f5` against the earlier suite (37); first candidate `f30017e` against
+its expanded suite (20); later candidates `cb878db`/`f9ba85f` against subsequent
+controls (7 each). Different suites, not comparable error rates. Reader suite:
+306 checks, 0 failed. Runs-only corpus: 267 files / 170 with faults before and
+at completion, no increase. The default reader CLI also reaches an existing
+parked save-prefix path raising PermissionError; preserved, not repaired.
+Python syntax checks clean; LSP records no diagnostics. No QC/engine build run.
+
+**Deployed and acted, 2026-10-06 07:52:56 UTC.** Published exact `4f16963`; staged
+nine app suites plus the reader suite on the Pi, all passing. Under the sweep
+lock, backed up the DB owner-only and each existing destination; copied ONLY
+the two sweeper files and the four matching previously committed reader
+dependencies. All six destination Git blob hashes match the commit; paired API
+probe passes. Live control read 1 previously unread receipt, 0 faults: receipt
+rows 19 -> 20, coverage 1791203401 -> 1791272575. Health stayed ok / 12 lobbies;
+no worker/lobby restart or progs swap. Normal entrypoint control with replay/sim
+work disabled exited 0 without a receipt-step exception at 07:56 UTC. Review
+startup initially hit concurrent npm failure; clean tree verified before native
+retry, no external-provider fallback. Peer rewind source/fixtures excluded.
+
+**Limits.** The 19 earlier receipt rows were not automatically reinterpreted;
+the live fleet still supplied no journal in the acted arm. This proves reader
+integration/retry behavior, not device/model calibration or cheat conviction.
+Permanent loss pauses unsigned coverage pending operator reconciliation. A
+repeated reread request does not supersede an in-flight partial reread: finish
+it, then request a new reinterpretation. Other evidence-lifecycle work remains.
