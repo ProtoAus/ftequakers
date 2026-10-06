@@ -37204,3 +37204,29 @@ hidcheck 263, receipt reader 74 and reccheck 306 checks remain green. The same
 269-recording / 360-source snapshot has identical per-source faults (170 fault
 sources / 173 faults). Frame continuity is not elapsed duration or corroboration
 against server warp records. Review/deployment are recorded after completion.
+
+## Patch 514 — explain journal identity abstention
+
+**Problem.** The receipt reader flattened several existing identity abstentions
+to a generic no-judged-frame sentence, losing the reason already observable in
+the journal's profile and records.
+
+**Change.** tools/hidcheck.py supplies explicit identity_blind explanations for
+legacy/no-view journals, no plain-linear profile, zero yaw scale, insufficient
+governed frames and transitions whose recorded profile/limits admit no check.
+tools/rcptcheck.py retains that explanation for a no-fault BLIND result. Existing
+fault and unresolved-frame explanations retain precedence. The no-data reason
+also survives rather than being flattened. No new detector, gate, board badge,
+evidence grammar, engine binary pin or QC build.
+
+**Verified.** Thirteen focused tests pass; Patch 513 fails four abstention tests.
+Existing hidcheck 263, receipt snapshot 74 and reccheck 306 checks pass. Sweep
+integration proves four generated signed receipts ACTED and retained coverage,
+continuity and abstention explanations in SQLite with unchanged verdicts; all
+sweep cases pass. The fixture's former generic-text expectation now asserts the
+specific missing-input reason. Recording snapshot faults remain identical, and
+all 124 local journal verdict/fault pairs match the published baseline exactly
+(37 OK, 84 BLIND, 3 FAULT). Initial focused fixture mistakes (wrong constructor
+key, absent clock attribute and unmatched replacement literal) were corrected;
+they did not require detector changes. This explains abstention, not additional
+coverage or hardware attestation. Review/deployment recorded after completion.
