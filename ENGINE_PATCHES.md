@@ -37242,3 +37242,26 @@ A stronger corpus control feeds each captured source byte string to both the
 published-base and changed readers, retaining SHA-256 provenance privately:
 269 recordings, 91 views and 124 journals have identical per-source faults and
 journal states. These are local preservation controls, not fleet calibration.
+
+**Batch deployment, 2026-10-06 21:21:56 UTC.** Frozen game commit ebf8462;
+13 staged Pi suites pass (four reader/diagnostic suites and nine application
+suites). Only four paired reader/crypto files installed under the sweep lock,
+using install+rename, source backups and an owner-only SQLite backup. All four
+destination hashes match on the Pi and BOTH Windows installs. Installed readers
+and installed Pi caller paths are explicitly asserted; 14 diagnostics tests and
+five generated signed SQLite observations ACT on each install, including the
+bounded FAULT case. Real receipt pass read 0/faulted 0; no historical reread or
+field-journal calibration claimed. Original master and health/12 lobbies stay
+unchanged. No progs, engine binary, cvar, config, schema, service reload or release.
+Primary build57 branch/index is preserved: two previously clean stale reader
+paths receive owned published-source overlays; other owner paths are untouched.
+Backup tag pre-ac514-20261006-211938; primary source backups retained privately.
+
+**Deployment controls corrected before any copy.** First staging attempt passed
+bytes as subprocess stdin instead of input and stopped before tests/copy. The
+second passed all suites but assumed a systemd unit for a pidfile-managed app;
+its pre-copy master guard refused. Corrected guard verifies the actual pidfile
+and live gunicorn command line, then confirms the same master after installation.
+Both failed stages are retained privately; neither installed source or touched
+production DB. The completed arm proves final hashes, installed controls, health
+and UTC rather than treating the earlier staging passes as deployment evidence.
