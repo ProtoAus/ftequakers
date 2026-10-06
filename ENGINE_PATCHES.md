@@ -37503,7 +37503,18 @@ saw absence before ALTER and preserved a historic row, plus forced initial-impor
 failure cleanup. Unfixed P521 fails the concurrency control; its original test
 driver demonstrably leaks on forced import failure, and that negative-control
 fixture was explicitly removed. Final whole-batch source reviews close both
-findings; deployment provenance follows after the frozen batch gate.
+findings.
+
+**Deployed.** Frozen game bf5153d (feature 9d7a9dd, reviewed correction 704f639)
+verified on the Pi at 2026-10-06T23:42:33Z. All 26 Linux staging suites pass,
+including full admin; 25 local suites pass. Full Windows admin retains two
+UDP failures reproduced on untouched published base. Installed authenticated
+storage/API controls acted; all four changed app destinations and paired readers
+hash-match the frozen
+commit, and old verdict metrics remain empty through the backup's id cutoff.
+Source/owner-only SQLite backups retained under the sweep lock; master preserved,
+replacement workers/fresh ready log and health 12 proven. No automatic backfill,
+new real field counts observation, engine/progs/config or policy swap.
 
 ## Patch 522 — authenticated historical similarity observations
 
@@ -37540,4 +37551,19 @@ Live preflight corrected the old missing-tool assumption: the existing tool is a
 exact published predecessor (34c2984), and the current canonical source differs
 only in comments. Collection was already present (two native rows/one stored
 pair); this is a guarded provenance upgrade, not new algorithm/activation or
-calibration. Frozen installed/Linux/deployment verification remains gated.
+calibration.
+
+**Deployed.** Frozen game bf5153d verified on the Pi at 2026-10-06T23:42:33Z
+and both Windows runtime paths at 23:42:32 UTC. All 26 Linux suites pass; installed
+authenticated API and runtime long-comparison/short-unjudgeable controls acted.
+Four app files and the fixed runtime destination match the commit; four paired
+readers remain unchanged. The primary Windows tool was already canonical; the
+second install received it. Source/SQLite rollback copies retained, historical
+metadata and protected tables preserved; bounded real collector stored no new
+pair. Master-preserving worker replacement, fresh ready log and health 12 proven.
+Two private gates needed finish-only correction: successful import returns a
+loaded path, and an unbounded board snapshot was killed for an unestablished
+cause. Frozen destinations/backups were rechecked without recopy; the replacement
+gate denies protected-table writes and compares bounded metadata/scalar counts.
+No new real similarity sample, complete coverage, calibration or live browser
+acceptance claimed; human layout checks remain in lextest.md.
