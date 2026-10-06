@@ -37470,3 +37470,28 @@ preserved, new worker/ready log and health (12 lobbies) proved. Completion
 HEAD/index and unrelated peer work preserved. Raw deployment logs/backups remain
 private. Real receipt read 0/faults 0; no new field calibration or live human
 browser acceptance claimed. No automatic historical backfill or policy change.
+
+## Patch 521 — retain verifier counts observations per attempt
+
+**Problem.** Sweep discards the existing engine's input-ring/view-read counts
+summary, leaving no durable opportunity count beside a verification attempt.
+
+**Change.** Bind narrow typed counts observations only within the engine's
+matching pm_recsim filename section and terminating VERIFY filename. Malformed,
+duplicate, missing, mismatched or truncated sections are unavailable. Persist
+versioned JSON in an additive empty-default verdict column, without backfill.
+Authenticated detail and text-only DOM show record/disagreement opportunities;
+no-records means unmeasured agreement, not honest input. Existing VERIFY reasons,
+verdicts, checked-state/badges, recorder/engine format and policy are unchanged.
+
+**Verified.** Five new synthetic section/storage/API/actual Node DOM tests pass;
+published base fails all five. Distinct multifile counts, mismatch, early REFUSE,
+missing header, duplicate/malformed/reordered/truncated sections, bounded integer
+input, no VERIFY/ERROR and historical/unmigrated rows exercised. Runner ACTED;
+old verdict/reason/ticks and checked state asserted unchanged. Idempotent migration
+leaves historical rows empty. Existing sweep, admin/receipt metrics, web, board,
+surfd, recplot, join, replays, evidence and angle-detail suites pass. Same captured
+269 rec/91 view/124 HID observations and faults 164/9/3 remain identical. Synthetic
+owned SQLite/log handles/homes cleaned with explicit failure. Source printer
+contract inspected; no engine build or live new field observation claimed.
+Independent final review and frozen deployment remain batch-gated.
