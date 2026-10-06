@@ -36913,3 +36913,45 @@ predicted. Plugin build has three pre-existing warnings in img_tth/mat_vmt and
 zero new ones; clangd still reports the pre-existing plugin-header configuration
 errors, not a compiler failure. This does not fix wall occlusion or claim Source
 rendering parity; those are a separate workstream.
+
+
+## Patch 509 — trace local model lights against opaque world geometry
+
+**Problem.** PVS membership was the final light-visibility test, so local lights
+leaked through walls. Source's VRAD and client worldlight code use real rays.
+Using movement's collision tree would include the receiving prop itself and
+make lighting depend on movement-only collision flags/cvars.
+
+**Change.** Build a map-owned, unregistered light-trace model over a separate
+BIH: original Source MASK_OPAQUE world brushes plus opaque, ray-collidable
+displacements; no props or inline movers. Preserve the movement tree. Trace
+contributing local lights after PVS/attenuation/cone rejection; reject hits,
+startsolid and allsolid, and offset surface-light endpoints off the emitter.
+Default hl2_lt_occlusion 1; live 0 is the PVS-only control. The prop cache key
+includes this toggle. hl2_lightprobe reports candidates, trace verdicts and the
+linear six-face direct cube. Missing trace infrastructure fails closed.
+
+**Verified.** Production-helper C harness: 21 checks with GCC -Wall -Wextra
+-Werror, zero failures, including world-only selection, movement-tree retention,
+NOHULL versus NORAY, emitter endpoint, hit/startsolid/allsolid and missing-tree
+controls. The 68 ambient-floor checks still pass. Isolated surf_tensor2 runtime:
+18 probe cubes reconstruct only from visible lights; on/off arms retain exactly
+the same candidate incident RGB/directions. Independent world-brush oracle:
+301 rays, 121 blocked and 180 clear agree, zero disagreements. Second-camera
+architectural-frame ROI changes 58.95 PVS-only -> 37.35 occluded -> 28.27
+bounce-only; restoration returns 37.35. Adjacent world-ceiling stays 38.66;
+first-camera visible-light wall stays 53.90 with occlusion on/off. Three
+pre-existing compiler warnings, zero new ones; existing clangd plugin-header
+configuration errors remain. Graded runtime rays do not independently prove a
+displacement shadow; the helper verifies displacement selection instead.
+
+**Source assessment / limits.** HL2_MODEL_LIGHTING.md records SDK shader and
+VRAD references and within-bounds spatial probes. Source retains six ambient
+faces and evaluates selected local-light distance/direction at vertex world
+positions; our usual path collapses a combined cube at one sample to two slots.
+Prop 46 spans 9152 units: two within-bounds point probes differ 3.85x in +Y
+direct luminance. Source's material-selected half-Lambert is squared; our
+split-fold ramp is not. World occlusion is not per-vertex lighting or full
+Source parity. No prop/mover shadow meshes, sky tracing or Source screenshot
+oracle is claimed. Public BACKLOG keeps the narrower remaining approximation;
+matched visual judgement is in lextest.md.
