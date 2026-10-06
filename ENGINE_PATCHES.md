@@ -37372,3 +37372,25 @@ The real receipt pass read zero new receipts and reported zero faults. The
 installed signed synthetic controls proved execution and integration, not a
 new live field journal or device calibration. Sparse/no-mouse thresholds,
 server corroboration and durable receipt metric snapshots remain open.
+
+## Patch 518 — typed receipt journal observations
+
+**Problem.** Bounded receipt prose drops axis coverage, exclusion reasons and
+counts-join opportunities; callers cannot retain the actual measurements.
+
+**Change.** Receipt exposes a version-1 numeric allowlist snapshot from the same
+captured, digest-checked HID bytes. Includes union/axis coverage, violations,
+unresolved spans, fixed exclusion ledgers and counts-join opportunities/profile.
+Missing keys remain absent; missing/unread/digest-mismatched journals have no
+snapshot. No device IDs, nonce, paths or diagnostic prose are copied. Store-only:
+no verdict, threshold, signature, engine, progs or ranked-policy changes.
+
+**Verified.** Six new reader tests pass; published base fails all six. Active
+mouse and counts-join controls, measured zero, abstention, FAULT/BLIND, capture
+replacement, allowlist and unavailable-source controls pass. Existing 32 journal
+diagnostic tests, 263 HID checks, 74 receipt checks and 306 recording checks pass.
+Captured-byte corpus: 269 recordings/91 views/124 journals; existing faults,
+notes, metrics and journal states identical. Recording faults remain 164; view
+faults 9; journal faults 3. LSP reports no recorded diagnostics (not a Python
+runtime proof). SQLite persistence/admin display and field calibration are not
+claimed by this reader slice. Deployment recorded after the batch gate.
