@@ -36715,8 +36715,25 @@ execution. Cold loads restore pictures but do not reconstruct historical scalar
 snapshots. Rendered alignment/camera feel still needs the human checks in
 `lextest.md`. No engine code, evidence grammar, build-number or engine-pin change.
 The number was reserved before the later reader/surfd patches; ENGINE.txt keeps
-the maximum patch requirement. Publication/deployment provenance follows in the
-verified delivery record rather than being inferred from these local controls.
+the maximum patch requirement.
+
+**DEPLOYED 2026-10-06 UTC.** Published game `87fc699` and patch entry
+`965209cf3`. Only the clean product commit's progs were shipped. The default LAN
+SSH query timed out before upload; the documented WAN deployment then proved
+all 12 active lobbies had directory rows with zero players, verified both
+uploaded/live hashes, kept `.prev`, and restarted all 12 successfully. Remote
+hashes were rechecked; at 12:36 UTC, authenticated full-serverinfo queries on
+all 12 advertised the expected CSQC checksum `0x10381299`. Plain `status` is
+insufficient because its serverinfo is truncated; full replies also carry
+console colour prefixes, which the reader must strip. At 12:38 UTC, a real
+client joined a live lobby and observed a nonzero echoed terminal save ticket,
+new client console output, and a server timer answer without lost ACK. Main
+lobby policy remained intact; no ranked-run or human camera acceptance claimed.
+At 12:18 UTC the primary Windows install and the separate FTESurf mod folder
+under the second install matched all three product progs and the seeded CSQC
+cache. The second install defaults to Quakers: its manifest/game were not
+replaced. Existing primary progs were kept as `.prev`; no owner's game was
+killed. Private generated identities/logs/provenance remain outside public Git.
 
 ## Patch 503 - hash and content analysis share one evidence observation  *(APPLIED - READERS ONLY, no engine C or game progs)*
 
