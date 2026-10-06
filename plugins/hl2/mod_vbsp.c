@@ -7073,6 +7073,7 @@ there.  The same sharp edge already exists on r_glsl_rtenvsphere (vertexlit.glsl
 :283) and is inherited, not introduced.
 */
 static cvar_t *hl2_lt_fold;
+static cvar_t *hl2_lt_min;
 /*
 FTESurf Patch 233: WHAT IS THIS NAME, AND WILL I EVER SEE IT.
 
@@ -8753,8 +8754,11 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//the right knob for a live A/B within one arm.
 			static int cubelight_live = -1;
 			int wantcube = (hl2_cubelight && hl2_cubelight->ival) ? 1 : 0;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live)
+			static float min_live = -1;
+			float wantmin = hl2_lt_min ? hl2_lt_min->value : 16.0f;
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live)
 			{
+				min_live = wantmin;
 				cubelight_live = wantcube;
 				fold_live = wantfold;
 				worldlight_live = wantwl;
@@ -9988,6 +9992,21 @@ static void VBSP_CubeAlongDir (vec3_t cube[6], const vec3_t dir, vec3_t out)
 			VectorMA(out, w, cube[i*2 + ((dir[i] >= 0)?0:1)], out);
 	}
 }
+//The former scale + desaturate of the base simplifies to a neutral additive lift.
+//res_diffuse is the shader's ambient BASE; res_ambient is its directional range.
+static void VBSP_FloorModelAmbient(vec3_t base, float minimum)
+{
+	float lum = 0.3f*base[0] + 0.59f*base[1] + 0.11f*base[2];
+	int c;
+	if (minimum <= 0 || lum >= minimum)
+		return;
+	if (lum <= 0.001f)
+		VectorSet(base, minimum, minimum, minimum);
+	else
+		for (c = 0; c < 3; c++)
+			base[c] += minimum - lum;
+}
+
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
@@ -10337,73 +10356,8 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 	setting: near-black leaf ambient renders near-black.  That is only a sensible
 	option now because Patch 152 made the cube itself arrive correct.
 	*/
-	{
-		static cvar_t *minamb;
-		float m, lum;
-		//16, not 64.  This exists so nothing renders pure black, and that is all
-		//it should do.  At 64 it was lifting 486 of surf_666's 653 props and was
-		//effectively the map's lighting -- which it could only be because the
-		//ambient cube was arriving as zeros and, once that was fixed, arriving
-		//un-gamma-encoded and ten times too dark.  With both fixed the real
-		//values average 60/255 and the floor goes back to being a floor.
-		if (!minamb) minamb = cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient on Source/HL2 maps (0-255), applied by SCALING the colour rather than clamping each channel -- a per-channel clamp desaturates, which is what made every prop in a dim leaf render pale grey. 0 = off.", "");
-		m = minamb->value;
-		if (m > 0)
-		{
-			/*
-			FTESurf Patch 304: WHICH VECTOR THE FLOOR IS ALLOWED TO ASK.
-
-			This floor exists so nothing renders pure black, so it has to key on
-			the darkest value the model will actually show.  Under the legacy fold
-			that is res_ambient, which is the six-face mean and a fair proxy for
-			"how bright is this sample".  Under the split fold res_ambient is the
-			directional AMPLITUDE -- a difference, not a level -- and it is
-			legitimately near zero for a bright, evenly-lit sample.  Reading it
-			there would send a perfectly well-lit prop down the lum<=0.001 branch
-			and clamp it flat to 16, and the lum<m branch would multiply a bright
-			base by m/amp.  The darkest value the split fold can render is base,
-			at w(n)=0, which is res_diffuse -- so that is what it asks.
-
-			Both vectors are still scaled by the SAME factor, which is what keeps
-			base:amp constant and so lifts the level without flattening the
-			shading.  Only the question changes, not the remedy.
-			*/
-			float *level = (hl2_lt_fold && hl2_lt_fold->ival && prv->fold_prop) ? res_diffuse : res_ambient;
-			lum = 0.3f*level[0] + 0.59f*level[1] + 0.11f*level[2];
-			if (lum <= 0.001f)
-			{	//no colour to preserve.
-				VectorSet(res_diffuse, m, m, m);
-				//...but under the split fold the directional half is a difference
-				//that may be perfectly good -- a prop lit hard from one side has a
-				//genuinely black unlit face -- and overwriting it with the floor
-				//would delete the shading instead of flooring it.
-				if (level == res_ambient)
-					VectorSet(res_ambient, m, m, m);
-			}
-			else if (lum < m)
-			{
-				//t is how much of the floor the sample reached, and so how much
-				//of its hue is signal rather than mantissa noise.  Each vector
-				//is desaturated toward ITS OWN post-lift grey, not toward m --
-				//res_diffuse carries the directional term and lands at a
-				//different luminance, and pulling it to the ambient's grey
-				//would flatten the shading as well as the colour.
-				float t = lum/m, k;
-				float ga, gd;
-				int c;
-				VectorScale(res_ambient, m/lum, res_ambient);
-				VectorScale(res_diffuse, m/lum, res_diffuse);
-				ga = 0.3f*res_ambient[0] + 0.59f*res_ambient[1] + 0.11f*res_ambient[2];
-				gd = 0.3f*res_diffuse[0] + 0.59f*res_diffuse[1] + 0.11f*res_diffuse[2];
-				k = 1.0f - t;
-				for (c = 0; c < 3; c++)
-				{
-					res_ambient[c] = res_ambient[c]*t + ga*k;
-					res_diffuse[c] = res_diffuse[c]*t + gd*k;
-				}
-			}
-		}
-	}
+	//Patch 508: floor only the shader base, in both folds. Never scale the range.
+	VBSP_FloorModelAmbient(res_diffuse, hl2_lt_min ? hl2_lt_min->value : 16.0f);
 }
 #else
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
@@ -11961,7 +11915,7 @@ qboolean VBSP_Init(void)
 		it.  The menu marks them * for exactly that reason.
 		*/
 		cvarfuncs->GetNVFDG("hl2_lt_baked_scale", "2", 0, "Overbright applied to VRAD's baked static prop lighting. 2 is the same factor gl_overbright already gives the world lightmap and which model lighting has never had; 1 is the raw baked value, as VRAD wrote it.", MAPOPTIONS);
-		cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient on Source/HL2 maps (0-255), applied by SCALING the colour rather than clamping each channel -- a per-channel clamp desaturates, which is what made every prop in a dim leaf render pale grey. 0 = off.", MAPOPTIONS);
+		hl2_lt_min = cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient base on Source/HL2 maps (0-255). Lift only the base toward neutral grey; never amplify the directional light. Live on unbaked props. 0 = off.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_scale", "255", 0, "Model-lighting brightness scale, applied after the encode. 255 maps a fully-lit luxel to white.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_srgb_mag", "1", 0, "sRGB-encode model lighting (0 = plain linear scale by hl2_lt_scale). Source's ambient cube is LINEAR light and needs a gamma encode to be displayed; a multiply is not one.", MAPOPTIONS);
 		//FTESurf Patch 302.  A plain cvar, not CVAR_MAPLATCH: the lump is loaded

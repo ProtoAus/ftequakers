@@ -36886,3 +36886,30 @@ temporary files and an in-memory DB. Real pass: zero reads/faults, two bound row
 before/after. Proven gunicorn master and CWD preserved; replacement worker, fresh
 ready log and health confirmed. No lobby/progs/binary or Windows tooling swap.
 This verifies scheduling/integration, not fleet detector/device calibration.
+
+
+## Patch 508 — floor Source model ambient without amplifying direct light
+
+**Problem.** The minimum-brightness safeguard keyed on the dark-side base but
+scaled and desaturated both lighting slots. On surf_tensor2's stage1_detail02
+assembly, a base near 4/255 multiplied the lit-side range roughly 3.7x. Changing
+hl2_lt_min alone also left cached prop lighting untouched.
+
+**Change.** VBSP_FloorModelAmbient lifts only the shader ambient base toward
+neutral grey; its additive form equals the former base scale/desaturation when
+the luminance is nonzero. Both folds use the base. The directional amplitude and
+direction are untouched, even for a zero base. Register the minimum eagerly and
+include its float value in the prop cache key. Baked vertex colours stay exempt.
+
+**Verified.** tools/p508ambient.py compiles the production helper with GCC
+-Wall -Wextra -Werror: 68 arithmetic checks plus production call/cache assertions,
+zero failures. An isolated plugin build and the owner's first saved camera show
+base 13.8/16.8/17.7 with min 16 versus 2.0/5.0/6.0 with min 0; directional
+94.8/114.3/127.3 is identical. Min changes acted without a worldlight toggle.
+A fixed wall ROI (400,260)-(800,345) falls from the old 191.96 to 53.90; min 0
+is 49.15, bounce-only 26.82, restoring 16 reproduces 53.90. Adjacent world-ceiling
+control remains 40.14. Second-camera models do not change with the floor, as
+predicted. Plugin build has three pre-existing warnings in img_tth/mat_vmt and
+zero new ones; clangd still reports the pre-existing plugin-header configuration
+errors, not a compiler failure. This does not fix wall occlusion or claim Source
+rendering parity; those are a separate workstream.
