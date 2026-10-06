@@ -37318,3 +37318,32 @@ recording 306 checks remain green. The same captured 269 rec / 91 view / 124 hid
 sources preserve every pre-existing info value, ordered note/fault list and
 journal state. These are emitted-record partitions, not render-frame coverage,
 input attribution or calibration. Batch review/deployment remain pending.
+
+## Patch 517 — counts-join opportunity ledger
+
+**Problem.** Counts-join checked/broken/transformed totals omitted the initial
+exemption and absolute-input windows. The transform count also overlaps checked
+and unjoinable populations; it is not another disjoint denominator.
+
+**Change.** tools/hidcheck.py publishes total emitted view windows, initial
+exemption, absolute-input unjoinable windows, transformed checked/unjoinable
+subtotals and availability of the declared-transform profile. Total windows =
+initial exemption + checked + unjoinable. The two transform subtotals sum to the
+existing transform total, excluding the same initial window. No-window streams
+omit the ledger rather than inventing a measured zero or a known profile.
+Existing join tolerance, first-window exemption, fault/note policy and legacy
+pre-312 downgrade stay unchanged. No evidence grammar, engine binary pin, QC
+build, schema, receipt storage or enforcement change.
+
+**Verified.** Thirty-two diagnostic tests pass. Six new join tests prove normal
+and initial-mismatch controls, overlapping absolute/transformed windows, wholly
+unjoinable streams, single seeds, current-profile faults versus legacy notes,
+no-window absence and verbose output. Source angle arithmetic can hold while the
+counts join breaks; that existing distinction is asserted. Patch 516 fails the
+new ledger controls (one assertion, four absent-field errors). Existing HID 263,
+receipt 74 and recording 306 checks pass; the same captured 269 rec / 91 view /
+124 hid sources preserve every pre-existing info value, ordered note/fault list
+and journal state. Opportunities are emitted-record windows, not render frames,
+elapsed time or proof of physical input. Durable receipt metric snapshots require
+separate schema/history-lifecycle work and remain deferred. Batch review and
+deployment will be recorded separately after completion.
