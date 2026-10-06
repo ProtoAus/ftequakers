@@ -13,7 +13,9 @@
 //modifier: STRENGTH_REFL	(distortion strength - 0.1 = fairly gentle, 0.2 = big waves)
 //modifier: STRENGTH_REFL	(distortion strength - 0.1 = fairly gentle, 0.2 = big waves)
 //modifier: FRESNEL_EXP	(5=water)
-//modifier: TXSCALE		(wave size - 0.2)
+//modifier: TXSCALE1		(normal UV tiling, not animation speed)
+//modifier: MULTITEXTURE	(Source's extra rotated/scaled normal layers)
+//modifier: SCROLL1/SCROLL2	(signed UV units per second)
 //modifier: RIPPLEMAP		(s_t3 contains a ripplemap
 //modifier: TINT_REFR		(some colour value)
 //modifier: TINT_REFL		(some colour value)
@@ -60,8 +62,11 @@
 #ifndef TXSCALE1
 #define TXSCALE1 TXSCALE
 #endif
-#ifndef TXSCALE2
-#define TXSCALE2 TXSCALE
+#ifndef SCROLL1
+#define SCROLL1 0.0,0.0
+#endif
+#ifndef SCROLL2
+#define SCROLL2 0.0,0.0
 #endif
 #ifndef TINT_REFR
 #define TINT_REFR TINT
@@ -77,15 +82,22 @@ varying vec2 tc;
 varying vec4 tf;
 varying vec3 norm;
 varying vec3 eye;
+varying mat3 tangenttoworld;
 
 #ifdef VERTEX_SHADER
 void main (void)
 {
 	tc = v_texcoord.st;
 	tf = ftetransform();
-	norm = v_normal;
-	eye = e_eyepos - v_position.xyz;
-	gl_Position = ftetransform();
+	norm = normalize((m_model * vec4(v_normal, 0.0)).xyz);
+	eye = (m_model * vec4(e_eyepos - v_position.xyz, 0.0)).xyz;
+	// VBSP negates the texture V axis when building its T attribute.
+	// Undo that convention for Source tangent-space RGB normals.
+	tangenttoworld = mat3(
+		normalize((m_model * vec4(v_svector, 0.0)).xyz),
+		normalize((m_model * vec4(-v_tvector, 0.0)).xyz),
+		norm);
+	gl_Position = tf;
 }
 #endif
 
@@ -104,18 +116,16 @@ void main (void)
 	//hack the texture coords slightly so that there are less obvious gaps
 	stc.t -= 1.5*norm.z/1080.0;
 
-#if 0//def USEMODS
-	ntc = tc;
-	n = texture2D(s_normalmap, ntc).xyz - 0.5;
-#else
-	//apply q1-style warp, just for kicks
-	ntc.s = tc.s + sin(tc.t+e_time)*0.125;
-	ntc.t = tc.t + sin(tc.s+e_time)*0.125;
-
-	//generate the two wave patterns from the normalmap
-	n = (texture2D(s_normalmap, vec2(TXSCALE1)*tc + vec2(e_time*0.1, 0.0)).xyz);
-	n += (texture2D(s_normalmap, vec2(TXSCALE2)*tc - vec2(0, e_time*0.097)).xyz);
-	n -= 1.0 - 4.0/256.0;
+	ntc = tc * float(TXSCALE1);
+	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
+	// the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
+	n = texture2D(s_normalmap, ntc).xyz * 2.0 - 1.0;
+#ifdef MULTITEXTURE
+	// Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap.
+	vec2 tc1 = vec2(ntc.x + ntc.y, ntc.y - ntc.x) * 0.1;
+	vec3 n1 = texture2D(s_normalmap, tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
+	vec3 n2 = texture2D(s_normalmap, ntc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
+	n = (n + n1 + n2) / 3.0;
 #endif
 
 #ifdef RIPPLEMAP
@@ -123,8 +133,10 @@ void main (void)
 #endif
 	n = normalize(n);
 
-	//the fresnel term decides how transparent the water should be
-	fres = pow(1.0-abs(dot(n, normalize(eye))), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);
+	// Fresnel and cube lookup must use the SAME world-space normal/view.
+	vec3 worldnormal = normalize(tangenttoworld * n);
+	vec3 viewdir = normalize(eye);
+	fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);
 
 #ifdef DEPTH
 	float far = #include "cvar/gl_maxdist";
@@ -163,7 +175,7 @@ void main (void)
 #endif
 
 #ifdef LQWATER
-	refl = textureCube(s_reflectcube, n).rgb;// * vec3(TINT_REFL);
+	refl = textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL);
 #else
 	refl = texture2D(s_reflect, stc - n.st*float(STRENGTH_REFL)*float(r_glsl_turbscale_reflect)).rgb * vec3(TINT_REFL);
 #endif

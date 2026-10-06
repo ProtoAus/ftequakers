@@ -37541,3 +37541,46 @@ exact published predecessor (34c2984), and the current canonical source differs
 only in comments. Collection was already present (two native rows/one stored
 pair); this is a guarded provenance upgrade, not new algorithm/activation or
 calibration. Frozen installed/Linux/deployment verification remains gated.
+
+## Patch 523 — capture-free Source water and honest material menu
+
+**Problem.** Water mode 1 still renders a refraction view. Cheap reflections use
+an unmatched normal/eye frame, omit reflection tint and discard signed authored
+scroll vectors. Plugin cvar registration masks CVAR_SHADERSYSTEM, so switching
+water policy leaves cached materials unchanged. The Graphics menu calls glass 0
+opaque although its shader blends, and promises immediate/reload application
+that several cached material/BSP-time settings cannot deliver.
+
+**Change.** Add opt-in `hl2_water 4`: animated normal layers, fog-colour/tint
+approximation, view-dependent baked-cubemap reflection and ordinary alpha
+blending, with no reflection/refraction framebuffer capture or depth sampler.
+Use the shared signed-scroll/tangent-frame calculation in modes 1/2, honor cheap
+reflection tint, and embed the budget shader through the existing generator.
+The renderer owns only water's shader-policy flag; do not widen plugin flag
+semantics generally. Default remains 3; flat/dither options remain available.
+The menu cycles 0..4, labels budget/no captures and glass 0 Translucent, marks
+other cached material policies for rebuild/load, and warns retry may reuse data.
+No particle, glass shader, recorder, movement or server policy change.
+
+**Verified.** Clean baseline/candidate native client/server/plugin builds have
+zero new warning identities (existing Make pattern and source warnings remain);
+all three QC modules compile with zero warnings. Uninstrumented production
+runtime completes 20/20 same-map transitions on surf_tensor2/surf_garden with
+acting camera frames/screenshots and expected budget/capture-sampler controls.
+An isolated rig using the actual menu/font source validates all 28 value/name
+rows, default 3 before/after startup, 3->4->0->1->2->3->4 via the real menu/seta
+queue, explicit archive save and fresh-process restoration, including early
+startup value 4. Complete product CSQC also exercises that cycle and inspected
+1280x720 layout. Separate diagnostic controls observed nonzero consumer index
+submission and zero budget captures, with modes 1/2 proving live captures acted;
+those hooks are NOT in the production build. Source-contract tests retain the
+menu/default/no-capture boundaries.
+
+**Limits.** Budget water is an approximation, not depth-correct fog, Source
+parity or live reflection. Missing normal/cubemap paths degrade explicitly;
+map cubemap substitution and underwater rendering retain existing engine limits.
+Local fixed-camera wall-frame observations are not GPU timings or portable FPS
+gains. Full/cheap capture sharing, resolution/depth fog, per-row acting graphics
+coverage and a rendered glass baseline remain follow-ups. This entry is source
+and isolated-runtime verification; installation/fleet states are recorded
+separately and no Linux renderer build or Source reference launch is claimed.

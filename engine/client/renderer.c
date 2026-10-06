@@ -845,6 +845,13 @@ cvar_t r_glsl_turbscale_refract				= CVARFD  ("r_glsl_turbscale_refract", "1", C
 cvar_t r_glsl_emissive						= CVARFD  ("r_glsl_emissive", "1", CVAR_SHADERSYSTEM, "When set, specifies that the _luma or _glow textures are emissive... When 0 they are taken as a mask for the proportion of the lightmap that will apply (for q2e compat, has issues with overbrights).");
 
 cvar_t r_fastturbcolour						= CVARFD ("r_fastturbcolour", "0.1 0.2 0.3", CVAR_ARCHIVE, "The colour to use for water surfaces draw with r_waterstyle 0.");
+// Renderer-owned opt-in: the plugin API deliberately masks CVAR_SHADERSYSTEM,
+// and Cvar_Get2 does not add it to an existing variable. Keep the policy narrow.
+static cvar_t hl2_water_shaderpolicy = CVARFD("hl2_water", "3", CVAR_SHADERSYSTEM,
+	"Source water mode. 0: flat translucent, no captures. 1: live refraction with baked reflection. "
+	"2: live refraction/reflection. 3: depth-writing dither (default). "
+	"4: budget animated, translucent fog colour/normals/approximate baked reflection, no captures or screen copy. "
+	"Budget water is not depth-correct or Source-exact. Changes rebuild materials without restarting the map.");
 cvar_t r_waterstyle							= CVARFD ("r_waterstyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Changes how water, and teleporters are drawn. Possible values are:\n0: fastturb-style block colour.\n1: regular q1-style water.\n2: refraction(ripply and transparent)\n3: refraction with reflection at an angle\n4: ripplemapped without reflections (requires particle effects)\n5: ripples+reflections");
 cvar_t r_slimestyle							= CVARFD ("r_slimestyle", "", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only slime. If empty, defers to r_waterstyle.");
 cvar_t r_lavastyle							= CVARFD ("r_lavastyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only lava. If empty, defers to r_waterstyle.");
@@ -1427,6 +1434,7 @@ void Renderer_Init(void)
 
 	Cvar_Register (&r_fastturbcolour, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterstyle, GRAPHICALNICETIES);
+	Cvar_Register (&hl2_water_shaderpolicy, GRAPHICALNICETIES);
 	Cvar_Register (&r_lavastyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimestyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_telestyle, GRAPHICALNICETIES);

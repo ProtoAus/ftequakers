@@ -24,6 +24,7 @@ was reachable from a cvar.  Now:
                1  refraction only, no reflection
                2  refraction + reflection, which is what shipped
                3  DITHERED FLAT  (DEFAULT since build 12)
+               4  budget animated -- translucent normals/baked cube, no captures
 
   hl2_refract  0  glass draws as plain translucency, no framebuffer copy
                1  Source's refraction
@@ -204,7 +205,7 @@ and it fits progargs[256] with 57 bytes to spare, so the SHADER is not truncated
 only this copy of it was.  A diagnostic that lies about the thing it exists to
 show is worse than no diagnostic, hence the exact size and this note.
 */
-char vmt_stat_waterargs[256];
+char vmt_stat_waterargs[1024];	//Match progargs, including signed water scroll vectors.
 
 /*
 FTESurf Patch 254: the map's underwater fog, for the engine's FOGTYPE_WATER slot.
@@ -891,6 +892,7 @@ typedef struct
 	qboolean fogcolor_set;
 	float waterscale;		//$scale, the normal-map tiling
 	qboolean waterscale_set;
+	float waterscroll1[2], waterscroll2[2];	//signed normal-layer UV velocity
 	char *blendfunc;
 	qboolean alphatest;
 	qboolean culldisable;
@@ -2046,17 +2048,9 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->fogcolor_set = VMT_ParseColour(value, st->fogcolor_f);
 		}
 		/*
-		FTESurf Patch 251: $scale, the Water shader's normal-map tiling -> TXSCALE.
-
-		Hammer writes it as "[1 1]", "[.5 .5]" or a bare number, and only the first
-		component is ever used here: water.glsl applies TXSCALE1/TXSCALE2 as
-		vec2(TXSCALE1)*tc, a single scalar per wave layer, so a material asking for
-		different S and T tiling cannot be expressed and the first component is the
-		closer of the two answers.
-
-		Parsed inside the Water arm's neighbourhood rather than globally: $scale
-		means something different on a VertexlitGeneric (a texture transform), and
-		this must not start claiming to implement that.
+		Water-only legacy $scale -> scalar normal UV tiling (first component).
+		Keep that compatibility independent of signed scroll velocity. This is
+		not an implementation of Source's $bumptransform or anisotropic tiling.
 		*/
 		else if (!Q_strcasecmp(key, "$scale") && !Q_strcasecmp(st->type, "Water"))
 		{
@@ -2080,9 +2074,9 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$bottommaterial"))
 			Q_strlcpy(st->bottommaterial, value, sizeof(st->bottommaterial));	//FTESurf Patch 233, see VMT_BottomRecord
 		else if (!Q_strcasecmp(key, "$scroll1"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			VMT_ParseVec3(value, st->waterscroll1, 2);
 		else if (!Q_strcasecmp(key, "$scroll2"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			VMT_ParseVec3(value, st->waterscroll2, 2);
 
 		else if (*key == '%')
 			;	//editor lines
@@ -2243,7 +2237,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	modes are whole-program selections and an alpha mask on a water plane means
 	nothing.
 	*/
-	char progargs[256];
+	char progargs[1024];
 
 	*progargs = 0;
 
@@ -3514,7 +3508,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	{
 		int wmode = hl2_water?hl2_water->ival:3;
 		if (wmode < 0) wmode = 0;
-		if (wmode > 3) wmode = 3;
+		if (wmode > 4) wmode = 4;
 		vmt_stat_water++;
 
 		/*
@@ -3593,7 +3587,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		which uses none of this.  Everything below changes hl2_water 1 and 2 only.
 		*/
 		{
-			char t[192];
+			char t[256];
 			if (st->refractamount_set)
 			{
 				Q_snprintfz(t, sizeof(t), "#STRENGTH_REFR=%f", st->refractamount);
@@ -3624,11 +3618,14 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			}
 			if (st->waterscale_set)
 			{
-				//Both layers from the one key: Source has a single $scale and the
-				//shader's two are its two wave layers, which are meant to tile
-				//together and drift apart only in time (the +e_time offsets differ).
-				Q_snprintfz(t, sizeof(t), "#TXSCALE1=%f#TXSCALE2=%f",
-					st->waterscale, st->waterscale);
+				Q_snprintfz(t, sizeof(t), "#TXSCALE1=%f", st->waterscale);
+				Q_strlcat(progargs, t, sizeof(progargs));
+			}
+			// Velocity is independent of tiling. Any active axis enables the
+			// extra Source-style normal layers (including signed/Y-only scroll).
+			if (st->waterscroll1[0] || st->waterscroll1[1] || st->waterscroll2[0] || st->waterscroll2[1])
+			{
+				Q_snprintfz(t, sizeof(t), "#MULTITEXTURE#SCROLL1=%f,%f#SCROLL2=%f,%f", st->waterscroll1[0], st->waterscroll1[1], st->waterscroll2[0], st->waterscroll2[1]);
 				Q_strlcat(progargs, t, sizeof(progargs));
 			}
 			//What the census will print. See the note beside vmt_stat_waterargs
@@ -3637,7 +3634,20 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				sizeof(vmt_stat_waterargs));
 		}
 
-		if (wmode == 3)
+		if (wmode == 4)
+		{
+			// Separate program: no render-target samplers or capture-triggering maps.
+			// A literal env_cubemap can use the existing baked-cube sentinel path.
+			if (!Q_strcasecmp(st->envmap, "env_cubemap") && (!hl2_envcubemap || hl2_envcubemap->ival))
+				st->wantenvcube = 1;
+			Q_strlcatfz(script, &offset, sizeof(script),
+				"\tprogram \"vmt/waterbudget%s\"\n"
+				"\tprogblendfunc blend\n", progargs);
+			if (*st->normalmap)
+				Q_strlcatfz(script, &offset, sizeof(script), "\tnormalmap \"%s%s.vtf\"\n",
+					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+		}
+		else if (wmode == 3)
 		{
 			/*
 			Dithered flat -- the default since build 12, and the cheapest of the
@@ -3706,7 +3716,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		load two VTFs per water material to never read them.  The point of the
 		mode is that it is cheap.
 		*/
-		if (wmode != 3)
+		if (wmode != 3 && wmode != 4)
 		{
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
