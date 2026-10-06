@@ -37265,3 +37265,28 @@ and live gunicorn command line, then confirms the same master after installation
 Both failed stages are retained privately; neither installed source or touched
 production DB. The completed arm proves final hashes, installed controls, health
 and UTC rather than treating the earlier staging passes as deployment evidence.
+
+## Patch 515 — separate yaw and pitch journal mouse coverage
+
+**Problem.** Relevant mouse coverage over the union of judged axes can hide a
+silent axis behind activity on its counterpart. The existing governed pitch
+count is not a denominator of comparisons actually performed.
+
+**Change.** tools/hidcheck.py publishes each axis's actual judged count, relevant
+nonzero-count records, no-count records, percentage and longest no-count span.
+The sets come from existing comparison loops. Spans follow emitted v-record
+order and break on records not judged on that axis; they are not render-frame
+coverage or elapsed duration. Unexecuted global-abstention paths still omit
+these measurements. No verdict, threshold, tolerance, comparison adjacency,
+evidence grammar, engine binary pin or QC build change.
+
+**Verified.** Nineteen diagnostic tests pass, including five new axis controls:
+horizontal-only, vertical-only, both active, seed-only counts, excluded pitch,
+free-cursor/profile gap interruptions, global abstention and verbose reporting.
+The published predecessor fails the new tests (one assertion, three absent-field
+errors). Existing HID 263, receipt 74 and recording 306 checks pass. Identical
+captured bytes from 269 recordings, 91 views and 124 journals retain every
+pre-existing info value, ordered note/fault list and journal classification:
+173 recording/view faults; journals 37 OK, 84 BLIND, 3 FAULT. This is diagnostic
+preservation, not hardware attestation or field calibration. Batch review and
+deployment will be recorded after they complete.
