@@ -37494,4 +37494,12 @@ surfd, recplot, join, replays, evidence and angle-detail suites pass. Same captu
 269 rec/91 view/124 HID observations and faults 164/9/3 remain identical. Synthetic
 owned SQLite/log handles/homes cleaned with explicit failure. Source printer
 contract inspected; no engine build or live new field observation claimed.
-Independent final review and frozen deployment remain batch-gated.
+Initial independent reviews found a concurrent-startup ALTER race and cleanup
+registered after a possibly failing initial import. Fixed before any deployment:
+only duplicate-column OperationalError is tolerated (other I/O errors rethrow),
+with the existing migration convention; fixture cleanup is registered first.
+Seven focused tests now pass, including a two-connection barrier that proves both
+saw absence before ALTER and preserved a historic row, plus forced initial-import
+failure cleanup. Unfixed P521 fails the concurrency control; its original test
+driver demonstrably leaks on forced import failure, and that negative-control
+fixture was explicitly removed. Final whole-batch review/deployment remain gated.
