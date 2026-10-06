@@ -37096,3 +37096,67 @@ and ready log plus health confirmed. No lobby/progs/binary/reader tooling swap.
 separate. Hints require begin within 64 lines of at most 4095 characters; longer
 headers still have explicit full rereads. Content attempts are bounded and fair;
 map/header discovery cost at fleet scale has not been measured.
+
+## Patch 511 - retain receipt angle explanations  *(APPLIED - SURFD / RECEIPT DIAGNOSTICS ONLY, no engine C or game progs)*
+
+**Problem.** The angle reader computed a detail string, but receipt observations
+stored only the angle verdict. Admin could not show the measurement or explain an
+abstaining check. Reconstructing old detail from today's sources would mislabel
+history, and independently updating verdict/detail could mix two observations.
+
+**Change.** Add `receipts.angles_reason` with an empty historical default. Store up
+to 1,000 characters from the captured angle check; the reader's diagnostic string
+now includes its existing abstention note. Completed full and late pair reads
+store verdict/detail together. Automatic recovery retains the matching historical
+detail whenever it retains a verdict; earlier angle FAULTs remain intact, and
+journal-only reads leave both alone. Authenticated admin exposes/renders literal
+text, explicitly reports unknown historic detail, and calls an empty angle verdict
+not checked rather than inferring a missing recording. No detector math, signing
+attribution, badge/ranked policy, automatic backfill/scheduling, engine pin/tag,
+progs, build-number or binary change.
+
+**Verified.** New real signed-pair/migration/executed-DOM suite: 99 checks, zero
+failures; untouched published base has 25 failures on the same suite. Includes OK,
+abstaining and faulting pairs, exact detail, partial/recovery history, completed
+explicit replacements, journal-only preservation, idempotent old-schema migration,
+bounded diagnostic storage, text injection and historical fallback controls.
+Existing late-view/rec/HID/identity/sweep suites: 268/227/156/68/262 checks, zero
+failures. reccheck/rcptcheck/hidcheck: 306/74/263 checks, zero failures. Corpus:
+269 recordings, 170 with faults, unchanged. Python compilation and LSP diagnostics
+show no new issues. Windows admin retains its two identical untouched-base UDP
+failures; all 18 isolated Linux stage suites pass, including admin's 258 checks.
+The new suite has 83 storage/migration checks on Linux; this host lacks Node, so
+its 16 executed-DOM checks were run on Windows only. Source frozen at 5890a293;
+storage/history review found no issues. Admin/test review's P2 (standalone suite
+required Node) was fixed in be530ead by an explicit DOM-only skip; simulated
+no-Node and actual Pi standalone runs each pass 83 checks. Focused retained
+re-review closes P2 and returns OK; product source is unchanged after review.
+Published exact be530ead to main, not shared HEAD.
+
+**Deployment, 2026-10-06 20:34:30 UTC final hashes.** Clean committed source only.
+The deployment script installed 12 selected surfd files, all hash-matched, with
+owner-only SQLite backup (600), old-source backups, no backup pruning and a
+worker reload. Only the reader diagnostic file was copied separately under the
+sweep lock to the configured installed tools location and hash-verified;
+production reader dependencies matched. Installed-source/reader controls pass
+83 checks and explicitly prove module paths. Additive migration preserves all
+old fields of 22 observations exactly against backup, leaving historic details
+empty. Actual authenticated admin response/template and anonymous refusal prove
+the live field/fallback boundary. Real receipt pass: 0 reads, 0 faults, identical
+history. Original master, one new worker, its own fresh ready line and health
+with 12 lobbies are proven. Final production hashes match be530ead. No lobby,
+config, progs, binary, Windows install or release change. Shared build57 diverged
+from published main and was preserved, not rewritten.
+
+**Failed arms resolved.** An incomplete selected stage lacked recplot and failed
+before backup/copy; retry included only three byte-identical import supports and
+passed. An installed-reader assertion caught a fixture importing byte-identical
+staged reccheck after 83 passing checks; finish-only controls preload installed
+modules, rerun and prove paths before live gates. No unrelated source repair or
+silent reinterpretation of failed controls.
+
+**Limits.** Existing rows are not reinterpreted or backfilled. These diagnostics
+explain an observation, not whether a player cheated; detector/device calibration
+remains separate. An initial partial fault's existing automatic journal-only retry
+preserves the deferred angle observation; a completed explicit full reread can
+replace it. No scheduling behavior was changed to manufacture a new measurement.
