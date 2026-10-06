@@ -37034,3 +37034,65 @@ old DLLs remain as .prev and backups. Cold launches of each installed exe loaded
 the new behavior and independently passed the 18-cube/301-ray controls.
 The Windows EXEs and game progs are unchanged. No owner process was stopped;
 no player saves/configs, Source install, Pi server or release archive changed.
+
+## Patch 510 - schedule recordings after completed view checks  *(APPLIED - SURFD ONLY, no engine C or game progs)*
+
+**Problem.** Full receipt reads and late-view completions could find no matching
+recording, then retire all pair readiness. A later recording never reached the
+existing nonce/angle checks. Broad full rereads could change unrelated journal
+findings or key/signing observations.
+
+**Change.** Store full-read captured missing-rec readiness in existing sweepmeta,
+separate from view readiness. Late views retain but never invent recording
+readiness; pruning a previously checked rec cannot rearm replacement scheduling.
+Header-only hints scan the reader's evidence/main/stage/bonus locations by runid
+(not filename), once per map per pass. Actual rec-only retries
+check the stored receipt identity/pub before joins and use the unchanged reader's
+final-session nonce, tick, view digest and angle checks, never HID. Missing views
+allow nonce completion without inventing a pair; present checked views are hashed
+again to bind the newly possible pair. Prior faults/reasons, angle FAULTs,
+journal, signature, times, identity and key sightings survive. Co-ready rec and
+other sources alternate; the existing view/HID alternation gives all three turns.
+Partial observations and discovery races retain readiness; complete listing alone
+may reap readiness for lost receipts. No engine pin/tag, progs, schema, reader,
+detector math, badge, ranked policy or legacy automatic backfill changes.
+
+**Verified.** New signed temporary regression suite: 227 checks,
+zero failures. Untouched e920be5 has 48 failures on the same 104 outcome/arrival
+checks, with independent reader controls acting. Both arrival orders, renamed
+unindexed evidence/main/stage/bonus and indexed main locations, OK/legacy BLIND,
+nonce/final-session/angle/digest/unsigned contradictions, receipt tick check,
+pruned views, historical findings/key preservation, replacements rejected before
+joins then restored, selected-tail/view I/O and discovery loss/drift recovery,
+three-source/row fairness under limit=1, partial fault retention, unrelated scan
+I/O, unknown identity/readiness and captured-not-statted readiness are covered.
+Late-view/HID/identity/sweep regressions pass; reccheck/rcptcheck/hidcheck have
+306/74/263 checks and zero failures. Explicit runs sweep: 269 recordings, 170
+with faults, unchanged from pre-slice baseline. Review exposed a completed-rec
+prune/late-view rearm leak on the first candidate; isolated repro and four failing
+scope-regression checks proved it. The correction only retains existing waits and
+also rejects historical-unknown backfill. Python compilation and LSP have
+no new diagnostics. No engine/progs build is needed for this scheduling slice.
+Clean frozen 24e654e and integrated b1be008 have all five receipt/sweep suites
+passing. All 18 isolated Linux staging suites pass with paired installed hashes
+and pre-copy health checked. Both source files are byte-identical between the
+reviewed frozen correction and the clean integration atop a peer's published
+docs/census commit. Both independent re-review lenses found no remaining issues;
+the source-flow reviewer explicitly corrected its earlier rearm acceptance.
+Published exact b1be008 (no shared-HEAD push or published-history rewrite).
+
+**Deployment, 2026-10-06 16:23:30 UTC.** Frozen published b1be008, all 18 staged
+Linux suites passing. Eight paired hashes matched before copy; only sweep.py and
+the new recording suite were installed under the sweep lock, with owner-only DB
+backup and old-source backups. Streamed checked SSH stdin plus required final
+sentinels proved installed view-first readiness, identity replacement rejection,
+matching pair/no HID/history/key preservation, signed nonce and angle faults,
+three-source I/O fairness/recovery, and no completed-recording prune/rearm.
+Temporary files and an in-memory DB only for controls. Real pass: 0 reads/faults,
+2 bound rows and 0 recording waits before/after. Master/CWD preserved, fresh worker
+and ready log plus health confirmed. No lobby/progs/binary/reader tooling swap.
+
+**Limits.** Completed-source replacements and detector/device calibration remain
+separate. Hints require begin within 64 lines of at most 4095 characters; longer
+headers still have explicit full rereads. Content attempts are bounded and fair;
+map/header discovery cost at fleet scale has not been measured.
