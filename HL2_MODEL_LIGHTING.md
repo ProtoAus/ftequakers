@@ -73,6 +73,14 @@ Reference code is the local, unversioned Momentum/Source SDK snapshot:
   followed by an opaque ray, not accepted as visibility. This is corroborating
   client-side worldlight code, **not** the closed engine's model light cache.
 
+The reference snapshot has no Git metadata. For reproducibility, SHA256:
+`common_vs_fxc.h` =
+`4a56acc0c4ff3d15ef5658045968f07eaf6f73e255ed2893bc6a7a738e2d1f20`;
+`vradstaticprops.cpp` =
+`81383a5a4ff40f9c1989be104892e3cbde08bb29b509583cc6ba88f9c208c2df`;
+`momentum/worldlight.cpp` =
+`6b4cf371624408f0dfd36aea09ecacc30a9c9c4d4dbd6123fb9fd8b0c72a0c7f`.
+
 These are source-contract comparisons and measured FTE controls. They are **not
 matched Source runtime screenshots**, nor proof of Source's exact light-cache
 selection, material permutations, exposure or tone mapping.

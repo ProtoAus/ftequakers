@@ -36955,3 +36955,14 @@ split-fold ramp is not. World occlusion is not per-vertex lighting or full
 Source parity. No prop/mover shadow meshes, sky tracing or Source screenshot
 oracle is claimed. Public BACKLOG keeps the narrower remaining approximation;
 matched visual judgement is in lextest.md.
+
+
+**Deployment / commit proof, 2026-10-06 15:29–15:33 UTC.** The HL2 DLL was
+rebuilt from a clean detached worktree at code commit
+9528fe2a145650f47db19880b2891a06435a1dbc (patch-509), not the shared dirty tree.
+Both C:/FTESurf and C:/FTEQuake received only fteplug_hl2_x64.dll, SHA256
+cd9e0ee01270a77086d1339fbba271af9094b177699041aa6db9770ef1c6cb23;
+old DLLs remain as .prev and backups. Cold launches of each installed exe loaded
+the new behavior and independently passed the 18-cube/301-ray controls.
+The Windows EXEs and game progs are unchanged. No owner process was stopped;
+no player saves/configs, Source install, Pi server or release archive changed.
