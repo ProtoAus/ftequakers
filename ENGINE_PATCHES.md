@@ -37230,3 +37230,15 @@ all 124 local journal verdict/fault pairs match the published baseline exactly
 key, absent clock attribute and unmatched replacement literal) were corrected;
 they did not require detector changes. This explains abstention, not additional
 coverage or hardware attestation. Review/deployment recorded after completion.
+
+**Batch review, pre-deployment.** Independent fresh code and test reviews found
+one P2: an existing >=300-character identity fault displaced numeric diagnostics
+from bounded storage. The follow-up reserves a 96-character fault summary,
+preserving the original fault note and FAULT verdict. Fourteen focused tests and
+five genuinely signed SQLite receipts pass, including FAULT plus unresolved
+continuity and coverage. The pre-fix commit fails two retention controls. Retained
+focused re-review closes P2 with no issues. Existing reader suites remain green.
+A stronger corpus control feeds each captured source byte string to both the
+published-base and changed readers, retaining SHA-256 provenance privately:
+269 recordings, 91 views and 124 journals have identical per-source faults and
+journal states. These are local preservation controls, not fleet calibration.
