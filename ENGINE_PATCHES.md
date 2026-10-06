@@ -37393,7 +37393,14 @@ Captured-byte corpus: 269 recordings/91 views/124 journals; existing faults,
 notes, metrics and journal states identical. Recording faults remain 164; view
 faults 9; journal faults 3. LSP reports no recorded diagnostics (not a Python
 runtime proof). SQLite persistence/admin display and field calibration are not
-claimed by this reader slice. Deployment recorded after the batch gate.
+claimed by this reader slice.
+
+**Deployed.** Frozen game commit 34840f9 includes P518–520 and passed 23 Linux
+staging suites. Exact receipt-reader bytes and unchanged paired HID/recording/
+Ed25519 readers verified on the Pi and both Windows installs. Installed-reader
+controls passed on Windows; installed-path signed storage controls passed on
+Linux. Pi completion 2026-10-06T22:39:28Z; Windows verification 22:39:27Z.
+No engine/progs/binary/config/build/release deployment.
 
 ## Patch 519 — durable receipt journal metric snapshots
 
@@ -37418,7 +37425,16 @@ full/late reads, I/O, replacement identity, content vs digest fault and partial
 recovery controls pass. Same captured-byte corpus remains identical (269 rec,
 91 view, 124 HID; faults 164/9/3). Windows admin has two UDP/throttle failures
 identical on untouched P518, not repaired here. LSP has no recorded diagnostics.
-Admin display, Linux installed checks and deployment remain batch-gated.
+Admin display was verified separately in P520.
+
+**Deployed.** Frozen 34840f9 passed all 23 Linux suites, including full admin.
+Additive live migration ran under the sweep lock after a mode-0600 SQLite backup;
+historical rows remain empty, no metric reconstruction. Installed-path synthetic
+signed full/delayed/partial/replacement/I/O controls passed. Real receipt pass
+read 0/faults 0 (integration, not new field metrics). Exact reader/application
+hashes match; source rollback copies retained. Pi completion 22:39:28 UTC on
+2026-10-06. Gunicorn master preserved; replacement workers/ready log proved;
+health still reports 12 lobbies. No thresholds or ranked policy deployed.
 
 ## Patch 520 — authenticated journal metric review
 
@@ -37443,4 +37459,14 @@ found no product blocker. One review caught fixture cleanup: new admin/storage
 drivers now close owned SQLite/log handles, remove only their own synthetic homes,
 and report failures; normal and forced-exception cleanup controls pass. No live
 browser session or field calibration is claimed. Linux and installed deployment
-provenance will be recorded after the frozen batch gate.
+provenance follows.
+
+**Deployed.** Frozen 34840f9 passed 23 Linux suites. Installed application/API
+and signed storage controls passed against installed source paths and temporary
+SQLite/evidence only. Linux has no Node: actual DOM controls passed on Windows,
+not on the Pi. Reader/application/template destination hashes match; master
+preserved, new worker/ready log and health (12 lobbies) proved. Completion
+2026-10-06T22:39:28Z; both Windows installed reader controls at 22:39:27Z. Primary
+HEAD/index and unrelated peer work preserved. Raw deployment logs/backups remain
+private. Real receipt read 0/faults 0; no new field calibration or live human
+browser acceptance claimed. No automatic historical backfill or policy change.
