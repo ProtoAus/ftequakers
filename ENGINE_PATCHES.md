@@ -36683,6 +36683,41 @@ Permanent loss pauses unsigned coverage pending operator reconciliation. A
 repeated reread request does not supersede an in-flight partial reread: finish
 it, then request a new reinterpretation. Other evidence-lifecycle work remains.
 
+## Patch 502 - rewind/save-lock keeps the played prefix  *(MOD-SIDE ONLY, no engine C: FTESurf server/client QC and isolated controls)*
+
+**Problem.** Rewind saves were placement-only, loads left abandoned visual
+history, and viewer/save-lock transitions could lose their pictures or input
+releases. Restoring the visible line without the corresponding timer/recorder
+state did not produce a usable segmented continuation.
+
+**Change.** Bound timer/recorder snapshots to the existing server physics ring
+and reuse the save reader's timed continuation contract. Validate recorder
+lineage and prefix availability before copying; retain only valid warm history
+at a cut. Preserve the recording-retention window and detach an old implicit
+resume pointer on a cold/demoted load without deleting its row. Client saves
+persist a visual-only raw prefix beside the existing sidecar and rebuild both
+raw/rendered history on a splice. Missing pictures never inherit another run's
+line. Replay/ended poses remain practice. Capture queued pictures at request
+time, preserve save/load order, and deliver terminal save results independently
+of later events. Ready load/hold pairs dispatch together; authoritative hold
+checks and immediate releases remain intact. Rewind uses sampled pitch and
+stand/duck eye height, retaining the optional chase view and vote/board priority.
+
+**Verified.** FTESurf `87fc699` reproduces the reviewed frozen QC source
+`bea3b75`; the product commit alone was rebuilt and controlled in a clean
+worktree. All three QC targets, zero warnings; real dedicated buffered and
+streamed arms each 42 checks, zero
+failures; nine grader counterfactuals pass; eight compiled recorder-cut helper
+controls pass. Reader suite 306 checks, zero failures; runs-only corpus remains
+267 files / 170 with faults. Independent source reviews and blocker rechecks
+report no remaining blockers; runtime evidence is parent-executed, not reviewer
+execution. Cold loads restore pictures but do not reconstruct historical scalar
+snapshots. Rendered alignment/camera feel still needs the human checks in
+`lextest.md`. No engine code, evidence grammar, build-number or engine-pin change.
+The number was reserved before the later reader/surfd patches; ENGINE.txt keeps
+the maximum patch requirement. Publication/deployment provenance follows in the
+verified delivery record rather than being inferred from these local controls.
+
 ## Patch 503 - hash and content analysis share one evidence observation  *(APPLIED - READERS ONLY, no engine C or game progs)*
 
 **Problem.** Receipt joins hashed a sidecar/journal and then reopened its path
