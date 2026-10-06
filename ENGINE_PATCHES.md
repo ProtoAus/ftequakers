@@ -36732,3 +36732,57 @@ pre-deploy rollback copies remain retained.
 reads, persisted receipt identity, post-timeout arrival scheduling, engine/HID
 attestation or model calibration. Historical rows are not automatically reread.
 Deploy all three readers together because the captured-byte parser API is shared.
+
+## Patch 504 - delayed receipt joins keep their original identity  *(APPLIED - SURFD ONLY, no engine C or game progs)*
+
+**Problem.** A PENDING or explicitly stale receipt reread could join whichever
+receipt now occupied the path, then attribute replacement content to the old
+row's key. A valid replacement signature did not prove continuity with the
+receipt that established that historical observation.
+
+**Change.** Persist a versioned fingerprint of the captured ordered signed block,
+public key/signature, parsed headers and structural/signature findings. Compare
+it and the stored pub before all joins on every reread. Identity drift defers
+without moving evidence, key sightings or policy, and consumes a bounded queue
+attempt. Preserve the original signing-time observation across retimed copies.
+The additive identity column defaults to unknown, with no startup backfill or
+historical reread. Only explicit operator permission can establish a current
+same-pub baseline for legacy rows; migration's stale marker is not permission.
+Admin renders bound/unknown separately from the signature verdict. No engine
+pin/tag, progs, build number, ranked policy or detector threshold changes.
+
+**Verified locally.** 68 identity falsifiers and 262 existing sweep checks pass.
+Controls actually judge replacement signatures and faulty journals, prove no
+join ran on drift, and require restored/format-equivalent receipts to act.
+Covers key and same-key signed-metadata changes, unsigned header/signature
+changes, explicit rereads, unknown/pre-8 migration, timeout, queue fairness,
+partial I/O observations and signing-time preservation. Untouched original
+source against the final identity suite has 40 failures (some unavailable-API
+arms abort; not a comparable error rate). Reader suites: recording 306, HID 263,
+snapshot 74, all zero failures. Seven other local app suites pass. Local admin
+has two network-timing failures reproduced identically on untouched control;
+new migration/admin payload/template checks pass. Python syntax checks pass;
+LSP records no diagnostics, not a Python type/build proof. No QC/engine build.
+
+**Limits / deployment.** This is continuity of a stored receipt observation, not
+engine/HID attestation, atomic filesystem capture or proof of legacy metadata.
+Post-timeout HID and late rec/view scheduling, corpus calibration and detector
+policy remain separate work. No existing row has been automatically reinterpreted.
+
+**Published/deployed, 2026-10-06 10:54:44 UTC.** Exact FTESurf `7414736` published
+to main; identity and sweep suites pass again in a clean detached worktree with
+peer QC excluded. All twelve app suites (including admin and identity) and three
+reader suites pass in isolated Pi staging. Installed only six changed surfd
+files under the sweep lock, with owner-only database and per-file backups.
+All six production hashes and four unchanged paired-reader hashes match the
+frozen commit. Installed caller ACTED on replacement rejection (historical row
+unchanged) and original-receipt delayed-HID recovery (journal OK), using only
+temporary files and an in-memory DB. Real pass: 0 reads / 0 faults; 0 bound rows
+before/after, so historical metadata was not silently reconstructed. Reloaded
+only the proven gunicorn master; same master, new worker, fresh ready log and
+health ok. No game/lobby, progs, binary or Windows tooling swap was necessary.
+First deploy hit the parent timeout with old production files intact; a retained
+backup attempt was not treated as complete. The longer retry copied verified
+bytes, then private probe setup failed (duplicate temporary table, then missing
+temporary migration). Corrected the helper and resumed only hash checks, probes
+and reload, not another source copy. All final controls acted successfully.
