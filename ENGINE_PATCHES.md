@@ -37419,3 +37419,28 @@ recovery controls pass. Same captured-byte corpus remains identical (269 rec,
 91 view, 124 HID; faults 164/9/3). Windows admin has two UDP/throttle failures
 identical on untouched P518, not repaired here. LSP has no recorded diagnostics.
 Admin display, Linux installed checks and deployment remain batch-gated.
+
+## Patch 520 — authenticated journal metric review
+
+**Problem.** Stored numeric journal observations are not visible on the admin
+run detail, and historical empty snapshots must not display as measured zero.
+
+**Change.** Authenticated detail returns bounded, typed version-1 metrics or
+explicit unavailable for empty, malformed, oversized or unsupported snapshots.
+The real DOM renders a collapsible observation panel using textContent, including
+union/yaw/pitch judged denominators, counts-join windows and exclusion ledgers.
+Measured zero stays zero; executed-but-empty differs from no stored snapshot.
+Public board, signature badges, ranked policy and thresholds are unchanged.
+
+**Verified.** New synthetic authenticated API and Node actual-renderer controls
+pass; P519 fails eight assertions. Unknown/malformed versions, NaN/Inf, booleans,
+string values, nested hostile labels, huge values, old/unmigrated rows, public
+board separation and unchanged signature summary exercised. All 22 local reader,
+receipt/lifecycle, sweep, web, board and adjacent suites pass; captured-byte corpus
+unchanged (269 rec/91 view/124 HID; faults 164/9/3). Two Windows admin UDP failures
+reproduce on untouched base; not fixed here. Two independent read-only reviews
+found no product blocker. One review caught fixture cleanup: new admin/storage
+drivers now close owned SQLite/log handles, remove only their own synthetic homes,
+and report failures; normal and forced-exception cleanup controls pass. No live
+browser session or field calibration is claimed. Linux and installed deployment
+provenance will be recorded after the frozen batch gate.
