@@ -37394,3 +37394,28 @@ notes, metrics and journal states identical. Recording faults remain 164; view
 faults 9; journal faults 3. LSP reports no recorded diagnostics (not a Python
 runtime proof). SQLite persistence/admin display and field calibration are not
 claimed by this reader slice. Deployment recorded after the batch gate.
+
+## Patch 519 — durable receipt journal metric snapshots
+
+**Problem.** Numeric reader observations disappear after the sweep; retaining
+prose alone cannot support later review, and retries must not mispair a historic
+journal verdict with newly measured or unavailable metrics.
+
+**Change.** Add idempotent empty-default receipts.journal_metrics (no schema
+version bump or historical backfill). Full and delayed-journal checks store
+canonical versioned JSON. Snapshot moves atomically with journal verdict/reason;
+I/O and identity-replacement refusals leave history intact, unrelated late
+view/recording joins do not touch it, and partial recovery that retains a journal
+observation retains its exact snapshot. Digest faults have no content snapshot.
+Old signature/angle/key/ranked-policy semantics remain unchanged.
+
+**Verified.** New signed temporary-evidence storage suite passes; P518 fails five
+new assertions. Existing sweep, late HID/view/recording, identity, angle-detail,
+surfd, web and board suites pass. Late-HID contract tests now assert the new
+snapshot against an independent reader while preserving every old field check.
+Migration twice preserves rows, key sightings and scheduling metadata. Active
+full/late reads, I/O, replacement identity, content vs digest fault and partial
+recovery controls pass. Same captured-byte corpus remains identical (269 rec,
+91 view, 124 HID; faults 164/9/3). Windows admin has two UDP/throttle failures
+identical on untouched P518, not repaired here. LSP has no recorded diagnostics.
+Admin display, Linux installed checks and deployment remain batch-gated.
