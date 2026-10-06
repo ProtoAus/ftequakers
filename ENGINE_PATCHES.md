@@ -37502,4 +37502,42 @@ Seven focused tests now pass, including a two-connection barrier that proves bot
 saw absence before ALTER and preserved a historic row, plus forced initial-import
 failure cleanup. Unfixed P521 fails the concurrency control; its original test
 driver demonstrably leaks on forced import failure, and that negative-control
-fixture was explicitly removed. Final whole-batch review/deployment remain gated.
+fixture was explicitly removed. Final whole-batch source reviews close both
+findings; deployment provenance follows after the frozen batch gate.
+
+## Patch 522 — authenticated historical similarity observations
+
+**Problem.** Stored cross-run observations and unjudgeable reasons have no
+browser review surface; absence and skipped comparisons must not look like low
+scores, and similarity must remain separate from badge/ranked adjudication.
+
+**Change.** Authenticated run detail reads at most 25 stored pairs with a stable
+order/overflow indicator, same/cross/unknown identity categories (no raw identity
+columns), original A/B orientation, observation time, row/move denominators,
+fractions, prefix/offset and clock rates. Skips and invalid/zero comparison
+opportunities have no numeric agreement score. The text-only collapsible panel
+labels history, no source-byte binding/current guarantee and incomplete coverage.
+Legacy reasons project to fixed safe categories and bounded short-run numbers;
+unknown prose stays withheld and raw SQL history is unchanged. No comparisons in
+web requests, public surface, verdict/review/badge/threshold/policy change.
+
+**Verified.** Five new temporary signed-in API/actual Node renderer tests pass;
+pre-panel published base fails the original four tests. Both endpoints, identity
+splits, missing/empty tables, bounded deterministic order, skipped/unmeasured
+opportunities, no mutation/public board change and literal text sinks exercised.
+A real synthetic collector stores a basename-bearing nine-move skip; API and
+actual DOM omit its synthetic identity/filename markers while full SQL history
+stays intact. Raw-projection negative control reproduces the leak and removes its
+owned fixture. Two independent retained reviewers found this projection omission,
+then approved the fix with no remaining source blocker. Counts 7 and runtime
+installer 9 tests plus adjacent suites pass; captured corpus observations remain
+unchanged. No field calibration or live human browser acceptance claimed.
+
+**Operational companion (tooling-only).** Commit 4c519b9 supplies a clean Git-pinned
+single-file runtime package/installer with dry-run, paired-reader hashes,
+predecessor guards and exclusive rollback. It claims no separate product patch.
+Live preflight corrected the old missing-tool assumption: the existing tool is an
+exact published predecessor (34c2984), and the current canonical source differs
+only in comments. Collection was already present (two native rows/one stored
+pair); this is a guarded provenance upgrade, not new algorithm/activation or
+calibration. Frozen installed/Linux/deployment verification remains gated.
