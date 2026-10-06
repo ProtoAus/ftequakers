@@ -37182,3 +37182,25 @@ Published base fails four of those tests for missing metrics. Existing hidcheck
 snapshot: 269 recordings / 360 sources, 170 fault sources / 173 existing faults;
 all per-source faults identical to baseline. No new fault or threshold claimed.
 Deployment and independent batch review are recorded separately after completion.
+
+## Patch 513 — unresolved journal-frame continuity
+
+**Problem.** Equal unresolved-frame totals concealed whether the events were
+isolated or consecutive. That distinction is useful for calibration, not enough
+to attribute a cause or accuse a player.
+
+**Change.** tools/hidcheck.py measures unresolved spans and their longest length
+in original v-record order, resetting on ordinary or ungoverned frames. Event
+lines between v records do not create artificial gaps. Receipt details retain
+these measurements and put diagnostics before descriptive prose so the sweep's
+existing 300-character limit does not silently discard them. No verdict,
+threshold, ranking, evidence format, engine pin or QC build change.
+
+**Verified.** Eight focused tests pass, including active controls, isolated and
+adjacent unresolved events, excluded-frame interruptions, verbose output and the
+receipt digest/content path through its stored-text limit. The Patch 512 base
+fails the continuity checks (one failure, two missing-metric errors). Existing
+hidcheck 263, receipt reader 74 and reccheck 306 checks remain green. The same
+269-recording / 360-source snapshot has identical per-source faults (170 fault
+sources / 173 faults). Frame continuity is not elapsed duration or corroboration
+against server warp records. Review/deployment are recorded after completion.
