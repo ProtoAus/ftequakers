@@ -38022,3 +38022,22 @@ already handles it. Extended emit/pixel control proves all 15 (37 alpha checks,
 52 screenshots). Long-sweep opaque endpoint has five one-channel 1/255 differences;
 it uses the existing <=1 survivor-colour tolerance with unchanged coverage masks.
 The original acted images were explicitly regraded, not replaced by a silent run.
+
+## Patch 536 — remove the misleading imported-board Compare control
+
+**Problem.** The Compare chip merely interleaved native and imported board times,
+not the continuous run comparison Lex wants, and was explicitly requested removed.
+
+**Change.** Remove sb_tmix and its rec_sb_mixboth state. Imported tab always
+selects the imported query tier; native remains ranked. Keep imported/refresh
+widgets, native/import provenance and combined read API/database rules intact.
+No backend, recording, permission or engine change; not a new frame comparator.
+
+**Verified.** Actual private board draw hook, not a silent no-call assertion:
+imported and native frames both rendered, getter tiers imported/ranked differ,
+Compare had zero calls while imported/refresh widgets had positive calls. Both
+actual screenshots inspected. Three-prog build zero warnings. First test sentinel
+was an implicit QC constant; explicit var repaired the seam and the complete arm
+reran. Test hooks stay in private overlay builds. Online terms are unaccepted,
+so this proves UI/scope only, not remote row fetch or broadened permission.
+Engine pin/tag and qcbuild unchanged; broader comparison stays in ROADMAP12.9.
