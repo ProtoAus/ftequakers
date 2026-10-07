@@ -38834,3 +38834,28 @@ category/CLI and locator/write-lock tests pass. Recorder suite remains 306/0;
 Two fresh source reviews accept the selection/admission boundaries. LSP has no
 recorded diagnostics. No engine binary, engine pin/tag, QC or Build change; no
 badge, ranking, detector threshold or public surface added.
+
+## Patch 559 - bounded similarity summary result set *(SURFD ONLY)*
+
+**Problem.** The read-only summary materialized every stored pair in Python.
+Accumulating the sample grew this allocation even though only fixed counts and
+identity-split maxima are reported.
+
+**Change.** One aggregate sample query groups into fixed safe skip categories and
+three compared identity buckets: at most thirteen Python result rows. Preserve
+empty/missing/error states, legacy unknown semantics, safe code projection, counts,
+maxima and notable attention labels. Explicitly compare nonempty identity TEXT;
+a textual zero is still an attributed identity. Read never migrates the sample.
+SQLite still scans the table and may allocate working memory; no overall RSS,
+database scan, hard-time, detector threshold or badge gate claim.
+
+**Verified.** Two predecessor-red resource controls pass in six SQLite tests.
+A 2,400-observation mixed fixture matches predecessor statistical semantics and
+returns at most thirteen rows; 500 arbitrary codes collapse to one safe group.
+Boundary matches, textual-zero identities, unknown identity, skips, old schema,
+empty/missing states and an ACTED SQLite authorization denial/recovery pass without
+sample mutation. Existing collector/category, admin authentication/projection,
+board and sweep suites pass. Recorder remains 306/0, current 269-recording corpus
+snapshot has identical recording/view faults. Two fresh source reviews accept
+supported parity and narrow resource claims. LSP has no recorded diagnostics.
+No engine binary, engine pin/tag, QC, Build or parser change.
