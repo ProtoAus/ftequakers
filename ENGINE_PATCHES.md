@@ -38786,3 +38786,27 @@ pin/body/clock controls pass with both installed clients and live lobby 1.
 Final destination hashes, all twelve active services, twelve empty heartbeat
 rows and health OK verified 2026-10-07 23:49:14 UTC. Human acceptance remains
 open as above; this does not complete the whole run-line roadmap.
+
+## Patch 557 - retain partially sampled similarity sources *(SURFD ONLY)*
+
+**Problem.** A source ceased to be pending after any one pair was stored. With a
+small pair budget, four eligible runs accumulated only three of six possible
+observations; later passes silently left the rest unexamined.
+
+**Change.** A source is pending iff it has an eligible same-map/track/leg native
+run-kind peer without a stored pair in either orientation. A skip suppresses only
+its own pair. Preserve oldest-first ordering, source-row limit and lone/completed
+exclusions. This fixes eligibility, not fair retry scheduling or full coverage;
+unavailable old sources can still crowd out newer rows. Store-only, no badge gate.
+
+**Verified.** Four predecessor-red assertions become green in six SQLite
+controls. With four sources, row limit one and pair budget one, six passes each
+ACT and store one distinct comparison, followed by an idle seventh pass. Complete
+sources, skips, imported and mismatched peers retain their boundaries; a positive
+native peer ACTS. Existing collection/time and locator/write-lock tests pass.
+Recorder suite 306 checks, zero failed; current corpus snapshot 269 recordings,
+101 view sidecars has identical predecessor/subject recording and view faults;
+15 HID sidecars are inventoried, not checked by this corpus comparator.
+LSP has no recorded diagnostics; Python tests are the execution oracle. No engine
+binary, engine pin/tag, QC or Build change. Initially unpublished as P554; a peer
+published that number during review, so this owned change was replayed as P557.
