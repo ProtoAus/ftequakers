@@ -37920,3 +37920,34 @@ actually download matching new CSQC, draw the 11-row editor/defaults and receive
 live peer-body streams. Actual live map surf_kitsune has one existing unresolved
 material; this is not a material/map-download fix or high-refresh acceptance.
 Engine pin/tag and qcbuild stay unchanged; native P531 is not shipped here.
+
+## Patch 533 — continuous fade, without chunk or coverage steps
+
+**Problem.** Lex's actual viewing falsifier rejected P532's stepped appearance.
+Line_End restarted a stagger for every publication/chunk, and the tail only
+appeared at each bulk rebuild. Bayer dither had just 16 coverage thresholds.
+
+**Change.** Live birth stamps now belong to sample arrival; rebuilding cannot
+restart them. Constant-rate age alpha replaces smoothstep/stagger. Demo initial
+publication uses one uniform ramp, composed with its playhead fade. Up to three
+normal pending live samples draw every frame with stride 1, no stale sphere/LOD
+culling and correct break termination, without rebuilding the bulk tables.
+Only live pending colours refresh; no board-cache invalidation. Contact/energy
+classifiers retain their existing whole-live-slot walk. Static spatial gradient
+noise replaces the 4x4 threshold pattern; no time seed or temporal flicker.
+Viewer controls, depth and survivor colours stay. Mod-side only.
+
+**Verified.** Extended private overlay: 37 alpha/rebuild/reuse/cap assertions;
+51 actual rendered screenshots. Both uniform half-age line images are 0.4993
+brightness of opaque controls; mature pixels match instant controls. Pending
+tail actually emits and matches mature complete-line brightness; a tail break
+removes its join. Body has 33 distinct monotonic coverage levels over 32 substeps
+(the old pattern could have at most 17 including endpoints), midpoint 0.500146,
+unchanged normal survivor RGB, far identical to off and near fully hidden.
+Production three-prog build zero warnings; five dedicated reset/rewind controls
+pass again. LSP inspected (no QC parser claim); actual screenshots inspected.
+
+**Limits.** Windows OpenGL, not subjective high-refresh acceptance/all backends.
+No worst-case contact-mode FPS claim. Source pose sampling is still tick-based;
+no claim of invented intermediate evidence. No server state, recorder format,
+engine code/pin/tag or qcbuild change. Broader rewind overhaul is separate.
