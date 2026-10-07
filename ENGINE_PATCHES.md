@@ -38154,3 +38154,35 @@ compatibility, not board-row fetch, full map appearance or camera/path acceptanc
 Independent source reviews and oracle recheck have no residual code blocker;
 parent-owned isolated native controls establish the cut/body/clock behavior.
 
+## Patch 540 — keep rewind presentation inside continuous spans
+
+**Problem.** Raw trail break/stitch columns were ignored by velocity/view
+interpolation, which checked only the legacy recording flag. Chase direction
+used +/-3 points even across a break, pivoting toward an unrelated attempt.
+Four acted compiled controls fail on the unchanged P539 client.
+
+**Change.** Respect raw columns 8/9 alongside the existing legacy/time gates;
+clip chase tangent endpoints at the nearest break around the cursor. Preserve
+fractional continuous presentation and sampled authoritative save/resume state.
+No server selection, recording format/clock, evidence reader/writer, engine C,
+engine pin/tag or qcbuild change. Opt-in private diagnostic builds trace both
+camera modes at quarter-point indices and restore cursor/camera/cvars afterward.
+
+**Verified.** Zero-warning builds. Nine compiled controls pass, including
+continuous/short-yaw/sampled-save, raw break/stitch and chase both sides of a
+break. Six-cut streamed/buffered native body/clock/prefix/refusal controls pass
+at cap 100, and streamed at 300; respective visual scans contain 12,006 / 12,110
+/ 12,142 cursor samples. Genuine 5-second stops stay counted. 17 lineage guards,
+19/18 native grader counterfactuals, 16 visual grader controls, P502 main/edges
+in both modes and reader 306/0 pass. The hold probe now waits 1.2 s for the
+acknowledgement without relaxing any body/clock/prefix check. Low-FPS warm cuts
+keep the existing >10-sample floor; six-decimal print precision sets a derived
+velocity comparison tolerance. Test-only programs must never ship.
+
+**Limits.** Visual 30-FPS buffered scans pass (5,626 samples), but the full
+requested-prefix oracle stays red at two cuts: 0.735 -> 0.690 and 1.500 -> 1.545.
+Both reproduce exactly on the unchanged P539 baseline. Keep this alignment
+follow-up in BACKLOG; do not claim a complete low-FPS resume fix. Human moving-
+camera feel, real teleport/contact coverage and the broader pause/event/compare
+request remain open. Deployment is a separate gate, not claimed by these tests.
+
