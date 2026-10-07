@@ -37610,3 +37610,76 @@ gains. Full/cheap capture sharing, resolution/depth fog, per-row acting graphics
 coverage and a rendered glass baseline remain follow-ups. This entry is source
 and isolated-runtime verification; installation/fleet states are recorded
 separately and no Linux renderer build or Source reference launch is claimed.
+
+---
+
+## Patch 524 — abstain on malformed comparison input
+
+**Problem.** The comparison reader could append only part of a required input
+row, misaligning its parallel arrays; nonfinite consumed values could also
+escape as conversion errors. A surviving fragment is not a measured stream.
+
+**Change.** Convert required values before any append and reject the whole
+comparison source when those values or its required row width are malformed.
+Keep tolerant standalone parsing, preserve valid numeric conversion semantics,
+and reject torn in-memory arrays. Pair inspection distinguishes malformed input
+from successfully read no-input files. This reader is not a general grammar
+validator and does not add movement bounds or detector thresholds.
+
+**Verified.** Five parser tests cover valid/fractional controls, malformed
+required columns and row positions, width/header handling and CLI abstention.
+The CLI assertion first fails against the reviewed candidate and then passes
+with the diagnostic correction. Isolated collector/storage/authenticated-history
+controls retain unavailable metrics for malformed input. Full batch: 13 focused
+and five integration tests pass; adjacent sweep, similarity, runtime-installer
+and reader suites pass, including 306 reader checks. All 269 captured valid
+streams retain identical values; the complete reader/sidecar corpus output is
+byte-identical to baseline (170 existing faulted files). No engine/QC, policy,
+public badge/ranking, schema or historical-row change. Deployment is recorded
+separately.
+
+---
+
+## Patch 525 — retain measured zero-agreement opportunities
+
+**Problem.** A valid pair with no agreeing rows retained a zero-initialized
+winner, losing its real comparison denominator. It was labelled compared but
+presented as unavailable rather than as a measured zero.
+
+**Change.** Retain the first candidate with actual opportunities even if its
+match count is zero; preserve the ordering and ties of positive-match winners.
+An actual zero-opportunity result abstains at the shared comparator boundary.
+No minimum length, shift window, discriminator, threshold or policy change.
+
+**Verified.** Four opportunity tests cover complete disjoint streams, exact and
+perturbed positive controls, malformed parallel arrays and actual unavailable
+opportunities. Isolated SQLite/history controls retain matched zero and a
+positive denominator as a measured result. Original source fails the new
+opportunity assertions. All 499 originally positive results in a deterministic
+500-pair probe retain identical full winner tuples. The complete batch and
+269-stream corpus controls documented in Patch 524 pass. Historical stored
+observations are neither recomputed nor backfilled; deployment is separate.
+
+---
+
+## Patch 526 — distinguish unreadable comparison evidence from no input
+
+**Problem.** The tolerant parser collapsed opening failures into the same
+result as successfully read no-input files. Shared comparisons and census could
+therefore report unavailable evidence as samples-only; mid-read I/O could escape.
+
+**Change.** Strict callers retain per-call I/O outcomes while tolerant parsing
+still returns no result. Shared comparisons, census and pair inspection reserve
+no-input outcomes for successful reads. Census unavailable counters are local,
+not inferred from accumulated global skips. No retry, selection, schema,
+threshold, enforcement, historical interpretation or richer UI taxonomy change.
+
+**Verified.** Four I/O tests cover missing/open-denied sources, mid-read failure
+after valid rows, subsequent valid/no-row controls, repeat census isolation and
+CLI unavailable/no-row diagnostics. Isolated collector and authenticated-history
+controls store skips with unavailable metrics, not measured zeros. Original
+source fails the new I/O assertions while valid controls act. All 13 focused,
+five integration and adjacent suites pass; 269 captured streams and the full
+reader/sidecar corpus remain unchanged. Runtime source is one shared reader;
+engine, progs, app, config, ranking and badge implementations are untouched.
+Deployment/path/hash and host verification are recorded separately.
