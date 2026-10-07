@@ -38746,3 +38746,33 @@ Initial native review setup failed ENOTEMPTY; captured state and same-role nativ
 retry resolved it. A peer published P550 during review; these unpublished items
 were replayed/renumbered P551–553 before successful exact-SHA push. Runtime blobs
 are identical to the tested snapshot. No peer client/progs deployment.
+
+## Patch 554 — cancel live rewind navigation on focus loss (2026-10-08)
+
+**Problem.** Live rewind retained a taken scrub direction when chat/menu opened
+or keyboard focus was lost. Delivered key-up events stopped it, but keeping the
+key held scrolled behind the panel. Returning focus could not safely be fixed by
+forgetting the press: its repeats/release still belong to the viewer.
+
+**Change.** Separate active navigation from physical press ownership. Cancel
+activity on lost browsing focus or IE_FOCUS keyboard=0; preserve down/owned
+identity until release, so return/repeats cannot restart or leak movement after
+close. A fresh press activates normally. Mouse-only/unchanged keyboard focus
+is not keyboard loss. CSQC_UpdateView passes its modal/chat/cursor focus; the
+existing effective getcursormode check covers the main console, which notmenu
+alone excludes neither. Bare toggleconsole/menu binds also cancel immediately.
+Pending-go/countdown policies, native sampled save/resume selection, pin/body,
+recorder and engine binary/pin/tag/Build number are unchanged.
+
+**Verified.** Unchanged source ACTS and specifically fails chat-without-release
+cancellation. Real dedicated full-CSQC-chain controls pass at 30/100/300 FPS and
+with the second installed client: chat/console/menu/keyboard/arrow cancellation,
+fixed cursor/HUD across return/repeat, fresh press, opposed inactive owners,
+mouse-only event, close ownership, plus existing opposing/rebind/pre-open/tap/
+panel-release/pending/native-selection and exact pinned body/clock controls.
+All three programs compile with zero warnings. Forty-seven grader controls
+reject malformed/unacted/drifting/restarted/lost-ownership/body/clock/native
+counterfactuals. HUD regression: 21 sample/presentation controls and 12 acted
+phases, screenshot inspected; recorder-reader 306 checks, zero failures.
+These are synthetic events, not actual-device/OS-focus delivery, compound/
+modifier binds, imported long-demo acceptance or camera-feel proof.
