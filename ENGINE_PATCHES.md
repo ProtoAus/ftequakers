@@ -37683,3 +37683,15 @@ five integration and adjacent suites pass; 269 captured streams and the full
 reader/sidecar corpus remain unchanged. Runtime source is one shared reader;
 engine, progs, app, config, ranking and badge implementations are untouched.
 Deployment/path/hash and host verification are recorded separately.
+
+**P524-526 deployment (2026-10-07 00:27:07 UTC).** Frozen game `4f5c47f`:
+only the fixed comparison reader installed on the Pi and both Windows installs,
+with matching destination hashes, paired-reader/predecessor guards and rollback
+copies. Nine Linux stage suites pass; installed valid, measured-zero, malformed,
+unreadable, no-input and short controls act. The actual Pi reader resolves at the
+expected path and measures a real pair read-only; protected table counts and
+binary/progs/config/app/process state are unchanged. Health OK, 12 lobbies;
+no reload/restart. One private locator probe failed after the correct swap and
+was repaired finish-only without recopying or replacing the original backup.
+This is installed-path/integration verification, not a new fleet calibration,
+historical reinterpretation or engine build.
