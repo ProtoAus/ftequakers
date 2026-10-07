@@ -37869,3 +37869,39 @@ operator honesty, entity flags/size, visibility/overdraw budgets, off/low and
 old-client gates, ship-set and deployment controls remain open. Existing export
 omission of trail spacing was observed and left untouched; the trail control
 restored its authored step instead of crediting a silent export replay.
+
+## Patch 532 — smooth run-line chunks and proximity-dither lobby bodies
+
+**Problem.** Small published line chunks appeared instantly behind a moving
+player and on demo load. Nearby lobby bodies obscured the view; ordinary alpha
+blending would wash out their colours and lose opaque depth behavior.
+
+**Change.** Heap birth stamps for demo/live/previous slots reveal each chunk
+oldest-to-newest over `hud_lines_reveal` (default 0.18 seconds, 0 instant), using
+smoothstep and a half-duration within-chunk stagger. Only unpublished points
+get births. Rebuild, Clear/reuse and cap compaction respect publication identity.
+Demo playhead alpha composes with publication; board lines remain unchanged.
+Streamed Body_Predraw selects an embedded opaque skin material with screen-space
+4x4 Bayer discard, preserving normal survivor colours and depth. Viewer-local
+`cl_playerfade` defaults on, near/far 32/128 units; off restores the original
+material. Four controls join `hud_edit lines` and default.cfg. Mod-side only;
+no engine code, movement, server rule, recorder grammar or qcbuild change.
+
+**Verified.** Production three-prog build: zero warnings. Isolated test-only
+CSQC: 33 publication/playhead/rebuild/reuse/cap assertions, plus 16 renderer
+screenshots. Live and demo start images are empty; halfway brightness is 0.5416
+of the instant control with back/front brightness 405858/149618; mature pixels
+match the instant control exactly. Body far pixels equal fade-off pixels; middle
+coverage is exactly 0.5, survivors match normal colours, near is fully hidden;
+zero and inverted endpoint controls are opaque. Dedicated reset/rewind regression:
+all five acted controls pass. Production HUD editor screenshot exposes all 11
+rows and the defaults; inspected alongside actual fade screenshots. No runtime
+command/VM or shader errors. Initial test extension called a later-defined
+function and crashed fteqcc without stdout; production built clean throughout,
+and the unnecessary test call was removed before rerunning.
+
+**Limits.** Windows OpenGL rendered evidence, not a universal backend/driver
+claim or subjective high-refresh acceptance. Applies to streamed lobby bodies,
+not ghosts/owner avatar. Birth time is visual client time, not run evidence.
+The rewind HUD/input/contact/Momentum/comparison overhaul remains separate.
+Test-only world-free and Visual_* hooks are confined to private overlay builds.
