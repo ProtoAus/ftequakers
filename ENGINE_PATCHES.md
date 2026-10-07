@@ -38390,3 +38390,71 @@ the menu after spawn and inverted vote-key down/up values; corrected arm complet
 without command/VM errors. No PiForce, engine/plugin/config/tool deployment, player
 data cleanup or Build bump. Deployment is not actual-device/human acceptance.
 
+## Patch 545 — in-game Momentum demo requests and run comparison graphs
+
+**Problem.** Imported times without a cached replay were dead rows. The Pi's
+bounded automatic grab only selected top-ten demos. World run lines could be
+loaded together, but lacked a shared elapsed-time speed/energy comparison and
+stable run-name labels.
+
+**Change.** Add validated board demo metadata and a durable, bounded request
+queue (schema 11). A public handle binds the row identity to its upstream SHA1;
+GET only polls, POST queues it. No caller URL or network work on the HTTP path.
+The locked momgrab worker prioritizes explicit requests within its existing
+six-demo budget, size/duration/free-space/hash/CDN-retry/map/time checks, plus
+requested-player matching. It files/links the converted recording and the
+client takes the existing replay delivery/cache path. Selected lines enqueue
+before round-robin polls; unavailable/stale/full/expired requests are explicit,
+and replacing/closing watch intent cannot open an old request later.
+
+Client-only min/max sample envelopes and a shared mouse cursor compare replay
+slot 0 and eight board lines. Align clocks at each run/stage start; show horizontal
+speed and z + full velocity squared / (2g), relative to its first run sample.
+Use recorded pmpin gravity when available; explicitly label the g=800 assumption
+for imported/legacy files. No endpoint clamping or interpolation across retained
+teleport/stitch/gap boundaries. Matching slot colours/names label graph curves
+and visible world paths. The leaderboard's graphs button opens comparison;
+linegraph toggles mouse mode, hud_linegraph controls the passive panel.
+No recording/evidence grammar, ranking, detector, engine pin/tag or qcbuild change.
+
+**Verified.** Three-prog working-tree build: zero warnings. Offline queue suite:
+nine cases including capacity, stale/forged handles, idempotency, TTL/recovery,
+rate, SHA/size refusal, player mismatch and actual filing/linking/replay serving
+(converter explicitly doubled). Existing momboards/momgrab, board, web, recplot,
+replay, join and surfd suites pass. In-game graph controls prove full vertical
+energy, two gravities, stage-start alignment, interpolation, no gap bridging or
+out-of-range clamping, selection changes and clear. In-game HTTP controls prove
+two parsed handles POST before polling, a cold replay transfer, drawn line,
+watching and missing-demo failure, and cached-watch replacement of queued intent.
+Screenshots inspected for labelled curves, shared cursor/readouts and Get demo.
+Rebased onto inspected public origin/main (not the stale shared branch), the
+isolated three-prog build has zero warnings, eleven app/reader suites pass,
+and both private content-overlay game arms pass against those exact progs.
+The earlier sweep failure belongs to the shared tree; it is not present in the
+isolated patch. Private overlay proves the online-consent refusal before spending
+a cached demo handle as well. All eleven Linux suites pass in the deployed
+complete-app stage on NVMe; the unchanged 20 GB downloader floor correctly
+refused worker controls on the 5.1 GB root filesystem.
+
+**Limits.** Graphs use the line's existing retained/decimated samples, not a new
+recorder; imported gravity is an assumption, not evidence of its physics. Worker
+schedule is five minutes and unsupported/unavailable demos can fail. No claim of
+actual mouse/keyboard feel, long-demo fleet performance or independent codec
+coverage from the stub/converter double. Human visual acceptance is in lextest.md.
+
+**Deployment (partial, 2026-10-07T17:01:58Z).** Product game `44197abd` and
+tooling follow-up `1b237d2a` are published; isolated product bytes were used, not
+the shared uncommitted tree. Six Python files hash-match the commit on the Pi;
+SQLite backup is mode 600, original files retain rollback copies, master identity
+is preserved across worker reload and health reports 12 lobbies. Full board
+metadata backfill attached 2,946,541 Momentum handles; tier counts stayed
+2,946,739 Momentum, 125,400 KSF, nine ranked. A real surf_voyager request queued,
+the existing worker downloaded/converted/linked it, and the backend served a
+273,389-byte recording (SHA256 f93bae95a771f6156b0e06a642d29910c3e072967a4535f8b449049b3947409a).
+qwprogs/csprogs on the Pi match the isolated build, all 12 lobbies restarted with
+zero players; both Windows installs also hash-match all three generated progs,
+with previous bytes retained. No engine/plugin/personal config/Build change.
+The minimal nginx prefix is prepared separately and preserves installed routes,
+but the account's sudo policy refused installation before any live nginx file
+changed. Public HTTPS demo-request end-to-end remains BLOCKED until Lex installs
+and reloads that snippet; a backend/localhost success is not that proof.
