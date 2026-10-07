@@ -38478,7 +38478,12 @@ zero controls retain all identity counts/maxima. Existing collector suite passes
 Python diagnostics record none, diff whitespace check passes. The first green
 run exposed Windows Python 3.10 authorizer-removal behavior in the harness;
 replacing it with an allow callback repaired the test, not production code.
-Deployment is recorded separately after installed verification.
+**Installed.** Shipped only simcheck.py/sweep.py from frozen game ab5146c with
+canonical app deployment, predecessor checks, backups and explicit NoReload. No
+engine/progs/config/tools or Windows-install swap. At 2026-10-07 20:14:39–20:15:25
+UTC, installed-module controls reproduce the missing/denied/empty/nonempty states;
+read-only live counts remain unchanged. All 21 frozen Linux test programs pass.
+Destination hashes match source; health remains ok with twelve lobbies.
 
 ## Patch 547 — similarity-pass unavailable diagnostics *(surfd-only)*
 
@@ -38497,7 +38502,11 @@ stores three 80-opportunity observations without unavailable text. Resolver and
 comparator counters prove each failure arm acted; mixed failure/success still
 stores later rows with no transaction held during comparisons. All eight focused
 SQLite controls and existing simcheck suite pass; diagnostics and diff check clean.
-Installed verification and deployment remain separate gates.
+**Installed.** Same collector-only ab5146c deployment as P546. At 2026-10-07
+20:14:39 UTC, seventeen controls explicitly use the installed subject, including
+unresolved-source and raised-row ACT controls. No fake observations enter the
+protected live database; scalar counts remain unchanged. Frozen Linux suites and
+canonical app deploy suites pass; no engine/progs/config/Windows swap.
 
 ## Patch 548 — pass-wide similarity pair-attempt cap *(surfd-only)*
 
@@ -38527,7 +38536,20 @@ existing faulted files before/after. Independent fresh-context read-only source
 review found no blockers; reviewer inspected parent test artifacts, did not run
 commands. The real-locator harness first used an invalid generated filename;
 repaired to filing grammar before its passing measurement. Diagnostics and diff
-check clean. Frozen Linux and installed gates are recorded separately.
+check clean.
+
+**Installed.** Canonical source-pinned deployment ships only simcheck.py/sweep.py
+from ab5146c after all 21 frozen Linux test programs pass. File/DB backups retained;
+predecessor and destination hashes checked. Explicit NoReload avoids unnecessary
+app restart; collectors import on fresh cron processes. At 2026-10-07 20:14:39 UTC,
+17 controls bound to the installed subject pass. Actual installed sweep/shared
+locator compares 4,418 opportunities from native rows using an isolated shadow
+DB with a one-pair budget. A real denied DML proves the read-only live guard acted;
+runs/replays/sims/verdicts/receipts/reviews scalar counts stay unchanged. At 20:15:25
+UTC, health is ok with twelve lobbies and installed CLI exposes the new cap.
+Source/destination blobs: simcheck c39a5a51e4eaebdeee0261012db90eaee1b0c609,
+sweep 86a7aaa4114febdd31e68170430f3b70e88c3c17. No engine/progs/config/tools,
+Windows-install or lobby swap; no unverified peer work shipped.
 
 **Limits.** Admission is not a hard deadline or individual source/DB scan/memory
 bound. Existing pending/first-peer semantics do not guarantee fairness or complete
