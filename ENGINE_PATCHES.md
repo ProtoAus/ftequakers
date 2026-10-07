@@ -37905,3 +37905,18 @@ claim or subjective high-refresh acceptance. Applies to streamed lobby bodies,
 not ghosts/owner avatar. Birth time is visual client time, not run evidence.
 The rewind HUD/input/contact/Momentum/comparison overhaul remains separate.
 Test-only world-free and Visual_* hooks are confined to private overlay builds.
+
+**Deployment (2026-10-07, verified 04:03:53 UTC).** Frozen clean product `4fdfbdf`
+builds byte-identically to the tested production artifacts; test hooks absent.
+Both Windows CSQC destinations and immediate predecessor backups hash-match.
+Windows SSQC/menu/native and owner configs/data are unchanged. Pi coherent pair
+swap retains .prev; SSQC is byte-identical to its predecessor. All 12 lobbies
+were empty, restarted successfully and remained healthy/empty after controls.
+Default.cfg matches all three destinations with guarded backups (second install
+previously lacked it); the inspected diff also catches up already-approved
+P527/P529/P530 viewer defaults whose progs shipped without that cfg. No movement
+or server-rule values change. Fresh-cache clients using both installed engines
+actually download matching new CSQC, draw the 11-row editor/defaults and receive
+live peer-body streams. Actual live map surf_kitsune has one existing unresolved
+material; this is not a material/map-download fix or high-refresh acceptance.
+Engine pin/tag and qcbuild stay unchanged; native P531 is not shipped here.
