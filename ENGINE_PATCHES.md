@@ -38658,3 +38658,26 @@ sidecars: identical baseline/subject recording faults (164 existing faulted
 recordings); all 29 readable input streams unchanged under bounds. Largest
 source is 5,660,099 bytes / 10,926 moves. No overall RSS/hard-deadline, complete
 coverage, authenticity or calibration claim. Deployment recorded separately.
+
+## Patch 552 - persist fixed similarity skip categories *(SURFD ONLY)*
+
+**Problem.** New unjudgeable pairs discarded the reader's category and retained
+only prose. Historical reasons cannot safely be treated as a typed observation;
+admin must never expose source paths or exception details to explain a skip.
+
+**Change.** Additive `sims.skip_code` captures fixed reader categories and unresolved
+peers; unrecognized reader categories become `unknown`. Compared pairs carry no
+skip code. Old rows retain the empty default: summaries count `legacy_unknown`
+and never backfill from prose. Read-only summary/admin support both old and new
+schemas; explicit schema ensure migrates idempotently. Authenticated bounded
+admin displays fixed labels (plus existing bounded short-run numbers), with no
+raw code/path/exception exposure. Ranking, metrics and detector policy unchanged.
+
+**Verified.** Five predecessor-red acted tests pass: every supported reader code,
+unknown code, unresolved peer, 80-opportunity compared control, historical
+read-without-migration followed by repeated additive ensure, and admin safe
+projection. Unknown stored codes are withheld. An initial test mock accumulated
+call counts across cases; reset per case before accepting results. Existing
+collector, byte/move bounds, admin auth/DOM/no-mutation, write-lock, sweep and
+board tests pass. No historical reread, source binding, coverage/calibration,
+engine/progs/pin/tag or Build claim. Deployment recorded separately.
