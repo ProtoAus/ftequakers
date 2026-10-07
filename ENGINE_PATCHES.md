@@ -38198,3 +38198,41 @@ unaccepted-terms gate and known missing-map material: live compatibility, not
 row-fetch, full map appearance or human camera-feel acceptance. No recording
 submissions, map change or second restart during the finish-only controls.
 
+## Patch 541 — depth-aware Source water surfaces
+
+**Problem.** Live water modes applied authored distortion directly, without
+Source's shallow-water attenuation. On surf_aesthetic, refractamount 5 smeared
+whole-screen samples into high-contrast noise. Surface fog ignored fogstart/end.
+The dormant depth branch used assumed near/far values and a fixed 4096 divisor.
+Worse, `$refractiondepth` set HASREFRACT but not HASREFRACTDEPTH: merely binding
+it returned an absent depth texture, not a real depth control.
+
+**Change.** The parser requests the existing refraction depth attachment. Its
+producer and consumer require the same FBO even at r_refract_fbo 0 (screen-copy
+has no depth attachment). Source live modes bind sampler 2, with a null slot 1
+in mode 1 so it still does not request a planar reflection. Reconstruct eye
+depth from m_projection; use the positive depth gap for shallow distortion and
+material fogstart/end. Keep Fresnel normals unit length. Reject foreground and
+out-of-screen refraction offsets, remove the fixed 1080-pixel offset, respect
+fogenable and abovewater. The generated GLSL header matches the source. Modes
+0/3/4 and movement/progs/evidence are unchanged. This adds a depth attachment,
+not another scene capture; it is not a free performance improvement.
+
+**Verified.** Windows engine/plugin and QC builds pass with zero QC warnings
+and no new warning in edited C units; LSP has only existing diagnostics. New
+`tools/test_water_depth.py --engine <checkout>` passes 12 source/numeric tests,
+including finite/infinite perspective depth, fog range, binding flags and
+copy-mode agreement. Existing water/menu source contracts pass. Real OpenGL
+fixed-camera controls: depth diagnostic changes from absent/zero to active;
+neutral normal restores recognizable reflections; fog ends 32 vs 8192 and
+fogenable 0 visibly act; yaw/pitch/foreground and r_refract_fbo 0/1 render
+without shader errors. Matched neutral controls give pixel-identical mode
+0/3/4 and submerged images before/after. The submerged camera explicitly
+reports water contents, not a solid or merely a wet-looking surface.
+
+**Limits.** Eye-depth gap approximates Source's fog-alpha capture; it is not
+pixel-identical Momentum water, volumetric ray integration or a world-depth
+buffer for mode 4. OpenGL is the runtime-verified backend. Authored underwater
+fog can remain dense; P538 contents tint/fog behavior is retained. Human taste
+and broader material/backend coverage remain open. Build number stays 89.
+

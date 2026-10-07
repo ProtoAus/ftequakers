@@ -4,6 +4,7 @@
 !!samps diffuse normalmap
 !!samps	refract=0	//always present
 !!samps reflect=1
+!!samps =DEPTH refractdepth=2
 !!samps =REFLECTCUBEMASK reflectcube
 !!permu FOG
 
@@ -77,6 +78,12 @@
 #ifndef FOGTINT
 #define FOGTINT 0.2,0.3,0.2
 #endif
+#ifndef FOGSTART
+#define FOGSTART 0.0
+#endif
+#ifndef FOGRANGE
+#define FOGRANGE 1024.0
+#endif
 
 varying vec2 tc;
 varying vec4 tf;
@@ -104,6 +111,20 @@ void main (void)
 #ifdef FRAGMENT_SHADER
 #include "sys/fog.h"
 
+#ifdef DEPTH
+// The depth capture uses the same non-oblique projection as the surface.
+// Use the matrix, not assumed near/far cvars (including infinite far planes).
+float eyeDepth(float z)
+{
+	float ndc = z * 2.0 - 1.0;
+	return abs(m_projection[3][2] / max(ndc * m_projection[2][3] - m_projection[2][2], 0.000001));
+}
+
+float waterDepth(vec2 uv, float surfaceDepth)
+{
+	return max(0.0, eyeDepth(texture2D(s_refractdepth, uv).r) - surfaceDepth);
+}
+#endif
 
 void main (void)
 {
@@ -111,10 +132,8 @@ void main (void)
 	vec2 ntc;	//normalmap/diffuse tex coords
 	vec3 n, refr, refl;
 	float fres;
-	float depth;
+	float depth = 0.0;
 	stc = (1.0 + (tf.xy / tf.w)) * 0.5;
-	//hack the texture coords slightly so that there are less obvious gaps
-	stc.t -= 1.5*norm.z/1080.0;
 
 	ntc = tc * float(TXSCALE1);
 	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
@@ -139,45 +158,35 @@ void main (void)
 	fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);
 
 #ifdef DEPTH
-	float far = #include "cvar/gl_maxdist";
-	float near = #include "cvar/gl_mindist";
-	//get depth value at the surface
-	float sdepth = gl_FragCoord.z;
-	sdepth = (2.0*near) / (far + near - sdepth * (far - near));
-	sdepth = mix(near, far, sdepth);
-
-	//get depth value at the ground beyond the surface.
-	float gdepth = texture2D(s_refractdepth, stc).x;
-	gdepth = (2.0*near) / (far + near - gdepth * (far - near));
-	if (gdepth >= 0.5)
-	{
-		gdepth = sdepth;
-		depth = 0.0;
-	}
-	else
-	{
-		gdepth = mix(near, far, gdepth);
-		depth = gdepth - sdepth;
-	}
-
-	//reduce the normals in shallow water (near walls, reduces the pain of linear sampling)
-	if (depth < 100.0)
-		n *= depth/100.0;
+	float surfaceDepth = eyeDepth(gl_FragCoord.z);
+	depth = waterDepth(stc, surfaceDepth);
+	// Source attenuates distortion by the refraction capture's fog-depth.
+	// Do not attenuate the unit normal used for Fresnel/cubemap reflection.
+	float distortion = clamp(depth / float(FOGRANGE), 0.0, 1.0);
 #else
-	depth = 1.0;
-#endif 
+	float distortion = 1.0;
+#endif
 
 
 	//refraction image (and water fog, if possible)
-	refr = texture2D(s_refract, stc + n.st*float(STRENGTH_REFR)*float(r_glsl_turbscale_refract)).rgb * vec3(TINT_REFR);
+	vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;
 #ifdef DEPTH
-	refr = mix(refr, vec3(FOGTINT), min(depth/4096.0, 1.0));
+	// Reject foreground/above-water distortion instead of pulling pillars
+	// across the shoreline. Capture and surface share screen depth.
+	if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||
+		texture2D(s_refractdepth, clamp(refractUV, 0.0, 1.0)).r <= gl_FragCoord.z)
+		refractUV = stc;
+	depth = waterDepth(clamp(refractUV, 0.0, 1.0), surfaceDepth);
+#endif
+	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb * vec3(TINT_REFR);
+#if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
+	refr = mix(refr, vec3(FOGTINT), clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0));
 #endif
 
 #ifdef LQWATER
 	refl = textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL);
 #else
-	refl = texture2D(s_reflect, stc - n.st*float(STRENGTH_REFL)*float(r_glsl_turbscale_reflect)).rgb * vec3(TINT_REFL);
+	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
 
 	//interplate by fresnel

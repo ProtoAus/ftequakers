@@ -886,6 +886,7 @@ typedef struct
 	*/
 	float refractamount, reflectamount;
 	qboolean refractamount_set, reflectamount_set;
+	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
 	qboolean refracttint_set, reflecttint_set;
 	float fogcolor_f[3];
@@ -2037,7 +2038,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$bumpframe"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogenable"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			st->waterfog_disabled = !atoi(value);
 		else if (!Q_strcasecmp(key, "$fogcolor"))
 		{
 			Q_strlcpy(st->fogcolor, value, sizeof(st->fogcolor));	//FTESurf: hl2_water 0 draws this
@@ -2064,7 +2065,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$fogend"))
 			st->fogend = atof(value);	//FTESurf build 12: drives the dither coverage at hl2_water 3
 		else if (!Q_strcasecmp(key, "$abovewater"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			st->water_below = !atoi(value);
 		else if (!Q_strcasecmp(key, "$underwateroverlay"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflectentities"))
@@ -3574,20 +3575,22 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Appended, not assigned: the two lines above use Q_strlcpy and this must not
 		undo them.
 
-		WHAT IS DELIBERATELY NOT WIRED, so the next person does not assume it was
-		missed.  #DEPTH is the interesting one -- it is what turns $fogstart/$fogend
-		into a real depth-graded fade instead of a constant tint -- but its branch
-		samples s_refractdepth, and water.glsl's `!!samps` line declares only
-		refract and reflect.  Wiring #DEPTH without also declaring and binding that
-		sampler would produce a shader that fails to compile, so $fogstart/$fogend
-		stay where they are: driving the dither coverage at hl2_water 3, which is
-		the default mode and the one most people see.
+		Patch 541 binds the existing refraction depth attachment as sampler 2.
+		It uses the unmodified screen projection, unlike the colour-only oblique
+		capture. Surface fog and shallow distortion use that depth. This adds an
+		attachment, not another scene render.
 
 		AND THE HONEST HEADLINE: hl2_water defaults to 3, the dithered flat mode,
 		which uses none of this.  Everything below changes hl2_water 1 and 2 only.
 		*/
 		{
 			char t[256];
+			Q_snprintfz(t, sizeof(t), "#DEPTH#FOGSTART=%f#FOGRANGE=%f", st->fogstart, max(1.0f, st->fogend - st->fogstart));
+			Q_strlcat(progargs, t, sizeof(progargs));
+			if (st->waterfog_disabled)
+				Q_strlcat(progargs, "#NO_WATERFOG", sizeof(progargs));
+			if (st->water_below)
+				Q_strlcat(progargs, "#UNDERWATER", sizeof(progargs));
 			if (st->refractamount_set)
 			{
 				Q_snprintfz(t, sizeof(t), "#STRENGTH_REFR=%f", st->refractamount);
@@ -3707,7 +3710,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					"\t\tmap $refraction\n", progargs);
 			if (wmode >= 2)
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $reflection\n");
-			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");
+			else
+				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
+			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n\t}\n");
 		}
 
 		/*

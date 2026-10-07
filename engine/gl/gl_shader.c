@@ -3813,7 +3813,7 @@ static qboolean Shaderpass_MapGen (parsestate_t *ps, shaderpass_t *pass, char *t
 	}
 	else if (!Q_stricmp (tname, "$refractiondepth"))
 	{
-		shader->flags |= SHADER_HASREFRACT;
+		shader->flags |= SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH;
 		pass->texgen = T_GEN_REFRACTIONDEPTH;
 	}
 	else if (!Q_stricmp (tname, "$ripplemap"))

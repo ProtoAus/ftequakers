@@ -1571,7 +1571,8 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 		   the same hours it nearly cost this one.
 
 		   r_refract_fbo defaults to 1, so this was latent rather than active. */
-		if (!r_refract_fboival && !(shaderstate.curshader && (shaderstate.curshader->flags & SHADER_HASPORTAL)))
+		// Depth consumers must sample the capture they generated, even at r_refract_fbo 0.
+		if (!r_refract_fboival && !(shaderstate.curshader && (shaderstate.curshader->flags & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
 		{
 			T_Gen_CurrentRender(tmu);
 			return;
@@ -6373,7 +6374,8 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	}
 	if (bs->flags & (SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH))
 	{
-		if (r_refract_fboival || (bs->flags&SHADER_HASPORTAL))
+		// A refraction depth attachment requires an FBO; screen-copy mode has none.
+		if (r_refract_fboival || (bs->flags&(SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH)))
 		{
 			float renderscale = min(1, bs->portalfboscale);
 			vrect_t ovrect = r_refdef.vrect;
