@@ -38480,3 +38480,23 @@ run exposed Windows Python 3.10 authorizer-removal behavior in the harness;
 replacing it with an allow callback repaired the test, not production code.
 Deployment is recorded separately after installed verification.
 
+## Patch 547 — similarity-pass unavailable diagnostics *(surfd-only)*
+
+**Problem.** Unresolved primary recording paths returned the same empty pass note
+as no work; row exceptions appeared only on stderr. Zero stored pairs could hide
+that every selected source was unavailable or every attempted row failed.
+
+**Change.** Optional pass-local diagnostics retain fixed-category counts for
+unresolved primary sources and failed rows, including zero-store passes. Existing
+return tuples and stderr debugging remain. No fake pair result is inserted for
+unattempted work, and no private path or exception prose enters the new summary.
+No schema/history/reader/ranking, engine/progs/config/pin/tag or Build change.
+
+**Verified.** Three new predecessor-red diagnostics become green; normal control
+stores three 80-opportunity observations without unavailable text. Resolver and
+comparator counters prove each failure arm acted; mixed failure/success still
+stores later rows with no transaction held during comparisons. All eight focused
+SQLite controls and existing simcheck suite pass; diagnostics and diff check clean.
+Installed verification and deployment remain separate gates.
+
+
