@@ -38589,5 +38589,16 @@ stop, fixed native freeze and reversible first-person/chase world-pixel change
 (0.403 changed; return 0.000). Diagnostic progs remain private and never ship.
 Final published `11e32ba` retains identical client/server source after the
 unpublished patch-number reassignment and peer tool-only fast-forward.
-Deployment remains a separate gate.
+
+**Deployed (UTC).** Clean published `11e32ba` production progs: normal empty-fleet
+`build.ps1 -Pi`, no PiForce, all twelve restarts completed 2026-10-07 20:18:51.
+Both Windows installs independently hash-match the same build; progs/LNO .prev
+copies retained and personal cfg unchanged (including absence). Independent
+20:25:57 host read confirms both progs and all twelve active units; directory
+returns to zero players after smoke quit. Production lobby-1 client ACTS on a
+synthetic replay; inspected main timer/chrome show 1.001s, stationary 3.205s and
+exact 6.000s finish, without command/VM errors. Earlier wrong fixture name did
+not act and was retained as a failed harness control, not a pass. This is clock
+rendering, not world-camera/import acceptance. No diagnostic progs, engine,
+server config, evidence clocks or owner settings shipped. Rollback pair retained.
 
