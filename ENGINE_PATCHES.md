@@ -37765,4 +37765,23 @@ CSQC also passes all 11 old/new menu/shader phases; screenshots show the legacy
 star versus live Budget label. Source contracts pass. Verification is Windows
 OpenGL rendering with an owned stub world, not prediction/network gameplay,
 a universal driver/backend claim, Source visual acceptance or fire completion.
-Deployment is recorded separately after commit/pin verification.
+
+**Deployment (2026-10-07).** Frozen native f073138ad and water-only product
+bd0f21c built from clean inspected commits; client VMs match the tested bytes.
+Published source integration b4afc5a preserves the independent HUD feature,
+but that peer feature is excluded from this deployment. Both Windows installs
+received the native/plugin/CSQC pair with all ten destination hashes and
+immediate predecessor backups checked; owner configs, SSQC and menu unchanged.
+Pi received the coherent SSQC/CSQC pair through the existing no-player/hash/
+backup/restart procedure, with an additional pre-swap predecessor-hash guard.
+All 12 active lobbies were empty, restarted successfully and remained healthy.
+Their live/previous pair hashes match new/old provenance. Compared with the
+Pi-era P519 source, only water-menu client code changes; server/shared contracts
+are unchanged. Actual fresh-cache downloads on a pre-P523 client and both
+installed updated clients match the new CSQC bytes; spawned bodies and visible
+menu pixels act. Old client shows Dithered with rebuild marker; new clients
+show live Budget. Fresh-process replay of a real saved 4 also retains 4/new or
+falls back and saves 3/old. Lobby map content was explicitly supplied to the
+isolated clients because the existing server map-download path denied the BSP;
+this is CSQC-download/menu compatibility evidence, not a map-download/material
+fix, other-backend acceptance or Source visual parity.
