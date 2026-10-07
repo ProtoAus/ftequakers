@@ -37712,3 +37712,37 @@ unknown commands/VM errors. Inspected actual editor screenshot: seven rows, with
 player/board on and demo off. Test runner retains private artifacts and removes
 only its own junctions. This verifies controls/UI, not the later lifecycle,
 contact, save-continuation or comparison fixes.
+
+---
+
+## Patch 528 — gate budget-water menu on local native support
+
+**Problem.** Lobby-downloaded CSQC offered water mode 4 even to an older
+native engine or plugin. A plugin/user-created cvar does not prove the native
+live shader-policy hook, so the no-capture promise and live-menu semantics
+could not be relied upon. An archived 4 could reach BSP material generation
+before the new CSQC initialized.
+
+**Change.** Add local extension FTE_CSQC_HL2_WATER_BUDGET, requiring an active
+programmable OpenGL renderer and a loaded material loader with embedded
+vmt/waterbudget on the native engine that owns the live policy. CSQC refreshes
+this capability at initialization, menu-command entry and renderer restart.
+Unsupported pairs retain the legacy 0..3 row/rebuild marker. Their archived 4
+falls back to Dithered 3 and queues flushshaders to replace cached materials;
+capable clients keep 4 and the live 0..4 row. Preserve milk target invalidation,
+default 3 and the plugin API flag mask. Non-OpenGL is conservatively legacy;
+this availability contract is not a driver-compilation guarantee.
+
+**Verified.** Clean owned worktree builds all three product VMs with zero
+warnings plus client/server/plugins with zero new compiler diagnostics against
+P523's full-build baseline. Actual pre-P523 and updated EXEs/plugins, including
+both mixed pairs, run the same menu source: 29 acting phases verify forged cvars
+do not enable 4, archived 4/new or fallback 3/legacy, correct cycle ranges,
+renderer reload, map return and saved value. Budget/fallback shaders have no
+capture samplers; full-reflection/refraction modes are positive controls.
+Legacy cycles explicitly rebuild as advertised. Uninstrumented full product
+CSQC also passes all 11 old/new menu/shader phases; screenshots show the legacy
+star versus live Budget label. Source contracts pass. Verification is Windows
+OpenGL rendering with an owned stub world, not prediction/network gameplay,
+a universal driver/backend claim, Source visual acceptance or fire completion.
+Deployment is recorded separately after commit/pin verification.

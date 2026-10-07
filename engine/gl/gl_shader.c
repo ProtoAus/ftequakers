@@ -350,6 +350,25 @@ qboolean Material_RegisterLoader(void *module, plugmaterialloaderfuncs_t *driver
 	}
 }
 
+//Native query: a downloaded CSQC must not infer mode 4 from a plugin cvar.
+qboolean R_HL2WaterBudgetSupported(void)
+{
+	size_t l;
+	const struct sbuiltin_s *progs;
+
+	if (qrenderer != QR_OPENGL || !sh_config.progs_supported)
+		return false;
+	for (l = 0; l < materialloader_count; l++)
+	{
+		if (!materialloader[l].funcs || !materialloader[l].funcs->builtinshaders)
+			continue;
+		for (progs = materialloader[l].funcs->builtinshaders; *progs->name; progs++)
+			if (progs->qrtype == QR_OPENGL && !strcmp(progs->name, "vmt/waterbudget"))
+				return true;
+	}
+	return false;
+}
+
 //===========================================================================
 
 static qboolean Shader_EvaluateCondition(shader_t *shader, const char **ptr)
