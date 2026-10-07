@@ -38336,3 +38336,42 @@ reverified unchanged at 13:00:51 UTC. No personal setting, server, progs, other
 plugin or Pi deployment. Engine code pin/tag remains the P543 feature commit;
 this provenance note changes neither the shipped bytes nor the product pin.
 
+## Patch 544 — bind-resolved held demo scrolling (2026-10-07)
+
+**Problem.** P535 strafe navigation was live-rewind-only. Demos still accepted
+only discrete arrows/wheel, despite using the same movement-suppressed pin.
+
+**Change.** Watch_Track observes press/repeat/up before every panel and release
+gate. Bare +moveleft/+moveright binds seek demos: a recorded tick on press,
+0.45..9 run seconds per wall second over a 2s hold. Physical ownership, not a
+re-read bind, governs repeats/releases through rebind/close/reopen. Opposing
+directions cancel, same-direction keys remain independent. Pre-open/earlier-panel
+presses cannot acquire navigation via repeat. Open/close/Space and menu/chat or
+IE_FOCUS loss cancel active scrub; taken repeats/up remain swallowed. Reuses
+Watch_Seek cache invalidation/window clamps. Preserves arrows (5s), primary mouse
+chrome, wheel, save controls and the existing outgoing movement gate. No server,
+recording/evidence grammar, engine pin/tag or qcbuild change.
+
+**Verified.** Isolated test-only overlay, real dedicated socket at 30/100/300:
+35 cursor probes and 55 whole-CSQC_InputEvent events per cap. Default/remapped
+keys, held acceleration, quick tap, opposing cancellation/remaining direction,
+two same-direction keys, rebind/release/new press, pre-open/chat-owned repeats,
+close/reopen, chat/console release, menu/IE_FOCUS cancellation, window clamps,
+arrows and Space all ACT. Replay pose/velocity follow the synthetic cursor;
+native pinned body stays exact. Unchanged baseline ACTS but fails held-scroll
+oracle. Positive plus 30 grader counterfactuals pass, including missing/unacted/
+wrong-state/pose/ownership/body/focus probes. Three-prog builds: zero warnings.
+306 reader checks pass; unchanged checker on 269 real recordings retains 170
+existing paired faults. Initial harness used absent menu_main; togglemenu fixed
+both arms. Float32 pose tolerance is .03u at <=14500u coordinates, independent
+of exact cursor stop equality. Tool-only screenshot-barrier work preceded this
+patch and does not change camera semantics.
+
+**Limits.** Bare current binds and at most 16 simultaneous tracked keys, not
+compound/modifier binds. Primary mouse buttons stay reserved for chrome. This
+synthetic whole-chain arm is not actual keyboard/OS-focus or imported-long-demo
+acceptance. Live rewind still prefers the newest opposing held direction;
+requested cancellation parity remains in BACKLOG. Human smoothness/camera/HUD
+judgement remains in lextest.md. No per-user cfg, evidence retiming or Build bump.
+Deployment provenance follows after the clean committed-byte gate.
+
