@@ -38667,7 +38667,15 @@ pass. Recorder suite: 306 checks, zero failures. Captured 269 recordings / 116
 sidecars: identical baseline/subject recording faults (164 existing faulted
 recordings); all 29 readable input streams unchanged under bounds. Largest
 source is 5,660,099 bytes / 10,926 moves. No overall RSS/hard-deadline, complete
-coverage, authenticity or calibration claim. Deployment recorded separately.
+coverage, authenticity or calibration claim. Added non-ASCII/replacement decoding
+parity control passes on Windows and frozen Linux (seven ingestion controls).
+
+**Deployed (UTC).** Published source `1020b3a69841564adf232d6fb7fb924198f969a1`;
+Pi reader capsule dry-run/apply completed 2026-10-07 22:09:48, BOTH Windows tools
+readers/controls completed 22:17:15. Paired/predecessor/installer/destination and
+rollback hashes proven; only the comparison reader changed in tools. Installed
+80-opportunity, byte/move abstention and newline/decoding controls ACT. App caller
+ships with P552/P553 below. No progs, binary, pin/tag, Build or configs deployed.
 
 ## Patch 552 - persist fixed similarity skip categories *(SURFD ONLY)*
 
@@ -38690,7 +38698,17 @@ projection. Unknown stored codes are withheld. An initial test mock accumulated
 call counts across cases; reset per case before accepting results. Existing
 collector, byte/move bounds, admin auth/DOM/no-mutation, write-lock, sweep and
 board tests pass. No historical reread, source binding, coverage/calibration,
-engine/progs/pin/tag or Build claim. Deployment recorded separately.
+engine/progs/pin/tag or Build claim.
+
+**Deployed (UTC).** Only admin/simcheck/sweep from `1020b3a` copied using canonical
+shipper: eleven staged tests, owner-only SQLite/file backups, hash readback and
+proven master-preserving gunicorn reload (ready 2026-10-07 22:13:25). Installed
+synthetic skip/control and safe typed projection ACT. Live additive column/readback
+at 22:15:34 retains all existing sample fields/verdict rows; no historical reread
+or live synthetic observations. Health twelve lobbies, anonymous admin refused.
+All 25 frozen Linux programs pass; Linux DOM control skipped, Windows DOM passed.
+Two fresh source reviews OK with notes; no independent test execution/browser
+claim. No peer client/progs, config or detector policy shipped.
 
 ## Patch 553 - elapsed similarity admission budget *(SURFD ONLY)*
 
@@ -38715,5 +38733,16 @@ admission. Zero avoids loader/resolver; finite positive values reach actual CLI
 and wrapper, NaN/Inf/negative reject before main connect. All existing collector,
 source-bound/category, locator/write-lock, admin/auth/DOM and sweep tests pass.
 LSP reports no recorded diagnostics; Python execution is the build/test gate.
-Frozen Linux, independent review and deployment recorded separately. No engine,
-progs, pin/tag or Build changes.
+Twenty-five frozen Linux programs pass; two fresh source reviews OK with notes
+(parent test evidence, not independent execution). No engine, progs, pin/tag or
+Build changes.
+
+**Deployed (UTC).** Source `1020b3a`, same three-file app swap described in P552;
+installed fake-monotonic control completes 80 opportunities, flushes its admitted
+pair and blocks later admissions at the deadline. Wrapper/CLI forwarding controls
+pass. Pi readback completed 2026-10-07 22:15:34, health twelve lobbies at 22:18:26.
+The real sample is one same-identity comparison, not cross-identity calibration.
+Initial native review setup failed ENOTEMPTY; captured state and same-role native
+retry resolved it. A peer published P550 during review; these unpublished items
+were replayed/renumbered P551–553 before successful exact-SHA push. Runtime blobs
+are identical to the tested snapshot. No peer client/progs deployment.
