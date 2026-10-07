@@ -38458,3 +38458,25 @@ The minimal nginx prefix is prepared separately and preserves installed routes,
 but the account's sudo policy refused installation before any live nginx file
 changed. Public HTTPS demo-request end-to-end remains BLOCKED until Lex installs
 and reloads that snippet; a backend/localhost success is not that proof.
+
+## Patch 546 — explicit similarity-summary availability *(surfd-only)*
+
+**Problem.** The store-only collector's summary returned measured-zero counters
+for both an absent table and a failed read, and its log line was silent in all
+three cases, including a genuinely empty sample.
+
+**Change.** Read-only summary states distinguish missing, query error, empty and
+available. Unavailable counters are absent (`None`), not measured zeros. Fixed
+log categories avoid exposing query exception text. Existing nonempty identity
+splits, scores and store-only policy are unchanged; no schema, history, ranking,
+engine, progs, configs, pin/tag or Build change.
+
+**Verified.** New temporary SQLite suite: four predecessor-red controls become
+four passes. A real SQLite authorizer denies the read and proves the error arm
+acted; missing-table reads create nothing. Nonempty comparison/skip and measured
+zero controls retain all identity counts/maxima. Existing collector suite passes;
+Python diagnostics record none, diff whitespace check passes. The first green
+run exposed Windows Python 3.10 authorizer-removal behavior in the harness;
+replacing it with an allow callback repaired the test, not production code.
+Deployment is recorded separately after installed verification.
+
