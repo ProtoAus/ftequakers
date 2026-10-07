@@ -38810,3 +38810,27 @@ Recorder suite 306 checks, zero failed; current corpus snapshot 269 recordings,
 LSP has no recorded diagnostics; Python tests are the execution oracle. No engine
 binary, engine pin/tag, QC or Build change. Initially unpublished as P554; a peer
 published that number during review, so this owned change was replayed as P557.
+
+## Patch 558 - exclude sampled pairs before the peer window *(SURFD ONLY)*
+
+**Problem.** The 200-peer window was chosen before already observed pairs were
+excluded. A source with 200 stored older peers could never reach newer eligible
+peers, even after later source selection admitted it.
+
+**Change.** Exclude stored pairs in both historical orientations in SQL before
+oldest-first peer ordering/LIMIT. Keep the per-peer late recheck for observations
+stored since selection. Complete direct sources return before file resolution.
+Candidate/pair/time limits, stored skips, parser and store-only policy unchanged.
+This is new-pair eligibility, not a fair retry scheduler or a database scan bound.
+
+**Verified.** Five predecessor-red controls pass (eleven including inherited
+eligibility controls). With 200 seeded observations in mixed orientations, five
+new peers ACT, or ACT one per pass under pair budget one. Three/default-200 peer
+limits still cap new candidates, completing 205 peers over three calls. Completed
+sources do no resolution; unavailable new peer consumes one attempt, persists
+peer_unresolved, and the next valid peer ACTS. Existing collector/time/ingestion/
+category/CLI and locator/write-lock tests pass. Recorder suite remains 306/0;
+269-recording current corpus snapshot has identical recording/view faults.
+Two fresh source reviews accept the selection/admission boundaries. LSP has no
+recorded diagnostics. No engine binary, engine pin/tag, QC or Build change; no
+badge, ranking, detector threshold or public surface added.
