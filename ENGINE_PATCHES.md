@@ -38776,3 +38776,13 @@ counterfactuals. HUD regression: 21 sample/presentation controls and 12 acted
 phases, screenshot inspected; recorder-reader 306 checks, zero failures.
 These are synthetic events, not actual-device/OS-focus delivery, compound/
 modifier binds, imported long-demo acceptance or camera-feel proof.
+
+**Deployed (UTC).** Frozen game `e1c556e`, rebuilt clean/zero warnings: CSQC
+`c948d840cea3073c6b24588513eec547ca9cdf38d83274db779efe3fb746fa45`
+on both Windows installs and the empty-gated twelve-lobby fleet, previous P550
+kept as `.prev`. SSQC/menu/default cfg/engine unchanged; no owner source/index
+or personal cfg edits. Non-instrumented full-chain focus/cancel/return/fresh/
+pin/body/clock controls pass with both installed clients and live lobby 1.
+Final destination hashes, all twelve active services, twelve empty heartbeat
+rows and health OK verified 2026-10-07 23:49:14 UTC. Human acceptance remains
+open as above; this does not complete the whole run-line roadmap.
