@@ -38634,3 +38634,27 @@ not act and was retained as a failed harness control, not a pass. This is clock
 rendering, not world-camera/import acceptance. No diagnostic progs, engine,
 server config, evidence clocks or owner settings shipped. Rollback pair retained.
 
+## Patch 551 - bound similarity source ingestion *(SURFD / READER ONLY)*
+
+**Problem.** The pair-attempt budget did not limit source bytes or retained move
+rows. A large file, including ignored records, could exhaust collector resources;
+comparing a truncated prefix would manufacture a misleading measurement.
+
+**Change.** The existing move reader accepts optional byte/move budgets. Byte
+capture reads at most cap+1 from the actual source, including growth; universal
+newlines and locale decoding are preserved. Over-budget sources abstain whole as
+`source limit`. The collector explicitly uses 16 MiB / 200,000 moves per source
+and refuses support without the bounded-input capability. Standalone defaults,
+comparison statistics, badges, progs and engine pin/tag/Build remain unchanged.
+
+**Verified.** Five predecessor-red behavioral controls and one positive control;
+all six pass after implementation. Exact byte/move boundaries and LF/CRLF/bare-CR
+retain 80 measured opportunities. Ignored-byte excess, growing source capture,
+and move excess abstain; collector stores an unjudgeable observation, not a
+measurement. Old support is explicitly unavailable. Existing 17 collector,
+locator/CLI, write-lock, parsing/opportunity/unreadable and observation controls
+pass. Recorder suite: 306 checks, zero failures. Captured 269 recordings / 116
+sidecars: identical baseline/subject recording faults (164 existing faulted
+recordings); all 29 readable input streams unchanged under bounds. Largest
+source is 5,660,099 bytes / 10,926 moves. No overall RSS/hard-deadline, complete
+coverage, authenticity or calibration claim. Deployment recorded separately.
