@@ -38373,5 +38373,20 @@ synthetic whole-chain arm is not actual keyboard/OS-focus or imported-long-demo
 acceptance. Live rewind still prefers the newest opposing held direction;
 requested cancellation parity remains in BACKLOG. Human smoothness/camera/HUD
 judgement remains in lextest.md. No per-user cfg, evidence retiming or Build bump.
-Deployment provenance follows after the clean committed-byte gate.
+
+**Deployment.** Product commit b7dddf9b5b884db173602f820c96c72f94e80e30
+was rebuilt in an isolated clean worktree, with zero warnings. Committed-byte
+navigation controls and native teleport/stop/camera regressions pass. At
+2026-10-07 13:30:23..32 UTC the guarded empty-fleet progs swap and all 12 lobby
+restarts completed; all units were independently read active with fresh PIDs.
+Windows dual QC deployment completed at 13:30:32 UTC; destination/previous-pair
+hashes match, all protected native binaries and personal/default cfgs untouched.
+QW SHA256 76f4a7bf24f2d7591a1d162583ad505c5d8f541436f78f026de87e97f41907ba;
+CS SHA256 1e42c31e5d03cdebc833c34cb4684693d30c9e192bbda21a13f7e5947c78d16e.
+Pi pair hashes match. A real client connected to the live published CSQC and
+proved clock 20.0000 -> 20.8758 while held, then exact release stability with
+unchanged native body. First live harness used absent ui_close without restarting
+the menu after spawn and inverted vote-key down/up values; corrected arm completed
+without command/VM errors. No PiForce, engine/plugin/config/tool deployment, player
+data cleanup or Build bump. Deployment is not actual-device/human acceptance.
 
