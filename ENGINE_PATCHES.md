@@ -37979,3 +37979,46 @@ in BACKLOG. No all-backend/Source-fidelity, whole-map cost or full-release claim
 The clean asset worktree lacks ignored particles data, so generic shipguard's
 filesystem precondition is not satisfied; exact new runtime asset entries and
 asset-only archive payloads are checked separately.
+
+## Patch 535 — main rewind HUD and bind-resolved cursor scrolling
+
+**Problem.** Rewind duplicated clock/speed in its own chrome while the main
+clock/units/energy still described the pinned body. Fractional scrub index was
+floored for all presentation. Strafe binds were ignored as navigation.
+
+**Change.** Rewind publishes a visual-only ui_rw snapshot after camera setup.
+The main timer displays fractional cursor time, explicitly display-only; existing
+speed/energy draw it without differentiating scrubs as physics. `e line` is
+relative to the first line sample's total energy, not the live/manual/jump anchor.
+Missing velocity abstains; duplicate clock chooses the last sample; interpolation
+never crosses a break. Separate visual position/velocity/angles do not rewrite
+selected tr_cur fields, sampled practice-save values, resume request or prefix
+bound. Unsupported live ramp/trainer panels are hidden; entry/exit re-latch and
+pending-go/countdown return to the normal HUD. Duplicate chrome numbers removed.
+Bare +moveleft/+moveright bindings scroll with physical ownership, not assumed
+A/D: held-before-open, repeat/release/rebind, slot recycling and overlapping-key
+fallback respect existing guards. No server rule, grammar, mover or engine change.
+
+**Verified.** Private test-only overlay, real dedicated socket: 21 exact-sample
+versus visual/unknown/ownership assertions and 12 acted HUD/input phases. Half
+index changes visual clock/camera while sampled save coordinates/velocity and
+prefix end stay exact. Repeated keydown does not add a step; released slots reuse,
+physical owners differ, remapped held keys release, overlapping direction falls
+back, held-before-open is not adopted. Native viewpos is stationary through
+browsing; pending-go/countdown/closed source clears. Actual main HUD and restored
+live screenshots inspected. Production three-prog build zero warnings. Five reset
+regression controls pass. 306 recorder-reader tests pass; unchanged checker and
+original corpus hashes retain 269 REC observations (164 existing REC faults and
+six faults among 91 paired VIEW files), not new faults.
+
+**Control repairs/limits.** Missing Rewind_Reset prototype fixed in the initial
+seam; first grader expected `origin:` rather than viewpos's `setpos` output. Both
+rerun. An early uncommitted product compile had undefined tr_track/wrong angle
+helper arity, fixed before publication. This is live rewind only, not demo parity,
+compound binds, full P477 27-round acceptance or the stitched idle-tail defect.
+No subjective high-refresh/universal-renderer claim. Engine pin/tag/qcbuild stay.
+P533 documentation correction: TR_BUILD=16 means 15 pending samples; existing code
+already handles it. Extended emit/pixel control proves all 15 (37 alpha checks,
+52 screenshots). Long-sweep opaque endpoint has five one-channel 1/255 differences;
+it uses the existing <=1 survivor-colour tolerance with unchanged coverage masks.
+The original acted images were explicitly regraded, not replaced by a silent run.
