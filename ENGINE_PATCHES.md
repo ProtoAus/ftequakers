@@ -38499,4 +38499,38 @@ stores later rows with no transaction held during comparisons. All eight focused
 SQLite controls and existing simcheck suite pass; diagnostics and diff check clean.
 Installed verification and deployment remain separate gates.
 
+## Patch 548 — pass-wide similarity pair-attempt cap *(surfd-only)*
+
+**Problem.** The source-row limit did not cap aggregate pair work: fifty selected
+rows could each admit two hundred peers. Limiting only successful measurements
+would still overrun on unavailable peers or raised comparisons.
+
+**Change.** Share an admission budget across all source rows. New pair attempts
+consume it before peer resolution/comparison, including skips and exceptions;
+already-stored/reverse pairs consume none. The independent `--sims-pairs` CLI cap
+is 200 by default, zero disables the collector entry point before support import,
+and negative CLI limits reject. Completed rows keep the existing short flush;
+unattempted pairs get no fabricated observation. Fixed limit-reached text says
+coverage is not measured. Source-row/peer selection, history and store-only policy
+are unchanged. No schema, reader, engine/progs/config/pin/tag or Build change.
+
+**Verified.** Four predecessor-red controls actually execute the legacy collector
+through a compatibility shim and exceed the budget or violate zero-disable;
+subject controls pass. Seventeen focused tests include exception/skip accounting,
+reverse-pair deduplication, a second pass acting, no comparison-time transaction,
+and three real 80-opportunity comparisons under budget. Two actual shared-locator,
+sweep-wrapper/CLI tests pass, including quiet disable and negative rejection.
+Existing simcheck concurrent-writer and store-only arms, sweep, five reader/SQLite
+observations, five admin controls, seven count controls and 306 reccheck checks
+pass. Captured 269-recording/91-sidecar reader output is identical, with 170
+existing faulted files before/after. Independent fresh-context read-only source
+review found no blockers; reviewer inspected parent test artifacts, did not run
+commands. The real-locator harness first used an invalid generated filename;
+repaired to filing grammar before its passing measurement. Diagnostics and diff
+check clean. Frozen Linux and installed gates are recorded separately.
+
+**Limits.** Admission is not a hard deadline or individual source/DB scan/memory
+bound. Existing pending/first-peer semantics do not guarantee fairness or complete
+pair coverage. Interrupted row comparisons retain their existing failure/flush
+behavior. No calibration, authenticity, public badge or enforcement claim.
 
