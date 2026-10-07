@@ -38579,7 +38579,17 @@ velocity and tick clock. Native selected tick/origin agree with the existing low
 sample while visual HUD time remains fractional. Builds have zero warnings;
 28 grader controls reject incomplete/unacted/malformed/nonfinite probes and
 broken cancellation/release/native/pinned-body/pending invariants. Reader suite
-retains 306 checks/zero failures. Production deployment is recorded separately.
+retains 306 checks/zero failures.
+
+**Deployment.** Production from exact game `41410d8` built with zero warnings;
+CSQC SHA-256 `676ca48a7b5d5bf26f76fe0620d50e80c30c248310758b368283841666615f2a`
+is installed in both Windows installs and all 12 empty-gated Pi lobbies. SSQC
+remains `76f4a7bf...`; menu, engine and personal/default configs are unchanged.
+Windows CSQC and fleet progs retain `.prev`. Non-instrumented controls using
+both installed clients and live lobby 1 pass opposing cancellation, either
+release, pin acknowledgement and stationary server body/clock. Fleet hashes,
+unchanged default cfg and all 12 active services rechecked 2026-10-07 22:09:02 UTC.
+No instrumented QC was deployed.
 
 **Limits.** Not physical-device/OS-focus, compound/modifier-bind or camera-feel
 acceptance. Baseline chat/menu opening while held continues scrolling until a
