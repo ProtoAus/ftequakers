@@ -37951,3 +37951,31 @@ pass again. LSP inspected (no QC parser claim); actual screenshots inspected.
 No worst-case contact-mode FPS claim. Source pose sampling is still tick-based;
 no claim of invented intermediate evidence. No server state, recorder format,
 engine code/pin/tag or qcbuild change. Broader rewind overhaul is separate.
+
+## Patch 534 — authored checker and extruded red ERROR asset
+
+**Problem.** The engine's 16x16 diffuse checker is coarse; the owner supplied
+64x64 missingtexture.png and requested an Impact ERROR placeholder like Source.
+
+**Change.** Asset-only. Ship the owner's unchanged PNG as gfx/env/missingtexture
+and the standard textures/no_texture.png alias. Add a locally generated,
+extruded Impact models/missing_error.md3, red/fullbright faces, darker sides and
+small additive halo rings with a shared palette. The font itself is not shipped.
+Include regeneration/structural controls and exact release/ignore entries. No
+engine/progs rebuild, engine pin/tag or qcbuild change; patch pin advances.
+
+**Verified.** Isolated Windows OpenGL: frontal/angled ERROR renders produce
+58653/53639 red pixels, model-off zero; bloom0. Checker override loads64x64,
+legacy gl_load24bit0 loads16x16; normal/gloss remain4x4. The early rgbgen const
+GPU-alias arm rendered white; baked palette UVs repair the acting red control.
+Final 1/64-quantized MD3 has no degenerate triangles and matches prior frontal
+pixels. Eight structural/PNG/material/ship-entry tests pass; fixture QC compiles
+without warnings and final runtime arms have no shader/command errors.
+
+**Limits.** Standalone model ART, not automatic failed-model selection. Valid
+Source VMT explicit pass maps with absent base textures can still render black;
+that controlled refusal and missing-model renderer/collision integration remain
+in BACKLOG. No all-backend/Source-fidelity, whole-map cost or full-release claim.
+The clean asset worktree lacks ignored particles data, so generic shipguard's
+filesystem precondition is not satisfied; exact new runtime asset entries and
+asset-only archive payloads are checked separately.
