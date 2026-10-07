@@ -38110,3 +38110,31 @@ a speculative down-step at an exit. Underwater portal crossing/stair/carrier
 collision cases are not claimed as runtime-verified.
 Deployment/provenance is recorded separately; qcbuild stays 89.
 
+## Patch 539 — preserve cold recorder attachment across repeated cuts
+
+**Problem.** A cold streamed prefix deliberately has no live evidence run ID.
+The old warm-cut gate demanded one; second/third cuts reloaded cold and dropped
+older authoritative snapshots, so the held body no longer matched the selected
+sample. The strict six-cut control exposed both failures.
+
+**Change.** Fresh server-local attachment key at open/cold/session attach, cleared
+on discard/reset/close. Both ordinary and rewind-snapshot saves emit `recbranch`.
+Compare it, serial, run ID and generation/line/byte floors; never adopt it as a
+run ID or nonce. Legacy saves retain the nonempty matching-run-ID gate. No `.rec`
+grammar, evidence identity, detector policy, engine pin/tag or qcbuild change.
+The unpublished P538 recorder candidate was renumbered forward after concurrent
+swimming publication; integrated on that published source without changing its
+engine pin, defaults or C. Recorder source is byte-identical to the tested arm.
+
+**Verified.** Zero-warning product and private probe builds. Buffered and streamed
+real-dedicated six-cut controls pass: native selected-snapshot origin/ticks, held
+clock, release/recording, counted >4s failed waits and persisted raw prefix.
+17 compiled attachment/generation/legacy/reset controls; 11 streamed/10 buffered
+grader counterfactuals. P502 main/edges and nine grader controls pass in both
+modes. Reader 306 checks/0 faults; read-only corpus unchanged at 903 recordings/
+13 faults. First candidate omitted the separate snapshot writer and stayed red;
+repaired probes/content roots were fully rerun. Integrated product build is zero
+warnings. Human path/camera/label acceptance and broader visual pause/event/
+compare work remain open. Independent review, integrated runtime and deployment
+are separate gates; no test-only probes belong in shipped progs.
+
