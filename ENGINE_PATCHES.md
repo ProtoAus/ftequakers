@@ -38534,3 +38534,38 @@ bound. Existing pending/first-peer semantics do not guarantee fairness or comple
 pair coverage. Interrupted row comparisons retain their existing failure/flush
 behavior. No calibration, authenticity, public badge or enforcement claim.
 
+## Patch 549 — fractional demo main HUD clock (2026-10-08)
+
+**Problem.** Replay pose follows fractional visual time, but the main timer and
+full-demo chrome formatted the floored sample tick. A cursor between samples
+therefore displayed an earlier run clock than the body being inspected.
+
+**Change.** One presentation-only helper derives ticks from the visual seconds
+and recording tickrate, bounded to zero and the recorded finish. Main timer and
+full-demo chrome use it. Sampled ticks still own event/split/state semantics;
+stage-cut chrome, live rewind, save/resume and recorder/evidence clocks are
+unchanged. No engine source, pin/tag or Build bump.
+
+**Verified.** All three production progs compile with zero warnings. A real
+private dedicated socket runs 33 acted native/foreign/legacy draw probes: both
+seek directions, adjacent sub-tick positions, paused holds, stationary pose with
+advancing run time and lead-in/finish bounds. Actual panel argument/formatted
+text and chrome agree; sampled ticks stay floored and the server body stays
+exactly pinned. Unchanged baseline acts on every probe but fails fractional-input
+parity. Strict grader passes and rejects 20 counterfactuals, including unacted,
+missing/duplicate/nonfinite input, quantized text, altered sampled ticks/flags,
+terminal overflow and body drift. Retained screenshots inspected. Existing held
+navigation control passes 35 cursor probes/55 input events. Reader suite: 306
+passes; unchanged checker/input hashes retain the existing 269 REC / 91 VIEW
+corpus observation (164 REC plus six VIEW faults). Synthetic foreign/legacy files
+are reader controls, not import-codec, absent-velocity labelling, long-demo camera
+or human smoothness acceptance. Broader run-line overhaul remains open.
+Clean product `b3bfdec` independently rebuilds with zero warnings and
+passes all clock/counterfactual and navigation controls. Native camera regression
+also passes 2977 cursor samples, nine compiled controls, a 333-sample counted
+stop, fixed native freeze and reversible first-person/chase world-pixel change
+(0.403 changed; return 0.000). Diagnostic progs remain private and never ship.
+Final published `11e32ba` retains identical client/server source after the
+unpublished patch-number reassignment and peer tool-only fast-forward.
+Deployment remains a separate gate.
+
