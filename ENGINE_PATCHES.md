@@ -38129,12 +38129,17 @@ engine pin, defaults or C. Recorder source is byte-identical to the tested arm.
 **Verified.** Zero-warning product and private probe builds. Buffered and streamed
 real-dedicated six-cut controls pass: native selected-snapshot origin/ticks, held
 clock, release/recording, counted >4s failed waits and persisted raw prefix.
-17 compiled attachment/generation/legacy/reset controls; 11 streamed/10 buffered
+17 compiled attachment/generation/legacy/reset controls; 19 streamed/18 buffered
 grader counterfactuals. P502 main/edges and nine grader controls pass in both
-modes. Reader 306 checks/0 faults; read-only corpus unchanged at 903 recordings/
-13 faults. First candidate omitted the separate snapshot writer and stayed red;
+modes. Reader 306 checks/0 faults; read-only corpus unchanged at 269 recordings/
+164 recording faults and 91 views/6 view faults, with byte-identical reports. First candidate omitted the separate snapshot writer and stayed red;
 repaired probes/content roots were fully rerun. Integrated product build is zero
 warnings. Human path/camera/label acceptance and broader visual pause/event/
-compare work remain open. Independent review, integrated runtime and deployment
-are separate gates; no test-only probes belong in shipped progs.
+compare work remain open. Integrated six-cut controls pass in both modes.
+Independent source reviews found no recorder-code regression; one caught an
+empty/truncated-vector `zip` oracle. Complete unique finite native fields and
+eight malformed-field counterfactuals repair it; the prior parser accepts the
+acted empty-body negative. Draft corpus counts were corrected from the complete
+report before publication. Deployment remains separate; no test-only probes
+belong in shipped progs.
 
