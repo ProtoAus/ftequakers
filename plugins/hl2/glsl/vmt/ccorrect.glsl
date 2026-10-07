@@ -1,7 +1,9 @@
 !!ver 130-450
 !!cvarf hl2_colourcorrection
+!!cvarf hl2_colour_hue
+!!cvarf hl2_colour_hue_strength
 !!samps screen=0
-!!samps lut0:3D=1
+!!samps =LUT0 lut0:3D=1
 !!samps =LUT1 lut1:3D=2
 !!samps =LUT2 lut2:3D=3
 !!samps =LUT3 lut3:3D=4
@@ -75,6 +77,10 @@
 #define W3 0.0
 #endif
 
+#ifndef MAPHUE
+#define MAPHUE 0.0
+#endif
+
 varying vec2 texcoord;
 
 #ifdef VERTEX_SHADER
@@ -100,6 +106,21 @@ void main ()
 // trip.  Setting it to 1 afterwards needs a map load to build the shader; the
 // live path exists for a map that was loaded with it on.
 uniform float cvar_hl2_colourcorrection;
+uniform float cvar_hl2_colour_hue;
+uniform float cvar_hl2_colour_hue_strength;
+
+//HSV rotation: grey/white and value stay intact, unlike a colour overlay.
+vec3 shiftHue(vec3 rgb, float degrees)
+{
+	vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+	vec4 p = mix(vec4(rgb.bg, K.wz), vec4(rgb.gb, K.xy), step(rgb.b, rgb.g));
+	vec4 q = mix(vec4(p.xyw, rgb.r), vec4(rgb.r, p.yzx), step(p.x, rgb.r));
+	float d = q.x - min(q.w, q.y);
+	float h = abs(q.z + (q.w-q.y)/(6.0*d+1e-10)) + degrees/360.0;
+	float s = d/(q.x+1e-10);
+	vec3 wheel = abs(fract(vec3(h)+vec3(0.0, 2.0/3.0, 1.0/3.0))*6.0-3.0);
+	return q.x * mix(vec3(1.0), clamp(wheel-1.0, 0.0, 1.0), s);
+}
 
 void main (void)
 {
@@ -112,11 +133,13 @@ void main (void)
 	// the lattice size is read from the texture rather than assumed, so the
 	// shader cannot disagree with the loader about it.  Same idiom vmt/animated
 	// uses for its frame count.
+#ifdef LUT0
 	n = float(textureSize(s_lut0, 0).x);
 	uvw = (c * (n - 1.0) + 0.5) / n;
 
 	graded += float(W0) * texture2D(s_lut0, uvw).rgb;
 	w += float(W0);
+#endif
 #ifdef LUT1
 	graded += float(W1) * texture2D(s_lut1, uvw).rgb;
 	w += float(W1);
@@ -151,6 +174,11 @@ void main (void)
 		w *= on;
 	}
 
-	gl_FragColor = vec4((1.0 - w) * scene.rgb + graded, scene.a);
+	vec3 rgb = (1.0 - w) * scene.rgb + graded;
+	float hue = cvar_hl2_colour_hue < -360.0 ? float(MAPHUE) : cvar_hl2_colour_hue;
+	float strength = clamp(cvar_hl2_colour_hue_strength, 0.0, 1.0);
+	if (hue != 0.0 && strength != 0.0)
+		rgb = mix(rgb, shiftHue(clamp(rgb, 0.0, 1.0), hue), strength);
+	gl_FragColor = vec4(rgb, scene.a);
 }
 #endif

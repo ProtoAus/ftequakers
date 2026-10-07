@@ -38057,3 +38057,49 @@ changes, zero warnings, native pinned body stationary, actual new screenshot
 inspected: timer caption, speed/energy, controls and default chat are separate.
 Default Windows layout, not every custom HUD arrangement or all renderers.
 Engine pin/tag and qcbuild unchanged.
+
+## Patch 538 — Source swimming and map-scoped colour/fog controls
+
+**Problem.** Source's submerged branch only traced existing velocity: no swimming
+input or water friction. Plain Source water inherited Quake's orange contents
+blend; material fog depended on water-warp being enabled. surf_sidistic's authored
+red scene and dense red fog lacked a cheap user-adjustable alternative.
+
+**Change.** Implement Source WaterMove input, 3D drag, sinking, jump rise, aimed
+swimming, collision sliding/stepping and basevelocity accounting. Live server
+advertises read-only pm_sourceversion=3; prediction follows that key (absent means
+old drift). The existing recorder pin selects mover v1/v2/v3: old pins retain old
+water behaviour without changing any recording columns. Source-only r_sourcewater
+replaces the plain-water orange blend with authored distance fog, independent of
+r_waterwarp, or a low-cost blue-green fallback. Damage/lava/slime blends remain.
+
+hl2_colour_hue (-999 automatic, otherwise degrees) and hl2_colour_hue_strength
+(0..1) rotate HSV after authored LUTs in the same scene-only pass. No extra blur,
+reflection or LUT texture; neutral/no-LUT maps bypass the postprocess completely.
+The automatic hue is 150 degrees on surf_sidistic, zero elsewhere. Archived QC
+vbsp_fog_distance and vbsp_fog_density (-1 automatic) scale Source fog distances
+and maximum opacity; automatic settings are 2/.5 on surf_sidistic, 1/1 elsewhere.
+Sky fog uses the same settings; live changes reapply without restarting the map.
+No per-map exec mutates user settings or leaks into the next map.
+
+**Verified.** Clean-origin Windows client/server/plugin full builds; all three
+progs zero warnings, no new compiler warning in an edited C translation unit.
+Seven numeric swimmer checks plus every existing pm_selftest check pass. Real
+localhost dedicated socket: old submerged input does not accelerate, current
+forward/strafe reaches ~208u/s at maxspeed 260, up/dive/jump act, and inherited
+100u/s drifts forever in the control but decays to ~12u/s in the subject. All
+submerged arms prove input and waterlevel 3; not a listen-server prediction test.
+Native old pin-1 and pin-2 replays reproduce 2347/2347 and 4417/4417 samples,
+identical to the clean base; pin-2 pm_verify PASS, future pin-4 REFUSE. A dry
+pin-3 control also reproduces 4417/4417; this is not a newly recorded water run.
+Reader 306 checks / 0 failed; 269-file corpus remains 164 pre-existing faults.
+Real surf_sidistic fixed-camera hue/fog, strength-0, restore and next-map arms
+reach without shader errors; HUD stays exactly red, water toggle above the
+surface is pixel-identical. Source material fog acts with r_waterwarp 0; missing
+material fog uses a smooth low-cost fallback. The same scene at 960x540 gives
+1542/1618/1546/1615 fps (hue on/off/on/off): ~4.5% here, no claim for other GPUs.
+OpenGL visuals only; this does not implement Source's scripted water-lip jump,
+per-volume water fog, or animate the existing global LUT entity weights.
+Deployment/provenance is recorded separately; qcbuild stays 89.
+
+

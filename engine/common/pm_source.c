@@ -2932,6 +2932,67 @@ static void PMSrc_AirMove (void)
 	VectorSubtract (pmove.velocity, pmove.basevelocity, pmove.velocity);
 }
 
+/* Patch 538: Source WaterMove's trace-free input/drag stage. Unlike walking,
+   swimming uses the full view vectors. Separate so numeric controls exercise it. */
+static void PMSrc_WaterVelocity (void)
+{
+	vec3_t wishvel;
+	float wishspeed, speed, newspeed, addspeed, accelspeed;
+	int i;
+
+	for (i = 0; i < 3; i++)
+		wishvel[i] = pms_forward[i]*pms_forwardmove + pms_right[i]*pms_sidemove;
+	if (pmove.cmd.buttons & BUTTON_JUMP)
+		wishvel[2] += movevars.maxspeed;
+	else if (!pms_forwardmove && !pms_sidemove && !pms_upmove)
+		wishvel[2] -= movevars.watersinkspeed;
+	else
+		wishvel[2] += pms_upmove + bound(0, pms_forwardmove*pms_forward[2]*2, movevars.maxspeed);
+
+	wishspeed = VectorNormalize(wishvel);
+	wishspeed = min(wishspeed, pms_maxspeed) * 0.8f;
+	speed = VectorLength(pmove.velocity);
+	newspeed = max(0, speed - pms_frametime*speed*movevars.friction*pmove.surfacefriction);
+	if (newspeed < 0.1f)
+		newspeed = 0;
+	if (speed)
+		VectorScale(pmove.velocity, newspeed/speed, pmove.velocity);
+
+	//Source uses total post-friction speed, NOT a dry-ground dot-product accel.
+	addspeed = wishspeed - newspeed;
+	if (wishspeed >= 0.1f && addspeed > 0)
+	{
+		accelspeed = min(addspeed, movevars.accelerate*wishspeed*pms_frametime*pmove.surfacefriction);
+		VectorMA(pmove.velocity, accelspeed, wishvel, pmove.velocity);
+	}
+}
+
+static void PMSrc_WaterMove (void)
+{
+	vec3_t dest, start;
+	trace_t tr;
+
+	PMSrc_WaterVelocity();
+	VectorAdd(pmove.velocity, pmove.basevelocity, pmove.velocity);
+	VectorMA(pmove.origin, pms_frametime, pmove.velocity, dest);
+	tr = PMSrc_TraceHull(pmove.origin, dest);
+	if (tr.fraction == 1)
+	{
+		VectorCopy(dest, start);
+		start[2] += movevars.stepheight + 1;
+		tr = PMSrc_TraceHull(start, dest);
+		if (!tr.startsolid && !tr.allsolid)
+			VectorCopy(tr.endpos, pmove.origin);
+		else
+			PMSrc_TryPlayerMove(NULL, NULL);
+	}
+	else if (pmove.onground)
+		PMSrc_StepMove(dest, &tr);
+	else
+		PMSrc_TryPlayerMove(NULL, NULL);
+	VectorSubtract(pmove.velocity, pmove.basevelocity, pmove.velocity);
+}
+
 /*
 ==================
 PMSrc_FullWalkMove   (cpp:2036)
@@ -2948,14 +3009,16 @@ static void PMSrc_FullWalkMove (void)
 
 	if (pmove.waterlevel >= 2)
 	{
-		/* Water is not what this tool is for; keep it simple and
-		   QuakeWorld-ish rather than pretending to be exact. */
+		//Patch 538: actual swimming for live v3; old recordings keep their drift.
 		if (pmove.cmd.buttons & BUTTON_JUMP)
 			PMSrc_CheckJumpButton ();
 		else
 			pmove.oldbuttons &= ~BUTTON_JUMP;
 
-		PMSrc_TryPlayerMove (NULL, NULL);
+		if (movevars.sourceversion >= 3)
+			PMSrc_WaterMove();
+		else
+			PMSrc_TryPlayerMove (NULL, NULL);
 		PMSrc_CategorizePosition ();
 		if (pmove.onground)
 			pmove.velocity[2] = 0;
@@ -5077,6 +5140,57 @@ static void PMSrc_SelfTest_f (void)
 	PMSrc_Check ("skin -33 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(-33), 0, 0);
 	PMSrc_Check ("ladder skin -16 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(-16), 0, 0);
 	PMSrc_Check ("skin 0 is not a slide", PMSLIDE_FLAGS_FROM_SKIN(0), 0, 0);
+
+	/* --- Patch 538: swimming input and 3D drag --------------------------- */
+	{
+		vec3_t oldf, oldr;
+		float oldfm = pms_forwardmove, oldsm = pms_sidemove, oldum = pms_upmove, oldmax = pms_maxspeed;
+		VectorCopy(pms_forward, oldf);
+		VectorCopy(pms_right, oldr);
+		VectorSet(pms_forward, 1, 0, 0);
+		VectorSet(pms_right, 0, -1, 0);
+		pms_maxspeed = movevars.maxspeed = 260;
+		movevars.watersinkspeed = 60;
+		movevars.friction = 4;
+		movevars.accelerate = 5;
+		pmove.surfacefriction = 1;
+		pmove.cmd.buttons = 0;
+		pms_forwardmove = pms_sidemove = pms_upmove = 0;
+		VectorSet(pmove.velocity, 100, 0, 0);
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water drag (100 -> 94)", pmove.velocity[0], 94, 0.0001f);
+		VectorClear(pmove.velocity);
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water idle sinks", pmove.velocity[2], -3.6f, 0.0001f);
+		VectorClear(pmove.velocity);
+		pms_forwardmove = 400;
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water forward from rest", pmove.velocity[0], 15.6f, 0.0001f);
+		VectorClear(pmove.velocity);
+		pms_forwardmove = 0;
+		pms_sidemove = 400;
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water strafe from rest", pmove.velocity[1], -15.6f, 0.0001f);
+		VectorClear(pmove.velocity);
+		pms_sidemove = 0;
+		pms_upmove = -400;
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water dive from rest", pmove.velocity[2], -15.6f, 0.0001f);
+		VectorClear(pmove.velocity);
+		pms_upmove = 0;
+		pmove.cmd.buttons = BUTTON_JUMP;
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water jump adds lift", pmove.velocity[2], 15.6f, 0.0001f);
+		VectorClear(pmove.velocity);
+		pmove.cmd.buttons = 0;
+		pms_forwardmove = 400;
+		VectorSet(pms_forward, 0, 0, -1);
+		PMSrc_WaterVelocity();
+		PMSrc_Check("water look-down swims down", pmove.velocity[2], -15.6f, 0.0001f);
+		VectorCopy(oldf, pms_forward);
+		VectorCopy(oldr, pms_right);
+		pms_forwardmove = oldfm; pms_sidemove = oldsm; pms_upmove = oldum; pms_maxspeed = oldmax;
+	}
 
 	/* --- restore -------------------------------------------------------- */
 	movevars = savemv;

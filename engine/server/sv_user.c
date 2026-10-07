@@ -129,13 +129,16 @@ int SV_PMSrcVer(const float *pin)
 	float f = pin[SV_PMPIN_FIXRAMPBUGS];
 	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
 		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
-	return f >= 2 ? PMSRC_VERSION : f < 2 ? 1 : 0;
+	//Patch 538: v3 includes swimming at every ramp setting; retain both old movers.
+	if (pin[0] == 3)
+		return 3;
+	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }
 
 static void SV_PMPinFill(float *v)
 {
 	float *o = v;
-	*o++ = 0;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
+	*o++ = movevars.sourceversion;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
 	*o++ = pmove.player_mins[0];	*o++ = pmove.player_mins[1];
 	*o++ = pmove.player_maxs[0];	*o++ = pmove.player_maxs[1];	*o++ = pmove.capsule;
 	*o++ = sv_maxvelocity.value;	*o++ = pm_trisoup_bevels.value;	*o++ = pm_rotatedboxhulls.value;	*o++ = pm_portalcsg_scanall.value;
@@ -251,6 +254,7 @@ int SV_PMPinParse(const char *text, float *v)
 void SV_PMPinApply(const float *v)
 {
 	const float *o = v + 4;
+	movevars.sourceversion = v[0];
 	movevars.physicsmode = v[1];	pmove.pm_type = v[2];
 	pmove.player_mins[0] = *o++;	pmove.player_mins[1] = *o++;
 	pmove.player_maxs[0] = *o++;	pmove.player_maxs[1] = *o++;	pmove.capsule = *o++;

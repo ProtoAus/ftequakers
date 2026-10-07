@@ -3302,6 +3302,8 @@ void CL_CheckServerInfo(void)
 		//rubber-bands, so each one falls back to the same default the server's
 		//SV_SetSourceMoveVars uses rather than to 0.
 		movevars.physicsmode = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_physicsmode"));
+		//No key means an old server: predict its drift, not the new swimmer.
+		movevars.sourceversion = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_sourceversion"));
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ticrate");
 		movevars.ticrate = *s?Q_atof(s):0.015;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxairspeed");

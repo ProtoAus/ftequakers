@@ -2738,8 +2738,21 @@ void GLR_RenderView (void)
 		extern cvar_t r_fog_linear;
 		extern cvar_t r_voidfog;	//FTESurf Patch 329 -- deliberately no render.h change, see the essay in renderer.c
 
-		int fogtype = ((r_refdef.flags & RDF_UNDERWATER) && cl.fog[FOGTYPE_WATER].density)?FOGTYPE_WATER:FOGTYPE_AIR;
+		extern cvar_t r_sourcewater;
+		qboolean sourcewater = r_sourcewater.ival && cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP) &&
+			(r_viewcontents & FTECONTENTS_WATER) && !(r_viewcontents & (FTECONTENTS_LAVA|FTECONTENTS_SLIME));
+		int fogtype = ((sourcewater || (r_refdef.flags & RDF_UNDERWATER)) && cl.fog[FOGTYPE_WATER].density)?FOGTYPE_WATER:FOGTYPE_AIR;
 		CL_BlendFog(&r_refdef.globalfog, &cl.oldfog[fogtype], realtime, &cl.fog[fogtype]);
+
+		//A cheap fallback for Source water without authored material fog. Do not
+		//tie immersion to RDF_UNDERWATER: r_waterwarp 0 clears that effect flag.
+		if (sourcewater && !cl.fog[FOGTYPE_WATER].density && Cvar_VariableValue("vbsp_fog"))
+		{
+			VectorSet(r_refdef.globalfog.colour, 0.055f, 0.18f, 0.20f);
+			r_refdef.globalfog.alpha = 1;
+			r_refdef.globalfog.depthbias = 0;
+			r_refdef.globalfog.density = r_fog_linear.ival ? 1536 : 0.12f;
+		}
 
 		if (!r_fog_linear.ival)
 			r_refdef.globalfog.density /= 64;	//FIXME
@@ -2797,7 +2810,19 @@ void GLR_RenderView (void)
 		obviously wrong if it were not.
 		*/
 		if (*r_colourcorrection.string)
-			ccpostproc = R_RegisterCustom(NULL, r_colourcorrection.string, SUF_NONE, NULL, NULL);
+		{
+			qboolean active = true;
+			if (!strncmp(r_colourcorrection.string, "ftesurf/cc/", 11))
+			{
+				float hue = Cvar_VariableValue("hl2_colour_hue");
+				if (hue < -360)
+					hue = Cvar_VariableValue("hl2_colour_maphue");
+				active = (Cvar_VariableValue("hl2_colour_luts") > 0 && Cvar_VariableValue("hl2_colourcorrection") > 0) ||
+					(hue != 0 && Cvar_VariableValue("hl2_colour_hue_strength") > 0);
+			}
+			if (active)
+				ccpostproc = R_RegisterCustom(NULL, r_colourcorrection.string, SUF_NONE, NULL, NULL);
+		}
 		/*
 		FTESurf Patch 290: THE STAGE IS ONLY SWITCHED ON IF THE SHADER CAN ACTUALLY
 		DRAW, and that test is not defensive programming -- it is a bug this patch

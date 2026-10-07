@@ -728,6 +728,16 @@ void V_SetContentsColor (int contents)
 	int i;
 	playerview_t *pv = r_refdef.playerview;
 	cvar_t *v;
+	extern cvar_t r_sourcewater;
+
+	//Patch 538: Source supplies distance fog, not Quake's orange water tint.
+	//Only plain water: damage/powerups and lava/slime retain their own blends.
+	if (r_sourcewater.ival && cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP) &&
+		(contents & FTECONTENTS_WATER) && !(contents & (FTECONTENTS_LAVA|FTECONTENTS_SLIME)))
+	{
+		pv->cshifts[CSHIFT_CONTENTS].percent = 0;
+		return;
+	}
 
 	if (contents & FTECONTENTS_LAVA)
 		v = &v_cshift_lava;
