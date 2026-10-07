@@ -38556,6 +38556,38 @@ bound. Existing pending/first-peer semantics do not guarantee fairness or comple
 pair coverage. Interrupted row comparisons retain their existing failure/flush
 behavior. No calibration, authenticity, public badge or enforcement claim.
 
+## Patch 550 — live rewind opposing-key cancellation (2026-10-08)
+
+**Problem.** Live rewind chose the newest held navigation owner. Unlike demos,
+holding left and right kept moving the cursor; releasing either side did not
+consistently provide the requested cancel/remaining-side behavior.
+
+**Change.** Mod-side `cl_rewind.qc` derives direction from the presence of owned
+left/right keys. Opposing owners cancel, same-side owners remain independent,
+and either release resumes the remaining side. Press/release and browsing frames
+refresh the effective direction; acceleration restarts only when it changes.
+Physical ownership through repeats/rebinds/pre-open presses stays intact. No
+engine implementation, sampled native selection, recorder/save/resume semantics,
+engine commit/tag or qcbuild change.
+
+**Verified.** The unchanged source ACTS over a real dedicated socket and fails
+the same opposing-key oracle. Subject whole-chain controls pass at 30/100/300 FPS
+and with the second installed client: both press orders, either release, same-side
+holds, accelerating movement, native-sample taps, repeat/rebind/pre-open ownership,
+panel-delivered releases, pending-go/countdown and a stationary server body,
+velocity and tick clock. Native selected tick/origin agree with the existing lower
+sample while visual HUD time remains fractional. Builds have zero warnings;
+28 grader controls reject incomplete/unacted/malformed/nonfinite probes and
+broken cancellation/release/native/pinned-body/pending invariants. Reader suite
+retains 306 checks/zero failures. Production deployment is recorded separately.
+
+**Limits.** Not physical-device/OS-focus, compound/modifier-bind or camera-feel
+acceptance. Baseline chat/menu opening while held continues scrolling until a
+release: that separate focus-cancellation defect remains in BACKLOG. A 30 FPS
+arm initially hit the cursor's lower bound at 1 s; the same oracle was rerun on
+baseline and subject at an interior 2 s cursor. No low-FPS requested/native
+snapshot-alignment or stitched-tail diagnosis is claimed.
+
 ## Patch 549 — fractional demo main HUD clock (2026-10-08)
 
 **Problem.** Replay pose follows fractional visual time, but the main timer and
