@@ -56,7 +56,7 @@ cvar_t	sv_spectatormaxspeed = CVAR( "sv_spectatormaxspeed", "500");
 cvar_t	sv_accelerate		 = CVAR( "sv_accelerate", "10");
 cvar_t	sv_airaccelerate	 = CVAR( "sv_airaccelerate", "0.7");
 cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
-static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", "3", CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming. Old clients need updating to predict water correctly.");
+static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming. Old clients need updating to predict water correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
 cvar_t	sv_waterfriction	 = CVAR( "sv_waterfriction", "4");
 cvar_t	sv_wallfriction		 = CVARD( "sv_wallfriction", "1", "Additional friction when running into walls");
@@ -148,6 +148,9 @@ void WPhys_Init(void)
 	Cvar_Register (&sv_airaccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_wateraccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&pm_sourceversion,					cvargroup_serverphysics);
+	//Early +set survives registration even for NOSET cvars. Never advertise
+	//a mover different from SV_SetSourceMoveVars or the recorder's pin.
+	Cvar_ForceSet(&pm_sourceversion, STRINGIFY(PMSRC_VERSION));
 	Cvar_Register (&sv_friction,						cvargroup_serverphysics);
 	Cvar_Register (&sv_waterfriction,					cvargroup_serverphysics);
 	Cvar_Register (&sv_wallfriction,					cvargroup_serverphysics);

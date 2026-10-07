@@ -38067,8 +38067,9 @@ red scene and dense red fog lacked a cheap user-adjustable alternative.
 
 **Change.** Implement Source WaterMove input, 3D drag, sinking, jump rise, aimed
 swimming, collision sliding/stepping and basevelocity accounting. Live server
-advertises read-only pm_sourceversion=3; prediction follows that key (absent means
-old drift). The existing recorder pin selects mover v1/v2/v3: old pins retain old
+advertises read-only pm_sourceversion=3 (forced to the compiled constant after
+registration so early +set cannot spoof it); prediction follows that key (absent
+means old drift). Non-finite ramp pins are refused before version selection. The existing recorder pin selects mover v1/v2/v3: old pins retain old
 water behaviour without changing any recording columns. Source-only r_sourcewater
 replaces the plain-water orange blend with authored distance fog, independent of
 r_waterwarp, or a low-cost blue-green fallback. Damage/lava/slime blends remain.
@@ -38091,7 +38092,11 @@ forward/strafe reaches ~208u/s at maxspeed 260, up/dive/jump act, and inherited
 submerged arms prove input and waterlevel 3; not a listen-server prediction test.
 Native old pin-1 and pin-2 replays reproduce 2347/2347 and 4417/4417 samples,
 identical to the clean base; pin-2 pm_verify PASS, future pin-4 REFUSE. A dry
-pin-3 control also reproduces 4417/4417; this is not a newly recorded water run.
+pin-3 dry control also reproduces 4417/4417. A fresh full-product swimming run
+with a jump records version 3 despite a startup version-2 override, reproduces
+136/136 packet arrivals and gets native pm_verify PASS (144 rows / 154 ticks).
+Header NaN, applied-restatement NaN and infinity ramp-pin arms REFUSE; ordinary
+version writes are rejected. Invalid early mutation arms were not counted.
 Reader 306 checks / 0 failed; 269-file corpus remains 164 pre-existing faults.
 Real surf_sidistic fixed-camera hue/fog, strength-0, restore and next-map arms
 reach without shader errors; HUD stays exactly red, water toggle above the
@@ -38099,7 +38104,9 @@ surface is pixel-identical. Source material fog acts with r_waterwarp 0; missing
 material fog uses a smooth low-cost fallback. The same scene at 960x540 gives
 1542/1618/1546/1615 fps (hue on/off/on/off): ~4.5% here, no claim for other GPUs.
 OpenGL visuals only; this does not implement Source's scripted water-lip jump,
-per-volume water fog, or animate the existing global LUT entity weights.
+per-volume water fog, or animate the existing global LUT entity weights. Portal
+maps reuse the prior portal-aware sliding path after swimming input/drag, avoiding
+a speculative down-step at an exit. Underwater portal crossing/stair/carrier
+collision cases are not claimed as runtime-verified.
 Deployment/provenance is recorded separately; qcbuild stays 89.
-
 

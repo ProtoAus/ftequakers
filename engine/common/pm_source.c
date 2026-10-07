@@ -2974,6 +2974,14 @@ static void PMSrc_WaterMove (void)
 
 	PMSrc_WaterVelocity();
 	VectorAdd(pmove.velocity, pmove.basevelocity, pmove.velocity);
+	//Retain the established crossing/rotation/carrier path on portal maps;
+	//do not commit a speculative down-step at a portal destination.
+	if (pms_haveportals)
+	{
+		PMSrc_TryPlayerMove(NULL, NULL);
+		VectorSubtract(pmove.velocity, pmove.basevelocity, pmove.velocity);
+		return;
+	}
 	VectorMA(pmove.origin, pms_frametime, pmove.velocity, dest);
 	tr = PMSrc_TraceHull(pmove.origin, dest);
 	if (tr.fraction == 1)

@@ -129,6 +129,9 @@ int SV_PMSrcVer(const float *pin)
 	float f = pin[SV_PMPIN_FIXRAMPBUGS];
 	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
 		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
+	//Reject non-finite pins before the shortcut, even with fast-math enabled.
+	if (IS_NAN(f))
+		return 0;
 	//Patch 538: v3 includes swimming at every ramp setting; retain both old movers.
 	if (pin[0] == 3)
 		return 3;
