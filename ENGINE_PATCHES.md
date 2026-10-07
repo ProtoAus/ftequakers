@@ -37766,3 +37766,26 @@ star versus live Budget label. Source contracts pass. Verification is Windows
 OpenGL rendering with an owned stub world, not prediction/network gameplay,
 a universal driver/backend claim, Source visual acceptance or fire completion.
 Deployment is recorded separately after commit/pin verification.
+
+## Patch 530 — complete nearby run-line labels and faded teleport endpoints
+
+**Problem.** The overlap grid silently removed visible contact labels; endpoint
+squares remained brighter than a faint teleport join. Contact holds and turn
+history could bridge a discontinuity.
+
+**Change.** Complete labels by default, bounded vertical collision lanes, and an
+optional sparse mode (`hud_lines_declutter 1`). Explicit archived teleport alpha
+fades both endpoints and dashes. Reset ramp/turn history at a visual break.
+Existing view/mark switches and the 128-label frame cap remain. Mod-side only.
+
+**Verified.** Three-prog build: zero warnings. Actual native-record replay draws
+8 labelled contacts in complete mode versus 6 in sparse mode; screenshot inspected.
+Four runtime-log tests check both off switches, mark metadata derived from the
+recording and every drawn speed/energy/vz/delta/time field. Full dedicated P502
+main/edge controls and 306 reccheck checks pass. An initial helper referenced a
+local-only fov component and crashed fteqcc without diagnostics; a clean baseline
+acted and an explicit screen-size cache fixed it. An unavailable initial map
+fixture did not act and was replaced with an installed map, then rerun.
+Impossible density can overprint and more than 128 queued labels hit the explicit
+cap. Adjacent ramp planes, Momentum contact inference, multi-line comparisons
+and segment attribution remain separate work; this patch does not claim them.
