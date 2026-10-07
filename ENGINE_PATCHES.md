@@ -37695,3 +37695,20 @@ no reload/restart. One private locator probe failed after the correct swap and
 was repaired finish-only without recopying or replacing the original backup.
 This is installed-path/integration verification, not a new fleet calibration,
 historical reinterpretation or engine build.
+
+## Patch 527 — independent run-line controls and a compact HUD pane
+
+**Problem.** The 29-row pane overwhelmed the editor and its apparent master
+switch controlled only the open demo. Selected board lines could not be hidden
+without losing their selection.
+
+**Change.** Seven rows, with independent archived player/demo/board switches,
+all on by default. `lines help` exposes the existing advanced console settings.
+Board visibility no longer changes selection. Mod-side only; engine pins unchanged.
+
+**Verified.** Isolated three-prog build: zero warnings. Private content-overlay
+runtime exercised both opposite switch combinations and console help without
+unknown commands/VM errors. Inspected actual editor screenshot: seven rows, with
+player/board on and demo off. Test runner retains private artifacts and removes
+only its own junctions. This verifies controls/UI, not the later lifecycle,
+contact, save-continuation or comparison fixes.
