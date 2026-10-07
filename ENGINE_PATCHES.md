@@ -38269,3 +38269,14 @@ visual fix. Full teleport/contact coverage, human moving-camera feel and the
 broader reported pause/event/compare request remain open. Private diagnostic
 programs must never ship. Deployment is a separate gate.
 
+**Deployment.** Frozen published game `72e7884` production pair reached both
+Windows installs at 2026-10-07 11:28:21 UTC; ordinary `.prev` retained. CSQC
+SHA256 `ac19e6df987d33393b6c1e526f0ab3d7256d9754fa27e49f47c6741efc36e22b`;
+SSQC unchanged. Installed-client dedicated P502 main/edges pass on both native
+executables; destination and protected-file hashes reverified at 11:34:44 UTC.
+No diagnostic programs, engine/plugin/menu/config or Quakers swap.
+Pi delivery is pending: the normal occupancy gate found one player in lobby 1
+and refused before any copy/restart; no force. Independent 11:32:04 UTC read
+retains predecessor CSQC and all 12 units active. Finish from the same frozen
+source only when the guard permits, then verify fleet hashes and live behavior.
+
