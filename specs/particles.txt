@@ -54,6 +54,31 @@ atlas count_in_each_axis firstidx [last]
 	firstidx specifies the first image to use (horizontal THEN vertical).
 	last specifies the last image to use (inclusive). The engine will pick one at random. They should not span multiple rows.
 
+texframe <duration> <s1> <t1> <s2> <t2>
+	Appends an arbitrary normalized UV rectangle to a single-channel animation.
+	Only valid with type normal. UVs must be finite and between 0 and 1;
+	reversed axes are allowed, zero-area rectangles are not. Duration must be
+	positive and finite. Up to 256 frames; total duration must be <=1000000.
+	Durations need not be uniform and the atlas need not be a square grid.
+	Invalid/oversized entries are reported and ignored, not silently wrapped.
+	The first frame overrides static tcoords/atlas even without texanim.
+
+texanim <static|lifetime|loop|clamp> [rate]
+	Requires texframes; rate defaults to 1 (finite, 0..1000000).
+	static keeps frame zero. loop advances age*rate through frame durations,
+	then wraps. clamp advances the same way but holds the final frame.
+	lifetime advances (age/actual_randomized_lifespan)*total_duration*rate,
+	then holds the last frame. Thus rate 1 fits the sequence to each particle's
+	own lifespan; rate 0 freezes it. Boundaries select the next frame.
+	A duration of 1 per frame with loop/clamp rate 20 gives 20 frames/second.
+	This is discrete UV stepping within the existing texture/material batch:
+	no frame blending, secondary sequence, extra texture samples or captures.
+	Tables are owned per type and survive query/export/re-exec; redefining a
+	type resets its table just like its other settings. Legacy static effects
+	without a table are unchanged. Available with FTE_PART_TEXANIM; this
+	extension advertises compiled scripted-backend syntax, not the currently
+	selected particle backend. Select the scripted backend before using it.
+
 rotation <startmin> <startmax> <speedmin> <speedmax>
 	the particle will start with a rotation rotated between startmin and startmax.
 	It will then rotate with some per-particle value randomly picked between the speedmin+speedmax values.

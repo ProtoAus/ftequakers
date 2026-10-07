@@ -8608,6 +8608,7 @@ qc_extension_t QSG_Extensions[] = {
 #endif
 #ifdef PSET_SCRIPT
 	{"FTE_PART_SCRIPT",					NULL,	0,{NULL}, "Specifies that the r_particledesc cvar can be used to select a list of particle effects to load from particles/foo.cfg, the format of which is documented elsewhere."},
+	{"FTE_PART_TEXANIM",					NULL,	0,{NULL}, "The scripted particle backend supports bounded single-channel arbitrary UV texframe duration/rectangle tables and texanim static/lifetime/loop/clamp [rate]. This is syntax availability, not a claim that the scripted backend is currently selected."},
 	{"FTE_PART_NAMESPACES",				NULL,	0,{NULL}, "Specifies that the engine can use foo.bar to load effect foo from particle description bar. When used via ssqc, this should cause the client to download whatever effects as needed."},
 #ifdef HAVE_LEGACY
 	{"FTE_PART_NAMESPACE_EFFECTINFO",	NULL,	0,{NULL}, "Specifies that effectinfo.bar can load effects from effectinfo.txt for DP compatibility."},

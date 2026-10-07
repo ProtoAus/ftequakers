@@ -29,6 +29,7 @@ The engine has a few builtins.
 
 #ifdef PSET_SCRIPT
 
+#include "p_texanim.h"
 
 #ifdef FTE_TARGET_WEB
 #define rand myrand	//emscripten's libc is doing a terrible job of this.
@@ -104,6 +105,7 @@ typedef struct particle_s
 {
 	struct particle_s	*next;
 	float		die;
+	float		birthtime, lifetime;
 
 // driver-usable fields
 	vec3_t		org;
@@ -273,6 +275,10 @@ typedef struct part_type_s {
 	float s1, t1, s2, t2;	//texture coords
 	float texsstride;	//addition for s for each random slot.
 	int randsmax;	//max times the stride can be added
+	int numtexframes;
+	particle_texframe_t *texframes;
+	particle_texanim_t texanim;
+	float texanimrate;
 
 	plooks_t *slooks;	//shared looks, so state switches don't apply between particles so much.
 	plooks_t looks;		//
@@ -373,6 +379,23 @@ typedef struct part_type_s {
 	unsigned int state;
 #define PS_INRUNLIST 0x1 // particle type is currently in execution list
 } part_type_t;
+
+/* UVs remain per-particle driver fields, so every animation frame still
+ * shares the original texture/material batch. Legacy effects take no lookup. */
+static void P_UpdateParticleTexAnim(part_type_t *type, particle_t *p, double age)
+{
+	if (type->numtexframes)
+	{
+		int index = P_TexAnimFrame(type->texframes, type->numtexframes,
+			type->texanim, age, p->lifetime, type->texanimrate);
+		if (index >= 0)
+		{
+			const particle_texframe_t *f = &type->texframes[index];
+			p->s1 = f->s1; p->t1 = f->t1;
+			p->s2 = f->s2; p->t2 = f->t2;
+		}
+	}
+}
 
 typedef struct pcfg_s
 {
@@ -590,6 +613,12 @@ static void PScript_RetintEffect(part_type_t *to, part_type_t *from, const char 
 	{
 		to->ramp = BZ_Malloc(to->rampindexes * sizeof(*to->ramp));
 		memcpy(to->ramp, from->ramp, to->rampindexes * sizeof(*to->ramp));
+	}
+
+	if (to->texframes)
+	{
+		to->texframes = BZ_Malloc(to->numtexframes * sizeof(*to->texframes));
+		memcpy(to->texframes, from->texframes, to->numtexframes * sizeof(*to->texframes));
 	}
 
 	//'from' might still have some links so we need to clear those out.
@@ -1061,6 +1090,8 @@ static void P_ResetToDefaults(part_type_t *ptype)
 		BZ_Free(ptype->models);
 	if (ptype->sounds)
 		BZ_Free(ptype->sounds);
+	if (ptype->texframes)
+		BZ_Free(ptype->texframes);
 
 	//reset everything we're too lazy to specifically set
 	memset(ptype, 0, sizeof(*ptype));
@@ -1095,6 +1126,7 @@ static void P_ResetToDefaults(part_type_t *ptype)
 	VectorSet(ptype->dl_scales, 0, 1, 1);
 	ptype->looks.stretch = 0.05;
 
+	ptype->texanimrate = 1;
 	ptype->randsmax = 1;
 	ptype->s2 = 1;
 	ptype->t2 = 1;
@@ -1324,6 +1356,55 @@ void P_ParticleEffect_f(void)
 
 			if (ptype->randsmax < 1 || ptype->texsstride == 0)
 				ptype->randsmax = 1;
+		}
+		else if (!strcmp(var, "texframe"))
+		{
+			particle_texframe_t frame;
+			float duration;
+			char *end;
+			int i;
+			qboolean valid = Cmd_Argc() == 6 && ptype->numtexframes < PARTICLE_TEXFRAME_MAX;
+			duration = strtod(value, &end);
+			valid = valid && *value && !*end && isfinite(duration) && duration > 0;
+			frame.end = duration + (ptype->numtexframes ? ptype->texframes[ptype->numtexframes-1].end : 0);
+			valid = valid && isfinite(frame.end) && frame.end <= 1000000 &&
+				(!ptype->numtexframes || frame.end > ptype->texframes[ptype->numtexframes-1].end);
+			for (i = 0; i < 4; i++)
+			{
+				float coord = strtod(Cmd_Argv(i+2), &end);
+				valid = valid && *Cmd_Argv(i+2) && !*end && isfinite(coord) && coord >= 0 && coord <= 1;
+				if (i == 0) frame.s1 = coord;
+				if (i == 1) frame.t1 = coord;
+				if (i == 2) frame.s2 = coord;
+				if (i == 3) frame.t2 = coord;
+			}
+			valid = valid && frame.s1 != frame.s2 && frame.t1 != frame.t2;
+			if (!valid)
+				Con_Printf("%s.%s: invalid/oversized texframe (duration s1 t1 s2 t2)\n", ptype->config, ptype->name);
+			else
+			{
+				ptype->texframes = BZ_Realloc(ptype->texframes, (ptype->numtexframes+1) * sizeof(*ptype->texframes));
+				ptype->texframes[ptype->numtexframes++] = frame;
+			}
+		}
+		else if (!strcmp(var, "texanim"))
+		{
+			particle_texanim_t mode;
+			char *end;
+			float rate = Cmd_Argc() == 3 ? strtod(Cmd_Argv(2), &end) : 1;
+			qboolean valid = Cmd_Argc() == 2 || (Cmd_Argc() == 3 && *Cmd_Argv(2) && !*end);
+			if (!strcmp(value, "static")) mode = PTEX_STATIC;
+			else if (!strcmp(value, "lifetime")) mode = PTEX_LIFETIME;
+			else if (!strcmp(value, "loop")) mode = PTEX_LOOP;
+			else if (!strcmp(value, "clamp")) mode = PTEX_CLAMP;
+			else { mode = PTEX_STATIC; valid = false; }
+			if (!valid || !isfinite(rate) || rate < 0 || rate > 1000000)
+				Con_Printf("%s.%s: invalid texanim (static/lifetime/loop/clamp [rate])\n", ptype->config, ptype->name);
+			else
+			{
+				ptype->texanim = mode;
+				ptype->texanimrate = rate;
+			}
 		}
 		else if (!strcmp(var, "atlas"))
 		{	//atlas countineachaxis first [last]
@@ -2484,6 +2565,18 @@ qboolean PScript_Query(int typenum, int body, char *outstr, int outstrlen)
 			Q_strncatz(outstr, va("tcoords %g %g %g %g %g %i %g\n", ptype->s1, ptype->t1, ptype->s2, ptype->t2, 1.0f, ptype->randsmax, ptype->texsstride), outstrlen);
 		}
 
+		if (ptype->numtexframes)
+		{
+			static const char *const modes[] = {"static", "lifetime", "loop", "clamp"};
+			Q_strncatz(outstr, va("texanim %s %.9g\n", modes[ptype->texanim], ptype->texanimrate), outstrlen);
+			for (i = 0; i < ptype->numtexframes; i++)
+			{
+				particle_texframe_t *f = &ptype->texframes[i];
+				Q_strncatz(outstr, va("texframe %.9g %.9g %.9g %.9g %.9g\n",
+					f->end - (i ? ptype->texframes[i-1].end : 0), f->s1, f->t1, f->s2, f->t2), outstrlen);
+			}
+		}
+
 		if (ptype->count || ptype->countrand || ptype->countextra || all)
 			Q_strncatz(outstr, va("count %g %g %g\n", ptype->count, ptype->countrand, ptype->countextra), outstrlen);
 		if (ptype->rainfrequency != 1 || all)
@@ -2684,7 +2777,7 @@ qboolean PScript_Query(int typenum, int body, char *outstr, int outstrlen)
 #ifdef HAVE_LEGACY
 static void P_ExportAllEffects_f(void)
 {
-	char effect[8192];
+	char effect[65536]; /* includes the bounded arbitrary-UV frame table */
 	int i, assoc, n;
 	vfsfile_t *outf;
 	char fname[64] = "particles/export.cfg";
@@ -2884,6 +2977,19 @@ static void FinishParticleType(part_type_t *ptype)
 	else if (ptype->ramp && !ptype->rampmode)
 	{
 		Con_Printf("%s.%s: Particle has a ramp but no ramp mode\n", ptype->config, ptype->name);
+	}
+	if (ptype->texanim != PTEX_STATIC && !ptype->numtexframes)
+	{
+		Con_Printf("%s.%s: texanim has no texframes\n", ptype->config, ptype->name);
+		ptype->texanim = PTEX_STATIC;
+	}
+	if (ptype->numtexframes && ptype->looks.type != PT_NORMAL)
+	{
+		Con_Printf("%s.%s: texframes require type normal\n", ptype->config, ptype->name);
+		BZ_Free(ptype->texframes);
+		ptype->texframes = NULL;
+		ptype->numtexframes = 0;
+		ptype->texanim = PTEX_STATIC;
 	}
 	r_plooksdirty = true;
 }
@@ -3610,6 +3716,8 @@ static void PScript_Shutdown (void)
 			BZ_Free(part_type[numparticletypes].sounds);
 		if (part_type[numparticletypes].ramp)
 			BZ_Free(part_type[numparticletypes].ramp);
+		if (part_type[numparticletypes].texframes)
+			BZ_Free(part_type[numparticletypes].texframes);
 	}
 	BZ_Free (part_type);
 	part_type = NULL;
@@ -3877,6 +3985,11 @@ static void R_Particles_KillAllEffects(void)
 		//dereference waiting for a ramped set to be swapped mid-map.
 		part_type[i].rampmode = RAMP_NONE;
 		part_type[i].rampindexes = 0;
+		if (part_type[i].texframes)
+			BZ_Free(part_type[i].texframes);
+		part_type[i].texframes = NULL;
+		part_type[i].numtexframes = 0;
+		part_type[i].texanim = PTEX_STATIC;
 	}
 	Con_DPrintf("^5particles^7 R_Particles_KillAllEffects: unloaded %i, kept %i (r_part_keepuser %i)\n", unloaded, kept, r_part_keepuser.ival);
 //	numparticletypes = 0;
@@ -5383,6 +5496,9 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 #endif
 
 				p->die = particletime + ptype->die - p->die;
+				p->birthtime = particletime;
+				p->lifetime = p->die - particletime;
+				P_UpdateParticleTexAnim(ptype, p, 0);
 
 				VectorCopy(p->org, p->oldorg);
 			}
@@ -6186,6 +6302,9 @@ static void P_ParticleTrailSpawn (vec3_t startpos, vec3_t end, part_type_t *ptyp
 		}
 
 		p->die = particletime + ptype->die - p->die;
+		p->birthtime = particletime;
+		p->lifetime = p->die - particletime;
+		P_UpdateParticleTexAnim(ptype, p, 0);
 		VectorCopy(p->org, p->oldorg);
 	}
 
@@ -7575,6 +7694,7 @@ static void PScript_DrawParticleTypes (void)
 			}
 
 			p->angle += p->rotationspeed*pframetime;
+			P_UpdateParticleTexAnim(type, p, particletime - p->birthtime);
 
 			switch (type->rampmode)
 			{

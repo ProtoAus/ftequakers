@@ -3880,7 +3880,7 @@ static void QCBUILTIN PF_cs_particleeffectquery (pubprogfuncs_t *prinst, struct 
 {
 	int id = G_FLOAT(OFS_PARM0);
 	qboolean body = G_FLOAT(OFS_PARM1);
-	char retstr[8192];
+	char retstr[65536]; /* includes the bounded particle texframe table */
 
 	id = CL_TranslateParticleFromServer(id);
 

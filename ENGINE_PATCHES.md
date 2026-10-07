@@ -37822,3 +37822,50 @@ complete-label/teleport/fade defaults act. All 12 heartbeats empty after control
 Read-only local map content supplied to the private clients; not a map-download
 or material fix. Existing archived configs are not rewritten, and the unresolved
 contact-plane/Momentum/attribution/comparison work remains unresolved.
+
+## Patch 531 — native single-channel particle sheet animation
+
+**Problem.** Source fire textures can contain many arbitrary atlas rectangles.
+The existing tcoords/atlas commands select a static cell at spawn; translating
+only the texture stem draws a whole sheet instead of an age-animated flame.
+Per-sprite CSQC polygons are not a scalable replacement for native batching.
+
+**Change.** The scripted normal-sprite backend accepts up to 256 `texframe
+<duration> <s1> <t1> <s2> <t2>` entries with finite normalized rectangles and
+strictly increasing cumulative duration. `texanim static/lifetime/loop/clamp
+[rate]` selects a discrete frame by actual particle age; lifetime mode uses
+its randomized lifespan. Point and trail spawns initialize the same UV fields
+already consumed by existing sprite batches. No extra texture samples, frame
+blend, capture, bloom or light pass. Tables are per-type owned allocations,
+deep-copied for retints and freed on reset/set unload/shutdown. Query/export
+preserves the table (QC query/export buffers enlarged for the bounded maximum). Invalid
+input and unsupported primitive types are reported. `FTE_PART_TEXANIM` reports
+compiled scripted-backend syntax, not current backend selection. Documentation
+and the pure-C selector test are included; legacy effects with no table retain
+their static UVs and random draws.
+
+**Verified.** Isolated Win64 m-rel build; no new compiler warnings (the existing
+p_script point-file `total` warning reproduced from identical baseline source).
+LSP inspected: only pre-existing diagnostics. The actual included C selector
+passes nonuniform durations, boundaries, rate zero, negative/late age, finite
+safety, randomized lifetime and 256-frame controls. Native colored-atlas pixels
+prove red/green/blue advancement, loop return, clamp hold, lifetime expiry,
+legacy tcoords, a real trail, retint surviving source-table replacement, table
+export/re-exec, set unload and two renderer restarts. A 257th frame is rejected;
+all 256 valid rows survive the actual QC query and export. Actual old/new clients both render the map
+and report extension 0/1 respectively. Fixed-camera native flame-layer controls
+on surf_dune and surf_anubis use their actual authored sheets; repeated off
+images match exactly, static/animated/repeated animated pixels all act, active
+pools are 10-14 of an explicitly capped 128, and logs have no shader/runtime
+errors. Bloom, dynamic lights and scene captures are off. Uncapped alternating
+wall-frame observations are not GPU timings or a whole-map budget acceptance.
+
+**Limits.** This is the renderer prerequisite, NOT the product fire fix or a
+Source-exact PCF/material implementation. No product emitter, generated assets,
+owner install or fleet changed. The isolated flame rigs approximate forces,
+size/alpha/material and omit children, smoke/embers, sequence blending and
+secondary UV channels. Product shared/embedded library resolution, graph and
+operator honesty, entity flags/size, visibility/overdraw budgets, off/low and
+old-client gates, ship-set and deployment controls remain open. Existing export
+omission of trail spacing was observed and left untouched; the trail control
+restored its authored step instead of crediting a silent export replay.
