@@ -38140,6 +38140,17 @@ Independent source reviews found no recorder-code regression; one caught an
 empty/truncated-vector `zip` oracle. Complete unique finite native fields and
 eight malformed-field counterfactuals repair it; the prior parser accepts the
 acted empty-body negative. Draft corpus counts were corrected from the complete
-report before publication. Deployment remains separate; no test-only probes
-belong in shipped progs.
+report before publication. No test-only probes belong in shipped progs.
+
+**Deployment.** Production progs from inspected FTESurf `8f87209` reached both
+Windows installs and all 12 Pi lobbies on 2026-10-07; cold-client controls finished
+07:49:48 UTC. Occupancy gate had a current zero-player row for every unit; no
+force. Destination hashes agree, all units are active, ordinary `.prev` retained.
+Engine/plugins/menu, owner configs and the separate Quakers mod unchanged.
+Two fresh clients downloaded matching CSQC and received acted peer streams;
+settings/imported/native UI reached without command/VM/shader errors. Screenshots
+show the terms-unaccepted gate and a missing-map-material warning; this is live
+compatibility, not board-row fetch, full map appearance or camera/path acceptance.
+Independent source reviews and oracle recheck have no residual code blocker;
+parent-owned isolated native controls establish the cut/body/clock behavior.
 
