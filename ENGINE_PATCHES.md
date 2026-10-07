@@ -37712,3 +37712,23 @@ unknown commands/VM errors. Inspected actual editor screenshot: seven rows, with
 player/board on and demo off. Test runner retains private artifacts and removes
 only its own junctions. This verifies controls/UI, not the later lifecycle,
 contact, save-continuation or comparison fixes.
+
+## Patch 529 — retain the pre-reset trail and rewind head
+
+**Problem.** A start-save load replaced the failed run's picture; untimed practice
+pictures could grow inside a start. Live teleports joined as solid geometry.
+
+**Change.** Armed start loads retain the failed picture/head. Practice extension
+stops at a settled start/stage boundary. New attempts start a one-second default
+fade. Speed-scaled visual discontinuities break the live line without touching
+recordings, mover, evidence or certification. Mod-side only.
+
+**Verified.** Three-prog build: zero warnings. Five dedicated acted controls:
+growing recorded run, retained reset head matching rewind, start-save retention,
+new-attempt fade, and explicit stage-1 retention/fade. Full P502 dedicated suite:
+all main and edge controls pass, including live/cold/demo prefixes, holds,
+queued saves and earlier splice history. Initial fixture used an unregistered
+pre-CSQC cvar and too-short departure wait; corrected and rerun. Stage-2's
+immediate re-launch was not a standing-at-start control and exposed a separate
+TS_RUNNING/clock-back lifecycle case, recorded in BACKLOG. Discontinuity detection
+is visual/tolerance-based, not guaranteed detection of short teleports.
