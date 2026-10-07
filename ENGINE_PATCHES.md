@@ -38236,3 +38236,36 @@ buffer for mode 4. OpenGL is the runtime-verified backend. Authored underwater
 fog can remain dense; P538 contents tint/fog behavior is retained. Human taste
 and broader material/backend coverage remain open. Build number stays 89.
 
+## Patch 542 — preserve the visual row at a serialized rewind cutoff
+
+**Problem.** A trail raw clock is six-decimal text, while trim/save/load used
+an unrounded float32 cutoff. At native tick 49, 0.015 * 49 is 0.734999955;
+its stored 0.735 row decodes as 0.735000014 and was discarded. At 30 FPS this
+lost a whole 45 ms visual sample even when request, native selection and load
+acknowledgement agreed. The original 0.735 -> 0.690 probe held tick 49, not a
+0.690 native snapshot. A separate forward difference held native tick 103.
+
+**Change.** Normalize only visual trim/save/load cutoffs with the same
+six-decimal formatter/parser as raw samples, once per operation. No FPS
+epsilon, synthesized sample, native selection change, evidence/save-state
+retiming, recording format, engine pin/tag or qcbuild change. Opt-in private
+instrumentation captures the entire native ring, wire request, sampled cursor
+and go acknowledgement for independent nearest-position and exact-prefix checks.
+
+**Verified.** Zero-warning production/diagnostic builds. Baseline 30-FPS cuts
+still drop a 2.025 boundary to 1.980 and compiled normalization controls fail.
+Candidate buffered 30/100/300 and streamed 30 matrices pass all six requested
+cuts, native body/clocks, counted failed waits, hold/release and 17 lineage
+guards. All six independent ring/acknowledged-prefix audits pass in each mode;
+six compiled raw-clock controls retain boundaries and exclude future ticks.
+19 audit counterfactuals, 18/19 existing native negatives and 16 visual negatives
+pass. Nine compiled visuals plus 5,646 / 5,574 both-camera cursor samples pass
+in buffered/streamed 30-FPS controls. Production P502 main/edges pass both modes;
+reader 306/0 and captured 269-file corpus findings are unchanged (164 faulted).
+
+**Limits.** Native nearest-position selection still need not equal the requested
+client clock; the original forward 45 ms difference is not repaired by this
+visual fix. Full teleport/contact coverage, human moving-camera feel and the
+broader reported pause/event/compare request remain open. Private diagnostic
+programs must never ship. Deployment is a separate gate.
+
