@@ -38681,3 +38681,29 @@ call counts across cases; reset per case before accepting results. Existing
 collector, byte/move bounds, admin auth/DOM/no-mutation, write-lock, sweep and
 board tests pass. No historical reread, source binding, coverage/calibration,
 engine/progs/pin/tag or Build claim. Deployment recorded separately.
+
+## Patch 553 - elapsed similarity admission budget *(SURFD ONLY)*
+
+**Problem.** A finite pair-attempt cap still permits an arbitrarily long pass when
+sources fail or comparisons are slow. Row selection is not measured coverage.
+
+**Change.** Add a ten-second default monotonic cooperative admission window,
+independent of row/pair limits. Loader/schema/query time counts; no new row/pair
+is admitted at the deadline. In-flight work is not interrupted and normal
+observations still flush outside comparison transactions. The wrapper/CLI forward
+`--sims-seconds`; zero disables before support import, negative/nonfinite CLI
+values are rejected before main's database connection. Existing module bootstrap
+may initialize its own database; this is not a no-database-open CLI guarantee.
+Time/pair stop notes explicitly say coverage is not measured. No process kill,
+hard timeout, scheduling fairness, detector threshold or badge gate.
+
+**Verified.** Five predecessor-red fake-monotonic-clock controls plus independent
+pair-cap positive control pass. Slow comparison ACTS, completes 80 opportunities,
+flushes before return, admits no further row/pair and later work ACTS next pass.
+Unavailable primaries, unresolved peer and thrown comparison consume elapsed
+admission. Zero avoids loader/resolver; finite positive values reach actual CLI
+and wrapper, NaN/Inf/negative reject before main connect. All existing collector,
+source-bound/category, locator/write-lock, admin/auth/DOM and sweep tests pass.
+LSP reports no recorded diagnostics; Python execution is the build/test gate.
+Frozen Linux, independent review and deployment recorded separately. No engine,
+progs, pin/tag or Build changes.
