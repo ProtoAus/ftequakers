@@ -38186,3 +38186,15 @@ follow-up in BACKLOG; do not claim a complete low-FPS resume fix. Human moving-
 camera feel, real teleport/contact coverage and the broader pause/event/compare
 request remain open. Deployment is a separate gate, not claimed by these tests.
 
+**Deployment.** Frozen FTESurf `996462b` production bytes reached both Windows
+installs and all 12 Pi lobbies; compatibility verification finished 2026-10-07
+08:44:27 UTC. Destination/progenitor hashes agree, ordinary `.prev` retained.
+Pi occupancy gate had a current empty row per unit, no force; independent read
+finds all 12 active. Windows native/plugin/menu/personal/default config and
+Quakers bytes unchanged. Production builds contain no private probe commands.
+Two fresh-cache installed clients downloaded matching CSQC and received real
+peer streams without command/VM/shader errors. Inspected screenshots show the
+unaccepted-terms gate and known missing-map material: live compatibility, not
+row-fetch, full map appearance or human camera-feel acceptance. No recording
+submissions, map change or second restart during the finish-only controls.
+
