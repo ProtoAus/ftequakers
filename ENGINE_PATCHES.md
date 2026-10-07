@@ -38041,3 +38041,19 @@ was an implicit QC constant; explicit var repaired the seam and the complete arm
 reran. Test hooks stay in private overlay builds. Online terms are unaccepted,
 so this proves UI/scope only, not remote row fetch or broadened permission.
 Engine pin/tag and qcbuild unchanged; broader comparison stays in ROADMAP12.9.
+
+## Patch 537 — separate rewind context from the main HUD caption
+
+**Problem.** Final clean production screenshot caught the legacy fixed REWIND
+heading overlapping P535's timer source caption; controls also shared chat rows.
+
+**Change.** While the main cursor snapshot is active, its caption owns top context.
+The footer has an explicit REWIND prefix at 0.80 viewport height; implicit resume
+context sits at 0.76. Keep the prior pending-go/countdown heading/guard behavior.
+No input/physics/evidence change.
+
+**Verified.** Entire 21-unit/12-dedicated-phase rewind control rerun after layout
+changes, zero warnings, native pinned body stationary, actual new screenshot
+inspected: timer caption, speed/energy, controls and default chat are separate.
+Default Windows layout, not every custom HUD arrangement or all renderers.
+Engine pin/tag and qcbuild unchanged.
