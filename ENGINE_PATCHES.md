@@ -38299,8 +38299,10 @@ and default coverage has a 65% minimum; explicit force still wins. Glass keeps
 its existing Bayer path. Renderer-owned alpha/force policies enable live
 coverage edits without widening the general plugin flag mask.
 
-**Verified.** Isolated Windows/OpenGL build: zero QC warnings, no new native
-warnings; LSP warnings predate these edits. Source water/menu contracts and all
+**Verified.** Isolated Windows/OpenGL build: zero QC warnings, no new compiler
+warnings; LSP warnings predate these edits. One grouped-dependency Make warning
+occurred after restoring private counters; the final incremental build had
+none. Each changed native byte set passed its own gate. Source contracts and all
 12 depth tests pass. Loaded DLL paths/hashes were attested, not inferred from an
 input filename. Matched fixed-normal old/new captures on surf_aesthetic show
 zero changed pixels for full reflection; an acting synthetic glass dither also
@@ -38322,4 +38324,15 @@ scene twice beyond the main view; reducing capture size does not remove scene
 submission cost. Moving-camera aesthetics, other maps/backends and owner FPS
 remain human gates. No movement, evidence, progs, config, server or qcbuild
 change; dual Windows native deployment is recorded separately after its gate.
+
+**Deployment.** At 2026-10-07 12:54:20 UTC, the exact verified native client and
+HL2 plugin reached both Windows installs, with their preceding bytes in `.prev`.
+Client SHA256 `661caed2ad401db0d6c27696536d8dcf64f3abea0033a16c7a0871638bbb60b2`;
+HL2 SHA256 `b68da9d0e4bddd96d871b3294113da0c17e1f169998845994fd5477c24201bd2`.
+Both installed executables and their actual installed DLL modules passed the
+isolated pool/mode-switch gate; flat-switch identity and 10/16 dither coverage
+pass on each. Destination and protected config/progs/server/addon hashes were
+reverified unchanged at 13:00:51 UTC. No personal setting, server, progs, other
+plugin or Pi deployment. Engine code pin/tag remains the P543 feature commit;
+this provenance note changes neither the shipped bytes nor the product pin.
 
