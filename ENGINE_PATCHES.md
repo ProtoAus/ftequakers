@@ -37808,3 +37808,17 @@ falls back and saves 3/old. Lobby map content was explicitly supplied to the
 isolated clients because the existing server map-download path denied the BSP;
 this is CSQC-download/menu compatibility evidence, not a map-download/material
 fix, other-backend acceptance or Source visual parity.
+
+**Run-line P527/P529/P530 deployment (2026-10-07 UTC).** Clean inspected product
+`5ff0b3b` built with zero warnings. Both Windows CSQC destinations and immediate
+predecessor backups verified; native/plugin, SSQC, menu, owner configs/data left
+unchanged. The existing deployed water code is preserved. Pi received the
+coherent SSQC/CSQC pair via no-player/hash/backup/restart gates: all 12 lobbies
+empty before swap, healthy afterward, live and previous pair hashes verified.
+SSQC/shared source is unchanged from the prior deployed water-only product.
+Actual fresh-cache CSQC downloads on both installed native clients match new
+bytes; spawned HUD editor screenshots, independent console controls and
+complete-label/teleport/fade defaults act. All 12 heartbeats empty after controls.
+Read-only local map content supplied to the private clients; not a map-download
+or material fix. Existing archived configs are not rewritten, and the unresolved
+contact-plane/Momentum/attribution/comparison work remains unresolved.
