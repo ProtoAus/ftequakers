@@ -1622,7 +1622,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef LQWATER\n"
+"#ifdef REFLECTCUBEMASK\n"
 "refl = textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL);\n"
+"#else\n"
+"refl = vec3(FOGTINT);\n"
+"#endif\n"
+//Baked reflection is only an approximation. Preserve water body colour
+//at the horizon; full Fresnel replacement is reserved for live reflection.
+"fres *= 0.65;\n"
 "#else\n"
 "refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);\n"
 "#endif\n"
@@ -1725,11 +1732,42 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float alpha = float(ALPHA);\n"
 "#ifdef REFLECTCUBEMASK\n"
 "vec3 reflected = textureCube(s_reflectcube, reflect(-viewdir, normal)).rgb * vec3(TINT_REFL);\n"
-"colour = mix(colour, reflected, fresnel);\n"
-"alpha = mix(alpha, 1.0, fresnel);\n"
+//A baked cube can have dark faces unrelated to the live sky. Retain
+//water body colour at grazing angles instead of becoming a black rim.
+"colour = mix(colour, reflected, 0.65 * fresnel);\n"
+"alpha = mix(alpha, 0.90, fresnel);\n"
 "#endif\n"
 // Scene fog affects colour, not the authored/translucent coverage.
 "gl_FragColor = vec4(fog3(colour), alpha);\n"
+"}\n"
+"#endif\n"
+},
+#endif
+#ifdef GLQUAKE
+{QR_OPENGL, 110, "vmt/watersheet",
+"!!ver 110\n"
+"!!permu FOG\n"
+
+"#include \"sys/fog.h\"\n"
+
+"#ifndef FOGTINT\n"
+"#define FOGTINT 0.2,0.3,0.35\n"
+"#endif\n"
+"#ifndef ALPHA\n"
+"#define ALPHA 0.7\n"
+"#endif\n"
+
+"#ifdef VERTEX_SHADER\n"
+"void main()\n"
+"{\n"
+"gl_Position = ftetransform();\n"
+"}\n"
+"#endif\n"
+
+"#ifdef FRAGMENT_SHADER\n"
+"void main()\n"
+"{\n"
+"gl_FragColor = fog4blend(vec4(vec3(FOGTINT), float(ALPHA)));\n"
 "}\n"
 "#endif\n"
 },
@@ -1846,6 +1884,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // returned as a threshold in (0,1).
 "float bayer4 (vec2 p)\n"
 "{\n"
+"#ifdef WATER\n"
+//gl_FragCoord is at half-pixel centres. Bayer cells need integer pixels;
+//otherwise even alpha 1 discards 2/16 samples. Keep glass unchanged.
+"p = floor(p);\n"
+"#endif\n"
 "float lo = b2(mod(p.x, 2.0), mod(p.y, 2.0));\n"
 "float hi = b2(mod(floor(p.x*0.5), 2.0), mod(floor(p.y*0.5), 2.0));\n"
 "return (4.0*lo + hi + 0.5) * (1.0/16.0);\n"

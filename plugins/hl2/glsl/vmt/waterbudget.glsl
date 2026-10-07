@@ -77,8 +77,10 @@ void main ()
 	float alpha = float(ALPHA);
 #ifdef REFLECTCUBEMASK
 	vec3 reflected = textureCube(s_reflectcube, reflect(-viewdir, normal)).rgb * vec3(TINT_REFL);
-	colour = mix(colour, reflected, fresnel);
-	alpha = mix(alpha, 1.0, fresnel);
+	//A baked cube can have dark faces unrelated to the live sky. Retain
+	//water body colour at grazing angles instead of becoming a black rim.
+	colour = mix(colour, reflected, 0.65 * fresnel);
+	alpha = mix(alpha, 0.90, fresnel);
 #endif
 	// Scene fog affects colour, not the authored/translucent coverage.
 	gl_FragColor = vec4(fog3(colour), alpha);

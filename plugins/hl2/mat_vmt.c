@@ -680,7 +680,12 @@ static float VMT_WaterDitherAlpha(float fogend)
 		if (a < 0.35f) a = 0.35f;
 		if (a > 0.90f) a = 0.90f;
 	}
-	return VMT_DitherScale(a);
+	a = VMT_DitherScale(a);
+	//Keep water readable without changing the glass coverage scale. An
+	//explicit force still wins, including intentionally sparse coverage.
+	if ((!hl2_dither_force || hl2_dither_force->value <= 0) && a < 0.65f)
+		a = 0.65f;
+	return a;
 }
 
 static plugfsfuncs_t *fsfuncs;
@@ -3560,7 +3565,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		$cheapwaterstartdistance/expensive hints.
 		*/
 		if (wmode == 1)
+		{
 			Q_strlcpy(progargs, "#LQWATER", sizeof(progargs));
+			if (!Q_strcasecmp(st->envmap, "env_cubemap") && (!hl2_envcubemap || hl2_envcubemap->ival))
+				st->wantenvcube = 1;
+		}
 
 		/*
 		FTESurf Patch 251: hand water.glsl the keys it has always been able to read.
@@ -3666,7 +3675,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			VMT_FogColorString(st->fogcolor, fog, sizeof(fog));
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
-					"\t\tprogram \"vmt/flatdither\"\n"
+					"\t\tprogram \"vmt/flatdither#WATER=1\"\n"
 					"\t\tmap $whiteimage\n"
 					"\t\trgbgen const %s\n"
 					"\t\talphagen const %f\n"
@@ -3684,18 +3693,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			so that is what this uses -- flat, translucent, and the same idiom
 			the engine's own r_waterstyle 0 uses (gl_shader.c:7205).
 
-			No program and no render target, so the backend never reaches the
-			GLR_DrawPortal branches at all.
+			A top-level colour shader avoids the compatibility-context progless
+			path (compiled out under GLSLONLY). No texture, capture or colourgen.
 			*/
 			char fog[64];
 			VMT_FogColorString(st->fogcolor, fog, sizeof(fog));
+			for (char *p = fog; *p; p++)
+				if (*p == ' ') *p = ',';
 			Q_strlcatfz(script, &offset, sizeof(script),
-				"\t{\n"
-					"\t\tmap $whiteimage\n"
-					"\t\trgbgen const %s\n"
-					"\t\talphagen const 0.7\n"
-					"\t\tblendfunc blend\n"
-				"\t}\n", fog);
+				"\tprogram \"vmt/watersheet#FOGTINT=%s#ALPHA=0.7\"\n"
+				"\t{\n\t\tblendfunc blend\n\t}\n", fog);
 		}
 		else
 		{

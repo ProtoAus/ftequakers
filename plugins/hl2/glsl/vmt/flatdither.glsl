@@ -72,6 +72,11 @@ float b2 (float x, float y)
 // returned as a threshold in (0,1).
 float bayer4 (vec2 p)
 {
+#ifdef WATER
+	//gl_FragCoord is at half-pixel centres. Bayer cells need integer pixels;
+	//otherwise even alpha 1 discards 2/16 samples. Keep glass unchanged.
+	p = floor(p);
+#endif
 	float lo = b2(mod(p.x, 2.0), mod(p.y, 2.0));
 	float hi = b2(mod(floor(p.x*0.5), 2.0), mod(floor(p.y*0.5), 2.0));
 	return (4.0*lo + hi + 0.5) * (1.0/16.0);

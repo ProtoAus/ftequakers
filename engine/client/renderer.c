@@ -852,6 +852,10 @@ static cvar_t hl2_water_shaderpolicy = CVARFD("hl2_water", "3", CVAR_SHADERSYSTE
 	"2: live refraction/reflection. 3: depth-writing dither (default). "
 	"4: budget animated, translucent fog colour/normals/approximate baked reflection, no captures or screen copy. "
 	"Budget water is not depth-correct or Source-exact. Changes rebuild materials without restarting the map.");
+static cvar_t hl2_dither_alpha_shaderpolicy = CVARFD("hl2_dither_alpha", "1", CVAR_SHADERSYSTEM,
+	"Coverage multiplier for dithered Source surfaces. Water keeps a readable minimum unless force is set.");
+static cvar_t hl2_dither_force_shaderpolicy = CVARFD("hl2_dither_force", "0", CVAR_SHADERSYSTEM,
+	"Explicit coverage for dithered Source surfaces; 0 uses each material's derived coverage.");
 cvar_t r_waterstyle							= CVARFD ("r_waterstyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Changes how water, and teleporters are drawn. Possible values are:\n0: fastturb-style block colour.\n1: regular q1-style water.\n2: refraction(ripply and transparent)\n3: refraction with reflection at an angle\n4: ripplemapped without reflections (requires particle effects)\n5: ripples+reflections");
 cvar_t r_slimestyle							= CVARFD ("r_slimestyle", "", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only slime. If empty, defers to r_waterstyle.");
 cvar_t r_lavastyle							= CVARFD ("r_lavastyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only lava. If empty, defers to r_waterstyle.");
@@ -1437,6 +1441,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_fastturbcolour, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterstyle, GRAPHICALNICETIES);
 	Cvar_Register (&hl2_water_shaderpolicy, GRAPHICALNICETIES);
+	Cvar_Register (&hl2_dither_alpha_shaderpolicy, GRAPHICALNICETIES);
+	Cvar_Register (&hl2_dither_force_shaderpolicy, GRAPHICALNICETIES);
 	Cvar_Register (&r_lavastyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimestyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_telestyle, GRAPHICALNICETIES);

@@ -9408,6 +9408,7 @@ void Shader_DoReload(void)
 		live++;
 		ps.s = s;
 		ps.saveshaderbody = NULL;
+		oldsort = s->sort;
 
 		strcpy(cleanname, s->name);
 		argsstart = *cleanname?strchr(cleanname+1, '#'):NULL;
@@ -9423,22 +9424,24 @@ void Shader_DoReload(void)
 				char drivername[MAX_QPATH];
 				Q_snprintfz(drivername, sizeof(drivername), sh_config.shadernamefmt, cleanname);
 				if (Shader_ParseShader(&ps, drivername))
-					continue;
+					goto sortcheck;
 			}
 			if (Shader_ParseShader(&ps, cleanname))
-				continue;
+				goto sortcheck;
 			if (strcmp(cleanname, shortname))
 				if (Shader_ParseShader(&ps, shortname))
-					continue;
+					goto sortcheck;
 		}
 		if (s->generator)
 		{
 			regenerated++;
-			oldsort = s->sort;
 			Shader_Regenerate(&ps, shortname);
-			if (s->sort != oldsort)
-				resort = true;
 		}
+	sortcheck:
+		//Material loaders and shader files can change sort too. Their early
+		//continues left live water/glass batches in the old world bucket.
+		if (s->sort != oldsort)
+			resort = true;
 	}
 
 	TRACE(("Resorting shaders\n"));

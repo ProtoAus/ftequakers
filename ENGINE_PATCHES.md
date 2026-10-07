@@ -38280,3 +38280,46 @@ and refused before any copy/restart; no force. Independent 11:32:04 UTC read
 retains predecessor CSQC and all 12 units active. Finish from the same frozen
 source only when the guard permits, then verify fleet hashes and live behavior.
 
+## Patch 543 — readable low-cost water and live material sort changes (2026-10-07)
+
+**Problem.** Cheap/budget water replaced its body colour with a dark baked cube
+at grazing angles. Flat water disappeared in the GLSL-only compatibility path,
+and changing a parsed VMT's sort regenerated the shader but skipped the batch
+resort check, so a newly translucent sheet could draw before the opaque floor.
+Water dither used half-pixel fragment centres as Bayer indices: even forced
+coverage .98 discarded two of sixteen pixels, and default coverage was faint.
+The plugin API masks shader-system flags, so dither coverage edits stayed cached.
+
+**Change.** Limit baked reflection to 65% Fresnel weight in modes 1/4; mode 1
+uses material fog colour when its optional cube is absent/gated. Keep mode 2's
+live reflection unchanged. Embed a sampler-free, 70%-alpha watersheet shader
+for mode 0. Check sort changes after all parsed/generated reload paths and
+resort existing world batches. Water-only Bayer arguments floor pixel centres
+and default coverage has a 65% minimum; explicit force still wins. Glass keeps
+its existing Bayer path. Renderer-owned alpha/force policies enable live
+coverage edits without widening the general plugin flag mask.
+
+**Verified.** Isolated Windows/OpenGL build: zero QC warnings, no new native
+warnings; LSP warnings predate these edits. Source water/menu contracts and all
+12 depth tests pass. Loaded DLL paths/hashes were attested, not inferred from an
+input filename. Matched fixed-normal old/new captures on surf_aesthetic show
+zero changed pixels for full reflection; an acting synthetic glass dither also
+has zero changed pixels. Flat now blends with the visible floor after both live
+2 -> 0 switches and a fresh load. Water coverage is exactly 10/16 by default,
+16/16 at force .98 and 2/16 at force .1; returning to 0 restores the default.
+Cheap/budget grazing regions brighten, and absent-cube fixtures remain visible.
+Private consumer instrumentation, removed before shipping, counts zero captures
+in modes 0/3/4, one refraction in 1 and one reflection plus one refraction in 2
+at the selected pool view. Both capture dimensions act at 1280x720, 640x360 and
+320x180 after scale change plus flushshaders. Full mode measured about 780-786,
+901 and 936 FPS respectively there; this is a local scene/control, not a fleet
+or universal performance promise. The earlier no-flush scale arm did not act
+and is not used as evidence of a CPU bottleneck.
+
+**Limits.** Baked modes remain approximations; 65% prevents loss of all body
+colour, not arbitrary authored black tint. Full reflection still renders the
+scene twice beyond the main view; reducing capture size does not remove scene
+submission cost. Moving-camera aesthetics, other maps/backends and owner FPS
+remain human gates. No movement, evidence, progs, config, server or qcbuild
+change; dual Windows native deployment is recorded separately after its gate.
+

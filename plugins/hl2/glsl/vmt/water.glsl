@@ -184,7 +184,14 @@ void main (void)
 #endif
 
 #ifdef LQWATER
+#ifdef REFLECTCUBEMASK
 	refl = textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL);
+#else
+	refl = vec3(FOGTINT);
+#endif
+	//Baked reflection is only an approximation. Preserve water body colour
+	//at the horizon; full Fresnel replacement is reserved for live reflection.
+	fres *= 0.65;
 #else
 	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
