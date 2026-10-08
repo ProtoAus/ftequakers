@@ -2166,6 +2166,19 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			return &funcs;
 	}
 #ifdef HAVE_CLIENT
+	//Independent exact-size ABI; never extend the legacy "2D" table in place.
+	if (!strcmp(interfacename, plugmeshfuncs_name))
+	{
+		static plugmeshfuncs_t funcs =
+		{
+			Plug_Draw_GetScreenSize,
+			Plug_Mesh_CreateTexture,
+			Plug_Mesh_DestroyTexture,
+			Plug_Mesh_Submit,
+		};
+		if (structsize == sizeof(funcs))
+			return &funcs;
+	}
 	if (!strcmp(interfacename, plug2dfuncs_name))
 	{
 		static plug2dfuncs_t funcs =

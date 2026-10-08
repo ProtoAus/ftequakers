@@ -39791,3 +39791,43 @@ read2026-10-08T09:11:25Z: hashes/rollback/backup mode good, healthOK, all12lobbi
 active. No live collection/reread, detector/badge/enforcement change, reader/QC/
 engine/Windows/config ship. Mutable board/replay/cursor preservation, hard time/
 RSS, calibration, million-row performance and live-browser acceptance unverified.
+
+## Patch 589 — versioned plugin-owned indexed 2D meshes
+
+**Problem.** The legacy plugin `2D` ABI exposes quads and shared shader-table
+references, not indexed command lists with caller-owned texture lifetimes. The
+native UI roadmap needs a separately negotiable prerequisite; extending `2D`
+in place would break its exact-size negotiation and existing callers.
+
+**Change.** Add exact-size `2DMesh/1`, immutable bounded raw RGBA8 uploads and
+non-repeating 64-bit plugin-owned tokens. Release, plugin close and pre-renderer
+teardown reclaim resources and permanently invalidate tokens. Validate the whole
+synchronous batch before submission: counts, command/index/vertex offsets,
+finite positions/UVs/clips and texture ownership. Triangle lists clip in physical
+top-left pixel space with interpolated UV/color, then submit bounded real meshes
+through BE_DrawMesh_Single. Flush pending 2D first; do not write caller color,
+blend flags or backend-dependent BE_Scissor. Straight alpha, linear/clamped atlas
+filtering, both windings; legacy ABI unchanged. Native callers are trusted code,
+not a hostile-pointer/thread sandbox. No QC/ImGui/service/input bridge in this
+milestone; MQC/CSQC draw-site dispatch and mixed inherited clipping remain next.
+
+**Verified.** Disposable Windows GL/NVIDIA native gallery: P581 control refuses
+new ABI while legacy sentinel ACTS; subject accepts exact size and rejects
+short/long/version mismatch. Physical gallery is pixel-identical at virtual
+scales 1/2, repeat, renderer restart and main-plugin unload/reload. Nonzero
+index/vertex offsets, both windings, atlas/tint alpha, partial/empty clips,
+multiple mesh chunks, invalid-second-command no-partial draw and legacy
+before/after color/order markers pass. 25 invalid probes, seven lifetime probes,
+61 texture-count-budget assertions, foreign destroy/submit rejection, fresh
+32-texture budget after automatic unload cleanup, stale restart/reload rejection
+and no-renderer startup ACT. Both fixture DLLs compile -Wall -Wextra -Werror;
+33 portable grader tests pass. Full client/server/plugins retain the same 74
+compiler warning messages/counts as inspected P581 full build, zero new. Plugin
+and renderer TUs retain only baseline clang-tidy warnings; standalone header/
+fixture diagnostics lack engine context. Older P581 atlas regression passes.
+Evidence: tools/p589mesh.py and tools/p589mesh.md in the game repo. These are
+native-only controls, not mixed QC clipping, non-GL parity, actual-device input,
+ImGui acceptance, exhaustive byte/global-budget stress or CPU/GPU cost approval.
+No progs/config/reader/evidence/Pi/release or Build-number change. Clean tagged
+build, frozen regression and guarded dual-native delivery are recorded in game
+AGENT_NOTES.md separately from this implementation verification.
