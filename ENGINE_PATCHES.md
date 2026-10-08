@@ -39477,7 +39477,8 @@ existing behavior. No metric, format, detector, ranking, engine pin/tag/Build ch
 control. Spied real binary reads request exactly limit+1 for both80-row sources;
 exact byte/move bounds retain default metrics and exact capture. One-less/zero
 budgets abstain whole. Existing source/parsing/unreadable/opportunity suites pass;
-LSP no recorded diagnostics. Independent review, Linux and deployment pending.
+LSP no recorded diagnostics. Final source review found no issues; complete batch
+and partial dual-Windows deployment evidence/limits are recorded with Patch 580.
 
 ## Patch 578 - report actual similarity flush additions *(SURFD ONLY)*
 
@@ -39495,7 +39496,8 @@ predecessor fails three same-key overlap counts. Real second-connection inserts
 ACT during real80-row comparisons, survive reopen unchanged, and ignored notable/
 skip/all-duplicate results do not invent additions. Admission still checkpoints;
 trigger writes do not inflate counts. Adjacent atomic/pair-fault/source/peer suites
-pass including acted rollback. LSP no recorded diagnostics; review/Linux/live pending.
+pass including acted rollback. LSP no recorded diagnostics. Final source review
+found no issues; final Linux/installed/live evidence is recorded with Patch 580.
 
 ## Patch 579 - acted bounded reader capsule preflight *(TOOLS ONLY)*
 
@@ -39517,7 +39519,8 @@ controls: marker variants preserving callable, hash-valid ignored limits, and
 incorrect captured hash. Dry/apply preserve prior bytes/mode/backup inventory on
 rejection; real dry/apply installed comparison/capture ACT. Predecessor guards,
 paired drift/race, exclusive backups and exact Git preparation still pass.
-LSP no recorded diagnostics; independent review/Linux/live gates pending.
+LSP no recorded diagnostics. Final source review found no issues; final Linux/
+installed evidence and primary Windows deployment blocker recorded with Patch 580.
 
 ## Patch 580 - bind similarity reader per collection pass *(SURFD ONLY)*
 
@@ -39537,4 +39540,24 @@ file replacement ACTS during real80-opportunity comparison; all three first-pass
 pairs use initial module with one load, three next-pass pairs use replacement,
 and later missing support abstains without cache. Direct calls observe replacement
 with explicit tools; disabled pass performs no loads/writes. LSP no recorded
-diagnostics; independent review/Linux/installed gates pending.
+diagnostics. Final source reviewer finds no issues, with inspected evidence only.
+All 52 explicit Linux programs pass across 51 first-run passes and one retained
+unmodified dynamic-board timestamp rerun, with established optional skips. Windows
+51/52 programs pass; unchanged admin's same two UDP assertions reproduce on the
+byte-identical baseline. Recorder 306/0; 269REC plus pairedVIEW manifests and full
+reports exactly match baseline, including 170 faulted reports.
+
+**DEPLOYED (UTC 2026-10-08).** Frozen source 952d586: Pi reader 07:00:37 and ONLY
+simcheck.py via canonical -Only -NoReload -SkipTests (explicit 52program stage
+already completed). Destination hashes, rollback files and mode600 database backup
+verified. Installed reader/collector pass25 cases including5 inherited, no skips;
+actual isolated installed sweep wrapper stores80 opportunities with capture. Live
+mode=ro/DML-denial/read-limit controls prove no cursor mutation/collection. Bounded
+SQL with ACTED exact/changed/deleted owned controls proves original sims/receipts/
+verdicts/reviews rows equal the pre-copy backup. No mutable board/replay preservation
+claim. Final installed/health/auth gates07:02:31. Secondary Windows reader installed
+07:01:07, exact hash/rollback/3controls pass. PRIMARY Windows reader is tracked and
+modified by another session: deployment BLOCKED, existing bytes preserved. No game/
+engine/QC/progs/config/release/Build change or owner-process restart. Broader hard
+resource bounds, fairness/reservation/completion/authenticity/calibration and browser
+acceptance remain unverified; primary Windows deployment remains incomplete.
