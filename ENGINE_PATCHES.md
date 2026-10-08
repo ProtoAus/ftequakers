@@ -39357,3 +39357,26 @@ pairs with concurrent writer ACTING outside transactions, and flush uses one com
 All-failed and old direct-call admission controls pass. Adjacent pair-fault, peer/
 source-cursor, SQL-peer and source-capture suites pass; LSP no recorded diagnostics.
 Independent batch review, broad pinned Linux and installed gates pending.
+
+## Patch 575 - scoped similarity SQLite lock waits *(SURFD ONLY)*
+
+**Problem.** Selected-read VM budgets cannot interrupt SQLite busy waits. Store-
+only schema/checkpoint/flush work used the shared five-second wait before checks
+that actually gate badges, without a collector-specific allowance.
+
+**Change.** Explicit sweep-owner busy-handler scope, default1000ms per SQLite
+lock operation; --sims-lock-ms0 means immediate/no waiting. Numeric prior timeout
+restores on all exits; disabled collection never touches it. CLI rejects invalid
+integer range before main connect. Direct unopted/dry-run waits stay unchanged.
+No generic native-handler preservation, hard pass deadline, retries, write/RSS
+budget, detector, ranking, engine pin/tag or Build change.
+
+**Verified.** Six focused controls pass on Python3.10 and3.13; corrected predecessor
+has five failures. Real second-connection EXCLUSIVE lock ACTS,20ms policy abstains
+within broad400ms tolerance, previous500ms restores, then unlock permits three
+real80-opportunity comparisons. Real no-wait read raises, exception/interrupt/
+nested scopes restore, invalid input leaves connection untouched. Actual isolated
+sweep wrapper/CLI proves forwarding, disabled bypass and parser rejection before
+connect. Existing budgetCLI three cases pass; LSP no recorded diagnostics. Python
+3.10 lacks SQLite error-code attributes; typed diagnosis is a later independent
+feature, not claimed by these controls. Batch review/Linux/installed gates pending.
