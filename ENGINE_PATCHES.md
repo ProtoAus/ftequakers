@@ -39240,3 +39240,25 @@ warnings. LSP after database refresh has only pre-existing integer-division note
 in pr_menu.c, not changed lines. Full CPU/GPU timing, other renderers, real monitor
 DPI/device delivery, glyph-family aesthetic judgement, atlas exhaustion and native
 ImGui are NOT accepted by these controls. No physics/evidence/Build-number change.
+
+## Patch 571 - bound similarity source-selection SQL reads *(SURFD ONLY)*
+
+**Problem.** A selected-row limit did not cap SQLite work finding eligible sources.
+A slow query could hold the collector before its cooperative admission checks.
+
+**Change.** Connection-owner opt-in ReadBudget reserves a residual quantum and
+interrupts selected cursor/pending reads at a finite pass-wide VM instruction
+allowance. No partial rows, zero/skip or coverage finding on exhaustion. Sweep
+exposes --sims-sql-steps (default 1000000, zero disables); dry-run reports unavailable
+counts. Callback/cursor are released on success, denial and interruption; unbudgeted
+standalone calls preserve existing callbacks. Not time, lock waits, schema/writes,
+file/mover work, RSS, enforcement or fair/full coverage. No engine/QC/pin/tag/Build.
+
+**Verified.** Source predecessor control has four failures across six cases; subject
+six pass, with acted pending interruption, positive real eighty-opportunity records,
+callback cleanup/query-error/recovery, foreign connection refusal and conservative
+many-short-query charge. Actual CLI zero disables before lazy loader, invalid parser
+rejects before main connect, tiny dry-run budget says unavailable, explicit scalar
+forwarding and unchanged observations. Adjacent pending/cursor/source/time/collection
+controls pass. LSP no recorded diagnostics; independent batch review, recorder/corpus,
+exact publication and Linux/installed gates recorded at batch completion.
