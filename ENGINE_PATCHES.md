@@ -40143,3 +40143,33 @@ was HOLD because the independent scheduled public-map sweep ran at 14:07 UTC;
 its writer/task witness and failed gate are retained, no data restored/excluded.
 No Pi/progs/server/config/data copy, release or Build-number change. Full receipt,
 commands/hashes and remaining input/model/panel/cost limits: game tools/p598imgui.md.
+
+## Patch 599 — fence new verifier observations to stable recording bytes
+
+**Problem.** The sweeper's submission-time fence did not establish source-byte
+stability around verification. A terminal result/counts observation could attach
+when its recording was replaced or disappeared without a database refile.
+
+**Change.** Sweeper-only: fresh SHA-256 before admission and after verifier plus
+row/stage checks. Known-current filing digests must agree before admission; both
+lobby and KEEP copies of evidence must agree. Descriptor/path metadata changes
+or I/O make the capture unavailable. Instability stores retryable ERROR, ticks
+unknown and counts unavailable, never a cheating judgement or new PASS. Hashing
+uses streaming reads outside writer transactions. Existing ERROR caps and refile/
+recheck semantics, unknown/stale-digest compatibility and existing PASS/owner
+approvals remain. No schema, historical reread/revocation, receipt-reader,
+detector threshold, engine/QC/progs/pin/tag/Build or release change. This is a
+before/after fence, not immutable engine input or hostile-host intermediate
+change-and-restore detection; it does not persist verdict source provenance.
+
+**Verified.** Eight initial file/SQLite/badge controls: six fail on untouched
+published game 0eafc347, honest and legacy controls pass; all pass with the fix.
+Extended source suite: 15 passing cases, including both evidence copies, hash-time
+replacement/read failure, metadata-only change, grouped companion independence,
+retry exhaustion/recovery/refiling, no hash-time writer transaction and retained
+historical PASS policy. Independent read-only review found no blockers. Full
+Windows boundary: 70 programs, 69 pass; only test_admin's two preexisting UDP/
+RCON failures, reproduced in clean 0eafc347. Reader suite passes; immutable
+REC+sidecar snapshot: 269 REC / 440 files, 164 existing fault files / 164 faults,
+unchanged reader blob and no fault increase. Owned Python compiles warning-free.
+Linux exact-commit stage/deployment gates are recorded separately after completion.
