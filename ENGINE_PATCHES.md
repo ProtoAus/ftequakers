@@ -39831,3 +39831,20 @@ ImGui acceptance, exhaustive byte/global-budget stress or CPU/GPU cost approval.
 No progs/config/reader/evidence/Pi/release or Build-number change. Clean tagged
 build, frozen regression and guarded dual-native delivery are recorded in game
 AGENT_NOTES.md separately from this implementation verification.
+
+## Patch 590 — bound authenticated log-tail acquisition *(SURFD ONLY)*
+
+**Problem.** A log tail used a path stat before opening and unsized reads after
+seeking. Rotation or growth could invalidate positioning or exceed the intended
+byte window; a newline-free tail also performed an unbounded discard.
+
+**Change.** Size and position the opened handle, acquire at most the existing
+byte allowance, and discard the partial first line from the bounded buffer.
+Byte-window-limited output is explicit; existing redaction remains in force.
+No game binaries, evidence verdicts, ranking, schema, engine pin or Build change.
+
+**Verified.** Six warning-clean real-file tests pass; the predecessor fails five
+acquisition/rotation/growth controls. Small redacted and large multiline tails
+act, newline-free output is bounded and marked, and unreadable stays distinct.
+This bounds selected Python acquisition, not hard elapsed time, filesystem
+snapshot atomicity or whole-request memory. Deployment is recorded separately.
