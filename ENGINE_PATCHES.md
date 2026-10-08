@@ -38977,3 +38977,32 @@ locator controls and corpus parity pass. Two fresh source reviews OK with notes;
 clean/range separately parent-attested. No general fairness/coverage, hard-resource,
 exactly-once or byte-binding claim; cursors are internal admission state, not
 judgment. Engine/Build unchanged; temporary shared claim marker used.
+
+## Patch 565 - isolate similarity comparison pair faults *(SURFD ONLY)*
+
+**Problem.** One comparison or result-building exception discarded earlier
+buffered observations and stopped later peers, despite their admitted work.
+
+**Change.** Catch these exceptions per admitted pair, leave that pair unobserved,
+continue later peers within budget, and flush valid prior/later observations in
+the existing short transaction. Fixed pass-local pair-failure counts contain no
+exception prose; private stderr retains diagnostic detail. Source/peer cursor
+progress remains admission-only. Selection/checkpoint/storage failures remain row
+failures; observation storage stays all-or-nothing. No fabricated skip/zero result.
+
+**Verified.** Six predecessor assertions fail; twenty-one fault/source/pending
+controls pass. First/middle/all pair faults, missing result metric, legitimate skip,
+measured-zero versus failed-unmeasured, deadline/pair caps and restart persistence
+ACT. A real mid-flush SQLite trigger fires after a first insertion, then aborts:
+all observations roll back, with row-failure reporting. Existing collector/time/
+CLI/reader/category/summary/authenticated projection, board/sweep tests pass.
+Windows RCON poll-rate assertions fail identically in a clean published baseline;
+source equality proven, failure preserved, unrelated product code not repaired.
+Frozen Linux31 programs pass after one recorded rerun of the unchanged dynamic-
+board timestamp comparison; that known failure remains recorded. Recorder306/0,
+identical269REC/101view fault lists;15HID inventoried only. Two fresh source reviews
+OK with notes; exact-range/clean state parent-attested after scoped watchdog failure,
+no alternate runner or independent reviewer execution claim. LSP no recorded
+diagnostics. Counts include possible reverse retries, not unique/full coverage.
+No engine/Build, resource-bound, byte-binding, calibration, exactly-once or gate
+change. Final runtime/test blobs unchanged by preservation of peer rewind P560.
