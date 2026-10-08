@@ -39618,7 +39618,7 @@ comparison and CLI/wrapper consumers. Predecessor fails 20 assertions plus 7
 errors across invalid/zero arms; subject rejects without loader/query action.
 LSP has no recorded diagnostics, not a parse/build guarantee. General hard
 elapsed/RSS/write limits and complete scheduling are not supplied by validation.
-Batch regression, review and installed delivery are recorded after final gates.
+Batch regression, review and installed delivery: see Patch 585 batch gates below.
 
 ## Patch 583 — preserve similarity caller transactions *(SURFD ONLY)*
 
@@ -39637,7 +39637,7 @@ fails four ownership arms. Pending caller DML remains rollbackable and invisible
 to another connection. Idle control ACTS with independent writer during files and
 stores 80 opportunities. Borrowed read callbacks/numeric timeout preserved. Initial
 own test expected empty summary to be ok; corrected fixture assertion and reran
-both arms. LSP no recorded diagnostics. Batch regression/review/delivery pending.
+both arms. LSP no recorded diagnostics. Batch gates/delivery: see Patch 585 below.
 
 ## Patch 584 — close the sweep-owned connection *(SURFD ONLY)*
 
@@ -39654,7 +39654,7 @@ engine/progs/pin/tag or Build change.
 dry-run, schema error, step error, KeyboardInterrupt and borrowed-step control.
 First five assert one explicit close and unusable SQL, retaining exception
 tracebacks where applicable; predecessor fails all five, borrowed control acts.
-LSP no recorded diagnostics. Batch regression, review and delivery pending.
+LSP no recorded diagnostics. Batch gates/delivery: see Patch 585 below.
 
 ## Patch 585 — scalar pending-similarity diagnostics *(SURFD ONLY)*
 
@@ -39673,4 +39673,30 @@ one-column row; eligible/ineligible, both observed orientations, short skips,
 source cursor and cap controls match existing pending semantics. Actual VM
 interruption abstains and higher allowance recovers. Actual CLI consumer avoids
 row materializer and cap-label branch ACTS with synthetic count. LSP no recorded
-diagnostics. Batch regression, independent review and delivery pending.
+diagnostics. Batch regression and delivery are recorded below.
+
+**P582-585 batch gates.** Reviewed frozen de0180c runtime equals published705ce1b;
+metadata-only peer deployment notes merged without rewriting history. Independent
+source/artifact review finds no issue; reviewer did not re-execute/hash-attest Git.
+Original30min reviewer timeout recovered through same native run after clean/ref
+proof. Separate private CLI and source-admission red/green controls cover earlier
+fail-fast predecessor gaps. Linux57/57 standalone programs pass after retained root
+filesystem disk-floor failures and full unmodified NVMe-TMPDIR rerun. Windows56/57;
+same2UDP-admin failures reproduce unchanged baseline. Argument-required momindex
+mis-invocation excluded, not passed. Existing fixture ResourceWarnings reproduce
+20/40/12lines in baseline, not globally warning-clean. Recorder306/0;269REC+91VIEW
+captured full reports equal,170combined faulted reports unchanged. Owned scratch
+retained after failed rmdir; no cleanup claim.
+
+**DEPLOYED UTC2026-10-08.** Exact705ce1b canonical normal stage tests, ONLY installed
+simcheck.py/sweep.py, NoReload. Destination/predecessor hashes, rollback files and
+mode600 SQLite backup verified; no prune. Installed synthetic HOME binds actual
+collector/wrapper/reader, stores80opportunities and ACTS on all four seams. Bounded
+mode=ro/DML-denial/read-limit controls and exact/changed/deleted preservation controls
+prove original sims/receipts/verdicts/reviews rows equal pre-copybackup. Final08:06:26
+health12lobbies, admin302/API401, board200. Initial parameter/path/state harness
+failures retained and corrected without runtime edits. No live collection, worker/
+game/server restart, Windows/progs/reader/config/engine swap or release. Prior primary
+Windows reader ownership blocker remains untouched. Broader hard elapsed/RSS/write
+bounds, complete/fair scheduling, reservation/authenticity/calibration and million-row
+performance remain unverified; no mutable board/replay/cursor preservation claim.
