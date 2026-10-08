@@ -39989,3 +39989,25 @@ swaps, zero failed, hashes/progs/config/data/server/DLL preservation verified
 2026-10-08T11:34:11Z; rollback retained. The rejected Draw path does not flush;
 resource cleanup may independently flush for P589 texture lifetime. No second
 Pi/progs swap or release. Exact evidence/provenance: game tools/p594clip.md.
+
+## Patch 595 — disclose bounded verifier history *(SURFD ONLY)*
+
+**Problem.** The authenticated history displayed only the newest 200 attempts,
+without saying older attempts existed; its summary could call the visible stale
+subset the entire history. Stored counts are per attempt, not a complete census.
+
+**Change.** Acquire one sentinel row, display the same 200 id-descending attempts,
+and add limit/more metadata. Literal-text summaries label partial counts as shown
+and disclose omitted older attempts. Latest/current/public verdict queries remain
+unchanged. No total-count scan, evidence rewrite, detector/policy, engine/QC,
+Build/pin/tag or Windows artifact change.
+
+**Verified.** Three warning-clean actual API/SQL/Node DOM tests pass; inspected
+predecessor fails all three (seven assertions/subcases). Boundaries 0/199/200/201/
+400 acquire at most 201, preserve ordering/history/public board and anonymous401.
+An oldest-current/latest200-stale fixture preserves Verified via the unchanged
+public query but refuses a universal all-stale display claim. Existing counts
+fragment harness now includes the actual summary helper; counts and receipt DOM
+controls pass. Initial fixture timestamp and Windows argv-length mistakes were
+corrected and predecessor re-run; these were not product failures. Final independent
+review, frozen Linux proof and delivery are batch gates recorded separately.
