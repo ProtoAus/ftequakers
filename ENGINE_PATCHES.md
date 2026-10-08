@@ -39302,3 +39302,37 @@ empty/missing and external unbudgeted callback preservation. Actual CLI tiny/zer
 read budgets report unavailable, not empty, and preserve observations. Adjacent
 summary/code/collector tests pass; LSP no recorded diagnostics. Final independent
 review, recorder/corpus, commit-pinned Linux and installed gates follow.
+
+**Batch publication/deployment verified (2026-10-08 04:32:39 UTC).** P571/P572/P573
+source commits b0159a2/891ab5b/789de86 and companion ece06e8a6/5724e8e06/45c9df855
+pushed by exact inspected SHA after replaying owned features over published peers.
+Engine pin/tag/Build stay as published by P570; no engine/QC/progs/runtime config
+change in this batch. Frozen review and publication surfd blobs are byte-identical.
+Two fresh native reviewers found no blockers; independent adversarial execution
+also proved naturally exhausted late SELECT preserves an eighty-opportunity result,
+original-base aggregate parity and total selected-read cap across multiple statements.
+
+Fifteen SQL and three CLI cases pass; predecessor controls fail 4/3/2 assertions
+for the three interfaces. Exact publication: all43Linux programs pass; Windows42
+pass with only the broad admin's two UDP/RCON assertions matching untouched baseline.
+Recorder306/0 and same captured269REC/101view fault lists are identical (164REC,
+167combined faulted);15HID inventoried only. Python compilation and LSP recorded
+checks pass; existing fixture warnings/skips remain, no new-warning claim for
+unrelated code. No QC/engine build is required or claimed for these Python-only files.
+Initial Linux harness omitted NVMe TMPDIR, triggering unchanged worker disk floors;
+corrected one rerun passes. Existing volatile-board timestamp gate also failed once;
+retained source proof/failed log and unmodified rerun, no unrelated product repair.
+
+Canonical shipper installs ONLY simcheck.py/sweep.py from789de86, under sweep lock,
+with600SQLite/file rollback backups and no pruning. Hashes match Git; proven gunicorn
+master HUP/ready/worker/health, no game restart or uncommitted peer ship. Installed
+fifteen cases and real installed sweep wrapper ACT on owned fixtures. Live mode=ro/
+DML-denial source/summary low-limit and fresh default reads ACT, healthOK/admin401.
+Installed SHA256: collector5215d28bd7324008, sweepb08dd30ef1062294.
+
+Original sample/receipt/verdict/review/replay rows match the before-snapshot exactly.
+Mutable board runs drift was present BEFORE file copy and continued under normal
+service; six-table immutability is NOT claimed. An overbroad private diagnostic was
+stopped by its proven owned PID after timing out, without touching owner processes;
+health remained OK. Full mutable-board preservation, real-player calibration,
+complete/fair/concurrent scheduling, hard time/RSS/lock-wait limits remain unverified.
