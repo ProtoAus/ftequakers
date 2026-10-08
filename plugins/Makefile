@@ -501,6 +501,25 @@ $(PLUG_PREFIX)ezhud$(PLUG_NATIVE_EXT): ezhud/ezquakeisms.c ezhud/hud.c ezhud/hud
 NATIVE_PLUGINS+=ezhud
 ######################################
 
+#Optional explicit-QC native gallery. No engine/dedicated C++ dependency.
+IMGUI_VENDOR=ui_imgui/vendor/imgui.cpp ui_imgui/vendor/imgui_draw.cpp ui_imgui/vendor/imgui_tables.cpp ui_imgui/vendor/imgui_widgets.cpp
+IMGUI_SOURCES=ui_imgui/backend.cpp ui_imgui/ui_imgui.cpp $(IMGUI_VENDOR)
+IMGUI_OBJECTS=$(patsubst ui_imgui/%.cpp,$(OUT_DIR)/ui_imgui/%.o,$(IMGUI_SOURCES))
+IMGUI_HEADERS=Makefile ui_imgui/backend.h plugin.h $(wildcard ui_imgui/vendor/*.h)
+IMGUI_FLAGS=-std=c++17 -DFTEPLUGIN -Wall -Wextra -Werror -I. -I../engine/client -I../engine/common -I../engine/server -I../engine/gl
+$(OUT_DIR)/ui_imgui/%.o: ui_imgui/%.cpp $(IMGUI_HEADERS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(BASE_CXXFLAGS) $(CFLAGS) $(PLUG_CXXFLAGS) $(IMGUI_FLAGS) -O2 -c $< -o $@
+#Pinned upstream sources: GCC 16 -O2 emits mouse-array diagnostics after asserts.
+#Build unmodified vendor at -O1 with no diagnostic suppression; adapter stays -O2.
+$(OUT_DIR)/ui_imgui/vendor/%.o: ui_imgui/vendor/%.cpp $(IMGUI_HEADERS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(PLUG_CXXFLAGS) -std=c++17 -Wall -Wextra -Werror -O1 -c $< -o $@
+$(PLUG_PREFIX)ui_imgui$(PLUG_NATIVE_EXT): $(IMGUI_OBJECTS)
+	$(CXX) -shared $(PLUG_CXXFLAGS) $^ $(PLUG_LDFLAGS) -static-libstdc++ -static -o $@
+	$(call EMBEDMETA,ui_imgui,$@,Native ImGui Gallery,Explicit QC draw-site gallery; no real-panel or input migration.)
+#NATIVE_PLUGINS+=ui_imgui
+
 ######################################
 #not really relevant now that gltf was made an internal plugin
 $(PLUG_PREFIX)models$(PLUG_NATIVE_EXT): models/gltf.c models/exportiqm.c models/models.c plugin.c ../engine/common/json.c

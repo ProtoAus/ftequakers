@@ -39989,3 +39989,47 @@ swaps, zero failed, hashes/progs/config/data/server/DLL preservation verified
 2026-10-08T11:34:11Z; rollback retained. The rejected Draw path does not flush;
 resource cleanup may independently flush for P589 texture lifetime. No second
 Pi/progs swap or release. Exact evidence/provenance: game tools/p594clip.md.
+
+## Patch 595 — optional explicit-QC Dear ImGui command-list service
+
+**Problem.** P589/P593/P594 proved indexed meshes, VM-owned native dispatch and
+inherited clipping, but no actual Dear ImGui draw lists exercised that path.
+A global overlay hook would not prove QC ordering, fallback or per-VM ownership.
+
+**Change.** Optional `ui_imgui` C++ plugin with unmodified, SHA256-pinned MIT
+Dear ImGui 1.91.9b (`f5befd2d29e66809cd1110a152e375a7f1981f06`). It exports the
+existing NativeUI/1 C service, accepts diagnostic owners only and makes no
+Tick/Menu/Sbar drawing exports. MQC and CSQC receive separate contexts and
+immutable embedded-font RGBA atlases, released by host lifecycle callbacks.
+Ini/log writes are disabled. The adapter preflights all lists, totals, finite
+transforms/UVs/clips, atlas identity, offsets/indices and consumed-index budgets
+before any Submit; unknown callbacks reject, reset-state is a host-owned no-op.
+Reusable bounded scratch batches expand triangles for arbitrary 16/32-bit source
+indices/VtxOffset, intersect physical inherited clips and use only 2DMesh/1.
+No raw graphics hooks, C ABI change or engine/dedicated C++ linkage. Windows
+C++/pthread runtimes are static in the DLL. Vendor stays unmodified at -O1 to
+avoid GCC 16 upstream -O2 mouse-array diagnostics; adapter -O2, both -Werror.
+Development build includes/copies the optional DLL. Its newly acting -NoDeploy
+switch isolates QC outputs and blocks native copies; unknown flags now reject
+instead of silently deploying. Real panels/defaults/input/model/widget transport,
+performance budgets, fonts/DPI policy, release packaging and Build number do not
+change. Multi-batch backend failure cannot roll back earlier successful batches;
+QC must redraw its covering legacy equivalent when Draw returns false.
+
+**Verified.** Real source host controls: 107 assertions each with 16- and 32-bit
+indices, zero failures; >64K generated vertices, offsets/transform/RGBA/UVs,
+whole-data rejection, bounded splitting, atlas/submit failure, two-context and
+closed-zero-work cleanup act. Real MQC/CSQC GL gallery: 23 screenshots across
+missing-service control and two virtual scales, zero failed, physical output
+identical. Glyphs, rounded control, clipped 1000-row table/tooltip, before/native/
+after markers, caller state, close/VM/restart/reload/reconnect and closed counter
+balance act. 16 grader mutations reject false successes. Existing actual bridge
+host 170 assertions, bridge/mesh graders 24/33 and their 52-shot runtime galleries
+pass. Native plugin compilation adds no warnings; both plugin files pass clangd
+with their actual C++17 database/driver (cached C-only session diagnostics are not
+that gate). Acting -Engine -NoDeploy build: 65 native/rollback/progs/cfg byte/path
+witnesses unchanged; three QC targets zero warnings; typo/NoDeploy+Pi refusal
+acts. Earlier ignored-switch native swaps were hash-guard restored from rollback
+copies; the new plugin was parked before proceeding. Full frozen-stamp build and
+guarded dual delivery are separate final gates, recorded in game tools/p595imgui.md.
+No non-GL/device/input/performance/real-panel/appearance or release acceptance.
