@@ -39720,7 +39720,7 @@ valid measured/empty/BLOB/legacy-column controls ACT and database rows stay exac
 Existing verifier-counts (7), admin-metrics and receipt-metrics suites pass. LSP
 records no diagnostics. Batch regression, independent review and delivery follow.
 
-## Patch 587 — versioned plugin-owned indexed 2D meshes
+## Patch 589 — versioned plugin-owned indexed 2D meshes
 
 **Problem.** The legacy plugin `2D` ABI exposes quads and shared shader-table
 references, not indexed command lists with caller-owned texture lifetimes. The
@@ -39753,7 +39753,7 @@ and no-renderer startup ACT. Both fixture DLLs compile -Wall -Wextra -Werror;
 compiler warning messages/counts as inspected P581 full build, zero new. Plugin
 and renderer TUs retain only baseline clang-tidy warnings; standalone header/
 fixture diagnostics lack engine context. Older P581 atlas regression passes.
-Evidence: tools/p587mesh.py and tools/p587mesh.md in the game repo. These are
+Evidence: tools/p589mesh.py and tools/p589mesh.md in the game repo. These are
 native-only controls, not mixed QC clipping, non-GL parity, actual-device input,
 ImGui acceptance, exhaustive byte/global-budget stress or CPU/GPU cost approval.
 No progs/config/reader/evidence/Pi/release or Build-number change. Clean tagged
