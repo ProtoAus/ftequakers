@@ -1965,6 +1965,9 @@ void R_ShutdownRenderer(qboolean devicetoo)
 
 	//make sure the worker isn't still loading stuff
 	COM_WorkerFullSync();
+#ifdef PLUGINS
+	Plug_Mesh_RendererShutdown();
+#endif
 
 	CL_AllowIndependantSendCmd(false);	//FIXME: figure out exactly which parts are going to affect the model loading.
 

@@ -223,6 +223,8 @@ static void Plug_Draw_UnloadImage(qhandle_t id)
 	R_UnloadShader(Plug_Draw_ShaderFromId(id));
 }
 
+#include "cl_plugin_mesh.inc"
+
 static int QDECL Plug_Draw_ImageSize(qhandle_t image, float *w, float *h)
 {
 	int iw, ih, ret;
@@ -1255,6 +1257,8 @@ static sfx_t *QDECL Plug_S_PrecacheSound(const char *sndname)
 static void Plug_Client_Close(plugin_t *plug)
 {
 	menu_t *m = Menu_FindContext(currentplug);
+
+	Plug_Mesh_Close(plug);
 
 	if (m)
 		Menu_Unlink(m, true);

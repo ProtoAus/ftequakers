@@ -442,6 +442,48 @@ typedef struct	//for huds and menus alike
 #define plug2dfuncs_name "2D"
 } plug2dfuncs_t;
 
+//Separate exact-size ABI. All calls are main-thread, inside a host plugin callback.
+//Physical top-left pixels, half-open clip bounds, normalized UVs, straight RGBA8.
+//Tokens belong to the calling plugin; release/restart/unload permanently invalidate them.
+#define plugmeshfuncs_name "2DMesh/1"
+#define PLUGMESH_MAX_VERTICES 16384
+#define PLUGMESH_MAX_INDICES 65535
+#define PLUGMESH_MAX_COMMANDS 128
+#define PLUGMESH_MAX_TEXTURES 32
+#define PLUGMESH_MAX_TEXTURE_BYTES (32u*1024u*1024u)
+typedef quint64_t plugmeshtex_t;
+typedef struct
+{
+	float xy[2], uv[2];
+	qbyte rgba[4];
+} plugmeshvertex_t;
+typedef struct
+{
+	plugmeshtex_t texture;
+	float clip[4]; //left, top, right, bottom (empty is allowed)
+	unsigned int firstindex, indexcount, vertexoffset;
+} plugmeshcommand_t;
+typedef struct
+{
+	size_t structsize;
+	const plugmeshvertex_t *vertices;
+	const unsigned int *indices; //32-bit indices, relative to each command's vertexoffset
+	const plugmeshcommand_t *commands;
+	unsigned int numvertices, numindices, numcommands;
+} plugmeshbatch_t;
+typedef struct
+{
+	F(qboolean, GetVideoSize, (float *vsize, unsigned int *psize));
+	//Immutable raw RGBA8; exact width*height*4 bytes, <=4096 per axis, budget above.
+	//Host global cap is 256 textures / 128 MiB. Filtering is linear, clamped, no mips.
+	F(plugmeshtex_t, CreateTextureRGBA, (unsigned int width, unsigned int height, const qbyte *rgba, size_t bytes));
+	F(qboolean, DestroyTexture, (plugmeshtex_t texture));
+	//Call only in a 2D drawing callback (not Tick). Native callers are trusted code.
+	//Synchronous: no retained caller pointers. Validate the WHOLE batch before drawing.
+	//Flushes existing 2D work; caller colour/blend/clip remain owned by the caller.
+	F(qboolean, Submit, (const plugmeshbatch_t *batch));
+} plugmeshfuncs_t;
+
 #if defined(FTEENGINE) || defined(FTEPLUGIN)
 struct entity_s;
 typedef struct
