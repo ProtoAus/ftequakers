@@ -39496,3 +39496,24 @@ ACT during real80-row comparisons, survive reopen unchanged, and ignored notable
 skip/all-duplicate results do not invent additions. Admission still checkpoints;
 trigger writes do not inflate counts. Adjacent atomic/pair-fault/source/peer suites
 pass including acted rollback. LSP no recorded diagnostics; review/Linux/live pending.
+
+## Patch 579 - acted bounded reader capsule preflight *(TOOLS ONLY)*
+
+**Problem.** The canonical reader capsule checked callable/path capability only;
+a callable could lack current bounded-input/capture support or not exercise it.
+
+**Change.** Require literal integer version1 bounded-input/capture markers. Before
+any destination mutation, compare disposable80-row sources under exact bounds,
+check exact captured hashes/sizes, and require whole-pair abstention for one-less
+byte and move limits. Recheck installed capability as before. Canonical current
+capsules only; historical readers missing these capabilities are not installable
+with this installer. Trusted-code smoke contract, not sandbox/resource/code
+attestation. No metric, detector/ranking, engine pin/tag/Build change.
+
+**Verified.** Twelve installer controls pass on Windows (symlink control explicitly
+skipped where privilege unavailable). Predecessor fails all three new feature
+controls: marker variants preserving callable, hash-valid ignored limits, and
+incorrect captured hash. Dry/apply preserve prior bytes/mode/backup inventory on
+rejection; real dry/apply installed comparison/capture ACT. Predecessor guards,
+paired drift/race, exclusive backups and exact Git preparation still pass.
+LSP no recorded diagnostics; independent review/Linux/live gates pending.
