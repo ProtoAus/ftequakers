@@ -39127,8 +39127,9 @@ Adjacent opportunities/parsing/unreadable/ingestion/runtime controls pass;
 recorder306/0 and captured269REC/101view fault lists are identical (164REC,
 167combined faulted);15HID inventoried only. Fresh read-only reader review OK
 with notes, source/log inspection only; Python execution is parent evidence.
-LSP no recorded diagnostics. Linux/deployment remain pending until the batch
-passes the publication/installed controls. No engine/progs/pin/tag/Build change.
+LSP no recorded diagnostics. Publication byte equality, all34explicit Linux
+programs and installed reader controls pass; see P569 deployment record below.
+No engine/progs/pin/tag/Build change.
 
 ## Patch 568 - persist historical similarity source snapshots *(SURFD ONLY)*
 
@@ -39151,8 +39152,9 @@ migration/repeat without backfill, skip/invalid abstention, capability admission
 narrow schema and duplicate/future/oversized/boolean rejection. A real trigger
 aborts a later INSERT and rolls back the whole measurement/capture transaction.
 All twenty-one focused/inherited reader/collector/runtime/admin/board/sweep
-programs pass locally. LSP no recorded diagnostics. Final batch review, exact-
-commit Linux and installed verification pending; no deployment claim yet.
+programs pass locally. LSP no recorded diagnostics. Final read-only review OK;
+publication byte equality, all34explicit Linux programs and installed collector
+controls pass. See P569 deployment record below.
 No engine/progs/pin/tag/Build or resource-bound/calibration/enforcement change.
 
 ## Patch 569 - authenticated historical similarity provenance *(SURFD ONLY)*
@@ -39179,6 +39181,29 @@ passes trailing-NUL, oversized-NUL and invalid-UTF8 controls (empty remains lega
 Adjacent admin/sweep/board/collector/reader controls pass; recorder306/0
 and captured269REC/101view corpus fault lists identical;15HID inventoried only.
 Existing fixture ResourceWarnings remain at unchanged fixture sites, not repaired.
-LSP no recorded diagnostics. Independent batch source review, Linux/publication/
-installed verification pending, no deployment claim. No engine/progs/pin/tag/Build,
-calibration/enforcement, current-source/authenticity or full-coverage claim.
+LSP no recorded diagnostics. Independent batch source review OK after correction;
+publication runtime/test/document bytes match reviewed frozen source. No engine/
+progs/pin/tag/Build, calibration/enforcement, current-source/authenticity or full-
+coverage claim.
+
+**Publication/deployment verified (UTC8Oct2026).** Source features2aaeb86,
+770749d,a976089 pushed exactly; peer published history preserved. Exact final
+commit34explicit Linux programs pass; Node-free Pi skips DOM, actual Windows
+renderer passes. Broad Windows admin's two UDP/RCON failures match untouched
+baselinee2d621b exactly; Linux admin passes, unrelated code not repaired.
+Git-pinned reader capsule dry-run/apply checks paired/predecessor/installer
+hashes and retains an exclusive600rollback copy. Canonical surfd shipper installs
+ONLY simcheck.py/admin.py/template froma976089, keeps owner-only SQLite/file
+backups, verifies bytes and proven gunicorn HUP/ready/health. No game restart,
+progs/binary swap, owner config/player-file change, release/archive or loose-peer ship.
+
+Initial readback found reload alone had not initialized capture on existing
+sims; installed ensure_schema then ran under canonical sweep lock, metadata only.
+At03:36UTC installed22cases (five inherited, three Node-DOM skips) pass with real
+installed reader/collector/admin, eighty-row comparisons, replacement/rollback
+and authenticated fixture projection. Original rows/values from six live tables
+match pre-deploy snapshots; added capture stays empty for legacy observations. Actual
+measured legacy projection, read-only pending/summary, health and anonymous401
+ACT. Four installed SHA256s match exact Git blobs: readeraa65869737f5885d,
+collector4d300e17af7fd986, adminf55b8fb5ee276cef, templatefc82d933597262fc.
+No live-browser/real-player calibrated finding or retrospective capture claim.
