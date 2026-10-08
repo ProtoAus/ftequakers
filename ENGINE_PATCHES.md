@@ -39957,3 +39957,26 @@ units retain baseline warnings; isolated headers/fixtures lack engine context.
 No ImGui, widgets/model/input transport, actual panel migration, preference,
 Build number, evidence policy, non-GL/device-input or cost acceptance. Frozen
 build/publication/delivery provenance is recorded separately in game notes.
+
+## Patch 594 — reject non-finite inherited native UI clips
+
+**Problem.** P593 intersected inherited caller clipping after P589 validated the
+mesh's own commands. A non-finite caller clip, or overflow converting a finite
+virtual clip to physical pixels, could therefore reach the service and bypass
+that validated-input boundary.
+
+**Change.** Validate all four final physical inherited-clip coordinates with
+FTE's NaN/Inf bit predicate before authorizing a native callback or flushing its
+queues. Reject invalid coordinates, release the opened owner once and return
+false for explicit QC fallback. Valid, empty and off-screen finite clips keep
+existing behavior. No ABI/input/model/panel/preference/Build-number change.
+
+**Verified.** Actual host implementation with acting callbacks: P593 fails 12
+assertions across NaN, infinity and finite-conversion-overflow controls. Subject
+passes 170 assertions, including no callback/no flush and one owner release in
+each malformed case; existing ownership/lifetime/caller-state controls remain
+active. All 24 portable grader controls pass. Host predicate matches FTE's
+NaN/Inf bit semantics rather than relying on libc finite assumptions. Full
+stamped build, valid GL galleries and guarded delivery are separate recorded
+gates; malformed-clip controls are host tests, not driver fault injection.
+Published patch-593 remains immutable. No ImGui/non-GL/device/cost acceptance.

@@ -173,7 +173,7 @@ void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr
 	plugin_t *old = currentplug;
 	pluguiframe_t frame;
 	vec4_t colour;
-	unsigned int flags, handle = Plug_NativeUI_ID(G_FLOAT(OFS_PARM0));
+	unsigned int i, flags, handle = Plug_NativeUI_ID(G_FLOAT(OFS_PARM0));
 	qboolean ok;
 	G_FLOAT(OFS_RETURN) = 0;
 	if (!v || !v->drawing || !handle || handle != v->owner.generation ||
@@ -201,6 +201,12 @@ void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr
 		frame.clip[2] = (v->scissor.x+v->scissor.width)*vid.pixelwidth;
 		frame.clip[3] = (1-v->scissor.y)*vid.pixelheight;
 	}
+	for (i = 0; i < countof(frame.clip); i++)
+		if (IS_NAN(frame.clip[i])) //also Inf; conversion itself may have overflowed
+		{
+			Plug_NativeUI_CloseOwner(v, PLUGUI_CLOSE_FAILED);
+			return; //do not bypass mesh validation through inherited clip intersection
+		}
 	v->lastframe = frame.frame;
 	if (R2D_Flush)
 		R2D_Flush(); //QC-before must submit before native, including equal materials
