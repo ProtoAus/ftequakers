@@ -2877,6 +2877,7 @@ void Font_Transform(float vx, float vy, int *px, int *py)
 }
 void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, float szy, float *px, float *py)
 {
+	float nearest;
 	if (R2D_Flush && (R2D_Flush != Font_Flush || curfont != font || font_be_flags != r2d_be_flags))
 		R2D_Flush();
 	R2D_Flush = Font_Flush;
@@ -2885,8 +2886,14 @@ void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, 
 	*px = (vx*(float)vid.rotpixelwidth) / (float)vid.width;
 	*py = (vy*(float)vid.rotpixelheight) / (float)vid.height;
 
-	//now that its in pixels, clamp it so the text is at least consistant with its position.
-	//an individual char may end straddling a pixel boundary, but at least the pixels won't jiggle around as the text moves.
+	// Repair float round-trips of integer physical origins before truncating.
+	// Preserve the existing truncation for genuinely fractional positions.
+	nearest = floorf(*px + 0.5f);
+	if (fabsf(*px - nearest) < 0.0001f)
+		*px = nearest;
+	nearest = floorf(*py + 0.5f);
+	if (fabsf(*py - nearest) < 0.0001f)
+		*py = nearest;
 	*px = (int)*px;
 	*py = (int)*py;
 
@@ -2895,8 +2902,13 @@ void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, 
 	else
 		curfont_scaled = true;
 */
-	curfont_scale[0] = (szx * (float)vid.rotpixelheight) / (curfont->charheight * (float)vid.height);
+	curfont_scale[0] = (szx * (float)vid.rotpixelwidth) / (curfont->charheight * (float)vid.width);
 	curfont_scale[1] = (szy * (float)vid.rotpixelheight) / (curfont->charheight * (float)vid.height);
+	// Native bakes must stay native after virtual/physical float conversion.
+	if (fabsf(curfont_scale[0] - 1.0f) < 0.0001f)
+		curfont_scale[0] = 1.0f;
+	if (fabsf(curfont_scale[1] - 1.0f) < 0.0001f)
+		curfont_scale[1] = 1.0f;
 	curfont_scale[0] *= curfont->scale;
 	curfont_scale[1] *= curfont->scale;
 }

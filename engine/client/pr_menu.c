@@ -107,15 +107,26 @@ struct {
 	float scale; //poop
 	int outline; //argh
 	unsigned int fontflags; //erk
+	qboolean physicalsizes;
 	int sizes;
 	int size[FONT_SIZES];
 	struct font_s *font[FONT_SIZES];
 } fontslot[FONT_SLOTS];
 
-static struct font_s *PR_CL_ChooseFont(float *fontsel, int szx, int szy)
+static struct font_s *PR_CL_LoadSlotFont(int slot, int index)
+{
+	float height = fontslot[slot].size[index];
+	if (fontslot[slot].physicalsizes && vid.rotpixelheight > 0)
+		height *= (float)vid.height / vid.rotpixelheight;
+	return Font_LoadFont(fontslot[slot].facename, height, fontslot[slot].scale,
+		fontslot[slot].outline, fontslot[slot].fontflags);
+}
+
+static struct font_s *PR_CL_ChooseFont(float *fontsel, float szx, float szy)
 {
 	int fontidx = 0;	//default by default...
 	struct font_s *font = font_default;
+	float pixelheight = vid.height > 0 ? (szy * vid.rotpixelheight) / vid.height : szy;
 
 	if (fontsel)
 	{
@@ -124,12 +135,15 @@ static struct font_s *PR_CL_ChooseFont(float *fontsel, int szx, int szy)
 
 	if (fontidx >= 0 && fontidx < FONT_SLOTS)
 	{
-		int i, j;
-		int fontdiff = 10000;
+		int i;
+		float j, fontdiff = 10000;
+		// Match the actual physical bake, including rounding of virtual ladders.
 		for (i = 0; i < fontslot[fontidx].sizes; i++)
 		{
-			j = abs(szy - fontslot[fontidx].size[i]);
-			if (j < fontdiff && fontslot[fontidx].font[i])
+			if (!fontslot[fontidx].font[i])
+				continue;
+			j = fabsf(pixelheight - Font_CharPHeight(fontslot[fontidx].font[i]));
+			if (j < fontdiff)
 			{
 				fontdiff = j;
 				font = fontslot[fontidx].font[i];
@@ -235,7 +249,7 @@ void PR_ReloadFonts(qboolean reload)
 		{	//otherwise load it.
 			for (j = 0; j < fontslot[i].sizes; j++)
 			{
-				fontslot[i].font[j] = Font_LoadFont(fontslot[i].facename, fontslot[i].size[j], fontslot[i].scale, fontslot[i].outline, fontslot[i].fontflags);
+				fontslot[i].font[j] = PR_CL_LoadSlotFont(i, j);
 			}
 		}
 	}
@@ -285,6 +299,7 @@ void QCBUILTIN PF_CL_loadfont (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 		fontslot[slotnum].sizes = 0;
 		fontslot[slotnum].owner = 0;
 		fontslot[slotnum].scale = 1;
+		fontslot[slotnum].physicalsizes = false;
 		fontslot[slotnum].outline = r_font_postprocess_outline.ival;
 	}
 	fontslot[slotnum].owner |= world->keydestmask;
@@ -292,6 +307,11 @@ void QCBUILTIN PF_CL_loadfont (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	while(*sizestr)
 	{
 		sizestr = COM_Parse(sizestr);
+		if (!strncmp(com_token, "pixels=", 7))
+		{
+			fontslot[slotnum].physicalsizes = atoi(com_token+7) != 0;
+			continue;
+		}
 		if (!strncmp(com_token, "scale=", 6))
 		{
 			fontslot[slotnum].scale = atof(com_token+6);
@@ -335,7 +355,7 @@ void QCBUILTIN PF_CL_loadfont (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	if (qrenderer > QR_NONE)
 	{
 		for (i = 0; i < fontslot[slotnum].sizes; i++)
-			fontslot[slotnum].font[i] = Font_LoadFont(facename, fontslot[slotnum].size[i], fontslot[slotnum].scale, fontslot[slotnum].outline, fontslot[slotnum].fontflags);
+			fontslot[slotnum].font[i] = PR_CL_LoadSlotFont(slotnum, i);
 	}
 
 	G_FLOAT(OFS_RETURN) = slotnum;
@@ -418,6 +438,7 @@ void CL_LoadFont_f(void)
 			}
 			fontslot[slotnum].owner = 0;
 			fontslot[slotnum].scale = 1;
+			fontslot[slotnum].physicalsizes = false;
 			fontslot[slotnum].sizes = 0;
 			fontslot[slotnum].outline = r_font_postprocess_outline.ival;	//locked in at definition, so different fonts can have different settings even with vid_reload going on.
 			fontslot[slotnum].fontflags = 0 |
@@ -483,7 +504,7 @@ void CL_LoadFont_f(void)
 		if (qrenderer > QR_NONE)
 		{
 			for (i = 0; i < fontslot[slotnum].sizes; i++)
-				fontslot[slotnum].font[i] = Font_LoadFont(facename, fontslot[slotnum].size[i], fontslot[slotnum].scale, fontslot[slotnum].outline, fontslot[slotnum].fontflags);
+				fontslot[slotnum].font[i] = PR_CL_LoadSlotFont(slotnum, i);
 		}
 
 		//FIXME: slotnum0==default is problematic.

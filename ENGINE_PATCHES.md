@@ -39207,3 +39207,36 @@ measured legacy projection, read-only pending/summary, health and anonymous401
 ACT. Four installed SHA256s match exact Git blobs: readeraa65869737f5885d,
 collector4d300e17af7fd986, adminf55b8fb5ee276cef, templatefc82d933597262fc.
 No live-browser/real-player calibrated finding or retrospective capture claim.
+
+## Patch 570 — genuinely native physical-pixel modern text (2026-10-08)
+
+**Problem.** P566 converted requested physical sizes back to virtual units, but
+`Font_LoadFont` also converts its virtual loadfont ladders to pixels. The engine
+selected a ladder using truncated virtual sizes; at non-default console scales
+it could therefore resample a different physical bake. The horizontal draw scale
+used the vertical ratio, and a float round-trip could floor an integer origin one
+pixel early. QC's physical-size probe alone did not establish a native raster.
+
+**Change.** `loadfont` accepts `pixels=1` in its size list, preserving those physical
+bakes through reload. Legacy lists still default to virtual units. Font selection
+matches the actual physical bake height, retaining fractional request precision.
+Scaled strings convert each axis independently and repair near-integer origins
+and near-unit scales. QC lazily allocates separate physical mirror slots only for
+modern text; classic UI/HUD slots and their larger virtual bakes are unchanged.
+Adds a disposable MQC gallery/driver and reader falsifiers, with input hashes,
+black/white backgrounds, three faces, 8–24px samples, half-alpha composition,
+repeat/menu/renderer-reload arms and an intentional unbaked-size control.
+
+**Verified.** Windows OpenGL, isolated control/subject engines built from inspected
+source. Final matched pre-patch scale-1/2 gallery has 30,764 different pixels and
+fails the strict comparison while both activity arms reach. Corrected physical
+scale-1/1.5/2 galleries are pixel-identical; corrected scale 1 preserves the old
+image. Every +0.75px request acts; same-process repeat, menu_restart and vid_restart
+restore identical images with bounded legacy/mirror initialization. Sixteen reader
+mutant tests and seven modern-UI tests pass. Actual CSQC editor controls pass at
+console scales 1 and 2 (28 checks per arm). QC and changed engine units build with
+zero new warnings; the clean native control has pre-existing third-party/engine
+warnings. LSP after database refresh has only pre-existing integer-division notes
+in pr_menu.c, not changed lines. Full CPU/GPU timing, other renderers, real monitor
+DPI/device delivery, glyph-family aesthetic judgement, atlas exhaustion and native
+ImGui are NOT accepted by these controls. No physics/evidence/Build-number change.
