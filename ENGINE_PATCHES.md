@@ -39593,6 +39593,14 @@ but crashed in untouched shutdown; retained, not accepted/repaired. No indexed
 mesh, clipping, QC bridge, ImGui, performance/device or hostile-decoder claim;
 no movement/evidence/Build-number change.
 
+**Delivered.** `710087cb7` / annotated `patch-581`, clean full build stamp
+`git-7096-patch-581-0-g710087cb7`. Clean game proof `e172392` repeats atlas,
+zero-warning QC and all 28 dedicated/editor checks. Native client + matching
+HL2 plugin only deployed to both Windows installs at 2026-10-08T07:51:06Z,
+keeping `.prev` and timestamped backups. Both installed-client copies repeat
+all atlas controls; destination/protected cfg/progs/reader hashes rechecked.
+No owner process stop, progs/config/reader/asset/server/Pi swap or release.
+
 ## Patch 582 — validate similarity admission limits *(SURFD ONLY)*
 
 **Problem.** SQLite negative LIMIT means unlimited. Collector source/peer APIs
