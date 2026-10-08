@@ -39719,3 +39719,27 @@ for large payloads, embedded NUL, invalid UTF-8, exact caps and multibyte text;
 valid measured/empty/BLOB/legacy-column controls ACT and database rows stay exact.
 Existing verifier-counts (7), admin-metrics and receipt-metrics suites pass. LSP
 records no diagnostics. Batch regression, independent review and delivery follow.
+
+## Patch 587 — bound the historical similarity panel's SQL work *(SURFD ONLY)*
+
+**Problem.** A 26-row result cap did not bound sorting work for a run with many
+stored pairs. An optional observation panel could monopolize a review request.
+
+**Change.** The authenticated handler explicitly owns its fresh connection's
+progress-handler slot and gives panel metadata/history reads one million VM
+instructions via existing ReadBudget. Whole-panel read_limit abstention is distinct
+from missing schema and empty history; no partial observations escape. Teardown
+precedes following SQL. Borrowed API defaults leave callbacks alone. Storage errors
+still propagate. No schema/history/reread/detector/gate, engine/progs/pin/tag/Build
+change. This is selected SQL work, not hard time/RSS or a whole-request budget.
+
+**Verified.** Four warning-clean tests pass and all fail P586 predecessor. Actual
+10,001-pair query is interrupted under tiny allowance, retains useful run review,
+clears callback before following SUM query, and default allowance recovers the
+80-opportunity measured control. Borrowed callback continues to act, direct owner
+opt-in abstains, missing schema stays missing, I/O remains error and actual DOM
+labels limits accurately. History rows unchanged. Existing similarity5/sources10
+and metrics3 tests pass; LSP no diagnostics. Initial unrelated-row arm did not
+exercise work due to indexes; corrected to related-row sorting and reran both
+versions. Initial import/API mismatch and too-small default were caught before
+commit. Batch regression, independent review and delivery follow.
