@@ -38928,3 +38928,26 @@ Initial probe compile/seam and pending-save/timed-screenshot harness failures
 were retained and corrected without weakening body or clock oracles. Real
 practice-device/camera feel, low-resolution/custom HUD layout and general
 requested/native alignment remain human/follow-up gates.
+
+## Patch 563 - durable similarity source admission rotation *(SURFD ONLY)*
+
+**Problem.** An unresolved oldest source could consume each source-row budget
+without storing an observation, indefinitely hiding later eligible sources.
+
+**Change.** Add an internal `sim_cursor` admission table lazily in collector
+schema initialization. Select eligible IDs above the last admitted source first,
+then wrap ascending. Checkpoint an admitted source in a short committed transaction
+before resolution/comparison, including failed attempts. Read-only pending/summary
+never create/advance state; old schemas start at zero. No observations are rewritten.
+
+**Verified.** Four predecessor assertions fail; thirteen source/pending controls
+pass, including connection restarts, unresolved sources1/2/3/1, row exceptions,
+measurable later peers, removed-ID wrap, old-schema reads, quiet disable and expired
+admission. Existing peer/collection/time/CLI/ingestion/category/summary and actual
+locator/write-lock controls pass. Recorder306/0 and current269REC/101view identical
+fault lists;15HID sidecars inventoried only. Two fresh source reviews OK with notes;
+clean/range evidence separately parent-attested after scoped watchdog rejection.
+LSP no recorded diagnostics. Rotation proves finite-fixture progress, not full
+fleet fairness, byte binding, exactly-once or SQL/RSS/hard-time bounds. No engine
+pin/tag, QC, Build or gate change. Unpublished P560 was replayed after a peer
+published rewind P560; peer history preserved, temporary shared claim marker used.
