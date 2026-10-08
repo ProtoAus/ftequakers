@@ -39092,3 +39092,15 @@ CPU/GPU/percentile budgets and broad nested/UTF-8/renderer-restart matrix are
 not certified. Bare-worktree full shipguard is blocked by pre-existing missing
 untracked particles; the exact new asset entry and missing-entry mutant pass.
 No release/archive or fleet result is inferred from these local controls.
+
+**Deployment verified (UTC 8 Oct).** Public source `414cd865d77c`, rebuilt in
+a clean proof tree. At02:46 CSQC/menu/mask hashes matched both Windows
+installs; .prev kept, owner cfgs/server progs unchanged, no Windows process
+stopped by the deploy. CSQC `f6b7ba2dc1479858`, menu `f8fc1c528430a2b7`, mask
+`80634455ba20c093`. Guarded Pi swap verified both progs (.prev retained), found
+12/12 empty lobby rows and restarted 12/12 services; mask copied/hash-verified
+separately. At02:57 an actual client connected to a live lobby, opened the new
+editor and reported round79/asset1. Anonymous directory remained 12 rows/0
+players after the smoke. UDP status did not include CSQC fields and was not a
+checksum grade. Active owner VM reload, other-client asset downloads, font
+judgement, full timing budgets and release/archive acceptance are not claimed.
