@@ -39404,3 +39404,17 @@ prose-only/other errors do not. Real read denial remains generic query error.
 Python3.10 executes non-code control and explicitly skips four code-required arms;
 no old-interpreter typed-contention claim. Adjacent lock/atomic/summary/collection/
 pair-fault tests pass; LSP no recorded diagnostics. Batch review/live gates pending.
+
+**Batch gates (2026-10-08, before delivery).** Two fresh independent read-only
+source/artifact reviews of1ca1342..2a9148d find no blocker (OK/OK with notes); they
+could not independently execute commands/generate the Git-range diff. Runtime
+remains identical after22c4022 explicitly closes the owned atomic test connections.
+49 pinned Linux programs pass across the first48 and one unmodified rerun of the
+existing verifier-counts dynamic-board timestamp failure (one established optional
+case skipped). Windows3.10 has48 passing programs and the same two UDP/RCON admin
+assertion failures as the clean published baseline. Windows3.13 retains the older
+source fixture's baseline-proven connection-cleanup error and the same admin
+limits; its dynamic-board metrics test passes one unmodified rerun. Failed logs
+retained, unrelated code untouched. Recorder306 checks/0failed;269 captured local
+recordings have164faulted files/164faults in both predecessor and subject, exact
+per-file parity. No corpus-fault reduction claim. Installed/live delivery pending.
