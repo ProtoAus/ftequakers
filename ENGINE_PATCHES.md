@@ -39461,7 +39461,11 @@ reader/ReadBudget interfaces and ACTED controls. These were harness failures, no
 product repairs. Hard total-time/RSS/write limits, crash-in-flight/concurrent/fair
 scheduling, calibration and ranking/authenticity conclusions remain unverified.
 
-## Patch 577 — usable native plugin memory-image handles *(ENGINE)*
+## Patch 581 — usable native plugin memory-image handles *(ENGINE)*
+
+Initial claim 577 collided with concurrently published reader work. Renumbered
+forward; published `51dfe46ef` / `patch-577` history is retained, not rewritten.
+The P577-named harness preserves its original pre-registered probe identifiers.
 
 **Problem.** Plugin `2D.LoadImageData` uploaded a valid image but its type-3
 shader path returned 0. Zero/negative handles could index before the shader
