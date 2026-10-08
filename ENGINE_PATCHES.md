@@ -39050,3 +39050,45 @@ finite fixture progress is not complete coverage or an enforcement threshold.
 Public operations notes and private checkpoint retain failures, scope limitation,
 exact commands, hashes and residual risks. Owned temporary claim markers removed
 only after both public histories contain these three patches.
+
+## Patch 566 — opt-in modern SUI editor and native-size text (2026-10-08)
+
+**Problem.** FTESurf's editor has useful interactions but square chrome and
+immediate single-line descriptions. A shared rounded/tooltip facility was
+missing. Merely scaling text geometry can also stretch a nearby baked glyph
+size; passing layout bounds is not evidence of crisp/native text.
+
+**Change (QC/assets only).** Added shared `sh_ui.qc` after fonts/SUI in both
+VMs, rounded nine-slice chrome with an authored reproducible 32px mask and an
+explicit release/ignore allowlist entry. `ui_style 1` opts the HUD editor in;
+0 remains classic/default. IDs, actions, dragging, settings and gameplay HUD
+are retained. Modern editor labels/tooltips convert to physical pixels, choose
+the selected face's baked size, convert back on both axes and pixel-align
+origins. No per-frame font rebake. Tooltips delay/wrap/cache, clamp to edges,
+draw above SUI clips, and free cached strings on close/hold/focus loss.
+IE_FOCUS retains independent mouse/key state and -1 unchanged semantics.
+Existing missing-image handling gives usable rectangular fallback. Registered
+`hud_edit ui` probes feed the existing handler chain without claiming actual
+OS-device delivery. Roadmap/native-font policy and pending human acceptance
+updated. No native ImGui module, engine code/pin/tag, Build number, recording,
+run/graph calculations or evidence format changed.
+
+**Verified.** Isolated source based on public FTESurf `21cfeea`, not the shared
+owner tree. All three QC compiles: zero warnings. Seven generator/ship-entry/
+grader tests include missing probes and font/tooltip/closed-work mutants.
+28 runtime checks per fresh real-dedicated/client rig: Windows clients from
+both installs, 1280x720/1920x1080/2560x1440, HUD scale 0.75/1/2, virtual scale
+1/1.5/2; separate fresh missing-mask arm. Native requests resolve to baked
+physical sizes, actual descriptions wrap/cache, holds and independent focus
+changes clear/restore them, actions agree, bounds fit, dirty saves stay in the
+rig, and close releases the cursor with no further SUI frames/submissions.
+Same-style panel pixel floors zero; acted speed-HUD control pixel delta zero.
+Existing p498 navigation: 16/16 with fresh-rig offline-consent/chosen-name
+bootstrap, fixed geometry and 1.5s rendered waits. Untouched fixtures first
+hit consent/default-name prerequisites; no unrelated product repair.
+
+Limits: actual OS/DPI/device feel and font/style judgement remain in lextest;
+CPU/GPU/percentile budgets and broad nested/UTF-8/renderer-restart matrix are
+not certified. Bare-worktree full shipguard is blocked by pre-existing missing
+untracked particles; the exact new asset entry and missing-entry mutant pass.
+No release/archive or fleet result is inferred from these local controls.
