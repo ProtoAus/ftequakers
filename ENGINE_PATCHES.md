@@ -39154,3 +39154,31 @@ All twenty-one focused/inherited reader/collector/runtime/admin/board/sweep
 programs pass locally. LSP no recorded diagnostics. Final batch review, exact-
 commit Linux and installed verification pending; no deployment claim yet.
 No engine/progs/pin/tag/Build or resource-bound/calibration/enforcement change.
+
+## Patch 569 - authenticated historical similarity provenance *(SURFD ONLY)*
+
+**Problem.** The review surface could show metrics but not whether their exact
+historical source buffers were captured. Treating legacy absence as captured or
+hashing present files would invent provenance for old measurements.
+
+**Change.** Read-only optional-column projection returns validated compared
+snapshots or fixed captured/legacy-unbound/unavailable states. Bound SQL capture
+to513BLOBbytes before strict UTF-8 decoding and the shared512byte validator. Preserve valid
+metrics when provenance is absent/invalid, and retain stored A/B orientation.
+Text-only DOM shows hashes/sizes with explicit historical/not-current/not-
+authenticity wording. Authentication,25pair bound, badges and public routes stay
+unchanged; no source reads, comparison execution, ALTER or historical backfill.
+
+**Verified.** Twelve predecessor assertions fail across ten cases (five inherited
+repeats); all ten pass with an actual Node DOM HTML-sink trap, positive measured
+fixture capture, anonymous401, B-page orientation, old-schema read/no-migration,
+legacy/invalid/future/oversized/boolean/skip projection and acted513character SQL
+prefix. Independent review identified reachable TEXT-substr NUL truncation;
+one additional red assertion confirms it. BLOB-prefix/strict-decode/coalesce fix
+passes trailing-NUL, oversized-NUL and invalid-UTF8 controls (empty remains legacy).
+Adjacent admin/sweep/board/collector/reader controls pass; recorder306/0
+and captured269REC/101view corpus fault lists identical;15HID inventoried only.
+Existing fixture ResourceWarnings remain at unchanged fixture sites, not repaired.
+LSP no recorded diagnostics. Independent batch source review, Linux/publication/
+installed verification pending, no deployment claim. No engine/progs/pin/tag/Build,
+calibration/enforcement, current-source/authenticity or full-coverage claim.
