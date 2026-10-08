@@ -39848,3 +39848,25 @@ acquisition/rotation/growth controls. Small redacted and large multiline tails
 act, newline-free output is bounded and marked, and unreadable stays distinct.
 This bounds selected Python acquisition, not hard elapsed time, filesystem
 snapshot atomicity or whole-request memory. Deployment is recorded separately.
+
+## Patch 591 — bounded historical key-association review *(SURFD ONLY)*
+
+**Problem.** The optional receipt panel fetched every historical signing-key
+association in both directions and rendered list lengths as exact totals.
+Large groups bypassed the separately bounded similarity panel.
+
+**Change.** Cap each selected association query at 26 rows, display 25 with
+separate more flags, and render partial counts as lower bounds. The request's
+fresh connection opts into a cumulative selected-read instruction budget;
+exhaustion withholds both association lists while retaining the receipt and
+explicit unavailable state. Borrowed callbacks are untouched by default.
+No key decisions, public badges, schema, historical rows or game builds change.
+
+**Verified.** Six warning-clean authenticated synthetic DB/actual DOM tests
+pass: both directions act, 1000-row groups acquire only cap+1, first-result
+completion followed by real second-query interruption withholds the subsection,
+recovery acts, missing schema stays read-only, and borrowed callback survives.
+Five initial predecessor controls fail. Combined selected regressions pass 19
+cases; the legacy admin script retains two unrelated UDP-control failures and
+all three template syntax checks pass. This is not a whole-request/time/RSS
+budget or human-browser acceptance. Deployment is recorded separately.
