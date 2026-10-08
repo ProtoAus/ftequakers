@@ -39743,3 +39743,24 @@ and metrics3 tests pass; LSP no diagnostics. Initial unrelated-row arm did not
 exercise work due to indexes; corrected to related-row sorting and reran both
 versions. Initial import/API mismatch and too-small default were caught before
 commit. Batch regression, independent review and delivery follow.
+
+## Patch 588 — non-initializing similarity dry-run diagnostics *(SURFD ONLY)*
+
+**Problem.** The similarity diagnostic subsection initialized/migrated the
+collector's schema before reporting availability. Observing a missing subsystem
+created it; observing legacy history ALTERed it and could require a writer lock.
+
+**Change.** Remove only that initializer. A budgeted table probe reports explicit
+unavailable for absent history; existing schemas get the scalar eligible-candidate
+count and independent read-only summary. Normal collection still initializes.
+General main/import schema setup is unchanged: the whole CLI is NOT read-only.
+No historical backfill, detector/gate, engine/progs/pin/tag/Build change.
+
+**Verified.** Four warning-clean actual-connected-consumer tests pass. P587
+predecessor fails all three dry-run schema arms under a real similarity DDL/DML
+authorizer; normal collector control passes both and stores a real 80-opportunity
+comparison with exact byte hashes. Absent, legacy and current schema/rows remain
+exact; legacy category and actual scalar count are reported. Pending4/CLI3 and
+owned-connection test pass; LSP no diagnostics. Initial cursor-name/argument/
+capture-key fixture mistakes and Python3.10 authorizer teardown quirk were caught,
+corrected and both versions rerun. Batch regression, review and delivery follow.
