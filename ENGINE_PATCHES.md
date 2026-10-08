@@ -39510,8 +39510,9 @@ capsules only; historical readers missing these capabilities are not installable
 with this installer. Trusted-code smoke contract, not sandbox/resource/code
 attestation. No metric, detector/ranking, engine pin/tag/Build change.
 
-**Verified.** Twelve installer controls pass on Windows (symlink control explicitly
-skipped where privilege unavailable). Predecessor fails all three new feature
+**Verified.** Twelve installer controls pass on Windows without skips. The generated
+negative reader's file-size check closes no handles because it uses stat, removing
+its initial test-only ResourceWarning. Predecessor fails all three new feature
 controls: marker variants preserving callable, hash-valid ignored limits, and
 incorrect captured hash. Dry/apply preserve prior bytes/mode/backup inventory on
 rejection; real dry/apply installed comparison/capture ACT. Predecessor guards,
