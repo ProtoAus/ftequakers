@@ -39461,6 +39461,107 @@ reader/ReadBudget interfaces and ACTED controls. These were harness failures, no
 product repairs. Hard total-time/RSS/write limits, crash-in-flight/concurrent/fair
 scheduling, calibration and ranking/authenticity conclusions remain unverified.
 
+## Patch 577 - validate similarity source budgets before I/O *(READER ONLY)*
+
+**Problem.** Optional source budgets accepted invalid types and negative read
+sizes. Configuration errors could act on a file before rejection instead of
+preserving the bounded-input contract.
+
+**Change.** Reject noninteger/boolean/negative limits and byte sizes whose
+sentinel read cannot fit the host read-size type before any open, including
+same-file and non-strict calls. Configuration errors are ValueError, not sample
+skips. None/default and nonnegative integer budgets, including zero, retain
+existing behavior. No metric, format, detector, ranking, engine pin/tag/Build change.
+
+**Verified.** Three new controls pass; predecessor fails the invalid-configuration
+control. Spied real binary reads request exactly limit+1 for both80-row sources;
+exact byte/move bounds retain default metrics and exact capture. One-less/zero
+budgets abstain whole. Existing source/parsing/unreadable/opportunity suites pass;
+LSP no recorded diagnostics. Final source review found no issues; complete batch
+and partial dual-Windows deployment evidence/limits are recorded with Patch 580.
+
+## Patch 578 - report actual similarity flush additions *(SURFD ONLY)*
+
+**Problem.** Buffered comparisons were counted as new observations even when
+INSERT OR IGNORE lost to a same-key collector insertion during comparison.
+
+**Change.** Count insertion-local rowcount within the existing atomic peer
+checkpoint/observation transaction; skipped/notable counts describe only inserted
+rows. No checkpoint or trigger writes inflate counts. Attempt budgets, uniqueness,
+selection and historical winner stay unchanged. No reservation/exactly-once claim,
+metric, detector/ranking, engine pin/tag/Build change.
+
+**Verified.** Four new SQLite controls plus five inherited atomic controls pass;
+predecessor fails three same-key overlap counts. Real second-connection inserts
+ACT during real80-row comparisons, survive reopen unchanged, and ignored notable/
+skip/all-duplicate results do not invent additions. Admission still checkpoints;
+trigger writes do not inflate counts. Adjacent atomic/pair-fault/source/peer suites
+pass including acted rollback. LSP no recorded diagnostics. Final source review
+found no issues; final Linux/installed/live evidence is recorded with Patch 580.
+
+## Patch 579 - acted bounded reader capsule preflight *(TOOLS ONLY)*
+
+**Problem.** The canonical reader capsule checked callable/path capability only;
+a callable could lack current bounded-input/capture support or not exercise it.
+
+**Change.** Require literal integer version1 bounded-input/capture markers. Before
+any destination mutation, compare disposable80-row sources under exact bounds,
+check exact captured hashes/sizes, and require whole-pair abstention for one-less
+byte and move limits. Recheck installed capability as before. Canonical current
+capsules only; historical readers missing these capabilities are not installable
+with this installer. Trusted-code smoke contract, not sandbox/resource/code
+attestation. No metric, detector/ranking, engine pin/tag/Build change.
+
+**Verified.** Twelve installer controls pass on Windows without skips. The generated
+negative reader's file-size check closes no handles because it uses stat, removing
+its initial test-only ResourceWarning. Predecessor fails all three new feature
+controls: marker variants preserving callable, hash-valid ignored limits, and
+incorrect captured hash. Dry/apply preserve prior bytes/mode/backup inventory on
+rejection; real dry/apply installed comparison/capture ACT. Predecessor guards,
+paired drift/race, exclusive backups and exact Git preparation still pass.
+LSP no recorded diagnostics. Final source review found no issues; final Linux/
+installed evidence and primary Windows deployment blocker recorded with Patch 580.
+
+## Patch 580 - bind similarity reader per collection pass *(SURFD ONLY)*
+
+**Problem.** A collection pass loaded support at startup then discarded it and
+reloaded for every source, allowing module changes inside one admitted pass.
+
+**Change.** Thread the initially resolved module through source comparisons.
+Direct compare_run callers still resolve their explicit tools directory without
+a supplied reader. Later passes re-resolve; no process-global cache. This binds
+reader code for one pass, not an atomic recording/filesystem snapshot, source
+reservation or code-authenticity claim. No metric, detector/ranking, engine pin/tag/
+Build change.
+
+**Verified.** Three new controls and source-cursor/pair-fault/pending/time/overlap
+suites pass. Predecessor fails pass-binding assertion. Actual temporary support
+file replacement ACTS during real80-opportunity comparison; all three first-pass
+pairs use initial module with one load, three next-pass pairs use replacement,
+and later missing support abstains without cache. Direct calls observe replacement
+with explicit tools; disabled pass performs no loads/writes. LSP no recorded
+diagnostics. Final source reviewer finds no issues, with inspected evidence only.
+All 52 explicit Linux programs pass across 51 first-run passes and one retained
+unmodified dynamic-board timestamp rerun, with established optional skips. Windows
+51/52 programs pass; unchanged admin's same two UDP assertions reproduce on the
+byte-identical baseline. Recorder 306/0; 269REC plus pairedVIEW manifests and full
+reports exactly match baseline, including 170 faulted reports.
+
+**DEPLOYED (UTC 2026-10-08).** Frozen source 952d586: Pi reader 07:00:37 and ONLY
+simcheck.py via canonical -Only -NoReload -SkipTests (explicit 52program stage
+already completed). Destination hashes, rollback files and mode600 database backup
+verified. Installed reader/collector pass25 cases including5 inherited, no skips;
+actual isolated installed sweep wrapper stores80 opportunities with capture. Live
+mode=ro/DML-denial/read-limit controls prove no cursor mutation/collection. Bounded
+SQL with ACTED exact/changed/deleted owned controls proves original sims/receipts/
+verdicts/reviews rows equal the pre-copy backup. No mutable board/replay preservation
+claim. Final installed/health/auth gates07:02:31. Secondary Windows reader installed
+07:01:07, exact hash/rollback/3controls pass. PRIMARY Windows reader is tracked and
+modified by another session: deployment BLOCKED, existing bytes preserved. No game/
+engine/QC/progs/config/release/Build change or owner-process restart. Broader hard
+resource bounds, fairness/reservation/completion/authenticity/calibration and browser
+acceptance remain unverified; primary Windows deployment remains incomplete.
+
 ## Patch 581 — usable native plugin memory-image handles *(ENGINE)*
 
 Initial claim 577 collided with concurrently published reader work. Renumbered
