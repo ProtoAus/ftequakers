@@ -1,6 +1,9 @@
 #include "backend.h"
+#include "vendor/imgui_internal.h"
 #include <cstdio>
 #include <new>
+#include <cmath>
+#include <cstring>
 
 namespace FteImGui {
 static plugcorefuncs_t *core;

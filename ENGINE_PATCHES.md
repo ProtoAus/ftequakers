@@ -40224,5 +40224,11 @@ summary repair or silent install seeding. These are synthetic explicit QC events
 not physical device/cursor/minus acceptance. Frozen source/tag/stamp, pushes and
 any deployment are separately recorded in FTESurf tools/p600input.md.
 
+The initial local frozen gate failed after a late include rearrangement placed
+third-party/standard headers inside FteImGui via input.inc; the compiler and new
+LSP errors correctly caught it. Headers restored to global scope; actual host,
+frozen compiler and runtime gates repeat before publication. Failed logs retained;
+no bad binary/tag was published or deployed.
+
 Claim 600 after fetching both origins: concurrent verifier P599 is preserved;
 disposable p599/P599 probe markers remain for preregistered evidence continuity.

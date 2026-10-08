@@ -1,7 +1,5 @@
+//Included inside FteImGui; keep all third-party/standard headers at global scope.
 //Scalar-only diagnostic transport. Model/snapshot/row generation is a later ABI.
-#include "vendor/imgui_internal.h"
-#include <cmath>
-#include <cstring>
 static bool inputRegistered;
 static bool Interactive(const pluguiowner_t &o)
 {
