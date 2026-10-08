@@ -39460,3 +39460,21 @@ used nonexistent API and history helper nonexistent guard, corrected using real
 reader/ReadBudget interfaces and ACTED controls. These were harness failures, not
 product repairs. Hard total-time/RSS/write limits, crash-in-flight/concurrent/fair
 scheduling, calibration and ranking/authenticity conclusions remain unverified.
+
+## Patch 577 - validate similarity source budgets before I/O *(READER ONLY)*
+
+**Problem.** Optional source budgets accepted invalid types and negative read
+sizes. Configuration errors could act on a file before rejection instead of
+preserving the bounded-input contract.
+
+**Change.** Reject noninteger/boolean/negative limits and byte sizes whose
+sentinel read cannot fit the host read-size type before any open, including
+same-file and non-strict calls. Configuration errors are ValueError, not sample
+skips. None/default and nonnegative integer budgets, including zero, retain
+existing behavior. No metric, format, detector, ranking, engine pin/tag/Build change.
+
+**Verified.** Three new controls pass; predecessor fails the invalid-configuration
+control. Spied real binary reads request exactly limit+1 for both80-row sources;
+exact byte/move bounds retain default metrics and exact capture. One-less/zero
+budgets abstain whole. Existing source/parsing/unreadable/opportunity suites pass;
+LSP no recorded diagnostics. Independent review, Linux and deployment pending.
