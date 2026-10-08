@@ -39611,3 +39611,22 @@ errors across invalid/zero arms; subject rejects without loader/query action.
 LSP has no recorded diagnostics, not a parse/build guarantee. General hard
 elapsed/RSS/write limits and complete scheduling are not supplied by validation.
 Batch regression, review and installed delivery are recorded after final gates.
+
+## Patch 583 — preserve similarity caller transactions *(SURFD ONLY)*
+
+**Problem.** Enabled direct/embedded collection could implicitly commit unrelated
+caller DML through executescript/connection contexts, or hold its writer lock
+across file comparison. This is a reachable API gap, not a proven cron incident.
+
+**Change.** Idle-connection precondition before enabled collection/comparison,
+schema initialization or source admission. Step reports fixed unavailable/coverage
+not measured; direct write APIs reject. Wrapper checks before optional loading or
+busy/progress-slot changes. Disabled and read-only paths retain caller ownership;
+no auto-commit/rollback, detector, gate, history, engine/progs/pin/tag/Build change.
+
+**Verified.** Six warning-clean real SQLite/actual wrapper tests pass; predecessor
+fails four ownership arms. Pending caller DML remains rollbackable and invisible
+to another connection. Idle control ACTS with independent writer during files and
+stores 80 opportunities. Borrowed read callbacks/numeric timeout preserved. Initial
+own test expected empty summary to be ok; corrected fixture assertion and reran
+both arms. LSP no recorded diagnostics. Batch regression/review/delivery pending.
