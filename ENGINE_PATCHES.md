@@ -40172,7 +40172,16 @@ Windows boundary: 70 programs, 69 pass; only test_admin's two preexisting UDP/
 RCON failures, reproduced in clean 0eafc347. Reader suite passes; immutable
 REC+sidecar snapshot: 269 REC / 440 files, 164 existing fault files / 164 faults,
 unchanged reader blob and no fault increase. Owned Python compiles warning-free.
-Linux exact-commit stage/deployment gates are recorded separately after completion.
+Linux exact-commit stage: all 70 programs pass after four staging-only controls
+are rerun with missing client fixtures, neutral path and adequate temp storage
+corrected; no product changes. Selected sweeper/control-only Pi copy verified at
+2026-10-08T15:29:27Z, rechecked 15:31:14Z. Installed module's 15 controls act;
+exact destination hashes, 125 protected support/static/template/reader files,
+stored verdict/review/receipt fingerprints and worker identities unchanged;
+health OK/12 lobbies. Canonical sweep lock, completed read-snapshot DB backup and
+owned source rollback retained. The first deferred-read backup timed out before
+swaps and is recorded, not hidden. No reload/game/Windows/progs/config/reader
+swap. Commands, actual hashes, failed controls and limits: game tools/p599sources.md.
 
 ## Patch 600 — bounded explicit native input/actions, diagnostic owners only
 
