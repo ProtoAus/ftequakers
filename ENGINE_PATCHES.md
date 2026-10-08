@@ -39380,3 +39380,27 @@ sweep wrapper/CLI proves forwarding, disabled bypass and parser rejection before
 connect. Existing budgetCLI three cases pass; LSP no recorded diagnostics. Python
 3.10 lacks SQLite error-code attributes; typed diagnosis is a later independent
 feature, not claimed by these controls. Batch review/Linux/installed gates pending.
+
+## Patch 576 - typed similarity contention availability *(SURFD ONLY)*
+
+**Problem.** Real SQLite contention was indistinguishable from arbitrary row/
+query faults; continuing row admission could repeat waits on a contended connection.
+A stored-sample summary could not distinguish contention from generic query failure.
+
+**Change.** BUSY/LOCKED primary result-code classification, including extended
+codes, returns fixed database-busy/coverage-not-measured telemetry. Stop new source
+admission and retain prior committed observations; no retries/fake skips/zeros.
+Summary busy state has all counters unknown and sample-not-measured wording. No
+exception-message inference: old Python without result codes retains generic
+error behavior. Other query/storage faults and all detector/ranking semantics stay.
+No engine pin/tag/Build change.
+
+**Verified.** Five controls pass on Python3.13; predecessor fails four assertions.
+Real two-connection EXCLUSIVE locks obstruct schema and summary, unlock recovers
+three native80-opportunity pairs/exact prior sample. A later-row real lock stops
+admission after one committed80-opportunity observation without losing it. Actual
+same-connection open-cursor DROP produces LOCKED; synthetic extended codes classify,
+prose-only/other errors do not. Real read denial remains generic query error.
+Python3.10 executes non-code control and explicitly skips four code-required arms;
+no old-interpreter typed-contention claim. Adjacent lock/atomic/summary/collection/
+pair-fault tests pass; LSP no recorded diagnostics. Batch review/live gates pending.
