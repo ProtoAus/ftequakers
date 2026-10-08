@@ -40011,3 +40011,23 @@ fragment harness now includes the actual summary helper; counts and receipt DOM
 controls pass. Initial fixture timestamp and Windows argv-length mistakes were
 corrected and predecessor re-run; these were not product failures. Final independent
 review, frozen Linux proof and delivery are batch gates recorded separately.
+
+## Patch 596 — reject ambiguous stored metric projections *(SURFD ONLY)*
+
+**Problem.** Ordinary JSON decoding discarded duplicate object keys before the
+owner-only typed validator saw them. Ambiguous historical journal/counts snapshots
+could consequently display the last value as a measured denominator or zero.
+
+**Change.** One local duplicate-rejecting JSON decoder for both historical metric
+validators, at every object nesting level. Existing byte caps, UTF-8, version/type
+allowlists, unavailable fallback and stored observations remain unchanged. No
+reader/sweep acceptance, backfill, detector/threshold, badge/ranking, engine/QC,
+Build/pin/tag or Windows artifact change.
+
+**Verified.** Five warning-clean actual authenticated API/bounded-fetch tests pass
+(three inherited controls); predecessor fails ten duplicate-key text/BLOB subcases.
+Top-level version/state, metrics, nested exclusions and escaped-equivalent keys
+abstain; unique zeros, empty metrics and no-records remain exact. Original stored
+strings/verdicts unchanged, no historical reader invocation, anonymous401. Existing
+actual receipt/counts Node renderers pass their unavailable/zero controls. Final
+independent review, frozen Linux and delivery gates are recorded separately.
