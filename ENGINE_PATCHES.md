@@ -39262,3 +39262,22 @@ rejects before main connect, tiny dry-run budget says unavailable, explicit scal
 forwarding and unchanged observations. Adjacent pending/cursor/source/time/collection
 controls pass. LSP no recorded diagnostics; independent batch review, recorder/corpus,
 exact publication and Linux/installed gates recorded at batch completion.
+
+## Patch 572 - bound similarity peer-selection SQL reads *(SURFD ONLY)*
+
+**Problem.** Source selection alone left peer sorting/exclusion and late pair
+rechecks outside the selected-read instruction allowance.
+
+**Change.** Peer cursor/candidate/recheck reads share the pass allowance. Whole
+candidate queries abstain before source resolution; a late recheck interruption
+stops new admission and flushes already completed observations/checkpoints.
+Fixed SQL read-limit note reports unknown coverage once, not a row fault, skip
+or zero. No detector/statistic, historical refresh, write-lock or policy change.
+
+**Verified.** Three predecessor behavioral failures across four cases; four
+subject cases pass. Real SQLite peer-sort interruption ACTS on a large same-map
+fixture, admits nothing and clears callback; fresh allowance then stores eighty
+opportunities. Exhaust next recheck after real first comparison: preserve exactly
+one observation/peer cursor, then resume without rewriting it. Positive orientation/
+exclusion and step diagnostic controls; adjacent peer cursor/pair fault/time/
+pending/source/CLI tests pass. LSP no recorded diagnostics; final batch gates follow.
