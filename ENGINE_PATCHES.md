@@ -39990,7 +39990,72 @@ swaps, zero failed, hashes/progs/config/data/server/DLL preservation verified
 resource cleanup may independently flush for P589 texture lifetime. No second
 Pi/progs swap or release. Exact evidence/provenance: game tools/p594clip.md.
 
-## Patch 595 — optional explicit-QC Dear ImGui command-list service
+## Patch 595 — disclose bounded verifier history *(SURFD ONLY)*
+
+**Problem.** The authenticated history displayed only the newest 200 attempts,
+without saying older attempts existed; its summary could call the visible stale
+subset the entire history. Stored counts are per attempt, not a complete census.
+
+**Change.** Acquire one sentinel row, display the same 200 id-descending attempts,
+and add limit/more metadata. Literal-text summaries label partial counts as shown
+and disclose omitted older attempts. Latest/current/public verdict queries remain
+unchanged. No total-count scan, evidence rewrite, detector/policy, engine/QC,
+Build/pin/tag or Windows artifact change.
+
+**Verified.** Three warning-clean actual API/SQL/Node DOM tests pass; inspected
+predecessor fails all three (seven assertions/subcases). Boundaries 0/199/200/201/
+400 acquire at most 201, preserve ordering/history/public board and anonymous401.
+An oldest-current/latest200-stale fixture preserves Verified via the unchanged
+public query but refuses a universal all-stale display claim. Existing counts
+fragment harness now includes the actual summary helper; counts and receipt DOM
+controls pass. Initial fixture timestamp and Windows argv-length mistakes were
+corrected and predecessor re-run; these were not product failures. Final independent
+review, frozen Linux proof and delivery are batch gates recorded separately.
+
+## Patch 596 — reject ambiguous stored metric projections *(SURFD ONLY)*
+
+**Problem.** Ordinary JSON decoding discarded duplicate object keys before the
+owner-only typed validator saw them. Ambiguous historical journal/counts snapshots
+could consequently display the last value as a measured denominator or zero.
+
+**Change.** One local duplicate-rejecting JSON decoder for both historical metric
+validators, at every object nesting level. Existing byte caps, UTF-8, version/type
+allowlists, unavailable fallback and stored observations remain unchanged. No
+reader/sweep acceptance, backfill, detector/threshold, badge/ranking, engine/QC,
+Build/pin/tag or Windows artifact change.
+
+**Verified.** Five warning-clean actual authenticated API/bounded-fetch tests pass
+(three inherited controls); predecessor fails ten duplicate-key text/BLOB subcases.
+Top-level version/state, metrics, nested exclusions and escaped-equivalent keys
+abstain; unique zeros, empty metrics and no-records remain exact. Original stored
+strings/verdicts unchanged, no historical reader invocation, anonymous401. Existing
+actual receipt/counts Node renderers pass their unavailable/zero controls. Final
+independent review, frozen Linux and delivery gates are recorded separately.
+
+## Patch 597 — budget the initial similarity schema probe *(SURFD ONLY)*
+
+**Problem.** The optional owner similarity panel budgeted PRAGMA/history reads,
+but its initial table-existence query ran outside the cumulative SQL allowance.
+A tiny allowance could consequently claim confirmed absence without budgeting
+that observation.
+
+**Change.** Create the existing opt-in owned ReadBudget before all three selected
+reads. Initial schema exhaustion returns whole-panel read_limit, not missing or
+partial observations. Adequately budgeted absence/empty/success stay distinct;
+borrowed callbacks remain untouched by default. No whole-request time/RSS/I/O,
+scoring/threshold/history, engine/QC, Build/pin/tag or Windows artifact change.
+
+**Verified.** Three warning-clean actual API/SQLite tests pass; predecessor fails
+two assertions. A one-step allowance ACTS at the schema SELECT with its progress
+handler installed, before PRAGMA/history; actual callback interrupts and finally
+clears, after-close-path SQL still acts. Adequate default recovers an 80-opportunity
+stored measurement. Missing/tiny unknown and adequately budgeted missing/empty
+remain distinct, original DB unchanged, anonymous401; borrowed callback survives
+and unrelated I/O still returns storage error. All four existing panel-budget and
+five historical similarity controls pass. Final independent review, frozen Linux
+and delivery gates are recorded separately.
+
+## Patch 598 — optional explicit-QC Dear ImGui command-list service
 
 **Problem.** P589/P593/P594 proved indexed meshes, VM-owned native dispatch and
 inherited clipping, but no actual Dear ImGui draw lists exercised that path.
@@ -40031,5 +40096,12 @@ that gate). Acting -Engine -NoDeploy build: 65 native/rollback/progs/cfg byte/pa
 witnesses unchanged; three QC targets zero warnings; typo/NoDeploy+Pi refusal
 acts. Earlier ignored-switch native swaps were hash-guard restored from rollback
 copies; the new plugin was parked before proceeding. Full frozen-stamp build and
-guarded dual delivery are separate final gates, recorded in game tools/p595imgui.md.
+guarded dual delivery are separate final gates, recorded in game tools/p598imgui.md.
 No non-GL/device/input/performance/real-panel/appearance or release acceptance.
+
+The provisional native 595 claim collided with concurrently published surfd-only
+P595-597 during final gates. Those entries are preserved unchanged; canonical
+native feature is P598. Already-published provisional tag patch-595 remains
+historical and immutable (not the canonical surfd-only P595 entry). Test fixture
+cvar/command/log names retain their provisional p595 prefix for replay continuity;
+canonical public tooling is p598imgui. No published history/tag was rewritten.

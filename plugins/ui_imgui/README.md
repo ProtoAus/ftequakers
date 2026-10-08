@@ -43,6 +43,9 @@ Normal development `build.ps1 -Engine` includes/copies this optional plugin to
 both Windows installs; loading remains explicit. Release ship-set changes are
 not part of this prerequisite and must be gated before wider adoption.
 
-Falsifiers and retained results: FTESurf `tools/p595imgui.md`,
-`tools/p595imgui.py`, `tools/p595build.py`, `tools/test_p595imgui_unit.py` and
-`tools/fixtures/p595imgui_host.cpp` (real service/adapter/ImGui source).
+Falsifiers and retained results: FTESurf `tools/p598imgui.md`,
+`tools/p598imgui.py`, `tools/p598build.py`, `tools/test_p598imgui_unit.py` and
+`tools/fixtures/p598imgui_host.cpp` (real service/adapter/ImGui source).
+The provisional native P595 claim collided with surfd-only P595-597. Canonical
+native feature is P598; immutable historical patch-595 tag and p595-prefixed
+fixture commands/cvars/logs are retained, not rewritten or panel defaults.
