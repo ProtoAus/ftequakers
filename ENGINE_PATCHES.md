@@ -38890,3 +38890,41 @@ anonymous admin access returns 401. Short locked swaps keep predecessor file and
 private DB backups. Only simcheck.py/sweep.py installed; reader/engine/progs/config,
 Windows installs and lobby process state unchanged. App master/worker reload is
 confirmed. Public notes and private checkpoint record limits and provenance.
+
+## Patch 560 — distinguish requested and native rewind clocks (2026-10-08)
+
+**Problem.** Browsing's fractional display and sampled save/go request are not
+identical, and native rewind chooses the nearest eligible recorded position,
+not necessarily the requested clock. The key hint promised "resume here" and
+countdown showed no requested/selected context. Under configured latency the
+native clock can differ visibly while body/ack/prefix restoration remains exact.
+
+**Change.** Display-only context row: sampled request while browsing, requested
+clock/waiting while pending, and correlated native clock/request/signed delta
+through held countdown. Practice resumes explicitly remain untimed; unmatched
+or unavailable metadata never invents a native clock. Reuse existing save/go
+ticket, SLTRAILTAG and SAVETICKS; capture presentation only after correlated
+acceptance. Closed/reset/reopened views cannot leak a selected caption. Key
+hint says native resume/save rather than promising clock-exact "here". Context
+row is below the key legend, clear of speed/e-line. No native selection, camera,
+body, countdown timing, restore/prefix/recorder/evidence, protocol, engine binary/
+pin/tag or Build change.
+
+**Verified.** Actual-draw/timer baseline ACTS and lacks required context. Candidate
+passes four three-warm/three-fresh-cold matrices at caps 30/100/300 and both
+installed clients, with explicit 120ms packet delay: sampled versus fractional
+display, pending, correlated native clock/fixed delta, actual frozen main HUD,
+release/close. Nine compiled presentation controls cover untimed/unmatched/
+negative ticks/pending/closed/reopened/rate cases; five real SV_RewindFind units
+prove repeated-position closest-tick/newest tie/window rules unchanged. Full
+native rings, acknowledged raw prefixes, native body/clock/hold/release and
+camera/discontinuity gates pass. Strict requested-clock checks remain RED on
+three or four cuts; this patch does not claim clock equivalence or general
+alignment. Twenty-five mutated presentation controls reject false/unacted
+claims; prior HUD21/12 and navigation/focus/opposition regressions pass;
+reader306/0. All programs compile zero warnings. Non-instrumented production
+request/pending/native/delta/timer/close control passes; screenshots inspected.
+Initial probe compile/seam and pending-save/timed-screenshot harness failures
+were retained and corrected without weakening body or clock oracles. Real
+practice-device/camera feel, low-resolution/custom HUD layout and general
+requested/native alignment remain human/follow-up gates.
