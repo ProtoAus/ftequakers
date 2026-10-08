@@ -40054,3 +40054,22 @@ remain distinct, original DB unchanged, anonymous401; borrowed callback survives
 and unrelated I/O still returns storage error. All four existing panel-budget and
 five historical similarity controls pass. Final independent review, frozen Linux
 and delivery gates are recorded separately.
+
+**Final P595/P596/P597 batch gates.** Independent fresh source review found no
+issues; parent strengthened its two predecessor-proof qualifications in test-only
+38eb243 (actual old summary execution and independent journal/counts reds).
+Frozen38eb243 passes59Linux programs including recorder; Windows57/58 with only
+the same two admin UDP failures reproduced on untouched4f066479. Recorder306/0;
+same captured local REC/view fault observations unchanged, no blocked reads;
+HID inventoried only. New focused suites warning-clean, not all legacy fixtures.
+Only admin.py/template shipped from exact committed bytes, under sweep lock with
+under-lock predecessor checks, atomic swaps and retained mode600 DB/file backups.
+Installed-source complete staged harness22tests/fourNode skips and authentic
+worker API/anonymous401 ACT; worker replaced, health12, selected stored history/
+public board and protected support/config/progs/reader bytes unchanged. Final
+UTC2026-10-08T13:59:52Z. No game/engine/Windows/reader/config/release swap. Private
+procedure failures (online backup churn, probe-cookie name, absent kernel children
+interface, transient legacy board-clock fixture) and exact restoration are recorded
+without repairing unrelated source. Actual source/control commands, ship-set,
+failed arms and limits: game `tools/p595observers.md`. No human browser/calibration,
+whole-request resource or enforcement claim; no new product patch for these records.
