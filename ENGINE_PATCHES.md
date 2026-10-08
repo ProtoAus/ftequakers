@@ -39890,6 +39890,34 @@ incomplete sample at the cap is withheld. The existing plot script passes.
 The byte allowance is not a hard elapsed-time/RSS or concurrent-file snapshot
 guarantee; exact-cap files conservatively show truncated. Deployment separately.
 
+### P590–592 verification and delivery — 2026-10-08
+
+Frozen game source/test commit `2ea4035aeede1454df67f071324de42db9a681e5`
+passed clean-checkout verification and native source/artifact review (reviewer
+inspected supplied evidence, did not independently rerun). Each product change
+has its own commit; later commits only repair actual DOM harness dependencies
+and compare board evidence without the generated response timestamp. The
+published integration `1d152893b469d4992b46a159dc2fe4e2d4180550` preserves
+these exact product bytes while retaining already-published peer tooling.
+
+Selected controls: 25 warning-clean tests, no local skips; all three template
+syntax checks pass. All 55 candidate surfd scripts were compared with the clean
+baseline except argument-required momindex; no new failures. Two legacy UDP
+admin failures remain. Reccheck: 306 checks, zero failures. Frozen corpus:
+269 recordings, 101 view files, unchanged 170 faulting recordings; private
+manifest verifies fixture preservation. No all-green legacy/warning claim.
+
+DEPLOYED the eight selected source/template/test files only via surfd-deploy,
+from frozen `2ea4035`, after Pi stage gates, owner-only SQLite backup and locked
+copy. All eight destination hashes match, rollback copies remain, gunicorn
+master is preserved with a replacement ready worker. At
+2026-10-08T10:16:14Z, live worker controls ACT on a nonempty bounded log window,
+nonempty authenticated historical associations, and a nonempty plot; anonymous
+access is refused and health reports 12 lobbies. Installed synthetic controls
+pass 25 cases with two Linux Node-dependent skips; local Node tests passed.
+No live collection/backfill, game or Windows artifact, engine/progs/pin/tag or
+Build change. Human browser readability remains unverified in lextest.md.
+
 ## Patch 593 — explicit VM-owned native UI dispatch prerequisite
 
 **Problem.** P589's indexed renderer had no caller-owned MQC/CSQC service route.
