@@ -39870,3 +39870,22 @@ Five initial predecessor controls fail. Combined selected regressions pass 19
 cases; the legacy admin script retains two unrelated UDP-control failures and
 all three template syntax checks pass. This is not a whole-request/time/RSS
 budget or human-browser acceptance. Deployment is recorded separately.
+
+## Patch 592 — exact plot-reader byte acquisition *(SURFD ONLY)*
+
+**Problem.** The plot reader checked its byte allowance only after acquiring a
+full line chunk, so small or non-aligned limits overshot, including during
+long-line draining. Coercion accepted ambiguous byte-budget configurations.
+
+**Change.** Require an exact nonnegative integer allowance before opening and
+constrain every normal/drain read to its remaining bytes. At the cap, report
+conservative truncation without an EOF probe; do not interpret a budget-cut
+line as a complete sample. Ordinary complete and recovered plots remain
+read-only observations, not evidence verdicts. No game/progs/engine pin change.
+
+**Verified.** Six warning-clean real-file tests pass; the predecessor fails
+12 boundary/configuration subcases. Positive complete plots and overlong-line
+recovery act; zero, one, non-aligned and drain budgets never overshoot, and an
+incomplete sample at the cap is withheld. The existing plot script passes.
+The byte allowance is not a hard elapsed-time/RSS or concurrent-file snapshot
+guarantee; exact-cap files conservatively show truncated. Deployment separately.
