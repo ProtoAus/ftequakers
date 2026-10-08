@@ -39592,3 +39592,22 @@ baseline warnings, zero new. Initial dedicated-client probe reached rejection
 but crashed in untouched shutdown; retained, not accepted/repaired. No indexed
 mesh, clipping, QC bridge, ImGui, performance/device or hostile-decoder claim;
 no movement/evidence/Build-number change.
+
+## Patch 582 — validate similarity admission limits *(SURFD ONLY)*
+
+**Problem.** SQLite negative LIMIT means unlimited. Collector source/peer APIs
+accepted negative or noninteger limits; CLI --sims accepted negatives, while huge
+values could fail only after optional support loading or database work.
+
+**Change.** Require exact integers in 0..9223372036854775807 for source, peer and
+pair admission limits before optional loading or SQL. Zero performs no query or
+loader work. CLI rejects invalid source/pair limits before main connects; existing
+import-time initialization is unchanged. No detector, threshold, history, schema,
+ranking, engine/progs/pin/tag or Build change.
+
+**Verified.** Five focused warning-clean tests pass with actual 80-opportunity
+comparison and CLI/wrapper consumers. Predecessor fails 20 assertions plus 7
+errors across invalid/zero arms; subject rejects without loader/query action.
+LSP has no recorded diagnostics, not a parse/build guarantee. General hard
+elapsed/RSS/write limits and complete scheduling are not supplied by validation.
+Batch regression, review and installed delivery are recorded after final gates.
