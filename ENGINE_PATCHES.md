@@ -40232,3 +40232,35 @@ no bad binary/tag was published or deployed.
 
 Claim 600 after fetching both origins: concurrent verifier P599 is preserved;
 disposable p599/P599 probe markers remain for preregistered evidence continuity.
+
+## Patch 602 — bind new ranked PASS observations to the indexed finish ticks *(SURFD ONLY)*
+
+**Problem.** Filing checks the claimed ticks against the replay's filename and
+identity header, but neither proves that those ticks are the finish pm_verify
+reproduced. The sweeper could attach a trajectory PASS to a different indexed
+ranking duration. Real POST/file/SQLite/public-board synthetic controls demonstrate
+this on the untouched baseline; a clean matching-time arm positively verifies.
+
+**Change.** Select the replay's indexed ticks with each pending observation. Parse
+the actual engine's bounded `ticks N rows N` PASS payload; for finished ranked
+runs, compare confirmed finish ticks to the index. Disagreement stores HOLD while
+retaining measured ticks and counts. Unusable/ambiguous/out-of-range duration is
+retryable ERROR with unknown ticks and no counts snapshot, not an accusation.
+Evidence-only abandon promotion, source/header/stage checks, ERROR budget,
+refile/recheck/tie and owner-review precedence remain intact. Historical PASSes
+and approvals are not reread or revoked. No schema, engine/QC/format/detector,
+config, pin/tag, progs or Build change.
+
+**Verified.** Nine focused integration tests: five failures on the baseline, zero
+on the subject; honest/mismatched durations, present/fileless arrival, malformed
+output, grouped independence, unchanged HOLD/REFUSE, header mismatch, approval
+precedence and abandoned evidence all act. Existing sweep/counts/source suites
+pass; the counts fixture now uses its indexed 662 ticks rather than unrelated
+100. Fresh read-only independent review: no findings. Full Linux70 pass. Actual
+Windows70 programs retain only the two pre-existing admin UDP/amplification
+assertions; an initial nonexistent extra tooling path was a boundary-script error,
+not a product failure. Strict owned Python compilation adds zero warnings.
+Immutable copied corpus269 rec/91 view: baseline and subject170 faulted files /
+173 faults, no increase. Native Pi pm_verify on an owned port confirms one
+existing recording PASS with parseable matching duration; not physics/detector
+calibration. Selected deployment/provenance and limits: FTESurf tools/p602finish.md.
