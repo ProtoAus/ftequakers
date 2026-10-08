@@ -39700,3 +39700,22 @@ game/server restart, Windows/progs/reader/config/engine swap or release. Prior p
 Windows reader ownership blocker remains untouched. Broader hard elapsed/RSS/write
 bounds, complete/fair scheduling, reservation/authenticity/calibration and million-row
 performance remain unverified; no mutable board/replay/cursor preservation claim.
+
+## Patch 586 — bound authenticated metric snapshot fetches *(SURFD ONLY)*
+
+**Problem.** Journal/counts decoder caps ran after SQL fetched the entire stored
+JSON. Oversized observation rows could allocate arbitrary payloads in Python.
+
+**Change.** Select at most 8193 journal bytes or 513 counts bytes as BLOB prefixes;
+one sentinel byte rejects oversize values rather than decoding a truncated prefix.
+Strict UTF-8 and the existing typed/versioned validators preserve valid snapshots,
+measured zero and legacy unavailable. No schema/history/reread/detector/gate,
+engine/progs/pin/tag or Build change. This bounds these result fields, not total
+query work, native RSS or the complete review response.
+
+**Verified.** Three warning-clean authenticated consumer tests pass; inspected
+ad99bc6 predecessor fails all three. Recording cursor measures real fetched sizes
+for large payloads, embedded NUL, invalid UTF-8, exact caps and multibyte text;
+valid measured/empty/BLOB/legacy-column controls ACT and database rows stay exact.
+Existing verifier-counts (7), admin-metrics and receipt-metrics suites pass. LSP
+records no diagnostics. Batch regression, independent review and delivery follow.
