@@ -40031,3 +40031,26 @@ abstain; unique zeros, empty metrics and no-records remain exact. Original store
 strings/verdicts unchanged, no historical reader invocation, anonymous401. Existing
 actual receipt/counts Node renderers pass their unavailable/zero controls. Final
 independent review, frozen Linux and delivery gates are recorded separately.
+
+## Patch 597 — budget the initial similarity schema probe *(SURFD ONLY)*
+
+**Problem.** The optional owner similarity panel budgeted PRAGMA/history reads,
+but its initial table-existence query ran outside the cumulative SQL allowance.
+A tiny allowance could consequently claim confirmed absence without budgeting
+that observation.
+
+**Change.** Create the existing opt-in owned ReadBudget before all three selected
+reads. Initial schema exhaustion returns whole-panel read_limit, not missing or
+partial observations. Adequately budgeted absence/empty/success stay distinct;
+borrowed callbacks remain untouched by default. No whole-request time/RSS/I/O,
+scoring/threshold/history, engine/QC, Build/pin/tag or Windows artifact change.
+
+**Verified.** Three warning-clean actual API/SQLite tests pass; predecessor fails
+two assertions. A one-step allowance ACTS at the schema SELECT with its progress
+handler installed, before PRAGMA/history; actual callback interrupts and finally
+clears, after-close-path SQL still acts. Adequate default recovers an 80-opportunity
+stored measurement. Missing/tiny unknown and adequately budgeted missing/empty
+remain distinct, original DB unchanged, anonymous401; borrowed callback survives
+and unrelated I/O still returns storage error. All four existing panel-budget and
+five historical similarity controls pass. Final independent review, frozen Linux
+and delivery gates are recorded separately.
