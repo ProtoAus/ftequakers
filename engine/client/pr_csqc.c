@@ -7146,6 +7146,11 @@ static struct {
 	{"ui_native_input_status",	PF_ui_native_input_status,	0},
 	{"ui_native_input",		PF_ui_native_input,		0},
 	{"ui_native_poll",		PF_ui_native_poll,		0},
+	{"ui_native_model_status",	PF_ui_native_model_status,	0},
+	{"ui_native_model_begin",	PF_ui_native_model_begin,	0},
+	{"ui_native_model_widget",	PF_ui_native_model_widget,	0},
+	{"ui_native_model_commit",	PF_ui_native_model_commit,	0},
+	{"ui_native_model_poll",	PF_ui_native_model_poll,		0},
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326
 	{"stringwidth",				PF_CL_stringwidth,				327},	// #327 EXT_CSQC_'DARKPLACES'

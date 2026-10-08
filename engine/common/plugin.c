@@ -442,6 +442,9 @@ static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfacept
 		return Plug_NativeUI_Register(interfaceptr, structsize);
 	if (!strcmp(name, pluguiinputservice_name))
 		return Plug_NativeUI_InputRegister(interfaceptr, structsize);
+	//Model registration also requires this provider's copied input table.
+	if (!strcmp(name, pluguimodelservice_name))
+		return Plug_NativeUI_ModelRegister(interfaceptr, structsize);
 #endif
 #if defined(PLUGINS) && !defined(SERVERONLY)
 #ifdef HAVE_MEDIA_DECODER

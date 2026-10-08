@@ -533,6 +533,36 @@ typedef struct
 	F(qboolean, Poll, (const pluguiowner_t *owner, pluguiaction_t *action));
 } pluguiinputservice_t;
 #define pluguiinputservice_name "NativeUIInput/1"
+
+//Additive counted snapshots; copied synchronously, never borrowed QC strings.
+#define PLUGUI_MODEL_VERSION 1u
+#define PLUGUI_MODEL_MAX_ID 16777215u
+#define PLUGUI_MODEL_CAP_WIDGETS 1u
+#define PLUGUI_MODEL_MAX_WIDGETS 64u
+#define PLUGUI_MODEL_LABEL_BYTES 96u
+#define PLUGUI_WIDGET_TEXT 1u
+#define PLUGUI_WIDGET_BUTTON 2u
+#define PLUGUI_WIDGET_CHECKBOX 3u
+typedef struct {
+	unsigned int id, row, type;
+	float value; //text/button=0; checkbox=0 or 1
+	char label[PLUGUI_MODEL_LABEL_BYTES]; //plain valid UTF-8, NUL terminated
+} pluguiwidget_t;
+typedef struct {
+	unsigned int structsize, revision, count;
+	pluguiwidget_t widgets[PLUGUI_MODEL_MAX_WIDGETS];
+} pluguimodel_t;
+typedef struct {
+	unsigned int id, row, generation, revision;
+	float value; //button=1; checkbox=0 or 1
+} pluguimodelaction_t;
+typedef struct {
+	unsigned int structsize, version, capabilities;
+	//Atomic copy; replacement discards queued/held input and unpolled actions.
+	F(qboolean, SetModel, (const pluguiowner_t *owner, const pluguimodel_t *model));
+	F(qboolean, PollModel, (const pluguiowner_t *owner, pluguimodelaction_t *action));
+} pluguimodelservice_t;
+#define pluguimodelservice_name "NativeUIModel/1"
 #define PLUGMESH_MAX_VERTICES 16384
 #define PLUGMESH_MAX_INDICES 65535
 #define PLUGMESH_MAX_COMMANDS 128

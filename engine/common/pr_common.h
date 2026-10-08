@@ -485,6 +485,11 @@ void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *p
 void QCBUILTIN PF_ui_native_input_status(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_input(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_poll(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_status(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_begin(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_widget(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_commit(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_poll(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 #else
 #define PF_ui_native_status PF_Fixme
 #define PF_ui_native_open PF_Fixme
@@ -493,6 +498,11 @@ void QCBUILTIN PF_ui_native_poll(pubprogfuncs_t *prinst, struct globalvars_s *pr
 #define PF_ui_native_input_status PF_Fixme
 #define PF_ui_native_input PF_Fixme
 #define PF_ui_native_poll PF_Fixme
+#define PF_ui_native_model_status PF_Fixme
+#define PF_ui_native_model_begin PF_Fixme
+#define PF_ui_native_model_widget PF_Fixme
+#define PF_ui_native_model_commit PF_Fixme
+#define PF_ui_native_model_poll PF_Fixme
 #endif
 void QCBUILTIN PF_CL_drawsetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawresetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

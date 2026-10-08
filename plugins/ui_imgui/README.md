@@ -8,8 +8,8 @@ Pinned upstream: **Dear ImGui 1.91.9b**, Git tag `v1.91.9b`, commit
 This is a **diagnostic gallery / explicit transport prerequisite**, not a
 migrated scoreboard, graph, editor or main menu. Passive owners 101 (MQC) and
 202 (CSQC) use the unchanged `NativeUI/1` host; optional interactive owners
-103/204 require additive `NativeUIInput/1`. No dynamic widget/model/snapshot
-protocol or production panel has migrated. No Sbar/Menu/Tick drawing hook. Loaded but
+103/204 require additive `NativeUIInput/1`; optional `NativeUIModel/1` supplies
+counted diagnostic snapshots. No production panel has migrated. No Sbar/Menu/Tick drawing hook. Loaded but
 closed runs no ImGui frames or atlas uploads. `ui_imgui_status` is an explicit,
 quiet-by-default diagnostic command. Implicit ini/log writes are disabled.
 
@@ -76,6 +76,31 @@ no text contents or engine commands cross this interface. Owner generation is
 NOT a row/model snapshot generation. Real browser/entity actions require a
 separate counted model/identity protocol before use. Synthetic QC event tests
 are not device-routing/minus/modifier/cursor or real-panel acceptance.
+
+## Optional counted widget/model snapshots
+
+`NativeUIModel/1` requires the same provider's existing draw AND input services.
+Older hosts can reject only this extension; existing galleries remain usable.
+QC wrappers `NUI_ModelAvailable/Begin/Widget/Commit/Poll` gate named builtins.
+Stage within the VM draw bracket, before Draw: begin(handle,revision,count), then
+widget(handle,index,identity,value,label) for ordered indices 0..count-1, then
+commit(handle). Identity is vector(widgetID,rowID,type); type 1=text, 2=button,
+3=checkbox. IDs/revisions are integers 1..16777215; widget IDs are unique. Rows
+can contain multiple widgets. Count is 0..64; zero clears the model. Labels have
+at most 95 valid UTF-8 bytes plus NUL, with ASCII control bytes rejected. All
+labels are plain text, including literal ##/###. No string pointer is retained.
+Text/button value is 0; checkbox value is 0 or 1. Snapshot values are immutable:
+QC responds to an action by publishing a strictly newer revision, not mutating
+native widget state. Revisions restart only with a fresh owner generation.
+
+Invalid/incomplete/duplicate staging cannot publish; a bad row poisons its whole
+transaction. Failed native publication releases once. Replacement cancels queued
+and held input, active focus and unpolled actions, and requires a successful Draw
+before polling. `poll(handle,currentRevision)` returns vector(widgetID,rowID,value)
+(button=1, checkbox=0/1) exactly once, with generation/revision checked inside the
+host. No offset, label hash or command string is action authority. Poll shares the
+16-attempt host-frame budget with scalar polling. Scalar Poll returns empty while
+an owner has an active model. No production input routing or panel is introduced.
 
 Build with the engine's `plugins-rel NATIVE_PLUGINS="... ui_imgui"` or the
 plugin Makefile's exact `fteplug_ui_imgui` target. Adapter compiles at -O2;

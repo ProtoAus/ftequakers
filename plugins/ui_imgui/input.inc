@@ -1,5 +1,5 @@
 //Included inside FteImGui; keep all third-party/standard headers at global scope.
-//Scalar-only diagnostic transport. Model/snapshot/row generation is a later ABI.
+//Scalar-only diagnostic transport; counted model authority is separate.
 static bool inputRegistered;
 static bool Interactive(const pluguiowner_t &o)
 {
@@ -58,7 +58,7 @@ static qboolean QDECL Input(const pluguiowner_t *o, const pluguiinputevent_t *e)
 static qboolean QDECL Poll(const pluguiowner_t *o, pluguiaction_t *action)
 {
 	Context *c = Find(o);
-	if (!c || !action || !Interactive(*o) || c->nextaction == c->actions) return qfalse;
+	if (!c || !action || !Interactive(*o) || c->model.revision || c->nextaction == c->actions) return qfalse;
 	*action = c->pending[c->nextaction++]; return qtrue;
 }
 static void Action(Context &c, unsigned id, float value)

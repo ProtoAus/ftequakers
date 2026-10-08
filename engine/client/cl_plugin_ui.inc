@@ -8,6 +8,9 @@ typedef struct
 {
 	pubprogfuncs_t *vm;
 	pluguiowner_t owner;
+	pluguimodel_t model, staging;
+	unsigned int staged;
+	qboolean stageactive, stagebad;
 	qboolean drawing, clipped;
 	srect_t scissor; //backend normalized bottom-left, including depth bounds
 	unsigned int lastframe, inputframe, inputs, polls;
@@ -16,6 +19,7 @@ typedef struct
 static pluguivm_t plugui_vms[2];
 static plugin_t *plugui_service;
 static pluguiinputservice_t plugui_input;
+static pluguimodelservice_t plugui_model;
 static unsigned int plugui_serial;
 static qboolean plugui_busy;
 static const pluguiframe_t *plugui_dispatch;
@@ -41,6 +45,9 @@ static void Plug_NativeUI_CloseOwner(pluguivm_t *v, unsigned int reason)
 	pluguiowner_t owner = v->owner;
 	memset(&v->owner, 0, sizeof(v->owner)); //invalidate before callback
 	v->drawok = false;
+	memset(&v->model, 0, sizeof(v->model));
+	memset(&v->staging, 0, sizeof(v->staging));
+	v->staged = 0; v->stageactive = v->stagebad = false;
 	if (!owner.generation || !plugui_service)
 		return;
 	currentplug = plugui_service;
@@ -68,6 +75,7 @@ static void Plug_NativeUI_PluginClose(plugin_t *p)
 	for (i = 0; i < countof(plugui_vms); i++)
 		Plug_NativeUI_CloseOwner(&plugui_vms[i], PLUGUI_CLOSE_PLUGIN);
 	memset(&plugui_input, 0, sizeof(plugui_input));
+	memset(&plugui_model, 0, sizeof(plugui_model));
 	plugui_service = NULL;
 }
 void Plug_NativeUI_RendererShutdown(void)
@@ -250,3 +258,4 @@ void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *p
 }
 
 #include "cl_plugin_ui_input.inc"
+#include "cl_plugin_ui_model.inc"

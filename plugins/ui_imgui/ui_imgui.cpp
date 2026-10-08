@@ -4,11 +4,13 @@
 #include <new>
 #include <cmath>
 #include <cstring>
+#include "../ui_model.h"
 
 namespace FteImGui {
 static plugcorefuncs_t *core;
 static plugmeshfuncs_t *mesh;
 static Counters stats;
+//Own all copied models/actions here; never retain frontend/VM string pointers.
 struct Context {
 	pluguiowner_t owner;
 	ImGuiContext *imgui = nullptr;
@@ -18,9 +20,12 @@ struct Context {
 	bool enabled = false, actionoverflow = false;
 	char text[128] = {};
 	pluguiaction_t pending[PLUGUI_INPUT_MAX_ACTIONS] = {};
+	pluguimodel_t model = {};
+	pluguimodelaction_t modelpending[PLUGUI_INPUT_MAX_ACTIONS] = {};
 };
 static Context *contexts[2];
 #include "input.inc"
+#include "model.inc"
 static void Gallery()
 {
 	ImGui::SetNextWindowPos(ImVec2(40,70),ImGuiCond_Always);
@@ -102,7 +107,8 @@ static qboolean QDECL Draw(const pluguiframe_t *f)
 	io.DeltaTime = 0.01f;
 	c->actions = c->nextaction = 0; c->actionoverflow = false;
 	ImGui::NewFrame(); stats.frames++;
-	if (Interactive(c->owner)) InteractiveGallery(*c); else Gallery();
+	if (c->model.revision) ModelGallery(*c);
+	else if (Interactive(c->owner)) InteractiveGallery(*c); else Gallery();
 	ImGui::Render(); c->events = 0;
 	bool ok = !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
 	if (!ok) c->actions = c->nextaction = 0;
@@ -150,6 +156,8 @@ extern "C" NATIVEEXPORT qboolean QDECL FTEPlug_Init(plugcorefuncs_t *c)
 		!core->ExportInterface(pluguiservice_name,&service,sizeof(service))) return qfalse;
 	pluguiinputservice_t input = {sizeof(input),PLUGUI_INPUT_VERSION,PLUGUI_INPUT_CAP_EVENTS,Input,Poll};
 	inputRegistered = core->ExportInterface(pluguiinputservice_name,&input,sizeof(input)) != qfalse;
-	//Older hosts may reject the additive interface: passive owners remain usable.
+	pluguimodelservice_t model = {sizeof(model),PLUGUI_MODEL_VERSION,PLUGUI_MODEL_CAP_WIDGETS,SetModel,PollModel};
+	if (inputRegistered) core->ExportInterface(pluguimodelservice_name,&model,sizeof(model));
+	//Older hosts may reject additive interfaces: prior owners remain usable.
 	return qtrue;
 }

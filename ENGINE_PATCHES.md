@@ -40264,3 +40264,36 @@ Immutable copied corpus269 rec/91 view: baseline and subject170 faulted files /
 173 faults, no increase. Native Pi pm_verify on an owned port confirms one
 existing recording PASS with parseable matching duration; not physics/detector
 calibration. Selected deployment/provenance and limits: FTESurf tools/p602finish.md.
+
+## Patch 601 — counted native widget/model snapshots, diagnostic owners only
+
+Reserved before concurrent Patch 602; entries remain immutable and numbered once.
+
+**Problem.** Owner generations alone cannot distinguish actions from a renamed,
+reordered or deleted snapshot row. The scalar diagnostic gallery has no copied QC
+model contract; migration would otherwise invent pointer/index/label authority.
+
+**Change.** Add copied optional `NativeUIModel/1` from the same draw/input provider.
+Draw-bracketed QC begin/widget/commit publishes a counted immutable snapshot:
+64 text/button/checkbox widgets, positive exact widget/row/revision IDs, unique
+widget IDs, 95-byte valid UTF-8 labels rendered without ImGui label-ID parsing.
+Staging failures poison the transaction; revisions strictly increase per owner.
+Host/plugin deep-copy, replace atomically, reset queued/held input and pending
+actions, and revoke poll authority until redraw. Typed actions bind owner
+generation, model revision, widget and row; host validates membership/type/value.
+Malformed callback results/failure release once to covering QC fallback. No native
+commands, production panel/input route, preference/default, progs/install/Pi,
+release or Build-number change. Existing draw/input ABIs stay unchanged.
+
+**Verified.** Real host: 463 model plus 172 passive assertions, zero failed.
+Actual plugin/ImGui/adapter: 184 model assertions per 16/32-bit index arm, zero
+failed, including actual button/checkbox clicks and queued/held/unpolled stale
+controls. Existing input regressions: 929 host and 700 interactive plus 109
+passive assertions per relevant arm, zero failed. Real MQC/CSQC runtime at two
+virtual scales, absent plugin and older draw/input-only hosts: 42 screenshots,
+zero failed; 21 grader falsifiers pass. QC production and diagnostic programs
+compile with zero warnings; native controlled units use -Werror. Full engine
+compiler stages complete; serial retry resolves transient untouched plugin ZIP
+locks. Known NoDeploy final-summary failure is separate, not a successful wrapper
+exit. Protocol/controls/provenance and remaining gates: FTESurf tools/p601model.md.
+No physical-device, panel migration, non-GL/font/DPI or cost acceptance claimed.
