@@ -39104,3 +39104,28 @@ editor and reported round79/asset1. Anonymous directory remained 12 rows/0
 players after the smoke. UDP status did not include CSQC fields and was not a
 checksum grade. Active owner VM reload, other-client asset downloads, font
 judgement, full timing budgets and release/archive acceptance are not claimed.
+
+## Patch 567 - exact bounded similarity source capture *(READER ONLY)*
+
+**Problem.** A stored comparison could not identify which source bytes its
+measurement consumed. Reopening paths after comparison would bind different
+bytes if a source was replaced; normalized text/moves would omit ignored bytes.
+
+**Change.** Hash and size the existing bounded binary buffer before decoding.
+Successful bounded comparisons add a versioned A/B capture snapshot. Existing
+metrics, decoding, parser, limits and skips are unchanged; unbounded standalone
+results have no capture promise. A capability marker identifies support. This
+identifies bytes read and parsed, not an atomic filesystem snapshot, current
+file equality, source authenticity, calibration or complete coverage.
+
+**Verified.** Three predecessor behavioral assertions fail; four reader controls
+pass with actual eighty-row comparisons, original metric equality, distinct
+LF/CRLF/CR/ignored/replacement-byte hashes, and acted after-capture replacement
+that leaves a nine-row current file beside the original eighty-row result/hash.
+Byte/move limits and short sources abstain without partial measured capture.
+Adjacent opportunities/parsing/unreadable/ingestion/runtime controls pass;
+recorder306/0 and captured269REC/101view fault lists are identical (164REC,
+167combined faulted);15HID inventoried only. Fresh read-only reader review OK
+with notes, source/log inspection only; Python execution is parent evidence.
+LSP no recorded diagnostics. Linux/deployment remain pending until the batch
+passes the publication/installed controls. No engine/progs/pin/tag/Build change.
