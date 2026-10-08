@@ -11,8 +11,13 @@ struct Context {
 	ImGuiContext *imgui = nullptr;
 	plugmeshtex_t atlas = 0;
 	Renderer renderer;
+	unsigned events = 0, actions = 0, nextaction = 0, clicks = 0;
+	bool enabled = false, actionoverflow = false;
+	char text[128] = {};
+	pluguiaction_t pending[PLUGUI_INPUT_MAX_ACTIONS] = {};
 };
 static Context *contexts[2];
+#include "input.inc"
 static void Gallery()
 {
 	ImGui::SetNextWindowPos(ImVec2(40,70),ImGuiCond_Always);
@@ -52,8 +57,9 @@ static void Gallery()
 }
 static qboolean QDECL Open(const pluguiowner_t *o)
 {
-	if (!o || o->vm < 1 || o->vm > 2 || !o->generation ||
-		o->owner != (o->vm == PLUGUI_VM_MENU ? GalleryMenu : GalleryClient) || contexts[o->vm-1]) return qfalse;
+	if (!o || o->vm < 1 || o->vm > 2 || !o->generation || contexts[o->vm-1]) return qfalse;
+	if (o->owner != (o->vm == PLUGUI_VM_MENU ? GalleryMenu : GalleryClient))
+		if (!inputRegistered || !Interactive(*o)) return qfalse;
 	Context *c = new (std::nothrow) Context;
 	if (!c) return qfalse;
 	contexts[o->vm-1] = c; c->owner = *o; stats.opens++;
@@ -63,6 +69,11 @@ static qboolean QDECL Open(const pluguiowner_t *o)
 	ImGui::SetCurrentContext(c->imgui);
 	ImGuiIO &io = ImGui::GetIO();
 	io.IniFilename = nullptr; io.LogFilename = nullptr;
+	if (Interactive(*o)) io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	ImGuiPlatformIO &platform = ImGui::GetPlatformIO();
+	platform.Platform_GetClipboardTextFn = nullptr;
+	platform.Platform_SetClipboardTextFn = nullptr;
+	platform.Platform_SetImeDataFn = nullptr;
 	io.BackendRendererName = "FTE 2DMesh/1";
 	io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 	ImGui::StyleColorsDark();
@@ -86,9 +97,12 @@ static qboolean QDECL Draw(const pluguiframe_t *f)
 	ImGuiIO &io = ImGui::GetIO();
 	io.DisplaySize = ImVec2(f->pixelwidth,f->pixelheight); io.DisplayFramebufferScale = ImVec2(1,1);
 	io.DeltaTime = 0.01f;
+	c->actions = c->nextaction = 0; c->actionoverflow = false;
 	ImGui::NewFrame(); stats.frames++;
-	Gallery(); ImGui::Render();
-	bool ok = c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
+	if (Interactive(c->owner)) InteractiveGallery(*c); else Gallery();
+	ImGui::Render(); c->events = 0;
+	bool ok = !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
+	if (!ok) c->actions = c->nextaction = 0;
 	if (!ok) stats.rejected++;
 	ImGui::SetCurrentContext(previous);
 	return ok ? qtrue : qfalse;
@@ -131,5 +145,8 @@ extern "C" NATIVEEXPORT qboolean QDECL FTEPlug_Init(plugcorefuncs_t *c)
 	if (!core->ExportFunction("Shutdown",reinterpret_cast<funcptr_t>(Shutdown)) ||
 		!cmd->AddCommand("ui_imgui_status",Status,"Report explicitly opened native gallery work") ||
 		!core->ExportInterface(pluguiservice_name,&service,sizeof(service))) return qfalse;
+	pluguiinputservice_t input = {sizeof(input),PLUGUI_INPUT_VERSION,PLUGUI_INPUT_CAP_EVENTS,Input,Poll};
+	inputRegistered = core->ExportInterface(pluguiinputservice_name,&input,sizeof(input)) != qfalse;
+	//Older hosts may reject the additive interface: passive owners remain usable.
 	return qtrue;
 }

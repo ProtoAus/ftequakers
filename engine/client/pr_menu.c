@@ -2883,6 +2883,9 @@ static struct {
 	{"ui_native_open",		PF_ui_native_open,		0},
 	{"ui_native_draw",		PF_ui_native_draw,		0},
 	{"ui_native_close",		PF_ui_native_close,		0},
+	{"ui_native_input_status",	PF_ui_native_input_status,	0},
+	{"ui_native_input",		PF_ui_native_input,		0},
+	{"ui_native_poll",		PF_ui_native_poll,		0},
 	{"drawgetimagesize",		PF_CL_drawgetimagesize,		460},
 #ifdef HAVE_MEDIA_DECODER
 	{"cin_open",				PF_cs_media_create,			461},

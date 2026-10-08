@@ -482,6 +482,57 @@ typedef struct
 	F(void, Close, (const pluguiowner_t *owner, unsigned int reason));
 } pluguiservice_t;
 #define pluguiservice_name "NativeUI/1"
+
+//Optional additive transport. No engine input interception; QC owns routing.
+#define PLUGUI_INPUT_VERSION 1u
+#define PLUGUI_INPUT_CAP_EVENTS 1u
+#define PLUGUI_INPUT_MAX_EVENTS 128u
+#define PLUGUI_INPUT_MAX_ACTIONS 16u
+#define PLUGUI_INPUT_MOUSEPOS 1u
+#define PLUGUI_INPUT_BUTTON 2u
+#define PLUGUI_INPUT_WHEEL 3u
+#define PLUGUI_INPUT_KEY 4u
+#define PLUGUI_INPUT_TEXT 5u
+#define PLUGUI_INPUT_RESET 6u
+//Compact navigation key ids, not engine/platform scancodes.
+#define PLUGUI_KEY_TAB 1u
+#define PLUGUI_KEY_LEFT 2u
+#define PLUGUI_KEY_RIGHT 3u
+#define PLUGUI_KEY_UP 4u
+#define PLUGUI_KEY_DOWN 5u
+#define PLUGUI_KEY_HOME 6u
+#define PLUGUI_KEY_END 7u
+#define PLUGUI_KEY_PAGEUP 8u
+#define PLUGUI_KEY_PAGEDOWN 9u
+#define PLUGUI_KEY_BACKSPACE 10u
+#define PLUGUI_KEY_DELETE 11u
+#define PLUGUI_KEY_ENTER 12u
+#define PLUGUI_KEY_ESCAPE 13u
+#define PLUGUI_KEY_SPACE 14u
+#define PLUGUI_KEY_CTRL 15u
+#define PLUGUI_KEY_SHIFT 16u
+#define PLUGUI_KEY_ALT 17u
+#define PLUGUI_KEY_SUPER 18u
+#define PLUGUI_KEY_MAX PLUGUI_KEY_SUPER
+
+typedef struct
+{
+	unsigned int structsize, type;
+	float a, b;
+} pluguiinputevent_t;
+typedef struct
+{
+	unsigned int id, generation;
+	float value;
+} pluguiaction_t;
+typedef struct
+{
+	unsigned int structsize, version, capabilities;
+	F(qboolean, Input, (const pluguiowner_t *owner, const pluguiinputevent_t *event));
+	//False means empty. Invalid nonempty results cause host owner release.
+	F(qboolean, Poll, (const pluguiowner_t *owner, pluguiaction_t *action));
+} pluguiinputservice_t;
+#define pluguiinputservice_name "NativeUIInput/1"
 #define PLUGMESH_MAX_VERTICES 16384
 #define PLUGMESH_MAX_INDICES 65535
 #define PLUGMESH_MAX_COMMANDS 128

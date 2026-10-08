@@ -440,6 +440,8 @@ static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfacept
 #ifdef HAVE_CLIENT
 	if (!strcmp(name, pluguiservice_name))
 		return Plug_NativeUI_Register(interfaceptr, structsize);
+	if (!strcmp(name, pluguiinputservice_name))
+		return Plug_NativeUI_InputRegister(interfaceptr, structsize);
 #endif
 #if defined(PLUGINS) && !defined(SERVERONLY)
 #ifdef HAVE_MEDIA_DECODER

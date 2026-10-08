@@ -505,8 +505,8 @@ NATIVE_PLUGINS+=ezhud
 IMGUI_VENDOR=ui_imgui/vendor/imgui.cpp ui_imgui/vendor/imgui_draw.cpp ui_imgui/vendor/imgui_tables.cpp ui_imgui/vendor/imgui_widgets.cpp
 IMGUI_SOURCES=ui_imgui/backend.cpp ui_imgui/ui_imgui.cpp $(IMGUI_VENDOR)
 IMGUI_OBJECTS=$(patsubst ui_imgui/%.cpp,$(OUT_DIR)/ui_imgui/%.o,$(IMGUI_SOURCES))
-IMGUI_HEADERS=Makefile ui_imgui/backend.h plugin.h $(wildcard ui_imgui/vendor/*.h)
-IMGUI_FLAGS=-std=c++17 -DFTEPLUGIN -Wall -Wextra -Werror -I. -I../engine/client -I../engine/common -I../engine/server -I../engine/gl
+IMGUI_HEADERS=Makefile ui_imgui/backend.h ui_imgui/input.inc plugin.h $(wildcard ui_imgui/vendor/*.h)
+IMGUI_FLAGS=-std=c++17 -DFTEPLUGIN -DIMGUI_USE_WCHAR32 -Wall -Wextra -Werror -I. -I../engine/client -I../engine/common -I../engine/server -I../engine/gl
 $(OUT_DIR)/ui_imgui/%.o: ui_imgui/%.cpp $(IMGUI_HEADERS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(BASE_CXXFLAGS) $(CFLAGS) $(PLUG_CXXFLAGS) $(IMGUI_FLAGS) -O2 -c $< -o $@
@@ -514,7 +514,7 @@ $(OUT_DIR)/ui_imgui/%.o: ui_imgui/%.cpp $(IMGUI_HEADERS)
 #Build unmodified vendor at -O1 with no diagnostic suppression; adapter stays -O2.
 $(OUT_DIR)/ui_imgui/vendor/%.o: ui_imgui/vendor/%.cpp $(IMGUI_HEADERS)
 	@mkdir -p $(dir $@)
-	$(CXX) $(PLUG_CXXFLAGS) -std=c++17 -Wall -Wextra -Werror -O1 -c $< -o $@
+	$(CXX) $(PLUG_CXXFLAGS) -std=c++17 -DIMGUI_USE_WCHAR32 -Wall -Wextra -Werror -O1 -c $< -o $@
 $(PLUG_PREFIX)ui_imgui$(PLUG_NATIVE_EXT): $(IMGUI_OBJECTS)
 	$(CXX) -shared $(PLUG_CXXFLAGS) $^ $(PLUG_LDFLAGS) -static-libstdc++ -static -o $@
 	$(call EMBEDMETA,ui_imgui,$@,Native ImGui Gallery,Explicit QC draw-site gallery; no real-panel or input migration.)

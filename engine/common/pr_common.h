@@ -482,11 +482,17 @@ void QCBUILTIN PF_ui_native_status(pubprogfuncs_t *prinst, struct globalvars_s *
 void QCBUILTIN PF_ui_native_open(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_input_status(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_input(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_poll(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 #else
 #define PF_ui_native_status PF_Fixme
 #define PF_ui_native_open PF_Fixme
 #define PF_ui_native_draw PF_Fixme
 #define PF_ui_native_close PF_Fixme
+#define PF_ui_native_input_status PF_Fixme
+#define PF_ui_native_input PF_Fixme
+#define PF_ui_native_poll PF_Fixme
 #endif
 void QCBUILTIN PF_CL_drawsetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawresetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

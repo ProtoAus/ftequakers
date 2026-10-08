@@ -7138,11 +7138,14 @@ static struct {
 	{"drawrotpic",				PF_CL_drawrotpic,				0},
 	{"drawfill",				PF_CL_drawfill,					323},		// #323 float(vector position, vector size, vector rgb, float alpha [, float flag]) drawfill (EXT_CSQC, [EXT_CSQC_???])
 	{"drawsetcliparea",			PF_CL_drawsetcliparea,			324},	// #324 void(float x, float y, float width, float height) drawsetcliparea (EXT_CSQC_???)
-	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},
+	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
 	{"ui_native_status",		PF_ui_native_status,		0},
 	{"ui_native_open",		PF_ui_native_open,		0},
 	{"ui_native_draw",		PF_ui_native_draw,		0},
-	{"ui_native_close",		PF_ui_native_close,		0},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
+	{"ui_native_close",		PF_ui_native_close,		0},
+	{"ui_native_input_status",	PF_ui_native_input_status,	0},
+	{"ui_native_input",		PF_ui_native_input,		0},
+	{"ui_native_poll",		PF_ui_native_poll,		0},
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326
 	{"stringwidth",				PF_CL_stringwidth,				327},	// #327 EXT_CSQC_'DARKPLACES'

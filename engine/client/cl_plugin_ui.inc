@@ -10,10 +10,12 @@ typedef struct
 	pluguiowner_t owner;
 	qboolean drawing, clipped;
 	srect_t scissor; //backend normalized bottom-left, including depth bounds
-	unsigned int lastframe;
+	unsigned int lastframe, inputframe, inputs, polls;
+	qboolean drawok;
 } pluguivm_t;
 static pluguivm_t plugui_vms[2];
 static plugin_t *plugui_service;
+static pluguiinputservice_t plugui_input;
 static unsigned int plugui_serial;
 static qboolean plugui_busy;
 static const pluguiframe_t *plugui_dispatch;
@@ -38,6 +40,7 @@ static void Plug_NativeUI_CloseOwner(pluguivm_t *v, unsigned int reason)
 	plugin_t *old = currentplug;
 	pluguiowner_t owner = v->owner;
 	memset(&v->owner, 0, sizeof(v->owner)); //invalidate before callback
+	v->drawok = false;
 	if (!owner.generation || !plugui_service)
 		return;
 	currentplug = plugui_service;
@@ -64,6 +67,7 @@ static void Plug_NativeUI_PluginClose(plugin_t *p)
 		return;
 	for (i = 0; i < countof(plugui_vms); i++)
 		Plug_NativeUI_CloseOwner(&plugui_vms[i], PLUGUI_CLOSE_PLUGIN);
+	memset(&plugui_input, 0, sizeof(plugui_input));
 	plugui_service = NULL;
 }
 void Plug_NativeUI_RendererShutdown(void)
@@ -208,6 +212,8 @@ void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr
 			return; //do not bypass mesh validation through inherited clip intersection
 		}
 	v->lastframe = frame.frame;
+	v->drawok = false;
+	v->polls = 0;
 	if (R2D_Flush)
 		R2D_Flush(); //QC-before must submit before native, including equal materials
 	R2D_GetImageColours(colour);
@@ -227,7 +233,10 @@ void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr
 	if (!ok)
 		Plug_NativeUI_CloseOwner(v, PLUGUI_CLOSE_FAILED);
 	else
+	{
+		v->drawok = true;
 		G_FLOAT(OFS_RETURN) = 1;
+	}
 }
 void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -239,3 +248,5 @@ void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *p
 	Plug_NativeUI_CloseOwner(v, PLUGUI_CLOSE_EXPLICIT);
 	G_FLOAT(OFS_RETURN) = 1;
 }
+
+#include "cl_plugin_ui_input.inc"

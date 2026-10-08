@@ -40173,3 +40173,47 @@ RCON failures, reproduced in clean 0eafc347. Reader suite passes; immutable
 REC+sidecar snapshot: 269 REC / 440 files, 164 existing fault files / 164 faults,
 unchanged reader blob and no fault increase. Owned Python compiles warning-free.
 Linux exact-commit stage/deployment gates are recorded separately after completion.
+
+## Patch 600 — bounded explicit native input/actions, diagnostic owners only
+
+**Problem.** P598 could draw a passive gallery, but had no QC-owned event/action
+transport. Borrowing engine input hooks would bypass the existing routing and
+cursor contract. A per-Draw event counter alone cannot bound ImGui's trickled
+residual queue, and owner generation cannot identify refreshed real browser rows.
+
+**Change.** Add the exact-size copied optional `NativeUIInput/1` table from the
+same registered provider, leaving `NativeUI/1` layout unchanged. Optional named
+MQC/CSQC status/input/poll builtins admit finite bounded scalar mouse/button/wheel,
+compact navigation-key, Unicode-scalar and reset events for a live VM-local
+handle. No native engine bind/scancode/command interpretation, input destination,
+cursor claimant or implicit capture. Bound host events at 128 per host frame
+(reopen cannot bypass), both plugin accepted and actual residual queue at 128,
+and action polls at 16 after successful same-frame explicit Draw. Reset clears
+queued/held input, active focus and action authority even at the event limit;
+malformed actions/callback failure/overflow release once to QC covering fallback.
+Diagnostic owners 103/204 expose a button, checkbox and 128-byte text buffer;
+clipboard/OS IME hooks are disabled. Compile all upstream/adapter units with
+IMGUI_USE_WCHAR32 to preserve supplementary scalars as exact UTF-8. No vendor
+source changes, dynamic model protocol, production panel, preference, progs/Pi,
+non-GL/device-input/performance/font/DPI/Build/release or install change.
+
+**Verified.** Real bridge source: 929 new plus 171 passive assertions, zero
+failures. Real plugin/core/adapter: 699 interactive plus 108 passive assertions per
+16/32-bit index arm, zero failures; actual clicks/toggle/text/backspace, exact
+supplementary UTF-8, fixed text cap, reset of queued/held input, acting trickled
+backlog and repeated refill bounds, generation/VM separation, atlas balance and
+external-context restoration. MQC/CSQC disposable GL runtime: 33 screenshots,
+zero failures across new/absent/older-draw-only providers and two virtual scales;
+actual actions, changed glyph/widget state, reset, close/reopen, simultaneous VMs,
+plugin/renderer teardown, no implicit files and physically identical scale arms.
+17 evidence mutation controls pass. Existing P598 gallery: 23 shots + 16 grader
+controls; bridge 24 and mesh 33 grader controls pass. Full Windows native/QC
+compiler stages complete: same 74 compiler-warning occurrences / 49 fingerprints
+as P598, zero new, three zero-warning QC programs. The unchanged clean NoDeploy
+final-summary bug returns exit 1 AFTER compiler/native stages (BACKLOG.md); no
+summary repair or silent install seeding. These are synthetic explicit QC events,
+not physical device/cursor/minus acceptance. Frozen source/tag/stamp, pushes and
+any deployment are separately recorded in FTESurf tools/p600input.md.
+
+Claim 600 after fetching both origins: concurrent verifier P599 is preserved;
+disposable p599/P599 probe markers remain for preregistered evidence continuity.
