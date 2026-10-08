@@ -39647,3 +39647,22 @@ dry-run, schema error, step error, KeyboardInterrupt and borrowed-step control.
 First five assert one explicit close and unusable SQL, retaining exception
 tracebacks where applicable; predecessor fails all five, borrowed control acts.
 LSP no recorded diagnostics. Batch regression, review and delivery pending.
+
+## Patch 585 — scalar pending-similarity diagnostics *(SURFD ONLY)*
+
+**Problem.** Dry-run fetched up to one million full replay rows only to take len;
+selected VM instruction limits did not bound Python payload materialization.
+
+**Change.** One scalar COUNT over a capped eligible-ID subquery. Reuse the exact
+pending predicate; collection rotation is unchanged. Retain one-million cap,
+label equality as at least, retain whole-query unavailable and independent summary
+allowance. No cursor mutation, detector/gate/history, engine/progs/pin/tag/Build
+change. This limits Python result shape, not SQLite scans, native RSS or time.
+
+**Verified.** Four warning-clean tests pass; predecessor fails scalar/projection
+and actual dry-run consumer assertions. Wide replay payload control fetches one
+one-column row; eligible/ineligible, both observed orientations, short skips,
+source cursor and cap controls match existing pending semantics. Actual VM
+interruption abstains and higher allowance recovers. Actual CLI consumer avoids
+row materializer and cap-label branch ACTS with synthetic count. LSP no recorded
+diagnostics. Batch regression, independent review and delivery pending.
