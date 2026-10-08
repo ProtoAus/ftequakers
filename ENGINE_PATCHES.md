@@ -38952,6 +38952,15 @@ fleet fairness, byte binding, exactly-once or SQL/RSS/hard-time bounds. No engin
 pin/tag, QC, Build or gate change. Unpublished P560 was replayed after a peer
 published rewind P560; peer history preserved, temporary shared claim marker used.
 
+**Deployed (UTC).** Frozen game `1482432`, simcheck.py-only serialized app swap
+at 2026-10-08 01:49:21. Exact-head Linux31 programs and canonical shipper11 suites
+pass. Installed controls finish01:52:12: unavailable admissions1/2/3/1 survive
+connection restarts without observations; a later native pair completes80 real
+bounded-reader opportunities. Additive live cursor init changes no existing sample/
+verdict rows; protected read-only cursor/sample/verdict checks remain unchanged.
+No engine/progs/config/Windows or peer client source swap; engine pin/tag/Build
+unchanged. Runtime source bytes identical to the fresh-reviewed frozen batch.
+
 ## Patch 564 - durable per-source similarity peer admission *(SURFD ONLY)*
 
 **Problem.** A repeatedly throwing first peer could consume a source's small
@@ -38977,6 +38986,14 @@ locator controls and corpus parity pass. Two fresh source reviews OK with notes;
 clean/range separately parent-attested. No general fairness/coverage, hard-resource,
 exactly-once or byte-binding claim; cursors are internal admission state, not
 judgment. Engine/Build unchanged; temporary shared claim marker used.
+
+**Deployed (UTC).** Same `1482432` swap. Installed bounded reader, one-candidate/
+one-attempt direct passes across restarts: fault2, real80-opportunity3, real80-
+opportunity4, retry2. Failed2 has no invented observation and source cursor is
+independent. Installed binding passes55 cases across source/peer/fault suites,
+including inherited repeats (not55 unique coverage claims). One checkpoint and
+independent-writer controls pass. Readback2026-10-08 01:52:13, blob `17f78a7`,
+SHA256 `f2267389f0eb3a94c1ea65b4b3fea7874662d2f16296509344b4ca336a5706eb`.
 
 ## Patch 565 - isolate similarity comparison pair faults *(SURFD ONLY)*
 
@@ -39006,3 +39023,18 @@ no alternate runner or independent reviewer execution claim. LSP no recorded
 diagnostics. Counts include possible reverse retries, not unique/full coverage.
 No engine/Build, resource-bound, byte-binding, calibration, exactly-once or gate
 change. Final runtime/test blobs unchanged by preservation of peer rewind P560.
+
+**Deployed (UTC).** Same frozen `1482432` simcheck-only app swap and master/worker
+reload. Installed real-reader middle-fault control ACTS on three admitted peers:
+two80-opportunity comparisons persist, the throwing middle peer has no row, and
+both results survive connection restart. Successful zero versus unmeasured failure
+and real trigger/storage rollback are separately proven by focused controls.
+Only new internal cursor schema is initialized live; no sample/verdict observations
+rewritten or real collection run. At2026-10-08 01:52:13, destination hash matches;
+unchanged sweep blob `2cdf49f` and reader `9e8f20f`. Health OK, twelve lobbies,
+anonymous admin401. Backups retained; no engine/progs/config/Windows swaps.
+Live sample remains one same-identity observation, no cross-identity calibration;
+finite fixture progress is not complete coverage or an enforcement threshold.
+Public operations notes and private checkpoint retain failures, scope limitation,
+exact commands, hashes and residual risks. Owned temporary claim markers removed
+only after both public histories contain these three patches.
