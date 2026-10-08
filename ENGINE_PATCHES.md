@@ -38922,12 +38922,24 @@ camera/discontinuity gates pass. Strict requested-clock checks remain RED on
 three or four cuts; this patch does not claim clock equivalence or general
 alignment. Twenty-five mutated presentation controls reject false/unacted
 claims; prior HUD21/12 and navigation/focus/opposition regressions pass;
-reader306/0. All programs compile zero warnings. Non-instrumented production
+reader 306/0. All programs compile zero warnings. Non-instrumented production
 request/pending/native/delta/timer/close control passes; screenshots inspected.
 Initial probe compile/seam and pending-save/timed-screenshot harness failures
 were retained and corrected without weakening body or clock oracles. Real
 practice-device/camera feel, low-resolution/custom HUD layout and general
 requested/native alignment remain human/follow-up gates.
+
+**Deployed (UTC).** Frozen game `8994b59`, clean rebuilt/zero warnings: CSQC
+`51de3f1eaeb82ff116a7b982fac55f279d87b5eff245653aaf370804919c032a`
+on both Windows installs and the empty-gated twelve-lobby fleet; P554 retained
+as `.prev`. SSQC/menu/configs/engine and owner source/index/personal cfg unchanged.
+Non-instrumented production request/pending/native/delta/actual-held-timer/close
+controls pass with both installed clients and live lobby 1; screenshots inspected.
+Destination/previous hashes and all twelve active services verified; final saved
+health OK/twelve empty heartbeat rows 2026-10-08 01:46:48 UTC. An initial post-probe
+health assertion did not pass and original snapshot was not retained; later
+explicit readbacks passed, with no cause claimed. No general alignment or
+actual-device/layout acceptance implied.
 
 ## Patch 563 - durable similarity source admission rotation *(SURFD ONLY)*
 
