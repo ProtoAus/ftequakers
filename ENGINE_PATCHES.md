@@ -39630,3 +39630,20 @@ to another connection. Idle control ACTS with independent writer during files an
 stores 80 opportunities. Borrowed read callbacks/numeric timeout preserved. Initial
 own test expected empty summary to be ok; corrected fixture assertion and reran
 both arms. LSP no recorded diagnostics. Batch regression/review/delivery pending.
+
+## Patch 584 — close the sweep-owned connection *(SURFD ONLY)*
+
+**Problem.** Embedded main calls relied on SQLite connection garbage collection;
+a retained exception traceback can retain the owned handle. Cron process exit
+usually masks this; no live handle leak is claimed.
+
+**Change.** Main dispatches connected steps inside try/finally and explicitly
+closes only its created connection. No blanket transaction or changed step
+commit/rollback decisions; borrowed APIs remain usable. No detector/gate/history,
+engine/progs/pin/tag or Build change.
+
+**Verified.** Actual main subprocess passes six warning-clean cases: normal,
+dry-run, schema error, step error, KeyboardInterrupt and borrowed-step control.
+First five assert one explicit close and unusable SQL, retaining exception
+tracebacks where applicable; predecessor fails all five, borrowed control acts.
+LSP no recorded diagnostics. Batch regression, review and delivery pending.
