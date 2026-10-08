@@ -38810,6 +38810,16 @@ Recorder suite 306 checks, zero failed; current corpus snapshot 269 recordings,
 LSP has no recorded diagnostics; Python tests are the execution oracle. No engine
 binary, engine pin/tag, QC or Build change. Initially unpublished as P554; a peer
 published that number during review, so this owned change was replayed as P557.
+The two reviewers' dry-run label P2 was reproduced and fixed: actual CLI now says
+unobserved eligible pairs, with three partially observed sources and unchanged
+stored observations. Both reviewers confirm the follow-up; no P0/P1 findings.
+
+**Deployed (UTC).** Frozen game `bd31786`, surfd-only app swap at
+2026-10-08 00:04:23; installed focused controls and real reader checks complete
+at 00:05:07. Six temporary native pairs each complete 80 opportunities across six
+one-row/one-pair passes, then become idle. Runtime file hashes match the inspected
+commit; the live sample/verdict tables remain unchanged under read-only/sweep-lock
+checks. No engine/progs/config/Windows-install swap and no peer source deployment.
 
 ## Patch 558 - exclude sampled pairs before the peer window *(SURFD ONLY)*
 
@@ -38835,6 +38845,13 @@ Two fresh source reviews accept the selection/admission boundaries. LSP has no
 recorded diagnostics. No engine binary, engine pin/tag, QC or Build change; no
 badge, ranking, detector threshold or public surface added.
 
+**Deployed (UTC).** Same frozen `bd31786` swap as P557. Installed real reader
+ACTS on five new peers beyond 200 stored mixed-orientation observations, one
+80-opportunity comparison per pass; old observations are retained. The installed
+module also passes all eleven peer/eligibility controls. Readback 2026-10-08
+00:05:08: simcheck blob `9912ed3`, sweep blob `2cdf49f`; source-pinned comparison
+reader remains unchanged at blob `9e8f20f`. No scoring/enforcement gate.
+
 ## Patch 559 - bounded similarity summary result set *(SURFD ONLY)*
 
 **Problem.** The read-only summary materialized every stored pair in Python.
@@ -38859,3 +38876,17 @@ board and sweep suites pass. Recorder remains 306/0, current 269-recording corpu
 snapshot has identical recording/view faults. Two fresh source reviews accept
 supported parity and narrow resource claims. LSP has no recorded diagnostics.
 No engine binary, engine pin/tag, QC, Build or parser change.
+
+**Deployed (UTC).** Frozen `bd31786`, same two-file app swap as P557. All 28
+frozen Linux test programs pass at this commit; the committed shipper's eleven
+standard suites also pass. An unchanged clock-sensitive full-board comparison
+failed one frozen run and passed one recorded rerun; its response contains dynamic
+`t` and the earlier timestamp was not retained separately. Recorded as a harness
+follow-up, not repaired in unrelated product code. Installed binding passes all
+23 focused pending/peer/summary controls. Read-only live summary retains one
+same-identity observation and no cross-identity pair: still no fleet calibration.
+At 2026-10-08 00:05:08 destination hashes match; health OK with twelve lobbies,
+anonymous admin access returns 401. Short locked swaps keep predecessor file and
+private DB backups. Only simcheck.py/sweep.py installed; reader/engine/progs/config,
+Windows installs and lobby process state unchanged. App master/worker reload is
+confirmed. Public notes and private checkpoint record limits and provenance.
