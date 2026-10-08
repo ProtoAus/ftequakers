@@ -40105,3 +40105,22 @@ native feature is P598. Already-published provisional tag patch-595 remains
 historical and immutable (not the canonical surfd-only P595 entry). Test fixture
 cvar/command/log names retain their provisional p595 prefix for replay continuity;
 canonical public tooling is p598imgui. No published history/tag was rewritten.
+
+Canonical frozen source `d5e828f03` / `patch-598`, game `a659cab`, built with
+actual Makefile SVN_VERSION/SVNREVISION inputs as byte-verified
+`git-7125-patch-598-0-gd5e828f03`. Worktree auto-detection's .git-directory test
+and unused FTEBUILD* wrapper inputs had produced an unstamped provisional build;
+that failed byte gate was not shipped. Full build: identical 74 baseline compiler
+warning occurrences / 49 distinct fingerprints, zero new; QC zero warnings and
+65 install/rollback/progs/cfg witnesses unchanged under -NoDeploy. Canonical
+107/index-arm hosts, 23-shot real ImGui gallery and bridge/mesh regressions pass.
+Published game integration `ae020d2` additionally merges peer off-ramp tooling/docs;
+no differences in QC/build/native-gallery sources versus the frozen game commit.
+Guarded native-only dual swaps and repeated actual installed executable-path
+controls pass at `2026-10-08T14:20:11Z`: 46 screenshots, four destination hashes
+and rollback verified, all 38 progs/config/data/server/unrelated-DLL protected
+hash groups unchanged across the repeated gates. The first whole-data comparison
+was HOLD because the independent scheduled public-map sweep ran at 14:07 UTC;
+its writer/task witness and failed gate are retained, no data restored/excluded.
+No Pi/progs/server/config/data copy, release or Build-number change. Full receipt,
+commands/hashes and remaining input/model/panel/cost limits: game tools/p598imgui.md.
