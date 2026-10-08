@@ -40265,6 +40265,16 @@ Immutable copied corpus269 rec/91 view: baseline and subject170 faulted files /
 existing recording PASS with parseable matching duration; not physics/detector
 calibration. Selected deployment/provenance and limits: FTESurf tools/p602finish.md.
 
+**DEPLOYED 2026-10-08T20:27:40Z.** Exact published product a4a75be; sweep and two
+controls only, under the canonical sweep lock. Three destination SHA256s match;
+actual installed finish9/counts7/sources15 pass in temporary homes. Completed
+mode600 SQLite/source rollback retained. All137 protected source/support/game
+files, verdict/review/receipt history, scalar board/replay counts, original web
+master/worker and health12 unchanged. No reload, historical reread, Windows game,
+engine/progs/config or Build swap. Source publication and installation are distinct
+proofs; this surfd-only entry does not move engine pin/tag or claim detector
+calibration. Full public-safe hashes/limits: FTESurf tools/p602finish.md.
+
 ## Patch 601 — counted native widget/model snapshots, diagnostic owners only
 
 Reserved before concurrent Patch 602; entries remain immutable and numbered once.
