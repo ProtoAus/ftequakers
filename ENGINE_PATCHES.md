@@ -39428,3 +39428,35 @@ limits; its dynamic-board metrics test passes one unmodified rerun. Failed logs
 retained, unrelated code untouched. Recorder306 checks/0failed;269 captured local
 recordings have164faulted files/164faults in both predecessor and subject, exact
 per-file parity. No corpus-fault reduction claim. Installed/live delivery pending.
+
+**Batch publication/deployment verified (2026-10-08 06:01:09-06:03:30 UTC).**
+P574/P575/P576 feature commitsf3f11b3/28d1df1/2a9148d and companion entries
+04c2e22a8/09269999e/85c0be8a2 are pushed. Publication74dcca0 preserves only already
+published incoming documentation; all collector/sweep/reader/test Python blobs
+match the frozen22c4022 Linux stage. Two committed app files only, simcheck.py and
+sweep.py, ship via canonical commit-pinned -Only -NoReload deployment with its11
+staged suites, serialized sweep lock, destination SHA256 equality, rollback files
+and database backup mode600 retained; no pruning/release/QC/engine/game/config/
+Windows artifact or owner-process restart. Engine pin/tag and Build unchanged.
+No peer uncommitted work shipped.
+
+Installed Python3.11/reader binding passes all15 unique new atomic/lock/contention
+controls without skips. Additional actual WAL sweep-wrapper control proves a real
+competing writer obstructs,20ms wait abstains/restores876ms, unlock compares80
+opportunities, and later synthetic verifier ACTS with the original wait. Explicit
+mode=ro live checks under sweep lock prove DML denial ACTED, low-limit source/
+summary abstention then default read recovery and no cursor mutation; no live
+collection or contention stimulation. HealthOK, anonymous admin401. Bounded
+SQL comparison with ACTED changed-value/deleted-row fixture proves original sims,
+receipts, verdicts and reviews rows/values equal the canonical pre-copy backup.
+Mutable board/replay preservation remains unverified, not silently assumed.
+
+Extended captured corpus control:269REC plus91paired VIEW reports,15HID inventoried
+only; predecessor/subject have exact per-file parity,170combined faulted reports/
+173faults. Sidecars were captured later than REC snapshot; no simultaneous corpus
+snapshot or full HID adjudication claim. Private failed auxiliary gates are retained:
+unsupported shipper -DryRun rejected before work; private corpus helper initially
+used nonexistent API and history helper nonexistent guard, corrected using real
+reader/ReadBudget interfaces and ACTED controls. These were harness failures, not
+product repairs. Hard total-time/RSS/write limits, crash-in-flight/concurrent/fair
+scheduling, calibration and ranking/authenticity conclusions remain unverified.
