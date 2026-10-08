@@ -1966,6 +1966,7 @@ void R_ShutdownRenderer(qboolean devicetoo)
 	//make sure the worker isn't still loading stuff
 	COM_WorkerFullSync();
 #ifdef PLUGINS
+	Plug_NativeUI_RendererShutdown(); //owners release while shader/image APIs are live
 	Plug_Mesh_RendererShutdown();
 #endif
 

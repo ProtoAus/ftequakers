@@ -223,7 +223,9 @@ static void Plug_Draw_UnloadImage(qhandle_t id)
 	R_UnloadShader(Plug_Draw_ShaderFromId(id));
 }
 
+static qboolean Plug_NativeUI_Clip(float *clip);
 #include "cl_plugin_mesh.inc"
+#include "cl_plugin_ui.inc"
 
 static int QDECL Plug_Draw_ImageSize(qhandle_t image, float *w, float *h)
 {

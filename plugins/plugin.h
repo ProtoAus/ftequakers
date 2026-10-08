@@ -446,6 +446,42 @@ typedef struct	//for huds and menus alike
 //Physical top-left pixels, half-open clip bounds, normalized UVs, straight RGBA8.
 //Tokens belong to the calling plugin; release/restart/unload permanently invalidate them.
 #define plugmeshfuncs_name "2DMesh/1"
+
+//ExportInterface: one trusted synchronous service; no QC pointers cross the ABI.
+//Open/Close allocate/release only. Draw must not reenter the engine or retain frame
+//pointers. Only main-framebuffer indexed 2D is supported; no input/widget ABI.
+#define PLUGUI_VERSION 1u
+#define PLUGUI_CAP_INDEXED2D 1u
+#define PLUGUI_VM_MENU 1u
+#define PLUGUI_VM_CLIENT 2u
+#define PLUGUI_CLOSE_EXPLICIT 1u
+#define PLUGUI_CLOSE_VM 2u
+#define PLUGUI_CLOSE_PLUGIN 3u
+#define PLUGUI_CLOSE_RENDERER 4u
+#define PLUGUI_CLOSE_FAILED 5u
+typedef struct
+{
+	unsigned int vm, owner, generation;
+} pluguiowner_t;
+typedef struct
+{
+	unsigned int structsize;
+	pluguiowner_t owner;
+	unsigned int frame;
+	float virtualwidth, virtualheight, pixelwidth, pixelheight;
+	float clip[4]; //physical top-left half-open left/top/right/bottom
+} pluguiframe_t;
+typedef struct
+{
+	unsigned int structsize, version, capabilities;
+	//Open may allocate partially on failure: Close is called even when false.
+	F(qboolean, Open, (const pluguiowner_t *owner));
+	//Only called from explicit QC dispatch inside the frontend draw callback.
+	//False releases this owner and lets QC render its legacy fallback immediately.
+	F(qboolean, Draw, (const pluguiframe_t *frame));
+	F(void, Close, (const pluguiowner_t *owner, unsigned int reason));
+} pluguiservice_t;
+#define pluguiservice_name "NativeUI/1"
 #define PLUGMESH_MAX_VERTICES 16384
 #define PLUGMESH_MAX_INDICES 65535
 #define PLUGMESH_MAX_COMMANDS 128

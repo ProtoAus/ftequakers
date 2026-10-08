@@ -125,6 +125,7 @@ typedef struct plugin_s {
 	qboolean (QDECL *menufunction)(int eventtype, int keyparam, int unicodeparm, float mousecursor_x, float mousecursor_y, float vidwidth, float vidheight);
 	int (QDECL *sbarlevel[3])(int seat, float x, float y, float w, float h, unsigned int showscores);	//0 - main sbar, 1 - supplementry sbar sections (make sure these can be switched off), 2 - overlays (scoreboard). menus kill all.
 	void (QDECL *reschange)(int width, int height, qboolean restarted);
+	pluguiservice_t nativeui;
 
 	//protocol-in-a-plugin
 	int (QDECL *connectionlessclientpacket)(const char *buffer, size_t size, netadr_t *from);
@@ -436,6 +437,10 @@ static qboolean QDECL PlugBI_GetPluginName(int plugnum, char *outname, size_t na
 
 static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfaceptr, size_t structsize)
 {
+#ifdef HAVE_CLIENT
+	if (!strcmp(name, pluguiservice_name))
+		return Plug_NativeUI_Register(interfaceptr, structsize);
+#endif
 #if defined(PLUGINS) && !defined(SERVERONLY)
 #ifdef HAVE_MEDIA_DECODER
 	if (!strcmp(name, "Media_VideoDecoder"))
@@ -1662,6 +1667,9 @@ void Plug_Close(plugin_t *plug)
 	}
 #endif
 
+#ifdef HAVE_CLIENT
+	Plug_NativeUI_PluginClose(plug); //before shutdown/unmapping, with texture API live
+#endif
 	//tell the plugin that everything is closed and that it should free up any lingering memory/stuff
 	//it is still allowed to create/have open files.
 	if (plug->shutdown)

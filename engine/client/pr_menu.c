@@ -80,6 +80,7 @@ void QCBUILTIN PF_CL_drawsetcliparea (pubprogfuncs_t *prinst, struct globalvars_
 	srect.dmin = -99999;
 	srect.dmax = 99999;
 	srect.y = (1-srect.y) - srect.height;
+	Plug_NativeUI_SetClip(prinst, &srect);
 	BE_Scissor(&srect);
 
 	G_FLOAT(OFS_RETURN) = 1;
@@ -94,6 +95,7 @@ void QCBUILTIN PF_CL_drawresetcliparea (pubprogfuncs_t *prinst, struct globalvar
 	csqc_dp_lastwas3d = false;
 #endif
 
+	Plug_NativeUI_SetClip(prinst, NULL);
 	BE_Scissor(NULL);
 	G_FLOAT(OFS_RETURN) = 1;
 }
@@ -2877,6 +2879,10 @@ static struct {
 	{"drawfill",				PF_CL_drawfill,				457},
 	{"drawsetcliparea",			PF_CL_drawsetcliparea,		458},
 	{"drawresetcliparea",		PF_CL_drawresetcliparea,	459},
+	{"ui_native_status",		PF_ui_native_status,		0},
+	{"ui_native_open",		PF_ui_native_open,		0},
+	{"ui_native_draw",		PF_ui_native_draw,		0},
+	{"ui_native_close",		PF_ui_native_close,		0},
 	{"drawgetimagesize",		PF_CL_drawgetimagesize,		460},
 #ifdef HAVE_MEDIA_DECODER
 	{"cin_open",				PF_cs_media_create,			461},
@@ -3262,6 +3268,7 @@ void MP_Shutdown (void)
 	if (temp && !inmenuprogs)
 		PR_ExecuteProgram(menu_world.progs, temp);
 
+	Plug_NativeUI_Release(menu_world.progs);
 	PR_Common_Shutdown(menu_world.progs, false);
 	menu_world.progs->Shutdown(menu_world.progs);
 	memset(&menu_world, 0, sizeof(menu_world));
@@ -3781,7 +3788,9 @@ void MP_Draw(void)
 			((float *)pr_globals)[OFS_PARM0+2] = 0;
 
 			((float *)pr_globals)[OFS_PARM1] = scr_disabled_for_loading;
+			Plug_NativeUI_Begin(menu_world.progs, 1);
 			PR_ExecuteProgram(menu_world.progs, mpfuncs.drawloading);
+			Plug_NativeUI_End(menu_world.progs);
 		}
 	}
 	else if (mpfuncs.draw)
@@ -3807,7 +3816,9 @@ void MP_Draw(void)
 			((float *)pr_globals)[OFS_PARM1+2] = 0;
 		}
 
+		Plug_NativeUI_Begin(menu_world.progs, 1);
 		PR_ExecuteProgram(menu_world.progs, mpfuncs.draw);
+		Plug_NativeUI_End(menu_world.progs);
 	}
 	inmenuprogs--;
 }

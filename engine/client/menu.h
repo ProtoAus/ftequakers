@@ -546,6 +546,20 @@ int M_GameType(void);
 
 
 
+//Explicit native UI frontend lifetime/draw brackets; no automatic plugin drawing.
+#ifdef PLUGINS
+void Plug_NativeUI_Begin(struct pubprogfuncs_s *vm, unsigned int frontend);
+void Plug_NativeUI_End(struct pubprogfuncs_s *vm);
+void Plug_NativeUI_Release(struct pubprogfuncs_s *vm);
+void Plug_NativeUI_SetClip(struct pubprogfuncs_s *vm, const void *rect);
+void Plug_NativeUI_RendererShutdown(void);
+#else
+#define Plug_NativeUI_Begin(vm, frontend) ((void)0)
+#define Plug_NativeUI_End(vm) ((void)0)
+#define Plug_NativeUI_Release(vm) ((void)0)
+#define Plug_NativeUI_SetClip(vm, rect) ((void)0)
+#endif
+
 //plugin functions
 #ifdef PLUGINS
 qboolean	Plug_CenterPrintMessage(const char *buffer, int clientnum);

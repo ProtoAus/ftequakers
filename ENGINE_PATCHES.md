@@ -39889,3 +39889,43 @@ recovery act; zero, one, non-aligned and drain budgets never overshoot, and an
 incomplete sample at the cap is withheld. The existing plot script passes.
 The byte allowance is not a hard elapsed-time/RSS or concurrent-file snapshot
 guarantee; exact-cap files conservatively show truncated. Deployment separately.
+
+## Patch 593 — explicit VM-owned native UI dispatch prerequisite
+
+**Problem.** P589's indexed renderer had no caller-owned MQC/CSQC service route.
+Automatic plugin Tick/Sbar/Menu drawing could not prove mixed QC order, inherited
+clipping, VM ownership or synchronous fallback at a particular panel draw site.
+
+**Change.** Copy an exact-size/version/capability `NativeUI/1` service table;
+expose named optional status/open/draw/close builtins in MQC and CSQC. Frontend
+entry/exit authorizes only explicit draw-site calls, not init/input/commands.
+One live owner per VM gets a process-monotonic float-exact handle, separate from
+its caller owner ID. Frames carry frontend/owner/generation/frame identity,
+virtual/physical dimensions and inherited top-left physical clip, never QC
+memory pointers. Enforce one dispatch per VM per host frame even across
+close/reopen; reject fractional/foreign/stale/exhausted handles and render targets.
+Flush QC-before/native queues, intersect indexed commands with the caller clip,
+and restore caller colour, flags and backend scissor. Failed open/draw, explicit
+close, VM teardown, plugin unload and renderer shutdown release owners once;
+renderer release precedes texture invalidation. Missing service/ABI stays an
+explicit usable QC fallback. Open/Close allocate/release only; callbacks are
+trusted synchronous native code, not a hostile-pointer/thread/reentry sandbox.
+
+**Verified.** `p590bridge` retains its provisional fixture identity; this is one
+forward-renumbered product patch after peers published 590-592. Five disposable
+Windows GL/NVIDIA arms: acting P589 legacy baseline, subject without service,
+MQC/simple CSQC HUD at two independently scaled virtual axes and full CSQC
+UpdateView. 52 screenshots prove QC-before/native/QC-after overlap, inherited
+clip and legacy failure recovery. Seven ABI controls, both VM ownership,
+outside/fractional/foreign/duplicate/stale calls, explicit close, menu restart,
+disconnect/reconnect, plugin unload/reload, renderer restart and failed partial
+open/draw act; every allocated texture is released exactly once. Real core host
+stubs pass 149 assertions including colour/flags/scissor restoration, nested
+bracket rejection, render-target refusal and handle exhaustion. 24 portable
+grader falsifiers pass. Full isolated predecessor and subject builds have the
+same 74 compiler warning message/count fingerprints, zero new; all QC compiles
+have zero warnings. P589 gallery and its 33 grader controls pass. LSP translation
+units retain baseline warnings; isolated headers/fixtures lack engine context.
+No ImGui, widgets/model/input transport, actual panel migration, preference,
+Build number, evidence policy, non-GL/device-input or cost acceptance. Frozen
+build/publication/delivery provenance is recorded separately in game notes.

@@ -208,6 +208,7 @@ static qboolean QDECL Plug_Mesh_Submit(const plugmeshbatch_t *b)
 		clip[1] = max(0, c->clip[1]);
 		clip[2] = min(vid.pixelwidth, c->clip[2]);
 		clip[3] = min(vid.pixelheight, c->clip[3]);
+		Plug_NativeUI_Clip(clip); //service cannot widen its explicit QC caller's clip
 		if (clip[0] >= clip[2] || clip[1] >= clip[3])
 			continue;
 		for (i = 0; i < c->indexcount; i += 3)

@@ -477,6 +477,17 @@ void QCBUILTIN PF_CL_drawcolouredstring (pubprogfuncs_t *prinst, struct globalva
 void QCBUILTIN PF_CL_drawpic (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawline (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawfill (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+#if defined(PLUGINS) && !defined(SERVERONLY)
+void QCBUILTIN PF_ui_native_status(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_open(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_draw(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+#else
+#define PF_ui_native_status PF_Fixme
+#define PF_ui_native_open PF_Fixme
+#define PF_ui_native_draw PF_Fixme
+#define PF_ui_native_close PF_Fixme
+#endif
 void QCBUILTIN PF_CL_drawsetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawresetcliparea (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_CL_drawgetimagesize (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

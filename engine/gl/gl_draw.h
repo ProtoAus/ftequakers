@@ -28,6 +28,7 @@ void Surf_DeInit (void);
 void R2D_Init(void);
 mpic_t	*R2D_SafeCachePic (const char *path);
 mpic_t *R2D_SafePicFromWad (const char *name);
+void R2D_GetImageColours(float *rgba);
 void R2D_ImageColours(float r, float g, float b, float a);
 void R2D_Image(float x, float y, float w, float h, float s1, float t1, float s2, float t2, mpic_t *pic);
 void R2D_Line(float x1, float y1, float x2, float y2, mpic_t *pic);

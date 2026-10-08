@@ -645,6 +645,10 @@ apic_t *R2D_LoadAtlasedPic(const char *name)
 	return apic;
 }
 
+void R2D_GetImageColours(float *rgba)
+{
+	Vector4Copy(draw_active_colour, rgba);
+}
 void R2D_ImageColours(float r, float g, float b, float a)
 {
 	draw_active_colour[0] = r;

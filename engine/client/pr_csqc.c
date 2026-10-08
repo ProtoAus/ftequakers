@@ -7138,7 +7138,11 @@ static struct {
 	{"drawrotpic",				PF_CL_drawrotpic,				0},
 	{"drawfill",				PF_CL_drawfill,					323},		// #323 float(vector position, vector size, vector rgb, float alpha [, float flag]) drawfill (EXT_CSQC, [EXT_CSQC_???])
 	{"drawsetcliparea",			PF_CL_drawsetcliparea,			324},	// #324 void(float x, float y, float width, float height) drawsetcliparea (EXT_CSQC_???)
-	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
+	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},
+	{"ui_native_status",		PF_ui_native_status,		0},
+	{"ui_native_open",		PF_ui_native_open,		0},
+	{"ui_native_draw",		PF_ui_native_draw,		0},
+	{"ui_native_close",		PF_ui_native_close,		0},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326
 	{"stringwidth",				PF_CL_stringwidth,				327},	// #327 EXT_CSQC_'DARKPLACES'
@@ -7835,6 +7839,7 @@ void CSQC_Shutdown(void)
 
 		key_dest_absolutemouse &= ~kdm_game;
 		PR_ReleaseFonts(kdm_game);
+		Plug_NativeUI_Release(csqcprogs);
 		PR_Common_Shutdown(csqcprogs, false);
 		World_Destroy(&csqc_world);
 		csqcprogs->Shutdown(csqcprogs);
@@ -9180,10 +9185,12 @@ qboolean CSQC_DrawView(void)
 		//a fresh shadowing `rsp` scoped to the block, which is what nesting requires.
 		{
 		RSpeedMark();
+		Plug_NativeUI_Begin(csqcprogs, 2);
 		if (csqcg.CSQC_UpdateViewLoading && ((cls.state && cls.state < ca_active) || scr_drawloading || loading_stage))
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateViewLoading);
 		else
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateView);
+		Plug_NativeUI_End(csqcprogs);
 		RSpeedEnd(RSPEED_CSQC_QCVIEW);
 		}
 	}
@@ -9231,7 +9238,9 @@ qboolean CSQC_DrawHud(playerview_t *pv)
 		G_FLOAT(OFS_PARM2+0) = 0;//r_refdef.grect.x;
 		G_FLOAT(OFS_PARM2+1) = 0;//r_refdef.grect.y;
 		G_FLOAT(OFS_PARM2+2) = 0;//pv-cl.playerview;
+		Plug_NativeUI_Begin(csqcprogs, 2);
 		PR_ExecuteProgram(csqcprogs, csqcg.CSQC_DrawHud);
+		Plug_NativeUI_End(csqcprogs);
 
 		if (*r_refdef.rt_destcolour[0].texname)
 		{
@@ -9275,7 +9284,9 @@ qboolean CSQC_DrawScores(playerview_t *pv)
 		G_FLOAT(OFS_PARM2+0) = 0;//r_refdef.grect.x;
 		G_FLOAT(OFS_PARM2+1) = 0;//r_refdef.grect.y;
 		G_FLOAT(OFS_PARM2+2) = 0;//pv-cl.playerview;
+		Plug_NativeUI_Begin(csqcprogs, 2);
 		PR_ExecuteProgram(csqcprogs, csqcg.CSQC_DrawScores);
+		Plug_NativeUI_End(csqcprogs);
 
 		if (*r_refdef.rt_destcolour[0].texname)
 		{
