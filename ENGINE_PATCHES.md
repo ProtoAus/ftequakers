@@ -39281,3 +39281,24 @@ opportunities. Exhaust next recheck after real first comparison: preserve exactl
 one observation/peer cursor, then resume without rewriting it. Positive orientation/
 exclusion and step diagnostic controls; adjacent peer cursor/pair fault/time/
 pending/source/CLI tests pass. LSP no recorded diagnostics; final batch gates follow.
+
+## Patch 573 - bound similarity sample-summary SQL reads *(SURFD ONLY)*
+
+**Problem.** A fixed thirteen-row result bound did not cap SQLite work scanning
+and aggregating the stored similarity sample; unavailable scans could look empty.
+
+**Change.** Optional owner allowance covers summary metadata/aggregate fetching.
+Whole-query exhaustion returns limited state with every count/max/category unknown
+and a fixed unavailable/sample-not-measured line. Dry-run summary gets a fresh
+allowance independent of pending selection; zero reports reads disabled. Missing/
+empty/query-error distinctions and no-budget standalone behavior are unchanged.
+No schema migration, historical reconstruction, calibration, badge or ranking gate.
+
+**Verified.** Two predecessor behavioral failures across five cases; all five
+subject cases pass. Real aggregate interruption ACTS; no prefix/false zero, exact
+1000-pair/800-compared/200-skipped recovery and category identity parity. Metadata
+abstention, old-schema read/no-migration, actual authorizer denial/error/recovery,
+empty/missing and external unbudgeted callback preservation. Actual CLI tiny/zero
+read budgets report unavailable, not empty, and preserve observations. Adjacent
+summary/code/collector tests pass; LSP no recorded diagnostics. Final independent
+review, recorder/corpus, commit-pinned Linux and installed gates follow.
