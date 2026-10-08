@@ -3,6 +3,7 @@
 //named functions, this makes it *really* easy to port plugins from one engine to another.
 
 #include "quakedef.h"
+#include <limits.h>
 #include "fs.h"
 #include "vr.h"
 #include "com_bih.h"

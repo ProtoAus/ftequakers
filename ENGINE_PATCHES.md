@@ -39460,3 +39460,30 @@ used nonexistent API and history helper nonexistent guard, corrected using real
 reader/ReadBudget interfaces and ACTED controls. These were harness failures, not
 product repairs. Hard total-time/RSS/write limits, crash-in-flight/concurrent/fair
 scheduling, calibration and ranking/authenticity conclusions remain unverified.
+
+## Patch 577 — usable native plugin memory-image handles *(ENGINE)*
+
+**Problem.** Plugin `2D.LoadImageData` uploaded a valid image but its type-3
+shader path returned 0. Zero/negative handles could index before the shader
+table on unload; query/draw accepted non-live slots. Encoded size_t lengths
+were narrowed to the decoder's int without checking; no-renderer/null input
+could enter decoder/upload work.
+
+**Change.** Register/cache the uploaded texture's normal 2D shader and return
+its reference. Gate renderer/name/data/INT_MAX length before decoding. Share
+positive/in-range/live-slot validation across lookup/query/draw/quad/unload;
+avoid decrementing a signed invalid ID. Correct width/height types and the
+header's false restart-persistence comment. Existing shader IDs still require
+balanced release/reacquisition and are not generation-safe capabilities.
+
+**Verified.** P570 control returns 0 while disk/memory-lookup pixels act;
+subject's returned image is pixel-identical, including half-alpha composition,
+replacement and renderer restart. Temporary release rejects query/draw/quad,
+reload visibly acts; 7 invalid inputs and 4 invalid IDs reject/unload safely.
+Normal startup autoload proves no-renderer rejection before graphics, exits 0;
+disabled-plugin arm reaches/rejects commands, draws no sentinel. 30 grader
+mutation tests pass. Client/server compiler controls retain exactly their 2/5
+baseline warnings, zero new. Initial dedicated-client probe reached rejection
+but crashed in untouched shutdown; retained, not accepted/repaired. No indexed
+mesh, clipping, QC bridge, ImGui, performance/device or hostile-decoder claim;
+no movement/evidence/Build-number change.

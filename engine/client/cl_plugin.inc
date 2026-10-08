@@ -161,11 +161,9 @@ static qboolean Plug_Draw_GetScreenSize(float *vsize, unsigned int *psize)
 static qhandle_t Plug_Draw_LoadImage(const char *name, int type, const char *script)
 {
 	shader_t *pic;
-	if (qrenderer != QR_NONE)
+	if (qrenderer != QR_NONE && name && *name)
 	{
-		if (type == 3)
-			pic = NULL;
-		else if (type == 2)
+		if (type == 2)
 			pic = R_RegisterShader(name, SUF_NONE, script);
 		else
 			pic = R2D_SafeCachePic(name);
@@ -183,10 +181,13 @@ static qhandle_t QDECL Plug_Draw_LoadImageData(const char *name, const char *mim
 	qhandle_t ret = 0;
 	image_t *t;
 	qbyte *rgbdata;
-	unsigned int width, height;
+	int width, height;
 	uploadfmt_t format;
-		
-	if ((rgbdata = ReadRawImageFile(codeddata, datalength, &width, &height, &format, false, name)))
+
+	if (qrenderer == QR_NONE || !name || !*name || !codeddata || !datalength || datalength > INT_MAX)
+		return 0;
+
+	if ((rgbdata = ReadRawImageFile(codeddata, (int)datalength, &width, &height, &format, false, name)))
 	{
 		t = Image_FindTexture(name, NULL, IF_PREMULTIPLYALPHA|IF_NOMIPMAP|IF_UIPIC|IF_CLAMP);
 		if (!TEXVALID(t))
@@ -211,9 +212,11 @@ static qhandle_t QDECL Plug_Draw_LoadImagePic(const char *name)
 }
 static shader_t *Plug_Draw_ShaderFromId(qhandle_t id)
 {
-	if (--id >= r_numshaders)
+	if (qrenderer == QR_NONE || id <= 0 || id > r_numshaders)
 		return NULL;
-	return r_shaders[id];
+	if (!r_shaders[id-1] || r_shaders[id-1]->uses <= 0)
+		return NULL;
+	return r_shaders[id-1];
 }
 static void Plug_Draw_UnloadImage(qhandle_t id)
 {
@@ -223,10 +226,11 @@ static void Plug_Draw_UnloadImage(qhandle_t id)
 static int QDECL Plug_Draw_ImageSize(qhandle_t image, float *w, float *h)
 {
 	int iw, ih, ret;
+	shader_t *shader = Plug_Draw_ShaderFromId(image);
 
-	if (image > 0 && image <= r_numshaders)
+	if (shader)
 	{
-		ret = R_GetShaderSizes(r_shaders[image-1], &iw, &ih, true);
+		ret = R_GetShaderSizes(shader, &iw, &ih, true);
 		if (w)
 			*w = iw;
 		if (h)
@@ -238,18 +242,20 @@ static int QDECL Plug_Draw_ImageSize(qhandle_t image, float *w, float *h)
 
 static int QDECL Plug_Draw_Image(float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t image)
 {
-	if (image > 0 && image <= r_numshaders)
+	shader_t *shader = Plug_Draw_ShaderFromId(image);
+	if (shader)
 	{
-		R2D_Image(x, y, w, h, s1, t1, s2, t2, r_shaders[image-1]);
+		R2D_Image(x, y, w, h, s1, t1, s2, t2, shader);
 		return 1;
 	}
 	return 0;
 }
 static int QDECL Plug_Draw_Image2dQuad(const vec2_t *points, const vec2_t *texcoords, const vec4_t *colours, qhandle_t image)
 {
-	if (image > 0 && image <= r_numshaders)
+	shader_t *shader = Plug_Draw_ShaderFromId(image);
+	if (shader)
 	{
-		R2D_Image2dQuad(points, texcoords, colours, r_shaders[image-1]);
+		R2D_Image2dQuad(points, texcoords, colours, shader);
 		return 1;
 	}
 	return 0;

@@ -399,7 +399,8 @@ typedef struct
 typedef struct	//for huds and menus alike
 {
 	F(qboolean,	GetVideoSize,	(float *vsize, unsigned int *psize));	//returns false if there's no video yet...
-	//note: these use handles instead of shaders, to make them persistent over renderer restarts.
+	//Shader-table references: release each successful load once, reacquire after UpdateVideo.
+	//Renderer restarts invalidate them; freed slots may be reused (not generation-safe).
 	F(qhandle_t,LoadImageData,	(const char *name, const char *mime, void *data, size_t datasize));	//load/replace a named texture
 	F(qhandle_t,LoadImageShader,(const char *name, const char *defaultshader));	//loads a shader.
 	F(qhandle_t,LoadImage,		(const char *name));	//wad image is ONLY for loading out of q1 gfx.wad. loads a shader. use gfx/foo.lmp for hud stuff.
