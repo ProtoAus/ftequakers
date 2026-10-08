@@ -39517,3 +39517,23 @@ incorrect captured hash. Dry/apply preserve prior bytes/mode/backup inventory on
 rejection; real dry/apply installed comparison/capture ACT. Predecessor guards,
 paired drift/race, exclusive backups and exact Git preparation still pass.
 LSP no recorded diagnostics; independent review/Linux/live gates pending.
+
+## Patch 580 - bind similarity reader per collection pass *(SURFD ONLY)*
+
+**Problem.** A collection pass loaded support at startup then discarded it and
+reloaded for every source, allowing module changes inside one admitted pass.
+
+**Change.** Thread the initially resolved module through source comparisons.
+Direct compare_run callers still resolve their explicit tools directory without
+a supplied reader. Later passes re-resolve; no process-global cache. This binds
+reader code for one pass, not an atomic recording/filesystem snapshot, source
+reservation or code-authenticity claim. No metric, detector/ranking, engine pin/tag/
+Build change.
+
+**Verified.** Three new controls and source-cursor/pair-fault/pending/time/overlap
+suites pass. Predecessor fails pass-binding assertion. Actual temporary support
+file replacement ACTS during real80-opportunity comparison; all three first-pass
+pairs use initial module with one load, three next-pass pairs use replacement,
+and later missing support abstains without cache. Direct calls observe replacement
+with explicit tools; disabled pass performs no loads/writes. LSP no recorded
+diagnostics; independent review/Linux/installed gates pending.
