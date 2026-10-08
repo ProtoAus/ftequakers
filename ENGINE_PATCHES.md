@@ -39726,8 +39726,9 @@ records no diagnostics. Batch regression, independent review and delivery follow
 stored pairs. An optional observation panel could monopolize a review request.
 
 **Change.** The authenticated handler explicitly owns its fresh connection's
-progress-handler slot and gives panel metadata/history reads one million VM
-instructions via existing ReadBudget. Whole-panel read_limit abstention is distinct
+progress-handler slot and gives selected PRAGMA/history reads one million VM
+instructions via existing ReadBudget. The initial sqlite_master probe is outside
+that allowance. Whole-panel read_limit abstention is distinct
 from missing schema and empty history; no partial observations escape. Teardown
 precedes following SQL. Borrowed API defaults leave callbacks alone. Storage errors
 still propagate. No schema/history/reread/detector/gate, engine/progs/pin/tag/Build
@@ -39764,3 +39765,29 @@ exact; legacy category and actual scalar count are reported. Pending4/CLI3 and
 owned-connection test pass; LSP no diagnostics. Initial cursor-name/argument/
 capture-key fixture mistakes and Python3.10 authorizer teardown quirk were caught,
 corrected and both versions rerun. Batch regression, review and delivery follow.
+
+**P586–588 final verification/delivery.** Frozen public game
+`b4f4d31e6bd986406a0aaac638dfa8959eb4e62f`: all60 explicit Linux programs pass;
+Windows59/60, with the same2 UDP-admin assertions reproduced on baseline56/57
+and byte-identical test_admin source. Argument-required momindex excluded, not
+counted pass; established Linux Node/conversion skips remain. New3/4/4 cases are
+warning-clean; Python compile and LSP clean. Recorder306/0; captured269REC and
+91pairedVIEW hashes/full fault lists exact, existing170faulted reports unchanged.
+Read-only source/evidence review found no concrete blocker, did not rerun tests,
+and narrowed the metadata-query scope above.
+
+Canonical exact-commit allowlist with NORMAL stage tests deployed only admin.py,
+templates/admin_run.html and sweep.py. Initial wrong path-prefix preflight changed
+nothing; corrected invocation needed no SkipTests/NoReload flags. All3 installed
+blobs and their predecessor rollback copies match, mode600 DB backup retained.
+Gunicorn master2479950 preserved, worker re-forked/ready2026-10-08T09:05:04Z.
+Installed-path isolated HOME/DB suite runs11new cases (10pass/1absent-Node skip),
+actual live authenticated native review200/anonymous401 and read-only diagnostic
+queries ACT. Original sims/receipts/verdicts/reviews rows match pre-copy backup via
+bounded SQLite EXCEPT; exact/changed/deleted oracle controls ACT. First finish
+probe expected the wrong summary state, then final shell probe streamed CRLF;
+corrected finish-only gates ran with no recopy/reload. Final independent host
+read2026-10-08T09:11:25Z: hashes/rollback/backup mode good, healthOK, all12lobbies
+active. No live collection/reread, detector/badge/enforcement change, reader/QC/
+engine/Windows/config ship. Mutable board/replay/cursor preservation, hard time/
+RSS, calibration, million-row performance and live-browser acceptance unverified.
