@@ -39478,3 +39478,21 @@ control. Spied real binary reads request exactly limit+1 for both80-row sources;
 exact byte/move bounds retain default metrics and exact capture. One-less/zero
 budgets abstain whole. Existing source/parsing/unreadable/opportunity suites pass;
 LSP no recorded diagnostics. Independent review, Linux and deployment pending.
+
+## Patch 578 - report actual similarity flush additions *(SURFD ONLY)*
+
+**Problem.** Buffered comparisons were counted as new observations even when
+INSERT OR IGNORE lost to a same-key collector insertion during comparison.
+
+**Change.** Count insertion-local rowcount within the existing atomic peer
+checkpoint/observation transaction; skipped/notable counts describe only inserted
+rows. No checkpoint or trigger writes inflate counts. Attempt budgets, uniqueness,
+selection and historical winner stay unchanged. No reservation/exactly-once claim,
+metric, detector/ranking, engine pin/tag/Build change.
+
+**Verified.** Four new SQLite controls plus five inherited atomic controls pass;
+predecessor fails three same-key overlap counts. Real second-connection inserts
+ACT during real80-row comparisons, survive reopen unchanged, and ignored notable/
+skip/all-duplicate results do not invent additions. Admission still checkpoints;
+trigger writes do not inflate counts. Adjacent atomic/pair-fault/source/peer suites
+pass including acted rollback. LSP no recorded diagnostics; review/Linux/live pending.
