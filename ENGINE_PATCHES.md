@@ -39129,3 +39129,28 @@ recorder306/0 and captured269REC/101view fault lists are identical (164REC,
 with notes, source/log inspection only; Python execution is parent evidence.
 LSP no recorded diagnostics. Linux/deployment remain pending until the batch
 passes the publication/installed controls. No engine/progs/pin/tag/Build change.
+
+## Patch 568 - persist historical similarity source snapshots *(SURFD ONLY)*
+
+**Problem.** Reader capture did not travel with stored comparison metrics, so
+historical observations could not name their input bytes. Later path hashing or
+backfilling existing rows would falsely bind changed files to old measurements.
+
+**Change.** Add one empty-default source_capture column and validate a narrow
+versioned two-source hash/size snapshot. Store reader-returned capture atomically
+with compared metrics, without source reopening. Require capture-capable support;
+legacy/skipped/invalid captures remain unbound. Additive race-aware migration
+preserves historical values. No remeasurement, verdict, badge or public-route
+change. Capture describes consumed bytes, never current-file/authenticity proof.
+
+**Verified.** Five predecessor behavioral assertions fail; eight focused controls
+pass: real eighty-row comparison and concurrent writer ACT outside transaction,
+after-comparison file replacement followed by persisted original hash/size,
+connection reopen, first-observation preservation, A/B orientation, legacy
+migration/repeat without backfill, skip/invalid abstention, capability admission,
+narrow schema and duplicate/future/oversized/boolean rejection. A real trigger
+aborts a later INSERT and rolls back the whole measurement/capture transaction.
+All twenty-one focused/inherited reader/collector/runtime/admin/board/sweep
+programs pass locally. LSP no recorded diagnostics. Final batch review, exact-
+commit Linux and installed verification pending; no deployment claim yet.
+No engine/progs/pin/tag/Build or resource-bound/calibration/enforcement change.
