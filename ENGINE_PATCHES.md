@@ -38951,3 +38951,29 @@ LSP no recorded diagnostics. Rotation proves finite-fixture progress, not full
 fleet fairness, byte binding, exactly-once or SQL/RSS/hard-time bounds. No engine
 pin/tag, QC, Build or gate change. Unpublished P560 was replayed after a peer
 published rewind P560; peer history preserved, temporary shared claim marker used.
+
+## Patch 564 - durable per-source similarity peer admission *(SURFD ONLY)*
+
+**Problem.** A repeatedly throwing first peer could consume a source's small
+pair/candidate budget on every pass without an observation to suppress it.
+
+**Change.** Rotate unobserved eligible peers above the last admitted peer first,
+then wrap, independently per source. Persist last admission once per source call
+in a short transaction, including raised comparisons; never advance for stored,
+unadmitted, completed or unresolved-primary work. Stored-both-orientation exclusion
+still precedes the candidate LIMIT, and the late recheck still precedes admission.
+No failure is turned into a fake observation; source and peer cursors are separate.
+
+**Verified.** Seven predecessor assertions fail; twenty-one peer/source/pending
+controls pass. Admin regression found historical direct callers without cursor
+schema; first admitted checkpoint now creates it additively, never on a read or
+unadmitted work. Actual authenticated collector/admin projection control passes.
+Across restarts and one-candidate/one-attempt budgets, a failing peer2 then peers3/4
+ACT, followed by retry2; failed2 remains unobserved. Independent source cursors,
+budget/deadline/primary boundaries, completed sources and a real late-store recheck
+pass. Three comparisons allow an independent connection to commit during each;
+trace records one checkpoint. Existing collector/CLI/category/ingestion/time/summary/
+locator controls and corpus parity pass. Two fresh source reviews OK with notes;
+clean/range separately parent-attested. No general fairness/coverage, hard-resource,
+exactly-once or byte-binding claim; cursors are internal admission state, not
+judgment. Engine/Build unchanged; temporary shared claim marker used.
