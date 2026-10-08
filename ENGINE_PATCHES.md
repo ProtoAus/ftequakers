@@ -39241,6 +39241,16 @@ in pr_menu.c, not changed lines. Full CPU/GPU timing, other renderers, real moni
 DPI/device delivery, glyph-family aesthetic judgement, atlas exhaustion and native
 ImGui are NOT accepted by these controls. No physics/evidence/Build-number change.
 
+**Delivered.** Engine `60dfdc102` / `patch-570`, clean game proof `efcfe0d`.
+Pi CSQC hashes/all 12 active lobbies verified at 2026-10-08T04:19:39Z; live
+editor actions reach, but its scene-dependent A/A pixel floor fails and is not
+accepted. Windows preflight initially stopped on the owner's executable lock
+without swapping any file. After the game closed, both installs hash-verified
+at 05:28:54Z, retaining `.prev` and UTC backups. Installed-client copies pass
+native gallery/reload/unbaked controls at console scales 1/2 with zero matched
+pixel differences, plus 28 dedicated/editor checks per client. Owner sources,
+settings and processes untouched; no release or new Pi engine deployment.
+
 ## Patch 571 - bound similarity source-selection SQL reads *(SURFD ONLY)*
 
 **Problem.** A selected-row limit did not cap SQLite work finding eligible sources.
