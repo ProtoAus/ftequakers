@@ -39336,3 +39336,24 @@ service; six-table immutability is NOT claimed. An overbroad private diagnostic 
 stopped by its proven owned PID after timing out, without touching owner processes;
 health remained OK. Full mutable-board preservation, real-player calibration,
 complete/fair/concurrent scheduling, hard time/RSS/lock-wait limits remain unverified.
+
+## Patch 574 - atomic similarity peer flush *(SURFD ONLY)*
+
+**Problem.** A separately committed peer admission checkpoint survived an aborted
+observation insert, pointing beyond discarded measurements. It was admission, not
+completion, but storage rollback unnecessarily changed retry order.
+
+**Change.** Non-committing checkpoint helper joins the peer upsert and observations
+in one short transaction after comparisons. All-failed admitted pairs still rotate
+without observations. Source admission remains independently committed before work;
+no reservation, exactly-once, crash-in-flight or complete/fair scheduler claim.
+No detector, schema, evidence metrics, ranking, engine pin/tag or Build change.
+
+**Verified.** Five temporary-SQLite controls pass. Predecessor fails two assertions:
+real middle-insert abort leaves prior peer cursor changed, and normal flush uses
+two transactions. Subject restores exact prior cursor and no new observations
+across reopen, cursor-abort rolls back, normal bounded reader compares two80-move
+pairs with concurrent writer ACTING outside transactions, and flush uses one commit.
+All-failed and old direct-call admission controls pass. Adjacent pair-fault, peer/
+source-cursor, SQL-peer and source-capture suites pass; LSP no recorded diagnostics.
+Independent batch review, broad pinned Linux and installed gates pending.
