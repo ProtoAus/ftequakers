@@ -39980,3 +39980,12 @@ NaN/Inf bit semantics rather than relying on libc finite assumptions. Full
 stamped build, valid GL galleries and guarded delivery are separate recorded
 gates; malformed-clip controls are host tests, not driver fault injection.
 Published patch-593 remains immutable. No ImGui/non-GL/device/cost acceptance.
+
+Frozen full source `bed572f50` / `patch-594` built as
+`git-7118-patch-594-0-gbed572f50`: identical 74 baseline compiler warning
+fingerprints, zero new; QC zero warnings. Valid bridge and P589 GL galleries
+pass. Both actual installed Windows executable paths ACT after guarded native-only
+swaps, zero failed, hashes/progs/config/data/server/DLL preservation verified
+2026-10-08T11:34:11Z; rollback retained. The rejected Draw path does not flush;
+resource cleanup may independently flush for P589 texture lifetime. No second
+Pi/progs swap or release. Exact evidence/provenance: game tools/p594clip.md.
