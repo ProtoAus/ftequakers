@@ -39720,6 +39720,51 @@ valid measured/empty/BLOB/legacy-column controls ACT and database rows stay exac
 Existing verifier-counts (7), admin-metrics and receipt-metrics suites pass. LSP
 records no diagnostics. Batch regression, independent review and delivery follow.
 
+## Patch 587 — bound the historical similarity panel's SQL work *(SURFD ONLY)*
+
+**Problem.** A 26-row result cap did not bound sorting work for a run with many
+stored pairs. An optional observation panel could monopolize a review request.
+
+**Change.** The authenticated handler explicitly owns its fresh connection's
+progress-handler slot and gives panel metadata/history reads one million VM
+instructions via existing ReadBudget. Whole-panel read_limit abstention is distinct
+from missing schema and empty history; no partial observations escape. Teardown
+precedes following SQL. Borrowed API defaults leave callbacks alone. Storage errors
+still propagate. No schema/history/reread/detector/gate, engine/progs/pin/tag/Build
+change. This is selected SQL work, not hard time/RSS or a whole-request budget.
+
+**Verified.** Four warning-clean tests pass and all fail P586 predecessor. Actual
+10,001-pair query is interrupted under tiny allowance, retains useful run review,
+clears callback before following SUM query, and default allowance recovers the
+80-opportunity measured control. Borrowed callback continues to act, direct owner
+opt-in abstains, missing schema stays missing, I/O remains error and actual DOM
+labels limits accurately. History rows unchanged. Existing similarity5/sources10
+and metrics3 tests pass; LSP no diagnostics. Initial unrelated-row arm did not
+exercise work due to indexes; corrected to related-row sorting and reran both
+versions. Initial import/API mismatch and too-small default were caught before
+commit. Batch regression, independent review and delivery follow.
+
+## Patch 588 — non-initializing similarity dry-run diagnostics *(SURFD ONLY)*
+
+**Problem.** The similarity diagnostic subsection initialized/migrated the
+collector's schema before reporting availability. Observing a missing subsystem
+created it; observing legacy history ALTERed it and could require a writer lock.
+
+**Change.** Remove only that initializer. A budgeted table probe reports explicit
+unavailable for absent history; existing schemas get the scalar eligible-candidate
+count and independent read-only summary. Normal collection still initializes.
+General main/import schema setup is unchanged: the whole CLI is NOT read-only.
+No historical backfill, detector/gate, engine/progs/pin/tag/Build change.
+
+**Verified.** Four warning-clean actual-connected-consumer tests pass. P587
+predecessor fails all three dry-run schema arms under a real similarity DDL/DML
+authorizer; normal collector control passes both and stores a real 80-opportunity
+comparison with exact byte hashes. Absent, legacy and current schema/rows remain
+exact; legacy category and actual scalar count are reported. Pending4/CLI3 and
+owned-connection test pass; LSP no diagnostics. Initial cursor-name/argument/
+capture-key fixture mistakes and Python3.10 authorizer teardown quirk were caught,
+corrected and both versions rerun. Batch regression, review and delivery follow.
+
 ## Patch 589 — versioned plugin-owned indexed 2D meshes
 
 **Problem.** The legacy plugin `2D` ABI exposes quads and shared shader-table
