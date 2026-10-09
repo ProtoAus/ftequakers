@@ -40350,3 +40350,38 @@ primary/Pi context-gate failures restored exact predecessors; corrected only pri
 harness imports, without weakening path assertions or changing product code. No
 worker reload, history reread, engine/progs/config/game or Build swap. Public-safe
 hashes/provenance/limits: FTESurf tools/p603receiptclock.md.
+
+## Patch 604 — Vulkan device enumeration pointer; D3D11 screenshot row order
+
+Both found by Patch 605's backend gate; neither is ImGui's.
+
+**Problem.** `Win32VK_EnumerateDevices` (gl_vidnt.c) declared a local
+`vkGetInstanceProcAddr` and assigned it only on the branch that loads
+`vulkan-1.dll`. With the library already loaded it handed the uninitialised local
+to `VK_EnumerateDevices`, which called through it: an intermittent 0xC0000005 at
+startup while the renderer option list is built, before any config command.
+Separately, `D3D11_VID_GetRGBInfo` filled its buffer bottom-up and returned a
+positive stride, so every D3D11 `screenshot` was upside down.
+
+**Change.** Initialise the local to NULL and resolve the symbol from the loaded
+module on the other branch; `VK_EnumerateDevices` already returns false for NULL.
+Fill the D3D11 buffer top-down. Nothing else: no other renderer, screenshot
+format, cvar or default.
+
+**Verified.** The crash stack, resolved through the build's symbol table:
+Host_Frame, R_UpdateRendererOptsNow, Win32VK_EnumerateDevices,
+VK_EnumerateDevices+0x37, then a jump into .bss. `tools/vkenum_coldstart.py`
+alternates cold `vid_renderer vk` starts of the unfixed and fixed client, 20 each,
+run twice: unfixed 1/20 and 9/20 crashed (10/40), fixed 0/40. The two clients
+differ by exactly this diff; both also carried Patch 605's stage, and this commit
+was not built on its own. In the second run
+the fixed client listed the GPU in `_vid_renderer_opts` 20/20; the first run's
+listing check read a wrong cvar name and measured nothing. D3D11: on the unfixed
+client the scoreboard gate faulted on rank-column ink differing between virtual
+scales; the same capture flipped by hand matched GL (421 ink pixels at both
+scales, 0 mask difference). On the fixed client D3D11 passes all four arms
+unflipped and Vulkan passes all four, including the legacy arm that had crashed.
+GL, D3D11 and Vulkan captures of one page were also compared by eye.
+Limits: one laptop, one GPU. D3D9 and D3D8 have the same copy loop and do not
+start there (FTESurf BACKLOG.md). D3D11 captures in older retained evidence are
+flipped. Commands and rigs: FTESurf `tools/p603scores.md`.

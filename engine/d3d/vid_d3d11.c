@@ -1451,7 +1451,7 @@ static char	*D3D11_VID_GetRGBInfo(int *bytestride, int *truevidwidth, int *truev
 	if (!FAILED(ID3D11DeviceContext_Map(d3ddevctx, (ID3D11Resource*)texture, 0, D3D11_MAP_READ, 0, &lock)))
 	{
 		r = rgb = BZ_Malloc(3 * vid.pixelwidth * vid.pixelheight);
-		for (y = vid.pixelheight; y-- > 0; )
+		for (y = 0; y < vid.pixelheight; y++)	//top-down, as the positive stride below says
 		{
 			in = lock.pData;
 			in += y * lock.RowPitch;

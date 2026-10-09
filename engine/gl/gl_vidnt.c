@@ -848,7 +848,7 @@ static qboolean Win32VK_EnumerateDevices(void *usercontext, void(*callback)(void
 {
 	qboolean ret = false;
 #ifdef VK_NO_PROTOTYPES
-	PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+	PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = NULL;
 	dllfunction_t func[] =
 	{
 		{(void*)&vkGetInstanceProcAddr,		"vkGetInstanceProcAddr"},
@@ -857,6 +857,8 @@ static qboolean Win32VK_EnumerateDevices(void *usercontext, void(*callback)(void
 
 	if (!hInstVulkan)
 		hInstVulkan = Sys_LoadLibrary("vulkan-1.dll", func);
+	else	//Already loaded (Vulkan is running, or an earlier enumeration): func was never filled.
+		vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)Sys_GetAddressForName(hInstVulkan, "vkGetInstanceProcAddr");
 	if (!hInstVulkan)
 		return false;
 #endif
