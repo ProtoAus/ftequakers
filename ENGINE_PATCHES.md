@@ -40338,3 +40338,15 @@ assertions. Strict owned Python compilation adds zero warnings. Immutable269 rec
 and91 paired view: baseline/subject170 faulted files/173 faults, unchanged. New
 parsing without a view is intentional, not fleet-cost acceptance. Exact publication,
 selected installation hashes and remaining blockers: FTESurf tools/p603receiptclock.md.
+
+**DEPLOYED 2026-10-09.** Exact published7e24d9d reader pair/test only: secondary
+Windows04:09:08Z, primary04:10:06Z, Pi04:13:28Z; three destination hashes and actual
+installed18 controls pass on each. Primary peer edit cleared before guarded copy;
+no dirty peer path was overwritten. Canonical Pi sweep lock, completed mode600
+SQLite/source rollback retained;137 protected files, receipt/verdict/review/sim/
+cursor histories, scalar run/replay counts, original master/worker and health12
+unchanged. Windows protected6/195 files and shared index unchanged. Initial
+primary/Pi context-gate failures restored exact predecessors; corrected only private
+harness imports, without weakening path assertions or changing product code. No
+worker reload, history reread, engine/progs/config/game or Build swap. Public-safe
+hashes/provenance/limits: FTESurf tools/p603receiptclock.md.
