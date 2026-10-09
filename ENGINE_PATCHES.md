@@ -40307,3 +40307,34 @@ compiler stages complete; serial retry resolves transient untouched plugin ZIP
 locks. Known NoDeploy final-summary failure is separate, not a successful wrapper
 exit. Protocol/controls/provenance and remaining gates: FTESurf tools/p601model.md.
 No physical-device, panel migration, non-GL/font/DPI or cost acceptance claimed.
+
+## Patch 603 — bind a finished receipt to the captured recording clock *(READER ONLY)*
+
+**Problem.** Receipt checking compared signed ticks to unsigned server ticks but
+not to the recording selected by runid/nonce. Genuine signed controls with both
+receipt clocks agreeing could still describe a different readable recording
+finish. This is evidence-content consistency, not signature failure or cheating.
+
+**Change.** Compare a positive kept-run statement with the selected readable
+closed recording's exact integral finish. Nonce, clock and angle checks share one
+captured byte body and grammar parse; a new capture resets the cache. New full,
+recording-only and view-only joins participate; journal-only does not rejudge old
+recordings. Zero abandon and -1 unkept are sentinels, not durations. Unavailable/
+malformed/nonintegral recordings remain unmeasured under current receipt policy.
+Use separately initialized Report.finish_ticks, not header info, and raw Decimal
+parsing with finite/integral signed32 and128-character limits. Legacy float info
+and grammar stay intact. Mismatch preserves valid signature and independent angle
+result. No wire format/schema, detector threshold/calibration, ranking/review,
+history reread, engine/QC/progs/config/pin/tag or Build change.
+
+**Verified.** Initial12 genuine crypto/file/SQLite/CLI tests have8 baseline
+failures; final18 pass. Both mismatch directions, sentinel/off-host/old-grammar
+controls, one-parse and replacement/rejoin boundaries, partial observations and
+header/near-integer/range/exponent controls ACT. Initial independent source review
+found header collision and float rounding; corrected source re-review closes both,
+no remaining findings. Existing receipt74/recorder306 and sweep/angle-reason
+controls pass. Final Linux71 pass; Windows71 only the two established admin UDP
+assertions. Strict owned Python compilation adds zero warnings. Immutable269 rec
+and91 paired view: baseline/subject170 faulted files/173 faults, unchanged. New
+parsing without a view is intentional, not fleet-cost acceptance. Exact publication,
+selected installation hashes and remaining blockers: FTESurf tools/p603receiptclock.md.
