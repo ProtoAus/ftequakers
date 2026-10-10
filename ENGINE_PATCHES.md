@@ -41712,3 +41712,24 @@ load the column is deaf until the next step it sees, or 2 s. A load without the
 hold from standing ground into a mid-air save still breaks its restored row, as
 it did before. The latency was `sv_minping` on loopback. BACKLOG, "Segments rows
 at a teleport". Human acceptance is lextest.md section 16.
+
+**DEPLOYED 2026-10-10 (Patch 616).** A build of FTESurf `adc724d` in a clean
+worktree: `csprogs.dat` `ebc342f0`, the file every measurement above was taken
+on; `qwprogs.dat` (`092f9880`) and `menu.dat` (`19874c5a`) byte-identical to
+what both Windows installs and the Pi already held, read before the deploy.
+The only commit between the build that was live and this one is this patch.
+Windows, 16:15:00Z: `csprogs.dat` and `csprogs.lno` into `C:\FTESurf\ftesurf`
+and `C:\FTEQuake\ftesurf`, each of which held Patch 617's csprogs (`4355bdf0`),
+kept beside it as `.prev`. Read back afterwards with a second tool. Another
+session's test rigs were running; they take their progs from their own
+directory and that session said so before the copy.
+The Pi: `build.ps1 -Pi`, 16:15:26Z to 16:16:05Z. 12 lobby rows, 0 players. Its
+own recompile gave the same two hashes; both files hash-verified on the Pi and
+swapped, the previous pair kept as `.prev`, which is now the whole Patch 617
+build (the `qwprogs.dat` before 617 is no longer kept there). Read back from
+the host: `csprogs.dat` `ebc342f0`, and all 12 lobby processes started
+16:15:57Z to 16:16:06Z. `tools/pi_lobby_smoke.py` against lobby 1: a client
+with no csprogs of its own was served `ebc342f0`, drew the board (screenshot
+looked at) and logged no QC error. That smoke does not pass a teleporter: the
+rule was measured in rigs on this file against a local server, and one lobby of
+twelve was connected to. No config, engine or surfd change.
