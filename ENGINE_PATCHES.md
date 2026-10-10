@@ -42592,3 +42592,110 @@ it. On a ramp, and above all across a landing, the straight line in vz is a
 reading and not the mover's own path. A top and a bottom look alike (one pale
 dot); nobody has judged whether that reads. The open of a replay costs 3
 more budget events a sample (Patch 626). FTESurf's BACKLOG has the list.
+
+## Patch 628 — a recording's off-ramp mark sits at the ramp's own edge, found on the loaded map *(MOD ONLY, csprogs + cfg/default.cfg)*
+
+**Problem.** The third of the owner's three, what Patches 608 and 611 left
+open: the off-ramp mark could sit up to a tick from the lip, a ride whose
+contact flickered before its end was marked a gap early, and nothing had been
+measured off the two maps of those patches. Patch 608 stamps a leave on the
+ride's last sample carrying the ramp bit. But the bit says the mover clipped
+a ramp DURING a tick, and the sample is where that tick ended.
+
+**Change.** FTESurf `cl_lines.qc` (`Line_Edge`, `Line_OnRamp`), a few lines in
+`cl_watch.qc`, `default.cfg` (`hud_lines_edge 1`).
+
+With the map loaded the viewer asks it. `Line_OnRamp` traces the player's hull
+from a quarter unit off the plane the recording wrote to half a unit into it,
+and wants a face of the ramp band. For a leave, the last sample whose hull is
+still against the ramp is the ride's last contact sample, else the one before
+it, else a sample in the hold's 0.08 s that the bit missed; the tick from
+there to the next sample is halved six times along the straight line between
+the two, and the mark is the last point found against the ramp.
+
+*Three answers.* The probe says 1 (against a ramp face), 0 (clear), or -1:
+the hull starts inside something and the map cannot say. A leave is placed
+only on definite answers -- the near sample 1, the far sample 0, every
+halving 1 or 0. Otherwise the mark stays on the last contact sample, Patch
+608's rule, which is also what `hud_lines_edge 0` gives, what a file with no
+plane gets (an import; then no record is kept and a sample costs nothing),
+and what the live line always does: only a recording's two scanners hand in
+the plane.
+
+*What the trace is made as*, twice wrong before it was right. A CSQC trace
+takes its content mask from the entity it is made for, and for `world` that
+leaves out player clip: the first cut read a map whose ramps are clip brushes
+as having no ramps at all. And an ordinary move also hits what is not the
+map -- the glare pass's walk-through copies of brush entities, the server's
+brush entities of the moment. It is made as a probe entity with the player's
+mask, against the world model only.
+
+**Verified.**
+
+*The premise, against the mover's own bit.* `replay rampprobe` asks, for every
+contact tick of the open recording, whether the hull is against a ramp face of
+the loaded map. One native recording on each of 17 maps, in the game: 21,892
+of 22,461 contact ticks. 16 maps at 98% or more; surf_boreas 65% (388 of its
+1,130 ticks find no ramp face in reach; not explained). On the WRONG map: 0
+of 2,888. The two earlier cuts, same recordings: as `world`, surf_axiom 0 of
+382 and surf_boreas 1 of 1,130; as an ordinary move, surf_medley 71% and
+surf_tensor2 61%, which are 99.0 and 98.9 now.
+
+*What it does.* Of 290 ramp leaves in those recordings 283 are placed: 68 with
+the lip in the tick after the last contact, 176 in the last contact tick
+itself -- the sample Patch 608 stamps is past the lip there -- and 39 after a
+sample the bit missed. 7 stay as stamped. On the arm's two maps the placed
+marks moved a median 11.6 u (surf_kitsune, 38 leaves, most 39.7) and 15.3 u
+(surf_voyager, 28 of 32, most 157.4 for a ride whose contact outlived its bit
+by four ticks).
+
+*The arm* (`runlines_edge.cfg` + `tools/test_runlines_edge.py`, seven checks):
+with the switch off the marks are the model's, mark for mark; with it on the
+table is in time order, every mark that is not a ramp leave is unchanged, and
+every placed leave has its `lnx` row -- its two samples are the file's own,
+next to each other and the right ones for its case, and the mark is on the
+line between them in time, place, sideways speed, vz and v.v. A board line
+places its leaves where the replay does. On the wrong map nothing moves. A
+map of clip ramps is seen (378 of 382). The control (the build before)
+places nothing. Eight one-edit mutants are each caught in the game by the
+check that names them: the tick halved the wrong way, the sample before the
+last contact never tried, the hold's gap never asked of the map, the trace
+made as the world, the mark keeping its first sample's clock, or its
+velocity, the switch ignored, a board line not handed the plane.
+
+*What the review found* (one independent reader; it ran the built csprogs in
+an interpreter with a small brush tracer standing in for the map):
+
+- A CLEARED RECORD'S PLANE WAS STILL READ, so one file could mark differently
+  in a slot another recording had used (6 of 762 native ramp leaves are rides
+  of that shape).
+- "INSIDE SOMETHING" READ AS "OFF THE RAMP": a pillar 0.03 u beside the path
+  moved a leave to before its last contact sample.
+- THE FAR SAMPLE WAS NEVER ASKED when it was the sample the leave was seen on:
+  a body that never left the face was "placed" 63/64 into its last tick.
+- 8 budget events a sample at a replay's open, on files that could never be
+  placed, with `hud_lines_edge 0` or without it (Patch 626's budget): 2 now.
+- The trace hits client entities (above).
+- The grader passed with a leave out of table order, with a far sample three
+  on, and with a placed mark's vz and v.v set to nonsense. It checks all
+  three now.
+
+Its own scenarios, run on the build before the fixes and on the shipped one,
+show the first three changed: all abstain. Its parity check (the mark table
+bit-identical to the build before with no plane, with the switch off, with
+every trace missing, with every trace starting solid) and its ordering fuzz
+(110 streams, 5,826 leaves, no violation) pass on the shipped build. None of
+that is the engine.
+
+*Pixels.* surf_voyager at 0:05.2, on and off: the chevron at the first ramp's
+lip moves about a body width and its speed reads 1637 for 1635 (looked at on
+the build before the review's fixes; the arm's numbers for that map are the
+same on both).
+
+**Not done.** Nothing independent of the trace says where a lip is. The mark
+is on a straight line between two samples; the body's path in that tick is
+the ramp and then a fall. NO GATE BY MAP: on surf_boreas the client places 15
+of 19 leaves while its probe answers for 65% of the contact. The live line is
+not placed. A ramp that is a brush entity or a prop abstains. A ducked body
+was not looked for. One ride in the 17 recordings ends on ground; not looked
+at. FTESurf's BACKLOG has the list.
