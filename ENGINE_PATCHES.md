@@ -41900,3 +41900,32 @@ cells cannot be clicked. The strip's cost was not measured. `p462trn.cfg`, the
 original sync arm, runs on an install and was not rerun. BACKLOG, "Patch 621,
 left open". Human acceptance is lextest.md, "the trainer keeps your last
 jumps".
+
+**DEPLOYED 2026-10-10 (Patch 621).** A build of FTESurf `e50eaac` in a clean
+worktree: `csprogs.dat` `87bd5e43`, byte for byte the file the gate ran on;
+`menu.dat` (`e5604321`) and `qwprogs.dat` (`092f9880`) are what both Windows
+installs and the Pi already held. The only commits between the build that was
+live and this one are this patch and Patch 620's deployment record. Another
+session's rig ran the installed server binary for under a minute just before
+(it takes its progs from its own directory, and said so); the copy waited for
+it to end.
+Windows, 18:20:34Z: `csprogs.dat` and its line table into `C:\FTESurf\ftesurf`
+and `C:\FTEQuake\ftesurf`, by a copy that refuses unless the installed file is
+the build of the previous main (Patch 620's `3c7c15d5`, kept beside each as
+`.prev`); and `cfg/default.cfg` `591c3236` over its predecessor `e971b8cb`,
+kept beside each as `default.cfg.pre621-20261010T182034Z`. Read back
+afterwards. `cfg/defaultuser.cfg` changed in the repo only: nothing executes or
+ships it, and the second install has no copy.
+The Pi: `cfg/default.cfg` by hand at 18:20:50Z, swapped only because the live
+file was the predecessor (kept as `default.cfg.pre621-20261010-182050`); two
+cvars and two binds a server never reads, for parity with the repo. Then
+`build.ps1 -Pi` from that worktree: 12 lobby rows, 0 players, both uploads
+hash-verified and swapped, the previous pair kept as `.prev`. Read back from
+the host in one call: `csprogs.dat` `87bd5e43`, `qwprogs.dat` `092f9880`,
+`csprogs.dat.prev` `3c7c15d5`, `cfg/default.cfg` `591c3236`, and all 12 lobby
+units active, started 18:21:31Z to 18:21:40Z. `tools/pi_lobby_smoke.py`
+against lobby 1: a client with no csprogs of its own was served `87bd5e43`,
+drew the board and logged no QC error. That smoke does not switch the trainer
+on: the panel was measured in rigs on this file, and one lobby of twelve was
+connected to. No engine or surfd change. Roll back: copy each `.prev` and
+`.pre621` file over its file.
