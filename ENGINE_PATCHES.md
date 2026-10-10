@@ -42737,3 +42737,15 @@ the online board (the files were replayed from disk; surfd's copy of one was
 read and carries `foreign` and `momdemo`). No engine or surfd change. Roll
 back: copy each `csprogs.dat.prev` over its file and the `.pre628` copy over
 `default.cfg`.
+
+**The board path, after that deploy (Patches 626-628).** The paragraph above
+says an imported run was not opened through the online board. Done since,
+short of the mouse click: a rig on the deployed `csprogs.dat` (`848c654e`),
+its `lobby_dir` the Pi's LAN address as `cfg/test/b66rep.cfg` uses, took
+imported run r6238 of surf_voyager from surfd with `board_replay` (what a
+click on a board row hands on), opened it with `replay online`, and reported
+`ramp contact inferred`, step 12.00, 2,553 airborne pairs, 594 contact ticks
+-- the numbers `tools/rampinfer.py` gives for the file it downloaded. 28 of
+its 44 mark labels are ramp edges and start with `~`; the screenshot shows
+them, a top's dot and `ramp: no plane` on the bar. One run of one map; the
+click, the hover and the Imported tab's own list are still read, not run.
