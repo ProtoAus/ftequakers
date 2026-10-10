@@ -358,26 +358,32 @@ LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
 		//in the other game's gamedir, and nowhere on a machine without that folder.  Not beside
 		//the exe as the client does -- the one installed server lives in the OTHER install --
 		//but where its game is: com_gamepath, "" (so the cwd) until the filesystem is up.
-		//Beside the exe is the fallback.  Stack buffers only; a crash handler must not allocate.
-		char path[MAX_OSPATH+16], exe[MAX_OSPATH];
-		DWORD en = GetModuleFileNameA(NULL, exe, sizeof(exe)-16);
+		//Beside the exe is the fallback.  The buffers are static and the exe is not asked for
+		//until the first line is down (review): this runs on the faulting thread's stack,
+		//which a stack overflow has all but used, and GetModuleFileName may want a heap lock
+		//a heap fault is holding.  Two threads faulting at once write the same bytes here.
+		static char path[MAX_OSPATH+16], exe[MAX_OSPATH+8];	//exe: "exe " + the path + "\r\n"
+		DWORD en = 0;
 		HANDLE h;
-		if (en >= sizeof(exe)-16)
-			en = 0;
-		exe[en] = 0;
 		path[0] = 0;
 		snprintf(path, sizeof(path), "%.*scrashaddr.txt", MAX_OSPATH-1, com_gamepath);
 		h = CreateFileA(path, FILE_APPEND_DATA,
 			FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (h == INVALID_HANDLE_VALUE && en)
+		if (h == INVALID_HANDLE_VALUE)
 		{
-			DWORD pn = en;
-			while (pn && exe[pn-1] != '\\' && exe[pn-1] != '/')
-				pn--;
-			memcpy(path, exe, pn);
-			memcpy(path+pn, "crashaddr.txt", 14);
-			h = CreateFileA(path, FILE_APPEND_DATA,
-				FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+			DWORD pn;
+			en = GetModuleFileNameA(NULL, exe+4, MAX_OSPATH-16);
+			if (en >= MAX_OSPATH-16)
+				en = 0;
+			for (pn = en; pn && exe[4+pn-1] != '\\' && exe[4+pn-1] != '/'; pn--)
+				;
+			if (en)
+			{
+				memcpy(path, exe+4, pn);
+				memcpy(path+pn, "crashaddr.txt", 14);
+				h = CreateFileA(path, FILE_APPEND_DATA,
+					FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+			}
 		}
 		if (h != INVALID_HANDLE_VALUE)
 		{
@@ -389,11 +395,17 @@ LONG CALLBACK nettest_CrashAddrLogger(PEXCEPTION_POINTERS ei)
 			buf[0] = 0;
 			snprintf(buf, sizeof(buf), "=== crash code=0x%08lx ===\r\n", (unsigned long)code);
 			WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
-			//which binary: the file is shared with the client's records, and the frames below
-			//only resolve against this exe's own .db
-			WriteFile(h, "exe ", 4, &wrote, NULL);
-			WriteFile(h, exe, en, &wrote, NULL);
-			WriteFile(h, "\r\n", 2, &wrote, NULL);
+			//which binary, in one append: the file is shared with the client's records, and
+			//the frames below only resolve against this exe's own .db
+			if (!en)
+			{
+				en = GetModuleFileNameA(NULL, exe+4, MAX_OSPATH-16);
+				if (en >= MAX_OSPATH-16)
+					en = 0;
+			}
+			memcpy(exe, "exe ", 4);
+			memcpy(exe+4+en, "\r\n", 2);
+			WriteFile(h, exe, 4+en+2, &wrote, NULL);
 			nettest_logmod(h, "fault", ei->ExceptionRecord->ExceptionAddress);
 			nf = CaptureStackBackTrace(0, 40, frames, NULL);
 			for (fi = 0; fi < nf; fi++)

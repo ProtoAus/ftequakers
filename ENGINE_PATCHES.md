@@ -40716,8 +40716,17 @@ arms, before the respawn changed, showed the copy the review predicted: alive
 surf_kitsune through FTESurf `tools/conbridge.py`: connect, spawn, `status`, 68
 server log lines, both quit with exit 0. The server build holds the word
 `warning` on 147 lines, 127 of them make's peer-target notice, none in the two
-files changed. One independent review of the first commit (the fault and the
-status) found no defect in its lines and the orphan above.
+files changed. Two independent reviews, one per commit. The first (the fault and
+the status) found no defect in its lines and the orphan above. The second (the
+respawn and the record) found none either and two ways the logger could lose a
+record it used to keep, both taken in a third commit and neither driven by an
+arm: its path buffers are static, because the handler runs on the faulting
+thread's stack and a stack overflow leaves it almost none, and it asks for the
+exe's name only after the first line is written, because that call may want a
+heap lock a heap fault is holding. The fault arms were rerun on that commit.
+The hard-coded file also holds five records older than this work, three of them
+at fteqwsv64.exe+0x72947 or +0x72957 in other binaries: not resolved here, and
+possibly this same fault, met before and read by nobody.
 Limits: one machine (the desktop PC). Only the missing-map route into SV_Error
 was driven, not a QC error or a `Host_Error`. The console arm proves the 10 s
 and the exit, not that a key press ends it. A first subject build measured
