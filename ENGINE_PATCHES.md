@@ -41076,3 +41076,19 @@ one whole range with no `board` record, no cut ride under 0.10 s and no merge
 across a break: a stage window's break list and those paths were read, not run.
 Three rows of the surf_rookie recording still read under -2700 with no break in
 them and were not looked at. Human acceptance is lextest.md section 15.
+
+**DEPLOYED 2026-10-10 (Patches 611 and 613, together).** A build of FTESurf
+`f141ee4`, whose QC is `63eea9c`'s: `csprogs.dat` `7dca72dc`; `qwprogs.dat` and
+`menu.dat` identical to what was already installed.
+Windows, 10:28Z: `csprogs.dat` and `csprogs.lno` into `C:\FTESurf\ftesurf` and
+`C:\FTEQuake\ftesurf`, each of which held the Patch 608 csprogs (`69515b32`) and
+is kept beside it as `.prev`. No game was running.
+The Pi: `build.ps1 -Pi` from the clean worktree, 10:28Z to 10:29Z. Before it, in
+one read: the Pi held the Patch 608 csprogs and a `qwprogs.dat` identical to this
+build's; 12 lobby rows, 0 players. The only QC changed since the Patch 608 deploy
+is these two patches' five client files. Both files hash-verified on the Pi and
+swapped, the previous pair kept as `.prev`; all 12 lobbies restarted. Read back
+from the host: `csprogs.dat` `7dca72dc`, 12 lobby processes started 10:28:55Z to
+10:29:04Z, 12 directory rows. `tools/pi_lobby_smoke.py` against lobby 1: a client
+with no csprogs of its own was served `7dca72dc`, drew the board and logged no QC
+error. No config, engine or surfd change.
