@@ -40835,3 +40835,93 @@ Patch 606's, so FTESurf ENGINE.txt's `tag` has not moved; nor the Pi. For
 whoever starts that exe by hand: `C:\FTEQuake\start_dedicated_server.bat` passes
 no flag, so its server no longer restarts itself after a fatal error (it needs
 `-autoreset` for that), and its crash record is now `C:\FTEQuake\crashaddr.txt`.
+
+## Patch 611 — the live run line takes each sample from the frame the server's stats describe *(MOD ONLY, csprogs)*
+
+**Problem.** The player's own live run line (`cl_trail.qc`) built each sample from
+two clocks. The position, velocity and ground flag were the client's PREDICTION
+for the current command frame; the ramp-contact bit and the run clock were server
+STATS, which describe the last command the server had acknowledged. On a local
+server those are the same frame. Behind a ping the stats are older by the round
+trip, so every stat was drawn beside a body that much further along its path, and
+the line's "landed" and "left the ramp" marks with it. Measured on a real socket
+against the server's own recording of the run (a scripted ride on surf_kitsune,
+exit at 890 u/s): the ramp-exit mark 44 u from its recorded contact sample at
+`sv_minping 60`, 79 and 100 u at `sv_minping 120` (101 u at 100 tick); every
+sample of the 120 ms run a median 69 u from the recorded sample carrying its
+clock. With no added latency it was 3 u. BACKLOG "Ramp-leave marks: what Patch 608
+left open", item 1; ROADMAP 12.4.
+
+**Change.** `Trail_Keep` keeps the predicted state of the last 64 command frames
+(position, velocity, ground flag, jump key, yaw, wish direction, client time),
+whether or not a run is on the clock. `Trail_Pair` picks the kept frame the stats
+in hand describe: `servercommandframe + 2`, because the engine draws one net
+interval behind real time (`cl_pred.c` CL_GetPredictionRealtime), so the state
+after acknowledged command A is on screen while the client's counter reads A + 2.
+On a local dedicated server that is the current frame and nothing changes. A frame
+with no new server state takes no sample; when the next snapshot acknowledges two
+commands, the frame between is sampled as well, its clock between its neighbours'
+and its ramp bit set only if both have it, so the line keeps one sample a command
+and a ride's marks stay on samples the server said were in contact. The current
+frame is used, as before, on a listen server, with `cl_nopred`, and once the
+client is 63 frames ahead (where the engine itself stops predicting).
+Teleports: one the client predicted (`cl_triggers.qc` now records the command it
+fired on, `tg_teleseq`) leaves the kept frames valid, because the server makes the
+same move on the same command; one the server made alone, a load and a hold move
+`tr_kfrom`, before which no kept frame is used. `trail` prints a `pairing` row.
+No engine source, server QC, recorder, evidence, ranking, default, ship-set or
+Build change: `qwprogs.dat` and `menu.dat` are byte-identical. FTESurf `14dee5d`.
+
+**Verified.** Three progs at 0 warnings. A dedicated server and one client on
+loopback in a private overlay, `sv_minping` holding the client's packets back,
+the changed build against the build deployed before it:
+- New arm `runlines_livelag.cfg` (`runlines_smoke.py --dedicated --map
+  surf_kitsune --server-arg "+set sv_minping 120"`), graded by
+  `test_runlines_livelag.py` against the recording the arm's saves leave in the
+  rig: 4 of 4. Land and leave marks 2.5 and 3.3 u from the recorded samples
+  carrying their clocks, 116 samples for 116 commands; the control is refused
+  (67 and 79 u). On a listen server the grader exits 2, CANNOT MEASURE.
+- Every sample the changed build took, from a diagnostic build that prints
+  them: at 120 ms 113 samples a median 2.5 u (at most 9.3) from the recorded
+  sample with the same clock, the ramp bit the recorded sample's on all 113;
+  at 60 ms a median 2.5 u (at most 4.8).
+- The arm at `sv_minping 250`: 2.4 and 4.1 u. At cl_maxfps 300 and 1000: leave
+  mark 1.3 and 0.6 u. At 100 tick, on a private copy of the map under a `bhop_`
+  name (the name loads the 100 Hz mode): 0.0 and 0.0 u, the control 73 and
+  101 u.
+- Under the tick rate, with a wider allowance: at 60 fps 20 and 28 u, at 30 fps
+  30 and 24 u. That is the frame rate, not the latency: the build before, with
+  no added latency, has one sample in ten a frame off at 60 fps (17 u at the
+  90th centile) and a median 12 u at 30 fps.
+- A run with a `cmd setpos`, a fall into a map teleporter the client predicts,
+  and six hops, at 120 ms: the predicted teleporter is classed as predicted and
+  the line runs to within a tick of it (3.3 u); the setpos is classed as the
+  server's and draws one sample of the old path; seventeen marks a median 0.6 u
+  (at most 1.6) from their recorded samples, 15.6 u (at most 28) on the control.
+- The existing dedicated lifecycle arm `runlines_reset.cfg` (grow, reset, rewind
+  cursor, load, fade, stage run): `test_runlines_reset.py` 5 of 5 with no added
+  latency, where no sample is taken from an older frame, and again at
+  `sv_minping 120`.
+- Recorded lines are not touched; `p449mark.py` on its eight recorded fixtures
+  gives the same result as before the change (seven pass, one fails containment
+  as it did: BACKLOG).
+One review round, on the first cut. It found that cut dropping the last round
+trip of path before a predicted teleporter, losing a one-tick ground contact in a
+frame no snapshot described, taking no sample at all under 12 fps with ping, and
+breaking the line after a 0.25 s stall; and the grader mixing two runs' reports,
+passing its control check on any mark and reporting "cannot measure" with a
+defect's exit status. All of that is what the Change above and the grader now do
+instead; the rework was measured as listed and not reviewed again.
+
+**Limits.** Under a tick each at 67 fps and above: the engine blends a sample up
+to one rendered frame past its clock (3 u at 100 fps and 890 u/s, under 1 u at
+1000 fps); a ride whose first or last contact tick fell between two snapshots is
+marked a tick late or early (10 u). Under the tick rate the line is only as right
+as it is with no latency at that frame rate; pairing by time instead of by frame
+count read about 2 u at 30 fps offline and is not built. On a listen server the
+stats lead the drawn body by under a tick (12 to 19 u at 890 u/s) and nothing
+corrects it. A save's picture and the rewind's resume point take the line's
+newest sample, which for a player with ping is now their ping short of where they
+are. The latency was `sv_minping`, not a real internet path; one ramp of one map;
+the predicted-teleporter case is one run; no ramp-to-ground exit. Human
+acceptance is lextest.md section 14.
