@@ -40836,6 +40836,98 @@ whoever starts that exe by hand: `C:\FTEQuake\start_dedicated_server.bat` passes
 no flag, so its server no longer restarts itself after a fatal error (it needs
 `-autoreset` for that), and its crash record is now `C:\FTEQuake\crashaddr.txt`.
 
+## Patch 610 — the strafe trainer and the run graphs redrawn, an off switch for the HUD graph, a scroll thumb that can be held *(MOD ONLY, csprogs + menu.dat)*
+
+**Problem.** The owner asked for the strafe trainer and the run graphs to be
+improved and given one look, for a way to remove the graph that appears bottom
+right when a leaderboard line is ticked, whether Dear ImGui draws graphs better
+for this, and, mid-task, for a scroll bar that does not shrink away on a long
+list. Measured first, on the published build: `hud_linegraph 0` was the only
+switch and nothing on screen named it; the graph was 760 x 370 px at 1080p and
+sat on the key and mouse blocks; its curves were `drawline` calls, and that
+builtin ignores its width (`pr_menu.c:1089`) and issues one aliased hardware
+line and one draw call a call, two per filled bin per run per plot, 2.96 ms of
+QC a frame under the profiler with three runs; its axes stepped by a quarter of
+whatever the range was; its legend drew leader lines from where a shorter run
+ended, which read as data; and the `^2` in one caption was taken as a colour
+escape. The trainer was a flat box with unnamed columns and a turn-rate trace
+drawn at +-100% of ideal where real strafes sit inside +-30%. The map picker's
+thumb, in proportion, was under 6 px of a 452 px list.
+
+**Change.** Mod-side only: csprogs and menu.dat. `cl_plot.qc` (new) is what
+both instruments draw with: the key menus' panel and header band (Patch 606),
+round axis steps, and a mitred anti-aliased strip over `cl_lines.qc`'s
+`Line_Emit`. The trainer keeps its measurement to the line (nothing above
+`Trn_Grade` changed) and gets that panel: the jump's grade in the header, named
+columns, each strafe's own speed gain, lanes and a trace at +-60% with grade
+A's +-20% shaded. The graphs keep Patch 545's sampling, bins, breaks, gravity
+labels and console lines. The envelope is now binned over a VIEW, into a second
+buffer that swaps in when complete, so the comparison panel zooms about the
+cursor (wheel), pans (drag) and returns (right button, `fit`); `linegraph zoom`
+does the same from a cfg. Curves are drawn from a cache: each run's bins cut,
+once, to the fewest vertices within a physical pixel of what the bins hold. The panel wears the
+board's chrome and type: runs as chips, a card at the cursor with every run's
+speed, its gap to the fastest there and its energy, an assumed gravity said on
+the plot and starred in the card. The HUD graph is a hud_edit element (`graph`:
+`hud_linegraph_x/_y/_plots/_size`), 300 x 160 px under the map info, speed by
+default; it yields to the finish card and a held TAB board, marks an open
+replay's clock on its curve, and switches off from the board (`hud graph`,
+beside the line boxes that raise it), from the panel, or from the editor.
+`sui_scrollbar` gives a thumb a floor of four gutter widths (never over half
+the list) and shortens its travel to match; `sui_style_thumb` adds a grip.
+`_sui_round_draw` is written out cell by cell instead of looping over nine.
+For tests: `hud_edit ui hover|down|up` acts on whichever panel holds the
+cursor, the menu gains `ui_hover @id` and `ui_mouse down|up` (a drag), and
+`linegraph status` prints the view, the value ranges, the vertex counts and
+the playhead. No engine source, server QC, recorder, evidence, ranking, config
+default or Build change.
+
+On the ImGui question: Dear ImGui's own `PlotLines` is one unlabelled series;
+the library that draws such plots well is ImPlot, which is not vendored, and
+this host could not feed it (one native owner per VM per frame; 256 labelled
+widgets, no sample arrays). What it would have brought here, round axes, a
+legend that toggles, a hover readout, zoom and pan, smooth lines, is in the QC
+panel now, where every lobby player gets it. FTESurf ROADMAP 13 stage D holds
+what a native graph would still need.
+
+**Review.** One independent review of the first cut, six findings, all fixed:
+curves at the edge of a zoomed view (a row outside it was joined in across a
+break or a gap), a view that could be left outside the run, the cut's tolerance
+(the cone was three times as wide as the notes said: now half a pixel from each
+point it is fed), a drag that outlived another panel's cursor claim,
+`linegraph cursor`'s arguments, and an arm that counted vertices and read no
+ink (it now reads the trainer's panel, the cursor's line and the replay's
+playhead as pixels).
+
+**Verified.** FTESurf `eafb117`, on `31a70a6` (Patch 615 and its deployment
+record). Its progs are byte-identical to the build gated on `6fc1695`; nothing
+under `src/` differs between the two. Three progs at 0 warnings; qwprogs.dat is
+the installed Patch 615 file (`199ffdd83dec9651`). `tools/p610ui.py`: 0
+failures at 1920x1080 on GL and at 1280x720, 800x600 and 640x480 (where the
+map list has no height and its thumb is printed NOT GRADED), and 34 failures on
+main's build, as it should. `tools/test_ui_theme.py` against main: 0 failed
+with 15 declared rectangles, on the third run: one was lost to another
+session's window taking the foreground, and one to the real mouse cursor
+resting over the rig's menu, which moved a hover and nothing else.
+`p545graph.py` PASS; the `p603scores.py` board arm 0 failures. Curves: 104
+vertices on the HUD's speed plot, 197 and 542 on the panel's two, from about
+2300 points.
+Before the review fixes and the rebase over Patches 611 to 615, on the same UI
+code otherwise: D3D11 and Vulkan 0 failures, `test_ui_modern.py` 0 failed, the
+p603 six-arm suites 0 failures with the reader at 69/69, `p603life` the same 4
+failures the Patch 606 and 607 builds show and no other, p498 16/16. Profiled
+QC a frame on the desktop PC: HUD graph 0.24 ms (0.38 with both plots) against
+2.96, the panel 1.28 against 3.11, the trainer 0.36 against 0.16 (0.26 against
+0.20 in an earlier run).
+
+**Limits.** The curve's one-pixel bound is by construction; no arm measures a
+deviation. No marker for the player's own live run on the HUD graph (a replay
+has one). The trainer panel costs about half again the QC of the box it
+replaced; it is off by default. The map picker has no list at 640x480. A click
+in a scroll gutter away from the thumb still does nothing. Nothing ran on the
+N100 laptop, and no real mouse drove the wheel or a drag. FTESurf BACKLOG
+"Patch 610, left open" has the rest.
+
 ## Patch 611 — the live run line takes each sample from the frame the server's stats describe *(MOD ONLY, csprogs)*
 
 **Problem.** The player's own live run line (`cl_trail.qc`) built each sample from
