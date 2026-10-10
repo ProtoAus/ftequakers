@@ -40925,3 +40925,69 @@ newest sample, which for a player with ping is now their ping short of where the
 are. The latency was `sv_minping`, not a real internet path; one ramp of one map;
 the predicted-teleporter case is one run; no ramp-to-ground exit. Human
 acceptance is lextest.md section 14.
+
+## Patch 612 — Steam accounts, stage 1: surfd signs a player in through Steam and stores the account *(MOD ONLY, surfd; schema 12)*
+
+**Problem.** A player is an engine guid: one per install, handed to any server
+that sends the fleet's `sv_guidkey`, and not a person. The owner wants records
+kept under a Steam account, which also gives the name and the picture, and a ban
+that is a ban on that account (FTESurf ROADMAP 14). surfd did not know what a
+Steam account was, and it had no ban.
+
+**Change.** surfd only: no engine source, QC, recorder, verifier, ranking or
+Build change. `surfd/accounts.py` and `surfd/steam.py`; schema 11 -> 12 is four
+additive tables (`accounts`, `links`, `linkcodes`, `linknonces`) that nothing
+ranking, verifying or publishing reads. With `SURFD_BOARD_URL` set,
+`/board/link` signs a browser in through Steam's OpenID and shows a ten-minute,
+single-use code; `POST /api/link` (shared key and a trusted source) binds the
+install that sends the code to that account, and `POST /api/account` says who an
+install is and whether the account is banned. The code goes from the browser to
+the game, so a link sent to someone cannot bind their account to the sender's
+install. A reply is put to Steam only if it holds exactly Steam's ten fields, its
+signed list is exactly Steam's seven, it is fresh and unseen, and it came back to
+the browser that left; a valid reply landing in another browser is recorded as
+seen. Steam is asked at most 3 times a minute per source, 30 for everyone and 2
+at once. An install that is already linked moves only on a second, confirmed
+request, and a ban never pins an install to its account. `SURFD_STEAM_KEY` adds
+the persona and avatar hash; a persona handed to a lobby goes through an
+allowlist and a 31-byte cap. `run.sh` creates gunicorn's log owner-only, because
+its access lines now carry sign-in return addresses. No lobby calls the two
+`/api` routes yet (ROADMAP 14.2), and a link carries no proof of the install's
+key until it does.
+
+**Review.** Three lenses on the first cut (the verification logic; what an
+attacker gains; stored data, migration and whether the tests measure). None
+found a way to get a code for an account one does not hold. What changed
+because of them: extra `openid.*` names were forwarded to Steam, whose parser
+might fold them onto real ones (not demonstrated; now an exact set); a reply
+that landed without the cookie could be finished by the cookie's holder if the
+victim handed the address back (now burned); a rule that refused to move a
+banned account's install let one player lock another out (removed); three
+addresses could spend everyone's sign-in budget (per-source cap and cool-off;
+thirty still can); `http.client` errors escaped as a 500; `^...$` patterns
+accepted a trailing newline, which made a second replay key; the persona
+sanitiser was a blocklist. The fix round's own suite then caught a lockout the
+fixes introduced (a table cap checked before its prune).
+A second round on the fixes, integrity only: the burn is best effort (a reply
+refused before it, by the victim's page limit, nginx or a lock, stays usable
+for the nonce window, now 120 s; FTESurf BACKLOG has it first), made-up strays
+could fill the replay table and close sign-in for an hour (they now stop at
+half of it, and a row lives five minutes), and one install could spend every
+lobby's `/api/link` allowance (its own limit now comes first). The feature is
+store-only, so the loop stops here; the first item is a gate on stage 3.
+
+**Verified.** `surfd/test_accounts.py`, with Steam faked and counting what it is
+asked and `steam.http` driven against a loopback server: 210 checks, 0
+failed, on Windows (Python 3.10, Flask 3.1) and in the Pi stage (3.11, Flask
+2.2). 89 single-edit mutants of the new code: 86 fail the suite and 3 survive
+alone, each one half of a doubled check whose pair dies. The other 60 surfd
+suites match the parent commit, test_admin's two Windows-only failures
+included. Against real Steam: a made-up assertion returns exactly
+`ns:http://specs.openid.net/auth/2.0\nis_valid:false\n` in 0.3 s from the
+desktop and from the Pi and reads as a refusal, a 302 is not followed, a bad key
+is a 403, and the real key returns a persona and a 40-hex avatar hash. Both
+pages were looked at as rendered. **Not verified:** a real sign-in's positive
+reply (FTESurf lextest.md), any game-side caller, and the race `BEGIN IMMEDIATE`
+is there for. Open items are in FTESurf BACKLOG, "Steam sign-in: what the review
+left".
+Published as FTESurf `76cfd63`. That commit deploys nothing.
