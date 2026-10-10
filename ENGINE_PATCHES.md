@@ -41200,6 +41200,140 @@ from the host: `csprogs.dat` `7dca72dc`, 12 lobby processes started 10:28:55Z to
 with no csprogs of its own was served `7dca72dc`, drew the board and logged no QC
 error. No config, engine or surfd change.
 
+## Patch 614 — the run graphs' plots on ImPlot: a counted sample-series interface, ImPlot 1.0 vendored, native owner 206
+
+**Problem.** Patch 610 gave the run-graph panel a view, chips and a readout in
+QC, and its record said what a native graph would still need: the host
+(`cl_plugin_ui.inc`) had no way to hand a provider sample arrays, only 256
+labelled widgets; ImPlot, the library that draws multi-series plots on Dear
+ImGui, was not vendored; and one owner a VM draws once a frame. The owner then
+asked for it: plots a player can manipulate, in a game that is about analysing
+movement. The QC plots are a 384-bin envelope a view, redrawn through the QC
+polygon path: every zoom rebuilds the bins over frames, the value axes are QC
+arithmetic, and there is no selecting a stretch or giving one plot more room.
+
+**Change.** Engine, plugin and mod.
+
+*Engine.* `NativeUIPlot/1` (`plugins/plugin.h`) is a third additive table from
+the NativeUI provider: `SetPlot` takes a revision of up to 16 series, each a
+run of rows (x, two values, a break flag; 65,536 rows a series, 589,824 a
+revision), and `SetView` takes what moves between revisions (hidden and
+emphasis masks, a marker, the caller's caption size, a one-shot x range).
+Numbers only; no string crosses it. Six CSQC/MQC builtins stage it
+(`cl_plugin_ui_plot.inc`): `ui_native_plot_status/begin/series/rows/commit/view`.
+`rows` is the first native UI builtin handed QC POINTERS: each is resolved with
+the VM's own bounds check (`PR_PointerToNative_MoInvalidate`, `count` floats at
+offset 0), read through memcpy (a QC pointer need not be aligned), copied into
+host arrays that live and die with the owner, and the whole copy is validated
+(`PlugUI_PlotValid` in `plugins/ui_model.h`: counts, contiguous ranges, x never
+decreasing, and every number finite and within `PLUGUI_PLOT_MAX_VALUE`, 1e9
+either way, x judged less its offset) before the provider is called; the
+provider validates again. A bad call poisons its transaction; a VM may begin
+two a frame. `cl_plugin_mesh.inc`, for every owner: a triangle wholly inside
+its clip skips the four clipping passes (which return it unchanged), and a
+backend draw carries up to 4,096 vertices where it carried 512.
+
+*Plugin.* ImPlot 1.0 (`epezent/implot` v1.0, `524f9fcd`) is vendored beside
+Dear ImGui: `implot.h`, `implot.cpp`, `implot_internal.h` and its MIT licence,
+byte-identical to that commit's blobs and pinned in `vendor/SHA256.json`. Its
+item templates (`implot_items.cpp`, 6.9 MB of objects) are not vendored: owner
+206 draws its own curves, and `ImPlot::BustItemCache`, the one symbol the core
+needs from that file, is an empty function. Owner 206 (`plots.inc`) is two
+plots on one linked time axis inside the inherited clip: wheel zoom about the
+cursor, drag to pan, right-drag to select a stretch, the right button or a
+double click for everything, a bar between the plots that drags, value axes
+that fit the rows in view. Curves are cut by a swing filter to the fewest
+vertices within 0.25 px of every row they replace and kept per plot until the
+revision, the series shown, an axis or the plot's rectangle changes. It reports
+the visible range, the time under the cursor, the points drawn and the plots
+cut afresh as `NativeUIInput/1` actions 1 to 5, each bounded to the 1e6 the
+host accepts from an action; a range request is cut to the run before ImPlot
+sees it; a vertex is bounded before it is a float; a marker outside the view is
+not drawn. The plugin is built with asserts live, so for this owner ImGui's
+recoverable-error asserts are off and an error callback fails the frame
+instead. Axis labels are a 10,596-byte ASCII subset of Roboto Regular (SIL OFL
+1.1, `fonts/`), baked at eight sizes. The plugin grows from 1.36 to 1.65 MB.
+
+*Mod.* `cl_linegraph.qc`: where `NUI_PlotAvailable()` and `ui_native_graphs`
+(default 1) say so, the panel's two plots are owner 206's. QC still draws the
+panel, the chips, the footer and the readout card, and still owns every number:
+it sums an energy array a run (`lgn_e`, 8192 rows a frame), publishes revisions
+by pointer into the line arenas, sends the view each frame, forwards the mouse
+as one event a frame (the latest position or one wheel notch, taking turns:
+ImGui takes a wheel after a move a frame later), and reads the range and the
+cursor's time back; the card reads `LineGraph_At` at that time. Anything
+missing or refused and the QC plots draw in the same frame. A draw refused once
+is another owner's frame (the board's native table has drawn when its chip
+opens the panel) and costs that frame only; refused, or the owner lost, on
+three frames running, the plugin is given up for that open. The HUD graph stays
+QC. `linegraph status` prints the native state; `linegraph probe` sends twenty
+hostile transactions through the real builtins, one a frame; `refuse` and
+`lose N` let a cfg force the two ways out.
+
+**Review.** Two independent reviews of the first cut, one on memory safety in
+the host and plugin, one on the QC state machine and the harness. No
+out-of-bounds read, use after free or leak was found. Found and fixed: a draw
+refused in the frame the board's table drew was latched as the plugin failing;
+a zoom request outside the run came back as a report past what the host
+accepts, the owner was dropped at the poll and the panel opened a new one every
+frame; a button held when another panel took the mouse stayed held; a position
+ahead of every wheel notch outran ImGui's one-a-frame queue; conversions of
+unbounded values to int and float; ImGui asserts live in the plugin build. In
+the harness: the native arm passed when the plugin did not draw, the fallback
+arms read no pixels, one check compared a variable with its own copy, and five
+grammar cases were refused by a neighbouring rule.
+
+**Verified.** FTESurf `56d8582`; engine `a67cebe1e`, tag `patch-614`. A full
+rebuild from the tagged commit (client, server, five plugins), stamped
+`git-7165-patch-614-0-ga67cebe1e`; the compiler's warnings are the same set as
+the Patch 606 build's. Client `7c97e69b27cad2b2`, server `1c338f6407b15489`,
+ui_imgui `69929fe57fa06826` (1.65 MB), hl2 `4406ae6a98515b7e`, box3d
+`1c84820d8875a915`, cod `0075ba6836efa39a`, ode `69a1707306958895`.
+*Unit* (`tools/test_p614plot_unit.py`): the host bridge over a small VM, 352
+checks; the shared grammar, 63 cases; the provider under a fake host at both
+index widths, 1894 checks each, with the swing filter at 0.250 px over 301 runs
+and nine full series of noise drawn in 12,000 points; 0 failed.
+`tools/p614mutants.py`, one edit to a copy of the tree a mutant: 29 of 30 host
+mutants caught, 42 of 46 grammar, 28 of 30 provider. The seven survivors are
+named equivalent there with their reasons, and a mutant that does not build is
+NO RUN, not a catch: two of the first sweep's catches had been an unused
+variable and an unused function under -Werror. The older native-UI suites on
+this tree: p590 174, p600 702, p601 184, p603dense 2872, p603scores 3750
+checks, 0 failed.
+*Live* (`tools/p614plots.py`, the stamped binaries, three made-up 50 s runs).
+The native arm, 0 failures on GL at 1920x1080, 1280x720, 800x600 and 640x480
+and on Vulkan: three series from 2550 points; a view that is only read is never
+cut afresh (328 frames, none of them QC's); hover, zoom, wheel, pan, right
+button, box, hide, emphasis, a replay's marker, twenty hostile transactions and
+a renderer restart graded on the panel's own lines and on pixels. Each defect
+the review found has a step, and the build from before the fixes fails each:
+one out-of-range zoom opened the plugin's owner 133 times in 0.7 s (now none);
+the wheel with the mouse moving ended in refusal 6 (now 160 events in 478
+frames, nothing refused); a button held when another panel took the mouse left
+the plots panning 2.6 s under a bare cursor (now still); opening from the
+board's chip was refusal 5 (now one draw refused, and the plugin drawing).
+Off, no plugin, a Patch 606 plugin, a Patch 606 engine: 0 failures, the QC
+plots read as pixels. The native scoreboard on the new mesh path
+(`p603scores.py` native1, native2, legacy): 0 failures.
+*Cost*, uncapped at 1080p on the desktop PC, the two routes alternating in one
+run: 2.06 ms a frame native against 1.39 to 1.51 for the QC plots; 2.19 against
+1.61 with the cursor on the plots; 0.88 against 0.83 with no curve shown.
+
+**Limits.** The plugin is not in the release ship set: only the two development
+installs draw native plots, and shipping it is a release decision (the DLL, the
+MIT notices for Dear ImGui and ImPlot, the OFL notice for the Roboto subset).
+D3D11 is graded on the open panel's pixels alone (the same counts as GL): the
+real mouse reached that rig in both of its runs, 77 and 106 positions, and the
+arm said INTERFERED before any gesture. The plugin is built with ImGui's
+asserts live; owner 206 routes the recoverable ones to a callback, the other
+owners do not, and a plain `IM_ASSERT` still ends the process. The native plots
+cost about 0.6 ms a frame more than the QC ones on this machine and were not
+measured on the N100 laptop. No real mouse drove them. A number past 1e9 (an
+energy at a gravity near zero) is refused whole and the QC plots draw. One
+owner a VM: the native scoreboard and the native plots are never up together.
+The value axes always fit what is in view; the time axis steps in ImPlot's
+tens. FTESurf BACKLOG "Patch 614, left open" has the rest.
+
 ## Patch 615 — Steam accounts, stage 2: `link <code>` in the game, and every connect proves its install's key *(MOD ONLY, qwprogs + csprogs + surfd; schema 13)*
 
 **Problem.** Patch 612 gave a player a code on the board site and nothing took
