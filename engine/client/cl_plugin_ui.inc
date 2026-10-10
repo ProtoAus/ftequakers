@@ -17,12 +17,20 @@ typedef struct
 	unsigned int lastframe, inputframe, inputs, polls;
 	unsigned int openframe, opens;
 	qboolean drawok;
+	//NativeUIPlot/1 staging (cl_plugin_ui_plot.inc), freed with the owner.
+	pluguiplot_t plot;
+	float *plotx, *plota, *plotb;
+	qbyte *plotbrk;
+	unsigned int plotcap, plotseries, plotrevision, plotframe, plotbegins;
+	qboolean plotactive, plotbad, plotrows;
 } pluguivm_t;
 static pluguivm_t plugui_vms[2];
 static plugin_t *plugui_service;
 static pluguiinputservice_t plugui_input;
 static pluguimodelservice_t plugui_model;
 static pluguimodelservice2_t plugui_model2;
+static pluguiplotservice_t plugui_plot;
+static void Plug_NativeUI_PlotFree(pluguivm_t *v);
 static unsigned int plugui_serial;
 static qboolean plugui_busy;
 static const pluguiframe_t *plugui_dispatch;
@@ -51,6 +59,7 @@ static void Plug_NativeUI_CloseOwner(pluguivm_t *v, unsigned int reason)
 	memset(&v->model, 0, sizeof(v->model));
 	memset(&v->staging, 0, sizeof(v->staging));
 	v->staged = 0; v->stageactive = v->stagebad = false;
+	Plug_NativeUI_PlotFree(v);
 	if (!owner.generation || !plugui_service)
 		return;
 	currentplug = plugui_service;
@@ -80,6 +89,7 @@ static void Plug_NativeUI_PluginClose(plugin_t *p)
 	memset(&plugui_input, 0, sizeof(plugui_input));
 	memset(&plugui_model, 0, sizeof(plugui_model));
 	memset(&plugui_model2, 0, sizeof(plugui_model2));
+	memset(&plugui_plot, 0, sizeof(plugui_plot));
 	plugui_service = NULL;
 }
 void Plug_NativeUI_RendererShutdown(void)
@@ -274,3 +284,4 @@ void QCBUILTIN PF_ui_native_close(pubprogfuncs_t *prinst, struct globalvars_s *p
 
 #include "cl_plugin_ui_input.inc"
 #include "cl_plugin_ui_model.inc"
+#include "cl_plugin_ui_plot.inc"

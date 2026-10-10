@@ -577,6 +577,50 @@ typedef struct {
 	F(qboolean, PollModel, (const pluguiowner_t *owner, pluguimodelaction_t *action));
 } pluguimodelservice2_t;
 #define pluguimodelservice2_name "NativeUIModel/2"
+
+//Additive counted sample series for a plot owner (Patch 614). Numbers only: a caller
+//draws its own names and readings. The host bounds-checks QC's arrays, copies and
+//validates them: x/a/b/brk are HOST memory, valid only during SetPlot, and a provider
+//copies what it keeps. Series i owns rows first..first+count-1; x never decreases.
+//Finite is not enough for a number that will be plotted: at 1e30 a flat view cannot be
+//padded and a pixel cannot be placed, so every one is within PLUGUI_PLOT_MAX_VALUE.
+#define PLUGUI_PLOT_VERSION 1u
+#define PLUGUI_PLOT_CAP_SERIES 1u
+#define PLUGUI_PLOT_MAX_SERIES 16u
+#define PLUGUI_PLOT_MAX_POINTS 65536u	//one series
+#define PLUGUI_PLOT_MAX_TOTAL 589824u	//a snapshot: nine full series
+#define PLUGUI_PLOT_MAX_VALUE 1e9f	//every x, value, gap, marker and range end, either sign
+#define PLUGUI_PLOT_HAS_B 1u		//the series carries a second value
+#define PLUGUI_PLOT_MARKED 2u		//the view's marker rides this series
+#define PLUGUI_PLOT_FLAGS 3u
+typedef struct {
+	unsigned int flags, first, count;
+	float gap;				//rows further apart in x than this are not joined
+	float rgb[3];
+} pluguiplotseries_t;
+typedef struct {
+	unsigned int structsize, revision, count, points;
+	pluguiplotseries_t series[PLUGUI_PLOT_MAX_SERIES];
+	const float *x, *a, *b;			//`points` each
+	const unsigned char *brk;		//1: the row is not joined to the one before
+} pluguiplot_t;
+//What moves without a new revision. Bit i of a mask is series i of the live plot.
+typedef struct {
+	unsigned int structsize;
+	unsigned int hidden, emphasis;
+	unsigned int marked;			//1: a marker stands at `mark`
+	float mark;
+	float textpx;				//the caller's caption size, physical pixels
+	unsigned int rangeserial;		//a change asks for x0..x1 in view; x1 <= x0 is all of it
+	float x0, x1;
+} pluguiplotview_t;
+typedef struct {
+	unsigned int structsize, version, capabilities;
+	//Atomic copy, as SetModel. False from either releases the owner.
+	F(qboolean, SetPlot, (const pluguiowner_t *owner, const pluguiplot_t *plot));
+	F(qboolean, SetView, (const pluguiowner_t *owner, const pluguiplotview_t *view));
+} pluguiplotservice_t;
+#define pluguiplotservice_name "NativeUIPlot/1"
 #define PLUGMESH_MAX_VERTICES 16384
 #define PLUGMESH_MAX_INDICES 65535
 #define PLUGMESH_MAX_COMMANDS 128

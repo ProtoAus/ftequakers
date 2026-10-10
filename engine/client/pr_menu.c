@@ -2892,6 +2892,12 @@ static struct {
 	{"ui_native_model_widget",	PF_ui_native_model_widget,	0},
 	{"ui_native_model_commit",	PF_ui_native_model_commit,	0},
 	{"ui_native_model_poll",	PF_ui_native_model_poll,		0},
+	{"ui_native_plot_status",	PF_ui_native_plot_status,	0},
+	{"ui_native_plot_begin",	PF_ui_native_plot_begin,	0},
+	{"ui_native_plot_series",	PF_ui_native_plot_series,	0},
+	{"ui_native_plot_rows",	PF_ui_native_plot_rows,		0},
+	{"ui_native_plot_commit",	PF_ui_native_plot_commit,	0},
+	{"ui_native_plot_view",	PF_ui_native_plot_view,		0},
 	{"drawgetimagesize",		PF_CL_drawgetimagesize,		460},
 #ifdef HAVE_MEDIA_DECODER
 	{"cin_open",				PF_cs_media_create,			461},

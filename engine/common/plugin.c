@@ -447,6 +447,8 @@ static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfacept
 		return Plug_NativeUI_ModelRegister(interfaceptr, structsize);
 	if (!strcmp(name, pluguimodelservice2_name))
 		return Plug_NativeUI_ModelRegister2(interfaceptr, structsize);
+	if (!strcmp(name, pluguiplotservice_name))
+		return Plug_NativeUI_PlotRegister(interfaceptr, structsize);
 #endif
 #if defined(PLUGINS) && !defined(SERVERONLY)
 #ifdef HAVE_MEDIA_DECODER

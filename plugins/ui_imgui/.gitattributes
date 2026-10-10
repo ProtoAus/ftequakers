@@ -1,2 +1,3 @@
 # Preserve upstream bytes and SHA256 pins even in core.autocrlf Windows clones.
 vendor/* -text
+fonts/* -text

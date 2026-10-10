@@ -4,12 +4,19 @@ Pinned upstream: **Dear ImGui 1.91.9b**, Git tag `v1.91.9b`, commit
 `f5befd2d29e66809cd1110a152e375a7f1981f06`.
 `vendor/` contains unmodified upstream core/headers and its MIT `LICENSE.txt`;
 `vendor/SHA256.json` pins every vendored file. No runtime code/font downloads.
+Since Patch 614 it also holds **ImPlot 1.0** (`epezent/implot` tag `v1.0`, commit
+`524f9fcd48d76c13fdf94c5ffbba8787a1ff7e39`): `implot.h`, `implot.cpp`,
+`implot_internal.h` and its MIT `LICENSE-implot.txt`, byte-identical to that
+commit's blobs and pinned the same way. See "Run graphs" below.
 
-This is a **diagnostic gallery / explicit transport prerequisite**, not a
-migrated scoreboard, graph, editor or main menu. Passive owners 101 (MQC) and
+This began as a **diagnostic gallery / explicit transport prerequisite**. Two
+FTESurf panels are now drawn through it, each with a QC panel behind it that
+draws when anything here is missing or refuses: owner 205, the scoreboard's
+ranked table (Patch 605, opt-in), and owner 206, the run graphs (Patch 614).
+The editor and the menus are not. Passive owners 101 (MQC) and
 202 (CSQC) use the unchanged `NativeUI/1` host; optional interactive owners
 103/204 require additive `NativeUIInput/1`; optional `NativeUIModel/1` supplies
-counted diagnostic snapshots. No production panel has migrated. No Sbar/Menu/Tick drawing hook. Loaded but
+counted diagnostic snapshots. No Sbar/Menu/Tick drawing hook. Loaded but
 closed runs no ImGui frames or atlas uploads. `ui_imgui_status` is an explicit,
 quiet-by-default diagnostic command. Implicit ini/log writes are disabled.
 
@@ -125,6 +132,107 @@ Since Patch 606 the owner wears FTESurf's `Dusk` palette (`ScoresTheme` in
 numbers as `SUI_THEME_*` in FTESurf `src/shared/sh_ui.qc`. No padding, spacing
 or border size is set there, because those gates click at fixed offsets inside
 the table. The font is still ProggyClean.
+
+## Run graphs: counted sample series and owner 206 (Patch 614)
+
+`NativeUIPlot/1` is a third additive table from the same provider (`plugin.h`):
+`SetPlot` takes a revision of up to 16 series, each a run of rows `x, a, b` and a
+break flag (65,536 rows a series, 589,824 a revision); `SetView` takes what moves
+between revisions (two 16-bit series masks, hidden and emphasis; a marker's x; the
+caller's caption size in physical pixels; a serial that asks for an x range once).
+Numbers only: no string crosses this interface. An older host rejects the table
+and owner 206 then refuses to open; an older provider leaves the builtins saying
+no. Either way QC draws its own plots.
+
+QC stages through six named CSQC/MQC builtins inside its draw callback:
+`ui_native_plot_status()`, `_begin(handle, revision, series)`,
+`_series(handle, index, [flags, gap, 0], rgb)`, `_rows(handle, index, x*, a*, b*,
+brk*, count, xoffset)`, `_commit(handle)` and `_view(handle, [x, shown, px],
+[hidden, emphasis, 0], [serial, x0, x1])`. `_rows` is the first native UI builtin
+handed QC POINTERS. The host resolves each with the VM's own bounds check
+(`PR_PointerToNative_MoInvalidate`, `count` floats at offset 0), reads through
+`memcpy` (a QC pointer need not be aligned), copies into its own arrays and runs
+`PlugUI_PlotValid` on the copy before the provider is called; the provider runs
+it again. Every number must be finite and within `PLUGUI_PLOT_MAX_VALUE` (1e9
+either way; x is judged less its offset, so a late clock with a short run
+passes), and x must not decrease. Finite alone was the first cut: at 1e30 a
+flat view cannot be padded and a hover failed the frame. A bad call poisons its
+transaction, exactly as the model's does; a VM may begin two a frame.
+
+Owner 206 (CSQC) is FTESurf's run-graph panel: two ImPlot plots on one linked x
+axis (a = speed above, b = energy below) inside the inherited clip, drawn in
+FTESurf's `Dusk` palette. FTESurf keeps the panel, the legend chips, the cursor's
+readout and every number in them; this owner draws curves, axes and the view,
+and reports back through `NativeUIInput/1` actions after each Draw: 1 and 2 the
+visible x range, 3 the x under the cursor (absent off the plots), 4 the points it
+drew, 5 the plots cut afresh. The player's wheel zooms about the cursor, a drag pans, a right-drag
+selects a range, the right button alone or a double click shows everything, and
+the bar between the plots drags. A clip under 160x120 returns false.
+
+- What comes back is bounded to what the host takes. It closes an owner over an
+  action outside 1e6 either way, so every report is clamped to that; and a
+  range request is cut to the run before ImPlot sees it, because ImPlot's own
+  limits took two frames to bring one from past the end back inside (the
+  fixture's mutant fails on both) and what was shown meanwhile was reported.
+  A vertex is bounded before it
+  is a float (the host refuses a mesh past 1e7 pixels, and the row beside a
+  zoomed view can map a billion seconds away), and a marker outside the view is
+  not drawn.
+- The plugin is built with asserts live. For this owner ImGui's recoverable-error
+  assert, log and tooltip are off and `PlotsError` fails the frame instead, so
+  a usage error costs the native plots and not the process. Every other owner
+  still asserts.
+- ImPlot zooms one step for a frame's wheel whatever its size (`implot.cpp:2026`),
+  and ImGui takes a wheel queued after a move a frame later. A caller sends one
+  event a frame, a notch at a time.
+- Curves are this owner's own strips on the plot's draw list, not ImPlot items:
+  ImPlot's line renderer wants `AntiAliasedLinesUseTex`, which this backend's
+  atlas filtering cannot promise, and its item templates (`implot_items.cpp`,
+  6.9 MB of objects) are neither vendored nor built. `ImPlot::BustItemCache`,
+  the one symbol `implot.cpp` needs from that file, is an empty function in
+  `ui_imgui.cpp`.
+- A point costs: 4 vertices and 18 indices as an anti-aliased strip, each index
+  a vertex again after the backend's expansion, each triangle through the
+  host's clipper. Drawn two to a pixel column, three 50 s runs were 11,752
+  points and took a 1.6 ms frame to 9-16 ms on the desktop PC. So a series is
+  cut by a swing filter to the fewest vertices that stay within 0.25 px,
+  vertically, of every row they replace (`PlotSwing`; measured at 0.250 px by
+  the fixture), and the strips are kept per plot until the revision, the series
+  shown, either axis or the plot's rectangle changes: a view that is only being
+  read is not cut again (action 5 reports how many of the two plots were). The
+  y axis is fitted to the rows in view rather than to the surviving vertices,
+  or the fit would move with the cut and nothing could be kept. A plot's pool
+  is 6,000 points and 1,024 strips; a series that would take more than its
+  share (noise, or far more rows than pixels) is cut to each pixel column's low
+  and high first. Nine full series of noise draw 12,000 points.
+- Axis labels are `fonts/roboto_ascii.h`: Roboto Regular 3.015 (SIL OFL 1.1,
+  `fonts/OFL.txt`; no Reserved Font Name) cut to its default instance and
+  U+0020..U+007E, 10,596 bytes, baked at eight sizes at Open. It is a Modified
+  Version in the licence's terms and keeps the font's own copyright and licence
+  records. Made with fontTools 4.53.1 from FTESurf `ftesurf/gfx/fonts/Roboto.ttf`
+  (sha256 0fe599ab...340fc5) by `instancer.instantiateVariableFont` at the axis
+  defaults, then `subset` with no layout features, no hinting, every name record
+  and unchanged timestamps; the header carries both hashes and the output repeats
+  byte for byte. The scoreboard owner's font is unchanged.
+- This owner's ImGui clock is real time, bounded to 0.5..250 ms a frame, because a
+  double click and the splitter's hover delay are measured in it. Every other
+  owner still advances 10 ms a Draw.
+
+The host's mesh path (`engine/client/cl_plugin_mesh.inc`) changed with this
+owner, for every owner: a triangle wholly inside its clip skips the four
+clipping passes (which would return it unchanged), and a backend draw carries up
+to 4,096 vertices where it carried 512.
+
+Falsifiers: FTESurf `tools/p614plots.py` (the panel through a live client, on
+its own status lines and on pixels; hostile transactions through the real
+builtins; an older plugin, an older engine and no plugin),
+`tools/test_p614plot_unit.py` (the host bridge over a small VM, the shared
+grammar against a table of malformed revisions, and this provider under a fake
+host at both index widths) and `tools/p614mutants.py` (one edit to a copy of
+this tree a mutant, 106 of them; each fixture must fail on its own, and a
+mutant that does not build is not a catch). The older suites build against this tree with their
+fixtures taught the new table (`tools/fixtures/p590bridge_host.c`,
+`p598imgui_host.cpp`).
 
 Build with the engine's `plugins-rel NATIVE_PLUGINS="... ui_imgui"` or the
 plugin Makefile's exact `fteplug_ui_imgui` target. Adapter compiles at -O2;

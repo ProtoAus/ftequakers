@@ -1,6 +1,8 @@
 //Included by cl_plugin.inc: owned texture tokens and synchronous indexed 2D.
 #define PLUGMESH_SLOTS 256
-#define PLUGMESH_DRAW_VERTS 512
+//Vertices a backend draw carries. At 512 a plot's curves were one draw call per 170
+//triangles. The arrays are static: Submit is main-thread and never nested.
+#define PLUGMESH_DRAW_VERTS 4096
 #define PLUGMESH_IMAGE_FLAGS (IF_NOMIPMAP|IF_NOPICMIP|IF_CLAMP|IF_UIPIC|IF_NOPURGE|IF_NOGAMMA|IF_NOSRGB)
 static struct
 {
@@ -180,10 +182,10 @@ static unsigned int Plug_Mesh_Clip(const plugmeshclipvertex_t *in, unsigned int 
 }
 static qboolean QDECL Plug_Mesh_Submit(const plugmeshbatch_t *b)
 {
-	vecV_t xyz[PLUGMESH_DRAW_VERTS];
-	vec2_t uv[PLUGMESH_DRAW_VERTS];
-	avec4_t rgba[PLUGMESH_DRAW_VERTS];
-	index_t indices[PLUGMESH_DRAW_VERTS*3];
+	static vecV_t xyz[PLUGMESH_DRAW_VERTS];
+	static vec2_t uv[PLUGMESH_DRAW_VERTS];
+	static avec4_t rgba[PLUGMESH_DRAW_VERTS];
+	static index_t indices[PLUGMESH_DRAW_VERTS*3];
 	mesh_t mesh;
 	plugmeshclipvertex_t a[8], scratch[8];
 	unsigned int ci, i, j, k, n;
@@ -221,10 +223,20 @@ static qboolean QDECL Plug_Mesh_Submit(const plugmeshbatch_t *b)
 				for (k = 0; k < 4; k++)
 					a[j].rgba[k] = v->rgba[k]/255.0f;
 			}
-			n = Plug_Mesh_Clip(a, 3, scratch, 0, clip[0], true);
-			n = Plug_Mesh_Clip(scratch, n, a, 0, clip[2], false);
-			n = Plug_Mesh_Clip(a, n, scratch, 1, clip[1], true);
-			n = Plug_Mesh_Clip(scratch, n, a, 1, clip[3], false);
+			//Nearly every triangle lies wholly inside its clip, where the four passes
+			//hand back the same three vertices in the same order (their tests are these,
+			//inclusive). They are skipped there.
+			if (a[0].xy[0] >= clip[0] && a[0].xy[0] <= clip[2] && a[0].xy[1] >= clip[1] && a[0].xy[1] <= clip[3] &&
+				a[1].xy[0] >= clip[0] && a[1].xy[0] <= clip[2] && a[1].xy[1] >= clip[1] && a[1].xy[1] <= clip[3] &&
+				a[2].xy[0] >= clip[0] && a[2].xy[0] <= clip[2] && a[2].xy[1] >= clip[1] && a[2].xy[1] <= clip[3])
+				n = 3;
+			else
+			{
+				n = Plug_Mesh_Clip(a, 3, scratch, 0, clip[0], true);
+				n = Plug_Mesh_Clip(scratch, n, a, 0, clip[2], false);
+				n = Plug_Mesh_Clip(a, n, scratch, 1, clip[1], true);
+				n = Plug_Mesh_Clip(scratch, n, a, 1, clip[3], false);
+			}
 			if (n < 3)
 				continue;
 			if (mesh.numvertexes+n > PLUGMESH_DRAW_VERTS)

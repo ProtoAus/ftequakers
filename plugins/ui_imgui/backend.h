@@ -11,6 +11,7 @@ namespace FteImGui {
 constexpr unsigned GalleryMenu = 101, GalleryClient = 202;
 constexpr unsigned InteractiveMenu = 103, InteractiveClient = 204;
 constexpr unsigned ScoresClient = 205;
+constexpr unsigned PlotsClient = 206;
 constexpr int MaxLists = 64, MaxVertices = 262144, MaxIndices = 786432, MaxCommands = 4096;
 struct Counters {
 	unsigned opens = 0, closes = 0, frames = 0, uploads = 0, submissions = 0;

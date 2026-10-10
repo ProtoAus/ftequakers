@@ -502,10 +502,10 @@ NATIVE_PLUGINS+=ezhud
 ######################################
 
 #Optional explicit-QC native gallery. No engine/dedicated C++ dependency.
-IMGUI_VENDOR=ui_imgui/vendor/imgui.cpp ui_imgui/vendor/imgui_draw.cpp ui_imgui/vendor/imgui_tables.cpp ui_imgui/vendor/imgui_widgets.cpp
+IMGUI_VENDOR=ui_imgui/vendor/imgui.cpp ui_imgui/vendor/imgui_draw.cpp ui_imgui/vendor/imgui_tables.cpp ui_imgui/vendor/imgui_widgets.cpp ui_imgui/vendor/implot.cpp
 IMGUI_SOURCES=ui_imgui/backend.cpp ui_imgui/ui_imgui.cpp $(IMGUI_VENDOR)
 IMGUI_OBJECTS=$(patsubst ui_imgui/%.cpp,$(OUT_DIR)/ui_imgui/%.o,$(IMGUI_SOURCES))
-IMGUI_HEADERS=Makefile ui_imgui/backend.h ui_imgui/input.inc ui_imgui/model.inc ui_imgui/scores.inc plugin.h ui_model.h $(wildcard ui_imgui/vendor/*.h)
+IMGUI_HEADERS=Makefile ui_imgui/backend.h ui_imgui/input.inc ui_imgui/model.inc ui_imgui/scores.inc ui_imgui/plots.inc ui_imgui/fonts/roboto_ascii.h plugin.h ui_model.h $(wildcard ui_imgui/vendor/*.h)
 IMGUI_FLAGS=-std=c++17 -DFTEPLUGIN -DIMGUI_USE_WCHAR32 -Wall -Wextra -Werror -I. -I../engine/client -I../engine/common -I../engine/server -I../engine/gl
 $(OUT_DIR)/ui_imgui/%.o: ui_imgui/%.cpp $(IMGUI_HEADERS)
 	@mkdir -p $(dir $@)

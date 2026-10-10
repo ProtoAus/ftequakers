@@ -1,21 +1,36 @@
 #include "backend.h"
 #include "vendor/imgui_internal.h"
+#include "vendor/implot.h"
+#include "vendor/implot_internal.h"
 #include <cstdio>
 #include <algorithm>
 #include <new>
 #include <cmath>
 #include <cstring>
+#include <chrono>
 #include "../ui_model.h"
+#include "fonts/roboto_ascii.h"
+
+//vendor/implot.cpp calls this when colours change, to drop what ImPlot's own plot
+//items cached. Those items are implot_items.cpp, which is neither vendored nor built
+//(its templates put 5.5 MB into the DLL): owner 206 draws its curves itself.
+void ImPlot::BustItemCache() {}
 
 namespace FteImGui {
 static plugcorefuncs_t *core;
 static plugmeshfuncs_t *mesh;
 static Counters stats;
+struct PlotStore;
 //Own bounded /2 snapshots/actions; /1 copies are converted at its callback.
 //Never retain frontend/VM string pointers.
 struct Context {
 	pluguiowner_t owner;
 	ImGuiContext *imgui = nullptr;
+	ImPlotContext *implot = nullptr;
+	PlotStore *plots = nullptr;
+	ImFont *plotfonts[8] = {};
+	bool plotserror = false;
+	std::chrono::steady_clock::time_point drawn = {};
 	plugmeshtex_t atlas = 0;
 	ImFont *scoresfonts[4] = {};
 	ImGuiStyle scoresstyle;
@@ -32,6 +47,7 @@ static Context *contexts[2];
 static void ModelAction(Context &c, const pluguiwidget_t &w, float value);
 #include "scores.inc"
 #include "model.inc"
+#include "plots.inc"
 static void Gallery()
 {
 	ImGui::SetNextWindowPos(ImVec2(40,70),ImGuiCond_Always);
@@ -74,6 +90,7 @@ static qboolean QDECL Open(const pluguiowner_t *o)
 	if (!o || o->vm < 1 || o->vm > 2 || !o->generation || contexts[o->vm-1]) return qfalse;
 	if (o->owner != (o->vm == PLUGUI_VM_MENU ? GalleryMenu : GalleryClient))
 		if (!inputRegistered || !Interactive(*o)) return qfalse;
+	if (PlotsOwner(*o) && !plotRegistered) return qfalse; //an older host: QC keeps its own panel
 	Context *c = new (std::nothrow) Context;
 	if (!c) return qfalse;
 	contexts[o->vm-1] = c; c->owner = *o; stats.opens++;
@@ -109,13 +126,29 @@ static qboolean QDECL Open(const pluguiowner_t *o)
 		}
 		io.FontDefault = c->scoresfonts[0];
 	}
+	bool fonts = true;
+	if (PlotsOwner(*o))
+	{
+		ImPlotContext *previousplot = ImPlot::GetCurrentContext();
+		c->implot = ImPlot::CreateContext(); //also makes it current
+		if (c->implot)
+		{
+			PlotsTheme(ImGui::GetStyle(),ImPlot::GetStyle());
+			ImPlot::GetInputMap().ZoomRate = 0.25f; //a notch out is the QC panel's x1.25, in is x0.833
+		}
+		ImPlot::SetCurrentContext(previousplot);
+		fonts = c->implot && PlotsFonts(*c,io);
+		//ImGui wants one of its error routes left on: the callback, which fails the frame.
+		c->imgui->ErrorCallback = PlotsError; c->imgui->ErrorCallbackUserData = c;
+		io.ConfigErrorRecoveryEnableAssert = io.ConfigErrorRecoveryEnableDebugLog = io.ConfigErrorRecoveryEnableTooltip = false;
+	}
 	unsigned char *rgba = nullptr; int w = 0, h = 0;
 	io.Fonts->GetTexDataAsRGBA32(&rgba,&w,&h);
 	if (rgba && w > 0 && h > 0 && w <= 4096 && h <= 4096)
 		c->atlas = mesh->CreateTextureRGBA(w,h,rgba,size_t(w)*size_t(h)*4);
 	if (c->atlas) { stats.uploads++; io.Fonts->SetTexID(ImTextureID(c->atlas)); io.Fonts->ClearTexData(); }
 	ImGui::SetCurrentContext(previous);
-	return c->atlas ? qtrue : qfalse;
+	return c->atlas && fonts ? qtrue : qfalse;
 }
 static qboolean QDECL Draw(const pluguiframe_t *f)
 {
@@ -127,16 +160,30 @@ static qboolean QDECL Draw(const pluguiframe_t *f)
 	io.DisplaySize = ImVec2(f->pixelwidth,f->pixelheight); io.DisplayFramebufferScale = ImVec2(1,1);
 	io.DeltaTime = 0.01f;
 	if (ScoresOwner(c->owner)) ScoresFont(*c);
+	ImPlotContext *previousplot = ImPlot::GetCurrentContext();
+	if (PlotsOwner(c->owner))
+	{
+		//A double click and the splitter's hover delay are measured in ImGui's time:
+		//this owner's runs on a real clock, bounded.
+		const auto now = std::chrono::steady_clock::now();
+		const float dt = std::chrono::duration<float>(now-c->drawn).count();
+		if (c->drawn != std::chrono::steady_clock::time_point()) io.DeltaTime = std::min(std::max(dt,0.0005f),0.25f);
+		c->drawn = now;
+		ImPlot::SetCurrentContext(c->implot);
+		PlotsFont(*c);
+	}
 	c->actions = c->nextaction = 0; c->actionoverflow = false;
 	ImGui::NewFrame(); stats.frames++;
 	bool panelok = true;
 	if (ScoresOwner(c->owner)) panelok = ScoresGallery(*c,*f);
+	else if (PlotsOwner(c->owner)) panelok = PlotsGallery(*c,*f);
 	else if (c->model.revision) ModelGallery(*c);
 	else if (Interactive(c->owner)) InteractiveGallery(*c); else Gallery();
 	ImGui::Render(); c->events = 0;
-	bool ok = panelok && !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
+	bool ok = panelok && !c->plotserror && !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
 	if (!ok) c->actions = c->nextaction = 0;
 	if (!ok) stats.rejected++;
+	ImPlot::SetCurrentContext(previousplot);
 	ImGui::SetCurrentContext(previous);
 	return ok ? qtrue : qfalse;
 }
@@ -146,6 +193,13 @@ static void QDECL Close(const pluguiowner_t *o, unsigned reason)
 	Context *c = contexts[o->vm-1];
 	if (!c || c->owner.generation != o->generation || c->owner.owner != o->owner) return;
 	if (c->atlas) mesh->DestroyTexture(c->atlas);
+	if (c->implot)
+	{
+		ImPlotContext *previousplot = ImPlot::GetCurrentContext();
+		ImPlot::DestroyContext(c->implot);
+		ImPlot::SetCurrentContext(previousplot != c->implot ? previousplot : nullptr);
+	}
+	delete c->plots;
 	ImGuiContext *previous = ImGui::GetCurrentContext();
 	if (c->imgui) ImGui::DestroyContext(c->imgui);
 	if (previous != c->imgui) ImGui::SetCurrentContext(previous);
@@ -186,6 +240,8 @@ extern "C" NATIVEEXPORT qboolean QDECL FTEPlug_Init(plugcorefuncs_t *c)
 		pluguimodelservice2_t dense = {sizeof(dense),PLUGUI_MODEL2_VERSION,PLUGUI_MODEL_CAP_WIDGETS,SetModel2,PollModel};
 		core->ExportInterface(pluguimodelservice2_name,&dense,sizeof(dense));
 	}
+	pluguiplotservice_t plot = {sizeof(plot),PLUGUI_PLOT_VERSION,PLUGUI_PLOT_CAP_SERIES,SetPlot,SetView};
+	plotRegistered = inputRegistered && core->ExportInterface(pluguiplotservice_name,&plot,sizeof(plot)) != qfalse;
 	//Older hosts may reject additive interfaces: prior owners remain usable.
 	return qtrue;
 }

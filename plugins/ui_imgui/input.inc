@@ -4,7 +4,7 @@ static bool inputRegistered;
 static bool Interactive(const pluguiowner_t &o)
 {
 	return o.owner == (o.vm == PLUGUI_VM_MENU ? InteractiveMenu : InteractiveClient) ||
-		(o.vm == PLUGUI_VM_CLIENT && o.owner == ScoresClient);
+		(o.vm == PLUGUI_VM_CLIENT && (o.owner == ScoresClient || o.owner == PlotsClient));
 }
 static Context *Find(const pluguiowner_t *o)
 {
