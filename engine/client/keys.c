@@ -4232,7 +4232,9 @@ Key_ClearStates
 void Key_ClearStates (void)
 {
 	int		i;
+	void IN_RealKeysLost(void);	/*FTESurf Patch 625 (in_generic.c)*/
 
 	for (i=0 ; i<K_MAX ; i++)
 		keydown[i] = 0;
+	IN_RealKeysLost();
 }

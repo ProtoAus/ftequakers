@@ -1961,10 +1961,13 @@ plugcorefuncs_t plugcorefuncs =
   it was recorded into now says so.  Accelerometer and Gyroscope are included even
   though neither is journalled today -- the point is the mark, and leaving two of five
   entries un-marked would be a gap that is invisible until someone uses them.*/
+void IN_SynthOrigin(qboolean on);	/*Patch 625, in_generic.c*/
 static void QDECL Plug_IN_KeyEvent(unsigned int devid, int down, int keycode, int unicode)
 {
 	IN_Journal_MarkSynth("plugin");
+	IN_SynthOrigin(true);
 	IN_KeyEvent(devid, down, keycode, unicode);
+	IN_SynthOrigin(false);
 }
 static void QDECL Plug_IN_MouseMove(unsigned int devid, int abs, float x, float y, float z, float size)
 {

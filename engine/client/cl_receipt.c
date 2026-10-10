@@ -53,6 +53,12 @@ cannot reach: a small-order key, a non-canonical encoding, and an unreduced s.
 */
 
 #include "quakedef.h"
+#ifdef _WIN32
+#include "winquake.h"
+#include <shellapi.h>
+#else
+#include <unistd.h>
+#endif
 
 #ifndef SERVERONLY
 
@@ -64,6 +70,10 @@ qboolean IN_Journal_LastDigest(qbyte digest[32], size_t *len, qboolean *kept);
 
 #define RCPT_KEYFILE	"fskey"
 #define RCPT_VERSION	"FTESURF-RCPT 1"
+/*Patch 625: an account proof's statement, and the one page the engine will open.*/
+#define ACCT_VERSION	"FTESURF-ACCT 1"
+#define ACCT_SITE		"https://proto.bar/ftesurf/board/link"
+#define ACCT_OPENERLEN	24
 
 static qboolean rcpt_have;
 static qbyte rcpt_pk[32], rcpt_sk[64];
@@ -310,6 +320,19 @@ static void CL_Receipt_Sign_f(void)
 	ticks = atoi(Cmd_Argv(2));
 
 	/*
+	  Patch 625: A RUN, AND NOTHING ELSE.  Below -1 was the account link's
+	  (Patches 615-619: connect, ask, confirm, start), signed here because game
+	  code had no other way to ask.  It has one now (CL_Receipt_AcctSign), and
+	  this is a console command: text can be put in front of it.  Printed, so a
+	  harness can see the refusal fire.
+	*/
+	if (ticks < -1)
+	{
+		Con_Printf("rec_sign: account proofs are not signed from the console. Refused.\n");
+		return;
+	}
+
+	/*
 	  THE JOURNAL DIGEST IS ONLY THIS RUN'S IF THIS RUN TOOK A JOURNAL, and the
 	  gamecode is the only thing that knows.  A run played with `rec_hid 0`, or
 	  a Multi-Session resume (which opens no sidecars at all), begins no journal
@@ -366,6 +389,228 @@ static void CL_Receipt_Sign_f(void)
 						 pubhex, ticks, hidhex, (unsigned)hidlen, kept ? 1 : 0,
 						 viewhex, sighex, svname);
 	Con_DPrintf("rec_sign: %s on %s hid %s view %s\n", nonce, svname, hidhex, viewhex);
+}
+
+/*
+  FTESurf Patch 625 -- THE ACCOUNT PROOF, as a function game code calls.
+
+  WHY IT LEFT THE CONSOLE.  `rec_sign` refuses a server's stufftext, and game
+  code's localcmd runs one level below that, so it obeyed game code -- and
+  game code builds console lines out of text in some fifty places.  Patch 617
+  found two of them pasting a typed argument in whole; nobody has read the
+  rest.  So whoever can write to a player's connection might find a line that
+  signs a link with no key pressed.  A builtin has no text in front of it.
+
+  A STATEMENT OF ITS OWN, so that a reader can tell which engine signed.  An
+  engine older than this one can only ever sign RCPT_VERSION; this function
+  signs ACCT_VERSION and nothing else does, so "this link was made by an
+  engine that only signs links under a key press" is something surfd can
+  check rather than hope.
+
+      FTESURF-ACCT 1
+      server <the address this client is talking to, from the netchan>
+      nonce  <32 lowercase hex: the lobby's, or a digest game code made>
+      kind   <-2 connect | -3 ask | -4 confirm | -5 start>
+      key    <1 if signed inside a device's key press, else 0>
+
+  WHICH KINDS NEED THE KEY.  -3, -4 and -5 are how a link is asked for,
+  confirmed and started: refused unless `keyed`, which pr_csqc.c sets only
+  while CSQC_InputEvent runs for a key a device pressed.  -2 is the connect's
+  "which account am I", asked for by a timer, and says so with `key 0`.
+
+  WHAT GOES BACK is `<pub> <key> <sig> "<server>"`, for game code to send as
+  it stands (the address is quoted for the same reason rec_rcpt's is).  Game
+  code may see its own public key and signature: a server already does.
+*/
+/*
+  THE SERVER NAMED IS THE ONE THE GAME CODE CAME FROM.  The statement names the
+  netchan's address, and a handshake packet can re-point the netchan while the
+  previous server's game code is still the code running (the second review:
+  `cl_transfer`, then one connectionless `accept` from the new address, which
+  that handler takes at ca_active without a disconnect).  So the address is
+  noted when the SERVERDATA arrives (the VM is made some frames later, from
+  what that serverdata announced), with whether that was a live connection:
+  a VM made in demo or QTV playback, or with no connection, never signs, even
+  if it is still loaded when a real connection comes up.  A VM takes the note
+  with it and is compared when it asks.
+*/
+static netadr_t acct_vm_adr, acct_sd_adr;
+static qboolean acct_vm_live, acct_sd_live;
+void CL_Receipt_ServerData(void)
+{
+	acct_sd_live = cls.state >= ca_connected && !cls.demoplayback;
+	acct_sd_adr = cls.netchan.remote_address;
+}
+/*
+  AND THE STATEMENT SAYS WHICH GAME CODE ASKED.  "A key was pressed" is consent
+  to whatever drew the box, and the client picks the csprogs it runs out of a
+  download cache every server it has visited can write, by a 32-bit checksum
+  (CSQC_FindMainProgs; its own comment calls the checksum broken).  So the
+  code on a lobby is not known to be the lobby's.  The SHA-256 of the file the
+  VM was made from goes into the signed statement, and surfd, which can read
+  what its lobbies serve, takes no other.  A VM that loaded any second file of
+  code (an addon, addprogs) has no one name and signs nothing.
+*/
+static char acct_vm_code[65];
+static qboolean acct_vm_mixed;
+void CL_Receipt_VM(qboolean made)
+{
+	acct_vm_live = made && acct_sd_live && cls.state >= ca_connected && !cls.demoplayback
+		&& NET_CompareAdr(&acct_sd_adr, &cls.netchan.remote_address);
+	acct_vm_code[0] = 0;
+	acct_vm_mixed = false;
+	if (acct_vm_live)
+		acct_vm_adr = acct_sd_adr;
+}
+/*the main file's bytes as the VM was handed them; NULL for any other code*/
+void CL_Receipt_VMCode(const void *data, size_t len)
+{
+	qbyte digest[32];
+	char hex[65];
+
+	if (!data)
+	{
+		acct_vm_mixed = true;
+		return;
+	}
+	CalcHash(&hash_sha2_256, digest, sizeof(digest), data, len);
+	CL_Receipt_Hex(hex, sizeof(hex), digest, sizeof(digest), true);
+	if (acct_vm_code[0] && strcmp(acct_vm_code, hex))
+		acct_vm_mixed = true;	/*a second main file, and not the same one*/
+	Q_strncpyz(acct_vm_code, hex, sizeof(acct_vm_code));
+}
+
+qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *out, size_t outlen)
+{
+	char msg[384], pubhex[80], sighex[160], svname[128];
+	qbyte sig[64];
+	int i;
+
+	if (kind < -5 || kind > -2)
+		return false;
+	if (kind != -2 && !keyed)
+	{
+		/*PRINTED: it is the only evidence a harness has that the refusal fired.*/
+		Con_Printf("acct_sign: kind %i is signed only under a key press. Refused.\n", kind);
+		return false;
+	}
+	/*
+	  NOT WHILE A DEMO OR A QTV STREAM IS PLAYING.  Playback is "connected", runs
+	  the game code that was recorded with it, and its netchan's address is
+	  whoever last sent this client a packet: the review walked a recorded
+	  csprogs to a signature naming a server the client was not talking to.
+	*/
+	if (cls.state < ca_connected || cls.demoplayback)
+		return false;
+	if (!acct_vm_live || !NET_CompareAdr(&acct_vm_adr, &cls.netchan.remote_address))
+	{
+		Con_Printf("acct_sign: this game code is not the connected server's. Refused.\n");
+		return false;
+	}
+	if (strlen(acct_vm_code) != 64 || acct_vm_mixed)
+	{
+		Con_Printf("acct_sign: this game code is not one file with a name. Refused.\n");
+		return false;
+	}
+	if (strlen(nonce) != 32)
+		return false;
+	for (i = 0; i < 32; i++)
+	{
+		char c = nonce[i];
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+			return false;
+	}
+	if (!CL_Receipt_Key())	/*after the checks: a refused call does not mint the key file*/
+		return false;
+
+	NET_AdrToString(svname, sizeof(svname), &cls.netchan.remote_address);
+	/*what comes back is spliced into a console line by game code: an address
+	  is digits, dots, colons and brackets, and anything else is not sent.*/
+	for (i = 0; svname[i]; i++)
+	{
+		char c = svname[i];
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+			|| c == '.' || c == ':' || c == '[' || c == ']' || c == '-' || c == '%'))
+			return false;
+	}
+
+	Q_snprintfz(msg, sizeof(msg),
+				ACCT_VERSION "\n"
+				"server %s\n"
+				"nonce %s\n"
+				"kind %i\n"
+				"key %i\n"
+				"code %s\n",
+				svname, nonce, kind, keyed ? 1 : 0, acct_vm_code);
+	Ed25519_Sign(sig, (const qbyte*)msg, strlen(msg), rcpt_sk);
+
+	Base16_EncodeBlock((const char*)rcpt_pk, sizeof(rcpt_pk), (qbyte*)pubhex, sizeof(pubhex));
+	pubhex[64] = 0;
+	Base16_EncodeBlock((const char*)sig, sizeof(sig), (qbyte*)sighex, sizeof(sighex));
+	sighex[128] = 0;
+	Q_snprintfz(out, outlen, "%s %i %s \"%s\" %s", pubhex, keyed ? 1 : 0, sighex, svname,
+				acct_vm_code);
+	Con_DPrintf("acct_sign: kind %i key %i on %s\n", kind, keyed ? 1 : 0, svname);
+	return true;
+}
+
+/*
+  Patch 625: THE SIGN-IN PAGE, IN THE PLAYER'S BROWSER.  Game code cannot name
+  an address: it supplies the opener it made for a link (24 lowercase hex) and
+  the address is ACCT_SITE with that after it.  So the worst a server's game
+  code can do with this is open the real sign-in page, and pr_csqc.c lets it
+  only while a device's key press is being delivered.
+*/
+qboolean CL_Receipt_Browse(const char *opener)
+{
+	static double last;
+	char url[sizeof(ACCT_SITE) + 8 + ACCT_OPENERLEN];
+	int i;
+
+	if (cls.state < ca_connected || cls.demoplayback)
+		return false;
+	/*one a second at most, whatever is pressing keys*/
+	if (last && realtime - last < 1.0 && realtime >= last)
+		return false;
+	if (strlen(opener) != ACCT_OPENERLEN)
+		return false;
+	for (i = 0; i < ACCT_OPENERLEN; i++)
+	{
+		char c = opener[i];
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+			return false;
+	}
+	Q_snprintfz(url, sizeof(url), ACCT_SITE "?k=%s", opener);
+	last = realtime;
+	/*A harness has no use for a browser on the desk it shares, and needs to see
+	  what would have been opened.  A switch, not a cvar: a server sets cvars.*/
+	if (COM_CheckParm("-nobrowse"))
+	{
+		Con_Printf("acct_browse: %s (-nobrowse: not opened)\n", url);
+		return true;
+	}
+#ifdef _WIN32
+	{
+		wchar_t wide[sizeof(url)];
+		for (i = 0; url[i]; i++)
+			wide[i] = (unsigned char)url[i];	/*ASCII by construction*/
+		wide[i] = 0;
+		return (INT_PTR)ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL) > 32;
+	}
+#elif defined(__linux__)
+	{
+		/*no shell: the address is an argument, not a command line*/
+		pid_t pid = fork();
+		if (pid == 0)
+		{
+			execlp("xdg-open", "xdg-open", url, (char*)NULL);
+			_exit(127);
+		}
+		return pid > 0;
+	}
+#else
+	return false;
+#endif
 }
 
 /*

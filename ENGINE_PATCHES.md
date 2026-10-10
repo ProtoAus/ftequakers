@@ -42148,3 +42148,104 @@ board and logged no QC error. That smoke ticks no run and starts none: the live
 line was measured in rigs on this file, and one lobby of twelve was connected
 to. No engine, cfg or surfd change. Roll back: copy each `csprogs.dat.prev`
 over its file.
+
+## Patch 625 — account proofs leave the console: `acct_sign` for game code, signed only under a device's key press *(ENGINE client + qwprogs + csprogs + surfd; schema 15)*
+
+**Problem.** The Steam link (Patches 615-619) was signed by `rec_sign`, a
+console command. It refuses a server's stufftext, but game code's `localcmd`
+runs one level below that, so it obeyed game code, and game code builds console
+lines out of text in some fifty places; Patch 617's review found two that
+pasted a typed argument in whole, and nobody has read the rest. So whoever can
+write to a player's connection might find a line that makes their key sign a
+link with no key pressed, and FTESurf's ROADMAP 14.3 is about to rank on links.
+Game code also had no random source and could not open a browser, which is why
+Patch 619's link start took two round trips and a pasted address.
+
+**Change.** `engine/client/cl_receipt.c`, `pr_csqc.c`, `in_generic.c`, `cl_main.c`,
+`cl_parse.c`, `keys.c`, `common/plugin.c`. No header is touched, so no plugin interface moves.
+
+- `CL_Receipt_AcctSign` signs a statement of the account's own,
+  `FTESURF-ACCT 1 / server / nonce / kind / key / code`, which no older engine
+  can produce. `key` says whether a device's key press was being delivered to
+  game code when it was signed. Kinds -3, -4 and -5 (ask, confirm, start a
+  link) are REFUSED without one; -2 (the connect's "which account am I") is
+  not. `code` is the SHA-256 of the csprogs the VM was made from, hashed as
+  the VM was handed it (`CSQC_PRLoadFile`); a VM that loaded any second file
+  of code has no one name and signs nothing. `server` is refused unless it is
+  still the address that VM's serverdata came from (`CL_Receipt_VM`).
+- "A device's key press" is the engine's own knowledge. Every input event
+  passes `in_newevent`; the two things that make events with no device,
+  `in_journal_synth` and a plugin's input shims, raise `IN_SynthOrigin` round
+  their calls and the slot remembers. `CSQC_KeyPress` holds a flag while
+  CSQC_InputEvent runs for a key-down whose slot was a device's. Default is
+  not-real: a key that reaches `Key_Event` by any other road signs nothing.
+- Three builtins for game code, by name: `acct_sign(nonce, kind)` returns
+  `<pub> <key> <sig> "<server>" <code>` for game code to send, or ""; `acct_random(n)`
+  is n bytes from `Sys_RandomBytes` as hex; `acct_browse(opener)` opens ONE
+  page, the sign-in page with a 24-hex opener after it, and only under a
+  device's key press. `-nobrowse` on the command line prints the address
+  instead, for harnesses on a shared desktop.
+- The console's `rec_sign` signs a run's receipt as before and refuses
+  anything below -1, in words a harness can read.
+
+FTESurf's half: `cl_account.qc` asks through the builtins (and says the game
+needs an update when they are absent); a link start is ONE key press that makes
+the opener from `acct_random` and its own pool, names the start from it, signs,
+sends and opens the browser, so nothing comes back from the lobby before the
+question; `sv_account.qc` takes `acct_proof` in place of a `rec_rcpt` with a
+negative tick count; surfd verifies the new statement, refuses the old one,
+requires `key 1` for a link's kinds, takes only a proof that names the csprogs
+its lobbies serve, and keeps links in a table older code never wrote (schema
+15; the one link made before, the owner's test link, is dropped).
+
+**Review.** Two lenses on the committed trees. The engine's found the flag
+could outlive its press: a QC error inside CSQC_InputEvent longjmps out of
+Host_Frame past the line that takes it down, and the next csprogs to load
+would have signed with no key delivered. The flags now come down at
+Host_Frame's landing, at the top of every IN_Commands and with the VM, and a
+builtin wants both `csqc_realkey` and `IN_RealKeyDown`. It also looped both
+builtins inside one handler call (one link signature and one browser a press
+now; a held key's repeats are not presses; one browser a second) and walked a
+recorded csprogs, in demo playback, to a signature naming a server the client
+was not talking to (the account builtins refuse during playback; `rec_sign`
+does not yet, and that is in FTESurf's BACKLOG). The protocol lens found
+nothing in the new start and two older weaknesses it would not let ranking
+rest on, both fixed in FTESurf's half: a typed code's bare digest could be
+searched if its one claiming packet was dropped (twelve characters under a
+per-ask salt now), and the sign-in page's number crossed the game's wire in
+the clear (the game sends a digest of it with its own opener now). It asked
+what a rollback does to "old links were dropped".
+
+A second round on the fixes, and each finding was reproduced against the
+build the reviewer had read before anything was changed. Engine: the address
+in the statement was the netchan's, which one handshake packet can re-point
+under loaded game code, so the address is noted when the VM is made and
+compared when it asks; and an injected key-up cleared the repeat latch, which
+now lives in in_generic.c and moves on device events alone (key 0, the
+character-only event beside a composed key, is never a press). Protocol: THE
+CLIENT CHOOSES ITS CSPROGS FROM A DOWNLOAD CACHE BY A 32-BIT CHECKSUM, so the
+code that draws the box on a lobby was never known to be that lobby's, and a
+key press is consent to whatever drew the box. Hence the `code` line: the
+statement says which game code asked and surfd, which can read what its
+lobbies serve, takes no other. The cache itself is untouched and is FTESurf's
+BACKLOG. It also re-linked a stamped row with the previous surfd, so links
+moved to a table of their own.
+
+A third round found no way to a wrong link. Engine changes from it: the
+address a VM may sign for is noted when its serverdata arrives
+(`CL_Receipt_ServerData`, both protocols' parsers), with whether that was a
+live connection, so a VM made in playback or unconnected never signs however
+long it outlives that; `Key_ClearStates` clears the press latch, because the
+X11 and D3D11 backends release keys on a focus change without the input
+queue and the Enter that opens the browser loses its release to it; and "one
+file of code" is read from the VM's own `numprogs` at signing instead of
+inferred from the names the file hook was asked for.
+
+**What it does not do.** A player's own modified client signs what it likes
+with its own key; that is their consent to give. A server that ships its own
+game code still draws its own box, and so can whatever is in the download
+cache on a lobby of ours, though neither can now make an account proof surfd
+takes. A person can still be talked into signing in for somebody else. Whoever can rewrite a whole connection can
+relay its proofs as their own: that wants an encrypted transport, not another
+signature. `acct_browse` on Linux (`xdg-open`, fork and exec) is written and
+has not been compiled.

@@ -527,6 +527,7 @@ static struct eventlist_s
 	  block below for what it does and does not mean -- on Windows this is the time
 	  the ENGINE saw the report, not the time the mouse produced it.*/
 	double time;
+	qboolean synth;	/*Patch 625: made by a command or a plugin, not a device*/
 
 	union
 	{
@@ -563,6 +564,53 @@ static volatile int events_used;
   is open.  Same volatile discipline as events_avail, for the same reason.*/
 static volatile unsigned int in_jrn_dropped;
 
+/*
+  FTESurf Patch 625: WAS THIS KEY PRESSED ON A DEVICE.  The account link signs
+  only under a key press (cl_receipt.c), and "a key press" has to mean one a
+  person made.  Every event passes in_newevent, so the two things that MAKE
+  events without a device -- `in_journal_synth` and a plugin's input shims --
+  raise in_synth_origin round their calls and the slot remembers it.  The
+  answer is read while that slot's Key_Event runs, and at no other time.
+  Default is NOT REAL: a key that reaches Key_Event by a road round this queue
+  (its direct callers) signs nothing.  A wheel notch, a touch and a media key
+  come through the queue and are a device's.
+
+  A PRESS, NOT A KEY-DOWN.  in_real_held is which keys a device has down, kept
+  from device events alone: an OS auto-repeat is a second down with no up
+  between and is not a press, and an INJECTED up does not touch the latch (the
+  second review used one to make a held key's repeat a press again).  Key 0 is
+  the character-only event a dead key or composed text adds beside its key.
+  The latch is set BEFORE Key_Event runs: a QC error in the handler longjmps
+  past the queue's own advance, the event is dispatched again next frame, and
+  it must not be a press twice.
+*/
+static qboolean in_synth_origin;
+static qboolean in_real_keydown;
+static qbyte in_real_held[K_MAX];
+void IN_SynthOrigin(qboolean on)
+{
+	in_synth_origin = on;
+}
+qboolean IN_RealKeyDown(void)
+{
+	return in_real_keydown;
+}
+/*A QC error inside the key handler longjmps out of Host_Frame, past the line
+  that takes the flag down again (the review traced it).  Host_Frame's landing
+  calls this, and so does every IN_Commands before it dispatches anything.*/
+void IN_RealKeyAbort(void)
+{
+	in_real_keydown = false;
+}
+/*The window lost its keys.  Key_ClearStates is the Windows GL, D3D11 and X11
+  backends' focus path, and the last two release keys without this queue
+  (Wayland queues the release).  A key whose release went to another window
+  is not held, or its next press signs nothing.*/
+void IN_RealKeysLost(void)
+{
+	memset(in_real_held, 0, sizeof(in_real_held));
+}
+
 static struct eventlist_s *in_newevent(void)
 {
 	if (events_avail >= events_used + EVENTQUEUELENGTH)
@@ -570,6 +618,7 @@ static struct eventlist_s *in_newevent(void)
 		in_jrn_dropped++;
 		return NULL;
 	}
+	eventlist[events_avail & (EVENTQUEUELENGTH-1)].synth = in_synth_origin;
 
 	/*FTESurf Patch 202.  Stamped HERE and not in the five producers because this is
 	  the one choke point every event passes through -- key, mouse, joystick,
@@ -2417,6 +2466,7 @@ static void IN_JournalSynth_f(void)
 		n = 100000;
 
 	IN_Journal_MarkSynth("in_journal_synth");
+	IN_SynthOrigin(true);	/*Patch 625: these are nobody's key presses*/
 
 	for (i = 0; i < n; i++)
 	{
@@ -2427,6 +2477,7 @@ static void IN_JournalSynth_f(void)
 		if (!(i % 16))
 			IN_KeyEvent(0, (i/16)&1, K_SPACE, 0);
 	}
+	IN_SynthOrigin(false);
 	Con_Printf("in_journal_synth: injected %i mouse and %i key events\n", n, (n+15)/16);
 }
 
@@ -2436,6 +2487,7 @@ void IN_Commands(void)
 {
 	struct eventlist_s *ev;
 
+	in_real_keydown = false;	/*Patch 625: nothing is being dispatched yet*/
 	INS_Commands();
 
 	/*FTESurf Patch 326: republish the grant, AFTER INS_Commands so a backend that
@@ -2514,6 +2566,13 @@ void IN_Commands(void)
 		{
 		case IEV_KEYRELEASE:
 //Con_Printf("IEV_KEYDOWN %i: %i '%c'\n", ev->devid, ev->keyboard.scancode, ev->keyboard.unicode?ev->keyboard.unicode:' ');
+			if (!ev->synth)
+			{	/*Patch 625: a device let go (-1: of everything, as on losing focus)*/
+				if (ev->keyboard.scancode == -1)
+					memset(in_real_held, 0, sizeof(in_real_held));
+				else if (ev->keyboard.scancode > 0 && ev->keyboard.scancode < K_MAX)
+					in_real_held[ev->keyboard.scancode] = false;
+			}
 			if (ev->keyboard.scancode == -1)
 			{
 				int i;
@@ -2562,7 +2621,13 @@ void IN_Commands(void)
 				else
 					m->touchkey = 0;
 			}
+			/*Patch 625: a press is a device's key that no device had down*/
+			in_real_keydown = false;
+			if (!ev->synth && ev->keyboard.scancode > 0 && ev->keyboard.scancode < K_MAX
+				&& !in_real_held[ev->keyboard.scancode])
+				in_real_keydown = in_real_held[ev->keyboard.scancode] = true;
 			Key_Event(ev->devid, ev->keyboard.scancode, ev->keyboard.unicode, true);
+			in_real_keydown = false;
 			break;
 		case IEV_JOYAXIS:
 			if (ev->devid < MAXJOYSTICKS && ev->joy.axis>=0 && ev->joy.axis<MAXJOYAXIS)

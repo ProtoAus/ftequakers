@@ -7420,6 +7420,13 @@ double Host_Frame (double time)
 
 	if (setjmp (host_abort) )
 	{
+#ifdef CSQC_DAT
+		{	/*FTESurf Patch 625: if this was a QC error inside the key handler,
+			  the "a device's key is being delivered" flags were jumped past.*/
+			void CSQC_RealKeyAbort(void);
+			CSQC_RealKeyAbort();
+		}
+#endif
 		return 0;			// something bad happened, or the server disconnected
 	}
 

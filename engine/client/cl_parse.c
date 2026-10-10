@@ -3989,6 +3989,10 @@ static void CLQW_ParseServerData (void)
 
 #ifdef CSQC_DAT
 	CSQC_Shutdown();	//revive it when we get the serverinfo saying the checksum.
+	{	/*FTESurf Patch 625: whose serverdata the next VM is made from (cl_receipt.c)*/
+		void CL_Receipt_ServerData(void);
+		CL_Receipt_ServerData();
+	}
 	CL_AutoMountForget();	//ftesurf (P284/P285): new map, new mount decision and a fresh wait deadline
 #endif
 }
@@ -4625,6 +4629,10 @@ static void CLNQ_ParseServerData(void)		//Doesn't change gamedir - use with caut
 
 #ifdef CSQC_DAT
 	CSQC_Shutdown();
+	{	/*FTESurf Patch 625: as the QW serverdata above*/
+		void CL_Receipt_ServerData(void);
+		CL_Receipt_ServerData();
+	}
 #endif
 }
 static void CLQEX_ParseServerVars(void)
