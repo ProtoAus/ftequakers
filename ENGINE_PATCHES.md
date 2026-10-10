@@ -41601,3 +41601,114 @@ opened the box on that lobby, typed a made-up code with real key presses and
 was refused by the live surfd (`POST /api/link` 200 in its log), linking
 nothing. A link made in the box is still unmade: it needs a Steam account.
 Rollback is in FTESurf AGENT_NOTES, "Steam accounts".
+
+## Patch 616 — the live Segments column is told where the body teleported *(MOD ONLY, csprogs)*
+
+**Problem.** Patch 613 told a REPLAY's segment machine where its recording moved
+the body. The player's own column is the same machine (`Board_Frame`), run once a
+rendered frame on the predicted body, and it still only noticed a step of over
+512 u, and that only while a segment was open. So while playing:
+- an air row opened "off the ground" across a teleport was measured from the
+  ground left behind. surf_kitsune does it at the start of every session: the
+  spawn room's door lifts a walking body 300 u onto the floor above, where it
+  lands within a tick or two. That fall is too short to be a row, so its +300 was
+  carried into the next one, and the first jump up there read +358 for a jump
+  worth +57.5;
+- a row a teleport under 512 u fell inside took the teleport's energy step: a
+  jump moved 247 u up in mid-air read +301, a body moved 200 u up off the floor a
+  "Jump" of +201.
+BACKLOG, "Segments rows at a teleport", item 1.
+
+**Change.** `Board_LiveMoved` (`cl_board.qc`), called from the HUD just before the
+live `Board_Frame`, calls `Board_LineBroke` on a frame the body was moved. Two
+signals.
+A map teleporter the client predicted (a dedicated server only: on a listen
+server the engine does not run the prediction hook). `cl_triggers.qc` keeps the
+command it fired on (`tg_teleseq`) and the command its hook last ran on
+(`tg_lastseq`), which is the upper of the two states the drawn body lies between.
+The engine blends a move under 128 u between those two, so every frame on which
+the two are equal is told, and the first frame past it, and the frame a teleport
+is first predicted on. The command counter only bounds a stale pair.
+Anything else: the replay's own kinematic rule between two rendered frames, 64 u
+more than the two velocities explain, and no looser.
+A save-lock load is NOT told. Its restore puts the open row back with the
+reference the save holds, the event and the placed origin need not share a
+frame, and letting a hold go moves the body with no event at all. So nothing is
+told from the event (`Board_ResetContact` starts a 2 s clock; or the event is
+still unread this frame; or `ui_rs_armed`) or while a hold or a rewind's pin is
+up, until the next step is seen.
+`Board_Frame`'s break block also moves `seg_laste`: an air time that lands on
+the frame it is moved closes at "last frame's" energy (build 88), which was the
+other side of the step. That line runs in the replay pass too. An air row opened
+with no ground sample is not named Jump or Bhop live either (it was build-pass
+only). `replay seq live` prints the column and how many teleports it was told
+of, predicted and kinematic; `cl_trigdebug 1` prints each, and each load step
+kept quiet. `tg_teleseq` is cleared on map load.
+No engine source, server QC, recorder, evidence, ranking, default, ship-set or
+Build change. FTESurf `adc724d`.
+
+**Verified.** Three progs at 0 warnings. New arm `runlines_seglive.cfg` with
+`test_runlines_seglive.py`, private overlays (`runlines_smoke.py`), on the Patch
+614 client. It stays in surf_kitsune's spawn room, which has no zone, and prints
+the column after each of seven stages: a plain jump; that jump moved 247 u up in
+mid-air; a body moved 200 u up off the floor; the same put back on the floor 0.3 s
+into the fall; a third such fall saved, then loaded with the load key's own pair
+from 200 u away; the room's door (a map teleporter, 300 u up); and a jump on the
+floor above. Eight variants, 10 tests each, 8 of 8: a listen server at 60, 99 and
+286 fps drawn; a dedicated server at 99 fps, and behind `sv_minping 120` at 30,
+72, 99 and 281 fps drawn (`cl_predtrace` prints the rate; `cl_maxfps` only caps
+it). Across the eight the plain jump reads 57.44 to 57.52, the jump moved in
+mid-air 56.89 to 58.49, the body moved off the floor -0.01 to 0.08 and not
+named a hop, the fall put back on the floor -0.01 to 0.13, the column over the
+load moves -0.01 to 0.14 with the load's own step (288 to 295 u) printed as
+kept quiet, and the jump after the door reads 57.87 to 57.96. Against a server
+the door is told as predicted (1 predicted, 5 kinematic); on a listen server
+all six are kinematic.
+Three controls, each one edit compiled out, two runs each (a server, a listen
+server), each refused for its own reason: without the call the four rows read
+243.4, 200.9, 200.9 and 300.4 more than they should; without the `seg_laste`
+line the row put back on the floor reads +200.71 and +200.78; with a load's
+step told like any other the column moves -183.25 and -185.75 over the load.
+One review round, on the first cut. It found that letting a held load go is a
+step with no event (shown afterwards: behind 250 ms a 400 u/s save moved 129 u on
+release and that cut told it as a teleport; this one prints it as a load's and
+tells nothing); that the predicted window was keyed on the command counter, which
+is the wrong command about half the time, hidden because the door is too far to
+be blended and the grader summed both kinds; that the LOAD stage passed when no
+load happened; and that a frame with no clock advance moved the baseline
+untested. Those four are in the Change above and in the grader, which now wants
+the door's break to be the predicted kind where the hook runs and wants the
+subject to say it saw the load's step. They were measured where an arm reaches
+them and were not reviewed again.
+ONE FIX MADE AFTER THE REVIEW WAS WRONG AND IS NOT IN THIS PATCH. The review
+also calculated that correcting a booster the client had not predicted would
+read as a teleport, and the threshold was given that speed change times the
+unacknowledged time. On the next full pass the arm failed 1 variant of 8: at
+30 fps behind 120 ms the server put a falling body back on the floor, 157 u,
+and the column was not told (the count after STOP read 3 for 4), where two
+earlier passes of that variant had been green. The allowance is out again and
+the booster is BACKLOG item 3, open and unobserved. That variant five times on
+each build, same controls: with the allowance 1 of 5 pass (the move untold in
+4), without it 5 of 5, the move told as a step of 108 to 119 u against a
+threshold near 68. So the one green run that variant had given on the pass
+before was the fifth, and a longer round trip than 120 ms will lose the move
+with or without the allowance; where is not measured.
+Replays, on the same build: Patch 613's arm 5 of 5 (-3.51, -0.18, -2.61; the
+build before 613 refused). Eleven recordings of eleven maps replayed on this build
+and on the control, whose replay pass is the published one: 1,782 rows, none
+differs. That shows no row moved; it does not exercise the `seg_laste` line in
+the replay pass, since no break in these files is also a landing. The live STOP
+stage and its control are what show that line.
+
+**Limits.** One room of one map; a walk, jumps and falls, no ramp; expectations
+written by hand, not `replay seq` of the same run. NOT DRIVEN BY ANY ARM: a
+predicted teleporter under 128 u, which the engine blends across a command (the
+arm's is 300 u); it is read and reasoned, and it is the case the review's second
+finding was about. The correction of a booster the client did not predict may
+still be told as a teleport: calculated, never observed, and not cured (see
+above). A move under 128 u that the client did not predict (every teleporter on a
+listen server) is seen only at a low frame rate, and under 64 u never. After a
+load the column is deaf until the next step it sees, or 2 s. A load without the
+hold from standing ground into a mid-air save still breaks its restored row, as
+it did before. The latency was `sv_minping` on loopback. BACKLOG, "Segments rows
+at a teleport". Human acceptance is lextest.md section 16.
