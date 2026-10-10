@@ -41515,3 +41515,74 @@ Pi's copy was replaced too, for parity with the repo and nothing else
 (`default.cfg.pre618-20261010-153115` beside it, hash read back in the same
 call); no lobby was restarted. Roll back: copy the `.pre618` file over
 `default.cfg`.
+
+## Patch 617 — the Steam link is made in a box, by key presses and nothing else *(MOD ONLY, qwprogs + csprogs + surfd page text)*
+
+**Problem.** Patch 615 took a link as two console commands, `link <code>` and
+`link <number>`, on the argument that text a server left in a client cannot
+read the number. Its own review then had a probe server type both commands at
+a client and link it: the engine runs a stuffed game-code command, and game
+code's `localcmd` sits one level above where `rec_sign` refuses. And a cvar
+named `link`, left by an earlier server, turned a typed code into a `setinfo`
+sent in the open. The owner, separately, asked whether the number could just
+be an OK box.
+
+**Change.** No engine source. `link` opens a box drawn by the client's game
+code (`cl_account.qc`). The code, ten characters now, is typed INTO the box;
+Enter sends its digest and the engine's signature for it; the lobby answers
+with the account's name and its number as a stuffed `acct_ask`; Enter on "link
+this game to X?" signs the number, and that links. Esc cancels. No console
+command carries a code or produces either signature.
+
+The box acts only on key events the ENGINE delivered. `CSQC_InputEvent` is now
+a five-line entry that sets `cl_input_real` round `CL_InputEvent` (the old
+body), and nothing in QC may call it; `vote key` and `spectate look`, harness
+commands that feed the input chain from the console, call `CL_InputEvent` and
+find the box deaf. It takes presses and never releases, keeps its own account
+of which keys are down, ignores a held key's repeats and every key for 0.6 s
+after the question appears, and answers to Enter, Y, N and Esc only: the
+engine's `in_journal_synth` injects SPACE through the device path. The server
+side (`sv_account.qc`) sends the box words in place of sprints; surfd's
+protocol is unchanged.
+
+**Review.** One round, two lenses on the committed tree. "Can anything but a
+key press make a link" found the box sound and TWO OTHER ROADS TO THE SAME
+SIGNATURE, both older than this patch. The run's receipt (`cl_replay.qc`)
+signed `rec_sign <nonce> <ticks>` with both taken from the server, and -3 and
+-4 are tick counts: it signs nothing below -1 now. And game code builds console
+lines out of text: `zone_goto` and `ghost speed` pasted a typed argument in
+whole, so a quoted `1;rec_sign ...` ran as a second command at game code's
+level; both take a number now. About fifty more `localcmd` calls carry text and
+have not been read for the same thing. The honest state is therefore: the BOX
+is keyboard-only, the CLIENT is not yet, and whoever can write to a player's
+connection may still find a line that signs. FTESurf ROADMAP 14.3 now opens
+with the fix, which is in the engine (signing as a builtin for game code, the
+console command for the typed console alone), and nothing ranks on a link
+before it. "Did the input change break anything" found nothing for a player
+who never opens the box, and with it: the release of a key the box took was
+swallowed while its repeats went to the game once the box closed (a held `2`
+loaded a saveloc), Esc after a confirm printed "cancelled" over a link that
+went through, and the box drew under panels it took keys ahead of. All fixed.
+
+**Verified.** `tools/p615link.py`, which now presses real keys in the rig's
+window (WM_KEYDOWN on its queue) beside console lines on stdin: 25 checks, 0
+failed, against the Patch 614 binaries. Its controls: an Enter fed down the
+input chain from the console, the engine's injected SPACE presses and a held
+Enter's repeats link nothing; an answer nobody asked for raises no question; a
+code given on the console is not sent; no .qc under src/ calls
+`CSQC_InputEvent`; a marker is no longer echoed through `zone_goto` or `ghost
+speed`. THE SAME ARM FAILS ON TWO BUILDS MADE TO FAIL IT: with the key guard
+removed the console's Enter moved the link, and on the build before the two
+command fixes both markers were echoed. `--refuse-address`, `--taken` and
+`--receipt` pass. `surfd/test_accounts.py` 294 checks, 0 failed; 153 mutants,
+144 fail the suite, 9 survive alone as halves of doubled checks. Build 0
+warnings. EACH STATE OF THE BOX WAS LOOKED AT AS DRAWN, and that found what
+the arm could not: one line sat on the footer, and with the console window
+open nothing was drawn at all, so `link` appeared to do nothing. The arm
+itself was wrong twice on the way: it typed into a box that was not up yet,
+having matched an earlier box's "open" line, and a second Esc of its own
+opened the game's menu, which took the keyboard for the rest of the run.
+**Not verified:** that the run's receipt signs nothing below -1 (needs a server
+that sets the stat; by reading), more than one client on a lobby, and a real
+player's link in the box (FTESurf lextest.md).
+Published as FTESurf `7c1161c`. That commit deploys nothing.
