@@ -41733,3 +41733,77 @@ with no csprogs of its own was served `ebc342f0`, drew the board (screenshot
 looked at) and logged no QC error. That smoke does not pass a teleporter: the
 rule was measured in rigs on this file against a local server, and one lobby of
 twelve was connected to. No config, engine or surfd change.
+
+## Patch 620 — names drawn whole and in real letters; the name on a line slides along it *(MOD ONLY, csprogs + menu.dat)*
+
+**Problem.** The owner: "a lot of names have characters the text doesn't have
+or something? so we get these glitched looking names", and of the name on a
+ticked line in the world, that it is in the engine's bitmap font and "sort of
+jumps segment to segment, instead of smoothly sliding along". Measured before
+anything was changed: on five Momentum boards 74 of 845 names hold characters
+the three shipped faces lack (symbols, kana, Cyrillic, Hanzi, Thai, Arabic,
+emoji) and six hold a `^`. Five causes, all the mod's:
+
+- each font slot and the console had ONE face, so a missing glyph was the
+  engine's hex box, or for Cyrillic its KOI8 transliteration ("PRIWET");
+- QC strings are bytes here (`utf8_enable` 0), so `substring(name, 0, 18)` cut
+  inside a character and left a stray red letter;
+- a `^` in a name was read as a colour code;
+- three display readers took `argv(1)` for a recording's `owner`, its first
+  word, where the grammar says "may contain spaces; read to end of line": 560
+  of the 6077 recordings on the desktop have a space in it;
+- the name on a line was drawn in whatever face was current, at the nearest of
+  at most 256 samples, about 300 u apart on a 50 s run at speed.
+
+**Change.** FTESurf only; the engine already does what is needed. `loadfont`'s
+face argument is a comma-separated list and a glyph comes from the first face
+that has it (`Font_LoadFont`, gl_font.c); a face is looked for in the game and
+then in the OS font directory. So every slot and `con_textfont` now name the
+system's own fonts after the shipped one (`FONT_FB_WIN`, `FONT_FB_LINUX` in
+`sh_font.qc`): nothing is added to the download or redistributed. A saved
+`con_textfont` that is exactly the old default is moved to the list; any other
+value is the player's and is left. `UI_CharBytes` is where a string's first n
+characters end (a fourth continuation byte in a row counts as one, so a damaged
+file cannot outrun four bytes a character); `UI_NameShow` cuts there and
+doubles a `^`. `UI_OwnerLine` reads the owner to the end of the line; a name
+wrapped in quotes still reads as what is inside, as the tokenizer gave it.
+`LineGraph_WorldLabels` sets the UI face and puts the name at the nearest POINT
+of the line where text can be read: in front of the eye and inside 2..98% by
+6..86% of the screen, less the text's width. For a line being ridden along that
+is where the line comes onto the screen. `hud_watch_path_far 0` ("never fade")
+no longer hides every name. `linegraph status` prints the eye and each label's
+point, screen position and text. `ENGINE.txt`'s `patch` moves to 620; `commit`
+and `tag` stay.
+
+**Verified.** FTESurf `16b94fe`, on the stamped Patch 614 binaries.
+`tools/p620names.py`: four authored runs with one made-up name of each kind
+(no real player's). Five eyes looking across the lines, between samples: 20
+labels, all on the true closest point (0.001 u), whole text, the 22-character
+name cut after 18. Three eyes on a line looking along it: all four labels on
+screen, the ridden line's at (960, 928.8) of 1920x1080, each the same distance
+ahead of the eye at all three (spread 0.02 u). A console face of the player's
+own that begins with the shipped one is still theirs after the next
+`Font_Init`. Controls, each of which fails: the refinement compiled out (labels
+up to 26.2 u off); the first cut, which had no on-screen rule (the along view's
+labels at (957, 3681) and the like, and the player's console face replaced);
+the cut without its close-crossing pass (an eye 10 u from a line gets no name).
+Shots looked at beside main's: boxes and "PRIWET" before, letters after.
+`p610ui.py` graphs 0 failures. `test_ui_theme.py` against main: 0 of 30 checks
+failed, its 13 menu and board shots identical to the pixel.
+
+One independent review, of the first cut. It found the off-screen label (by a
+model of the two loops, which the arm then measured), the hover card's byte
+cut, a console-face migration that also moved a player's own list, and a cut
+that bounded characters but not bytes. All four are fixed in what was
+published. The look gate failed the first cut's board for drawing a quoted
+fixture name with its quotes, which is where the quoted-name rule came from.
+
+**Limits.** The fallback faces were seen on one Windows machine, which has all
+seven; the Linux list was never loaded. No shaping and no bidi: Arabic and Thai
+are their letters in file order, and emoji are one colour. A glyph no face has
+is still the hex box. Text still drawn in the engine's bitmap font shows boxes
+as before (the replay's title bar and info rows), and the native scoreboard's
+table has a Latin-only face. The hover card's cut and the byte bound are fixed
+by reading, not by an arm. A ridden line's name sits on the 86% line at mid
+screen whatever the player has put there. BACKLOG, "Patch 620, left open".
+Human acceptance is lextest.md, "names you can read".
