@@ -42699,3 +42699,41 @@ of 19 leaves while its probe answers for 65% of the contact. The live line is
 not placed. A ramp that is a brush entity or a prop abstains. A ducked body
 was not looked for. One ride in the 17 recordings ends on ground; not looked
 at. FTESurf's BACKLOG has the list.
+
+**DEPLOYED 2026-10-10 (Patches 626, 627, 628).** One build for the three, of
+FTESurf `0b3e887` in a clean worktree: `csprogs.dat` `848c654e`, byte for byte
+the file every final check of the three ran on (the in-game arms, the 17-map
+run, the long-run open, the offline counts; the notes were committed after it
+and the rebuild matched). `qwprogs.dat` (`bc25c080`) and `menu.dat`
+(`e5604321`) are what both Windows installs and the Pi already held from Patch
+625, and a clean build of main as it stood (`aecb6d9`) gave the installed
+`csprogs.dat`, Patch 624's `1c098884`. The only commits between the build that
+was live and this one are these three. The process list held no game just
+before the copy.
+Windows, 23:15:31Z: `csprogs.dat` and its line table into `C:\FTESurf\ftesurf`
+and `C:\FTEQuake\ftesurf`, by a copy that refuses unless the installed file is
+the build of the previous main (kept beside each as `.prev`); and
+`cfg/default.cfg` (`hud_lines_nums 2`, `hud_lines_edge 1` and a reworded
+comment: +6 -4 lines, read before the copy), by the same script, which refuses
+unless the installed one is byte for byte the previous main's (kept beside
+each as `default.cfg.pre628-20261010T231531Z`). Read back afterwards with a
+second tool. The owner's own saved settings hold neither cvar, so both new
+defaults are what he gets; that file was read for the two names and not
+touched.
+The Pi, `build.ps1 -Pi` from that worktree, 23:15:54Z to 23:16:38Z: its own
+recompile gave the same two hashes; 12 lobby rows, 0 players; both uploads
+hash-verified and swapped, the previous pair kept as `.prev`; all twelve
+lobbies restarted. Read back from the host in one call: `csprogs.dat`
+`848c654e`, `qwprogs.dat` `bc25c080`, `csprogs.dat.prev` `1c098884`, twelve
+lobby units active since 23:16:31Z to 23:16:40Z. surfd (Patch 625) takes an
+account proof only if it names the csprogs the lobbies serve or the one before
+it: those are now this build and Patch 624's.
+`tools/pi_lobby_smoke.py` against lobby 1, with the Patch 625 client: a client
+with no csprogs of its own was served `848c654e`, drew the board (screenshot
+looked at) and logged no QC error. THAT SMOKE OPENS NO REPLAY AND TICKS NO
+LINE: the three changes were measured in rigs on this file and one lobby of
+twelve was connected to. Not done on the fleet: an imported run opened through
+the online board (the files were replayed from disk; surfd's copy of one was
+read and carries `foreign` and `momdemo`). No engine or surfd change. Roll
+back: copy each `csprogs.dat.prev` over its file and the `.pre628` copy over
+`default.cfg`.
