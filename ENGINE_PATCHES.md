@@ -42317,3 +42317,28 @@ cheaper with the order on than off, because it draws a third of the points.
 **Not done.** No real map was flown with a line ticked. A recording with a
 failed attempt in it shows that attempt first; a rewind into the later of two
 close passes takes the earlier. FTESurf's BACKLOG has the list.
+
+**DEPLOYED 2026-10-10 (Patch 624).** A build of FTESurf `673e4d0` in a clean
+worktree: `csprogs.dat` `1c098884`, byte for byte the file the gate ran on (the
+gate's build was of the same QC before the commit's notes were finished; the
+files were compared whole). `qwprogs.dat` (`bc25c080`) and `menu.dat`
+(`e5604321`) are what both Windows installs and the Pi already held from
+Patch 625, and a clean build of main as it stood (`8216c0c`) is byte for byte
+what was installed. The only commit between the build that was live and this
+one is this patch. The process list held no game just before the copy.
+Windows, 22:25:43Z: `csprogs.dat` and its line table into `C:\FTESurf\ftesurf`
+and `C:\FTEQuake\ftesurf`, by a copy that refuses unless the installed file is
+the build of the previous main (Patch 625's `f1126df3`, kept beside each as
+`.prev`). Read back afterwards.
+The Pi, `build.ps1 -Pi` from that worktree: 12 lobby rows, 0 players, both
+uploads hash-verified and swapped at 22:26:22Z, the previous pair kept as
+`.prev`, all twelve lobbies restarted. Read back from the host in one call:
+`csprogs.dat` `1c098884`, `qwprogs.dat` `bc25c080`, `csprogs.dat.prev`
+`f1126df3`, twelve lobby units active. surfd (Patch 625) takes an account proof
+only if it names the csprogs the lobbies serve or the one before it: those are
+now this build and 625's. `tools/pi_lobby_smoke.py` against lobby 1, with the
+Patch 625 client: a client with no csprogs of its own was served `1c098884`,
+drew the board and logged no QC error. That smoke ticks no line: the run order
+was measured in rigs on this file, on the Patch 625 binaries, and one lobby of
+twelve was connected to. No engine, cfg or surfd change. Roll back: copy each
+`csprogs.dat.prev` over its file.
