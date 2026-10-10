@@ -92,6 +92,12 @@ void Log_String (logtype_t lognum, const char *s)
 	if (!log_enable[lognum].value)
 		return;
 
+	//Patch 609: Cvar_Shutdown NULLs every .string and leaves .value, so the test above
+	//still passes after it. The Windows server's Sys_Error logs AFTER SV_Error's
+	//SV_Shutdown and faulted on the next line (crashaddr: Log_String+0x46).
+	if (!log_name[lognum].string)
+		return;
+
 	if (log_name[lognum].string[0])
 		f = log_name[lognum].string;
 	else

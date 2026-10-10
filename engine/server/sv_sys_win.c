@@ -856,6 +856,9 @@ Sys_Error
 ================
 */
 #include <process.h>
+//Patch 609: every way out of Sys_Error is Sys_Quit, whose exit(0) reported a fatal error
+//as success (the exit(1) after each call is unreachable).
+static int sys_exitcode;
 void Sys_Error (const char *error, ...)
 {
 	va_list		argptr;
@@ -868,6 +871,7 @@ void Sys_Error (const char *error, ...)
 	vsnprintf (text,sizeof(text)-1, error,argptr);
 	va_end (argptr);
 	COM_WorkerAbort(text);
+	sys_exitcode = 1;
 
 
 //    MessageBox(NULL, text, "Error", 0 /* MB_OK */ );
@@ -1443,7 +1447,7 @@ void Sys_Quit (void)
 		SetServiceStatus (ServerServiceStatusHandle, &MyServiceStatus);
 	}
 #endif
-	exit (0);
+	exit (sys_exitcode);
 }
 
 int restorecode;

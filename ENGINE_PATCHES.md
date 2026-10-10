@@ -40642,3 +40642,53 @@ entries said "one laptop". Every rig ran on the desktop PC: the client logs
 read `GL_RENDERER: NVIDIA GeForce RTX 2080 SUPER/PCIe/SSE2`. The word is
 corrected in place above. Nothing was measured on the N100 laptop, so no
 cost figure in these entries says anything about it.
+
+## Patch 609 — a Windows dedicated server that reaches SV_Error exits instead of faulting
+
+**Problem.** On a dedicated server `SV_Error` calls `SV_Shutdown`, which ends in
+`Cvar_Shutdown`, and then `Sys_Error`. sv_sys_win.c's `Sys_Error` calls
+`Con_Log`. `Cvar_Shutdown` NULLs every cvar's `.string` and leaves `.value`, so
+`Log_String` passed its `log_enable` test and read `log_name[lognum].string[0]`:
+an access violation on every SV_Error while `log_enable` is 1, which is every
+harness server. The CRT's signal handler then called `Sys_Error` again and
+faulted the same way. With logging off nothing faulted and the process left
+through `Sys_Quit`, whose `exit(0)` reported the fatal error as success. Found
+with `+map` naming a map nobody has: the server asks `cl_download_mapsrc`, gets
+404, and `SV_Map_DownloadCanceled` raises the SV_Error.
+
+**Change.** `Log_String` returns when `log_name[lognum].string` is NULL.
+`Sys_Error` in sv_sys_win.c sets a file-static exit status of 1 and `Sys_Quit`
+passes it to `exit`; an ordinary quit still exits 0. Nothing else: the 10 s wait
+and the CreateProcess of the server's own command line when `-noreset` is absent
+are as they were, and so are the Linux server's `Sys_Error` (it aborts, by
+design) and the client.
+
+**Verified.** The fault, from the crash logger's file (its path is hard-coded,
+`C:\FTEQuake\quakers\crashaddr.txt`, sv_sys_win.c:357) resolved against the
+installed build's own `fteqwsv64.exe.db`: main, ServerMainLoop, SV_Frame,
+COM_DoWork, HTTP_CL_Think, DL_Close, SV_Map_Downloaded, SV_Error, Sys_Error,
+Log_String+0x46; the second record enters through Signal_Error_Handler.
+FTESurf `tools/p609sverr.py`: one server per arm, no client, cwd the install,
+`-plugin` with a piped stdin, `+map no_such_map_zz`. Control is the installed
+Patch 606 server (sha256 13ecc334cc2ba536; no file under engine/ or plugins/
+differs between its commit and this one's parent), subject is this diff built
+`sv-rel` in a worktree.
+
+| arm | control | subject |
+|---|---|---|
+| `log_enable 1`, `-noreset` | exit 0xC0000005, crash file +2684 bytes | exit 1, crash file +0 |
+| `log_enable 0`, `-noreset` | exit 0, crash file +0 | exit 1, crash file +0 |
+| `log_enable 1`, no `-noreset` | not run | exit 1 after 12.9 s, crash file +0 |
+
+Both `log_enable 1` arms end their log on `SV_Error: Couldn't download map
+no_such_map_zz.`. In the last arm a second server from the same path was alive
+14 s later, the respawn working as written; it was stopped by hand, and nothing
+here changes it. A client and this server on surf_kitsune through FTESurf
+`tools/conbridge.py`: connect, spawn, `status`, 68 server log lines, both quit
+with exit 0. The server build holds the word `warning` on 147 lines, 127 of them
+make's peer-target notice and none in the two files changed.
+Limits: one machine (the desktop PC). Only the missing-map route into SV_Error
+was driven, not a QC error or a `Host_Error`. A first subject build measured
+nothing and is not counted: a fresh worktree has no `libs-x86_64-w64-mingw32`,
+so it linked `zlib1.dll` and every arm ended in 0.1 s with 0xC0000135; the build
+above passes `ARCHLIBS=` the main checkout's.
