@@ -42492,3 +42492,103 @@ a sample, so a recording of some 300,000 samples, imported or native, would
 end the session when opened; none exists, and the fix (an open spread over
 frames, as the board-line job is) lifts the cap as well. Three reader
 mismatches on files nothing writes. FTESurf's BACKLOG has the list.
+
+## Patch 627 — a line marks the top of each arc and the bottom of each ride, and shows them by default *(MOD ONLY, csprogs + cfg/default.cfg)*
+
+**Problem.** The second of the owner's three: speed and energy at the high
+point of an air time and at the bottom of a ramp. The line already had
+"apex" and "trough" marks, but a turn was looked for only between two samples
+that were both in the AIR, and only once |vz| had reached 40 since the last
+one -- so the bottom of a ride on a ramp, which is where a surf run's bottoms
+are, was never marked at all; the marks were stamped on the sample after the
+turn; and their numbers were off unless `hud_lines_nums` was set to 2.
+
+**Change.** FTESurf `cl_lines.qc` (`Line_Peak`), `default.cfg`,
+`defaultuser.cfg` and `registercvar` (`hud_lines_nums 2`).
+
+*A turn* is where vz crossed zero between the sample before and this one, in
+the air, on a ramp, or across the change between them. It is stamped AT the
+crossing: time, place and sideways speed read off the straight line vz draws
+between the two samples, which in the air is exact (the mover's gravity is
+two half steps).
+
+*It is marked when it stands 8 units of height clear on both sides* -- of the
+turn before it, or of where the count began; and of where the body goes next.
+So tops and bottoms alternate, a wobble marks nothing however fast vz flips,
+a slow turn is kept, and a mark is appended once the body has moved on and
+stamped back at its turn: `Line_EvAt` now keeps the mark table in time
+order, which `Line_EvFind` searches by.
+
+*The count starts again* on a slot's first sample, after a teleport or a
+loaded save, and on or beside ground: a takeoff is not a bottom. A landing on
+ground is itself a far side: a top that only the landing puts 8 u behind is
+marked. A turn on a sample that carries its own contact mark, or on the one
+after it, counts for the alternation and is not drawn twice (a landing on an
+upslope is the bottom).
+
+`tools/p449mark.py` mirrors the rule.
+
+**The first cut was a gate, and it was worse.** "|vz| reached 40, or 8 u
+moved, since the last mark" passed its own arm. On real runs it marked the
+same bottom twice where a ride wobbles (surf_voyager at 18.67 and 18.71 s):
+52 pairs of marks under 0.1 s apart in 400 imports and 29 in 186 native runs,
+against none and 4 for the rule shipped.
+
+**What the review found** (one independent reader, given the diff and the
+requirements, not the argument; it transcribed the rule to Python and ran it
+over 88 native runs and 1,200 imports). No requirement broken as written, and:
+
+- *Half the upslope landings drew a second mark.* In real files the landing's
+  own sample often still falls and the next one turns up (13 of 24 native,
+  119 of 244 imported): the bottom was stamped between the two, 17 u along
+  from the landing's mark. Fixed: the sample after a contact mark is covered
+  as well.
+- *A top whose first clear sample is the landing was dropped* (a hop onto a
+  ledge 8 to 12 u under its top, marked or not by where the last air sample
+  fell: 35 tops in 68 bhop imports). Fixed: a ground landing is a far side.
+- *A board line and the replay of one file can differ by the run's first
+  top*: the board line's count starts at its one seed sample, the replay's at
+  the file's first. 14 of 75 native whole-run files and 53 of 700 imports (8
+  and 30 under the rule before this patch). NOT fixed; the fixture's first
+  top is built to be that case so a change to it is seen. BACKLOG.
+- *The first fixture did not pin what it named*: `LN_EVDZ` anywhere from 3 to
+  10.5 passed, a turn's x and y were not looked at, and the board-line check
+  could not see the seed. It pins them now.
+- The older ramp-leave grader took "the mark before a leave" as the ride's
+  landing; a bottom sits between the two on 6 of 32 rides. It looks for the
+  landing now.
+
+**Verified.** `tools/test_runlines_peaks.py` builds its fixture tick by tick,
+so every expected mark is known by construction and not from the classifier:
+one motion written twice, as a native file and as an import whose contact has
+to be inferred (Patch 626); 423 samples, 9 tops and 3 bottoms among 31 marks.
+The model agrees with the construction without a game (six checks). In the
+game (`runlines_peaks.cfg`, five more): the client's marks for both files are
+the constructed ones in time, sample, place and speed; the native and the import
+mark identically (the `~` aside); a board line of each marks the same from
+its seed, less the first top; `hud_lines_nums` reads 2 with nothing set; tops
+and bottoms are issued with their numbers. The control (the build before)
+has no bottom at all. Fourteen one-edit mutants are each caught -- the eight
+of the rule, and six for what the review found (a bottom a tick after a
+landing drawn, a ground landing not a far side, `LN_EVDZ` 7.3 and 8.7, a
+board line counting from height 0, a turn at the later sample's x and y).
+They are built and graded OFFLINE, the built csprogs in the review's
+interpreter against the test's own expectations; nine of them were also
+caught in the game on an earlier cut of the fixture, with the label default's.
+The two older arms that grade a real run's marks (`runlines_labels`,
+`runlines_rampleave`) pass on the final build.
+By the mark model over 400 imports (326 minutes), before the review's two
+fixes: 8,627 tops and bottoms where the old rule marked 5,157 -- a median 13
+a run against 7.
+*Pixels.* surf_voyager at 0:03.9: a dot on the ramp where the line is lowest,
+`2001 u/s  E -562  4.59 s`, and another at the top of the arc after it
+(looked at on the build before the review's fixes).
+
+**Not done.** NO TOP OR BOTTOM HAS BEEN SEEN ON THE PLAYER'S OWN LIVE LINE by
+an arm: `runlines_livelag` passes on the final build with its land and leave
+where they were, but its ride has no turn, and three scripted jumps did not
+land one inside a running run. A mark there appears once the body is 8 u past
+it. On a ramp, and above all across a landing, the straight line in vz is a
+reading and not the mover's own path. A top and a bottom look alike (one pale
+dot); nobody has judged whether that reads. The open of a replay costs 3
+more budget events a sample (Patch 626). FTESurf's BACKLOG has the list.
