@@ -40459,3 +40459,83 @@ replaced, each first checked against its pre-task hash and kept as `.prev`. No
 game was running, and none was started from an install; the owner's config was
 not opened. Not deployed to the Pi. Hashes and rigs: FTESurf
 `tools/p603scores.md`.
+
+## Patch 606 — one dark pastel theme behind `ui_style 1`, and a laid-out leaderboard
+
+**Problem.** Patch 566's modern SUI style reached one panel, hud_edit, as a
+bright outline on every control. The map picker, both leaderboards and the
+save-lock and Source-renderer menus each carried their own hard-coded colours and
+square 1 px boxes. The +showscores board had only ever been added to: 12 px
+text, time before player, the room list hanging off one side. Patch 605's native
+table drew ImGui's default blue inside it.
+
+**Change.** Mod-side, except the provider's colours. `sh_ui.qc` holds one token
+set (five slate surfaces, a text ramp, seven pastel accents) and
+`sui_style_panel`, `sui_style_thumb`, `sui_style_hud` and pastel `^x` escapes;
+each panel's own palette macros read the tokens under `ui_style 1` and keep
+their literals under 0, which stays the default. hud_edit: the fill carries a
+chip's state and a hairline appears only under the cursor. Save-lock and
+Source-renderer menus: one rounded card, a keycap per row, page names and dots,
+values coloured by meaning. Map picker and its leaderboard panel: pills, rounded
+wells and buttons, a tier colour ramp, podium colours, a primary start button,
+tooltips on the filters and on the `? ~ k` tier marks. Tooltips now choose the
+UI face themselves (`m_draw` resets it before `sui_end`) and answer a mouse
+hover only; `ui_hover` is the menu harness's way to hold one. +showscores gets a
+second layout, `Scores_DrawModern`, over the same data, row drawers, sui ids and
+hand-offs: a header band, the sources as one segmented control, the legs as a
+sidebar, player before time, right-aligned time and delta, podium plates for
+clean runs, a key-hint footer, and the board centred as a pair with the room
+list at a width that does not change with the source. It sizes itself in steps
+(type 8, 7, 6 units, then why/date/run-class columns, then a narrower room list)
+and draws nothing under the room list; when its smallest form does not fit it
+returns before drawing and the classic layout runs. Both row drawers read a
+per-frame column table that the classic layout fills from its old character
+offsets. Provider: `ScoresTheme` sets colours, two rounding values and
+`DisabledAlpha` 0.85 and no size, because the p603 gates click at fixed offsets
+inside the table; it applies in either style (the provider cannot see
+`ui_style`). No server QC (qwprogs.dat is byte-identical), recorder, evidence,
+ranking, default, ship-set or Build change. The owner retired the old look
+after seeing this one (10 Oct); Patch 607 removes it.
+
+**Verified.** One laptop, GL, 1920x1080 at hud_scale 2 unless said; synthetic
+rows, a loopback stub for lobbies and boards, real dedicated sockets. Three
+progs at 0 warnings. `tools/test_ui_theme.py` against the previous build's
+progs: 13 panel states at `ui_style 0` differ by 0 pixels (whole frame less the
+ping cell in game, the opaque panel interior in the menu); every one differs at
+`ui_style 1`; a csprogs the test rebuilds with one classic colour moved is
+caught on the three hud_edit shots (76,248-76,734 pixels) and reads 0 on the
+save-lock shot it cannot reach; a synthetic mouse parked on a map-picker chip
+reads back its tooltip at style 1 and none at style 0. `test_ui_modern.py`
+28/28. Its first run failed one check that was real: the themed snap lines
+crossed the speedometer (58 changed pixels, bound 30), so those lines stay one
+colour in both styles. A second run failed four with a foreground-focus line in
+its log between stages; the next, on the same files, passed. `p498keys.py`
+16/16 once its fixture had accepted terms and a chosen name. The new board
+acts: `p603scores.py`, legacy arm, 0 failures at `--style 0` and at `--style 1`
+(a row click opens row 0's own recording, the line box builds row 0's line,
+focus and console precedence hold, and real clicks on the source switch step
+Online, Segmented, Local), and the dense suite in the new board, native at two
+virtual scales plus legacy, 0 failures. Predicted and wrong: the basic suite's
+native arm fails "page controls did not act" at `--style 1` -- and identically
+at `--style 0`, because it expects a 6-row page from 8 rows and the dense
+provider's page is 24; not a layout fault, noted in BACKLOG. Looked at, not
+gated: the board at 1280x720, 1024x768 (why/tag dropped), 800x600 (type 12,
+five columns, the room list 200 wide beside it) and 640x480 (the classic
+layout, as designed). Cost is reported, not gated, and this hour it mostly measured the machine,
+which the owner and another agent's jobs were using: QC UpdateView median
+us/frame at 20 rows with the board open, legacy / no-plugin / native arms. The
+final build's modern board read 1594 / 1537 / 1465 at 15:57 and 1169 / 1173 /
+1075 at 16:12, with the same draw calls and indices both times; the first
+review copy read 1208 / 1190 / 1114 in between, and the classic board 1329 /
+1157 / 1000 at 16:01 with a foreground-focus line in every arm. The spread
+between two runs of one build (36%) is larger than any difference between the
+layouts or the builds, so neither is called cheaper. Two independent reviews of the committed tree,
+integrity only. The first found two classic colours changed by a shared macro
+in the room list (the gallery has one player and no hover there), the provider
+theme reaching `ui_style 0`, and a one-frame disagreement about the source on
+the frame a tab is clicked; the second, on the fixes, found no integrity defect
+and that nothing clicked the source switch, which the gate above now does. The
+owner then retired the old look, so the provider's theme stayed unconditional
+by decision rather than oversight. Not claimed: appearance (FTESurf
+lextest.md), another machine, DPI, D3D/Vulkan for the QC panels, a real mouse
+on the menu's tooltips.

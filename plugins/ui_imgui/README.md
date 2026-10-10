@@ -120,6 +120,12 @@ returns false and QC draws its own table. Appearance, DPI and device acceptance
 are not claimed. Falsifiers: FTESurf `tools/p603scores.md` and the `p603*` tools
 it names (a historical harness number, not Patch 603).
 
+Since Patch 606 the owner wears FTESurf's `Dusk` palette (`ScoresTheme` in
+`scores.inc`): colours, two rounding values and `DisabledAlpha` 0.85, the same
+numbers as `SUI_THEME_*` in FTESurf `src/shared/sh_ui.qc`. No padding, spacing
+or border size is set there, because those gates click at fixed offsets inside
+the table. The font is still ProggyClean.
+
 Build with the engine's `plugins-rel NATIVE_PLUGINS="... ui_imgui"` or the
 plugin Makefile's exact `fteplug_ui_imgui` target. Adapter compiles at -O2;
 unmodified vendor compiles at -O1 to avoid GCC 16's upstream mouse-array

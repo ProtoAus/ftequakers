@@ -55,6 +55,31 @@ static bool ScoresModelValid(const pluguimodel2_t &m)
 	}
 	return highlighted;
 }
+//FTESurf's `Dusk` palette, the values of src/shared/sh_ui.qc's SUI_THEME_* (Patch
+//606); change them together. Colours and rounding only: the gates click at fixed
+//offsets inside this table, so no padding, spacing or border size may move.
+static void ScoresTheme(ImGuiStyle &s)
+{
+	const ImVec4 well(0.075f,0.078f,0.110f,1), panel(0.102f,0.110f,0.149f,1), chip(0.141f,0.153f,0.208f,1),
+		hover(0.184f,0.200f,0.275f,1), pressed(0.231f,0.251f,0.345f,1), selected(0.200f,0.262f,0.361f,1),
+		edge(0.204f,0.220f,0.286f,1), edgehi(0.314f,0.337f,0.435f,1), text(0.882f,0.894f,0.949f,1),
+		muted(0.435f,0.459f,0.565f,1), accent(0.549f,0.769f,0.973f,1), clear(0,0,0,0);
+	ImVec4 *c = s.Colors;
+	c[ImGuiCol_Text] = text; c[ImGuiCol_TextDisabled] = muted;
+	c[ImGuiCol_WindowBg] = well; c[ImGuiCol_ChildBg] = clear; c[ImGuiCol_Border] = edge;
+	c[ImGuiCol_FrameBg] = chip; c[ImGuiCol_FrameBgHovered] = hover; c[ImGuiCol_FrameBgActive] = pressed;
+	c[ImGuiCol_Button] = chip; c[ImGuiCol_ButtonHovered] = hover; c[ImGuiCol_ButtonActive] = pressed;
+	c[ImGuiCol_Header] = selected; c[ImGuiCol_HeaderHovered] = hover; c[ImGuiCol_HeaderActive] = pressed;
+	c[ImGuiCol_CheckMark] = accent; c[ImGuiCol_NavCursor] = accent;
+	c[ImGuiCol_ScrollbarBg] = clear; c[ImGuiCol_ScrollbarGrab] = edgehi;
+	c[ImGuiCol_ScrollbarGrabHovered] = muted; c[ImGuiCol_ScrollbarGrabActive] = accent;
+	c[ImGuiCol_TableHeaderBg] = panel; c[ImGuiCol_TableBorderStrong] = edge;
+	c[ImGuiCol_TableBorderLight] = ImVec4(edge.x,edge.y,edge.z,0.55f);
+	c[ImGuiCol_TableRowBg] = clear; c[ImGuiCol_TableRowBgAlt] = ImVec4(chip.x,chip.y,chip.z,0.45f);
+	s.ScrollbarRounding = 6; s.GrabRounding = 4;
+	//A held peek is drawn disabled; the default 0.6 read as a washed-out board.
+	s.DisabledAlpha = 0.85f;
+}
 static void ScoresFont(Context &c)
 {
 	int index = ScoresFontIndex(c.model);
@@ -130,7 +155,8 @@ static bool ScoresGallery(Context &c, const pluguiframe_t &f)
 		for (unsigned i = base+4; i < c.model.count; i += 9)
 			widths[4] = std::max(widths[4],ImGui::CalcTextSize(c.model.widgets[i].label).x);
 		for (unsigned col = 0; col < 9; col++) ImGui::TableSetupColumn(heads[col],ImGuiTableColumnFlags_WidthFixed,widths[col]);
-		ImGui::TableSetupScrollFreeze(0,1); ImGui::TableHeadersRow();
+		ImGui::TableSetupScrollFreeze(0,1);
+		ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.651f,0.671f,0.761f,1)); ImGui::TableHeadersRow(); ImGui::PopStyleColor();
 		ImGuiListClipper rows; rows.Begin(int((c.model.count-base)/9));
 		while (rows.Step())
 			for (int row = rows.DisplayStart; row < rows.DisplayEnd; row++)

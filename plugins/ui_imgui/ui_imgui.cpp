@@ -96,6 +96,7 @@ static qboolean QDECL Open(const pluguiowner_t *o)
 	ImGui::GetStyle().AntiAliasedLinesUseTex = false;
 	if (ScoresOwner(*o))
 	{
+		ScoresTheme(ImGui::GetStyle());
 		c->scoresstyle = ImGui::GetStyle();
 		//Actual physical bakes share one immutable atlas. No file IO or rebaking
 		//on size changes, and no global/window/framebuffer bitmap enlargement.
