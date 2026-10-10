@@ -42029,3 +42029,52 @@ started a link (surfd logged the start and kept its seal; the lobby's waits
 came two seconds apart and stopped at Esc). Nobody has signed in for a start
 on a real lobby yet: that needs the owner's Steam account. Rollback order is
 in FTESurf AGENT_NOTES, "Steam accounts".
+
+## Patch 623 — the Windows release ships the ui_imgui plugin, with its notices *(MOD ONLY, release tooling)*
+
+**Problem.** The owner asked whether the ImPlot run graphs ship in the next
+release. They did not: `fteplug_ui_imgui_x64.dll` reached the two development
+installs through `build.ps1 -Engine` and was in no ship list, so a release
+player got the QC plots and, since Patch 618 loads the plugin at boot, one
+"Couldn't load plugin ui_imgui" line.
+
+**Change.** FTESurf `src/release/release.ps1`. The DLL is in the ship list;
+gate 3 compares it with `engine\release` beside the exe and the hl2 plugin (no
+built copy at all is "cannot check", one missing beside the others is skew),
+and the three are hashed again once staged. `VERSION.txt` and the receipt carry
+its hash. `THIRD-PARTY.txt` is generated into the stage and is about that DLL:
+the notices of Dear ImGui, ImPlot (read from the head of `implot.h`: the
+vendored `LICENSE-implot.txt` names one of the two holders), the stb headers
+inside Dear ImGui, ProggyClean, the Roboto subset (`plugins/ui_imgui/fonts/OFL.txt`)
+and winpthreads. A text missing or not the one expected stops the release.
+`SOURCE.txt` named this fork's branch as `engine-patches`, which stops at
+Patch 500 and has no `plugins/ui_imgui`; it says `main`. The `qcbuild` drift
+check read `ENGINE.txt`'s first 40 lines and the pin is at line 179; it reads
+the file. Two tools: `tools/release_tree.py` and `tools/release_dryrun.ps1`,
+which runs the script's dry run with rclone, ssh, scp and curl replaced by
+counted stubs, because that dry run otherwise writes a probe object to the
+production bucket.
+
+**For this tree.** `plugins/Makefile` links the plugin `-static-libstdc++
+-static`, and libstdc++ brings winpthreads with it: 134 `pthread_*` names in
+the DLL, none in `fteqw64.exe` or the hl2 plugin. Its licence (MIT and a BSD
+part) asks for its notice with binary copies; FTESurf's `src/release/notices`
+holds a copy of the compiler's own `COPYING`. `vendor/LICENSE-implot.txt`
+(pinned in `SHA256.json`) says "2020 Evan Pezent"; `implot.h`, `implot.cpp` and
+`implot_internal.h` say 2020-2024 and add a second holder for 2025-2026.
+
+**Verified.** FTESurf `ea83c9f`. No release was cut. In a scratch worktree with
+a QC build, the stamped Patch 614 binaries and the install's untracked ship
+files: gates 1 to 4 pass, 805 files staged, the archive's 805 entries identical
+to the stage, three rclone calls swallowed; the staged DLL is the installed one
+(`69929fe5`). Controls, each stopping the script with its own message: the DLL
+absent from the tree, a byte appended to it, its built copy absent beside the
+other two, `implot.h` moved aside, a byte appended to the staged copy while the
+rest was being copied. One independent review of the first cut found the gate
+asking for all three built copies or nothing (it passed a tree holding only a
+different exe and hl2 plugin), ImPlot's second holder, stb, winpthreads, a
+Roboto pointer onto a blank OFL template and the branch; all fixed before
+publishing.
+
+**Not done.** The release carries no notices for what the exe and the hl2
+plugin are built with; the Linux archive has no such plugin.
