@@ -40643,6 +40643,90 @@ read `GL_RENDERER: NVIDIA GeForce RTX 2080 SUPER/PCIe/SSE2`. The word is
 corrected in place above. Nothing was measured on the N100 laptop, so no
 cost figure in these entries says anything about it.
 
+## Patch 608 — a ramp leave mark sits on the ride's last real contact *(MOD ONLY, csprogs)*
+
+**Problem.** The run line's "left the ramp" chevron, and the speed and energy
+beside it, were stamped on the sample where the 0.08 s ramp hold ran out, not
+where the ride ended. On a surf_kitsune recording all 38 ramp leaves sat 0.090 s
+late, a median 211 u (84..315) past the last sample that touched the ramp.
+BACKLOG "Off ramp labels appear well beyond the actual ramp exit"; ROADMAP 12.4.
+
+**Change.** `cl_lines.qc:Line_Point` remembers each ride's last sample carrying
+the native ramp bit and, when the hold expires, stamps the leave mark with that
+sample's clock, ordinal, position and velocity (`Line_EvAt`). The classifier,
+its edges, the hold and the Segments column are unchanged, so a bridged gap
+still marks nothing and no mark is added or removed. A ride with no contact of
+its own since the slot began or the last break or stitch takes its first such
+sample, which keeps the table in clock order. Each mark also keeps the clock of
+the sample its edge fell on (`ln_ec`, the last column of `replay marks`): a
+Segments row still starts there, and containment is graded on it. The contact
+colour is built from the marks, so the ramp colour now ends with the ride.
+`tools/p449mark.py` models the new stamp and gains the hold reset at a break
+that Patch 530 gave the client; `p452col.py` colours from the file-derived
+marks. No engine source, server QC, recorder, evidence, ranking, default,
+ship-set or Build change: `qwprogs.dat` and `menu.dat` are byte-identical.
+FTESurf `26e350e`.
+
+**Verified.** Three progs at 0 warnings. Private overlays (`runlines_smoke.py`),
+changed build against a control built from the parent commit:
+- `runlines_rampleave.cfg`: `test_runlines_rampleave.py` 8 of 8. On a copy of a
+  recorded surf_kitsune run (10,252 samples) all 38 ramp leaves are on a sample
+  carrying the ramp bit, with that sample's own clock, position and velocity,
+  no later sample of the ride touching, and the hold expired exactly at the
+  edge sample; 266 points between a leave and its edge are drawn as air; every
+  Segments row starts on a mark's edge and none on a leave's stamp. That
+  recording's rides are one shape, so the arm also replays an authored body
+  (`runlines_rampshapes.rec`: a one-sample ride, a bridged gap, a ride the hold
+  opens off ground, a stitch on a repeated clock inside the hold, a ride ending
+  on ground) against a 13-mark table written by hand. The control fails five of
+  the eight tests: 0 of 38 on a contact sample.
+- `p449mark.py` on its eight recorded fixtures (surf and bhop, 4,659 marks):
+  every mark equals the file-derived one in kind, sub-code, ordinal, time, speed,
+  vz and edge clock. Its stamp is the patch author's own, so this shows the two
+  agree, not that either is right. Three of the eight failed on the control with
+  the grader as published (the model lacked the break reset). One still fails
+  containment, on the control as well: BACKLOG.
+- `p452col.py` 4 of 4 (9,965 points graded for contact, 0 wrong; 152 wrong on
+  the control). `test_runlines_labels.py` 4 of 4; the dedicated live-line
+  `test_runlines_reset.py` 5 of 5.
+- The mark cap's compaction, which no fixture reaches, with a private
+  `LN_EVCAP 20` build: the 20 kept marks are rows of the uncapped table field
+  for field.
+- Screenshots of both builds at the same replay time: the labels draw, with the
+  exit's own time and numbers.
+One review round. It found a stitch on a repeated clock (no break, so the hold
+survives) putting a leave behind the stitch mark, fixed and in the authored
+recording, and three test assertions that did not test what they said,
+rewritten. Its fixes were not reviewed again.
+
+**Limits.** The stamp is the first sample at or past the exit, so it can be a
+tick late; no interpolated crossing. Where the ramp bit alternates a ride can
+end on a clear tick and the mark sits that gap early. The LIVE line reads the
+bit from a server stat beside a predicted position: its lag is not measured or
+changed. No curved or prop ramp, and no tick-rate, frame-rate or LOD sweep.
+A human look is in lextest.md section 13.
+
+**DEPLOYED 2026-10-10, Windows only (Patch 608, csprogs only).** FTESurf
+`26e350e`. The progs built from that commit in a clean worktree are
+byte-identical to the ones the gates ran on. Both installs at 08:07:18Z:
+`csprogs.dat` and its line table replaced (4 files), each install first checked
+to hold the published Patch 607 csprogs (`162aaf01`) and that pair kept as
+`.prev`; `qwprogs.dat` and `menu.dat` were already identical and were not
+touched. No engine rebuild. No game was running when the files were read back.
+Not deployed to the Pi.
+
+**DEPLOYED 2026-10-10 to the Pi (Patch 608).** FTESurf `26e350e`, `build.ps1
+-Pi` from the clean worktree, 08:09:00Z to 08:09:40Z. Before it, in one read: the
+Pi held the published Patch 607 csprogs (`162aaf01`), a `qwprogs.dat` identical
+to this build's and the repo's `default.cfg`; 12 lobby rows, 0 players; and the
+only QC changed since the Patch 607 deploy was this patch's two client files.
+Both files hash-verified on the Pi and swapped, the previous pair kept as
+`.prev`; all 12 lobbies restarted. Read back from the host: `csprogs.dat`
+`69515b32`, 12 lobby processes started 08:09:32Z to 08:09:41Z, 12 directory rows.
+`tools/pi_lobby_smoke.py` against lobby 1: a client with no csprogs of its own
+was served `69515b32`, drew the board and logged no QC error. No config, engine
+or surfd change.
+
 ## Patch 609 — the Windows dedicated server's fatal-error path: no fault, an error status, no orphan, and a crash record where its game is
 
 **Problem.** Four things on one path, each hidden by the one before it.
