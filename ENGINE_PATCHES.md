@@ -40733,3 +40733,21 @@ and the exit, not that a key press ends it. A first subject build measured
 nothing and is not counted: a fresh worktree has no `libs-x86_64-w64-mingw32`,
 so it linked `zlib1.dll` and every arm ended in 0.1 s with 0xC0000135; the
 builds above pass `ARCHLIBS=` the main checkout's.
+
+**DEPLOYED 2026-10-10, Windows, the server binary only (Patch 609).** A clean
+`sv-rel` of the tagged commit `d43004f60` in a worktree, with `SVN_VERSION` and
+`SVNREVISION` supplied by hand and `ARCHLIBS=` the main checkout's: the exe
+contains `git-7151-patch-609-0-gd43004f60`, imports the same DLLs as the Patch
+606 server, sha256 `fa9dc4e82b9265d0`; 147 lines hold the word `warning`, as in
+the builds above. On that file before it was installed: `p609sverr.py
+--respawn`, 12 arms, 0 failed. `C:\FTEQuake\fteqwsv64.exe` was replaced at
+08:24:47Z, after checking that it was the recorded Patch 606 build
+(`13ecc334cc2ba536`) and that no process had it open; that build is kept as
+`.prev`, and the Patch 605 server it displaced there is gone. On the installed
+file: the 8 subject arms, 0 failed, and a client and server on surf_kitsune
+through `conbridge.py` whose server reports the stamp. Not replaced:
+ftesurf64.exe, fteqw64.exe and the plugins in either install, which are still
+Patch 606's, so FTESurf ENGINE.txt's `tag` has not moved; nor the Pi. For
+whoever starts that exe by hand: `C:\FTEQuake\start_dedicated_server.bat` passes
+no flag, so its server no longer restarts itself after a fatal error (it needs
+`-autoreset` for that), and its crash record is now `C:\FTEQuake\crashaddr.txt`.
