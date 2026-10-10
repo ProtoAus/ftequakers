@@ -40382,7 +40382,7 @@ scales; the same capture flipped by hand matched GL (421 ink pixels at both
 scales, 0 mask difference). On the fixed client D3D11 passes all four arms
 unflipped and Vulkan passes all four, including the legacy arm that had crashed.
 GL, D3D11 and Vulkan captures of one page were also compared by eye.
-Limits: one laptop, one GPU. D3D9 and D3D8 have the same copy loop and do not
+Limits: one machine (the desktop PC), one GPU. D3D9 and D3D8 have the same copy loop and do not
 start there (FTESurf BACKLOG.md). D3D11 captures in older retained evidence are
 flipped. Commands and rigs: FTESurf `tools/p603scores.md`.
 
@@ -40415,7 +40415,7 @@ something that moves a row, authority or input changes, else at 10 Hz. The
 release ship-set is unchanged; development builds already copy the optional
 DLL. No recorder, evidence, ranking, server, default or Build change.
 
-**Verified.** One laptop, synthetic rows, real dedicated sockets. QC 0 warnings;
+**Verified.** One machine (the desktop PC), synthetic rows, real dedicated sockets. QC 0 warnings;
 no engine warning at a line this work added. Host: 629 /2 bridge checks, 2872
 dense + 3750 scoreboard per 16/32-bit index width, model/input regressions
 unchanged, 0 failed. Runtime, GL six arms (two virtual scales, P601 plugin, P601
@@ -40497,7 +40497,7 @@ inside the table; it applies in either style (the provider cannot see
 ranking, default, ship-set or Build change. The owner retired the old look
 after seeing this one (10 Oct); Patch 607 removes it.
 
-**Verified.** One laptop, GL, 1920x1080 at hud_scale 2 unless said; synthetic
+**Verified.** One machine (the desktop PC), GL, 1920x1080 at hud_scale 2 unless said; synthetic
 rows, a loopback stub for lobbies and boards, real dedicated sockets. Three
 progs at 0 warnings. `tools/test_ui_theme.py` against the previous build's
 progs: 13 panel states at `ui_style 0` differ by 0 pixels (whole frame less the
@@ -40589,7 +40589,7 @@ was already unconditional), no server QC (qwprogs.dat is byte-identical),
 recorder, evidence or ranking change. The old look is at FTESurf 562a6c9 and
 before.
 
-**Verified.** One laptop, the Patch 606 binaries as installed. Three progs at 0
+**Verified.** One machine (the desktop PC), the Patch 606 binaries as installed. Three progs at 0
 warnings; qwprogs.dat byte-identical. `tools/test_ui_theme.py`, now a look gate
 between two builds: all 13 panel states on screen and differing by 0 pixels
 from Patch 606 at `ui_style 1`; a csprogs with the theme's butter moved differs
@@ -40636,3 +40636,9 @@ server QC shipped, and `default.cfg` already matched. All 12 units restarted
 and lobby 2: the file each lobby served hashes to the build, and the board
 drew. The Pi's aarch64 engine and surfd were not touched. FTESurf
 `tools/p603scores.md` has the hashes; `tools/pi_lobby_smoke.py` is the check.
+
+**CORRECTION 2026-10-10, Patches 604-607: the test machine.** These four
+entries said "one laptop". Every rig ran on the desktop PC: the client logs
+read `GL_RENDERER: NVIDIA GeForce RTX 2080 SUPER/PCIe/SSE2`. The word is
+corrected in place above. Nothing was measured on the N100 laptop, so no
+cost figure in these entries says anything about it.
