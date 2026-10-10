@@ -40928,6 +40928,21 @@ in a scroll gutter away from the thumb still does nothing. Nothing ran on the
 N100 laptop, and no real mouse drove the wheel or a drag. FTESurf BACKLOG
 "Patch 610, left open" has the rest.
 
+**DEPLOYED 2026-10-10 14:12 to 14:14 UTC.** Both Windows installs, by a guarded
+copy that refuses unless each installed file is main's build (compared with
+fteqcc's compile date masked) and each source is the gated one: csprogs.dat
+`fe286a637a2d1ebb` and menu.dat `a8ef786dad01bb12` with their line tables.
+qwprogs.dat was already this build's (`199ffdd83dec9651`, Patch 615's) and was
+not written. `.prev` beside each is Patch 615's csprogs (`a28719be71d38908`)
+and the 10 Oct menu.dat (`d38891771c3ae376`). The Pi: `build.ps1 -Pi` from a
+clean worktree at `eafb117`, nobody on, all 12 lobbies restarted 14:14:04 to
+14:14:13 UTC. Read back in one call: csprogs `fe286a637a2d1ebb`, qwprogs
+unchanged, `.prev` the Patch 615 pair, 12 units active, no `.new` left.
+`tools/pi_lobby_smoke.py`: lobby 1 served `fe286a63` to a client with no
+csprogs of its own, and the board drew. Roll back: on an install copy each
+`.prev` over its file; on the Pi `cp -p csprogs.dat.prev csprogs.dat` in the
+game directory and restart `ftesurf@1..12` one at a time.
+
 ## Patch 611 — the live run line takes each sample from the frame the server's stats describe *(MOD ONLY, csprogs)*
 
 **Problem.** The player's own live run line (`cl_trail.qc`) built each sample from
