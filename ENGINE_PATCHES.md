@@ -40991,3 +40991,16 @@ reply (FTESurf lextest.md), any game-side caller, and the race `BEGIN IMMEDIATE`
 is there for. Open items are in FTESurf BACKLOG, "Steam sign-in: what the review
 left".
 Published as FTESurf `76cfd63`. That commit deploys nothing.
+
+**Deployed.** 2026-10-10 10:20 UTC, surfd only (FTESurf `76cfd63`, recorded in
+`aa3a25f`): `surfd-deploy.ps1 -Ref 76cfd63 -Only` the seven files the patch owns.
+Twelve staged suites pass on the Pi, the files hash-match the commit, master
+2479950 SIGHUP'd, `schema migrated 11 -> 12`, `surfd ready` 10:20:14, /health
+12 lobbies. `surfd.env` gained `SURFD_STEAM_KEY` and `SURFD_BOARD_URL`;
+`logs/gunicorn.log` went 644 -> 600. Read back live through proto.bar: the page
+200 under the board's CSP, the redirect accepted by Steam's own sign-in form,
+the `__Host-ftl` cookie's attributes, 400 for a return with no assertion, 405
+for a HEAD, and both `/api` routes 404 through either vhost. The four tables
+are empty. Rollback and the database backup's name are in FTESurf AGENT_NOTES,
+"Steam accounts". No lobby, progs, binary or config changed. A real sign-in is
+still unmade.
