@@ -41929,3 +41929,87 @@ drew the board and logged no QC error. That smoke does not switch the trainer
 on: the panel was measured in rigs on this file, and one lobby of twelve was
 connected to. No engine or surfd change. Roll back: copy each `.prev` and
 `.pre621` file over its file.
+
+## Patch 619 — the Steam link starts in the game: a prompt, a copied address, four digits *(MOD ONLY, qwprogs + csprogs + surfd; schema 14)*
+
+**Problem.** Patch 617 made linking safe and left it a chore: find the site,
+sign in, read a ten-character code, open the console, type `link`, close the
+console, type the code, Enter, Enter. Nothing told a new player any of it
+except a line that scrolls away at connect. The owner asked for the least
+friction that can be had: a popup on first launch, the address copied, a site
+nobody can get wrong, "or maybe ... auto magically linked".
+
+**Change.** No engine source. An install that is not linked gets a small
+prompt on its first lobby of a game (`acct_is`, sent with the connect proof's
+answer). It takes Enter and Esc and leaves every other key to the game. Enter
+STARTS a link: the client makes a secret of its own (the opener), the lobby
+issues a nonce, and the client's key signs the two together (`rec_sign`,
+ticks -5, a fourth kind no run produces). surfd's new `/api/link/start` keeps
+that signature and issues a code. The client copies its own constant address
+with the code and the opener after it (`clipboard_set`; game code cannot open
+a browser) and shows it. The page the player signs in on shows a four-digit
+number. The lobby asks `/api/link/wait`; when somebody has signed in, the box
+asks "link this game to X?" and for the number, and Enter signs the lobby's
+own number (ticks -4, as in 617) and sends the page's beside it. surfd
+compares: one try, and a wrong number spends the start. A ten-character code
+typed into the box, for a sign-in that did not start in the game, is 617's
+flow unchanged.
+
+The code in the address is public and links nothing; the number is what ties
+the browser to the game, and both consents stay (the account's owner signed in
+and carried a number to a game; the install's owner typed it under the
+account's name). The number crosses the game's wire in the clear, so it has to
+be worth nothing to anyone but the key that started: that is what the opener
+is for. The start's signature is over the lobby's nonce AND the opener, which
+nobody but that client has seen, so surfd cannot check it when the start
+arrives; it checks it when a sign-in brings the opener, and it verifies only
+for the key whose client made the address. A code swapped on a rewritten
+connection, or a start registered by somebody who watched, opens nothing. The
+sign-in pages are one centred card each, light or dark with the browser, no
+script (`web/link.css`). surfd schema 14 adds `linkcodes.shown` and `seal`.
+
+**Review, and what it changed.** One round, three lenses, on the first cut,
+which typed nothing at all: the site attached the signed-in account to the
+start if the browser was at the address the game had started from. "What does
+an attacker gain" answered that an address is a household, a campus or a
+carrier's NAT, and that at rollout every account is one with no install: a
+start sent to somebody at the same address took their account for the
+sender's install with a sign-in and nothing more, and the reverse (an account
+of the attacker's choosing, named like the victim's, under the victim's
+question) needed only sight of the code. Rather than patch the address rule,
+the binding was replaced: nothing depends on addresses now, the page's number
+does the tying, a second account signing in for one start ends it for both,
+and a sign-in that came with a start's code never yields a typed code. The
+other two lenses found no wrong link and a list of smaller things, fixed with
+it: Esc between the Enter and surfd's reply left the start out, and its reply
+armed ten minutes of waits for a closed box; the same account reloading the
+page spent its own start; the lobby's number died after 90 s while the player
+was still in the browser; starts could fill the cap that closes sign-in to
+everybody, and waits spent the link steps' fleet-wide allowance; `link` was a
+no-op while the unasked prompt was up; and the first cut's Tab ("I have a
+code") is half of Alt+Tab. A second reviewer then read the number binding
+alone and found its hole: the number goes to the lobby in the clear, and game
+code, which does not know its own key, took whatever code the connection
+handed it, so a rewritten connection could sign a player in for somebody
+else's start and read the number off the wire. Its advice was that the client
+has to know the code is its own. A digest of a client secret sent with the
+start, the first answer, can be copied into another key's start; the opener
+under the start's own signature, checked when the browser brings it, cannot.
+A third read was of that alone.
+
+**Verification.** `surfd/test_accounts.py`, 353 checks. `tools/accounts_mutants.py`,
+194 mutants (it learned to pin a mutant to a function: thirteen older ones
+matched twice once the new endpoint repeated `/api/link`'s limits, which became
+one `link_call`); the last full sweep was of 191 and left five to move or
+strengthen, and those and the three added since were re-run on their own: all
+killed, or surviving alone where a second check covers the same hole.
+`tools/p615link.py` on the installed engine binaries, 34 checks and its three
+other modes (5, 5, 3): the prompt comes up by itself and leaves the game a
+bound key; an Enter fed from the console and a stuffed code start nothing; the
+code with an opener that is not this client's opens nothing; a "browser" at
+another address signs in with the address the box showed and is shown a
+number, and the game asks for it by itself; Enter and Y without the number
+link nothing; the number links; Esc on the wait cancels it; a wrong number
+says so and spends the start. An earlier cut with the `acct_go` gate and the
+`cl_input_real` checks removed failed the controls. The box's states and the
+pages were looked at as pixels. FTESurf `66a4225`.
