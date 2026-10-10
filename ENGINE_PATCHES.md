@@ -41004,3 +41004,75 @@ for a HEAD, and both `/api` routes 404 through either vhost. The four tables
 are empty. Rollback and the database backup's name are in FTESurf AGENT_NOTES,
 "Steam accounts". No lobby, progs, binary or config changed. A real sign-in is
 still unmade.
+
+## Patch 613 — a replay's Segments rows are told where the line broke; the peak that fills the mark table goes with the rest *(MOD ONLY, csprogs)*
+
+**Problem.** A replay builds two things from a recording: the run line with its
+marks (`Watch_ScanRange` feeding `Line_Point`) and the Segments rows
+(`Watch_BuildSeq` feeding the live HUD's own segment machine, `Board_Frame`). The
+line knows where the recording moved the body, a break, and clears its ramp hold
+there. The segment machine only noticed a position step of over 512 u
+(`SEG_JUMPDIST`). So across a shorter teleport, and from standing still across any
+teleport, it carried on:
+- a ramp ride whose bit had just cleared stayed held, and its row ended where the
+  0.08 s hold ran out. On `bhop_monster_jam` a 154 u teleport 0.06 s after a ramp's
+  last contact left a row starting 0.02 s past it, at a tick the line marks
+  nothing on: the containment failure `tools/p449mark.py` has reported on that
+  recording since Patch 530 gave the line its reset;
+- an air row opened "off the ground" across a teleport was measured from the
+  ground left behind. One surf_rookie recording had a 0.54 s "Bhop" row reading
+  +23807 at 99.96%; seven such rows over 1500 in size across four of eight
+  recordings.
+Separately, `Line_EvAt` cuts every apex and trough when a slot's mark table
+(4096) fills, and then appended the very mark that triggered the cut even when it
+was itself a peak. BACKLOG, the two entries under Patch 608's.
+
+**Change.** `Watch_ScanRange` lists the file lines it broke the line on
+(`rec_wt_bkl`, 4096, over that it says so) and `Watch_BuildSeq` calls the new
+`Board_LineBroke` before `Board_Frame` on those lines. It ends the held ride, as
+the line's does; forgets the launch point, so a hop opened next is measured from
+where it starts; has `Board_Frame` move the open segment's reference by the energy
+step across the break, height and speed both, so no row is charged what the engine
+did; sets `seq_break`, so the rows either side are not merged; and a fall that
+begins with a teleport, with no launch point, is not named Jump or Bhop (build
+pass only). The live board is not told and behaves as before. `Line_EvAt` returns
+when the mark that filled the table is a peak. `tools/p449mark.py` takes a break
+mark as a mark a row may end on and counts its "marks with no row" per mark. No
+engine source, server QC, recorder, evidence, ranking, default, ship-set or Build
+change: `qwprogs.dat` and `menu.dat` are byte-identical. FTESurf `63eea9c`.
+
+**Verified.** Three progs at 0 warnings. Private overlays (`runlines_smoke.py`),
+the changed build against the published one:
+- New arm `runlines_segbreak.cfg` replays an authored body
+  (`runlines_segbreak.rec`, 155 samples, no player data) holding three teleports
+  under 512 u: off standing ground into a fall; a ramp ride moved 150 u along and
+  60 u down 0.045 s after its last contact; a fall moved 160 u up with its speed
+  cut. `test_runlines_segbreak.py`, with rows written by hand, 5 of 5: the three
+  touched rows read -3.5, -0.2 and -2.6 and the ramp row ends on its teleport's
+  tick. The published build is refused: +196 at 89% named a hop, -60.5 ending
+  three ticks late, +107.6. A variant that removed only the step's height is
+  refused too (-52.7 on the row whose teleport rewrites speed).
+- `p449mark.py` on its eight recorded fixtures (surf and bhop): 8 of 8, the bhop
+  save included; all 4,659 marks unchanged. Of 1,894 rows 86 change and none is
+  added or dropped. The seven rows over 1500 in size that touched a break read
+  124, 125, 138, 20, 8.5, -5.9 and -2.2. With the grader's new rule on the
+  published build that recording still fails, so the rule is not what passes it.
+- The mark-table fix with a private `LN_EVCAP 20` build on a surf run: one apex
+  row beside `cut 1` before, none after, 20 marks kept both times.
+One review round. It found no regression, and gaps: the merge could re-sew a cut
+ride onto the next, the cut row still closed at the post-teleport energy, the cap
+was silent, the post-teleport fall kept a hop's name, and the grader could skip
+its control. Those are in the Change above; they were not reviewed again.
+While measuring: cutting the hold alone made one surf_4am row worse (+4935: with
+the phantom held ramp gone, the next row took the ground left behind as its
+launch point), which is what the launch-point half is for; and taking out only
+the step's height charged a fail teleport's zeroed speed to the hop (-76 where
+the flight gained 99), which is why the whole step goes.
+
+**Limits.** The live Segments column is unchanged and has the same faults when
+the server moves the body; not measured live. A segment moved over 512 u is still
+dropped whole rather than kept with the step taken out. The arm's recording is
+one whole range with no `board` record, no cut ride under 0.10 s and no merge
+across a break: a stage window's break list and those paths were read, not run.
+Three rows of the surf_rookie recording still read under -2700 with no break in
+them and were not looked at. Human acceptance is lextest.md section 15.
