@@ -41334,6 +41334,32 @@ owner a VM: the native scoreboard and the native plots are never up together.
 The value axes always fit what is in view; the time axis steps in ImPlot's
 tens. FTESurf BACKLOG "Patch 614, left open" has the rest.
 
+**DEPLOYED 2026-10-10 15:03 to 15:07 UTC.** Both Windows installs, by guarded
+copies that refuse unless every installed file is the published one it
+replaces and every source is the gated build: the client (`7c97e69b27cad2b2`
+as C:\FTESurf\ftesurf64.exe and C:\FTEQuake\fteqw64.exe), the server
+(`1c338f6407b15489`, C:\FTEQuake\fteqwsv64.exe), the five plugins in both,
+csprogs.dat `ce6397a5a3de525e` and menu.dat `19874c5a21619d1b` with their line
+tables. qwprogs.dat was not written (`199ffdd83dec9651`). `.prev` beside each
+replaced file is what it replaced: the Patch 606 client and plugins, the Patch
+609 server, Patch 610's csprogs and menu.dat. The Pi: `build.ps1 -Pi` from a
+clean worktree at `56d8582`, nobody on, all 12 lobbies restarted 15:06:34 to
+15:06:42 UTC; read back in one call: csprogs `ce6397a5a3de525e`, qwprogs
+unchanged, `.prev` Patch 610's pair. `tools/pi_lobby_smoke.py` with a copy of
+the installed client and hl2 plugin: lobby 2 served `ce6397a5` and the board
+drew on a Source map.
+ONE THING THE PATCH'S WORDS GOT WRONG, found after the deploy: the plugin
+draws only where it is LOADED, and a normal boot does not load it. Measured
+in an isolated rig with the mod's own default.cfg and both DLLs beside the
+exe: `plug_loaddefault` reads 3, `plug_list` says `fteplug_ui_imgui_x64.dll:
+not loaded`, `ui_imgui_status` is an unknown command until `plug_load
+ui_imgui`. Every arm loads it explicitly, so none noticed. On an install the
+native plots therefore want `plug_load ui_imgui` typed once a session; loading
+it by default is the owner's decision and is asked in FTESurf lextest.
+Roll back: copy each `.prev` over its file on an install; on the Pi
+`cp -p csprogs.dat.prev csprogs.dat` in the game directory and restart
+`ftesurf@1..12` one at a time.
+
 ## Patch 615 — Steam accounts, stage 2: `link <code>` in the game, and every connect proves its install's key *(MOD ONLY, qwprogs + csprogs + surfd; schema 13)*
 
 **Problem.** Patch 612 gave a player a code on the board site and nothing took
