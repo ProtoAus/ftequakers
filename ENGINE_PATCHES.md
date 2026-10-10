@@ -40714,3 +40714,15 @@ to hold the published Patch 607 csprogs (`162aaf01`) and that pair kept as
 `.prev`; `qwprogs.dat` and `menu.dat` were already identical and were not
 touched. No engine rebuild. No game was running when the files were read back.
 Not deployed to the Pi.
+
+**DEPLOYED 2026-10-10 to the Pi (Patch 608).** FTESurf `26e350e`, `build.ps1
+-Pi` from the clean worktree, 08:09:00Z to 08:09:40Z. Before it, in one read: the
+Pi held the published Patch 607 csprogs (`162aaf01`), a `qwprogs.dat` identical
+to this build's and the repo's `default.cfg`; 12 lobby rows, 0 players; and the
+only QC changed since the Patch 607 deploy was this patch's two client files.
+Both files hash-verified on the Pi and swapped, the previous pair kept as
+`.prev`; all 12 lobbies restarted. Read back from the host: `csprogs.dat`
+`69515b32`, 12 lobby processes started 08:09:32Z to 08:09:41Z, 12 directory rows.
+`tools/pi_lobby_smoke.py` against lobby 1: a client with no csprogs of its own
+was served `69515b32`, drew the board and logged no QC error. No config, engine
+or surfd change.
