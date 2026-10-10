@@ -42123,3 +42123,28 @@ each caught at its own step.
 **Not done.** Nothing with a save state in it was driven (the rig cannot load
 one), nor a real staged map, nor a ping; FTESurf's BACKLOG lists what the review
 read there.
+
+**DEPLOYED 2026-10-10 (Patch 622).** A build of FTESurf `6448f72` in a clean
+worktree: `csprogs.dat` `47444c35`, byte for byte the file the gate ran on
+(the gate's build was of the same QC one commit earlier in the branch; the two
+files were compared whole). `qwprogs.dat` (`2e41110e`) and `menu.dat`
+(`e5604321`) are what both Windows installs and the Pi already held from
+Patch 619. The only commits between the build that was live and this one are
+Patch 619's deployment record, Patch 623 (release tooling, no QC) and this
+patch. The process list held no game a minute before the copy; another
+session's rigs, which take their progs from their own directories, were
+starting about then.
+Windows, 20:12:41Z: `csprogs.dat` and its line table into `C:\FTESurf\ftesurf`
+and `C:\FTEQuake\ftesurf`, by a copy that refuses unless the installed file is
+the build of the previous main (Patch 619's `8a5ccca3`, kept beside each as
+`.prev`). Read back afterwards.
+The Pi, `build.ps1 -Pi` from that worktree: 12 lobby rows, 0 players, both
+uploads hash-verified and swapped at 20:13:28Z, the previous pair kept as
+`.prev`, all twelve lobbies restarted. Read back from the host in one call:
+`csprogs.dat` `47444c35`, `qwprogs.dat` `2e41110e`, `csprogs.dat.prev`
+`8a5ccca3`, twelve lobby units active. `tools/pi_lobby_smoke.py` against
+lobby 1: a client with no csprogs of its own was served `47444c35`, drew the
+board and logged no QC error. That smoke ticks no run and starts none: the live
+line was measured in rigs on this file, and one lobby of twelve was connected
+to. No engine, cfg or surfd change. Roll back: copy each `csprogs.dat.prev`
+over its file.
