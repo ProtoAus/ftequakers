@@ -41468,3 +41468,50 @@ new key and no csprogs, was served `a28719be`, drew the board, and 18 s after
 connecting was told its install is not linked; surfd logged that lobby's `POST
 /api/account` 200. Nobody has typed `link` on a real lobby yet. Rollback and
 what was not measured about it are in FTESurf AGENT_NOTES, "Steam accounts".
+
+## Patch 618 — fteplug_ui_imgui is loaded at client boot *(MOD ONLY, cfg/default.cfg)*
+
+**Problem.** Patch 614's ImPlot plots draw only where `fteplug_ui_imgui` is
+loaded, and nothing loaded it. FTESurf's `cfg/default.cfg` names hl2 alone, and
+the `plug_loaddefault 3` beside it does nothing for a DLL next to the exe: the
+scan that cvar controls runs in `Plug_Initialise`, before the file is read, and
+the cvar is not saved between boots. Found after Patch 614 was deployed, by
+booting a plain rig: every arm of that patch types `plug_load ui_imgui`
+itself. The owner had to type it each session, and when asked said "yes, make
+it default".
+
+**Change.** One line in FTESurf `cfg/default.cfg`, beside hl2's:
+`if $dedicated == 0 plug_load ui_imgui`. `$dedicated` is the engine's own
+macro (`cmd.c`, "1" or "0"), so a dedicated server never touches the DLL.
+`ENGINE.txt`'s `patch` moves to 618. No QC, progs, engine source, recorder,
+evidence, ranking or Build change; the binaries are Patch 614's.
+
+**Verified.** FTESurf `9239f6f`. Three plain boots of the stamped Patch 614
+binaries on that default.cfg, in isolated rigs that issue no `plug_load` of
+their own: a client with the DLL beside it lists
+`fteplug_ui_imgui_x64.dll: loaded` and answers `ui_imgui_status`; a client
+without it boots with the plugin absent and the QC panels; a dedicated server
+with the DLL beside it lists it not loaded. The control, the same server on a
+default.cfg with the guard taken out: it loads the DLL, the plugin refuses, and
+the log reads `Couldn't load plugin ui_imgui`. `tools/p614plots.py`'s native
+arm on a rig carrying the file (so the plugin is loaded twice over, by the file
+and by the arm): 0 failures.
+
+**Limits.** A client without the DLL, which is every release so far, prints
+`Couldn't load plugin ui_imgui` once at boot; whether a release ships the DLL
+or drops the line is the release decision Patch 614 left open. The line was
+not run through the Pi's own server binary: the lobbies were not restarted for
+a line they skip, and the three things it could do there (skip on the macro,
+skip on an unexpanded `$dedicated`, or print that one line) are all harmless.
+The plugin now runs in every session on a development install, where before
+it ran only when asked; what is known about that is Patch 614's gate, on GL
+and Vulkan. `plug_loaddefault 3` still does nothing.
+
+**DEPLOYED 2026-10-10 15:30 to 15:31 UTC.** `cfg/default.cfg`
+`e971b8cb0ced3e67` (42,742 bytes) in both Windows installs, by a copy that
+refuses unless the installed file is the predecessor (`8fd357ac59147c8a`); the
+predecessor is kept beside each as `default.cfg.pre618-20261010T153048Z`. The
+Pi's copy was replaced too, for parity with the repo and nothing else
+(`default.cfg.pre618-20261010-153115` beside it, hash read back in the same
+call); no lobby was restarted. Roll back: copy the `.pre618` file over
+`default.cfg`.
