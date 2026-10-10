@@ -42013,3 +42013,19 @@ link nothing; the number links; Esc on the wait cancels it; a wrong number
 says so and spends the start. An earlier cut with the `acct_go` gate and the
 `cl_input_real` checks removed failed the controls. The box's states and the
 pages were looked at as pixels. FTESurf `66a4225`.
+
+**Deployed 10 Oct 2026, 18:40-18:45 UTC** (FTESurf `66a4225`, record `4740401`),
+over Patch 621's pair, which was read back on the Pi and both installs first.
+surfd first: accounts.py, surfd.py and the new web/link.css, twelve staged
+suites passing on the Pi, files hash-matched, `surfd ready` 18:42:47, /health
+12 lobbies; schema 14, `linkkeys` still its one row. Lobbies: `build.ps1 -Pi`
+from the clean worktree, 0 players, `qwprogs.dat` `2e41110e` and `csprogs.dat`
+`8a5ccca3` hash-verified on the Pi, the 621 pair kept as `.prev`, all 12
+restarted by 18:44:09. Windows: the same two progs and their `.lno` into both
+installs at 18:44:36, no game running; `menu.dat`, every binary and
+default.cfg untouched. Read back live once: a rig client with a new key joined
+lobby 1 through `play.proto.bar`, got the prompt unasked, and a real Enter
+started a link (surfd logged the start and kept its seal; the lobby's waits
+came two seconds apart and stopped at Esc). Nobody has signed in for a start
+on a real lobby yet: that needs the owner's Steam account. Rollback order is
+in FTESurf AGENT_NOTES, "Steam accounts".
