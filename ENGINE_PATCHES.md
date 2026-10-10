@@ -40444,3 +40444,18 @@ hostile-label fallback fixed, the rest in FTESurf BACKLOG.md. Not claimed: real
 online boards, another machine or GPU, D3D9, Linux, DPI, font or appearance
 (FTESurf lextest.md), GPU cost. Commands, rigs and limits: FTESurf
 `tools/p603scores.md` (historical harness number, not Patch 603).
+
+**DEPLOYED 2026-10-10, Windows only (Patches 604 and 605, one build).** A `-Full`
+rebuild of the published commit, with `SVN_VERSION`/`SVNREVISION` supplied by
+hand because the Makefile's `.git` directory test fails in a worktree and stamps
+nothing: client and server both contain `git-7142-patch-605-0-gf6b92f413`. 77
+compiler warning lines, the same count as before the stage, none at a changed
+line; the progs are byte-identical to the ones the gates ran on. On these
+binaries the host suites, GL six arms with 69/69 reader controls, the
+hostile-name arms and the D3D11 and Vulkan four arms were rerun, 0 failed; cost
+and soak were not. Both installs at 01:35:58Z: 25 files (client, server, five
+plugins, three progs and their line tables) match the build by hash, 23 were
+replaced, each first checked against its pre-task hash and kept as `.prev`. No
+game was running, and none was started from an install; the owner's config was
+not opened. Not deployed to the Pi. Hashes and rigs: FTESurf
+`tools/p603scores.md`.
