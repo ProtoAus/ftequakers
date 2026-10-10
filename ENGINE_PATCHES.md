@@ -41807,3 +41807,24 @@ table has a Latin-only face. The hover card's cut and the byte bound are fixed
 by reading, not by an arm. A ridden line's name sits on the 86% line at mid
 screen whatever the player has put there. BACKLOG, "Patch 620, left open".
 Human acceptance is lextest.md, "names you can read".
+
+**DEPLOYED 2026-10-10 (Patch 620).** A build of FTESurf `16b94fe` in a clean
+worktree: `csprogs.dat` `3c7c15d5` and `menu.dat` `e5604321`, byte for byte the
+files every measurement above was taken on; `qwprogs.dat` (`092f9880`) is what
+both Windows installs and the Pi already held. The only commit between the
+build that was live and this one is this patch. No game was running.
+Windows, 17:47:52Z: `csprogs.dat`, `menu.dat` and their line tables into
+`C:\FTESurf\ftesurf` and `C:\FTEQuake\ftesurf`, by a copy that refuses unless
+the installed files are the build of the previous main (they were Patch 616's,
+`ebc342f0` and `19874c5a`, kept beside each as `.prev`). Read back afterwards.
+The Pi: `build.ps1 -Pi` from that worktree, 17:48Z. 12 lobby rows, 0 players.
+Both uploads hash-verified on the Pi and swapped, the previous pair kept as
+`.prev`. Read back from the host in one call: `csprogs.dat` `3c7c15d5`,
+`qwprogs.dat` `092f9880`, `csprogs.dat.prev` `ebc342f0`, and all 12 lobby
+units active, started 17:48:39Z to 17:48:48Z. `tools/pi_lobby_smoke.py`
+against lobby 1: a client with no csprogs of its own was served `3c7c15d5`,
+drew the board (screenshot looked at) and logged no QC error. That smoke draws
+no ticked line and no name with a glyph the shipped faces lack: those were
+measured in rigs on this file, and one lobby of twelve was connected to.
+`menu.dat` is not served and is not on the Pi. No config, engine or surfd
+change. Roll back: copy each `.prev` over its file.
