@@ -40557,3 +40557,71 @@ the hash recorded after the Patch 605 deploy and kept as `.prev`. No game was
 running, and none was started from an install; the owner's config was read for
 four settings and not written. Not deployed to the Pi. Hashes and rigs: FTESurf
 `tools/p603scores.md`.
+
+## Patch 607 — the old SUI look and `ui_style` are removed
+
+**Problem.** Patch 606 put the designed look behind `ui_style 1` and kept the
+earlier one pixel-identical behind 0. The owner then retired the earlier look
+("I never designed it ... we have it in the git"). Keeping both meant every
+restyled panel carried two drawing paths and the board two layouts, the new
+board fell back to the old layout on a small window, and everyone but the owner
+still got the look nobody wanted.
+
+**Change.** Mod-side only. `ui_style` is no longer registered or read and
+`sui_style_modern` is gone: every `(style ? token : literal)` palette macro is
+its token, and the classic branches of hud_edit (its own latched tooltip with
+them), the save-lock and Source-renderer menus, the room list, the map picker
+and the menu leaderboard are deleted; the scrollbar draws the one thumb. The
+board keeps one layout: `Scores_Draw` is Patch 606's `Scores_DrawModern`, and
+the classic body, its character-offset column table and `Scores_ColsClassic`
+are deleted. Where that layout used to decline, it now shrinks its type toward
+8 px, and a window too small even for that clips the table. `Gfx_Row` stays,
+for the vote box. `scores status` reports the drawn column count and the row
+type size, and the board treats `hud_scale` above 16 as 16. Tools follow:
+`ui_gallery.py` takes window sizes where it took styles, can pair its shots
+against another rig's and reports a rig whose window took the foreground as
+interfered; `test_ui_theme.py` is a look gate between two builds with an
+on-screen witness per panel; `test_ui_modern.py`'s classic stage is the closed
+editor; the p603 tools lose `--style`, and the lifecycle dock arm, the perf
+tool's screenshot crop and the dense reader's one-pixel control follow the new
+layout instead of the classic one's positions. No engine source change (the provider
+was already unconditional), no server QC (qwprogs.dat is byte-identical),
+recorder, evidence or ranking change. The old look is at FTESurf 562a6c9 and
+before.
+
+**Verified.** One laptop, the Patch 606 binaries as installed. Three progs at 0
+warnings; qwprogs.dat byte-identical. `tools/test_ui_theme.py`, now a look gate
+between two builds: all 13 panel states on screen and differing by 0 pixels
+from Patch 606 at `ui_style 1`; a csprogs with the theme's butter moved differs
+on the two shots that draw it and by 0 on one that does not; the parked mouse
+reads its tooltip back; 30 checks, 0 failed. Its first run read 16 and 18
+changed pixels on the map picker, all in the panel's rounded corners where the
+animated backdrop shows through a region two pixels in; the regions moved to
+six. At 1280x720, 1024x768 and 800x600 every in-game shot matches Patch 606's
+but for ping digits; 640x480, where 606 drew the old layout, draws this one at
+8 px. The board acts: real clicks on a row, the line box and the three source
+tabs, 0 failures; the dense suite, 0. GL six arms 0 failed with 69/69 reader
+controls (68 until the one-pixel control followed the table's rectangle rather
+than the classic position), hostile names, D3D11 and Vulkan 0 failed.
+`test_ui_modern.py` 27/27 without its classic stage, `p498keys.py` 16/16. The
+lifecycle suite's dock arm, which raised hud_scale to dock the room list, could
+no longer reach its condition; narrowing the canvas to 560 does, and it passes.
+Cost at 20 rows: 1194 / 1197 / 1121 us/frame (legacy / no plugin / native),
+inside Patch 606's range for the same layout. One independent review: the QC
+equal to the modern arm in all nine files, one way to hang the sizing loop
+(`hud_scale` large enough to overflow to infinity; the board now treats it as
+16), and three test-side gaps, fixed. Found and left, both in FTESurf BACKLOG:
+the board's small labels outgrow its rows under 11 px of type, and the native
+table lands up to 2 px off its rectangle because the host passes it float
+products and the provider truncates them, so the dense gate's rank-ink equality
+holds only while both arms round alike; a geometry tried here did not. Not
+claimed: appearance, another machine, DPI, the panels that were never restyled.
+
+**DEPLOYED 2026-10-10, Windows only (Patch 607, progs only).** FTESurf
+`5474c48`. No engine rebuild: the installs keep the Patch 606 binaries
+(`git-7144-patch-606-0-g93828165c`). The progs built from the published commit
+are byte-identical to the ones the gates ran on. Both installs at 07:16:07Z:
+`csprogs.dat` and `menu.dat` with their line tables replaced (8 files), each
+first checked against the hash recorded after the Patch 606 deploy and kept as
+`.prev`; `qwprogs.dat` was already identical. No game was running. Not deployed
+to the Pi.
