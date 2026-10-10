@@ -41828,3 +41828,75 @@ no ticked line and no name with a glyph the shipped faces lack: those were
 measured in rigs on this file, and one lobby of twelve was connected to.
 `menu.dat` is not served and is not on the Pi. No config, engine or surfd
 change. Roll back: copy each `.prev` over its file.
+
+## Patch 621 — the strafe trainer keeps its last eight jumps, and a ramp ends a jump *(MOD ONLY, csprogs + cfg)*
+
+**Problem.** The owner, of the strafe trainer: "after you've made a jump, the
+info is gone and you can't read it! maybe a rolling buffer?" Two things did
+that. The panel held one jump, and the next jump's first strafe replaced it.
+And a jump was take-off to landing by the ground flag alone, which on a surf
+map is the whole flight: over the 106 recordings in the desktop's `data/runs`
+(their `fl` bits 1 and 16; a few are arm fixtures) one a run at the median, the
+longest 163 s, 56 of them past the ring's 16 strafes, so the panel was a window
+sliding over it. A landed jump went on changing as well: its timeline's span
+was `trn_clock - t0` and grew on the ground, and its "+N u/s" followed the
+ground speed.
+
+**Change.** FTESurf `cl_trainer.qc`. Every strafe and trace array is nine
+blocks: block 0 is the open jump, indexed as the sampler always did, and a jump
+that ends is copied to one of eight (`Trn_Keep`). The panel draws any block
+through one range (`Trn_View`): the open jump once it is 0.15 s old and has a
+strafe, else the newest kept, else one the player stepped to with
+`trainer older` / `trainer newer` (LEFTARROW and RIGHTARROW in
+`cfg/default.cfg` and `cfg/defaultuser.cfg`); the next jump kept takes the panel
+back. A strip under the panel has a cell a jump, its grade and the speed it
+added (`hud_trainer_jumps`). A jump is free air: ramp contact ends it as the
+ground does (`hud_trainer_split`, on; 0 is the old rule). By that rule the same
+recordings are five jumps a run, median 0.90 s and three strafes, none past 14.
+A jump under 0.15 s is not kept: the ramp flag drops out for one to four ticks
+in the middle of a ride (185 times there), and what follows a dropout is not a
+jump. A strafe's sync is timed from the clock its key went down at, which is
+read on the ground and the ramp too: a key held into a jump gets no number.
+Placed low, the taller panel rises to keep its bottom edge on screen.
+`trainer status` prints what an arm grades and `trainer feed` authors the
+body's state for one. `ENGINE.txt`'s `patch` moves to 621; `commit` and `tag`
+stay.
+
+**Verified.** FTESurf `e50eaac`, csprogs `87bd5e43`, on the stamped Patch 614
+binaries. `tools/p621trn.py`, fed arm: the rig's map has no floor, so its real
+flags say air for ever; `trainer feed` authors ground, ramp and air and
+`+right` each strafe's rate, so every kept jump is known without the subject.
+Three jumps of 2, 3 and 2 strafes at 300, 400 and 500 deg/s kept with what
+ended them; a 30 ms gap in a ride and a strafe-less jump counted and not kept;
+paging and its two stops; release by the next jump; a kept jump unchanged by
+hard strafing on the ground afterwards; the open jump on show; ten jumps
+leaving 3..10; `hud_trainer_split 0`; the strip's cells counted in pixels (8
+kept, then 3) and gone with the switch; a key held 400 ms into a jump with no
+sync, and one pressed with its flick just before the jump timed from the press.
+0 failures. `--real`, nothing fed, on surf_kitsune: a hop from the spawn ended
+by the server's ground flag (735 ms of air, 755 authored) and a drop onto a
+real ramp ended by its ramp flag. Seven one-line mutants: all seven fail the
+fed arm. `p610ui.py`'s graphs arm, which grades this sampler's rates and its
+late flick: 0 failures. The first cut also passed `p620names.py` and
+`test_ui_theme.py` against main (0 of 30); the changes since are inside
+`cl_trainer.qc`.
+
+One independent review, of the first cut. It found a sync number given to a key
+that was merely held off a ramp or the ground (its emulation over the same
+recordings: 123 of the 408 first strafes after a ride), a dead stretch when a
+clamped panel is dragged in hud_edit, and `trainer feed` outliving the panel;
+and that the counts first quoted came from a census rule that did not ship.
+All are fixed in what was published. The sync fix is measured: the reviewed cut
+gives the held key -15 ms and times the pressed one +45 ms from the take-off.
+The other two are by reading.
+
+**Limits.** Eight jumps, each 16 strafes and 256 trace ticks: on a bhop map,
+eight hops. A ramp touched for one to three ticks splits a jump in two (12 in
+those recordings, against 1530 jumps). A teleport inside a jump is in its
+numbers, as it was in the old panel's header (the review's emulation: 116 of
+1453 kept jumps); now each is a kept cell. At 1920x1080 with hud_scale 2 the
+default place overlaps the Segments column as soon as a jump has a row. The
+cells cannot be clicked. The strip's cost was not measured. `p462trn.cfg`, the
+original sync arm, runs on an install and was not rerun. BACKLOG, "Patch 621,
+left open". Human acceptance is lextest.md, "the trainer keeps your last
+jumps".
