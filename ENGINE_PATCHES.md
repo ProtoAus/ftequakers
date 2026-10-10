@@ -40539,3 +40539,21 @@ owner then retired the old look, so the provider's theme stayed unconditional
 by decision rather than oversight. Not claimed: appearance (FTESurf
 lextest.md), another machine, DPI, D3D/Vulkan for the QC panels, a real mouse
 on the menu's tooltips.
+
+**DEPLOYED 2026-10-10, Windows only (Patch 606).** A `-Full` rebuild of the
+published commit with `SVN_VERSION`/`SVNREVISION` supplied by hand: client and
+server both contain `git-7144-patch-606-0-g93828165c`. 426 log lines hold the
+word `warning`, the same count and kinds as Patch 605's final build, none in
+`plugins/ui_imgui`; the progs are byte-identical to the ones the gates ran on.
+On these binaries the host suites, GL six arms with 69/69 reader controls, the
+hostile-name arms and the D3D11 and Vulkan four arms were rerun, 0 failed, and
+FTESurf's board-action gate in each style and `test_ui_modern.py`. Its theme
+gate failed three menu comparisons on the first run, with the rig's window in
+the foreground and the real pointer on it for exactly those shots (the log says
+so), and passed 32 of 32 on the rerun; cost was not rerun. Both installs at
+05:51:29Z: 25 files (client, server, five plugins, three progs and their line
+tables) match the build by hash, 21 were replaced, each first checked against
+the hash recorded after the Patch 605 deploy and kept as `.prev`. No game was
+running, and none was started from an install; the owner's config was read for
+four settings and not written. Not deployed to the Pi. Hashes and rigs: FTESurf
+`tools/p603scores.md`.
