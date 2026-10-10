@@ -42078,3 +42078,48 @@ publishing.
 
 **Not done.** The release carries no notices for what the exe and the hl2
 plugin are built with; the Linux archive has no such plugin.
+
+## Patch 622 — the player's own run on the run graphs, as it happens *(MOD ONLY, csprogs)*
+
+**Problem.** The owner: "the graphs would be great if you could see your own
+line competing with it as you race!" The run graphs drew the open replay and the
+ticked board runs and left the live trail out on purpose (Patch 545): a slot's
+bins are rebuilt whole when its line changes, the live one changes every tick,
+and a ticked run's time starts at a run or at a stage where the live clock has
+only the run's.
+
+**Change.** FTESurf `cl_linegraph.qc`, with two per-slot floats in
+`cl_lines.qc` and two lines in `cl_watch.qc`. The live trail's slot is a graph
+slot. Its zero is the one the ticked runs have: the stage in progress, from the
+server's stage base, where a ticked run shows that stage; else the run's start
+beside a whole run; else it is not drawn. A changed answer waits 0.25 s of the
+line's own growth, because the timer's stats are the server's present and the
+line is its past. New samples are folded into the drawn bins as they arrive and
+only that curve is cut again; a rebuild that only the live run asked for keeps
+the ticked runs on screen. It is drawn last, white and wider, with a dot and a
+hairline at its head, and stays after the run until the next one starts.
+`hud_linegraph_live` switches it. The plugin's plots (Patch 614) take its rows
+as one more series, republished as they grow. Published after Patch 623, so
+`ENGINE.txt`'s `patch` stays 623; `commit` and `tag` stay.
+
+**Verified.** FTESurf `6448f72`, csprogs `47444c35` (the clean build is the
+gated one, byte for byte), on the stamped Patch 614 binaries, in the gallery
+rig, where the timer really runs. `tools/p622live.py`, three arms: the head a
+tick behind the timer's clock with every sample folded; the span growing by
+quarters past the ticked runs' end; white ink in the plot from its left edge to
+the head's column and none with the switch off; a stage 2 line drawn from the
+server's base on the way out of the box; the plugin drawing three series and
+refusing nothing. One independent review of the first cut found a real defect
+in the arm's own passing log: a teleport into the next stage's box gave the
+line that was ending the next stage's zero (one dot, energy 52.6). With a
+stage 1 run ticked the arm now reads the line in that box: still stage 1's,
+all its samples, not growing; the first cut fails it. Also from the review, and
+measured: a live rebuild blanked the whole graph (eight ticked runs: blank
+frames 0 to 7 as they are ticked, 7 after three live rebuilds); a stale axis
+cut every curve again a frame (3 cuts in 1.7 s, 108 with the test taken out);
+the plugin's `fit` chip stayed up past the longest run. Ten one-line mutants,
+each caught at its own step.
+
+**Not done.** Nothing with a save state in it was driven (the rig cannot load
+one), nor a real staged map, nor a ping; FTESurf's BACKLOG lists what the review
+read there.
