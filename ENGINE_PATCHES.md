@@ -42249,3 +42249,21 @@ takes. A person can still be talked into signing in for somebody else. Whoever c
 relay its proofs as their own: that wants an encrypted transport, not another
 signature. `acct_browse` on Linux (`xdg-open`, fork and exec) is written and
 has not been compiled.
+
+**Deployed 10 Oct 2026, 22:07-22:10 UTC** (FTESurf `e31cce8`; this entry's
+commit `c543d688a`, tag `patch-625`), over Patch 622's progs and surfd's 619
+files, read back first. surfd first, ready 22:07:19: schema 15, `keylinks`
+made, `linkkeys` emptied (one row, the owner's test link), accounts kept.
+Lobbies 22:08:34: `build.ps1 -Pi`, 0 players, `qwprogs.dat` `bc25c080` and
+`csprogs.dat` `f1126df3` hash-verified, all 12 active; surfd picked up the new
+csprogs' hash by itself. Windows 22:09:52, nothing installed running: the same
+progs, and a clean build of this commit stamped
+`git-7182-patch-625-0-gc543d688a` (read out of the binaries: one stamp each):
+client `183faf44` as `ftesurf64.exe` and `fteqw64.exe`, server `e9cfd598`,
+plugins hl2 `66042d85`, ui_imgui `ab7b0512`, cod `a6c00b64`, box3d
+`f19f9814`, ode `59508a3d`; every replaced file kept as `.prev`. The Pi's
+server binary is unchanged (no server C in this patch). Read back live: the
+installed client, in a rig with its own key, joined a lobby through
+`play.proto.bar` and its connect proof was answered, which is the address,
+the game code's hash and the signature passing on the live service. No key
+was pressed there; a person linking end to end is FTESurf's lextest.
