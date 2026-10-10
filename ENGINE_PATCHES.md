@@ -42342,3 +42342,153 @@ drew the board and logged no QC error. That smoke ticks no line: the run order
 was measured in rigs on this file, on the Patch 625 binaries, and one lobby of
 twelve was connected to. No engine, cfg or surfd change. Roll back: copy each
 `csprogs.dat.prev` over its file.
+
+## Patch 626 — an imported Momentum run's line has ramp marks: contact inferred from the samples, and said to be *(MOD ONLY, csprogs)*
+
+**Problem.** The owner, asked what was left of the demo line labels: "yea do
+these 3". The first: a Momentum demo records no ramp contact (`.mtv` has no
+such field; tools/momreimport.py: "Never 16"), so an imported run's line had no
+on-ramp or off-ramp marks, its Segments column no ramp rows, and the strafe bar
+graded every ride against the free-air target. Readers took a clear bit 16 in a
+17-column file as "measured, not riding". 5,281 imported runs.
+
+**Change.** FTESurf `cl_infer.qc` (new), `cl_watch.qc`, `cl_lines.qc`, one
+`#define` in `sh_defs.qc`. The viewer infers the contact from the file's own
+samples and marks it as inferred; no file is rewritten and the bit
+(`WT_F_RAMPI`, 32) exists in memory only -- a file that carries it has it
+cleared on the way in.
+
+*The rule.* Free flight changes vertical velocity by one exact step a tick --
+the mover's gravity in two half steps -- and air strafing is horizontal. A ramp
+pushes up. Between two consecutive samples one mover tick apart, neither on
+ground, not a teleport (`Interp_Fit`):
+
+    r = (vz1 - vz0) + step
+    contact = r > 0.045  and not  (r > 2.5 * step and the sideways change < 0.5)
+
+`step` is read off the file: the commonest fall among such pairs, to 0.01. It
+is not assumed to be 800 times the tick; one imported map runs gravity 750, and
+read as 800 every airborne tick of it is a "push" of 0.4. The second half
+leaves out a hard push with no sideways change at all: a floor touched for a
+tick without a ground flag.
+
+*Three answers.* Inferred; measured (a native file keeps its own bit and
+behaves as before); and UNAVAILABLE, which is not "no contact": an import with
+no `momdemo` key (21 files still hold a velocity differenced from positions
+and no ground flag at all, so a floor would read as a ramp -- and their fall is
+sharp enough, shares 0.27 to 0.50, that only the header tells them apart),
+under 30 judgeable pairs, no fall holding a tenth of them, or a run over
+200,000 samples (the review, below).
+
+*One result for every view.* The replay computes a bit per buffer line once at
+load (`Watch_InferScan`) and its three passes read it through `Watch_Flags`:
+the line's scan, the Segments build, the playhead. The board-line job is a
+stream, so it reads an import's file twice, a first pass for the step; both
+readers go through the one `Infer_Step`.
+
+*Said.* A ramp edge's label starts with `~`; `replay status` and
+`hud_watch_info` say `inferred` (or why not); the strafe bar says `ramp: no
+plane` and draws no target on an inferred ride, which is the state it already
+had for a ride without a plane; the air-control colour gives no answer on an
+inferred tick. The plane is not inferred.
+
+**Verified.** Three ways, none of them the QC grading itself.
+
+*The rule against truth* (`tools/rampinfer.py`, written from the measurement
+and not from the QC). `--score`, native bit 16, one file a run, the owner's
+recordings: 16 with a tick-counted clock on 8 maps -- all 14,640 contact
+ticks, all 155 rides, 152 starting and 155 ending on the recording's own
+tick, 1 extra ride (a noclip hover in a cheat file). 145 frame-sampled ones
+on 29 maps, re-clocked -- 52,386 of 52,433 ticks, 810 of 816 rides, 791
+starts and 797 ends exact, 115 extra rides of which 108 are in cheat,
+practice and save files (noclip) and 7 in clean runs holding 351 true rides.
+`--twin`, ONE REAL DEMO: `cfg/test/p492voy.rec` turned out to be the owner's
+surf_voyager Momentum run flown again by this engine from the demo's inputs
+(bodies a median 0.3 u apart over the timed run, velocities 0.02 u/s), so its
+bit 16 is the contact the import lacks. 33 of 38 rides found, 31 starting and
+32 ending on the exact tick. The 5 missed are one to eleven ticks on a face
+pointing DOWN (an overhang); 1 extra ride is a lift (46 ticks of one constant
+push); two rides start 84 and 11 ticks early.
+`--shape`, all 5,281 imports: 5,257 inferred, 24 unavailable (21 without
+`momdemo`, 2 with under 30 airborne pairs, 1 over 200,000 samples); the
+commonest fall is exactly 800 times the tick in all but one; the lowest share
+of airborne pairs falling by the step is 0.279.
+
+*The client against the rule.* Arm `runlines_infer.cfg` +
+`tools/test_runlines_infer.py` on surf_voyager, ten checks: `replay status`
+reports the reference's step, pairs and contact ticks (12.00, 4,470, 2,264);
+every mark is the one `tools/p449mark.py` derives with the reference's bits
+(73 marks, 62 on a ramp edge); the Segments column has ramp rows (24 of 51);
+every ramp edge's label has the `~` and no other mark's does (62 and 11); the
+playhead's contact at three clocks is the reference's; no inferred tick is
+graded (1,135 of them) while 1,122 others are; a board line of the same file
+feeds the same contact ticks and makes the same marks from its seed; the
+native twin is `measured` with no `~`; `cfg/test/momflag.rec` (no `momdemo`)
+is `unavailable` and marks no ramp, replayed and as a board line. The control
+is main: no `ramp contact` line, 0 ramp marks, 0 ramp rows. Six one-edit
+mutants (the flat-floor test, the grade refusal, the `~` on every mark, the
+job not reading the file first, the playhead and the Segments build reading
+the file's own flags) are each caught by the check that names them; they were
+run on the build before the review's fixes.
+
+*Pixels.* The screenshot of the import at 0:20 shows `~2741 u/s 17.62 s` in
+the landing's colour beside its chevron, Ramp rows in the column and `ramp:
+no plane` on the bar.
+
+**What the review found** (one independent reader, given the diff and not the
+argument). No wrong bit, mark or fault on any file a writer here produces --
+and A BUDGET NO ARM COULD SEE. A replay opens in one QC call, and the engine
+ends a call at 100,000,000 branches, calls and returns (`execloop.h`
+RUNAWAYCHECK; the session ends with "runaway loop error"). The reviewer ran
+the BUILT csprogs in a small QuakeC interpreter and counted: the longest
+import (238,434 samples, an hour of surf_666) opened at 76.2% of that on
+main and 94.7% with this patch, the scan alone 19.5M. With Patches 627 and
+628 stacked on it, 97.4%. Shipped instead:
+
+- the scan tokenizes a line once and keeps each judgeable pair's two numbers
+  for the second walk (48 budget events a sample, was 82);
+- over 200,000 samples neither reader infers, and the line says
+  `unavailable: too long a run`. One import, the owner's own.
+
+Counted again on the shipped build: that file opens at 77.9%, the longest
+that is still inferred (197,512 samples) at 73.1%, and the bits of the
+surf_voyager import are the reference's on all 4,516 samples.
+
+It also found that a FILE carrying bit 32 got to set it. `p492voy.rec` with 32
+added to thirty airborne samples drew other marks while its line still said
+`measured`; the three readers of the flags column clear the bit now, and the
+same file gives the same marks as the plain one (the build before does not).
+No writer here emits the bit.
+
+The review also showed which unit cases could not fail. My 19 mutants of the
+rule were all caught and said little: of the reviewer's 46 one-edit mutants
+of the rule and the mark model, the 17 cases caught 17. With 25 cases, 42
+(the four left: the hold's length in the scoring helper, twice, and two
+details of the mark model's seed). And it showed that the ARM's one
+recording never lands on the rule's edges --
+breaking the teleport refusal, the one-tick window, any threshold, the tie or
+the rounding in the reference changes none of its 4,516 bits. The client is
+held to the reference there only offline: 96,000 generated samples through
+the built `Infer_*`, 0 differences, the reviewer's script rerun on the
+shipped build. The interpreter is not the engine.
+
+**What the measuring corrected on the way.** The first cut divided by the
+clock step and read half of free flight as a push: a format under 5 samples
+by frame (steps of 0.0088 and 0.0152 on a 0.01 tick) while vz still moves by
+whole steps. Leaving out "vz did not move at all" (noclip, a ladder) was
+wrong: a body wedged still on a ramp does that too, which is how a surf run
+waits at its start, and native files set the bit there (2,770 ticks).
+Requiring a ramp's own sideways push (1.02 times the push up, less what air
+strafing can add) was wrong too: a body landing in the crease between two
+facets of a curved ramp is pushed up while the sideways parts cancel, and
+that test refused the first tick of 10 rides in 33 on the demo.
+
+**Not done.** The plane (on the demo the sideways-to-upward ratio of a contact
+tick equalled the recorded plane's on 1,958 ticks, so it looks recoverable). A
+lift, a booster, a gravity zone and a ladder read as a ramp. A face pointing
+down is not looked for. The practice-save prefix of an imported replay and the
+web run page do not infer. THE OPEN IS STILL ONE CALL: about 327 budget events
+a sample, so a recording of some 300,000 samples, imported or native, would
+end the session when opened; none exists, and the fix (an open spread over
+frames, as the board-line job is) lifts the cap as well. Three reader
+mismatches on files nothing writes. FTESurf's BACKLOG has the list.
