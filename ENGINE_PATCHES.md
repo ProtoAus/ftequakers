@@ -40625,3 +40625,14 @@ are byte-identical to the ones the gates ran on. Both installs at 07:16:07Z:
 first checked against the hash recorded after the Patch 606 deploy and kept as
 `.prev`; `qwprogs.dat` was already identical. No game was running. Not deployed
 to the Pi.
+
+**DEPLOYED TO THE PI 2026-10-10 07:29 UTC (Patches 606 and 607, progs only),
+on the owner's request.** `build.ps1 -Pi` from a clean worktree at FTESurf
+`5b3f181`, nobody on any of the 12 lobbies. The live pair reads back as the
+build's (csprogs `162aaf018682ca0b`); the previous pair is kept as `.prev`.
+The old and new qwprogs differ in two bytes, the compiler's date stamp, so no
+server QC shipped, and `default.cfg` already matched. All 12 units restarted
+07:28:57-07:29:07. A fresh client with no csprogs of its own joined lobby 1
+and lobby 2: the file each lobby served hashes to the build, and the board
+drew. The Pi's aarch64 engine and surfd were not touched. FTESurf
+`tools/p603scores.md` has the hashes; `tools/pi_lobby_smoke.py` is the check.
