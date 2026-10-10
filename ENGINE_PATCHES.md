@@ -41175,3 +41175,29 @@ test_board, test_surfd, test_web and test_join pass. Build: 0 warnings.
 commands before it spawns, the browser's side of the cookies, and a real
 player's link on a real lobby (FTESurf lextest.md).
 Published as FTESurf `6fc1695`. That commit deploys nothing.
+
+**After publishing.** `surfd-deploy.ps1 -Ref 6fc1695` refused to install: in its
+suite stage on the Pi, test_board's two-threads-migrating arm raised `no such
+table: main.links`. A process still in schema step 12's script reached `CREATE
+INDEX ... ON links` just after another had finished step 13 and dropped the
+table. Every desktop run had passed. FTESurf `3adb6f8`: step 12 no longer makes
+that table, and test_accounts.py lets a second connection finish both steps at
+each of their six statements in turn, failing on the old script at the third
+with the Pi's error (294 checks; 151 mutants, 142 killed, 9 expected pairs).
+The live database was already at 12, so its own upgrade was never the one at
+risk.
+
+**Deployed.** 2026-10-10 13:45 to 13:49 UTC, FTESurf `3adb6f8` (recorded in
+`31a70a6`). surfd: the five files the patch owns, twelve staged suites passing
+on the Pi, files hash-matched, `schema migrated 12 -> 13`, `surfd ready`
+13:45:47, /health 12 lobbies; `links` gone, `linkkeys` empty, the one account
+row intact. Lobbies: `build.ps1 -Pi` from the clean worktree, 0 players,
+`qwprogs.dat` `199ffdd8` and `csprogs.dat` `a28719be` hash-verified on the Pi,
+the Patch 613 pair kept as `.prev`, all 12 restarted. Windows: the same two
+progs and their `.lno` into both installs, no game running; `.prev` there is
+now the Patch 613 pair; `menu.dat` and every binary untouched. Read back live
+once: `pi_lobby_smoke.py` through `play.proto.bar:27510`, a rig client with a
+new key and no csprogs, was served `a28719be`, drew the board, and 18 s after
+connecting was told its install is not linked; surfd logged that lobby's `POST
+/api/account` 200. Nobody has typed `link` on a real lobby yet. Rollback and
+what was not measured about it are in FTESurf AGENT_NOTES, "Steam accounts".
