@@ -41092,3 +41092,86 @@ from the host: `csprogs.dat` `7dca72dc`, 12 lobby processes started 10:28:55Z to
 10:29:04Z, 12 directory rows. `tools/pi_lobby_smoke.py` against lobby 1: a client
 with no csprogs of its own was served `7dca72dc`, drew the board and logged no QC
 error. No config, engine or surfd change.
+
+## Patch 615 — Steam accounts, stage 2: `link <code>` in the game, and every connect proves its install's key *(MOD ONLY, qwprogs + csprogs + surfd; schema 13)*
+
+**Problem.** Patch 612 gave a player a code on the board site and nothing took
+it: no lobby called `/api/link`, and a link was keyed on the engine guid, which
+any server that sends the fleet's `sv_guidkey` is handed. A link that anyone
+holding a harvested guid could move, or take before its owner did, is not
+something to rank times under (FTESurf ROADMAP 14.3).
+
+**Change.** No engine source. `src/server/sv_account.qc`,
+`src/client/cl_account.qc`, `surfd/accounts.py`; schema 12 -> 13 adds `linkkeys`
+(keyed on the install's `fskey` public key) and `linkcodes.claim`, and drops
+12's guid-keyed `links`, which no caller ever wrote, if it is empty. Still
+store-only: nothing ranks, verifies, publishes, kicks or refuses on it.
+
+An install is its key, and every lobby call carries a signature by it over
+rec_sign's own statement, whose ticks line says which of three kinds it is: -2
+a connect, -3 asking to link, -4 confirming. No run signs below -1 and
+`SV_RecRcpt` refuses below -1, so `Account_Proof`, which now sees each
+`rec_rcpt` before `SV_RecRcpt`, takes exactly those three and passes every
+other receipt on untouched.
+
+- **Connect.** The client's game code asks, the lobby mints a nonce from the
+  OS, the client signs it, `/api/account` answers for that key, and the lobby
+  says who the install is linked to or how to link it.
+- **`link <code>`, then `link <number>`.** The client sends a digest of the
+  code, never the code, and signs a second digest of it; surfd checks the
+  signature and that the address the CLIENT signed is this fleet's on that
+  lobby's port, keeps the code for the key that asked, and names the account.
+  The lobby prints a six-digit number of its own; `link <number>` signs it, and
+  that signature spends the code and links. A linked install is told where it
+  would move from. Two commands because text another server left in a client
+  can type the first and cannot read the second.
+- **The sign-in page** lists the account's installs and unlinks one (two GETs),
+  in the browser that signed in.
+- Per-player limits are keyed on the client address the lobby saw, not the
+  guid. surfd marks every lobby reply, because a request that never connected
+  reaches QuakeC as code 0 with no body and must not read as "not linked".
+
+**Review.** Two rounds. Three lenses on the first cut (evidence, the game
+code's flow, what an attacker gains), which was one command, sent the code in
+clear and signed ticks 0. They found: a proof could be filed as a kept
+abandon's receipt, or eat one (hence the three negative kinds); text left in a
+client by another server could type the whole link (hence the number); the
+code crossed an unencrypted channel (hence the digest and the claim); limits
+keyed on a guid let one player spend another's; an unlink link worked from any
+browser; a reply with no body read as "not linked". The second round read the
+redesign through two lenses and found no way to lose, misfile or forge a run's
+receipt. It found that THE NUMBER DOES NOT STOP WHOEVER CAN WRITE TO THE
+CONNECTION: `link` is a game-code command, and one that arrives as stufftext
+is signed like a typed one. Measured afterwards with a probe build whose server
+typed both commands at the client: linked. It also found that a server the
+player was on earlier can take the command's name, and that the digest of a
+40-bit code can be searched. None costs anything while nothing ranks on a
+link, and all three have one fix, `link` in the engine for the local console
+only, which is now the first paragraph of FTESurf ROADMAP 14.3 and a condition
+of it. Fixed from that round: account state and a pending request survived into
+the next occupant of a client slot until their `spawn`; the account commands
+now wait for ClientConnect; the game code warns when `link` is already a cvar.
+The feature is store-only, so the loop stops there.
+
+**Verified.** `surfd/test_accounts.py`: 292 checks, 0 failed. 150 single-edit
+mutants of the surfd code (`tools/accounts_mutants.py`): 141 fail the suite and
+9 survive alone, each one part of a doubled check whose pair fails. The sweep
+first left eight more: five wanted tests, one a pair, and two checks changed no
+answer and were deleted. `tools/p615link.py`, the installed server and client
+in a private rig against this checkout's surfd with Steam faked, typing into
+the client and reading the lobby's number back: 19 checks, 0 failed, among them
+a wrong number, a blind guess, a signature over the wrong nonce, and two
+run-shaped receipts reaching the run's handler while a link was owed.
+`--refuse-address` (the address check's control), `--taken` (`link` already a
+cvar) and `--receipt` (a whole run on these progs leaves one receipt that
+`rcptcheck.py` reads as valid) pass; `--receipt` failed on a build that takes
+every receipt, against the first cut's dispatch. ONE FAILURE WAS FOUND BY THE
+ARM AND NOTHING ELSE: 1 reconnect in 9 had its connect proof refused, because
+the game clock jumps at connect, the ask and its retry fired together, and the
+first signature was posted under the second nonce. Forced by one console line
+(two nonces issued, `proof`), fixed at both ends, and the arm keeps the case.
+test_board, test_surfd, test_web and test_join pass. Build: 0 warnings.
+**Not verified:** more than one client on a lobby, a client that sends account
+commands before it spawns, the browser's side of the cookies, and a real
+player's link on a real lobby (FTESurf lextest.md).
+Published as FTESurf `6fc1695`. That commit deploys nothing.
