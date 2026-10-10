@@ -42267,3 +42267,53 @@ installed client, in a rig with its own key, joined a lobby through
 `play.proto.bar` and its connect proof was answered, which is the address,
 the game code's hash and the signature passing on the live service. No key
 was pressed there; a person linking end to end is FTESurf's lextest.
+
+## Patch 624 — ticked board lines are drawn in run order from where the viewer is *(MOD ONLY, csprogs)*
+
+**Problem.** The owner: "maybe it's possible to display only segments of the
+line which are in order, and not based on distance? sometimes you will see a
+demo line though the wall which is from a later part of the run". A ticked
+board line was drawn wherever it came within `hud_watch_path_far` (6000 u) of
+the eye, so on a route that doubles back the later pass showed beside the one
+being run. The replay's own line has had a run-time window round its playhead
+since Patch 449; a board line had no playhead, and the board loop switched the
+window off.
+
+**Change.** FTESurf `cl_lines.qc`, `cl_scores.qc`, `cl_linegraph.qc`. A board
+line gets a cursor: its sample nearest the eye, kept in run order
+(`Line_Follow`). It is followed 48 samples either side a frame, the last of
+equals. Four times a second the whole line is looked over: every stretch within
+1.5 times the nearest distance (or 128 u) is a candidate; the one being
+followed stays if it is one, else the one nearest in time to it wins, or the
+earliest when no cursor is believed (a new line, or for half a second after a
+restart: the clock stepped back or the timer armed). The look compares 512
+samples and then reads sample by sample beside any of them that could hide a
+nearer one. `Scores_LinesDraw` sets `Line_Window` from the cursor before each
+slot's draw: `hud_lines_order` seconds ahead (8) and a quarter of that behind;
+0 is the old draw. The teleport-join pass fades with the window as the line and
+the marks already did. The name on a line searches the window that frame's
+draw used, less a twelfth at each end. Published after Patch 625, so
+`ENGINE.txt`'s `patch`, `commit` and `tag` stay 625's.
+
+**Verified.** FTESurf `673e4d0`, csprogs `1c098884`, on the Patch 625 binaries, in
+the gallery rig. `tools/p624order.py`: on an authored run that passes one place
+twice 20 s apart, the cursor is the pass under the eye, follows along it
+without a look moving it, is the later pass where only that is, and the first
+again after a restart; the draw's own trace (`replay marktrace`) has the window
+and the samples inside it; where the later pass crosses the view there are 0 px
+of line with the order on and 1094 with it off; a name is on the drawn pass
+with the eye standing on the other. One independent review ported the first
+cut's follow to Python, flew real recordings through it and found four
+defects: a stop in the recording held the cursor at its first sample; another
+part of the route within 768 u was never taken; the look's 512 samples alone
+took the later pass a quarter of the time at 2000 u/s; a restart's forget was
+spent on the frame the stats changed, with the view still at the old place.
+And the open replay lost its name until a board line had been ticked. Each has
+a step in the arm on a second authored run (2000 u/s, 162 s), the reviewed
+build fails every one, and thirteen one-line mutants are each caught at their
+own step. One profiled run with eight long lines ticked: the board loop is
+cheaper with the order on than off, because it draws a third of the points.
+
+**Not done.** No real map was flown with a line ticked. A recording with a
+failed attempt in it shows that attempt first; a rewind into the later of two
+close passes takes the earlier. FTESurf's BACKLOG has the list.
