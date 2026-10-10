@@ -41586,3 +41586,18 @@ opened the game's menu, which took the keyboard for the rest of the run.
 that sets the stat; by reading), more than one client on a lobby, and a real
 player's link in the box (FTESurf lextest.md).
 Published as FTESurf `7c1161c`. That commit deploys nothing.
+
+**Deployed.** 2026-10-10 15:49 to 15:52 UTC, FTESurf `7c1161c` built at `2dd135a`
+(recorded in `4d37d16`), after eleven minutes waiting for the owner to leave a
+lobby. Lobbies: `build.ps1 -Pi` from the clean worktree, 0 players, `qwprogs.dat`
+`092f9880` and `csprogs.dat` `4355bdf0` hash-verified on the Pi, the previous
+pair kept as `.prev`, all 12 restarted. Windows: the same two progs and their
+`.lno` into both installs; `menu.dat`, binaries, plugins and default.cfg
+untouched. surfd: accounts.py and test_accounts.py, twelve staged suites
+passing on the Pi, both files hash-matched, `surfd ready` 15:51:49. Read back
+live twice through `play.proto.bar:27510`: a rig client with no csprogs was
+served `4355bdf0` and told how to link in the new words; and a rig client
+opened the box on that lobby, typed a made-up code with real key presses and
+was refused by the live surfd (`POST /api/link` 200 in its log), linking
+nothing. A link made in the box is still unmade: it needs a Steam account.
+Rollback is in FTESurf AGENT_NOTES, "Steam accounts".
