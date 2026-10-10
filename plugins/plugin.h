@@ -563,6 +563,20 @@ typedef struct {
 	F(qboolean, PollModel, (const pluguiowner_t *owner, pluguimodelaction_t *action));
 } pluguimodelservice_t;
 #define pluguimodelservice_name "NativeUIModel/1"
+
+//Separate exact-size ABI: /1 stays 64 widgets on old hosts/providers.
+#define PLUGUI_MODEL2_VERSION 2u
+#define PLUGUI_MODEL2_MAX_WIDGETS 256u
+typedef struct {
+	unsigned int structsize, revision, count;
+	pluguiwidget_t widgets[PLUGUI_MODEL2_MAX_WIDGETS];
+} pluguimodel2_t;
+typedef struct {
+	unsigned int structsize, version, capabilities;
+	F(qboolean, SetModel, (const pluguiowner_t *owner, const pluguimodel2_t *model));
+	F(qboolean, PollModel, (const pluguiowner_t *owner, pluguimodelaction_t *action));
+} pluguimodelservice2_t;
+#define pluguimodelservice2_name "NativeUIModel/2"
 #define PLUGMESH_MAX_VERTICES 16384
 #define PLUGMESH_MAX_INDICES 65535
 #define PLUGMESH_MAX_COMMANDS 128

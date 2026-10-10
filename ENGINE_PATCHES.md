@@ -40385,3 +40385,62 @@ GL, D3D11 and Vulkan captures of one page were also compared by eye.
 Limits: one laptop, one GPU. D3D9 and D3D8 have the same copy loop and do not
 start there (FTESurf BACKLOG.md). D3D11 captures in older retained evidence are
 flipped. Commands and rigs: FTESurf `tools/p603scores.md`.
+
+## Patch 605 — opt-in native scoreboard table on dense NativeUIModel/2
+
+**Problem.** The ranked scoreboard is the first panel that wants a real table
+(scrollbar, row buttons, paging), but `NativeUIModel/1` carries 64 widgets --
+six nine-cell rows -- and enlarging an exact-size struct breaks every older
+peer. Nothing real had used the bridge either, so its lifetime rules had only met
+galleries: an owner closing during action polling freed a Vulkan atlas the
+recorded frame still referenced.
+
+**Change.** Engine: additive exact-size `NativeUIModel/2` (256 widgets) beside
+the unchanged /1, converted either way for an older peer; builtins
+`ui_native_model_limit` (256, 64 or 0) and `ui_native_gamefocus`; at most 4 open
+attempts per VM per host frame; `VK_DestroyTexture` defers its native handles to
+the frame fence and `VK_R_DeInit` drains them before the device goes;
+`VK_DestroySampler` stops at its match instead of reading the freed node.
+Plugin: owner 205 (`scores.inc`), one ImGui table inside the inherited clip, up
+to 24 rows of nine cells plus a metadata prefix, four ProggyClean bakes
+(13/16/20/24 physical px) in one atlas; a clip that is too small, non-finite or
+larger than the framebuffer is refused. QC: `cl_scores_native.qc` behind
+`ui_native_scores 1` (default 0) and `ui_native_scores_font`. It replaces only
+the ranked table at `Scores_Draw`'s draw site; any refusal leaves legacy drawing
+for that gesture. Clicks are hit-tested at SUI's cursor and resolved by slot,
+then checked against the row key; every label is rewritten to what
+`PlugUI_LabelValid` accepts in each QC string mode; the page survives
+close/reopen within one map/leg/tab/filter; the page is rebuilt only when
+something that moves a row, authority or input changes, else at 10 Hz. The
+release ship-set is unchanged; development builds already copy the optional
+DLL. No recorder, evidence, ranking, server, default or Build change.
+
+**Verified.** One laptop, synthetic rows, real dedicated sockets. QC 0 warnings;
+no engine warning at a line this work added. Host: 629 /2 bridge checks, 2872
+dense + 3750 scoreboard per 16/32-bit index width, model/input regressions
+unchanged, 0 failed. Runtime, GL six arms (two virtual scales, P601 plugin, P601
+engine, legacy, no plugin): 0 faults, 69/69 reader controls; D3D11 and Vulkan
+four arms each: 0 faults (after Patch 604). Controls that fail as they should:
+the pre-fix product source opens row 8's recording where the fixed one opens row
+0's after motion the table never saw; progs built before the sanitizer drop to
+legacy on 14 hostile owner names where the fixed ones stay native in all four
+string modes; a row cap of 6 fails exactly the 24-row acceptance. Cost, QC
+UpdateView median us/frame open: 828 and 852 native against 1050 and 1095
+legacy at 20 and 32 rows (0.78-0.79x), closed equal to legacy within 1%. That
+number moves with the engine's QC temp-string collector: the same held-open
+table reads 822 us with the collector off and 1159 us with it cycling. Soak:
+per-cycle open/close/upload counters held on every cycle of 150 slow and 800
+fast open/close cycles. Memory took three runs. The first two missed their
+bounds and found a real cost, the table making five times legacy's temp-string
+garbage by rebuilding ~220 labels a frame, fixed by the rebuild rule above; a
+6-row control with the same 800 opens showed a flat floor, so there is no
+per-open leak. In the third the floor rose 21.0 MiB against legacy's 1.9 over
+800 cycles (bound 32) and held-open growth was below legacy's, but its
+leak-control arm was killed by the host's memory reaper, so the instrument's
+discrimination rests on the second run (leak arm +294 MiB against +54).
+Review: three lenses on the committed stage, one fresh reader on the fixes; no
+memory-safety defect; one wrong-row bug (a stale private cursor copy) and the
+hostile-label fallback fixed, the rest in FTESurf BACKLOG.md. Not claimed: real
+online boards, another machine or GPU, D3D9, Linux, DPI, font or appearance
+(FTESurf lextest.md), GPU cost. Commands, rigs and limits: FTESurf
+`tools/p603scores.md` (historical harness number, not Patch 603).

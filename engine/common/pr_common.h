@@ -486,6 +486,7 @@ void QCBUILTIN PF_ui_native_input_status(pubprogfuncs_t *prinst, struct globalva
 void QCBUILTIN PF_ui_native_input(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_poll(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_model_status(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_ui_native_model_limit(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_model_begin(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_model_widget(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_ui_native_model_commit(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
@@ -499,6 +500,7 @@ void QCBUILTIN PF_ui_native_model_poll(pubprogfuncs_t *prinst, struct globalvars
 #define PF_ui_native_input PF_Fixme
 #define PF_ui_native_poll PF_Fixme
 #define PF_ui_native_model_status PF_Fixme
+#define PF_ui_native_model_limit PF_Fixme
 #define PF_ui_native_model_begin PF_Fixme
 #define PF_ui_native_model_widget PF_Fixme
 #define PF_ui_native_model_commit PF_Fixme

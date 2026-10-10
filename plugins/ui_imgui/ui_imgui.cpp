@@ -1,6 +1,7 @@
 #include "backend.h"
 #include "vendor/imgui_internal.h"
 #include <cstdio>
+#include <algorithm>
 #include <new>
 #include <cmath>
 #include <cstring>
@@ -10,21 +11,26 @@ namespace FteImGui {
 static plugcorefuncs_t *core;
 static plugmeshfuncs_t *mesh;
 static Counters stats;
-//Own all copied models/actions here; never retain frontend/VM string pointers.
+//Own bounded /2 snapshots/actions; /1 copies are converted at its callback.
+//Never retain frontend/VM string pointers.
 struct Context {
 	pluguiowner_t owner;
 	ImGuiContext *imgui = nullptr;
 	plugmeshtex_t atlas = 0;
+	ImFont *scoresfonts[4] = {};
+	ImGuiStyle scoresstyle;
 	Renderer renderer;
 	unsigned events = 0, actions = 0, nextaction = 0, clicks = 0;
-	bool enabled = false, actionoverflow = false;
+	bool enabled = false, actionoverflow = false, scoretop = false;
 	char text[128] = {};
 	pluguiaction_t pending[PLUGUI_INPUT_MAX_ACTIONS] = {};
-	pluguimodel_t model = {};
+	pluguimodel2_t model = {};
 	pluguimodelaction_t modelpending[PLUGUI_INPUT_MAX_ACTIONS] = {};
 };
 static Context *contexts[2];
 #include "input.inc"
+static void ModelAction(Context &c, const pluguiwidget_t &w, float value);
+#include "scores.inc"
 #include "model.inc"
 static void Gallery()
 {
@@ -88,6 +94,20 @@ static qboolean QDECL Open(const pluguiowner_t *o)
 	ImGui::GetStyle().WindowRounding = 8;
 	ImGui::GetStyle().FrameRounding = 6;
 	ImGui::GetStyle().AntiAliasedLinesUseTex = false;
+	if (ScoresOwner(*o))
+	{
+		c->scoresstyle = ImGui::GetStyle();
+		//Actual physical bakes share one immutable atlas. No file IO or rebaking
+		//on size changes, and no global/window/framebuffer bitmap enlargement.
+		for (unsigned i = 0; i < 4; i++)
+		{
+			ImFontConfig config;
+			config.SizePixels = ScoresFontPixels[i];
+			config.OversampleH = config.OversampleV = 1; config.PixelSnapH = true;
+			c->scoresfonts[i] = io.Fonts->AddFontDefault(&config);
+		}
+		io.FontDefault = c->scoresfonts[0];
+	}
 	unsigned char *rgba = nullptr; int w = 0, h = 0;
 	io.Fonts->GetTexDataAsRGBA32(&rgba,&w,&h);
 	if (rgba && w > 0 && h > 0 && w <= 4096 && h <= 4096)
@@ -105,12 +125,15 @@ static qboolean QDECL Draw(const pluguiframe_t *f)
 	ImGuiIO &io = ImGui::GetIO();
 	io.DisplaySize = ImVec2(f->pixelwidth,f->pixelheight); io.DisplayFramebufferScale = ImVec2(1,1);
 	io.DeltaTime = 0.01f;
+	if (ScoresOwner(c->owner)) ScoresFont(*c);
 	c->actions = c->nextaction = 0; c->actionoverflow = false;
 	ImGui::NewFrame(); stats.frames++;
-	if (c->model.revision) ModelGallery(*c);
+	bool panelok = true;
+	if (ScoresOwner(c->owner)) panelok = ScoresGallery(*c,*f);
+	else if (c->model.revision) ModelGallery(*c);
 	else if (Interactive(c->owner)) InteractiveGallery(*c); else Gallery();
 	ImGui::Render(); c->events = 0;
-	bool ok = !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
+	bool ok = panelok && !c->actionoverflow && c->renderer.Submit(*ImGui::GetDrawData(),c->atlas,*f,*mesh,stats);
 	if (!ok) c->actions = c->nextaction = 0;
 	if (!ok) stats.rejected++;
 	ImGui::SetCurrentContext(previous);
@@ -157,7 +180,11 @@ extern "C" NATIVEEXPORT qboolean QDECL FTEPlug_Init(plugcorefuncs_t *c)
 	pluguiinputservice_t input = {sizeof(input),PLUGUI_INPUT_VERSION,PLUGUI_INPUT_CAP_EVENTS,Input,Poll};
 	inputRegistered = core->ExportInterface(pluguiinputservice_name,&input,sizeof(input)) != qfalse;
 	pluguimodelservice_t model = {sizeof(model),PLUGUI_MODEL_VERSION,PLUGUI_MODEL_CAP_WIDGETS,SetModel,PollModel};
-	if (inputRegistered) core->ExportInterface(pluguimodelservice_name,&model,sizeof(model));
+	if (inputRegistered && core->ExportInterface(pluguimodelservice_name,&model,sizeof(model)))
+	{
+		pluguimodelservice2_t dense = {sizeof(dense),PLUGUI_MODEL2_VERSION,PLUGUI_MODEL_CAP_WIDGETS,SetModel2,PollModel};
+		core->ExportInterface(pluguimodelservice2_name,&dense,sizeof(dense));
+	}
 	//Older hosts may reject additive interfaces: prior owners remain usable.
 	return qtrue;
 }

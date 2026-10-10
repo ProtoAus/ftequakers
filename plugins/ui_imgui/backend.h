@@ -7,9 +7,10 @@
 #include "vendor/imgui.h"
 
 namespace FteImGui {
-//Diagnostic owners only; not a widget/model/input transport for real panels.
+//Owners are explicit QC draw sites; production input policy remains in QC.
 constexpr unsigned GalleryMenu = 101, GalleryClient = 202;
 constexpr unsigned InteractiveMenu = 103, InteractiveClient = 204;
+constexpr unsigned ScoresClient = 205;
 constexpr int MaxLists = 64, MaxVertices = 262144, MaxIndices = 786432, MaxCommands = 4096;
 struct Counters {
 	unsigned opens = 0, closes = 0, frames = 0, uploads = 0, submissions = 0;

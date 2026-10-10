@@ -102,6 +102,24 @@ host. No offset, label hash or command string is action authority. Poll shares t
 16-attempt host-frame budget with scalar polling. Scalar Poll returns empty while
 an owner has an active model. No production input routing or panel is introduced.
 
+## Optional dense snapshots and the scoreboard owner
+
+`NativeUIModel/2` is a second exact-size table from the same provider: the /1
+contract with 256 widgets (a 28684-byte snapshot against /1's 7180). /1 is
+unchanged and stays 64; the host converts either way for an older peer, validating
+first. `ui_native_model_limit()` returns 256, 64 or 0 so QC sizes a page before it
+stages one. Open attempts are budgeted at 4 per VM per host frame; asking again
+for the live owner is free.
+
+Owner 205 is FTESurf's ranked scoreboard table (Patch 605, opt-in from QC): one
+ImGui table inside the inherited clip, a metadata prefix (pin state, message,
+Previous/Next, standing, optional font size) and nine cells per row, at most 24
+rows. Four ProggyClean bakes (13/16/20/24 physical px) share one 512x256 atlas
+made at Open. A clip under 150x80, non-finite, or larger than the framebuffer
+returns false and QC draws its own table. Appearance, DPI and device acceptance
+are not claimed. Falsifiers: FTESurf `tools/p603scores.md` and the `p603*` tools
+it names (a historical harness number, not Patch 603).
+
 Build with the engine's `plugins-rel NATIVE_PLUGINS="... ui_imgui"` or the
 plugin Makefile's exact `fteplug_ui_imgui` target. Adapter compiles at -O2;
 unmodified vendor compiles at -O1 to avoid GCC 16's upstream mouse-array

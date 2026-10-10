@@ -1,12 +1,31 @@
 //Included inside FteImGui. Snapshot/actions have stable identity, not label/index.
-static qboolean QDECL SetModel(const pluguiowner_t *o, const pluguimodel_t *m)
+static qboolean QDECL SetModel2(const pluguiowner_t *o, const pluguimodel2_t *m)
 {
 	Context *c = Find(o);
-	if (!c || !Interactive(*o) || !PlugUI_ModelValid(m) || m->revision <= c->model.revision) return qfalse;
+	if (!c || !Interactive(*o) || !PlugUI_Model2Valid(m) || m->revision <= c->model.revision ||
+		(ScoresOwner(*o) && !ScoresModelValid(*m))) return qfalse;
 	pluguiinputevent_t reset = {sizeof(reset),PLUGUI_INPUT_RESET,0,0};
 	if (!Input(o,&reset)) return qfalse;
+	if (ScoresOwner(*o))
+	{
+		unsigned before = ScoresRowBase(c->model), after = ScoresRowBase(*m);
+		unsigned rows = (m->count-after)/9;
+		if (!c->model.revision) c->scoretop = true;
+		else if ((c->model.count-before)/9 != rows) c->scoretop = true;
+		else if (rows && c->model.widgets[before].row != m->widgets[after].row) c->scoretop = true;
+		//Page/reorder replacement starts at its first row. Same identities keep
+		//their vertical view through checkbox/font/geometry-only revisions.
+	}
 	c->model = *m;
 	return qtrue;
+}
+static qboolean QDECL SetModel(const pluguiowner_t *o, const pluguimodel_t *m)
+{
+	if (!PlugUI_ModelValid(m)) return qfalse;
+	pluguimodel2_t dense = {}; dense.structsize = sizeof(dense);
+	dense.revision = m->revision; dense.count = m->count;
+	std::memcpy(dense.widgets,m->widgets,m->count*sizeof(m->widgets[0]));
+	return SetModel2(o,&dense);
 }
 static qboolean QDECL PollModel(const pluguiowner_t *o, pluguimodelaction_t *a)
 {

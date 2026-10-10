@@ -9,6 +9,15 @@ static qboolean Plug_NativeUI_ModelRegister(const pluguimodelservice_t *s, size_
 	plugui_model = *s;
 	return true;
 }
+static qboolean Plug_NativeUI_ModelRegister2(const pluguimodelservice2_t *s, size_t size)
+{
+	if (!s || size != sizeof(*s) || !currentplug || currentplug != plugui_service ||
+		plugui_busy || !plugui_input.Input || !plugui_model.SetModel || plugui_model2.SetModel) return false;
+	if (s->structsize != sizeof(*s) || s->version != PLUGUI_MODEL2_VERSION ||
+		s->capabilities != PLUGUI_MODEL_CAP_WIDGETS || !s->SetModel || !s->PollModel) return false;
+	plugui_model2 = *s;
+	return true;
+}
 static qboolean Plug_NativeUI_ModelReady(void)
 {
 	return Plug_NativeUI_InputReady() && plugui_model.SetModel && plugui_model.PollModel;
@@ -25,6 +34,12 @@ void QCBUILTIN PF_ui_native_model_status(pubprogfuncs_t *prinst, struct globalva
 	(void)prinst;
 	G_FLOAT(OFS_RETURN) = Plug_NativeUI_ModelReady();
 }
+void QCBUILTIN PF_ui_native_model_limit(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	(void)prinst;
+	G_FLOAT(OFS_RETURN) = !Plug_NativeUI_ModelReady() ? 0 :
+		plugui_model2.SetModel ? PLUGUI_MODEL2_MAX_WIDGETS : PLUGUI_MODEL_MAX_WIDGETS;
+}
 void QCBUILTIN PF_ui_native_model_begin(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	pluguivm_t *v = Plug_NativeUI_ModelOwner(prinst, G_FLOAT(OFS_PARM0));
@@ -35,7 +50,8 @@ void QCBUILTIN PF_ui_native_model_begin(pubprogfuncs_t *prinst, struct globalvar
 	//Even a rejected begin abandons an older staging transaction, not its live model.
 	v->stageactive = false;
 	if (!revision || revision <= v->model.revision || IS_NAN(count) || count < 0 ||
-		count > PLUGUI_MODEL_MAX_WIDGETS || count != (unsigned int)count) return;
+		count > (plugui_model2.SetModel ? PLUGUI_MODEL2_MAX_WIDGETS : PLUGUI_MODEL_MAX_WIDGETS) ||
+		count != (unsigned int)count) return;
 	memset(&v->staging, 0, sizeof(v->staging));
 	v->staging.structsize = sizeof(v->staging);
 	v->staging.revision = revision; v->staging.count = (unsigned int)count;
@@ -76,13 +92,23 @@ void QCBUILTIN PF_ui_native_model_commit(pubprogfuncs_t *prinst, struct globalva
 	pluguivm_t *v = Plug_NativeUI_ModelOwner(prinst, G_FLOAT(OFS_PARM0));
 	plugin_t *old = currentplug;
 	qboolean ok;
+	pluguimodel_t prior;
 	G_FLOAT(OFS_RETURN) = 0;
 	if (!v || !v->stageactive) return;
 	v->stageactive = false;
-	if (v->stagebad || v->staged != v->staging.count || !PlugUI_ModelValid(&v->staging)) return;
+	if (v->stagebad || v->staged != v->staging.count || !PlugUI_Model2Valid(&v->staging)) return;
 	v->drawok = false;
 	currentplug = plugui_service; plugui_busy = true;
-	ok = plugui_model.SetModel(&v->owner, &v->staging);
+	if (plugui_model2.SetModel) ok = plugui_model2.SetModel(&v->owner, &v->staging);
+	else
+	{
+		//Exact /1 layout, never cast a larger struct through the old callback.
+		memset(&prior, 0, sizeof(prior)); prior.structsize = sizeof(prior);
+		prior.revision = v->staging.revision; prior.count = v->staging.count;
+		if (prior.count <= PLUGUI_MODEL_MAX_WIDGETS)
+			memcpy(prior.widgets, v->staging.widgets, prior.count * sizeof(prior.widgets[0]));
+		ok = PlugUI_ModelValid(&prior) && plugui_model.SetModel(&v->owner, &prior);
+	}
 	plugui_busy = false; currentplug = old;
 	if (!ok) Plug_NativeUI_CloseOwner(v, PLUGUI_CLOSE_FAILED);
 	else { v->model = v->staging; G_FLOAT(OFS_RETURN) = 1; }
@@ -101,7 +127,7 @@ void QCBUILTIN PF_ui_native_model_poll(pubprogfuncs_t *prinst, struct globalvars
 	v->polls++;
 	memset(&a, 0, sizeof(a));
 	currentplug = plugui_service; plugui_busy = true;
-	ok = plugui_model.PollModel(&v->owner, &a);
+	ok = plugui_model2.PollModel ? plugui_model2.PollModel(&v->owner, &a) : plugui_model.PollModel(&v->owner, &a);
 	plugui_busy = false; currentplug = old;
 	if (!ok) return;
 	for (i = 0; i < v->model.count; i++)

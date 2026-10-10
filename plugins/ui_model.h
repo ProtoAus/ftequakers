@@ -35,17 +35,26 @@ static int PlugUI_WidgetValid(const pluguiwidget_t *w)
 		!PlugUI_LabelValid(w->label)) return 0;
 	return w->value == 0 || (w->type == PLUGUI_WIDGET_CHECKBOX && w->value == 1);
 }
-static int PlugUI_ModelValid(const pluguimodel_t *m)
+static int PlugUI_WidgetsValid(unsigned int revision, unsigned int count, const pluguiwidget_t *widgets)
 {
 	unsigned int i, j;
-	if (!m || m->structsize != sizeof(*m) || !m->revision ||
-		m->revision > PLUGUI_MODEL_MAX_ID || m->count > PLUGUI_MODEL_MAX_WIDGETS) return 0;
-	for (i = 0; i < m->count; i++)
+	if (!revision || revision > PLUGUI_MODEL_MAX_ID) return 0;
+	for (i = 0; i < count; i++)
 	{
-		if (!PlugUI_WidgetValid(&m->widgets[i])) return 0;
+		if (!PlugUI_WidgetValid(&widgets[i])) return 0;
 		for (j = 0; j < i; j++)
-			if (m->widgets[i].id == m->widgets[j].id) return 0;
+			if (widgets[i].id == widgets[j].id) return 0;
 	}
 	return 1;
+}
+static int PlugUI_ModelValid(const pluguimodel_t *m)
+{
+	return m && m->structsize == sizeof(*m) && m->count <= PLUGUI_MODEL_MAX_WIDGETS &&
+		PlugUI_WidgetsValid(m->revision, m->count, m->widgets);
+}
+static int PlugUI_Model2Valid(const pluguimodel2_t *m)
+{
+	return m && m->structsize == sizeof(*m) && m->count <= PLUGUI_MODEL2_MAX_WIDGETS &&
+		PlugUI_WidgetsValid(m->revision, m->count, m->widgets);
 }
 #endif

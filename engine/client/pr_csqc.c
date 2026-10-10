@@ -6767,6 +6767,12 @@ static void QCBUILTIN PF_cs_clipboard_get(pubprogfuncs_t *prinst, struct globalv
 
 void QCBUILTIN PF_CL_DrawTextField (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
+static void QCBUILTIN PF_ui_native_gamefocus(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	//The engine owns console/menu/prompt precedence; QC cannot infer it from cursor mode.
+	G_FLOAT(OFS_RETURN) = Key_Dest_Has(kdm_game) && !Key_Dest_Has_Higher(kdm_game);
+}
+
 //prefixes:
 //PF_ - common, works on any vm
 //PF_cs_ - works in csqc only (dependant upon globals or fields)
@@ -7139,6 +7145,7 @@ static struct {
 	{"drawfill",				PF_CL_drawfill,					323},		// #323 float(vector position, vector size, vector rgb, float alpha [, float flag]) drawfill (EXT_CSQC, [EXT_CSQC_???])
 	{"drawsetcliparea",			PF_CL_drawsetcliparea,			324},	// #324 void(float x, float y, float width, float height) drawsetcliparea (EXT_CSQC_???)
 	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
+	{"ui_native_gamefocus",	PF_ui_native_gamefocus,	0},
 	{"ui_native_status",		PF_ui_native_status,		0},
 	{"ui_native_open",		PF_ui_native_open,		0},
 	{"ui_native_draw",		PF_ui_native_draw,		0},
@@ -7147,6 +7154,7 @@ static struct {
 	{"ui_native_input",		PF_ui_native_input,		0},
 	{"ui_native_poll",		PF_ui_native_poll,		0},
 	{"ui_native_model_status",	PF_ui_native_model_status,	0},
+	{"ui_native_model_limit",	PF_ui_native_model_limit,	0},
 	{"ui_native_model_begin",	PF_ui_native_model_begin,	0},
 	{"ui_native_model_widget",	PF_ui_native_model_widget,	0},
 	{"ui_native_model_commit",	PF_ui_native_model_commit,	0},
