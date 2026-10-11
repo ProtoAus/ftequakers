@@ -7653,7 +7653,10 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 				BE_SelectMode(BEM_STANDARD);
 
 			RSpeedRemark();
-			GLBE_SubmitMeshes(worldbatches, SHADER_SORT_PORTAL, SHADER_SORT_SEETHROUGH+1);
+			//FTESurf Patch 658: was SEETHROUGH+1. GLBE_SubmitMeshes INCLUDES its last bucket (the other
+			//renderers' loops stop before it), so UNLITDECAL, where the script particle system's blended
+			//shaders sort, was drawn here and again after the lights: every such particle blended twice.
+			GLBE_SubmitMeshes(worldbatches, SHADER_SORT_PORTAL, SHADER_SORT_SEETHROUGH);
 			RSpeedEnd(RSPEED_OPAQUE);
 
 #ifdef RTLIGHTS

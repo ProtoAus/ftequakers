@@ -4655,7 +4655,17 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "if (col.a < float(MASK))\n"
 "discard;\n"
 "#endif\n"
-"gl_FragColor = fog4blend(col * vc * e_colourident * e_vlscale);\n"
+"col = fog4blend(col * vc * e_colourident * e_vlscale);\n"
+//FTESurf Patch 658: see glsl/defaultsprite.glsl
+"#ifdef TWICE\n"
+"col.a = clamp(col.a, 0.0, 1.0);\n"
+"col.a *= 2.0 - col.a;\n"
+"#endif\n"
+"#ifdef TWICEC\n"
+"col.rgb = clamp(col.rgb, 0.0, 1.0);\n"
+"col.rgb *= 2.0 - col.rgb;\n"
+"#endif\n"
+"gl_FragColor = col;\n"
 "}\n"
 "#endif\n"
 },

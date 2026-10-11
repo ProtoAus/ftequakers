@@ -788,6 +788,10 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 	if (!ptype->looks.shader)
 	{
 		/*okay, so no shader, generate a shader that matches the legacy/shaderless mode*/
+		//FTESurf Patch 658: the `sort unlitdecal` ones ask for defaultsprite#TWICE or #TWICEC. The GL
+		//renderer drew that bucket twice a frame until 658 (gl_backend.c, GLBE_DrawWorld) and every effect
+		//written against it was tuned over the double blend; the permutation writes the same result in
+		//one. BM_BLENDCOLOUR has no single-blend equivalent and is drawn once at what it says.
 		switch(ptype->looks.blendmode)
 		{
 		case BM_BLEND:
@@ -795,7 +799,7 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 			namepostfix = "_blend";
 			defaultshader =
 				"{\n"
-					"program defaultsprite\n"
+					"program defaultsprite#TWICE\n"
 					"nomipmaps\n"
 					"sort unlitdecal\n"
 					"{\n"
@@ -895,7 +899,7 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 			namepostfix = "_invmoda";
 			defaultshader =
 				"{\n"
-					"program defaultsprite\n"
+					"program defaultsprite#TWICE\n"
 					"nomipmaps\n"
 					"sort unlitdecal\n"
 					"{\n"
@@ -915,7 +919,7 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 			namepostfix = "_invmodc";
 			defaultshader =
 				"{\n"
-					"program defaultsprite\n"
+					"program defaultsprite#TWICEC\n"
 					"nomipmaps\n"
 					"sort unlitdecal\n"
 					"{\n"
@@ -935,7 +939,7 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 			namepostfix = "_sub";
 			defaultshader =
 				"{\n"
-					"program defaultsprite\n"
+					"program defaultsprite#TWICEC\n"
 					"nomipmaps\n"
 					"sort unlitdecal\n"
 					"{\n"
@@ -974,6 +978,21 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 					"}\n"
 				"}\n";
 			break;
+		}
+
+		//FTESurf Patch 658: beams and fans go through the render queue, not the unlitdecal bucket, and
+		//were drawn once all along: the plain program for them, under a name of its own.
+		if (ptype->looks.type == PT_BEAM || ptype->looks.type == PT_VBEAM || ptype->looks.type == PT_SPARKFAN)
+		{
+			static char plain[1024], plainname[32];
+			char *perm = strstr(defaultshader, "#TWICE");
+			if (perm)
+			{
+				Q_snprintfz(plain, sizeof(plain), "%.*s%s", (int)(perm-defaultshader), defaultshader, perm+((perm[6]=='C')?7:6));
+				Q_snprintfz(plainname, sizeof(plainname), "%s1", namepostfix);
+				defaultshader = plain;
+				namepostfix = plainname;
+			}
 		}
 
 		memset(&tn, 0, sizeof(tn));

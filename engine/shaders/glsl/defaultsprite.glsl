@@ -24,6 +24,18 @@ void main ()
 	if (col.a < float(MASK))
 		discard;
 #endif
-	gl_FragColor = fog4blend(col * vc * e_colourident * e_vlscale);
+	col = fog4blend(col * vc * e_colourident * e_vlscale);
+//FTESurf Patch 658: the GL renderer drew the unlitdecal bucket twice a frame, and every effect
+//in it was tuned by eye over that.  Drawn once, these write what two blends at col left:
+//a*(2-a) is exact for an alpha factor, c*(2-c) for a colour one.
+#ifdef TWICE
+	col.a = clamp(col.a, 0.0, 1.0);
+	col.a *= 2.0 - col.a;
+#endif
+#ifdef TWICEC
+	col.rgb = clamp(col.rgb, 0.0, 1.0);
+	col.rgb *= 2.0 - col.rgb;
+#endif
+	gl_FragColor = col;
 }
 #endif
