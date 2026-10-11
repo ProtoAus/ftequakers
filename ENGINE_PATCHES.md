@@ -44845,3 +44845,13 @@ opens the card with the offer pending now (check O: the pick is the
 search's, no link starts, and the offer takes Esc again once the card is
 closed); the build that was live fails it. 27 checks, on the installed
 engine and on release 0.1.24's.
+
+### Correction to Patches 660 and 662: the reviews' timings are this desktop's
+
+Both entries say a reviewer's figures were taken "on a laptop" (660: 0.4 s
+for one request and 3.9 to 5.1 s each for four; 662: about 20 ms a search
+over 67,000 entries). They were taken on the machine the reviews ran on, an
+i9-9900K desktop (checked with `Get-CimInstance Win32_Processor`), not a
+laptop. The figures stand; the Pi's own are in each patch's deployment
+record (660: the boards' read 11.4 s; 662: a search 12 ms, the widest
+profile 1.52 s cold).
