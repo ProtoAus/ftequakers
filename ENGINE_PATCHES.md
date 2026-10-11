@@ -44676,3 +44676,80 @@ drop cannot meet `prop_dynamic` or a brush the map has since moved;
 
 **Deployed** 11 Oct 18:14 UTC: csprogs `bc2b938e` on the Pi's twelve lobbies
 and both Windows installs, `.prev` `6cb9b6c2`; lobby smoke on 27510 passed.
+
+## Patch 655 — text fields: a caret under the click, selection, copy and cut; and why none pastes *(MOD ONLY: QC)*
+
+From the owner's list of 12 Oct ("full text support, highlighting, copy,
+paste"). `sui_text_input` had a caret that a click sent to the end, no
+selection, and keys by arrows, Backspace and Delete.
+
+- **A field that says where its text is** (`sui_text_metrics`, before
+  `sui_text_input`) gets: the caret under a click, a selection by dragging,
+  by Shift with the arrows, Home and End, and by Ctrl+A; Ctrl+C and Ctrl+X
+  through the engine's `clipboard_set`; typing over a selection.
+  `sui_text_selection` draws it, `sui_text_has_focus` says the field has the
+  keyboard this frame (a field focused by TAB used to draw no ring).
+  Both of the menu's fields do. A field that says nothing is what it was.
+- **One selection**, in the field that has the keyboard, dropped when
+  another field takes it or when this one takes it anew. "Anew" is by frame
+  (the last two in which a sui bracket began), not by a clock: the first cut
+  gave it half a second and its own arm's screenshots, which stall the
+  frame, dropped a held selection. `sui_keys_forget` for an owner's open and
+  close (the menu calls it in `m_open` and `m_close`).
+- **Chords are control codes.** Windows and X11 make 1, 3 and 24 only while
+  Ctrl really is down. Where a key came with no character at all, the key
+  under a Ctrl this VM saw go down. A letter that arrives as a letter is
+  typed, so a Ctrl whose release went elsewhere cannot turn typing into
+  cuts. Modifiers are stored with each buffered key.
+- **The link box** (cl_account.qc): a code box with a letter in it never
+  closed (Patch 653's review). It closes 45 s after the last key that
+  changed it, or Enter.
+- **`ui_mouse` stamps `ui_synth_t`**, as `ui_key` and `ui_click` have since
+  Patch 647: that command's click was taken for the player's hand.
+
+**NO FIELD PASTES.** Three cuts tried. The first two gave the game VM a
+`clipboard_get` behind an engine gate (a real Ctrl+V; then a real Ctrl+V
+while the game has the cursor): the game VM's code is the server's, Ctrl and
+V are crouch and noclip in this game, and the cursor is a bit that VM sets
+itself. The third kept paste to the menu VM, whose code is the install's,
+for a key the engine delivered. Its review read the engine: the menu VM's
+registered console commands run from a server's stuffed text and from a
+server's game code (`MP_ConsoleCommand_f` tests nothing, and the exec-level
+compare passes a higher level), and those commands open the menu, choose its
+screen, place its cursor and its focus, and press its buttons. So a key the
+engine delivered proves a key, not who arranged what it lands on; and a
+field's text can leave by a button a command can press. No latch inside QC
+closed it: each needs the cursor, the focus and the screen to be the
+player's, and a command can park the cursor under the player's next real
+click. Neither `.dat` names `clipboard_get` now. BACKLOG has what the engine
+would have to do.
+
+**Measured.** `tools/p655text.py`, the menu's name box in a private rig,
+graded on the field's own text, caret and selection, on sui's modifiers, and
+on what the desktop's clipboard then holds: 17 checks pass (the caret and ring by TAB; the caret under a click, and
+under a press and release inside one frame; selection by Shift and by a
+drag; copy and cut landing on the desktop's clipboard; NOTHING PASTING by a
+keyboard's own Ctrl+V, by Shift+Insert or by a fed one, and `clipboard_get`
+named in neither `.dat`; a held Enter moving no caret; a Shift held before
+the field has the keyboard; a modifier forgotten across a closed menu). CONTROL, the same arm
+on the third cut's build: it fails N (the paste lands, and its menu.dat names
+`clipboard_get`), Q, J and Z, and A in N's wake; the other twelve pass. The link box: `tools/p653box.py
+--idle` closes at 45 s on this build and never on the code before it; its
+whole arm passes on the engine release 0.1.24 shipped; `p647boot.py` and
+`p652builds.py` pass on this menu.dat (`10cba3c146bab74f`; csprogs `a9c734555bf1b558`).
+Looked at: four screenshots, cropped at 1:1 (the ring and caret by TAB, two
+characters selected, all selected, a drag's selection), each on its glyphs.
+
+**Review.** Three rounds, one a cut. Round 1 (engine gate by key): the chord
+is this game's own. Round 2 (gate by cursor): the cursor is the VM's to set,
+and the menu's paste answers to console text. Round 3 (menu only, one
+reviewer, three lenses, the engine open beside it): the must-fix above, and
+from the same round, fixed: a confirm key held over a field dragged the
+caret (a keyboard "press" is a press to sui); a press and release inside one
+frame placed no caret; a field taking the keyboard zeroed the modifiers; a
+cut with no `clipboard_set` lost the text; the code box's clock was any
+alphabet key, W, A, S and D among them. The fourth cut removes code and
+adds those five; it was not reviewed again.
+
+**Left** (BACKLOG): paste, with the engine change it needs; colour codes in
+a field; text longer than its box; `in_builtinkeymap`.
