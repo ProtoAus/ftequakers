@@ -42845,3 +42845,44 @@ decided by the slot's key, `why: held`) were tested and mutated but had no
 review round of their own; none is reachable with the switch off. Roll back:
 `.prev` over each progs file and a lobby restart, the `.pre061fa8d-*` copies
 over surfd's files and a reload.
+
+## Patch 630 — hud_edit: second sizes as boxes, speed / both / energy, a size for the keys and the mouse pad *(MOD ONLY, csprogs + cfg/default.cfg)*
+
+**Problem.** The first part of the owner's list of HUD edits (11 Oct). The
+speedometer's energy size and the timer's subtext size were cycle chips where
+every other text size is a row of boxes; the speedometer could not show the
+energy without the speed; the run graph and the strafe trainer offered 8 and
+12 px; the key block and the mouse pad had one size.
+
+**Change.** FTESurf `2570367`: `cl_hudedit.qc`, `cl_hud.qc`, `cl_mouse.qc`,
+`default.cfg`. Two option kinds in `HE_OptDef`: `s`, a second text size drawn
+as the element's own size row (0 is auto: the lit box clicked again), and
+`b`, a plain row of boxes. Speed: `Energy` 40 48 64 80 (the speedometer's own
+four), `Shows` speed / both / energy (`hud_speed_show`), `Energy as` units /
+u/s. A config saved with `hud_energy 0`, the old "off", is moved at load to
+`hud_speed_show 0`. Timer: `Subtext` 12 16 20 24. Run graph and Strafe
+trainer: 16 20 24 28. Mouse: `Size` S M L XL (`hud_keys_size` 1 1.25 1.5 2)
+for the pad and the key block together; at the automatic position the block
+keeps its floor and right gaps and grows up and left.
+
+**Verified.** `tools/test_p630hud.py` over `cfg/test/p630hud.cfg` in a private
+rig, 1600x900: 41 of 41, every click through the panel's own hit rects and
+read back from the cvar. The build before failed 21 of the 34 checks the
+cfg's first cut reached. At the default settings the play view is
+pixel-identical to the build before, and the key block and pad print the
+same boxes at S.
+
+One review. The pane contradicted the HUD for a config saved with the energy
+off (`Shows: both` over a speed alone); XL grew off the bottom where S has no
+floor gap (hud_scale 3 in a 900-line window); sizes were not multiples of S
+off hud_scale 2 (a row unit snapped to the font ladder per size). Fixed, and
+the commit before those fixes fails the four checks added for them. Its
+fourth find was in my evidence: a screenshot filed as the Mouse pane was the
+pane before it, a wait eaten by a console dump. The cfg waits four frames
+after each wait now.
+
+**Known.** A dragged key block or a detached pad grows right and down and can
+leave the screen at L or XL. In a 720-line window the editor panel halves
+when Speed is open (five rows where there were four). Not run: the energy
+alone while spectating or rewinding; any window but 1600x900. FTESurf
+BACKLOG, "hud_edit sizes and modes".
