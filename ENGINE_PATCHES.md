@@ -45114,3 +45114,98 @@ at 22:45:13Z with nobody on, twelve lobbies restarted and read back, and to
 both Windows installs at 22:47:44Z with no game running. A client on the 625
 exe joined a lobby, was served this csprogs and drew the board. `.prev` is
 Patch 659's `e04ccb61`. The arm had passed on the 625 exe before the deploy.
+
+## Patch 668 — func_precipitation: Source's rain and snowfall volumes *(FTESurf csprogs and tools/pcf.py; no engine source)*
+
+From the owner, 12 Oct: "Do you think you could add func_precipitation?"
+
+**Problem.** `func_precipitation` was never read. It is Source's rain on 37
+of the library's maps (168 volumes) and its snowfall on 41 (201), and most of
+those maps have no other. Patch 659's rain is a different thing, a particle
+system in fixed boxes on a handful of maps.
+
+**Change.** FTESurf `1eca438`, `src/client/cl_emit.qc`, from `c_effects.cpp`.
+- **Type 0, rain.** Each volume emits, every frame, in the part of itself
+  within 750 units of the player in x and y, from 512 over his feet at most:
+  `renderamt / 255 * 0.001` drops a square unit a second (882 a second at
+  renderamt 100; renderamt is a byte, as in Source), falling at 425 with up
+  to 130 sideways, 0.35 units wide and a tenth of a second long, alpha 0.4
+  raised to 0.8. `Emit_StreakShader` is Patch 659's trail shader with that
+  power as a parameter.
+- **Sky or roof.** Where a drop passes the player's height Source asks
+  whether anything but `SURF_SKY` is over it. That flag does not come through
+  a VBSP trace (`trace_surfaceflags` reads 0 on a sky side); the plugin's
+  name for the side does, `sky/...`, in `trace_surfacename`, which the
+  engine fills for a progs that declares it. A side that names nothing is a
+  roof.
+- **Type 3, snowfall**, one manager a map: 500 flakes a second times
+  renderamt a hundred, 500 alive at most, in a cube of 256 (and half the
+  player's speed) round a point ahead of him while he stands in a volume,
+  within 1024 of that point while he does not. A flake falls at 37 to 52, is
+  2 units across shrinking to nothing, alpha 0.1 to 1, colour 150 175 200,
+  and fades out within 64 units of the eye.
+- **One trace each.** A drop or a flake is traced once and sent out on the
+  block whose life ends where it lands (Patch 659's ladder: 24 rain blocks,
+  32 snow blocks). The engine traces nothing per frame.
+- `vbsp_emit_precip 0` is off. A map with nothing but precipitation has no
+  emitter, and `Emit_Frame` returned before anything ran: it tests both.
+
+**Also, found by this patch's review in Patch 659's rain.**
+- A block with no `alphadelta` line fades to nothing over its life
+  (`p_script.c:2452`): a drop faded as it fell where Source holds its alpha.
+  `tools/pcf.py` writes `alphadelta 0` in a trail's drop blocks; the baked
+  `surf_tensor2.cfg` gains 260 such lines and nothing else.
+- `Emit_PsysRepair`'s cap was three repairs a map, which left a baked map's
+  blocks gone after a third `vid_restart`. It is three in a row unanswered.
+
+**Verified.** `tools/p668precip.py` over `cfg/test/p668precip.cfg`, 17 of 17
+on csprogs `ddf40c04`, the patch-658 client, i9-9900K and RTX 2080 SUPER,
+1920x1111; and 17 of 17 on the engine the 0.1.24 download ships (patch-625,
+`183faf44`). Each view is photographed bare, then with it on.
+- Rain, surf_zion (renderamt 255): `asking 2250/sec of 2400, throttle
+  1.000`; 23,598 drops made, all started under the sky, mean life 1.57 s;
+  the engine holds 2,691 where the 1,683 a second made at 1.57 s come to
+  2,642, none marked `(+traceline)`. 177 and 172 streaks in view, the 20
+  longest 2.9 and 3.0 px wide and 49 times as long.
+- surf_misc, a volume drawn up to a metal ceiling with only void over it:
+  2,697 refused under a roof, 0 started under the sky.
+- After `vid_restart` the blocks are made again (once; twice on patch-625)
+  and 3,495 drops are falling.
+- Snow, surf_voyager: 1,272 flakes made, 1,088 refused with 500 alive; the
+  engine holds 500. 71 flakes in view, adding 48 56 63 to the bare frame.
+  From 600 units outside the volume the count rises 1,378 to 1,795.
+- Control, the deployed csprogs `cbc72b32`: 0 streaks, 0 flakes, no line.
+- `tools/p659rain.py` with the re-baked `surf_tensor2.cfg`: 18 of 18, its
+  streaks 37 and 39 of 255 over the sky where the fading ones read 34 and
+  35.
+- Cost, two readings each: surf_zion's rain, the heaviest in the library,
+  1,036 and 1,033 frames a second against 1,541 and 1,554 with it off, a
+  third of a millisecond a frame; surf_voyager's snow 547 and 542 against
+  559 and 568.
+- One independent review of the first cut. That cut told sky from roof by a
+  second trace (anything over what was hit: a roof), on a note of mine that
+  "a trace names no surface", drawn from two hits. The review modelled the
+  brushes of 36 rain maps: a fifth of sky ceilings called roofs, a tenth of
+  roofs called sky, and the arm's own map had no sky over its volume at all
+  (355 starts "under the sky" there were under `metal/train_met`). It also
+  found the fading alpha, renderamt clamped where Source wraps it, and no
+  rain over anything taller than the player. All fixed and measured above;
+  the arm gained the surf_misc stage.
+
+**Not verified.** Source itself: no side-by-side was taken, and `lextest.md`
+asks the owner. A flake's size and fade over its life, and where a drop ends,
+as pictures. The sky test against the review's 36-map model (it was run on
+two maps). No second review after the fixes.
+
+**Known gaps** (BACKLOG, "Source precipitation"). A drop falls to what is
+under it, or 512 under the player; Source's ends at the height of his middle.
+Ash and the particle rains (types 2 and 5: 4 volumes on 3 maps) are counted
+and not drawn. No wind, no `func_precipitation_blocker`, no splashes. Rain is
+held to 2,400 drops a second over all volumes. Every other baked particle
+system without a fade operator still fades by the engine's default.
+
+**Deployed** 11 Oct 23:10 UTC: csprogs `ddf40c04` on the Pi's twelve lobbies
+and both Windows installs, `.prev` `cbc72b32`; lobby smoke on 27510 passed.
+`tools/pcf.py` then re-baked surf_tensor2 in `C:\FTESurf`
+(`particles/surf_tensor2.cfg`, `1b8d2e83`), byte-equal to the tested file; the
+second install has no particle files.
