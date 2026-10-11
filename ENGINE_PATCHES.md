@@ -44280,3 +44280,54 @@ Left as found (BACKLOG): the question for a typed code has no timeout
 655 (it needs an engine change for game code). A click before the cursor has
 moved since the box took it is ignored, by design: the engine says where the
 cursor is only when it moves.
+
+## Patch 651 — two builds of one map share zones and boards; the Pi writes the map list the game fetches; map updates on *(MOD ONLY: surfd and tools)*
+
+**Problem.** From the owner's reply to Patch 644's report, 11 Oct: copy
+Momentum's zones "if the map has a momentum mod version of the map"; "I still
+want to be able to see momentum times on a KSF map, and KSF times on a
+Momentum map"; follow Momentum's map updates; and the game fetching its own
+map list ("great idea"). KSF's build of a name both games list, kept as
+`<name>_css` since 644, had no start or end, a board of its own with nothing
+on it, and reached a player's list only with a release.
+
+**Change** (ftesurf `610c1b0`, `4ceeca5`).
+- **`surfd/zonefit.py`** (new): `tools/census/zonefit.py`'s verdict for
+  whether one build's zone file means the same on another -- world mins
+  within 64 units, every start/end/stage region inside the target's world,
+  every `teleDestTargetname` present -- with every read bounded, and
+  OWN-TIMER for a target that carries Momentum's timer triggers itself.
+- **`surfd/mapwatch.py`**: a second build (a `_css` that is KSF's archive, or
+  a port by suffix, never a name Momentum lists) with no zone file takes the
+  file its map is timed by here, where that map is held at the published
+  build and the pair is FIT. `given` records the bytes and the build they
+  were measured on; a file edited since is kept; a build swapped since is
+  measured again and its zones moved aside if they no longer fit. A
+  measurement that could not be made gives nothing and takes nothing back.
+  It writes `<state>/mapdl.txt`, `data/mapdl.txt`'s grammar with a tenth
+  column on a second build. `KEEP_BUILD`: bhop_eazy is never replaced.
+- **`surfd/surfd.py`**: `GET /api/board?maps=1` serves that list (on that
+  path for the reason `?avatar=` is: nginx forwards a fixed set). A map the
+  catalogue lists as a build `of` another shows its own native rows and the
+  plain name's KSF and Momentum rows; an ordinary map's SQL is unchanged.
+- **`tools/mapscan.py`** writes the tenth column too.
+- The watcher's cron line has `--updates`.
+
+**Verified.** `test_mapwatch.py` 170 checks, `test_zonefit.py` 27 (the PC
+tool's verdict equal on every pair), `test_variants.py` 17; 59 one-edit
+mutants, all caught. One review with an integrity lens (three findings: a
+400-digit number in a zone file ended every run; zones stayed after their
+build was swapped; two cases wider than documented) and a confirmation of
+the fixes (four more: a failed measurement was read as "no longer fits").
+On the Pi, 11 Oct: 31 builds and 14 zone files replaced, 23 second builds
+given zones (3 refused as SHIFTED, 1 OWN-TIMER), 985 of 1,857 maps with a
+zone file (937 before); a throwaway server printed `zones(sv): 12 on
+surf_ace_css (maps/zones/online)`; the public list answered 200 with 1,787
+rows; `surf_ace_css`'s combined board counted 7,672 Momentum and 645 KSF
+rows. Ordinary boards: 25 of 25 bodies identical before and after.
+
+**Known.** Momentum's zoneHash is not the hash of its own zones for 92 maps
+(a January re-save: the three compared differ only in `dataTimestamp` and
+`globalRegions.allowBhop`), so 17 builds and 75 zone files are not followed.
+The fit rule cannot see a world rearranged inside the same box. Native rows
+are per build. Beta maps and their second builds have no zones. BACKLOG.md.
