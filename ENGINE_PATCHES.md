@@ -43517,3 +43517,96 @@ menu.dat `6db94852` (qwprogs unchanged, no cfg) to both Windows installs at
 10:08Z with no game running, csprogs to the Pi at 10:09Z with nobody on.
 Twelve lobbies restarted, read back from the host; a fresh client on a lobby
 was served this csprogs and drew the board. `.prev` is Patch 641's pair.
+
+## Patch 640 — Steam profile pictures in the game *(MOD ONLY: csprogs)*
+
+From the owner's list of 11 Oct ("use players Display Pictures next to their
+name on the leaderboard, and or on the line or where else their name is
+displayed"). ROADMAP 14.4, the picture, second half; Patch 639 made the
+service's side.
+
+- **The cache** (`cl_steampic.qc`, new). 32 pictures by the 8-hex mark: a
+  lobby's `*phash` for a player, `FS_GuidId` of a board row's `player` for a
+  row. A mark something drew in the last 3 s is asked for at
+  `/api/board?avatar=<mark>`, one request at a time, 1.5 s apart, under the
+  board's own consent and `lobby_dir` rules; a mark with no picture is not
+  asked again for 15 minutes; a slot still on screen is never given away.
+  The reply is text (`uri_get` hands QuakeC a string): its hex becomes 32 x 32
+  RGBA in memalloc'd memory, the corners rounded in the alpha, and
+  `r_uploadimage` takes it under the slot's name.
+- **Drawing it.** A shader of the cache's own, registered after the upload:
+  drawpic's default shader loads its picture premultiplied, which is another
+  texture than the uploaded one, and drew the engine's missing-texture
+  checker. `sui_pic`, so a list row's position is its frame's.
+- **Where.** Before the name on the TAB board's Online rows, where surfd's row
+  says `av` (one picture on a board and every name moves over, so the names
+  stay a column; a board with none is drawn as before). In the room list,
+  where the colour square was, the colour kept as a bar under it. Before the
+  name on a ticked run line in the world.
+- **Room in the compiler.** csprogs was 33 definitions from fteqcc's table of
+  131,072 (one per array element and per local; `numglobaldefs` in the
+  .dat's header) and this patch's 61 did not fit. The local board's four
+  256-float row tables are memalloc'd pointers now, allocated in
+  `Scores_RegisterCvars`: 129,663 after this patch, 641 and 642.
+
+**Measured.** `tools/p640pics.py`: p615link's rig, surfd in the driver's
+process seeded with one account that has a picture (four flat quadrants, so a
+swapped channel or a flipped row order shows) and two KSF rows; one client on
+a listen server opens the TAB board. Graded on surfd's row (`av` on the
+account's row and no other), the cache's own line (one ask, one picture,
+under the account's mark) and THE SCREENSHOT (the four quadrants in their
+places): 10 of 10, 127 quadrant matches at the owner column. `--no-picture`,
+the control: no `av`, no ask, no quadrants, names at the column's start, 8 of
+8. THREE CUTS HAD THE SAME COUNTER: the cache said "asked 1 got 1, state 3"
+while the first drew at a frame-local position (nothing on screen) and the
+second drew the missing-texture checker; only the screenshot's reading told
+them from the third (0, 0 and 117 matches then). Build: 0 warnings; qwprogs and
+menu.dat are the installed bytes.
+
+**Review.** One reviewer, four heads (VM safety; the network side; what the
+player sees; breakage elsewhere), given the code and the engine source, with
+an offline VM of its own; then a narrower pass over the fixes. Nothing found
+that can raise a VM error: the four moved tables are allocated before any
+frame, command or callback and every index keeps its bound; the pixel loop
+is exact against the validated length (a synthetic picture, 0 of 1,024 pixels
+wrong). Found and fixed:
+- a renderer restart (F11, `vid_restart`) took the textures and shaders
+  while the cache still said "held": every picture became the missing-texture
+  checker, and stayed one, because a name drawn before its re-upload keeps
+  drawpic's default shader. `CSQC_RendererRestarted` now sends the held ones
+  back to be fetched. REPRODUCED in the rig on the build before the fix
+  (cache "1 of 1", 0 quadrant matches after `vid_restart`) and passing after
+  (2 of 2, 127 matches);
+- an unanswered request was given up on after 20 s and the next mark asked:
+  against a directory that never answers, 6 requests in 100 s, and the
+  engine's HTTP client has four threads and no timeout, so the fourth
+  stopped the board, replays, zones and the menu's lobby list. Now nothing
+  is asked while one is out;
+- a 429, a 5xx and a timeout were each a 15-minute "no picture" for that
+  mark, and the next mark was asked 1.5 s on: one rate-limited minute blanked
+  every picture. Now the mark stays wanted and the asking waits a minute;
+- request ids restarted at 1 with every map and a reply names no mark, so
+  the last map's late answer could be kept as another player's picture;
+- the slot took a third of the name at the owner column's narrowest; the
+  pinned row was out of line with the names above it; a body of the right
+  length with nothing opaque in it was "held"; `scores pics` ran on into
+  the status dump.
+From the second pass, fixed as well: a late answer is taken (a slow
+directory, or a 24 s stall of the client, had ended pictures for the map,
+and F11 after that lost the held ones for good); a slow request's hold
+outlives the map; three non-answers in a row end the asking instead of one
+a minute for ever; the pinned row's word is fitted.
+RIG, on the final build (csprogs `b01acd53`): picture 10 of 10 with the
+restart step, `--no-picture` 8 of 8, `--slow 25` 10 of 10 (one request, the
+answer taken 25 s on and drawn), `--busy 1` 10 of 10 (the second request 60 s
+after the 429, drawn). The second pass's own fixes are measured by those two
+runs and not again in the reviewer's VM.
+
+**Not measured in a rig:** the room list and the run-line name (each needs a
+linked player on a lobby; one call each to the function the board's row
+measures). The owner is asked to look (lextest).
+
+**Left** (BACKLOG): no picture yet in the opt-in native table, chat,
+the results screen or the spectate bar; each ask spends the
+board's rate budget on surfd; a picture changed on Steam shows at the next
+map.
