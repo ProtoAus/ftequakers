@@ -43244,3 +43244,60 @@ restarted, read back from the host; a fresh client on a lobby was served this
 csprogs and drew the board. The live surfd answered the merged list for three
 maps in 25 to 63 ms, one request each. `.prev` is Patch 632's csprogs in all
 three places.
+
+## Patch 638 — a linked player's in-game name is their Steam name *(MOD ONLY: qwprogs + surfd)*
+
+From the owner's list of 11 Oct ("for their in game name to follow their steam
+name"). ROADMAP 14.4, the name half.
+
+- **The lobby.** Once surfd has answered a connection's proof with a linked,
+  unbanned account that has a name, `Account_NameNow` forces the player's
+  userinfo name to it (`forceinfokey`: no rename line, this server only, the
+  player's saved name untouched). The engine may alter what it is given (a
+  "(1)" before a name somebody here already has, a cut at 31 bytes), so the
+  lobby latches what the engine made and forces again only when the name has
+  moved off that; a "(1)" is tried without every fifteen seconds; a link
+  moved to another account mid-connection renames. If the engine answers
+  "unnamed" the player's own name goes back and the hold is let go.
+- **The hold.** A held player's rename is dropped in `SV_ParseClientCommand`
+  before the engine sees it, with one line saying why. The test is on the
+  engine's own tokens (`tokenize_console`) and covers the three spellings the
+  engine renames on: `setinfo name`, its own `name` command, and a `setinfo`
+  whose key is hidden from QuakeC's `tokenize()` or sent encoded.
+- **surfd.** `/api/account` answers `named`; an account's rows and recordings
+  are filed under the account's name whatever the lobby sent; the site lists
+  an account under it. A name the engine would refuse (it reads leet, drops
+  spaces and looks for "console" anywhere: "Falcon Soleil") is not one the
+  lobby is told to hold. `steamsync.py` (cron, half-hourly) asks Steam for
+  current names, fifty accounts a request, and then makes every row of a
+  named account follow the account, so a row filed before this patch is
+  renamed by the first pass.
+
+**Review.** One reviewer, three heads (recorded evidence and ranking; abuse;
+breakage), given the code and the engine source. Nothing found that loses a
+recording, fails a check, misattributes a run or moves a rank: a recording's
+file name is built once at close, its `owner` line is unbound, and nothing
+compares a name with one stored earlier. Found and fixed: the drop tested one
+spelling of a rename where the engine takes three; `steamsync` renamed rows
+only on a change it saw itself; a name with no game-safe form relabelled a
+history "player"; surfd's reserved-word test was narrower than the engine's;
+a "(1)" stayed after the other player had left; a Steam reply with no picture
+blanked the stored one and an unreadable reply stopped every pass at the same
+accounts.
+
+**Measured.** In the rig (`tools/p615link.py`, the installed Patch 625
+binaries): 43 of 43, the lobby's own line naming each account in turn, and no
+"Imposter" in the server's log by any of the three routes; the four other
+modes pass. TWO CONTROLS, each a build with one thing taken out: with the
+drop compiled out the cvar route's check fails (41 of 42); with the first
+cut's test the engine's `name` command and the hidden `setinfo` both rename
+(42 of 43), which is the review's finding reproduced. `test_ranked.py` 108
+checks, `test_accounts.py` 399; `tools/accounts_mutants.py` 319 mutants, the
+full sweep on the final code: 308 killed, 11 surviving alone as declared
+pairs, none unexpected. That sweep's first run caught `rank-ext`, orphaned by
+Patch 636's second rule for a linked account's Steam id; its check is added.
+
+**Left** (BACKLOG): the first seconds of a connection are under the game's
+own name; the customizer's name field does not say the name is held; whoever
+is on a lobby first under a linked player's name keeps it; the terms screen
+still says "under the name you are playing as".
