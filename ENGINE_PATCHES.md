@@ -44049,3 +44049,103 @@ uncached rows were not ticked against the live server. A real run at speed
 beside sixty-four lines was not measured, nor a thinned line's picture. The
 tables are 68.9 MiB, made at the first line of a map in 17 to 23 ms. FTESurf
 BACKLOG, "Sixty-four run lines".
+
+## Patch 648 — func_dustmotes is drawn the way Source draws it *(MOD ONLY, csprogs)*
+
+From the owner, 11 Oct: "in Source ... they spawn in as orbs, like we do it, but
+their orbs are much bolder, more like a circle and less fade out, and they spawn
+in, in a few sizes, move around and fade out. They seem also much smaller ...
+maybe you can pre-compute the sizes of the dust mote, for correct rendering at
+any size. Can you look into HL2 entity and copy the properties."
+
+**Problem.** A `func_dustmotes` volume emitted one median mote for the whole
+library (`ftesurf_dustmote_N`: six colour buckets, several world units wide, a
+soft glow). Every number that makes a mote in Source is the ENTITY'S, and
+`pointparticles` carries none of them.
+
+**Change.** FTESurf `7e37d30`, `src/client/cl_emit.qc`, from `c_func_dust.cpp`.
+- **A block per look.** Each distinct (Color, Alpha, SizeMin, SizeMax,
+  LifetimeMin, LifetimeMax, DistMax, Frozen) on a map is an `r_part` block
+  written at load (48 at most; the library's worst map has 27). The keys are
+  read as the client receives them: `func_dust.cpp:87-93` sends the lifetimes
+  in 4 bits, SpawnRate and SpeedMax in 12, DistMax in 16 (122 volumes on 39 maps
+  write a LifetimeMax that wraps).
+- **One shader draws the sprite.** What differs per particle rides the colour
+  channels (size, life, the colour as one integer, age) and what differs per
+  look rides the texture coordinates (DistMax, Alpha, Frozen). The half-side is
+  `rand(SizeMin, SizeMax) / 10000` of the depth (`:73`, `:234`): the same few
+  pixels at any distance, 1.5 to 3 across at 1080p for the library's median 10
+  and 20. Alpha is the sine through the life (`:58-59`) times `1 - depth /
+  DistMax` (`:68`). A Frozen mote stands at full strength.
+- **Correct at any size.** `particle/sparkles` is solid to a quarter of the
+  half-side and falls in a line to nothing at 1.17 (`tools/sparkleshape.py`
+  reads it off the .vtf: mean difference 0.028). The shader computes that per
+  pixel from four taps; under 0.6 px a mote is held at that and dimmed by the
+  area it lost. No texture is sampled and none is shipped.
+- **Source's pool.** `MAX_TOTAL_PARTICLES` is 2,048 for every old-style
+  particle in the world (`particle_iterators.h:20`). 173 maps hold volumes that
+  together ask for more (surf_psychedelia: 144,000); every mote volume in range
+  is scaled alike, before the emitter budget.
+- **The blend.** Linear light, as Source's, drawn as `ONE /
+  ONE_MINUS_SRC_ALPHA` with both factors computed: exact over a 0.25 grey and
+  over white.
+- **The orbs remain the fallback** (not OpenGL, `r_particlesystem` not script,
+  `vbsp_emit_motes 0`), and `emit_list` names the reason. `func_dustcloud` is
+  unchanged: Source never scales it with depth.
+
+**Found, not changed: blended particles are drawn twice a frame.**
+`GLBE_SubmitMeshes` loops `i <= stop` (`gl_backend.c:6715`) and `GLBE_DrawWorld`
+calls it with `(PORTAL, SEETHROUGH+1)` and then `(SEETHROUGH+1, NEAREST)`
+(`:7656`, `:7698`): the UNLITDECAL bucket goes through both, and that is where
+the script particle system's `blendalpha` shaders sort. The first cut's motes
+measured `1 - (1 - a)^2` (0.975 for 0.85, 0.887 for 0.67); on `sort additive`
+they read 0.851 and 0.673. Stock FTE has the same lines. Fixing it dims every
+effect tuned over the double draw, so it is in FTESurf BACKLOG for the owner.
+
+**Verified.** `tools/p648motes.py` over `cfg/test/p648motes.cfg`: rows of black
+motes at known depths over a wall photographed bare, so `1 - (shot / bare)^2.2`
+is coverage per pixel. A rig of the commit's own build (csprogs `88986a28`) on the
+patch-645 engine, RTX 2080 SUPER at 1920x1111.
+- Size: a size-100 mote's area above half its peak, 88.0 px at depth 150 and
+  87.0 at 330; Source 86.9. Sizes drawn from 50 to 150: 23 to 144 px.
+- Fade: peaks 0.851 and 0.673 (Source 0.850, 0.670). A sixth of the way through
+  a life, 0.244 of full: the sine is 0.25 there, a ramp 0.33. Lives drawn from 4
+  to 12 s differ. Frozen 0.851 in both shots. Past DistMax, and past its life,
+  0.00.
+- At any size: a size-20 mote's total coverage is 0.0393 of a size-100's
+  (0.04); the size-100's is 82.2 px, Source 82.3.
+- Upright: outside a size-300 mote's square, 6.84 px of coverage towards the
+  corners and 0.00 towards the sides.
+- Colour, against linear light over the wall pixel it is on: white at alpha
+  0.087 is 0.023 over on a 0.37 channel and 0.029 under on 0.17; `0 128 255`
+  within 0.035 on the channels judged.
+- Pool: surf_psychedelia asks for 7,200 (three volumes at the 200-a-second
+  clamp); the engine holds 2,562, which is 2,050 alive in Source's sense (it
+  carries each to LifetimeMax, 15 s for a mean of 12).
+- `vid_restart`: 3 of 3 looks answer again; 195 motes, and 860 four seconds on.
+- Controls, on the same source before FTESurf's Patch 649 went under it. The
+  depth term and the pool's scale out: 18.5 px at 330 for 88.0, and 9,009 held.
+  `rotation 0` out and the blend on black and white: 1.23 px towards the sides,
+  and the white mote 0.108 over on the 0.37 channel.
+- Frames a second, same camera, the pool full (2,561 held), two runs: no dust
+  1,438 and 1,299; the motes 1,082 and 1,160; the old orbs (2,410 held) 1,181
+  and 1,111. Two runs do not tell the motes from the orbs.
+
+One independent review (behaviour against Source, state, the shader, the
+grader). Fixed from it: the engine turns an `r_part` particle to a random angle
+unless told not to, so every mote's square was tilted; the blend, exact on black
+and white, was 0.108 too bright for a faint mote on a mid wall; a volume Source
+shows at the screen's edge (it fades by view depth, the cull was by distance)
+never emitted; the pool's cut was charged to the other classes' budget; a repair
+looped off the scripted particle system; `emit_mote` could place a row into the
+last map's block of the same name; and the arm's pool stage would have failed a
+correct build.
+
+**Known.** Not seen beside Source (FTESurf lextest asks the owner). Cost on the
+laptop's Intel GPU is not measured. A mote's drift is not graded. Not drawn:
+`env_wind`, the brush's own shape (a mote is born anywhere in its box), fog,
+Source's first quarter second of sideways dash. The blend is a straight line
+where linear light is a curve: motes are fainter than Source's against
+near-black (0.10 under on a 0.04 wall). `vbsp_emit_ratemax 200` still clamps 270
+volumes. The engine carries each mote, undrawn, to LifetimeMax. All in FTESurf
+BACKLOG.
