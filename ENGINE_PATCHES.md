@@ -43975,3 +43975,34 @@ own new maps; the create-server list shows it as its own row, not a switch.
 Players get a longer list only with a release (`data/mapdl.txt` ships).
 `--updates` is off: 49 held builds are not Momentum's current one. The Beta
 list is as fresh as the owner's Momentum install. All in BACKLOG.md.
+
+## Patch 650 — the map watcher takes turns with the KSF crawl *(MOD ONLY: surfd)*
+
+**Problem.** Two tools of ours talk to ksf.surf and neither knew of the
+other. `ksfimport.py --watch` (every five minutes) was refused at 13:31Z on
+11 Oct, "read operation timed out", while Patch 644's first fill was
+downloading archives from the same host (13:28Z to 13:36Z). A refusal parks
+that crawl for six hours, doubling. It had timed out the day before with no
+watcher running, so the overlap is shown and the cause is not; at 20
+archives every six hours it would have recurred.
+
+**Change** (ftesurf `0aa7e64`, surfd/mapwatch.py).
+- `ksf_turn()`: each request to ksf.surf, the page and every archive, is
+  made holding the crawl's own lock (`/tmp/surfd-ksfwatch.lock`, which the
+  crawl's cron line takes with `flock -n`, so a tick starting meanwhile is
+  skipped). A tick in progress is waited for up to `KSF_WAIT` (300 s), then
+  KSF is left for the run.
+- `ksf_parked()`: while the crawl's `data/ksf/.refused` says it is parked,
+  KSF is asked nothing, a park that begins mid-run included. Neither strikes
+  a map.
+
+**Verified.** `surfd/test_mapwatch.py`: 141 checks on Windows, 147 on the Pi
+(the lock cases need flock and are graded there). Six one-edit mutants run on
+the Pi, all caught. DEPLOYED 11 Oct 13:48Z with `surfd-deploy.ps1 -Only
+surfd/mapwatch.py -NoBackup -NoReload`; a dry run on the Pi a minute later
+printed `ksf: NOT READ (it refused its crawl (no answer: The read operation
+timed out): nothing asked until 2026-10-11 19:31 UTC)` and read Momentum's
+lists as before.
+
+**Known.** Nothing was run against ksf.surf itself, and whether the overlap
+caused the timeout is not known. The crawl stays parked until 19:31Z.
