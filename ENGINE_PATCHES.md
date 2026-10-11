@@ -43110,3 +43110,9 @@ stop short of its finish ranks by its length. The Run graph's curves keep the
 graph's palette. `reset all` has the older-default.cfg fault for every other
 row that only the game code registers. The nine older arms that set the
 colouring were read, not rerun. FTESurf BACKLOG, "Run lines by time".
+
+**Deployed** 2026-10-11 from FTESurf `6f936bc`: csprogs `6dc6e7b3` (qwprogs and
+menu.dat unchanged) and `cfg/default.cfg` to both Windows installs at 03:51Z,
+and the progs to the Pi at 03:52Z with nobody on. Twelve lobbies restarted,
+read back from the host; a fresh client on a lobby was served this csprogs and
+drew the board. `.prev` is Patch 631's csprogs in all three places.
