@@ -42814,3 +42814,34 @@ surfd has been heard on a map is traced, not driven; nobody but the two
 development installs has the Patch 625 engine, so until a release every other
 player would be unranked with the switch on. No engine change: `ENGINE.txt`'s
 commit and tag stay Patch 625's.
+
+**DEPLOYED 11 Oct 2026, 01:31-01:38 UTC (FTESurf `061fa8d`, record `713c39a`),
+SWITCHED OFF.** In this order. 01:31:52Z: `SURFD_RANKED_LINKED=0` appended
+to the Pi's `surfd.env`, before any of this patch's code was on the host (the
+code's default is on, and every cron tool imports surfd; the service's process
+holds no `SURFD_*` of its own, so both read that file). surfd, `-Ref 061fa8d`,
+its fourteen changed python files: the staged suites pass on the Pi with
+`test_ranked` among them; database backup
+`surfd.db.bak-061fa8d-20261011-123213`; `surfd ready` 01:34:53Z. Read back
+from the host: the commit's blobs, schema 16, `runs_live`, the log line
+`ranked rows need a linked Steam account: NO (SURFD_RANKED_LINKED=0)`, and
+the board as it was (21 ranked rows of one install, 1 link, 0 pins), also
+after a cron sweep had imported the new module. The index build held the
+write lock for seven seconds and one lobby heartbeat was refused in it; 0
+players. Lobbies, `build.ps1 -Pi` at 12 rows and 0 players: `qwprogs.dat`
+`e9c95065`, `csprogs.dat` `6ddb3e37` (the bytes the rig arm ran on), the
+previous pair kept as `.prev` (`bc25c080` / `848c654e`), twelve units active
+since 01:36:22Z to 01:36:30Z; `menu.dat` unchanged. Live check 01:37:23Z: the
+installed Patch 625 client in a private rig, its own key and no key pressed,
+joined a lobby by its public name and had its connect proof answered; surfd's
+game-code line reads `6ddb3e37` with `848c654e` before it. That check posts no
+run: with the switch off the run path is the old one by construction, and the
+owner's next finish is its first live use. Windows, 01:38:33Z: both installs'
+`qwprogs.dat` and `csprogs.dat`, by a copy that refuses unless the installed
+file is the previous main's build and no installed game is running; previous
+files kept as `.prev`; read back with a second tool. The last round's three
+fixes (a missing column on a file an earlier cut started, the paused-run gate
+decided by the slot's key, `why: held`) were tested and mutated but had no
+review round of their own; none is reachable with the switch off. Roll back:
+`.prev` over each progs file and a lobby restart, the `.pre061fa8d-*` copies
+over surfd's files and a reload.
