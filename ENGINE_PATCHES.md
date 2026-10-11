@@ -43433,3 +43433,38 @@ the final code is held to the no-key rule by its own check.
 **Left** (BACKLOG): the game does not draw them yet; a changed picture is no
 picture until the next sync; a browser keeps a picture an hour, a banned
 account's included; the game's copy spends the board's rate budget.
+
+## Patch 641 — A config still on the HUD's old defaults is moved to the new ones, once *(MOD ONLY, csprogs)*
+
+**Problem.** Patch 637 made the owner's layout the HUD's defaults, but a
+default is beaten by any config that already holds the name: the engine saves
+every archived setting only the game code registers, `hud_edit`'s reset wrote
+the others with `seta`, and an older release's default.cfg sets them. Players
+with a saved config kept the old layout or a mix of the two. The owner, asked
+whether to move them: "do it".
+
+**Change.** FTESurf `475d313`: `cl_hudedit.qc` (`HE_MigrateDefaults`), one call
+at the end of the HUD's registrations in `cl_main.qc`. Once a config (a new
+archived mark, `hud_layout_rev`), each of Patch 637's 42 settings that is still
+exactly its old default becomes the new one; an element's place only when both
+its axes are the old ones. What a player changed is left, and so is a value
+typed back afterwards. One console line says how many moved; a fresh install
+says nothing. Two 256-float history rings in `cl_hud.qc` moved to allocated
+memory: csprogs was 12 global definitions from the compiler's 131,072.
+
+**Verified.** `tools/test_p641migrate.py` over `cfg/test/p641migrate.cfg`,
+three starts of the game code in one process, 9 of 9 on csprogs `05b3a6ff`:
+all 42 move and the game says 31 (14 elements, 17 settings); the config it
+then saves holds them and the mark; an element moved on one axis, a setting
+off its old default and a value a hair off are left; a value put back after
+the mark is left. The build before fails 7 of the 9. A fresh overlay says
+nothing and passes Patch 637's arm.
+
+One review of the first cut, which moved the 16 settings the engine pins; it
+showed two more ways the old default is pinned, and the patch was widened to
+all 42 and measured again.
+
+**Known.** It cannot tell a setting deliberately put back on the old default
+from one never touched. A config pinned on a default older than the last is
+not moved. No real config from an older release was run. FTESurf BACKLOG,
+"The owner's layout as the defaults".
