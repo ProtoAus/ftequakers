@@ -44830,3 +44830,18 @@ for anew when the card opens. The fixes were measured, not reviewed again.
 
 **Left** (BACKLOG): a result row is not a link; the header's "linked" is a
 stuffable word; no drill-down from a tier's bar; colour codes shown raw.
+
+### Patch 663, an hour on: the link offer yields to the card
+
+A rig client on a live lobby, reading the real directory, drew the owner's
+breakdown and a search as the arm had. It also showed what the arm had
+dismissed before looking: the Link Steam offer, which comes up by itself
+for an unlinked player and stays forty seconds, drew over the card and took
+Enter from its search, so a pick started a link and opened a browser.
+`Account_Draw` does not draw that offer while the card is up, and
+`Account_InputEvent` gives it no key while the card is up or a search field
+has the keyboard. The card has its own Link Steam. `tools/p663profile.py`
+opens the card with the offer pending now (check O: the pick is the
+search's, no link starts, and the offer takes Esc again once the card is
+closed); the build that was live fails it. 27 checks, on the installed
+engine and on release 0.1.24's.
