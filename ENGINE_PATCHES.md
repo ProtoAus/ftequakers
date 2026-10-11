@@ -44006,3 +44006,46 @@ lists as before.
 
 **Known.** Nothing was run against ksf.surf itself, and whether the overlap
 caused the timeout is not known. The crawl stays parked until 19:31Z.
+
+## Patch 649 — Sixty-four run lines can be ticked where eight could *(MOD ONLY, csprogs)*
+
+**Problem.** The board's lines were eight fixed slots, and the owner's own
+injectable drew fifty and more. Three costs in `cl_lines.qc` were per line or
+per pair and did not show at eight: the rank paired every line with every
+other each frame, every finished build bumped one count so the live run's
+line (built four times a second) repainted every ticked line from its first
+sample, and the follow search read each whole line every 0.25 s. The server
+allows an address twenty recordings a minute, and its refusal ended a line.
+
+**Change.** FTESurf `512870b`. Fifty-six more board slots of 8192 samples
+(slots 11..66; a longer run is thinned to fit) beside the eleven of 65536,
+which stay where they were. The per-slot tables are allocated. The rank is
+recomputed on a change, the repaint count is one a slot, and past eight lines
+the search looks at each line every 0.25 s x lines/8 on its own phase, and at
+once when the viewer is moved away from a cursor. Only the first
+`hud_lines_marked` (8, saved) drawn board lines carry marks and numbers; names
+and the run graph are the lines in places 1..8. Line downloads spend tokens
+(three, one more every four seconds) and a refusal puts the line back, four
+times. No engine source: the patch-645 builtins draw them.
+
+**Verified.** `tools/test_p649lines.py` over `cfg/test/p649lines.cfg`, 11 of
+11 on csprogs `95f30046` with the patch-645 engine: sixty-four lines draw
+exactly eight times eight lines' segments with the same 72 marks; a viewer
+moved 25 s along the run has all sixty-four cursors half a second on, and
+they stay while it plays; a line alone in slot 5, 42 and 66 is the same
+picture, 0 pixels; a 65th is refused; a walk that builds the live line five
+times repaints none of eight ticked lines. With the one-count repaint put
+back that check fails, 48 repaints. `tools/test_p645lines.py` on the same
+build: 28 of 28. QC time a frame on a paused replay, 2.11 ms with no board
+line: eight lines 2.93, sixteen 3.03, thirty-two 3.33, sixty-four 4.02.
+
+One review. Fixed from it: the limiter, the repaint, the search's spread
+collapsing after a restart and its lag after a teleport, marks by drawn order,
+and the arm's moved, playing and live parts.
+
+**Known.** Names and the run graph stay with places 1..8 whatever is ticked.
+The download pacing is modelled from the server's settings; sixty-four
+uncached rows were not ticked against the live server. A real run at speed
+beside sixty-four lines was not measured, nor a thinned line's picture. The
+tables are 68.9 MiB, made at the first line of a map in 17 to 23 ms. FTESurf
+BACKLOG, "Sixty-four run lines".
