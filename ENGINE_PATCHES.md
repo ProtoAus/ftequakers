@@ -43054,3 +43054,14 @@ same two rcon packet-count checks on main.
 the log; the rows of a banned account's installs under their own ids stay; a
 banned run's in-game watch commands get the public 404; set-aside rows count
 toward the caps.
+
+**DEPLOYED 11 Oct 2026, 03:16:10 UTC (FTESurf `04a6ea0`, record after it),
+surfd only**: `accounts.py`, `admin.py`, `surfd.py`, the four admin templates
+and two tests; the staged suites pass on the Pi; a database backup; a reload
+with 0 players. Read back from the host: the commit's blobs, no error after
+the reload by position in the log, `/admin/accounts` redirecting to the login
+and the three new API routes answering 401 without a session, the boards as
+they were (21 ranked rows of one account, nobody banned). Not done on the
+fleet: a ban itself, which needs the owner's panel password; `lextest.md` has
+the try. The full mutant sweep ran on the final code: 303 mutants, 292
+killed, 11 surviving alone as declared pairs, none unexpected.
