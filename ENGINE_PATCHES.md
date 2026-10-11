@@ -44937,3 +44937,129 @@ MiB (46 with motes) are lit at 1.
 
 **Deployed** 11 Oct 19:40 UTC: csprogs `c7596c74` on the Pi's twelve lobbies
 and both Windows installs, `.prev` `9fc0940b`; lobby smoke on 27510 passed.
+
+## Patch 659 — Rain as Source draws it: thin, long, and one trace a drop *(FTESurf csprogs and tools/pcf.py; no engine source)*
+
+From the owner, 12 Oct: "Same with rain, rain in source is brighter, thinner,
+faster, and longer."
+
+**Problem.** Rain on these maps is a `render_sprite_trail` particle system on
+`particle/rain` (surf_tensor2 has thirteen). `tools/pcf.py` baked it as an
+FTE `texturedspark`, and four things were off.
+- **Width.** A trail is `radius` wide; the translator gave it the sprite
+  conversion (4 * sqrt(2) times the radius, right for a sprite, whose quad is
+  drawn from its centre to its corners). A spark's `scale` is its full width
+  (`p_script.c`, `R_AddTSparkParticle`): rain was 5.66 units wide, Source's 1.
+- **Length.** Source's streak is a tenth of a second of travel held to "max
+  length", 80 units at any rain speed. The material's shader sorts `blend`,
+  which sends a spark down the engine's immediate draw
+  (`GL_DrawTexturedSparkParticle`): from the particle to 0.05 s of travel
+  ahead, 50 to 150 units, and no fixed length.
+- **Brightness.** UnlitGeneric blends in linear light and this framebuffer in
+  gamma space: a streak at alpha 0.15 over a dark sky is a third as far above
+  it. And the translator wrote alpha as its middle and half its range where
+  the engine draws `alpha + alpharand * frandom()`: the upper half of
+  Source's range, for every baked system.
+- **How many.** Source emits 800 a second. The translator wrote
+  `min(emission_rate, max_particles / lifetime)` = 150, on the reasoning that
+  the pool fills; a drop killed by what it hits never lives its 10 s, so it
+  does not. The client then held that to 68 (the dust's per-emitter ceiling
+  and the shared budget).
+- Not speed: the bake already had Source's 1,000 to 3,000 units a second and
+  its gravity.
+
+**The cost that shaped the fix.** A first cut emitted 800 a second through
+the engine. `clipbounce` makes the engine trace every such particle every
+frame (`r_particle_tracelimit` defaults to 0x7fffffff): 1,550 drops alive
+took surf_tensor2's spawn from 650 frames a second to 133, about 4
+microseconds a drop a frame. And the engine's trace did not stop a drop at the
+sky's floor, so most drops lived their whole 10 s under the map.
+
+**Change.** FTESurf `a68e411`.
+- **`tools/pcf.py`**: a trail whose material is in `TRAIL_BLENDED`
+  (`particle/rain`) gets twenty more blocks, `<map>_<name>_t0..19`, with no
+  spawn box and no collision: `scale` four times the radius,
+  `stretchfactor -40`, lives of 0.04 * 1.25^k seconds. And a line in the
+  index: `trail <map> <name> <material> <rate> <box> <speed spread>
+  <gravity> <n> <t0> <ratio>`. The system's own block and its psys line are
+  written as before, so a client from before the patch reading the new files,
+  or this client reading old ones, draws the old rain. Alpha is a floor and a
+  range, for every system.
+- **`Emit_TrailDrop`** (`src/client/cl_emit.qc`): the client picks a drop's
+  point in the box and its speed, traces once along the fall (4,096 units),
+  works out when it lands under the block's gravity, and sends it out as the
+  block whose life is the longest not over that; the time left over it has
+  "already fallen", a start lower in the box and faster. A drop born inside
+  something is not made. Nothing is traced afterwards.
+- **`Emit_TrailShader`**: `ftesurf_trail/<material>`, the motes' linear-light
+  blend (Patch 657) over the material's .vtf. The quad is four streak widths
+  wide and the streak is drawn inside it by pixel coverage, so one a third of
+  a pixel wide is a faint line and not a row of dots. `sort additive`, which
+  is what makes the engine batch it and honour the fixed length.
+- Trail emitters keep the index's rate (not the dust's ceiling of 200) and
+  have a budget of their own, 2,400 drops a second.
+- `Emit_PsysRepair`: a renderer restart takes the shader and the map's
+  blocks; both are made again, asked of the first baked system that emits
+  and three times a map at most. Nothing brought a baked map's blocks back
+  before.
+- A drop's fall is cut short by half the streak and a frame of travel: the
+  engine draws a particle once more in the frame it dies and a spark's quad
+  is centred on it.
+
+**Verified.** `tools/p659rain.py` over `cfg/test/p659rain.cfg`, 18 of 18
+on csprogs `e04ccb61`, the patch-658 client, RTX 2080 SUPER, 1920x1111.
+The streaks are what differs between a shot of surf_tensor2's spawn and the
+same view with the systems off.
+- Shape, two shots: 57 and 71 streaks in view; the 20 longest 2.2 px wide,
+  72 and 79 long, 34 and 33 times as long as wide, 34 and 35 of 255 over
+  the sky; 1.6% and 1.5% of the rain's pixels in blobs under 8 (a streak
+  drawn as dots is those).
+- The subject's lines: `sprite trails: 11 emitters, those in range asking
+  850/sec of 2400, throttle 1.000`; a drop's mean life 0.40 s, 2 of 6,468
+  with nothing to land on; and the ENGINE's count, 150 of spawn_rain01's
+  particles where the 442 a second made at 0.40 s come to 177, none marked
+  `(+traceline)`; `reloads 0`.
+- After `vid_restart`: the shader made once, the map's blocks sent again
+  once, 232 particles falling.
+- Control, the build before (csprogs `c7596c74`) with the files as
+  installed: 7 and 6 streaks, 3.5 and 2.7 px wide, 7 and 10 times as long,
+  22 and 19 over the sky. That client with the new files, and the new
+  client with the old files, draw the same old rain (9 to 10 streaks).
+- Control, the cut before the review: `reloads 9` before any restart, and
+  10.1% and 12.5% of the rain's pixels in pieces.
+- Cost, two runs a build, alternating, surf_tensor2's spawn: 666 and 662
+  frames a second with this rain, 574 and 555 with the old, 832 with the
+  map's systems off.
+- `tools/p648motes.py`, 22 of 22 on the same bytes. `tools/p656fire.py`
+  failed one check on its first run (the wall over the medium fire 91.3
+  with smoke, 93.1 bare, under its bound of 2). Run twice more a build,
+  alternating with the build before: 85.6 and 86.5 there, 89.0 and 87.6
+  here, each 78 to 93 shot by shot, the shot after a screenshot always the
+  palest, the engine's count of smoke particles the same in every build.
+  The arm now judges the darkest of its three shots. Five runs neither
+  show nor rule out that this patch thins smoke; nothing in it touches
+  fire.
+- One independent review of the second cut. Its repair asked a handle no
+  emitter had taken (the first trail system in the index, which on
+  surf_tensor2 no entity names), so the map's config was sent again every
+  second, freeing every live particle of its 280 blocks, and the arm
+  passed; a streak under a pixel sampled the texture's empty edge and drew
+  as dots; nothing tied a drop's life to its trace; and the per-frame cap
+  held 800 a second to 720 at 30 fps. All fixed, the first three with a
+  check the old code fails.
+
+**Not verified.** Source itself: no side-by-side was taken, and `lextest.md`
+asks the owner. A streak's width in world units (a blob's depth is not
+known; the ratio is). Cost on the owner's Intel laptop.
+
+**Known gaps** (BACKLOG, "Source rain"). `func_precipitation`, Source's other
+rain and snow, is not drawn at all: 373 volumes on 72 maps. Wind is a
+constant drift. A drop lands on what CSQC's trace meets, func_illusionary
+included. No exposure, no fog. The baked files are not in git and not sent by
+a lobby: a player has this rain from a release archive baked after the patch.
+
+**Deployed** 11 Oct 21:13 UTC: csprogs `e04ccb61` on the Pi's twelve lobbies
+and both Windows installs, `.prev` `c7596c74`; lobby smoke on 27510 passed.
+`tools/pcf.py` then re-baked surf_tensor2 and surf_boreas in `C:\FTESurf`
+(`particles/*.cfg`, `data/mapparticles.txt`), byte-equal to the tested files;
+the second install has no particle files.
