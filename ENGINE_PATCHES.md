@@ -42946,3 +42946,9 @@ Segments rows keep a zero from where the seek came from (older than this
 patch; the window no longer shares it). Not run: frame rates other than 100,
 a save-lock load, a board under the grading thresholds. FTESurf BACKLOG, "The
 Boarding window".
+
+**Deployed** 2026-10-11 from FTESurf `d43a0c2`: csprogs `1a27aa8f` (qwprogs and
+menu.dat unchanged) to both Windows installs at 02:36Z and to the Pi at 02:37Z
+with nobody on. Twelve lobbies restarted, read back from the host; a fresh
+client on a lobby was served this csprogs and drew the board. `.prev` is
+Patch 630's csprogs in all three places.
