@@ -1726,8 +1726,10 @@ void QCBUILTIN PF_R_PolygonEnd(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	if (flags != csqc_poly_flags || (cl_numstrisvert-csqc_poly_origvert) >= 32768)
 	{
 		int sv = cl_numstrisvert - nv;
+		shader_t *shader = csqc_poly_shader;	//FTESurf Patch 645: the flush clears it, and this polygon is still to draw
 		cl_numstrisvert -= nv;
 		CSQC_PolyFlush();
+		csqc_poly_shader = shader;
 
 		csqc_poly_origvert = cl_numstrisvert;
 		csqc_poly_origidx = cl_numstrisidx;
@@ -1814,8 +1816,10 @@ void QCBUILTIN PF_R_PolygonEndRibbon(pubprogfuncs_t *prinst, struct globalvars_s
 	if (flags != csqc_poly_flags || (cl_numstrisvert-csqc_poly_origvert) >= 32768)
 	{
 		int sv = cl_numstrisvert - nv;
+		shader_t *shader = csqc_poly_shader;	//FTESurf Patch 645: the flush clears it, and this polygon is still to draw
 		cl_numstrisvert -= nv;
 		CSQC_PolyFlush();
+		csqc_poly_shader = shader;
 
 		csqc_poly_origvert = cl_numstrisvert;
 		csqc_poly_origidx = cl_numstrisidx;
@@ -2154,6 +2158,8 @@ static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars
 		out[2] = tempv[2]/tempv[3];
 	}
 }
+
+#include "pr_csqc_lines.inc"	//FTESurf Patch 645: the run lines' strip, natively
 
 //clear scene, and set up the default stuff.
 static void QCBUILTIN PF_R_ClearScene (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7173,6 +7179,12 @@ static struct {
 	{"ui_native_plot_rows",	PF_ui_native_plot_rows,		0},
 	{"ui_native_plot_commit",	PF_ui_native_plot_commit,	0},
 	{"ui_native_plot_view",	PF_ui_native_plot_view,		0},
+	{"lines_width",			PF_cs_lines_width,		0},	//FTESurf Patch 645, pr_csqc_lines.inc
+	{"lines_segment",		PF_cs_lines_segment,	0},
+	{"lines_strip2d",		PF_cs_lines_strip2d,	0},
+	{"lines_arrays",		PF_cs_lines_arrays,		0},
+	{"lines_lod",			PF_cs_lines_lod,		0},
+	{"lines_draw",			PF_cs_lines_draw,		0},
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326
 	{"stringwidth",				PF_CL_stringwidth,				327},	// #327 EXT_CSQC_'DARKPLACES'
@@ -7887,6 +7899,7 @@ void CSQC_Shutdown(void)
 		World_Destroy(&csqc_world);
 	}
 
+	CSQC_Lines_Reset();	/*Patch 645: no later VM inherits this one's sample arrays*/
 	Cmd_RemoveCommands(CS_ConsoleCommand_f);
 
 

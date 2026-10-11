@@ -43654,3 +43654,73 @@ the track list (the same lines; the fixture's track list is three rows), a
 replay under the board, a real wheel. On a narrow window a notch over the
 docked room list scrolls the Online list under it; a board pinned by accident
 during a TAB peek takes the wheel until TAB is let go. All in BACKLOG.md.
+
+## Patch 645 — Run lines are drawn by the engine; a polygon batch of 32768 vertices no longer kills the client *(ENGINE client + csprogs)*
+
+**Problem.** The owner: eight run lines "really drains my fps", where his
+older injectable drew fifty. FTESurf draws a recorded run as a screen-space
+antialiased strip, and QC built it a segment at a time (`cl_lines.qc`
+`Line_Feed`, `Line_Q`, `Line_Emit`): some 250 instructions and 14 builtin
+calls a segment, about a microsecond. On the owner's laptop eight lines with
+their marks and the HUD graph added 3.6 ms to a 2.2 ms QC frame.
+
+Measuring it found a second thing. `PF_R_PolygonEnd` flushes a batch itself
+when it holds 32768 vertices or its flags change; `CSQC_PolyFlush` ends by
+clearing the batch's shader; and the polygon that crossed the line was then
+flushed by the next `R_BeginPolygon` with no shader, an access violation at
+the top of `GLBE_DrawMesh_List`. Eight whole lines three pixels wide are
+33,040 vertices, and the installed client died drawing them.
+
+**Change.** `engine/client/pr_csqc_lines.inc` (new, included by `pr_csqc.c`):
+six CSQC builtins, by name. No header is touched, so no plugin interface
+moves; the server is not built differently.
+
+- `lines_draw(parm, n)` is `Line_Draw`'s pass over one slot's samples in C:
+  group and chunk culling, LOD strides, the near clip, the playhead split,
+  Catmull-Rom subdivision, reveal, fade and window alpha, mitres. It writes
+  the same two fans a segment into the same 2D polygon batch
+  `R_BeginPolygon("", DRAWFLAG_TWOSIDED, TRUE)` fills. Anything out of range
+  in its parameter block and it returns 0 having drawn nothing; QC then runs
+  its own loop.
+- `lines_arrays` and `lines_lod` say where a VM keeps its samples and LOD
+  tables. They are kept as QC pointers and resolved, with their sizes, inside
+  each call; a VM's are forgotten when it shuts down.
+- `lines_segment` and `lines_width` are `Line_Emit` (marks, dashes, the mouse
+  pad's trail); `lines_strip2d` is a strip through an array of points, the
+  HUD graph's curves.
+- `PF_R_PolygonEnd` and `PF_R_PolygonEndRibbon` keep the batch's shader across
+  their forced flush.
+
+FTESurf's half: `cl_lines.qc` draws through the builtins when
+`checkbuiltin(lines_draw)` and keeps its loop for an engine without them and
+as the reference. `hud_lines_native 0` draws the QC way; `lines native`
+prints which drew, how many passes were refused and the last drawer's counts.
+
+**Verified.** On a development build of this source, FTESurf
+`tools/test_p645lines.py` over `cfg/test/p645lines.cfg`: eight views, each
+drawn the QC way, the engine's way and the QC way again. 28 of 28. In the
+seven views on a paused replay (eight board lines in a window, whole, three
+pixels wide, later in the run; the replay's own line alone with its playhead
+inside it, and stopping at it; one board slot alone) every pixel is the same,
+largest difference 0 of 255, with the same point, segment, clipped and wild
+counts and screen box and no pass refused. In the live view (the player's own
+line, whose last sample has no LOD tables yet) the line's own pixels are the
+same; the map behind it flickers by itself. The build without the flush fix
+dies in the three-pixel view drawing the QC way; with it both ways draw.
+
+Cost, QC time a frame in one process and view (1600x900, eight lines): a
+window with marks and graph 5.81 ms the QC way and 3.39 ms the engine's,
+against 2.22 ms with no board line; whole lines 8.92 against 4.48.
+
+One review. From it: two fields of the block whose product could overflow an
+int index for a hostile VM (bounded), three places C rounded in double where
+QC rounds in float (made float), the reset moved after the VM's own shutdown
+function, and the arm's last three views.
+
+**Known.** What is left of eight lines' cost is QC that is not per segment:
+marks, labels, the follow search, the names. The cap of eight lines stands.
+A line appearing (its samples' births, 0.18 s) is not compared: the picture
+has to hold still. An engine before this one still dies at 32768 vertices on
+the QC path. `CSQC_PolyFlush` rewinds the index count to the vertex origin,
+and `PF_R_PolygonEnd` copies with `memcpy` where the ranges can overlap: both
+older, both left. FTESurf BACKLOG, "Run lines drawn by the engine".
