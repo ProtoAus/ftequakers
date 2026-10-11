@@ -43369,3 +43369,67 @@ and menu.dat unchanged) and `cfg/default.cfg` to both Windows installs at
 on. Twelve lobbies restarted, read back from the host; a fresh client on a
 lobby was served this csprogs and drew the board. `.prev` is Patch 635's
 csprogs in all three places.
+
+## Patch 639 — Steam profile pictures, the service and website half *(MOD ONLY: surfd + its site)*
+
+From the owner's list of 11 Oct ("use players Display Pictures next to their
+name on the leaderboard"). ROADMAP 14.4, the picture, first half: the site
+draws them; the game's copy is made and served, and the game draws it next.
+
+- **The fetch.** `steamsync.py` (cron, half-hourly) fetches each unbanned
+  account's picture once, by Steam's own hash of it, from Steam's picture host
+  into `data/avatars`: `<hash>.jpg` as served at 64 px, and `<hash>.txt`, a
+  header line and 32 lines of 32 RGBA pixels in hex. Text, because `uri_get`
+  hands QuakeC a string and a binary body stops at its first NUL; this fork
+  cannot use a URL as a pic name.
+- **What is kept.** Only a body Pillow has opened: one cut short on the way
+  has a JPEG's first bytes. A picture that could not be had leaves
+  `<hash>.bad` and is asked for again after a day. The host throttling or not
+  answering ends the pass and marks nothing. Files of a hash no unbanned
+  account names are removed at the end of a pass.
+- **surfd.** `avatars()` is one table of who has a picture on disk, swapped
+  whole each minute and at once when the admin's page bans or unbans.
+  `/board/avatar/<handle>` serves the JPEG from the site's own origin (its
+  CSP is `img-src 'self'`), in a rate bucket of its own.
+  `/api/board?avatar=<mark>` serves the game's copy: a parameter of the board
+  route because the game-facing vhost forwards a fixed list of paths; only
+  while ranking is by account; never for a mark two accounts share.
+- **Rows.** `/api/board`, `/board/api/map`, the players list and a player's
+  page say `av: 1` where the player has a picture and carry no key where they
+  do not, so a board with no pictured account on it is byte for byte what it
+  was (the review compared 32 bodies against the commit before: 16
+  identical, 16 differing only by that key).
+- **The site.** `board.js` draws the picture beside the name on board rows, on
+  a player's page and in the players list; one that will not load removes
+  itself.
+
+**Review.** One reviewer, four heads (files and requests; Pillow; who sees
+what; breakage), given the code. Nothing found that reads or writes outside
+the pictures directory, asks another host, or serves a file under a type a
+browser would run. Found and fixed, each with a check and a mutant: every
+`steam.Unavailable` was read as the host being down, and that exception is
+also a refusal of one object, so one refused hash ended every pass at itself;
+a picture was kept on its first three bytes and never asked for again; the
+game was told `av` where only the site's file existed; a shared mark was
+dropped only when both accounts were pictured; a ban took up to a minute to
+stop a picture; the site's route resolved a handle through the player
+directory, five minutes behind a new player; any file error left the pass by
+exception; pictures spent the map screenshots' rate budget; nothing was ever
+deleted.
+
+**Measured.** `test_ranked.py` section 10: 22 checks (130 in the suite), with
+a fake Steam that cuts one picture short, refuses one, sends a PNG for one
+and throttles; `test_accounts.py` 399, `test_web.py` 202, `test_board.py`
+351. The 35 picture mutants: 35 killed. `tools/accounts_mutants.py`, the full
+sweep on this code: 354 mutants, 343 killed, 11 surviving alone as declared pairs, none unexpected. LOOKED AT: the board, a player's page and
+the players list from a fixture with two drawn pictures, in a headless
+browser (the list's picture sat high in its row; its style is corrected).
+`test_admin.py`: 259 of 261 on this box today, and the same two fail on the
+commit before this patch, loaded or quiet (a lobby probe's wording and its
+packet count, first seen after the machine's restart): not this patch's, not
+explained. The 32-body comparison above is the reviewer's, on the first cut;
+the final code is held to the no-key rule by its own check.
+
+**Left** (BACKLOG): the game does not draw them yet; a changed picture is no
+picture until the next sync; a browser keeps a picture an hour, a banned
+account's included; the game's copy spends the board's rate budget.
