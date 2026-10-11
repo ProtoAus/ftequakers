@@ -43319,3 +43319,46 @@ measured on the fleet: a name being forced, which needs a linked game; the
 owner's next connect is the first. Read in the same hour, 05:09:39Z: a stage
 time of the owner's stored `ranked` under his account, the first live run
 through Patch 629's path.
+
+## Patch 637 — The HUD's defaults are the owner's own layout *(MOD ONLY, csprogs + cfg/default.cfg)*
+
+**Problem.** The last item of the owner's list of HUD edits (11 Oct): "make my
+current hud settings, the default hud settings for the game... this is just the
+default template." The defaults were each element's first placing, with every
+optional row switched on.
+
+**Change.** FTESurf `423c081`: thirteen client files, `cl_hudedit.qc`'s reset
+literals and the two default configs. 42 of the settings `hud_edit` owns start
+on the value the owner's saved config held: where the elements sit; Boarding
+off; run-line labels off; the Segments column without its absolute, percent
+and unit columns, the Board readout without its segment, ramp and word rows,
+the strafe bar without rates, why and best; the Run graph on both plots; the
+mouse pad over 360 degrees with a one second trail; the live numbers updated
+every frame. Each was changed wherever it is stated (the `registercvar`, the
+`set` line in both default configs, the editor's literal list), so
+`hud_edit`'s "reset" and "reset all" return to it. The speed, its energy and
+the strafe trainer draw at his sizes (64, 48 and 20 px at `hud_scale 2`) by
+moving the drawers' own sizes, so they still follow `hud_scale` and reach a
+config that had saved the old automatic. Not taken: the editor's own window.
+A saved config keeps what it holds.
+
+**Verified.** `tools/test_p637defaults.py` over `cfg/test/p637defaults.cfg` in
+a fresh overlay, 11 of 11 on csprogs `154fe49e`: the 42 boot on the owner's
+values and the other 99 as before; setting his whole saved layout by hand (80
+settings) moves none of the editor's 20 rectangles; with the 42 put back on
+their old defaults the rectangles move, and "reset all" returns all 141. The
+build before fails the four checks that rest on the defaults. The speed and
+its energy are the same pixels as his explicit sizes at `hud_scale 2`.
+
+One review, one reader. Folded in: the three sizes had first been made
+absolute pixels, which no longer followed `hud_scale`; "reset all" would hand
+back two old defaults on a config saved before; an older arm graded the label
+default; a dozen comments stated defaults that had moved.
+
+**Known.** A player who has saved a config keeps 16 of the old defaults: the
+engine saves every setting the game code alone registers, at its default too.
+Not migrated; the owner is asked. Board and Boarding are placed where they
+were stacked under the strafe bar, and the stacked state is console only. In
+a 1280x720 window two pairs of his panels overlap that do not at 1600x900.
+Arms that read a HUD default without setting it were not swept. FTESurf
+BACKLOG, "The owner's layout as the defaults".
