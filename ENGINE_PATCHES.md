@@ -43654,3 +43654,90 @@ the track list (the same lines; the fixture's track list is three rows), a
 replay under the board, a real wheel. On a narrow window a notch over the
 docked room list scrolls the Online list under it; a board pinned by accident
 during a TAB peek takes the wheel until TAB is let go. All in BACKLOG.md.
+
+## Patch 647 — the first-boot screens *(MOD ONLY: menu.dat + one sentence of surfd)*
+
+From the owner's list of 11 Oct ("make the sign in process happen when you
+first boot the game, like the screen that tells you, you will be recorded,
+make it follow the current design flow, and also clean up that screen").
+ROADMAP 14.4, the last of that list.
+
+- **"Before you play".** `screen_terms` was 35 hand-broken lines in a flat
+  box with three equal buttons. It is one rounded panel with two cards, "On
+  this machine" and "Public lobbies", whose text is wrapped to the cards at
+  draw time (`ui_para`) and measured first, so the panel is sized from it:
+  16 px text, or 12 where 16 does not fit the window. The offline answer is
+  still the first element and the keyboard's default; the online one is
+  drawn as the way forward. In a window too short even at 12 px the buttons
+  and the footnote sit on a strip of their own along the bottom edge.
+- **Its wording**, under the rule the old text's essay set (disclose only
+  what the shipped code does today): a tick is 66 or 100 a second, where it
+  said "about 66"; a ranked time is filed under a linked Steam account, by
+  its Steam name and with its picture, where it said "under the name you
+  are playing as"; what a link stores; that the game asks play.proto.bar for
+  leaderboards and pictures as well as the map picker. `FS_TERMS_ONLINE` is
+  not bumped: nothing new leaves the machine of a player who does not link,
+  and linking is its own act on its own page.
+- **"Sign in with Steam".** Taking the online answer goes on to
+  `screen_steam`, an offer with a "not now" (ESC too). The menu cannot make a
+  link: the engine signs one only in the game, on a lobby, under a real key
+  press (Patch 625). So the offer says what a link is, joins the directory's
+  first lobby with room through `ui_connect`'s own gates (the name gate
+  waved through once: the Steam name becomes the name, Patch 638), and the
+  box the game raises there by itself asks for Enter. Declining an offer
+  that could be taken also tells the game not to raise that box this
+  session.
+- **surfd's sign-in page** says, before the sign-in, that the Steam name and
+  avatar are shown with the times, in the game too, and that the Steam name
+  is the name on lobbies (Patches 638 to 640 made those true).
+
+**Measured.** `tools/p647boot.py`: p615link's rig with NO consent file, a
+lobby heartbeating to a surfd in the driver's process, and real keys on the
+client's own window (an answer to the terms is never a console line). The
+sign-in path, 8 of 8: the terms come up, D then Enter writes tier 4 and the
+menu offers the sign-in, the offer asks the directory for lobbies, D then
+Enter loads the map list and joins the rig's lobby under the factory name,
+and the game's own box comes up asking for Enter. `--later`, 6 of 6: ESC on
+the offer, no join, `_acct_prompted` 1. `--offline`, 4 of 4: Enter on the
+default button writes tier 1, no offer, and the directory is asked nothing.
+The panel against the window, by its own print: 1240 x 781 at 16 px in
+1920 x 1080; 1240 x 641 at 12 px in 1280 x 720; 992 x 656 at 12 px in
+1024 x 768. LOOKED AT: the terms at those three sizes and as a returning
+player sees them, the offer, and the game's box. `test_accounts.py` 400 with
+the page's sentence checked; the mutant set lints clean against the edited
+file (354, none stale). Build: 0 warnings; qwprogs and csprogs are the
+installed bytes.
+
+**Review.** One reviewer, four heads (consent; the text as a disclosure,
+sentence by sentence against the code; the VM and the layout; the offer's
+join), given the code and the engine source. Nothing found that writes or
+raises consent without the player's answer, leaves the terms without one, or
+contacts a server below the online tier; no disclosure the old text made is
+missing. Found and fixed:
+- the panel was 790 px tall at 1280 x 720 (15 px text, measured at one
+  window size only): the buttons' fallback strip was the normal case and hid
+  the footnote. Now 16 px or 12, a wider panel, and the three sizes above;
+- the offer said Enter "opens Steam's own page": it opens the sign-in page,
+  Steam's is a click on, and a number is typed back. The sentence says so;
+- with no lobby answering, the offer said "the game asks again" while its
+  only exits told the game not to: nothing is declined in that state now;
+- the join read an unloaded map list (PLAY loads it, and a first boot has
+  not been there), so a missing map was not fetched first;
+- the screen's "ready" and the button's pick asked different questions
+  (every lobby refused by the host list gave a live button that did
+  nothing); full lobbies were not skipped;
+- the Steam paragraph left out what else surfd keeps for a linked install
+  (its id, where and when it was linked, when and how often it sends ranked
+  runs) and the profile link beside the name;
+- two harness commands that feed the menu synthetic keys and clicks could
+  press the terms' answers: for a moment after either, the answers and the
+  offer's sign-in do nothing and say why. (Not new with this patch; its test
+  word had made the route shorter. Whether a server's text can reach those
+  commands was not traced.)
+Left as found (BACKLOG): the name gate is waved through for the offer's
+join, so a player who then declines in the game is on a lobby under the
+factory name.
+
+**Left** (BACKLOG): signing in is still a join and five steps; the offer
+is made once, after the terms, and nothing in the main menu leads back to
+it; an 800 x 600 window does not fit the terms even at 12 px.
