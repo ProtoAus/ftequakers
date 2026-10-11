@@ -43186,3 +43186,53 @@ time and 0.03 s the second; its maps list gives the same ten tiers as its
 bars; one map shows 7,859 rows on All games and 1 / 7,652 / 206 by game.
 Momentum profile links are empty until the importer refetches a board. The
 first maps-list build after the reload took 4.95 s against the proxy's 5.
+
+## Patch 635 — The TAB board: every game in one list, a filter switch and slider, the LINE heading *(MOD ONLY, csprogs)*
+
+**Problem.** From the owner's list of HUD edits (11 Oct). The other games'
+times (Momentum, KSF) sat on a fourth tab, Imported, apart from ours; the
+owner asked for them in the Online list with a filter beside it, and on the
+first cut: "show all combined, and then the filter on the right, to be like a
+slider, with a filter toggle switch." Ticking the lines of a list was one box
+at a time.
+
+**Change.** FTESurf `8286948`: `cl_scores.qc`, `cl_online.qc`, `cl_players.qc`,
+`cl_scores_native.qc`. The Online list asks surfd for the `combined` tier by
+default (a tier surfd already served; no surfd change). Right of the tabs a
+`filter` switch and a slider with three stops, FTESurf, Momentum and KSF,
+narrow it to one game: `sb_filter`, `sb_filter_src`, both saved; `scores
+source all|ftesurf|momentum|ksf` on the console. The Imported tab is gone and
+Segmented stays ours. An imported row says its source in the WHY column, or
+in front of its name where a narrow window drops that column; the name and
+the footer's count are cut to their room. A click on the LINE heading ticks
+the lines of the list on screen from the top, up to the eight slots, or
+unticks them, and the footer says what it did. The room list asks for its own
+ranked board, since the Online store now usually holds the merged list. One
+account's ranked row is the player's own before its imported row, and where a
+merged list does not hold it the row pinned under the list reads the name and
+`FTESurf #<rank>`. A board that is only held hands no mouse press to its
+controls. Twenty older arms pin the filter to ours.
+
+**Verified.** `tools/p635board.py` starts the checkout's own surfd over
+seeded rows and grades the client's prints (the tier asked, the footer's
+sentence, the names as drawn, the controls' rectangles, each click): 52 of 52
+on csprogs `b2b6de57`. A build with seven faults planted (no source tag, no cut,
+the footer's wording, ticking from the bottom, a click on a held board, no
+room-list request, the console's list outliving its tab) fails the ten checks
+for them and no other. The player's own row and the pinned row were measured
+through a server-side seam in a scratch tree. Frames looked at: 1600x900 and
+1024x576, hud_scale 1 to 4.
+
+One review of the first cut, two readers. Folded in: a tagged name over the
+time column (1:06.990 read as 2:06.990), the room list without times while
+the merged list was up, the footer under the key hints, the same account's
+imported row taken for the player's, a held board firing the last control,
+the arm passing a build with four behaviours broken, and the test tool's file
+drop reaching outside its overlay. The redesign after the review was
+measured, not reviewed again.
+
+**Known.** Under about 760 px of window the board is clipped sooner than
+before (the header is wider; by arithmetic, not run). A drag of the knob, the
+native table and a finish under a one-game filter were not run. The LINE
+heading unticks before it completes. FTESurf BACKLOG, "The TAB board's filter
+and LINE heading".
