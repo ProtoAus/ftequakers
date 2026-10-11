@@ -42749,3 +42749,68 @@ click on a board row hands on), opened it with `replay online`, and reported
 its 44 mark labels are ramp edges and start with `~`; the screenshot shows
 them, a top's dot and `ramp: no plane` on the bar. One run of one map; the
 click, the hover and the Imported tab's own list are still read, not run.
+
+## Patch 629 — a ranked row belongs to a linked Steam account: built, and shipped switched OFF *(MOD ONLY: qwprogs + csprogs + surfd; schema 16)*
+
+ROADMAP 14.3 (a). Since Patch 625 an install can prove its key and be linked
+to a Steam account, but a run was still stored under the install's guid, which
+the client chooses. With `SURFD_RANKED_LINKED` on (the code's default; the
+Pi's `surfd.env` holds `SURFD_RANKED_LINKED=0` until the owner switches it):
+
+- **Whose row.** The lobby keeps the key each connection proved and sends it
+  with the run (`pub`), from a trusted lobby only. surfd stores the run under
+  the SteamID that key is linked to, on the ranked tier. No key, or a key that
+  is not linked: the community tier, under the guid, with `why: unproven` or
+  `unlinked`. A banned account: nothing stored. Every answer carries `why`,
+  and the lobby says each reason once a connection; the finish card and the
+  banner read "unranked: no Steam account linked (type link)".
+- **One identity a run.** The first post of a run id pins who it is
+  (`runpins`), with the key that earned it. Later posts of that run get the
+  pin; an account's pin answers only to its own key, and a post without it is
+  not stored (`why: held`, "not submitted"). A link made mid-run ranks the
+  next run. The run's key is latched where its id is minted
+  (`sv_timer.qc`), travels in a paused run's `ms.txt` (`key`), and a paused
+  run parked under a key is picked up or dropped only by a connection that
+  has proved that key. A run begun before the proof landed takes the key when
+  it does, if this connection minted it.
+- **The move.** At every start with the setting on, ranked rows whose player
+  is not an account move to community with their recordings; where the same
+  install already has a row there the faster is kept. It takes the write lock
+  before it reads its list and reads `runs_live`, a partial index of the rows
+  that are no imported tier's, made at schema 16 (one scan of `runs`, once).
+  One way: turning the setting off puts nothing back.
+- **Names.** With the setting on an install's name must be the engine's 32
+  hex (or that with a seat suffix), so it can never be read as a SteamID. The
+  board's "your row" mark is the account's digest (`who`) once linked, and no
+  mark before that on a lobby with a directory.
+
+**Review.** Three rounds, the reviewers given the code and a lens each, never
+the reasoning: whose row a run is; what a modified game gains; stored rows and
+the migration. What they found and this patch fixed, as conditions: a pin
+handed an account to any later post on the same guid; the move read its list
+before it held the lock, so two starts at once deleted what one had moved (6
+of 6 with two real processes); a marker for "moved" could be set by a cron
+tool's import before the service restarted; a run begun in the seconds before
+the proof landed never ranked; a paused run could be consumed by a connection
+whose posts were then refused; a file an earlier cut had started on answered
+500. The last check found nothing that stores a run under an account its
+connection did not prove, and nothing that loses a stored row.
+
+**Measured.** `surfd/test_ranked.py` (63 checks, new) and
+`test_accounts.py` (399); `tools/accounts_mutants.py`: 274 mutants, the full
+sweep run on the round-two code (271: 260 killed, 11 surviving alone as
+declared pairs, none unexpected) and the last round's four run by name.
+`tools/p615link.py` on the Patch 625 binaries: main mode 41 of 41 (its R
+checks read the form the lobby posted: the key carried, each reason line said
+once, the mark; its P checks park a run, are refused it under another key
+with the slot kept, and resume it under its own), and the four other modes.
+With the key latch compiled out of `sv_timer.qc` the R check for a run with
+an id fails with the id and no key.
+
+**Not measured, or not in this patch** (ROADMAP 14.3 a and BACKLOG carry
+them, as gates before the switch goes on): save slots, recording names and
+paused-run slots are still filed under the guid; the paused-run gate before
+surfd has been heard on a map is traced, not driven; nobody but the two
+development installs has the Patch 625 engine, so until a release every other
+player would be unranked with the switch on. No engine change: `ENGINE.txt`'s
+commit and tag stay Patch 625's.
