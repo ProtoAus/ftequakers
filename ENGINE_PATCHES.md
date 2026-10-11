@@ -45108,3 +45108,9 @@ no yield to other panels.
 test were not run. A new zone is a box; no moving one corner, no reordering,
 no map settings. The command is every player's and changes only their own
 view and their own hosted game. FTESurf BACKLOG, "The zone editor".
+
+**Deployed** 2026-10-11 from FTESurf `79425a5`: csprogs `cbc72b32` to the Pi
+at 22:45:13Z with nobody on, twelve lobbies restarted and read back, and to
+both Windows installs at 22:47:44Z with no game running. A client on the 625
+exe joined a lobby, was served this csprogs and drew the board. `.prev` is
+Patch 659's `e04ccb61`. The arm had passed on the 625 exe before the deploy.
