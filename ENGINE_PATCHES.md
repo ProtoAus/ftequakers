@@ -44393,3 +44393,46 @@ rows show no picture.
 page can show more; a banned account's imported rows show no picture, which
 says it is banned; names are not refreshed for imported players, only
 pictures.
+
+## Patch 652 — one row per map with a MOM / CS:S switch; the menu fetches its map list *(MOD ONLY, menu.dat)*
+
+**Problem.** From the owner, 11 Oct: "please build it" (the CS:S or Momentum
+version of a map, chosen from the create-server menu) and, of the game
+fetching its own map list, "great idea". KSF's build of a map was a second
+row named `<name>_css` (Patch 644), and `data/mapdl.txt` ships, so a map the
+Pi fetched reached a player's list with the next release.
+
+**Change** (ftesurf `123c70e`; m_main.qc, m_lobby.qc).
+- **The fold.** A list row with a tenth column is a second build of the map
+  named there and goes onto that map's row (`ms_var`, `ms_varof`, `ms_pick`).
+  `ui_eff(row)` is the row whose file an action is about: Play, Download,
+  start, the leaderboard panel, the player's own time and the headcount read
+  through it; the name, tier, picture and best known time stay the plain
+  map's. The row answers the CS:S library, and a search by the build's name
+  finds it.
+- **The switch.** Two cells on the row's second line, MOM and CS:S; the
+  choice is kept in `data/mapbuild.txt`.
+- **The fetch** (`Mdl_Ask`, `Mdl_Reply`). Once a run, from the picker,
+  behind the lobby poll's consent test: `<lobby_dir>/api/board?maps=1`
+  (Patch 651). Each row is rebuilt from fields that each passed their own
+  test (a name is `[A-Za-z0-9_-]{1,64}`), read back through a file so the
+  cost is linear, and saved to `data/mapdl.net.txt`, which `ui_dl_load` reads
+  in preference to the shipped list. A list with no row that passes saves
+  nothing.
+- Test twins: `ui_build <map> [mom|css]`, `ui_mapnet [ask|sel]`, `ui_find`.
+
+**Verified.** `tools/p652builds.py` on p615link's rig (surfd in process, a
+fixture list with nine hostile rows, a real mouse click on each cell): 15 of
+15 on menu.dat `b4b46b6e`. Nine one-edit mutants of the menu each fail it (no
+fold; start ignores the switch; a choice not saved; a name taken as it came;
+the fetched list not preferred; no ask; the plain row not in the CS:S
+library; an empty list saved; a search blind to the folded name). One review,
+read not run: walking the reply with `strstrofs` and `substring` was a strlen
+of the whole body per call in the engine, minutes for a hostile two
+megabytes; fixed. `tools/p647boot.py`, default mode, on the same menu.dat: 8
+of 8. On the owner's install, once, nothing picked: 1,787 rows fetched from
+the Pi, 20 maps folded, the switch drawn on surf_rookie (LOOKED AT).
+
+**Known.** No switch was clicked and no CS:S build downloaded on the real
+install. The headcount is the chosen build's alone; `lobby_dir` decides a
+row's size and what it is a build of. BACKLOG.md.
