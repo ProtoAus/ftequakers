@@ -44598,3 +44598,81 @@ is small and has a mutant that dies.
 **Left** (BACKLOG): a mark two directory players share opens neither by
 mark; marks are counted over directory players only; every search walks the
 directory; a cold wide profile is ranked once per ask in flight.
+
+## Patch 656 — env_fire: its smoke, the floor it is lit on, and how far it shows *(FTESurf csprogs; no engine source)*
+
+From the owner, 12 Oct: "can you draw the smoke? idk what that last part means
+and also look into the ent_ to see if there's other values that need to be read
+about draw distace?" (The last part was "fires Source drops to the floor".)
+
+**Problem.** Patch 643 drew Source's flame and nothing else of `env_fire`.
+- No smoke. Unless spawnflags 2 (Smokeless), `C_FireSmoke::Start` asks for
+  `env_fire_<size>_smoke`, the flame under a column of smoke
+  (`c_fire_smoke.cpp:173-186`). 39% of the library's 13,529 start-on fires.
+- A fire without spawnflags 16 (Don't drop) is lit where a line 1024 units
+  down from its entity ends (`fire.cpp:701-709`, `MASK_FIRE_SOLID`). The mod
+  drew every fire at its entity: 4,309 fires on 85 maps hung in the air.
+- Bit 16 was read as the glow switch. That is 32.
+- Fires stopped at 4,000 units, a number of the mod's. `env_fire` has no
+  draw-distance key; its particle systems say 100000, the large smoke's two
+  10000.
+
+**Change.** FTESurf `87c63c8`, `src/client/cl_emit.qc`.
+- **Smoke.** Five systems out of `particles/fire_01.pcf` (`Emit_SmokeSpec`),
+  drawn off `particle/smoke1/smoke1` (six stills, one picked a particle) and
+  `particle/vistasmokev1/vistasmokev1` (a 16-frame loop). Both sheets are read
+  from the mounted game and never shipped; `tools/smokesheet.py` writes their
+  frame rectangles to `cl_smokesheet.qc`. The shader does the system's colour
+  fade, its fade-out and SpriteCard's `$startfadesize`/`$endfadesize`
+  (`spritecard_vs20.fxc:187-202`), and blends as Patch 643's flame does: a
+  straight line that is exact for linear-light blending on a 0.25 grey and on
+  white. It sorts a bucket before the flame's so a fire is over its own smoke.
+  Smoke is set up only for the size classes that have a smoking fire.
+  `vbsp_emit_firesmoke 0` is the fire without it.
+- **The floor.** `Emit_DropFires`, once at map load: the glare test's occluder
+  copies (`cl_sprites.qc`) stand down, the brush entities Source's mask stops
+  at stand up (func_brush by its Solidity), each fire without bit 16 is traced
+  1024 down, and everything is put back. A fire with nothing under it stays at
+  its entity (Source lights it 1024 below), as does one inside a solid.
+- **Reach** is 10,000 units, and a fire past 2,000 emits `2000 / distance` of
+  its particles so the near ones keep the budget.
+- **No fog.** SpriteCard ends in `PIXEL_FOG_TYPE_NONE`
+  (`spritecard_ps20b.fxc:184`): Source's fire and smoke show through fog. The
+  first cut fogged them and the review read the shader.
+
+**Verified.** `tools/p656fire.py` over `cfg/test/p656fire.cfg`, 22 of 22 on
+csprogs `bc2b938e`, the patch-658 client, RTX 2080 SUPER, 1920x1111.
+- Smoke: the wall over a medium fire reads 84.3 of 255 with it and 93.1
+  without, a box beside it 0.00 apart; over a tiny one 36.6 and 37.6.
+  `r_partinfo` holds 136, 54 and 326 smoke particles at a medium, a large and
+  a small fire.
+- Floor: surf_lost2, "178 lit on what is under them (mean 24, most 24 units)",
+  its func_brush pedestals; surf_classics2, 233 of 233, most 565 units, and a
+  camera where that one lands counts 6,420 and 7,122 flame pixels.
+- Reach: 6,000 units over a surf_anubis brazier, 49 and 46 pixels under the
+  camera differ from the same shot with `vbsp_emit_fire 0`.
+- Control, the build before (csprogs `6cb9b6c2`): 18 of the 22 fail, with 93.1
+  against 93.1, 0 pixels at 6,000 units and 0 where the fire lands.
+- Control, this build standing up no brush entity for the drop: surf_lost2
+  alone fails, "107 lit (mean 778, most 984), 71 with nothing within 1024".
+- Cost, two runs a build, alternating: a medium fire's smoke in view 1,079 and
+  1,140 fps with it, 1,187 and 1,104 without; surf_anubis's first spawn 869
+  and 848 with 108 fires in reach, 919 and 758 with the 22 there were. The
+  runs differ by more than the builds do.
+- One independent review of the first cut: the fog, a drop that met the
+  occluder copies and missed solid brush entities, smoke over its flame by
+  luck of draw order, and a reach check that counted a map's lava as flame.
+  All fixed; the reach check now compares fire on with fire off.
+
+**Not verified.** The smoke beside Source's: no side-by-side was taken, and
+`lextest.md` asks the owner. Small and large smoke were counted, not looked at.
+Cost on the owner's Intel laptop.
+
+**Known gaps** (BACKLOG, "Source fire"): a puff grows in a straight line where
+the system's curve is a bias; vistasmokev1's second sequence is drawn as its
+mean colour, so medium and large smoke is flat grey; no `$depthblend`; the
+drop cannot meet `prop_dynamic` or a brush the map has since moved;
+`info_particle_system` fires (surf_dune's other 42) are still not drawn.
+
+**Deployed** 11 Oct 18:14 UTC: csprogs `bc2b938e` on the Pi's twelve lobbies
+and both Windows installs, `.prev` `6cb9b6c2`; lobby smoke on 27510 passed.
