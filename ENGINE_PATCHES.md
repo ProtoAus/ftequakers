@@ -45063,3 +45063,48 @@ and both Windows installs, `.prev` `c7596c74`; lobby smoke on 27510 passed.
 `tools/pcf.py` then re-baked surf_tensor2 and surf_boreas in `C:\FTESurf`
 (`particles/*.cfg`, `data/mapparticles.txt`), byte-equal to the tested files;
 the second install has no particle files.
+
+## Patch 669 — A zone editor in the game, part one *(MOD ONLY, csprogs)*
+
+**Problem.** Nothing in the game could make or move a timing zone. Zones were
+Momentum's files or a BSP's own triggers, so the 870 or so KSF-only maps with
+neither, and the few `_css` builds offset from their Momentum twin, could not
+be timed without a file made by hand. The owner asked for Momentum's zone
+editor: a panel, then fly and place the corners with the mouse on a 16-unit
+grid or the world, floor first, then the height.
+
+**Change.** FTESurf `79425a5`, a new `src/client/cl_zoneedit.qc` and five
+hooks; qwprogs is byte-identical. `zone_edit` opens a panel of the map's
+zones by track (add, re-place, delete, a spawn point). Placing gives the
+mouse back: MOUSE1 a floor corner, MOUSE1 the opposite one, look up to pull
+the height, MOUSE1. It edits the client's own zone table and keeps it in the
+file's shape after every change, since a region's type is its position in
+the file. Save writes Momentum's zone JSON as `maps/zones/local/<map>.json`
+(under `data/`), which both VMs already read first: a hosted game times with
+it at the next map load, and a hosted game posts no times. A file is written
+or removed only when the client is the server or a device has just clicked
+in the panel, because a server can type a console command for a player.
+Publishing a file to the lobbies is part two and is not in this patch.
+
+**Verified.** `tools/test_p669zoneedit.py` over `cfg/test/p669zoneedit.cfg`,
+8 of 8 on csprogs `cbc72b32`, on the patch-658 client and on a copy of the
+625 exe: a real map's 14 zones saved and read back line for line with their
+destinations; the panel's buttons pressed by name; a start placed with three
+clicks of the aim, on the grid and not above the floor that was hit; an
+empty table refused; a two-stage course read back in course order; a stage
+deleted; the server's and the client's own lines stating the saved crc after
+a restart; the way back. Over `cfg/test/p669remote.cfg` against a dedicated
+server, five asks to write or remove a file by command are each refused and
+nothing is written. The build the reviewer read fails five of the eight.
+
+One review. Fixed from it: every checkpoint after the first stage fell into
+stage 1 once a track had two stages; a floor rounded up to the grid could
+leave a start nobody arms; a server could type a save; a height written to
+three decimals; the old file removed before the new one was read back; a
+re-place removing the wrong row after a reload; the wheel taken everywhere;
+no yield to other panels.
+
+**Known.** A rig has no mouse: the clicks themselves and the panel's hit
+test were not run. A new zone is a box; no moving one corner, no reordering,
+no map settings. The command is every player's and changes only their own
+view and their own hosted game. FTESurf BACKLOG, "The zone editor".
