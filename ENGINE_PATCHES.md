@@ -44331,3 +44331,65 @@ rows. Ordinary boards: 25 of 25 bodies identical before and after.
 `globalRegions.allowBhop`), so 17 builds and 75 zone files are not followed.
 The fit rule cannot see a world rearranged inside the same box. Native rows
 are per build. Beta maps and their second builds have no zones. BACKLOG.md.
+
+## Patch 660 — Steam pictures for everyone on the boards *(MOD ONLY: surfd and its cron tool)*
+
+From the owner's list of 12 Oct ("is it possible to scan for all the people
+in the leaderboard and save their DP to the nanopi? update it once a day").
+Patch 639 kept a picture for each LINKED account, which was two. A Momentum
+or KSF row's player is a SteamID too, and nobody's account here: 67,259 of
+them on the Pi's boards that day.
+
+- **Who.** `steamsync.people()`: once a day the imported rows are read for
+  their players' SteamIDs (table `boardpics`, made by `CREATE TABLE IF NOT
+  EXISTS` beside `momusers`: no schema bump); a player on no board any more
+  is forgotten at that read. Each half-hourly run asks Steam about `--people`
+  of them (5000), the never-asked first and then whoever was asked longest
+  ago, nobody twice in a day, and stores the picture's hash. A reply with no
+  picture keeps the one held.
+- **The pictures.** `steamsync.pictures()` fetches their hashes after the
+  accounts', `--pictures` requests a run (1500), into the same directory in
+  the same two forms (the site's JPEG, the game's 32 x 32 text). Nothing is
+  pruned while a player has never been asked about: until then their
+  picture's files would read as nobody's.
+- **Serving.** `surfd.avatars()` now holds them too, under the rules it had:
+  a SteamID that is an account is the account's, banned or not; a game mark
+  two players share, or one shares with an account, is nobody's in the game.
+  So an imported row carries `av` like a ranked one, on the site and in the
+  game's answer, with no change to either client.
+  THE IMPORTED PLAYERS' PART IS BUILT OFF THE REQUEST PATH: once in the first
+  request of a process that needs it, the others waiting for that one, and
+  after that on a thread, only when steamsync has touched its stamp
+  (`board.at`). The 60-second table copies it in.
+
+**Measured.** `surfd/test_ranked.py`: 151 checks, 21 of them this patch's
+(who is counted and asked and when, by the pass's own clock; Steam down; a
+busy database; a player gone from the boards; an empty table; the budget;
+what is pruned and when; the row's `av` on the site and in the game's answer;
+an account's SteamID, banned and not; marks shared; the table's own life,
+built once and rebuilt on its thread when the stamp moves, a failed rebuild
+keeping what was held). `tools/accounts_mutants.py`: 388 texts, none stale;
+the 69 that touch pictures all die (34 are this patch's). ON THE PI'S
+DATABASE, read-only, before the deploy: the daily read of the boards is
+11.4 s for 67,259 players along the primary key's index, and 35.1 s as first
+written (the players' index with a lookup a row); the query now says which,
+and a check holds its plan.
+
+**Review.** One reviewer, three lenses (correctness, load on the Pi,
+what goes out), given the code. MUST-FIX, and fixed: the first cut rebuilt
+the 67,000-player table inside whichever request found it old, with nothing
+to stop four requests doing it at once (measured by the reviewer on a
+laptop: 0.4 s alone, 3.9 to 5.1 s each for four; the proxy gives 5). It is
+built off the request path now. Also found and fixed: the boards' read
+planned along the wrong index; a table read that failed read as "no
+hashes", and what follows an empty set is the pruning of every file; a
+restored database beside a kept directory, the same way; a failed listing
+installing an empty table as fresh; a busy database raising out of the pass;
+the budget stopping game copies that cost no request; rows for players no
+longer on any board. Left as found (BACKLOG): a banned account's imported
+rows show no picture.
+
+**Left** (BACKLOG): the game keeps 32 pictures at once, and a Momentum board
+page can show more; a banned account's imported rows show no picture, which
+says it is banned; names are not refreshed for imported players, only
+pictures.
