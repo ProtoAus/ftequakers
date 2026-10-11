@@ -43116,3 +43116,60 @@ menu.dat unchanged) and `cfg/default.cfg` to both Windows installs at 03:51Z,
 and the progs to the Pi at 03:52Z with nobody on. Twelve lobbies restarted,
 read back from the host; a fresh client on a lobby was served this csprogs and
 drew the board. `.prev` is Patch 631's csprogs in all three places.
+
+## Patch 636 — the site shows one person across every game: one board per map with a filter per game, and whole-player pages *(MOD ONLY: surfd and its website)*
+
+The owner's list of 11 Oct, once his own imported Momentum times had joined
+his FTESurf rows on one player page by themselves (an imported row's `player`
+is the SteamID64 its board publishes, and since Patch 629 a linked account's
+ranked rows are under the same id).
+
+- **A map's board is every game's.** `/board/api/map` takes `tier=momentum`
+  and `tier=ksf` beside `ranked`, `imported` and `combined`. The page's
+  filter is All games / FTESurf / Momentum Mod / KSF, each with its count,
+  and a link with no `tier` opens All games (it opened ours alone). The
+  API's own default is unchanged.
+- **A player's page.** Links to the Steam, Momentum Mod and KSF profiles.
+  Steam's is published for a linked, unbanned account as well as for an
+  imported player, and the sign-in page now says so; an install's own id is
+  still never published. Momentum addresses a profile by its own user
+  number (read in its website's source, not guessed), which the importer now
+  keeps from each board it refetches (`momusers`), so that link fills in
+  over a day or two.
+- **Which maps.** `/board/api/player/<handle>/maps` lists every map with a
+  main board by difficulty tier: finished or not, the fastest time and the
+  games it was finished in, by the profile bars' own rule and denominator.
+  Each tier on the page opens its list, and `&ct=<tier>` in the address
+  links to it.
+- **Cost.** A player page read `runs` by player with no index: 0.6 s warm
+  and 4.66 s cold on the Pi for an account with 2,029 rows, of nginx's 5.
+  `runs_player` is that index (built in 4.8 s, +79 MiB), and a player's
+  ranked rows are held two minutes, dropped by that player's own next run.
+  Rewriting the rank count as two index ranges was tried and measured no
+  faster on the live file (1.29 s against 1.27 s, the same answers), so
+  `rank_of` is unchanged.
+
+**The index, and a mistake.** `runs_player` was first built on the live file
+ahead of the patch's review, on the belief that an index only adds a faster
+path. With no statistics table, sqlite then answered the two statements that
+GROUP BY player by walking the new index in order with a table lookup a row:
+the site's directory build took 34.2 s for 8.0 s and the admin's account
+counts 14.4 s for 0.00 s, for 27 minutes, until the reviewer's report said to
+measure the host and the index was dropped. Both statements say `GROUP BY
++player` now and a test holds their plans. `tools/plan_audit.py` is new: it
+traces every statement the suites run on a table and prints those whose plan
+a given CREATE INDEX would move (34 here; 5 walked the new index, 2 of them
+the service's own).
+
+**Review.** One round, four heads (leak, wrong, break, script). Beside the
+index: a held page was dropped by the player's own run alone, so a banned
+account's times stayed on its page for the two minutes, and a run landing
+while ranks were being counted could be overwritten by the list from before
+it (an entry now carries a mark of the player's own rows, read on every
+hit); the pages held were bounded by players, not rows; a rank that could
+not be counted was held; under one game's filter the style tabs counted both
+imported games. Nothing found under script injection.
+
+**Measured.** `surfd/test_web.py`, 202 checks, with 17 hand mutants of the
+new code all killed. The pages were served from a fixture and looked at in a
+headless browser: the board, one game's filter, a profile with a tier open.
