@@ -42886,3 +42886,9 @@ leave the screen at L or XL. In a 720-line window the editor panel halves
 when Speed is open (five rows where there were four). Not run: the energy
 alone while spectating or rewinding; any window but 1600x900. FTESurf
 BACKLOG, "hud_edit sizes and modes".
+
+**Deployed** 2026-10-11 from FTESurf `2570367`: csprogs `9ab0442f` (qwprogs and
+menu.dat unchanged) to both Windows installs at 01:43Z, with
+`cfg/default.cfg`, and to the Pi at 01:44Z with nobody on. Twelve lobbies
+restarted, read back from the host; a fresh client on lobby 1 was served this
+csprogs and drew the board. `.prev` is Patch 629's csprogs in all three places.
