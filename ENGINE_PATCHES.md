@@ -44050,6 +44050,20 @@ beside sixty-four lines was not measured, nor a thinned line's picture. The
 tables are 68.9 MiB, made at the first line of a map in 17 to 23 ms. FTESurf
 BACKLOG, "Sixty-four run lines".
 
+**Deployed** 2026-10-11 from FTESurf `512870b`: csprogs `95f30046` to both
+Windows installs at 14:36Z with no game running and to the Pi at 14:37Z with
+nobody on (no engine, menu.dat or cfg). Twelve lobbies restarted, read back
+from the host; a fresh client on a lobby was served this csprogs and drew the
+board. `.prev` was Patch 645's `f40d4069`.
+
+**Shipped with a fault, found at 14:49Z.** Every check above ran on the
+patch-645 engine. An engine before it has no line builtins, so the QC loop
+draws, six to ten vertices a segment into one polygon batch, and that engine
+dies when a batch reaches 32768 (the fault Patch 645 fixed). On a copy of the
+625 exe, which the 0.1.24 download has, eight lines draw and the client dies
+as the fortieth is added. Live on the lobbies that way from 14:37:27Z to
+15:13:07Z; Patch 654 keeps such an engine at eight.
+
 ## Patch 648 — func_dustmotes is drawn the way Source draws it *(MOD ONLY, csprogs)*
 
 From the owner, 11 Oct: "in Source ... they spawn in as orbs, like we do it, but
