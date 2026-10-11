@@ -44855,3 +44855,85 @@ i9-9900K desktop (checked with `Get-CimInstance Win32_Processor`), not a
 laptop. The figures stand; the Pi's own are in each patch's deployment
 record (660: the boards' read 11.4 s; 662: a search 12 ms, the widest
 profile 1.52 s cold).
+
+## Patch 657 — Dust motes are brighter: a blend exact on black, and Source's exposure *(FTESurf csprogs; no engine source)*
+
+From the owner, 12 Oct: "I think they look not as bright as source, they
+really pop in source."
+
+**Problem.** Two things held `func_dustmotes` under Source's.
+- **The blend.** Source blends a mote over the wall in linear light,
+  `(a * colour^2.2 + (1 - a) * wall^2.2) ^ (1/2.2)`, which is a curve over the
+  wall's brightness; this framebuffer blends in gamma space, and Patch 648
+  emulates the curve with a straight line (ONE / ONE_MINUS_SRC_ALPHA, both
+  factors computed). 648 made that line exact on a 0.25 grey and on white.
+  On a black wall a white mote at alpha 0.087 then read 0.192 where linear
+  light gives 0.329, and a dark wall is where a mote is seen.
+- **The exposure.** Source multiplies every pixel by its tonemap scale,
+  UnlitGeneric included (`vertexlit_and_unlit_generic_ps20b.fxc:481`,
+  `TONEMAP_SCALE_LINEAR`); Momentum runs HDR on any map with HDR lighting.
+  This frame has no exposure at all.
+
+**Change.** FTESurf `35510e0`, `src/client/cl_emit.qc`.
+- **The line** is exact on black for any colour, exact on white for a grey
+  mote, and over linear light between. One alpha is one slope for three
+  channels (71% of the library's 5,297 mote volumes are coloured), so a
+  coloured mote's slope is midway between what its brightest and its dimmest
+  channel want.
+- **`Emit_Exposure`**: a mote's light is multiplied by the exposure Source can
+  reach on the map. That is the ceiling a logic_auto sets (`"OnMapSpawn"
+  "tonemap,SetAutoExposureMax,1.2,0,-1"`, the separators 0x1b in newer maps),
+  else Source's own 2 where HDR lighting is drawn, else 1; held to 1..2. One
+  shader an exposure (`ftesurf_mote<exposure * 100>`).
+- **`Emit_MapHDR`**: whether HDR lighting is drawn is the loader's own test,
+  lumps 53 and 8 of the map's header and `hl2_favour_ldr`. QC's `fread`,
+  `fseek` and `fsize` each load the whole file on first use
+  (`pr_bgcmd.c`, FRIK_FILE_READ_DELAY), so the size is asked of the file
+  system (`search_getfilesize`), a map over 128 MiB is not read and is lit at
+  1, and no file is read on a map without motes or with a ceiling of 1 or
+  under.
+- `vbsp_emit_exposure`: -1 the map's, 1 Source without HDR, any other number
+  everywhere. Read at map load.
+
+**Verified.** `tools/p657bright.py` over `cfg/test/p657bright.cfg`, 14 of 14 on
+csprogs `c7596c74`, the patch-658 client, RTX 2080 SUPER, 1920x1111. The
+ruler: rows of Frozen motes at a known depth over a wall of one flat colour
+(`r_clear` from the void over the map), read at each mote's middle.
+- Black: white at alpha 0.087, 0.43 and 0.85 reads 0.329, 0.678, 0.928
+  (linear light 0.329, 0.679, 0.929); `0 128 255` reads 0 0.466 0.928.
+- White: the white rows read 1.000, and the blue row beside them is there.
+- A 0.37 grey: 0.576, 0.796, 0.956, each on its line, where linear light
+  gives 0.468, 0.723, 0.937.
+- Colour: `0 128 255` at 0.85 reads 0.249 0.715 1 on white (linear light
+  0.422 0.610 1) and 0.091 0.557 1 on the grey (0.156 0.485 0.937).
+- Exposure, in `emit_list`'s line and in pixels: surf_dune 1.2 (the alpha
+  0.087 row reads 0.357 on black), surf_shade 2, surf_andromeda 1,
+  surf_tensor2 1.4, surf_dune at `hl2_favour_ldr 1` 1, surf_destruction
+  (134 MiB) 1 with no open of its file in the log.
+- Control, the build before (csprogs `9fc0940b`): black 0.192 0.596 0.908,
+  the grey 0.490, no exposure line; 11 of the 14 fail.
+- Control, the cut before the review: colour fails (red 0.140 on white) and
+  surf_destruction's file is opened.
+- Control, the exposure taken out of the shader (on the cut before the
+  review): the line still says 1.2 and the pixels read 0.329.
+- `tools/p648motes.py`, 22 of 22: size, fade, pool and restart are as they
+  were. Its ruler is now at exposure 1 and its colour check moved here.
+- One independent review of the first cut. `fsize` read the 495 MiB file it
+  was guarding; a slope taken from the mote's luminance drew `0 128 255`'s
+  red at 0.140 on white, worse than the 0.236 it replaced, with the old
+  colour check retired in the same commit; and WHITE passed on a frame with
+  no motes. All fixed, each with a check that fails on the old code.
+
+**Not verified.** Source itself: the numbers above are its shader's
+arithmetic, not a picture of it, and `lextest.md` asks the owner. A map whose
+ceiling is 1 or under. Any colour but one. Cost on the owner's Intel laptop.
+
+**Known gaps** (BACKLOG, "Source dust motes"). Source scales the wall by the
+same exposure and this frame does not, so on an HDR map a mote stands out
+from its wall more than Source's does. The ceiling is used, not what the
+exposure would settle at in the view. A coloured mote's weak channel is still
+under-shown on a pale wall (red 0.249 for 0.422). No fog term. Maps over 128
+MiB (46 with motes) are lit at 1.
+
+**Deployed** 11 Oct 19:40 UTC: csprogs `c7596c74` on the Pi's twelve lobbies
+and both Windows installs, `.prev` `9fc0940b`; lobby smoke on 27510 passed.
