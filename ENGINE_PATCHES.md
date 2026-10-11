@@ -42952,3 +42952,33 @@ menu.dat unchanged) to both Windows installs at 02:36Z and to the Pi at 02:37Z
 with nobody on. Twelve lobbies restarted, read back from the host; a fresh
 client on a lobby was served this csprogs and drew the board. `.prev` is
 Patch 630's csprogs in all three places.
+
+## Patch 634 — the site's maps list answers inside the proxy's five seconds *(MOD ONLY: surfd)*
+
+The owner saw "Could not load the board (HTTP 504)" on the site's front page.
+Timed on the Pi route by route, `/board/api/maps` took 12.06 s when its 60 s
+cache had lapsed, and nginx gives surfd 5 s: the first visitor after each
+minute got the error and a reload worked. Query by query, 7.9 s of it was the
+count of imported rows per map with the count of their recordings beside it:
+`replay_id` is in no index that also orders by map, so sqlite walked
+`runs_run` in map order with a table lookup for each of 3.2 million rows. The
+same plan is on the backup from before Patch 629 (28 s cold), so it is as old
+as the imports, not today's schema change.
+
+It is two queries now, each off an index that answers it: the counts 0.67 s
+off `runs_board` (covering), the recordings 0.026 s off `runs_replay`. The
+second needs `GROUP BY +map`; without it sqlite picks the map-ordered walk
+again (6.3 s). Same answer on the live file: 849 maps, 12,611 recordings.
+
+`test_web.py` pins the recordings count, which nothing did: two Momentum
+demos, not the KSF row and not our own ranked rows; with the tier filter
+dropped it fails with 4. No review round: a read-only route and six lines.
+
+**DEPLOYED 11 Oct 2026, 02:46:48 UTC (FTESurf `234a488`), surfd only**, 0
+players, the staged suites passing on the Pi. Timed on the host afterwards:
+5.94 s for the first build after the reload (cold; one visitor after a surfd
+restart can still see a 504), 0.005 s from the cache, 1.95 s for a rebuild,
+the body the same 73,898 bytes. Left (BACKLOG): the list is still built
+inside a request; a player page asks a rank for every row its player has
+before showing a hundred, 2 to 4 s for an account with two thousand imported
+rows.
