@@ -42982,3 +42982,75 @@ the body the same 73,898 bytes. Left (BACKLOG): the list is still built
 inside a request; a player page asks a rank for every row its player has
 before showing a hundred, 2 to 4 s for an account with two thousand imported
 rows.
+
+**Patch 629, switched ON: 11 Oct 2026, 02:14:18 UTC**, on the owner's word. No
+code moved: the Pi's `surfd.env` line went from 0 to 1 and surfd was reloaded,
+with 0 players, after a database backup and after his own 21 board rows and 7
+recording rows were moved by hand from his install's id to his account (one
+IMMEDIATE transaction, refused unless the only owner of non-imported rows was
+the one linked install). Read back: the log line `ranked rows need a linked
+Steam account: yes`, 21 ranked rows of one account, nothing moved by the
+start, no error after the reload. His account also holds 2,008 imported
+Momentum rows under the same SteamID, and his page lists both under one
+handle. Not measured at the switch: a finished run stored under an account on
+the live fleet. Save slots, paused-run slots and recording names are still
+filed under the guid (ROADMAP 14.3 a): open, and accepted for now because
+every ranked row is the owner's.
+
+## Patch 633 — a ban is a Steam account's: its rows are set aside, and come back *(MOD ONLY: surfd)*
+
+ROADMAP 14.3 (c). The admin panel gains an Accounts page: everybody who has
+signed in through Steam, with installs and rows, and a ban or unban by
+SteamID with a note (a ban needs one; a SteamID nobody has signed in with can
+be banned in advance, and the reply says that is what happened).
+
+- **A tier, not a filter.** A banned account's rows in `runs` and its run
+  recordings in `replays` move from `<tier>` to `banned:<tier>`, set-aside
+  copies included, and back on an unban (the faster kept where a row is in
+  the way, in the board's own order). Every reader names its tiers, so
+  nothing lists them, ranks against them or counts them, with no filter
+  anywhere. Imported rows under the same SteamID are other boards' records
+  and stay.
+- **Review goes on inside.** Re-standing keys on a replay's own tier; stage
+  parking asks which family the player's rows are in. A reject or a clear
+  made while banned is what the unban brings back.
+- **Recordings** answer the public by owner: a banned account's `run` and
+  `evidence` recordings are "no such replay". The admin reads the file at a
+  route of the panel's own, and the run page's download link is that.
+- **A run in flight.** A run's identity is read in one transaction and its
+  row written in another; a ban committed between them is caught after the
+  run's own commit and the row set aside with the rest.
+- Its installs are told at connect (Patch 617) and its runs are not stored
+  (Patch 629).
+
+**Review.** Two lenses on the first cut, given the code: stored rows and the
+state machine; who can do what and what leaks. Found and fixed, as
+conditions: stage parking named the two plain tiers, so a reject made while
+banned came back public at the unban and a clear made while banned stayed
+hidden; the recording behind stage rows has no tier and was still served; a
+ban committed while a run was being filed left that run live; the page's
+list re-sorted under a second click, which then acted on another account;
+the admin's own download link went through the public route; a no-op unban
+rewrote the note; `tools/mapwr.py` read every tier. A narrow check of the
+fixes followed and found three low corners in the new path for a run filed
+across a ban, none produced unforced: the late pass acted on a ban read
+before it held the lock (it reads again under it now); a pass that never ran
+left the row live (every start sets such rows aside now); and an exact-tie
+re-file across the ban loses the row's link to its recording (BACKLOG). Its
+fuzz of ban, unban, review and sweep orders against a no-ban control found
+no difference in 200 sequences, and 49 with the family rule put back.
+
+**Measured.** `surfd/test_ranked.py` section 8 and 8b (the suite is 95
+checks): the public routes are graded by their own words (with no file on
+disk a public recording answers "no recording on this node" and a banned one
+"no such run"), and 8b writes a real recording so a reject binds to the run.
+`tools/accounts_mutants.py`: 303 mutants, the full sweep on the final code.
+The map-record tool's check fails with `banned:ranked` as a map's best when
+its tier filter is removed by hand. The page was rendered from the real
+route's data in a headless browser and looked at. `test_admin.py` fails the
+same two rcon packet-count checks on main.
+
+**Not in this patch** (BACKLOG): no ban history beyond the newest note and
+the log; the rows of a banned account's installs under their own ids stay; a
+banned run's in-game watch commands get the public 404; set-aside rows count
+toward the caps.
