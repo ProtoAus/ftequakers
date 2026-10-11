@@ -43236,3 +43236,11 @@ before (the header is wider; by arithmetic, not run). A drag of the knob, the
 native table and a finish under a one-game filter were not run. The LINE
 heading unticks before it completes. FTESurf BACKLOG, "The TAB board's filter
 and LINE heading".
+
+**Deployed** 2026-10-11 from FTESurf `8286948`: csprogs `b2b6de57` (qwprogs
+and menu.dat unchanged, no cfg) to both Windows installs at 04:41Z with no
+game running, and to the Pi at 04:42Z with nobody on. Twelve lobbies
+restarted, read back from the host; a fresh client on a lobby was served this
+csprogs and drew the board. The live surfd answered the merged list for three
+maps in 25 to 63 ms, one request each. `.prev` is Patch 632's csprogs in all
+three places.
