@@ -43811,3 +43811,81 @@ has to hold still. An engine before this one still dies at 32768 vertices on
 the QC path. `CSQC_PolyFlush` rewinds the index count to the vertex origin,
 and `PF_R_PolygonEnd` copies with `memcpy` where the ranges can overlap: both
 older, both left. FTESurf BACKLOG, "Run lines drawn by the engine".
+
+## Patch 643 — env_fire is drawn from Source's flame sheet *(MOD ONLY, csprogs)*
+
+From the owner, 11 Oct: an earlier session "got their scrolling texture to
+work, however it doesn't display today, we got the original orbs that float
+up ... can you find if we lost this work? or if it can be enabled."
+
+**Problem.** Nothing was lost and nothing had been joined up. Patch 531 (the
+engine stepping a sprite sheet through a particle's life) has been in the
+client since; the flames the owner saw on 7 Oct were private rigs. In the game
+`cl_emit.qc` still drew every `env_fire` as generic orbs. The four resolver
+tools of that day had never been committed: their worktree was retired on
+8 Oct and they survived only in the retirement archive.
+
+**Change.** FTESurf `74e4d44`, `src/client/cl_emit.qc`.
+- **Source's own choice of system.** `floor(firesize / 36)` picks
+  `env_fire_tiny`, `_small`, `_medium` or `_large` (`c_fire_smoke.cpp:167`).
+  Each is drawn as Source's three parts: the system (sequences 3-5 of the
+  atlas), its `_b` child (sequences 0-2) and its embers, with radius, alpha,
+  tint, rise, acceleration, frame rate and particles a second out of
+  `particles/fire_01.pcf`. A life is the sequence's length at the layer's frame
+  rate, as "lifetime from sequence" makes it.
+- **Everything is text inside csprogs.** The r_part blocks go through
+  `localcmd`, a size class a frame; the shader is an inline `glslprogram`; the
+  frame table is the generated `cl_flamesheet.qc`. A lobby hands a player
+  csprogs.dat and nothing else, so a new file under `particles/` or `glsl/`
+  would have left every installed client on the orbs.
+- **The atlas is never shipped.** `fire_burning_character.vtf` is read from the
+  mounted Counter-Strike: Source or Half-Life 2. `tools/flamesheet.py` writes
+  the table from the .vtf's sheet and refuses unless every copy it is given
+  carries the same one (CS:S, HL2 and Momentum's do).
+- **The orbs remain the fallback**, and `emit_list` names the reason: no
+  mounted atlas, an engine without `FTE_PART_TEXANIM`, a renderer other than
+  OpenGL, `r_particlesystem` other than script, or `vbsp_emit_flame 0`.
+- **The blend.** SpriteCard with `$addself 1`, `$overbrightfactor 2.15` and
+  the `$startfadesize` fade, as `spritecard_ps20b.fxc` computes it. Source
+  sums that in linear light and this framebuffer blends in gamma space:
+  premultiplied in gamma space the same sprites drew a fire that was mostly
+  absent. The shader writes the linear sum's own encoding and a destination
+  factor that is exact on black and on a 0.6 grey.
+- **Room in the compiler.** The fifteen per-emitter arrays moved to memalloc:
+  csprogs went from 130,556 definitions to 119,152 with this patch's code in.
+- **Published with it:** `tools/pcf_resources.py`, `sourceassets.py`,
+  `vtfsheet.py` and `test_pcf_resources.py`, recovered byte for byte
+  (sha256-checked) from the 8 Oct archive.
+
+**Verified.** `tools/p643fire.py` over `cfg/test/p643fire.cfg`, a rig of the
+commit's own build (csprogs `dcbf42b6`), RTX 2080 SUPER at 1920x1111.
+- The subject's lines: surf_anubis size classes 10 with 26 of 26 effects
+  answering `particleeffectquery`; the same after `vid_restart` with one
+  repair; surf_dune classes 3, 26 of 26; surf_classics2, one of the two maps
+  with all four sizes, classes 15, 52 of 52.
+- The pictures, flame-bright pixels at the fire (means): the brazier 3,773,
+  after the restart 3,293, Dune's small flame 4,183, a large fire 8,043;
+  with fire off 0; the orbs 0.
+- Control, the stepping compiled out (`texanim static`): every line above
+  still passes and the same four read 214, 682, 1,435 and 1,017.
+- Control, CS:S and HL2 out of `fs_addons.txt`: the grader refuses with "no
+  mounted game carries the fire atlas", and the orbs draw.
+- Control, no `particles/` directory (as in `C:\FTEQuake`): the first cut
+  defined the flame effects 72 times in one run, emptying them each time,
+  because its repair asked the wrong effect; now 3 times.
+- Frames a second, same camera, two quiet runs: no fire 1,193 and 1,229; the
+  sheet 1,046 and 1,066; the orbs 1,122 and 1,139.
+
+One independent review (control flow, state, failure modes). Fixed from it: a
+grader whose mean passed with three shots of four empty, probes that asked one
+effect of thirteen, the atlas requested on maps with no fire, a repair that
+looped off the scripted particle system. Its command-buffer overflow did not
+reproduce (61 KB fitted with 4 KB to spare); the class-a-frame staging is kept
+as margin.
+
+**Known.** Not seen beside Source (FTESurf lextest asks the owner). Cost on
+the laptop's Intel GPU is not measured. Not drawn: the smoke Source adds to
+the 39% of fires that are not smokeless, surf_dune's 42 particle-file fires,
+`env_fire_random_puff`, the blend between frames. A fire without spawnflags 16
+is still drawn at its origin where Source drops it to the floor (4,309 fires
+on 85 maps). `ftesurf/particles/` is not in git. All in FTESurf BACKLOG.
