@@ -43301,3 +43301,21 @@ Patch 636's second rule for a linked account's Steam id; its check is added.
 own name; the customizer's name field does not say the name is held; whoever
 is on a lobby first under a linked player's name keeps it; the terms screen
 still says "under the name you are playing as".
+
+**DEPLOYED 11 Oct 2026, 05:31-05:33 UTC (FTESurf `36bd989`): surfd, the Pi's
+twelve lobbies, both Windows installs' qwprogs.** surfd first, the staged
+suites passing on the Pi, a database backup, `surfd ready` 05:31:17Z, the
+commit's files read back and no error since the reload; a crontab line for
+`steamsync.py` at minutes 7 and 37, whose first pass asked Steam for the one
+account and renamed nothing (the owner's rows were already under his Steam
+name). Lobbies, `build.ps1 -Pi` at 12 rows and 0 players: `qwprogs.dat`
+`76e00522`, the bytes the rig arm ran on; `csprogs.dat` `b2b6de57`, byte for
+byte Patch 635's; twelve units active since 05:32:48Z to 05:32:57Z. Windows,
+05:33:20Z: `qwprogs.dat` into both installs with no game running, the
+previous file kept as `.prev`, read back with a second tool. Live check
+05:33:47Z: the installed client in a private rig, a key of its own and no key
+pressed, joined a lobby by its public name and had its proof answered. Not
+measured on the fleet: a name being forced, which needs a linked game; the
+owner's next connect is the first. Read in the same hour, 05:09:39Z: a stage
+time of the owner's stored `ranked` under his account, the first live run
+through Patch 629's path.
