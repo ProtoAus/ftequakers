@@ -43065,3 +43065,48 @@ they were (21 ranked rows of one account, nobody banned). Not done on the
 fleet: a ban itself, which needs the owner's panel password; `lextest.md` has
 the try. The full mutant sweep ran on the final code: 303 mutants, 292
 killed, 11 surviving alone as declared pairs, none unexpected.
+
+## Patch 632 — Run lines: your line blue, the others by time; labels at the peaks alone *(MOD ONLY, csprogs + cfg/default.cfg)*
+
+**Problem.** From the owner's list of HUD edits (11 Oct). Every run line took
+one colouring, so your own line could not be told from the lines you had
+ticked, nor those from each other. Labels were off, contacts, or contacts and
+peaks, never the peaks alone. The Run lines pane held three rows about fading
+nearby players.
+
+**Change.** FTESurf `6f936bc`: `cl_lines.qc`, `cl_hudedit.qc`, `cl_watch.qc`,
+`cl_linegraph.qc`, the two default configs. `hud_lines_color_own` colours the
+live trail and `hud_lines_color_others` the open demo and the board's lines:
+one of the five readings, or 5, the plain colour and the default: blue, or the
+line's place by time among the shown lines of its own leg, green to red, equal
+times sharing a place. `hud_watch_path_color` is no longer read (a saved value
+would have pinned the old look for anyone who had clicked its chip); a config
+that had chosen gain, contact, energy or air control keeps it for both, once.
+An imported line's blue tint applies over a reading only. `hud_lines_nums 3`
+labels the tops and bottoms alone, a landing that is itself the bottom
+included. The pane loses the nearby-player rows (console only); "reset all"
+writes those and the two new rows as literals. Your own line gets a speed
+range (it had none, so "speed" over it alone was one flat red, before this
+patch too), and the speed ramp spans the lines coloured by speed.
+
+**Verified.** `tools/test_p632lines.py` over `cfg/test/p632lines.cfg` in a
+private rig: 38 of 38, a place's colour worked out in the grader from the
+place. The five readings are point for point what they were (574 points of one
+recording in each, the old name on the build before against the new names).
+Screenshots looked at.
+
+One review, two readers, thirteen findings: a run both watched and ticked
+ranked against itself (red over green); lines of different legs in one list;
+the demo ranked while no drawer drew it; your line's flat red; "peaks" giving
+no number to a bottom that is a landing (1 of 11 in one recording, 2 of 5 in
+another); a saved colouring dropped; "reset all" restoring the saved value on
+an install with an older default.cfg; a name beside a line in the graph's
+colour; and the arm's "a reading when asked", which sampled the line where
+the speed is constant and passed the flat red. Fixed, and a build with the
+fixes taken out fails the 8 checks for them.
+
+**Known.** A line is ranked by its last sample, so an import whose samples
+stop short of its finish ranks by its length. The Run graph's curves keep the
+graph's palette. `reset all` has the older-default.cfg fault for every other
+row that only the game code registers. The nine older arms that set the
+colouring were read, not rerun. FTESurf BACKLOG, "Run lines by time".
