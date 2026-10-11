@@ -43362,3 +43362,10 @@ were stacked under the strafe bar, and the stacked state is console only. In
 a 1280x720 window two pairs of his panels overlap that do not at 1600x900.
 Arms that read a HUD default without setting it were not swept. FTESurf
 BACKLOG, "The owner's layout as the defaults".
+
+**Deployed** 2026-10-11 from FTESurf `423c081`: csprogs `154fe49e` (qwprogs
+and menu.dat unchanged) and `cfg/default.cfg` to both Windows installs at
+05:44Z with no game running, and the progs to the Pi at 05:45Z with nobody
+on. Twelve lobbies restarted, read back from the host; a fresh client on a
+lobby was served this csprogs and drew the board. `.prev` is Patch 635's
+csprogs in all three places.
