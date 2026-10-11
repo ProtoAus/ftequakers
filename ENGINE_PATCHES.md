@@ -44436,3 +44436,67 @@ the Pi, 20 maps folded, the switch drawn on surf_rookie (LOOKED AT).
 **Known.** No switch was clicked and no CS:S build downloaded on the real
 install. The headcount is the chosen build's alone; `lobby_dir` decides a
 row's size and what it is a build of. BACKLOG.md.
+
+## Patch 658 — The GL renderer draws blended particles once a frame, and they look as they did *(ENGINE client)*
+
+From the owner, 12 Oct, on being told the engine drew every see-through particle
+twice: "is this the only way to make them brighter? I want them brighter, but
+only drawn 1 obviously."
+
+**Problem.** `GLBE_DrawWorld` (`engine/gl/gl_backend.c`) submitted the sort
+buckets PORTAL..SEETHROUGH+1, drew the lights, then submitted
+SEETHROUGH+1..NEAREST. `GLBE_SubmitMeshes` loops `i <= stop`: it INCLUDES its
+last bucket, where the D3D and Vulkan backends' loops stop before theirs (their
+second call ends at `SHADER_SORT_COUNT`). So in GL the bucket after SEETHROUGH,
+UNLITDECAL, was drawn twice a frame. The only shaders that sort there are the
+script particle system's defaults (`engine/client/p_script.c`: blend,
+blendcolour, invmoda, invmodc, subtract), so every alpha-blended particle
+without a shader of its own was blended twice: at alpha a it covered
+`1 - (1 - a)^2`. Found measuring FTESurf's Patch 648, whose first motes read
+0.975 where 0.85 was meant. Stock FTE has the same two lines.
+
+**Change.** Commit `7501a6cce`, tag `patch-658`.
+- **`gl_backend.c`:** the first submit stops at SEETHROUGH. UNLITDECAL is drawn
+  once, after the lights, which is what unlit means.
+- **`defaultsprite` gains two permutations** (`engine/shaders/glsl/defaultsprite.glsl`
+  and its copy in `engine/gl/r_bishaders.h`): `TWICE` writes alpha `a * (2 - a)`
+  and `TWICEC` colour `c * (2 - c)`, each clamped to 1 first as the framebuffer
+  clamped both draws, after the fog as each draw was fogged.
+- **`p_script.c`:** the default shaders ask for `defaultsprite#TWICE` (blend,
+  invmoda) or `#TWICEC` (invmodc, subtract). One blend then leaves exactly what
+  two left, so no effect written against the double draw changes. Beams and
+  fans (`PT_BEAM`, `PT_VBEAM`, `PT_SPARKFAN`) go through the render queue and
+  were drawn once all along: they get the plain program under
+  `<texture>_blend1`. `blendcolour` has no single-blend equivalent and is drawn
+  once at what it says.
+
+**Verified.** FTESurf `8aa6b7f`: `tools/p658once.py` over
+`cfg/test/p658once.cfg`, six still dots over a wall photographed bare, on the
+stamped client (`git-7229-patch-658-0-g7501a6cce`, sha256 `4faa7ff4`). The
+sprite is 0.914 opaque in the middle.
+- Drawn once: a shader with the OLD template text, alpha 0.5, leaves 0.549 of
+  the wall. One draw leaves 0.543, two 0.295.
+- No fainter: the default shader leaves 0.290 (two draws: 0.295); at alpha 0.2,
+  0.673 (0.668); a grey dot is 0.467 0.404 0.365 (0.467 0.405 0.364); alpha 1.6
+  leaves 0.000; invmodc 0.246 (0.248).
+- Control, the patch-645 client: the old-template shader leaves 0.306 and the
+  arm fails on that line alone; the other five read as above.
+- The engine-drawn run lines (Patch 645) are unchanged: the run-line session
+  ran `tools/test_p645lines.py` on this binary, 28 of 28.
+- DLL list (`objdump -p`): the installed binary's.
+
+One independent review of the engine change. Fixed from it: a value over 1
+folded back where two draws had saturated (alpha 2 became 0); beams and fans
+gained a strength they never had; and the arm compared the two dots with each
+other, which is true for any number of draws, where it now grades the plain one
+against the sprite file's own alpha.
+
+**Known.** `r_lightprepass 1` (off by default) still submits the bucket twice
+and a particle there is now too strong, (1 - a)^4. A scene with no world drew
+the bucket once all along and is stronger by the permutation. With
+`r_shadow_realtime_world 1`, or a dynamic light on the wall behind a particle,
+the two old draws were not equal and the single draw differs by that. Other
+renderers ignore the permutation and never drew twice. `alpha` in a
+default-shader effect remains "the alpha of two blends": 0.5 covers 0.75. Client
+only: no server file, plugin or header moved; the Linux client carries it from
+its next build. Not run: beams, fans, subtract, invmoda, fog.
