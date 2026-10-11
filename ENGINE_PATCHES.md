@@ -44753,3 +44753,80 @@ adds those five; it was not reviewed again.
 
 **Left** (BACKLOG): paste, with the engine change it needs; colour codes in
 a field; text longer than its box; `in_builtinkeymap`.
+
+## Patch 663 — `hud_player` is a profile: name, picture, the customizer, a breakdown, and a search for any player *(MOD ONLY: QC, one bind)*
+
+From the owner's list of 12 Oct ("upgrade this menu to show your steam name,
+steam picture, and allow you to customize your player ... a tab for your
+player breakdown like the website page but in game ... a search bar you can
+type in any player, like the website, but in game"). The panel was a flat
+column of controls from Patch 340 that only the console could open.
+
+- **One card, in the UI's look** (`Av_Draw`, rebuilt). A header: the
+  player's picture and name (a linked account plays under its Steam name,
+  and the lobby's mark finds its picture), what the lobby last said of this
+  install (linked, not linked with a Link Steam button, banned), and the
+  search. Two pages: **Customize**, every control the old panel had, laid
+  out again, the body standing on the card beside them; **Stats**, the
+  site's player page: five figures, a bar a difficulty tier, results best
+  first in a list that asks for more as its end is reached. The type steps
+  down until the card fits the window. `bind p hud_player`.
+- **`cl_profile.qc`** (new): surfd's two lookups (Patch 662), their answers
+  into memalloc'd tables, and the pieces a panel draws in its own bracket:
+  the search field, the list under it, the breakdown. A search rests 0.3 s
+  before it is asked; a breakdown that never came is asked for once more by
+  itself (a wide profile's first answer is seconds on the Pi, and surfd
+  keeps it). Both need the online terms, as the board does.
+- **The leaderboard** (cl_scores.qc): the same field on a pinned board's
+  title row, and "my profile". A picked player closes the board and opens
+  the card on their breakdown. Letting go of the scoreboard key while the
+  field has the keyboard leaves the board up.
+- **`sui_text_event`**: a key for a text field at the time it comes. A game
+  panel is not always its frame's only sui bracket, and every `sui_end`
+  empties the key buffer. Both fields here (the search, the name) use it,
+  with Patch 655's selection, copy and cut.
+- **A field swallows only the releases of keys it took the press of.** The
+  engine returns before a bind's release when game code takes a key-up, so a
+  strafe key held as a field took the keyboard stayed down. (The old name
+  field took every release while it was focused.)
+
+**Measured.** `tools/p663profile.py`: a private rig whose surfd holds a
+board put straight into its database, a difficulty catalogue and one
+four-colour picture; graded on the panel's own `hud_player status` line and
+its developer lines against what was put in. 25 checks pass: the two pages; a click on a trail
+colour; the search (three players named, the exact one first; no keyboard by
+a console line; the keyboard by a click; Enter's pick); a planted picture
+found by its colours in the list and at twice the size on the card; a mark
+finding its player; a wide profile paging as it is scrolled; a page that
+brings nothing asked for once, and one that fails three times, two seconds
+apart (surfd counted them); typed keys being text while a bind on one stays
+unrun; a key held before the field took the keyboard getting its release; a
+name that is no handle never asked about; the board's field, its pick, "my
+profile", and the scoreboard key let go while typing; a link, then the
+player's own page by the lobby's mark, their picture in the room list
+(Patch 653's size, seen at last) and on the card. CONTROL, a build with five
+lines as they were before the review: X, K, U, G and Y fail (G: 111 asks in
+seven seconds where the patch makes one), and what depends on them. The same
+arm passes on the engine release 0.1.24 shipped. Looked at: ten
+screenshots; the two pages, the list, a wide profile and the board's field
+at 1:1. csprogs `221cbebf62381187`, default.cfg `1029ff976654671c`.
+
+**Review.** One reviewer, three lenses (control flow, untrusted input,
+regressions), given the commit and the engine. FOUR MUST-FIX, all fixed and
+each now a check that the control build fails: the Stats page and the first
+trail swatch shared a sui id, so a press on the red trail colour turned the
+page instead of choosing it; a next page that failed, or brought nothing,
+was asked for again at once for as long as the list's tail was on screen (an
+answer could make that permanent); the console twins of typing gave the
+field the keyboard, so a console line could send what the player typed next
+to the directory; and the field took every key release, after which the
+engine skips the bind's own. Also from it: every failure but "nobody" offers
+Try again; a `who` is asked about only if it is 8 or 12 hex; an answer must
+be for the player asked, and this file's request ids have a base drawn per
+VM; names and maps are cut at parse and a map's colour codes taken out; the
+drag handle is where the card is drawn; a pick with a replay or the editor
+up leaves the board and says why; a breakdown held over a minute is asked
+for anew when the card opens. The fixes were measured, not reviewed again.
+
+**Left** (BACKLOG): a result row is not a link; the header's "linked" is a
+stuffable word; no drill-down from a tier's bar; colour codes shown raw.
