@@ -43475,3 +43475,45 @@ game running, and to the Pi at 09:05Z with nobody on. Twelve lobbies
 restarted, read back from the host; a fresh client on a lobby was served this
 csprogs, drew the board and printed no move line. `.prev` is Patch 637's
 csprogs in all three places.
+
+## Patch 642 — Rounded corners are drawn from masks made at their own size *(MOD ONLY, csprogs and menu.dat)*
+
+**Problem.** Every rounded box in the game and the menu was drawn from one
+32x32 mask whose corner is 8 texels, stretched to the wanted radius. From
+about 20 px the edge was smeared over several pixels and looked low
+resolution. The owner: small corners look good, bigger ones blurry, "the play
+button rounded corner is most obvious".
+
+**Change.** FTESurf `6713cd3`: `_sui_round_draw` in `src/shared/sh_ui.qc`
+(both VMs). A disc of the corner's pixel radius is rasterised in QC once a
+radius (by 1 to 32 px, by 2 to 64, by 8 to 128, by 16 to 256, rounded up),
+uploaded with `r_uploadimage` and given a shader of its own; the box is its
+four quadrants and its opaque middle, on whole pixels. Each VM forgets its
+masks in its renderer-restart hook and makes them again under the next
+number. Where the builtins are missing or a mask will not make, the .png
+draws as before. Test hooks: `hud_edit ui round <px|png|mask>`,
+`ui_strip_test masks`.
+
+**Verified.** `tools/test_p642corners.py` over `cfg/test/p642corners.cfg`,
+6 of 6 on csprogs `30f816bb`: nine radii from 6 to 176 px, each drawn the old
+way and the new. Along the corner's edge the mean difference from the exact
+shape is 0.000 at the seven radii the ladder holds and 0.030 and 0.040 at the
+two between steps; the stretched mask reads 0.025 at 6 px, 0.18 at 20 and
+0.37 at 176, with 3.6 to 33 times the exact count of half-lit pixels. After a
+video restart the masks are made again. The menu VM made 2 masks and 4 after
+a restart (its own count line), and its buttons were looked at.
+
+One review of the first cut. Fixed from it: names polled after a restart
+could be defined wrongly for good (now the engine's restart hooks), a
+one-pixel shift at half-pixel edges, small radii rounded up, and a grader
+whose mean thinned as the radius grew.
+
+**Known.** The Play pill itself was not reached in a rig. Pixels were graded
+in the game VM at one unit to a pixel; cost was not measured. FTESurf BACKLOG,
+"Rounded corners".
+
+**Deployed** 2026-10-11 from FTESurf `6713cd3`: csprogs `30f816bb` and
+menu.dat `6db94852` (qwprogs unchanged, no cfg) to both Windows installs at
+10:08Z with no game running, csprogs to the Pi at 10:09Z with nobody on.
+Twelve lobbies restarted, read back from the host; a fresh client on a lobby
+was served this csprogs and drew the board. `.prev` is Patch 641's pair.
