@@ -45209,3 +45209,50 @@ and both Windows installs, `.prev` `cbc72b32`; lobby smoke on 27510 passed.
 `tools/pcf.py` then re-baked surf_tensor2 in `C:\FTESurf`
 (`particles/surf_tensor2.cfg`, `1b8d2e83`), byte-equal to the tested file; the
 second install has no particle files.
+
+## Patch 664 — zones Momentum publishes under a zoneHash that is not theirs; bhop_eazy follows Momentum *(MOD ONLY: surfd)*
+
+**Problem.** Patch 651 left 92 maps `--updates` could not follow: Momentum's
+`zoneHash` is not the hash of the zones it serves for them, so 75 zone files
+and 17 builds stayed as held. bhop_eazy was pinned by name because the engine
+gate compares `pm_dettest` on it between the Pi and Windows. The owner, asked
+about both: "do both".
+
+**Change** (ftesurf `b15ab86`, record `85820d3`). `surfd/mapwatch.py` only.
+- A reply that does not hash is taken only as **the zone file held, saved
+  again**: the same `tracks`, key for key. Measured on all 92: 64 are that
+  (new `globalRegions.allowBhop`, no cancel region changed).
+- The other 28 (8 with a change inside the tracks, 20 with no zone file
+  held) are `data/mapwatch/approved.json`: a key and the SHA1 of the very
+  bytes, written by a person and only read by the watcher.
+- In both cases the reply must name the list row's id, bspHash and zoneHash;
+  the zones are read the way the game reads them (`zone_regions`: a number is
+  a JSON number, since `json_get_float` runs `atof` over a string; a restart
+  position is three numbers), written as that parse and not as the reply's
+  text (`json_find_object_child` takes the first of two keys, Python the
+  last), and measured on the build they are for before anything is written.
+- A zone file about to be replaced is kept in `zones/online/.old/` first,
+  before its build is swapped. Zones taken this way are asked for again
+  weekly and rewritten only when more than the timestamp has changed.
+- `KEEP_BUILD` is empty.
+
+**Verified.** `test_mapwatch.py` 248 checks; 66 one-edit mutants, all caught.
+Three review rounds: strikes that never accumulated and a record not bound
+to its build; checks that let through bodies that break timing, and text
+numbers and repeated keys the game reads otherwise; the third found nothing
+that writes or replaces a file against the rules on any real zone file. On
+the Pi, 11 Oct 23:27Z: 17 builds replaced, 69 zone files replaced and 6
+written; of the 92, every build the published one and every zone file the
+bytes read at 22:10Z; no strike left; 76 zone files and 48 builds kept
+aside; `zones(sv)` 24 on surf_ace (12 before), 23 on surf_arcade, 64 on
+surf_fortress, the region counts read. bhop_eazy: 07320480e924 to
+4ddeea8cc0fa on the Pi at 23:41Z and in the owner's install at 23:42Z;
+`pm_dettest` on both builds, Pi and Windows, prints the same seven lines but
+`mapcrc` (676de275, now 7f53da5d).
+
+**Known.** Momentum's bhop_eazy is not the old one to an arm: 188 `func_door`
+platforms are `func_bhop`, and its three stages are three checkpoints of one
+segment; 91 of the 246 arms and tools naming it mention stages and none was
+rerun. The old pair is kept on both machines. A re-save may move a cancel
+region unreviewed; a re-save moves `zone_crc`, so a run parked on one of
+those maps no longer resumes. BACKLOG.md has the reviews' leftovers.
