@@ -43812,6 +43812,20 @@ the QC path. `CSQC_PolyFlush` rewinds the index count to the vertex origin,
 and `PF_R_PolygonEnd` copies with `memcpy` where the ranges can overlap: both
 older, both left. FTESurf BACKLOG, "Run lines drawn by the engine".
 
+**Deployed** 2026-10-11. Engine: the client and the dedicated server built
+clean from `65bf6f464` (tag `patch-645`; both carry the one stamp
+`git-7216-patch-645-0-g65bf6f464`, read back from the files), client
+`03989f66`, server `25071c74`, into `C:\FTESurf` and `C:\FTEQuake` at 12:57Z
+with no game running; the plugins were not rebuilt (no header moved). The
+Linux recipe builds the same commit with gates all PASS and the same revision
+line. Game code: FTESurf `231e276`, csprogs `f40d4069` (with Patch 643's), to
+both installs at 12:58Z and to the Pi at 12:58:48Z with nobody on; twelve
+lobbies restarted and read back. On those final binaries the arm reads 28 of
+28, and the cost table is 5.84 ms against 3.41 for eight lines in a window
+(2.49 with none), 10.16 against 4.98 whole. A fresh client on a lobby with
+the new engine was served this csprogs and drew the board. The 0.1.24 release
+of the same hour is the patch-625 engine: this is the next release's.
+
 ## Patch 643 — env_fire is drawn from Source's flame sheet *(MOD ONLY, csprogs)*
 
 From the owner, 11 Oct: an earlier session "got their scrolling texture to
