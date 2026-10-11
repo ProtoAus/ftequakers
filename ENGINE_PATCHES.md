@@ -44542,3 +44542,10 @@ renamed.
 different runs was not put in a rig. Five of the review's fixes have no
 check of their own. The run graph is still the first eight places. FTESurf
 BACKLOG, "Labels on the run lines".
+
+**Deployed** 2026-10-11 from FTESurf `497527d`: csprogs `6cb9b6c2` to the Pi
+at 17:15:58Z with nobody on, twelve lobbies restarted and read back; csprogs
+and `cfg/default.cfg` to both Windows installs at 17:18:20Z with no game
+running. A fresh client on a lobby was served this csprogs and drew the
+board. `.prev` is Patch 653's `84eaeec6`. Run on a copy of the 625 exe before
+the deploy (10 pass, 2 not measured, 0 fail), the check Patch 649 skipped.
