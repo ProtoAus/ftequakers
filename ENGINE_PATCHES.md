@@ -42892,3 +42892,57 @@ menu.dat unchanged) to both Windows installs at 01:43Z, with
 `cfg/default.cfg`, and to the Pi at 01:44Z with nobody on. Twelve lobbies
 restarted, read back from the host; a fresh client on lobby 1 was served this
 csprogs and drew the board. `.prev` is Patch 629's csprogs in all three places.
+
+## Patch 631 — the Boarding window's energies are levels; a board noticed before its clip *(MOD ONLY, csprogs)*
+
+**Problem.** From the owner's list of HUD edits (11 Oct): under each speed the
+Boarding window printed a change, what the touchdown cost and what the ride
+gained, where it was meant to print the energy held at the enter and at the
+leave. The one review of the first cut then found the level itself wrong
+where the server is near, and the fault older than the patch: the board
+counter and its latched pair are the newest packet's, the drawn body can be a
+net frame behind, and build 39's "e + cost" for the Segments column counted
+the cost twice on a frame that still held the arrival's velocity. On a listen
+server one ride read Jump 139e (+97e), Board 42e, Ramp -54e (-96e) for a fall
+held at 42e. The first cut's checks compared the window with that column,
+which made the same mistake, and passed.
+
+**Change.** FTESurf `d43a0c2`: `cl_board.qc`, `cl_boarding.qc`, `cl_watch.qc`,
+`cl_hud.qc`. `Board_Frame` stamps the energy arrived with and the energy on
+the frame the ride ends, each with the speedometer's zero taken then; the
+window prints level less its own zero, as a Segments row does. `Board_ClipSeen`
+is the part f of the into-plane speed the frame's velocity has already lost:
+the arrival is `e + cost*f*(2-f)` and the ramp opens at `e - cost*(1-f)^2`, so
+the Board row is the cost whatever f is. It puts back the half tick of gravity
+between the latch (after StartGravity) and the drawn state, and takes a body
+up to two ticks earlier in its fall for the arrival. A recording's sample is
+the board's own tick, f is 1 there, and a replay's rows are unchanged. A
+replay never runs `Board_Frame` at the cursor, so the build pass keeps each
+board's level in a table and the window reads it against the viewer's zero
+now. A reset adopts the board counter (a listen server keeps it across maps)
+and closing a replay clears the contact state; both had drawn a board nobody
+rode. `boarding` prints the window, the column's last rows, f and f before
+the allowance.
+
+**Verified.** `tools/test_p631boarding.py` over `cfg/test/p631boarding.cfg` on
+a listen server, a dedicated one and a dedicated one behind `sv_minping 120`,
+private rigs: 35 of 35. One fall held at 42.3e in flight, cost 96.7: enter
+42.3, 43.0 and 43.1 with f 0.000 (0.033 before the allowance), 0.494 and
+0.990; twelve rides with this rule read 42.1 to 43.2. The enter is graded
+against the speedometer's own e printed in flight before the board, and in a
+replay against the recording's sample before each board record (five places,
+within 3). A build with f fixed at 1, no resync and a stamped replay zero
+fails 5 of 11. The replay's 73 Segments rows are identical to the build
+before. Screenshots looked at.
+
+One review, of the first cut: the doubled cost above; the board drawn after a
+map change and after a closed replay; a replayed level that depended on where
+the seek came from. All three fixed and each has a check the first cut fails.
+
+**Known.** The two-tick allowance rests on one run 1.7 ticks behind; a body
+further behind reads high again, and a true blend under f 0.039 reads up to
+7.4e low on that ramp. A replay has no leave row. After a seek a replay's
+Segments rows keep a zero from where the seek came from (older than this
+patch; the window no longer shares it). Not run: frame rates other than 100,
+a save-lock load, a board under the grading thresholds. FTESurf BACKLOG, "The
+Boarding window".
