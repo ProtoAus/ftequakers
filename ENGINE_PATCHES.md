@@ -43889,3 +43889,75 @@ the 39% of fires that are not smokeless, surf_dune's 42 particle-file fires,
 `env_fire_random_puff`, the blend between frames. A fire without spawnflags 16
 is still drawn at its origin where Source drops it to the floor (4,309 fires
 on 85 maps). `ftesurf/particles/` is not in git. All in FTESurf BACKLOG.
+
+## Patch 644 — the map library keeps itself level: the Pi lists Momentum's and KSF's maps and fetches what is new; KSF's main boards first *(MOD ONLY: surfd and tools)*
+
+From the owner, 11 Oct: "do we have all KSF maps added to the nanopi ... and
+all of the momentum mod maps that are Surf/Bhop ... or future maps they add,
+so we need rescanning, and downloading of new maps", a CS:S or Momentum
+version of a map, and "more then 1 page of KSF records".
+
+**Measured first.**
+- The Pi served 767 of 1,753 catalogued surf/bhop maps: 465 of KSF's 929, 379
+  of Momentum's 1,164. The 5 Oct restore had stopped at `surf_k`, and the 463
+  maps `mapgrab.py` once fetched from Momentum's CDN were never fetched again.
+  The six-hourly scan had printed the gap into a log each time.
+- Nothing fetched a new map, and the lists were behind: KSF's site listed 952
+  maps where the Drive sheet the scan reads stops at 929 (17 April); 14 were in
+  no catalogue or disk here.
+- Two notes were wrong: Momentum's catalogue "cannot be fetched" (`/v1/maps`
+  answers anonymously for approved maps, hash, url and tier included; only
+  submissions answer 401), and zones "would need" an authenticated query (they
+  are anonymous, and hash to the published zoneHash).
+- 372 of 448 KSF Forward main boards held one 20-row page: the crawl took a
+  viewed map's every board, four styles of every stage, to its end first.
+- A CS:S install is not a source for KSF's builds: this PC's `cstrike` copy
+  matched KSF's own archive on 3 of 6 maps.
+
+**Change** (ftesurf `ed14d91`).
+- **`tools/mapsync.py`, run once**: 586 files, 20.7 GB, back onto the Pi
+  (1,349 held).
+- **`surfd/mapwatch.py`** (new; cron, six-hourly). Reads Momentum's approved
+  surf/bhop list and `ksf.surf/maps`, and a Beta list a PC sends; installs a
+  map whose name the library lacks. A Momentum file is kept on its published
+  SHA1 and a VBSP header; a KSF archive when it holds exactly one `.bsp`,
+  named for the map. Momentum's zones are written on their published hash,
+  only for a map held at the build they were published for, never over a
+  file, never while a lobby is on the map or the lobbies are unheard, and a
+  first zone file never goes under a name that already has runs (read again
+  at the write). `--variants N` keeps
+  KSF's archive of a name Momentum also lists as `<name>_css` where the bytes
+  differ. A held build that is not the published one is reported and left
+  (`--updates`, off).
+- **`surfd/ksfimport.py --watch`**: a viewed map's main board first (to 1,000
+  ranks), then its other boards (to 100) and every map's main board (to 200)
+  together by depth, then the rest. The same 10 requests per 5 minutes.
+- **`tools/mapscan.py`** reads the Pi's catalogue back, so `mapdl.txt` lists
+  what only KSF's site or the watcher knows, and sends the Beta list.
+
+**Verified.**
+- `surfd/test_mapwatch.py` against a fake of both hosts: 138 checks on
+  Windows, 141 on the Pi (file modes under surfd's umask 077 and the header
+  deadline are graded only there, and each fails with its line removed). 112
+  one-edit mutants of `mapwatch.py`, all caught. `test_ksfimport.py` 106, six
+  order mutants caught.
+- Five review rounds on frozen commits. Rounds 1 to 4 each found a way to put
+  a zone file under a run or to hurt the box (files written 0600 under
+  surfd's umask; a first zone file under history; bzip2 archive members
+  inflated whole, 313 bytes to 449 MB; a page regex at ~280 MB per megabyte;
+  a header drip no clock covered; round 4's was a regression from round 3's
+  fix). The fifth, on the zone-write path alone, found a window one history
+  read wide and a missing folder read as "no runs"; both closed, each with a
+  failing mutant. Nothing after that was reviewed.
+- On the Pi, 11 Oct: a dry run against the real hosts read 758 approved, 319
+  beta and 952 KSF names and planned 488 new maps (35 s, 54 MB). The first
+  live run installed three (bhop_2006isback, bhop_25, bhop_2hrs), mode 0644,
+  with their zones; `play.proto.bar/maps/bhop_25.bsp` answered 206 and the
+  zone URL clients use served the same bytes; a throwaway headless server
+  loaded it: `zones(sv): 4 on bhop_25 (maps/zones/online)`.
+
+**Known.** A `<name>_css` build gets no zones and loads untimed, as do KSF's
+own new maps; the create-server list shows it as its own row, not a switch.
+Players get a longer list only with a release (`data/mapdl.txt` ships).
+`--updates` is off: 49 held builds are not Momentum's current one. The Beta
+list is as fresh as the owner's Momentum install. All in BACKLOG.md.
