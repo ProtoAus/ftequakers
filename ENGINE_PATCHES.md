@@ -44500,3 +44500,45 @@ renderers ignore the permutation and never drew twice. `alpha` in a
 default-shader effect remains "the alpha of two blends": 0.5 covers 0.75. Client
 only: no server file, plugin or header moved; the Linux client carries it from
 its next build. Not run: beams, fans, subtract, invmoda, fog.
+
+## Patch 661 — A name on every run line, and labels that stay at their marks *(MOD ONLY, csprogs and default.cfg)*
+
+**Problem.** The owner tried twenty-odd lines. Only the first eight had a
+name (the names were the run graph's eleven slots), and a name wore the
+graph's colour. A mark's numbers were moved into lanes to keep them whole,
+up to eight rows from the mark, and showed as far as the line. Energy on a
+label was the split list's unit (u/s) from the run's own start, not what the
+speedometer shows. Only one label setting had a row in the HUD editor.
+
+**Change.** FTESurf `497527d`. `LineGraph_WorldLabels` names every slot in
+the colour the line has where the name sits, and queues the names with the
+marks' numbers; `Line_LabelsPlace` gives out the room at the end of the
+frame, nearest the eye first, and a label whose place is taken fades out
+until moving nearer parts it from its neighbour (`hud_lines_declutter 0`;
+the lanes are 2). Numbers show within `hud_lines_label_far` (3000 u). Energy
+is the speedometer's by default: `hud_lines_units 1`, `hud_lines_ref 0`. The
+editor has a "Line labels" pane with a switch for each number. Past eight
+names a line looks for its place one frame in names/16. No engine source.
+
+**Verified.** `tools/test_p661labels.py` over `cfg/test/p661labels.cfg`, 12
+of 12 on csprogs `6cb9b6c2`: a twelfth line alone has its name as a fifth
+has, in the line's colour by its pixels; twenty lines of one run show 2
+labels with room and 38 without; the lanes still stack all 40; 10 labels as
+far as the line and 1 within 600 u; energy as energy, as a speed and alone;
+the pane is listed; a saved old zero is moved once. Main before the patch: 1
+of 9. On a copy of the 625 exe: 10 pass, 2 not measured (a twelfth line is
+refused there). `tools/test_p645lines.py`: 28 of 28. QC a frame on a paused
+replay, 2.13 ms with no line: eight lines 2.96, sixty-four 4.26 with their
+names (4.02 before, with eight); numbers on the first eight add 0.1 where
+they added 1.4.
+
+One review; seven findings fixed (BACKLOG and AGENT_NOTES name them). The
+cost table then caught one more: the names' frame counter had been declared
+under a name the graph already used, which fteqcc accepts silently, and the
+graph rebuilt its curves every frame (eight lines 6.1 ms) until it was
+renamed.
+
+**Known.** The arm's crowd is one run in twenty lines; a real pack of
+different runs was not put in a rig. Five of the review's fixes have no
+check of their own. The run graph is still the first eight places. FTESurf
+BACKLOG, "Labels on the run lines".
