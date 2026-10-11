@@ -43468,3 +43468,10 @@ all 42 and measured again.
 from one never touched. A config pinned on a default older than the last is
 not moved. No real config from an older release was run. FTESurf BACKLOG,
 "The owner's layout as the defaults".
+
+**Deployed** 2026-10-11 from FTESurf `475d313`: csprogs `05b3a6ff` (qwprogs
+and menu.dat unchanged, no cfg) to both Windows installs at 09:04Z with no
+game running, and to the Pi at 09:05Z with nobody on. Twelve lobbies
+restarted, read back from the host; a fresh client on a lobby was served this
+csprogs, drew the board and printed no move line. `.prev` is Patch 637's
+csprogs in all three places.
