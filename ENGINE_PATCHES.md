@@ -44549,3 +44549,52 @@ and `cfg/default.cfg` to both Windows installs at 17:18:20Z with no game
 running. A fresh client on a lobby was served this csprogs and drew the
 board. `.prev` is Patch 653's `84eaeec6`. Run on a copy of the 625 exe before
 the deploy (10 pass, 2 not measured, 0 fail), the check Patch 649 skipped.
+
+## Patch 662 — the game's player search and breakdown, on `/api/board` *(MOD ONLY: surfd)*
+
+From the owner's list of 12 Oct ("a tab for your player breakdown like the
+website page but in game ... a search bar you can type in any player, like the
+website, but in game"). The site has both; the game could reach neither,
+because the address it talks to forwards a fixed list of paths. So they are
+two more parameters of `/api/board`, beside `avatar=` and `maps=`, spending
+the board's bucket. Patch 663 is the game's half.
+
+- **`?players=<text>`** (`game_players`): the site's directory and its
+  plain-text match (colour codes and case are seen through), twelve rows. A
+  name that IS the text first, then names that start with it, then the rest,
+  each most times first: twelve rows have no page two to find a short name
+  on. A row is `who`, `name`, `n`, `maps`, `src`, and `av` where the game can
+  have that player's picture (the board rows' own rule).
+- **`?player=<who>`** (`game_player`): the site's player page without its
+  links out: the same figures by the same code (`_profile_figures`, taken
+  out of `web_player`, whose reply is what it was), the completion table, and
+  rows best first, 50 at a time and at most 200. `<who>` is a search row's
+  12-hex handle, or the 8-hex mark the game already knows a player by, which
+  is the handle's first eight.
+- **The directory** holds two more things, built where it is installed and
+  outside its lock: each mark that one player alone has, and each handle's
+  own entry (a profile used to walk the list for its player).
+
+**Measured.** `surfd/test_web.py`: 222 checks, 26 of them this patch's.
+`tools/accounts_mutants.py`: 417 texts, none stale; the 28 that are this
+patch's all die by a check (that tool now runs `test_web.py` for them).
+`test_ranked`, `test_variants`, `test_board`, `test_surfd`, `test_accounts`:
+green. NOT MEASURED HERE: the cost on the Pi; the review's figures are a
+laptop's (about 20 ms a search over 67,000 entries, the site's own cost).
+
+**Review.** One reviewer, three lenses (control flow, load on the Pi, what
+leaves the process), given the code. No must-fix. Fixed from it: the 8-hex
+form is answered only while the board is by account, as `avatar=` is
+(otherwise a mark is the digest of a string a client chose, and a row filed
+under a chosen one would make another player's mark nobody's); a mark that
+misses may refresh the directory as a handle that misses does (a new
+player's own); the search stops at a full answer of exact names; a profile
+no longer walks the list for its entry (15 ms for a player at its end, both
+routes). Its eight unchecked behaviours each have a check and a mutant now
+(UTF-8 out, a row's values, the echoed text, `offset`, capitals refused, the
+early stop, the gate, the refresh). The fixes were not reviewed again: each
+is small and has a mutant that dies.
+
+**Left** (BACKLOG): a mark two directory players share opens neither by
+mark; marks are counted over directory players only; every search walks the
+directory; a cold wide profile is ranked once per ask in flight.
