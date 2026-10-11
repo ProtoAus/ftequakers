@@ -43610,3 +43610,47 @@ measures). The owner is asked to look (lextest).
 the results screen or the spectate bar; each ask spends the
 board's rate budget on surfd; a picture changed on Steam shows at the next
 map.
+
+## Patch 646 — The board's lists take the mouse wheel *(MOD ONLY, csprogs)*
+
+**Problem.** From the owner, 11 Oct ("the ability to load more then 1 page of
+KSF records"). The board in the game asks for its next 100 rows when its list
+is scrolled near the end of what it holds (Patch 474), and the wheel never
+reached the list: `Scores_InputEvent` handed sui the cursor and two buttons
+only, so a notch fell through to its bind (`+jump`) and the one way to a
+second page was dragging the thumb.
+
+**Change** (ftesurf `088bb6a`, cl_scores.qc).
+
+- **`Scores_InputEvent`**: while the board is PINNED and the cursor is over
+  one of its lists (`sb_online`, `sb_runs`, `sb_legs`), a notch moves that
+  list's offset one row and is taken. Held with no cursor, off the lists, or
+  closed, it is the player's as before: both notches are bound to `+jump`.
+- The offset is moved directly, not through sui's input buffer: with a replay
+  under the board that buffer is emptied by the replay's own `sui_end` before
+  the board reads it (the review's finding, on the first cut).
+- The hover is re-tested at the notch and at a MOUSE1 press. sui re-tests it
+  only on motion, so after a wheel scroll with the mouse still a click went to
+  the row that HAD been under the cursor.
+- `scores status` prints the online list's top row (`scroll N`); a click
+  dprints the row it landed on. Both are what the arm grades.
+
+**Verified.** `tools/p646wheel.py` over `cfg/test/p646wheel.cfg`, on
+p635board.py's surfd and rows (surf_voyager bonus 2: 130 rows, a page of 100
+and a second). csprogs `e9371ed5`, built from the commit alone: 9 of 9 --
+off the lists `took 0` and nothing moves; five notches move five rows; a
+click there, the mouse not moved, lands five rows on (row 10, then 15); two
+up move two back; seventy more bring the second page (rows 100 to 130, scroll
+73); held and closed `took 0`. The same arm on four other builds of the same
+source: the hunk out (`1d6c9109`) fails four checks, `took 0` throughout; no
+hover test (`6202b1ed`) takes a notch off the lists; no pin test (`9e8dd2fd`)
+takes one from a held board; no re-test at the click (`6278cfa3`) lands on
+row 10 twice. LOOKED AT: `p646_paged.png`, rows 74 to 94 on screen, the thumb
+two thirds down, the footer "130 clean time(s)". qwprogs `76e00522` and
+menu.dat `6db94852` are byte for byte the installed ones.
+
+**Known.** One review, read and not run. Not measured: the Local list and
+the track list (the same lines; the fixture's track list is three rows), a
+replay under the board, a real wheel. On a narrow window a notch over the
+docked room list scrolls the Online list under it; a board pinned by accident
+during a TAB peek takes the wheel until TAB is let go. All in BACKLOG.md.
