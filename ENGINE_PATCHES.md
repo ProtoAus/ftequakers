@@ -43173,3 +43173,16 @@ imported games. Nothing found under script injection.
 **Measured.** `surfd/test_web.py`, 202 checks, with 17 hand mutants of the
 new code all killed. The pages were served from a fixture and looked at in a
 headless browser: the board, one game's filter, a profile with a tier open.
+
+**DEPLOYED 11 Oct 2026, 04:16:58 UTC (FTESurf `32c3b3b`), surfd and its
+website**, 0 players, the staged suites passing on the Pi, a database backup;
+`tools/momfetch.py` copied by hand to where the Pi's importer loads it from
+(refused unless the copy there was the previous one). The start built
+`runs_player`. Read back on the host: the commit's files, no error since the
+reload, and the two statements the index had moved on their old plans (the
+directory build a table scan, 11.2 s on that read; the admin's account counts
+off the small index in 0.00 s). The owner's player page took 1.61 s the first
+time and 0.03 s the second; its maps list gives the same ten tiers as its
+bars; one map shows 7,859 rows on All games and 1 / 7,652 / 206 by game.
+Momentum profile links are empty until the importer refetches a board. The
+first maps-list build after the reload took 4.95 s against the proxy's 5.
