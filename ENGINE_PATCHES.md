@@ -44201,3 +44201,82 @@ Patches 649 and 648) to the Pi at 15:13:07Z with nobody on, twelve lobbies
 restarted and read back, and to both Windows installs at 15:13:51Z with no
 game running. A fresh client on a lobby was served this csprogs and drew the
 board. `.prev` is Patch 648's `88986a28`.
+
+## Patch 653 — the Link Steam box: the Dusk look, a cursor and a clickable address, cells for the code *(MOD ONLY: csprogs)*
+
+From the owner's list after trying release 0.1.24 ("make the 'Link Steam'
+window ... the same styling as the rest of my ui ... when press enter to link
+steam, I would hope it would lock your mouse so you can select the 'proto.bar'
+link ... make the font uni-size so it doesn't wiggle as you type. The Display
+picture in the Spectate window is quite small").
+
+- **The look.** `Account_Draw` (cl_account.qc) drew a flat box with a blue
+  title bar. It is the rounded Dusk panel the other panels are: a muted
+  title, the palette's text colours, key caps for what Enter and Esc do, and
+  the prompt's "Press Enter to link" as a button-shaped row. The box is drawn
+  in the HUD stack, outside any sui bracket, so it calls sui's rounded box at
+  absolute coordinates and its own `sui_style_hud`.
+- **The cursor.** From the Enter that starts a link the box has the mouse
+  (`UIC_ACCOUNT` in the cursor register): through the wait for the browser,
+  the page's number and the confirm. A click on the sign-in address does what
+  Enter does there, the page again and the address on the clipboard; a click
+  beside the box gives the mouse back to the game and Enter takes it again.
+  The click is hit-tested inside the input handler, because the engine opens
+  a browser only while a device's press is being delivered, and a mouse
+  button is one. It signs nothing: the consent is still Enter.
+  NOT for the prompt or a typed code's box, which a console line can raise:
+  those hold the keys already and would have frozen the view with them. While
+  the box has the cursor the mouse's other buttons and the wheel run no bind.
+- **Cells.** The code (twelve, in fours) and the page's number (four) are
+  drawn one glyph to a fixed cell, the next cell to fill in the accent. The
+  proportional face's digits are not one width, and a centred string of them
+  moved with every key.
+- **The room list's picture** (cl_players.qc) is 26 px in a 32 px row, where
+  it was 14 in 26: about the board's.
+
+**Measured.** `tools/p653box.py`, p615link's rig (a lobby, a surfd in the
+driver, a client with `-nobrowse`), keys and clicks posted to the client's
+own window: 14 of 14. The prompt that comes up by itself and a typed code's
+box take no mouse; Enter starts the link and the box says it has the mouse
+and where its address is; a click there is answered by the box at a point
+inside the address and by the ENGINE, which prints its second
+`acct_browse:` (a mouse press is a device's press to it); two more clicks
+inside the engine's one page a second, and all three of the box's lines
+still say a page opened (the engine took 3 asks of 4); the other mouse
+button runs no bind while the box has the cursor and runs it again after; a
+click beside the box gives the mouse back and Enter takes it again; a
+browser signs in, the number is typed, and between no digit and four the
+only pixels that change inside the box are a 143 x 42 band at its centre;
+Enter links it. CONTROL: the same arm on the installed progs (Patch 654's) fails at
+"the box takes the mouse". `tools/p615link.py`, the whole link flow, 43 of
+43 on the same build; `tools/p640pics.py` 9 of 9. LOOKED AT: the prompt,
+the code's cells, the wait with the address plain and under the pointer,
+the number at 2 digits, and the room list's taller row. NOT SEEN: a
+picture in that row at its new size (the rig's player has none; the arm's
+step for it is written and has not run). Build: 0 warnings, csprogs 117,515 definitions; server QC and
+menu untouched.
+
+**Review.** One reviewer, two lenses (what a hostile server gains; the
+states against the cursor), given the code and the engine source. Nothing
+that changes who can link what: the click reaches `acct_browse` and the
+clipboard only, the engine builds the address from this VM's own opener,
+and the consent is still a key. Found and fixed:
+- the first cut claimed the cursor in every state that owned the keyboard,
+  and a typed code's box is a console line and one letter away with no
+  timeout once a letter is in: the view would have frozen with the keys.
+  The claim is now only a link the player started;
+- the cursor's position is the engine's to say and it says it on the first
+  move: a click before that was tested at the last VM's point (0,0 gave the
+  mouse away). Such a click is ignored;
+- a click beside the box was taken from a panel that also had the cursor;
+- the mouse's other buttons and the wheel still ran binds under a view
+  that could not turn;
+- the engine opens one page a second, and a click (or a second Enter)
+  inside that second wrote "no page opened" over a page that had.
+Left as found (BACKLOG): the question for a typed code has no timeout
+(older than this patch).
+
+**Left**: paste into the cells and selection in the text fields are Patch
+655 (it needs an engine change for game code). A click before the cursor has
+moved since the box took it is ignored, by design: the engine says where the
+cursor is only when it moves.
