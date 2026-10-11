@@ -44163,3 +44163,41 @@ where linear light is a curve: motes are fainter than Source's against
 near-black (0.10 under on a 0.04 wall). `vbsp_emit_ratemax 200` still clamps 270
 volumes. The engine carries each mote, undrawn, to LifetimeMax. All in FTESurf
 BACKLOG.
+
+## Patch 654 — An engine before Patch 645 keeps the limit of eight run lines *(MOD ONLY, csprogs)*
+
+**Problem.** Patch 649 raised the board's lines from eight to sixty-four for
+every engine. An engine before Patch 645 has no line builtins, so
+`cl_lines.qc`'s own loop draws them, six vertices a segment (ten for a wide
+line) into one polygon batch, and that engine dies when a batch reaches 32768
+vertices (`PF_R_PolygonEnd`, Patch 645). The 0.1.24 download has such an
+engine, and a client on a lobby runs the lobby's csprogs. Every check of 649
+before its deploy ran on the 645 engine; the old one had been run with eight
+lines only.
+
+**Change.** FTESurf `884d171`, `src/client/cl_scores.qc`: `Scores_LineMax`
+is 64 where `checkbuiltin(lines_draw)` and 8 where not, and the three ways a
+line is ticked ask it (a row's box, the LINE heading, `scores lineat`). The
+refusal says a newer game draws sixty-four. No engine source.
+
+**Verified.** The 649 arm's cfg on a copy of the 625 exe (`183faf44`). With
+649's csprogs `95f30046` eight lines draw and the client dies as the fortieth
+is added, its crash record written that second. With csprogs `827dece4` the
+fifty-six asks past the eighth are refused in words, eight lines draw with
+the 920 segments they had, and the client reaches the end.
+`tools/test_p649lines.py` reads `native builtins 0` in the log and grades
+those three things: 3 of 3, and none on the control's log. On the 645 engine
+the same build is 11 of 11, sixty-four drawn. No review: three call sites
+and one message.
+
+**Known.** Eight WHOLE lines at 3 px still close an engine before 645, as
+before 649; the limit does not count vertices. Both engines were run offline,
+one map, one recording in every slot. Sixty-four lines reach players with a
+release that has the 645 engine. FTESurf BACKLOG, "Run lines on an engine
+before 645".
+
+**Deployed** 2026-10-11 from FTESurf `884d171`: csprogs `827dece4` (with
+Patches 649 and 648) to the Pi at 15:13:07Z with nobody on, twelve lobbies
+restarted and read back, and to both Windows installs at 15:13:51Z with no
+game running. A fresh client on a lobby was served this csprogs and drew the
+board. `.prev` is Patch 648's `88986a28`.
