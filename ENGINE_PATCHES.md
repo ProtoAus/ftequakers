@@ -45884,3 +45884,17 @@ peak fixture model 6/6, with five runtime-only tests not invoked by that model r
 live autohop or owner approval of the shades. Peaks keep their existing
 height-turn meaning and nums visibility; no new energy/speed extremum detector.
 Deployment is recorded separately after destination hashes and live smoke.
+
+**Windows deployed / fleet pending.** Product `b5a704f`, clean committed build
+byte-identical to the tested subject. Both Windows csprogs replaced at
+2026-10-12 06:45:15 UTC, preceding P676 bytes retained in `.prev`; unchanged
+server/menu skipped. CSQC `d6b4d81e8c64261d`, SSQC `7598b0da1cd90ebd`. All 23
+checked native/config hashes and mtimes unchanged; no owner process stopped.
+Both installed engine/program pairs each pass the same isolated runtime 7/7.
+`build.ps1 -Pi` built clean but REFUSED at the player gate: one active player,
+12 fleet rows. No upload/swap/restart, no force override. At 06:48:53 UTC the
+fleet still had one player and its csprogs still hashed to P676 `7d3954d9eb25152d`.
+The lobby change remains pending until a safe empty-fleet deployment; a running
+remote client will still receive P676. Evidence/staging retained under
+`C:/FTESurf-worktrees/labels-677-20261012T0623/`; local restart/map reload loads
+new local QC, but reconnecting to the unchanged fleet does not.
