@@ -45396,4 +45396,18 @@ rewind, and does not suppress cl_prederror. ROADMAP specifies the unbuilt unifie
 acknowledged warp; BACKLOG records the remaining first-command seam and the
 unmeasured loss/reordering/shared-transition cases. Legacy spectator mode was
 checked against the engine enum and compiled, not exercised as a live protocol.
-Deployment is a separate recorded step, not implied by these tests.
+
+**Pi deployment completed by 2026-10-12 02:08:08Z.** Clean QC commit 25746cb;
+normal worktree outputs were byte-identical to the tested isolated pair:
+qwprogs `915dfa31bf20917c`, csprogs `e2f8a9c144201116`. Twelve live lobby rows
+all reported zero players; build.ps1 -Pi uploaded/verified, kept .prev,
+swapped the pair and restarted all twelve. The host hashes matched. A fresh
+isolated client on 27510 loaded CSQC on surf_kitsune, received push *64
+ready/on and ran the prediction hook; the HUD screenshot was inspected.
+Missing imported materials in that overlay are not a renderer acceptance.
+
+**Windows pending.** The guarded dual-install copy refused before opening
+its lock or touching either install because other sessions had live engines.
+Nobody's processes were stopped. The exact pair and guarded copy script are
+retained in C:\FTESurf-worktrees\prediction-20261012-0125; no Windows deployment
+or full reset/rewind prediction is claimed.
