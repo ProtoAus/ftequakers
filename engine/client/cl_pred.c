@@ -440,8 +440,10 @@ CL_PredictUsercmd
   is keyed on the chain's sequences.  Set around the two calls in
   CL_PredictMovePNum and tested beside the hook.*/
 static qboolean cl_pred_localchain;
-void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u)
+static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared)
 {
+	int preflags = 0;
+	vec3_t preorigin;
 	// split up very long moves
 	if (u->msec > 50)
 	{
@@ -454,13 +456,14 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 		if (split.msec > 500)
 		{
 			split.msec = 500;
-			CL_PredictUsercmd (pnum, entnum, from, to, &split);
+			CL_PredictUsercmdPart (pnum, entnum, from, to, &split, offsetmsec, carrier_cleared);
 		}
 		else
 		{
-			CL_PredictUsercmd (pnum, entnum, from, &temp, &split);
+			CL_PredictUsercmdPart (pnum, entnum, from, &temp, &split, offsetmsec, carrier_cleared);
+			offsetmsec += split.msec;
 			split.msec = u->msec - split.msec;
-			CL_PredictUsercmd (pnum, entnum, &temp, to, &split);
+			CL_PredictUsercmdPart (pnum, entnum, &temp, to, &split, offsetmsec, carrier_cleared);
 		}
 		return;
 	}
@@ -480,13 +483,6 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	instead of wrong.
 	*/
 	VectorClear (pmove.basevelocity);
-	/*FTESurf Patch 337: the frame half of the basevelocity mirror -- restore
-	  the held carrier/armed state the previous command's hook left in the
-	  sequence-keyed ring, pay the Patch 249 cash-out if nothing re-armed it,
-	  and hand the window to pmove.basevelocity, exactly as the server's
-	  SV_BaseVelocityFrame does in PreThink before SV_RunCmd.*/
-	if (cl_pred_localchain)
-		CSQC_PredictConsumeBaseVel(pnum, u->sequence);
 	VectorCopy (from->gravitydir, pmove.gravitydir);
 
 	if (IS_NAN(pmove.velocity[0]))
@@ -517,6 +513,16 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	VectorCopy(from->szmins, pmove.player_mins);
 	VectorCopy(from->szmaxs, pmove.player_maxs);
 
+	if (cl_pred_localchain)
+	{
+		preflags = CSQC_PredictPlayerPreMove(pnum, u, offsetmsec);
+		if (preflags & PMPI_CLEARCARRIER)
+			*carrier_cleared = true;
+		/* Clear before cash-out, and never restore sequence-1 after a clear
+		   in an earlier piece of this same logical input command. */
+		CSQC_PredictConsumeBaseVel(pnum, u->sequence, !*carrier_cleared);
+	}
+	VectorCopy(pmove.origin, preorigin);
 	PM_PlayerMove (cl.gamespeed);
 
 	/*FTESurf Patch 335: the CSQC trigger hook, between the move and the
@@ -524,7 +530,12 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	  propagates down the rest of the replay chain.  Local chain only -- see
 	  cl_pred_localchain.*/
 	if (cl_pred_localchain)
-		CSQC_PredictPlayerMove(pnum, u, from->origin);
+	{
+		if (preflags & PMPI_HOLD)
+			CSQC_PredictSaveBaseVel(pnum, u->sequence);
+		else
+			CSQC_PredictPlayerMove(pnum, u, preorigin);
+	}
 
 	to->waterjumptime = pmove.waterjumptime;
 	to->jump_held = pmove.jump_held;
@@ -539,12 +550,18 @@ void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state
 	to->onground = pmove.onground;
 
 	to->weaponframe = from->weaponframe;
-	to->pm_type = from->pm_type;
+	to->pm_type = pmove.pm_type;
 
 	VectorCopy(pmove.player_mins, to->szmins);
 	VectorCopy(pmove.player_maxs, to->szmaxs);
 }
 
+
+void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u)
+{
+	qboolean carrier_cleared = false;
+	CL_PredictUsercmdPart(pnum, entnum, from, to, u, 0, &carrier_cleared);
+}
 
 //Used when cl_nopred is 1 to determine whether we are on ground, otherwise stepup smoothing code produces ugly jump physics
 void CL_CatagorizePosition (playerview_t *pv, float *org)

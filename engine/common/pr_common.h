@@ -1186,6 +1186,7 @@ enum
 	globalfunction(CSQC_Parse_Event,		"void()")	\
 	globalfunction(CSQC_Parse_Damage,		"float(float save, float take, vector inflictororg)")	\
 	globalfunction(CSQC_Parse_SetAngles,	"float(vector angles, float isdelta)")	\
+	globalfunction(CSQC_PredictPlayerPreMove, "void(float seat, float cmdsequence, float seconds, float offsetseconds)")/*optional pre-input boundary, called again on replay*/ \
 	globalfunction(CSQC_PredictPlayerMove,	"void(float seat, float cmdsequence, float msec)")/*FTESurf Patch 335: per-predicted-usercmd trigger hook*/	\
 	globalfunction(CSQC_PlayerInfoChanged,	"void(float playernum)")	\
 	globalfunction(CSQC_ServerInfoChanged,	"void()")	\
@@ -1270,6 +1271,13 @@ enum
 	globalfloat (pmove_jump_held)			/*deprecated. read/written by runplayerphysics*/ \
 	globalfloat (pmove_waterjumptime)		/*deprecated. read/written by runplayerphysics*/ \
 	globalfloat (pmove_onground)			/*deprecated. read/written by runplayerphysics*/ \
+	\
+	globalfloat (predinput_apply)            /*PMPI_* mask; reset to zero before each callback*/ \
+	globalvector(predinput_origin)           /*BODY: origin before this piece of input*/ \
+	globalvector(predinput_velocity)         /*BODY: velocity before input*/ \
+	globalfloat (predinput_onground)          /*BODY: exactly 0 or 1*/ \
+	globalfloat (predinput_pmtype)            /*MODE: PM_NORMAL..PM_6DOF*/ \
+	globalfloat (predinput_forceduck)         /*DUCK: completed posture, 1 stand or 2 duck*/ \
 	\
 	globalvector(predmove_org0)				/*FTESurf P335: origin at the START of the predicted command (ro)*/ \
 	globalvector(predmove_org)				/*FTESurf P335: origin after PM_PlayerMove; QC may rewrite (rw)*/ \

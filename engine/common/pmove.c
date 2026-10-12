@@ -32,6 +32,47 @@ float		frametime;
 
 vec3_t		forward, right, up;
 
+qboolean PM_ApplyPreInput(playermove_t *move, const pmpreinput_t *input)
+{
+	int i;
+	/* Validate the entire selected payload before changing even the carrier. */
+	if (input->flags < 0 || (input->flags & ~PMPI_ALL))
+		return false;
+	if (input->flags & PMPI_BODY)
+	{
+		for (i = 0; i < 3; i++)
+			if (IS_NAN(input->origin[i]) || IS_NAN(input->velocity[i]))
+				return false;
+		if (input->onground != 0 && input->onground != 1)
+			return false;
+	}
+	if ((input->flags & PMPI_MODE) && (input->pm_type < PM_NORMAL || input->pm_type > PM_6DOF))
+		return false;
+	if ((input->flags & PMPI_DUCK) && input->forceduck != 1 && input->forceduck != 2)
+		return false;
+
+	if (input->flags & PMPI_BODY)
+	{
+		VectorCopy(input->origin, move->origin);
+		VectorCopy(input->velocity, move->velocity);
+		move->onground = input->onground;
+		move->safeorigin_known = false;
+	}
+	if (input->flags & PMPI_MODE)
+		move->pm_type = input->pm_type;
+	if (input->flags & PMPI_DUCK)
+	{
+		move->ducked = (input->forceduck == 2);
+		move->ducking = false;
+		move->ducktime = 0;
+	}
+	if (input->flags & PMPI_HOLD)
+		move->cmd.msec = 0;
+	if (input->flags & PMPI_CLEARCARRIER)
+		VectorClear(move->basevelocity);
+	return true;
+}
+
 void PM_Init (void)
 {
 	PM_InitBoxHull();

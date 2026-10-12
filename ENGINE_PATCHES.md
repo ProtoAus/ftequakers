@@ -45474,6 +45474,63 @@ Local map settings need the P671+ engine and a reload; older binaries ignore
 them. No Linux native engine was rebuilt/deployed for P671; only fleet progs
 changed. OS clipboard approval/delivery remains human acceptance.
 
+## Patch 672 — a replayed native boundary before player input
+
+**Problem.** Command placements and hold/release transitions cannot seed the
+player mover through the existing post-move trigger callback. Camera-only
+anticipation is not body prediction. Restoring a carrier after a placement
+would also cash out the old push into the newly placed velocity.
+
+**Change.** Optional `CSQC_PredictPlayerPreMove(seat, sequence, seconds,
+offsetseconds)` runs in the local replay chain after baseline Source/command
+state initialization, before carrier consumption and `PM_PlayerMove`. Its
+independent `predinput_*` staging globals default to no edit every invocation.
+The native `PM_ApplyPreInput` validates selected BODY/MODE/DUCK/HOLD/CLEARCARRIER
+fields atomically. BODY edits origin/velocity/boolean ground; MODE writes back
+the resulting movement mode; DUCK applies the server's completed-posture policy.
+Unselected carried fields stay intact at this boundary. HOLD sets only native
+command duration to zero and skips the CSQC post-trigger callback; it is NOT a
+universal body freeze or save-style MOVETYPE_NONE timer policy.
+
+The existing trigger callback stays after movement. Split commands carry a
+**float** offset (usercmd duration is float), reset on each replay; consumers
+can select their first substep without a render-lifetime latch. A carrier clear
+precedes cash-out, retains earlier history, and prevents later substeps from
+restoring sequence-1's pre-operation carrier. Fresh post-trigger carriers still
+consume within the command. Held pieces save final carrier state even though
+they skip touches. Disabled/absent, nonlocal, listen and restricted hooks remain
+inert. No normal QC callback, wire format, recorder, timer, ranking or Build
+change; no Source movement identity bump.
+
+**Verified.** Paired isolated source at engine `d95c5a0ad` / QC `0789b73` plus
+this candidate: full Windows client/dedicated/five-plugin build, all three QC
+programs and separate fixture compile with zero QC warnings; no new compiler
+or C translation-unit LSP diagnostic (existing warnings retained). Ten acting
+unit groups compile extracted production boundary/bridge/carrier/CL recursion
+against real headers and VM/mover doubles: 0/.5/50.5/51/100.75/101/255 ms replay,
+seeded defaults, no-mask writes, mode/body ordering, carrier clear/fresh re-arm,
+held-only/mixed carrier commits, missing globals and NaN/Inf/invalid selected
+payloads with byte-identical rejection. These doubles are NOT collision physics.
+
+Real dedicated surf_dune with 100 ms server minimum ping and test-only CSQC:
+2,070 no-op probes, 117 moved-body split probes and 44 held split probes; entry
+body/mode readback proves native application, not requested-output printing.
+Disabled callback has an independent native prediction trace heartbeat and
+re-enabled controls. Missing-arm counterfactual graders reject. The same
+fixture on the installed older engine is ignored while the legacy trigger
+hook acts. Two subagent reviews; held-state commit and fractional-offset defects
+found and fixed before acceptance. Restricted-access discovery is source-reviewed,
+not a separately executed hostile-VM test. Test contract: FTESurf
+`tools/p672predinput.md`, `tools/test_predinput.py`, `tools/fixtures/predinput.qc`.
+
+**Limits.** This is the native seam, NOT instant reset/load/hold-release/rewind.
+Server-prepared complete descriptors, scoped requests, admission/application,
+ACK versus operation-bearing body-baseline coverage and frontend activation
+remain unbuilt. QC sequence arguments retain existing float precision limits.
+HOLD still allows mover housekeeping and carrier effects unless independently
+restricted/cleared. No full historical Source-state restore or network-authority
+claim. The fixture is excluded from production compilation/deployment.
+
 ## Patch 667 — paste, behind the engine's own question *(ENGINE + MOD: menu.dat, csprogs)*
 
 The owner's list of 12 Oct asked for text boxes with "full text support,

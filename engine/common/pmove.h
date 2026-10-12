@@ -327,6 +327,23 @@ void PMSrc_LoadState(const pmsourcestate_t *in);
 extern	movevars_t		movevars;
 extern	playermove_t	pmove;
 
+/* Optional pre-input edits. Unselected fields retain their baseline values.
+   This is a mover boundary, not an acknowledgement or a full-state restore. */
+#define PMPI_BODY          1
+#define PMPI_MODE          2
+#define PMPI_DUCK          4
+#define PMPI_HOLD          8   // zero command duration, not a universal body freeze
+#define PMPI_CLEARCARRIER 16
+#define PMPI_ALL          31
+
+typedef struct
+{
+	int flags;
+	vec3_t origin, velocity;
+	int onground, pm_type, forceduck; // forceduck: 1 stand, 2 duck (server policy)
+} pmpreinput_t;
+qboolean PM_ApplyPreInput(playermove_t *move, const pmpreinput_t *input);
+
 void PM_PlayerMove (float gamespeed);
 void PM_Init (void);
 void PM_InitBoxHull (void);

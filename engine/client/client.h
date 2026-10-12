@@ -1605,7 +1605,9 @@ qboolean CSQC_Parse_Damage(int seat, float save, float take, vec3_t source);
 qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta);
 //FTESurf Patch 335: per-predicted-usercmd CSQC trigger hook.
 void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin);
-void	 CSQC_PredictConsumeBaseVel(int seat, int sequence);
+int      CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec);
+void	 CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious);
+void     CSQC_PredictSaveBaseVel(int seat, int sequence);
 void	 CSQC_PredictBaseVelFlush(void);
 void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
 void	 CSQC_PredictAngleFlush(int seat);
@@ -1638,7 +1640,9 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_UseGamecodeLoadingScreen() false
 #define CSQC_Parse_SetAngles(seat,newangles,wasdelta) false
 #define CSQC_PredictPlayerMove(seat,cmd,preorigin)
-#define CSQC_PredictConsumeBaseVel(seat,sequence)
+#define CSQC_PredictPlayerPreMove(seat,cmd,offsetmsec) 0
+#define CSQC_PredictConsumeBaseVel(seat,sequence,restoreprevious)
+#define CSQC_PredictSaveBaseVel(seat,sequence)
 #define CSQC_PredictBaseVelFlush()
 #define CSQC_PredictAngleCorrect(seat,delta)
 #define CSQC_PredictAngleFlush(seat)

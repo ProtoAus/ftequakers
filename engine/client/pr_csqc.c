@@ -242,6 +242,9 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.pmove_org = NULL;	//can't make aimbots if you don't know where you're aiming from.
 		csqcg.pmove_vel = NULL;	//no dead reckoning please
 		csqcg.pmove_mins = csqcg.pmove_maxs = csqcg.pmove_jump_held = csqcg.pmove_waterjumptime = csqcg.pmove_onground = NULL; //I just want to kill theses
+		csqcg.CSQC_PredictPlayerPreMove = 0;
+		csqcg.predinput_apply = csqcg.predinput_origin = csqcg.predinput_velocity = NULL;
+		csqcg.predinput_onground = csqcg.predinput_pmtype = csqcg.predinput_forceduck = NULL;
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
 		csqcg.predmove_bvfired = NULL;
@@ -10369,7 +10372,113 @@ void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 		n >= 0 ? "abs-keep-newer" : m >= 0 ? "abs-match" : "abs-server", n >= 0 ? (int)predsnaps[seat][n].seq : m >= 0 ? (int)predsnaps[seat][m].seq : -1, ang[YAW]);
 }
 
-void CSQC_PredictConsumeBaseVel(int seat, int sequence)
+int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
+{
+	pmpreinput_t input;
+	float flags, value;
+	void *pr_globals;
+	int slot;
+
+	if (!csqcprogs || !csqcg.CSQC_PredictPlayerPreMove || !csqcg.predinput_apply || !cl_predict_qchook.ival)
+		return 0;
+#ifdef HAVE_SERVER
+	if (sv.state != ss_dead)
+		return 0;
+#endif
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return 0;
+
+	CSQC_ChangeLocalPlayer(seat);
+	*csqcg.predinput_apply = 0;
+	if (csqcg.predinput_origin)
+		VectorCopy(pmove.origin, csqcg.predinput_origin);
+	if (csqcg.predinput_velocity)
+		VectorCopy(pmove.velocity, csqcg.predinput_velocity);
+	if (csqcg.predinput_onground)
+		*csqcg.predinput_onground = pmove.onground;
+	if (csqcg.predinput_pmtype)
+		*csqcg.predinput_pmtype = pmove.pm_type;
+	if (csqcg.predinput_forceduck)
+		*csqcg.predinput_forceduck = 0;
+	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+	((float *)pr_globals)[OFS_PARM0] = seat;
+	((float *)pr_globals)[OFS_PARM1] = cmd->sequence;
+	((float *)pr_globals)[OFS_PARM2] = cmd->msec / 1000.0f;
+	((float *)pr_globals)[OFS_PARM3] = offsetmsec / 1000.0f;
+	PR_ExecuteProgram(csqcprogs, csqcg.CSQC_PredictPlayerPreMove);
+
+	/* Check floats before casting; NaN/Inf/out-of-range casts are undefined. */
+	flags = *csqcg.predinput_apply;
+	if (IS_NAN(flags) || flags < 0 || flags > PMPI_ALL || flags != (int)flags)
+		goto invalid;
+	memset(&input, 0, sizeof(input));
+	input.flags = (int)flags;
+	if (input.flags & PMPI_BODY)
+	{
+		if (!csqcg.predinput_origin || !csqcg.predinput_velocity || !csqcg.predinput_onground)
+			goto invalid;
+		VectorCopy(csqcg.predinput_origin, input.origin);
+		VectorCopy(csqcg.predinput_velocity, input.velocity);
+		value = *csqcg.predinput_onground;
+		if (value != 0 && value != 1)
+			goto invalid;
+		input.onground = (int)value;
+	}
+	if (input.flags & PMPI_MODE)
+	{
+		if (!csqcg.predinput_pmtype)
+			goto invalid;
+		value = *csqcg.predinput_pmtype;
+		if (IS_NAN(value) || value < PM_NORMAL || value > PM_6DOF || value != (int)value)
+			goto invalid;
+		input.pm_type = (int)value;
+	}
+	if (input.flags & PMPI_DUCK)
+	{
+		if (!csqcg.predinput_forceduck)
+			goto invalid;
+		value = *csqcg.predinput_forceduck;
+		if (value != 1 && value != 2)
+			goto invalid;
+		input.forceduck = (int)value;
+	}
+	if (!PM_ApplyPreInput(&pmove, &input))
+		goto invalid;
+
+	if (input.flags & PMPI_CLEARCARRIER)
+	{
+		/* Do not erase old history: earlier sequences must still replay it. */
+		VectorClear(pred_bv_held[seat]);
+		pred_bv_armed[seat] = false;
+		slot = (unsigned int)cmd->sequence & (PRED_BVEL_RING - 1);
+		VectorClear(pred_bvring[seat][slot].held);
+		pred_bvring[seat][slot].armed = false;
+		pred_bvring[seat][slot].seq = cmd->sequence;
+		pred_bvring[seat][slot].used = true;
+	}
+	return input.flags;
+invalid:
+	Con_DPrintf("CSQC_PredictPlayerPreMove returned invalid input; ignored\n");
+	return 0;
+}
+
+void CSQC_PredictSaveBaseVel(int seat, int sequence)
+{
+	int slot;
+	if ((unsigned int)seat >= MAX_SPLITS || !cl_predict_qchook.ival)
+		return;
+#ifdef HAVE_SERVER
+	if (sv.state != ss_dead)
+		return;
+#endif
+	slot = (unsigned int)sequence & (PRED_BVEL_RING - 1);
+	VectorCopy(pred_bv_held[seat], pred_bvring[seat][slot].held);
+	pred_bvring[seat][slot].armed = pred_bv_armed[seat];
+	pred_bvring[seat][slot].seq = sequence;
+	pred_bvring[seat][slot].used = true;
+}
+
+void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious)
 {
 	int slot;
 	if (!csqcg.predmove_basevel || !cl_predict_qchook.ival)
@@ -10381,17 +10490,21 @@ void CSQC_PredictConsumeBaseVel(int seat, int sequence)
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return;
 
-	/* restore the state as of the end of the previous command */
-	slot = (unsigned int)(sequence - 1) & (PRED_BVEL_RING - 1);
-	if (pred_bvring[seat][slot].used && pred_bvring[seat][slot].seq == (unsigned int)(sequence - 1))
+	/* After a pre-input clear, subsequent pieces of this logical command
+	   consume newly armed state, never resurrect sequence-1's old carrier. */
+	if (restoreprevious)
 	{
-		VectorCopy(pred_bvring[seat][slot].held, pred_bv_held[seat]);
-		pred_bv_armed[seat] = pred_bvring[seat][slot].armed;
-	}
-	else
-	{
-		VectorClear(pred_bv_held[seat]);
-		pred_bv_armed[seat] = false;
+		slot = (unsigned int)(sequence - 1) & (PRED_BVEL_RING - 1);
+		if (pred_bvring[seat][slot].used && pred_bvring[seat][slot].seq == (unsigned int)(sequence - 1))
+		{
+			VectorCopy(pred_bvring[seat][slot].held, pred_bv_held[seat]);
+			pred_bv_armed[seat] = pred_bvring[seat][slot].armed;
+		}
+		else
+		{
+			VectorClear(pred_bv_held[seat]);
+			pred_bv_armed[seat] = false;
+		}
 	}
 
 	/* (a) the cash-out: horizontal only, because (d) spent the Z already */
@@ -10500,16 +10613,12 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 	if (csqcg.predmove_basevel)
 	{
 		qboolean fired = csqcg.predmove_bvfired ? (*csqcg.predmove_bvfired != 0) : (csqcg.predmove_basevel[0] != 0 || csqcg.predmove_basevel[1] != 0 || csqcg.predmove_basevel[2] != 0);
-		int slot = (unsigned int)cmd->sequence & (PRED_BVEL_RING - 1);
 		if (fired)
 		{
 			VectorCopy(csqcg.predmove_basevel, pred_bv_held[seat]);
 			pred_bv_armed[seat] = true;
 		}
-		VectorCopy(pred_bv_held[seat], pred_bvring[seat][slot].held);
-		pred_bvring[seat][slot].armed = pred_bv_armed[seat];
-		pred_bvring[seat][slot].seq = cmd->sequence;
-		pred_bvring[seat][slot].used = true;
+		CSQC_PredictSaveBaseVel(seat, cmd->sequence);
 	}
 }
 
