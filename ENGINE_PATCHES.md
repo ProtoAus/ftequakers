@@ -45802,3 +45802,37 @@ admission and operation-bearing authoritative baseline coverage remain needed.
 Kind 2 is not original client timing; server integer splitting still differs
 from P672 client splitting. No forced loss/reordering runtime matrix, Linux
 build, fleet deployment, release, Build bump or evidence/ranking change claimed.
+
+## Patch 676 — zone-editor hover help using the HUD-editor tooltips
+
+**Problem.** The completed zone editor's buttons and map properties did not
+explain their actions. Surface tracing could be confused with Surf mode;
+Apply, local saves and map-reload requirements were not obvious.
+
+**Change.** Client-only help text for zone tools, track tabs, zone rows,
+Box/Polygon, edge/grid/XYZ snapping, spawn actions, local-file actions,
+cursor controls and every visible map property. Numeric labels and the active
+text field share their property's explanation. Reuses hud_edit's shared SUI
+mouse-only delay, wrapping, themed chrome and screen clamping. A closed or
+mouse-released zone editor clears only its own tips, not another panel's.
+No native source/pin/tag, server QC, physics, saved-time, evidence, default
+config or Build-number change. Published P674 client/menu and P675 pin/tooling
+work is preserved.
+
+**Verified.** Isolated QC build at published P675 base ed1e2df plus this feature:
+all three programs zero warnings; bytes match the tested P674-based subject
+(P675 changed no normal QC source). Acting pre-change control reaches the same
+existing controls but never shows a zone tooltip. Subject 58/58 covers all
+button classes, zone row, three property labels, active input, initial delay,
+held mouse press, pointer departure, focus loss, Look/fly and close dismissal;
+unchanged zone CRC/count/dirty state and no zone/settings writes. Existing
+HUD-editor help still acts with the zone editor inactive. Wrapped line widths
+and tooltip bounds pass at 1600x900 and 800x600; screenshots inspected.
+P671 hosted regression 18/18 with its required malformed-settings overlay;
+P673 hosted spawn/mode/settings regression 12/12. Test fixtures retain their
+pre-claim P675 markers (that number was concurrently published for native work).
+
+**Limits.** Synthetic events are not physical mouse delivery or owner approval
+of the wording/readability. The two earlier patches' full loader/dedicated
+matrix is not repeated for this help-only change. Deployment is recorded
+separately after destination hashes/runtime checks; no deployment claimed here.
