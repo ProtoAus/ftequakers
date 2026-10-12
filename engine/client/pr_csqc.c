@@ -191,6 +191,17 @@ static void CSQC_ChangeLocalPlayer(int seat)
 	}
 }
 
+// FTESurf Patch 675: optional exact-identity exports must be float scalars.
+static float *CSQC_FindCmdContextGlobal(const char *name)
+{
+	etype_t type = ev_void;
+	float *value = (float *)PR_FindGlobal(csqcprogs, name, 0, &type);
+	if (!value || (type & 0xfff) != ev_float)
+		return NULL;
+	*value = 0;
+	return value;
+}
+
 static void CSQC_FindGlobals(qboolean nofuncs)
 {
 	static eval_t junk;
@@ -217,6 +228,9 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 #undef globalentity
 #undef globalstring
 #undef globalfunction
+
+	csqcg.predinput_sequence_lo = CSQC_FindCmdContextGlobal("predinput_sequence_lo");
+	csqcg.predinput_sequence_hi = CSQC_FindCmdContextGlobal("predinput_sequence_hi");
 
 #define ensurefloat(name)	do{if (!csqcg.name) csqcg.name = &junk._float;}while(0)
 #define ensureint(name)		do{if (!csqcg.name) csqcg.name = &junk._int;  }while(0)
@@ -245,6 +259,7 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.CSQC_PredictPlayerPreMove = 0;
 		csqcg.predinput_apply = csqcg.predinput_origin = csqcg.predinput_velocity = NULL;
 		csqcg.predinput_onground = csqcg.predinput_pmtype = csqcg.predinput_forceduck = NULL;
+		csqcg.predinput_sequence_lo = csqcg.predinput_sequence_hi = NULL;
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
 		csqcg.predmove_bvfired = NULL;
@@ -10390,6 +10405,10 @@ int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 
 	CSQC_ChangeLocalPlayer(seat);
 	*csqcg.predinput_apply = 0;
+	if (csqcg.predinput_sequence_lo)
+		*csqcg.predinput_sequence_lo = cmd->sequence & 0xffffu;
+	if (csqcg.predinput_sequence_hi)
+		*csqcg.predinput_sequence_hi = cmd->sequence >> 16;
 	if (csqcg.predinput_origin)
 		VectorCopy(pmove.origin, csqcg.predinput_origin);
 	if (csqcg.predinput_velocity)
