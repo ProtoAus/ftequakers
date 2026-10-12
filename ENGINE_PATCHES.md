@@ -46169,8 +46169,9 @@ material/entity/vertex opacity and authored vertex tint. Animated unlit material
 select the actual UNLIT permutation; additive animated mist masks RGB by direct
 vertex alpha. The Source SDK does not support the rejected inverse-alpha probe.
 
-**Verified:** isolated current-main Windows/QC build, zero new compiler warnings;
-unchanged build-system peer-target warnings retained. Extracted production cache
+**Verified:** clean exact-code-commit full Windows/QC build; identically configured
+parent baseline and subject both emit 423 warning lines, zero new normalized
+warnings. Native exact-commit glyph actor passes. Extracted production cache
 lookup passes concrete type/order matrix, ANY lifecycle, identity flags and
 subpaths; old source fails. Actual VTF loops pass frame-zero and 331-frame-array
 traversal, both environment layouts; old frame-zero control fails. All five
@@ -46185,6 +46186,15 @@ omissions. Full reproducible commands/provenance: FTESurf tools/p683mapvisual.md
 **Limits:** renderamt modes 1..5 are an alpha approximation, not every Source
 blend mode. Mist fade acts, but exact reference brightness/background seams are
 not accepted as solved. Native secret-button activation did not ACT in the
-harness; target fan-out/visibility did. Rise/water regressions, exact clean-commit
-build and deployment verification remain pending at this entry's initial claim.
-No evidence semantics, collision policy, QC Build-number or release bump.
+harness; target fan-out/visibility did. Rise native screenshot/UNLIT permutation
+and Monster Jam resolved water/glass masks were inspected; water-in-view pixel
+acceptance remains pending. Exact product commits are engine 6b6c8ab68 and game
+791123cc. At 2026-10-12T18:08:20Z, all 19 Windows native/plugin/program targets and
+rollback hashes verified, protected configs unchanged. Guarded progs-only Pi
+deploy restarted twelve empty lobbies; 18:17:03Z readback proves twelve active
+PIDs/acted UDP sockets, expected progs, retained rollback, health and empty fresh
+directory. Each installed Windows native/menu pair separately downloaded exact
+served CSQC, drew cols8/type14 board, exited normally with zero QC/smoke errors;
+both screenshots inspected. Linux native/plugin were not shipped. Public final
+provenance is in FTESurf tools/p683mapvisual.md. No evidence semantics, collision
+policy, QC Build-number or release bump.
