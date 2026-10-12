@@ -45836,3 +45836,18 @@ pre-claim P675 markers (that number was concurrently published for native work).
 of the wording/readability. The two earlier patches' full loader/dedicated
 matrix is not repeated for this help-only change. Deployment is recorded
 separately after destination hashes/runtime checks; no deployment claimed here.
+
+**Deployed.** Product `90790c5`, clean committed QC build byte-identical to the
+subject above. Both Windows csprogs replaced at 2026-10-12 06:19:01 UTC, P674
+predecessors kept as `.prev`; identical qwprogs/menu skipped. Native binaries,
+plugins and protected owner/default/config hashes/mtimes unchanged; no owner
+process stopped. Twelve fresh zero-player fleet rows permitted `build.ps1 -Pi`:
+remote pair hashes checked, swapped with `.prev`, all twelve lobbies restarted
+by 06:20:42 UTC. CSQC `7d3954d9eb25152d6`, SSQC `7598b0da1cd90ebd` (unchanged).
+Fresh live connections with both installed clients/program pairs show Surface
+and Map properties tips, dismiss on close and complete without command/VM
+errors; synthetic focus/hover only. At 06:28 UTC, twelve fresh heartbeats,
+health OK, zero players. Owned staging/evidence retained under
+`C:/FTESurf-worktrees/zetips-01a12ea0/`; source is published, no task game/server
+process remains. Restart/reconnect for new client code; wording/physical mouse
+acceptance is still the owner's.
