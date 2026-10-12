@@ -45852,6 +45852,41 @@ health OK, zero players. Owned staging/evidence retained under
 process remains. Restart/reconnect for new client code; wording/physical mouse
 acceptance is still the owner's.
 
+## Patch 678 — inert server-only movement policy preparation (2026-10-12)
+
+**APPLIED — MOD-SIDE ONLY.** FTESurf `src/server/sv_moveprep.qc`, server source
+listing and test fixture/tool; no native engine C/header/binary change.
+
+**Problem:** P672/P675 supply the pre-input seam and exact command context, not
+complete operation state. Save files do not serialize all native mover history;
+sequence equality alone does not establish unchanged movement content. Reusing
+the movement-producing load/create funnels for preparation would mutate gameplay.
+
+**Change:** side-effect-free save-load and current-hold release POLICY builders,
+caller-owned output and explicit not-ready statuses. Resolve id+seq in the fresh
+owner/map block, independently reread load movement fields, strict bounded parsing,
+rewound rwvel/demotion rules. Release has both block bounds, current aim/native
+history preservation and no new disk dependency. Enumerate KEEP/CLEAR/SET policies
+for all twelve pmsourcestate_t fields plus body/mode/ground/carrier/gravity/jump.
+READY describes this call only; no content/connection epochs or persistent cache.
+No normal caller/client callback, requests, admission, movement application,
+operation-bearing body baseline, save/rec format, timer/ranked or Build change.
+Native pin/tag and installed executables remain unchanged.
+
+**Verified:** all three normal VMs and final fixtures compile with zero warnings.
+Dedicated subject: **66 checks, 0 failed**, including independent row AND disk
+movement changes, stable identity after compaction, malformed/bounded input,
+owner/lower+upper bounds, explicit history policies and actual unchanged
+Load/Hold/Release parity. Forced-READY weak validation: **23/66 fail as expected**,
+including required acting stale-velocity marker. Reader **306/0**, unchanged reader
+bytes; corpus **270 recs / 91 views / 170 existing faults**, no source-induced
+increase. Initial compiler/fixture/path and 3/52 attribution-fixture failures are
+retained, not passes. No collision, cache-generation, prediction, ACK coverage or
+network-loss acceptance claim. No Windows/fleet deployment for this inert slice.
+Next: lifecycle/reset/rewind builders, exact bounded admission, then
+PEXT2_REPLACEMENTDELTAS authoritative body-baseline reconciliation. Public contract:
+FTESurf `tools/p678moveprep.md`.
+
 ## Patch 677 — run/demo label colours, triangle peaks and single autohop marks (2026-10-12)
 
 **Problem.** Speed and energy shared the contact glyph's colour. Tops and
