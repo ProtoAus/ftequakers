@@ -45411,3 +45411,55 @@ its lock or touching either install because other sessions had live engines.
 Nobody's processes were stopped. The exact pair and guarded copy script are
 retained in C:\FTESurf-worktrees\prediction-20261012-0125; no Windows deployment
 or full reset/rewind prediction is claimed.
+
+## Patch 671 — editable zone outlines, window controls and local map rules
+
+**Problem.** The first zone editor only creates boxes, holds the cursor while
+its panel is open, and cannot be moved. Grid changes can leave a pulled top Z
+between grid planes. There is no list double-click teleport or map speed-cap
+editor. Ordinary QC cvar writes are not a solution: the engine's movement lock
+restores the canonical map/mode values before movement.
+
+**Change.** The jump-bound physical key toggles window/view control, including
+an in-progress outline or number field. The title drags and clamps to the
+screen; taken presses own their releases across toggles/close/bind/map changes.
+Top-Z snaps absolutely, and Snap XYZ validates/snap-rounds a selected ring and
+both Z planes. Polygon mode clicks a simple XY outline (up to 64 points),
+closes with Enter/first corner and pulls a Z cap. Crossed/collapsed outlines
+are refused before replacing a zone; a concave default spawn is inside the
+ring rather than its bounding box. Corner snap wins over edge projection;
+nearby existing zone edges are available, not BSP mesh edges. Double-click
+uses the existing server warp/rewind handling, with a matching geometry CRC
+required before accepting the client index.
+
+The menu stages six bounded numeric map settings: max velocity, gravity,
+air/ground acceleration, max ground speed and friction. A candidate is read
+back and replaces the local file with a `.prev` predecessor/rollback. Engine
+`SV_LoadEditorRuleset` validates the whole <=4096-byte allowlist and adds/updates
+canonical entries in the existing per-map load/lock window. Nothing is executed
+as cfg code. Dedicated servers and public lobbies never read these editor
+files. Existing map-clear/load machinery supplies the next map's own defaults.
+No receipt, input journal, replay verifier, ranked policy or Build change.
+
+**Verified.** Clean worktrees rebased onto QC feab052 and engine bd6cf6d91,
+not the canonical engine's dirty build57 checkout. Windows client/dedicated/
+plugins built; QC zero warnings, no new sv_phys.c compiler/LSP diagnostic.
+`cfg/test/p671zoneedit.cfg` and `tools/test_p671zoneedit.py` exercise press
+ownership/repeat/release, title drag/clamp, corner/edge/Z controls, actual
+server teleport and mismatch refusal, concave save/readback/spawn, invalid
+outline refusal, numeric field backspace/jump/Enter and repeated settings
+replacement. Actual engine values distinguish 10000/800/150 from the saved
+6000/700/125, then restore the next map's rules; a public-lobby guard retains
+its normal map values. Nine real loader arms include valid and partial,
+unknown-name, duplicate, extra-token, NaN, out-of-range, oversized and embedded
+NUL files. A real dedicated socket ignores a valid 9000 override; console and
+synthetic cursor/button attempts cannot write it. P669 hosted/remote regression
+controls still act. Fixture labels retain their initial P670 protocol; the
+patch allocation moved to 671 after the independent P670 was published.
+
+**Limits.** OS mouse/key delivery remains human acceptance in lextest.md. Steam
+admin access and NanoPi zone/settings publication are NOT implemented: the
+owner must confirm Proto's exact Steam identity and the review/existing-times
+policy. No display-name grants, private credentials, upload or board mutation.
+Local map settings need the P671+ engine and a reload; older binaries ignore
+them. No Linux/native fleet build or deployment is claimed by these controls.
