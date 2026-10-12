@@ -6733,43 +6733,7 @@ static void QCBUILTIN PF_resourcestatus(pubprogfuncs_t *prinst, struct globalvar
 	}
 }
 
-/*static void PF_cs_clipboard_got(void *ctx, const char *utf8)
-{
-	void *pr_globals;
-	unsigned int unicode;
-	int error;
-
-	while (*utf8)
-	{
-		unicode = utf8_decode(&error, utf8, &utf8);
-		if (error)
-			unicode = 0xfffdu;
-
-		if (!csqcprogs || !csqcg.input_event || CSIE_PASTE >= dpcompat_csqcinputeventtypes.ival)
-			return;
-	#ifdef TEXTEDITOR
-		if (editormodal)
-			return;
-	#endif
-
-		pr_globals = PR_globals(csqcprogs, PR_CURRENT);
-		G_FLOAT(OFS_PARM0) = CSIE_PASTE;
-		G_FLOAT(OFS_PARM1) = 0;
-		G_FLOAT(OFS_PARM2) = unicode;
-		G_FLOAT(OFS_PARM3) = 0;
-
-		qcinput_scan = G_FLOAT(OFS_PARM1);
-		qcinput_unicode = G_FLOAT(OFS_PARM2);
-		PR_ExecuteProgram (csqcprogs, csqcg.input_event);
-		qcinput_scan = 0;	//and stop replay attacks
-		qcinput_unicode = 0;
-	}
-}
-static void QCBUILTIN PF_cs_clipboard_get(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
-{
-	clipboardtype_t cliptype = G_FLOAT(OFS_PARM0);
-	Sys_Clipboard_PasteText(cliptype, PF_cs_clipboard_got, prinst);
-}*/
+//FTESurf Patch 667: clipboard_get is below, beside csqc_realkey: it asks the player.
 
 void QCBUILTIN PF_CL_DrawTextField (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
@@ -6793,6 +6757,59 @@ void CL_Receipt_VM(qboolean made);
 void CL_Receipt_VMCode(const void *data, size_t len);
 static qboolean csqc_realkey;	/*and its two budgets: see CSQC_KeyPress*/
 static int csqc_realkey_signs, csqc_realkey_browses;
+
+/*
+  FTESurf Patch 667: PASTE FOR GAME CODE.  Upstream leaves clipboard_get out of
+  this VM ("too risky"): the code is the server's, and a clipboard holds
+  passwords.  Here the builtin exists and hands nothing over: under a device's
+  press of a paste chord (Ctrl+V or Shift+Ins, once a press: CSQC_RealKey) the
+  engine asks the player (pr_clcmd.c, CL_PasteAsk), and a yes comes back as
+  CSIE_PASTE events for the VM that asked.
+*/
+static unsigned int csqc_pastevm;	/*moves whenever a VM is shut*/
+static int csqc_realkey_pastes;	/*a third budget of a press*/
+static int csqc_realkey_code;	/*...and the key that press was of*/
+static qboolean CSQC_RealKey(void);
+void CL_PasteAsk(void (*give)(const unsigned int *text, int chars, unsigned int vm), unsigned int vm);
+void CL_PasteDrop(void (*give)(const unsigned int *text, int chars, unsigned int vm));
+
+static void CSQC_PasteGive(const unsigned int *text, int chars, unsigned int vm)
+{
+	void *pr_globals;
+	int i;
+
+	if (vm != csqc_pastevm)
+		return;
+	for (i = 0; i < chars; i++)
+	{
+		if (!csqcprogs || !csqcg.CSQC_InputEvent || CSIE_PASTE >= dpcompat_csqcinputeventtypes.ival)
+			break;
+		pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+		G_FLOAT(OFS_PARM0) = CSIE_PASTE;
+		G_FLOAT(OFS_PARM1) = 0;
+		G_FLOAT(OFS_PARM2) = text[i];
+		G_FLOAT(OFS_PARM3) = 0;
+		PR_ExecuteProgram (csqcprogs, csqcg.CSQC_InputEvent);
+	}
+}
+/*float(float cliptype) clipboard_get: `cliptype` is not read, it is the clipboard.
+  -> the key being handled is a device's paste chord (so it is not text).*/
+static void QCBUILTIN PF_cs_clipboard_get(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	qboolean chord = false;
+	if (csqc_realkey_code == 'v' || csqc_realkey_code == 'V')	/*not AltGr's Ctrl+Alt*/
+		chord = (keydown[K_LCTRL] || keydown[K_RCTRL]) && !(keydown[K_LALT] || keydown[K_RALT]);
+	else if (csqc_realkey_code == K_INS)
+		chord = (keydown[K_LSHIFT] || keydown[K_RSHIFT]);
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!chord || !CSQC_RealKey())
+		return;
+	G_FLOAT(OFS_RETURN) = 1;
+	if (csqc_realkey_pastes < 1)
+		return;
+	csqc_realkey_pastes--;
+	CL_PasteAsk(CSQC_PasteGive, csqc_pastevm);
+}
 static struct {
 	char *name;
 	builtin_t bifunc;
@@ -7222,7 +7239,7 @@ static struct {
 	{"setmousepos",				PF_cl_setmousepos,				0},		//
 	{"getmousepos",				PF_cl_getmousepos,				344},	// #344 This is a DP extension
 
-//	{"clipboard_get",			PF_cs_clipboard_get,			0},		//don't let csqc read the clipboard right now. its too risky.
+	{"clipboard_get",			PF_cs_clipboard_get,			0},		//FTESurf Patch 667: it asks the player first (upstream: "too risky", and left out).
 	{"clipboard_set",			PF_cl_clipboard_set,			0},		//it can change it though, no real problem there. just kill the program if its filling it with crap.
 	{"acct_sign",				PF_cl_acct_sign,				0},		//FTESurf Patch 625: string(string nonce, float kind)
 	{"acct_random",				PF_cl_acct_random,			0},		//FTESurf Patch 625: string(float bytes)
@@ -7876,7 +7893,9 @@ void CSQC_Shutdown(void)
 {
 	int i;
 	csqc_realkey = false;	/*Patch 625: no VM inherits a key press*/
-	csqc_realkey_signs = csqc_realkey_browses = 0;
+	csqc_pastevm++;	/*Patch 667: nor a question about the clipboard*/
+	CL_PasteDrop(CSQC_PasteGive);
+	csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = 0;
 	CL_Receipt_VM(false);
 	if (csqcprogs)
 	{
@@ -9394,7 +9413,7 @@ static qboolean CSQC_RealKey(void)
 void CSQC_RealKeyAbort(void)
 {
 	csqc_realkey = false;
-	csqc_realkey_signs = csqc_realkey_browses = 0;
+	csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = 0;
 	IN_RealKeyAbort();
 }
 
@@ -9482,7 +9501,8 @@ qboolean CSQC_KeyPress(int key, int unicode, qboolean down, unsigned int devid)
 
 		/*Patch 625: a press (in_generic.c says what one is), and its budget*/
 		csqc_realkey = IN_RealKeyDown();
-		csqc_realkey_signs = csqc_realkey_browses = csqc_realkey ? 1 : 0;
+		csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = csqc_realkey ? 1 : 0;
+		csqc_realkey_code = key;
 		csqckeysdown[key] |= (1u<<devid);
 	}
 	else
@@ -9495,7 +9515,7 @@ qboolean CSQC_KeyPress(int key, int unicode, qboolean down, unsigned int devid)
 		csqc_realkey = false;
 	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_InputEvent);
 	csqc_realkey = false;
-	csqc_realkey_signs = csqc_realkey_browses = 0;
+	csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = 0;
 	qcinput_scan = 0;	//and stop replay attacks
 	qcinput_unicode = 0;
 

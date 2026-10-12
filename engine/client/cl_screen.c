@@ -3789,6 +3789,10 @@ void SCR_DrawTwoDimensional(qboolean nohud)
 
 	SCR_DrawCursor();
 	SCR_DrawSimMTouchCursor();
+	{	/*FTESurf Patch 667: over the cursor and the overlay above, which draw over prompts (pr_clcmd.c)*/
+		void CL_Paste_DrawLast(void);
+		CL_Paste_DrawLast();
+	}
 
 	if (R2D_Flush)
 		R2D_Flush();

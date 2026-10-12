@@ -268,6 +268,9 @@ static void Con_Editor_DoPaste(void *ctx, const char *utf8)
 }
 static void Con_Editor_Paste(console_t *con)
 {
+	extern qboolean key_fromqc;	/*FTESurf Patch 667 (keys.c): not for a key QC handed a console*/
+	if (key_fromqc)
+		return;
 	Sys_Clipboard_PasteText(CBT_CLIPBOARD, Con_Editor_DoPaste, con);
 }
 static void Con_Editor_Save(console_t *con)

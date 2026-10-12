@@ -3227,7 +3227,9 @@ unsigned int utf8_decode(int *error, const void *in, char const**out)
 	else if ((*str & 0xfe) == 0xfc)
 	{
 		//six bytes
-		if ((str[1] & 0xc0) == 0x80 && (str[2] & 0xc0) == 0x80 && (str[3] & 0xc0) == 0x80 && (str[4] & 0xc0) == 0x80)
+		//FTESurf Patch 667: the sixth was read and stepped over untested, so a
+		//string ending in five of them left `out` past its terminator.
+		if ((str[1] & 0xc0) == 0x80 && (str[2] & 0xc0) == 0x80 && (str[3] & 0xc0) == 0x80 && (str[4] & 0xc0) == 0x80 && (str[5] & 0xc0) == 0x80)
 		{
 			l = 6;
 			uc = ((str[0] & 0x01)<<30) | ((str[1] & 0x3f)<<24) | ((str[2] & 0x3f)<<18) | ((str[3] & 0x3f)<<12) | ((str[4] & 0x3f)<<6) | ((str[5] & 0x3f)<<0);
