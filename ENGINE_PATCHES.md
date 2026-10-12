@@ -45736,3 +45736,42 @@ The existing 609 staged local zone files, including bhop_eazy, hash-identically;
 only eleven absent FIT donations were added. No engine code/pin/tag, server QC,
 recorder/evidence, ranking policy, schema, default or Build-number change.
 Deployment provenance is recorded separately after destination verification.
+
+## Patch 675 — exact command identity and scoped authoritative provenance
+
+**Problem.** P672 supplies the replayed pre-input callback, but its float
+sequence argument (and SSQC's existing `input_sequence`) aliases large command
+identities. The server also executes synthetic lastcmd repeats and legacy
+server ticks, and recursively subdivides commands without exposing their
+logical duration/offset. Treating these as decoded client requests would make
+operation correlation unsound.
+
+**Change.** Native SSQC PlayerPreThink optionally receives a complete, typed
+six-float `input_cmd_*` context: exact low/high 16-bit sequence words, top-level
+executed duration, actual piece duration/offset and provenance kind. Decoded
+QW/redundancy recovery is kind 1; FTE timestamp-derived execution is kind 2;
+synthetic/legacy callers, native budget mutation and incomplete/invalid exports
+are unavailable (kind 0, all available fields zero). Context is reseeded before
+PreThink and cleared immediately afterward. P672 also reseeds optional typed
+`predinput_sequence_lo/hi` words on every callback. Legacy callback arguments
+and server/client subdivision policies are unchanged. No consumer, admission,
+operation ACK, descriptor installation or baseline retirement is activated.
+
+**Verified.** Actual-source/native-header units exercise uint32 precision/wrap,
+recursive integer/fractional server timing, synthetic repeats, budget mutation,
+full-QC bypass, null/incomplete exports, invalid timing and typed lookup; P672
+replay/carrier/rejection tests pass with exact-word reseeding. Real dedicated
+QW and FTE fixture runs observe kind 1/2 with split offsets and frame-clear
+controls; a retained P672 server observes 600 unavailable callbacks while the
+original hooks act. Negative graders reject missing/stale controls. Full
+client/dedicated/five-plugin and three-progs build succeeds with no new compiler
+warning kinds versus P672 (QC zero warnings). Recorder suite 306/306; 270-run
+read-only corpus stays at 165 pre-existing faults. Independent source review
+finds no blocker. See FTESurf `tools/p675cmdcontext.md` for bounded contracts.
+
+**Limits.** This is native identity/provenance, not safe instant hold/reset/load/
+rewind. A map/connection epoch, complete prepared descriptors, bounded request
+admission and operation-bearing authoritative baseline coverage remain needed.
+Kind 2 is not original client timing; server integer splitting still differs
+from P672 client splitting. No forced loss/reordering runtime matrix, Linux
+build, fleet deployment, release, Build bump or evidence/ranking change claimed.

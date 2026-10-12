@@ -8184,11 +8184,32 @@ void Sh_CalcPointLight(vec3_t point, vec3_t light);
 SV_RunCmd
 ===========
 */
-void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
+// FTESurf Patch 675: scoped provenance, not operation admission or an ACK.
+// Kind 1 is decoded QW input; kind 2 is FTE timestamp-derived execution.
+// Synthetic loss fill and legacy/server-tick callers use kind 0.
+static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmsec, float offsetmsec)
+{
+	globalptrs_t *g = pr_global_ptrs;
+	qboolean complete = g->input_cmd_kind && g->input_cmd_sequence_lo && g->input_cmd_sequence_hi &&
+		g->input_cmd_msec && g->input_cmd_piece_msec && g->input_cmd_offset_msec;
+	if (!complete || (kind != 1 && kind != 2) || !ucmd ||
+		!isfinite(totalmsec) || !isfinite(offsetmsec) || !isfinite(ucmd->msec) ||
+		totalmsec < 0 || totalmsec > 500 || offsetmsec < 0 || ucmd->msec < 0 ||
+		offsetmsec + ucmd->msec > totalmsec)
+		kind = 0;
+	if (g->input_cmd_kind) *g->input_cmd_kind = kind;
+	if (g->input_cmd_sequence_lo) *g->input_cmd_sequence_lo = kind ? (ucmd->sequence & 0xffffu) : 0;
+	if (g->input_cmd_sequence_hi) *g->input_cmd_sequence_hi = kind ? (ucmd->sequence >> 16) : 0;
+	if (g->input_cmd_msec) *g->input_cmd_msec = kind ? totalmsec : 0;
+	if (g->input_cmd_piece_msec) *g->input_cmd_piece_msec = kind ? ucmd->msec : 0;
+	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
+}
+
+static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec)
 {
 	edict_t		*ent;
 	int			i, n;
-	int			oldmsec;
+	int			oldmsec, firstmsec;
 	qboolean jumpable;
 	qboolean held = false;	//FTESurf Patch 380
 	vec3_t new_vel;
@@ -8271,17 +8292,23 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 	}
 
 
+	// Budget enforcement can shorten input. Do not advertise the original boundary then.
+	if (!recurse && ucmd->msec != totalmsec)
+		kind = 0;
 	cmd = *ucmd;
 
 	// chop up very long commands
 	if (cmd.msec > 50)
 	{
 		oldmsec = ucmd->msec;
-		cmd.msec = oldmsec/2;
-		SV_RunCmd (&cmd, true);
-		cmd.msec = oldmsec/2 + (oldmsec&1);	//give them back their msec.
+		// Preserve the existing integer split policy; P672 client splits differ.
+		firstmsec = oldmsec/2;
+		cmd.msec = firstmsec;
+		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec);
+		// Keep the branch budget locally: recursive calls overwrite shared cmd.
+		cmd.msec = oldmsec - firstmsec;
 		cmd.impulse = 0;
-		SV_RunCmd (&cmd, true);
+		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec + firstmsec);
 		return;
 	}
 
@@ -8490,7 +8517,11 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 		else
 #endif
 			if (pr_global_ptrs->PlayerPreThink)
+			{
+				SV_PublishCmdContext(&cmd, kind, totalmsec, offsetmsec);
 				PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->PlayerPreThink);
+				SV_PublishCmdContext(NULL, 0, 0, 0);
+			}
 
 		if (progstype != PROG_QW)
 		{
@@ -9050,6 +9081,17 @@ SV_PostRunCmd
 ===========
 Done after running a player command.
 */
+// Existing callers are deliberately uncorrelatable (spawn, tick, gap-fill).
+void SV_RunCmd(usercmd_t *ucmd, qboolean recurse)
+{
+	SV_RunCmdPart(ucmd, recurse, 0, ucmd->msec, 0);
+}
+
+static void SV_RunCmdNetwork(usercmd_t *ucmd, int kind)
+{
+	SV_RunCmdPart(ucmd, false, kind, ucmd->msec, 0);
+}
+
 void SV_PostRunCmd(void)
 {
 	// run post-think
@@ -9401,7 +9443,7 @@ static double SVFTE_ExecuteClientMove(client_t *controller, unsigned int moveseq
 						split->lastcmd.msec = split->lastcmd.servertime - split->lastruncmd;
 
 						SV_Prompt_Input(split, &split->lastcmd);
-						SV_RunCmd (&split->lastcmd, false);
+						SV_RunCmdNetwork (&split->lastcmd, 2);
 						split->lastruncmd = split->lastcmd.servertime;
 					}
 				}
@@ -9685,16 +9727,16 @@ void SV_ExecuteClientMessage (client_t *cl)
 							if (net_drop > 1)
 							{
 								SV_Prompt_Input(split, &oldest);
-								SV_RunCmd (&oldest, false);
+								SV_RunCmdNetwork (&oldest, 1);
 							}
 							if (net_drop > 0)
 							{
 								SV_Prompt_Input(split, &oldcmd);
-								SV_RunCmd (&oldcmd, false);
+								SV_RunCmdNetwork (&oldcmd, 1);
 							}
 						}
 						SV_Prompt_Input(split, &newcmd);
-						SV_RunCmd (&newcmd, false);
+						SV_RunCmdNetwork (&newcmd, 1);
 						split->lastruncmd = sv.time*1000;
 
 						if (!SV_PlayerPhysicsQC || split->spectator)

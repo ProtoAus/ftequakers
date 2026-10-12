@@ -879,6 +879,17 @@ void PR_Deinit(void)
 	SpectatorDisconnect = 0;
 }
 
+// FTESurf Patch 675: never treat an integer/vector export as a float pointer.
+static pvec_t *SV_FindCmdContextGlobal(const char *name)
+{
+	etype_t type = ev_void;
+	pvec_t *value = (pvec_t *)PR_FindGlobal(svprogfuncs, name, 0, &type);
+	if (!value || (type & 0xfff) != ev_float)
+		return NULL;
+	*value = 0;
+	return value;
+}
+
 void PR_LoadGlabalStruct(qboolean muted)
 {
 	static pvec_t svphysicsmode = 2;
@@ -1024,6 +1035,15 @@ void PR_LoadGlabalStruct(qboolean muted)
 #undef globalstring
 #undef globalvec
 #undef globalfunc
+
+#define cmdglobal(name) pr_globals->name = SV_FindCmdContextGlobal(#name)
+	cmdglobal(input_cmd_kind);
+	cmdglobal(input_cmd_sequence_lo);
+	cmdglobal(input_cmd_sequence_hi);
+	cmdglobal(input_cmd_msec);
+	cmdglobal(input_cmd_piece_msec);
+	cmdglobal(input_cmd_offset_msec);
+#undef cmdglobal
 
 	memset(&evalc_idealpitch, 0, sizeof(evalc_idealpitch));
 	memset(&evalc_pitch_speed, 0, sizeof(evalc_pitch_speed));

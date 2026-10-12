@@ -140,6 +140,14 @@ typedef struct nqglobalvars_s
 	pvec_t *spawnparamglobals[NUM_SPAWN_PARMS];
 	string_t *parm_string;
 	pint_t *serverid;
+
+	// FTESurf Patch 675: read-only native PlayerPreThink command context.
+	pvec_t *input_cmd_kind;
+	pvec_t *input_cmd_sequence_lo;
+	pvec_t *input_cmd_sequence_hi;
+	pvec_t *input_cmd_msec;
+	pvec_t *input_cmd_piece_msec;
+	pvec_t *input_cmd_offset_msec;
 } globalptrs_t;
 
 #define P_VEC(v) (pr_global_struct->v)
