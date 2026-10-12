@@ -14953,12 +14953,18 @@ image_t *Image_TextureIsValid(qintptr_t address)
 image_t *Image_FindTexture(const char *identifier, const char *subdir, unsigned int flags)
 {
 	image_t *tex;
+	unsigned int matchflags = IF_CLAMP|IF_PALETTIZE|IF_PREMULTIPLYALPHA;
+	// ANY is a request-side wildcard; a loading ANY object cannot satisfy a
+	// concrete request until its upload has resolved the actual target type.
+	if ((flags & IF_TEXTYPEMASK) != IF_TEXTYPE_ANY)
+		matchflags |= IF_TEXTYPEMASK;
 	if (!subdir)
 		subdir = "";
 	tex = Hash_GetInsensitive(&imagetable, identifier);
 	while(tex)
 	{
-		if (!((tex->flags ^ flags) & (IF_CLAMP|IF_PALETTIZE|IF_PREMULTIPLYALPHA)))
+		// A frame array and a 2D view of the same asset need separate targets.
+		if (!((tex->flags ^ flags) & matchflags))
 		{
 			if (r_ignoremapprefixes.ival || !Q_strcasecmp(subdir, tex->subpath?tex->subpath:"") || ((flags|tex->flags) & IF_INEXACT))
 			{

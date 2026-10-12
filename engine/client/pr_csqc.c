@@ -6723,7 +6723,7 @@ static void QCBUILTIN PF_resourcestatus(pubprogfuncs_t *prinst, struct globalvar
 */
 	case RESTYPE_TEXTURE:
 		G_FLOAT(OFS_RETURN) = RESSTATE_NOTKNOWN;
-		img = Image_FindTexture(resname, NULL, 0);
+		img = Image_FindTexture(resname, NULL, IF_TEXTYPE_ANY);
 		if (!img)
 			G_FLOAT(OFS_RETURN) = RESSTATE_NOTKNOWN;
 		else

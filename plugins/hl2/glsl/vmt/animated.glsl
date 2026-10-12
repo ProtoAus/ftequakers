@@ -70,6 +70,9 @@
 #endif
 
 varying vec2 tex_c;
+#if defined(VERTEXCOL) || defined(VERTEXALPHA)
+varying vec4 vex_color;
+#endif
 
 #ifndef UNLIT
 varying vec2 lm0;
@@ -90,6 +93,9 @@ varying vec2 lm1, lm2, lm3;
 	#endif
 	#endif
 		tex_c = v_texcoord + e_time * vec2(SCROLL);
+	#if defined(VERTEXCOL) || defined(VERTEXALPHA)
+		vex_color = v_colour;
+	#endif
 		gl_Position = ftetransform();
 	}
 #endif
@@ -134,6 +140,17 @@ varying vec2 lm1, lm2, lm3;
 
 		diffuse_f = texture2D(s_anim, vec3(tex_c, layer));
 		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
+	#ifdef VERTEXCOL
+		diffuse_f.rgb *= vex_color.rgb;
+	#endif
+	#ifdef VERTEXALPHA
+		float coverage = vex_color.a;
+		diffuse_f.a *= coverage;
+		// ONE/ONE blending ignores output alpha; painted fades must mask RGB.
+		#ifdef ADDITIVE
+			diffuse_f.rgb *= coverage;
+		#endif
+	#endif
 
 #ifdef MASKLT
 		if (diffuse_f.a < float(MASK))
@@ -147,6 +164,8 @@ varying vec2 lm1, lm2, lm3;
 
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
+	#elif defined(ADDITIVE)
+		gl_FragColor = fog4additive(diffuse_f);
 	#else
 		//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
 		//fog4() multiplies by regularcolour.a, which on a Source material is a

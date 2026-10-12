@@ -46,12 +46,16 @@
 #define STRENGTH 1.0		// kDefaultEmissiveBlendStrength
 #endif
 
+#ifndef EMISUVSCALE
+#define EMISUVSCALE 1.0,1.0
+#endif
+
 varying vec2 tex_c;
 
 #ifdef VERTEX_SHADER
 void main ()
 {
-	tex_c = v_texcoord;
+	tex_c = v_texcoord * vec2(EMISUVSCALE);
 	gl_Position = ftetransform();
 }
 #endif

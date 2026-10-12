@@ -251,6 +251,7 @@ typedef struct shaderparsestate_s
 	//Shaderpass_BlendFunc, to suppress that function's nextbundle redirect.  See
 	//the comment on the redirect itself.
 	qboolean blendfunc_nonextbundle;
+	qboolean pass0_explicitdepthwrite;
 
 	//for dpwater compat, used to generate a program
 	int dpwatertype;
@@ -3176,6 +3177,13 @@ static void Shader_ProgBlendFunc (parsestate_t *ps, const char **ptr)
 		//pass-level `program` gives pass 0 sub-passes.  See the comment there.
 		ps->blendfunc_nonextbundle = true;
 		Shaderpass_BlendFunc(ps, ptr);
+		// A completed opaque pass may have acquired an implicit depth write
+		// before progblendfunc turned it translucent. Keep authored masks only.
+		if (!ps->pass0_explicitdepthwrite &&
+			(ps->pass->shaderbits & SBITS_BLEND_BITS) &&
+			(ps->pass->shaderbits & SBITS_BLEND_BITS) !=
+			(SBITS_SRCBLEND_ONE | SBITS_DSTBLEND_ZERO))
+			ps->pass->shaderbits &= ~SBITS_MISC_DEPTHWRITE;
 		ps->blendfunc_nonextbundle = false;
 		ps->pass = NULL;
 	}
@@ -4518,6 +4526,8 @@ static void Shaderpass_DepthWrite (parsestate_t *ps, const char **ptr)
 	shaderpass_t *pass = ps->pass;
 	shader->flags |= SHADER_DEPTHWRITE;
 	pass->shaderbits |= SBITS_MISC_DEPTHWRITE;
+	if (pass == shader->passes)
+		ps->pass0_explicitdepthwrite = true;
 }
 
 static void Shaderpass_NoDepthTest (parsestate_t *ps, const char **ptr)
@@ -6317,15 +6327,11 @@ static void Shader_Finish (parsestate_t *ps)
 		(gl_backend.c:3289-3293), which is exactly why the reported artefact was
 		a fog colour and not a depth hole.
 
-		NARROW ON PURPOSE -- additive only, not every blend.  A `progblendfunc
-		src_alpha one_minus_src_alpha` shader (every $translucent material that
-		emits a program: glass, and a lot of it) also writes depth here, and by
-		the same argument probably should not.  That is a bigger, older question
-		about sort order on a lot of maps, and it is not this patch's to answer;
-		changing it as a side effect of a fog fix is how a fog fix becomes a
-		regression report about glass.  Recorded, not acted on.
+		Ordinary transparency has the same rule: alpha-zero label pixels must
+		not stamp square depth holes into later translucent portal doors.
 		*/
-		if ((pass->shaderbits & SBITS_BLEND_BITS) != (SBITS_SRCBLEND_ONE|SBITS_DSTBLEND_ONE))
+		if (!(pass->shaderbits & SBITS_BLEND_BITS) ||
+			(pass->shaderbits & SBITS_BLEND_BITS) == (SBITS_SRCBLEND_ONE|SBITS_DSTBLEND_ZERO))
 			pass->shaderbits |= SBITS_MISC_DEPTHWRITE;
 		pass->rgbgen = RGB_GEN_IDENTITY;
 		pass->alphagen = ALPHA_GEN_IDENTITY;
@@ -9263,15 +9269,22 @@ void Shader_ShaderPasses_f(void)
 			(s->flags & SHADER_HASDIFFUSE)?" HASDIFFUSE":"",
 			s->sort, s->numpasses,
 			(s->prog && s->prog->name)?s->prog->name:"<none>");
+		if (s->defaulttextures)
+			Con_Printf("    images: diffuse=%s lower=%s fullbright=%s\n",
+				s->defaulttextures->base?s->defaulttextures->base->ident:"<none>",
+				s->defaulttextures->loweroverlay?s->defaulttextures->loweroverlay->ident:"<none>",
+				s->defaulttextures->fullbright?s->defaulttextures->fullbright->ident:"<none>");
 		for (j = 0; j < s->numpasses; j++)
 		{
 			shaderpass_t *p = &s->passes[j];
-			Con_Printf("    pass %i: texgen=%-3i tcgen=%-3i(%s)%s shaderbits=0x%x\n",
+			Con_Printf("    pass %i: texgen=%-3i tcgen=%-3i(%s)%s shaderbits=0x%x prog=%s merged=%u\n",
 				j, (int)p->texgen, (int)p->tcgen,
 				((unsigned)p->tcgen < countof(tcgennames))?tcgennames[p->tcgen]:"?",
 				(p->texgen == T_GEN_LIGHTMAP && p->tcgen != TC_GEN_LIGHTMAP)?
 					" ^1<-- LIGHTMAP SAMPLER WITH NON-LIGHTMAP TCGEN^7":"",
-				(unsigned)p->shaderbits);
+				(unsigned)p->shaderbits,
+				(p->prog && p->prog->name)?p->prog->name:"<none>",
+				(unsigned)p->numMergedPasses);
 		}
 	}
 	if (!shown)

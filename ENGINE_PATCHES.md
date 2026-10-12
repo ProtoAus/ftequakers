@@ -46147,3 +46147,44 @@ completeness acceptance. No native consumer activated. SSQC SHA256
 Public full provenance/rollback/limits: FTESurf `tools/p682deployment.md`,
 documentation commit `837eb004d611cea4bd31798b889d64168ceb7375`. Owned cleanup/
 compact evidence is recorded at the task root; live `.prev` rollback remains.
+
+## Patch 683 -- Source brush visibility and material compositing
+
+**Problem:** surf_kitsune's zero-opacity rainbow brushes rendered outside their
+secret. Translucent Hades2 labels occluded their own portal backgrounds. Demise's
+animated smoke asset was cached as a frame array and then reused by a 2D emissive
+sampler, suppressing the spawn glyph; VTF frame-zero decoding also advanced over
+only one of the stored frames at each mip. Base-less reflective UnlitGeneric
+ramps acquired white diffuse albedo, and additive mist ignored vertex opacity.
+
+**Change:** SSQC separates native opacity/EF_NODRAW from brush Enable/Disable and
+reapplies Source rendermode/renderamt after each input. Shader program fixup
+preserves explicitly authored depth masks, not opaque synthetic defaults for
+alpha/additive leaders. Texture cache identity includes concrete target type;
+request-side ANY remains a wildcard, and CSQC resource status uses it. VTF walks
+all stored frames while retaining requested output frames. Base-less brush
+emissive mapping defaults to Source's 32-unit mapping unless authored/model
+mapping applies. Reflective base-less UnlitGeneric uses reflection-only albedo,
+material/entity/vertex opacity and authored vertex tint. Animated unlit materials
+select the actual UNLIT permutation; additive animated mist masks RGB by direct
+vertex alpha. The Source SDK does not support the rejected inverse-alpha probe.
+
+**Verified:** isolated current-main Windows/QC build, zero new compiler warnings;
+unchanged build-system peer-target warnings retained. Extracted production cache
+lookup passes concrete type/order matrix, ANY lifecycle, identity flags and
+subpaths; old source fails. Actual VTF loops pass frame-zero and 331-frame-array
+traversal, both environment layouts; old frame-zero control fails. All five
+resolved depth-write probes pass. Real dedicated Kitsune fixture records 111
+passing brush states; same-camera hidden -> Alpha75 rainbow -> Alpha0 hidden
+pixels ACT. Native Demise loads both 2D and Array256x256x331 smoke views and renders
+the red glyph with no loose GLSL override; vertex-alpha off restores solid mist
+coverage. Hades2 native labels/backgrounds are visible. Reader suite 306/0.
+Independent reviews found and fixed ANY-preview caching and reflection-opacity
+omissions. Full reproducible commands/provenance: FTESurf tools/p683mapvisual.md.
+
+**Limits:** renderamt modes 1..5 are an alpha approximation, not every Source
+blend mode. Mist fade acts, but exact reference brightness/background seams are
+not accepted as solved. Native secret-button activation did not ACT in the
+harness; target fan-out/visibility did. Rise/water regressions, exact clean-commit
+build and deployment verification remain pending at this entry's initial claim.
+No evidence semantics, collision policy, QC Build-number or release bump.

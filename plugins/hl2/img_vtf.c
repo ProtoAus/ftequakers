@@ -498,15 +498,22 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			if (!h)
 				h = 1;
 			datasize = ((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb;
+			// Every stored frame contributes to the next mip's offset, even when
+			// a sampler2D requests only frame zero. Never stop at output capacity.
+			if (!vtf->numframes || filedata > end ||
+				datasize > (size_t)(end-filedata) / storedfaces / vtf->numframes)
+			{
+				Con_Printf(CON_ERROR"%s: truncated VTF mip level %u\n", fname, miplevel);
+				if (axcraw)
+					plugfuncs->Free(axcraw);
+				plugfuncs->Free(mips);
+				return NULL;
+			}
 			for (frame = 0; frame < vtf->numframes; frame++)
 			{
-				if (miplevel < miplevels && mips->type != PTI_2D_ARRAY)
+				if (frame < frames && miplevel < miplevels && mips->type != PTI_2D_ARRAY)
 				{
 					img = miplevel + frame*miplevels;
-					if (img >= countof(mips->mip))
-						break;	//erk?
-					if (filedata + datasize > end)
-						break;	//no more data here...
 					mips->mip[img].width = w;
 					mips->mip[img].height = h;
 					mips->mip[img].depth = faces;

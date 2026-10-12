@@ -696,6 +696,7 @@ typedef struct
 {
 	char **savefile;
 	char *sourcefile;
+	qboolean modelmaterial;
 	char type[MAX_QPATH];
 	char normalmap[MAX_QPATH];
 	struct
@@ -1021,6 +1022,7 @@ static void Q_StrCat(char **ptr, const char *append)
 }
 
 static qboolean VMT_ReadVMT(const char *materialname, vmtstate_t *st);	//this is made more complicated on account of includes allowing recursion
+static void VMT_EmissiveMappingScale(const char *name, char *args, size_t argsize);
 //nettest: Source .vmt keys/blocks FTE intentionally ignores. Recognise-and-skip them so developer 1 isn't flooded,
 //while a genuinely novel/malformed key or block still reaches the warning below.
 static qboolean VMT_IsKnownIgnoredField(const char *key)
@@ -1699,6 +1701,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			if (!VMT_ReadVMT(value, st))
 				return NULL;
 		}
+		else if (!Q_strcasecmp(key, "$model"))
+			st->modelmaterial = !!atoi(value);
 		else if (!Q_strcasecmp(key, "$basetexture"))	//nettest: $basetexture is the LDR face — make it authoritative
 			Q_strlcpy(st->tex[0].name, value, sizeof(st->tex[0].name));
 		else if (!Q_strcasecmp(key, "$hdrbasetexture"))	//nettest: uncompressed HDR sky face (RGBA16161616F) — native float HDR, used in preference to the LDR $basetexture to kill banding
@@ -2244,6 +2248,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	nothing.
 	*/
 	char progargs[1024];
+	qboolean emisdefaultmapping = st->emisenabled && !st->modelmaterial && !*st->tex[0].name;
 
 	*progargs = 0;
 
@@ -2285,11 +2290,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		currently honouring its cubemap.  At hl2_envmap 0 that leaves a flat white
 		surface, which is still a better answer than a checkerboard.
 
-		KNOWN LIMITATION: what Source actually draws here is the cubemap.  This
-		arm emits a PASS, and a pass cannot sample s_reflectcube -- only the
-		program paths can -- so doing it properly means moving envmap-only
-		UnlitGeneric onto a program, which changes lighting for every other
-		material of that type.  Not done here.
+		Envmap-only UnlitGeneric now has a dedicated reflective program below;
+		other unlit materials keep their own lighting and sampling paths.
 
 		FTESurf Patch 263 drops the UnlitGeneric test that used to gate this.
 
@@ -2759,7 +2761,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcat(progargs, anim, sizeof(progargs));
 		if (animunlit)
 		{
-			Q_strlcat(progargs, "#UNLIT", sizeof(progargs));
+			Q_strlcat(progargs, "#UNLIT=1", sizeof(progargs));
 			vmt_stat_animunlit++;
 		}
 		Q_strlcpy(st->type, "vmt/animated", sizeof(st->type));
@@ -2818,6 +2820,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_snprintfz(t, sizeof(t), "#SCROLL=%f,%f#TINT=%f,%f,%f#STRENGTH=%f", sx, sy, tr, tg, tb, str);
 		Q_strlcat(progargs, t, sizeof(progargs));
 		Q_strlcpy(st->type, "vmt/emissive", sizeof(st->type));
+		if (emisdefaultmapping)
+			VMT_EmissiveMappingScale(st->emisbase, progargs, sizeof(progargs));
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->emisbase, "materials/")?"materials/":"", st->emisbase);
@@ -2867,6 +2871,17 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	$color and $vertexcolor both apply here, where the pass could only have one
 	rgbgen and had to pick.  That is Source's own behaviour, not a liberty.
 	*/
+	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && st->nobasetex && *st->envmap)
+	{
+		// Only authored base-less reflections: never add white diffuse albedo.
+		if (st->vertexcolor)
+			VMT_AddVertexColourArgs(progargs, sizeof(progargs));
+		if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
+			st->wantenvcube = true;
+		Q_strlcpy(st->type, "vmt/unlitreflect", sizeof(st->type));
+		Q_strlcatfz(script, &offset, sizeof(script), "\tprogram \"%s%s%s%s%s\"\n",
+			st->type, progargs, envmaptint, envmapsat, envmapcontrast);
+	}
 	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && VMT_AdditiveProgramOK(st))
 	{
 		if (st->vertexcolor)
@@ -2917,6 +2932,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 		if (st->vertexalpha)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\ralphaGen vertex\n");
+		else if (st->alphaval)
+			Q_strlcatfz(script, &offset, sizeof(script), "\talphaGen const %f\n", st->alphaval);
 		//FTESurf Patch 189: this arm is a real pass, so the engine's own tcMod
 		//does the scroll and no shader permutation is spent on it.
 		if (st->scrollrate != 0 && VMT_ScrollsBase(st->scrollvar))
@@ -4487,6 +4504,32 @@ static qboolean VMT_ReadVMT(const char *fname, vmtstate_t *st)
 	}
 	return false;
 }
+// Base-less brush emissive materials use Source's default 32-unit mapping
+// texture. BSP UVs have been normalized by the mask dimensions instead.
+// Correct only this path; model UVs are already normalized by their author.
+static void VMT_EmissiveMappingScale(const char *name, char *args, size_t argsize)
+{
+	char path[512], scale[80];
+	qbyte *file;
+	size_t len = 0;
+	unsigned int w, h;
+	Q_snprintfz(path, sizeof(path), "materials/%s.vtf", name);
+	file = fsfuncs->LoadFile(path, &len);
+	if (!file)
+		return;
+	if (len >= 20 && !memcmp(file, "VTF\0", 4))
+	{
+		w = file[16] | (file[17] << 8);
+		h = file[18] | (file[19] << 8);
+		if (w && h)
+		{
+			Q_snprintfz(scale, sizeof(scale), "#EMISUVSCALE=%f,%f", w / 32.0f, h / 32.0f);
+			Q_strlcat(args, scale, argsize);
+		}
+	}
+	plugfuncs->Free(file);
+}
+
 const char *VBSP_ColourCorrectScript(const char *name);	//FTESurf Patch 288, mod_vbsp.c
 
 static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
