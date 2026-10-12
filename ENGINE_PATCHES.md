@@ -45753,10 +45753,15 @@ no process/engine/plugin/config/default change or interruption, and no claim
 that that client has loaded the new bytes. Restart to load the local UI.
 Eleven missing-only zone donations rechecked FIT against each install's BSP;
 all 609 prior primary local zones unchanged, including bhop_eazy. Secondary had
-no prior local JSONs. **FLEET PENDING:** one player on a live lobby; no program
-upload/swap/restart/force attempted. Its csprogs remains `825c2b46d41aa8a2`.
-Public connections receive old client code until a zero-player fleet deploy.
-Remaining UI/native/paste/pixel acceptance is still unmeasured. Owned clean
+no prior local JSONs. **FLEET DELIVERED 06:03 UTC:** the initial one-player
+blocker cleared. All 12 live rows were zero-player; clean `61d291d` proof ran
+`build.ps1 -Jobs 8 -Pi` (zero warnings, no force). .new hashes checked before
+swap, .prev retained; live qwprogs `7598b0da1cd90ebd`, csprogs
+`444f921987a6b317` (predecessor `825c2b46d41aa8a2`). All 12 lobbies restarted,
+independent remote hash readback matches, every unit active, fresh zero-player
+heartbeats age0–5s, all 12 UDP status sockets answer. No new engine/config/default
+or zone files shipped to lobbies. Remaining UI/native/paste/pixel acceptance
+is still unmeasured. Owned clean
 proof/evidence retained at `C:/FTESurf-worktrees/ui-maps-20261012T0335Z/`.
 
 ## Patch 675 — exact command identity and scoped authoritative provenance
