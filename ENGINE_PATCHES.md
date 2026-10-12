@@ -45852,6 +45852,52 @@ health OK, zero players. Owned staging/evidence retained under
 process remains. Restart/reconnect for new client code; wording/physical mouse
 acceptance is still the owner's.
 
+## Patch 680 — inert canonical reset/zone movement policy preparation (2026-10-12)
+
+**APPLIED — MOD-SIDE ONLY.** FTESurf server QC and test tooling/documentation;
+no engine C/header/binary or native pin/tag change for this patch.
+
+**Problem:** save-load policy cannot stand in for reset. Restart can resolve a
+latched duplicate region or the newest eligible start-save origin/aim, yet must
+not restore its speed/duck/timer. Raw zone centres bypass authored destinations,
+standing-hull snapping and live fallback choices. Calling the movement funnels
+while preparing would mutate player/timer/recorder state.
+
+**Change:** inert `SV_MovePrepZone`/`SV_MovePrepReset` current-call descriptors.
+Share read-only canonical zone leg/destination and start-save selection halves
+with existing live handlers. Only live wrappers scan, print or cache missing
+named targets. Keep map/stage/bonus and latched/save-backed `!r` choices, active
+same-stage save bypass, explicit yaw/pitch overrides and disabled lobby saves.
+Reset zeroes speed/clears carrier but preserves immediate ground/duck and all
+12 Source history fields; held reset restores walk, noclip keeps mode. Explicit
+forceduck policy separates KEEP from its value. Stale eligible preferences do
+not rescan or invent a zone answer. Timer/recorder transitions stay live only.
+Map/zone/save identities are NOT epochs or retainable admitted requests.
+No production consumer/export, rewind preparation, cache, admission, baseline
+reconciliation, instant prediction, evidence format, ranking/default or Build
+change. Trace builtins still update trace_* scratch globals.
+
+**Verified:** normal server/client/menu and subject/mutant fixtures compile at
+zero warnings. Real dedicated subject **71/0**, plus P678 **66/0** in the same
+run: floor/solid actors; map/stage/bonus/latch/save-backed/goto operation parity;
+named zero yaw, missing-target cache separation, box/void/solid/explicit aim;
+no body/timer/recorder/list/root/table mutation, stale/owner/mode/bounds/output
+refusals. Post-snap save refusal fallback had an acting **2/71** saved-pitch/live
+mismatch; explicit fallback pitch zero fixes it. First high-slab **1/71** control
+had no eligible row and is not evidence. One-factor reset-speed mutant:
+**2/71 expected failures**, required
+acting reset-zero marker, P678 **66/0**. Independent P678 weak validation still
+**23/66 expected failures**. Grader rejects absent/partial/duplicate completion,
+count mismatch and runtime faults (13 grader falsifiers). Reader **306/0**; unchanged reader bytes,
+canonical **270 recs / 91 views / 170 existing faults**, no new corpus faults.
+Initial compiler crashes, absent mount/plugin connections and short-box **1/64**
+fixture failure retained, not passes; isolated compiler probes establish the
+struct-pointer vector-component crash. Broader save-prefix sweep hit an untouched
+directory named run.rec and is not accepted. Public contract/falsifier:
+FTESurf `tools/p680zoneprep.md`. Lifecycle generations and canonical rewind-go,
+then bounded command admission/operation-bearing body baseline remain mandatory.
+No Windows/fleet deployment for this inert slice.
+
 ## Patch 679 — automatic Momentum base assets and CS:GO Legacy discovery (2026-10-12)
 
 **Problem:** surf_666 appeared to require a separate Half-Life 2 installation:
