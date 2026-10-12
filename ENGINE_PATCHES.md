@@ -45852,6 +45852,43 @@ health OK, zero players. Owned staging/evidence retained under
 process remains. Restart/reconnect for new client code; wording/physical mouse
 acceptance is still the owner's.
 
+## Patch 679 — automatic Momentum base assets and CS:GO Legacy discovery (2026-10-12)
+
+**Problem:** surf_666 appeared to require a separate Half-Life 2 installation:
+FTESurf's base mounts and offline scanner assumed HL2, while Momentum supplies
+its own shared hl2_dir.vpk. Existing CS:GO specs also named only the CS2
+csgo_legacy beta layout, not the standalone Source 1 Legacy install. A modern
+CS2 directory without legacy content must not count as an installed Source 1 pack.
+
+**Change:** `engine/common/fs.c` automatically appends only Momentum's
+`mount/hl2_dir.vpk` after configured addons, retaining private/copy-protected
+flags. This works with existing lists, filesystem rebuilds and lazy mount calls;
+no user config or generated dependency rewrite is required. Old Momentum/mount
+specs also select only this VPK, excluding other-game placeholders. The Steam
+resolver accepts both Source 1 CS:GO folder aliases, checks pak01_dir.vpk, and
+keeps explicit Steam-library overrides ahead of auto-discovered installs. Its
+Windows primary-library file probe now returns the absolute game directory,
+not the relative probe filename. The companion QC tree treats Momentum's HL2
+pack as base content, selects either CS:GO layout offline, updates installation
+instructions, and supplies bounded hermetic/runtime tests. No physics, recorder,
+QC Build number, fleet progs or content redistribution change.
+
+**Verified:** clean origin/main-based worktree, paired native client/dedicated
+server/all-five-plugin build via pwsh 7 build.ps1 -Jobs 8 -Engine -Full -NoDeploy;
+QC 0 warnings, changed fs.c 0 warnings (untouched native warnings remain).
+DLL imports match installed Windows dependencies, without missing zlib1.dll.
+`tools/test_source_mounts.py` compiles the actual resolver: 10 passing tests,
+including beta-only, Legacy-only, both, empty stale directory, explicit-root
+precedence, modern-CS2-only rejection and unchanged unrelated probes.
+`tools/test_source_mounts_runtime.py`: acted missing-pack surf_666 control,
+automatic no-HL2 subject, fs_restart dedup/persistence, old dependency-spec arm,
+and surf_tensor2 using each real CS:GO layout all pass; logs and all five
+screenshots inspected. HL2-dependent walls/ceiling recover; three authored
+texture references still miss even with standalone HL2 and are tracked in
+BACKLOG.md. A few checker surfaces remain; this does not claim all map content
+is repaired or that CS:GO replaces every CS:S asset. Linux was not rebuilt.
+First build/harness setup failures were retained, not counted as passing arms.
+
 ## Patch 678 — inert server-only movement policy preparation (2026-10-12)
 
 **APPLIED — MOD-SIDE ONLY.** FTESurf `src/server/sv_moveprep.qc`, server source

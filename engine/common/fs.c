@@ -6544,7 +6544,7 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 	else if ((f = VFSOS_Open(va("%s/%s", basepath, fname), "rb")))
 	{
 		VFS_CLOSE(f);
-		callback(ctx, fname);
+		callback(ctx, basepath);
 		return true;
 	}
 
@@ -6552,9 +6552,7 @@ static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callbac
 	//   this file in two places depending on its vintage and keeps both current, so
 	//   probe both rather than pick.  Sys_SteamParseLibraries handles the old numeric-
 	//   key form and the newer nested "path" form, frees the buffer either way, and
-	//   hands the callback a resolved ABSOLUTE path -- so unlike branch 1's non-empty-
-	//   fname case above (which passes the relative `fname`, upstream's behaviour and
-	//   left alone here) a library hit is always directly mountable.
+	//   hands the callback a resolved ABSOLUTE game directory, like branch 1 above.
 	Q_snprintfz(libdirs, sizeof(libdirs), "%s/steamapps/libraryfolders.vdf", steampath);
 	if (Sys_SteamParseLibraries(callback,ctx, FS_MallocFile(libdirs, FS_SYSTEM, NULL), steamdir, fname))
 		return true;
@@ -7011,6 +7009,30 @@ static qboolean Sys_FindGameData(const char *poshname, const char *gamename, cha
 static qboolean Sys_SteamHasFile(char *steambasedir,size_t steambasedirsize, char *steamdir, char *fname)
 {
 	struct sys_findgamedata_ctx_s ctx = {steambasedir, steambasedirsize, false};
+	char *alternate = NULL;
+
+	//P679: both Source 1 layouts satisfy existing mapdeps/mount specs. A CS2
+	//install directory alone is not enough: require the legacy content pack.
+	if (!*fname)
+	{
+		if (!Q_strcasecmp(steamdir, "Counter-Strike Global Offensive/csgo"))
+			alternate = "csgo legacy/csgo";
+		else if (!Q_strcasecmp(steamdir, "csgo legacy/csgo"))
+			alternate = "Counter-Strike Global Offensive/csgo";
+	}
+	if (alternate)
+	{
+#ifdef FTESURF_STEAMLIBS
+		//Keep explicit library overrides ahead of registry/VDF installs for BOTH aliases.
+		if (Sys_SteamExtraRoots(Sys_FoundGameData, &ctx, steamdir, "pak01_dir.vpk") ||
+			Sys_SteamExtraRoots(Sys_FoundGameData, &ctx, alternate, "pak01_dir.vpk"))
+			return ctx.found;
+#endif
+		if (Sys_SteamDirsWithFile(steamdir, "pak01_dir.vpk", Sys_FoundGameData, &ctx) ||
+			Sys_SteamDirsWithFile(alternate, "pak01_dir.vpk", Sys_FoundGameData, &ctx))
+			return ctx.found;
+		return false;
+	}
 	return Sys_SteamDirsWithFile(steamdir, fname, Sys_FoundGameData,&ctx);
 }
 
@@ -9366,6 +9388,55 @@ void FS_ClearPreferHint(void)
 	fs_preferhint[0] = 0;
 }
 
+#define FS_MOMENTUM_BASE_SPEC "steam:Momentum Mod Playtest/mount"
+
+//P679: mount ONLY Momentum's shared HL2 pack, never its other-game placeholder
+//VPKs. Keep it private and below the configured games; no persistent-list rewrite.
+static qboolean FS_Addon_MountSourceBase(const char *syspath)
+{
+	char pakpath[MAX_OSPATH];
+	searchpath_t *s, *oldpaths = NULL;
+	searchpathfuncs_t *parent, *pak;
+	vfsfile_t *file;
+	int i;
+
+	for (i = 0; i < countof(searchpathformats); i++)
+		if (searchpathformats[i].OpenNew && searchpathformats[i].extension &&
+			!Q_strcasecmp(searchpathformats[i].extension, "vpk"))
+			break;
+	if (i == countof(searchpathformats))
+		return false;	//plugin registration triggers a searchpath rebuild later
+
+	Q_snprintfz(pakpath, sizeof(pakpath), "%s/hl2_dir.vpk", syspath);
+	for (s = com_searchpaths; s; s = s->next)
+		if (!Q_strcasecmp(s->logicalpath, pakpath))
+			return true;
+	file = VFSOS_Open(pakpath, "rb");
+	if (!file)
+		return false;
+	parent = VFSOS_OpenPath(NULL, NULL, syspath, syspath, "");
+	if (!parent)
+	{
+		VFS_CLOSE(file);
+		return false;
+	}
+	//The VPK loader opens its numbered fragments through this temporary parent.
+	pak = FS_OpenPackByExtension(file, parent, "hl2_dir.vpk", pakpath, "");
+	parent->ClosePath(parent);
+	if (!pak)
+		return false;
+	FS_AddPathHandle(&oldpaths, FS_MOMENTUM_BASE_SPEC "/hl2_dir.vpk", pakpath, pak, "",
+		SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE, 0);
+	Con_DPrintf("fs_load: automatic Source base pack \"%s\"\n", pakpath);
+	return true;
+}
+static void FS_Addon_AutoSourceBase(void)
+{
+	char syspath[MAX_OSPATH];
+	if (FS_Addon_ResolveEx(FS_MOMENTUM_BASE_SPEC, syspath, sizeof(syspath), true))
+		FS_Addon_MountSourceBase(syspath);
+}
+
 static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 {
 	char syspath[MAX_OSPATH];
@@ -9374,6 +9445,8 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 
 	if (!FS_Addon_Resolve(arg, syspath, sizeof(syspath)))
 		return false;
+	if (!Q_strcasecmp(arg, FS_MOMENTUM_BASE_SPEC))
+		return FS_Addon_MountSourceBase(syspath);	//old generated deps and saved mounts
 
 	for (s = com_searchpaths; s; s = s->next)	//skip if already mounted
 		if (!Q_strcasecmp(s->logicalpath, syspath))
@@ -9541,7 +9614,10 @@ static void FS_RemountAddons(unsigned int loadstuff)
 
 	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
 	if (!file)
+	{
+		FS_Addon_AutoSourceBase();
 		return;
+	}
 	for (line = file; line && *line; line = nl)
 	{
 		nl = strchr(line, '\n');
@@ -9562,6 +9638,7 @@ static void FS_RemountAddons(unsigned int loadstuff)
 	BZ_Free(file);
 	if (steamfails)
 		FS_SteamHint();
+	FS_Addon_AutoSourceBase();	//below user-ordered games, before any map asset loads
 }
 
 //=================================================================
@@ -9780,6 +9857,7 @@ static void FS_UseAddons_f(void)
 				FS_Addon_Mount(spec, ~0u);	//add-only, dup-safe (~0u = load everything, same as the fs_load command)
 			}
 		}
+		FS_Addon_AutoSourceBase();
 		if (fs_thread_mutex)
 			Sys_UnlockMutex(fs_thread_mutex);
 	}
