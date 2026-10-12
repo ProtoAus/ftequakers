@@ -45851,3 +45851,36 @@ health OK, zero players. Owned staging/evidence retained under
 `C:/FTESurf-worktrees/zetips-01a12ea0/`; source is published, no task game/server
 process remains. Restart/reconnect for new client code; wording/physical mouse
 acceptance is still the owner's.
+
+## Patch 677 — run/demo label colours, triangle peaks and single autohop marks (2026-10-12)
+
+**Problem.** Speed and energy shared the contact glyph's colour. Tops and
+bottoms were both small squares, so neither direction nor colour distinguished
+them. A one-tick autohop displayed a landing beside its jump even though the
+jump already implies ground contact.
+
+**Change.** Client-only `cl_lines.qc`: yellow speed and green energy fields via
+inline colour escapes, still one queued label/shadow pass. Rich-text width
+measurement excludes those escapes; existing diagnostic labels stay plain.
+Closed screen-space triangles, pink pointing up for arc tops and purple down
+for ride bottoms, retain the dark outline. The draw pass skips a ground-contact
+mark only when its immediate next event is a jump from ground at most one
+sample later and jump ink is enabled. Ordinary landings, ramp contacts, walks
+off, and contact ink when jump is disabled remain. No mark classifier, stored
+table, Segments, recorder, physics, engine source/pin/tag, owner/default config,
+evidence or Build-number change. Existing nums/mark switches still govern peaks.
+
+**Verified.** Pre-change control and subject compile all three QC programs
+with zero warnings; server/menu bytes unchanged. Isolated acting-pair runtime
+7/7: coloured label pixels with both fields, each alone and unnamed speed-equivalent
+energy; visibly up/down pink/purple triangle ink; one-contact autohop suppression
+in native replay, imported replay and board line; multi-sample landing+jump and
+walking-off contacts retained; jump/nums/marks switches; unchanged mark, numeric
+label and Segments tables against control. All three requested-change checks
+fail against the acting pre-change control. Screenshots inspected. Existing
+peak fixture model 6/6, with five runtime-only tests not invoked by that model run.
+
+**Limits.** Authored fixtures exercise the shared draw path, not a physical
+live autohop or owner approval of the shades. Peaks keep their existing
+height-turn meaning and nums visibility; no new energy/speed extremum detector.
+Deployment is recorded separately after destination hashes and live smoke.
