@@ -1608,6 +1608,12 @@ static void Cmd_Alias_f (void)
 		a->execlevel = RESTRICT_SERVER;	//server-set aliases MUST run at the server's level.
 		a->restriction = 1;				//and be runnable at the user's level
 	}
+	else if (Cmd_IsInsecure())
+	{	//FTESurf Patch 667: and one made by QC's localcmd at QC's: it ran at its caller's, and the engine calls some by name as the player.
+		a->execlevel = RESTRICT_INSECURE;
+		a->restriction = 1;
+		a->flags |= ALIAS_FROMSERVER;	//not written to a config: `aliaslevel` clamps to the player's level, and it came back as the player's
+	}
 	else
 	{
 		a->execlevel = 0;	//run at users exec level
@@ -1712,6 +1718,13 @@ static void Cmd_AliasLevel_f (void)
 
 	if (Cmd_Argc() == 3)
 	{
+		/*FTESurf Patch 667: the compare below reads a server's 31 as more than the
+		  player's 29, so stuffed text set an alias to run AS THE PLAYER.*/
+		if (Cmd_IsInsecure())
+		{
+			Con_TPrintf("You arn't allowed to raise a command above your own level\n");
+			return;
+		}
 		level = atoi(Cmd_Argv(2));
 		if (level > RESTRICT_MAX)
 		{
@@ -3412,6 +3425,9 @@ void Cmd_ExecuteString (const char *text, int level)
 			if (a->execlevel)
 				execlevel = a->execlevel;
 			else
+				execlevel = level;
+			//FTESurf Patch 667: an insecure caller never runs a body as the player, whatever level the alias was given.
+			if (level >= RESTRICT_INSECURE && execlevel < RESTRICT_INSECURE)
 				execlevel = level;
 		}
 

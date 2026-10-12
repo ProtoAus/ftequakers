@@ -48,6 +48,7 @@ struct key_cursor_s key_customcursor[kc_max];
 int		key_bindmaps[2];
 char	*keybindings[K_MAX][KEY_MODIFIERSTATES];
 qbyte	bindcmdlevel[K_MAX][KEY_MODIFIERSTATES];	//should be a struct, but not due to 7 bytes wasted per on 64bit machines
+qboolean key_fromqc;	/*FTESurf Patch 667: Key_Console is being handed a key by QC (con_input): it pastes nothing*/
 qboolean	consolekeys[K_MAX];	// if true, can't be rebound while in console
 int		keyshift[K_MAX];		// key to map to if shift held down in console
 unsigned int	keydown[K_MAX];	//	bitmask, for each device (to block autorepeat binds per-seat).
@@ -2246,12 +2247,14 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 
 	if (key == K_MOUSE3)
 	{	//middle-click to paste from the unixy primary buffer.
-		Sys_Clipboard_PasteText(CBT_SELECTION, Key_ConsolePaste, line);
+		if (!key_fromqc)	//FTESurf Patch 667: not for a key QC handed over
+			Sys_Clipboard_PasteText(CBT_SELECTION, Key_ConsolePaste, line);
 		return true;
 	}
 	if (((unicode=='V' || unicode=='v' || unicode==22/*sync*/) && ctrl) || (shift && key == K_INS))
 	{	//ctrl+v to paste from the windows-style clipboard.
-		Sys_Clipboard_PasteText(CBT_CLIPBOARD, Key_ConsolePaste, line);
+		if (!key_fromqc)
+			Sys_Clipboard_PasteText(CBT_CLIPBOARD, Key_ConsolePaste, line);
 		return true;
 	}
 
@@ -3800,6 +3803,11 @@ Should NOT be called during an interrupt!
 On some systems, keys and (uni)char codes will be entirely separate events.
 ===================
 */
+/*FTESurf Patch 667: THE KEY THAT ANSWERED THE PASTE PROMPT is nobody's until it
+  comes up.  The prompt took its press and went, and the OS's repeats of a key
+  still held came to game code as presses: a held Enter sent the chat draft it
+  had just pasted into (the review).  A press of it by a device ends this too.*/
+int key_pasteanswer;
 void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down)
 {
 	unsigned int devbit = 1u<<devid;
@@ -3810,6 +3818,15 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 	int modifierstate;
 	int conkey = consolekeys[key] || ((unicode || key == '`') && (key != '`' || key_linepos>0));	//if the input line is empty, allow ` to toggle the console, otherwise enter it as actual text.
 	qboolean wasdown = !!(keydown[key]&devbit);
+
+	key_fromqc = false;	/*a QC error can leave Key_Console by longjmp (pr_menu.c PF_SubConInput)*/
+	if (key_pasteanswer && key == key_pasteanswer)
+	{
+		qboolean IN_RealKeyDown(void);
+		if (down && !IN_RealKeyDown())
+			return;
+		key_pasteanswer = 0;
+	}
 
 //	Con_Printf ("%i : %i : %i\n", key, unicode, down); //@@@
 

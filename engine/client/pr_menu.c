@@ -1325,6 +1325,15 @@ void QCBUILTIN PF_SubConInput (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	G_FLOAT(OFS_RETURN) = 0;
 	if (!con)
 		return;
+	/*FTESurf Patch 667: QC HAS NO KEYS FOR THE PLAYER'S OWN CONSOLE.  Only the
+	  mouse was kept off it; a key QC was handling could be handed to its
+	  input line (Enter runs that line as the player) and a release to its
+	  links.  Our QC never calls this.*/
+	{
+		extern console_t *con_main;	/*console.c*/
+		if (con == con_main && (ie == CSIE_KEYDOWN || ie == CSIE_KEYUP))
+			return;
+	}
 	switch(ie)
 	{
 	case CSIE_KEYDOWN:
@@ -1332,7 +1341,14 @@ void QCBUILTIN PF_SubConInput (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 		if ((pa && qcinput_scan != pa) || (pb && pb != qcinput_unicode))
 			G_FLOAT(OFS_RETURN) = 0;
 		else
+		{	/*FTESurf Patch 667: a key QC hands a console is not a paste there
+			  (keys.c, key_fromqc): the line it would paste into is one QC can
+			  have run or read back.*/
+			extern qboolean key_fromqc;
+			key_fromqc = true;
 			G_FLOAT(OFS_RETURN) = Key_Console(con, MP_TranslateQCtoFTECodes(pa), pb);
+			key_fromqc = false;
+		}
 		break;
 	case CSIE_KEYUP:
 		//scan, char
@@ -2454,6 +2470,88 @@ static void QCBUILTIN PF_m_clipboard_get(pubprogfuncs_t *prinst, struct globalva
 	Sys_Clipboard_PasteText(cliptype, PF_m_clipboard_got, prinst);
 }
 
+/*
+  FTESurf Patch 667: float() clipboard_paste -- OUR MENU'S PASTE.  clipboard_get
+  above answers whoever calls it; this one is asked while this VM is being
+  handed a paste chord (Ctrl+V, Shift+Ins) that a device pressed (-> it was
+  such a chord, so the key is not text), and gives one line (CL_PasteLine) as
+  CSIE_PASTE events.
+  AT ONCE ONLY WITH NOBODY ABOUT: no server, no demo, so no game code and no
+  stuffed text, and what a server left behind (a bind, an alias) keeps its
+  level and is turned away by MP_ConsoleCommand.  With a server about the
+  player is asked first, as for game code (pr_clcmd.c): this VM's test
+  commands feed it keys, clicks and focus, and a chord can come from play.
+  That the builtin exists is how our menu knows it may ask at all.
+*/
+#define MP_PASTE_MAX 256
+static int mp_key_code;	/*the key-down MP_KeyEvent is handing over*/
+static unsigned int mp_pastevm;	/*moves whenever this VM is shut*/
+static unsigned int mp_paste_text[MP_PASTE_MAX];
+static int mp_paste_chars;	/*a line taken and not yet given*/
+qboolean IN_RealKeyDown(void);	/*in_generic.c, Patch 625*/
+int CL_PasteLine(const char *utf8, unsigned int *out, int max);	/*pr_clcmd.c*/
+void CL_PasteAsk(void (*give)(const unsigned int *text, int chars, unsigned int vm), unsigned int vm);
+void CL_PasteDrop(void (*give)(const unsigned int *text, int chars, unsigned int vm));
+/*NEITHER OF THESE TWO RUNS QC.  Windows calls the first with the clipboard
+  open, X11 some frames later from its event loop, the prompt calls the second
+  from Key_Event; a QC error leaves by longjmp (mp_abort), which only an entry
+  into this VM has set.  MP_Paste_Flush hands the line over: from the builtin
+  when the answer came at once, from the next MP_Draw when it did not.*/
+static void MP_Paste_Got(void *ctx, const char *utf8)
+{	/*still nobody about: X11 answers frames later, and a connection can have been made*/
+	if ((unsigned int)(size_t)ctx == mp_pastevm && cls.state == ca_disconnected && !cls.demoplayback)
+		mp_paste_chars = CL_PasteLine(utf8, mp_paste_text, MP_PASTE_MAX);
+}
+static void MP_PasteGive(const unsigned int *text, int chars, unsigned int vm)
+{
+	if (vm != mp_pastevm || chars > MP_PASTE_MAX)
+		return;
+	memcpy(mp_paste_text, text, sizeof(text[0])*chars);
+	mp_paste_chars = chars;
+}
+static void MP_Paste_Flush(void)
+{
+	unsigned int text[MP_PASTE_MAX];
+	int i, chars = mp_paste_chars;
+	void *pr_globals;
+
+	mp_paste_chars = 0;
+	memcpy(text, mp_paste_text, sizeof(text[0])*chars);
+	memset(mp_paste_text, 0, sizeof(mp_paste_text));
+	for (i = 0; i < chars; i++)
+	{
+		if (!menu_world.progs || !mpfuncs.inputevent)
+			return;
+		pr_globals = PR_globals(menu_world.progs, PR_CURRENT);
+		G_FLOAT(OFS_PARM0) = CSIE_PASTE;
+		G_FLOAT(OFS_PARM1) = 0;
+		G_FLOAT(OFS_PARM2) = text[i];
+		G_FLOAT(OFS_PARM3) = 0;
+		PR_ExecuteProgram (menu_world.progs, mpfuncs.inputevent);
+	}
+}
+static void QCBUILTIN PF_m_clipboard_paste(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	qboolean chord = false;
+	if (mp_key_code == 'v' || mp_key_code == 'V')	/*not AltGr's Ctrl+Alt*/
+		chord = (keydown[K_LCTRL] || keydown[K_RCTRL]) && !(keydown[K_LALT] || keydown[K_RALT]);
+	else if (mp_key_code == K_INS)
+		chord = (keydown[K_LSHIFT] || keydown[K_RSHIFT]);
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!chord || !IN_RealKeyDown())
+		return;
+	mp_key_code = 0;	/*one a press*/
+	if (cls.state == ca_disconnected && !cls.demoplayback)
+	{
+		mp_paste_chars = 0;
+		Sys_Clipboard_PasteText(CBT_CLIPBOARD, MP_Paste_Got, (void*)(size_t)mp_pastevm);
+		MP_Paste_Flush();
+	}
+	else
+		CL_PasteAsk(MP_PasteGive, mp_pastevm);
+	G_FLOAT(OFS_RETURN) = 1;	/*last: the events above were calls of their own*/
+}
+
 //FTESurf Patch 465: the map browser's download button.
 //menuqc's localcmd runs at RESTRICT_INSECURE (pr_bgcmd.c PF_localcmd), so a
 //`download maps/foo.bsp` from the menu takes CL_Download_f's SERVER-INITIATED
@@ -2799,6 +2897,7 @@ static struct {
 
 
 	{"clipboard_get",			PF_m_clipboard_get,			0},
+	{"clipboard_paste",			PF_m_clipboard_paste,		0},	//FTESurf Patch 667
 	{"clipboard_set",			PF_cl_clipboard_set,		0},
 
 //	{NULL,						PF_Fixme,					344},
@@ -3172,11 +3271,16 @@ static qboolean MP_KeyEvent(menu_t *menu, qboolean isdown, unsigned int devid, i
 		return false;
 #endif
 
+	mp_key_code = 0;	/*Patch 667: PF_m_clipboard_paste*/
 	if (setjmp(mp_abort))
+	{
+		mp_key_code = 0;
 		return true;
+	}
 
 	if (isdown)
 	{
+		mp_key_code = key;
 #ifndef NOBUILTINMENUS
 #ifdef _DEBUG
 		if (key == 'c')
@@ -3254,6 +3358,7 @@ static qboolean MP_KeyEvent(menu_t *menu, qboolean isdown, unsigned int devid, i
 	else
 		result = false;
 	inmenuprogs--;
+	mp_key_code = 0;
 
 	if (R2D_Flush)	//shouldn't be needed, but in case the mod is buggy.
 		R2D_Flush();
@@ -3294,6 +3399,10 @@ void MP_Shutdown (void)
 #endif
 
 	Cmd_RemoveCommands(MP_ConsoleCommand_f);
+	mp_pastevm++;	/*Patch 667: a line read or asked for is not the next VM's*/
+	mp_paste_chars = 0;
+	memset(mp_paste_text, 0, sizeof(mp_paste_text));
+	CL_PasteDrop(MP_PasteGive);
 
 	Key_Dest_Remove(kdm_menu);
 	key_dest_absolutemouse &= ~kdm_menu;
@@ -3592,6 +3701,20 @@ qboolean MP_ConsoleCommand(const char *cmdtext)
 		return false;
 	if (!mpfuncs.consolecommand)
 		return false;
+	/*FTESurf Patch 667: A CONSOLE LINE FOR THIS VM IS THE PLAYER'S TO TYPE.  It
+	  ran for anyone: stuffed text (RESTRICT_SERVER) and game code's localcmd
+	  (RESTRICT_INSECURE) pass a registered command's restriction compare, and
+	  cmd.c offers EVERY UNKNOWN WORD here whatever its level.  Our menu's test
+	  commands feed it keys, clicks and focus.  HARDENING, NOT A WALL: a level is
+	  kept by a bind (keys.c bindcmdlevel) and, since this patch, by an alias an
+	  insecure level made or calls (cmd.c), and nobody has shown those are the
+	  only roads.  What must not leak has its own gate (the paste prompt).  Both
+	  callers have Cmd_ExecLevel set: a command's handler, and cmd.c's tail.*/
+	if (Cmd_IsInsecure())
+	{
+		Con_DPrintf("menu: \"%s\" is not a server's or game code's to run\n", cmdtext);
+		return false;
+	}
 
 	if (setjmp(mp_abort))
 		return true;
@@ -3790,6 +3913,8 @@ void MP_Draw(void)
 
 	inmenuprogs++;
 	PR_RunThreads(&menu_world);
+	if (mp_paste_chars)
+		MP_Paste_Flush();	/*Patch 667: a line that came late, or by the prompt's yes*/
 
 	pr_globals = PR_globals(menu_world.progs, PR_CURRENT);
 
