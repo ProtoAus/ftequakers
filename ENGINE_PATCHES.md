@@ -45355,3 +45355,45 @@ served that file and drew the board, and a test player on that lobby opened
 a real player's tier 2 (105 of 117 finished), the unrated (71 of 952) and
 their seven times on surf_kitsune in the board. NOT SEEN: a person doing it
 by hand.
+
+## Patch 670 — predict continuous boosters across shared cooldown gates
+
+**Problem.** surf_deoa repeatedly corrected by exactly 6 units. Its nine
+400-unit/s push brushes have duplicate OnEndTouch outputs: immediate !self
+Disable and delayed !self Enable. The client correctly refused to speculate
+that graph, but thereby predicted no push: one 15 ms server tick is 6 units.
+Ignoring the Enable is not safe; the Disable and shared cooldown are real.
+
+**Change.** Continuous server push brushes publish enabled state through a
+five-byte typed extension of the existing CSQC entity stream (type marker,
+type, brush model number, state), with full state for new clients, PVS-independent
+updates and SendFlags loss/retry. SV_IOEnable marks state dirty. The client
+uses that authoritative gate for continuous pushes with Enable/Disable writers,
+including immediate writers affected by other players. No received state means
+no prediction; removal revokes it. Cached wire entities reseed a rebuilt mirror.
+Typed gate entities never allocate a player-body ring. Graph truncation, once
+retirement, speed/name rewrites and movement outputs stay conservative.
+The teleport jump bypass and unconditional speed/push noclip bypass recognise
+both engine spectator movement modes. QC only; engine pin/tag and Build unchanged.
+
+**Verified.** Isolated clean-base worktrees, actual dedicated socket 27589,
+installed client engine patch 658, three progs built with zero warnings.
+`cfg/test/p670prediction.cfg` on surf_deoa: OFF acted with 49 repeated ~6-unit
+corrections; ON had one 6-unit entry seam and no sustained train, with matching
+server booster displacement. The same ON result at 100 ms added packet delay.
+Noclip crossed the brush without a 6-unit train. A second client saw the first
+player's *57 gate on -> off -> on, all nine gates ready, and an independent
+player-body stream (one body, 119 samples, no late/underflow in that arm).
+Reconnect restored all nine gates; new client/old server had all nine NOT ready
+and the expected server-only correction train, not speculative enablement.
+On surf_hourglass noclip+jump stayed in a real fail teleport; releasing jump
+fired the predicted teleport to (104,0,969) and agreed with server viewpos without
+a correction in that release arm. !r separately resolved to (104,0,800) and
+still corrected. Reader regression suite passed; evidence semantics untouched.
+
+**Limits.** This does not body-predict !r, zone moves, save/load, hold release or
+rewind, and does not suppress cl_prederror. ROADMAP specifies the unbuilt unified
+acknowledged warp; BACKLOG records the remaining first-command seam and the
+unmeasured loss/reordering/shared-transition cases. Legacy spectator mode was
+checked against the engine enum and compiled, not exercised as a live protocol.
+Deployment is a separate recorded step, not implied by these tests.
