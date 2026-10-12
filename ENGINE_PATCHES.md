@@ -45474,6 +45474,51 @@ Local map settings need the P671+ engine and a reload; older binaries ignore
 them. No Linux native engine was rebuilt/deployed for P671; only fleet progs
 changed. OS clipboard approval/delivery remains human acceptance.
 
+## Patch 673 — organized zone editing, default spawns and Surf/Bhop presets
+
+**Problem.** The editor's "surf" snap button meant surface tracing, not Surf
+movement. Map properties exposed seldom-edited ground rules but lacked a mode
+preset, manual spawns could not be reset, and construction/file actions and the
+placement hint did not read as the shared interface.
+
+**Change.** Surface snapping is named Surface. Selection/spawn actions,
+construction/snap tools and file/navigation actions have distinct groups with
+a recessed scroll list. Placement uses the shared rounded SUI chrome without
+a second input bracket. Reset spawn removes custom coordinates/name; when the
+bounds centre is outside a concave ring it writes a safe zone-derived floor
+point instead of the server's unsafe centre fallback.
+
+Properties expose speed cap, gravity and optional air acceleration. Surf/Bhop
+presets stage AA150/1000 and hosted mode 1/2, keeping the chosen cap/gravity.
+The native reader validates the whole file before selecting a mode or applying
+numerics. New files contain gamemode plus the three visible keys; complete old
+six-key files and mode-plus-six files stay readable. Unknown, duplicate,
+partial, nonfinite, out-of-range, extra-token and command-looking records apply
+nothing. The existing mode pipeline supplies 0.015/0.01 physics/server clocks,
+client command cadence, jump/mode defaults and restoration; numeric overrides
+still follow trusted per-map rules. Dedicated and public-lobby guards remain.
+No recorder, evidence, ranking, on-disk zone format or native ABI layout is
+changed by this patch. The harness can select an exact inspected dedicated executable.
+
+**Verified.** Pre-claim isolated controls on P671 native base: 27/27 P673
+controls (12 acting editor/mode/spawn checks plus 15 fresh loader arms), P671
+29/29 with exact subject dedicated executable and P669 8/8. Surf replaces forced
+Bhop and restores all three clocks; next unedited map restores its own defaults.
+Spawn setter acts before reset, ordinary save/reload preserves reset, concave
+spawn lies inside the L and empty-selection reset invents nothing. Numeric file
+replacement preserves its Bhop predecessor. Normal/smaller editor/settings/hint
+screenshots inspected. QC compiles zero warnings; native translation-unit LSP
+retains only two pre-existing warnings. Final clean build/subject provenance is
+retained in the owned task checkpoint; claim moved from 672 when the independent
+published pre-input seam claimed that number during testing.
+
+**Limits.** Physical mouse/key/clipboard delivery remains human acceptance.
+Local presets need this native engine and a map reload; no Linux native mode
+loader or ranked-rule deployment is claimed. Steam identity/review policy is
+now confirmed, with explicit times choice (default keep); trusted reviewed
+upload/admin publication is not implemented by this UI patch. No times were
+removed or relabelled, and no role was granted by a client/display-name claim.
+
 ## Patch 672 — a replayed native boundary before player input
 
 **Problem.** Command placements and hold/release transitions cannot seed the

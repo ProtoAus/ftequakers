@@ -3696,25 +3696,33 @@ Loading it only where a mode ruleset was found would have covered none of them.
   Apply only on a hosted game, in the existing pre-lock/pre-movevars window.
   Validate the WHOLE allowlist first. Update an existing canonical entry when
   overriding a map/mode value: SV_MovementCanonical returns the first match.*/
-static void SV_LoadEditorRuleset(const char *mapname)
+typedef struct {
+	char values[6][32];
+	cvar_t *vars[6];
+	unsigned seen;
+	int mode;
+} sv_editorrules_t;
+
+/* P673: mode and numerics share one whole-file validation before either acts.
+   Old six-key files stay valid; new files are mode + the three visible keys. */
+static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out, qboolean report)
 {
 	static const char *names[] = {"sv_maxvelocity", "sv_gravity", "sv_airaccelerate",
-		"sv_accelerate", "sv_maxspeed", "sv_friction"};
-	static const double mins[] = {1, 1, 0, 0, 1, 0};
-	static const double maxs[] = {100000, 10000, 10000, 10000, 10000, 100};
-	char path[MAX_OSPATH], values[6][32], *file, *l, *e, *p, *end;
-	cvar_t *vars[6];
+		"sv_accelerate", "sv_maxspeed", "sv_friction", "gamemode"};
+	static const double mins[] = {1, 1, 0, 0, 1, 0, 1};
+	static const double maxs[] = {100000, 10000, 10000, 10000, 10000, 100, 2};
+	char path[MAX_OSPATH], *file, *l, *e, *p, *end;
 	size_t sz;
-	unsigned seen = 0;
-	int i, j, needed = 0;
+	int i;
 	double v;
 	qboolean valid = true;
 
-	if (isDedicated || Cvar_VariableValue("lobby_enable") || *Cvar_VariableString("lobby_master"))
-		return;
+	memset(out, 0, sizeof(*out));
+	if (!mapname || !*mapname || isDedicated || Cvar_VariableValue("lobby_enable") || *Cvar_VariableString("lobby_master"))
+		return false;
 	Q_snprintfz(path, sizeof(path), "data/maps/settings/local/%s.cfg", mapname);
 	file = FS_LoadMallocFile(path, &sz);
-	if (!file) return;
+	if (!file) return false;
 	if (sz > 4096 || memchr(file, 0, sz)) valid = false;
 	for (l = file; valid && *l; l = e)
 	{
@@ -3722,28 +3730,47 @@ static void SV_LoadEditorRuleset(const char *mapname)
 		if (*e) *e++ = 0;
 		p = COM_Parse(l);
 		if (!*com_token) continue;
-		for (i = 0; i < 6; i++) if (!strcmp(com_token, names[i])) break;
-		if (i == 6 || (seen & (1u << i))) { valid = false; break; }
+		for (i = 0; i < 7; i++) if (!strcmp(com_token, names[i])) break;
+		if (i == 7 || (out->seen & (1u << i))) { valid = false; break; }
 		p = COM_Parse(p);
-		if (!*com_token || strlen(com_token) >= sizeof(values[i])) { valid = false; break; }
+		if (!*com_token || strlen(com_token) >= 32) { valid = false; break; }
 		v = strtod(com_token, &end);
 		if (*end || end == com_token || !(v >= mins[i] && v <= maxs[i])) { valid = false; break; }
-		Q_strncpyz(values[i], com_token, sizeof(values[i]));
+		if (i == 6)
+		{
+			if (v != 1 && v != 2) { valid = false; break; }
+			out->mode = (int)v;
+		}
+		else
+		{
+			Q_strncpyz(out->values[i], com_token, sizeof(out->values[i]));
+			out->vars[i] = Cvar_FindVar(names[i]);
+			if (!out->vars[i]) { valid = false; break; }
+		}
 		COM_Parse(p);
 		if (*com_token) { valid = false; break; }
-		vars[i] = Cvar_FindVar(names[i]);
-		if (!vars[i]) { valid = false; break; }
-		seen |= 1u << i;
+		out->seen |= 1u << i;
 	}
 	FS_FreeFile(file);
-	if (!valid || seen != 63u)
+	if (!valid || (out->seen != 63u && out->seen != 71u && out->seen != 127u))
 	{
-		Con_Printf(CON_WARNING"map_settings: invalid override ignored (%s)\n", path);
-		return;
+		if (report) Con_Printf(CON_WARNING"map_settings: invalid override ignored (%s)\n", path);
+		memset(out, 0, sizeof(*out));
+		return false;
 	}
-	for (i = 0; i < 6; i++)
+	return true;
+}
+
+static void SV_LoadEditorRuleset(const char *mapname)
+{
+	sv_editorrules_t data;
+	char path[MAX_OSPATH];
+	int i, j, needed = 0;
+	if (!SV_ReadEditorRuleset(mapname, &data, true)) return;
+	Q_snprintfz(path, sizeof(path), "data/maps/settings/local/%s.cfg", mapname);
+	for (i = 0; i < 6; i++) if (data.seen & (1u << i))
 	{
-		for (j = 0; j < pms_numover; j++) if (pms_over[j].var == vars[i]) break;
+		for (j = 0; j < pms_numover; j++) if (pms_over[j].var == data.vars[i]) break;
 		if (j == pms_numover) needed++;
 	}
 	if (pms_numover + needed > PMS_MAXOVERRIDE)
@@ -3751,17 +3778,17 @@ static void SV_LoadEditorRuleset(const char *mapname)
 		Con_Printf(CON_WARNING"map_settings: override table full (%s)\n", path);
 		return;
 	}
-	for (i = 0; i < 6; i++)
+	for (i = 0; i < 6; i++) if (data.seen & (1u << i))
 	{
-		for (j = 0; j < pms_numover; j++) if (pms_over[j].var == vars[i]) break;
-		if (j == pms_numover) { pms_over[j].var = vars[i]; pms_numover++; }
+		for (j = 0; j < pms_numover; j++) if (pms_over[j].var == data.vars[i]) break;
+		if (j == pms_numover) { pms_over[j].var = data.vars[i]; pms_numover++; }
 		else Z_Free(pms_over[j].val);
-		pms_over[j].val = Z_StrDup(values[i]);
-		Cvar_ForceSet(vars[i], values[i]);
+		pms_over[j].val = Z_StrDup(data.values[i]);
+		Cvar_ForceSet(data.vars[i], data.values[i]);
 	}
 	Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
 	Con_Printf("map_settings: %s maxvelocity %s gravity %s airaccelerate %s\n",
-		mapname, values[0], values[1], values[2]);
+		mapname, data.values[0], data.values[1], data.values[2]);
 }
 
 static void SV_LoadMapRuleset(const char *mapname)
@@ -3810,6 +3837,7 @@ static void SV_ApplyGamemodeModes(const char *mapname)
 	int mode = 0;
 	const char *src = "none", *cat;
 	svmapmeta_t meta;
+	sv_editorrules_t editor;
 	qboolean havemeta;
 
 	SV_ClearGamemodeOverrides(true);
@@ -3857,7 +3885,15 @@ static void SV_ApplyGamemodeModes(const char *mapname)
 			InfoBuf_SetValueForKey(&svs.info, "maptiersrc", meta.tsrc);
 	}
 
-	if (*sv_gamemode.string && Q_strcasecmp(sv_gamemode.string, "auto"))
+	if (SV_ReadEditorRuleset(mapname, &editor, false))
+	{
+		if (editor.mode)
+		{
+			mode = editor.mode;
+			src = "local editor";
+		}
+	}
+	if (!mode && *sv_gamemode.string && Q_strcasecmp(sv_gamemode.string, "auto"))
 	{
 		int i;
 		if (!Q_strcasecmp(sv_gamemode.string, "none"))
