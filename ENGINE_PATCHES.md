@@ -45463,3 +45463,113 @@ owner must confirm Proto's exact Steam identity and the review/existing-times
 policy. No display-name grants, private credentials, upload or board mutation.
 Local map settings need the P671+ engine and a reload; older binaries ignore
 them. No Linux/native fleet build or deployment is claimed by these controls.
+
+## Patch 667 — paste, behind the engine's own question *(ENGINE + MOD: menu.dat, csprogs)*
+
+The owner's list of 12 Oct asked for text boxes with "full text support,
+highlighting, copy, paste". Patch 655 shipped all but paste and said why: no
+gate QC could keep survived its reviews. He then said of the engine change it
+needed: "do it!". This is it. What stands is not what 655 proposed (keep
+servers off the menu's console commands, then paste in the menu): the first
+review round showed a console line's level is not a wall, so the clipboard
+got a gate of its own.
+
+**The rule.** QC is given clipboard text by the engine and by nothing else.
+A field asks under a V or an Insert going down; the engine alone judges the
+chord (its own key state, a device's press) and reads the clipboard itself.
+- **With a server connected, or a demo playing: the engine asks the player.**
+  One prompt for both VMs (`pr_clcmd.c`), on the prompt stack, where every
+  key-down but the function keys is its own, and drawn last of all. "Paste N
+  characters from your clipboard? Y: paste, any other key: no." It says how
+  many, never which: the screen may be on a stream. Yes is a device's press
+  of Y (by the letter the key types where that is a Latin one, by position
+  otherwise) after the prompt has been drawn for 0.35 s, counted in drawn
+  frames with a frame's share capped; every other press is a no. Not Enter:
+  it is the chat key, and Ctrl and V are bound to crouch and noclip, so a
+  chord can come from play. A yes arrives as `CSIE_PASTE` events, one line,
+  at most 256 characters, no control codes, for the VM that asked.
+- **With nobody about (no server, no demo) the menu pastes at once.** That is
+  the main menu: the name box, the map search.
+- **An older engine has neither builtin**, and there a field pastes nothing:
+  the new csprogs on release 0.1.24's client asks nothing and types the V.
+
+**Engine** (`17b11bc13`, tag `patch-667`):
+- `pr_clcmd.c`: `CL_PasteLine`, the prompt (`CL_PasteAsk`, `CL_PasteDrop`).
+- `pr_csqc.c`: `clipboard_get` for game code (upstream leaves it out as too
+  risky). It hands nothing over; it asks. One a press, beside Patch 625's
+  budgets.
+- `pr_menu.c`: `clipboard_paste` for the menu VM. `MP_ConsoleCommand` turns
+  away a console line from an insecure level, for the commands the VM
+  registered and for the unknown words `cmd.c` offers it (HARDENING: a
+  level is kept by a bind and, since this patch, by an alias, and nobody has
+  shown those are the only roads). `con_input` has no keys for the player's
+  own console.
+- `keys.c`: the key that answered the prompt is nobody's until it comes up
+  (its OS repeats reached game code as presses); a key QC hands a console
+  does not paste there, nor in the editor (`textedit.c`).
+- `cmd.c`: an insecure level cannot raise an alias's level; an alias it makes
+  runs at its own level and is not written to a config; an insecure caller
+  never runs an alias's body as the player.
+- `common.c`: `utf8_decode`'s six-byte form tests its sixth byte (it stepped
+  over it untested).
+
+**Mod**: `sui_sys.qc` (both VMs: `sui_paste_ask`, `sui_paste_char`, the
+field takes a paste over its selection), `m_main.qc` (`Menu_InputEvent`),
+`cl_main.qc` (`CSQC_InputEvent`: a pasted character goes to whichever box has
+the keyboard, the link box first, then a chat draft, then a panel's field,
+and runs no bind), `cl_account.qc` (the four digits and the code),
+`cl_chat.qc`, `cl_profile.qc`, `cl_avatar.qc`.
+
+**Measured**, on the stamped client's own bytes (sha256 `72feb6d5`):
+`tools/p667paste.py` 16 of 16, in a game: a chord pastes nothing by itself;
+Y gives the line and no y; that Y's repeats while held are nobody's; Enter,
+Esc and any other key are a no (and Enter's repeat does not send the chat
+draft); a Y in the prompt's first moment is a no; Shift+Insert asks the same;
+the menu over a game asks too and sees the chord's keys come up; a menu word
+stuffed by the server is not run, nor one behind an alias the server tries
+to raise. `tools/p655text.py` 17 of 17, the menu with no server: a
+keyboard's Ctrl+V and Shift+Insert paste at once, a console-fed one never.
+Regressions on the same bytes: `p663profile` 38 of 38, `p653box` 14 of 14,
+`p647boot` 8 of 8, and the run-line check (`test_p645lines.py`) 28 of 28.
+CONTROLS: on release 0.1.24's client the same QC asks nothing, the V is a
+letter, and the stuffed menu word RUNS (the hole as it was); with the
+release of a key not handed on to the menu, the menu's modifier checks fail
+(2, then 3, where the fix reads 0). The prompt was looked at in the
+screenshots, over the game and over the menu.
+NOT MEASURED: the X11 clipboard's late answer (written for, read by both
+reviewers, never run; the Linux client is not built); a layout other than
+this keyboard's; a person pasting by hand.
+ON THE WAY: two arms' pointer clicks failed twice on these bytes while the
+owner was using the mouse (the desktop's idle time said so afterwards) and
+passed with the desktop idle; the rule in CLAUDE.md about harnesses sharing
+the machine held again.
+
+**Review.** Two reviewers, given the code: what a hostile server gains, and
+control flow and lifetimes. Three rounds each, by reading; the design moved
+after the first (the prompt became the gate for both VMs), and the third
+found no defect. Fixed on the way: the arm's clock (three cuts: from the
+prompt's creation, from the key's queue stamp, then drawn frames), the
+answering key's repeats, the yes key and how it is judged, the menu's
+modifiers left held under the prompt, what draws after it, and the alias and
+console items above, which predate this patch. Left open and written down
+(BACKLOG): `con_input` on a console QC made can still click that console's
+links; `r_speeds` text draws after the prompt; the prompt does not say which
+VM asked.
+
+**Deployed 12 Oct 2026, 02:28 to 02:29 UTC** (FTESurf `3fdd401`; engine
+`17b11bc13`, merged to ftequakers main at `91465d783` because main had moved
+after the binary was stamped). csprogs `a7810a8765916a47` to the Pi's twelve
+lobbies (`build.ps1 -Pi`, nobody on, all restarted, read back; it is Patch
+670's client code with 667 on it, and qwprogs `915dfa31` was swapped for the
+same bytes Patch 670 had put there twenty minutes before). Both Windows
+installs at 02:29:26Z under the rig lock: csprogs `a7810a87` (`.prev`
+`ce9e7607`), menu.dat `a87b88ca` (`.prev` `10cba3c1`), and the client
+`72feb6d55e31eb78`, stamp `git-7249-patch-667-0-g17b11bc13`, as
+`C:\FTESurf\ftesurf64.exe` and `C:\FTEQuake\fteqw64.exe` (`.prev` is the
+patch-658 client `4faa7ff4`). The server exe, the plugins and default.cfg
+untouched; the installs' own qwprogs is NOT Patch 670's (that half is its
+author's to place). Then the lobby smoke on 27510 was served `a7810a87` and
+drew the board on release 0.1.24's client and on the new one, and the
+run-line check read 28 of 28 on the installed files.
+PLAYERS ON RELEASE 0.1.24 get this csprogs from the lobbies and no paste:
+their engine has neither builtin. Paste reaches them with the next release.
