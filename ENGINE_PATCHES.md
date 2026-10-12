@@ -45457,12 +45457,22 @@ synthetic cursor/button attempts cannot write it. P669 hosted/remote regression
 controls still act. Fixture labels retain their initial P670 protocol; the
 patch allocation moved to 671 after the independent P670 was published.
 
+**Deployed.** Published QC `2c540555` / native tag `patch-671` (`dbcaa17a7`):
+all 12 Pi lobbies received qwprogs `7598b0da` / csprogs `6080b34d` and restarted
+at 2026-10-12 03:39:01..11 UTC (zero players, `.prev` kept); Pi native unchanged.
+Both Windows installs at 03:40:54 UTC: client `8fe38e11`, dedicated `d29b8242`,
+all five plugins and all three progs hash-verified. Installed P671 controls
+29/29 (nine retained loader arms on identical native bytes), P669 hosted 8/8;
+a fresh lobby-1 client downloaded exact csprogs and drew the board. Owner/default
+configs unchanged; no peer process stopped. No new release.
+
 **Limits.** OS mouse/key delivery remains human acceptance in lextest.md. Steam
 admin access and NanoPi zone/settings publication are NOT implemented: the
 owner must confirm Proto's exact Steam identity and the review/existing-times
 policy. No display-name grants, private credentials, upload or board mutation.
 Local map settings need the P671+ engine and a reload; older binaries ignore
-them. No Linux/native fleet build or deployment is claimed by these controls.
+them. No Linux native engine was rebuilt/deployed for P671; only fleet progs
+changed. OS clipboard approval/delivery remains human acceptance.
 
 ## Patch 667 — paste, behind the engine's own question *(ENGINE + MOD: menu.dat, csprogs)*
 
