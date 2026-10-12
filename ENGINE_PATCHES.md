@@ -46125,5 +46125,25 @@ whole-native snapshot across subsequent mover commands. Genuine-ring buffered
 writer actors do not establish asynchronous stream/copy failure parity; synthetic
 fractional vectors verify decimal representation separately. READY is only the
 body policy for this call, not future persistence, admission, baseline, evidence
-or cached-authority permission. Development deployment is recorded separately
-only after destination hashes and live program integration verification.
+or cached-authority permission.
+
+**Development deployment completed:** normal `build.ps1 -Jobs 8 -Pi` from clean
+product `0a66924` passed the fresh empty12-lobby guard, compiled at zero warnings
+and matched tested program bytes; staged/hash-checked progs swapped with `.prev`
+and all12 units restarted. Explicit program-only copies completed both Windows
+installs with captured predecessor/hash guards. At **2026-10-12T17:02:36Z**, all12
+fresh PIDs and UDP sockets ACTED, progs/.prev hashes matched, every native process
+still reported/hashes to P679 with the unchanged Source plugin, live default8
+and health12. Protected native/config hash+mtime and aggregate player run/
+evidence/resume/save/receipt observations were unchanged across swap/restarts.
+Two fresh isolated clients using both installed Windows engines/menu downloaded
+exact deployed CSQC and drew board cols8/type14 with zero smoke failures/client
+QC errors; screenshots inspected. No terms accepted/run submitted. Final
+17:06:55Z directory was all12 empty, ages0..4s. SSH journal visibility unavailable
+was not graded as a clean journal; bright known missing-map material is not map
+completeness acceptance. No native consumer activated. SSQC SHA256
+`424afeebea4f25c33ffd0d0d4c7d46b3520294cf9cb21ee5079414a8b6524205`, CSQC
+`3e33342c3296afde1bece3f581830665ebb153535b2dd68108a882365ce4e669`.
+Public full provenance/rollback/limits: FTESurf `tools/p682deployment.md`,
+documentation commit `837eb004d611cea4bd31798b889d64168ceb7375`. Owned cleanup/
+compact evidence is recorded at the task root; live `.prev` rollback remains.
