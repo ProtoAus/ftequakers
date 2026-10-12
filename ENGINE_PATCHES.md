@@ -46016,3 +46016,38 @@ The lobby change remains pending until a safe empty-fleet deployment; a running
 remote client will still receive P676. Evidence/staging retained under
 `C:/FTESurf-worktrees/labels-677-20261012T0623/`; local restart/map reload loads
 new local QC, but reconnecting to the unchanged fleet does not.
+
+## Patch 681 — bounded world catch-up at low render FPS (2026-10-12)
+
+**APPLIED — CONFIG ONLY.** FTESurf `ftesurf/cfg/default.cfg`,
+`tools/p681ticks.py`; no native engine C/header/binary or QC behavior change.
+
+**Problem:** the native `sv_limittics 3` default permits too little server-world
+catch-up for a local 100 Hz bhop game rendering at 20 FPS. `SV_Physics` discards
+remaining world time when its bounded catch-up allowance is exhausted. Fixed
+10 ms player-mover substeps do not remove that separate world limit.
+
+**Change:** FTESurf's ruleset default is `set sv_limittics 8`. It increases the
+bounded catch-up allowance, not a minimum rate or the physics tickrate. Existing
+surf 15 ms player steps, bhop 10 ms player/world steps, client netfps matching,
+angle interpolation, engine pin/tag, QC Build and recording/evidence semantics
+are unchanged. No owner archived config edit. Extreme stalls can still exceed
+the budget; extra simulation work has a CPU cost, not a free render-FPS gain.
+
+**Verified:** clean origin/main QC worktree, pwsh 7 `build.ps1 -Jobs 8 -NoDeploy`:
+all three programs compile with zero warnings. Isolated actual installed P679
+client, clean generated programs, synthetic raw MAPs, independent MAINCONFIG
+and spawned local player in every arm. Native `sv_perfdump` counts five passing
+controls: bhop at 100 FPS/old default = 1009 ticks / 1008 frames; bhop at 20 FPS,
+old default = 603/202 (2.985 ticks/frame), new startup default = 1012/203 (4.985).
+Both surf 20 FPS arms = 203/203 world ticks/frames and retain `pm_ticrate 0.015`:
+surf's existing local world defaults are `sv_mintic 0`, `sv_maxtic 0.1`, NOT a
+fixed 66.667 Hz world clock. This patch deliberately leaves that policy alone.
+The 10-second windows prove frame limiting and active server ticks, not ranked
+surf/bhop accuracy, per-tick mouse input, screenshots or remote prediction.
+Initial compiler-path, startup-log sentinel and incorrect surf-world expectation
+failures were retained and corrected in the fixture, not counted as passes.
+All five arms were repeated successfully against clean committed product
+`e8407bb`, after rebasing onto the concurrently published inert P680 work.
+Those generated QC programs are verification-only, not a peer-work deployment.
+Deployment provenance is recorded separately; no engine rebuild is required.
