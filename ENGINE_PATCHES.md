@@ -45512,6 +45512,20 @@ retains only two pre-existing warnings. Final clean build/subject provenance is
 retained in the owned task checkpoint; claim moved from 672 when the independent
 published pre-input seam claimed that number during testing.
 
+**Final build/deployment.** Full isolated client/dedicated/five-plugin build at
+clean tagged native `57bfa6bd3`, merged on published P672 headers: native compiler
+warning set unchanged after normalizing relocated diagnostic lines; QC zero
+warnings. Fresh tagged-subject controls new27/27 (15 fresh loader arms), P671
+29/29 with exact dedicated binary, P6698/8; P672 seam's ten production-slice unit
+groups pass. Committed QC `3d17ade4` rebuild is byte-identical to tested artifacts.
+All 12 idle Pi lobbies received CSQC `825c2b46` / qwprogs `7598b0da` (unchanged)
+at 2026-10-12 05:20:12..21 UTC, prior pair in `.prev`, Pi native unchanged.
+Both Windows installs' 19 destinations verified 05:23:09 UTC: client `e9bbd6f3`,
+dedicated `c6e4cede`, five plugins and three progs. Installed hosted/dedicated
+controls pass; fresh lobby client downloaded exact CSQC and drew the board.
+Owner/default configs' hashes/mtimes unchanged. Owner game closed naturally;
+none killed. No existing time/role mutation, no release or Build increment.
+
 **Limits.** Physical mouse/key/clipboard delivery remains human acceptance.
 Local presets need this native engine and a map reload; no Linux native mode
 loader or ranked-rule deployment is claimed. Steam identity/review policy is
