@@ -45736,3 +45736,25 @@ The existing 609 staged local zone files, including bhop_eazy, hash-identically;
 only eleven absent FIT donations were added. No engine code/pin/tag, server QC,
 recorder/evidence, ranking policy, schema, default or Build-number change.
 Deployment provenance is recorded separately after destination verification.
+
+**DEPLOYED, 12 Oct 2026.** FTESurf tree `61d291d` (product `79c3599`, plus
+published P673 docs): backend at 05:51 UTC, only `surfd.py` and `test_web.py`.
+All 17 staged suites pass on the host; momgrab's unavailable conversion fixture
+is explicitly skipped. Installed bytes hash-match; surfd.py `b9101630701f1ce2`,
+worker reloaded, `/health` healthy. Mode-600 DB rollback
+`data/surfd.db.bak-61d291d-20261012-164812`, source predecessors
+`*.pre61d291d-20261012-164812`; no pruning. Live known-name HTTP filter returns
+matches with original rank/account and query echo; nonmatch returns zero
+rows/counts. Last 100 app-log lines have zero ERROR/WARNING/Traceback.
+Windows 05:55:21–05:55:25 UTC: BOTH installs read back csprogs
+`444f921987a6b317`, menu `d111ec13ee2827f4`, with `.prev`; qwprogs unchanged
+`7598b0da1cd90ebd`. File-only swap while the owner's game remained running:
+no process/engine/plugin/config/default change or interruption, and no claim
+that that client has loaded the new bytes. Restart to load the local UI.
+Eleven missing-only zone donations rechecked FIT against each install's BSP;
+all 609 prior primary local zones unchanged, including bhop_eazy. Secondary had
+no prior local JSONs. **FLEET PENDING:** one player on a live lobby; no program
+upload/swap/restart/force attempted. Its csprogs remains `825c2b46d41aa8a2`.
+Public connections receive old client code until a zero-player fleet deploy.
+Remaining UI/native/paste/pixel acceptance is still unmeasured. Owned clean
+proof/evidence retained at `C:/FTESurf-worktrees/ui-maps-20261012T0335Z/`.
