@@ -45699,3 +45699,40 @@ drew the board on release 0.1.24's client and on the new one, and the
 run-line check read 28 of 28 on the installed files.
 PLAYERS ON RELEASE 0.1.24 get this csprogs from the lobbies and no paste:
 their engine has neither builtin. Paste reaches them with the next release.
+
+## Patch 674 — scoreboard/profile navigation and independent map tiers
+
+**Problem.** Online owner names were not profile links; profile map names were
+not board links. A name search could not narrow the complete board before
+pagination. The create-server list collapsed MOM/KSF difficulty into ambiguous
+symbols and hid installed imported maps without timer metadata.
+
+**Change.** Online names queue a stable-account profile handoff after SUI ends;
+WATCH and LINE remain distinct. Profile map names publish validated browse data
+to the menu, preserving source/track/leg/style without launching a map or
+changing the connected server. `api/board?name=` filters the complete selected
+board before LIMIT/OFFSET, keeps its original ranks/counts and suppresses crawl
+top-ups on filtered pages. The client requires the active query echo for both
+initial and appended replies. Create-server rows show blue `MOM Tn` above white
+`KSF Tn`, filter either independent source, reject invalid numeric tiers and
+retain installed MOM/CS:S surf/bhop entries without timing metadata. Suggestions
+are tooltip prose; local alias inheritance is not an independent MOM tier.
+`zoneinstall --only-missing --gamedir` preserves existing files at the write
+boundary. The census found all 1,748 downloaded Momentum maps already listed;
+eleven missing variant zone files passed geometry FIT and were added.
+
+**Verified.** Isolated control and subject QC builds: zero warnings. Backend
+web/board/variants/momboards suites pass; source-bound tier predicates and their
+mutation controls pass; zoneinstall preservation tests pass. A dedicated-socket
+fallback runtime exercised whole-board filtering beyond row 100, counts and
+original ranks, clear-query restoration, rejected missing/stale echoes,
+held-TAB refusal and independent LINE/WATCH actions. The pre-change control
+rejects the corresponding new navigation/filter falsifiers. Owner/profile-map
+and stationary-wheel assertions needed harness corrections (spawn/console
+acknowledgements, eight-character account marks, replay-stop); their complete
+rerun is blocked by an active owner's/peer's client. Native actions, final tier
+pixels and clipboard/paste remain explicitly unmeasured in `lextest.md`.
+The existing 609 staged local zone files, including bhop_eazy, hash-identically;
+only eleven absent FIT donations were added. No engine code/pin/tag, server QC,
+recorder/evidence, ranking policy, schema, default or Build-number change.
+Deployment provenance is recorded separately after destination verification.
