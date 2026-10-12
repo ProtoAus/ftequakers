@@ -45256,3 +45256,54 @@ segment; 91 of the 246 arms and tools naming it mention stages and none was
 rerun. The old pair is kept on both machines. A re-save may move a cancel
 region unreviewed; a re-save moves `zone_crc`, so a run parked on one of
 those maps no longer resumes. BACKLOG.md has the reviews' leftovers.
+
+## Patch 665 — a tier's maps and a player's times on one map, on `/api/board` *(MOD ONLY: surfd)*
+
+From the owner's reply after trying the profile (12 Oct): "some ability to
+select the tiers to see what maps you have and havent finished, with your
+times! same for others with search! ... I want to see results for the map,
+from that user, see their times." Two more forms of 662's
+`/api/board?player=<who>`; Patch 666 is the game's half.
+
+- **`&ct=<n|u>`**: one difficulty tier's maps for that player (`u` the
+  unrated), the ones finished first with the fastest main time, its game and
+  style, then the rest; paged. It is the site's `/board/api/player/<h>/maps`
+  a tier at a time, and both are one function now (`_tier_maps`).
+- **`&on=<map>`**: that player's rows on one map, the main track first, then
+  stages, then bonuses, with their `total`. A second build shows its map's
+  imported rows, as its board does.
+- No table, no schema, nothing a ranked run passes through.
+
+**Measured.** `surfd/test_web.py`: 232 checks, ten of them new. The sweep:
+428 mutants, 417 killed, 11 survive alone as expected, none unexpected; the
+eleven for this patch each die by a named check.
+
+**Review.** One reviewer, by reading: no defect in surfd.py. From it: a tier
+is a number as the catalogue writes one (no `0`, no `07`), `on` says its
+total, the sort is total, `ct` is read first where both are given.
+
+**`tools/accounts_mutants.py` HAD NOT MEASURED SINCE PATCH 662, and that was
+mine.** 662 set the tools path for every suite. `test_accounts.py`'s "a host
+with no ed25519.py" check makes its host by taking `tools/` off `sys.path`;
+with the path in the environment too the check failed on UNMUTATED code, so
+it "killed" every mutant, 173 of them by itself alone. It showed in the
+sweep's own lines: the eleven mutants that are meant to survive alone were
+all reported killed, by one check. Measured on the unmutated suite (no
+failure without the variable, that one with it). The review found a second
+way: the path was built from the tool's argument, so called as its docstring
+says it named nothing, `test_web.py` died on an import, and a crash counted
+as a kill (measured: exit 1, no check failed). Now the path is the tool's
+own directory and `test_web.py`'s alone; every suite runs once on an
+unmutated copy first and the sweep stops if one fails there; and
+`ACCOUNTS_MUTANTS_ONLY=<prefix>` sweeps part. A sweep that reports every
+mutant dead is not evidence until something shows the suite passes alone.
+
+**Deployed 12 Oct 2026, 00:15 to 00:18 UTC** (FTESurf `4519bdb`):
+`surfd.py` and `test_web.py` by `surfd-deploy.ps1`, the whole suite green on
+the Pi first, backup `data/surfd.db.bak-4519bdb-20261012-111517`, both files
+hash-matched, `surfd ready` 00:18:04Z. Asked once on the host: the maps list
+(1,370 rows, 6.0 s cold), a search (1.0 s cold), a breakdown, `ct=1` (65
+maps), `ct=u` (845, then 953 once the map watcher's new builds were
+indexed), `on=surf_beginner` (four legs), the site's own maps list; no error
+line in the log. Rollback: the two `*.pre4519bdb-20261012-111517` files and
+SIGHUP.
