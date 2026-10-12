@@ -46061,3 +46061,69 @@ QC shipped. This is live cvar verification, not a remote gameplay/prediction
 claim. Complete config receipts and acted runtime logs retained beneath
 `C:/FTESurf-worktrees/ticks-01a12f46/artifacts/`; disposable source/runtime copies
 are retired on completion.
+
+## Patch 682 — inert canonical warm rewind-go body preparation (2026-10-12)
+
+**APPLIED — MOD-SIDE ONLY.** FTESurf product `0a66924dd0f250d48cb417dcb1f048e9e035f2b6`
+(two feature/fix commits). Reviewed candidate `093b390` is retained; publication
+integrates only concurrent published release tooling `196a628`. All QC/fixture
+inputs and all three program outputs are byte-identical to that reviewed/tested
+candidate. No engine C/header/binary, native pin/tag or QC Build change.
+P682 was reserved after the fetched P681/untracked-test census.
+
+**Problem:** rewind-go chooses a genuine recorder sample by bounded spatial/
+tick rules, serializes a new row at four decimals, loads it held and later
+releases its saved velocity. A raw desired-time/camera target or unrounded
+sample is not that body's policy. Running create/write/load while preparing
+would allocate/publish an ID, mutate recorder lineage and timers or move the
+player. One available token also cannot satisfy the real dispatcher's two
+rewind-go charges.
+
+**Change:** share a read-only, bounded `SV_RewindSelectRead` with the existing
+live `SV_RewindFind` wrapper. Preserve recent tick-window/spatial/fallback and
+newest-tie rules; validate finite/integer ring domains before addressing rows.
+Keep allocation/sample publication exclusively in the live wrapper. Inert
+`SV_MovePrepRewind` accepts only current-call canonical warm, same-lineage,
+non-full/no-conflict go. It normalizes body/aim/velocity through the actual
+four-decimal row representation, supplies held zero-velocity/NONE and release
+WALK/saved-velocity policies, clears ground flag/carrier and sets duck/jump/
+gravity while enumerating all twelve Source history intentions. A pre-dispatch
+read requires at least two available tokens without changing the rate bucket;
+the authoritative command gates are unchanged. Output refusal invalidates prior
+results. Cold/forked/replacement/full roots, sweep/copy locks and future external
+write/read-back success abstain; no invented row/seq/ID reservation.
+No production preparer consumer/export, cache or lifecycle epoch, admitted
+request, native callback activation, operation-bearing baseline, prediction,
+recorder/evidence format, ranking/default or Build change.
+
+**Verified:** fresh clean exact-commit pwsh7 `src/build.ps1 -Jobs 8 -NoDeploy`
+compiles all three VMs with zero warnings; all outputs are byte-identical to the
+retained tested production build. Real dedicated recorder/pin/select/legacy-go/
+write/read/load/hold/release actor: **98 checks, 0 failed**. Window-spatial winner,
+fallback/tie/wrapped/full ring, malformed bounds, decimal normalization and
+refusal/no-mutation controls ACT. One token and largest float32 below two
+prepare REFUSED and the real dispatcher remains pinned after its first charge;
+exactly two prepares without consumption and actual go consumes both/acts.
+Independent one-factor old-rate mutant: **4/98** named expected failures;
+spatial-selection mutant **7/98** and held-velocity mutant **2/98** named expected
+failures. All fixtures compile at zero warnings; **16/0** grader controls reject
+silence, obsolete/partial/duplicate completion, wrong/missing detectors and
+runtime faults even after completion. Retained unchanged P678/P680 controls
+**66/0** and **71/0**, reader **306/0**, parent/subject corpus fault count
+**173/173**, no newly faulted source file. Initial recorder-lineage/fixture-domain
+failures are retained, not passes.
+
+Independent selection/bounds/effect-free and recorder/go reviews completed;
+valid P1 one-token mismatch fixed with acting falsifiers and bounded fix
+re-review, no remaining concrete blocker. A provider failure and cross-session
+revival rejection were reported; authorized retry retained the same native
+reviewer/model protocol. Reviews inspected source/retained logs, not new test
+execution. Public contract/falsifiers: FTESurf `tools/p682rewindprep.md`.
+
+**Limits:** enumerated Source KEEP intentions are not an independently measured
+whole-native snapshot across subsequent mover commands. Genuine-ring buffered
+writer actors do not establish asynchronous stream/copy failure parity; synthetic
+fractional vectors verify decimal representation separately. READY is only the
+body policy for this call, not future persistence, admission, baseline, evidence
+or cached-authority permission. Development deployment is recorded separately
+only after destination hashes and live program integration verification.
