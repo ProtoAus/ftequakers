@@ -46050,4 +46050,14 @@ failures were retained and corrected in the fixture, not counted as passes.
 All five arms were repeated successfully against clean committed product
 `e8407bb`, after rebasing onto the concurrently published inert P680 work.
 Those generated QC programs are verification-only, not a peer-work deployment.
-Deployment provenance is recorded separately; no engine rebuild is required.
+**Config-only deployed 2026-10-12 09:23 UTC.** Product `e8407bb`; both Windows
+default.cfg files hash `cbc2191087785c19`, all 11 inspected native/program/owner
+config hash+mtime guards unchanged. The Pi received only this committed
+three-line hunk, retaining existing platform-specific defaults; destination hash
+`9df79b3d2e388975` and a pre681 rollback copy verified. All 12 active lobbies
+changed from 3 to 8 and read back 8 over loopback RCON. No restart or player
+interruption, no native binary or generated program deployment, and no peer P680
+QC shipped. This is live cvar verification, not a remote gameplay/prediction
+claim. Complete config receipts and acted runtime logs retained beneath
+`C:/FTESurf-worktrees/ticks-01a12f46/artifacts/`; disposable source/runtime copies
+are retired on completion.
