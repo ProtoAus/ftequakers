@@ -45307,3 +45307,51 @@ maps), `ct=u` (845, then 953 once the map watcher's new builds were
 indexed), `on=surf_beginner` (four legs), the site's own maps list; no error
 line in the log. Rollback: the two `*.pre4519bdb-20261012-111517` files and
 SIGHUP.
+
+## Patch 666 — tiers that open, and a player's times on the map being played *(MOD ONLY: csprogs)*
+
+The game's half of 665, from the same reply ("... no search for +showscores
+leaderboard? I want to see results for the map, from that user, see their
+times").
+
+- **`hud_player`, Stats.** A difficulty tier's bar is a control: its maps
+  take the results' place, the finished ones first with the fastest main
+  time, then the ones not yet; "Unrated" is a bar too. The tier stays on show
+  for the next player searched, and is asked for when their breakdown lands
+  (surfd has their rows ranked by then). The card opens on the results.
+- **The leaderboard.** He had not found the search: it was drawn on a pinned
+  board only. It is drawn on a HELD board as well now, as the look alone,
+  saying what gives it a cursor. A player picked from it is no longer handed
+  to the card: their times on THIS MAP take the table's place (every leg, the
+  time, the place, how long ago). A time opens its leg's board, "Whole
+  profile" the card, "Back to board" the table.
+- `cl_profile.qc`, `cl_avatar.qc`, `cl_scores.qc`. No engine source, server
+  QC, surfd, recorder, evidence, ranking, default or Build change.
+
+**Measured.** `tools/p663profile.py`, 38 checks, nine of them this patch's,
+on the installed patch-658 client and on release 0.1.24's (patch-625): the
+bar clicked with the desktop's pointer, the unrated a hundred at a time, the
+tier kept for the next player, the pick by Enter, a time's row clicked (the
+board goes to that leg), "Whole profile" clicked. Screenshots of each state
+were looked at. On the test map's new build (Patch 664 replaced bhop_eazy
+that day: one segment and a bonus) the arm reads the map's own legs.
+
+**Review.** One reviewer, by reading: one defect, five quirks. The defect: a
+pick did not end its frame's hand-offs, so the table's own row pick could run
+under the search's list (the native table takes a press anywhere in its
+rect). Fixed, with three quirks: the view stays when the scoreboard key is
+let go, goes when the leg or the source moves by any road (the arrows, a
+console word, the finish's follow), and a tier named on the console with no
+card up asks nothing. Those three have checks, and each fails on the build
+before the fixes (35 of 38 there). The rest are in BACKLOG.
+
+**Deployed 12 Oct 2026, 00:20 UTC** (FTESurf `0464e0f`): csprogs
+`ce9e7607db707221` to the Pi's twelve lobbies (`build.ps1 -Pi`, nobody on,
+all restarted, hashes read back on the host; qwprogs `35fda5eb` swapped for
+itself) and to both Windows installs at 00:20:12Z under the rig lock
+(`.prev` is Patch 668's `ddf40c04`). menu.dat, default.cfg and the exes
+untouched. Then, on the engine 0.1.24 shipped: the lobby smoke on 27510 was
+served that file and drew the board, and a test player on that lobby opened
+a real player's tier 2 (105 of 117 finished), the unrated (71 of 952) and
+their seven times on surf_kitsune in the board. NOT SEEN: a person doing it
+by hand.
