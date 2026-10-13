@@ -46233,3 +46233,45 @@ suite 306/0. Reproducible gate/limits: FTESurf tools/viewer_ui.md.
 parked body. Human scale/long-name/imported/third/free-camera look acceptance
 remains in lextest.md. No engine C, evidence grammar, verifier, movement policy,
 QC Build-number, native tag or release change. Deployment is a separate gate.
+
+## Patch 685 -- opt-in per-face OpenGL transparency ordering
+
+**Problem:** reversing a material batch cannot order separate window faces,
+materials, entity meshes and CSQC polygons against each other. A cached-VBO
+batch deliberately has no CPU meshes: treating it as an empty submission drops
+it. A world-wide scene-poly bounds key incorrectly treats far/near polygons as
+one depth record. Forcing scene caches off for all Source maps sidesteps these
+contracts while discarding opaque-world cache reuse.
+
+**Change:** OpenGL `r_blendsort 2` collects each supported plain blend mesh in a
+single far-to-near stream. World-space transformed vertex bounds determine its
+view-forward depth; stable emit sequence breaks ties. Weapon/depthhack records
+follow ordinary geometry. Refraction/reflection/portal-capable records retain
+the immediate, recursion-safe batch path. Cached or CPU-unavailable geometry
+retains a coarse batch record and whole-batch submission. Per-face submissions
+copy the batch descriptor: original cache pointers, mesh ranges and source data
+remain intact. Scenetris use their actual mesh vertices, not world bounds.
+Finite keys are validated bitwise under fast-math. Source scene-cache controls
+are no longer globally forced off. Modes 0/1 and default **1** remain legacy;
+this is an opt-in feature, not promotion of mode 2 as the default.
+
+**Verified:** clean sorter-only Windows engine/plugin build, separate from the
+unverified envmap-space work. `tools/test_gl_blend_faces.py` compiles production
+collector/guards/matrix code under C99 `-Wall -Wextra -Werror`, normal/HEXEN2,
+with and without fast-math. Cached-VBO-drop, whole-world-scenetris-key and NaN
+mutants each ACT and fail assertions. Native exact-executable Kitsune pixel
+oracle: two polygon emit orders and a reverse view each pass all 9,216 pixels
+within two RGB levels; legacy mode 1 ACTS and fails all 9,216 mixed-overlap
+pixels. Background is independently captured with world rendering enabled.
+Native camera/save-2 window images retained. Earlier mixed pane/model/sprite
+and Source material cache controls remain the bounded integration evidence;
+not every path below was newly photographed. See FTESurf tools/p685blendsort.md
+for commands, provenance, failed harness arms and publication/deployment state.
+
+**Limits:** whole-mesh depth is not triangle splitting/intersection resolution.
+Coarse cached records cannot establish internal face order. Recursive capture
+records are deliberately not globally sortable. Static screen correctness is
+not a broad perf/water/reflection or all-backend pass; cache/capture performance
+and further native rotated-brush/model/weapon overlaps remain acceptance gates.
+No movement/evidence semantics, QC Build-number, Linux fleet or release change.
+The envmap-space draft is explicitly excluded from this patch and native bundle.

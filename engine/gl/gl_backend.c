@@ -6707,6 +6707,212 @@ static void GLBE_SubmitMeshesSortList(batch_t *sortlist)
 	}
 }
 
+typedef struct
+{
+	batch_t *batch;
+	mesh_t *mesh; // NULL replays the whole batch, building procedural meshes only then.
+	double depth;
+	size_t sequence;
+	qboolean foreground;
+} glblendface_t;
+
+// Use the same model matrix as GLBE_SelectEntity, including axis sign and scale.
+static double GLBE_BlendCenterDepth(const double *center, const float *matrix)
+{
+	double depth = 0, world;
+	int j;
+	for (j = 0; j < 3; j++)
+	{
+		if (IS_NAN(matrix[j]) || IS_NAN(matrix[4+j]) ||
+			IS_NAN(matrix[8+j]) || IS_NAN(matrix[12+j]) ||
+			IS_NAN(r_origin[j]) || IS_NAN(vpn[j]))
+			return 0;
+		world = matrix[j]*center[0] + matrix[4+j]*center[1] +
+			matrix[8+j]*center[2] + matrix[12+j];
+		depth += (world - r_origin[j])*vpn[j];
+	}
+	return depth;
+}
+
+static double GLBE_BlendFaceDepth(const mesh_t *mesh, const float *matrix)
+{
+	double center[3] = {0, 0, 0};
+	int v, j;
+	if (!mesh->xyz_array || mesh->numvertexes <= 0)
+		return 0;
+	for (v = 0; v < mesh->numvertexes; v++)
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(mesh->xyz_array[v][j]))
+				return 0;
+			center[j] += mesh->xyz_array[v][j];
+		}
+	for (j = 0; j < 3; j++)
+		center[j] /= mesh->numvertexes;
+	return GLBE_BlendCenterDepth(center, matrix);
+}
+
+// Procedural commands must not build or retain the shared alias mesh until replay.
+static double GLBE_BlendBatchDepth(const batch_t *batch, const float *matrix)
+{
+	double center[3] = {0, 0, 0}, depth = 0;
+	unsigned int m, count = 0;
+	int j;
+	model_t *model = batch->ent->model;
+	if (batch->buildmeshes == R_DB_Poly)
+	{
+		unsigned int surface = batch->user.poly.surface, first, num, v;
+		// Scenetris use r_worldentity, but their live positions describe the command.
+		if (!cl_stris || !cl_strisvertv || surface >= cl_numstris)
+			return 0;
+		if (cl_stris[surface].firstvert < 0 || cl_stris[surface].numvert <= 0)
+			return 0;
+		first = cl_stris[surface].firstvert;
+		num = cl_stris[surface].numvert;
+		if (first > cl_numstrisvert || num > cl_numstrisvert - first)
+			return 0;
+		for (v = 0; v < num; v++)
+			for (j = 0; j < 3; j++)
+			{
+				if (IS_NAN(cl_strisvertv[first+v][j]))
+					return 0;
+				center[j] += cl_strisvertv[first+v][j];
+			}
+		for (j = 0; j < 3; j++)
+			center[j] /= num;
+		return GLBE_BlendCenterDepth(center, matrix);
+	}
+	if (!batch->buildmeshes && batch->mesh)
+	{
+		for (m = batch->firstmesh; m < batch->meshes; m++)
+			if (batch->mesh[m] && batch->mesh[m]->xyz_array && batch->mesh[m]->numvertexes > 0)
+			{
+				depth += GLBE_BlendFaceDepth(batch->mesh[m], matrix);
+				count++;
+			}
+		if (count)
+			return depth / count;
+	}
+	if (model)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(model->mins[j]) || IS_NAN(model->maxs[j]))
+				return 0;
+			center[j] = ((double)model->mins[j] + model->maxs[j]) * 0.5;
+		}
+	}
+	return GLBE_BlendCenterDepth(center, matrix);
+}
+
+static int GLBE_BlendFaceCompare(const void *va, const void *vb)
+{
+	const glblendface_t *a = va, *b = vb;
+	if (a->foreground != b->foreground) return a->foreground ? 1 : -1;
+	if (a->depth > b->depth) return -1;
+	if (a->depth < b->depth) return 1;
+	return (a->sequence > b->sequence) - (a->sequence < b->sequence);
+}
+
+static qboolean GLBE_BlendBatchImmediate(const batch_t *batch)
+{
+	shader_t *sh = batch->shader;
+	unsigned int special = SHADER_HASREFLECT | SHADER_HASREFRACT |
+		SHADER_HASRIPPLEMAP | SHADER_HASPORTAL | SHADER_SKY;
+	// Only recursion-capable/unknown materials stay outside the sortable stream.
+	return !sh || !sh->remapto || !batch->ent ||
+		((sh->flags | sh->remapto->flags) & special);
+}
+
+static qboolean GLBE_BlendFaceEligible(const batch_t *batch)
+{
+	unsigned int m;
+	if (GLBE_BlendBatchImmediate(batch) || batch->buildmeshes || !batch->mesh)
+		return false;
+	if (batch->flags & BEF_FORCEADDITIVE)
+		return false;
+	if (batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK | RF_XFLIP))
+		return false;
+	// Efficient scene-cache VBOs have drawable indices but no CPU positions.
+	// Preserve them as complete coarse commands rather than lose geometry.
+	for (m = batch->firstmesh; m < batch->meshes; m++)
+		if (batch->mesh[m] && batch->mesh[m]->numvertexes > 0 && batch->mesh[m]->numindexes > 0 &&
+			!batch->mesh[m]->xyz_array)
+			return false;
+	return true;
+}
+
+static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
+{
+	batch_t *lists[2] = {world, dynamic}, *batch, view;
+	glblendface_t *faces;
+	size_t count = 0, n = 0, f;
+	unsigned int m;
+	int l;
+	float matrix[16], modelview[16];
+
+	// Finish capture/portal/sky recursion before gathering root-view records.
+	// The temp-batch pool appends during recursion; root batch addresses survive.
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			if (GLBE_BlendBatchImmediate(batch))
+			{
+				view = *batch;
+				view.next = NULL;
+				GLBE_SubmitMeshesSortList(&view);
+			}
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			if (!GLBE_BlendBatchImmediate(batch) && batch->meshes > batch->firstmesh)
+				count += GLBE_BlendFaceEligible(batch) ? batch->meshes - batch->firstmesh : 1;
+	if (!count)
+		return;
+	// Invocation-owned heap storage survives recursive views; never frame-global scratch.
+	faces = BZ_Malloc(count * sizeof(*faces));
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			if (!GLBE_BlendBatchImmediate(batch) && batch->meshes > batch->firstmesh)
+			{
+				R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
+				if (!GLBE_BlendFaceEligible(batch))
+				{
+					faces[n].batch = batch;
+					faces[n].mesh = NULL;
+					faces[n].depth = GLBE_BlendBatchDepth(batch, matrix);
+					faces[n].sequence = n;
+					faces[n].foreground = !!(batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));
+					n++;
+					continue;
+				}
+				for (m = batch->firstmesh; m < batch->meshes; m++)
+				{
+					mesh_t *mesh = batch->mesh[m];
+					if (!mesh || !mesh->xyz_array || mesh->numvertexes <= 0 || mesh->numindexes <= 0)
+						continue;
+					faces[n].batch = batch;
+					faces[n].mesh = mesh;
+					faces[n].depth = GLBE_BlendFaceDepth(mesh, matrix);
+					faces[n].sequence = n;
+					faces[n].foreground = false;
+					n++;
+				}
+			}
+	qsort(faces, n, sizeof(*faces), GLBE_BlendFaceCompare);
+	for (f = 0; f < n; f++)
+	{
+		view = *faces[f].batch;
+		view.next = NULL;
+		if (faces[f].mesh)
+		{
+			view.mesh = &faces[f].mesh;
+			view.firstmesh = 0;
+			view.meshes = view.maxmeshes = 1;
+		}
+		GLBE_SubmitMeshesSortList(&view);
+	}
+	BZ_Free(faces);
+}
+
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i;
@@ -6714,6 +6920,11 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 
 	for (i = start; i <= stop; i++)
 	{
+		if (i == SHADER_SORT_BLEND && r_blendsort.ival == 2)
+		{
+			GLBE_SubmitBlendedFaces(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
+			continue;
+		}
 		if (worldbatches)
 		{
 			if (i == SHADER_SORT_PORTAL && r_refdef.recurse < portaldepth)

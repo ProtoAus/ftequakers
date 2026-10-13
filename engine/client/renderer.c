@@ -338,45 +338,15 @@ cvar_t r_voidfog							= CVARFD ("r_voidfog", "1", CVAR_ARCHIVE,
 												"0: keep the map's fog -- everything you flew out to see is past fogend, so it is fog colour.\n"
 												"1: no fog in the void (default).  Fog returns the frame you are back inside.\n"
 												"Has no effect anywhere r_voidvis does not.");
-/*
-FTESurf Patch 218: blended world surfaces were drawn FRONT-TO-BACK.
+// Center-depth ordering is practical for separated panes, not intersecting polygons/OIT.
+cvar_t r_blendsort = CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
+	"Blended surface ordering.\n"
+	"0: emit order.\n"
+	"1: reverse each world blend batch's walk order (legacy default).\n"
+	"2: OpenGL global center-depth sort of plain world/static mesh faces, including brushes.\n"
+	"Models/procedural/cache batches use coarse center-depth commands; weapon/depthhack draws follow them.\n"
+	"Capture/portal/sky batches remain immediate and unsorted; other backends use mode 1.");
 
-Every BSP world walk in this engine visits the near child of a node first, then
-that node's own surfaces, then the far child -- Surf_RecursiveQ2WorldNode
-(gl_q2bsp.c:7988-8009), and the VBSP plugin's own VBSP_RecursiveWorldNode
-(mod_vbsp.c:4378-4398) does the same.  That is the right order for opaque
-geometry: it is a painter's order run nearest-first, which is what makes early-z
-work.  Surfaces are appended to their batch in exactly that order.
-
-For a BLENDED surface it is precisely backwards.  Alpha blending is not
-commutative, so a translucent surface has to be composited over what is behind
-it, which means drawing far-to-near.  Drawn near-to-far, a pane in front is laid
-down before the pane behind it and the nearer one ends up UNDER.  Reported as
-"there is a lot of glass / alpha textures in this map ... and it seems to get the
-ordering of these alphas wrong, almost backwards" -- which is not almost, it is
-exactly backwards, and the word is the diagnosis.
-
-The fix is a reversal rather than a sort, and that is the point: BSP front-to-back
-order is an EXACT painter's order for the surfaces the tree separates, so reading
-it backwards is an exact back-to-front order.  No distance comparisons, no
-per-frame qsort, no tie-breaking -- one pass swapping ends of an array the walk
-has already ordered for us.
-
-WHAT IT DOES NOT FIX, stated because it is visible on the same maps.  Batches are
-grouped by shader AND lightmap, so this orders surfaces WITHIN a batch and leaves
-the order BETWEEN batches as the batch list's.  Two overlapping translucent
-surfaces wearing different materials can still composite in the wrong order.
-That is a real remaining case and needs a cross-batch sort, which is a different
-and much more expensive change.
-
-Only SHADER_SORT_BLEND is touched.  Additive blending IS commutative so it does
-not care, alpha-tested surfaces write depth and do not care, and the water and
-banner sorts are left alone because nothing has measured them.
-*/
-cvar_t r_blendsort							= CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
-												"Draw blended world surfaces back-to-front.\n"
-												"0: emit order (nearest first) -- the pre-Patch-218 behaviour, wrong for alpha.\n"
-												"1: reverse the world walk's order, which is exact back-to-front.");
 /*
 FTESurf Patch: r_reflectcube -- one switch that every cubemap reflection obeys.
 

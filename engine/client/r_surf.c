@@ -2253,8 +2253,8 @@ Runs on the current view's range only (firstmesh..meshes), so a recursed portal
 view reverses its own meshes and leaves the primary view's alone -- see
 Surf_PushChains above for how that range is maintained.
 
-The full essay, including what this does NOT fix (ordering BETWEEN batches of
-different materials) is on r_blendsort in renderer.c.
+This legacy reversal cannot order different batches. OpenGL mode 2 instead
+sorts plain faces across world and entity batches in the backend.
 */
 static void Surf_SortBlendedChains(batch_t **batches)
 {
@@ -2262,7 +2262,7 @@ static void Surf_SortBlendedChains(batch_t **batches)
 	mesh_t *swap;
 	int a, b;
 
-	if (!r_blendsort.ival)
+	if (!r_blendsort.ival || (r_blendsort.ival == 2 && qrenderer == QR_OPENGL))
 		return;
 
 	for (batch = batches[SHADER_SORT_BLEND]; batch; batch = batch->next)
@@ -2841,7 +2841,13 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 		if (!b)
 			continue;
 		*b = *ob;
-		if (b->vbo && b->maxmeshes)
+		if (qrenderer == QR_OPENGL && r_blendsort.ival == 2 && !b->shader)
+			b->shader = R_TextureAnimation(ent->framestate.g[FS_REG].frame[0], b->texture)->shader;
+		// Mode 2 needs the original face descriptors, not a single contiguous span.
+		if (b->vbo && b->maxmeshes && !(qrenderer == QR_OPENGL && r_blendsort.ival == 2 &&
+			(b->buildmeshes || b->shader->sort == SHADER_SORT_BLEND ||
+			(b->shader->remapto && b->shader->remapto->sort == SHADER_SORT_BLEND) ||
+			((bef & BEF_FORCETRANSPARENT) && !(bef & BEF_FORCEADDITIVE)))))
 		{
 			b->user.meshbuf = *b->mesh[0];
 			b->user.meshbuf.numindexes = b->mesh[b->maxmeshes-1]->indexes+b->mesh[b->maxmeshes-1]->numindexes-b->mesh[0]->indexes;
