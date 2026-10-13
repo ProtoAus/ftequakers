@@ -2434,6 +2434,7 @@ void S_ShutdownCard(soundcardinfo_t *sc)
 void S_Shutdown(qboolean final)
 {
 	soundcardinfo_t *sc, *next;
+	SNDVIS_Shutdown();
 
 #if defined(_WIN32) && !defined(FTE_SDL)
 	INS_SetupControllerAudioDevices(false);

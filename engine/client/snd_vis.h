@@ -4,6 +4,7 @@
 #ifndef SND_VIS_H
 #define SND_VIS_H
 
+void SNDVIS_Shutdown(void); //main thread: release loopback on restart/quit
 void SNDVIS_Init(void);		//S_Init: cvars + snd_visinfo
 void SNDVIS_Latch(void);	//S_Update, main thread, mixer locked: copies cvars for the mixer
 void SNDVIS_Frame(void);	//S_Update, main thread, mixer unlocked: snd_vis_trace

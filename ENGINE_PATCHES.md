@@ -46375,3 +46375,50 @@ retention behavior is historical and unvalidated by these arms; native Linux
 replay/addons-specific replay remain coverage limits. No mover/recorder/evidence,
 ranking, server policy or detector change. FTESurf's tools/test_update_native_recovery.py
 runs the new key-free acted cold-recovery falsifiers with retained signed fixtures.
+
+## Patch 688 -- Windows-output audio and a spatial, map-coloured visualizer sky
+
+**Problem:** sound-reactive shaders only heard the game's software mix. The
+visualizer sky lacked map-relative depth and thumbnail colours; shipped visual
+settings differed from the owner's profile. Unavailable analyser data left the
+last spectrum texture frozen. A sky thumbnail lookup in WorldLoaded can see an
+empty map name, so an otherwise valid atlas never loads.
+
+**Change:** local-only, archived `snd_vis_source` (0 game mix, 1 Windows default
+playback output) adds bounded main-thread shared WASAPI render loopback. It never
+opens a microphone, replays captured samples or writes audio. Validate and downmix
+float/PCM formats, clear history on source/discontinuity, release COM resources on
+shutdown/disable, and retry failed/default-changed endpoints. `snd_vis_status`
+reports activity without endpoint identity. Non-Windows retains game audio.
+QC exposes the selector through the menu's local-command privilege and suppresses
+automatic menu music while Windows output is selected. Upload the native blank
+spectrum/neutral wave on unavailable frames too.
+
+Three analytic enclosing layers at 3/6/12 map diagonals use the rendered eye for
+bounded, non-integrating parallax. A small current-thumbnail RT supplies distinct
+region tones rather than averaging a mixed image into one tint; neutral fallback,
+late image load and renderer reset redraw safely. Defer map-name lookup until the
+live key exists. No world geometry, mover, timer or evidence change. The sky stays
+off by default. Shipped defaults mirror the owner's visual settings, but music
+stays automatic and saved user preferences win.
+
+**Verified:** portable PCM tests and real Windows loopback external-tone control /
+subject / silence / source-switch arms pass; game-only control is zero, selected
+capture measures ~0.177 RMS, silence and switch-back are zero with capture closed.
+Production sky-fragment WGL pixels reject disabled-parallax, equal-depth and
+single-average-palette mutants: near/middle/far shift 13/6/3 pixels, distinct red
+and blue tones remain. Three QC programs compile with zero warnings. Isolated
+fresh-profile runtime reads 46 values and preserves explicit overrides; settings
+page screenshots inspected. Dedicated Source-map native screenshots exercise the
+actual shader, atlas thumbnail RT, procedural-vs-map colours, camera movement and
+vid_restart. Independent review caught the frozen image path; it was corrected.
+Verification details and final exact-build/deployment provenance live in FTESurf
+`tools/soundsky.md`; committed/built/pushed/deployed remain separate states.
+
+**Limits:** Windows default endpoint only (not per-app or microphone capture);
+protected/exclusive/unavailable playback may be silent. Device removal/default
+switch recovery is implemented but not exercised against a physical device change.
+Remote-command refusal is source-reviewed via CVAR_NOTFROMSERVER, not claimed as a
+new live network test. Linux native runtime, non-OpenGL visualizers and subjective
+scale/art direction while surfing are not certified by these controls. QC Build
+and public release version unchanged; no signed updater feed/release publication.

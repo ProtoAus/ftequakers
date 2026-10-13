@@ -536,7 +536,15 @@ static int LP_Process(lpfilter_t *lp, int rate, int nc, float target, float tau,
 #ifndef SNDVIS_STANDALONE
 /* ======================== engine glue ======================== */
 
+#include "snd_vis_loopback.h"
 extern cvar_t _snd_mixahead;
+static void SNDVIS_SourceChanged(cvar_t *var, char *oldvalue);
+static cvar_t snd_vis_source = CVARFCD("snd_vis_source", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, SNDVIS_SourceChanged, "Visualiser source: 0 game mix (default), 1 Windows default output loopback. Local opt-in only; no microphone or playback.");
+#if defined(_WIN32) && !defined(SERVERONLY)
+static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "1", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether Windows render loopback is supported by this build.");
+#else
+static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "0", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether Windows render loopback is supported by this build.");
+#endif
 
 static cvar_t snd_vis				= CVARD("snd_vis", "1", "Analyse the software mix for snd_getvis/snd_visimage. 0 removes the mixer tap entirely.");
 static cvar_t snd_vis_rate			= CVARD("snd_vis_rate", "120", "Analyses per second of audio (10..1000, 0 = 1000). They run on a fixed audio-time grid, lazily when QC asks, catching up on any grid points that became audible since the last call, so the frame rate and frame hitches do not change the results; between grid points the builtins return the cached result.");
@@ -578,8 +586,8 @@ static lpstate_t lpstates[LP_CARDS];	//mixer-owned; snd_visinfo reads them under
 static int lp_running;					//filters not bypassed; 0 with no target = no work at all
 static unsigned int lp_paints;
 
-enum {VISNA_OK, VISNA_DISABLED, VISNA_NOCARD, VISNA_EXTERNAL, VISNA_NOSAMPLES};
-static const char *vis_reasons[] = {"", "snd_vis is 0", "no sound card", "the output device mixes externally (OpenAL)", "no samples mixed yet"};
+enum {VISNA_OK, VISNA_DISABLED, VISNA_NOCARD, VISNA_EXTERNAL, VISNA_NOSAMPLES, VISNA_LOOPBACK};
+static const char *vis_reasons[] = {"", "snd_vis is 0", "no sound card", "the output device mixes externally (OpenAL)", "no samples mixed yet", "Windows output loopback unavailable (retrying on Windows)"};
 enum {VISSRC_CVAR, VISSRC_CURSOR, VISSRC_QUEUE, VISSRC_MIXAHEAD};
 static const char *vis_latsrcs[] = {"snd_vis_latency", "measured: the device's play cursor, extrapolated from the last mix", "estimated: the device's queue length", "fallback: s_mixahead"};
 
@@ -613,6 +621,35 @@ static struct
 	double lastuse;
 } visimg[VISIMG_MAX];
 static qbyte visimg_pixels[VIS_SPECBANDS*2*4];
+
+static void SNDVIS_SourceChanged(cvar_t *var, char *oldvalue)
+{
+#ifdef MULTITHREAD
+	extern void *mixermutex;
+#endif
+	(void)var; (void)oldvalue;
+	VISLB_Close();
+	vislb.retry = 0;
+#ifdef MULTITHREAD
+	if (mixermutex) S_LockMixer(); //cvar registration precedes mixer mutex creation
+#endif
+	vistap.card = NULL;
+	vistap.total = 0;
+	vistap.resets++;
+	vistap.tapon = 0;
+#ifdef MULTITHREAD
+	if (mixermutex) S_UnlockMixer();
+#endif
+	vis.coreinit = vis.haveend = 0;
+	memset(&vis.core, 0, sizeof(vis.core));
+}
+
+void SNDVIS_Shutdown(void)
+{
+	VISLB_Close();
+	vislb.retry = 0;
+	vis.coreinit = vis.haveend = 0;
+}
 
 /* ---- mixer side ---- */
 
@@ -711,7 +748,7 @@ void SNDVIS_Lowpass(soundcardinfo_t *sc, int *pb, int stride, int frames)
 void SNDVIS_Latch(void)
 {
 	float f;
-	vistap.tapon = !!snd_vis.ival;
+	vistap.tapon = !!snd_vis.ival && snd_vis_source.ival != 1;
 	if (!vistap.tapon)
 		vistap.card = NULL;	//re-enabling starts a fresh ring
 	f = snd_fx_lowpass.value;
@@ -767,9 +804,12 @@ static int SNDVIS_Update(void)
 	int rate = 0, reason = VISNA_OK, latsrc = VISSRC_CVAR, reinit = 0, n;
 	unsigned int resets = 0, i, len, on0, on1;
 	float visrate = snd_vis_rate.value, dt;
+	const float *ring;
+	int loopback = snd_vis_source.ival == 1;
 
 	if (!snd_vis.ival)
 	{
+		VISLB_Close();
 		vis.reason = VISNA_DISABLED;
 		return 0;
 	}
@@ -778,21 +818,31 @@ static int SNDVIS_Update(void)
 	else if (visrate < 10)
 		visrate = 10;
 	now = Sys_DoubleTime();
+	if (loopback && !VISLB_Poll(now))
+	{
+		vis.reason = VISNA_LOOPBACK;
+		return 0;
+	}
 
 	S_LockMixer();
 	sc = sndcardinfo;
-	if (!S_HaveOutput() || !sc)
+	if (loopback && vislb.total < VIS_N)
+		reason = VISNA_NOSAMPLES;
+	else if (!loopback && (!S_HaveOutput() || !sc))
 		reason = VISNA_NOCARD;
-	else if (sc->sn.sampleformat == QSF_EXTERNALMIXER)
+	else if (!loopback && sc->sn.sampleformat == QSF_EXTERNALMIXER)
 		reason = VISNA_EXTERNAL;
-	else if (vistap.card != sc || vistap.total < VIS_N)
+	else if (!loopback && (vistap.card != sc || vistap.total < VIS_N))
 		reason = VISNA_NOSAMPLES;
 	else
 	{
-		rate = vistap.rate;
-		total = vistap.total;
-		resets = vistap.resets;
-		if (snd_vis_latency.value >= 0)
+		rate = loopback ? vislb.rate : vistap.rate;
+		total = loopback ? vislb.total : vistap.total;
+		resets = loopback ? vislb.generation : vistap.resets;
+		ring = loopback ? vislb.ring : vistap.ring;
+		if (loopback)
+			behind = 0; //loopback packets have already reached the render endpoint
+		else if (snd_vis_latency.value >= 0)
 			behind = snd_vis_latency.value * rate;
 		else if (vistap.latmode == VISLAT_CURSOR || vistap.latmode == VISLAT_QUEUE)
 		{
@@ -830,7 +880,7 @@ static int SNDVIS_Update(void)
 			{
 				len = (unsigned int)(end - first) + VIS_N;
 				for (i = 0; i < len; i++)
-					vis.span[i] = vistap.ring[(unsigned int)(first - VIS_N + i) & (VIS_RING-1)];
+					vis.span[i] = ring[(unsigned int)(first - VIS_N + i) & (VIS_RING-1)];
 			}
 			else
 				first = 0;
@@ -948,14 +998,30 @@ static void SNDVIS_Info_f(void)
 	Vis_PrintFlush();
 }
 
+static void SNDVIS_Status_f(void)
+{
+	int live;
+	if (Cmd_IsInsecure()) return;
+	live = SNDVIS_Update();
+	Con_Printf("snd_vis_status: source %i supported %i active %i available %i packets %u rms %.6f\n",
+		snd_vis_source.ival, snd_vis_loopback_supported.ival, vislb.active, live, vislb.packets, live ? vis.core.out[11] : 0);
+}
+
 void SNDVIS_Frame(void)
 {
+	if ((!snd_vis.ival || snd_vis_source.ival != 1) && vislb.active)
+		VISLB_Close();
+	else if (vislb.active)
+		VISLB_Poll(Sys_DoubleTime()); //drain between QC polls, avoiding capture queue overruns
 	if (snd_vis_trace.ival)
 		SNDVIS_Update();	//once per frame, as QC would; the trace lines come from the analyses themselves
 }
 
 void SNDVIS_Init(void)
 {
+	Cvar_Register(&snd_vis_source, "Sound visualiser");
+	Cvar_Register(&snd_vis_loopback_supported, "Sound visualiser");
+	Cmd_AddCommandD("snd_vis_status", SNDVIS_Status_f, "Local visualiser source, capture activity and RMS; no endpoint identity.");
 	Cvar_Register(&snd_vis, "Sound visualiser");
 	Cvar_Register(&snd_vis_rate, "Sound visualiser");
 	Cvar_Register(&snd_vis_latency, "Sound visualiser");
