@@ -6842,6 +6842,244 @@ static qboolean GLBE_BlendFaceEligible(const batch_t *batch)
 	return true;
 }
 
+#define GLBLEND_PLANE_FACES 128
+#define GLBLEND_PLANE_VERTS 64
+#define GLBLEND_PLANE_INDEXES 192
+#define GLBLEND_PLANE_TOTALVERTS 2048
+#define GLBLEND_PLANE_WORK 65536
+#define GLBLEND_PLANE_EPS 0.125
+
+typedef struct
+{
+	mesh_t *mesh;
+	double normal[3], origin[3], eye;
+	double mins[2], maxs[2];
+	size_t slot;
+} glblendplane_t;
+
+typedef struct
+{
+	unsigned int admitted, edges, work, moved;
+	int status; // 0 unchanged, 1 ordered, -1 budget, -2 cycle.
+} glblendplanestats_t;
+
+static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
+{
+	int p;
+	// Even a vertex-only material program can move positions. No CPU-plane proof.
+	if (!shader || shader->numdeforms || shader->prog || shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
+		return false;
+	for (p = 0; p < shader->numpasses; p++)
+		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || shader->passes[p].prog)
+			return false;
+	return true;
+}
+
+static qboolean GLBE_BlendPlaneViewEligible(void)
+{
+	const float *p = r_refdef.m_projection_std;
+	int i;
+	if (!r_refdef.useperspective || shaderstate.mode != BEM_STANDARD)
+		return false;
+	for (i = 0; i < 16; i++)
+		if (IS_NAN(p[i])) return false;
+	// R_SetupGL also accepts external matrices. x/z,y/z bounds require this eye.
+	// Allow asymmetric/mirrored frusta and the oblique near-clip z row.
+	return p[0] != 0 && p[5] != 0 && p[1] == 0 && p[4] == 0 &&
+		p[3] == 0 && p[7] == 0 && p[11] == -1 && p[15] == 0 &&
+		p[12] == 0 && p[13] == 0;
+}
+
+static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_t *plane)
+{
+	mesh_t *mesh = face->mesh;
+	double best = 0, norm[3] = {0, 0, 0}, origin[3] = {0, 0, 0};
+	double p[3], a[3], b[3], cross[3], area, depth, side, xy;
+	int v, t, j, k;
+	unsigned int ia, ib, ic;
+	if (!mesh || face->foreground || face->batch->ent != &r_worldentity ||
+		face->batch->buildmeshes || face->batch->flags ||
+		!GLBE_BlendPlaneShaderEligible(face->batch->shader) || !GLBE_BlendPlaneShaderEligible(face->batch->shader->remapto) ||
+		mesh->xyz2_array || mesh->numbones || !mesh->xyz_array || !mesh->indexes ||
+		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
+		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
+		return false;
+	for (j = 0; j < 3; j++)
+		if (IS_NAN(r_origin[j]) || IS_NAN(vpn[j]) || IS_NAN(vright[j]) || IS_NAN(vup[j]))
+			return false;
+	for (v = 0; v < mesh->numvertexes; v++)
+		for (j = 0; j < 3; j++)
+			if (IS_NAN(mesh->xyz_array[v][j]))
+				return false;
+	// Indexed triangles avoid a duplicate/collinear first-three-vertex plane.
+	for (t = 0; t < mesh->numindexes; t += 3)
+	{
+		ia = mesh->indexes[t]; ib = mesh->indexes[t+1]; ic = mesh->indexes[t+2];
+		if (ia >= (unsigned int)mesh->numvertexes || ib >= (unsigned int)mesh->numvertexes || ic >= (unsigned int)mesh->numvertexes)
+			return false;
+		for (j = 0; j < 3; j++)
+		{
+			a[j] = (double)mesh->xyz_array[ib][j] - mesh->xyz_array[ia][j];
+			b[j] = (double)mesh->xyz_array[ic][j] - mesh->xyz_array[ia][j];
+		}
+		cross[0] = a[1]*b[2] - a[2]*b[1];
+		cross[1] = a[2]*b[0] - a[0]*b[2];
+		cross[2] = a[0]*b[1] - a[1]*b[0];
+		area = cross[0]*cross[0] + cross[1]*cross[1] + cross[2]*cross[2];
+		if (area > best)
+		{
+			best = area;
+			for (j = 0; j < 3; j++)
+			{
+				norm[j] = cross[j];
+				origin[j] = mesh->xyz_array[ia][j];
+			}
+		}
+	}
+	if (best < 1e-8)
+		return false;
+	plane->eye = 0;
+	for (j = 0; j < 3; j++)
+	{
+		plane->normal[j] = norm[j] / sqrt(best);
+		plane->origin[j] = origin[j];
+		plane->eye += plane->normal[j] * ((double)r_origin[j] - origin[j]);
+	}
+	if (fabs(plane->eye) <= 2*GLBLEND_PLANE_EPS)
+		return false;
+	for (v = 0; v < mesh->numvertexes; v++)
+	{
+		side = depth = 0;
+		for (j = 0; j < 3; j++)
+		{
+			p[j] = (double)mesh->xyz_array[v][j] - r_origin[j];
+			side += plane->normal[j] * ((double)mesh->xyz_array[v][j] - origin[j]);
+			depth += p[j]*vpn[j];
+		}
+		// Near/behind-eye spans need clipping; keep their baseline command.
+		if (fabs(side) > GLBLEND_PLANE_EPS || depth <= GLBLEND_PLANE_EPS)
+			return false;
+		for (k = 0; k < 2; k++)
+		{
+			xy = 0;
+			for (j = 0; j < 3; j++)
+				xy += p[j] * (k ? vup[j] : vright[j]);
+			xy /= depth;
+			if (!v || xy < plane->mins[k]) plane->mins[k] = xy;
+			if (!v || xy > plane->maxs[k]) plane->maxs[k] = xy;
+		}
+	}
+	plane->mesh = mesh;
+	return true;
+}
+
+// -1: a before b; +1: b before a; 0: no strict separation proof.
+static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
+{
+	double side, lo = 0, hi = 0;
+	int v, j;
+	for (v = 0; v < a->mesh->numvertexes; v++)
+	{
+		side = 0;
+		for (j = 0; j < 3; j++)
+			side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
+		if (!v || side < lo) lo = side;
+		if (!v || side > hi) hi = side;
+	}
+	if (lo > 2*GLBLEND_PLANE_EPS) return b->eye > 0 ? 1 : -1;
+	if (hi < -2*GLBLEND_PLANE_EPS) return b->eye < 0 ? 1 : -1;
+	return 0;
+}
+
+static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
+{
+	glblendplane_t *planes;
+	glblendface_t *ordered;
+	unsigned char *edges;
+	unsigned int degree[GLBLEND_PLANE_FACES] = {0}, order[GLBLEND_PLANE_FACES];
+	unsigned int verts = 0, i, j, pick, step, from, to, cost;
+	size_t f;
+	int ab, ba;
+	stats->admitted = stats->edges = stats->work = stats->moved = 0;
+	stats->status = 0;
+	// The point-eye and divided screen bounds prove only perspective rays.
+	// Nonstandard modes may select an override program with different geometry.
+	if (!GLBE_BlendPlaneViewEligible())
+		return;
+	planes = BZ_Malloc(GLBLEND_PLANE_FACES * sizeof(*planes));
+	for (f = 0; f < n; f++)
+	{
+		glblendplane_t candidate;
+		if (!GLBE_BlendPlaneGeometry(&faces[f], &candidate))
+			continue;
+		verts += candidate.mesh->numvertexes;
+		if (stats->admitted == GLBLEND_PLANE_FACES || verts > GLBLEND_PLANE_TOTALVERTS)
+		{ stats->status = -1; BZ_Free(planes); return; }
+		candidate.slot = f;
+		planes[stats->admitted++] = candidate;
+	}
+	if (stats->admitted < 2)
+	{ BZ_Free(planes); return; }
+	edges = BZ_Malloc(stats->admitted * stats->admitted);
+	memset(edges, 0, stats->admitted * stats->admitted);
+	for (i = 0; i < stats->admitted; i++)
+		for (j = i+1; j < stats->admitted; j++)
+		{
+			if (planes[i].maxs[0] < planes[j].mins[0] || planes[j].maxs[0] < planes[i].mins[0] ||
+				planes[i].maxs[1] < planes[j].mins[1] || planes[j].maxs[1] < planes[i].mins[1])
+				continue;
+			cost = planes[i].mesh->numvertexes + planes[j].mesh->numvertexes;
+			if (cost > GLBLEND_PLANE_WORK - stats->work)
+			{ stats->status = -1; goto done; }
+			stats->work += cost;
+			ab = GLBE_BlendPlaneSide(&planes[i], &planes[j]);
+			ba = -GLBE_BlendPlaneSide(&planes[j], &planes[i]);
+			if (ab && ba && ab != ba) ab = 0;
+			else if (!ab) ab = ba;
+			// A third face can otherwise reverse an unproven overlapping pair.
+			// Preserve its baseline order; incompatible constraints fall back.
+			if (!ab) ab = -1;
+			from = ab < 0 ? i : j; to = ab < 0 ? j : i;
+			edges[from*stats->admitted + to] = 1;
+			degree[to]++;
+			stats->edges++;
+		}
+	// Stable Kahn priority is baseline rank. Never compare planes in qsort.
+	for (step = 0; step < stats->admitted; step++)
+	{
+		for (pick = 0; pick < stats->admitted; pick++)
+			if (!degree[pick]) break;
+		if (pick == stats->admitted)
+		{ stats->status = -2; goto done; }
+		order[step] = pick;
+		degree[pick] = GLBLEND_PLANE_FACES + 1;
+		for (j = 0; j < stats->admitted; j++)
+			if (edges[pick*stats->admitted+j]) degree[j]--;
+	}
+	// A fixed ineligible slot is not a fixed pairwise draw order. Abstain if
+	// any moved world face would cross a dynamic/unsupported command.
+	for (i = 0; i < stats->admitted; i++)
+	{
+		from = i < order[i] ? i : order[i];
+		to = i > order[i] ? i : order[i];
+		if (planes[to].slot - planes[from].slot != to - from)
+		{ stats->status = -3; goto done; }
+	}
+	ordered = BZ_Malloc(stats->admitted * sizeof(*ordered));
+	for (i = 0; i < stats->admitted; i++)
+	{
+		ordered[i] = faces[planes[order[i]].slot];
+		stats->moved += order[i] != i;
+	}
+	for (i = 0; i < stats->admitted; i++)
+		faces[planes[i].slot] = ordered[i];
+	BZ_Free(ordered);
+	stats->status = 1;
+done:
+	BZ_Free(edges);
+	BZ_Free(planes);
+}
+
 static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 {
 	batch_t *lists[2] = {world, dynamic}, *batch, view;
@@ -6898,6 +7136,12 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				}
 			}
 	qsort(faces, n, sizeof(*faces), GLBE_BlendFaceCompare);
+	// Root static-world plane relations refine only eligible baseline slots.
+	if (!r_refdef.recurse)
+	{
+		glblendplanestats_t stats;
+		GLBE_BlendPlaneSort(faces, n, &stats);
+	}
 	for (f = 0; f < n; f++)
 	{
 		view = *faces[f].batch;

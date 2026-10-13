@@ -66,10 +66,12 @@ static struct { int mode; } shaderstate;
 #define RF_XFLIP 4
 #define nanmask 0x7f800000
 __ACTUAL_IS_NAN__
-typedef struct { int numvertexes,numindexes; float (*xyz_array)[3]; int id; } mesh_t;
+typedef struct { int numvertexes,numindexes; float (*xyz_array)[3]; int id; unsigned *indexes; float (*xyz2_array)[3]; int numbones; } mesh_t;
 // GPU handles are simulated; only the collector/submission guards run here.
 typedef struct { unsigned vertcount, vbo_handle, ebo_handle; } test_vbo_t;
-typedef struct shader_s { unsigned flags; struct shader_s *remapto; } shader_t;
+#define SHADER_PASS_MAX 16
+#define SBITS_TESSELLATION (1u<<20)
+typedef struct shader_s { unsigned flags; struct shader_s *remapto; int numpasses,numdeforms; void *prog; struct { unsigned shaderbits; void *prog; } passes[SHADER_PASS_MAX]; } shader_t;
 typedef struct { float mins[3],maxs[3],clampscale; const char *name; int type; } model_t;
 typedef struct { unsigned flags; float axis[3][3],origin[3]; model_t *model; float scale; unsigned drawflags; } entity_t;
 #define VectorScale(a,s,b) do { (b)[0]=(a)[0]*(s);(b)[1]=(a)[1]*(s);(b)[2]=(a)[2]*(s); } while(0)
@@ -92,7 +94,8 @@ static float (*cl_strisvertv)[3];
 static unsigned cl_numstris, cl_numstrisvert;
 static entity_t r_worldentity;
 static void R_DB_Poly(batch_t *b);
-static float r_origin[3],vpn[3]={0,0,1};
+static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
+static struct { int useperspective; float m_projection_std[16]; int recurse; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},0};
 #define BZ_Malloc malloc
 #define BZ_Free free
 static int draws[128],ndraw, builds;
@@ -134,7 +137,7 @@ static void capture_recursive(batch_t *b) {
 }
 int main(void) {
  float xyz[4][3]={{-2,0,10},{2,0,10},{2,2,10},{-2,2,10}};
- mesh_t far={4,6,xyz,1}, middle={4,6,xyz,2}, near={1,6,0,3},ignored={4,6,xyz,77};
+ mesh_t far={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=1}, middle={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=2}, near={.numvertexes=1,.numindexes=6,.id=3},ignored={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=77};
  entity_t e={.axis={{1,0,0},{0,1,0},{0,0,1}}},brush=e;
  float m[16],mv[16]; R_RotateForEntity(m,mv,&e,0);
  assert(GLBE_BlendFaceDepth(&far,m)==10);
@@ -156,7 +159,7 @@ int main(void) {
  mesh_t zero={0};assert(GLBE_BlendFaceDepth(&zero,m)==0);
  glblendface_t ties[3]={{.depth=5,.sequence=2},{.depth=5,.sequence=0},{.depth=5,.sequence=1}};
  qsort(ties,3,sizeof(*ties),GLBE_BlendFaceCompare);assert(ties[0].sequence==0&&ties[2].sequence==2);
- shader_t sh={0,0};sh.remapto=&sh;
+ shader_t sh={0};sh.remapto=&sh;
  mesh_t *wm[3]={&ignored,&far,&near}, *bm[1]={&middle};
  float nxyz[1][3]={{0,0,0}};near.xyz_array=nxyz;
  brush.origin[2]=-5;
@@ -186,7 +189,7 @@ int main(void) {
  cl_stris=tris;cl_strisvertv=verts;cl_numstris=2;cl_numstrisvert=4;
  batch_t spritefar={.meshes=1,.shader=&sh,.ent=&r_worldentity,.buildmeshes=R_DB_Poly,.id=12,.user.poly.surface=1};
  batch_t spritenear={.next=&spritefar,.meshes=1,.shader=&sh,.ent=&r_worldentity,.buildmeshes=R_DB_Poly,.id=11};
- float paneverts[1][3]={{0,0,20}};mesh_t pane={1,6,paneverts,13};mesh_t *paneptr=&pane;
+ float paneverts[1][3]={{0,0,20}};mesh_t pane={.numvertexes=1,.numindexes=6,.xyz_array=paneverts,.id=13};mesh_t *paneptr=&pane;
  batch_t panecommand={.mesh=&paneptr,.meshes=1,.shader=&sh,.ent=&r_worldentity};
  ndraw=builds=0;GLBE_SubmitBlendedFaces(&panecommand,&spritenear);
  assert(ndraw==3&&draws[0]==12&&draws[1]==13&&draws[2]==11&&builds==2);
@@ -248,10 +251,10 @@ int main(void) {
  ef.origin[2]=0;ndraw=0;GLBE_SubmitBlendedFaces(&plain,&cache);
  assert(draws[0]==3&&draws[1]==6);
  sh.flags=SHADER_HASREFRACT;assert(GLBE_BlendBatchImmediate(&plain));sh.flags=0;
- shader_t remap={SHADER_HASPORTAL,0};sh.remapto=&remap;assert(GLBE_BlendBatchImmediate(&plain));sh.remapto=&sh;
+ shader_t remap={.flags=SHADER_HASPORTAL};sh.remapto=&remap;assert(GLBE_BlendBatchImmediate(&plain));sh.remapto=&sh;
  dynamic.flags=BEF_FORCEADDITIVE;assert(!GLBE_BlendFaceEligible(&dynamic));assert(!GLBE_BlendBatchImmediate(&dynamic));
  // Immediate capture command precedes gather but does not consume alias records.
- shader_t cap={SHADER_HASREFRACT,0};cap.remapto=&cap;
+ shader_t cap={.flags=SHADER_HASREFRACT};cap.remapto=&cap;
  batch_t capture={.next=&modelfar,.meshes=1,.shader=&cap,.ent=&e,.buildmeshes=capture_recursive,.id=99};
  ndraw=builds=0;GLBE_SubmitBlendedFaces(&plain,&capture);
  assert(draws[0]==88&&draws[1]==99&&builds==4&&ndraw==5);
@@ -267,7 +270,30 @@ int main(void) {
  cache.flags=0;sh.flags=SHADER_NODRAW;shaderstate.mode=BEM_STANDARD;
  GLBE_SubmitBlendedFaces(NULL,&cache);assert(ndraw==0);sh.flags=0;
  ndraw=0;GLBE_SubmitBlendedFaces(NULL,&cache);assert(ndraw==1&&draws[0]==6);
- puts("PASS actual collector/BEM gates: world-owned scenetris/interleave/inverse/invalid replay/large arrays, mixed model/plain/model replay, shared alias lifetime, cache VBO once, yaw XY/scale, A/B/A, reverse, foreground, ties/ranges, zero/NaN/large, remap/capture/additive");
+ // Actual submission must call the plane stage, not just compile helper tests.
+ // CPU centroid ranks the wide slope first; strict overlap requires tiny pane first.
+ float px[2][4][3]={{{-.1f,-.1f,10},{.1f,-.1f,10},{.1f,.1f,10},{-.1f,.1f,10}},
+  {{0,-100,9},{22,-100,31},{22,100,31},{0,100,9}}};
+ unsigned pi[6]={0,1,2,0,2,3};mesh_t pm[2];mesh_t *pml[2];
+ for(int i=0;i<2;i++){pm[i]=(mesh_t){.numvertexes=4,.numindexes=6,.xyz_array=px[i],.indexes=pi,.id=250+i};pml[i]=&pm[i];}
+ batch_t pb={.ent=&r_worldentity,.shader=&sh,.mesh=pml,.meshes=2};
+ shaderstate.mode=BEM_STANDARD;vpn[0]=vpn[1]=0;vpn[2]=1;
+ memset(r_origin,0,sizeof(r_origin));sh.numdeforms=0;sh.prog=NULL;sh.numpasses=0;
+ ndraw=0;GLBE_SubmitBlendedFaces(&pb,NULL);assert(ndraw==2&&draws[0]==250&&draws[1]==251);
+ sh.prog=&pm[0];ndraw=0;GLBE_SubmitBlendedFaces(&pb,NULL);assert(ndraw==2&&draws[0]==251&&draws[1]==250);sh.prog=NULL;
+ r_refdef.useperspective=0;ndraw=0;GLBE_SubmitBlendedFaces(&pb,NULL);assert(ndraw==2&&draws[0]==251&&draws[1]==250);r_refdef.useperspective=1;
+ // Review regression: a fixed dynamic slot is not a pairwise order guarantee.
+ // B centroid20, D15, A10: baseline B,D,A. On ray(.005,0,1),
+ // D15 is behind A10 behind B9.045: moving A across D breaks D-before-A.
+ float dx[4][3]={{-.2f,-.2f,15},{.2f,-.2f,15},{.2f,.2f,15},{-.2f,.2f,15}};
+ mesh_t dm={.numvertexes=4,.numindexes=6,.xyz_array=dx,.indexes=pi,.id=252};mesh_t *dml[1]={&dm};
+ entity_t de=r_worldentity;batch_t db={.ent=&de,.shader=&sh,.mesh=dml,.meshes=1};
+ ndraw=0;GLBE_SubmitBlendedFaces(&pb,&db);assert(ndraw==3&&draws[0]==251&&draws[1]==252&&draws[2]==250);
+ // Three admitted panes: an unproven A/D intersection must keep baseline
+ // A-before-D. D-before-B and B-before-A then form a conservative cycle.
+ dx[0][0]=dx[3][0]=0;dx[1][0]=dx[2][0]=12;dm.id=253;db.ent=&r_worldentity;
+ ndraw=0;GLBE_SubmitBlendedFaces(&pb,&db);assert(ndraw==3&&draws[0]==251&&draws[1]==253&&draws[2]==250);
+ puts("PASS actual collector/BEM/plane integration: old lifetime/range/capture/remap guards, ACTED plane correction, custom-program/orthographic baseline, dynamic overlap barrier and three-world intersection fallback");
 }
 '''
 
@@ -277,9 +303,9 @@ c.write_text(pre.replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBU
 suffix = '.exe' if os.name == 'nt' else ''
 exe = root / ('gl_blend_faces_test' + suffix)
 flags = ['-std=c99', '-Wall', '-Wextra', '-Werror', '-O2', '-fno-strict-aliasing']
-command = shlex.split(args.cc) + flags + [str(c), '-o', str(exe)]
+compiler = shlex.split(args.cc) + flags
 for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
-    subprocess.run(command + variant, check=True, cwd=root)
+    subprocess.run(compiler + variant + [str(c), '-o', str(exe), '-lm'], check=True, cwd=root)
     subprocess.run([str(exe)], check=True, cwd=root)
 # Deliberately restore each rejected behavior in the extracted source, never the engine.
 # The assertions must fail, not merely report successful compilation.
@@ -296,7 +322,7 @@ for name, control in controls.items():
     cc = root / f'gl_blend_faces_{name}_control.c'
     ce = root / (f'gl_blend_faces_{name}_control' + suffix)
     cc.write_text(control)
-    subprocess.run(command[:-3] + [str(cc), '-o', str(ce), '-ffast-math'], check=True, cwd=root)
+    subprocess.run(compiler + [str(cc), '-o', str(ce), '-ffast-math', '-lm'], check=True, cwd=root)
     failed = subprocess.run([str(ce)], capture_output=True, text=True, cwd=root)
     (root / f'{name}-control.log').write_text(failed.stdout + failed.stderr)
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed

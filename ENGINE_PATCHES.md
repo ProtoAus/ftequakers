@@ -46461,3 +46461,62 @@ production default-HTTPS/restart, hostile concurrent ancestor-swap/hardlink,
 crash-safe remove/rename journal-replacement or deployment certification. This is
 source acceptance only: native pin/tag move, but QC Build/public version,
 release archives/feed/site and canonical/fleet binaries remain unchanged.
+
+## Patch 690 -- conservative plane refinement for opt-in blend sorting
+
+**Problem:** P685's single whole-face centre-depth key can flip two planar window
+faces incorrectly when the camera turns. Merely retaining an unsupported face's
+slot does not retain its ordering relationships with moved supported faces.
+Shader deformation and world batches without trustworthy CPU geometry cannot
+safely participate in a plane-based reorder.
+
+**Change:** refine only eligible `r_blendsort 2` static, identity-world faces in
+the blend-sort bucket, with bounded finite planar geometry, no material programs
+and the standard perspective projection. Derive plane/extent data from actual
+mesh vertices; reject dynamic entities, deformation, oversized/nonplanar/index-
+invalid geometry, capture and unsupported projection paths. Disjoint projected
+bounds remain unconstrained; strict separated-plane proofs supply ordering edges.
+Unknown overlapping admitted pairs retain centre-depth baseline edges. A stable
+bounded topological pass rejects cycles atomically; moves crossing an unsupported
+record's slot also abstain atomically. Budgets retain the original centre-depth
+collector order, not new coarse batches. Existing coarse commands, recursion-safe
+captures and weapon/depthhack handling remain unchanged. Hard admitted-face,
+vertex and pair-work bounds gate refinement; the complete collector/admission scan
+is not covered by the pair-work counter. Modes 0/1 and the default **1** are
+untouched; mode 2 remains opt-in.
+
+**Verified:** actual production-C collector gates run in normal/HEXEN2 builds,
+with and without fast-math; plane helpers run normal/fast-math. All compile under
+`-Wall -Wextra -Werror`; eight plane and three collector mutations must compile,
+ACT and fail assertions. Frozen Kitsune geometry supplies the ordering oracle.
+Dynamic-barrier and unknown overlapping admitted-world-pair collector regressions
+first fail pre-fix, then pass. Reviewed four-file hashes bind retained v3 native
+controls: all six input-locked Kitsune mode1 images exactly match baseline; mode2
+changes 12,065/8,931/12,277/12,016/16,900/15,244 pixels, not a stand-alone correctness
+proof. Authored native static/dynamic-barrier/unknown-world and top/pass-local
+program fixtures ACT. V2 Q1 cache1 evidence remains separately attributed; no
+Source-cache1 claim. Source Full/Dither/Full-return mode1/2 images match; the 1,501
+cross-binary Air-HUD pixels are explicitly masked after PNG triage, with zero
+remaining changes and 431,672 Full/Dither acted pixels. Kitsune A/B/A timerefresh
+means: mode1 0.619105/0.624758/0.628283 ms; mode2 0.674844/0.695402/0.668383 ms.
+These are bounded explicit-finish samples, not ordinary frame-time certification.
+Final commit-stamped build, exact runtime, warning comparison and dual-Windows
+delivery are separate gates recorded in FTESurf `tools/p690blendplanes.md`.
+
+**Number reconciliation:** this sorter was initially published under P689, but
+another session independently claimed P689 for native-recovery work during the
+long clean-build/runtime gate. Keep the peer's published `patch-689` tag intact;
+this forward metadata-only commit assigns the sorter P690/`patch-690` without
+rewriting published history or including the recovery branch's code. Production
+sorter/test bytes are unchanged. Build/deploy claims must name the actual stamped
+source SHA, not infer it from either historical patch number.
+
+**Limits:** this is bounded whole-face refinement, not triangle splitting,
+intersecting/coplanar transparency, recursive-capture sorting or an all-map/all-
+backend correctness claim. Mode1 deformed-world nondeterminism also occurs in
+the same baseline executable (20,402 A/A-return changed pixels); it is recorded,
+not claimed fixed. No arbitrary native model/sprite/weapon, hardware tessellation
+or external-projection runtime certification. Source model lighting/envmap
+experiments are excluded. No mover/evidence/QC Build, Linux fleet,
+signed update feed or release-version change. Further subjective touring remains
+in lextest.md.
