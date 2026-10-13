@@ -46275,3 +46275,36 @@ not a broad perf/water/reflection or all-backend pass; cache/capture performance
 and further native rotated-brush/model/weapon overlaps remain acceptance gates.
 No movement/evidence semantics, QC Build-number, Linux fleet or release change.
 The envmap-space draft is explicitly excluded from this patch and native bundle.
+
+## Patch 686 -- Perfect-board sound streak and animated grade letters
+
+**Problem:** the ramp-board indicator reported its percentage/grade but had no
+optional success sound or animated Perfect word. Feedback must follow actual
+new ramp arrivals, not repeated HUD frames, ground/bhop edges or replay scans.
+
+**Change:** client-only feedback at the existing live, graded Board_Frame edge.
+Perfect raises a streak's playback speed by one semitone, capped at one octave;
+a non-perfect graded board clears it. Bhops, rejected ungraded contacts, run
+resets and replay reconstruction neither clear nor reward it. New map/VM clears
+it. Board editor exposes Off/Dong/Bong/Bell, volume, rainbow and bounce. Three
+original reproducible soft PCM cues are explicitly allowlisted for shipping.
+Only Perfect's seven letters animate; mono-space prefix preserves the exact
+percentage suffix raster position. Default: Dong at 35%, rainbow/bounce on.
+
+**Verified:** clean stock and subject QC builds, zero warnings. Identically
+instrumented pre-change control executes 26 assertions and fails 20; subject
+passes all 26, including real Board_Frame grading, same-counter/bhop/run-reset
+controls, non-perfect reset, mute/off tracking, volume bounds, octave cap and
+replay scanner arms. Real dedicated-socket CSQC screenshots ACT: rainbow 2,974
+changed glyph pixels, bounce 4,901, time-separated animation 5,750; percentage,
+non-perfect and grade-hidden controls have zero changed pixels. Native raw
+mixer capture emits exactly six cues: four dong fundamentals 391.85, 410.52,
+434.69, 391.85 Hz (rise then reset), bong 195.92, bell 784.06 Hz; no extra hop,
+failure, Off or muted sound. Software mixer quantizes speed to 1/64. Old binary
+emits no cue/effect. Board settings screenshot inspected; asset shipguard passes.
+Reproducible gates and deployment provenance: FTESurf tools/p686_board_feedback.md.
+
+**Limits:** test-only live-stat injection proves presentation event plumbing,
+not a new mover/physics validation. Subjective softness/animation feel is in
+lextest.md. No engine C, grade thresholds, evidence grammar, recorder/verifier,
+QC Build-number, engine pin/tag or release change. Deployment is a separate gate.
