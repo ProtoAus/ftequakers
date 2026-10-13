@@ -46422,3 +46422,42 @@ Remote-command refusal is source-reviewed via CVAR_NOTFROMSERVER, not claimed as
 new live network test. Linux native runtime, non-OpenGL visualizers and subjective
 scale/art direction while surfing are not certified by these controls. QC Build
 and public release version unchanged; no signed updater feed/release publication.
+
+## Patch 689 -- unreadable protected native recovery and bounded object retirement
+
+**Problem:** `QKU_FSPreserveFile` treated every failed protected-file hash as
+absence. An unprivileged client could replace an existing mode000 local zone or
+mounts file, or install earlier rows before an inaccessible ancestor caused late
+failure. Mixed-pending journal rewrites retained staged objects for already
+installed/preserved rows, even after the journal no longer referenced them.
+
+**Change:** one shared install/preserve/unreadable classification permits a
+failed-hash replacement only on OS-confirmed file/path absence. Native planning
+classifies before candidate compaction; cold recovery classifies every signed
+row against the unchanged ledger before any replacement. Unreadable protected
+rows refuse with an explicit diagnostic. After a successful mixed-journal
+rewrite, retire only verified resolved objects not shared by outstanding rows.
+A failed rewrite refuses and retains staged objects. Ordinary Quakers policy,
+readable local edits, missing-file installation and signed ledgers are unchanged.
+
+**Verified:** actual production-signed 0.1.25 object closure, real external Linux
+clients under uid/gid 65534 with no supplemental groups, private tmpfs/network
+namespace, and explicit mode000-open refusal. Sixteen before controls reproduce
+old overwrite/late-refusal/resolved-object-leak actors; sixteen subject controls
+pass: zones and mounts in both row orders, genuinely missing positives,
+inaccessible ancestors, corrupt and locked pending rows, shared staged hashes,
+corrupt/unreferenced-object preservation, honest partial ledger/version/journal,
+repaired retries, failed journal writes and bounded retry exhaustion. Eight
+Windows cold-recovery regressions pass on a fresh subject build. Both Windows
+control/subject builds have the same 259 compiler/Make warning occurrences, zero
+new warnings; Linux subject has no compiler warnings. Clangd standalone check
+with the configured MinGW driver/environment completes with zero errors.
+Independent read-only review found no introduced defect; expanded tests retain
+separate partial/completed phase evidence. FTESurf `tools/p689native_recovery.md`
+records commands, hashes, failed infrastructure attempts and retention.
+
+**Limits:** no new live-planner HTTP/menu, Windows unreadable-file ACL/share-mode,
+production default-HTTPS/restart, hostile concurrent ancestor-swap/hardlink,
+crash-safe remove/rename journal-replacement or deployment certification. This is
+source acceptance only: native pin/tag move, but QC Build/public version,
+release archives/feed/site and canonical/fleet binaries remain unchanged.

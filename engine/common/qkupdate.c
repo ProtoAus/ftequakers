@@ -102,6 +102,7 @@ typedef struct
 	char		hash[QKU_HEXLEN+1];
 	quint64_t	size;
 	qboolean	exec;					//unix +x. mirrors the launcher; without it a downloaded engine won't start.
+	qboolean	preserved;				//preflight decision against the unchanged install ledger
 	int			status;
 } qku_file_t;
 
@@ -820,17 +821,33 @@ static qboolean QKU_StateHashEquals(const qku_stateent_t *e, const char *hex)
 	return e->hashlen == QKU_HEXLEN && !strncmp(e->hash, hex, QKU_HEXLEN);
 }
 
-// Planning and cold recovery must use the same baseline test for local edits.
-static qboolean QKU_FSPreserveFile(qku_state_t *st, const char *path, const char *hash)
+enum qku_preserve_e { QKUP_INSTALL, QKUP_PRESERVE, QKUP_UNREADABLE };
+
+// Planning and cold recovery must distinguish absence from an unreadable local edit.
+static enum qku_preserve_e QKU_FSPreserveFile(qku_state_t *st, const char *path, const char *hash)
 {
 	char abs[MAX_OSPATH], have[QKU_HEXLEN+1];
 	quint64_t size;
 	qku_stateent_t *old;
-	if (!QKU_FSProtected(path)) return false;
+	if (!QKU_FSProtected(path)) return QKUP_INSTALL;
 	QKU_InstallPath(abs, sizeof(abs), path);
-	if (!QKU_HashFile(abs, &size, have)) return false;
+	if (!QKU_HashFile(abs, &size, have))
+	{
+#ifdef _WIN32
+		wchar_t wide[MAX_OSPATH];
+		DWORD error;
+		if (!MultiByteToWideChar(CP_UTF8, 0, abs, -1, wide, MAX_OSPATH)) return QKUP_UNREADABLE;
+		if (GetFileAttributesW(wide) != INVALID_FILE_ATTRIBUTES) return QKUP_UNREADABLE;
+		error = GetLastError();
+		if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return QKUP_INSTALL;
+#else
+		struct stat stbuf;
+		if (lstat(abs, &stbuf) < 0 && errno == ENOENT) return QKUP_INSTALL;
+#endif
+		return QKUP_UNREADABLE;
+	}
 	old = Hash_Get(&st->ht, path);
-	return !strcmp(path, "ftesurf/fs_addons.txt") || (strcmp(have, hash) && (!old || !QKU_StateHashEquals(old, have)));
+	return (!strcmp(path, "ftesurf/fs_addons.txt") || (strcmp(have, hash) && (!old || !QKU_StateHashEquals(old, have)))) ? QKUP_PRESERVE : QKUP_INSTALL;
 }
 
 struct qku_checkargs_s
@@ -1000,6 +1017,19 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 		cand++;
 	}
 
+	// Refuse before compacting: the original candidate array still owns every path.
+	if (qku_ftesurf)
+		for (i = 0; i < cand; i++)
+		{
+			enum qku_preserve_e protect = QKU_FSPreserveFile(&st, files[i].path, files[i].hash);
+			if (protect == QKUP_UNREADABLE)
+			{
+				Q_snprintfz(plan->reason, sizeof(plan->reason), "cannot read protected update file: %.128s", files[i].path);
+				goto done;
+			}
+			files[i].preserved = protect == QKUP_PRESERVE;
+		}
+
 	//Only now, for the handful of candidates, touch the disk: the ledger can be behind reality
 	//(a hand-copied file, a previous partial apply), and re-downloading something already
 	//correct is pure waste.
@@ -1010,7 +1040,7 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 			char abs[MAX_OSPATH], have[QKU_HEXLEN+1];
 			quint64_t sz = 0;
 			QKU_InstallPath(abs, sizeof(abs), files[i].path);
-			if (qku_ftesurf && QKU_FSPreserveFile(&st, files[i].path, files[i].hash))
+			if (qku_ftesurf && files[i].preserved)
 			{ Z_Free(files[i].path); continue; }
 			if (QKU_HashFile(abs, &sz, have) && sz == files[i].size && !strcmp(have, files[i].hash))
 			{
@@ -1995,9 +2025,12 @@ void QKU_ReplayJournal(void)
 			char rel[MAX_OSPATH], hash[QKU_HEXLEN+16];
 			json_t *f = JSON_GetIndexed(files, i);
 			quint64_t size = (quint64_t)JSON_GetFloat(f, "s", -1);
+			enum qku_preserve_e protect;
 			JSON_GetString(f, "p", rel, sizeof(rel), ""); JSON_GetString(f, "h", hash, sizeof(hash), "");
 			if (!QKU_ValidHash(hash) || !QKU_FSJournalEntry(signedroot, rel, hash, size) || !QKU_FSNoLinks(rel) || !QKU_FSStageNoLinks("staged/%s", hash) || !QKU_FSStageNoLinks("staged/%s.install", hash)) Sys_Error("Unverified or linked recovery entry. Run the launcher to repair; nothing installed.");
-			preserved[i] = QKU_FSPreserveFile(&state, rel, hash);
+			protect = QKU_FSPreserveFile(&state, rel, hash);
+			if (protect == QKUP_UNREADABLE) Sys_Error("Cannot read protected update file %s. Restore access or repair with the launcher; nothing installed.", rel);
+			preserved[i] = protect == QKUP_PRESERVE;
 		}
 		QKU_FreeState(&state);
 	}
@@ -2115,7 +2148,7 @@ void QKU_ReplayJournal(void)
 			//`attempts` never rises and a permanently locked file is retried forever.
 			char tmp[MAX_OSPATH];
 			vfsfile_t *f;
-			qboolean first = true;
+			qboolean first = true, rewritten = false;
 			Q_snprintfz(tmp, sizeof(tmp), "%s%s/journal.tmp", com_gamepath, QKU_STAGEDIR);
 			FS_CreatePath(tmp, FS_SYSTEM);
 			f = FS_OpenVFS(tmp, "wb", FS_SYSTEM);
@@ -2135,8 +2168,21 @@ void QKU_ReplayJournal(void)
 				if (VFS_CLOSE(f))
 				{
 					FS_Remove(path, FS_SYSTEM);		//Sys_Rename will not overwrite
-					FS_Rename(tmp, path, FS_SYSTEM);
+					rewritten = FS_Rename(tmp, path, FS_SYSTEM);
 				}
+			}
+			if (qku_ftesurf)
+			{
+				if (!rewritten) Sys_Error("Cannot rewrite the update recovery journal. Run the launcher to repair; staged objects retained.");
+				for (i = 0; i < count; i++)
+					if (e[i].valid && (e[i].installed || preserved[i]))
+					{
+						size_t j;
+						// A resolved row may share its object with an outstanding destination.
+						for (j = 0; j < count; j++)
+							if (e[j].valid && !e[j].installed && !preserved[j] && !strcmp(e[j].hash, e[i].hash)) break;
+						if (j == count) QKU_FSPurgeObject(e[i].hash, e[i].size);
+					}
 			}
 			Con_Printf(CON_WARNING "update: %u file(s) still pending, will retry next launch (attempt %i of %i)\n",
 						(unsigned)pending, attempts, QKU_MAXATTEMPTS);
