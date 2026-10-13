@@ -1542,20 +1542,44 @@ static void QKU_Main_ObjectGot(int iarg, void *data)
 //Written before the first rename and rewritten as entries land, so a crash mid-apply is
 //recoverable: at any instant a destination is the old file, absent for microseconds, or the new
 //file -- and if absent, replay reinstalls it on the next boot.
-static void QKU_WriteJournal(int attempts)
+// Publish a closed sibling temp without removing FTESurf's recovery authority.
+// Atomic namespace replacement is not a power-loss durability guarantee.
+static qboolean QKU_CommitJournal(void)
 {
 	char path[MAX_OSPATH], tmp[MAX_OSPATH];
+	if (!QKU_FSStageNoLinks("%s", "journal.json") || !QKU_FSStageNoLinks("%s", "journal.tmp")) return false;
+	QKU_StagePath(path, sizeof(path), "%s", "journal.json");
+	QKU_StagePath(tmp, sizeof(tmp), "%s", "journal.tmp");
+	if (!qku_ftesurf)
+	{	//Keep legacy Quakers policy and generic FS_Rename semantics unchanged.
+		FS_Remove(path, FS_SYSTEM);
+		return FS_Rename(tmp, path, FS_SYSTEM);
+	}
+#ifdef _WIN32
+	{
+		wchar_t wpath[MAX_OSPATH], wtmp[MAX_OSPATH];
+		if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wpath, countof(wpath)) ||
+			!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, tmp, -1, wtmp, countof(wtmp))) return false;
+		return !!MoveFileExW(wtmp, wpath, MOVEFILE_REPLACE_EXISTING);
+	}
+#else
+	return !rename(tmp, path);
+#endif
+}
+
+static qboolean QKU_WriteJournal(int attempts)
+{
+	char tmp[MAX_OSPATH];
 	vfsfile_t *f;
 	size_t i;
 	qboolean first = true;
 
-	if (!QKU_FSStageNoLinks("%s", "journal.json") || !QKU_FSStageNoLinks("%s", "journal.tmp")) return;
-	QKU_StagePath(path, sizeof(path), "%s", "journal.json");
+	if (!QKU_FSStageNoLinks("%s", "journal.json") || !QKU_FSStageNoLinks("%s", "journal.tmp")) return false;
 	QKU_StagePath(tmp, sizeof(tmp), "%s", "journal.tmp");
 	FS_CreatePath(tmp, FS_SYSTEM);
 	f = FS_OpenVFS(tmp, "wb", FS_SYSTEM);
 	if (!f)
-		return;
+		return false;
 
 	VFS_PRINTF(f, "{\n\"version\":\"%s\",\n\"attempts\":%i,\n\"files\":[\n", qku.version, attempts);
 	for (i = 0; i < qku.numfiles; i++)
@@ -1569,10 +1593,9 @@ static void QKU_WriteJournal(int attempts)
 	}
 	VFS_PRINTF(f, "\n]\n}\n");
 	if (!VFS_CLOSE(f))
-		return;
+		return false;
 
-	FS_Remove(path, FS_SYSTEM);
-	FS_Rename(tmp, path, FS_SYSTEM);
+	return QKU_CommitJournal();
 }
 
 static void QKU_FSPurgeObject(const char *hash, quint64_t size)
@@ -1863,7 +1886,8 @@ static void QKU_Apply(void)
 	QKU_SetState(QKUS_APPLYING);
 	if (qku_ftesurf && !QKU_FSSaveEnvelope(qku.envelope, ".ftesurf-updater/ingame/manifest.json"))
 	{ QKU_Fail(QKUS_ERROR, "cannot save the signed recovery manifest; nothing installed"); return; }
-	QKU_WriteJournal(1);
+	if (!QKU_WriteJournal(1) && qku_ftesurf)
+	{ QKU_Fail(QKUS_ERROR, "cannot commit the recovery journal; nothing installed"); return; }
 	if (qku_ftesurf)
 	{
 		char path[MAX_OSPATH], *text;
@@ -1935,7 +1959,8 @@ static void QKU_Apply(void)
 
 	if (deferred)
 	{
-		QKU_WriteJournal(1);	//keep only what is still outstanding
+		if (!QKU_WriteJournal(1) && qku_ftesurf)	//keep only what is still outstanding
+		{ QKU_Fail(QKUS_ERROR, "cannot rewrite the recovery journal; restart to recover before playing"); return; }
 		Con_Printf("update: installed %u of %u files; restart to finish\n", (unsigned)installed, (unsigned)(installed+deferred));
 	}
 	else
@@ -2166,10 +2191,7 @@ void QKU_ReplayJournal(void)
 				}
 				VFS_PRINTF(f, "\n]\n}\n");
 				if (VFS_CLOSE(f))
-				{
-					FS_Remove(path, FS_SYSTEM);		//Sys_Rename will not overwrite
-					rewritten = FS_Rename(tmp, path, FS_SYSTEM);
-				}
+					rewritten = QKU_CommitJournal();
 			}
 			if (qku_ftesurf)
 			{

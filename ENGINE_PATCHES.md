@@ -46572,3 +46572,43 @@ A changed already-cached atlas image at the same filename is not force-reloaded;
 this patch handles metadata/coordinate replacement and ordinary pending image
 loads. Large tables resolve across multiple frames. Subjective scale/performance
 and physical Windows device-change acceptance remain as documented for P688.
+
+## Patch 692 -- retain native recovery authority through journal replacement
+
+**Problem:** mixed cold recovery removed journal.json before renaming its closed
+journal.tmp. A real Windows source-sharing failure, Linux rename failure or
+process interruption before rename left no authority for the next cold start.
+The current process refused, but its successor then started with pending content
+unresolved. Existing rewrite-OPEN controls did not reach this publication gap.
+
+**Change:** a narrow QKU_CommitJournal helper publishes a closed sibling temp
+without removing the FTESurf authority: checked UTF-8 conversion and Windows
+MoveFileExW(REPLACE_EXISTING), or POSIX rename, with no copy/delete fallback.
+Both live writers and the cold pending-only rewrite use it. Initial live failure
+installs nothing; deferred live failure is consumed and leaves the prior superset
+for replay. Cold failure refuses before retiring any resolved staged objects.
+Recheck existing no-link guards at commit. Legacy Quakers policy and generic
+FS/Sys rename semantics remain unchanged. No QC Build/public-version/feed change.
+
+**Verified:** full isolated Windows/Linux control and subject builds succeed with
+zero new compiler warnings; regenerated clangd check reports zero parser errors.
+Both journal row orders ACT: Windows proves writable temp plus real source-rename
+sharing refusal; Linux exact rename interposition forces EACCES, interruption
+before commit and interruption after successful real commit. Old failure/before-
+interruption controls lose authority and start mixed. Subject retains byte-exact
+old journal/all staged objects on failed commit, refuses the next corrupt retry,
+and completes/advances honest state after staged-object repair. After-commit
+interruption retains valid pending-only authority and direct repaired retry
+completes. Owned startup/error/exit and pre-cleanup job/group census required.
+Live Windows initial-failure/same-game retry and held-destination deferred rewrite
+then cold completion ACT. Existing 16 POSIX recovery, 8 Windows cold and 16 Windows
+live/cold protected share/ACL controls pass. Independent read-only source review:
+no implementation findings. Tests/limits: FTESurf tools/p692native_journal.md.
+
+**Limits:** namespace/process-interruption evidence, NOT stable-storage/power-loss
+ordering. Windows process-interruption and failure specifically at the second
+live commit are not separately injected. After-commit interruption may strand
+previously resolved staged objects before retirement; no full-cleanup claim.
+General metadata durability, hostile ancestor swaps/hardlinks, Linux default-HTTPS
+menu/restart, release and deployment remain separate gates. Canonical/fleet
+binaries are unchanged by this source acceptance.
