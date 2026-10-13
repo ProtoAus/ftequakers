@@ -46308,3 +46308,13 @@ Reproducible gates and deployment provenance: FTESurf tools/p686_board_feedback.
 not a new mover/physics validation. Subjective softness/animation feel is in
 lextest.md. No engine C, grade thresholds, evidence grammar, recorder/verifier,
 QC Build-number, engine pin/tag or release change. Deployment is a separate gate.
+
+**Deployment:** at 2026-10-13T05:19:28Z, clean product d18b5610 is built/pushed and
+both Windows program/cue sets hash-match. Personal configs unchanged. Guarded
+empty-fleet progs swap keeps .prev; all twelve final active nonzero PIDs and UDP
+ports are read back. New cues required copying before an asset-load restart.
+Each installed Windows executable then separately downloaded the exact served
+CSQC and all three exact WAVs, drew the Board settings pane and exited without
+command/VM errors. The existing HTTP mirror lacks these cues; server download
+fallback is verified, not an HTTP mirror/release deploy. No native/plugin ship.
+Public hashes and limits: FTESurf tools/p686_board_feedback.md.
