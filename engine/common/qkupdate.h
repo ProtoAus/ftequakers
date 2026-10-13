@@ -9,6 +9,7 @@
 
 void QKU_Init(void);			//register cvars + commands. call from COM_Init, after COM_InitFilesystem.
 void QKU_Shutdown(void);		//call immediately BEFORE HTTP_CL_Terminate, so in-flight downloads still have a valid target.
-void QKU_ReplayJournal(void);	//call at the TAIL of COM_InitFilesystem: paths are resolved, but nothing is mounted or dlopen()ed yet.
+void QKU_ReplayJournal(void);	//call in FS_ChangeGame after fs_manifest/com_gamepath are final, before mounting paths/plugins.
+int QKU_MenuAction(int action); //menu-only capability: check/force/apply/cancel/enable/disable/restart (0..6).
 
 #endif

@@ -46308,3 +46308,60 @@ Reproducible gates and deployment provenance: FTESurf tools/p686_board_feedback.
 not a new mover/physics validation. Subjective softness/animation feel is in
 lextest.md. No engine C, grade thresholds, evidence grammar, recorder/verifier,
 QC Build-number, engine pin/tag or release change. Deployment is a separate gate.
+
+## Patch 687 -- complete signed FTESurf updater and protected recovery
+
+**Problem:** FTESurf had no coherent opt-in launcher/native/menu update path or
+signed content-addressed release feed. The staged implementation also followed
+unchecked download `.part` and native ledger temporary links, widened restrictive
+POSIX executable permissions, and replayed signed zones over intervening edits.
+
+**Change:** finish the complete native/menu/bootstrap/feed source across the
+engine, FTESurf and launcher repositories, not an isolated helper slice. FTESurf
+uses the pinned signed feed, scoped ship allowlist, explicit persisted consent,
+shared install ownership, offline cache and whole-journal preflight. Native/menu
+updates preserve local zones and addons, stage verified objects and recover
+interrupted content updates; binary replacements defer to the launcher. Wrappers
+use the bootstrap without silently retrying a failed invocation as a direct
+engine start. Release preparation binds the bootstrap and complete cross-platform
+object closure; publication verifies objects before switching feed/site state.
+Existing Quakers policy remains separate.
+
+Before transport, the FTESurf downloader preflights every final/partial path and
+ancestor, then validates no-follow opened regular-file handles before mutation.
+Only install preparation adds execute bits; it preserves existing read/write
+permissions. Native startup and ledger writes guard the actual `.enginetmp`
+companion. Replay shares the planner's protected-file baseline test, classifies
+all rows before replacements, and resolves edited rows without claiming signed
+hashes. Protected-only completion advances the verified release version with zero
+replacement records, preserving the rollback floor and local baseline entries.
+
+**Verified:** independent whole-feature review found four concrete blockers;
+independent post-fix review is OK with notes. Fresh Windows native build has the
+same 34 compiler-warning occurrences/28 distinct payloads as P685, none new.
+Eight acted pre-fix Windows native recovery arms reproduce overwrite/link faults;
+eight subject arms pass, including five edited-zone ordering/baseline variants,
+ordinary replacement, corrupt-ledger refusal and linked-ledger-temp refusal.
+Player-setting/recording sentinels stay unchanged. Retained signed fixtures were
+replayed unchanged: no signing key used. Locked-offline Rust suites pass 37 tests
+on Windows and 38 unique tests on Linux, zero warnings; seven new regressions
+include real loopback fresh/resumed downloads, link refusals/unchanged external
+sentinels, and 0600/0640 staging -> 0700/0750 installed execution modes. Four
+pre-fix Rust regressions fail as predicted. All three P686-base QC programs build
+with zero warnings. Feed tests pass 12 units and acted publication controls
+(three invalid-prior before/after arms, 11 PowerShell and 10 shell cases).
+A private read-only-cache/source Bullseye namespace compiles the native subject;
+clock-skew warnings make that dirty build test-only, not release gate evidence.
+P686's published board sound assets/allowlist are retained. Source and native
+inputs are hash-bound in the owned task evidence; original held source is intact.
+
+**Limits:** source commits, regression builds, release proof and deployment are
+separate states. No new public version/QC Build, production signing/feed/site
+publication or canonical/fleet deployment is claimed here. Clean pinned native
+builds, full release-preview/archive gates and deployment remain required.
+Pre-existing-link checks/final-component no-follow do not defend hostile ancestor
+swaps or hardlink aliases. Native unreadable-protected-file and mixed-pending
+retention behavior is historical and unvalidated by these arms; native Linux
+replay/addons-specific replay remain coverage limits. No mover/recorder/evidence,
+ranking, server policy or detector change. FTESurf's tools/test_update_native_recovery.py
+runs the new key-free acted cold-recovery falsifiers with retained signed fixtures.

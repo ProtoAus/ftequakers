@@ -3,6 +3,7 @@
 #include "pr_common.h"
 #include "shader.h"
 #include "snd_vis.h"
+#include "qkupdate.h"
 
 #ifdef GLQUAKE
 #include "glquake.h"
@@ -2575,6 +2576,16 @@ static void QCBUILTIN PF_m_clipboard_paste(pubprogfuncs_t *prinst, struct global
 //the gamedir write path, so the file lands in ftesurf/maps/ and SHADOWS the
 //copy in a lower mount. Combined with Patch 465's .tmp-then-rename, a re-get
 //that fails leaves the old build in place rather than no map at all.
+// Menu-only entry point. Do not expose this in the remotely supplied CSQC VM:
+// menu localcmd deliberately has the same command restriction as untrusted input.
+static void QCBUILTIN PF_m_gameupdate(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float action = G_FLOAT(OFS_PARM0);
+	G_FLOAT(OFS_RETURN) = false;
+	if (!(action >= 0 && action <= 6) || action != (int)action) return;
+	G_FLOAT(OFS_RETURN) = QKU_MenuAction((int)action);
+}
+
 static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char *name = PR_GetStringOfs(prinst, OFS_PARM0);
@@ -3054,6 +3065,7 @@ static struct {
 //	{NULL,						PF_Fixme,					501},
 //	{NULL,						PF_Fixme,					502},
 	{"whichpack",				PF_whichpack,				503},
+	{"gameupdate", PF_m_gameupdate, 0},
 	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 465
 	{"mapfilekb",				PF_m_mapfilekb,				0},	//FTESurf Patch 466
 	{"fs_addonstate",			PF_m_fs_addonstate,			0},	//FTESurf Patch 480
