@@ -46198,3 +46198,38 @@ served CSQC, drew cols8/type14 board, exited normally with zero QC/smoke errors;
 both screenshots inspected. Linux native/plugin were not shipped. Public final
 provenance is in FTESurf tools/p683mapvisual.md. No evidence semantics, collision
 policy, QC Build-number or release bump.
+
+## Patch 684 -- normal viewer controls and Dusk demo-player chrome
+
+**Problem:** replay chrome consumed SUI's shared release queue before a front
+leaderboard could act. The native board separately rejected the replay cursor
+claim; HUD editor/customizer/profile gates also refused playback. Spectating
+could not save the viewed position. Crosshairs disappeared in viewed runs, and
+rewind skipped the normal keys panel. Playback chrome used unrelated square
+surfaces/colours, and its first mouse click could lack a current SUI hit.
+
+**Change:** QC-only front-modal arbitration suppresses the background playback
+SUI bracket, not the camera/clock/HUD. The native board accepts a background
+watch claim. Existing modal priority and unrelated movement protections remain.
+Spectator binds/digits can save the transmitted target pose through the existing
+untimed view-snapshot path; no recorded prefix is granted. Native rewind retains
+its server-history gate. A replay pin restores an active spectator pin first in
+one server command. Configured crosshairs and rewind keys keep their normal HUD
+positions/cvars. Dusk surfaces, rounded controls and semantic colours match the
+board; UI labels use a measured face and the clock stays fixed-width. The clock
+has a clickable Play/Pause action; mouse-down refreshes the current hit list.
+
+**Verified:** clean QC build, zero warnings. Identically instrumented baseline
+and subject run two real clients on an isolated dedicated socket. The unchanged
+baseline reproduces the HUD/modal/board/spectator restrictions. Subject actual
+line-checkbox/replay-row/pause clicks ACT; editor/customizer open during playback;
+rewind/demo saves and loads ACT; spectator save matches the watched pose, differs
+from the parked body, is untimed, preserves the spectator hold until load, then
+leaves it. Server spectator/replay hold readback is exclusive after handoff.
+Screenshots of demo/board/editor/rewind/spectate inspected at 1920-wide. Reader
+suite 306/0. Reproducible gate/limits: FTESurf tools/viewer_ui.md.
+
+**Limits:** missing streamed inputs/contact planes are not fabricated from the
+parked body. Human scale/long-name/imported/third/free-camera look acceptance
+remains in lextest.md. No engine C, evidence grammar, verifier, movement policy,
+QC Build-number, native tag or release change. Deployment is a separate gate.
