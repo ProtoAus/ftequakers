@@ -46503,6 +46503,22 @@ These are bounded explicit-finish samples, not ordinary frame-time certification
 Final commit-stamped build, exact runtime, warning comparison and dual-Windows
 delivery are separate gates recorded in FTESurf `tools/p690blendplanes.md`.
 
+**Windows delivery continuation (2026-10-13):** clean integrated P689+P690 source
+`a8e705787fad1b60661da5e8dd43c9138cc69b1b` was built with an exact full commit
+stamp and installed native-only to thirteen dual-Windows destinations at11:10 UTC.
+All predecessor `.prev`/immutable backups match. Fresh merged48-shot Kitsune
+station reproduces all six default-parity/action counts; actual-C gates and all
+11 mutants pass, as do eight signed Windows cold-recovery controls. Installed
+client/server version and OS DLL-path checks ACT against an owned guarded fixture;
+Box3D/ODE use separate phases, dedicated UI refusal is expected. All owned runtimes
+stop rc0. Complete9310 protected files remain unchanged by path/size/hash/mtime
+post-smoke. Native74/45 warnings match controls; a tar-mtime mistake rebuilt the
+shared ODE cache, adding1041 dependency warnings (full1115). Cache was not read-only
+and was not restored/deleted. No own progs/config/default2/Build/Pi/Linux/feed/
+release swap; prior water/cache/program/timing attribution and broader limits stay
+intact. Exact bundle/receipt hashes and retained setup/smoke failures are in the
+FTESurf delivery document above. This paragraph records verification, not new C.
+
 **Number reconciliation:** this sorter was initially published under P689, but
 another session independently claimed P689 for native-recovery work during the
 long clean-build/runtime gate. Keep the peer's published `patch-689` tag intact;
