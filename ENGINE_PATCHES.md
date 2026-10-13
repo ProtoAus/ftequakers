@@ -46612,3 +46612,53 @@ previously resolved staged objects before retirement; no full-cleanup claim.
 General metadata durability, hostile ancestor swaps/hardlinks, Linux default-HTTPS
 menu/restart, release and deployment remain separate gates. Canonical/fleet
 binaries are unchanged by this source acceptance.
+
+## Patch 693 -- focused profile times, editor wheel, and posed ent_view faces
+
+**Problem:** profile-time clicks opened only the board scope, at its first row;
+compact profile picks stayed on the combined/current board rather than their own
+tier/style. The zone editor treated any +jump bind as a look/window toggle, so a
+jump-bound wheel changed mouse ownership instead of scrolling. ent_view drew
+brush hulls in model coordinates without the map entity pose; translated Source
+teleports could report faces but fill somewhere other than their visible box.
+There was no automatic world-clip overlay in ent_view.
+
+**Change:** whole profile-time rows hand off scope plus rank, identity and time.
+The menu fetches that rank's neighborhood directly, highlights only the matching
+identity/time, preserves base offsets while paging, and offers earlier/top.
+Legacy five-token browse requests and both compact/full profile handles remain
+supported. Mouse2 switches editor look/window ownership; look-mode placement
+keeps its existing back/cancel behavior. Jump keys do not switch ownership.
+CSQC publishes precomputed brush origins/angles and teleport model ids. Native
+face emission applies that pose with the renderer's angle basis and colors
+teleport faces red. Reject nonfinite poses by IEEE exponent bits under fast-math.
+ent_view_clips defaults to 1 and shows nearby PLAYERCLIP/MONSTERCLIP world hulls
+with existing ordered dither. Closing/reloading clears publications. Explicit
+r_showbrushes debug modes retain control and are never rewritten. No collision,
+movement, evidence, backend, QC Build number or release-feed change.
+
+**Verified:** three QC programs compile at zero warnings. Full native control and
+subject builds have zero new warnings (74 compiler warnings plus 349 existing
+Make notices unchanged after path/line normalization). Source/navigation and
+existing fixture suites pass. Actual native pose parser/face emitter with actual
+AngleVectors passes under -ffast-math; four acted mutants fail for missing
+translation, mirrored basis, wrong color and accepted nonfinite input. Real
+socket profile clicks focus rank1500 among duplicate names/times; next1594,
+earlier1394 and top0 act. Compact profile-time click focuses its ranked/clean
+row. Malformed focus payloads, wrong identity, eight/twelve-character handles
+and legacy browse act. Jump-bound wheel moves the editor list down/up without
+changing cursor, space leaves ownership alone, Mouse2 toggles both ways and
+placement back cancels. Original-code runtime contradicts the subject checks.
+Screenshots inspected: translated trigger_teleport *36 submits one brush/six
+faces at its published map origin and visibly fills the door; an interior crop
+has 554 red-tinted pixels against zero in the original. Clip overlay submits
+75 brushes/462 faces; on/off images change 4540 pixels in a floor crop. Closing
+clears active publication. Test/limits: FTESurf tools/p693ui.md.
+
+**Limits:** GPU evidence is Windows OpenGL on the installed surf_tensor2 revision;
+rotated poses and nonfinite refusal have CPU-emitter tests, not a separate rotated
+map screenshot. Hull drawing needs retained Q2/Q3/VBSP brush data, not arbitrary
+nodraw surfaces or static-prop mesh collision. Dense in-view brush limits remain.
+A stale/removed time is not guessed from a display name; its nearby cached ranks
+are shown with a notice. Deployment/version-stamped receipt is separate from
+source acceptance. No Linux GPU or release claim.

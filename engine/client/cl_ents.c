@@ -3707,6 +3707,9 @@ struct brushviz_s
 	shader_t	*fill;
 	float		fillalpha;
 	int		nolines;	//Patch 331 addendum: fill-only pass (the in-view set)
+	qboolean teleport;	//P693: CSQC's entity classname, not brush contents
+	qboolean transform;
+	vec3_t origin, axis[3];
 };
 static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 {
@@ -3736,7 +3739,8 @@ static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 		}
 	}
 
-	if (brush->contents & FTECONTENTS_PLAYERCLIP)	{r=1.0; g=0.35; b=0.10;}
+	if (v->teleport)							{r=1.0; g=0.12; b=0.12;}
+	else if (brush->contents & FTECONTENTS_PLAYERCLIP)	{r=1.0; g=0.35; b=0.10;}
 	else if (brush->contents & FTECONTENTS_SOLID)	{r=0.25; g=0.80; b=0.25;}
 	else											{r=0.40; g=0.55; b=1.00;}
 
@@ -3745,6 +3749,18 @@ static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 		n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
 		if (n < 3)
 			continue;	/*a supporting bevel has no face of its own -- expected*/
+		if (v->transform)
+		{
+			for (j = 0; j < (int)n; j++)
+			{
+				vec3_t local;
+				VectorCopy(verts[j], local);
+				VectorCopy(v->origin, verts[j]);
+				VectorMA(verts[j], local[0], v->axis[0], verts[j]);
+				VectorMA(verts[j], local[1], v->axis[1], verts[j]);
+				VectorMA(verts[j], local[2], v->axis[2], verts[j]);
+			}
+		}
 		v->faces++;
 		if (!v->nolines)
 			for (j = 0; j < (int)n; j++)
@@ -3762,8 +3778,14 @@ void CLQ1_AddVisibleBrushes(void)
 	struct brushviz_s v;
 	vec3_t mins, maxs;
 	float d;
+	qboolean entclips;
+	cvar_t *active = Cvar_FindVar("ent_view_active");
+	cvar_t *clips = Cvar_FindVar("ent_view_clips");
+	cvar_t *dist = Cvar_FindVar("ent_view_dist");
 
-	if (!r_showbrushes.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+	// Separate from cheat debug settings: ent_view never rewrites r_showbrushes.
+	entclips = (!r_showbrushes.ival && active && active->ival && clips && clips->ival);
+	if ((!r_showbrushes.ival && !entclips) || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 	{
 		lastshow = 0;
 		return;
@@ -3785,7 +3807,7 @@ void CLQ1_AddVisibleBrushes(void)
 	/*Patch 331: the dither fill.  Inline script like hullshader's own; the GLSL
 	  program it names lives in the gamedir (glsl/ftesurf_ditherfill.glsl), which
 	  is the half the mod can retune.*/
-	if (r_showbrushes_fill.value > 0)
+	if (entclips || r_showbrushes_fill.value > 0)
 	{
 		v.fill = R_RegisterShader("ftesurf_brushfill", SUF_NONE,
 			"{\n"
@@ -3796,17 +3818,17 @@ void CLQ1_AddVisibleBrushes(void)
 					"rgbgen vertex\n"
 				"}\n"
 			"}\n");
-		v.fillalpha = r_showbrushes_fill.value;
+		v.fillalpha = entclips ? 0.25 : r_showbrushes_fill.value;
 	}
-	v.mask = (unsigned int)r_showbrushes_mask.ival;
-	v.expand = (r_showbrushes.ival == 2);
+	v.mask = entclips ? (FTECONTENTS_PLAYERCLIP|FTECONTENTS_MONSTERCLIP) : (unsigned int)r_showbrushes_mask.ival;
+	v.expand = (!entclips && r_showbrushes.ival == 2);
 	/*the player hull, so mode 2 draws the volume THIS player's origin is stopped
 	  by. pm_source's defaults; a ducked or otherwise resized player differs, and
 	  that is honest -- the swept hull is per-hull, not a property of the brush. */
 	VectorSet(v.hullmins, -16, -16, 0);
 	VectorSet(v.hullmaxs,  16,  16, 62);
 
-	d = r_showbrushes_dist.value;
+	d = entclips ? ((dist && dist->value > 0) ? dist->value : 1024) : r_showbrushes_dist.value;
 	if (d <= 0)
 		d = 768;
 	VectorSet(mins, r_refdef.vieworg[0]-d, r_refdef.vieworg[1]-d, r_refdef.vieworg[2]-d);
@@ -3816,9 +3838,9 @@ void CLQ1_AddVisibleBrushes(void)
 
 	/*one-shot readout on (re)enable: a blank screen should say WHY. "0 brushes"
 	  with a mask set is a mask problem; "0 faces" would be a winding problem. */
-	if (r_showbrushes.ival != lastshow)
+	if ((entclips ? 3 : r_showbrushes.ival) != lastshow)
 	{
-		lastshow = r_showbrushes.ival;
+		lastshow = entclips ? 3 : r_showbrushes.ival;
 		Con_Printf("r_showbrushes %i: %i brush(es), %i face(s) within %g units, mask 0x%x%s\n",
 			r_showbrushes.ival, v.brushes, v.faces, d, v.mask,
 			v.expand?" (SWEPT hull: offset by the 32x32x62 player box, so it hangs below the brush)":"");
@@ -3850,6 +3872,51 @@ chosen by the player's own aim, so the unreadable-everything case that
 r_showbrushes_dist exists for cannot arise.
 ==================================================
 */
+#if defined(Q2BSPS) || defined(Q3BSPS)
+static void CLQ1_EntViewPose(int idx, struct brushviz_s *v)
+{
+	cvar_t *cv = Cvar_FindVar("ent_view_poses");
+	const char *p = cv ? cv->string : "";
+	vec3_t origin, angles;
+	int id, used, c;
+	while (*p)
+	{
+		used = 0;
+		if (sscanf(p, "%d %f %f %f %f %f %f %n", &id, &origin[0], &origin[1], &origin[2],
+			&angles[0], &angles[1], &angles[2], &used) != 7 || !used)
+			return;
+		p += used;
+		if (id != idx) continue;
+		for (c = 0; c < 3; c++)
+		{
+			unsigned int obits, abits;
+			memcpy(&obits, &origin[c], sizeof(obits));
+			memcpy(&abits, &angles[c], sizeof(abits));
+			if ((obits & 0x7f800000u) == 0x7f800000u || (abits & 0x7f800000u) == 0x7f800000u) return;
+		}
+		VectorCopy(origin, v->origin);
+		AngleVectors(angles, v->axis[0], v->axis[1], v->axis[2]);
+		VectorNegate(v->axis[1], v->axis[1]);
+		v->transform = true;
+		return;
+	}
+}
+
+static qboolean CLQ1_EntViewTeleport(int idx)
+{
+	cvar_t *cv = Cvar_FindVar("ent_view_teleports");
+	const char *p = cv ? cv->string : "";
+	while (*p)
+	{
+		while (*p == ' ') p++;
+		if (!*p) break;
+		if (atoi(p) == idx) return true;
+		while (*p && *p != ' ') p++;
+	}
+	return false;
+}
+#endif
+
 void CLQ1_AddHoverBrushes(void)
 {
 #if defined(Q2BSPS) || defined(Q3BSPS)
@@ -3936,7 +4003,7 @@ void CLQ1_AddHoverBrushes(void)
 			  is the Nth PRECACHE SLOT, not lump *N (the winding it produced sat
 			  ten thousand units from the view), and worldmodel->submodels[N] does
 			  not carry the plugin's brush array at all (segfault).  The submodel
-			  model_t is the one object that has the brushes, world-space, in a
+			  model_t is the one object that has the brushes, model-local, in a
 			  BIH of BIH_BRUSH leaves -- VBSP_BuildBIHSubmodel builds it at load.
 			  The box is the whole coordinate space on purpose: that BIH holds
 			  only this submodel's brushes, so the box is the question "which of
@@ -3949,6 +4016,8 @@ void CLQ1_AddHoverBrushes(void)
 			v.nolines = 1;
 			v.fill = fillsh;
 			v.fillalpha = 0.1875;	//3/16: present, but the world stays the picture
+			v.teleport = CLQ1_EntViewTeleport(idx);
+			CLQ1_EntViewPose(idx, &v);
 			VectorSet(mins, -131072, -131072, -131072);
 			VectorSet(maxs,  131072,  131072,  131072);
 			BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
@@ -3977,9 +4046,19 @@ void CLQ1_AddHoverBrushes(void)
 	v.shader = linesh;
 	v.fill = fillsh;
 	v.fillalpha = 0.375;	//6/16: the hover out-reads the in-view set
+	v.teleport = CLQ1_EntViewTeleport(idx);
+	CLQ1_EntViewPose(idx, &v);
 	VectorSet(mins, -131072, -131072, -131072);
 	VectorSet(maxs,  131072,  131072,  131072);
 	BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
+	{
+		static int lastidx = -1, lastfaces = -1, lastteleport = -1;
+		if (idx != lastidx || v.faces != lastfaces || v.teleport != lastteleport)
+		{
+			lastidx = idx; lastfaces = v.faces; lastteleport = v.teleport;
+			Con_Printf("entview hover: *%i teleport %i, %i brush(es), %i face(s), origin %g %g %g\n", idx, v.teleport, v.brushes, v.faces, v.origin[0], v.origin[1], v.origin[2]);
+		}
+	}
 #endif
 }
 
