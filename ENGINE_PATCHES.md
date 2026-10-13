@@ -46423,7 +46423,7 @@ new live network test. Linux native runtime, non-OpenGL visualizers and subjecti
 scale/art direction while surfing are not certified by these controls. QC Build
 and public release version unchanged; no signed updater feed/release publication.
 
-## Patch 689 -- conservative plane refinement for opt-in blend sorting
+## Patch 690 -- conservative plane refinement for opt-in blend sorting
 
 **Problem:** P685's single whole-face centre-depth key can flip two planar window
 faces incorrectly when the camera turns. Merely retaining an unsupported face's
@@ -46462,7 +46462,15 @@ remaining changes and 431,672 Full/Dither acted pixels. Kitsune A/B/A timerefres
 means: mode1 0.619105/0.624758/0.628283 ms; mode2 0.674844/0.695402/0.668383 ms.
 These are bounded explicit-finish samples, not ordinary frame-time certification.
 Final commit-stamped build, exact runtime, warning comparison and dual-Windows
-delivery are separate gates recorded in FTESurf `tools/p689blendplanes.md`.
+delivery are separate gates recorded in FTESurf `tools/p690blendplanes.md`.
+
+**Number reconciliation:** this sorter was initially published under P689, but
+another session independently claimed P689 for native-recovery work during the
+long clean-build/runtime gate. Keep the peer's published `patch-689` tag intact;
+this forward metadata-only commit assigns the sorter P690/`patch-690` without
+rewriting published history or including the recovery branch's code. Production
+sorter/test bytes are unchanged. Build/deploy claims must name the actual stamped
+source SHA, not infer it from either historical patch number.
 
 **Limits:** this is bounded whole-face refinement, not triangle splitting,
 intersecting/coplanar transparency, recursive-capture sorting or an all-map/all-
