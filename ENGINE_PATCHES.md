@@ -46520,3 +46520,39 @@ or external-projection runtime certification. Source model lighting/envmap
 experiments are excluded. No mover/evidence/QC Build, Linux fleet,
 signed update feed or release-version change. Further subjective touring remains
 in lextest.md.
+
+## Patch 691 -- recover late thumbnail metadata without reloading the map
+
+**Problem:** P688 cached the map key before checking `data/mapmeta.txt`. A missing
+file/row or subsequently regenerated atlas coordinates were ignored indefinitely
+on that same map, even though late atlas image decoding itself was retried. The
+synchronous lookup also scanned an entire metadata table inside one sky frame.
+
+**Change:** CSQC reads at most 64 metadata rows per active sky view. Retry unresolved
+rows after five seconds; recheck resolved rows after 30 seconds. Retain a valid
+same-map palette during lookup, then clear absent/malformed coordinates to neutral;
+map changes clear old coordinates immediately. Strict decimal indices no longer
+interpret arbitrary text as zero. Close interrupted streams on world load,
+renderer reset or sky disable. `milk_skyinfo [refresh]` exposes map/coordinates,
+scan activity, rows and measured maximum batch, and can request an immediate scan.
+No native capture/renderer/movement/evidence or Build/release-number change; native
+pin and tag are left intact by this patch (tests use the P688 runtime).
+
+**Verified:** three QC programs compile at zero warnings. Eight production/static
+mutant contracts and 17-default consistency check pass. An isolated real dedicated
+surf_rookie/client publishes metadata only after missing-state proof: neutral to
+tan without refresh; changed cell to olive after a 1,025-row scan with maxbatch64;
+removed/non-numeric rows and file disappearance return neutral. Reappearance and
+blank lines before valid rows recover. Renderer restart, sky disable mid-scan
+(rows0/file closed), re-enable and automatic successful-row refresh all act. An
+otherwise-identical compiled no-retry control reaches the end marker but is
+rejected at late-row recovery (-1/-1 instead of 5/0). Native screenshots inspected.
+Reproducible test and feature/limits: FTESurf `tools/test_soundsky_metadata.py` and
+`tools/soundsky.md`. Exact commit and deployment receipts stay separate from this
+source/test record.
+
+**Limits:** table generation remains an offline/local operation, not a downloader.
+A changed already-cached atlas image at the same filename is not force-reloaded;
+this patch handles metadata/coordinate replacement and ordinary pending image
+loads. Large tables resolve across multiple frames. Subjective scale/performance
+and physical Windows device-change acceptance remain as documented for P688.
