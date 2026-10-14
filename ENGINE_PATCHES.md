@@ -6,7 +6,7 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
-## Patch 701 — play public KSF CSS clips through the imported viewer
+## Patch 702 — play public KSF CSS clips through the imported viewer
 
 ### Problem
 KSF board times existed in game, but the public CSS/66t v2/v3 binary replays
@@ -31,13 +31,14 @@ CSQC retains foreign source/style, shows KSF/build-unknown chrome and imported/
 not-verified info, and leaves imported recording dates unknown. `demodata` is
 an imported ground/velocity capability alongside the compatible `momdemo` key,
 not a native evidence claim. The existing console player, pause/seek/rate/path
-controls and loaded-map name refusal are reused. Twelve supplied public samples
+controls are reused; KSF-only missing/different map names are refused with full
+previous-viewer pin/cursor cleanup, preserving native/Momentum warning behavior. Twelve supplied public samples
 have safe console aliases; converted runtime files live outside player data.
 Automatic KSF leaderboard Watch/download association is explicitly not included.
 No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
 
 ### Verified
-- Eight independent synthetic converter tests cover v2/v3/extensibility, exact
+- Nine independent synthetic converter tests cover v2/v3/extensibility, exact
   fields, raw-button vs FSI namespaces, opposed inputs, bookends/bonus names,
   malformed/nonfinite/HTML/timing/binding rejection, sanitization/no overwrite.
   Existing binary-inspector tests pass. All twelve public clips independently
@@ -45,8 +46,10 @@ No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
 - Dedicated socket overlays on surf_null, surf_prosurf and surf_monolith compare
   every in-run source-frame camera coordinate/pitch/yaw, plus end velocity,
   pause/seek and actual-frame playback. v2/main/bonus, native and old momdemo
-  controls, wrong-map refusal and explicit provenance are exercised by
-  `tools/p701ksf_smoke.py`. Screenshots show map alignment, imported provenance
+  controls, cold wrong-map refusal and active missing/wrong-map replacement
+  cleanup (immediate closed state/cursor release and actual body movement) are
+  exercised by
+  `tools/p702ksf_smoke.py`. Screenshots show map alignment, imported provenance
   and v2 unavailable versus v3 inferred contact. Build: all three progs, zero
   warnings. Engine compilation is not required by this QC/tools-only change.
 - Recorder suite: 306 checks, zero failures. Current owner corpus: 273 REC plus
