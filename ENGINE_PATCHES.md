@@ -47043,6 +47043,36 @@ No existing map/zone or personal cache was replaced. Archived-version zones or
 an owner-approved map refresh remain BACKLOG, as does native KSF replay playback.
 No native pin/tag, QC Build, release/feed or evidence semantics changed.
 
+## Patch 704 -- Guard dev installs and detach the Windows Surf launcher
+
+**Problem.** A deployed 13.38 MB development preview retained rejected wave
+artwork, waited for the game to quit, and treated a source checkout as an archive
+install. Running its saved-permission updater replaced the newer Windows dev
+engine/plugins/progs with public release 0.1.25.
+
+**Change.** Launcher source in ProtoAus/Quakers-Launcher retains the already
+centered logo-only header. Windows game spawn is detached with null standard
+handles and returns immediately after successful spawn; errors remain visible.
+A `.git` directory or worktree file disables release checks regardless of saved
+consent/automation flags, without changing that permission. Pending bootstrap or
+in-game recovery refuses instead of applying release files to the dev checkout.
+Build/deploy the locked optimized release profile, not the earlier debug preview.
+Restore only exact independently recorded dev binary predecessors; no player
+config/data, updater ledger, release/feed or live fleet change.
+
+**Verified.** Windows Rust library: 42 passed, zero new warnings. Complete signed
+launcher integration suite passes, including invalid signatures, locks, recovery,
+junction/refusal/corrupt/offline controls. Synthetic `.git` directory/file arms
+make zero feed requests under saved permission/--yes/--enable-updates/--verify;
+player control fetches once and rejects an unsigned feed. Actual Enter input into
+fresh hidden Windows consoles proves the old launcher waits and the new direct
+and batch launchers exit, close their own consoles, and leave a persistent actor
+alive with exact args/CWD. Invalid executable spawn rejects. Optimized binary is
+3,583,488 bytes versus 13,379,584 (73.2% smaller); TLS and signature policy remain.
+Details/restoration status: FTESurf tools/p704launcher.md. Only launcher product
+source changed: engine pin/tag, QC Build and public version remain unchanged.
+No Linux/physical-desktop/new game runtime or live Pi acceptance is claimed.
+
 ## Patch 703 -- Retain bounded native recovery authority through cleanup
 
 **Problem:** Reducing recovery journals loses resolved object names across an
