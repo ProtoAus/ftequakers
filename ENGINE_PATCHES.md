@@ -46682,3 +46682,49 @@ source acceptance. Fresh precision/editor gates cover retained HTTP fixtures,
 fallback UI and synthetic input, not real backend/native production-provider or
 clipboard behavior. Native code/runtime tag remain4148e7292/patch-693; this
 acceptance update is documentation-only. No Linux GPU or release claim.
+
+## Patch 694 -- animated World of Surf launcher presentation
+
+**Problem:** the signed Surf bootstrap used plain status output while the Quakers
+entry point had a graphical terminal downloader. The owner requested prominent
+World of Surf artwork, live progress and Enter interaction, then removed the
+initial tagline and requested animated logo/artwork. The full game rename is
+separate; another agent's performance workload must remain undisturbed.
+
+**Change:** launcher-only Rust presentation: large cyan/violet SURF wordmark,
+sunset/ramp scene, moving neon sheen, twinkling stars, glowing sun and flowing
+waves on the existing 160 ms terminal cadence. Animated Enter/Y confirmation
+pages, Esc/N/Q/Ctrl-C rejection and safe early-return --ui-preview / --ui-demo
+controls. Main progress counts successfully verified files; content meters count
+verified bytes and workers show staged bytes. Received traffic/ETA is separate;
+incomplete percentages floor below100 and resumed verified files count without
+new traffic. Transfer cancellation enters normal raw-input control flow, aborts
+and drains workers, restores the terminal and returns before installation or
+launch. Partials remain available for guarded rehash/resume. No new dependency,
+GPU window, art download, disk/feed/signing-key rename or Quakers UI replacement.
+Native engine and QC source, pins/tags, Build/public version/feed remain unchanged.
+
+**Verified:** locked offline single-worker Windows debug bootstrap/example builds,
+zero compiler warnings; 41 Rust library tests pass, including existing guarded
+transport/signature/disk-policy tests, 46 distinct artwork frames with invariant
+progress cells, tiny/resized layouts, all content categories and99%-not100%
+boundaries. Six explicit piped-I/O smoke controls: preview before install/network,
+help without tagline, noninteractive demo refusal, undecided permission refusal,
+offline/no-launch and --yes error without a pause. Six hidden real Windows-console
+controls ACT: sample animation with Enter/Esc/Ctrl-C, renderer normal stop/Ctrl-C,
+and an active slow loopback transfer cancelled after nonzero partial staging.
+All exit through normal control flow; main-screen readback, raw input restoration
+and final visible cursor pass. The transfer leaves an unpromoted partial object,
+never starts installation or a game. Original independent review found Ctrl-C
+cleanup and premature rounded100%; both are corrected and falsified. Fresh
+follow-up independent source review is OK with notes, no residual findings. Commands,
+source/commit provenance and limits: FTESurf tools/p694launcher.md.
+
+**Limits:** source acceptance and isolated debug artifacts, NOT official archive,
+release/feed publication or canonical/fleet deployment. No game/engine/QC process
+or performance benchmark was run. Native controls use hidden Win32 consoles;
+ConPTY setup attempts failed and are not evidence. Win32 cursor visibility during
+the private VT alternate buffer did not establish a hide-command measurement;
+only final cursor restoration is proven. Physical desktop visuals, external hard
+termination/signal delivery and Linux execution remain separate. Rendered PNG/GIF
+previews use explicitly labeled sample terminal cells, not game screenshots.
