@@ -46728,3 +46728,33 @@ the private VT alternate buffer did not establish a hide-command measurement;
 only final cursor restoration is proven. Physical desktop visuals, external hard
 termination/signal delivery and Linux execution remain separate. Rendered PNG/GIF
 previews use explicitly labeled sample terminal cells, not game screenshots.
+
+## Patch 695 -- replace abstract launcher artwork with a plain ASCII wave
+
+**Problem:** the owner rejected the P694 ramp/sun illustration as unlike its
+claimed scene and requested a simpler ASCII wave. Differently sized rows were
+also centered independently, offsetting the picture's connected outline.
+
+**Change:** illustration-only Rust/README correction: a ten-line, entirely ASCII
+curling ocean wave in white/cyan replaces the ramp, sun and stars. Pad rows to
+one width before centering, preserving the outline at ordinary80-column width.
+Keep the curl steady/readable while its tilde waterline flows sideways; the logo
+sheen remains. Download meters, progress counters, confirmation/cancellation,
+transport, feeds, signatures, install/launch gates and Quakers UI are unchanged.
+No native/QC source or runtime pin/tag, Build/public version/feed change.
+
+**Verified:** isolated locked/offline jobs1 IDLE-priority Windows bootstrap/example
+builds, zero warnings;42 library tests pass. New ASCII/equal-row-width/wide80/100
+render checks and stable-curl/moving-water control ACT; existing46 distinct art
+frames retain unchanged progress cells. Six piped binary and six hidden native
+console regressions pass, including Enter/Esc/Ctrl-C and an acted partial local
+transfer cancellation. Parent inspected the rendered PNG after row alignment and
+compared the pre-alignment control. Scope is two launcher files only; no fresh
+independent review ceremony is claimed for the localized illustration amendment.
+Commands/source/preview provenance: FTESurf tools/p695wave.md.
+
+**Limits:** owner/physical-console aesthetic acceptance remains separate; previous
+cursor-hide/Linux/external-signal coverage limits are unchanged. Sample PNG/GIF
+are terminal-cell renders. Only source and an isolated safe debug preview are
+accepted; no live launcher/game replacement, engine/performance run, full rename,
+official archive/release/feed publication or canonical/fleet deployment.
