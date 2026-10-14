@@ -7,6 +7,41 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 714 — separate KSF top-up filing from fresh replay authority
+
+### Problem
+An explicit top-up discarded each actual page and labeled the entire cached
+board as fetched, even when a completed board made no request. An equal-time,
+same-date seed replacement could therefore be undone and its obsolete demo
+relinked from retained bytes. Independently, 256 current cold jobs blocked a
+later retained repair forever with zero network allowance.
+
+### Change
+Top-ups preserve actual page rows separately from whole-cache filing; both
+previously owed and newly selected cached boards use exact fresh identity
+matching. Durable owed intent precedes filing/acknowledgement even for no-page
+completion. At most two retained candidates per discovery pass may displace
+unattempted cold intents at queue saturation. Original digest/PB validation,
+256-slot cap, two-original and network budgets stay unchanged; retry/strike
+records are not displaced. No engine/QC source or replay grammar change.
+
+### Verified
+Source-only offline continuation at
+`C:/FTESurf-worktrees/ksfaccept-20261014T181832Z/artifacts/`.
+`topup-red-control.log` reproduces stale A resurrection for no-page and
+unrelated-fresh-page arms, while genuinely fresh A acts. `coldqueue-red.log`
+passes the 255-cold control and fails with 256 cold jobs. Final focused controls
+pass; `collector-accepted.log` runs 31 tests, OK, including both owed states,
+retained admission 2+1 fairness, ID reuse, no fetch/sleep and protected retries.
+Importer 106 assertions/0 failed, top-up 8 tests/OK. Independent frozen-source
+review returns OK with notes. QC candidate `eaad87288f0c37699fc8b6602ed021f477224037`
+passes all ten existing exact-commit delivery groups, including the flattened
+31-test collector. Protected-only queues remain a conditional-admission
+follow-up, not an unconditional fairness guarantee. Tooling corrections are
+separate; collector proof and limitations are recorded in tools/p714ksfaccept.md.
+No live SSH/crawl/install/reload/cron/game/GPU or native build,
+engine pin/tag, QC Build bump or fleet acceptance is claimed.
+
 ## Patch 713 — close KSF cache, recovery and backend delivery gaps
 
 ### Problem
