@@ -434,7 +434,8 @@ static qboolean QKU_FSNoLinks(const char *rel)
 #else
 		{
 			struct stat st;
-			if (!lstat(path, &st) && S_ISLNK(st.st_mode)) return false;
+			if (!lstat(path, &st)) { if (S_ISLNK(st.st_mode)) return false; }
+			else if (errno != ENOENT) return false;
 		}
 #endif
 		path[i] = saved;
@@ -561,10 +562,12 @@ static qboolean QKU_HashFile(const char *abspath, quint64_t *outsize, char *outh
 	qbyte block[65536];
 	void *ctx;
 	int r;
-	quint64_t sz = 0;
+	quint64_t sz = 0, expected;
+	qboolean closed;
 
 	if (!f)
 		return false;
+	expected = VFS_GETLEN(f);
 
 	ctx = Z_Malloc(hash_blake2b_256.contextsize);
 	hash_blake2b_256.init(ctx);
@@ -576,14 +579,55 @@ static qboolean QKU_HashFile(const char *abspath, quint64_t *outsize, char *outh
 		hash_blake2b_256.process(ctx, block, r);
 		sz += r;
 	}
-	VFS_CLOSE(f);
+	closed = VFS_CLOSE(f);
 	hash_blake2b_256.terminate(digest, ctx);
 	Z_Free(ctx);
 
 	outhex[Base16_EncodeBlock((const char*)digest, hash_blake2b_256.digestsize, (qbyte*)outhex, QKU_HEXLEN)] = 0;
 	if (outsize)
 		*outsize = sz;
-	return r == 0;
+	// Windows VFS reports ReadFile failure as zero: EOF alone is not readability.
+	return r == 0 && (!qku_ftesurf || (closed && sz == expected));
+}
+
+// -1 means denied/nonregular, 0 is OS-confirmed absent, 1 is regular.
+static int QKU_FSRegular(const char *path)
+{
+#ifdef _WIN32
+	wchar_t wide[MAX_OSPATH];
+	DWORD attr, error;
+	if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, countof(wide))) return -1;
+	attr = GetFileAttributesW(wide);
+	if (attr != INVALID_FILE_ATTRIBUTES) return (attr & (FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT)) ? -1 : 1;
+	error = GetLastError();
+	return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+#else
+	struct stat st;
+	if (!lstat(path, &st)) return S_ISREG(st.st_mode) ? 1 : -1;
+	return errno == ENOENT ? 0 : -1;
+#endif
+}
+
+// Missing content can be repaired; unreadable content cannot be classified.
+static qboolean QKU_FSReadableClosure(json_t *root)
+{
+	json_t *files = JSON_FindChild(root, "files");
+	size_t i;
+	for (i = 0; i < JSON_GetCount(files); i++)
+	{
+		json_t *f = JSON_GetIndexed(files, i);
+		char platform[32], rel[MAX_OSPATH], path[MAX_OSPATH], have[65];
+		quint64_t size;
+		int regular;
+		JSON_GetString(f, "platform", platform, sizeof(platform), "");
+		if (strcmp(platform, "all") && strcmp(platform, QKU_PLATFORM)) continue;
+		JSON_GetString(f, "path", rel, sizeof(rel), "");
+		if (!QKU_FSNoLinks(rel)) return false;
+		QKU_InstallPath(path, sizeof(path), rel);
+		regular = QKU_FSRegular(path);
+		if (regular < 0 || (regular && !QKU_HashFile(path, &size, have))) return false;
+	}
+	return true;
 }
 
 static qboolean QKU_FSComplete(json_t *root)
@@ -705,7 +749,7 @@ static qboolean QKU_FSSaveEnvelope(const char *text, const char *rel)
 	return FS_Rename(tmp, path, FS_SYSTEM);
 }
 
-static qboolean QKU_FSJournalEntry(json_t *signedroot, const char *path, const char *hash, quint64_t size)
+static qboolean QKU_FSJournalEntry(json_t *signedroot, const char *path, const char *hash, quint64_t size, qboolean exec)
 {
 	json_t *files = JSON_FindChild(signedroot, "files"), *f;
 	char p[MAX_OSPATH], h[65], plat[32];
@@ -718,7 +762,7 @@ static qboolean QKU_FSJournalEntry(json_t *signedroot, const char *path, const c
 		JSON_GetString(f, "platform", plat, sizeof(plat), "all");
 		if (strcmp(p, path) || (strcmp(plat, "all") && strcmp(plat, QKU_PLATFORM))) continue;
 		JSON_GetString(f, "hash", h, sizeof(h), "");
-		return !strcmp(h, hash) && size == (quint64_t)JSON_GetFloat(f, "size", 0);
+		return !strcmp(h, hash) && size == (quint64_t)JSON_GetFloat(f, "size", 0) && exec == !!JSON_GetInteger(f, "exec", 0);
 	}
 	return false;
 }
@@ -1567,12 +1611,22 @@ static qboolean QKU_CommitJournal(void)
 #endif
 }
 
+static qboolean QKU_JournalPrintf(vfsfile_t *f, const char *fmt, ...)
+{
+	char line[MAX_OSPATH*2+256];
+	va_list args;
+	va_start(args, fmt);
+	Q_vsnprintfz(line, sizeof(line), fmt, args);
+	va_end(args);
+	return VFS_WRITE(f, line, strlen(line)) == (int)strlen(line);
+}
+
 static qboolean QKU_WriteJournal(int attempts)
 {
 	char tmp[MAX_OSPATH];
 	vfsfile_t *f;
 	size_t i;
-	qboolean first = true;
+	qboolean first = true, written = true;
 
 	if (!QKU_FSStageNoLinks("%s", "journal.json") || !QKU_FSStageNoLinks("%s", "journal.tmp")) return false;
 	QKU_StagePath(tmp, sizeof(tmp), "%s", "journal.tmp");
@@ -1581,42 +1635,96 @@ static qboolean QKU_WriteJournal(int attempts)
 	if (!f)
 		return false;
 
-	VFS_PRINTF(f, "{\n\"version\":\"%s\",\n\"attempts\":%i,\n\"files\":[\n", qku.version, attempts);
+	written &= QKU_JournalPrintf(f, "{\n\"version\":\"%s\",\n\"attempts\":%i,\n\"files\":[\n", qku.version, attempts);
 	for (i = 0; i < qku.numfiles; i++)
 	{
-		if (qku.files[i].status != QKUF_STAGED)
-			continue;	//already installed, or never staged: nothing to replay
-		VFS_PRINTF(f, "%s{\"p\":\"%s\",\"h\":\"%s\",\"s\":%.0f,\"x\":%i}",
+		if (qku.files[i].status != QKUF_STAGED && !(qku_ftesurf && qku.files[i].status == QKUF_DONE))
+			continue;	//FTESurf carries resolved rows until checked retirement
+		written &= QKU_JournalPrintf(f, "%s{\"p\":\"%s\",\"h\":\"%s\",\"s\":%.0f,\"x\":%i}",
 					first?"":",\n", qku.files[i].path, qku.files[i].hash,
 					(double)qku.files[i].size, qku.files[i].exec?1:0);
 		first = false;
 	}
-	VFS_PRINTF(f, "\n]\n}\n");
-	if (!VFS_CLOSE(f))
+	written &= QKU_JournalPrintf(f, "\n]\n}\n");
+	if (!VFS_CLOSE(f)) return false;
+	if (qku_ftesurf && !written)
 		return false;
 
 	return QKU_CommitJournal();
 }
 
-static void QKU_FSPurgeObject(const char *hash, quint64_t size)
+// Reclassify shared references at the destructive seam, including legacy outside rows.
+static qboolean QKU_FSHashPending(json_t *root, const char *hash)
+{
+	qku_state_t state;
+	json_t *files = JSON_FindChild(root, "files");
+	size_t i;
+	qboolean pending = false;
+	if (!QKU_LoadState(&state)) { QKU_FreeState(&state); return true; }
+	for (i = 0; i < JSON_GetCount(files); i++)
+	{
+		json_t *f = JSON_GetIndexed(files, i);
+		char platform[32], rel[MAX_OSPATH], want[65], path[MAX_OSPATH], have[65];
+		quint64_t size;
+		enum qku_preserve_e protect;
+		JSON_GetString(f, "platform", platform, sizeof(platform), "");
+		JSON_GetString(f, "hash", want, sizeof(want), "");
+		if ((strcmp(platform, "all") && strcmp(platform, QKU_PLATFORM)) || (hash && strcmp(want, hash))) continue;
+		JSON_GetString(f, "path", rel, sizeof(rel), "");
+		if (!QKU_FSNoLinks(rel)) { pending = true; break; }
+		protect = QKU_FSPreserveFile(&state, rel, want);
+		if (protect == QKUP_PRESERVE) continue;
+		QKU_InstallPath(path, sizeof(path), rel);
+		if (protect == QKUP_UNREADABLE || !QKU_HashFile(path, &size, have) || size != (quint64_t)JSON_GetFloat(f, "size", -1) || strcmp(have, want)) { pending = true; break; }
+	}
+	QKU_FreeState(&state);
+	return pending;
+}
+
+static qboolean QKU_FSPurgeObject(json_t *root, const char *hash, quint64_t size)
 {
 	char path[MAX_OSPATH], have[QKU_HEXLEN+1];
 	quint64_t sz;
-	if (!QKU_ValidHash(hash) || !QKU_FSStageNoLinks("staged/%s", hash)) return;
+	int regular;
+	if (!root || QKU_FSHashPending(root, hash) || !QKU_ValidHash(hash) || !QKU_FSStageNoLinks("staged/%s", hash)) return false;
 	QKU_StagePath(path, sizeof(path), "staged/%s", hash);
-	if (QKU_HashFile(path, &sz, have) && sz == size && !strcmp(have, hash)) FS_Remove(path, FS_SYSTEM);
+	regular = QKU_FSRegular(path);
+	if (!regular) return true;
+	if (regular < 0 || !QKU_HashFile(path, &sz, have) || sz != size || strcmp(have, hash)) return false;
+	if (!QKU_FSStageNoLinks("staged/%s", hash)) return false;
+	return FS_Remove(path, FS_SYSTEM) || QKU_FSRegular(path) == 0;
+}
+
+static qboolean QKU_DropJournal(void)
+{
+	char path[MAX_OSPATH];
+	if (!QKU_FSStageNoLinks("%s", "journal.json")) return false;
+	QKU_StagePath(path, sizeof(path), "%s", "journal.json");
+	return FS_Remove(path, FS_SYSTEM) || QKU_FSRegular(path) == 0;
 }
 
 static void QKU_PurgeStaging(void)
 {
-	char path[MAX_OSPATH];
 	size_t i;
-	if (!QKU_FSStageNoLinks("%s", "journal.json")) return;
-	QKU_StagePath(path, sizeof(path), "%s", "journal.json");
-	FS_Remove(path, FS_SYSTEM);
+	qboolean clean = true;
+	char *payload = NULL;
+	json_t *root = qku_ftesurf ? QKU_FSParseSigned(qku.envelope, &payload) : NULL;
+	if (!qku_ftesurf) { QKU_DropJournal(); return; }
 	if (qku_ftesurf)
-		for (i = 0; i < qku.numfiles; i++) QKU_FSPurgeObject(qku.files[i].hash, qku.files[i].size);
-	// Only Quakers consumes objects by rename. Displaced originals remain until next boot.
+		for (i = 0; i < qku.numfiles; i++)
+			if (!QKU_FSPurgeObject(root, qku.files[i].hash, qku.files[i].size)) clean = false;
+	if (root) JSON_Destroy(root);
+	if (payload) Z_Free(payload);
+	if (clean && !QKU_DropJournal()) clean = false;
+	if (!clean) Con_Printf(CON_WARNING "update: cleanup retained for next launch\n");
+}
+
+static qboolean QKU_FSRetainedGeneration(void)
+{
+	char path[MAX_OSPATH];
+	if (!QKU_FSStageNoLinks("%s", "journal.json")) return true;
+	QKU_StagePath(path, sizeof(path), "%s", "journal.json");
+	return QKU_FSRegular(path) != 0;
 }
 
 //Delete the displaced originals from a previous session. Safe here and nowhere else: at boot
@@ -1883,6 +1991,33 @@ static void QKU_Apply(void)
 	if (qku_ftesurf && sv.state != ss_dead)
 	{ Con_Printf("update: stop the local server before installing\n"); QKU_SetState(QKUS_AVAILABLE); return; }
 #endif
+	if (qku_ftesurf && QKU_FSRetainedGeneration())
+	{ QKU_Fail(QKUS_LAUNCHER, "retained update recovery; run the launcher before another update"); return; }
+	if (qku_ftesurf)
+	{
+		char *payload = NULL, version[64];
+		json_t *root = QKU_FSParseSigned(qku.envelope, &payload);
+		qku_state_t state;
+		qboolean valid = root && QKU_FSValidateManifest(root) && QKU_FSReadableClosure(root);
+		if (!QKU_LoadState(&state)) valid = false;
+		JSON_GetString(root, "version", version, sizeof(version), "");
+		if (strcmp(version, qku.version) || (*state.version && QKU_FSVersionOlder(version, state.version)) || !qku.numfiles || qku.numfiles > 8192) valid = false;
+		for (i = 0; valid && i < qku.numfiles; i++)
+		{
+			size_t j;
+			qku_file_t *f = &qku.files[i];
+			enum qku_preserve_e protect;
+			if (!QKU_FSJournalEntry(root, f->path, f->hash, f->size, f->exec) || !QKU_FSStageNoLinks("staged/%s", f->hash) || !QKU_FSStageNoLinks("staged/%s.install", f->hash)) { valid = false; break; }
+			for (j = 0; j < i; j++) if (!Q_strcasecmp(qku.files[j].path, f->path)) valid = false;
+			protect = QKU_FSPreserveFile(&state, f->path, f->hash);
+			if (protect == QKUP_UNREADABLE) valid = false;
+			f->preserved = protect == QKUP_PRESERVE;
+		}
+		QKU_FreeState(&state);
+		if (root) JSON_Destroy(root);
+		if (payload) Z_Free(payload);
+		if (!valid) { QKU_Fail(QKUS_LAUNCHER, "unverified or unreadable update; nothing installed"); return; }
+	}
 	QKU_SetState(QKUS_APPLYING);
 	if (qku_ftesurf && !QKU_FSSaveEnvelope(qku.envelope, ".ftesurf-updater/ingame/manifest.json"))
 	{ QKU_Fail(QKUS_ERROR, "cannot save the signed recovery manifest; nothing installed"); return; }
@@ -1904,6 +2039,8 @@ static void QKU_Apply(void)
 	{
 		if (qku.files[i].status != QKUF_STAGED)
 			continue;
+		if (qku_ftesurf && qku.files[i].preserved)
+		{ qku.files[i].status = QKUF_DONE; continue; }
 		if (QKU_InstallOne(qku.files[i].path, qku.files[i].hash, qku.files[i].size, qku.files[i].exec, &oldcounter))
 		{
 			qku.files[i].status = QKUF_DONE;
@@ -1937,17 +2074,17 @@ static void QKU_Apply(void)
 	{
 		char *payload = NULL;
 		json_t *signedroot = QKU_FSParseSigned(qku.envelope, &payload);
-		qboolean complete = signedroot && QKU_FSComplete(signedroot);
+		qboolean complete = signedroot && QKU_FSComplete(signedroot) && !QKU_FSHashPending(signedroot, NULL);
 		if (signedroot) JSON_Destroy(signedroot);
 		if (payload) Z_Free(payload);
 		if (!complete) { QKU_Fail(QKUS_LAUNCHER, "installed set is incomplete; run the launcher to repair"); return; }
 	}
-	if (installed)
+	if (installed || (qku_ftesurf && !deferred))
 	{	//hand the launcher an accurate ledger, or it re-downloads everything we just installed
-		struct qku_record_s *recs = Z_Malloc(sizeof(*recs) * installed);
+		struct qku_record_s *recs = Z_Malloc(sizeof(*recs) * (installed?installed:1));
 		size_t n = 0;
 		for (i = 0; i < qku.numfiles; i++)
-			if (qku.files[i].status == QKUF_DONE)
+			if (qku.files[i].status == QKUF_DONE && !qku.files[i].preserved)
 			{
 				recs[n].path = qku.files[i].path;
 				recs[n].hash = qku.files[i].hash;
@@ -1959,8 +2096,17 @@ static void QKU_Apply(void)
 
 	if (deferred)
 	{
-		if (!QKU_WriteJournal(1) && qku_ftesurf)	//keep only what is still outstanding
+		if (!QKU_WriteJournal(1) && qku_ftesurf)	//retain every original FTESurf row
 		{ QKU_Fail(QKUS_ERROR, "cannot rewrite the recovery journal; restart to recover before playing"); return; }
+		if (qku_ftesurf)
+		{
+			char *payload = NULL;
+			json_t *root = QKU_FSParseSigned(qku.envelope, &payload);
+			for (i = 0; i < qku.numfiles; i++)
+				if (qku.files[i].status == QKUF_DONE) QKU_FSPurgeObject(root, qku.files[i].hash, qku.files[i].size);
+			if (root) JSON_Destroy(root);
+			if (payload) Z_Free(payload);
+		}
 		Con_Printf("update: installed %u of %u files; restart to finish\n", (unsigned)installed, (unsigned)(installed+deferred));
 	}
 	else
@@ -1990,6 +2136,7 @@ void QKU_ReplayJournal(void)
 	char *text, *signedtext = NULL, *signedpayload = NULL;
 	json_t *root, *files, *ent, *signedroot = NULL;
 	qboolean *preserved = NULL;
+	qboolean contentcomplete = false, admitted = false;
 	size_t i, count, pending = 0, done = 0;
 	int attempts, oldcounter = 1000;	//distinct range so replay cannot collide with a live apply
 
@@ -2012,7 +2159,10 @@ void QKU_ReplayJournal(void)
 	Q_snprintfz(path, sizeof(path), "%s%s/journal.json", com_gamepath, QKU_STAGEDIR);
 	text = QKU_ReadTextFile(path, 8*1024*1024);
 	if (!text)
+	{
+		if (qku_ftesurf && QKU_FSRegular(path) != 0) Sys_Error("Unreadable update journal. Run the launcher to repair.");
 		return;
+	}
 
 	root = JSON_Parse(text);
 	if (!root)
@@ -2023,19 +2173,22 @@ void QKU_ReplayJournal(void)
 		return;
 	}
 
-	attempts = (int)JSON_GetInteger(root, "attempts", 1) + 1;
+	attempts = qku_ftesurf ? 0 : (int)JSON_GetInteger(root, "attempts", 1) + 1;
 	JSON_GetString(root, "version", jver, sizeof(jver), "");	//read before the tree is destroyed
 	files = JSON_FindChild(root, "files");
 	count = files ? JSON_GetCount(files) : 0;
 	if (qku_ftesurf)
 	{
 		char sigpath[MAX_OSPATH], version[64], game[32];
+		json_t *budget = JSON_FindChild(root, "attempts");
+		if (!budget || budget->type != json_type_number || budget->bodyend-budget->bodystart != 1 || *budget->bodystart < '1' || *budget->bodystart > '3') Sys_Error("Invalid recovery attempt budget; nothing installed.");
+		attempts = *budget->bodystart - '0' + 1;
 		qku_state_t state;
 		qboolean older;
 		QKU_InstallPath(sigpath, sizeof(sigpath), ".ftesurf-updater/ingame/manifest.json");
 		signedtext = QKU_ReadTextFile(sigpath, 2*1024*1024);
 		signedroot = signedtext ? QKU_FSParseSigned(signedtext, &signedpayload) : NULL;
-		if (!signedroot || !QKU_FSValidateManifest(signedroot) || !count || count > 8192) Sys_Error("Update recovery lacks a valid signed manifest. Run the launcher to repair.");
+		if (!signedroot || !QKU_FSValidateManifest(signedroot) || !count || count > 8192 || !files || files->type != json_type_array) Sys_Error("Update recovery lacks a valid signed manifest. Run the launcher to repair.");
 		JSON_GetString(signedroot, "version", version, sizeof(version), "");
 		JSON_GetString(signedroot, "game", game, sizeof(game), "");
 		if (strcmp(version, jver) || strcmp(game, "ftesurf")) Sys_Error("Update journal does not match its signed manifest. Run the launcher to repair.");
@@ -2043,6 +2196,8 @@ void QKU_ReplayJournal(void)
 		{ QKU_FreeState(&state); Sys_Error("Cannot read the update recovery ledger. Run the launcher to repair; nothing installed."); }
 		older = *state.version && QKU_FSVersionOlder(version, state.version);
 		if (older) Sys_Error("Older signed recovery release. Run the launcher to repair; nothing installed.");
+		if (!QKU_FSReadableClosure(signedroot)) Sys_Error("Unreadable signed recovery content; nothing installed.");
+		contentcomplete = QKU_FSComplete(signedroot) && !QKU_FSHashPending(signedroot, NULL);
 		preserved = Z_Malloc(sizeof(*preserved) * count);
 		// Validate and classify ALL entries against the pre-recovery ledger before replacements.
 		for (i = 0; i < count; i++)
@@ -2051,8 +2206,30 @@ void QKU_ReplayJournal(void)
 			json_t *f = JSON_GetIndexed(files, i);
 			quint64_t size = (quint64_t)JSON_GetFloat(f, "s", -1);
 			enum qku_preserve_e protect;
+			json_t *x = JSON_FindChild(f, "x"), *sz = JSON_FindChild(f, "s");
+			if (!x || x->type != json_type_number || x->bodyend-x->bodystart != 1 || (*x->bodystart != '0' && *x->bodystart != '1') || !sz || sz->type != json_type_number) Sys_Error("Invalid recovery tuple; nothing installed.");
+			{
+				const char *c;
+				quint64_t exact = 0;
+				if (sz->bodystart == sz->bodyend) Sys_Error("Invalid recovery size; nothing installed.");
+				for (c = sz->bodystart; c < sz->bodyend; c++)
+				{
+					if (*c < '0' || *c > '9' || exact > 32*1024*1024) Sys_Error("Invalid recovery size; nothing installed.");
+					exact = exact*10 + (*c-'0');
+				}
+				if (exact > 32*1024*1024 || exact != size) Sys_Error("Invalid recovery size; nothing installed.");
+			}
 			JSON_GetString(f, "p", rel, sizeof(rel), ""); JSON_GetString(f, "h", hash, sizeof(hash), "");
-			if (!QKU_ValidHash(hash) || !QKU_FSJournalEntry(signedroot, rel, hash, size) || !QKU_FSNoLinks(rel) || !QKU_FSStageNoLinks("staged/%s", hash) || !QKU_FSStageNoLinks("staged/%s.install", hash)) Sys_Error("Unverified or linked recovery entry. Run the launcher to repair; nothing installed.");
+			if (!QKU_ValidHash(hash) || !QKU_FSJournalEntry(signedroot, rel, hash, size, !!JSON_GetInteger(f, "x", 0)) || !QKU_FSNoLinks(rel) || !QKU_FSStageNoLinks("staged/%s", hash) || !QKU_FSStageNoLinks("staged/%s.install", hash)) Sys_Error("Unverified or linked recovery entry. Run the launcher to repair; nothing installed.");
+			{
+				size_t j;
+				for (j = 0; j < i; j++)
+				{
+					char previous[MAX_OSPATH];
+					JSON_GetString(JSON_GetIndexed(files, j), "p", previous, sizeof(previous), "");
+					if (!Q_strcasecmp(previous, rel)) Sys_Error("Duplicate recovery path; nothing installed.");
+				}
+			}
 			protect = QKU_FSPreserveFile(&state, rel, hash);
 			if (protect == QKUP_UNREADABLE) Sys_Error("Cannot read protected update file %s. Restore access or repair with the launcher; nothing installed.", rel);
 			preserved[i] = protect == QKUP_PRESERVE;
@@ -2060,7 +2237,7 @@ void QKU_ReplayJournal(void)
 		QKU_FreeState(&state);
 	}
 
-	if (attempts > QKU_MAXATTEMPTS)
+	if (attempts > QKU_MAXATTEMPTS && !(qku_ftesurf && contentcomplete))
 	{	//something is permanently holding a file. give up loudly rather than boot-loop.
 		if (qku_ftesurf) Sys_Error("Update cannot finish while files are held open. Close other copies and repair with the launcher; journal retained.");
 		qku_bootverdict = QKUS_LAUNCHER;
@@ -2073,6 +2250,8 @@ void QKU_ReplayJournal(void)
 		return;
 	}
 
+	admitted = qku_ftesurf && !contentcomplete;
+	if (qku_ftesurf && contentcomplete) attempts--;
 	Con_Printf("update: finishing an interrupted update (%u files)\n", (unsigned)count);
 
 	//Entries are re-emitted verbatim if they are still outstanding, so keep the parsed values
@@ -2103,7 +2282,7 @@ void QKU_ReplayJournal(void)
 			e[i].size = (quint64_t)JSON_GetFloat(ent, "s", 0);
 			e[i].exec = JSON_GetInteger(ent, "x", 0) ? true : false;
 
-			if (qku_ftesurf && (!QKU_ValidHash(raw) || !QKU_FSJournalEntry(signedroot, e[i].rel, raw, e[i].size)))
+			if (qku_ftesurf && (!QKU_ValidHash(raw) || !QKU_FSJournalEntry(signedroot, e[i].rel, raw, e[i].size, e[i].exec)))
 				Sys_Error("Update journal contains an unverified file. Run the launcher to repair; journal retained.");
 			if (!QKU_ValidPath(e[i].rel) || !QKU_ValidHash(raw))
 				continue;	//left !valid: dropped from the rewritten journal rather than retried forever
@@ -2125,6 +2304,7 @@ void QKU_ReplayJournal(void)
 				continue;
 			}
 
+			if (qku_ftesurf && contentcomplete) Sys_Error("Completed recovery content changed; journal retained.");
 			{	//verify the staged object before trusting it -- it may itself be a torn write
 				char staged[MAX_OSPATH];
 				Q_snprintfz(staged, sizeof(staged), "%s%s/staged/%s", com_gamepath, QKU_STAGEDIR, e[i].hash);
@@ -2149,7 +2329,7 @@ void QKU_ReplayJournal(void)
 		root = NULL;
 		text = NULL;
 
-		if (qku_ftesurf && !pending && !QKU_FSComplete(signedroot)) Sys_Error("Incomplete signed installation after recovery. Run the launcher to repair; journal retained.");
+		if (qku_ftesurf && !pending && (!QKU_FSComplete(signedroot) || QKU_FSHashPending(signedroot, NULL))) Sys_Error("Incomplete signed installation after recovery. Run the launcher to repair; journal retained.");
 		if (done || (qku_ftesurf && !pending))
 		{	//A protected-only completion still commits the verified release version,
 			//but no replacement hashes. Keep its rollback floor and cache consistent.
@@ -2166,55 +2346,60 @@ void QKU_ReplayJournal(void)
 			Z_Free(recs);
 		}
 
-		if (pending)
+		if (pending || admitted)
 		{
-			//Rewrite the journal with ONLY what is still outstanding and a bumped attempt count.
-			//Getting this wrong is how you build a boot loop: leaving the original in place means
-			//`attempts` never rises and a permanently locked file is retried forever.
+			// FTESurf retains the original authority, including resolved rows.
 			char tmp[MAX_OSPATH];
 			vfsfile_t *f;
-			qboolean first = true, rewritten = false;
+			qboolean first = true, rewritten = false, written = true;
 			Q_snprintfz(tmp, sizeof(tmp), "%s%s/journal.tmp", com_gamepath, QKU_STAGEDIR);
 			FS_CreatePath(tmp, FS_SYSTEM);
 			f = FS_OpenVFS(tmp, "wb", FS_SYSTEM);
 			if (f)
 			{
-				if (qku_ftesurf) VFS_PRINTF(f, "{\n\"attempts\":%i,\n\"version\":\"%s\",\n\"files\":[\n", attempts, jver);
-				else VFS_PRINTF(f, "{\n\"attempts\":%i,\n\"files\":[\n", attempts);
+				if (qku_ftesurf) written &= QKU_JournalPrintf(f, "{\n\"attempts\":%i,\n\"version\":\"%s\",\n\"files\":[\n", attempts, jver);
+				else written &= QKU_JournalPrintf(f, "{\n\"attempts\":%i,\n\"files\":[\n", attempts);
 				for (i = 0; i < count; i++)
 				{
-					if (!e[i].valid || e[i].installed || (preserved && preserved[i]))
+					if (!e[i].valid || (!qku_ftesurf && (e[i].installed || (preserved && preserved[i]))))
 						continue;
-					VFS_PRINTF(f, "%s{\"p\":\"%s\",\"h\":\"%s\",\"s\":%.0f,\"x\":%i}",
+					written &= QKU_JournalPrintf(f, "%s{\"p\":\"%s\",\"h\":\"%s\",\"s\":%.0f,\"x\":%i}",
 								first?"":",\n", e[i].rel, e[i].hash, (double)e[i].size, e[i].exec?1:0);
 					first = false;
 				}
-				VFS_PRINTF(f, "\n]\n}\n");
-				if (VFS_CLOSE(f))
+				written &= QKU_JournalPrintf(f, "\n]\n}\n");
+				if (!VFS_CLOSE(f)) written = false;
+				if (written)
 					rewritten = QKU_CommitJournal();
 			}
 			if (qku_ftesurf)
 			{
 				if (!rewritten) Sys_Error("Cannot rewrite the update recovery journal. Run the launcher to repair; staged objects retained.");
-				for (i = 0; i < count; i++)
+				for (i = 0; pending && i < count; i++)
 					if (e[i].valid && (e[i].installed || preserved[i]))
 					{
 						size_t j;
 						// A resolved row may share its object with an outstanding destination.
 						for (j = 0; j < count; j++)
 							if (e[j].valid && !e[j].installed && !preserved[j] && !strcmp(e[j].hash, e[i].hash)) break;
-						if (j == count) QKU_FSPurgeObject(e[i].hash, e[i].size);
+						if (j == count) QKU_FSPurgeObject(signedroot, e[i].hash, e[i].size);
 					}
 			}
-			Con_Printf(CON_WARNING "update: %u file(s) still pending, will retry next launch (attempt %i of %i)\n",
+			if (pending) Con_Printf(CON_WARNING "update: %u file(s) still pending, will retry next launch (attempt %i of %i)\n",
 						(unsigned)pending, attempts, QKU_MAXATTEMPTS);
 		}
-		else
+		if (!pending)
 		{
+			qboolean clean = true;
 			if (qku_ftesurf && !QKU_FSSaveEnvelope(signedtext, ".ftesurf-updater/installed.json")) Sys_Error("Cannot save the recovered update's offline manifest; journal retained.");
-			FS_Remove(path, FS_SYSTEM);
 			if (qku_ftesurf)
-				for (i = 0; i < count; i++) if (e[i].valid && (e[i].installed || preserved[i])) QKU_FSPurgeObject(e[i].hash, e[i].size);
+			{
+				for (i = 0; i < count; i++)
+					if (e[i].valid && !QKU_FSPurgeObject(signedroot, e[i].hash, e[i].size)) clean = false;
+				if (clean && !QKU_DropJournal()) clean = false;
+				if (!clean) Con_Printf(CON_WARNING "update: cleanup retained for next launch\n");
+			}
+			else FS_Remove(path, FS_SYSTEM);
 			Con_Printf("update: interrupted update completed (%u files)\n", (unsigned)done);
 		}
 
@@ -2313,6 +2498,8 @@ static void QKU_Apply_f(void)
 	}
 	if (qku_ftesurf && qku.numdone == qku.numfiles)
 	{ QKU_Apply(); return; }
+	if (qku_ftesurf && QKU_FSRetainedGeneration())
+	{ QKU_Fail(QKUS_LAUNCHER, "retained update recovery; run the launcher before another update"); return; }
 	qku.numdone = 0;
 	qku.donebytes = 0;
 	QKU_SetState(QKUS_DOWNLOADING);

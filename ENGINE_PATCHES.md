@@ -47042,3 +47042,37 @@ zone_on_build-checked bhop_perspective JSON was seeded to both Windows installs.
 No existing map/zone or personal cache was replaced. Archived-version zones or
 an owner-approved map refresh remain BACKLOG, as does native KSF replay playback.
 No native pin/tag, QC Build, release/feed or evidence semantics changed.
+
+## Patch 703 -- Retain bounded native recovery authority through cleanup
+
+**Problem:** Reducing recovery journals loses resolved object names across an
+interruption; unlinking authority before purge can strand held/corrupt stages.
+An exhausted but content-complete transaction needs cleanup-only retry without
+resetting its content budget. Windows ReadFile failures reported as zero must
+not classify unreadable protected content as complete.
+
+**Change:** Keep every original signed transaction row until named-stage cleanup
+finishes. Revalidate signed installed closure, protected policy, shared pending
+references and each staged object's type/length/hash before retirement; remove
+the journal last and retain it after any failed cleanup. Complete-only replay
+spends no attempts, but incomplete exhaustion refuses before mutation and an
+admitted completion persists its increased count. FTESurf hashing requires the
+opened length, successful read byte count and close to agree. Check journal
+writes/close, and refuse a new native apply while recovery authority remains.
+Legacy Quakers behavior remains separate; there is no unreferenced-object sweep.
+
+**Verified:** Exact corrected source7321da29 passes the retained Windows20-case/
+35-phase cold matrix, real first-removal interruptions in both orders, held-stage/
+journal denial/release, full-row initial/cold/deferred publication controls,
+attempt3/exhaustion, retained-generation live apply and real launcher reconciliation.
+Fresh >5MiB protected byte-lock comparison proves shared open + ReadFile33: the
+blocked candidate incorrectly retires authority; corrected attempt3 refuses with
+complete seed bytes unchanged, then released cleanup ACTS preserving the edit.
+Independent product-source review finds no issues; portable native-tooling units
+pass. Exact final build/deployment hashes and readlock evidence are recorded in
+FTESurf tools/p703native_retirement.md and tools/native_retirement_readlock.md.
+
+**Limits:** Windows bounded recovery only; no power-loss/directory-flush proof,
+hostile concurrent ancestor/hardlink protection, broad orphan collection or
+all-network-silence claim. No QC Build/public version/feed, progs/configs,
+Linux/Pi or release operation is implied by this source entry.
