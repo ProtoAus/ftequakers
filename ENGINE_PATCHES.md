@@ -7,6 +7,49 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 716 — queue complete KSF profile walks and lift client row ceilings
+
+### Problem
+The archive crawler was not capped at1000, but CSQC stopped holding board
+rows there, and profile totals stopped at200 rows. The manual profile seed
+mistook bestrecords' starting position25 for a limit; actual pages contain5
+rows at positions1,6,11,... . Profile completion counts therefore reflected
+only the incomplete imported subset, without an explicit source-check status.
+
+### Change
+Add surfd schema18's bounded profile-demand queue, fed only after resolving a
+known public profile. The existing lock/pacer/refusal park governs up to3
+profile pages per watch tick, across FW/SW/HSW/BW. Persist source before PB
+filing and checkpoint only after durable import; resume idempotently after a
+crash. Validate pagination/shape/main-map semantics. Valid upstream rows carry
+record_id:null: preserve that absence, use map/style for completion and retain
+existing cache-only PB/demo authority rules. Disclose pending/incomplete and
+unavailable-map counts in game/site profiles, refresh completed walks daily.
+
+Correct manual seed heads to position1 with separate cache names. Increase
+board/profile memory stores to a bounded10000 rows, retaining100/50-row HTTP
+pages and existing virtualized lists. Add `scores more` to exercise the same
+guarded append used by scrolling. Deploy planner ships the schema app, paced
+worker and profile module together; Linux suite includes its new tests.
+
+### Verified
+Fourteen real-SQLite/offline-source controls pass, including1005 completions,
+all4 styles, null IDs without replay authority, correct positions, wrong-
+offset/refusal retention, queue contention/cap, refresh expiry, and crash after
+PB write before cursor. Existing importer, top-up and web regressions pass;
+JS syntax and4 offline deploy-plan controls pass. Isolated pwsh7 three-progs
+NoDeploy build has zero warnings. Real CSQC held1050 board rows and1005 profile
+rows, observed actual offset1000 requests, rendered the in-progress caption
+and produced no VM errors; its screenshot was inspected. All31 P715 picture
+regression controls also pass on the new QC. Real public KSF positions1/6
+returned five distinct maps each with offsets0/5 and null record IDs.
+
+Limits: this is a paced eventual check, not an atomic upstream snapshot. It
+does not withdraw historical PBs or fabricate unavailable maps, and has an
+explicit10000-position safety bound per style. R2 publication/CDN cutover,
+remaining Beta zones and36 incompatible Windows BSPs remain separate gaps.
+No engine source/binary pin/tag, evidence grammar or QC Build decision change.
+
 ## Patch 715 — persist validated Steam pictures in the game
 
 ### Problem
