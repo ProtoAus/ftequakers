@@ -7,6 +7,43 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 711 — recover exact-current KSF imports from retained originals
+
+### Problem
+An interrupted KSF index write or missing normalized replay re-downloaded an
+original already held locally, making recovery depend on the shared host budget
+and cooldown. The seed updater also treated equal raw seconds as an unchanged
+record, retaining an old demo after a known record ID/date replacement.
+
+### Change
+Game/backend repository only: direct exact-binding provenance lookup, bounded
+metadata and original digest validation, and at most two retained-original reads
+per tick. Reconvert/reindex through the existing exact-current transaction, even
+with zero network allowance or host cooldown. No archive scan or inferred path;
+old archives without new lookup metadata remain ordinary budgeted cache misses.
+Admission rotates durably even on a cache miss, preventing two missing originals
+from starving a later intact one during cooldown. Missing originals may use the
+existing request budget; corrupt/mismatched/deeply nested local metadata or
+originals defer only their job. Equal-time seed replacements invalidate old Watch;
+unchanged/unknown identity and older/slower/rounded-only metadata retain their
+protection. ENGINE.txt patch only; no engine source/binary/pin/tag or QC Build.
+
+### Verified
+Offline controls require zero-download recovery after interrupted index and a
+missing normalized file, bound three local repairs to two per tick, exercise
+missing-byte budget fallback, digest/provenance/link refusal, and reject stale
+sub-millisecond/file/seed identities. Pre-change recovery controls fail, as do
+all three changed-ID/date seed subcases. All 23 collector/index/API tests pass,
+including the acted no-rotation starvation and nested-JSON controls. Existing
+codec9, importer106 assertions, top-up8, board351, replay-ledger119 and web268
+checks pass. Game source d20b579fb6ace569227e700497755f876cce4489 passes all
+seven exact-commit offline delivery groups, including the flattened 23-test
+collector/API suite and acted missing-codec/shell-failure controls. Targeted
+independent blocker closure returns PASS. Commands/results/limits:
+game tools/p711ksfrecovery.md.
+Source-only: no game/GPU, QC/native rebuild, network crawl, remote deployment,
+reload, cron change or live Watch claim. Stage/CSS100/map identity limits remain.
+
 ## Patch 710 — prepare compatible game and package presentation
 
 ### Problem
