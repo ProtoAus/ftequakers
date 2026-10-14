@@ -46621,9 +46621,13 @@ tier/style. The zone editor treated any +jump bind as a look/window toggle, so a
 jump-bound wheel changed mouse ownership instead of scrolling. ent_view drew
 brush hulls in model coordinates without the map entity pose; translated Source
 teleports could report faces but fill somewhere other than their visible box.
-There was no automatic world-clip overlay in ent_view.
+There was no automatic world-clip overlay in ent_view. A follow-up review found
+float32 milliseconds falsely matching changed times at 2^24 and INT_MAX.
 
 **Change:** whole profile-time rows hand off scope plus rank, identity and time.
+Raw JSON integer milliseconds have separate full/compact row tables and survive
+the decimal mailbox; MenuQC name-resolves stoi/itos, validates the decimal bound
+before conversion and compares exact JSON integers, preserving display behavior.
 The menu fetches that rank's neighborhood directly, highlights only the matching
 identity/time, preserves base offsets while paging, and offers earlier/top.
 Legacy five-token browse requests and both compact/full profile handles remain
@@ -46653,7 +46657,20 @@ Screenshots inspected: translated trigger_teleport *36 submits one brush/six
 faces at its published map origin and visibly fills the door; an interior crop
 has 554 red-tinted pixels against zero in the original. Clip overlay submits
 75 brushes/462 faces; on/off images change 4540 pixels in a floor crop. Closing
-clears active publication. Test/limits: FTESurf tools/p693ui.md.
+clears active publication. Fresh exclusive2026-10-14 PREINTEGER control ACTS:
+profile16777217/board16777216 wrongly selects1500 at offset1494 while predecessor
+profile/editor/viewer regressions pass. Integer candidate passes all5 groups and
+all6 typed raw HTTP/rank witnesses: changed/equal full2^24+1 and INT_MAX pairs,
+changed/equal compact2^24+1 pairs; mismatches select0, matches1500/1. Leading-zero
+decimal handoff and overflow-before-HTTP act. Both outside wheel pairs decline,
+inside pairs act row0->2->0/cursor1 via atomic pointer/down/up dispatch; Mouse2,
+SPACE, placement-back and dirty0 prove unchanged ownership/save semantics. All12
+original PNGs inspected; both arms' fixed interior strip has187 red-increment
+pixels teleport/no-clips vs off,241 clips; clip-on/off upper-world delta59482.
+Read-only independent audit OK with notes/no issues. Four exact owned PIDs/eight
+junctions gone,136 protected pins/36 install hashes+metadata unchanged. All-repo
+status gate remains NONMATCH only for peer untracked694 launcher claim, not a
+progs/native/ref/index change. Test/limits: FTESurf tools/p693ui.md.
 
 **Limits:** GPU evidence is Windows OpenGL on the installed surf_tensor2 revision;
 rotated poses and nonfinite refusal have CPU-emitter tests, not a separate rotated
@@ -46661,4 +46678,7 @@ map screenshot. Hull drawing needs retained Q2/Q3/VBSP brush data, not arbitrary
 nodraw surfaces or static-prop mesh collision. Dense in-view brush limits remain.
 A stale/removed time is not guessed from a display name; its nearby cached ranks
 are shown with a notice. Deployment/version-stamped receipt is separate from
-source acceptance. No Linux GPU or release claim.
+source acceptance. Fresh precision/editor gates cover retained HTTP fixtures,
+fallback UI and synthetic input, not real backend/native production-provider or
+clipboard behavior. Native code/runtime tag remain4148e7292/patch-693; this
+acceptance update is documentation-only. No Linux GPU or release claim.
