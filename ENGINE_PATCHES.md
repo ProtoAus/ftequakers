@@ -6,6 +6,43 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+## Patch 707 — prepare parallel World of Surf website paths
+
+### Problem
+The new website base had no production-shaped routing compatibility proof.
+The unrelated root filebrowser can return a misleading 200; slashless legacy
+redirects dropped queries. Moving signed account callbacks too early would
+invalidate in-flight sign-ins despite keeping the same host/database/cookies.
+
+### Change
+Game repository: add scoped /worldofsurf static/font/board/map-POST locations
+beside /ftesurf, sharing storage/backend/rate/method/IP policy and legacy marker.
+Keep both legacy account starts/returns and SURFD_BOARD_URL authoritative; no
+callback redirect/config switch. Preserve slash queries, remove redundant gzip
+HTML type warning. Installer backs up snippet and verifies both board JSON
+routes by marker/type/envelope. Real-nginx/isolated-surfd harness plus full mock
+account suite under either configured base. Plan clarifies origin-only realm.
+ENGINE.txt patch only; engine C/binaries/pin/tag, QC Build, release/feed defaults,
+service hosts, account application/database, signed formats and player data unchanged.
+
+### Verified
+Isolated game base 54902ea, ledger base 31b9c86d7; refreshed max+1 claim 707
+following concurrent published P706. Five real local Windows + WSL Linux nginx
+1.28.0 + surfd integration groups pass per platform, zero nginx warnings;
+legacy-only acting control fails on actual filebrowser fallback and query loss.
+268 web, 400 legacy-base and 400 future-base mock accounts, 350 board checks and
+seven brand tests pass; shell syntax/whitespace pass. Cookie attributes, exact
+upstream queries, POST boundary, static/feed fixture bytes and installer probe
+controls act. Foreground master PID/shutdown/socket checks and intentional setup/
+shutdown-failure controls pass on both platforms with no retained fixtures.
+Integrated onto published P706 (game a70aaaa, ledger 2458d94e8); all full
+regression suites and both-platform nginx matrices repeat successfully.
+Source evidence/commands/failures/limits: game tools/p707sitepaths.md.
+Source-only, not installed/reloaded: local nginx/mock tests do not establish
+live HTTP, real Steam/HTTPS browser, signed update round-trip or art approval.
+Privileged parallel-routing window, external old/new matrix and explicit account
+start-drain/callback policy remain gates before canonical-path/default cutover.
+
 ## Patch 705 — World of Surf brand kit and web presentation candidate
 
 ### Problem
