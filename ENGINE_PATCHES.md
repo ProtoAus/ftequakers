@@ -46783,3 +46783,43 @@ Parent inspected the logo-only rendered PNG. Source/commands: tools/p696logo.md.
 or broader cancellation coverage claim. No real game/engine/performance run,
 canonical/fleet deployment, official archive/release/feed or full rename. Prior
 wave previews/source preserved as history, not kept in the current renderer.
+
+## Patch 698 -- Momentum/KSF map links, zones and admin pool manifest
+
+**Problem:** real KSF port names (notably surf_aircontrol_ksf) were not linked to
+held Momentum roots. The web board did not use the game's imported-build scope.
+Approved-only zone donors missed held beta maps. There was no reversible admin
+pool manifest or per-build missing-zone warning in Create Server.
+
+**Change:** infer only known KSF port suffixes against held Momentum roots,
+including extra/beta roots; arbitrary _css names and version suffixes remain
+independent. Archive-compared _css links keep their existing provenance. Both
+board APIs share imported rows in both directions and retain build-specific
+native records; the web board exposes related-build navigation. Extra-zone
+donors must match extra.tsv's BSP hash, have complete valid timer zones fitting
+the donor world/restart targets, and still pass the existing destination
+geometry/restart-name gate; local, existing/edited and incompatible zones stay
+untouched. Admin /admin/maps adds searchable/filterable/sortable per-build
+manifest rows, independent tiers, red missing zones and reversible pool actions
+using existing session/same-origin/CSRF protection. Persist per-build policy in
+SQLite; retain explicit disabled rows in the game feed, reject disabled joins,
+hide disabled menu builds, and fall back only to an enabled alternate. Menu
+feed refresh is capped at once/minute. Missing-zone names/labels draw red.
+
+**Verified:** isolated QC build has zero warnings. Windows board/web/join/
+accounts/surfd/variants/mapwatch/zonefit and the new map-pool falsifiers pass;
+mapwatch includes an acted held-beta copy and a shifted-build refusal. Acting
+menu overlay proves parser flags, folded build fallback, disabled-side refusal,
+and positive/negative query controls. Chrome exercises search, mode, zones,
+tier, related builds, sorting, red rows, disable/unhighlight/filter and reenable;
+parent inspected browser and menu screenshots. All 19 staged backend suites,
+including test_admin, pass on the NanoPi (only declared fixture/tool skips).
+Windows test_admin's two rcon/cache timing failures reproduce unchanged at the
+e008c3b control. Source commit 37cc4b1. Engine native
+code/pins, QC Build and run-evidence semantics are unchanged.
+
+**Limits:** native times are not made equivalent by a name link. Pool controls
+do not delete files/history, interrupt current lobbies, change explicit lobby
+rotations or prohibit manual console maps; offline menus use last fetched
+policy. Incompatible zone transfers remain refused, not silently forced. Fleet
+and dual-install deployment/provenance are recorded separately after staging.
