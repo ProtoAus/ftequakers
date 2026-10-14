@@ -7,6 +7,44 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 713 — close KSF cache, recovery and backend delivery gaps
+
+### Problem
+An older owed/cached board could overwrite a known equal-time/same-date seed
+record replacement and resurrect its obsolete demo. The CLI skipped opted-in
+local recovery with zero reserved network requests; a normalized publication
+failure could leave new originals without keyed intent. Oversized advertised
+numeric filename fields aborted discovery. Backend delivery also accepted an
+old worker/historical readiness, failed-open publication queries and filtered
+rather than raw destination byte equivalence.
+
+### Change
+Game/backend repository only: distinguish cache-only rows from exact identities
+fetched this tick, preventing tied cached rebinding without assuming monotonic
+record IDs. Invoke opted-in collector recovery even with zero request budget;
+publish exact provenance before bytes. Bound filename leaves before numeric
+parsing/request admission. Fail closed on publication-query errors, hash raw
+installed bytes, and verify the same master's new direct worker only after old
+workers retire and that PID logs fresh readiness and answers healthy. Handle
+log rotation and cap health/sleep to a monotonic remaining-time budget. No native
+source/binary/pin/tag, evidence semantics, QC Build, stage/CSS100 or map-ID change.
+
+### Verified
+Old-source controls reproduce all three collector reviewer findings, the numeric
+filename crash, and all three delivery findings. Repaired collector/index/API28
+and codec9 tests pass; importer106 assertions/0 failed and existing top-up, board,
+replay, web, variants and sweep regressions pass. Remaining backend suites also
+return zero. Ten offline delivery groups include raw CRLF-vs-LF refusal, missing
+publication without workspace/transport, fresh/draining workers and stale/log/
+PID/master/health/process/signal refusal actors. Independent source follow-up
+and final exact-commit checks are recorded in game tools/p713ksffinal.md.
+Game6bb63403c5a3c4f954b89605e70684ecaae1b1c7 passes all10 exact-commit
+delivery groups, including28 flattened collector tests, missing codecs and
+collector/converter failure controls. No uncommitted source is shipped.
+Source/offline only: no game/GPU, QC/native rebuild, upstream crawl, remote
+installation/reload, cron enablement or live Watch claim. Destination/fleet
+runtime acceptance remains a separate gate; no engine pin/tag or QC Build bump.
+
 ## Patch 711 — recover exact-current KSF imports from retained originals
 
 ### Problem
