@@ -7,6 +7,28 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 715 — persist validated Steam pictures in the game
+
+### Problem
+Steam pictures had a 32-slot memory cache only. Map/client/renderer restarts
+fetched the same picture again despite NanoPi's existing JPEG/RGBA disk cache.
+
+### Change
+Persist only successfully parsed/rendered RGBA pictures in 256 disk buckets
+under the client's data/cache/steampic sandbox. Full directory-origin+mark
+SHA256 and UTC-day headers reject collisions, other origins and stale copies.
+Corrupt/truncated/non-hex bodies fall through to the existing single-flight
+HTTP path. Consent, pacing, refusal hold and texture rebuilding stay intact.
+No engine source, binary pin/tag or QC Build decision changes.
+
+### Verified
+Isolated pwsh7 build -Jobs8 -NoDeploy: all three progs, zero warnings. New
+p715pics real-client controls pass across seven fresh VMs: initial HTTP/write,
+zero-HTTP warm restart and renderer restart, corrupt/truncated/expired/key-
+collision/origin/non-hex fallbacks, quadrant screenshots and no VM errors.
+The warm screenshot was inspected. Cache is daily-expiring, bounded and local;
+R2 publication is a separate tooling task, not a claimed delivery cutover.
+
 ## Patch 714 — separate KSF top-up filing from fresh replay authority
 
 ### Problem
