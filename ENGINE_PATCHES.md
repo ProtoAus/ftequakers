@@ -6,6 +6,36 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+## Patch 705 — World of Surf brand kit and web presentation candidate
+
+### Problem
+The approved game rename had no reusable web/icon kit; landing, board and
+account pages still presented FTESurf/FTE. Replacing every identifier would
+break startup instructions, signed account tags and compatibility paths.
+
+### Change
+Game repository only: outlined full-name dark/light/one-color wordmarks, WOS
+compact icon, PNG/ICO/social exports and offline gallery; reproducible exporter;
+landing/Anti-Cheat/board/account display branding, OG/Twitter metadata and mobile
+header fit. Preserve native/QC binaries, wire tiers, signed formats, callbacks,
+service/storage paths, updater and player data. Track REBRANDING_PLAN.md progress.
+ENGINE.txt patch moves; engine pin/tag and qcbuild/version do not. No engine C,
+renderer, movement, native metadata or ICO resource integration in this stage.
+
+### Verified
+Isolated game base a5a04db and ledger base 28367212b; fresh max+1 allocation 705.
+Seven brand regressions, 268 web, 400 accounts and 351 board checks pass; Node
+syntax passes. Accounts AST/board-JS differ only in display literals. Original
+HTML documents fail the branding detector; subjects pass. All SVG/PNG/ICO bytes
+rebuild identically (Edge 155.0.4283.45, fontTools 4.60.1, Pillow 12.3.0,
+Playwright 1.55.0). Browser acts under both site-prefix fixtures at
+320/390/768/1440px: pages/account light-dark, all five board titles, WOS selects
+ranked and retains a sample row, resource/no-JS controls, no document/nav overflow
+or page/resource errors. Inspected screenshots and icon gallery. Source evidence
+and retained failed attempts: game tools/p705rebrand.md. Human art acceptance,
+actual canonical/account routing, game/native/launcher identity and archive/update
+bridge are pending. Source-only candidate; no build, live deploy or release.
+
 ## Patch 702 — play public KSF CSS clips through the imported viewer
 
 ### Problem
