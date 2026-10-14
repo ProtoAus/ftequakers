@@ -103,7 +103,7 @@ static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
 static struct { int useperspective; float m_projection_std[16]; int recurse; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},0};
 #define BZ_Malloc malloc
 #define BZ_Free free
-static int draws[128],ndraw, builds, ranges[128];
+static int draws[128],ndraw, builds, ranges[128], emitted[128], nemit, recordmeshes;
 static void GLBE_SubmitMeshesPortals(batch_t **world,batch_t *dynamic) { (void)world;(void)dynamic; }
 static void GLBE_SubmitMeshesSortRange(batch_t *batch,batch_t *end) {
  for(;batch&&batch!=end;batch=batch->next) {
@@ -111,7 +111,10 @@ static void GLBE_SubmitMeshesSortRange(batch_t *batch,batch_t *end) {
  if(batch->buildmeshes) batch->buildmeshes(batch);
  shader_t *bs=batch->shader;
  __ACTUAL_SHADERGATES__
- if(batch->meshes>batch->firstmesh) { ranges[ndraw]=batch->meshes-batch->firstmesh; draws[ndraw++]=batch->mesh[batch->firstmesh]->id; }
+ if(batch->meshes>batch->firstmesh) {
+  if(recordmeshes) for(unsigned i=batch->firstmesh;i<batch->meshes;i++) {assert(nemit<128);emitted[nemit++]=batch->mesh[i]->id;}
+  ranges[ndraw]=batch->meshes-batch->firstmesh; draws[ndraw++]=batch->mesh[batch->firstmesh]->id;
+ }
  }
 }
 static void GLBE_SubmitMeshesSortList(batch_t *batch) { GLBE_SubmitMeshesSortRange(batch,NULL); }
@@ -336,6 +339,9 @@ int main(void) {
  pb.mesh=oversize;pb.meshes=129;ndraw=0;GLBE_SubmitBlendedWorld(&pb);assert(ndraw==1&&ranges[0]==129);pb.meshes=2;
  // Recorded Kitsune panes, six yaw viewpoints, every material-batch order.
  mesh1235.id=1235;mesh1236.id=1236;mesh1228.id=1228;(void)cyclexyz;
+ // Recorded grid_red rear quad shares the actual foreground material batch.
+ float xyz4029[4][3]={{-14976,-14832,792},{-15744,-14832,792},{-15872,-15088,792},{-14848,-15088,792}};
+ mesh_t rear={.numvertexes=4,.numindexes=6,.xyz_array=xyz4029,.indexes=idx1236,.id=4029};
  mesh_t *frozen[3]={&mesh1235,&mesh1236,&mesh1228};
  const int perm[6][3]={{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}};
  float yaws[6]={125.6f,104.3f,104.2f,103.2f,103.1f,95};
@@ -350,9 +356,29 @@ int main(void) {
    for(int i=0;i<3;i++){fm[i]=frozen[perm[p][i]];fb[i]=last;fb[i].mesh=&fm[i];fb[i].next=i<2?&fb[i+1]:NULL;}
    wb[SHADER_SORT_BLEND]=fb;ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
    assert(ndraw==3&&draws[0]==1235); // wrong legacy material rank must ACT and fail
+   // Same batch, not three one-face batches: rear geometry must not veto
+   // foreground admission. Unsupported slots themselves never move.
+   for(int slot=0;slot<=3;slot+=3) {
+    mesh_t *mixed[4];for(int i=0,j=0;i<4;i++)mixed[i]=i==slot?&rear:frozen[perm[p][j++]];
+    batch_t mb=last;mb.mesh=mixed;mb.meshes=4;mb.next=NULL;wb[SHADER_SORT_BLEND]=&mb;
+    recordmeshes=1;ndraw=nemit=0;r_blendsort.ival=1;
+    GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+    assert(nemit==4&&emitted[slot]==4029&&emitted[slot?0:1]==1235);
+    assert(mb.mesh==mixed&&mb.meshes==4&&mixed[slot]==&rear);
+    ndraw=nemit=0;r_blendsort.ival=0;
+    GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+    assert(ndraw==1&&ranges[0]==4&&nemit==4);
+    for(int i=0;i<4;i++)assert(emitted[i]==mixed[i]->id);
+    recordmeshes=0;r_blendsort.ival=1;
+   }
+   // An unsupported INTERVENING slot is still a pairwise safety barrier.
+   mesh_t *blocked[4]={frozen[perm[p][0]],&rear,frozen[perm[p][1]],frozen[perm[p][2]]};
+   batch_t bb=last;bb.mesh=blocked;bb.meshes=4;bb.next=NULL;wb[SHADER_SORT_BLEND]=&bb;
+   ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   if(perm[p][0]!=0)assert(ndraw==1&&ranges[0]==4&&draws[0]==blocked[0]->id);
   }
  }
- puts("PASS actual default0/1/2 dispatch:36 frozen-yaw/material permutations; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
+ puts("PASS actual default0/1/2 dispatch:36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
@@ -371,6 +397,11 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 base = c.read_text()
 controls = {
     'legacy_default': base.replace('GLBE_SubmitBlendedWorld(worldbatches[i]);', 'GLBE_SubmitMeshesSortList(worldbatches[i]);'),
+    'whole_batch_geometry': base.replace(
+        'return GLBE_BlendPlaneShaderEligible(batch->shader) && GLBE_BlendPlaneShaderEligible(batch->shader->remapto);',
+        'glblendface_t face={0}; glblendplane_t plane; face.batch=batch; '
+        'for(unsigned m=batch->firstmesh;m<batch->meshes;m++){face.mesh=batch->mesh[m]; '
+        'if(!GLBE_BlendPlaneGeometry(&face,&plane))return false;} return true;'),
     'lost_fog': base.replace('|| batch->fog ||', '||'),
     'lost_callback_update': base.replace('GLBE_SubmitMeshesSortRange(batch, batch->next);', 'view=*batch;view.next=NULL;GLBE_SubmitMeshesSortList(&view);'),
     'world_bbox': base.replace('if (batch->buildmeshes == R_DB_Poly)', 'if (0)'),

@@ -7166,20 +7166,12 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 // Only ordinary single-pass static-world runs may be split into planar faces.
 static qboolean GLBE_BlendWorldBatchEligible(batch_t *batch)
 {
-	glblendface_t face;
-	glblendplane_t plane;
-	unsigned int m;
-	if (!GLBE_BlendFaceEligible(batch) || batch->fog || batch->meshes <= batch->firstmesh ||
-		batch->shader->numpasses != 1 || batch->shader->remapto->numpasses != 1)
+	if (!GLBE_BlendFaceEligible(batch) || batch->ent != &r_worldentity || batch->buildmeshes || batch->fog || batch->flags ||
+		batch->meshes <= batch->firstmesh || batch->shader->numpasses != 1 || batch->shader->remapto->numpasses != 1)
 		return false;
-	memset(&face, 0, sizeof(face));
-	face.batch = batch;
-	for (m = batch->firstmesh; m < batch->meshes; m++)
-	{
-		face.mesh = batch->mesh[m];
-		if (!GLBE_BlendPlaneGeometry(&face, &plane)) return false;
-	}
-	return true;
+	// A rear/near-span face can share its material batch with visible panes.
+	// Admit geometry per face in the sorter; unsupported slots stay barriers.
+	return GLBE_BlendPlaneShaderEligible(batch->shader) && GLBE_BlendPlaneShaderEligible(batch->shader->remapto);
 }
 
 static void GLBE_SubmitBlendedWorld(batch_t *world)
