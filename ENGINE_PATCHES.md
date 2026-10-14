@@ -83,6 +83,43 @@ shipguard fixture initialization is blocked on absent ignored generated content,
 not counted as a pass. P705 art, P710 human checks and native/package gates must
 precede delivery; old endpoints/technical identity remain authoritative.
 
+## Patch 712 — recorded-input strafe trainer during demo playback
+
+### Problem
+The trainer deliberately hid during replay and sampled only outgoing live
+commands. Simply removing the hide would misattribute the viewer's last jump
+to a native/Momentum/KSF runner. Render interpolation and playback speed must
+not change measured key/flick timing; imported physics/contact may be absent.
+
+### Change
+QC only: share the command-clock sampler, feed recorded yaw/resolved side
+movement/speed/contact from a bounded 512-record walk per rendered frame, and
+restart that walk on backwards seek or split-mode changes. No extra whole-file
+open pass. Pause/viewer input cannot feed it; close/off-on clear stale history.
+Use file pmpin/tick values for an air-rate target, never current-lobby settings.
+Without a valid pin/contact, show key timing/agreement with an explicit keys-only
+label; missing movement data abstains. KSF v2 direction proxies are usable for
+key timing but do not manufacture ground/jumps. Gaps/recorded breaks discard the
+open span. Cursor storage is allocated to stay under CSQC's global limit.
+Engine C/binaries/pin/tag, QC Build and evidence formats/checker are unchanged.
+
+### Verified
+Acting unmodified control reads the authored native/Momentum/original KSF v2/v3
+clips and has a zero trainer rectangle. Subject draws the panel, reproduces
++15/-15 ms late/early swaps, and retains identical native durations/rate grades
+through pause with viewer commands, 0.25x/4x, backwards seek and off/on.
+Unpinned imports have timing but no fabricated air grade; movementless clips
+abstain; 2,100 samples catch up across the frame budget. Logs/screenshots inspected.
+All three VMs compile with zero warnings. Existing live P621 numeric/history
+checks pass; its 365-pixel no-strip failure repeats identically in the control
+at 1280x720 Vulkan, so no full pixel-suite pass is claimed. Evidence checker
+regression passes; 289-file corpus has the same 184 pre-existing faults in exact
+fault-list comparisons. Source/control/commands/limits: FTESurf tools/p712trainer.md.
+Delivery uses a separate clean P712-only snapshot on the inspected pre-P710
+runtime base: P710 is explicitly a withheld presentation candidate, not shipped
+by this feature. Physical key provenance, sub-sample accuracy, real-fleet demo
+acceptance and ordinary engine .dem input reconstruction are not inferred.
+
 ## Patch 707 — prepare parallel World of Surf website paths
 
 ### Problem
