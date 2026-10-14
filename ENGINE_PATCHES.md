@@ -50,6 +50,33 @@ explicit10000-position safety bound per style. R2 publication/CDN cutover,
 remaining Beta zones and36 incompatible Windows BSPs remain separate gaps.
 No engine source/binary pin/tag, evidence grammar or QC Build decision change.
 
+### Deployed / live-verified — 2026-10-14, by 20:40:21 UTC
+Both P715 and P716 are in the exact P716 progs (QC 2d2aa6b; later caabd99 is
+QA/staging-only). All three generated progs hash-match in BOTH Windows installs;
+client checksum 8b0e6df8 was seeded in both. Pi qwprogs SHA256 39c5c945457003fd...
+and csprogs ad2bd7e5bb055b21... match the isolated build; build.ps1 -Pi proved all
+12 lobbies empty, kept .prev, and restarted all 12. All 12 later answered UDP
+status. No menu was shipped to a lobby, and no owner's game client was stopped.
+
+Backend seven-file matched ship-set hash/mode-matches caabd99, with a mode 600
+SQLite backup and same-master graceful worker reload. The full staged Linux
+suite passed, including schema18 migration races and the new profile controls;
+its pre-existing MOMGRAB sample-conversion arm had no fixture and was skipped.
+First stage refusal (old schema test constants and missing proxy fixture) was
+not waived; source/tests/staging were corrected and the entire suite rerun.
+Live schema 18 profile view queued demand, then a real lock/pacer watch tick
+advanced position 1->6 with five source rows; normal cron reached 21/four pages.
+Public HTTPS profile JSON reports partial, and public board.js bytes match the
+commit. This is evidence of an ACTED incremental check, not archive completion.
+
+Exact-build bhop_perspective zones were restored missing-only to both installs;
+isolated SSQC read 10 local zones and walking out reported running/recording 1.
+The persistent, flock-protected R2 picture publisher has verified JPEG and RGBA
+objects by authenticated body readback and is still seeding. NanoPi remains the
+picture origin; no unproven public CDN cutover is claimed. Its retained runtime
+root/cron and remaining incompatible/Beta/public-archive candidates are recorded
+in QC's AGENT_NOTES.md and BACKLOG.md.
+
 ## Patch 715 — persist validated Steam pictures in the game
 
 ### Problem
