@@ -46917,4 +46917,29 @@ Twelve supplied public replays were retrieved and decoded (three v3, nine v2,
 semantics unchanged. KSF replay conversion remains BACKLOG work: timer cropping,
 map/style/leg identity and actual game line/watch comparison must act first.
 Zone discovery cannot manufacture unpublished beta JSON. Source acceptance is
-not a release or deployment; live delivery is recorded separately after staging.
+not a release or deployment.
+
+**Delivery / correction, 14 Oct:** final backend d0ed3a3 passed all twenty staged
+NanoPi suites; exact old topup_step control fails at the common worker seam,
+and eight subject controls include actual --watch filing failure/recovery.
+The first live tick found a three-cell/four-cell fetched tuple mismatch missed
+by direct helper tests; its cache/owed marker and queue survived. Corrected
+worker was deployed and live requests then filed the supplied bonus4 boards:
+prosurf7, monolith5, exhausted; null main17, exhausted. Cached exact-name public
+metadata now permits their first unfiled leg page, without HTTP-side fetching.
+Both Windows gamedirs have the new menu/client pair; the twelve empty lobbies
+were swapped with .prev and restarted. Native reader regression: 306 checks
+pass; same bytes of 273 local recordings have unchanged168 faults (delta0).
+
+The public site's root nginx config still needs OWNER sudo install/test/reload:
+only the exact map API gains POST; all other board routes stay GET-only. Actual
+unprivileged syntax/proxy controls gave selected POST202 / other POST403 and
+were stopped; public remains403. Prepared template and exact commands live in
+tools/p699ksf.md. Do not call the website fetch button active before that gate.
+
+Local census corrects the fleet-only zone assumption: 39 locally held approved
+names lacked JSON; 38 BSP hashes differ from the Pi build. Only the matching,
+zone_on_build-checked bhop_perspective JSON was seeded to both Windows installs.
+No existing map/zone or personal cache was replaced. Archived-version zones or
+an owner-approved map refresh remain BACKLOG, as does native KSF replay playback.
+No native pin/tag, QC Build, release/feed or evidence semantics changed.
