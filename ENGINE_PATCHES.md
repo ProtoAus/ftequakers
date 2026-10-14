@@ -7,6 +7,45 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 710 — prepare compatible game and package presentation
+
+### Problem
+The staged World of Surf website/launcher still opened game menus, HUD/boards,
+lobbies and generated package prose under the old public title. A broad rename
+would also alter update/game/data/account contracts before their migration gates.
+
+### Change
+Game repository only: manifest NAME, full menu/HUD title and consent/help/error
+copy, compact WOS scoreboard/profile/native-score labels, local/server fallback
+hostnames and all 12 configured lobby hostnames. One WORLD OF SURF menu label
+feeds crisp, additive halo and feedback passes at the existing 48px font rung.
+Lob_Title accepts both old/new non-empty lobby prefixes, case-insensitively;
+unrelated/prefix-only names and empty-host address fallback remain specified.
+Current README/service and generated release/install/legal headings plus Linux
+wrapper error copy are updated. Legacy executable/scripts/archive roots, URLs,
+identity, signed formats, evidence readers, ranked tiers and saved data/settings
+are not renamed. ENGINE.txt patch only; engine C/native binaries/pin/tag, QC Build,
+release/feed/live routing/defaults/fleet remain unchanged.
+
+### Verified
+Isolated game e27f2c8 and ledger b4c9f82e4; fast-forwarded to published peer P708
+(game 594e693, ledger 30d395320) without touching peer/shared trees. Refreshed
+max+1 claim 710 after observing peer untracked p709trainer-claim.md. Final game
+base advanced to 2c2cb20 (shipping tools/docs only). All three VMs compile with zero warnings using build.ps1
+-NoDeploy; actual compiled string tables contain the new title/badges and legacy
+formats/account URL. Six frozen product-source and five package-source audit
+tests pass, also under Python -O; real old-source controls fail visible-brand
+assertions while compatibility checks remain green. Seven web-brand tests,
+12 synthetic-key signed-feed tests and actual physical release-deny controls
+pass. Shell/PowerShell syntax and whitespace pass. Independent source review,
+commands, hashes and limits are recorded in game tools/p710presentation.md.
+Source/compile/offline candidate only: no game/menu execution, layout or art
+acceptance, native icon/title rebuild, actual archive/fresh install/upgrade,
+Linux native runtime, Steam browser, live HTTP or deployment claim. Clean-tree
+shipguard fixture initialization is blocked on absent ignored generated content,
+not counted as a pass. P705 art, P710 human checks and native/package gates must
+precede delivery; old endpoints/technical identity remain authoritative.
+
 ## Patch 707 — prepare parallel World of Surf website paths
 
 ### Problem
