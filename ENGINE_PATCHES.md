@@ -6,6 +6,7 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+
 ## Patch 707 — prepare parallel World of Surf website paths
 
 ### Problem
@@ -42,6 +43,37 @@ Source-only, not installed/reloaded: local nginx/mock tests do not establish
 live HTTP, real Steam/HTTPS browser, signed update round-trip or art approval.
 Privileged parallel-routing window, external old/new matrix and explicit account
 start-drain/callback policy remain gates before canonical-path/default cutover.
+
+## Patch 708 — Black slim launcher and continuous small-window styling
+
+**Problem.** Launcher collapsed its32-cell logo at78 columns, painted a dark-blue
+background, filled a huge confirmation panel and exposed canonical Windows path
+prose. Separate terminal takeovers/plain-text transitions broke small-window
+styling. Three real workers did not fill the desired compact download view.
+
+**Change.** Launcher-only source in ProtoAus/Quakers-Launcher uses a black,
+borderless shared layout and one alternate-screen/raw-input session through
+consent/check/download/install/play/errors. Full centered logo remains at40x20;
+compact only below34 columns or18 rows. Up/Down chooses Yes/No, Enter confirms.
+Empty installs read Download World of Surf? with service/IP consent before
+network; first Yes covers the first download and No makes no requests/files.
+Questions show size only, not canonical paths. Slim view has exact session network
+bytes, verified-file completion, package size and four live filename/thin staged
+meters; actual transport concurrency4. No categories or giant dashboard panels.
+P704 dev-source guard/detached Windows spawn and signing/recovery policy remain.
+
+**Verified.** Windows optimized release3,596,288 bytes, zero new warnings;
+42 Rust tests passed. Live owned ConPTY resize80x30/60x24/40x20, black-cell/full-logo
+snapshots, actual Up/Down/Enter, exactly one VT alternate-screen enter/leave pair,
+continuous raw input and restored exit modes. First No zero requests/files; first
+Yes one feed/verified install; four held object requests versus prior P704's three.
+Actual-byte cancellation drains/retains partials without promotion; unsigned feed
+gets styled error/exit1 without objects. Full signed updater suite and dev/direct/
+batch detached actor falsifiers pass; reader306 checks0 failures. Complete control,
+failure and delivery distinctions: FTESurf tools/p708launcher.md. No engine source,
+pin/tag, QC Build, player data, public release/feed, Linux runtime or Pi change.
+Physical-terminal appearance/new real game acceptance is not inferred from ConPTY.
+
 
 ## Patch 705 — World of Surf brand kit and web presentation candidate
 
