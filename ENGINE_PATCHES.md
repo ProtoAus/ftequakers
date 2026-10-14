@@ -47043,6 +47043,47 @@ No existing map/zone or personal cache was replaced. Archived-version zones or
 an owner-approved map refresh remain BACKLOG, as does native KSF replay playback.
 No native pin/tag, QC Build, release/feed or evidence semantics changed.
 
+## Patch 706 -- Original KSF playback and bounded advertised-demo imports
+
+**Problem.** P702 made twelve KSF clips playable through offline conversion, but
+original binary files were not accepted by the game and imported KSF board times
+had no automatic exact recording association. Public board rows already carry
+sparse advertised file metadata; probing every player or guessing filenames is
+unnecessary and unsafe. Rounded milliseconds alone cannot identify a PB.
+
+**Change.** Client reads original CSS/66t v2/v3 files into Watch's imported REC5
+buffer using explicit map/course/style, unambiguous bookmark clock and pre-open
+16 MiB/40,000-frame bounds. Preserve source poses, velocity, buttons, recorded
+ground/analog and normalized direction; invent no duck state, BSP identity or
+native authority. Existing board crawler's opt-in --demos reserves <=2 requests
+inside its budget under the same lock/pacing/shared host cooldown. Consume only
+advertised cache fields; retain originals/provenance and exact current-PB link
+transactionally through kind/tier ksf and a separate normalized root. Preserve
+raw seconds and upstream identity/file metadata; faster/replaced PBs clear old
+links, seeds cannot overwrite exact bindings with rounded-only metadata. Bound
+queue/scans/bytes/disk reserve, distinguish transport/body failures from local
+archive failures, recover interrupted publication, and suppress incompatible
+variant Watch rather than removing its map guard. No new replay wire protocol.
+
+**Verified.** Three QC programs: zero new warnings. Twelve real dedicated original
+clips on null main and prosurf/monolith bonus4: full independent source traces,
+endpoint velocity/keys, pause/seek/rendered advance/path and active map refusal.
+Sixteen malformed/native-boundary arms prove the valid subject first. Seventeen
+offline collector/index/API tests cover exact binding/sub-ms/withdrawal, real
+budget/lock, scan/queue limits/progress, interrupted publication, seed ordering,
+shared refusal including ConnectionResetError/IncompleteRead, local failure
+retirement, stream cap/deadline, variant/path guards and 256-warm/one-cold queue
+progress with durable removal/missing-file recovery. One actual advertised
+upstream original indexes; its retained bytes pass real isolated cold API/client
+board-row download/cache/Watch and warm no-second-fetch controls. Existing
+backend/converter/inspector/native
+reader suites pass; same-byte native corpus 289 REC/101 VIEW has identical
+184/4 preexisting faults and zero delta. Fresh review found transport-category, legacy-seed and warm-queue blockers;
+acted regressions close all three. Final gates,
+source/commands/limits and separate delivery status: FTESurf tools/p706ksf.md.
+Stage cuts/CSS100/other games/build-hash binding remain explicit limits. No native
+engine pin/tag, QC Build, public release/feed or verified evidence semantics change.
+
 ## Patch 704 -- Guard dev installs and detach the Windows Surf launcher
 
 **Problem.** A deployed 13.38 MB development preview retained rejected wave
