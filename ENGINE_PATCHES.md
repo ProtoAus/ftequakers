@@ -32,8 +32,8 @@ not-verified info, and leaves imported recording dates unknown. `demodata` is
 an imported ground/velocity capability alongside the compatible `momdemo` key,
 not a native evidence claim. The existing console player, pause/seek/rate/path
 controls are reused; KSF-only missing/different map names are refused with full
-previous-viewer pin/cursor cleanup, preserving native/Momentum warning behavior. Twelve supplied public samples
-have safe console aliases; converted runtime files live outside player data.
+previous-viewer pin/cursor cleanup, preserving native/Momentum warning behavior.
+Twelve supplied public samples have safe console aliases; converted runtime files live outside player data.
 Automatic KSF leaderboard Watch/download association is explicitly not included.
 No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
 
@@ -48,8 +48,7 @@ No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
   pause/seek and actual-frame playback. v2/main/bonus, native and old momdemo
   controls, cold wrong-map refusal and active missing/wrong-map replacement
   cleanup (immediate closed state/cursor release and actual body movement) are
-  exercised by
-  `tools/p702ksf_smoke.py`. Screenshots show map alignment, imported provenance
+  exercised by `tools/p702ksf_smoke.py`. Screenshots show map alignment, imported provenance
   and v2 unavailable versus v3 inferred contact. Build: all three progs, zero
   warnings. Engine compilation is not required by this QC/tools-only change.
 - Recorder suite: 306 checks, zero failures. Current owner corpus: 273 REC plus
@@ -60,6 +59,48 @@ No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
   conversion and automatic board replay binding unsupported. Display aliases
   are not verified player identity. Bookmark duration is not the official
   sub-tick timer duration. See `tools/ksfplayback.md` and owned task receipts.
+
+## Patch 701 — admit alpha planes independently within material batches
+
+### Problem
+Patch 700's default1 batch eligibility required every mesh to pass the plane
+geometry proof. One rear/near-span face therefore excluded all otherwise valid
+foreground panes sharing its material. Kitsune's `grids/grid_red` batch contains
+such rear faces, but the initial frozen dispatcher regression used three
+separate one-face batches and missed this admission failure.
+
+### Change
+Keep static-world, callback/flags/fog, CPU-geometry, program/deform and
+single-pass material gates at batch level. Admit plane geometry per face in the
+existing bounded sorter instead. Unsupported faces retain their baseline slots;
+any proposed crossing of an intervening unsupported command still aborts the
+refinement atomically. No clipping, OIT, centroid sorting, new cvar, worker,
+mode0/2, header/ABI, scene-cache or other-backend change.
+
+### Verified
+- Extended the EXISTING `tools/test_gl_blend_faces.py`, not a new trace/tool:
+  six frozen Kitsune yaws x six pane permutations x real rear quad4029 in the
+  first/last slot =72 same-material one-batch cases. Foreground1235-first,
+  stationary rear, unchanged batch descriptors and exact full-range mode0 order
+  pass. Intervening unsupported-slot fallback remains exercised.
+- Unmodified P700 compiled and ACTED before failing the new mixed-batch order
+  assertion. Restoring its whole-batch geometry veto in corrected source also
+  compiles and fails. All seven face controls, normal/HEXEN2 and normal/fast-math
+  strict C builds pass, as do existing plane and shader-rebucket regressions.
+- Full isolated Windows m-rel candidate succeeds with zero new compiler
+  diagnostic payloads against P700;5890 shared dependency-cache files retain
+  membership/hash/size/mtime. clangd has no errors; existing unrelated alignment
+  and integer-division warnings remain. Independent source review approves the
+  captured two-file fix with explicit conservative/native-acceptance limits;
+  parent confirms the intervening HEAD fast-forward changed only board docs.
+
+Limits: source/host regressions and compilation are not fresh GPU, startup-repeat
+or performance acceptance. Unsupported intervening faces, intersections/cycles,
+program-driven/capture/dynamic and CPU-unavailable geometry remain conservative
+fallbacks. A separate pre-fix P700 bundle attempt compiled the exes but failed
+plugin metadata packaging and unexpectedly downloaded its owned ODE archive;
+no configure/cache-file mutation occurred. Failed outputs retained. No deployment,
+QC Build bump, native runtime or old paused experiment acceptance is claimed.
 
 ## Patch 700 — correct default static alpha order and shader rebucketing
 
