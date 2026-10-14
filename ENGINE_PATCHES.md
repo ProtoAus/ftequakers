@@ -6,6 +6,58 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+## Patch 701 — play public KSF CSS clips through the imported viewer
+
+### Problem
+KSF board times existed in game, but the public CSS/66t v2/v3 binary replays
+were not converted into the imported viewer. Their first frame integer is
+Source buttons, not entity flags; header kind is not map/course/style identity.
+Raw Source buttons also differ from the native recorder's resolved-direction
+FSI mask. The old import presentation assumed Momentum quality metadata and
+formatted arbitrary long import hashes as native recording dates.
+
+### Change
+`tools/ksfconvert.py` converts bounded local binaries using explicit external
+map/course/style bindings and one unambiguous main/bonus bookmark interval.
+It preserves pre-roll through the finish frame, source float motion/angles and
+raw buttons; the bookmark clock and optional official time remain separate.
+Native FSI directions follow recorded v3 moves or explicitly labelled v2 unit
+button-direction proxies. Opposing v2 inputs cancel without guessing SOCD order.
+No measured v2 analog magnitude, ground, native plane/journal/nonce/warp/sidecar
+or verifier/ranking identity is fabricated. v3 ambiguous flag bit1 is not ducked
+body state or a native warp. Source SHA256 is provenance, not authentication.
+
+CSQC retains foreign source/style, shows KSF/build-unknown chrome and imported/
+not-verified info, and leaves imported recording dates unknown. `demodata` is
+an imported ground/velocity capability alongside the compatible `momdemo` key,
+not a native evidence claim. The existing console player, pause/seek/rate/path
+controls and loaded-map name refusal are reused. Twelve supplied public samples
+have safe console aliases; converted runtime files live outside player data.
+Automatic KSF leaderboard Watch/download association is explicitly not included.
+No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
+
+### Verified
+- Eight independent synthetic converter tests cover v2/v3/extensibility, exact
+  fields, raw-button vs FSI namespaces, opposed inputs, bookends/bonus names,
+  malformed/nonfinite/HTML/timing/binding rejection, sanitization/no overwrite.
+  Existing binary-inspector tests pass. All twelve public clips independently
+  match source bytes/clocks/keys and pass the unchanged `.rec` reader.
+- Dedicated socket overlays on surf_null, surf_prosurf and surf_monolith compare
+  every in-run source-frame camera coordinate/pitch/yaw, plus end velocity,
+  pause/seek and actual-frame playback. v2/main/bonus, native and old momdemo
+  controls, wrong-map refusal and explicit provenance are exercised by
+  `tools/p701ksf_smoke.py`. Screenshots show map alignment, imported provenance
+  and v2 unavailable versus v3 inferred contact. Build: all three progs, zero
+  warnings. Engine compilation is not required by this QC/tools-only change.
+- Recorder suite: 306 checks, zero failures. Current owner corpus: 273 REC plus
+  91 paired VIEW, baseline and subject fault reasons identical (173 preexisting
+  faulted files/views); the reader is byte-identical to the inspected base and
+  there is no new corpus fault. Existing corpus faults are not repaired here.
+- Limits: source map digest and ducked body/eye state unknown; CSS100t/CSGO/stage
+  conversion and automatic board replay binding unsupported. Display aliases
+  are not verified player identity. Bookmark duration is not the official
+  sub-tick timer duration. See `tools/ksfplayback.md` and owned task receipts.
+
 ## Patch 700 — correct default static alpha order and shader rebucketing
 
 ### Problem
