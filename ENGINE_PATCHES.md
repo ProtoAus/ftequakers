@@ -46758,3 +46758,28 @@ cursor-hide/Linux/external-signal coverage limits are unchanged. Sample PNG/GIF
 are terminal-cell renders. Only source and an isolated safe debug preview are
 accepted; no live launcher/game replacement, engine/performance run, full rename,
 official archive/release/feed publication or canonical/fleet deployment.
+
+## Patch 696 -- remove the launcher illustration entirely
+
+**Problem:** the owner rejected the ASCII wave and explicitly requested removal,
+not another replacement illustration.
+
+**Change:** delete wave rows/helper and the split logo/scene header. Center the
+existing World of Surf logo across the full header, retaining its letter sheen
+and the download-progress/confirmation display. No supplementary picture or new
+scene. README matches logo-only presentation. All bootstrap/transport/signature/
+progress counters/key handling/install/launch behavior remains byte-exact.
+
+**Verified:** warm isolated Windows locked/offline jobs1 IDLE-priority builds,
+zero warnings;42 library tests pass. Positive logo/full-width center and negative
+wave-geometry tests replace the superseded wave test;42 total and existing46-frame
+progress-invariance controls remain. Six piped and six hidden native console
+regressions pass. Native animation proof now reads actual header color attributes
+for the logo sheen rather than wave-specific changing character positions; input,
+screen/cursor restore and acted local partial-transfer cancellation still pass.
+Parent inspected the logo-only rendered PNG. Source/commands: tools/p696logo.md.
+
+**Limits:** no new illustration/physical aesthetic approval, Linux/cursor-hide
+or broader cancellation coverage claim. No real game/engine/performance run,
+canonical/fleet deployment, official archive/release/feed or full rename. Prior
+wave previews/source preserved as history, not kept in the current renderer.
