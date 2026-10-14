@@ -117,7 +117,12 @@ regression passes; 289-file corpus has the same 184 pre-existing faults in exact
 fault-list comparisons. Source/control/commands/limits: FTESurf tools/p712trainer.md.
 Delivery uses a separate clean P712-only snapshot on the inspected pre-P710
 runtime base: P710 is explicitly a withheld presentation candidate, not shipped
-by this feature. Physical key provenance, sub-sample accuracy, real-fleet demo
+by this feature. Client-only delivery d643b8a hashes on both Windows installs
+and NanoPi; old SSQC/menu/configs preserved. All 12 positively empty active
+lobbies restarted with changed PIDs; no recent runtime errors. Actual old
+installed-pair hidden control and new installed-pair UI arm both act/pass.
+Clock-attributed UTC, full SHAs/hashes and limits are in tools/p712trainer.md.
+Physical key provenance, sub-sample accuracy, real-fleet demo
 acceptance and ordinary engine .dem input reconstruction are not inferred.
 
 ## Patch 707 — prepare parallel World of Surf website paths
