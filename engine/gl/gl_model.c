@@ -469,12 +469,48 @@ void Mod_RebuildLightmaps (void)
 }
 
 #ifdef HAVE_CLIENT
+// Stable bottom-up merge: restore the initial descending BSP creation order,
+// independently of which old shader bands a reload merged or split.
+static batch_t *Mod_SortBatchSequence(batch_t *head)
+{
+	batch_t *p, *q, *b, *tail;
+	size_t width = 1, merges, left, right, i;
+	for (;;)
+	{
+		p = head;
+		head = tail = NULL;
+		merges = 0;
+		while (p)
+		{
+			merges++;
+			q = p;
+			for (left = 0; left < width && q; left++) q = q->next;
+			right = width;
+			while (left || (right && q))
+			{
+				if (!left) { b = q; q = q->next; right--; }
+				else if (!right || !q || p->user.bmodel.sortsequence >= q->user.bmodel.sortsequence)
+				{ b = p; p = p->next; left--; }
+				else { b = q; q = q->next; right--; }
+				if (tail) tail->next = b;
+				else head = b;
+				tail = b;
+			}
+			p = q;
+		}
+		if (tail) tail->next = NULL;
+		if (merges <= 1) return head;
+		i = width;
+		width = i * 2;
+	}
+}
+
 void Mod_ResortShaders(void)
 {
 	//called when some shader changed its sort key.
 	//this means we have to hunt down all models and update their batches.
 	//really its only bsps that need this.
-	batch_t *oldlists[SHADER_SORT_COUNT], *b;
+	batch_t *oldlists[SHADER_SORT_COUNT], **tails[SHADER_SORT_COUNT], *b;
 	int i, j, bs;
 	model_t	*mod;
 	for (i=0, mod=mod_known ; i<mod_numknown ; i++, mod++)
@@ -485,7 +521,9 @@ void Mod_ResortShaders(void)
 		memcpy(oldlists, mod->batches, sizeof(oldlists));
 		memset(mod->batches, 0, sizeof(oldlists));
 		mod->numbatches = 0;	//this is a bit of a misnomer. clearing this will cause it to be recalculated, with everything renumbered as needed.
-	
+		for (j = 0; j < SHADER_SORT_COUNT; j++)
+			tails[j] = &mod->batches[j];
+
 		for (j = 0; j < SHADER_SORT_COUNT; j++)
 		{
 			while((b=oldlists[j]))
@@ -493,10 +531,19 @@ void Mod_ResortShaders(void)
 				oldlists[j] = b->next;
 				bs = b->shader?b->shader->sort:j;
 
-				b->next = mod->batches[bs];
-				mod->batches[bs] = b;
+				// A reload with unchanged sort keys must not reverse alpha draw order.
+				b->next = NULL;
+				*tails[bs] = b;
+				tails[bs] = &b->next;
 			}
 		}
+		if (mod->type == mod_brush)
+			for (j = 0; j < SHADER_SORT_COUNT; j++)
+			{
+				// Other brush producers have no BSP sequence: retain stable traversal.
+				for (b = mod->batches[j]; b && b->user.bmodel.sortsequence; b = b->next) {}
+				if (!b) mod->batches[j] = Mod_SortBatchSequence(mod->batches[j]);
+			}
 	}
 
 	Surf_ClearSceneCache();	//make sure their caches are updated.
@@ -3751,6 +3798,7 @@ static int Mod_Batches_Generate(model_t *mod)
 		if (!batch)
 		{
 			batch = ZG_Malloc(&mod->memgroup, sizeof(*batch));
+			batch->user.bmodel.sortsequence = i + 1;
 			batch->lightmap[0] = lmmerge(surf->lightmaptexturenums[0]);
 #if MAXRLIGHTMAPS > 1
 			batch->lightmap[1] = lmmerge(surf->lightmaptexturenums[1]);

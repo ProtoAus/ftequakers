@@ -166,6 +166,7 @@ typedef struct batch_s
 		{
 			unsigned int ebobatch;		//temporal scene cache stuff, basically just a simple index so we don't have to deal with shader sort values when generating new index lists.
 			unsigned int shadowbatch;	//a unique index to accelerate shadowmesh generation (dlights, yay!)
+			unsigned int sortsequence;	//immutable first surface + 1; zero for other batch producers
 //		} bmodel;
 //		struct
 //		{

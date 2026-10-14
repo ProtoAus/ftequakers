@@ -6,6 +6,60 @@ engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
+## Patch 700 — correct default static alpha order and shader rebucketing
+
+### Problem
+Default OpenGL `r_blendsort 1` reversed faces only within a material batch;
+separate material batches still composited in linked-list order. The proven
+Kitsune plane correction in Patch 690 was reachable only in opt-in mode 2.
+Separately, `Mod_ResortShaders` prepended every visited node: even an unrelated
+shader reload reversed unchanged alpha bands, and final band order depended on
+which old bands the same BSP batches had occupied.
+
+### Change
+Default1 retains its BSP-walk baseline and world-before-dynamic boundary, then
+uses the existing conservative plane relation/topological ordering for runs of
+ordinary single-pass static-world faces. No centroid sort is introduced into
+default1. Capture/portal, program/deform, fogged, multipass, animated,
+CPU-unavailable and uncertain geometry remain whole-batch barriers at their
+original positions. Unchanged, over-budget and cyclic runs retain original-node
+submission; callback shader updates persist. Mode0, mode2, other backends,
+worker settings and the cvar default value remain unchanged.
+
+Shader rebucketing now appends instead of reversing lists. Generated BSP batches
+carry an immutable first-surface sequence; stable merge sorting reconstructs the
+initial descending creation order after band merges/splits, independent of
+reload history. Unkeyed/nonbrush producers retain stable traversal. Scene-cache
+and batch-number invalidation remain intact.
+
+### Verified
+- Extended `tools/test_gl_blend_faces.py` exercises actual default0/1/2 dispatch,
+  all36 permutations of three frozen Kitsune panes at six recorded viewpoints,
+  dynamic boundary, original callback persistence, fog/program/multipass/cache/
+  recursion barriers, unchanged whole batches and atomic oversize fallback.
+  Normal/HEXEN2, normal/fast-math strict C builds pass; six compiled controls
+  reject restored legacy dispatch and the targeted new/old regressions.
+- Existing `tools/test_gl_blend_planes.py` passes its geometry, program,
+  projection, intersection, cycle/budget and eight compiled-control regressions.
+- `tools/test_model_shader_resort.py` passes exact production C at O0/O2:
+  fixed-sort idempotence, two-history convergence, split/reunion, shared/null
+  shaders, loading/nonbrush/unkeyed producers, stable equal keys, membership and
+  invalidation, and shuffled4096-node lists. Restored prepend and removed
+  canonical sorting compile and fail their named order assertions.
+- Isolated full Windows m-rel client build succeeds:37 pre-existing compiler
+  warnings, zero new diagnostic payloads;5890 shared dependency-cache files
+  remain hash/size/mtime unchanged through the client build. clangd database
+  regenerated; affected C translation units have no errors (standalone header
+  diagnostics lack its required including context). A subsequent server/plugin `make -n`
+  inspection timed out after recursive dependency configuration changed49
+  shared-cache paths. Failure retained; cache not restored/deleted, no remaining
+  owned root process. Server/plugin bundle verification is NOT claimed.
+
+Limits: extracted production tests are not fresh default1 GPU/pixel or startup
+acceptance. The prior paused worker-registration experiment is not rerun or
+credited. Arbitrary intersecting/program-driven/dynamic/capture transparency is
+not solved by this bounded correction. No deployment or QC Build bump is claimed.
+
 ## Reading entries written before build 46 — the `fs_` names
 
 Build 46 moved every FTESurf cvar, field and global **off the `fs_` prefix**, because

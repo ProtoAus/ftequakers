@@ -26,8 +26,9 @@ if os.name == 'posix':
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 s = (engine / 'gl/gl_backend.c').read_text()
 actual = s[s.index('typedef struct\n{\n\tbatch_t *batch;\n\tmesh_t *mesh;'):s.index('\nvoid GLBE_SubmitMeshes (')]
+dispatch = s[s.index('\nvoid GLBE_SubmitMeshes ('):s.index('\n#if (defined(GLQUAKE) || defined(VKQUAKE)) && defined(MULTITHREAD)', s.index('\nvoid GLBE_SubmitMeshes ('))]
 # Exercise the real pre-build BEM gates, but stub GL submission itself.
-submit = s[s.index('static void GLBE_SubmitMeshesSortList(batch_t *sortlist)'):s.index('typedef struct\n{\n\tbatch_t *batch;')]
+submit = s[s.index('static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)'):s.index('typedef struct\n{\n\tbatch_t *batch;')]
 prebuild = submit[submit.index('\t\tif (batch->meshes =='):submit.index('\n\t\t//buildmeshes')]
 shadergates = submit[submit.index('\t\tif ((bs->flags & SHADER_NODRAW)'):submit.index('\n\t\tif (bs->flags & SHADER_SKY)')]
 rotate = (engine / 'gl/gl_rmain.c').read_text()
@@ -60,7 +61,11 @@ typedef int qboolean;
 #define BEM_LIGHT 1
 #define BEM_STENCIL 2
 #define BEM_DEPTHONLY 3
-static struct { int mode; } shaderstate;
+struct batch_s;
+static struct { int mode; struct batch_s *mbatches[4]; } shaderstate;
+#define SHADER_SORT_PORTAL 1
+#define SHADER_SORT_BLEND 2
+static struct { int ival; } r_blendsort={1},r_portalrecursion={0},r_portalonly={0};
 #define RF_WEAPONMODEL 1
 #define RF_DEPTHHACK 2
 #define RF_XFLIP 4
@@ -87,7 +92,7 @@ typedef struct { unsigned flags; float axis[3][3],origin[3]; model_t *model; flo
 #define mod_alias 1
 static struct { int ival; } ruleset_allow_larger_models={1};
 #define Con_DPrintf(...) ((void)0)
-typedef struct batch_s { struct batch_s *next; mesh_t **mesh; unsigned firstmesh,meshes,maxmeshes,flags; shader_t *shader; entity_t *ent; void (*buildmeshes)(struct batch_s*); int id; void *vbo; union { struct { unsigned surface; } poly; } user; } batch_t;
+typedef struct batch_s { struct batch_s *next; mesh_t **mesh; unsigned firstmesh,meshes,maxmeshes,flags; shader_t *shader; entity_t *ent; void (*buildmeshes)(struct batch_s*); int id; void *vbo, *fog; union { struct { unsigned surface; } poly; } user; } batch_t;
 typedef struct { int firstvert, numvert; } scenetris_t;
 static scenetris_t *cl_stris;
 static float (*cl_strisvertv)[3];
@@ -98,17 +103,18 @@ static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
 static struct { int useperspective; float m_projection_std[16]; int recurse; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},0};
 #define BZ_Malloc malloc
 #define BZ_Free free
-static int draws[128],ndraw, builds;
-static void GLBE_SubmitMeshesSortList(batch_t *batch) {
- assert(!batch->next);
- do {
+static int draws[128],ndraw, builds, ranges[128];
+static void GLBE_SubmitMeshesPortals(batch_t **world,batch_t *dynamic) { (void)world;(void)dynamic; }
+static void GLBE_SubmitMeshesSortRange(batch_t *batch,batch_t *end) {
+ for(;batch&&batch!=end;batch=batch->next) {
  __ACTUAL_PREBUILD__
  if(batch->buildmeshes) batch->buildmeshes(batch);
  shader_t *bs=batch->shader;
  __ACTUAL_SHADERGATES__
- if(batch->meshes>batch->firstmesh) draws[ndraw++]=batch->mesh[batch->firstmesh]->id;
- } while(0);
+ if(batch->meshes>batch->firstmesh) { ranges[ndraw]=batch->meshes-batch->firstmesh; draws[ndraw++]=batch->mesh[batch->firstmesh]->id; }
+ }
 }
+static void GLBE_SubmitMeshesSortList(batch_t *batch) { GLBE_SubmitMeshesSortRange(batch,NULL); }
 static void R_RotateForEntity(float *m,float *mv,const entity_t *e,model_t *mod) {
 '''
 post = r'''
@@ -116,6 +122,9 @@ post = r'''
 }
 '''
 tests = r'''
+static batch_t *callback_original;
+static shader_t *callback_shader;
+static void update_shader(batch_t *b) { assert(b==callback_original);builds++;b->shader=callback_shader; }
 static void procedural(batch_t *b) {
  static mesh_t shared; static mesh_t *ptr;
  // The caller has not built/retained any alias descriptor during gather.
@@ -293,13 +302,63 @@ int main(void) {
  // A-before-D. D-before-B and B-before-A then form a conservative cycle.
  dx[0][0]=dx[3][0]=0;dx[1][0]=dx[2][0]=12;dm.id=253;db.ent=&r_worldentity;
  ndraw=0;GLBE_SubmitBlendedFaces(&pb,&db);assert(ndraw==3&&draws[0]==251&&draws[1]==253&&draws[2]==250);
- puts("PASS actual collector/BEM/plane integration: old lifetime/range/capture/remap guards, ACTED plane correction, custom-program/orthographic baseline, dynamic overlap barrier and three-world intersection fallback");
+ // Exercise actual default dispatch, not merely an unused plane helper.
+ sh.numpasses=1;mesh_t *reverse[2]={&pm[1],&pm[0]};pb.mesh=reverse;
+ batch_t *wb[4]={0};wb[SHADER_SORT_BLEND]=&pb;db.ent=&de;dm.id=252;
+ shaderstate.mbatches[SHADER_SORT_BLEND]=&db;
+ r_blendsort.ival=1;ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(ndraw==3&&draws[0]==250&&draws[1]==251&&draws[2]==252&&ranges[0]==1&&ranges[1]==1);
+ assert(pb.mesh==reverse&&reverse[0]==&pm[1]&&pb.meshes==2);
+ r_blendsort.ival=0;ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(ndraw==2&&draws[0]==251&&ranges[0]==2&&draws[1]==252);
+ r_blendsort.ival=2;ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);assert(ndraw==3);
+ shaderstate.mbatches[SHADER_SORT_BLEND]=NULL;r_blendsort.ival=1;
+ // Default unchanged, unsupported and recursive runs retain full batches.
+ for(int arm=0;arm<7;arm++) {
+  switch(arm){case 0:sh.prog=&pm[0];break;case 1:sh.numpasses=2;break;case 2:r_refdef.recurse=1;break;
+   case 3:r_refdef.useperspective=0;break;case 4:sh.numdeforms=1;break;case 5:pm[0].xyz_array=NULL;break;case 6:pb.fog=&sh;break;}
+  ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+  assert(ndraw==1&&draws[0]==251&&ranges[0]==2);
+  sh.prog=NULL;sh.numpasses=1;r_refdef.recurse=0;r_refdef.useperspective=1;sh.numdeforms=0;pm[0].xyz_array=px[0];pb.fog=NULL;
+ }
+ pb.mesh=pml;ndraw=0;GLBE_SubmitBlendedWorld(&pb);assert(ndraw==1&&ranges[0]==2); // already correct
+ // Capture stays between adjacent ordinary runs, never hoisted or crossed.
+ shader_t barrier=sh;barrier.flags=SHADER_HASREFRACT;barrier.remapto=&barrier;
+ batch_t last=pb;last.mesh=&pml[0];last.meshes=1;
+ batch_t barrierbatch=last;barrierbatch.shader=&barrier;barrierbatch.mesh=dml;barrierbatch.next=&last;
+ batch_t first=last;first.mesh=&pml[1];first.next=&barrierbatch;
+ ndraw=0;GLBE_SubmitBlendedWorld(&first);assert(ndraw==3&&draws[0]==251&&draws[1]==252&&draws[2]==250);
+ barrierbatch.shader=&sh;barrierbatch.buildmeshes=update_shader;callback_original=&barrierbatch;callback_shader=&barrier;
+ ndraw=builds=0;GLBE_SubmitBlendedWorld(&first);
+ assert(ndraw==3&&builds==1&&barrierbatch.shader==&barrier&&barrierbatch.next==&last&&draws[1]==252);
+ // Oversize eligible run must not be partially sorted or partially drawn.
+ mesh_t *oversize[129];for(int i=0;i<129;i++)oversize[i]=&pm[i%2];
+ pb.mesh=oversize;pb.meshes=129;ndraw=0;GLBE_SubmitBlendedWorld(&pb);assert(ndraw==1&&ranges[0]==129);pb.meshes=2;
+ // Recorded Kitsune panes, six yaw viewpoints, every material-batch order.
+ mesh1235.id=1235;mesh1236.id=1236;mesh1228.id=1228;(void)cyclexyz;
+ mesh_t *frozen[3]={&mesh1235,&mesh1236,&mesh1228};
+ const int perm[6][3]={{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}};
+ float yaws[6]={125.6f,104.3f,104.2f,103.2f,103.1f,95};
+ r_origin[0]=-14986.237f;r_origin[1]=-14484.737f;r_origin[2]=836.36249f;
+ for(int y=0;y<6;y++) {
+  double pitch=19.3*3.141592653589793/180,yaw=yaws[y]*3.141592653589793/180;
+  vpn[0]=cos(pitch)*cos(yaw);vpn[1]=cos(pitch)*sin(yaw);vpn[2]=-sin(pitch);
+  vright[0]=sin(yaw);vright[1]=-cos(yaw);vright[2]=0;
+  vup[0]=sin(pitch)*cos(yaw);vup[1]=sin(pitch)*sin(yaw);vup[2]=cos(pitch);
+  for(int p=0;p<6;p++) {
+   batch_t fb[3];mesh_t *fm[3];
+   for(int i=0;i<3;i++){fm[i]=frozen[perm[p][i]];fb[i]=last;fb[i].mesh=&fm[i];fb[i].next=i<2?&fb[i+1]:NULL;}
+   wb[SHADER_SORT_BLEND]=fb;ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   assert(ndraw==3&&draws[0]==1235); // wrong legacy material rank must ACT and fail
+  }
+ }
+ puts("PASS actual default0/1/2 dispatch:36 frozen-yaw/material permutations; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
 c = root / 'gl_blend_faces_test.c'
 nan_macro = next(line for line in (engine/'common/mathlib.h').read_text().splitlines() if line.startswith('#define') and 'IS_NAN(x)' in line)
-c.write_text(pre.replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates) + normal_matrix + post + actual + tests)
+c.write_text(pre.replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates) + normal_matrix + post + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + tests)
 suffix = '.exe' if os.name == 'nt' else ''
 exe = root / ('gl_blend_faces_test' + suffix)
 flags = ['-std=c99', '-Wall', '-Wextra', '-Werror', '-O2', '-fno-strict-aliasing']
@@ -311,6 +370,9 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 # The assertions must fail, not merely report successful compilation.
 base = c.read_text()
 controls = {
+    'legacy_default': base.replace('GLBE_SubmitBlendedWorld(worldbatches[i]);', 'GLBE_SubmitMeshesSortList(worldbatches[i]);'),
+    'lost_fog': base.replace('|| batch->fog ||', '||'),
+    'lost_callback_update': base.replace('GLBE_SubmitMeshesSortRange(batch, batch->next);', 'view=*batch;view.next=NULL;GLBE_SubmitMeshesSortList(&view);'),
     'world_bbox': base.replace('if (batch->buildmeshes == R_DB_Poly)', 'if (0)'),
     'special_first': base.replace('return !sh || !sh->remapto || !batch->ent ||',
                                   'return batch->buildmeshes || !sh || !sh->remapto || !batch->ent ||'),
@@ -332,5 +394,6 @@ surf = (engine/'client/r_surf.c').read_text()
 assert 'r_blendsort.ival == 2 && qrenderer == QR_OPENGL' in surf
 assert 'b->shader->sort == SHADER_SORT_BLEND' in surf
 assert 'i == SHADER_SORT_BLEND && r_blendsort.ival == 2' in s
+assert 'i == SHADER_SORT_BLEND && r_blendsort.ival == 1' in s
 assert 'CVARFD ("r_blendsort", "1"' in (engine/'client/renderer.c').read_text()
-print('PASS: mode 0/1 preserved, default1, OpenGL blend-only seam and brush no-flatten source gates')
+print('PASS: default1 plane correction ACTED; mode0/2, dynamic boundary and brush no-flatten gates retained')
