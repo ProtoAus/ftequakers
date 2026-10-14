@@ -46823,3 +46823,44 @@ do not delete files/history, interrupt current lobbies, change explicit lobby
 rotations or prohibit manual console maps; offline menus use last fetched
 policy. Incompatible zone transfers remain refused, not silently forced. Fleet
 and dual-install deployment/provenance are recorded separately after staging.
+
+## Patch 699 -- Explicit KSF top-up, movement-style boards and zone coverage
+
+**Problem:** Create Server treated every missing JSON as no zones, despite the
+legacy embedded timer path; the beta BSP list was mistaken for approved zone
+publication. Existing KSF style storage was not selectable in either game board.
+Paging the locally held board did not request deeper KSF coverage. Old comments
+incorrectly described KSF's public binary replays as unusable Source demos.
+
+**Change:** additive surfd schema 17 queues bounded requests by canonical map,
+track, leg and style. POST on existing board paths coalesces active requests;
+known KSF legs only, 64 active keys, 100 source rows/request, 10k/board ceiling.
+The existing watch importer gives explicit requests bounded priority (three
+boards/five pages each), retains pacing/refusal parking, and acknowledges only
+after durable row filing; interrupted requests resume from cached cursors.
+Both game boards and the website offer FW/SW/HSW/BW independently of source;
+non-forward styles are KSF-only and never merge into Forward. Fetch +100 differs
+from Show more (held-row pagination). Count valid embedded brush start+stop
+triggers as timed in the service, cached by BSP identity; menu absence is now
+'zones not listed'. No guessed/private/differently-sized zone files are copied.
+Bounded offline tools/ksfreplay_info.py decodes the public v2/v3 format but does
+not convert, associate, certify or expose game playback.
+
+**Verified:** zero-warning SSQC/CSQC/menu compile. Queue/import/HTTP controls prove
+120 -> 220 -> 247/exhausted, duplicate coalescing, restart before acknowledgement,
+GET non-action, 50ms lock refusal, active cap, remote refusal retention, style
+isolation, linked map resolution and bonus4 -> KSF zone34. Existing Windows
+board/web/join/accounts/surfd/variants/zonefit/mappool/mapwatch/ksf suites pass.
+Real dedicated socket + HTTP fixture acts all four style GETs and CSQC SW/menu
+HSW POSTs, with durable isolated keys. FTE normalizes 200 to 0 but preserves
+202; both callbacks accept that actual response. Chrome exercises style/source
+reset and selected-style POSTs. Screenshots inspected; tools/p699ksf.md records
+commands, source/deployment provenance and explicit limits.
+Twelve supplied public replays were retrieved and decoded (three v3, nine v2,
+1,715,160 bytes total), plus malformed/oversized-shape/NaN rejection controls.
+
+**Limits:** native engine/pin/tag, QC Build, player configurations and evidence
+semantics unchanged. KSF replay conversion remains BACKLOG work: timer cropping,
+map/style/leg identity and actual game line/watch comparison must act first.
+Zone discovery cannot manufacture unpublished beta JSON. Source acceptance is
+not a release or deployment; live delivery is recorded separately after staging.
