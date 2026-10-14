@@ -7,6 +7,55 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 717 — bound retained KSF repair through protected queues
+
+### Problem
+P714 cold-intent swaps still strand retained repair257 when all256 current
+intents are protected. A global overflow cursor can repeat misses across
+SCAN32 windows; stale nonterminal metadata and valid legacy excess can defeat
+bounded admission even after the protected-queue seam is bypassed. Incoming
+null-ID profile PBs lose raw precision and let stale cached records regain
+replay authority at equal rounded milliseconds.
+
+### Change
+Add a <=2 transient local-only overflow lane sharing original read/conversion
+cap2 with queued work; retain protected queue256 and request/park/lock rules.
+Persist one board+exact-key resume position and keep scan32 moving. Preserve
+retry/strike metadata in the bounded existing ledger, reconcile obsolete/ready
+nonterminal history, and hold queued terminal work safely when capacity is full.
+Preserve oversized historical state and park locally before DB/work/save until
+normal expiry permits processing. Exact provenance/hash/PB/transaction authority
+and imported-tier isolation remain unchanged. Old integer state reads forward;
+old-reader rollback is NOT safe for new dictionaries, so opt-in needs matching
+source+state preservation. Published P716 schema18/profile/deployer changes are
+preserved; prior unpublished P716 claim was superseded before any push.
+Additive schema19 scoped ksf_unbound metadata preserves null-ID raw clock
+precision in the PB transaction; current/install/legacy backfill refuse markers,
+cache cannot bind and exact fresh identity clears them. Original18 unknown raw
+precision stays explicitly ambiguous. No fake record IDs, native promotion,
+engine source/binary pin/tag or QC Build change. Old18 writers must be excluded
+BEFORE install/import (startup migration precedes the inner cache lock); retain
+fail-closed exclusion across coherent six-file migration/acceptance/receipt,
+including failure/disconnect. Preserve source+DB+demos.json and later native data.
+Source-only downgrade or ordinary deployer flocks alone are not safe transition.
+
+### Verified
+Original queue/state controls and3 acted review regressions fail as predicted;
+actual null-ID profile step then stale filing/retained repair/fresh slower A
+adds3 integration reds. Corrected collector45/profile16/importer106/top-up8/
+codec9 pass. The64-board gate repairs two intact originals across8 naturally
+exited fresh processes with original2/scan32/queue256 and no fetch/sleep.
+Capacity/retirement,2050/2304 preservation/expiry, precise and unknown18 scope,
+native/identified isolation, malformed metadata and actual PB-update-before-
+marker abort/rollback controls act. Account19 explicit13-boundary DDL races
+and board19 guards pass. Independent reviews close all4 P1s. Synthetic10000-row
+local WSL migration is indexed/idempotent, preserves runs and takes ~0.010s;
+not owner/NanoPi live timing or power-loss proof. Prior immutable16/38 proofs
+remain pre-integration evidence; final exact current18/flattened45/backend21
+six-blob receipts are required before publication and specified in FTESurf
+p717ksfprotected.md/owned CHECKPOINT. No live Pi/crawl/cron/install/reload/game/
+GPU/corpus/old-writer transition claim. Native Node/Pillow/MTV/corpus limits remain.
+
 ## Patch 716 — queue complete KSF profile walks and lift client row ceilings
 
 ### Problem
