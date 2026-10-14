@@ -51,10 +51,13 @@ No engine code/binary/pin/tag, server evidence, native data or qcbuild change.
   exercised by `tools/p702ksf_smoke.py`. Screenshots show map alignment, imported provenance
   and v2 unavailable versus v3 inferred contact. Build: all three progs, zero
   warnings. Engine compilation is not required by this QC/tools-only change.
-- Recorder suite: 306 checks, zero failures. Current owner corpus: 273 REC plus
-  91 paired VIEW, baseline and subject fault reasons identical (173 preexisting
-  faulted files/views); the reader is byte-identical to the inspected base and
+- Recorder suite: 306 checks, zero failures. Final frozen-corpus snapshot: 275
+  REC plus 91 paired VIEW, baseline and subject fault reasons identical (175
+  preexisting faulted files/views); the reader is byte-identical to the inspected base and
   there is no new corpus fault. Existing corpus faults are not repaired here.
+- Two independent final FORMAT/VIEWER reviews ACCEPT frozen QC b992920. Acting
+  pre-fix controls fail active-mapless viewer cleanup and tiny-analog key/move
+  alignment; the final source passes both and all twelve dedicated clips.
 - Limits: source map digest and ducked body/eye state unknown; CSS100t/CSGO/stage
   conversion and automatic board replay binding unsupported. Display aliases
   are not verified player identity. Bookmark duration is not the official
