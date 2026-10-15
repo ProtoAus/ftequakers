@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 724 — fit the complete MOM/KSF bonus sidebar label (QC only)
+
+**Problem:** P723's text controls passed, but the first graphical screenshot
+clipped the Strafe half of a split KSF bonus rating. Sidebar width used mono-row
+ems even when that face shrank below the UI-label font's12px minimum.
+
+**Change:** Measure all actual leg titles, compact source-aware ratings and the
+header in their drawn UI fonts/sizes inside the responsive sizing loop. Share
+one formatter for measurement/drawing; add insets before giving width to the
+normal table/column fit. Expose an acted width witness in scores status. No
+native engine, pin/tag, physics, evidence, backend or qcbuild change.
+
+**Verified:** All3 VMs compile with0 warnings. Quiet-gated1280x720 and800x600
+real dedicated-socket graphical arms pass; inspected images show BOTH Unit and
+Strafe letters in the sidebar and full bonus text in the HUD. Actual UI-chain
+clicks select the taller stage2 row. Width grades pass (e.g.128px >=113px label
++14.4px inset); an800x600 HUD-editor capture registers the complete extra bonus
+row inside the viewport. Full source/authority/stage/bonus/map-change controls
+still pass; the original clipped screenshot and first rig's failed server-cvar
+probe remain failed evidence. Physical wheel/input taste remains human-only.
+Source and delivery provenance: tools/p723tiers.md.
+
 ## Patch 723 — separate MOM/KSF map and stage/bonus display (QC only)
 
 **Problem:** The top-right HUD displayed one generic tier, obscuring whether it
