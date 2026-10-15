@@ -486,7 +486,7 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	qbyte sig[64];
 	int i;
 
-	if (kind < -5 || kind > -2)
+	if (kind < -6 || kind > -2)
 		return false;
 	if (kind != -2 && !keyed)
 	{
@@ -523,7 +523,12 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	if (!CL_Receipt_Key())	/*after the checks: a refused call does not mint the key file*/
 		return false;
 
-	NET_AdrToString(svname, sizeof(svname), &cls.netchan.remote_address);
+	// Zone drafts use the existing linked-key proof, with a distinct purpose
+	// and fixed HTTPS service instead of the local editor's listen address.
+	if (kind == -6)
+		Q_strncpyz(svname, "play.proto.bar:443", sizeof(svname));
+	else
+		NET_AdrToString(svname, sizeof(svname), &cls.netchan.remote_address);
 	/*what comes back is spliced into a console line by game code: an address
 	  is digits, dots, colons and brackets, and anything else is not sent.*/
 	for (i = 0; svname[i]; i++)

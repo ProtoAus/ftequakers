@@ -9486,7 +9486,7 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 {
 	char out[512];
 	float f = G_FLOAT(OFS_PARM1);
-	int kind = (f >= -5 && f <= -2) ? (int)f : 0;	/*a NaN is nobody's kind*/
+	int kind = (f >= -6 && f <= -2) ? (int)f : 0;	/*a NaN is nobody's kind*/
 	qboolean keyed = CSQC_RealKey();
 
 	/*the statement names ONE file of code: a VM holding a second (an addon,

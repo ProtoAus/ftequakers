@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 729 — preserved map photos, eager manifests and saved-zone drafts
+
+**Problem:** Surf/bhop picture coverage depended on incomplete cached prefixes;
+the selector could only stretch a small bundled thumbnail and map manifests
+waited for menu focus. Zone refresh skipped existing files, and saved local zones
+had no authenticated upload path. An uploaded file must not bypass the owner's
+review/activation and existing-times decisions.
+
+**Change:** Audit live approved native modes plus cached testing metadata,
+preserve XL originals, recover same-map deleted-thumbnail alternatives, generate
+bounded R2 backdrops/name aliases and larger offline atlas layouts. Append-only
+missing-cell generation preserves existing atlas coordinates. Boot manifest
+refresh retains consent/rate gates. Native menu image readiness is nonblocking;
+full HTTPS picture identifiers survive shader canonicalization and pending/failure
+continues to use the atlas. Online disclosure advances to version 6 (not qcbuild).
+
+Latest-zone requests before local Play/download validate and reversibly promote
+a curated layer without overwriting local edits or mutating active timer tables.
+SSQC never consumes the client-only download layer. Saved-file upload freezes the
+bytes, requests explicit native confirmation and uses a distinct existing account
+proof purpose. A separate role/challenge/draft store reads linked accounts
+read-only, denies by default and bounds geometry, lifetimes and attempts. Owner
+installation and review staging helpers do not migrate/restart the sealed main
+backend or activate drafts/change existing times.
+
+**Verified:** 1,124 known inventory maps, zero missing available images; 4,497 R2
+JPEG objects checked against complete source bytes. Testing is cached coverage,
+not a fresh authenticated upstream census. Media10, real-Ed25519 backend11 and
+installer3 unit controls pass; 512x288 offline export and append-only atlas
+preservation acted. Recorder regression and unchanged-reader corpus checks pass.
+Full native/QC build after integrating P728 has zero NEW compiler warnings.
+Native boot fetch, offline-consent refusal, 1920x1080 HTTPS readiness and valid/
+invalid refresh preservation acted; screenshot inspected. Native synthetic
+confirmation was refused, a real-key non-admin denied, and an isolated test admin
+stored the exact44,244-byte frozen file. Dedicated SSQC consumed curated geometry,
+preferred local geometry with a distinct hash, and ignored a valid client-only
+file when curated input was invalid. Those tests used isolated synthetic data;
+no live account role, public upload service, zone activation or existing-times
+change is claimed. Installation/delivery provenance and remaining owner/root
+boundaries are recorded separately in FTESurf tools/p729mapmedia.md.
+
 ## Patch 728 — authored map visuals, Prosurf launch and black-safe shadows
 
 **Problem:** Leidenfrost's dithered VTFs request POINTSAMPLE but their sampling

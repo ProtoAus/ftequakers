@@ -1114,8 +1114,9 @@ void QCBUILTIN PF_CL_drawline (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	r2d_be_flags = 0;
 }
 
-//vector  drawgetimagesize(string pic) = #460;
-void QCBUILTIN PF_CL_drawgetimagesize (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+// The legacy builtin blocks for local decode. Remote menu pictures must be
+// polled without waiting for network I/O on the rendering thread.
+static void PF_CL_ImageSize (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals, qboolean block)
 {
 	const char *picname = PR_GetStringOfs(prinst, OFS_PARM0);
 	mpic_t *p = R2D_SafeCachePic(picname);
@@ -1123,7 +1124,7 @@ void QCBUILTIN PF_CL_drawgetimagesize (pubprogfuncs_t *prinst, struct globalvars
 	float *ret = G_VECTOR(OFS_RETURN);
 	int iw, ih;
 	
-	if (R_GetShaderSizes(p, &iw, &ih, true) > 0)
+	if (R_GetShaderSizes(p, &iw, &ih, block) > 0)
 	{
 		ret[0] = iw;
 		ret[1] = ih;
@@ -1135,6 +1136,16 @@ void QCBUILTIN PF_CL_drawgetimagesize (pubprogfuncs_t *prinst, struct globalvars
 		ret[1] = 0;
 		ret[2] = 0;
 	}
+}
+
+void QCBUILTIN PF_CL_drawgetimagesize (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	PF_CL_ImageSize(prinst, pr_globals, true);
+}
+
+static void QCBUILTIN PF_CL_drawgetimagesize_async (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	PF_CL_ImageSize(prinst, pr_globals, false);
 }
 
 //vector	getmousepos(void)  	= #66;
@@ -3009,6 +3020,7 @@ static struct {
 	{"ui_native_plot_commit",	PF_ui_native_plot_commit,	0},
 	{"ui_native_plot_view",	PF_ui_native_plot_view,		0},
 	{"drawgetimagesize",		PF_CL_drawgetimagesize,		460},
+	{"drawgetimagesize_async", PF_CL_drawgetimagesize_async, 0},
 #ifdef HAVE_MEDIA_DECODER
 	{"cin_open",				PF_cs_media_create,			461},
 	{"cin_close",				PF_cs_media_destroy,		462},

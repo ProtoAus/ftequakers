@@ -7020,7 +7020,9 @@ void QDECL R_BuildDefaultTexnums(texnums_t *src, shader_t *shader, unsigned int 
 		*h = 0;
 	if (*imagename == '/' || strchr(imagename, ':'))
 	{	//this is not security. this is anti-spam for the verbose security in the filesystem code.
-		Con_Printf("Warning: shader has absolute path: %s\n", shader->name);
+		if (!(shader->generator == Shader_Default2D && shader->genargs &&
+			(!strncmp(shader->genargs, "https://", 8) || !strncmp(shader->genargs, "http://", 7))))
+			Con_Printf("Warning: shader has absolute path: %s\n", shader->name);
 		*imagename = 0;
 	}
 
@@ -8285,7 +8287,16 @@ void Shader_DefaultSkinShell(parsestate_t *ps, const char *shortname, const void
 void Shader_Default2D(parsestate_t *ps, const char *shortname, const void *genargs)
 {
 	shader_t *s = ps->s;
-	if (Shader_ParseShader(ps, "default2d"))
+	const char *picname = s->name;
+	const char *subdirs = genargs;
+	// Shader keys normalize slashes, but https:// is a transport identity, not
+	// a filesystem path. R_RegisterPic carries its original bytes separately.
+	if (subdirs && (!strncmp(subdirs, "https://", 8) || !strncmp(subdirs, "http://", 7)))
+	{
+		picname = subdirs;
+		subdirs = NULL;
+	}
+	if (picname == s->name && Shader_ParseShader(ps, "default2d"))
 		return;
 	if (sh_config.progs_supported && qrenderer != QR_DIRECT3D9
 #ifdef HAVE_LEGACY
@@ -8307,7 +8318,7 @@ void Shader_Default2D(parsestate_t *ps, const char *shortname, const void *genar
 				"sort additive\n"
 			"}\n"
 			);
-		TEXASSIGN(s->defaulttextures->base, R_LoadHiResTexture(s->name, genargs, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY));
+		TEXASSIGN(s->defaulttextures->base, R_LoadHiResTexture(picname, subdirs, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY));
 	}
 	else
 	{
@@ -8324,7 +8335,7 @@ void Shader_Default2D(parsestate_t *ps, const char *shortname, const void *genar
 				"sort additive\n"
 			"}\n"
 			);
-		TEXASSIGN(s->defaulttextures->base, R_LoadHiResTexture(s->name, genargs, IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY));
+		TEXASSIGN(s->defaulttextures->base, R_LoadHiResTexture(picname, subdirs, IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY));
 	}
 }
 void Shader_PolygonShader(struct shaderparsestate_s *ps, const char *shortname, const void *args)
@@ -9755,6 +9766,8 @@ int R_GetShaderSizes(shader_t *shader, int *width, int *height, qboolean blockti
 shader_t *R_RegisterPic (const char *name, const char *subdirs)
 {
 	shader_t *shader;
+	if (!strncmp(name, "https://", 8) || !strncmp(name, "http://", 7))
+		subdirs = name;
 	shader = R_LoadShader (NULL, name, SUF_2D, Shader_Default2D, subdirs);
 	return shader;
 }
