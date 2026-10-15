@@ -164,11 +164,19 @@ Real-body label near/far/wall/behind fixture passes; wall/fade mutant rejects.
 Independent backend/client review findings resolved; final verdicts both OK.
 Failed/racy harness arms remain failed, not passes. Existing recorder checks306
 pass; corpus remains289 run files/48 known faults. No evidence semantics change.
-64-player roster layout/scroll and Players search/Back remain acceptance. NanoPi
-backend is still schema18: P717 old-writer exclusion/transition is a concrete
-backend deployment gate. Source, progs delivery and live backend are separate;
-no full social deployment or generic Steam-game/E2EE/native release claim.
-Sanitized commands/evidence/remaining gates: FTESurf tools/p722friends.md.
+Published QC ada3252; test-only schema20 KSF controls c69b845. Exact committed
+source passes all22 Linux staged suites (external MOM conversion fixture absent)
+and all19 offline deploy controls. Zero-warning clean QC is byte-identical to
+the native-tested output; both Windows installs and all12 empty Pi lobbies now
+have hash-verified progs, .prev preserved. A fresh client loads live Players and
+labels modules without command/VM errors; no other body exists in that live
+control. At 03:48:49Z live backend remains schema18 with no social.py and all
+measured backend source hashes unchanged. This is PARTIAL progs delivery, not
+live fleet Friends. P717 inventory approval/old-writer exclusion/transition is
+the concrete backend gate; none was bypassed. 64-player roster layout/scroll and
+Players search/Back remain acceptance. No generic Steam-game/E2EE/native release
+or QC Build claim. Sanitized commands/receipts/remaining gates: FTESurf
+tools/p722friends.md.
 
 ## Patch 718 — practice labels and save-owned run tags
 
