@@ -18,13 +18,21 @@ maps are not interrupted. The matched backend/admin/template ship-set is closed
 by the exact-commit deployment planner. No QC/native, pin/tag or Build change.
 
 **Verified:** A clean pre-change control positively reproduces both leaks and
-retains eligible controls (5 checks). Subject32 checks pin shared web/game
+retains eligible controls (5 checks). Final subject34 checks pin shared web/game
 populations/counts, warm-cache admin changes, automatic file add/remove,
 embedded-only exclusion, manual override persistence, feed/join behavior and
 history preservation. Web/board/join/map-pool/variant/KSF top-up suites pass.
 The two Windows UDP timing assertions in admin also fail identically on the
-untouched control; not repaired here. Full native Pi-suite and delivery/live
-receipts are recorded in tools/p727completion.md when completed.
+untouched control; not repaired here. All24 main-generation backend suites
+plus codec pass natively; an isolated live-generation19-compatible candidate
+also passes all23 suites plus codec, with expanded completion33 native checks
+(Node syntax separately passes on Windows). Inspected real browser/client
+fixtures show the same3/5 and five maps. **NOT LIVE:** the ordinary deployer
+refused the existing sealed guarded runtime before copying/reloading anything.
+A separately reviewed same-schema generation handover and reversible bhop pool
+reconciliation remain required; never bypass/relabel the guard or silently ship
+schema20. Exact source, skipped external fixtures and blocker/proof:
+tools/p727completion.md; BACKLOG.md carries the closing falsifier.
 
 ## Patch 726 — Counter-Strike-style spectate chat aliases (QC only)
 
