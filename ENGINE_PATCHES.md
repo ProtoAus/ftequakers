@@ -172,11 +172,18 @@ have hash-verified progs, .prev preserved. A fresh client loads live Players and
 labels modules without command/VM errors; no other body exists in that live
 control. At 03:48:49Z live backend remains schema18 with no social.py and all
 measured backend source hashes unchanged. This is PARTIAL progs delivery, not
-live fleet Friends. P717 inventory approval/old-writer exclusion/transition is
-the concrete backend gate; none was bypassed. 64-player roster layout/scroll and
-Players search/Back remain acceptance. No generic Steam-game/E2EE/native release
-or QC Build claim. Sanitized commands/receipts/remaining gates: FTESurf
-tools/p722friends.md.
+live fleet Friends. Subsequently approved read-only inventory observed sweep-family
+launch churn between snapshots; old-writer exclusion/transition remains the concrete
+backend gate, owned by the separate P717 deployment workstream. None was bypassed.
+A later TEST-ONLY native rig passes30 checks at1280x720/800x600: inert one-real-row
+control,64 synthetic UI rows scrolled to visible index63, parsed Players search
+result selected through SUI, embedded on-map profile, and Back proving a fresh
+roster draw in pinned Players before comparing bottom scroll. Eleven non-native
+controls reject stale/wrong-tab/unacted results and prove fail-closed wrapper
+lifecycle reporting. Parent inspected native screenshots. No product change. This is NOT64 network clients,
+nonempty profile times, physical input or busy-lobby performance; those and human
+visual comfort remain acceptance. No generic Steam-game/E2EE/native release or QC
+Build claim. Sanitized commands/receipts/remaining gates: FTESurf tools/p722friends.md.
 
 ## Patch 718 — practice labels and save-owned run tags
 
