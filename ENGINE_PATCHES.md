@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 726 — Counter-Strike-style spectate chat aliases (QC only)
+
+**Problem:** Players naturally typed `!spec` / `!spec proto` in chat, but both
+were broadcast as ordinary text instead of opening the existing spectate camera.
+
+**Change:** Recognize `!spec` in the existing server chat parser and send the
+trimmed tail as one quoted argument to the client's existing `spectate` command.
+Bare use selects the next player, or leaves through the existing countdown.
+Names retain case-insensitive exact/unique-prefix matching, colour stripping,
+ambiguity/self/unknown refusal and normal camera/hold behavior. Both whole and
+split-token senders, including the chat draft and team chat, use the same path.
+No native engine, pin/tag, recorder/evidence, physics or qcbuild change.
+
+**Verified:** All three VMs compile with zero warnings. An isolated pre-change
+real dedicated-socket, three-client control proves both aliases broadcast while
+console spectate enters and leaves through the countdown (6 checks). The subject
+passes25 checks: entry/toggle/countdown, exact coloured multiword names, split
+sender/team chat, unique prefixes and refusal without changing an existing
+target; a semicolon-bearing tail remains one argument. Ordinary/non-alias chat
+still broadcasts, handled aliases do not, and no-target uppercase use leaves no
+pending camera request. No command/VM errors. Driver: tools/spec_chat_smoke.py;
+commands, failed-harness boundaries and delivery evidence: tools/p726spec_chat.md.
+Original product commit used P725; concurrent portal publication took that number
+before this documentation push. Renumbering changes no tested/deployed code.
+
 ## Patch 725 — seamless oriented linked portals
 
 **Problem:** surf_tripportals uses real see-through linked_portal_door surfaces,
