@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 725 — seamless oriented linked portals
+
+**Problem:** surf_tripportals uses real see-through linked_portal_door surfaces,
+including ceilings, oblique doors and roll. The old slab/feet crossing and
+additive Euler correction did not describe that geometry; a minimum exit speed
+and upright-only view also broke momentum and camera continuity. Static client
+portals ignored the map's runtime Open/Close state.
+
+**Change:** Source mover pin4 crosses the oriented rectangle with the hull
+centre, preserves the rigidly rotated velocity and world gravity, and carries a
+transient eye correction as the thirteenth explicit native/QC movement field.
+Derive the current posture's eye before movement. Compose view rotations from
+forward/up bases, retaining original submitted command angles for delayed snap
+matching; keep local view state separate from remote prediction scratch. The
+main eye can cross the rendered plane separately from the body. Exact aperture
+half-extents and destination origin/basis participate only in the v4 environment
+digest. Keep legacy pins1/2/3 and ordinary trigger angle semantics unchanged.
+Reliable typed named-door snapshots synchronize activation, partner and size,
+including pre-lump state; server I/O and client rendering/collision refresh
+together. Linked CSG retains swept aperture boundaries and refuses rear-side
+wall forgiveness while allowing front-side exit overlap.
+
+**Verified:** Isolated full Windows build plus final native13 incremental build,
+zero NEW warnings; production QC zero warnings. Actual production math helpers
+pass54006 checks; actual CSG/posture functions pass17 checks with separate acting
+glancing-wall and rear-approach failure controls. Native prediction-input and
+13-field movement-policy tests pass. Real dedicated-socket map arms cover wall,
+ceiling, floor, oblique, reverse and180-roll crossings; slow16u/s and2000u/s
+controls preserve rotated momentum, and actual duck47/stand64 crossings act.
+Partner-only retarget leaves the old native fingerprint unchanged; pin4 changes
+it and exact restoration restores it. Independent geometry/state/compatibility
+reviews and final front-side follow-up have no remaining blockers. Paired
+canonical corpus:289 files,189 existing faults in BOTH arms, stable input/no
+increase; unchanged reader, no all-clean corpus claim. Reproduction and delivery
+provenance: FTESurf tools/p725portals.md. Full-map human feel remains in lextest;
+no QC Build, release or updater/feed operation is implied.
+
 ## Patch 724 — fit the complete MOM/KSF bonus sidebar label (QC only)
 
 **Problem:** P723's text controls passed, but the first graphical screenshot

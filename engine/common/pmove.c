@@ -131,11 +131,12 @@ void PM_ClipVelocity (vec3_t in, vec3_t normal, vec3_t out, float overbounce)
 }
 
 #include "pr_common.h"
-static qboolean PM_PortalTransform(world_t *w, int portalnum, vec3_t org, vec3_t move, vec3_t newang, vec3_t newvel)
+static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t move, vec3_t newang, vec3_t newvel, vec3_t neweye)
 {
-	vec3_t rounded;
+	vec3_t rounded, centre = {0,0,0}, eye = {0,0,0};
+	qboolean linked = movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && pe->portalhalf[0] > 0;
 	qboolean okay = true;
-	wedict_t *portal = WEDICT_NUM_UB(w->progs, portalnum);
+	wedict_t *portal = WEDICT_NUM_UB(w->progs, pe->info);
 	int oself = *w->g.self;
 	void *pr_globals = PR_globals(w->progs, PR_CURRENT);
 	int i;
@@ -143,20 +144,31 @@ static qboolean PM_PortalTransform(world_t *w, int portalnum, vec3_t org, vec3_t
 	float f;
 
 	*w->g.self = EDICT_TO_PROG(w->progs, portal);
-	//transform origin+velocity etc
-	VectorCopy(org, G_VECTOR(OFS_PARM0));
+	// Linked doors rotate the hull centre, not Source's feet origin.
+	if (linked)
+	{
+		VectorAdd(pmove.player_mins, pmove.player_maxs, centre);
+		VectorScale(centre, 0.5f, centre);
+		VectorCopy(pmove.portaloffset, eye);
+		eye[2] += pmove.viewheight;
+		VectorSubtract(eye, centre, eye);
+	}
+	VectorAdd(org, centre, G_VECTOR(OFS_PARM0));
 	VectorCopy(pmove.angles, G_VECTOR(OFS_PARM1));
 	VectorCopy(pmove.velocity, w->g.v_forward);
 	VectorCopy(move, w->g.v_right);
-	VectorCopy(pmove.gravitydir, w->g.v_up);
-	if (!DotProduct(w->g.v_up, w->g.v_up))
+	if (linked)
+		VectorCopy(eye, w->g.v_up);
+	else
+		VectorCopy(pmove.gravitydir, w->g.v_up);
+	if (!linked && !DotProduct(w->g.v_up, w->g.v_up))
 		w->g.v_up[2] = -1;
 
 	PR_ExecuteProgram (w->progs, portal->xv->camera_transform);
 
 	for (i = 0; i < 3; i++)
 	{
-		tmp = floor(G_VECTOR(OFS_RETURN)[i]*8 + 0.5);
+		tmp = floor((G_VECTOR(OFS_RETURN)[i] - centre[i])*8 + 0.5);
 		rounded[i] = tmp/8.0;
 	}
 	//make sure the new origin is okay for the player. back out if its invalid.
@@ -167,10 +179,15 @@ static qboolean PM_PortalTransform(world_t *w, int portalnum, vec3_t org, vec3_t
 		VectorCopy(rounded, org);
 		VectorCopy(w->g.v_forward, newvel);
 		VectorCopy(w->g.v_right, move);
-//		VectorCopy(w->g.v_up, pmove.gravitydir);
+		VectorCopy(pmove.portaloffset, neweye);
+		if (linked)
+		{
+			VectorAdd(w->g.v_up, centre, neweye);
+			neweye[2] -= pmove.viewheight;
+		}
 
 		//floor+floor, ish
-		if (DotProduct(w->g.v_up, pmove.gravitydir) < 0.7)
+		if (!linked && DotProduct(w->g.v_up, pmove.gravitydir) < 0.7)
 		{
 			f = DotProduct(newvel, newvel);
 			if (f < 200*200)
@@ -206,11 +223,11 @@ trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int solidmask, 
 		{
 			vec3_t move;
 			vec3_t from;
-			vec3_t newang, newvel = {0,0,0};
+			vec3_t newang, neweye, newvel = {0,0,0};
 
 			VectorCopy(trace.endpos, from);	//just in case
 			VectorSubtract(end, trace.endpos, move);
-			if (PM_PortalTransform(pmove.world, impact->info, from, move, newang, newvel))
+			if (PM_PortalTransform(pmove.world, impact, from, move, newang, newvel, neweye))
 			{
 				trace_t exit;
 				int i, tmp;
@@ -227,9 +244,11 @@ trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int solidmask, 
 				if (PM_TestPlayerPosition(exit.endpos, false))
 				{
 					if (tookportal)
-						*tookportal = trace.fraction;
+						*tookportal = movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 ? max(trace.fraction, 0.000001f) : trace.fraction;
 					VectorCopy(newang, pmove.angles);
 					VectorCopy(newvel, pmove.velocity);
+					VectorCopy(neweye, pmove.portaloffset);
+
 					return exit;
 				}
 

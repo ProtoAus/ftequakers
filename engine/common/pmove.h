@@ -69,6 +69,8 @@ typedef struct
 	unsigned int	info;		// for client or server to identify
 	qbyte		nonsolid;		//contributes to contents, but does not block. FIXME: why not just use the contentsmask directly?
 	qbyte		notouch;		//don't trigger touch events. FIXME: why are these entities even in the list?
+	float		portalhalf[2]; // exact linked-door half-width/height
+	vec3_t		portaltransform[4]; // cached destination origin and forward/right/up
 	qbyte		isportal;		//special portal traversion required
 	qbyte		slideflags;		//FTESurf Patch 280: PMSLIDE_* of a func_slide brush, 0 for everything else.
 								//Occupies the padding byte after isportal (three qbytes then a 4-aligned
@@ -134,6 +136,7 @@ typedef struct
 	qboolean	surfing;			//this move clipped a too-steep-to-stand face
 	float		stamina;			//m_flStamina, MILLISECONDS. CS:S jump/land penalty.
 									//PREDICTED -- also lives in pmsourcestate_t.
+	vec3_t		portaloffset; // eye continuity after a rotated crossing
 	float		viewheight;			//OUTPUT ONLY: eye above the origin this tick, from
 									//Source's SetDuckedEyeOffset.  Derived from ducktime
 									//every tick, so it is NOT part of the carried state.
@@ -226,7 +229,7 @@ typedef struct
    Patch 492/538: versions 1/2 retain drift-only water and their original
    fixrampbugs clip cycle. Live version 3 adds swimming at either ramp setting.
    SV_PMSrcVer accepts old pins only with their original matching ramp setting. */
-#define PMSRC_VERSION 3
+#define PMSRC_VERSION 4
 
 typedef struct {
 	//standard quakeworld

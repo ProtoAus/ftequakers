@@ -133,8 +133,8 @@ int SV_PMSrcVer(const float *pin)
 	if (IS_NAN(f))
 		return 0;
 	//Patch 538: v3 includes swimming at every ramp setting; retain both old movers.
-	if (pin[0] == 3)
-		return 3;
+	if (pin[0] == 3 || pin[0] == 4)
+		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }
 
@@ -330,6 +330,11 @@ unsigned int SV_PhysentDigest(void)
 			PD(&rel, sizeof(rel));
 		}
 		PD(&pe->nonsolid, 1);	PD(&pe->isportal, 1);	PD(&pe->slideflags, 1);
+		if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && pe->isportal)
+		{
+			PD(pe->portalhalf, sizeof(pe->portalhalf));
+			PD(pe->portaltransform, sizeof(pe->portaltransform));
+		}
 		PD(&pe->forcecontentsmask, sizeof(pe->forcecontentsmask));
 		PD(pe->origin, sizeof(vec3_t));	PD(pe->angles, sizeof(vec3_t));
 		PD(pe->mins, sizeof(vec3_t));	PD(pe->maxs, sizeof(vec3_t));
@@ -7638,6 +7643,25 @@ static qboolean AddEntityToPmove(world_t *w, wedict_t *player, wedict_t *check)
 	pe->info = NUM_FOR_EDICT(w->progs, check);
 	pe->nonsolid = solid == SOLID_TRIGGER;
 	pe->isportal = solid == SOLID_PORTAL;
+	pe->portalhalf[0] = pe->portalhalf[1] = 0;
+	memset(pe->portaltransform, 0, sizeof(pe->portaltransform));
+	if (pe->isportal)
+	{
+		static const char *fields[] = {"lpd_ob", "lpd_fb", "lpd_rb", "lpd_ub"};
+		int p;
+		eval_t *hw = w->progs->GetEdictFieldValue(w->progs, (void*)check, "lpd_hw", ev_float, NULL);
+		eval_t *hh = w->progs->GetEdictFieldValue(w->progs, (void*)check, "lpd_hh", ev_float, NULL);
+		if (hw && hh)
+		{
+			pe->portalhalf[0] = hw->_float;
+			pe->portalhalf[1] = hh->_float;
+		}
+		for (p = 0; p < countof(fields); p++)
+		{
+			eval_t *basis = w->progs->GetEdictFieldValue(w->progs, (void*)check, fields[p], ev_vector, NULL);
+			if (basis) VectorCopy(basis->_vector, pe->portaltransform[p]);
+		}
+	}
 	q1contents = (int)check->v->skin;
 	/* FTESurf Patch 280: a func_slide.  Its skin is a TAG, not a contents
 	   override -- the brush must collide exactly as a skin-0 SOLID_BSP does, so

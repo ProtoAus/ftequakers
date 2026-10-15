@@ -9076,6 +9076,52 @@ qboolean CSQC_SetupToRenderPortal(int entkeynum)
 	return false;
 }
 
+// The eye can cross before the upright hull's centre (or lag it after a turn).
+// Draw from its actual side of the opening until the body catches up.
+void CSQC_PortalView(playerview_t *pv)
+{
+	vec3_t body, a, b, f, r, u, p;
+	int i, oself;
+	void *pr_globals;
+	if (!csqcprogs || pmove.world != &csqc_world || movevars.physicsmode != PHYSMODE_SOURCE || movevars.sourceversion < 4 ||
+		pv->spectator || (pv->portalpmtype != PM_NORMAL && pv->portalpmtype != PM_DEAD))
+		return;
+	VectorAdd(pv->simorg, pv->portalcentre, body);
+	for (i = 1; i < pmove.numphysent; i++)
+	{
+		physent_t *pe = &pmove.physents[i];
+		csqcedict_t *e;
+		float da, db;
+		if (!pe->isportal || pe->portalhalf[0] <= 0)
+			continue;
+		AngleVectors(pe->angles, f, r, u);
+		VectorSubtract(body, pe->origin, a);
+		VectorSubtract(r_refdef.vieworg, pe->origin, b);
+		da = DotProduct(a, f);
+		db = DotProduct(b, f);
+		if (da < 0 || db >= 0)
+			continue;
+		VectorInterpolate(a, da / (da - db), b, p);
+		if (fabs(DotProduct(p, r)) > pe->portalhalf[0] || fabs(DotProduct(p, u)) > pe->portalhalf[1])
+			continue;
+		e = (void*)EDICT_NUM_UB(csqcprogs, pe->info);
+		if (!e->xv->camera_transform)
+			continue;
+		oself = *csqcg.self;
+		pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+		*csqcg.self = EDICT_TO_PROG(csqcprogs, e);
+		VectorCopy(r_refdef.vieworg, G_VECTOR(OFS_PARM0));
+		VectorCopy(r_refdef.viewangles, G_VECTOR(OFS_PARM1));
+		AngleVectors(r_refdef.viewangles, csqcg.v_forward, csqcg.v_right, csqcg.v_up);
+		PR_ExecuteProgram(csqcprogs, e->xv->camera_transform);
+		VectorCopy(G_VECTOR(OFS_RETURN), r_refdef.vieworg);
+		VectorAngles(csqcg.v_forward, csqcg.v_up, r_refdef.viewangles, false);
+		VectorCopy(csqcg.trace_endpos, r_refdef.pvsorigin);
+		*csqcg.self = oself;
+		return;
+	}
+}
+
 qboolean CSQC_DrawView(void)
 {
 	int ticlimit = 10;
@@ -10006,7 +10052,10 @@ extern cvar_t cl_predict_angleexact, cl_predict_angledebug;	/*cl_pred.c, Patch 3
 #define PRED_SNAP_NEWWIN 2	/*...or the local crossing came up to this many commands late*/
 #define PRED_SNAP_LIFE 1.5	/*s*/
 typedef struct {
-	vec3_t target, rot;
+	vec3_t target, rot, base;
+	qboolean rigid;
+	unsigned short cmdangles[3];
+	double cmdtime;
 	unsigned int seq;
 	double time;
 	qboolean used;
@@ -10026,7 +10075,7 @@ static float PredAngNorm(float a)
 }
 static qboolean PredAngClose(const vec3_t a, const vec3_t b)
 {
-	return fabs(PredAngNorm(a[PITCH] - b[PITCH])) <= PRED_SNAP_TOL && fabs(PredAngNorm(a[YAW] - b[YAW])) <= PRED_SNAP_TOL;
+	return fabs(PredAngNorm(a[PITCH] - b[PITCH])) <= PRED_SNAP_TOL && fabs(PredAngNorm(a[YAW] - b[YAW])) <= PRED_SNAP_TOL && fabs(PredAngNorm(a[ROLL] - b[ROLL])) <= PRED_SNAP_TOL;
 }
 static qboolean PredAngExact(void)
 {	//QW only: the command sequence is the netchan sequence (cl_input.c CLQW_SendCmd)
@@ -10118,10 +10167,41 @@ void CSQC_PredictAngleFlush(int seat)
 	CSQC_PredictAngleReset(seat);
 }
 
+// Compose target * inverse(base) with a live view. Euler subtraction is not
+// a rotation when a portal changes pitch/roll and the mouse has moved since cmd.
+static void PredAngCompose(const vec3_t base, const vec3_t target, const vec3_t in, vec3_t out)
+{
+	vec3_t bf, br, bu, tf, tr, tu, f, u, nf, nu;
+	AngleVectors(base, bf, br, bu);
+	AngleVectors(target, tf, tr, tu);
+	AngleVectors(in, f, NULL, u);
+	VectorScale(tf, DotProduct(f, bf), nf);
+	VectorMA(nf, DotProduct(f, br), tr, nf);
+	VectorMA(nf, DotProduct(f, bu), tu, nf);
+	VectorScale(tf, DotProduct(u, bf), nu);
+	VectorMA(nu, DotProduct(u, br), tr, nu);
+	VectorMA(nu, DotProduct(u, bu), tu, nu);
+	VectorAngles(nf, nu, out, false);
+}
+
+static qboolean PredAngTargetClose(const vec3_t a, const vec3_t b, qboolean rigid)
+{
+	vec3_t af, ar, au, bf, br, bu;
+	float cosine;
+	if (!rigid)
+		return PredAngClose(a, b);
+	AngleVectors(a, af, ar, au);
+	AngleVectors(b, bf, br, bu);
+	cosine = (DotProduct(af, bf) + DotProduct(ar, br) + DotProduct(au, bu) - 1) * 0.5f;
+	// Euler yaw/roll are not unique at a vertical view. Compare orientation,
+	// with the existing three-axis quantization budget.
+	return cosine >= cos(2.1 * M_PI / 180);
+}
+
 /* Apply one locally-predicted angle snap: rotate the live view by
    (snap - the triggering command's angles), through the same funnel every
    server fixangle uses, and remember it for the server's setangle. */
-static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercmd_t *cmd)
+static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercmd_t *cmd, qboolean rigid)
 {
 	playerview_t *pv = &cl.playerview[seat];
 	vec3_t newang, rot, target, before, base;
@@ -10148,7 +10228,7 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 	//Patch 396: the server crossed a command or two earlier and its angle already landed.
 	if (exact && predsrv[seat].valid && realtime - predsrv[seat].time <= PRED_SNAP_LIFE &&
 		(int)cmd->sequence - predsrv[seat].basis > 0 && (int)cmd->sequence - predsrv[seat].basis <= PRED_SNAP_NEWWIN &&
-		PredAngClose(predsrv[seat].target, target))
+		PredAngTargetClose(predsrv[seat].target, target, rigid))
 	{
 		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-server (basis %i)", realtime, cmd->sequence, target[YAW], predsrv[seat].basis);
 		return;
@@ -10168,14 +10248,17 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 			if (s->used || realtime - s->time > PRED_SNAP_LIFE)
 				continue;
 			if (s->time >= sampled)
-				VectorAdd(base, s->rot, base);
-			if (PredAngClose(s->target, target) && (self < 0 || (int)(s->seq - predsnaps[seat][self].seq) > 0))
+			{
+				if (s->rigid) PredAngCompose(s->base, s->target, base, base);
+				else VectorAdd(base, s->rot, base);
+			}
+			if (PredAngTargetClose(s->target, target, rigid) && (self < 0 || (int)(s->seq - predsnaps[seat][self].seq) > 0))
 				self = i;
 		}
 	}
 	//skip-self: a live snap already put the view on this target (the same crossing moved later,
 	//any distance, comes out at 0 up to the mouse).
-	if (self >= 0 && PredAngClose(base, target))
+	if (self >= 0 && PredAngTargetClose(base, target, rigid))
 	{
 		PA_Log("predangle: %.4f snap seq %u tgt %.3f skip-self (slot seq %u, cmd %.3f base %.3f)", realtime, cmd->sequence, target[YAW],
 			predsnaps[seat][self].seq, SHORT2ANGLE(cmd->angles[YAW]), base[YAW]);
@@ -10187,6 +10270,8 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 		rot[i] = PredAngNorm(target[i] - base[i]);
 		newang[i] = pv->viewangles[i] + rot[i];
 	}
+	if (rigid)
+		PredAngCompose(base, target, pv->viewangles, newang);
 	VectorCopy(pv->viewangles, before);
 
 	if (!CSQC_Parse_SetAngles(seat, newang, true))
@@ -10209,6 +10294,11 @@ static void CSQC_PredictAngleApplySnap(int seat, const vec3_t snap, const usercm
 	}
 	VectorCopy(target, predsnaps[seat][slot].target);
 	VectorCopy(rot, predsnaps[seat][slot].rot);
+	VectorCopy(base, predsnaps[seat][slot].base);
+	predsnaps[seat][slot].rigid = rigid;
+	for (i = 0; i < 3; i++)
+		predsnaps[seat][slot].cmdangles[i] = cmd->angles[i];
+	predsnaps[seat][slot].cmdtime = cl.outframes[cmd->sequence & UPDATE_MASK].senttime;
 	predsnaps[seat][slot].seq = cmd->sequence;
 	predsnaps[seat][slot].time = realtime;
 	predsnaps[seat][slot].used = false;
@@ -10244,9 +10334,16 @@ static void CSQC_PredictAngleCorrectLegacy(int seat, vec3_t delta)
 /*Patch 396: rebuild the server's absolute target from the command it answered (its lastcmd is
   the acked outframe's) and compare that with the snaps, instead of assuming the delta's basis
   is the snap's command.*/
+void CSQC_PredictPortalAngles(int seat, const usercmd_t *cmd)
+{
+	if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4)
+		CSQC_PredictAngleApplySnap(seat, pmove.angles, cmd, true);
+}
+
 void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 {
 	outframe_t *of = NULL;
+	outframe_t recovered;
 	vec3_t ssrv, din;
 	const char *verdict;
 	int i, j, K = 0, m = -1, r = -1;
@@ -10274,6 +10371,39 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 	for (i = 0; i < 3; i++)
 		ssrv[i] = PredAngNorm(SHORT2ANGLE(of->cmd[seat].angles[i]) + delta[i]);
 
+	// Reliable output may be delayed well beyond its packet's acknowledgement.
+	// Retain the submitted command basis to recognize its rigid result without
+	// applying the same portal rotation twice, even after outframe reuse.
+	{
+		int match = -1;
+		for (j = 0; j < countof(predsnaps[seat]); j++)
+		{
+			predsnap_t *s = &predsnaps[seat][j];
+			vec3_t target;
+			if (s->used || !s->rigid || realtime - s->time > PRED_SNAP_LIFE ||
+				(int)(s->seq - (unsigned int)cls.netchan.incoming_acknowledged) > PRED_SNAP_NEWWIN)
+				continue;
+			for (i = 0; i < 3; i++)
+				target[i] = PredAngNorm(SHORT2ANGLE(s->cmdangles[i]) + din[i]);
+			if (PredAngTargetClose(target, s->target, true) &&
+				(match < 0 || (int)(s->seq - predsnaps[seat][match].seq) > 0))
+				match = j;
+		}
+		if (match >= 0)
+		{
+			predsnap_t *s = &predsnaps[seat][match];
+			memset(&recovered, 0, sizeof(recovered));
+			K = s->seq;
+			recovered.senttime = s->cmdtime;
+			for (i = 0; i < 3; i++)
+			{
+				recovered.cmd[seat].angles[i] = s->cmdangles[i];
+				ssrv[i] = PredAngNorm(SHORT2ANGLE(s->cmdangles[i]) + din[i]);
+			}
+			of = &recovered;
+		}
+	}
+
 	//m = the newest live snap the server's target confirms; r = the newest live snap
 	for (j = 0; j < PRED_SNAP_RING; j++)
 	{
@@ -10287,7 +10417,7 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 		}
 		if (r < 0 || (int)(s->seq - predsnaps[seat][r].seq) > 0)
 			r = j;
-		if ((int)(s->seq - (unsigned int)K) <= PRED_SNAP_NEWWIN && PredAngClose(s->target, ssrv) &&
+		if ((int)(s->seq - (unsigned int)K) <= PRED_SNAP_NEWWIN && PredAngTargetClose(s->target, ssrv, s->rigid) &&
 			(m < 0 || (int)(s->seq - predsnaps[seat][m].seq) > 0))
 			m = j;
 	}
@@ -10332,6 +10462,15 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
 			predsnaps[seat][j].used = true;
 	}
 
+	if (r >= 0 && predsnaps[seat][r].rigid &&
+		((m >= 0 && r != m && (int)(predsnaps[seat][r].seq - (unsigned int)K) <= 0) ||
+		 (m < 0 && predsnaps[seat][r].time >= of->senttime)))
+	{
+		vec3_t corrected;
+		PredAngCompose(predsnaps[seat][r].target, ssrv, cl.playerview[seat].viewangles, corrected);
+		for (i = 0; i < 3; i++)
+			delta[i] = PredAngNorm(corrected[i] - cl.playerview[seat].viewangles[i]);
+	}
 	VectorCopy(ssrv, predsrv[seat].target);
 	predsrv[seat].basis = K;
 	predsrv[seat].time = realtime;
@@ -10360,7 +10499,7 @@ void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 	{	//m as CSQC_PredictAngleCorrect picks it
 		predsnap_t *s = &predsnaps[seat][i];
 		int d = (int)(s->seq - (unsigned int)K);
-		if (!s->used && realtime - s->time <= PRED_SNAP_LIFE && d <= PRED_SNAP_NEWWIN && PredAngClose(s->target, predsrv[seat].target) &&
+		if (!s->used && realtime - s->time <= PRED_SNAP_LIFE && d <= PRED_SNAP_NEWWIN && PredAngTargetClose(s->target, predsrv[seat].target, s->rigid) &&
 			(m < 0 || (int)(s->seq - predsnaps[seat][m].seq) > 0))
 			m = i;
 	}
@@ -10619,7 +10758,7 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 	if (csqcg.predmove_fixangle && *csqcg.predmove_fixangle && csqcg.predmove_anglesnap)
 	{
 		*csqcg.predmove_fixangle = 0;
-		CSQC_PredictAngleApplySnap(seat, csqcg.predmove_anglesnap, cmd);
+		CSQC_PredictAngleApplySnap(seat, csqcg.predmove_anglesnap, cmd, false);
 	}
 
 	/*FTESurf Patch 337: the touch half of the basevelocity machine -- what

@@ -524,6 +524,8 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 	}
 	VectorCopy(pmove.origin, preorigin);
 	PM_PlayerMove (cl.gamespeed);
+	if (cl_pred_localchain && pmove.portalcrossings)
+		CSQC_PredictPortalAngles(pnum, u);
 
 	/*FTESurf Patch 335: the CSQC trigger hook, between the move and the
 	  writeback, so anything QC imposes on predmove_* lands in to->state and
@@ -1404,6 +1406,12 @@ void CL_PredictMovePNum (int seat)
 		}
 	}
 
+	// Clear on interpolation/no-prediction paths too; a prior correction must not latch.
+	VectorClear(pv->portaloffset);
+	pv->portalpmtype = to.state->pm_type;
+	VectorAdd(to.state->szmins, to.state->szmaxs, pv->portalcentre);
+	VectorScale(pv->portalcentre, 0.5f, pv->portalcentre);
+
 	// predict forward until cl.time <= to->senttime
 	oldphysent = pmove.numphysent;
 	CL_SetSolidPlayers();
@@ -1575,14 +1583,26 @@ void CL_PredictMovePNum (int seat)
 		//(the absolute eye position must not move at all), so a one-snapshot lag
 		//between the two halves is a visible 18-unit pop.  Only the Source module
 		//writes this field; every other physicsmode leaves the stat in charge.
+		VectorClear(pv->portaloffset);
 		if (movevars.physicsmode == PHYSMODE_SOURCE)
+		{
 			pv->viewheight = pmove.viewheight;
+			if (movevars.sourceversion >= 4)
+			{
+				VectorCopy(pmove.portaloffset, pv->portaloffset);
+				pv->portalpmtype = pmove.pm_type;
+				VectorAdd(pmove.player_mins, pmove.player_maxs, pv->portalcentre);
+				VectorScale(pv->portalcentre, 0.5f, pv->portalcentre);
+			}
+		}
 	}
 
 	pmove.numphysent = oldphysent;
 
 	if (to.time == from.time)
 	{
+		if (!nopred && movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4)
+			VectorCopy(to.state->pmsrc.portaloffset, pv->portaloffset);
 		VectorCopy (to.state->velocity, pv->simvel);
 		VectorCopy (to.state->origin, pv->simorg);
 
@@ -1604,6 +1624,13 @@ void CL_PredictMovePNum (int seat)
 		pt_f = f;	//FTESurf Patch 269
 //Con_DPrintf("%i:%f %f %i:%f (%f)\n", fromframe, fromtime, simtime, toframe, totime, f);
 		VectorSubtract(to.state->origin, from.state->origin, move);
+		if (!nopred && movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4)
+		{
+			if (DotProduct(move, move) > 128*128)
+				VectorCopy(to.state->pmsrc.portaloffset, pv->portaloffset);
+			else
+				VectorInterpolate(from.state->pmsrc.portaloffset, f, to.state->pmsrc.portaloffset, pv->portaloffset);
+		}
 		if (DotProduct(move, move) > 128*128)
 		{
 			// teleported, so don't lerp

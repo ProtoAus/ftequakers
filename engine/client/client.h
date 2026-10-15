@@ -762,6 +762,9 @@ struct playerview_s
 	vec3_t		oldorigin;		// to track step smoothing
 	float		oldz, extracrouch, crouchspeed; // to track step smoothing
 	qboolean	onground;
+	vec3_t		portaloffset; // predicted rotated-eye correction
+	vec3_t		portalcentre; // local hull, independent of later remote prediction
+	int			portalpmtype;
 	float		viewheight;
 	int			waterlevel;		//for smartjump
 
@@ -1605,6 +1608,8 @@ qboolean CSQC_Parse_Damage(int seat, float save, float take, vec3_t source);
 qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta);
 //FTESurf Patch 335: per-predicted-usercmd CSQC trigger hook.
 void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin);
+void	 CSQC_PredictPortalAngles(int seat, const usercmd_t *cmd);
+void	 CSQC_PortalView(playerview_t *pv);
 int      CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec);
 void	 CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious);
 void     CSQC_PredictSaveBaseVel(int seat, int sequence);
@@ -1640,6 +1645,8 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_UseGamecodeLoadingScreen() false
 #define CSQC_Parse_SetAngles(seat,newangles,wasdelta) false
 #define CSQC_PredictPlayerMove(seat,cmd,preorigin)
+#define CSQC_PredictPortalAngles(seat,cmd)
+#define CSQC_PortalView(pv)
 #define CSQC_PredictPlayerPreMove(seat,cmd,offsetmsec) 0
 #define CSQC_PredictConsumeBaseVel(seat,sequence,restoreprevious)
 #define CSQC_PredictSaveBaseVel(seat,sequence)

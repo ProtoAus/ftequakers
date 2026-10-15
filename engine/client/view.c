@@ -1716,6 +1716,8 @@ void V_CalcRefdef (playerview_t *pv)
 	viewheight += pv->crouch;
 
 	VectorMA(r_refdef.vieworg, -viewheight, pv->gravitydir, r_refdef.vieworg);
+	if (!pv->spectator && (pv->portalpmtype == PM_NORMAL || pv->portalpmtype == PM_DEAD))
+		VectorAdd(r_refdef.vieworg, pv->portaloffset, r_refdef.vieworg);
 
 // set up gun position
 	V_CalcGunPositionAngle (pv, bob);
@@ -1727,6 +1729,8 @@ void V_CalcRefdef (playerview_t *pv)
 		VectorMA(r_refdef.viewangles, v_gunkick.value, pv->punchangle_sv, r_refdef.viewangles);
 		VectorMA(r_refdef.vieworg, v_gunkick.value, pv->punchorigin, r_refdef.vieworg);
 	}
+
+	CSQC_PortalView(pv);
 
 	if (v_skyroom_set)
 	{

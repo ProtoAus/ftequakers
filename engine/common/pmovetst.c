@@ -571,6 +571,8 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 	int hitplane = -1;
 	float bestfrac;
 	vec3_t movedir;		//P214: which way this trace is trying to go
+	qboolean linked = movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && portal->portalhalf[0] > 0;
+	qboolean wasstartsolid = trace->startsolid;
 	vec3_t botcorner;	//P216: the player box's lowest corner along the aperture's up
 	float aperturebottom;	//P216: the opening's own bottom edge, with no box slop on it
 	float feetdist;
@@ -633,6 +635,19 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 	}
 	hwidth  = fabs(planes[3][0])*halfsize[0] + fabs(planes[3][1])*halfsize[1] + fabs(planes[3][2])*halfsize[2];
 	hheight = fabs(planes[5][0])*halfsize[0] + fabs(planes[5][1])*halfsize[1] + fabs(planes[5][2])*halfsize[2];
+	if (linked)
+	{
+		vec3_t approach;
+		// A one-way door is not a hole from behind. Legitimate exits are
+		// nudged in front, where the overlapping hull must still be carved.
+		for (plane = 0; plane < 3; plane++)
+			approach[plane] = start[plane] + (trmin[plane] + trmax[plane]) * 0.5f - portal->origin[plane];
+		if (DotProduct(approach, planes[1]) < -(1/32.0f))
+			return;
+		hwidth = portal->portalhalf[0];
+		hheight = portal->portalhalf[1];
+		VectorCopy(portal->origin, center);
+	}
 	if (hwidth <= 0 || hheight <= 0)
 	{	//no usable bounds. fall back to the pre-P203 fixed window so anything that
 		//reached here without them behaves exactly as it did before.
@@ -665,6 +680,13 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 			//portal plane to count, so expand by its support along this normal.
 			for (k = 0; k < 3; k++)
 				corner[k] = (planes[plane][k]>=0)?trmax[k]:trmin[k];
+			planes[plane][3] -= DotProduct(corner, planes[plane]);
+		}
+		else if (plane == 1 && linked)
+		{
+			// Keep the hole carved while the upright hull overlaps the plane.
+			for (k = 0; k < 3; k++)
+				corner[k] = planes[plane][k] >= 0 ? trmax[k] : trmin[k];
 			planes[plane][3] -= DotProduct(corner, planes[plane]);
 		}
 		else if (plane>1)
@@ -780,6 +802,24 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 	   wall and travelling through it are separate permissions, which is the whole
 	   lesson of 214 and 215. */
 	trace->startsolid = trace->allsolid = false;
+	if (linked)
+	{
+		// Carve both entry and departure overlaps. A probe leaving an exit
+		// must not report the wall as ground simply because it moves outward.
+		if (wasstartsolid || fabs(DotProduct(trace->plane.normal, planes[1])) >= 0.5f)
+		{
+			// Keep the swept boundary: otherwise a diagonal can leave the
+			// aperture before crossing, then tunnel through a thin wall.
+			trace->fraction = bestfrac;
+			VectorInterpolate(start, bestfrac, end, trace->endpos);
+			if (hitplane >= 0)
+			{
+				VectorCopy(planes[hitplane], trace->plane.normal);
+				trace->plane.dist = planes[hitplane][3];
+			}
+		}
+		return; // only the separate centre-plane intersection may traverse
+	}
 
 	/* ---- FTESurf Patch 214: only a trace HEADING INTO the aperture may be
 	   elongated ----
@@ -909,8 +949,8 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 	// get the clipping hull
 		if (pe->isportal)
 		{
-			if (ignoreportals)
-				continue;
+			if (ignoreportals || (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && pe->portalhalf[0] > 0))
+				continue; // a linked opening is a plane, not its solid AABB
 			//if the trace ended up inside a portal region, then its not valid.
 			if (pe->model)
 			{
@@ -1093,9 +1133,37 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 				   the same box the same way.  Exact at 0/90/180/270 yaw, which is
 				   every door in surf_kitsune, and conservative in between -- an
 				   off-axis door fires slightly early at its corners. */
-				PM_HullForBox (pe->mins, pe->maxs);
-				if (!PM_TransformedHullCheck (NULL, NULL, start, end, vec3_origin, vec3_origin, &trace, pe->origin, vec3_origin, 1))
-					continue;
+				if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && pe->portalhalf[0] > 0)
+				{
+					vec3_t f, r, u, centre, a, b, p;
+					float da, db, frac;
+					AngleVectors(pe->angles, f, r, u);
+					VectorAdd(pmove.player_mins, pmove.player_maxs, centre);
+					VectorScale(centre, 0.5f, centre);
+					VectorSubtract(start, pe->origin, a);
+					VectorAdd(a, centre, a);
+					VectorSubtract(end, pe->origin, b);
+					VectorAdd(b, centre, b);
+					da = DotProduct(a, f);
+					db = DotProduct(b, f);
+					if (da < 0 || db >= 0 || da == db)
+						continue;
+					frac = da / (da - db);
+					VectorInterpolate(a, frac, b, p);
+					if (fabs(DotProduct(p, r)) > pe->portalhalf[0] || fabs(DotProduct(p, u)) > pe->portalhalf[1])
+						continue;
+					memset(&trace, 0, sizeof(trace));
+					trace.fraction = frac;
+					VectorInterpolate(start, frac, end, trace.endpos);
+					VectorCopy(f, trace.plane.normal);
+					trace.plane.dist = DotProduct(pe->origin, f) - DotProduct(centre, f);
+				}
+				else
+				{
+					PM_HullForBox (pe->mins, pe->maxs);
+					if (!PM_TransformedHullCheck (NULL, NULL, start, end, vec3_origin, vec3_origin, &trace, pe->origin, vec3_origin, 1))
+						continue;
+				}
 			}
 			else
 			{

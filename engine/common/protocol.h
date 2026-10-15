@@ -759,6 +759,7 @@ typedef struct
 	vec3_t		srcladdernormal;//the attached ladder's plane normal; the whole climb is
 								//expressed relative to it, so it must survive a replay
 								//or the client and server climb along different axes.
+	vec3_t		portaloffset; // transient view correction; carried through prediction replay
 } pmsourcestate_t;
 
 // player move types

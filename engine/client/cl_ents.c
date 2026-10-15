@@ -7785,6 +7785,22 @@ static void CL_AddCSQCPortalsToPmove (void)
 		VectorCopy (check->v->angles, pent->angles);
 		VectorCopy (check->v->mins, pent->mins);
 		VectorCopy (check->v->maxs, pent->maxs);
+		{
+			static const char *fields[] = {"lpd_ob", "lpd_fb", "lpd_rb", "lpd_ub"};
+			int p;
+			eval_t *hw = w->progs->GetEdictFieldValue(w->progs, (void*)check, "lpd_hw", ev_float, NULL);
+			eval_t *hh = w->progs->GetEdictFieldValue(w->progs, (void*)check, "lpd_hh", ev_float, NULL);
+			if (hw && hh)
+			{
+				pent->portalhalf[0] = hw->_float;
+				pent->portalhalf[1] = hh->_float;
+			}
+			for (p = 0; p < countof(fields); p++)
+			{
+				eval_t *basis = w->progs->GetEdictFieldValue(w->progs, (void*)check, fields[p], ev_vector, NULL);
+				if (basis) VectorCopy(basis->_vector, pent->portaltransform[p]);
+			}
+		}
 	}
 }
 #endif

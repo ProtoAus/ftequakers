@@ -477,6 +477,7 @@ void PMSrc_SaveState (pmsourcestate_t *out)
 	out->rampcontact     = pmove.rampcontact;
 	out->srcladder       = pmove.srcladder;		//Patch 260
 	VectorCopy (pmove.srcladdernormal, out->srcladdernormal);
+	VectorCopy (pmove.portaloffset, out->portaloffset);
 }
 
 void PMSrc_LoadState (const pmsourcestate_t *in)
@@ -493,6 +494,7 @@ void PMSrc_LoadState (const pmsourcestate_t *in)
 	pmove.rampcontact     = in->rampcontact;
 	pmove.srcladder       = in->srcladder;		//Patch 260
 	VectorCopy (in->srcladdernormal, pmove.srcladdernormal);
+	VectorCopy (in->portaloffset, pmove.portaloffset);
 }
 
 /*
@@ -3642,6 +3644,8 @@ static void PMSrc_Tick (void)
 			pmove.stamina = 0;
 	}
 
+	if (movevars.sourceversion >= 4)
+		VectorScale(pmove.portaloffset, max(0, 1 - 10 * pms_frametime), pmove.portaloffset);
 	AngleVectors (pmove.angles, pms_forward, pms_right, pms_up);
 
 	/* P203: PMSrc_TryPlayerMove clears this on entry too, but not every tick
@@ -3680,6 +3684,10 @@ static void PMSrc_Tick (void)
 	pms_slidetick = pms_slidecontact;
 
 	PMSrc_Duck ();
+	// Portal movement consumes this output during the tick. Derive it from
+	// this player's current posture, never a previous player's scratch value.
+	if (movevars.sourceversion >= 4)
+		PMSrc_SetDuckedEyeOffset(PMSrc_DuckFraction());
 
 	/*Patch 260, temporary.  Deliberately HERE: Source calls Duck() then its
 	  ladder block (gamemovement.cpp:4577 then :4591), so this is the line the
