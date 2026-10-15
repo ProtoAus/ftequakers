@@ -122,6 +122,53 @@ version.json and both signed update feeds are byte-identical. No release,
 archive, game install, lobby service/restart or backend change. Details and
 hashes: FTESurf tools/p719sitecopy.md. Detector effectiveness is not retested
 or claimed by a wording change.
+## Patch 722 — Steam friends, player roster and overhead labels
+
+### Problem
+There was no install-independent friends list, lobby presence/join action or
+private in-server friend chat. The scoreboard's small sidebar constrained
+player actions. ESC on another profile backed through the local profile.
+Players had no viewer-local overhead names/pictures with wall occlusion.
+
+### Change
+QC/surfd-only, with additive schema20. Verified account proofs mint lobby-only
+capabilities bound to key/account/node; every social use rechecks links/bans.
+Steam friendships require acceptance and are shared across linked installs.
+Five-second full-node snapshots publish bounded/expiring presence; Join uses a
+fresh directory address. Only accepted friends can send bounded transient
+private messages, delivered solely to recipient connections and acknowledged
+on the next poll. Neither presence nor chat has a public HTTP reader; messages
+are NOT end-to-end encrypted from operators. Lists refresh by content hash and
+are paced into a separate staging buffer. Spectator accounts use the same proof
+path. Add Friends to the account profile and Players to the full-width board;
+retain separate profile, spectate, friend, chat-mute and voice-mute actions.
+Remove the sidebar and its native-input exclusion rectangle. Other-profile
+ESC closes before search/text-focus handling. Existing body poses and Steam
+picture cache supply overhead labels: a cheap view/range filter plus twice-per-
+second PVS/solid trace, name-distance fade and centered far picture. No extra
+pose traffic, engine source/binary pin/tag, run evidence or QC Build change.
+
+### Verified
+Isolated QC/surfd worktree merged published main through P721. Three-VM build:
+zero warnings. Account, board and 21 social tests pass; 19 offline deploy controls
+include social-suite failure propagation and exact-commit dependency closure.
+The dedicated QC encoder preserves 41/42/64 populated rows across >16s; old
+whole-array escape keeps41 but truncates42/64 (8192-byte builtin limit). Actual
+Account Think/nonce fixture proves live prompt/request deferral, expired state
+retirement, exhausted client budget and bounded renewal retries. The three-client
+run passes23 controls: a forced renewal HTTP503 followed by automatic proof/list
+recovery BEFORE Join; actual profile Add, private draft/literal PM to Bob but
+not present Third, picture persistence, one-ESC close, Friends wheel ownership,
+held-row snapshot cancellation, roster chat/voice mute, Spectate and Join.
+Real-body label near/far/wall/behind fixture passes; wall/fade mutant rejects.
+Independent backend/client review findings resolved; final verdicts both OK.
+Failed/racy harness arms remain failed, not passes. Existing recorder checks306
+pass; corpus remains289 run files/48 known faults. No evidence semantics change.
+64-player roster layout/scroll and Players search/Back remain acceptance. NanoPi
+backend is still schema18: P717 old-writer exclusion/transition is a concrete
+backend deployment gate. Source, progs delivery and live backend are separate;
+no full social deployment or generic Steam-game/E2EE/native release claim.
+Sanitized commands/evidence/remaining gates: FTESurf tools/p722friends.md.
 
 ## Patch 718 — practice labels and save-owned run tags
 
