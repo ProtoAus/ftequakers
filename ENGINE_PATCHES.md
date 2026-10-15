@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 723 — separate MOM/KSF map and stage/bonus display (QC only)
+
+**Problem:** The top-right HUD displayed one generic tier, obscuring whether it
+was Momentum's or KSF's. The scoreboard had no per-leg ratings, and the owner's
+linked community bonus sheet was not read.
+
+**Change:** QC publishes exact-map public rating rows through short serverinfo
+keys. HUD and Track sidebar share one MOM/KSF formatter, mark suggestions and
+unknowns, and show actual current-stage/bonus ratings without copying main-map
+tiers. A public generated catalogue includes MOM main/bonus (and any supplied
+stage) ratings, numeric KSF main tiers, and separate Unit/Strafe bonus letters
+from the requested sheet. No numeric conversion or suffix aliasing. Asset is
+explicitly release-allowlisted. No native engine, pin/tag, qcbuild, evidence,
+physics or backend/schema change. Existing cstrike mounting needed no repair.
+
+**Verified:** All3 VMs compile with0 warnings;14 importer/ship-entry controls
+pass. Real dedicated/headless CSQC controls prove differing server/client data,
+MOM4/KSF6, stage suggestion, unknown stage, compact/split bonus labels, old-server
+fallbacks, stale-map refusal and map-change clearing. Actual bonus warp proves
+HUD stats and sidebar leg ratings. Predecessor formatter ACTED as `Tier 4` and
+failed the positive dual-source assertion. Initial whole-payload serverinfo
+controls failed (large/semicolon values became undelivered info blobs); short
+comma-only rows and a colon marker passed. A CSS-only surf_unrequited join plus
+flocate proved mounted cstrike/maps supplied the exact BSP without a download.
+The installed Momentum snapshot has no rated stages; synthetic stage fixtures
+prove support, not real upstream data. Existing game was not interrupted:
+visual/small-window/input acceptance remains in lextest.md. Source, commands,
+failed-control boundaries and delivery provenance: tools/p723tiers.md.
+
 Custom modifications to the FTEQW engine for the nettest mod. These live in the
 engine **source tree** at `C:\msys64\home\Lex\fteqw\engine` and must be
 **re-applied + rebuilt** whenever you pull a new upstream fteqw, because they
