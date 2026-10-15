@@ -1,5 +1,66 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 728 — authored map visuals, Prosurf launch and black-safe shadows
+
+**Problem:** Leidenfrost's dithered VTFs request POINTSAMPLE but their sampling
+policy was discarded. Sidistic's automatic150-degree hue remained green rather
+than the requested light blue. Prosurf B4's concave START surrounds an authored
+allowBhop launch pit, so its necessary bhop could earn a hopped/practice tag.
+There was no black-preserving shadow control. Legacy OS/texture gamma policy
+also made scene image controls depend on the selected rendering path.
+
+**Change:** Preserve successful VTF nearest/no-mip metadata unless an explicit
+sampler controls it; do not change global filtering. Sidistic's automatic grade
+is195 degrees /0.65 saturation, with one policy feeding diagnostics, generated
+arguments and shader hash. Explicit user hue retains original semantics.
+QuakeC captures narrow Prosurf B4 region permission per grounded jump command,
+not the previous packet endpoint. Outside attempts deny the packet, arm identity
+must still match, and normal/held PostThink paths clear permission. Existing
+hopped/dirty taints are never forgiven by the exception.
+
+Archived OpenGL `shadows` / `v_shadows` (0..1, default0) lifts luminance smoothly
+while preserving the deepest toe, highlights and RGB ratios. Stable sub-LSB
+spatial dither and float scene/grade intermediates avoid expanding a quantized
+grade. User exposure follows the authored grade, before AA/bloom and HUD.
+Source OpenGL integrates gamma/brightness in that shader path rather than relying
+on OS/texture gamma. Neutral controls do not request the exposure pass. Existing
+hardware-ramp restoration remains intact. Engine and plugin shader headers are
+regenerated. No owner config, global movement settings, Build number, backend,
+lobby or deployment-control change.
+
+**Verified:** Isolated clean-base native client/server/HL2 builds and zero-warning
+QC builds; no new native warning payload versus the same-compiler clean control.
+Actual GPU shader plus native stage-order checks pass normally and under Python
+-O:12 GPU checks cover neutral identity, toe/highlights, acting lift, temporal
+stability, bounds, monotonic mean ramp, spatial quantization levels, colour/grey
+preservation and gamma/brightness. An optimized-out neutral lift is rejected in
+both modes. Real dedicated texture listings prove Leidenfrost NEAREST versus a
+filtering control; static crop/screenshot controls and unchanged global filtering
+confirm action. Final scene/graded targets are RGBA16F. Shadow/brightness crops
+change; restoring neutral returns the static crop exactly (MAE0). Sidistic's
+final pastel/original-hue controls are inspected.
+
+Two reviews rejected the first packet-scoped permission; two corrected-diff
+re-reviews found no concrete issue.13 actual helper/watcher runtime checks pass,
+plus3 real-client normal/early-return/held cleanup receipts. Natural final clean
+product Prosurf launch reaches2275 with practice0/recording1/hopped0; throttled
+outgoing input also passes. Outside bad-hop control earns practice; earlier
+hopped/dirty preservation has an acting predicate control. Reader tests306/0;
+unchanged reader/corpus yields190 existing faults on813 recordings/661 views,
+no increase. Gamma/brightness already worked in the connected control in modes0
+and1: no server lock was reproduced, and no such root-cause claim is made.
+
+**Limits:** NOT INSTALLED/LIVE at source verification. P727's owner subsequently
+published explicit release of the cutover hold; delivery needs its own guarded
+receipts, not that source note alone. OpenGL/Windows measured; no Vulkan/D3D shadow lift,
+HDR/display or subjective shade/performance acceptance claimed. A prior-bad-hop
+plus boost arm missed its booster and is not a combined-path proof. Monolith B4
+still measures about1643 versus supplied clips around1666–1669; unimplemented
+StrictMode is a lead, not established causality. No guessed +30 correction or
+physics change shipped. Matching original CSS map/authoritative trigger semantics
+remain needed. Source, controls, failures, retained evidence and delivery hold:
+FTESurf `tools/p728mapfix.md`, BACKLOG.md and lextest.md.
+
 ## Patch 727 — completion honours the surf / zoned-bhop pool (backend only)
 
 **Problem:** Admin map disables affected menu/join requests, but profile

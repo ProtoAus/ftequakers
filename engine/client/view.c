@@ -389,6 +389,15 @@ cvar_t		v_gammainverted = CVARFCD("v_gammainverted", "0", CVAR_ARCHIVE, V_Gamma_
 cvar_t		v_contrast = CVARAFCD("contrast", "1.0", "v_contrast", CVAR_ARCHIVE, V_Gamma_Callback, "Scales colour values linearly to make your screen easier to see. Setting this to anything but 1 without hardware gamma will reduce your framerates a little.");
 cvar_t		v_contrastboost = CVARFCD("v_contrastboost", "1.0", CVAR_ARCHIVE, V_Gamma_Callback, "Amplifies contrast in dark areas");
 cvar_t		v_brightness = CVARAFCD("brightness", "0.0", "v_brightness", CVAR_ARCHIVE, V_Gamma_Callback, "Brightness is how much 'white' to add to each and every pixel on the screen.");
+cvar_t		v_shadows = CVARAFCD("shadows", "0", "v_shadows", CVAR_ARCHIVE, V_Gamma_Callback, "Lift OpenGL scene shadows, 0..1. Preserves the deepest blacks and highlights; 0 disables. Uses spatial dither, not a raised black floor.");
+
+qboolean V_UseSceneGamma(void)
+{
+	// Source scenes must not depend on OS gamma ramps (or brighten the HUD).
+	return vid_hardwaregamma.ival == 4 ||
+		(qrenderer == QR_OPENGL && (v_shadows.value > 0 ||
+		(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))));
+}
 
 qbyte		gammatable[256];	// palette is sent through this
 
@@ -905,6 +914,13 @@ void V_UpdatePalette (qboolean force)
 	float	ftime;
 	qboolean applied;
 	static double oldtime;
+	static qboolean oldscenegamma;
+	qboolean scenegamma = V_UseSceneGamma();
+	if (scenegamma != oldscenegamma)
+	{
+		force = true;
+		oldscenegamma = scenegamma;
+	}
 	RSpeedMark();
 
 	ftime = cl.time - oldtime;
@@ -973,7 +989,7 @@ void V_UpdatePalette (qboolean force)
 
 		if (qrenderer)
 		{
-			applied = rf->VID_ApplyGammaRamps (rampsize, allramps);
+			applied = V_UseSceneGamma() ? false : rf->VID_ApplyGammaRamps (rampsize, allramps);
 			if (!applied && r2d_canhwgamma)
 				rf->VID_ApplyGammaRamps (0, NULL);
 			r2d_canhwgamma = applied;
@@ -3712,6 +3728,7 @@ void V_Init (void)
 	Cvar_Register (&v_contrast, VIEWVARS);
 	Cvar_Register (&v_contrastboost, VIEWVARS);
 	Cvar_Register (&v_brightness, VIEWVARS);
+	Cvar_Register (&v_shadows, VIEWVARS);
 
 	Cvar_Register (&chase_active, VIEWVARS);
 	Cvar_Register (&chase_back, VIEWVARS);

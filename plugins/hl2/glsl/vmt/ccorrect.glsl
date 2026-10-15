@@ -80,6 +80,9 @@
 #ifndef MAPHUE
 #define MAPHUE 0.0
 #endif
+#ifndef MAPSAT
+#define MAPSAT 1.0
+#endif
 
 varying vec2 texcoord;
 
@@ -178,7 +181,13 @@ void main (void)
 	float hue = cvar_hl2_colour_hue < -360.0 ? float(MAPHUE) : cvar_hl2_colour_hue;
 	float strength = clamp(cvar_hl2_colour_hue_strength, 0.0, 1.0);
 	if (hue != 0.0 && strength != 0.0)
-		rgb = mix(rgb, shiftHue(clamp(rgb, 0.0, 1.0), hue), strength);
+	{
+		vec3 shifted = shiftHue(clamp(rgb, 0.0, 1.0), hue);
+		// Map-only pastel grade; explicit user hue retains its original semantics.
+		if (cvar_hl2_colour_hue < -360.0)
+			shifted = mix(vec3(max(max(shifted.r, shifted.g), shifted.b)), shifted, float(MAPSAT));
+		rgb = mix(rgb, shifted, strength);
+	}
 	gl_FragColor = vec4(rgb, scene.a);
 }
 #endif

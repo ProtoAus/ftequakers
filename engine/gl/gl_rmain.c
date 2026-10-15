@@ -2637,7 +2637,10 @@ texid_t R_RenderPostProcess (texid_t sourcetex, texid_t sourcedepth, int type, s
 			if (R2D_Flush)
 				R2D_Flush();
 			GLBE_FBO_Sources(sourcetex, sourcedepth);
-			sourcetex = R2D_RT_Configure(restexname, w, h, TF_RGBA32, RT_IMAGEFLAGS);
+			// Keep the graded scene precise through exposure; never expand an 8-bit grade.
+			sourcetex = R2D_RT_Configure(restexname, w, h,
+				(sh_config.texfmt[PTI_RGBA16F] && ((r_refdef.flags & RDF_SCENEGAMMA) || shader == scenepp_gamma || sourcetex->format == PTI_RGBA16F || sourcetex->format == PTI_RGBA32F)) ? PTI_RGBA16F : TF_RGBA32,
+				RT_IMAGEFLAGS);
 			GLBE_FBO_Update(&fbo_postproc, 0, &sourcetex, 1, r_nulltex, w, h, 0);
 			qglViewport(0,0,w,h);
 			R2D_ScalePic(0, 0, vid.fbvwidth, vid.fbvheight, shader);
@@ -2871,7 +2874,7 @@ void GLR_RenderView (void)
 					break;
 				}
 		}
-		if (vid_hardwaregamma.ival == 4 && (v_gamma.value != 1 || v_contrast.value != 1 || v_contrastboost.value != 1|| v_brightness.value != 0))
+		if (V_UseSceneGamma() && (v_gamma.value != 1 || v_contrast.value != 1 || v_contrastboost.value != 1 || v_brightness.value != 0 || v_shadows.value > 0))
 			r_refdef.flags |= RDF_SCENEGAMMA;
 	}
 
@@ -2996,7 +2999,9 @@ void GLR_RenderView (void)
 		}
 		else if ((r_refdef.flags&RDF_SCENEGAMMA)||(vid.flags&(VID_SRGBAWARE|VID_FP16))||r_hdr_framebuffer.ival)
 		{	//gamma ramps really need higher colour precision, otherwise the entire thing looks terrible.
-			if (sh_config.texfmt[PTI_B10G11R11F])
+			if ((r_refdef.flags & RDF_SCENEGAMMA) && sh_config.texfmt[PTI_RGBA16F])
+				fmt = PTI_RGBA16F;
+			else if (sh_config.texfmt[PTI_B10G11R11F])
 				fmt = PTI_B10G11R11F;
 			else if (sh_config.texfmt[PTI_RGBA16F])
 				fmt = PTI_RGBA16F;
@@ -3125,18 +3130,17 @@ void GLR_RenderView (void)
 	}
 	else
 	{
+		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_WATERWARP, scenepp_waterwarp, "rt/$waterwarped");
+		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_CUSTOMPOSTPROC, custompostproc, "rt/$postproced");
+		// Author grade follows custom effects; user exposure sees the final graded
+		// blacks, not the LUT's input values. Keep it before AA and bloom compositing.
+		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_COLOURCORRECT, ccpostproc, "rt/$colourcorrected");
 		if (r_refdef.flags & RDF_SCENEGAMMA)
 		{
 			R2D_ImageColours (v_gammainverted.ival?v_gamma.value:(1/v_gamma.value), v_contrast.value, v_brightness.value, v_contrastboost.value);
 			sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_SCENEGAMMA, scenepp_gamma, "rt/$gammaed");
 			R2D_ImageColours (1, 1, 1, 1);
 		}
-		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_WATERWARP, scenepp_waterwarp, "rt/$waterwarped");
-		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_CUSTOMPOSTPROC, custompostproc, "rt/$postproced");
-		//FTESurf Patch 288.  AFTER the user's post-process shader, so a grade that
-		//the map author chose is the last thing applied to the scene's colour, and
-		//BEFORE fxaa, which wants to run on the pixels that will actually be shown.
-		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_COLOURCORRECT, ccpostproc, "rt/$colourcorrected");
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_ANTIALIAS, scenepp_antialias, "rt/$antialiased");
 		if (r_refdef.flags & RDF_BLOOM)
 			R_BloomBlend(sourcetex, r_refdef.vrect.x, r_refdef.vrect.y, r_refdef.vrect.width, r_refdef.vrect.height);

@@ -14030,7 +14030,7 @@ struct pendingtextureinfo *Image_LoadMipsFromMemory(int flags, const char *iname
 	{
 #ifdef HAVE_CLIENT
 		extern cvar_t vid_hardwaregamma;
-		if (!(flags&IF_NOGAMMA) && !vid_hardwaregamma.value)
+		if (!(flags&IF_NOGAMMA) && !vid_hardwaregamma.value && !V_UseSceneGamma())
 			BoostGamma(rgbadata, imgwidth, imgheight, format);
 #endif
 
@@ -14293,7 +14293,7 @@ static struct pendingtextureinfo *Image_LoadCubemapTextureData(const char *nicen
 								mips->mip[0].needfree = true;
 							}
 
-							if (!(texflags&IF_NOGAMMA) && !vid_hardwaregamma.value)
+							if (!(texflags&IF_NOGAMMA) && !vid_hardwaregamma.value && !V_UseSceneGamma())
 								BoostGamma(data, width, height, format);
 							Image_FlipImage(data, (qbyte*)mips->mip[0].data + i*width*height*bb, &width, &height, bb, cmscheme[j][i].flipx, cmscheme[j][i].flipy, cmscheme[j][i].flipd);
 							BZ_Free(data);
@@ -14373,9 +14373,26 @@ static qboolean Image_LoadRawTexture(texid_t tex, unsigned int flags, void *rawd
 //also frees the textures fallback data, but only on success
 qboolean Image_LoadTextureFromMemory(texid_t tex, int flags, const char *iname, const char *fname, qbyte *filedata, int filesize)
 {
-	struct pendingtextureinfo *mips = Image_LoadMipsFromMemory(flags, iname, fname, filedata, filesize);
+	struct pendingtextureinfo *mips;
+	unsigned int sampling = 0;
+	// VTF POINTSAMPLE is authored texture policy, not a map-wide filter override.
+	// Explicit sampler requests (notably colour LUTs) take precedence.
+	if (!(flags & (IF_LINEAR|IF_NEAREST)) && filesize >= 64 &&
+		!memcmp(filedata, "VTF\0", 4) && filedata[4] == 7 &&
+		filedata[5] == 0 && filedata[6] == 0 && filedata[7] == 0)
+	{
+		unsigned int vtfflags = filedata[20] | (filedata[21]<<8) | (filedata[22]<<16);
+		if (vtfflags & 0x1)
+		{
+			sampling = IF_NEAREST;
+			if (vtfflags & 0x100)
+				sampling |= IF_NOMIPMAP;
+		}
+	}
+	mips = Image_LoadMipsFromMemory(flags | sampling, iname, fname, filedata, filesize);
 	if (mips)
 	{
+		tex->flags |= sampling;
 		BZ_Free(tex->fallbackdata);
 		tex->fallbackdata = NULL;
 

@@ -1584,7 +1584,7 @@ void R2D_BrightenScreen (void)
 	if (v_contrast.value < 0.5)
 		v_contrast.value = 0.5;
 
-	if (r2d_canhwgamma || vid_hardwaregamma.ival == 4)
+	if (r2d_canhwgamma || V_UseSceneGamma())
 		return;
 
 	TRACE(("R2D_BrightenScreen: brightening\n"));

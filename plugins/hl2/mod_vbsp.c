@@ -1405,6 +1405,7 @@ static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, 
 	char key[CC_KEY];
 	unsigned int hash;
 	char base[MAX_QPATH];
+	float maphue, mapsat;
 	int i, j;
 
 	passes[0] = 0;
@@ -1579,7 +1580,11 @@ static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, 
 		if (s)
 			*s = 0;
 	}
-	cvarfuncs->SetFloat("hl2_colour_maphue", !Q_strcasecmp(base, "surf_sidistic") ? 150 : 0);
+	maphue = !Q_strcasecmp(base, "surf_sidistic") ? 195 : 0;
+	mapsat = !Q_strcasecmp(base, "surf_sidistic") ? 0.65f : 1;
+	cvarfuncs->SetFloat("hl2_colour_maphue", maphue);
+	hash = (hash ^ (unsigned int)(maphue * 100)) * 16777619u;
+	hash = (hash ^ (unsigned int)(mapsat * 10000)) * 16777619u;
 	Q_snprintfz(cc_shader, sizeof(cc_shader), "ftesurf/cc/%s_%08x", base, hash);
 
 	/*
@@ -1608,7 +1613,7 @@ static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, 
 	{
 		char args[256];
 		int k;
-		Q_snprintfz(args, sizeof(args), "#MAPHUE=%g", !Q_strcasecmp(base, "surf_sidistic") ? 150.0 : 0.0);
+		Q_snprintfz(args, sizeof(args), "#MAPHUE=%g#MAPSAT=%g", maphue, mapsat);
 		if (cc_n)
 			Q_strlcat(args, "#LUT0", sizeof(args));
 		for (k = 0; k < cc_n; k++)
@@ -12017,7 +12022,7 @@ qboolean VBSP_Init(void)
 		*/
 		hl2_colourcorrection = cvarfuncs->GetNVFDG("hl2_colourcorrection", "1", CVAR_SHADERSYSTEM, "Source's color_correction entities -- a 32x32x32 lookup table applied to the whole frame, which is how a Source map's author set its colour.  FTE has never applied any of them, so every graded map in the library has been rendering ungraded.\nOnly the global form is implemented (minfalloff/maxfalloff -1, which is the common idiom); a correction with a real distance falloff, and color_correction_volume entirely, are counted and declined in the map's census line.\n0: no grade, the way every build before this one looked.  Live -- it takes effect on the current frame, and 0 is bit-for-bit the ungraded scene.\n1: apply the map's own grade (default).  Going from 0 to 1 needs a map load if the map was loaded with it off, because the shader is generated then.\nFractional values scale the grade: .5 is half of it.", MAPOPTIONS);
 
-		cvarfuncs->GetNVFDG("hl2_colour_hue", "-999", CVAR_ARCHIVE, "Source scene hue rotation in degrees, after the map's LUT. -999 = map default (150 for surf_sidistic, 0 elsewhere); 0 = original hue. Live; HUD is not graded. Set hl2_colour_hue_strength 0 to disable the hue change.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_colour_hue", "-999", CVAR_ARCHIVE, "Source scene hue rotation in degrees, after the map's LUT. -999 = map default (light blue on surf_sidistic, original elsewhere); 0 = original hue and saturation. Live; HUD is not graded. Set hl2_colour_hue_strength 0 to disable the hue change.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_colour_hue_strength", "1", CVAR_ARCHIVE, "Blend strength of the Source hue rotation, clamped 0..1. 0 leaves the authored scene unchanged; 1 applies the full shift.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_colour_luts", "0", CVAR_NOSAVE, "Active global Source LUT count for the current map (loader output).", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_colour_maphue", "0", CVAR_NOSAVE, "Default hue rotation for the current Source map (loader output).", MAPOPTIONS);
