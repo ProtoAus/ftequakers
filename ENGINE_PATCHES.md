@@ -7,6 +7,40 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 719 — minimal website copy and factual verification overview
+
+### Problem
+The homepage and anti-cheat page repeated promotional slogans and large feature
+cards. They obscured setup information and implied every ranked run was checked
+before appearing, while the badge also represents developer approval.
+
+### Change
+Website only. Keep a short movement description, feature list, requirements and
+setup. Replace anti-cheat slogans with recording/replay, input analysis, review,
+board separation, badge semantics and limits. Use plain lists and a compact
+article; cache-bust the changed CSS. Keep receipt-driven downloads and all
+release/update bytes. No runtime, detector, evidence, engine pin/tag, native/QC
+build or QC Build-number change.
+
+### Verified
+Clean isolated QC product eaa87531941336b70b1ce017a7072a4c692777de based on
+origin/main afd6c514. Six copy tests, seven brand tests and 76 release-library
+checks pass. Final predecessor control fails 21 copy assertions; parser and
+support/download controls pass. Receipt render preserves both token sets.
+Local and public Chrome at desktop/mobile widths: no overflow, JS errors or
+failed resources; images, download anchor, details and four clipboard buttons
+act; missing-resource control is 404. Inspected screenshots. Initial guessed
+test IDs/command labels were corrected to the existing template and rerun.
+
+Published 2026-10-15 01:32:29 UTC through the locked presentation transaction:
+presentations/sitecopy-20261015-7f2df7; rollback brand-20261014T1750Z retained.
+A mutated-receipt dry-run control is refused. Exactly three files change in the
+complete 20-file tree; all 20 match public HTTP SHA256s. Predecessor history,
+version.json and both signed update feeds are byte-identical. No release,
+archive, game install, lobby service/restart or backend change. Details and
+hashes: FTESurf tools/p719sitecopy.md. Detector effectiveness is not retested
+or claimed by a wording change.
+
 ## Patch 718 — practice labels and save-owned run tags
 
 ### Problem
