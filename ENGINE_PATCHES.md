@@ -7,6 +7,40 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 720 — single-screen homepage with both platform downloads
+
+### Problem
+The reduced overview still scrolled through lower feature/setup sections, and
+Linux downloads remained below the first screen. The owner requested one full
+page with Windows and Linux downloads.
+
+### Change
+Homepage only: one viewport-sized hero, two direct receipt archive links, short
+requirements/launcher guidance and compact project links. Remove all lower
+sections; retain archive hash/size/compatibility metadata and exact release
+token sets. Scope responsive styles to the homepage and refresh its cache key.
+Replace obsolete lower-section test assertions with direct-link checks.
+Anti-cheat content, JS, engine pin/tag, QC Build number, receipts and feeds stay
+unchanged. No native/QC build, runtime, release or service operation.
+
+### Verified
+Clean isolated QC product 642a40e1ce21306561f5303bfcfd0281753474d9, base a9dce85f:
+6 copy tests, 7 brand tests, 76 release checks pass. Predecessor fails 5 copy
+assertions and all five acting viewport controls; both actual old archive links
+exist. Local and public Chrome at 1440x900, 1280x720, 390x844, 320x568, 844x390:
+no document scrolling, both downloads fully visible, loaded wordmark, unclipped
+nav, no resource/JS errors. No-JS phone passes; simulated 200% CSS zoom retains
+accessible downloads. Missing-resource control is 404. Screenshots inspected.
+Initial inline-block-marker and short-screen overflow failures were corrected
+and the complete controls/subjects rerun. Bare Python archive HEAD was 403;
+browser-like range HEAD/GET probes are 206 with receipt-matching total sizes.
+
+Published 2026-10-15 02:00:04 UTC using the locked presentation transaction:
+sitecopy-fullpage-20261015-7f2df7; predecessor sitecopy-20261015-7f2df7 preserved.
+Protected-receipt mutation is refused. All 20 public files SHA256-match; exactly
+index.html and site.css change. No anti-cheat/feed/history bytes change or game,
+backend/account/detector verification claim. Details: FTESurf tools/p720fullpage.md.
+
 ## Patch 719 — minimal website copy and factual verification overview
 
 ### Problem
