@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 727 — completion honours the surf / zoned-bhop pool (backend only)
+
+**Problem:** Admin map disables affected menu/join requests, but profile
+completion totals and have/not-beaten lists independently unioned every main
+board and playable map. Disabled, unrelated-mode and unzoned bhop entries still
+counted on both the website and the in-game leaderboard.
+
+**Change:** One effective pool admits surf maps plus bhop maps with actual
+online/local JSON zone files, with explicit admin disables taking precedence.
+Both completion counters and both map-list APIs use it, as do admin/feed/join.
+Unrelated modes and unzoned bhop are automatically disabled with a reason;
+embedded timer brushes alone are not a bhop zone file. Zone-file indexing is
+separate from the existing timed flag. Admin enables cannot bypass the rule.
+No map, zone or historical time is deleted. Existing lobbies/manual console
+maps are not interrupted. The matched backend/admin/template ship-set is closed
+by the exact-commit deployment planner. No QC/native, pin/tag or Build change.
+
+**Verified:** A clean pre-change control positively reproduces both leaks and
+retains eligible controls (5 checks). Subject32 checks pin shared web/game
+populations/counts, warm-cache admin changes, automatic file add/remove,
+embedded-only exclusion, manual override persistence, feed/join behavior and
+history preservation. Web/board/join/map-pool/variant/KSF top-up suites pass.
+The two Windows UDP timing assertions in admin also fail identically on the
+untouched control; not repaired here. Full native Pi-suite and delivery/live
+receipts are recorded in tools/p727completion.md when completed.
+
 ## Patch 726 — Counter-Strike-style spectate chat aliases (QC only)
 
 **Problem:** Players naturally typed `!spec` / `!spec proto` in chat, but both
