@@ -27,12 +27,34 @@ untouched control; not repaired here. All24 main-generation backend suites
 plus codec pass natively; an isolated live-generation19-compatible candidate
 also passes all23 suites plus codec, with expanded completion33 native checks
 (Node syntax separately passes on Windows). Inspected real browser/client
-fixtures show the same3/5 and five maps. **NOT LIVE:** the ordinary deployer
-refused the existing sealed guarded runtime before copying/reloading anything.
-A separately reviewed same-schema generation handover and reversible bhop pool
-reconciliation remain required; never bypass/relabel the guard or silently ship
-schema20. Exact source, skipped external fixtures and blocker/proof:
-tools/p727completion.md; BACKLOG.md carries the closing falsifier.
+fixtures show the same3/5 and five maps. The ordinary deployer correctly refused
+the sealed guarded runtime; that is not relabelled a successful deployment.
+
+**Live acceptance, 2026-10-15T15:35:36Z:** Owner-authorized, separately reviewed
+schema19 guarded cutover accepted compatible source `bf054235bc2ec73b4d9a2cd685f3bc228f5978bf`,
+old CLOSED/new OPEN, all27 tables logically identical at CLOSED acceptance.
+Only527 proven prior bulk bhop exclusions reset;4 unrelated setting rows remain
+unchanged. All12 native services/configs/runtime cvars/autosave restored, with
+12 fresh heartbeats (maximum age5.5s). Live HTTP/API and real public DOM show
+**1752 =1367 surf +385 file-zoned bhop**, zero forbidden/manual-disabled entries.
+A real dedicated-socket game client agrees on total and per-tier total/done.
+No schema20 substitution, history deletion, native/QC or Build change.
+
+The final reviewed observational boot update keeps promotion pins strict without
+permanently freezing ordinary shared progs/credential rotations. It leaves the
+existing worker/app untouched; a later normal worker roll emitted the new fields.
+Focused controls:39 serving/settings,6 real-file CAS,5 explicitly seam-mocked
+orchestration and10 real isolated worker arms. Preserve the strict worker
+UID/start/argv/executable/lifetime/listener and original-context receipt binding.
+The initial strict-census park was recovered explicitly without journal reset or
+foreign-process kill. The fleet/deployment hold is released; serving/recovery
+roots remain runtime-required, not disposable tests.
+
+**Limits:** Game unrated total1341 still hits the pre-existing1000 held-row cap;
+this is not complete unrated-row browsing. One initial public profile navigation
+rendered HTTP504, while the alternate reference passed; its failed endpoint/root
+cause is not isolated. BACKLOG.md retains these two falsifiers. Exact source,
+controls, skipped external fixtures and live evidence: tools/p727completion.md.
 
 ## Patch 726 — Counter-Strike-style spectate chat aliases (QC only)
 
