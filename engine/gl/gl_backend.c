@@ -7174,13 +7174,72 @@ static qboolean GLBE_BlendWorldBatchEligible(batch_t *batch)
 	return GLBE_BlendPlaneShaderEligible(batch->shader) && GLBE_BlendPlaneShaderEligible(batch->shader->remapto);
 }
 
+// Only default1's static, single-pass world path may omit proven raster-empty
+// commands. Use projected triangle winding, not the plane's largest triangle.
+static qboolean GLBE_BlendWorldRasterEmpty(const batch_t *batch, const mesh_t *mesh)
+{
+	const float *view = r_refdef.m_view, *proj = r_refdef.m_projection_std;
+	double xy[GLBLEND_PLANE_VERTS][2], p[3], w, x, y, ax, ay, bx, by, area, scale;
+	unsigned int cull, ia, ib, ic;
+	int v, t, j;
+	qboolean nondegenerate = false;
+	if ((batch->flags & BEF_FORCETWOSIDED) || !mesh || !mesh->xyz_array || !mesh->indexes ||
+		mesh->xyz2_array || mesh->numbones || mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
+		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
+		return false;
+	cull = batch->shader->remapto->flags & (SHADER_CULL_FRONT | SHADER_CULL_BACK);
+	if (!cull) return false;
+	cull ^= r_refdef.flipcull;
+	// Nonfinite scales cannot prove winding; NaN comparisons would hide a draw.
+	if (IS_NAN(proj[0]) || IS_NAN(proj[5])) return false;
+	for (j = 0; j < 16; j++)
+		if (IS_NAN(view[j])) return false;
+	for (v = 0; v < mesh->numvertexes; v++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(mesh->xyz_array[v][j])) return false;
+			p[j] = mesh->xyz_array[v][j];
+		}
+		w = -(view[2]*p[0] + view[6]*p[1] + view[10]*p[2] + view[14]);
+		// Eye-spanning triangles require clipping; uncertainty keeps the command.
+		if (w <= GLBLEND_PLANE_EPS) return false;
+		x = view[0]*p[0] + view[4]*p[1] + view[8]*p[2] + view[12];
+		y = view[1]*p[0] + view[5]*p[1] + view[9]*p[2] + view[13];
+		// Asymmetric projection offsets cancel in triangle edge differences.
+		xy[v][0] = proj[0]*x/w;
+		xy[v][1] = proj[5]*y/w;
+	}
+	for (t = 0; t < mesh->numindexes; t += 3)
+	{
+		ia = mesh->indexes[t]; ib = mesh->indexes[t+1]; ic = mesh->indexes[t+2];
+		if (ia >= (unsigned int)mesh->numvertexes || ib >= (unsigned int)mesh->numvertexes || ic >= (unsigned int)mesh->numvertexes)
+			return false;
+		if (ia == ib || ib == ic || ia == ic) continue;
+		ax = xy[ib][0] - xy[ia][0]; ay = xy[ib][1] - xy[ia][1];
+		bx = xy[ic][0] - xy[ia][0]; by = xy[ic][1] - xy[ia][1];
+		area = ax*by - ay*bx;
+		scale = fabs(ax*by) + fabs(ay*bx);
+		if (fabs(area) <= 1e-6*scale + 1e-12) return false;
+		nondegenerate = true;
+		// GL's default front winding is CCW; FRONT wins if both flags are set.
+		if (cull & SHADER_CULL_FRONT)
+		{
+			if (area < 0) return false;
+		}
+		else if (!(cull & SHADER_CULL_BACK) || area > 0)
+			return false;
+	}
+	return nondegenerate;
+}
+
 static void GLBE_SubmitBlendedWorld(batch_t *world)
 {
 	glblendface_t *faces;
 	glblendplanestats_t stats;
 	batch_t *batch = world, *first, view;
 	size_t count, f;
-	unsigned int m;
+	unsigned int m, inspected;
 	qboolean overflow;
 	if (!world) return;
 	if (r_refdef.recurse || !GLBE_BlendPlaneViewEligible())
@@ -7192,13 +7251,20 @@ static void GLBE_SubmitBlendedWorld(batch_t *world)
 	while (batch)
 	{
 		first = batch;
-		count = 0;
+		count = inspected = 0;
 		overflow = false;
 		while (batch && GLBE_BlendWorldBatchEligible(batch))
 		{
+			// Match actual world submission: a preceding entity may leave an
+			// RF_XFLIP contribution in flipcull. Preserve the view-level flip.
+			if (shaderstate.curentity != batch->ent)
+				GLBE_SelectEntity(batch->ent);
 			for (m = batch->firstmesh; m < batch->meshes; m++)
 			{
-				if (count == GLBLEND_PLANE_FACES) { overflow = true; break; }
+				if (overflow || inspected == GLBLEND_PLANE_FACES) { overflow = true; break; }
+				inspected++;
+				// Empty draws add neither graph constraints nor crossing barriers.
+				if (GLBE_BlendWorldRasterEmpty(batch, batch->mesh[m])) continue;
 				faces[count].batch = batch;
 				faces[count].mesh = batch->mesh[m];
 				faces[count].depth = 0;

@@ -7,6 +7,54 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 721 — cull-aware default world-alpha ordering
+
+### Problem
+P701 could include raster-empty world faces in its default1 plane graph. Their
+constraints could create a cycle/barrier and preserve the wrong whole run even
+when the remaining visible single-pass panes had a bounded valid order. A stale
+entity RF_XFLIP contribution could also pollute world winding classification.
+
+### Change
+In the existing default1 static-world path, prove raster emptiness using every
+indexed triangle, actual remapped FRONT/BACK/two-sided culling, view/projection
+and positive eye distance before gathering graph commands. Unknown, nonfinite,
+eye-spanning and degenerate cases stay conservative. Select the world entity
+before reading cull state, clear only the previous entity contribution, and keep
+the view flip intact. Count the existing128 raw-face budget BEFORE filtering;
+retain original whole-batch replay for refusal/overflow. Ship the required
+28-fan fixture include with the actual-dispatcher tests.
+
+No new cvar, ABI/header, centroid sort, OIT, map-name special case, worker change,
+mode0/2 alteration, default2 promotion or other-backend change. Program,
+multipass, dynamic/fog/CPU-unavailable and recursive/capture paths keep their
+conservative existing admission/fallback behavior.
+
+### Verified
+Exact accepted renderer/test/fixture bytes transferred onto inspected origin
+8a2a9d32a; four portable GCC variants pass (normal/HEXEN2/fast-math/combined),
+with17 named compiled/runtime mutant controls that ACT and reject, and no
+compiler diagnostics under -Wall -Wextra -Werror. Includes six-yaw retained
+28-fan world geometry, all-triangle/remapped/two-sided/flip/projection guards,
+raw-budget overflow and entity-state restoration.
+
+Prior source-identical renderer build: independent native104.2 candidate equals
+a separately justified28-command reference fullframe; wrong-reference7936px
+and broken-baseline16996px controls ACT. Follow-up40-frame/3-startup native
+matrix passes stationary repeats, six-yaw startup stability, mode0/2 same-mode
+baseline preservation and default returns. Mode0/default104.2 differs42052px;
+all startup/post-shot workers are4 and default1 is read before writes. These
+are nonexclusive functional gates, not quiet performance results. Other-yaw
+stability is not independent ground truth. Whole-new-upstream build, exact
+commit smoke/publication/deployment remain separately receipted steps.
+
+Quiet service/cadence/tails, new-candidate supported-cache action, native
+static-world program/multipass/capture/reflection/raw-budget and broader-map
+coverage remain explicit limits. Source cache selection alone is not cached
+branch action; host fixtures alone do not prove GPU replay. No QC Build bump,
+Linux/Pi binary shipping or release/archive/feed publication.
+
+
 ## Patch 720 — single-screen homepage with both platform downloads
 
 ### Problem

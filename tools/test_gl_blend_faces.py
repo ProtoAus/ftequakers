@@ -29,6 +29,14 @@ actual = s[s.index('typedef struct\n{\n\tbatch_t *batch;\n\tmesh_t *mesh;'):s.in
 dispatch = s[s.index('\nvoid GLBE_SubmitMeshes ('):s.index('\n#if (defined(GLQUAKE) || defined(VKQUAKE)) && defined(MULTITHREAD)', s.index('\nvoid GLBE_SubmitMeshes ('))]
 # Exercise the real pre-build BEM gates, but stub GL submission itself.
 submit = s[s.index('static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)'):s.index('typedef struct\n{\n\tbatch_t *batch;')]
+cull = s[s.index('void GL_CullFace(unsigned int sflags)'):s.index('static void R_FetchPlayerColour')]
+select_start = s.index('\nvoid GLBE_SelectEntity(entity_t *ent)')
+selectentity = s[select_start:s.index('\n#ifndef GLSLONLY', select_start)]
+# Preserve the existing signed -1 sentinel/unsigned-fl comparison verbatim;
+# its untouched warning is scoped out only around this extracted function.
+selectentity = '#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored "-Wsign-compare"\n' + selectentity + '\n#pragma GCC diagnostic pop\n'
+select_seam = '\tif (shaderstate.curentity != batch->ent)\n\t\tGLBE_SelectEntity(batch->ent);'
+assert s.count(select_seam) == 1
 prebuild = submit[submit.index('\t\tif (batch->meshes =='):submit.index('\n\t\t//buildmeshes')]
 shadergates = submit[submit.index('\t\tif ((bs->flags & SHADER_NODRAW)'):submit.index('\n\t\tif (bs->flags & SHADER_SKY)')]
 rotate = (engine / 'gl/gl_rmain.c').read_text()
@@ -46,23 +54,22 @@ pre = r'''
 typedef int qboolean;
 #define false 0
 #define true 1
-#define SHADER_HASREFLECT 1
-#define SHADER_HASREFRACT 2
-#define SHADER_HASRIPPLEMAP 4
-#define SHADER_HASPORTAL 8
-#define SHADER_SKY 16
-#define BEF_FORCEADDITIVE 1
-#define BEF_NODLIGHT 2
-#define BEF_NOSHADOWS 4
-#define SHADER_NODRAW 32
-#define SHADER_NODLIGHT 64
-#define SHADER_NOSHADOWS 128
+__ACTUAL_FLAGS__
+#define SHADER_CULL_FLIP (SHADER_CULL_FRONT|SHADER_CULL_BACK)
 #define BEM_STANDARD 0
 #define BEM_LIGHT 1
 #define BEM_STENCIL 2
 #define BEM_DEPTHONLY 3
 struct batch_s;
-static struct { int mode; struct batch_s *mbatches[4]; } shaderstate;
+typedef struct entity_s entity_t;
+static struct { int mode; struct batch_s *mbatches[4]; unsigned flags,curcull; entity_t *curentity; int usingweaponviewmatrix,lastuniform; float modelmatrix[16],modelviewmatrix[16],modelmatrixinv[16],projectionmatrix[16]; } shaderstate={.usingweaponviewmatrix=-1};
+#define GL_CULL_FACE 0x0b44
+#define GL_FRONT 0x0404
+#define GL_BACK 0x0405
+static int test_cull_enabled,test_cull_face;
+static void qglEnable(int cap) { assert(cap==GL_CULL_FACE);test_cull_enabled=1; }
+static void qglDisable(int cap) { assert(cap==GL_CULL_FACE);test_cull_enabled=0; }
+static void qglCullFace(int face) { test_cull_face=face; }
 #define SHADER_SORT_PORTAL 1
 #define SHADER_SORT_BLEND 2
 static struct { int ival; } r_blendsort={1},r_portalrecursion={0},r_portalonly={0};
@@ -78,7 +85,7 @@ typedef struct { unsigned vertcount, vbo_handle, ebo_handle; } test_vbo_t;
 #define SBITS_TESSELLATION (1u<<20)
 typedef struct shader_s { unsigned flags; struct shader_s *remapto; int numpasses,numdeforms; void *prog; struct { unsigned shaderbits; void *prog; } passes[SHADER_PASS_MAX]; } shader_t;
 typedef struct { float mins[3],maxs[3],clampscale; const char *name; int type; } model_t;
-typedef struct { unsigned flags; float axis[3][3],origin[3]; model_t *model; float scale; unsigned drawflags; } entity_t;
+struct entity_s { unsigned flags; float axis[3][3],origin[3]; model_t *model; float scale; unsigned drawflags; };
 #define VectorScale(a,s,b) do { (b)[0]=(a)[0]*(s);(b)[1]=(a)[1]*(s);(b)[2]=(a)[2]*(s); } while(0)
 #define VectorMA(a,s,v,b) do { (b)[0]=(a)[0]+(s)*(v)[0];(b)[1]=(a)[1]+(s)*(v)[1];(b)[2]=(a)[2]+(s)*(v)[2]; } while(0)
 #define SCALE_TYPE_MASK 3
@@ -100,7 +107,15 @@ static unsigned cl_numstris, cl_numstrisvert;
 static entity_t r_worldentity;
 static void R_DB_Poly(batch_t *b);
 static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
-static struct { int useperspective; float m_projection_std[16]; int recurse; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},0};
+static struct { int useperspective; float m_projection_std[16],m_projection_view[16]; int recurse; unsigned flipcull; float m_view[16]; } r_refdef={.useperspective=1,.m_projection_std={1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},.m_projection_view={1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},.m_view={1,0,0,0,0,1,0,0,0,0,-1,0,0,0,0,1}};
+// Actual entity-state transition; unrelated matrix inversion/GL upload is stubbed.
+static entity_t *currententity;
+static void (*qglLoadMatrixf)(const float *matrix);
+#define GL_PROJECTION 0x1701
+#define GL_MODELVIEW 0x1700
+static void qglMatrixMode(int mode) { (void)mode; }
+static void Matrix4_Invert(const float *matrix,float *inverse) { memcpy(inverse,matrix,16*sizeof(float)); }
+static void GLBE_SelectEntity(entity_t *ent);
 #define BZ_Malloc malloc
 #define BZ_Free free
 static int draws[128],ndraw, builds, ranges[128], emitted[128], nemit, recordmeshes;
@@ -112,6 +127,8 @@ static void GLBE_SubmitMeshesSortRange(batch_t *batch,batch_t *end) {
  shader_t *bs=batch->shader;
  __ACTUAL_SHADERGATES__
  if(batch->meshes>batch->firstmesh) {
+  shaderstate.flags=batch->flags;
+ __ACTUAL_SELECTENTITY_SEAM__
   if(recordmeshes) for(unsigned i=batch->firstmesh;i<batch->meshes;i++) {assert(nemit<128);emitted[nemit++]=batch->mesh[i]->id;}
   ranges[ndraw]=batch->meshes-batch->firstmesh; draws[ndraw++]=batch->mesh[batch->firstmesh]->id;
  }
@@ -378,13 +395,131 @@ int main(void) {
    if(perm[p][0]!=0)assert(ndraw==1&&ranges[0]==4&&draws[0]==blocked[0]->id);
   }
  }
- puts("PASS actual default0/1/2 dispatch:36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
+ // Full material stream, including1194: the historical three-pane golden
+ // reversed1194/1235. Check native eye and rounded body+standing offset.
+ sh.flags=SHADER_CULL_FRONT;sh.remapto=&sh;sh.numpasses=1;
+ const float eyes[2][3]={{-14986.237f,-14484.737f,836.36249f},{-14986.3f,-14484.8f,836.3f}};
+ for(int eye=0;eye<2;eye++)for(int y=0;y<6;y++) {
+  memcpy(r_origin,eyes[eye],sizeof(r_origin));
+  double pitch=19.3*3.141592653589793/180,yaw=yaws[y]*3.141592653589793/180;
+  vpn[0]=cos(pitch)*cos(yaw);vpn[1]=cos(pitch)*sin(yaw);vpn[2]=-sin(pitch);
+  vright[0]=sin(yaw);vright[1]=-cos(yaw);vright[2]=0;
+  vup[0]=sin(pitch)*cos(yaw);vup[1]=sin(pitch)*sin(yaw);vup[2]=cos(pitch);
+  for(int j=0;j<3;j++){r_refdef.m_view[j*4]=vright[j];r_refdef.m_view[j*4+1]=vup[j];r_refdef.m_view[j*4+2]=-vpn[j];}
+  r_refdef.m_view[12]=r_refdef.m_view[13]=r_refdef.m_view[14]=0;
+  for(int j=0;j<3;j++){r_refdef.m_view[12]-=vright[j]*r_origin[j];r_refdef.m_view[13]-=vup[j]*r_origin[j];r_refdef.m_view[14]+=vpn[j]*r_origin[j];}
+  mesh_t *input[28];for(int i=0;i<28;i++)input[i]=hs_all[27-i];
+  batch_t all={.ent=&r_worldentity,.shader=&sh,.mesh=input,.meshes=28,.maxmeshes=28};
+  wb[SHADER_SORT_BLEND]=&all;recordmeshes=1;ndraw=nemit=0;r_blendsort.ival=1;
+  GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+  int a=-1,b=-1,c=-1,d=-1;
+  for(int i=0;i<nemit;i++){if(emitted[i]==1235)a=i;if(emitted[i]==1236)b=i;if(emitted[i]==1228)c=i;if(emitted[i]==1194)d=i;}
+  assert(a>=0&&d>=0&&b>=0&&c>=0); // every contributing pane must act
+  assert(a<d&&d<b&&b<c); // independently proved1235,1194,1236,1228
+  assert(all.mesh==input&&all.meshes==28&&all.maxmeshes==28);
+  for(int i=0;i<28;i++)assert(input[i]==hs_all[27-i]);
+  ndraw=nemit=0;r_blendsort.ival=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+  assert(ndraw==1&&nemit==28&&ranges[0]==28);
+  for(int i=0;i<28;i++)assert(emitted[i]==input[i]->id);
+  // No-cull is a potentially visible stream: the old conservative cycle stays.
+  sh.flags=0;ndraw=nemit=0;r_blendsort.ival=1;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+  assert(ndraw==1&&nemit==28&&ranges[0]==28);
+  for(int i=0;i<28;i++)assert(emitted[i]==input[i]->id);
+  sh.flags=SHADER_CULL_FRONT;recordmeshes=0;
+ }
+ // Cross-check effective cull semantics with the actual GL_CullFace routine.
+ float cx[4][3]={{-1,-1,10},{1,-1,10},{1,1,10},{-1,1,10}};
+ unsigned ci[6]={0,1,2,0,2,3};mesh_t culled={.numvertexes=4,.numindexes=6,.xyz_array=cx,.indexes=ci,.id=600};
+ mesh_t *cp=&culled;shader_t csh={.numpasses=1},mapped=csh;csh.remapto=&mapped;mapped.remapto=&mapped;
+ batch_t cb={.ent=&r_worldentity,.shader=&csh,.mesh=&cp,.meshes=1};
+ memset(r_refdef.m_view,0,sizeof(r_refdef.m_view));r_refdef.m_view[0]=r_refdef.m_view[5]=r_refdef.m_view[15]=1;r_refdef.m_view[10]=-1;
+ for(int winding=0;winding<2;winding++)for(int mirror=0;mirror<2;mirror++)for(int flip=0;flip<2;flip++)for(int two=0;two<2;two++)for(int kind=0;kind<4;kind++) {
+  ci[1]=winding?2:1;ci[2]=winding?1:2;ci[4]=winding?3:2;ci[5]=winding?2:3;
+  r_refdef.m_projection_std[0]=mirror?-1:1;r_refdef.flipcull=flip?SHADER_CULL_FLIP:0;
+  mapped.flags=kind==0?0:kind==1?SHADER_CULL_FRONT:kind==2?SHADER_CULL_BACK:SHADER_CULL_FLIP;
+  csh.flags=SHADER_CULL_FLIP^mapped.flags;cb.flags=two?BEF_FORCETWOSIDED:0;
+  shaderstate.flags=cb.flags;shaderstate.curcull=~0u;GL_CullFace(mapped.flags);
+  int ccw=!(winding^mirror),empty=test_cull_enabled&&(test_cull_face==(ccw?GL_FRONT:GL_BACK));
+  assert(GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty);
+ }
+ r_refdef.m_projection_std[0]=1;r_refdef.flipcull=0;cb.flags=0;mapped.flags=SHADER_CULL_FRONT;
+ ci[1]=1;ci[2]=2;ci[4]=2;ci[5]=3;
+ assert(GLBE_BlendWorldRasterEmpty(&cb,&culled));
+ // A later visible triangle cannot be discarded using the representative normal.
+ ci[4]=3;ci[5]=2;assert(!GLBE_BlendWorldRasterEmpty(&cb,&culled));ci[4]=2;ci[5]=3;
+ for(int arm=0;arm<17;arm++) {
+  mesh_t saved=culled;float coordinate=cx[0][0],depth=cx[0][2],projx=r_refdef.m_projection_std[0],projy=r_refdef.m_projection_std[5];
+  switch(arm) {
+   case 0:ci[5]=4;break;case 1:culled.indexes=NULL;break;case 2:culled.xyz_array=NULL;break;
+   case 3:culled.numindexes=5;break;case 4:culled.numvertexes=65;break;case 5:culled.numindexes=195;break;
+   case 6:culled.xyz2_array=cx;break;case 7:culled.numbones=1;break;case 8:cx[0][0]=NAN;break;
+   case 9:cx[0][0]=INFINITY;break;case 10:cx[0][2]=-1;break;case 11:r_refdef.m_view[12]=NAN;break;
+   case 12:cx[0][2]=.01f;break;
+   case 13:r_refdef.m_projection_std[0]=NAN;break;case 14:r_refdef.m_projection_std[5]=NAN;break;
+   case 15:r_refdef.m_projection_std[0]=INFINITY;break;case 16:r_refdef.m_projection_std[5]=INFINITY;break;
+  }
+  assert(!GLBE_BlendWorldRasterEmpty(&cb,&culled));culled=saved;ci[5]=3;cx[0][0]=coordinate;cx[0][2]=depth;r_refdef.m_view[12]=0;
+  r_refdef.m_projection_std[0]=projx;r_refdef.m_projection_std[5]=projy;
+ }
+ // Finite nonzero winding below the relative area threshold is uncertain.
+ float mx[3][3]={{0,0,10},{10,10,10},{20,20.000002f,10}};
+ unsigned mi[3]={0,1,2};mesh_t marginal={.numvertexes=3,.numindexes=3,.xyz_array=mx,.indexes=mi,.id=601};
+ assert(!GLBE_BlendWorldRasterEmpty(&cb,&marginal));
+ mx[2][1]=30;assert(GLBE_BlendWorldRasterEmpty(&cb,&marginal));
+ // Fully culled commands still consume the original raw-face inspection budget.
+ mesh_t *emptyrun[129];for(int i=0;i<129;i++)emptyrun[i]=&culled;
+ cb.flags=0;cb.mesh=emptyrun;cb.meshes=cb.maxmeshes=129;
+ wb[SHADER_SORT_BLEND]=&cb;ndraw=0;r_blendsort.ival=1;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(ndraw==1&&ranges[0]==129);
+ // The budget must also veto a correction after a long inert prefix.
+ memset(r_origin,0,sizeof(r_origin));vpn[0]=vpn[1]=0;vpn[2]=1;vright[0]=1;vright[1]=vright[2]=0;vup[0]=vup[2]=0;vup[1]=1;
+ pb.mesh=reverse;pb.meshes=2;pb.next=NULL;sh.flags=0;
+ cb.meshes=cb.maxmeshes=127;cb.next=&pb;
+ ndraw=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(ndraw==2&&ranges[0]==127&&ranges[1]==2);
+ // An inert intervening slot is removable; a potentially visible one is a barrier.
+ mesh_t *crossing[3]={&pm[1],&culled,&pm[0]};pb.mesh=crossing;pb.meshes=3;sh.flags=0;
+ shader_t inert=sh;inert.flags=SHADER_CULL_FRONT;inert.remapto=&inert;
+ batch_t end=pb;end.mesh=&crossing[2];end.meshes=1;end.next=NULL;
+ batch_t mid=end;mid.shader=&inert;mid.mesh=&crossing[1];mid.next=&end;
+ batch_t begin=end;begin.mesh=&crossing[0];begin.next=&mid;wb[SHADER_SORT_BLEND]=&begin;
+ ndraw=nemit=0;recordmeshes=1;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(nemit==2&&emitted[0]==250&&emitted[1]==251);
+ inert.flags=0;ndraw=nemit=0;GLBE_SubmitMeshes(wb,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+ assert(nemit==3&&emitted[0]==251&&emitted[1]==600&&emitted[2]==250);
+ // Preceding dynamic entity's RF_XFLIP must not leak into the world proof.
+ mesh_t prior=culled;prior.id=700;mesh_t *pp=&prior;
+ entity_t preceding=e;
+ batch_t before_world={.ent=&preceding,.shader=&sh,.mesh=&pp,.meshes=1};
+ shaderstate.mbatches[0]=&before_world;
+ for(int view=0;view<2;view++)for(int xflip=0;xflip<2;xflip++)for(int empty=0;empty<2;empty++) {
+  unsigned viewflip=view?SHADER_CULL_FLIP:0;
+  r_refdef.flipcull=viewflip;shaderstate.usingweaponviewmatrix=-1;shaderstate.curentity=NULL;
+  preceding.flags=xflip?RF_XFLIP:0;
+  inert.flags=(empty?SHADER_CULL_FRONT:SHADER_CULL_BACK)^viewflip;
+  ndraw=nemit=0;GLBE_SubmitMeshes(wb,0,SHADER_SORT_BLEND);
+  if(empty)assert(nemit==3&&emitted[0]==700&&emitted[1]==250&&emitted[2]==251);
+  else assert(nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250);
+  assert(r_refdef.flipcull==viewflip&&shaderstate.curentity==&r_worldentity);
+ }
+ shaderstate.mbatches[0]=NULL;r_refdef.flipcull=0;shaderstate.usingweaponviewmatrix=-1;shaderstate.curentity=NULL;
+ puts("PASS actual default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
 c = root / 'gl_blend_faces_test.c'
 nan_macro = next(line for line in (engine/'common/mathlib.h').read_text().splitlines() if line.startswith('#define') and 'IS_NAN(x)' in line)
-c.write_text(pre.replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates) + normal_matrix + post + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + tests)
+shader_header = (engine/'gl/shader.h').read_text()
+import re
+names = ['SHADER_HASREFLECT', 'SHADER_HASREFRACT', 'SHADER_HASRIPPLEMAP', 'SHADER_HASPORTAL', 'SHADER_SKY', 'SHADER_NODRAW', 'SHADER_NODLIGHT', 'SHADER_NOSHADOWS', 'SHADER_CULL_FRONT', 'SHADER_CULL_BACK']
+flag_lines = []
+for name in names:
+    value = re.search(r'\b' + name + r'\s*=\s*(1 << \d+)', shader_header).group(1)
+    flag_lines.append(f'#define {name} ({value})')
+flags = '\n'.join(flag_lines)
+for name in ['BEF_FORCEADDITIVE', 'BEF_NODLIGHT', 'BEF_NOSHADOWS', 'BEF_FORCETWOSIDED']:
+    flags += '\n' + next(line.split('//')[0] for line in shader_header.splitlines() if line.startswith('#define ' + name + '\t'))
+c.write_text(pre.replace('__ACTUAL_FLAGS__', flags).replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates).replace('__ACTUAL_SELECTENTITY_SEAM__', select_seam) + normal_matrix + post + selectentity + cull + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + (engine.parent/'tools/blend_world_fixtures.inc').read_text() + tests)
 suffix = '.exe' if os.name == 'nt' else ''
 exe = root / ('gl_blend_faces_test' + suffix)
 flags = ['-std=c99', '-Wall', '-Wextra', '-Werror', '-O2', '-fno-strict-aliasing']
@@ -395,7 +530,26 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 # Deliberately restore each rejected behavior in the extracted source, never the engine.
 # The assertions must fail, not merely report successful compilation.
 base = c.read_text()
+raster = actual[actual.index('static qboolean GLBE_BlendWorldRasterEmpty'):actual.index('static void GLBE_SubmitBlendedWorld')]
 controls = {
+    # Test-only labels deliberately invert the fourth contributor while
+    # preserving the old1235-before1236-before1228 assertion.
+    'lost_full_scene_order': base.replace('if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats);', '''if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats);
+        { int a=-1,b=-1; for(size_t k=0;k<count;k++) if(faces[k].mesh) {
+            if(faces[k].mesh->id==1194) a=(int)k;
+            if(faces[k].mesh->id==1235) b=(int)k;
+          }
+          if(a>=0 && b>=0 && a>b) { glblendface_t swap=faces[a]; faces[a]=faces[b]; faces[b]=swap; }
+        }'''),
+    'stale_entity_cull': base.replace('\t\t\tif (shaderstate.curentity != batch->ent)\n\t\t\t\tGLBE_SelectEntity(batch->ent);\n', ''),
+    'lost_marginal_area': base.replace('if (fabs(area) <= 1e-6*scale + 1e-12) return false;', '(void)scale; /* mutant: no marginal-area abstention */'),
+    'lost_projection_guard': base.replace('if (IS_NAN(proj[0]) || IS_NAN(proj[5])) return false;', ''),
+    'lost_cull_filter': base.replace('if (GLBE_BlendWorldRasterEmpty(batch, batch->mesh[m])) continue;', 'if (0) continue;'),
+    'original_not_remapped_cull': base.replace('cull = batch->shader->remapto->flags &', 'cull = batch->shader->flags &'),
+    'lost_flipcull': base.replace('cull ^= r_refdef.flipcull;', 'cull ^= 0;'),
+    'lost_twosided': base.replace('(batch->flags & BEF_FORCETWOSIDED) || !mesh', '0 || !mesh'),
+    'first_triangle_only': base.replace(raster, raster.replace('t < mesh->numindexes', 't < 3')),
+    'filtered_not_raw_budget': base.replace('overflow || inspected == GLBLEND_PLANE_FACES', 'overflow || count == GLBLEND_PLANE_FACES'),
     'legacy_default': base.replace('GLBE_SubmitBlendedWorld(worldbatches[i]);', 'GLBE_SubmitMeshesSortList(worldbatches[i]);'),
     'whole_batch_geometry': base.replace(
         'return GLBE_BlendPlaneShaderEligible(batch->shader) && GLBE_BlendPlaneShaderEligible(batch->shader->remapto);',
@@ -419,6 +573,20 @@ for name, control in controls.items():
     failed = subprocess.run([str(ce)], capture_output=True, text=True, cwd=root)
     (root / f'{name}-control.log').write_text(failed.stdout + failed.stderr)
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed
+    predicate = {
+        'stale_entity_cull': 'nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250',
+        'lost_marginal_area': '!GLBE_BlendWorldRasterEmpty(&cb,&marginal)',
+        'lost_full_scene_order': 'a<d&&d<b&&b<c',
+        'lost_projection_guard': '!GLBE_BlendWorldRasterEmpty(&cb,&culled)',
+        'lost_cull_filter': 'a<d&&d<b&&b<c',
+        'original_not_remapped_cull': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
+        'lost_flipcull': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
+        'lost_twosided': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
+        'first_triangle_only': 'a>=0&&d>=0&&b>=0&&c>=0',
+        'filtered_not_raw_budget': 'ndraw==2&&ranges[0]==127&&ranges[1]==2',
+    }.get(name)
+    if predicate:
+        assert predicate in failed.stderr, failed
     print(f'PASS falsifier rejects {name}: exit {failed.returncode}')
 # Source control seams, not pixel claims.
 surf = (engine/'client/r_surf.c').read_text()
