@@ -36,12 +36,26 @@ a start-zone reset, a practice save stays practice, active noclip stays
 practice, and a saved start permits a fresh clean recording. Full/stage banner
 probes and filter/legacy alias agree. Inspected HUD screenshots show Practice,
 then shadow/held rather than a poisoned label after loading the clean run.
-`tools/test_reccheck.py`: 306 checks, zero failures. Corpus baseline: 289 run
-files, 189 with existing faults; post-check and delivery recorded separately
-in FTESurf tools/p718_runtags.md. Initial invalid rig let the run fall/reset
-before sampling and used an unknown cvar; retained as a failed harness, not a
-pass. Hopped-start forgiveness, resume, finish ranking and engine physics are
-not redesigned by this patch. Independent review and delivery pending.
+`tools/test_reccheck.py`: 306 checks, zero failures. Corpus before/after: 289
+run files, 189 with existing faults, unchanged. Two independent reviews: OK
+following fixes for Practice chat colour and a vacuous empty-list filter test.
+Final populated control/subject: 42 checks each pass own expectations; old
+control fails 12 subject checks. Six header-only browser rows prove Practice
+keeps bare practice and flagged/unflagged legacy reasons; segmented remains
+separate and unknown stays visible everywhere. First populated fixture used
+an unsupported filename suffix and correctly failed the six-row assertion;
+corrected to the existing shadow spelling, not a reader change. Initial invalid
+rig let the run fall/reset before sampling and used an unknown cvar; retained
+as a failed harness, not a pass. Hopped-start forgiveness, resume, finish ranking
+and engine physics are not redesigned by this patch.
+
+Pushed product d9c2e92; clean rebuild zero warnings and byte-identical to the
+final subject. Both Windows installs received all three generated VMs with
+.prev at 2026-10-15 00:41:27 UTC, destination hashes verified. Fresh installed-
+artifact dedicated rig: 42 checks, zero failures. Details/hashes and limits in
+FTESurf tools/p718_runtags.md. NanoPi SSH/directory probes timed out: no fleet
+files changed, and no lobby deployment/restart/live verification is claimed.
+No release or Build-number bump.
 
 ## Patch 717 — bound retained KSF repair through protected queues
 
