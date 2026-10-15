@@ -7,6 +7,42 @@ fork the engine. The deployed binary is `C:\FTEQuake\fteqw64.exe` (the previous
 build is kept as `fteqw64.exe.prev` for rollback).
 
 
+## Patch 718 — practice labels and save-owned run tags
+
+### Problem
+Noclip/settings attempts had a separate Cheated presentation. Ordinary save
+loads restored a snapshot's flags but reapplied the attempt being abandoned's
+noclip latch, so a clean running save inherited that attempt's reason until a
+start-zone reset. Retry restoration already used the saved latch.
+
+### Change
+QC-only. Restore the ordinary load's run/stage reason from the saved `cheat`
+field plus the CURRENT noclip/settings level, not the abandoned latch. Keep
+load segmentation/shadow and recorder restoration/cancellation unchanged.
+Present the legacy reason class as Practice with the usual amber colour and
+stage glyph; completion banners, announcements and local records agree.
+The Practice chip owns both bare-practice and legacy reason rows; segmented
+rows retain their own chip. Keep the old console filter spelling as an alias.
+No recording format/filename migration, reason-bit removal, engine source/
+binary pin/tag change, or QC Build-number change.
+
+### Verified
+Clean detached QC tree based on origin/main 8edb549. Three VMs compile with
+zero warnings. Real dedicated-socket control/subject on surf_dune each pass
+39 acting checks under their own expectations; the old build fails 11 subject
+checks. Walking starts a real recording, noclip acts, a clean RUNNING save
+loaded afterward clears the abandoned reason (including stage/latch) without
+a start-zone reset, a practice save stays practice, active noclip stays
+practice, and a saved start permits a fresh clean recording. Full/stage banner
+probes and filter/legacy alias agree. Inspected HUD screenshots show Practice,
+then shadow/held rather than a poisoned label after loading the clean run.
+`tools/test_reccheck.py`: 306 checks, zero failures. Corpus baseline: 289 run
+files, 189 with existing faults; post-check and delivery recorded separately
+in FTESurf tools/p718_runtags.md. Initial invalid rig let the run fall/reset
+before sampling and used an unknown cvar; retained as a failed harness, not a
+pass. Hopped-start forgiveness, resume, finish ranking and engine physics are
+not redesigned by this patch. Independent review and delivery pending.
+
 ## Patch 717 — bound retained KSF repair through protected queues
 
 ### Problem
