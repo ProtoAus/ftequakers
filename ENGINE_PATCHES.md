@@ -34,6 +34,27 @@ Reader306/0; paired stable run corpus faults190→190; readable save prefixes ke
 Prediction controls retain baseline-sized seams, not a new mirror/latency claim.
 Scope, commands, failures and separate delivery provenance: tools/p732monolith.md.
 
+## Patch 734 — opt-in recurring visibility and jump-height diagnostics
+
+**Problem:** `developer 2` continuously printed Source area/300-frame leaf-walk
+statistics and a successful height correction for every predicted jump. Routine
+instrumentation crowded out useful diagnostics while playing a level.
+
+**Change:** Default-off, non-archived `hl2_visdebug` gates area reachability,
+`mark/300f` and the one-shot area-cull census. Default-off `pm_jumpzdebug` gates
+only the successful normalization print, never its trace or origin update.
+Both still require `developer`. Keep ordinary diagnostics, warnings, visibility
+and movement unchanged. No QC Build, evidence format or public release change.
+
+**Verified:** Isolated native/QC build, zero NEW compiler warnings. Original
+socket control on surf_kitsune emitted area/mark/jump messages. Subject at
+`developer 2` emitted none with switches off, all three with switches on, and
+none after disabling again; real body replies and repeated jumps acted in each
+phase. `pm_selftest` passes and the full bhop_eazy `pm_dettest` output matches
+the original control exactly. Touched C files have no LSP parser errors
+(existing warnings remain). Commands, counts and separate delivery status:
+FTESurf `tools/p734devquiet.md`.
+
 ## Patch 733 — bare right-aligned status and actual F2 updater dispatch (QC only)
 
 **Problem:** The updater corner still had a panel backdrop/left alignment and
