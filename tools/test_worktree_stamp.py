@@ -25,18 +25,26 @@ def main():
     for key in ('SVN_VERSION', 'SVNREVISION', 'MAKEFLAGS'):
         env.pop(key, None)
     env['PATH'] = 'C:/msys64/ucrt64/bin;C:/msys64/usr/bin;' + env.get('PATH', '')
-    for name, source, wanted in [('subject', actual, expected), ('old-git-dir-mutant', mutant, '')]:
+    # Raw MSYS Git may disagree with Windows Git about CRLF dirtiness. The raw
+    # control proves worktree/commit detection, NOT a clean release stamp. The
+    # explicit-argument arm is what the Windows build entrypoint must bind.
+    cases = [('subject', actual, expected, []), ('old-git-dir-mutant', mutant, '', []),
+             ('inspected-override', actual, expected, [f'SVN_VERSION={expected}', f'SVN_DATE={git("log", "-1", "--format=%cs")}'])]
+    for name, source, wanted, extra in cases:
         f = a.work_root / (name + '.mk')
         f.write_text(source + '\n.PHONY: release-stamp-control\nrelease-stamp-control:\n\t@echo STAMP=$(SVN_VERSION)\n')
         result = subprocess.run([a.make, '--no-print-directory', '-s', '-C', str(root / 'engine'),
-                                 '-f', str(f), 'release-stamp-control', 'FTE_TARGET=win64'],
+                                 '-f', str(f), 'release-stamp-control', 'FTE_TARGET=win64', *extra],
                                 env=env, capture_output=True, text=True)
         (a.work_root / (name + '.log')).write_text(result.stdout + result.stderr)
         assert result.returncode == 0, result.stderr
         stamps = [line.removeprefix('STAMP=') for line in result.stdout.splitlines() if line.startswith('STAMP=')]
-        assert stamps == [wanted], (name, stamps, wanted)
+        if name == 'subject':
+            assert len(stamps) == 1 and stamps[0].removesuffix('-dirty') == wanted.removesuffix('-dirty'), (name, stamps, wanted)
+        else:
+            assert stamps == [wanted], (name, stamps, wanted)
         print(name, 'PASS', stamps)
-    print('PASS: actual worktree revision; old directory-only check demonstrably loses it')
+    print('PASS: raw worktree commit detection; old check loses it; explicit inspected revision wins')
 
 
 if __name__ == '__main__':
