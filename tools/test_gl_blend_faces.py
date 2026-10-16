@@ -99,6 +99,10 @@ struct entity_s { unsigned flags; float axis[3][3],origin[3]; model_t *model; fl
 #define mod_alias 1
 static struct { int ival; } ruleset_allow_larger_models={1};
 #define Con_DPrintf(...) ((void)0)
+#define QR_OPENGL 1
+static int qrenderer=QR_OPENGL, test_insecure, test_trace_printfs;
+#define Cmd_IsInsecure() test_insecure
+static void Con_Printf(const char *fmt,...) { (void)fmt; test_trace_printfs++; }
 typedef struct batch_s { struct batch_s *next; mesh_t **mesh; unsigned firstmesh,meshes,maxmeshes,flags; shader_t *shader; entity_t *ent; void (*buildmeshes)(struct batch_s*); int id; void *vbo, *fog; union { struct { unsigned surface; } poly; } user; } batch_t;
 typedef struct { int firstvert, numvert; } scenetris_t;
 static scenetris_t *cl_stris;
@@ -165,6 +169,12 @@ static void capture_recursive(batch_t *b) {
  procedural(b); // Same rebuild-after-recursion discipline as real captures.
 }
 int main(void) {
+ // Diagnostic is opt-in/local, consumes one root pass, and leaves draws intact.
+ assert(!gl_blendtrace_pending);
+ test_insecure=1; GLBE_BlendTrace_f(); assert(!gl_blendtrace_pending);
+ test_insecure=0; GLBE_BlendTrace_f(); assert(!gl_blendtrace_pending); // mode1
+ r_blendsort.ival=2; GLBE_BlendTrace_f(); assert(gl_blendtrace_pending);
+ r_blendsort.ival=1; // direct collector test below consumes the one-shot
  float xyz[4][3]={{-2,0,10},{2,0,10},{2,2,10},{-2,2,10}};
  mesh_t far={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=1}, middle={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=2}, near={.numvertexes=1,.numindexes=6,.id=3},ignored={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=77};
  entity_t e={.axis={{1,0,0},{0,1,0},{0,0,1}}},brush=e;
@@ -187,6 +197,7 @@ int main(void) {
   batch_t batch={.meshes=2,.mesh=pair,.shader=&shade,.ent=&r_worldentity};
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
   assert(ndraw==2&&draws[0]==736&&draws[1]==737);
+  assert(!gl_blendtrace_pending && test_trace_printfs>2);
   face.numvertexes=5;face.numindexes=9;face.xyz_array=split;face.indexes=si;
   assert(GLBE_BlendFaceDepth(&face,m)<GLBE_BlendFaceDepth(&marker,m));
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
