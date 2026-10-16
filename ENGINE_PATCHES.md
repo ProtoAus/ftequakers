@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 732 — known-port Monolith B4 KSF launch compatibility (QC only)
+
+**Problem:** Momentum's one-shot1662/398.301 opposed-ramp launch settles near
+1643, below the supplied KSF reference. Raw original CSS entry/exit script
+values do not reproduce effective KSF behavior; a speed-only fitted control
+also mistakes its own generated ramp lift for a hopped start.
+
+**Change:** Explicit reference-tuned policy for only the known Monolith B4
+pad/authoring: grounded opposed entry, one physical-progress reapplication,
+downstream XY clamp retaining Z. Duplicate/zero-tick contacts cannot advance it.
+Finalize before another command and packet evidence sampling. Existing force
+markers attribute only the next causal ramp move; real jump input still wins,
+older taints remain. Warp/hold/spawn/invalid/timeout/side exit retire state;
+all packet exits clear transient latches. No global physics, generic VScript,
+native pin/tag, evidence format, backend or QC Build-number change.
+
+**Verified:** Three isolated production VMs compile with0 warnings.
+Normal66/batched20pps reproduce1668.867/1665.936/1663.005→1662;
+first two dx/dz steps match all four clips within0.001. Clean timer classification
+and real older-hop rejection both act; Prosurf remains2275/normal/recording.
+44 actual-QC predicates pass; command-exit mutant fails its exact predicate.
+Three real-client normal/early/held packet exits act/clean. New run prefix passes
+reader and32-packet native replay at printing floor, zero bit/physent mismatches.
+Reader306/0; paired stable run corpus faults190→190; readable save prefixes keep
+16 existing faults and one historical read-denied fixture remains untouched.
+Prediction controls retain baseline-sized seams, not a new mirror/latency claim.
+Scope, commands, failures and separate delivery provenance: tools/p732monolith.md.
+
 ## Patch 731 — passive updater status and roomier Play/Friends UI (QC only)
 
 **Problem:** The title menu's update button did not match its station controls;
