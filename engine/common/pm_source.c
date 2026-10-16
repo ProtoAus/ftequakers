@@ -204,6 +204,9 @@ static float pms_maxspeed;
    surfing.  Reported to the mod so the HUD can say so. */
 static qboolean pms_surfed;
 
+static cvar_t pm_jumpzdebug = CVARD("pm_jumpzdebug", "0",
+	"Print successful Source jump-height corrections (also requires developer). Does not change movement.");
+
 extern cvar_t pm_noround;
 extern int bih_sourceclip;	//Patch 492, com_bih.c
 extern cvar_t pm_dispprobe;	//FTESurf Patch 256, temporary -- defined in common.c
@@ -2757,16 +2760,12 @@ static qboolean PMSrc_CheckJumpButton (void)
 				tr = PMSrc_TraceHull (tr.endpos, up);
 				if (tr.fraction == 1.0f && !tr.startsolid && !tr.allsolid)
 				{
-					/* Momentum prints exactly this, and for the same reason:
-					   it is the only way to see the correction actually being
-					   applied, and the (from => to) pair is what tells you
-					   whether it moved you UP or DOWN -- which is the whole
-					   difference between pinning and adding.
-					   mom_gamemovement.cpp, "Jump height normalization". */
-					Con_DPrintf ("jump z: moving player %s %.4f (%.4f => %.4f)\n",
-						(tr.endpos[2] >= pmove.origin[2]) ? "up" : "down",
-						fabs (tr.endpos[2] - pmove.origin[2]),
-						pmove.origin[2], tr.endpos[2]);
+					/* Opt-in diagnostics only; normalization below always runs. */
+					if (pm_jumpzdebug.ival)
+						Con_DPrintf ("jump z: moving player %s %.4f (%.4f => %.4f)\n",
+							(tr.endpos[2] >= pmove.origin[2]) ? "up" : "down",
+							fabs (tr.endpos[2] - pmove.origin[2]),
+							pmove.origin[2], tr.endpos[2]);
 
 					VectorCopy (tr.endpos, pmove.origin);
 				}
@@ -5227,6 +5226,7 @@ static void PMSrc_SelfTest_f (void)
 
 void PMSrc_Init (void)
 {
+	Cvar_Register (&pm_jumpzdebug, "Movement debugging");
 	Cmd_AddCommandD ("pm_selftest", PMSrc_SelfTest_f,
 		"FTESurf: verify the Counter-Strike: Source movement maths against known values. Runs without a map loaded.");
 }

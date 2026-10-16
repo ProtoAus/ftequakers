@@ -81,6 +81,7 @@ r_qrenderer_t qrenderer = QR_OPENGL;
 #define SURF_OFFNODE		SURF_DRAWBACKGROUND	//might as well just reuse that.
 
 static cvar_t *hl2_novis;
+static cvar_t *hl2_visdebug;	//Opt-in area/leaf-walk statistics, not visibility behavior.
 static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
 static cvar_t *hl2_displacement_scale;
 static cvar_t *hl2_favour_ldr;
@@ -8548,13 +8549,14 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		VBSP_WriteAreaBits sends everything when the camera is in the null area.
 
 		Printed on a change rather than per frame, so walking a map traces out
-		which areas exist and how much each one can see.  developer 1.
+		which areas exist and how much each one can see. Requires hl2_visdebug
+		and developer; ordinary developer output must not repeat these statistics.
 		*/
 		/* Rate-limited, not just edge-detected.  Standing on an area boundary
 		   flips the camera's leaf every frame, and an edge-detect alone then
 		   prints twice per frame forever -- which is the same mistake as the
 		   `waits without server frames` latch this build also fixes. */
-		if (clientarea != prv->lastreportedarea &&
+		if (hl2_visdebug->ival && clientarea != prv->lastreportedarea &&
 		    r_refdef->time >= prv->nextareareport)	//Con_DPrintf gates on developer itself
 		{
 			int i, n = 0;
@@ -8589,14 +8591,15 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		   report so every window stands alone. */
 		if (++prv->markstatframes >= 300)
 		{
-			Con_DPrintf("mark/300f: %i runs, %i leaf visits (%.1f per run, of %i leafs; index %s)\n",
-				vbsp_mark_runs, vbsp_mark_leaves,
-				vbsp_mark_runs ? vbsp_mark_leaves/(float)vbsp_mark_runs : 0.0f,
-				(int)mod->numleafs, prv->clusterfirstleaf?"ON":"off (fallback loop)");
+			if (hl2_visdebug->ival)
+				Con_DPrintf("mark/300f: %i runs, %i leaf visits (%.1f per run, of %i leafs; index %s)\n",
+					vbsp_mark_runs, vbsp_mark_leaves,
+					vbsp_mark_runs ? vbsp_mark_leaves/(float)vbsp_mark_runs : 0.0f,
+					(int)mod->numleafs, prv->clusterfirstleaf?"ON":"off (fallback loop)");
 			prv->markstatframes = 0;
 			vbsp_mark_runs = vbsp_mark_leaves = 0;
 		}
-		if (++prv->areastatframes == 300)
+		if (hl2_visdebug->ival && ++prv->areastatframes == 300)
 			Con_DPrintf("area cull over 300 frames: dropped %i of %i vis-passing leafs (%.1f%%)\n",
 				vbsp_leaf_areakill, vbsp_leaf_invis,
 				vbsp_leaf_invis ? (100.0*vbsp_leaf_areakill)/vbsp_leaf_invis : 0.0);
@@ -11690,6 +11693,7 @@ qboolean VBSP_Init(void)
 		description belonging to hl2_displacement_scale on the line below,
 		copy-pasted, so `cvarlist r_novis` described the wrong cvar entirely.
 		*/
+		hl2_visdebug = cvarfuncs->GetNVFDG("hl2_visdebug", "0", 0, "Print Source area visibility and 300-frame leaf-walk statistics (also requires developer). Does not change visibility.", MAPOPTIONS);
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
 		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
 		hl2_lumpretire = cvarfuncs->GetNVFDG("hl2_lumpretire", "1", CVAR_MAPLATCH, "FTESurf (P298): skip LZMA-decompressing the BSP lumps nothing in this configuration will read -- both lightmaps on a dedicated server, and the unused half of the LDR/HDR pair when drawing. Map load on this engine is single-threaded LZMA and almost nothing else, so this is most of it: 334 MB of the 350 MB surf_affliction expands is lightmap. 0 restores the old decompress-everything behaviour, which makes the whole patch a one-command A/B.", MAPOPTIONS);
