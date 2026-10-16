@@ -96,9 +96,10 @@ ifeq ($(SVNREVISION),)
 #    endif
     ifeq (,$(SVN_VERSION))
         #try to get git version info instead. this usually uses git-count-hash[-dirty] format
-        SVN_VERSION:=$(shell test -d $(BASE_DIR)/../.git && cd $(BASE_DIR) && echo $$((`git rev-list HEAD --count` + 29)))
-        GIT_VERSION:=$(shell test -d $(BASE_DIR)/../.git && cd $(BASE_DIR) && git describe --long --always --dirty)
-        SVN_DATE:=$(shell test -d $(BASE_DIR)/../.git && git log -1 --format=%cs $(BASE_DIR))
+        # git worktrees use a .git FILE; ask git rather than testing its storage layout.
+        SVN_VERSION:=$(shell cd $(BASE_DIR) && git rev-parse --git-dir >/dev/null 2>&1 && echo $$((`git rev-list HEAD --count` + 29)))
+        GIT_VERSION:=$(shell cd $(BASE_DIR) && git describe --long --always --dirty 2>/dev/null)
+        SVN_DATE:=$(shell cd $(BASE_DIR) && git log -1 --format=%cs . 2>/dev/null)
         ifneq (,$(SVN_VERSION))
             #make sure its prefixed with something specific. we use versions for versioning, which will confuse the update mechanism if they're inconsistent - like random hashses that have no implied ordering...
             SVN_VERSION:=git-$(SVN_VERSION)-$(GIT_VERSION)
