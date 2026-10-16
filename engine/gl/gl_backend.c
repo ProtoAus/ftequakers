@@ -29,6 +29,7 @@ extern cvar_t r_refract_fbo;
 extern cvar_t gl_line_width;				//nettest: CSQC debug wireframe line width (3D scene polys / R_DB_Poly)
 extern cvar_t gl_2dline_width;				//nettest: 2D drawline width (hit-marker reticle / dummybatch)
 extern void R_DB_Poly(batch_t *batch);			//nettest: gl_alias.c scenetris builder; tags CSQC debug-line batches
+extern shader_t *shader_draw_fill_trans;
 #ifndef GL_ALIASED_LINE_WIDTH_RANGE
 #define GL_ALIASED_LINE_WIDTH_RANGE 0x846E
 #endif
@@ -6867,6 +6868,22 @@ static double GLBE_BlendBatchDepth(const batch_t *batch, const float *matrix)
 	return GLBE_BlendCenterDepth(center, matrix);
 }
 
+// Keep stock CSQC wire annotations in the legacy post-world layer. Their
+// centre depths are not glass-plane constraints; arbitrary shaders/models
+// remain conservative barriers. Opaque depth testing is unchanged.
+static qboolean GLBE_BlendForeground(const batch_t *batch)
+{
+	shader_t *sh = batch->shader;
+	if (batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK))
+		return true;
+	if (r_refdef.recurse || !r_refdef.useperspective || shaderstate.mode != BEM_STANDARD ||
+		batch->ent != &r_worldentity || batch->buildmeshes != R_DB_Poly || batch->fog || batch->vbo ||
+		!(batch->flags & BEF_LINES) || (batch->flags & ~(BEF_LINES | BEF_NOSHADOWS | BEF_NODLIGHT)))
+		return false;
+	return sh && sh == shader_draw_fill_trans && sh->remapto == sh &&
+		sh->numpasses == 1 && !sh->numdeforms && !sh->passes[0].prog;
+}
+
 static int GLBE_BlendFaceCompare(const void *va, const void *vb)
 {
 	const glblendface_t *a = va, *b = vb;
@@ -7204,7 +7221,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					faces[n].mesh = NULL;
 					faces[n].depth = GLBE_BlendBatchDepth(batch, matrix);
 					faces[n].sequence = n;
-					faces[n].foreground = !!(batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));
+					faces[n].foreground = GLBE_BlendForeground(batch);
 					n++;
 					continue;
 				}
