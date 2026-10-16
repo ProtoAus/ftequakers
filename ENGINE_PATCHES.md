@@ -27,9 +27,14 @@ actual collector's four-pane-order assertion before the fix, then passes with
 all panes and the one annotation retained and its callback called once.
 All4 normal/HEXEN2/fast-math variants and21 deliberate regression controls pass;
 11 unsupported annotation contexts remain excluded. Default1/dispatch source
-is byte-identical to published P738. Native build and owner live angular
-acceptance are pending at this source checkpoint; no completed visual fix is
-claimed from the portable test alone.
+is byte-identical to published P738. Clean feature87df379ec/tag739 native build
+has74 baseline compiler warnings and0 new; both normal Windows client hashes
+are verified with P737 .prev rollback. Plugin/header ABI and all5890 shared
+dependency files are unchanged, permitting client-only delivery without stopping
+an owner's game to replace loaded, unchanged DLLs. Other8 native destinations,
+progs/config/saves are not shipped. Owner live angular acceptance remains
+PENDING; portable success is not its replacement. Full provenance and human
+check: FTESurf tools/p739annotations.md.
 
 ## Patch 738 — signed updates include the public tier catalogue
 
