@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 738 — signed updates include the public tier catalogue
+
+**Problem:** P723's shipped `maps/tiers.txt` was absent from all three signed
+update disk policies, so a complete release could not be signed or installed.
+
+**Change:** Permit exactly `ftesurf/maps/tiers.txt` in the native updater, Rust
+bootstrap and Python publisher. No map-directory wildcard, bootstrap self-update,
+player-data overwrite or signature relaxation. The owner explicitly approved a
+one-time new-launcher download for this alpha rollout. Publish verified standalone
+Windows/Linux launchers with immutable versioned URLs and an upgrade notice.
+
+**Verified:** Actual native path-policy C compiles under `-Wall -Wextra -Werror`:
+exact tier path and existing assets accepted,12 neighboring/player paths refused;
+removing the new entry acts and rejects the tier path. Rust library42 tests and
+Python signed-feed13 tests pass, including tier-object hash round-trip and narrow
+path refusals. The previous P708 launcher actually refuses the signed tier fixture
+before installation, as expected; existing users must replace it. Packaging/helper
+80 tests pass. Full binary/archive/publication provenance is recorded separately
+in FTESurf `tools/release026.md`; these source tests do not claim live deployment.
+
 ## Patch 736 — tessellation-stable mode2 transparency centres
 
 **Problem:** The owner's saved Kitsune ramp/floor view changes apparent layer

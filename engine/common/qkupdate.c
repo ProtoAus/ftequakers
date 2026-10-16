@@ -253,7 +253,7 @@ static qboolean QKU_ValidPath(const char *p)
 // FTESurf's disk policy is also enforced by updatefeed.py and the native launcher.
 static qboolean QKU_FSManaged(const char *p)
 {
-	static const char *roots[] = {"default.fmf", "ftesurf.bat", "ftesurf.sh", "ftesurf_debug.bat", "LICENSE", "INSTALL.txt", "VERSION.txt", "SOURCE.txt", "THIRD-PARTY.txt", "ftesurf64.exe", "ftesurf64", "fteplug_hl2_x64.dll", "fteplug_ui_imgui_x64.dll", "fteplug_hl2_amd64.so", "ftesurf/csprogs.dat", "ftesurf/qwprogs.dat", "ftesurf/menu.dat", "ftesurf/fs_addons.default.txt", "ftesurf/fs_addons.txt", "ftesurf/data/mapmeta.txt", "ftesurf/data/mapdeps.txt", "ftesurf/data/mapmeta_override.txt", "ftesurf/data/mapparticles.txt", "ftesurf/data/mapwr.txt", "ftesurf/data/mapdl.txt", "ftesurf/data/mapmanifest.txt", "ftesurf/textures/no_texture.png"};
+	static const char *roots[] = {"default.fmf", "ftesurf.bat", "ftesurf.sh", "ftesurf_debug.bat", "LICENSE", "INSTALL.txt", "VERSION.txt", "SOURCE.txt", "THIRD-PARTY.txt", "ftesurf64.exe", "ftesurf64", "fteplug_hl2_x64.dll", "fteplug_ui_imgui_x64.dll", "fteplug_hl2_amd64.so", "ftesurf/csprogs.dat", "ftesurf/qwprogs.dat", "ftesurf/menu.dat", "ftesurf/fs_addons.default.txt", "ftesurf/fs_addons.txt", "ftesurf/data/mapmeta.txt", "ftesurf/data/mapdeps.txt", "ftesurf/data/mapmeta_override.txt", "ftesurf/data/mapparticles.txt", "ftesurf/data/mapwr.txt", "ftesurf/data/mapdl.txt", "ftesurf/data/mapmanifest.txt", "ftesurf/maps/tiers.txt", "ftesurf/textures/no_texture.png"};
 	static const char *prefixes[] = {"ftesurf/gfx/", "ftesurf/glsl/", "ftesurf/particles/", "ftesurf/scripts/", "ftesurf/models/", "ftesurf/sound/"};
 	size_t i, n = strlen(p);
 	const char *t;
