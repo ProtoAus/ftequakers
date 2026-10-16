@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 742 — retain mode2 ordering across eye-spanning world panes
+
+**Problem:** P739 fixes most owner switching, but farther-right save4/5 still
+flip. The new live trace has15 world commands,4 admitted planes/status-3;
+near/behind-eye planar ramp fans remain unsupported barriers. An exact actual-C
+replay matches all15 face IDs/depths,4 admissions,6 edges and75 work.
+
+**Change:** Mode2 only: conservative whole-view bounds admit validated planar
+eye spans without dividing behind-eye vertices. Full original vertex half-space
+proofs remain authoritative. Homogeneous triangle winding can prove empty
+backfaces even when eye-spanning; no GPU mesh/clip/depth state changes. Unknown
+materials/dynamics still block crossings. Mode0/1 paths remain unchanged.
+
+**Verified:** Exact P73915-world-command replay matches the live failure,
+including every depth and4/6/75 admission/edge/work counts. The fix retains all
+four ramp contributors in proven order at save4/5 and that exact camera. An
+independent positive-w polygon-clip area reference validates every newly empty
+triangle across39 views. All4 normal/HEXEN2/fast-math collector variants and23
+acting mutants pass; removing either eye-span admission or homogeneous culling
+fails near_camera_order_ok. Direct actual plane helper controls pass after
+repairing the older fixture's P739 trace-extraction seam; two wrapper setup
+failures are excluded, not feature failures. Original default1 raster/submission
+functions are byte-unchanged. Native build/delivery and owner farther-right
+visual acceptance are pending at this source checkpoint; no completed fix is
+claimed from host tests.
+
 ## Patch 741 — authenticated Friends before joining a map
 
 **Problem:** The map-picker Friends list only mirrored the connected CSQC

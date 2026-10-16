@@ -24,7 +24,12 @@ tmp = None if args.output else tempfile.TemporaryDirectory(prefix='gl_blend_plan
 root = args.output.resolve() if args.output else Path(tmp.name)
 root.mkdir(parents=True, exist_ok=True)
 code=s[s.index('#define GLBLEND_PLANE_FACES'):s.index('static void GLBE_SubmitBlendedFaces')]
+# The collector suite covers raster/trace with real batch/view/command stubs;
+# this fixture deliberately isolates plane geometry and ordering only.
+near=code[code.index('static qboolean GLBE_BlendWorldRasterEmptyNear'):code.index('// -1: a before b;')]
+code=code.replace(near,'')
 struct=s[s.index('typedef struct\n{\n\tbatch_t *batch;\n\tmesh_t *mesh;'):s.index('static double GLBE_BlendCenterDepth')]
+struct=struct[:struct.index('static qboolean gl_blendtrace_pending;')]
 compare=s[s.index('static int GLBE_BlendFaceCompare'):s.index('static qboolean GLBE_BlendBatchImmediate')]
 nan = next(l for l in (engine / 'common/mathlib.h').read_text().splitlines() if l.startswith('#define') and 'IS_NAN(x)' in l)
 pre=r'''
@@ -49,6 +54,7 @@ typedef struct { int numdeforms; struct shader_s_unused *unused; void *remapto; 
 __SHADER__
 static struct { int useperspective; float m_projection_std[16]; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0}};
 static struct { int mode; } shaderstate={BEM_STANDARD};
+static struct { int ival; } r_blendsort={1};
 typedef struct { int unused; } entity_t;
 typedef struct { entity_t *ent; unsigned flags; void (*buildmeshes)(void); realshader_t *shader; } batch_t;
 static entity_t r_worldentity;

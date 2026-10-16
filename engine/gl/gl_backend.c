@@ -6978,6 +6978,7 @@ static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_
 	mesh_t *mesh = face->mesh;
 	double best = 0, norm[3] = {0, 0, 0}, origin[3] = {0, 0, 0};
 	double p[3], a[3], b[3], cross[3], area, depth, side, xy;
+	qboolean nearspan = false, projected = false;
 	int v, t, j, k;
 	unsigned int ia, ib, ic;
 	if (!mesh || face->foreground || face->batch->ent != &r_worldentity ||
@@ -7039,21 +7040,94 @@ static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_
 			side += plane->normal[j] * ((double)mesh->xyz_array[v][j] - origin[j]);
 			depth += p[j]*vpn[j];
 		}
-		// Near/behind-eye spans need clipping; keep their baseline command.
-		if (fabs(side) > GLBLEND_PLANE_EPS || depth <= GLBLEND_PLANE_EPS)
+		if (fabs(side) > GLBLEND_PLANE_EPS)
 			return false;
+		if (depth <= GLBLEND_PLANE_EPS)
+		{
+			if (r_blendsort.ival != 2) return false;
+			nearspan = true;
+			continue;
+		}
 		for (k = 0; k < 2; k++)
 		{
 			xy = 0;
 			for (j = 0; j < 3; j++)
 				xy += p[j] * (k ? vup[j] : vright[j]);
 			xy /= depth;
-			if (!v || xy < plane->mins[k]) plane->mins[k] = xy;
-			if (!v || xy > plane->maxs[k]) plane->maxs[k] = xy;
+			if (!projected || xy < plane->mins[k]) plane->mins[k] = xy;
+			if (!projected || xy > plane->maxs[k]) plane->maxs[k] = xy;
 		}
+		projected = true;
+	}
+	if (!projected) return false;
+	if (nearspan)
+	{
+		// No false disjoint proof across the eye plane. Float-input dot products
+		// fit these bounds; full original vertices still prove every plane side.
+		plane->mins[0] = plane->mins[1] = -1e300;
+		plane->maxs[0] = plane->maxs[1] = 1e300;
 	}
 	plane->mesh = mesh;
 	return true;
+}
+
+// Homogeneous winding keeps its sign through positive-w clipping, unlike a
+// divide of an original behind-eye vertex. This extension is mode2-only.
+static qboolean GLBE_BlendWorldRasterEmptyNear(batch_t *batch, const mesh_t *mesh)
+{
+	const float *view = r_refdef.m_view, *proj = r_refdef.m_projection_std;
+	double h[GLBLEND_PLANE_VERTS][3], p[3], terms[6], area, scale;
+	unsigned int cull, ia, ib, ic;
+	int v, t, j;
+	qboolean nearspan = false, nondegenerate = false;
+	if (r_blendsort.ival != 2 || !GLBE_BlendWorldBatchEligible(batch) ||
+		!mesh || !mesh->xyz_array || !mesh->indexes || mesh->xyz2_array || mesh->numbones ||
+		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
+		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
+		return false;
+	cull = batch->shader->remapto->flags & (SHADER_CULL_FRONT | SHADER_CULL_BACK);
+	if (!cull) return false;
+	cull ^= r_refdef.flipcull;
+	if (IS_NAN(proj[0]) || IS_NAN(proj[5])) return false;
+	for (j = 0; j < 16; j++)
+		if (IS_NAN(view[j])) return false;
+	for (v = 0; v < mesh->numvertexes; v++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(mesh->xyz_array[v][j])) return false;
+			p[j] = mesh->xyz_array[v][j];
+		}
+		h[v][0] = proj[0]*(view[0]*p[0] + view[4]*p[1] + view[8]*p[2] + view[12]);
+		h[v][1] = proj[5]*(view[1]*p[0] + view[5]*p[1] + view[9]*p[2] + view[13]);
+		h[v][2] = -(view[2]*p[0] + view[6]*p[1] + view[10]*p[2] + view[14]);
+		if (h[v][2] <= GLBLEND_PLANE_EPS) nearspan = true;
+	}
+	if (!nearspan) return false;
+	for (t = 0; t < mesh->numindexes; t += 3)
+	{
+		ia = mesh->indexes[t]; ib = mesh->indexes[t+1]; ic = mesh->indexes[t+2];
+		if (ia >= (unsigned int)mesh->numvertexes || ib >= (unsigned int)mesh->numvertexes || ic >= (unsigned int)mesh->numvertexes)
+			return false;
+		if (ia == ib || ib == ic || ia == ic) continue;
+		terms[0] = h[ia][0]*h[ib][1]*h[ic][2];
+		terms[1] = h[ia][1]*h[ib][2]*h[ic][0];
+		terms[2] = h[ia][2]*h[ib][0]*h[ic][1];
+		terms[3] = -h[ia][2]*h[ib][1]*h[ic][0];
+		terms[4] = -h[ia][1]*h[ib][0]*h[ic][2];
+		terms[5] = -h[ia][0]*h[ib][2]*h[ic][1];
+		area = scale = 0;
+		for (j = 0; j < 6; j++) { area += terms[j]; scale += fabs(terms[j]); }
+		if (fabs(area) <= 1e-6*scale + 1e-12) return false;
+		nondegenerate = true;
+		if (cull & SHADER_CULL_FRONT)
+		{
+			if (area < 0) return false;
+		}
+		else if (!(cull & SHADER_CULL_BACK) || area > 0)
+			return false;
+	}
+	return nondegenerate;
 }
 
 // -1: a before b; +1: b before a; 0: no strict separation proof.
@@ -7234,7 +7308,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					if (!mesh || !mesh->xyz_array || mesh->numvertexes <= 0 || mesh->numindexes <= 0)
 						continue;
 					// Invisible backfaces must not create cycles in the plane graph.
-					if (cullworld && GLBE_BlendWorldRasterEmpty(batch, mesh))
+					if (cullworld && (GLBE_BlendWorldRasterEmpty(batch, mesh) || GLBE_BlendWorldRasterEmptyNear(batch, mesh)))
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;

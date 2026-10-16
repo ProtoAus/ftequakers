@@ -169,6 +169,23 @@ static void capture_recursive(batch_t *b) {
  GLBE_SubmitBlendedFaces(NULL,&nested);
  procedural(b); // Same rebuild-after-recursion discipline as real captures.
 }
+// Independent positive-w polygon clipping reference, not the determinant proof.
+static double clipped_triangle_area(const mesh_t *m, int t) {
+ double in[3][3],out[6][3],area=0;int n=0;
+ for(int i=0;i<3;i++){
+  const float *p=m->xyz_array[m->indexes[t+i]],*v=r_refdef.m_view,*s=r_refdef.m_projection_std;
+  in[i][0]=s[0]*(v[0]*(double)p[0]+v[4]*(double)p[1]+v[8]*(double)p[2]+v[12]);
+  in[i][1]=s[5]*(v[1]*(double)p[0]+v[5]*(double)p[1]+v[9]*(double)p[2]+v[13]);
+  in[i][2]=-(v[2]*(double)p[0]+v[6]*(double)p[1]+v[10]*(double)p[2]+v[14]);
+ }
+ for(int i=0;i<3;i++){
+  int j=(i+1)%3,a=in[i][2]>=1,b=in[j][2]>=1;
+  if(a){for(int k=0;k<3;k++)out[n][k]=in[i][k];n++;}
+  if(a!=b){double f=(1-in[i][2])/(in[j][2]-in[i][2]);for(int k=0;k<3;k++)out[n][k]=in[i][k]+f*(in[j][k]-in[i][k]);n++;}
+ }
+ for(int i=0;i<n;i++){int j=(i+1)%n;area+=out[i][0]/out[i][2]*out[j][1]/out[j][2]-out[j][0]/out[j][2]*out[i][1]/out[i][2];}
+ return area;
+}
 int main(void) {
  // Diagnostic is opt-in/local, consumes one root pass, and leaves draws intact.
  assert(!gl_blendtrace_pending);
@@ -560,12 +577,15 @@ int main(void) {
   r_worldentity.axis[0][0]=r_worldentity.axis[1][1]=r_worldentity.axis[2][2]=1;r_worldentity.scale=1;
   entity_t preceding_world=r_worldentity;preceding_world.flags=RF_XFLIP;
   r_origin[0]=-12947.9473f;r_origin[1]=-14884.377f;r_origin[2]=-399.9688f;
-  const double poses[3][2]={{14.2108,123.2996},{15.8368,93.1531},{16.5674,85.6384}};
+  const double poses[6][2]={{14.2108,123.2996},{15.8368,93.1531},{16.5674,85.6384},{8.3002,60.7928},{8.02,45.3241},
+   {asin(0.131663337)*180/3.141592653589793,atan2(0.723562598,0.677585423)*180/3.141592653589793}};
   recordmeshes=1;r_blendsort.ival=2;shaderstate.mbatches[SHADER_SORT_BLEND]=NULL;
-  for(int pose=0;pose<36;pose++) {
-   double t=pose<3?0:(pose-3)/32.0;
-   double pitch=(pose<3?poses[pose][0]:poses[1][0]+t*(poses[2][0]-poses[1][0]))*3.141592653589793/180;
-   double yaw=(pose<3?poses[pose][1]:poses[1][1]+t*(poses[2][1]-poses[1][1]))*3.141592653589793/180;
+  for(int pose=0;pose<39;pose++) {
+   int saved=pose<3?pose:(pose>=36?pose-33:-1);
+   double t=(pose-3)/32.0;
+   double pitch=(saved>=0?poses[saved][0]:poses[1][0]+t*(poses[2][0]-poses[1][0]))*3.141592653589793/180;
+   double yaw=(saved>=0?poses[saved][1]:poses[1][1]+t*(poses[2][1]-poses[1][1]))*3.141592653589793/180;
+   if(pose>=36){r_origin[0]=-12947.8848f;r_origin[1]=-14884.3145f;r_origin[2]=-399.906311f;}
    vpn[0]=cos(pitch)*cos(yaw);vpn[1]=cos(pitch)*sin(yaw);vpn[2]=-sin(pitch);
    vright[0]=sin(yaw);vright[1]=-cos(yaw);vright[2]=0;
    vup[0]=sin(pitch)*cos(yaw);vup[1]=sin(pitch)*sin(yaw);vup[2]=cos(pitch);
@@ -576,10 +596,14 @@ int main(void) {
    ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
    int a=-1,b=-1,c=-1,d=-1;
    for(int i=0;i<nemit;i++){if(emitted[i]==2073)a=i;if(emitted[i]==2086)b=i;if(emitted[i]==2047)c=i;if(emitted[i]==2071)d=i;}
-   assert(a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d);
+   if(pose<36)assert(a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d);
+   else { int near_camera_order_ok=a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d;assert(near_camera_order_ok); }
    assert(r_refdef.flipcull==0&&shaderstate.curentity==&r_worldentity);
+   for(int m=0;m<20;m++)if(GLBE_BlendWorldRasterEmptyNear(&follow_batch,follow_all[m]))
+    for(int t=0;t<follow_all[m]->numindexes;t+=3)assert(clipped_triangle_area(follow_all[m],t)>=-1e-7);
   }
-  assert(nemit==12); //8 proven raster-empty commands omitted, not visible panes.
+  assert(nemit==8); //12 proven empty commands; all four visible ramp contributors retained.
+  int kept[8]={1384,504,2073,2086,2047,2071,2971,490};for(int i=0;i<8;i++)assert(emitted[i]==kept[i]);
   // Live failure: stock CSQC wire annotations interleave with the glass and
   // force status-3. Keep their legacy post-world layer, not a graph barrier.
   {
@@ -598,7 +622,7 @@ int main(void) {
    for(int i=0;i<nemit;i++){if(emitted[i]==2073)a=i;if(emitted[i]==2086)b=i;if(emitted[i]==2047)c=i;if(emitted[i]==2071)d=i;}
    int annotation_layers_ok=a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d;
    assert(annotation_layers_ok); // live-line regression oracle
-   assert(nemit==13&&emitted[12]==line.id&&builds==1); // no annotation loss/duplicate callback
+   assert(nemit==9&&emitted[8]==line.id&&builds==1); // no annotation loss/duplicate callback
    assert(line.user.poly.surface==0&&line.firstmesh==0&&line.meshes==1);
    assert(GLBE_BlendForeground(&line));
    for(int guard=0;guard<11;guard++) {
@@ -672,7 +696,9 @@ base = c.read_text()
 raster = actual[actual.index('static qboolean GLBE_BlendWorldRasterEmpty'):actual.index('static void GLBE_SubmitBlendedWorld')]
 controls = {
     'lost_annotation_layer': base.replace('faces[n].foreground = GLBE_BlendForeground(batch);', 'faces[n].foreground = !!(batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));'),
-    'lost_mode2_cull': base.replace('if (cullworld && GLBE_BlendWorldRasterEmpty(batch, mesh))', 'if (false && GLBE_BlendWorldRasterEmpty(batch, mesh))'),
+    'lost_mode2_cull': base.replace('if (cullworld && (GLBE_BlendWorldRasterEmpty(batch, mesh) || GLBE_BlendWorldRasterEmptyNear(batch, mesh)))', 'if (false && (GLBE_BlendWorldRasterEmpty(batch, mesh) || GLBE_BlendWorldRasterEmptyNear(batch, mesh)))'),
+    'lost_near_admission': base.replace('if (r_blendsort.ival != 2) return false;', 'if (true) return false;'),
+    'lost_near_cull': base.replace('|| GLBE_BlendWorldRasterEmptyNear(batch, mesh)', '|| false'),
     'stale_mode2_world': base.replace('\t\t\t\tif (cullworld && shaderstate.curentity != batch->ent)\n\t\t\t\t\tGLBE_SelectEntity(batch->ent);', ''),
     'lost_area_center': base.replace('faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);',
         'faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix); faces[n].depth = GLBE_BlendFaceDepth(mesh, matrix);'),
@@ -719,6 +745,8 @@ for name, control in controls.items():
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed
     predicate = {
         'lost_annotation_layer': 'annotation_layers_ok',
+        'lost_near_admission': 'near_camera_order_ok',
+        'lost_near_cull': 'near_camera_order_ok',
         'lost_mode2_cull': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'stale_mode2_world': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
