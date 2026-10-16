@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 740 — prompt requested Momentum demos and sparse KSF collection
+
+**Problem:** KSF's bounded demo lane was not enabled in the watch schedule.
+Momentum requests waited for cron or behind a frozen automatic download batch.
+
+**Change:** Enable KSF `--demos` inside its existing bounded importer budget.
+Add a supervised requested-only Momentum worker with one-second cheap queue
+polls and at most two jobs per pass; reconsider explicit requests between
+background transfers. Preserve the shared lock, persisted CDN pacing, cooldowns,
+validity/expiry/capacity and all existing codec/import/foreign-replay checks.
+Canonical helpers retain the existing sealed-generation pre-import fence;
+no sealed manifest/source, schema, native engine, QC or lobby change.
+
+**Verified:** Ten offline worker/priority controls and nine existing request
+controls pass; existing momgrab controls exit zero. Original source acts A,B
+and fails the mid-batch A,C,B falsifier, while fixed source passes. Canonical
+admitted KSF max-zero probe exits zero, discovers four pending demos and makes
+zero upstream requests. KSF schedule enabled 2026-10-16T15:30:35Z with its
+existing HTTP500 cooldown intact. Momentum delivery/live acceptance is pending;
+see FTESurf `tools/p740demograb.md` for deployment evidence and limits. No live
+KSF playback claim while its upstream is parked.
+
 ## Patch 738 — signed updates include the public tier catalogue
 
 **Problem:** P723's shipped `maps/tiers.txt` was absent from all three signed
