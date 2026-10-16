@@ -16,29 +16,29 @@ per pair on P742's budget. For a pair without one, both faces' triangles (each
 face projected once per sort through `m_view`, clipped in homogeneous space) are
 intersected on screen and affine 1/w compared at every intersection vertex:
 disjoint means no edge, one sign gives that order, mixed signs (a real crossing)
-or uncertainty keep the baseline edge. Intersections narrower than 5e-4 NDC (half
-a pixel at 1080p) are contact seams and skipped; depths within 0.01 units tie.
-Opposite strict plane proofs cannot share a view ray and add no edge. A cycle is
-retried with every edge confirmed by real overlap (pass 1), then with P742's own
-graph (pass 2), so the result is never a fallback where P742 sorted. Overlap work
-has its own 65536 budget; once spent, remaining pairs get P742's edges.
+or uncertainty keep the baseline edge. Depths within 0.01 units tie, so shared
+edges and T-junction seams give no sign. Opposite strict plane proofs cannot
+share a view ray and add no edge. A cycle or a barrier crossing (-3) is retried
+with every edge confirmed by real overlap (pass 1), then with P742's own graph
+(pass 2), so the result is never a fallback where P742 sorted. Overlap work has
+its own 65536 budget; once spent, remaining pairs get P742's edges.
 `GLBE_BlendWorldRasterEmptyNear` drops a face whose every vertex is at least 0.125
 behind the eye (w < 0 everywhere, no cull state draws it). `ALPHATRACE result`
 prints `pass=`. No map, material or surface exemptions; modes 0/1 and default1
 use P742's graph unchanged.
 
 **Verified:** Actual-C suites (`tools/test_gl_blend_faces.py`, 4 normal/HEXEN2/
-fast-math variants, 33 acting mutants; `test_gl_blend_planes.py`) pass. The frozen
+fast-math variants, 35 acting mutants; `test_gl_blend_planes.py`) pass. The frozen
 stage1 scene at the logged camera now sorts (status 1, 44 edges, 8 moved). Graded
 independently against clipped screen overlap in Python, over 360 yaws x 15
 pitches at each saved eye: stage1 (save 6) views with a pair drawn nearer-first
-fall from 978 of 5400 with P742's sorter to 3, and the stage3/save5 scene from
-475 to 0; peak work 4230. The 3 left are one pane seen edge-on (eye 0.13 from its
-plane, not admitted), at most 704 px. A review found the first cut abandoned
-busy scenes on budget, signed sub-pixel hinge seams and could cycle where P742
-did not; the projection cache, own budget, seam guards and pass 2 answer those,
-each with an acting control (hinge seams 0 signed of >1000 pairs). Geometry
-evidence, not GPU pixels; owner live check pending.
+fall from 978 of 5400 with P742's sorter to 0, and the stage3/save5 scene from
+475 to 0; peak work 4230. Two review rounds: the first cut abandoned busy scenes
+on budget, signed hinge seams and could cycle where P742 did not; a sliver-width
+cut then dropped real thin overlaps and -3 was not retried. Each fix has an
+acting control (hinge seams 0 signed of >1000 pairs; a 0.2 px-wide real overlap
+keeps its order). In the reviewer's ramp and wall scenes (16-52 faces) P742 was
+never better. Geometry evidence, not GPU pixels; owner live check pending.
 
 ## Patch 742 — retain mode2 ordering across eye-spanning world panes
 

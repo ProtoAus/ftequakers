@@ -7158,11 +7158,9 @@ static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
 // Overlap proofs spend their own budget; once it is gone, pairs get P742 edges.
 #define GLBLEND_OVERLAP_WORK 65536
 #define GLBLEND_ORDER_DISJOINT 2
-// A shared edge or T-junction meets in a sliver whose depth sign is rounding
-// noise. NDC width, about half a pixel at 1080p: skip narrower intersections.
-#define GLBLEND_SLIVER_WIDTH 5e-4
-// Depths within this many world units tie: 20x the float rounding (~0.0005)
-// of ~15000-unit Kitsune coordinates.
+// Depths within this many world units tie, so a shared edge or T-junction seam
+// gives no sign: 20x the float rounding (~0.0005) of ~15000-unit coordinates.
+// A width cut instead dropped real thin overlaps of up to ~200 px (review).
 #define GLBLEND_DEPTH_TIE 0.01
 #define GLBLEND_PAIR_UNSEEN 3	// screen bounds disjoint
 #define GLBLEND_PAIR_OPPOSED 4	// opposite strict plane proofs
@@ -7269,7 +7267,7 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 {
 	glblendproject_t clip[2][GLBLEND_OVERLAP_VERTS];
 	const glblendproject_t *pa, *pb;
-	double da, db, f, area, perimeter, det, dx = 0, dy = 0, offset = 0, za, zb, diff, eps;
+	double da, db, f, area, det, dx = 0, dy = 0, offset = 0, za, zb, diff, eps;
 	int at, bt, na, nb, n, count, src, dst, i, j, k;
 	qboolean seen = false, positive = false, negative = false;
 	if (!fa->state) GLBE_BlendProjectFace(a, fa, work);
@@ -7311,16 +7309,9 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 				n = count; src ^= 1; dst ^= 1;
 			}
 			if (n < 3) continue;
-			area = perimeter = 0;
-			for (i = 0; i < n; i++)
-			{
-				j = (i+1)%n;
-				area += clip[src][i].x*clip[src][j].y - clip[src][j].x*clip[src][i].y;
-				perimeter += sqrt((clip[src][j].x-clip[src][i].x)*(clip[src][j].x-clip[src][i].x) +
-					(clip[src][j].y-clip[src][i].y)*(clip[src][j].y-clip[src][i].y));
-			}
-			// |area| here is twice the polygon's area, so this ratio is its width.
-			if (fabs(area) <= GLBLEND_SLIVER_WIDTH*perimeter) continue;
+			area = 0;
+			for (i = 0; i < n; i++) { j = (i+1)%n; area += clip[src][i].x*clip[src][j].y - clip[src][j].x*clip[src][i].y; }
+			if (!area) continue;
 			if (hint) return hint;
 			seen = true;
 			for (i = 1; i < nb-1; i++)
@@ -7400,8 +7391,8 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		}
 	// Pass 0 refines unproved pairs by screen overlap; pass 1 also drops strict
 	// edges between faces that never overlap. Pass 2 is P742's graph: a mix of
-	// proofs and baseline edges can cycle where all-baseline did not. Mode1
-	// runs pass 2 only.
+	// proofs and baseline edges can cycle, or cross a barrier, where
+	// all-baseline did not. Mode1 runs pass 2 only.
 	stats->pass = r_blendsort.ival == 2 ? 0 : 2;
 	if (!stats->pass)
 	{
@@ -7474,7 +7465,10 @@ rebuild:
 		from = i < order[i] ? i : order[i];
 		to = i > order[i] ? i : order[i];
 		if (planes[to].slot - planes[from].slot != to - from)
-		{ stats->status = -3; goto done; }
+		{
+			if (stats->pass < 2) { stats->pass++; goto rebuild; }
+			stats->status = -3; goto done;
+		}
 	}
 	ordered = BZ_Malloc(stats->admitted * sizeof(*ordered));
 	for (i = 0; i < stats->admitted; i++)

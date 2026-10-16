@@ -733,6 +733,19 @@ int main(void) {
     cycle[i]=(mesh_t){.numvertexes=4,.numindexes=6,.xyz_array=bandxyz[i],.indexes=qi};cf[i]=(glblendface_t){.batch=&batch,.mesh=&cycle[i],.depth=3-i,.sequence=i};
    }
    GLBE_BlendPlaneSort(cf,3,&st);int parent_fallback_ok=st.admitted==3&&st.status==1&&st.pass==2&&st.moved==0;assert(parent_fallback_ok);
+   // C->A alone, across an unsupported slot: pass0 would cross the barrier
+   // (-3) where P742's baseline edge sorted, so it must retry to pass2.
+   glblendface_t barrier[3]={cf[0],{.batch=&batch,.mesh=NULL,.sequence=1},cf[2]};
+   GLBE_BlendPlaneSort(barrier,3,&st);int barrier_retry_ok=st.admitted==2&&st.status==1&&st.pass==2&&barrier[0].mesh==&cycle[0];
+   assert(barrier_retry_ok);
+  }
+  // A real overlap 4e-4 NDC wide (0.2 px at 1080p) but a full unit long keeps
+  // its true order: a width cut dropped such strips (review round 2).
+  {
+   float nearq[4][3],farq[4][3];const float qx[4]={-.5f,.5f,.5f,-.5f},qy[4]={-.5f,-.5f,.5f,.5f};
+   for(int v=0;v<4;v++){nearq[v][0]=qx[v]*10;nearq[v][1]=qy[v]*10;nearq[v][2]=10;farq[v][0]=(v==0||v==3?.4996f:1.f)*20;farq[v][1]=qy[v]*20;farq[v][2]=20;}
+   mesh_t nm={.numvertexes=4,.numindexes=6,.xyz_array=nearq,.indexes=qi},fm={.numvertexes=4,.numindexes=6,.xyz_array=farq,.indexes=qi};
+   work=0;int thin_overlap_ok=overlap_order(&nm,&fm,0,&work)==1&&overlap_order(&fm,&nm,0,&work)==-1;assert(thin_overlap_ok);
   }
   // The old triangle fixture is a COARSE graph cycle: its B/C projections are
   // disjoint. Zoom retains visible A and removes offscreen edges, not commands.
@@ -840,7 +853,7 @@ int main(void) {
    int behind_eye_order_ok=st.status==1&&p2800<0&&p4031>=0&&p4031<p281;assert(behind_eye_order_ok);
   }
  }
- puts("PASS general overlap: analytic contact/reversal/disjoint/nearclip/budget,real painter cycle retained,zoomed false-cycle retry ACTED,native12 area keys+graph corrected,33-view stage1 40..130yaw sweep no fallback/loss,behind-eye barrier dropped,hinge seams unsigned,P742-graph fallback");
+ puts("PASS general overlap: analytic contact/reversal/disjoint/nearclip/budget,real painter cycle retained,zoomed false-cycle retry ACTED,native12 area keys+graph corrected,33-view stage1 40..130yaw sweep no fallback/loss,behind-eye barrier dropped,hinge seams unsigned,thin real overlap kept,P742-graph fallback for cycles and barriers");
  puts("PASS stock-wireframe acted regression,11 conservative layer guards,once-only callback; Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,7 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
@@ -878,8 +891,9 @@ controls = {
     'lost_overlap_nearclip': base.replace('for (plane = 0; plane < 6 && n; plane++)', 'for (plane = 0; plane < 4 && n; plane++)'),
     'lost_real_cycle_abstention': base.replace('stats->status = -2; goto done;', 'stats->status = 1; goto done;'),
     'lost_mode2_only_overlap': base.replace("stats->pass = r_blendsort.ival == 2 ? 0 : 2;", "stats->pass = 0;"),
-    'lost_contact_guards': base.replace('if (fabs(area) <= GLBLEND_SLIVER_WIDTH*perimeter) continue;', 'if (!area) continue;').replace(
-        'eps = GLBLEND_DEPTH_TIE*fabs(za*zb) + 1e-15;', 'eps = 1e-8*(fabs(za)+fabs(zb)) + 1e-12;'),
+    'lost_depth_tie': base.replace('eps = GLBLEND_DEPTH_TIE*fabs(za*zb) + 1e-15;', 'eps = 1e-8*(fabs(za)+fabs(zb)) + 1e-12;'),
+    'sliver_skipped': base.replace('if (!area) continue;\n\t\t\tif (hint) return hint;', 'if (fabs(area) < 1e-3) continue;\n\t\t\tif (hint) return hint;'),
+    'lost_barrier_retry': base.replace('\t\t{\n\t\t\tif (stats->pass < 2) { stats->pass++; goto rebuild; }\n\t\t\tstats->status = -3; goto done;\n\t\t}', '\t\t{ stats->status = -3; goto done; }'),
     'lost_parent_fallback': base.replace('if (stats->pass < 2) { stats->pass++; goto rebuild; }', 'if (stats->pass < 1) { stats->pass++; goto rebuild; }'),
     'lost_behind_eye': base.replace('if (behind) return true;', 'if (behind && false) return true;'),
     'lost_behind_eye_order': base.replace('if (behind) return true;', 'if (behind && false) return true;').replace(
@@ -941,7 +955,9 @@ for name, control in controls.items():
         'lost_overlap_nearclip': 'near_homogeneous_ok',
         'lost_real_cycle_abstention': 'real_painter_cycle_ok',
         'lost_mode2_only_overlap': 'ndraw==1&&nemit==28&&ranges[0]==28',
-        'lost_contact_guards': 'hinge_noise_ok',
+        'lost_depth_tie': 'hinge_noise_ok',
+        'sliver_skipped': 'thin_overlap_ok',
+        'lost_barrier_retry': 'barrier_retry_ok',
         'lost_parent_fallback': 'parent_fallback_ok',
         'lost_behind_eye': 'behind_drop_ok',
         'lost_behind_eye_order': 'behind_eye_order_ok',
