@@ -16,13 +16,16 @@ No full map-world/delayed-I/O rollback, recorder format, engine pin/tag, QC Buil
 number or release change.
 
 **Verified:** Zero-warning fixture builds. Acting pre-change dedicated control
-fails22/46 marker assertions; subject passes46/46, including actual save/load/
+fails22/46 marker assertions; the exit correction passes46/46, including actual save/load/
 hold dispatch, both map filter predicates and wrong-name reset controls, empty/
 quoted names, original-marker demotion, ring wrap/overwrite and stale-exit/peer
 isolation and mixed name/gravity exits. Review caught silent-discard cleanup
 loss in the unshipped first candidate; that regression control fails4/46 while
-the final subject passes. Real retry queues a map restart and restores the
-marker at spawn; the same baseline loses it. Reader306/0. Production build, corpus, independent
+the corrected subject passes. A second callback-lifetime control catches
+emitting a removed successor's outputs (unshipped candidate1/49); the final
+subject passes49/49, including source-self-removal. Advance with nextent after
+callbacks so removed successors are skipped. Real retry queues a map restart
+and restores the marker at spawn; the same baseline loses it. Reader306/0. Production build, corpus, independent
 review and separate delivery provenance: FTESurf tools/p735savemarker.md.
 
 ## Patch 732 — known-port Monolith B4 KSF launch compatibility (QC only)
