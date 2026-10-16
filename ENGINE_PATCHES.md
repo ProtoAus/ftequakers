@@ -12,17 +12,20 @@ pad/authoring: grounded opposed entry, one physical-progress reapplication,
 downstream XY clamp retaining Z. Duplicate/zero-tick contacts cannot advance it.
 Finalize before another command and packet evidence sampling. Existing force
 markers attribute only the next causal ramp move; real jump input still wins,
-older taints remain. Warp/hold/spawn/invalid/timeout/side exit retire state;
-all packet exits clear transient latches. No global physics, generic VScript,
+older taints remain. Cancel/consume a pending contact on jump input without
+erasing its rise before JumpWatch's outer gate. Actual warp/hold/spawn/invalid/
+timeout/side exit retire state; nonplacement ghost restamps preserve it.
+All packet exits clear transient latches. No global physics, generic VScript,
 native pin/tag, evidence format, backend or QC Build-number change.
 
 **Verified:** Three isolated production VMs compile with0 warnings.
 Normal66/batched20pps reproduce1668.867/1665.936/1663.005→1662;
 first two dx/dz steps match all four clips within0.001. Clean timer classification
 and real older-hop rejection both act; Prosurf remains2275/normal/recording.
-44 actual-QC predicates pass; command-exit mutant fails its exact predicate.
-Three real-client normal/early/held packet exits act/clean. New run prefix passes
-reader and32-packet native replay at printing floor, zero bit/physent mismatches.
+50 actual-QC predicates pass, including actual detector/ghost paths; exact
+pre-review source rejects45/5. Command-exit mutant rejects its earlier predicate.
+Three real-client normal/early/held packet exits act/clean. New run prefixes pass
+reader and32/13-packet native replays at printing floor, zero bit/physent mismatch.
 Reader306/0; paired stable run corpus faults190→190; readable save prefixes keep
 16 existing faults and one historical read-denied fixture remains untouched.
 Prediction controls retain baseline-sized seams, not a new mirror/latency claim.
