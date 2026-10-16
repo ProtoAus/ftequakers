@@ -22,9 +22,18 @@ acting mutants pass; removing either eye-span admission or homogeneous culling
 fails near_camera_order_ok. Direct actual plane helper controls pass after
 repairing the older fixture's P739 trace-extraction seam; two wrapper setup
 failures are excluded, not feature failures. Original default1 raster/submission
-functions are byte-unchanged. Native build/delivery and owner farther-right
-visual acceptance are pending at this source checkpoint; no completed fix is
-claimed from host tests.
+functions are byte-unchanged. Clean featurec75d7a5ea/tag742 native build has74
+baseline compiler warnings and0 new; all5890 shared dependency hashes match.
+Both normal Windows clients hash-verified at2026-10-16T16:37:40Z, with known
+published P741 .prev rollback and all8 current DLL/server destinations untouched.
+A predecessor guard caught the P741 bundle arriving during the owner-exit wait;
+both client hashes matched its public immutable clean stage, and P742 includes
+that exact parent with unchanged plugin/header ABI. Prior guard/snapshot retained;
+no failed transaction or foreign work was bypassed/reverted. No progs/config/
+saves shipped. Owner confirms the stage3 section is fixed, but new stage1
+save5/6 still flip: all12 admitted/status-2/48 edges/546 work. This is NOT full
+acceptance; general ambiguous-pair graph constraints remain under investigation,
+not another eye-span exemption. FTESurf tools/p742eyespan.md.
 
 ## Patch 741 — authenticated Friends before joining a map
 
