@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 733 — bare right-aligned status and actual F2 updater dispatch (QC only)
+
+**Problem:** The updater corner still had a panel backdrop/left alignment and
+advertised F2 even without an update. P731's ordinary menu-local bind persisted
+RESTRICT_INSECURE30, so keys.c's F-key bind route reached MP_ConsoleCommand and
+was rejected. Its synthetic ui_key test bypassed that native route.
+
+**Change:** Remove the backdrop; fit all three lines to a common16-unit right
+margin. Show [F2] only for available/restart/launcher status with a working
+standard binding. Use the existing menu-only localcmd_local for the fixed
+literal bind, repairing empty/stock/ui_updates (including saved level30), while
+preserving custom binds. No engine source, dispatch trust-boundary, remote VM,
+Friends/backend or QC Build-number changes. Engine pin/tag stay unchanged.
+
+**Verified:** All three VMs zero-warning compile. Native Windows messages to only
+the owned HWND reproduce original F2 no-op while independent F3/F4 binds act;
+the subject opens the visible Updates pane from the SAME stored insecure bind.
+Empty binding also opens; custom binding still acts. Eleven status fixtures at
+1280x720 and800x600 share the correct right edge and conditional [F2] selection.
+PNGs inspected for the bare corner and actual opened pane. Status fixtures are
+NEVER DEPLOYABLE and do not prove updater HTTP/permission/restart authority.
+Evidence, exact contract and prior-test correction: tools/p733updatestatus.md.
+
 ## Patch 731 — passive updater status and roomier Play/Friends UI (QC only)
 
 **Problem:** The title menu's update button did not match its station controls;
