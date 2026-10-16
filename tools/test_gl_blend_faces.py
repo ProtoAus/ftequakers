@@ -539,7 +539,55 @@ int main(void) {
   assert(r_refdef.flipcull==viewflip&&shaderstate.curentity==&r_worldentity);
  }
  shaderstate.mbatches[0]=NULL;r_refdef.flipcull=0;shaderstate.usingweaponviewmatrix=-1;shaderstate.curentity=NULL;
- puts("PASS actual default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
+ // The new Kitsune station: all3 saved poses and33 interpolated2-to3 views.
+ // An independent triangle-ray check proves2073,2086,2047,2071 far-to-near.
+ {
+  shader_t follow_shader={.flags=SHADER_CULL_FRONT,.numpasses=1};follow_shader.remapto=&follow_shader;
+  batch_t follow_batch={.ent=&r_worldentity,.shader=&follow_shader,.mesh=follow_all,.meshes=20,.maxmeshes=20};
+  batch_t *follow_world[4]={0};follow_world[SHADER_SORT_BLEND]=&follow_batch;
+  r_worldentity.axis[0][0]=r_worldentity.axis[1][1]=r_worldentity.axis[2][2]=1;r_worldentity.scale=1;
+  entity_t preceding_world=r_worldentity;preceding_world.flags=RF_XFLIP;
+  r_origin[0]=-12947.9473f;r_origin[1]=-14884.377f;r_origin[2]=-399.9688f;
+  const double poses[3][2]={{14.2108,123.2996},{15.8368,93.1531},{16.5674,85.6384}};
+  recordmeshes=1;r_blendsort.ival=2;shaderstate.mbatches[SHADER_SORT_BLEND]=NULL;
+  for(int pose=0;pose<36;pose++) {
+   double t=pose<3?0:(pose-3)/32.0;
+   double pitch=(pose<3?poses[pose][0]:poses[1][0]+t*(poses[2][0]-poses[1][0]))*3.141592653589793/180;
+   double yaw=(pose<3?poses[pose][1]:poses[1][1]+t*(poses[2][1]-poses[1][1]))*3.141592653589793/180;
+   vpn[0]=cos(pitch)*cos(yaw);vpn[1]=cos(pitch)*sin(yaw);vpn[2]=-sin(pitch);
+   vright[0]=sin(yaw);vright[1]=-cos(yaw);vright[2]=0;
+   vup[0]=sin(pitch)*cos(yaw);vup[1]=sin(pitch)*sin(yaw);vup[2]=cos(pitch);
+   for(int j=0;j<3;j++){r_refdef.m_view[j*4]=vright[j];r_refdef.m_view[j*4+1]=vup[j];r_refdef.m_view[j*4+2]=-vpn[j];}
+   r_refdef.m_view[12]=r_refdef.m_view[13]=r_refdef.m_view[14]=0;
+   for(int j=0;j<3;j++){r_refdef.m_view[12]-=vright[j]*r_origin[j];r_refdef.m_view[13]-=vup[j]*r_origin[j];r_refdef.m_view[14]+=vpn[j]*r_origin[j];}
+   shaderstate.curentity=&preceding_world;shaderstate.usingweaponviewmatrix=RF_XFLIP;shaderstate.flags=0;r_refdef.flipcull=SHADER_CULL_FLIP;
+   ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   int a=-1,b=-1,c=-1,d=-1;
+   for(int i=0;i<nemit;i++){if(emitted[i]==2073)a=i;if(emitted[i]==2086)b=i;if(emitted[i]==2047)c=i;if(emitted[i]==2071)d=i;}
+   assert(a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d);
+   assert(r_refdef.flipcull==0&&shaderstate.curentity==&r_worldentity);
+  }
+  assert(nemit==12); //8 proven raster-empty commands omitted, not visible panes.
+  ndraw=nemit=0;r_blendsort.ival=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+  assert(ndraw==1&&nemit==20&&ranges[0]==20);
+  for(int i=0;i<20;i++)assert(emitted[i]==follow_all[i]->id);
+  r_blendsort.ival=2;
+  for(int guard=0;guard<7;guard++) {
+   follow_shader.flags=SHADER_CULL_FRONT;follow_shader.numpasses=1;follow_shader.prog=NULL;
+   follow_batch.flags=0;follow_batch.fog=NULL;r_refdef.recurse=0;r_refdef.useperspective=1;
+   if(guard==0)follow_shader.flags=0;
+   if(guard==1)follow_shader.prog=&follow_shader;
+   if(guard==2)follow_shader.numpasses=2;
+   if(guard==3)follow_batch.fog=&follow_batch;
+   if(guard==4)follow_batch.flags=BEF_FORCETWOSIDED;
+   if(guard==5)r_refdef.recurse=1;
+   if(guard==6)r_refdef.useperspective=0;
+   ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   assert(nemit==20); // uncertainty keeps every original command.
+  }
+  r_refdef.recurse=0;r_refdef.useperspective=1;r_blendsort.ival=1;recordmeshes=0;
+ }
+ puts("PASS Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,7 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
@@ -555,7 +603,7 @@ for name in names:
 flags = '\n'.join(flag_lines)
 for name in ['BEF_FORCEADDITIVE', 'BEF_NODLIGHT', 'BEF_NOSHADOWS', 'BEF_FORCETWOSIDED']:
     flags += '\n' + next(line.split('//')[0] for line in shader_header.splitlines() if line.startswith('#define ' + name + '\t'))
-c.write_text(pre.replace('__ACTUAL_FLAGS__', flags).replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates).replace('__ACTUAL_SELECTENTITY_SEAM__', select_seam) + normal_matrix + post + selectentity + cull + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + (engine.parent/'tools/blend_world_fixtures.inc').read_text() + tests)
+c.write_text(pre.replace('__ACTUAL_FLAGS__', flags).replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates).replace('__ACTUAL_SELECTENTITY_SEAM__', select_seam) + normal_matrix + post + selectentity + cull + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + (engine.parent/'tools/blend_world_fixtures.inc').read_text() + (engine.parent/'tools/blend_yaw_fixtures.inc').read_text() + tests)
 suffix = '.exe' if os.name == 'nt' else ''
 exe = root / ('gl_blend_faces_test' + suffix)
 flags = ['-std=c99', '-Wall', '-Wextra', '-Werror', '-O2', '-fno-strict-aliasing']
@@ -568,6 +616,8 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 base = c.read_text()
 raster = actual[actual.index('static qboolean GLBE_BlendWorldRasterEmpty'):actual.index('static void GLBE_SubmitBlendedWorld')]
 controls = {
+    'lost_mode2_cull': base.replace('if (cullworld && GLBE_BlendWorldRasterEmpty(batch, mesh))', 'if (false && GLBE_BlendWorldRasterEmpty(batch, mesh))'),
+    'stale_mode2_world': base.replace('\t\t\t\tif (cullworld && shaderstate.curentity != batch->ent)\n\t\t\t\t\tGLBE_SelectEntity(batch->ent);', ''),
     'lost_area_center': base.replace('faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);',
         'faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix); faces[n].depth = GLBE_BlendFaceDepth(mesh, matrix);'),
     # Test-only labels deliberately invert the fourth contributor while
@@ -612,6 +662,8 @@ for name, control in controls.items():
     (root / f'{name}-control.log').write_text(failed.stdout + failed.stderr)
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed
     predicate = {
+        'lost_mode2_cull': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
+        'stale_mode2_world': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
         'stale_entity_cull': 'nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250',
         'lost_marginal_area': '!GLBE_BlendWorldRasterEmpty(&cb,&marginal)',
@@ -621,7 +673,7 @@ for name, control in controls.items():
         'original_not_remapped_cull': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
         'lost_flipcull': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
         'lost_twosided': 'GLBE_BlendWorldRasterEmpty(&cb,&culled)==empty',
-        'first_triangle_only': 'a>=0&&d>=0&&b>=0&&c>=0',
+        'first_triangle_only': 'ndraw==3&&draws[0]==1235', # now ACTS earlier through mode2's shared proof
         'filtered_not_raw_budget': 'ndraw==2&&ranges[0]==127&&ranges[1]==2',
     }.get(name)
     if predicate:

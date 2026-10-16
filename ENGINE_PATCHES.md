@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 737 — cull-aware mode2 plane ordering
+
+**Problem:** Owner confirms P736 fixes the original Kitsune saved view, but
+saves2/3 turned right expose another flip. The actual C sorter with20 nearby
+source-map grid fans reproduces a pose3 constraint cycle and angle-dependent
+fallback. Proven GL-empty backfaces were still participating in mode2's graph;
+default1 already excluded them conservatively.
+
+**Change:** Reuse the existing static-world/single-pass raster-empty proof before
+mode2 gathers face commands. Select the real world entity first, clearing a
+preceding RF_XFLIP exactly as actual world submission does. Only proven empty
+commands disappear; uncertain/near-span, program, multipass, fog, two-sided,
+recursive, nonstandard-view, dynamic/coarse/capture paths retain prior handling.
+Modes0/1/default1, budgets, plane proofs and P736's centres are unchanged. No map
+or surface-ID renderer condition, ABI/header, shader, QC Build or evidence change.
+
+**Verified:** Actual dispatcher: all3 saved poses plus33 interpolated2-to3
+views retain independently established2073/2086/2047/2071 pane order. Four
+normal/HEXEN2/fast-math Werror variants and20 named acting mutants pass, including
+old-mode2/no-cull and stale-world selection. Seven unsupported-context guards
+retain all20 commands; mode0 retains its full original range. Existing plane
+helper controls pass. Separate indexed-triangle/ray sampling checks6456 overlap
+pairs with0 expected-order errors; P736's save3 fallback reverses2452 samples.
+An initially inconsistent synthetic XFLIP state is corrected/excluded, not
+counted as evidence. Build/delivery provenance and the simple owner save3 gate:
+FTESurf tools/p737alphacull2.md. No GPU/performance or universal transparency
+claim; owner visual acceptance remains pending.
+
 ## Patch 736 — tessellation-stable mode2 transparency centres
 
 **Problem:** The owner's saved Kitsune ramp/floor view changes apparent layer

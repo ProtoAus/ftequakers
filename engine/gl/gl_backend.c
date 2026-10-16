@@ -6889,6 +6889,10 @@ static qboolean GLBE_BlendFaceEligible(const batch_t *batch)
 	return true;
 }
 
+// Mode2 shares default1's conservative static-world raster proof.
+static qboolean GLBE_BlendWorldBatchEligible(batch_t *batch);
+static qboolean GLBE_BlendWorldRasterEmpty(const batch_t *batch, const mesh_t *mesh);
+
 #define GLBLEND_PLANE_FACES 128
 #define GLBLEND_PLANE_VERTS 64
 #define GLBLEND_PLANE_INDEXES 192
@@ -7134,6 +7138,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	size_t count = 0, n = 0, f;
 	unsigned int m;
 	int l;
+	qboolean cullworld;
 	float matrix[16], modelview[16];
 
 	// Finish capture/portal/sky recursion before gathering root-view records.
@@ -7169,10 +7174,16 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					n++;
 					continue;
 				}
+				cullworld = !r_refdef.recurse && GLBE_BlendPlaneViewEligible() && GLBE_BlendWorldBatchEligible(batch);
+				if (cullworld && shaderstate.curentity != batch->ent)
+					GLBE_SelectEntity(batch->ent);
 				for (m = batch->firstmesh; m < batch->meshes; m++)
 				{
 					mesh_t *mesh = batch->mesh[m];
 					if (!mesh || !mesh->xyz_array || mesh->numvertexes <= 0 || mesh->numindexes <= 0)
+						continue;
+					// Invisible backfaces must not create cycles in the plane graph.
+					if (cullworld && GLBE_BlendWorldRasterEmpty(batch, mesh))
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;
