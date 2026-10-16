@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 735 — restore save-lock map progress names (QC only)
+
+**Problem:** Monolith B4 and bhop_futile use player targetnames as progress
+markers for filtered reset teleports. Save-locks restored position and timer
+without restoring the marker, retaining later progress or none after a restart.
+
+**Change:** Capture/restore exact, quoted player targetname, including empty.
+Preserve it through demotion, retry/resume readers and bounded warm-rewind
+snapshots. Forget only the restored player's abandoned trigger occupancy so
+stale EndTouch outputs cannot overwrite it; preserve once/cooldown and peer
+state. Leave map filters intact. Legacy saves and unsampled replay positions
+cannot invent missing historical progress; affected old saves need re-creation.
+No full map-world/delayed-I/O rollback, recorder format, engine pin/tag, QC Build
+number or release change.
+
+**Verified:** Zero-warning fixture builds. Acting pre-change dedicated control
+fails22/40 marker assertions; subject passes40/40, including actual save/load/
+hold dispatch, both map filter predicates and wrong-name reset controls, empty/
+quoted names, original-marker demotion, ring wrap/overwrite and stale-exit/peer
+isolation. Real retry queues a map restart and restores the marker at spawn;
+the same baseline loses it. Reader306/0. Production build, corpus, independent
+review and separate delivery provenance: FTESurf tools/p735savemarker.md.
+
 ## Patch 732 — known-port Monolith B4 KSF launch compatibility (QC only)
 
 **Problem:** Momentum's one-shot1662/398.301 opposed-ramp launch settles near
