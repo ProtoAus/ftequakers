@@ -6944,6 +6944,7 @@ typedef struct
 {
 	unsigned int admitted, edges, work, moved;
 	int status; // 0 unchanged, 1 ordered, -1 budget, -2 cycle.
+	int pass; // mode2 graph: 0 overlap, 1 overlap-confirmed, 2 P742.
 } glblendplanestats_t;
 
 static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
@@ -7154,35 +7155,52 @@ static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
 
 #define GLBLEND_CLIP_VERTS 16
 #define GLBLEND_OVERLAP_VERTS 32
+// Overlap proofs spend their own budget; once it is gone, pairs get P742 edges.
+#define GLBLEND_OVERLAP_WORK 65536
 #define GLBLEND_ORDER_DISJOINT 2
-#define GLBLEND_ORDER_BUDGET 3
+// A shared edge or T-junction meets in a sliver whose depth sign is rounding
+// noise. NDC width, about half a pixel at 1080p: skip narrower intersections.
+#define GLBLEND_SLIVER_WIDTH 5e-4
+// Depths within this many world units tie: 20x the float rounding (~0.0005)
+// of ~15000-unit Kitsune coordinates.
+#define GLBLEND_DEPTH_TIE 0.01
+#define GLBLEND_PAIR_UNSEEN 3	// screen bounds disjoint
+#define GLBLEND_PAIR_OPPOSED 4	// opposite strict plane proofs
+#define GLBLEND_PAIR_PENDING 5	// overlap verdict not computed yet
 typedef struct { double x, y, iw; } glblendproject_t;
+typedef struct
+{
+	glblendproject_t *verts;	// GLBLEND_CLIP_VERTS per triangle
+	signed char *count;		// per triangle: polygon vertices, 0 if empty
+	int state;			// 0 pending, 1 projected, -1 uncertain or out of budget
+} glblendprojface_t;
 
 // Clip an indexed world triangle before division; iw is affine on its screen
-// polygon. Negative returns mean uncertainty/budget, never empty coverage.
+// polygon. -1 is uncertainty, -2 budget, 0 empty.
 static int GLBE_BlendProjectTriangle(const mesh_t *mesh, int t, glblendproject_t *out, unsigned int *work)
 {
-	double h[2][GLBLEND_CLIP_VERTS][4], view[4], p[3], da, db, f, area;
-	const float *proj = r_refdef.m_projection_std;
+	double h[2][GLBLEND_CLIP_VERTS][4], view[4], da, db, f, area;
+	// The world's GL modelview, not r_origin/vright: GLR_DrawPortal rebuilds
+	// those without screen roll or eye offsets, m_view keeps them.
+	const float *proj = r_refdef.m_projection_std, *m = r_refdef.m_view;
 	int i, j, k, v, plane, axis, sign, n = 3, count, src = 0, dst = 1;
 	unsigned int index;
-	for (j = 0; j < 16; j++) if (IS_NAN(proj[j])) return -1;
+	for (j = 0; j < 16; j++) if (IS_NAN(proj[j]) || IS_NAN(m[j])) return -1;
 	for (v = 0; v < 3; v++)
 	{
-		if (*work >= GLBLEND_PLANE_WORK) return -2;
+		if (*work >= GLBLEND_OVERLAP_WORK) return -2;
 		(*work)++;
 		index = mesh->indexes[t+v];
 		if (index >= (unsigned int)mesh->numvertexes) return -1;
 		for (j = 0; j < 3; j++)
 		{
-			if (IS_NAN(r_origin[j]) || IS_NAN(vright[j]) || IS_NAN(vup[j]) || IS_NAN(vpn[j])) return -1;
-			p[j] = (double)mesh->xyz_array[index][j] - r_origin[j];
+			if (IS_NAN(mesh->xyz_array[index][j])) return -1;
+			view[j] = m[12+j];
 		}
-		view[0] = view[1] = view[2] = 0; view[3] = 1;
-		for (j = 0; j < 3; j++)
-		{
-			view[0] += p[j]*vright[j]; view[1] += p[j]*vup[j]; view[2] -= p[j]*vpn[j];
-		}
+		for (k = 0; k < 3; k++)
+			for (j = 0; j < 3; j++)
+				view[j] += (double)m[k*4+j]*mesh->xyz_array[index][k];
+		view[3] = 1;
 		for (j = 0; j < 4; j++)
 		{
 			h[0][v][j] = 0;
@@ -7194,7 +7212,7 @@ static int GLBE_BlendProjectTriangle(const mesh_t *mesh, int t, glblendproject_t
 		axis = plane/2; sign = (plane & 1) ? -1 : 1; count = 0;
 		for (i = 0; i < n; i++)
 		{
-			if (*work >= GLBLEND_PLANE_WORK) return -2;
+			if (*work >= GLBLEND_OVERLAP_WORK) return -2;
 			(*work)++;
 			j = (i+1)%n;
 			da = h[src][i][3] + sign*h[src][i][axis];
@@ -7224,33 +7242,46 @@ static int GLBE_BlendProjectTriangle(const mesh_t *mesh, int t, glblendproject_t
 	}
 	area = 0;
 	for (i = 0; i < n; i++) { j = (i+1)%n; area += out[i].x*out[j].y - out[j].x*out[i].y; }
-	if (!area) return 0;
-	if (fabs(area) < 1e-16) return -1;
+	// A degenerate (edge-on or collinear-split) triangle covers no pixel.
+	if (fabs(area) < 1e-16) return 0;
 	if (area < 0)
 		for (i = 0; i < n/2; i++) { glblendproject_t swap = out[i]; out[i] = out[n-1-i]; out[n-1-i] = swap; }
 	return n;
 }
 
-// A strict whole-plane hint needs only coverage confirmation. Otherwise compare
-// reciprocal depths at every intersection vertex, including contact boundaries.
-static int GLBE_BlendOverlapOrder(const mesh_t *a, const mesh_t *b, int hint, unsigned int *work)
+// Each admitted face is projected once per sort, on first use.
+static void GLBE_BlendProjectFace(const mesh_t *mesh, glblendprojface_t *face, unsigned int *work)
 {
-	glblendproject_t pa[GLBLEND_CLIP_VERTS], pb[GLBLEND_CLIP_VERTS];
+	int t, n;
+	face->state = 1;
+	for (t = 0; t+2 < mesh->numindexes; t += 3)
+	{
+		n = GLBE_BlendProjectTriangle(mesh, t, face->verts + (t/3)*GLBLEND_CLIP_VERTS, work);
+		if (n < 0) { face->state = -1; return; }
+		face->count[t/3] = n;
+	}
+}
+
+// 1/w is affine on the convex screen intersection, so its vertices bound the
+// depth order. hint: a strict plane order that needs only coverage confirmed.
+// Uncertainty or a spent budget returns hint (P742's edge).
+static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const mesh_t *b, glblendprojface_t *fb, int hint, unsigned int *work)
+{
 	glblendproject_t clip[2][GLBLEND_OVERLAP_VERTS];
-	double da, db, f, area, det, dx = 0, dy = 0, offset = 0, za, zb, diff, eps;
+	const glblendproject_t *pa, *pb;
+	double da, db, f, area, perimeter, det, dx = 0, dy = 0, offset = 0, za, zb, diff, eps;
 	int at, bt, na, nb, n, count, src, dst, i, j, k;
 	qboolean seen = false, positive = false, negative = false;
-	for (at = 0; at < a->numindexes; at += 3)
+	if (!fa->state) GLBE_BlendProjectFace(a, fa, work);
+	if (!fb->state) GLBE_BlendProjectFace(b, fb, work);
+	if (fa->state < 0 || fb->state < 0) return hint;
+	for (at = 0; at < a->numindexes/3; at++)
 	{
-		na = GLBE_BlendProjectTriangle(a, at, pa, work);
-		if (na == -2) return GLBLEND_ORDER_BUDGET;
-		if (na < 0) return hint;
+		na = fa->count[at]; pa = fa->verts + at*GLBLEND_CLIP_VERTS;
 		if (!na) continue;
-		for (bt = 0; bt < b->numindexes; bt += 3)
+		for (bt = 0; bt < b->numindexes/3; bt++)
 		{
-			nb = GLBE_BlendProjectTriangle(b, bt, pb, work);
-			if (nb == -2) return GLBLEND_ORDER_BUDGET;
-			if (nb < 0) return hint;
+			nb = fb->count[bt]; pb = fb->verts + bt*GLBLEND_CLIP_VERTS;
 			if (!nb) continue;
 			memcpy(clip[0], pa, na*sizeof(*pa)); n = na; src = 0; dst = 1;
 			for (k = 0; k < nb && n; k++)
@@ -7259,7 +7290,7 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, const mesh_t *b, int hint, un
 				for (i = 0; i < n; i++)
 				{
 					glblendproject_t *p = &clip[src][i], *q = &clip[src][(i+1)%n];
-					if (*work >= GLBLEND_PLANE_WORK) return GLBLEND_ORDER_BUDGET;
+					if (*work >= GLBLEND_OVERLAP_WORK) return hint;
 					(*work)++;
 					da = (pb[j].x-pb[k].x)*(p->y-pb[k].y) - (pb[j].y-pb[k].y)*(p->x-pb[k].x);
 					db = (pb[j].x-pb[k].x)*(q->y-pb[k].y) - (pb[j].y-pb[k].y)*(q->x-pb[k].x);
@@ -7280,13 +7311,18 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, const mesh_t *b, int hint, un
 				n = count; src ^= 1; dst ^= 1;
 			}
 			if (n < 3) continue;
-			area = 0;
-			for (i = 0; i < n; i++) { j = (i+1)%n; area += clip[src][i].x*clip[src][j].y - clip[src][j].x*clip[src][i].y; }
-			if (!area) continue;
-			// A tiny intersection can be a shared contact edge after rounding;
-			// it does not make either triangle's depth plane ill-conditioned.
+			area = perimeter = 0;
+			for (i = 0; i < n; i++)
+			{
+				j = (i+1)%n;
+				area += clip[src][i].x*clip[src][j].y - clip[src][j].x*clip[src][i].y;
+				perimeter += sqrt((clip[src][j].x-clip[src][i].x)*(clip[src][j].x-clip[src][i].x) +
+					(clip[src][j].y-clip[src][i].y)*(clip[src][j].y-clip[src][i].y));
+			}
+			// |area| here is twice the polygon's area, so this ratio is its width.
+			if (fabs(area) <= GLBLEND_SLIVER_WIDTH*perimeter) continue;
 			if (hint) return hint;
-			seen = true; det = 0;
+			seen = true;
 			for (i = 1; i < nb-1; i++)
 			{
 				det = (pb[i].x-pb[0].x)*(pb[i+1].y-pb[0].y) - (pb[i+1].x-pb[0].x)*(pb[i].y-pb[0].y);
@@ -7300,7 +7336,8 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, const mesh_t *b, int hint, un
 			for (i = 0; i < n; i++)
 			{
 				za = clip[src][i].iw; zb = dx*clip[src][i].x + dy*clip[src][i].y + offset;
-				diff = za-zb; eps = 1e-8*(fabs(za)+fabs(zb)) + 1e-12;
+				// A depth gap dw moves 1/w by about dw/w^2.
+				diff = za-zb; eps = GLBLEND_DEPTH_TIE*fabs(za*zb) + 1e-15;
 				if (diff > eps) positive = true;
 				if (diff < -eps) negative = true;
 			}
@@ -7315,14 +7352,16 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 {
 	glblendplane_t *planes;
 	glblendface_t *ordered;
-	unsigned char *edges;
+	glblendprojface_t *proj = NULL;
+	glblendproject_t *projverts = NULL;
+	signed char *projcount = NULL, *pair = NULL, *verdict = NULL;
+	unsigned char *edges = NULL;
 	unsigned int degree[GLBLEND_PLANE_FACES] = {0}, order[GLBLEND_PLANE_FACES];
-	unsigned int verts = 0, i, j, pick, step, from, to, cost;
+	unsigned int verts = 0, tris = 0, i, j, pick, step, from, to, cost, idx, owork = 0;
 	size_t f;
 	int ab, ba;
-	qboolean refine = (r_blendsort.ival == 2), exactcoverage = false;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
-	stats->status = 0;
+	stats->status = stats->pass = 0;
 	// The point-eye and divided screen bounds prove only perspective rays.
 	// Nonstandard modes may select an override program with different geometry.
 	if (!GLBE_BlendPlaneViewEligible())
@@ -7342,6 +7381,45 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	if (stats->admitted < 2)
 	{ BZ_Free(planes); return; }
 	edges = BZ_Malloc(stats->admitted * stats->admitted);
+	pair = BZ_Malloc(stats->admitted * stats->admitted);
+	// Plane-side proofs once per pair, on P742's budget.
+	for (i = 0; i < stats->admitted; i++)
+		for (j = i+1; j < stats->admitted; j++)
+		{
+			idx = i*stats->admitted + j;
+			if (planes[i].maxs[0] < planes[j].mins[0] || planes[j].maxs[0] < planes[i].mins[0] ||
+				planes[i].maxs[1] < planes[j].mins[1] || planes[j].maxs[1] < planes[i].mins[1])
+			{ pair[idx] = GLBLEND_PAIR_UNSEEN; continue; }
+			cost = planes[i].mesh->numvertexes + planes[j].mesh->numvertexes;
+			if (cost > GLBLEND_PLANE_WORK - stats->work)
+			{ stats->status = -1; goto done; }
+			stats->work += cost;
+			ab = GLBE_BlendPlaneSide(&planes[i], &planes[j]);
+			ba = -GLBE_BlendPlaneSide(&planes[j], &planes[i]);
+			pair[idx] = (ab && ba && ab != ba) ? GLBLEND_PAIR_OPPOSED : ab ? ab : ba;
+		}
+	// Pass 0 refines unproved pairs by screen overlap; pass 1 also drops strict
+	// edges between faces that never overlap. Pass 2 is P742's graph: a mix of
+	// proofs and baseline edges can cycle where all-baseline did not. Mode1
+	// runs pass 2 only.
+	stats->pass = r_blendsort.ival == 2 ? 0 : 2;
+	if (!stats->pass)
+	{
+		for (i = 0; i < stats->admitted; i++)
+			tris += planes[i].mesh->numindexes/3;
+		verdict = BZ_Malloc(stats->admitted * stats->admitted);
+		memset(verdict, GLBLEND_PAIR_PENDING, stats->admitted * stats->admitted);
+		proj = BZ_Malloc(stats->admitted * sizeof(*proj));
+		projverts = BZ_Malloc(tris * GLBLEND_CLIP_VERTS * sizeof(*projverts));
+		projcount = BZ_Malloc(tris);
+		for (i = 0, tris = 0; i < stats->admitted; i++)
+		{
+			proj[i].verts = projverts + tris*GLBLEND_CLIP_VERTS;
+			proj[i].count = projcount + tris;
+			proj[i].state = 0;
+			tris += planes[i].mesh->numindexes/3;
+		}
+	}
 rebuild:
 	stats->edges = 0;
 	memset(edges, 0, stats->admitted * stats->admitted);
@@ -7349,29 +7427,25 @@ rebuild:
 	for (i = 0; i < stats->admitted; i++)
 		for (j = i+1; j < stats->admitted; j++)
 		{
-			if (planes[i].maxs[0] < planes[j].mins[0] || planes[j].maxs[0] < planes[i].mins[0] ||
-				planes[i].maxs[1] < planes[j].mins[1] || planes[j].maxs[1] < planes[i].mins[1])
+			idx = i*stats->admitted + j;
+			ab = pair[idx];
+			if (ab == GLBLEND_PAIR_UNSEEN)
 				continue;
-			cost = planes[i].mesh->numvertexes + planes[j].mesh->numvertexes;
-			if (cost > GLBLEND_PLANE_WORK - stats->work)
-			{ stats->status = -1; goto done; }
-			stats->work += cost;
-			ab = GLBE_BlendPlaneSide(&planes[i], &planes[j]);
-			ba = -GLBE_BlendPlaneSide(&planes[j], &planes[i]);
-			if (ab && ba && ab != ba)
+			if (stats->pass == 2)
 			{
-				// Opposite strict orders cannot share a positive view ray.
-				if (refine) continue;
-				ab = 0;
+				if (ab == GLBLEND_PAIR_OPPOSED) ab = 0;
 			}
-			else if (!ab) ab = ba;
-			if (refine && (!ab || exactcoverage))
+			// Opposite strict orders cannot share a positive view ray.
+			else if (ab == GLBLEND_PAIR_OPPOSED)
+				continue;
+			else if (!ab || stats->pass == 1)
 			{
-				ab = GLBE_BlendOverlapOrder(planes[i].mesh, planes[j].mesh, ab, &stats->work);
-				if (ab == GLBLEND_ORDER_BUDGET) { stats->status = -1; goto done; }
+				if (verdict[idx] == GLBLEND_PAIR_PENDING)
+					verdict[idx] = GLBE_BlendOverlapOrder(planes[i].mesh, &proj[i], planes[j].mesh, &proj[j], ab, &owork);
+				ab = verdict[idx];
 				if (ab == GLBLEND_ORDER_DISJOINT) continue;
 			}
-			// Genuine depth reversals/uncertainty still preserve baseline order.
+			// Genuine depth reversals/uncertainty preserve baseline order.
 			if (!ab) ab = -1;
 			from = ab < 0 ? i : j; to = ab < 0 ? j : i;
 			edges[from*stats->admitted + to] = 1;
@@ -7385,9 +7459,7 @@ rebuild:
 			if (!degree[pick]) break;
 		if (pick == stats->admitted)
 		{
-			// Broad bounds can invent even strict but unnecessary edges. Retry
-			// with actual viewport coverage before declaring a painter cycle.
-			if (refine && !exactcoverage) { exactcoverage = true; goto rebuild; }
+			if (stats->pass < 2) { stats->pass++; goto rebuild; }
 			stats->status = -2; goto done;
 		}
 		order[step] = pick;
@@ -7415,6 +7487,12 @@ rebuild:
 	BZ_Free(ordered);
 	stats->status = 1;
 done:
+	stats->work += owork;
+	if (projcount) BZ_Free(projcount);
+	if (projverts) BZ_Free(projverts);
+	if (proj) BZ_Free(proj);
+	if (verdict) BZ_Free(verdict);
+	BZ_Free(pair);
 	BZ_Free(edges);
 	BZ_Free(planes);
 }
@@ -7506,9 +7584,9 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 		GLBE_BlendPlaneSort(faces, n, &stats);
 	if (trace)
 	{
-		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u\n",
+		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d\n",
 			(unsigned int)count, (unsigned int)n, (unsigned int)stats.admitted, stats.status,
-			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved);
+			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass);
 		for (f = 0; f < n && f < GLBLEND_PLANE_FACES; f++)
 		{
 			batch_t *b = faces[f].batch;

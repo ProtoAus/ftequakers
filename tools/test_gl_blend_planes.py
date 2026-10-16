@@ -52,7 +52,7 @@ typedef struct { int numdeforms; struct shader_s_unused *unused; void *remapto; 
 #define SBITS_TESSELLATION (1u<<20)
 #define BEM_STANDARD 0
 __SHADER__
-static struct { int useperspective; float m_projection_std[16]; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0}};
+static struct { int useperspective; float m_projection_std[16], m_view[16]; } r_refdef={1,{1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},{0}};
 static struct { int mode; } shaderstate={BEM_STANDARD};
 static struct { int ival; } r_blendsort={1};
 typedef struct { int unused; } entity_t;
