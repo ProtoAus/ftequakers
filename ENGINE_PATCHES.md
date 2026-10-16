@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 731 — passive updater status and roomier Play/Friends UI (QC only)
+
+**Problem:** The title menu's update button did not match its station controls;
+fixed filter rows displaced map previews. Existing private Friends presence
+had no map-picker window. The Friends/backend continuation remains independent.
+
+**Change:** Passive top-right current/latest status and F2 access to the existing
+updater. Consented background updates no longer force its pane open. Collapsible
+filters retain state and a Compact/Large preview switch offers 78x44 or 128x72
+thumbnails. Optional Friends sidebar/drawer reads an isolated, non-archived CSQC
+adapter over P722's completed private snapshots. Join reuses Friends_Action and
+its authenticated lobby response arm; no backend, schema, wire or Steam changes.
+Disconnected/stale data is unavailable, never silently classified offline.
+Release staging stamps its final version in its own default.cfg; dev menus show
+their compiled source version. No native change, engine pin/tag or QC build bump.
+
+**Verified:** All three isolated QC VMs compile with zero warnings. Native
+1280x720 and 800x600 socket controls pass F2, retained tier/results, map scrolling,
+row density, 128 friends, completed-vs-partial publication, stale/clear behavior,
+one UI-to-CSQC join request and pending/offline negatives. PNGs inspected for
+large/compact previews, the updater corner, wide sidebar and narrow drawer.
+At 720p collapsed filters recover two large rows (5 vs 3); compact shows 8.
+Synthetic presence is NOT live Steam/backend or a completed cross-lobby join.
+Commands, evidence and the adapter compatibility contract: tools/p731menu.md.
+
 ## Patch 729 — preserved map photos, eager manifests and saved-zone drafts
 
 **Problem:** Surf/bhop picture coverage depended on incomplete cached prefixes;
