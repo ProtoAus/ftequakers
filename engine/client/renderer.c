@@ -30,6 +30,10 @@ int r_regsequence;
 int rspeeds[RSPEED_MAX];
 int rquant[RQUANT_MAX];
 
+#ifdef GLQUAKE
+void GLBE_BlendTrace_f(void);
+#endif
+
 static void R_RegisterBuiltinRenderers(void);
 void R_InitParticleTexture (void);
 void R_RestartRenderer (rendererstate_t *newr);
@@ -1305,6 +1309,9 @@ void Renderer_Init(void)
 	Cvar_Register (&r_voidvis, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidfog, GLRENDEREROPTIONS);	//FTESurf Patch 329
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
+#ifdef GLQUAKE
+	Cmd_AddCommandD("r_blendtrace", GLBE_BlendTrace_f, "Prints anonymous view/command/plane diagnostics for the next main-view r_blendsort 2 pass. One-shot; does not change rendering.");
+#endif
 	Cvar_Register (&r_reflectcube, GLRENDEREROPTIONS);
 	Cvar_Register (&r_envcubemap, GLRENDEREROPTIONS);			//FTESurf Patch 268 B
 	Cvar_Register (&r_reflectcube_nosky, GLRENDEREROPTIONS);	//FTESurf Patch 268 B

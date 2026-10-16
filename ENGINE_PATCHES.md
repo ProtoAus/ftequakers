@@ -22,6 +22,42 @@ existing HTTP500 cooldown intact. Momentum delivery/live acceptance is pending;
 see FTESurf `tools/p740demograb.md` for deployment evidence and limits. No live
 KSF playback claim while its upstream is parked.
 
+## Patch 739 — keep wire annotations out of world-pane ordering
+
+**Problem:** The owner's actual OpenGL frame has383 raw/375 gathered blend
+commands,7 admitted planes and status-3 (unsupported-slot barrier), not the
+12-command static model. Hundreds of stock CSQC wire annotations interleave
+with the glass by centre depth. The conservative barrier then abandons the
+whole world-plane correction as the camera turns. Earlier static passes did
+not cover those live annotation commands.
+
+**Change:** In root perspective mode2, keep stock CSQC `fill_trans` wire
+annotations in the legacy post-world layer. They retain ordinary opaque depth
+testing, widths, relative depth ordering and exactly-once callback replay;
+this is not xray or a draw suppression. As in default1, annotations are drawn
+after translucent world surfaces rather than attenuated by them. Recognition
+requires the actual stock shader, identity remap, one pass, no deformation or
+pass program, ordinary line/no-shadow/no-light flags, world entity, no fog/VBO
+and the known scenetris builder. Custom/remapped/multipass/deforming geometry,
+other callbacks, models and recursive/orthographic passes retain existing
+conservative behavior. Default0/1 and the graph itself are unchanged. The
+local-only one-shot `r_blendtrace` tool reports anonymous state/order without
+names, GUIDs or pointers and does not change rendering.
+
+**Verified:** A single interleaved stock wire command ACTED and failed the
+actual collector's four-pane-order assertion before the fix, then passes with
+all panes and the one annotation retained and its callback called once.
+All4 normal/HEXEN2/fast-math variants and21 deliberate regression controls pass;
+11 unsupported annotation contexts remain excluded. Default1/dispatch source
+is byte-identical to published P738. Clean feature87df379ec/tag739 native build
+has74 baseline compiler warnings and0 new; both normal Windows client hashes
+are verified with P737 .prev rollback. Plugin/header ABI and all5890 shared
+dependency files are unchanged, permitting client-only delivery without stopping
+an owner's game to replace loaded, unchanged DLLs. Other8 native destinations,
+progs/config/saves are not shipped. Owner live angular acceptance remains
+PENDING; portable success is not its replacement. Full provenance and human
+check: FTESurf tools/p739annotations.md.
+
 ## Patch 738 — signed updates include the public tier catalogue
 
 **Problem:** P723's shipped `maps/tiers.txt` was absent from all three signed

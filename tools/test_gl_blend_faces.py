@@ -99,12 +99,17 @@ struct entity_s { unsigned flags; float axis[3][3],origin[3]; model_t *model; fl
 #define mod_alias 1
 static struct { int ival; } ruleset_allow_larger_models={1};
 #define Con_DPrintf(...) ((void)0)
+#define QR_OPENGL 1
+static int qrenderer=QR_OPENGL, test_insecure, test_trace_printfs;
+#define Cmd_IsInsecure() test_insecure
+static void Con_Printf(const char *fmt,...) { (void)fmt; test_trace_printfs++; }
 typedef struct batch_s { struct batch_s *next; mesh_t **mesh; unsigned firstmesh,meshes,maxmeshes,flags; shader_t *shader; entity_t *ent; void (*buildmeshes)(struct batch_s*); int id; void *vbo, *fog; union { struct { unsigned surface; } poly; } user; } batch_t;
 typedef struct { int firstvert, numvert; } scenetris_t;
 static scenetris_t *cl_stris;
 static float (*cl_strisvertv)[3];
 static unsigned cl_numstris, cl_numstrisvert;
 static entity_t r_worldentity;
+static shader_t *shader_draw_fill_trans;
 static void R_DB_Poly(batch_t *b);
 static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
 static struct { int useperspective; float m_projection_std[16],m_projection_view[16]; int recurse; unsigned flipcull; float m_view[16]; } r_refdef={.useperspective=1,.m_projection_std={1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},.m_projection_view={1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-1,0},.m_view={1,0,0,0,0,1,0,0,0,0,-1,0,0,0,0,1}};
@@ -165,6 +170,12 @@ static void capture_recursive(batch_t *b) {
  procedural(b); // Same rebuild-after-recursion discipline as real captures.
 }
 int main(void) {
+ // Diagnostic is opt-in/local, consumes one root pass, and leaves draws intact.
+ assert(!gl_blendtrace_pending);
+ test_insecure=1; GLBE_BlendTrace_f(); assert(!gl_blendtrace_pending);
+ test_insecure=0; GLBE_BlendTrace_f(); assert(!gl_blendtrace_pending); // mode1
+ r_blendsort.ival=2; GLBE_BlendTrace_f(); assert(gl_blendtrace_pending);
+ r_blendsort.ival=1; // direct collector test below consumes the one-shot
  float xyz[4][3]={{-2,0,10},{2,0,10},{2,2,10},{-2,2,10}};
  mesh_t far={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=1}, middle={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=2}, near={.numvertexes=1,.numindexes=6,.id=3},ignored={.numvertexes=4,.numindexes=6,.xyz_array=xyz,.id=77};
  entity_t e={.axis={{1,0,0},{0,1,0},{0,0,1}}},brush=e;
@@ -187,6 +198,7 @@ int main(void) {
   batch_t batch={.meshes=2,.mesh=pair,.shader=&shade,.ent=&r_worldentity};
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
   assert(ndraw==2&&draws[0]==736&&draws[1]==737);
+  assert(!gl_blendtrace_pending && test_trace_printfs>2);
   face.numvertexes=5;face.numindexes=9;face.xyz_array=split;face.indexes=si;
   assert(GLBE_BlendFaceDepth(&face,m)<GLBE_BlendFaceDepth(&marker,m));
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
@@ -568,6 +580,49 @@ int main(void) {
    assert(r_refdef.flipcull==0&&shaderstate.curentity==&r_worldentity);
   }
   assert(nemit==12); //8 proven raster-empty commands omitted, not visible panes.
+  // Live failure: stock CSQC wire annotations interleave with the glass and
+  // force status-3. Keep their legacy post-world layer, not a graph barrier.
+  {
+   shader_t line_shader={.numpasses=1,.prog=&line_shader};line_shader.remapto=&line_shader;
+   batch_t line={.ent=&r_worldentity,.shader=&line_shader,.flags=BEF_LINES|BEF_NOSHADOWS,
+    .buildmeshes=R_DB_Poly,.meshes=1,.maxmeshes=1};
+   scenetris_t annotations[1]={{.firstvert=0,.numvert=2}};float points[2][3],matrix[16],modelview[16];
+   mesh_t *fa=NULL,*fb=NULL;for(int i=0;i<20;i++){if(follow_all[i]->id==2073)fa=follow_all[i];if(follow_all[i]->id==2086)fb=follow_all[i];}
+   assert(fa&&fb);R_RotateForEntity(matrix,modelview,&r_worldentity,r_worldentity.model);
+   double middle=(GLBE_BlendAreaDepth(fa,matrix)+GLBE_BlendAreaDepth(fb,matrix))*.5;
+   for(int j=0;j<3;j++){points[0][j]=r_origin[j]+vpn[j]*middle-vright[j];points[1][j]=r_origin[j]+vpn[j]*middle+vright[j];}
+   cl_stris=annotations;cl_strisvertv=points;cl_numstris=1;cl_numstrisvert=2;
+   shader_draw_fill_trans=&line_shader;shaderstate.mbatches[SHADER_SORT_BLEND]=&line;
+   ndraw=nemit=builds=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   int a=-1,b=-1,c=-1,d=-1;
+   for(int i=0;i<nemit;i++){if(emitted[i]==2073)a=i;if(emitted[i]==2086)b=i;if(emitted[i]==2047)c=i;if(emitted[i]==2071)d=i;}
+   int annotation_layers_ok=a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d;
+   assert(annotation_layers_ok); // live-line regression oracle
+   assert(nemit==13&&emitted[12]==line.id&&builds==1); // no annotation loss/duplicate callback
+   assert(line.user.poly.surface==0&&line.firstmesh==0&&line.meshes==1);
+   assert(GLBE_BlendForeground(&line));
+   for(int guard=0;guard<11;guard++) {
+    line.shader=&line_shader;line_shader.remapto=&line_shader;line_shader.numpasses=1;
+    line_shader.numdeforms=0;line_shader.passes[0].prog=NULL;line.flags=BEF_LINES|BEF_NOSHADOWS;
+    line.buildmeshes=R_DB_Poly;line.fog=line.vbo=NULL;r_refdef.recurse=0;r_refdef.useperspective=1;
+    shaderstate.mode=BEM_STANDARD;
+    if(guard==0)line.shader=&follow_shader;
+    if(guard==1)line_shader.remapto=&follow_shader;
+    if(guard==2)line_shader.numpasses=2;
+    if(guard==3)line_shader.numdeforms=1;
+    if(guard==4)line.flags|=BEF_FORCEADDITIVE;
+    if(guard==5)line.buildmeshes=NULL;
+    if(guard==6)line.fog=&line;
+    if(guard==7)line.vbo=&line;
+    if(guard==8)r_refdef.recurse=1;
+    if(guard==9)r_refdef.useperspective=0;
+    if(guard==10)line_shader.passes[0].prog=&line;
+    assert(!GLBE_BlendForeground(&line));
+   }
+   assert(builds==1);r_refdef.recurse=0;r_refdef.useperspective=1;
+   shader_draw_fill_trans=NULL;shaderstate.mbatches[SHADER_SORT_BLEND]=NULL;
+   cl_stris=NULL;cl_strisvertv=NULL;cl_numstris=cl_numstrisvert=0;
+  }
   ndraw=nemit=0;r_blendsort.ival=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
   assert(ndraw==1&&nemit==20&&ranges[0]==20);
   for(int i=0;i<20;i++)assert(emitted[i]==follow_all[i]->id);
@@ -587,7 +642,7 @@ int main(void) {
   }
   r_refdef.recurse=0;r_refdef.useperspective=1;r_blendsort.ival=1;recordmeshes=0;
  }
- puts("PASS Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,7 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
+ puts("PASS stock-wireframe acted regression,11 conservative layer guards,once-only callback; Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,7 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
@@ -601,7 +656,7 @@ for name in names:
     value = re.search(r'\b' + name + r'\s*=\s*(1 << \d+)', shader_header).group(1)
     flag_lines.append(f'#define {name} ({value})')
 flags = '\n'.join(flag_lines)
-for name in ['BEF_FORCEADDITIVE', 'BEF_NODLIGHT', 'BEF_NOSHADOWS', 'BEF_FORCETWOSIDED']:
+for name in ['BEF_FORCEADDITIVE', 'BEF_NODLIGHT', 'BEF_NOSHADOWS', 'BEF_FORCETWOSIDED', 'BEF_LINES']:
     flags += '\n' + next(line.split('//')[0] for line in shader_header.splitlines() if line.startswith('#define ' + name + '\t'))
 c.write_text(pre.replace('__ACTUAL_FLAGS__', flags).replace('__ACTUAL_IS_NAN__', nan_macro).replace('__ACTUAL_PREBUILD__', prebuild).replace('__ACTUAL_SHADERGATES__', shadergates).replace('__ACTUAL_SELECTENTITY_SEAM__', select_seam) + normal_matrix + post + selectentity + cull + actual + dispatch + (engine.parent/'tools/blend_plane_fixtures.inc').read_text() + (engine.parent/'tools/blend_world_fixtures.inc').read_text() + (engine.parent/'tools/blend_yaw_fixtures.inc').read_text() + tests)
 suffix = '.exe' if os.name == 'nt' else ''
@@ -616,6 +671,7 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 base = c.read_text()
 raster = actual[actual.index('static qboolean GLBE_BlendWorldRasterEmpty'):actual.index('static void GLBE_SubmitBlendedWorld')]
 controls = {
+    'lost_annotation_layer': base.replace('faces[n].foreground = GLBE_BlendForeground(batch);', 'faces[n].foreground = !!(batch->ent->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));'),
     'lost_mode2_cull': base.replace('if (cullworld && GLBE_BlendWorldRasterEmpty(batch, mesh))', 'if (false && GLBE_BlendWorldRasterEmpty(batch, mesh))'),
     'stale_mode2_world': base.replace('\t\t\t\tif (cullworld && shaderstate.curentity != batch->ent)\n\t\t\t\t\tGLBE_SelectEntity(batch->ent);', ''),
     'lost_area_center': base.replace('faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);',
@@ -662,6 +718,7 @@ for name, control in controls.items():
     (root / f'{name}-control.log').write_text(failed.stdout + failed.stderr)
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed
     predicate = {
+        'lost_annotation_layer': 'annotation_layers_ok',
         'lost_mode2_cull': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'stale_mode2_world': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
