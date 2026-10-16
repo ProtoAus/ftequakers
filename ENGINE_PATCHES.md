@@ -15,6 +15,8 @@ markers attribute only the next causal ramp move; real jump input still wins,
 older taints remain. Cancel/consume a pending contact on jump input without
 erasing its rise before JumpWatch's outer gate. Actual warp/hold/spawn/invalid/
 timeout/side exit retire state; nonplacement ghost restamps preserve it.
+Zero-tick input cannot retire attribution: remove only the new unexecuted latch,
+retain older executed input, never resurrect consumed packet state.
 All packet exits clear transient latches. No global physics, generic VScript,
 native pin/tag, evidence format, backend or QC Build-number change.
 
@@ -22,8 +24,9 @@ native pin/tag, evidence format, backend or QC Build-number change.
 Normal66/batched20pps reproduce1668.867/1665.936/1663.005→1662;
 first two dx/dz steps match all four clips within0.001. Clean timer classification
 and real older-hop rejection both act; Prosurf remains2275/normal/recording.
-50 actual-QC predicates pass, including actual detector/ghost paths; exact
-pre-review source rejects45/5. Command-exit mutant rejects its earlier predicate.
+60 actual-QC predicates pass, including actual detector/ghost/zero-tick input
+paths. Earlier strengthened50 reject pre-review45/5; final60 reject the zero-tick
+regression54/6. Command-exit mutant rejects its earlier predicate.
 Three real-client normal/early/held packet exits act/clean. New run prefixes pass
 reader and32/13-packet native replays at printing floor, zero bit/physent mismatch.
 Reader306/0; paired stable run corpus faults190→190; readable save prefixes keep
