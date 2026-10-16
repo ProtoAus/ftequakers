@@ -1,5 +1,6 @@
 /* Frozen regression geometry from surf_kitsune; these IDs are test labels only.
- * Synthetic triangles below form a painter cycle. No runtime map dependency. */
+ * Synthetic triangles below form a coarse graph cycle, not a proved visible
+ * painter cycle (B/C projections can be disjoint). No runtime map dependency. */
 static float xyz1235[7][3]={{-15360.0f,-14539.9f,749.24298f},{-15360.0f,-14539.8f,749.198f},{-15360.0f,-13550.7f,484.177f},{-15712.0f,-13658.3f,82.317596f},{-15712.0f,-13658.4f,82.339798f},{-15712.0f,-14647.5f,347.384f},{-15360.0f,-14539.8f,749.198f}};
 static unsigned idx1235[15]={0,1,2,0,2,3,0,3,4,0,4,5,0,5,6};
 static mesh_t mesh1235={.numvertexes=7,.numindexes=15,.xyz_array=xyz1235,.indexes=idx1235};

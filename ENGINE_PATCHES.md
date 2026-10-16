@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 743 — prove ambiguous alpha order over projected overlap
+
+**Problem:** P742's stage3 fix is accepted, but stage1 saves 5/6 still flip:
+all 12 world panes admitted, then a cycle (48 edges, 546 work, status -2). A
+pair with no plane-side proof got a mandatory centre-depth edge; on these long
+slanted ramp fans the centre often orders the pair backwards. Logged native keys
+plus frozen geometry reproduce it: the proof-only edges are acyclic, so the cycle
+is artificial, not a case for OIT or splitting. Separately, a face wholly behind
+the eye stays in the list as an unadmitted barrier and forces status -3 when the
+player turns round.
+
+**Change:** Mode2 only (`GLBE_BlendPlaneSort`). For a pair without a strict
+plane-side proof, clip both faces' triangles in homogeneous space, intersect them
+on screen and compare affine 1/w at every intersection vertex: disjoint means no
+edge, one sign gives that order, mixed signs (a real crossing) or uncertainty keep
+the old baseline edge. Opposite strict plane proofs cannot share a view ray and
+add no edge. If the graph still cycles, it is rebuilt once with every edge, strict
+ones too, confirmed by actual screen overlap; a remaining cycle falls back as
+before. `GLBE_BlendWorldRasterEmptyNear` drops a face whose every vertex is at
+least 0.125 behind the eye (w < 0 everywhere, no cull state draws it). Work stays
+inside the existing 65536 budget. No map, material or surface exemptions;
+modes 0/1 and default1 are unchanged.
+
+**Verified:** Actual-C suites (`tools/test_gl_blend_faces.py`, 4 normal/HEXEN2/
+fast-math variants, 31 acting mutants; `test_gl_blend_planes.py`) pass. The frozen
+stage1 scene at the logged camera now sorts (status 1, 44 edges, 2605 work, 8
+moved). Graded independently against clipped screen overlap in Python, over a
+dense sweep of 360 yaws x 15 pitches at each saved eye: stage1 (save 6) views with
+a pair drawn nearer-first fall from 978 of 5400 with P742's sorter to 3, and
+the stage3/save5 scene from 475 to 0. The 3 left are one pane seen edge-on (eye
+0.13 from its plane, not admitted), at most 704 px. Geometry evidence, not GPU
+pixels; owner live check pending.
+
 ## Patch 742 — retain mode2 ordering across eye-spanning world panes
 
 **Problem:** P739 fixes most owner switching, but farther-right save4/5 still

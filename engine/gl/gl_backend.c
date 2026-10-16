@@ -7079,15 +7079,12 @@ static qboolean GLBE_BlendWorldRasterEmptyNear(batch_t *batch, const mesh_t *mes
 	double h[GLBLEND_PLANE_VERTS][3], p[3], terms[6], area, scale;
 	unsigned int cull, ia, ib, ic;
 	int v, t, j;
-	qboolean nearspan = false, nondegenerate = false;
+	qboolean nearspan = false, behind = true, nondegenerate = false;
 	if (r_blendsort.ival != 2 || !GLBE_BlendWorldBatchEligible(batch) ||
 		!mesh || !mesh->xyz_array || !mesh->indexes || mesh->xyz2_array || mesh->numbones ||
 		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
 		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
 		return false;
-	cull = batch->shader->remapto->flags & (SHADER_CULL_FRONT | SHADER_CULL_BACK);
-	if (!cull) return false;
-	cull ^= r_refdef.flipcull;
 	if (IS_NAN(proj[0]) || IS_NAN(proj[5])) return false;
 	for (j = 0; j < 16; j++)
 		if (IS_NAN(view[j])) return false;
@@ -7102,8 +7099,15 @@ static qboolean GLBE_BlendWorldRasterEmptyNear(batch_t *batch, const mesh_t *mes
 		h[v][1] = proj[5]*(view[1]*p[0] + view[5]*p[1] + view[9]*p[2] + view[13]);
 		h[v][2] = -(view[2]*p[0] + view[6]*p[1] + view[10]*p[2] + view[14]);
 		if (h[v][2] <= GLBLEND_PLANE_EPS) nearspan = true;
+		if (h[v][2] > -GLBLEND_PLANE_EPS) behind = false;
 	}
+	// Every point of a wholly behind-eye face has w < 0, so no cull state draws
+	// it. Kept, it is an unadmitted barrier that forces status -3 when turning.
+	if (behind) return true;
 	if (!nearspan) return false;
+	cull = batch->shader->remapto->flags & (SHADER_CULL_FRONT | SHADER_CULL_BACK);
+	if (!cull) return false;
+	cull ^= r_refdef.flipcull;
 	for (t = 0; t < mesh->numindexes; t += 3)
 	{
 		ia = mesh->indexes[t]; ib = mesh->indexes[t+1]; ic = mesh->indexes[t+2];
@@ -7148,6 +7152,165 @@ static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
 	return 0;
 }
 
+#define GLBLEND_CLIP_VERTS 16
+#define GLBLEND_OVERLAP_VERTS 32
+#define GLBLEND_ORDER_DISJOINT 2
+#define GLBLEND_ORDER_BUDGET 3
+typedef struct { double x, y, iw; } glblendproject_t;
+
+// Clip an indexed world triangle before division; iw is affine on its screen
+// polygon. Negative returns mean uncertainty/budget, never empty coverage.
+static int GLBE_BlendProjectTriangle(const mesh_t *mesh, int t, glblendproject_t *out, unsigned int *work)
+{
+	double h[2][GLBLEND_CLIP_VERTS][4], view[4], p[3], da, db, f, area;
+	const float *proj = r_refdef.m_projection_std;
+	int i, j, k, v, plane, axis, sign, n = 3, count, src = 0, dst = 1;
+	unsigned int index;
+	for (j = 0; j < 16; j++) if (IS_NAN(proj[j])) return -1;
+	for (v = 0; v < 3; v++)
+	{
+		if (*work >= GLBLEND_PLANE_WORK) return -2;
+		(*work)++;
+		index = mesh->indexes[t+v];
+		if (index >= (unsigned int)mesh->numvertexes) return -1;
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(r_origin[j]) || IS_NAN(vright[j]) || IS_NAN(vup[j]) || IS_NAN(vpn[j])) return -1;
+			p[j] = (double)mesh->xyz_array[index][j] - r_origin[j];
+		}
+		view[0] = view[1] = view[2] = 0; view[3] = 1;
+		for (j = 0; j < 3; j++)
+		{
+			view[0] += p[j]*vright[j]; view[1] += p[j]*vup[j]; view[2] -= p[j]*vpn[j];
+		}
+		for (j = 0; j < 4; j++)
+		{
+			h[0][v][j] = 0;
+			for (k = 0; k < 4; k++) h[0][v][j] += proj[k*4+j]*view[k];
+		}
+	}
+	for (plane = 0; plane < 6 && n; plane++)
+	{
+		axis = plane/2; sign = (plane & 1) ? -1 : 1; count = 0;
+		for (i = 0; i < n; i++)
+		{
+			if (*work >= GLBLEND_PLANE_WORK) return -2;
+			(*work)++;
+			j = (i+1)%n;
+			da = h[src][i][3] + sign*h[src][i][axis];
+			db = h[src][j][3] + sign*h[src][j][axis];
+			if (da >= 0)
+			{
+				if (count == GLBLEND_CLIP_VERTS) return -1;
+				memcpy(h[dst][count++], h[src][i], sizeof(h[dst][0]));
+			}
+			if ((da >= 0) != (db >= 0))
+			{
+				if (count == GLBLEND_CLIP_VERTS) return -1;
+				f = da/(da-db);
+				for (k = 0; k < 4; k++) h[dst][count][k] = h[src][i][k] + f*(h[src][j][k]-h[src][i][k]);
+				count++;
+			}
+		}
+		n = count; src ^= 1; dst ^= 1;
+	}
+	if (n < 3) return 0;
+	for (i = 0; i < n; i++)
+	{
+		if (h[src][i][3] <= 0) return -1;
+		out[i].x = h[src][i][0]/h[src][i][3];
+		out[i].y = h[src][i][1]/h[src][i][3];
+		out[i].iw = 1/h[src][i][3];
+	}
+	area = 0;
+	for (i = 0; i < n; i++) { j = (i+1)%n; area += out[i].x*out[j].y - out[j].x*out[i].y; }
+	if (!area) return 0;
+	if (fabs(area) < 1e-16) return -1;
+	if (area < 0)
+		for (i = 0; i < n/2; i++) { glblendproject_t swap = out[i]; out[i] = out[n-1-i]; out[n-1-i] = swap; }
+	return n;
+}
+
+// A strict whole-plane hint needs only coverage confirmation. Otherwise compare
+// reciprocal depths at every intersection vertex, including contact boundaries.
+static int GLBE_BlendOverlapOrder(const mesh_t *a, const mesh_t *b, int hint, unsigned int *work)
+{
+	glblendproject_t pa[GLBLEND_CLIP_VERTS], pb[GLBLEND_CLIP_VERTS];
+	glblendproject_t clip[2][GLBLEND_OVERLAP_VERTS];
+	double da, db, f, area, det, dx = 0, dy = 0, offset = 0, za, zb, diff, eps;
+	int at, bt, na, nb, n, count, src, dst, i, j, k;
+	qboolean seen = false, positive = false, negative = false;
+	for (at = 0; at < a->numindexes; at += 3)
+	{
+		na = GLBE_BlendProjectTriangle(a, at, pa, work);
+		if (na == -2) return GLBLEND_ORDER_BUDGET;
+		if (na < 0) return hint;
+		if (!na) continue;
+		for (bt = 0; bt < b->numindexes; bt += 3)
+		{
+			nb = GLBE_BlendProjectTriangle(b, bt, pb, work);
+			if (nb == -2) return GLBLEND_ORDER_BUDGET;
+			if (nb < 0) return hint;
+			if (!nb) continue;
+			memcpy(clip[0], pa, na*sizeof(*pa)); n = na; src = 0; dst = 1;
+			for (k = 0; k < nb && n; k++)
+			{
+				j = (k+1)%nb; count = 0;
+				for (i = 0; i < n; i++)
+				{
+					glblendproject_t *p = &clip[src][i], *q = &clip[src][(i+1)%n];
+					if (*work >= GLBLEND_PLANE_WORK) return GLBLEND_ORDER_BUDGET;
+					(*work)++;
+					da = (pb[j].x-pb[k].x)*(p->y-pb[k].y) - (pb[j].y-pb[k].y)*(p->x-pb[k].x);
+					db = (pb[j].x-pb[k].x)*(q->y-pb[k].y) - (pb[j].y-pb[k].y)*(q->x-pb[k].x);
+					if (da >= 0)
+					{
+						if (count == GLBLEND_OVERLAP_VERTS) return hint;
+						clip[dst][count++] = *p;
+					}
+					if ((da >= 0) != (db >= 0))
+					{
+						if (count == GLBLEND_OVERLAP_VERTS) return hint;
+						f = da/(da-db);
+						clip[dst][count].x = p->x + f*(q->x-p->x);
+						clip[dst][count].y = p->y + f*(q->y-p->y);
+						clip[dst][count++].iw = p->iw + f*(q->iw-p->iw);
+					}
+				}
+				n = count; src ^= 1; dst ^= 1;
+			}
+			if (n < 3) continue;
+			area = 0;
+			for (i = 0; i < n; i++) { j = (i+1)%n; area += clip[src][i].x*clip[src][j].y - clip[src][j].x*clip[src][i].y; }
+			if (!area) continue;
+			// A tiny intersection can be a shared contact edge after rounding;
+			// it does not make either triangle's depth plane ill-conditioned.
+			if (hint) return hint;
+			seen = true; det = 0;
+			for (i = 1; i < nb-1; i++)
+			{
+				det = (pb[i].x-pb[0].x)*(pb[i+1].y-pb[0].y) - (pb[i+1].x-pb[0].x)*(pb[i].y-pb[0].y);
+				if (fabs(det) < 1e-16) continue;
+				dx = ((pb[i].iw-pb[0].iw)*(pb[i+1].y-pb[0].y) - (pb[i+1].iw-pb[0].iw)*(pb[i].y-pb[0].y))/det;
+				dy = ((pb[i].x-pb[0].x)*(pb[i+1].iw-pb[0].iw) - (pb[i+1].x-pb[0].x)*(pb[i].iw-pb[0].iw))/det;
+				offset = pb[0].iw - dx*pb[0].x - dy*pb[0].y;
+				break;
+			}
+			if (i == nb-1) return 0;
+			for (i = 0; i < n; i++)
+			{
+				za = clip[src][i].iw; zb = dx*clip[src][i].x + dy*clip[src][i].y + offset;
+				diff = za-zb; eps = 1e-8*(fabs(za)+fabs(zb)) + 1e-12;
+				if (diff > eps) positive = true;
+				if (diff < -eps) negative = true;
+			}
+			if (positive && negative) return 0;
+		}
+	}
+	if (!seen) return GLBLEND_ORDER_DISJOINT;
+	return positive ? 1 : negative ? -1 : 0;
+}
+
 static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
 {
 	glblendplane_t *planes;
@@ -7157,6 +7320,7 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	unsigned int verts = 0, i, j, pick, step, from, to, cost;
 	size_t f;
 	int ab, ba;
+	qboolean refine = (r_blendsort.ival == 2), exactcoverage = false;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	stats->status = 0;
 	// The point-eye and divided screen bounds prove only perspective rays.
@@ -7178,7 +7342,10 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	if (stats->admitted < 2)
 	{ BZ_Free(planes); return; }
 	edges = BZ_Malloc(stats->admitted * stats->admitted);
+rebuild:
+	stats->edges = 0;
 	memset(edges, 0, stats->admitted * stats->admitted);
+	memset(degree, 0, sizeof(degree));
 	for (i = 0; i < stats->admitted; i++)
 		for (j = i+1; j < stats->admitted; j++)
 		{
@@ -7191,10 +7358,20 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 			stats->work += cost;
 			ab = GLBE_BlendPlaneSide(&planes[i], &planes[j]);
 			ba = -GLBE_BlendPlaneSide(&planes[j], &planes[i]);
-			if (ab && ba && ab != ba) ab = 0;
+			if (ab && ba && ab != ba)
+			{
+				// Opposite strict orders cannot share a positive view ray.
+				if (refine) continue;
+				ab = 0;
+			}
 			else if (!ab) ab = ba;
-			// A third face can otherwise reverse an unproven overlapping pair.
-			// Preserve its baseline order; incompatible constraints fall back.
+			if (refine && (!ab || exactcoverage))
+			{
+				ab = GLBE_BlendOverlapOrder(planes[i].mesh, planes[j].mesh, ab, &stats->work);
+				if (ab == GLBLEND_ORDER_BUDGET) { stats->status = -1; goto done; }
+				if (ab == GLBLEND_ORDER_DISJOINT) continue;
+			}
+			// Genuine depth reversals/uncertainty still preserve baseline order.
 			if (!ab) ab = -1;
 			from = ab < 0 ? i : j; to = ab < 0 ? j : i;
 			edges[from*stats->admitted + to] = 1;
@@ -7207,7 +7384,12 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		for (pick = 0; pick < stats->admitted; pick++)
 			if (!degree[pick]) break;
 		if (pick == stats->admitted)
-		{ stats->status = -2; goto done; }
+		{
+			// Broad bounds can invent even strict but unnecessary edges. Retry
+			// with actual viewport coverage before declaring a painter cycle.
+			if (refine && !exactcoverage) { exactcoverage = true; goto rebuild; }
+			stats->status = -2; goto done;
+		}
 		order[step] = pick;
 		degree[pick] = GLBLEND_PLANE_FACES + 1;
 		for (j = 0; j < stats->admitted; j++)

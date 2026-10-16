@@ -209,12 +209,13 @@ int main(void) {
  for(int i=0;i<33;i++) { for(int k=0;k<16;k++) quad(fullverts[i]+k*4,0,10+i);many[i].xyz_array=fullverts[i];many[i].numvertexes=64;mf[i]=face(&b,&many[i],i); }
  memcpy(before,mf,sizeof(mf));GLBE_BlendPlaneSort(mf,33,&st);
  assert(st.status==-1&&st.moved==0&&!memcmp(mf,before,33*sizeof(*mf)));
- // Real triangle geometry forms a painter-cycle; atomic fallback, not sorting by a nontransitive comparator.
+ // Legacy coarse triangle graph-cycle: preserve mode1's atomic fallback.
+ // This is NOT a visible-cycle oracle; mode2's three-strip proof is in faces.
  unsigned triidx[3]={0,1,2};mesh_t cyclic[3];glblendface_t cf[3],saved[3];
  for(int i=0;i<3;i++) { cyclic[i]=(mesh_t){.numvertexes=3,.numindexes=3,.xyz_array=cyclexyz[i],.indexes=triidx};cf[i]=face(&b,&cyclic[i],i); }
  memcpy(saved,cf,sizeof(cf));GLBE_BlendPlaneSort(cf,3,&st);
  assert(st.status==-2&&st.edges==3&&st.moved==0&&!memcmp(cf,saved,sizeof(cf)));
- puts("PASS actual plane code: six frozen-yaw wrong-rank controls/correction, contiguous static slots, ACTED dynamic barrier and three-world intersection fallback, disjoint/coplanar/intersection/invalid/deform/dynamic gates, atomic face/vertex/work budgets and real triangle cycle, ACTED ortho/material-program counterexamples, raw/remap/pass/PN/geom/external-projection/nonstandard gates");
+ puts("PASS actual plane code: six frozen-yaw wrong-rank controls/correction, contiguous static slots, ACTED dynamic barrier and three-world intersection fallback, disjoint/coplanar/intersection/invalid/deform/dynamic gates, atomic face/vertex/work budgets and legacy coarse triangle cycle, ACTED ortho/material-program counterexamples, raw/remap/pass/PN/geom/external-projection/nonstandard gates");
 }
 '''
 base=pre+nan+'\n'+struct+compare+code+fixtures+tests
