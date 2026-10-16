@@ -80,14 +80,18 @@ validity/expiry/capacity and all existing codec/import/foreign-replay checks.
 Canonical helpers retain the existing sealed-generation pre-import fence;
 no sealed manifest/source, schema, native engine, QC or lobby change.
 
-**Verified:** Ten offline worker/priority controls and nine existing request
-controls pass; existing momgrab controls exit zero. Original source acts A,B
-and fails the mid-batch A,C,B falsifier, while fixed source passes. Canonical
-admitted KSF max-zero probe exits zero, discovers four pending demos and makes
-zero upstream requests. KSF schedule enabled 2026-10-16T15:30:35Z with its
-existing HTTP500 cooldown intact. Momentum delivery/live acceptance is pending;
-see FTESurf `tools/p740demograb.md` for deployment evidence and limits. No live
-KSF playback claim while its upstream is parked.
+**Verified:** Fifteen worker/priority controls (one a real loopback transfer
+interrupted by SIGTERM, on Linux), nine request controls and the existing
+momgrab controls pass. Original source acts A,B and fails the mid-batch A,C,B
+falsifier; four controls fail on the first reviewed cut (7808c0a) for the
+reviewers' findings. Final helper (44dc15e) and deploy-seam (6474131) reviews
+clear. Deployed `35988cd` momgrab only, no reload, 2026-10-16T16:39Z; the user
+unit has been active since 16:43Z. A real public request outside the top ten
+went queued to ready in 1.263 s, served a 212857-byte replay that reccheck
+passes, and the board row then had Watch. Still live at 21:58Z. KSF's `--demos`
+row (enabled 15:30:35Z) discovers demos (50 pending) but requests none until
+its upstream HTTP500 cooldown ends 2026-10-17T08:36Z: no KSF download or
+playback, and no in-game playback, is claimed. FTESurf `tools/p740demograb.md`.
 
 ## Patch 739 — keep wire annotations out of world-pane ordering
 
