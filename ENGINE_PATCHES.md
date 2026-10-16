@@ -8,19 +8,21 @@ without restoring the marker, retaining later progress or none after a restart.
 
 **Change:** Capture/restore exact, quoted player targetname, including empty.
 Preserve it through demotion, retry/resume readers and bounded warm-rewind
-snapshots. Forget only the restored player's abandoned trigger occupancy so
-stale EndTouch outputs cannot overwrite it; preserve once/cooldown and peer
-state. Leave map filters intact. Legacy saves and unsampled replay positions
+snapshots. Finish only the loading player's abandoned exits before assigning
+the saved name, preserving non-name cleanup and peer-safe last-occupant events;
+retain once/cooldown and peer state. Leave map filters intact. Legacy saves and unsampled replay positions
 cannot invent missing historical progress; affected old saves need re-creation.
 No full map-world/delayed-I/O rollback, recorder format, engine pin/tag, QC Build
 number or release change.
 
 **Verified:** Zero-warning fixture builds. Acting pre-change dedicated control
-fails22/40 marker assertions; subject passes40/40, including actual save/load/
+fails22/46 marker assertions; subject passes46/46, including actual save/load/
 hold dispatch, both map filter predicates and wrong-name reset controls, empty/
 quoted names, original-marker demotion, ring wrap/overwrite and stale-exit/peer
-isolation. Real retry queues a map restart and restores the marker at spawn;
-the same baseline loses it. Reader306/0. Production build, corpus, independent
+isolation and mixed name/gravity exits. Review caught silent-discard cleanup
+loss in the unshipped first candidate; that regression control fails4/46 while
+the final subject passes. Real retry queues a map restart and restores the
+marker at spawn; the same baseline loses it. Reader306/0. Production build, corpus, independent
 review and separate delivery provenance: FTESurf tools/p735savemarker.md.
 
 ## Patch 732 — known-port Monolith B4 KSF launch compatibility (QC only)
