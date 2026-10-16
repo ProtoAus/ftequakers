@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 736 — tessellation-stable mode2 transparency centres
+
+**Problem:** The owner's saved Kitsune ramp/floor view changes apparent layer
+order with small mouse movements. Collinear BSP edge splits bias the vertex-mean
+sort centre without changing the actual surface; paired ramp faces can then
+receive inverted depth keys. Mode2 improves the larger scene but retains this
+bias when its bounded plane refinement cannot establish the order.
+
+**Change:** Use triangle-area-weighted centres for mode2's eligible indexed
+meshes, followed by the existing entity transform/view projection. Retain the
+previous fallback for missing/invalid/wholly degenerate indexed geometry.
+Modes0/1, default1, plane/cull proofs, capture/coarse/cache behavior, materials,
+map geometry and gameplay are unchanged. No triangle splitting, general
+intersecting-surface solution, custom-deformation or performance claim.
+
+**Verified:** Existing actual-C collector suite gains an acting collinear-split
+invariance control and actual Kitsune faces2047/2070 with plane refinement
+unavailable. Four normal/HEXEN2/fast-math variants pass under Werror; restoring
+the old per-face key acts and fails the new order assertion. All17 prior mutant
+controls still reject. Full isolated native/QC build passes with zero NEW
+compiler warnings (74 existing, matching the prior full build); no install or
+shared dependency bytes changed. The first synthetic world had zero axes and
+its new mutant did not reject; that inert setup is excluded and retained.
+Exact stamped build/delivery provenance and the owner saved-position acceptance
+gate are recorded separately in FTESurf tools/p736alphacentre.md.
+No QC Build-number, evidence format, public release or NanoPi-native change.
+
 ## Patch 735 — restore save-lock map progress names (QC only)
 
 **Problem:** Monolith B4 and bhop_futile use player targetnames as progress

@@ -170,6 +170,42 @@ int main(void) {
  entity_t e={.axis={{1,0,0},{0,1,0},{0,0,1}}},brush=e;
  float m[16],mv[16]; R_RotateForEntity(m,mv,&e,0);
  assert(GLBE_BlendFaceDepth(&far,m)==10);
+ {
+  // Mode2's initial key must not depend on a collinear BSP edge split.
+  // Decline plane refinement deliberately, so this acts the actual fallback.
+  entity_t saved_world=r_worldentity;
+  r_worldentity.axis[0][0]=r_worldentity.axis[1][1]=r_worldentity.axis[2][2]=1;
+  r_worldentity.scale=1;
+  float quad[4][3]={{0,0,4},{8,0,12},{8,8,12},{0,8,4}};
+  float split[5][3]={{0,0,4},{1,0,5},{8,0,12},{8,8,12},{0,8,4}};
+  float mark[4][3]={{0,0,7.7f},{8,0,7.7f},{8,8,7.7f},{0,8,7.7f}};
+  unsigned qi[]={0,1,2,0,2,3},si[]={0,1,2,0,2,3,0,3,4};
+  mesh_t face={.numvertexes=4,.numindexes=6,.xyz_array=quad,.indexes=qi,.id=736};
+  mesh_t marker={.numvertexes=4,.numindexes=6,.xyz_array=mark,.indexes=qi,.id=737};
+  mesh_t *pair[]={&face,&marker};
+  shader_t shade={0};shade.remapto=&shade;shade.prog=&shade;
+  batch_t batch={.meshes=2,.mesh=pair,.shader=&shade,.ent=&r_worldentity};
+  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  assert(ndraw==2&&draws[0]==736&&draws[1]==737);
+  face.numvertexes=5;face.numindexes=9;face.xyz_array=split;face.indexes=si;
+  assert(GLBE_BlendFaceDepth(&face,m)<GLBE_BlendFaceDepth(&marker,m));
+  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  assert(ndraw==2&&draws[0]==736&&draws[1]==737);
+  // Actual surf_kitsune world faces2047/2070, relative to the reported eye.
+  float ramp_far[4][3]={{-364.052700000f,1347.077195313f,-173.635203906f},{-28.052700000f,1312.176804688f,-572.124217578f},{-28.052700000f,292.077195313f,-482.876170703f},{-364.052700000f,326.976609375f,-84.387187549f}};
+  unsigned ramp_far_idx[]={0,1,2,0,2,3};
+  float ramp_near[5][3]={{-12.052700000f,292.077195313f,-482.876170703f},{-12.052700000f,1312.176804688f,-572.122203418f},{-103.961879688f,1321.655320313f,-463.914805957f},{-364.052700000f,1348.476609375f,-157.710216113f},{-364.052700000f,328.377000000f,-68.462199756f}};
+  unsigned ramp_near_idx[]={0,1,2,0,2,3,0,3,4};
+  face.numvertexes=4;face.numindexes=6;face.xyz_array=ramp_far;face.indexes=ramp_far_idx;
+  marker.numvertexes=5;marker.numindexes=9;marker.xyz_array=ramp_near;marker.indexes=ramp_near_idx;
+  vpn[0]=-0.532216565f;vpn[1]=0.810234614f;vpn[2]=-0.245490118f;
+  assert(GLBE_BlendFaceDepth(&face,m)<GLBE_BlendFaceDepth(&marker,m));
+  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  assert(ndraw==2&&draws[0]==736&&draws[1]==737);
+  vpn[0]=0;vpn[1]=0;vpn[2]=1;ndraw=nemit=0;
+  shaderstate.curentity=NULL;currententity=NULL;shaderstate.lastuniform=0;
+  r_worldentity=saved_world;
+ }
  // XY depth discriminates yaw sign, unlike a Z-only rotated fixture.
  brush.axis[0][0]=0;brush.axis[0][1]=1;brush.axis[1][0]=-1;brush.axis[1][1]=0;
  vpn[0]=1;vpn[2]=0;
@@ -532,6 +568,8 @@ for variant in ([], ['-DHEXEN2'], ['-ffast-math'], ['-DHEXEN2', '-ffast-math']):
 base = c.read_text()
 raster = actual[actual.index('static qboolean GLBE_BlendWorldRasterEmpty'):actual.index('static void GLBE_SubmitBlendedWorld')]
 controls = {
+    'lost_area_center': base.replace('faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);',
+        'faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix); faces[n].depth = GLBE_BlendFaceDepth(mesh, matrix);'),
     # Test-only labels deliberately invert the fourth contributor while
     # preserving the old1235-before1236-before1228 assertion.
     'lost_full_scene_order': base.replace('if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats);', '''if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats);
@@ -574,6 +612,7 @@ for name, control in controls.items():
     (root / f'{name}-control.log').write_text(failed.stdout + failed.stderr)
     assert failed.returncode != 0 and 'assert' in failed.stderr.lower(), failed
     predicate = {
+        'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
         'stale_entity_cull': 'nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250',
         'lost_marginal_area': '!GLBE_BlendWorldRasterEmpty(&cb,&marginal)',
         'lost_full_scene_order': 'a<d&&d<b&&b<c',

@@ -6757,6 +6757,48 @@ static double GLBE_BlendFaceDepth(const mesh_t *mesh, const float *matrix)
 	return GLBE_BlendCenterDepth(center, matrix);
 }
 
+// Mode2: BSP edge splits must not change a face's sorting centre.
+static double GLBE_BlendAreaDepth(const mesh_t *mesh, const float *matrix)
+{
+	double center[3] = {0, 0, 0}, total = 0;
+	unsigned int a, b, c;
+	int t, j;
+	if (!mesh->xyz_array || mesh->numvertexes <= 0 || !mesh->indexes ||
+		mesh->numindexes <= 0 || mesh->numindexes % 3)
+		return GLBE_BlendFaceDepth(mesh, matrix);
+	for (t = 0; t < mesh->numindexes; t += 3)
+	{
+		double ab[3], ac[3], cross[3], area;
+		a = mesh->indexes[t]; b = mesh->indexes[t+1]; c = mesh->indexes[t+2];
+		if (a >= (unsigned int)mesh->numvertexes || b >= (unsigned int)mesh->numvertexes ||
+			c >= (unsigned int)mesh->numvertexes)
+			return GLBE_BlendFaceDepth(mesh, matrix);
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(mesh->xyz_array[a][j]) || IS_NAN(mesh->xyz_array[b][j]) ||
+				IS_NAN(mesh->xyz_array[c][j]))
+				return GLBE_BlendFaceDepth(mesh, matrix);
+			ab[j] = (double)mesh->xyz_array[b][j] - mesh->xyz_array[a][j];
+			ac[j] = (double)mesh->xyz_array[c][j] - mesh->xyz_array[a][j];
+		}
+		cross[0] = ab[1]*ac[2] - ab[2]*ac[1];
+		cross[1] = ab[2]*ac[0] - ab[0]*ac[2];
+		cross[2] = ab[0]*ac[1] - ab[1]*ac[0];
+		area = sqrt(cross[0]*cross[0] + cross[1]*cross[1] + cross[2]*cross[2]);
+		if (area <= 0)
+			continue;
+		total += area;
+		for (j = 0; j < 3; j++)
+			center[j] += area * ((double)mesh->xyz_array[a][j] +
+				mesh->xyz_array[b][j] + mesh->xyz_array[c][j]) / 3;
+	}
+	if (total <= 0)
+		return GLBE_BlendFaceDepth(mesh, matrix);
+	for (j = 0; j < 3; j++)
+		center[j] /= total;
+	return GLBE_BlendCenterDepth(center, matrix);
+}
+
 // Procedural commands must not build or retain the shared alias mesh until replay.
 static double GLBE_BlendBatchDepth(const batch_t *batch, const float *matrix)
 {
@@ -7134,7 +7176,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;
-					faces[n].depth = GLBE_BlendFaceDepth(mesh, matrix);
+					faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);
 					faces[n].sequence = n;
 					faces[n].foreground = false;
 					n++;
