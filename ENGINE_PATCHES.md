@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 741 — authenticated Friends before joining a map
+
+**Problem:** The map-picker Friends list only mirrored the connected CSQC
+snapshot, so it was unavailable until a map/lobby had loaded. Retrying an
+unanswered menu request would retain HTTP workers; MENU generations also reused
+URI callback identity after a menu reload.
+
+**Change:** Add a MENU-only, read-only signing builtin with a fixed Friends
+domain/authority and strict list/Join targets. Reuse the installation key without
+exposing its seed or granting account-link, receipt, message or lobby authority.
+Refuse connected, connecting and demo states. Give MENU VMs a persistent native
+generation so old URI callbacks cannot enter a replacement VM. Mod-side Friends
+uses the fixed HTTPS service only with online consent and its panel open, keeps
+transport ownership across app timeout/hide, stages private lists atomically,
+rechecks Join server-side, and retains existing connected CSQC snapshots.
+The service uses expiring peer/operation-bound challenges, current key links,
+relationship/ban/presence checks, bounded rates and no-store replies. Exact proxy
+locations expose only the two read-only menu routes; no schema change.
+
+**Verified:** Three QC programs: zero warnings; isolated native/plugin build
+passes with no new changed-unit compiler warnings. Thirty real backend tests,
+account and board regressions pass. Actual disconnected MENU/native proof lists
+an online friend and pending request; pointer Join reaches a dedicated socket,
+where signing refuses and the connected snapshot still works. Consent/hidden
+silence, delayed Hide refusal, a 91-second held transport with no accumulation
+and healthy unrelated URI, and same-ID old/new MENU generation controls ACTED.
+Two independent reviews and follow-up closure; recorder tests pass and unchanged
+reader/corpus retain the190 preexisting faults. Details and separate publication,
+Windows/runtime/service status: FTESurf tools/p741menufriends.md. No native HTTP
+cancellation, live genuine-account/fleet acceptance, public release, QC Build
+bump or backend migration is claimed.
+
 ## Patch 740 — prompt requested Momentum demos and sparse KSF collection
 
 **Problem:** KSF's bounded demo lane was not enabled in the watch schedule.

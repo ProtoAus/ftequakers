@@ -1439,6 +1439,8 @@ static progparms_t menuprogparms;
 static menuedict_t *menu_edicts;
 static int num_menu_edicts;
 world_t menu_world;
+// Survives MP_Shutdown's world reset: an old URI callback is not the next VM's.
+static unsigned int mp_vmsequence;
 static int menuentsize;
 double  menutime;
 static struct
@@ -2678,6 +2680,16 @@ static void QCBUILTIN PF_m_fs_addonstate(pubprogfuncs_t *prinst, struct globalva
 	G_FLOAT(OFS_RETURN) = (spec && strlen(spec) < MAX_OSPATH) ? FS_AddonState(spec) : -1;
 }
 
+qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen);
+static void QCBUILTIN PF_m_friends_sign(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	char out[256];
+	G_INT(OFS_RETURN) = 0;
+	if (CL_FriendsSign(PR_GetStringOfs(prinst, OFS_PARM0), PR_GetStringOfs(prinst, OFS_PARM1),
+					   PR_GetStringOfs(prinst, OFS_PARM2), out, sizeof(out)))
+		RETURN_TSTRING(out);
+}
+
 static struct {
 	char *name;
 	builtin_t bifunc;
@@ -2698,6 +2710,7 @@ static struct {
 	{"crossproduct",			PF_crossproduct,			0},
 	{"random",					PF_random,					12},
 	{"localcmd",				PF_localcmd,				13},
+	{"friends_sign",			PF_m_friends_sign,			0},
 	{"localcmd_local",			PF_M_localcmd_local,		0},
 	{"cvar",					PF_menu_cvar,				14},
 	{"cvar_set",				PF_menu_cvar_set,			15},
@@ -3619,6 +3632,8 @@ qboolean MP_Init (void)
 		menu_world.Get_CModel = MP_GetCModel;
 		menu_world.Get_FrameState = MP_Get_FrameState;
 
+		if (!++mp_vmsequence) ++mp_vmsequence;
+		menu_world.spawncount = mp_vmsequence;
 		menu_world.progs = InitProgs(&menuprogparms);
 		PR_Configure(menu_world.progs, PR_ReadBytesString(pr_menu_memsize.string), 16, pr_enable_profiling.ival);
 		mprogs = PR_LoadProgs(menu_world.progs, "menu.dat");

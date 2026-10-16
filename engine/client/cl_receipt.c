@@ -559,6 +559,45 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	return true;
 }
 
+/* Read-only menu proofs have a separate domain, never account/link consent,
+   receipts or lobby capabilities. The builtin exists only in the MENU VM. */
+qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen)
+{
+	char msg[256], pubhex[65], sighex[129];
+	qbyte sig[64];
+	const char *p;
+
+	if (outlen) out[0] = 0;
+	if (cls.state != ca_disconnected || cls.demoplayback || CL_TryingToConnect())
+		return false;
+	if (!nonce || strlen(nonce) != 32 || !op || !who)
+		return false;
+	for (p = nonce; *p; p++)
+		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+			return false;
+	if (!strcmp(op, "list"))
+	{
+		if (strcmp(who, "-")) return false;
+	}
+	else if (!strcmp(op, "join"))
+	{
+		if (strlen(who) != 8) return false;
+		for (p = who; *p; p++)
+			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+				return false;
+	}
+	else
+		return false;
+	if (!CL_Receipt_Key())
+		return false;
+	Q_snprintfz(msg, sizeof(msg), "FTESURF-FRIENDS 1\nserver play.proto.bar:443\nnonce %s\nop %s\nwho %s\n", nonce, op, who);
+	Ed25519_Sign(sig, (const qbyte *)msg, strlen(msg), rcpt_sk);
+	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
+	CL_Receipt_Hex(sighex, sizeof(sighex), sig, sizeof(sig), true);
+	Q_snprintfz(out, outlen, "%s %s", pubhex, sighex);
+	return true;
+}
+
 /*
   Patch 625: THE SIGN-IN PAGE, IN THE PLAYER'S BROWSER.  Game code cannot name
   an address: it supplies the opener it made for a link (24 lowercase hex) and
