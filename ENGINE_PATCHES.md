@@ -1,5 +1,88 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 764 — mover 7: a static prop's collision hull is traced as its convex pieces
+
+**Problem:** Lex, 18 Oct: on curved prop ramps the game throws the rider off where
+Momentum and CS:S ride smoothly, hands off (surf_leidenfrost save 4, surf_surreal
+save 3). `pm_dispprobe 3` named both stops: the rider slid on the prop's top faces
+(`convex_ramp_detailed.mdl`, `ramp10_1.mdl`), then was clipped by an edge-cross-axis
+bevel of a VERTICAL triangle, (0 -0.787 0.617) against the face's (0.330 -0.676 0.659)
+on leidenfrost, (0 0.845 0.534) against (0.508 0.555 0.658) on surreal, about 25
+degrees off the surface. A `.phy` hull is a set of convex IVP ledges, and the walls
+BETWEEN two ledges are faces of both. A solid static prop has collided through its
+model's BIH, built from those triangles, each a prism with four units of solid behind
+it (`BIH_ClipToTriangle`), so the inner walls are thin slabs standing at every seam.
+Offline over the two hulls (FTESurf `tools/census/physeams.py`, the same walk as
+`mod_phy.c`): 32 ledges and 168 wall faces on leidenfrost's, 88 and 124 on surreal's,
+every ledge convex; each wall meets its ledge's top a fraction of a degree short of
+square (89.62 and 89.06 degrees), so its slab's far edge stands up to 0.027 and 0.066
+above the ramp, the second over the 1/32 a rider rides at, at all 124 of surreal's
+seams. Source sweeps each ledge as one convex solid, which no box outside it can
+meet at an inner wall.
+
+**Change:** `mod_phy.c` records where each ledge's triangles start and exports
+`Mod_PHY_ConvexPieces` (the model load's parse and bounds check, kept per ledge). At
+map load `mod_vbsp.c` (`VBSP_PhyBrushes`) turns each colliding static prop's ledges
+into world-space brushes on its `bihtransform_s` (`phybrushes`): a side per face, the
+six axial planes and every edge-cross-axis bevel whose edge is on the hull, each plane
+at the ledge's own support so none can cut it; world space, so the bevel axes are the
+box's. A ledge with a point over 0.05 in front of a face, under four points, or under
+0.01 thick behind any face refuses the prop, which keeps its triangles.
+`BIH_RecursiveTrace`/`BIH_RecursiveTest` sweep those brushes, culled against the whole
+move, in place of the model while `bih_phybrushes` is set; `PMSrc_PlayerMove` sets it
+at `movevars.sourceversion >= 7` beside Patch 492's `bih_sourceclip`, so the brush test
+is Source's at fixrampbugs 2. `PMSRC_VERSION` 7 and `SV_PMSrcVer` accepts pin 7; a pin
+below 7 replays the triangles, and QC traces, rendering and every other caller keep
+them. The builder is part of pin 7 (a change to it is a new version). The load line
+names the props, pieces, planes and KB. `MODPLUGFUNCS_VERSION` 5: `bihtransform_s`
+grew, and an old hl2 plugin under the new engine read `lightorg` as the brush pointer,
+so a mismatched pair now refuses to load Source maps instead. `pm_dettest`: `srctrace`
+and `srcmover` stay the triangles every older pin replays on (`mover`/`srcmover`
+pinned to mover 6); `proptrace` (with how many traces a prop piece decided) and
+`propmover` are mover 7.
+
+**Verified:** the two saves through `conbridge`, `pm_dispprobe 3` on the server, the
+installed P758 pair as control: leidenfrost, the control is stopped at (5162.5 -9797.3
+7654.7) by bevel #6 of a wall and thrown onto the floor at (7318 -10197 6929); this
+build at the same tick hits the face (0.330 -0.676 0.659) of a hull piece and rides on
+over faces (0.365 -0.658 0.659) to (5999 -9743 7261), where hands off it slides off
+the ramp's bottom edge (z 7168.5). Surreal, the control takes bevel #3 at (2788.7
+-8076.3 -12998.1) into a wall at (3860 -8001); this build is clipped by the face to
+(2464 -980 -1131) and flies on as the curve falls away: positions sampled every frame
+lie 21.8, 34.7 and 58.6 units above successive faces of the hull (offline, from the
+same `.phy`), never inside one. Same result on the three builds after review round
+1's fix; the last, 31a45ac8e, loads leidenfrost's 25 props as 192 pieces (3104 planes, 118 KB) and
+surreal's 38 as 1341 (34791, 1285 KB), none refused. 16 recordings on maps with props
+(surf_mesa 230, surf_demise 434, surf_666 600 colliding props) get the same `pm_verify`
+verdict on both builds (PASS, HOLD at the same row, or REFUSE on zones). `pm_dettest`
+trace/mover/srctrace/srcmover are equal on both builds on bhop_eazy, surf_ace,
+surf_boreas, surf_leidenfrost and surf_surreal (bhop_eazy f7958b04/3d136f8d/de0ed342,
+surf_ace 9ba6ebb0/2b575b87/f89ef15d, as at 492); proptrace's prop pieces decide 0, 1,
+3, 23 and 33 of the traces there. FTESurf `tools/test_portal_landing.py` (pin 7
+accepted, 8 refused), `test_portal_carveexit`, `test_portal_collision`,
+`test_portals` pass. Builds: no warnings in the touched files.
+Review: two lenses (geometry and control flow; evidence, replay and prediction), four
+rounds. Round 1 found the first cut unusable: this plugin's `VectorNormalize` returns
+1/length and the builder read it as a length, so every large ledge became its bounding
+box (the first subject arm stood on a (0 0 1) box top; the reviewer's harness measured
+180-512 units of phantom), plus qbsp's bevel thresholds (2-7 unit wedges), a dropped
+three-point ledge, the plugin ABI crash, and `srctrace` no longer measuring old pins.
+Round 2: exactly flat ledges oriented by rounding noise (13.8-39.3 unit half-boxes;
+none in the three maps measured, thinnest 0.9999), and a gate whose prop lines could
+compare nothing. Round 3: the flatness test looked at one face. Round 4: nothing; the
+harness, against exact Minkowski sums in double, gives phantom <= 0.001 and hole
+<= 0.0005 on ramps, wedges, near-axial edges, thin plates and 70 random hulls and
+curved caps, far from the origin included.
+
+**Limits:** displacements, brush-mounted and dynamic props, and QC `tracebox` are still
+triangles (BACKLOG). A scaled static prop still collides unscaled, and a hull reaching
+past its leaf's unscaled radius is still missed outside it, as before. No Momentum
+recording rides these two seams on the save's line, so the ride is checked against
+the hull's own geometry, not against Momentum tick by tick. An old client on a new
+server predicts the triangles and is corrected at prop seams; an old verifier REFUSEs
+pin 7, so the Pi's sweeper takes this binary, and its hl2 plugin, with or before any
+lobby. Times on maps with solid static props are not comparable across mover 6 and 7.
+
 ## Patch 763 — the CSQC tempstring GC skips blocks the QC marks string-free
 
 **Problem:** on surf_kitsune, once a run had started, a ~20 ms frame came every ~415
