@@ -782,14 +782,21 @@ static struct vbsp_phypieces_s *VBSP_PhyPieces(struct vbsp_phypieces_s *cache, s
 	return &cache[(*count)++];
 }
 
-//Appends (normal, support) unless that plane is already there.  Returns the support.
-static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t *w, int nw)
+static float VBSP_PhySupport(const vec3_t normal, const vec3_t *w, int nw)
 {
 	float s = DotProduct(w[0], normal), d;
 	int k;
 	for (k = 1; k < nw; k++)
 		if ((d = DotProduct(w[k], normal)) > s)
 			s = d;
+	return s;
+}
+
+//Appends (normal, support) unless that plane is already there.  Returns the support.
+static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t *w, int nw)
+{
+	float s = VBSP_PhySupport(normal, w, nw);
+	int k;
 	for (k = 0; k < *n; k++)
 		if (fabs(pl[k][0]-normal[0]) < 1e-4 && fabs(pl[k][1]-normal[1]) < 1e-4 &&
 		    fabs(pl[k][2]-normal[2]) < 1e-4 && fabs(pl[k][3]-s) < 0.01)
@@ -881,12 +888,9 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 				VectorNegate(nrm, nrm);
 			if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) - DotProduct(nrm, w[map[ix[t*3]]]) > 0.05)
 				ok = false;	//a point stands in front of a face: not convex
-		}
-		if (ok && n)
-		{	//a flat ledge has no inside to orient its faces by
-			VectorNegate(pl[0], nrm);
-			if (pl[0][3] + VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) < 0.01)
-				ok = false;
+			VectorNegate(nrm, v);
+			if (DotProduct(nrm, w[map[ix[t*3]]]) + VBSP_PhySupport(v, (const vec3_t*)w, nw) < 0.01)
+				ok = false;	//flat across this face: no inside to orient by
 		}
 		if (!ok || !n)
 		{
