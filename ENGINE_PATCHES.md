@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 771 — the 3D sky through a door is no longer cut by the door's near plane
+
+**Problem:** on surf_kitsune, the stage 2 room's 3D-sky grid seen through the stage 1
+exit door appeared only within ~220 units of the door (the owner's saves 17-19). From
+save 18 it was there; 18 units further back and beyond, it was not. P758 had placed
+the sky camera per view, and that was right.
+
+**Cause:** `GLR_DrawPortal` bends the portal view's `m_projection_std` with
+`R_ObliqueNearClip`, so that view clips at the door plane. `R_DrawSkyroom` reused that
+projection from the sky camera, for its frustum and on the GPU. So the sky room lost
+everything nearer than the eye's distance to the door.
+
+How it was measured:
+- A diagnostic build (never shipped) put the moved sky camera, and the sky_camera
+  origin, in the same open cluster (99) at all three distances. So visibility is not
+  the cause.
+- With `r_fastsky 1` the grid is gone at every distance, so the grid is the skyroom.
+- `r_portalrecursion 1`, `r_portalmaxviews 8` and `r_portalscissor 0` change nothing.
+
+**Fix:** `R_SetupGL` keeps the root view's projection in
+`r_refdef.m_projection_noclip`, which portal views inherit and the oblique clip never
+touches. A nested skyroom draws with it. `GLBE_DrawWorld` reloads the backend's cached
+projection on entry and exit, so the portal view draws on with its own. If the copy
+was never set (all zero), the old behaviour stays. The main view is unchanged.
+
+**Verified:**
+- Kitsune, the owner's settings, `r_portalfbo 1`. P771 shows the grid at saves 17 and
+  18 and at every point of a sweep out to 530 units. The installed P766 build shows it
+  at save 18 only.
+- Frame diffs against that build: at the poses on a floor, every change is inside the
+  door. `r_fastsky 1` differs by 2 px, against 12-65 px between two runs of one build.
+- P758's sky arm at saves 12-15 is unchanged.
+- Review, one round on render state: no defect. It found redundant projection flushes
+  (removed) and a cosmetic risk. With `r_portalfbo 0`, or where `GLR_PortalScreenRect`
+  falls back to the full viewport, the far-side sky can now fill the door's scissor
+  rectangle past its outline, where it meets the skyline. The FBO path paints the
+  exact aperture.
+- Water reflection and refraction views take the unclipped sky too.
+
 ## Patch 768 — the forced sky depth sits just behind the sky brush (`r_sky_forcedepth_push`)
 
 **Problem:** Lex, 17 Oct: in surf_monolith's bonus 4 the map's own blue sky
