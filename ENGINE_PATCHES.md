@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 767 — Modulate multiplies as Source does, whatever `$additive` says (hl2 plugin)
+
+**Problem:** Lex, 17 Oct: surf_board_this's stage 1 sky drew flat yellow with
+streaks. Stage 1 sits inside model `*457`, six faces of
+`Modulate { $basetexture "lody/rainbow" $additive 1 $nocull 1 }`, a box that tints
+the sky behind it. The Modulate arm wrote DST_COLOR*SRC_COLOR for a plain Modulate
+and DST_COLOR*(1-SRC_ALPHA) under `$mod2x`, the reverse of `modulate_dx9.cpp`
+(DST_COLOR*ZERO; DST_COLOR*SRC_COLOR with `$mod2x`), and left `st->additive` set, so
+the tail's `progblendfunc add` replaced the pass blend (Patch 219 lets it reach a
+pass): the rainbow was added over the nebula instead of multiplying it.
+
+**Change:** the arm writes Source's two blends and clears `st->additive` and
+`st->alphaval`, which Source's Modulate never blends by (the tail re-derived
+translucency from a fractional `$alpha` and replaced the multiply too). `$mod2x`
+reads its value: `"$mod2x" "0"` was 2x. DecalModulate is unchanged.
+
+**Verified:** plugin build, no new warning. Same exe (20d3e0b1), installed plugin
+against this one, main start of surf_board_this at yaw 0/90/180/270, share of the
+frame that is saturated yellow: 55.8/0.0/18.0/28.6% against 0.0/0.0/0.2/0.0%; the
+nebula now shows through, tinted. `r_showshader lody/rainbow`: `blendFunc
+gl_dst_color gl_src_color` + `progblendfunc add` against `gl_dst_color gl_zero` and
+no progblendfunc. `tools/census/modulate.py` over 1926 library maps: 26 packed
+Modulate materials in 12 maps move (16 `$additive`, 10 `$mod2x`; board_this,
+surf_era and surf_pride's lody set; six maps' combine_binocoverlay; df_upvno's six
+glass panes go from 2x to Source's 1x).
+
+One review (translation against modulate_dx9.cpp and the tail); its `$alpha` and
+`$mod2x 0` findings are the second commit.
+
+**Limits:** still unlike Source: `$writez` is ignored, `$color`/`$color2` are not
+applied, transparent texels are not faded to grey, and DecalModulate's `$mod2x`
+branch writes DST_COLOR*(1-SRC_ALPHA) where Source always doubles (BACKLOG). The
+streaks at the stage box's edges remain.
 ## Patch 766 — borderless stays visible to display capture (`vid_borderless_capture`)
 
 **Problem:** OBS display capture showed the owner's borderless game as black, with a
