@@ -1356,7 +1356,8 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 				for (i = 0; i < trn->numphybrushes; i++)
 				{
 					q2cbrush_t *b = &trn->phybrushes[i];
-					if ((b->contents & tr->hitcontents) && BIH_BoundsIntersect(b->absmins, b->absmaxs, movesubbounds->min, movesubbounds->max))
+					//the whole move, not movesubbounds: a hull may reach past the leaf's bounds
+					if ((b->contents & tr->hitcontents) && BIH_BoundsIntersect(b->absmins, b->absmaxs, tr->bounds.min, tr->bounds.max))
 						BIH_ClipBoxToBrush (tr, b);
 				}
 				if (bih_probe_seq != probeseq)

@@ -327,7 +327,7 @@ typedef struct modplugfuncs_s
 	#define plugmodfuncs_name_idxpostfix "_IDX" STRINGIFY(sizeof_index_t)
 #define plugmodfuncs_name "Models" plugmodfuncs_name_idxpostfix
 } plugmodfuncs_t;
-#define MODPLUGFUNCS_VERSION 4
+#define MODPLUGFUNCS_VERSION 5	//FTESurf Patch 764: struct bihtransform_s grew (the plugin fills it, com_bih.c reads it)
 
 #ifdef SKELETALMODELS
 void Alias_TransformVerticies(float *bonepose, galisskeletaltransforms_t *weights, int numweights, vecV_t *xyzout, vec3_t *normout);

@@ -4094,8 +4094,9 @@ static void SV_DetTest_f (void)
 	unsigned long long hmover = SV_DETHASH_INIT;
 	unsigned long long htick  = SV_DETHASH_INIT;	//FTESurf Patch 325
 	unsigned long long hsrctrace, hsrcmover = SV_DETHASH_INIT;	//Patch 492
+	unsigned long long hproptrace, hpropmover = SV_DETHASH_INIT;	//Patch 764
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
-	unsigned int seed = 20260914u, seedrerun;
+	unsigned int seed = 20260914u, seedrerun, seedprop;
 	int ntrace = atoi(Cmd_Argv(1));
 	int ntick  = atoi(Cmd_Argv(2));
 	int lo[3], hi[3], i, k, pass;
@@ -4140,24 +4141,29 @@ static void SV_DetTest_f (void)
 	/* Patch 492: `srctrace` repeats these traces under the Source clip, which only
 	   the mover turns on, so nothing else here reaches it.  Same draws, so the
 	   seed leaves both calls equal and `mover` keeps its recorded value.
-	   Patch 764: and with static props as their convex pieces, as the mover has at pmsrcver 7. */
+	   Patch 764: `proptrace` adds the static props' convex pieces, mover 7's rule;
+	   `srctrace` stays the triangles every older pin replays on. */
 	seedrerun = seed;
+	seedprop = seed;
 	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true);
 	bih_sourceclip = 1;
-	bih_phybrushes = 1;
 	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false);
+	bih_phybrushes = 1;
+	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false);
 	bih_sourceclip = 0;
 	bih_phybrushes = 0;
 
 	/* ---- 3. the mover, for real. ---------------------------------------- */
 	/* Patch 492: pass 0 is `mover`, pinned to fixrampbugs 1, the value every
-	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2. */
+	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2.
+	   Patch 764: both at mover 6, which they had run at live; pass 2 is
+	   `propmover`, the walk at 2 on mover 7. */
 	seedrerun = seed;
-	for (pass = 0; pass < 2; pass++)
+	for (pass = 0; pass < 3; pass++)
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
-		unsigned long long *hm = pass ? &hsrcmover : &hmover;
+		unsigned long long *hm = (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
 
 		if (pass)
 			seed = seedrerun;
@@ -4193,6 +4199,7 @@ static void SV_DetTest_f (void)
 		movevars.maxspeed      = 320;
 		movevars.entgravity    = 1;
 		movevars.fixrampbugs   = pass ? 2 : 1;
+		movevars.sourceversion = (pass == 2) ? 7 : 6;
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
@@ -4329,6 +4336,9 @@ static void SV_DetTest_f (void)
 	   where the rules differ, not that the clip is idle. */
 	Con_Printf("^5pm_dettest^7 srctrace %016llx\n", hsrctrace);
 	Con_Printf("^5pm_dettest^7 srcmover %016llx\n", hsrcmover);
+	/* Patch 764.  Equal to srctrace/srcmover on a map whose sample met no prop. */
+	Con_Printf("^5pm_dettest^7 proptrace %016llx\n", hproptrace);
+	Con_Printf("^5pm_dettest^7 propmover %016llx\n", hpropmover);
 }
 
 /*

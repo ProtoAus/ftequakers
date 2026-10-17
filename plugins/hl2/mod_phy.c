@@ -189,6 +189,7 @@ typedef struct
 	   ledge is one convex piece, which Mod_PHY_ConvexPieces hands back whole. */
 	size_t          *ledgestart;
 	size_t           numledges, maxledges;
+	qboolean         nostats;	/* Patch 764: a re-parse, not a model load */
 } phyctx_t;
 
 static unsigned int PHY_ReadU32 (const qbyte *p)
@@ -413,10 +414,12 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 	*/
 	if (ctx->numledges == ctx->maxledges)
 	{	/* Patch 764 */
-		ctx->maxledges = ctx->maxledges ? ctx->maxledges*2 : 64;
-		ctx->ledgestart = plugfuncs->Realloc(ctx->ledgestart, sizeof(*ctx->ledgestart)*ctx->maxledges);
-		if (!ctx->ledgestart)
+		size_t want = ctx->maxledges ? ctx->maxledges*2 : 64;
+		size_t *grown = plugfuncs->Realloc(ctx->ledgestart, sizeof(*ctx->ledgestart)*want);
+		if (!grown)
 			return false;
+		ctx->ledgestart = grown;
+		ctx->maxledges = want;
 	}
 	ctx->ledgestart[ctx->numledges++] = ctx->numidx;
 
@@ -518,6 +521,8 @@ static qboolean PHY_Parse (phyctx_t *ctx, const char *dbgname)
 	   that are never solid static props. */
 	if (hdr.solidCount != 1)
 	{
+		if (ctx->nostats)
+			return false;
 		phy_stat_jointed++;
 		Con_DPrintf("%s: .phy has %i solids (jointed) -- using the render mesh\n",
 		            dbgname, hdr.solidCount);
@@ -810,12 +815,15 @@ qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.base    = file;
 	ctx.filelen = filelen;
+	ctx.nostats = true;
 	ok = PHY_Parse(&ctx, mod->name) && PHY_HullInsideModel(&ctx, mod);
 	plugfuncs->Free(file);
 	if (ok && ctx.numledges == ctx.maxledges)
 	{
-		ctx.ledgestart = plugfuncs->Realloc(ctx.ledgestart, sizeof(*ctx.ledgestart)*(ctx.maxledges+1));
-		ok = ctx.ledgestart != NULL;
+		size_t *grown = plugfuncs->Realloc(ctx.ledgestart, sizeof(*ctx.ledgestart)*(ctx.maxledges+1));
+		if (grown)
+			ctx.ledgestart = grown;
+		ok = grown != NULL;
 	}
 	if (!ok)
 	{

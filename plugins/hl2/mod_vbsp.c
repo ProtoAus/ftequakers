@@ -754,6 +754,8 @@ per IVP ledge, for BIH_RecursiveTrace to sweep at pmsrcver 7 instead of the
 model's triangle prisms (ENGINE_PATCHES.md 764).  Sides are the ledge's faces,
 the six axial planes and the edge-cross-axis bevels, each at the ledge's own
 support so no side can cut it.  World space, so the bevel axes are the box's.
+These shapes are what a pin-7 recording replays on: any change to this builder or
+to Mod_PHY_ConvexPieces is a new PMSRC_VERSION, with this one kept for pin 7.
 */
 struct vbsp_phypieces_s
 {
@@ -763,7 +765,7 @@ struct vbsp_phypieces_s
 	index_t *idx;
 	size_t *ledgestart, numledges;
 };
-static unsigned int vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyrefused;
+static unsigned int vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyrefused, vbsp_stat_phyplanes;
 static q2mapsurface_t vbsp_physurface = {{"phy_hull"}};
 
 static struct vbsp_phypieces_s *VBSP_PhyPieces(struct vbsp_phypieces_s *cache, size_t *count, model_t *m)
@@ -780,8 +782,8 @@ static struct vbsp_phypieces_s *VBSP_PhyPieces(struct vbsp_phypieces_s *cache, s
 	return &cache[(*count)++];
 }
 
-//Appends (n, support) unless an equal plane is already there.  Returns the support.
-static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t *w, int nw, float tol)
+//Appends (normal, support) unless that plane is already there.  Returns the support.
+static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t *w, int nw)
 {
 	float s = DotProduct(w[0], normal), d;
 	int k;
@@ -789,8 +791,8 @@ static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t
 		if ((d = DotProduct(w[k], normal)) > s)
 			s = d;
 	for (k = 0; k < *n; k++)
-		if (fabs(pl[k][0]-normal[0]) < tol && fabs(pl[k][1]-normal[1]) < tol &&
-		    fabs(pl[k][2]-normal[2]) < tol && fabs(pl[k][3]-s) < 0.01)
+		if (fabs(pl[k][0]-normal[0]) < 1e-4 && fabs(pl[k][1]-normal[1]) < 1e-4 &&
+		    fabs(pl[k][2]-normal[2]) < 1e-4 && fabs(pl[k][3]-s) < 0.01)
 			return s;
 	VectorCopy(normal, pl[*n]);
 	pl[*n][3] = s;
@@ -798,7 +800,15 @@ static float VBSP_PhyPlane(vec4_t *pl, int *n, const vec3_t normal, const vec3_t
 	return s;
 }
 
-//False when a ledge is not convex: the prop then keeps its triangles.
+//Model-space vector to world space: the inverse of BIH_Trace's p_m[i] = dot(p, axis[i]).
+static void VBSP_PhyRotate(const struct bihtransform_s *trn, const float *m, vec3_t out)
+{
+	int a;
+	for (a = 0; a < 3; a++)
+		out[a] = m[0]*trn->axis[0][a] + m[1]*trn->axis[1][a] + m[2]*trn->axis[2][a];
+}
+
+//False refuses the prop (a ledge not convex or degenerate): it keeps its triangles.
 static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const struct vbsp_phypieces_s *pc)
 {
 	const struct bihtransform_s *trn = &sp->transform;
@@ -809,6 +819,7 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 	q2cbrush_t *brushes;
 	qboolean ok = true;
 	size_t maxtris = 0, numxyz = 0;
+	float len;
 
 	for (li = 0; li < pc->numledges; li++)
 		if (maxtris < (pc->ledgestart[li+1] - pc->ledgestart[li]) / 3)
@@ -837,14 +848,16 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 		for (t = 0; t < ntri*3; t++)
 			if (map[ix[t]] < 0)
 			{
-				const float *m = pc->xyz[ix[t]];
 				map[ix[t]] = nw;
-				for (a = 0; a < 3; a++)
-					w[nw][a] = trn->origin[a] + m[0]*trn->axis[0][a] + m[1]*trn->axis[1][a] + m[2]*trn->axis[2][a];
+				VBSP_PhyRotate(trn, pc->xyz[ix[t]], w[nw]);
+				VectorAdd(w[nw], trn->origin, w[nw]);
 				nw++;
 			}
 		if (nw < 4)
-			continue;
+		{
+			ok = false;	//flat or empty: there is no solid to build
+			break;
+		}
 		VectorClear(cen);
 		for (k = 0; k < nw; k++)
 			VectorAdd(cen, w[k], cen);
@@ -852,17 +865,21 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 
 		n = 0;
 		for (t = 0; t < ntri && ok; t++)
-		{	//faces, outward from the ledge's centroid
-			const float *p0 = w[map[ix[t*3+0]]], *p1 = w[map[ix[t*3+1]]], *p2 = w[map[ix[t*3+2]]];
-			VectorSubtract(p1, p0, u);
-			VectorSubtract(p2, p0, v);
-			CrossProduct(u, v, nrm);
-			if (VectorNormalize(nrm) < 1e-3)
+		{	//faces, from the model-space points (smaller numbers), outward from the centroid
+			const float *m0 = pc->xyz[ix[t*3+0]], *m1 = pc->xyz[ix[t*3+1]], *m2 = pc->xyz[ix[t*3+2]];
+			vec3_t mn;
+			VectorSubtract(m1, m0, u);
+			VectorSubtract(m2, m0, v);
+			CrossProduct(u, v, mn);
+			len = VectorLength(mn);
+			if (len < 1e-4)
 				continue;
-			VectorSubtract(p0, cen, u);
+			VectorScale(mn, 1/len, mn);
+			VBSP_PhyRotate(trn, mn, nrm);
+			VectorSubtract(w[map[ix[t*3]]], cen, u);
 			if (DotProduct(nrm, u) < 0)
 				VectorNegate(nrm, nrm);
-			if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw, 1e-4) - DotProduct(nrm, p0) > 0.1)
+			if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) - DotProduct(nrm, w[map[ix[t*3]]]) > 0.05)
 				ok = false;	//a point stands in front of a face: not convex
 		}
 		if (!ok)
@@ -871,20 +888,22 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 		{	//axial
 			VectorClear(axis);
 			axis[a] = 1;
-			VBSP_PhyPlane(pl, &n, axis, (const vec3_t*)w, nw, 1e-4);
+			VBSP_PhyPlane(pl, &n, axis, (const vec3_t*)w, nw);
 			axis[a] = -1;
-			VBSP_PhyPlane(pl, &n, axis, (const vec3_t*)w, nw, 1e-4);
+			VBSP_PhyPlane(pl, &n, axis, (const vec3_t*)w, nw);
 		}
 		for (t = 0; t < ntri; t++)
 		for (e = 0; e < 3; e++)
-		{	//edge bevels, kept only where the edge is on the support (Patch 318's rule)
-			const float *p0 = w[map[ix[t*3+e]]], *p1 = w[map[ix[t*3+(e+1)%3]]];
+		{	//edge bevels, kept where the edge is on the hull in that direction
+			const float *m0 = pc->xyz[ix[t*3+e]], *m1 = pc->xyz[ix[t*3+(e+1)%3]];
+			const float *p0 = w[map[ix[t*3+e]]];
 			int dir;
-			VectorSubtract(p1, p0, u);
-			if (VectorNormalize(u) < 0.5)
+			VectorSubtract(m1, m0, v);
+			VBSP_PhyRotate(trn, v, u);
+			len = VectorLength(u);
+			if (len < 1e-3)
 				continue;
-			if (fabs(u[0]) > 0.999 || fabs(u[1]) > 0.999 || fabs(u[2]) > 0.999)
-				continue;	//an axial edge's bevels are the axial planes
+			VectorScale(u, 1/len, u);
 			for (a = 0; a < 3; a++)
 			for (dir = -1; dir <= 1; dir += 2)
 			{
@@ -892,9 +911,11 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 				VectorClear(axis);
 				axis[a] = dir;
 				CrossProduct(u, axis, nrm);
-				if (VectorNormalize(nrm) < 0.5)
-					continue;
-				if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw, 0.01) - DotProduct(nrm, p0) > 0.01)
+				len = VectorLength(nrm);
+				if (len < 1e-6)
+					continue;	//an axial edge: its bevels are the axial planes
+				VectorScale(nrm, 1/len, nrm);
+				if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) - DotProduct(nrm, p0) > 0.01)
 					n = before;	//the edge is not on the hull in this direction
 			}
 		}
@@ -916,6 +937,7 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 			b->brushside[k].surface = &vbsp_physurface;
 		}
 		b->numsides = n;
+		vbsp_stat_phyplanes += n;
 		b->contents = FTECONTENTS_BODY;	//what mod_hl2 gives the hull's triangles
 		ClearBounds(b->absmins, b->absmaxs);
 		for (k = 0; k < nw; k++)
@@ -7587,7 +7609,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	phyprobe = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*phyprobe)*prv->numstaticprops) : NULL;
 	phypieces = 0;	//FTESurf Patch 764, sized as phyprobe is
 	phypiece = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*phypiece)*prv->numstaticprops) : NULL;
-	vbsp_stat_phyprops = vbsp_stat_phypieces = vbsp_stat_phyrefused = 0;
+	vbsp_stat_phyprops = vbsp_stat_phypieces = vbsp_stat_phyrefused = vbsp_stat_phyplanes = 0;
 
 	bihleafs = sub->num_brushes;
 	if (hl2_dispcollision->ival)
@@ -7838,9 +7860,10 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 
 	//FTESurf Patch 764
 	if (vbsp_stat_phyprops || vbsp_stat_phyrefused)
-		Con_Printf("%s: %u static props trace their .phy hulls as %u convex pieces at pm_sourceversion 7%s.\n",
-			mod->name, vbsp_stat_phyprops, vbsp_stat_phypieces,
-			vbsp_stat_phyrefused ? va("; %u kept their triangles (a piece was not convex)", vbsp_stat_phyrefused) : "");
+		Con_Printf("%s: %u static props trace their .phy hulls as %u convex pieces (%u planes, %u KB) at pm_sourceversion 7%s.\n",
+			mod->name, vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyplanes,
+			(unsigned)((vbsp_stat_phypieces*sizeof(q2cbrush_t) + vbsp_stat_phyplanes*(sizeof(mplane_t)+sizeof(q2cbrushside_t)))/1024),
+			vbsp_stat_phyrefused ? va("; %u kept their triangles (a piece not convex, or flat)", vbsp_stat_phyrefused) : "");
 
 	/*
 	FTESurf Patch 262, and a real Con_Printf rather than a DPrintf: this is the
