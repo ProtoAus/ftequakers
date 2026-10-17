@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 759 — 3/4/5/6 and `!s N`/`!b N` are predicted (QC only)
+
+**Problem:** on a Patch 754 client, which predicts through a save-lock hold, every
+3/4/5/6 press under a hold printed a `prederr`: the server moved the held body by
+stringcmd and the replay, re-based one snapshot late, finalized the old row (the
+owner's Kitsune walk through saves 12 to 15: 9-4421 u). Turning prediction off
+around the step does not help: on resume the engine re-bases at `prop.sequence`,
+a frame before the step. `!s N` and `!b N` still waited a round trip.
+
+**Change:** FTESurf `sv_warpop.qc`/`cl_warpop.qc`, on Patch 753's ops: 205-208
+sl_next/prev/first/last, 209+N-1 `!s N` (N up to 30), 239+N-1 `!b N` (up to 16),
+applied through the same calls as the stringcmds and chat. The server publishes the
+four rows a step can land on (STAT_FS_WOPROW, every PostThink), P680's answer for
+each existing stage and bonus (STAT_FS_WOPLEGS, six string stats, at most once a
+second per player) and the last op it answered (STAT_FS_WOPACK, which travels with
+those stats; servercommandframe can lead them). Every press is sent at once and in
+order; the client walks the unanswered loads and steps through the server's cursor
+arithmetic, predicts only a row it was given, and otherwise sends the op
+unpredicted. A client mirror of SV_SaveLocRate keeps a refused press out of the
+walk, and a key's auto-repeat waits for the answer.
+
+**Verified:** `tools/p753warpop.py --more`, dedicated surf_dune, sv_minping 80, 754
+client. The live build printed 1343-28654 u per held step, 10923 for `!s 2`, 29608
+for `!b 1` and 498 for a free step; this build 0 in every predicted window, each op
+at the same command on both sides, rows landing in order (a step onto an
+unpublished row is corrected once, as designed). The 0.1.26 release client
+predicts all but held steps, which fall back. Three control-flow and two integrity
+review rounds; a first cut that held early presses back let later keys overtake
+them and was replaced. Not this patch's: a landing from surf_dune's void teleports
+after a fast fall is sometimes corrected on every engine (FTESurf BACKLOG).
+
 ## Patch 762 — key configuration panel, key hints, the save-lock keys as binds (QC only)
 
 **Problem:** There was no in-game way to rebind keys. The save panel's z and the
