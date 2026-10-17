@@ -644,6 +644,8 @@ static void R_SetupGL (const float eyematrix[12]/*can be null*/, const vec4_t fo
 		r_refdef.m_projection_view[2+4*3] *= 0.333;
 		r_refdef.m_projection_view[14] -= 0.666;
 
+		memcpy(r_refdef.m_projection_noclip, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_noclip));	//FTESurf Patch 771: portal views inherit it unclipped
+
 		GL_ViewportUpdate();
 	}
 

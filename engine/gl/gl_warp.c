@@ -480,6 +480,14 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 	}
 	else
 		Matrix4x4_CM_ModelViewMatrixFromAxis(vmat, vpn, vright, vup, r_refdef.vieworg);
+	/* FTESurf Patch 771: inside a portal view m_projection_std carries the door's oblique near
+	   plane (R_ObliqueNearClip). From the sky camera that cut away everything in the sky room
+	   nearer than the eye's distance to the door: on surf_kitsune the sky through the stage 2
+	   door was gone from more than ~220 units back. The sky is behind everything, so it takes
+	   the unclipped projection; GLBE_DrawWorld reloads the backend's cached copy on entry and
+	   exit. Unset (all zero, cl_main.c's memset) keeps the old behaviour. */
+	if (oldrefdef.recurse && (r_refdef.m_projection_noclip[11] || r_refdef.m_projection_noclip[15]))
+		memcpy(r_refdef.m_projection_std, r_refdef.m_projection_noclip, sizeof(r_refdef.m_projection_std));
 	R_SetFrustum (r_refdef.m_projection_std, vmat);
 
 	//now determine the stuff the backend will use.

@@ -386,6 +386,7 @@ typedef struct refdef_s
 
 	vec3_t		skyroom_eye;		/*FTESurf Patch 758: vieworg when skyroom_pos was set*/
 	float		skyroom_scale;		/*...and its parallax divisor, 0 for none (a fixed camera)*/
+	float		m_projection_noclip[16];	/*FTESurf Patch 771: the root view's m_projection_std, which no portal's oblique near plane touches; the skyroom draws with it*/
 } refdef_t;
 
 extern	refdef_t	r_refdef;
