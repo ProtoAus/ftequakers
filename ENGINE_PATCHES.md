@@ -55,6 +55,67 @@ fuzzed exits in both physent orders (an acting control differs on 42,881); mover
 adds no client/server disagreement mover 5 lacks. Limits in FTESurf BACKLOG's
 mover 6 item. Provenance: FTESurf `tools/p758portalsky.md`.
 
+## Patch 760 — a run line's sample store is sized to its run (QC only)
+
+**Problem:** each scoreboard line slot had a fixed store: 65,536 samples for lines
+1-8 and 8,192 (about 2 min) for lines 9-64. Past it a line kept every other
+sample, then every fourth. 18 % of Momentum's 2,491 main runs are over 2 min, and
+a typical line used a sixth of a big slot. Drawing already windows and simplifies
+far parts, so the limit was the fixed split, not the draw (30 s chunks loaded
+around the player were weighed and left in BACKLOG: they matter only past
+200,000 samples, 1 file of 5,281).
+
+**Change:** FTESurf `cl_lines.qc`. The replay (slot 0), the live run (9, 10) and
+the race ghost's whole-run PB (68) keep their fixed places. Every other slot
+takes a region of the rest, 991,232 samples in two ranges either side of the
+live run, from a best-fit allocator in whole 512-sample groups, at most 65,536.
+Each region owns its chunks and LOD groups, so the engine's per-draw bases need
+nothing. A line job asks for the file's size / 40, and gives back what it does not
+hold at the end of its build or when it stops early. Clearing a line returns its
+region, and free neighbours merge. `lines native` prints the regions.
+
+**Verified:** `p760pool.cfg`, graded by `tools/test_p760pool.py`, on the current
+exe and on the 0.1.26 release exe. The owner's Kitsune PB in lines 1, 9 and 64
+keeps all 9,996 samples (the build before: 4,998 in 9 and 64). 19 copies of a
+58,126-sample run: 15 whole (8 + 7, as the two ranges hold beside three short
+runs), the rest halved down to an eighth. No region, used or free, overlaps
+another or a fixed place. Two lines off join into one free region, and a run
+ticked again lands inside it. Cleared, the pool is whole. The build before the
+review fails the grader. p649lines 11 of 11; race ghost stage and pose arms pass.
+One review: the ghost PB had been pooled, and a job that stopped early kept its
+65,536. FTESurf `c62aa38`, review fixes `6bf55c5`.
+
+## Patch 759 — 3/4/5/6 and `!s N`/`!b N` are predicted (QC only)
+
+**Problem:** on a Patch 754 client, which predicts through a save-lock hold, every
+3/4/5/6 press under a hold printed a `prederr`: the server moved the held body by
+stringcmd and the replay, re-based one snapshot late, finalized the old row (the
+owner's Kitsune walk through saves 12 to 15: 9-4421 u). Turning prediction off
+around the step does not help: on resume the engine re-bases at `prop.sequence`,
+a frame before the step. `!s N` and `!b N` still waited a round trip.
+
+**Change:** FTESurf `sv_warpop.qc`/`cl_warpop.qc`, on Patch 753's ops: 205-208
+sl_next/prev/first/last, 209+N-1 `!s N` (N up to 30), 239+N-1 `!b N` (up to 16),
+applied through the same calls as the stringcmds and chat. The server publishes the
+four rows a step can land on (STAT_FS_WOPROW, every PostThink), P680's answer for
+each existing stage and bonus (STAT_FS_WOPLEGS, six string stats, at most once a
+second per player) and the last op it answered (STAT_FS_WOPACK, which travels with
+those stats; servercommandframe can lead them). Every press is sent at once and in
+order; the client walks the unanswered loads and steps through the server's cursor
+arithmetic, predicts only a row it was given, and otherwise sends the op
+unpredicted. A client mirror of SV_SaveLocRate keeps a refused press out of the
+walk, and a key's auto-repeat waits for the answer.
+
+**Verified:** `tools/p753warpop.py --more`, dedicated surf_dune, sv_minping 80, 754
+client. The live build printed 1343-28654 u per held step, 10923 for `!s 2`, 29608
+for `!b 1` and 498 for a free step; this build 0 in every predicted window, each op
+at the same command on both sides, rows landing in order (a step onto an
+unpublished row is corrected once, as designed). The 0.1.26 release client
+predicts all but held steps, which fall back. Three control-flow and two integrity
+review rounds; a first cut that held early presses back let later keys overtake
+them and was replaced. Not this patch's: a landing from surf_dune's void teleports
+after a fast fall is sometimes corrected on every engine (FTESurf BACKLOG).
+
 ## Patch 762 — key configuration panel, key hints, the save-lock keys as binds (QC only)
 
 **Problem:** There was no in-game way to rebind keys. The save panel's z and the
