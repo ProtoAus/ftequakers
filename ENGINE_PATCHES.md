@@ -118,6 +118,11 @@ stands; after a map teleport into a stage start the server ran no move ticks for
 0.7 s and never set the ground flag while the Surfer's prediction landed, so the
 watched column follows the server there. 0 warnings in all three VMs.
 
+**Deployed:** main `b4ab2c1` (with 745 and 746) to all 12 lobbies at
+2026-10-17T01:38Z and to both Windows installs: csprogs `b7d751ee`, qwprogs
+`aca51849`, `.prev` kept. Host hashes read back; a fresh 0.1.25 client on
+:27510 was served `b7d751ee` and drew the board. Owner check pending (lextest).
+
 ## Patch 743 — prove ambiguous alpha order over projected overlap
 
 **Problem:** P742's stage3 fix is accepted, but stage1 saves 5/6 still flip:
