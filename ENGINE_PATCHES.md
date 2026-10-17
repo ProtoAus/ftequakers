@@ -1,5 +1,76 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 772 — paint: discs sprayed where you aim, clipped to the faces as Source's are; the player trail as a line
+
+**Problem:** Lex asked for `paint`: a coloured disc sprayed where you aim, with no
+latency and as many as possible, clipped to the surface so a ramp's edge shows. He also
+asked for player_edit's trail to be a line that follows the player, not the particle
+dots it was. The persistent decal (`adddecal_static`) was the right base: it is clipped
+once and copied each frame. But it only reached faces the world's BSP leaves list:
+- VBSP leaves list no displacements: 0 of 452 on surf_dune, 457 on surf_ethereal,
+  493 on surf_aquaflow.
+- Brush entities were never clipped. Across 1,131 surf maps, a quarter or more of the
+  surfable face area is a func_brush or func_illusionary on 116 maps, and a
+  displacement on 35.
+- Every decal was emitted every frame. 29,992 decals out of view took a frame from
+  1.1 to 4.7 ms (≈920 → 213 fps).
+
+**Change (engine):**
+- `adddecal_static` reads srange's third figure as flags; older engines ignore it.
+  PDC_SOURCE (1) also clips the decal to two more things:
+  - The world's displacements. They are the only non-fan meshes in a VBSP world;
+    `Mod_ClipDecalDisplacements` (q1bsp.c) keeps them with their bounds per map.
+  - The unrotated brush entities in the current packet. Source stores their models
+    about the entity origin, so the clip runs in model space and the fragments are
+    shifted back.
+  - Extension `FTESURF_DECAL_SOURCE`.
+- No decal lands on a hidden tool face (`SURF_NODRAW`: triggers, clip).
+- `CL_EmitPersistentDecals` skips a decal whose clipped bounds are outside the frustum,
+  unless a portal or mirror view drew the world in the previous frame. Those views
+  draw the main view's scene tris. The skyroom draws none and does not count.
+
+**Change (csprogs):**
+- `cl_paint.qc`: `+paint`, `paint`, `paint_clear`, `paint_fill <n> [deg]`,
+  `paint_status`, and the cvars `paint_color` ("" = your body colour), `paint_size`,
+  `paint_alpha` and `paint_max` (8192; the oldest goes).
+  - The disc is a GLSL coverage circle, placed in the frame the key is down, client
+    only.
+  - The aim stops at player collision (solid + player clip). If no face takes the
+    disc there, it tries the first visible solid within 32 units further on.
+  - `hud_player` has a Paint section under the body; the key panel has a
+    "Paint (hold)" row, unbound.
+- `cl_ptrail.qc`: the trail is one camera-facing ribbon per body
+  (`R_EndPolygonRibbon`), cut at teleports, faded by age. The four length stops keep
+  the particle blocks' lives (0.6/1.2/1.8/3 s). Motes are gone from the panel and from
+  other players' bodies, and opening the panel clears the old bit.
+
+**Verified:** client exe built from this tree, beside a dedicated server, via conbridge.
+- surf_raqbonus3ramp: the func_illusionary ramp face takes paint, cut at its ridge and
+  foot. Of a 6,000-disc spray, 542 failed under the P771 exe (46 on a brush entity,
+  496 with no face); 2 failed under this one.
+- surf_dune: the sand mound (a displacement) is bare at a straight line under P771 and
+  painted with a soft fade under this build. Discs stop at face edges (the arch's
+  frame, the floor's rim).
+- The same csprogs under the installed P771 exe: source clip 0, world faces painted,
+  the trail drawn, no QC error.
+- Cost, the same pose with the paint out of view: 0 decals 0.94 ms; 27,951 decals
+  1.5-2.3 ms with the cull, 4.7 ms without. In view: 2.4 ms (4.2 ms before).
+- Trail: your own (slot 0) and a streamed body (`lobby_av_self 1`, slot 2) both fed;
+  one ribbon of 90 points drawn in the trail colour.
+- 0 warnings, both builds.
+- Review, one round. It found that brush entities were clipped in world space, that
+  triggers' hidden faces would take paint, that a failed aim at the cap dropped the
+  oldest disc, a per-failure surface scan, a cache key that could go stale, and a
+  short reach. All fixed; the brush-entity fix re-measured above.
+
+**Known:**
+- Static props take no paint. surf_ethereal's ramps are props.
+- A rotated or moving brush entity is left out, or keeps its paint where it was clipped.
+- The first frame a portal comes into view, decals outside the main frustum are
+  missing from it.
+- Other players do not see your paint.
+- Trail drawing in a full lobby (32 × up to 192 points) is not measured.
+
 ## Patch 771 — the 3D sky through a door is no longer cut by the door's near plane
 
 **Problem:** on surf_kitsune, the stage 2 room's 3D-sky grid seen through the stage 1
