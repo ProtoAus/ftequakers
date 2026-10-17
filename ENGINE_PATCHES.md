@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 770 — Friends need no acceptance; TAB board Scoreboard / Players switch, Styles row and a new Players list (QC, surfd)
+
+**Problem:** Lex, 18 Oct: the main menu's Friends list did not load; adding a friend
+waited on the other player accepting; the board's Online / Segmented / Local / Players
+tab strip mixed boards with the player list (he asked for a "Scoreboard/Players" button
+above the board, and Segmented as the first entry of "KSF Styles", renamed "Styles");
+and the Players page looked bad, with Spectate/Add/Mute as small chips under each name.
+
+**Cause (menu list):** the Pi's surfd was sealed generation 36697da (16 Oct morning),
+older than P741's `/api/social/menu` routes, and the public proxy had no locations for
+them: `play.proto.bar/api/social/menu/challenge` answered 404.
+
+**Change:**
+- surfd `social.py`: `add` makes both accounts friends at once (a pre-P770 request is
+  completed by an add, or by the next lobby poll). Without acceptance an account needs a
+  way to refuse one: `block` ends a friendship, purges queued messages and refuses that
+  account's add, message and join; both sides' blocks stand until each lifts its own
+  (accepted -1 / -2); the blocker sees relation 4 with Unblock, being blocked is not
+  shown and takes no friend slot; menus before P770 get no relation-4 rows.
+- `cl_scores.qc`: tab strip Online / Local; a Scoreboard | Players switch centred above
+  the panel (Scoreboard returns to the board and KSF style it left); "Styles" opens with
+  Segmented, then FW / SW / HSW / BW; left / right go Online, Local, Players.
+- `cl_players.qc`: a row per player (picture or initial, name, You / Spectating /
+  Blocked / Voice muted, ping, PB). The row spectates; Profile, Add friend, Mute (voice,
+  the engine's, session only) and Block (saved chat silence plus the service block)
+  sit on it. `sv_social.qc` passes block / unblock; the Friends tab lists blocks.
+- `tools/surfd_successor/`: build, suite, cutover and rollback for a code-only
+  successor generation (the sealed one refuses `surfd-deploy.ps1`). It moves every
+  host binding together: the guard, 4 cron lines, `run.sh`, the six import stubs in
+  `/srv/nvme/surfd` (which run the generation's code for unguarded crons and
+  `momrequests.service`), and restarts that service.
+
+**Verified:** `test_social.py` 36 pass (each new test fails on the code before it) here
+and in the Pi stage, with the whole surfd suite. QC builds with 0 warnings. A fixture
+arm (7 synthetic roster rows, owned overlay) at 1280x720 and 800x600: every switch,
+Styles chip and arrow path acts, read from `scores status`, screenshots read; Block
+sends `friend block`. Three review rounds (social, QC, Pi scripts): a step-2/3 cutover
+failure without a working rollback, a harasser's block making the victim's a no-op,
+hidden rows taking slots, the rollback ordering, all fixed. Live: QC on 12 lobbies
+(qwprogs `24e65490`, csprogs `bc93f6db`) and both installs (menu `7cdba577`) at
+22:47-22:48Z; surfd 8182c6f promoted at 22:58:21Z after 64 s of 503s (step 3 waited
+its 60 s on momrequests' shared lock); 12 lobbies heartbeating, social polls 200,
+local `menu/challenge` ok. Not verified: the public menu route (the proxy snippet
+needs Lex's sudo), real linked accounts, more than one real player. FTESurf
+`884a85b`..`8182c6f`.
+
 ## Patch 772 — paint: discs sprayed where you aim, clipped to the faces as Source's are; the player trail as a line
 
 **Problem:** Lex asked for `paint`: a coloured disc sprayed where you aim, with no
