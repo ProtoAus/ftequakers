@@ -319,6 +319,7 @@ typedef struct {
 //included before this header (client/quakedef.h:186 vs :196).
 void PMSrc_SaveState(pmsourcestate_t *out);
 void PMSrc_LoadState(const pmsourcestate_t *in);
+void PMSrc_ReconcileHull(pmsourcestate_t *s, const vec3_t mins, const vec3_t maxs, float servereye);	//FTESurf Patch 754
 
 #define MOVEFLAG_VALID							0x80000000	//to signal that these are actually known. otherwise reserved.
 //#define MOVEFLAG_Q2AIRACCELERATE				0x00000001

@@ -1280,6 +1280,7 @@ enum
 	globalfloat (predinput_forceduck)         /*DUCK: completed posture, 1 stand or 2 duck*/ \
 	globalfloat (predinput_sequence_lo)       /*P675: read-only exact sequence low 16 bits*/ \
 	globalfloat (predinput_sequence_hi)       /*P675: read-only exact sequence high 16 bits*/ \
+	globalfloat (predinput_held)              /*P754: nonzero lets the replay run through PM_NONE*/ \
 	\
 	globalvector(predmove_org0)				/*FTESurf P335: origin at the START of the predicted command (ro)*/ \
 	globalvector(predmove_org)				/*FTESurf P335: origin after PM_PlayerMove; QC may rewrite (rw)*/ \

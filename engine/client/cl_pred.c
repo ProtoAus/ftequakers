@@ -1242,7 +1242,8 @@ void CL_PredictMovePNum (int seat)
 
 	//these things also force-disable prediction
 	if (cls.demoplayback==DPB_MVD ||
-		cl.intermissionmode != IM_NONE || cl.paused || pv->pmovetype == PM_NONE || pv->pmovetype == PM_FREEZE || CAM_ISLOCKED(pv))
+		cl.intermissionmode != IM_NONE || cl.paused || pv->pmovetype == PM_FREEZE || CAM_ISLOCKED(pv) ||
+		(pv->pmovetype == PM_NONE && !CSQC_PredictsHeld()))	//FTESurf Patch 754
 	{
 		nopred = true;
 	}
@@ -1508,6 +1509,10 @@ void CL_PredictMovePNum (int seat)
 				if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 					VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 			}
+			//FTESurf Patch 754: the posture the hull states, propagated or not (a
+			//resume after a no-prediction stretch seeds a zeroed pmsrc).  Our own
+			//predicted frames carry a matching hull, so this only acts on a snapshot.
+			PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);
 			cl_pred_localchain = true;	//FTESurf Patch 335
 			CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
 			cl_pred_localchain = false;
@@ -1566,6 +1571,7 @@ void CL_PredictMovePNum (int seat)
 					if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 						VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 				}
+				PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);	//Patch 754
 //				Con_DPrintf(" extrap %i: %f-%f (%g)\n", toframe, fromtime, simtime, simtime-fromtime);
 				cl_pred_localchain = true;	//FTESurf Patch 335
 				CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);

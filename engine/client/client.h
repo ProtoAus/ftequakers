@@ -1611,6 +1611,7 @@ void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preori
 void	 CSQC_PredictPortalAngles(int seat, const usercmd_t *cmd);
 void	 CSQC_PortalView(playerview_t *pv);
 int      CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec);
+qboolean CSQC_PredictsHeld(void);	//FTESurf Patch 754
 void	 CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious);
 void     CSQC_PredictSaveBaseVel(int seat, int sequence);
 void	 CSQC_PredictBaseVelFlush(void);
@@ -1648,6 +1649,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_PredictPortalAngles(seat,cmd)
 #define CSQC_PortalView(pv)
 #define CSQC_PredictPlayerPreMove(seat,cmd,offsetmsec) 0
+#define CSQC_PredictsHeld() false
 #define CSQC_PredictConsumeBaseVel(seat,sequence,restoreprevious)
 #define CSQC_PredictSaveBaseVel(seat,sequence)
 #define CSQC_PredictBaseVelFlush()

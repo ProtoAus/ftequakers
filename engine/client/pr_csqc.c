@@ -259,7 +259,7 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.CSQC_PredictPlayerPreMove = 0;
 		csqcg.predinput_apply = csqcg.predinput_origin = csqcg.predinput_velocity = NULL;
 		csqcg.predinput_onground = csqcg.predinput_pmtype = csqcg.predinput_forceduck = NULL;
-		csqcg.predinput_sequence_lo = csqcg.predinput_sequence_hi = NULL;
+		csqcg.predinput_sequence_lo = csqcg.predinput_sequence_hi = csqcg.predinput_held = NULL;
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
 		csqcg.predmove_bvfired = NULL;
@@ -10524,6 +10524,24 @@ void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 	pred_trace_until[seat] = realtime + 1;
 	PA_Log("predangle: %.4f absolute %.3f basis %i %s seq %i -> %.3f", realtime, predsrv[seat].target[YAW], K,
 		n >= 0 ? "abs-keep-newer" : m >= 0 ? "abs-match" : "abs-server", n >= 0 ? (int)predsnaps[seat][n].seq : m >= 0 ? (int)predsnaps[seat][m].seq : -1, ang[YAW]);
+}
+
+/*FTESurf Patch 754: a module with the pre-move hook can apply a held body's
+  release at its command (FTESurf's warp ops), which needs the replay to keep
+  running while the server reports PM_NONE.  A PM_NONE replay moves nothing.
+  Opt-in per server through predinput_held: PM_NONE also means "server-side
+  physics" under sv_nqplayerphysics, where only interpolation is right.*/
+qboolean CSQC_PredictsHeld(void)
+{
+	if (!csqcprogs || !csqcg.CSQC_PredictPlayerPreMove || !csqcg.predinput_apply || !cl_predict_qchook.ival)
+		return false;
+	if (!csqcg.predinput_held || !*csqcg.predinput_held || cls.demoplayback)
+		return false;
+#ifdef HAVE_SERVER
+	if (sv.state != ss_dead)
+		return false;
+#endif
+	return true;
 }
 
 int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)

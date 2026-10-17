@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 754 — prediction runs through a held body and takes the server's posture
+
+**Problem:** Client prediction stopped whenever the server reported PM_NONE (the
+save-lock hold), so a release applied at its usercmd (Patch 753) could not be
+replayed and still waited a round trip; when prediction resumed it seeded the
+replay from a stale propagated pmsrc. pmsrc is never networked, so a duck the
+server forced (a save load's `run_forceduck`) or the client mispredicted stayed
+wrong until the player's own duck input reconciled it: loading a crouched mid-air
+save while standing, the server unducked at the release and the client did not,
+an 8.5-unit (PMSrc_AirDuckShift) snap, and the camera sat at the wrong eye height.
+
+**Change:** `cl_pred.c`: PM_NONE no longer forces `nopred` when the CSQC module
+exports the pre-move hook and sets `predinput_held` (`CSQC_PredictsHeld`); a PM_NONE replay only
+categorizes, so a held body predicts held. Where the replay is seeded from the
+acked snapshot, `PMSrc_ReconcileHull` (pm_source.c) takes the snapshot's Source
+hull (floor 0, the stand or duck height, which the server pushes onto the edict
+after every move) as the completed posture when it disagrees. Server unchanged.
+
+**Verified:** FTESurf `tools/p753warpop.py` on surf_dune at sv_minping 80: with
+this client every window (reset, spawn, a held load of a ducked mid-air save and
+its release) has 0 prederr, against one at the release on the installed client.
+`--posture` (old stringcmds, ducked save, standing player, hold): `cl_predtrace`'s
+predicted eye is 47 (ducked) on this client and 64 on the same build without the
+reconcile. On a client without this patch the trace shows the server's eye (the
+replay is off), so that client is no control. 0 new compiler warnings. Review:
+PM_NONE is predicted only where the CSQC sets `predinput_held` (FTESurf: servers
+with `fs_wop`; never in demos), since sv_nqplayerphysics also reports PM_NONE; the
+spectate hold (msec 0, no touches) is replayed as a P672 HOLD by FTESurf; a
+standing hull with duck held is a forced stand only at the full standing eye
+(`STAT_VIEWHEIGHT`), else a duck in progress; the reconcile runs on every
+snapshot-seeded replay, not only the propagated one.
 ## Patch 755 — Steam pictures stay on disk and draw from it at once (QC only)
 
 **Problem:** P715's picture cache kept each copy for one local day, so every
