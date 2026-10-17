@@ -331,11 +331,10 @@ static void BE_PolyOffset(void)
 	po.factor += shaderstate.polyoffset.factor;
 	po.unit += shaderstate.polyoffset.unit;
 	if ((shaderstate.flags & BEF_SKYDEPTH) && r_sky_forcedepth_push.value > 0)
-	{	//FTESurf Patch 768: away from the eye, whichever way the depth test runs
+	{	//FTESurf Patch 768: away from the eye, whichever way the depth test runs. Steps only:
+		//a slope term grows without bound as the eye nears a sky plane (review).
 		extern int gldepthfunc;
-		float away = (gldepthfunc == GL_LEQUAL) ? 1 : -1;
-		po.factor += away * 2;
-		po.unit += away * r_sky_forcedepth_push.value;
+		po.unit += ((gldepthfunc == GL_LEQUAL) ? 1 : -1) * r_sky_forcedepth_push.value;
 	}
 
 #ifndef FORCESTATE

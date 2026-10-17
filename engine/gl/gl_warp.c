@@ -104,7 +104,7 @@ and 1 remains one word away.
 cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "2", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not.\n2: always mask, on every game (default since Patch 296; on a Source map this is the only setting that stops the rest of the level drawing through the sky).");
 //FTESurf Patch 768: monolith B4's WindowImposter slab sits a few units in front of its sky brush,
 //and at some angles that is under one depth step, so the mask won and the real sky showed through.
-cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "4", CVAR_ARCHIVE,"Pushes r_sky_forcedepth's sky mask this many depth steps (plus twice the polygon's depth slope) away from the eye, so a surface just in front of a sky brush still beats it. The level far behind the sky stays masked. 0: the mask is written at the brush, as before Patch 768.");
+cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "4", CVAR_ARCHIVE,"Pushes r_sky_forcedepth's sky mask this many depth steps away from the eye, so a surface just in front of a sky brush still beats it; the level far behind the sky stays masked. GL only, and only where the sky itself writes no depth (Source/Half-Life maps with a skyname). 0: the mask is written at the brush, as before Patch 768.");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;
