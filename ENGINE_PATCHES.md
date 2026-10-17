@@ -57,6 +57,57 @@ recorded; the installed build (`108748bb`) records 0 and refuses.
 FTESurf `53adbba`. Not covered: the mode-1 3D ribbon (no window, as before).
 The changed default replay look is the owner's to judge (lextest).
 
+## Patch 744 — a spectated player's splits, segments, boarding and trainer (QC only)
+
+**Problem:** Spectating showed the watched player's speed, keys and run clock,
+and nothing else: the pose stream's SPEC block carries no stage, checkpoint,
+ramp-contact or board state, so the HUD switched Splits, the timer's stage line,
+Segments, Board, Boarding and the strafe trainer off (Patch 385). Separately,
+`Pose_Capture`'s `force = tp || heldchg || (...)` parsed as `(force = tp) || ...`,
+so a watched body at rest published at the 2 Hz keepalive, not every tick.
+
+**Change:** FTESurf `sv_pose.qc`: two watcher-only blocks. RUN (4 B, with every
+SPEC): ramp contact and the velocity's part under SPEC's 1 u/s rounding, in
+1/254. STATE (40 B, on change and once when a watch starts, `pb_kwatch`): board
+count with the plane and pre-clip velocity latched on the move the count changed
+(the engine copies its shared pmove into those fields after every move),
+seg/segs, cp, stage fails and closes, the stage and close SF words, split, delta,
+cp ticks, cp delta, pb. The force expression is bracketed, and a publish only the
+watch asks for goes to the watchers alone, so other viewers keep their gap and
+2 Hz keepalive; the budget counts a watcher's target every tick. `cl_body.qc`
+keeps both blocks per sample. `cl_spectate.qc` `Spec_Feed` runs every drawn
+sample, oldest first, through the anchor, `Board_Frame` (new `board_ov_spec`: a
+live frame on those inputs and the watched timer's state, no save-lock events)
+and `Trn_Sample`, on a tick clock; `Timer_Draw`'s live path reads the drawn
+sample (`Timer_Stat`), its latches seeded from the first one. The watcher's own
+segment column (and its fade), split list, anchor and board streak are held for
+the window and restored; the trainer starts clean after. Mode 1's energy zero is
+unknown until the watched body stands. The results card and your own live
+machines wait while you spectate; a replay cannot be opened then. No strafe bar
+(it needs the ramp plane and wish direction per frame). `spectate status` prints
+the feed's counters.
+
+**Verified:** `tools/p744spec.py`: a dedicated socket, `sv_csqcdebug 1`, three
+clients on surf_kitsune. The Surfer walks out, enters stage 2, hops with a
+strafe and rides a real ramp; the Watcher, who made rows of its own first,
+spectates it throughout and again mid-run; the Bystander watches nobody. 35/35
+on the rebased build (csprogs `b5f6aa6c`) and 35/35 with the released 0.1.25
+client (`0deac625`): trainer jumps agree in count, end and strafes (air within 4
+ticks, a constant turn within 2.5%, rates from a teleport's yaw step or a turn
+across the ramp exit within 10%), segment rows within 0.5 units, board entry,
+the stage-2 split row exact, no row from before a mid-run watch, the Watcher's
+own rows restored, no CSQC overread. At rest the Watcher takes 76-98 of 119
+ticks, the Bystander 3 of 67. Controls: `bb18c5e` fails 14 of 21 subject checks;
+the pre-review commit sends the Bystander 88 of 120 ticks and draws a stale row
+on the re-watch. Same gestures before/after the bracket: 287 against 679 samples
+fed. One review, two lenses (client state, wire and server); its findings are
+fixed above. Limits: STATE is sent on change, so under loss a split or board
+lands on a sample up to a round trip late; the absolute energies in the Segments
+and Splits columns read from the watch's first height until the watched body
+stands; after a map teleport into a stage start the server ran no move ticks for
+0.7 s and never set the ground flag while the Surfer's prediction landed, so the
+watched column follows the server there. 0 warnings in all three VMs.
+
 ## Patch 743 — prove ambiguous alpha order over projected overlap
 
 **Problem:** P742's stage3 fix is accepted, but stage1 saves 5/6 still flip:
