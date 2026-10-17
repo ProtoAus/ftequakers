@@ -559,6 +559,8 @@ cvar_t vid_fullscreen						= CVARFD ("vid_fullscreen", "1",	CVAR_ARCHIVE|CVAR_VI
 cvar_t vid_fullscreen_order					= CVARFD ("vid_fullscreen_order", "1", CVAR_ARCHIVE, "Which numbering vid_fullscreen uses.\n0: FTE upstream - 0 windowed, 1 exclusive, 2 borderless.\n1: FTESurf - 0 windowed, 1 borderless, 2 exclusive.\nOnly the cvar's meaning changes; the engine's internal modes are the same either way.");
 cvar_t vid_winmaximize						= CVARFD ("vid_winmaximize", "2", CVAR_ARCHIVE, "Whether a windowed session (vid_fullscreen 0, and anything that toggles back to windowed) is maximized.\n2: Always maximize - a normal window with a title bar, filling the desktop, with the taskbar still visible. vid_width/vid_height are ignored for this mode only; they still control borderless and exclusive fullscreen.\n1: Maximize when no size was asked for, or when the requested size plus its border and caption will not fit on the usable desktop. A size that does fit is used exactly.\n0: Never. A window whose client area is exactly vid_width*vid_height, even if that is larger than the screen and puts its title bar out of reach.\nUse 1 or 0 if you need a windowed capture at a specific resolution.");
 cvar_t vid_minonfocusloss					= CVARFD ("vid_minonfocusloss", "1", CVAR_ARCHIVE, "Minimize the window when it loses focus.\n0: Never - alt-tabbing out of a borderless window leaves it where it is.\n1: Minimize whenever the window is not a plain window, which includes borderless.\n2: Minimize only for a real exclusive-fullscreen mode switch, which is the only mode that has to give the display back.");
+//FTESurf Patch 766
+cvar_t vid_borderless_capture				= CVARFD ("vid_borderless_capture", "1", CVAR_ARCHIVE|CVAR_VIDEOLATCH, "Whether screen capture can see borderless fullscreen (requires vid_restart).\n1: The window hangs one pixel past an edge of the screen that has no other monitor, so it stays on the desktop compositor and OBS display capture sees the game.\n0: Exactly the screen's size. NVIDIA's OpenGL driver then presents the active window directly, as in exclusive fullscreen, and display capture gets no frames.");
 cvar_t vid_exclusive_desktopres				= CVARFD ("vid_exclusive_desktopres", "1", CVAR_ARCHIVE|CVAR_VIDEOLATCH, "What resolution exclusive fullscreen uses.\n0: Whatever vid_width/vid_height say, which will mode-switch the monitor if that is not what it is already running.\n1: Detect the display's current resolution and refresh rate and use that, so going exclusive does not change your mode. vid_width/vid_height still apply to the other modes.");
 cvar_t vid_height							= CVARFD ("vid_height", "0",
 												CVAR_ARCHIVE | CVAR_VIDEOLATCH, "The screen height to attempt to use, in physical pixels. 0 means use desktop resolution.");
@@ -1336,6 +1338,7 @@ void Renderer_Init(void)
 	Cvar_Register (&vid_fullscreen_order, VIDCOMMANDGROUP);	//FTESurf Patch 268
 	Cvar_Register (&vid_winmaximize, VIDCOMMANDGROUP);		//FTESurf Patch 268
 	Cvar_Register (&vid_minonfocusloss, VIDCOMMANDGROUP);	//FTESurf Patch 268
+	Cvar_Register (&vid_borderless_capture, VIDCOMMANDGROUP);	//FTESurf Patch 766
 	Cvar_Register (&vid_exclusive_desktopres, VIDCOMMANDGROUP);	//FTESurf Patch 268
 	Cvar_Register (&vid_bpp, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_depthbits, VIDCOMMANDGROUP);

@@ -3056,6 +3056,52 @@ void MainThreadWndProc(void *ctx, void *data, size_t msg, size_t ex)
 }
 #endif
 
+//FTESurf Patch 766: while active, a GL window exactly covering its monitor gets no frames
+//through Desktop Duplication or Graphics Capture on NVIDIA (OBS display capture is black);
+//one row taller, 181 of 181. The row goes past an edge with no monitor beyond it.
+static void VID_BorderlessOverhang(HWND hWnd, WINDOWPOS *wp)
+{
+	extern cvar_t vid_borderless_capture;
+	MONITORINFO mi;
+	RECT r, edge;
+	int side;
+
+	if (modestate != MS_FULLWINDOW || !vid_borderless_capture.ival || (wp->flags & SWP_NOSIZE))
+		return;
+	GetWindowRect(hWnd, &r);
+	if (!(wp->flags & SWP_NOMOVE))
+	{
+		r.left = wp->x;
+		r.top = wp->y;
+	}
+	r.right = r.left + wp->cx;
+	r.bottom = r.top + wp->cy;
+	mi.cbSize = sizeof(mi);
+	if (!GetMonitorInfo(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi) || !EqualRect(&r, &mi.rcMonitor))
+		return;
+
+	for (side = 0; side < 4; side++)
+	{	//bottom, right, top, left
+		edge = r;
+		switch(side)
+		{
+		case 0:	edge.top = r.bottom;	edge.bottom = r.bottom+1;	break;
+		case 1:	edge.left = r.right;	edge.right = r.right+1;		break;
+		case 2:	edge.bottom = r.top;	edge.top = r.top-1;			break;
+		case 3:	edge.right = r.left;	edge.left = r.left-1;		break;
+		}
+		if (!MonitorFromRect(&edge, MONITOR_DEFAULTTONULL))
+			break;
+	}
+	if (side == 4)
+		side = 0;	//monitors on every side: one row shows on the one below
+	wp->x = r.left - (side == 3);
+	wp->y = r.top - (side == 2);
+	wp->cx = r.right - r.left + (side == 1 || side == 3);
+	wp->cy = r.bottom - r.top + (side == 0 || side == 2);
+	wp->flags &= ~SWP_NOMOVE;
+}
+
 /* main window procedure
 due to moving the main window over to a different thread, we gain access to input timestamps (as well as video refreshes when dragging etc)
 however, we have to tread carefully. the main/render thread will be running the whole time, and may trigger messages that we need to respond to _now_.
@@ -3291,6 +3337,13 @@ static LONG WINAPI GLMainWndProc (
 				mmi->ptMinTrackSize.y = 200 + ((windowrect.bottom - windowrect.top) - (clientrect.bottom - clientrect.top));
 			}
 			return 0;
+		case WM_WINDOWPOSCHANGING:
+			VID_BorderlessOverhang(hWnd, (WINDOWPOS*)lParam);
+			if (WinNT)
+				lRet = DefWindowProcW (hWnd, uMsg, wParam, lParam);
+			else
+				lRet = DefWindowProcA (hWnd, uMsg, wParam, lParam);
+			break;
 		case WM_SIZE:
 			vid.isminimized  = (wParam==SIZE_MINIMIZED);
 			if (!vid_initializing)
