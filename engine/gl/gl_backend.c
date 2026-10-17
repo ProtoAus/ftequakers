@@ -6723,6 +6723,8 @@ typedef struct
 } glblendface_t;
 
 static qboolean gl_blendtrace_pending;
+static int gl_blendtrace_frame;
+extern int host_framecount;
 
 void GLBE_BlendTrace_f(void)
 {
@@ -6734,7 +6736,8 @@ void GLBE_BlendTrace_f(void)
 		return;
 	}
 	gl_blendtrace_pending = true;
-	Con_Printf("ALPHATRACE armed for one frame: portal views, then the main view; close the console if needed\n");
+	gl_blendtrace_frame = -1;
+	Con_Printf("ALPHATRACE armed for every view of the next frame drawn; close the console if needed\n");
 }
 
 // Use the same model matrix as GLBE_SelectEntity, including axis sign and scale.
@@ -6974,33 +6977,38 @@ static qboolean GLBE_BlendPlaneViewEligible(void)
 		p[12] == 0 && p[13] == 0;
 }
 
-// Plane proofs and centres read r_origin/vpn/vright/vup; GL and the overlap test
-// read m_view. A spinning skyroom rotates only m_view, and a view returning from
-// a portal rebuilds the vectors without gl_screenangle.
-static qboolean GLBE_BlendViewBasisAgrees(void)
+// Plane-side proofs read the eye from r_origin; GL and the overlap test use
+// m_view. Ray-disjoint screen bounds hold in any image frame (roll, mirror,
+// skyroom spin), so only the eye must agree. Stereo/VR eye offsets do not.
+static qboolean GLBE_BlendViewEyeAgrees(void)
 {
 	const float *m = r_refdef.m_view;
-	double t;
+	double det, eye[3], c[3][3];
 	int j;
 	for (j = 0; j < 16; j++)
 		if (IS_NAN(m[j])) return false;
 	for (j = 0; j < 3; j++)
-	{
-		if (IS_NAN(r_origin[j]) || IS_NAN(vpn[j]) || IS_NAN(vright[j]) || IS_NAN(vup[j]))
-			return false;
-		if (fabs(m[j*4] - vright[j]) > 1e-4 || fabs(m[j*4+1] - vup[j]) > 1e-4 || fabs(m[j*4+2] + vpn[j]) > 1e-4)
-			return false;
-	}
+		if (IS_NAN(r_origin[j])) return false;
+	// GL's eye solves R*eye = -t, R's row k being m[k], m[4+k], m[8+k];
+	// c holds R's cofactors, so R's inverse is c transposed over det.
+	c[0][0] = (double)m[5]*m[10] - (double)m[9]*m[6];
+	c[0][1] = (double)m[9]*m[2] - (double)m[1]*m[10];
+	c[0][2] = (double)m[1]*m[6] - (double)m[5]*m[2];
+	c[1][0] = (double)m[8]*m[6] - (double)m[4]*m[10];
+	c[1][1] = (double)m[0]*m[10] - (double)m[8]*m[2];
+	c[1][2] = (double)m[4]*m[2] - (double)m[0]*m[6];
+	c[2][0] = (double)m[4]*m[9] - (double)m[8]*m[5];
+	c[2][1] = (double)m[8]*m[1] - (double)m[0]*m[9];
+	c[2][2] = (double)m[0]*m[5] - (double)m[4]*m[1];
+	det = m[0]*c[0][0] + m[4]*c[0][1] + m[8]*c[0][2];
+	if (fabs(det) < 1e-6) return false;
 	// Translation is float-rounded at map coordinates.
-	t = m[12];
-	for (j = 0; j < 3; j++) t += (double)vright[j]*r_origin[j];
-	if (fabs(t) > 1.0/32) return false;
-	t = m[13];
-	for (j = 0; j < 3; j++) t += (double)vup[j]*r_origin[j];
-	if (fabs(t) > 1.0/32) return false;
-	t = m[14];
-	for (j = 0; j < 3; j++) t -= (double)vpn[j]*r_origin[j];
-	return fabs(t) <= 1.0/32;
+	for (j = 0; j < 3; j++)
+	{
+		eye[j] = -(c[0][j]*m[12] + c[1][j]*m[13] + c[2][j]*m[14]) / det;
+		if (fabs(eye[j] - r_origin[j]) > 1.0/32) return false;
+	}
+	return true;
 }
 
 static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_t *plane)
@@ -7541,14 +7549,16 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				view.next = NULL;
 				GLBE_SubmitMeshesSortList(&view);
 			}
-	// Portal views of the armed frame trace before the main view, which disarms.
+	// Every pass of the armed frame traces: portal and skyroom views, light passes,
+	// the main view. r_portalonly never reaches the main view, so a frame disarms.
+	if (gl_blendtrace_pending && gl_blendtrace_frame >= 0 && gl_blendtrace_frame != host_framecount)
+		gl_blendtrace_pending = false;
 	trace = gl_blendtrace_pending;
 	if (trace)
 	{
-		if (!r_refdef.recurse)
-			gl_blendtrace_pending = false;
-		Con_Printf("ALPHATRACE begin recurse=%d mode=%d perspective=%d vieweligible=%d basis=%d flip=%x worldflags=%x\n",
-			r_refdef.recurse, shaderstate.mode, r_refdef.useperspective, GLBE_BlendPlaneViewEligible(), GLBE_BlendViewBasisAgrees(),
+		gl_blendtrace_frame = host_framecount;
+		Con_Printf("ALPHATRACE begin recurse=%d mode=%d perspective=%d vieweligible=%d eye=%d flip=%x worldflags=%x\n",
+			r_refdef.recurse, shaderstate.mode, r_refdef.useperspective, GLBE_BlendPlaneViewEligible(), GLBE_BlendViewEyeAgrees(),
 			(unsigned int)r_refdef.flipcull, (unsigned int)r_worldentity.flags);
 		Con_Printf("ALPHATRACE eye=%.9g,%.9g,%.9g forward=%.9g,%.9g,%.9g\n",
 			r_origin[0], r_origin[1], r_origin[2], vpn[0], vpn[1], vpn[2]);
@@ -7606,9 +7616,9 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			}
 	qsort(faces, n, sizeof(*faces), GLBE_BlendFaceCompare);
 	// Static-world plane relations refine only eligible baseline slots. Portal and
-	// skyroom views sort too: GLR_DrawPortal builds m_view, r_origin and vpn/vright/
-	// vup from one basis, and its oblique near clip rewrites only the projection z row.
-	if (GLBE_BlendViewBasisAgrees())
+	// skyroom views sort too: their r_origin is m_view's eye, and the portal oblique
+	// near clip rewrites only the projection z row.
+	if (GLBE_BlendViewEyeAgrees())
 		GLBE_BlendPlaneSort(faces, n, &stats);
 	if (trace)
 	{

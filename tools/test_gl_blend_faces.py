@@ -103,6 +103,7 @@ static struct { int ival; } ruleset_allow_larger_models={1};
 static int qrenderer=QR_OPENGL, test_insecure, test_trace_printfs;
 #define Cmd_IsInsecure() test_insecure
 static void Con_Printf(const char *fmt,...) { (void)fmt; test_trace_printfs++; }
+int host_framecount;
 typedef struct batch_s { struct batch_s *next; mesh_t **mesh; unsigned firstmesh,meshes,maxmeshes,flags; shader_t *shader; entity_t *ent; void (*buildmeshes)(struct batch_s*); int id; void *vbo, *fog; union { struct { unsigned surface; } poly; } user; } batch_t;
 typedef struct { int firstvert, numvert; } scenetris_t;
 static scenetris_t *cl_stris;
@@ -221,7 +222,14 @@ int main(void) {
   batch_t batch={.meshes=2,.mesh=pair,.shader=&shade,.ent=&r_worldentity};
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
   assert(ndraw==2&&draws[0]==736&&draws[1]==737);
-  assert(!gl_blendtrace_pending && test_trace_printfs>2);
+  // Armed for every pass of one frame; a later frame's first pass disarms.
+  int trace_frame_ok=gl_blendtrace_pending&&test_trace_printfs>2,printed=test_trace_printfs;
+  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  trace_frame_ok=trace_frame_ok&&gl_blendtrace_pending&&test_trace_printfs>printed;
+  printed=test_trace_printfs;host_framecount++;
+  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  trace_frame_ok=trace_frame_ok&&!gl_blendtrace_pending&&test_trace_printfs==printed&&ndraw==2;
+  assert(trace_frame_ok);
   face.numvertexes=5;face.numindexes=9;face.xyz_array=split;face.indexes=si;
   assert(GLBE_BlendFaceDepth(&face,m)<GLBE_BlendFaceDepth(&marker,m));
   ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
@@ -617,28 +625,33 @@ int main(void) {
   }
   int mode2_cull_ok=(nemit==8);assert(mode2_cull_ok); //12 proven empty; all four panes retained.
   int kept[8]={1384,504,2073,2086,2047,2071,2971,490};for(int i=0;i<8;i++)assert(emitted[i]==kept[i]);
-  // Screen roll or a spinning skyroom moves m_view but not vpn/vright/vup:
-  // proofs from one basis must not order GL's other. Baseline depth order then.
+  // Ray-disjoint bounds hold in any image frame: a screen roll or skyroom spin
+  // of GL's view alone still sorts. An eye GL does not share keeps the baseline.
   {
    float matrix[16],modelview[16],saved_view[16],c=cos(2*3.141592653589793/180),s=sin(2*3.141592653589793/180);
-   double depth[8];int sort_acted=0,basis_guard_ok=1;
+   double depth[8];int sort_acted=0,roll_sort_ok,eye_guard_ok;
    R_RotateForEntity(matrix,modelview,&r_worldentity,r_worldentity.model);
    for(int i=0;i<8;i++)for(int m=0;m<20;m++)if(follow_all[m]->id==kept[i])depth[i]=GLBE_BlendAreaDepth(follow_all[m],matrix);
    for(int i=1;i<8;i++)if(depth[i]>depth[i-1])sort_acted=1;
-   assert(sort_acted&&GLBE_BlendViewBasisAgrees());
+   assert(sort_acted&&GLBE_BlendViewEyeAgrees());
    memcpy(saved_view,r_refdef.m_view,sizeof(saved_view));
    for(int j=0;j<4;j++){float r=r_refdef.m_view[j*4],u=r_refdef.m_view[j*4+1];r_refdef.m_view[j*4]=c*r+s*u;r_refdef.m_view[j*4+1]=c*u-s*r;}
-   assert(!GLBE_BlendViewBasisAgrees());
    shaderstate.curentity=NULL;r_refdef.flipcull=0;ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
-   basis_guard_ok=nemit==8;
-   for(int i=1;basis_guard_ok&&i<nemit;i++)for(int m=0;m<20;m++)for(int k=0;k<20;k++)
-    if(follow_all[m]->id==emitted[i-1]&&follow_all[k]->id==emitted[i]&&
-     GLBE_BlendAreaDepth(follow_all[k],matrix)>GLBE_BlendAreaDepth(follow_all[m],matrix))basis_guard_ok=0;
-   assert(basis_guard_ok);
+   roll_sort_ok=GLBE_BlendViewEyeAgrees()&&nemit==8;
+   for(int i=0;roll_sort_ok&&i<8;i++)roll_sort_ok=emitted[i]==kept[i];
+   assert(roll_sort_ok);
    memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
-   r_origin[0]+=1;assert(!GLBE_BlendViewBasisAgrees());r_origin[0]-=1;
-   r_refdef.m_view[14]=NAN;assert(!GLBE_BlendViewBasisAgrees());memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
-   assert(GLBE_BlendViewBasisAgrees());
+   r_refdef.m_view[12]+=1;
+   shaderstate.curentity=NULL;r_refdef.flipcull=0;ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   eye_guard_ok=!GLBE_BlendViewEyeAgrees()&&nemit==8;
+   for(int i=1;eye_guard_ok&&i<nemit;i++)for(int m=0;m<20;m++)for(int k=0;k<20;k++)
+    if(follow_all[m]->id==emitted[i-1]&&follow_all[k]->id==emitted[i]&&
+     GLBE_BlendAreaDepth(follow_all[k],matrix)>GLBE_BlendAreaDepth(follow_all[m],matrix))eye_guard_ok=0;
+   assert(eye_guard_ok);
+   memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
+   r_origin[0]+=1;assert(!GLBE_BlendViewEyeAgrees());r_origin[0]-=1;
+   r_refdef.m_view[14]=NAN;assert(!GLBE_BlendViewEyeAgrees());memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
+   assert(GLBE_BlendViewEyeAgrees());
   }
   // Live failure: stock CSQC wire annotations interleave with the glass and
   // force status-3. Keep their legacy post-world layer, not a graph barrier.
@@ -883,7 +896,7 @@ int main(void) {
   }
  }
  puts("PASS general overlap: analytic contact/reversal/disjoint/nearclip/budget,real painter cycle retained,zoomed false-cycle retry ACTED,native12 area keys+graph corrected,33-view stage1 40..130yaw sweep no fallback/loss,behind-eye barrier dropped,hinge seams unsigned,thin real overlap kept,P742-graph fallback for cycles and barriers");
- puts("PASS stock-wireframe acted regression,11 conservative layer guards,once-only callback; Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,portal views same cull+order,view-basis guard,6 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
+ puts("PASS stock-wireframe acted regression,11 conservative layer guards,once-only callback; Kitsune mode2:3 saved poses+33-view sweep,stale-XFLIP,independent4-pane order,portal views same cull+order,any-frame roll sorts,eye guard,one-frame trace,6 conservative guards; default0/1/2 dispatch:8 prior-entity/view-flip contribution contexts;directed marginal-area abstention;128 effective-cull contexts;17 uncertain/invalid geometry/projection controls;inert/visible crossing barriers;raw culled-face budget;12 complete28-face scenes/four-pane rank at two eyes; 36 frozen-yaw/material permutations;72 same-material mixed foreground/rear batches; stationary unsupported slots and mode0 full-range order; world-only correction; whole-batch/program/multipass/cache/recursive/budget fallbacks; capture barrier; existing mode2 lifetime/range/remap/BEM/plane regressions");
 }
 '''
 
@@ -927,11 +940,18 @@ controls = {
     'lost_behind_eye': base.replace('if (behind) return true;', 'if (behind && false) return true;'),
     'lost_behind_eye_order': base.replace('if (behind) return true;', 'if (behind && false) return true;').replace(
         'int behind_drop_ok=(nemit==(guard==0?18:20));', 'int behind_drop_ok=1;'),
-    'lost_portal_sort': base.replace('\tif (GLBE_BlendViewBasisAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
-        '\tif (!r_refdef.recurse && GLBE_BlendViewBasisAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
+    'lost_portal_sort': base.replace('\tif (GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
+        '\tif (!r_refdef.recurse && GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
     'lost_portal_cull': base.replace('cullworld = GLBE_BlendPlaneViewEligible() &&', 'cullworld = !r_refdef.recurse && GLBE_BlendPlaneViewEligible() &&'),
-    'lost_basis_guard': base.replace('\tif (GLBE_BlendViewBasisAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
+    'lost_eye_guard': base.replace('\tif (GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
         '\tGLBE_BlendPlaneSort(faces, n, &stats);'),
+    'axis_guard': base.replace('\tif (GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
+        '\tif (GLBE_BlendViewEyeAgrees() && fabs(r_refdef.m_view[0] - vright[0]) < 1e-4 && fabs(r_refdef.m_view[1] - vup[0]) < 1e-4)\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
+    'eye_cofactor_untransposed': base.replace('eye[j] = -(c[0][j]*m[12] + c[1][j]*m[13] + c[2][j]*m[14]) / det;',
+        'eye[j] = -(c[j][0]*m[12] + c[j][1]*m[13] + c[j][2]*m[14]) / det;'),
+    'lost_trace_frame': base.replace('if (gl_blendtrace_pending && gl_blendtrace_frame >= 0 && gl_blendtrace_frame != host_framecount)\n\t\tgl_blendtrace_pending = false;', ''),
+    'root_pass_disarms': base.replace('\t\tgl_blendtrace_frame = host_framecount;\n',
+        '\t\tgl_blendtrace_frame = host_framecount;\n\t\tif (!r_refdef.recurse) gl_blendtrace_pending = false;\n'),
     'lost_near_admission': base.replace('if (r_blendsort.ival != 2) return false;', 'if (true) return false;'),
     'lost_near_cull': base.replace('|| GLBE_BlendWorldRasterEmptyNear(batch, mesh)', '|| false'),
     'stale_mode2_world': base.replace('\t\t\t\tif (cullworld && shaderstate.curentity != batch->ent)\n\t\t\t\t\tGLBE_SelectEntity(batch->ent);', ''),
@@ -997,7 +1017,11 @@ for name, control in controls.items():
         'lost_behind_eye_order': 'behind_eye_order_ok',
         'lost_portal_sort': 'portal_view_order_ok',
         'lost_portal_cull': 'portal_view_order_ok',
-        'lost_basis_guard': 'basis_guard_ok',
+        'lost_eye_guard': 'eye_guard_ok',
+        'axis_guard': 'roll_sort_ok',
+        'eye_cofactor_untransposed': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
+        'lost_trace_frame': 'trace_frame_ok',
+        'root_pass_disarms': 'trace_frame_ok',
         'stale_mode2_world': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
         'stale_entity_cull': 'nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250',
