@@ -1,5 +1,49 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 765 — a Source map's packed materials beat other games' copies
+
+**Problem:** Lex, 17 Oct: surf_monolith looked inside-out, as if its face normals
+were flipped; zone lines and particles showed through walls at its spawn and on
+surf_joutsenlaulu after turning right. `flocate "materials/silkroad/egypt/wall
+(3).vmt"` named a loose copy in Lex's `Counter-Strike Source/cstrike`, which says
+`"$translucent" 1`; the copy packed in surf_monolith.bsp has no `$translucent`.
+`FS_LoadMapPackFile` mounts a map's pakfile as SPF_TEMPORARY, and
+`FS_AddPathHandle` appends that after every mount (`path` lists it after Momentum,
+CS:S, HL2, TF2, CS:GO and Portal 2); Source searches the BSP pakfile first. 16 of
+monolith's wall, floor and stair materials and 10 of joutsenlaulu's resolved that
+way to sort 11 (`progblendfunc src_alpha one_minus_src_alpha`) and wrote no depth.
+`r_blendsort` 0 and 1 have always drawn zones through them; mode 2 hid it until
+Patch 739 moved stock fill_trans lines to the post-world layer, as it says it does.
+
+**Change:** `FS_FLocateFile` gives a `materials/` lookup a pass of its own before
+the main walk: every non-SPF_ADDON path first (FTESurf's gamedir, server
+packages), then the SPF_TEMPORARY map pakfiles, then the ordinary walk. The pak is
+asked for the name hash's own entry first; only when the hash names another
+mount's copy (the shadowed case) does it scan by name. A pak hit ranks one level
+below the last mod path, so Image_LocateHighResTexture's first-lowest-depth pick
+still gives a format tie to the mod. `models/` is unchanged: `.phy` collision lives
+there. `fs_mapmaterials 0` (CVAR_NOTFROMSERVER, not archived) restores the old
+order for materials loaded after it is set.
+
+**Verified:** client build, no compiler warning in fs.c. A detector counts zone-box
+pixels on a stone wall: at monolith's spawn red/green 148/243, and red on the right
+wall at its main start 1693, where a correct frame has 0. One P765 binary: 0/0 and 0
+with `fs_mapmaterials 1` (`flocate` "inside surf_monolith.bsp", no progblendfunc),
+148/243 and 1693 with 0 (cstrike, progblendfunc); joutsenlaulu's
+silkroad/china/china_wall_tile.vmt the same way. Release 0.1.26 gives 1693/1693/0 in
+r_blendsort 0/1/2, and P739, P756 and P758 give 1693 in all three. P758 with
+`hl2_translucent 0` gives 0. Cost of the pass, timer build: surf_monolith 1199
+calls, 924 found in its pak, 2.3 ms; surf_fantasy (2564 packed files) 6001/5874,
+12.9 ms. A name scan on every call cost 155.7 ms there. One review (predicate and
+control flow; what a map or a player can now override) plus a round on the fixes.
+
+**Limits:** `tools/census/shadowed.py`: packed materials/ and models/ that another
+mount shadows with different bytes, monolith 46 of 592, joutsenlaulu 29 of 1463,
+board_this 83 of 1376; only the materials/ ones move. A map-pak hit ties the
+gamedir's `downloads/` (the first SPF_ADDON path) on depth (BACKLOG). monolith's B4
+and board_this's room skies are unchanged by this. A material already loaded keeps
+its copy until the map reloads.
+
 ## Patch 764 — mover 7: a static prop's collision hull is traced as its convex pieces
 
 **Problem:** Lex, 18 Oct: on curved prop ramps the game throws the rider off where
