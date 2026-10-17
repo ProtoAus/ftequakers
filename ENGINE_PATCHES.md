@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 747 — unknown KSF players no longer park the crawler (backend only)
+
+**Problem:** No KSF row ever had a replay, so the board offered no Watch or
+line for KSF. A profile view queues a KSF walk for any Steam player; KSF answers
+HTTP 500 for one it does not know, the crawler read that as a host refusal, and
+the walk stayed first in the queue. From 2026-10-15T14:31Z every tick made one
+request and parked (6 h doubling), so no board, top-up or demo request ran.
+Demo discovery also ignored which maps people view.
+
+**Change:** `ksfprofile.step` ends a walk KSF answers 500 for (`unknown`, or
+`limited` after a page) and stops profile work for the tick without parking;
+the crawl's next request still parks a failing host. `ksfgrab` scans boards of
+recently viewed maps (mapwant) first on their own bounded cursor, downloads
+their demos first, and lets them take a cold unwanted slot in a full queue.
+Rate unchanged (two downloads a tick).
+
+**Verified:** Profile 20, grab 48 and ksfimport suites pass; the seven new
+tests fail on the unpatched code, the watch-tick one with the live symptom (one
+request, then park). One review: a swallowed 500 could lift an expired park;
+fixed and tested. Read-only Pi probe: the stuck walk 500s, a board and
+`/api/replays/<file>?game=66t` answer 200. NOT deployed: both files are pinned
+by the sealed schema20 generation, so this ships with the next guarded cutover.
+Owner-approved interim, 2026-10-17T03:56Z: the 7 stuck walks set `unknown` and
+the park lifted, live DB, crawler lock held, guard OPEN. The next tick (04:01Z)
+linked the first two KSF replays ever. FTESurf `tools/p747ksfunblock.md`.
+
 ## Patch 746 — race ghost of your PB and ticked runs (QC only)
 
 **Problem:** Nothing showed a comparison body. FTESurf's `ghost` is a freecam,
