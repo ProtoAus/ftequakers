@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 749 — the race ghost ducks, faces its player's view, has a name tag (QC only)
+
+**Problem:** Patch 746's ghost always stood and faced its direction of travel:
+a line sample kept no view yaw and no duck flag, though the loader read both.
+Nothing drew whose ghost it was.
+
+**Change:** FTESurf `cl_lines.qc` keeps `ln_pose` per sample (the view yaw, plus
+512 when ducked; written by Line_Point from what it was already handed, carried
+through the past-the-cap halving; +4.8 MiB). `cl_raceghost.qc` turns the body the
+shortest way between the samples either side, takes the nearer sample's duck and
+swaps in the ducked model as a lobby body does, and draws a name tag like a
+player's (picture or a chip, "Your PB" / "Your stage N PB" / the line's owner,
+fading past 256 u, hidden behind a wall; `hud_ghost_names`, a hud_edit row).
+
+**Verified:** `raceghost_pose.cfg` uses a rewind's exact clock to put the ghost at
+nine chosen moments of a real surf_kitsune PB: its three ducks and three places
+where view and travel part by 54-177 degrees. Yaw and duck equal the file's at
+all nine; the 746 build fails 18 checks. The look arm with that PB ducked for
+its first second shows a shorter body with its "Your PB" tag; the stage arm tags
+a ticked line with the file's owner. One stage run of four froze the client with
+no VM error; the other three passed. 0 warnings, FTESurf `da909c0`. Not deployed.
+
 ## Patch 747 — unknown KSF players no longer park the crawler (backend only)
 
 **Problem:** No KSF row ever had a replay, so the board offered no Watch or
