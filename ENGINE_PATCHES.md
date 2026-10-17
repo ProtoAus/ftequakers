@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 746 — race ghost of your PB and ticked runs (QC only)
+
+**Problem:** Nothing showed a comparison body. FTESurf's `ghost` is a freecam,
+and a run line shows where a run went, not where it is at your time.
+
+**Change:** FTESurf `cl_raceghost.qc`. Your PB for the run or stage you are on
+(data/runs) is built into two line slots appended to the table (67 a stage's at
+LN_CAP2, 68 a whole run's at LN_CAP) by the board lines' own job; it and the
+first `hud_ghost_lines` ticked board lines run beside you on your own clock from
+the moment you leave the start box, or again from each stage's box with
+`hud_ghost_sync 1`. A whole run asked for a stage is cut where its body left that
+stage's box (its samples against the zone file; the last exit before the next
+stage, so a fail and retry counts the retry). The clock is the drawn body's: the
+timer stat plus the wall time since the frame it acknowledges was predicted
+(Patch 611's kept frames). Off/body/line highlight/both, an offset, opacity by a
+dither material or a blend, a fade near the eye, ghosts at a rewind's cursor, a
+hud_edit Ghost pane and `raceghost`. Ghost slots are never ranked or graphed.
+Patch 745's follow-up (FTESurf `fb3b39d`) also put the replay line's name on its
+window and distance, as its review found it was not.
+
+**Verified:** Dedicated surf_kitsune behind sv_minping 120: the ghost is 0.05 u
+off the PB file at its clock, and the server's own recording at your clock is
+0.6-8.9 u from the predicted body against 35-52 u at the timer stat's. Stage
+runs: the anchors equal the PB's own `stagestart` records (stage 2 4.98 s, stage
+7 37.02 s, not its first 29.475 s); a ticked line ghosts with the PB off, the same
+file ticked and as PB is one ghost. Pictures: dither, blend, highlight, off, the
+pane. Mutants without the lead (36-64 u off) and keeping the first exit (29.475 s)
+each fail. 0 warnings, csprogs `24dd85cf`, FTESurf `6195307`. Not covered: a
+ducked ghost (it stands), names over ghosts, the owner's feel (lextest).
+
 ## Patch 745 — a hidden player line still records; a replay line's own window (QC only)
 
 **Problem:** `hud_trail 0` reset and stopped the live run line, so a rewind
