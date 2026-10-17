@@ -134,7 +134,8 @@ int SV_PMSrcVer(const float *pin)
 		return 0;
 	//Patch 538: v3 includes swimming at every ramp setting; retain both old movers.
 	//Patch 756: v5 keeps linked portal landings exact. Patch 758: v6 leaves a door's carve forward.
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6)
+	//Patch 764: v7 traces static props' hulls as convex pieces.
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }

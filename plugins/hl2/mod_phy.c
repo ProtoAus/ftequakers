@@ -184,6 +184,11 @@ typedef struct
 	int              winding;
 	/* measured, per file, for the census the cvar description quotes */
 	int              tris_outward, tris_inverted;
+
+	/* FTESurf Patch 764: where each accepted ledge's triangles begin in idx.  A
+	   ledge is one convex piece, which Mod_PHY_ConvexPieces hands back whole. */
+	size_t          *ledgestart;
+	size_t           numledges, maxledges;
 } phyctx_t;
 
 static unsigned int PHY_ReadU32 (const qbyte *p)
@@ -406,6 +411,15 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 	  with no visual cue -- far worse than the uniform offset being fixed.  Mode 2
 	  therefore measures every triangle and lets the LEDGE vote.
 	*/
+	if (ctx->numledges == ctx->maxledges)
+	{	/* Patch 764 */
+		ctx->maxledges = ctx->maxledges ? ctx->maxledges*2 : 64;
+		ctx->ledgestart = plugfuncs->Realloc(ctx->ledgestart, sizeof(*ctx->ledgestart)*ctx->maxledges);
+		if (!ctx->ledgestart)
+			return false;
+	}
+	ctx->ledgestart[ctx->numledges++] = ctx->numidx;
+
 	{
 		int flip = (ctx->winding == 1);
 		int outward = 0, inverted = 0;
@@ -572,6 +586,44 @@ done:
 }
 
 /*
+  THE BOUNDS CHECK.  See the note at the top: a hull in the wrong place is worse
+  than a hull that is too fat, because the second is visible and the first is
+  not.  If what we assembled does not sit inside the model, we got it wrong --
+  say so and fall back.
+*/
+static qboolean PHY_HullInsideModel (const phyctx_t *ctx, model_t *mod)
+{
+	vec3_t mn, mx;
+	size_t i;
+	int    a;
+
+	VectorCopy(ctx->xyz[0], mn);
+	VectorCopy(ctx->xyz[0], mx);
+	for (i = 1; i < ctx->numverts; i++)
+		for (a = 0; a < 3; a++)
+		{
+			if (ctx->xyz[i][a] < mn[a]) mn[a] = ctx->xyz[i][a];
+			if (ctx->xyz[i][a] > mx[a]) mx[a] = ctx->xyz[i][a];
+		}
+
+	for (a = 0; a < 3; a++)
+	{
+		if (mn[a] < mod->mins[a] - PHY_BOUNDS_SLACK ||
+		    mx[a] > mod->maxs[a] + PHY_BOUNDS_SLACK)
+		{
+			Con_DPrintf("%s: .phy hull [%.1f %.1f %.1f]..[%.1f %.1f %.1f] "
+			            "escapes the model [%.1f %.1f %.1f]..[%.1f %.1f %.1f] "
+			            "-- bone-relative solid, using the render mesh\n",
+			            mod->name, mn[0],mn[1],mn[2], mx[0],mx[1],mx[2],
+			            mod->mins[0],mod->mins[1],mod->mins[2],
+			            mod->maxs[0],mod->maxs[1],mod->maxs[2]);
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
 ===========================================================================
   Mod_PHY_CollisionMesh
 
@@ -689,48 +741,14 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	plugfuncs->Free(file);
 
 	if (ok)
-	{
-		/*
-		  THE BOUNDS CHECK.  See the note at the top: a hull in the wrong place
-		  is worse than a hull that is too fat, because the second is visible
-		  and the first is not.  If what we assembled does not sit inside the
-		  model, we got it wrong -- say so and fall back.
-		*/
-		vec3_t mn, mx;
-		size_t i;
-		int    a;
-
-		VectorCopy(ctx.xyz[0], mn);
-		VectorCopy(ctx.xyz[0], mx);
-		for (i = 1; i < ctx.numverts; i++)
-			for (a = 0; a < 3; a++)
-			{
-				if (ctx.xyz[i][a] < mn[a]) mn[a] = ctx.xyz[i][a];
-				if (ctx.xyz[i][a] > mx[a]) mx[a] = ctx.xyz[i][a];
-			}
-
-		for (a = 0; a < 3; a++)
-		{
-			if (mn[a] < mod->mins[a] - PHY_BOUNDS_SLACK ||
-			    mx[a] > mod->maxs[a] + PHY_BOUNDS_SLACK)
-			{
-				Con_DPrintf("%s: .phy hull [%.1f %.1f %.1f]..[%.1f %.1f %.1f] "
-				            "escapes the model [%.1f %.1f %.1f]..[%.1f %.1f %.1f] "
-				            "-- bone-relative solid, using the render mesh\n",
-				            mod->name, mn[0],mn[1],mn[2], mx[0],mx[1],mx[2],
-				            mod->mins[0],mod->mins[1],mod->mins[2],
-				            mod->maxs[0],mod->maxs[1],mod->maxs[2]);
-				ok = false;
-				break;
-			}
-		}
-	}
+		ok = PHY_HullInsideModel(&ctx, mod);
 
 	if (!ok)
 	{
 		phy_stat_rejected++;
 		plugfuncs->Free(ctx.xyz);
 		plugfuncs->Free(ctx.idx);
+		plugfuncs->Free(ctx.ledgestart);
 		return NULL;
 	}
 	phy_stat_hull++;
@@ -759,6 +777,57 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 
 	plugfuncs->Free(ctx.xyz);
 	plugfuncs->Free(ctx.idx);
+	plugfuncs->Free(ctx.ledgestart);
 
 	return out;
+}
+
+/*
+  FTESurf Patch 764.  Mode 1's hull from the same parse and bounds check as
+  Mod_PHY_CollisionMesh, kept as the convex pieces (ledges) IVP stored it in, for
+  mod_vbsp to turn into a static prop's brushes.  Model space.  Ledge i is
+  idx[ledgestart[i] .. ledgestart[i+1]), indexing xyz; xyz can hold points that
+  ledge does not use.  False is "no usable .phy" with nothing to free; on true
+  the caller frees the three arrays.  Counts nothing in phy_stat_*, which
+  describe the model loads.
+*/
+qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
+                               plugmodfuncs_t *phy_modfuncs, vecV_t **xyz,
+                               index_t **idx, size_t **ledgestart, size_t *numledges)
+{
+	char          name[MAX_QPATH];
+	void         *file;
+	size_t        filelen = 0;
+	phyctx_t      ctx;
+	qboolean      ok;
+
+	phy_modfuncs->StripExtension(mod->name, name, sizeof(name));
+	Q_strncatz(name, ".phy", sizeof(name));
+	file = phy_filefuncs->LoadFile(name, &filelen);
+	if (!file)
+		return false;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.base    = file;
+	ctx.filelen = filelen;
+	ok = PHY_Parse(&ctx, mod->name) && PHY_HullInsideModel(&ctx, mod);
+	plugfuncs->Free(file);
+	if (ok && ctx.numledges == ctx.maxledges)
+	{
+		ctx.ledgestart = plugfuncs->Realloc(ctx.ledgestart, sizeof(*ctx.ledgestart)*(ctx.maxledges+1));
+		ok = ctx.ledgestart != NULL;
+	}
+	if (!ok)
+	{
+		plugfuncs->Free(ctx.xyz);
+		plugfuncs->Free(ctx.idx);
+		plugfuncs->Free(ctx.ledgestart);
+		return false;
+	}
+	ctx.ledgestart[ctx.numledges] = ctx.numidx;
+	*xyz = ctx.xyz;
+	*idx = ctx.idx;
+	*ledgestart = ctx.ledgestart;
+	*numledges = ctx.numledges;
+	return true;
 }

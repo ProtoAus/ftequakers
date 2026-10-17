@@ -230,8 +230,9 @@ typedef struct
    fixrampbugs clip cycle. Live version 3 adds swimming at either ramp setting.
    SV_PMSrcVer accepts old pins only with their original matching ramp setting.
    Patch 756: version 5 keeps a linked portal landing's exact position.
-   Patch 758: version 6 keeps moving when the hull clears a linked door's front. */
-#define PMSRC_VERSION 6
+   Patch 758: version 6 keeps moving when the hull clears a linked door's front.
+   Patch 764: version 7 traces a static prop's .phy hull as its convex pieces. */
+#define PMSRC_VERSION 7
 
 typedef struct {
 	//standard quakeworld

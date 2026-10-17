@@ -4039,6 +4039,7 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 #define PMDET_TICRATE 0.015f
 
 extern int bih_sourceclip;	//Patch 492, com_bih.c
+extern int bih_phybrushes;	//Patch 764, com_bih.c
 
 //pm_dettest's collision-tree sweep: ntrace random box traces, every field that
 //decides a move hashed.  A function since Patch 492's review, to run it twice.
@@ -4138,12 +4139,15 @@ static void SV_DetTest_f (void)
 	}
 	/* Patch 492: `srctrace` repeats these traces under the Source clip, which only
 	   the mover turns on, so nothing else here reaches it.  Same draws, so the
-	   seed leaves both calls equal and `mover` keeps its recorded value. */
+	   seed leaves both calls equal and `mover` keeps its recorded value.
+	   Patch 764: and with static props as their convex pieces, as the mover has at pmsrcver 7. */
 	seedrerun = seed;
 	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true);
 	bih_sourceclip = 1;
+	bih_phybrushes = 1;
 	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false);
 	bih_sourceclip = 0;
+	bih_phybrushes = 0;
 
 	/* ---- 3. the mover, for real. ---------------------------------------- */
 	/* Patch 492: pass 0 is `mover`, pinned to fixrampbugs 1, the value every

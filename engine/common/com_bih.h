@@ -95,6 +95,10 @@ struct bihdata_s
 			{
 				vec3_t axis[3];
 				vec3_t origin;
+				//FTESurf Patch 764: the prop's .phy hull as world-space convex brushes,
+				//traced instead of the model while bih_phybrushes is set.  0 = none.
+				q2cbrush_t *phybrushes;
+				unsigned int numphybrushes;
 			} *tr;
 		} mesh;
 	};

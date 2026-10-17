@@ -143,6 +143,7 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 
 #define	DIST_EPSILON	(0.03125)
 int bih_sourceclip;	//Patch 492: Source's clip rules, set by the Source mover (see BIH_ClipBoxToBrush)
+int bih_phybrushes;	//Patch 764: a static prop with phybrushes is traced as them, set by the Source mover at pmsrcver 7
 #define NEVER_UPDATED	-9999	//Patch 492: Source's "no enter plane yet", where Quake 2 has -1
 /*static void BIH_ClipBoxToPlanes (struct bihtrace_s *fte_restrict tr, vec3_t plmins, vec3_t plmaxs, const mplane_t *plane, int numplanes, const q2csurface_t *surf)
 {
@@ -470,6 +471,10 @@ void BIH_ProbeReport (const trace_t *t, const char *tag)
 		return;
 	case 2:
 	case 3:
+		if (bih_probe_model)	//Patch 764: a piece of a static prop's hull
+			Con_Printf ("%s   hit: BIH_BRUSH (prop hull piece)  model \"%s\"  origin %.1f %.1f %.1f\n",
+			            tag, bih_probe_model->name,
+			            bih_probe_modelorg[0], bih_probe_modelorg[1], bih_probe_modelorg[2]);
 		Con_Printf ("%s   hit: %s  surface \"%s\"  contents 0x%08x  norm %.3f %.3f %.3f  (matches this trace: %s)\n",
 		            tag, (bih_probe_kind==2)?"BIH_BRUSH":"BIH_PATCHBRUSH",
 		            bih_probe_surf, bih_probe_contents,
@@ -1341,6 +1346,28 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 
 			model_t *submod = node->data.mesh.model;
 
+#if defined(Q2BSPS) || defined(Q3BSPS)
+			if (bih_phybrushes && node->data.mesh.tr->numphybrushes)
+			{	//Patch 764: Source sweeps each convex piece of the hull, so the walls
+				//between pieces are inside the solid and no box outside it meets them.
+				const struct bihtransform_s *trn = node->data.mesh.tr;
+				unsigned int i;
+				probeseq = bih_probe_seq;
+				for (i = 0; i < trn->numphybrushes; i++)
+				{
+					q2cbrush_t *b = &trn->phybrushes[i];
+					if ((b->contents & tr->hitcontents) && BIH_BoundsIntersect(b->absmins, b->absmaxs, movesubbounds->min, movesubbounds->max))
+						BIH_ClipBoxToBrush (tr, b);
+				}
+				if (bih_probe_seq != probeseq)
+				{
+					bih_probe_model = submod;
+					VectorCopy(trn->origin, bih_probe_modelorg);
+				}
+				return;
+			}
+#endif
+
 			if (submod->loadstate != MLS_LOADED)
 			{
 				static float throttle;
@@ -1673,6 +1700,21 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 			trace_t sub;
 			vec3_t start_l;
 			vec3_t end_l;
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+			if (bih_phybrushes && node->data.mesh.tr->numphybrushes)
+			{	//Patch 764: must agree with BIH_RecursiveTrace about what is solid
+				const struct bihtransform_s *trn = node->data.mesh.tr;
+				unsigned int i;
+				for (i = 0; i < trn->numphybrushes && !tr->trace.allsolid; i++)
+				{
+					q2cbrush_t *b = &trn->phybrushes[i];
+					if (b->contents & tr->hitcontents)
+						BIH_TestBoxInBrush (tr, b);
+				}
+				return;
+			}
+#endif
 
 			if (!node->data.mesh.model || node->data.mesh.model->loadstate != MLS_LOADED || !node->data.mesh.model->funcs.NativeTrace)
 				return;	//nettest: a flushed/non-collidable static prop (model not loaded / no NativeTrace fn) — skip it instead of calling a NULL fn pointer. The sibling BIH_RecursiveTrace already guards loadstate; this Test variant didn't.

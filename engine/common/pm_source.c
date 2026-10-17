@@ -209,6 +209,7 @@ static cvar_t pm_jumpzdebug = CVARD("pm_jumpzdebug", "0",
 
 extern cvar_t pm_noround;
 extern int bih_sourceclip;	//Patch 492, com_bih.c
+extern int bih_phybrushes;	//Patch 764, com_bih.c
 extern cvar_t pm_dispprobe;	//FTESurf Patch 256, temporary -- defined in common.c
 extern cvar_t pm_ladderprobe;	//FTESurf Patch 260, temporary -- defined in common.c
 
@@ -3796,6 +3797,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	pms_frametime = tick;
 	pms_surfed = false;
 	bih_sourceclip = (movevars.fixrampbugs >= 2);	//Patch 492: cleared at the end
+	bih_phybrushes = (movevars.sourceversion >= 7);	//Patch 764: likewise
 
 	/* FTESurf Patch 280: once per command -- the physent set does not change
 	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
@@ -3918,6 +3920,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	   state rather than written during the ticks -- see PMSrc_DuckFraction. */
 	PMSrc_SetDuckedEyeOffset (PMSrc_DuckFraction ());
 	bih_sourceclip = 0;
+	bih_phybrushes = 0;
 }
 
 /*
