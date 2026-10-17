@@ -4040,10 +4040,12 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 
 extern int bih_sourceclip;	//Patch 492, com_bih.c
 extern int bih_phybrushes;	//Patch 764, com_bih.c
+extern int bih_probe_kind;	//Patch 764: which leaf decided the last trace (com_bih.h)
+extern model_t *bih_probe_model;
 
 //pm_dettest's collision-tree sweep: ntrace random box traces, every field that
 //decides a move hashed.  A function since Patch 492's review, to run it twice.
-static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, qboolean print)
+static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, qboolean print, int *propwins)
 {
 	unsigned long long htrace = SV_DETHASH_INIT;
 	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
@@ -4058,8 +4060,11 @@ static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, co
 			e1[k] = (float)SV_DetRange(seed, lo[k], hi[k]);
 		}
 		memset(&tr, 0, sizeof(tr));
+		bih_probe_kind = 0;
 		world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1,
 		                         tmins, tmaxs, false, MASK_PLAYERSOLID, &tr);
+		if (propwins && tr.fraction < 1 && bih_probe_kind == 2 && bih_probe_model)
+			(*propwins)++;	//Patch 764: a prop piece decided this trace
 
 		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
 		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
@@ -4095,6 +4100,7 @@ static void SV_DetTest_f (void)
 	unsigned long long htick  = SV_DETHASH_INIT;	//FTESurf Patch 325
 	unsigned long long hsrctrace, hsrcmover = SV_DETHASH_INIT;	//Patch 492
 	unsigned long long hproptrace, hpropmover = SV_DETHASH_INIT;	//Patch 764
+	int                propwins = 0;					//Patch 764
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u, seedrerun, seedprop;
 	int ntrace = atoi(Cmd_Argv(1));
@@ -4145,11 +4151,11 @@ static void SV_DetTest_f (void)
 	   `srctrace` stays the triangles every older pin replays on. */
 	seedrerun = seed;
 	seedprop = seed;
-	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true);
+	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true, NULL);
 	bih_sourceclip = 1;
-	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false);
+	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false, NULL);
 	bih_phybrushes = 1;
-	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false);
+	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins);
 	bih_sourceclip = 0;
 	bih_phybrushes = 0;
 
@@ -4337,7 +4343,7 @@ static void SV_DetTest_f (void)
 	Con_Printf("^5pm_dettest^7 srctrace %016llx\n", hsrctrace);
 	Con_Printf("^5pm_dettest^7 srcmover %016llx\n", hsrcmover);
 	/* Patch 764.  Equal to srctrace/srcmover on a map whose sample met no prop. */
-	Con_Printf("^5pm_dettest^7 proptrace %016llx\n", hproptrace);
+	Con_Printf("^5pm_dettest^7 proptrace %016llx  prop pieces decided %i traces\n", hproptrace, propwins);
 	Con_Printf("^5pm_dettest^7 propmover %016llx\n", hpropmover);
 }
 

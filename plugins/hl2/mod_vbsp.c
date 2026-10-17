@@ -882,8 +882,17 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 			if (VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) - DotProduct(nrm, w[map[ix[t*3]]]) > 0.05)
 				ok = false;	//a point stands in front of a face: not convex
 		}
-		if (!ok)
+		if (ok && n)
+		{	//a flat ledge has no inside to orient its faces by
+			VectorNegate(pl[0], nrm);
+			if (pl[0][3] + VBSP_PhyPlane(pl, &n, nrm, (const vec3_t*)w, nw) < 0.01)
+				ok = false;
+		}
+		if (!ok || !n)
+		{
+			ok = false;
 			break;
+		}
 		for (a = 0; a < 3; a++)
 		{	//axial
 			VectorClear(axis);
@@ -7863,7 +7872,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		Con_Printf("%s: %u static props trace their .phy hulls as %u convex pieces (%u planes, %u KB) at pm_sourceversion 7%s.\n",
 			mod->name, vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyplanes,
 			(unsigned)((vbsp_stat_phypieces*sizeof(q2cbrush_t) + vbsp_stat_phyplanes*(sizeof(mplane_t)+sizeof(q2cbrushside_t)))/1024),
-			vbsp_stat_phyrefused ? va("; %u kept their triangles (a piece not convex, or flat)", vbsp_stat_phyrefused) : "");
+			vbsp_stat_phyrefused ? va("; %u kept their triangles (a piece not convex or flat)", vbsp_stat_phyrefused) : "");
 
 	/*
 	FTESurf Patch 262, and a real Con_Printf rather than a DPrintf: this is the
