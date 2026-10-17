@@ -3513,19 +3513,24 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 	else if (!Q_strcasecmp(st->type, "Modulate"))
 	{
-
+		/* FTESurf Patch 767: as modulate_dx9.cpp -- DST_COLOR*ZERO (multiply), or
+		   DST_COLOR*SRC_COLOR under $mod2x, and $additive is never read. The two were
+		   the other way round, and the tail's progblendfunc add replaced the pass blend
+		   for $additive: surf_board_this wraps stage 1 in
+		   Modulate { lody/rainbow $additive 1 }, which washed its sky yellow. */
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n");
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 
-		if (!st->mod2x) {
+		if (st->mod2x) {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_src_color\n");
 		} else {
-			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_one_minus_src_alpha\n");
+			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_zero\n");
 		}
 		Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
 		st->translucent = 0;
+		st->additive = 0;
 	}
 	else if (!Q_strcasecmp(st->type, "Water"))
 	{
