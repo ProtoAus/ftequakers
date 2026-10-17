@@ -1,5 +1,99 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 756 — mover 5: walking through a linked portal no longer sticks
+
+**Problem:** On surf_kitsune a player who walked through a floor-level linked
+portal stuck just past the exit; jumping through worked and a duck tap freed
+them. Walking back from stage 1 into its entry door never crossed. A per-tick
+diagnostic build (not shipped) showed why: the walker crosses on the hull centre
+plane, so half the hull is still inside the wall behind the exit and every trace
+starts in solid. `PM_PortalCSG`'s linked branch then keeps only the six window
+planes, whose bottom one is offset to the box centre 31 units under the sill, so
+the ground probe passed through the floor (airborne), gravity's move ended 0.18
+inside the real floor and `PMSrc_TryPlayerMove` refused it and cleared the
+velocity every tick. The 1/8-unit landing snap was a first suspect; an exact
+landing alone still stuck 3.9 units past the exit.
+
+**Change:** `PMSRC_VERSION` 5 (`common/pmove.h`). Under mover 5, for an upright
+linked door (its up within 0.7 of world up) `PM_PortalCSG` bounds a carved trace
+by a seventh plane, the player box's lowest corner against the opening's own
+bottom edge (Patch 216's start-only gate as a sweep); tilted doors keep mover 4's
+sweep. A linked landing keeps its exact position instead of the 1/8 snap
+(`PM_PortalTransform`, `PM_PlayerTracePortals`). Movers 1-4 replay unchanged;
+`SV_PMSrcVer` accepts pin 5, which an older verifier refuses (REFUSE, not a
+fault): on the Pi swap the binary (the sweeper's verifier) before restarting
+lobbies, and never roll it back below 756 once a lobby ran it.
+
+**Verified:** FTESurf `tools/test_portal_collision.py` (actual `PM_PortalCSG`,
+22 checks): under mover 5 the sill is ground, a walk out is still carved, a fall
+stops on it, a 50-degree door sweeps as mover 4; mover 4 still carves the sill;
+controls without the plane or the upright gate fail. `tools/test_portal_landing.py`
+(actual transform, trace and `SV_PMSrcVer`): 816.03125 vs 816.0, pin 5 accepted,
+6 refused; snap controls fail. Native timeline, settled walk, eye every 300 ms:
+mover 4 freezes 3 units past the hub door's exit and 7 short of stage 1's entry
+for the rest of the walk; mover 5 crosses both ways at an unbroken ~225 u/s; jump
+and duck-tap arms still cross. Review (flow, evidence, cheater): no gain for an
+unearned run; two commits both pinning 5 were squashed; tilted doors excluded;
+the mid-air perch, a departure-tick clip and door edges below the floor are in
+BACKLOG. Provenance: FTESurf `tools/p756portalwalk.md`.
+
+## Patch 752 — portal rooms: the door seen through a door opens
+
+**Problem:** The owner asked for a setting for how many rooms you see through
+portals, two by preference. `r_portalrecursion` is that setting (default.cfg 2),
+but on linked-portal maps the second level never opened: FTESurf's
+`FS_PortalPredraw` offered a door only if it faced the player's eye, sat within
+`vbsp_portal_dist` of it and in its PVS, so the door in the room behind a door was
+never in the scene for `CSQC_SetupToRenderPortal` to recurse into. The cvar was
+not archived either.
+
+**Change:** `client/renderer.c`: `r_portalrecursion` is `CVAR_ARCHIVE`, described
+in rooms. `gl/gl_rmain.c` `GLR_PortalDrawableAt`: a view budgets only doors in its
+own PVS (`r_refdef.scenevis`; nothing else culls portal batches by PVS with
+`r_ignoreentpvs 1`), so a door offered for another level cannot take a slot. FTESurf `cl_portal.qc` `Portal_Offer`: once per frame, the player's eye
+and then each offered door's far-side eye (`FS_PortalWarp`/`FS_PortalRotate`, PVS
+at the exit doorway as the renderer samples it), up to `r_portalrecursion`
+levels; only the `r_portalmaxviews` largest doors in front of an eye carry the
+walk deeper (at most 32 eyes). `vbsp_portal_dist` bounds directly seen doors only.
+
+**Verified:** Native A/B at the Kitsune hub, P748 engine, latest-main progs
+against P752's: the old progs offer `portal_hub_exit` only and render 1 door at
+depth 1; P752 offers `portal_s1_exit` at view level 1, renders 2, and stage 2's
+door frame appears inside stage 1's exit through the hub door; the hidden hub door
+seen from stage 1 is no longer rendered at depth 1. Cost (`timerefresh 2 720`,
+FBO portals, 960x720, final build): hub 0.39 s at recursion 1, 1.55 s at 2 (old
+build 0.48 / 0.59). One review: findings fixed or in BACKLOG. QC 0 warnings.
+Provenance and limits: FTESurf `tools/p752portalrooms.md`.
+
+## Patch 748 — mode2 sorts translucent panes seen through portals and in the 3D sky
+
+**Problem:** After P743 the owner found two more surf_kitsune flips: stage 1's
+floor seen through `portal_hub_exit` (save 8 vs save 9, 0.04 degrees apart) and
+the skybox grid at stage 1's start (save 11 vs 10). `GLBE_SubmitBlendedFaces` ran
+the raster-empty cull and the plane sort only at `r_refdef.recurse == 0`, so every
+pane in a portal, skyroom or FBO-capture view kept P736's centre-depth order.
+
+**Change:** mode2 only, `gl/gl_backend.c`. Recursive views gather, cull and sort
+as the main view does (one basis from `GLR_DrawPortal`/`R_DrawSkyroom`; the
+oblique near clip rewrites only the projection z row). `GLBE_BlendViewEyeAgrees`
+gates the sort on GL's eye, solved from `m_view`, lying within 1/32 unit of the
+proofs' `r_origin`: ray-disjoint bounds hold in any image frame, so roll, mirrors
+and skyroom spin sort, a stereo/VR eye offset keeps the baseline. `r_blendtrace`
+traces every pass of the next frame drawn (`recurse=`, `eye=`); a later frame's
+first pass disarms.
+
+**Verified:** Actual-C suites, four variants, 48 acting mutants (portal order and
+cull, eye guard, roll/mirror/spin still sort, per-axis tolerance, singular
+`m_view`, one-frame trace). Native A/B against a trace-only control at the owner's
+saves (recursion 2, FBO portals): control portal/skyroom views status 0 with 0
+admitted and save 8's portal order differing from save 9's; P748 status 1, the
+same order at both, frames matching the owner's good views (save 9/10 0 px from
+control, save 8's 7,400-pixel doorway difference is the save-9 layering, save 11
+vs 10 30k px against 120k); main views and P743's poses unchanged. Cost +0.04 to
++0.12 ms a frame. Two review rounds (the first guard over-refused correct sorts;
+a stuck trace; test gaps), fixed; round 2 found no wrong-order path. Provenance:
+FTESurf `tools/p748portalsort.md`.
+
 ## Patch 754 — prediction runs through a held body and takes the server's posture
 
 **Problem:** Client prediction stopped whenever the server reported PM_NONE (the
