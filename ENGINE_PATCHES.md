@@ -12,7 +12,8 @@ time is its timer's, not the frame count.
 
 **Change:** a course with no entry before its one exit is accepted when an
 official time binds it (never without one); the official time must be within 2.5
-ticks or 0.2 % of the run. A wrong course or run is seconds off.
+ticks plus each frame the file repeats while moving plus one a 10,000 frames. A
+wrong course or run is seconds off.
 
 **Verified:** all 17, fetched again one at a time, convert with their rows' exact
 times; the 12 P702 clips convert to identical bytes; converter tests 11 pass, the
@@ -20,6 +21,11 @@ old converter fails 6 of the new checks. The refused surf_monolith main FW demo
 replays with zone splits each one tick before KSF's own stage bookmarks (9 of 9).
 Pinned by the sealed schema20 generation: live with the next guarded cutover.
 FTESurf `cad73a2`, `tools/p757ksfconvert.md`.
+
+**Review (one round, FTESurf `c91719f`):** the first cut allowed 0.2 % of the run
+(1.8 s at 900 s); now bounded by counted repeated frames. `surfd/ksfgrab.py` stored
+the bookmark interval as the run page's time; it stores the row's now (its owner
+asked). test_ksfgrab 49 pass; the old ksfgrab fails the new test.
 
 ## Patch 750 — Momentum and KSF replays show splits, boards and boarding (QC only)
 
