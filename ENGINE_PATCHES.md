@@ -1,5 +1,49 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 763 — the CSQC tempstring GC skips blocks the QC marks string-free
+
+**Problem:** on surf_kitsune, once a run had started, a ~20 ms frame came every ~415
+frames (0.45 s at ~930 fps). The owner felt it as stutter and poor 1% lows. qclib's
+collector runs as the top-level QC call returns. Every collection either copies the
+whole QC hunk on the main thread (`pr_gc_threaded 1`, the default) or scans it
+(`0`). FTESurf's run-line pool (`cl_lines.qc` Line_Alloc, ~80 MB of float and vector
+arrays, allocated at the first line) takes the CSQC hunk from 0.3 % to 4.2 % of
+2 GiB, and that made each collection 19-24 ms. With the collector off (`2`,
+diagnostic) the spikes were gone.
+
+**Fix:** `float memnostrings(__variant *ptr)`, a CSQC builtin bound by name. The QC
+promises that a memalloc block never holds a string, and it is registered, if its
+header is a used block wholly inside the hunk. The table holds up to 128 blocks,
+sorted. `PR_RunGC`'s threaded copy and its same-thread scan then read the hunk
+minus those blocks (`PR_QCGC_Segments`), cut to whole words so every word read
+sits where an unskipped scan reads it. `memfree`, and `memrealloc` through it, drop
+every registration that overlaps the freed block. The VM's flush clears them.
+`cl_status` prints "csqc gc reads: X MiB of Y MiB (N blocks marked)". With nothing
+registered, the reads are what they were. A false promise frees a string that is
+still referenced: with the threaded GC that is `PR_QCGC_Sweep`'s FIXME race, which
+a csprogs could already reach by hiding a reference.
+
+**Verified:** FTESurf `tools/test_qcgc_nostrings.py` compiles initlib.c's
+allocator, the skip table and both GC read paths. In random
+alloc/mark/free/realloc/forged-header sequences (forgeries inside blocks and in
+the globals), it checks the marks against a plain word scan that leaves out only
+the ranges an independent model says are registered. That is ~30,000 checks with
+the marks equal on both paths, and four controls fail `marks_ok`.
+
+Native arm, surf_kitsune at the owner's settings, hub walks after one door crossing:
+
+| Build | GC reads | ~20 ms spikes |
+| --- | --- | --- |
+| 763 engine + QC | 7.2 of 86.8 MiB, 29 blocks marked | none, threaded or same-thread; a ~4 ms frame per collection remains; 1% low 267-301 fps |
+| 763 engine, P758 QC (control) | all 86.8 MiB | 19-28 ms every ~0.5 s; 1% low 73-104 fps |
+| P758 engine, 763 QC | (no builtin) | as before; no QC error |
+
+No run logged an invalid-tempstring warning. Review, one round with two lenses
+(flow, hostile csprogs): no defect for a QC that keeps its promise. It found a
+false comment, a forged registration outliving a freed block, the header read
+reaching past the hunk, and the status wording; all four are fixed and covered by
+the harness. Provenance: FTESurf `tools/p763gcskip.md`.
+
 ## Patch 758 — portal views see their own sky; mover 6 leaves a door at speed; `frametimes`
 
 **Problem:** On surf_kitsune the owner saw the room behind a door with no 3D sky,
