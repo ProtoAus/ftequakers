@@ -31,6 +31,45 @@ spectate hold (msec 0, no touches) is replayed as a P672 HOLD by FTESurf; a
 standing hull with duck held is a forced stand only at the full standing eye
 (`STAT_VIEWHEIGHT`), else a duck in progress; the reconcile runs on every
 snapshot-seeded replay, not only the propagated one.
+## Patch 753 — `!r`, `!m` and the save-lock load key are predicted (QC only)
+
+**Problem:** `!r`/`!m` and a save load waited a round trip and then snapped:
+every one printed a `prederr` line (a dedicated surf_dune at sv_minping 80: 371 u
+for `!r`, 361 for `!m`, 105 for a held load and 23 more at its release). The
+stringcmd that asked for them lands between packets, at whichever command the
+reliable channel delivered it before, so the client could not know which of its
+replayed commands to move. Players also asked for client-side goto_start/goto_spawn.
+
+**Change:** FTESurf `sv_warpop.qc`/`cl_warpop.qc`. The op is ONE usercmd's impulse
+(201 `!r`, 202 `!m`, 203 load + hold, 204 release). `SV_WarpOpCommand` runs first
+in PlayerPreThink, where a stringcmd sent just before that command would run, and
+calls what that stringcmd calls (`SV_ZoneChatCommand`, `SV_SaveLocLoad` +
+`SV_SaveLocHold`, `SV_SaveLocHold(FALSE)`, with sl_load's rate charge); it acts
+only on a decoded command newer than the last op (P675 `input_cmd_*`), since the
+engine re-runs `lastcmd` with its impulse. The server publishes where `!r` and
+`!m` would put the body (P680's `SV_MovePrepReset`, STAT_FS_WOPR/WOPM) and the
+cursor save's velocity (STAT_FS_SLVEL), and `fs_wop` once it sees a decoded command.
+The client attaches a queued op in CSQC_Input_Frame and applies the same body
+change for that command's sequence in `CSQC_PredictPlayerPreMove` (P672) on every
+replay. `say !r`/`!m` from binds (CSQC_ChatSay) and the chat box, the load key and
+`+sl_hold`, and new `goto_start`/`goto_spawn` use it; anything it cannot predict
+(an old engine or server, spectate/replay/ghost/rewind, a list command in flight)
+sends the old command. `cl_warpop 0` turns it off.
+
+**Verified:** `tools/p753warpop.py`, dedicated surf_dune, sv_minping 80. Control
+(`cl_warpop 0`): the four corrections above. Subject on the installed client:
+each op ran at the same command on both sides (`warpop:` dprints), `!r`/`!m` 0
+prederr, the held load of a ducked mid-air save 0 until its release, then one at
+the release (7.5 and 22 u in two runs); with the Patch 754 client, 0 everywhere.
+`--threaded` (`cl_threadedphysics 1`, no CSQC_Input_Frame): no op is queued and
+every gesture falls back. QC 0 warnings. Three review lenses (integrity: no
+exploit, the gates match the stringcmds'; correctness; a round on the fixes)
+found: ops stranded or sent late (threaded input, a replay's early returns:
+now expired after 0.25 s), the hold backstop landing before a fast tap's load,
+`!r` overtaking an in-flight save, the release mode, `.impulse` written without a
+command (now `input_impulse`), the fixangle snap-back (now a Patch 396 predicted
+snap), and a non-short-circuit `||` that would have written through an
+unallocated ring on any client off this path. All fixed and re-measured.
 ## Patch 755 — Steam pictures stay on disk and draw from it at once (QC only)
 
 **Problem:** P715's picture cache kept each copy for one local day, so every
