@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 751 — a lobby sees the saves another lobby made on the same map (QC only)
+
+**Problem:** Saves placed in one lobby were missing in another lobby on the same
+map. All twelve Pi lobbies share one `data/saves` (one basedir, one `sv_guidkey`,
+so one `@<guid>` folder a player), but `fopen` finds only the files the process's
+name hash held at its last map load (`fs.c` FS_FLocateFile, `fs_cache 1`), while
+`search_begin` lists the disk. A save made in lobby A therefore read as torn in a
+lobby B already on that map: missing from B's list, and B's next save took the
+same folder number and wrote over it. A block scanned once also stayed fresh for
+that guid across a leave and rejoin.
+
+**Change:** FTESurf `sv_saveloc.qc`: every list change in a lobby folder
+(create, rewind save, delete, a delete-all batch) rewrites `@<guid>/gen.txt` with
+a port/clock/counter line, and the first save-list use after `ClientConnect`
+(Sync, or Begin for a command ahead of the first move) rescans a fresh block whose
+`gen.txt` no longer matches. A read that misses adopts the file into the hash
+(`frename(p, p)`, which `FS_Rename2` follows with `FS_FlushFSHashWritten`, as
+`SV_MsAdopt` does), only where the disk listing found it.
+
+**Verified:** `tools/p751lobbysaves.py`: two dedicated servers on one basedir
+(surf_dune, recording on), one client B -> A -> B -> A, A's save made mid-run.
+Control (FTESurf `223475b`): B lists nothing, saves into slot 001 and A's save is
+gone (one folder left). Subject (FTESurf `b047d03`): B lists A's save, loads it
+with the run resumed, takes slot 002, A lists both after the rejoin, and B's log
+shows the gen.txt and state.txt adoptions (each runs only after a missed read).
+One review round: a command ahead of the first Sync skipped the check, adopting
+mkdir'd missing folders, and it ran on every row; fixed. A streamed run.rec is
+read FS_GAMEONLY and needed no adoption (a mutant without one still resumed).
+QC 0 warnings. Traps: `cl_sendguid 1` hashes the guid with the server ADDRESS,
+and a rejoined slot answers `viewpos` before its spawn. Not covered: two
+connections on one guid saving in two lobbies at once.
+
 ## Patch 749 — the race ghost ducks, faces its player's view, has a name tag (QC only)
 
 **Problem:** Patch 746's ghost always stood and faced its direction of travel:
