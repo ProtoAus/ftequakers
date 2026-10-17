@@ -1212,6 +1212,14 @@ static qboolean GLR_PortalDrawableAt(batch_t *batch, int level)
 		return false;
 	if (d < -r_refdef.mindist)
 		return false;
+	/* FTESurf Patch 752: only a door in THIS view's PVS. Every level shares the
+	   CSQC scene, which now holds doors offered for deeper eyes, and with
+	   r_ignoreentpvs 1 nothing else culls them by PVS: a hidden door could take
+	   a budget slot from one in sight. NULL areas: PVS only, as checkpvs. */
+	if (r_refdef.scenevis && batch->ent && batch->ent != &r_worldentity && cl.worldmodel &&
+		cl.worldmodel->funcs.EdictInFatPVS &&
+		!cl.worldmodel->funcs.EdictInFatPVS(cl.worldmodel, &batch->ent->pvscache, r_refdef.scenevis, NULL))
+		return false;
 	return true;
 }
 
