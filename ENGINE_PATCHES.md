@@ -30,6 +30,16 @@ pane. Mutants without the lead (36-64 u off) and keeping the first exit (29.475 
 each fail. 0 warnings, csprogs `24dd85cf`, FTESurf `6195307`. Not covered: a
 ducked ghost (it stands), names over ghosts, the owner's feel (lextest).
 
+**Review (one round, FTESurf `b4ab2c1`):** two real defects, both in the stage-PB
+slot the stage arm never filled: once a stage's own PB had finished, the whole
+run's PB stood in further along the map, and with "your run" the stage PB was
+cleared and read again at every abandoned attempt (RUNLEG is 0 between runs).
+Fixed with five risks it named (scan cost, zone edits, rewind under "each stage",
+a line outliving a map change, facing across a teleport); a thin stage box is
+BACKLOG. `raceghost_stagepb.cfg` (a stage-2 PB cut from the Kitsune PB): the
+6195307 build fails all four checks, the fix passes; every arm passes again on
+the tree rebased onto Patch 744.
+
 ## Patch 745 — a hidden player line still records; a replay line's own window (QC only)
 
 **Problem:** `hud_trail 0` reset and stopped the live run line, so a rewind
