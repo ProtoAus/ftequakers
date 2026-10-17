@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 755 — Steam pictures stay on disk and draw from it at once (QC only)
+
+**Problem:** P715's picture cache kept each copy for one local day, so every
+picture was fetched again after midnight; a disk copy waited behind the 1.5 s
+ask pacing like a request, so a board of 13 took 19.3 s from disk on every map;
+and 256 two-hex bucket files let players evict each other.
+
+**Change:** `cl_steampic.qc` keeps one file per origin+mark SHA256 for 30 days.
+Copies load two a frame, regardless of ask pacing, strikes or the hold; a copy
+of an earlier day is drawn and refreshed by a paced ask behind it, and kept if
+the refresh fails. A 404 deletes the mark's copy. Old bucket files are read.
+Draw contract unchanged; no new builtin, limit or draw path.
+
+**Verified:** Three progs 0 warnings, as the base. `tools/p755pics.py`, real
+client, 13 pictured players: warm board 1.0 s from disk with 0 requests (base
+19.3 s); a day-old cache drawn at once then refreshed; legacy, >30-day,
+corrupt and other-origin arms as designed. One review found an in-flight
+origin race and three smaller faults, all fixed; the fixes were not reviewed
+again, and the 404 deletion is not reached by an arm. `vid_restart` kills the
+rig client on both builds (BACKLOG). FTESurf `tools/p755steampic.md`.
+
 ## Patch 751 — a lobby sees the saves another lobby made on the same map (QC only)
 
 **Problem:** Saves placed in one lobby were missing in another lobby on the same
