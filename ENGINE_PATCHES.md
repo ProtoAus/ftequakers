@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 762 — key configuration panel, key hints, the save-lock keys as binds (QC only)
+
+**Problem:** There was no in-game way to rebind keys. The save panel's z and the
+panel-down 1/2/4 were fixed scancodes in SaveLoc_Key, so they could not be moved
+and a bind on those keys never ran. Nothing on screen said which key opens which
+menu, and the vote box still drew the rows Patch 606 replaced.
+
+**Change:** FTESurf `cl_keycfg.qc`. `config_menu` (default K) is a SUI panel in
+the shared card style, with two key slots per action: movement, +left/+right,
+the save menu, save/load/delete/prev/next, restart/respawn (goto_start,
+goto_spawn), rewind, noclip, hud_edit, gfx_menu, config_menu. It also has
+cl_yawspeed and sensitivity sliders and a reset that asks twice. Binds go
+through setkeybind on all modifier states. A CSQC bind has the insecure level
+(`bindlevel <key> 30`) and runs at it. A key an action gives up is bound to "":
+Key_WriteBindings writes no unbound key and no unbindall, so an unbind would
+come back from default.cfg. A capture comes first in CL_InputChain, ignores OS
+repeats and takes its key's release. A click away from the waiting chip cancels
+rather than binding Mouse 1. `hud_keyhint` is a bottom-left strip of the bound
+keys of the save, graphics and HUD menus, noclip, rewind and the key panel; it
+is listed in hud_edit. default.cfg binds z save_menu (a new name beside
+saveloc_menu), 1 sl_save, 2 +sl_hold, 4 sl_del and k config_menu. A `+sl_hold`
+from a printable key owns its hold as the fixed 2 did. Its owner checks run
+above the rec_savelock gate, so the repeat deadman still lets go of a lost
+key-up. `-sl_hold <key>` releases only that key's hold, because keys.c keeps it
+after CSQC takes the up. SaveLoc_Key keeps only the open panel's digits and lets
+the save_menu key through; rewind and spectate pass those binds. The vote box
+uses the KeyMenu_Row card.
+
+**Verified:** three progs 0 warnings; csprogs global defs 123,068 of 131,072.
+`tools/p762keys.py` drives a windowed client on a generated map, posting native
+WM_KEY* only to its own window. It passes 56/56: default binds; the strip; native
+1/z through their binds; a cleared 1 no longer saving; captured j and x (x's old
+action named); a held W's repeat not captured; the sliders; ESC; the saved
+bindlevel lines; a restart keeping a cleared key cleared over default.cfg;
+reset; sl_save/save_menu/noclip from panel-made binds; the deadman on a lost
+release; rec_savelock 0; a stale -sl_hold 50; a stray click; save_menu on 8.
+Controls: origin/main 1b92f58 4/4 (1 saves with its bind cleared; no
+config_menu); the first cut's source (048ed47) fails the four first-review
+checks; the first fix's (b144a1a) fails the two second-review checks.
+Reviews: the first (control flow and input routing) found seven defects, five
+fixed and two low ones to BACKLOG; a narrow review of the fix found three more
+in the hold ownership, two fixed and one
+(the deadman after Windows stops a key's repeats, old behaviour) to BACKLOG.
+Mouse clicks on the panel were not driven by the arm (lextest).
+FTESurf `048ed47`, `b144a1a`, `be10183`.
+
 ## Patch 757 — KSF demos that begin in the start zone, or time off the frame count (backend tool)
 
 **Problem:** FTESurf `tools/ksfconvert.py` refused 17 of the 155 KSF demos the
