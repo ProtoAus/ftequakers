@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 750 — Momentum and KSF replays show splits, boards and boarding (QC only)
+
+**Problem:** A replay's split list, Board panel and Boarding enter row were read
+from a file's own `stage`, `cp` and `board` records, which only a native recording
+has; the leave row was blank in every replay; a KSF v2 file has no ground flag, so
+its contact was not inferred and Segments was empty. Measured: a Momentum replay
+showed Segments and the trainer only (its timer at "stage 1/3" 40 s in), a KSF v2
+one the trainer only.
+
+**Change:** FTESurf `cl_watch.qc`. Stage and checkpoint crossings of a file without
+those records come from this map's zones by the server's own rule (SV_ZoneScan:
+the first END, else STAGE, touched per tick; the next stage only; checkpoints on a
+change of region), a few thousand lines a frame. Boards of a file without them are
+inferred in the build pass where contact begins after the engine's air gate: the
+plane is the face the map has along the velocity's clip, the pre-clip velocity the
+sample's in-plane part plus the last sample's along the normal; the panel says
+"inferred". Every replay keeps its leaves for the Boarding window. KSF v2 reads
+ground from vz (`cl_infer.qc` Infer_Ground: on the three KSF v3 clips vz is 0 on
+all 270 ground samples and on none of the other 10,747).
+
+**Verified:** Lex's surf_kitsune PB rewritten as an import: split ticks 8 of 8
+exact; boards 38 of 38 within two ticks, plane error median 0.00 max 0.66 deg, kept
+% median 0.04, grade equal on 36 (35 of 38 with its contact inferred too); leaves 38
+of 38. A surf_dune Momentum import: both splits, 22 boards. A KSF v2 surf_monolith
+clip: contact at the 12.00 step, 5 boards, 6 leaves, ground 59 of 59. The build
+without the patch fails the import arm 9 times and the KSF arm 6. One review: the
+first cut split on any higher stage a hull touched (a hub map would show three at
+once); fixed with the server's rule, boards retried on a ride's first three samples.
+The import arm also passed on the 0.1.26 release engine (before the fix). FTESurf `8105095`, review fix `b7f6f02`.
+
 ## Patch 756 — mover 5: walking through a linked portal no longer sticks
 
 **Problem:** On surf_kitsune a player who walked through a floor-level linked
