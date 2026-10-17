@@ -727,7 +727,7 @@ cvar_t dpcompat_smallerfonts				= CVARFD("dpcompat_smallerfonts", "0", 0, "Mimic
 
 cvar_t vid_triplebuffer						= CVARAFD ("vid_triplebuffer", "1", "gl_triplebuffer", CVAR_ARCHIVE, "Specifies whether the hardware is forcing tripplebuffering on us, this is the number of extra page swaps required before old data has been completely overwritten.");
 
-cvar_t r_portalrecursion					= CVARD  ("r_portalrecursion", "1", "The number of portals the camera is allowed to recurse through.");
+cvar_t r_portalrecursion					= CVARFD ("r_portalrecursion", "1", CVAR_ARCHIVE, "How many rooms deep you see through portals: 1 is the room behind a portal, 2 also shows the portal in that room open, and so on. Each level renders the scene again. 0 draws every portal closed.");
 cvar_t r_portaldrawplanes					= CVARD  ("r_portaldrawplanes", "0", "Draw front and back planes in portals. Debug feature.");
 cvar_t r_portalonly							= CVARD  ("r_portalonly", "0", "Don't draw things which are not portals. Debug feature.");
 /* FTESurf Patch 206.  r_portalrecursion bounds the DEPTH of the portal tree and
