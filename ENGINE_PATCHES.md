@@ -1,5 +1,60 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 758 — portal views see their own sky; mover 6 leaves a door at speed; `frametimes`
+
+**Problem:** On surf_kitsune the owner saw the room behind a door with no 3D sky,
+or red fragments of it, until walking through (saves 12-15); bhopping through a
+door sometimes stopped dead; the map felt stuttery with poor 1% lows.
+
+**Sky:** CSQC sets `VF_SKYROOM_CAMERA` from the player's eye once a frame and every
+recursive view inherited it, so a portal view of a room thousands of units away
+looked into the wrong part of the sky room. The property takes an optional fifth
+argument, the parallax scale (FTESurf passes its `sky_camera` scale);
+`R_DrawSkyroom` moves the camera by (that view's eye - the setter's eye) / scale.
+`V_ClearRefdef` clears the scale for each view, so only that frame's call sets it.
+Without the argument nothing changes.
+
+**Mover 6 (`PMSRC_VERSION` 6):** `PM_PortalCSG`'s linked branch clips a trace that
+starts with the hull embedded in the wall behind an exit to the carve region's
+boundary. Its plane 0 is the hull clearing the door into the room in front; the
+clip reported it as a wall facing back and `ClipVelocity` zeroed the forward
+speed. A bhop tick (10-15 units) can start that deep: 8 of 20 crossings of the hub
+door stopped dead at 700-1000 u/s with autohop, on movers 4 and 5 alike. P756's
+review had recorded it as pre-existing and unseen, from walking speed (3.4 units a
+tick). Under mover 6 that stop is a waypoint: `PM_PlayerTrace` hands it to
+`PM_CarveExitRest`, which traces the rest of the move from the stop moved 1/16
+along the door's forward (1/32 clear of the carve), so whatever is really in front
+still stops the hull. A rest that starts in solid keeps mover 5's stop; a blocked
+rest is charged its end projected on the move, below 1. Movers 1-5 replay
+unchanged; `SV_PMSrcVer` accepts pin 6, which an older verifier refuses (REFUSE,
+not a fault). On the Pi: binary (the sweeper's verifier) before lobby restarts,
+and never roll it back below 758 once a lobby ran it.
+
+**`frametimes`:** a console command. Present-to-present intervals since the last
+call (2^18 frames; it says when the window filled): average fps, 1% low,
+p50/p99/p99.9/max, and the times of the slow frames, so a periodic stutter shows
+its period. GL on Windows.
+
+**Verified:** FTESurf `tools/test_portal_carveexit.py` (actual `PM_PlayerTrace`,
+`PM_PortalCSG` and `PM_CarveExitRest` over box and half-space brushes with the
+mover's tick shape; 12 checks: flush and in-slop exits continue, past the slop and
+at an obstacle they stop, non-upright and grazing exits keep mover 5's stop, a
+corridor wall beside a door is passed in none of 43,380 exit states a mover, a
+blocked rest is charged its projection below 1; five controls fail their named
+checks), `test_portal_collision.py` (28), `test_portal_landing.py` (pin 6
+accepted, 7 refused). Native, listen server: 20 hub-door crossings at 700/1000 u/s
+across the hop phase, mover 5 stops 8, mover 6 none; a walk crosses both ways
+unbroken. Sky: saves 12-14's views show the sky grid the crossed view shows, where
+the old build showed none or red fragments. Review, four rounds, three lenses
+(control flow, evidence, cheater): round 1 found a stuck rest passed on as a move
+(a non-upright exit tunnelled through a wall), round 2 a grazing move left
+untraced (through a jamb or corridor wall, 0.4-1.5% of exit states), round 3 a
+blocked rest reported as a full move; each was fixed and re-measured, and round 4
+found nothing. Movers 4 and 5 are bitwise identical to the base over 200,000
+fuzzed exits in both physent orders (an acting control differs on 42,881); mover 6
+adds no client/server disagreement mover 5 lacks. Limits in FTESurf BACKLOG's
+mover 6 item. Provenance: FTESurf `tools/p758portalsky.md`.
+
 ## Patch 762 — key configuration panel, key hints, the save-lock keys as binds (QC only)
 
 **Problem:** There was no in-game way to rebind keys. The save panel's z and the
