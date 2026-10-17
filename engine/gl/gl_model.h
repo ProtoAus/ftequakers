@@ -632,6 +632,7 @@ typedef struct fragmentdecal_s fragmentdecal_t;
 void Fragment_ClipPoly(fragmentdecal_t *dec, int numverts, float *inverts, shader_t *surfshader);
 size_t Fragment_ClipPlaneToBrush(vecV_t *points, size_t maxpoints, void *planes, size_t planestride, size_t numplanes, vec4_t face);
 void Mod_ClipDecal(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surflagmatch, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx);
+void Mod_ClipDecalDisplacements(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx);	//FTESurf Patch 772
 extern const struct msurface_s *Mod_Decal_CurrentSurface;	//nettest: surface of the in-progress decal fragment (r_decal_lightmap); set by Mod_ClipDecal's clipper, read by CL_AddDecal_Callback
 
 void Q1BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *node);

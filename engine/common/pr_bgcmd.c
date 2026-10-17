@@ -8575,6 +8575,7 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTE_CSQC_SKELETONOBJECTS",		NULL,	15,{"skel_create", "skel_build", "skel_get_numbones", "skel_get_bonename", "skel_get_boneparent", "skel_find_bone",
 													"skel_get_bonerel", "skel_get_boneabs", "skel_set_bone", "skel_premul_bone", "skel_premul_bones", "skel_copybones",
 													"skel_delete", "frameforname", "frameduration"}, "Provides container objects for skeletal bone data, which can be modified on a per bone basis if needed. This allows you to dynamically generate animations (or just blend them with greater customisation) instead of being limited to a single animation or two."},
+	{"FTESURF_DECAL_SOURCE",			NULL,	1,{"adddecal_static"}, "adddecal_static with srange_z 1 also clips to displacements and brush entities at rest, as a Source decal does (FTESurf Patch 772)."},
 	{"FTE_CSQC_RAWIMAGES",				NULL,	2,{"r_uploadimage","r_readimage"}, "Provides raw rgba image access to csqc. With this, the csprogs can read textures into qc-accessible memory, modify it, and then upload it to the renderer."},
 	{"FTE_CSQC_RENDERTARGETS",			NULL,	0,{NULL}, "VF_RT_DESTCOLOUR exists and can be used to redirect any rendering to a texture instead of the screen."},
 	{"FTE_CSQC_REVERB",					NULL,	1,{"setup_reverb"}, "Specifies that the mod can create custom reverb effects. Whether they will actually be used or not depends upon the sound driver."},

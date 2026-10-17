@@ -192,6 +192,7 @@ struct fragmentdecal_s
 	int numplanes;
 
 	vec_t radius;
+	vec_t reach;	//FTESurf Patch 772: half the clip box's diagonal
 
 	//will only appear on surfaces with the matching surfaceflag
 	unsigned int surfflagmask;
@@ -468,6 +469,8 @@ static void Fragment_Mesh (fragmentdecal_t *dec, const msurface_t *surf, mesh_t 
 
 	if ((surfshader->flags & SHADER_NOMARKS) || !mesh)
 		return;
+	if (surf && (surf->flags & SURF_NODRAW))
+		return;	//FTESurf Patch 772: a hidden tool face (a trigger, clip) is not drawn: a decal on it would float
 
 	if (dec->surfflagmask)
 	{
@@ -602,36 +605,46 @@ static void Q3BSP_ClipDecalToNodes (fragmentdecal_t *dec, mnode_t *node)
 }
 #endif
 
+static void Mod_DecalSetup(fragmentdecal_t *dec, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx)
+{
+	int p;
+	float r, d2 = 0;
+
+	VectorCopy(center, dec->center);
+	VectorCopy(normal, dec->normal);
+	dec->radius = 0;
+	dec->callback = callback;
+	dec->ctx = ctx;
+	dec->surfflagmask = surfflagmask;
+	dec->surfflagmatch = surfflagmatch;
+
+	VectorCopy(tangent1,	dec->planenorm[0]);
+	VectorNegate(tangent1,	dec->planenorm[1]);
+	VectorCopy(tangent2,	dec->planenorm[2]);
+	VectorNegate(tangent2,	dec->planenorm[3]);
+	VectorCopy(dec->normal,		dec->planenorm[4]);
+	VectorNegate(dec->normal,	dec->planenorm[5]);
+	for (p = 0; p < 6; p++)
+	{
+		r = sqrt(DotProduct(dec->planenorm[p], dec->planenorm[p]));
+		VectorScale(dec->planenorm[p], 1/r, dec->planenorm[p]);
+		r*= size/2;
+		if (r > dec->radius)
+			dec->radius = r;
+		if (!(p & 1))
+			d2 += r*r;
+		dec->planedist[p] = -(r - DotProduct(dec->center, dec->planenorm[p]));
+	}
+	dec->reach = sqrt(d2);
+	dec->numplanes = 6;
+}
+
 void Mod_ClipDecal(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx)
 {	//quad marks a full, independant quad
 	int p;
-	float r;
 	fragmentdecal_t dec;
 
-	VectorCopy(center, dec.center);
-	VectorCopy(normal, dec.normal);
-	dec.radius = 0;
-	dec.callback = callback;
-	dec.ctx = ctx;
-	dec.surfflagmask = surfflagmask;
-	dec.surfflagmatch = surfflagmatch;
-
-	VectorCopy(tangent1,	dec.planenorm[0]);
-	VectorNegate(tangent1,	dec.planenorm[1]);
-	VectorCopy(tangent2,	dec.planenorm[2]);
-	VectorNegate(tangent2,	dec.planenorm[3]);
-	VectorCopy(dec.normal,		dec.planenorm[4]);
-	VectorNegate(dec.normal,	dec.planenorm[5]);
-	for (p = 0; p < 6; p++)
-	{
-		r = sqrt(DotProduct(dec.planenorm[p], dec.planenorm[p]));
-		VectorScale(dec.planenorm[p], 1/r, dec.planenorm[p]);
-		r*= size/2;
-		if (r > dec.radius)
-			dec.radius = r;
-		dec.planedist[p] = -(r - DotProduct(dec.center, dec.planenorm[p]));
-	}
-	dec.numplanes = 6;
+	Mod_DecalSetup(&dec, center, normal, tangent1, tangent2, size, surfflagmask, surfflagmatch, callback, ctx);
 
 	sh_shadowframe++;
 
@@ -661,6 +674,88 @@ void Mod_ClipDecal(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tan
 	if (mod->terrain)
 		Terrain_ClipDecal(&dec, center, dec.radius, mod);
 #endif
+}
+
+//FTESurf Patch 772: Source decals land on displacements, and the leaf walk above never reaches
+//one -- VBSP leaves do not list them (mod_vbsp.c draws them by their own PVS test). They are the
+//only non-fan meshes in a VBSP world (VBSP_BuildSurfMesh), kept here with their bounds per map.
+typedef struct
+{
+	msurface_t *surf;
+	vec3_t mins, maxs;
+} decaldisp_t;
+static struct
+{
+	model_t *mod;			//the key, all four: a map rebuilt under one name can come back
+	msurface_t *surfaces;	//at the same address, but not with the same checksum
+	int numsurfaces;
+	unsigned int checksum;
+	int count;
+	decaldisp_t *list;
+} decaldisps;
+
+static void Mod_DecalDispCache(model_t *mod)
+{
+	int i, j, n, nomesh;
+	msurface_t *surf;
+	mesh_t *m;
+
+	if (decaldisps.mod == mod && decaldisps.surfaces == mod->surfaces
+		&& decaldisps.numsurfaces == mod->numsurfaces && decaldisps.checksum == mod->checksum)
+		return;
+	if (decaldisps.list)
+		BZ_Free(decaldisps.list);
+	memset(&decaldisps, 0, sizeof(decaldisps));
+	for (n = nomesh = i = 0; i < mod->nummodelsurfaces; i++)
+	{
+		m = mod->surfaces[mod->firstmodelsurface + i].mesh;
+		if (!m || !m->xyz_array)	//allocated at load, filled when its material is built
+			nomesh++;
+		else if (!m->istrifan)
+			n++;
+	}
+	decaldisps.list = BZ_Malloc(sizeof(*decaldisps.list) * (n ? n : 1));
+	for (i = 0; i < mod->nummodelsurfaces; i++)
+	{
+		surf = mod->surfaces + mod->firstmodelsurface + i;
+		m = surf->mesh;
+		if (!m || !m->xyz_array || m->istrifan)
+			continue;
+		decaldisps.list[decaldisps.count].surf = surf;
+		ClearBounds(decaldisps.list[decaldisps.count].mins, decaldisps.list[decaldisps.count].maxs);
+		for (j = 0; j < m->numvertexes; j++)
+			AddPointToBounds(m->xyz_array[j], decaldisps.list[decaldisps.count].mins, decaldisps.list[decaldisps.count].maxs);
+		decaldisps.count++;
+	}
+	if (!nomesh)	//a mesh still being built is looked for again next time
+	{
+		decaldisps.mod = mod;
+		decaldisps.surfaces = mod->surfaces;
+		decaldisps.numsurfaces = mod->numsurfaces;
+		decaldisps.checksum = mod->checksum;
+	}
+}
+
+void Mod_ClipDecalDisplacements(struct model_s *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, void (*callback)(void *ctx, vec3_t *fte_restrict points, size_t numpoints, shader_t *shader), void *ctx)
+{
+	fragmentdecal_t dec;
+	decaldisp_t *d;
+	int i, k;
+
+	if (!mod || mod->loadstate != MLS_LOADED || mod->type != mod_brush || mod->fromgame != fg_new || mod->submodelof)
+		return;
+	Mod_DecalDispCache(mod);
+	if (!decaldisps.count)
+		return;
+	Mod_DecalSetup(&dec, center, normal, tangent1, tangent2, size, 0, 0, callback, ctx);
+	for (i = 0, d = decaldisps.list; i < decaldisps.count; i++, d++)
+	{
+		for (k = 0; k < 3; k++)
+			if (dec.center[k] + dec.reach < d->mins[k] || dec.center[k] - dec.reach > d->maxs[k])
+				break;
+		if (k == 3)
+			Fragment_Mesh(&dec, d->surf, d->surf->mesh, d->surf->texinfo);
+	}
 }
 #endif
 

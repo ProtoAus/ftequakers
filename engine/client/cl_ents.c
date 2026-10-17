@@ -4271,7 +4271,7 @@ static void CL_Decal_SetupCtx(cl_adddecal_ctx_t *ctx, shader_t *shader, vec3_t o
 //nettest: per-clipped-vertex decal attributes — texcoord, the edge-fade alpha FACTOR (kept separate
 //from base alpha so persistent decals can fade without re-clipping), and the atlas lightmap st. Shared
 //by CL_AddDecal_Callback (transient) and CL_AddDecalStatic_Callback (persistent) so they stay identical.
-static void CL_Decal_VertexAttribs(const cl_adddecal_ctx_t *ctx, const msurface_t *surf, int page,
+static void CL_Decal_VertexAttribs(const cl_adddecal_ctx_t *ctx, const msurface_t *surf, int page, const vec3_t lmp,
 								   const vec3_t p, vec2_t out_st, vec2_t out_lm, float *out_valpha)
 {
 	//Both of these ran 0..1 across the footprint and were used directly as the texcoord. Keep them as
@@ -4292,7 +4292,7 @@ static void CL_Decal_VertexAttribs(const cl_adddecal_ctx_t *ctx, const msurface_
 		*out_valpha = 0;
 	if (ctx->dolm && page >= 0 && surf && surf->mesh && surf->plane)
 	{
-		if (!DecalLM_Interp(surf->mesh, surf->plane->normal, p, out_lm))
+		if (!DecalLM_Interp(surf->mesh, surf->plane->normal, lmp, out_lm))
 		{	//DecalLM_Interp returns false when lmst_array[0] is NULL, so the old fallback dereferenced
 			//exactly the pointer whose NULL-ness sent it here. Harmless while the gate was Q1/HL-only.
 			if (surf->mesh->lmst_array[0])
@@ -4341,7 +4341,7 @@ static void CL_AddDecal_Callback(void *vctx, vec3_t *fte_restrict points, size_t
 		vec2_t st, lm;
 		float valpha;
 		VectorCopy(points[v], cl_strisvertv[cl_numstrisvert+v]);
-		CL_Decal_VertexAttribs(ctx, surf, page, points[v], st, lm, &valpha);
+		CL_Decal_VertexAttribs(ctx, surf, page, points[v], points[v], st, lm, &valpha);
 		cl_strisvertt[cl_numstrisvert+v][0] = st[0];
 		cl_strisvertt[cl_numstrisvert+v][1] = st[1];
 		cl_strisvertc[cl_numstrisvert+v][0] = ctx->rgbavalue[0];
@@ -4405,6 +4405,8 @@ typedef struct
 	vec4_t		rgba;			//base rgb+alpha (updatedecal rewrites this; NO re-clip)
 	qboolean	dolm;
 	float		die;			//0 = never; else cl.time to expire
+	unsigned int clipflags;		//FTESurf Patch 772: PDC_*
+	vec3_t		mins, maxs;		//FTESurf Patch 772: the clipped geometry's bounds, for the frustum cull
 } persistdecal_t;
 
 static persistdecal_t		*cl_persistdecals;
@@ -4412,6 +4414,7 @@ static int					cl_numpersistdecals, cl_maxpersistdecals;
 static int					*cl_persistdecal_free;		//free-stack of slot indices
 static int					cl_persistdecal_freecount;
 static persistdecaltri_t	*cl_persisttri_freelist;	//recycled tri nodes (pooled across maps)
+static int					cl_persistdecal_portalframe = -2;	//FTESurf Patch 772: cls.framecount a portal view last drew the world
 static qboolean				cl_persistdecals_reclip;	//set on renderer restart -> re-resolve shaders + re-clip all next emit
 
 //handle = (index+1) | (seq<<16). index 16 bits, seq 8 bits -> max 2^24-1 (exact as a QC float).
@@ -4512,6 +4515,7 @@ typedef struct
 {
 	cl_adddecal_ctx_t base;
 	persistdecal_t *rec;
+	vec3_t shift;	//FTESurf Patch 772: a brush entity's origin -- its model is clipped in its own space
 } cl_persistdecal_clipctx_t;
 static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, size_t numtris, shader_t *shader)
 {
@@ -4526,8 +4530,8 @@ static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, 
 		tri->lightmap = page;
 		for (k = 0; k < 3; k++)
 		{
-			VectorCopy(points[tr*3+k], tri->vertex[k]);
-			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tri->texcoord[k], tri->lmcoord[k], &tri->valpha[k]);
+			VectorAdd(points[tr*3+k], cc->shift, tri->vertex[k]);
+			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tri->vertex[k], tri->texcoord[k], tri->lmcoord[k], &tri->valpha[k]);
 		}
 		tri->next = cc->rec->tris;
 		cc->rec->tris = tri;
@@ -4552,13 +4556,55 @@ static qboolean CL_ClipPersistDecal(persistdecal_t *rec)
 		return false;
 
 	cc.rec = rec;
+	VectorClear(cc.shift);
 	CL_Decal_SetupCtx(&cc.base, rec->shader, rec->origin, rec->up, rec->side, rec->rgba, rec->rgba[3], rec->aspect, rec->texrange, cliptan1, cliptan2, &clipsize);
 	rec->dolm = cc.base.dolm;
 	Mod_ClipDecal(cl.worldmodel, rec->origin, cc.base.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecalStatic_Callback, &cc);
+	if (rec->clipflags & PDC_SOURCE)
+	{	//FTESurf Patch 772: where Source puts a decal and the world's leaves do not reach --
+		//displacements, and the brush entities in this packet. Source stores a brush entity's
+		//model about its origin, so the decal is clipped in model space and shifted back; a
+		//turned one is left out, and a mover's paint stays where it was clipped.
+		packet_entities_t *pack = cl.currentpackentities;
+		entity_state_t *es;
+		model_t *m;
+		vec3_t c;
+		int i, k;
+		float reach = 0.5f * clipsize * sqrt(DotProduct(cliptan1,cliptan1) + DotProduct(cliptan2,cliptan2) + 1);
+		Mod_ClipDecalDisplacements(cl.worldmodel, rec->origin, cc.base.axis[0], cliptan1, cliptan2, clipsize, CL_AddDecalStatic_Callback, &cc);
+		for (i = 0; pack && i < pack->num_entities; i++)
+		{
+			es = &pack->entities[i];
+			if (es->modelindex <= 0 || es->modelindex >= MAX_PRECACHE_MODELS)
+				continue;
+			m = cl.model_precache[es->modelindex];
+			if (!m || m->submodelof != cl.worldmodel || m->loadstate != MLS_LOADED)
+				continue;
+			if (es->angles[0] || es->angles[1] || es->angles[2])
+				continue;
+			VectorSubtract(rec->origin, es->origin, c);
+			for (k = 0; k < 3; k++)
+				if (c[k] + reach < m->mins[k] || c[k] - reach > m->maxs[k])
+					break;
+			if (k < 3)
+				continue;
+			VectorCopy(es->origin, cc.shift);
+			Mod_ClipDecal(m, c, cc.base.axis[0], cliptan1, cliptan2, clipsize, 0,0, CL_AddDecalStatic_Callback, &cc);
+		}
+		VectorClear(cc.shift);
+	}
+	{
+		persistdecaltri_t *tri;
+		int k;
+		ClearBounds(rec->mins, rec->maxs);
+		for (tri = rec->tris; tri; tri = tri->next)
+			for (k = 0; k < 3; k++)
+				AddPointToBounds(tri->vertex[k], rec->mins, rec->maxs);
+	}
 	return rec->tris != NULL;
 }
 
-int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime, const float *texrange)
+int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime, const float *texrange, unsigned int clipflags)
 {
 	int idx;
 	persistdecal_t *rec;
@@ -4584,6 +4630,7 @@ int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec
 	else
 		Vector4Set(rec->texrange, 0, 1, 0, 1);
 	rec->die = (lifetime > 0) ? cl.time + lifetime : 0;
+	rec->clipflags = clipflags;
 
 	if (!CL_ClipPersistDecal(rec))
 	{	//off-surface / no world / no shader -> caller falls back to the transient path
@@ -4642,9 +4689,18 @@ static void CL_EmitPersistDecalTris(persistdecal_t *rec)
 		t->numidx += 3;
 	}
 }
+//FTESurf Patch 772: a portal or mirror view draws the main view's scene tris (BE_GenModelBatches),
+//so a decal outside the main frustum may still be seen through one. Cull only on frames that follow
+//one with no such view; the skyroom draws no scene tris (RDF_DISABLEPARTICLES) and does not count.
+//The first frame a portal appears, the main view has already culled: a one-frame pop in it.
+void CL_PersistentDecals_PortalView(void)
+{
+	cl_persistdecal_portalframe = cls.framecount;
+}
 void CL_EmitPersistentDecals(void)
 {
 	int i;
+	qboolean cull = (unsigned int)(cls.framecount - cl_persistdecal_portalframe) > 1;
 	for (i = 0; i < cl_numpersistdecals; i++)
 	{
 		persistdecal_t *rec = &cl_persistdecals[i];
@@ -4658,6 +4714,8 @@ void CL_EmitPersistentDecals(void)
 		if (cl_persistdecals_reclip || rec->builtepoch != r_regsequence)	//renderer restart / lightmap-atlas rebuild -> re-resolve shader (stale ptr) + re-clip (stale page)
 			CL_ClipPersistDecal(rec);
 		if (!rec->shader || !rec->tris)
+			continue;
+		if (cull && R_CullBox(rec->mins, rec->maxs))
 			continue;
 		CL_EmitPersistDecalTris(rec);
 	}

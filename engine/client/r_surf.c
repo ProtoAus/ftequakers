@@ -3950,6 +3950,8 @@ void Surf_DrawWorld (void)
 					P_DrawParticles ();
 				if (!r_refdef.recurse)
 					CL_EmitPersistentDecals ();	//nettest: persistent lit decals (before BE_DrawWorld consumes cl_stris)
+				else if (!(r_refdef.flags & RDF_DISABLEPARTICLES))
+					CL_PersistentDecals_PortalView ();	//FTESurf Patch 772
 
 				TRACE(("dbg: calling BE_DrawWorld\n"));
 				r_refdef.scenevis = surfvis;
@@ -4027,6 +4029,8 @@ void Surf_DrawWorld (void)
 				P_DrawParticles ();
 			if (!r_refdef.recurse)
 				CL_EmitPersistentDecals ();	//nettest: persistent lit decals
+			else if (!(r_refdef.flags & RDF_DISABLEPARTICLES))
+				CL_PersistentDecals_PortalView ();	//FTESurf Patch 772
 		}
 
 		//FTESurf Patch 218: the world walk emitted these near-to-far, which is

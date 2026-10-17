@@ -1168,10 +1168,12 @@ static void QCBUILTIN PF_R_AddDecalStatic(pubprogfuncs_t *prinst, struct globalv
 	//express a mirrored image (s1 < s0) -- the projection frame is a fixed proper rotation, so no
 	//choice of up/side can reflect -- or a texture that repeats or shows only a sub-rectangle.
 	vec4_t texrange;
+	unsigned int clipflags = 0;
 	if (prinst->callargc > 7)
 	{
 		float *sr = G_VECTOR(OFS_PARM6), *tr = G_VECTOR(OFS_PARM7);
 		Vector4Set(texrange, sr[0], sr[1], tr[0], tr[1]);
+		clipflags = (unsigned int)sr[2];	//FTESurf Patch 772: PDC_*; older engines ignore srange's third figure
 	}
 	else
 		Vector4Set(texrange, 0, 1, 0, 1);
@@ -1179,7 +1181,7 @@ static void QCBUILTIN PF_R_AddDecalStatic(pubprogfuncs_t *prinst, struct globalv
 		Con_DPrintf("adddecal_static \"%s\": argc %i alpha %g aspect %g life %g texrange s %g..%g t %g..%g\n",
 					shadername, prinst->callargc, alpha, aspect, lifetime,
 					texrange[0], texrange[1], texrange[2], texrange[3]);
-	G_FLOAT(OFS_RETURN) = CL_AddPersistentDecal(shadername, org, up, side, rgb, alpha, aspect, lifetime, texrange);
+	G_FLOAT(OFS_RETURN) = CL_AddPersistentDecal(shadername, org, up, side, rgb, alpha, aspect, lifetime, texrange, clipflags);
 }
 static void QCBUILTIN PF_R_RemoveDecal(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {	//void(float handle)
