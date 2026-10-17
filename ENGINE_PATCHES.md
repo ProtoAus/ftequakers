@@ -1,5 +1,59 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 766 — borderless stays visible to display capture (`vid_borderless_capture`)
+
+**Problem:** OBS display capture showed the owner's borderless game as black, with a
+flicker every few seconds. Measured with ffmpeg's ddagrab (Desktop Duplication, OBS's
+"DXGI Desktop Duplication" method) and gfxcapture (Windows Graphics Capture, its
+"Windows 10 1903 and up") on the primary monitor (1920x1200 @ 360 Hz, RTX 2080 SUPER,
+driver 591.86). While the OpenGL window is exactly the monitor's size AND the foreground
+window, Desktop Duplication fails on every frame (887a0026 DXGI_ERROR_ACCESS_LOST,
+"ReleaseFrame failed") and Graphics Capture delivers nothing. The gamma ramp is not the
+cause: it never changed, and the log says hardware gamma is not supported. A background
+window of the same size captures (121 of 121 frames), which is why the first arm passed.
+
+**Fix:** `VID_BorderlessOverhang` on WM_WINDOWPOSCHANGING (gl_vidnt.c). When a move or
+size of the MS_FULLWINDOW window would exactly cover a monitor, it grows the window one
+row or column past the first edge with no monitor beyond it (bottom, right, top, left;
+bottom if all have one). Maximize, alt-tab restore and display changes all pass through
+it. The engine renders at the client size, so the extra row is drawn and falls off-screen.
+`vid_borderless_capture` (archived, video latch, default 1); 0 keeps the exact size.
+
+**Verified:** FTESurf `tools/p766capture.py`, game made the foreground window, view
+turning; live frames of total over 6 s:
+
+| Build | Window | Desktop Duplication | Graphics Capture |
+| --- | --- | --- | --- |
+| 758 install | 1920x1200 | 0 (15 attempts) | 0 |
+| 758, same window grown from outside | 1920x1201 | 181/181 | 179/179 |
+| 766 test build (before the review fixes), `vid_borderless_capture 0` | 1920x1200 | 0 (11 attempts) | 0 |
+| the same, `1` | 1920x1201 | 181/181 | 180/180 |
+| the same, `1`, minimized and restored | 1920x1201 | 181/181 | 180/180 |
+| 766 as installed (`66e7748e`), `1` | 1920x1201 | 181/181; restored 182/182 | 180/180; restored 181/181 |
+| the same, `0` | 1920x1200 | 0 (15 attempts) | 0 |
+| the same, `1` with `vid_srgb 2` | 1920x1200 (no overhang) | 0 | 0 |
+
+At 1:1 the screen's first row matches its second and its last matches the one above,
+so nothing is undrawn or shifted. The taskbar (bottom, not auto-hidden) stays behind
+the window: the game's own bottom-right fps counter is in the captured frames.
+
+Not measured: the latency or tearing change of being composited, AMD and Intel drivers,
+and a monitor with neighbours on every side. `vid_restart` with a map loaded ends the
+client on the 758 install too (BACKLOG), so the arm sets the cvar at launch.
+
+Review, one round (predicate and control flow, Win32 semantics). It found no defect in
+the predicate or the message handling, and two fixes came from it. The overhang is now
+WGL only: EGL takes its maximize after the last VID_UpdateWindowStatus, with WM_SIZE
+skipped, so its image would sit a row low; Vulkan and NV-Vulkan are unmeasured. It is
+also skipped at `vid_srgb >= 2`, whose fp16 backbuffer CheckForcePixelFormat asks for
+only because NVIDIA treats it as linear when it is presented directly.
+
+Installed in both Windows clients at 2026-10-17T19:38:17Z: `66e7748e`, stamp
+git-7410-patch-766-0-g23f7bf2c3 (P763 to P766, so P765 now ships inside this exe);
+`.prev` is P765's `20d3e0b1`. The plugins and the FTEQuake server are unchanged (P764's).
+Then the installed `C:\FTESurftesurf64.exe` itself: 1920x1201, 181/181 and 180/180;
+minimized and restored, 181/181 and 181/181.
+
 ## Patch 765 — a Source map's packed materials beat other games' copies
 
 **Problem:** Lex, 17 Oct: surf_monolith looked inside-out, as if its face normals
