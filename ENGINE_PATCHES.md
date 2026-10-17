@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 768 — the forced sky depth sits just behind the sky brush (`r_sky_forcedepth_push`)
+
+**Problem:** Lex, 17 Oct: in surf_monolith's bonus 4 the map's own blue sky
+(sky138a) showed through the room's red fake sky along the far wall, a solid band
+with stipple at its edges, and only from some angles ("you have to offset your view
+angle before loading the save"). B4 is roofed and walled by a WindowImposter slab a
+few units in front of its sky brush. `r_sky_forcedepth 2` (default since Patch 296)
+draws the sky brushes depth-only so the level behind the sky stays hidden; seen at
+range the gap is under one depth step (24-bit depth, `gl_mindist` 1: a step is about
+d²·6e-8 units, 6 units at 10000), so the slab lost the depth test.
+
+**Change:** `GL_SkyForceDepth` tags its depth-only draw `BEF_SKYDEPTH` (bit 11), and
+`BE_PolyOffset` gives such a batch `r_sky_forcedepth_push` depth steps (default 4)
+away from the eye (signed by `gldepthfunc`). `0` restores the old mask. Steps only: a
+slope term grows without bound as the eye nears a sky plane (review). The D3D and
+Vulkan backends do not test the bit, and on paths where the sky writes its own depth
+(Quake skies, GLSL surface skies) the push has no effect.
+
+**Verified:** client build, no new warning. Save 18's origin, pitch -8 and -7.5 by
+five yaws, share of the horizon band that is sky138a blue, one binary and session:
+push 0 0.07-25.8%; push 1, 2, 4, 8, 16, 64 0.00-0.01%. `r_sky_forcedepth 1` and `0`
+also read 0.00% there; `r_novis 1`, `r_blendsort 0`, `r_portalrecursion 0` did not
+(23.9-25.8%). surf_kitsune, four zone starts by four yaws, push 0 against 4 (on the
+first cut, which pushed further): at most 0.09% of pixels differ (motion). One review
+(state and leaks; what now shows through); its slope-term finding is the second commit.
+
+**Limits:** the mask now lets through geometry within 4 depth steps behind a sky
+brush: about 1 unit at 2000, 24 at 10000, 60 at 16000 (`gl_mindist` 1). Patch 296's
+surf_fantasy case was not reproduced in the arm: at its four zone starts the mask hid
+at most 0.26% of the frame, so this measures no regression there and no protection
+either (BACKLOG). Inside a mirror or portal view the oblique near clip rewrites the
+depth row, so 4 steps may cover more distance there (unmeasured).
+
 ## Patch 767 — Modulate multiplies as Source does, whatever `$additive` says (hl2 plugin)
 
 **Problem:** Lex, 17 Oct: surf_board_this's stage 1 sky drew flat yellow with
