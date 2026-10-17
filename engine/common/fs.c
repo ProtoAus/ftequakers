@@ -2519,7 +2519,11 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 				if (!(search->flags & SPF_TEMPORARY) || ((lflags & FSLF_SECUREONLY) && (search->flags & SPF_UNTRUSTED)))
 					continue;
 				fs_finds++;
-				found = search->handle->FindFile(search->handle, loc, filename, NULL);	//NULL: the hash holds the addon's copy
+				//the hash's entry first: an unshadowed packed file is that pak's own (no scan). Only
+				//when it names another mount's copy does the pak take a linear scan by name.
+				found = search->handle->FindFile(search->handle, loc, filename, pf);
+				if (!found && pf)
+					found = search->handle->FindFile(search->handle, loc, filename, NULL);
 				if (found)
 				{
 					mdepth++;	//deeper than every mod path: an image-format tie (Image_LocateHighResTexture) goes to the mod
