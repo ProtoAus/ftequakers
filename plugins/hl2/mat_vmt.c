@@ -2034,7 +2034,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$maxreflectivity"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$mod2x"))
-			st->mod2x = 1;
+			st->mod2x = !!atoi(value);	//FTESurf Patch 767: Source reads the value; "$mod2x" "0" is off
 		else if (!Q_strcasecmp(key, "$forcecheap"))
 			st->water_cheap = 1;
 		else if (!Q_strcasecmp(key, "$forceexpensive"))
@@ -3531,6 +3531,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
 		st->translucent = 0;
 		st->additive = 0;
+		st->alphaval = 0;	//the tail would re-derive translucency from it and replace the multiply
 	}
 	else if (!Q_strcasecmp(st->type, "Water"))
 	{
