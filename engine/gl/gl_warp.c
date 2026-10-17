@@ -102,6 +102,9 @@ were weighed against a fault the reporter can see from spawn on a map he plays,
 and 1 remains one word away.
 */
 cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "2", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not.\n2: always mask, on every game (default since Patch 296; on a Source map this is the only setting that stops the rest of the level drawing through the sky).");
+//FTESurf Patch 768: monolith B4's WindowImposter slab sits a few units in front of its sky brush,
+//and at some angles that is under one depth step, so the mask won and the real sky showed through.
+cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "64", CVAR_ARCHIVE, "Pushes r_sky_forcedepth's sky mask this many depth steps (plus twice the polygon's depth slope) away from the eye, so a surface just in front of a sky brush still beats it. The level far behind the sky stays masked. 0: the mask is written at the brush, as before Patch 768.");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;
@@ -1096,7 +1099,7 @@ static void GL_SkyForceDepth(batch_t *batch)
 	if ((r_sky_forcedepth.ival || !cls.allow_unmaskedskyboxes) && batch->texture)	//allow a little extra fps.
 	{
 		BE_SelectMode(BEM_DEPTHONLY);
-		BE_DrawMesh_List(batch->shader, batch->meshes-batch->firstmesh, batch->mesh+batch->firstmesh, batch->vbo, NULL, batch->flags);
+		BE_DrawMesh_List(batch->shader, batch->meshes-batch->firstmesh, batch->mesh+batch->firstmesh, batch->vbo, NULL, batch->flags|BEF_SKYDEPTH);
 		BE_SelectMode(BEM_STANDARD);	/*skys only render in standard mode anyway, so this is safe*/
 	}
 }
@@ -1614,6 +1617,7 @@ void R_Sky_Register(void)
 	Cvar_Register (&r_fastskycolour,		groupname);
 	Cvar_Register (&r_skyfog,				groupname);
 	Cvar_Register (&r_sky_forcedepth,	groupname);
+	Cvar_Register (&r_sky_forcedepth_push,	groupname);	//FTESurf Patch 768
 	Cvar_Register (&r_skyboxname,			groupname);
 	Cvar_Register (&r_skybox_default,		groupname);	//FTESurf Patch 211
 	Cvar_Register (&r_skybox_orientation,	groupname);

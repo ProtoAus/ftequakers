@@ -26,6 +26,7 @@ extern cvar_t r_wireframe;
 extern cvar_t r_outline;
 extern cvar_t r_outline_width;
 extern cvar_t r_refract_fbo;
+extern cvar_t r_sky_forcedepth_push;	//FTESurf Patch 768, gl_warp.c
 extern cvar_t gl_line_width;				//nettest: CSQC debug wireframe line width (3D scene polys / R_DB_Poly)
 extern cvar_t gl_2dline_width;				//nettest: 2D drawline width (hit-marker reticle / dummybatch)
 extern void R_DB_Poly(batch_t *batch);			//nettest: gl_alias.c scenetris builder; tags CSQC debug-line batches
@@ -329,6 +330,13 @@ static void BE_PolyOffset(void)
 #endif
 	po.factor += shaderstate.polyoffset.factor;
 	po.unit += shaderstate.polyoffset.unit;
+	if ((shaderstate.flags & BEF_SKYDEPTH) && r_sky_forcedepth_push.value > 0)
+	{	//FTESurf Patch 768: away from the eye, whichever way the depth test runs
+		extern int gldepthfunc;
+		float away = (gldepthfunc == GL_LEQUAL) ? 1 : -1;
+		po.factor += away * 2;
+		po.unit += away * r_sky_forcedepth_push.value;
+	}
 
 #ifndef FORCESTATE
 	if (shaderstate.curpolyoffset.factor != po.factor || shaderstate.curpolyoffset.unit != po.unit)
