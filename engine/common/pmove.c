@@ -135,6 +135,10 @@ static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t
 {
 	vec3_t rounded, centre = {0,0,0}, eye = {0,0,0};
 	qboolean linked = movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 4 && pe->portalhalf[0] > 0;
+	// Patch 756, mover 5: snapping a linked landing to 1/8 put a walker's feet
+	// (floor + 1/32) exactly on the exit sill, where the window carve leaves the
+	// ground probes nothing to stand on: the player stalls until they jump or duck.
+	qboolean exact = linked && movevars.sourceversion >= 5;
 	qboolean okay = true;
 	wedict_t *portal = WEDICT_NUM_UB(w->progs, pe->info);
 	int oself = *w->g.self;
@@ -169,7 +173,7 @@ static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t
 	for (i = 0; i < 3; i++)
 	{
 		tmp = floor((G_VECTOR(OFS_RETURN)[i] - centre[i])*8 + 0.5);
-		rounded[i] = tmp/8.0;
+		rounded[i] = exact ? G_VECTOR(OFS_RETURN)[i] - centre[i] : tmp/8.0;
 	}
 	//make sure the new origin is okay for the player. back out if its invalid.
 	if (!PM_TestPlayerPosition(rounded, true))
@@ -236,11 +240,13 @@ trace_t	PM_PlayerTracePortals(vec3_t start, vec3_t end, unsigned int solidmask, 
 				//if we follow the portal, then we basically need to restart from the other side.
 				exit = PM_PlayerTrace (from, end, MASK_PLAYERSOLID);
 
-				for (i = 0; i < 3; i++)
-				{
-					tmp = floor(exit.endpos[i]*8 + 0.5);
-					exit.endpos[i] = tmp/8.0;
-				}
+				// Mover 5 keeps a linked landing exact; see PM_PortalTransform.
+				if (!(movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 5 && impact->portalhalf[0] > 0))
+					for (i = 0; i < 3; i++)
+					{
+						tmp = floor(exit.endpos[i]*8 + 0.5);
+						exit.endpos[i] = tmp/8.0;
+					}
 				if (PM_TestPlayerPosition(exit.endpos, false))
 				{
 					if (tookportal)

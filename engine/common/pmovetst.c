@@ -562,7 +562,7 @@ static void PM_PortalCSGReport(int entnum, int plane, float miss)
 
 static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trmax, vec3_t start, vec3_t end, trace_t *trace)
 {
-	vec4_t planes[6];	//far, near, right, left, up, down
+	vec4_t planes[7];	//far, near, right, left, up, down; 6: the feet against the bottom edge (P756)
 	int plane;
 	vec3_t worldpos;
 	vec3_t center;		//P203: the aperture's centre, world space
@@ -668,6 +668,10 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 	   deciding where the hole is.  This is the line the doorway FLOOR sits on, and
 	   no amount of player height may be allowed to move it. */
 	aperturebottom = planes[5][3];
+	for (plane = 0; plane < 3; plane++)
+		botcorner[plane] = (planes[5][plane] >= 0) ? trmin[plane] : trmax[plane];
+	VectorCopy(planes[5], planes[6]);
+	planes[6][3] = aperturebottom - DotProduct(botcorner, planes[6]);
 
 	//if we're actually inside the csg region
 	for (plane = 0; plane < 6; plane++)
@@ -753,6 +757,28 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 				   whose endpos had moved but whose fraction had not -- and the value
 				   was overwritten unconditionally further down anyway.  The winning
 				   fraction is all this loop needs to produce. */
+			}
+		}
+	}
+	/* FTESurf Patch 756, mover 5: the bottom edge also bounds the SWEEP. A
+	   walker crosses on the centre plane with half the hull still in the wall
+	   behind the exit, so every trace starts in solid and was carved down
+	   through the sill: the ground probe found nothing and gravity's move ended
+	   inside the real floor, which the move check refused every tick. Only an
+	   upright door's bottom edge is a floor; tilted doors keep mover 4's sweep. */
+	if (linked && movevars.sourceversion >= 5 && planes[5][2] >= 0.7f)
+	{
+		float ds = DotProduct(start, planes[6]) - planes[6][3];
+		float de = DotProduct(end, planes[6]) - planes[6][3];
+		if (ds >= -(1/32.0) && de < 0 && de < ds)
+		{
+			float frac = (ds - (1/32.0)) / (ds - de);
+			if (frac < 0)
+				frac = 0;
+			if (frac < bestfrac)
+			{
+				hitplane = 6;
+				bestfrac = frac;
 			}
 		}
 	}
