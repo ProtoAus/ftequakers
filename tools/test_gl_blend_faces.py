@@ -224,10 +224,11 @@ int main(void) {
   assert(ndraw==2&&draws[0]==736&&draws[1]==737);
   // Armed for every pass of one frame; a later frame's first pass disarms.
   int trace_frame_ok=gl_blendtrace_pending&&test_trace_printfs>2,printed=test_trace_printfs;
-  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
-  trace_frame_ok=trace_frame_ok&&gl_blendtrace_pending&&test_trace_printfs>printed;
-  printed=test_trace_printfs;host_framecount++;
-  ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+  for(int pass=0;pass<2;pass++){
+   r_refdef.recurse=pass;ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);
+   trace_frame_ok=trace_frame_ok&&gl_blendtrace_pending&&test_trace_printfs>printed;printed=test_trace_printfs;
+  }
+  host_framecount++;ndraw=0;GLBE_SubmitBlendedFaces(&batch,NULL);r_refdef.recurse=0;
   trace_frame_ok=trace_frame_ok&&!gl_blendtrace_pending&&test_trace_printfs==printed&&ndraw==2;
   assert(trace_frame_ok);
   face.numvertexes=5;face.numindexes=9;face.xyz_array=split;face.indexes=si;
@@ -640,6 +641,37 @@ int main(void) {
    roll_sort_ok=GLBE_BlendViewEyeAgrees()&&nemit==8;
    for(int i=0;roll_sort_ok&&i<8;i++)roll_sort_ok=emitted[i]==kept[i];
    assert(roll_sort_ok);
+   // A mirror (left-handed GL basis, flipcull set as GLR_DrawPortal sets it) and
+   // a 2 degree spin about world z through the eye sort as well.
+   int mirror_sort_ok,spin_sort_ok;
+   memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
+   for(int j=0;j<4;j++)r_refdef.m_view[j*4]=-r_refdef.m_view[j*4];
+   shaderstate.curentity=NULL;r_refdef.flipcull=SHADER_CULL_FLIP;ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   mirror_sort_ok=GLBE_BlendViewEyeAgrees()&&nemit==8;
+   for(int i=0;mirror_sort_ok&&i<8;i++)mirror_sort_ok=emitted[i]==kept[i];
+   assert(mirror_sort_ok);
+   memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
+   for(int k=0;k<3;k++){
+    double a=saved_view[k],b=saved_view[4+k];
+    r_refdef.m_view[k]=a*c-b*s;r_refdef.m_view[4+k]=a*s+b*c;
+    r_refdef.m_view[12+k]=-(r_refdef.m_view[k]*(double)r_origin[0]+r_refdef.m_view[4+k]*(double)r_origin[1]+r_refdef.m_view[8+k]*(double)r_origin[2]);
+   }
+   shaderstate.curentity=NULL;r_refdef.flipcull=0;ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
+   spin_sort_ok=GLBE_BlendViewEyeAgrees()&&nemit==8;
+   for(int i=0;spin_sort_ok&&i<8;i++)spin_sort_ok=emitted[i]==kept[i];
+   assert(spin_sort_ok);
+   // Tolerance on every axis, and a singular rotation never passes.
+   int eye_tolerance_ok=1;
+   memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
+   for(int j=0;j<3;j++){
+    float o=r_origin[j];
+    r_origin[j]=o+0.01f;eye_tolerance_ok=eye_tolerance_ok&&GLBE_BlendViewEyeAgrees();
+    r_origin[j]=o+0.0625f;eye_tolerance_ok=eye_tolerance_ok&&!GLBE_BlendViewEyeAgrees();
+    r_origin[j]=o;
+   }
+   for(int j=0;j<11;j++)if(j%4!=3)r_refdef.m_view[j]=0;
+   eye_tolerance_ok=eye_tolerance_ok&&!GLBE_BlendViewEyeAgrees();
+   assert(eye_tolerance_ok);
    memcpy(r_refdef.m_view,saved_view,sizeof(saved_view));
    r_refdef.m_view[12]+=1;
    shaderstate.curentity=NULL;r_refdef.flipcull=0;ndraw=nemit=0;GLBE_SubmitMeshes(follow_world,SHADER_SORT_BLEND,SHADER_SORT_BLEND);
@@ -949,7 +981,16 @@ controls = {
         '\tif (GLBE_BlendViewEyeAgrees() && fabs(r_refdef.m_view[0] - vright[0]) < 1e-4 && fabs(r_refdef.m_view[1] - vup[0]) < 1e-4)\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
     'eye_cofactor_untransposed': base.replace('eye[j] = -(c[0][j]*m[12] + c[1][j]*m[13] + c[2][j]*m[14]) / det;',
         'eye[j] = -(c[j][0]*m[12] + c[j][1]*m[13] + c[j][2]*m[14]) / det;'),
-    'lost_trace_frame': base.replace('if (gl_blendtrace_pending && gl_blendtrace_frame >= 0 && gl_blendtrace_frame != host_framecount)\n\t\tgl_blendtrace_pending = false;', ''),
+    'lost_trace_frame': base.replace('if (gl_blendtrace_pending && gl_blendtrace_started && gl_blendtrace_frame != host_framecount)\n\t\tgl_blendtrace_pending = false;', ''),
+    'recursive_pass_no_disarm': base.replace('if (gl_blendtrace_pending && gl_blendtrace_started && gl_blendtrace_frame != host_framecount)',
+        'if (gl_blendtrace_pending && gl_blendtrace_started && gl_blendtrace_frame != host_framecount && !r_refdef.recurse)'),
+    'forward_guard': base.replace('\tif (GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
+        '\tif (GLBE_BlendViewEyeAgrees() && fabs(r_refdef.m_view[2] + vpn[0]) < 1e-4 && fabs(r_refdef.m_view[6] + vpn[1]) < 1e-4)\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
+    'handed_guard': base.replace('\tif (GLBE_BlendViewEyeAgrees())\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);',
+        '\tif (GLBE_BlendViewEyeAgrees() && r_refdef.m_view[0]*vright[0] + r_refdef.m_view[4]*vright[1] + r_refdef.m_view[8]*vright[2] > 0)\n\t\tGLBE_BlendPlaneSort(faces, n, &stats);'),
+    'loose_tolerance': base.replace('if (fabs(eye[j] - r_origin[j]) > 1.0/32) return false;', 'if (fabs(eye[j] - r_origin[j]) > 0.3) return false;'),
+    'axis0_only': base.replace('\tfor (j = 0; j < 3; j++)\n\t{\n\t\teye[j] =', '\tfor (j = 0; j < 1; j++)\n\t{\n\t\teye[j] ='),
+    'lost_det': base.replace('if (fabs(det) < 1e-6) return false;', ''),
     'root_pass_disarms': base.replace('\t\tgl_blendtrace_frame = host_framecount;\n',
         '\t\tgl_blendtrace_frame = host_framecount;\n\t\tif (!r_refdef.recurse) gl_blendtrace_pending = false;\n'),
     'lost_near_admission': base.replace('if (r_blendsort.ival != 2) return false;', 'if (true) return false;'),
@@ -1022,6 +1063,12 @@ for name, control in controls.items():
         'eye_cofactor_untransposed': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_trace_frame': 'trace_frame_ok',
         'root_pass_disarms': 'trace_frame_ok',
+        'recursive_pass_no_disarm': 'trace_frame_ok',
+        'forward_guard': 'spin_sort_ok',
+        'handed_guard': 'mirror_sort_ok',
+        'loose_tolerance': 'eye_tolerance_ok',
+        'axis0_only': 'eye_tolerance_ok',
+        'lost_det': 'eye_tolerance_ok',
         'stale_mode2_world': 'a>=0&&b>=0&&c>=0&&d>=0&&a<b&&b<c&&c<d',
         'lost_area_center': 'ndraw==2&&draws[0]==736&&draws[1]==737',
         'stale_entity_cull': 'nemit==4&&emitted[0]==700&&emitted[1]==251&&emitted[2]==600&&emitted[3]==250',

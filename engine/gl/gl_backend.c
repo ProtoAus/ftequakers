@@ -6723,6 +6723,7 @@ typedef struct
 } glblendface_t;
 
 static qboolean gl_blendtrace_pending;
+static qboolean gl_blendtrace_started;
 static int gl_blendtrace_frame;
 extern int host_framecount;
 
@@ -6736,7 +6737,7 @@ void GLBE_BlendTrace_f(void)
 		return;
 	}
 	gl_blendtrace_pending = true;
-	gl_blendtrace_frame = -1;
+	gl_blendtrace_started = false;
 	Con_Printf("ALPHATRACE armed for every view of the next frame drawn; close the console if needed\n");
 }
 
@@ -7551,11 +7552,12 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			}
 	// Every pass of the armed frame traces: portal and skyroom views, light passes,
 	// the main view. r_portalonly never reaches the main view, so a frame disarms.
-	if (gl_blendtrace_pending && gl_blendtrace_frame >= 0 && gl_blendtrace_frame != host_framecount)
+	if (gl_blendtrace_pending && gl_blendtrace_started && gl_blendtrace_frame != host_framecount)
 		gl_blendtrace_pending = false;
 	trace = gl_blendtrace_pending;
 	if (trace)
 	{
+		gl_blendtrace_started = true;
 		gl_blendtrace_frame = host_framecount;
 		Con_Printf("ALPHATRACE begin recurse=%d mode=%d perspective=%d vieweligible=%d eye=%d flip=%x worldflags=%x\n",
 			r_refdef.recurse, shaderstate.mode, r_refdef.useperspective, GLBE_BlendPlaneViewEligible(), GLBE_BlendViewEyeAgrees(),
