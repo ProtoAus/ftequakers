@@ -159,6 +159,7 @@ HWND WINAPI InitializeWindow (HINSTANCE hInstance, int nCmdShow);
 //unsigned	d_8to24bgrtable[256];
 
 static enum {MS_WINDOWED, MS_FULLDIB, MS_FULLWINDOW, MS_UNINIT}	modestate = MS_UNINIT;
+static qboolean borderless_overhang;	//FTESurf Patch 766: see VID_BorderlessOverhang
 
 extern float gammapending;
 
@@ -1552,6 +1553,13 @@ static int GLVID_SetMode (rendererstate_t *info, unsigned char *palette)
 
 	qGetDeviceGammaRamp = (void*)GetDeviceGammaRamp;
 	qSetDeviceGammaRamp = (void*)SetDeviceGammaRamp;
+
+	//Patch 766: measured on WGL only; an fp16 backbuffer (CheckForcePixelFormat) needs the direct present
+	borderless_overhang = false;
+#ifdef USE_WGL
+	if (platform_rendermode == MODE_WGL && info->srgb < 2)
+		borderless_overhang = true;
+#endif
 
 	switch(platform_rendermode)
 	{
@@ -3066,7 +3074,7 @@ static void VID_BorderlessOverhang(HWND hWnd, WINDOWPOS *wp)
 	RECT r, edge;
 	int side;
 
-	if (modestate != MS_FULLWINDOW || !vid_borderless_capture.ival || (wp->flags & SWP_NOSIZE))
+	if (!borderless_overhang || modestate != MS_FULLWINDOW || !vid_borderless_capture.ival || (wp->flags & SWP_NOSIZE))
 		return;
 	GetWindowRect(hWnd, &r);
 	if (!(wp->flags & SWP_NOMOVE))
