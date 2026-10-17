@@ -6734,7 +6734,7 @@ void GLBE_BlendTrace_f(void)
 		return;
 	}
 	gl_blendtrace_pending = true;
-	Con_Printf("ALPHATRACE armed for one main-view blend pass; close the console if needed\n");
+	Con_Printf("ALPHATRACE armed for one frame: portal views, then the main view; close the console if needed\n");
 }
 
 // Use the same model matrix as GLBE_SelectEntity, including axis sign and scale.
@@ -6972,6 +6972,35 @@ static qboolean GLBE_BlendPlaneViewEligible(void)
 	return p[0] != 0 && p[5] != 0 && p[1] == 0 && p[4] == 0 &&
 		p[3] == 0 && p[7] == 0 && p[11] == -1 && p[15] == 0 &&
 		p[12] == 0 && p[13] == 0;
+}
+
+// Plane proofs and centres read r_origin/vpn/vright/vup; GL and the overlap test
+// read m_view. A spinning skyroom rotates only m_view, and a view returning from
+// a portal rebuilds the vectors without gl_screenangle.
+static qboolean GLBE_BlendViewBasisAgrees(void)
+{
+	const float *m = r_refdef.m_view;
+	double t;
+	int j;
+	for (j = 0; j < 16; j++)
+		if (IS_NAN(m[j])) return false;
+	for (j = 0; j < 3; j++)
+	{
+		if (IS_NAN(r_origin[j]) || IS_NAN(vpn[j]) || IS_NAN(vright[j]) || IS_NAN(vup[j]))
+			return false;
+		if (fabs(m[j*4] - vright[j]) > 1e-4 || fabs(m[j*4+1] - vup[j]) > 1e-4 || fabs(m[j*4+2] + vpn[j]) > 1e-4)
+			return false;
+	}
+	// Translation is float-rounded at map coordinates.
+	t = m[12];
+	for (j = 0; j < 3; j++) t += (double)vright[j]*r_origin[j];
+	if (fabs(t) > 1.0/32) return false;
+	t = m[13];
+	for (j = 0; j < 3; j++) t += (double)vup[j]*r_origin[j];
+	if (fabs(t) > 1.0/32) return false;
+	t = m[14];
+	for (j = 0; j < 3; j++) t -= (double)vpn[j]*r_origin[j];
+	return fabs(t) <= 1.0/32;
 }
 
 static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_t *plane)
@@ -7498,15 +7527,28 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	size_t count = 0, n = 0, f;
 	unsigned int m;
 	int l;
-	qboolean cullworld, trace = gl_blendtrace_pending && !r_refdef.recurse;
+	qboolean cullworld, trace;
 	glblendplanestats_t stats = {0};
 	float matrix[16], modelview[16];
 
+	// Finish capture/portal/sky recursion before gathering this view's records.
+	// The temp-batch pool appends during recursion; this view's batch addresses survive.
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			if (GLBE_BlendBatchImmediate(batch))
+			{
+				view = *batch;
+				view.next = NULL;
+				GLBE_SubmitMeshesSortList(&view);
+			}
+	// Portal views of the armed frame trace before the main view, which disarms.
+	trace = gl_blendtrace_pending;
 	if (trace)
 	{
-		gl_blendtrace_pending = false;
-		Con_Printf("ALPHATRACE begin mode=%d perspective=%d vieweligible=%d flip=%x worldflags=%x\n",
-			shaderstate.mode, r_refdef.useperspective, GLBE_BlendPlaneViewEligible(),
+		if (!r_refdef.recurse)
+			gl_blendtrace_pending = false;
+		Con_Printf("ALPHATRACE begin recurse=%d mode=%d perspective=%d vieweligible=%d basis=%d flip=%x worldflags=%x\n",
+			r_refdef.recurse, shaderstate.mode, r_refdef.useperspective, GLBE_BlendPlaneViewEligible(), GLBE_BlendViewBasisAgrees(),
 			(unsigned int)r_refdef.flipcull, (unsigned int)r_worldentity.flags);
 		Con_Printf("ALPHATRACE eye=%.9g,%.9g,%.9g forward=%.9g,%.9g,%.9g\n",
 			r_origin[0], r_origin[1], r_origin[2], vpn[0], vpn[1], vpn[2]);
@@ -7517,23 +7559,13 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			r_refdef.m_projection_std[8], r_refdef.m_projection_std[9], r_refdef.m_projection_std[10], r_refdef.m_projection_std[11],
 			r_refdef.m_projection_std[12], r_refdef.m_projection_std[13], r_refdef.m_projection_std[14], r_refdef.m_projection_std[15]);
 	}
-	// Finish capture/portal/sky recursion before gathering root-view records.
-	// The temp-batch pool appends during recursion; root batch addresses survive.
-	for (l = 0; l < 2; l++)
-		for (batch = lists[l]; batch; batch = batch->next)
-			if (GLBE_BlendBatchImmediate(batch))
-			{
-				view = *batch;
-				view.next = NULL;
-				GLBE_SubmitMeshesSortList(&view);
-			}
 	for (l = 0; l < 2; l++)
 		for (batch = lists[l]; batch; batch = batch->next)
 			if (!GLBE_BlendBatchImmediate(batch) && batch->meshes > batch->firstmesh)
 				count += GLBE_BlendFaceEligible(batch) ? batch->meshes - batch->firstmesh : 1;
 	if (!count)
 	{
-		if (trace) Con_Printf("ALPHATRACE empty main-view blend lists\n");
+		if (trace) Con_Printf("ALPHATRACE empty blend lists recurse=%d\n", r_refdef.recurse);
 		return;
 	}
 	// Invocation-owned heap storage survives recursive views; never frame-global scratch.
@@ -7553,7 +7585,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					n++;
 					continue;
 				}
-				cullworld = !r_refdef.recurse && GLBE_BlendPlaneViewEligible() && GLBE_BlendWorldBatchEligible(batch);
+				cullworld = GLBE_BlendPlaneViewEligible() && GLBE_BlendWorldBatchEligible(batch);
 				if (cullworld && shaderstate.curentity != batch->ent)
 					GLBE_SelectEntity(batch->ent);
 				for (m = batch->firstmesh; m < batch->meshes; m++)
@@ -7573,14 +7605,16 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				}
 			}
 	qsort(faces, n, sizeof(*faces), GLBE_BlendFaceCompare);
-	// Root static-world plane relations refine only eligible baseline slots.
-	if (!r_refdef.recurse)
+	// Static-world plane relations refine only eligible baseline slots. Portal and
+	// skyroom views sort too: GLR_DrawPortal builds m_view, r_origin and vpn/vright/
+	// vup from one basis, and its oblique near clip rewrites only the projection z row.
+	if (GLBE_BlendViewBasisAgrees())
 		GLBE_BlendPlaneSort(faces, n, &stats);
 	if (trace)
 	{
-		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d\n",
+		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d recurse=%d\n",
 			(unsigned int)count, (unsigned int)n, (unsigned int)stats.admitted, stats.status,
-			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass);
+			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, r_refdef.recurse);
 		for (f = 0; f < n && f < GLBLEND_PLANE_FACES; f++)
 		{
 			batch_t *b = faces[f].batch;

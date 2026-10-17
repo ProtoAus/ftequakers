@@ -28,6 +28,8 @@ code=s[s.index('#define GLBLEND_PLANE_FACES'):s.index('static void GLBE_SubmitBl
 # this fixture deliberately isolates plane geometry and ordering only.
 near=code[code.index('static qboolean GLBE_BlendWorldRasterEmptyNear'):code.index('// -1: a before b;')]
 code=code.replace(near,'')
+basis=code[code.index('// Plane proofs and centres read r_origin'):code.index('static qboolean GLBE_BlendPlaneGeometry')]
+code=code.replace(basis,'')
 struct=s[s.index('typedef struct\n{\n\tbatch_t *batch;\n\tmesh_t *mesh;'):s.index('static double GLBE_BlendCenterDepth')]
 struct=struct[:struct.index('static qboolean gl_blendtrace_pending;')]
 compare=s[s.index('static int GLBE_BlendFaceCompare'):s.index('static qboolean GLBE_BlendBatchImmediate')]
