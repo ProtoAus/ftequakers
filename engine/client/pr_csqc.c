@@ -7225,6 +7225,7 @@ static struct {
 	{"lines_arrays",		PF_cs_lines_arrays,		0},
 	{"lines_lod",			PF_cs_lines_lod,		0},
 	{"lines_draw",			PF_cs_lines_draw,		0},
+	{"memnostrings",		PF_memnostrings,		0},	//FTESurf Patch 763
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326
 	{"stringwidth",				PF_CL_stringwidth,				327},	// #327 EXT_CSQC_'DARKPLACES'

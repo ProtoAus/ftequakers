@@ -668,6 +668,9 @@ void QCBUILTIN PF_base64decode(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 void QCBUILTIN PF_memalloc	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memrealloc(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memfree	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_memnostrings(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);	//FTESurf Patch 763
+pbool PR_AddressableNoStrings(pubprogfuncs_t *ppf, void *memptr);			//qclib/initlib.c
+size_t PR_AddressableNoStringsInfo(pubprogfuncs_t *ppf, unsigned int *blocks);
 void QCBUILTIN PF_memcmp	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memcpy	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memfill8	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);

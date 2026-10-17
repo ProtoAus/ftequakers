@@ -2095,6 +2095,13 @@ void QCBUILTIN PF_memfree (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	if (qcptr)
 		prinst->AddressableFree(prinst, cptr);
 }
+//FTESurf Patch 763: float(__variant *ptr) memnostrings: the QC's promise that this memalloc block never
+//holds a string, so the tempstring GC skips it (PR_AddressableNoStrings). 1 when it is skipped.
+void QCBUILTIN PF_memnostrings (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int qcptr = G_INT(OFS_PARM0);
+	G_FLOAT(OFS_RETURN) = (qcptr > 0 && PR_AddressableNoStrings(prinst, prinst->stringtable + qcptr));
+}
 void QCBUILTIN PF_memcmp (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	int qcdst = G_INT(OFS_PARM0);

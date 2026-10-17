@@ -5954,6 +5954,12 @@ void CL_Status_f(void)
 			count++;
 		}
 		Con_Printf("csqc entities    : %i/%i/%i (mem: %.1f%%)\n", count, csqc_world.num_edicts, csqc_world.max_edicts, 100*(float)(csqc_world.progs->stringtablesize/(double)csqc_world.progs->stringtablemaxsize));
+		{	//FTESurf Patch 763
+			extern size_t PR_AddressableNoStringsInfo(pubprogfuncs_t *ppf, unsigned int *blocks);
+			unsigned int blocks;
+			size_t skip = PR_AddressableNoStringsInfo(csqc_world.progs, &blocks);
+			Con_Printf("csqc gc reads    : %.1f MiB of %.1f MiB (%u blocks marked)\n", (csqc_world.progs->stringtablesize - skip)/(1024.0*1024), csqc_world.progs->stringtablesize/(1024.0*1024), blocks);
+		}
 		for (count = 1; count < MAX_CSMODELS; count++)
 			if (!*cl.model_csqcname[count])
 				break;

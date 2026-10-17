@@ -233,6 +233,89 @@ void PR_memvalidate (progfuncs_t *progfuncs)
 	}
 }
 
+//FTESurf Patch 763: a block the QC says never holds a string (a float or vector array) is left out
+//of the tempstring GC's read. The GC copies or scans the whole hunk each collection, and the 80 MB
+//run-line pool made that ~20 ms every ~415 frames. A false promise frees a string that is still
+//referenced: with the threaded GC that is PR_QCGC_Sweep's FIXME race (a read or a grow while the
+//worker frees it), which a csprogs could already reach by hiding a reference. Mark only blocks that
+//never take a string.
+static void PR_NoStringsDrop(progfuncs_t *progfuncs, unsigned int start, unsigned int end)
+{	//forget every registration overlapping [start, end), a forged one over a freed block included
+	unsigned int i, o;
+	for (i = o = 0; i < prinst.numnostr; i++)
+		if (prinst.nostr_end[i] <= start || prinst.nostr_start[i] >= end)
+		{
+			prinst.nostr_start[o] = prinst.nostr_start[i];
+			prinst.nostr_end[o++] = prinst.nostr_end[i];
+		}
+	prinst.numnostr = o;
+}
+pbool PR_AddressableNoStrings(pubprogfuncs_t *ppf, void *memptr)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	qcmemusedblock_t *ub;
+	size_t ptr;
+	unsigned int i, start;
+
+	if ((char*)memptr < progfuncs->funcs.stringtable + sizeof(*ub))
+		return false;
+	ptr = (char*)memptr - progfuncs->funcs.stringtable - sizeof(*ub);	//the block's header, as PR_memfree finds it
+	if (ptr + sizeof(*ub) > prinst.addressableused || (ptr & 3))	//the whole header inside the hunk
+		return false;
+	ub = (qcmemusedblock_t*)(progfuncs->funcs.stringtable + ptr);
+	if (ub->marker != MARKER_USED || ub->size <= sizeof(*ub) || ptr + ub->size > prinst.addressableused)
+		return false;
+	start = ptr + sizeof(*ub);
+	for (i = 0; i < prinst.numnostr && prinst.nostr_start[i] < start; i++)
+		;
+	if (i < prinst.numnostr && prinst.nostr_start[i] == start)
+		return true;
+	if (prinst.numnostr == NOSTR_MAX)
+		return false;
+	memmove(prinst.nostr_start+i+1, prinst.nostr_start+i, sizeof(*prinst.nostr_start)*(prinst.numnostr-i));
+	memmove(prinst.nostr_end+i+1, prinst.nostr_end+i, sizeof(*prinst.nostr_end)*(prinst.numnostr-i));
+	prinst.nostr_start[i] = start;
+	prinst.nostr_end[i] = ptr + ub->size;
+	prinst.numnostr++;
+	return true;
+}
+//The stretches of the hunk the GC reads, in order: all of it but those blocks. Skips are cut to
+//whole words, so every word read sits where an unskipped scan reads it.
+static unsigned int PR_QCGC_Segments(progfuncs_t *progfuncs, size_t *ofs, size_t *len)
+{
+	size_t pos = 0, s, e, used = prinst.addressableused;
+	unsigned int i, n = 0;
+	for (i = 0; i < prinst.numnostr; i++)
+	{
+		s = (prinst.nostr_start[i] + 3) & ~(size_t)3;
+		e = (prinst.nostr_end[i] < used ? prinst.nostr_end[i] : used) & ~(size_t)3;
+		if (s >= e || e <= pos)
+			continue;
+		if (s > pos)
+		{
+			ofs[n] = pos;
+			len[n++] = s - pos;
+		}
+		pos = e;
+	}
+	if (used > pos)
+	{
+		ofs[n] = pos;
+		len[n++] = used - pos;
+	}
+	return n;
+}
+size_t PR_AddressableNoStringsInfo(pubprogfuncs_t *ppf, unsigned int *blocks)
+{	//bytes the GC skips, for cl_status
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], read = 0;
+	unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
+	for (i = 0; i < n; i++)
+		read += len[i];
+	*blocks = prinst.numnostr;
+	return prinst.addressableused - read;
+}
+
 static void *PDECL PR_memalloc (pubprogfuncs_t *ppf, unsigned int size)
 {
 	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
@@ -362,6 +445,7 @@ static void PDECL PR_memfree (pubprogfuncs_t *ppf, void *memptr)
 	ub->marker = 0;	//invalidate it
 	size = ub->size;
 	ub = NULL;
+	PR_NoStringsDrop(progfuncs, ptr, ptr + size);	//its memory may hold strings next (memrealloc frees through here too)
 
 	//we have an (ordered) list of free blocks.
 	//in order to free our memory, we need to find the free block before+after the 'new' block
@@ -499,6 +583,7 @@ void PRAddressableFlush(progfuncs_t *progfuncs, size_t totalammount)
 {
 	prinst.addressableused = 0;
 	prinst.mfreelist = 0;
+	prinst.numnostr = 0;	//FTESurf Patch 763
 	// Clear localstack state when flushing memory
 	prinst.localstack = NULL;
 	prinst.localstack_used = 0;
@@ -1274,13 +1359,10 @@ void QCBUILTIN PF_memsetval (pubprogfuncs_t *inst, struct globalvars_s *globals)
 
 #ifdef QCGC
 #define smallbool char
-static smallbool *PR_QCGC_Mark(void *mem, size_t memsize, size_t numtemps)
+static void PR_QCGC_MarkWords(smallbool *marked, void *mem, size_t memsize, size_t numtemps)
 {
 	unsigned int *str;	//the reference we're considering
 	size_t p;
-	smallbool *marked;	//just booleans. could compact.
-	marked = malloc(sizeof(*marked) * numtemps);
-	memset(marked, 0, sizeof(*marked) * numtemps);
 
 	//mark everything the qc has access to, even if it isn't even a string!
 	//note that I did try specifically checking only data explicitly marked as a string type, but that was:
@@ -1296,6 +1378,13 @@ static smallbool *PR_QCGC_Mark(void *mem, size_t memsize, size_t numtemps)
 				marked[idx] = true;
 		}
 	}
+}
+static smallbool *PR_QCGC_Mark(void *mem, size_t memsize, size_t numtemps)
+{
+	smallbool *marked;	//just booleans. could compact.
+	marked = malloc(sizeof(*marked) * numtemps);
+	memset(marked, 0, sizeof(*marked) * numtemps);
+	PR_QCGC_MarkWords(marked, mem, memsize, numtemps);
 	return marked;
 }
 static size_t PR_QCGC_Sweep(progfuncs_t *progfuncs, smallbool *marked, tempstr_t **tempstrings, unsigned int numtemps)
@@ -1469,16 +1558,25 @@ void PR_RunGC (progfuncs_t *progfuncs)
 #ifdef GCTIMINGS
 			double starttime = Sys_DoubleTime(), endtime;
 #endif
-			struct qcgccontext_s *gc = prinst.gccontext = malloc(sizeof(*gc) - sizeof(gc->amem) + prinst.addressableused + sizeof(*gc->tempstrings)*prinst.maxtempstrings);
+			size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], memsize = 0, padded;	//FTESurf Patch 763: copy what is read
+			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
+			char *dst;
+			struct qcgccontext_s *gc;
+			for (i = 0; i < n; i++)
+				memsize += len[i];
+			padded = (memsize + 7) & ~(size_t)7;
+			gc = prinst.gccontext = malloc(sizeof(*gc) - sizeof(gc->amem) + padded + sizeof(*gc->tempstrings)*prinst.maxtempstrings);
 			gc->done = false;
 			gc->clearedtemps = 0;
 			gc->progfuncs = progfuncs;
 
-			gc->memsize = prinst.addressableused;
-			memcpy(gc->amem, prinst.addressablehunk, prinst.addressableused);
+			gc->memsize = memsize;
+			for (dst = (char*)gc->amem, i = 0; i < n; dst += len[i++])
+				memcpy(dst, prinst.addressablehunk + ofs[i], len[i]);
+			memset(dst, 0, padded - memsize);
 
 			gc->maxtemps = prinst.maxtempstrings;
-			gc->tempstrings = (void*)((char*)gc->amem+prinst.addressableused);
+			gc->tempstrings = (void*)((char*)gc->amem+padded);
 			memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
 
 			COM_InsertWork(WG_LOADER, PR_QCGC_Thread, gc, NULL, 0, 0);
@@ -1491,8 +1589,13 @@ void PR_RunGC (progfuncs_t *progfuncs)
 		}
 #endif
 		{	//same-thread gc.
-			smallbool *marked = PR_QCGC_Mark(prinst.addressablehunk, prinst.addressableused, prinst.maxtempstrings);
-			size_t swept = PR_QCGC_Sweep(progfuncs, marked, prinst.tempstrings, prinst.maxtempstrings);
+			size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1];
+			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
+			smallbool *marked = PR_QCGC_Mark(NULL, 0, prinst.maxtempstrings);
+			size_t swept;
+			for (i = 0; i < n; i++)
+				PR_QCGC_MarkWords(marked, prinst.addressablehunk + ofs[i], len[i], prinst.maxtempstrings);
+			swept = PR_QCGC_Sweep(progfuncs, marked, prinst.tempstrings, prinst.maxtempstrings);
 			prinst.livetemps -= swept;
 
 			//if over half the (max)strings are still live, just increase the max so we are not spamming collections

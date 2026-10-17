@@ -197,6 +197,12 @@ typedef struct prinst_s
 
 	unsigned int maxedicts;
 	struct edictrun_s **edicttable;
+
+	//FTESurf Patch 763: memnostrings' blocks, [start, end) hunk offsets sorted by start; the GC skips them
+#define NOSTR_MAX 128
+	unsigned int numnostr;
+	unsigned int nostr_start[NOSTR_MAX];
+	unsigned int nostr_end[NOSTR_MAX];
 } prinst_t;
 
 typedef struct progfuncs_s
