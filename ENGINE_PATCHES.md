@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 757 — KSF demos that begin in the start zone, or time off the frame count (backend tool)
+
+**Problem:** FTESurf `tools/ksfconvert.py` refused 17 of the 155 KSF demos the
+crawler tried on 2026-10-17. Ten begin inside the start zone (two bookmarks: the
+exit at frame 334, then the finish), so "no initial start-zone entry", although
+exit to finish is the official time within 0.13 tick. Seven differ from the frame
+count by more than the one tick allowed: 1.005 to 2.03 ticks on short runs, 3.99
+and 24.15 over 57,053 and 24,692 frames (the second repeats 23 frames). KSF's
+time is its timer's, not the frame count.
+
+**Change:** a course with no entry before its one exit is accepted when an
+official time binds it (never without one); the official time must be within 2.5
+ticks or 0.2 % of the run. A wrong course or run is seconds off.
+
+**Verified:** all 17, fetched again one at a time, convert with their rows' exact
+times; the 12 P702 clips convert to identical bytes; converter tests 11 pass, the
+old converter fails 6 of the new checks. The refused surf_monolith main FW demo
+replays with zone splits each one tick before KSF's own stage bookmarks (9 of 9).
+Pinned by the sealed schema20 generation: live with the next guarded cutover.
+FTESurf `cad73a2`, `tools/p757ksfconvert.md`.
+
 ## Patch 750 — Momentum and KSF replays show splits, boards and boarding (QC only)
 
 **Problem:** A replay's split list, Board panel and Boarding enter row were read
