@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 745 — a hidden player line still records; a replay line's own window (QC only)
+
+**Problem:** `hud_trail 0` reset and stopped the live run line, so a rewind
+refused ("hud_trail is off") and saves carried no picture: hiding the line took
+away what reads it. A replay's line had no hud_edit window: board lines follow
+"Board lines show" (`hud_lines_order`), the demo line only the console's
+`hud_lines_win/winf`, so it was drawn whole. `hud_watch_path_far` did already
+apply to a replay (measured below).
+
+**Change:** FTESurf `cl_trail.qc`: `hud_trail` only hides the line; Trail_Frame
+always records it and Rewind_Open no longer checks it. Run lines gains **Demo line
+shows** (`hud_lines_demo`: seconds ahead of the playhead and a quarter behind, at
+least 1 s, faded at both ends as a board line's window; 0 whole; -1, the default,
+follows `hud_lines_order`) and **Demo visible for** (`hud_lines_demo_far`, -1 =
+`hud_watch_path_far`), set after Line_ViewFrame through `Line_FarSet`. The
+console's `hud_lines_win/winf` still win when set.
+
+**Verified:** `runlines_hidden.cfg` on a dedicated surf_dune with the line off:
+it grows (19 points), a rewind opens and leaves, and turning it on shows the 41
+recorded; the installed build (`108748bb`) records 0 and refuses. 
+`runlines_demowin.cfg` on a surf_kitsune PB paused at 40 s: no window when whole,
+[39, 44] at 4 s, [38, 48] as board lines at 8, the console's [34, 42] wins;
+1500 u by either distance draws 431 of 691 points, which the old build did for
+`hud_watch_path_far` and not for the new one. 0 warnings, csprogs `b70ea5ef`,
+FTESurf `53adbba`. Not covered: the mode-1 3D ribbon (no window, as before).
+The changed default replay look is the owner's to judge (lextest).
+
 ## Patch 743 — prove ambiguous alpha order over projected overlap
 
 **Problem:** P742's stage3 fix is accepted, but stage1 saves 5/6 still flip:
