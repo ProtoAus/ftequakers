@@ -331,7 +331,7 @@ static cvar_t fs_homepath			= CVARAFD	("fs_homepath"/*q3ish*/, "", "fs_homedir"/
 static cvar_t dpcompat_ignoremodificationtimes = CVARAFD("fs_packageprioritisation", "1", "dpcompat_ignoremodificationtimes", CVAR_NOUNSAFEEXPAND|CVAR_NOSAVE, "Favours the package that is:\n0: Most recently modified\n1: Is alphabetically last (favour z over a, 9 over 0).");
 cvar_t	fs_dlURL					= CVARAFD(/*ioq3*/"sv_dlURL", "", /*dp*/"sv_curl_defaulturl", CVAR_SERVERINFO|IFWEB(CVAR_NOSAVE,CVAR_ARCHIVE), "Provides clients with an external url from which they can obtain pk3s/packages from an external http server instead of having to download over udp.");
 cvar_t  cl_download_mapsrc			= CVARFD("cl_download_mapsrc", "", CVAR_ARCHIVE, "Specifies an http location prefix for map downloads. EG: \"http://example.com/path/gamemaps/\"");
-cvar_t	fs_mapmaterials				= CVARFD("fs_mapmaterials", "1", 0, "ftesurf (P765): 1 = a map's own packed materials/ beat the same files in mounted games (Source's order); FTESurf's own files still win. 0 = the map's pakfile is searched last, as before. Read per lookup, so it applies from the next map load.");
+cvar_t	fs_mapmaterials				= CVARFD("fs_mapmaterials", "1", CVAR_NOTFROMSERVER, "ftesurf (P765): 1 = a map's own packed materials/ beat the same files in mounted games (Source's order); FTESurf's own files still win. 0 = the map's pakfile is searched last, as before. Read on every lookup; materials already loaded keep their copy until the map is reloaded.");
 int active_fs_cachetype;
 static int fs_referencetype;
 int fs_finds;
@@ -2494,13 +2494,15 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	   FTE appends it last (SPF_TEMPORARY). On Lex's PC a loose cstrike copy of
 	   silkroad/egypt/wall (3).vmt saying $translucent 1 beat surf_monolith's packed
 	   one, so its walls blended and wrote no depth. materials/ now tries the map
-	   pakfile after the mod's own paths and before the SPF_ADDON mounts. */
+	   pakfile after every non-addon path and before the SPF_ADDON mounts. */
 	if (((lflags & FSLF_IGNOREPURE) || fs_puremode < 2) && found == FF_NOTFOUND &&
 		fs_mapmaterials.ival && !Q_strncasecmp(filename, "materials/", 10))
 	{
-		int mdepth = 0;
-		for (search = com_searchpaths ; search && !(search->flags & SPF_ADDON) ; search = search->next)
+		int mdepth = depth;	//on from the pure walk, as the main loop counts
+		for (search = com_searchpaths ; search ; search = search->next)
 		{
+			if (search->flags & (SPF_ADDON|SPF_TEMPORARY))
+				continue;
 			if ((lflags & FSLF_SECUREONLY) && (search->flags & SPF_UNTRUSTED))
 				continue;
 			if (!((lflags & FSLF_IGNOREBASEDEPTH) && (search->flags & SPF_BASEPATH)))
@@ -2519,7 +2521,10 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 				fs_finds++;
 				found = search->handle->FindFile(search->handle, loc, filename, NULL);	//NULL: the hash holds the addon's copy
 				if (found)
+				{
+					mdepth++;	//deeper than every mod path: an image-format tie (Image_LocateHighResTexture) goes to the mod
 					break;
+				}
 			}
 		}
 		if (found)
