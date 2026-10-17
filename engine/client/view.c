@@ -1608,6 +1608,7 @@ void V_ClearRefdef(playerview_t *pv)
 	r_refdef.flags = 0;
 
 	r_refdef.skyroom_enabled = false;
+	r_refdef.skyroom_scale = 0;	//FTESurf Patch 758: only CSQC's call this frame sets it
 	r_refdef.firstvisedict = 0;	//just in case.
 
 	r_refdef.areabitsknown = false;

@@ -2617,6 +2617,11 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 		}
 		else
 			Vector4Set(r_refdef.skyroom_spin, 0, 0, 0, 0);
+		// FTESurf Patch 758: an optional parallax scale. R_DrawSkyroom moves the
+		// camera by (that view's eye - this eye) / scale, so a view through a
+		// portal sees the sky from its own eye.
+		VectorCopy(r_refdef.vieworg, r_refdef.skyroom_eye);
+		r_refdef.skyroom_scale = (prinst->callargc >= 5) ? G_FLOAT(OFS_PARM4) : 0;
 		break;
 
 	case VF_ORIGIN:

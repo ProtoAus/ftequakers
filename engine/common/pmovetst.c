@@ -560,6 +560,10 @@ static void PM_PortalCSGReport(int entnum, int plane, float miss)
 		entnum, edge[plane], -miss);
 }
 
+static float pm_carveexit_frac = -1;	// Patch 758: where PM_PortalCSG stopped at plane 0, see PM_CarveExitRest
+static vec3_t pm_carveexit_dir;		// ...and the door's forward, which the rest starts 1/16 along
+static int pm_carveexit_depth;
+
 static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trmax, vec3_t start, vec3_t end, trace_t *trace)
 {
 	vec4_t planes[7];	//far, near, right, left, up, down; 6: the feet against the bottom edge (P756)
@@ -843,6 +847,13 @@ static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trm
 				VectorCopy(planes[hitplane], trace->plane.normal);
 				trace->plane.dist = planes[hitplane][3];
 			}
+			// Mover 6 (Patch 758): plane 0 is the hull clearing the door into the room
+			// in front, not a surface. Mover 4/5 stopped dead there (8 of 20 hops).
+			if (hitplane == 0 && movevars.sourceversion >= 6)
+			{
+				pm_carveexit_frac = bestfrac;
+				VectorCopy(planes[1], pm_carveexit_dir);
+			}
 		}
 		return; // only the separate centre-plane intersection may traverse
 	}
@@ -1077,6 +1088,37 @@ qboolean PM_AnyPortals (void)
 	return false;
 }
 
+/* Patch 758, mover 6: a trace PM_PortalCSG stopped at a linked door's front boundary
+   carries on as an ordinary trace from 1/16 along the door's forward, 1/32 clear of the
+   carve (a wall face within the carve's 1/8 slop is then behind the hull), so whatever
+   is really in front stops it. That nudge is the only untraced motion: restarting along
+   the move skipped most of a grazing one, through a jamb (P758 review round 2). A rest
+   that starts in solid keeps mover 5's stop: passing it on as a move carried a
+   non-upright exit through a wall (round 1). One level. */
+static trace_t PM_CarveExitRest(trace_t total, vec3_t start, vec3_t end, unsigned int solidmask)
+{
+	trace_t rest;
+	vec3_t from, m, p;
+	float f = total.fraction, mm;
+	if (pm_carveexit_frac < 0 || f != pm_carveexit_frac || total.startsolid || pm_carveexit_depth)
+		return total;
+	VectorMA(total.endpos, 1/16.0, pm_carveexit_dir, from);
+	pm_carveexit_depth++;
+	rest = PM_PlayerTrace(from, end, solidmask);
+	pm_carveexit_depth--;
+	if (rest.startsolid || rest.allsolid)
+		return total;
+	if (rest.fraction < 1)
+	{	// the move's progress is endpos projected on it: the nudge is off its line.
+		// Blocked stays below 1, or the mover skips this bump's clip (round 3).
+		VectorSubtract(end, start, m);
+		VectorSubtract(rest.endpos, start, p);
+		mm = DotProduct(m, m);
+		rest.fraction = mm > 0 ? min(nextafterf(1, 0), max(f, DotProduct(p, m) / mm)) : f;
+	}
+	return rest;
+}
+
 /*
 ================
 PM_PlayerTrace
@@ -1088,6 +1130,7 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 	int			i, j;
 	physent_t	*pe;
 
+	pm_carveexit_frac = -1;
 // fill in a default trace
 	memset (&total, 0, sizeof(trace_t));
 	total.fraction = 1;
@@ -1284,7 +1327,7 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 //	//this is needed to avoid *2 friction. some id bug.
 	if (total.startsolid)
 		total.fraction = 0;
-	return total;
+	return PM_CarveExitRest(total, start, end, solidmask);
 }
 
 //for use outside the pmove code. lame, but works.

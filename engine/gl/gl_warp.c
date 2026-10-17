@@ -416,8 +416,20 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 	}
 
 	/*work out where the camera should be (use the same angles)*/
-	VectorCopy(r_refdef.skyroom_pos, r_refdef.vieworg);
-	VectorCopy(r_refdef.skyroom_pos, r_refdef.pvsorigin);
+	{	/* FTESurf Patch 758: from THIS view's eye. CSQC placed skyroom_pos for the
+		   player's eye; a portal view (or a crossing eye, CSQC_PortalView) has its
+		   own, and the sky camera moves by the difference over the scale. */
+		vec3_t sky;
+		VectorCopy(r_refdef.skyroom_pos, sky);
+		if (r_refdef.skyroom_scale > 0 && !IS_NAN(r_refdef.skyroom_scale))
+		{
+			vec3_t d;
+			VectorSubtract(r_refdef.vieworg, r_refdef.skyroom_eye, d);
+			VectorMA(sky, 1 / r_refdef.skyroom_scale, d, sky);
+		}
+		VectorCopy(sky, r_refdef.vieworg);
+		VectorCopy(sky, r_refdef.pvsorigin);
+	}
 
 	/*
 	FTESurf Patch 209a: this used to run the PointContents trace and print EVERY FRAME for as long as

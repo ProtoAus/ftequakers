@@ -229,8 +229,9 @@ typedef struct
    Patch 492/538: versions 1/2 retain drift-only water and their original
    fixrampbugs clip cycle. Live version 3 adds swimming at either ramp setting.
    SV_PMSrcVer accepts old pins only with their original matching ramp setting.
-   Patch 756: version 5 keeps a linked portal landing's exact position. */
-#define PMSRC_VERSION 5
+   Patch 756: version 5 keeps a linked portal landing's exact position.
+   Patch 758: version 6 keeps moving when the hull clears a linked door's front. */
+#define PMSRC_VERSION 6
 
 typedef struct {
 	//standard quakeworld

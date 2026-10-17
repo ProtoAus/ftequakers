@@ -383,6 +383,9 @@ typedef struct refdef_s
 	qboolean	fixedview;			/*if true, use a fixed camera setup for out-of-body screenshots (usually to build cubemaps)*/
 	vec3_t		fixedvieworg;
 	vec3_t		fixedviewangles;
+
+	vec3_t		skyroom_eye;		/*FTESurf Patch 758: vieworg when skyroom_pos was set*/
+	float		skyroom_scale;		/*...and its parallax divisor, 0 for none (a fixed camera)*/
 } refdef_t;
 
 extern	refdef_t	r_refdef;

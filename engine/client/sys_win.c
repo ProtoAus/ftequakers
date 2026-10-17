@@ -1624,6 +1624,7 @@ static cvar_t sys_framepacing_drain = CVARFD("sys_framepacing_drain", "2", CVAR_
 	"How far back sys_framepacing 4's GPU drain waits before the paced flip. 0: no drain (fastest, but the swap can sit behind a deep GPU queue and the cadence sawtooths). 1: drain THIS frame -- the original behaviour; flattest cadence, but it serialises CPU and GPU and costs ~a fifth of the frame. 2: drain the PREVIOUS frame (default) -- caps queue depth at one frame while keeping CPU/GPU overlap. 3: drain two frames back -- looser still, more latency, least stall. Only used when sys_framepacing is 4 on OpenGL.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
+static void Sys_FrameTimes_f(void);
 static void Sys_FramePacing_Init(void);
 /*
 ================
@@ -1645,6 +1646,8 @@ void Sys_Init (void)
 	Cvar_Register(&sys_framepacing_drain, "System vars");
 	Cmd_AddCommandD("sys_framepacing_stats", Sys_FramePacing_Stats_f,
 		"Reports what sys_framepacing is actually doing: current mode, acquired timer resolution, waitable-timer tier, DXGI handle availability, and wait-accuracy stats over the last 128 frames. Use this to verify non-zero modes have any effect.");
+	Cmd_AddCommandD("frametimes", Sys_FrameTimes_f,
+		"Frame pacing since the last time you ran it: average fps, 1% low, percentiles of the present-to-present interval, and when the slow frames were. Run it once, play, run it again. OpenGL on Windows.");
 #ifndef SERVERONLY
 	Cvar_Register(&sys_disableWinKeys, "System vars");
 	Cvar_Register(&sys_disableTaskSwitch, "System vars");
@@ -1936,6 +1939,15 @@ static int    g_present_head   = 0;
 static int    g_present_count  = 0;
 static double g_last_present_t = 0;
 
+// FTESurf Patch 758: every present interval since the last `frametimes`, so a 1% low
+// covers a whole run (the ring above holds 128 swaps). 2^18 frames is ~9 min at 500 fps.
+#define FT_MAX (1<<18)
+static float  g_ft_ms[FT_MAX];
+static float  g_ft_at[FT_MAX];	// seconds since the window opened
+static int    g_ft_count;
+static int    g_ft_lost;	// frames after the window filled
+static double g_ft_start;
+
 static void Sys_FramePacing_Init(void)
 {
 	HMODULE ntdll;
@@ -2213,8 +2225,72 @@ void Sys_FramePace_RecordPresent(void)
 		g_present_ring[g_present_head] = now - g_last_present_t;
 		g_present_head = (g_present_head + 1) % PACE_ERR_RING;
 		if (g_present_count < PACE_ERR_RING) g_present_count++;
+		if (!g_ft_start)
+			g_ft_start = g_last_present_t;
+		if (g_ft_count < FT_MAX)
+		{
+			g_ft_ms[g_ft_count] = (now - g_last_present_t) * 1000;
+			g_ft_at[g_ft_count] = now - g_ft_start;
+			g_ft_count++;
+		}
+		else
+			g_ft_lost++;
 	}
 	g_last_present_t = now;
+}
+
+static int QDECL Sys_FrameTimes_Cmp(const void *a, const void *b)
+{
+	float x = *(const float *)a, y = *(const float *)b;
+	return (x > y) - (x < y);
+}
+
+// Prints the window since the last call, then opens a new one.
+static void Sys_FrameTimes_f(void)
+{
+	int n = g_ft_count, lost = g_ft_lost, i, k, spikes = 0, shown = 0;
+	float *s, med, lim;
+	double sum = 0, worst = 0;
+	char line[1024];
+
+	g_ft_count = 0;
+	g_ft_lost = 0;
+	g_ft_start = 0;
+	if (n < 100)
+	{
+		Con_Printf("frametimes: new window open (%i frames in the last); play, then run it again\n", n);
+		return;
+	}
+	s = BZ_Malloc(n * sizeof(*s));
+	memcpy(s, g_ft_ms, n * sizeof(*s));
+	qsort(s, n, sizeof(*s), Sys_FrameTimes_Cmp);
+	for (i = 0; i < n; i++)
+		sum += s[i];
+	k = max(1, n / 100);
+	for (i = n - k; i < n; i++)
+		worst += s[i];
+	med = s[n / 2];
+	Con_Printf("frametimes: %i frames in %.1f s, avg %.0f fps, 1%% low %.0f fps\n", n, sum / 1000, n * 1000 / sum, k * 1000 / worst);
+	Con_Printf("  ms: p50 %.2f  p99 %.2f  p99.9 %.2f  max %.2f\n", med, s[min(n - 1, (int)(n * 0.99))], s[min(n - 1, (int)(n * 0.999))], s[n - 1]);
+	if (lost)
+		Con_Printf("  the window filled at %i frames; the %i after it are not counted\n", n, lost);
+	BZ_Free(s);
+
+	// Spikes in time order, so a period shows.
+	lim = max(med * 2, med + 2);
+	*line = 0;
+	for (i = 0; i < n; i++)
+	{
+		if (g_ft_ms[i] < lim)
+			continue;
+		spikes++;
+		if (shown < 40)
+		{
+			Q_strncatz(line, va(" %.2f(%.1f)", g_ft_at[i], g_ft_ms[i]), sizeof(line));
+			shown++;
+		}
+	}
+	Con_Printf("  %i frames over %.1f ms; at s(ms):%s%s\n", spikes, lim, line, spikes > shown ? " ..." : "");
 }
 
 /* Called when sys_framepacing changes.  Force-init the subsystem so the
