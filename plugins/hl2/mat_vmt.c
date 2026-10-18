@@ -897,6 +897,7 @@ typedef struct
 	qboolean refracttint_set, reflecttint_set;
 	float fogcolor_f[3];
 	qboolean fogcolor_set;
+	qboolean fogcolor_srgb;	//FTESurf Patch 783: set from `srgb?$fogcolor`, which a plain $fogcolor may not replace
 	float waterscale;		//$scale, the normal-map tiling
 	qboolean waterscale_set;
 	float waterscroll1[2], waterscroll2[2];	//signed normal-layer UV velocity
@@ -915,6 +916,10 @@ typedef struct
 	char nodraw;
 	char additive;
 	char translucent;
+	char translucent_vmt;	//FTESurf Patch 783: $translucent as written; arms below overwrite `translucent`
+	char vertexalpha_on;	//FTESurf Patch 783: $vertexalpha's value (`vertexalpha` is set by the key alone)
+	char additive_oneone;	//FTESurf Patch 783: Source's pass is ONE ONE whatever the alpha (emissive)
+	char vmtclass[32];	//FTESurf Patch 783: the Source shader class, before an arm rewrites `type`
 	char selfillum;
 	char decal;
 	char nofog;
@@ -1617,9 +1622,11 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 	char key[MAX_OSPATH];
 	char value[MAX_OSPATH];
 	char *qmark;
-	qboolean cond;
+	qboolean cond, srgbkey;
+	float fogtmp[3];
 	for(;line;)
 	{
+		srgbkey = false;
 		line = cmdfuncs->ParseToken(line, key, sizeof(key), &ttype);
 		if (ttype == TTP_RAWTOKEN && !strcmp(key, "}"))
 			break;	//end-of-block
@@ -1648,7 +1655,15 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		{
 			*qmark++ = 0;
 			if (!Q_strcasecmp(key, "srgb"))
-				cond = false;//!!(vid.flags & VID_SRGBAWARE);
+			{
+				/*FTESurf Patch 783: Source on PC takes the srgb? branch (Momentum's surf_boreas
+				water is its srgb? blue, not the plain white).  Only $fogcolor is followed:
+				water.cpp:331 converts it gamma-to-linear and the sRGB write converts it back,
+				so it shows as written.  The other srgb? keys in the library -- $alpha .375,
+				$overbrightfactor .75, the -dx10 tool textures -- compensate for blending in
+				linear light, which this renderer does not do.*/
+				cond = srgbkey = !Q_strcasecmp(qmark, "$fogcolor");
+			}
 			else
 			{
 				Con_DPrintf("%s: Unknown vmt conditional \"%s\"\n", fname, key);
@@ -1837,7 +1852,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			which is what makes the fix narrow -- it can only ever turn a surface
 			the author marked opaque back into an opaque one.
 			*/
-			st->translucent = atoi(value) ? 1 : 0;
+			st->translucent = st->translucent_vmt = atoi(value) ? 1 : 0;
 		}
 		else if (!Q_strcasecmp(key, "$additive"))
 		{
@@ -1898,7 +1913,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$vertexcolor"))
 			st->vertexcolor = 1;
 		else if (!Q_strcasecmp(key, "$vertexalpha"))
+		{
 			st->vertexalpha = 1;
+			st->vertexalpha_on = atof(value) != 0;	//FTESurf Patch 783: the value, for VMT_AdditiveBlend only
+		}
 		else if (!Q_strcasecmp(key, "$decal"))
 			st->decal = atoi(value);
 		else if (!Q_strcasecmp(key, "$decalscale"))
@@ -2051,6 +2069,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$fogenable"))
 			st->waterfog_disabled = !atoi(value);
+		else if (!Q_strcasecmp(key, "$fogcolor") && st->fogcolor_srgb && !srgbkey)
+			;	//FTESurf Patch 783: the srgb? colour wins whichever line comes first
+		else if (!Q_strcasecmp(key, "$fogcolor") && srgbkey && !VMT_ParseColour(value, fogtmp))
+			;	//FTESurf Patch 783: an unreadable srgb? colour changes nothing
 		else if (!Q_strcasecmp(key, "$fogcolor"))
 		{
 			Q_strlcpy(st->fogcolor, value, sizeof(st->fogcolor));	//FTESurf: hl2_water 0 draws this
@@ -2059,6 +2081,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			//straight to `rgbgen const` and re-deriving it would be two spellings
 			//of one value.
 			st->fogcolor_set = VMT_ParseColour(value, st->fogcolor_f);
+			st->fogcolor_srgb |= srgbkey;
 		}
 		/*
 		Water-only legacy $scale -> scalar normal UV tiling (first component).
@@ -2153,6 +2176,29 @@ static qboolean VMT_AdditiveProgramOK(vmtstate_t *st)
 	if (*st->hdrbasetex || *st->hdrcompressedtex)
 		return false;	//`map "$hdr:..."`
 	return true;
+}
+
+/*
+FTESurf Patch 783: the blend an $additive material gets.  Source's
+SetAdditiveBlendingShadowState (shaderlib/BaseShader.cpp:632-668) uses SRC_ALPHA ONE
+when the alpha means opacity -- vertex alpha, a fractional $alpha, or a base texture's
+alpha, which TextureIsTranslucent (:404-435) counts only under $translucent and not
+when spent on alphatest / $selfillum / $basealphaenvmapmask -- and ONE ONE otherwise.
+Under $translucent a texture with no alpha reads 1, where the two agree, so the
+texture itself need not be known here.  Sprite and SpriteCard add with SRC_ALPHA
+always (sprite_dx9.cpp:237-346, spritecard.cpp:234-236).  Always ONE ONE before:
+surf_boreas's end-room smoke (vertex alpha) drew as a saturated white column.
+*/
+static char *VMT_AdditiveBlend(const vmtstate_t *st)
+{
+	if (st->additive_oneone)
+		return "add";
+	if (!Q_strcasecmp(st->vmtclass, "Sprite") || !Q_strcasecmp(st->vmtclass, "SpriteCard"))
+		return "src_alpha one";
+	if (st->vertexalpha_on || (st->alphaval > 0 && st->alphaval < 1) ||
+	    (st->translucent_vmt && !(st->alphatest || st->selfillum || st->envfrombase)))
+		return "src_alpha one";
+	return "add";
 }
 
 /*
@@ -2254,6 +2300,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	qboolean emisdefaultmapping = st->emisenabled && !st->modelmaterial && !*st->tex[0].name;
 
 	*progargs = 0;
+	Q_strlcpy(st->vmtclass, st->type, sizeof(st->vmtclass));	//FTESurf Patch 783, for VMT_AdditiveBlend
 
 	/*
 	FTESurf Patch 780: Source's Wireframe is VertexLitGeneric drawn with
@@ -2804,7 +2851,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		coupling is noted at both ends.
 		*/
 		if (st->additive && (!hl2_translucent || hl2_translucent->ival))
-			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc add\n");
+			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc %s\n", VMT_AdditiveBlend(st));	//FTESurf Patch 783
 		else if (st->translucent && (!hl2_translucent || hl2_translucent->ival))
 			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc blend\n");
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
@@ -2855,6 +2902,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		//Source's pass is unconditionally ONE ONE. These materials all say
 		//$additive anyway, but the shader is additive whatever the material said.
 		st->additive = 1;
+		st->additive_oneone = 1;	//FTESurf Patch 783: emissive.glsl writes alpha 0, so never src_alpha one
 		vmt_stat_emissive++;
 	}
 	/*
@@ -2964,7 +3012,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 
 		if (st->additive)
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tblendFunc add\n");
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tblendFunc %s\n", VMT_AdditiveBlend(st));	//FTESurf Patch 783
 		else if (st->translucent)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tblendFunc blend\n");
 		else if (st->alphatest)
@@ -3258,7 +3306,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tprogram \"%s%s\"\n", st->type, progargs);
 			Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"$2darray:%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 			if (st->additive && (!hl2_translucent || hl2_translucent->ival))
-				Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc add\n");
+				Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc %s\n", VMT_AdditiveBlend(st));	//FTESurf Patch 783
 			else if (st->translucent && (!hl2_translucent || hl2_translucent->ival))
 				Q_strlcatfz(script, &offset, sizeof(script),	"\t\tblendFunc blend\n");
 			Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
@@ -4222,7 +4270,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		//"add" rather than spelling out the factors: Shaderpass_BlendFunc
 		//(gl_shader.c:4205) turns it into SRCBLEND_ONE|DSTBLEND_ONE by name, and
 		//it is the same word the pass-based arms above already use.
-		st->blendfunc = "add";
+		st->blendfunc = VMT_AdditiveBlend(st);	//FTESurf Patch 783: "add" or Source's src_alpha one
 		if (!st->translucent)
 			vmt_stat_translucent++;	//it costs what a translucent surface costs; the census should say so
 	}

@@ -15,7 +15,7 @@ typedef enum {
 	VMF_ABGR8=1,	//FTESurf Patch 239: 421 instances across 73 maps.  No PTI_ABGR8 exists; byte-reversed in place, below.
 	VMF_RGB8=2,
 	VMF_BGR8=3,
-//	VMF_RGB565=4,	//zero instances in the library; BGR565 (17) is the one that shows up, and FTE has no PTI_BGR565
+//	VMF_RGB565=4,	//zero instances in the library; BGR565 (17) is the one that shows up (Patch 783)
 	VMF_I8=5,
 	VMF_IA8=6,
 //	VMF_P8=7,
@@ -28,11 +28,11 @@ typedef enum {
 	VMF_BC2=14,
 	VMF_BC3=15,
 	VMF_BGRX8=16,
-//	VMF_BGR565=17,
+	VMF_BGR565=17,	//FTESurf Patch 783: 6 files, 3 maps
 //	VMF_BGRX5551=18,
-//	VMF_BGRA4444=19,
+	VMF_BGRA4444=19,	//FTESurf Patch 783: 5 files, 3 maps -- surf_boreas's end-room smoke
 	VMF_BC1A=20,
-//	VMF_BGRA5551=21,
+	VMF_BGRA5551=21,	//FTESurf Patch 783: none in the library; the same mapping as the other two
 	VMF_UV88=22,
 //	VMF_UVWQ8=23,
 	VMF_RGBA16F=24,
@@ -107,6 +107,18 @@ static uploadfmt_t ImageVTF_VtfToFTE(fmtfmt_t f, unsigned int vtfflags)
 		return PTI_L8;
 	case VMF_IA8:
 		return PTI_L8A8;
+	/*
+	FTESurf Patch 783: Source's 16-bit formats are bitfields with the FIRST-named channel
+	in the low bits (public/bitmap/imageformat.h:230-284, BGRA4444_t: b bits 0-3 .. a
+	bits 12-15).  These PTIs only size the mip chain at 2 bytes a texel; the texels are
+	expanded to BGRA8/BGRX8 after the layout -- see the Patch 783 block there.
+	*/
+	case VMF_BGRA4444:
+		return PTI_ARGB4444;
+	case VMF_BGRA5551:
+		return PTI_ARGB1555;
+	case VMF_BGR565:
+		return PTI_RGB565;
 	case VMF_INVALID:
 		return PTI_INVALID;
 
@@ -237,7 +249,8 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 	Strata BC7 (182+19) -- and after those the residue is 21 files in formats
 	FTE genuinely has no pixel layout for (BGR565, BGRA4444, A8, the two
 	_BLUESCREEN colour-key formats, UVWQ8888, UVLX8888).  Those 21 now say so by
-	name instead of vanishing.
+	name instead of vanishing.  (Patch 783 decodes BGR565 and BGRA4444 after all, by
+	expanding them to 8 bits a channel.)
 
 	Placed before anything is allocated and before `filedata` has moved, so
 	returning NULL leaves the caller's BZ_Free(filedata) correct.
@@ -570,6 +583,50 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 				px[0]=r; px[1]=g; px[2]=b; px[3]=a;
 			}
 		}
+	}
+
+	/*
+	FTESurf Patch 783: the 16-bit formats are expanded here to BGRA8/BGRX8 rather than
+	uploaded as PTI_ARGB4444/ARGB1555/RGB565.  The engine's own handling of those is
+	unsafe: Vulkan claims ARGB4444 and then Sys_Errors creating it (vk_init.c), the
+	software converters read the low bits as red (image.c Image_Tr_ARGB4444to8888,
+	..1555to8888) where every renderer table and Source read blue, and nothing converts
+	RGB565 at all.  The layout above still sized the mips at 2 bytes a texel.
+	*/
+	if (mips && (vmffmt == VMF_BGRA4444 || vmffmt == VMF_BGRA5551 || vmffmt == VMF_BGR565))
+	{
+		unsigned int m, p, n;
+		for (m = 0; m < mips->mipcount; m++)
+		{
+			const qbyte *src = mips->mip[m].data;
+			qbyte *dst, *out;
+			if (!src)
+				continue;
+			n = (unsigned int)(mips->mip[m].datasize / 2);
+			out = dst = plugfuncs->Malloc(n * 4 + 1);
+			for (p = 0; p < n; p++, src += 2, out += 4)
+			{
+				unsigned int v = src[0] | (src[1] << 8);
+				if (vmffmt == VMF_BGRA4444)
+				{
+					out[0] = (v & 15) * 17;	out[1] = ((v >> 4) & 15) * 17;
+					out[2] = ((v >> 8) & 15) * 17;	out[3] = (v >> 12) * 17;
+				}
+				else
+				{
+					unsigned int b = v & 31, r = (vmffmt == VMF_BGR565) ? (v >> 11) : ((v >> 10) & 31);
+					unsigned int g = (vmffmt == VMF_BGR565) ? ((v >> 5) & 63) : ((v >> 5) & 31);
+					out[0] = (b << 3) | (b >> 2);
+					out[1] = (vmffmt == VMF_BGR565) ? ((g << 2) | (g >> 4)) : ((g << 3) | (g >> 2));
+					out[2] = (r << 3) | (r >> 2);
+					out[3] = (vmffmt == VMF_BGRA5551) ? ((v >> 15) ? 255 : 0) : 255;
+				}
+			}
+			mips->mip[m].data = dst;
+			mips->mip[m].datasize = n * 4;
+			mips->mip[m].needfree = true;
+		}
+		mips->encoding = (vmffmt == VMF_BGR565) ? PTI_BGRX8 : PTI_BGRA8;
 	}
 
 	//nettest: Source compressed-HDR (RGBS) sky face — stored in a BGRA8 VTF, but the alpha

@@ -6608,7 +6608,8 @@ done:;
 				s->sort = SHADER_SORT_OPAQUE;
 			else if (maskpass == -1)
 			{
-				if (s->numpasses && s->passes[0].blendmode == PBM_ADD)
+				if (s->numpasses && (s->passes[0].blendmode == PBM_ADD ||	//FTESurf Patch 783: and additive with alpha
+				    (s->passes[0].shaderbits&SBITS_BLEND_BITS) == (SBITS_SRCBLEND_SRC_ALPHA|SBITS_DSTBLEND_ONE)))
 					s->sort = SHADER_SORT_ADDITIVE;
 				else
 					s->sort = SHADER_SORT_BLEND;
