@@ -7665,6 +7665,8 @@ static int VBSP_PropModelOpaque(const entity_t *ent)
 		bits = sh->passes[0].shaderbits & SBITS_BLEND_BITS;
 		if (bits && bits != (SBITS_SRCBLEND_ONE|SBITS_DSTBLEND_ZERO))
 			return 5;
+		if (sh->passes[0].shaderbits & SBITS_ATEST_BITS)
+			return 5;	//alpha-tested foliage: Source's query sees through its gaps
 	}
 	return n > 0 ? 0 : 3;
 #else
@@ -7676,8 +7678,8 @@ static void VBSP_BuildVisualBIH(model_t *mod)
 {
 	vbspinfo_t *prv = mod->meshinfo;
 	struct bihleaf_s *leafs, *l;
-	struct bihnode_s *collisionnodes = mod->cnodes;
-	modelfuncs_t funcs = mod->funcs;
+	struct bihnode_s *collisionnodes;
+	modelfuncs_t funcs;
 	size_t i, j, count = prv->numstaticprops, props = 0;
 	unsigned int why[6] = {0};
 	int w;
@@ -7746,6 +7748,9 @@ static void VBSP_BuildVisualBIH(model_t *mod)
 	}
 	if (l != leafs)
 	{	//through the real map, as VBSP_BuildLightBIH does, then put movement's tree and funcs back
+		//(taken here, after the waits above: they run main-thread jobs)
+		collisionnodes = mod->cnodes;
+		funcs = mod->funcs;
 		prv->vis_trace_model = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->vis_trace_model));
 		memset(prv->vis_trace_model, 0, sizeof(*prv->vis_trace_model));
 		modfuncs->BIH_Build(mod, leafs, l-leafs);
@@ -7761,15 +7766,17 @@ static void VBSP_BuildVisualBIH(model_t *mod)
 	plugfuncs->Free(leafs);
 }
 
-//The world's NativeTrace from the movement build on: byte-identical unless VBSP_CONTENTS_VISUAL is asked for.
+//The world's NativeTrace from the movement build on: byte-identical unless VBSP_CONTENTS_VISUAL is
+//asked for.  An all-bits mask (WPhys_CheckWater, solidhere) is not asking, and nor is a server.
 static qboolean VBSP_TraceVisual(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace)
 {
 	vbspinfo_t *prv = model->meshinfo;
 	trace_t vt;
-	qboolean hit = prv->vis_basetrace(model, hulloverride, framestate, axis, p1, p2, mins, maxs, capsule, against & ~VBSP_CONTENTS_VISUAL, trace);
+	qboolean hit;
 
-	if (!(against & VBSP_CONTENTS_VISUAL))
-		return hit;
+	if (!(against & VBSP_CONTENTS_VISUAL) || against == ~0u || qrenderer == QR_NONE)
+		return prv->vis_basetrace(model, hulloverride, framestate, axis, p1, p2, mins, maxs, capsule, against, trace);
+	hit = prv->vis_basetrace(model, hulloverride, framestate, axis, p1, p2, mins, maxs, capsule, against & ~VBSP_CONTENTS_VISUAL, trace);
 	if (!prv->vis_built)
 		VBSP_BuildVisualBIH(model);
 	if (!prv->vis_trace_model)

@@ -3014,7 +3014,9 @@ void SV_WritePlayersToClient (client_t *client, client_frame_t *frame, edict_t *
 				continue;
 
 			// ignore if not touching a PV leaf
-			if (cameras && !sv.world.worldmodel->funcs.EdictInFatPVS(sv.world.worldmodel, &ent->pvsinfo, cameras->pvs.buffer, &cameras->numents))
+			//FTESurf Patch 802: the area list, not &numents -- with two or more cameras the old
+			//argument read ent[] pointer halves as area numbers (VBSP: Host_Error "area > numareas").
+			if (cameras && !sv.world.worldmodel->funcs.EdictInFatPVS(sv.world.worldmodel, &ent->pvsinfo, cameras->pvs.buffer, cameras->area))
 				continue;
 
 			if (!((int)clent->xv->dimension_see & ((int)ent->xv->dimension_seen | (int)ent->xv->dimension_ghost)))
@@ -4381,6 +4383,8 @@ static void SV_AddPortalCameras(pvscamera_t *camera)
 	wedict_t *p;
 	eval_t *ob, *fb;
 	pvec3_t ofs;
+	vec3_t pt;
+	int area;
 
 	for (l = sv.world.portallist.l.next; l != &sv.world.portallist.l && camera->numents < SV_PVS_CAMERAS; l = l->next)
 	{
@@ -4393,8 +4397,11 @@ static void SV_AddPortalCameras(pvscamera_t *camera)
 		fb = svprogfuncs->GetEdictFieldValue(svprogfuncs, (edict_t*)p, "lpd_fb", ev_vector, &evalc_lpdfb);
 		if (!ob || !fb)
 			return;
-		VectorMA(ob->_vector, 8, fb->_vector, ofs);
-		VectorSubtract(ofs, p->v->origin, ofs);	//SV_AddCameraEntity adds it back
+		VectorMA(ob->_vector, 8, fb->_vector, pt);
+		//a point in solid would fat-PVS to every bit (VBSP_FatPVS) and send the whole map
+		if (sv.world.worldmodel->funcs.ClusterForPoint(sv.world.worldmodel, pt, &area) < 0)
+			continue;
+		VectorSubtract(pt, p->v->origin, ofs);	//SV_AddCameraEntity adds it back
 		SV_AddCameraEntity(camera, (edict_t*)p, ofs);
 	}
 #endif
