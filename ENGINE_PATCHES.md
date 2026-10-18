@@ -9,20 +9,25 @@ receipt said journal kept0: official lobbies still requested only views at
 run_evidence_ul1 even though the HTTPS collector/proxy was deployed.
 
 **Change:** Online full-run playback may recover only the matching nonce-named local
-staged view, with a matching map. A nonce-keyed, counted renderer-only `.ownview`
-cache survives map staging cleanup without publishing private views or changing
-submitted evidence. Existing targets remain intact; missing/invalid nonces and
-stage slices do not borrow a full-run view. Official lobby config requests level2
+staged view, with a matching map and validated native header/finite frame schema.
+A short nonce-keyed renderer-only `.ownview` cache survives map staging cleanup
+without publishing private views or changing submitted evidence. Its counted
+header and terminal completion record reject interrupted copies; the completion
+record is removed before rendering. Existing targets remain intact; missing/invalid
+nonces and stage slices do not borrow a full-run view. Official lobby config requests level2
 before map initialization; native per-player permission and the native server's
 refusal to send raw journals over the legacy channel remain unchanged. Build and
 native engine pins unchanged.
 
 **Verified:** All three QC VMs compile with zero warnings. A pre-change acting
 viewer control has no sidecar; the subject uses the staged frames' pitch/yaw/keys,
-and a fresh VM uses the cache with no staged source. Missing/wrong nonce, wrong
-map, stage slice, invalid nonce and non-online paths do not borrow frames; existing
-cache targets and source fixtures remain byte-identical. These are synthetic
-viewer controls, not recorder/consent evidence. Reader regression:403 checks pass;
+and a fresh VM uses the cache with no staged source. Review findings reproduced
+on the initial candidate: malformed/incomplete views were adopted and a supported
+long online filename could not cache. The repaired subject refuses those inputs,
+and long-name warm/cold playback uses the bounded cache. Missing/wrong nonce,
+wrong map, stage slice, invalid nonce and non-online paths do not borrow frames;
+existing cache targets and source fixtures remain byte-identical. These are
+synthetic viewer controls, not recorder/consent evidence. Reader regression:403 checks pass;
 unchanged-reader runs sweep adds no faults. Human playback and a new genuine
 consenting signed HTTPS receipt/HID file join remain PENDING. No calibration or
 attestation claim; deployed code is not a human pass.
