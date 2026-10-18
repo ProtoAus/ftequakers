@@ -123,9 +123,12 @@ collector generation was serving internally: actual source/module/schema20 witne
 new OPEN/retired fully drained, seven dispatchers/four cron routes and momrequests'
 new admission lease verified. Existing reads/health12 pass; invalid HID length
 is refused by the declared handler. The private read-only database snapshot was
-retained; no DB restore or existing-player consent rewrite. Public TLS HID route
-is still404 pending the owner's privileged additive nginx command. Human consent
-and genuine signed HTTPS finish remain PENDING, not inferred from fixtures.
+retained; no DB restore or existing-player consent rewrite. Owner installed the
+additive nginx route21:29:25Z; independent21:30:50Z checks prove exact new config
+suffixes and retained predecessor bytes, trusted TLS health/directory200, HID
+GET403 and empty POST413 from the handler. Reviewed body/rate/concurrency config
+matches; no live saturation claim. Deployment is complete. Human consent and a
+genuine signed HTTPS finish remain PENDING, not inferred from fixture/refusal tests.
 Native help wording still describes the older tier (nonblocking BACKLOG item).
 
 ## Patch 802 — the server sends what a client sees through a portal; doors show in noclip
