@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 785 — preserve the recording clock across practice holds (qwprogs, tools)
+
+**Problem:** a held run excludes frozen mover ticks from its timer and client
+sidecar, but the server input trace retained the raw mover clock without recording
+that exclusion. An honest practice pair could therefore be reported as mismatched.
+
+**Change:** additive `holdclock 1` / cumulative `hold` records describe effective
+thaws without changing raw input fields. The angle reader projects later rows onto
+that declared clock. Legacy practice/prefix clocks and other unresolved origins
+remain explicitly unavailable to both angle rules, not clean or guilty. Format
+faults remain faults. No thresholds, ranking policy, native binary or pin changed.
+
+**Verified:** QC build, zero warnings; real dedicated-server hold/release and saved
+recording/sidecar join (short capture, insufficient for a full angle verdict).
+Independent-clock controls retain tight comparison and reject altered sidecars;
+old reader fails the honest held pair. Reader 327 checks, receipt 74, sweep suite:
+zero failed. Same bytes from 602 historical recordings / 383 sidecars: no new
+faulting files; unavailable historical joins are not reclassified clean.
+
 ## Patch 784 — a demo or a profile opens over an open one; no countdown out of spectate or the rewind (csprogs, qwprogs)
 
 **Problem:** Lex: picking a demo while one is playing does nothing, and the same with a
