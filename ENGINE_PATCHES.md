@@ -1,5 +1,57 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 782 — r_budget: where each frame goes, CPU groups, idle and GPU passes, as bars
+
+**Problem:** Lex, 18 Oct: "a low budget way of seeing how the scene is being spent on the GPU and
+the CPU in some sort of visual human graph way ... a text bar graph ... bundle up the info so I can
+see breakdowns of specific parts. display, world calculations, HL2 plugin rendering". `r_speeds 2`
+had about thirty CPU buckets as raw nested microseconds, no GPU timing (`r_speeds 3` puts a glFinish
+in every bucket, a different, serialised frame), and nothing for idle.
+
+**Change (client exe):**
+- `r_budget 1`: one compact panel -- frame ms and fps, CPU busy, GPU busy, idle, a verdict, and two
+  stacked bars on one scale (the CPU's groups then idle; the GPU's passes) with the three biggest
+  of each named. `2` adds a row per group (ms, share, bar), `3` every bucket under its group.
+  `r_budget_window` (0.5 s) averages; `r_budget_dump` prints the table with `#` bars and copies it.
+- CPU groups: server; CSQC; world walk, entities, lightmaps; PrepareFrame (named the HL2 plugin's
+  map vis and props on a Source map); draw calls; shadows; particles; post; HUD and 2D; display
+  (swap, pacing, screen setup); input, network, audio; loading; other host work. Each bucket counts
+  its SELF time: RSpeed_Begin/RSpeed_Finish (render.h macros) keep a depth stack on the main thread,
+  and a bracket hands its whole time to the one it sits in, so portal views inside "opaque",
+  lightmaps inside PrepareFrame and shadow draws count once. r_speeds still reads inclusive times.
+  New buckets: the host frame's whole work, COM_MainThreadWork, input and console, server frames
+  between client frames, PrepareFrame; r_speeds 2 names them. Timing is latched per host frame
+  (`r_speeds_timing`), so a bracket cannot open on one setting and close on another.
+- Four brackets opened and never closed on an early return (classic particles with none alive,
+  brightening with nothing to do, screen setup on loading frames and the editor, the fake-shadow
+  atlas failing); with self times that re-parents everything after them. `r_budget_dump` counts
+  brackets closed with others open inside.
+- GPU: GL_TIMESTAMP queries (ARB_timer_query, GL 3.3+) where the frame moves from one kind of work
+  to the next -- each sort level's world and model lists, pushed passes (3D sky, portals, shadows,
+  RT lights), post, then HUD and 2D -- read four frames later and only once available, so never a
+  stall; at most 192 marks a frame. Stretches where the CPU runs QC or walks the world are
+  "Waiting on the CPU" and are not GPU busy.
+
+**Verified:** on this PC at 1920x1200 and the owner's `r_renderscale 2` unless set. The groups' self
+times sum to the frame: surf_demise 5.56 of 5.56 ms, surf_kitsune 2.81 of 2.80 (r_speeds' inclusive
+"Host frame work" over its own 100 frames: 5.38, 2.87). Brackets left open per dump: 3524 before the
+four closes, 0 after, on both maps. The GPU rows sum to GPU busy (2.51 of 2.52, 1.69 of 1.68).
+Where the GPU is the bottleneck GPU busy matches the frame: `r_renderscale 3` 5.18 against 5.24 ms,
+`4` 8.17 against 8.25, verdict "GPU-bound"; `0.5` drops it to 0.32. `hl2_propdist 1` takes
+"Models & props" from 0.25 to 0.04 ms; `cl_maxfps 60` puts 11.12 of 16.68 ms in idle, verdict
+"headroom". The first cut's overhead, mean fps of three passes at levels 0/1/2/3: 196.8, 200.8,
+193.3, 190.5; the panel times itself in "r_budget / r_speeds" (0.29 ms at level 3, ~300 fps).
+Columns checked on shots at 1:1. Ship exe a7f3dfc4 (one stamp throughout), both installs.
+
+**Known:**
+- "HUD & 2D" on the GPU includes the GPU's idle while the HUD's QC runs; splitting it needs
+  a mark per 2D flush.
+- GPU timing is GL only (3.3+ or ARB_timer_query); D3D and Vulkan say "n/a". Vulkan's submit-thread
+  brackets keep their r_speeds time and stay out of the groups, and three Vulkan-only paths still
+  leave a bracket open (`VK_SCR_GrabBackBuffer`'s early returns, the `r_lightprepass` branch).
+- A map frame that never reaches GLR_RenderView (an opaque menu) is all "Waiting on the CPU".
+- `r_speeds 3`'s glFinish now runs on any GL build, not only Windows.
+
 ## Patch 785 — preserve the recording clock across practice holds (qwprogs, tools)
 
 **Problem:** a held run excludes frozen mover ticks from its timer and client
