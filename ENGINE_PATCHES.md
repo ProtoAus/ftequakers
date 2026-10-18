@@ -1,5 +1,45 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 775 — a fail teleport back into your start box resets the run, from rest (qwprogs)
+
+**Problem:** Lex: the practice tag reset only on `!r`, not on the map's fail teleporter,
+and the race ghost "doesn't notice you fail, and won't playback when you leave the
+startzone of that stage". A map teleport is seen only by the next tick's zone scan:
+- a STAGE run (`!s N`) back in its own box was never re-armed (`SV_TimerTryArm` returned
+  for every non-START box while running), so its clock, practice tag and ghost ran on;
+- a bhop map defers a START re-arm to the next standing jump;
+- the hopped-start tag survives every arm (Patch 445), so a fall into the start kept the
+  next attempt practice until `!r`.
+
+**Change (sv_timer.qc, sv_entities.qc, sv_player.qc):**
+- `SV_TimerMapTeleport` latches each map teleport (trigger_teleport both exits,
+  trigger_teleport_relative, bhop blocks) for the next `SV_TimerFrame`, per packet.
+- A stage run back in its own box re-arms as a START re-entry does: on a teleport, or a
+  walk back off bhop maps -- from outside the whole box (not a seam) and only at a walk's
+  or a jump's speed (`SV_TimerBackInBox`; faster, the run goes on as before). On bhop
+  maps a teleport into the run's own START re-arms instead of waiting for the jump. A
+  stage-1 run stays stage 1, as `!r` keeps it.
+- `!r` is safe because it zeroes the velocity; this keeps it, so a teleport arriving
+  faster than a walk across the ground (carrier included) sets the hopped tag with the
+  finish's rest forgiveness armed (`run_t_finfgv` 2): stop moving and the next start is
+  clean, leave at speed and it is practice ("back in the box at speed"). A teleport that
+  leaves you armed in the box with a tag already up arms the same forgiveness.
+- A packet that also crosses the run's finish does not take the new paths
+  (`run_t_tpfin`). A surf START that is also the END keeps its cancel: three tracks'
+  fall-offs land in both. `run_tpreset 0` restores the old rules.
+
+**Verified:** surf_exxak: the map's own fail trigger re-armed the stage-2 run; a teleport
+into the START cleared hopped 1 -> 0; `run_tpreset 0` kept the run RUNNING practice and
+the tag. bhop_clrs: falls into the floor teleporter re-armed; control kept RUNNING.
+surf_kitsune, a save loaded above the speed-keeping fail floor at 1040 u/s: tagged and
+told, forgiven at 221 u/s once slowed in the box; the round-1 build re-armed it clean.
+agtricks (surf mode locally): the finish teleport still cancels. Four integrity review
+rounds: fixed the kept-speed laundering (bhop maps' free prespeed), the own-box test,
+seams, labels, a held spectator's latch, a finish-by-fall-off on three START+END
+tracks, a never-forgiven tag on surf_polygon b4; round 4 found nothing P775 makes newly
+exploitable (residuals in BACKLOG). Not verified: the race ghost on screen (it follows
+the state stats), real players.
+
 ## Patch 777 — share paint and saves with the player you look at; paint layouts per map
 
 **Problem:** Lex: "an option for sharing paint? or saving layouts for a map? also same
