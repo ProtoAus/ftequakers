@@ -1,5 +1,90 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 802 — the server sends what a client sees through a portal; doors show in noclip
+
+**Problem:** Lex, 19 Oct, on surf_tripportals: walking back and forth at the stage-1 start zone,
+"they show the previous levels deloading incorrectly"; doors "weirdly turn off/on depending on how
+I look at them"; "can noclip not disable portals unless in the void?"
+
+**Change (server exe, csprogs):**
+- The server culled entities from the client's own eye only. From the start zone the hub, seen
+  through the `start2` door that fills the back wall, lost its brush-entity art (signs, neon), and
+  the zone's cluster cannot see the hub's. `SV_Snapshot_SetupPVS` now adds a PVS camera for each
+  SOLID_PORTAL in the PVS built so far, at the door's exit doorway (QC `lpd_ob + lpd_fb*8`, where
+  cl_portal.qc samples the far PVS). The merge lets a door seen through a door qualify, up to
+  SV_PVS_CAMERAS (16). A point with no cluster is skipped: in solid it would fat-PVS every bit
+  and send the whole map. `sv_portalpvs 0` turns it off. The two field caches join
+  SV_FS_ResetFieldCaches.
+- The legacy-client player path passed `&cameras->numents` to EdictInFatPVS as its area list;
+  with two or more cameras that reads pointer halves as areas (Host_Error "area > numareas" on a
+  VBSP map). It passes `cameras->area` now.
+- cl_portal.qc: FS_PortalPredraw no longer refuses every door while the movetype is noclip
+  (noclip and spectating). From the void, `checkpvs` already refuses them: cluster -1's PVS row is
+  empty (VBSP_ClusterPVS).
+- Not changed: `r_portalmaxviews` (2 per view, largest first) is the on/off with view angle. In the
+  tripportals hub 11-17 doors are offered; 2 per view renders 2-4 scenes, 16 with recursion 2
+  renders 10-16, 16 with recursion 1 renders 5-8. The cost on this PC could not be measured fairly
+  (an unfocused rig window is throttled), so the default waits for Lex.
+
+**Verified:** this PC, a local dedicated server and one client at Lex's tripportals save 2. Control
+(C:/FTEQuake server 5dd6583d, live progs): through `start2` the hub has no art and `b5_0` floats as
+a grey box -- Lex's surf_tripportals_001. Ship server (fteqwsv64 35384294, git-7477-patch-802-0-
+g1866f1052): the art is there (his _002); no Host_Error in either log. surf_kitsune in noclip: door
+offers 0 -> 146 lines over the same view, walking 138. One review round with P799's.
+
+**Known:**
+- One level of cameras per snapshot, and the 16-camera cap: a hub with more open doors in view
+  than that sends the far side of the first 16 only.
+- Entities behind a door are sent whether or not the client faces it, as Source sends through its
+  portals.
+
+## Patch 799 — glows hidden where Source hides them; areaportal windows fade
+
+**Problem:** Lex, 19 Oct: surf_jumble's wall-light glows show through its ramps; surf_dragon's
+`window21` func_brush draws as a black disc that Momentum does not show; an env_sprite behind a
+func_illusionary on surf_dragon is hidden where Momentum draws it.
+
+**Change (hl2 plugin, csprogs, qwprogs):**
+- Glare traces ask for what Source's depth query sees. jumble's ramps are non-solid static props
+  over player clips, so no trace had them. The plugin keeps a second, draw-only tree -- static
+  props outside the collision tree and NOHULL displacements, opaque ones only (a vol_light cone
+  must not hide its own lamp) -- built on the first trace whose mask has `VBSP_CONTENTS_VISUAL`
+  (0x400). The world's NativeTrace becomes `VBSP_TraceVisual`, which traces the movement tree with
+  that bit cleared, then the draw-only tree. A mask without the bit is passed through unchanged.
+- Opacity is `passes[0]`'s blend, not `shader->sort`: the plugin's `shader_t` diverges from the
+  engine's past `passes[]`. `shaderpass_t` ends in a D3D11/VK-only pointer, 488 bytes in the plugin
+  and 496 in the engine, so `sort` sits at 8672 against 8800 (measured with both builds' flags).
+  Alpha-tested materials count as see-through (foliage gaps). An all-bits mask (WPhys_CheckWater,
+  solidhere) and a renderer-less server never reach the draw-only tree.
+- cl_sprites.qc: glares trace SOLID|BODY|VISUAL, without WINDOW. VBSP gives translucent brushes
+  TRANSLUCENT|WINDOW (the dragon pane is 0x10000002) and MASK_OPAQUE leaves them out. The mask
+  rides on the passedict: the skipped occluder, or a tracer entity.
+- func_areaportalwindow (276 on 73 maps): the server hides the window's first target
+  (EF_NODRAW, as CFuncAreaPortalWindow::Activate does) and the client draws that brush with Source's
+  `RemapValClamped(eye distance to its box, FadeStartDist, FadeDist, TranslucencyLimit, 1)`.
+  Both sides take the first caseless match, and a non-brush first match draws nothing, as in
+  Source. The hide survives Alpha and Enable inputs (`vbsp_apwhide`; Source's InputAlpha leaves
+  EF_NODRAW alone), runs before the first frame's spawn outputs, and panes are not glare
+  occluders (Source draws them translucent). Windows join the stale-lump signature.
+
+**Verified:** this PC, one client per variant, control = the installs' live exe 8abba595, plugin
+de079afd and progs. jumble: 741 of 819 props in the draw-only tree (78 see-through declined), 86528
+NOHULL displacement triangles. Twelve views placed behind a ramp prop facing a glow: at s1_r4's the
+centre crop goes from mean luma 68.5 to 16.3 and glows drawn from 10 to 5; screenshots show the ramp
+covering them. dragon save 2: 4 of 4 glares hidden -> 3 of 4, the sprite drawn over the pane; save 1
+(115 units from window21, fade start 500): the disc is gone and the pit shows. Rerun on the stamped
+ship build (exe 4b4c91f8, plugin 6a235275). One review round, two lenses: no defect in the engine
+half; the QC half's Alpha-input defect and the risks above are fixed. QC 0 warnings; no warning in
+the changed C.
+
+**Known:**
+- A scaled prop occludes at scale 1, as it collides (bihtransform has no scale); a prop's fade
+  distance is ignored. BackgroundBModel (one map) stays an ordinary server entity, unfaded.
+- Translucent world brushes no longer hide glows, which is Source's rule; a glow behind glass now
+  shows.
+- Any plugin read of a `shader_t` field past `passes[]` would have the same offset fault; none
+  exists today (the plugin reads `flags` and `prog`, both before it).
+
 ## Patch 801 — r_frametime: a frame-time graph with 1% and 0.1% lows and stutter marks
 
 **Problem:** Lex, 19 Oct: "some sort of efficent, low budget frame time/frametime graph we could
