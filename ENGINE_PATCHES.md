@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 778 — demo playback skips and hides failed stage attempts (csprogs)
+
+**Problem:** Lex: "for demo playback, a filter for lines for successful stage completes,
+and an option to show only successful stages in the playback bar, like the remove
+stills". A `.rec` holds each attempt (`stagestart`) and each fail back into the box
+(`restart`, also `!r`), but the viewer read neither, and "stage N only" without a
+stagepost started at the stage's entry, failed attempts included.
+
+**Change (cl_watch.qc, cl_hudedit.qc, tools/onlinecache.py):**
+- `Watch_Scan`'s pass one files, per segment that restarted, a span from its `stage`
+  entry to its last attempt's start (an abandoned run's last segment to the end).
+- The bar marks them (butter) beside the still marks. A "skip fails (N)" chip
+  (`hud_watch_skipfail`, default 0) skips them while playing, landing 0.5 s before the
+  attempt that succeeded; not the stage a window is cut to, not at the cut's end.
+- `hud_watch_path_fails 0` (hud_edit Run lines: "Demo attempts") leaves them off the
+  replay's line, rebuilt on the switch; the run graph follows the line.
+- A stage window starts at the stage's last `stagestart` or `restart`, its own clock, as
+  a stagepost window does, for the replay and the board's line job; the oracle and the
+  p395 arms' pinned windows moved with it.
+
+**Verified:** surf_aesthetic player_r4: one span, 8.415..20.895 s (ticks 561..1393, read
+off the file); clicking the chip skipped 8.430 -> 20.395 (control played to 9.00); the
+hud_edit row rebuilt the line 5156 -> 4324 samples (832 = 12.48 s / 0.015); "stage 2
+only" 1393..2103, was 561..2103. surf_aweles kap_r19: the three predicted spans; its
+stagepost window agrees. The abandon fixture's stage 5 window plays (was a jump to its
+end). `onlinecache.py selftest` PASS, re-pinned from the files (r3 688, r16 1061/3700,
+fixture 1678). One review; its findings fixed. Not verified: Lex's eye on the colours.
+
 ## Patch 776 — surf_view: surfable faces and teleports red, invisible solid faces yellow; ent_view's mouse1 pins and expands, mouse2 copies
 
 **Problem:** Lex, 18 Oct: "Make a command that shows you all surfable surfaces (surfaces at
