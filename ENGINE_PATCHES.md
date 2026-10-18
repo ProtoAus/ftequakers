@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 794 — preserve view validation faults on usable angle clocks (consumer)
+
+**Problem:** a usable angle comparison could mask independent sidecar validation
+faults: the reader rejected malformed content but the receipt still said OK.
+The consumer preserved these faults only when the clock/join was unavailable.
+
+**Change:** propagate every independent view validation fault before comparison
+eligibility/classification. Keep the existing angular-mismatch proof for genuine
+comparisons; valid unresolved pairs remain BLIND. Digest, I/O, signature and reset
+authority paths are unchanged. No native code, pin, Build, threshold, ranking or
+forced historical reread change.
+
+**Verified:** seven parser-acting fault types fail the old receipt grade while
+the good/tight and rotated controls ACT. Real test-key signatures stay valid while
+malformed-view content grades become FAULT through normal, delayed-view and
+delayed-recording sweep API paths. Parent reader 403 / receipt 248 checks and
+sweep suite pass; all three QC programs compile with zero warnings. Current
+same-capture 612-record/383-view parser faults remain 211/224 in both arms. Four
+matched-digest pair API replays change BLIND to FAULT for already-parsed view
+faults, not new angular judgments. Eleven added records and one unavailable prior
+record explain the changed corpus size, not a reader regression. Signature fixtures do not claim real-device/human provenance.
+
 ## Patch 793 — bind initial recording clocks before judging angles (reader)
 
 **Problem:** before the first input row, a cumulative held interval could project
