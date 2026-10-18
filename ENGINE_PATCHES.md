@@ -1,5 +1,94 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 776 — surf_view: surfable faces and teleports red, invisible solid faces yellow; ent_view's mouse1 pins and expands, mouse2 copies
+
+**Problem:** Lex, 18 Oct: "Make a command that shows you all surfable surfaces (surfaces at
+a 45>degree angle) and all teleport triggers in dithered red, and all clip brushes yellow
+(anything invisable and would block the player). sort of like ent_view, but without the
+info, just visuals", and "enhance ent_view Make mouse1 expand and tell you more and mouse2
+copy to clipboard when in ent_view mode."
+
+**Change (client exe):** `surf_view [0|1]` toggles a depth-tested dither overlay built from
+COLLISION, not from what is drawn (an invisible ramp has no surface; a drawn one can be
+non-solid).
+- Red: a player-solid face with normal z in [0.1, standable) (0.7), the mover's ramp band
+  (pm_source.c, Patch 131: below 0.1 a face is a wall); displacement triangles in that band
+  on either side (BIH_ClipToTriangle collides them as a 4-unit slab); and every
+  `trigger_*teleport*` in the lump, its brushes posed by its origin/angles keys as ent_view
+  poses them, whatever their slope.
+- Yellow: a player-solid face with SURF_NODRAW (0x80 in Q2, Q3 and Source) that is not sky
+  (0x4, Source's 2D sky 0x2), or any face of a PLAYERCLIP-only brush.
+- Sources: the world BIH through the new BIH_EnumCollision (brushes, displacement triangles,
+  Patch 764's prop hull pieces; a prop without them is counted and skipped), cut once per map;
+  solid brush entities from the packet entities the prediction collides with (ES_SOLID_BSP),
+  cut once per model and posed per frame.
+- Its own two-sided shader `ftesurf_surfview` on r_showbrushes' dither program, with
+  polygonoffset. `surf_view_dist` 8192, `surf_view_fill` 0.25.
+- It culls on its own view cone. R_CullSphere's frustum at this call site is whichever view
+  rendered last: on surf_boreas (3D sky) it culled 85992 of 86076 faces.
+
+**Change (csprogs):** while ent_view's passive overlay is up, Ev_PassiveMouse takes MOUSE1 and
+MOUSE2 in CL_InputChain ahead of Keys_Edge.
+- Mouse1 pins the crosshair's entity (or, aiming at open space, the volume you stand in). The
+  card stays when you look away and lists the server's ent_info answer, caught off
+  CSQC_Parse_Print for 3 s, then every key. Mouse1 again, or on nothing, closes it.
+- Mouse2 copies the pinned or hovered entity as lump text, the server's lines as `//`.
+- A reply is kept only if it is the pinned row's: same classname, same `*N` when the server
+  still has one (triggers are stripped to `-`), and on its second line the same targetname
+  and target, compared case-blind (SV_RepairTargetCase rewrites 1,168 teleport targets).
+- The hover card's footer reads "mouse1 more | mouse2 copy | ESC off".
+
+**Verified:**
+- surf_view, conbridge from each map's start zone at four yaws. Counts (surfable / invisible
+  solid / teleports in faces, cut time): surf_boreas 42497 / 1059 / 21 in 359, 12 ms;
+  surf_monolith 3877 / 7838 / 447 in 3560, 31 ms; surf_kitsune 3351 / 13316 / 44 in 300,
+  20 ms; surf_board_this 3986 / 10336 / 115 in 1862, 33 ms.
+- By eye, on/off pairs: monolith's sloped triangle face turns red, its stage doorways (the
+  teleports) fill, and a clip column in the spawn ceiling shows yellow; board_this's bonus
+  pads carry red teleport columns. A colour count could not grade it: the scene has its own
+  reds and yellows, and the downsampled render turns the 4/16 stipple into an exact 25% blend.
+- Cost, surf_boreas uncapped, final build (second of on/off/on/off): range 8192, 295.5 fps on
+  and 270.0 off, i.e. inside this machine's ~10% run-to-run noise; whole map, 235.7 vs 347.3
+  (about 1.4 ms). The first cut re-cut the brush entities every frame and cost 0.9 ms at 8192
+  (257.9 vs 330.8).
+- ent_view: ftesurf/cfg/test/p776ev.cfg in a runlines_smoke overlay on surf_tensor2, through
+  `vote key`: off took 0; mouse1 took 1, printed the summary and keys, the reply arrived and the
+  card showed it; looking away kept it; mouse2 copied with "and the server's answer"; mouse1
+  unpinned; off took 0. The Windows clipboard held the 11 keys and 3 server lines.
+  The same cfg on release 0.1.26's exe (104dd762, what lobby players run): identical.
+- Reply attribution, ftesurf/cfg/test/p776ev2.cfg (pins `trigger_multiple *109` in the
+  frame another request goes out, so its own request falls in the 0.25 s cooldown): the
+  control filed `*36`'s reply (class differs) and another trigger_multiple's (same class)
+  under `*109`; the fix rejects both and keeps `*109`'s own. p776ev3.cfg, surf_kitsune's
+  `*1` (lump target "Red", server "red"): the control copied "and its 10 keys" (its own reply
+  thrown away), the fix "and the server's answer".
+- Review: three rounds, one reviewer each. Round 1: the cone read a zeroed fov (always 86
+  degrees), brush entities drawn at the packet pose not the interpolated one, 0x2 is Q2/Q3
+  slick, and a pinned card took the first reply after the pin, whoever's it was. Round 2:
+  the cone's fallback used the console size, not the pixel aspect; a lerp slot from an
+  older frame; the spectating footer. My first attribution fix also rejected a trigger's
+  own reply (the server strips trigger models), found by p776ev2 case 3. Round 3: target
+  case rewritten by the server; the spectating footer named a command that reports the
+  hovered entity. All fixed and re-measured; round 3's two fixes (a case-blind compare and
+  a footer string) were measured, not reviewed again.
+- 0 new compiler warnings; csprogs 0 warnings. Ship exe bf1a9aac (git-7428-patch-776-0-gbd2e03757), same 20
+  DLL imports as the installed one.
+
+**Known:**
+- Depth-tested, so only what you can see is marked: a teleport buried in a wall shows nothing.
+- From outside the playable map (above the sky), faces of the 3D sky room and of areas behind
+  walls float in the sky. Inside the map, walls and the sky's depth hide them.
+- A static prop with no hull pieces (traced as its model) is not drawn; the count is printed.
+- A face steeper than 84 degrees counts as a wall, not a ramp.
+- A teleport parented to a mover is drawn where the lump puts it.
+- With ent_view on, mouse1 and mouse2 do not duck or jump; spectate keeps them.
+- ent_info answers the smallest box of the class that holds the asked point, so a large
+  trigger whose centre lies in a smaller one of its class gets the small one's answer (as
+  ent_here always has). Two same-class entities with no model, targetname or target pinned
+  within one round trip cannot be told apart. BACKLOG.
+- On a mover below version 7 a prop collides as its mesh but the overlay shows its hull
+  pieces. Q3 patches and triangle soups are not drawn.
+
 ## Patch 773 — paint sprays while a key is held; random colour; body/belt presets set what you picked
 
 **Problem:** Lex: "holding down the key should spray repeatedly", spray speed in
