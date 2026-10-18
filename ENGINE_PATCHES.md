@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 798 — hud_edit: a Display Info row, Input display, Boarding and Enter/Exit speeds (csprogs)
+
+**Problem:** Lex: replace the Key hints row with "Display Info" holding the Map info
+and Key hints switches, the chips at the bottom of the HUD Layout window, chat and
+Spectate's "Who's watching"; remove the Spectate row (distance stays a console
+setting); rename Mouse "Input display" with switches for the keys and the mouse;
+rename Boarding "Enter/Exit speeds" and Board "Boarding".
+
+**Change:** cl_hudedit.qc only. A new options-only `display` row: Map info, Map time
+left (the hidden Map info row's pane, unreachable since build 66), Key hints, Chat
+(`hud_chat`), Who's watching, then the old fixed chips as cycles in their old order
+(Crosshair 1/2/3/off, Text plain/outline/shadow, Number rate tick/10/20/30 Hz/frame,
+Number step 1/2/5/off). The fixed block is `reset all` (full width) and `done`
+(HE_FIXEDROWS 5 -> 3). Key hints is a hidden row (still drawn, dragged and reset).
+The Spectate row is gone; `reset all` still resets `spec_dist`, and writes
+`hud_chat 1` as a literal because default.cfg never sets it. The `mouse` row is
+listed as Input display: Keys and Mouse rows lead its pane, its square switches
+both, its reset also puts the key block back; its outline is still labelled Mouse.
+Harness hovers of the removed chip ids (ui_modern.cfg, ui_gallery.py,
+test_p676zonetips.py) open the Display Info pane and hover its rows instead.
+
+Review fix: HE_Default had no `keyhint` line since Patch 762, so no reset moved the
+strip; it now resets to 0.0333 / 0.955.
+
+**Verified:** FTESurf 4cb8ba62. build.ps1 0 warnings. `cfg/test/p798hud.cfg` in an
+isolated test_ui_modern rig: the element dump shows the Display Info row and its nine
+chips and none of the removed ids; each click reads back its cvar (chat, crosshair,
+Input display square both ways, Keys alone, Input display reset); `reset all` restores
+hud_chat, spec_dist and the key-hint x (0.5 stays on the pre-fix build). Both panes
+read at 1:1. test_ui_modern.py fails the same 3 round/SUI-frame checks on the
+pre-patch build as on this one (BACKLOG); its selection check now discriminates. One
+independent review. Not yet seen by Lex.
+
 ## Patch 800 — r_budget_csqc: CSQC by QC source file and function; the panel's own time
 
 **Problem:** Lex, 19 Oct, on r_budget: "can we also get a indication of how much the display is
