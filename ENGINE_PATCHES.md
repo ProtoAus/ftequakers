@@ -1,5 +1,73 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 780 — Source map visuals: leaf-ambient index wrap and blend, model light point, Wireframe, missing-checker grid
+
+Developed as P774 and renumbered: a private branch (ac-delivery-20261019) holds a local
+`patch-774` tag for different work.
+
+**Problems** (the owner's saves, 18 Oct): surf_me's pillar props drawn orange, black and
+lavender side by side, where Momentum draws one sandstone colour (the owner's Momentum
+screenshots); surf_not_so_sinister's ramp model far darker than the brush ramps; surf_666's
+spawn a purple checker room; the missing-texture checker "blown up" on big textures.
+surf_devil's ramps (one too yellow, one too dark) are only partly fixed.
+
+**Causes and fixes** (all in the hl2 plugin unless named):
+- **Leaf ambient index wrap.** `dleafambientindex_t::firstAmbientSample` is an unsigned
+  short and VRAD stores the running sample count in it (`leaf_ambient_lighting.cpp:672`),
+  so past 65535 samples every later leaf read another leaf's cubes. `VBSP_LoadLeafLight`
+  rebuilds the start from the running total on a lump that can wrap (over 65536 points)
+  and whose counts sum to its size, and drops a range past the lump's end (read
+  unchecked before). Library, 1926 maps: 457 lumps (309 LDR, 148 HDR) wrap, 1,575,459
+  leaves rebuilt, none disagreeing, none out of range. surf_me 3308 of 7893 lit leaves,
+  surf_devil 8580 of 13982, surf_666 6446 of 11505. This is the pillars.
+- **Leaf ambient blend.** The cube at a point is the inverse-square-distance average of
+  the leaf's samples, 1/(d²+1) in world units: VRAD's `Mod_LeafAmbientColorAtPos`, which
+  its `CompressAmbientSampleList` drops samples against. It was the nearest sample.
+  `hl2_lt_blend 0` restores that, live.
+- **Model light point.** A static prop with no usable lighting origin is lit from the
+  model's `$illumposition` through its transform (Source's `R_ComputeLightingOrigin`;
+  studiomdl defaults it to the hull centre), not from its origin. ramp10's origin is its
+  bottom corner, its illumposition 1000 units up the ramp. `hl2_lt_illumpos 0` restores
+  the origin, live. `galiasinfo_t` gains append-only `hasillum`/`illumposition`.
+- **Wireframe.** The `Wireframe` class and `$wireframe` draw as UnlitGeneric under `$color`
+  with a new material keyword `fte_wireframe` (gl_shader.c, `shader_s::wireframe`); the
+  GL backend submits that material's triangles as lines (`BE_SubmitMeshChain`), outside
+  the r_wireframe/gl_outline passes, with the current polygon offset. Source applies
+  `$wireframe` as line mode in every shader (`BaseShader.cpp:197`). surf_666's spawn is
+  `dev_nyro/blends/wire_white` on 8 displacements; about 30 maps draw such materials
+  (surf_fortum/jaqen2/zae ramp layers and surf_polygon among them).
+- **Missing-checker grid.** A world face whose diffuse image will not load draws the
+  checker at `hl2_missinggrid` world units a square (32), texinfo axes normalised and the
+  offset dropped. Decided per texture at material registration by the image's own file
+  (two spellings), else one synchronous probe load through the real image search. Not
+  the material census: surf_me's walls resolve their VMT and miss the image without the
+  TF2 pack, and surf_joutsenlaulu's unresolved `ceiling/tar` still draws by name. Water,
+  refract/reflect/portal shaders and two-layer materials are never rescaled.
+
+**Verified** (subject basedir with the owner's mapdeps.txt and pack cache, the owner's
+saves, installed P772 build against the stamped P780 build):
+- surf_me: the colonnade pillars' solved lit ends go from 87/21/1 .. 202/165/207 to
+  137/109/127 .. 195/157/187, one colour family, as Momentum draws them.
+- surf_not_so_sinister ramp10: lit end 28.9/24.9/14.5 → 105.5/90.0/68.6.
+- surf_666: the spawn draws a grey wire grid over black.
+- Checker: without the TF2 pack surf_me's walls draw 32-unit squares; with it, nothing
+  on surf_me or surf_devil is marked.
+- Library change (all static props, old pick against P780): of 106,979 props lit from the
+  leaf cube, 21,502 move by 12+ sRGB levels and 6,238 by 32+. The largest are the wrap
+  correcting (bhop_treason_speedrun's underground trusses 255 → ~30, unmoved).
+- Build: 77 compiler warnings, the same set as P771's final.
+- Reviews: round 1 (correctness; consequences) and round 2 (the fix delta), no crash or
+  memory bug. Round 1 found the grid rescaling water ripples in hl2_water 1/2 and a
+  WVT second layer, the A/B switches not live, and decal lines without offset; round 2
+  the rebuild needing a whole-lump check (ab_baume shares one sample) and the owned
+  polygon-mode flag needing save/restore. All fixed.
+
+**Open:** surf_devil's ramps. ramp09's warm look is three local lights near its centre
+applied to a 3264-unit model; the curved ramp's centre sees none of the lights its surface
+would. Per-vertex local light for props (HL2_MODEL_LIGHTING.md §2) is the fix. v25
+(Strata) maps' 8-byte leaf-ambient index is not read at all (VBSP_LoadLeafLight returns
+at its size check), so those maps' props get no leaf ambient.
+
 ## Patch 776 — surf_view: surfable faces and teleports red, invisible solid faces yellow; ent_view's mouse1 pins and expands, mouse2 copies
 
 **Problem:** Lex, 18 Oct: "Make a command that shows you all surfable surfaces (surfaces at
