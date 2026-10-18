@@ -1,5 +1,95 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 777 — share paint and saves with the player you look at; paint layouts per map
+
+**Problem:** Lex: "an option for sharing paint? or saving layouts for a map? also same
+for save-locks ... look at someone in game, and hit a share button to share paint (both
+see each other's paint) or send them a save-lock or send them the paint of the whole
+level you've saved! people use it to know where to board and where to leave on ramps."
+Paint (P772/P773) was client-only: a disc was a decal handle and nothing else, so it
+could be neither saved nor sent.
+
+**Change (csprogs):**
+- `cl_paint.qc`: every disc keeps what it was placed with (origin, normal, colour, size,
+  alpha, who sent it). `paint_save [name]` / `paint_load [name]` write and read
+  `data/paint/<map>[.name].txt`, a line a disc, read 400 lines a frame. `paint_autoload`
+  (1) loads the map's layout 3 s after the map. A disc whose face is not here yet (a
+  brush entity outside the packet the clip reads) waits and is retried, 64 a second,
+  within 4096u of the camera.
+- `cl_share.qc` (new): `share` (default F) picks the player nearest the crosshair
+  (lobby body, else the engine entity; ~3.5 degrees or a body's width; not behind a
+  wall) and opens a card: 1 paint together, 2 send my paint (the saved layout, else what
+  is up), 3 send my selected save. The receiver answers F3 / F4 or `share yes|no`.
+  Live paint goes out at up to 60 discs a second; a stream is paced to the receiver's
+  ping (about 26 discs a round trip). A layout you take becomes yours. Received discs
+  arrive in `CSQC_Parse_Event`.
+- hud_player PAINT: Save layout, Load (count), Auto-load. Key panel: "Share (look at a
+  player)", F.
+
+**Change (qwprogs):**
+- `sv_share.qc` (new): `cmd share offer|answer|ack|stop|status`. An offer stands 20 s and
+  carries an id the answer must echo; one pending per receiver; two seconds between a
+  player's offers; after a no or no answer, that sender waits 60 s for that receiver. Live
+  links are pairwise and both ways.
+- Discs arrive as sendevent ("pd" live, "pl" streamed, "ple" a stream's end), are
+  range-checked and held to 300 a second per sender, and are re-encoded by the server into
+  one SVC_CGAMEPACKET to the one client (`MULTICAST_ONE_R_NOSPECS`). A stream is accepted
+  only from a linked pair or for the layout offer the receiver said yes to (its id rides
+  in the target), up to the count they were shown. The stuffcmds carry numbers only.
+- Both reliable channels are windowed on acknowledgement: a client keeps at most 20
+  events the server has not confirmed (`SH_EV_GOT`), and the server keeps at most 300
+  discs a receiver has not acknowledged (`cmd share ack`), dropping past that, counted.
+  A client's reliable buffer holds about one 1440-byte packet a round trip and is cleared
+  past that; a server drops a client whose backlog passes 16 x 1200 bytes. Link changes
+  are events in order with the discs.
+- A sent save is the replay-point row `sl_saveview` already makes
+  (`SV_SaveLocCreateAt(..., view)`): idle timer, no run, speed under `rwvel`. It is the
+  sender's selected row, read when the offer is made, and lands in the receiver's list
+  only on their yes. `SV_SaveLocCreateAt` names the sender in its line.
+- `share_offers 0` declines every offer unseen.
+
+**Verified:** tools/p777share.py: a dedicated server and two clients (Alice, Bob), each
+with its own basedir, lobby bodies streamed, surf_dune; keys posted to each window. 23 of 23:
+- Bob looking at Alice, `share` opens the card on her (looking 90 degrees away: no card);
+  1 sends the offer, F3 links both ways.
+- Live: 21 discs Alice sprayed, 21 at Bob; 21 the other way; relay dropped 0.
+- A 42-disc layout arrives whole, and Bob's `paint_save` file equals Alice's disc for disc
+  (origin to 0.01u, normal, colour, size, alpha). 1542 discs arrive whole in 7.1 s.
+- `paint_load` restores a saved layout.
+- A sent save: Bob's list gains the row ("share: save 1 (slot 001) from Alice").
+- F4 reaches Alice as "said no"; an unanswered offer runs out after 20 s and Bob's card
+  goes; `share_offers 0` declines unseen; `share stop` ends the link and nothing crosses.
+- Review round 1 (two reviewers: protocol and control flow; abuse and saves) found the
+  stream unpaced against the reliable channel (a sender's buffer overflows above ~120 ms;
+  a receiver's server backlog fills and the engine drops them; an end marker had no
+  rate), a layout permission with one target that never ended, answers not tied to
+  offers, a re-link duplicating discs, `<map>_<name>` file names colliding with real
+  maps, and a sent save answering the receiver's last save ticket. It confirmed the sent
+  save carries nothing of the sender's run and gives nothing `sl_saveview` does not.
+  Fixed (`5a8c405`): pacing to both round trips, a per-receiver byte budget on the
+  server, per-pair layout permission bounded by the count shown, offer ids, a 10 s wait
+  after a no, layouts taken become yours, `<map>.<name>.txt`.
+- tools/p777lag.py, 1500 discs with `cl_delay_packets 300` on both clients: the first
+  build overflowed 7 times and delivered 89 while saying "sent you 1500 marks".
+- Review round 2 (one reviewer, integrity) found the round-1 budgets refilled with time,
+  not acknowledgement: tools/p777lag.py `--freeze 8` (Bob suspended mid-stream) got Bob
+  dropped on the round-1 build (MAX_BACK_BUFFERS, "Server connection timed out"). Also a
+  link stuffcmd running after the discs behind it, end markers not tied to their stream,
+  and a cooldown two senders could take turns past. Fixed (`03194e7e`): acknowledgement
+  windows, links as ordered events, stream ids, 60 s per-pair cooldowns. Re-measured on
+  this build: tools/p777share.py 25 of 25 (a re-link brings the partner's 5 discs once);
+  three runs of 1500 discs at `cl_delay_packets 300`, each 1500 of 1500 with no overflow,
+  about 47 s; `--freeze 8`, Bob stays connected and is told "sent you 1500 marks, 901
+  arrived". An earlier cut of the windows overflowed and crawled because its stall timer
+  started at 0; fixed before these runs.
+- 0 warnings.
+- Not verified: on the Pi's lobbies, waiting discs on a brush-entity ramp, a save sent
+  while the receiver's timer runs.
+
+**Known:** received discs share the ring with your own; a sent save carries no
+map-progress name; a layout is keyed by map name, not build; a new link drops the live
+paint of whoever held that slot before; see BACKLOG.
+
 ## Patch 780 — Source map visuals: leaf-ambient index wrap and blend, model light point, Wireframe, missing-checker grid
 
 Developed as P774 and renumbered: a private branch (ac-delivery-20261019) holds a local
