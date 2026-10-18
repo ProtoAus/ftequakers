@@ -4118,6 +4118,7 @@ static struct
 	vecV_t *lverts;
 	size_t numlverts, maxlverts;
 	unsigned int count[3], teleports, props, propsnohull;
+	unsigned int skybits;	//the texinfo flags that mean sky on this map's format
 	double buildms;
 	qboolean reported;
 } surfview;
@@ -4273,9 +4274,9 @@ static void SurfView_Brush (void *ctx, const q2cbrush_t *brush)
 		n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
 		if (n < 3)
 			continue;	//a supporting bevel has no face of its own
-		//SURF_NODRAW is 0x80 and sky 0x4 (and Source's 2D sky 0x2) in Q2, Q3 and Source alike
+		//SURF_NODRAW is 0x80 and sky 0x4 in Q2, Q3 and Source; 0x2 is Source's 2D sky but Q2/Q3's slick
 		sflags = brush->brushside[i].surface ? brush->brushside[i].surface->c.flags : 0;
-		SurfView_Face(c, verts, (int)n, planes[i], cliponly || ((sflags & 0x80) && !(sflags & 0x06)));
+		SurfView_Face(c, verts, (int)n, planes[i], cliponly || ((sflags & 0x80) && !(sflags & surfview.skybits)));
 	}
 }
 
@@ -4361,6 +4362,7 @@ static void SurfView_Build (void)
 	memset(surfview.count, 0, sizeof(surfview.count));
 	surfview.teleports = 0;
 	surfview.reported = false;
+	surfview.skybits = (cl.worldmodel->fromgame == fg_quake2 || cl.worldmodel->fromgame == fg_quake3) ? 0x04 : 0x06;
 
 	memset(&c, 0, sizeof(c));
 	memset(&en, 0, sizeof(en));
@@ -4429,6 +4431,7 @@ void CLQ1_AddSurfView (void)
 	entity_state_t *state;
 	model_t *mod;
 	vecV_t placed[64];
+	vec_t *org, *ang;
 	vec3_t rgb, mid, fwd, right, up, rel, nrm;
 	float dist, coverage, cone, conecos, conesin, along, d, lim;
 	size_t i, j, k;
@@ -4465,9 +4468,18 @@ void CLQ1_AddSurfView (void)
 
 	/*The view cone through the screen's corners, not R_CullSphere: by now r_refdef.frustum
 	  is whichever view rendered last, and on a map with a 3D sky or a portal that is not this
-	  one (measured: 85992 of 86076 faces culled looking over surf_boreas).*/
+	  one (measured: 85992 of 86076 faces culled looking over surf_boreas).  CSQC's clearscene
+	  zeroes fov_x/fov_y until renderscene, so they are rebuilt from scr_fov: applied to the
+	  screen's MINOR axis, which bounds every scr_fov_mode from above.*/
 	AngleVectors(r_refdef.viewangles, fwd, right, up);
-	cone = atan(sqrt(pow(tan(r_refdef.fov_x*(M_PI/360)), 2) + pow(tan(r_refdef.fov_y*(M_PI/360)), 2)));
+	if (r_refdef.fov_x > 0 && r_refdef.fov_y > 0)
+		cone = atan(sqrt(pow(tan(r_refdef.fov_x*(M_PI/360)), 2) + pow(tan(r_refdef.fov_y*(M_PI/360)), 2)));
+	else
+	{
+		float w = max(vid.width, 1), h = max(vid.height, 1);
+		float ratio = (w > h) ? w/h : h/w;
+		cone = atan(tan(bound(1, scr_fov.value, 170)*(M_PI/360)) * sqrt(1 + ratio*ratio));
+	}
 	if (!(cone > 0) || cone > 1.5)
 		cone = 1.5;
 	conecos = cos(cone);
@@ -4500,14 +4512,25 @@ void CLQ1_AddSurfView (void)
 		mod = cl.model_precache[state->modelindex];
 		if (!mod || mod == cl.worldmodel || mod->type != mod_brush || mod->loadstate != MLS_LOADED || !mod->cnodes)
 			continue;
+		//the interpolated pose the renderer draws, so a moving door's fill stays on it
+		if (state->number < cl.maxlerpents)
+		{
+			org = cl.lerpents[state->number].origin;
+			ang = cl.lerpents[state->number].angles;
+		}
+		else
+		{
+			org = state->origin;
+			ang = state->angles;
+		}
 		VectorAdd(mod->mins, mod->maxs, mid);
-		VectorMA(state->origin, 0.5, mid, mid);
+		VectorMA(org, 0.5, mid, mid);
 		VectorSubtract(mid, r_refdef.vieworg, rel);
 		if (VectorLength(rel) - mod->radius > dist)
 			continue;
 		m = SurfView_Model(mod);
 		memset(&c, 0, sizeof(c));
-		SurfView_Pose(&c, state->origin, state->angles);
+		SurfView_Pose(&c, org, ang);
 		for (j = 0; j < m->numfaces; j++)
 		{
 			l = &surfview.local[m->firstface + j];
