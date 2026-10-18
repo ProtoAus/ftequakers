@@ -142,6 +142,7 @@ qboolean GLSCR_UpdateScreen (void)
 	shader_reload_why = "SCR_UpdateScreen (per frame)";
 	Shader_DoReload();
 
+	GLBudget_FrameBegin();	//FTESurf Patch 782: past the early returns; ended just before the swap
 	qglDisable(GL_SCISSOR_TEST);
 
 #ifdef TEXTEDITOR
@@ -340,6 +341,7 @@ qboolean GLSCR_UpdateScreen (void)
 		Sys_FramePacePresent();	//sys_framepacing 4: hold the now-complete flip to the present grid (no-op in other modes)
 		RSpeedEnd(RSPEED_SCR_PACING);
 #endif
+		GLBudget_FrameEnd();	//FTESurf Patch 782: before the swap, so waiting on vsync is not counted as GPU work
 		RSpeedRemark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);

@@ -922,10 +922,37 @@ enum {
 	RSPEED_SUBMIT,
 	RSPEED_PRESENT,
 	RSPEED_ACQUIRE,
+	//FTESurf Patch 782 (r_budget): the host frame's own work from its top to its end, the pieces of
+	//it that were in no bucket, the server frames run on the between-frames path, and the world
+	//model's PrepareFrame (for a Source map: the hl2 plugin's vis and static props).
+	RSPEED_HOSTWORK,
+	RSPEED_MAINTHREAD,
+	RSPEED_INPUT,
+	RSPEED_SERVERIDLE,
+	RSPEED_WORLDPREPARE,
 
 	RSPEED_MAX
 };
 extern int rspeeds[RSPEED_MAX];
+
+//FTESurf Patch 782: what r_budget's GPU half is split into, by GL timestamp queries.
+enum {
+	GPUB_OTHER,			//clears, view setup, uploads: anything not in a pass below
+	GPUB_WORLD,
+	GPUB_MODELS,
+	GPUB_SKY,
+	GPUB_SKYROOM,		//the 3D sky's own view
+	GPUB_PORTALS,		//nested views: portals, mirrors, reflections
+	GPUB_SHADOWS,
+	GPUB_LIGHTS,
+	GPUB_TRANSPARENT,
+	GPUB_POSTPROC,
+	GPUB_2D,			//the HUD, menus and console, after the 3D view's post-processing
+	GPUB_MAX
+};
+//sums of finished frames since the last call, in milliseconds; returns how many frames (0: none, or no timer queries)
+int R_BudgetGPUCollect(double ms[GPUB_MAX], double *total);
+extern int r_speeds_timing;	//Patch 782: r_speeds >= 2 or r_budget, latched once per host frame
 
 enum {
 	RQUANT_MSECS,	//old r_speeds
@@ -960,13 +987,14 @@ extern int rquant[RQUANT_MAX];
 #define RSpeedEnd(spt)
 #else
 #define RSpeedLocals() double rsp
-#define RSpeedMark() double rsp = (r_speeds.ival>1)?Sys_DoubleTime()*1000000:0
-#define RSpeedRemark() rsp = (r_speeds.ival>1)?Sys_DoubleTime()*1000000:0
+//Patch 782: the latched r_speeds_timing, not the cvar, so a bracket cannot open on one setting and close on another
+#define RSpeedMark() double rsp = r_speeds_timing?Sys_DoubleTime()*1000000:0
+#define RSpeedRemark() rsp = r_speeds_timing?Sys_DoubleTime()*1000000:0
 
 #if defined(_WIN32) && defined(GLQUAKE)
 extern void (_stdcall *qglFinish) (void);
-#define RSpeedEnd(spt) do {if(r_speeds.ival > 1){if(r_speeds.ival > 2 && qglFinish)qglFinish(); rspeeds[spt] += (double)(Sys_DoubleTime()*1000000) - rsp;}}while (0)
+#define RSpeedEnd(spt) do {if(r_speeds_timing){if(r_speeds.ival > 2 && qglFinish)qglFinish(); rspeeds[spt] += (double)(Sys_DoubleTime()*1000000) - rsp;}}while (0)
 #else
-#define RSpeedEnd(spt) rspeeds[spt] += (r_speeds.ival>1)?Sys_DoubleTime()*1000000 - rsp:0
+#define RSpeedEnd(spt) rspeeds[spt] += r_speeds_timing?Sys_DoubleTime()*1000000 - rsp:0
 #endif
 #endif

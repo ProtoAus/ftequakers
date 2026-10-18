@@ -7841,15 +7841,164 @@ static void GLBE_SubmitBlendedWorld(batch_t *world)
 	BZ_Free(faces);
 }
 
+/*
+FTESurf Patch 782 -- r_budget's GPU half.  A GL_TIMESTAMP query wherever the frame moves from one
+kind of work to the next; the time between two marks belongs to the category the first one opened.
+A frame's marks are read back GLB_FRAMES frames later, and only once its last one is available, so
+reading never stalls the pipeline (a frame still in flight by then is dropped, and counted).
+*/
+#define GLB_FRAMES	4
+#define GLB_MARKS	192
+static struct
+{
+	qboolean made;
+	GLuint q[GLB_FRAMES][GLB_MARKS];
+	unsigned char cat[GLB_FRAMES][GLB_MARKS];
+	int nmarks[GLB_FRAMES];
+	qboolean pending[GLB_FRAMES];
+	unsigned int frame;
+	int slot;		//the frame being recorded, -1 when not recording
+	int cur;		//its current category
+	int depth;		//inside a pushed pass or view: its own marks are ignored
+	double sum[GPUB_MAX], total;
+	int frames, dropped;
+} glb = {false, {{0}}, {{0}}, {0}, {0}, 0, -1};
+
+static void GLBudget_Mark(int cat)
+{
+	int s = glb.slot;
+	if (glb.nmarks[s] >= GLB_MARKS-1)
+		return;	//one is kept for the end mark; the rest of the frame stays in the current category
+	qglQueryCounter(glb.q[s][glb.nmarks[s]], GL_TIMESTAMP);
+	glb.cat[s][glb.nmarks[s]++] = cat;
+	glb.cur = cat;
+}
+
+static void GLBudget_Read(int s)
+{
+	GLuint avail = 0;
+	unsigned long long t, prev, first;
+	int i, n = glb.nmarks[s];
+
+	glb.pending[s] = false;
+	if (n < 2)
+		return;
+	qglGetQueryObjectuivARB(glb.q[s][n-1], GL_QUERY_RESULT_AVAILABLE_ARB, &avail);
+	if (!avail)
+	{
+		glb.dropped++;
+		return;
+	}
+	qglGetQueryObjectui64v(glb.q[s][0], GL_QUERY_RESULT_ARB, &first);
+	prev = first;
+	for (i = 1; i < n; i++)
+	{
+		qglGetQueryObjectui64v(glb.q[s][i], GL_QUERY_RESULT_ARB, &t);
+		if (t > prev)
+			glb.sum[glb.cat[s][i-1]] += (t - prev) / 1000000.0;	//ns to ms
+		prev = t;
+	}
+	if (prev > first)
+		glb.total += (prev - first) / 1000000.0;
+	glb.frames++;
+}
+
+void GLBudget_FrameBegin(void)
+{
+	extern cvar_t r_budget;
+	int s;
+
+	glb.slot = -1;
+	glb.depth = 0;
+	if (!r_budget.ival || !qglQueryCounter || !qglGetQueryObjectui64v || !qglGetQueryObjectuivARB || !qglGenQueriesARB)
+		return;
+	if (!glb.made)
+	{
+		qglGenQueriesARB(GLB_FRAMES*GLB_MARKS, &glb.q[0][0]);
+		memset(glb.pending, 0, sizeof(glb.pending));
+		glb.made = true;
+	}
+	s = glb.frame++ % GLB_FRAMES;
+	if (glb.pending[s])
+		GLBudget_Read(s);
+	glb.nmarks[s] = 0;
+	glb.slot = s;
+	GLBudget_Mark(GPUB_OTHER);
+}
+void GLBudget_FrameEnd(void)
+{
+	int s = glb.slot;
+	if (s < 0)
+		return;
+	qglQueryCounter(glb.q[s][glb.nmarks[s]], GL_TIMESTAMP);	//always room: Mark keeps it free
+	glb.cat[s][glb.nmarks[s]++] = GPUB_OTHER;
+	glb.pending[s] = true;
+	glb.slot = -1;
+}
+void GLBudget_Set(int cat)
+{
+	if (glb.slot < 0 || glb.depth)
+		return;
+	if (r_refdef.recurse)
+		cat = GPUB_PORTALS;	//a nested view (portal, mirror, reflection) is one item, whatever it draws
+	if (cat != glb.cur)
+		GLBudget_Mark(cat);
+}
+int GLBudget_Push(int cat)
+{
+	int prev = glb.cur;
+	if (glb.slot < 0)
+		return prev;
+	if (!glb.depth && cat != glb.cur)
+		GLBudget_Mark(cat);
+	glb.depth++;
+	return prev;
+}
+void GLBudget_Pop(int prev)
+{
+	if (glb.slot < 0 || !glb.depth)
+		return;
+	if (!--glb.depth && prev != glb.cur)
+		GLBudget_Mark(prev);
+}
+void GLBudget_Reset(void)
+{	//the context and its query objects are gone; a new one makes its own
+	memset(&glb, 0, sizeof(glb));
+	glb.slot = -1;
+}
+int R_BudgetGPUCollect(double ms[GPUB_MAX], double *total)
+{
+	int i, n = glb.frames;
+	for (i = 0; i < GPUB_MAX; i++)
+	{
+		ms[i] = glb.sum[i];
+		glb.sum[i] = 0;
+	}
+	*total = glb.total;
+	glb.total = 0;
+	glb.frames = 0;
+	return n;
+}
+//which category a sort level's world (or model) batches are
+static int GLBudget_SortCat(int sort, qboolean world)
+{
+	if (sort == SHADER_SORT_SKY)
+		return GPUB_SKY;
+	if (sort > SHADER_SORT_SEETHROUGH)
+		return GPUB_TRANSPARENT;
+	return world ? GPUB_WORLD : GPUB_MODELS;
+}
+
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
-	int i;
+	int i, prev;
 	int portaldepth = r_portalrecursion.ival;
 
 	for (i = start; i <= stop; i++)
 	{
 		if (i == SHADER_SORT_BLEND && r_blendsort.ival == 2)
 		{
+			GLBudget_Set(GPUB_TRANSPARENT);
 			GLBE_SubmitBlendedFaces(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
 			continue;
 		}
@@ -7857,17 +8006,23 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 		{
 			if (i == SHADER_SORT_PORTAL && r_refdef.recurse < portaldepth)
 			{
+				prev = GLBudget_Push(GPUB_PORTALS);
 				GLBE_SubmitMeshesPortals(worldbatches, shaderstate.mbatches[i]);
+				GLBudget_Pop(prev);
 
 				if (!r_refdef.recurse && r_portalonly.ival)
 					return;
 			}
 
+			if (worldbatches[i])
+				GLBudget_Set(GLBudget_SortCat(i, true));
 			if (i == SHADER_SORT_BLEND && r_blendsort.ival == 1)
 				GLBE_SubmitBlendedWorld(worldbatches[i]);
 			else
 				GLBE_SubmitMeshesSortList(worldbatches[i]);
 		}
+		if (shaderstate.mbatches[i])
+			GLBudget_Set(GLBudget_SortCat(i, false));
 		GLBE_SubmitMeshesSortList(shaderstate.mbatches[i]);
 	}
 }
@@ -8676,6 +8831,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 	batch_t *batches[SHADER_SORT_COUNT];
 	batch_t **ob = shaderstate.mbatches;
 	qboolean ownedwas;	//FTESurf Patch 780: polymodeowned across a pass
+	int budgetprev;	//FTESurf Patch 782
 	RSpeedLocals();
 	shaderstate.mbatches = batches;
 
@@ -8727,6 +8883,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled)
 		{
 			batch_t *b;
+			budgetprev = GLBudget_Push(GPUB_SKYROOM);
 			for (b = worldbatches[SHADER_SORT_SKY]; b; b = b->next)
 				if (R_DrawSkyroom(b->shader))
 				{
@@ -8738,6 +8895,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 					r_refdef.flags |= RDF_SKIPSKY;
 					break;
 				}
+			GLBudget_Pop(budgetprev);
 		}
 		if (gl_overbright.modified)
 		{
@@ -8784,7 +8942,9 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 				//the frame -- bigger than Opaque Batches -- which made r_speeds actively
 				//misleading about where the time went.  Read it as "Shadow generation".
 				RSpeedRemark();
+				budgetprev = GLBudget_Push(GPUB_SHADOWS);
 				Sh_GenerateFakeShadows();
+				GLBudget_Pop(budgetprev);
 				RSpeedEnd(RSPEED_FAKESHADOWS);
 			}
 #endif
@@ -8808,7 +8968,9 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 				RSpeedRemark();
 				TRACE(("GLBE_DrawWorld: drawing lights\n"));
 				GLBE_SelectEntity(&r_worldentity);
+				budgetprev = GLBudget_Push(GPUB_LIGHTS);
 				Sh_DrawLights(r_refdef.scenevis);
+				GLBudget_Pop(budgetprev);
 				RSpeedEnd(RSPEED_RTLIGHTS);
 				TRACE(("GLBE_DrawWorld: lights drawn\n"));
 			}

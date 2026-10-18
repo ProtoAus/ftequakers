@@ -145,6 +145,8 @@ void (APIENTRY *qglEndQueryARB)(GLenum target);
 //extern void (APIENTRY *qglGetQueryivARB)(GLenum target, GLenum pname, GLint *params);
 //extern void (APIENTRY *qglGetQueryObjectivARB)(GLuint id, GLenum pname, GLint *params);
 void (APIENTRY *qglGetQueryObjectuivARB)(GLuint id, GLenum pname, GLuint *params);
+void (APIENTRY *qglQueryCounter)(GLuint id, GLenum target);	//FTESurf Patch 782
+void (APIENTRY *qglGetQueryObjectui64v)(GLuint id, GLenum pname, unsigned long long *params);
 
 
 //GL_OES_get_program_binary
@@ -1404,6 +1406,17 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 		qglBeginQueryARB		= NULL;
 		qglEndQueryARB			= NULL;
 		qglGetQueryObjectuivARB	= NULL;
+	}
+	//FTESurf Patch 782: GPU timestamps for r_budget. Desktop GL only (GLES's is EXT_disjoint_timer_query).
+	if (!gl_config.gles && qglGenQueriesARB && (gl_config.glversion >= 3.3 || GL_CheckExtension("GL_ARB_timer_query")))
+	{
+		qglQueryCounter			= (void *)getglext("glQueryCounter");
+		qglGetQueryObjectui64v	= (void *)getglext("glGetQueryObjectui64v");
+	}
+	else
+	{
+		qglQueryCounter			= NULL;
+		qglGetQueryObjectui64v	= NULL;
 	}
 
 	if (!gl_config.gles && gl_config_nofixedfunc)
@@ -3417,6 +3430,9 @@ void GL_ForgetPointers(void)
 	qglBeginQueryARB		= NULL;
 	qglEndQueryARB			= NULL;
 	qglGetQueryObjectuivARB	= NULL;
+	qglQueryCounter			= NULL;	//FTESurf Patch 782
+	qglGetQueryObjectui64v	= NULL;
+	GLBudget_Reset();
 
 	qglGenVertexArrays = NULL;
 	qglBindVertexArray = NULL;

@@ -768,6 +768,18 @@ extern void (APIENTRY *qglEndQueryARB)(GLenum target);
 //extern void (APIENTRY *qglGetQueryivARB)(GLenum target, GLenum pname, GLint *params);
 //extern void (APIENTRY *qglGetQueryObjectivARB)(GLuint id, GLenum pname, GLint *params);
 extern void (APIENTRY *qglGetQueryObjectuivARB)(GLuint id, GLenum pname, GLuint *params);
+//FTESurf Patch 782: ARB_timer_query (core in GL 3.3), for r_budget's GPU half
+extern void (APIENTRY *qglQueryCounter)(GLuint id, GLenum target);
+extern void (APIENTRY *qglGetQueryObjectui64v)(GLuint id, GLenum pname, unsigned long long *params);
+#ifndef GL_TIMESTAMP
+#define GL_TIMESTAMP 0x8E28
+#endif
+void GLBudget_FrameBegin(void);
+void GLBudget_FrameEnd(void);
+void GLBudget_Set(int cat);		//GPUB_*: from here on the GPU's work is this
+int GLBudget_Push(int cat);		//a whole pass or nested view; marks inside it are ignored
+void GLBudget_Pop(int prev);
+void GLBudget_Reset(void);		//the context went away with its queries
 
 extern void (APIENTRY *qglDrawBuffers)(GLsizei n, GLsizei *ids);	//gl2
 

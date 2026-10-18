@@ -3083,6 +3083,7 @@ void GLR_RenderView (void)
 		time1 = Sys_DoubleTime ();
 	}
 
+	GLBudget_Set(GPUB_OTHER);	//FTESurf Patch 782: this view's clears and setup
 	if (!(r_refdef.flags & RDF_NOWORLDMODEL) && R_RenderScene_Cubemap())
 	{
 
@@ -3124,6 +3125,7 @@ void GLR_RenderView (void)
 	{
 	RSpeedMark();
 
+	GLBudget_Set(GPUB_POSTPROC);	//FTESurf Patch 782
 	//update stuff now that we're not rendering the 3d scene
 	if (dofbo)
 		GLBE_FBO_Pop(oldfbo);
@@ -3166,6 +3168,7 @@ void GLR_RenderView (void)
 
 	if (gl_screenangle.value)
 		GL_Set2D (false);	//make sure any hud stuff is rotated properly.
+	GLBudget_Set(GPUB_2D);	//FTESurf Patch 782: after the 3D view come the HUD, menus and console
 
 	RSpeedEnd(RSPEED_POSTPROC);
 	}

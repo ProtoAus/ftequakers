@@ -3975,7 +3975,10 @@ void Surf_DrawWorld (void)
 		if (currentmodel->funcs.PrepareFrame)
 		{
 			int clusters[2] = {r_viewcluster, r_viewcluster2};
+			double prep = r_speeds_timing ? Sys_DoubleTime() : 0;	//Patch 782: inside RSPEED_WORLDNODE; a Source map's vis and static props
 			currentmodel->funcs.PrepareFrame(currentmodel, &r_refdef, r_viewarea, clusters, &surf_frustumvis[r_refdef.recurse], &entvis, &surfvis);
+			if (r_speeds_timing)
+				rspeeds[RSPEED_WORLDPREPARE] += (Sys_DoubleTime() - prep) * 1000000;
 		}
 		else if (currentmodel->type != mod_brush)
 			entvis = surfvis = NULL;
