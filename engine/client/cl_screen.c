@@ -150,6 +150,7 @@ void RSpeed_Finish(int spt, double start, int d)
 
 cvar_t r_budget = CVARFD("r_budget", "0", 0, "FTESurf Patch 782. Shows where each frame's time goes: CPU work by group, idle, and GPU time by pass (GL timer queries). 1 = compact: two bars and the three biggest items under each, 2 = a row per group, 3 = every bucket in each group. r_budget_dump prints it and copies it to the clipboard.");
 cvar_t r_budget_window = CVARFD("r_budget_window", "0.5", 0, "FTESurf Patch 782. r_budget averages over this many seconds.");
+static void R_FrameTime_AfterDump(void);	//FTESurf Patch 801
 cvar_t r_budget_csqc = CVARFD("r_budget_csqc", "0", 0, "FTESurf Patch 800. With r_budget on, also breaks CSQC down by QC source file (and at r_budget 3 its three busiest functions). Runs the QC profiler while on, which slows QC; off, it costs nothing.");
 
 typedef struct
@@ -801,6 +802,8 @@ static void R_Budget_Dump_f(void)
 	}
 	Sys_SaveClipboard(CBT_CLIPBOARD, out);
 	Con_Printf("r_budget_dump: copied to the clipboard\n");
+	budget.lastframe = Sys_DoubleTime();
+	R_FrameTime_AfterDump();
 }
 
 //FTESurf Patch 801: r_frametime. One sample per rendered frame, from RSpeedShow. The graph keeps the
@@ -1007,6 +1010,11 @@ static void R_FrameTime_Draw(void)
 	R2D_FillBlock(x, y + gh - min(ft.median * FT_STUTTER / scale, 1) * gh, gw, 1);
 	R2D_ImageColours(1, 1, 1, 1);
 }
+//a dump stalled its own frame by 0.3 s in the P801 arm: asking must not add a stutter
+static void R_FrameTime_AfterDump(void)
+{
+	ft.last = Sys_DoubleTime();
+}
 static void R_FrameTime_Reset_f(void)
 {
 	ft.on = false;	//the next frame starts clean
@@ -1050,6 +1058,7 @@ static void R_FrameTime_Dump_f(void)
 		}
 	}
 	Sys_SaveClipboard(CBT_CLIPBOARD, out);
+	R_FrameTime_AfterDump();
 }
 
 void RSpeedShow(void)
