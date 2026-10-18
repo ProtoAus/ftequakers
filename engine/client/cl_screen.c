@@ -73,7 +73,7 @@ are the only top-level brackets in the host frame, and summing the array would
 double-count every nested child.  If a third top-level bracket is ever added,
 add it here or this line quietly starts lying the same way.
 */
-#define RSPEED_REALFRAME(a) ((a)[RSPEED_TOTALREFRESH] + (a)[RSPEED_SERVER])
+#define RSPEED_REALFRAME(a) ((a)[RSPEED_TOTALREFRESH] + (a)[RSPEED_SERVER] + (a)[RSPEED_SERVERIDLE])	//Patch 782 split the between-frames server out
 
 static void RSpeed_Dump_f(void)
 {
@@ -97,6 +97,57 @@ Patch 782, has the tree and what it cannot see.
 ==================================================
 */
 int r_speeds_timing;
+int rspeeds_self[RSPEED_MAX];	//each bucket's own time: its brackets less the brackets that closed inside them
+int rspeed_depth;			//how many brackets are open; reset at the top of each host frame
+#define RSPEED_DEPTH 32
+static double rspeed_child[RSPEED_DEPTH];	//time of the brackets that closed inside the open one at each depth
+
+static int rspeed_unclosed, rspeed_offthread;	//r_budget_dump's check on the nesting
+double RSpeed_Begin(int *depth)
+{
+	int d;
+	if (!r_speeds_timing)
+	{
+		*depth = -1;
+		return 0;
+	}
+	if (!Sys_IsMainThread())
+	{	//a worker's bracket: its time still counts for r_speeds, but it is no part of this thread's nesting
+		*depth = -2;
+		rspeed_offthread++;
+		return Sys_DoubleTime() * 1000000;
+	}
+	d = rspeed_depth++;
+	if (d < RSPEED_DEPTH)
+		rspeed_child[d] = 0;
+	*depth = d;
+	return Sys_DoubleTime() * 1000000;
+}
+void RSpeed_Finish(int spt, double start, int d)
+{
+	double elapsed;
+	if (d == -2)
+	{
+		rspeeds[spt] += Sys_DoubleTime() * 1000000 - start;
+		return;
+	}
+	if (d < 0)
+		return;	//opened while timing was off
+	if (rspeed_depth != d + 1)
+		rspeed_unclosed++;
+#ifdef GLQUAKE
+	if (r_speeds.ival > 2 && qrenderer == QR_OPENGL && qglFinish)
+		qglFinish();	//r_speeds 3: each bucket waits for its GPU work too
+#endif
+	elapsed = Sys_DoubleTime() * 1000000 - start;
+	rspeeds[spt] += elapsed;
+	if (d < RSPEED_DEPTH)
+		rspeeds_self[spt] += max(0, elapsed - rspeed_child[d]);
+	rspeed_depth = d;	//also closes whatever opened inside and never closed (an early return)
+	if (d > 0 && d-1 < RSPEED_DEPTH)
+		rspeed_child[d-1] += elapsed;
+}
+
 cvar_t r_budget = CVARFD("r_budget", "0", 0, "FTESurf Patch 782. Shows where each frame's time goes: CPU work by group, idle, and GPU time by pass (GL timer queries). 1 = compact: two bars and the three biggest items under each, 2 = a row per group, 3 = every bucket in each group. r_budget_dump prints it and copies it to the clipboard.");
 cvar_t r_budget_window = CVARFD("r_budget_window", "0.5", 0, "FTESurf Patch 782. r_budget averages over this many seconds.");
 
@@ -112,6 +163,7 @@ typedef struct
 	budgetmember_t m[10];
 } budgetgroup_t;
 //every bucket in exactly one group, as its self time; the CPU's groups sum to its work
+#define BUDGET_PREP 3	//the PrepareFrame group, named by map format below
 static const budgetgroup_t budget_groups[] =
 {
 	{"Server: game logic, physics",	{0.35,0.55,1.00},	{{RSPEED_SERVER, "server frames"}, {RSPEED_SERVERIDLE, "between frames"}, {-1}}},
@@ -131,17 +183,24 @@ static const budgetgroup_t budget_groups[] =
 #define BUDGET_GROUPS (sizeof(budget_groups)/sizeof(budget_groups[0]))
 //r_budget 1's legend, in budget_groups' order
 static const char *budget_groupshort[] = {"server", "csqc", "world", "hl2 props", "draws", "shadows", "particles", "post", "hud", "display", "input/net", "loading", "other"};
-static const char *budget_gpushort[GPUB_MAX] = {"other", "world", "props", "sky", "3d sky", "portals", "shadows", "lights", "transparent", "post", "hud"};
+static const char *budget_gpushort[GPUB_MAX] = {"other", "cpu wait", "world", "props", "sky", "3d sky", "portals", "shadows", "lights", "transparent", "post", "hud"};
 static const char *budget_gpunames[GPUB_MAX] =
 {
-	"Other: clears, setup",	"World",	"Models & props",	"Sky",	"3D sky (skyroom)",	"Portals & reflections",
+	"Other: clears, setup",	"Waiting on the CPU",	"World",	"Models & props",	"Sky",	"3D sky (skyroom)",	"Portals & reflections",
 	"Shadows",	"RT lights",	"Transparent & effects",	"Post-processing",	"HUD & 2D"
 };
 static const float budget_gpucols[GPUB_MAX][3] =
 {
-	{0.40,0.40,0.40},	{0.35,0.85,0.35},	{1.00,0.60,0.20},	{0.50,0.75,1.00},	{0.40,0.60,0.90},	{0.75,0.60,0.95},
+	{0.40,0.40,0.40},	{0.25,0.25,0.30},	{0.35,0.85,0.35},	{1.00,0.60,0.20},	{0.50,0.75,1.00},	{0.40,0.60,0.90},	{0.75,0.60,0.95},
 	{0.55,0.40,0.85},	{1.00,1.00,0.70},	{0.95,0.85,0.30},	{0.30,0.85,0.85},	{0.85,0.85,0.85}
 };
+//the PrepareFrame group is the hl2 plugin only on a Source map; elsewhere it is the engine's own vis and world walk
+static const char *R_Budget_GroupName(int i, qboolean shortname)
+{
+	if (i == BUDGET_PREP && !(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP)))
+		return shortname ? "map vis" : "Map vis + walk (PrepareFrame)";
+	return shortname ? budget_groupshort[i] : budget_groups[i].name;
+}
 
 static struct
 {
@@ -149,9 +208,9 @@ static struct
 	double winstart, lastframe;
 	int frames, intervals;
 	double interval;			//window sums: seconds between frames
-	double cpu[RSPEED_MAX];		//...microseconds
+	double cpu[RSPEED_MAX];		//...self microseconds
 	double quant[RQUANT_MAX];
-	unsigned int prevs[RSPEED_MAX], prevq[RQUANT_MAX];
+	unsigned int prevq[RQUANT_MAX];
 	//published averages, per frame
 	qboolean valid;
 	float frame;				//ms
@@ -161,8 +220,6 @@ static struct
 	float quantavg[RQUANT_MAX];
 } budget;
 
-static int budget_parent[RSPEED_MAX];
-static qboolean budget_treemade;
 static qboolean R_Budget_GPUTimers(void)
 {
 #ifdef GLQUAKE
@@ -171,50 +228,17 @@ static qboolean R_Budget_GPUTimers(void)
 	return false;
 #endif
 }
-static void R_Budget_InitTree(void)
-{
-	int i;
-	static const int toplevel[] = {RSPEED_MAINTHREAD, RSPEED_INPUT, RSPEED_PROTOCOL, RSPEED_SERVER, RSPEED_TOTALREFRESH, RSPEED_AUDIO};
-	static const int refresh[] = {RSPEED_CSQCPHYSICS, RSPEED_CSQCREDRAW, RSPEED_RSPEEDSHOW, RSPEED_SCR_SETUP, RSPEED_SCR_COMPOSITE, RSPEED_SCR_BRIGHTEN, RSPEED_SCR_PACING, RSPEED_SCR_RESET, RSPEED_2D, RSPEED_PALETTEFLASHES, RSPEED_PRESENT, RSPEED_SETUP, RSPEED_ACQUIRE};
-	//inside CSQC_UpdateView's renderscene (pr_csqc.c); without CSQC these sit under the refresh instead
-	static const int render[] = {RSPEED_LINKENTITIES, RSPEED_WORLDNODE, RSPEED_DYNAMIC, RSPEED_FAKESHADOWS, RSPEED_POSTPROC, RSPEED_OPAQUE, RSPEED_RTLIGHTS, RSPEED_TRANSPARENTS, RSPEED_PARTICLES, RSPEED_PARTICLESDRAW, RSPEED_SUBMIT};
-	for (i = 0; i < RSPEED_MAX; i++)
-		budget_parent[i] = -1;	//HOSTWORK and SERVERIDLE are the roots
-	for (i = 0; i < countof(toplevel); i++)
-		budget_parent[toplevel[i]] = RSPEED_HOSTWORK;
-	for (i = 0; i < countof(refresh); i++)
-		budget_parent[refresh[i]] = RSPEED_TOTALREFRESH;
-	for (i = 0; i < countof(render); i++)
-		budget_parent[render[i]] = RSPEED_CSQC_QCVIEW;
-	budget_parent[RSPEED_CSQC_PREDICT] = RSPEED_CSQCREDRAW;
-	budget_parent[RSPEED_CSQC_QCVIEW] = RSPEED_CSQCREDRAW;
-	budget_parent[RSPEED_WORLDPREPARE] = RSPEED_WORLDNODE;
-	budget_parent[RSPEED_SHADOW_CLASSIFY] = RSPEED_FAKESHADOWS;
-	budget_parent[RSPEED_SHADOW_ENTDRAW] = RSPEED_FAKESHADOWS;
-}
 
 static void R_Budget_Publish(double now)
 {
-	int i, p;
-	float val[RSPEED_MAX];
+	int i;
 	double gsum[GPUB_MAX], gtotal = 0;
 	int gn = 0;
 
 	if (budget.frames <= 0)
 		return;
 	for (i = 0; i < RSPEED_MAX; i++)
-		budget.self[i] = val[i] = budget.cpu[i] / budget.frames;
-	for (i = 0; i < RSPEED_MAX; i++)
-	{
-		p = budget_parent[i];
-		if (p == RSPEED_CSQC_QCVIEW && val[p] <= 0)
-			p = RSPEED_TOTALREFRESH;	//no CSQC: the render is the refresh's own
-		if (p >= 0)
-			budget.self[p] -= val[i];
-	}
-	for (i = 0; i < RSPEED_MAX; i++)
-		if (budget.self[i] < 0)
-			budget.self[i] = 0;
+		budget.self[i] = budget.cpu[i] / budget.frames;
 	for (i = 0; i < RQUANT_MAX; i++)
 		budget.quantavg[i] = budget.quant[i] / budget.frames;
 	budget.frame = budget.intervals ? budget.interval * 1000 / budget.intervals : 0;
@@ -244,20 +268,16 @@ static void R_Budget_Sample(void)
 
 	if (!r_budget.ival)
 	{
-		budget.on = false;
+		budget.on = budget.valid = false;
 		return;
 	}
 	if (!budget.on)
 	{	//switched on: start clean, the counters' history is not this window's
 		double discard[GPUB_MAX], dt;
-		if (!budget_treemade)
-			R_Budget_InitTree();
-		budget_treemade = true;
 		memset(&budget, 0, sizeof(budget));
 		budget.on = true;
 		budget.winstart = budget.lastframe = now;
-		for (i = 0; i < RSPEED_MAX; i++)
-			budget.prevs[i] = rspeeds[i];
+		memset(rspeeds_self, 0, sizeof(rspeeds_self));
 		for (i = 0; i < RQUANT_MAX; i++)
 			budget.prevq[i] = rquant[i];
 #ifdef GLQUAKE
@@ -266,9 +286,10 @@ static void R_Budget_Sample(void)
 #endif
 		return;
 	}
-	//unsigned deltas: r_speeds' own sampler may have zeroed them since, and rquant wraps
 	for (i = 0; i < RSPEED_MAX; i++)
-		budget.cpu[i] += (unsigned int)rspeeds[i] >= budget.prevs[i] ? (unsigned int)rspeeds[i] - budget.prevs[i] : (unsigned int)rspeeds[i];
+		budget.cpu[i] += rspeeds_self[i];
+	memset(rspeeds_self, 0, sizeof(rspeeds_self));	//ours alone: r_speeds reads the inclusive rspeeds[]
+	//unsigned deltas: r_speeds' own sampler may have zeroed rquant since, and it wraps
 	for (i = 0; i < RQUANT_MAX; i++)
 		budget.quant[i] += (unsigned int)rquant[i] >= budget.prevq[i] ? (unsigned int)rquant[i] - budget.prevq[i] : (unsigned int)rquant[i];
 	budget.interval += now - budget.lastframe;
@@ -279,7 +300,7 @@ static void R_Budget_Sample(void)
 		R_Budget_Publish(now);
 }
 
-//after RSpeedShow is done with them: remember where they stand, and keep them from wrapping when nothing else resets them
+//after RSpeedShow is done with them: remember where rquant stands, and keep the counters from wrapping when nothing else resets them
 static void R_Budget_Rebase(void)
 {
 	int i;
@@ -290,8 +311,6 @@ static void R_Budget_Rebase(void)
 		memset(rspeeds, 0, sizeof(rspeeds));
 		memset(rquant, 0, sizeof(rquant));
 	}
-	for (i = 0; i < RSPEED_MAX; i++)
-		budget.prevs[i] = rspeeds[i];
 	for (i = 0; i < RQUANT_MAX; i++)
 		budget.prevq[i] = rquant[i];
 }
@@ -469,13 +488,15 @@ static void R_Budget_Draw(void)
 	{	//compact: what the colours are, the three biggest items under each bar
 		float vals[BUDGET_GROUPS];
 		const float *cols[GPUB_MAX > BUDGET_GROUPS ? GPUB_MAX : BUDGET_GROUPS];
+		const char *names[BUDGET_GROUPS];
 		y += cw;
 		for (i = 0; i < BUDGET_GROUPS; i++)
 		{
 			vals[i] = R_Budget_Group(&budget_groups[i]);
 			cols[i] = budget_groups[i].col;
+			names[i] = R_Budget_GroupName(i, true);
 		}
-		R_Budget_Legend(x, y, cw, "cpu", vals, budget_groupshort, cols, BUDGET_GROUPS);
+		R_Budget_Legend(x, y, cw, "cpu", vals, names, cols, BUDGET_GROUPS);
 		y += cw;
 		if (budget.gpuframes)
 		{
@@ -496,7 +517,7 @@ static void R_Budget_Draw(void)
 		ms = R_Budget_Group(g);
 		if (!BUDGET_SHOWN(ms))
 			continue;
-		R_Budget_Row(x, y, cw, ms, scale, g->col, g->name, false);
+		R_Budget_Row(x, y, cw, ms, scale, g->col, R_Budget_GroupName(i, false), false);
 		y += cw;
 		if (r_budget.ival >= 3)
 			for (j = 0; j < countof(g->m) && g->m[j].b >= 0; j++)
@@ -559,7 +580,7 @@ static void R_Budget_Dump_f(void)
 	{
 		g = &budget_groups[i];
 		ms = R_Budget_Group(g);
-		Q_strncatz(out, va("  %-32s %6.2f %4.0f%% %s\n", g->name, ms, scale > 0 ? ms*100/scale : 0, BUDGET_BAR(ms)), sizeof(out));
+		Q_strncatz(out, va("  %-32s %6.2f %4.0f%% %s\n", R_Budget_GroupName(i, false), ms, scale > 0 ? ms*100/scale : 0, BUDGET_BAR(ms)), sizeof(out));
 		for (j = 0; j < countof(g->m) && g->m[j].b >= 0; j++)
 			if (budget.self[g->m[j].b] > 0)
 				Q_strncatz(out, va("      %-28s %6.2f\n", g->m[j].name, budget.self[g->m[j].b]/1000), sizeof(out));
@@ -576,6 +597,8 @@ static void R_Budget_Dump_f(void)
 	Q_strncatz(out, va("draws %.0f  triangles %.2fM  batches world %.0f entity %.0f  (%s, %s)\n", budget.quantavg[RQUANT_DRAWS],
 		budget.quantavg[RQUANT_PRIMITIVEINDICIES]/3000000, budget.quantavg[RQUANT_WORLDBATCHES], budget.quantavg[RQUANT_ENTBATCHES],
 		cl.worldmodel ? cl.worldmodel->name : "no map", version_string()), sizeof(out));
+	Q_strncatz(out, va("timers since the last dump: %i closed with others still open inside, %i off the main thread\n", rspeed_unclosed, rspeed_offthread), sizeof(out));
+	rspeed_unclosed = rspeed_offthread = 0;
 #undef BUDGET_BAR
 	{	//a line at a time: one Con_Printf of the whole table is cut at its print buffer
 		char *line = out, *nl;
@@ -654,6 +677,12 @@ void RSpeedShow(void)
 	RSpNames[RSPEED_PROTOCOL]		= "Client Protocol";
 	RSpNames[RSPEED_SERVER]			= "Server";
 	RSpNames[RSPEED_AUDIO]			= "Audio";
+	//FTESurf Patch 782; the table draws every bucket's name, so a new one without one prints garbage
+	RSpNames[RSPEED_HOSTWORK]		= "Host frame work";
+	RSpNames[RSPEED_MAINTHREAD]		= " Main-thread work";
+	RSpNames[RSPEED_INPUT]			= " Input/console";
+	RSpNames[RSPEED_SERVERIDLE]		= "Server (between frames)";
+	RSpNames[RSPEED_WORLDPREPARE]	= "   Map PrepareFrame";
 
 	memset(RQntNames, 0, sizeof(RQntNames));
 	RQntNames[RQUANT_MSECS]					= "Microseconds";

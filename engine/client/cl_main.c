@@ -7423,6 +7423,7 @@ double Host_Frame (double time)
 	double spike_gfx = 0;
 	double spike_audio = 0;
 	double hostwork_start;	//FTESurf Patch 782
+	int hostwork_depth;
 
 	RSpeedLocals();
 
@@ -7456,7 +7457,8 @@ double Host_Frame (double time)
 	//FTESurf Patch 782: latched so every RSpeed bracket in this frame agrees; the frame's own work is
 	//timed from here to its end, and an early return between frames adds nothing to it (that is idle)
 	r_speeds_timing = (r_speeds.ival > 1 || r_budget.ival);
-	hostwork_start = r_speeds_timing ? Sys_DoubleTime() : 0;
+	rspeed_depth = 0;	//every bracket of this frame nests under this one; an unclosed one from before is gone
+	hostwork_start = RSpeed_Begin(&hostwork_depth);
 
 #ifdef WEBCLIENT
 //	FTP_ClientThink();
@@ -7909,8 +7911,7 @@ double Host_Frame (double time)
 
 	host_framecount++;
 	cl.lasttime = cl.time;
-	if (r_speeds_timing)
-		rspeeds[RSPEED_HOSTWORK] += (Sys_DoubleTime() - hostwork_start) * 1000000;	//Patch 782
+	RSpeed_Finish(RSPEED_HOSTWORK, hostwork_start, hostwork_depth);	//Patch 782
 	return 0;
 }
 

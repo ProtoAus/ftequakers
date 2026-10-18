@@ -264,6 +264,7 @@ qboolean GLSCR_UpdateScreen (void)
 	if (R2D_Flush)
 		R2D_Flush();
 	RSpeedEnd(RSPEED_RSPEEDSHOW);
+	GLBudget_FrameEnd();	//FTESurf Patch 782: the frame's last GPU work; frame pacing and the swap are waits, not work
 
 	{
 #if defined(_WIN32) && !defined(FTE_SDL)
@@ -341,7 +342,6 @@ qboolean GLSCR_UpdateScreen (void)
 		Sys_FramePacePresent();	//sys_framepacing 4: hold the now-complete flip to the present grid (no-op in other modes)
 		RSpeedEnd(RSPEED_SCR_PACING);
 #endif
-		GLBudget_FrameEnd();	//FTESurf Patch 782: before the swap, so waiting on vsync is not counted as GPU work
 		RSpeedRemark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);

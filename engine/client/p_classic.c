@@ -402,13 +402,14 @@ static void PClassic_DrawParticles(void)
 	union c usecolours;
 #endif
 	static float oldtime;
-	RSpeedMark();
 
 	if (!active_particles)
 	{
 		oldtime = cl.time;
 		return;
 	}
+	{
+	RSpeedMark();	//FTESurf Patch 782: after the early return, which used to leave this bracket open
 
 	if (particleframe != -1 && particleframe != cl_framecount)
 	{
@@ -605,6 +606,7 @@ static void PClassic_DrawParticles(void)
 	}
 #endif
 	RSpeedEnd(RSPEED_PARTICLESDRAW);
+	}
 }
 
 

@@ -1572,11 +1572,11 @@ void R2D_PolyBlend (void)
 void R2D_BrightenScreen (void)
 {
 	float f;
-
-	RSpeedMark();
+	RSpeedLocals();
 
 	if (fabs(v_contrast.value - 1.0) < 0.05 && fabs(v_contrastboost.value - 1.0) < 0.05 && fabs(v_brightness.value - 0) < 0.05 && fabs(v_gamma.value - 1) < 0.05)
 		return;
+	RSpeedRemark();	//FTESurf Patch 782: after the early return, which used to leave this bracket open
 
 	//don't go crazy with brightness. that makes it unusable and is thus unsafe - and worse, lots of people assume its based around 1 (like gamma and contrast are). cap to 0.5
 	if (v_brightness.value > 0.5)
@@ -1585,7 +1585,10 @@ void R2D_BrightenScreen (void)
 		v_contrast.value = 0.5;
 
 	if (r2d_canhwgamma || V_UseSceneGamma())
+	{
+		RSpeedEnd(RSPEED_PALETTEFLASHES);
 		return;
+	}
 
 	TRACE(("R2D_BrightenScreen: brightening\n"));
 	if ((v_gamma.value != 1 || v_contrast.value > 3 || v_contrastboost.value != 1) && shader_gammacb->prog)

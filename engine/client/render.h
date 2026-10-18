@@ -938,6 +938,7 @@ extern int rspeeds[RSPEED_MAX];
 //FTESurf Patch 782: what r_budget's GPU half is split into, by GL timestamp queries.
 enum {
 	GPUB_OTHER,			//clears, view setup, uploads: anything not in a pass below
+	GPUB_WAIT,			//stretches where the CPU is busy elsewhere (QC, the world walk) and the GPU may sit idle
 	GPUB_WORLD,
 	GPUB_MODELS,
 	GPUB_SKY,
@@ -986,15 +987,16 @@ extern int rquant[RQUANT_MAX];
 #define RSpeedRemark()
 #define RSpeedEnd(spt)
 #else
-#define RSpeedLocals() double rsp
-//Patch 782: the latched r_speeds_timing, not the cvar, so a bracket cannot open on one setting and close on another
-#define RSpeedMark() double rsp = r_speeds_timing?Sys_DoubleTime()*1000000:0
-#define RSpeedRemark() rsp = r_speeds_timing?Sys_DoubleTime()*1000000:0
-
-#if defined(_WIN32) && defined(GLQUAKE)
-extern void (_stdcall *qglFinish) (void);
-#define RSpeedEnd(spt) do {if(r_speeds_timing){if(r_speeds.ival > 2 && qglFinish)qglFinish(); rspeeds[spt] += (double)(Sys_DoubleTime()*1000000) - rsp;}}while (0)
-#else
-#define RSpeedEnd(spt) rspeeds[spt] += r_speeds_timing?Sys_DoubleTime()*1000000 - rsp:0
-#endif
+/*FTESurf Patch 782: a bracket opens at a nesting depth and, closing, hands its time to the bracket
+  it sits in, so rspeeds_self[] is each bucket's own time however the brackets happen to nest (a
+  portal view's world walk inside "opaque", lightmaps inside the hl2 plugin's PrepareFrame).
+  Gated on r_speeds_timing, latched per host frame, not the cvar.  Main thread only.*/
+double RSpeed_Begin(int *depth);
+void RSpeed_Finish(int spt, double start, int depth);
+extern int rspeeds_self[RSPEED_MAX];
+extern int rspeed_depth;
+#define RSpeedLocals() double rsp; int rspd
+#define RSpeedMark() int rspd; double rsp = RSpeed_Begin(&rspd)
+#define RSpeedRemark() rsp = RSpeed_Begin(&rspd)
+#define RSpeedEnd(spt) RSpeed_Finish(spt, rsp, rspd)
 #endif

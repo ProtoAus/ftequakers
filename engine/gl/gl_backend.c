@@ -7858,6 +7858,7 @@ static struct
 	qboolean pending[GLB_FRAMES];
 	unsigned int frame;
 	int slot;		//the frame being recorded, -1 when not recording
+	qboolean on;	//r_budget was on last frame: switching it on drops what was recorded before
 	int cur;		//its current category
 	int depth;		//inside a pushed pass or view: its own marks are ignored
 	double sum[GPUB_MAX], total;
@@ -7911,19 +7912,27 @@ void GLBudget_FrameBegin(void)
 	glb.slot = -1;
 	glb.depth = 0;
 	if (!r_budget.ival || !qglQueryCounter || !qglGetQueryObjectui64v || !qglGetQueryObjectuivARB || !qglGenQueriesARB)
+	{
+		glb.on = false;
 		return;
+	}
 	if (!glb.made)
 	{
 		qglGenQueriesARB(GLB_FRAMES*GLB_MARKS, &glb.q[0][0]);
-		memset(glb.pending, 0, sizeof(glb.pending));
 		glb.made = true;
+	}
+	if (!glb.on)
+	{	//frames recorded before it was last switched off are not this window's
+		memset(glb.pending, 0, sizeof(glb.pending));
+		glb.on = true;
 	}
 	s = glb.frame++ % GLB_FRAMES;
 	if (glb.pending[s])
 		GLBudget_Read(s);
 	glb.nmarks[s] = 0;
 	glb.slot = s;
-	GLBudget_Mark(GPUB_OTHER);
+	//in a map, the GPU first waits while the CPU runs QC and prediction; a menu-only frame is all 2D
+	GLBudget_Mark((cls.state == ca_active && cl.worldmodel) ? GPUB_WAIT : GPUB_2D);
 }
 void GLBudget_FrameEnd(void)
 {

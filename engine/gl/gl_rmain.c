@@ -3097,6 +3097,7 @@ void GLR_RenderView (void)
 	//	GLR_SetupFog ();
 
 		// render normal view
+		GLBudget_Set(GPUB_WAIT);	//FTESurf Patch 782: the world walk is CPU; the first batch ends the wait
 		R_RenderScene ();
 	}
 
