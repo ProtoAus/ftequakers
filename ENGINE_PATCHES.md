@@ -1,5 +1,126 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 803 — a departed player's body stops being solid (qwprogs)
+
+**Problem:** the engine clears a leaving player's edict only for NQ progs (sv_user.c
+SV_DespawnClient, ED_Clear under PROG_NQ), and ClientDisconnect never touched `.solid`,
+so the body stood on as a SOLID_SLIDEBOX box. Found reproducing Lex's surf_null spawn
+report: a `reconnect` took another slot and spawned 25 u above the old body, inside it.
+The server held the new body at z 7161 for good (walking and jumping moved nothing) while
+the client predicted the fall and was pulled back every packet, so the camera sat at the
+spawn height. A body dropped from above the spawn landed on the invisible box at 7198.1.
+
+**Change:** ClientDisconnect ends with SOLID_NOT, MOVETYPE_NONE and a setorigin that
+relinks the body out of the solid lists. No native change.
+
+**Verified:** conbridge, dedicated server + client on surf_null in the real install:
+pre-fix (qwprogs 2ff5ba15) after `reconnect` the body stayed at 7161 and a drop from 7300
+stopped at 7198.1; fixed (qwprogs 6b8707e2, which answers `tp_player`) the body fell to
+7136 and the drop landed at 7136. Known: Lex's own symptom -- a fresh connect, the server
+body on the floor, the camera ~25 u high until a jump -- was seen once and not again in
+three fresh connects; it is not explained by this patch.
+
+## Patch 797 — Teleport to a player from the TAB player list (qwprogs, csprogs)
+
+**Problem:** Lex asked for a teleport-to-player button on the server player list.
+
+**Change:** each other player's row gets a Teleport chip that sends `cmd tp_player
+<entnum>` and closes the board. SV_TpPlayer refuses world, self, a non-player or
+unspawned slot, a resume, a replay pin, ghost, a second teleport inside a second, and
+nowhere to stand. It ends a run as `!r`'s move does (release, then SV_TimerVoid), so a
+run that posted a stage is kept closed where the body was, then makes setpos's move --
+now SV_SetPosSelf, shared with `setpos`, same order -- to 48 u behind the target with
+its aim: behind a grounded target over a step (18 u up, footing within 36 u down),
+never into mid-air; level behind an airborne one; the target's own spot otherwise. The
+sweeps are the target's and pass through the mover; the stand check is MOVE_NORMAL, so
+props, clip and (off a lobby) players count. No native change.
+
+**Verified:** tools/p797tp.py, server + Mover + Target on surf_kitsune, players
+colliding, client = released 0.1.27 exe e19f681d. Subject (qwprogs 3e4b255e) 12/12:
+setpos moves and aims; tp_player 0, 99 and self refused, no move; a clean running run
+cancelled, timer idle; landing 48 u behind on footing 12.8 u up a slope with the
+target's yaw; a second within a second refused; the mover inside the sweep's path
+still lands behind; a target sunk 30 u into the floor refused, no move. Control
+(pre-P797 qwprogs fa94eb5d) 8/8: tp_player answers nothing and moves nothing. Four
+static review rounds (lens: what a player gains, what reaches evidence): the jump with
+no `warp`, overlap where players collide and no rate limit (round 1), the foot-level
+sweep (2), the mover in the sweep (3; the arm then hit it live), nothing (4). Known:
+behind an airborne target in a start box it reaches setpos's mid-air arm (BACKLOG); no
+per-player block or opt-out.
+
+## Patch 796 — a short first-boot terms screen; journal uploads chosen there (menu)
+
+**Problem:** Lex: the "Before you play" screen is far too long to be read, and Input
+journal uploads should be part of that first screen, not a main-menu button.
+
+**Change:** the terms open on a four-line summary (recorded on this PC incl. mouse and
+keyboard input; offline nothing about a run leaves; online leaderboards, the server's
+recording, others see you, our servers see your IP; never recorded: what you type, only
+that a key was pressed and when). The two cards are behind "Full details"; answers
+"Play offline" / "Play online". P774's separate journal consent is a box on the summary:
+it mirrors rec_hid_upload until the player changes it, a tick takes a real click and
+applies only with "Play online" and the online tier on record, an untick applies with
+either answer, and it is added after the answers so it is never the keyboard default.
+The main-menu button is gone; F2 has an "Input journal uploads: on/off -> Change" row to
+the journal screen, whose Back (now its default) and ESC return to F2. FS_TERMS_VERSION
+unchanged.
+
+**Verified:** tools/p795menu.py screenshots: the final menu (41128506) draws the summary at 700 x 353 at 16 px with the box's whole label, the full cards at 1240 x 1015, F2's row, and the main menu without the button; installed menus answer `ui_strip_test screen terms|termsfull`. Three static review
+rounds (lens: predicate, control flow, consent): a stale box re-applying an old choice,
+the offline answer applying a tick, the summary's wording, the full view's strip room,
+the journal screen's default (1); an untick ignored offline, a failed write dropping a
+tick, the label clipped before "F2" (2); nothing new (3). The box's click paths are
+covered by review, not by an arm: ui_click is synthetic and refused by design.
+
+## Patch 795 — a map picked from a player profile no longer kills the menu (menu)
+
+**Problem:** P789's MP_Of chose a picture slot with `old < 0 || mp_used[i] <
+mp_used[old]`; QC evaluates both sides, so mp_used[-1] failed the bound check once a
+second new picture was drawn with slot 0 held. The menu VM died and ESC then opened the
+engine's Quake menu. Lex hit it opening a map's board from a player profile
+(menucore.txt, 18 Oct 15:39Z: MP_Of, i 0, old -1, the check's operands as temps).
+
+**Change:** the test nested, as cl_steampic.qc's is; `ui_board_test` prints the picture
+slots held. No native change.
+
+**Verified:** tools/p795menu.py, surf_beginner's KSF board (50 of 50 rows pictured), an
+isolated basedir: control (menu.dat eaf20c34) "Progs boundcheck failed. Value is -1" at
+MP_Of+58 from Mlb_DrawRow, Menu_Abort; subject 21 slots held, 8 fetched, no fault,
+the menu answering after.
+
+## Patch 798 — hud_edit: a Display Info row, Input display, Boarding and Enter/Exit speeds (csprogs)
+
+**Problem:** Lex: replace the Key hints row with "Display Info" holding the Map info
+and Key hints switches, the chips at the bottom of the HUD Layout window, chat and
+Spectate's "Who's watching"; remove the Spectate row (distance stays a console
+setting); rename Mouse "Input display" with switches for the keys and the mouse;
+rename Boarding "Enter/Exit speeds" and Board "Boarding".
+
+**Change:** cl_hudedit.qc only. A new options-only `display` row: Map info, Map time
+left (the hidden Map info row's pane, unreachable since build 66), Key hints, Chat
+(`hud_chat`), Who's watching, then the old fixed chips as cycles in their old order
+(Crosshair 1/2/3/off, Text plain/outline/shadow, Number rate tick/10/20/30 Hz/frame,
+Number step 1/2/5/off). The fixed block is `reset all` (full width) and `done`
+(HE_FIXEDROWS 5 -> 3). Key hints is a hidden row (still drawn, dragged and reset).
+The Spectate row is gone; `reset all` still resets `spec_dist`, and writes
+`hud_chat 1` as a literal because default.cfg never sets it. The `mouse` row is
+listed as Input display: Keys and Mouse rows lead its pane, its square switches
+both, its reset also puts the key block back; its outline is still labelled Mouse.
+Harness hovers of the removed chip ids (ui_modern.cfg, ui_gallery.py,
+test_p676zonetips.py) open the Display Info pane and hover its rows instead.
+
+Review fix: HE_Default had no `keyhint` line since Patch 762, so no reset moved the
+strip; it now resets to 0.0333 / 0.955.
+
+**Verified:** FTESurf 4cb8ba62. build.ps1 0 warnings. `cfg/test/p798hud.cfg` in an
+isolated test_ui_modern rig: the element dump shows the Display Info row and its nine
+chips and none of the removed ids; each click reads back its cvar (chat, crosshair,
+Input display square both ways, Keys alone, Input display reset); `reset all` restores
+hud_chat, spec_dist and the key-hint x (0.5 stays on the pre-fix build). Both panes
+read at 1:1. test_ui_modern.py fails the same 3 round/SUI-frame checks on the
+pre-patch build as on this one (BACKLOG); its selection check now discriminates. One
+independent review. Not yet seen by Lex.
+
 ## Patch 800 — r_budget_csqc: CSQC by QC source file and function; the panel's own time
 
 **Problem:** Lex, 19 Oct, on r_budget: "can we also get a indication of how much the display is
