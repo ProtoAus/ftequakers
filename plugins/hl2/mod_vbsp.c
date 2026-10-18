@@ -37,6 +37,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 //Source MASK_OPAQUE, before movement's contents remap drops MOVEABLE.
 #define VBSP_MASK_LIGHTOPAQUE (0x00000001u|0x00000080u|0x00004000u)
+//FTESurf Patch 799: a trace asking for the draw-only occluders too (VBSP_TraceVisual).  Only
+//CSQC's glare traces set it (cl_sprites.qc SPR_CONTENTS_VISUAL); Source leaves 0x400 unused.
+#define VBSP_CONTENTS_VISUAL 0x00000400u
 #ifdef HAVE_CLIENT
 #include "glquake.h"
 #endif
@@ -471,6 +474,10 @@ typedef struct vbspinfo_s
 	q2cbrush_t		*brushes;
 	qboolean		*brushlightopaque;
 	model_t			*wl_trace_model;	//unregistered world-only light BIH; map-owned
+	model_t			*vis_trace_model;	//FTESurf Patch 799: draw-only occluders, built on first request
+	qboolean		vis_built;
+	struct bihtransform_s *vis_tr;		//per prop, from its own entity (not staticprops[].transform)
+	qboolean		(*vis_basetrace)(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace);
 
 	int				numvisibility;
 	q2dvis_t		*vis;
@@ -7619,6 +7626,163 @@ static void VBSP_BuildLightBIH(model_t *mod)
 	plugfuncs->Free(leafs);
 }
 
+/* FTESurf Patch 799: what a glare's depth query sees and the movement tree does not -- static
+ * props outside the collision tree (non-solid, or no hull) and NOHULL displacements, opaque ones
+ * only, so a translucent prop such as a vol_light cone cannot hide its own lamp's glow.
+ * surf_jumble's ramps are non-solid props over player clips, and its wall-light glows drew
+ * through them.  Built on the first trace that asks, so a server never pays.
+ */
+//0 opaque, else why not: 1 not loaded, 2 not a mesh, 3 no skin, 4 no shader, 5 see-through
+static int VBSP_PropModelOpaque(const entity_t *ent)
+{
+#ifdef HAVE_CLIENT
+	const galiasinfo_t *inf;
+	const galiasskin_t *sk;
+	const shader_t *sh;
+	unsigned int bits;
+	int n = 0;
+
+	if (!ent->model || ent->model->loadstate != MLS_LOADED)
+		return 1;
+	if (ent->model->type != mod_alias)
+		return 2;
+	for (inf = ent->model->meshinfo; inf; inf = inf->nextsurf, n++)
+	{
+		if (inf->numskins <= 0 || !inf->ofsskins)
+			return 3;
+		sk = &inf->ofsskins[(ent->skinnum >= 0 && ent->skinnum < inf->numskins) ? ent->skinnum : 0];
+		sh = (sk->numframes > 0 && sk->frame) ? sk->frame[0].shader : NULL;
+		if (!sh)
+			return 4;	//unknown counts as see-through: never a new occluder by guess
+		/*
+		Not sh->sort: the plugin's shader_t is not the engine's past passes[].  shaderpass_t
+		ends in a D3D11/VK-only pointer, 488 bytes here and 496 in the engine, so sort
+		reads 128 bytes early (8672 against 8800, measured).  passes[0] starts at the same
+		offset, and its blend is what Shader_Finish's opaque test reads.
+		*/
+		if (sh->numpasses <= 0 || (sh->flags & SHADER_NODRAW))
+			return 5;
+		bits = sh->passes[0].shaderbits & SBITS_BLEND_BITS;
+		if (bits && bits != (SBITS_SRCBLEND_ONE|SBITS_DSTBLEND_ZERO))
+			return 5;
+	}
+	return n > 0 ? 0 : 3;
+#else
+	return 4;
+#endif
+}
+
+static void VBSP_BuildVisualBIH(model_t *mod)
+{
+	vbspinfo_t *prv = mod->meshinfo;
+	struct bihleaf_s *leafs, *l;
+	struct bihnode_s *collisionnodes = mod->cnodes;
+	modelfuncs_t funcs = mod->funcs;
+	size_t i, j, count = prv->numstaticprops, props = 0;
+	unsigned int why[6] = {0};
+	int w;
+
+	prv->vis_built = true;
+	for (i = 0; i < prv->numdisplacements; i++)
+		count += prv->displacements[i].numindexes/3;
+	if (!count)
+		return;
+	leafs = l = plugfuncs->Malloc(sizeof(*l)*count);
+	prv->vis_tr = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->vis_tr)*(prv->numstaticprops ? prv->numstaticprops : 1));
+	for (i = 0; i < prv->numstaticprops; i++)
+	{
+		entity_t *ent = &prv->staticprops[i].ent;
+		if (hl2_propcollision->ival && prv->staticprops[i].solid && !prv->staticprops[i].nocollide)
+			continue;	//in the movement tree, which VBSP_TraceVisual traces first
+		if (!ent->model)
+			continue;
+		//non-solid props are never requested by the movement build; they load when first drawn
+		if (ent->model->loadstate == MLS_NOTLOADED)
+			modfuncs->GetModel(ent->model->publicname, MLV_WARN);
+		while (ent->model->loadstate == MLS_LOADING)
+			threadfuncs->WaitForCompletion(ent->model, &ent->model->loadstate, MLS_LOADING);
+		w = ent->model->funcs.NativeTrace ? VBSP_PropModelOpaque(ent) : 2;
+		if (w)
+		{
+			why[w]++;
+			continue;
+		}
+		VectorCopy(ent->axis[0], prv->vis_tr[i].axis[0]);
+		VectorCopy(ent->axis[1], prv->vis_tr[i].axis[1]);
+		VectorCopy(ent->axis[2], prv->vis_tr[i].axis[2]);
+		VectorCopy(ent->origin, prv->vis_tr[i].origin);
+		l->type = BIH_MODEL;
+		l->data.mesh.model = ent->model;
+		l->data.mesh.tr = &prv->vis_tr[i];
+		l->data.contents = FTECONTENTS_SOLID;
+		for (j = 0; j < 3; j++)
+		{
+			l->mins[j] = ent->origin[j] - ent->model->radius;
+			l->maxs[j] = ent->origin[j] + ent->model->radius;
+		}
+		l++;
+		props++;
+	}
+	for (i = 0; i < prv->numdisplacements; i++)
+	{
+		dispinfo_t *d = &prv->displacements[i];
+		if (!d->lightopaque)
+			continue;
+		if (hl2_dispcollision->ival && !(hl2_dispflags->ival && (d->collflags & DISPSURF_NOHULL_COLL)))
+			continue;	//solid in the movement tree already
+		for (j = 0; j < d->numindexes; j+=3)
+		{
+			index_t *v = d->cidx+j;
+			l->type = BIH_TRIANGLE;
+			l->data.tri.xyz = d->xyz;
+			l->data.tri.indexes = v;
+			l->data.contents = FTECONTENTS_SOLID;
+			VectorCopy(d->xyz[v[0]], l->mins);
+			VectorCopy(d->xyz[v[0]], l->maxs);
+			AddPointToBounds(d->xyz[v[1]], l->mins, l->maxs);
+			AddPointToBounds(d->xyz[v[2]], l->mins, l->maxs);
+			l++;
+		}
+	}
+	if (l != leafs)
+	{	//through the real map, as VBSP_BuildLightBIH does, then put movement's tree and funcs back
+		prv->vis_trace_model = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->vis_trace_model));
+		memset(prv->vis_trace_model, 0, sizeof(*prv->vis_trace_model));
+		modfuncs->BIH_Build(mod, leafs, l-leafs);
+		prv->vis_trace_model->cnodes = mod->cnodes;
+		prv->vis_trace_model->funcs.NativeTrace = mod->funcs.NativeTrace;
+		VectorCopy(mod->mins, prv->vis_trace_model->mins);
+		VectorCopy(mod->maxs, prv->vis_trace_model->maxs);
+		mod->cnodes = collisionnodes;
+		mod->funcs = funcs;
+	}
+	Con_DPrintf("%s: glare occluders %u draw-only props (declined %u see-through, %u no shader, %u unloaded, %u other), %u displacement triangles\n",
+		mod->name, (unsigned)props, why[5], why[4], why[1], why[2]+why[3], (unsigned)((l-leafs) - props));
+	plugfuncs->Free(leafs);
+}
+
+//The world's NativeTrace from the movement build on: byte-identical unless VBSP_CONTENTS_VISUAL is asked for.
+static qboolean VBSP_TraceVisual(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace)
+{
+	vbspinfo_t *prv = model->meshinfo;
+	trace_t vt;
+	qboolean hit = prv->vis_basetrace(model, hulloverride, framestate, axis, p1, p2, mins, maxs, capsule, against & ~VBSP_CONTENTS_VISUAL, trace);
+
+	if (!(against & VBSP_CONTENTS_VISUAL))
+		return hit;
+	if (!prv->vis_built)
+		VBSP_BuildVisualBIH(model);
+	if (!prv->vis_trace_model)
+		return hit;
+	prv->vis_trace_model->funcs.NativeTrace(prv->vis_trace_model, hulloverride, framestate, axis, p1, p2, mins, maxs, capsule, against & ~VBSP_CONTENTS_VISUAL, &vt);
+	if (vt.truefraction < trace->truefraction)
+	{
+		*trace = vt;
+		hit = true;
+	}
+	return hit;
+}
+
 static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t unusedb)
 {	//NOTE: must be on main thread because we're waiting for submodels for their size.
 	model_t		*mod = ctx;
@@ -7946,6 +8110,10 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 
 	modfuncs->BIH_Build(mod, bihleaf, l-bihleaf);
 	VBSP_BuildLightBIH(mod);
+	prv->vis_trace_model = NULL;	//FTESurf Patch 799
+	prv->vis_built = false;
+	prv->vis_basetrace = mod->funcs.NativeTrace;
+	mod->funcs.NativeTrace = VBSP_TraceVisual;
 	plugfuncs->Free(bihleaf);
 	plugfuncs->Free(phyprobe);	//FTESurf Patch 262
 	phyprobe = NULL;
