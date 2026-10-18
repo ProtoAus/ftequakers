@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 800 — r_budget_csqc: CSQC by QC source file and function; the panel's own time
+
+**Problem:** Lex, 19 Oct, on r_budget: "can we also get a indication of how much the display is
+taking in terms of CPU time? and also can we get a break down of CSQC the same way? These tools
+don't cause slowdown when not running them correct?"
+
+**Change (client exe, qclib):**
+- The header and `r_budget_dump` show `panel`: the panel's own CPU time (RSPEED_RSPEEDSHOW).
+- `r_budget_csqc 1` (with r_budget): "CSQC by QC file", busiest first, bars on the QC total's
+  scale; `r_budget 3` adds the three busiest functions under the first four files; the panel shows
+  ten files, `r_budget_dump` sixteen with their functions; `r_budget 1` a "qc" legend line.
+- qclib: SetProfiling (only between calls), EnumProfile (self and total per function), and
+  ProfileExclude, a window the host opens round engine work it times elsewhere -- renderscene's
+  R_RenderView and addentities. It is paused while QC nested inside runs, so a predraw function
+  still counts as its caller's child. The three are appended to pubprogfuncs_t after `user`.
+- The profiler runs only while r_budget_csqc shows: off, one branch a frame, and QC keeps the
+  fast interpreter. The first window after switching on is partial and is not shown.
+
+**Verified:** on this PC, surf_demise, uncapped, the owner's `r_renderscale 2`, three runs.
+Grouping by file: cl_hud 26-27% of QC, cl_zones 16%, then a long tail, each with its busiest
+functions (HUD_TextDraw, Zone_Line, Chat_Draw). The profiler's cost on the CSQC row: 0.54-0.61 ms
+off against 0.65-0.70 on (+0.07 to +0.13), back on switching off. "all QC" reads 0.38-0.42 of that
+row. The panel: 0.08 ms at level 1, 0.16-0.17 at 2, 0.24-0.27 at 2 with the breakdown, 0.40-0.48 at
+3 with it. Shots read at 1:1 at levels 1, 2 and 3; the first level-3 shot ran off a 1200 px
+screen, hence ten files and functions under four. One review round (grouping, abort reset,
+first-window skip, backdrop, CSQC_DAT guard), all fixed. Ship exe 33466461, one stamp throughout,
+both installs.
+
+**Known:**
+- "all QC" is not the CSQC row: QC run from entity setup (predraw) is under World there, and the
+  unbucketed parts of R_RenderView stay in CSQC.
+- Builtins count toward the QC function that called them (drawstring is HUD time), except the two
+  excluded. SSQC and menu QC are not broken down.
+- A csprogs reload inside one window can show a single partial window as full.
+
 ## Patch 794 — preserve view validation faults on usable angle clocks (consumer)
 
 **Problem:** a usable angle comparison could mask independent sidecar validation
