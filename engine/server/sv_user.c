@@ -69,9 +69,12 @@ evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
 evalc_t	evalc_pmepoch, evalc_physcrc, evalc_portalx, evalc_portalorg, evalc_portalvel;	//FTESurf Patch 346
 evalc_t	evalc_pmhold;		//FTESurf Patch 380
+evalc_t	evalc_lpdob, evalc_lpdfb;	//FTESurf Patch 802: sv_ents.c's portal cameras
 
 void SV_FS_ResetFieldCaches(void)
 {
+	memset(&evalc_lpdob,     0, sizeof(evalc_lpdob));		//FTESurf Patch 802
+	memset(&evalc_lpdfb,     0, sizeof(evalc_lpdfb));
 	memset(&evalc_pmepoch,   0, sizeof(evalc_pmepoch));		//FTESurf Patch 346
 	memset(&evalc_physcrc,   0, sizeof(evalc_physcrc));
 	memset(&evalc_portalx,   0, sizeof(evalc_portalx));

@@ -27,6 +27,8 @@ extern cvar_t sv_debug_animrate;	//nettest Patch 155
 extern cvar_t sv_cullentities_trace;
 extern cvar_t sv_cullplayers_trace;
 extern cvar_t sv_nopvs;
+extern cvar_t sv_portalpvs;		//FTESurf Patch 802
+extern evalc_t evalc_lpdob, evalc_lpdfb;
 
 #define SV_PVS_CAMERAS 16
 typedef struct
@@ -4363,6 +4365,41 @@ void SV_AddCameraEntity(pvscamera_t *cameras, edict_t *ent, pvec3_t viewofs)
 	}
 }
 
+/*
+  FTESurf Patch 802: an open linked portal in view shows the room it opens onto, and that
+  room's brush entities were never sent -- the client sees from its own eye only.  From
+  surf_tripportals' stage-1 start zone the hub through `start2` lost its signs and neon (the
+  zone's cluster cannot see the hub's).  Each SOLID_PORTAL in the PVS built so far adds a
+  camera at lpd_ob + lpd_fb*8 (sh_portal.qc's exit doorway, where cl_portal.qc's
+  FS_PortalTransformView samples the far PVS); the merge lets a door seen through a door
+  qualify too, up to SV_PVS_CAMERAS.  Doors whose QC lacks the fields add nothing.
+*/
+static void SV_AddPortalCameras(pvscamera_t *camera)
+{
+#ifdef USEAREAGRID
+	link_t *l;
+	wedict_t *p;
+	eval_t *ob, *fb;
+	pvec3_t ofs;
+
+	for (l = sv.world.portallist.l.next; l != &sv.world.portallist.l && camera->numents < SV_PVS_CAMERAS; l = l->next)
+	{
+		p = ((areagridlink_t*)l)->ed;
+		if (ED_ISFREE(p) || p->v->solid != SOLID_PORTAL)
+			continue;
+		if (!sv.world.worldmodel->funcs.EdictInFatPVS(sv.world.worldmodel, &p->pvsinfo, camera->pvs.buffer, camera->area))
+			continue;
+		ob = svprogfuncs->GetEdictFieldValue(svprogfuncs, (edict_t*)p, "lpd_ob", ev_vector, &evalc_lpdob);
+		fb = svprogfuncs->GetEdictFieldValue(svprogfuncs, (edict_t*)p, "lpd_fb", ev_vector, &evalc_lpdfb);
+		if (!ob || !fb)
+			return;
+		VectorMA(ob->_vector, 8, fb->_vector, ofs);
+		VectorSubtract(ofs, p->v->origin, ofs);	//SV_AddCameraEntity adds it back
+		SV_AddCameraEntity(camera, (edict_t*)p, ofs);
+	}
+#endif
+}
+
 void SV_Snapshot_SetupPVS(client_t *client, pvscamera_t *camera)
 {
 	camera->area[0] = 0;
@@ -4386,6 +4423,9 @@ void SV_Snapshot_SetupPVS(client_t *client, pvscamera_t *camera)
 	//hack for skyrooms, open up the pvs. FIXME: only do this if 'the' viewleaf can see sky.
 	if (sv.skyroom_pos_known)
 		SV_AddCameraEntity(camera, NULL, sv.skyroom_pos);
+
+	if (sv_portalpvs.ival && !sv_nopvs.ival)
+		SV_AddPortalCameras(camera);	//FTESurf Patch 802
 }
 
 void SV_Snapshot_Clear(packet_entities_t *pack)

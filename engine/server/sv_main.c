@@ -69,6 +69,7 @@ cvar_t	sv_nailhack					= CVARD("sv_nailhack","1", "If set to 1, disables the nai
 //only the print that was off.
 cvar_t	sv_debug_animrate			= CVARD("sv_debug_animrate","0", "Report entities whose networked animation playback rate (.animrate) is not 1. Throttled to one line per second.");
 cvar_t	sv_nopvs					= CVARD("sv_nopvs", "0", "Set to 1 to ignore pvs on the server. This can make wallhacks more dangerous, so should only be used for debugging.");
+cvar_t	sv_portalpvs				= CVARD("sv_portalpvs", "1", "FTESurf Patch 802. Also send what an open linked portal in a client's view looks onto: each one adds the far doorway's PVS, as Source does for its linked portals. 0 culls from the player's own eye only, so brush entities seen through a door are missing.");
 cvar_t	fraglog_public				= CVARD("fraglog_public", "1", "Enables support for connectionless fraglog requests");
 cvar_t	fraglog_details				= CVARD("fraglog_details", "1", "Bitmask\n1: killer+killee names.\n2: killer+killee teams\n4:timestamp.\n8:killer weapon\n16:killer+killee guid.\nFor compatibility, use 1(vanilla) or 7(mvdsv).");
 
@@ -6233,6 +6234,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&sv_nailhack, cvargroup_servercontrol);
 	Cvar_Register (&sv_debug_animrate, cvargroup_servercontrol);	//nettest Patch 155
 	Cvar_Register (&sv_nopvs, cvargroup_servercontrol);
+	Cvar_Register (&sv_portalpvs, cvargroup_servercontrol);	//FTESurf Patch 802
 
 	Cmd_AddCommandD ("sv_perfdump", SV_PerfDump_f, "FTESurf Patch 273: split r_speeds' single `Server` row into the QC StartFrame chain, entity physics and the client snapshot build, in us/SV_Frame, then reset. Also prints ticks/frame, which says how much of the average is a rare physics tick smeared over many bookkeeping-only frames.");
 
