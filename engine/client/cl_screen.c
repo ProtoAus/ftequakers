@@ -803,6 +803,255 @@ static void R_Budget_Dump_f(void)
 	Con_Printf("r_budget_dump: copied to the clipboard\n");
 }
 
+//FTESurf Patch 801: r_frametime. One sample per rendered frame, from RSpeedShow. The graph keeps the
+//slowest frame of each column's slice, so a spike is never averaged away; the lows come from a
+//histogram updated as frames arrive and expire, so computing them never costs a frame of its own.
+cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the average fps and the 1% and 0.1% lows (the average of the slowest 1% and 0.1% of frames) over r_frametime_window. r_frametime_dump lists the worst frames and where you were; r_frametime_reset starts the window again.");
+cvar_t r_frametime_seconds = CVARFD("r_frametime_seconds", "10", 0, "FTESurf Patch 801. Seconds the r_frametime graph spans.");
+cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch 801. Seconds r_frametime's lows and stutter count cover (1 to 120).");
+
+#define FT_RING 65536		//frames the window can hold: 120 s at 546 fps; past that the oldest go early
+#define FT_BINMS 0.05f
+#define FT_BINS 4000		//0.05 ms bins to 200 ms; the last also takes every slower frame, its exact times summed
+#define FT_COLS 300
+#define FT_WORST 8
+#define FT_STUTTER 2.5f		//times the median
+static struct
+{
+	qboolean on;
+	double base, last;			//realtime when switched on, and of the previous frame
+	float ms[FT_RING], at[FT_RING];	//each frame in the window, and when (s since base)
+	int head, count;
+	int bins[FT_BINS];
+	double sum, oversum;		//ms: the window's, and the last bin's
+	float colmax[FT_COLS];
+	int colcount[FT_COLS];
+	int col;
+	double colstart;
+	double nextstats;
+	float avg, median, low1, low01, worst;	//ms
+	int stutters;
+	struct {float ms, at; vec3_t org;} bad[FT_WORST];	//the window's slowest, slowest first
+} ft;
+
+static int R_FrameTime_Bin(float ms)
+{
+	int b = ms / FT_BINMS;
+	return b < FT_BINS-1 ? b : FT_BINS-1;
+}
+static void R_FrameTime_Drop(void)
+{
+	int t = (ft.head - ft.count) & (FT_RING-1), b = R_FrameTime_Bin(ft.ms[t]);
+	ft.bins[b]--;
+	ft.sum -= ft.ms[t];
+	if (b == FT_BINS-1)
+		ft.oversum -= ft.ms[t];
+	ft.count--;
+}
+//the mean of the slowest n frames, walking the histogram down (a bin's frames count at its middle)
+static float R_FrameTime_Slowest(int n)
+{
+	int b, c, left = n;
+	double s = 0;
+	for (b = FT_BINS-1; b >= 0 && left > 0; b--)
+	{
+		if (!ft.bins[b])
+			continue;
+		c = min(ft.bins[b], left);
+		s += c * (b == FT_BINS-1 ? ft.oversum / ft.bins[b] : (b + 0.5) * FT_BINMS);
+		left -= c;
+	}
+	return n > left ? s / (n - left) : 0;
+}
+static void R_FrameTime_Stats(void)
+{
+	int b, c = 0, half = ft.count / 2, over;
+	float stut;
+	ft.avg = ft.count ? ft.sum / ft.count : 0;
+	for (b = 0; b < FT_BINS; b++)
+		if ((c += ft.bins[b]) > half)
+			break;
+	ft.median = (min(b, FT_BINS-1) + 0.5) * FT_BINMS;
+	ft.low1 = R_FrameTime_Slowest(max(1, ft.count / 100));
+	ft.low01 = R_FrameTime_Slowest(max(1, ft.count / 1000));
+	ft.worst = ft.bad[0].ms;
+	stut = ft.median * FT_STUTTER;
+	for (over = 0, b = R_FrameTime_Bin(stut) + 1; b < FT_BINS; b++)
+		over += ft.bins[b];
+	ft.stutters = over;
+}
+static void R_FrameTime_Sample(void)
+{
+	double now = Sys_DoubleTime(), window, span;
+	float ms, at;
+	int b, i;
+
+	if (!r_frametime.ival)
+	{
+		ft.on = false;
+		return;
+	}
+	if (!ft.on)
+	{
+		memset(&ft, 0, sizeof(ft));
+		ft.on = true;
+		ft.base = ft.last = ft.colstart = now;
+		return;
+	}
+	ms = (now - ft.last) * 1000;
+	ft.last = now;
+	if (ms <= 0 || ms > 1000)
+		return;	//minimised, or a load: not a frame anyone watched
+	at = now - ft.base;
+
+	window = bound(1, r_frametime_window.value, 120);
+	while (ft.count && at - ft.at[(ft.head - ft.count) & (FT_RING-1)] > window)
+		R_FrameTime_Drop();
+	if (ft.count == FT_RING)
+		R_FrameTime_Drop();
+	ft.ms[ft.head] = ms;
+	ft.at[ft.head] = at;
+	ft.head = (ft.head + 1) & (FT_RING-1);
+	ft.count++;
+	b = R_FrameTime_Bin(ms);
+	ft.bins[b]++;
+	ft.sum += ms;
+	if (b == FT_BINS-1)
+		ft.oversum += ms;
+
+	//the slowest frames in the window, and where the view was for each
+	for (i = 0; i < FT_WORST; i++)
+		if (ft.bad[i].ms && at - ft.bad[i].at > window)
+		{
+			memmove(&ft.bad[i], &ft.bad[i+1], sizeof(ft.bad[0]) * (FT_WORST-1 - i));
+			memset(&ft.bad[FT_WORST-1], 0, sizeof(ft.bad[0]));
+			i--;
+		}
+	for (i = 0; i < FT_WORST; i++)
+		if (ms > ft.bad[i].ms)
+		{
+			memmove(&ft.bad[i+1], &ft.bad[i], sizeof(ft.bad[0]) * (FT_WORST-1 - i));
+			ft.bad[i].ms = ms;
+			ft.bad[i].at = at;
+			VectorCopy(r_refdef.vieworg, ft.bad[i].org);
+			break;
+		}
+
+	//the graph's columns: a new one each slice; a gap leaves the ones it spans empty
+	span = bound(1, r_frametime_seconds.value, 120) / FT_COLS;
+	for (i = 0; now - ft.colstart >= span && i < FT_COLS; i++)
+	{
+		ft.col = (ft.col + 1) % FT_COLS;
+		ft.colmax[ft.col] = 0;
+		ft.colcount[ft.col] = 0;
+		ft.colstart += span;
+	}
+	if (now - ft.colstart >= span)
+		ft.colstart = now;
+	ft.colmax[ft.col] = max(ft.colmax[ft.col], ms);
+	ft.colcount[ft.col]++;
+
+	if (now >= ft.nextstats)
+	{
+		R_FrameTime_Stats();
+		ft.nextstats = now + 0.25;
+	}
+}
+static void R_FrameTime_Draw(void)
+{
+	float cw, gw = 2*FT_COLS, gh = 120, x, y, scale, v, h;
+	static const float nice[] = {2, 5, 10, 15, 20, 30, 50, 100, 200, 500, 1000};
+	int i, c;
+
+	if (!ft.on || !ft.count)
+		return;
+	cw = (con_textsize.value < 0) ? (-con_textsize.value * vid.height) / vid.pixelheight : con_textsize.value;
+	if (!cw)
+		cw = 8;
+	x = vid.width - gw - 12;
+	y = 130;
+	for (i = 0, scale = 0; i < countof(nice) && !scale; i++)
+		if (nice[i] >= ft.median * 3)
+			scale = nice[i];
+	if (!scale)
+		scale = nice[countof(nice)-1];
+
+	R2D_ImageColours(0, 0, 0, 0.6);
+	R2D_FillBlock(x - 4, y - 4, gw + 8, gh + 3*cw + 8);
+	R2D_ImageColours(1, 1, 1, 1);
+	Draw_FunStringWidthFont(font_console, x, y, va("^3frametime^7  avg %.0f fps   ^31%% low %.0f   0.1%% low %.0f", ft.avg > 0 ? 1000/ft.avg : 0, ft.low1 > 0 ? 1000/ft.low1 : 0, ft.low01 > 0 ? 1000/ft.low01 : 0), gw, false, false);
+	R2D_ImageColours(1, 1, 1, 1);
+	Draw_FunStringWidthFont(font_console, x, y + cw, va("^7median %.2f ms  worst %.1f  ^1stutters %i^7/%gs  top %g", ft.median, ft.worst, ft.stutters, bound(1, r_frametime_window.value, 120), scale), gw, false, false);
+	y += 2*cw + 4;
+
+	//oldest on the left; each column the slowest frame of its slice
+	for (i = 0; i < FT_COLS; i++)
+	{
+		c = (ft.col + 1 + i) % FT_COLS;
+		if (!ft.colcount[c])
+			continue;
+		v = ft.colmax[c];
+		h = min(v / scale, 1) * gh;
+		if (v > ft.median * FT_STUTTER)
+			R2D_ImageColours(1.0, 0.25, 0.25, 0.95);
+		else if (v > ft.median * 1.5)
+			R2D_ImageColours(0.95, 0.85, 0.3, 0.95);
+		else
+			R2D_ImageColours(0.35, 0.85, 0.35, 0.9);
+		R2D_FillBlock(x + i*2, y + gh - h, 2, max(h, 1));
+	}
+	//the median and the stutter line
+	R2D_ImageColours(1, 1, 1, 0.5);
+	R2D_FillBlock(x, y + gh - min(ft.median / scale, 1) * gh, gw, 1);
+	R2D_ImageColours(1, 0.25, 0.25, 0.5);
+	R2D_FillBlock(x, y + gh - min(ft.median * FT_STUTTER / scale, 1) * gh, gw, 1);
+	R2D_ImageColours(1, 1, 1, 1);
+}
+static void R_FrameTime_Reset_f(void)
+{
+	ft.on = false;	//the next frame starts clean
+}
+static void R_FrameTime_Dump_f(void)
+{
+	char out[4096];
+	int i, b, c, n, p;
+	static const float pct[] = {50, 90, 99, 99.9f};
+	double now;
+	if (!ft.on || !ft.count)
+	{
+		Con_Printf("r_frametime_dump: turn r_frametime on first\n");
+		return;
+	}
+	R_FrameTime_Stats();
+	now = Sys_DoubleTime() - ft.base;
+	*out = 0;
+	Q_strncatz(out, va("frametime over %.1f s, %i frames (%s, %s)\n", min(now, bound(1, r_frametime_window.value, 120)), ft.count,
+		cl.worldmodel ? cl.worldmodel->name : "no map", version_string()), sizeof(out));
+	Q_strncatz(out, va("  avg %.2f ms (%.0f fps)  1%% low %.2f ms (%.0f fps)  0.1%% low %.2f ms (%.0f fps)\n", ft.avg, 1000/ft.avg,
+		ft.low1, 1000/ft.low1, ft.low01, 1000/ft.low01), sizeof(out));
+	for (p = 0; p < countof(pct); p++)
+	{
+		n = ft.count * pct[p] / 100;
+		for (b = 0, c = 0; b < FT_BINS && (c += ft.bins[b]) <= n; b++)
+			;
+		Q_strncatz(out, va("  p%-4g %7.2f ms\n", pct[p], b < FT_BINS-1 ? (b + 0.5) * FT_BINMS : ft.oversum / max(1, ft.bins[FT_BINS-1])), sizeof(out));
+	}
+	Q_strncatz(out, va("  stutters (over %.1fx the median, %.2f ms): %i\n", FT_STUTTER, ft.median * FT_STUTTER, ft.stutters), sizeof(out));
+	Q_strncatz(out, "  slowest frames: ms, seconds ago, where the view was\n", sizeof(out));
+	for (i = 0; i < FT_WORST && ft.bad[i].ms; i++)
+		Q_strncatz(out, va("    %7.2f  %6.1f s ago  setpos %.0f %.0f %.0f\n", ft.bad[i].ms, now - ft.bad[i].at,
+			ft.bad[i].org[0], ft.bad[i].org[1], ft.bad[i].org[2]), sizeof(out));
+	{
+		char *line = out, *nl;
+		while ((nl = strchr(line, '\n')))
+		{
+			Con_Printf("%.*s\n", (int)(nl - line), line);
+			line = nl + 1;
+		}
+	}
+	Sys_SaveClipboard(CBT_CLIPBOARD, out);
+}
+
 void RSpeedShow(void)
 {
 	int i;
@@ -819,6 +1068,9 @@ void RSpeedShow(void)
 	R_Budget_Sample();	//FTESurf Patch 782
 	if (r_budget.ival)
 		R_Budget_Draw();
+	R_FrameTime_Sample();	//FTESurf Patch 801
+	if (r_frametime.ival)
+		R_FrameTime_Draw();
 	if (!r_speeds.ival)
 	{
 		R_Budget_Rebase();
@@ -4556,6 +4808,11 @@ void SCR_Init (void)
 	Cvar_Register (&r_budget, "Screen options");	//FTESurf Patch 782
 	Cvar_Register (&r_budget_window, "Screen options");
 	Cvar_Register (&r_budget_csqc, "Screen options");	//FTESurf Patch 800
+	Cvar_Register (&r_frametime, "Screen options");	//FTESurf Patch 801
+	Cvar_Register (&r_frametime_seconds, "Screen options");
+	Cvar_Register (&r_frametime_window, "Screen options");
+	Cmd_AddCommandD ("r_frametime_dump", R_FrameTime_Dump_f, "FTESurf Patch 801. Prints r_frametime's lows, percentiles and slowest frames (with a setpos for each) and copies them to the clipboard.");
+	Cmd_AddCommandD ("r_frametime_reset", R_FrameTime_Reset_f, "FTESurf Patch 801. Starts r_frametime's window again.");
 	Cmd_AddCommandD ("r_budget_dump", R_Budget_Dump_f, "FTESurf Patch 782. Prints r_budget's breakdown as text and copies it to the clipboard.");
 	Cmd_AddCommandD ("r_speeds_dump", RSpeed_Dump_f, "Prints the current r_speeds 2 sample table to the console as text, so it can be logged with -condebug and reconciled arithmetically instead of read off a screenshot.");
 
