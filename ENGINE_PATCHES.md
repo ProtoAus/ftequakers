@@ -110,8 +110,9 @@ four closes, 0 after, on both maps. The GPU rows sum to GPU busy (2.51 of 2.52, 
 Where the GPU is the bottleneck GPU busy matches the frame: `r_renderscale 3` 5.18 against 5.24 ms,
 `4` 8.17 against 8.25, verdict "GPU-bound"; `0.5` drops it to 0.32. `hl2_propdist 1` takes
 "Models & props" from 0.25 to 0.04 ms; `cl_maxfps 60` puts 11.12 of 16.68 ms in idle, verdict
-"headroom". The first cut's overhead, mean fps of three passes at levels 0/1/2/3: 196.8, 200.8,
-193.3, 190.5; the panel times itself in "r_budget / r_speeds" (0.29 ms at level 3, ~300 fps).
+"headroom". Overhead is the panel's own CPU time ("r_budget / r_speeds"), two passes on the shipped
+exe: 0.07 ms at level 1, 0.16-0.18 at 2, 0.27 at 3 (1-5% of a 5.4 ms frame); screenshot fps could
+not separate the levels (one level's readings spread 21 fps).
 Columns checked on shots at 1:1. Ship exe a7f3dfc4 (one stamp throughout), both installs.
 
 **Known:**
