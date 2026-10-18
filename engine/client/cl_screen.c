@@ -361,11 +361,15 @@ static void R_Budget_Text(float x, float y, const char *s, float w, qboolean rig
 }
 
 //one row: a label, its milliseconds and share of the frame, and a bar on one scale for all rows
+#define BUDGET_LABEL 32		//characters: the longest group name
+#define BUDGET_COLS (BUDGET_LABEL + 12)	//label, "%6.2f %3.0f%%", a space
+static float budget_adv, budget_w;	//per draw: the console font's advance (its glyphs are narrower than con_textsize, the line height), the panel width
 static void R_Budget_Row(float x, float y, float cw, float ms, float scale, const float *col, const char *label, qboolean indent)
 {
-	float barx = x + 34*cw, barw = 24*cw, w;
+	float barx = x + BUDGET_COLS*budget_adv, barw = budget_w - BUDGET_COLS*budget_adv, w;
 	//one string per row, columns by padding: the console font is fixed-width, and glyph runs are this overlay's whole cost
-	R_Budget_Text(x, y, va("^7%s%-*.*s%6.2f %3.0f%%", indent ? "  " : "", indent ? 21 : 23, indent ? 21 : 23, label, ms, scale > 0 ? ms*100/scale : 0), 34*cw, false);
+	R_Budget_Text(x, y, va("^7%s%-*.*s%6.2f %3.0f%%", indent ? "  " : "", indent ? BUDGET_LABEL-2 : BUDGET_LABEL, indent ? BUDGET_LABEL-2 : BUDGET_LABEL,
+		label, ms, scale > 0 ? ms*100/scale : 0), BUDGET_COLS*budget_adv, false);
 	w = scale > 0 ? barw * ms / scale : 0;
 	if (w > barw)
 		w = barw;
@@ -422,7 +426,15 @@ static void R_Budget_Draw(void)
 	if (idle < 0)
 		idle = 0;
 	scale = max(budget.frame, max(work, budget.gputotal));
-	w = 59*cw;
+	{
+		int px, py;
+		Font_BeginString(font_console, 0, 0, &px, &py);
+		budget_adv = Font_CharWidth(CON_WHITEMASK, '0') * (float)vid.width / vid.rotpixelwidth;
+		Font_EndString(font_console);
+		if (budget_adv <= 0)
+			budget_adv = cw;
+	}
+	w = budget_w = max(59*cw, BUDGET_COLS*budget_adv + 16*cw);
 
 	//count what will be drawn, so the backdrop fits it
 	if (r_budget.ival == 1)
@@ -510,7 +522,7 @@ static void R_Budget_Draw(void)
 	}
 	y += cw*1.5;
 
-	R_Budget_Text(x, y, "^3CPU work by group          ms frame", 34*cw, false);
+	R_Budget_Text(x, y, va("^3%-*s    ms frame", BUDGET_LABEL, "CPU work by group"), BUDGET_COLS*budget_adv, false);
 	y += cw;
 	for (i = 0; i < BUDGET_GROUPS; i++)
 	{
@@ -535,7 +547,7 @@ static void R_Budget_Draw(void)
 
 	if (budget.gpuframes)
 	{
-		R_Budget_Text(x, y, "^3GPU time by pass           ms frame", 34*cw, false);
+		R_Budget_Text(x, y, va("^3%-*s    ms frame", BUDGET_LABEL, "GPU time by pass"), BUDGET_COLS*budget_adv, false);
 		y += cw;
 		for (i = 0; i < GPUB_MAX; i++)
 		{
