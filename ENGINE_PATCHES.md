@@ -1,5 +1,52 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 813 — a surfer pinned to the face they are sliding along recovers instead of stopping (mover 8)
+
+**Problem.** Lex: on surf ramps "you randomly stop", rarely. His lobby run on
+surf_colin_blaster_69000 (18 Oct, 0009194, pin 7) stopped dead at t 19.200 on its curved
+ramp: position unchanged for a tick, velocity exactly (0, 0, -6). `pm_verify` on the Pi and
+`pm_recsim` on Windows replay that file exactly, stop included. A diagnostic build
+(`pm_stopprobe`, never shipped) showed the tick: crossing the concave seam between two of
+the curve's brushes, 1.4 degrees apart, left the hull about 0.001 u from the new face
+(Source's both-ends-in-front early-out does not keep the 1/32 clearance on a shallow
+approach). At x ~ -20000 a float32 origin resolves 1/512, so the retrace parallel to that
+face dips into it and hits it at fraction 0. Since Patch 492 a fraction-0 trace is valid on
+fixrampbugs 2, so bumps 1-5 filed the same plane five times and the loop cleared the
+velocity. Momentum 0.8.7's IsValidMovementTrace refuses every fraction-0 trace and its ramp
+fix nudges the hull 0.2 off the face.
+
+**Change.** `PMSrc_SamePlaneAgain` (engine/common/pm_source.c): at bump >= 1 in the air, a
+fraction-0 hit on a plane already clipped against since the last progress is refused like an
+invalid trace, so the ramp-fix recovery runs. A fraction-0 hit on a new plane still reaches
+the crease (Patch 492, voyager's V troughs). Mover 8 (PMSRC_VERSION, pin 8 in SV_PMSrcVer);
+fixrampbugs >= 2 only. As in 0.8.7, two equal planes can no longer be filed in the air, so
+the crease's same-plane push is unreachable there. Brush faces only. `pm_dettest` gains
+`pinmover`, the srcmover walk on mover 8.
+
+**Verified.**
+- Census of 131 replayable lobby and desktop runs (42 of 57 maps; stopped twice by low
+  memory), open loop only: the same-plane fraction-0 case occurred twice under fixrampbugs 2
+  (Lex's colin run, pin 7; bhop_zentic 0005033, pin 3, a wall) and both ended in a velocity
+  clear; four times in pin-1 runs, where 0.8.7's rule recovered and the run went on. Two more
+  stops are in parked resume runs (surf_666, a second colin run), replayed exactly. The pinned
+  arm of `pm_recsim` (state snapped to %.2f) invents such stops: three it showed
+  (surf_aesthetic, surf_aircontrol, surf_boreas) are not in the runs.
+- Lex's colin file at its own pin 7: 9190/9190 packets exact on this build; the same inputs at
+  pin 8 leave the recording at packet 1279 (the stop tick) and do not stop.
+- surf_voyager's P492 flight (p492voy.rec): 4417/4417 exact at pins 2, 7 and 8; no same-plane
+  fraction-0 hit in it.
+- pm_dettest: every line equal to the parent build on bhop_eazy, surf_ace, surf_boreas and
+  surf_colin_blaster_69000, and the Pi native equal to Windows on all four (pinmover = propmover).
+- One review round, three lenses (control flow, evidence, cheater): no integrity finding; the
+  round added the dettest pass and corrected comments.
+- Deployed 2026-10-18 21:20Z: lobby native 06fee9ab (rollback pre813 = P812's 7c72bbdf),
+  pm_sourceversion 8 on all 12; both installs' client 219c737c, C:\FTEQuake server c6dbcef3
+  (FTESurf tools/lobby-engine-p813-20261018.md).
+
+**Known.** An old client exe on a mover-8 lobby predicts the old stop and is corrected. Never
+roll the sweeper back below 813 (an older verifier REFUSEs pin 8). The rest of the audit
+(start-of-tick ground check, duck crop, CheckStuck, edge bevels) is in FTESurf BACKLOG.
+
 ## Patch 812 — velocity past 4096 u/s is predicted: PEXT2_BIGVELOCITY is offered (client and server exe)
 
 **Problem:** Lex: prediction errors at ~4500 u/s on surf_joutsenlaulu. The cap was not it:
