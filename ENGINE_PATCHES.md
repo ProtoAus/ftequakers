@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 812 — velocity past 4096 u/s is predicted: PEXT2_BIGVELOCITY is offered (client and server exe)
+
+**Problem:** Lex: prediction errors at ~4500 u/s on surf_joutsenlaulu. The cap was not it:
+lobby 2 ran `maxvel 9999/axis` (its cfg/maps file) and a client's `serverinfo` read
+`sv_maxvelocity 9999`. The wire was: the client printed `Using FTE extensions
+0x387fedeeffdf`, pext2 0x387f without 0x4000. PEXT2_BIGVELOCITY had a reader, a writer and
+a PEXT2_CLIENTSUPPORT entry but was never put in Net_PextMask -- the same omission as 125 and
+141 -- so it was never negotiated, the UFP velocity fields stayed 16-bit at 1/8 unit, and
+SV_EncodeVelocity saturated each axis at 4095.875 u/s. Above that the client replayed every
+command slower than the server moved: at 4600 u/s `prederr ... off by 7.56` per tick on the
+fast axis, which is 69.0 - 61.44 u, i.e. 4600 against 4095.9.
+
+**Change:** `mask |= PEXT2_BIGVELOCITY;` in Net_PextMask's replacement-deltas block
+(common/net_chan.c), beside the other UF/UFP payload bits. Both sides must carry it; either
+side without it negotiates 0 and behaves exactly as before. MVDs keep their fixed recorder mask
+(sv_mvd.c), so their format is unchanged and their playback still clamps at 4095.9 per axis; a
+client demo records the negotiated mask, which this fork since bf24802ed reads and upstream FTE
+does not. `info` still names 0x4000 UNKNOWN.
+
+**Verified:** FTESurf-worktrees `maxvel_arm.py`, a dedicated socket on surf_joutsenlaulu
+(cfg/maps 9999), saves rewritten to Lex's save063 position with the dominant axis at 3800,
+4600 and 6000, loaded by `cmd sl_first/sl_next`, client prederr counted for 3 s (the load's
+own snap is one line in every arm). Installed pair (client a77d4a3f, server 35384294): 1 / 1 /
+83 at 3300 / 3800 / 4600. This build (client 7f8e25fb, server 3ff93982,
+git-7483-patch-812-0-g92f020ed3): pext2 0x787f, 2 / 1 / 2 lines at 3800 / 4600 / 6000, the
+second being one single correction ~6 ticks after the load at both speeds. New client on the
+old server: 0x387f, 2 / 86 / 74. Old installed client and the 0.1.27 client (e19f681d) on the
+new server: 0x387f, 1 / 82 / 72 and 3 / 86 / 73 -- unchanged, no failure. Zero new compiler
+warnings. aarch64 native (7c72bbdf): pm_dettest on bhop_eazy, surf_ace, surf_boreas,
+surf_leidenfrost and surf_surreal and both pm_verify files print exactly what the live P802
+native's gate printed (its known boreas physents HOLD included). One review (wire format, mixed
+versions, demos): every writer keys the width on the stream owner's mask and every reader on the
+mask its serverdata or demo header announced; no defect.
+
 ## Patch 806 — Player (hud_player) in the key panel and the key strip (csprogs)
 
 **Problem.** Lex asked for `hud_player` and `config_menu` in the bottom-left key hints.
