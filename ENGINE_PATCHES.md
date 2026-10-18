@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 786 — spectate inside a trigger; the hold keeps the body in it (qwprogs)
+
+**Problem:** Lex: "it prevents you from going spec if you're inside a trigger??" Patch
+382 refused the entry while a trigger touched the body on the last packet or had not
+seen it leave, because a hold ran the trigger's state on in world time: the end-touch
+sweep counted the held body absent, fired OnEndTouch at it and cleared its masks, so
+the release was a fresh OnStartTouch. The touch stamp was also the first line of all
+five touch handlers, so a disabled, filtered or spent trigger refused too.
+
+**Change:**
+- The stamp moves past each handler's returns for a trigger that cannot act on the
+  player (trigger_multiple only where it has outputs).
+- SV_TriggerEndThink never counts a held player absent (SV_TouchHeld; the one-toucher
+  path skips its clock while held and gets the hold added back at release).
+- SV_TrigResume at a release where the body stays (leave, notarget, move): the release
+  counts as a touch (a PlayerPostThink release comes before the next move, and a sweep
+  between must not see absence); a speed pad the body rests in has no enter edge; the
+  player's OnTrigger on a `wait` trigger counts as just fired if its window had
+  expired, and a window only the player spent moves by the hold.
+- SV_SpecStart allows the entry inside a trigger and keeps the run ranked. It still
+  refuses while an output delayed with the player as activator is due (anywhere in the
+  edict walk), during Monolith B4's pad profile, and within `run_spec_cooldown` (0.25 s,
+  never under 0.1) of a release where the body stayed: holds toggled faster than the
+  0.03 s sweep would keep a LEFT trigger's touch alive (OnJump anywhere), and each
+  toggle walks every edict twice.
+
+**Rejected, across five review rounds:** practice-marking a running run and clearing
+the carrier (the masks still emptied, so a player not yet running could stack an
+OnStartTouch booster into a clean run); counting a player held only after a 0.03 s
+window (its first sweep could mark absence that a PostThink release then turned into an
+exit and a re-fired entry, about 1 in 4 such releases).
+
+**Verified:** tools/p786trig.py on surf_colony's trigger *93 (`echo` on OnStartTouch),
+dedicated server + 2 clients: main refuses; the first cut re-fires the entry output on
+release; this patch accepts ("touch 1, pending 1") and stays silent, the trigger still
+sees the exit and the next entry, toggled re-entries are refused by the cooldown, and
+20 countdown releases inside the trigger fire nothing (the window-rule build re-fires;
+c410d513, the round-2 build, keeps a left touch alive under toggling). Not driven: the
+pad and `wait` halves of SV_TrigResume (no reachable map case). Known: BACKLOG "Spectate
+inside a trigger (P786)".
+
 ## Patch 787 — particle bakes draw the material's image with Source's blend; ropes declined (tools, particles/surf_boreas.cfg)
 
 **Problem:** Lex, 18 Oct: Momentum's surf_boreas end room has a beam and little
