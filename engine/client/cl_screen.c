@@ -932,6 +932,17 @@ static void R_FrameTime_Stats(void)
 		over += ft.bins[b];
 	ft.stutters = over;
 }
+//unfocused with cl_idlefps on, the engine paces frames to it on purpose (CL_Frame's idle); unfocused
+//with it at 0 (the rig, a stream with OBS focused) they are real frames and count
+static qboolean R_FrameTime_Throttled(void)
+{
+	static cvar_t *idlefps;
+	if (vid.activeapp)
+		return false;
+	if (!idlefps)
+		idlefps = Cvar_FindVar("cl_idlefps");
+	return idlefps && idlefps->value > 0;
+}
 static void R_FrameTime_Sample(void)
 {
 	double now = Sys_DoubleTime(), window, span;
@@ -950,8 +961,8 @@ static void R_FrameTime_Sample(void)
 		ft.base = ft.last = ft.colstart = now;
 		return;
 	}
-	if (!vid.activeapp)
-	{	//tabbed out: cl_idlefps throttles these, and nobody is watching
+	if (R_FrameTime_Throttled())
+	{
 		ft.last = now;
 		return;
 	}
