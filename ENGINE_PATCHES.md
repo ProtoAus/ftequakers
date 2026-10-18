@@ -12,12 +12,13 @@ angle timestamps before storage. Invalid clocks fault without an angle judgment.
 Retain independent sidecar faults when the comparison is unavailable; valid
 unresolved pairs stay BLIND, not OK. Client-local reset allowances use validated
 server restore/session history, counting a cold restore and its new session once.
+Resume authority also requires an ASCII integer slot in the writer's 0..999 range.
 Shape, finite-number, invariant run-clock and end-range checks stay active.
 Captured bytes and digest checks are unchanged. No native/QC behavior, engine pin,
 Build, ranking policy or threshold change.
 
 **Verified:** independent reviews exposed the cases; parent baseline/head probes
-reproduced them before correction. Reader 354 / receipt 151 checks and sweep suite:
+reproduced them before correction. Reader 363 / receipt 183 checks and sweep suite:
 zero failed. Same bytes of 602 recordings / 383 sidecars: no new faulting pairs;
 two formerly faulting cold-load pairs remain unavailable, not angle-clean.
 The retained native held prefix still joins without faults (short capture, THIN).
