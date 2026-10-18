@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 801 — r_frametime: a frame-time graph with 1% and 0.1% lows and stutter marks
+
+**Problem:** Lex, 19 Oct: "some sort of efficent, low budget frame time/frametime graph we could
+get to see/analysise the 1% or 0.1% lows, see visually to see if a map has a stutter issue".
+
+**Change (client exe, cl_screen.c):**
+- `r_frametime 1`: at the top right (the bottom right when r_budget's panel would reach it), a graph
+  of the last `r_frametime_seconds` (10), each of 300 columns the slowest frame of its slice so a
+  spike is never averaged away: green, yellow over 1.5x the median, red over 2.5x (a stutter), with
+  the median and stutter lines. Above it the average fps, the 1% and 0.1% lows (the mean of the
+  slowest 1% / 0.1%), the median, the worst frame and the stutter count over `r_frametime_window` (30).
+- One sample per rendered frame from RSpeedShow. The lows come from a 4000-bin histogram (0.05 ms
+  bins to 200 ms) kept as frames arrive and expire from a 65536-frame ring, so computing them never
+  costs a frame; the window's 64 slowest are kept exactly, with where the player stood and looked,
+  and frames over 200 ms are read from them.
+- `r_frametime_dump`: the lows, p50/p90/p99/p99.9, the stutter count and the eight slowest frames
+  with a `setpos` for each (origin and angles), to the clipboard. `r_frametime_reset`.
+- Frames over a second (a load, minimised) and frames cl_idlefps throttles while unfocused are not
+  counted; a dump (either command) starts the next interval after itself, since it stalls its own frame.
+
+**Verified:** on this PC, surf_demise, the owner's `r_renderscale 2`. `cl_maxfps 60`: median 16.68,
+average 16.67 ms, 1% low 53 fps, no stutters. Three forced hitches (a `screenshot` each, 0.72-0.74 s):
+3 red spikes and 3 stutters counted; the 0.1% low of 2217 frames read 733.17 ms, the exact mean of the
+two slowest (736.64, 729.69), where the bin's mean would give 727.5. A dump's `setpos -12000 -3900
+14976 15 90 0` matched `viewpos` after facing 15/90. With `cl_idlefps 60` the (unfocused) rig window
+counted no frames; at 0, 869 in 4.7 s. Cost: r_budget's `panel` 0.16 ms without it, 0.19 with it.
+Uncapped: median 5.28 ms, p99 6.63. Shots read at 1:1, beside r_budget 2 at 1920x1200. One review
+round (kept slowest lost frames, inexact over 200 ms, setpos from the eye with no angles, tabbed-out
+frames, small screens), all fixed and each measured. Ship exe 8abba595, one stamp, both installs.
+
+**Known:**
+- A dump stalled its own frame by about 0.3 s in the arm (r_budget_dump too); the next interval
+  starts after it, so it does not count, but the stall is real.
+- `setpos` uses the standing view height (64); a crouched stutter reads 18 units low.
+- Past 2184 fps (or 546 at a 120 s window) the ring holds less than the window; the dump's span says so.
+
 ## Patch 803 — a departed player's body stops being solid (qwprogs)
 
 **Problem:** the engine clears a leaving player's edict only for NQ progs (sv_user.c
