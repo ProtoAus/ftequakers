@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 806 — Player (hud_player) in the key panel and the key strip (csprogs)
+
+**Problem.** Lex asked for `hud_player` and `config_menu` in the bottom-left key hints.
+`config_menu` was already there (K Keys); `hud_player` had no row in the key table, so
+neither the panel nor the strip could show or rebind its key.
+
+**Change.** FTESurf `src/client/cl_keycfg.qc`: a `player` row (hud_player, default P) is
+the last row under Menus; the save and run rows move up one (KC_N 25); the strip shows
+P Player between HUD and Noclip (KC_HINTS 7). No native change.
+
+**Verified.** 0 warnings; `tools/p762keys.py` 56/56 on the new csprogs, the hint read
+back as `Z|Saves;X|Graphics;C|HUD;P|Player;V|Noclip;Bksp|Rewind;K|Keys`; screenshots
+of the strip and the panel read. FTESurf 633d131e. Both installs csprogs 03feab73.
+
 ## Patch 805 — the step smoother no longer pins the camera after a long frame (client exe)
 
 **Problem:** Lex: on surf_null "you visually stay at the wrong height until you jump".
