@@ -1,5 +1,74 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 787 — particle bakes draw the material's image with Source's blend; ropes declined (tools, particles/surf_boreas.cfg)
+
+**Problem:** Lex, 18 Oct: Momentum's surf_boreas end room has a beam and little
+particles; ours has neither. They are child systems of `tendies_endparticle01`, and
+`vbsp_emit_psys_children 1` turned the room white.
+- tools/pcf.py wrote the MATERIAL name as `texture`; FTE's particle loader takes an
+  IMAGE name and draws its default particle when there is none (p_script.c:1008).
+  particle_glow_11 -> effects/tesla_glow, glow_04_additive -> particle_glow_04,
+  laser -> laser01: white discs. Every block was `blendalpha` where Source adds.
+- The beam (`tendies_endparticle05`) is `render_rope`, drawn as 24 billboards of
+  radius 1500.
+
+**Change (tools/pcf.py, tools/sourceassets.py, test_pcf_resources.py):** `material_look`
+resolves the .vmt (map pak first, then `--content`, default CS:S's cstrike_pak and
+hl2_misc) to its `$basetexture`, and writes `blend adda` for `$additive` or a Sprite in
+render mode 3/5/7/9 (sprite_dx9.cpp). `render_rope` systems are declined. A quoted
+`"[ 0.5 0.5 ]"` VMT value is a vector, not a `[$X]` conditional.
+
+**Verified:** 24 resource tests (two new). surf_boreas re-bake: 8 blocks change image
+and blend, two ropes declined, index otherwise identical; surf_tensor2's bake and index
+byte-identical to the installed ones. A/B in game, children on: the white-out is gone,
+but `tendies_endparticle04` (radius 800, 64/s, alpha 0.8-1) still draws a saturated
+dome over the pit, so children stay off (BACKLOG: likely Source's linear-light
+blending). Installed in C:\FTESurftesurf 2026-10-18T09:35Z: `particles/surf_boreas.cfg` `15ccc3ca`,
+`data/mapparticles.txt` `9570137e` (were `bb277920` / `6c1f06ec`).
+
+## Patch 783 — surf_boreas: 16-bit VTFs load, $additive blends as Source does, water takes its srgb? fog colour (hl2 plugin, gl_shader.c)
+
+**Problem:** Lex, 18 Oct: surf_boreas's end-room "smoke" drew the missing checker, and
+its water lacks Momentum's blue fog (his surf_boreas0001.tga against surf_boreas_007).
+- `tendies_smoke.vtf` is BGRA4444 (VTF format 19); img_vtf.c rejected all three 16-bit
+  formats. Library: BGRA4444 5 files on 3 maps, BGR565 6 on 3, BGRA5551 none.
+- Loaded, the ribbons (displacements; `$additive $translucent $vertexalpha`) drew ONE
+  ONE, a saturated white column. Source adds with SRC_ALPHA when alpha is opacity
+  (BaseShader.cpp:632), and their painted alpha is 0-6 of 255.
+- water01's blue is `srgb?$fogcolor {120 200 255}`. Every srgb? key read false, so the
+  water fogged toward the plain `{255 255 255}`.
+
+**Change:**
+- img_vtf.c: the three formats are sized at 2 bytes a texel and each mip expanded to
+  BGRA8 (BGRX8 for 565), first-named channel in the low bits (imageformat.h:230-284).
+  Not uploaded as ARGB4444/1555/RGB565: Vulkan claims ARGB4444 and Sys_Errors creating
+  it, the software converters swap red and blue, nothing converts RGB565.
+- mat_vmt.c `VMT_AdditiveBlend`: SRC_ALPHA ONE for `$vertexalpha` (its value), 0 <
+  `$alpha` < 1, or `$translucent` without alphatest/`$selfillum`/`$basealphaenvmapmask`;
+  Sprite and SpriteCard always; the emissive pass stays ONE ONE (emissive.glsl writes
+  alpha 0); otherwise ONE ONE. The UnlitGeneric pass arm, both flipbook arms and the
+  shared tail use it.
+- gl_shader.c `Shader_Finish`: a pass 0 of SRC_ALPHA ONE auto-sorts additive as ONE ONE
+  does, so those surfaces keep their bucket. Also moves quakers' `gfx/rain/streak` and
+  `gfx/tracer` (effects.shader, no sort) from BLEND to ADDITIVE.
+- mat_vmt.c: `srgb?` is taken for `$fogcolor` only: water.cpp:331 converts it
+  gamma-to-linear and the sRGB write converts back, so it shows as written. It wins over
+  a plain `$fogcolor` in either order; an unreadable one is ignored. The other srgb? keys
+  (1,168 materials: `$alpha .375`, `$overbrightfactor .75`, `-dx10` tool textures)
+  compensate for linear-light blending, which FTE does not do, and stay false.
+
+**Verified:** build, no new warnings. surf_boreas, fixture basedir: the smoke texture
+loads and the ribbons draw `src_alpha one` at sort 12 (additive; 11 before the sort
+change). Water under a copy of Lex's ftesurf.cfg (`hl2_water 2`): same views, control
+grey-white over shallow water as in Lex's 007, candidate blue-tinted with the bottom
+showing, as in Momentum's 0001; the deep lake fogs nearly solid in both (grazing view).
+Three review rounds: round 1 (emissive went invisible, the `$translucent` term, the
+flipbook arms, the sort bucket), round 2 (an explicit `sort additive` pre-empted
+DECAL/NEAREST/SEETHROUGH, `$vertexalpha 0`, an unreadable srgb? colour), round 3 none.
+Not verified: other maps' additive materials on screen (the rule is Source's; no
+library A/B was run). Stamped build git-7419-patch-783-0-g70d794dd3: client `804c2990`, hl2 `b4cd0ce5`, in both
+Windows installs 2026-10-18T09:35:22Z (`.prev` = P782 `a7f3dfc4` / hl2 `0bd360e0`).
+
 ## Patch 782 — r_budget: where each frame goes, CPU groups, idle and GPU passes, as bars
 
 **Problem:** Lex, 18 Oct: "a low budget way of seeing how the scene is being spent on the GPU and
