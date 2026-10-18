@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 814 — recover own online replay frames and request opted-in HTTPS journals (csprogs + lobby config)
+
+**Problem:** A real bhop_ambience23.500 finish uploaded its valid committed per-frame
+view, but its online replay used a database-ID filename and found no adjacent
+sidecar. The client's own copy remained private and nonce-staged. The same signed
+receipt said journal kept0: official lobbies still requested only views at
+run_evidence_ul1 even though the HTTPS collector/proxy was deployed.
+
+**Change:** Online full-run playback may recover only the matching nonce-named local
+staged view, with a matching map. A nonce-keyed, counted renderer-only `.ownview`
+cache survives map staging cleanup without publishing private views or changing
+submitted evidence. Existing targets remain intact; missing/invalid nonces and
+stage slices do not borrow a full-run view. Official lobby config requests level2
+before map initialization; native per-player permission and the native server's
+refusal to send raw journals over the legacy channel remain unchanged. Build and
+native engine pins unchanged.
+
+**Verified:** All three QC VMs compile with zero warnings. A pre-change acting
+viewer control has no sidecar; the subject uses the staged frames' pitch/yaw/keys,
+and a fresh VM uses the cache with no staged source. Missing/wrong nonce, wrong
+map, stage slice, invalid nonce and non-online paths do not borrow frames; existing
+cache targets and source fixtures remain byte-identical. These are synthetic
+viewer controls, not recorder/consent evidence. Reader regression:403 checks pass;
+unchanged-reader runs sweep adds no faults. Human playback and a new genuine
+consenting signed HTTPS receipt/HID file join remain PENDING. No calibration or
+attestation claim; deployed code is not a human pass.
+
 ## Patch 813 — a surfer pinned to the face they are sliding along recovers instead of stopping (mover 8)
 
 **Problem.** Lex: on surf ramps "you randomly stop", rarely. His lobby run on
