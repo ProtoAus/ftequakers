@@ -817,8 +817,11 @@ cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch
 #define FT_BINMS 0.05f
 #define FT_BINS 4000		//0.05 ms bins to 200 ms; the last also takes every slower frame, its exact times summed
 #define FT_COLS 300
-#define FT_WORST 8
+#define FT_WORST 8			//listed by the dump
+#define FT_KEEP 64			//the window's slowest, kept exactly (with where the view was, when known)
 #define FT_STUTTER 2.5f		//times the median
+#define FT_EYE 64			//PM_VIEW_OFS standing: setpos takes the origin, the view is above it
+typedef struct {float ms, at; vec3_t org, ang; qboolean known;} ftbad_t;
 static struct
 {
 	qboolean on;
@@ -834,7 +837,7 @@ static struct
 	double nextstats;
 	float avg, median, low1, low01, worst;	//ms
 	int stutters;
-	struct {float ms, at; vec3_t org;} bad[FT_WORST];	//the window's slowest, slowest first
+	ftbad_t bad[FT_KEEP];		//slowest first
 } ft;
 
 static int R_FrameTime_Bin(float ms)
@@ -851,17 +854,63 @@ static void R_FrameTime_Drop(void)
 		ft.oversum -= ft.ms[t];
 	ft.count--;
 }
+//when one of the kept slowest leaves the window, the next may be in the ring but not the list: take
+//them from the ring again (rare: only on an expiry). Where the view was survives for frames kept then.
+static void R_FrameTime_Rebuild(void)
+{
+	static ftbad_t old[FT_KEEP];
+	int i, j, k;
+	float ms;
+	memcpy(old, ft.bad, sizeof(old));
+	memset(ft.bad, 0, sizeof(ft.bad));
+	for (i = 0; i < ft.count; i++)
+	{
+		k = (ft.head - ft.count + i) & (FT_RING-1);
+		ms = ft.ms[k];
+		if (ms <= ft.bad[FT_KEEP-1].ms)
+			continue;
+		for (j = 0; ms <= ft.bad[j].ms; j++)
+			;
+		memmove(&ft.bad[j+1], &ft.bad[j], sizeof(ft.bad[0]) * (FT_KEEP-1 - j));
+		memset(&ft.bad[j], 0, sizeof(ft.bad[j]));
+		ft.bad[j].ms = ms;
+		ft.bad[j].at = ft.at[k];
+	}
+	for (j = 0; j < FT_KEEP && ft.bad[j].ms; j++)
+		for (i = 0; i < FT_KEEP && old[i].ms; i++)
+			if (old[i].known && old[i].at == ft.bad[j].at && old[i].ms == ft.bad[j].ms)
+			{
+				ft.bad[j] = old[i];
+				break;
+			}
+}
+//the last bin's frames, slowest first: exact from bad[] (they are the window's slowest), then its mean
+static float R_FrameTime_Over(int fromtop)
+{
+	int nb, n = ft.bins[FT_BINS-1];
+	double sb = 0;
+	for (nb = 0; nb < FT_KEEP && ft.bad[nb].ms >= (FT_BINS-1) * FT_BINMS; nb++)
+		sb += ft.bad[nb].ms;
+	nb = min(nb, n);
+	if (fromtop < nb)
+		return ft.bad[fromtop].ms;
+	return n > nb ? (ft.oversum - sb) / (n - nb) : 0;
+}
 //the mean of the slowest n frames, walking the histogram down (a bin's frames count at its middle)
 static float R_FrameTime_Slowest(int n)
 {
-	int b, c, left = n;
+	int b, c, k, left = n;
 	double s = 0;
 	for (b = FT_BINS-1; b >= 0 && left > 0; b--)
 	{
 		if (!ft.bins[b])
 			continue;
 		c = min(ft.bins[b], left);
-		s += c * (b == FT_BINS-1 ? ft.oversum / ft.bins[b] : (b + 0.5) * FT_BINMS);
+		if (b == FT_BINS-1)
+			for (k = 0; k < c; k++)
+				s += R_FrameTime_Over(k);
+		else
+			s += c * (b + 0.5) * FT_BINMS;
 		left -= c;
 	}
 	return n > left ? s / (n - left) : 0;
@@ -901,6 +950,11 @@ static void R_FrameTime_Sample(void)
 		ft.base = ft.last = ft.colstart = now;
 		return;
 	}
+	if (!vid.activeapp)
+	{	//tabbed out: cl_idlefps throttles these, and nobody is watching
+		ft.last = now;
+		return;
+	}
 	ms = (now - ft.last) * 1000;
 	ft.last = now;
 	if (ms <= 0 || ms > 1000)
@@ -922,23 +976,25 @@ static void R_FrameTime_Sample(void)
 	if (b == FT_BINS-1)
 		ft.oversum += ms;
 
-	//the slowest frames in the window, and where the view was for each
-	for (i = 0; i < FT_WORST; i++)
-		if (ft.bad[i].ms && at - ft.bad[i].at > window)
+	//the window's slowest, and where the view was for each
+	for (i = 0; i < FT_KEEP && ft.bad[i].ms; i++)
+		if (at - ft.bad[i].at > window)
 		{
-			memmove(&ft.bad[i], &ft.bad[i+1], sizeof(ft.bad[0]) * (FT_WORST-1 - i));
-			memset(&ft.bad[FT_WORST-1], 0, sizeof(ft.bad[0]));
-			i--;
-		}
-	for (i = 0; i < FT_WORST; i++)
-		if (ms > ft.bad[i].ms)
-		{
-			memmove(&ft.bad[i+1], &ft.bad[i], sizeof(ft.bad[0]) * (FT_WORST-1 - i));
-			ft.bad[i].ms = ms;
-			ft.bad[i].at = at;
-			VectorCopy(r_refdef.vieworg, ft.bad[i].org);
+			R_FrameTime_Rebuild();
 			break;
 		}
+	if (ms > ft.bad[FT_KEEP-1].ms)
+	{
+		for (i = 0; ms <= ft.bad[i].ms; i++)
+			;
+		memmove(&ft.bad[i+1], &ft.bad[i], sizeof(ft.bad[0]) * (FT_KEEP-1 - i));
+		ft.bad[i].ms = ms;
+		ft.bad[i].at = at;
+		VectorCopy(r_refdef.vieworg, ft.bad[i].org);
+		ft.bad[i].org[2] -= FT_EYE;
+		VectorCopy(r_refdef.viewangles, ft.bad[i].ang);
+		ft.bad[i].known = true;
+	}
 
 	//the graph's columns: a new one each slice; a gap leaves the ones it spans empty
 	span = bound(1, r_frametime_seconds.value, 120) / FT_COLS;
@@ -962,7 +1018,7 @@ static void R_FrameTime_Sample(void)
 }
 static void R_FrameTime_Draw(void)
 {
-	float cw, gw = 2*FT_COLS, gh = 120, x, y, scale, v, h;
+	float cw, gw, colw, gh = 120, x, y, scale, v, h;
 	static const float nice[] = {2, 5, 10, 15, 20, 30, 50, 100, 200, 500, 1000};
 	int i, c;
 
@@ -971,8 +1027,12 @@ static void R_FrameTime_Draw(void)
 	cw = (con_textsize.value < 0) ? (-con_textsize.value * vid.height) / vid.pixelheight : con_textsize.value;
 	if (!cw)
 		cw = 8;
+	gw = bound(FT_COLS, vid.width - 24, 2*FT_COLS);
+	colw = gw / FT_COLS;
 	x = vid.width - gw - 12;
 	y = 130;
+	if (r_budget.ival && 8 + budget_w + 12 > x)
+		y = vid.height - gh - 3*cw - 72;	//r_budget's panel is under the top right: go to the bottom
 	for (i = 0, scale = 0; i < countof(nice) && !scale; i++)
 		if (nice[i] >= ft.median * 3)
 			scale = nice[i];
@@ -1001,7 +1061,7 @@ static void R_FrameTime_Draw(void)
 			R2D_ImageColours(0.95, 0.85, 0.3, 0.95);
 		else
 			R2D_ImageColours(0.35, 0.85, 0.35, 0.9);
-		R2D_FillBlock(x + i*2, y + gh - h, 2, max(h, 1));
+		R2D_FillBlock(x + i*colw, y + gh - h, colw, max(h, 1));
 	}
 	//the median and the stutter line
 	R2D_ImageColours(1, 1, 1, 0.5);
@@ -1033,7 +1093,7 @@ static void R_FrameTime_Dump_f(void)
 	R_FrameTime_Stats();
 	now = Sys_DoubleTime() - ft.base;
 	*out = 0;
-	Q_strncatz(out, va("frametime over %.1f s, %i frames (%s, %s)\n", min(now, bound(1, r_frametime_window.value, 120)), ft.count,
+	Q_strncatz(out, va("frametime over %.1f s, %i frames (%s, %s)\n", ft.at[(ft.head-1) & (FT_RING-1)] - ft.at[(ft.head - ft.count) & (FT_RING-1)], ft.count,
 		cl.worldmodel ? cl.worldmodel->name : "no map", version_string()), sizeof(out));
 	Q_strncatz(out, va("  avg %.2f ms (%.0f fps)  1%% low %.2f ms (%.0f fps)  0.1%% low %.2f ms (%.0f fps)\n", ft.avg, 1000/ft.avg,
 		ft.low1, 1000/ft.low1, ft.low01, 1000/ft.low01), sizeof(out));
@@ -1042,13 +1102,15 @@ static void R_FrameTime_Dump_f(void)
 		n = ft.count * pct[p] / 100;
 		for (b = 0, c = 0; b < FT_BINS && (c += ft.bins[b]) <= n; b++)
 			;
-		Q_strncatz(out, va("  p%-4g %7.2f ms\n", pct[p], b < FT_BINS-1 ? (b + 0.5) * FT_BINMS : ft.oversum / max(1, ft.bins[FT_BINS-1])), sizeof(out));
+		Q_strncatz(out, va("  p%-4g %7.2f ms\n", pct[p], b < FT_BINS-1 ? (b + 0.5) * FT_BINMS : R_FrameTime_Over(ft.count - 1 - n)), sizeof(out));
 	}
 	Q_strncatz(out, va("  stutters (over %.1fx the median, %.2f ms): %i\n", FT_STUTTER, ft.median * FT_STUTTER, ft.stutters), sizeof(out));
-	Q_strncatz(out, "  slowest frames: ms, seconds ago, where the view was\n", sizeof(out));
+	Q_strncatz(out, "  slowest frames: ms, seconds ago, where you stood (standing height) and looked\n", sizeof(out));
 	for (i = 0; i < FT_WORST && ft.bad[i].ms; i++)
-		Q_strncatz(out, va("    %7.2f  %6.1f s ago  setpos %.0f %.0f %.0f\n", ft.bad[i].ms, now - ft.bad[i].at,
-			ft.bad[i].org[0], ft.bad[i].org[1], ft.bad[i].org[2]), sizeof(out));
+		Q_strncatz(out, ft.bad[i].known
+			? va("    %7.2f  %6.1f s ago  setpos %.0f %.0f %.0f %.0f %.0f 0\n", ft.bad[i].ms, now - ft.bad[i].at,
+				ft.bad[i].org[0], ft.bad[i].org[1], ft.bad[i].org[2], ft.bad[i].ang[0], ft.bad[i].ang[1])
+			: va("    %7.2f  %6.1f s ago  (where was not kept)\n", ft.bad[i].ms, now - ft.bad[i].at), sizeof(out));
 	{
 		char *line = out, *nl;
 		while ((nl = strchr(line, '\n')))
