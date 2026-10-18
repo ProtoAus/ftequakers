@@ -4469,19 +4469,20 @@ void CLQ1_AddSurfView (void)
 	/*The view cone through the screen's corners, not R_CullSphere: by now r_refdef.frustum
 	  is whichever view rendered last, and on a map with a 3D sky or a portal that is not this
 	  one (measured: 85992 of 86076 faces culled looking over surf_boreas).  CSQC's clearscene
-	  zeroes fov_x/fov_y until renderscene, so they are rebuilt from scr_fov: applied to the
-	  screen's MINOR axis, which bounds every scr_fov_mode from above.*/
+	  zeroes fov_x/fov_y until renderscene, so they are rebuilt from afov: applied to the
+	  screen's MINOR pixel axis, which bounds every scr_fov_mode from above.*/
 	AngleVectors(r_refdef.viewangles, fwd, right, up);
 	if (r_refdef.fov_x > 0 && r_refdef.fov_y > 0)
 		cone = atan(sqrt(pow(tan(r_refdef.fov_x*(M_PI/360)), 2) + pow(tan(r_refdef.fov_y*(M_PI/360)), 2)));
 	else
 	{
-		float w = max(vid.width, 1), h = max(vid.height, 1);
+		float w = max(vid.pixelwidth, 1), h = max(vid.pixelheight, 1);
 		float ratio = (w > h) ? w/h : h/w;
-		cone = atan(tan(bound(1, scr_fov.value, 170)*(M_PI/360)) * sqrt(1 + ratio*ratio));
+		float afov = (r_refdef.afov > 0) ? r_refdef.afov : scr_fov.value;
+		cone = atan(tan(bound(1, afov, 170)*(M_PI/360)) * sqrt(1 + ratio*ratio));
 	}
-	if (!(cone > 0) || cone > 1.5)
-		cone = 1.5;
+	if (!(cone > 0) || cone > 1.56)
+		cone = 1.56;	//just short of pi/2: past it the test would cull nothing anyway
 	conecos = cos(cone);
 	conesin = sin(cone);
 
@@ -4512,8 +4513,9 @@ void CLQ1_AddSurfView (void)
 		mod = cl.model_precache[state->modelindex];
 		if (!mod || mod == cl.worldmodel || mod->type != mod_brush || mod->loadstate != MLS_LOADED || !mod->cnodes)
 			continue;
-		//the interpolated pose the renderer draws, so a moving door's fill stays on it
-		if (state->number < cl.maxlerpents)
+		//the interpolated pose the renderer draws, so a moving door's fill stays on it --
+		//when this frame's lerp holds the entity (view.c's nametags make the same test)
+		if (state->number < cl.maxlerpents && cl.lerpentssequence && cl.lerpents[state->number].sequence == cl.lerpentssequence)
 		{
 			org = cl.lerpents[state->number].origin;
 			ang = cl.lerpents[state->number].angles;
