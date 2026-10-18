@@ -66,8 +66,10 @@ Three review rounds: round 1 (emissive went invisible, the `$translucent` term, 
 flipbook arms, the sort bucket), round 2 (an explicit `sort additive` pre-empted
 DECAL/NEAREST/SEETHROUGH, `$vertexalpha 0`, an unreadable srgb? colour), round 3 none.
 Not verified: other maps' additive materials on screen (the rule is Source's; no
-library A/B was run). Stamped build git-7419-patch-783-0-g70d794dd3: client `804c2990`, hl2 `b4cd0ce5`, in both
-Windows installs 2026-10-18T09:35:22Z (`.prev` = P782 `a7f3dfc4` / hl2 `0bd360e0`).
+library A/B was run). Stamped build git-7448-patch-783-0-g70d794dd3 (-Full, from the tag): client `e19f681d`, hl2
+`de079afd`, in both Windows installs 2026-10-18T09:47:16Z (`.prev` = P782 `a7f3dfc4` / hl2
+`0bd360e0`). It replaced a first install (09:35:22Z) stamped 7419: the build wrapper passed the
+raw commit count, not the Makefile's count + 29 that releaselib.ps1 Test-RevisionMatch checks.
 
 ## Patch 782 — r_budget: where each frame goes, CPU groups, idle and GPU passes, as bars
 
