@@ -81,10 +81,18 @@ guard refuses the extra hash before creating state. The service suite's missing
 archived-fixture arm passes after supplying its exact same-commit nginx fixture
 to the same stage; unchanged passed arms reused, MOM conversion fixture explicitly
 unavailable. The online-only sending predicate is compiled/source-reviewed;
-the corrected input/harness delta passed both independent reviews. Peer/native
-preservation and final source binding are checked separately before publication;
-genuine HTTPS delivery and deployment remain pending, not inferred from fixtures. Native help
-wording still describes the older tier (nonblocking BACKLOG item).
+the corrected input/harness delta passed both independent reviews. Exact-base
+composition preserved published P805/P806 and reviewed product bytes. Published
+QC29b71b37 is installed in both Windows gamedirs and all 12 empty lobbies, with
+matching six-file build outputs and fresh served-client smoke. At 20:50Z the new
+collector generation was serving internally: actual source/module/schema20 witness,
+new OPEN/retired fully drained, seven dispatchers/four cron routes and momrequests'
+new admission lease verified. Existing reads/health12 pass; invalid HID length
+is refused by the declared handler. The private read-only database snapshot was
+retained; no DB restore or existing-player consent rewrite. Public TLS HID route
+is still404 pending the owner's privileged additive nginx command. Human consent
+and genuine signed HTTPS finish remain PENDING, not inferred from fixtures.
+Native help wording still describes the older tier (nonblocking BACKLOG item).
 
 ## Patch 802 — the server sends what a client sees through a portal; doors show in noclip
 
