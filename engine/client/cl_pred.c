@@ -620,6 +620,11 @@ void CL_CalcCrouch (playerview_t *pv)
 				{
 					pv->extracrouch = orgz - pv->oldz + host_frametime * 400 + 15;
 					pv->extracrouch = max(pv->extracrouch, -5);
+					//FTESurf Patch 805: and never above 0.  One long frame over the drop
+					//(a 0.25 s hitch on surf_null's 25 u spawn fall) made this +88, and the
+					//clamp below then pinned oldz at orgz+15+extracrouch: the camera 103 u
+					//up until a jump left the ground.
+					pv->extracrouch = min(pv->extracrouch, 0);
 				}
 				pv->crouchspeed = -160*2;
 			}
@@ -634,6 +639,8 @@ void CL_CalcCrouch (playerview_t *pv)
 				pv->extracrouch += host_frametime * 400;
 			else if (pv->extracrouch < 0)
 				pv->extracrouch = 0;
+			else if (pv->extracrouch > 0)	//FTESurf Patch 805: a step-up's, carried in
+				pv->extracrouch = max(0, pv->extracrouch - host_frametime * 400);
 		}
 		else
 		{
@@ -647,6 +654,7 @@ void CL_CalcCrouch (playerview_t *pv)
 				{
 					pv->extracrouch = orgz - pv->oldz - host_frametime * 200 - 15;
 					pv->extracrouch = min(pv->extracrouch, 5);
+					pv->extracrouch = max(pv->extracrouch, 0);	//FTESurf Patch 805: the mirror
 				}
 				pv->crouchspeed = 160;
 			}
@@ -663,6 +671,8 @@ void CL_CalcCrouch (playerview_t *pv)
 				pv->extracrouch -= host_frametime * 200;
 			else if (pv->extracrouch > 0)
 				pv->extracrouch = 0;
+			else if (pv->extracrouch < 0)	//FTESurf Patch 805: a step-down's, carried in
+				pv->extracrouch = min(0, pv->extracrouch + host_frametime * 200);
 		}
 
 		pv->crouch = pv->oldz - orgz;
