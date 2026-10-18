@@ -801,6 +801,26 @@ static qboolean PMSrc_IsValidMovementTrace (trace_t *tr)
 	return true;
 }
 
+/* FTESurf Patch 813, mover 8: a fraction-0 hit on a plane this move already clipped
+   against, with no progress since.  The hull was left nearer that face than a float32
+   origin resolves (1/512 past 16384), so the parallel retrace dips into it, the loop
+   files the same plane five times and clears the velocity: Lex's dead stop on
+   surf_colin_blaster_69000's curve.  0.8.7's IsValidMovementTrace refuses every
+   fraction-0 trace; Patch 492 lets them reach the crease for voyager's V troughs,
+   which are a new plane each time, so only the repeat is refused. */
+static qboolean PMSrc_SamePlaneAgain (const trace_t *tr, vec3_t planes[], int numplanes)
+{
+	int i;
+
+	if (movevars.sourceversion < 8 || movevars.fixrampbugs < 2 ||
+	    tr->startsolid || tr->allsolid || fabs(tr->fraction) > FLT_EPSILON)
+		return false;
+	for (i = 0; i < numplanes; i++)
+		if (PMSrc_VecCloseEnough (planes[i], tr->plane.normal))
+			return true;
+	return false;
+}
+
 /*
 ==================
 PMSrc_FindRecoveryPlane   (cpp:2486)
@@ -1232,7 +1252,8 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 		   legitimately have fraction 0 (emerging flush) and a plane belonging to
 		   the far side's geometry; IsValidMovementTrace would read it as a ramp
 		   failure and "recover" the player along a plane from the other room. */
-		if (bumpcount && fixramps && !pmove.onground && !tookportal && !PMSrc_IsValidMovementTrace (&pm))
+		if (bumpcount && fixramps && !pmove.onground && !tookportal &&
+		    (!PMSrc_IsValidMovementTrace (&pm) || PMSrc_SamePlaneAgain (&pm, planes, numplanes)))
 		{
 			has_valid_plane = false;
 			stuck_on_ramp = true;

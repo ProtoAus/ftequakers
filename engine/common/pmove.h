@@ -231,8 +231,9 @@ typedef struct
    SV_PMSrcVer accepts old pins only with their original matching ramp setting.
    Patch 756: version 5 keeps a linked portal landing's exact position.
    Patch 758: version 6 keeps moving when the hull clears a linked door's front.
-   Patch 764: version 7 traces a static prop's .phy hull as its convex pieces. */
-#define PMSRC_VERSION 7
+   Patch 764: version 7 traces a static prop's .phy hull as its convex pieces.
+   Patch 813: version 8 recovers a surfer whose retrace hits the same face again at fraction 0. */
+#define PMSRC_VERSION 8
 
 typedef struct {
 	//standard quakeworld
