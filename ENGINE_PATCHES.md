@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 790 — keep timing-format faults distinct from clock abstention (readers)
+## Patch 792 — keep timing-format faults distinct from clock abstention (readers)
 
 **Problem:** held-clock parsing exposed unchecked counter conversion and projected
 array overflow. The receipt consumer also ignored independent malformed-sidecar
@@ -22,6 +22,64 @@ reproduced them before correction. Reader 363 / receipt 183 checks and sweep sui
 zero failed. Same bytes of 602 recordings / 383 sidecars: no new faulting pairs;
 two formerly faulting cold-load pairs remain unavailable, not angle-clean.
 The retained native held prefix still joins without faults (short capture, THIN).
+
+## Patch 791 — Source render_rope beams: surf_boreas's end beam (tools, csprogs, particles/surf_boreas.cfg)
+
+**Problem:** Lex, 18 Oct: Momentum's surf_boreas end room has a beam; ours had none. It is
+`tendies_endparticle05`, a render_rope (one ribbon through the particles in birth order) and
+a child of `tendies_endparticle01`. Patch 787 declined ropes: as billboards of radius 1500
+they whited out the room.
+
+**Change:**
+- tools/pcf.py `translate_rope`: a rope writes a 25-word `rope` index line -- spawn offset,
+  gravity, life, rate, width, colour, the fade (start_alpha up to the particle's alpha, then
+  down to end_alpha: C_OP_FadeAndKill as read, closed source), image and blend from the .vmt.
+  Refused rather than drawn wrong: operators outside ROPE_OPS, a spawn box with spread, a
+  timed emitter, a material that does not resolve. Width is 0.5 x radius, fitted to ONE
+  Momentum screenshot (surf_boreas0000, core ~120 units of laser01).
+- cl_emit.qc: Emit_RopeNote / Emit_RopeAt / Emit_RopeFrame draw a camera-facing strip along
+  the steady-state path, a segment between each two live particles up to 32, SRC_ALPHA ONE,
+  sorted additive. `vbsp_emit_ropes` (default 1) is independent of vbsp_emit_psys_children.
+
+**Verified:** pcf tests 27 (rope line field positions, refusals); surf_tensor2's bake is
+byte-identical. surf_boreas fixture, same camera with ropes on and off: a beam from the pit
+to the ceiling, brightest low and fading up, like Momentum's; the client logs the rope it
+placed. 0.1.26 release exe and current exe: no QC errors. Three review rounds (fade
+semantics and continuity, refusals, segment ceiling, overflow, a one-particle rope).
+Installed 2026-10-18T11:56:48Z: csprogs `75b75a77`, bake `0d1f6cd7` / index `cbab1bbd`;
+lobbies with 89's deploy of QC main e3dfce05.
+
+## Patch 790 — momentary_rot_button: non-solid as Source says, and the non-solid ones turn (qwprogs)
+
+**Problem:** Lex, 18 Oct: Momentum's surf_boreas end room has spinning floor symbols; ours
+were frozen, and solid. momentary_rot_button spawned as func_wall; Source makes it non-solid
+under SF_ROTBUTTON_NOTSOLID (buttons.h:16) and turns it on SetPosition. Census of 1,349
+maps: 131 on 17 maps, 115 non-solid on 16 (walls here), 60 looping themselves on 6.
+
+**Change (sv_entities.qc):**
+- Spawnflag 1 gives SOLID_NOT, model kept; a solid one stays a frozen func_wall and answers
+  nothing, so it never claims an arrival.
+- SetPosition / SetPositionImmediately move a live one: position 0..1 along its AxisDir axis,
+  angles from the clock in one driver think (at most 20 Hz, and at each predicted arrival);
+  OnFullyClosed at 1, OnFullyOpen at 0 (Valve's naming), OnReachedPosition. Every arrival
+  is settled before any output fires.
+- A child of a spinning yaw-axis button orbits it (surf_boreas's outer three).
+- A model with no faces or only tools/ faces does not turn: 77 prop carriers, whose props
+  do not follow here, would only cost the lobbies packets.
+- SV_IODeliver: Source's classname fallback (cbase.cpp:944-958) for this class only; the
+  library's other classname targets (player_speedmod, player, ...) are BACKLOG.
+- Enable / Disable / Toggle are swallowed: they gate Use in Source.
+
+**Consequence, Lex's call (ship now, rule bump after):** the `pe` digest hashes solid
+brushes near the player, so a run recorded before P790 on those 16 maps and verified after
+reads HOLD physents differ. A header rule on the `proprule` precedent is BACKLOG.
+
+**Verified:** surf_boreas: 19 turn, 3 orbit, shots 2 s apart differ 4.5% (old progs 0.13%);
+surf_gradient's 15 and surf_nyx's 20 faceless carriers still; bhop_avantasia's buttons
+loop (3-15 restarts in 3 s); 0.1.26 release exe and current exe: no QC errors. Five review
+rounds (arrival ordering through inline relays, Kill, Enable, carriers; the output fired
+for a goal changed under it; an arrival lost before the tick; a late wake; float32 eta).
+Installed 2026-10-18T11:56:48Z: qwprogs `fa94eb5d`; lobbies with 89's deploy of e3dfce05.
 
 ## Patch 789 — a player's picture beside their name, wherever it is drawn (csprogs, menu)
 
