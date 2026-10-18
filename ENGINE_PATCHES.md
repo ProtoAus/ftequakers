@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 805 — the step smoother no longer pins the camera after a long frame (client exe)
+
+**Problem:** Lex: on surf_null "you visually stay at the wrong height until you jump".
+His machine, F8 capture: `eye: cam 7299.722 org 7136.031 -> eye 163.691 | stat 64`, and
+`cl_predtrace` put it in the step smoother -- `vh 64.000 crouch 103.208`, frozen. In
+CL_CalcCrouch (client/cl_pred.c) the step-down branch sets extracrouch = drop +
+host_frametime*400 + 15, floored at -5 and never capped. One long frame over a ground
+step-down -- the 25 u spawn fall seen across a ~0.25 s hitch -- made it +88; the clamp
+`oldz > orgz + 15 - extracrouch -> oldz = orgz + 15 + extracrouch` then held the camera
+103 u above the feet every frame, and that branch never decays a positive value. Only a
+jump (the air branch) reset it. At 30 fps a 25 u drop seen in one frame left 18 u.
+
+**Change:** the step-down extracrouch is capped at 0 and the step-up one floored at 0;
+each branch decays a carried value of the other sign. Client only, no header change.
+
+**Verified:** a line-for-line model of the function gives 103.2 from one 0.2455 s frame
+and returns to 0 in every case with the change. tools/p805crouch.py (conbridge on
+surf_null, three respawns at cl_maxfps 4, then cl_predtrace): installed exe 4b4c91f8
+(patch-802) crouch 96.355 in 3 of 3; this build (a77d4a3f,
+git-7479-patch-805-0-g12a173c4c) 0.000 in 3 of 3. One review: normal stairs unchanged
+above 80 fps (below it a 20-22 u drop's +0..1.7 is now 0); no other reader of
+extracrouch. Known, pre-existing and not touched: a ground flag that flickers at a
+constant height can freeze a NEGATIVE crouch (view up to ~20 u low) until the height
+changes (BACKLOG).
+
 ## Patch 802 — the server sends what a client sees through a portal; doors show in noclip
 
 **Problem:** Lex, 19 Oct, on surf_tripportals: walking back and forth at the stage-1 start zone,
