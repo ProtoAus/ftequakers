@@ -279,6 +279,10 @@ typedef struct galiasinfo_s
 	int *vhvmap;
 	int vhvmapcount;
 	int vhvmodelverts;
+	//FTESurf Patch 780: APPEND-ONLY.  studiohdr_t::illumposition, the model-space point Source lights
+	//a model from when the map names no lighting origin.  First surface only; hasillum 0 elsewhere.
+	qboolean hasillum;
+	vec3_t illumposition;
 } galiasinfo_t;
 
 struct terrainfuncs_s;
