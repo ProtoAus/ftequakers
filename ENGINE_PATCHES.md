@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 794 — preserve view validation faults on usable angle clocks (consumer)
+
+**Problem:** a usable angle comparison could mask independent sidecar validation
+faults: the reader rejected malformed content but the receipt still said OK.
+The consumer preserved these faults only when the clock/join was unavailable.
+
+**Change:** propagate every independent view validation fault before comparison
+eligibility/classification. Mixed validation/mismatch pairs retain both findings
+and actual comparison detail. Measurements lead the bounded detail field, followed
+by one validation summary; genuine angular proof stays primary in the sweep's short
+reason. Valid unresolved pairs remain BLIND. Digest, I/O, signature and reset
+authority paths are unchanged. No native code, pin, Build, threshold, ranking-code
+or forced historical reread change.
+
+**Verified:** seven parser-acting fault types fail the old receipt grade while
+the good/tight and rotated controls ACT. Mixed-fault tests discriminate the initial
+candidate's lost proof and first-fault summary; 30 repeated malformed markers
+cannot crowd measurements out of the actual 1,000-character sweep field. Real
+test-key signatures stay valid through normal, delayed-view and delayed-recording
+API paths; mixed faults retain proof, validation and measurements through those
+paths. Parent reader 403 / receipt 268 checks, sweep and all 15 path-bound controls
+pass. Unchanged QC build inputs reuse the three-program
+zero-warning build. Captured 612-record/383-view parser faults remain 211/224 in
+both arms. Four matched-digest pair API replays change BLIND to FAULT for
+already-parsed view faults, not new angular judgments; all 383 pair grades and
+bytes remain unchanged by the mixed-fault fix. Eleven added records and one
+unavailable prior record explain the changed corpus size, not a reader regression.
+Signature fixtures do not claim real-device/human provenance.
+
 ## Patch 793 — bind initial recording clocks before judging angles (reader)
 
 **Problem:** before the first input row, a cumulative held interval could project
