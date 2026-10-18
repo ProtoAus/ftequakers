@@ -151,6 +151,8 @@ const char *Mat_VMT_BottomParent(const char *name);
 qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
 static cvar_t *hl2_bottommaterial;
+static cvar_t *hl2_missinggrid;	//FTESurf Patch 780
+static cvar_t *hl2_lt_blend, *hl2_lt_illumpos;	//FTESurf Patch 780, read by VBSP_LeafAmbientCube / VBSP_PropSamplePoint
 cvar_t *hl2_skinfallback;		//FTESurf Patch 234: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest
 extern cvar_t *hl2_dither_alpha, *hl2_bumpmap, *hl2_envmap;	//FTESurf Build 13, all owned by mat_vmt.c
 extern cvar_t *hl2_envcubemap, *hl2_envmap_source;	//FTESurf Patch 268 B, likewise
@@ -478,6 +480,7 @@ typedef struct vbspinfo_s
 	{
 		vec4_t lmvecs[2];
 		qboolean bumped;	//FTESurf Patch 268 D1: SURF_BUMPLIGHT -- VRAD wrote NUM_BUMP_VECTS+1 = 4 luxel sets per lightstyle for this face
+		float missingtile;	//FTESurf Patch 780: material did not resolve; world units per checker tile (0 = texinfo scale)
 	} *texinfo;
 
 	int				numareas;
@@ -591,6 +594,7 @@ typedef struct vbspinfo_s
 		qboolean solid;
 		struct bihtransform_s transform;
 		vec3_t	lightorg;
+		qboolean authoredlight;	//FTESurf Patch 780: lightorg is the map's own, not the origin fallback
 		//FTESurf Patch 163: the mean of VRAD's own baked per-vertex lighting for
 		//THIS prop instance, 0..255 in the same gamma space res_ambient uses.
 		vec3_t	baked;
@@ -4290,6 +4294,14 @@ static void VBSP_ProbeLightmapStride (model_t *mod)
 }
 #endif
 #ifdef HAVE_CLIENT
+//FTESurf Patch 780: a texinfo coordinate (dot(p, axis) + offset) as world units along the
+//axis, in checker tiles.  The offset is dropped so the squares sit on the world grid.
+static float VBSP_MissingTC(float raw, const float *vecs, float tile)
+{
+	float len = VectorLength(vecs);
+	return len ? (raw - vecs[3]) / (len * tile) : 0;
+}
+
 static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -4300,7 +4312,7 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 	float *vec;
 	float s, t, miss;
 	int sty;
-	struct vbsptexinfo_s *vtexinfo;
+	struct vbsptexinfo_s *vtexinfo = &prv->texinfo[surf->texinfo-mod->texinfo];
 
 	//displacement surfaces...
 	dispinfo_t *d = prv->surfdisp[surf-mod->surfaces];
@@ -4319,12 +4331,20 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 			VectorCopy (d->xyz[i], mesh->xyz_array[i]);
 
 			//st
-			mesh->st_array[i][0] = dv->st[0];
-			mesh->st_array[i][1] = dv->st[1];
-			if (surf->texinfo->texture->vwidth)
-				mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
-			if (surf->texinfo->texture->vheight)
-				mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+			if (vtexinfo->missingtile > 0)
+			{
+				mesh->st_array[i][0] = VBSP_MissingTC(dv->st[0], surf->texinfo->vecs[0], vtexinfo->missingtile);
+				mesh->st_array[i][1] = VBSP_MissingTC(dv->st[1], surf->texinfo->vecs[1], vtexinfo->missingtile);
+			}
+			else
+			{
+				mesh->st_array[i][0] = dv->st[0];
+				mesh->st_array[i][1] = dv->st[1];
+				if (surf->texinfo->texture->vwidth)
+					mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
+				if (surf->texinfo->texture->vheight)
+					mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+			}
 
 			//lmst
 			s = (float)(i%(d->width+1))/d->width;
@@ -4380,14 +4400,21 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 
 		VectorCopy (vec, mesh->xyz_array[i]);
 
-		mesh->st_array[i][0] = s;
-		mesh->st_array[i][1] = t;
-		if (surf->texinfo->texture->vwidth)
-			mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
-		if (surf->texinfo->texture->vheight)
-			mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+		if (vtexinfo->missingtile > 0)
+		{
+			mesh->st_array[i][0] = VBSP_MissingTC(s, surf->texinfo->vecs[0], vtexinfo->missingtile);
+			mesh->st_array[i][1] = VBSP_MissingTC(t, surf->texinfo->vecs[1], vtexinfo->missingtile);
+		}
+		else
+		{
+			mesh->st_array[i][0] = s;
+			mesh->st_array[i][1] = t;
+			if (surf->texinfo->texture->vwidth)
+				mesh->st_array[i][0] /= surf->texinfo->texture->vwidth;
+			if (surf->texinfo->texture->vheight)
+				mesh->st_array[i][1] /= surf->texinfo->texture->vheight;
+		}
 
-		vtexinfo = &prv->texinfo[surf->texinfo-mod->texinfo];
 		s = DotProduct (vec, vtexinfo->lmvecs[0]) + vtexinfo->lmvecs[0][3];
 		t = DotProduct (vec, vtexinfo->lmvecs[1]) + vtexinfo->lmvecs[1][3];
 		for (sty = 0; sty < 1; sty++)
@@ -5456,6 +5483,7 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 				VectorCopy(ent->origin, sent->lightorg);
 				nolightorg++;
 			}
+			sent->authoredlight = usable;	//FTESurf Patch 780: else VBSP_PropSamplePoint tries the model's $illumposition
 		}
 		if (version >= 5)
 		{
@@ -5837,6 +5865,56 @@ static qboolean VBSP_LoadGameLump(model_t *mod, qbyte *mod_base, vlump_t *l)
 }
 
 #ifdef HAVE_CLIENT
+/*
+FTESurf Patch 780: will this texture's surfaces draw the missing checker?  Not the material
+census: a material can resolve with an image that does not (surf_me's walls ask for
+"egypt\flat_wall_03", found only in the TF2 cache), and a missing material can still find an
+image by its own name (surf_joutsenlaulu's materials/ceiling/tar).  The image's own file is a
+free first answer; anything else gets one synchronous load through the real image search, as
+an image of its own so the shader's queued copy is left alone.  A hit leaves that probe image
+loaded until the next purge; there are a handful per map at most.
+*/
+static qboolean VBSP_DiffuseMissing(texture_t *tx)
+{
+	shader_t *sh = tx ? tx->shader : NULL;
+	image_t *b, *probe;
+	char name[MAX_QPATH], *c;
+
+	//HASDIFFUSE: something samples T_GEN_DIFFUSE.  Refract/reflect shaders name their own
+	//material as a base they never draw, and their normal map reads these coordinates
+	//(water is excluded by TI_WARP at the caller, whatever hl2_water picked).
+	if (!sh || !(sh->flags & SHADER_HASDIFFUSE) || (sh->flags & (SHADER_HASREFRACT|SHADER_HASREFLECT|SHADER_HASPORTAL)) ||
+		!sh->defaulttextures || !(b = sh->defaulttextures->base) || !b->ident)
+		return false;
+	if (!Q_strncasecmp(tx->name, "tools/", 6) || !Q_strncasecmp(tx->name, "sky/", 4))
+		return false;
+	//WorldVertexTransition's $basetexture2 and UnlitTwoTexture's $texture2 (uppermap), and
+	//$blendmodulatetexture (lowermap), read the same coordinates; a missing first layer
+	//must not rescale a second one that draws
+	if (b->status == TEX_LOADED || sh->defaulttextures->upperoverlay || sh->defaulttextures->loweroverlay)
+		return false;
+	//the cheap answer, in the two spellings the loader also tries: VMT bases may carry
+	//backslashes ("egypt\flat_wall_03"), and a default-shader ident has no extension
+	Q_strlcpy(name, b->ident, sizeof(name));
+	for (c = name; *c; c++)
+		if (*c == '\\')
+			*c = '/';
+	if (filefuncs->LocateFile(name, FSLF_IFFOUND, NULL))
+		return false;
+	if (!*filefuncs->GetExtension(name, NULL) && strlen(name) + 4 < sizeof(name))
+	{
+		Q_strlcat(name, ".vtf", sizeof(name));
+		if (filefuncs->LocateFile(name, FSLF_IFFOUND, NULL))
+			return false;
+	}
+	//Image_FindTexture dedups on IF_CLAMP|IF_PALETTIZE|IF_PREMULTIPLYALPHA and the type;
+	//flipping the clamp bit is what makes this a separate image rather than the queued one.
+	probe = modfuncs->GetTexture(b->ident, b->subpath,
+		IF_NOWORKER|IF_NOMIPMAP|IF_NOPICMIP | (b->flags & IF_TEXTYPEMASK) | ((b->flags & IF_CLAMP) ^ IF_CLAMP),
+		NULL, NULL, 0, 0, PTI_INVALID);
+	return probe && probe->status == TEX_FAILED;
+}
+
 static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 {
 	model_t *mod = ctx;
@@ -5959,6 +6037,42 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 					mod->name, base, parent);
 			}
 		}
+
+		/*
+		FTESurf Patch 780: a face whose diffuse image will not load draws the 2x2
+		missing checker (T_GEN_DIFFUSE's fallback) through ITS texinfo, which is scaled
+		for the absent texture -- a 1024 texture at 0.25 gave 128-unit squares.  Decided
+		here because VBSP_BuildSurfMesh runs from Batches_Build below.  See
+		VBSP_DiffuseMissing for why the material census cannot decide it.
+		*/
+		{
+			vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
+			float grid = hl2_missinggrid ? hl2_missinggrid->value : 32;
+			qbyte *miss = grid > 0 && mod->numtextures ? plugfuncs->Malloc(mod->numtextures) : NULL;
+			size_t t;
+			for (t = 0; miss && t < (size_t)mod->numtextures; t++)
+				miss[t] = VBSP_DiffuseMissing(mod->textures[t]);
+			for (t = 0; t < (size_t)mod->numtexinfo; t++)
+			{
+				size_t k;
+				prv->texinfo[t].missingtile = 0;
+				if (mod->texinfo[t].flags & TI_WARP)
+					continue;	//water: its ripple normal map shares these coordinates
+				for (k = 0; miss && k < (size_t)mod->numtextures; k++)
+					if (mod->textures[k] == mod->texinfo[t].texture)
+						break;
+				if (!miss || k == (size_t)mod->numtextures || !miss[k])
+					continue;
+				prv->texinfo[t].missingtile = grid*2;	//the image is two squares across
+			}
+			if (miss)
+			{
+				for (t = 0; t < (size_t)mod->numtextures; t++)
+					if (miss[t])
+						Con_DPrintf("%s: %s draws the missing checker, %g units a square\n", mod->name, mod->textures[t]->name, grid);
+				plugfuncs->Free(miss);
+			}
+		}
 	}
 	modfuncs->Batches_Build(mod, data);
 	if (data)
@@ -6074,6 +6188,43 @@ static qboolean VBSP_LeafHasAmbient (model_t *mod, const vec3_t p)
 	if (leafnum <= 0 || leafnum >= (int)mod->numleafs)
 		return false;
 	return prv->leaflight[leafnum].count != 0;
+}
+
+/*
+FTESurf Patch 780: where a static prop is lit from.  Source takes the map's lighting
+origin when the prop carries one, else the model's $illumposition through the prop's
+transform (R_ComputeLightingOrigin), which studiomdl defaults to the hull centre.  The
+origin alone was wrong for any model built off-centre: surf_not_so_sinister's ramp10
+has its origin at the bottom corner and its illumposition 1000 units up the ramp.
+Each candidate must sit in a leaf with an ambient cube; the origin stays the last word.
+*/
+static void VBSP_PropSamplePoint(model_t *mod, const struct staticprop_s *sent, vec3_t out)
+{
+	const entity_t *ent = &sent->ent;
+	const galiasinfo_t *g;
+
+	if (sent->authoredlight && VBSP_LeafHasAmbient(mod, sent->lightorg))
+	{
+		VectorCopy(sent->lightorg, out);
+		return;
+	}
+	g = (hl2_lt_illumpos && hl2_lt_illumpos->ival && ent->model && ent->model->loadstate == MLS_LOADED && ent->model->type == mod_alias) ?
+		(const galiasinfo_t*)ent->model->meshinfo : NULL;
+	if (g && g->hasillum &&
+		fabs(g->illumposition[0]) < 65536 && fabs(g->illumposition[1]) < 65536 && fabs(g->illumposition[2]) < 65536)
+	{
+		vec3_t p;
+		float s = ent->scale ? ent->scale : 1;
+		VectorMA(ent->origin, g->illumposition[0]*s, ent->axis[0], p);
+		VectorMA(p, g->illumposition[1]*s, ent->axis[1], p);
+		VectorMA(p, g->illumposition[2]*s, ent->axis[2], p);
+		if (VBSP_LeafHasAmbient(mod, p))
+		{
+			VectorCopy(p, out);
+			return;
+		}
+	}
+	VectorCopy(ent->origin, out);
 }
 
 static int VBSP_PointCluster (model_t *mod, const vec3_t p, int *area)
@@ -8292,6 +8443,64 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 }
 
 /*
+FTESurf Patch 780: the leaf's ambient cube at a point, as Source rebuilds it -- an
+inverse-square-distance average of every sample in the leaf, 1/(d^2+1) in world units.
+VRAD stores only what that blend cannot predict: CompressAmbientSampleList drops each
+sample the others reproduce within 3 gamma steps (utils/vrad/leaf_ambient_lighting.cpp,
+Mod_LeafAmbientColorAtPos, the engine's name for the same sum), so the nearest sample
+alone is a value VRAD never meant to stand for its neighbourhood.  hl2_lt_blend 0 is
+the nearest sample, exactly as before.
+*/
+static void VBSP_LeafAmbientCube(const mleaf_t *leaf, const struct mleaflight_s *leaflight, const vec3_t point, vec3_t out[6])
+{
+	const struct leaflightpoint_s *lp, *best;
+	size_t i, j;
+	float total = 0;
+
+	memset(out, 0, sizeof(vec3_t)*6);
+	if (!leaflight->count)
+		return;
+	if (hl2_lt_blend && !hl2_lt_blend->ival)
+	{	//the pre-780 pick: nearest in the 0..255 leaf-fraction grid, strict tie-break
+		int xyz[3];
+		size_t d, bd = ~0;
+		for (i = 0; i < 3; i++)
+			xyz[i] = 255*(point[i] - leaf->minmaxs[i]) / (leaf->minmaxs[3+i]-leaf->minmaxs[i]);
+		for (i = 0, best = lp = leaflight->point; i < (size_t)leaflight->count; i++, lp++)
+		{
+			int m[3];
+			m[0] = xyz[0] - lp->x;
+			m[1] = xyz[1] - lp->y;
+			m[2] = xyz[2] - lp->z;
+			d = DotProduct(m,m);
+			if (bd > d)
+			{
+				bd = d;
+				best = lp;
+			}
+		}
+		for (j = 0; j < 6; j++)
+			VectorCopy(best->rgb[j], out[j]);
+		return;
+	}
+	for (i = 0, lp = leaflight->point; i < (size_t)leaflight->count; i++, lp++)
+	{
+		vec3_t pos;
+		float f;
+		pos[0] = leaf->minmaxs[0] + (leaf->minmaxs[3]-leaf->minmaxs[0]) * lp->x * (1.0f/255);
+		pos[1] = leaf->minmaxs[1] + (leaf->minmaxs[4]-leaf->minmaxs[1]) * lp->y * (1.0f/255);
+		pos[2] = leaf->minmaxs[2] + (leaf->minmaxs[5]-leaf->minmaxs[2]) * lp->z * (1.0f/255);
+		VectorSubtract(pos, point, pos);
+		f = 1.0f / (DotProduct(pos, pos) + 1.0f);
+		total += f;
+		for (j = 0; j < 6; j++)
+			VectorMA(out[j], f, lp->rgb[j], out[j]);
+	}
+	for (j = 0; j < 6; j++)
+		VectorScale(out[j], 1.0f/total, out[j]);
+}
+
+/*
 ===============================================================================
 
 Rendering stuff
@@ -8956,14 +9165,12 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				float lum;
 
 				// The SAME choice the draw path makes, or the census measures
-				// something nobody looks at.
-				VectorCopy(prv->staticprops[i].lightorg, sample);
+				// something nobody looks at.  FTESurf Patch 780: except a non-solid
+				// prop whose model is still loading -- no illumposition yet, so the
+				// origin; the draw path solves only once the model is up.
+				VBSP_PropSamplePoint(mod, &prv->staticprops[i], sample);
 				if (!VBSP_LeafHasAmbient(mod, sample))
-				{
-					VectorCopy(prv->staticprops[i].ent.origin, sample);
-					if (!VBSP_LeafHasAmbient(mod, sample))
-						prv->lit_solid++;
-				}
+					prv->lit_solid++;
 
 				VBSP_LightPointValues(mod, sample, dif, amb, dir);
 
@@ -9100,8 +9307,13 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			static int occlusion_live = -1;
 			float wantmin = hl2_lt_min ? hl2_lt_min->value : 16.0f;
 			int wantocclusion = (hl2_lt_occlusion && hl2_lt_occlusion->ival) ? 1 : 0;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live)
+			static int blend_live = -1, illumpos_live = -1;	//FTESurf Patch 780: both change solved data
+			int wantblend = (hl2_lt_blend && hl2_lt_blend->ival) ? 1 : 0;
+			int wantillumpos = (hl2_lt_illumpos && hl2_lt_illumpos->ival) ? 1 : 0;
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live)
 			{
+				blend_live = wantblend;
+				illumpos_live = wantillumpos;
 				occlusion_live = wantocclusion;
 				min_live = wantmin;
 				cubelight_live = wantcube;
@@ -9286,9 +9498,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				*/
 				vec3_t tmp, sample;
 
-				VectorCopy(sent->lightorg, sample);
-				if (!VBSP_LeafHasAmbient(mod, sample))
-					VectorCopy(src->origin, sample);
+				VBSP_PropSamplePoint(mod, sent, sample);
 
 				VectorCopy(src->origin, tmp);
 				VectorCopy(sample, src->origin);
@@ -9831,12 +10041,49 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 			nz ? "" : CON_WARNING" -- every model on this map will fall back to hl2_lt_min");
 	}
 
+	/*
+	FTESurf Patch 780: firstAmbientSample is an unsigned short and VRAD assigns it the
+	running sample count (leaf_ambient_lighting.cpp:672), so past 65535 samples it
+	wraps and every later leaf reads another leaf's cubes.  VRAD appends in leaf
+	order, so the true start is the running total of the counts; a stored value that
+	agrees with it mod 65536 is that total.  Only on a lump that can wrap (over 65536
+	points) and whose counts sum to its size -- written in leaf order; ab_baume's
+	shares one sample between 12089 leaves.  Library (1926 maps): 457 lumps wrap,
+	1.58M leaves rebuilt, none disagreeing.  surf_me 3308 of 7893 lit leaves, surf_devil
+	8580 of 13982, surf_666 6446 of 11505: the colonnade pillars drew orange, black and
+	lavender off strangers' cubes.
+	*/
 	prv->leaflight = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->leaflight)*mod->numleafs);
 	in = (unsigned short*)(mod_base + lump_idx->fileofs);
-	for (i = 0; i < mod->numleafs; i++)
 	{
-		prv->leaflight[i].count = LittleShort(*in++);
-		prv->leaflight[i].point = point + (unsigned short)LittleShort(*in++);
+		size_t npoints = lump_vals->filelen/(7*4), run = 0, first, wrapped = 0, disagree = 0, sum = 0;
+		qboolean rebuild;
+		for (i = 0; i < mod->numleafs; i++)
+			sum += (unsigned short)LittleShort(in[i*2]);
+		rebuild = npoints > 0x10000 && sum == npoints;
+		for (i = 0; i < mod->numleafs; i++)
+		{
+			unsigned int stored = (unsigned short)LittleShort(*in++), count = stored;
+			first = (unsigned short)LittleShort(*in++);
+			if (rebuild && count && run != first)
+			{
+				if ((run & 0xffff) == first)
+				{
+					first = run;
+					wrapped++;
+				}
+				else
+					disagree++;
+			}
+			if (count && first + count > npoints)
+				count = 0;	//names cubes the lump does not hold; was read past the end
+			prv->leaflight[i].count = count;
+			prv->leaflight[i].point = point + (count ? first : 0);
+			run += stored;
+		}
+		if (wrapped || disagree)
+			Con_DPrintf("%s: %u leaves' ambient sample index wrapped past 65535 -- rebuilt from the running count; %u disagree and are left as stored\n",
+				mod->name, (unsigned)wrapped, (unsigned)disagree);
 	}
 }
 
@@ -10407,9 +10654,7 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		leafnum = 0;
 	mleaf_t *leaf = model->leafs+leafnum;
 	struct mleaflight_s *leaflight = prv->leaflight+leafnum;
-	struct leaflightpoint_s *best, *lp;
-	size_t i, j, d, bd=~0;
-	int xyz[3];
+	size_t j;
 	vec3_t diff[6];
 	float sig[6];
 
@@ -10440,21 +10685,8 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 
 	if (prv->leaflight && leaflight->count)
 	{
-		for (i = 0; i < 3; i++)
-			xyz[i] = 255*(point[i] - leaf->minmaxs[i]) / (leaf->minmaxs[3+i]-leaf->minmaxs[i]);
-		for (i = 0, best=lp = leaflight->point; i < leaflight->count; i++, lp++)
-		{
-			int m[3];
-			m[0] = xyz[0] - lp->x;
-			m[1] = xyz[1] - lp->y;
-			m[2] = xyz[2] - lp->z;
-			d = DotProduct(m,m);
-			if (bd > d)
-			{
-				bd = d;
-				best = lp;
-			}
-		}
+		vec3_t leafcube[6];
+		VBSP_LeafAmbientCube(leaf, leaflight, point, leafcube);	//FTESurf Patch 780
 
 
 		/*
@@ -10476,20 +10708,14 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		term written into one of those by hand lifts either only the lit faces or
 		only the flat base; written into the cube it correctly does both.
 
-		vbsp_wl_cube is a plain local: the six faces are small, this runs once per
-		prop inside the light_known cache, and leaving best->rgb untouched keeps
-		the loaded lump read-only so a second model sampling the same leaf is not
-		looking at someone else's accumulation.
+		leafcube is a plain local: the six faces are small, this runs once per
+		prop inside the light_known cache, and the loaded lump stays read-only so
+		a second model sampling the same leaf is not looking at someone else's
+		accumulation.
 		*/
-		vec3_t lcube[6];
-		vec3_t *rgb = best->rgb;
+		vec3_t *rgb = leafcube;
 		if (prv->numworldlights && hl2_lt_worldlight && hl2_lt_worldlight->ival && !prv->wl_suppress)
-		{
-			for (j = 0; j < 6; j++)
-				VectorCopy(best->rgb[j], lcube[j]);
-			VBSP_AddWorldLightCube(model, point, lcube, false, false);	//the LEVEL: suppression stands
-			rgb = lcube;
-		}
+			VBSP_AddWorldLightCube(model, point, leafcube, false, false);	//the LEVEL: suppression stands
 
 		VectorClear(res_ambient);
 		for (j = 0; j < 6; j++)
@@ -10766,10 +10992,8 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 /*
 FTESurf Patch 268 C: the ambient cube itself, for vertexlit.glsl's #BUMPCUBE.
 
-The same nearest sample VBSP_LightPointValues picks -- same leaf, same clamp, same
-255-grid search, same strict tie-break -- written out again rather than hoisted out
-of it, so that function is untouched and "hl2_cubelight 0 is today" needs no
-argument.  Outside the #if above on purpose: with no leaf lighting loaded,
+The same cube VBSP_LightPointValues reads -- same leaf, same clamp, and since
+Patch 780 the same VBSP_LeafAmbientCube.  Outside the #if above on purpose: with no leaf lighting loaded,
 prv->leaflight is NULL and this answers zeros, which the shader turns into exactly 1.
 
 The six faces go out LINEAR, as the lump decoded them.  The shader takes the ratio
@@ -10781,10 +11005,8 @@ static void VBSP_LightPointCube(struct model_s *model, const vec3_t point, vec3_
 {
 	vbspinfo_t *prv = (vbspinfo_t*)model->meshinfo;
 	struct mleaflight_s *leaflight;
-	struct leaflightpoint_s *best, *lp;
 	mleaf_t *leaf;
-	size_t i, d, bd = ~0;
-	int leafnum, xyz[3], j;
+	int leafnum;
 
 	memset(res_cube, 0, sizeof(vec3_t)*6);
 	if (!prv || !prv->leaflight || model->numleafs <= 0)
@@ -10797,23 +11019,7 @@ static void VBSP_LightPointCube(struct model_s *model, const vec3_t point, vec3_
 	if (!leaflight->count)
 		return;
 
-	for (j = 0; j < 3; j++)
-		xyz[j] = 255*(point[j] - leaf->minmaxs[j]) / (leaf->minmaxs[3+j]-leaf->minmaxs[j]);
-	for (i = 0, best = lp = leaflight->point; i < (size_t)leaflight->count; i++, lp++)
-	{
-		int m[3];
-		m[0] = xyz[0] - lp->x;
-		m[1] = xyz[1] - lp->y;
-		m[2] = xyz[2] - lp->z;
-		d = DotProduct(m,m);
-		if (bd > d)
-		{
-			bd = d;
-			best = lp;
-		}
-	}
-	for (j = 0; j < 6; j++)
-		VectorCopy(best->rgb[j], res_cube[j]);
+	VBSP_LeafAmbientCube(leaf, leaflight, point, res_cube);	//FTESurf Patch 780: the same cube the flat path reads
 	//FTESurf Patch 302: the same term VBSP_LightPointValues adds, so #AMBIENTCUBE
 	//(which REPLACES light.rgb outright, vertexlit.glsl:113-116) and #BUMPCUBE's
 	//ratio see the same light the flat path does.  Both are off by default; if
@@ -11782,9 +11988,17 @@ static void VBSP_PropCensus_f(void)
 			(src->pvscache.num_leafs == -1) ? " (headnode test -- leaf list overflowed)" :
 			(src->pvscache.num_leafs == -2) ? " (not yet re-derived; prop has never been reached)" :
 			(src->pvscache.num_leafs ==  0) ? " (NO VISIBLE LEAVES -- this prop can never pass the PVS test)" : "");
-		Con_Printf("    lighting           : %s, sampled at %.1f %.1f %.1f\n",
-			sent->hasbaked ? "VRAD baked (.vhv)" : "leaf ambient cube",
-			sent->lightorg[0], sent->lightorg[1], sent->lightorg[2]);
+		{
+			vec3_t sp;
+			VBSP_PropSamplePoint(mod, sent, sp);
+			Con_Printf("    lighting           : %s, sampled at %.1f %.1f %.1f (%s)\n",
+				sent->hasbaked ? "VRAD baked (.vhv)" : "leaf ambient cube",
+				sp[0], sp[1], sp[2],
+				(sent->authoredlight && !memcmp(sp, sent->lightorg, sizeof(vec3_t))) ? "map's lighting origin" :
+				memcmp(sp, src->origin, sizeof(vec3_t)) ? "model illumposition" :
+				(src->model && src->model->loadstate == MLS_LOADED) ? "prop origin" :
+				"prop origin -- model not loaded yet");	//FTESurf Patch 780
+		}
 		//FTESurf Patch 296: the LEVEL, which nothing printed until now.  The old
 		//line said only which SOURCE the prop was lit from, so "these two pines
 		//are different brightnesses" could not be checked except by eye against a
@@ -12197,6 +12411,7 @@ qboolean VBSP_Init(void)
 		hl2_refract = cvarfuncs->GetNVFDG("hl2_refract", "2", CVAR_SHADERSYSTEM, "How Source's Refract materials (glass, windows) are drawn.\n0: plain translucency, with no framebuffer copy.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth.", MAPOPTIONS);
 		hl2_vertexcolor = cvarfuncs->GetNVFDG("hl2_vertexcolor", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 232: $vertexcolor / $vertexalpha on LightmappedGeneric and WorldVertexTransition materials -- the per-vertex tint and opacity a mapper paints onto a DISPLACEMENT (every other surface carries white at alpha 1, so this cannot change them).\n0: ignore both keys, which is what every build before P232 did.\n1: draw what the material asks for (default). 41 transition materials in 20 maps and 494 LightmappedGeneric ones in 111 maps carry them; surf_rise's ivy is the reported case.", MAPOPTIONS);
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);
+		hl2_missinggrid = cvarfuncs->GetNVFDG("hl2_missinggrid", "32", 0, "FTESurf Patch 780: the size, in world units, of one square of the missing-texture checker on a world face whose material did not resolve.\n0: scale it like the texture it stands in for, which is what every build before P780 did (a 1024 texture at 0.25 drew 128-unit squares).\n32 (default): one square per 32 units -- Hammer's grid -- whatever the face's texture scale. Takes effect on the next map load.", MAPOPTIONS);
 		hl2_skinfallback = cvarfuncs->GetNVFDG("hl2_skinfallback", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 234: what a model does when one of its skins names a material that was never shipped.\n0: nothing -- that skin draws with the default wall shader, and the map reports a missing material.\n1: use another skin of the same slot that did resolve (default). surf_demise ships three of its four bone skins and one of its two fir-branch skins; no prop on the map selects the missing ones, so this silences two reports and changes nothing on screen.", MAPOPTIONS);
 		hl2_translucent = cvarfuncs->GetNVFDG("hl2_translucent", "1", CVAR_SHADERSYSTEM, "$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).", MAPOPTIONS);
 		hl2_decallit = cvarfuncs->GetNVFDG("hl2_decallit", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 236: how a LightmappedGeneric material that also sets $decal is lit -- graffiti, stains, ivy, and every other decal painted straight onto a world brush face.\n0: route it to the model shader on the strength of $decal alone, which is what every build before P236 did. It costs the surface its lightmap, and (since P232 hands that shader two permutations it does not declare) its whole program: the material then draws as a flat opaque rectangle of whatever the artist left in the transparent texels. This is only here to reproduce that on demand.\n1: keep the lightmapped shader the material asked to be (default). 18 of bhop_futile's 68 world textures are decals; 224 maps also place infodecal.", MAPOPTIONS);
@@ -12313,6 +12528,8 @@ qboolean VBSP_Init(void)
 		*/
 		cvarfuncs->GetNVFDG("hl2_lt_baked_scale", "2", 0, "Overbright applied to VRAD's baked static prop lighting. 2 is the same factor gl_overbright already gives the world lightmap and which model lighting has never had; 1 is the raw baked value, as VRAD wrote it.", MAPOPTIONS);
 		hl2_lt_occlusion = cvarfuncs->GetNVFDG("hl2_lt_occlusion", "1", 0, "Trace local worldlights against opaque world brushes and ray-collidable displacements before lighting models. Independent of movement collision. No prop/mover shadows or sky tracing. Live; 0 restores PVS-only lighting for comparison.", MAPOPTIONS);
+		hl2_lt_blend = cvarfuncs->GetNVFDG("hl2_lt_blend", "1", 0, "FTESurf Patch 780: how a model's ambient light is read from the leaf it stands in.\n1: Source's way (default) -- every sample in the leaf, weighted by inverse squared distance. VRAD stores the samples assuming that blend.\n0: the single nearest sample, as before P780. Neighbouring props can land on very different samples.\nLive: props re-solve on the next frame.", MAPOPTIONS);
+		hl2_lt_illumpos = cvarfuncs->GetNVFDG("hl2_lt_illumpos", "1", 0, "FTESurf Patch 780: where a static prop with no usable lighting origin is lit from.\n1: the model's $illumposition through the prop's transform, as Source does (default).\n0: the prop's origin, as before P780.\nLive: props re-solve on the next frame.", MAPOPTIONS);
 		hl2_lt_min = cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient base on Source/HL2 maps (0-255). Lift only the base toward neutral grey; never amplify the directional light. Live on unbaked props. 0 = off.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_scale", "255", 0, "Model-lighting brightness scale, applied after the encode. 255 maps a fully-lit luxel to white.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_lt_srgb_mag", "1", 0, "sRGB-encode model lighting (0 = plain linear scale by hl2_lt_scale). Source's ambient cube is LINEAR light and needs a gamma encode to be displayed; a multiply is not one.", MAPOPTIONS);

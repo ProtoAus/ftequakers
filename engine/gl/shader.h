@@ -727,6 +727,8 @@ struct shader_s
 #define MATERIAL_FACTOR_COUNT 5
 	vec4_t factors[MATERIAL_FACTOR_COUNT];
 
+	qboolean wireframe;	//FTESurf Patch 780: `fte_wireframe` -- GL draws the triangles as lines (Source's MATERIAL_VAR_WIREFRAME). flags has no bit left.
+
 	//arranged as a series of vec4s
 /*	struct
 	{

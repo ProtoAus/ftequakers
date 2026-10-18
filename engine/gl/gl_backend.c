@@ -237,6 +237,7 @@ static struct {
 
 		vbo_t *sourcevbo;
 		const material_t *curshader;
+		qboolean polymodeowned;	//FTESurf Patch 780: r_wireframe/gl_outline hold glPolygonMode for a whole pass
 		const entity_t *curentity;
 		const batch_t *curbatch;
 		const texnums_t *curtexnums;
@@ -3460,7 +3461,7 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 #endif
 }
 
-static void BE_SubmitMeshChain(qboolean usetesselation)
+static void BE_SubmitMeshChainDraw(qboolean usetesselation)
 {
 	int startv, starti, endv, endi;
 	int m;
@@ -3673,6 +3674,35 @@ static void BE_SubmitMeshChain(qboolean usetesselation)
 			qglUnlockArraysEXT();
 */
 	}
+}
+
+/*
+FTESurf Patch 780: a `wireframe` material's triangles go down as lines in every pass that
+comes through here (depth, colour, fog), so it never writes a filled depth.  The mode is
+restored before returning; the r_wireframe and gl_outline passes, which set it for all
+their batches, are left alone.  Where qglPolygonMode is NULL (GLES, core profiles,
+GLSLONLY) the surface draws filled, as do rtlight shadow-map casters (GLBE_RenderShadowBuffer).
+*/
+static void BE_SubmitMeshChain(qboolean usetesselation)
+{
+#ifdef GL_LINE
+	if (shaderstate.curshader && shaderstate.curshader->wireframe && qglPolygonMode &&
+		!(shaderstate.flags & BEF_LINES) && !shaderstate.polymodeowned)
+	{
+		//BE_PolyOffset enables the current offset for GL_POLYGON_OFFSET_FILL only; lines need their own
+		qboolean offset = shaderstate.curpolyoffset.factor || shaderstate.curpolyoffset.unit;
+		qglLineWidth(1);	//the last GL_LINES batch may have left a debug width
+		qglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+		if (offset)
+			qglEnable(GL_POLYGON_OFFSET_LINE);
+		BE_SubmitMeshChainDraw(usetesselation);
+		if (offset)
+			qglDisable(GL_POLYGON_OFFSET_LINE);
+		qglPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		return;
+	}
+#endif
+	BE_SubmitMeshChainDraw(usetesselation);
 }
 
 #ifndef GLSLONLY
@@ -8645,6 +8675,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 #endif
 	batch_t *batches[SHADER_SORT_COUNT];
 	batch_t **ob = shaderstate.mbatches;
+	qboolean ownedwas;	//FTESurf Patch 780: polymodeowned across a pass
 	RSpeedLocals();
 	shaderstate.mbatches = batches;
 
@@ -8798,7 +8829,10 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 			qglEnable(GL_POLYGON_OFFSET_LINE);
 			qglLineWidth (bound(0.1, r_outline_width.value, 3.0));
 			qglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+			ownedwas = shaderstate.polymodeowned;	//a nested GLBE_DrawWorld (portal, reflection) re-enters here
+			shaderstate.polymodeowned = true;
 			GLBE_SubmitMeshes(NULL, SHADER_SORT_PORTAL, SHADER_SORT_OPAQUE+1);
+			shaderstate.polymodeowned = ownedwas;
 			r_refdef.flipcull = oc;
 			GLBE_SelectMode(BEM_STANDARD);
 			qglDisable(GL_POLYGON_OFFSET_LINE);
@@ -8829,7 +8863,10 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		{
 			BE_SelectMode(BEM_WIREFRAME);
 			qglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+			ownedwas = shaderstate.polymodeowned;
+			shaderstate.polymodeowned = true;
 			GLBE_SubmitMeshes(worldbatches, SHADER_SORT_PORTAL, SHADER_SORT_NEAREST);
+			shaderstate.polymodeowned = ownedwas;
 			BE_SelectMode(BEM_STANDARD);
 			qglPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		}
@@ -8846,7 +8883,10 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		{
 			BE_SelectMode(BEM_WIREFRAME);
 			qglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+			ownedwas = shaderstate.polymodeowned;
+			shaderstate.polymodeowned = true;
 			GLBE_SubmitMeshes(NULL, SHADER_SORT_PORTAL, SHADER_SORT_NEAREST);
+			shaderstate.polymodeowned = ownedwas;
 			BE_SelectMode(BEM_STANDARD);
 			qglPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		}

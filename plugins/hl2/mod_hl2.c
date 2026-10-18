@@ -57,7 +57,7 @@ typedef struct
 	unsigned int filesize;
 
 	vec3_t _80;
-	vec3_t _92;
+	vec3_t illumposition;	//FTESurf Patch 780: studiomdl's default is the hull centre
 	vec3_t mins;
 	vec3_t maxs;
 	vec3_t _128;
@@ -1447,7 +1447,11 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	*/
 	galias = (galiasinfo_t*)mod->meshinfo;
 	if (galias)
+	{
 		Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations);
+		VectorCopy(ctx.header->illumposition, galias->illumposition);	//FTESurf Patch 780
+		galias->hasillum = true;
+	}
 
 	mod->type = mod_alias;
 	mod->radius = RadiusFromBounds(mod->mins, mod->maxs);

@@ -936,6 +936,7 @@ typedef struct
 	*/
 	char filefound;
 	char nobasetex;	//FTESurf Patch 190: the material named no $basetexture and there is nothing sane to guess at
+	char wireframe;	//FTESurf Patch 780: the Wireframe class or $wireframe -- MATERIAL_VAR_WIREFRAME, triangles drawn as lines
 	/*
 	FTESurf Patch 233: $bottommaterial, the material Source draws on the UNDERSIDE
 	of this water.  Kept rather than discarded because it is the only place the link
@@ -1966,6 +1967,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$nofog"))
 			st->nofog = 1;
+		else if (!Q_strcasecmp(key, "$wireframe"))
+			st->wireframe = !!atoi(value);	//FTESurf Patch 780
 		else if (!Q_strcasecmp(key, "$nomip"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$nodecal"))
@@ -2251,6 +2254,24 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	qboolean emisdefaultmapping = st->emisenabled && !st->modelmaterial && !*st->tex[0].name;
 
 	*progargs = 0;
+
+	/*
+	FTESurf Patch 780: Source's Wireframe is VertexLitGeneric drawn with
+	MATERIAL_VAR_WIREFRAME and NOFOG (stdshaders/wireframe_dx9.cpp).  Drawn here as
+	UnlitGeneric -- a white base under $color when there is no $basetexture -- with
+	fte_wireframe turning its triangles into lines.  It was the unknown-class
+	fallback: the material's own name as a texture, i.e. the missing checker.
+	surf_666's spawn is dev_nyro/blends/wire_white, {73 73 73} on 8 displacements.
+	Unlit, not vertex-lit; nofog reaches only the program arms, so the plain pass fogs.
+	*/
+	if (!Q_strcasecmp(st->type, "Wireframe") || !Q_strcasecmp(st->type, "Wireframe_DX9") || !Q_strcasecmp(st->type, "Wireframe_DX8"))
+	{
+		st->wireframe = 1;
+		st->nofog = 1;
+		if (!*st->tex[0].name)
+			st->nobasetex = 1;
+		Q_strlcpy(st->type, "UnlitGeneric", sizeof(st->type));
+	}
 
 	/*
 	FTESurf Patch 190: the default $basetexture must not carry the material's
@@ -4210,6 +4231,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset 1\n");
 		Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
 	}
+	if (st->wireframe)
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tfte_wireframe\n");	//FTESurf Patch 780
 
 	if (*st->fullbrightmap)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s%s.vtf\"\n", strcmp(st->fullbrightmap, "materials/")?"materials/":"", st->fullbrightmap);

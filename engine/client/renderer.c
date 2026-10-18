@@ -1589,6 +1589,10 @@ void Renderer_Init(void)
 		Cvar_Register (&r_showbrushes_mask, GLRENDEREROPTIONS);
 		Cvar_Register (&r_showbrushes_fill, GLRENDEREROPTIONS);	//FTESurf Patch 331
 	}
+	{
+		extern void CLQ1_SurfViewInit(void);
+		CLQ1_SurfViewInit();	//FTESurf Patch 776: surf_view and its cvars
+	}
 	Cvar_Register (&r_showfields, GLRENDEREROPTIONS);
 	Cvar_Register (&r_showshaders, GLRENDEREROPTIONS);
 #ifdef BEF_PUSHDEPTH

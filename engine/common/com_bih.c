@@ -2597,6 +2597,77 @@ void BIH_EnumBrushes (model_t *mod, const vec3_t mins, const vec3_t maxs,
 		return;
 	BIH_EnumBrushes_r ((struct bihnode_s*)mod->cnodes, mins, maxs, cb, ctx);
 }
+
+//FTESurf Patch 776: BIH_EnumBrushes plus the two leaf kinds it skips that still stop a player
+//(displacement triangles, Patch 764's static-prop hull pieces), for surf_view in cl_ents.c.
+static void BIH_EnumCollision_r (struct bihnode_s *node, const vec3_t mins, const vec3_t maxs, struct bihenum_s *en)
+{
+	const vec_t *a, *b, *c;
+	vec3_t tmins, tmaxs;
+	const struct bihtransform_s *trn;
+	unsigned int i;
+	switch (node->type)
+	{
+	case BIH_GROUP:
+		for (i = 0; i < (unsigned int)node->group.numchildren; i++)
+			BIH_EnumCollision_r (node+node->group.firstchild+i, mins, maxs, en);
+		break;
+#ifdef BIH_USEBIH
+	case BIH_X:
+	case BIH_Y:
+	case BIH_Z:
+		BIH_EnumCollision_r (node+node->bihnode.firstchild+0, mins, maxs, en);
+		BIH_EnumCollision_r (node+node->bihnode.firstchild+1, mins, maxs, en);
+		break;
+#endif
+#ifdef BIH_USEBVH
+	case BVH_X:
+	case BVH_Y:
+	case BVH_Z:
+		BIH_EnumCollision_r (node+node->bvhnode.firstchild+0, mins, maxs, en);
+		BIH_EnumCollision_r (node+node->bvhnode.firstchild+1, mins, maxs, en);
+		break;
+#endif
+	case BIH_BRUSH:
+		if (en->brush && BIH_BoundsIntersect (node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs))
+			en->brush (en->ctx, node->data.brush);
+		break;
+	case BIH_TRIANGLE:
+		if (!en->tri)
+			break;
+		a = node->data.tri.xyz[node->data.tri.indexes[0]];
+		b = node->data.tri.xyz[node->data.tri.indexes[1]];
+		c = node->data.tri.xyz[node->data.tri.indexes[2]];
+		VectorCopy (a, tmins);
+		VectorCopy (a, tmaxs);
+		AddPointToBounds ((vec_t*)b, tmins, tmaxs);
+		AddPointToBounds ((vec_t*)c, tmins, tmaxs);
+		if (BIH_BoundsIntersect (tmins, tmaxs, mins, maxs))
+			en->tri (en->ctx, a, b, c, node->data.contents);
+		break;
+	case BIH_MODEL:
+		en->props++;
+		trn = node->data.mesh.tr;
+		if (!trn || !trn->numphybrushes)
+		{
+			en->propsnohull++;	//traced as its model: no brush shape to hand out
+			break;
+		}
+		if (en->brush)
+			for (i = 0; i < trn->numphybrushes; i++)
+				if (BIH_BoundsIntersect (trn->phybrushes[i].absmins, trn->phybrushes[i].absmaxs, mins, maxs))
+					en->brush (en->ctx, &trn->phybrushes[i]);
+		break;
+	default:
+		break;
+	}
+}
+void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, struct bihenum_s *en)
+{
+	if (!mod || !mod->cnodes || !en)
+		return;
+	BIH_EnumCollision_r ((struct bihnode_s*)mod->cnodes, mins, maxs, en);
+}
 #endif
 
 void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
