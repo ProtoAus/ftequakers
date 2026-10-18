@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 790 — keep timing-format faults distinct from clock abstention (readers)
+
+**Problem:** held-clock parsing exposed unchecked counter conversion and projected
+array overflow. The receipt consumer also ignored independent malformed-sidecar
+faults when its angle join was unavailable. Promoting every old view diagnostic
+instead falsely faulted repeated retries and cold loads.
+
+**Change:** bound the new counter tokens before conversion and check projected
+angle timestamps before storage. Invalid clocks fault without an angle judgment.
+Retain independent sidecar faults when the comparison is unavailable; valid
+unresolved pairs stay BLIND, not OK. Client-local reset allowances use validated
+server restore/session history, counting a cold restore and its new session once.
+Shape, finite-number, invariant run-clock and end-range checks stay active.
+Captured bytes and digest checks are unchanged. No native/QC behavior, engine pin,
+Build, ranking policy or threshold change.
+
+**Verified:** independent reviews exposed the cases; parent baseline/head probes
+reproduced them before correction. Reader 354 / receipt 151 checks and sweep suite:
+zero failed. Same bytes of 602 recordings / 383 sidecars: no new faulting pairs;
+two formerly faulting cold-load pairs remain unavailable, not angle-clean.
+The retained native held prefix still joins without faults (short capture, THIN).
+
 ## Patch 789 — a player's picture beside their name, wherever it is drawn (csprogs, menu)
 
 **Problem:** Lex: "wherever a player name is, also place their display picture -- like
