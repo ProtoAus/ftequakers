@@ -1,5 +1,53 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 773 — paint sprays while a key is held; random colour; body/belt presets set what you picked
+
+**Problem:** Lex: "holding down the key should spray repeatedly", spray speed in
+player_edit, a random colour per glob, z-fighting "only if you're really close to the
+wall", and the body/belt presets "result in the slider being set to 255".
+- Lex's keys (`i`, MOUSE3) are bound to the one-shot `paint`, so a held key painted one
+  disc. `+paint` repeated, but skipped any disc within 0.3 of the size of the last one,
+  so a key held still also painted one.
+- A body/belt preset was a palette ask (`lobbycolor`) that only a lobby server resolves.
+  Solo, `cl_pcolour` stays 0, `Av_PaletteRGB(0)` is white: the body stayed white and the
+  sliders read 255 255 255.
+
+**Change (csprogs):**
+- `Paint_InputEvent` (CSQC_InputEvent, watches only): a key bound to `paint` (with
+  its modifiers, first command) holds the spray until that key comes up; `+paint` and
+  up to two such keys hold separately. Held, a disc goes down every frame the aim has
+  moved 0.3 of a disc (a sweep is a line) and, on a still aim, every 1/`paint_rate` s
+  (0 = every frame), so a spray builds up.
+- `paint_color random`: a new hue for every disc.
+- The paint vertex shader moves each vertex 0.125u toward the eye along its own ray (same
+  pixel, nearer depth). `polygonoffset` alone is depth-buffer steps, which near a wall are
+  thousandths of a unit, below the decal clip's float rounding at map coordinates.
+  `e_eyepos` is declared in the program: an inline `glslprogram` does not include
+  sys/defs.h, and without it the program failed and drew a square fallback.
+- hud_player: a swatch sets the half the sliders edit. The body's is the palette ask a
+  lobby resolves for everyone (lobbybody/lobbyrgb cleared, so body, trail and chat stay
+  one colour); solo the body wears the ask (Av_MyRGB). The belt takes it exactly. A
+  one-colour body opens on Body. The sliders follow the worn colour when it changes.
+  Paint section: Random chip, Rate slider.
+
+**Verified:** conbridge on surf_dune, control = the P772 csprogs.
+- A key bound to `paint`, posted WM_KEYDOWN held 2 s at 20/s: 42 discs (control 1).
+  `+paint` 2 s: 44 at 20/s, 11 at 5/s; 1 s at max: 114 (100 fps).
+- Panel: `lobbybody "0 128 255"` shows sliders 0/128/255; solo `lobbycolor 3` wears and
+  shows yellow 255/255/0.
+- Close paint: square on at 2-16u and grazing at 2-8u off the wall, both builds draw the
+  disc solid. **Lex's z-fighting was not reproduced**, so the pull is verified only to
+  draw correctly.
+- Review round 1 (one reviewer) found: rate-pacing turned a sweep into dots; a body
+  swatch written exactly let a lobby give a body unlike its trail; the panel opened on
+  Belt; the sliders re-read the echo every frame and snapped back. Fixed and
+  re-measured against the pre-fix build: a fixed colour held still 2 s placed 43
+  (pre-fix 1); a 40 deg/s sweep at rate 2 placed 121 (pre-fix 5); the panel opens on
+  Body for a one-colour body.
+- The deployed csprogs (f6103f93) was built from the pushed tree. 0 warnings.
+
+**Known:** the z-fighting itself is unconfirmed (lextest asks where it was seen).
+
 ## Patch 770 — Friends need no acceptance; TAB board Scoreboard / Players switch, Styles row and a new Players list (QC, surfd)
 
 **Problem:** Lex, 18 Oct: the main menu's Friends list did not load; adding a friend
