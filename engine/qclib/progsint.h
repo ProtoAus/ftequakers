@@ -101,6 +101,7 @@ typedef struct
 	int				s;
 	int				pushed;
 	prclocks_t		timestamp;
+	prclocks_t		excluded;	//FTESurf Patch 800: profile_excluded when this frame was entered
 } prstack_t;
 
 #if defined(QCGC) && defined(MULTITHREAD)
@@ -180,6 +181,12 @@ typedef struct prinst_s
 
 	pbool profiling;
 	prclocks_t profilingalert;	//one second, in cpu clocks
+	//FTESurf Patch 800: engine work the host times elsewhere (ProfileExclude), left out of every function
+	//it ran under. Paused while QC nested inside it runs, so that QC still counts as its caller's child.
+	prclocks_t profile_excluded;	//running total, cycles
+	prclocks_t profile_exclstart;	//when the open window last (re)started
+	int profile_excldepth;			//pr_depth it was opened at, plus one; 0 = none open
+	int profile_exclnest;
 	mfunction_t	*pr_xfunction;	//active function
 	int pr_xstatement;			//active statement
 
@@ -534,6 +541,7 @@ extern pvec3_t pvec3_origin;
 struct qcthread_s *PDECL PR_ForkStack	(pubprogfuncs_t *progfuncs);
 void PDECL PR_ResumeThread			(pubprogfuncs_t *progfuncs, struct qcthread_s *thread);
 void	PDECL PR_AbortStack			(pubprogfuncs_t *progfuncs);
+void	PDECL PR_ProfileExclude		(pubprogfuncs_t *progfuncs, pbool begin);	//FTESurf Patch 800
 pbool	PDECL PR_GetBuiltinCallInfo	(pubprogfuncs_t *ppf, int *builtinnum, char *function, size_t sizeoffunction);
 
 eval_t *PDECL PR_FindGlobal(pubprogfuncs_t *prfuncs, const char *globname, progsnum_t pnum, etype_t *type);

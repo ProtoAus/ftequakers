@@ -1780,6 +1780,51 @@ static pbool PDECL PR_DumpProfiles (pubprogfuncs_t *ppf, pbool resetprofiles)
 	return true;
 }
 
+//FTESurf Patch 800
+static pbool PDECL PR_SetProfiling (pubprogfuncs_t *ppf, pbool on)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	unsigned int i, f;
+	if (prinst.pr_depth)
+		return false;	//frames on the stack were entered without timestamps (or with them)
+	if (on && !prinst.profiling)
+		for (i = 0; i < prinst.maxprogs; i++)
+			if (pr_progstate[i].progs)
+				for (f = 0; f < pr_progstate[i].progs->numfunctions; f++)
+				{
+					pr_progstate[i].functions[f].profile = 0;
+					pr_progstate[i].functions[f].profiletime = 0;
+					pr_progstate[i].functions[f].profilechildtime = 0;
+				}
+	prinst.profiling = on;
+	prinst.profile_exclnest = 0;
+	prinst.profile_excldepth = 0;
+	return true;
+}
+static void PDECL PR_EnumProfile (pubprogfuncs_t *ppf, void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx, pbool reset)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	unsigned int i, f;
+	double us = 1000000.0 / ull2dbl(Sys_GetClockRate());
+	mfunction_t *mf;
+	for (i = 0; i < prinst.maxprogs; i++)
+	{
+		if (!pr_progstate[i].progs)
+			continue;
+		for (f = 0; f < pr_progstate[i].progs->numfunctions; f++)
+		{
+			mf = &pr_progstate[i].functions[f];
+			if (!mf->profiletime)
+				continue;
+			if (cb)
+				cb(ctx, mf->s_name+progfuncs->funcs.stringtable, mf->s_file+progfuncs->funcs.stringtable,
+					ull2dbl(mf->profiletime - mf->profilechildtime) * us, ull2dbl(mf->profiletime) * us);
+			if (reset)
+				mf->profile = mf->profiletime = mf->profilechildtime = 0;
+		}
+	}
+}
+
 static void PDECL PR_Shutdown(pubprogfuncs_t *ppf);
 
 static pubprogfuncs_t deffuncs = {
@@ -1988,6 +2033,9 @@ pubprogfuncs_t * PDECL InitProgs(progexterns_t *ext)
 	funcs = (ext->memalloc?ext->memalloc:qclib_malloc)(sizeof(progfuncs_t));	
 	memcpy(&funcs->funcs, &deffuncs, sizeof(pubprogfuncs_t));
 	memset(&funcs->inst, 0, sizeof(funcs->inst));
+	funcs->funcs.SetProfiling = PR_SetProfiling;	//FTESurf Patch 800: after `user`, so set here, not in deffuncs
+	funcs->funcs.ProfileExclude = PR_ProfileExclude;
+	funcs->funcs.EnumProfile = PR_EnumProfile;
 
 	funcs->funcs.progstate = &funcs->inst.progstate;
 

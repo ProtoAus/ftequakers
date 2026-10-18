@@ -246,6 +246,13 @@ struct pubprogfuncs_s
 		char	*tempstringbase;					//for engine's use. Store your base tempstring pointer here.
 		int		tempstringnum;						//for engine's use.
 	} user;
+
+	//FTESurf Patch 800, appended so nothing above moves. SetProfiling takes effect only between calls
+	//(returns false while QC runs); ProfileExclude(true/false) brackets engine work called from QC;
+	//EnumProfile reports each function that ran, self and total in microseconds, and can reset.
+	pbool (PDECL *SetProfiling)					(pubprogfuncs_t *progfuncs, pbool on);
+	void (PDECL *ProfileExclude)				(pubprogfuncs_t *progfuncs, pbool begin);
+	void (PDECL *EnumProfile)					(pubprogfuncs_t *progfuncs, void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx, pbool reset);
 };
 
 typedef struct progexterns_s {

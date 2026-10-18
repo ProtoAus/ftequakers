@@ -150,6 +150,7 @@ void RSpeed_Finish(int spt, double start, int d)
 
 cvar_t r_budget = CVARFD("r_budget", "0", 0, "FTESurf Patch 782. Shows where each frame's time goes: CPU work by group, idle, and GPU time by pass (GL timer queries). 1 = compact: two bars and the three biggest items under each, 2 = a row per group, 3 = every bucket in each group. r_budget_dump prints it and copies it to the clipboard.");
 cvar_t r_budget_window = CVARFD("r_budget_window", "0.5", 0, "FTESurf Patch 782. r_budget averages over this many seconds.");
+cvar_t r_budget_csqc = CVARFD("r_budget_csqc", "0", 0, "FTESurf Patch 800. With r_budget on, also breaks CSQC down by QC source file (and at r_budget 3 its three busiest functions). Runs the QC profiler while on, which slows QC; off, it costs nothing.");
 
 typedef struct
 {
@@ -202,6 +203,20 @@ static const char *R_Budget_GroupName(int i, qboolean shortname)
 	return shortname ? budget_groupshort[i] : budget_groups[i].name;
 }
 
+#define BUDGET_QCFILES 16	//published, and in the dump
+#define BUDGET_QCROWS 10	//on the panel, functions under the first BUDGET_QCFUNCROWS: r_budget 3 fits 1200 px
+#define BUDGET_QCFUNCROWS 4
+#define BUDGET_QCACC 64
+typedef struct
+{
+	char file[32];
+	float ms;
+	struct {char name[40]; float ms;} top[3];
+} budgetqc_t;
+//one window's QC profile, summed per source file (us); the overflow goes to the last slot
+static struct {budgetqc_t f[BUDGET_QCACC]; int n;} budget_qcacc;
+static qboolean budget_qcprof;	//the CSQC VM is profiling for us; outside `budget`, which is wiped when r_budget comes on
+
 static struct
 {
 	qboolean on;
@@ -218,7 +233,99 @@ static struct
 	float gpu[GPUB_MAX], gputotal, gpubusy;	//ms; busy is the total less "Waiting on the CPU"
 	int gpuframes;				//finished frames the GPU figures came from; 0 = none
 	float quantavg[RQUANT_MAX];
+	qboolean qcfull;			//the window now open started with the profiler on
+	int nqc;					//published r_budget_csqc files, busiest first; 0 = none
+	float qctotal;				//ms
+	budgetqc_t qc[BUDGET_QCFILES];
 } budget;
+
+static void R_Budget_QCFunc(void *ctx, const char *func, const char *file, double selfus, double totalus)
+{
+	char b[sizeof(budget_qcacc.f[0].file)];
+	budgetqc_t *f;
+	int i, k;
+	Q_strncpyz(b, COM_SkipPath(file), sizeof(b));
+	COM_StripExtension(b, b, sizeof(b));
+	for (i = 0; i < budget_qcacc.n; i++)
+		if (!strcmp(budget_qcacc.f[i].file, b))
+			break;
+	if (i == budget_qcacc.n)
+	{
+		if (i == BUDGET_QCACC-1)
+			Q_strncpyz(b, "(other files)", sizeof(b));
+		if (i < BUDGET_QCACC)
+		{
+			memset(&budget_qcacc.f[i], 0, sizeof(budget_qcacc.f[i]));
+			Q_strncpyz(budget_qcacc.f[i].file, b, sizeof(budget_qcacc.f[i].file));
+			budget_qcacc.n++;
+		}
+		else
+			i = BUDGET_QCACC-1;
+	}
+	f = &budget_qcacc.f[i];
+	f->ms += selfus;
+	for (k = 0; k < 3; k++)
+		if (selfus > f->top[k].ms)
+		{
+			memmove(&f->top[k+1], &f->top[k], sizeof(f->top[0])*(2-k));
+			Q_strncpyz(f->top[k].name, func, sizeof(f->top[k].name));
+			f->top[k].ms = selfus;
+			break;
+		}
+}
+static int QDECL R_Budget_QCSort(const void *a, const void *b)
+{
+	float d = ((const budgetqc_t*)b)->ms - ((const budgetqc_t*)a)->ms;
+	return (d > 0) - (d < 0);
+}
+//the window's QC profile as per-frame ms; the first window after switching on is partial, so not shown
+static void R_Budget_QCPublish(void)
+{
+	int i, k;
+	budget.nqc = 0;
+	budget.qctotal = 0;
+	if (!budget_qcprof)
+	{
+		budget.qcfull = false;
+		return;
+	}
+	budget_qcacc.n = 0;
+#ifdef CSQC_DAT
+	CSQC_EnumProfile(R_Budget_QCFunc, NULL);
+#endif
+	if (budget.qcfull)
+	{
+		qsort(budget_qcacc.f, budget_qcacc.n, sizeof(budget_qcacc.f[0]), R_Budget_QCSort);
+		for (i = 0; i < budget_qcacc.n; i++)
+		{
+			for (k = 0; k < 3; k++)
+				budget_qcacc.f[i].top[k].ms /= budget.frames * 1000.0;
+			budget_qcacc.f[i].ms /= budget.frames * 1000.0;
+			budget.qctotal += budget_qcacc.f[i].ms;
+			if (i < BUDGET_QCFILES)
+				budget.qc[budget.nqc++] = budget_qcacc.f[i];
+		}
+	}
+	budget.qcfull = true;
+}
+//between QC calls each frame: the profiler runs only while r_budget_csqc shows it
+static void R_Budget_QCProfiler(qboolean want)
+{
+	if (want == budget_qcprof && !want)
+		return;
+#ifdef CSQC_DAT
+	if (CSQC_SetProfiling(want))
+	{
+		if (want && !budget_qcprof)
+			budget.qcfull = false;	//the window now open began unprofiled
+		budget_qcprof = want;
+	}
+	else if (!CSQC_Inited())
+		budget_qcprof = false;	//no VM to profile (a map change reloads it with the profiler off)
+#else
+	budget_qcprof = false;
+#endif
+}
 
 static qboolean R_Budget_GPUTimers(void)
 {
@@ -252,6 +359,7 @@ static void R_Budget_Publish(double now)
 		budget.gpu[i] = gn ? gsum[i] / gn : 0;
 	budget.gputotal = gn ? gtotal / gn : 0;
 	budget.gpubusy = max(0, budget.gputotal - budget.gpu[GPUB_WAIT]);
+	R_Budget_QCPublish();
 	budget.valid = true;
 
 	budget.winstart = now;
@@ -267,6 +375,7 @@ static void R_Budget_Sample(void)
 	int i;
 	double now = Sys_DoubleTime();
 
+	R_Budget_QCProfiler(r_budget.ival && r_budget_csqc.ival);
 	if (!r_budget.ival)
 	{
 		budget.on = budget.valid = false;
@@ -405,6 +514,11 @@ static void R_Budget_Legend(float x, float y, float cw, const char *what, const 
 	}
 }
 
+static const float budget_qccols[][3] =
+{
+	{0.85,0.45,0.85},	{0.55,0.75,1.00},	{0.95,0.85,0.30},	{0.35,0.85,0.35},
+	{1.00,0.60,0.20},	{0.30,0.85,0.85},	{1.00,0.40,0.40},	{0.70,0.70,0.75}
+};
 static void R_Budget_Draw(void)
 {
 	float cw, x = 8, y = 8, w, scale, work, idle, bx, seg, ms, lines;
@@ -438,10 +552,24 @@ static void R_Budget_Draw(void)
 
 	//count what will be drawn, so the backdrop fits it
 	if (r_budget.ival == 1)
-		lines = 2.5 + 2 + 2;	//compact: header, the two bars, a legend line for each
+		lines = 2.5 + 2 + 2 + (budget.nqc ? 1 : 0);	//compact: header, the two bars, a legend line for each, and qc's
 	else
 	{
-		lines = 2.5 + 2.5 + 1 + 1 + 1.5 + 1 + 0.5 + 1;	//header, bars, cpu heading, idle, gpu heading, footer
+		lines = 0;
+		if (budget.nqc)
+		{	//heading, files, then the total and its gap
+			lines += 1 + 1.5;
+			for (i = 0; i < budget.nqc && i < BUDGET_QCROWS; i++)
+				if (BUDGET_SHOWN(budget.qc[i].ms))
+				{
+					lines++;
+					if (r_budget.ival >= 3 && i < BUDGET_QCFUNCROWS)
+						for (j = 0; j < 3; j++)
+							if (BUDGET_SHOWN(budget.qc[i].top[j].ms))
+								lines++;
+				}
+		}
+		lines += 2.5 + 2.5 + 1 + 1 + 1.5 + 1 + 0.5 + 1;	//header, bars, cpu heading, idle, gpu heading, footer
 		for (i = 0; i < BUDGET_GROUPS; i++)
 		{
 			g = &budget_groups[i];
@@ -460,9 +588,10 @@ static void R_Budget_Draw(void)
 	R2D_ImageColours(0, 0, 0, 0.6);
 	R2D_FillBlock(x - 4, y - 4, w + 8, lines*cw + 8);
 
-	R_Budget_Text(x, y, va("^3frame %.2f ms  %.0f fps^7   cpu busy %.2f   gpu %s   idle %.2f",
+	R_Budget_Text(x, y, va("^3frame %.2f ms  %.0f fps^7   cpu busy %.2f   gpu %s   idle %.2f   ^5panel %.2f",
 		budget.frame, budget.frame > 0 ? 1000/budget.frame : 0, R_Budget_Busy(work),
-		budget.gpuframes ? va("%.2f", budget.gpubusy) : R_Budget_GPUTimers() ? "..." : "n/a", idle), w, false);
+		budget.gpuframes ? va("%.2f", budget.gpubusy) : R_Budget_GPUTimers() ? "..." : "n/a", idle,
+		budget.self[RSPEED_RSPEEDSHOW]/1000), w, false);
 	y += cw;
 	R_Budget_Text(x, y, va("^7%s", R_Budget_Verdict(work)), w, false);
 	y += cw*1.5;
@@ -517,6 +646,20 @@ static void R_Budget_Draw(void)
 				cols[i] = budget_gpucols[i];
 			R_Budget_Legend(x, y, cw, "gpu", budget.gpu, budget_gpushort, cols, GPUB_MAX);
 		}
+		if (budget.nqc)
+		{
+			float qv[BUDGET_QCFILES];
+			const char *qn[BUDGET_QCFILES];
+			const float *qcol[BUDGET_QCFILES];
+			y += cw;
+			for (i = 0; i < budget.nqc; i++)
+			{
+				qv[i] = budget.qc[i].ms;
+				qn[i] = budget.qc[i].file;
+				qcol[i] = budget_qccols[i % countof(budget_qccols)];
+			}
+			R_Budget_Legend(x, y, cw, "qc", qv, qn, qcol, budget.nqc);
+		}
 		R2D_ImageColours(1, 1, 1, 1);
 		return;
 	}
@@ -545,6 +688,29 @@ static void R_Budget_Draw(void)
 	R_Budget_Row(x, y, cw, idle, scale, idlecol, "Idle (waiting for next frame)", false);
 	y += cw*1.5;
 
+	if (budget.nqc)
+	{	//on the QC total's scale, so the split shows. Not CSQC's row: QC run from entity setup is under World there
+		R_Budget_Text(x, y, va("^3%-*s    ms   qc", BUDGET_LABEL, "CSQC by QC file (profiler on)"), BUDGET_COLS*budget_adv, false);
+		y += cw;
+		for (i = 0; i < budget.nqc && i < BUDGET_QCROWS; i++)
+		{
+			const float *col = budget_qccols[i % countof(budget_qccols)];
+			if (!BUDGET_SHOWN(budget.qc[i].ms))
+				continue;
+			R_Budget_Row(x, y, cw, budget.qc[i].ms, budget.qctotal, col, budget.qc[i].file, false);
+			y += cw;
+			if (r_budget.ival >= 3 && i < BUDGET_QCFUNCROWS)
+				for (j = 0; j < 3; j++)
+					if (BUDGET_SHOWN(budget.qc[i].top[j].ms))
+					{
+						R_Budget_Row(x, y, cw, budget.qc[i].top[j].ms, budget.qctotal, col, budget.qc[i].top[j].name, true);
+						y += cw;
+					}
+		}
+		R_Budget_Text(x, y, va("^7%-*s%6.2f  (profiled: QC runs slower)", BUDGET_LABEL, "all QC", budget.qctotal), w, false);
+		y += cw*1.5;
+	}
+
 	if (budget.gpuframes)
 	{
 		R_Budget_Text(x, y, va("^3%-*s    ms frame", BUDGET_LABEL, "GPU time by pass"), BUDGET_COLS*budget_adv, false);
@@ -571,7 +737,7 @@ static void R_Budget_Draw(void)
 //the same table as text: printed, and put on the clipboard to paste into a report
 static void R_Budget_Dump_f(void)
 {
-	char out[8192], bar[33];
+	char out[16384], bar[33];
 	float work, idle, ms, scale;
 	int i, j, n;
 	const budgetgroup_t *g;
@@ -586,8 +752,8 @@ static void R_Budget_Dump_f(void)
 	scale = max(budget.frame, max(work, budget.gputotal));
 #define BUDGET_BAR(v) (n = scale > 0 ? (int)(32*(v)/scale + 0.5) : 0, n = bound(0, n, 32), memset(bar, '#', n), bar[n] = 0, bar)
 	*out = 0;
-	Q_strncatz(out, va("frame %.2f ms (%.0f fps)  cpu busy %.2f  gpu %s  idle %.2f  -- %s\n", budget.frame, budget.frame > 0 ? 1000/budget.frame : 0,
-		R_Budget_Busy(work), budget.gpuframes ? va("%.2f", budget.gpubusy) : "n/a", idle, R_Budget_Verdict(work)), sizeof(out));
+	Q_strncatz(out, va("frame %.2f ms (%.0f fps)  cpu busy %.2f  gpu %s  idle %.2f  panel %.2f  -- %s\n", budget.frame, budget.frame > 0 ? 1000/budget.frame : 0,
+		R_Budget_Busy(work), budget.gpuframes ? va("%.2f", budget.gpubusy) : "n/a", idle, budget.self[RSPEED_RSPEEDSHOW]/1000, R_Budget_Verdict(work)), sizeof(out));
 	Q_strncatz(out, "CPU work by group                    ms  frame\n", sizeof(out));
 	for (i = 0; i < BUDGET_GROUPS; i++)
 	{
@@ -607,6 +773,18 @@ static void R_Budget_Dump_f(void)
 	}
 	else
 		Q_strncatz(out, "GPU: no timer results\n", sizeof(out));
+	if (budget.nqc)
+	{
+		Q_strncatz(out, va("CSQC by QC file (profiled, QC runs slower)   ms   qc  -- all QC %.2f ms\n", budget.qctotal), sizeof(out));
+		for (i = 0; i < budget.nqc; i++)
+		{
+			ms = budget.qc[i].ms;
+			Q_strncatz(out, va("  %-32s %6.2f %4.0f%%\n", budget.qc[i].file, ms, budget.qctotal > 0 ? ms*100/budget.qctotal : 0), sizeof(out));
+			for (j = 0; j < 3; j++)
+				if (budget.qc[i].top[j].ms > 0)
+					Q_strncatz(out, va("      %-28s %6.3f\n", budget.qc[i].top[j].name, budget.qc[i].top[j].ms), sizeof(out));
+		}
+	}
 	Q_strncatz(out, va("draws %.0f  triangles %.2fM  batches world %.0f entity %.0f  (%s, %s)\n", budget.quantavg[RQUANT_DRAWS],
 		budget.quantavg[RQUANT_PRIMITIVEINDICIES]/3000000, budget.quantavg[RQUANT_WORLDBATCHES], budget.quantavg[RQUANT_ENTBATCHES],
 		cl.worldmodel ? cl.worldmodel->name : "no map", version_string()), sizeof(out));
@@ -4377,6 +4555,7 @@ void SCR_Init (void)
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
 	Cvar_Register (&r_budget, "Screen options");	//FTESurf Patch 782
 	Cvar_Register (&r_budget_window, "Screen options");
+	Cvar_Register (&r_budget_csqc, "Screen options");	//FTESurf Patch 800
 	Cmd_AddCommandD ("r_budget_dump", R_Budget_Dump_f, "FTESurf Patch 782. Prints r_budget's breakdown as text and copies it to the clipboard.");
 	Cmd_AddCommandD ("r_speeds_dump", RSpeed_Dump_f, "Prints the current r_speeds 2 sample table to the console as text, so it can be logged with -condebug and reconciled arithmetically instead of read off a screenshot.");
 

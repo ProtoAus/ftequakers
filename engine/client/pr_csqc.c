@@ -1493,6 +1493,7 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 
 	int oldself = *csqcg.self;
 	RSpeedMark();
+	prinst->ProfileExclude(prinst, true);	//FTESurf Patch 800: "entity setup" is World's; predraw QC still counts
 
 	if (cl.worldmodel)
 	{
@@ -1584,6 +1585,7 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 		}
 	}
 
+	prinst->ProfileExclude(prinst, false);
 	RSpeedEnd(RSPEED_LINKENTITIES);
 }
 
@@ -2858,7 +2860,9 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 	V_ApplyRefdef();
 	V_CalcGunPositionAngle(csqc_playerview, V_CalcBob(csqc_playerview, true));
 
+	prinst->ProfileExclude(prinst, true);	//FTESurf Patch 800: the 3D view has its own r_budget groups
 	R_RenderView();
+	prinst->ProfileExclude(prinst, false);
 	R2D_PolyBlend ();
 
 	if (r_refdef.grect.x || r_refdef.grect.y || r_refdef.grect.width != vid.fbvwidth || r_refdef.grect.height != vid.fbvheight)
@@ -8120,6 +8124,18 @@ qboolean CSQC_Inited(void)
 	if (csqcprogs)
 		return true;
 	return false;
+}
+//FTESurf Patch 800: r_budget_csqc's profiler. pr_enable_profiling keeps it on regardless.
+qboolean CSQC_SetProfiling(qboolean on)
+{
+	if (!csqcprogs || !csqcprogs->SetProfiling)
+		return false;
+	return csqcprogs->SetProfiling(csqcprogs, on || pr_enable_profiling.ival);
+}
+void CSQC_EnumProfile(void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx)
+{
+	if (csqcprogs && csqcprogs->EnumProfile)
+		csqcprogs->EnumProfile(csqcprogs, cb, ctx, true);
 }
 
 qboolean CSQC_UnconnectedOkay(qboolean inprinciple)

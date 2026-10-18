@@ -533,6 +533,9 @@ static int ASMCALL PR_EnterFunction (progfuncs_t *progfuncs, mfunction_t *f, int
 	if (prinst.profiling)
 	{
 		st->timestamp = Sys_GetClock();
+		if (prinst.profile_excldepth && prinst.pr_depth == prinst.profile_excldepth)
+			prinst.profile_excluded += st->timestamp - prinst.profile_exclstart;	//QC called from inside excluded engine work: pause
+		st->excluded = prinst.profile_excluded;
 	}
 
 	prinst.localstack_used += prinst.spushed;	//make sure the call doesn't hurt pushed pointers
@@ -599,8 +602,10 @@ static int ASMCALL PR_LeaveFunction (progfuncs_t *progfuncs)
 
 	if (prinst.profiling)
 	{
-		prclocks_t cycles;
-		cycles = Sys_GetClock() - st->timestamp;
+		prclocks_t cycles, now = Sys_GetClock();
+		cycles = now - st->timestamp - (prinst.profile_excluded - st->excluded);
+		if (prinst.profile_excldepth && prinst.pr_depth+1 == prinst.profile_excldepth)
+			prinst.profile_exclstart = now;	//back inside the excluded engine work: resume
 		if (cycles > prinst.profilingalert)
 			externs->Printf("QC call to %s took over a second\n", PR_StringToNative(&progfuncs->funcs,prinst.pr_xfunction->s_name));
 		prinst.pr_xfunction->profiletime += cycles;
@@ -2148,6 +2153,27 @@ void	PDECL PR_AbortStack			(pubprogfuncs_t *ppf)
 	while(prinst.pr_depth > prinst.exitdepth)
 		PR_LeaveFunction(progfuncs);
 	prinst.pr_xstatement = -1;	//should make the loop abort.
+}
+
+//FTESurf Patch 800: here, not in initlib.c, for Sys_GetClock
+void PDECL PR_ProfileExclude (pubprogfuncs_t *ppf, pbool begin)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	if (!prinst.profiling)
+		return;
+	if (begin)
+	{
+		if (prinst.profile_exclnest++ == 0)
+		{
+			prinst.profile_excldepth = prinst.pr_depth+1;
+			prinst.profile_exclstart = Sys_GetClock();
+		}
+	}
+	else if (prinst.profile_exclnest > 0 && --prinst.profile_exclnest == 0)
+	{
+		prinst.profile_excluded += Sys_GetClock() - prinst.profile_exclstart;
+		prinst.profile_excldepth = 0;
+	}
 }
 
 pbool	PDECL PR_GetBuiltinCallInfo	(pubprogfuncs_t *ppf, int *builtinnum, char *function, size_t sizeoffunction)
