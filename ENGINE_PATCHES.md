@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 784 — a demo or a profile opens over an open one; no countdown out of spectate or the rewind (csprogs, qwprogs)
+
+**Problem:** Lex: picking a demo while one is playing does nothing, and the same with a
+profile open (TAB, click a name); leaving spectate counts down 3 s, and so does coming
+back from the rewind; can these go.
+- `Watch_OpenIn` and `Av_OpenAt` both replace what is open; the clicks never arrived. A
+  TAB board you only HOLD drops clicks (Patch 635), and over a replay or the profile card
+  the pointer was already up, so the board looked live. The card took the mouse before
+  the board, so even right-click could not pin it.
+- Letting go of TAB closed the board and dropped an online replay still downloading.
+- `run_spec_countdown` 3 (server) and `RW_COUNT` 3 (client) were UX, not integrity: the
+  clock is stopped and nothing is recorded during either.
+
+**Change:**
+- cl_scores.qc: over an open replay or profile card (UIC_WATCH, UIC_AVATAR) holding TAB
+  opens the board pinned, so a row or a name replaces what is open; right-click does not
+  drop it back to a dead held board there; letting go keeps a board fetching a replay
+  until it lands. The Players tab's Profile honours the editor check as the board does.
+- cl_watch.qc: a wrong file is refused before the open replay is let go; an unreadable
+  or empty one stops the replaced replay cleanly (pin and cursor released).
+- `run_spec_countdown` defaults to 0: leaving releases on the packet (SV_SpecCount);
+  `hud_rewind_countdown` (default 0) replaces RW_COUNT. Both keep their old value as a
+  setting. tools/spec_chat_smoke.py accepts the immediate release.
+
+**Verified:** see the commit (arm p784open: replay replaced through the board's Local
+row, profile replaced through "my profile" over an open card; control build: both
+clicks dropped). Not verified in game: the spectate release with two players (code
+path: the countdown's own SV_SpecRelease, called at once), the rewind at 0.
+
 ## Patch 779 — the Comparison window: you against the ghost's line, live, at splits and segments (csprogs)
 
 **Problem:** Lex: a hud_edit window "Comparison" comparing you to the ghost or the best
