@@ -993,7 +993,7 @@ extern int rquant[RQUANT_MAX];
   Gated on r_speeds_timing, latched per host frame, not the cvar.  Main thread only.*/
 double RSpeed_Begin(int *depth);
 void RSpeed_Finish(int spt, double start, int depth);
-extern int rspeeds_self[RSPEED_MAX];
+extern double rspeeds_self[RSPEED_MAX];
 extern int rspeed_depth;
 #define RSpeedLocals() double rsp; int rspd
 #define RSpeedMark() int rspd; double rsp = RSpeed_Begin(&rspd)

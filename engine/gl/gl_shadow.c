@@ -4852,6 +4852,7 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 		}
 		GLBE_SetFakeShadowCount(1);
 		fs_slotcount = 1;
+		RSpeedEnd(RSPEED_SHADOW_CLASSIFY);	//FTESurf Patch 782: r_budget needs every bracket closed
 		return;
 	}
 

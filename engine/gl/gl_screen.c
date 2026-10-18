@@ -64,11 +64,9 @@ qboolean GLSCR_UpdateScreen (void)
 	extern cvar_t vid_srgb;
 	RSpeedLocals();	//nettest: shared by the five SCR_ gap buckets below
 
-	//nettest: SCREEN SETUP gap.  Everything from here to the 3d dispatch -- vid_srgb changes,
-	//Shader_DoReload, SCR_SetUpToDrawConsole and the r_clear glClear -- was in no bucket.
-	//The early returns below deliberately skip the matching RSpeedEnd; on those frames nothing
-	//accumulates, which is correct (no 3d frame was drawn either).
-	RSpeedRemark();
+	//nettest: SCREEN SETUP gap: Shader_DoReload, SCR_SetUpToDrawConsole and the r_clear glClear.
+	//FTESurf Patch 782: opened below the early returns, which used to leave it open (r_budget's
+	//self times need every bracket closed); the vid_srgb block above it is the refresh's own.
 
 	r_refdef.pxrect.maxheight = vid.pixelheight;
 
@@ -139,6 +137,7 @@ qboolean GLSCR_UpdateScreen (void)
 	//nettest Patch 141: THE PER-FRAME ONE.  Early-outs unless something set
 	//shader_reload_needed, but when anything does -- one new material, one
 	//cvar callback -- this re-parses EVERY live shader, next frame.
+	RSpeedRemark();
 	shader_reload_why = "SCR_UpdateScreen (per frame)";
 	Shader_DoReload();
 
@@ -148,6 +147,7 @@ qboolean GLSCR_UpdateScreen (void)
 #ifdef TEXTEDITOR
 	if (editormodal)
 	{
+		RSpeedEnd(RSPEED_SCR_SETUP);	//Patch 782: the other branch closes it after its clear
 		Editor_Draw();
 		V_UpdatePalette (false);
 		R2D_BrightenScreen();

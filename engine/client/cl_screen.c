@@ -97,7 +97,7 @@ Patch 782, has the tree and what it cannot see.
 ==================================================
 */
 int r_speeds_timing;
-int rspeeds_self[RSPEED_MAX];	//each bucket's own time: its brackets less the brackets that closed inside them
+double rspeeds_self[RSPEED_MAX];	//us: each bucket's own time: its brackets less the brackets that closed inside them
 int rspeed_depth;			//how many brackets are open; reset at the top of each host frame
 #define RSPEED_DEPTH 32
 static double rspeed_child[RSPEED_DEPTH];	//time of the brackets that closed inside the open one at each depth
@@ -187,7 +187,7 @@ static const char *budget_gpushort[GPUB_MAX] = {"other", "cpu wait", "world", "p
 static const char *budget_gpunames[GPUB_MAX] =
 {
 	"Other: clears, setup",	"Waiting on the CPU",	"World",	"Models & props",	"Sky",	"3D sky (skyroom)",	"Portals & reflections",
-	"Shadows",	"RT lights",	"Transparent & effects",	"Post-processing",	"HUD & 2D"
+	"Shadows",	"RT lights",	"Transparent & effects",	"Post-processing",	"HUD & 2D, with waits on its QC"
 };
 static const float budget_gpucols[GPUB_MAX][3] =
 {
@@ -215,7 +215,7 @@ static struct
 	qboolean valid;
 	float frame;				//ms
 	float self[RSPEED_MAX];		//us, self time
-	float gpu[GPUB_MAX], gputotal;	//ms
+	float gpu[GPUB_MAX], gputotal, gpubusy;	//ms; busy is the total less "Waiting on the CPU"
 	int gpuframes;				//finished frames the GPU figures came from; 0 = none
 	float quantavg[RQUANT_MAX];
 } budget;
@@ -251,6 +251,7 @@ static void R_Budget_Publish(double now)
 	for (i = 0; i < GPUB_MAX; i++)
 		budget.gpu[i] = gn ? gsum[i] / gn : 0;
 	budget.gputotal = gn ? gtotal / gn : 0;
+	budget.gpubusy = max(0, budget.gputotal - budget.gpu[GPUB_WAIT]);
 	budget.valid = true;
 
 	budget.winstart = now;
@@ -342,7 +343,7 @@ static const char *R_Budget_Verdict(float work)
 	float busy = R_Budget_Busy(work);
 	if (budget.frame <= 0)
 		return "";
-	if (budget.gpuframes && budget.gputotal > busy && budget.gputotal > budget.frame * 0.85)
+	if (budget.gpuframes && budget.gpubusy > busy && budget.gpubusy > budget.frame * 0.85)
 		return "GPU-bound: the GPU is busy nearly the whole frame";
 	if (busy > budget.frame * 0.85)
 		return "CPU-bound: the CPU is busy nearly the whole frame";
@@ -449,7 +450,7 @@ static void R_Budget_Draw(void)
 
 	R_Budget_Text(x, y, va("^3frame %.2f ms  %.0f fps^7   cpu busy %.2f   gpu %s   idle %.2f",
 		budget.frame, budget.frame > 0 ? 1000/budget.frame : 0, R_Budget_Busy(work),
-		budget.gpuframes ? va("%.2f", budget.gputotal) : R_Budget_GPUTimers() ? "..." : "n/a", idle), w, false);
+		budget.gpuframes ? va("%.2f", budget.gpubusy) : R_Budget_GPUTimers() ? "..." : "n/a", idle), w, false);
 	y += cw;
 	R_Budget_Text(x, y, va("^7%s", R_Budget_Verdict(work)), w, false);
 	y += cw*1.5;
@@ -574,7 +575,7 @@ static void R_Budget_Dump_f(void)
 #define BUDGET_BAR(v) (n = scale > 0 ? (int)(32*(v)/scale + 0.5) : 0, n = bound(0, n, 32), memset(bar, '#', n), bar[n] = 0, bar)
 	*out = 0;
 	Q_strncatz(out, va("frame %.2f ms (%.0f fps)  cpu busy %.2f  gpu %s  idle %.2f  -- %s\n", budget.frame, budget.frame > 0 ? 1000/budget.frame : 0,
-		R_Budget_Busy(work), budget.gpuframes ? va("%.2f", budget.gputotal) : "n/a", idle, R_Budget_Verdict(work)), sizeof(out));
+		R_Budget_Busy(work), budget.gpuframes ? va("%.2f", budget.gpubusy) : "n/a", idle, R_Budget_Verdict(work)), sizeof(out));
 	Q_strncatz(out, "CPU work by group                    ms  frame\n", sizeof(out));
 	for (i = 0; i < BUDGET_GROUPS; i++)
 	{
