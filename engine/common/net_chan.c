@@ -277,6 +277,11 @@ unsigned int Net_PextMask(unsigned int protover, qboolean fornq)
 			//delta stream, so advertising this without deltas would negotiate a
 			//capability with nowhere to put its bytes.
 			mask |= PEXT2_FRAMERATE;
+
+			//FTESurf Patch 812: the same omission as 125 and 141. Unoffered, the
+			//UFP_VELOCITY fields stayed 16-bit, SV_EncodeVelocity saturated every
+			//axis at 4095.9 u/s, and the client predicted slower than the server.
+			mask |= PEXT2_BIGVELOCITY;
 		}
 
 		if (pext_infoblobs.ival)
