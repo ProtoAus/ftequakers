@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 789 — a player's picture beside their name, wherever it is drawn (csprogs, menu)
+
+**Problem:** Lex: "wherever a player name is, also place their display picture -- like
+in the friends list in the map display, on the demo playback window, and wherever else."
+Pictures (P640) were drawn on the online board, the Players tab, the in-game Friends
+tab, the profile card, overhead labels, race-ghost tags and board line labels only;
+the menu had no picture code at all.
+
+**Change:**
+- Game: the demo window title (the board row's mark when the board opened it, your own
+  for your runs, else a letter disc); the replay's line label and the "You" trail; the
+  Comparison window's "vs" line; the spectator HUD's WATCHING line and Spec: list;
+  another player's completion banner; the share card; your own TAB Local rows; chat
+  lines from a player or a friend's PM (a picture at the message's first row, the text
+  wrapped beside it). SteamPic_SlotMark gives a connected player's mark.
+- Menu: m_pics.qc ports the game's cache to the menu VM -- the game's disk copies
+  first, else one paced ask of the board's avatar route on its shared budget -- and the
+  friends panel rows and the leaderboard rows draw from it.
+
+**Verified:** see the commit (runlines arm p789pics with two pictures planted from disk:
+the toast, a PM chat line, the demo title and the menu friends panel).
+
 ## Patch 788 — friends: an add is one-way until added back; the "added you" toast (surfd, csprogs, menu)
 
 **Problem:** Lex: a toast when someone adds you, F2 to respond; people who added you at
