@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 793 — bind initial recording clocks before judging angles (reader)
+
+**Problem:** before the first input row, a cumulative held interval could project
+before the declared run origin and still produce an eligible angle comparison.
+A restored initial header also claimed a usable angle transform without the
+missing clock history. Permissive integer preflights could terminate the reader.
+
+**Change:** bound the first fresh projected origin and every raw trace horizon.
+Restored/missing initial origins explicitly abstain; no guessed post-session
+origin or frozen-finish equality. Use one bounded ASCII integer lexer for shared
+and direct preflights. Independent sidecar faults and trusted-clock detection
+remain active; an invalid recording clock is not a sidecar conviction. No native
+code, engine pin, Build, threshold, ranking or historical-reread change.
+
+**Verified:** parent baseline/new controls act: equality and rotated-view
+positives, malformed first origins, initial restored headers and bounded integer
+faults without exceptions. Reader 403 / receipt 198 checks and sweep suite pass.
+Same bytes of 602 recordings / 383 sidecars retain 201 recording-format / 214
+pair faults, with no new fault or availability transition. Retained native held
+prefix stays fault-free (one epoch, short/sweep-only). Post-session timer origins,
+final-clock validation and genuine-input calibration remain open.
+
 ## Patch 792 — keep timing-format faults distinct from clock abstention (readers)
 
 **Problem:** held-clock parsing exposed unchecked counter conversion and projected
