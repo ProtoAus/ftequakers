@@ -8579,6 +8579,9 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTE_CSQC_RAWIMAGES",				NULL,	2,{"r_uploadimage","r_readimage"}, "Provides raw rgba image access to csqc. With this, the csprogs can read textures into qc-accessible memory, modify it, and then upload it to the renderer."},
 	{"FTE_CSQC_RENDERTARGETS",			NULL,	0,{NULL}, "VF_RT_DESTCOLOUR exists and can be used to redirect any rendering to a texture instead of the screen."},
 	{"FTE_CSQC_REVERB",					NULL,	1,{"setup_reverb"}, "Specifies that the mod can create custom reverb effects. Whether they will actually be used or not depends upon the sound driver."},
+#if defined(HAVE_CLIENT) && defined(WEBCLIENT)
+	{"FTESURF_HID_HTTP", NULL, 0,{NULL}, "Armed raw input journals use fixed-origin HTTPS only with separate default-off rec_hid_upload consent. Legacy raw uploads are disabled (FTESurf Patch 774)."},
+#endif
 #ifdef HAVE_CLIENT
 	{"FTE_CSQC_HL2_WATER_BUDGET", check_hl2_waterbudget, 0,{NULL}, "Local programmable OpenGL renderer has the live hl2_water policy and a loaded material loader providing vmt/waterbudget. Mode 4 needs no scene captures; availability is not a driver-compilation guarantee."},
 #endif

@@ -1,5 +1,56 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 774 — deliver signed input journals outside the game netchan
+
+**Problem:** the evidence transport refused files above 4 MiB and sent one small
+chunk per round trip. Real input journals outgrew it, leaving a signed commitment
+without the journal needed for input checks. Raising the netchan cap alone would
+still consume gameplay-channel bandwidth for many round trips.
+
+**Change:** capable clients advertise `fshidhttp`. The server's existing evidence
+request names the same armed nonce/kind plus its server-selected map/run basename;
+only HID takes a fixed-origin binary HTTPS POST via a distinct `rec_ul_http`
+command. `.view` retains the existing protocol. Older clients are not asked for
+raw journals; even a spoofed capability cannot make their legacy handler upload
+one through the new verb. A domain-separated Ed25519 request must match an existing
+server-written receipt's key, nonce, kept status, SHA-256 and length. The collector
+streams into a private temporary file and publishes only a matching complete
+journal, atomically without replacement; retries are idempotent and conflicting
+existing evidence is preserved. Missing receipts/I/O are service errors, never
+cheating findings. Collector/proxy/configuration live in the game repository.
+
+The native sender accepts only its per-run armed file and BOTH registered local
+upload switches. **Raw uploads separately default OFF** (`rec_hid_upload`): the
+existing online terms promised raw journals stayed local. A separate informed
+menu choice is required; online acceptance never enables it. MQC uses its trusted
+local-command builtin for protected enable/revoke, with synthetic enabling
+refused. CSQC stages only on a supporting native engine with both switches on.
+Registration preserves early local upload-off values and adds native server
+protection; a server cannot re-enable them. Legacy raw upload is disabled. One active request, 64 MiB journal cap,
+300-second deadline and disconnect/disarm/revocation cleanup bound ownership.
+The fixed small acknowledgement has 8 KiB header/512-byte body limits; redirects,
+compressed and transfer-coded responses are refused for this request only. A
+local-only diagnostic accepts a loopback receiver, never another remote origin.
+No detector, receipt semantics, ranking policy or automatic punishment changes.
+
+**Verified:** Windows client/server/plugin build; native dedicated-socket controls
+with synthetic signed fixtures: 5,242,913-byte journal delivered byte-for-byte and
+its digest acknowledged, while the small legacy `.view` also arrived exactly.
+A historical old-protocol control refused the same journal at 4,194,304 bytes.
+The final old-client control keeps `.view` working and deliberately skips raw
+requests. Early global upload-off and independent raw-opt-in-off controls, each
+with an acting server enable attempt, post nothing until local re-enablement,
+which then delivers the journal. A malformed
+chunked acknowledgement was rejected; the same client immediately reused the
+upload slot and completed an ordinary acknowledgement. Backend eight focused
+falsifiers and existing directory/sweeper tests pass; recorder reader 306 checks,
+zero failed. Existing corpus baseline is unchanged reader input, not a claim that
+its historical malformed fixtures are clean. These are collection controls, not
+input/physics classification, cohort calibration, numerical throughput, release
+or fleet-deployment evidence. Larger-than-64-MiB journals retain an explicit
+transport limit; older peers keep raw data local. Real menu-click acceptance and
+deployment provenance are recorded separately.
+
 ## Patch 773 — paint sprays while a key is held; random colour; body/belt presets set what you picked
 
 **Problem:** Lex: "holding down the key should spray repeatedly", spray speed in

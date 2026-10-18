@@ -7454,6 +7454,7 @@ double Host_Frame (double time)
 
 #ifdef WEBCLIENT
 //	FTP_ClientThink();
+	CL_Receipt_Think();
 	HTTP_CL_Think(NULL, NULL);
 #endif
 

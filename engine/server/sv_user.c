@@ -3271,6 +3271,49 @@ void SV_UploadAsk (client_t *cl)
 		Con_DPrintf("SV_UploadAsk: %s has no run to ask about\n", cl->uploadfn);
 		return;
 	}
+	/*Old clients never offered the separate raw-upload consent control. Keep
+	  their angle sidecars, but do not request a raw journal from them.*/
+	if (!strcmp(kind, "hid") && strcmp(InfoBuf_ValueForKey(&cl->userinfo, "fshidhttp"), "1"))
+	{
+		Con_DPrintf("sv_recupload: raw journal not requested from legacy client\n");
+		Q_strncpyz(cl->uploadfn, cl->uploadnext, sizeof(cl->uploadfn));
+		*cl->uploadnext = 0;
+		if (*cl->uploadfn)
+			SV_UploadAsk(cl);
+		else
+			SV_UploadCancel(cl);
+		return;
+	}
+	/*P774: capable clients post journals to the fixed HTTPS collector. The
+	  basename still comes from SSQC's destination, not the client's path.
+	  No netchan destination remains armed and no empty .hid is published.*/
+	if (!strcmp(kind, "hid") && !*cl->uploadnext &&
+		!strcmp(InfoBuf_ValueForKey(&cl->userinfo, "fshidhttp"), "1") &&
+		!strncmp(cl->uploadfn, "data/evidence/", 14))
+	{
+		const char *map = cl->uploadfn + 14;
+		const char *slash = strchr(map, '/');
+		const char *p;
+		qboolean valid = true;
+		char mapname[65], runid[97], command[320];
+		size_t ml = slash ? (size_t)(slash - map) : 0;
+		size_t rl = slash ? strlen(slash + 1) - 4 : 0;
+		for (p = map; slash && *p; p++)
+			if (!( (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+				(*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || (*p == '+' && p < slash) || p == slash ||
+				(*p == '.' && (p < slash || p == cl->uploadfn + l - 4)) ))
+				valid = false;
+		if (valid && ml && ml < sizeof(mapname) && rl && rl < sizeof(runid))
+		{
+			Q_strncpyz(mapname, map, ml + 1);
+			Q_strncpyz(runid, slash + 1, rl + 1);
+			Q_snprintfz(command, sizeof(command), "rec_ul_http %s hid %s %s\n", cl->uploadnonce, mapname, runid);
+			ClientReliableWrite_Begin(cl, svc_stufftext, strlen(command) + 2);
+			ClientReliableWrite_String(cl, command);
+			SV_UploadCancel(cl);
+			return;
+		}
+	}
 	cl->uploadwant = true;
 	ClientReliableWrite_Begin (cl, svc_stufftext, 64);
 	ClientReliableWrite_String (cl, va("rec_ul_send %s %s\n", cl->uploadnonce, kind));

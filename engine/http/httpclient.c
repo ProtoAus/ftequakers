@@ -405,10 +405,18 @@ static qboolean HTTP_DL_Work(struct dl_download *dl)
 		break;
 
 	case HC_GETTINGHEADER:
+		if (dl->headerlimit && con->bufferused >= dl->headerlimit)
+		{
+			dl->status = DL_FAILED;
+			return false;
+		}
 		if (con->bufferlen - con->bufferused < 1530)
 			ExpandBuffer(con, 1530);
 
-		ammount = VFS_READ(con->stream, con->buffer+con->bufferused, con->bufferlen-con->bufferused-15);
+		ammount = con->bufferlen-con->bufferused-15;
+		if (dl->headerlimit && ammount > dl->headerlimit-con->bufferused)
+			ammount = dl->headerlimit-con->bufferused;
+		ammount = VFS_READ(con->stream, con->buffer+con->bufferused, ammount);
 		if (!ammount)
 			return true;
 		if (ammount < 0)
@@ -513,16 +521,38 @@ static qboolean HTTP_DL_Work(struct dl_download *dl)
 					}
 					*nl = '\n';
 				}
-				else if (!strnicmp(msg, "Content-Encoding: ", 18))
+				else if (!strnicmp(msg, "Content-Encoding:", 17))
 				{
-					char *chunk = strstr(msg, "gzip");
-					if (chunk < nl)
-						con->gzip = true;
+					if (dl->identityonly)
+					{
+						char encoding[64];
+						*nl = 0;
+						if (!COM_TrimString(msg+17, encoding, sizeof(encoding)) ||
+							stricmp(encoding, "identity"))
+						{
+							dl->status = DL_FAILED;
+							return false;
+						}
+						*nl = '\n';
+					}
+					else
+					{
+						char *chunk = strstr(msg, "gzip");
+						if (chunk && chunk < nl)
+							con->gzip = true;
+					}
 				}
-				else if (!strnicmp(msg, "Transfer-Encoding: ", 19))
+				else if (!strnicmp(msg, "Transfer-Encoding:", 18))
 				{
 					char *chunk = strstr(msg, "chunked");
-					if (chunk < nl)
+					/*Tiny identity-only replies reject transfer coding too:
+					  incomplete chunk framing must not evade their bounds.*/
+					if (dl->identityonly)
+					{
+						dl->status = DL_FAILED;
+						return false;
+					}
+					if (chunk && chunk < nl)
 						con->chunking = true;
 				}
 #ifdef COOKIECOOKIECOOKIE
@@ -916,10 +946,14 @@ void HTTPDL_Establish(struct dl_download *dl)
 			"Content-Type: %s\r\n"
 			"Connection: close\r\n"
 #ifdef AVAIL_GZDEC
-			"Accept-Encoding: gzip\r\n"
+			"Accept-Encoding: %s\r\n"
 #endif
 			"User-Agent: "FULLENGINENAME"\r\n"
-			"\r\n", uri, con->server, cookies, (unsigned int)dl->postlen, dl->postmimetype);
+			"\r\n", uri, con->server, cookies, (unsigned int)dl->postlen, dl->postmimetype
+#ifdef AVAIL_GZDEC
+			, dl->identityonly ? "identity" : "gzip"
+#endif
+			);
 		con->bufferused = strlen(con->buffer);
 		memcpy(con->buffer + con->bufferused, dl->postdata, dl->postlen);
 		con->bufferused += dl->postlen;

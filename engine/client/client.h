@@ -1209,6 +1209,8 @@ void CL_InitDlights(void);
 void CL_Receipt_Init(void);
 //FTESurf Patch 418: forget any evidence file armed for the server we are leaving.
 void CL_Receipt_Disarm(void);
+//P774: cancel an expired/revoked HTTP journal before pumping HTTP.
+void CL_Receipt_Think(void);
 void CL_FreeDlights(void);
 dlight_t *CL_AllocDlight (int key);	//allocates or reuses the light with the specified key index
 dlight_t *CL_AllocDlightOrg (int keyidx, vec3_t keyorg); //reuses the light at the specified origin...

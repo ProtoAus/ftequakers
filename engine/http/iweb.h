@@ -122,6 +122,9 @@ struct dl_download
 	size_t			completed; /*ammount correctly received so far*/
 
 	size_t			sizelimit;
+	//P774: optional request-local bounds; zero/false retain legacy behaviour.
+	size_t			headerlimit;
+	qboolean		identityonly;
 
 	/*internals*/
 #ifdef MULTITHREAD

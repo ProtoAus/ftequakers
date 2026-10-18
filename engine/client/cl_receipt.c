@@ -53,6 +53,9 @@ cannot reach: a small-order key, a non-canonical encoding, and an unreduced s.
 */
 
 #include "quakedef.h"
+#ifdef WEBCLIENT
+#include "../http/iweb.h"
+#endif
 #ifdef _WIN32
 #include "winquake.h"
 #include <shellapi.h>
@@ -777,6 +780,151 @@ static void CL_Receipt_SelfTest_f(void)
 */
 #define RCPT_ULSLOTS 4
 static char rcpt_ularm[RCPT_ULSLOTS][MAX_QPATH];
+static cvar_t rcpt_upload = CVARFD("rec_upload", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
+	"Allow consented, per-run armed angle sidecars to be uploaded when the server requests them.");
+static cvar_t rcpt_hid_upload = CVARFD("rec_hid_upload", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
+	"Separate opt-in: allow raw mouse/keyboard run journals to be sent to the official HTTPS collector for anti-cheat review. Off by default; online consent alone does not enable this.");
+
+#ifdef WEBCLIENT
+#define HID_HTTP_HEAD 1024
+#define HID_HTTP_MAX (64u * 1024u * 1024u)
+static struct dl_download *rcpt_http;
+static double rcpt_http_until;
+static char rcpt_http_reply[128];
+static cvar_t rcpt_http_test = CVARFD("rec_hid_testurl", "", CVAR_NOTFROMSERVER,
+	"Local diagnostic only: a http://127.0.0.1:PORT/api/hid journal receiver. Empty uses the official HTTPS collector. Never accepts a remote URL.");
+
+static void CL_Receipt_HTTPCancel(void)
+{
+	if (rcpt_http)
+	{
+		struct dl_download *dl = rcpt_http;
+		rcpt_http = NULL;
+		dl->notifycomplete = NULL;
+		DL_Close(dl);
+		Con_Printf("rec_ul_send: journal HTTP cancelled\n");
+	}
+}
+
+static void CL_Receipt_HTTPDone(struct dl_download *dl)
+{
+	char reply[128];
+	size_t len = dl->file ? VFS_GETLEN(dl->file) : 0;
+	qboolean ok = false;
+	if (dl->status == DL_FINISHED && dl->replycode == 200 && len < sizeof(reply))
+	{
+		if (dl->file && VFS_READ(dl->file, reply, len) == len)
+		{
+			reply[len] = 0;
+			ok = !strcmp(reply, rcpt_http_reply);
+		}
+	}
+	if (rcpt_http == dl)
+		rcpt_http = NULL;
+	Con_Printf(ok ? "rec_ul_send: journal HTTP stored and digest acknowledged\n" :
+		CON_WARNING "rec_ul_send: journal HTTP not acknowledged (status %u); no evidence verdict\n", dl->replycode);
+}
+
+static qboolean CL_Receipt_HTTPName(const char *s, size_t maxlen, qboolean map)
+{
+	size_t n = 0;
+	if (map && (*s == '.' || strstr(s, "..")))
+		return false;
+	for (; *s; s++, n++)
+		if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+			(*s >= '0' && *s <= '9') || *s == '_' || *s == '-' || (map && (*s == '.' || *s == '+'))))
+			return false;
+	return n && n <= maxlen;
+}
+
+static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const char *map, const char *runid)
+{
+	vfsfile_t *file;
+	qofs_t size;
+	char *body, statement[512], pubhex[65], sighex[129], hex[65];
+	const char *url = "https://play.proto.bar/api/hid";
+	qbyte digest[32], signature[64];
+	size_t n;
+
+	if (rcpt_http || !CL_Receipt_HTTPName(map, 64, true) || !CL_Receipt_HTTPName(runid, 96, false) || strlen(nonce) != 32)
+		return false;
+	for (n = 0; n < 32; n++)
+		if (!((nonce[n] >= '0' && nonce[n] <= '9') || (nonce[n] >= 'a' && nonce[n] <= 'f')))
+			return false;
+	if (*rcpt_http_test.string)
+	{
+		char *end;
+		unsigned long port;
+		if (strncmp(rcpt_http_test.string, "http://127.0.0.1:", 17))
+			return false;
+		port = strtoul(rcpt_http_test.string + 17, &end, 10);
+		if (!port || port > 65535 || strcmp(end, "/api/hid"))
+			return false;
+		url = rcpt_http_test.string;
+	}
+	if (!CL_Receipt_Key())
+		return false;
+	file = FS_OpenVFS(path, "rb", FS_GAME);
+	if (!file)
+		return false;
+	size = VFS_GETLEN(file);
+	if (size <= 0 || size > HID_HTTP_MAX)
+	{
+		VFS_CLOSE(file);
+		return false;
+	}
+	/*One bounded owned buffer, transferred to HTTP (not copied by Put).
+	  The HTTP transport has its own bounded send buffer; no journal-sized
+	  allocation or traffic touches the game netchan.*/
+	body = BZ_Malloc(HID_HTTP_HEAD + size);
+	if (VFS_READ(file, body + HID_HTTP_HEAD, size) != size)
+	{
+		VFS_CLOSE(file);
+		BZ_Free(body);
+		return false;
+	}
+	VFS_CLOSE(file);
+	CalcHash(&hash_sha2_256, digest, sizeof(digest), (const qbyte*)body + HID_HTTP_HEAD, size);
+	CL_Receipt_Hex(hex, sizeof(hex), digest, sizeof(digest), true);
+	Q_snprintfz(statement, sizeof(statement), "FTESURF-HID 1\nmap %s\nrunid %s\nnonce %s\nhid %s %u\n",
+		map, runid, nonce, hex, (unsigned)size);
+	Ed25519_Sign(signature, (const qbyte*)statement, strlen(statement), rcpt_sk);
+	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
+	CL_Receipt_Hex(sighex, sizeof(sighex), signature, sizeof(signature), true);
+	Q_snprintfz(body, HID_HTTP_HEAD, "%spub %s\nsig %s\n", statement, pubhex, sighex);
+	n = strlen(body);
+	memset(body + n, ' ', HID_HTTP_HEAD - n);
+	body[HID_HTTP_HEAD - 1] = '\n';
+	rcpt_http = HTTP_CL_Get(url, NULL, CL_Receipt_HTTPDone);
+	if (!rcpt_http)
+	{
+		BZ_Free(body);
+		return false;
+	}
+	rcpt_http->isquery = true;
+	rcpt_http->sizelimit = 512;
+	rcpt_http->headerlimit = 8192;
+	rcpt_http->identityonly = true;
+	/*The HTTP client's existing redirect guard rejects the FIRST redirect.
+	  A collector may never forward this body to another host or plaintext.*/
+	rcpt_http->redircount = 11;
+	Q_strncpyz(rcpt_http->postmimetype, "application/octet-stream", sizeof(rcpt_http->postmimetype));
+	rcpt_http->postdata = body;
+	rcpt_http->postlen = HID_HTTP_HEAD + size;
+	rcpt_http_until = Sys_DoubleTime() + 300;
+	Q_snprintfz(rcpt_http_reply, sizeof(rcpt_http_reply), "stored %s %u\n", hex, (unsigned)size);
+	Con_Printf("rec_ul_send: journal HTTP started (%u bytes)\n", (unsigned)size);
+	return true;
+}
+#endif
+
+void CL_Receipt_Think(void)
+{
+#ifdef WEBCLIENT
+	if (rcpt_http && (!rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || Sys_DoubleTime() >= rcpt_http_until))
+		CL_Receipt_HTTPCancel();
+#endif
+}
 
 static void CL_Receipt_ULArm_f(void)
 {
@@ -792,8 +940,7 @@ static void CL_Receipt_ULArm_f(void)
 	}
 	if (Cmd_Argc() < 2 || !*Cmd_Argv(1) || !strcmp(Cmd_Argv(1), "-"))
 	{	/*disarming is not an error: a run with no evidence says so*/
-		for (i = 0; i < RCPT_ULSLOTS; i++)
-			*rcpt_ularm[i] = 0;
+		CL_Receipt_Disarm();
 		return;
 	}
 
@@ -841,6 +988,9 @@ static void CL_Receipt_ULArm_f(void)
 void CL_Receipt_Disarm(void)
 {
 	int i;
+#ifdef WEBCLIENT
+	CL_Receipt_HTTPCancel();
+#endif
 	for (i = 0; i < RCPT_ULSLOTS; i++)
 		*rcpt_ularm[i] = 0;
 }
@@ -865,6 +1015,7 @@ static void CL_Receipt_ULSend_f(void)
 {
 	const char *nonce, *kind, *base, *dot;
 	int i;
+	qboolean http;
 
 	/*
 	  THE REQUEST NAMES THE RUN AND THE KIND, AND STILL NO PATH.
@@ -891,7 +1042,23 @@ static void CL_Receipt_ULSend_f(void)
 	}
 	nonce = Cmd_Argv(1);
 	kind = Cmd_Argv(2);
-	if (CL_IsUploading())
+	http = (!strcmp(Cmd_Argv(0), "rec_ul_http") && Cmd_Argc() == 5 && !strcmp(kind, "hid"));
+	if (!rcpt_upload.ival)
+	{
+		CL_Receipt_Disarm();
+		if (!http)
+			CL_Receipt_ULDecline();
+		return;
+	}
+	/*A separate, default-off choice: earlier online terms explicitly promised
+	  that raw journals stayed local. Never send HID through the legacy route.*/
+	if (!strcmp(kind, "hid") && (!http || !rcpt_hid_upload.ival))
+	{
+		if (!http)
+			CL_Receipt_ULDecline();
+		return;
+	}
+	if (!http && CL_IsUploading())
 	{
 		Con_DPrintf("rec_ul_send: already sending\n");
 		return;
@@ -912,7 +1079,8 @@ static void CL_Receipt_ULSend_f(void)
 	if (i == RCPT_ULSLOTS)
 	{
 		Con_DPrintf("rec_ul_send: nothing armed for %s %s\n", nonce, kind);
-		CL_Receipt_ULDecline();
+		if (!http)
+			CL_Receipt_ULDecline();
 		return;
 	}
 	/*
@@ -926,7 +1094,14 @@ static void CL_Receipt_ULSend_f(void)
 	  was invisible on a shipping client AND left the server holding a
 	  destination nobody would ever write to.  The player can see that their
 	  file was not sent; the receipt still commits to its digest either way.*/
-	if (!CL_StartUploadFile(rcpt_ularm[i], RCPT_ULMAX))
+	if (http)
+	{
+#ifdef WEBCLIENT
+		if (!CL_Receipt_HTTPSend(rcpt_ularm[i], nonce, Cmd_Argv(3), Cmd_Argv(4)))
+#endif
+			Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
+	}
+	else if (!CL_StartUploadFile(rcpt_ularm[i], RCPT_ULMAX))
 	{
 		Con_Printf(CON_WARNING "rec_ul_send: %s not sent -- missing, empty, or over the %i byte cap\n",
 				   rcpt_ularm[i], RCPT_ULMAX);
@@ -944,6 +1119,15 @@ static void CL_Receipt_ULSend_f(void)
 
 void CL_Receipt_Init(void)
 {
+	/*Register merges native protection flags while preserving an early +set
+	  value. Cvar_Get alone does not retrofit NOTFROMSERVER on that value.*/
+	Cvar_Register(&rcpt_upload, "Anti-cheat evidence");
+	Cvar_Register(&rcpt_hid_upload, "Anti-cheat evidence");
+#ifdef WEBCLIENT
+	Cvar_Get("fshidhttp", "1", CVAR_USERINFO|CVAR_NOSET, "Anti-cheat evidence");
+	Cvar_Register(&rcpt_http_test, "Anti-cheat evidence");
+	Cmd_AddCommandD("rec_ul_http", CL_Receipt_ULSend_f, "rec_ul_http nonce hid map run -- send only an opted-in armed journal to the official HTTPS collector. No legacy HID upload.");
+#endif
 	Cmd_AddCommandD("rec_sign", CL_Receipt_Sign_f,
 					"rec_sign <nonce> <ticks> [viewpath] -- sign this run's evidence for the server.  Called by the gamecode at the end of a run.");
 	Cmd_AddCommandD("rec_pubkey", CL_Receipt_PubKey_f,
