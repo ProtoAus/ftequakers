@@ -4100,6 +4100,7 @@ static void SV_DetTest_f (void)
 	unsigned long long htick  = SV_DETHASH_INIT;	//FTESurf Patch 325
 	unsigned long long hsrctrace, hsrcmover = SV_DETHASH_INIT;	//Patch 492
 	unsigned long long hproptrace, hpropmover = SV_DETHASH_INIT;	//Patch 764
+	unsigned long long hpinmover = SV_DETHASH_INIT;	//Patch 813
 	int                propwins = 0;					//Patch 764
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u, seedrerun, seedprop;
@@ -4163,13 +4164,14 @@ static void SV_DetTest_f (void)
 	/* Patch 492: pass 0 is `mover`, pinned to fixrampbugs 1, the value every
 	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2.
 	   Patch 764: both at mover 6, which they had run at live; pass 2 is
-	   `propmover`, the walk at 2 on mover 7. */
+	   `propmover`, the walk at 2 on mover 7.  Patch 813: pass 3 is `pinmover`,
+	   the same walk on mover 8. */
 	seedrerun = seed;
-	for (pass = 0; pass < 3; pass++)
+	for (pass = 0; pass < 4; pass++)
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
-		unsigned long long *hm = (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
+		unsigned long long *hm = (pass == 3) ? &hpinmover : (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
 
 		if (pass)
 			seed = seedrerun;
@@ -4205,7 +4207,7 @@ static void SV_DetTest_f (void)
 		movevars.maxspeed      = 320;
 		movevars.entgravity    = 1;
 		movevars.fixrampbugs   = pass ? 2 : 1;
-		movevars.sourceversion = (pass == 2) ? 7 : 6;
+		movevars.sourceversion = (pass == 3) ? 8 : (pass == 2) ? 7 : 6;
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
@@ -4345,6 +4347,8 @@ static void SV_DetTest_f (void)
 	/* Patch 764.  Equal to srctrace/srcmover on a map whose sample met no prop. */
 	Con_Printf("^5pm_dettest^7 proptrace %016llx  prop pieces decided %i traces\n", hproptrace, propwins);
 	Con_Printf("^5pm_dettest^7 propmover %016llx\n", hpropmover);
+	/* Patch 813.  Equal to propmover where the walk never pinned against a face. */
+	Con_Printf("^5pm_dettest^7 pinmover %016llx\n", hpinmover);
 }
 
 /*

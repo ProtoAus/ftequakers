@@ -806,14 +806,16 @@ static qboolean PMSrc_IsValidMovementTrace (trace_t *tr)
    origin resolves (1/512 past 16384), so the parallel retrace dips into it, the loop
    files the same plane five times and clears the velocity: Lex's dead stop on
    surf_colin_blaster_69000's curve.  0.8.7's IsValidMovementTrace refuses every
-   fraction-0 trace; Patch 492 lets them reach the crease for voyager's V troughs,
-   which are a new plane each time, so only the repeat is refused. */
+   fraction-0 trace; Patch 492 lets them reach the crease for voyager's V troughs, and
+   voyager's flight never repeats a plane, so only the repeat is refused.  In the air
+   two equal planes can no longer be filed, so the crease's same-plane push below is
+   unreachable there, as in 0.8.7.  Brush faces only: triangle normals of one face
+   need not be bit-equal. */
 static qboolean PMSrc_SamePlaneAgain (const trace_t *tr, vec3_t planes[], int numplanes)
 {
 	int i;
 
-	if (movevars.sourceversion < 8 || movevars.fixrampbugs < 2 ||
-	    tr->startsolid || tr->allsolid || fabs(tr->fraction) > FLT_EPSILON)
+	if (movevars.sourceversion < 8 || movevars.fixrampbugs < 2 || fabs(tr->fraction) > FLT_EPSILON)
 		return false;
 	for (i = 0; i < numplanes; i++)
 		if (PMSrc_VecCloseEnough (planes[i], tr->plane.normal))
