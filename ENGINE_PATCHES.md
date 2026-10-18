@@ -39,6 +39,53 @@ extracrouch. Known, pre-existing and not touched: a ground flag that flickers at
 constant height can freeze a NEGATIVE crouch (view up to ~20 u low) until the height
 changes (BACKLOG).
 
+## Patch 804 — disclosed online journal acceptance and guarded collector activation
+
+**Problem:** The owner approved activating the built journal collector/proxy and
+accepting uploads through online play. Earlier online answers promised a separate
+choice. Buffered consent writes could fail at close; deferred/helper-selected
+input and same-batch navigation/confirmation could reach a grant. The legacy
+guard rejected the collector's extra hash, and nginx validation did not bind the
+eventual reload/success receipt.
+
+**Change:** Preserve published P795–P805, including the current native P805 pin
+and P801 frame-time work. The short P796 page remains: its new online tier 7 includes
+journal uploads by default, with the checkbox as an explicit opt-out and F2
+Allow/Stop retained. Opening the page or having an old answer never grants
+permission. Saved readback and real input are required. Synthetic action/focus
+provenance survives suspension; native motion/navigation clearing helper focus
+also latches that draw until SUI applies the replacement and consumes any queued
+activation. Local recording keeps tier 1; client angle/journal sending requires
+online tier 7, and both views disclose the client angle sidecar. The successor
+builder independently pins old/new guards, uses an exact schema20 `hid-v1`
+nine-hash profile and imported-collector witness, and preserves retained-helper
+pins. HID-only nginx setup is additive, predecessor-bound, backed up, validated
+before reload and rechecked/read back afterward; rollback never overwrites peer
+edits. No native code/pin/tag, Build, database schema, collection-policy knob,
+threshold, ranking or enforcement change of our own.
+
+**Verified:** Integrated three-VM build: zero warnings. Real fixture-window input
+on installed native P802 (4b4c91f8): fresh/prior-tier online answers record 7/raw1;
+explicit checkbox opt-out records 7/raw0; offline records 1/raw0; failed fresh
+consent persistence grants nothing. Same-batch native navigation/confirmation
+actually grants 7/raw1 on the prior candidate and is refused on the subject;
+separated genuine input still accepts. Immediate/deferred synthetic actions and
+helper-selected focus regressions pass too. Screenshots/logs retained privately;
+these fixtures are not human acceptance. Reader tests pass; the unchanged reader
+was swept read-only over the current corpus, with existing faults retained and
+changed corpus membership explicit in private evidence. Eight signed collector
+tests, eight additive installer tests (two discriminating predecessor failures)
+and the POSIX admission/candidate/drain/death/hash/profile suite pass. Actual
+non-serving builder initialization succeeds for all 77 runtime pins; the legacy
+guard refuses the extra hash before creating state. The service suite's missing
+archived-fixture arm passes after supplying its exact same-commit nginx fixture
+to the same stage; unchanged passed arms reused, MOM conversion fixture explicitly
+unavailable. The online-only sending predicate is compiled/source-reviewed;
+the corrected input/harness delta passed both independent reviews. Peer/native
+preservation and final source binding are checked separately before publication;
+genuine HTTPS delivery and deployment remain pending, not inferred from fixtures. Native help
+wording still describes the older tier (nonblocking BACKLOG item).
+
 ## Patch 802 — the server sends what a client sees through a portal; doors show in noclip
 
 **Problem:** Lex, 19 Oct, on surf_tripportals: walking back and forth at the stage-1 start zone,
