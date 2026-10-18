@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 779 — the Comparison window: you against the ghost's line, live, at splits and segments (csprogs)
+
+**Problem:** Lex: a hud_edit window "Comparison" comparing you to the ghost or the best
+line -- your time, speed and energy against that player's at that moment -- with options
+for the segments and the splits showing two lines, yours and theirs, and the difference
+("300 / 270 = +30 energy") coloured ahead or behind.
+
+**Change (new cl_compare.qc; cl_raceghost.qc, cl_hudedit.qc, cl_board.qc, cl_timer.qc,
+cl_main.qc):**
+- Against the race ghost's first line (your PB, else the first ticked board line). With
+  `hud_ghost 0` RG_Frame still chooses for the window; it draws no body or tag.
+- Measured where you are: the line's point nearest your feet, followed by a cursor and
+  found afresh over the leg (from the line's anchor) after a teleport or a new attempt,
+  not by its clock -- after a fail you are seconds off its pace and still on its route.
+  Time: yours minus theirs to get here; speed and energy: yours minus theirs here, on the
+  speedometer's zero. Green ahead, red behind.
+- `hud_compare_splits`: at each stage, checkpoint and finish, your row against their own
+  crossing of it (their line's first entry into that box, swept). `hud_compare_segs`: the
+  last Segments row's energy, you / them / difference.
+- hud_edit "Comparison" (position, size, the two options); `compare` prints it.
+
+**Verified:** a planted PB (surf_aesthetic player_r4): live match 29-98 u off the line
+with you/them/differences; the stage-2 split against their crossing at 8.415 s (=
+`stage 1 561`); Segments rows (Air, Bhop: you 58 them 52 +6e); still comparing with
+the ghost off; the hud_edit pane's Segments option clicked off. Screenshots read. Not
+verified: a real run against a real ghost (the arm places the body with setpos).
+
 ## Patch 775 — a fail teleport back into your start box resets the run, from rest (qwprogs)
 
 **Problem:** Lex: the practice tag reset only on `!r`, not on the map's fail teleporter,
