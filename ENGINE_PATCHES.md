@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 788 — friends: an add is one-way until added back; the "added you" toast (surfd, csprogs, menu)
+
+**Problem:** Lex: a toast when someone adds you, F2 to respond; people who added you at
+the bottom of the friends list, darkened, to add back. P770 made an add a friendship at
+once (one row, accepted 1) and the poll upgraded any pending row, so nobody could learn
+who added them.
+
+**Change:**
+- surfd: an add writes accepted 0 (relation 1 mine, 2 theirs); adding back (add, or the
+  old accept) makes it 1; the poll no longer upgrades pending rows. Presence, Join and
+  messages are for friendships only, so an add cannot watch anyone. An add I have not
+  returned takes none of my slots; blocking one on a full list is refused (Decline
+  still works). Lists sort friends, blocks, then incoming adds, drop a banned adder's
+  row, and are cut at 128 rows (only incoming adds are ever cut). The menu route stays
+  read-only (the engine signs only list/join).
+- Game: incoming rows faded with Add back / Remove; labels Add back / Added. A toast
+  (picture, name, "F2 Add back", 12 s) once per account, remembered in
+  data/friends_toasted.txt; it waits while the board (pinned or held), the profile card
+  or a resume offer covers it, pauses there, and F2 re-checks the relation.
+- Menu: the friends panel draws incoming rows faded with Add back while connected
+  (through the game's friends_menu_add); disconnected it says to add back in a lobby.
+- Rollback hazard (AGENT_NOTES): surfd generations before P788 upgrade accepted 0 rows
+  on every poll; a rollback deletes them inside rollback.sh after its step 3.
+
+**Verified:** surfd/test_social.py 39 OK (one-way rows show no presence and cannot Join,
+add back, decline, slots and the 128 cut, a full list cannot block past it, banned
+adders hidden, the menu refuses op add); the new tests fail on the old social.py. In
+game (runlines arm p788toast): the toast shows for an incoming add, waits under the
+profile card, and F2 sends `friend add <who>` during a replay; the main build shows no
+toast and sends nothing.
+
 ## Patch 786 — spectate inside a trigger; the hold keeps the body in it (qwprogs)
 
 **Problem:** Lex: "it prevents you from going spec if you're inside a trigger??" Patch
