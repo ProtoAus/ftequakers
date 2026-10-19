@@ -1,5 +1,53 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 841 — a Momentum zone file's maxVelocity sets the map's speed cap; map rulesets read only from trusted directories (engine + qwprogs + csprogs + zonepub)
+
+**Problem (Lex, 19 Oct: "not loading the correct maxvelocity ... maybe we don't get them from the
+zone files?"):** Momentum's zone files carry the map's speed cap as a top-level `maxVelocity`, and
+nothing read it. A cap came only from cfg/maps/map_<map>.cfg (80 maps, read out of entity lumps in
+P267) or cfg/default.cfg's 3500. On the lobbies 296 of 1,279 zoned maps name a cap and 164 of them
+ran another, nearly all at 3500 where Momentum runs 4000-10000 (surf_apollo 10000, surf_boreas
+5000; 74 of the 164 are _css/_ksf builds sharing the plain map's file); surf_ofrenda ran its entity
+lump's 6000 where Momentum's file says 10000. The zone editor's Speed cap was a local-only file, so
+a publish could not carry it. The review then found that every map-load ruleset file (mode, map,
+hosted settings, and the new zone read) was read through the whole search path at a point where
+the previous map's own pakfile is still mounted.
+
+**Change:** SV_LoadMapRuleset reads, after the cfg/maps file, the zone file SV_ZoneLoad will time
+with -- its names and order (sv_zones_curated's two first), QC_FixFileName's data/-first lookup, the
+first file with a non-empty region array -- and puts a `maxVelocity` of 1..100000 into the override
+table, so the lock, `*ruleset` and `movement` treat it as the map's value; 0 or absent leaves
+cfg/maps or the default (Lex: Momentum's value wins). Keys match exactly. The hosted editor settings
+still apply last, and `movement` names every file. All map-load ruleset reads (data/mapmeta.txt,
+mode and map cfgs, editor settings, zone files) go through SV_RulesetLoadLoose: no pak symlinks,
+only a directory search path that is not temporary, server or untrusted, and for cfgs not an addon
+mount (zone files may come from Momentum's); read through the judged location.
+QC: zone_maxvel (1..100000) from the same key; the server prints `zones: <map> asks maxVelocity N,
+this server runs M` when the file it timed with disagrees. The editor writes `maxVelocity` into
+saved zone files (outside zone_crc, checked on read-back); Save settings stages the Speed cap there
+only when it was edited in the panel; the publish dialog says what cap goes. Multi-Session writes
+`maxvel` into ms.txt and drops a slot whose cap differs ("the speed cap changed"; a slot from
+before reads as cfg/maps or 3500). zonepub.validate refuses a maxVelocity outside 0 / 1..100000 by
+name. Existing times stay on their boards (Lex: "who cares if they are faster").
+
+**Verified:** tools/p841caps.py, one dedicated server over seven maps with planted files: subject
+surf_boreas 5000 (a packed 9000 data/ copy refused; QC, which reads packs, says 9000/5000),
+surf_ofrenda 10000 (cfg 6000), surf_santorini 3500 (file 0; a packed cfg/maps file refused),
+surf_axil 4500 (cfg only), a data/ file with a region QC cannot build 7777 with QC's 4000/7777, an
+out-of-range 200000 refused (cfg 9999 stands), a curated copy 6100; a pak symlink for the mode file
+refused on every map. The patch-816 server on the same QC: 3500 / 6000 / 7000 (the packed cfg) /
+4500 / 3500 / 9999 / 7000, and it followed the symlink onto the bhop ruleset ("6 cvars from
+cfg/lobby/mode_surf.cfg" on surf_boreas). Hosted editor round trip (cfg/test/p841editor.cfg, 18/18)
+with a planted settings file at 3500: a gravity-only save stages nothing; 6500 saved into the zone
+file, crc 5545b345 unchanged, zonepub.validate passes, 6500 from that file on reload. All 208
+shipped files with a cap pass the validator; surfd/test_zonepub 50/50. Pi native against the live
+patch-816 one: pm_dettest equal on bhop_eazy and surf_ace; on surf_boreas and colin_blaster the
+mover hashes differ and each native at the other's cap (planted before spawn: the mover reads
+movevars, set at spawn) reproduces the other's exactly. PASS recordings on three maps whose cap rose
+(colin_blaster 9194, surf_demise 3140, bhop_sandtrap 5136) PASS on the new native at
+5000/5000/10000 -- caps read from maps/zones/local and the Momentum mount's maps/zones/online.
+Five review rounds: two lenses on the feature and on its fixes, then three on the ruleset loader.
+
 ## Patch 839 — the 3D viewer moves a static prop only when it is drawn; the playhead is an element (surfd web)
 
 **Problem:** after P835, a static prop's per-frame `movement` was ~15% of a surf_demise frame:
