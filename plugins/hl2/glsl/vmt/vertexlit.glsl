@@ -8,6 +8,7 @@
 !!permu AMBIENTCUBE
 !!permu VC			// FTESurf Patch 259: VRAD's own per-vertex bake for THIS prop instance (sp_N.vhv), as a multiplier over `light`
 !!permu REFLECTCUBEMASK
+!!permu INSTANCED	// FTESurf Patch 831: one draw for a run of identical props, each prop's values from s_instdata
 !!samps diffuse
 !!samps =BUMP normalmap
 !!samps =FULLBRIGHT fullbright
@@ -27,6 +28,39 @@
 !!cvardf r_skipDiffuse
 
 #include "sys/defs.h"
+
+//FTESurf Patch 831: a run of identical props in one draw. gl_backend.c packs each prop's
+//per-entity values, 18 RGBA32F texels a prop from e_instbase (layout at GLBE_SubmitInstancedRun),
+//and these names stand in for the uniforms the single-prop draw sets. The baked vertex
+//colours come from one pooled RGBA8 buffer, a texel per vertex.
+#ifdef INSTANCED
+	uniform samplerBuffer s_instdata;
+	uniform samplerBuffer s_instvc;
+	uniform int e_instbase;
+	flat varying int inst_id;
+	#ifdef VERTEX_SHADER
+		#define INST_ID gl_InstanceID
+	#else
+		#define INST_ID inst_id
+	#endif
+	vec4 instfetch(int k)
+	{
+		return texelFetch(s_instdata, e_instbase + INST_ID*18 + k);
+	}
+	#define e_eyepos (instfetch(7).xyz)
+	#define e_light_ambient (instfetch(8).rgb)
+	#define e_light_dir (instfetch(9).xyz)
+	#define e_light_mul (instfetch(10).rgb)
+	#define e_colourident (instfetch(11))
+	#define m_model mat4(vec4(instfetch(4).xyz,0.0), vec4(instfetch(5).xyz,0.0), vec4(instfetch(6).xyz,0.0), vec4(0.0,0.0,0.0,1.0))
+	vec3 inst_cube[6];
+	#define e_light_ambientcube inst_cube
+	void instcube()
+	{
+		for (int i = 0; i < 6; i++)
+			inst_cube[i] = instfetch(12+i).rgb;
+	}
+#endif
 
 //ftesurf (P187): $alpha as a compile-time constant.  e_colourident cannot carry
 //it -- that is the entity's alpha, one value per entity -- and these materials
@@ -108,6 +142,14 @@ varying vec4 light;
 		vec3 n, s, t, w;
 		tex_c = v_texcoord + e_time * vec2(SCROLL);
 		gl_Position = skeletaltransform_wnst(w,n,s,t);
+	#ifdef INSTANCED
+		//the same product ftetransform() makes, with this prop's model-view-projection
+		inst_id = gl_InstanceID;
+		gl_Position = mat4(instfetch(0), instfetch(1), instfetch(2), instfetch(3)) * vec4(w, 1.0);
+		#ifdef AMBIENTCUBE
+			instcube();
+		#endif
+	#endif
 		norm = n = normalize(n);
 		s = normalize(s);
 		t = normalize(t);
@@ -157,7 +199,12 @@ varying vec4 light;
 	//mat_vmt_progs.h and the plugin will not compile.  Every other comment in
 	//these files is either // or a /* */ that opens and closes on one line.
 	#ifdef VC
-		light.rgb *= v_colour.rgb;
+		#ifdef INSTANCED
+			//the attribute's own fetch: index value plus where this prop's surface starts
+			light.rgb *= texelFetch(s_instvc, int(instfetch(7).w) + gl_VertexID).rgb;
+		#else
+			light.rgb *= v_colour.rgb;
+		#endif
 	#endif
 
 /* CUBEMAPS ONLY */
@@ -191,6 +238,9 @@ varying vec4 light;
 
 	void main (void)
 	{
+	#if defined(INSTANCED) && defined(BUMPCUBE) && defined(BUMP)
+		instcube();
+	#endif
 		vec4 diffuse_f = texture2D(s_diffuse, tex_c);
 		diffuse_f.rgb *= vec3(COLOR);
 

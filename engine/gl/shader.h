@@ -389,6 +389,8 @@ enum{
 
 	#define PERMUTATION_VC				(1u<<PERMUTATION_BIT_VC)
 	PERMUTATION_BIT_VC,					//nettest: baked static-prop per-vertex colour multiplier (RGBPROPLIGHT)
+	#define PERMUTATION_INSTANCED		(1u<<PERMUTATION_BIT_INSTANCED)
+	PERMUTATION_BIT_INSTANCED,			//FTESurf Patch 831: one draw for a run of identical props, each prop's data from s_instdata
 
 	PERMUTATION_BIT_MAX
 };
@@ -552,6 +554,7 @@ struct programpermu_s
 #endif
 #ifdef GLQUAKE
 	int factorsuniform;
+	int instuniform[3];	//FTESurf Patch 831: s_instdata, s_instvc, e_instbase
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;

@@ -21,6 +21,24 @@ void DumpGLState(void);
 #endif
 
 extern cvar_t gl_overbright;
+extern cvar_t r_multidraw;	//FTESurf Patch 831
+extern cvar_t r_instancing;	//FTESurf Patch 831
+extern qboolean r_fakeshadows;
+#ifdef RTLIGHTS
+qboolean Sh_AnyLightToDraw(void);
+#else
+#define Sh_AnyLightToDraw() false
+#endif
+//FTESurf Patch 831: instanced props, see GLBE_SubmitInstancedRun.
+#define INST_TEXELS	18			//RGBA32F texels a prop, laid out there
+#define INST_TMU_DATA	14			//texture units the two buffers sit on; a unit's buffer target is ours alone
+#define INST_TMU_VC	15
+static int be_instancecount;		//>1 while the batch being submitted stands for a run
+static int be_instancebase;		//its first texel in inst_buf
+static qboolean be_instancefailed;	//something in it drew for the first prop alone: the caller draws the rest
+static qboolean be_instdraw;		//the program BE_RenderMeshProgram just bound is the INSTANCED one
+static void GLBE_BindInstanceData(const struct programpermu_s *permu);
+static void GLBE_InstanceReset(void);
 extern cvar_t r_tessellation;
 extern cvar_t r_wireframe;
 extern cvar_t r_outline;
@@ -1821,6 +1839,7 @@ void GLBE_Init(void)
 	GLBE_Shutdown();
 
 	memset(&shaderstate, 0, sizeof(shaderstate));
+	GLBE_InstanceReset();	//FTESurf Patch 831
 
 	shaderstate.curentity = &r_worldentity;
 	be_maxpasses = gl_config_nofixedfunc?1:gl_mtexarbable;
@@ -3461,6 +3480,53 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 #endif
 }
 
+//if we're drawing via a VBO then we don't really need DrawRangeElements any more.
+//and avoiding so many calls into the driver also gives the driver a chance to optimise the draws instead of constantly checking if anything changed.
+static void BE_SubmitMeshChainMultiDraw(int batchtype)
+{
+	int starti, endi;
+	int m;
+	mesh_t *mesh;
+	static GLsizei counts[1024];
+	static const GLvoid *indicies[countof(counts)];
+	GLsizei drawcount = 0;
+	GL_SelectEBO(shaderstate.sourcevbo->indicies.gl.vbo);
+
+	for (m = 0, mesh = shaderstate.meshes[0]; m < shaderstate.meshcount; )
+	{
+		starti = mesh->vbofirstelement;
+		endi = starti+mesh->numindexes;
+
+		//find consecutive surfaces
+		for (++m; m < shaderstate.meshcount; m++)
+		{
+			mesh = shaderstate.meshes[m];
+			if (endi == mesh->vbofirstelement)
+			{
+				endi = mesh->vbofirstelement+mesh->numindexes;
+			}
+			else
+			{
+				break;
+			}
+		}
+		if (drawcount == countof(counts))
+		{
+			qglMultiDrawElements(batchtype, counts, GL_INDEX_TYPE, indicies, drawcount);
+			RQuantAdd(RQUANT_DRAWS, drawcount);
+			DRAWCALL("BE_SubmitMeshChain MultiDraw");
+			drawcount = 0;
+		}
+		counts[drawcount] = endi-starti;
+		indicies[drawcount] = (index_t*)shaderstate.sourcevbo->indicies.gl.addr + starti;
+		drawcount++;
+		RQuantAdd(RQUANT_PRIMITIVEINDICIES, endi-starti);
+	}
+	qglMultiDrawElements(batchtype, counts, GL_INDEX_TYPE, indicies, drawcount);
+	RQuantAdd(RQUANT_DRAWS, drawcount);
+	DRAWCALL("BE_SubmitMeshChain MultiDraw");
+}
+
 static void BE_SubmitMeshChainDraw(qboolean usetesselation)
 {
 	int startv, starti, endv, endi;
@@ -3493,6 +3559,18 @@ static void BE_SubmitMeshChainDraw(qboolean usetesselation)
 		qglLineWidth(lw);
 	}
 
+	if (be_instancecount > 1 && !(be_instdraw && shaderstate.meshcount == 1))
+		be_instancefailed = true;	//FTESurf Patch 831: this draw covers the first prop only
+	else if (be_instancecount > 1)
+	{	//FTESurf Patch 831: one draw for the run; vertexlit.glsl's INSTANCED reads each prop's data
+		mesh = shaderstate.meshes[0];
+		GL_SelectEBO(shaderstate.sourcevbo->indicies.gl.vbo);
+		qglDrawElementsInstanced(batchtype, mesh->numindexes, GL_INDEX_TYPE, (index_t*)shaderstate.sourcevbo->indicies.gl.addr + mesh->vbofirstelement, be_instancecount);
+		RQuantAdd(RQUANT_DRAWS, 1);
+		DRAWCALL("BE_SubmitMeshChain instanced");
+		RQuantAdd(RQUANT_PRIMITIVEINDICIES, mesh->numindexes*be_instancecount);
+		return;
+	}
 	if (!shaderstate.streamvbo[0])	//only if we're not forcing vbos elsewhere.
 	{
 		//q3map2 sucks. it splits static meshes randomly rather than with any pvs consistancy, and then splays them out over 1000 different surfaces.
@@ -3506,6 +3584,12 @@ static void BE_SubmitMeshChainDraw(qboolean usetesselation)
 			RQuantAdd(RQUANT_DRAWS, 1);
 			DRAWCALL("BE_SubmitMeshChain 1");
 			RQuantAdd(RQUANT_PRIMITIVEINDICIES, mesh->numindexes);
+			return;
+		}
+		else if (r_multidraw.ival && qglMultiDrawElements && shaderstate.sourcevbo->indicies.gl.vbo)
+		{	//FTESurf Patch 831: straight from the index buffer. The list below copied every index on the CPU
+			//for every draw (5.4% of a surf_demise frame) and the driver copied it again.
+			BE_SubmitMeshChainMultiDraw(batchtype);
 			return;
 		}
 		else
@@ -3546,51 +3630,7 @@ static void BE_SubmitMeshChainDraw(qboolean usetesselation)
 		return;
 	}
 	else if (qglMultiDrawElements)
-	{	//if we're drawing via a VBO then we don't really need DrawRangeElements any more.
-		//and avoiding so many calls into the driver also gives the driver a chance to optimise the draws instead of constantly checking if anything changed.
-		static GLsizei counts[1024];
-		static const GLvoid *indicies[countof(counts)];
-		GLsizei drawcount = 0;
-		GL_SelectEBO(shaderstate.sourcevbo->indicies.gl.vbo);
-
-		for (m = 0, mesh = shaderstate.meshes[0]; m < shaderstate.meshcount; )
-		{
-			startv = mesh->vbofirstvert;
-			starti = mesh->vbofirstelement;
-
-			endv = startv+mesh->numvertexes;
-			endi = starti+mesh->numindexes;
-
-			//find consecutive surfaces
-			for (++m; m < shaderstate.meshcount; m++)
-			{
-				mesh = shaderstate.meshes[m];
-				if (endi == mesh->vbofirstelement)
-				{
-					endv = mesh->vbofirstvert+mesh->numvertexes;
-					endi = mesh->vbofirstelement+mesh->numindexes;
-				}
-				else
-				{
-					break;
-				}
-			}
-			if (drawcount == countof(counts))
-			{
-				qglMultiDrawElements(batchtype, counts, GL_INDEX_TYPE, indicies, drawcount);
-				RQuantAdd(RQUANT_DRAWS, drawcount);
-				DRAWCALL("BE_SubmitMeshChain MultiDraw");
-				drawcount = 0;
-			}
-			counts[drawcount] = endi-starti;
-			indicies[drawcount] = (index_t*)shaderstate.sourcevbo->indicies.gl.addr + starti;
-			drawcount++;
-			RQuantAdd(RQUANT_PRIMITIVEINDICIES, endi-starti);
-		}
-		qglMultiDrawElements(batchtype, counts, GL_INDEX_TYPE, indicies, drawcount);
-		RQuantAdd(RQUANT_DRAWS, drawcount);
-		DRAWCALL("BE_SubmitMeshChain MultiDraw");
-	}
+		BE_SubmitMeshChainMultiDraw(batchtype);
 #if 0 //def FTE_TARGET_WEB
 	else if (shaderstate.meshcount > 1)
 	{	//FIXME: not really needed if index lists are consecutive
@@ -3832,6 +3872,51 @@ static void DrawPass(const shaderpass_t *pass)
 	BE_SubmitMeshChain(false);
 }
 #endif
+
+/*
+FTESurf Patch 268 C: Source's six-face ambient cube, +x -x +y -y +z -z in world
+axes, for vertexlit.glsl's #BUMPCUBE ratio.  r_cubelight 0 uploads zeros, and the
+shader's (cube(n_bump)+e)/(cube(n_geom)+e) is then e/e, exactly 1.0 -- so the gate
+is bit-exact without a second permutation.  The entity field is zero on anything
+the hl2 plugin did not fill (R_CalcModelLighting clears it), which gives the same
+exact 1.0.  Counted only when there is a cube to act on, so used=0 gated=0 means
+"nothing here carries one" rather than "the gate did nothing".
+Patch 831 made it a function: the instanced props' packer takes the same choice.
+*/
+static const float *BE_EntityAmbientCube(const entity_t *ent, qboolean count)
+{
+	static const float zerocube[6*3];
+	const float *cube = (const float*)ent->light_cube;
+	int k;
+	for (k = 0; k < 6*3 && !cube[k]; k++)
+		;
+	if (k < 6*3)
+	{
+		if (r_cubelight.ival)
+		{
+			r_cubelight_used += count;
+			//r_cubelight 2: a synthetic cube, lit hard from above and nearly black
+			//below, on every entity that has a real one.  It answers the one question
+			//the map's own cube cannot: does the bumped-normal path work at all?  A
+			//leaf cube can be close to uniform, and then a working ratio and a broken
+			//one draw the same picture.  A diagnostic, never a look.
+			if (r_cubelight.ival == 2)
+			{
+				static const float testcube[6*3] = {
+					0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
+					0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
+					1.00f,1.00f,1.00f,	0.02f,0.02f,0.02f};
+				cube = testcube;
+			}
+		}
+		else
+		{
+			r_cubelight_gated += count;
+			cube = zerocube;
+		}
+	}
+	return cube;
+}
 
 static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu_s *perm, qboolean entunchanged)
 {
@@ -4379,49 +4464,8 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			else
 				qglUniform3fvARB(ph, 1, (float*)shaderstate.curentity->light_avg);
 			break;
-		case SP_E_L_AMBIENTCUBE:
-			/*
-			FTESurf Patch 268 C: Source's six-face ambient cube, +x -x +y -y +z -z in world
-			axes, for vertexlit.glsl's #BUMPCUBE ratio.  r_cubelight 0 uploads zeros, and the
-			shader's (cube(n_bump)+e)/(cube(n_geom)+e) is then e/e, exactly 1.0 -- so the gate
-			is bit-exact without a second permutation.  The entity field is zero on anything
-			the hl2 plugin did not fill (R_CalcModelLighting clears it), which gives the same
-			exact 1.0.  Counted only when there is a cube to act on, so used=0 gated=0 means
-			"nothing here carries one" rather than "the gate did nothing".
-			*/
-			{
-				static const float zerocube[6*3];
-				const float *cube = (const float*)shaderstate.curentity->light_cube;
-				int k;
-				for (k = 0; k < 6*3 && !cube[k]; k++)
-					;
-				if (k < 6*3)
-				{
-					if (r_cubelight.ival)
-					{
-						r_cubelight_used++;
-						//r_cubelight 2: a synthetic cube, lit hard from above and nearly black
-						//below, on every entity that has a real one.  It answers the one question
-						//the map's own cube cannot: does the bumped-normal path work at all?  A
-						//leaf cube can be close to uniform, and then a working ratio and a broken
-						//one draw the same picture.  A diagnostic, never a look.
-						if (r_cubelight.ival == 2)
-						{
-							static const float testcube[6*3] = {
-								0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
-								0.30f,0.30f,0.30f,	0.30f,0.30f,0.30f,
-								1.00f,1.00f,1.00f,	0.02f,0.02f,0.02f};
-							cube = testcube;
-						}
-					}
-					else
-					{
-						r_cubelight_gated++;
-						cube = zerocube;
-					}
-				}
-				qglUniform3fvARB(ph, 6, cube);
-			}
+		case SP_E_L_AMBIENTCUBE:	//see BE_EntityAmbientCube
+			qglUniform3fvARB(ph, 6, BE_EntityAmbientCube(shaderstate.curentity, true));
 			break;
 
 		case SP_E_TIME:
@@ -4576,18 +4620,29 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		(shaderstate.sourcevbo->colours[0].gl.addr || shaderstate.sourcevbo->colours[0].gl.vbo))
 		perm |= PERMUTATION_VC;
 
+	if (be_instancecount > 1 && !be_instancefailed)
+		perm |= PERMUTATION_INSTANCED;
 	perm &= p->supportedpermutations;
-	permu = p->permu[perm];
-	if (!permu)
+	for (;;)
 	{
-		p->permu[perm] = permu = Shader_LoadPermutation(p, perm);
+		permu = p->permu[perm];
 		if (!permu)
-		{	//failed? copy from 0 so we don't keep re-failing
-			permu = p->permu[perm] = p->permu[0];
+		{
+			p->permu[perm] = permu = Shader_LoadPermutation(p, perm);
+			if (!permu)
+			{	//failed? copy from 0 so we don't keep re-failing
+				permu = p->permu[perm] = p->permu[0];
+			}
 		}
+		if (!(perm & PERMUTATION_INSTANCED) || (permu->permutation & PERMUTATION_INSTANCED))
+			break;
+		perm &= ~PERMUTATION_INSTANCED;	//FTESurf Patch 831: no INSTANCED variant compiled, so this prop alone, as usual
 	}
+	be_instdraw = !!(perm & PERMUTATION_INSTANCED);
 
 	GL_SelectProgram(permu->h.glsl.handle);
+	if (be_instdraw)
+		GLBE_BindInstanceData(permu);
 
 	/*
 	FTESurf Patch 166.  THE COLOURGEN HAS TO HAPPEN BEFORE THE ATTRIBUTE BIND,
@@ -4688,6 +4743,7 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 
 	BE_EnableShaderAttributes(permu->attrmask, shaderstate.sourcevbo->vao);
 	BE_SubmitMeshChain(permu->h.glsl.usetesselation);
+	be_instdraw = false;
 }
 
 qboolean GLBE_LightCullModel(vec3_t org, model_t *model)
@@ -6599,14 +6655,222 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	shaderstate.identitylighting = oldil;
 	return true;
 }
+/*
+FTESurf Patch 831 -- INSTANCED PROPS.  After r_batchsort, a run of alias batches with the same
+shader, model, surface, skin, envmap, fog, flags and shader time differs only in what the shader
+reads per entity: matrices, eye position, lighting, colour and the baked vertex colours.  Those
+go into a texture buffer, INST_TEXELS texels a prop, and the run is ONE draw of vertexlit.glsl's
+INSTANCED permutation.  The matrices are GLBE_SelectEntity's and the model-view-projection is
+multiplied as SP_M_MODELVIEWPROJECTION does, so a prop lands on the same pixels either way.
+Texels: 0-3 the model-view-projection's columns, 4-6 the model matrix's first three columns,
+7 eye position in model space + the colours' first texel, 8 ambient, 9 light direction,
+10 light multiplier, 11 colourident, 12-17 the ambient cube.
+*/
+static GLuint inst_buf, inst_tex;
+static size_t inst_bufsize, inst_bufused;	//bytes
+static float *inst_data;
+static size_t inst_cap;					//floats
+static qboolean inst_broken;			//a program had no INSTANCED permutation: off until a restart
+static int inst_report = -1;			//host_framecount whose runs print (r_instancing 2)
+static void GLBE_InstanceReset(void)
+{	//the context, and so its objects, are new (GLBE_Init)
+	inst_buf = inst_tex = 0;
+	inst_bufsize = inst_bufused = 0;
+	inst_broken = false;
+}
+extern int host_framecount;
+GLuint VertLightPool_Texture(void);
+int R_GAlias_InstanceColours(batch_t *b);
+
+//every program the standard path will draw this shader with (DrawMeshes: the shader's, else each
+//merged pass's) has an INSTANCED permutation
+static qboolean GLBE_InstanceShader(const shader_t *s)
+{
+	int passno;
+	if (s->remapto)
+		s = s->remapto;	//what DrawMeshes draws
+	//the walker's own special cases (skipped, or captures made before the submit) stay with it
+	if (s->flags & (SHADER_NODRAW|SHADER_SKY|SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASRIPPLEMAP|SHADER_HASPORTAL))
+		return false;
+	if (s->prog)
+		return !!(s->prog->supportedpermutations & PERMUTATION_INSTANCED);
+	if (!s->numpasses)
+		return false;
+	for (passno = 0; passno < s->numpasses; passno += max(1, s->passes[passno].numMergedPasses))
+		if (!s->passes[passno].prog || !(s->passes[passno].prog->supportedpermutations & PERMUTATION_INSTANCED))
+			return false;
+	return true;
+}
+static qboolean GLBE_InstanceCandidate(const batch_t *b)
+{
+	return b->buildmeshes == R_GAlias_DrawBatch && b->ent && b->shader && !b->fog && GLBE_InstanceShader(b->shader) &&
+		!(b->ent->flags & (RF_DEPTHHACK|RF_XFLIP));
+}
+static qboolean GLBE_InstanceSame(const batch_t *a, const batch_t *b)
+{
+	return b->buildmeshes == a->buildmeshes && b->shader == a->shader && b->ent->model == a->ent->model &&
+		b->user.alias.surfrefs[0] == a->user.alias.surfrefs[0] && b->skin == a->skin &&
+		b->envmap == a->envmap && b->fog == a->fog && b->flags == a->flags &&
+		b->ent->shaderTime == a->ent->shaderTime && !(b->ent->flags & (RF_DEPTHHACK|RF_XFLIP));
+}
+//the program has just been selected for a run's batch: hand it the two buffers and its base
+static void GLBE_BindInstanceData(const struct programpermu_s *permu)
+{
+	GL_SelectTexture(INST_TMU_DATA);
+	qglBindTexture(GL_TEXTURE_BUFFER_FTE, inst_tex);
+	GL_SelectTexture(INST_TMU_VC);
+	qglBindTexture(GL_TEXTURE_BUFFER_FTE, VertLightPool_Texture());
+	qglUniform1iARB(permu->instuniform[0], INST_TMU_DATA);
+	qglUniform1iARB(permu->instuniform[1], INST_TMU_VC);
+	qglUniform1iARB(permu->instuniform[2], be_instancebase);
+}
+//how many of the count batches from first it drew as one: 2 or more, or 1 (first alone: the caller draws
+//the rest), or 0 (none). *alone: batches from first the caller draws as usual without trying again.
+static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
+{
+	batch_t *b;
+	entity_t *e;
+	int i, vc;
+	float *d, m[16], mv[16], inv[16];
+	const float *proj, *cube;
+	vec3_t eye;
+	size_t bytes = (size_t)count*INST_TEXELS*16;
+
+	if (inst_cap < (size_t)count*INST_TEXELS*4)
+	{
+		inst_cap = (size_t)count*INST_TEXELS*4*2;
+		inst_data = BZ_Realloc(inst_data, inst_cap*sizeof(float));
+	}
+	//GLBE_SelectEntity's projection for an entity with neither flag
+	proj = shaderstate.usingweaponviewmatrix ? r_refdef.m_projection_std : shaderstate.projectionmatrix;
+	*alone = 0;
+	for (i = 0, b = first; i < count; i++, b = b->next)
+	{
+		b->buildmeshes(b);
+		vc = (b->meshes == 1) ? R_GAlias_InstanceColours(b) : -1;
+		if (vc < 0)
+		{
+			if (inst_report == host_framecount)
+				Con_Printf("r_instancing: %s: member %i of %i cannot join (meshes %u, bones %i, colours %p)\n", first->shader->name, i, count, b->meshes, b->vbo?b->vbo->numbones:-1, (void*)b->ent->vertlightbytes);
+			if (i < 2)
+			{
+				*alone = i+1;
+				return 0;
+			}
+			count = i;	//the members before it are a run of their own
+			break;
+		}
+		e = b->ent;
+		d = inst_data + (size_t)i*INST_TEXELS*4;
+		R_RotateForEntity(m, mv, e, e->model);
+		Matrix4_Multiply(proj, mv, d);
+		d[16] = m[0]; d[17] = m[1]; d[18] = m[2]; d[19] = 0;
+		d[20] = m[4]; d[21] = m[5]; d[22] = m[6]; d[23] = 0;
+		d[24] = m[8]; d[25] = m[9]; d[26] = m[10]; d[27] = 0;
+		Matrix4_Invert(m, inv);
+		Matrix4x4_CM_Transform3(inv, r_origin, eye);
+		VectorCopy(eye, d+28); d[31] = vc;
+		VectorCopy(e->light_avg, d+32); d[35] = 0;
+		VectorCopy(e->light_dir, d+36); d[39] = 0;
+		VectorCopy(e->light_range, d+40); d[43] = 0;
+		if (b->flags & BEF_FORCECOLOURMOD)
+			Vector4Copy(e->shaderRGBAf, d+44);
+		else
+			Vector4Set(d+44, 1, 1, 1, e->shaderRGBAf[3]);
+		cube = BE_EntityAmbientCube(e, false);	//the counters stay the single-draw uploads'
+		for (vc = 0; vc < 6; vc++)
+		{
+			VectorCopy(cube+vc*3, d+48+vc*4);
+			d[48+vc*4+3] = 0;
+		}
+	}
+	bytes = (size_t)count*INST_TEXELS*16;
+	//the shared alias mesh and colour slice now describe the last; make them the first's again
+	first->buildmeshes(first);
+	if (first->meshes != 1)
+		return 0;
+
+	if (!inst_buf)
+	{
+		qglGenBuffersARB(1, &inst_buf);
+		qglGenTextures(1, &inst_tex);
+	}
+	qglBindBufferARB(GL_TEXTURE_BUFFER_FTE, inst_buf);
+	if (inst_bufused + bytes > inst_bufsize)
+	{	//a fresh store; the driver keeps the old one for draws still reading it
+		inst_bufsize = max(inst_bufsize, max(bytes, (size_t)1<<20));
+		qglBufferDataARB(GL_TEXTURE_BUFFER_FTE, inst_bufsize, NULL, GL_STREAM_DRAW_ARB);
+		inst_bufused = 0;
+		GL_SelectTexture(INST_TMU_DATA);
+		qglBindTexture(GL_TEXTURE_BUFFER_FTE, inst_tex);
+		qglTexBuffer(GL_TEXTURE_BUFFER_FTE, GL_RGBA32F, inst_buf);
+	}
+	qglBufferSubDataARB(GL_TEXTURE_BUFFER_FTE, inst_bufused, bytes, inst_data);
+	qglBindBufferARB(GL_TEXTURE_BUFFER_FTE, 0);
+	be_instancebase = (int)(inst_bufused / 16);
+	inst_bufused += bytes;
+
+	be_instancecount = count;
+	be_instancefailed = false;
+	GLBE_SubmitBatch(first);
+	be_instancecount = 0;
+	if (inst_report == host_framecount)
+		Con_Printf("r_instancing: %s x%i%s\n", first->shader->name, count, be_instancefailed?" -- NO INSTANCED PERMUTATION, drawn one by one":"");
+	if (be_instancefailed)
+	{	//drawn as the first prop alone: the program could not take the run. Off until a restart.
+		inst_broken = true;
+		return 1;
+	}
+	return count;
+}
+
 static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 {
-	batch_t *batch;
+	batch_t *batch, *n;
 	shader_t *bs;
+	int run, used, alone, noinst = 0;
+	qboolean instancing = r_instancing.ival && !inst_broken && shaderstate.mode == BEM_STANDARD &&
+		qglDrawElementsInstanced && qglTexBuffer && !r_fakeshadows && !Sh_AnyLightToDraw();
+	int ncand = 0, nalias = 0, nruns = 0;
+	if (r_instancing.ival == 2)
+	{	//one frame's report, every view of it
+		inst_report = host_framecount;
+		Cvar_ForceSet(&r_instancing, "1");
+		Con_Printf("r_instancing: gates: cvar %i broken %i mode %i (standard %i) DrawElementsInstanced %i TexBuffer %i fakeshadows %i lights %i\n",
+			r_instancing.ival, inst_broken, shaderstate.mode, BEM_STANDARD, qglDrawElementsInstanced!=NULL, qglTexBuffer!=NULL, r_fakeshadows, Sh_AnyLightToDraw());
+	}
 	for (batch = sortlist; batch && batch != end; batch = batch->next)
 	{
 		if (batch->meshes == batch->firstmesh)
 			continue;
+
+		if (inst_report == host_framecount && batch->buildmeshes == R_GAlias_DrawBatch)
+		{
+			nalias++;
+			if (GLBE_InstanceCandidate(batch))
+				ncand++;
+			else if (nalias <= 3)
+				Con_Printf("r_instancing: not a candidate: %s prog %p supported %#x\n", batch->shader->name, (void*)batch->shader->prog, batch->shader->prog?batch->shader->prog->supportedpermutations:0);
+		}
+		if (noinst)
+			noinst--;
+		else if (instancing && !inst_broken && GLBE_InstanceCandidate(batch))
+		{
+			for (run = 1, n = batch->next; n && n != end && run < 4096 && GLBE_InstanceSame(batch, n); n = n->next)
+				run++;
+			nruns += run > 1;
+			if (run > 1)
+			{
+				used = GLBE_SubmitInstancedRun(batch, run, &alone);
+				if (used)
+				{
+					while (--used)
+						batch = batch->next;
+					continue;
+				}
+				noinst = alone-1;	//this one is drawn below
+			}
+		}
 
 		if (batch->flags & BEF_NODLIGHT)
 			if (shaderstate.mode == BEM_LIGHT)
@@ -6743,6 +7007,8 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 
 		GLBE_SubmitBatch(batch);
 	}
+	if (inst_report == host_framecount && nalias)
+		Con_Printf("r_instancing: list: %i alias batches, %i candidates, %i runs of 2+\n", nalias, ncand, nruns);
 }
 
 static void GLBE_SubmitMeshesSortList(batch_t *sortlist)

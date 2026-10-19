@@ -43,6 +43,7 @@ extern cvar_t r_showhitboxes;	//nettest: per-bone hitbox overlay for GoldSrc stu
 extern cvar_t r_noaliasshadows;
 extern cvar_t r_lodscale, r_lodbias;
 extern cvar_t r_model_mincoverage;	//nettest Patch 100: screen-coverage entity cull
+extern cvar_t r_batchsort;	//FTESurf Patch 831
 
 extern cvar_t gl_ati_truform;
 extern cvar_t r_vertexdlights;
@@ -1981,6 +1982,7 @@ typedef struct
 	vboarray_t	ebo;		//BE_VBO_Finish insists on index data; this holds the stub
 	void		*vbomem;
 	void		*ebomem;
+	unsigned int pooltexel1;	//FTESurf Patch 831: 1 + its first texel in the instancing pool, 0 = not pooled
 } vertlightbuf_t;
 static vertlightbuf_t	*vertlightbufs;			//open addressed, power of two, kept under half full
 static unsigned int		vertlightbufs_mask;
@@ -2109,6 +2111,84 @@ static const vboarray_t *VertLightBuf_Acquire(const qbyte *src, unsigned int ver
 	vertlightbuf_memo = NULL;
 	return VertLightBuf_Lookup(src);
 }
+
+/*
+FTESurf Patch 831: the same colours, pooled in ONE buffer that the instanced prop draw reads
+as a texture buffer (RGBA8, a texel per vertex): a run of props is one draw, and a vertex
+attribute can only point into one buffer. A prop joins on its first instanced draw. Its CPU
+array lives as long as the map, so growing the pool re-uploads every member from it.
+Uploads go through GL_TEXTURE_BUFFER, a binding the backend's VBO cache does not track.
+*/
+static GLuint vlpool_buf, vlpool_tex;
+static size_t vlpool_size, vlpool_used;	//bytes
+static qboolean vlpool_failed;
+GLuint VertLightPool_Texture(void)
+{
+	return vlpool_tex;
+}
+int VertLightPool_Texel(const qbyte *src, unsigned int verts)
+{
+	vertlightbuf_t *e;
+	size_t need, nsize, i;
+	GLint maxtexels = 0;
+	GLuint nb;
+	if (vlpool_failed || !qglTexBuffer || !src || !verts)
+		return -1;
+	e = VertLightBuf_Find(src);
+	if (!e || e->verts != verts)
+		return -1;
+	if (e->pooltexel1)
+		return e->pooltexel1 - 1;
+	need = vlpool_used + (size_t)verts*4;
+	if (need > vlpool_size)
+	{
+		nsize = max(max(vlpool_size*2, need), (size_t)1<<20);
+		qglGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE_FTE, &maxtexels);
+		maxtexels = min(maxtexels, 1<<24);	//the shader gets the index as a float, exact to 2^24
+		if (need > (size_t)maxtexels*4)
+		{
+			vlpool_failed = true;
+			return -1;
+		}
+		nsize = min(nsize, (size_t)maxtexels*4);
+		qglGenBuffersARB(1, &nb);
+		qglBindBufferARB(GL_TEXTURE_BUFFER_FTE, nb);
+		qglBufferDataARB(GL_TEXTURE_BUFFER_FTE, nsize, NULL, GL_STATIC_DRAW_ARB);
+		for (i = 0; vertlightbufs && i <= vertlightbufs_mask; i++)
+			if (vertlightbufs[i].src && vertlightbufs[i].pooltexel1)
+				qglBufferSubDataARB(GL_TEXTURE_BUFFER_FTE, (size_t)(vertlightbufs[i].pooltexel1-1)*4,
+					(size_t)vertlightbufs[i].verts*4, (void*)vertlightbufs[i].src);
+		if (vlpool_buf)
+			qglDeleteBuffersARB(1, &vlpool_buf);
+		vlpool_buf = nb;
+		vlpool_size = nsize;
+		if (!vlpool_tex)
+			qglGenTextures(1, &vlpool_tex);
+		qglBindTexture(GL_TEXTURE_BUFFER_FTE, vlpool_tex);	//the active unit's buffer target, which nothing else binds
+		qglTexBuffer(GL_TEXTURE_BUFFER_FTE, GL_RGBA8, vlpool_buf);
+		qglBindTexture(GL_TEXTURE_BUFFER_FTE, 0);
+	}
+	else
+		qglBindBufferARB(GL_TEXTURE_BUFFER_FTE, vlpool_buf);
+	qglBufferSubDataARB(GL_TEXTURE_BUFFER_FTE, vlpool_used, (size_t)verts*4, (void*)src);
+	qglBindBufferARB(GL_TEXTURE_BUFFER_FTE, 0);
+	e->pooltexel1 = (unsigned int)(vlpool_used/4) + 1;
+	vlpool_used = need;
+	return e->pooltexel1 - 1;
+}
+static void VertLightPool_Flush(void)
+{
+	if (rf && qrenderer == QR_OPENGL)
+	{
+		if (vlpool_buf)
+			qglDeleteBuffersARB(1, &vlpool_buf);
+		if (vlpool_tex)
+			qglDeleteTextures(1, &vlpool_tex);
+	}
+	vlpool_buf = vlpool_tex = 0;
+	vlpool_size = vlpool_used = 0;
+	vlpool_failed = false;
+}
 #endif
 
 //Everything those buffers own, released.  Called from Surf_DeInit, which runs BOTH on
@@ -2140,6 +2220,31 @@ void R_VertLightBuffers_Flush(void)
 	vertlightbufs_used = 0;
 	vertlightbuf_memosrc = NULL;
 	vertlightbuf_memo = NULL;
+	VertLightPool_Flush();
+#endif
+}
+
+//FTESurf Patch 831: the first instancing-pool texel of batch b's surface colours, or -1 when
+//there are none there (no bake, the guard R_GAlias_DrawBatch applies, or no pool). Call it
+//after the batch's buildmeshes, which is what makes vertlightbytes mean anything.
+int R_GAlias_InstanceColours(batch_t *b)
+{
+#ifdef GLQUAKE
+	entity_t *e = b->ent;
+	galiasinfo_t *inf;
+	unsigned int surfnum;
+	int t;
+	if (qrenderer != QR_OPENGL || !e->vertlightbytes)
+		return -1;
+	for (inf = Mod_Extradata(e->model), surfnum = 0; inf; inf = inf->nextsurf, surfnum++)
+		if (surfnum == b->user.alias.surfrefs[0])
+			break;
+	if (!inf || inf->firstvert < 0 || inf->firstvert + inf->numverts > e->vertlightverts)
+		return -1;
+	t = VertLightPool_Texel(e->vertlightbytes, (unsigned int)e->vertlightverts);
+	return (t < 0) ? -1 : t + inf->firstvert;
+#else
+	return -1;
 #endif
 }
 
@@ -3495,6 +3600,101 @@ static void BE_GenPolyBatches(batch_t **batches)
 	}
 }
 void PR_Route_Visualise(void);
+/*
+FTESurf Patch 831: model batches reach the backend in entity order, and a VBSP map's static props
+are not sorted (surf_demise changes model 1,794 times across 2,350 props), so nearly every draw
+switched program, textures and buffers. Sorted by shader, model and surface, neighbours share them.
+Depth-tested draws that do not blend cannot change the picture by their order, bar exactly
+coplanar faces, which still resolve the same way every frame. A batch whose first pass blends
+(surf_demise's reflective_white_plaster sits in the opaque sort) or is forced transparent goes
+after them, in the order it came: a later pass blends onto its own first, so only the first
+meets other entities.
+*/
+typedef struct
+{
+	batch_t *b;
+	unsigned int seq;
+	unsigned int late;
+} batchsort_t;
+static int QDECL R_BatchSortCompare(const void *va, const void *vb)
+{
+	const batchsort_t *sa = va, *sb = vb;
+	const batch_t *a = sa->b, *b = sb->b;
+	int ma = a->buildmeshes == R_GAlias_DrawBatch, mb = b->buildmeshes == R_GAlias_DrawBatch;
+#define BSCMP(x,y) if ((x) != (y)) return ((x) < (y))?-1:1
+	BSCMP(sa->late, sb->late);
+	if (!sa->late)
+	{
+		BSCMP(ma, mb);
+		if (ma)
+		{
+			BSCMP((uintptr_t)a->shader, (uintptr_t)b->shader);
+			BSCMP((uintptr_t)a->ent->model, (uintptr_t)b->ent->model);
+			BSCMP(a->user.alias.surfrefs[0], b->user.alias.surfrefs[0]);
+			BSCMP((uintptr_t)a->skin, (uintptr_t)b->skin);
+			BSCMP((uintptr_t)a->envmap, (uintptr_t)b->envmap);
+			BSCMP((uintptr_t)a->fog, (uintptr_t)b->fog);
+			BSCMP(a->flags, b->flags);
+		}
+	}
+	BSCMP(sa->seq, sb->seq);
+#undef BSCMP
+	return 0;
+}
+static int r_batchsort_report = -1;	//host_framecount whose sorts print (r_batchsort 2)
+static void R_SortModelBatches(batch_t **list, const char *what)
+{
+	static batchsort_t *buf;
+	static size_t bufsize;
+	batch_t *b;
+	size_t n = 0, late = 0, i, runs;
+	const shader_t *sh;
+	unsigned int bits;
+	for (b = *list; b; b = b->next)
+		n++;
+	if (n < 3)
+		return;
+	if (n > bufsize)
+	{
+		bufsize = n * 2;
+		buf = BZ_Realloc(buf, sizeof(*buf) * bufsize);
+	}
+	for (i = 0, b = *list; b; b = b->next, i++)
+	{
+		buf[i].b = b;
+		buf[i].seq = i;
+		sh = b->shader->remapto ? b->shader->remapto : b->shader;
+		bits = sh->numpasses ? sh->passes[0].shaderbits : 0;
+		buf[i].late = (b->flags & (BEF_FORCETRANSPARENT|BEF_FORCEADDITIVE|BEF_FORCENODEPTH)) ||
+			(bits & (SBITS_BLEND_BITS|SBITS_MISC_NODEPTHTEST)) || !(bits & SBITS_MISC_DEPTHWRITE) ||
+			(bits & SBITS_DEPTHFUNC_BITS) == SBITS_DEPTHFUNC_EQUAL;
+		late += buf[i].late;
+	}
+	if (r_batchsort_report == host_framecount)
+	{
+		for (runs = 1, i = 1; i < n; i++)
+			runs += buf[i].b->shader != buf[i-1].b->shader;
+		Con_Printf("r_batchsort: %s %u batches (%u blend, kept last), %u shader runs before", what, (unsigned)n, (unsigned)late, (unsigned)runs);
+	}
+	qsort(buf, n, sizeof(*buf), R_BatchSortCompare);
+	for (i = 0; i < n; i++)
+		buf[i].b->next = (i+1 < n) ? buf[i+1].b : NULL;
+	*list = buf[0].b;
+	if (r_batchsort_report == host_framecount)
+	{
+		size_t same;
+		for (runs = 1, same = 1, i = 1; i < n; i++)
+		{
+			const batch_t *x = buf[i].b, *y = buf[i-1].b;
+			runs += x->shader != y->shader;
+			same += !(x->shader == y->shader && x->buildmeshes == R_GAlias_DrawBatch && y->buildmeshes == R_GAlias_DrawBatch &&
+				x->ent->model == y->ent->model && x->user.alias.surfrefs[0] == y->user.alias.surfrefs[0] &&
+				x->skin == y->skin && x->envmap == y->envmap && x->fog == y->fog && x->flags == y->flags);
+		}
+		Con_Printf(", %u after; %u runs of one shader+model+surface\n", (unsigned)runs, (unsigned)same);
+	}
+}
+
 void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemode, const qbyte *worldpvs, const int *worldareas)
 {
 	int		i;
@@ -3729,6 +3929,17 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 
 	if (cl_numstris && !(r_refdef.flags & RDF_DISABLEPARTICLES))
 		BE_GenPolyBatches(batches);
+
+	if (r_batchsort.ival == 2)
+	{	//one frame's report, every pass of it
+		r_batchsort_report = host_framecount;
+		Cvar_ForceSet(&r_batchsort, "1");
+	}
+	if (r_batchsort.ival)
+	{
+		R_SortModelBatches(&batches[SHADER_SORT_OPAQUE], "opaque");
+		R_SortModelBatches(&batches[SHADER_SORT_SEETHROUGH], "seethrough");
+	}
 
 	while(orig_numstris < cl_numstris)
 		cl_stris[orig_numstris++].shader = NULL;

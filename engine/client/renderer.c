@@ -791,6 +791,9 @@ cvar_t r_lodbias							= CVARFD ("r_lodbias", "0", CVAR_ARCHIVE, "Biases the lev
 //below the threshold.  Size-aware for free (it is screen coverage, not raw distance), so a van stays
 //visible far out while a grass tuft drops early.  0 = off (the stock behaviour).
 cvar_t r_model_mincoverage					= CVARFD ("r_model_mincoverage", "0", CVAR_ARCHIVE, "Cull model entities whose projected on-screen size (fraction of screen height, as used by the LOD selector) falls below this. Players, viewmodels and skeletal-object entities are exempt from this AND from the near-plane reject it enables (their e->origin is not a world position). 0 = off. Try 0.002-0.01 on prop-dense maps.");
+cvar_t r_batchsort						= CVARD ("r_batchsort", "1", "FTESurf Patch 831: sort opaque model batches by shader, model and surface, so consecutive draws share their state. 0 draws them in entity order (the A/B).");
+cvar_t r_multidraw						= CVARD ("r_multidraw", "1", "FTESurf Patch 831: draw a batch of several meshes straight from its index buffer with one glMultiDrawElements, where the compatibility profile copied every index into a fresh list per draw. 0 = the copy (the A/B).");
+cvar_t r_instancing						= CVARD ("r_instancing", "1", "FTESurf Patch 831: draw a run of identical props (same model, surface and material, after r_batchsort) as one instanced draw. 0 draws each prop alone (the A/B); 2 prints one frame's runs.");
 cvar_t r_shadows							= CVARFD ("r_shadows", "0", CVAR_ARCHIVE, "Draw basic blob shadows underneath entities without using realtime lighting.");
 //nettest: whether BRUSH entities (the inline "*N" submodels a map's func_ classes are made of)
 //cast shadows at all.  DEFAULT 0 = models only: doors, lifts, crates, buttons and invisible
@@ -924,6 +927,9 @@ void GLRenderer_Init(void)
 	Cvar_Register (&r_lodscale, GRAPHICALNICETIES);
 	Cvar_Register (&r_lodbias, GRAPHICALNICETIES);
 	Cvar_Register (&r_model_mincoverage, GRAPHICALNICETIES);	//nettest Patch 100
+	Cvar_Register (&r_batchsort, GRAPHICALNICETIES);	//FTESurf Patch 831
+	Cvar_Register (&r_multidraw, GRAPHICALNICETIES);	//FTESurf Patch 831
+	Cvar_Register (&r_instancing, GRAPHICALNICETIES);	//FTESurf Patch 831
 
 	Cvar_Register (&gl_motionblur, GLRENDEREROPTIONS);
 	Cvar_Register (&gl_motionblurscale, GLRENDEREROPTIONS);

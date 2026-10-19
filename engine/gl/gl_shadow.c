@@ -6476,6 +6476,27 @@ void Sh_CalcPointLight(vec3_t point, vec3_t light)
 	}
 }
 
+//FTESurf Patch 831: will Sh_DrawLights draw a light this frame (its filter, no culling)? Its passes
+//test depth for equality and position vertices with ftransform(), so props drawn instanced, whose
+//depths come from an explicit multiply, are drawn one by one in such a frame.
+qboolean Sh_AnyLightToDraw(void)
+{
+	dlight_t *dl;
+	int i;
+	unsigned int ignoreflags;
+	if (r_lightprepass)
+		return true;
+	ignoreflags = (r_shadow_realtime_world.ival?LFLAG_REALTIMEMODE:0)
+				| (r_shadow_realtime_dlight.ival?LFLAG_NORMALMODE:0)
+				| ((r_dynamic.ival&&!r_dlightlightmaps)?LFLAG_LIGHTMAP:0);
+	if (!ignoreflags)
+		return false;
+	for (dl = cl_dlights+rtlights_first, i=rtlights_first; i<rtlights_max; i++, dl++)
+		if (dl->radius && (dl->flags & ignoreflags))
+			return true;
+	return false;
+}
+
 void Sh_DrawLights(qbyte *vis)
 {
 	vec3_t rotated[3];

@@ -1,5 +1,68 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 831 — props drawn in runs: sorted, instanced, and the world walk tests fewer planes (engine + hl2 plugin)
+
+**Problem (Lex's r_budget dumps, 19 Oct):** every heavy map was CPU-bound with the GPU mostly idle.
+A sampling profile of surf_demise's spawn (the main thread, 16k samples) put 38% of the frame in
+the NVIDIA GL driver, mostly under draw calls, and 17% in the hl2 plugin's visibility walk. The map
+has 2,350 static props of 64 models, drawn as 914 draws a frame, one per prop surface, in lump
+order (the model changes 1,794 times across the lump), so nearly every draw switched program,
+textures and buffers. Multi-mesh world batches also copied every index into a fresh list per draw
+in the compatibility profile (5.4% of the frame on its own).
+
+**Change:**
+- `r_batchsort` (default 1): opaque and seethrough model batches are sorted by shader, model,
+  surface, skin, envmap, fog and flags. A batch whose order can show (first pass blends, no depth
+  test, no depth write, depth-equal, or forced transparent/additive/no-depth; judged on the shader
+  drawn, after remaps) keeps its order after them. `r_batchsort 2` prints one frame's lists.
+- `r_multidraw` (default 1): a multi-mesh batch with an index buffer draws with one
+  glMultiDrawElements from it in the compatibility profile too (core already did).
+- `r_instancing` (default 1): a run of sorted batches with the same shader, model, surface, skin,
+  envmap, fog, flags and shader time is ONE glDrawElementsInstanced of vertexlit.glsl's new
+  INSTANCED permutation. Each prop's per-entity values (model-view-projection as
+  SP_M_MODELVIEWPROJECTION multiplies it, model rotation, eye position, light ambient/direction/
+  multiplier, colourident, ambient cube) go into a RGBA32F texture buffer, 18 texels a prop. The
+  baked VRAD vertex colours come from one pooled RGBA8 texture buffer: a prop joins on its first
+  instanced draw, is re-uploaded from its CPU array when the pool grows, and goes with the per-prop
+  buffers at a map change; capped at 2^24 texels because the index travels as a float. Off under
+  fake shadows, in other render modes, in a frame with a realtime light to draw (its passes test
+  depth for equality against ftransform()), for NODRAW/sky/reflect/refract/portal shaders and fog
+  volumes, and wherever a pass's program lacks the permutation. A program whose INSTANCED
+  permutation fails to compile draws its first prop in its own permutation and the rest one by
+  one, and turns instancing off until a restart. `r_instancing 2` prints one frame's runs, the
+  gates, and why a member could not join.
+- hl2 plugin `hl2_clipflags` (default 1): the world walk passes down the frustum planes still to
+  test; a node's box wholly in front of a plane frees its children from it.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; overlay defaults at each map's spawn; each cvar A/B'd
+live in one process, paired 2 s r_budget windows; every gate and change shown acting by its own
+report line):**
+- surf_demise: batch sort opaque 2.11 -> 1.82 ms (10 pairs); multidraw draw submission -0.28 ms
+  (median); instancing opaque 1.72 -> 0.93 ms, frame 4.21 -> 3.45 ms (237 -> 290 fps), prop draws
+  914 -> 295 (6 pairs); clip flags PrepareFrame 0.87 -> 0.72 ms. The installed build's frame there
+  was ~5.0 ms in separate runs, so about +45% fps overall.
+- surf_boreas: instancing frame 2.92 -> 2.52 ms (343 -> 397 fps), prop draws 467 -> 122.
+- surf_tensor2, surf_joutsenlaulu, surf_sidistic (few props): within noise either way.
+- Pictures with the game paused (pausable 1), where two shots of one setting are identical:
+  instancing on vs off differs in 0 pixels on boreas (one view), tensor2, joutsenlaulu and dune;
+  1 pixel at <= 6/255 on demise; 33 pixels at <= 16/255 on one boreas view (geometry edges, a
+  differently compiled program). Clip flags: 0 pixels on demise and boreas. Instancing survives a
+  full shader reload (r_shadows 2 then 0: 49 runs before and after, same pixels); fake shadows and
+  a live realtime light turn it off (reported).
+- NOT demonstrated: the light-pass hazard the realtime-light gate guards. With world realtime
+  lights on at surf_demise's spawn, a build without the gate drew the same picture instanced (1 px).
+- One review (picture and GL state): a draw other than the INSTANCED program's inside a run would
+  have been issued N times (unreachable on shipped content), a failed compile drew with the base
+  permutation, the colour index lost precision past 2^24, a failing member re-tried runs O(k^2),
+  the late sort missed non-blend order-dependent states. All fixed and re-measured. Its claim that
+  the baked props are skinned was wrong (the report shows bones 0), so a skinned-only rule was
+  tried and removed.
+- `vid_restart` on surf_demise crashes the INSTALLED build too (0xC0000005), so that path is untested.
+
+**Known:** GL only; D3D and Vulkan unchanged. One NVIDIA PC measured: another driver may fail to
+compile the INSTANCED permutation, which the fallback covers but no AMD/Intel machine has run.
+Players get it with the next release; the lobbies run no client code from it.
+
 ## Patch 828 — a closing horizon must reach the last hold boundary (reader)
 
 **Problem:** A thaw can be the final event in a complete `holdclock 1` recording,

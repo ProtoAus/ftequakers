@@ -84,6 +84,7 @@ r_qrenderer_t qrenderer = QR_OPENGL;
 #define SURF_OFFNODE		SURF_DRAWBACKGROUND	//might as well just reuse that.
 
 static cvar_t *hl2_novis;
+static cvar_t *hl2_clipflags;	//FTESurf Patch 831
 static cvar_t *hl2_visdebug;	//Opt-in area/leaf-walk statistics, not visibility behavior.
 static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
 static cvar_t *hl2_displacement_scale;
@@ -8718,7 +8719,9 @@ static int vbsp_emit_dropped = 0;
 				(void*)(s)->sbatch, (s)->sbatch?(int)(s)->sbatch->meshes:-1, (s)->sbatch?(int)((s)->sbatch->maxmeshes*R_MAX_RECURSE):0); \
 	} while(0)
 
-static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
+//FTESurf Patch 831: clipflags, one bit a frustum plane still to test. A node's box wholly in front
+//of a plane holds its children's, so they skip it (BoxOnPlaneSide was 4.7% of a surf_demise frame).
+static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node, unsigned int clipflags)
 {
 	int			c, side;
 	mplane_t	*plane;
@@ -8733,8 +8736,24 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 
 	if (node->visframe != vbsp_nodesequence)
 		return;
-	if (VBSP_CullBox (node->minmaxs, node->minmaxs+3))
-		return;
+	if (clipflags)
+	{
+		int i;
+		for (i = 0; i < refdef->frustum_numplanes; i++)
+		{
+			if (!(clipflags & (1u<<i)))
+				continue;
+			switch (BOX_ON_PLANE_SIDE (node->minmaxs, node->minmaxs+3, &refdef->frustum[i]))
+			{
+			case 2:
+				return;
+			case 1:
+				if (hl2_clipflags->ival)
+					clipflags &= ~(1u<<i);
+				break;
+			}
+		}
+	}
 
 // if a leaf node, draw stuff
 	if (node->contents != -1)
@@ -8810,7 +8829,7 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 	}
 
 // recurse down the children, front side first
-	VBSP_RecursiveWorldNode (model, node->children[side]);
+	VBSP_RecursiveWorldNode (model, node->children[side], clipflags);
 
 	// draw stuff
 	for ( c = node->numsurfaces, surf = model->surfaces + node->firstsurface; c ; c--, surf++)
@@ -8830,7 +8849,7 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node)
 
 
 // recurse down the back side
-	VBSP_RecursiveWorldNode (model, node->children[!side]);
+	VBSP_RecursiveWorldNode (model, node->children[!side], clipflags);
 }
 static qbyte *VBSP_MarkLeaves (model_t *model, int clusters[2])
 {
@@ -9268,7 +9287,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		areas[0] = 1;
 		areas[1] = area;
 		vbsp_surfsequence++;
-		VBSP_RecursiveWorldNode (mod, mod->nodes);
+		VBSP_RecursiveWorldNode (mod, mod->nodes, (1u<<refdef->frustum_numplanes)-1);
 		for (i = 0; i < prv->numdisplacements; i++)
 		{
 			disp = &prv->displacements[i];
@@ -12340,6 +12359,7 @@ qboolean VBSP_Init(void)
 		*/
 		hl2_visdebug = cvarfuncs->GetNVFDG("hl2_visdebug", "0", 0, "Print Source area visibility and 300-frame leaf-walk statistics (also requires developer). Does not change visibility.", MAPOPTIONS);
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
+		hl2_clipflags = cvarfuncs->GetNVFDG("hl2_clipflags", "1", 0, "FTESurf Patch 831: the world walk stops testing a frustum plane below a node wholly in front of it. 0 tests every plane at every node (the A/B).", MAPOPTIONS);
 		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
 		hl2_lumpretire = cvarfuncs->GetNVFDG("hl2_lumpretire", "1", CVAR_MAPLATCH, "FTESurf (P298): skip LZMA-decompressing the BSP lumps nothing in this configuration will read -- both lightmaps on a dedicated server, and the unused half of the LDR/HDR pair when drawing. Map load on this engine is single-threaded LZMA and almost nothing else, so this is most of it: 334 MB of the 350 MB surf_affliction expands is lightmap. 0 restores the old decompress-everything behaviour, which makes the whole patch a one-command A/B.", MAPOPTIONS);
 		/*

@@ -1835,7 +1835,8 @@ static struct
 	{"FOG", PERMUTATION_FOG},
 	{"FRAMEBLEND", PERMUTATION_FRAMEBLEND},
 	{"LIGHTSTYLED", PERMUTATION_LIGHTSTYLES},
-	{"VC", PERMUTATION_VC}	//nettest: baked static-prop per-vertex colour multiplier
+	{"VC", PERMUTATION_VC},	//nettest: baked static-prop per-vertex colour multiplier
+	{"INSTANCED", PERMUTATION_INSTANCED}	//FTESurf Patch 831
 };
 #define MAXMODIFIERS 64
 
