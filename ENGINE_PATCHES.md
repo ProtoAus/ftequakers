@@ -23,18 +23,20 @@ practice closures have no recording/sidecar faults. R1/R2 exposed closing-only
 fault leakage into validated restore history, footer suffixes hiding old counters,
 released-before-thaw kept horizons, and keyword-whitespace loss. Repairs keep
 closing declarations out of lifecycle authority, validate intact legacy footer
-fields, retain the landed release-tail kind across prefixes, and recognize UTF-8
-new-record boundaries before payload parsing. Native old-binary controls act;
-26 supported/refusal expectations pass after repair. A real first release row at
+fields, retain the landed release-tail kind across prefixes, ignore closing-only
+lines at session/seed boundaries, and recognize UTF-8 new-record boundaries before
+payload parsing. Raw-length/line-boundary validation precedes C-string decoding.
+Native old-binary controls act;32 supported/refusal expectations pass after repair. A real first release row at
 the pin horizon closes at the later actual native horizon; the pinned-only
 control stays at the pin. This uses controlled production release/void callees
 and a synthetic retention flag, not a natural stage/board submission. Those kept
 cases emit no VIEW, so only their REC is graded. Finish-interface observations
-are controlled practice, not natural-completion or hardware proof. Reader729,
+are controlled practice, not natural-completion or hardware proof. Reader772,
 receipt268, six census parser tests and the existing source/limit/opportunity/
 unreadable/paired-runtime suites pass. Same-byte319REC/109VIEW sweep has no semantic
 differences from its published baseline (which already has196REC and5VIEW faults).
-Fresh post-repair review, final combined builds, ARM runtime and rollout pending.
+These bounded controls do not grant hardware or platform-promotion acceptance;
+final-source qualification and installed-byte provenance are separate records.
 ## Patch 853 — tier completion filtered All / Surf / Bhop, on the web profile and the in-game card (surfd + board + csprogs)
 
 **Problem (Lex, 20 Oct):** "when viewing a player profile you should be able to filter bhop / surf for the

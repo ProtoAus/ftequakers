@@ -5269,6 +5269,19 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		Con_Printf(CON_ERROR "pm_recsim: cannot read \"%s\"\n", fname);
 		return;
 	}
+	/* P842: do not admit a C-string prefix or join tokens across raw CR.
+	   The loader's appended terminator is outside fsz; CRLF and EOF CR are safe. */
+	end = buf + fsz;
+	for (p = buf; p < end; p++)
+	{
+		if (!*p || (*p == '\r' && p+1 < end && p[1] != '\n'))
+		{
+			RECSIM_REFUSE("recording contains invalid raw line bytes");
+			Con_Printf(CON_ERROR "pm_recsim: invalid raw recording line bytes.\n");
+			FS_FreeFile(buf);
+			return;
+		}
+	}
 	mapname[0] = 0;
 	memset(hdrpin, 0, sizeof(hdrpin));
 	memset(&seedstate, 0, sizeof(seedstate));
