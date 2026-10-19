@@ -35,6 +35,102 @@ receipt268, six census parser tests and the existing source/limit/opportunity/
 unreadable/paired-runtime suites pass. Same-byte319REC/109VIEW sweep has no semantic
 differences from its published baseline (which already has196REC and5VIEW faults).
 Fresh post-repair review, final combined builds, ARM runtime and rollout pending.
+## Patch 853 — tier completion filtered All / Surf / Bhop, on the web profile and the in-game card (surfd + board + csprogs)
+
+**Problem (Lex, 20 Oct):** "when viewing a player profile you should be able to filter bhop / surf for the
+tier completion, so you can see how much of each category you've done, same with viewing your profile
+ingame." surfd's `_completion` gave one table over every map the site counts, and the per-tier map lists
+(the site's `/maps`, the game's `player=&ct=`) had no filter. Which kind a map is was already decided in
+one place: pool_policy's `surf_` / zoned `bhop_` prefixes, and every counted map is one of the two.
+
+**Change:** surfd: `mapmanifest.map_mode` beside pool_policy; `_completion` adds `modes: {surf, bhop}`, each
+the same table (tiers, untiered, done, of) over that kind's maps, so the two add up to the whole;
+`/board/api/player/<h>/maps` and the game's `player=&ct=` take `mode=surf|bhop` (anything else 400) and
+echo it. board.js: an All / Surf / Bhop switch over the bars, each showing done / of; a tier opens that
+kind's maps (one cached list per kind); `&cm=` keeps the kind in the link beside `&ct=`. csprogs: the three
+tables in one memalloc'd block (`pf_cmt`, PF_CMF floats each; the 36 global floats the bars used are
+gone), three chips over the bars, a tier's list asked with `&mode=` and its answer checked against it,
+headed "TIER 3 BHOP MAPS"; `hud_player kind all|surf|bhop`, and `hud_player status` ends `kind N split N`.
+A surfd without `modes` hides the switch on both; the "maps finished" figure stays the whole.
+
+**Verified:** surfd/test_completion_pool.py 46/0 with 13 new checks (the fixture's 3/5 splits 2/3 surf +
+1/2 bhop; per-kind lists on the site and in the game; done/total; a bad mode 400); the same file against
+main's surfd fails at the first new check. test_web, test_board, test_mappool pass. Browser: the
+worktree's board.js over the live API (modes added by a local proxy from the live per-map list): AlexX
+All 485/1831 = Surf 485/1446 + Bhop 0/385, a bhop tier lists bhop maps only, the link reopens it.
+tools/p853kind.py (p663profile's rig, console lines only): csprogs d4709153 A-D ok (tier 1 asked plain,
+bhop, surf, plain: 3 / 2 / 1 maps); `--old-surfd` O ok (split 0, the switch inert, nothing asked);
+control, installed csprogs 2f86a702: A-D fail. QC 0 warnings. One review round: `&cm=` took any
+Object.prototype name (`constructor` blanked the profile), `kind` asked with the card closed; both fixed,
+A-D ok again on d28a06aa. FTESurf main 02ed71c2.
+
+## Patch 852 — the download page leads with the launcher; no .bat files in the release (site + release tooling)
+
+**Problem (Lex, 20 Oct):** the launcher should be the main download ("they use that to get the game"),
+the archive the second one; the "Extract and run ftesurf.bat" and "Existing alpha installs" notes should
+go, leaving links to the full package; and the next release should not carry ftesurf.bat or
+ftesurf_debug.bat. Making the launcher the button had a catch: the engine's update handoff runs
+`ftesurf-launcher.exe` by that name (qkupdate.c QKU_Restart_f), the feed omits the launcher, and a
+browser saves the download as `ftesurf-launcher-<ver>.exe` (`download=` is ignored cross-origin). And
+sitepage.ps1 could not re-render a live page at all: publish.sh takes only a new version with its signed
+feed (P738), and sitepage's own Linux token list missed the launcher tokens.
+
+**Change:** page.template.html: the two buttons are the launchers; "Full package:" links the archives,
+sizes and hashes in their titles. release.ps1: the .bat files leave the ship set and the archive's
+must-have list (the CRLF pass for them goes too); the install text starts ftesurf-launcher.exe (engine
+options after `--`); the standalone launchers upload with `Content-Disposition: attachment;
+filename="ftesurf-launcher(.exe)"`, checked on the round trip. sitepage.ps1 takes the Linux tokens from
+Test-ReleaseTemplate and publishes by renaming only the changed files into the live release's
+directory, old copies kept in `.sitepage-prev/` outside the served tree, never update.json.
+updatefeed.py keeps the .bat names managed (validate() checks the previous feed, which lists them); the
+feed never removes a file, so existing installs keep theirs, and it still calls the launcher.
+
+**Verified:** test_releaselib.ps1 86/0; test_site_copy and test_rebrand pass (both had failed on main
+since P738's tokens). sitepage -DryRun from the 0.1.28 receipt: only index.html differed from live;
+Chrome at 1400 and 390 px, no horizontal scroll. R2: a scratch key showed the header passes through
+dl.proto.bar; 0.1.28's two launcher objects re-uploaded with it, SHA-256 equal to the receipt before and
+after (an overwrite's new header took about a second to show; release keys are always new). Published
+2026-10-19 20:05Z (UTC): index.html replaced, every file read back byte for byte, update.json unchanged.
+Not run: the release pipeline itself (it runs at the next release).
+
+## Patch 850 — full water costs less: nested views stop redrawing the outer views' props and an unseen 3D sky (client engine)
+
+**Problem (Lex, 20 Oct):** full reflections on surf_boreas (save 006, deep in the cave, `hl2_water 2`)
+dumped 12.75 ms a frame, 3D sky 4.21 ms of GPU and portals & reflections 5.08. Each water batch
+renders two more scenes (reflection, refraction), and every one of them -- plus each 3D sky room --
+is a nested `R_RenderScene`. Two things in them were drawn for nothing: (1) a nested view's world
+walk appends its own props and statics to `cl_visedicts` after the outer views' ones, and its model
+pass walked the whole list, so it drew the outer views' props as well as its own copies; (2) the 3D
+sky was drawn in every view of a map with sky, three times a frame at that save, where no view has
+a sky surface (a refraction looks under the water; the cave's reflection has no sky).
+
+**Change:** `R_RenderScene_Internal` latches the list length at a top-level view's entry
+(`r_visdynamic`); a nested view (capture, portal, sky room) passes over `[r_visdynamic, its entry)`
+in `BE_GenModelBatches` -- every pass except the shadow-caster ones (`BEM_DEPTHONLY`, which fake
+shadows filter in, and `BEM_STENCIL`): a prop the nested walk culled can still shadow what it sees.
+No skip when the list is full (the nested walk could not add its own). `r_nestedents` 0 = as before.
+`GLBE_DrawWorld` draws the sky room only for a view whose world sky batches have meshes:
+`r_skyroomneed` 1 = water captures, 2 (default) = and the main view, 0 = as before. Portal views,
+and captures nested in one (`refdef.insideportal`), always draw it: they inherit the near view's
+areas, so the far side's sky surfaces can be culled while the 3D sky still shows (surf_kitsune's
+door). `r_viewstats` prints views by depth, 3D skies drawn/skipped and entities passed over, per
+top-level view. The four `refdef_t` fields are APPENDED: the hl2 plugin reads the struct by
+offset, and inserted after `firstvisedict` they shifted areabits/vieworg/time/recurse under the
+shipped plugin -- at 16 bytes the water stopped drawing at all.
+
+**Verified** (rig, 1600x900, Lex's own cfg, `artifacts/water` under perfplan-20261019, plugin
+2b60d9c3 as shipped): at save 006 noclipped and paused, 4 alternating pairs each, `r_budget` dumps
+with no screenshots in the window: off 8.86 ms -> level 1 5.14 ms -> level 2 4.14 ms a frame, 4/4
+pairs faster at each step, draws 2181 -> 1230 -> 679; views 1 main + 2 captures, skies drawn 3 -> 0.
+Pictures, two shots per setting (noise floor 0 px): unchanged but 25 px, a one-pixel sliver at the
+far waterline where a seam in the capture's world showed the 3D sky (now the capture's clear
+colour). Controls: surf_kitsune's door (portal + a view nested in it) draws all 3 skies at every
+level, pictures equal to off within the scene's own shot-to-shot noise; surf_demise (open sky, no
+water) draws its sky at every level, differences no larger than its animated-sky a/b. One review,
+three rounds: shadow casters, a capture inside a portal, a full list, the light pass, a web-target
+guard and the struct layout, all fixed and rechecked. Not done: the shadow code's own caster walks
+(gl_shadow.c) are untouched; captures are not shared between batches on one plane; a refraction
+could read the main view's framebuffer instead of re-rendering -- BACKLOG.
 
 ## Patch 840 — the unranked line names the input setting; slow-motion runs are measured and demoted (QC + reccheck + surfd)
 

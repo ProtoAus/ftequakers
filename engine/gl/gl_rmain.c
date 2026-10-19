@@ -703,6 +703,22 @@ static void R_RenderScene_Internal(void)
 {
 	extern qboolean depthcleared;
 	int tmpvisents = cl_numvisedicts;
+	extern cvar_t r_nestedents;
+	if (!r_refdef.recurse)
+	{
+		r_visdynamic = cl_numvisedicts;	//FTESurf Patch 850: what a nested view sees besides its own walk
+		r_refdef.visskipfrom = r_refdef.visskipto = 0;
+		r_refdef.capturekind = 0;
+		r_refdef.insideportal = false;
+		r_vs_frames++;
+	}
+	else if (r_nestedents.ival && r_visdynamic < cl_numvisedicts)
+	{
+		r_refdef.visskipfrom = r_visdynamic;
+		r_refdef.visskipto = cl_numvisedicts;
+	}
+	if (r_refdef.recurse < R_MAX_RECURSE)
+		r_vs_views[r_refdef.recurse]++;
 	TRACE(("dbg: calling R_SetFrustrum\n"));
 	if (!r_refdef.recurse)
 		R_SetFrustum (r_refdef.m_projection_std, r_refdef.m_view);
@@ -1685,6 +1701,9 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 
 	oldrefdef = r_refdef;
 	r_refdef.recurse+=1;
+	r_refdef.capturekind = portaltype;	//FTESurf Patch 850: r_skyroomneed tells a water capture from a portal
+	if (!portaltype)
+		r_refdef.insideportal = true;	//...and from a capture inside one, which inherits its areas
 
 	r_refdef.externalview = true;
 

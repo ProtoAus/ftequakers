@@ -278,6 +278,8 @@ typedef struct {
 #ifndef R_MAX_RECURSE
 #define R_MAX_RECURSE	6
 #endif
+extern int r_visdynamic;	/*FTESurf Patch 850, renderer.c*/
+extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 #define RDFD_FOV 1
 typedef struct refdef_s
 {
@@ -387,6 +389,11 @@ typedef struct refdef_s
 	vec3_t		skyroom_eye;		/*FTESurf Patch 758: vieworg when skyroom_pos was set*/
 	float		skyroom_scale;		/*...and its parallax divisor, 0 for none (a fixed camera)*/
 	float		m_projection_noclip[16];	/*FTESurf Patch 771: the root view's m_projection_std, which no portal's oblique near plane touches; the skyroom draws with it*/
+
+	//FTESurf Patch 850. Added at the end: the hl2 plugin reads this struct by offset.
+	int			visskipfrom, visskipto;	/*in a nested view, the outer views' own entities*/
+	int			capturekind;		/*GLR_DrawPortal's type, 0 for a portal or the main view*/
+	qboolean	insideportal;		/*a portal's view or one nested inside it*/
 } refdef_t;
 
 extern	refdef_t	r_refdef;

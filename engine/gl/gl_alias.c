@@ -3701,7 +3701,7 @@ static void R_SortModelBatches(batch_t **list, const char *what)
 
 void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemode, const qbyte *worldpvs, const int *worldareas)
 {
-	int		i;
+	int		i, skipfrom, skipto;
 	entity_t *ent;
 	model_t *emodel;
 	unsigned int orig_numstris = cl_numstris;
@@ -3794,9 +3794,26 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		}
 	}
 
+	//FTESurf Patch 850: a nested view passes over its outer views' own props and statics
+	//(R_RenderScene_Internal). Not the shadow-caster passes (fake shadows filter in DEPTHONLY):
+	//a prop this view's walk culled can still shadow what it sees. Not when the list is full, as
+	//then this view's walk could not add its own copies.
+	skipfrom = skipto = 0;
+	if (bemode != BEM_DEPTHONLY && bemode != BEM_STENCIL && r_refdef.visskipto > r_refdef.visskipfrom && cl_numvisedicts < cl_maxvisedicts)
+	{
+		skipfrom = r_refdef.visskipfrom;
+		skipto = r_refdef.visskipto;
+		if (bemode == BEM_STANDARD)
+			r_vs_entskipped += skipto - skipfrom;
+	}
 	// draw sprites seperately, because of alpha blending
 	for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 	{
+		if (i >= skipfrom && i < skipto)
+		{
+			i = skipto - 1;
+			continue;
+		}
 		ent = &cl_visedicts[i];
 
 		if ((r_refdef.externalview || chase_active.ival) && (ent->flags & RF_FIRSTPERSON))
