@@ -4916,15 +4916,17 @@ static const char *SV_RecSim_HoldRefusal (const char *s)
 	if (*s < '0' || *s > '9')
 		return "malformed `hold` accounting";
 	mt = strtoul(s, &end, 10);
-	if (mt > 0x7fffffffUL)
+	if (end - s > 10 || mt > 0x7fffffffUL)
 		return "malformed `hold` accounting";
 	s = end;
 	while (*s == ' ' || *s == '\t') s++;
 	if (*s < '0' || *s > '9')
 		return "malformed `hold` accounting";
 	frozen = strtoul(s, &end, 10);
+	if (end - s > 10 || frozen > 0x7fffffffUL)
+		return "malformed `hold` accounting";
 	while (*end == ' ' || *end == '\t' || *end == '\r') end++;
-	if (*end || frozen > 0x7fffffffUL)
+	if (*end)
 		return "malformed `hold` accounting";
 	return frozen ? "frozen timer accounting (`hold`) is not modeled" : NULL;
 }

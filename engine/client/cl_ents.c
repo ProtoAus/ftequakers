@@ -4066,16 +4066,19 @@ void CLQ1_AddHoverBrushes(void)
 ==================================================
 surf_view					FTESurf Patch 776
 
-Red: faces you can surf, and every trigger_*teleport* volume.  Yellow: faces that
-stop the player and are not drawn.  Read off COLLISION, not the drawn surfaces,
-because an invisible ramp has no surface and a drawn one can be non-solid.  The
-world and the lump's teleports are cut into windings once per map; solid brush
-entities move, so they are cut each frame from the packet entities the
-prediction collides with.  ENGINE_PATCHES.md, Patch 776, has the rules.
+Red: every trigger_*teleport* volume (the resets).  Blue: faces you can surf, a
+clip brush's included.  Yellow: the other faces of brushes with no face drawn
+(clip, toolsinvisible).  Patch 818: a
+nodraw side of a drawn brush is nothing (P776 painted every ramp's back yellow),
+and ramps are no longer the teleports' red.  Read off COLLISION, not the drawn
+surfaces, because an invisible ramp has no surface and a drawn one can be
+non-solid.  The world and the lump's teleports are cut into windings once per
+map; solid brush entities move, so they are cut each frame from the packet
+entities the prediction collides with.  ENGINE_PATCHES.md, Patches 776 and 818.
 ==================================================
 */
-#define SURFVIEW_RED	0
-#define SURFVIEW_YELLOW	1
+#define SURFVIEW_RAMP	0
+#define SURFVIEW_CLIP	1
 #define SURFVIEW_TELE	2
 #define SURFVIEW_WALL	0.1f	//pm_source.c's ramp band (Patch 131): below this a face is a wall
 cvar_t surf_view_dist = CVARFD("surf_view_dist", "8192", 0, "FTESurf Patch 776. surf_view draws faces within this many units of the view.");
@@ -4095,7 +4098,7 @@ typedef struct
 {
 	unsigned int firstvert;
 	unsigned short numverts;
-	qboolean hidden;
+	qboolean clip;			//its brush has no face drawn
 	vec3_t normal;
 } surfviewlocal_t;		//a brush entity's, in its model's space: posed and classified per frame
 typedef struct
@@ -4144,20 +4147,23 @@ static float SurfView_Standable (void)
 	return (movevars.standablenormal > 0) ? movevars.standablenormal : 0.7f;	//PMSrc_Standable
 }
 
-//red when you can surf it, yellow when it stops you and is not drawn, -1 when neither
-static int SurfView_Kind (const vec3_t nrm, qboolean hidden)
+//a face you can surf, whatever brush it is on (a clip ramp is a ramp, as wrlines draws it),
+//else any other face of a clip brush, else -1
+static int SurfView_Kind (const vec3_t nrm, qboolean clip)
 {
 	if (nrm[2] >= SURFVIEW_WALL && nrm[2] < SurfView_Standable())
-		return SURFVIEW_RED;
-	return hidden ? SURFVIEW_YELLOW : -1;
+		return SURFVIEW_RAMP;
+	return clip ? SURFVIEW_CLIP : -1;
 }
 
 static void SurfView_Colour (int kind, float *rgb)
 {
-	if (kind == SURFVIEW_YELLOW)
+	if (kind == SURFVIEW_CLIP)
 		VectorSet(rgb, 1.0, 0.85, 0.10);
-	else
+	else if (kind == SURFVIEW_TELE)
 		VectorSet(rgb, 1.0, 0.12, 0.12);	//ent_view's teleport red
+	else
+		VectorSet(rgb, 0.15, 0.45, 1.0);
 }
 
 static void SurfView_Pose (struct surfviewcut_s *c, const vec3_t origin, const vec3_t angles)
@@ -4212,7 +4218,7 @@ static void SurfView_Cache (int kind, vecV_t *verts, int n)
 }
 
 //one face of a brush, in the brush's own space
-static void SurfView_Face (struct surfviewcut_s *c, vecV_t *verts, int n, const vec_t *normal, qboolean hidden)
+static void SurfView_Face (struct surfviewcut_s *c, vecV_t *verts, int n, const vec_t *normal, qboolean clip)
 {
 	surfviewlocal_t *l;
 	vec3_t nrm, p;
@@ -4225,7 +4231,7 @@ static void SurfView_Face (struct surfviewcut_s *c, vecV_t *verts, int n, const 
 		l = &surfview.local[surfview.numlocal++];
 		l->firstvert = surfview.numlverts;
 		l->numverts = n;
-		l->hidden = hidden;
+		l->clip = clip;
 		VectorCopy(normal, l->normal);
 		memcpy(&surfview.lverts[surfview.numlverts], verts, sizeof(*verts)*n);
 		surfview.numlverts += n;
@@ -4242,7 +4248,7 @@ static void SurfView_Face (struct surfviewcut_s *c, vecV_t *verts, int n, const 
 	}
 	else
 		VectorCopy(normal, nrm);
-	kind = c->teleport ? SURFVIEW_TELE : SurfView_Kind(nrm, hidden);
+	kind = c->teleport ? SURFVIEW_TELE : SurfView_Kind(nrm, clip);
 	if (kind >= 0)
 		SurfView_Cache(kind, verts, n);
 }
@@ -4255,7 +4261,7 @@ static void SurfView_Brush (void *ctx, const q2cbrush_t *brush)
 	int i;
 	size_t n;
 	unsigned int sflags;
-	qboolean cliponly;
+	qboolean clip;
 
 	if (!c->teleport && !(brush->contents & MASK_PLAYERSOLID))
 		return;
@@ -4266,17 +4272,31 @@ static void SurfView_Brush (void *ctx, const q2cbrush_t *brush)
 		VectorCopy(brush->brushside[i].plane->normal, planes[i]);
 		planes[i][3] = brush->brushside[i].plane->dist;
 	}
-	//every face of a clip brush is undrawn by construction, whatever its texinfo says
-	cliponly = (brush->contents & FTECONTENTS_PLAYERCLIP) && !(brush->contents & (FTECONTENTS_SOLID|FTECONTENTS_WINDOW|FTECONTENTS_BODY));
+	//Clip is a brush with no face drawn, read off the faces: Source compiles textured
+	//grates and toolsinvisible to grate, which FTE loads as clip, so contents cannot tell a
+	//drawn grate from an invisible wall.  SURF_NODRAW is 0x80 and sky 0x4 in Q2, Q3 and
+	//Source; 0x2 is Source's 2D sky but Q2/Q3's slick.
+	clip = false;
+	if (!c->teleport)
+	{
+		for (i = 0; i < brush->numsides; i++)
+		{
+			n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
+			if (n < 3)
+				continue;
+			sflags = brush->brushside[i].surface ? brush->brushside[i].surface->c.flags : 0;
+			if (!(sflags & 0x80) || (sflags & surfview.skybits))
+				break;
+		}
+		clip = (i == brush->numsides);
+	}
 
 	for (i = 0; i < brush->numsides; i++)
 	{
 		n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
 		if (n < 3)
 			continue;	//a supporting bevel has no face of its own
-		//SURF_NODRAW is 0x80 and sky 0x4 in Q2, Q3 and Source; 0x2 is Source's 2D sky but Q2/Q3's slick
-		sflags = brush->brushside[i].surface ? brush->brushside[i].surface->c.flags : 0;
-		SurfView_Face(c, verts, (int)n, planes[i], cliponly || ((sflags & 0x80) && !(sflags & surfview.skybits)));
+		SurfView_Face(c, verts, (int)n, planes[i], clip);
 	}
 }
 
@@ -4299,7 +4319,7 @@ static void SurfView_Tri (void *ctx, const vec_t *a, const vec_t *b, const vec_t
 	VectorCopy(a, verts[0]);
 	VectorCopy(b, verts[1]);
 	VectorCopy(t3, verts[2]);
-	SurfView_Cache(SURFVIEW_RED, verts, 3);	//one winding: the shader does not cull
+	SurfView_Cache(SURFVIEW_RAMP, verts, 3);	//one winding: the shader does not cull
 }
 
 //every trigger_*teleport* in the lump, posed from its own keys as ent_view poses them
@@ -4409,7 +4429,7 @@ static void SurfView_f (void)
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	surfview.reported = false;
 #endif
-	Con_Printf("surf_view %s\n", surfview_on ? "on: red = surfable and teleports, yellow = invisible and solid" : "off");
+	Con_Printf("surf_view %s\n", surfview_on ? "on: red = teleports, yellow = clip, blue = ramps" : "off");
 }
 
 void CLQ1_SurfViewInit (void)
@@ -4444,8 +4464,8 @@ void CLQ1_AddSurfView (void)
 	if (!surfview.reported)
 	{
 		surfview.reported = true;
-		Con_Printf("surf_view: %u surfable face(s), %u invisible solid face(s), %u teleport(s) in %u face(s), cut in %.0f ms%s\n",
-			surfview.count[SURFVIEW_RED], surfview.count[SURFVIEW_YELLOW], surfview.teleports, surfview.count[SURFVIEW_TELE],
+		Con_Printf("surf_view: %u ramp face(s), %u clip face(s), %u teleport(s) in %u face(s), cut in %.0f ms%s\n",
+			surfview.count[SURFVIEW_RAMP], surfview.count[SURFVIEW_CLIP], surfview.teleports, surfview.count[SURFVIEW_TELE],
 			surfview.buildms, cl.worldmodel->cnodes ? "" : " -- this map keeps no collision brushes to read");
 		if (surfview.propsnohull)
 			Con_Printf("surf_view: %u of %u static prop(s) have no hull pieces and are not shown\n", surfview.propsnohull, surfview.props);
@@ -4540,7 +4560,7 @@ void CLQ1_AddSurfView (void)
 				SurfView_Rotate(&c, l->normal, nrm);
 			else
 				VectorCopy(l->normal, nrm);
-			kind = SurfView_Kind(nrm, l->hidden);
+			kind = SurfView_Kind(nrm, l->clip);
 			if (kind < 0)
 				continue;
 			for (k = 0; k < l->numverts; k++)
