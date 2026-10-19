@@ -357,7 +357,15 @@ varying vec2 lm1, lm2, lm3;
 		diffuse_f.rgb += texture2D(s_fullbright, tex_c).rgb * texture2D(s_fullbright, tex_c).a;
 	#endif
 
-		diffuse_f.a *= float(ALPHA);
+		//FTESurf Patch 844: and the entity's renderamt, as Source's g_flAlpha2
+		//(lightmappedgeneric_ps2_3_x.h:413-429).  1 on the world and an opaque entity.
+		//Under $basealphaenvmapmask the base alpha is the mask, so a faded entity
+		//takes its renderamt alone, as Source does.
+	#ifdef ENVFROMBASE
+		if (e_colourident.a < 1.0)
+			diffuse_f.a = 1.0;
+	#endif
+		diffuse_f.a *= float(ALPHA) * e_colourident.a;
 
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
