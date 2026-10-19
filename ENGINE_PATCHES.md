@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 817 — a rewind over a failed attempt carries the run on, timed (qwprogs, csprogs)
+
+**Problem:** On a map whose fail teleport lands in the start box (surf_dune), the fail re-arms the
+run, and the arm's SV_RecDiscard dropped the attempt's recorder. The rewind ring kept the attempt's
+states, but SV_RewindWriteState cuts a save's prefix from the live recorder, so a save or a resume
+(ENTER) on the rewind after a fail was only a practice placement.
+
+**Change:** Before the arm's discard of a run that was on the clock, SV_RecFailKeep keeps what the
+state writer reads -- serial, lines, generations, branch, run id, start latches -- and SV_RecDiscard
+hands the recording over: the buffer, or the part file renamed to <part>-fail.rec, or the evidence
+path when the Patch 360 keep takes the file. SV_RewindWriteState cuts from it when the live
+recorder is not the snapshot's; the load that follows is a timed save's cold load (segmented). It
+is dropped when the next recording opens, at every load, a disconnect and SV_Shutdown, and kept
+through a `!r` in the box. The client keeps the attempt's .view frames for those saves and adopts
+them for a go; a save on a rewind opened armed is always the cursor's.
+
+Four review rounds also closed the profile and ruleset span around saves: every timed save carries
+the finish's verdict so far (SV_SaveWriteState, the live rewind save; a save from the kept attempt
+compares that attempt's start latches with now), and every cold load takes its own start latches
+as SV_MsApply does, with a retry's profile baseline at 0 (CSQC's counter restarts with the
+serverdata). Before, a cold load kept another run's latch, or a fresh edict's 0, so the finish
+could skip a span or compare it with the wrong run.
+
+**Verified:** 0 warnings. `tools/p817failrewind.py` on the shipped build (surf_dune): 17/17 buffered and
+17/17 `--lobby` (streamed), and `--lobby` on the 0.1.27 exe -- a save on the rewind before the
+fail is timed (state 2, run.rec rows = reclines, picture, Segments anchor at the save, run.view to
+its tick), its load and a go after a second fail run timed and segmented with a 3 s count, the
+next start drops the kept attempt; the build without it makes that save a practice placement.
+`--prof`/`--prof2`: an m_accel step marks the save TF_NOPROFILE (2562 against 514 before) and
+the load latches; `--retry`: the restored run latches 0. p808rewind --lobby and p811savesync pass.
+Four review rounds (control flow, evidence, a cheater's gain); live-lobby smoke passed. Not run:
+a map with posted stages (the evidence-keep path).
+
 ## Patch 826 — a refused zone publish says why (surfd zonepub + its installer)
 
 **Problem (Lex, 19 Oct):** P822's dialog worded a refusal from its status code ("update the game,
