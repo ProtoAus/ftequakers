@@ -18,18 +18,23 @@ exclusion or unsupported/malformed closing state. No mover/timer, input source,
 consent, eligibility, calibration, threshold or held-verification grant changes.
 
 **Verified:** Windows native ordinary/zero controls replay 2,192 rows; derived
-zero-exclusion v11 also passes and six refusal arms name the unsupported state.
-Controlled real normal, held, thawed and warm-restored recordings use v11 and
-have no recording/sidecar faults; release rows and a nonzero carried-rank closer
-are observed. Finish is artificial/practice, not natural-completion or hardware
-proof. 613 reader and 268 receipt checks pass. Same-byte current runs sweep:
-319 recordings/119 views, no increased faults or changed angular availability.
-R1 exposed closing-only lexical/footer fault leakage, a released-before-thaw
-kept horizon, and new-keyword whitespace loss. Repairs preserve strict faults,
-cover the actual input horizon, and recognize new records before payload parsing;
-old-binary acting controls reproduce the whitespace loss. Reader checks now665,
-with six census parser tests. Fresh R2, clean final builds, ARM runtime and rollout
-remain pending.
+zero-exclusion v11 also passes. Controlled normal, held, thawed and warm-restored
+practice closures have no recording/sidecar faults. R1/R2 exposed closing-only
+fault leakage into validated restore history, footer suffixes hiding old counters,
+released-before-thaw kept horizons, and keyword-whitespace loss. Repairs keep
+closing declarations out of lifecycle authority, validate intact legacy footer
+fields, retain the landed release-tail kind across prefixes, and recognize UTF-8
+new-record boundaries before payload parsing. Native old-binary controls act;
+26 supported/refusal expectations pass after repair. A real first release row at
+the pin horizon closes at the later actual native horizon; the pinned-only
+control stays at the pin. This uses controlled production release/void callees
+and a synthetic retention flag, not a natural stage/board submission. Those kept
+cases emit no VIEW, so only their REC is graded. Finish-interface observations
+are controlled practice, not natural-completion or hardware proof. Reader729,
+receipt268, six census parser tests and the existing source/limit/opportunity/
+unreadable/paired-runtime suites pass. Same-byte319REC/109VIEW sweep has no semantic
+differences from its published baseline (which already has196REC and5VIEW faults).
+Fresh post-repair review, final combined builds, ARM runtime and rollout pending.
 
 ## Patch 840 — the unranked line names the input setting; slow-motion runs are measured and demoted (QC + reccheck + surfd)
 

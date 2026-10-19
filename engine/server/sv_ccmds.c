@@ -5115,20 +5115,31 @@ static const char *SV_RecSim_HoldRefusal (const char *s)
 /* P842: v11 declares final exclusions, including a close without a thaw.
    This is NOT a held-clock model. Only counted zero accounting is supported;
    reader-side declared-state arithmetic is not independent simulation proof. */
-static qboolean SV_RecSim_White(char c)
+/* Byte width of Python str.split whitespace in a UTF-8 metadata line.
+   Ownership must agree even when the payload will be explicitly refused. */
+static int SV_RecSim_White(const char *s)
 {
-	return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+	const unsigned char *p = (const unsigned char *)s;
+	if ((p[0] >= 9 && p[0] <= 13) || (p[0] >= 28 && p[0] <= 32)) return 1;
+	if (p[0] == 0xc2 && (p[1] == 0x85 || p[1] == 0xa0)) return 2;
+	if (p[0] == 0xe1 && p[1] == 0x9a && p[2] == 0x80) return 3;
+	if (p[0] == 0xe2 && p[1] == 0x80 &&
+	    ((p[2] >= 0x80 && p[2] <= 0x8a) || p[2] == 0xa8 || p[2] == 0xa9 || p[2] == 0xaf)) return 3;
+	if (p[0] == 0xe2 && p[1] == 0x81 && p[2] == 0x9f) return 3;
+	if (p[0] == 0xe3 && p[1] == 0x80 && p[2] == 0x80) return 3;
+	return 0;
 }
 
 /* Even empty new metadata belongs to its parser/refusal, not an unknown line. */
 static const char *SV_RecSim_RecordArgs(const char *s, const char *keyword)
 {
 	size_t n = strlen(keyword);
-	while (SV_RecSim_White(*s)) s++;
-	if (strncmp(s, keyword, n) || (s[n] && !SV_RecSim_White(s[n])))
+	int white;
+	while ((white = SV_RecSim_White(s))) s += white;
+	if (strncmp(s, keyword, n) || (s[n] && !SV_RecSim_White(s+n)))
 		return NULL;
 	s += n;
-	while (SV_RecSim_White(*s)) s++;
+	while ((white = SV_RecSim_White(s))) s += white;
 	return s;
 }
 
