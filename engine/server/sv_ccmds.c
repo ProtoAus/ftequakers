@@ -641,7 +641,8 @@ static int QDECL CompleteMapListExt (const char *name, qofs_t flags, time_t mtim
   `map surf_n` juddered. Two enumerations fill this; a keystroke then runs SV_Map_c's own
   patterns over it with wildcmp, the filter every backend uses, so the same names match.
   Sorted, so past Cmd_Complete's 256 slots the rows kept are the alphabetical first rather
-  than the first enumerated. Rebuilt when FS_ListGeneration moves, or the cvar is set.*/
+  than the first enumerated. Rebuilt when FS_ListGeneration moves (a map another program drops
+  in lands at the next hash rebuild, i.e. a map load), or when the cvar changes value.*/
 static struct
 {
 	unsigned int gen;	//FS_ListGeneration it was built at; 0 = never
@@ -650,9 +651,9 @@ static struct
 } sv_mapcache;
 static void QDECL SV_MapCompletionCache_Callback(struct cvar_s *var, char *oldvalue)
 {
-	sv_mapcache.gen = 0;	//any set rebuilds: `sv_mapcompletioncache 1` is also "look again"
+	sv_mapcache.gen = 0;	//callbacks fire on a change only: 0 then 1 is "look again"
 }
-cvar_t sv_mapcompletioncache = CVARCD("sv_mapcompletioncache", "1", SV_MapCompletionCache_Callback, "Whether the map command's completion lists maps from a cached list (rebuilt when the filesystem changes, or when this is set) rather than searching every mounted path on each keystroke.\n0: search on each keystroke (before Patch 846).");
+cvar_t sv_mapcompletioncache = CVARCD("sv_mapcompletioncache", "1", SV_MapCompletionCache_Callback, "Whether the map command's completion lists maps from a cached list rather than searching every mounted path on each keystroke. The list is rebuilt when this engine changes or notices a change in its files, and at each map load, so a map another program adds shows after the next map load; setting this to 0 and back to 1 rebuilds it at once.\n0: search on each keystroke (before Patch 846).");
 static const struct
 {
 	const char *ext;
@@ -801,6 +802,73 @@ static void SV_Map_c(int argn, const char *partial, struct xcommandargcompletion
 		PM_EnumerateMaps(raw, ctx);
 #endif
 	}
+}
+
+//FTESurf Patch 846, for con_selftest: every name SV_Map_c offers for `partial`, live and
+//cached, with no 256 cap. Returns how many names are in one set and not the other.
+struct mapcompare_s
+{
+	struct xcommandargcompletioncb_s cb;
+	char **names;
+	size_t n, max;
+};
+static void SV_MapCompare_Add(const char *value, const char *desc, const char *repl, struct xcommandargcompletioncb_s *vctx)
+{
+	struct mapcompare_s *m = (struct mapcompare_s*)vctx;
+	if (m->n == m->max)
+	{
+		m->max = m->max ? m->max*2 : 1024;
+		m->names = BZ_Realloc(m->names, sizeof(*m->names)*m->max);
+	}
+	m->names[m->n++] = Z_StrDup(value);
+}
+static int QDECL SV_MapCompare_Sort(const void *a, const void *b)
+{
+	return Q_strcasecmp(*(char*const*)a, *(char*const*)b);
+}
+int SV_MapCompletionCompare(const char *partial, int *nlive, int *ncached)
+{
+	struct mapcompare_s m[2];
+	int savecache = sv_mapcompletioncache.ival, i, c, differ = 0;
+	size_t a, b;
+
+	memset(m, 0, sizeof(m));
+	for (i = 0; i < 2; i++)
+	{
+		m[i].cb.cb = SV_MapCompare_Add;
+		sv_mapcompletioncache.ival = i;	//ival alone: setting the cvar would drop the cache
+		SV_Map_c(1, partial, &m[i].cb);
+		qsort(m[i].names, m[i].n, sizeof(*m[i].names), SV_MapCompare_Sort);
+		for (a = b = 0; a < m[i].n; a++)
+		{	//distinct names, as Cmd_Complete keeps them
+			if (b && !Q_strcasecmp(m[i].names[a], m[i].names[b-1]))
+				Z_Free(m[i].names[a]);
+			else
+				m[i].names[b++] = m[i].names[a];
+		}
+		m[i].n = b;
+	}
+	sv_mapcompletioncache.ival = savecache;
+
+	for (a = b = 0; a < m[0].n || b < m[1].n; )
+	{
+		c = (a == m[0].n) ? 1 : (b == m[1].n) ? -1 : Q_strcasecmp(m[0].names[a], m[1].names[b]);
+		if (c)
+			differ++;
+		if (c <= 0)
+			a++;
+		if (c >= 0)
+			b++;
+	}
+	*nlive = m[0].n;
+	*ncached = m[1].n;
+	for (i = 0; i < 2; i++)
+	{
+		for (a = 0; a < m[i].n; a++)
+			Z_Free(m[i].names[a]);
+		BZ_Free(m[i].names);
+	}
+	return differ;
 }
 
 #ifdef WEBCLIENT
