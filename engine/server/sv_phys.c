@@ -3489,7 +3489,8 @@ static char *SV_RulesetLoadLoose(const char *path, size_t *sz, qboolean addon, q
 	len = VFS_GETLEN(f);
 	if (len > 1024*1024)	//zone files are at most 256 KB (zonepub.py), data/mapmeta.txt ~200 KB
 	{
-		Con_Printf(CON_WARNING"ruleset: %s is over 1 MB - not read\n", path);
+		if (report)
+			Con_Printf(CON_WARNING"ruleset: %s is over 1 MB - not read\n", path);
 		VFS_CLOSE(f);
 		return NULL;
 	}
