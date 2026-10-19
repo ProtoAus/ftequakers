@@ -14,6 +14,7 @@ to one is a change to the other (FTESurf tools/test_p645lines.py compares them p
   lines_strip2d(pts, n, org, scale, rgb, a)    a strip through n (x, y, starts-a-strip) triples: a plot's curve
   lines_arrays / lines_lod                     where a VM keeps its samples and their LOD tables
   lines_draw(parm, n)                          Line_Draw's pass over one slot; 0 = not drawn
+  lines_label(parm, n)                         Patch 833: where a line's name may sit, its first look
 
 QC pointers are kept as QC pointers and resolved, with their sizes, inside each call; every
 index a pass can reach is checked before it starts. The numbers are trusted to be numbers: a
@@ -848,5 +849,127 @@ static void QCBUILTIN PF_cs_lines_draw(pubprogfuncs_t *prinst, struct globalvars
 	memcpy(parm + LP_BBMAX*sizeof(float), L.bbmax, sizeof(L.bbmax));
 	memcpy(parm + LP_FIRSTPT*sizeof(float), L.first, sizeof(L.first));
 	f = L.cfade;	memcpy(parm + LP_CFADE*sizeof(float), &f, sizeof(f));
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
+/*
+FTESurf Patch 833: LineGraph_WorldLabels' first look along a line for where its name can sit. In
+QC each of up to 256 samples a line costs a vlen and, for most, LineGraph_LabelAt -> Line_ProjPt ->
+project(): with eight board lines, 0.48 ms a frame. This is that loop in the same order on the same
+float arithmetic -- vlen is sqrt(DotProduct), project() is CS_ProjectPoint, and -ffp-contract=off
+keeps the VM's own dot product unfused -- so it returns what QC would. QC keeps its loop for an
+engine without it, and the two must change together.
+*/
+enum
+{
+	LL_VERSION,		//1
+	LL_BASE,		//the slot's first sample
+	LL_COUNT,		//samples the slot holds
+	LL_FIRST,		//every LL_STRIDEth sample from LL_FIRST to LL_LAST is looked at
+	LL_LAST,
+	LL_STRIDE,
+	LL_CUT,			//1: a sample whose clock is past LL_TCUT is not there (the replay's playhead)
+	LL_TCUT,
+	LL_FAR,			//0: no distance limit
+	LL_NEAR,
+	LL_GUARD,
+	LL_PX,
+	LL_EYE,			//3
+	LL_FWD = LL_EYE+3,	//3
+	LL_LO = LL_FWD+3,	//2: the rectangle a name may sit in, virtual pixels
+	LL_HI = LL_LO+2,	//2
+	//out
+	LL_BEST = LL_HI+2,	//the nearest sample a name may sit at, and the nearest merely in front
+	LL_CBEST,
+	LL_BI,			//-1: none
+	LL_CI,
+	LL_AT,			//3: LL_BI on screen, and in the world
+	LL_AW = LL_AT+3,	//3
+	LL_SIZE = LL_AW+3
+};
+
+//float(float *parm, float count) lines_label: 1 with the outputs written, 0 when it refused.
+static void QCBUILTIN PF_cs_lines_label(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	char *parm, *pos, *t;
+	qboolean bad = false;
+	int b, n, ia, ib, stride, cut, i, bi = -1, ci = -1;
+	float tcut, farz, nearz, guard, px, d, best = 99999999, cbest = 99999999, f;
+	vec3_t eye, fwd, p, r, q, at = {0, 0, 0}, aw = {0, 0, 0};
+	float lo[2], hi[2];
+
+	G_FLOAT(OFS_RETURN) = 0;
+	if (csqc_isdarkplaces || csqc_lines.vm != prinst || G_FLOAT(OFS_PARM1) != LL_SIZE)
+		return;
+	parm = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM0), 0, LL_SIZE * sizeof(float));
+	if (!parm || LinesF(parm, LL_VERSION) != 1)
+		return;
+	n = LinesInt(parm, LL_COUNT, 1, csqc_lines.samples, &bad);
+	b = LinesInt(parm, LL_BASE, 0, csqc_lines.samples - 1, &bad);
+	ia = LinesInt(parm, LL_FIRST, 0, 16777216, &bad);
+	ib = LinesInt(parm, LL_LAST, 0, 16777216, &bad);
+	stride = LinesInt(parm, LL_STRIDE, 1, 16777216, &bad);
+	cut = LinesInt(parm, LL_CUT, 0, 1, &bad);
+	if (bad || ia > ib || ib >= n || (unsigned int)b + n > csqc_lines.samples)
+		return;
+	pos = PR_PointerToNative_MoInvalidate(prinst, csqc_lines.pos, 0, csqc_lines.samples * 3 * sizeof(float));
+	t = PR_PointerToNative_MoInvalidate(prinst, csqc_lines.t, 0, csqc_lines.samples * sizeof(float));
+	if (!pos || !t)
+		return;
+	tcut = LinesF(parm, LL_TCUT);
+	farz = LinesF(parm, LL_FAR);
+	nearz = LinesF(parm, LL_NEAR);
+	guard = LinesF(parm, LL_GUARD);
+	px = LinesF(parm, LL_PX);
+	LinesV(parm + LL_EYE*sizeof(float), 0, eye);
+	LinesV(parm + LL_FWD*sizeof(float), 0, fwd);
+	lo[0] = LinesF(parm, LL_LO);
+	lo[1] = LinesF(parm, LL_LO+1);
+	hi[0] = LinesF(parm, LL_HI);
+	hi[1] = LinesF(parm, LL_HI+1);
+
+	if (csqc_rebuildmatricies)
+		cs_buildmatricies();
+	for (i = ia; i <= ib; i += stride)
+	{
+		LinesV(pos, b + i, p);
+		VectorSubtract(p, eye, r);
+		d = sqrt(DotProduct(r, r));
+		if (d >= best)
+			continue;
+		if (farz > 0 && d > farz)
+			continue;
+		//LineGraph_LabelAt at the sample itself
+		if (cut && LinesF(t, b + i) > tcut)
+			continue;
+		//Line_ProjPt
+		if (DotProduct(r, fwd) < nearz)
+			continue;
+		CS_ProjectPoint(p, q);
+		if (q[2] < -1 || fabs(q[0]) > guard || fabs(q[1]) > guard)
+			continue;
+		q[0] = (float)floor(q[0] / px + 0.5f) * px;
+		q[1] = (float)floor(q[1] / px + 0.5f) * px;
+		q[2] = 0;
+		if (!(q[0] < lo[0] || q[0] > hi[0] || q[1] < lo[1] || q[1] > hi[1]))	//QC's own test, NaN and all
+		{
+			best = d;
+			VectorCopy(q, at);
+			VectorCopy(p, aw);
+			bi = i;
+		}
+		if (d < cbest)
+		{
+			cbest = d;
+			ci = i;
+		}
+	}
+
+	memcpy(parm + LL_BEST*sizeof(float), &best, sizeof(best));
+	memcpy(parm + LL_CBEST*sizeof(float), &cbest, sizeof(cbest));
+	f = bi;		memcpy(parm + LL_BI*sizeof(float), &f, sizeof(f));
+	f = ci;		memcpy(parm + LL_CI*sizeof(float), &f, sizeof(f));
+	memcpy(parm + LL_AT*sizeof(float), at, sizeof(at));
+	memcpy(parm + LL_AW*sizeof(float), aw, sizeof(aw));
 	G_FLOAT(OFS_RETURN) = 1;
 }

@@ -2090,51 +2090,51 @@ static void cs_buildmatricies(void)
 	r_refdef.fovv_x = ofovvx,
 	r_refdef.fovv_y = ofovvy;
 }
+//FTESurf Patch 833: project()'s arithmetic, shared with lines_label, which must land where QC's
+//own project() would. The caller rebuilds the matrices first.
+static void CS_ProjectPoint(const float *in, float *out)
+{
+	float v[4], tempv[4];
+
+	v[0] = in[0];
+	v[1] = in[1];
+	v[2] = in[2];
+	v[3] = 1;
+
+	Matrix4x4_CM_Transform4(csqc_proj_matrix, v, tempv);
+
+	tempv[0] /= tempv[3];
+	tempv[1] /= tempv[3];
+	tempv[2] /= tempv[3];
+
+	if (csqc_isdarkplaces)
+	{	/*sigh*/
+		tempv[0] = -tempv[0]/tempv[2]/csqc_proj_frustum[0];
+		tempv[1] = tempv[1]/tempv[2]/csqc_proj_frustum[1];
+		out[0] = (1+tempv[0])/2;
+		out[1] = (1+tempv[1])/2;
+		out[2] = -tempv[2];
+
+		out[0] = out[0]*vid.width;
+		out[1] = out[1]*vid.height;
+	}
+	else
+	{
+		out[0] = (1+tempv[0])/2;
+		out[1] = 1-(1+tempv[1])/2;
+		out[2] = tempv[2];
+
+		out[0] = out[0]*r_refdef.vrect.width + r_refdef.vrect.x;
+		out[1] = out[1]*r_refdef.vrect.height + r_refdef.vrect.y;
+	}
+	if (tempv[3] < 0)
+		out[2] *= -1;
+}
 static void QCBUILTIN PF_cs_project (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	if (csqc_rebuildmatricies)
 		cs_buildmatricies();
-
-
-	{
-		float *in = G_VECTOR(OFS_PARM0);
-		float *out = G_VECTOR(OFS_RETURN);
-		float v[4], tempv[4];
-
-		v[0] = in[0];
-		v[1] = in[1];
-		v[2] = in[2];
-		v[3] = 1;
-
-		Matrix4x4_CM_Transform4(csqc_proj_matrix, v, tempv);
-
-		tempv[0] /= tempv[3];
-		tempv[1] /= tempv[3];
-		tempv[2] /= tempv[3];
-
-		if (csqc_isdarkplaces)
-		{	/*sigh*/
-			tempv[0] = -tempv[0]/tempv[2]/csqc_proj_frustum[0];
-			tempv[1] = tempv[1]/tempv[2]/csqc_proj_frustum[1];
-			out[0] = (1+tempv[0])/2;
-			out[1] = (1+tempv[1])/2;
-			out[2] = -tempv[2];
-
-			out[0] = out[0]*vid.width;
-			out[1] = out[1]*vid.height;
-		}
-		else
-		{
-			out[0] = (1+tempv[0])/2;
-			out[1] = 1-(1+tempv[1])/2;
-			out[2] = tempv[2];
-
-			out[0] = out[0]*r_refdef.vrect.width + r_refdef.vrect.x;
-			out[1] = out[1]*r_refdef.vrect.height + r_refdef.vrect.y;
-		}
-		if (tempv[3] < 0)
-			out[2] *= -1;
-	}
+	CS_ProjectPoint(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_RETURN));
 }
 static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -7231,6 +7231,7 @@ static struct {
 	{"lines_arrays",		PF_cs_lines_arrays,		0},
 	{"lines_lod",			PF_cs_lines_lod,		0},
 	{"lines_draw",			PF_cs_lines_draw,		0},
+	{"lines_label",			PF_cs_lines_label,		0},	//FTESurf Patch 833
 	{"memnostrings",		PF_memnostrings,		0},	//FTESurf Patch 763
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326

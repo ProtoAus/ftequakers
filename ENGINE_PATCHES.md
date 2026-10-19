@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 833 — board-line names are looked for natively: lines_label (engine + csprogs)
+
+**Problem (Lex's setup, 19 Oct):** with Lex's config and eight board lines on surf_voyager, the
+names on the lines (`hud_linegraph_labels`) cost +0.475 ms of QC a frame (+0.63 ms of frame;
+toggled in one process, 4 pairs). LineGraph_WorldLabels looks along each named line at up to 256
+samples, and for most of them calls LineGraph_LabelAt -> Line_ProjPt -> project(): ~120k QC
+instructions and thousands of builtin calls a frame. A QC rewrite that visited fewer samples
+(group spheres, nearest first, an inline near-plane test) was exact -- 97k searches compared, 0
+mismatches, half the LabelAt calls -- and measured nothing (16-pair same-process A/B, QC -0.015 to
+-0.04 ms median), so it was dropped.
+
+**Change:**
+- Engine: builtin `lines_label(parm, count)` (pr_csqc_lines.inc) runs that first look natively:
+  the same samples in the same order on the same float arithmetic. vlen is sqrt(DotProduct) as
+  PF_vlen computes it, the near test is Line_ProjPt's own dot product (the VM's OP_MUL_V; the build
+  has -ffp-contract=off), and project() is factored out of PF_cs_project into CS_ProjectPoint so
+  both land on the same pixels. Bounds: the slot's base, count and range are checked against the
+  arrays lines_arrays registered; it refuses (returns 0) otherwise.
+- csprogs: LineGraph_WorldLabels calls it when the engine has it (`checkbuiltin`, alongside
+  lines_draw) and keeps its QC loop as the fallback and the specification. `lines native` counts
+  native looks and refusals.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; Lex's ftesurf.cfg read into each rig, never written):**
+- Exactness: a check build ran the QC loop beside every native look and compared all six results:
+  94,485 looks over a spawn turn, a 30 s replay ride and a second turn, 0 mismatches, 31,574 of
+  them with a place found (the replay's playhead rule included).
+- Speed, same process, a throwaway build where `hud_linegraph_labels 2` took the QC loop: QC row
+  -0.40 ms median at voyager's spawn (15 of 16 pairs), -0.145 and -0.125 ms over two replay rides
+  (11 and 12 of 16).
+- Fallback: the same csprogs on the 0.1.27 release exe (e19f681d, no lines_label) and on the
+  P832 install reads "natively 0, refused 0" and runs the arm without a VM error; mid-ride
+  screenshots on 0.1.27 and on the new exe both show the line's name at the same place.
+- One review (equivalence to the QC loop, safety of the QC memory it reads, the fallback): no
+  defect. Its notes: the matrices are rebuilt before the loop rather than at the first project()
+  (nothing observable); exactness rests on SSE float arithmetic (only 64-bit builds ship).
+
+**Known:** the other line work stays in QC: board lines still cost ~0.7 ms of QC in that setup
+(marks, follow, find), and the run graph (+0.41 ms) draws its curves natively already.
+
 ## Patch 832 — r_blendsort 2 stops re-checking a batch once per face (engine)
 
 **Problem (Lex's setup, 19 Oct):** Lex runs `r_blendsort 2`, and it cost 1.35 ms a frame over mode 1
