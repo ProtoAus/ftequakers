@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 842 — preserve release inputs and the final native clock (recorder/readers)
+
+**Problem:** movement can resume before PostThink thaws the counted clock. The
+recorder suppressed that released packet's inputs, and a finish while still
+held had no declaration of its final cumulative frozen ticks. Neither omission
+can safely be reconstructed from elapsed time or a rounded trailer.
+
+**Change:** new recordings use format 11: `fzin` retains actual released inputs
+without labelling them an ordinary angle epoch; one counted `clockend` describes
+native origin, carried rank ticks and final exclusion (or explicitly declines
+that equation). Reader checks are declared-state integrity, not simulation.
+Saved v9/v10 prefixes retain their old contract, including v9-to-v10 on pause;
+v11 prefixes stay v11. Replay/census readers accept the new rows. Native verify
+accepts zero-exclusion ordinary v11 but refuses release inputs, positive final
+exclusion or unsupported/malformed closing state. No mover/timer, input source,
+consent, eligibility, calibration, threshold or held-verification grant changes.
+
+**Verified:** Windows native ordinary/zero controls replay 2,192 rows; derived
+zero-exclusion v11 also passes and six refusal arms name the unsupported state.
+Controlled real normal, held, thawed and warm-restored recordings use v11 and
+have no recording/sidecar faults; release rows and a nonzero carried-rank closer
+are observed. Finish is artificial/practice, not natural-completion or hardware
+proof. 613 reader and 268 receipt checks pass. Same-byte current runs sweep:
+319 recordings/119 views, no increased faults or changed angular availability.
+Independent review, clean final build, ARM runtime and rollout are pending.
+
 ## Patch 845 — goto_spawn goes to the map's spawn entity (qwprogs + csprogs)
 
 **Problem (Lex, 20 Oct):** "goto_spawn doesn't goto the spawn point of the map." P753 made it `!m`'s

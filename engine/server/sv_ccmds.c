@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "pr_common.h"
 #include "fs.h"
 #include "netinc.h"
+#include <float.h>
 
 #ifndef CLIENTONLY
 
@@ -4931,6 +4932,55 @@ static const char *SV_RecSim_HoldRefusal (const char *s)
 	return frozen ? "frozen timer accounting (`hold`) is not modeled" : NULL;
 }
 
+/* P842: v11 declares final exclusions, including a close without a thaw.
+   This is NOT a held-clock model. Only counted zero accounting is supported;
+   reader-side declared-state arithmetic is not independent simulation proof. */
+static const char *SV_RecSim_ClockRefusal(const char *s)
+{
+	const char *p;
+	char *end;
+	unsigned long origin, frozen;
+	double carried;
+	float single;
+	qboolean nonzero = false, exponent = false;
+
+	while (*s == ' ' || *s == '\t') s++;
+	if (strncmp(s, "counted", 7) || (s[7] != ' ' && s[7] != '\t'))
+		return "a non-counted/kept v11 closing clock (not modelled)";
+	s += 7;
+	while (*s == ' ' || *s == '\t') s++;
+	if (*s < '0' || *s > '9') goto malformed;
+	origin = strtoul(s, &end, 10);
+	if ((*end != ' ' && *end != '\t') || origin > 0x7fffffffUL ||
+	    (double)(float)origin != (double)origin) goto malformed;
+	s = end;
+	while (*s == ' ' || *s == '\t') s++;
+	for (p = s; *p && *p != ' ' && *p != '\t'; p++)
+	{
+		if (*p == 'e' || *p == 'E') exponent = true;
+		else if (*p >= '0' && *p <= '9')
+		{
+			if (!exponent && *p != '0') nonzero = true;
+		}
+		else if (*p != '+' && *p != '-' && *p != '.') goto malformed;
+	}
+	if (p == s || (*s == '-' && nonzero)) goto malformed;
+	carried = strtod(s, &end);
+	if (end != p || !(carried >= 0 && carried <= FLT_MAX)) goto malformed;
+	single = (float)carried;
+	if (single == 0 && nonzero) goto malformed; /* source cannot print an underflow */
+	s = end;
+	while (*s == ' ' || *s == '\t') s++;
+	if (*s < '0' || *s > '9') goto malformed;
+	frozen = strtoul(s, &end, 10);
+	if (frozen > 0x7fffffffUL || (double)(float)frozen != (double)frozen) goto malformed;
+	while (*end == ' ' || *end == '\t') end++;
+	if (*end) goto malformed;
+	return frozen ? "a positive final frozen-clock exclusion (not modelled)" : NULL;
+malformed:
+	return "a malformed v11 closing clock";
+}
+
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -4979,6 +5029,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	recsim_spec_t *spc = NULL;		/* Patch 380 */
 	const char   *specbad = NULL;
 	const char   *holdbad = NULL;
+	const char   *clockbad = NULL;
+	int           nclock = 0, nexcluded = 0;
 	int           nspec = 0, nspinside = 0, spinside_row = -1;
 	char          spinside_kind[16] = "";
 	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
@@ -5117,12 +5169,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				}
 				csam++;
 			}
-			else if (!strncmp(ln, "in ", 3))
+			else if (!strncmp(ln, "in ", 3) || !strncmp(ln, "fzin ", 5))
 			{
+				if (pass == 0 && ln[0] == 'f') nexcluded++;
 				if (pass == 1 && cin < nin)
 				{
 					recsim_in_t *r = &ins[cin];
-					int nf = sscanf(ln+3, "%i %i %f %f %f %f %f %f %f %i %i",
+					int nf = sscanf(ln + (ln[0] == 'f' ? 5 : 3), "%i %i %f %f %f %f %f %f %f %i %i",
 					           &r->pk, &r->mt, &r->carry,
 					           &r->mv[0], &r->mv[1], &r->mv[2],
 					           &r->ang[0], &r->ang[1], &r->ang[2], &r->bt, &r->fl);
@@ -5194,6 +5247,16 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			{
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
+			}
+			else if (!strncmp(ln, "clockend", 8) && (!ln[8] || ln[8] == ' ' || ln[8] == '\t'))
+			{
+				if (pass == 0)
+				{
+					nclock++;
+					if (!clockbad)
+						clockbad = filever == 11 ? SV_RecSim_ClockRefusal(ln + 8)
+						                        : "a v11 closing clock under another format";
+				}
 			}
 			else if (!strncmp(ln, "hold", 4) && (!ln[4] || ln[4] == ' ' || ln[4] == '\t'))
 			{
@@ -5488,8 +5551,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
 	   its restarted counter.  Anything this replay cannot follow is refused. */
-	if (filever > 10)
-		sesbad = "a newer format (this verifier reads FTESURF-REC 10)";
+	if (filever > 11)
+		sesbad = "a newer format (this verifier reads FTESURF-REC 11)";
 	else if (!sesbad && npause && filever < 10)
 		sesbad = "a `pause` under a header below FTESURF-REC 10";
 	else if (!sesbad && !npause && filever == 10)
@@ -5621,6 +5684,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = specbad;
 		else if (holdbad)
 			refuse = holdbad;
+		else if (nexcluded)
+			refuse = "excluded-clock release inputs (not modelled)";
+		else if (clockbad)
+			refuse = clockbad;
+		else if (filever == 11 && nclock != 1)
+			refuse = "missing or duplicate v11 closing clock";
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
