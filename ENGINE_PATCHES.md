@@ -32,6 +32,15 @@ unchanged-reader runs sweep adds no faults. Human playback and a new genuine
 consenting signed HTTPS receipt/HID file join remain PENDING. No calibration or
 attestation claim; deployed code is not a human pass.
 
+**Deployment:** Both Windows installs have the verified P814 programs. At
+2026-10-19 00:51–00:53Z, clean QC source16ea34c3 passed the normal empty-fleet
+progs deployment: destination hashes match both installs, predecessors are retained,
+and all12 restarted lobbies publish the map-initialized `fs_ul 2`. The guarded
+HTTPS collector remains open. Native binaries, engine pins, Build number and
+personal permission settings were not changed. Human replay acceptance and a
+new genuine signed HTTPS journal join remain pending. Provenance is in FTESurf
+`tools/lobby-progs-p814-20261019.md`.
+
 ## Patch 813 — a surfer pinned to the face they are sliding along recovers instead of stopping (mover 8)
 
 **Problem.** Lex: on surf ramps "you randomly stop", rarely. His lobby run on
