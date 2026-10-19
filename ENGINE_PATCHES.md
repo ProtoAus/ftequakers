@@ -1,5 +1,49 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 821 — the open chat is a panel: its history, a real text field, the mouse to select and copy (csprogs)
+
+**Problem:** Lex: the chatbox "doesn't have a real text input that you can highlight and/copy/select";
+asked for a box that fades in holding the chat with an input box, takes the mouse so text can be
+selected and copied, gives it back when chat is done, the chat font a size smaller, and a better
+text input. The draft was an append-only line (Backspace only at the end, no caret, no selection),
+and nothing in the history could be clicked or copied.
+
+**Change:** `cl_chat.qc`. Opening a draft fades in (0.12 s; out 0.18 s) a Dusk panel at the
+chatbox's place: every line in the ring above a one-line field; the wheel and PgUp/PgDn scroll it,
+and a line that arrives while scrolled keeps the view. The panel takes the mouse (`UIC_CHAT` 1024)
+only while nobody else holds it (the inspector lets go of its own when another claim appears) and
+gives it back on Enter, Esc or the console key; the zone editor's blocker does not count it (it
+closes on a foreign claim, and the chat draws no sui bracket and takes every event while up).
+History: a drag selects across rows and messages, a double click a word, a triple the line, Shift
+extends; an end is (ring slot, its stamp, an offset into the line's drawn text -- `Chat_Plain`,
+codes dropped, `^^` one `^`), so a re-wrap keeps it, an overwritten slot drops it, and a copy
+carries no codes and gives a wrapped line whole. Field: drawn raw, a caret placed and a selection
+dragged by the mouse (double and triple click too), Shift+arrows/Home/End, Ctrl+arrows, Ctrl+Backspace
+and Ctrl+Delete by word, Ctrl+A/C/X, Ctrl+Insert, Shift+Delete, Shift+Insert and Ctrl+V through
+P667's asking paste, Up/Down for the last 20 lines sent, keypad Enter; it scrolls sideways to keep
+the caret in. Ctrl+C or mouse2 copies the field's selection, else the history's (`clipboard_set`),
+and "Copied" shows. Shut, the lines sit where they sit open, so opening moves none.
+`hud_chat_size` 24 -> 20, and a config still at 24 moves once (`HE_MigrateDefaults`, mark
+`hud_chat_rev`). `chat_rows` prints the panel, the claims, the field and both selections;
+`chat_mouse <x> <y> [<scan> <0|1>]` drives the cursor through the whole chain.
+
+**Verified:** build 0 warnings in a clean worktree on FTESurf main. `tools/p821chat.py` (one
+windowed client hosting a listen server in an owned basedir; keys through `vote key`, the cursor
+through `chat_mouse`; grades `chat_rows`, the cursor register and the real Windows clipboard): 27 of
+28 as run on exe f49207dd, the 28th (no focus) failing on its own regex and re-graded from that log;
+the pre-review build 26 of 26 on 219c737c, f49207dd and the 0.1.27 release exe e19f681d. Checks: a
+saved 24 reads 20, panel 1.00 and claims 1024 open, 0 and 0 shut; drags over a row, over a wrapped
+coloured line (its plain text whole), over two messages both ways; mouse2 and Ctrl+C copies; double
+and triple click; typing, Shift+Left, Ctrl+Left, Home/End, Ctrl+A, Ctrl+Backspace; field click and
+drag; Enter, Esc and the console key give the mouse back; Up/Down; wheel and a line arriving while
+scrolled; over the key panel chat claims nothing; over the zone editor looking it claims and the
+editor stays open (state 1). Screenshots read by eye. One review (predicate/control flow and the
+input chain) found six defects, all fixed: the zone editor closing, two lines moving a scrolled view,
+a click before motion at a stale position, the hit band half a gap below the highlight, a PM
+recalled into public chat, a slot overwritten between draw and click. **Known:** a Ctrl released
+under the console stays held for the field (`ui_kmods`, BACKLOG); real OS input and the look are
+Lex's check (lextest.md).
+
 ## Patch 820 — imported replays' failed stage attempts; one "successful only" switch on the bar (csprogs)
 
 **Problem:** Lex, 19 Oct: "during demo playback allow filtering lines for suscessfull completes for
@@ -108,13 +152,17 @@ matches the already-shipped online disclosure: new acceptance includes uploads
 unless opted out, old answers do not grant the new scope, and Stop remains effective.
 Only description text changes; defaults, saved answers, setters and gates are untouched.
 
-**Verified:** Initial isolated Windows/ARM controls: genuine 21.920 s and zero PASS;
-positive, negative and overflowing accounting REFUSE; diagnostic replay still acts.
-Thirty normalized determinism lines match across three maps, with prop geometry
-acting. Two fresh independent reviews found one lexical gap: overlong zero-padded
-counters escaped the native refusal; an acting native/reader pair reproduced it.
-The token-length correction and integration with published P818–P820 require fresh
-review/build/native controls before promotion. Not deployed; no calibration claim.
+**Verified:** Exact integrated source `ebc96a081` includes the published P818 surf-view
+code unchanged. Full Windows/QC build and native ARM build succeed, no new diagnostics
+in changed native units. Both platforms: genuine 21.920 s, inert zero, padded-ten-digit
+and whitespace controls PASS; positive exclusions, negative/overflow counters and
+both overlong-zero-padding positions explicitly REFUSE. Diagnostic replay still acts.
+Thirty normalized lines match across bhop_eazy, surf_ace and surf_boreas, including
+an acting prop-piece control. Python 409 checks / zero failed; same captured corpus
+bytes (318 recordings / 109 views) have identical before/after reader findings.
+Two fresh independent review rounds: the first lexical finding was reproduced and
+fixed; round two found no issues. Source verified; deployment recorded separately.
+No native frozen-clock reconstruction, legacy eligibility or calibration claim.
 
 ## Patch 815 — admin zone uploads are published by themselves; clients show the lobby's zones (qwprogs, csprogs, menu, surfd zonepub)
 
