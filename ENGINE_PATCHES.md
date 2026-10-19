@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 839 — the 3D viewer moves a static prop only when it is drawn; the playhead is an element (surfd web)
+
+**Problem:** after P835, a static prop's per-frame `movement` was ~15% of a surf_demise frame:
+every prop ran its materials' proxies and eye updates whether or not any view drew it. (The
+P835 measurement called it a LOD pick; noclip's `getLODModelIndex` is a constant 0.) And the
+timeline graph redrew its whole canvas each frame to move a 1-pixel playhead.
+
+**Change:** a vendor patch (tools/vendor.py) runs a proxy-free static prop's movement at the
+first view that draws it each frame, with the movement phase's view put back for the call; a
+prop with any material proxy, or with a material still loading, moves every frame as upstream,
+because a proxy can keep state in its material's params between calls (an Add into its own
+source accumulates; a proxy reading a later one's output lags). A deferred call that throws
+moves the prop back to the movement phase, where upstream throws. The graph's traces go onto
+its canvas once per change; the playhead is an element at the same pixel, clipped to the same
+rounded edge, hidden where the canvas line was off the canvas. `watchHold` pins the scene clock
+for `tools/pixels.mjs`. Live on surfd 21b01ff6 since 2026-10-19T16:13:52Z.
+
+**Verified:** surf_demise first person, clock pinned, control build against new, two rounds:
+109/78/107 -> 121/87/117 and 124/87/120 fps (+11..+16%); six views (first person and chase at
+1, 15, 30 s) hash identically, each distinct and stable. The playhead read from the page: hidden
+with no run and at the end, 1 x 54 px at x 33 (0 s) and 518 (15 s), the old line's column. In
+fps the playhead change is within noise. One review round: the proxy-state and mid-frame-throw
+cases it found are the rules above; a round whose map never finished building (six identical
+hashes, 5,500 fps) is now VOID in the arm.
+
 ## Patch 838 — closing native carry cannot be negative (reader)
 
 **Problem:** The reader accepted a finite negative `inend` remainder. The native
