@@ -7422,7 +7422,10 @@ static qboolean GLBE_BlendWorldRasterEmptyNear(batch_t *batch, const mesh_t *mes
 	unsigned int cull, ia, ib, ic;
 	int v, t, j;
 	qboolean nearspan = false, behind = true, nondegenerate = false;
-	if (r_blendsort.ival != 2 || !GLBE_BlendWorldBatchEligible(batch) ||
+	//FTESurf Patch 832: the caller has proven the batch GLBE_BlendWorldBatchEligible (the gather's
+	//cullworld). Testing it again here walked every face of the batch once per face: 11.7% of a
+	//frame on surf_voyager in Lex's setup.
+	if (r_blendsort.ival != 2 ||
 		!mesh || !mesh->xyz_array || !mesh->indexes || mesh->xyz2_array || mesh->numbones ||
 		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
 		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)

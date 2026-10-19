@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 832 — r_blendsort 2 stops re-checking a batch once per face (engine)
+
+**Problem (Lex's setup, 19 Oct):** Lex runs `r_blendsort 2`, and it cost 1.35 ms a frame over mode 1
+on surf_voyager with his config and eight board lines (transparent row 1.40 against 0.18 ms; frame
+4.70 against 3.35). A sampling profile put 11.7% of the frame in GLBE_BlendFaceEligible: for every
+face of a blended world batch, GLBE_SubmitBlendedFaces' gather called GLBE_BlendWorldRasterEmptyNear,
+which re-ran GLBE_BlendWorldBatchEligible -- a walk over every face of that batch. Quadratic in the
+batch's faces, every frame.
+
+**Change:** GLBE_BlendWorldRasterEmptyNear no longer tests the batch; its one caller does so already
+(`cullworld`, computed once per batch before the loop), and the test is a pure function of a batch
+that does not change during it. Same faces, same order, same draws.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER):**
+- Same arm before and after (Lex's config, voyager, three rounds of each mode in one process):
+  mode 2's transparent row 1.40 -> 0.80 ms, frame 4.70 -> 4.37 ms; the function leaves the
+  profile's top.
+- Same process, same paused view: a throwaway build put the old re-check back behind
+  `r_instancing 3`. `r_blendtrace` is identical with and without it on surf_voyager and
+  surf_joutsenlaulu: the gathered and admitted counts (809/128 and 307/101) and the first 128
+  sorted commands with their flags and depths (the trace prints no more), while voyager's transparent row moves 0.77 -> 1.44 ms with it back (3 pairs; joutsenlaulu's
+  batches are small and do not move). Pixels could not measure this: two paused shots of ONE
+  setting on voyager differ by 42k pixels.
+
+**Known:** mode 2 still costs ~0.6 ms over mode 1 there: one program setup per blended face, and the
+sky's polygon clipping (ClipSkyPolygon ~7.5%, which mode 1 pays too).
+
 ## Patch 831 — props drawn in runs: sorted, instanced, and the world walk tests fewer planes (engine + hl2 plugin)
 
 **Problem (Lex's r_budget dumps, 19 Oct):** every heavy map was CPU-bound with the GPU mostly idle.
