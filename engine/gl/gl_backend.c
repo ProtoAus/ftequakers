@@ -23,6 +23,8 @@ void DumpGLState(void);
 extern cvar_t gl_overbright;
 extern cvar_t r_multidraw;	//FTESurf Patch 831
 extern cvar_t r_instancing;	//FTESurf Patch 831
+extern cvar_t r_skyroomneed;	//FTESurf Patch 850
+extern unsigned int r_vs_skydrawn, r_vs_skyskipped;
 extern qboolean r_fakeshadows;
 #ifdef RTLIGHTS
 qboolean Sh_AnyLightToDraw(void);
@@ -9161,8 +9163,20 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled)
 		{
 			batch_t *b;
+			int seen = 0;
+			//FTESurf Patch 850: the 3D sky shows only through sky surfaces, so a water capture with
+			//none to draw (a refraction under the water, a reflection of a cave) does not render it.
+			//Not a portal: it inherits the near view's areas, so the far side's sky surfaces can be
+			//culled while the 3D sky still fills what nothing else drew (surf_kitsune's door).
+			qboolean need = (r_refdef.capturekind >= 1 && r_skyroomneed.ival >= 1) ||
+				(!r_refdef.recurse && r_skyroomneed.ival >= 2);
 			budgetprev = GLBudget_Push(GPUB_SKYROOM);
 			for (b = worldbatches[SHADER_SORT_SKY]; b; b = b->next)
+			{
+				if (b->meshes > b->firstmesh)
+					seen++;
+				else if (need)
+					continue;
 				if (R_DrawSkyroom(b->shader))
 				{
 					GL_CullFace(0);//make sure flipcull reversion takes effect
@@ -9171,8 +9185,12 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 					GL_ForceDepthWritable();
 					qglClear(GL_DEPTH_BUFFER_BIT);
 					r_refdef.flags |= RDF_SKIPSKY;
+					r_vs_skydrawn++;
 					break;
 				}
+			}
+			if (!seen && need)
+				r_vs_skyskipped++;
 			GLBudget_Pop(budgetprev);
 		}
 		if (gl_overbright.modified)

@@ -329,6 +329,8 @@ typedef struct refdef_s
 	vec4_t		skyroom_spin;		/*the camera spin for sky rooms*/
 	qboolean	skyroom_enabled;	/*whether a skyroom position is defined*/
 	int			firstvisedict;		/*so we can skip visedicts in skies*/
+	int			visskipfrom, visskipto;	/*FTESurf Patch 850: in a nested view, the outer views' own entities*/
+	int			capturekind;		/*FTESurf Patch 850: GLR_DrawPortal's type, 0 for a portal or the main view*/
 
 	pxrect_t	pxrect;				/*vrect, but in pixels rather than virtual coords*/
 	qboolean	externalview;		/*draw external models and not viewmodels*/

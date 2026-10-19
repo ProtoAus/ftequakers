@@ -379,6 +379,15 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 
 	oldrefdef = r_refdef;
 	r_refdef.recurse+=1;
+	{	//FTESurf Patch 850: the sky room's own props, not again the outer views' (R_RenderScene_Internal)
+		extern cvar_t r_nestedents;
+		extern int r_visdynamic;
+		if (r_nestedents.ival && r_visdynamic < cl_numvisedicts)
+		{
+			r_refdef.visskipfrom = r_visdynamic;
+			r_refdef.visskipto = cl_numvisedicts;
+		}
+	}
 
 //	if (r_ignoreentpvs.ival)	//if we're ignoring ent pvs then we're probably drawing lots of ents in the skybox that shouldn't be there
 //		r_refdef.firstvisedict = cl_numvisedicts;

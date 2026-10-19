@@ -171,6 +171,12 @@ cvar_t gl_line_width						= CVARD ("gl_line_width", "1", "Pixel width of CSQC de
 cvar_t gl_2dline_width						= CVARD ("gl_2dline_width", "2", "Pixel width of 2D drawline strokes (e.g. the hit-marker reticle). Separate from gl_line_width (3D debug wireframe). Driver-clamped.");
 cvar_t r_wireframe_smooth					= CVAR ("r_wireframe_smooth", "0");
 cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refraction. If 0, just renders as a portal and uses a copy of the current framebuffer.");
+//FTESurf Patch 850: what a water capture, a portal view and the 3D sky redraw.
+#ifdef GLQUAKE
+void R_ViewStats_f(void);
+#endif
+cvar_t r_nestedents						= CVARD ("r_nestedents", "1", "1: a nested view (a water reflection or refraction, a portal, the 3D sky) draws the frame's own entities and the props and statics its own world walk found, not again the props its outer views found (each copy of which it drew a second time). 0: every entity in the list, as before Patch 850.");
+cvar_t r_skyroomneed						= CVARD ("r_skyroomneed", "2", "Where the 3D sky is drawn only if the view has sky surfaces to show it through.\n1: water reflections and refractions (a refraction looks under the water; a cave's reflection has no sky).\n2: and the main view, which then shows what is behind a crack in the world instead of the 3D sky.\n0: every view of a map with sky draws it, as before Patch 850. Portal views always do: they inherit the near view's areas, so the far side's sky surfaces can be culled while the 3D sky still shows.");
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
@@ -1439,6 +1445,11 @@ void Renderer_Init(void)
 	Cvar_Register (&gl_line_width, GRAPHICALNICETIES);
 	Cvar_Register (&gl_2dline_width, GRAPHICALNICETIES);
 	Cvar_Register (&r_refract_fbo, GRAPHICALNICETIES);
+	Cvar_Register (&r_nestedents, GRAPHICALNICETIES);	//FTESurf Patch 850
+	Cvar_Register (&r_skyroomneed, GRAPHICALNICETIES);
+#ifdef GLQUAKE
+	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: views rendered per frame since the last call -- by depth, 3D skies drawn and skipped, entities a nested view passed over.");
+#endif
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
 	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288

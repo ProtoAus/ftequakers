@@ -3794,9 +3794,19 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		}
 	}
 
+	if (bemode == BEM_STANDARD && r_refdef.visskipto > r_refdef.visskipfrom)
+	{	//FTESurf Patch 850
+		extern unsigned int r_vs_entskipped;
+		r_vs_entskipped += r_refdef.visskipto - r_refdef.visskipfrom;
+	}
 	// draw sprites seperately, because of alpha blending
 	for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 	{
+		if (i >= r_refdef.visskipfrom && i < r_refdef.visskipto)
+		{	//FTESurf Patch 850: an outer view's own props and statics (R_RenderScene_Internal)
+			i = r_refdef.visskipto - 1;
+			continue;
+		}
 		ent = &cl_visedicts[i];
 
 		if ((r_refdef.externalview || chase_active.ival) && (ent->flags & RF_FIRSTPERSON))
