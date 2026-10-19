@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 824 — the chat box's width, height and full height; a field that wraps; hud_edit's Chat pane (csprogs)
+
+**Problem:** Lex, on P821's box: "the chatbox is to long", wanted "a option to display full height
+without the text being there to fill it up", the text box to "extend to 2 lines" once a line is
+full, and "a hud_edit menu section for chatbox configuration ... so I can find how I like it". The
+width was fixed at 45% of the screen, the open box only ever as tall as its chat, the field one
+row scrolled sideways, and no chat setting but its on/off switch was in hud_edit.
+
+**Change:** `cl_chat.qc`: `hud_chat_w` (0.35 of the screen, was a fixed 0.45), `hud_chat_rows` (10,
+the rows the box holds; was max(hud_chat_lines, 10)), `hud_chat_full` (0; 1 opens the box its whole
+height) and `hud_chat_bg` (0.88, its opacity). The field wraps raw text at a space (a word wider
+than a row is cut) and grows a row at a time, lifting the history and the box; the caret, the
+mouse and the selection work across its rows. A `hud_chat_size` of 0 is now 10 x hud_scale (20 at
+scale 2, was 4). While `hud_edit` is up the box draws open (no mouse, no caret) and hands over its
+rect with the bottom-left corner as the anchor, so it shows each setting as it changes and drags.
+`cl_hudedit.qc`: a listed "Chat" element (its on/off, Size 16-28, drag, reset to 0.05/0.95) whose
+pane has Width, Height, Open height, Shut show, Stays for and Box; the Chat switch left Display
+Info. Switched off, the box is not drawn and the editor's stand-in hangs up from the anchor
+(HEA_LB). Pass one registers the chat's box first, so a panel over it wins the overlap. Reset all
+writes the seven chat settings as literals: a value saved before the code registers it becomes its
+default. HE_MAX and HUDE_MAX 28 -> 30. `chat_rows` prints the field's row starts.
+
+**Verified:** build 0 warnings. `tools/p821chat.py` 40 of 40 on exe f49207dd (the window never
+foreground): P821's 28, and width 35% of 1280; full height taller than fit by (cap - used) rows and
+Height 6 four rows shorter than 10; a 110-character line wrapping the field to 3 rows with the field
+and the box growing by 2 rows; a click at row 2's start putting the caret on its first byte; emptied,
+one row; hud_edit showing the box open (claims 4 only) and listing Chat as drawn; the pane's seven
+chips; the Width chip stepping 35% to 40% with the box following; Chat off = no box, "not drawn";
+reset all from a `seta hud_chat_bg 0.5` saved before the code registered it (its default then read
+0.5) back to 0.88, and Width to 35%; `hud_edit ui` lists the chat's rect first. Screenshots read by
+eye. One review (indices, layout, the editor) found reset all keeping saved values, the box taking the
+Comparison's and the trainer's clicks, the off switch showing nothing, a stale p798 cfg, no wrap
+minimum, no face term in the wrap cache and a lighter default shadow, all fixed. **Known:** a click
+right of a row cut mid-word puts the caret at the next row's start (the same byte); real OS input
+and the look are Lex's check (lextest.md).
+
 ## Patch 823 — the first-boot screens in the menus' style; no Updates screen (menu)
 
 **Problem (Lex, 19 Oct):** the terms, the Steam offer and the update screen did not look like the
