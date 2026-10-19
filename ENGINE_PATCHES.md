@@ -1,5 +1,105 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 811 — a lobby's saves and the install's are one list (qwprogs, csprogs)
+
+**Problem:** A save made in a lobby lives on the lobby's disk (data/saves/<map>/@<guid>), one made
+in a local game on the player's (data/saves/<map>), and neither side saw the other's: saves
+"disappeared" between the lobbies and a local game.
+
+**Change:** `cmd savesync list|add|del` (sv_savesync.qc: the player's own lobby block only; ten a
+second, and an add or delete also pays SV_SaveLocRate's charge, quietly) and the client half,
+cl_savesync.qc. A few seconds into each lobby map the client lists the block (16 rows a page,
+numbered, paced under the rate) and compares it with the install's list and a ledger
+(<lobby root>/sync.txt: the keys both held last time). A row is the same save on both sides when
+its origin and view agree within 0.05 (SS_Same), never by row or folder number. Lobby-only rows not
+in the ledger are copied into the install, install-only ones sent up; a ledgered key one side has
+lost entirely, from a listing that came back whole and with every install file read, is deleted on
+the other -- one row, a copy before an original. More than 5 and over half of either list at once is
+read as a lost folder and restored instead, unless a delete-all was seen. During the visit every new
+lobby row is copied as it lands (its picture a second later) and a delete follows once no lobby row
+of that key is left. The rewind's current resume row is never listed, pushed or matched. Both
+directions write the replay-point shape `sl_saveview` already takes from a client (idle timer, no
+run, the velocity under `rwvel`): a lobby run's recording stays the lobby's, and nothing sent up is
+timed. Pictures (trail.txt) are copied client side with their header made a placement's (ticks -1,
+so Trail_Load takes them), only when they end at the row. An install file is never removed: a delete
+moves it to data/saves/<map>/deleted/. A delete carried to the lobby is `sl_del`'s. Lists over 400
+on either side are not synced. `savesync status` / `now`; `cl_savesync 0` turns it off.
+
+The client learns its save root (`data/saves/<map>/@<guid>` in a lobby) from a string stat,
+STAT_FS_SAVEROOT, instead of the `set cl_saveroot` the server stuffed since Patch 333. CSQC's
+cvar_string returns a cvar's latched_string, and a cvar the server sets keeps the value from before
+the server took it there, so every read after a session's first root returned the first: after a
+lobby map change the client's seq.txt and run.view went into the first map's folder. A root not in
+yet or naming another map goes to `@pending`, and the save-event listeners leave an event unread
+until the root is in (string stats follow number stats in a packet) and never act on another
+player's stats (an engine spectator) or a demo's.
+
+**Verified:** 0 warnings. `tools/p811savesync.py` (a lobby server on its own basedir; one client
+install seeded with two offline saves): the control (main) lists neither and copies nothing; the
+subject passes all 10 -- both go up; S1 idle, S2 on a run and S3 held at S2's place are made, S1 and
+S2 copied (S2's picture rewritten, 18 samples); deleting L1's row in the lobby moves the install's
+L1 to deleted/, deleting S3 keeps S2's copy; after an offline delete and an offline save the second
+visit deletes S1 there and sends L3 up; after a changelevel the new map's save lands in its own
+@guid folder and the sync goes live there (the latch build: @pending, and the sync off on another
+map's root); a local game lists L2, S2, L3 and loading S2 draws its line. The same arm passes on the
+0.1.27 release exe. Five review rounds, and one on the root stat; the integrity lens found no row
+that can load timed or reach another block. The packet split behind the listeners' wait was not
+reproduced on localhost (tools/p811rootwait.py: three retries, no wait). Not checked: two machines
+on one guid, lists near 400 rows.
+
+## Patch 809 — ent_view's MOUSE3 is a bind (csprogs, default.cfg)
+
+**Problem:** MOUSE3 toggled the entity overlay from inside the input chain (Ev_PassiveKey since
+Patch 331), ahead of the key's bind: a MOUSE3 bound to anything else still opened ent_view, and the
+overlay could not be put on another key.
+
+**Change:** The chain keeps only ESC for the overlay. default.cfg binds `MOUSE3 ent_cursor`, and
+config_menu has an Entity view row (`ent_cursor`, also counting `ent_view`) at the end of Menus,
+rebindable like any other; the saves/run rows move down one (14-25). With ent_panel's cursor taken,
+the ent_cursor key lets it go as MOUSE3 did (Ev_InputEvent, before a results card could claim it),
+and spectating keeps the bind (SPEC_CMDS). KC_Assign's "with the save menu open" note tests the
+row's id, not a row number (Patch 806 moved the save menu off row 12). The results card still takes
+MOUSE3 while a card is up.
+
+**Verified:** 0 warnings. `tools/p809entview.py`: MOUSE3 fed through CL_InputEvent (`vote key 514`)
+is taken and opens the overlay on the control build and passes with no overlay on the subject; `bind
+MOUSE3` reads `ent_cursor`, `config_menu status` lists the row, and a typed `ent_cursor` opens the
+overlay. The panel's screenshot shows the Entity view row under Menus inside the panel. Not checked:
+a real MOUSE3 press (the bind running), spectating with it (Lex).
+
+## Patch 808 — the rewind's resume counts 3 again; a save or resume on its cursor is that moment's (csprogs)
+
+**Problem:** Patch 784 set `hud_rewind_countdown` to 0 at Lex's word; he has asked for the 3 seconds
+back. A save made on the rewind's cursor (S or a key bound to `sl_save`) wrote the Segments column
+of the pinned head, not of the cursor: on surf_dune a save at y 881 carried `anchorpos` y 1050, so
+loading it listed the segments after the save and the restore's guard waited for a body 170 units
+away. Its `.view` sidecar was walked back at most 256 frames, so at 1000 fps a cursor 0.5 s back
+kept frames 5 ticks past the save (last tick 29, save 24). A resume (ENTER) wrote neither: the
+server overwrites its save event with the load in the same frame, so the Segments panel kept the
+head's rows, and the live sidecar ran on from the head while the run's clock went back to the cursor
+-- camera frames for ticks the recording no longer held.
+
+**Change:** `hud_rewind_countdown` defaults to 3. `cl_board.qc` keeps the column by predicted run
+tick (2048 kept: at each row, at most every 2 ticks on another change, every 16 otherwise; never
+under the rewind's pin; started again by a new run, a retry or any other load). A save the rewind
+makes behind its head, and the rewind's own resume (`Rewind_GoLoaded`: the load answering its go,
+whenever it is read, and only at the cursor's place), take the column of that tick with the anchor
+at the row's origin, or none -- never the head's; the save events are read while the rewind browses.
+For the same two the view trim walks back as far as it takes from the buffer as the go found it; the
+resume writes its row's `run.view`, cuts the live sidecar there, and forgets every warm mark past
+the cut. Any load, a new recording and a dropped one forget the marks into lines they threw away
+(older: a warm load of a later save could take another attempt's frames). `rewind status` prints the
+live sidecar's backward steps and the column's rows.
+
+**Verified:** 0 warnings. `tools/p808rewind.py` (dedicated surf_dune, 1000 fps): the control build
+(main 633d131e) keeps the timed prefix, picture and segmented load and fails s-column (anchor y 1050
+against 881), s-view (tick 29 against 24) and go-column (no file); the subject passes all 14, among
+them the 3 s hold, the run after it, the resume row's column at its origin and a live sidecar with
+no backward step. With the resume's view fix taken out, go-view fails (one backward step, 951 lines
+against 600). `--lobby` (the server on its own basedir) passes too. Five review rounds (control
+flow; evidence and data; what a cheater gains; then integrity only). Not checked: the panel as drawn
+(Lex); a cursor minutes back; a resume after a cold load of another attempt's save.
+
 ## Patch 821 — the open chat is a panel: its history, a real text field, the mouse to select and copy (csprogs)
 
 **Problem:** Lex: the chatbox "doesn't have a real text input that you can highlight and/copy/select";
