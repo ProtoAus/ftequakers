@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 827 — the live line's Line_End redoes only what new samples touch (csprogs)
+
+**Problem (Lex's r_budget dumps, 19 Oct):** `r_budget_csqc` put Line_End at 0.43 ms a frame on
+surf_boreas. The live trail calls it every 16 samples, about four times a second, and it rebuilt
+every table from sample 0: chunk and group spheres, breaks, gains, stride errors and the speed
+range. A whole pass is 337 QC instructions a sample (offline VM) and took 4-5 ms for a
+4,588-sample replay in the engine, about 1 us a sample, so a 5-minute run stalled ~20 ms every
+quarter second.
+
+**Change:** cl_lines.qc keeps the count and base each slot's last Line_End covered
+(`ln_endn`/`ln_endb`). Line_Add only appends, so the next pass starts at the first chunk, group
+and gain the new samples reach; the break list and the trail's speed sums carry on in the same
+order, so they are equal to the bit. Line_Clear and the past-the-cap halving zero the mark; a
+moved base or a shorter line makes a whole pass. `lines native` prints whole and partial passes.
+
+**Verified:** build 0 warnings. Offline A/B on the review626 QC VM, both builds fed the same
+streams (control main 3a47c916 = the installed adecfe6c): every table equal bit for bit at 51
+checkpoints (a 20,000-sample trail, five halvings, a halving after a long gap, more than 512
+breaks, irregular calls, the replay's fade stamps). A pass costs 10-20k instructions at any
+length; the whole pass at 20,000 is 6.75M. Two mutants fail it (gains from one back; the
+halving's reset removed, which only the gap scenario catches). cfg/test/p827lines.cfg on the
+installed exe: no QC errors, the trail's first pass whole and the next five partial.
+
+**Known:** the other levers from the same dumps are in BACKLOG ("Frame time: CPU levers").
+
 ## Patch 825 — the board plays a run in 3D (surfd + web; no engine, QC or player-file change)
 
 **Problem (Lex, 19 Oct):** people should be able to watch a recorded run, as if in game, and read
