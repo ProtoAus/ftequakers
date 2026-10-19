@@ -1125,17 +1125,21 @@ static void Key_ConSelfTest_f (void)
 				"kz", "bhop_", "ski", "mom", "1", "surf_null", "SURF_N", "*_mom", "surf_?a"};
 			static const char *typed = "map surf_null";
 			cvar_t *mcc = Cvar_FindVar("sv_mapcompletioncache");
-			int savemcc = mcc->ival, q, mode, differ = 0, names = 0, nl, nc, d;
+			int savemcc = mcc->ival, q, mode, differ = 0, names = 0, nl, nc, d, lenient;
 			double t, ms[3] = {0,0,0}, first = 0;
 			char pre[64];
 			size_t k, keys = strlen(typed) - 4;
 
-			for (q = 0; q < countof(queries); q++)
-			{
-				d = SV_MapCompletionCompare(queries[q], &nl, &nc);
-				Con_Printf ("  (map \"%s\": %i live, %i cached, %i differ)\n", queries[q], nl, nc, d);
-				differ += d;
-				names += nl;
+			for (lenient = 0; lenient < 2; lenient++)
+			{	//prefix matching (the stock default) and Lex's substring matching
+				Cvar_SetValue(mc, lenient);
+				for (q = 0; q < countof(queries); q++)
+				{
+					d = SV_MapCompletionCompare(queries[q], &nl, &nc);
+					Con_Printf ("  (map \"%s\", sv_mapcompletion %i: %i live, %i cached, %i differ)\n", queries[q], lenient, nl, nc, d);
+					differ += d;
+					names += nl;
+				}
 			}
 			Key_ConCheck("map names compared, live (>0 = ran)", names > 0, 1);
 			Key_ConCheck("cached names differing from live", differ, 0);
