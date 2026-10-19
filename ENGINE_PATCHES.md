@@ -63,6 +63,58 @@ report line):**
 compile the INSTANCED permutation, which the fallback covers but no AMD/Intel machine has run.
 Players get it with the next release; the lobbies run no client code from it.
 
+## Patch 830 — /api/replay refuses review-rejected recordings (surfd)
+
+**Problem:** `/api/replay/<id>` refused only a banned owner's rows, so a recording an admin
+had rejected still resolved by id while its board row and run page (`_web_run_file`) were gone.
+
+**Change:** `replay()` answers 404 for a run or evidence recording whose own review is a
+reject, and for evidence whose run has a rejected bound recording (`_run_rejected`: restage
+parks that run's stage rows). A run's own recording answers to its own review alone, because
+its leg-0 row stands when an evidence copy is rejected. Unreviewed evidence stays served:
+`_PARENT_SQL` points a stage row with no recording of its own at its run's leg-0 replay, run
+first, else evidence, and the game's board lines fetch it here. Imports are another
+board's and are not gated. `/api/board`'s raw `player` on community rows is not changed: the
+client hashes it as an identity (own row, menu focus, owner pick), so the fix needs a client
+field first (BACKLOG).
+
+**Verified:** test_web 6b3: run served, rejected 404, approved 200; evidence unreviewed 200,
+rejected 404; a run's evidence copy 200, then 404 once the run is rejected; a rejected evidence
+copy leaves the run's recording served and its row standing. Mutants: gating kind `run` only
+fails three of those checks, applying the run-wide rule to runs fails the last.
+
+## Patch 829 — the 3D viewer draws zones, stage times for imports, the game's body (surfd + web)
+
+**Problem:** P825's viewer drew the run line and bodies as a 2D overlay (through walls, dots
+for bodies), drew no zones, and had no stage times for an import, which records no `split`.
+Board rows had no way into it. And surfd's run, board and map routes 504'd: each new gunicorn
+worker (one every ~5,000 requests, about every 18 minutes on 19 Oct) scanned the map library
+inside its first request, and zonefit.has_timer over the Pi's 2,151 BSPs took 20.8 s cold
+(0.014 s warm).
+
+**Change:** `zones.ts` reads the zone file the game downloads and infers each stage's time
+as the first touch of its stage zone, with the game's test (`Zone_BoxInside`: Z slab, PNPOLY,
+the 32x32 rect against the ring; the standing hull, as the timer) and each tick's travel
+swept in 2-unit steps, marked ≈; the HUD stage and timeline follow. A vendor patch
+(`onWorldPasses`) lets `world.ts` draw through
+noclip's DebugDraw into the main view's colour and depth: zones, a 3-unit run-line ribbon, and
+the game's pentagon prism for the player and the ghost; behind the map at 15%. Board rows get
+a 3D link. surfd keeps the timer answers in `data/maps_timer_cache.json` by stem, stat and
+zonefit.py's hash, so a new worker stats the library instead of opening it; only real answers
+are kept (`zonefit.timer_read` says None for an OSError or MemoryError), entries merge, and one
+scan runs at a time. Live on surfd 9b917197 since 2026-10-19T10:04:51Z.
+
+**Verified:** `zones_check.ts`: 52 of 52 recorded splits within 0.05 s of the inference
+(restarts not compared). Over all 648 zone files, every stage zone is reachable (a review's
+probes; the first, convex cut stalled 20 tracks and lost 63 splits to the 155 concave stage
+regions). Headless Chrome on surf_beginner (eye, chase, overhead, a Momentum ghost with inferred
+splits) and surf_prosurf bonus 4 (19 model-less props counted, no render error). test_web: a
+new worker with the cache reads no BSP, a changed BSP is read alone, a corrupt cache is a cold
+scan with the right answer (also nested past the recursion limit), a non-bool flag or another
+zonefit's answers are not believed, a failed read is not kept, an empty listing keeps the cache,
+three cold callers run one scan; mutants without the cache read, the lock or the merge, or
+keeping failed reads, each fail their own check. Three review rounds.
+
 ## Patch 828 — a closing horizon must reach the last hold boundary (reader)
 
 **Problem:** A thaw can be the final event in a complete `holdclock 1` recording,
