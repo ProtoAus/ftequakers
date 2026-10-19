@@ -31,6 +31,216 @@ old-binary acting controls reproduce the whitespace loss. Reader checks now665,
 with six census parser tests. Fresh R2, clean final builds, ARM runtime and rollout
 remain pending.
 
+## Patch 840 — the unranked line names the input setting; slow-motion runs are measured and demoted (QC + reccheck + surfd)
+
+**Problem (Lex, 20 Oct):** a tester's two lobby runs played at half speed stood on the community
+board as `community clean`, PASS, verified -- community only through TF_NOPROFILE ("input mode"),
+with nothing saying which setting. The slow motion itself passed everything: the counted clock is
+honest GAME time, the re-simulation reproduces it, and the files pass reccheck (one sample per
+tick: the whole client clock was slowed). Start-to-submit wall time was 1.99x the run time on both,
+against 0.96-1.04 on 52 other single-attempt lobby runs (1 s stamps).
+
+**Change:** `FS_ProfileWhy`/`SV_ProfileWhy` return which profile test failed (rawinput, m_filter,
+m_accel, rawmice, silent, platform, changed); the .rec header gains `inprof <verdict> <report...>`,
+the finish writes `prof <verdict>`, `cmd timer` prints it, and the lobby's unranked line reads e.g.
+"input mode: m_accel is on". Per packet, `SV_ClockFrame` adds wall minus mover game seconds into a
+DEBT; a packet interval of 0.15 s or more is a stall whose loss (if >= 0.2 s) is credited up to
+0.5 s from a bucket of 4 that refills one a minute; a SERVER stall (its own frame gap at
+StartFrame) is excused outright. Every rise of the debt less 0.2 s is summed, so surplus repays
+but never unspends; `TF_SLOWCLOCK` (524288, TF_UNCERT, surfd `certifiable()`) when that sum reaches
+`run_slowclock` (5 s; 0 off). The state is carried by saves (`slowclk`: retry, loads, Multi-Session)
+and the rewind ring. The finish writes `clk <bound> <hyst> <allow> <wall> <stalls> <credited> <debt>
+<behind>`; reccheck judges both bits from the file after `end`. surfd's admin shows the reason word
+and the clock. Flags prints that used %g now use %d (the word passes 999999).
+
+**Verified:** `tools/p840clock.py` (real dedicated socket, bhop_eazy + cfg/test/p840.zones.json, a
+test-only actor csprogs that scales usercmd time; the lobby-run shape is x0.5 with half the
+packets): an honest client SUSPENDED 1.5 s reads 0 behind; a retried honest run 0; the actor slowed
+for the whole run 4.4 s behind, TF_SLOWCLOCK, `inprof`/`prof` m_accel, reccheck clean; slowed only
+while standing 2.3 s (bound 2 in the rig). Control (pre-patch qwprogs, same actor): no `clk`, no bit,
+unranked only by TF_NOPROFILE (flags 133124), the old tick report 356 ticks apart -- the lobby's
+19 Oct outcome. Four independent review rounds (control flow, evidence, cheater/false positive)
+drove the metric, the carry and the stall handling; their remaining design limits are in BACKLOG.
+reccheck 606 checks; old/new reccheck identical over the 629-file local corpus; none of the 393
+fleet files uses the new lines; surfd Flask suites pass on the Pi.
+Live 2026-10-19 (UTC): surfd 3334069f since 18:56:50Z; qwprogs babf2b9b / csprogs 2f86a702 on both
+installs and all 12 lobbies at 19:00Z (with P851); reccheck 77524170 at its three roots.
+
+## Patch 851 — m is goto_start, r is reset; the three in the key panel (csprogs + default.cfg)
+
+**Problem (Lex, 20 Oct):** "make m goto_start, and r is reset. make the 3 bindable in the config
+menu." default.cfg shipped m as `say !m` and r as `say !r`, and the key panel's Run group listed
+Restart and Respawn apart from the Reset stage row P848 appended.
+
+**Change:** default.cfg and defaultuser.cfg bind m goto_start and r reset. The Run group starts
+Restart run (goto_start, m; an old `say !m` counts as it), Reset stage (reset, r; `say !r` counts),
+Go to spawn (goto_spawn, no key); the hint strip's rows follow. A saved config keeps its binds.
+
+**Verified:** conbridge, the installed exe 775a1956 with this csprogs: `config_menu reset` then
+`bind m` / `bind r` -> "goto_start" / "reset"; `config_menu status` lists the three with keys [m],
+[r], []; the panel draws them together. FTESurf main 1266bed1.
+
+## Patch 848 — reset is the old goto_start; goto_start goes to the start of the run (qwprogs + csprogs)
+
+**Problem (Lex, 20 Oct):** "make a new command reset that does the job of goto_start but now make
+goto_start make you goto the start of the run, instead of resetting on a stage." goto_start was
+`!r` (P753): the start of the leg you are on, which mid-run past the leg's first segment is a stage
+restart (SV_TimerWouldRestartSeg).
+
+**Change:** `reset` is what goto_start was (WOP_RESET, else `cmd zone_reset`). goto_start sends `!r`
+too, keeping its save in the start box (P415) and its latched zone, except while the run is running
+past its leg's first segment, where it goes to the track's start: `!m` (WOP_SPAWN) or `!b N`
+(WOP_BONUS1 + N - 1), predicted as those ops already are. The server publishes the leg's first
+segment as STAT_FS_TIMERSTARTSEG (116, `run_t_startseg`). The key panel gains a Reset stage row
+(`reset`; default.cfg's `say !r` on r counts as it, and "reset keys" gives it r) and is one row
+taller; Restart keeps goto_start, the owner's r bind. The mid-run load refusal names goto_start's key.
+`reset` is allowed while spectating, as goto_start is.
+
+**Verified:** conbridge on surf_dune, this exe and csprogs: a full run flown through stage 2's start
+(the server's `cmd timer`: "track 0 leg 0 startseg 0 seg 1 of 3"), `reset` -> "stage 2 restarted --
+the run clock keeps going", `goto_start` -> "run cancelled (teleported)", "!m -- start of the map";
+armed at the start, goto_start -> "!r -- start of the map". The same on the 0.1.28 release exe
+(ff0f0a2d) with this csprogs, which logged no QC error. The first cut (goto_start always `!m`) lost
+P415's save and the latched zone; one review round found it, and that the panel's reset-keys disagreed
+with default.cfg.
+
+## Patch 847 — glow sprites and embers behind a translucent surface draw under it (client exe + csprogs)
+
+**Problem (Lex, 20 Oct):** after P843 the flame went behind surf_dune's grate, but the brazier's
+glow (env_sprite glow08, rendermode 9) and the embers still drew over it. Both are additive, and a
+CSQC polygon's flags can only push it later (DRAWFLAG_ADD to the additive sort, NODEPTHTEST to at
+least banner), after every blended surface, which writes no depth.
+
+**Change:** engine: DRAWFLAG_UNDERBLEND (0x2000) on R_BeginPolygon and AddTrisoup maps to
+BEF_UNDERBLEND, which BE_GenPolyBatches sorts into SHADER_SORT_UNDERWATER after its other
+adjustments; the forced blend stays. An older engine ignores the bit. QC: an additive sprite that is
+drawn (past the glare check) and roughly in view, with a translucent brush between it and the eye (a
+tracer whose mask is WINDOW alone, VBSP's translucent brushes being TRANSLUCENT|WINDOW), is drawn
+with it; each sprite is asked again after 0.25 s, at most `vbsp_sprite_under_rays` (2) rays a frame
+(a glare ray measured 27 us). The embers get a twin under `ftesurf_dotu` (the engine's BM_ADDA
+template on particles/ftesurf_dot in the underwater sort), chosen with the flame. `vbsp_sprite_under 0`
+and `vbsp_emit_flameunder 0` give the old order. Engine commit da30a1c21, merged over main with 846
+and 849 as b3f34daf9 (tag patch-847); exe stamp git-7546-patch-847-0-gb3f34daf9, sha256 775a1956.
+
+**Verified:** conbridge at Lex's save 2 on surf_dune (the grate's bar over the brazier), this exe and
+csprogs: in a box on the fire, pixels brighter than 80 were 5 with the switches on and 385 with both
+off; by eye flame, glow and embers are behind the bar. `vbsp_sprite_debug`: 3 glares drawn, 3 under,
+51 rays in the first seconds; from the stage-1 start every glow is hidden by the glare check and none
+is traced. `emit_list`: "flame and embers under ... 26 of 26 effects answering". On the 0.1.28 release
+exe the bit is ignored (glow over, as before) and the csprogs ran with no QC error. One review round:
+no engine defect; the unbudgeted first cut traced every additive sprite in front every eighth frame.
+
+## Patch 849 — r_budget and r_frametime's cvars are registered once (engine)
+
+**Problem (Lex, 20 Oct):** every launch printed "Can't register variable r_budget, already defined"
+and the same for r_budget_window, r_budget_csqc, r_frametime, r_frametime_seconds and
+r_frametime_window. Patches 782, 800 and 801 registered them in SCR_Init. R_ApplyRenderer
+(renderer.c) runs SCR_Init on every renderer start, and the config pass queues a vid_reload or
+vid_restart when the renderer is already up (cl_main.c), so the second registration was refused
+with that line each time. SCR_DeInit removes SCR_Init's commands; a cvar cannot be removed.
+Harmless, but noise on every launch.
+
+**Change:** cl_screen.c: the six Cvar_Register calls move to CLSCR_Init (CL_Init, once), with the
+same group.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; `cfg/test/p849cvars.cfg`: a launch, `vid_reload`,
+`vid_restart`, `cvarlist`):**
+- Control, the installed P846 exe 320a6806: 6 lines after `vid_reload` and 6 after `vid_restart`.
+- This build (git-7542-patch-849-0-g5516bf608, sha256 780afe5a): 0. Both restarts happened (two
+  "Setting windowed mode" lines), and `cvarlist` lists r_budget and r_frametime in both.
+- No review round: the change is the six registrations moving to the once-only init.
+
+## Patch 846 — the console: map names from a cached list; Tab, Enter and a click on completion rows; ` closes it (engine)
+
+**Problem (Lex's list, 20 Oct):**
+- Typing `map surf_n` juddered. SV_Map_c ran 18 COM_EnumerateFiles per keystroke, each over
+  every searchpath (23 here, the Momentum library directory among them): 139.5-148.3 ms a key
+  on this PC.
+- At `con_completionenter 1`, ENTER on a highlighted bare cvar (`cl_ya`, Down, `cl_yawspeed`)
+  ran it, which only prints it. Lex wants it typed in to take a value; `map surf_null` should
+  still run.
+- TAB with nothing highlighted typed the common prefix and highlighted row 1; a second TAB typed
+  the row.
+- A click on a completion row underlined it and did nothing. The popup (`con_completiondown 2`)
+  hangs below the console window, and Key_Console's window bounds test returned before the click
+  reached anything.
+- `` ` `` typed itself whenever the cursor was past column 0, instead of closing the console.
+- The `[focus] ... correcting` line printed on screen, often enough to be a nuisance.
+
+**Change:**
+- sv_ccmds.c: the map list is enumerated once (`maps/*`, `maps/*/*`), sorted, one entry per
+  path. Each keystroke runs SV_Map_c's own patterns over it with wildcmp, the filter every
+  backend uses. It is rebuilt when `FS_ListGeneration()` (fs.c) moves: a hash rebuild (where
+  PollChanges' external changes land), a mount, a full flush, or a file written or removed under
+  maps/. A typed path separator still takes the live globs (the cache holds two levels).
+  - Past Cmd_Complete's 256 slots, the rows kept are now the alphabetical first rather than the
+    first enumerated, and the count is of distinct maps (the live count had each searchpath's
+    copy: 3,380 against 2,297 for `map `).
+  - `sv_mapcompletioncache 0` is the old path; changing it rebuilds the list.
+- keys.c, at `con_completionenter 1` and `con_displaypossibilities 2`:
+  - ENTER on a highlighted bare cvar types `name `, and the footer shows its value and default.
+    Commands, aliases and argument rows still run.
+  - TAB with nothing highlighted types row 1.
+  - A press on a popup row types it (Con_CompletionRowAt in console.c, from the rows last
+    painted); in find mode it does not.
+  - The `` ` `` character goes to its bind. The character, not the key: keys are scancodes, so
+    shift's `~` and German `^` still type.
+  - `con_settext` and a click on a `/command` link in console output no longer leave row 1
+    highlighted.
+- gl_vidnt.c: the `[focus]` correction line goes to the log file only (Con_Log), where the
+  harnesses that count it read it. The correction itself is unchanged.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; `cfg/test/p846con.cfg`, surf_dune, Lex's default.cfg
+console settings, own build of this commit's tree):**
+- `con_selftest` now drives Key_Console with TAB, ENTER and `` ` ``; all checks pass.
+  - TAB on `cl_` gave `cl_addport` (row 1).
+  - ENTER on the `con_completionenter` row gave `con_completionenter ` with nothing highlighted.
+  - `` ` `` with `cl_` typed went to the bind and left the line alone; the same key's `~` typed.
+- Cached against live, SV_Map_c's whole output with no 256 cap (SV_MapCompletionCompare), over
+  18 queries, each at `sv_mapcompletion 0` and at 1 (36 compares):
+  - `""` (the whole library) gave 2,297 names both ways at either setting, with 0 differing.
+  - The rest were `_` (2,274), `b` (865), `bhop_` (591), `2`, `surf_s`, `surf_?a`, `1`,
+    `surf_a`, `kz`, `surf_n`, `SURF_N`, `mom`, `*_mom`, `ski`, `kits`, `surf_null` and `zzqq`.
+    0 names differ across all 36.
+- Per keystroke over the prefixes of `map surf_null`, four runs (the last on the stamped exe,
+  git-7540-patch-846-0-gd6d9eefbc, sha256 320a6806):
+  - live 139.52 / 148.25 / 144.17 / 141.92 ms;
+  - cached 0.286 / 0.285 / 0.288 / 0.284 ms;
+  - the key that builds the list 24.06 / 24.31 / 24.26 / 23.57 ms;
+  - live again, after the cached pass, 139.41 / 148.83 / 143.77 / 141.39 ms (not a cold disk).
+- The click map (rows 0-11 -> completions 1-12, the status row none) against a screenshot of the
+  same frame, with the popup flipped above the field: each row's centre is on its drawn row. The
+  self-test prints this map rather than checking it, since it reads the record the click reads.
+- One review (lenses: cache equivalence and invalidation; key paths and the click's routing and
+  row arithmetic). It traced equivalence, invalidation, memory, click routing (popup below,
+  flipped, clamped; `con_completionrows` 0 and 1) and the `[focus]` change as correct. Its
+  defects were all fixed in 12d3e9917:
+  - `` ` `` taking the whole key;
+  - the ENTER arm not gated on the list mode;
+  - the link-click highlight;
+  - a find-bar footer;
+  - an untrue "any set rebuilds";
+  - two self-test checks that could not fail;
+  - a cached-versus-live compare that skipped queries past 256.
+  The fix had its own round, which found no new defect. It added a compare in prefix mode
+  (done, above), and noted that a click in find mode on a popup inside the console still
+  reaches the row's link and overwrites the "find:" footer, as before 846.
+
+**Not shown:**
+- A real mouse click: the click map is checked against a screenshot and the press routing was
+  read.
+- A `[focus]` correction: none occurred in any arm.
+
+**Known:**
+- A map another program drops in (Momentum, Explorer) shows after the next hash rebuild, which
+  happens at a map load; setting `sv_mapcompletioncache 0` and back to 1 rebuilds it at once.
+  The live search saw such a map on the next key.
+- After TAB on a fully typed cvar, row 1 is highlighted, so ENTER types `name ` rather than
+  printing the value (the footer shows it).
+- The Ctrl+F find bar still types `` ` ``.
+- A directory whose name ends in a map extension is no longer offered.
+- fteqwsv64.exe is not rebuilt for this patch; it is unchanged for players.
+
 ## Patch 845 — goto_spawn goes to the map's spawn entity (qwprogs + csprogs)
 
 **Problem (Lex, 20 Oct):** "goto_spawn doesn't goto the spawn point of the map." P753 made it `!m`'s

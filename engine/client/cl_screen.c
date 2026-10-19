@@ -1453,6 +1453,14 @@ void CLSCR_Init(void)
 	Cvar_Register(&scr_showdisk_y, cl_screengroup);
 	Cvar_Register(&scr_diskicontimeout, cl_screengroup);
 	Cvar_Register(&scr_showobituaries, cl_screengroup);
+	//FTESurf Patch 849: here, once. SCR_Init runs on every vid_reload/vid_restart, where these
+	//printed "Can't register variable ..., already defined" (the commands there are removed in SCR_DeInit)
+	Cvar_Register(&r_budget, cl_screengroup);	//FTESurf Patch 782
+	Cvar_Register(&r_budget_window, cl_screengroup);
+	Cvar_Register(&r_budget_csqc, cl_screengroup);	//FTESurf Patch 800
+	Cvar_Register(&r_frametime, cl_screengroup);	//FTESurf Patch 801
+	Cvar_Register(&r_frametime_seconds, cl_screengroup);
+	Cvar_Register(&r_frametime_window, cl_screengroup);
 
 
 	memset(&key_customcursor, 0, sizeof(key_customcursor));
@@ -4887,12 +4895,6 @@ void SCR_Init (void)
 	Cmd_AddCommandD ("screenshot_cubemap",SCR_ScreenShot_Cubemap_f, "screenshot_cubemap <name> [size]\nTakes 6 screenshots forming a single cubemap.");
 	Cmd_AddCommandD ("envmap",SCR_ScreenShot_Envmap_f, "Legacy name for the screenshot_cubemap command.");	//legacy 
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
-	Cvar_Register (&r_budget, "Screen options");	//FTESurf Patch 782
-	Cvar_Register (&r_budget_window, "Screen options");
-	Cvar_Register (&r_budget_csqc, "Screen options");	//FTESurf Patch 800
-	Cvar_Register (&r_frametime, "Screen options");	//FTESurf Patch 801
-	Cvar_Register (&r_frametime_seconds, "Screen options");
-	Cvar_Register (&r_frametime_window, "Screen options");
 	Cmd_AddCommandD ("r_frametime_dump", R_FrameTime_Dump_f, "FTESurf Patch 801. Prints r_frametime's lows, percentiles and slowest frames (with a setpos for each) and copies them to the clipboard.");
 	Cmd_AddCommandD ("r_frametime_reset", R_FrameTime_Reset_f, "FTESurf Patch 801. Starts r_frametime's window again.");
 	Cmd_AddCommandD ("r_budget_dump", R_Budget_Dump_f, "FTESurf Patch 782. Prints r_budget's breakdown as text and copies it to the clipboard.");

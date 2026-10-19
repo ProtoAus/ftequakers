@@ -462,6 +462,9 @@ sprites/light_glow02_add_noz, and the _noz suffix is the whole trick.  With this
 flag the QC can do it per polygon and keep the map's own material.
 */
 #define DRAWFLAG_NODEPTHTEST 0x1000
+//FTESurf Patch 847: draw this polygon before the map's blended surfaces (the underwater sort),
+//so a glow behind a translucent window is covered by it; an older engine ignores the bit.
+#define DRAWFLAG_UNDERBLEND 0x2000
 void QCBUILTIN PF_SubConGetSet (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_SubConPrintf (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_SubConDraw (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
