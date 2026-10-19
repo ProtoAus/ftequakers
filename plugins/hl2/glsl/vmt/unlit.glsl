@@ -78,7 +78,8 @@ void main ()
 	diffuse_f.a *= vex_color.a;
 #endif
 
-	diffuse_f.a *= float(ALPHA);
+	//FTESurf Patch 844: and the entity's renderamt (see lightmapped.glsl).
+	diffuse_f.a *= float(ALPHA) * e_colourident.a;
 
 #ifdef NOFOG
 	//FTESurf Patch 300: $nofog, which these arms have been computing and then
