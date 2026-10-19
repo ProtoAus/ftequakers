@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 825 — the board plays a run in 3D (surfd + web; no engine, QC or player-file change)
+
+**Problem (Lex, 19 Oct):** people should be able to watch a recorded run, as if in game, and read
+its numbers without launching the game. The board's run page drew a 2D path only.
+
+**Change:** `surfd/web/watch.html#r=<rid>` (a "Watch in 3D" link on the run page) renders the
+map with noclip.website's Source renderer (MIT; the import closure of SourceEngine/Main.ts vendored
+at fd973ff2 by src/viewer/tools/vendor.py, its UI, WebGPU backend and Rust crate replaced by stubs,
+LZMA in TypeScript) and drives the camera from the recording as cl_watch.qc's model interpolates
+it (tools/watchtrace.py): first person, chase, overhead, free; a HUD with time, speed and keys; the
+run line around the playhead, broken at snaps; splits, jumps, strafes, air time; a speed graph; and
+a race against the combined board's top recorded run (a marker at the same run time, the gap at
+the same place). surfd's `/board/api/run/<rid>/track` (recplot.track) serves a filtered
+FTESURF-REC behind the run page's own gate: WEB_HEAD_KEYS, eye heights, 11 sample columns,
+timer/snap/ride records; no `in`, pm, pe, mc, seed or integrity key. One build at a time (503 to
+the next caller), six kept, 10/min. Valve content never comes from us: the visitor picks a game
+folder and its VPKs are read by slices; what is still missing is a flat colour from its name, lit
+by the map's own lightmaps. The BSP comes from that folder, else play.proto.bar/maps (needs CORS on
+the redirect and on R2; the owner's step). Also: the run page's "Download the .rec" pointed at a
+path that 404s under proto.bar and points at play.proto.bar's route now; build_gen.py gains
+`--add web/<file>`, because a successor generation's file set was the serving one's.
+
+**Verified:** test_web 6b2 and test_recplot's track cases; five mutants of the gate and filter
+(pmpin passed, `in` kept, kind gate dropped, shared bucket, CSP unscoped) and four of the round-2
+fixes each fail them. The TypeScript LZMA matches Python's on every compressed lump and pakfile
+entry of three maps (275), and a decoder mutant fails it. In headless Chrome on the PC (RTX 2080
+SUPER): run 21367 on surf_beginner loads in 1.6 s, renders textured with the Steam folder mounted
+and in flat colours without it, and races Momentum's record with a live gap. Three review rounds
+(what leaves the process; the viewer against watchtrace on 56 recordings, poses within 0.6 u; the
+fixes): no integrity finding; cost, CSP width, teleport streaks, stage numbering and model material
+search fixed. Not verified: the Pi's cost, phones, Strata maps, maps over 100 MB.
+
+**Known:** the map download needs CORS on two hops before it works for a visitor without the game;
+no zones, no depth on the run line, no stage deltas against imports (BACKLOG).
+
 ## Patch 817 — a rewind over a failed attempt carries the run on, timed (qwprogs, csprogs)
 
 **Problem:** On a map whose fail teleport lands in the start box (surf_dune), the fail re-arms the
