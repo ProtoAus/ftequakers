@@ -1695,6 +1695,8 @@ void QCBUILTIN PF_R_PolygonBegin(pubprogfuncs_t *prinst, struct globalvars_s *pr
 		beflags |= BEF_FORCETWOSIDED;
 	if (qcflags & DRAWFLAG_NODEPTHTEST)
 		beflags |= BEF_FORCENODEPTH;	//FTESurf Patch 274, see pr_common.h
+	if (qcflags & DRAWFLAG_UNDERBLEND)
+		beflags |= BEF_UNDERBLEND;	//FTESurf Patch 847
 
 	shader = PR_R_PolygonShader(shadername, twod);
 
@@ -1967,6 +1969,8 @@ void QCBUILTIN PF_R_AddTrisoup_Simple(pubprogfuncs_t *prinst, struct globalvars_
 		beflags |= BEF_LINES;
 	if (qcflags & DRAWFLAG_NODEPTHTEST)
 		beflags |= BEF_FORCENODEPTH;	//FTESurf Patch 274, as PF_R_PolygonBegin
+	if (qcflags & DRAWFLAG_UNDERBLEND)
+		beflags |= BEF_UNDERBLEND;	//FTESurf Patch 847
 
 	shader = PR_R_PolygonShader(shadername, twod);
 

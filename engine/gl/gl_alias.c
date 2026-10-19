@@ -3594,6 +3594,10 @@ static void BE_GenPolyBatches(batch_t **batches)
 			sort = SHADER_SORT_BLEND;
 		if ((b->flags & BEF_FORCENODEPTH) && sort < SHADER_SORT_BANNER)
 			sort = SHADER_SORT_BANNER;
+		//FTESurf Patch 847: before the blended surfaces, whatever the shader or the flags above said;
+		//the blend itself stays as forced (BEF_FORCEADDITIVE).
+		if (b->flags & BEF_UNDERBLEND)
+			sort = SHADER_SORT_UNDERWATER;
 
 		b->next = batches[sort];
 		batches[sort] = b;
