@@ -1,5 +1,54 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 840 — the unranked line names the input setting; slow-motion runs are measured and demoted (QC + reccheck + surfd)
+
+**Problem (Lex, 20 Oct):** a tester's two lobby runs played at half speed stood on the community
+board as `community clean`, PASS, verified -- community only through TF_NOPROFILE ("input mode"),
+with nothing saying which setting. The slow motion itself passed everything: the counted clock is
+honest GAME time, the re-simulation reproduces it, and the files pass reccheck (one sample per
+tick: the whole client clock was slowed). Start-to-submit wall time was 1.99x the run time on both,
+against 0.96-1.04 on 52 other single-attempt lobby runs (1 s stamps).
+
+**Change:** `FS_ProfileWhy`/`SV_ProfileWhy` return which profile test failed (rawinput, m_filter,
+m_accel, rawmice, silent, platform, changed); the .rec header gains `inprof <verdict> <report...>`,
+the finish writes `prof <verdict>`, `cmd timer` prints it, and the lobby's unranked line reads e.g.
+"input mode: m_accel is on". Per packet, `SV_ClockFrame` adds wall minus mover game seconds into a
+DEBT; a packet interval of 0.15 s or more is a stall whose loss (if >= 0.2 s) is credited up to
+0.5 s from a bucket of 4 that refills one a minute; a SERVER stall (its own frame gap at
+StartFrame) is excused outright. Every rise of the debt less 0.2 s is summed, so surplus repays
+but never unspends; `TF_SLOWCLOCK` (524288, TF_UNCERT, surfd `certifiable()`) when that sum reaches
+`run_slowclock` (5 s; 0 off). The state is carried by saves (`slowclk`: retry, loads, Multi-Session)
+and the rewind ring. The finish writes `clk <bound> <hyst> <allow> <wall> <stalls> <credited> <debt>
+<behind>`; reccheck judges both bits from the file after `end`. surfd's admin shows the reason word
+and the clock. Flags prints that used %g now use %d (the word passes 999999).
+
+**Verified:** `tools/p840clock.py` (real dedicated socket, bhop_eazy + cfg/test/p840.zones.json, a
+test-only actor csprogs that scales usercmd time; the lobby-run shape is x0.5 with half the
+packets): an honest client SUSPENDED 1.5 s reads 0 behind; a retried honest run 0; the actor slowed
+for the whole run 4.4 s behind, TF_SLOWCLOCK, `inprof`/`prof` m_accel, reccheck clean; slowed only
+while standing 2.3 s (bound 2 in the rig). Control (pre-patch qwprogs, same actor): no `clk`, no bit,
+unranked only by TF_NOPROFILE (flags 133124), the old tick report 356 ticks apart -- the lobby's
+19 Oct outcome. Four independent review rounds (control flow, evidence, cheater/false positive)
+drove the metric, the carry and the stall handling; their remaining design limits are in BACKLOG.
+reccheck 606 checks; old/new reccheck identical over the 629-file local corpus; none of the 393
+fleet files uses the new lines; surfd Flask suites pass on the Pi.
+Live 2026-10-19 (UTC): surfd 3334069f since 18:56:50Z; qwprogs babf2b9b / csprogs 2f86a702 on both
+installs and all 12 lobbies at 19:00Z (with P851); reccheck 77524170 at its three roots.
+
+## Patch 851 — m is goto_start, r is reset; the three in the key panel (csprogs + default.cfg)
+
+**Problem (Lex, 20 Oct):** "make m goto_start, and r is reset. make the 3 bindable in the config
+menu." default.cfg shipped m as `say !m` and r as `say !r`, and the key panel's Run group listed
+Restart and Respawn apart from the Reset stage row P848 appended.
+
+**Change:** default.cfg and defaultuser.cfg bind m goto_start and r reset. The Run group starts
+Restart run (goto_start, m; an old `say !m` counts as it), Reset stage (reset, r; `say !r` counts),
+Go to spawn (goto_spawn, no key); the hint strip's rows follow. A saved config keeps its binds.
+
+**Verified:** conbridge, the installed exe 775a1956 with this csprogs: `config_menu reset` then
+`bind m` / `bind r` -> "goto_start" / "reset"; `config_menu status` lists the three with keys [m],
+[r], []; the panel draws them together. FTESurf main 1266bed1.
+
 ## Patch 848 — reset is the old goto_start; goto_start goes to the start of the run (qwprogs + csprogs)
 
 **Problem (Lex, 20 Oct):** "make a new command reset that does the job of goto_start but now make
