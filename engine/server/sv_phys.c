@@ -3791,6 +3791,92 @@ static void SV_LoadEditorRuleset(const char *mapname)
 		mapname, data.values[0], data.values[1], data.values[2]);
 }
 
+/*P841: a Momentum zone file's top-level maxVelocity is the map's speed cap, as in Momentum.
+  The file is the one SV_ZoneLoad (sv_zones.qc) times with: same names, same order, and
+  QC_FixFileName's data/-first lookup. QC also skips a file that yields no zones, which this
+  cannot see before the map's entities exist; sv_zones.qc says so when the two disagree.
+  0 or absent is "not set" (12 shipped files say 0) and leaves cfg/maps or the default.*/
+qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
+
+//The file's maxVelocity, 0 if none; FALSE when this path is not a zone file at all.
+static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel)
+{
+	const char *name, *fallback;
+	char *file;
+	json_t *root, *mv;
+	qboolean zones;
+
+	if (!QC_FixFileName(path, &name, &fallback))
+		return false;
+	Q_strncpyz(found, name, foundsz);	//name may be a va() buffer
+	file = FS_LoadMallocFile(found, NULL);
+	if (!file && fallback)
+	{
+		Q_strncpyz(found, fallback, foundsz);
+		file = FS_LoadMallocFile(found, NULL);
+	}
+	if (!file)
+		return false;
+	root = JSON_Parse(file);	//its nodes point into file: free that last
+	zones = root && root->type == json_type_object && JSON_FindChild(root, "tracks.main.zones");
+	mv = zones ? JSON_FindChild(root, "maxVelocity") : NULL;
+	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
+	JSON_Destroy(root);
+	FS_FreeFile(file);
+	if (!zones)
+		Con_DPrintf("map ruleset: %s is not a zone file, trying the next\n", found);
+	return zones;
+}
+
+static void SV_LoadZoneRuleset(const char *mapname)
+{
+	static const char *const dirs[] = {"data/maps/zones/local", "maps/zones/curated",
+		"maps/zones/local", "maps/zones/online"};
+	char path[MAX_OSPATH], found[MAX_OSPATH], val[32];
+	qboolean have = false;
+	cvar_t *var;
+	double v = 0;
+	int i, j;
+
+	for (i = Cvar_VariableValue("sv_zones_curated") ? 0 : 2; i < 4 && !have; i++)
+	{
+		Q_snprintfz(path, sizeof(path), "%s/%s.json", dirs[i], mapname);
+		have = SV_ZoneRulesetFile(path, found, sizeof(found), &v);
+	}
+	if (!have || v == 0)
+		return;
+	if (!(v >= 1 && v <= 100000))
+	{
+		Con_Printf(CON_WARNING"map ruleset: %s maxVelocity is not 1..100000 - ignored\n", found);
+		return;
+	}
+	var = Cvar_FindVar("sv_maxvelocity");
+	if (!var)
+		return;
+	for (j = 0; j < pms_numover; j++)
+		if (pms_over[j].var == var)
+			break;
+	if (j == pms_numover)
+	{
+		if (pms_numover >= PMS_MAXOVERRIDE)
+		{
+			Con_Printf(CON_WARNING"map ruleset: override table full (%s)\n", found);
+			return;
+		}
+		pms_over[j].var = var;
+		pms_numover++;
+	}
+	else
+		Z_Free(pms_over[j].val);
+	Q_snprintfz(val, sizeof(val), "%.9g", v);
+	pms_over[j].val = Z_StrDup(val);	//before the set: the lock's callback reads it
+	Cvar_ForceSet(var, val);
+	if (*pms_appliedmapfile)
+		Q_strncatz(pms_appliedmapfile, " + ", sizeof(pms_appliedmapfile));
+	Q_strncatz(pms_appliedmapfile, found, sizeof(pms_appliedmapfile));
+	Con_Printf("map ruleset: %s sv_maxvelocity %s from %s\n", mapname, val, found);
+}
+
 static void SV_LoadMapRuleset(const char *mapname)
 {
 	char path[MAX_QPATH];
@@ -3803,6 +3889,7 @@ static void SV_LoadMapRuleset(const char *mapname)
 	Q_snprintfz(path, sizeof(path), "cfg/maps/map_%s.cfg", mapname);
 	if (SV_LoadRulesetFile(path, "map ruleset"))
 		Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
+	SV_LoadZoneRuleset(mapname);
 	SV_LoadEditorRuleset(mapname);
 	pms_mapover = pms_numover - before;
 }
