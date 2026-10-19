@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 815 — admin zone uploads are published by themselves; clients show the lobby's zones (qwprogs, csprogs, menu, surfd zonepub)
+
+**Problem:** Lex: admins (him, proto) make zones in zone_edit, save, "hit upload for it to be
+uploaded to the nanopi/r2 server, so when the next time someone trys to connect to the map via the
+map picker, they get the new zone file. I want it to work automagically"; existing times kept. P729
+had the upload and a deny-by-default role/proof service, stopped at a draft and was never installed.
+And: the release ships 648 zone files under `maps/zones/local`, the own edit's name, which beat every
+fetched copy, so a publish could never reach a player on those maps; the upload read that name
+with `fgets`, which drops a byte at every 4095 (276 of the 648 are longer).
+
+**Change:** surfd/zonepub.py + zonepub_publish.py: an accepted upload from a zone admin is queued and
+written (temp file + rename, 0644, the row with the replaced bytes committed first, a flock across
+processes) to the lobbies' `maps/zones/local` and the site's zones once every lobby is heard in surfd's
+lobbies table (any row over 30 s = nothing known), no lobby has had the map (or an assignment to it,
+or a posted stage of it) for 600 s, the sweeper owes it no verdict (sweep.pending's predicate) and its
+log moved 360 s after that; the service hears the lobbies every minute. validate() reads as the engine
+does (no duplicate keys, no escapes, number tokens of at most 32 characters, sh_zonefile.qc's limits).
+Rollback by id, sticky over a pending publish; 20 publishes an hour; only a csprogs carrying this
+patch's upload flow can publish. QC: Publish works only in a game this client hosts
+(`isserver()`, no demo, "ip" beginning QLoopBack), from the button's own device click, force-saves
+the table and sends exactly the bytes that save wrote, re-checked at Enter. The server publishes
+serverinfo `zonecrc`; a client whose table differs and is not its own loose edit fetches the map's
+file from our origin (once a minute) and shows whichever held copy matches, never mid-run or
+mid-edit. A picker game (`sv_zones_curated`, set by Play) reads own edit, the curated refresh, then
+the shipped library; every other server, lobbies and sweep.py's verifier alike, keeps the old order.
+
+**Verified:** test_zonepub.py 46/46, test_zonepub_install 3/3, test_reccheck 403/0; 13 of 13
+mutants of the publish gate, queue, rollback and validator killed. tools/p815zones.py on surf_dune
+(end-zone heights A shipped / B published / C own edit, crc 5545b345 / 87784c97 / 4e15411a).
+Five review rounds of two or three lenses (control flow, timing and evidence, what an attacker gains);
+the fifth found nothing at integrity level. Left open (BACKLOG): saves carry no zonecrc, the sweep
+log's mtime is a weak "a sweep ran", an own edit is not proof of authorship, a map's own pack can
+supply `data/maps/zones/local` on any server, zonecrc does not cover destinations.
+tools/p815zones.py: lobby -- the client switches to the server's table (control stays on the
+shipped one); own edit kept; no copy matching, no switch; hosted reads the curated copy (control
+the shipped); the 0.1.27 exe the same; no QC fault in any run.
+
+**Deployed:** FTESurf 151d65a5. Both installs and all 12 lobbies 2026-10-19T03:44Z: qwprogs
+f08f6fc1, csprogs 100068b0 (lobby .prev b7c29da0), menu.dat 15a24f21 on the installs; lobby 1's
+serverinfo carries zonecrc. The Pi service is not installed yet: tools/install_zonepub.py dry run
+passes at 151d65a5, `--apply` needs the owner's sudo; then the role grant.
+
 ## Patch 810 — Source's PlayerProximity fade on brush entities; 16 portals per view (csprogs)
 
 **Problem.** Lex, 19 Oct, on surf_tripportals: "in Momentum that neon fades out with distance from
