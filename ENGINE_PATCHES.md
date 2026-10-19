@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 855 — the 3D viewer draws Propper props, and HDR maps in Chromium (surfd/web/watch.js)
+
+**Problem (Lex, 20 Oct):** "some elements on the map don't load", run 23168 on surf_null. 46 of the map's
+81 static props never drew: the bhop platforms the run lands on (the body floated over a black hole),
+the arches, the neon ramp trims and the hub signs. Separately, in Chrome and Edge every HDR map showed
+"The 3D view failed on this map" (627 of the 1,926 version-20/21 BSPs in the local Momentum folder are
+HDR; two tested, the rest follows from the code).
+
+**Change:** two tools/vendor.py PATCHES, re-vendored from noclip fd973ff2. Studio.ts asserted
+`clientmaterial === 0` in each MDL texture entry; that slot is a stale runtime pointer like `material`
+two lines up (whose assert upstream already dropped), and Propper writes 1: every failing model had 1,
+every drawn one 0, and the throw escaped the prop's construction unseen. The check is gone. On an HDR map
+Chromium turns auto-exposure on, and the luminance histogram asks for the debug canvas, which reads
+`window.main` (noclip's own page, absent here), so every frame threw; Firefox keeps auto-exposure off.
+The insert is now `window.main?.`; the histogram draws only behind its debug flag, so this costs one
+detached canvas. tools/shot.mjs takes `FF=1` for Firefox.
+
+**Verified:** re-vendoring with the old PATCHES reproduced the committed tree (0 files) and its build the
+committed watch.js (7d8fd334); the vendored diff is the two lines; tsc clean; watch.js 52da42c7. Run 23168
+on a local server, shots at 15.5 s and 43.3 s chase and 21.7 s eye: the committed bundle logged 46
+"Assert fail" in Chrome and in Firefox and, in Chrome, "3D view failed" (toplevel); this one 0 and 0,
+loaded in 5 s (Chrome) and 7 s (Firefox), with the platforms and the arch under the player in both.
+Mounting CS:S/HL2/Momentum content changed no pixel on 10 views (diagnosis), so it was never missing
+content. FTESurf main 37456de3.
+
 ## Patch 853 — tier completion filtered All / Surf / Bhop, on the web profile and the in-game card (surfd + board + csprogs)
 
 **Problem (Lex, 20 Oct):** "when viewing a player profile you should be able to filter bhop / surf for the
