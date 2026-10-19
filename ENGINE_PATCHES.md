@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 849 — r_budget and r_frametime's cvars are registered once (engine)
+
+**Problem (Lex, 20 Oct):** every launch printed "Can't register variable r_budget, already defined"
+and the same for r_budget_window, r_budget_csqc, r_frametime, r_frametime_seconds and
+r_frametime_window. Patches 782, 800 and 801 registered them in SCR_Init. R_ApplyRenderer
+(renderer.c) runs SCR_Init on every renderer start, and the config pass queues a vid_reload or
+vid_restart when the renderer is already up (cl_main.c), so the second registration was refused
+with that line each time. SCR_DeInit removes SCR_Init's commands; a cvar cannot be removed.
+Harmless, but noise on every launch.
+
+**Change:** cl_screen.c: the six Cvar_Register calls move to CLSCR_Init (CL_Init, once), with the
+same group.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; `cfg/test/p849cvars.cfg`: a launch, `vid_reload`,
+`vid_restart`, `cvarlist`):**
+- Control, the installed P846 exe 320a6806: 6 lines after `vid_reload` and 6 after `vid_restart`.
+- This build (git-7542-patch-849-0-g5516bf608, sha256 780afe5a): 0. Both restarts happened (two
+  "Setting windowed mode" lines), and `cvarlist` lists r_budget and r_frametime in both.
+- No review round: the change is the six registrations moving to the once-only init.
+
 ## Patch 846 — the console: map names from a cached list; Tab, Enter and a click on completion rows; ` closes it (engine)
 
 **Problem (Lex's list, 20 Oct):**
