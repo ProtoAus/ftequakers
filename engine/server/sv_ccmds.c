@@ -4905,6 +4905,30 @@ static const char *SV_VerifyZoneCmp (const char *here, const char *fsrc,
 	return NULL;
 }
 
+/* Patch 816: positive exclusions change the timer clock this replay does not
+   model. Zero edges are inert; malformed/overflowing counters are not zero. */
+static const char *SV_RecSim_HoldRefusal (const char *s)
+{
+	char *end;
+	unsigned long mt, frozen;
+
+	while (*s == ' ' || *s == '\t') s++;
+	if (*s < '0' || *s > '9')
+		return "malformed `hold` accounting";
+	mt = strtoul(s, &end, 10);
+	if (mt > 0x7fffffffUL)
+		return "malformed `hold` accounting";
+	s = end;
+	while (*s == ' ' || *s == '\t') s++;
+	if (*s < '0' || *s > '9')
+		return "malformed `hold` accounting";
+	frozen = strtoul(s, &end, 10);
+	while (*end == ' ' || *end == '\t' || *end == '\r') end++;
+	if (*end || frozen > 0x7fffffffUL)
+		return "malformed `hold` accounting";
+	return frozen ? "frozen timer accounting (`hold`) is not modeled" : NULL;
+}
+
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -4952,6 +4976,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	const char   *ghostbad = NULL;
 	recsim_spec_t *spc = NULL;		/* Patch 380 */
 	const char   *specbad = NULL;
+	const char   *holdbad = NULL;
 	int           nspec = 0, nspinside = 0, spinside_row = -1;
 	char          spinside_kind[16] = "";
 	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
@@ -5167,6 +5192,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			{
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
+			}
+			else if (!strncmp(ln, "hold", 4) && (!ln[4] || ln[4] == ' ' || ln[4] == '\t'))
+			{
+				if (pass == 0 && !holdbad)
+					holdbad = SV_RecSim_HoldRefusal(ln + 4);
 			}
 			/* Patch 349: the timer latches the start packet left (QC build 88). */
 			else if (!strncmp(ln, "zseed ", 6) && pass == 0)
@@ -5587,6 +5617,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = ghostbad;
 		else if (specbad)
 			refuse = specbad;
+		else if (holdbad)
+			refuse = holdbad;
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)

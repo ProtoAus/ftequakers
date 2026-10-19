@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 816 — refuse frozen clocks native replay cannot model (engine verifier)
+
+**Problem:** Native `pm_verify` skipped known `hold` accounting while comparing the
+raw mover clock to the timer. A current genuine normal run supplied an acting native
+PASS control; inert and positive-accounting derivatives also passed unchanged. The
+positive declaration was not modeled, so that verdict could not establish timer
+consistency. A refusal is an unsupported-evidence boundary, not a cheating finding.
+
+**Change:** Recognize body `hold` records and parse two bounded nonnegative decimal
+counters. Native verification refuses positive exclusions and malformed/overflowing
+accounting explicitly. Zero edges remain inert. No frozen-clock reconstruction,
+legacy eligibility widening, recorder/journal format, mover or permission change;
+`pm_recsim` remains diagnostic and unchanged.
+
+**Verified:** Acting installed-native baseline: genuine 21.920 s control and both
+metadata derivatives PASS. Candidate full builds, explicit post-change native
+controls and deployment are pending; this entry is not a deployment claim.
+
 ## Patch 815 — admin zone uploads are published by themselves; clients show the lobby's zones (qwprogs, csprogs, menu, surfd zonepub)
 
 **Problem:** Lex: admins (him, proto) make zones in zone_edit, save, "hit upload for it to be
