@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 826 — a refused zone publish says why (surfd zonepub + its installer)
+
+**Problem (Lex, 19 Oct):** P822's dialog worded a refusal from its status code ("update the game,
+link Steam, or ask for the role"), because the game's HTTP client keeps no body for a non-200
+reply (httpclient.c returns before opening the file), so the service's reason never reached QC.
+
+**Change:** zonepub.py's refusals answer 200 with ok=0, error and status; every client version
+already checks `ok`, so no game deploy. install_zonepub.py gains `--upgrade`: only a unit this
+installer wrote, byte for byte, with its six Environment keys and write paths; the installed release
+must exist and be what is running; it writes zonepub/<sha>, runs the idempotent init, rewrites
+WorkingDirectory, SURFD_TOOLS and ZONEPUB_SOURCE, probes loopback and public HTTPS, and on any
+failure (Ctrl-C too) resets the start limit and puts the old unit and release back.
+
+**Verified:** test_zonepub 48/48 (the new wire test errors on the old service); installer tests 7/7,
+incl. an upgraded unit equal to a fresh install of the new commit and hand edits refused; against
+the Pi's live unit, unit_text rebuilds it byte for byte and the upgrade changes exactly three lines.
+p822dialog 15/15 with the stand-in answering the P826 way (step 7 shows the service's own reason)
+and the old way (7b). Two review rounds on the root path: round 1 found three ways a failed upgrade
+could leave the service down, all fixed; round 2 found nothing at integrity level. Deployed by the
+owner's sudo ~07:05Z: release 189d9f08 serving, a public refusal is 200 + ok:0 + its reason.
+
 ## Patch 824 — the chat box's width, height and full height; a field that wraps; hud_edit's Chat pane (csprogs)
 
 **Problem:** Lex, on P821's box: "the chatbox is to long", wanted "a option to display full height
