@@ -24,19 +24,80 @@ fault leakage into validated restore history, footer suffixes hiding old counter
 released-before-thaw kept horizons, and keyword-whitespace loss. Repairs keep
 closing declarations out of lifecycle authority, validate intact legacy footer
 fields, retain the landed release-tail kind across prefixes, ignore closing-only
-lines at session/seed boundaries, and recognize UTF-8 new-record boundaries before
+lines at initial and restored seed boundaries, and recognize UTF-8 new-record boundaries before
 payload parsing. Raw-length/line-boundary validation precedes C-string decoding.
-Native old-binary controls act;32 supported/refusal expectations pass after repair. A real first release row at
+Native old-binary controls act;32 supported/refusal expectations pass on both
+Windows and ARM with the final replay VM. All10 current deterministic rows match
+across both platforms on three maps; acted prop decisions are retained. A real first release row at
 the pin horizon closes at the later actual native horizon; the pinned-only
 control stays at the pin. This uses controlled production release/void callees
 and a synthetic retention flag, not a natural stage/board submission. Those kept
 cases emit no VIEW, so only their REC is graded. Finish-interface observations
-are controlled practice, not natural-completion or hardware proof. Reader772,
+are controlled practice, not natural-completion or hardware proof. Reader801,
 receipt268, six census parser tests and the existing source/limit/opportunity/
 unreadable/paired-runtime suites pass. Same-byte319REC/109VIEW sweep has no semantic
 differences from its published baseline (which already has196REC and5VIEW faults).
 These bounded controls do not grant hardware or platform-promotion acceptance;
 final-source qualification and installed-byte provenance are separate records.
+## Patch 854 — Story and Event mode: a trophy ladder of WOS runs in the main menu (surfd + menu.dat)
+
+**Problem (Lex, 20 Oct):** "a story move and a event mode ... similar to track mania ... you get a bronze,
+silver, or gold ... if you reach a certin amount of trophy points, you unlock the next stages ... a selection
+in main menu ... a scrolling list of stages and have the next ones locked and greyed out ... I want to be able
+to see other peoples progress ... I need a way to be able to configure this list in the future ... these will
+not count momentum completes or ksf completes, only WOS completes." His calls: a level is worth its best medal;
+unlinked players earn too and keep it on linking; saves never count; events are a separate ladder.
+
+**Change:** surfd reads `data/story.txt` (source `surfd/story.txt`; `tools/story_push.py` checks it with
+surfd's parser and the live `?maps=1`, copies it, and waits for `?story=list` to serve its sha256[:12]) and
+works medals out from ranked and community clean rows, never imported, segmented or owner-rejected ones,
+through `runs_live`. finish / time m:ss / reach N decide now; nofail, wonly and via are listed and earn
+nothing yet. A chapter opens at 60% of the trophies decidable before it, or `unlock N`. A community run
+counts for an account only when its own receipt verified with a key linked to it (a guid is the client's to
+choose: review rounds 1 and 2 took a victim's medals through `keylinks.player` and through FIRST KEY WINS).
+Three reads on /api/board (`story=list|players|player`, recomputed off the request on a thread); the menu's
+who-am-I is the Friends list proof with `story=1`. Menu: STORY between PLAY and VISUALS, m_story.qc (Story,
+Events, Players tabs; trophy header; locked chapters greyed; Play through ui_launch; another player's
+ladder). The list: Lex's 100 levels deduplicated and tier-ordered in chapters of five, 25 blanks,
+placeholder times (his surf_demise 1:05/1:01 scaled by each track's record). Also surf_sinister.bsp went
+onto the Pi's map library and both installs' ftesurf/maps for Lex to zone.
+
+**Verified:** test_story 15 cases and test_social 39 locally; 11 one-line mutants of the code each fail
+the suite. Menu rigs in an owned overlay against `tools/story_fixture.py` (`cfg/test/p854story*.cfg`):
+story_probe lines and screenshots of every tab, a new player (chapter 1 open, Play shown), a locked level,
+another player's ladder. Three review rounds (server, menu, integrity); every finding fixed or in BACKLOG.
+**LIVE 2026-10-19 (UTC):** surfd generation d0fd1bf9 from `/srv/nvme/agent-work/surfd854-20261019T2133Z`
+since 21:38:49Z (OLD surfd855 CLOSED, kept; 27 suites green in the stage); `data/story.txt` rev
+3ab0fa470bc6 read at 21:39:07Z with 0 problems; menu.dat 79219f4e in both installs (.prev 07fa02c8). The
+installed menu against the live board drew Proto's ladder (14 trophies, chapter 2 open); four players
+ranked.
+FTESurf main d0fd1bf9.
+
+## Patch 855 — the 3D viewer draws Propper props, and HDR maps in Chromium (surfd/web/watch.js)
+
+**Problem (Lex, 20 Oct):** "some elements on the map don't load", run 23168 on surf_null. 46 of the map's
+81 static props never drew: the bhop platforms the run lands on (the body floated over a black hole),
+the arches, the neon ramp trims and the hub signs. Separately, in Chrome and Edge every HDR map showed
+"The 3D view failed on this map" (627 of the 1,926 version-20/21 BSPs in the local Momentum folder are
+HDR; two tested, the rest follows from the code).
+
+**Change:** two tools/vendor.py PATCHES, re-vendored from noclip fd973ff2. Studio.ts asserted
+`clientmaterial === 0` in each MDL texture entry; that slot is a stale runtime pointer like `material`
+two lines up (whose assert upstream already dropped), and Propper writes 1: every failing model had 1,
+every drawn one 0, and the throw escaped the prop's construction unseen. The check is gone. On an HDR map
+Chromium turns auto-exposure on, and the luminance histogram asks for the debug canvas, which reads
+`window.main` (noclip's own page, absent here), so every frame threw; Firefox keeps auto-exposure off.
+The insert is now `window.main?.`; the histogram draws only behind its debug flag, so this costs one
+detached canvas. tools/shot.mjs takes `FF=1` for Firefox.
+
+**Verified:** re-vendoring with the old PATCHES reproduced the committed tree (0 files) and its build the
+committed watch.js (7d8fd334); the vendored diff is the two lines; tsc clean; watch.js 52da42c7. Run 23168
+on a local server, shots at 15.5 s and 43.3 s chase and 21.7 s eye: the committed bundle logged 46
+"Assert fail" in Chrome and in Firefox and, in Chrome, "3D view failed" (toplevel); this one 0 and 0,
+loaded in 5 s (Chrome) and 7 s (Firefox), with the platforms and the arch under the player in both.
+Mounting CS:S/HL2/Momentum content changed no pixel on 10 views (diagnosis), so it was never missing
+content. FTESurf main 37456de3.
+
 ## Patch 853 — tier completion filtered All / Surf / Bhop, on the web profile and the in-game card (surfd + board + csprogs)
 
 **Problem (Lex, 20 Oct):** "when viewing a player profile you should be able to filter bhop / surf for the
