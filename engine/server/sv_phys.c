@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if !defined(CLIENTONLY) || defined(CSQC_DAT)
 
 #include "pr_common.h"
+#include "fs.h"	//P841: SPF_ISDIR
 
 /*
 
@@ -3786,40 +3787,88 @@ static void SV_LoadEditorRuleset(const char *mapname)
 		pms_over[j].val = Z_StrDup(data.values[i]);
 		Cvar_ForceSet(data.vars[i], data.values[i]);
 	}
-	Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
+	if (*pms_appliedmapfile)	//P841: keep the map and zone files named
+		Q_strncatz(pms_appliedmapfile, " + ", sizeof(pms_appliedmapfile));
+	Q_strncatz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
 	Con_Printf("map_settings: %s maxvelocity %s gravity %s airaccelerate %s\n",
 		mapname, data.values[0], data.values[1], data.values[2]);
 }
 
 /*P841: a Momentum zone file's top-level maxVelocity is the map's speed cap, as in Momentum.
   The file is the one SV_ZoneLoad (sv_zones.qc) times with: same names, same order, and
-  QC_FixFileName's data/-first lookup. QC also skips a file that yields no zones, which this
-  cannot see before the map's entities exist; sv_zones.qc says so when the two disagree.
-  0 or absent is "not set" (12 shipped files say 0) and leaves cfg/maps or the default.*/
+  QC_FixFileName's data/-first lookup. 0 or absent is "not set" (12 shipped files say 0) and
+  leaves cfg/maps or the default. Differences from QC's choice, which the server QC reports
+  when the file it timed with asks for a cap the server is not running:
+  - only loose files count. This runs before the previous map's own pakfile is dropped and the
+    next one's mounted (sv_init.c), so a packed copy is read as absent: one map's BSP must not
+    set another's physics.
+  - "a zone file" is a parsed object with a non-empty region array; QC also needs a region
+    that builds, which it cannot know before the map's entities exist.*/
 qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
+
+static json_t *SV_JsonChild(json_t *t, const char *name)
+{	//exact key, first match, as QC's json_find_object_child; JSON_FindChild splits on dots
+	for (t = t ? t->child : NULL; t; t = t->sibling)
+		if (!strcmp(t->name, name))
+			return t;
+	return NULL;
+}
+
+static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
+{
+	if (!t || depth > 16)
+		return false;
+	if (t->type == json_type_array && t->child && !strcmp(t->name, "regions"))
+		return true;
+	for (t = t->child; t; t = t->sibling)
+		if (SV_ZoneAnyRegion(t, depth + 1))
+			return true;
+	return false;
+}
+
+static char *SV_ZoneRulesetLoad(const char *name)
+{
+	flocation_t loc;
+
+	if (!FS_FLocateFile(name, FSLF_IFFOUND, &loc))
+		return NULL;
+	if (!loc.search || !(loc.search->flags & SPF_ISDIR))
+	{
+		Con_Printf(CON_WARNING"map ruleset: %s is inside a package - its speed cap is not read\n", name);
+		return NULL;
+	}
+	return FS_LoadMallocFile(name, NULL);
+}
 
 //The file's maxVelocity, 0 if none; FALSE when this path is not a zone file at all.
 static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel)
 {
 	const char *name, *fallback;
 	char *file;
-	json_t *root, *mv;
+	json_t *root, *mv, *gr;
 	qboolean zones;
 
 	if (!QC_FixFileName(path, &name, &fallback))
 		return false;
 	Q_strncpyz(found, name, foundsz);	//name may be a va() buffer
-	file = FS_LoadMallocFile(found, NULL);
+	file = SV_ZoneRulesetLoad(found);
 	if (!file && fallback)
 	{
 		Q_strncpyz(found, fallback, foundsz);
-		file = FS_LoadMallocFile(found, NULL);
+		file = SV_ZoneRulesetLoad(found);
 	}
 	if (!file)
 		return false;
 	root = JSON_Parse(file);	//its nodes point into file: free that last
-	zones = root && root->type == json_type_object && JSON_FindChild(root, "tracks.main.zones");
-	mv = zones ? JSON_FindChild(root, "maxVelocity") : NULL;
+	zones = false;
+	if (root && root->type == json_type_object)
+	{
+		zones = SV_ZoneAnyRegion(SV_JsonChild(root, "tracks"), 0);
+		gr = SV_JsonChild(root, "globalRegions");	//flat region arrays
+		for (gr = gr ? gr->child : NULL; gr && !zones; gr = gr->sibling)
+			zones = gr->type == json_type_array && gr->child;
+	}
+	mv = zones ? SV_JsonChild(root, "maxVelocity") : NULL;
 	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
 	JSON_Destroy(root);
 	FS_FreeFile(file);
