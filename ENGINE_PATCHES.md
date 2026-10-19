@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 854 — Story and Event mode: a trophy ladder of WOS runs in the main menu (surfd + menu.dat)
+
+**Problem (Lex, 20 Oct):** "a story move and a event mode ... similar to track mania ... you get a bronze,
+silver, or gold ... if you reach a certin amount of trophy points, you unlock the next stages ... a selection
+in main menu ... a scrolling list of stages and have the next ones locked and greyed out ... I want to be able
+to see other peoples progress ... I need a way to be able to configure this list in the future ... these will
+not count momentum completes or ksf completes, only WOS completes." His calls: a level is worth its best medal;
+unlinked players earn too and keep it on linking; saves never count; events are a separate ladder.
+
+**Change:** surfd reads `data/story.txt` (source `surfd/story.txt`; `tools/story_push.py` checks it with
+surfd's parser and the live `?maps=1`, copies it, and waits for `?story=list` to serve its sha256[:12]) and
+works medals out from ranked and community clean rows, never imported, segmented or owner-rejected ones,
+through `runs_live`. finish / time m:ss / reach N decide now; nofail, wonly and via are listed and earn
+nothing yet. A chapter opens at 60% of the trophies decidable before it, or `unlock N`. A community run
+counts for an account only when its own receipt verified with a key linked to it (a guid is the client's to
+choose: review rounds 1 and 2 took a victim's medals through `keylinks.player` and through FIRST KEY WINS).
+Three reads on /api/board (`story=list|players|player`, recomputed off the request on a thread); the menu's
+who-am-I is the Friends list proof with `story=1`. Menu: STORY between PLAY and VISUALS, m_story.qc (Story,
+Events, Players tabs; trophy header; locked chapters greyed; Play through ui_launch; another player's
+ladder). The list: Lex's 100 levels deduplicated and tier-ordered in chapters of five, 25 blanks,
+placeholder times (his surf_demise 1:05/1:01 scaled by each track's record). Also surf_sinister.bsp went
+onto the Pi's map library and both installs' ftesurf/maps for Lex to zone.
+
+**Verified:** test_story 15 cases and test_social 39 locally; 11 one-line mutants of the code each fail
+the suite. Menu rigs in an owned overlay against `tools/story_fixture.py` (`cfg/test/p854story*.cfg`):
+story_probe lines and screenshots of every tab, a new player (chapter 1 open, Play shown), a locked level,
+another player's ladder. Three review rounds (server, menu, integrity); every finding fixed or in BACKLOG.
+**LIVE 2026-10-19 (UTC):** surfd generation d0fd1bf9 from `/srv/nvme/agent-work/surfd854-20261019T2133Z`
+since 21:38:49Z (OLD surfd855 CLOSED, kept; 27 suites green in the stage); `data/story.txt` rev
+3ab0fa470bc6 read at 21:39:07Z with 0 problems; menu.dat 79219f4e in both installs (.prev 07fa02c8). The
+installed menu against the live board drew Proto's ladder (14 trophies, chapter 2 open); four players
+ranked.
+FTESurf main d0fd1bf9.
+
 ## Patch 855 — the 3D viewer draws Propper props, and HDR maps in Chromium (surfd/web/watch.js)
 
 **Problem (Lex, 20 Oct):** "some elements on the map don't load", run 23168 on surf_null. 46 of the map's
