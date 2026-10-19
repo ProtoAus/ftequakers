@@ -37,8 +37,14 @@ are controlled practice, not natural-completion or hardware proof. Reader801,
 receipt268, six census parser tests and the existing source/limit/opportunity/
 unreadable/paired-runtime suites pass. Same-byte319REC/109VIEW sweep has no semantic
 differences from its published baseline (which already has196REC and5VIEW faults).
-These bounded controls do not grant hardware or platform-promotion acceptance;
-final-source qualification and installed-byte provenance are separate records.
+These bounded controls do not grant hardware acceptance. Final-source qualification
+and installed-byte provenance are separate records: both Windows bundles deployed
+2026-10-19 22:28Z; all12 zero-player Pi lobbies activated through the standard
+entrypoint and live native version/hash readback passed22:38Z. A real socket client
+downloaded matching CSQC and drew its board with no QC error, without accepting
+terms or submitting a run. See tools/lobby-progs-p842-20261019.md in FTESurf;
+no natural finish, two-operator, stage/board, device or calibration claim.
+
 ## Patch 854 — Story and Event mode: a trophy ladder of WOS runs in the main menu (surfd + menu.dat)
 
 **Problem (Lex, 20 Oct):** "a story move and a event mode ... similar to track mania ... you get a bronze,
