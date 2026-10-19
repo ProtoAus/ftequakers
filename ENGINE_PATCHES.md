@@ -1,5 +1,55 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 848 — reset is the old goto_start; goto_start goes to the start of the run (qwprogs + csprogs)
+
+**Problem (Lex, 20 Oct):** "make a new command reset that does the job of goto_start but now make
+goto_start make you goto the start of the run, instead of resetting on a stage." goto_start was
+`!r` (P753): the start of the leg you are on, which mid-run past the leg's first segment is a stage
+restart (SV_TimerWouldRestartSeg).
+
+**Change:** `reset` is what goto_start was (WOP_RESET, else `cmd zone_reset`). goto_start sends `!r`
+too, keeping its save in the start box (P415) and its latched zone, except while the run is running
+past its leg's first segment, where it goes to the track's start: `!m` (WOP_SPAWN) or `!b N`
+(WOP_BONUS1 + N - 1), predicted as those ops already are. The server publishes the leg's first
+segment as STAT_FS_TIMERSTARTSEG (116, `run_t_startseg`). The key panel gains a Reset stage row
+(`reset`; default.cfg's `say !r` on r counts as it, and "reset keys" gives it r) and is one row
+taller; Restart keeps goto_start, the owner's r bind. The mid-run load refusal names goto_start's key.
+`reset` is allowed while spectating, as goto_start is.
+
+**Verified:** conbridge on surf_dune, this exe and csprogs: a full run flown through stage 2's start
+(the server's `cmd timer`: "track 0 leg 0 startseg 0 seg 1 of 3"), `reset` -> "stage 2 restarted --
+the run clock keeps going", `goto_start` -> "run cancelled (teleported)", "!m -- start of the map";
+armed at the start, goto_start -> "!r -- start of the map". The same on the 0.1.28 release exe
+(ff0f0a2d) with this csprogs, which logged no QC error. The first cut (goto_start always `!m`) lost
+P415's save and the latched zone; one review round found it, and that the panel's reset-keys disagreed
+with default.cfg.
+
+## Patch 847 — glow sprites and embers behind a translucent surface draw under it (client exe + csprogs)
+
+**Problem (Lex, 20 Oct):** after P843 the flame went behind surf_dune's grate, but the brazier's
+glow (env_sprite glow08, rendermode 9) and the embers still drew over it. Both are additive, and a
+CSQC polygon's flags can only push it later (DRAWFLAG_ADD to the additive sort, NODEPTHTEST to at
+least banner), after every blended surface, which writes no depth.
+
+**Change:** engine: DRAWFLAG_UNDERBLEND (0x2000) on R_BeginPolygon and AddTrisoup maps to
+BEF_UNDERBLEND, which BE_GenPolyBatches sorts into SHADER_SORT_UNDERWATER after its other
+adjustments; the forced blend stays. An older engine ignores the bit. QC: an additive sprite that is
+drawn (past the glare check) and roughly in view, with a translucent brush between it and the eye (a
+tracer whose mask is WINDOW alone, VBSP's translucent brushes being TRANSLUCENT|WINDOW), is drawn
+with it; each sprite is asked again after 0.25 s, at most `vbsp_sprite_under_rays` (2) rays a frame
+(a glare ray measured 27 us). The embers get a twin under `ftesurf_dotu` (the engine's BM_ADDA
+template on particles/ftesurf_dot in the underwater sort), chosen with the flame. `vbsp_sprite_under 0`
+and `vbsp_emit_flameunder 0` give the old order. Engine commit da30a1c21, merged over main with 846
+and 849 as b3f34daf9 (tag patch-847); exe stamp git-7546-patch-847-0-gb3f34daf9, sha256 775a1956.
+
+**Verified:** conbridge at Lex's save 2 on surf_dune (the grate's bar over the brazier), this exe and
+csprogs: in a box on the fire, pixels brighter than 80 were 5 with the switches on and 385 with both
+off; by eye flame, glow and embers are behind the bar. `vbsp_sprite_debug`: 3 glares drawn, 3 under,
+51 rays in the first seconds; from the stage-1 start every glow is hidden by the glare check and none
+is traced. `emit_list`: "flame and embers under ... 26 of 26 effects answering". On the 0.1.28 release
+exe the bit is ignored (glow over, as before) and the csprogs ran with no QC error. One review round:
+no engine defect; the unbudgeted first cut traced every additive sprite in front every eighth frame.
+
 ## Patch 849 — r_budget and r_frametime's cvars are registered once (engine)
 
 **Problem (Lex, 20 Oct):** every launch printed "Can't register variable r_budget, already defined"
