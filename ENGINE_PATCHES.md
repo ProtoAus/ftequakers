@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 828 — a closing horizon must reach the last hold boundary (reader)
+
+**Problem:** A thaw can be the final event in a complete `holdclock 1` recording,
+after its last input row. The reader bounded `inend` against the input trace but
+not that later hold observation, so a closing counter before the declared boundary
+could be accepted. This is a raw-counter contradiction, independent of a timer's
+initial origin or final elapsed ticks.
+
+**Change:** `reccheck.py` also bounds the closing raw counter against the last valid
+hold marker in its current mover origin. Existing origin resets keep an earlier
+session's larger counter out of this check. Unknown hold capabilities are not
+interpreted as version 1; a live prefix needs no invented close. No native code,
+format, threshold, permission or ranking-policy change; no final timer-span equality.
+
+**Verified:** 423 reader checks, zero failed. The 14 new checks fail three specific
+predicates on the prepatch reader, not a crash; equality/later closes, inert totals,
+prefixes, unknown capabilities and counter-reset controls pass. A native final-thaw
+capture parses cleanly; its closing-only counter mutant now faults specifically.
+Receipt, sweep and connection suites pass; isolated QC build has zero warnings in
+all three VMs. Exact captured 319 recordings/109 sidecar pairs: unchanged fault sets
+and angle-origin availability, no automatic historical reread. Full initial/final
+clock proof and calibration remain open.
+
 ## Patch 827 — the live line's Line_End redoes only what new samples touch (csprogs)
 
 **Problem (Lex's r_budget dumps, 19 Oct):** `r_budget_csqc` put Line_End at 0.43 ms a frame on
