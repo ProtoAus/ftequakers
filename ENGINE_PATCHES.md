@@ -1,5 +1,130 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 845 — goto_spawn goes to the map's spawn entity (qwprogs + csprogs)
+
+**Problem (Lex, 20 Oct):** "goto_spawn doesn't goto the spawn point of the map." P753 made it `!m`'s
+twin: the start of the map's start zone. On surf_dune the spawn entity
+(info_player_counterterrorist, 11614 11675 12913) is in the end room, 25,000 units from the start
+zone, so goto_spawn never went where joining puts you.
+
+**Change:** goto_spawn sends a new `zone_spawn` client command, which runs the respawn that `kill`
+and a join run (PutClientInServer: spectate window and save hold released, timer warped and idled,
+hop taint forgiven) and says so in chat. It voids the run first, as `!m`'s move does (SV_TimerVoid),
+and carries a closed finish's tag across the respawn, whose SV_TimerSpawn clears it: without that a
+finish followed by goto_spawn within a packet lost its sidecar and its receipt (review). Refused, as
+`!m` is, while a paused run is being restored (SV_MsBusy); not predicted. `!m` and the shipped `say
+!m` are unchanged; the key panel's Respawn row writes goto_spawn, which is the owner's m bind.
+
+**Verified:** conbridge on surf_dune, the client and dedicated server on this build: from Lex's save
+2 (-12006 1366 14692), goto_spawn -> 11614.0 11675.0 12912.6, "goto_spawn: back at the map's spawn",
+timer idle, practice 0; `say !m` -> -11910 477 15052, armed, as before (both builds, before and
+after the review fix). Control (installed csprogs f1f94d56 / qwprogs 45013167): goto_spawn -> -11910
+477 15052, "!m -- start of the map".
+
+## Patch 844 — every brush entity's rendermode, and the hl2 programs take the entity's alpha (qwprogs + hl2 plugin)
+
+**Problem (Lex, 20 Oct):** bhop_eazy's glass walls (func_wall, rendermode 2 Texture, renderamt
+50-120, a plain LightmappedGeneric material) drew opaque. P683 applied renderamt only to func_brush
+in mode 4; and even there the hl2 plugin's `vmt/lightmapped` and `vmt/unlit` wrote the texture's
+alpha and never the entity's, so the forced-transparent blend drew them solid (BACKLOG, "Map visuals
+left open by Patches 799 and 802"). Census of 1,926 Momentum maps: brush entities in modes 1/2/4
+with a partial renderamt 1,386; with renderamt 0 87; mode 5 448; mode 10 585 (func_illusionary 97,
+func_button 83, func_physbox 64 ...), all drawn solid here except func_brush's.
+
+**Change:** SV_BrushRenderMode (sv_entities.qc), Source's RenderMode_t: 1, 2 and 4 fade by
+renderamt/255, 5 adds (EF_ADDITIVE), 10 and a zero renderamt hide (C_BaseEntity::ShouldDraw); 3 and
+6-9 are drawn as before. func_brush keeps P683's StartDisabled rule. Every other brush class gets it
+once the lump is built (SV_BrushRenderAll, StartFrame's first frame) and from the Alpha input; those
+classes own their EF_NODRAW (I/O, toggles), so the mode adds it and takes back only its own
+(`vbsp_rmhide`). The plugin's `vmt/lightmapped` and `vmt/unlit` multiply the output alpha by
+`e_colourident.a`, as Source's g_flAlpha2 (lightmappedgeneric_ps2_3_x.h:429); it is 1 on the world
+and on an opaque entity. Engine commits e1670ac29 and 45e4ddb65, tag patch-844; plugin
+fteplug_hl2_x64.dll sha256 2b60d9c3.
+
+**Verified:** conbridge, bhop_eazy spawn (-451 -254 65, yaw 0), r_blendsort 2 (Lex's): the control
+(installed plugin dd6dce96, qwprogs 45013167) draws the window glass solid blue; this build draws it
+see-through and tinted, 30,365 pixels changed by more than 24 in the window's box, none elsewhere in
+the frame. The server prints "brush render: 26 brush entities besides func_brush carry a rendermode"
+on bhop_eazy (25 func_wall mode 2, 1 func_breakable mode 4) and 0 on surf_dune. Mode 5:
+kz_bhop_beginner's number signs (func_illusionary, renderamt 254) drew as glyphs on black squares
+and now add, the black gone; surf_replicant's func_brush *317 (white, 150) was a solid wall and is
+now a glow the room shows through. Server lines: kz_bhop_beginner 25, surf_replicant 0 (its six are
+func_brush). One review round, two lenses, plus a re-check of the fixes: the window-pane and TurnOn
+cases above, and lightmapped under `$basealphaenvmapmask` (ENVFROMBASE) starting a faded entity's
+alpha from 1, the mask not being opacity (ps2_3_x.h:413-418).
+
+## Patch 843 — a fire behind a translucent surface draws its flame under it (csprogs)
+
+**Problem (Lex, 20 Oct, surf_dune save 2):** "Fire appears in front of the chain texture." The
+"chain" is SOCK_EGYPTIAN/GRATE1A, a `$translucent` world grate 27 units in front of the save. The
+env_fire flame shader (P643) is `sort additive`, a bucket drawn after every blended surface, and
+blended surfaces write no depth, so the brazier 1,220 units behind the grate drew over it.
+
+**Change:** each sheet fire, when it emits, traces from the eye to its flame (+16 units, over the
+brazier's rim). With anything between (VBSP makes translucent brushes TRANSLUCENT|WINDOW, which a
+default traceline hits) it emits slots 17-28, the flame's twelve effects again under
+`ftesurf_flameu`: the same program in `sort underwater`, after the smoke's banner and before the
+map's blended surfaces. A clear fire keeps `additive`, so glass or water BEHIND a fire still goes
+under it. `vbsp_emit_flameunder 0` is the old order; `emit_list` counts both outcomes.
+
+**Verified:** conbridge at Lex's save 2, 1280x720, a 120x120 box on the fire, pixels brighter than
+200: this build 5, with `vbsp_emit_flameunder 0` 32, control (installed csprogs f1f94d56) 47 and 43.
+`emit_list`: "24 of 24 effects answering ... 1823 fire-frames had something between, 75 did not". An
+unblocked brazier (-12153 2380 15190) draws the same flame either way. **Smoke:** it is drawn (two
+frames 2.5 s apart differ in a 250-pixel column over the bowl) but surf_dune's fires are
+env_fire_tiny/_small, whose smoke is 16-24% opaque and turns dark brown, so on the map's dark brick
+it is not visible by eye. **Not changed:** the brazier's env_sprite glow (glow08, rendermode 9,
+additive and drawn without depth, P799) and the embers still draw over the grate (BACKLOG). One
+review round, two lenses: the flame repair now probes both halves of a class.
+
+## Patch 841 — a Momentum zone file's maxVelocity sets the map's speed cap; map rulesets read only from trusted directories (engine + qwprogs + csprogs + zonepub)
+
+**Problem (Lex, 19 Oct: "not loading the correct maxvelocity ... maybe we don't get them from the
+zone files?"):** Momentum's zone files carry the map's speed cap as a top-level `maxVelocity`, and
+nothing read it. A cap came only from cfg/maps/map_<map>.cfg (80 maps, read out of entity lumps in
+P267) or cfg/default.cfg's 3500. On the lobbies 296 of 1,279 zoned maps name a cap and 164 of them
+ran another, nearly all at 3500 where Momentum runs 4000-10000 (surf_apollo 10000, surf_boreas
+5000; 74 of the 164 are _css/_ksf builds sharing the plain map's file); surf_ofrenda ran its entity
+lump's 6000 where Momentum's file says 10000. The zone editor's Speed cap was a local-only file, so
+a publish could not carry it. The review then found that every map-load ruleset file (mode, map,
+hosted settings, and the new zone read) was read through the whole search path at a point where
+the previous map's own pakfile is still mounted.
+
+**Change:** SV_LoadMapRuleset reads, after the cfg/maps file, the zone file SV_ZoneLoad will time
+with -- its names and order (sv_zones_curated's two first), QC_FixFileName's data/-first lookup, the
+first file with a non-empty region array -- and puts a `maxVelocity` of 1..100000 into the override
+table, so the lock, `*ruleset` and `movement` treat it as the map's value; 0 or absent leaves
+cfg/maps or the default (Lex: Momentum's value wins). Keys match exactly. The hosted editor settings
+still apply last, and `movement` names every file. All map-load ruleset reads (data/mapmeta.txt,
+mode and map cfgs, editor settings, zone files) go through SV_RulesetLoadLoose: no pak symlinks,
+only a directory search path that is not temporary, server or untrusted, and for cfgs not an addon
+mount (zone files may come from Momentum's); read through the judged location.
+QC: zone_maxvel (1..100000) from the same key; the server prints `zones: <map> asks maxVelocity N,
+this server runs M` when the file it timed with disagrees. The editor writes `maxVelocity` into
+saved zone files (outside zone_crc, checked on read-back); Save settings stages the Speed cap there
+only when it was edited in the panel; the publish dialog says what cap goes. Multi-Session writes
+`maxvel` into ms.txt and drops a slot whose cap differs ("the speed cap changed"; a slot from
+before reads as cfg/maps or 3500). zonepub.validate refuses a maxVelocity outside 0 / 1..100000 by
+name. Existing times stay on their boards (Lex: "who cares if they are faster").
+
+**Verified:** tools/p841caps.py, one dedicated server over seven maps with planted files: subject
+surf_boreas 5000 (a packed 9000 data/ copy refused; QC, which reads packs, says 9000/5000),
+surf_ofrenda 10000 (cfg 6000), surf_santorini 3500 (file 0; a packed cfg/maps file refused),
+surf_axil 4500 (cfg only), a data/ file with a region QC cannot build 7777 with QC's 4000/7777, an
+out-of-range 200000 refused (cfg 9999 stands), a curated copy 6100; a pak symlink for the mode file
+refused on every map. The patch-816 server on the same QC: 3500 / 6000 / 7000 (the packed cfg) /
+4500 / 3500 / 9999 / 7000, and it followed the symlink onto the bhop ruleset ("6 cvars from
+cfg/lobby/mode_surf.cfg" on surf_boreas). Hosted editor round trip (cfg/test/p841editor.cfg, 18/18)
+with a planted settings file at 3500: a gravity-only save stages nothing; 6500 saved into the zone
+file, crc 5545b345 unchanged, zonepub.validate passes, 6500 from that file on reload. All 208
+shipped files with a cap pass the validator; surfd/test_zonepub 50/50. Pi native against the live
+patch-816 one: pm_dettest equal on bhop_eazy and surf_ace; on surf_boreas and colin_blaster the
+mover hashes differ and each native at the other's cap (planted before spawn: the mover reads
+movevars, set at spawn) reproduces the other's exactly. PASS recordings on three maps whose cap rose
+(colin_blaster 9194, surf_demise 3140, bhop_sandtrap 5136) PASS on the new native at
+5000/5000/10000 -- caps read from maps/zones/local and the Momentum mount's maps/zones/online.
+Five review rounds: two lenses on the feature and on its fixes, then three on the ruleset loader.
+
 ## Patch 839 — the 3D viewer moves a static prop only when it is drawn; the playhead is an element (surfd web)
 
 **Problem:** after P835, a static prop's per-frame `movement` was ~15% of a surf_demise frame:

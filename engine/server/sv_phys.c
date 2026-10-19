@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if !defined(CLIENTONLY) || defined(CSQC_DAT)
 
 #include "pr_common.h"
+#include "fs.h"	//P841: SPF_ISDIR
 
 /*
 
@@ -3461,6 +3462,52 @@ typedef struct
 						  before the column existed*/
 } svmapmeta_t;
 
+/*P841: a map-load ruleset is read only from a trusted directory: these run before the previous
+  map's own pakfile is dropped (sv_init.c), a BSP is untrusted, and downloads land in addon
+  directories. Zone files may come from an addon mount (Momentum's maps/zones/online). Links are
+  not followed -- a pak symlink reports its target's directory -- and the file is read through
+  the location that was judged, not looked up again.*/
+static char *SV_RulesetLoadLoose(const char *path, size_t *sz, qboolean addon, qboolean report)
+{
+	unsigned int bad = SPF_TEMPORARY|SPF_SERVER|SPF_UNTRUSTED|(addon ? 0 : SPF_ADDON);
+	flocation_t loc;
+	vfsfile_t *f;
+	qofs_t len;
+	char *buf;
+
+	if (!FS_FLocateFile(path, FSLF_IGNORELINKS, &loc))
+		return NULL;
+	if (!loc.search || (loc.search->flags & (SPF_ISDIR|bad)) != SPF_ISDIR)
+	{
+		if (report)
+			Con_Printf(CON_WARNING"ruleset: %s is not in a trusted directory - not read\n", path);
+		return NULL;
+	}
+	f = FS_OpenReadLocation(NULL, &loc);	//NULL: no VFS_Filter, which would decompress xz/gzip first
+	if (!f)
+		return NULL;
+	len = VFS_GETLEN(f);
+	if (len > 1024*1024)	//zone files are at most 256 KB (zonepub.py), data/mapmeta.txt ~200 KB
+	{
+		if (report)
+			Con_Printf(CON_WARNING"ruleset: %s is over 1 MB - not read\n", path);
+		VFS_CLOSE(f);
+		return NULL;
+	}
+	buf = BZ_Malloc(len + 1);
+	buf[len] = 0;
+	if (VFS_READ(f, buf, len) != len)
+	{
+		VFS_CLOSE(f);
+		BZ_Free(buf);
+		return NULL;
+	}
+	VFS_CLOSE(f);
+	if (sz)
+		*sz = len;
+	return buf;	//FS_FreeFile
+}
+
 static qboolean SV_MapMetaLookup(const char *mapname, svmapmeta_t *out)
 {
 	char *file, *l, *e, *p;
@@ -3470,7 +3517,7 @@ static qboolean SV_MapMetaLookup(const char *mapname, svmapmeta_t *out)
 
 	memset(out, 0, sizeof(*out));
 
-	file = FS_LoadMallocFile("data/mapmeta.txt", &sz);
+	file = SV_RulesetLoadLoose("data/mapmeta.txt", &sz, false, true);
 	if (!file)
 		return false;
 
@@ -3568,7 +3615,7 @@ static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 	size_t sz;
 	cvar_t *var;
 
-	file = FS_LoadMallocFile(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz, false, true);
 	if (!file)
 		return false;
 
@@ -3721,7 +3768,7 @@ static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out,
 	if (!mapname || !*mapname || isDedicated || Cvar_VariableValue("lobby_enable") || *Cvar_VariableString("lobby_master"))
 		return false;
 	Q_snprintfz(path, sizeof(path), "data/maps/settings/local/%s.cfg", mapname);
-	file = FS_LoadMallocFile(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz, false, report);
 	if (!file) return false;
 	if (sz > 4096 || memchr(file, 0, sz)) valid = false;
 	for (l = file; valid && *l; l = e)
@@ -3786,9 +3833,127 @@ static void SV_LoadEditorRuleset(const char *mapname)
 		pms_over[j].val = Z_StrDup(data.values[i]);
 		Cvar_ForceSet(data.vars[i], data.values[i]);
 	}
-	Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
+	if (*pms_appliedmapfile)	//P841: keep the map and zone files named
+		Q_strncatz(pms_appliedmapfile, " + ", sizeof(pms_appliedmapfile));
+	Q_strncatz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
 	Con_Printf("map_settings: %s maxvelocity %s gravity %s airaccelerate %s\n",
 		mapname, data.values[0], data.values[1], data.values[2]);
+}
+
+/*P841: a Momentum zone file's top-level maxVelocity is the map's speed cap, as in Momentum.
+  The file is the one SV_ZoneLoad (sv_zones.qc) times with: same names, same order, and
+  QC_FixFileName's data/-first lookup. 0 or absent is "not set" (12 shipped files say 0) and
+  leaves cfg/maps or the default. Differences from QC's choice, which the server QC reports
+  when the file it timed with asks for a cap the server is not running:
+  - a packed copy reads as absent (SV_RulesetLoadLoose); QC reads packs.
+  - "a zone file" is a parsed object with a non-empty region array; QC also needs a region
+    that builds, which it cannot know before the map's entities exist.*/
+qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
+
+static json_t *SV_JsonChild(json_t *t, const char *name)
+{	//exact key, first match, as QC's json_find_object_child; JSON_FindChild splits on dots
+	for (t = t ? t->child : NULL; t; t = t->sibling)
+		if (!strcmp(t->name, name))
+			return t;
+	return NULL;
+}
+
+static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
+{
+	if (!t || depth > 16)
+		return false;
+	if (t->type == json_type_array && t->child && !strcmp(t->name, "regions"))
+		return true;
+	for (t = t->child; t; t = t->sibling)
+		if (SV_ZoneAnyRegion(t, depth + 1))
+			return true;
+	return false;
+}
+
+//The file's maxVelocity, 0 if none; FALSE when this path is not a zone file at all.
+static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel)
+{
+	const char *name, *fallback;
+	char *file;
+	json_t *root, *mv, *gr;
+	qboolean zones;
+
+	if (!QC_FixFileName(path, &name, &fallback))
+		return false;
+	Q_strncpyz(found, name, foundsz);	//name may be a va() buffer
+	file = SV_RulesetLoadLoose(found, NULL, true, true);
+	if (!file && fallback)
+	{
+		Q_strncpyz(found, fallback, foundsz);
+		file = SV_RulesetLoadLoose(found, NULL, true, true);
+	}
+	if (!file)
+		return false;
+	root = JSON_Parse(file);	//its nodes point into file: free that last
+	zones = false;
+	if (root && root->type == json_type_object)
+	{
+		zones = SV_ZoneAnyRegion(SV_JsonChild(root, "tracks"), 0);
+		gr = SV_JsonChild(root, "globalRegions");	//flat region arrays
+		for (gr = gr ? gr->child : NULL; gr && !zones; gr = gr->sibling)
+			zones = gr->type == json_type_array && gr->child;
+	}
+	mv = zones ? SV_JsonChild(root, "maxVelocity") : NULL;
+	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
+	JSON_Destroy(root);
+	FS_FreeFile(file);
+	if (!zones)
+		Con_DPrintf("map ruleset: %s is not a zone file, trying the next\n", found);
+	return zones;
+}
+
+static void SV_LoadZoneRuleset(const char *mapname)
+{
+	static const char *const dirs[] = {"data/maps/zones/local", "maps/zones/curated",
+		"maps/zones/local", "maps/zones/online"};
+	char path[MAX_OSPATH], found[MAX_OSPATH], val[32];
+	qboolean have = false;
+	cvar_t *var;
+	double v = 0;
+	int i, j;
+
+	for (i = Cvar_VariableValue("sv_zones_curated") ? 0 : 2; i < 4 && !have; i++)
+	{
+		Q_snprintfz(path, sizeof(path), "%s/%s.json", dirs[i], mapname);
+		have = SV_ZoneRulesetFile(path, found, sizeof(found), &v);
+	}
+	if (!have || v == 0)
+		return;
+	if (!(v >= 1 && v <= 100000))
+	{
+		Con_Printf(CON_WARNING"map ruleset: %s maxVelocity is not 1..100000 - ignored\n", found);
+		return;
+	}
+	var = Cvar_FindVar("sv_maxvelocity");
+	if (!var)
+		return;
+	for (j = 0; j < pms_numover; j++)
+		if (pms_over[j].var == var)
+			break;
+	if (j == pms_numover)
+	{
+		if (pms_numover >= PMS_MAXOVERRIDE)
+		{
+			Con_Printf(CON_WARNING"map ruleset: override table full (%s)\n", found);
+			return;
+		}
+		pms_over[j].var = var;
+		pms_numover++;
+	}
+	else
+		Z_Free(pms_over[j].val);
+	Q_snprintfz(val, sizeof(val), "%.9g", v);
+	pms_over[j].val = Z_StrDup(val);	//before the set: the lock's callback reads it
+	Cvar_ForceSet(var, val);
+	if (*pms_appliedmapfile)
+		Q_strncatz(pms_appliedmapfile, " + ", sizeof(pms_appliedmapfile));
+	Q_strncatz(pms_appliedmapfile, found, sizeof(pms_appliedmapfile));
+	Con_Printf("map ruleset: %s sv_maxvelocity %s from %s\n", mapname, val, found);
 }
 
 static void SV_LoadMapRuleset(const char *mapname)
@@ -3803,6 +3968,7 @@ static void SV_LoadMapRuleset(const char *mapname)
 	Q_snprintfz(path, sizeof(path), "cfg/maps/map_%s.cfg", mapname);
 	if (SV_LoadRulesetFile(path, "map ruleset"))
 		Q_strncpyz(pms_appliedmapfile, path, sizeof(pms_appliedmapfile));
+	SV_LoadZoneRuleset(mapname);
 	SV_LoadEditorRuleset(mapname);
 	pms_mapover = pms_numover - before;
 }
