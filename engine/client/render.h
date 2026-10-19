@@ -277,6 +277,8 @@ typedef struct {
 
 #ifndef R_MAX_RECURSE
 #define R_MAX_RECURSE	6
+extern int r_visdynamic;	/*FTESurf Patch 850, renderer.c*/
+extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 #endif
 #define RDFD_FOV 1
 typedef struct refdef_s
@@ -331,6 +333,7 @@ typedef struct refdef_s
 	int			firstvisedict;		/*so we can skip visedicts in skies*/
 	int			visskipfrom, visskipto;	/*FTESurf Patch 850: in a nested view, the outer views' own entities*/
 	int			capturekind;		/*FTESurf Patch 850: GLR_DrawPortal's type, 0 for a portal or the main view*/
+	qboolean	insideportal;		/*FTESurf Patch 850: a portal's view or one nested inside it*/
 
 	pxrect_t	pxrect;				/*vrect, but in pixels rather than virtual coords*/
 	qboolean	externalview;		/*draw external models and not viewmodels*/

@@ -9168,7 +9168,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 			//none to draw (a refraction under the water, a reflection of a cave) does not render it.
 			//Not a portal: it inherits the near view's areas, so the far side's sky surfaces can be
 			//culled while the 3D sky still fills what nothing else drew (surf_kitsune's door).
-			qboolean need = (r_refdef.capturekind >= 1 && r_skyroomneed.ival >= 1) ||
+			qboolean need = (r_refdef.capturekind >= 1 && !r_refdef.insideportal && r_skyroomneed.ival >= 1) ||
 				(!r_refdef.recurse && r_skyroomneed.ival >= 2);
 			budgetprev = GLBudget_Push(GPUB_SKYROOM);
 			for (b = worldbatches[SHADER_SORT_SKY]; b; b = b->next)

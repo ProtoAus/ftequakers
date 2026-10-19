@@ -699,22 +699,6 @@ R_RenderScene
 r_refdef must be set before the first call
 ================
 */
-//FTESurf Patch 850: the entity list before the top-level view's world walk added its own props and
-//statics. A nested view sees those, then its own; the outer views' own ones it would draw again.
-int r_visdynamic;
-unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
-void R_ViewStats_f(void)
-{
-	unsigned int i, f = r_vs_frames ? r_vs_frames : 1;
-	Con_Printf("r_viewstats: %u frames; views a frame by depth:", r_vs_frames);
-	for (i = 0; i < R_MAX_RECURSE; i++)
-		Con_Printf(" %.2f", r_vs_views[i] / (double)f);
-	Con_Printf("; 3D skies a frame drawn %.2f skipped %.2f; nested entities passed over a frame %.1f\n",
-		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f);
-	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = 0;
-	memset(r_vs_views, 0, sizeof(r_vs_views));
-}
-
 static void R_RenderScene_Internal(void)
 {
 	extern qboolean depthcleared;
@@ -722,9 +706,10 @@ static void R_RenderScene_Internal(void)
 	extern cvar_t r_nestedents;
 	if (!r_refdef.recurse)
 	{
-		r_visdynamic = cl_numvisedicts;
+		r_visdynamic = cl_numvisedicts;	//FTESurf Patch 850: what a nested view sees besides its own walk
 		r_refdef.visskipfrom = r_refdef.visskipto = 0;
 		r_refdef.capturekind = 0;
+		r_refdef.insideportal = false;
 		r_vs_frames++;
 	}
 	else if (r_nestedents.ival && r_visdynamic < cl_numvisedicts)
@@ -1717,6 +1702,8 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 	oldrefdef = r_refdef;
 	r_refdef.recurse+=1;
 	r_refdef.capturekind = portaltype;	//FTESurf Patch 850: r_skyroomneed tells a water capture from a portal
+	if (!portaltype)
+		r_refdef.insideportal = true;	//...and from a capture inside one, which inherits its areas
 
 	r_refdef.externalview = true;
 
