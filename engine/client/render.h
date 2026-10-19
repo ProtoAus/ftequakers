@@ -331,9 +331,6 @@ typedef struct refdef_s
 	vec4_t		skyroom_spin;		/*the camera spin for sky rooms*/
 	qboolean	skyroom_enabled;	/*whether a skyroom position is defined*/
 	int			firstvisedict;		/*so we can skip visedicts in skies*/
-	int			visskipfrom, visskipto;	/*FTESurf Patch 850: in a nested view, the outer views' own entities*/
-	int			capturekind;		/*FTESurf Patch 850: GLR_DrawPortal's type, 0 for a portal or the main view*/
-	qboolean	insideportal;		/*FTESurf Patch 850: a portal's view or one nested inside it*/
 
 	pxrect_t	pxrect;				/*vrect, but in pixels rather than virtual coords*/
 	qboolean	externalview;		/*draw external models and not viewmodels*/
@@ -392,6 +389,11 @@ typedef struct refdef_s
 	vec3_t		skyroom_eye;		/*FTESurf Patch 758: vieworg when skyroom_pos was set*/
 	float		skyroom_scale;		/*...and its parallax divisor, 0 for none (a fixed camera)*/
 	float		m_projection_noclip[16];	/*FTESurf Patch 771: the root view's m_projection_std, which no portal's oblique near plane touches; the skyroom draws with it*/
+
+	//FTESurf Patch 850. Added at the end: the hl2 plugin reads this struct by offset.
+	int			visskipfrom, visskipto;	/*in a nested view, the outer views' own entities*/
+	int			capturekind;		/*GLR_DrawPortal's type, 0 for a portal or the main view*/
+	qboolean	insideportal;		/*a portal's view or one nested inside it*/
 } refdef_t;
 
 extern	refdef_t	r_refdef;
