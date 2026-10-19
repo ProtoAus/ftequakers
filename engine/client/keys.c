@@ -706,6 +706,59 @@ static qboolean Key_TakeHighlightedRow(qboolean argsonly)
 	return true;
 }
 
+/*FTESurf Patch 846: the input line becomes completion row `row` (1-based) plus `suffix`.
+  No length guard, unlike Key_TakeHighlightedRow: that is for keys that complete what you
+  typed, and a click or a cvar's ENTER has picked a row outright. Leaves nothing
+  highlighted, so the next ENTER runs the line.*/
+static qboolean Key_TypeCompletionRow(int row, const char *suffix)
+{
+	const char *s = key_lines[edit_line], *pick;
+	cmd_completion_t *c;
+	qboolean had_slash;
+	char line[MAXCMDLINE];
+
+	if (*s == ' ' || *s == '\t')
+		s++;
+	had_slash = (*s == '\\' || *s == '/');
+	if (had_slash)
+		s++;
+	if (*s == ' ' || *s == '\t')
+		s++;
+	c = Cmd_Complete(s, true);
+	if (!c || row < 1 || (size_t)row > c->num)
+		return false;
+	pick = c->completions[row-1].repl ? c->completions[row-1].repl : c->completions[row-1].text;
+	Q_snprintfz(line, sizeof(line), "%s%s%s", (cl_chatmode.ival && had_slash)?"/":"", pick, suffix);
+	Key_ClearTyping();
+	Key_ConsoleInsert(line);
+	Key_UpdateCompletionDesc();	//the footer, which for a cvar is its value and default
+	con_commandmatch = 0;
+	return true;
+}
+
+//FTESurf Patch 846: is the highlighted row a bare cvar name? Running one only prints it.
+static qboolean Key_HighlightIsCvar(void)
+{
+	const char *s = key_lines[edit_line], *pick;
+	cmd_completion_t *c;
+
+	if (con_commandmatch <= 0)
+		return false;
+	if (*s == ' ' || *s == '\t')
+		s++;
+	if (*s == '\\' || *s == '/')
+		s++;
+	if (*s == ' ' || *s == '\t')
+		s++;
+	if (strchr(s, ' ') || strchr(s, '\t'))
+		return false;	//an argument row; `set x` and friends are not ours to second-guess
+	c = Cmd_Complete(s, true);
+	if (!c || (size_t)con_commandmatch > c->num)
+		return false;
+	pick = c->completions[con_commandmatch-1].repl ? c->completions[con_commandmatch-1].repl : c->completions[con_commandmatch-1].text;
+	return Cvar_FindVar(pick) != NULL;
+}
+
 /*
 FTESurf Patch 213: move the dropdown's highlight, and ONLY the highlight.
 
@@ -840,8 +893,8 @@ static void Key_ConSetLine (const char *s);
 static void Key_ConSetText_f (void)
 {
 	Key_ConSetLine(Cmd_Argc() > 1 ? Cmd_Args() : "");
-	con_commandmatch = 0;
 	Key_UpdateCompletionDesc();
+	con_commandmatch = 0;	//Patch 846: after, since that sets row 1 (seen highlighted in p846popup)
 }
 
 static void Key_ConSelfTest_f (void)
@@ -1061,8 +1114,133 @@ static void Key_ConSelfTest_f (void)
 				}
 			}
 		}
+		/*FTESurf Patch 846: the cached map list against the live globs it replaces -- the
+		  same rows for each query -- and what a keystroke costs each way. The typing is
+		  the prefixes of one name, each a fresh partial for Cmd_Complete's memo.*/
+		if (all && Cvar_FindVar("sv_mapcompletioncache"))
+		{
+			static const char *queries[] = {"map ", "map kits", "map surf_n", "map _", "map b", "map 2", "map zzqq",
+				"map surf_a", "map surf_s", "map kz", "map bhop_", "map ski", "map mom", "map 1", "map surf_null"};
+			static const char *typed = "map surf_null";
+			cvar_t *mcc = Cvar_FindVar("sv_mapcompletioncache");
+			int savemcc = mcc->ival, q, mode, same = 0, compared = 0;
+			unsigned int sig[2][countof(queries)], num[2][countof(queries)], extra[2][countof(queries)];
+			double t, ms[3] = {0,0,0}, first = 0;
+			char pre[64];
+			size_t k, u, keys = strlen(typed) - 4;
+
+			for (mode = 0; mode < 2; mode++)
+			{
+				Cvar_SetValue(mcc, mode);	//any set drops the cache
+				for (q = 0; q < countof(queries); q++)
+				{
+					unsigned int h = 2166136261u;
+					const char *p;
+					Cmd_Complete(NULL, false);
+					r = Cmd_Complete(queries[q], true);
+					for (u = 0; r && u < r->num; u++)
+						for (p = r->completions[u].text; ; p++)
+						{
+							h = (h ^ (unsigned char)*p) * 16777619u;
+							if (!*p)
+								break;
+						}
+					sig[mode][q] = h;
+					num[mode][q] = r ? r->num : 0;
+					extra[mode][q] = r ? r->extra : 0;
+				}
+			}
+			for (q = 0; q < countof(queries); q++)
+			{
+				Con_Printf ("  (\"%s\": live %u rows +%u more, cached %u rows +%u more)\n", queries[q],
+							num[0][q], extra[0][q], num[1][q], extra[1][q]);
+				if (!extra[0][q])
+				{	//past 256 the live list keeps an arbitrary 256 and the cache the first
+					compared++;
+					same += (sig[0][q] == sig[1][q] && num[0][q] == num[1][q] && !extra[1][q]);
+				}
+			}
+			Key_ConCheck("cached map rows == live rows", same, compared);
+
+			//live, cached, live again: the second live run shows the first was not a cold disk
+			for (mode = 0; mode < 3; mode++)
+			{
+				Cvar_SetValue(mcc, mode == 1);
+				for (k = 0; k < keys; k++)
+				{
+					Q_strncpyz(pre, typed, min(sizeof(pre), k+6));
+					Cmd_Complete(NULL, false);
+					t = Sys_DoubleTime();
+					Cmd_Complete(pre, true);
+					t = Sys_DoubleTime() - t;
+					if (mode == 1 && !k)
+						first = t;	//the build is in here
+					else
+						ms[mode] += t;
+				}
+			}
+			Con_Printf ("  map completion per keystroke over \"%s\": live %.2f ms, cached %.3f ms (first key, building the list: %.2f ms), live again %.2f ms\n",
+						typed, ms[0]*1000/keys, ms[1]*1000/(keys-1), first*1000, ms[2]*1000/keys);
+			Cvar_SetValue(mcc, savemcc);
+		}
+
 		Cvar_SetValue(mc, savemc);
 		Cmd_Complete(NULL, false);
+	}
+
+	/*FTESurf Patch 846: through Key_Console itself, which is what a key press reaches.*/
+	if (con->linebuffered)
+	{
+		int saveenter = con_completionenter.ival;
+		char want[MAXCMDLINE];
+
+		Cvar_SetValue(&con_completionenter, 1);
+		history_line = edit_line;
+
+		Cmd_Complete(NULL, false);
+		c = Cmd_Complete("cl_", true);
+		Q_strncpyz(want, c->completions[0].repl ? c->completions[0].repl : c->completions[0].text, sizeof(want));
+		Key_ConSetLine("cl_");
+		con_commandmatch = 0;
+		Key_Console(con, K_TAB, 0);
+		Con_Printf ("  (Tab on \"cl_\" -> \"%s\")\n", key_lines[edit_line]);
+		Key_ConCheck("Tab, nothing highlighted: types row 1", !strcmp(key_lines[edit_line], want), 1);
+
+		Key_ConSetLine("con_completione");
+		con_commandmatch = 1;
+		Key_Console(con, K_ENTER, 0);
+		Key_ConCheck("Enter on a cvar row types it + space", !strcmp(key_lines[edit_line], "con_completionenter "), 1);
+		Key_ConCheck("... and leaves nothing highlighted", con_commandmatch, 0);
+
+		Key_ConSetLine("cl_");
+		Key_ConCheck("` with text typed goes to its bind", Key_Console(con, '`', '`') ? 1 : 0, 0);
+		Key_ConCheck("... and types nothing", !strcmp(key_lines[edit_line], "cl_"), 1);
+
+		/*The popup's row map, when this console painted one last frame (con_settext and a
+		  few frames first): from the top, consecutive completions, then the status row (0),
+		  and -1 below the box.*/
+		{
+			float px, py, rh;
+			int rows = Con_CompletionPopupRows(con, &px, &py, &rh), at, prev = 0, ok = 1;
+			for (n = 0; n < rows; n++)
+			{
+				at = Con_CompletionRowAt(con, px, py + (n+0.5f)*rh);
+				Con_Printf ("  (popup row %i at y %.1f -> completion %i)\n", n, py + (n+0.5f)*rh, at);
+				if (n == rows-1)
+					ok &= (at == 0);
+				else
+					ok &= (n ? at == prev+1 : at > 0);
+				prev = at;
+			}
+			if (rows)
+			{
+				Key_ConCheck("popup rows map top-down, status last", ok, 1);
+				Key_ConCheck("below the popup is not on it", Con_CompletionRowAt(con, px, py + rows*rh + 1), -1);
+			}
+			else
+				Con_Printf ("  ^3skip^7 no popup painted -- con_settext, a few frames, then con_selftest\n");
+		}
+		Cvar_SetValue(&con_completionenter, saveenter);
 	}
 
 restore:
@@ -2529,6 +2707,17 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		int wtop = (con->flags & CONF_ISWINDOW) ? Con_WindowTitleHeight() : 8;
 		int wsw = Con_WindowScrollWidth();
 		int wgr = Con_WindowGripSize();		//FTESurf Patch 213
+		/*FTESurf Patch 846: a click on the completion popup types its row in. The popup
+		  hangs below the window, so the bounds test next ate the press: the hover
+		  underline was all it ever did.*/
+		if (key == K_MOUSE1 || key == K_TOUCHTAP)
+		{
+			int row = Con_CompletionRowAt(con, mousecursor_x, mousecursor_y);
+			if (row > 0)
+				Key_TypeCompletionRow(row, "");
+			if (row >= 0)
+				return true;
+		}
 		if (con->flags & CONF_ISWINDOW)
 			if (con->mousecursor[0] < -CON_WNDBORDER || con->mousecursor[1] < 0 || con->mousecursor[0] > con->wnd_w || con->mousecursor[1] > con->wnd_h)
 				return true;
@@ -2811,6 +3000,13 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			Cbuf_AddText("\nvid_toggle\n", RESTRICT_LOCAL);
 #endif
 
+		/*FTESurf Patch 846: at con_completionenter 1 a highlighted cvar is typed in with a
+		  space for its value instead of run. Commands, aliases and argument rows (`map x`)
+		  still run.*/
+		if (con->commandcompletion && con_completionenter.ival && !ctrl && !shift &&
+			Key_HighlightIsCvar() && Key_TypeCompletionRow(con_commandmatch, " "))
+			return true;
+
 		/*The original path below only accepts incomplete command names.  Argument
 		  completions need the same accept-without-executing step before map/cvar
 		  dispatch sees the literal query text.*/
@@ -2920,6 +3116,18 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			if (con_completionenter.ival && con_commandmatch > 0 && !ctrl && !shift &&
 				Key_TakeHighlightedRow(false))
 				return true;
+			/*FTESurf Patch 846: and with nothing highlighted, the first row -- the one the
+			  green hint is showing -- rather than a common prefix and a highlight that
+			  took a second TAB to type in. Declined (the row is what is typed), it falls
+			  through to the old step.*/
+			if (con_completionenter.ival && con_displaypossibilities.ival >= 2 &&
+				con_commandmatch <= 0 && !ctrl && !shift)
+			{
+				con_commandmatch = 1;
+				if (Key_TakeHighlightedRow(false))
+					return true;
+				con_commandmatch = 0;
+			}
 			CompleteCommand (ctrl, shift?-1:1);
 		}
 		return true;
@@ -3049,11 +3257,10 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		}
 	}
 
+	//FTESurf Patch 846: ` is the console key and never text, so it reaches its bind
+	//(toggleconsole) with a line half typed too, rather than only when the cursor is at 0
 	if (rkey && !consolekeys[rkey])
-	{
-		if (rkey != '`' || key_linepos==0)
-			return false;
-	}
+		return false;
 
 	if (con_commandmatch)
 	{	//if they're typing, try to retain the current completion guess.

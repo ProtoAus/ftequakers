@@ -2945,12 +2945,14 @@ static void VID_ReconcileActiveApp (void)
 	//and stays silent.  A line here means the messages were WRONG and the grab was
 	//about to be left in the wrong state -- i.e. it prints exactly when the bug would
 	//have bitten.  Capped in case a future change ever makes the two ping-pong.
+	//FTESurf Patch 846: to the log file only. It was not rare on the owner's desktop ("I get
+	//it too much"), and the harnesses that count these lines read the log, not the screen.
 	{
 		static int moaned = 0;
 		if (moaned++ < 20)
-			Con_Printf("[focus] window is %s but the focus messages said %s -- correcting (in_focusgrab 0 to disable)\n",
+			Con_Log(va("[focus] window is %s but the focus messages said %s -- correcting (in_focusgrab 0 to disable)\n",
 						foreground?"foreground":"NOT foreground",
-						vid.activeapp?"active":"inactive");
+						vid.activeapp?"active":"inactive"));
 	}
 
 	if (GLAppActivate(foreground, Minimized))

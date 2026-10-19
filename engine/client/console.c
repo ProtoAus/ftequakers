@@ -293,6 +293,11 @@ be. Cleared by Con_DrawCompletionPopup itself on the first frame it declines.
 */
 static console_t	*con_popupshown;
 static float		con_popuphit[4];	//x, y, w, h
+//FTESurf Patch 846: which completions those rows were, for Con_CompletionRowAt
+static int			con_buildfirst, con_buildentries;	//Con_BuildCompletion's last window
+static int			con_popupfirst, con_popupentries;	//as recorded for this frame's popup
+static int			con_popuphitfirst, con_popuphitentries;
+static float		con_popuphitrow;	//one row's height, virtual pixels
 
 static void Con_FreeCompletion(console_t *con)
 {
@@ -502,6 +507,8 @@ static int Con_BuildCompletion(console_t *con, const char *text, int maxrows)
 	if (last > (int)c->num)
 		last = c->num;
 	total = c->num + c->extra;
+	con_buildfirst = first;			//FTESurf Patch 846
+	con_buildentries = last - first;
 
 	for (i = first; i < last; i++, n++)
 	{
@@ -2177,6 +2184,8 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 			{
 				con_popupcon  = con;
 				con_popuprows = rows;
+				con_popupfirst   = con_buildfirst;
+				con_popupentries = con_buildentries;
 				con_popupl    = left;
 				con_popupr    = right;
 				con_popupb    = y + Font_CharHeight();	//the bottom the caller passed in
@@ -4147,6 +4156,9 @@ static void Con_DrawCompletionPopup(console_t *con)
 	con_popuphit[1] = vy;
 	con_popuphit[2] = vw;
 	con_popuphit[3] = vh;
+	con_popuphitfirst = con_popupfirst;
+	con_popuphitentries = con_popupentries;
+	con_popuphitrow = ch * syv;
 }
 
 //FTESurf Patch 226: is (x,y) over the popup the console last painted? Virtual pixels.
@@ -4156,6 +4168,30 @@ static qboolean Con_PopupCovers(console_t *con, float x, float y)
 		return false;
 	return x >= con_popuphit[0] && x < con_popuphit[0]+con_popuphit[2] &&
 	       y >= con_popuphit[1] && y < con_popuphit[1]+con_popuphit[3];
+}
+
+/*FTESurf Patch 846: the completion (1-based) under (x,y) on the popup last painted; 0 over
+  it but not on an entry (the status row), -1 not over it. Rows run top to bottom from
+  con_popuphitfirst with the status row last: the chain head is drawn at the bottom.*/
+int Con_CompletionRowAt(console_t *con, float x, float y)
+{
+	int r;
+	if (!Con_PopupCovers(con, x, y) || con_popuphitrow <= 0)
+		return -1;
+	r = (int)((y - con_popuphit[1]) / con_popuphitrow);
+	if (r < 0 || r >= con_popuphitentries)
+		return 0;
+	return con_popuphitfirst + r + 1;
+}
+//for con_selftest: rows the popup last painted, with its centre x, top y and row height
+int Con_CompletionPopupRows(console_t *con, float *x, float *y, float *rowh)
+{
+	if (con_popupshown != con || con_popuphitrow <= 0)
+		return 0;
+	*x = con_popuphit[0] + con_popuphit[2]/2;
+	*y = con_popuphit[1];
+	*rowh = con_popuphitrow;
+	return (int)(con_popuphit[3] / con_popuphitrow + 0.5f);
 }
 
 void Con_DrawConsole (int lines, qboolean noback)
