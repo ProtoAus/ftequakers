@@ -29,6 +29,10 @@ as fails (surf_tibet: 35 s of a good stage hidden), an END over the stage box hi
 from the first attempt and the chip's state; all fixed by the stage machine above. Left open
 (BACKLOG): another track's END over a stage box loses that split (P750's rule), stage-run imports.
 
+**Deployed:** FTESurf f025d7a1 (code 8f4fb23c). All 12 lobbies 2026-10-19T04:51Z, csprogs 74fbeba9
+(.prev 100068b0); both installs the same by 04:55Z. Lobby smoke on the 0.1.27 exe (e19f681d)
+against lobby 1: served 74fbeba9, board drew, no QC error. Lex's look pending (lextest P820).
+
 ## Patch 819 — hour-long lobby maps, hour extensions, a whole hour for the first player in (qwprogs, lobby cfgs)
 
 **Problem:** Lex, 19 Oct: "map map lobbies go for an hour, and make extend, extend the map by 1
@@ -51,6 +55,10 @@ more minutes", 1:59:34 left; disconnect and rejoin -> server "first player in an
 server state and control flow) found the first-begin reset on every map change and a vote that
 could survive it; fixed. Left open (BACKLOG): an !extend in a hold's last hour, a lone player's
 reconnect resets. Not run: the reset NOT firing with a second client present.
+
+**Deployed:** FTESurf f025d7a1. All 12 lobbies 2026-10-19T04:51Z: qwprogs 234261dd (.prev f08f6fc1),
+lobby cfgs (backups `*.pre819-20261019T045018Z`); rcon read back lobby_cycle 3600 and
+lobby_extend_time 3600 on every port. Both installs' qwprogs the same. Lex's check pending.
 
 ## Patch 818 — surf_view: red resets, yellow clip, blue ramps (engine)
 
@@ -77,6 +85,10 @@ Offline over 13 maps' brushes: every PLAYERCLIP-only brush has all faces nodraw,
 "clip" brushes are grates (surf_disneyland 160). One review (lens: predicate and control flow) found
 clip ramps yellow and grates as clip; both fixed. Left open (BACKLOG): Quake 2/3 maps build no
 collision tree by default, so surf_view draws nothing there.
+
+**Deployed:** engine 306a6304d (tag patch-818; merged into main 19b9ea60b). Both installs by
+2026-10-19T04:55Z: exe f49207dd (.prev 219c737c), plugins unchanged (hl2 6a235275). Client only;
+the lobbies' native is untouched. Lex's look pending (lextest P818).
 
 ## Patch 815 — admin zone uploads are published by themselves; clients show the lobby's zones (qwprogs, csprogs, menu, surfd zonepub)
 
