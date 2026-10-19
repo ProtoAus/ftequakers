@@ -277,9 +277,9 @@ typedef struct {
 
 #ifndef R_MAX_RECURSE
 #define R_MAX_RECURSE	6
+#endif
 extern int r_visdynamic;	/*FTESurf Patch 850, renderer.c*/
 extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
-#endif
 #define RDFD_FOV 1
 typedef struct refdef_s
 {

@@ -3795,15 +3795,16 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 	}
 
 	//FTESurf Patch 850: a nested view passes over its outer views' own props and statics
-	//(R_RenderScene_Internal). The drawing pass only: shadow casters keep every copy, as a prop
-	//this view's walk culled can still shadow what it sees. Not when the list is full, as then
-	//this view's walk could not add its own copies.
+	//(R_RenderScene_Internal). Not the shadow-caster passes (fake shadows filter in DEPTHONLY):
+	//a prop this view's walk culled can still shadow what it sees. Not when the list is full, as
+	//then this view's walk could not add its own copies.
 	skipfrom = skipto = 0;
-	if (bemode == BEM_STANDARD && r_refdef.visskipto > r_refdef.visskipfrom && cl_numvisedicts < cl_maxvisedicts)
+	if (bemode != BEM_DEPTHONLY && bemode != BEM_STENCIL && r_refdef.visskipto > r_refdef.visskipfrom && cl_numvisedicts < cl_maxvisedicts)
 	{
 		skipfrom = r_refdef.visskipfrom;
 		skipto = r_refdef.visskipto;
-		r_vs_entskipped += skipto - skipfrom;
+		if (bemode == BEM_STANDARD)
+			r_vs_entskipped += skipto - skipfrom;
 	}
 	// draw sprites seperately, because of alpha blending
 	for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
