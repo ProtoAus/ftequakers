@@ -365,7 +365,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 //FTESurf Patch 844: and the entity's renderamt, as Source's g_flAlpha2
-//(lightmappedgeneric_ps2_3_x.h:429).  1 on the world and an opaque entity.
+//(lightmappedgeneric_ps2_3_x.h:413-429).  1 on the world and an opaque entity.
+//Under $basealphaenvmapmask the base alpha is the mask, so a faded entity
+//takes its renderamt alone, as Source does.
+"#ifdef ENVFROMBASE\n"
+"if (e_colourident.a < 1.0)\n"
+"diffuse_f.a = 1.0;\n"
+"#endif\n"
 "diffuse_f.a *= float(ALPHA) * e_colourident.a;\n"
 
 "#ifdef NOFOG\n"
