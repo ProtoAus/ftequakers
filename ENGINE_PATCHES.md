@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 838 — closing native carry cannot be negative (reader)
+
+**Problem:** The reader accepted a finite negative `inend` remainder. The native
+mover explicitly clamps its carry to zero before publishing it, including frozen
+and spectator commands; the clamp predates the field's introduction. Syntax alone
+therefore admitted a value the writer's native source cannot publish.
+
+**Change:** `reccheck.py` rejects negative v8+ closing carry, while preserving
+signed zero, positive values, prefixes and pre-v8 handling. When binary64 yields
+zero, an exact coefficient distinguishes negative nonzero underflow from genuine
+zero without exponent arithmetic. This asserts no upper
+quantum bound or elapsed-clock equality. Only this diagnostic and P833's independent
+closing-observation diagnostic share validated reset-history eligibility, including
+when both occur; any unrelated recording fault retains the prior closed guard.
+No writer/format, native pin/tag, threshold, permission, collection or policy change.
+
+**Verified:** 580 reader checks, 268 receipt checks, sweep/connection suites pass.
+The 40 new assertions first expose 21 specific failures in the P833 reader; positive,
+signed-zero, legacy and existing restore controls act. Warm/cold two-restore cases
+keep unavailable angles and retain either/both recording faults plus independent
+sidecar faults. Independent review caught binary64 sign loss: 15 boundary checks
+expose five misses in the blocked version, including v8 decimal underflow and v9/10
+exponent spellings; signed zero stays legal. Actual-module matched-digest
+receipt-angle matrix: 77 controls and
+four unrelated-fault authority controls pass. Current same-byte 421-record/209-view
+corpus preserves exact fault sets, angle availability and reset budgets; original
+native captures stay compatible and a carry-only native negative is rejected.
+No hardware/signature/calibration or full initial/final clock proof claimed.
+
 ## Patch 837 — the HUD run graph's still layer is drawn once and reused (csprogs + glsl)
 
 **Problem (Lex's setup, 19 Oct):** after 836 the run graph panel was the biggest HUD item left with
