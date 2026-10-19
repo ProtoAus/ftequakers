@@ -1,5 +1,52 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 837 — the HUD run graph's still layer is drawn once and reused (csprogs + glsl)
+
+**Problem (Lex's setup, 19 Oct):** after 836 the run graph panel was the biggest HUD item left with
+Lex's config and eight board lines: +0.385 ms of QC a frame (+0.495 ms of frame), almost all of it
+drawing the same panel again every frame -- the curves' strips, rounded boxes of seven pictures
+each, outlined text.
+
+**Change:**
+- The still layer -- panel, header, frames, clocks, legend, and every curve but the live run's -- is
+  drawn into two render targets, one cleared black and one cleared white, when something it shows
+  changes (LineGraph_CacheSame keys every input of LineGraph_HudStill) and at least every 2 s. Each
+  frame one quad composites it with glsl/ftesurf_lgcache.glsl: out = black + scene * (white -
+  black), premultiplied, which holds for any mix of the layer's blends (fills SRC_ALPHA, pictures
+  and fonts premultiplied). The live run's curve and the heads draw over it every frame.
+- The targets are 1:1 with the screen's pixels: nearest, RGBA16F, as large as the panel's far
+  corner. In a target the 2D projection is flipped while the clip is converted as the screen's, so
+  the layer's clip rectangles are flipped there (LineGraph_Clip).
+- It draws directly with hud_linegraph_cache 0, without glsl/ftesurf_lgcache.glsl (every install
+  before this one: lobby players on 0.1.27), on non-GL renderers, when 2D units are not physical
+  pixels, with the panel off the top or left edge, and in a demo while capturedemo has its own size.
+- Shader facts met on the way (no engine change): inline `glslprogram` is shader-level only, and
+  then a pass keeps one map; a `blendfunc` after a pass's second map lands on the merged sub-pass,
+  whose blend bits never reach GL; `!!samps 2` declares one sampler named s_2.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; Lex's ftesurf.cfg read into each rig, never written;
+surf_voyager, eight board lines):**
+- Paused, the panel cached against direct: within 7 of 255 levels (41.7k pixels off by 1-7: direct
+  rounds to 8 bits after each layer); direct against direct 0 pixels; the scene shows through as before.
+- Same process, 8 pairs: frame -0.38 ms (4.74 -> 4.27), QC -0.35 ms.
+- Redrawn 0 times in 406 frames standing, 3 in 2,353 frames of a live run, 2 in 4,619 of a replay,
+  besides the 2 s refresh.
+- After a vid_restart with a resize (surf_dune) the panel draws correctly; the big panel
+  (ui_native_graphs 0) draws, and the HUD graph is pixel-identical before and after it.
+  vid_restart itself crashes now and then with or without this csprogs (the control crashed on
+  voyager and on dune).
+- The 0.1.27 exe without the glsl reads cache 0 and draws the graph as before. Lobby smoke (served
+  f1f94d56, the board drew, no QC error) on the 0.1.27 and the current exe.
+- Two review rounds. Round 1: the material was lost for good on a vid_restart (now forgotten and
+  renamed per generation), a mega screenshot or sized capture could leave a wrong layer (the 2 s
+  refresh), full-window targets (~59 MB at 1440p; now sized to the panel). Round 2: a zero-size
+  target with the panel off screen, and the refresh during a sized capturedemo; both now draw
+  directly (not reviewed again).
+
+**Known:** a screenshot_mega whose frame is a rebuild sends the rest of that frame's HUD to the back
+buffer (the csprogs cannot see the screenshot's framebuffer). The replay's playhead dot is not held
+inside its plot; off its range it now lies over plot 2's curves rather than under them.
+
 ## Patch 836 — board-line names are looked for natively: lines_label (engine + csprogs)
 
 Built, deployed and first written up as 833; pi.dev published its own 833 first (its claim file
