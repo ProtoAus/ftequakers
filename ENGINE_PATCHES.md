@@ -42,6 +42,30 @@ mismatches, half the LabelAt calls -- and measured nothing (16-pair same-process
 **Known:** the other line work stays in QC: board lines still cost ~0.7 ms of QC in that setup
 (marks, follow, find), and the run graph (+0.41 ms) draws its curves natively already.
 
+## Patch 835 — the 3D viewer's renderer: the same visible sets from less work (surfd web)
+
+**Problem:** Lex asked for more viewer fps without lower quality. On heavy maps the viewer is
+CPU-bound in noclip's per-frame JavaScript, not the GPU: a canvas twice the size costs at most
+6%, and our own drawing is about 0.45 ms a frame. On surf_demise `gatherLiveSets` was 42% of the
+CPU: three BSP walks a frame over ~48,000 nodes and ~350,000 `Set.add` calls for 1,670 faces.
+
+**Change:** five vendor patches in `src/viewer/tools/vendor.py`, each the same answer from less
+work: A skips BSP subtrees with no visible leaf (a per-view mask rebuilt when the PVS changes);
+B lets the water check reuse the main view's freshly gathered set (one BSPRenderer only); C
+prunes the water lookup by a fixed per-node water-below mask; D stamps each face once per walk
+before `Set.add` (insertion order kept); E caches an entity's leaf clusters while its bounds,
+compared by value, stay put. A lost WebGL context now says so. Live on surfd e58d9d0e since
+2026-10-19T12:20:25Z.
+
+**Verified:** separate builds alternated, vsync off, camera held: surf_demise +31..+79% held
+views and playback 62 -> 92 fps, surf_boreas +24..+94%, surf_prosurf b4 +49..+66%, surf_beginner
++16..+37%; live page on surf_demise 94/69/92 against 52/48/57. The visible face and leaf sets
+hash identically in order under every configuration; 12 views on 4 maps byte-identical with the
+scene clock frozen; E's cross-check 0 mismatches in 0.17-1.1 M queries. Review: 4.5 M old-vs-new
+comparisons on random trees, 0 mismatches; each deliberately broken edit caught (1,403 to 10,179
+mismatches). `tools/fps.mjs` is the A/B; grade its state line, since a lost context renders
+nothing thousands of times a second.
+
 ## Patch 834 — the 3D viewer's Display settings, energy, and what it keeps on the PC (surfd web)
 
 **Problem:** Lex asked for viewer settings (which overlays and HUD elements show, a clean
