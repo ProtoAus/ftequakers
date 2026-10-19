@@ -3483,12 +3483,13 @@ static char *SV_RulesetLoadLoose(const char *path, size_t *sz, qboolean addon, q
 			Con_Printf(CON_WARNING"ruleset: %s is not in a trusted directory - not read\n", path);
 		return NULL;
 	}
-	f = FS_OpenReadLocation(path, &loc);
+	f = FS_OpenReadLocation(NULL, &loc);	//NULL: no VFS_Filter, which would decompress xz/gzip first
 	if (!f)
 		return NULL;
 	len = VFS_GETLEN(f);
-	if (len > 1024*1024)	//zone files are at most 256 KB (zonepub.py)
+	if (len > 1024*1024)	//zone files are at most 256 KB (zonepub.py), data/mapmeta.txt ~200 KB
 	{
+		Con_Printf(CON_WARNING"ruleset: %s is over 1 MB - not read\n", path);
 		VFS_CLOSE(f);
 		return NULL;
 	}
