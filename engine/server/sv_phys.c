@@ -3462,6 +3462,50 @@ typedef struct
 						  before the column existed*/
 } svmapmeta_t;
 
+/*P841: a map-load ruleset is read only from a trusted directory: these run before the previous
+  map's own pakfile is dropped (sv_init.c), a BSP is untrusted, and downloads land in addon
+  directories. Zone files may come from an addon mount (Momentum's maps/zones/online). Links are
+  not followed -- a pak symlink reports its target's directory -- and the file is read through
+  the location that was judged, not looked up again.*/
+static char *SV_RulesetLoadLoose(const char *path, size_t *sz, qboolean addon, qboolean report)
+{
+	unsigned int bad = SPF_TEMPORARY|SPF_SERVER|SPF_UNTRUSTED|(addon ? 0 : SPF_ADDON);
+	flocation_t loc;
+	vfsfile_t *f;
+	qofs_t len;
+	char *buf;
+
+	if (!FS_FLocateFile(path, FSLF_IGNORELINKS, &loc))
+		return NULL;
+	if (!loc.search || (loc.search->flags & (SPF_ISDIR|bad)) != SPF_ISDIR)
+	{
+		if (report)
+			Con_Printf(CON_WARNING"ruleset: %s is not in a trusted directory - not read\n", path);
+		return NULL;
+	}
+	f = FS_OpenReadLocation(path, &loc);
+	if (!f)
+		return NULL;
+	len = VFS_GETLEN(f);
+	if (len > 1024*1024)	//zone files are at most 256 KB (zonepub.py)
+	{
+		VFS_CLOSE(f);
+		return NULL;
+	}
+	buf = BZ_Malloc(len + 1);
+	buf[len] = 0;
+	if (VFS_READ(f, buf, len) != len)
+	{
+		VFS_CLOSE(f);
+		BZ_Free(buf);
+		return NULL;
+	}
+	VFS_CLOSE(f);
+	if (sz)
+		*sz = len;
+	return buf;	//FS_FreeFile
+}
+
 static qboolean SV_MapMetaLookup(const char *mapname, svmapmeta_t *out)
 {
 	char *file, *l, *e, *p;
@@ -3471,7 +3515,7 @@ static qboolean SV_MapMetaLookup(const char *mapname, svmapmeta_t *out)
 
 	memset(out, 0, sizeof(*out));
 
-	file = FS_LoadMallocFile("data/mapmeta.txt", &sz);
+	file = SV_RulesetLoadLoose("data/mapmeta.txt", &sz, false, true);
 	if (!file)
 		return false;
 
@@ -3562,22 +3606,6 @@ the same parse, the same refusal list and, above all, the same
 record-then-ForceSet ordering against the lock's callback. A second copy would
 be a second place for that ordering to be got wrong.
 */
-/*P841: a ruleset is read only from a directory. Rulesets load before the previous map's own
-  pakfile is dropped (sv_init.c), and a BSP is untrusted content.*/
-static char *SV_RulesetLoadLoose(const char *path, size_t *sz)
-{
-	flocation_t loc;
-
-	if (!FS_FLocateFile(path, FSLF_IFFOUND, &loc))
-		return NULL;
-	if (!loc.search || !(loc.search->flags & SPF_ISDIR))
-	{
-		Con_Printf(CON_WARNING"map ruleset: %s is inside a package - not read\n", path);
-		return NULL;
-	}
-	return FS_LoadMallocFile(path, sz);
-}
-
 static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 {
 	char name[64];
@@ -3585,7 +3613,7 @@ static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 	size_t sz;
 	cvar_t *var;
 
-	file = SV_RulesetLoadLoose(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz, false, true);
 	if (!file)
 		return false;
 
@@ -3738,7 +3766,7 @@ static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out,
 	if (!mapname || !*mapname || isDedicated || Cvar_VariableValue("lobby_enable") || *Cvar_VariableString("lobby_master"))
 		return false;
 	Q_snprintfz(path, sizeof(path), "data/maps/settings/local/%s.cfg", mapname);
-	file = SV_RulesetLoadLoose(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz, false, report);
 	if (!file) return false;
 	if (sz > 4096 || memchr(file, 0, sz)) valid = false;
 	for (l = file; valid && *l; l = e)
@@ -3851,11 +3879,11 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	if (!QC_FixFileName(path, &name, &fallback))
 		return false;
 	Q_strncpyz(found, name, foundsz);	//name may be a va() buffer
-	file = SV_RulesetLoadLoose(found, NULL);
+	file = SV_RulesetLoadLoose(found, NULL, true, true);
 	if (!file && fallback)
 	{
 		Q_strncpyz(found, fallback, foundsz);
-		file = SV_RulesetLoadLoose(found, NULL);
+		file = SV_RulesetLoadLoose(found, NULL, true, true);
 	}
 	if (!file)
 		return false;
