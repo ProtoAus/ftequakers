@@ -783,7 +783,9 @@ static char rcpt_ularm[RCPT_ULSLOTS][MAX_QPATH];
 static cvar_t rcpt_upload = CVARFD("rec_upload", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
 	"Allow consented, per-run armed angle sidecars to be uploaded when the server requests them.");
 static cvar_t rcpt_hid_upload = CVARFD("rec_hid_upload", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
-	"Separate opt-in: allow raw mouse/keyboard run journals to be sent to the official HTTPS collector for anti-cheat review. Off by default; online consent alone does not enable this.");
+	"New online acceptance includes raw mouse/keyboard run journal uploads to the official HTTPS collector unless you opt out. "
+	"Older saved answers do not grant the new scope. Stop cancels active uploads and blocks new ones; rec_hid 0 also stops local recording. "
+	"Native confirmed permission is still required; evidence already received is not deleted.");
 
 #ifdef WEBCLIENT
 #define HID_HTTP_HEAD 1024

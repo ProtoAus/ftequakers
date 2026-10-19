@@ -4905,7 +4905,7 @@ static const char *SV_VerifyZoneCmp (const char *here, const char *fsrc,
 	return NULL;
 }
 
-/* Patch 816: positive exclusions change the timer clock this replay does not
+/* Patch 816: known exclusions change the timer clock this replay does not
    model. Zero edges are inert; malformed/overflowing counters are not zero. */
 static const char *SV_RecSim_HoldRefusal (const char *s)
 {

@@ -12,7 +12,10 @@ consistency. A refusal is an unsupported-evidence boundary, not a cheating findi
 counters. Native verification refuses positive exclusions and malformed/overflowing
 accounting explicitly. Zero edges remain inert. No frozen-clock reconstruction,
 legacy eligibility widening, recorder/journal format, mover or permission change;
-`pm_recsim` remains diagnostic and unchanged.
+`pm_recsim` remains diagnostic and unchanged. The client `rec_hid_upload` help now
+matches the already-shipped online disclosure: new acceptance includes uploads
+unless opted out, old answers do not grant the new scope, and Stop remains effective.
+Only description text changes; defaults, saved answers, setters and gates are untouched.
 
 **Verified:** Acting installed-native baseline: genuine 21.920 s control and both
 metadata derivatives PASS. Candidate full builds, explicit post-change native
