@@ -2090,7 +2090,7 @@ static void cs_buildmatricies(void)
 	r_refdef.fovv_x = ofovvx,
 	r_refdef.fovv_y = ofovvy;
 }
-//FTESurf Patch 833: project()'s arithmetic, shared with lines_label, which must land where QC's
+//FTESurf Patch 836: project()'s arithmetic, shared with lines_label, which must land where QC's
 //own project() would. The caller rebuilds the matrices first.
 static void CS_ProjectPoint(const float *in, float *out)
 {
@@ -7231,7 +7231,7 @@ static struct {
 	{"lines_arrays",		PF_cs_lines_arrays,		0},
 	{"lines_lod",			PF_cs_lines_lod,		0},
 	{"lines_draw",			PF_cs_lines_draw,		0},
-	{"lines_label",			PF_cs_lines_label,		0},	//FTESurf Patch 833
+	{"lines_label",			PF_cs_lines_label,		0},	//FTESurf Patch 836
 	{"memnostrings",		PF_memnostrings,		0},	//FTESurf Patch 763
 
 	{"drawstring",				PF_CL_drawcolouredstring,		326},	// #326

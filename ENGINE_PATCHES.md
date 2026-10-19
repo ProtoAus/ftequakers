@@ -1,6 +1,9 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 833 — board-line names are looked for natively: lines_label (engine + csprogs)
+## Patch 836 — board-line names are looked for natively: lines_label (engine + csprogs)
+
+Built, deployed and first written up as 833; pi.dev published its own 833 first (its claim file
+was older), so this is 836. The installs' exe was restamped.
 
 **Problem (Lex's setup, 19 Oct):** with Lex's config and eight board lines on surf_voyager, the
 names on the lines (`hud_linegraph_labels`) cost +0.475 ms of QC a frame (+0.63 ms of frame;
@@ -38,6 +41,35 @@ mismatches, half the LabelAt calls -- and measured nothing (16-pair same-process
 
 **Known:** the other line work stays in QC: board lines still cost ~0.7 ms of QC in that setup
 (marks, follow, find), and the run graph (+0.41 ms) draws its curves natively already.
+
+## Patch 833 — a closing horizon must reach raw state observations (reader)
+
+**Problem:** A post-move warp or later carrier change may follow the last input.
+`inend` could precede that already observed raw mover counter and still parse cleanly.
+
+**Change:** Bound an ordinary v8+ finish's live closer by the maximum valid
+warp/ride counter in its parsed context. Only validated restore/session metadata
+establish boundaries; moving a marker after the closer cannot erase it. Kept
+`abandon` is excluded: its frozen closer may legitimately use an earlier latch,
+and the format has no reliable frozen discriminator. Other body/sidecar faults
+remain intact; a sole new closing fault cannot revoke valid restore reset
+allowances and manufacture a sidecar fault. No timer equality, writer/format,
+native pin, threshold, permission or policy change; packet ordinals, prefixes
+and open warp vocabulary stay intact.
+
+**Verified:** 525 reader checks, zero failed; receipt, sweep and connection suites
+pass; isolated QC build zero warnings in 3 VMs. Initial 45 checks expose twelve
+prepatch misses. First independent review blocked the frozen-evidence assertion
+and raw-token reset authority; 41 added controls expose 28 failures in that blocked
+version, including multi-restore unavailable joins and independent sidecar faults.
+Second review blocked a missing ordinary-close/multi-restore cross-product;
+16 added checks expose eight false-sidecar failures in that version. Corrected
+actual-module receipt-angle controls preserve BLIND and independent faults.
+The captured control stays clean and its byte-only closing negative still faults.
+Five native captured files preserved. Same-byte comparison against the installed
+prepatch reader: runs 319 recordings/119 sidecars; evidence 102/90; exact fault
+sets/angle availability unchanged. The corpus did not itself exercise the blocked
+exception: the source-derived acting controls do. No historical receipt reread.
 
 ## Patch 832 — r_blendsort 2 stops re-checking a batch once per face (engine)
 

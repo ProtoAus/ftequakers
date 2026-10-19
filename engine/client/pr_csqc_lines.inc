@@ -14,7 +14,7 @@ to one is a change to the other (FTESurf tools/test_p645lines.py compares them p
   lines_strip2d(pts, n, org, scale, rgb, a)    a strip through n (x, y, starts-a-strip) triples: a plot's curve
   lines_arrays / lines_lod                     where a VM keeps its samples and their LOD tables
   lines_draw(parm, n)                          Line_Draw's pass over one slot; 0 = not drawn
-  lines_label(parm, n)                         Patch 833: where a line's name may sit, its first look
+  lines_label(parm, n)                         Patch 836: where a line's name may sit, its first look
 
 QC pointers are kept as QC pointers and resolved, with their sizes, inside each call; every
 index a pass can reach is checked before it starts. The numbers are trusted to be numbers: a
@@ -853,7 +853,7 @@ static void QCBUILTIN PF_cs_lines_draw(pubprogfuncs_t *prinst, struct globalvars
 }
 
 /*
-FTESurf Patch 833: LineGraph_WorldLabels' first look along a line for where its name can sit. In
+FTESurf Patch 836: LineGraph_WorldLabels' first look along a line for where its name can sit. In
 QC each of up to 256 samples a line costs a vlen and, for most, LineGraph_LabelAt -> Line_ProjPt ->
 project(): with eight board lines, 0.48 ms a frame. This is that loop in the same order on the same
 float arithmetic -- vlen is sqrt(DotProduct), project() is CS_ProjectPoint, and -ffp-contract=off
