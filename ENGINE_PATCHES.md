@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 810 — Source's PlayerProximity fade on brush entities; 16 portals per view (csprogs)
+
+**Problem.** Lex, 19 Oct, on surf_tripportals: "in Momentum that neon fades out with distance from
+the player" (two Momentum screenshots), and "r_portalmaxviews 16 is much better!".
+
+**Change.** FTESurf `src/client/cl_proximity.qc` (new). At map load the brush submodels' materials
+are read; an UnlitGeneric with `$alpha <- Subtract($var, P)`, `P <- PlayerProximity` (Source's
+Init rules: the vars must be declared) on a plain identity-alphaGen pass gets a deltalisten
+callback, which writes alpha = base - scale * |entity centre - player centre| every frame
+(proxyplayer.cpp:45-60). The pass takes it through RF_TRANSLUCENT -> BEF_FORCETRANSPARENT
+(gl_backend.c:3054-3058). Measured from the player (feet + 31), a replay's or watched player's
+body, or a free camera. `vbsp_proximity` 0/1/2. r_portalmaxviews default 2 -> 16 (default.cfg,
+defaultuser.cfg; a saved 2 moves once, `portal_cfg_rev`). No native change.
+
+**Verified.** This PC, listen server. surf_tripportals: 279 entities accepted, 1 declined, 217-232
+ms at load; from spawn 24 of 123 drawn, matching an offline recompute; the client path with the
+fade off differs from the engine's by 0 pixels; QC 0.05 ms a frame (all QC 0.89 against 0.87
+with no listen). timerefresh at the tripportals spawn: 5.6 ms at 2 views, 9.2 at 16, 2.6 at 16
+with recursion 1; surf_kitsune's spawn 3.6 / 3.2. One review round (two lenses), its fixes in.
+Momentum's part-faded pieces read brighter (0.94 against 0.72 at 186 units). FTESurf 2254d304;
+installs 21:56Z, lobbies through P814's fleet deploy 00:51Z (csprogs b7c29da0). Not yet run on
+the 0.1.27 exe.
+
+## Patch 807 — volume brushes Source never draws are not drawn (qwprogs)
+
+**Problem.** Lex, 19 Oct: surf_voyager save 1 shows a func_smokevolume brush, "I can see a
+trigger brush which is a smoke volume".
+
+**Change.** FTESurf `src/server/sv_entities.qc`: func_dustmotes, func_dustcloud,
+func_smokevolume, func_precipitation and color_correction_volume drop their model after setmodel;
+the precache stays for cl_emit.qc's probe. ShouldDraw is false for C_Func_Dust,
+C_BaseParticleEntity and C_ColorCorrectionVolume; precipitation is kRenderEnvironmental and
+always transparent, so RENDER_GROUP_OTHER. 112 in 34 maps had faces the plugin draws (a Strata
+v25 face's texinfo is an int at offset 16). No native change.
+
+**Verified.** surf_voyager save 1: the tools/toolsfog block is drawn by the live build and gone in
+the new one; the map's smoke emitters still load. The two added classes were not seen on screen.
+FTESurf 2254d304; qwprogs bf5e014b in both installs (21:56Z) and on all 12 lobbies (00:51Z).
+
 ## Patch 814 — recover own online replay frames and request opted-in HTTPS journals (csprogs + lobby config)
 
 **Problem:** A real bhop_ambience23.500 finish uploaded its valid committed per-frame
