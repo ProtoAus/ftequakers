@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 853 — tier completion filtered All / Surf / Bhop, on the web profile and the in-game card (surfd + board + csprogs)
+
+**Problem (Lex, 20 Oct):** "when viewing a player profile you should be able to filter bhop / surf for the
+tier completion, so you can see how much of each category you've done, same with viewing your profile
+ingame." surfd's `_completion` gave one table over every map the site counts, and the per-tier map lists
+(the site's `/maps`, the game's `player=&ct=`) had no filter. Which kind a map is was already decided in
+one place: pool_policy's `surf_` / zoned `bhop_` prefixes, and every counted map is one of the two.
+
+**Change:** surfd: `mapmanifest.map_mode` beside pool_policy; `_completion` adds `modes: {surf, bhop}`, each
+the same table (tiers, untiered, done, of) over that kind's maps, so the two add up to the whole;
+`/board/api/player/<h>/maps` and the game's `player=&ct=` take `mode=surf|bhop` (anything else 400) and
+echo it. board.js: an All / Surf / Bhop switch over the bars, each showing done / of; a tier opens that
+kind's maps (one cached list per kind); `&cm=` keeps the kind in the link beside `&ct=`. csprogs: the three
+tables in one memalloc'd block (`pf_cmt`, PF_CMF floats each; the 36 global floats the bars used are
+gone), three chips over the bars, a tier's list asked with `&mode=` and its answer checked against it,
+headed "TIER 3 BHOP MAPS"; `hud_player kind all|surf|bhop`, and `hud_player status` ends `kind N split N`.
+A surfd without `modes` hides the switch on both; the "maps finished" figure stays the whole.
+
+**Verified:** surfd/test_completion_pool.py 46/0 with 13 new checks (the fixture's 3/5 splits 2/3 surf +
+1/2 bhop; per-kind lists on the site and in the game; done/total; a bad mode 400); the same file against
+main's surfd fails at the first new check. test_web, test_board, test_mappool pass. Browser: the
+worktree's board.js over the live API (modes added by a local proxy from the live per-map list): AlexX
+All 485/1831 = Surf 485/1446 + Bhop 0/385, a bhop tier lists bhop maps only, the link reopens it.
+tools/p853kind.py (p663profile's rig, console lines only): csprogs d4709153 A-D ok (tier 1 asked plain,
+bhop, surf, plain: 3 / 2 / 1 maps); `--old-surfd` O ok (split 0, the switch inert, nothing asked);
+control, installed csprogs 2f86a702: A-D fail. QC 0 warnings. One review round: `&cm=` took any
+Object.prototype name (`constructor` blanked the profile), `kind` asked with the card closed; both fixed,
+A-D ok again on d28a06aa. FTESurf main 02ed71c2.
+
 ## Patch 852 — the download page leads with the launcher; no .bat files in the release (site + release tooling)
 
 **Problem (Lex, 20 Oct):** the launcher should be the main download ("they use that to get the game"),
