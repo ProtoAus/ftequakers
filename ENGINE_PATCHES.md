@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 850 — full water costs less: nested views stop redrawing the outer views' props and an unseen 3D sky (client engine)
+
+**Problem (Lex, 20 Oct):** full reflections on surf_boreas (save 006, deep in the cave, `hl2_water 2`)
+dumped 12.75 ms a frame, 3D sky 4.21 ms of GPU and portals & reflections 5.08. Each water batch
+renders two more scenes (reflection, refraction), and every one of them -- plus each 3D sky room --
+is a nested `R_RenderScene`. Two things in them were drawn for nothing: (1) a nested view's world
+walk appends its own props and statics to `cl_visedicts` after the outer views' ones, and its model
+pass walked the whole list, so it drew the outer views' props as well as its own copies; (2) the 3D
+sky was drawn in every view of a map with sky, three times a frame at that save, where no view has
+a sky surface (a refraction looks under the water; the cave's reflection has no sky).
+
+**Change:** `R_RenderScene_Internal` latches the list length at a top-level view's entry
+(`r_visdynamic`); a nested view (capture, portal, sky room) passes over `[r_visdynamic, its entry)`
+in `BE_GenModelBatches` -- every pass except the shadow-caster ones (`BEM_DEPTHONLY`, which fake
+shadows filter in, and `BEM_STENCIL`): a prop the nested walk culled can still shadow what it sees.
+No skip when the list is full (the nested walk could not add its own). `r_nestedents` 0 = as before.
+`GLBE_DrawWorld` draws the sky room only for a view whose world sky batches have meshes:
+`r_skyroomneed` 1 = water captures, 2 (default) = and the main view, 0 = as before. Portal views,
+and captures nested in one (`refdef.insideportal`), always draw it: they inherit the near view's
+areas, so the far side's sky surfaces can be culled while the 3D sky still shows (surf_kitsune's
+door). `r_viewstats` prints views by depth, 3D skies drawn/skipped and entities passed over, per
+top-level view. The four `refdef_t` fields are APPENDED: the hl2 plugin reads the struct by
+offset, and inserted after `firstvisedict` they shifted areabits/vieworg/time/recurse under the
+shipped plugin -- at 16 bytes the water stopped drawing at all.
+
+**Verified** (rig, 1600x900, Lex's own cfg, `artifacts/water` under perfplan-20261019, plugin
+2b60d9c3 as shipped): at save 006 noclipped and paused, 4 alternating pairs each, `r_budget` dumps
+with no screenshots in the window: off 8.86 ms -> level 1 5.14 ms -> level 2 4.14 ms a frame, 4/4
+pairs faster at each step, draws 2181 -> 1230 -> 679; views 1 main + 2 captures, skies drawn 3 -> 0.
+Pictures, two shots per setting (noise floor 0 px): unchanged but 25 px, a one-pixel sliver at the
+far waterline where a seam in the capture's world showed the 3D sky (now the capture's clear
+colour). Controls: surf_kitsune's door (portal + a view nested in it) draws all 3 skies at every
+level, pictures equal to off within the scene's own shot-to-shot noise; surf_demise (open sky, no
+water) draws its sky at every level, differences no larger than its animated-sky a/b. One review,
+three rounds: shadow casters, a capture inside a portal, a full list, the light pass, a web-target
+guard and the struct layout, all fixed and rechecked. Not done: the shadow code's own caster walks
+(gl_shadow.c) are untouched; captures are not shared between batches on one plane; a refraction
+could read the main view's framebuffer instead of re-rendering -- BACKLOG.
+
 ## Patch 840 — the unranked line names the input setting; slow-motion runs are measured and demoted (QC + reccheck + surfd)
 
 **Problem (Lex, 20 Oct):** a tester's two lobby runs played at half speed stood on the community
