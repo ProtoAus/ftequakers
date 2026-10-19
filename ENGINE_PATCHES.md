@@ -39,8 +39,10 @@ the shipped); the 0.1.27 exe the same; no QC fault in any run.
 
 **Deployed:** FTESurf 151d65a5. Both installs and all 12 lobbies 2026-10-19T03:44Z: qwprogs
 f08f6fc1, csprogs 100068b0 (lobby .prev b7c29da0), menu.dat 15a24f21 on the installs; lobby 1's
-serverinfo carries zonecrc. The Pi service is not installed yet: tools/install_zonepub.py dry run
-passes at 151d65a5, `--apply` needs the owner's sudo; then the role grant.
+serverinfo carries zonecrc. The Pi service: installed by the owner 04:05Z, release d9bf33b4
+(two installer fixes after failed-safe runs: 887ffa7b ships steam.py and imports FILES first;
+d9bf33b4 edits sites-enabled's regular file and checks `nginx -T`); public challenge 200 with
+that source header, GET 403; the applier ticking; the zone-admin role granted to Lex's account.
 
 ## Patch 810 — Source's PlayerProximity fade on brush entities; 16 portals per view (csprogs)
 
