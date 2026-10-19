@@ -1,5 +1,83 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 820 — imported replays' failed stage attempts; one "successful only" switch on the bar (csprogs)
+
+**Problem:** Lex, 19 Oct: "during demo playback allow filtering lines for suscessfull completes for
+stages, so you don't see all the lines that fail, and a demo option to show only sucessful stages
+on the demo playback window." P778 had a "skip fails" chip and a hud_edit line filter, but found
+failed attempts only from a .rec's `stagestart`/`restart` records. Momentum and KSF imports carry
+none, so their replays drew every failed attempt and skipped nothing; 16 of the 17 surf_dune main
+imports on this machine hold some. The line filter was not on the playback window.
+
+**Change:** FTESurf `src/client/cl_watch.qc`. Watch_ZoneEvents, P750's pass that derives an
+import's splits from the zones, also runs SV_TimerFrame's stage machine over it (whole runs, past
+stage 1): the stage's box by identity (SV_StageZone's first region), occupancy a point test,
+armed/hold/disarm as the server; leaving after a hold is a stagestart, back in the box disarmed a
+restart. Spans close through Watch_FailClose like pass one's and fill rec_wt_la, so a later "stage
+N only" starts at the last attempt; a line built with fails hidden before the pass ended is rebuilt
+once. The bar's chip is "successful only (N failed)": lit when either cvar filters, a click sets
+hud_watch_skipfail 1 and hud_watch_path_fails 0, or clears both. Native files are unchanged.
+
+**Verified:** 0 warnings. FTESurf `cfg/test/p820demo.cfg` on surf_dune imports: nevermind66
+stage 2 failed 23.475..28.005 s, stage 3 44.610..61.560; one click set both cvars, rebuilt the line
+without the fails (screenshot: the green failed-attempt lines gone), playback skipped 24.010 ->
+27.505, a second click restored both; mobyvyk (rank 1) none; kaan2005 stage 3 only, 43.515..94.635,
+and `replay window 3` from 94.635. Control, the installed csprogs 100068b0: 0 spans on every file,
+kaan's window from 43.515. One review (lens: what the viewer shows; a sweep of 2,485 imported main
+runs against a model of the server's rule) found the first cut's swept hull test filing near misses
+as fails (surf_tibet: 35 s of a good stage hidden), an END over the stage box hiding it, windows
+from the first attempt and the chip's state; all fixed by the stage machine above. Left open
+(BACKLOG): another track's END over a stage box loses that split (P750's rule), stage-run imports.
+
+## Patch 819 — hour-long lobby maps, hour extensions, a whole hour for the first player in (qwprogs, lobby cfgs)
+
+**Problem:** Lex, 19 Oct: "map map lobbies go for an hour, and make extend, extend the map by 1
+hour, and when a player first joins a empty server, restart the timeleft to be 1 hour." The lobbies
+ran lobby_cycle 1800 and lobby_extend_time 600, and an empty lobby's clock ran on.
+
+**Change:** FTESurf `ftesurf/cfg/lobby/lobby1..12.cfg` lobby_cycle 3600; lobby_extend_time 3600
+(lobby.cfg and the progs default). `src/server/sv_vote.qc` Vote_ClientConnect: a real player with
+no other live player in the lobby (Vote_LiveBut: their own classname is set later, in
+PutClientInServer) calls Vote_FreshClock: Lobby_CycleGo's re-arm with no map (a whole lobby_cycle,
+holds cleared, warnings as the latch sets them), extensions and their cap reset, the voted next map,
+!rtv and any running vote cleared. A change already issued, forced (!rtv) or in its hold's last ten
+seconds keeps its moment; a map's first begin (ClientConnect runs again for everyone after a
+changelevel) is skipped when the clock it latched is already whole.
+
+**Verified:** 0 warnings. FTESurf `cfg/test/p819clock.cfg`, a dedicated server and one client on
+surf_dune (lobby_cycle 3600): first join 59:41 left and no reset line; `extend` -> "extended -- 60
+more minutes", 1:59:34 left; disconnect and rejoin -> server "first player in an empty lobby --
+1:00:00 on surf_dune (was 1:59:19, 1 extension(s))", 59:51 left, extensions 0. One review (lens:
+server state and control flow) found the first-begin reset on every map change and a vote that
+could survive it; fixed. Left open (BACKLOG): an !extend in a hold's last hour, a lone player's
+reconnect resets. Not run: the reset NOT firing with a second client present.
+
+## Patch 818 — surf_view: red resets, yellow clip, blue ramps (engine)
+
+**Problem:** Lex, 19 Oct: "surf_view is currently busted, the colours are all over the place. I
+wanted red on reset triggers, yellow on clip brushes, and blue on the ramps, which are planes that
+are greater then 45degrees, my tool C:\Users\Lex\Documents\wrlines did it correctly." P776 drew
+surfable faces and teleport volumes in the same red, and every SURF_NODRAW side of a solid brush
+yellow: on Source maps the hidden back and underside of most ramps, and the nodraw shell round the
+play area (surf_dune's spawn view: yellow stipple over the whole screen).
+
+**Change:** `engine/client/cl_ents.c` SurfView_*. Red: trigger_*teleport* volumes (the resets).
+Blue: a face with normal z in [0.1, standable) on any brush, clip included (a clip ramp is a ramp,
+as wrlines draws it), and displacement triangles. Yellow: the other faces of a brush with no face
+drawn (clip, toolsinvisible), read off the faces: Source compiles textured grates and
+toolsinvisible to grate, which FTE loads as clip. A nodraw side of a drawn brush is not drawn. The
+first-frame line reads "N ramp face(s), N clip face(s), N teleport(s) in N face(s)".
+
+**Verified:** build 0 new warnings. FTESurf `cfg/test/p818sv.cfg` (surf_kitsune, surf_dune), exe
+`git-7496-patch-818-0-g306a6304d` against the installed P813 exe: kitsune 3351 ramp / 550 clip
+faces, 44 teleports in 300 (control: 3351 surfable / 13316 invisible solid); dune 4119 / 1298 / 160
+in 1597 (control 4119 / 20046). At 1:1 kitsune's stage-1 clip ramp is blue (38,115,255); the
+control's dune spawn view is yellow edge to edge, the subject's only the blocks' ramp faces, blue.
+Offline over 13 maps' brushes: every PLAYERCLIP-only brush has all faces nodraw, and the drawn
+"clip" brushes are grates (surf_disneyland 160). One review (lens: predicate and control flow) found
+clip ramps yellow and grates as clip; both fixed. Left open (BACKLOG): Quake 2/3 maps build no
+collision tree by default, so surf_view draws nothing there.
+
 ## Patch 815 — admin zone uploads are published by themselves; clients show the lobby's zones (qwprogs, csprogs, menu, surfd zonepub)
 
 **Problem:** Lex: admins (him, proto) make zones in zone_edit, save, "hit upload for it to be
