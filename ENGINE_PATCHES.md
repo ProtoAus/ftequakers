@@ -42,6 +42,32 @@ mismatches, half the LabelAt calls -- and measured nothing (16-pair same-process
 **Known:** the other line work stays in QC: board lines still cost ~0.7 ms of QC in that setup
 (marks, follow, find), and the run graph (+0.41 ms) draws its curves natively already.
 
+## Patch 834 — the 3D viewer's Display settings, energy, and what it keeps on the PC (surfd web)
+
+**Problem:** Lex asked for viewer settings (which overlays and HUD elements show, a clean
+view), an energy display, maps that are not downloaded on every visit, and game folders found
+without picking them each time.
+
+**Change:** a Display panel inside the stage (works in full screen; remembered in
+localStorage) and H for a clean view. Energy is the game's `Strafe_Energy`, z + |v|²/2g, from
+either `hud_energy_ref` zero, ported as `HUD_UpdateJumpRef` (re-based at a marked teleport over
+512 units, start-box rule) and `HUD_UpdateAnchor` (the last start or stage zone's floor); the
+graph can show energy from the run's start. Maps are kept in Cache Storage and reused while the
+R2 download's Content-Length and Last-Modified match (the signed URL changes per request, so
+the HTTP cache never hits); files a map reads from the visitor's VPKs or loose mounts are kept
+too, so later visits need no folder. One IndexedDB record per kept entry; LRU to the smaller of
+the budget and 40% of the site's quota. A pick keeps only VPKs, maps and Momentum's loose
+materials/models (now mounted); HL2's hl2_pak is mounted; folders from Chrome's picker are
+remembered. Live on surfd cb9b4603 since 2026-10-19T11:46:53Z.
+
+**Verified:** `src/viewer/tools/keep.mjs` (the page's own watchState), locally and live: a first
+load downloads, a reload uses the kept copy, a stale kept version downloads again, two tabs keep
+both maps; surf_beginner shows 20 missing textures without a folder, 1 with CS:S, and 1 on a
+reload with no folder (65 files read back). Energy zeros: 0 differing samples against ports of
+both game functions on 60 runs over 16 maps; the first cut differed on up to 26% (review).
+Picking CS:S lists 21,845 files in 5.1 s; all of `common`, 300,487 in 96 s. One review round
+(non-ranking feature); remembered folder handles are untested (they need a real click).
+
 ## Patch 833 — a closing horizon must reach raw state observations (reader)
 
 **Problem:** A post-move warp or later carrier change may follow the last input.
