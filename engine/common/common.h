@@ -754,6 +754,7 @@ qbyte *COM_LoadTempMoreFile (const char *path, size_t *fsize);	//allocates a lit
 searchpathfuncs_t *COM_IteratePaths (void **iterator, char *pathbuffer, int pathbuffersize, char *dirname, int dirnamesize);
 void COM_FlushFSCache(qboolean purge, qboolean domutex);	//a file was written using fopen
 qboolean FS_Restarted(unsigned int *since);
+unsigned int FS_ListGeneration(void);	//FTESurf Patch 846
 
 enum manifestdeptype_e
 {

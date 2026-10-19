@@ -231,6 +231,7 @@ qboolean fs_readonly;
 static searchpath_t *fs_allowfileuri;
 int waitingformanifest;
 static unsigned int fs_restarts;
+static unsigned int fs_listgen = 1;	//FTESurf Patch 846: see FS_ListGeneration
 void *fs_thread_mutex;
 float fs_accessed_time;	//timestamp of read (does not include flocates, which should normally happen via a cache).
 
@@ -2279,6 +2280,7 @@ static void FS_RebuildFSHash(qboolean domutex)
 
 	com_fschanged = false;
 	com_fsneedreload = false;
+	fs_listgen++;	//also where an external change found by PollChanges lands
 
 	if (domutex)
 		Sys_UnlockMutex(fs_thread_mutex);
@@ -2295,6 +2297,10 @@ static void FS_RebuildFSHash_Update(const char *fname)
 	fsbucket_t *old;
 	void *filehandle = NULL;
 
+	//before the stale return, so a map landing while stale still counts. maps/ only: QC
+	//fclose comes through here for every data file it writes (pr_bgcmd.c)
+	if (!Q_strncasecmp(fname, "maps/", 5))
+		fs_listgen++;
 	if (com_fschanged)
 		return;
 
@@ -2354,6 +2360,7 @@ void FS_FlushFSHashFull(void)
 {	//any calls to this are typically a bug...
 	//that said, figuring out if the file was actually within quake's filesystem isn't easy.
 	com_fschanged = true;
+	fs_listgen++;
 
 	//for safety we would need to sync with all threads, so lets just not bother.
 	//FS_FlushFSHashReally(true);
@@ -4747,6 +4754,7 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 
 		com_fschanged = true;	//depth values are screwy
 	}
+	fs_listgen++;
 
 	return search;
 }
@@ -4754,6 +4762,16 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 static void COM_RefreshFSCache_f(void)
 {
 	com_fschanged=true;
+	fs_listgen++;
+}
+
+/*FTESurf Patch 846: changes whenever the set of map files may have: a hash rebuild (which is
+  also where PollChanges' external changes land), a file under maps/ written or removed, a
+  path mounted, a full flush. Equality says nothing changed that this engine has noticed; a
+  file another program drops in shows after the next rebuild.*/
+unsigned int FS_ListGeneration(void)
+{
+	return fs_listgen + fs_restarts;
 }
 
 //optionally purges the cache and rebuilds it

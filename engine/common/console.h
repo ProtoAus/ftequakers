@@ -269,6 +269,8 @@ text inset with them.
 int Con_WindowTitleHeight(void);	//title bar height, in virtual pixels
 int Con_WindowScrollWidth(void);	//scrollbar strip width, in virtual pixels
 int Con_WindowGripSize(void);		//right/bottom resize grips, in virtual pixels
+int Con_CompletionRowAt(console_t *con, float x, float y);	//FTESurf Patch 846: popup row under a point
+int Con_CompletionPopupRows(console_t *con, float *x, float *y, float *rowh);
 #define CON_WNDBORDER 8
 void Con_ExpandConsoleSelection(console_t *con);
 char *Con_CopyConsole(console_t *con, qboolean nomarkup, qboolean onlyiflink, qboolean forceutf8);

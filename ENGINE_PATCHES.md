@@ -1,5 +1,96 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 846 — the console: map names from a cached list; Tab, Enter and a click on completion rows; ` closes it (engine)
+
+**Problem (Lex's list, 20 Oct):**
+- Typing `map surf_n` juddered. SV_Map_c ran 18 COM_EnumerateFiles per keystroke, each over
+  every searchpath (23 here, the Momentum library directory among them): 139.5-148.3 ms a key
+  on this PC.
+- At `con_completionenter 1`, ENTER on a highlighted bare cvar (`cl_ya`, Down, `cl_yawspeed`)
+  ran it, which only prints it. Lex wants it typed in to take a value; `map surf_null` should
+  still run.
+- TAB with nothing highlighted typed the common prefix and highlighted row 1; a second TAB typed
+  the row.
+- A click on a completion row underlined it and did nothing. The popup (`con_completiondown 2`)
+  hangs below the console window, and Key_Console's window bounds test returned before the click
+  reached anything.
+- `` ` `` typed itself whenever the cursor was past column 0, instead of closing the console.
+- The `[focus] ... correcting` line printed on screen, often enough to be a nuisance.
+
+**Change:**
+- sv_ccmds.c: the map list is enumerated once (`maps/*`, `maps/*/*`), sorted, one entry per
+  path. Each keystroke runs SV_Map_c's own patterns over it with wildcmp, the filter every
+  backend uses. It is rebuilt when `FS_ListGeneration()` (fs.c) moves: a hash rebuild (where
+  PollChanges' external changes land), a mount, a full flush, or a file written or removed under
+  maps/. A typed path separator still takes the live globs (the cache holds two levels).
+  - Past Cmd_Complete's 256 slots, the rows kept are now the alphabetical first rather than the
+    first enumerated, and the count is of distinct maps (the live count had each searchpath's
+    copy: 3,380 against 2,297 for `map `).
+  - `sv_mapcompletioncache 0` is the old path; changing it rebuilds the list.
+- keys.c, at `con_completionenter 1` and `con_displaypossibilities 2`:
+  - ENTER on a highlighted bare cvar types `name `, and the footer shows its value and default.
+    Commands, aliases and argument rows still run.
+  - TAB with nothing highlighted types row 1.
+  - A press on a popup row types it (Con_CompletionRowAt in console.c, from the rows last
+    painted); in find mode it does not.
+  - The `` ` `` character goes to its bind. The character, not the key: keys are scancodes, so
+    shift's `~` and German `^` still type.
+  - `con_settext` and a click on a `/command` link in console output no longer leave row 1
+    highlighted.
+- gl_vidnt.c: the `[focus]` correction line goes to the log file only (Con_Log), where the
+  harnesses that count it read it. The correction itself is unchanged.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; `cfg/test/p846con.cfg`, surf_dune, Lex's default.cfg
+console settings, own build of this commit's tree):**
+- `con_selftest` now drives Key_Console with TAB, ENTER and `` ` ``; all checks pass.
+  - TAB on `cl_` gave `cl_addport` (row 1).
+  - ENTER on the `con_completionenter` row gave `con_completionenter ` with nothing highlighted.
+  - `` ` `` with `cl_` typed went to the bind and left the line alone; the same key's `~` typed.
+- Cached against live, SV_Map_c's whole output with no 256 cap (SV_MapCompletionCompare), over
+  18 queries, each at `sv_mapcompletion 0` and at 1 (36 compares):
+  - `""` (the whole library) gave 2,297 names both ways at either setting, with 0 differing.
+  - The rest were `_` (2,274), `b` (865), `bhop_` (591), `2`, `surf_s`, `surf_?a`, `1`,
+    `surf_a`, `kz`, `surf_n`, `SURF_N`, `mom`, `*_mom`, `ski`, `kits`, `surf_null` and `zzqq`.
+    0 names differ across all 36.
+- Per keystroke over the prefixes of `map surf_null`, four runs (the last on the stamped exe,
+  git-7540-patch-846-0-gd6d9eefbc, sha256 320a6806):
+  - live 139.52 / 148.25 / 144.17 / 141.92 ms;
+  - cached 0.286 / 0.285 / 0.288 / 0.284 ms;
+  - the key that builds the list 24.06 / 24.31 / 24.26 / 23.57 ms;
+  - live again, after the cached pass, 139.41 / 148.83 / 143.77 / 141.39 ms (not a cold disk).
+- The click map (rows 0-11 -> completions 1-12, the status row none) against a screenshot of the
+  same frame, with the popup flipped above the field: each row's centre is on its drawn row. The
+  self-test prints this map rather than checking it, since it reads the record the click reads.
+- One review (lenses: cache equivalence and invalidation; key paths and the click's routing and
+  row arithmetic). It traced equivalence, invalidation, memory, click routing (popup below,
+  flipped, clamped; `con_completionrows` 0 and 1) and the `[focus]` change as correct. Its
+  defects were all fixed in 12d3e9917:
+  - `` ` `` taking the whole key;
+  - the ENTER arm not gated on the list mode;
+  - the link-click highlight;
+  - a find-bar footer;
+  - an untrue "any set rebuilds";
+  - two self-test checks that could not fail;
+  - a cached-versus-live compare that skipped queries past 256.
+  The fix had its own round, which found no new defect. It added a compare in prefix mode
+  (done, above), and noted that a click in find mode on a popup inside the console still
+  reaches the row's link and overwrites the "find:" footer, as before 846.
+
+**Not shown:**
+- A real mouse click: the click map is checked against a screenshot and the press routing was
+  read.
+- A `[focus]` correction: none occurred in any arm.
+
+**Known:**
+- A map another program drops in (Momentum, Explorer) shows after the next hash rebuild, which
+  happens at a map load; setting `sv_mapcompletioncache 0` and back to 1 rebuilds it at once.
+  The live search saw such a map on the next key.
+- After TAB on a fully typed cvar, row 1 is highlighted, so ENTER types `name ` rather than
+  printing the value (the footer shows it).
+- The Ctrl+F find bar still types `` ` ``.
+- A directory whose name ends in a map extension is no longer offered.
+- fteqwsv64.exe is not rebuilt for this patch; it is unchanged for players.
+
 ## Patch 845 — goto_spawn goes to the map's spawn entity (qwprogs + csprogs)
 
 **Problem (Lex, 20 Oct):** "goto_spawn doesn't goto the spawn point of the map." P753 made it `!m`'s
