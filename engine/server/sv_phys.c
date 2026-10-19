@@ -3562,6 +3562,22 @@ the same parse, the same refusal list and, above all, the same
 record-then-ForceSet ordering against the lock's callback. A second copy would
 be a second place for that ordering to be got wrong.
 */
+/*P841: a ruleset is read only from a directory. Rulesets load before the previous map's own
+  pakfile is dropped (sv_init.c), and a BSP is untrusted content.*/
+static char *SV_RulesetLoadLoose(const char *path, size_t *sz)
+{
+	flocation_t loc;
+
+	if (!FS_FLocateFile(path, FSLF_IFFOUND, &loc))
+		return NULL;
+	if (!loc.search || !(loc.search->flags & SPF_ISDIR))
+	{
+		Con_Printf(CON_WARNING"map ruleset: %s is inside a package - not read\n", path);
+		return NULL;
+	}
+	return FS_LoadMallocFile(path, sz);
+}
+
 static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 {
 	char name[64];
@@ -3569,7 +3585,7 @@ static qboolean SV_LoadRulesetFile(const char *path, const char *what)
 	size_t sz;
 	cvar_t *var;
 
-	file = FS_LoadMallocFile(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz);
 	if (!file)
 		return false;
 
@@ -3722,7 +3738,7 @@ static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out,
 	if (!mapname || !*mapname || isDedicated || Cvar_VariableValue("lobby_enable") || *Cvar_VariableString("lobby_master"))
 		return false;
 	Q_snprintfz(path, sizeof(path), "data/maps/settings/local/%s.cfg", mapname);
-	file = FS_LoadMallocFile(path, &sz);
+	file = SV_RulesetLoadLoose(path, &sz);
 	if (!file) return false;
 	if (sz > 4096 || memchr(file, 0, sz)) valid = false;
 	for (l = file; valid && *l; l = e)
@@ -3799,9 +3815,7 @@ static void SV_LoadEditorRuleset(const char *mapname)
   QC_FixFileName's data/-first lookup. 0 or absent is "not set" (12 shipped files say 0) and
   leaves cfg/maps or the default. Differences from QC's choice, which the server QC reports
   when the file it timed with asks for a cap the server is not running:
-  - only loose files count. This runs before the previous map's own pakfile is dropped and the
-    next one's mounted (sv_init.c), so a packed copy is read as absent: one map's BSP must not
-    set another's physics.
+  - a packed copy reads as absent (SV_RulesetLoadLoose); QC reads packs.
   - "a zone file" is a parsed object with a non-empty region array; QC also needs a region
     that builds, which it cannot know before the map's entities exist.*/
 qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
@@ -3826,20 +3840,6 @@ static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
 	return false;
 }
 
-static char *SV_ZoneRulesetLoad(const char *name)
-{
-	flocation_t loc;
-
-	if (!FS_FLocateFile(name, FSLF_IFFOUND, &loc))
-		return NULL;
-	if (!loc.search || !(loc.search->flags & SPF_ISDIR))
-	{
-		Con_Printf(CON_WARNING"map ruleset: %s is inside a package - its speed cap is not read\n", name);
-		return NULL;
-	}
-	return FS_LoadMallocFile(name, NULL);
-}
-
 //The file's maxVelocity, 0 if none; FALSE when this path is not a zone file at all.
 static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel)
 {
@@ -3851,11 +3851,11 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	if (!QC_FixFileName(path, &name, &fallback))
 		return false;
 	Q_strncpyz(found, name, foundsz);	//name may be a va() buffer
-	file = SV_ZoneRulesetLoad(found);
+	file = SV_RulesetLoadLoose(found, NULL);
 	if (!file && fallback)
 	{
 		Q_strncpyz(found, fallback, foundsz);
-		file = SV_ZoneRulesetLoad(found);
+		file = SV_RulesetLoadLoose(found, NULL);
 	}
 	if (!file)
 		return false;
