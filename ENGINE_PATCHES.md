@@ -24,7 +24,12 @@ have no recording/sidecar faults; release rows and a nonzero carried-rank closer
 are observed. Finish is artificial/practice, not natural-completion or hardware
 proof. 613 reader and 268 receipt checks pass. Same-byte current runs sweep:
 319 recordings/119 views, no increased faults or changed angular availability.
-Independent review, clean final build, ARM runtime and rollout are pending.
+R1 exposed closing-only lexical/footer fault leakage, a released-before-thaw
+kept horizon, and new-keyword whitespace loss. Repairs preserve strict faults,
+cover the actual input horizon, and recognize new records before payload parsing;
+old-binary acting controls reproduce the whitespace loss. Reader checks now665,
+with six census parser tests. Fresh R2, clean final builds, ARM runtime and rollout
+remain pending.
 
 ## Patch 845 — goto_spawn goes to the map's spawn entity (qwprogs + csprogs)
 

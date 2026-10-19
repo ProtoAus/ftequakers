@@ -4935,6 +4935,23 @@ static const char *SV_RecSim_HoldRefusal (const char *s)
 /* P842: v11 declares final exclusions, including a close without a thaw.
    This is NOT a held-clock model. Only counted zero accounting is supported;
    reader-side declared-state arithmetic is not independent simulation proof. */
+static qboolean SV_RecSim_White(char c)
+{
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+/* Even empty new metadata belongs to its parser/refusal, not an unknown line. */
+static const char *SV_RecSim_RecordArgs(const char *s, const char *keyword)
+{
+	size_t n = strlen(keyword);
+	while (SV_RecSim_White(*s)) s++;
+	if (strncmp(s, keyword, n) || (s[n] && !SV_RecSim_White(s[n])))
+		return NULL;
+	s += n;
+	while (SV_RecSim_White(*s)) s++;
+	return s;
+}
+
 static const char *SV_RecSim_ClockRefusal(const char *s)
 {
 	const char *p;
@@ -5081,6 +5098,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
+			const char *fzargs = SV_RecSim_RecordArgs(ln, "fzin");
+			const char *clockargs = SV_RecSim_RecordArgs(ln, "clockend");
 			if (!*ln)
 				continue;
 			if (pass == 0 && strlen(ln) >= sizeof(line)-1)
@@ -5169,13 +5188,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				}
 				csam++;
 			}
-			else if (!strncmp(ln, "in ", 3) || !strncmp(ln, "fzin ", 5))
+			else if (!strncmp(ln, "in ", 3) || fzargs)
 			{
-				if (pass == 0 && ln[0] == 'f') nexcluded++;
+				if (pass == 0 && fzargs) nexcluded++;
 				if (pass == 1 && cin < nin)
 				{
 					recsim_in_t *r = &ins[cin];
-					int nf = sscanf(ln + (ln[0] == 'f' ? 5 : 3), "%i %i %f %f %f %f %f %f %f %i %i",
+					int nf = sscanf(fzargs ? fzargs : ln + 3, "%i %i %f %f %f %f %f %f %f %i %i",
 					           &r->pk, &r->mt, &r->carry,
 					           &r->mv[0], &r->mv[1], &r->mv[2],
 					           &r->ang[0], &r->ang[1], &r->ang[2], &r->bt, &r->fl);
@@ -5248,13 +5267,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
 			}
-			else if (!strncmp(ln, "clockend", 8) && (!ln[8] || ln[8] == ' ' || ln[8] == '\t'))
+			else if (clockargs)
 			{
 				if (pass == 0)
 				{
 					nclock++;
 					if (!clockbad)
-						clockbad = filever == 11 ? SV_RecSim_ClockRefusal(ln + 8)
+						clockbad = filever == 11 ? SV_RecSim_ClockRefusal(clockargs)
 						                        : "a v11 closing clock under another format";
 				}
 			}
