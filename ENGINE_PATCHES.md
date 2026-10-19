@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 851 — m is goto_start, r is reset; the three in the key panel (csprogs + default.cfg)
+
+**Problem (Lex, 20 Oct):** "make m goto_start, and r is reset. make the 3 bindable in the config
+menu." default.cfg shipped m as `say !m` and r as `say !r`, and the key panel's Run group listed
+Restart and Respawn apart from the Reset stage row P848 appended.
+
+**Change:** default.cfg and defaultuser.cfg bind m goto_start and r reset. The Run group starts
+Restart run (goto_start, m; an old `say !m` counts as it), Reset stage (reset, r; `say !r` counts),
+Go to spawn (goto_spawn, no key); the hint strip's rows follow. A saved config keeps its binds.
+
+**Verified:** conbridge, the installed exe 775a1956 with this csprogs: `config_menu reset` then
+`bind m` / `bind r` -> "goto_start" / "reset"; `config_menu status` lists the three with keys [m],
+[r], []; the panel draws them together. FTESurf main 1266bed1.
+
 ## Patch 848 — reset is the old goto_start; goto_start goes to the start of the run (qwprogs + csprogs)
 
 **Problem (Lex, 20 Oct):** "make a new command reset that does the job of goto_start but now make
