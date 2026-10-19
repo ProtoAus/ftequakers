@@ -1,5 +1,49 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 823 — the first-boot screens in the menus' style; no Updates screen (menu)
+
+**Problem (Lex, 19 Oct):** the terms, the Steam offer and the update screen did not look like the
+other menus, and the update screen should go: "just make people accept when people play online".
+
+**Change:** the terms, Steam offer and journal panel use sui_style_panel, a lowercase accent
+heading, 16 px margins and 30 px buttons, as Play and Friends. SCREEN_UPDATE (7) is gone. Play
+online on the terms also turns updates on (ui_tm_answer -> MU_Consent); Play offline leaves the
+permission as it was. The title menu's corner keeps the state and has Turn off / Turn on updates
+(on needs the online terms and a real click), Restart to update / through launcher, Check again
+after an error, and the error itself, wrapped. F2 opens the journal panel (`ui_journal`;
+`ui_updates` binds are repaired). FS_TERMS_ONLINE stays 7: earlier answers keep the update choice
+they made, so nobody holds more than they read and lobby csprogs is unaffected. The terms text
+says what Play online does to updates, and that zone uploads go live by themselves (P815).
+
+**Verified:** 0 warnings. `tools/p823shots.py` (the real manifest, no permission decided): the
+pre-P823 control sends F2 and the title menu to screen 7, the subject to 8 and 0, with Turn on
+updates in the corner; six screenshots against the Play panel. `tools/p647boot.py` with real
+keys: online writes the permission 1, offline and a synthetic answer leave it absent.
+`test_ingame_update.py`: all six menu arms pass (its cold-forged arm expects pre-P703 wording).
+Two review rounds (consent/mechanics lens): round 1 found the promised off switch missing and
+"Stay offline" withdrawing an earlier yes, both fixed; round 2 found nothing at integrity level.
+Not run: test_update_corner.py, test_update_handoff.py and the posix updater tests (BACKLOG).
+
+## Patch 822 — Publish saved asks in a dialog (csprogs)
+
+**Problem (Lex, 19 Oct):** "The enter thing was not obvious, need a real prompt."
+
+**Change:** zone_edit's Publish saved opens a modal dialog naming the map, zone count and crc.
+Publish -- the mouse press itself, or Enter -- signs (acct_sign kind -6) and posts; the engine
+signs only while a device's key event is delivered, mouse buttons included (CSQC_RealKey).
+Cancel/Esc backs out; the service's answer stays on its own page until OK. The dialog is cancelled
+whenever the panel stops showing it (placing, settings, look mode), acts only on the page drawn,
+and an upload in flight ends only with its answer or 120 s of silence. A non-200 reply reaches QC
+with no body (httpclient.c keeps no file), so zonepub's refusals are worded from their codes.
+Request ids start at a random offset per VM: a map change restarts the counter.
+
+**Verified:** 0 warnings. `tools/p822dialog.py` on a test build pointed at a 127.0.0.1 stand-in
+service, 13 checks: a command on Publish is refused and posts nothing; a real Esc cancels; a real
+Enter and a real MOUSE1 press each sign and post the saved file's bytes under the issued nonce;
+the answer pages; a 403 is worded; look mode cancels the dialog and a real Enter after it posts
+nothing. Two review rounds (predicate/adversary lens): round 1 found a hidden dialog still armed
+(a regression), fixed with four others; round 2 found nothing at integrity level.
+
 ## Patch 811 — a lobby's saves and the install's are one list (qwprogs, csprogs)
 
 **Problem:** A save made in a lobby lives on the lobby's disk (data/saves/<map>/@<guid>), one made
