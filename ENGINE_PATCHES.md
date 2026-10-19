@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 852 — the download page leads with the launcher; no .bat files in the release (site + release tooling)
+
+**Problem (Lex, 20 Oct):** the launcher should be the main download ("they use that to get the game"),
+the archive the second one; the "Extract and run ftesurf.bat" and "Existing alpha installs" notes should
+go, leaving links to the full package; and the next release should not carry ftesurf.bat or
+ftesurf_debug.bat. Making the launcher the button had a catch: the engine's update handoff runs
+`ftesurf-launcher.exe` by that name (qkupdate.c QKU_Restart_f), the feed omits the launcher, and a
+browser saves the download as `ftesurf-launcher-<ver>.exe` (`download=` is ignored cross-origin). And
+sitepage.ps1 could not re-render a live page at all: publish.sh takes only a new version with its signed
+feed (P738), and sitepage's own Linux token list missed the launcher tokens.
+
+**Change:** page.template.html: the two buttons are the launchers; "Full package:" links the archives,
+sizes and hashes in their titles. release.ps1: the .bat files leave the ship set and the archive's
+must-have list (the CRLF pass for them goes too); the install text starts ftesurf-launcher.exe (engine
+options after `--`); the standalone launchers upload with `Content-Disposition: attachment;
+filename="ftesurf-launcher(.exe)"`, checked on the round trip. sitepage.ps1 takes the Linux tokens from
+Test-ReleaseTemplate and publishes by renaming only the changed files into the live release's
+directory, old copies kept in `.sitepage-prev/` outside the served tree, never update.json.
+updatefeed.py keeps the .bat names managed (validate() checks the previous feed, which lists them); the
+feed never removes a file, so existing installs keep theirs, and it still calls the launcher.
+
+**Verified:** test_releaselib.ps1 86/0; test_site_copy and test_rebrand pass (both had failed on main
+since P738's tokens). sitepage -DryRun from the 0.1.28 receipt: only index.html differed from live;
+Chrome at 1400 and 390 px, no horizontal scroll. R2: a scratch key showed the header passes through
+dl.proto.bar; 0.1.28's two launcher objects re-uploaded with it, SHA-256 equal to the receipt before and
+after (an overwrite's new header took about a second to show; release keys are always new). Published
+2026-10-19 20:05Z (UTC): index.html replaced, every file read back byte for byte, update.json unchanged.
+Not run: the release pipeline itself (it runs at the next release).
+
 ## Patch 850 — full water costs less: nested views stop redrawing the outer views' props and an unseen 3D sky (client engine)
 
 **Problem (Lex, 20 Oct):** full reflections on surf_boreas (save 006, deep in the cave, `hl2_water 2`)
