@@ -1435,6 +1435,10 @@ static void T_Gen_CurrentRender(int tmu)
 		qglGenTextures(1, &shaderstate.temptexture->num);
 	}
 	GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
+	{
+		extern unsigned int r_vs_copies;	//FTESurf Patch 878: r_viewstats counts them
+		r_vs_copies++;
+	}
 	//FTESurf Patch 866: copy into the storage the last copy allocated; CopyTexImage2D
 	//reallocated it for every batch that samples the screen (Refract at hl2_refract 1).
 	if (be_currentw == vwidth && be_currenth == vheight && be_currentfmt == fmt)
@@ -8372,6 +8376,7 @@ static int GLBE_NearPaneCompare(const void *va, const void *vb)
 	return (a->sequence > b->sequence) - (a->sequence < b->sequence);
 }
 
+extern cvar_t r_nearestsort;
 static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 {
 	batch_t *lists[2] = {world, dynamic}, *batch, *run, one;
@@ -8435,7 +8440,7 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 			GLBE_SubmitBlendedFaces(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
 			continue;
 		}
-		if (i == SHADER_SORT_NEAREST)
+		if (i == SHADER_SORT_NEAREST && r_nearestsort.ival)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
 			GLBE_SubmitNearest(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
