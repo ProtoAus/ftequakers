@@ -1,5 +1,52 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 872 — r_frametime shows the last second's fps first (client exe)
+
+**Problem (Lex, 20 Oct):** "r_frametime 1 seems to take an average over the entire period it's
+running? presenting much different values than show_fps 1, maybe avg the last second?" The
+headline "avg" was the mean over `r_frametime_window` (30 s): surf_garden stage 5 read 163 fps
+while show_fps read 45 (his screenshot).
+
+**Change:** R_FrameTime_Stats also computes the last second's rate (the newest second's frames over
+their summed time, refreshed 4 times a second with the rest); the line reads `frametime N fps  30s
+avg M  1% low ...`. The cvar's help says so. Numbered 870 at first (ftesurf-79 holds 870).
+
+**Verified:** builds clean; one review (ring indexing, empty and one-frame windows, the boundary,
+the format string). Display only.
+
+## Patch 866 — "Refracting" glass is Source's refract_ps20b (hl2 plugin + client exe)
+
+**Problem (Lex, 20 Oct, hl2_refract 1):** surf_garden's fountain "looks like frozen water" (save 5;
+Momentum shows the statue behind rippling sheets) and surf_boreas's icicles "look too transparent"
+(save 9; Momentum's are bright ice). Mode 1 offset the screen copy by the whole normalized normal
+map, ignoring `$refractamount` (the fountain asks .02, the icicles 1), and dropped `$refracttint`,
+the tint texture, `$envmap`, `$bluramount` and the normal's alpha. `$currentrender` reallocated the
+copy (glCopyTexImage2D) for every batch that sampled it, and bound nothing in a nested view.
+
+**Change:**
+- `vmt/refract` is refract_ps20b: warp = normal.xy x normal.a x `$refractamount` (default 2);
+  screen x `$refracttint` (x 2^(1/2.2) x tint texture, the 2x of linear light in gamma space);
+  `$bluramount` 1 is Source's 4-tap blur; the `$envmap` term (tint, contrast, saturation) under
+  REFLECTCUBEMASK; alpha = normal.a, blended as refract_dx9_helper does (none with `$envmap`,
+  additive under `$additive` and fogged to black, `$alphatest` drops the blend unless `$alpha` is
+  fractional). The tail's blend is cleared as in mode 0 (Patch 859).
+- `$normalmap` only (DX9 Refract's; `$dudvmap` is DX8's and loads unsigned): none means no warp. A
+  real `$basetexture` is sampled instead of the screen (refract_dx9_helper.cpp:240-247).
+- Refract's `env_cubemap` reflects whatever `hl2_envcubemap` says, both modes: on Refract the
+  reflection is most of what makes the pane visible; r_reflectcube/r_envcubemap still gate it.
+- T_Gen_CurrentRender copies into the storage it has (glCopyTexSubImage2D; reallocated only when the
+  size or format changes, reset with the FBOs) and binds the last copy in a nested view.
+
+**Verified:** conbridge with Lex's cfg (hl2_refract 1), this exe + plugin against the installed
+9c39795c / 5c9fa5ab, r_showshader at each: garden save 5 smeared cylinder -> the statue behind
+rippling sheets with the falling arcs in front of the wall (Momentum's look); boreas save 9's icicles
+dark and see-through -> icy with the cubemap's reflection (Momentum's are a little whiter); spectra,
+gigapede, bhop_ceaseless, surf_autosave as glass with their tint and reflection. At the fountain, paused,
+uncapped: p50 4.17/4.19 -> 3.82/3.65 ms (one run each; the 64-frame timerefresh sweep read 0.313
+against 0.337 s). One review: no-normal-map warp, additive fog (fixed). Limits: glass seen in a
+reflection or through a portal shows the last main-view copy (it showed garbage before);
+`$bluramount` 2 is clamped to 1 as Source does.
+
 ## Patch 863 — the HUD's own work a frame cut by a third, same picture (csprogs)
 
 **Problem (Lex's r_budget dumps, surf_sidistic, 20 Oct):** every HUD panel on, a run line and the
