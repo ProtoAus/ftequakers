@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 860 — Source's decorative movers move: spinning func_rotating, bobbing func_movelinear, props that follow (qwprogs)
+
+**Problem (Lex, 20 Oct):** "a visual sword element in the spawn of gigapede which is supposed to be
+rotating but is static ... it doesn't interact with the player in any way". The dagger is
+`prop_dynamic` dagger.mdl (solid 0) parented to a faceless `func_rotating` (START_ON, 40 deg/s)
+parented to a non-solid `func_movelinear` that bobs 8 units on its own Open/Close outputs. All
+three froze: Patch 256 freezes func_rotating, nothing moved a movelinear, and props never followed
+a parent.
+
+**Change (sv_entities.qc):** what cannot touch a player moves, and NO collision moves.
+- A `func_rotating` turns when non-solid (bit 64) or faceless (SV_RotButtonDrawn); a faceless SOLID
+  one keeps its frozen hull and only its children see the turn. Source's ACCDCC ramps (fanfriction),
+  Start/Stop/Reverse/SetSpeed/StartForward/StartBackward and StopAtStartPos; speed starts at 0 and
+  START_ON spins it up after 0.2 s (bmodels.cpp:668, SUB_CallUseToggle).
+- A non-solid `func_movelinear` (bit 8) moves when every output it owns is Open/Close/SetPosition/
+  SetSpeed aimed at itself and no frozen entity shares its name (surf_era's painting1_move pair
+  stays); it fires OnFullyOpen/OnFullyClosed as Source's MoveDone does.
+- SOLID_NOT `prop_*` with a parentname follow a moving chain (Source's matrix convention); a chain
+  that does not end at a mover is not placed.
+- Poses come from clocks (as SV_RotButtonPlace's), written at most 20 times a second from StartFrame;
+  NO edict is allocated at map load (a driver spawned mid-load shifted every later edict number and
+  so the physent digest on ~440 maps -- review round 1). A mover made solid by any input is dropped
+  back to its spawn pose; Toggle always takes main's solidity path.
+- Census, all 1,926 maps: 948 rotators, 506 props and 412 movelinears move, on 282 maps;
+  bhop_lost_world_v2 has the most moving edicts (56, at 20 Hz on a lobby).
+
+**Verified:** gigapede at Lex's save 10, patched against origin/main progs: the dagger reads yaw 4,
+45, 86, 129 deg at 1 s steps and z between -2879 and -2871; screenshot area change 7.2% against 1.3%
+on the control. A probe listing every non-player entity that is not SOLID_NOT (number, class,
+model, origin, angles, mins, maxs, solid) is identical to the control on surf_gigapede (320) and
+surf_era (171), and on the round-0 build differs from #296 on (so it sees the shift); `pm_pin`
+physcrc 03879a on both. surf_era: painting1_move and duck_rot stay, 6 turn, 4 slide, 2 follow.
+Two review rounds (edict numbering, collision through inputs, admission, follower roots, speed
+seed, StopAtStartPos, Toggle), all fixed. qwprogs 0 warnings. Limits in BACKLOG: AddOutput can
+add a non-self output or a shared name after admission (0 in the library); only props follow
+(sprites, trails, particles and brush children do not).
+
 ## Patch 864 — no water capture inside a water capture (client exe, GL)
 
 **Problem (Lex, 20 Oct):** surf_garden "runs at lower fps 200~ ... one stage drops it down to 50fps".
