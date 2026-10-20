@@ -9678,6 +9678,72 @@ static void FS_Addon_MountHD(const char *spec, unsigned int loadstuff)
 		Con_DPrintf("fs_load: mounted HD pack \"%s\"\n", hdspec);
 }
 
+/*
+FTESurf Patch 875: a Source game's LOOSE files sink below every pack, as Momentum mounts them.
+Momentum's gameinfo mounts cstrike_pak_dir.vpk and cstrike/download, never cstrike's loose
+materials; ours put the whole cstrike dir above HL2 and Momentum's mount/hl2_dir.vpk, so Lex's
+community-pack cstrike/materials/dev/water_normal.vtf (1024^2, one frame) replaced HL2's animated
+256^2 one on 835 of 1,926 maps.  Census of his mounts: the 5 dev/water*.vtf are the only files
+in cstrike's loose dirs that a lower pack also has.  A loose dir is a Source game's when one of
+its own *_dir.vpk is mounted; the packs keep their order.  No locks: called inside the rebuild
+or automount, which hold fs_thread_mutex.
+*/
+static cvar_t fs_sourceloose = CVARFD("fs_sourceloose", "1", CVAR_ARCHIVE, "ftesurf (P875): 1 = a mounted Source game's loose files (cstrike/materials and the like) rank below every pack, as Momentum mounts them; 0 = above them, the order before. Takes effect at fs_restart.");
+static qboolean FS_Addon_IsSourceLoose(const searchpath_t *sp)
+{
+	const searchpath_t *s;
+	size_t len = strlen(sp->logicalpath), l2;
+	if ((sp->flags & (SPF_ADDON|SPF_ISDIR)) != (SPF_ADDON|SPF_ISDIR) || !len)
+		return false;
+	for (s = com_searchpaths; s; s = s->next)
+	{
+		if (s == sp || (s->flags & SPF_ISDIR) || !(s->flags & SPF_ADDON))
+			continue;
+		l2 = strlen(s->logicalpath);
+		if (l2 > len + 8 && !Q_strncasecmp(s->logicalpath, sp->logicalpath, len) &&
+			(s->logicalpath[len] == '/' || s->logicalpath[len] == '\\') &&
+			!strchr(s->logicalpath + len + 1, '/') && !strchr(s->logicalpath + len + 1, '\\') &&
+			!Q_strcasecmp(s->logicalpath + l2 - 8, "_dir.vpk"))
+			return true;
+	}
+	return false;
+}
+static void FS_Addon_SinkSourceLoose(void)
+{
+	searchpath_t *sp, **link, *sunk = NULL, **tail = &sunk;
+	qboolean loose = false;
+	if (!fs_sourceloose.ival)
+		return;
+	for (sp = com_searchpaths; sp; sp = sp->next)	//already in order: no rehash
+	{
+		if (FS_Addon_IsSourceLoose(sp))
+			loose = true;
+		else if (loose)
+			break;
+	}
+	if (!sp)
+		return;
+	for (link = &com_searchpaths; *link; )
+	{
+		sp = *link;
+		if (FS_Addon_IsSourceLoose(sp))
+		{
+			*link = sp->next;
+			sp->next = NULL;
+			*tail = sp;
+			tail = &sp->next;
+			Con_DPrintf("fs_load: \"%s\" loose files rank below every pack\n", sp->logicalpath);
+		}
+		else
+			link = &sp->next;
+	}
+	if (!sunk)
+		return;
+	*link = sunk;
+	com_fschanged = true;	//depths moved; the next lookup rebuilds the hash
+	fs_listgen++;
+}
+
 //(re)mount every game listed in <gamedir>/fs_addons.txt.  Called at the end of
 //each searchpath rebuild so addon games survive fs_restart / gamedir changes.
 static void FS_RemountAddons(unsigned int loadstuff)
@@ -9712,6 +9778,7 @@ static void FS_RemountAddons(unsigned int loadstuff)
 	if (steamfails)
 		FS_SteamHint();
 	FS_Addon_AutoSourceBase();	//below user-ordered games, before any map asset loads
+	FS_Addon_SinkSourceLoose();	//FTESurf Patch 875
 }
 
 //=================================================================
@@ -11259,6 +11326,7 @@ void FS_AutoMountForMap(const char *mapname)
 				Con_Printf("fs_automount: %s needs \"%s\"\n", want, wantspec[i]);
 				FS_Addon_MountHD(wantspec[i], ~0u);
 				FS_Addon_Mount(wantspec[i], ~0u);
+				FS_Addon_SinkSourceLoose();	//FTESurf Patch 875: its loose dir below every pack, the earlier ones too
 			}
 			if (fs_thread_mutex)
 				Sys_UnlockMutex(fs_thread_mutex);
@@ -11716,6 +11784,7 @@ void COM_InitFilesystem (void)
 	Cvar_Register(&fs_maploadhash, "Filesystem");	//ftesurf (P180)
 	Cvar_Register(&fs_mapmaterials, "Filesystem");	//ftesurf (P765)
 	Cvar_Register(&fs_hdmodels, "Filesystem");	//nettest: Half-Life HD model pack preference
+	Cvar_Register(&fs_sourceloose, "Filesystem");	//FTESurf Patch 875
 	Cvar_Register(&fs_hidesyspaths, "Filesystem");
 	Cvar_Register(&fs_gamename, "Filesystem");
 #ifdef PACKAGEMANAGER

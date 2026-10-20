@@ -429,8 +429,8 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 		    uint32  compressed size of each mip level, SMALLEST level first -- the
 		            file's own order, so entry k is level mipmapcount-1-k
 		and the image resource is those frames laid end to end: arbre01's twelve sizes
-		sum to its file length less the image offset, exactly.  One frame holds a whole
-		level -- every frame and face of it -- so the chain is inflated once into a
+		sum to its file length less the image offset, exactly.  In a single-frame file one
+		frame holds a whole level (Patch 875 below has the rest), so the chain is inflated once into a
 		buffer laid out exactly as an uncompressed file's would be, and the loop below
 		walks it unchanged.
 
@@ -463,8 +463,22 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 			}
 			else
 			{
+				/*
+				FTESurf Patch 875: a multi-frame or cube 7.6 file carries one zstd frame per
+				level x frame (x face), not one per level: Momentum's dev/water_normal (9
+				levels, 29 frames) has 261, its 8 cubemaps 6 per level.  Census of the mount's
+				5,589 AXC files: per level 5,521, per level x frame 60, per level x face 8, no
+				other shape.  Entries stay smallest level first, then frame, then face -- the
+				uncompressed layout -- so each inflates to its level's size / entries a level.
+				*/
 				size_t total = 0, srcofs = 0, outofs = 0;
-				unsigned int k;
+				unsigned int k, j, n = (axclen - 4) / 4, per = n / nlevels;
+				if (n % nlevels || !per || (storedfaces * vtf->numframes) % per)
+				{
+					Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary compression has %u entries for %u levels\n", fname, n, nlevels);
+					plugfuncs->Free(mips);
+					return NULL;
+				}
 				for (k = 0; k < nlevels; k++)
 				{
 					w = vtf->width>>k;	if (!w) w = 1;
@@ -475,17 +489,23 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 				for (k = 0; k < nlevels; k++)
 				{
 					unsigned int lvl = nlevels-1-k;	//the file's order: smallest level first
-					size_t csize = AXC_LE32(axc + 8 + 4*k), want, got;
+					size_t want, got, csize = 0;
 					w = vtf->width>>lvl;	if (!w) w = 1;
 					h = vtf->height>>lvl;	if (!h) h = 1;
-					want = (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes;
-					if (filedata + srcofs + csize > end)
+					want = (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes / per;
+					for (j = 0; j < per; j++)
+					{
+						csize = AXC_LE32(axc + 8 + 4*(k*per + j));
+						if (filedata + srcofs + csize > end)
+							break;
+						got = ZSTD_decompress(axcraw + outofs, want, filedata + srcofs, csize);
+						if (ZSTD_isError(got) || got != want)
+							break;
+						srcofs += csize;
+						outofs += want;
+					}
+					if (j < per)
 						break;
-					got = ZSTD_decompress(axcraw + outofs, want, filedata + srcofs, csize);
-					if (ZSTD_isError(got) || got != want)
-						break;
-					srcofs += csize;
-					outofs += want;
 				}
 				if (k < nlevels)
 				{
