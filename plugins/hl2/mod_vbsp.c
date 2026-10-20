@@ -95,6 +95,7 @@ static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their p
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
+static cvar_t *hl2_3dskyleaf;		//FTESurf Patch 880
 static cvar_t *hl2_contents_remap;
 cvar_t *hl2_propcollision;	//FTESurf Build 8: shared with mod_hl2.c, which picks the model's collision shape from it
 cvar_t *hl2_propcollision_nophy;	//FTESurf Patch 262: likewise -- "no .phy" means non-solid, not "use the render mesh"
@@ -491,6 +492,7 @@ typedef struct vbspinfo_s
 		float missingtile;	//FTESurf Patch 780: material did not resolve; world units per checker tile (0 = texinfo scale)
 	} *texinfo;
 
+	qbyte			*leafflags;			//FTESurf Patch 880: dleaf_t's flags (LEAF_FLAGS_SKY 0x01, SKY2D 0x04), [numleafs]
 	int				numareas;
 	int				floodvalid;
 	int				lastreportedarea;	//FTESurf Build 8: edge-detects the area print in VBSP_PrepareFrame
@@ -3007,6 +3009,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 	*/
 	clusterbound = prv->vis ? prv->vis->numclusters : count;
 
+	prv->leafflags = plugfuncs->GMalloc(&mod->memgroup, count);
 	if (!wide && ver == 19)
 	{
 		prv->leaflight = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * count);
@@ -3028,6 +3031,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
 			out->cluster = LittleLong(in->cluster);		//already signed; -1 = no cluster
 			out->area = LittleLong(in->areaflags) & 0x1ffff;	//low 17 bits; upper 15 are flags
+			prv->leafflags[i] = ((unsigned int)LittleLong(in->areaflags) >> 17) & 0xff;
 			out->firstleafbrush = LittleLong(in->firstleafbrush);
 			out->numleafbrushes = LittleLong(in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + LittleLong(in->firstleafface);
@@ -3046,6 +3050,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			if (out->cluster == 0xffff)
 				out->cluster = -1;
 			out->area = (unsigned short)LittleShort (in->area) & 0x1ff;	//upper part is flags.
+			prv->leafflags[i] = (unsigned short)LittleShort (in->area) >> 9;
 			out->firstleafbrush = (unsigned short)LittleShort (in->firstleafbrush);
 			out->numleafbrushes = (unsigned short)LittleShort (in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + (unsigned short)LittleShort(in->firstleafface);
@@ -9182,6 +9187,16 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 	refdef = r_refdef;
 
+	//FTESurf Patch 880: Source draws the 3D sky only where the eye's leaf has 3D sky in its PVS
+	//(viewrender.cpp:4595); a toolsskybox2d leaf shows the 2D skybox. The main view decides for the
+	//views nested in it, as Source's bDrawSkybox does. surf_tendies: every spawn is SKY2D only.
+	if (!r_refdef->recurse && r_refdef->skyroom_enabled && hl2_3dskyleaf->ival && prv->leafflags)
+	{
+		int eyeleaf = VBSP_PointLeafnum(mod, r_refdef->vieworg);
+		if (eyeleaf >= 0 && eyeleaf < mod->numleafs && !(prv->leafflags[eyeleaf] & 0x01))
+			r_refdef->skyroom_enabled = false;
+	}
+
 	if (vis->buffersize < mod->pvsbytes)
 		vis->buffer = plugfuncs->Realloc(vis->buffer, vis->buffersize=mod->pvsbytes);
 	frustumvis = vis->buffer;
@@ -12577,6 +12592,7 @@ qboolean VBSP_Init(void)
 		surf_666 that could not be drawn; 0 is the Quake 2 behaviour this used to
 		have, kept so the difference can be seen rather than argued about.
 		*/
+		hl2_3dskyleaf = cvarfuncs->GetNVFDG("hl2_3dskyleaf", "1", 0, "FTESurf Patch 880. 1: the 3D sky is drawn only from a leaf whose PVS holds 3D sky (LEAF_FLAGS_SKY), as Source (viewrender.cpp:4595, IsSkyboxVisibleFromPoint); elsewhere the 2D skybox shows, as in Momentum. 0: wherever sky is visible, as before.", MAPOPTIONS);
 		hl2_areaportals = cvarfuncs->GetNVFDG("hl2_areaportals", "1", CVAR_MAPLATCH, "Initial state of a Source map's areaportals.\n0: closed, and opened only by gamecode -- the Quake 2 rule, which seals off every area a Source map has because nothing closes or opens them.\n1: open, which is what Source itself initialises them to (default).", MAPOPTIONS);
 		/*
 		FTESurf Build 10 -- the price of Source water and Source glass.
