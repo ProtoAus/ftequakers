@@ -1388,6 +1388,9 @@ void GLBE_EndShadowMap(int restorefbo)
 //FTESurf Patch 866: what temptexture's storage was allocated as (0 = none).
 static int be_currentw, be_currenth;
 static GLenum be_currentfmt;
+static qboolean be_nopanedepth;	//FTESurf Patch 878: a world or brush pane drawn now writes no depth (GLBE_SubmitNearest)
+extern unsigned int r_vs_copies;
+extern double r_vs_copypixels;
 
 static void T_Gen_CurrentRender(int tmu)
 {
@@ -1435,6 +1438,8 @@ static void T_Gen_CurrentRender(int tmu)
 		qglGenTextures(1, &shaderstate.temptexture->num);
 	}
 	GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
+	if (!shaderstate.force2d)	//FTESurf Patch 878: r_viewstats counts the scene's
+		r_vs_copies++, r_vs_copypixels += (double)vwidth * vheight;
 	//FTESurf Patch 866: copy into the storage the last copy allocated; CopyTexImage2D
 	//reallocated it for every batch that samples the screen (Refract at hl2_refract 1).
 	if (be_currentw == vwidth && be_currenth == vheight && be_currentfmt == fmt)
@@ -3373,6 +3378,8 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 				sbits |= SBITS_MISC_DEPTHWRITE;
 		}
 	}
+	if (be_nopanedepth)
+		sbits &= ~SBITS_MISC_DEPTHWRITE;
 	sbits |= r_refdef.colourmask;
 	//FTESurf Patch 871: a coverage target's alpha is written whatever the pass masks (fill_trans masks it)
 	if (r2d_coverage && shaderstate.force2d)
@@ -8341,6 +8348,136 @@ static int GLBudget_SortCat(int sort, qboolean world)
 	return world ? GPUB_WORLD : GPUB_MODELS;
 }
 
+/*
+FTESurf Patch 878: a pane that samples the screen ($currentrender: Refract at hl2_refract 1) sorts
+NEAREST (gl_shader.c Shader_Finish), after everything it can show.  Source draws its refracting
+renderables (models: C_BaseAnimating, c_baseanimating.cpp:799; brushes never copy, c_baseentity.cpp:
+1801-1804) back to front, each after a fresh copy (viewrender.cpp:4316-4374), and skips them in its
+water views (:4360-4363).  Here: world batches first in their old order, then the model list's
+other batches, then MODEL panes back to front by centre, each binding (so copying) the screen, then
+weapons and no-depth-test draws.  Only a model pane writes depth; a world or brush pane's depth
+write is dropped (be_nopanedepth) so the depth the material asks for (mat_vmt.c VMT_RefractBlend)
+cannot hide a pane behind it.  r_nearestsort 0 keeps the submission order.
+*/
+typedef struct
+{
+	batch_t *batch;
+	double depth;
+	size_t sequence;
+} glnearpane_t;
+
+static qboolean GLBE_NearestPane(const batch_t *batch)
+{
+	const shader_t *sh = batch->shader;
+	return batch->meshes > batch->firstmesh && sh && sh->numpasses &&
+		sh->passes[0].texgen == T_GEN_CURRENTRENDER && !GLBE_BlendBatchImmediate(batch);
+}
+
+static qboolean GLBE_NearestFlatPane(const batch_t *batch)
+{
+	return GLBE_NearestPane(batch) &&
+		(batch->ent == &r_worldentity || !batch->ent->model || batch->ent->model->type == mod_brush);
+}
+
+static qboolean GLBE_NearestLate(const batch_t *batch)
+{
+	return GLBE_BlendForeground(batch) || (batch->flags & BEF_FORCENODEPTH);
+}
+
+static qboolean GLBE_NearestModelPane(const batch_t *batch)
+{
+	return GLBE_NearestPane(batch) && !GLBE_NearestFlatPane(batch) && !GLBE_NearestLate(batch);
+}
+
+static int GLBE_NearPaneCompare(const void *va, const void *vb)
+{
+	const glnearpane_t *a = va, *b = vb;
+	if (a->depth > b->depth) return -1;
+	if (a->depth < b->depth) return 1;
+	return (a->sequence > b->sequence) - (a->sequence < b->sequence);
+}
+
+//the list's batches that pick() accepts, in order: a world or brush pane alone with its depth
+//write dropped, the rest in runs (so instancing still sees its neighbours)
+static void GLBE_SubmitNearestSome(batch_t *list, qboolean (*pick)(const batch_t *b))
+{
+	batch_t *batch, *run, one;
+	for (batch = list; batch; )
+	{
+		if (!pick(batch))
+			batch = batch->next;
+		else if (GLBE_NearestFlatPane(batch))
+		{
+			one = *batch;
+			one.next = NULL;
+			be_nopanedepth = true;
+			GLBE_SubmitMeshesSortList(&one);
+			be_nopanedepth = false;
+			batch = batch->next;
+		}
+		else
+		{
+			for (run = batch; run && pick(run) && !GLBE_NearestFlatPane(run); run = run->next)
+				;
+			GLBE_SubmitMeshesSortRange(batch, run);
+			batch = run;
+		}
+	}
+}
+static qboolean GLBE_PickAll(const batch_t *b)
+{
+	return true;
+}
+static qboolean GLBE_PickEarly(const batch_t *b)
+{
+	return !GLBE_NearestModelPane(b) && !GLBE_NearestLate(b);
+}
+static qboolean GLBE_PickLate(const batch_t *b)
+{
+	return !GLBE_NearestModelPane(b) && GLBE_NearestLate(b);
+}
+
+extern cvar_t r_nearestsort;
+static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
+{
+	glnearpane_t stackpanes[64], *panes = stackpanes;
+	size_t count = 0, n = 0, i;
+	float matrix[16], modelview[16];
+	batch_t *batch, one;
+
+	if (!r_nearestsort.ival)
+	{
+		GLBE_SubmitNearestSome(world, GLBE_PickAll);
+		GLBE_SubmitNearestSome(dynamic, GLBE_PickAll);
+		return;
+	}
+	GLBE_SubmitNearestSome(world, GLBE_PickAll);
+	GLBE_SubmitNearestSome(dynamic, GLBE_PickEarly);
+	for (batch = dynamic; batch; batch = batch->next)
+		count += GLBE_NearestModelPane(batch);
+	if (count > countof(stackpanes))	//heap, as GLBE_SubmitBlendedFaces: it survives recursive views
+		panes = BZ_Malloc(count * sizeof(*panes));
+	for (batch = dynamic; batch; batch = batch->next)
+		if (GLBE_NearestModelPane(batch) && !(r_refdef.recurse && r_refdef.capturekind >= 1))
+		{
+			R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
+			panes[n].batch = batch;
+			panes[n].depth = GLBE_BlendBatchDepth(batch, matrix);
+			panes[n].sequence = n;
+			n++;
+		}
+	qsort(panes, n, sizeof(*panes), GLBE_NearPaneCompare);
+	for (i = 0; i < n; i++)
+	{
+		one = *panes[i].batch;
+		one.next = NULL;
+		GLBE_SubmitMeshesSortList(&one);
+	}
+	if (panes != stackpanes)
+		BZ_Free(panes);
+	GLBE_SubmitNearestSome(dynamic, GLBE_PickLate);
+}
+
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i, prev;
@@ -8352,6 +8489,12 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
 			GLBE_SubmitBlendedFaces(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
+			continue;
+		}
+		if (i == SHADER_SORT_NEAREST && shaderstate.mode == BEM_STANDARD)
+		{
+			GLBudget_Set(GPUB_TRANSPARENT);
+			GLBE_SubmitNearest(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
 			continue;
 		}
 		if (worldbatches)
@@ -9235,7 +9378,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom), as
 		//Source's above-water views do; with the eye under water its refraction keeps the 3D sky
 		//(viewrender.cpp:5912-5927).
-		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled &&
+		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled && !r_refdef.skyroom_noleafsky &&	//Patch 880
 			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival &&
 			  !(r_viewcontents & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA))))	//FLUID includes SKY
 		{

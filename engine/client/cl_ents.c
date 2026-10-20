@@ -3921,7 +3921,7 @@ void CLQ1_AddHoverBrushes(void)
 {
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	static cvar_t *hm, *vm;
-	static shader_t *fillsh, *linesh;
+	shader_t *fillsh, *linesh;	//Patch 883: not static -- a renderer restart frees every shader
 	struct brushviz_s v;
 	vec3_t mins, maxs;
 	model_t *mod;
@@ -3936,8 +3936,9 @@ void CLQ1_AddHoverBrushes(void)
 	}
 	if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 		return;
+	if ((!vm || !*vm->string) && (!hm || !*hm->string))
+		return;
 
-	if (!fillsh)
 	{
 		/*Same shape as ftesurf_brushfill -- polygonoffset, depth-tested, default
 		  sort -- because that is the shape MEASURABLY draws from a scenetris

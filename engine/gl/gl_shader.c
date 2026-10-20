@@ -1996,8 +1996,9 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		//Com_PermuOrFloatArgument (:1688).  Suppressing the sampler too would change numsamplers,
 		//hence the synthesised pass list and every texture binding index after it; leaving it
 		//declared but unused costs one ignored uniform and keeps the pass layout byte-identical.
-		//cl.worldmodel is NULL for 2D/menu//loading shaders, which want no deluxe modulation either.
-		if (r_deluxemapping && cl.worldmodel && cl.worldmodel->lightmaps.deluxemapping)
+		//No world for 2D/menu//loading shaders, which want no deluxe modulation either; during a renderer
+		//restart the answer is the world's from before the restart (V_WorldFreed).
+		if (r_deluxemapping && V_WorldHasDeluxe())	//Patch 883: not cl.worldmodel, which a restart leaves dangling
 			Q_strlcatfz(defines, &offset, sizeof(defines), "#define DELUXE\n");
 	}
 	permutationdefines[pn++] = defines;

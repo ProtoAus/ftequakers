@@ -176,6 +176,9 @@ cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refract
 //statics. A nested view sees those and its own walk's, not the outer views' ones again.
 int r_visdynamic;
 unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
+unsigned int r_vs_skycam;	//FTESurf Patch 880: 3D skies drawn from the sky camera's vis (gl_warp.c)
+unsigned int r_vs_copies;	//FTESurf Patch 878: $currentrender screen copies in top-level views (gl_backend.c)
+double r_vs_copypixels;	//and the pixels they copied
 //FTESurf Patch 868: CPU self time (ms) and draw calls by kind of view (R_ViewStatsEnter/Leave keep
 //a child's total out of its parent's self time, by depth).
 static const char *r_vs_kindname[R_VS_KINDS] = {"main", "reflection", "refraction", "portal", "3D sky"};
@@ -217,13 +220,15 @@ static void R_ViewStats_f(void)
 	Con_Printf("r_viewstats: %u top-level views (a frame's, or each eye/face/renderscene); per one, views by depth:", r_vs_frames);
 	for (i = 0; i < R_MAX_RECURSE; i++)
 		Con_Printf(" %.2f", r_vs_views[i] / (double)f);
-	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f\n",
-		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f);
+	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f; 3D skies from the sky camera %.2f; screen copies %.2f (%.2f Mpx)\n",
+		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f, r_vs_skycam / (double)f, r_vs_copies / (double)f,
+		r_vs_copypixels / f / 1e6);
 	Con_Printf("r_viewstats: cpu self ms / draw calls:");
 	for (i = 0; i < R_VS_KINDS; i++)
 		Con_Printf(" %s %.3f/%.0f", r_vs_kindname[i], r_vs_ms[i] / f, r_vs_draws[i] / (double)f);
 	Con_Printf("\n");
-	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = 0;
+	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = r_vs_skycam = r_vs_copies = 0;
+	r_vs_copypixels = 0;
 	memset(r_vs_views, 0, sizeof(r_vs_views));
 	memset(r_vs_ms, 0, sizeof(r_vs_ms));
 	memset(r_vs_draws, 0, sizeof(r_vs_draws));
@@ -233,6 +238,7 @@ cvar_t r_skyroomneed						= CVARD ("r_skyroomneed", "2", "Where the 3D sky is dr
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
 //FTESurf Patch 868: Source's water views (viewrender.cpp CAboveWaterView::CReflectionView::Setup, :5690-5700).
 cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water reflection or refraction draws the 3D sky.\n0: no -- the reflection shows the 2D skybox through its sky surfaces, as Source's does (viewrender.cpp: \"draw the 2d skybox in the reflection, instead of the 3d skybox\"), and the refraction looks under the water. Two exceptions, as in Source: with the eye under water the refraction (looking up out of it) keeps the 3D sky, and water seen through a portal draws it too.\n1: yes, as before Patch 868 (still subject to r_skyroomneed).");
+cvar_t r_nearestsort						= CVARD ("r_nearestsort", "1", "FTESurf Patch 878: how panes that refract the screen (Refract at hl2_refract 1) are ordered.\n1: the world's first, then models' back to front, each over a fresh copy of the screen, as Source draws its models.\n0: in the order they were submitted, world first (the engine's order before Patch 878; not a pre-878 picture, since the plugin's depth rule stays). Either way a model pane that Source draws opaque writes depth, and a world or brush pane does not. GL only.");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
@@ -1505,7 +1511,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_skyroomneed, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterskyroom, GRAPHICALNICETIES);	//FTESurf Patch 868
 	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
-	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over.");
+	Cvar_Register (&r_nearestsort, GRAPHICALNICETIES);
+	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over, 3D skies from the sky camera, screen copies and their megapixels.");
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
 	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288
@@ -2034,6 +2041,7 @@ void R_ShutdownRenderer(qboolean devicetoo)
 #endif
 
 	P_Shutdown();
+	V_WorldFreed(true);	//FTESurf Patch 883: cl.worldmodel dangles from here to the reload
 	Mod_Shutdown(false);
 
 	IN_Shutdown();
@@ -2533,6 +2541,7 @@ TRACE(("dbg: R_ApplyRenderer: reloading ALL models\n"));
 		else
 #endif
 			cl.worldmodel = cl.model_precache[wmidx];
+		V_WorldFreed(false);
 
 		if (cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADING)
 			COM_WorkerPartialSync(cl.worldmodel, &cl.worldmodel->loadstate, MLS_LOADING);
@@ -2564,6 +2573,7 @@ TRACE(("dbg: R_ApplyRenderer: efrags\n"));
 		Skin_FlushPlayers();
 
 	}
+	V_WorldFreed(false);	//no world, or a Quake 3 one, or reloaded above
 
 #ifdef SKELETALOBJECTS
 	skel_reload();
