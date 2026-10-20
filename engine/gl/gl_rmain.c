@@ -1775,9 +1775,14 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 				for (j = 0; j < mesh->numvertexes; j++)
 					VectorAdd(point, mesh->xyz_array[j], point);
 				VectorScale(point, 1.0f/mesh->numvertexes, point);
-				d = DotProduct(point, plane.normal) - plane.dist;
-				d += 0.1;	//an epsilon on the far side
-				VectorMA(point, d, plane.normal, point);
+				if (batch->ent == &r_worldentity && mesh->normals_array)
+					VectorMA(point, -0.1, mesh->normals_array[0], point);	//FTESurf Patch 879: past its OWN surface (a shared capture's meshes span heights)
+				else
+				{
+					d = DotProduct(point, plane.normal) - plane.dist;
+					d += 0.1;	//an epsilon on the far side
+					VectorMA(point, d, plane.normal, point);
+				}
 
 				clust = cl.worldmodel->funcs.ClusterForPoint(cl.worldmodel, point, NULL);
 				if (i == batch->firstmesh)
