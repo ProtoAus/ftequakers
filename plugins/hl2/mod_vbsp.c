@@ -483,6 +483,7 @@ typedef struct vbspinfo_s
 	model_t			*vis_trace_model;	//FTESurf Patch 799: draw-only occluders, built on first request
 	qboolean		vis_built;
 	qboolean		wl_tried;	//FTESurf Patch 879: the occluder tree was built, or asked for once
+	qboolean		wl_requested;	//...and the renderer has asked for it (logged once)
 	struct bihtransform_s *vis_tr;		//per prop, from its own entity (not staticprops[].transform)
 	qboolean		(*vis_basetrace)(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace);
 
@@ -7584,7 +7585,7 @@ static qboolean VBSP_MissReason(model_t *mod, const char *name, char *out, size_
  * separate world-only tree. No prop shadow meshes or inline movers are present;
  * this is world occlusion, not Source's full light cache or VRAD shadow scene.
  */
-static void VBSP_BuildOccluderBIH(model_t *mod)
+static void VBSP_BuildOccluderBIH(model_t *mod, const char *why)
 {
 	vbspinfo_t *prv = mod->meshinfo;
 	cmodel_t *sub = &prv->cmodels[0];
@@ -7639,8 +7640,8 @@ static void VBSP_BuildOccluderBIH(model_t *mod)
 	VectorCopy(mod->maxs, prv->wl_trace_model->maxs);
 	mod->cnodes = collisionnodes;	//movement tree and its contents are unchanged
 	mod->funcs = funcs;
-	Con_DPrintf("%s: worldlight occluders %u brushes/displacement triangles (no props or movers), %.1f ms\n",
-		mod->name, (unsigned)(l-leafs), (plugfuncs->GetSeconds() - t0) * 1000);
+	Con_DPrintf("%s: occluder tree built now, %s: %u brushes/displacement triangles (no props or movers), %.1f ms\n",
+		mod->name, why, (unsigned)(l-leafs), (plugfuncs->GetSeconds() - t0) * 1000);
 	plugfuncs->Free(leafs);
 }
 static void VBSP_BuildLightBIH(model_t *mod)
@@ -7649,7 +7650,7 @@ static void VBSP_BuildLightBIH(model_t *mod)
 	if (!prv->numworldlights)
 		return;	//FTESurf Patch 879: otherwise the first VBSP_OccluderTrace builds it, client only
 	prv->wl_tried = true;
-	VBSP_BuildOccluderBIH(mod);
+	VBSP_BuildOccluderBIH(mod, "at load for the world lights");
 }
 
 /* FTESurf Patch 799: what a glare's depth query sees and the movement tree does not -- static
@@ -10690,7 +10691,14 @@ static int QDECL VBSP_OccluderTrace(model_t *mod, const vec3_t start, const vec3
 		//with no capture water, and every renderer-less server, never pays (bhop_matches: 420,675 leaves,
 		//~26 MB kept)
 		prv->wl_tried = true;
-		VBSP_BuildOccluderBIH(mod);
+		prv->wl_requested = true;
+		VBSP_BuildOccluderBIH(mod, "on the first occlusion request");
+	}
+	else if (!prv->wl_requested)
+	{
+		prv->wl_requested = true;
+		Con_DPrintf("%s: occluder tree first requested: %s\n", mod->name,
+			prv->wl_trace_model ? "already built (at load for the world lights)" : "none (no renderer)");
 	}
 	if (!prv->wl_trace_model || !prv->wl_trace_model->funcs.NativeTrace)
 		return -1;
