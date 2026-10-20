@@ -447,6 +447,32 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 		}
 		VectorCopy(sky, r_refdef.vieworg);
 		VectorCopy(sky, r_refdef.pvsorigin);
+
+		/* FTESurf Patch 880: Source draws the 3D sky with the sky camera's own vis and area alone,
+		   wherever the scaled eye lands (viewrender.cpp:4627-4630, 4675). From the eye, a view
+		   past the room's walls was in solid -- cluster -1, area 0, the whole map from the sky
+		   (surf_tendies save 5: no sky, 426 draws, 4.5 ms; save 6, 36 units lower, 46). */
+		if (cl.worldmodel && cl.worldmodel->fromgame == fg_new && cl.worldmodel->funcs.PrepareFrame &&
+			cl.worldmodel->funcs.InfoForPoint && !Q_strcasecmp(COM_GetFileExtension(cl.worldmodel->name, NULL), ".bsp"))
+		{
+			vec3_t cam;
+			int area, cluster;
+			unsigned int contents;
+			VectorCopy(r_refdef.skyroom_pos, cam);
+			if (r_refdef.skyroom_scale > 0 && !IS_NAN(r_refdef.skyroom_scale))
+				VectorMA(cam, -1 / r_refdef.skyroom_scale, r_refdef.skyroom_eye, cam);
+			cl.worldmodel->funcs.InfoForPoint(cl.worldmodel, cam, &area, &cluster, &contents);
+			if (cluster >= 0)
+			{
+				VectorCopy(cam, r_refdef.pvsorigin);
+				if (area > 0 && area < MAX_MAP_AREA_BYTES*8)
+				{
+					memset(r_refdef.areabits, 0, sizeof(r_refdef.areabits));
+					r_refdef.areabits[area>>3] |= 1<<(area&7);
+					r_refdef.areabitsknown = true;
+				}
+			}
+		}
 	}
 
 	/*
