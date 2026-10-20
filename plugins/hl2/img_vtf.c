@@ -483,8 +483,8 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 				Validate before allocating (the allocator Sys_Errors on failure, so a few-KB
 				hostile file in a map pak must not reach it): every entry lies in the file and
 				its zstd frame declares the size this level expects (all 22,266 of the mount's
-				frames declare one), the total is at most 8192x the compressed bytes (the
-				mount's worst real file, a black skybox face, is 6,228x; median 1.7x) and
+				frames declare one), the total is at most 32768x the compressed bytes (zstd's
+				ceiling, a 4-byte RLE block per 128 KiB: a solid 2048^2 DXT1 chain is ~10,000x) and
 				at most 256 MB (its largest is 10 MB; an uncompressed 4096^2 RGBA16F chain
 				fits).
 				*/
@@ -511,7 +511,7 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 					if (j < per)
 						break;
 				}
-				if (k < nlevels || total > (size_t)256*1024*1024 || total / 8192 > comp)
+				if (k < nlevels || total > (size_t)256*1024*1024 || total / 32768 > comp)
 				{
 					Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary-compressed image does not match its header\n", fname);
 					plugfuncs->Free(mips);
