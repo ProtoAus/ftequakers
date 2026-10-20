@@ -1,5 +1,89 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 875 — Source games' loose files under their packs; VTF 7.6 multi-frame textures (client exe + hl2 plugin)
+
+**Problem (Lex, 20 Oct):** surf_garden's water "is static" with small strong ripples, boreas's
+"scaled wrong". `materials/dev/water_normal.vtf` resolved to a LOOSE file in his CS:S install
+(`cstrike/materials/dev/`, a mapping pack: 1024x1024, one frame, strong normals) because a Source
+game's loose dir was mounted above that game's VPKs and the next games' content; HL2's (also in
+Momentum's mount/hl2_dir.vpk) is 256x256 with 29 frames, nearly flat. Momentum's gameinfo never
+mounts cstrike's loose files. Separately, Momentum's own VTF 7.6 (AXC, zstd) multi-frame textures
+store one entry per level x frame (or x face) and our reader expected one per level, so every one
+failed ("would not inflate").
+
+**Change:** FS_Addon_SinkSourceLoose (fs.c) moves a Source game's loose dir (one whose own
+`*_dir.vpk` is mounted) below every pack, only at boot / FS_RemountAddons, after the worker sync
+(automount, fs_load and mapfrom still append: a mid-session reorder could change which .phy a
+surviving model reads). `fs_sourceloose 0` restores the old order at fs_restart. img_vtf.c inflates
+AXC entries per level x frame/face, and bounds the allocation first: every entry inside the file,
+each zstd frame's declared size, the total at most 32768x the compressed bytes (zstd's ceiling) and
+256 MB (P292's unbounded total let a few-KB file in a map pak Sys_Error a client).
+
+**Verified:** census on Lex's mounts (old vs new order): 15 winners change -- the 5
+materials/dev/water*.vtf and 10 hl2 scripts/ (soundscapes_*, surfaceproperties_hl2, which nothing
+reads yet); 0 .bsp/.mdl/.phy/.vvd/.vtx/.zon/.cfg, so no collision or evidence change; 835 of 1,926
+maps draw a material reading those textures. In game: flocate water_normal -> hl2_textures_dir.vpk
+256x256; effects/minescreen_static01_ (Momentum-only) loads as a 25-layer array where the control
+fails; a loose-only CS:S file still loads; garden save 4 shows the canal walls through the water as in
+Momentum. Two review rounds (automount reorder, worker lock, separators, the AXC bound; then the
+8192x cap rejecting large solid textures), all fixed. Not done: Momentum's full order (hl2_dir.vpk
+above cstrike's VPK and HL2) changes 22,969 winners incl. 182 .phy -- needs its own design. fs.c is
+shared with the server: check a server's mounts before deploying one built from this.
+
+## Patch 868 — water captures draw what Source's water views draw (client exe + hl2 plugin)
+
+**Problem (Lex, 20 Oct):** "I would like to get the reflections/refractions rendering correctly,
+meaning high fps, and the full effect, sort of like how source does it" -- three surf_garden saves at
+~120 fps, CPU-bound, his r_budget dumps putting the 3D sky at 45% of GPU time. Our captures drew the
+3D sky and every entity and static prop; Source's reflection draws the 2D skybox "instead of the 3d
+skybox" and entities only under `$reflectentities` / r_waterforcereflectentities, its above-water
+refraction no sky (viewrender.cpp:5692-5700, 5271-5290, 5751-5753).
+
+**Change:** `r_waterskyroom 0` (default): a water capture shows the 2D skybox, not the 3D sky, unless
+the eye is in water/slime/lava (Source's under-water refraction draws over the 3D sky, :5912-5927) or
+the water is seen through a portal. GLR_DrawPortal clears RDF_SKIPSKY for every nested view (each view
+decides its own sky). The Water arm reads `$reflectentities` and emits `fte_reflectnoentities` when it
+is 0/absent (a shader_t field appended at the end; the plugin never reads shader_t past passes[]):
+such a reflection skips entities and the plugin's static-prop walk (RDF_NOENTS), keeping world decals
+and paint; `r_waterforcereflectentities 1` is the old picture. `$forcecheap` (#LQWATER) water no
+longer maps a `$reflection` it never samples. r_viewstats prints CPU and draws per kind of view.
+
+**Verified:** Lex's cfg and window, matched paused cameras, frametime p50 old / P868 / old again:
+save 1 2.95-2.90 / 2.51-2.54 / 2.87-2.86 ms; 2 3.16-3.28 / 2.79-2.80 / 3.25-3.27; 3 3.43-3.40 /
+2.96-2.88 / 3.42-3.45; 4 (canal) 3.09-3.11 / 2.60-2.57 / 2.96-2.90. 3D sky CPU 0.73-0.91 -> 0.29-0.34
+ms, ~320 fewer draws; at save 5 (3D sky above the fountain pond) 4.38-4.54 -> 3.21-3.29 ms. Saves 1-3
+pixel-identical outside the r_budget overlay; the canal's ripple sparkles now reflect the packed 2D
+sky33 (4.7% of pixels), as Source. Census: 146 of 886 packed Water materials (118 maps) say
+`$reflectentities 1` and keep entities. Two review rounds (the first found the sky in a capture going
+black wherever the main view drew the 3D sky -- fixed and shown at save 5; under-water, skyroom props,
+particles/decals, sky contents), all fixed. Not measured: the under-water exception in game. Left:
+Lex's own session draws ~2.2x a fresh client's draws at save 3 (unexplained); capture resolution is
+0.5x the framebuffer where Source uses 1024^2.
+
+## Patch 867 — Source water moves and fogs as water_ps2x does (hl2 plugin)
+
+**Problem (Lex, 20 Oct):** surf_garden save 4 "water is rippling and moving and looks scaled up maybe?
+our water is static"; boreas save 8 "scaled wrong". Besides P875's wrong texture, the Water arm ignored
+the AnimatedTexture on `$normalmap` (garden: 29 frames at 30 fps) and the `$bumptransform`
+TextureScroll, and differed from Source's terms.
+
+**Change:** a water normal map whose resolved file has frames is bound as a `$2darray` and animated
+at the proxy's rate in `vmt/wateranim` (water.glsl under GLSL 130, only for those materials; the rest
+keep the old version); the shader falls back to the plain normal map when no frame loaded (a failed
+array read zero and drew a mirror). TextureScroll on the bump transform scrolls it. Source's terms
+(water_ps2x_helper.h, water.cpp): refraction tint default 1 (ours was .7/.8/.7), distortion scaled by
+fog depth (depth/range, no start term) and normal alpha above water and without a `$basetexture`,
+MULTITEXTURE averaging alpha too, the shallow-water reflection cut, fog blend from 0.05 depth.
+`hl2_waterdebug 1-9` shows each term.
+
+**Verified:** with P875: garden save 4 runs vmt/wateranim with water_normal as a 256x256x29 array, 40.5%
+of water pixels move over 0.5 s (0% before); boreas 11.6% (MULTITEXTURE scroll, no frames there);
+hl2_water 1 and 2 compile and draw. The fallback arm: a one-frame map forced through the array path
+draws normal water (70.6% moving) with the fallback and a full mirror (0%) without it. One review
+(mirror on a failed array, the empty-Proxies clear -- reverted, GLSL 130 for every permutation,
+four Source terms), all fixed. Still unlike Momentum: boreas's blue under-water haze (Source fogs the
+world inside the refraction render), no refraction blur.
+
 ## Patch 872 — r_frametime shows the last second's fps first (client exe)
 
 **Problem (Lex, 20 Oct):** "r_frametime 1 seems to take an average over the entire period it's
