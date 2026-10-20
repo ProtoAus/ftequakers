@@ -1,4 +1,3 @@
-!!ver 130-450
 !!cvardf r_glsl_turbscale_reflect=1	//simpler scaler
 !!cvardf r_glsl_turbscale_refract=1	//simpler scaler
 !!cvarf hl2_waterdebug=0	//P867: 1 refraction 2 +fog 3 reflection 4 fresnel 5 fog depth 6/7 normal 8/9 the bound maps
@@ -93,8 +92,11 @@
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
 // frames a second, whole frames, water.cpp:268) samples every layer from one frame.
+// Only in vmt/wateranim (this file under !!ver 130, built by the Makefile), so every
+// other permutation keeps its version. A frame array that did not load (0 layers)
+// falls back to the shader's own normal map.
 #ifdef ANIMBUMP
-#define BUMPSAMPLE(uv) texture2D(s_bumpanim, vec3(uv, bumplayer))
+#define BUMPSAMPLE(uv) (bumplayers > 0 ? texture2D(s_bumpanim, vec3(uv, bumplayer)) : texture2D(s_normalmap, uv))
 #else
 #define BUMPSAMPLE(uv) texture2D(s_normalmap, uv)
 #endif
@@ -150,7 +152,8 @@ void main (void)
 	float depth = 0.0;
 	stc = (1.0 + (tf.xy / tf.w)) * 0.5;
 #ifdef ANIMBUMP
-	float bumplayer = floor(mod(e_time * float(ANIMBUMP), float(textureSize(s_bumpanim, 0).z)));
+	int bumplayers = textureSize(s_bumpanim, 0).z;
+	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;
 #endif
 
 	vec2 btc = tc * float(TXSCALE1);
@@ -160,14 +163,13 @@ void main (void)
 	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 	// the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
 	vec4 nsample = BUMPSAMPLE(ntc);
-	n = nsample.xyz * 2.0 - 1.0;
 #ifdef MULTITEXTURE
-	// Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap.
+	// Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap;
+	// the alpha averages with them (water_ps2x_helper.h:42-45).
 	vec2 tc1 = vec2(btc.x + btc.y, btc.y - btc.x) * 0.1;
-	vec3 n1 = BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
-	vec3 n2 = BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
-	n = (n + n1 + n2) / 3.0;
+	nsample = (nsample + BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)) + BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2))) / 3.0;
 #endif
+	n = nsample.xyz * 2.0 - 1.0;
 
 #ifdef RIPPLEMAP
 	n += texture2D(s_ripplemap, stc).rgb*3.0;
@@ -182,10 +184,12 @@ void main (void)
 #ifdef DEPTH
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
 	depth = waterDepth(stc, surfaceDepth);
-	// Source attenuates distortion by the refraction capture's fog-depth (its alpha,
-	// water_ps2x_helper.h: reflectRefractScale *= waterFogDepthValue) and by the
-	// normal map's alpha. Do not attenuate the normal used for Fresnel/cubemap.
-	float distortion = clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0) * nsample.a;
+#endif
+	// Source attenuates distortion by the normal map's alpha and, above water and
+	// without a $basetexture, by the refraction's fog depth (water_ps2x_helper.h:64-72).
+	// Its fog depth has no start term (common_ps_fxc.h CalcWaterFogAlpha).
+#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX)
+	float distortion = clamp(depth / float(FOGRANGE), 0.0, 1.0) * nsample.a;
 #else
 	float distortion = nsample.a;
 #endif
@@ -203,11 +207,16 @@ void main (void)
 #endif
 	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb * vec3(TINT_REFR);
 	vec3 dbg_refr = refr;
+#if defined(DEPTH) && !defined(UNDERWATER)
+	float fogw = clamp(depth / float(FOGRANGE), 0.0, 1.0);
+#else
+	float fogw = 1.0;	// Source: no depth below water, so the farthest value
+#endif
 #if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
-	// Source: fog = saturate(fogdepth - 0.05); shallow water (fogdepth under 0.05,
-	// fully by 0.1) shows no reflection at all.
-	float fogw = clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0);
 	refr = mix(refr, vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
+#endif
+#ifndef BASETEX
+	// Shallow water (fog depth under 0.05, fully by 0.1) shows no reflection.
 	fres *= clamp((fogw - 0.05) * 20.0, 0.0, 1.0);
 #endif
 	vec3 dbg_fogged = refr;
@@ -232,7 +241,7 @@ void main (void)
 		if (dm == 2) o = dbg_fogged;
 		else if (dm == 3) o = refl;
 		else if (dm == 4) o = vec3(fres);
-		else if (dm == 5) o = vec3(clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0));
+		else if (dm == 5) o = vec3(fogw);
 		else if (dm == 6) o = n * 0.5 + 0.5;
 		else if (dm == 7) o = worldnormal * 0.5 + 0.5;
 		else if (dm == 8) o = texture2D(s_normalmap, gl_FragCoord.xy / 256.0).rgb;

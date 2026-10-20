@@ -1457,24 +1457,11 @@ static char *VMT_ParseProxies(const char *fname, vmtstate_t *st, char *line)
 	com_tokentype_t ttype;
 	char key[MAX_OSPATH];
 	char value[MAX_OSPATH];
-	qboolean empty = true;
 	for(;line;)
 	{
 		line = cmdfuncs->ParseToken(line, key, sizeof(key), &ttype);
 		if (ttype == TTP_RAWTOKEN && !strcmp(key, "}"))
-		{
-			//FTESurf Patch 867: a patch's `replace { Proxies { } }` removes the included
-			//material's proxies in Source (surf_boreas's cubemap-patched water01).
-			if (empty)
-			{
-				st->animrate = 0;
-				*st->animvar = 0;
-				st->scrollrate = 0;
-				*st->scrollvar = 0;
-			}
 			break;
-		}
-		empty = false;
 		line = cmdfuncs->ParseToken(line, value, sizeof(value), &ttype);
 		if (ttype == TTP_RAWTOKEN && !strcmp(value, "{"))
 		{
@@ -3788,6 +3775,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_snprintfz(t, sizeof(t), "#ANIMBUMP=%f", st->animrate);
 				Q_strlcat(progargs, t, sizeof(progargs));
 			}
+			if (!st->basedefaulted)	//Source's BASETEXTURE combo: no depth-scaled distortion, no shallow cut
+				Q_strlcat(progargs, "#BASETEX", sizeof(progargs));
 			if (st->reflecttint_set)
 			{
 				Q_snprintfz(t, sizeof(t), "#TINT_REFL=%f,%f,%f",
@@ -3885,8 +3874,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			*/
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
-					"\t\tprogram \"vmt/water%s\"\n"
-					"\t\tmap $refraction\n", progargs);
+					"\t\tprogram \"vmt/water%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
+					"\t\tmap $refraction\n", strstr(progargs, "#ANIMBUMP") ? "anim" : "", progargs);
 			//FTESurf Patch 868: #LQWATER ($forcecheap without $forceexpensive) reads the cubemap,
 			//never the capture.
 			if (wmode >= 2 && !strstr(progargs, "#LQWATER"))
@@ -3894,7 +3883,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			else
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
 			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n");
-			if (VMT_WaterAnimBump(st))	//FTESurf Patch 867: sampler 3, every frame of the normal map
+			if (strstr(progargs, "#ANIMBUMP"))	//FTESurf Patch 867: sampler 3, every frame of the normal map
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
 					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
 			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");

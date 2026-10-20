@@ -80,3 +80,5 @@ plugins/*/installed.lst
 *.orig
 *.rej
 *~
+# FTESurf Patch 867: generated from water.glsl by plugins/hl2/Makefile
+plugins/hl2/glsl/vmt/wateranim.glsl
