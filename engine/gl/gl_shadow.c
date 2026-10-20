@@ -246,9 +246,11 @@ void Sh_Reset(void)
 	GLBE_FBO_Destroy(&crepuscular_fbo);
 #endif
 }
+static void Sh_FlushMapLights(void);
 void Sh_Shutdown(void)
 {
 	Sh_Reset();
+	Sh_FlushMapLights();
 	SHM_Shutdown();
 }
 
@@ -3898,6 +3900,19 @@ static qboolean Sh_FindTarget(const sh_target_t *tbl, int n, const char *name, v
 	return false;
 }
 
+//Patch 883: also from Sh_Shutdown. The meshes reference the world's surfaces and own the context's
+//buffers, and the restarted mod_known can put the reloaded world at the old address, so the key goes too.
+static void Sh_FlushMapLights(void)
+{
+	int i;
+	for (i = 0; i < sh_nummaplights; i++)
+		if (sh_maplights[i].mesh)
+			{ SH_FreeShadowMesh(sh_maplights[i].mesh); sh_maplights[i].mesh = NULL; }
+	sh_nummaplights = 0;
+	sh_heldlamp_n = 0;	//lamp indices are per-map; forget the held set
+	sh_maplights_model = NULL;
+}
+
 static void Sh_LoadMapLights(void)
 {
 	const char *lump, *p;
@@ -3911,14 +3926,7 @@ static void Sh_LoadMapLights(void)
 	int numtargets = 0;
 	qboolean anyflagged = false;
 
-	{	//free the per-lamp world-occlusion meshes (they reference the OLD map's surfaces/leafs)
-		int i;
-		for (i = 0; i < sh_nummaplights; i++)
-			if (sh_maplights[i].mesh)
-				{ SH_FreeShadowMesh(sh_maplights[i].mesh); sh_maplights[i].mesh = NULL; }
-	}
-	sh_nummaplights = 0;
-	sh_heldlamp_n = 0;	//lamp indices are per-map; forget the held set
+	Sh_FlushMapLights();
 	sh_maplights_model = cl.worldmodel;
 	sh_anyshadowflag = false;
 	if (!cl.worldmodel)

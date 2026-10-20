@@ -1997,7 +1997,7 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		//hence the synthesised pass list and every texture binding index after it; leaving it
 		//declared but unused costs one ignored uniform and keeps the pass layout byte-identical.
 		//cl.worldmodel is NULL for 2D/menu//loading shaders, which want no deluxe modulation either.
-		if (r_deluxemapping && cl.worldmodel && cl.worldmodel->lightmaps.deluxemapping)
+		if (r_deluxemapping && V_WorldHasDeluxe())	//Patch 883: not cl.worldmodel, which a restart leaves dangling
 			Q_strlcatfz(defines, &offset, sizeof(defines), "#define DELUXE\n");
 	}
 	permutationdefines[pn++] = defines;

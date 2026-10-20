@@ -26,7 +26,9 @@ extern	cvar_t		v_contrastboost;
 extern	cvar_t		v_brightness;
 extern	cvar_t		v_shadows;
 qboolean V_UseSceneGamma(void);
-void V_SceneGammaHold(qboolean hold);
+void V_WorldFreed(qboolean freed);
+qboolean V_WorldIsSource(void);
+qboolean V_WorldHasDeluxe(void);
 extern float sw_blend[4];
 extern float hw_blend[4];
 
