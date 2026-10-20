@@ -89,6 +89,7 @@
    PER LEDGE and its indices wrapped past this many; mover <= 8 still traces that
    wrapped hull, so its triangles never reach past the first PHY_OLD_KEEP copies. */
 #define PHY_OLD_KEEP        65536
+typedef char phy_index_t_is_16_bits[sizeof(index_t) == 2 ? 1 : -1];	/*a wider one moves the wrap*/
 
 /*
   THE BOUNDS CHECK, and why it is not optional.
@@ -444,8 +445,10 @@ static qboolean PHY_FixArrays (phyctx_t *ctx, const size_t *ledges, size_t numle
 	{
 		a[i].base = total;
 		total += (size_t)a[i].maxidx + 1;
+		if (total > PHY_OLD_KEEP)
+			return false;	/*checked per array: a 32-bit size_t could wrap the sum*/
 	}
-	if (total > PHY_OLD_KEEP || !PHY_GrowVerts(ctx, total))
+	if (!PHY_GrowVerts(ctx, total))
 		return false;
 	for (i = 0; i < ctx->numarrays; i++)
 		for (k = 0; k <= a[i].maxidx; k++)
