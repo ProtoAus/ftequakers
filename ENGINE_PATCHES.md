@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 889 — Momentum's stand-in packs mounted last (fs.c + lobby content)
+
+**Problem:** surf_nuclear's spawn hub is Portal 2 static props. The lobbies have no Portal 2,
+so the server loaded none of them ("675 static props are not solid", 25 models unable) while a
+client that owns Portal 2 stood on them: an endless fall into the hub's own teleport and a
+prediction error every tick (Lex, lobby 2). P679 mounted only Momentum's mount/hl2_dir.vpk so
+that its other-game placeholder packs could not outrank a real game mounted later.
+
+**Change:** `FS_Addon_AutoSourceBase` also mounts Momentum's `mount/<game>_placeholder.vpk` for
+TF2, CS:S, CS:GO and Portal 2 when that game's content pack is missing (`fs_standins 1`; 2 =
+always, 0 = never). "Installed" means tf2_misc_dir.vpk / cstrike_pak_dir.vpk / portal2's
+pak01_dir.vpk / CS:GO's P679 pak01_dir.vpk probe, not the folder, which an uninstall leaves behind.
+Momentum mounts a game's fallback in that game's slot; ours all sit below every other path:
+`FS_AddPathHandle` inserts every tail-appended path above a stand-in (`FS_IsStandInPack`, the
+`_placeholder.vpk` tail), so a pack fs_automount, fs_load or a map's own pakfile mounts later still
+wins, and `FS_Addon_SinkStandIns` puts them back below the loose dirs P875 sinks at boot /
+fs_restart. Stand-ins hash at depth + 0x100000 (`FS_HashDepth`), so that insert above them keeps the
+incremental hash; review 1 found the first cut marked it stale, and every lookup of every load then
+scanned every archive. Where two stand-ins share a model the earlier one wins (cstrike/csgo share
+616 .phy, 614 differ; csgo/portal2 15, 14 differ; tf/csgo 1), not the game's own slot. Stand-ins
+hold models only (.mdl/.vvd/.vtx/.phy), drawn grey with momentum's models/placeholder material; for
+the 84 models the lobbies could not load (17 maps) the .phy bytes and .mdl hull bounds equal the
+real game's, so PHY_HullInsideModel decides as for an owner. Lobbies (no Steam): the tf/csgo/portal2
+packs in game/placeholders as the last fs_addons.txt line, shipped with a P889 Pi native so a map's
+pakfile ranks above them there too.
+
+**Verified:** 0 warnings in fs.c (client + dedicated, stamp git-7604-patch-875-5-gfe814786a).
+Warm second map (surf_nuclear after surf_utopia), the server's own fs_loadstats line: first cut
+with stand-ins 9528 ms, 48546 lookups missed the hash, hash STALE; this build with stand-ins 6292 ms,
+19237, valid; stand-ins off 5540 ms, 19228, valid; installed exe 5409 ms, 19247, valid (stand-ins add
+~36k indexed files: +0.75 s on that load, +1.1 s on surf_utopia's). surf_nuclear spawn: a
+Pi-like server (fs_automount 0, fs_standins 2) with an owner's client stands at -9135.6 with one
+3.7 u prederr in the spawn drop (control: 514 prederr lines, falling -9023..-9247); the server's
+unloadable hub models drop 25 -> 4, and those 4 have no .phy in real Portal 2 either. Owner client
+with stand-ins forced on: flocate walkway_end_b .mdl/.phy -> Portal 2's pak01 (1780 B, the stand-in's
+is 1904), `path` lists the automounted games, then the map pak, then the four stand-ins;
+materials/dev/water_normal.vtf -> hl2_textures_dir.vpk (P875). Non-owner client (stand-ins, no
+automount) against a server with Portal 2: 1 prederr line; the same on the installed client: 25.
+Offline: the 84 lobby-unloadable models with a stand-in .phy match the real game's bytes and hull
+bounds. 130 library map paks share 4,149 paths with the three Pi stand-ins (214 .phy differ on 67
+maps), so the lobbies need this native, not content alone.
+
 ## Patch 887 — linear float cubemaps encoded for the gamma framebuffer (hl2 plugin)
 
 **Problem:** surf_demise's first ramp (Lex, save 3) drew its panels near-black where Momentum shows
