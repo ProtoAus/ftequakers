@@ -205,7 +205,7 @@ void main (void)
 		refractUV = stc;
 	depth = waterDepth(clamp(refractUV, 0.0, 1.0), surfaceDepth);
 #endif
-	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb * vec3(TINT_REFR);
+	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;
 	vec3 dbg_refr = refr;
 #if defined(DEPTH) && !defined(UNDERWATER)
 	float fogw = clamp(depth / float(FOGRANGE), 0.0, 1.0);
@@ -213,7 +213,15 @@ void main (void)
 	float fogw = 1.0;	// Source: no depth below water, so the farthest value
 #endif
 #if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
-	refr = mix(refr, vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
+	// P877: the refraction view draws the world in height fog by this factor (viewrender.cpp:5772,
+	// lightmappedgeneric_ps2_3_x.h:592-598); then the water lerps again (water_ps2x_helper.h:180).
+	// Gamma space, unlike Source's linear: on boreas save 8 linear was 36/255 off Momentum's shot, gamma 10.
+	refr = mix(mix(refr, vec3(FOGTINT), fogw) * vec3(TINT_REFR), vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
+#elif defined(DEPTH) && !defined(NO_WATERFOG)
+	// Eye under water: by the surface's own distance (water_ps2x_helper.h:182-183).
+	refr = mix(refr * vec3(TINT_REFR), vec3(FOGTINT), clamp((surfaceDepth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0));
+#else
+	refr *= vec3(TINT_REFR);
 #endif
 #ifndef BASETEX
 	// Shallow water (fog depth under 0.05, fully by 0.1) shows no reflection.
