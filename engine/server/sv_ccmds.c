@@ -4287,7 +4287,7 @@ static void SV_DetTest_f (void)
 	unsigned long long hproptrace, hpropmover = SV_DETHASH_INIT;	//Patch 764
 	unsigned long long hpinmover = SV_DETHASH_INIT;	//Patch 813
 	unsigned long long hfixtrace, hfixmover = SV_DETHASH_INIT;	//Patch 888
-	int                fixwins = 0;					//Patch 888
+	int                fixwins = 0, wrapwins = 0;	//Patch 888
 	int                propwins = 0;					//Patch 764
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u, seedrerun, seedprop, seedfix;
@@ -4344,7 +4344,7 @@ static void SV_DetTest_f (void)
 	bih_sourceclip = 1;
 	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false, NULL, NULL);
 	bih_phybrushes = 1;
-	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins, NULL);
+	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins, &wrapwins);
 	bih_phyfix = 1;	//Patch 888: `fixtrace`, mover 9's hulls
 	hfixtrace = SV_DetTraceHash(world, &seedfix, lo, hi, ntrace, false, NULL, &fixwins);
 	bih_sourceclip = 0;
@@ -4541,7 +4541,11 @@ static void SV_DetTest_f (void)
 	/* Patch 813.  Equal to propmover where the walk never pinned against a face. */
 	Con_Printf("^5pm_dettest^7 pinmover %016llx\n", hpinmover);
 	/* Patch 888.  Equal to proptrace/pinmover on a map with no wrapped .phy hull. */
-	Con_Printf("^5pm_dettest^7 fixtrace %016llx  unwrapped hulls decided %i traces\n", hfixtrace, fixwins);
+	/* wrapwins: what those hulls' OLD geometry decided at proptrace; 0 on a map with them means
+	   the twins were never built.  On surf_pantheon ramp07's real hull lies under a clip brush, so
+	   fixwins is 0 there while wrapwins is not. */
+	Con_Printf("^5pm_dettest^7 fixtrace %016llx  unwrapped hulls decided %i traces, wrapped %i at proptrace\n",
+	           hfixtrace, fixwins, wrapwins);
 	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
 }
 
