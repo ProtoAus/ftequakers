@@ -2408,8 +2408,8 @@ nogameaccess:
 	case VF_DRAWWORLD:
 		*r = !(r_refdef.flags&RDF_NOWORLDMODEL);
 		break;
-	case VF_RT_COVERAGE:	//FTESurf Patch 871: -1 while the frame itself goes to an engine target -- the
-						//switch back from CSQC's own target returns to the screen, not to it
+	case VF_RT_COVERAGE:	//FTESurf Patch 871: -1 while any other target is bound (screenshot_mega, a capture,
+						//CSQC's own): switching back from a coverage target returns to the screen, not to it
 		*r = (vid.framebuffer || (*r_refdef.rt_destcolour[0].texname && !r2d_coverage)) ? -1 : r2d_coverage;
 		break;
 	case VF_ENGINESBAR:
