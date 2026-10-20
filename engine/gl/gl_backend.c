@@ -1388,6 +1388,9 @@ void GLBE_EndShadowMap(int restorefbo)
 //FTESurf Patch 866: what temptexture's storage was allocated as (0 = none).
 static int be_currentw, be_currenth;
 static GLenum be_currentfmt;
+static qboolean be_holdcopy;	//FTESurf Patch 878: bind the copy GLBE_SubmitNearest keeps, do not copy
+extern unsigned int r_vs_copies;
+extern double r_vs_copypixels;
 
 static void T_Gen_CurrentRender(int tmu)
 {
@@ -1396,7 +1399,7 @@ static void T_Gen_CurrentRender(int tmu)
 	int pheight = vid.fbpheight;
 	GLenum fmt;
 	//FTESurf Patch 866: bind the last copy rather than leave the unit holding whatever it had.
-	if (r_refdef.recurse)
+	if (r_refdef.recurse || be_holdcopy)
 	{
 		GL_MTBind(tmu, GL_TEXTURE_2D, TEXVALID(shaderstate.temptexture) ? shaderstate.temptexture : r_blackimage);
 		return;
@@ -1435,10 +1438,8 @@ static void T_Gen_CurrentRender(int tmu)
 		qglGenTextures(1, &shaderstate.temptexture->num);
 	}
 	GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
-	{
-		extern unsigned int r_vs_copies;	//FTESurf Patch 878: r_viewstats counts them
-		r_vs_copies++;
-	}
+	r_vs_copies++;	//FTESurf Patch 878: r_viewstats counts them
+	r_vs_copypixels += (double)vwidth * vheight;
 	//FTESurf Patch 866: copy into the storage the last copy allocated; CopyTexImage2D
 	//reallocated it for every batch that samples the screen (Refract at hl2_refract 1).
 	if (be_currentw == vwidth && be_currenth == vheight && be_currentfmt == fmt)
@@ -8350,15 +8351,66 @@ FTESurf Patch 878: a pane that samples the screen ($currentrender: Refract at hl
 NEAREST (gl_shader.c Shader_Finish), after everything it can show.  Source draws such renderables
 back to front, each after a fresh copy (viewrender.cpp:4316-4374), so a pane behind another is in
 that one's copy; here they went world list first, then models, in submission order, and with a
-depth-writing pane in front the one behind failed the depth test.  Panes now go back to front by
-batch centre (each draw binds, so copies, the screen); the rest of the sort keeps its order, after.
+depth-writing pane in front the one behind failed the depth test.  Panes now go back to front: a
+world or brush batch face by face (one batch is every face with that shader), a model by its
+centre.  The screen is copied whole before the first pane, then again only where panes drawn since
+overlap the next one's rectangle; a water capture skips model panes, as Source does in its water
+views (viewrender.cpp:4360-4363), and any nested view binds the last top-level copy.
 */
 typedef struct
 {
 	batch_t *batch;
+	mesh_t *mesh;	//NULL: the whole batch
 	double depth;
 	size_t sequence;
 } glnearpane_t;
+
+//the pixel rectangle of entity-space points (stride floats apart) in the screen copy; false if one is behind the eye
+static qboolean GLBE_NearRect(const float *pts, int stride, int n, const float *modelview, int w, int h, int rect[4])
+{
+	float mvp[16];
+	double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30, c[4], x, y;
+	const float *p;
+	int i, j;
+	Matrix4_Multiply(r_refdef.m_projection_std, modelview, mvp);
+	for (i = 0; i < n; i++)
+	{
+		p = pts + i*stride;
+		for (j = 0; j < 4; j++)
+			c[j] = mvp[j]*p[0] + mvp[4+j]*p[1] + mvp[8+j]*p[2] + mvp[12+j];
+		if (!(c[3] > 1e-3))
+			return false;
+		x = (c[0]/c[3]*0.5 + 0.5) * w;
+		y = (c[1]/c[3]*0.5 + 0.5) * h;
+		x0 = min(x0, x); x1 = max(x1, x);
+		y0 = min(y0, y); y1 = max(y1, y);
+	}
+	rect[0] = bound(0, (int)floor(x0), w); rect[1] = bound(0, (int)floor(y0), h);
+	rect[2] = bound(0, (int)ceil(x1), w); rect[3] = bound(0, (int)ceil(y1), h);
+	return n > 0;
+}
+
+static void GLBE_NearPaneRect(const glnearpane_t *p, int w, int h, int rect[4])
+{
+	float matrix[16], modelview[16];
+	model_t *model = p->batch->ent->model;
+	vec3_t corners[8];
+	int i;
+	R_RotateForEntity(matrix, modelview, p->batch->ent, model);
+	if (p->mesh && p->mesh->xyz_array && p->mesh->numvertexes > 0)
+	{
+		if (GLBE_NearRect(p->mesh->xyz_array[0], sizeof(vecV_t)/sizeof(float), p->mesh->numvertexes, modelview, w, h, rect))
+			return;
+	}
+	else if (model && model->maxs[0] > model->mins[0])
+	{
+		for (i = 0; i < 8; i++)
+			VectorSet(corners[i], (i&1)?model->maxs[0]:model->mins[0], (i&2)?model->maxs[1]:model->mins[1], (i&4)?model->maxs[2]:model->mins[2]);
+		if (GLBE_NearRect(corners[0], 3, 8, modelview, w, h, rect))
+			return;
+	}
+	rect[0] = rect[1] = 0, rect[2] = w, rect[3] = h;
+}
 
 static qboolean GLBE_NearestPane(const batch_t *batch)
 {
@@ -8383,11 +8435,15 @@ static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 	glnearpane_t stackpanes[64], *panes = stackpanes;
 	size_t count = 0, n = 0, i;
 	float matrix[16], modelview[16];
-	int l;
+	unsigned int m;
+	int l, w = vid.fbpwidth, h = vid.fbpheight, mx = w / 8, my = h / 8;
+	int dirty[4] = {0, 0, 0, 0}, rect[4];
+	qboolean copied = false;
 
 	for (l = 0; l < 2; l++)
 		for (batch = lists[l]; batch; batch = batch->next)
-			count += GLBE_NearestPane(batch);
+			if (GLBE_NearestPane(batch))
+				count += GLBE_BlendFaceEligible(batch) ? batch->meshes - batch->firstmesh : 1;
 	if (!count)
 	{
 		GLBE_SubmitMeshesSortList(world);
@@ -8398,21 +8454,70 @@ static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 		panes = BZ_Malloc(count * sizeof(*panes));
 	for (l = 0; l < 2; l++)
 		for (batch = lists[l]; batch; batch = batch->next)
-			if (GLBE_NearestPane(batch))
+		{
+			if (!GLBE_NearestPane(batch))
+				continue;
+			if (r_refdef.recurse && r_refdef.capturekind >= 1 && batch->ent != &r_worldentity)
+				continue;
+			R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
+			if (!GLBE_BlendFaceEligible(batch))
 			{
-				R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
 				panes[n].batch = batch;
+				panes[n].mesh = NULL;
 				panes[n].depth = GLBE_BlendBatchDepth(batch, matrix);
 				panes[n].sequence = n;
 				n++;
+				continue;
 			}
+			for (m = batch->firstmesh; m < batch->meshes; m++)
+				if (batch->mesh[m] && batch->mesh[m]->numvertexes > 0 && batch->mesh[m]->numindexes > 0)
+				{
+					panes[n].batch = batch;
+					panes[n].mesh = batch->mesh[m];
+					panes[n].depth = GLBE_BlendAreaDepth(batch->mesh[m], matrix);
+					panes[n].sequence = n;
+					n++;
+				}
+		}
 	qsort(panes, n, sizeof(*panes), GLBE_NearPaneCompare);
 	for (i = 0; i < n; i++)
 	{
+		if (!r_refdef.recurse)
+		{
+			GLBE_NearPaneRect(&panes[i], w, h, rect);
+			if (!copied)
+			{	//the whole screen once, before the first pane
+				T_Gen_CurrentRender(0);
+				copied = be_holdcopy = true;
+			}
+			else if (dirty[2] > dirty[0] && dirty[0] < rect[2] + mx && rect[0] - mx < dirty[2] &&
+				dirty[1] < rect[3] + my && rect[1] - my < dirty[3])
+			{	//panes drawn since the last copy are under this one's (padded) rectangle
+				GL_MTBind(0, GL_TEXTURE_2D, shaderstate.temptexture);
+				qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, dirty[0], dirty[1], dirty[0], dirty[1], dirty[2]-dirty[0], dirty[3]-dirty[1]);
+				r_vs_copies++;
+				r_vs_copypixels += (double)(dirty[2]-dirty[0]) * (dirty[3]-dirty[1]);
+				dirty[0] = dirty[1] = dirty[2] = dirty[3] = 0;
+			}
+			if (dirty[2] > dirty[0])
+			{
+				dirty[0] = min(dirty[0], rect[0]); dirty[1] = min(dirty[1], rect[1]);
+				dirty[2] = max(dirty[2], rect[2]); dirty[3] = max(dirty[3], rect[3]);
+			}
+			else
+				memcpy(dirty, rect, sizeof(dirty));
+		}
 		one = *panes[i].batch;
 		one.next = NULL;
+		if (panes[i].mesh)
+		{
+			one.mesh = &panes[i].mesh;
+			one.firstmesh = 0;
+			one.meshes = one.maxmeshes = 1;
+		}
 		GLBE_SubmitMeshesSortList(&one);
 	}
+	be_holdcopy = false;
 	if (panes != stackpanes)
 		BZ_Free(panes);
 	//the rest in runs between the panes, so instancing still sees its neighbours

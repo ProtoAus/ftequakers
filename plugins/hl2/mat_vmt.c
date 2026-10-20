@@ -894,7 +894,8 @@ typedef struct
 	float bluramount;	//FTESurf Patch 866
 	qboolean blurrefract;	//FTESurf Patch 877: Water's BLURRY_REFRACT, the only path that applies $refracttint
 	qboolean nowritez, masked;	//FTESurf Patch 878: Refract's $nowritez, $masked
-	qboolean normalmap_set;	//FTESurf Patch 878: $normalmap itself ($bumpmap fills normalmap too)
+	qboolean alpha_set;	//FTESurf Patch 878: $alpha was given (alphaval 0 also means unset)
+	char normalmapkey[MAX_QPATH];	//FTESurf Patch 878: $normalmap's own value; normalmap also takes $bumpmap
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -1268,22 +1269,23 @@ static qboolean VMT_TextureHasAlpha(const char *name)
 }
 
 /*
-FTESurf Patch 878: how Source blends a Refract.  $masked always (refract_dx9_helper.cpp:228-231);
-with a $normalmap and no $envmap, SetDefaultBlendingShadowState on the normal map: $additive always,
-otherwise only when translucent -- $alpha, $vertexalpha, or a normal VTF with alpha and no
-$alphatest (BaseShader.cpp:607-671).  Anything else is opaque and writes depth unless $nowritez
-(:138; blending turns it off, BaseShader.cpp:593-598).  $bumpmap is not a Refract parameter.
+FTESurf Patch 878: how Source blends a Refract.  $masked always, ONE_MINUS_SRC_ALPHA SRC_ALPHA
+(refract_dx9_helper.cpp:228-231); with a $normalmap and no $envmap, SetDefaultBlendingShadowState
+on the normal map: $additive always, otherwise only when translucent -- $alpha other than 1,
+$vertexalpha, or a normal VTF with alpha and no $alphatest (BaseShader.cpp:499, 607-671).  Anything
+else is opaque and writes depth unless $nowritez (:138; blending turns it off, BaseShader.cpp:593-598).
+$bumpmap is not a Refract parameter.
 */
-enum {REFR_OPAQUE, REFR_BLEND, REFR_ADDALPHA, REFR_ADD};
+enum {REFR_OPAQUE, REFR_BLEND, REFR_ADDALPHA, REFR_ADD, REFR_MASKED};
 static int VMT_RefractBlend(const vmtstate_t *st)
 {
 	qboolean trans;
 	if (st->masked)
-		return REFR_BLEND;
-	if (!st->normalmap_set || !*st->normalmap || st->envauthored)
+		return REFR_MASKED;
+	if (!*st->normalmapkey || st->envauthored)
 		return REFR_OPAQUE;
-	trans = (st->alphaval > 0 && st->alphaval < 1) || st->vertexalpha_on ||
-		(!st->alphatest && VMT_TextureHasAlpha(st->normalmap));
+	trans = (st->alpha_set && st->alphaval != 1) || st->vertexalpha_on ||
+		(!st->alphatest && VMT_TextureHasAlpha(st->normalmapkey));
 	if (st->additive)
 		return trans ? REFR_ADDALPHA : REFR_ADD;
 	return trans ? REFR_BLEND : REFR_OPAQUE;
@@ -1904,7 +1906,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 				Con_DPrintf("%s: $alpha 0 -- hidden\n", fname);
 			}
 			else
+			{
 				st->alphaval = atof(value);	//FTESurf build 12: kept now; the dither pass can carry it (see hl2_translucent)
+				st->alpha_set = true;
+			}
 		}
 		else if (!Q_strcasecmp(key, "$translucent"))
 		{
@@ -2161,7 +2166,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$normalmap"))
 		{
 			Q_strlcpy(st->normalmap, value, sizeof(st->normalmap));
-			st->normalmap_set = true;
+			Q_strlcpy(st->normalmapkey, value, sizeof(st->normalmapkey));
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$bumpframe"))
@@ -4034,13 +4039,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#TINTTEX", sizeof(args));
 			if (st->alphatest)
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
-			//Patch 878: Source's blend (VMT_RefractBlend).  No depth write here: the multiply and
-			//the added reflection come out the same in any order, and this pass sorts before the
-			//additive bucket, so a depth write would hide what Source shows through the pane.
+			//Patch 878: Source's blend (VMT_RefractBlend); coverage is the alpha only when Source
+			//blends by it.  No depth write: this pass sorts BLEND, before additive content and the
+			//screen-copy panes, which its depth would hide where they are behind it.
 			rkind = VMT_RefractBlend(st);
 			if (rkind == REFR_ADD || rkind == REFR_ADDALPHA)
 				Q_strlcat(args, "#ADDITIVE", sizeof(args));
-			if (rkind == REFR_OPAQUE)
+			if (rkind == REFR_OPAQUE || rkind == REFR_ADD)
 				Q_strlcat(args, "#NOCOVER", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
@@ -4090,7 +4095,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[1024], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16], refr[MAX_QPATH + 16];
 			size_t aoff = 0;
 			//DX9 Refract reads $normalmap only ($dudvmap is DX8's and loads unsigned here; $bumpmap is not its key)
-			const char *nm = st->normalmap_set ? st->normalmap : "";
+			const char *nm = st->normalmapkey;
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
 			int rkind = VMT_RefractBlend(st);
 			qboolean add = rkind == REFR_ADD || rkind == REFR_ADDALPHA;
@@ -4163,7 +4168,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
 				"\t}\n", args,
-				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" : "blend",
+				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" :
+				rkind == REFR_MASKED ? "GL_ONE_MINUS_SRC_ALPHA GL_SRC_ALPHA" : "blend",
 				(rkind == REFR_OPAQUE && !st->nowritez) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
 			st->translucent = 0;
 			st->additive = 0;
