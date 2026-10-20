@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 856 — Story and Event mode, phase 2: one-run challenges, dates, medal toasts, a third list (surfd + qwprogs + csprogs + menu.dat)
+
+**Problem (Lex, 20 Oct, on the P854 design page):** "looks epic, start developing the backend and
+intergrating!" The page's next steps were the recording challenges ("first try every stage",
+W-only, another route), a medal toast the moment one lands and a lobby line for a gold, and the
+event ideas. P854's ladder read board rows, which keep a player's best only, so nothing about one
+run, and nothing dated, could be decided, and nothing told a player a medal had landed.
+
+**Change:** the lobby counts, for the run on the clock, stage resets and restarts, the FSI bits of
+the moves the mover was handed (plus STY_HSWBAD, a move on one axis) and the top ground speed
+(SV_StoryFrame in PreThink), zeroed by SV_TimerStart, which also sets `lobby_sty_ok`; a full
+one-session finish posts them (`sfails`/`smask`/`stop`; `cmd timer` prints them), never after a
+`retry`. surfd logs clean lobby finishes on listed tracks in `story_runs`, reserved by story_before
+before the board write and completed by story_finish, and decides `nofail`, `wonly`, `nojump`,
+`sw`, `hsw`, `speed N`, `via <spot>` (`spot` lines; the .rec samples read on a thread), `stage N
+m:ss`, `first` (the first logged finish, via the `story_tracks` ledger), `rank N`, `improve N%`,
+and `dates` on a list or a level. The finish's answer carries the medals it just earned
+(`story`); the lobby says them in chat, a gold to the lobby, and writes `*story` (emptied at every
+spawn), drawn by the HUD as a 7 s toast (cl_story.qc). The menu shows up to three lists and a
+dated level's "opens in / ends in / ended". story.txt: the grammar header, and a Halloween event
+(24 Oct to 2 Nov, 11 maps).
+
+**Verified:** test_story 38 cases; the surfd suites (27 in the Pi stage); about twenty one-line
+mutants of the review fixes each fail a test (run with `python -B`: a restored mutant's .pyc once
+ran in its place). p856toast rig (stub board, dedicated lobby, P371's walkable fixture, four real
+finishes): smask as walked, toasts for the answers that carry medals and none for the one without,
+and against d4b0d6ba as the control a `retry` posted smask=1 and replayed the old toast where the
+fix posts no facts and no toast; the same rig on the 0.1.28 release exe draws the toast. p856menu
+rig: three tabs, "ends in 13d 21h" / "opens in 4d 21h" / "ended". Six review rounds (server
+integrity, game-side QC, then four on `first` and the log); what is left is in BACKLOG.
+**LIVE 2026-10-20 (UTC):** lobbies 12/12 restarted at about 03:01Z on qwprogs 60d3776b / csprogs
+4f49f974 (carrying P858); both installs hold those plus menu.dat 368d6040 (.prev = P858/P854);
+surfd generation f8cdcd4a serving from `/srv/nvme/agent-work/surfd856-20261020T0300Z` since
+03:05:38Z (OLD surfd854 CLOSED, kept); story.txt rev 7c98ff08e2cc. FTESurf main f8cdcd4a.
+
 ## Patch 858 — respawns preserve finish handshakes and close live recordings (qwprogs)
 
 **Problem:** `kill`, `cmd respawn` and `cmd restart` used fresh-connection spawn.
