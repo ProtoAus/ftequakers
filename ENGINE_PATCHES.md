@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 880 — the 3D sky from the sky camera's own vis and area, and only where Source draws it (client exe + hl2 plugin)
+
+**Problem (Lex, 21 Oct):** surf_tendies "window lowers fps": 900 fps in the start room looking away
+from the window (save 2), 90 looking slightly left at it (save 3); and "save 5 gets no skybox when
+outside looking at the skybox and 90fps, and save 6 which is next to save 5 ... 850fps". The window
+is ordinary LightmappedGeneric glass; the cost was the 3D sky seen through it. R_DrawSkyroom took the
+sky view's PVS from the scaled eye (sky_camera + eye/scale) and the hl2 plugin its area bits from that
+eye's leaf; at saves 3 and 5 that eye sits above the sky room's ceiling (z 14848) in solid: cluster
+-1, area 0 ("everything"), so the 3D sky drew the whole map from inside solid (installed exe, Lex's
+cfg: save 3 148 fps, 3D sky 4.78 ms / 440 draws; save 5 151 fps and grey walls where the sky is).
+Source draws the 3D sky with the sky camera's own vis and only its area (viewrender.cpp:4627-4630,
+4675), and only when the eye's leaf has 3D sky in its PVS (IsSkyboxVisibleFromPoint, :4595).
+
+**Change:** on a Source map (MDLF_SOURCEBSP) R_DrawSkyroom takes the sky view's pvsorigin from the sky
+camera and area bits holding the camera's area alone (all areas for the null area, as
+VBSP_WriteAreaBits), when the camera's leaf has a cluster; else, and on Quake 2/3 and FTE sky rooms, as
+before. The camera is the first sky_camera's origin from the entity lump (CSQC's choice), used when it
+agrees with CSQC's camera + eye/scale within a unit: that sum arrives float-rounded, and seven maps'
+cameras sit exactly on a floor plane (surf_santorini, santorini2, santorini3, santorini_ksf, tropic,
+tropic2, mesa_aether). The hl2 plugin keeps each leaf's flags; VBSP_PrepareFrame answers per view in an
+appended refdef_t field whether the eye's leaf has LEAF_FLAGS_SKY (vrad bakes the 3D-sky PVS test into
+it, utils/vrad/lightmap.cpp:1350-1470; maps without vrad keep it on every leaf): the main view from its
+eye, a portal view from its exit (IsSkyboxVisibleFromExitPortal, :4840-4843; a kitsune door tests its
+partner's), a water view keeps its outer view's answer (bDrawSkybox). skyroom_enabled stays CSQC's.
+`hl2_3dskyleaf 0` is the old rule. r_viewstats adds "3D skies from the sky camera". No CSQC change.
+
+**Verified:** Lex's cfg, paused, uncapped, against the installed exe: tendies save 3 148 -> 1,011 fps,
+save 5 151 -> 1,116 (the 2D sky with clouds and sun where the skyline was; Momentum shows its 2D sky
+there, every tendies spawn is SKY2D-only), save 6 978 -> 1,196, save 2 897 -> 968; the exe before P868
+is as broken. santorini walk: lump camera "from the camera" = "drawn"; a mutant without the lump read
+falls behind (~1% of frames). Leaf gate: surf_epithet's SKY2D-only point 3D sky 0 (control 1.00),
+garden save 3 kept. bhop_recharge's link2_1 door (unflagged room, flagged partner) pixel-identical to
+the installed exe (the main-view-only gate lost its 3D sky, 2.31% of pixels), 1.20 ms / 627 draws for
+its 3D sky against 3.09 / 1,098, 192 fps against 115; bhop_2shiny2shuckle's doors identical, no
+unfilled sky. Census: CSQC's parse and the engine's give bit-identical origins on all 237 sky_camera
+maps; 62 of 221 put the scaled eye outside the sky room from some spawn or teleport (61 in solid);
+leaf flags: 72 maps SKY at every point, 7 at none, 142 mixed. Four review rounds (rebuilt camera, null
+area, CoD1 passing the gate; then nothing; the gate inherited through portals, fixed per view; then
+nothing). Limits: the first sky_camera wins (Source: SF_SKY_MASTER, else the last constructed,
+SkyCamera.cpp:23-29); RT_PORTALCAMERA never sets pvsorigin (unused here); the mirror fallback re-tests
+at the mesh centre where Source inherits; with r_portalareas 0 a door view uses the near view's areas.
+
 ## Patch 883 — vid_restart and ent_view crashes (exe)
 
 **Problem:** Lex: "vid_restart and ent_view crashes the game sometimes". The installed exe's own
