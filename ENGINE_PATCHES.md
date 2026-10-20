@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 862 — the CSQC trigger mirror predicts on a listen server too (client exe)
+
+**Problem (Lex, 20 Oct):** surf_garden offline "likes to judder on teleports to the next level";
+his log: `prederr ... origin off by 9223.92` / `4727.43` / `5510.71` at each stage teleport.
+`CSQC_PredictPlayerMove` returned whenever a local server ran (`sv.state != ss_dead`, "the Patch
+240 precedent: honestly ignorant rather than right twice"), so offline a map teleport was predicted
+past and corrected a frame later. Walking into garden's stage-4 teleport `*8` reproduced it
+(1068.62 u).
+
+**What fires twice: nothing the server sees.** The hook writes `pmove.origin/velocity/onground`
+and, through the carrier ring, `basevelocity`; SV_RunCmd reloads all four for every command
+(sv_user.c:8648-8656, 8701-8711), the spectator path clears basevelocity, recsim sets it per row,
+and CSQC is its own VM whose hook path calls only read-only builtins. The host frame is single
+threaded (CL_SendCmd, SV_Frame, CL_ReadPackets, then render and predict). Loopback is QW, so the
+view snap goes through Patch 396's matching exactly as against a remote server (portal snaps
+already did, ungated). Patch 240's double-apply is the client's own basevelocity clear, kept.
+
+**Change:** cvar `cl_predict_listen` (default 1) opens the post-move hook and the carrier ring
+(CSQC_PredictSaveBaseVel / ConsumeBaseVel) on a listen server; 0 is the old gate. The warp-op
+pre-move hook and the hold gate keep theirs: opening them would move a local `!r`/`!m` onto the
+server's impulse path.
+
+**Verified:** listen server, Lex's cfg, two `*8` crossings each: this exe no prederr and
+`trig: seq 1108 trig #3 kind 1 fired` (stage finish) / fired at seq 1534 (no run); with
+`cl_predict_listen 0` prederr 1068.22 / 1066.71; installed a9242516 1068.05 / 1066.71.
+`pm_recsim` on each arm's server-written `stage_4/cheat.rec` (the teleport is a warp record)
+reproduces 171/171 packets hook on, 168/168 hook off, 168/168 on the installed exe; physents
+match on every row. One review (shared state and ordering): nothing serious. Limits: garden has
+no pushes or setspeeds, so the opened carrier ring is not exercised offline here (AGENT_NOTES asks
+a human playtest on bhop_mom_training_beta, in lextest); after `!r` while riding a push the ring
+can cash out a carrier the server already cleared, for one round trip (as against a remote server
+with `cl_warpop 0`); cl_triggers.qc's tg_lastseq/IO ring are one global across splitscreen seats.
+The crossing's 17-24 ms frames come with a stage finish on either build (timer finish work on the
+shared thread), not from prediction. Arms: `C:\FTESurf-worktrees\p862-tppredict-20261020T0548Z`.
+
 ## Patch 860 — Source's decorative movers move: spinning func_rotating, bobbing func_movelinear, props that follow (qwprogs)
 
 **Problem (Lex, 20 Oct):** "a visual sword element in the spawn of gigapede which is supposed to be
