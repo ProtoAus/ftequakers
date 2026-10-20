@@ -892,6 +892,7 @@ typedef struct
 	*/
 	float refractamount, reflectamount;
 	float bluramount;	//FTESurf Patch 866
+	qboolean blurrefract;	//FTESurf Patch 877: Water's BLURRY_REFRACT, the only path that applies $refracttint
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -2088,6 +2089,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 
 		else if (!Q_strcasecmp(key, "$refracttint"))
 			st->refracttint_set = VMT_ParseColour(value, st->refracttint);
+		else if (!Q_strcasecmp(key, "$blurrefract"))
+			st->blurrefract = !!atoi(value);
 		else if (!Q_strcasecmp(key, "$reflecttexture"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflectamount"))
@@ -3761,6 +3764,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			}
 			else	//FTESurf Patch 867: water.cpp:29's default, not the shader's 0.7 0.8 0.7
 				Q_strlcat(progargs, "#TINT_REFR=1.0,1.0,1.0", sizeof(progargs));
+			if (st->blurrefract)	//FTESurf Patch 877: water.cpp:245; no blur stage, but the tint is applied
+				Q_strlcat(progargs, "#BLURREFRACT", sizeof(progargs));
 			//FTESurf Patch 867: the proxies that make Source water move -- a
 			//TextureScroll on $bumptransform and the AnimatedTexture on $normalmap
 			//(the frames are mapped in the pass below).
