@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 885 — the start-hop rule judges only hops in the start, once you stood there (qwprogs)
+
+**Problem:** Lex, surf_tendies: the route is one jump out of the start zone and a hop on the booster in
+the pit beyond it, and that hop made the run practice. SV_TimerJumpWatch judged every jump until the
+start settled (about a second airborne, a ramp, or a ground dwell), in the box or not.
+
+**Change:** a hop taken once the pre-move hull (run_t_lastorg, the launch test's point and hull) is
+outside the arm zone's box, and outside any START it is standing in (run_t_azone), is no longer
+judged -- if the attempt stood in the box for the initial-jump dwell while ARMED (run_t_boxrest,
+cleared by SV_TimerArm). Review 1 found the version without that latch let a player bhop beside a
+small start, cross it in the air (it arms, never lands) and hop on with the speed ranked; an unrested
+attempt keeps the old judgment. ARMED is unchanged.
+
+**Verified:** 0 warnings. `cfg/test/p885hop.cfg` / `p885walk.cfg` via `tools/p884arms.py` on
+surf_tendies with Lex's local zone: H (rest, one jump out, booster hop) control 4ab61a33 `practice 1`,
+fixed 89550455 `practice 0`; I (hop chain in the box) `hopped 1` on every build; W (run_prestrafe_time
+5, walk off unrested, hop outside) control `practice 1`, first cut d8a47ba9 `practice 0` (the hole),
+fixed `practice 1`. Two review lenses, then an integrity round on the fix. Left: a fly-through that
+lands on a ramp still ranks, as before (no exit cap: run_startcap 0); run_zone_hull_live 1's ducked
+corner; packet granularity (BACKLOG).
+
+## Patch 884 — a func_physbox with "notsolid" 1 is not solid (qwprogs)
+
+**Problem:** Lex, surf_lovetunnel save 10: stopped mid-map standing on a func_physbox. Source reads
+"notsolid" as m_bNotSolidToWorld and adds FSOLID_NOT_SOLID (physobj.cpp:382, :458); SV_SpawnBreakable
+made every physbox SOLID_BSP. Here *16 is the butterflies' motor axle (a 16-unit cube) and *17 beside
+it a 16 x 4112 x 4112 wall. 229 such boxes on 30 of 1,926 library maps.
+
+**Change:** func_physbox (and func_physbox_multiplayer through it) spawns SOLID_NOT when notsolid is
+set, relinked. No map sends Enable/Disable/Toggle to one (census), so SV_IOEnable's SOLID_BSP default
+for an unset vbsp_io_solid is not reached.
+
+**Verified:** 0 warnings. `cfg/test/p884phys.cfg`: ent_info on *16/*17 `solid BSP` (control
+4ab61a33) / `solid NOT` (fixed); at save 10's origin a second later z -696.0 / -1100.0. Physents
+digest moves on those maps (P790's class, the owed rule bump; a touched box HOLDs as `state` rather
+than `physents`). Debris (58/12 maps) and func_physbox_multiplayer's PUSHAWAY group (111/19) stay
+solid pending a Momentum check (BACKLOG).
+
 ## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
 
 **Problem:** nothing told a player what an update changed. The release records (tools/release0NN.md)
