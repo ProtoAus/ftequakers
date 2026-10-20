@@ -176,6 +176,7 @@ cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refract
 //statics. A nested view sees those and its own walk's, not the outer views' ones again.
 int r_visdynamic;
 unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
+unsigned int r_vs_skycam;	//FTESurf Patch 880: 3D skies drawn from the sky camera's vis (gl_warp.c)
 //FTESurf Patch 868: CPU self time (ms) and draw calls by kind of view (R_ViewStatsEnter/Leave keep
 //a child's total out of its parent's self time, by depth).
 static const char *r_vs_kindname[R_VS_KINDS] = {"main", "reflection", "refraction", "portal", "3D sky"};
@@ -217,13 +218,13 @@ static void R_ViewStats_f(void)
 	Con_Printf("r_viewstats: %u top-level views (a frame's, or each eye/face/renderscene); per one, views by depth:", r_vs_frames);
 	for (i = 0; i < R_MAX_RECURSE; i++)
 		Con_Printf(" %.2f", r_vs_views[i] / (double)f);
-	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f\n",
-		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f);
+	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f; 3D skies from the sky camera %.2f\n",
+		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f, r_vs_skycam / (double)f);
 	Con_Printf("r_viewstats: cpu self ms / draw calls:");
 	for (i = 0; i < R_VS_KINDS; i++)
 		Con_Printf(" %s %.3f/%.0f", r_vs_kindname[i], r_vs_ms[i] / f, r_vs_draws[i] / (double)f);
 	Con_Printf("\n");
-	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = 0;
+	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = r_vs_skycam = 0;
 	memset(r_vs_views, 0, sizeof(r_vs_views));
 	memset(r_vs_ms, 0, sizeof(r_vs_ms));
 	memset(r_vs_draws, 0, sizeof(r_vs_draws));
