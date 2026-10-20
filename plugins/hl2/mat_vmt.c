@@ -893,6 +893,7 @@ typedef struct
 	float refractamount, reflectamount;
 	float bluramount;	//FTESurf Patch 866
 	qboolean blurrefract;	//FTESurf Patch 877: Water's BLURRY_REFRACT, the only path that applies $refracttint
+	qboolean nowritez;	//FTESurf Patch 878: Refract's $nowritez
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -1245,6 +1246,14 @@ static qboolean VMT_ScrollsBase(const char *var)
 		if (!Q_strncasecmp(s, "basetexture", 11))
 			return true;
 	return false;
+}
+
+//FTESurf Patch 878: Source blends a Refract only with a $normalmap and no $envmap, and not under
+//$alphatest without a fractional $alpha; blending is what stops its depth writes, so any other
+//pane writes depth unless $nowritez (refract_dx9_helper.cpp:96,138-146, BaseShader.cpp:593-598).
+static qboolean VMT_RefractBlended(const vmtstate_t *st)
+{
+	return *st->normalmap && !st->envauthored && !(st->alphatest && !(st->alphaval > 0 && st->alphaval < 1));
 }
 
 //FTESurf Patch 859: a scroll on $bumptransform (want2 0), which Refract's normal map
@@ -2086,6 +2095,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		}
 		else if (!Q_strcasecmp(key, "$bluramount"))
 			st->bluramount = atof(value);	//FTESurf Patch 866: Refract's BLUR combo; water.glsl has no blur stage
+		else if (!Q_strcasecmp(key, "$nowritez"))
+			st->nowritez = atoi(value) != 0;
 
 		else if (!Q_strcasecmp(key, "$refracttint"))
 			st->refracttint_set = VMT_ParseColour(value, st->refracttint);
@@ -4007,9 +4018,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				"\t{\n"
 					"\t\tprogram \"vmt/refractflat%s%s\"\n"
 					"\t\tblendfunc GL_DST_COLOR GL_SRC_COLOR\n"
+					"%s"	//Patch 878: see VMT_RefractBlended
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args, st->envauthored ? "#ENVMAPPED" : "", bump, tint);
+				"\t}\n", args, st->envauthored ? "#ENVMAPPED" : "",
+				(!VMT_RefractBlended(st) && !st->nowritez) ? "\t\tdepthwrite\n" : "", bump, tint);
 			//The tail would turn these into a progblendfunc on pass 0 and replace the
 			//multiply (the Modulate arm's fix); $alpha is "unused" on Refract (refract.cpp:18).
 			st->translucent = 0;
@@ -4045,7 +4058,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			//DX9 Refract reads $normalmap only ($dudvmap is DX8's, and loads unsigned here)
 			const char *nm = st->normalmap;
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
-			qboolean add = st->additive && !st->envauthored;
+			qboolean blended = VMT_RefractBlended(st);
+			qboolean add = st->additive && blended;
 
 			if (*nm)
 				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
@@ -4081,7 +4095,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
-			if (st->envauthored || (st->alphatest && !(st->alphaval > 0 && st->alphaval < 1)))
+			if (!blended)
 				Q_strlcat(args, "#OPAQUE", sizeof(args));
 			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
 			{
@@ -4103,15 +4117,18 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			}
 
 			//blendfunc before the maps (see mode 0); an opaque pane still sorts as
-			//blended, after what it shows: its alpha is 1 under #OPAQUE.
+			//blended, after what it shows: its alpha is 1 under #OPAQUE, and it writes
+			//depth, so two of them hide each other in any order (surf_boreas's icicles).
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
 					"\t\tprogram \"vmt/refract%s\"\n"
 					"\t\tblendfunc %s\n"
+					"%s"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args, add ? "GL_SRC_ALPHA GL_ONE" : "blend", refr, bump, tint);
+				"\t}\n", args, add ? "GL_SRC_ALPHA GL_ONE" : "blend",
+				(!blended && !st->nowritez) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
 			st->translucent = 0;
 			st->additive = 0;
 			st->alphaval = 0;
