@@ -2136,6 +2136,21 @@ static void FS_FlushFSHashReally(qboolean domutexes)
 	}
 }
 
+//FTESurf Patch 889: one of Momentum's mount/<game>_placeholder.vpk stand-ins (FS_Addon_AutoSourceBase,
+//or an fs_addons.txt dir holding them, as the lobbies do).  They stay below every other path, and
+//their hash depth is offset so a pack mounted later above them (a map's own pakfile) can still be
+//inserted incrementally at the tail's depth instead of leaving the hash stale.
+#define FS_STANDIN_DEPTH 0x100000
+static qboolean FS_IsStandInPack(const char *logicalpath, unsigned int flags)
+{
+	size_t l = strlen(logicalpath), s = strlen("_placeholder.vpk");
+	return (flags & SPF_ADDON) && !(flags & SPF_ISDIR) && l > s && !Q_strcasecmp(logicalpath + l - s, "_placeholder.vpk");
+}
+static int FS_HashDepth(const searchpath_t *sp, int depth)
+{
+	return FS_IsStandInPack(sp->logicalpath, sp->flags) ? FS_STANDIN_DEPTH + depth : depth;
+}
+
 static void QDECL FS_AddFileHashUnsafe(int depth, const char *fname, fsbucket_t *filehandle, void *pathhandle)
 {
 	//threading stuff is fucked.
@@ -2273,7 +2288,7 @@ static void FS_RebuildFSHash(qboolean domutex)
 	{
 		for (search = com_searchpaths ; search ; search = search->next)
 		{
-			search->handle->BuildHash(search->handle, depth++, FS_AddFileHash);
+			search->handle->BuildHash(search->handle, FS_HashDepth(search, depth++), FS_AddFileHash);
 		}
 	}
 	fs_hash_rebuilding = false;
@@ -2323,6 +2338,7 @@ static void FS_RebuildFSHash_Update(const char *fname)
 			if (search->handle->FindFile(search->handle, &loc, fname, NULL))
 			{
 				filehandle = loc.fhandle;
+				depth = FS_HashDepth(search, depth);	//P889
 				break;
 			}
 			depth++;
@@ -4632,14 +4648,6 @@ static void FS_AddDataFiles(searchpath_t **oldpaths, const char *purepath, const
 #endif
 }
 
-//FTESurf Patch 889: one of Momentum's mount/<game>_placeholder.vpk stand-ins (FS_Addon_AutoSourceBase,
-//or an fs_addons.txt dir holding them, as the lobbies do).  They stay below every other path.
-static qboolean FS_IsStandInPack(const char *logicalpath, unsigned int flags)
-{
-	size_t l = strlen(logicalpath), s = strlen("_placeholder.vpk");
-	return (flags & SPF_ADDON) && !(flags & SPF_ISDIR) && l > s && !Q_strcasecmp(logicalpath + l - s, "_placeholder.vpk");
-}
-
 static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purepath, const char *logicalpath, searchpathfuncs_t *handle, const char *prefix, unsigned int flags, unsigned int loadstuff)
 {
 	searchpath_t *search, **link;
@@ -4712,6 +4720,8 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 			for (s = com_searchpaths ; s ; s = s->next)
 				depth++;
 		}
+		if (standin)
+			depth += FS_STANDIN_DEPTH;	//P889: see FS_HashDepth
 		search->next = *link;	//P889: non-NULL only above a stand-in
 		*link = search;
 
@@ -4753,7 +4763,7 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 		sv_ccmds.c:1028 rebuilds the hash from scratch, so that incremental insert was always
 		thrown away.  The else arm keeps the flag set for exactly the same reason the other
 		branch sets it. */
-		if (filesystemhash.numbuckets && !com_fschanged && !search->next)	//P889: above a stand-in, depth is not the tail's
+		if (filesystemhash.numbuckets && !com_fschanged)
 			search->handle->BuildHash(search->handle, depth, FS_AddFileHashUnsafe);
 		else
 			com_fschanged = true;
@@ -9522,26 +9532,32 @@ static qboolean FS_Addon_MountSourceBase(const char *syspath)
 /*FTESurf Patch 889: Momentum's stand-ins for a game the player does not have: that game's prop
 models with its own .phy, drawn as a grey hull (momentum/materials/models/placeholder).  For the 84
 models the lobbies could not load, .phy bytes and .mdl hull bounds equal the real game's.  Momentum
-mounts one only when its appid fails to mount (gameinfo.txt "fallback"); so does 1.
-FS_AddPathHandle keeps them last, so a real game mounted later for one map still wins.*/
-static cvar_t fs_standins = CVARFD("fs_standins", "1", CVAR_ARCHIVE, "ftesurf (P889): Momentum's stand-in packs (mount/<game>_placeholder.vpk: TF2, CS:S, CS:GO and Portal 2 prop hulls, drawn grey) below every other path. 1 = for each of those games that is not installed, as Momentum does; 2 = always; 0 = never. Takes effect at fs_restart.");
-static const struct {const char *pak, *game;} fs_standin[] =
-{	//Momentum's gameinfo.txt order
-	{"tf_placeholder.vpk",		"steam:Team Fortress 2/tf"},
-	{"cstrike_placeholder.vpk",	"steam:Counter-Strike Source/cstrike"},
-	{"csgo_placeholder.vpk",	"steam:Counter-Strike Global Offensive/csgo"},
-	{"portal2_placeholder.vpk",	"steam:Portal 2/portal2"},
+mounts one only when its appid fails to mount (gameinfo.txt "fallback"), in that game's slot; ours
+all sit below every other path (FS_AddPathHandle), so where two stand-ins share a model (cstrike and
+csgo: 616 .phy, 614 differ) the earlier one in this list wins, not the game's own slot.
+"Installed" is the game's own content pack, not its folder: an uninstall leaves cfg/ and custom/.*/
+static cvar_t fs_standins = CVARFD("fs_standins", "1", CVAR_ARCHIVE, "ftesurf (P889): Momentum's stand-in packs (mount/<game>_placeholder.vpk: TF2, CS:S, CS:GO and Portal 2 prop hulls, drawn grey) below every other path. 1 = for each of those games whose content pack is not installed; 2 = always; 0 = never. Takes effect at fs_restart.");
+static const struct {const char *pak, *game, *probe;} fs_standin[] =
+{	//Momentum's gameinfo.txt order; csgo's probe is P679's pak01_dir.vpk over both layouts
+	{"tf_placeholder.vpk",		"Team Fortress 2/tf",					"tf2_misc_dir.vpk"},
+	{"cstrike_placeholder.vpk",	"Counter-Strike Source/cstrike",		"cstrike_pak_dir.vpk"},
+	{"csgo_placeholder.vpk",	"Counter-Strike Global Offensive/csgo",	""},
+	{"portal2_placeholder.vpk",	"Portal 2/portal2",						"pak01_dir.vpk"},
 };
 static void FS_Addon_AutoSourceBase(void)
 {
-	char syspath[MAX_OSPATH], gamepath[MAX_OSPATH];
+	char syspath[MAX_OSPATH], gamepath[MAX_OSPATH], game[MAX_OSPATH], probe[MAX_QPATH];
 	int i;
 	if (!FS_Addon_ResolveEx(FS_MOMENTUM_BASE_SPEC, syspath, sizeof(syspath), true))
 		return;
 	FS_Addon_MountSourceBase(syspath);
 	for (i = 0; i < countof(fs_standin) && fs_standins.ival; i++)
-		if (fs_standins.ival == 2 || !FS_Addon_ResolveEx(fs_standin[i].game, gamepath, sizeof(gamepath), true))
+	{
+		Q_strncpyz(game, fs_standin[i].game, sizeof(game));
+		Q_strncpyz(probe, fs_standin[i].probe, sizeof(probe));
+		if (fs_standins.ival == 2 || !Sys_SteamHasFile(gamepath, sizeof(gamepath), game, probe))
 			FS_Addon_MountMomentumPack(syspath, fs_standin[i].pak);
+	}
 }
 
 static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)

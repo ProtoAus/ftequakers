@@ -9,19 +9,24 @@ prediction error every tick (Lex, lobby 2). P679 mounted only Momentum's mount/h
 that its other-game placeholder packs could not outrank a real game mounted later.
 
 **Change:** `FS_Addon_AutoSourceBase` also mounts Momentum's `mount/<game>_placeholder.vpk` for
-TF2, CS:S, CS:GO and Portal 2 when that game is not installed (`fs_standins 1`, Momentum's own
-gameinfo "fallback" rule; 2 = always, 0 = never). `FS_AddPathHandle` inserts every tail-appended
-path ABOVE a stand-in (`FS_IsStandInPack`, the `_placeholder.vpk` tail), so a pack fs_automount or
-fs_load mounts later still wins, and `FS_Addon_SinkStandIns` puts them back below the loose dirs
-P875 sinks at boot / fs_restart. An insert above a stand-in skips the incremental hash (its tail
-depth would lose to the stand-in) and marks the hash stale. Stand-ins hold models only: .mdl/.vvd/
-.vtx/.phy, drawn grey with momentum's models/placeholder material. For the 84 models the lobbies
-could not load (17 maps), .phy bytes and .mdl hull bounds equal the real game's, so
-PHY_HullInsideModel decides as for an owner. Lobbies (no Steam): tf/csgo/portal2 packs in
-game/placeholders, the last fs_addons.txt line (FTESurf p889 pi_standins.sh).
+TF2, CS:S, CS:GO and Portal 2 when that game's content pack is missing (`fs_standins 1`; 2 =
+always, 0 = never). "Installed" means tf2_misc_dir.vpk / cstrike_pak_dir.vpk / portal2's
+pak01_dir.vpk / CS:GO's P679 pak01_dir.vpk probe, not the folder, which an uninstall leaves behind.
+Momentum mounts a game's fallback in that game's slot; ours all sit below every other path:
+`FS_AddPathHandle` inserts every tail-appended path above a stand-in (`FS_IsStandInPack`, the
+`_placeholder.vpk` tail), so a pack fs_automount, fs_load or a map's own pakfile mounts later still
+wins, and `FS_Addon_SinkStandIns` puts them back below the loose dirs P875 sinks at boot /
+fs_restart. Stand-ins hash at depth + 0x100000 (`FS_HashDepth`), so that insert above them keeps the
+incremental hash; review 1 found the first cut marked it stale, and every lookup of every load then
+scanned every archive. Where two stand-ins share a model the earlier one wins (cstrike/csgo share
+616 .phy, 614 differ; csgo/portal2 15, 14 differ; tf/csgo 1), not the game's own slot. Stand-ins
+hold models only (.mdl/.vvd/.vtx/.phy), drawn grey with momentum's models/placeholder material; for
+the 84 models the lobbies could not load (17 maps) the .phy bytes and .mdl hull bounds equal the
+real game's, so PHY_HullInsideModel decides as for an owner. Lobbies (no Steam): the tf/csgo/portal2
+packs in game/placeholders as the last fs_addons.txt line, shipped with a P889 Pi native so a map's
+pakfile ranks above them there too.
 
-**Verified:** pending game arms (see the task root's p889 notes); offline: standin_bounds.py
-84/84 .phy and hull bounds equal.
+**Verified:** see the arms in the task root's p889 notes.
 
 ## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
 
