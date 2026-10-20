@@ -126,6 +126,54 @@ static uploadfmt_t ImageVTF_VtfToFTE(fmtfmt_t f, unsigned int vtfflags)
 		return PTI_INVALID;
 	}
 }
+
+//FTESurf Patch 887: half float in, half float out, every bit pattern once (VTF_Init).
+static unsigned short vtf_lin2srgb[65536];
+static cvar_t *vtf_vid_srgb;
+static float VTF_HalfToFloat(unsigned int h)
+{
+	unsigned int e = (h >> 10) & 31, m = h & 1023;
+	float f;
+	if (e == 31)
+		f = m ? 0 : 65504;	//NaN -> 0, inf -> the largest finite half
+	else if (!e)
+		f = ldexpf((float)m, -24);
+	else
+		f = ldexpf((float)(m | 1024), (int)e - 25);
+	return (h & 0x8000) ? -f : f;
+}
+static float VTF_SRGBEncode(float c)
+{
+	if (!(c > 0))
+		return 0;	//negative or NaN
+	if (c <= 0.0031308f)
+		return c * 12.92f;
+	return 1.055f * powf(c, 1/2.4f) - 0.055f;	//keeps rising past 1: an HDR texel stays brighter
+}
+static unsigned short VTF_FloatToHalf(float f)	//f >= 0
+{
+	int e;
+	unsigned int frac, x;
+	float m;
+	if (!(f > 0))
+		return 0;
+	if (f >= 65504)
+		return 0x7bff;
+	m = frexpf(f, &e);	//f = m * 2^e, m in [0.5, 1)
+	if (e < -13)
+		return (unsigned short)(f * 16777216.0f + 0.5f);	//subnormal: f / 2^-24
+	x = (unsigned int)(e - 1 + 15);
+	frac = (unsigned int)((2*m - 1) * 1024 + 0.5f);
+	if (frac == 1024)
+	{
+		frac = 0;
+		x++;
+	}
+	if (x >= 31)
+		return 0x7bff;
+	return (unsigned short)((x << 10) | frac);
+}
+
 struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fname, qbyte *filedata, size_t filesize)
 {
 	struct vtf_s
@@ -637,6 +685,34 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 		}
 	}
 
+	//FTESurf Patch 887: a float cubemap (.hdr.vtf) is linear light, and Source writes its envmap
+	//term through an sRGB encode; the shaders here add textureCube().rgb straight into a gamma
+	//framebuffer, so surf_demise's red underlay drew at 12/255 for Source's ~69. Encode once here.
+	//vid_srgb 1/2 (and -1) encode in the framebuffer instead, so they keep the linear texels.
+	if (mips && mips->type == PTI_CUBE && vmffmt == VMF_RGBA16F && !(flags & IF_HDRDECOMPRESS) &&
+		!(vtf_vid_srgb && vtf_vid_srgb->ival))
+	{
+		unsigned int m;
+		size_t p, n;
+		for (m = 0; m < mips->mipcount; m++)
+		{
+			qbyte *px = mips->mip[m].data;
+			if (!px)
+				continue;
+			n = mips->mip[m].datasize / 8;	//RGBA, two bytes a channel; alpha untouched
+			for (p = 0; p < n; p++, px += 8)
+			{
+				unsigned short r = vtf_lin2srgb[px[0] | (px[1]<<8)];
+				unsigned short g = vtf_lin2srgb[px[2] | (px[3]<<8)];
+				unsigned short b = vtf_lin2srgb[px[4] | (px[5]<<8)];
+				px[0] = r & 0xff;	px[1] = r >> 8;
+				px[2] = g & 0xff;	px[3] = g >> 8;
+				px[4] = b & 0xff;	px[5] = b >> 8;
+			}
+		}
+		Con_DPrintf("%s: linear float cubemap encoded to sRGB (Patch 887)\n", fname);
+	}
+
 	/*
 	FTESurf Patch 783: the 16-bit formats are expanded here to BGRA8/BGRX8 rather than
 	uploaded as PTI_ARGB4444/ARGB1555/RGB565.  The engine's own handling of those is
@@ -747,9 +823,16 @@ static plugimageloaderfuncs_t vtffuncs =
 
 qboolean VTF_Init(void)
 {
+	unsigned int h;
+
 	imagefuncs = plugfuncs->GetEngineInterface(plugimagefuncs_name, sizeof(*imagefuncs));
 	if (!imagefuncs)
 		return false;
+	//Patch 887: built here, before any loader thread can read it.
+	for (h = 0; h < 65536; h++)
+		vtf_lin2srgb[h] = VTF_FloatToHalf(VTF_SRGBEncode(VTF_HalfToFloat(h)));
+	if (cvarfuncs)
+		vtf_vid_srgb = cvarfuncs->GetNVFDG("vid_srgb", "0", 0, NULL, NULL);
 	return plugfuncs->ExportInterface(plugimageloaderfuncs_name, &vtffuncs, sizeof(vtffuncs));
 }
 
