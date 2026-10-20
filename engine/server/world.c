@@ -2045,7 +2045,11 @@ void World_TouchAllLinks (world_t *w, wedict_t *ent)
 
 		if (solid == SOLID_BSPTRIGGER)
 		{
-			if (!World_ClipMoveToEntity(w, touch, touch->v->origin, touch->v->angles, ent->v->origin, ent->v->mins, ent->v->maxs, ent->v->origin, 0, false, (ent->xv->geomtype == GEOMTYPE_CAPSULE), MASK_WORLDSOLID).startsolid)
+			//FTESurf Patch 881: a Source trigger is its whole model, whatever its brushes'
+			//contents; surf_network2008_final's are GRATE|TRANSLUCENT (CLIP here) and never fired.
+			model_t *tmod = w->Get_CModel(w, touch->v->modelindex);
+			unsigned int tmask = (tmod && tmod->fromgame == fg_new) ? ~0u : MASK_WORLDSOLID;
+			if (!World_ClipMoveToEntity(w, touch, touch->v->origin, touch->v->angles, ent->v->origin, ent->v->mins, ent->v->maxs, ent->v->origin, 0, false, (ent->xv->geomtype == GEOMTYPE_CAPSULE), tmask).startsolid)
 				continue;
 		}
 
