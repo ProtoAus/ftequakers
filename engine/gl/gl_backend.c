@@ -3360,6 +3360,9 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 		}
 	}
 	sbits |= r_refdef.colourmask;
+	//FTESurf Patch 871: a coverage target's alpha is written whatever the pass masks (fill_trans masks it)
+	if (r2d_coverage && shaderstate.force2d)
+		sbits &= ~SBITS_MASK_ALPHA;
 
 
 	delta = sbits^shaderstate.shaderbits;
