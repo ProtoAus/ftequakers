@@ -1,5 +1,112 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 878 — Refract icicles occlude each other: Source's blend rule, model panes back to front (hl2 plugin + client exe)
+
+**Problem (Lex, 21 Oct):** since P866, surf_boreas save 9's icicles "show incorrect sorting, some
+icicles from behind show up in front". The Refract ones are props: `icicle_r01_x2` (two spikes in one
+mesh) and `icicle_refracttest01` (`project_tendies/models/ice_refracttest`: $normalmap + env_cubemap);
+`icicle_01`-`06` are UnlitGeneric `ice03` and were never involved.
+
+**Cause:** Source draws a Refract with a $normalmap and no $envmap through SetDefaultBlendingShadowState:
+$additive always blends, otherwise only a translucent one does ($alpha other than 1, $vertexalpha, or
+a normal VTF with 1- or 8-bit alpha and no $alphatest; BaseShader.cpp:499, 607-671). Every other
+Refract is opaque and writes depth unless $nowritez (refract_dx9_helper.cpp:96, 138; blending turns
+depth writes off, BaseShader.cpp:593-598). Ours drew the opaque ones as alpha 1 through `blendfunc
+blend` with no depth write, so of two overlapping icicles the later one covered the other. Source
+copies the screen only for model renderables (c_baseanimating.cpp:799; never for brushes,
+c_baseentity.cpp:1801-1804), draws them back to front, each after a fresh copy
+(viewrender.cpp:4316-4374), and skips them in its water views (:4360-4363). Our screen-copy panes
+sort NEAREST (gl_shader.c Shader_Finish) and went world list first, then models, as submitted.
+
+**Change:**
+- `VMT_RefractBlend` is Source's rule (opaque, blend, additive by alpha, additive), reading the normal
+  map's alpha from its VTF flags. Refract reads `$normalmap`'s own value: `$bumpmap` (not a Refract
+  key) overwrote it, and on 144 packed materials it names something else, 32 of them a cubemap.
+- Mode 1 (`vmt/refract`, hl2_refract 1): an opaque screen-copy pane asks for depth. Mode 0
+  (`vmt/refractflat`) takes the rule for `#ADDITIVE`/`#NOCOVER` and writes no depth. A
+  $basetexture pane keeps its old drawing.
+- `GLBE_SubmitNearest` (gl_backend.c, standard pass only): world batches first in their old order,
+  then the model list's other batches, then model panes back to front by centre, each binding (so
+  copying) the screen, then weapons and no-depth-test draws. A world or brush pane's depth write is
+  dropped, so only model panes write depth. A water capture skips model panes.
+- `r_nearestsort 0` keeps the submission order. `r_viewstats` prints the scene's screen copies and
+  the pixels they copied.
+
+**Verified:** (the first commit, on the installed exe with Lex's cfg) aimed at icicle_r01_x2 at fov 30,
+the control draws the rear spike over the front one; with depth writes the front one is whole. That
+view is identical across r_blendsort 0/1/2 in either build, so its 14,335 changed pixels are all the
+patch. Census of packed materials (patches resolved): 2,258 Refract on 430 maps; opaque by $envmap
+1,695, opaque with a normal map 272, blend 284, additive 7. Four review rounds; the third narrowed
+the patch to model panes after per-face world ordering showed seams, the fourth found only text. 6118b82df against the same exe
+with the installed plugin at r_nearestsort 0 (Lex's cfg, paused cameras, uncapped, control /
+subject / control / subject): at the icicle_r01_x2 zoom the control's rear spike cuts across the
+front one and this build's front one is whole (39,600-40,400 changed pixels against a run-to-run
+floor of 279-888); surf_boreas's icicle group shows the same in its crop. Screen copies per view are
+the same in both builds (save 9 7, the zoom 1, garden 5 1, spectra 20 4, gigapede 9 1, bhop_recharge
+2 and 1, shibboleth 1; 6.4 Mpx each at Lex's r_renderscale 2), and frame time is within the
+run-to-run drift (save 9 3.07 / 3.15 / 3.84 / 3.39 ms). surf_shibboleth's glass floor (91 glass_10
+faces) is unchanged (130-279 pixels, floor ~310): no seams. bhop_recharge's glass_blur_clear changes
+by 1,000-3,000 pixels (floor 65-214): its $normalmap, no longer the cubemap $bumpmap named. Save 9,
+garden 5, spectra 20 and gigapede 9 vary between runs of one build as much as between builds
+(animated water, lava, the copy's content), so they were judged by eye: no new artefact.
+
+**Limits:**
+- World and brush glass does not occlude by depth (it did not before P878 either), and it is drawn
+  before the model panes: a Refract prop behind a world window draws over it.
+- A nested view (a portal, the 3D sky, a water capture's world panes) samples the last top-level copy,
+  and an opaque pane draws it at alpha 1 (P866).
+- Anything in a blended or additive bucket in front of a screen-copy pane, including particles and
+  paint on the glass, is drawn before it, so it is copied and refracted rather than drawn over it,
+  and an additive pane adds it twice. Source draws it after the pane.
+- Model panes go one batch at a time, each with a whole-screen copy, as P866 already made them (the
+  refract program has no instanced variant). Vulkan and D3D11 get the depth write without the order
+  (the plugin's programs are GL-only).
+- `$masked` (Source's dest-alpha overlay) is ignored, as before; no packed material uses it.
+
+## Patch 877 — Source water's under-water haze (hl2 plugin)
+
+**Problem (Lex, 21 Oct):** surf_boreas save 8: "Momentum has a blue haze under the surface and ours is
+clearer." Source draws the above-water refraction view in height fog toward the water's `$fogcolor`
+and clears it to that colour (viewrender.cpp:5772-5773; lightmappedgeneric_ps2_3_x.h:592-598 lerps
+the colour by CalcWaterFogAlpha and writes the factor to alpha), then the water shader lerps toward
+the fog colour again by that alpha from 0.05 (water_ps2x_helper.h:180). Patch 867 computed the same
+factor from `$refractiondepth` -- `(scene depth - surface depth) / ($fogend - $fogstart)` is
+CalcWaterFogAlpha (common_ps_fxc.h:208-224) for an eye above the plane -- but did only the second
+lerp.
+
+**Change:** water.glsl does the refraction view's lerp, then (only under `$blurrefract 1`, the one
+path where Source applies it, water_ps2x_helper.h:147) `$refracttint`, then the water's lerp. The
+surface depth is taken on the refracted sample's own ray (1/depth's screen gradient), as Source's
+alpha was, and the shoreline rejection keeps a sample only beyond the plane on that same ray (a ray
+that never meets the plane rejects). Under `$blurrefract` the distortion is not fog-scaled (:72-76). A face on a
+downward plane (normal z below -0.5) -- Patch 233's stand-in for a missing `$bottommaterial`, or water
+with no bottom material -- takes no above-water terms (census of 1,741 readable library maps:
+104,925 top faces on upward planes; 96,033 bottom faces and 7,346 undersides of top materials on
+downward planes; 4,456 downward faces of 62 materials with no upward partner, unverified). Gamma
+space, not Source's linear: fitted on boreas save 8 from the measured untinted refraction and fog
+factor (hl2_waterdebug 1 and 5) against Momentum's surf_boreas0002, mean error over three open-water
+boxes 11.9/255 gamma, 38.9 linear, 13.6 for Patch 867's single lerp. Eye under water Source also
+lerps by the surface's distance (:182-183); ours does not, because our capture is already
+water-fogged there (BACKLOG). In the shader rather than a fogged capture: the factor needs only the
+depth the water already reads.
+
+**Verified:** builds with only the 3 warnings from unchanged lines; all 1,024 vmt/water (GLSL 110)
+and 2,048 vmt/wateranim (130) permutations compile offline on this RTX 2080 SUPER (a mutant fails
+256). Review round 1 (under-water third fog, undersides, the refracted ray's surface depth, the tint
+path): the under-water lerp removed and the capture's fog left to BACKLOG, the rest fixed. Round 2
+(the shoreline test on the old ray, blur distortion, the sign test): fixed. Round 3 (a ray above the
+horizon was kept at default gl_mindist): fixed; its float32 precision table is in BACKLOG.
+In game (de1ffb17d, Lex's cfg, installed exe e1cf5c31, subject/control/subject/control against the
+installed plugin, no shader errors in any log): boreas save 8's three water boxes (47,64,75)
+(42,54,62) (51,72,86) against Momentum's (38,56,69) (46,64,77) (40,63,79), mean error 8.7 and 8.8 on
+the two runs, the control 17.6 on both; the shoreline at a grazing angle (eye 64 above the water)
+fogged with its reflection, no unfogged band at this scale; garden save 4's canal teal (14.1% of
+pixels changed), save 5 2.8%; hl2_water 1 draws. Frame time p50 at boreas save 2, paused, two 4 s
+windows per arm: P877 2.96/2.76 and 2.82/2.75 ms, control 3.03/3.02 and 2.82/2.79 -- no cost visible
+beyond the spread between runs. Not measured: an eye under water and surf_aesthetic's underside
+from below -- the water on boreas and surf_aesthetic is a fail zone, and every probe was sent back
+to the stage start.
+
 ## Patch 880 — the 3D sky from the sky camera's own vis and area, and only where Source draws it (client exe + hl2 plugin)
 
 **Problem (Lex, 21 Oct):** surf_tendies "window lowers fps": 900 fps in the start room looking away
