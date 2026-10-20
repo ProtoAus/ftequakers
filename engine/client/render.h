@@ -279,6 +279,10 @@ typedef struct {
 #define R_MAX_RECURSE	6
 #endif
 extern int r_visdynamic;	/*FTESurf Patch 850, renderer.c*/
+#define R_VS_KINDS 5	/*FTESurf Patch 868, renderer.c: r_viewstats' per-view times -- main, reflection, refraction, portal, 3D sky*/
+int R_ViewStatsKind(void);
+void R_ViewStatsEnter(int depth, double *t0, int *d0);
+void R_ViewStatsLeave(int depth, double t0, int d0, int kind);
 extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 #define RDFD_FOV 1
 typedef struct refdef_s

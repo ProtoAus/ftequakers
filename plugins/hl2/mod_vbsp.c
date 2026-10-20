@@ -9308,7 +9308,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 
 
-	if (prv->numstaticprops)
+	//FTESurf Patch 868: a water reflection without $reflectentities draws only the world, as Source's.
+	if (prv->numstaticprops && !(r_refdef->flags & RDF_NOENTS))
 	{
 		struct staticprop_s *sent;
 		entity_t *src, *ent;

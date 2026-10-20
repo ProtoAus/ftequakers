@@ -704,6 +704,9 @@ static void R_RenderScene_Internal(void)
 	extern qboolean depthcleared;
 	int tmpvisents = cl_numvisedicts;
 	extern cvar_t r_nestedents;
+	int vsdepth = r_refdef.recurse, vsd0;
+	double vst0;
+	R_ViewStatsEnter(vsdepth, &vst0, &vsd0);	//FTESurf Patch 868
 	if (!r_refdef.recurse)
 	{
 		r_visdynamic = cl_numvisedicts;	//FTESurf Patch 850: what a nested view sees besides its own walk
@@ -716,6 +719,18 @@ static void R_RenderScene_Internal(void)
 	{
 		r_refdef.visskipfrom = r_visdynamic;
 		r_refdef.visskipto = cl_numvisedicts;
+	}
+	//FTESurf Patch 868: Source's water reflection without $reflectentities draws only the world
+	//(viewrender.cpp CReflectionView::Setup, :5697-5700): none of the frame's entities, and the
+	//plugin skips its props walk under RDF_NOENTS.
+	if (r_refdef.recurse && r_refdef.capturekind == 1)
+	{
+		extern int r_capturenoents;
+		if (r_capturenoents)
+		{
+			r_refdef.flags |= RDF_NOENTS;
+			r_refdef.firstvisedict = cl_numvisedicts;
+		}
 	}
 	if (r_refdef.recurse < R_MAX_RECURSE)
 		r_vs_views[r_refdef.recurse]++;
@@ -743,6 +758,7 @@ static void R_RenderScene_Internal(void)
 	cl_numvisedicts = tmpvisents;
 
 	depthcleared = false;	//whatever is in the depth buffer is no longer useful.
+	R_ViewStatsLeave(vsdepth, vst0, vsd0, R_ViewStatsKind());
 
 	if (vrui.enabled)
 	{

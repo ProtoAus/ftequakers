@@ -505,7 +505,13 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 	VectorCopy(r_refdef.vieworg, r_origin);
 
 	Surf_SetupFrame();
-	Surf_DrawWorld ();
+	{
+		double vst0;
+		int vsd0;
+		R_ViewStatsEnter(r_refdef.recurse, &vst0, &vsd0);	//FTESurf Patch 868
+		Surf_DrawWorld ();
+		R_ViewStatsLeave(r_refdef.recurse, vst0, vsd0, 4);
+	}
 
 	r_viewarea = oldarea;
 	r_viewcluster = oldcluster[0];

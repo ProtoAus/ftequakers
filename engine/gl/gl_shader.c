@@ -1658,6 +1658,12 @@ static void Shader_Wireframe (parsestate_t *ps, const char **ptr)
 	ps->s->wireframe = true;
 }
 
+//FTESurf Patch 868: Source water without $reflectentities -- its reflection draws only the world.
+static void Shader_ReflectNoEntities (parsestate_t *ps, const char **ptr)
+{
+	ps->s->reflectnoents = true;
+}
+
 #if defined(GLQUAKE) || defined(D3DQUAKE)
 static qboolean Shader_ParseProgramCvar(char *script, char **cvarnames, int *cvartypes, int cvartype)
 {
@@ -3608,6 +3614,7 @@ static shaderkey_t shaderkeys[] =
 	{"affine",				Shader_Affine,				"fte"},	//some hardware is horribly slow, and can benefit from certain hints.
 	{"fullrate",			Shader_FullRate,			"fte"},	//blocks half-rate shading on this surface.
 	{"wireframe",			Shader_Wireframe,			"fte"},	//FTESurf Patch 780: Source's MATERIAL_VAR_WIREFRAME (GL only)
+	{"reflectnoentities",	Shader_ReflectNoEntities,	"fte"},	//FTESurf Patch 868: fte_reflectnoentities
 
 	{"bemode",				Shader_BEMode,				"fte"},
 

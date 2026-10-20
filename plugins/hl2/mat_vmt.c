@@ -927,6 +927,7 @@ typedef struct
 	char mod2x; /* modulate only */
 	char water_cheap; /* water only */
 	char water_expensive; /* water only */
+	char water_reflectents; /* FTESurf Patch 868: $reflectentities -- its reflection draws entities */
 	/*
 	FTESurf Patch 181: did the FILE turn up, regardless of whether it parsed.
 
@@ -2123,7 +2124,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$underwateroverlay"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$reflectentities"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			st->water_reflectents = !!atoi(value);	//FTESurf Patch 868
 		else if (!Q_strcasecmp(key, "$scale"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$bottommaterial"))
@@ -3828,11 +3829,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				"\t{\n"
 					"\t\tprogram \"vmt/water%s\"\n"
 					"\t\tmap $refraction\n", progargs);
-			if (wmode >= 2)
+			//FTESurf Patch 868: #LQWATER ($forcecheap without $forceexpensive) reads the cubemap,
+			//never the capture.
+			if (wmode >= 2 && !strstr(progargs, "#LQWATER"))
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $reflection\n");
 			else
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
 			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n\t}\n");
+			//FTESurf Patch 868: Source water reflects entities only under $reflectentities.
+			if (!st->water_reflectents)
+				Q_strlcatfz(script, &offset, sizeof(script), "\tfte_reflectnoentities\n");
 		}
 
 		/*

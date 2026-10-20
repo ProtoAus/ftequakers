@@ -731,6 +731,7 @@ struct shader_s
 	vec4_t factors[MATERIAL_FACTOR_COUNT];
 
 	qboolean wireframe;	//FTESurf Patch 780: `fte_wireframe` -- GL draws the triangles as lines (Source's MATERIAL_VAR_WIREFRAME). flags has no bit left.
+	qboolean reflectnoents;	//FTESurf Patch 868: `fte_reflectnoentities` -- Source water with no $reflectentities: its reflection draws only the world. Appended: plugins read shader_t by offset.
 
 	//arranged as a series of vec4s
 /*	struct

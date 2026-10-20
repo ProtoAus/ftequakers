@@ -176,6 +176,41 @@ cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refract
 //statics. A nested view sees those and its own walk's, not the outer views' ones again.
 int r_visdynamic;
 unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
+//FTESurf Patch 868: CPU self time (ms) and draw calls by kind of view (R_ViewStatsEnter/Leave keep
+//a child's total out of its parent's self time, by depth).
+static const char *r_vs_kindname[R_VS_KINDS] = {"main", "reflection", "refraction", "portal", "3D sky"};
+static double r_vs_ms[R_VS_KINDS];
+static unsigned int r_vs_draws[R_VS_KINDS];
+static double r_vs_childms[R_MAX_RECURSE+1];
+static int r_vs_childdraws[R_MAX_RECURSE+1];
+int R_ViewStatsKind(void)
+{
+	if (!r_refdef.recurse)
+		return 0;
+	if (r_refdef.capturekind == 1)
+		return 1;
+	if (r_refdef.capturekind >= 2)
+		return 2;
+	return 3;
+}
+void R_ViewStatsEnter(int depth, double *t0, int *d0)
+{
+	*t0 = Sys_DoubleTime();
+	*d0 = rquant[RQUANT_DRAWS];
+	if (depth >= 0 && depth <= R_MAX_RECURSE)
+		r_vs_childms[depth] = 0, r_vs_childdraws[depth] = 0;
+}
+void R_ViewStatsLeave(int depth, double t0, int d0, int kind)
+{
+	double tot = (Sys_DoubleTime() - t0) * 1000;
+	int dr = rquant[RQUANT_DRAWS] - d0;
+	if (depth < 0 || depth >= R_MAX_RECURSE || kind < 0 || kind >= R_VS_KINDS)
+		return;
+	r_vs_ms[kind] += tot - r_vs_childms[depth], r_vs_draws[kind] += dr - r_vs_childdraws[depth];
+	r_vs_childms[depth] = 0, r_vs_childdraws[depth] = 0;
+	if (depth > 0)
+		r_vs_childms[depth-1] += tot, r_vs_childdraws[depth-1] += dr;
+}
 static void R_ViewStats_f(void)
 {
 	unsigned int i, f = r_vs_frames ? r_vs_frames : 1;
@@ -184,12 +219,21 @@ static void R_ViewStats_f(void)
 		Con_Printf(" %.2f", r_vs_views[i] / (double)f);
 	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f\n",
 		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f);
+	Con_Printf("r_viewstats: cpu self ms / draw calls:");
+	for (i = 0; i < R_VS_KINDS; i++)
+		Con_Printf(" %s %.3f/%.0f", r_vs_kindname[i], r_vs_ms[i] / f, r_vs_draws[i] / (double)f);
+	Con_Printf("\n");
 	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = 0;
 	memset(r_vs_views, 0, sizeof(r_vs_views));
+	memset(r_vs_ms, 0, sizeof(r_vs_ms));
+	memset(r_vs_draws, 0, sizeof(r_vs_draws));
 }
 cvar_t r_nestedents						= CVARD ("r_nestedents", "1", "1: a nested view (a water reflection or refraction, a portal, the 3D sky) draws the frame's own entities and the props and statics its own world walk found, not again the props its outer views found (each copy of which it drew a second time). 0: every entity in the list, as before Patch 850.");
 cvar_t r_skyroomneed						= CVARD ("r_skyroomneed", "2", "Where the 3D sky is drawn only if the view has sky surfaces to show it through.\n1: water reflections and refractions (a refraction looks under the water; a cave's reflection has no sky).\n2: and the main view, which then shows what is behind a crack in the world instead of the 3D sky.\n0: every view of a map with sky draws it, as before Patch 850. Portal views always do: they inherit the near view's areas, so the far side's sky surfaces can be culled while the 3D sky still shows.");
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
+//FTESurf Patch 868: Source's water views (viewrender.cpp CAboveWaterView::CReflectionView::Setup, :5690-5700).
+cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water reflection or refraction draws the 3D sky.\n0: no -- the reflection shows the 2D skybox through its sky surfaces, as Source's does (viewrender.cpp: \"draw the 2d skybox in the reflection, instead of the 3d skybox\"), and the refraction looks under the water.\n1: yes, as before Patch 868 (still subject to r_skyroomneed).");
+cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
 cvar_t r_dynamic							= CVARFD ("r_dynamic", IFMINIMAL("0","1"),
@@ -1459,6 +1503,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_refract_fbo, GRAPHICALNICETIES);
 	Cvar_Register (&r_nestedents, GRAPHICALNICETIES);	//FTESurf Patch 850
 	Cvar_Register (&r_skyroomneed, GRAPHICALNICETIES);
+	Cvar_Register (&r_waterskyroom, GRAPHICALNICETIES);	//FTESurf Patch 868
+	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
 	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over.");
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);

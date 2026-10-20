@@ -24,6 +24,8 @@ extern cvar_t gl_overbright;
 extern cvar_t r_multidraw;	//FTESurf Patch 831
 extern cvar_t r_instancing;	//FTESurf Patch 831
 extern cvar_t r_skyroomneed;	//FTESurf Patch 850
+extern cvar_t r_waterskyroom, r_waterforcereflectentities;	//FTESurf Patch 868
+int r_capturenoents;	//FTESurf Patch 868: the reflection capture being rendered draws only the world
 extern unsigned int r_vs_skydrawn, r_vs_skyskipped;
 extern qboolean r_fakeshadows;
 #ifdef RTLIGHTS
@@ -6520,7 +6522,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		qglClearColor(0, 0, 0, 1);
 		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		be_watercapture++;
+		r_capturenoents = bs->reflectnoents && !r_waterforcereflectentities.ival;	//Patch 868
 		GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 1);
+		r_capturenoents = 0;
 		be_watercapture--;
 		GLBE_FBO_Pop(oldfbo);
 		r_refdef.vrect = orect;
@@ -9227,7 +9231,9 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 	GLBE_UpdateLightmaps();
 	if (worldbatches)
 	{
-		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled)
+		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom).
+		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled &&
+			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival))
 		{
 			batch_t *b;
 			int seen = 0;
