@@ -2034,6 +2034,7 @@ void R_ShutdownRenderer(qboolean devicetoo)
 #endif
 
 	P_Shutdown();
+	V_SceneGammaHold(true);	//FTESurf Patch 883: cl.worldmodel dangles from here to the reload
 	Mod_Shutdown(false);
 
 	IN_Shutdown();
@@ -2533,6 +2534,7 @@ TRACE(("dbg: R_ApplyRenderer: reloading ALL models\n"));
 		else
 #endif
 			cl.worldmodel = cl.model_precache[wmidx];
+		V_SceneGammaHold(false);
 
 		if (cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADING)
 			COM_WorkerPartialSync(cl.worldmodel, &cl.worldmodel->loadstate, MLS_LOADING);
@@ -2564,6 +2566,7 @@ TRACE(("dbg: R_ApplyRenderer: efrags\n"));
 		Skin_FlushPlayers();
 
 	}
+	V_SceneGammaHold(false);	//no world, or a Quake 3 one, or reloaded above
 
 #ifdef SKELETALOBJECTS
 	skel_reload();

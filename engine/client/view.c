@@ -391,12 +391,24 @@ cvar_t		v_contrastboost = CVARFCD("v_contrastboost", "1.0", CVAR_ARCHIVE, V_Gamm
 cvar_t		v_brightness = CVARAFCD("brightness", "0.0", "v_brightness", CVAR_ARCHIVE, V_Gamma_Callback, "Brightness is how much 'white' to add to each and every pixel on the screen.");
 cvar_t		v_shadows = CVARAFCD("shadows", "0", "v_shadows", CVAR_ARCHIVE, V_Gamma_Callback, "Lift OpenGL scene shadows, 0..1. Preserves the deepest blacks and highlights; 0 disables. Uses spatial dither, not a raised black floor.");
 
+//FTESurf Patch 883: R_ShutdownRenderer's Mod_Shutdown frees mod_known and cl.worldmodel points into it until
+//R_ApplyRenderer_Load reloads; VID_DeInit and the new renderer's texture loads ask here in between. -1 = read the world.
+static int v_scenegamma_held = -1;
+void V_SceneGammaHold(qboolean hold)
+{
+	if (!hold)
+		v_scenegamma_held = -1;
+	else if (v_scenegamma_held < 0)	//a second shutdown before the reload must not read the freed model
+		v_scenegamma_held = cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP);
+}
+
 qboolean V_UseSceneGamma(void)
 {
 	// Source scenes must not depend on OS gamma ramps (or brighten the HUD).
 	return vid_hardwaregamma.ival == 4 ||
 		(qrenderer == QR_OPENGL && (v_shadows.value > 0 ||
-		(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))));
+		(v_scenegamma_held >= 0 ? v_scenegamma_held :
+		(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP)))));
 }
 
 qbyte		gammatable[256];	// palette is sent through this
