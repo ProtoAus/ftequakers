@@ -9188,13 +9188,18 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	refdef = r_refdef;
 
 	//FTESurf Patch 880: Source draws the 3D sky only where the eye's leaf has 3D sky in its PVS
-	//(viewrender.cpp:4595); a toolsskybox2d leaf shows the 2D skybox. The main view decides for the
-	//views nested in it, as Source's bDrawSkybox does. surf_tendies: every spawn is SKY2D only.
-	if (!r_refdef->recurse && r_refdef->skyroom_enabled && hl2_3dskyleaf->ival && prv->leafflags)
+	//(viewrender.cpp:4595); a toolsskybox2d leaf shows the 2D skybox. The main view tests its eye, a
+	//portal view its exit (IsSkyboxVisibleFromExitPortal, :4840-4843); a water view keeps its outer
+	//view's answer, as Source's bDrawSkybox. Surf_SetupFrame clears it. surf_tendies: every spawn SKY2D.
+	if (r_refdef->capturekind < 1)
 	{
-		int eyeleaf = VBSP_PointLeafnum(mod, r_refdef->vieworg);
-		if (eyeleaf >= 0 && eyeleaf < mod->numleafs && !(prv->leafflags[eyeleaf] & 0x01))
-			r_refdef->skyroom_enabled = false;
+		r_refdef->skyroom_noleafsky = false;	//per view: a second stereo eye shares the main view's refdef
+		if (hl2_3dskyleaf->ival && prv->leafflags)
+		{
+			int eyeleaf = VBSP_PointLeafnum(mod, r_refdef->recurse ? r_refdef->pvsorigin : r_refdef->vieworg);
+			if (eyeleaf >= 0 && eyeleaf < mod->numleafs && !(prv->leafflags[eyeleaf] & 0x01))
+				r_refdef->skyroom_noleafsky = true;
+		}
 	}
 
 	if (vis->buffersize < mod->pvsbytes)
@@ -12592,8 +12597,8 @@ qboolean VBSP_Init(void)
 		surf_666 that could not be drawn; 0 is the Quake 2 behaviour this used to
 		have, kept so the difference can be seen rather than argued about.
 		*/
-		hl2_3dskyleaf = cvarfuncs->GetNVFDG("hl2_3dskyleaf", "1", 0, "FTESurf Patch 880. 1: the 3D sky is drawn only from a leaf whose PVS holds 3D sky (LEAF_FLAGS_SKY), as Source (viewrender.cpp:4595, IsSkyboxVisibleFromPoint); elsewhere the 2D skybox shows, as in Momentum. 0: wherever sky is visible, as before.", MAPOPTIONS);
 		hl2_areaportals = cvarfuncs->GetNVFDG("hl2_areaportals", "1", CVAR_MAPLATCH, "Initial state of a Source map's areaportals.\n0: closed, and opened only by gamecode -- the Quake 2 rule, which seals off every area a Source map has because nothing closes or opens them.\n1: open, which is what Source itself initialises them to (default).", MAPOPTIONS);
+		hl2_3dskyleaf = cvarfuncs->GetNVFDG("hl2_3dskyleaf", "1", 0, "FTESurf Patch 880. 1: the 3D sky is drawn only from a leaf whose PVS holds 3D sky (LEAF_FLAGS_SKY) -- the main view's eye, a portal view's exit -- as Source (viewrender.cpp:4595, :4840); elsewhere the 2D skybox shows, as in Momentum. 0: wherever sky is visible, as before.", MAPOPTIONS);
 		/*
 		FTESurf Build 10 -- the price of Source water and Source glass.
 

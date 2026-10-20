@@ -9235,7 +9235,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom), as
 		//Source's above-water views do; with the eye under water its refraction keeps the 3D sky
 		//(viewrender.cpp:5912-5927).
-		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled &&
+		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled && !r_refdef.skyroom_noleafsky &&	//Patch 880
 			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival &&
 			  !(r_viewcontents & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA))))	//FLUID includes SKY
 		{

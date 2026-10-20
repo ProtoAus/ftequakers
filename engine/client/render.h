@@ -398,6 +398,7 @@ typedef struct refdef_s
 	int			visskipfrom, visskipto;	/*in a nested view, the outer views' own entities*/
 	int			capturekind;		/*GLR_DrawPortal's type, 0 for a portal or the main view*/
 	qboolean	insideportal;		/*a portal's view or one nested inside it*/
+	qboolean	skyroom_noleafsky;	/*FTESurf Patch 880: the hl2 plugin found this view's eye leaf without 3D sky in its PVS*/
 } refdef_t;
 
 extern	refdef_t	r_refdef;
