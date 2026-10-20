@@ -396,6 +396,12 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 	r_refdef.forcevis = false;
 	r_refdef.flags |= RDF_DISABLEPARTICLES;
 	r_refdef.flags &= ~RDF_SKIPSKY;
+	if (r_refdef.flags & RDF_NOENTS)
+	{	//FTESurf Patch 868: a world-only water reflection's 3D sky (r_waterskyroom 1) keeps its props
+		extern int r_noentsfirstvisedict;
+		r_refdef.flags &= ~RDF_NOENTS;
+		r_refdef.firstvisedict = r_noentsfirstvisedict;
+	}
 	r_refdef.forcedvis = NULL;
 	r_refdef.areabitsknown = false;	//recalculate areas clientside.
 	r_refdef.sceneareas = NULL;

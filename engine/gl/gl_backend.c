@@ -26,6 +26,7 @@ extern cvar_t r_instancing;	//FTESurf Patch 831
 extern cvar_t r_skyroomneed;	//FTESurf Patch 850
 extern cvar_t r_waterskyroom, r_waterforcereflectentities;	//FTESurf Patch 868
 int r_capturenoents;	//FTESurf Patch 868: the reflection capture being rendered draws only the world
+int r_noentsfirstvisedict;	//...and the firstvisedict it replaced, for a 3D sky drawn inside it
 extern unsigned int r_vs_skydrawn, r_vs_skyskipped;
 extern qboolean r_fakeshadows;
 #ifdef RTLIGHTS
@@ -9231,9 +9232,12 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 	GLBE_UpdateLightmaps();
 	if (worldbatches)
 	{
-		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom).
+		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom), as
+		//Source's above-water views do; with the eye under water its refraction keeps the 3D sky
+		//(viewrender.cpp:5912-5927).
 		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled &&
-			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival))
+			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival &&
+			  !(r_viewcontents & FTECONTENTS_FLUID)))
 		{
 			batch_t *b;
 			int seen = 0;

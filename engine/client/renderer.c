@@ -180,7 +180,7 @@ unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskip
 //a child's total out of its parent's self time, by depth).
 static const char *r_vs_kindname[R_VS_KINDS] = {"main", "reflection", "refraction", "portal", "3D sky"};
 static double r_vs_ms[R_VS_KINDS];
-static unsigned int r_vs_draws[R_VS_KINDS];
+static double r_vs_draws[R_VS_KINDS];	//double: an unsigned int wraps within the hour at hundreds of fps
 static double r_vs_childms[R_MAX_RECURSE+1];
 static int r_vs_childdraws[R_MAX_RECURSE+1];
 int R_ViewStatsKind(void)
@@ -232,7 +232,7 @@ cvar_t r_nestedents						= CVARD ("r_nestedents", "1", "1: a nested view (a wate
 cvar_t r_skyroomneed						= CVARD ("r_skyroomneed", "2", "Where the 3D sky is drawn only if the view has sky surfaces to show it through.\n1: water reflections and refractions (a refraction looks under the water; a cave's reflection has no sky).\n2: and the main view, which then shows what is behind a crack in the world instead of the 3D sky.\n0: every view of a map with sky draws it, as before Patch 850. Portal views always do: they inherit the near view's areas, so the far side's sky surfaces can be culled while the 3D sky still shows.");
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
 //FTESurf Patch 868: Source's water views (viewrender.cpp CAboveWaterView::CReflectionView::Setup, :5690-5700).
-cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water reflection or refraction draws the 3D sky.\n0: no -- the reflection shows the 2D skybox through its sky surfaces, as Source's does (viewrender.cpp: \"draw the 2d skybox in the reflection, instead of the 3d skybox\"), and the refraction looks under the water.\n1: yes, as before Patch 868 (still subject to r_skyroomneed).");
+cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water reflection or refraction draws the 3D sky.\n0: no -- the reflection shows the 2D skybox through its sky surfaces, as Source's does (viewrender.cpp: \"draw the 2d skybox in the reflection, instead of the 3d skybox\"), and the refraction looks under the water. Two exceptions, as in Source: with the eye under water the refraction (looking up out of it) keeps the 3D sky, and water seen through a portal draws it too.\n1: yes, as before Patch 868 (still subject to r_skyroomneed).");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");

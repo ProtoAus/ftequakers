@@ -725,10 +725,11 @@ static void R_RenderScene_Internal(void)
 	//plugin skips its props walk under RDF_NOENTS.
 	if (r_refdef.recurse && r_refdef.capturekind == 1)
 	{
-		extern int r_capturenoents;
+		extern int r_capturenoents, r_noentsfirstvisedict;
 		if (r_capturenoents)
 		{
-			r_refdef.flags |= RDF_NOENTS;
+			r_noentsfirstvisedict = r_refdef.firstvisedict;	//R_DrawSkyroom gives it back to the 3D sky
+			r_refdef.flags |= RDF_NOENTS | RDF_DISABLEPARTICLES;	//Source's particles are renderables too
 			r_refdef.firstvisedict = cl_numvisedicts;
 		}
 	}
@@ -1717,6 +1718,9 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 
 	oldrefdef = r_refdef;
 	r_refdef.recurse+=1;
+	//FTESurf Patch 868: each view decides its own sky. The outer view's RDF_SKIPSKY (it drew the 3D
+	//sky) made a capture that skips the 3D sky draw no sky chains at all: black.
+	r_refdef.flags &= ~RDF_SKIPSKY;
 	r_refdef.capturekind = portaltype;	//FTESurf Patch 850: r_skyroomneed tells a water capture from a portal
 	if (!portaltype)
 		r_refdef.insideportal = true;	//...and from a capture inside one, which inherits its areas
