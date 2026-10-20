@@ -191,12 +191,12 @@ void main (void)
 	depth = waterDepth(stc, surfaceDepth);
 	// An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
 	// with none) sits on a downward plane, as 96,033 bottom faces and 7,346 such undersides do (census).
-	bool topside = norm.z >= 0.0;
+	bool topside = norm.z > -0.5;	// not a sign test: overhanging or pitched faces round both ways
 #endif
 	// Source attenuates distortion by the normal map's alpha and, above water and
 	// without a $basetexture, by the refraction's fog depth (water_ps2x_helper.h:64-72).
 	// Its fog depth has no start term (common_ps_fxc.h CalcWaterFogAlpha).
-#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX)
+#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX) && !defined(BLURREFRACT)	//:72-76
 	float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;
 #else
 	float distortion = nsample.a;
@@ -207,11 +207,15 @@ void main (void)
 	vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;
 #ifdef DEPTH
 	// Reject foreground/above-water distortion instead of pulling pillars
-	// across the shoreline. Capture and surface share screen depth.
-	if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||
-		texture2D(s_refractdepth, clamp(refractUV, 0.0, 1.0)).r <= gl_FragCoord.z)
-		refractUV = stc;
+	// across the shoreline: a sample not beyond the plane on its own ray (a ray
+	// above the horizon extrapolates to a non-positive 1/depth and rejects too).
 	vec2 rc = clamp(refractUV, 0.0, 1.0);
+	if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||
+		eyeDepth(texture2D(s_refractdepth, rc).r) <= 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001))
+	{
+		refractUV = stc;
+		rc = stc;
+	}
 	depth = waterDepth(rc, 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001));
 #endif
 	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;

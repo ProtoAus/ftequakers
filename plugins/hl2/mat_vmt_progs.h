@@ -1745,12 +1745,12 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "depth = waterDepth(stc, surfaceDepth);\n"
 // An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
 // with none) sits on a downward plane, as 96,033 bottom faces and 7,346 such undersides do (census).
-"bool topside = norm.z >= 0.0;\n"
+"bool topside = norm.z > -0.5; // not a sign test: overhanging or pitched faces round both ways\n"
 "#endif\n"
 // Source attenuates distortion by the normal map's alpha and, above water and
 // without a $basetexture, by the refraction's fog depth (water_ps2x_helper.h:64-72).
 // Its fog depth has no start term (common_ps_fxc.h CalcWaterFogAlpha).
-"#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX)\n"
+"#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX) && !defined(BLURREFRACT) //:72-76\n"
 "float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;\n"
 "#else\n"
 "float distortion = nsample.a;\n"
@@ -1761,11 +1761,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;\n"
 "#ifdef DEPTH\n"
 // Reject foreground/above-water distortion instead of pulling pillars
-// across the shoreline. Capture and surface share screen depth.
-"if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||\n"
-"texture2D(s_refractdepth, clamp(refractUV, 0.0, 1.0)).r <= gl_FragCoord.z)\n"
-"refractUV = stc;\n"
+// across the shoreline: a sample not beyond the plane on its own ray (a ray
+// above the horizon extrapolates to a non-positive 1/depth and rejects too).
 "vec2 rc = clamp(refractUV, 0.0, 1.0);\n"
+"if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||\n"
+"eyeDepth(texture2D(s_refractdepth, rc).r) <= 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001))\n"
+"{\n"
+"refractUV = stc;\n"
+"rc = stc;\n"
+"}\n"
 "depth = waterDepth(rc, 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001));\n"
 "#endif\n"
 "refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;\n"
@@ -3350,12 +3354,12 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "depth = waterDepth(stc, surfaceDepth);\n"
 // An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
 // with none) sits on a downward plane, as 96,033 bottom faces and 7,346 such undersides do (census).
-"bool topside = norm.z >= 0.0;\n"
+"bool topside = norm.z > -0.5; // not a sign test: overhanging or pitched faces round both ways\n"
 "#endif\n"
 // Source attenuates distortion by the normal map's alpha and, above water and
 // without a $basetexture, by the refraction's fog depth (water_ps2x_helper.h:64-72).
 // Its fog depth has no start term (common_ps_fxc.h CalcWaterFogAlpha).
-"#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX)\n"
+"#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX) && !defined(BLURREFRACT) //:72-76\n"
 "float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;\n"
 "#else\n"
 "float distortion = nsample.a;\n"
@@ -3366,11 +3370,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;\n"
 "#ifdef DEPTH\n"
 // Reject foreground/above-water distortion instead of pulling pillars
-// across the shoreline. Capture and surface share screen depth.
-"if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||\n"
-"texture2D(s_refractdepth, clamp(refractUV, 0.0, 1.0)).r <= gl_FragCoord.z)\n"
-"refractUV = stc;\n"
+// across the shoreline: a sample not beyond the plane on its own ray (a ray
+// above the horizon extrapolates to a non-positive 1/depth and rejects too).
 "vec2 rc = clamp(refractUV, 0.0, 1.0);\n"
+"if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||\n"
+"eyeDepth(texture2D(s_refractdepth, rc).r) <= 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001))\n"
+"{\n"
+"refractUV = stc;\n"
+"rc = stc;\n"
+"}\n"
 "depth = waterDepth(rc, 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001));\n"
 "#endif\n"
 "refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;\n"
