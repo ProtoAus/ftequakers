@@ -26,7 +26,21 @@ real game's, so PHY_HullInsideModel decides as for an owner. Lobbies (no Steam):
 packs in game/placeholders as the last fs_addons.txt line, shipped with a P889 Pi native so a map's
 pakfile ranks above them there too.
 
-**Verified:** see the arms in the task root's p889 notes.
+**Verified:** 0 warnings in fs.c (client + dedicated, stamp git-7604-patch-875-5-gfe814786a).
+Warm second map (surf_nuclear after surf_utopia), the server's own fs_loadstats line: first cut
+with stand-ins 9528 ms, 48546 lookups missed the hash, hash STALE; this build with stand-ins 6292 ms,
+19237, valid; stand-ins off 5540 ms, 19228, valid; installed exe 5409 ms, 19247, valid (stand-ins add
+~36k indexed files: +0.75 s on that load, +1.1 s on surf_utopia's). surf_nuclear spawn: a
+Pi-like server (fs_automount 0, fs_standins 2) with an owner's client stands at -9135.6 with one
+3.7 u prederr in the spawn drop (control: 514 prederr lines, falling -9023..-9247); the server's
+unloadable hub models drop 25 -> 4, and those 4 have no .phy in real Portal 2 either. Owner client
+with stand-ins forced on: flocate walkway_end_b .mdl/.phy -> Portal 2's pak01 (1780 B, the stand-in's
+is 1904), `path` lists the automounted games, then the map pak, then the four stand-ins;
+materials/dev/water_normal.vtf -> hl2_textures_dir.vpk (P875). Non-owner client (stand-ins, no
+automount) against a server with Portal 2: 1 prederr line; the same on the installed client: 25.
+Offline: the 84 lobby-unloadable models with a stand-in .phy match the real game's bytes and hull
+bounds. 130 library map paks share 4,149 paths with the three Pi stand-ins (214 .phy differ on 67
+maps), so the lobbies need this native, not content alone.
 
 ## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
 
