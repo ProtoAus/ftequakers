@@ -38,6 +38,7 @@ extern cvar_t r_waterripple_react;
 extern cvar_t r_hlwater_hidesides;
 cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
+cvar_t sv_entfix								= CVARD("sv_entfix", "1", "FTESurf Patch 890: apply cfg/maps/entfix_<map>.cfg (Stripper:Source syntax) to a map's entities as it loads.");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
 cvar_t mod_warnmodels						= CVARD("mod_warnmodels", "1", "Warn if any models failed to load. Set to 0 if your mod is likely to lack optional models (like its in development).");	//set to 0 for hexen2 and its otherwise-spammy-as-heck demo.
 //nettest Patch 102: read by Mod_SkipCollisionHulls (com_mesh.c) on the LOADER WORKER, so it MUST be
@@ -885,6 +886,7 @@ void Mod_Init (qboolean initial)
 		Cvar_Register(&mod_litsprites_force, "Graphical Nicaties");
 		Cvar_Register(&mod_loadentfiles, NULL);
 		Cvar_Register(&mod_loadentfiles_dir, NULL);
+		Cvar_Register(&sv_entfix, NULL);	//FTESurf Patch 890
 		Cvar_Register(&mod_loadmappackages, NULL);
 		Cvar_Register(&mod_lightscale_broken, NULL);
 		Cvar_Register(&mod_lightpoint_distance, NULL);
@@ -2800,6 +2802,428 @@ static void Mod_SaveEntFile_f(void)
 }
 
 /*
+FTESurf Patch 890: per-map entity fixes in Stripper:Source's syntax (the files KSF-style servers
+patch maps with), read from cfg/maps/entfix_<map>.cfg.  Applied here, where server and client both
+take a map's entities, so spawns, trigger mirrors and every CSQC lump reader see the same lump.
+Sections filter: (remove: too), add: and modify: (match / replace / delete / insert), in file
+order.  Keys match case-insensitively, values too with ',' equal to the 0x1b output separator; a
+value written /like this/ is a wildcard pattern with '*' (Stripper's regex, cut down), any other is
+exact, so "model" "*12" is model *12.  A block that matches nothing is reported: after a map update
+it is how a stale fix shows.
+*/
+typedef struct
+{
+	int num, max;
+	char **k, **v;
+	qboolean gone;
+} efent_t;
+typedef struct
+{
+	int num, max;
+	efent_t *e;
+} eflist_t;
+
+static char *EF_Dup(const char *s, size_t n)
+{
+	char *d = Z_Malloc(n + 1);
+	memcpy(d, s, n);
+	d[n] = 0;
+	return d;
+}
+static void EF_PairN(efent_t *e, const char *k, size_t kl, const char *v, size_t vl)
+{
+	if (e->num == e->max)
+	{
+		e->max = e->max ? e->max * 2 : 8;
+		e->k = BZ_Realloc(e->k, sizeof(*e->k) * e->max);
+		e->v = BZ_Realloc(e->v, sizeof(*e->v) * e->max);
+	}
+	e->k[e->num] = EF_Dup(k, kl);
+	e->v[e->num] = EF_Dup(v, vl);
+	e->num++;
+}
+static void EF_DropPair(efent_t *e, int i)
+{
+	Z_Free(e->k[i]);
+	Z_Free(e->v[i]);
+	memmove(e->k + i, e->k + i + 1, sizeof(*e->k) * (e->num - i - 1));
+	memmove(e->v + i, e->v + i + 1, sizeof(*e->v) * (e->num - i - 1));
+	e->num--;
+}
+static void EF_FreeEnt(efent_t *e)
+{
+	while (e->num)
+		EF_DropPair(e, e->num - 1);
+	BZ_Free(e->k);
+	BZ_Free(e->v);
+	memset(e, 0, sizeof(*e));
+}
+static efent_t *EF_NewEnt(eflist_t *l)
+{
+	if (l->num == l->max)
+	{
+		l->max = l->max ? l->max * 2 : 256;
+		l->e = BZ_Realloc(l->e, sizeof(*l->e) * l->max);
+	}
+	memset(&l->e[l->num], 0, sizeof(l->e[l->num]));
+	return &l->e[l->num++];
+}
+
+//The next token as a slice of the text: a quoted string, a brace, or a bare word; // ; # comment
+//to the end of a line between tokens.  NULL at the end.  Nothing is copied, so nothing is cut.
+static const char *EF_Token(const char *s, const char **tok, size_t *len, qboolean *quoted)
+{
+	for (;;)
+	{
+		while (*s && (unsigned char)*s <= ' ')
+			s++;
+		if (!*s)
+			return NULL;
+		if ((s[0] == '/' && s[1] == '/') || *s == ';' || *s == '#')
+		{
+			while (*s && *s != '\n')
+				s++;
+			continue;
+		}
+		break;
+	}
+	*quoted = (*s == '"');
+	if (*quoted)
+	{
+		*tok = ++s;
+		while (*s && *s != '"')
+			s++;
+		*len = s - *tok;
+		if (*s == '"')
+			s++;
+	}
+	else if (*s == '{' || *s == '}')
+	{
+		*tok = s;
+		*len = 1;
+		s++;
+	}
+	else
+	{
+		*tok = s;
+		while ((unsigned char)*s > ' ' && *s != '{' && *s != '}' && *s != '"')
+			s++;
+		*len = s - *tok;
+	}
+	return s;
+}
+static qboolean EF_Is(const char *tok, size_t len, qboolean quoted, const char *word)
+{
+	return !quoted && strlen(word) == len && !Q_strncasecmp(tok, word, len);
+}
+
+//Pairs up to the closing brace (the opening one already read).  NULL on a malformed block.
+static const char *EF_Block(const char *s, efent_t *out)
+{
+	const char *k, *v;
+	size_t kl, vl;
+	qboolean q;
+	for (;;)
+	{
+		s = EF_Token(s, &k, &kl, &q);
+		if (!s)
+			return NULL;
+		if (EF_Is(k, kl, q, "}"))
+			return s;
+		if (!q)
+			return NULL;
+		s = EF_Token(s, &v, &vl, &q);
+		if (!s || !q)
+			return NULL;
+		EF_PairN(out, k, kl, v, vl);
+	}
+}
+
+static int EF_Fold(int c)
+{
+	c = (unsigned char)c;
+	if (c == 0x1b)
+		return ',';
+	return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+}
+//'*' over a counted pattern, by backing up to the last star only: linear in practice, never
+//exponential however many stars.
+static qboolean EF_Glob(const char *p, size_t pl, const char *s)
+{
+	size_t pi = 0, si = 0, star = (size_t)-1, mark = 0, sl = strlen(s);
+	while (si < sl)
+	{
+		if (pi < pl && p[pi] == '*')
+		{
+			star = pi++;
+			mark = si;
+		}
+		else if (pi < pl && EF_Fold(p[pi]) == EF_Fold(s[si]))
+		{
+			pi++;
+			si++;
+		}
+		else if (star != (size_t)-1)
+		{
+			pi = star + 1;
+			si = ++mark;
+		}
+		else
+			return false;
+	}
+	while (pi < pl && p[pi] == '*')
+		pi++;
+	return pi == pl;
+}
+static qboolean EF_Value(const char *pat, const char *val)
+{
+	size_t pl = strlen(pat);
+	if (pl >= 2 && pat[0] == '/' && pat[pl-1] == '/')
+		return EF_Glob(pat + 1, pl - 2, val);
+	for (; *pat && *val; pat++, val++)
+		if (EF_Fold(*pat) != EF_Fold(*val))
+			return false;
+	return !*pat && !*val;
+}
+static qboolean EF_Matches(const efent_t *e, const efent_t *m)
+{
+	int i, j;
+	if (e->gone)
+		return false;
+	for (j = 0; j < m->num; j++)
+	{
+		for (i = 0; i < e->num; i++)
+			if (!Q_strcasecmp(e->k[i], m->k[j]) && EF_Value(m->v[j], e->v[i]))
+				break;
+		if (i == e->num)
+			return false;
+	}
+	return true;
+}
+
+//P841's rule for map-load rulesets (sv_phys.c SV_RulesetLoadLoose): a loose file in a local
+//directory only -- not a download, an addon mount or a server's temporary files; a link inside a
+//package is not followed (an OS link in the directory is) -- so no map package can supply an
+//entfix file.  (sv_loadentfiles' maps/<map>.ent, beside this, has no such check.)
+static char *EF_LoadTrusted(const char *path)
+{
+	unsigned int bad = SPF_TEMPORARY|SPF_SERVER|SPF_UNTRUSTED|SPF_ADDON;
+	flocation_t loc;
+	vfsfile_t *f;
+	qofs_t len;
+	char *buf;
+
+	if (!FS_FLocateFile(path, FSLF_IGNORELINKS, &loc))
+		return NULL;
+	if (!loc.search || (loc.search->flags & (SPF_ISDIR|bad)) != SPF_ISDIR)
+	{
+		Con_Printf(CON_WARNING "entfix: %s is not in a trusted directory - not read\n", path);
+		return NULL;
+	}
+	f = FS_OpenReadLocation(NULL, &loc);
+	if (!f)
+		return NULL;
+	len = VFS_GETLEN(f);
+	if (len > 256*1024)
+	{
+		Con_Printf(CON_WARNING "entfix: %s is over 256 KB - not read\n", path);
+		VFS_CLOSE(f);
+		return NULL;
+	}
+	buf = BZ_Malloc(len + 1);
+	if (VFS_READ(f, buf, len) != len)
+	{
+		BZ_Free(buf);
+		VFS_CLOSE(f);
+		return NULL;
+	}
+	buf[len] = 0;
+	VFS_CLOSE(f);
+	return buf;
+}
+
+static char *Mod_EntFix(model_t *mod, const char *ents, unsigned int *fixhash)
+{
+	char base[MAX_QPATH], path[MAX_QPATH + 32], stale[64];
+	char *fix, *out = NULL, *o;
+	const char *s, *tok;
+	size_t len, tl;
+	eflist_t l = {0};
+	efent_t blk, mt, rp, dl, in;
+	int mode = 0, i, j, block = 0, nrem = 0, nadd = 0, nmod = 0, nstale = 0, hits;
+	qboolean q, ok = true;
+
+	if (!sv_entfix.ival || strncmp(mod->name, "maps/", 5))
+		return NULL;
+	COM_FileBase(mod->name, base, sizeof(base));
+	Q_snprintfz(path, sizeof(path), "cfg/maps/entfix_%s.cfg", base);
+	fix = EF_LoadTrusted(path);
+	if (!fix)
+		return NULL;
+	//Its identity for *entfile and a recording's `entfile`: the fix's own bytes, CRLF read as LF
+	//(the parser does), 24 bits so QC's float carries it exactly.  Not the fixed lump's crc, which
+	//overlay synthesis also changes.
+	{
+		char *r, *w;
+		for (r = w = fix; *r; r++)
+			if (!(r[0] == '\r' && r[1] == '\n'))
+				*w++ = *r;
+		*w = 0;
+	}
+	*fixhash = CalcHashInt(&hash_sha1, fix, strlen(fix)) & 0xffffff;
+
+	for (s = ents; ok && (s = EF_Token(s, &tok, &tl, &q)); )
+	{
+		if (!EF_Is(tok, tl, q, "{"))
+			ok = false;
+		else if (!(s = EF_Block(s, EF_NewEnt(&l))))
+			ok = false;
+	}
+	if (!ok)
+	{
+		Con_Printf(CON_WARNING "entfix: %s: the map's entity lump did not parse; not applied\n", mod->name);
+		goto done;
+	}
+
+	for (s = fix; ok && (s = EF_Token(s, &tok, &tl, &q)); )
+	{
+		if (EF_Is(tok, tl, q, "filter:") || EF_Is(tok, tl, q, "remove:"))	mode = 1;
+		else if (EF_Is(tok, tl, q, "add:"))	mode = 2;
+		else if (EF_Is(tok, tl, q, "modify:"))	mode = 3;
+		else if (EF_Is(tok, tl, q, "{") && mode == 1)
+		{
+			block++;
+			memset(&blk, 0, sizeof(blk));
+			if (!(s = EF_Block(s, &blk)) || !blk.num)
+				ok = false;
+			else
+			{
+				for (i = 0, hits = 0; i < l.num; i++)
+					if (EF_Matches(&l.e[i], &blk))
+						l.e[i].gone = true, hits++, nrem++;
+				if (!hits)
+					nstale++, Con_Printf(CON_WARNING "entfix: %s: filter block %i matched nothing\n", path, block);
+			}
+			EF_FreeEnt(&blk);
+		}
+		else if (EF_Is(tok, tl, q, "{") && mode == 2)
+		{
+			efent_t *e = EF_NewEnt(&l);
+			block++;
+			if (!(s = EF_Block(s, e)) || !e->num)
+				ok = false;
+			nadd++;
+		}
+		else if (EF_Is(tok, tl, q, "{") && mode == 3)
+		{
+			block++;
+			memset(&mt, 0, sizeof(mt));	memset(&rp, 0, sizeof(rp));
+			memset(&dl, 0, sizeof(dl));	memset(&in, 0, sizeof(in));
+			for (;;)
+			{
+				efent_t *into;
+				s = EF_Token(s, &tok, &tl, &q);
+				if (!s || q)
+				{
+					ok = false;
+					break;
+				}
+				if (EF_Is(tok, tl, q, "}"))
+					break;
+				if (EF_Is(tok, tl, q, "match:"))	into = &mt;
+				else if (EF_Is(tok, tl, q, "replace:"))	into = &rp;
+				else if (EF_Is(tok, tl, q, "delete:"))	into = &dl;
+				else if (EF_Is(tok, tl, q, "insert:"))	into = &in;
+				else
+				{
+					ok = false;
+					break;
+				}
+				s = EF_Token(s, &tok, &tl, &q);
+				if (!s || !EF_Is(tok, tl, q, "{") || !(s = EF_Block(s, into)))
+				{
+					ok = false;
+					break;
+				}
+			}
+			if (ok && !mt.num)
+				ok = false;
+			if (ok)
+			{
+				for (i = 0, hits = 0; i < l.num; i++)
+				{
+					efent_t *e = &l.e[i];
+					int p;
+					if (!EF_Matches(e, &mt))
+						continue;
+					hits++;
+					for (j = 0; j < rp.num; j++)
+						for (p = 0; p < e->num; p++)
+							if (!Q_strcasecmp(e->k[p], rp.k[j]))
+							{
+								Z_Free(e->v[p]);
+								e->v[p] = Z_StrDup(rp.v[j]);
+							}
+					for (j = 0; j < dl.num; j++)
+						for (p = e->num - 1; p >= 0; p--)
+							if (!Q_strcasecmp(e->k[p], dl.k[j]) && EF_Value(dl.v[j], e->v[p]))
+								EF_DropPair(e, p);
+					for (j = 0; j < in.num; j++)
+						EF_PairN(e, in.k[j], strlen(in.k[j]), in.v[j], strlen(in.v[j]));
+				}
+				nmod += hits;
+				if (!hits)
+					nstale++, Con_Printf(CON_WARNING "entfix: %s: modify block %i matched nothing\n", path, block);
+			}
+			EF_FreeEnt(&mt);	EF_FreeEnt(&rp);
+			EF_FreeEnt(&dl);	EF_FreeEnt(&in);
+		}
+		else
+			ok = false;
+	}
+	if (!ok)
+	{
+		Con_Printf(CON_ERROR "entfix: %s: malformed at block %i; not applied\n", path, block ? block : 1);
+		goto done;
+	}
+
+	for (i = 0, len = 1; i < l.num; i++)
+		if (!l.e[i].gone)
+			for (len += 4, j = 0; j < l.e[i].num; j++)
+				len += strlen(l.e[i].k[j]) + strlen(l.e[i].v[j]) + 6;
+	if (len > 16*1024*1024)
+	{
+		Con_Printf(CON_ERROR "entfix: %s: the fixed lump would be over 16 MB; not applied\n", path);
+		goto done;
+	}
+	out = o = BZ_Malloc(len);
+	for (i = 0; i < l.num; i++)
+	{
+		if (l.e[i].gone)
+			continue;
+		*o++ = '{';	*o++ = '\n';
+		for (j = 0; j < l.e[i].num; j++)
+		{
+			size_t kl = strlen(l.e[i].k[j]), vl = strlen(l.e[i].v[j]);
+			*o++ = '"';	memcpy(o, l.e[i].k[j], kl);	o += kl;	*o++ = '"';	*o++ = ' ';
+			*o++ = '"';	memcpy(o, l.e[i].v[j], vl);	o += vl;	*o++ = '"';	*o++ = '\n';
+		}
+		*o++ = '}';	*o++ = '\n';
+	}
+	*o = 0;
+	*stale = 0;	//not va(): this can run on a loader thread
+	if (nstale)
+		Q_snprintfz(stale, sizeof(stale), ", %i block(s) matched nothing", nstale);
+	Con_Printf("entfix: %s: %i removed, %i added, %i modified%s\n", path, nrem, nadd, nmod, stale);
+done:
+	for (i = 0; i < l.num; i++)
+		EF_FreeEnt(&l.e[i]);
+	BZ_Free(l.e);
+	BZ_Free(fix);
+	return out;
+}
+
+/*
 =================
 Mod_LoadEntities
 =================
@@ -2851,6 +3275,16 @@ qboolean Mod_LoadEntitiesBlob(struct model_s *mod, const char *entdata, size_t e
 	}
 	else
 		mod->entitiescrc = CalcHashInt(&hash_crc16, ents, strlen(ents));
+	{	//FTESurf Patch 890; *entfile (sv_init.c) then names the fix
+		unsigned int fixhash = 0;
+		char *fixed = Mod_EntFix(mod, ents, &fixhash);
+		if (fixed)
+		{
+			Z_Free(ents);
+			ents = fixed;
+			mod->entitiescrc = ((mod->entitiescrc ^ fixhash) & 0xffffff) ? ((mod->entitiescrc ^ fixhash) & 0xffffff) : 1;
+		}
+	}
 
 	Mod_SetEntitiesString(mod, ents, false);
 

@@ -5217,6 +5217,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	char          mapname[64];
 	unsigned int  filecrc = 0;
 	qboolean      havecrc = false, inbody;
+	int           hdrentfile = 0;	/* Patch 890: `entfile`; absent = 0, the map's own lump */
+	qboolean      hdrentbad = false;
 	char          hdrpintext[2048] = "";	/* Patch 882: for SV_PMPinNamesBelow */
 	float         rate = 0;
 	int           instart_mt = -1, instart_run = -1;
@@ -5342,6 +5344,15 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						hdrtick = atof(ln+9);
 					else if (!strncmp(ln, "mapcrc ", 7))
 						{ filecrc = (unsigned int)strtoul(ln+7, NULL, 16); havecrc = true; }
+					else if (!strncmp(ln, "entfile ", 8))	/* Patch 890 */
+					{
+						char *numend;
+						long v = strtol(ln+8, &numend, 10);
+						if (numend == ln+8 || (*numend && *numend != '\r' && *numend != '\n') || v < 0 || v > 0xffffff)
+							hdrentbad = true;
+						else
+							hdrentfile = (int)v;
+					}
 					else if (!strncmp(ln, "instart ", 8))
 						sscanf(ln+8, "%i %i", &instart_mt, &instart_run);
 					else if (!strncmp(ln, "FTESURF-REC ", 12))
@@ -5828,6 +5839,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		           : "^1DIFFERENT MAP -- every number below is meaningless^7");
 	else
 		Con_Printf("  map pin   ^3none in the header^7 (predates build 73)\n");
+	/* Patch 890: absent is 0, the lump before entity fixes existed */
+	Con_Printf("  entities  file %i  world %i  -- %s\n", hdrentfile, (int)world->entitiescrc,
+	           hdrentbad ? "^1UNREADABLE^7" : hdrentfile == (int)world->entitiescrc ? "^2MATCH^7"
+	           : "^1A DIFFERENT ENTITY LUMP^7 (an entity fix differs)");
 	Con_Printf("  body      %i in rows, %i samples, %i packets, %i warps, %i rides\n",
 	           nin, nsam, nin?(ins[nin-1].pk - ins[0].pk + 1):0, nwarp, nride);
 	if (inend_mt >= 0)
@@ -5942,6 +5957,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
 		else if (!havecrc || filecrc != (unsigned int)world->checksum)
 			refuse = "a different map";
+		else if (hdrentbad || hdrentfile != (int)world->entitiescrc)	/* Patch 890 */
+			refuse = hdrentbad ? "an unreadable `entfile`" : "a different entity lump (entfile: an entity fix or .ent differs)";
 		else if (pinbad)
 			refuse = (pinbad[0] == 1 && SV_PMSrcVer(pinbad) == 2)
 			         ? "a mover before Patch 492's review (pmsrcver 1 at fixrampbugs 2)" : "a different mover (pmsrcver)";
