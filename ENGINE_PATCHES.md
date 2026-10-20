@@ -1,5 +1,137 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 874 — env_sun and ropes drawn (csprogs)
+
+**Problem:** the entity census found env_sun on 247 maps and move_rope/keyframe_rope on 181, drawn by
+nothing: no sun glow over the sky, no cables between poles.
+
+**Change:** cl_sun.qc draws Source's C_Sun: two additive quads 100 units ahead of the eye along the
+sun's direction (its target, or use_angles with SetupLightNormalFromProps; no target keeps CSun's
+(0,0,1)), the core at `size`, the glow at `overlaysize` x6 fading out by a view dot of 0.9, drawn
+without depth as light_glow02_add_noz, hidden over 0.05 s when a CONTENTS_SOLID trace toward it hits
+anything but a sky side. cl_ropes.qc draws each NextKey span as the parabola whose length is the
+distance plus Slack, 4-16 camera-facing segments with c_rope.cpp's texture density, lit once from the
+lightgrid, one polygon begin per span, skipped outside an 80-degree cone or past vbsp_ropes_dist
+(4096), every other point past 2048. Static: no wind, collision, breaking or dangling ends. Both load
+from CSQC_WorldLoaded; gfx menu rows Sun and Ropes (vbsp_sun, vbsp_ropes).
+
+**Verified:** 0 warnings. `cfg/test/p870vis.cfg` matched on/off pairs: bhop_eazy's sun from its
+env_sun (140k px differ, the glow over the sky), bhop_kiitovittu's rope (~10k px, a smooth curve);
+`cfg/test/p874sun.cfg`: bhop_forevertranslucent's untargeted sun overhead ("env_sun: visible").
+Cost, `cfg/test/p874perf.cfg` on bhop_canals (235 spans, the library's most), four headings, A/B
+interleaved: the profiled cl_ropes row 0.10-0.17 ms before the one-begin-per-span layout,
+0.07-0.11 ms after (window noise ~0.3 ms in the whole CSQC row); the cone and LOD came after and are
+not re-measured. One review (correctness, cost): its findings fixed (the no-target default, depth,
+glass, world-load, the string leak). Not seen: surf_mom_training's untargeted sun (the arm's camera
+did not take the pitch there). bhop_kiitovittu draws one wall with the lattice's material
+intermittently on builds before this patch too (BACKLOG).
+
+## Patch 873 — trigger_soundscape and env_soundscape_proxy (csprogs)
+
+**Problem:** maps that switch soundscapes with trigger volumes (env_soundscape_triggerable +
+trigger_soundscape) or reuse one through env_soundscape_proxy played nothing there.
+
+**Change:** a proxy is a candidate at its own origin and radius playing what MainSoundscapeName
+names. A triggerable is an ordinary distance candidate, and entering a trigger_soundscape naming it
+makes it current (DelegateStartTouch) until something closer qualifies; with nothing qualifying it
+stays, as Source's update never clears audio.ent. The triggers are SOLID_BSPTRIGGER probes, linked at
+their origin, tested with the predicted hull as cl_triggers.qc tests its own.
+
+**Verified:** 0 warnings. `cfg/test/p870vis.cfg` on bhop_pokemans_xd: inside *2 `snd_report` says
+`active: s1`, inside *3 `active: s2`, 10 trigger volumes built (before the origin link: none active).
+One review: triggerables as candidates, the seed rule, fixed.
+
+## Patch 870 — map text and screen effects: game_text, env_hudhint, env_fade, env_shake (qwprogs + csprogs)
+
+**Problem:** stage names, credits, hints, coloured flashes and camera shakes that maps send through
+these four entities (removed at spawn) never showed.
+
+**Change:** the server sends MM_EV_* events to the activator or to everyone, as Source's flags say
+(game_text spawnflag 1, env_fade without "activator only", env_shake by radius, on-ground unless
+flag 4, not with flag 32 or frequency 0); the entities are stashed and re-created after the lump, so
+no map entity changes number. cl_mapmsg.qc: game_text on eight channels placed as message.cpp places
+it, with fade and scan-out (a character every fadein, settling from color2 over fxtime; effect 1
+draws as 0, as Source 2013's flicker is compiled out); env_hudhint in a Dusk panel, a repeat only
+holding it; env_fade under the HUD (in, out, stay, FadeReverse); env_shake a roll and offset of the
+camera only. hud_mapmsg / hud_mapfx (hud_edit Display Info) turn them off.
+
+**Verified:** 0 warnings. `cfg/test/p870vis.cfg`, the server's own lines and the screenshots:
+bhop_grid2's "Bunnyhop Grid 2" types out in 0 155 200 centred on the whole line (0.6 s: "Bunny" in
+color2; 2.6 s: complete); surf_tron's and surf_s_t_a_t_i_o_n's hints in the panel; bhop_wuyan's fade1
+full cyan at 0.15 s. The arm caught the colour arriving black (a vector stash bug, fixed in P865's
+review 2). Not seen: a shake on screen (the library cases the arm reached were airborne, which
+Source does not shake without flag 4). One review: layout, channels, hint, shake, reverse fade fixed.
+
+## Patch 869 — Momentum's bhop-control triggers: onehop, multihop, progress, catapult, reversespeed, userinput (qwprogs)
+
+**Problem:** Momentum's anti-bhop section triggers and Source's trigger_catapult had no spawn
+function: 16 roster maps (22 of the 1,926 in Momentum's folder), all inert (bhop_mom_training_beta, surf_mom_training, bhop_floodwaters,
+bhop_lego2...).
+
+**Change:** read from mom_triggers.cpp: progress (sets the destination, clears onehops), multihop (hold,
+0.5 s when absent), onehop (a multihop whose second landing teleports; flag 32768 onehops leave the
+list on a new first landing), resetonehop, teleport_progress, reversespeed, userinput (key edges per
+command), catapult (speed along a direction or at a target, exact/approximate aim, threshold) and
+filter_momentum_progress. Teleports follow MomTeleportEntity (target first); a START or stage zone
+entered is the progress trigger, and with none reached a failed hop goes to that zone's destination.
+Two hold slots per player; track_number honoured. The triggers spawn where they stand
+(SV_OnEntityNoSpawnFunction already kept trigger_* edicts), so numbering is unchanged. `tele` warps for
+the teleports, new kinds `catapult` and `reverse` (reccheck); header key `momtrig` records the
+run_momtriggers switch latched at the run's start, and saves/rewinds carry it with the progress.
+
+**Verified:** 0 warnings; `tools/test_reccheck.py` 801 checks, 0 failed. `cfg/test/p869mom.cfg`:
+bhop_mom_training_beta's onehops -- first landing on *263, *266's first landing drops *263, *263 a
+first landing again, a re-landing before the hold teleports at once, *266 held 0.36 s teleports;
+multihop *224 held teleports, 0.1 s does not; with the switch off nothing fires until it is back on;
+floodwaters' teleport_progress *300 to progress *24's middle; surf_mom_training's catapult *58 sets
+1256.37 0 457.28 (1337 along -20 0 0). `cfg/test/p869r1.cfg` against the build without P869 and the
+first P869: the lump's last edict is the same as without P869 on every map (#457, #236, #72) where
+the first P869, which stashed and freed the triggers, read #407, #235, #62; userinput *121 prints
+one press and one release. Five review rounds (control flow; evidence and cheating; then the fixes),
+all fixed. Not measured: the zone fallback (no zone data in the harness for those maps), the switch
+across a restore, three tiled multihops (none in the library).
+
+## Patch 865 — map entities: trigger_gravity, team/class/velocity filters, Break and a test shot, point_teleport (qwprogs + csprogs)
+
+**Problem:** an entity census of the 1,753 roster maps (KSF + Momentum) found gameplay entities with
+no spawn function: trigger_gravity (402 on 87 maps), filter_activator_team/_class/filter_velocity
+(removed at spawn, so 3,300 triggers naming them passed everyone; 79 maps overlap T-only and CT-only
+teleports with different destinations), func_breakable's Break (584 inputs on 103 maps; the wall
+stayed shut), point_teleport (Teleport on 15 maps, removed at spawn), and AddOutput
+classname/origin/target at the player (1,226 class renames on 91 maps feed the class filters).
+
+**Change:** trigger_gravity sets the toucher's `.gravity` through the AddOutput path (the pin records
+it); `persist 0` restores 1 on leaving, an absent key keeps it as Source did; entering a START resets
+gravity, as Momentum's zone entry does. Team filters: one team per map, the spawn class's. Class
+filters: NamesMatch against `.run_srcclass`, which AddOutput classname writes and saves carry
+(`srcclass`, additive). filter_velocity: both FGD dialects. Point entities that used to be freed at
+spawn are stashed and re-created on the first frame, so no map entity changes number; vectors are read
+by component (the engine's PF_getentityfieldstring tests field 0's type, so a vector whose x is 0
+read empty) and a string "0" stays "0". point_teleport's Teleport/TeleportToCurrentPos/TeleportEntity
+move a player (absent UseDestinationAngles turns to the entity's angles, as Source's; the library's
+lowercase spelling read) and write a `tele` warp, as AddOutput origin at a player does; a frozen body
+(spectate, replay pin, save-lock park, resume countdown) is not moved. Break/Shatter remove a breakable
+and fire OnBreak. `+attack` fires one silent shot (`run_shoot` 1, `lobby_shoot` 0, `run_shoot_damage`
+100): a damage-activated button presses, a breakable loses health (minhealthdmg honoured) and breaks;
+the trace adds MONSTERCLIP, because Source grates load as clip. On a lobby, Break and AddOutput target
+stay inert (`lobby_mapedits` 0): they would change the map for everyone, and pm_verify replays on an
+unbroken copy. AddOutput target takes the destination's own spelling; AddOutput angles on a player is
+Source's SetAbsAngles (no view turn). The csprogs trigger mirror evaluates team and class filters.
+
+**Verified:** 0 warnings. `cfg/test/p865ents.cfg` (subject progs against the installed ones, which
+print none of these lines): bhop_landmark2's class gate holds a classless player and opens after the
+rename; surf_graphia's T/CT overlap lands on the CT side; bhop_decimus' persist-0 volume restores on
+leaving, cheesemania's keyless one does not; cheesemania's trigger_once breaks tower2; the shot hits
+bhop_eazy_v2's grate button *383 at z -167.4 and its OnDamaged breaks the glass; surf_frus' b1endzone
+fires point_teleport frustele. Five review rounds (control flow; evidence and cheating; then each fix),
+each fix against the build before it: `p865r1.cfg` -- `!r` resets cheesemania's 0.33 gravity, and with
+`lobby_enable 1` the tower's Break is held; `p865r2.cfg` -- surf_leesriize's point_teleport (angles
+0 270 0, no key) turns the view to yaw -90 where the control stays at 0, surf_happyhug's case-retargeted
+teleport reaches tp_sroxy, qlimax_q's filtered gravity volume applies; a "lump: last edict" line lets
+an arm compare numbering. Not measured: the bhop walk-in reset (the arm could not walk a body into
+the box), the frozen-body skip, client prediction across a class rename, an offline run through a
+breakable under pm_verify (physents HOLD -- BACKLOG).
+
 ## Patch 871 — hud_fps: the strafe trainer, net, boarding and key-strip panels redrawn at a capped rate and pasted between (client exe + csprogs)
 
 **Problem (Lex, 20 Oct, after P863):** with every panel on and the strafe trainer full of strafes the
