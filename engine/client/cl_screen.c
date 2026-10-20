@@ -809,7 +809,7 @@ static void R_Budget_Dump_f(void)
 //FTESurf Patch 801: r_frametime. One sample per rendered frame, from RSpeedShow. The graph keeps the
 //slowest frame of each column's slice, so a spike is never averaged away; the lows come from a
 //histogram updated as frames arrive and expire, so computing them never costs a frame of its own.
-cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the average fps and the 1% and 0.1% lows (the average of the slowest 1% and 0.1% of frames) over r_frametime_window. r_frametime_dump lists the worst frames and where you were; r_frametime_reset starts the window again.");
+cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the last second's fps (show_fps' figure), then the average fps and the 1% and 0.1% lows (the average of the slowest 1% and 0.1% of frames) over r_frametime_window. r_frametime_dump lists the worst frames and where you were; r_frametime_reset starts the window again.");
 cvar_t r_frametime_seconds = CVARFD("r_frametime_seconds", "10", 0, "FTESurf Patch 801. Seconds the r_frametime graph spans.");
 cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch 801. Seconds r_frametime's lows and stutter count cover (1 to 120).");
 
@@ -836,6 +836,7 @@ static struct
 	double colstart;
 	double nextstats;
 	float avg, median, low1, low01, worst;	//ms
+	float fps1;					//FTESurf Patch 872: frames in the last second, show_fps' clock
 	int stutters;
 	ftbad_t bad[FT_KEEP];		//slowest first
 } ft;
@@ -917,9 +918,21 @@ static float R_FrameTime_Slowest(int n)
 }
 static void R_FrameTime_Stats(void)
 {
-	int b, c = 0, half = ft.count / 2, over;
-	float stut;
+	int b, c = 0, half = ft.count / 2, over, i, k;
+	float stut, since;
+	double s1 = 0;
 	ft.avg = ft.count ? ft.sum / ft.count : 0;
+	//FTESurf Patch 872: the last second's rate, newest first (the window's average is the
+	//headline Lex found 163 against show_fps' 45 at the same moment)
+	since = ft.at[(ft.head - 1) & (FT_RING-1)] - 1;
+	for (i = 0; i < ft.count; i++)
+	{
+		k = (ft.head - 1 - i) & (FT_RING-1);
+		if (ft.at[k] < since)
+			break;
+		s1 += ft.ms[k];
+	}
+	ft.fps1 = s1 > 0 ? i * 1000 / s1 : 0;
 	for (b = 0; b < FT_BINS; b++)
 		if ((c += ft.bins[b]) > half)
 			break;
@@ -1053,7 +1066,7 @@ static void R_FrameTime_Draw(void)
 	R2D_ImageColours(0, 0, 0, 0.6);
 	R2D_FillBlock(x - 4, y - 4, gw + 8, gh + 3*cw + 8);
 	R2D_ImageColours(1, 1, 1, 1);
-	Draw_FunStringWidthFont(font_console, x, y, va("^3frametime^7  avg %.0f fps   ^31%% low %.0f   0.1%% low %.0f", ft.avg > 0 ? 1000/ft.avg : 0, ft.low1 > 0 ? 1000/ft.low1 : 0, ft.low01 > 0 ? 1000/ft.low01 : 0), gw, false, false);
+	Draw_FunStringWidthFont(font_console, x, y, va("^3frametime^7 %.0f fps  %gs avg %.0f  ^31%% low %.0f  0.1%% low %.0f", ft.fps1, bound(1, r_frametime_window.value, 120), ft.avg > 0 ? 1000/ft.avg : 0, ft.low1 > 0 ? 1000/ft.low1 : 0, ft.low01 > 0 ? 1000/ft.low01 : 0), gw, false, false);
 	R2D_ImageColours(1, 1, 1, 1);
 	Draw_FunStringWidthFont(font_console, x, y + cw, va("^7median %.2f ms  worst %.1f  ^1stutters %i^7/%gs  top %g", ft.median, ft.worst, ft.stutters, bound(1, r_frametime_window.value, 120), scale), gw, false, false);
 	y += 2*cw + 4;
