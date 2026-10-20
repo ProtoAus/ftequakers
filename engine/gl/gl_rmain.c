@@ -699,6 +699,7 @@ R_RenderScene
 r_refdef must be set before the first call
 ================
 */
+int r_topviews;	//FTESurf Patch 879: top-level views begun (r_capturelog counts them)
 static void R_RenderScene_Internal(void)
 {
 	extern qboolean depthcleared;
@@ -714,6 +715,7 @@ static void R_RenderScene_Internal(void)
 		r_refdef.capturekind = 0;
 		r_refdef.insideportal = false;
 		r_vs_frames++;
+		r_topviews++;
 	}
 	else if (r_nestedents.ival && r_visdynamic < cl_numvisedicts)
 	{
@@ -1216,6 +1218,10 @@ static qboolean GLR_PortalPlane(batch_t *batch, plane_t *out, mesh_t **outmesh)
 	if (outmesh)
 		*outmesh = mesh;
 	return true;
+}
+qboolean GLR_BatchPlane(batch_t *batch, plane_t *out)	//FTESurf Patch 879: the plane a capture of this batch uses
+{
+	return GLR_PortalPlane(batch, out, NULL);
 }
 
 /*

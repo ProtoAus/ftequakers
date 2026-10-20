@@ -233,6 +233,8 @@ cvar_t r_skyroomneed						= CVARD ("r_skyroomneed", "2", "Where the 3D sky is dr
 cvar_t r_refractreflect_scale				= CVARD ("r_refractreflect_scale", "0.5", "Use a different scale for refraction and reflection texturemaps. Because $reasons.");
 //FTESurf Patch 868: Source's water views (viewrender.cpp CAboveWaterView::CReflectionView::Setup, :5690-5700).
 cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water reflection or refraction draws the 3D sky.\n0: no -- the reflection shows the 2D skybox through its sky surfaces, as Source's does (viewrender.cpp: \"draw the 2d skybox in the reflection, instead of the 3d skybox\"), and the refraction looks under the water. Two exceptions, as in Source: with the eye under water the refraction (looking up out of it) keeps the 3D sky, and water seen through a portal draws it too.\n1: yes, as before Patch 868 (still subject to r_skyroomneed).");
+cvar_t r_waterviews						= CVARD ("r_waterviews", "1", "FTESurf Patch 879: how many water reflection/refraction captures a view renders.\n0: one for every water batch, as before.\n1: one pair, as Source (viewrender.cpp DrawWorldAndEntities: one visible fog volume), for the nearest visible water plane; every water surface in the view samples it, as every Source water material samples the same _rt_WaterReflection/_rt_WaterRefraction.\n2: one pair per plane: batches on the same plane share a capture, other planes render their own.");
+cvar_t r_capturelog						= CVARD ("r_capturelog", "0", "FTESurf Patch 879: print every water reflection/refraction capture (level, kind, shader, plane, meshes) for this many frames.");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
@@ -1505,6 +1507,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_skyroomneed, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterskyroom, GRAPHICALNICETIES);	//FTESurf Patch 868
 	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
+	Cvar_Register (&r_capturelog, GRAPHICALNICETIES);	//FTESurf Patch 879
+	Cvar_Register (&r_waterviews, GRAPHICALNICETIES);
 	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over.");
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);

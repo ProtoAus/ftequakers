@@ -6435,11 +6435,181 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 //FTESurf Patch 864: depth of water reflection/refraction captures (not portals) being rendered.
 static int be_watercapture;
 
+//FTESurf Patch 879: r_capturelog N prints each water capture for N top-level views.
+extern cvar_t r_capturelog;
+extern int r_topviews;
+qboolean GLR_BatchPlane(batch_t *batch, plane_t *out);
+static void GLBE_CaptureLog(batch_t *batch, shader_t *bs, const char *kind)
+{
+	static int firstview, lastview = -1;
+	plane_t p;
+	if (r_capturelog.modified)
+	{
+		r_capturelog.modified = false;
+		firstview = r_topviews;
+	}
+	if (r_capturelog.ival <= 0 || r_topviews - firstview >= r_capturelog.ival)
+		return;
+	if (lastview != r_topviews)
+	{
+		lastview = r_topviews;
+		Con_Printf("[capture] view %i eye %.1f %.1f %.1f\n", r_topviews - firstview, r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2]);
+	}
+	if (!GLR_BatchPlane(batch, &p))
+		VectorClear(p.normal), p.dist = 0;
+	Con_Printf("[capture]  level %i %s %s plane %.3f %.3f %.3f %.2f meshes %i ent %i lm %i scale %g%s\n",
+		r_refdef.recurse, kind, bs->name, p.normal[0], p.normal[1], p.normal[2], p.dist,
+		(int)(batch->meshes - batch->firstmesh), batch->ent ? batch->ent->keynum : -1, batch->lightmap[0],
+		bs->portalfboscale, bs->reflectnoents ? " noents" : "");
+}
+
+//FTESurf Patch 879: Source renders one water reflection and one refraction per view, for the one
+//fog volume GetVisibleFogVolume picks (viewrender.cpp:2400-2420, DetermineWaterRenderInfo :2253-2392),
+//and every water material samples those same targets (water.cpp:259-266). Per view and level, the
+//nearest visible world water plane is chosen before anything draws and captured once, for all of its
+//batches together (r_waterviews).
+extern cvar_t r_waterviews;
+#define BE_WATERKINDS (SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH)
+typedef struct
+{
+	int serial;				//be_levelserial[level] of the view this was chosen for
+	vec3_t eye;				//...and its eye: a submit from anywhere else must not find it
+	batch_t *chosen;		//the nearest world water batch; NULL: none in this view
+	plane_t plane;
+	unsigned int need;		//kinds the chosen plane's world batches sample
+	unsigned int needall;	//...and every visible world water batch (r_waterviews 1 captures them all at the plane)
+	batch_t combined;		//the plane's world batches as one, so a refraction's PVS covers all of them
+	mesh_t **mesh;
+	unsigned int maxmesh;
+	qboolean held;			//what this level's capture textures hold now:
+	plane_t heldplane;
+	unsigned int helddone;
+} bewaterview_t;
+static bewaterview_t be_waterview[R_MAX_RECURSE];
+static int be_viewserial, be_levelserial[R_MAX_RECURSE];
+
+static qboolean GLBE_WaterSamePlane(const plane_t *a, const plane_t *b)
+{
+	return DotProduct(a->normal, b->normal) > 0.999f && fabs(a->dist - b->dist) < 1;
+}
+//a world water batch whose meshes are already this view's (entity batches build theirs at submit)
+static qboolean GLBE_WaterCandidate(batch_t *b)
+{
+	shader_t *s = b->shader;
+	return s && !(s->flags & (SHADER_NODRAW|SHADER_HASPORTAL)) && (s->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT)) &&
+		b->ent == &r_worldentity && !b->buildmeshes && b->mesh && b->meshes > b->firstmesh;
+}
+//squared distance from the eye to the nearest of the batch's mesh boxes
+static float GLBE_WaterBatchDist(batch_t *b)
+{
+	float best = 1e30f, d2, o;
+	unsigned int m;
+	int v, k;
+	for (m = b->firstmesh; m < b->meshes; m++)
+	{
+		mesh_t *mesh = b->mesh[m];
+		vec3_t lo, hi;
+		if (!mesh || !mesh->xyz_array || mesh->numvertexes <= 0)
+			continue;
+		VectorCopy(mesh->xyz_array[0], lo);
+		VectorCopy(mesh->xyz_array[0], hi);
+		for (v = 1; v < mesh->numvertexes; v++)
+			for (k = 0; k < 3; k++)
+			{
+				if (mesh->xyz_array[v][k] < lo[k]) lo[k] = mesh->xyz_array[v][k];
+				if (mesh->xyz_array[v][k] > hi[k]) hi[k] = mesh->xyz_array[v][k];
+			}
+		for (d2 = 0, k = 0; k < 3; k++)
+		{
+			o = r_refdef.vieworg[k] < lo[k] ? lo[k] - r_refdef.vieworg[k] : r_refdef.vieworg[k] > hi[k] ? r_refdef.vieworg[k] - hi[k] : 0;
+			d2 += o*o;
+		}
+		if (d2 < best)
+			best = d2;
+	}
+	return best;
+}
+//before this view submits anything: pick its water plane
+static void GLBE_WaterViewsBegin(batch_t **worldbatches)
+{
+	int level = r_refdef.recurse, i, pass;
+	bewaterview_t *wv;
+	batch_t *b, *best = NULL;
+	plane_t p, bestplane;
+	float d, bestdist = 1e30f;
+	unsigned int n, k;
+
+	if (level >= R_MAX_RECURSE)
+		return;
+	wv = &be_waterview[level];
+	wv->serial = be_levelserial[level] = ++be_viewserial;
+	VectorCopy(r_refdef.vieworg, wv->eye);
+	wv->chosen = NULL;
+	wv->need = wv->needall = 0;
+	wv->held = false;
+	if (!r_waterviews.ival || !worldbatches)
+		return;
+	for (i = 0; i < SHADER_SORT_COUNT; i++)
+		for (b = worldbatches[i]; b; b = b->next)
+		{
+			if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p))
+				continue;
+			if (DotProduct(r_refdef.vieworg, p.normal) - p.dist < -r_refdef.mindist)
+				continue;	//behind it: GLR_DrawPortal would refuse the capture
+			wv->needall |= b->shader->flags & BE_WATERKINDS;
+			d = GLBE_WaterBatchDist(b);
+			if (d < bestdist)
+			{
+				bestdist = d;
+				best = b;
+				bestplane = p;
+			}
+		}
+	if (!best)
+		return;
+	wv->chosen = best;
+	wv->plane = bestplane;
+	//the chosen batch's meshes first (GLR_PortalPlane and the reflection's PVS read the first one), then
+	//its plane's; at 1 every other visible water mesh too, so the refraction's PVS still covers the water
+	//that samples it (as one load-merged batch's did: Mod_Batches_Build splits by plane only if the shader
+	//captured at load).
+	for (n = 0, pass = 0; pass < 3; pass++)
+		for (i = 0; i < SHADER_SORT_COUNT; i++)
+			for (b = worldbatches[i]; b; b = b->next)
+			{
+				qboolean same;
+				if ((pass == 0) != (b == best) || !GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p))
+					continue;
+				if (pass && DotProduct(r_refdef.vieworg, p.normal) - p.dist < -r_refdef.mindist)
+					continue;
+				same = GLBE_WaterSamePlane(&p, &bestplane);
+				if ((pass == 1 && !same) || (pass == 2 && (same || r_waterviews.ival != 1)))
+					continue;
+				if (same)
+					wv->need |= b->shader->flags & BE_WATERKINDS;
+				if (n + (b->meshes - b->firstmesh) > wv->maxmesh)
+				{
+					wv->maxmesh = n + (b->meshes - b->firstmesh) + 64;
+					wv->mesh = BZ_Realloc(wv->mesh, wv->maxmesh * sizeof(*wv->mesh));
+				}
+				for (k = b->firstmesh; k < b->meshes; k++)
+					wv->mesh[n++] = b->mesh[k];
+			}
+	wv->combined = *best;
+	wv->combined.next = NULL;
+	wv->combined.mesh = wv->mesh;
+	wv->combined.firstmesh = 0;
+	wv->combined.meshes = wv->combined.maxmeshes = n;
+}
+
 static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 {
 	int oldfbo;
 	float oldil;
 	int oldbem;
+	unsigned int cf = bs->flags;	//FTESurf Patch 879: the kinds this call captures,
+	shader_t *cs = bs;				//the shader whose scale and $reflectentities decide them,
+	batch_t *cb = batch;			//and the batch whose meshes place them
 	if (r_refdef.recurse >= r_portalrecursion.ival || r_refdef.recurse == R_MAX_RECURSE)
 		return false;
 	//FTESurf Patch 864: no water capture inside a water capture.  r_portalrecursion 2
@@ -6476,12 +6646,48 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	if ((bs->flags & SHADER_HASPORTAL) && !GLR_PortalWouldDraw(batch))
 		return false;
 
+	//FTESurf Patch 879: the view's water plane is captured once (GLBE_WaterViewsBegin).
+	//Below GLR_DrawPortal's out-of-recursion path, which would submit the combined batch itself.
+	if (!(bs->flags & SHADER_HASPORTAL) && r_waterviews.ival && r_refdef.recurse < R_MAX_RECURSE-1)
+	{
+		bewaterview_t *wv = &be_waterview[r_refdef.recurse];
+		plane_t p;
+		unsigned int need;
+		if (wv->serial == be_levelserial[r_refdef.recurse] && wv->chosen && VectorCompare(wv->eye, r_refdef.vieworg) &&
+			GLR_BatchPlane(batch, &p))
+		{
+			if (GLBE_WaterSamePlane(&p, &wv->plane) || r_waterviews.ival == 1)
+			{	//at 1 every water surface samples the chosen plane's capture, as in Source
+				p = wv->plane;
+				need = ((r_waterviews.ival == 1) ? wv->needall : wv->need) | (bs->flags & BE_WATERKINDS);
+				cs = wv->chosen->shader;
+				cb = &wv->combined;
+			}
+			else	//2, another plane: its own capture, shared with the batches after it on that plane
+				need = bs->flags & BE_WATERKINDS;
+			if (!wv->held || !GLBE_WaterSamePlane(&p, &wv->heldplane))
+			{
+				wv->held = true;
+				wv->heldplane = p;
+				wv->helddone = 0;
+			}
+			need &= ~wv->helddone;
+			if (!need)
+			{
+				GLBE_CaptureLog(batch, bs, "shared");
+				return true;
+			}
+			wv->helddone |= need;
+			cf = (bs->flags & ~BE_WATERKINDS) | need;
+		}
+	}
+
 	oldbem = shaderstate.mode;
 	oldil = shaderstate.identitylighting;
 
-	if ((bs->flags & SHADER_HASREFLECT) && gl_config.ext_framebuffer_objects)
+	if ((cf & SHADER_HASREFLECT) && gl_config.ext_framebuffer_objects)
 	{
-		float renderscale = bs->portalfboscale;
+		float renderscale = cs->portalfboscale;
 		vrect_t orect = r_refdef.vrect;
 		pxrect_t oprect = r_refdef.pxrect;
 		if (!shaderstate.tex_reflection[r_refdef.recurse])
@@ -6522,9 +6728,10 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		GL_ForceDepthWritable();
 		qglClearColor(0, 0, 0, 1);
 		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		GLBE_CaptureLog(batch, bs, "reflect");
 		be_watercapture++;
-		r_capturenoents = bs->reflectnoents && !r_waterforcereflectentities.ival;	//Patch 868
-		GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 1);
+		r_capturenoents = cs->reflectnoents && !r_waterforcereflectentities.ival;	//Patch 868
+		GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, 1);
 		r_capturenoents = 0;
 		be_watercapture--;
 		GLBE_FBO_Pop(oldfbo);
@@ -6532,12 +6739,12 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		r_refdef.pxrect = oprect;
 		GL_ViewportUpdate();
 	}
-	if (bs->flags & (SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH))
+	if (cf & (SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH))
 	{
 		// A refraction depth attachment requires an FBO; screen-copy mode has none.
-		if (r_refract_fboival || (bs->flags&(SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH)))
+		if (r_refract_fboival || (cf&(SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH)))
 		{
-			float renderscale = min(1, bs->portalfboscale);
+			float renderscale = min(1, cs->portalfboscale);
 			vrect_t ovrect = r_refdef.vrect;
 			pxrect_t oprect = r_refdef.pxrect;
 			r_refdef.vrect.x = 0;
@@ -6571,7 +6778,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 			}
-			if (bs->flags & SHADER_HASREFRACTDEPTH)
+			if (cf & SHADER_HASREFRACTDEPTH)
 			{
 				if (!shaderstate.tex_refractiondepth[r_refdef.recurse])
 				{
@@ -6658,8 +6865,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			}
 			else
 			{
+				GLBE_CaptureLog(batch, bs, (cf & SHADER_HASREFRACTDEPTH)?"refract+depth":"refract");
 				be_watercapture++;
-				GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, ((bs->flags & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
+				GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, ((cf & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
 				be_watercapture--;
 			}
 			GLBE_FBO_Pop(oldfbo);
@@ -6670,8 +6878,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		}
 		else
 		{
+			GLBE_CaptureLog(batch, bs, "refractcopy");
 			be_watercapture++;	//a portal never gets here: it forces the FBO branch
-			GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 3);
+			GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, 3);
 			be_watercapture--;
 		}
 	}
@@ -9230,6 +9439,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 //		shaderstate.updatetime = cl.servertime;
 
 	GLBE_UpdateLightmaps();
+	GLBE_WaterViewsBegin(worldbatches);	//FTESurf Patch 879
 	if (worldbatches)
 	{
 		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom), as
