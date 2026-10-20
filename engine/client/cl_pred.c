@@ -81,7 +81,7 @@ static cvar_t	cl_predict_freshtype = CVARD("cl_predict_freshtype","1", "Take the
   hook itself is inert unless the csprogs exports CSQC_PredictPlayerMove; this
   cvar exists so an engine-side 0 is still a bisectable answer.*/
 cvar_t	cl_predict_qchook = CVARD("cl_predict_qchook","1", "Call CSQC_PredictPlayerMove once per predicted usercmd, letting CSQC run map triggers inside client prediction (FTESurf Patch 335). 0 restores the historical behaviour where only the server's touches exist and every trigger costs a round trip.");
-/*FTESurf Patch 862: the trigger mirror on a listen server.  See CSQC_PredictListen.*/
+/*FTESurf Patch 862: the trigger mirror on a listen server.  See CSQC_PredictListenGated.*/
 cvar_t	cl_predict_listen = CVARD("cl_predict_listen","1", "Run the CSQC trigger mirror (teleports, pushes, speed triggers) inside client prediction on a listen server too, as against a remote one (FTESurf Patch 862). 0 restores the old gate: offline, a map teleport is predicted past and corrected a frame later. The warp-op pre-move hook stays off on a listen server either way.");
 cvar_t	cl_predict_angleexact = CVARD("cl_predict_angleexact","1", "Reconcile a predicted teleport's view snap with the server's setangle by absolute target and command sequence (FTESurf Patch 396). 0 restores Patch 335's arithmetic, which rotates twice or not at all depending on frame rate and timing.");
 cvar_t	cl_predict_angledebug = CVARD("cl_predict_angledebug","0", "FTESurf Patch 396: 1 records every predicted-snap and setangle decision into a memory log; 2 also each sent command's yaw and the view yaw for 1 s after each. predangle_dump prints and clears it. Nothing prints while recording.");
