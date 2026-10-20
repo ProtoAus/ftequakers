@@ -893,7 +893,8 @@ typedef struct
 	float refractamount, reflectamount;
 	float bluramount;	//FTESurf Patch 866
 	qboolean blurrefract;	//FTESurf Patch 877: Water's BLURRY_REFRACT, the only path that applies $refracttint
-	qboolean nowritez;	//FTESurf Patch 878: Refract's $nowritez
+	qboolean nowritez, masked;	//FTESurf Patch 878: Refract's $nowritez, $masked
+	qboolean normalmap_set;	//FTESurf Patch 878: $normalmap itself ($bumpmap fills normalmap too)
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -1248,12 +1249,44 @@ static qboolean VMT_ScrollsBase(const char *var)
 	return false;
 }
 
-//FTESurf Patch 878: Source blends a Refract only with a $normalmap and no $envmap, and not under
-//$alphatest without a fractional $alpha; blending is what stops its depth writes, so any other
-//pane writes depth unless $nowritez (refract_dx9_helper.cpp:96,138-146, BaseShader.cpp:593-598).
-static qboolean VMT_RefractBlended(const vmtstate_t *st)
+//FTESurf Patch 878: ITexture::IsTranslucent -- the VTF says it has 1- or 8-bit alpha.
+static qboolean VMT_TextureHasAlpha(const char *name)
 {
-	return *st->normalmap && !st->envauthored && !(st->alphatest && !(st->alphaval > 0 && st->alphaval < 1));
+	char path[MAX_QPATH];
+	unsigned char hdr[24];
+	vfsfile_t *f;
+	qboolean alpha = false;
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(name, "materials/")?"materials/":"", name);
+	f = fsfuncs->OpenVFS(path, "rb", FS_GAME);
+	if (f)
+	{
+		if (VFS_READ(f, hdr, sizeof(hdr)) == sizeof(hdr) && !memcmp(hdr, "VTF", 4))
+			alpha = !!(hdr[21] & 0x30);	//VTFFileHeader_t.flags: ONEBITALPHA 0x1000, EIGHTBITALPHA 0x2000
+		VFS_CLOSE(f);
+	}
+	return alpha;
+}
+
+/*
+FTESurf Patch 878: how Source blends a Refract.  $masked always (refract_dx9_helper.cpp:228-231);
+with a $normalmap and no $envmap, SetDefaultBlendingShadowState on the normal map: $additive always,
+otherwise only when translucent -- $alpha, $vertexalpha, or a normal VTF with alpha and no
+$alphatest (BaseShader.cpp:607-671).  Anything else is opaque and writes depth unless $nowritez
+(:138; blending turns it off, BaseShader.cpp:593-598).  $bumpmap is not a Refract parameter.
+*/
+enum {REFR_OPAQUE, REFR_BLEND, REFR_ADDALPHA, REFR_ADD};
+static int VMT_RefractBlend(const vmtstate_t *st)
+{
+	qboolean trans;
+	if (st->masked)
+		return REFR_BLEND;
+	if (!st->normalmap_set || !*st->normalmap || st->envauthored)
+		return REFR_OPAQUE;
+	trans = (st->alphaval > 0 && st->alphaval < 1) || st->vertexalpha_on ||
+		(!st->alphatest && VMT_TextureHasAlpha(st->normalmap));
+	if (st->additive)
+		return trans ? REFR_ADDALPHA : REFR_ADD;
+	return trans ? REFR_BLEND : REFR_OPAQUE;
 }
 
 //FTESurf Patch 859: a scroll on $bumptransform (want2 0), which Refract's normal map
@@ -2097,6 +2130,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->bluramount = atof(value);	//FTESurf Patch 866: Refract's BLUR combo; water.glsl has no blur stage
 		else if (!Q_strcasecmp(key, "$nowritez"))
 			st->nowritez = atoi(value) != 0;
+		else if (!Q_strcasecmp(key, "$masked"))
+			st->masked = atoi(value) != 0;
 
 		else if (!Q_strcasecmp(key, "$refracttint"))
 			st->refracttint_set = VMT_ParseColour(value, st->refracttint);
@@ -2126,6 +2161,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$normalmap"))
 		{
 			Q_strlcpy(st->normalmap, value, sizeof(st->normalmap));
+			st->normalmap_set = true;
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$bumpframe"))
@@ -3975,6 +4011,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			*/
 			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
 			size_t aoff = 0;
+			int rkind;
 			const char *nm = *st->normalmap ? st->normalmap : st->dudvmap;
 			//FTESurf Patch 866: env_cubemap reflects whatever hl2_envcubemap says -- on Refract
 			//the reflection is most of what makes the pane visible (surf_boreas's icicles);
@@ -3997,11 +4034,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#TINTTEX", sizeof(args));
 			if (st->alphatest)
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
-			if (st->additive && !st->envauthored)
+			//Patch 878: Source's blend (VMT_RefractBlend).  No depth write here: the multiply and
+			//the added reflection come out the same in any order, and this pass sorts before the
+			//additive bucket, so a depth write would hide what Source shows through the pane.
+			rkind = VMT_RefractBlend(st);
+			if (rkind == REFR_ADD || rkind == REFR_ADDALPHA)
 				Q_strlcat(args, "#ADDITIVE", sizeof(args));
-			//$alphatest drops texture-alpha blending unless $alpha says otherwise
-			//(BaseShader.cpp:497-501, 617-618).
-			if (st->alphatest && !(st->alphaval > 0 && st->alphaval < 1))
+			if (rkind == REFR_OPAQUE)
 				Q_strlcat(args, "#NOCOVER", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
@@ -4018,11 +4057,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				"\t{\n"
 					"\t\tprogram \"vmt/refractflat%s%s\"\n"
 					"\t\tblendfunc GL_DST_COLOR GL_SRC_COLOR\n"
-					"%s"	//Patch 878: see VMT_RefractBlended
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args, st->envauthored ? "#ENVMAPPED" : "",
-				(!VMT_RefractBlended(st) && !st->nowritez) ? "\t\tdepthwrite\n" : "", bump, tint);
+				"\t}\n", args, st->envauthored ? "#ENVMAPPED" : "", bump, tint);
 			//The tail would turn these into a progblendfunc on pass 0 and replace the
 			//multiply (the Modulate arm's fix); $alpha is "unused" on Refract (refract.cpp:18).
 			st->translucent = 0;
@@ -4047,19 +4084,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			FTESurf Patch 866: mode 1 is refract_ps20b on the screen copy (vmt/refract):
 			the warp is normal.xy * normal.a * $refractamount, the colour is times
 			$refracttint (and the tint texture), $bluramount 1 is Source's 9-tap blur,
-			and the $envmap term is added.  Blending follows refract_dx9_helper.cpp:143-147:
-			none with an $envmap (the alpha is the reflection amount), additive under
-			$additive, else by the normal map's alpha; $alphatest drops that blend unless
-			$alpha is fractional (BaseShader.cpp:617).  The tail's blend is cleared as
-			in mode 0.
+			and the $envmap term is added.  Blending is VMT_RefractBlend (Patch 878).  The
+			tail's blend is cleared as in mode 0.
 			*/
 			char args[1024], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16], refr[MAX_QPATH + 16];
 			size_t aoff = 0;
-			//DX9 Refract reads $normalmap only ($dudvmap is DX8's, and loads unsigned here)
-			const char *nm = st->normalmap;
+			//DX9 Refract reads $normalmap only ($dudvmap is DX8's and loads unsigned here; $bumpmap is not its key)
+			const char *nm = st->normalmap_set ? st->normalmap : "";
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
-			qboolean blended = VMT_RefractBlended(st);
-			qboolean add = st->additive && blended;
+			int rkind = VMT_RefractBlend(st);
+			qboolean add = rkind == REFR_ADD || rkind == REFR_ADDALPHA;
 
 			if (*nm)
 				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
@@ -4095,7 +4129,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
-			if (!blended)
+			if (rkind == REFR_OPAQUE)
 				Q_strlcat(args, "#OPAQUE", sizeof(args));
 			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
 			{
@@ -4116,9 +4150,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				}
 			}
 
-			//blendfunc before the maps (see mode 0); an opaque pane still sorts as
-			//blended, after what it shows: its alpha is 1 under #OPAQUE, and it writes
-			//depth, so two of them hide each other in any order (surf_boreas's icicles).
+			//blendfunc before the maps (see mode 0).  On the screen copy the pane sorts NEAREST
+			//(gl_shader.c:6402), where GLBE_SubmitNearest draws panes back to front after all they
+			//can show; with a $basetexture it sorts blended.  An opaque pane has alpha 1 (#OPAQUE)
+			//and writes depth, as Source's does.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
 					"\t\tprogram \"vmt/refract%s\"\n"
@@ -4127,8 +4162,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args, add ? "GL_SRC_ALPHA GL_ONE" : "blend",
-				(!blended && !st->nowritez) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
+				"\t}\n", args,
+				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" : "blend",
+				(rkind == REFR_OPAQUE && !st->nowritez) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
 			st->translucent = 0;
 			st->additive = 0;
 			st->alphaval = 0;

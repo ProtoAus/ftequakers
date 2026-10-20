@@ -8341,6 +8341,87 @@ static int GLBudget_SortCat(int sort, qboolean world)
 	return world ? GPUB_WORLD : GPUB_MODELS;
 }
 
+/*
+FTESurf Patch 878: a pane that samples the screen ($currentrender: Refract at hl2_refract 1) sorts
+NEAREST (gl_shader.c Shader_Finish), after everything it can show.  Source draws such renderables
+back to front, each after a fresh copy (viewrender.cpp:4316-4374), so a pane behind another is in
+that one's copy; here they went world list first, then models, in submission order, and with a
+depth-writing pane in front the one behind failed the depth test.  Panes now go back to front by
+batch centre (each draw binds, so copies, the screen); the rest of the sort keeps its order, after.
+*/
+typedef struct
+{
+	batch_t *batch;
+	double depth;
+	size_t sequence;
+} glnearpane_t;
+
+static qboolean GLBE_NearestPane(const batch_t *batch)
+{
+	const shader_t *sh = batch->shader;
+	return batch->meshes > batch->firstmesh && sh && sh->numpasses &&
+		sh->passes[0].texgen == T_GEN_CURRENTRENDER &&
+		!GLBE_BlendBatchImmediate(batch) && !GLBE_BlendForeground(batch);
+}
+
+static int GLBE_NearPaneCompare(const void *va, const void *vb)
+{
+	const glnearpane_t *a = va, *b = vb;
+	if (a->depth > b->depth) return -1;
+	if (a->depth < b->depth) return 1;
+	return (a->sequence > b->sequence) - (a->sequence < b->sequence);
+}
+
+static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
+{
+	batch_t *lists[2] = {world, dynamic}, *batch, *run, one;
+	glnearpane_t stackpanes[64], *panes = stackpanes;
+	size_t count = 0, n = 0, i;
+	float matrix[16], modelview[16];
+	int l;
+
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			count += GLBE_NearestPane(batch);
+	if (!count)
+	{
+		GLBE_SubmitMeshesSortList(world);
+		GLBE_SubmitMeshesSortList(dynamic);
+		return;
+	}
+	if (count > countof(stackpanes))	//heap, as GLBE_SubmitBlendedFaces: it survives recursive views
+		panes = BZ_Malloc(count * sizeof(*panes));
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; batch = batch->next)
+			if (GLBE_NearestPane(batch))
+			{
+				R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
+				panes[n].batch = batch;
+				panes[n].depth = GLBE_BlendBatchDepth(batch, matrix);
+				panes[n].sequence = n;
+				n++;
+			}
+	qsort(panes, n, sizeof(*panes), GLBE_NearPaneCompare);
+	for (i = 0; i < n; i++)
+	{
+		one = *panes[i].batch;
+		one.next = NULL;
+		GLBE_SubmitMeshesSortList(&one);
+	}
+	if (panes != stackpanes)
+		BZ_Free(panes);
+	//the rest in runs between the panes, so instancing still sees its neighbours
+	for (l = 0; l < 2; l++)
+		for (batch = lists[l]; batch; )
+		{
+			for (run = batch; run && !GLBE_NearestPane(run); run = run->next)
+				;
+			if (run != batch)
+				GLBE_SubmitMeshesSortRange(batch, run);
+			batch = run ? run->next : NULL;
+		}
+}
+
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i, prev;
@@ -8352,6 +8433,12 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
 			GLBE_SubmitBlendedFaces(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
+			continue;
+		}
+		if (i == SHADER_SORT_NEAREST)
+		{
+			GLBudget_Set(GPUB_TRANSPARENT);
+			GLBE_SubmitNearest(worldbatches ? worldbatches[i] : NULL, shaderstate.mbatches[i]);
 			continue;
 		}
 		if (worldbatches)
