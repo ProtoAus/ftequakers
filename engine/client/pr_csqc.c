@@ -2408,8 +2408,9 @@ nogameaccess:
 	case VF_DRAWWORLD:
 		*r = !(r_refdef.flags&RDF_NOWORLDMODEL);
 		break;
-	case VF_RT_COVERAGE:
-		*r = r2d_coverage;
+	case VF_RT_COVERAGE:	//FTESurf Patch 871: -1 while the frame itself goes to an engine target -- the
+						//switch back from CSQC's own target returns to the screen, not to it
+		*r = (vid.framebuffer || (*r_refdef.rt_destcolour[0].texname && !r2d_coverage)) ? -1 : r2d_coverage;
 		break;
 	case VF_ENGINESBAR:
 		*r = r_refdef.drawsbar;
@@ -7935,6 +7936,7 @@ static plugmaterialloaderfuncs_t csqcmaterialloader = {"csqc", CSQC_GenerateMate
 void CSQC_Shutdown(void)
 {
 	int i;
+	r2d_coverage = 0;	/*Patch 871: an aborted VM can leave it set inside its target*/
 	csqc_realkey = false;	/*Patch 625: no VM inherits a key press*/
 	csqc_pastevm++;	/*Patch 667: nor a question about the clipboard*/
 	CL_PasteDrop(CSQC_PasteGive);

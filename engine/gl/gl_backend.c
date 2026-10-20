@@ -3324,6 +3324,17 @@ static void BE_GeneratePassTC(const shaderpass_t *pass, int tmu)
 }
 #endif
 
+#ifdef GL_STATIC
+#define BE_HAVE_BLENDSEP true
+#else
+#define BE_HAVE_BLENDSEP (qglBlendFuncSeparate != NULL)
+#endif
+//FTESurf Patch 871: what FTESURF_2D_COVERAGE promises (VF_RT_COVERAGE) needs both
+qboolean GLBE_CoverageSupported(void)
+{
+	return qrenderer == QR_OPENGL && BE_HAVE_BLENDSEP;
+}
+
 static void BE_SendPassBlendDepthMask(unsigned int sbits)
 {
 	unsigned int delta;
@@ -3412,9 +3423,9 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 			qglEnable(GL_BLEND);
 			//FTESurf Patch 871: into a coverage target alpha is coverage -- a blend over the target adds
 			//to it, an additive one leaves it -- so the target composites as premultiplied.
-			if (shaderstate.coverage && qglBlendFuncSeparate && dst == GL_ONE_MINUS_SRC_ALPHA)
+			if (shaderstate.coverage && BE_HAVE_BLENDSEP && dst == GL_ONE_MINUS_SRC_ALPHA)
 				qglBlendFuncSeparate(src, dst, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-			else if (shaderstate.coverage && qglBlendFuncSeparate && dst == GL_ONE)
+			else if (shaderstate.coverage && BE_HAVE_BLENDSEP && dst == GL_ONE)
 				qglBlendFuncSeparate(src, dst, GL_ZERO, GL_ONE);
 			else
 				qglBlendFunc(src, dst);
