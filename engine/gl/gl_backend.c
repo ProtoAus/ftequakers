@@ -6548,7 +6548,37 @@ static void GLBE_MeshBox(const mesh_t *mesh, vec3_t lo, vec3_t hi)
 }
 #ifdef PLUGINS
 int Plug_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end);	//engine/common/plugin.c
+static qboolean be_occluderasked;	//this map's occluder tree was asked for (at load, or by the first trace)
 #endif
+//FTESurf Patch 879: build the map plugin's occluder tree during the load when the world has water that can
+//capture, so the first frame that sees it does not stall (bhop_matches: 420,554 leaves, 1.1 s). Water that only
+//becomes capture water later (an hl2_water change mid-map) still builds it on its first trace, which says so.
+void GLBE_WaterViewsNewMap(void)
+{
+	int i, n = 0;
+	batch_t *b;
+	double t0;
+	for (i = 0; i < MAX_SPLITS; i++)
+		be_waterlastvalid[i] = false;	//planes of the old map
+#ifdef PLUGINS
+	be_occluderasked = false;
+	if (!r_waterviews.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+		return;
+	for (i = 0; i < SHADER_SORT_COUNT; i++)
+		for (b = cl.worldmodel->batches[i]; b; b = b->next)
+			if (b->shader && !(b->shader->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) &&
+				(b->shader->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT)))
+				n++;
+	if (!n)
+		return;
+	t0 = Sys_DoubleTime();
+	if (Plug_OccluderTrace(cl.worldmodel, vec3_origin, vec3_origin) >= 0)	//-1: not the plugin's world (yet)
+	{
+		be_occluderasked = true;
+		Con_DPrintf("water: occluder tree at map load, for %i capture water batches: %.1f ms\n", n, (Sys_DoubleTime() - t0) * 1000);
+	}
+#endif
+}
 //nothing opaque between the eye and the point: world brushes and displacements that hide what is behind them
 //(the map plugin's occluder tree: no static props -- a chain-link fence is a prop -- and no light-only
 //toolsblocklight brushes, as Source's MASK_VISIBLE), else the world's movement trace; then the
@@ -6565,7 +6595,15 @@ static qboolean GLBE_WaterSeen(const vec3_t to)
 	if (!cl.worldmodel)
 		return true;
 #ifdef PLUGINS
-	r = Plug_OccluderTrace(cl.worldmodel, r_refdef.vieworg, to);
+	if (!be_occluderasked)
+	{	//no capture water at load: this trace builds the tree, mid-map
+		double t0 = Sys_DoubleTime();
+		be_occluderasked = true;
+		r = Plug_OccluderTrace(cl.worldmodel, r_refdef.vieworg, to);
+		Con_DPrintf("water: occluder tree on the first occlusion trace (not at load): %.1f ms\n", (Sys_DoubleTime() - t0) * 1000);
+	}
+	else
+		r = Plug_OccluderTrace(cl.worldmodel, r_refdef.vieworg, to);
 #endif
 	if (r < 0 && cl.worldmodel->funcs.NativeTrace)
 	{
@@ -6630,8 +6668,7 @@ static double GLBE_TriSolidAngle(const vec3_t p0, const vec3_t p1, const vec3_t 
 }
 //the solid angle of a face's part inside the view frustum -- the exact screen share, so a pool the eye
 //floats over outweighs a smaller water farther off however its faces are cut -- and that part's centre
-//(weighted by solid angle). Over the mesh's TRIANGLES: a warped water face is a subdivided grid, not a fan
-//in vertex order, and clipping a grid as one polygon multiplies the crossings past any fixed buffer.
+//(weighted by solid angle). Over the mesh's triangles (its indexes), so a displacement grid weighs right too.
 static double GLBE_FaceSolidAngle(const mesh_t *mesh, vec3_t centre)
 {
 	vec3_t buf[2][3 + MAXFRUSTUMPLANES + 1];	//a triangle clipped by each plane gains at most one vertex

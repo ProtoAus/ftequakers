@@ -5079,6 +5079,13 @@ TRACE(("dbg: Surf_NewMap: tp\n"));
 #ifdef RTLIGHTS
 	Sh_PreGenerateLights();
 #endif
+#ifdef GLQUAKE
+	if (qrenderer == QR_OPENGL)
+	{
+		void GLBE_WaterViewsNewMap(void);
+		GLBE_WaterViewsNewMap();	//FTESurf Patch 879: the occluder tree now, not on the first frame with water
+	}
+#endif
 	P_LoadedCensus("Surf_NewMap end");	//FTESurf Patch 272
 }
 
