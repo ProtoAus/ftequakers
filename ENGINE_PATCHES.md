@@ -20,6 +20,25 @@ Three production VMs compile with zero warnings; reader801/receipt268 pass.
 Stable319REC/109VIEW comparison has no changed result/new fault (existing196REC
 faulted files and5VIEW faults in4sidecars remain). Deployment is recorded separately.
 
+## Patch 857 — the download page says to give the launcher its own folder (site)
+
+**Problem:** P852 made the launcher the main download and removed the old install text, as Lex asked.
+The launcher installs into the folder it is started from (ftesurf.rs has no Downloads/Desktop guard),
+so a launcher run from Downloads fills Downloads and overwrites same-named files there. The page also
+lost its only `chmod +x` hint for Linux. A P852 reviewer flagged both; Lex chose a page note
+(20 Oct) over a launcher change.
+
+**Change:** page.template.html: one `launch-note` line under the buttons, "Put it in its own folder,
+then run it", with "(Linux: `chmod +x`)" in a third LINUX block so a Windows-only release does not
+show it. test_releaselib.ps1 expects three blocks and the line (chmod only inside a block);
+test_site_copy.py checks the same on the template.
+
+**Verified:** test_site_copy 6/6, test_rebrand 7/7, test_releaselib 89/0; test_site_copy against the
+previous template fails on the new line. sitepage.ps1 -DryRun for 0.1.28: the render differs from the
+live page by those lines only; Chrome at 1400 and 390 px, no horizontal scroll. Published
+2026-10-20 00:58Z (UTC), index.html only (old copy in `.sitepage-prev/0.1.28-20261020T005823Z`),
+every file read back byte for byte. FTESurf main 38afa97d.
+
 ## Patch 842 — preserve release inputs and the final native clock (recorder/readers)
 
 **Problem:** movement can resume before PostThink thaws the counted clock. The
