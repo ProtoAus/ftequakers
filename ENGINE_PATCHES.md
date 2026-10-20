@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 858 — respawns preserve finish handshakes and close live recordings (qwprogs)
+
+**Problem:** `kill`, `cmd respawn` and `cmd restart` used fresh-connection spawn.
+It erased an unread finish tag/receipt fields and dropped an active offline
+recording's strbuf handle before the lifecycle code could release it.
+
+**Change:** share the existing `goto_spawn` lifecycle as `SV_PlayerRespawn`.
+Void/release first, then carry completed tag/leg/ticks/saved/bytes across spawn.
+Fresh connections still use blank `PutClientInServer`; no new client command,
+format, mover, ranking, collection or native engine change. Engine pin/tag stay842.
+
+**Verified:** acting native QC before/after14-case matrices: the old three paths
+lose prepared finish fields and leak the active slot; the repaired paths retain
+all five fields and the allocator reclaims the slot. Existing goto_spawn, empty
+respawns and blank fresh-spawn controls pass. These are direct production QC
+calls with seeded protocol state, not a natural network finish/signature test.
+Three production VMs compile with zero warnings; reader801/receipt268 pass.
+Stable319REC/109VIEW comparison has no changed result/new fault (existing196REC
+faulted files and5VIEW faults in4sidecars remain). Deployment is recorded separately.
+
 ## Patch 842 — preserve release inputs and the final native clock (recorder/readers)
 
 **Problem:** movement can resume before PostThink thaws the counted clock. The
