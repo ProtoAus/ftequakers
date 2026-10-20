@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 889 — Momentum's stand-in packs mounted last (fs.c + lobby content)
+
+**Problem:** surf_nuclear's spawn hub is Portal 2 static props. The lobbies have no Portal 2,
+so the server loaded none of them ("675 static props are not solid", 25 models unable) while a
+client that owns Portal 2 stood on them: an endless fall into the hub's own teleport and a
+prediction error every tick (Lex, lobby 2). P679 mounted only Momentum's mount/hl2_dir.vpk so
+that its other-game placeholder packs could not outrank a real game mounted later.
+
+**Change:** `FS_Addon_AutoSourceBase` also mounts Momentum's `mount/<game>_placeholder.vpk` for
+TF2, CS:S, CS:GO and Portal 2 when that game is not installed (`fs_standins 1`, Momentum's own
+gameinfo "fallback" rule; 2 = always, 0 = never). `FS_AddPathHandle` inserts every tail-appended
+path ABOVE a stand-in (`FS_IsStandInPack`, the `_placeholder.vpk` tail), so a pack fs_automount or
+fs_load mounts later still wins, and `FS_Addon_SinkStandIns` puts them back below the loose dirs
+P875 sinks at boot / fs_restart. An insert above a stand-in skips the incremental hash (its tail
+depth would lose to the stand-in) and marks the hash stale. Stand-ins hold models only: .mdl/.vvd/
+.vtx/.phy, drawn grey with momentum's models/placeholder material. For the 84 models the lobbies
+could not load (17 maps), .phy bytes and .mdl hull bounds equal the real game's, so
+PHY_HullInsideModel decides as for an owner. Lobbies (no Steam): tf/csgo/portal2 packs in
+game/placeholders, the last fs_addons.txt line (FTESurf p889 pi_standins.sh).
+
+**Verified:** pending game arms (see the task root's p889 notes); offline: standin_bounds.py
+84/84 .phy and hull bounds equal.
+
 ## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
 
 **Problem:** nothing told a player what an update changed. The release records (tools/release0NN.md)
