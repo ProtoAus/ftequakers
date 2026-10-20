@@ -18,7 +18,15 @@ respawns and blank fresh-spawn controls pass. These are direct production QC
 calls with seeded protocol state, not a natural network finish/signature test.
 Three production VMs compile with zero warnings; reader801/receipt268 pass.
 Stable319REC/109VIEW comparison has no changed result/new fault (existing196REC
-faulted files and5VIEW faults in4sidecars remain). Deployment is recorded separately.
+faulted files and5VIEW faults in4sidecars remain). Two independent full-feature
+reviews find no executable issue; the stale historical race note is corrected.
+
+**Delivered 2026-10-20, verified01:40Z:** both Windows QC/debug bundles and all12
+empty Pi lobbies through standard `build.ps1 -Pi`, `.prev` retained. A real client
+receives matching CSQC and draws the board without QC error; screenshot inspected,
+terms not accepted/no submitted run. All12 live native versions remain DC/842;
+server/plugin hashes unchanged. Exact source, hashes and limits:
+`tools/lobby-progs-p858-20261020.md` in the QC repo. No natural-finish/signature claim.
 
 ## Patch 857 — the download page says to give the launcher its own folder (site)
 
