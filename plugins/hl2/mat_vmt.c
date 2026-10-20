@@ -1244,13 +1244,14 @@ static qboolean VMT_ScrollsBase(const char *var)
 	return false;
 }
 
-//FTESurf Patch 859: a scroll on $bumptransform, which Refract's normal map reads.
-static qboolean VMT_ScrollsBump(const char *var)
+//FTESurf Patch 859: a scroll on $bumptransform (want2 0), which Refract's normal map
+//reads, or on $bumptransform2 (want2 1), the second normal map's.
+static qboolean VMT_ScrollsBump(const char *var, qboolean want2)
 {
 	const char *s;
 	for (s = var; *s; s++)
-		if (!Q_strncasecmp(s, "bumptransform", 13) && s[13] != '2')	//$bumptransform2 is the second normal map's
-			return true;
+		if (!Q_strncasecmp(s, "bumptransform", 13))
+			return (s[13] == '2') == want2;
 	return false;
 }
 
@@ -1306,7 +1307,9 @@ static char *VMT_ParseTextureScroll(const char *fname, vmtstate_t *st, char *lin
 			st->tex2scrollrate = rate;
 			st->tex2scrollangle = angle;
 		}
-		else
+		//FTESurf Patch 859: nothing reads a $bumptransform2 scroll, so it never takes
+		//the slot from one already there (surf_agony's waterfall_blood lists it last).
+		else if (!*st->scrollvar || !VMT_ScrollsBump(var, true))
 		{
 			Q_strlcpy(st->scrollvar, var, sizeof(st->scrollvar));
 			st->scrollrate = rate;
@@ -3919,9 +3922,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
 			if (st->additive && !st->envauthored)
 				Q_strlcat(args, "#ADDITIVE", sizeof(args));
+			//$alphatest drops texture-alpha blending unless $alpha says otherwise
+			//(BaseShader.cpp:497-501, 617-618).
+			if (st->alphatest && !(st->alphaval > 0 && st->alphaval < 1))
+				Q_strlcat(args, "#NOCOVER", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
-			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar))
+			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
 			{
 				double a = st->scrollangle * (3.14159265358979323846/180.0);
 				aoff = strlen(args);

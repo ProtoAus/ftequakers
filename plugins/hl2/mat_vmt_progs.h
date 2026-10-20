@@ -2932,7 +2932,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //   ENVPASS: Source's cubemap term, added.  Gamma-space, as lightmapped.glsl's.  Only
 //            under REFLECTCUBEMASK, the engine's gate (r_reflectcube, r_envcubemap).
 // #TINTTEX: Source's 2*tex is in linear light; 2^(1/2.2) is the same factor here.
-// #ADDITIVE: $additive without $envmap adds the result to the screen: 1 + f*a.
+// #ADDITIVE: $additive without $envmap adds the result to the screen: 1 + f*a, in linear light.
+// #NOCOVER: $alphatest without a fractional $alpha does not blend by the alpha.
 
 "#ifndef REFRTINT\n"
 "#define REFRTINT 1.0,1.0,1.0\n"
@@ -2999,11 +3000,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef TINTTEX\n"
 "f *= 1.3703 * texture2D(s_tint, tex_c).rgb;\n"
 "#endif\n"
-"#if defined(ENVMAPPED)\n"
-"#elif defined(ADDITIVE)\n"
-"f = vec3(1.0) + f * nrm.a;\n"
+"float cov = nrm.a; // no $envmap: the alpha is coverage (refract_dx9_helper.cpp:143)\n"
+"#if defined(ENVMAPPED) || defined(NOCOVER)\n"
+"cov = 1.0;\n"
+"#endif\n"
+"#ifdef ADDITIVE\n"
+"f = pow(vec3(1.0) + pow(f, vec3(2.2)) * cov, vec3(1.0 / 2.2)); // Source adds in linear light\n"
 "#else\n"
-"f = mix(vec3(1.0), f, nrm.a); // no $envmap: the alpha is coverage (refract_dx9_helper.cpp:143)\n"
+"f = mix(vec3(1.0), f, cov);\n"
 "#endif\n"
 "#ifndef NOFOG\n"
 "f = mix(vec3(1.0), f, fog3additive(vec3(1.0)).r);\n"
