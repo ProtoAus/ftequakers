@@ -85,6 +85,12 @@
    and mutable here would be two props racing over one buffer. */
 #define PHY_MAX_DEPTH       1024
 
+/* FTESurf Patch 888: index_t is 16 bits.  The old layout copied a ledge's points once
+   PER LEDGE and its indices wrapped past this many; mover <= 8 still traces that
+   wrapped hull, so its triangles never reach past the first PHY_OLD_KEEP copies. */
+#define PHY_OLD_KEEP        65536
+typedef char phy_index_t_is_16_bits[sizeof(index_t) == 2 ? 1 : -1];	/*a wider one moves the wrap*/
+
 /*
   THE BOUNDS CHECK, and why it is not optional.
 
@@ -130,12 +136,14 @@ volatile int phy_stat_tris;      /* total collision triangles from hulls */
   wrong and the cvar should go back to 0. */
 volatile int phy_stat_tris_outward;   /* anticlockwise from outside -> was inverted for the BIH */
 volatile int phy_stat_tris_inverted;  /* already clockwise -> was correct */
+volatile int phy_stat_unwrapped;      /* Patch 888: hulls whose old indices wrapped */
 
 void Mod_PHY_ResetStats (void)
 {
 	phy_stat_hull = phy_stat_nofile = phy_stat_jointed = 0;
 	phy_stat_rejected = phy_stat_bbox = phy_stat_tris = 0;
 	phy_stat_tris_outward = phy_stat_tris_inverted = 0;
+	phy_stat_unwrapped = 0;
 }
 
 typedef struct
@@ -190,7 +198,19 @@ typedef struct
 	size_t          *ledgestart;
 	size_t           numledges, maxledges;
 	qboolean         nostats;	/* Patch 764: a re-parse, not a model load */
+
+	/* Patch 888.  fixed 0: the old per-ledge layout, numverts counting every copy
+	   and only storedverts (<= PHY_OLD_KEEP) of them kept.  fixed 1: each point
+	   array once, from `arrays` (sorted by file offset). */
+	int              fixed;
+	size_t           storedverts;
+	struct phyarray_s *arrays;
+	size_t           numarrays;
+	vec3_t           mn, mx;	/* over every point read: the bounds check's input */
+	qboolean         anypoint;
 } phyctx_t;
+
+struct phyarray_s { size_t points; unsigned int maxidx; size_t base; };
 
 static unsigned int PHY_ReadU32 (const qbyte *p)
 {
@@ -302,78 +322,194 @@ static qboolean PHY_GrowIdx (phyctx_t *ctx, size_t want)
 }
 
 /*
-  One ledge -> triangles appended to ctx.
+  Patch 888: point i of the array at `points`, model space; into *out when given,
+  and into ctx's bounds either way.  HL = (x, z, -y) * 39.37 -- fitted, see the
+  header note.
+*/
+static void PHY_PointAt (const phyctx_t *ctx, size_t points, unsigned int i, vec3_t p)
+{
+	const qbyte *pp = ctx->base + points + (size_t)i*PHY_POINT_SIZE;
+	p[0] =  PHY_ReadF32(pp+0) * PHY_IVP2HL;
+	p[1] =  PHY_ReadF32(pp+8) * PHY_IVP2HL;
+	p[2] = -PHY_ReadF32(pp+4) * PHY_IVP2HL;
+}
+static void PHY_KeepPoint (phyctx_t *ctx, size_t points, unsigned int i, vecV_t *out)
+{
+	vec3_t p;
+	int a;
 
+	PHY_PointAt(ctx, points, i, p);
+	if (!ctx->anypoint)
+	{
+		VectorCopy(p, ctx->mn);
+		VectorCopy(p, ctx->mx);
+		ctx->anypoint = true;
+	}
+	else for (a = 0; a < 3; a++)
+	{
+		if (p[a] < ctx->mn[a]) ctx->mn[a] = p[a];
+		if (p[a] > ctx->mx[a]) ctx->mx[a] = p[a];
+	}
+	if (!out)
+		return;
+	VectorCopy(p, *out);
+	/* vecV_t is an aligned vec4 on every target but web; leaving w
+	   uninitialised means the SSE-width copies downstream carry
+	   whatever was in the heap.  The compiler folds this away where
+	   vecV_t is a vec3. */
+	if (sizeof(vecV_t) >= sizeof(float)*4)
+		((float*)out)[3] = 1;
+}
+
+/*
   A ledge's points live at `c_point_offset` from the ledge and are indexed by
   the triangles' edges.  There is NO point count in the format: the array is
   sized by the highest index any of this ledge's triangles reaches, which is
-  what everything that reads these files does.  Slightly wasteful when ledges
-  share a point array; correct in every case.
+  what everything that reads these files does.
+  1 = points and maxidx set, 0 = no triangles (legal), -1 = malformed.
 */
-static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end)
+static int PHY_LedgePoints (const phyctx_t *ctx, size_t lo, size_t surf, size_t end,
+                            size_t *points, unsigned int *maxidx)
 {
-	int      cpo    = PHY_ReadI32(ctx->base + lo + 0);
-	short    ntri   = PHY_ReadI16(ctx->base + lo + 12);
-	size_t   points, firstvert;
+	int      cpo  = PHY_ReadI32(ctx->base + lo + 0);
+	short    ntri = PHY_ReadI16(ctx->base + lo + 12);
 	int      t, k;
-	unsigned maxidx = 0;
-	qboolean any = false;
 
 	if (ntri <= 0)
-		return true;                    /* an empty ledge is legal, not an error */
+		return 0;                       /* an empty ledge is legal, not an error */
 	if (lo + PHY_LEDGE_HEADER_SIZE + (size_t)ntri*PHY_TRI_SIZE > end)
-		return false;
-	if (ctx->numidx/3 + (size_t)ntri > PHY_MAX_TRIS)
-		return false;
+		return -1;
 
-	/* first pass: how many points does this ledge actually reach? */
+	*maxidx = 0;
 	for (t = 0; t < ntri; t++)
 	{
 		const qbyte *tp = ctx->base + lo + PHY_LEDGE_HEADER_SIZE + (size_t)t*PHY_TRI_SIZE;
 		for (k = 0; k < 3; k++)
 		{
 			unsigned e = PHY_ReadU32(tp + 4 + k*4) & 0xffff;   /* start_point_index:16 */
-			if (!any || e > maxidx)
-				maxidx = e;
-			any = true;
+			if (e > *maxidx)
+				*maxidx = e;
 		}
 	}
-	if (!any)
-		return true;
 
 	if (cpo < 0 && (size_t)(-(ptrdiff_t)cpo) > lo)
-		return false;
-	points = lo + (size_t)(ptrdiff_t)cpo;
-	if (points < surf || points + ((size_t)maxidx+1)*PHY_POINT_SIZE > end)
-		return false;
+		return -1;
+	*points = lo + (size_t)(ptrdiff_t)cpo;
+	if (*points < surf || *points + ((size_t)*maxidx+1)*PHY_POINT_SIZE > end)
+		return -1;
+	return 1;
+}
 
-	firstvert = ctx->numverts;
-	if (!PHY_GrowVerts(ctx, firstvert + maxidx + 1))
+static int PHY_ArrayCmp (const void *a, const void *b)
+{
+	size_t x = ((const struct phyarray_s*)a)->points;
+	size_t y = ((const struct phyarray_s*)b)->points;
+	return x < y ? -1 : x > y;
+}
+
+/*
+  Patch 888, mover 9: every point array the ledges index, copied ONCE and as far
+  as any ledge reaches, so an index is the array's base plus the file's own.
+  ramp07 is one 679-point array under 427 ledges (171,827 copies the old way).
+  False if malformed, or if even this overflows index_t.
+*/
+static qboolean PHY_FixArrays (phyctx_t *ctx, const size_t *ledges, size_t numledges,
+                               size_t surf, size_t end)
+{
+	struct phyarray_s *a;
+	size_t i, n = 0, total = 0;
+	unsigned int k;
+
+	a = ctx->arrays = plugfuncs->Malloc(sizeof(*a)*(numledges ? numledges : 1));
+	if (!a)
 		return false;
+	for (i = 0; i < numledges; i++)
+	{
+		int r = PHY_LedgePoints(ctx, ledges[i], surf, end, &a[n].points, &a[n].maxidx);
+		if (r < 0)
+			return false;
+		n += r;
+	}
+	qsort(a, n, sizeof(*a), PHY_ArrayCmp);
+	for (i = 0; i < n; i++)
+	{
+		if (ctx->numarrays && a[ctx->numarrays-1].points == a[i].points)
+		{
+			if (a[i].maxidx > a[ctx->numarrays-1].maxidx)
+				a[ctx->numarrays-1].maxidx = a[i].maxidx;
+			continue;
+		}
+		a[ctx->numarrays++] = a[i];
+	}
+	for (i = 0; i < ctx->numarrays; i++)
+	{
+		a[i].base = total;
+		total += (size_t)a[i].maxidx + 1;
+		if (total > PHY_OLD_KEEP)
+			return false;	/*checked per array: a 32-bit size_t could wrap the sum*/
+	}
+	if (!PHY_GrowVerts(ctx, total))
+		return false;
+	for (i = 0; i < ctx->numarrays; i++)
+		for (k = 0; k <= a[i].maxidx; k++)
+			PHY_KeepPoint(ctx, a[i].points, k, &ctx->xyz[a[i].base + k]);
+	ctx->numverts = ctx->storedverts = total;
+	return true;
+}
+
+/* Patch 888: the base PHY_FixArrays gave the array at `points` (always present). */
+static size_t PHY_ArrayBase (const phyctx_t *ctx, size_t points)
+{
+	size_t lo = 0, hi = ctx->numarrays;
+	while (lo < hi)
+	{
+		size_t mid = (lo + hi) / 2;
+		if (ctx->arrays[mid].points < points)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	return ctx->arrays[lo].base;
+}
+
+/*
+  One ledge -> triangles appended to ctx.  The old layout (fixed 0) copies the
+  ledge's points afresh at numverts -- see PHY_OLD_KEEP; fixed 1 indexes the
+  arrays PHY_FixArrays copied.
+*/
+static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end)
+{
+	short    ntri   = PHY_ReadI16(ctx->base + lo + 12);
+	size_t   points, firstvert;
+	int      t, k, r;
+	unsigned maxidx = 0;
+
+	if (ntri > 0 && ctx->numidx/3 + (size_t)ntri > PHY_MAX_TRIS)
+		return false;
+	r = PHY_LedgePoints(ctx, lo, surf, end, &points, &maxidx);
+	if (r <= 0)
+		return r == 0;
+
+	if (ctx->fixed)
+		firstvert = PHY_ArrayBase(ctx, points);
+	else
+	{
+		size_t keep;
+		unsigned i;
+
+		firstvert = ctx->numverts;
+		keep = firstvert + maxidx + 1;
+		if (keep > PHY_OLD_KEEP)
+			keep = PHY_OLD_KEEP;
+		if (keep > ctx->storedverts && !PHY_GrowVerts(ctx, keep))
+			return false;
+		for (i = 0; i <= maxidx; i++)
+			PHY_KeepPoint(ctx, points, i, (firstvert + i < keep) ? &ctx->xyz[firstvert + i] : NULL);
+		if (keep > ctx->storedverts)
+			ctx->storedverts = keep;
+	}
 	if (!PHY_GrowIdx(ctx, ctx->numidx + (size_t)ntri*3))
 		return false;
-
-	{
-		unsigned i;
-		for (i = 0; i <= maxidx; i++)
-		{
-			const qbyte *pp = ctx->base + points + (size_t)i*PHY_POINT_SIZE;
-			float x = PHY_ReadF32(pp+0);
-			float y = PHY_ReadF32(pp+4);
-			float z = PHY_ReadF32(pp+8);
-			vecV_t *out = &ctx->xyz[firstvert + i];
-			/* HL = (x, z, -y) * 39.37 -- fitted, see the header note. */
-			(*out)[0] =  x * PHY_IVP2HL;
-			(*out)[1] =  z * PHY_IVP2HL;
-			(*out)[2] = -y * PHY_IVP2HL;
-			/* vecV_t is an aligned vec4 on every target but web; leaving w
-			   uninitialised means the SSE-width copies downstream carry
-			   whatever was in the heap.  The compiler folds this away where
-			   vecV_t is a vec3. */
-			if (sizeof(vecV_t) >= sizeof(float)*4)
-				((float*)out)[3] = 1;
-		}
-	}
 
 	/*
 	  FTESurf Patch 317 -- THE WINDING.
@@ -439,7 +575,8 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 				for (k = 0; k < 3; k++)
 				{
 					unsigned e = PHY_ReadU32(tp + 4 + k*4) & 0xffff;
-					float *v = ctx->xyz[firstvert + e];
+					vec3_t v;
+					PHY_PointAt(ctx, points, e, v);	/*Patch 888: the old layout may not keep it*/
 					cen[0] += v[0]; cen[1] += v[1]; cen[2] += v[2];
 				}
 			}
@@ -451,10 +588,10 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 				unsigned e0 = PHY_ReadU32(tp + 4 + 0*4) & 0xffff;
 				unsigned e1 = PHY_ReadU32(tp + 4 + 1*4) & 0xffff;
 				unsigned e2 = PHY_ReadU32(tp + 4 + 2*4) & 0xffff;
-				float *a = ctx->xyz[firstvert + e0];
-				float *b = ctx->xyz[firstvert + e1];
-				float *c = ctx->xyz[firstvert + e2];
-				vec3_t u, v, n, r;
+				vec3_t a, b, c, u, v, n, r;
+				PHY_PointAt(ctx, points, e0, a);
+				PHY_PointAt(ctx, points, e1, b);
+				PHY_PointAt(ctx, points, e2, c);
 				VectorSubtract(b, a, u);
 				VectorSubtract(c, a, v);
 				CrossProduct(u, v, n);
@@ -484,7 +621,8 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 		}
 	}
 
-	ctx->numverts = firstvert + maxidx + 1;
+	if (!ctx->fixed)
+		ctx->numverts = firstvert + maxidx + 1;
 	return true;
 }
 
@@ -577,6 +715,11 @@ static qboolean PHY_Parse (phyctx_t *ctx, const char *dbgname)
 
 	if (!PHY_CollectLedges(ctx, surf, end, root, ledges, &numledges, stack))
 		goto done;
+	if (ctx->fixed && !PHY_FixArrays(ctx, ledges, numledges, surf, end))
+	{
+		Con_DPrintf("%s: .phy point arrays do not fit 16-bit indices even copied once\n", dbgname);
+		goto done;
+	}
 
 	for (i = 0; i < numledges; i++)
 		if (!PHY_ReadLedge(ctx, ledges[i], surf, end))
@@ -587,6 +730,8 @@ static qboolean PHY_Parse (phyctx_t *ctx, const char *dbgname)
 done:
 	plugfuncs->Free(ledges);
 	plugfuncs->Free(stack);
+	plugfuncs->Free(ctx->arrays);	/*Patch 888*/
+	ctx->arrays = NULL;
 	return ok;
 }
 
@@ -598,19 +743,11 @@ done:
 */
 static qboolean PHY_HullInsideModel (const phyctx_t *ctx, model_t *mod)
 {
-	vec3_t mn, mx;
-	size_t i;
+	const float *mn = ctx->mn, *mx = ctx->mx;	/*Patch 888: every point read, in file order*/
 	int    a;
 
-	VectorCopy(ctx->xyz[0], mn);
-	VectorCopy(ctx->xyz[0], mx);
-	for (i = 1; i < ctx->numverts; i++)
-		for (a = 0; a < 3; a++)
-		{
-			if (ctx->xyz[i][a] < mn[a]) mn[a] = ctx->xyz[i][a];
-			if (ctx->xyz[i][a] > mx[a]) mx[a] = ctx->xyz[i][a];
-		}
-
+	if (!ctx->anypoint)
+		return false;
 	for (a = 0; a < 3; a++)
 	{
 		if (mn[a] < mod->mins[a] - PHY_BOUNDS_SLACK ||
@@ -626,6 +763,29 @@ static qboolean PHY_HullInsideModel (const phyctx_t *ctx, model_t *mod)
 		}
 	}
 	return true;
+}
+
+/* Copy a parse out of the grow buffers into the model's own memgroup, so it lives
+   and dies with the model rather than with the loader. */
+static galiasinfo_t *PHY_MeshOut (model_t *mod, const phyctx_t *ctx, unsigned int contents)
+{
+	galiasinfo_t *out = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out));
+	memset(out, 0, sizeof(*out));
+
+	out->ofs_skel_xyz = plugfuncs->GMalloc(&mod->memgroup, sizeof(vecV_t)*ctx->storedverts);
+	memcpy(out->ofs_skel_xyz, ctx->xyz, sizeof(vecV_t)*ctx->storedverts);
+	out->numverts = ctx->storedverts;
+
+	out->ofs_indexes = plugfuncs->GMalloc(&mod->memgroup, sizeof(index_t)*ctx->numidx);
+	memcpy(out->ofs_indexes, ctx->idx, sizeof(index_t)*ctx->numidx);
+	out->numindexes = ctx->numidx;
+
+	Q_strlcpy(out->surfacename, "phy_hull", sizeof(out->surfacename));
+	out->contents     = contents;
+	out->shares_verts = -1;
+	out->shares_bones = -1;
+	out->nextsurf     = NULL;
+	return out;
 }
 
 /*
@@ -647,10 +807,13 @@ static qboolean PHY_HullInsideModel (const phyctx_t *ctx, model_t *mod)
   long as the model does and is freed with it.
 ===========================================================================
 */
+
+/* Patch 888: *unwrapped (when asked for) is set only for a hull whose old indices
+   wrapped -- its mover-9 mesh, or the render mesh -- and stays NULL otherwise. */
 galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
-                                     unsigned int contents)
+                                     unsigned int contents, galiasinfo_t **unwrapped)
 {
 	galiasinfo_t *out;
 	char          name[MAX_QPATH];
@@ -676,6 +839,8 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	  front of it.  See VBSP_ModelHasPhy there.
 	*/
 
+	if (unwrapped)
+		*unwrapped = NULL;
 	if (mode == 2)
 	{	/* Bounding box: twelve triangles from the model's own bounds.  Doing it
 		   here rather than as a new BIH leaf type means every trace path that
@@ -743,13 +908,13 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	ctx.winding = winding;	/*Patch 317; see the essay in PHY_ReadLedge*/
 
 	ok = PHY_Parse(&ctx, mod->name);
-	plugfuncs->Free(file);
 
 	if (ok)
 		ok = PHY_HullInsideModel(&ctx, mod);
 
 	if (!ok)
 	{
+		plugfuncs->Free(file);
 		phy_stat_rejected++;
 		plugfuncs->Free(ctx.xyz);
 		plugfuncs->Free(ctx.idx);
@@ -761,24 +926,29 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	phy_stat_tris_outward  += ctx.tris_outward;		/*Patch 317*/
 	phy_stat_tris_inverted += ctx.tris_inverted;
 
-	/* Copy out of the grow buffers into the model's own memgroup, so this
-	   lives and dies with the model rather than with the loader. */
-	out = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out));
-	memset(out, 0, sizeof(*out));
+	out = PHY_MeshOut(mod, &ctx, contents);
 
-	out->ofs_skel_xyz = plugfuncs->GMalloc(&mod->memgroup, sizeof(vecV_t)*ctx.numverts);
-	memcpy(out->ofs_skel_xyz, ctx.xyz, sizeof(vecV_t)*ctx.numverts);
-	out->numverts = ctx.numverts;
-
-	out->ofs_indexes = plugfuncs->GMalloc(&mod->memgroup, sizeof(index_t)*ctx.numidx);
-	memcpy(out->ofs_indexes, ctx.idx, sizeof(index_t)*ctx.numidx);
-	out->numindexes = ctx.numidx;
-
-	Q_strlcpy(out->surfacename, "phy_hull", sizeof(out->surfacename));
-	out->contents     = contents;
-	out->shares_verts = -1;
-	out->shares_bones = -1;
-	out->nextsurf     = NULL;
+	/* Patch 888: the old indices wrapped, so mover 9 gets the hull read again with
+	   each point array copied once -- or the render mesh, if even that overflows. */
+	if (unwrapped && ctx.numverts > PHY_OLD_KEEP)
+	{
+		phyctx_t fix;
+		memset(&fix, 0, sizeof(fix));
+		fix.base    = file;
+		fix.filelen = filelen;
+		fix.winding = winding;
+		fix.nostats = true;
+		fix.fixed   = 1;
+		*unwrapped = PHY_Parse(&fix, mod->name) ? PHY_MeshOut(mod, &fix, contents) : mod->meshinfo;
+		Con_DPrintf("%s: .phy indices wrapped (%u copies); mover 9 traces %u points%s\n",
+		            mod->name, (unsigned)ctx.numverts, (unsigned)fix.numverts,
+		            (*unwrapped == mod->meshinfo) ? " -- none: the render mesh" : "");
+		plugfuncs->Free(fix.xyz);
+		plugfuncs->Free(fix.idx);
+		plugfuncs->Free(fix.ledgestart);
+		phy_stat_unwrapped++;
+	}
+	plugfuncs->Free(file);
 
 	plugfuncs->Free(ctx.xyz);
 	plugfuncs->Free(ctx.idx);
@@ -795,10 +965,13 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
   ledge does not use.  False is "no usable .phy" with nothing to free; on true
   the caller frees the three arrays.  Counts nothing in phy_stat_*, which
   describe the model loads.
+  Patch 888: fixed 0 is the old layout, pin 7/8's pieces, and *wrapped says
+  whether its indices wrapped; fixed 1 is mover 9's, each point array once.
 */
 qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
                                plugmodfuncs_t *phy_modfuncs, vecV_t **xyz,
-                               index_t **idx, size_t **ledgestart, size_t *numledges)
+                               index_t **idx, size_t **ledgestart, size_t *numledges,
+                               int fixed, qboolean *wrapped)
 {
 	char          name[MAX_QPATH];
 	void         *file;
@@ -806,6 +979,7 @@ qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
 	phyctx_t      ctx;
 	qboolean      ok;
 
+	*wrapped = false;
 	phy_modfuncs->StripExtension(mod->name, name, sizeof(name));
 	Q_strncatz(name, ".phy", sizeof(name));
 	file = phy_filefuncs->LoadFile(name, &filelen);
@@ -816,7 +990,9 @@ qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
 	ctx.base    = file;
 	ctx.filelen = filelen;
 	ctx.nostats = true;
+	ctx.fixed   = fixed;
 	ok = PHY_Parse(&ctx, mod->name) && PHY_HullInsideModel(&ctx, mod);
+	*wrapped = ok && !fixed && ctx.numverts > PHY_OLD_KEEP;
 	plugfuncs->Free(file);
 	if (ok && ctx.numledges == ctx.maxledges)
 	{

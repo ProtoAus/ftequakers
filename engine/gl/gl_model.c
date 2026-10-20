@@ -779,6 +779,11 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 
 	//and obliterate anything else remaining in memory.
 	mod->meshinfo = NULL;
+	if (mod->phyfixed)
+	{	//FTESurf Patch 888: the twin lives in memgroup; its own tree in its own group
+		ZG_FreeGroup(&mod->phyfixed->memgroup);
+		mod->phyfixed = NULL;
+	}
 	if (mod->archive)
 	{
 		FS_CloseMapPackFile(mod->archive);

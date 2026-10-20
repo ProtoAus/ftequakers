@@ -4221,12 +4221,13 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 
 extern int bih_sourceclip;	//Patch 492, com_bih.c
 extern int bih_phybrushes;	//Patch 764, com_bih.c
+extern int bih_phyfix;		//Patch 888, com_bih.c
 extern int bih_probe_kind;	//Patch 764: which leaf decided the last trace (com_bih.h)
 extern model_t *bih_probe_model;
 
 //pm_dettest's collision-tree sweep: ntrace random box traces, every field that
 //decides a move hashed.  A function since Patch 492's review, to run it twice.
-static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, qboolean print, int *propwins)
+static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, qboolean print, int *propwins, int *fixwins)
 {
 	unsigned long long htrace = SV_DETHASH_INIT;
 	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
@@ -4246,6 +4247,9 @@ static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, co
 		                         tmins, tmaxs, false, MASK_PLAYERSOLID, &tr);
 		if (propwins && tr.fraction < 1 && bih_probe_kind == 2 && bih_probe_model)
 			(*propwins)++;	//Patch 764: a prop piece decided this trace
+		if (fixwins && tr.fraction < 1 && (bih_probe_kind == 1 || bih_probe_kind == 2) &&
+			bih_probe_model && bih_probe_model->phyfixed)
+			(*fixwins)++;	//Patch 888: a hull whose old indices wrapped decided it
 
 		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
 		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
@@ -4282,9 +4286,11 @@ static void SV_DetTest_f (void)
 	unsigned long long hsrctrace, hsrcmover = SV_DETHASH_INIT;	//Patch 492
 	unsigned long long hproptrace, hpropmover = SV_DETHASH_INIT;	//Patch 764
 	unsigned long long hpinmover = SV_DETHASH_INIT;	//Patch 813
+	unsigned long long hfixtrace, hfixmover = SV_DETHASH_INIT;	//Patch 888
+	int                fixwins = 0;					//Patch 888
 	int                propwins = 0;					//Patch 764
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
-	unsigned int seed = 20260914u, seedrerun, seedprop;
+	unsigned int seed = 20260914u, seedrerun, seedprop, seedfix;
 	int ntrace = atoi(Cmd_Argv(1));
 	int ntick  = atoi(Cmd_Argv(2));
 	int lo[3], hi[3], i, k, pass;
@@ -4333,26 +4339,30 @@ static void SV_DetTest_f (void)
 	   `srctrace` stays the triangles every older pin replays on. */
 	seedrerun = seed;
 	seedprop = seed;
-	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true, NULL);
+	seedfix = seed;
+	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true, NULL, NULL);
 	bih_sourceclip = 1;
-	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false, NULL);
+	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false, NULL, NULL);
 	bih_phybrushes = 1;
-	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins);
+	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins, NULL);
+	bih_phyfix = 1;	//Patch 888: `fixtrace`, mover 9's hulls
+	hfixtrace = SV_DetTraceHash(world, &seedfix, lo, hi, ntrace, false, NULL, &fixwins);
 	bih_sourceclip = 0;
 	bih_phybrushes = 0;
+	bih_phyfix = 0;
 
 	/* ---- 3. the mover, for real. ---------------------------------------- */
 	/* Patch 492: pass 0 is `mover`, pinned to fixrampbugs 1, the value every
 	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2.
 	   Patch 764: both at mover 6, which they had run at live; pass 2 is
 	   `propmover`, the walk at 2 on mover 7.  Patch 813: pass 3 is `pinmover`,
-	   the same walk on mover 8. */
+	   the same walk on mover 8.  Patch 888: pass 4 is `fixmover`, on mover 9. */
 	seedrerun = seed;
-	for (pass = 0; pass < 4; pass++)
+	for (pass = 0; pass < 5; pass++)
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
-		unsigned long long *hm = (pass == 3) ? &hpinmover : (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
+		unsigned long long *hm = (pass == 4) ? &hfixmover : (pass == 3) ? &hpinmover : (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
 
 		if (pass)
 			seed = seedrerun;
@@ -4388,7 +4398,7 @@ static void SV_DetTest_f (void)
 		movevars.maxspeed      = 320;
 		movevars.entgravity    = 1;
 		movevars.fixrampbugs   = pass ? 2 : 1;
-		movevars.sourceversion = (pass == 3) ? 8 : (pass == 2) ? 7 : 6;
+		movevars.sourceversion = (pass == 4) ? 9 : (pass == 3) ? 8 : (pass == 2) ? 7 : 6;
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
@@ -4530,6 +4540,9 @@ static void SV_DetTest_f (void)
 	Con_Printf("^5pm_dettest^7 propmover %016llx\n", hpropmover);
 	/* Patch 813.  Equal to propmover where the walk never pinned against a face. */
 	Con_Printf("^5pm_dettest^7 pinmover %016llx\n", hpinmover);
+	/* Patch 888.  Equal to proptrace/pinmover on a map with no wrapped .phy hull. */
+	Con_Printf("^5pm_dettest^7 fixtrace %016llx  unwrapped hulls decided %i traces\n", hfixtrace, fixwins);
+	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
 }
 
 /*

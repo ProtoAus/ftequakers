@@ -144,6 +144,21 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 #define	DIST_EPSILON	(0.03125)
 int bih_sourceclip;	//Patch 492: Source's clip rules, set by the Source mover (see BIH_ClipBoxToBrush)
 int bih_phybrushes;	//Patch 764: a static prop with phybrushes is traced as them, set by the Source mover at pmsrcver 7
+int bih_phyfix;		//Patch 888: a .phy hull whose old indices wrapped is traced unwrapped, set by the Source mover at pmsrcver 9
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+//Patch 888: the brushes the mover sweeps for this prop, or 0 to trace its model.
+static unsigned int BIH_PropBrushes (const struct bihtransform_s *trn, q2cbrush_t **brushes)
+{
+	if (bih_phyfix && trn->phyfix)
+	{
+		*brushes = trn->phyfixbrushes;
+		return trn->numphyfixbrushes;
+	}
+	*brushes = trn->phybrushes;
+	return trn->numphybrushes;
+}
+#endif
 #define NEVER_UPDATED	-9999	//Patch 492: Source's "no enter plane yet", where Quake 2 has -1
 /*static void BIH_ClipBoxToPlanes (struct bihtrace_s *fte_restrict tr, vec3_t plmins, vec3_t plmaxs, const mplane_t *plane, int numplanes, const q2csurface_t *surf)
 {
@@ -1347,15 +1362,17 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 			model_t *submod = node->data.mesh.model;
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
-			if (bih_phybrushes && node->data.mesh.tr->numphybrushes)
+			q2cbrush_t *brushes;
+			unsigned int nb;
+			if (bih_phybrushes && (nb = BIH_PropBrushes(node->data.mesh.tr, &brushes)))
 			{	//Patch 764: Source sweeps each convex piece of the hull, so the walls
 				//between pieces are inside the solid and no box outside it meets them.
 				const struct bihtransform_s *trn = node->data.mesh.tr;
 				unsigned int i;
 				probeseq = bih_probe_seq;
-				for (i = 0; i < trn->numphybrushes; i++)
+				for (i = 0; i < nb; i++)
 				{
-					q2cbrush_t *b = &trn->phybrushes[i];
+					q2cbrush_t *b = &brushes[i];
 					//the whole move, not movesubbounds: a hull may reach past the leaf's bounds
 					if ((b->contents & tr->hitcontents) && BIH_BoundsIntersect(b->absmins, b->absmaxs, tr->bounds.min, tr->bounds.max))
 						BIH_ClipBoxToBrush (tr, b);
@@ -1703,13 +1720,14 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 			vec3_t end_l;
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
-			if (bih_phybrushes && node->data.mesh.tr->numphybrushes)
+			q2cbrush_t *brushes;
+			unsigned int nb;
+			if (bih_phybrushes && (nb = BIH_PropBrushes(node->data.mesh.tr, &brushes)))
 			{	//Patch 764: must agree with BIH_RecursiveTrace about what is solid
-				const struct bihtransform_s *trn = node->data.mesh.tr;
 				unsigned int i;
-				for (i = 0; i < trn->numphybrushes && !tr->trace.allsolid; i++)
+				for (i = 0; i < nb && !tr->trace.allsolid; i++)
 				{
-					q2cbrush_t *b = &trn->phybrushes[i];
+					q2cbrush_t *b = &brushes[i];
 					if (b->contents & tr->hitcontents)
 						BIH_TestBoxInBrush (tr, b);
 				}
@@ -1813,6 +1831,9 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	int		i;
 	vec3_t point;
 	struct bihtrace_s tr;
+
+	if (bih_phyfix && model->phyfixed)
+		model = model->phyfixed;	//Patch 888
 
 	if (axis)
 	{	//rotate everything
@@ -2132,6 +2153,8 @@ static unsigned int BIH_PointContents(struct model_s *mod, const vec3_t axis[3],
 {
 	unsigned int contents;
 	vec3_t n;
+	if (bih_phyfix && mod->phyfixed)
+		mod = mod->phyfixed;	//Patch 888
 	if (axis)
 	{
 		VectorSet(n, DotProduct(p, axis[0]), DotProduct(p, axis[1]), DotProduct(p, axis[2]));
@@ -2149,6 +2172,8 @@ static unsigned int BIH_NativeContents(struct model_s *mod, int hulloverride, co
 {	//we don't support boxcontents... sorry.
 	unsigned int contents;
 	vec3_t n;
+	if (bih_phyfix && mod->phyfixed)
+		mod = mod->phyfixed;	//Patch 888
 	if (axis)
 	{
 		VectorSet(n, DotProduct(p, axis[0]), DotProduct(p, axis[1]), DotProduct(p, axis[2]));
@@ -2648,15 +2673,19 @@ static void BIH_EnumCollision_r (struct bihnode_s *node, const vec3_t mins, cons
 	case BIH_MODEL:
 		en->props++;
 		trn = node->data.mesh.tr;
-		if (!trn || !trn->numphybrushes)
-		{
-			en->propsnohull++;	//traced as its model: no brush shape to hand out
-			break;
+		{	//Patch 888: what the live mover sweeps -- the unwrapped pieces where there are any
+			q2cbrush_t *brushes = trn ? (trn->phyfix ? trn->phyfixbrushes : trn->phybrushes) : NULL;
+			unsigned int nb = trn ? (trn->phyfix ? trn->numphyfixbrushes : trn->numphybrushes) : 0;
+			if (!nb)
+			{
+				en->propsnohull++;	//traced as its model: no brush shape to hand out
+				break;
+			}
+			if (en->brush)
+				for (i = 0; i < nb; i++)
+					if (BIH_BoundsIntersect (brushes[i].absmins, brushes[i].absmaxs, mins, maxs))
+						en->brush (en->ctx, &brushes[i]);
 		}
-		if (en->brush)
-			for (i = 0; i < trn->numphybrushes; i++)
-				if (BIH_BoundsIntersect (trn->phybrushes[i].absmins, trn->phybrushes[i].absmaxs, mins, maxs))
-					en->brush (en->ctx, &trn->phybrushes[i]);
 		break;
 	default:
 		break;

@@ -99,6 +99,11 @@ struct bihdata_s
 				//traced instead of the model while bih_phybrushes is set.  0 = none.
 				q2cbrush_t *phybrushes;
 				unsigned int numphybrushes;
+				//FTESurf Patch 888: phyfix set = the model's old .phy indices wrapped, so
+				//mover 9 (bih_phyfix) traces phyfixbrushes, or the model's phyfixed tree if 0.
+				q2cbrush_t *phyfixbrushes;
+				unsigned int numphyfixbrushes;
+				qboolean phyfix;
 			} *tr;
 		} mesh;
 	};
