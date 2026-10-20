@@ -6383,12 +6383,23 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 	}
 }
 
+//FTESurf Patch 864: depth of water reflection/refraction captures (not portals) being rendered.
+static int be_watercapture;
+
 static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 {
 	int oldfbo;
 	float oldil;
 	int oldbem;
 	if (r_refdef.recurse >= r_portalrecursion.ival || r_refdef.recurse == R_MAX_RECURSE)
+		return false;
+	//FTESurf Patch 864: no water capture inside a water capture.  r_portalrecursion 2
+	//(kitsune's doors) let surf_garden's ponds render 1+2+4 views facing the pond,
+	//6.2 ms against 3.0 at 1.  Source has one reflection target, so it never nests
+	//either.  The skipped water is what the recursion limit already skips.
+	if (!r_refdef.recurse)
+		be_watercapture = 0;	//the main view: nothing left counted by an aborted frame
+	if (be_watercapture && !(bs->flags & SHADER_HASPORTAL))
 		return false;
 	//these flags require rendering some view as an fbo
 	//(BEM_DEPTHDARK is used when lightmap scale is 0, but still shows any emissive stuff)
@@ -6462,7 +6473,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		GL_ForceDepthWritable();
 		qglClearColor(0, 0, 0, 1);
 		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		be_watercapture++;
 		GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 1);
+		be_watercapture--;
 		GLBE_FBO_Pop(oldfbo);
 		r_refdef.vrect = orect;
 		r_refdef.pxrect = oprect;
@@ -6593,7 +6606,11 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				}
 			}
 			else
+			{
+				be_watercapture++;
 				GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, ((bs->flags & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
+				be_watercapture--;
+			}
 			GLBE_FBO_Pop(oldfbo);
 
 			r_refdef.vrect = ovrect;
@@ -6601,7 +6618,11 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			GL_ViewportUpdate();
 		}
 		else
+		{
+			be_watercapture++;	//a portal never gets here: it forces the FBO branch
 			GLR_DrawPortal(batch, cl.worldmodel->batches, NULL, 3);
+			be_watercapture--;
+		}
 	}
 	if ((bs->flags & SHADER_HASRIPPLEMAP) && gl_config.ext_framebuffer_objects)
 	{
