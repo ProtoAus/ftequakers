@@ -1,5 +1,61 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 883 — vid_restart and ent_view crashes (exe)
+
+**Problem:** Lex: "vid_restart and ent_view crashes the game sometimes". The installed exe's own
+crash logger (crashaddr.txt beside it) held both, read with the symbols of a rebuild of its commit
+(function addresses checked equal: 13,367 of 13,720 first-six-byte prologues identical, the rest
+RIP-relative loads of shifted data). (1) `V_UseSceneGamma+0x47`, `mov 0x105(%rax)`: a renderer
+restart (vid_restart, a mode or fullscreen change) runs R_ShutdownRenderer, whose Mod_Shutdown frees
+mod_known while cl.worldmodel points into it until R_ApplyRenderer_Load reloads; VID_DeInit's
+GLAppActivate, window messages pumped during the new renderer's font load, and its texture uploads
+call V_UseSceneGamma, which read `cl.worldmodel->engineflags` from the freed (unmapped) block. The
+read came with 694bdd544 (P728, 15 Oct); it needs a map, `shadows 0` and OpenGL. (2)
+`BE_GenModelBatches+0xcd7` (BE_GenPolyBatches inlined) under CSQC renderscene: a scene polygon's
+`shader->sort` was garbage and indexed past the batch list. CLQ1_AddHoverBrushes (Patch 331,
+ent_view's dithered faces) kept its two shaders in statics registered once, and a renderer restart
+frees every shader. A review found two more of the same kind: the lamp shadow meshes (r_shadows 2
+prop shadows) keyed on the world model's address, which the restarted mod_known can repeat, so a
+second restart of a map could reuse meshes that reference the freed world; and Shader_LoadPermutation
+reading `cl.worldmodel->lightmaps.deluxemapping` while r_glsl_precache 1 compiles every permutation
+in the restart window.
+
+**Change:** view.c V_WorldFreed: R_ShutdownRenderer takes the world's answers (Source BSP,
+deluxemapping) before Mod_Shutdown, once, so a second shutdown before the reload never reads the
+freed model; V_WorldIsSource / V_WorldHasDeluxe serve them until R_ApplyRenderer_Load has set
+cl.worldmodel again (after the reload, and after the block for no world or a Quake 3 one).
+V_UseSceneGamma and Shader_LoadPermutation ask those. CLQ1_AddHoverBrushes looks its shaders up each
+frame it draws, as r_showbrushes does, and returns first when neither cvar names a model.
+Sh_FlushMapLights frees the lamp meshes and the address key, from Sh_Shutdown (the old context is
+still current there) and from Sh_LoadMapLights.
+
+**Verified:**
+- Rig, Lex's ftesurf.cfg read into each run, 1600x900 window. The control (a rebuild of the installed
+  exe's commit, laid out like it) died at the first `vid_restart` on poop at V_UseSceneGamma+0x47, here
+  through window messages pumped during the new renderer's font load. P883 ran every restart (two
+  in that arm, four in the lamp arm) and Patch 871's panel cache came back after them (`hudcache` why 0, ~130 redraws/s at hud_fps 144); the
+  screenshot after the restart has the HUD and the key strip.
+- `r_glsl_precache 1` then `vid_restart`: without the review fix, Shader_LoadPermutation+0x3d4
+  (`cmpl $0,0x5c4(%rax)`, the world's deluxemapping) on poop and on surf_sidistic; with it, passes.
+- ent_view on surf_sidistic (7 models in view, a hover on *1, then *2 after a restart): the build
+  without the cl_ents change did not crash in its one run. A check build printing each cached pointer
+  beside the shader registered under its name read, after the restart, fill cached ...850A0 registered
+  (null), lines cached ...7C060 registered ...601F7540: every frame drew with two freed shaders.
+  P883 drew it through the restart.
+- Lamp meshes: not reproduced. On surf_sidistic (671 lamps, r_shadows 2, props=0 cells=0) the
+  reloaded world came back at a new address after both restarts, so the old code reloaded the lamps
+  as well; P883 reloads them after every restart.
+- Two review rounds (lifetimes and call order): round 1 found the lamp meshes and the precache read;
+  round 2 found nothing but two comments the fix had made untrue.
+- The deploy exe itself: two restarts in the rig, the panel cache resumed, no crash record.
+
+**Live:** exe 8b8cb611 (git-7606-patch-883-0-g979e91eb0, built clean from 979e91eb0) in both installs
+since 2026-10-20 19:39:45Z UTC, .prev e1cf5c31. Client only: the lobbies are unchanged.
+
+**Left (BACKLOG "Renderer restart leftovers"):** with r_glsl_precache 1, a restart that changes
+r_deluxemapping compiles bump permutations against the old world's answer until a shader reload; a
+restart between CL_LoadModels stages leaves cl.model_precache pointing at freed models (upstream).
+
 ## Patch 885 — the start-hop rule judges only hops in the start, once you stood there (qwprogs)
 
 **Problem:** Lex, surf_tendies: the route is one jump out of the start zone and a hop on the booster in
