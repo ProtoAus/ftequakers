@@ -35,6 +35,33 @@ integrity, game-side QC, then four on `first` and the log); what is left is in B
 surfd generation f8cdcd4a serving from `/srv/nvme/agent-work/surfd856-20261020T0300Z` since
 03:05:38Z (OLD surfd854 CLOSED, kept); story.txt rev 7c98ff08e2cc. FTESurf main f8cdcd4a.
 
+## Patch 861 — retain accepted-touchpad reports in private journal metrics
+
+**Problem.** Patch 468 already accepts and counts qualified precision-pad reports,
+and the HID reader validates the journal-span declaration. The bounded receipt
+snapshot omitted that existing count, so authenticated inspection lost it. A stale
+shared comment also incorrectly inferred grant0 merely from touchpad use.
+
+**Change.** Add only `metrics.touchpad` to the existing version1 snapshot, as a
+non-bool integer in0..10^12, and the matching authenticated API/display. The label
+names reports and journal span; missing/unsupported stays unavailable, measured0
+stays0. Old stored observations are not automatically reconstructed. Reuse the
+consented HID channel: no new collection/counter, raw data, public exposure,
+ordinary REC wire, grant, rejection total, threshold, verdict or rank change.
+Correct the comment: the known precision pad has a virtual RIM_TYPEMOUSE collection.
+Native commit/tag and mover pin remain unchanged.
+
+**Verified.** New grammar-built HID, signed-receipt-to-SQLite and authenticated
+API/Node DOM controls fail on the old snapshot/API/display, then pass with the
+change. Zero/accepted6, missing/native-unsupported, integer bounds, existing
+captured-byte/error/history/no-backfill controls pass. HID263, receipt268 and
+recording801 checks pass; three QCs compile with0 warnings. Same-byte corpus320
+REC/110 VIEW: 196 recording-fault files,197 pair-fault files in both arms, zero new
+or changed pairs. One untouched angle-reason test expects old epoch prose; the
+same lone wording assertion fails on clean92dc1af2 and this tree, while BLIND,
+storage and signature checks pass; preserved in BACKLOG. No new hardware/gesture
+calibration or universal count availability is claimed. Deployment is separate.
+
 ## Patch 858 — respawns preserve finish handshakes and close live recordings (qwprogs)
 
 **Problem:** `kill`, `cmd respawn` and `cmd restart` used fresh-connection spawn.
