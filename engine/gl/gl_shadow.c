@@ -3853,7 +3853,7 @@ typedef struct
 	//WORLD-OCCLUSION mask: the world-surface depth mesh as seen from this lamp (SHM_BuildShadowMesh,
 	//SMT_SHADOWMAP).  Lamps are static, so this builds ONCE (lazily, the first frame the lamp wins a
 	//cell) and then every frame is a single cached-VBO depth draw -- same lifecycle as the rtlight
-	//prebuild in Sh_PreGenerateLights.  Freed on map change (Sh_LoadMapLights).
+	//prebuild in Sh_PreGenerateLights.  Freed on map change and renderer shutdown (Sh_FlushMapLights).
 	struct shadowmesh_s *mesh;
 } sh_maplight_t;
 static sh_maplight_t sh_maplights[SH_MAXMAPLIGHTS];
