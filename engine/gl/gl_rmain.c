@@ -729,7 +729,7 @@ static void R_RenderScene_Internal(void)
 		if (r_capturenoents)
 		{
 			r_noentsfirstvisedict = r_refdef.firstvisedict;	//R_DrawSkyroom gives it back to the 3D sky
-			r_refdef.flags |= RDF_NOENTS | RDF_DISABLEPARTICLES;	//Source's particles are renderables too
+			r_refdef.flags |= RDF_NOENTS;	//not RDF_DISABLEPARTICLES: it also drops world decals and paint, which DrawWorld keeps
 			r_refdef.firstvisedict = cl_numvisedicts;
 		}
 	}

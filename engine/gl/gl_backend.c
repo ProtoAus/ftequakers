@@ -9237,7 +9237,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		//(viewrender.cpp:5912-5927).
 		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled &&
 			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival &&
-			  !(r_viewcontents & FTECONTENTS_FLUID)))
+			  !(r_viewcontents & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA))))	//FLUID includes SKY
 		{
 			batch_t *b;
 			int seen = 0;
