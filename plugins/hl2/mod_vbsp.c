@@ -7576,8 +7576,8 @@ static void VBSP_BuildLightBIH(model_t *mod)
 	struct bihnode_s *collisionnodes = mod->cnodes;
 	size_t i, j, count = sub->num_brushes;
 
-	if (!prv->numworldlights)
-		return;
+	//FTESurf Patch 879: built on every map, not only those with world lights: the renderer's water
+	//occlusion test traces it too (VBSP_OccluderTrace).
 	for (i = 0; i < prv->numdisplacements; i++)
 		count += prv->displacements[i].numindexes/3;
 	leafs = l = plugfuncs->Malloc(sizeof(*l)*(count ? count : 1));
@@ -10645,6 +10645,28 @@ static qboolean VBSP_WorldLightVisible(model_t *mod, const vec3_t point, const s
 	return !tr.startsolid && !tr.allsolid && tr.fraction == 1;
 }
 
+/* FTESurf Patch 879: the renderer's water-occlusion test (gl_backend.c GLBE_WaterSeen) through Patch 509's
+ * world-only tree: brushes and displacements, no props (a chain-link fence prop must not hide a pool) and no
+ * movers (the engine traces brush entities itself). 1 blocked, 0 clear, -1 not one of our maps or no tree.
+ */
+static int QDECL VBSP_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end)
+{
+	vbspinfo_t *prv;
+	vec3_t zero = {0, 0, 0};
+	trace_t tr;
+	if (!mod || mod->loadstate != MLS_LOADED || mod->funcs.NativeTrace != VBSP_TraceVisual)
+		return -1;
+	prv = mod->meshinfo;
+	if (!prv || !prv->wl_trace_model || !prv->wl_trace_model->funcs.NativeTrace)
+		return -1;
+	memset(&tr, 0, sizeof(tr));
+	prv->wl_trace_model->funcs.NativeTrace(prv->wl_trace_model, 0, NULLFRAMESTATE,
+		NULL, start, end, zero, zero, false, FTECONTENTS_SOLID, &tr);
+	if (tr.startsolid || tr.allsolid)
+		return 0;	//an eye in solid cannot tell
+	return tr.fraction < 1;
+}
+
 static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cube[6], qboolean ignoresuppress, qboolean report)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -12327,6 +12349,7 @@ qboolean VBSP_Init(void)
 	if (modfuncs && filefuncs && threadfuncs)
 	{
 		modfuncs->RegisterModelFormatMagic("Source (V)BSP", "VBSP",4, VBSP_LoadMap);
+		plugfuncs->ExportFunction("Mod_OccluderTrace", (funcptr_t)VBSP_OccluderTrace);	//FTESurf Patch 879; older engines decline it
 
 #define MAPOPTIONS "Map Cvar Options"
 

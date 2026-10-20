@@ -70,6 +70,17 @@ void main ()
 	vec3 viewdir = normalize(eye);
 	if (dot(normal, viewdir) < 0.0)
 		normal = -normal;
+#ifdef CHEAPOPAQUE
+	//$forcecheap: watercheap_ps20b with BLEND 0 -- opaque, fog colour to the cubemap by (1-n.e)^5
+	//(its FRESNEL combo), no refraction.
+	vec3 cheap = vec3(FOGTINT);
+#ifdef REFLECTCUBEMASK
+	float f = pow(1.0 - clamp(dot(normal, viewdir), 0.0, 1.0), 5.0);
+	cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, normal)).rgb * vec3(TINT_REFL), f);
+#endif
+	gl_FragColor = vec4(fog3(cheap), 1.0);
+	return;
+#endif
 	float fresnel = 0.05 + 0.95 * pow(1.0 - clamp(dot(normal, viewdir), 0.0, 1.0), 5.0);
 	// Mild surface shading keeps normals visible even without a loaded cubemap.
 	float shade = 0.9 + 0.1 * max(dot(normal, normalize(vec3(0.3,-0.4,0.85))), 0.0);

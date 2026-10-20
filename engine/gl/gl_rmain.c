@@ -1752,6 +1752,8 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 		{
 			int clust, j, first = true;
 			vec3_t point;
+			qbyte *merged = alloca((cl.worldmodel->numclusters>>3)+1);	//each cluster's PVS once
+			memset(merged, 0, (cl.worldmodel->numclusters>>3)+1);
 			r_refdef.forcevis = false;
 			r_refdef.forcedvis = NULL;
 			newvis.buffer = alloca(newvis.buffersize=cl.worldmodel->pvsbytes);
@@ -1766,6 +1768,12 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 				VectorScale(point, 1.0f/m->numvertexes, point);
 				VectorMA(point, 0.1, m->normals_array[0], point);
 				clust = cl.worldmodel->funcs.ClusterForPoint(cl.worldmodel, point, NULL);
+				if (clust >= 0 && clust < cl.worldmodel->numclusters)
+				{
+					if (merged[clust>>3] & (1<<(clust&7)))
+						continue;
+					merged[clust>>3] |= 1<<(clust&7);
+				}
 				r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, first?PVM_REPLACE:PVM_MERGE);
 				r_refdef.forcevis = true;
 				first = false;
@@ -1785,9 +1793,11 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 
 		if (cl.worldmodel && cl.worldmodel->funcs.ClusterPVS && !r_novis.ival)
 		{
-			int clust, i, j;
+			int clust, i, j, first = true;
 			float d;
 			vec3_t point;
+			qbyte *merged = alloca((cl.worldmodel->numclusters>>3)+1);	//FTESurf Patch 879: each cluster's PVS once
+			memset(merged, 0, (cl.worldmodel->numclusters>>3)+1);
 			r_refdef.forcevis = false;
 			r_refdef.forcedvis = NULL;
 			newvis.buffer = alloca(newvis.buffersize=cl.worldmodel->pvsbytes);
@@ -1811,10 +1821,14 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 				}
 
 				clust = cl.worldmodel->funcs.ClusterForPoint(cl.worldmodel, point, NULL);
-				if (i == batch->firstmesh)
-					r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, PVM_REPLACE);
-				else
-					r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, PVM_MERGE);
+				if (clust >= 0 && clust < cl.worldmodel->numclusters)
+				{
+					if (merged[clust>>3] & (1<<(clust&7)))
+						continue;
+					merged[clust>>3] |= 1<<(clust&7);
+				}
+				r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, first?PVM_REPLACE:PVM_MERGE);
+				first = false;
 			}
 //			memset(newvis, 0xff, pvsbytes);
 		}

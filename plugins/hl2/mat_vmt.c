@@ -3865,6 +3865,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				"\tprogram \"vmt/watersheet#FOGTINT=%s#ALPHA=0.7\"\n"
 				"\t{\n\t\tblendfunc blend\n\t}\n", fog);
 		}
+		else if (st->water_cheap && !st->water_expensive)
+		{
+			//FTESurf Patch 879: $forcecheap is Source's cheap water: DrawCheapWater with bBlend = !bForceCheap
+			//(water.cpp:493-518) binds no refraction and does not blend -- watercheap_ps20b's BLEND 0 is
+			//opaque fog colour to the cubemap by fresnel. Nothing to capture, nothing to share.
+			if (!Q_strcasecmp(st->envmap, "env_cubemap") && (!hl2_envcubemap || hl2_envcubemap->ival))
+				st->wantenvcube = 1;
+			Q_strlcatfz(script, &offset, sizeof(script),
+				"\tprogram \"vmt/waterbudget%s#CHEAPOPAQUE\"\n", progargs);	//its maps: the tail below
+		}
 		else
 		{
 			/*
