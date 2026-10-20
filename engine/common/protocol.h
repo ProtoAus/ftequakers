@@ -760,6 +760,7 @@ typedef struct
 								//expressed relative to it, so it must survive a replay
 								//or the client and server climb along different axes.
 	vec3_t		portaloffset; // transient view correction; carried through prediction replay
+	int			landticks;	//FTESurf Patch 882: ticks since landing, for PMLIM_BHOP's cooldown
 } pmsourcestate_t;
 
 // player move types

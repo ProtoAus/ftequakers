@@ -2733,6 +2733,7 @@ qboolean SV_AntiKnockBack(world_t *w, client_t *client)
 	pmove.jump_held = frame->pmjumpheld;
 	pmove.waterjumptime = frame->pmwaterjumptime;
 	pmove.onladder = frame->pmonladder;
+	pmove.momlimit = client->momlimit;	pmove.momslide = client->momslide;	pmove.momcool = client->momcool;	//FTESurf Patch 882
 
 	//stuff not regenerated properly, shouldn't really be changing much or not very significant.
 	pmove.world = w;

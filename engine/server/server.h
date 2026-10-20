@@ -456,7 +456,8 @@ enum serverprotocols_e
 	//note, nq is nq+
 };
 
-#define SV_PMPIN_COUNT 70	//FTESurf Patch 346: entries in sv_pmpin_names (sv_user.c)
+#define SV_PMPIN_COUNT 73	//FTESurf Patch 346: entries in sv_pmpin_names (sv_user.c)
+#define SV_PMPIN_COUNT_PRE882 70	//Patch 882: the names a pin below mover 10 publishes (SV_PMPinNeed)
 #define SV_PMPIN_FIXRAMPBUGS 63	//Patch 492: "fixrampbugs" in that table; SV_PMPinFill checks the name
 
 typedef struct client_s
@@ -787,6 +788,8 @@ typedef struct client_s
 	unsigned int	physcrc;		//24-bit digest of the last move's physent list
 	unsigned int	portalx;		//linked-portal crossings, cumulative; reset per map
 	vec3_t			portalorg, portalvel;	//post-move state of the last crossing move
+	int				momlimit, momslide;	//FTESurf Patch 882: the last move's, sent as stats for prediction
+	float			momcool;
 } client_t;
 
 #if defined(NQPROT) || defined(Q2SERVER) || defined(Q3SERVER)
@@ -1471,12 +1474,15 @@ void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t c
 //FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
 extern const char *sv_pmpin_names[SV_PMPIN_COUNT];
 int SV_PMSrcVer(const float *pin);
+int SV_PMPinNeed(const float *pin);
+int SV_PMPinNamesBelow(const char *text, int below);
 size_t SV_PMPinText(const float *v, char *out, size_t outsz);
 size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
 qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);
 int SV_PMPinParse(const char *text, float *v);
 void SV_PMPinApply(const float *v);
 qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st);
+qboolean SV_PMStateHasLand(const char *text);	//Patch 882
 unsigned int SV_PhysentDigest(void);
 
 void SV_SendClientPrespawnInfo(client_t *client);

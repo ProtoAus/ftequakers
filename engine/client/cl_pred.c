@@ -507,6 +507,10 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 
 	movevars.entgravity = cl.playerview[pnum].entgravity;
 	movevars.maxspeed = cl.playerview[pnum].maxspeed;
+	//FTESurf Patch 882: the server's latest; a trigger edge mispredicts until it arrives
+	pmove.momlimit = cl.playerview[pnum].statsf[STAT_MOMLIMIT];
+	pmove.momslide = cl.playerview[pnum].statsf[STAT_MOMSLIDE];
+	pmove.momcool = cl.playerview[pnum].statsf[STAT_MOMCOOL];
 	movevars.bunnyspeedcap = cl.bunnyspeedcap;
 	pmove.onladder = false;
 	pmove.safeorigin_known = false;

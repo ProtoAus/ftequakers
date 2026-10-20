@@ -4419,6 +4419,7 @@ static void SV_DetTest_f (void)
 			pmove.angles[0] = pmove.cmd.angles[0] * (360.0f/65536.0f);
 			pmove.angles[1] = pmove.cmd.angles[1] * (360.0f/65536.0f);
 			pmove.angles[2] = 0;
+			pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
 			PM_PlayerMove(1.0f);
 
@@ -4504,6 +4505,7 @@ static void SV_DetTest_f (void)
 			for (k = 0; k < 3; k++)
 				pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
 
+			pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882
 			for (i = 0; i < census_n; i++)
 			{
 				pmove.cmd.msec = arm_msec[a];
@@ -5215,6 +5217,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	char          mapname[64];
 	unsigned int  filecrc = 0;
 	qboolean      havecrc = false, inbody;
+	char          hdrpintext[2048] = "";	/* Patch 882: for SV_PMPinNamesBelow */
 	float         rate = 0;
 	int           instart_mt = -1, instart_run = -1;
 	int           nin = 0, nsam = 0, nwarp = 0, nride = 0, i, pass;
@@ -5346,7 +5349,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					else if (!strncmp(ln, "proprule ", 9))
 						filepropr = atoi(ln+9);
 					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
+					{
 						pinfound = SV_PMPinParse(ln+6, hdrpin);
+						Q_strncpyz(hdrpintext, ln+6, sizeof(hdrpintext));
+					}
 					else if (!strncmp(ln, "zonesrc ", 8))	/* Patch 349 */
 						Q_strncpyz(hdrzsrc, ln+8, sizeof(hdrzsrc));
 					else if (!strncmp(ln, "zonecrc ", 8))
@@ -5621,7 +5627,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						VectorCopy(so, seedorg);
 						VectorCopy(sv, seedvel);
 						seedground = sg;
-						seedstate_ok = SV_PMStateParse(q, &seedstate);
+						/* Patch 882: at mover 10 the cooldown's clock is state too */
+						seedstate_ok = SV_PMStateParse(q, &seedstate) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q));
 					}
 					else if (cses && cses <= nses && !ses[cses-1].seeded)
 					{
@@ -5630,7 +5637,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						VectorCopy(so, s->org);
 						VectorCopy(sv, s->vel);
 						s->ground = sg;
-						s->stateok = SV_PMStateParse(q, &s->st);
+						s->stateok = SV_PMStateParse(q, &s->st) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q));
 					}
 				}
 			}
@@ -5830,7 +5837,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	/* Patch 347: v9.  EXACT means the file states the seed, the carried mover
 	   state and every pinned input -- then the replay is the mover, not a model
 	   of it, and any sample it disagrees with is the file's fault. */
-	exact = haveseed && seedstate_ok && pinfound == SV_PMPIN_COUNT;
+	exact = haveseed && seedstate_ok && pinfound &&	/* Patch 882: every name its version publishes */
+	        SV_PMPinNamesBelow(hdrpintext, SV_PMPinNeed(hdrpin)) == SV_PMPinNeed(hdrpin);
 	for (i = 0; exact && i < nses; i++)	/* Patch 367: every session must restate its state */
 		if (!ses[i].seeded || !ses[i].stateok)
 			exact = false;
@@ -5839,7 +5847,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		           nses, pausewhys);
 	if (filever >= 9 || pinfound || haveseed)
 		Con_Printf("  v9 state  pin %i/%i names, seed %s, %i pm, %i pe, %i portal -- %s\n",
-		           pinfound, SV_PMPIN_COUNT,
+		           pinfound, SV_PMPinNeed(hdrpin),
 		           haveseed ? (seedstate_ok ? "exact" : "^3carried state incomplete^7") : "^3absent^7",
 		           npm, npe, nportal,
 		           exact ? "^2EXACT REPLAY^7" : "^3approximate (the file lacks state)^7");

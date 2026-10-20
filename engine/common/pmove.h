@@ -221,7 +221,28 @@ typedef struct
 	   static; this survives the call so the caller can publish it.  Zeroed with
 	   ticksrun. */
 	int			portalcrossings;
+
+	/* FTESurf Patch 882: Momentum's trigger_momentum_limitmovement and
+	   trigger_momentum_slide, as the player stood after the last command's
+	   touches.  INPUTS, pinned (momlimit/momcool/momslide); read only at
+	   sourceversion >= 10.  Appended: plugins bake this struct's stride. */
+	int			momlimit;			//PMLIM_* bits
+	float		momcool;			//bhop cooldown, seconds (PMLIM_BHOP)
+	int			momslide;			//PMSLIDE_* bits, ACTIVE set while inside
+	int			landticks;			//ticks since the last landing; carried (pmsourcestate_t)
 } playermove_t;
+
+//Patch 882: limitmovement spawnflags >> 13 (mom_triggers.h SF_LIMIT_*).
+#define PMLIM_FORWARD	1
+#define PMLIM_LEFT		2
+#define PMLIM_RIGHT		4
+#define PMLIM_BACK		8
+#define PMLIM_JUMP		16
+#define PMLIM_CROUCH	32
+#define PMLIM_BHOP		64
+#define PMLIM_WALK		128	//Momentum's IN_WALK, AHOP only: carried, never read
+#define PMLIM_SPRINT	256	//Momentum's IN_SPEED: BUTTON_SPEED, CS:S's shift-walk
+#define PMLIM_LANDMAX	1000000	//landticks saturates here
 
 /* FTESurf Patch 346: bump on ANY change to pm_source.c or the trace layer that can
    alter a trajectory.  Recordings pin it (`pmsrcver` in the pin text); a verifier
@@ -233,8 +254,9 @@ typedef struct
    Patch 758: version 6 keeps moving when the hull clears a linked door's front.
    Patch 764: version 7 traces a static prop's .phy hull as its convex pieces.
    Patch 813: version 8 recovers a surfer whose retrace hits the same face again at fraction 0.
-   Patch 888: version 9 traces a .phy hull whose 16-bit indices wrapped as it really is. */
-#define PMSRC_VERSION 9
+   Patch 888: version 9 traces a .phy hull whose 16-bit indices wrapped as it really is.
+   Patch 882: version 10 honours momlimit/momcool/momslide (Momentum's limitmovement and slide triggers). */
+#define PMSRC_VERSION 10
 
 typedef struct {
 	//standard quakeworld

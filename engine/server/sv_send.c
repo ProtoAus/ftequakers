@@ -2220,6 +2220,12 @@ static unsigned int SV_CalcClientStats(client_t *client, int statsi[MAX_CL_STATS
 
 		statsf[STAT_VIEWHEIGHT] = ent->v->view_ofs[2];
 		statsf[STAT_IDEALPITCH] = ent->xv->idealpitch;
+		if (ent == client->edict)
+		{	//FTESurf Patch 882: what this client's own last move was limited by, for its prediction
+			statsf[STAT_MOMLIMIT] = client->momlimit;
+			statsf[STAT_MOMSLIDE] = client->momslide;
+			statsf[STAT_MOMCOOL] = client->momcool;
+		}
 
 		statsf[STAT_PUNCHANGLE_X] = ent->xv->punchangle[0];
 		statsf[STAT_PUNCHANGLE_Y] = ent->xv->punchangle[1];

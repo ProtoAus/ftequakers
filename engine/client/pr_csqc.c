@@ -4419,6 +4419,7 @@ static void QCBUILTIN PF_cs_runplayerphysics (pubprogfuncs_t *prinst, struct glo
 	VectorCopy(ent->xv->gravitydir, pmove.gravitydir);
 
 	CL_SetSolidEntities();
+	pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
 	while(msecs > 0)	//break up longer commands
 	{

@@ -10441,6 +10441,7 @@ static void QCBUILTIN PF_runclientphys(pubprogfuncs_t *prinst, struct globalvars
 	AddAllLinksToPmove(&sv.world, (wedict_t*)ent);
 
 	SV_PreRunCmd();
+	pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
 	while(msecs)	//break up longer commands
 	{

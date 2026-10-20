@@ -69,6 +69,7 @@ evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
 evalc_t	evalc_pmepoch, evalc_physcrc, evalc_portalx, evalc_portalorg, evalc_portalvel;	//FTESurf Patch 346
 evalc_t	evalc_pmhold;		//FTESurf Patch 380
+evalc_t	evalc_momlimit, evalc_momcool, evalc_momslide;	//FTESurf Patch 882
 evalc_t	evalc_lpdob, evalc_lpdfb;	//FTESurf Patch 802: sv_ents.c's portal cameras
 
 void SV_FS_ResetFieldCaches(void)
@@ -91,6 +92,9 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_mtickrate, 0, sizeof(evalc_mtickrate));	//FTESurf Patch 325
 	memset(&evalc_mcarry,    0, sizeof(evalc_mcarry));		//FTESurf Patch 325
 	memset(&evalc_pmhold,    0, sizeof(evalc_pmhold));		//FTESurf Patch 380
+	memset(&evalc_momlimit,  0, sizeof(evalc_momlimit));	//FTESurf Patch 882
+	memset(&evalc_momcool,   0, sizeof(evalc_momcool));
+	memset(&evalc_momslide,  0, sizeof(evalc_momslide));
 }
 
 /*
@@ -118,7 +122,8 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 	"normalizejump", "jumpaddrise", "jumpzoffset", "walkspeed", "groundtracedist",
 	"bumpcount", "snaptoground", "groundquadrants", "fixslopes", "fixedges",
 	"fixrampbugs", "rampretrace", "viewscale", "ladders", "ladderdampen",
-	"ladderangle", "slide"
+	"ladderangle", "slide",
+	"momlimit", "momcool", "momslide"	//Patch 882: mover 10's inputs
 };
 
 //Patch 492: the mover a pin's numbers need.  Below fixrampbugs 2, version 1
@@ -140,9 +145,17 @@ int SV_PMSrcVer(const float *pin)
 	//Patch 764: v7 traces static props' hulls as convex pieces.
 	//Patch 813: v8 recovers a fraction-0 retrace onto a plane already clipped since the last progress.
 	//Patch 888: v9 traces .phy hulls whose old 16-bit indices wrapped as they are.
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9)
+	//Patch 882: v10 honours momlimit/momcool/momslide.
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
+}
+
+//Patch 882: the names a pin of its own version publishes.  Mover 10 appended
+//three; an older pin is complete without them (they replay as 0).
+int SV_PMPinNeed(const float *pin)
+{
+	return SV_PMSrcVer(pin) >= 10 ? SV_PMPIN_COUNT : SV_PMPIN_COUNT_PRE882;
 }
 
 static void SV_PMPinFill(float *v)
@@ -167,6 +180,7 @@ static void SV_PMPinFill(float *v)
 	*o++ = movevars.fixslopes;	*o++ = movevars.fixedges;	*o++ = movevars.fixrampbugs;	*o++ = movevars.rampretrace;
 	*o++ = movevars.viewscale;	*o++ = movevars.ladders;	*o++ = movevars.ladderdampen;	*o++ = movevars.ladderangle;
 	*o++ = movevars.slide;
+	*o++ = pmove.momlimit;	*o++ = pmove.momcool;	*o++ = pmove.momslide;
 	if (o - v != SV_PMPIN_COUNT)
 		Sys_Error("SV_PMPinFill: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
 	v[0] = SV_PMSrcVer(v);
@@ -193,12 +207,13 @@ size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz)
 {
 	static const char *names[] = {"surfacefriction", "ducktime", "ducking", "ducked",
 		"msec_carry", "oldbuttons", "stamina", "rampoff", "boardcount", "rampcontact",
-		"srcladder", "ladnx", "ladny", "ladnz"};
+		"srcladder", "ladnx", "ladny", "ladnz", "landticks"};
 	float v[countof(names)];
 	v[0] = st->surfacefriction;	v[1] = st->ducktime;	v[2] = st->ducking;	v[3] = st->ducked;
 	v[4] = st->msec_carry;	v[5] = st->oldbuttons;	v[6] = st->stamina;	v[7] = st->rampoff;
 	v[8] = st->boardcount;	v[9] = st->rampcontact;	v[10] = st->srcladder;
 	VectorCopy(st->srcladdernormal, v+11);
+	v[14] = st->landticks;	//Patch 882
 	return SV_PMTokens(names, v, countof(names), out, outsz);
 }
 
@@ -238,6 +253,7 @@ qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz)
 int SV_PMPinParse(const char *text, float *v)
 {
 	int i, found = 0;
+	qboolean seen[SV_PMPIN_COUNT] = {0};	//Patch 882: a repeated name counts once
 	char tok[64];
 	const char *s = text;
 	while (*s)
@@ -252,11 +268,38 @@ int SV_PMPinParse(const char *text, float *v)
 			if (eq)
 				for (i = 0; i < SV_PMPIN_COUNT; i++)
 					if (!strncmp(tok, sv_pmpin_names[i], eq - tok) && !sv_pmpin_names[i][eq - tok])
-						{ v[i] = atof(eq + 1); found++; break; }
+						{ v[i] = atof(eq + 1); found += !seen[i]; seen[i] = true; break; }
 		}
 		s = *e ? e + 1 : e;
 	}
 	return found;
+}
+
+//Patch 882: how many of the table's first `below` names the text supplies, each once -- an
+//exact replay needs every name its version publishes, and later names cannot stand in for them.
+int SV_PMPinNamesBelow(const char *text, int below)
+{
+	qboolean seen[SV_PMPIN_COUNT] = {0};
+	int i, n = 0;
+	char tok[64];
+	const char *s = text;
+	while (*s)
+	{
+		const char *e = s, *eq;
+		while (*e && *e != ' ') e++;
+		if (e - s > 0 && e - s < (int)sizeof(tok))
+		{
+			memcpy(tok, s, e - s);
+			tok[e - s] = 0;
+			eq = strchr(tok, '=');
+			if (eq)
+				for (i = 0; i < below && i < SV_PMPIN_COUNT; i++)
+					if (!strncmp(tok, sv_pmpin_names[i], eq - tok) && !sv_pmpin_names[i][eq - tok])
+						{ n += !seen[i]; seen[i] = true; break; }
+		}
+		s = *e ? e + 1 : e;
+	}
+	return n;
 }
 
 //The inverse of SV_PMPinFill, for a replay: movevars and the pmove inputs.
@@ -284,8 +327,25 @@ void SV_PMPinApply(const float *v)
 	movevars.fixslopes = *o++;	movevars.fixedges = *o++;	movevars.fixrampbugs = *o++;	movevars.rampretrace = *o++;
 	movevars.viewscale = *o++;	movevars.ladders = *o++;	movevars.ladderdampen = *o++;	movevars.ladderangle = *o++;
 	movevars.slide = *o++;
+	//Patch 882: bounded as SV_RunCmd bounds them; a file's float is not trusted to cast
+	pmove.momlimit = (o[0] > 0 && o[0] < 512) ? (int)o[0] : 0;	o++;
+	pmove.momcool = (o[0] > 0 && o[0] <= 60) ? o[0] : 0;	o++;
+	pmove.momslide = (o[0] > 0 && o[0] < 16) ? (int)o[0] : 0;	o++;
 	if (o - v != SV_PMPIN_COUNT)
 		Sys_Error("SV_PMPinApply: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
+}
+
+//Patch 882: does a state text carry landticks (required for an exact replay at mover 10)?
+qboolean SV_PMStateHasLand(const char *text)
+{
+	const char *p = text;
+	while ((p = strstr(p, "landticks=")))
+	{
+		if (p == text || p[-1] == ' ')
+			return true;
+		p += 10;
+	}
+	return false;
 }
 
 //pm_source's carried state from SV_PMStateText's tokens; false if any is missing.
@@ -313,6 +373,25 @@ qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st)
 	st->msec_carry = v[4];	st->oldbuttons = v[5];	st->stamina = v[6];	st->rampoff = v[7];
 	st->boardcount = v[8];	st->rampcontact = v[9];	st->srcladder = v[10] != 0;
 	VectorCopy(v+11, st->srcladdernormal);
+	//Patch 882: optional -- a state from before it has no cooldown to honour.
+	st->landticks = PMLIM_LANDMAX;
+	{
+		const char *p = text;
+		while ((p = strstr(p, "landticks=")))
+		{
+			if (p == text || p[-1] == ' ')
+			{
+				char *end;
+				double lt = strtod(p + 10, &end);
+				if (end == p + 10 || (*end && *end != ' ' && *end != '\r' && *end != '\n') ||
+					!(lt >= 0 && lt <= PMLIM_LANDMAX))
+					return false;	//present and unreadable: the state is not known
+				st->landticks = (int)lt;
+				break;
+			}
+			p += 10;
+		}
+	}
 	return found == (int)countof(names);
 }
 
@@ -8447,6 +8526,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 			pmove_mins[i] = pmove.origin[i] - 256;
 			pmove_maxs[i] = pmove.origin[i] + 256;
 		}
+		pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
 		PM_PlayerMove (sv.gamespeed);
 
@@ -8714,6 +8794,23 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	{
 		eval_t *ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_pmhold", ev_float, &evalc_pmhold);
 		held = ev && ev->_float;
+	}
+
+	//FTESurf Patch 882: the limitmovement/slide triggers QC found where this move starts.
+	//Bounded here (and in the replay) so the pin and the stats carry what ran.
+	{
+		eval_t *ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_momlimit", ev_float, &evalc_momlimit);
+		float f = ev ? ev->_float : 0;
+		pmove.momlimit = (f > 0 && f < 512) ? (int)f : 0;
+		ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_momcool", ev_float, &evalc_momcool);
+		f = ev ? ev->_float : 0;
+		pmove.momcool = (f > 0 && f <= 60) ? f : 0;
+		ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_momslide", ev_float, &evalc_momslide);
+		f = ev ? ev->_float : 0;
+		pmove.momslide = (f > 0 && f < 16) ? (int)f : 0;
+		host_client->momlimit = pmove.momlimit;
+		host_client->momcool = pmove.momcool;
+		host_client->momslide = pmove.momslide;
 	}
 
 	//FTESurf Patch 142 -- let QC hand the duck state back.

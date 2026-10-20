@@ -2196,6 +2196,7 @@ static void SVHL_RunCmdR(hledict_t *ed, usercmd_t *ucmd)
 	}
 	else
 		VectorClear(pmove.basevelocity);
+	pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
 	PM_PlayerMove(sv.gamespeed);
 

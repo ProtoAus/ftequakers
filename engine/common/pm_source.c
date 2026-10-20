@@ -346,15 +346,19 @@ static qboolean pms_haveportals;
 static qboolean pms_anyslide;
 static int      pms_slidecontact;
 static int      pms_slidetick;
+static int      pms_momslide;	/* Patch 882: pmove.momslide at mover 10, else 0 */
+static qboolean pms_physslide;	/* Patch 882: pms_anyslide before the trigger slide joined it */
 
 static void PMSrc_StayOnGround (void);	/* defined below; TryPlayerMove's slide retrace needs it first */
 
-/* The slide flag byte of the physent a trace hit, or 0. */
+/* The slide flag byte of the physent a trace hit, or 0.  Patch 882: inside a
+   trigger_momentum_slide the trigger's flags hold whatever the probe found --
+   Momentum's slide state is the trigger, contact or not (cpp:1929). */
 static int PMSrc_SlideFlagsOfTrace (const trace_t *tr)
 {
-	if (!pms_anyslide || tr->fraction >= 1.0f || tr->entnum <= 0 || tr->entnum >= pmove.numphysent)
-		return 0;
-	return pmove.physents[tr->entnum].slideflags;
+	if (!pms_physslide || tr->fraction >= 1.0f || tr->entnum <= 0 || tr->entnum >= pmove.numphysent)
+		return pms_momslide;
+	return pms_momslide | pmove.physents[tr->entnum].slideflags;
 }
 
 /* SetGroundEntity's exception (cpp:3003-3009): the slide allows jumping, is not
@@ -483,6 +487,7 @@ void PMSrc_SaveState (pmsourcestate_t *out)
 	out->srcladder       = pmove.srcladder;		//Patch 260
 	VectorCopy (pmove.srcladdernormal, out->srcladdernormal);
 	VectorCopy (pmove.portaloffset, out->portaloffset);
+	out->landticks       = pmove.landticks;		//Patch 882
 }
 
 void PMSrc_LoadState (const pmsourcestate_t *in)
@@ -500,6 +505,7 @@ void PMSrc_LoadState (const pmsourcestate_t *in)
 	pmove.srcladder       = in->srcladder;		//Patch 260
 	VectorCopy (in->srcladdernormal, pmove.srcladdernormal);
 	VectorCopy (in->portaloffset, pmove.portaloffset);
+	pmove.landticks       = in->landticks;		//Patch 882
 }
 
 /*
@@ -2283,6 +2289,8 @@ static void PMSrc_CategorizePosition (void)
 			else
 			{
 				pmove.onground = !pm.startsolid;
+				if (!wasonground && pmove.onground)
+					pmove.landticks = 0;	/* Patch 882: Momentum's OnLand, m_iLandTick */
 				pmove.groundent = pm.entnum;
 				VectorCopy (pm.plane.normal, pmove.groundnormal);
 				pmove.waterjumptime = 0;
@@ -2571,6 +2579,14 @@ Two details that are easy to get wrong and both matter:
     Do not "fix" this.
 ==================
 */
+/* Patch 882: momcool in whole ticks, rounded up (0.2 s at 0.015 is 14). */
+static int PMSrc_BhopCooldownTicks (void)
+{
+	if (!(pmove.momcool > 0) || pms_frametime <= 0)
+		return 0;
+	return (int)ceil (min (pmove.momcool, 60.0f) / pms_frametime - 0.001f);
+}
+
 static qboolean PMSrc_CheckJumpButton (void)
 {
 	float flMul;
@@ -2601,6 +2617,12 @@ static qboolean PMSrc_CheckJumpButton (void)
 		pmove.oldbuttons |= BUTTON_JUMP;
 		return false;	/* in air, so no effect */
 	}
+
+	/* Patch 882: limitmovement's "prevent bhopping" (cpp:1359).  Refused without
+	   marking the button held, so a held jump goes as the cooldown ends. */
+	if (movevars.sourceversion >= 10 && (pmove.momlimit & PMLIM_BHOP) &&
+		pmove.landticks < PMSrc_BhopCooldownTicks ())
+		return false;
 
 	/* Must release and re-press to jump again -- unless autobunny is on,
 	   which is how every surf server is configured. */
@@ -3668,6 +3690,8 @@ static void PMSrc_Tick (void)
 	pmove.rampcontact = 0;
 	VectorClear (pmove.rampnormal);	/* Patch 137: re-derived below, like rampcontact */
 	pmove.rampoff += pms_frametime;
+	if (pmove.landticks < PMLIM_LANDMAX)
+		pmove.landticks++;	/* Patch 882: tickcount - m_iLandTick */
 
 	/* --- CheckParameters (cpp:965): clamp the move values to maxspeed --- */
 	pms_forwardmove = pmove.cmd.forwardmove;
@@ -3803,6 +3827,37 @@ through the client's replay, so a dropped or doubled packet cannot desync the
 client from the server.
 ==================
 */
+/* Patch 882: the triggers the last command touched.  Momentum strips the
+   buttons (player_command.cpp:423) and leaves forwardmove/sidemove, which
+   would make bhop_offstyles' one-key sections do nothing; the FGD says
+   "prevent moving", so the move itself is cut.  Walking players only. */
+static void PMSrc_ApplyLimits (void)
+{
+	int lim = pmove.momlimit;
+
+	pms_momslide = 0;
+	if (movevars.sourceversion < 10)
+		return;
+	if (pmove.pm_type != PM_NORMAL)
+		return;
+	if (pmove.momslide & PMSLIDE_ACTIVE)
+		pms_momslide = pmove.momslide & (PMSLIDE_ACTIVE|PMSLIDE_STAYON|PMSLIDE_ALLOWJUMP|PMSLIDE_NOGRAVITY);
+	if (pms_momslide)
+		pms_anyslide = true;
+	if (!lim)
+		return;
+	if (((lim & PMLIM_FORWARD) && pmove.cmd.forwardmove > 0) || ((lim & PMLIM_BACK) && pmove.cmd.forwardmove < 0))
+		pmove.cmd.forwardmove = 0;
+	if (((lim & PMLIM_RIGHT) && pmove.cmd.sidemove > 0) || ((lim & PMLIM_LEFT) && pmove.cmd.sidemove < 0))
+		pmove.cmd.sidemove = 0;
+	if (lim & PMLIM_JUMP)
+		pmove.cmd.buttons &= ~BUTTON_JUMP;
+	if (lim & PMLIM_CROUCH)
+		pmove.cmd.buttons &= ~BUTTON_DUCK;
+	if (lim & PMLIM_SPRINT)		/* IN_SPEED, CS's shift-walk (mom_triggers.cpp:1316); WALK is AHOP's IN_WALK */
+		pmove.cmd.buttons &= ~BUTTON_SPEED;
+}
+
 void PMSrc_PlayerMove (float gamespeed)
 {
 	float tick = movevars.ticrate;
@@ -3841,6 +3896,9 @@ void PMSrc_PlayerMove (float gamespeed)
 	}
 	pms_slidecontact = 0;
 	pms_slidetick = 0;
+	pms_physslide = pms_anyslide;
+
+	PMSrc_ApplyLimits ();
 
 	if (pmove.surfacefriction <= 0)
 		pmove.surfacefriction = 1.0f;
@@ -5273,6 +5331,60 @@ static void PMSrc_SelfTest_f (void)
 		VectorCopy(oldf, pms_forward);
 		VectorCopy(oldr, pms_right);
 		pms_forwardmove = oldfm; pms_sidemove = oldsm; pms_upmove = oldum; pms_maxspeed = oldmax;
+	}
+
+	/* --- Patch 882: limitmovement's bhop cooldown ------------------------ */
+	{
+		int savelim = pmove.momlimit, savelt = pmove.landticks, saveob = pmove.oldbuttons, savewl = pmove.waterlevel;
+		float savecool = pmove.momcool;
+		qboolean saveog = pmove.onground, savejh = pmove.jump_held;
+		vec3_t v0;
+		VectorCopy (pmove.velocity, v0);
+
+		pms_frametime = 0.015f;	pmove.momcool = 0.2f;
+		PMSrc_Check ("bhop cooldown: 0.2 s at 0.015 is 14 ticks", PMSrc_BhopCooldownTicks (), 14, 0.5f);
+		pms_frametime = 0.01f;	pmove.momcool = 0.15f;
+		PMSrc_Check ("bhop cooldown: 0.15 s at 0.01 is Momentum's 15", PMSrc_BhopCooldownTicks (), 15, 0.5f);
+		pmove.momcool = 0;
+		PMSrc_Check ("bhop cooldown: 0 is none", PMSrc_BhopCooldownTicks (), 0, 0.5f);
+
+		pms_frametime = 0.015f;	pmove.momcool = 0.2f;	pmove.momlimit = PMLIM_BHOP;
+		movevars.autobunny = 1;	pmove.waterlevel = 0;	pmove.waterjumptime = 0;
+		movevars.sourceversion = 10;
+		pmove.onground = true;	pmove.landticks = 13;	pmove.cmd.buttons = BUTTON_JUMP;	pmove.oldbuttons = 0;
+		PMSrc_Check ("bhop limit: refused 13 ticks after landing", PMSrc_CheckJumpButton (), 0, 0.5f);
+		PMSrc_Check ("bhop limit: refusal leaves jump unheld", (pmove.oldbuttons & BUTTON_JUMP) != 0, 0, 0.5f);
+		pmove.onground = true;	pmove.landticks = 14;	pmove.oldbuttons = 0;
+		PMSrc_Check ("bhop limit: jumps at 14", PMSrc_CheckJumpButton (), 1, 0.5f);
+		movevars.sourceversion = 9;
+		pmove.onground = true;	pmove.landticks = 0;	pmove.oldbuttons = 0;
+		PMSrc_Check ("bhop limit: mover 9 ignores it", PMSrc_CheckJumpButton (), 1, 0.5f);
+
+		/* the key cut: only the limited direction of each axis, and the limited buttons */
+		movevars.sourceversion = 10;
+		pmove.pm_type = PM_NORMAL;
+		pmove.momlimit = PMLIM_LEFT | PMLIM_BACK | PMLIM_JUMP;
+		pmove.cmd.forwardmove = 400;	pmove.cmd.sidemove = -400;	pmove.cmd.buttons = BUTTON_JUMP | BUTTON_DUCK;
+		PMSrc_ApplyLimits ();
+		PMSrc_Check ("key limit: forward kept", pmove.cmd.forwardmove, 400, 0.5f);
+		PMSrc_Check ("key limit: left cut", pmove.cmd.sidemove, 0, 0.5f);
+		PMSrc_Check ("key limit: jump stripped, duck kept", pmove.cmd.buttons, BUTTON_DUCK, 0.5f);
+		pmove.cmd.forwardmove = -400;	pmove.cmd.sidemove = 400;
+		PMSrc_ApplyLimits ();
+		PMSrc_Check ("key limit: back cut", pmove.cmd.forwardmove, 0, 0.5f);
+		PMSrc_Check ("key limit: right kept", pmove.cmd.sidemove, 400, 0.5f);
+		movevars.sourceversion = 9;
+		pmove.cmd.forwardmove = -400;	pmove.cmd.sidemove = -400;	pmove.cmd.buttons = BUTTON_JUMP;
+		PMSrc_ApplyLimits ();
+		PMSrc_Check ("key limit: mover 9 keeps back", pmove.cmd.forwardmove, -400, 0.5f);
+		PMSrc_Check ("key limit: mover 9 keeps left", pmove.cmd.sidemove, -400, 0.5f);
+		PMSrc_Check ("key limit: mover 9 keeps jump", pmove.cmd.buttons, BUTTON_JUMP, 0.5f);
+		pmove.cmd.forwardmove = pmove.cmd.sidemove = 0;	pmove.cmd.buttons = 0;
+
+		pmove.momlimit = savelim;	pmove.landticks = savelt;	pmove.oldbuttons = saveob;	pmove.waterlevel = savewl;
+		pmove.momcool = savecool;	pmove.onground = saveog;	pmove.jump_held = savejh;
+		VectorCopy (v0, pmove.velocity);
+		pms_frametime = dt;
 	}
 
 	/* --- restore -------------------------------------------------------- */

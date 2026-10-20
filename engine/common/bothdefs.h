@@ -975,9 +975,9 @@ STAT_VIEW2			= 20,
 #endif
 STAT_VIEWZOOM		= 21, // DP
 #define STAT_VIEWZOOM_SCALE 255
-//STAT_UNUSED		= 22,
-//STAT_UNUSED		= 23,
-//STAT_UNUSED		= 24,
+STAT_MOMLIMIT		= 22,	//FTESurf Patch 882: PMLIM_* of the last move
+STAT_MOMSLIDE		= 23,	//FTESurf Patch 882: PMSLIDE_* of the last move
+STAT_MOMCOOL		= 24,	//FTESurf Patch 882: its bhop cooldown, seconds
 STAT_IDEALPITCH		= 25,	//nq-emu
 STAT_PUNCHANGLE_X	= 26,	//nq-emu
 STAT_PUNCHANGLE_Y	= 27,	//nq-emu
