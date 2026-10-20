@@ -2458,6 +2458,8 @@ void Surf_SetupFrame(void)
 
 	if (!cl.worldmodel || cl.worldmodel->loadstate!=MLS_LOADED)
 		r_refdef.flags |= RDF_NOWORLDMODEL;
+	if (r_refdef.capturekind < 1)
+		r_refdef.skyroom_noleafsky = false;	//FTESurf Patch 880: the hl2 plugin's PrepareFrame answers it per view
 
 	R_AnimateLight();
 

@@ -1191,6 +1191,9 @@ typedef struct model_s
 	//use the single hull above. Each entry is one convex piece; their union = a concave shape.
 	int			numhulls;
 	convhull_t	*convhulls;
+	//FTESurf Patch 888: the collision tree mover 9 traces instead of this model's, for a .phy
+	//hull whose old 16-bit indices wrapped (BIH_Trace swaps).  In memgroup; NULL = this one.
+	struct model_s *phyfixed;
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

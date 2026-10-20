@@ -99,6 +99,7 @@ static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their p
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
+static cvar_t *hl2_3dskyleaf;		//FTESurf Patch 880
 static cvar_t *hl2_contents_remap;
 cvar_t *hl2_propcollision;	//FTESurf Build 8: shared with mod_hl2.c, which picks the model's collision shape from it
 cvar_t *hl2_propcollision_nophy;	//FTESurf Patch 262: likewise -- "no .phy" means non-solid, not "use the render mesh"
@@ -177,7 +178,9 @@ extern volatile int phy_stat_tris_outward, phy_stat_tris_inverted;	//FTESurf Pat
 void Mod_PHY_ResetStats (void);
 qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
                                plugmodfuncs_t *phy_modfuncs, vecV_t **xyz,
-                               index_t **idx, size_t **ledgestart, size_t *numledges);	//FTESurf Patch 764
+                               index_t **idx, size_t **ledgestart, size_t *numledges,
+                               int fixed, qboolean *wrapped);	//FTESurf Patch 764, 888
+extern volatile int phy_stat_unwrapped;	//FTESurf Patch 888
 cvar_t *hl2_phywinding;	//FTESurf Patch 317: read by Mod_LoadHL2Model in mod_hl2.c, registered here beside hl2_dispwinding
 /*FTESurf Patch 318 -- see the essay above VBSP_AddBrushBevels.  Up here because
   VBSP_LoadBrushes resets the counters and sits well above the generator. */
@@ -498,6 +501,7 @@ typedef struct vbspinfo_s
 		float missingtile;	//FTESurf Patch 780: material did not resolve; world units per checker tile (0 = texinfo scale)
 	} *texinfo;
 
+	qbyte			*leafflags;			//FTESurf Patch 880: dleaf_t's flags (LEAF_FLAGS_SKY 0x01, SKY2D 0x04), [numleafs]
 	int				numareas;
 	int				floodvalid;
 	int				lastreportedarea;	//FTESurf Build 8: edge-detects the area print in VBSP_PrepareFrame
@@ -775,16 +779,23 @@ the six axial planes and the edge-cross-axis bevels, each at the ledge's own
 support so no side can cut it.  World space, so the bevel axes are the box's.
 These shapes are what a pin-7 recording replays on: any change to this builder or
 to Mod_PHY_ConvexPieces is a new PMSRC_VERSION, with this one kept for pin 7.
+Patch 888: a hull whose old indices wrapped also gets `fix`, the pieces read with
+each point array once, for mover 9; the old ones stay what pins 7/8 replay.
 */
-struct vbsp_phypieces_s
+struct vbsp_phypieceset_s
 {
-	model_t *m;
-	qboolean ok;
 	vecV_t *xyz;
 	index_t *idx;
 	size_t *ledgestart, numledges;
 };
+struct vbsp_phypieces_s
+{
+	model_t *m;
+	qboolean ok, wrapped;
+	struct vbsp_phypieceset_s old, fix;	//fix: only if wrapped; numledges 0 if unusable
+};
 static unsigned int vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyrefused, vbsp_stat_phyplanes;
+static unsigned int vbsp_stat_phyfixprops, vbsp_stat_phyfixrefused;	//Patch 888
 static q2mapsurface_t vbsp_physurface = {{"phy_hull"}};
 
 static struct vbsp_phypieces_s *VBSP_PhyPieces(struct vbsp_phypieces_s *cache, size_t *count, model_t *m)
@@ -795,9 +806,17 @@ static struct vbsp_phypieces_s *VBSP_PhyPieces(struct vbsp_phypieces_s *cache, s
 			return &cache[j];
 	memset(&cache[*count], 0, sizeof(cache[*count]));
 	cache[*count].m = m;
-	cache[*count].ok = Mod_PHY_ConvexPieces(m, filefuncs, modfuncs, &cache[*count].xyz,
-	                                        &cache[*count].idx, &cache[*count].ledgestart,
-	                                        &cache[*count].numledges);
+	cache[*count].ok = Mod_PHY_ConvexPieces(m, filefuncs, modfuncs, &cache[*count].old.xyz,
+	                                        &cache[*count].old.idx, &cache[*count].old.ledgestart,
+	                                        &cache[*count].old.numledges, 0, &cache[*count].wrapped);
+	if (cache[*count].ok && cache[*count].wrapped)
+	{
+		struct vbsp_phypieceset_s *f = &cache[*count].fix;
+		qboolean dummy;
+		if (!Mod_PHY_ConvexPieces(m, filefuncs, modfuncs, &f->xyz, &f->idx, &f->ledgestart,
+		                          &f->numledges, 1, &dummy))
+			memset(f, 0, sizeof(*f));
+	}
 	return &cache[(*count)++];
 }
 
@@ -835,7 +854,8 @@ static void VBSP_PhyRotate(const struct bihtransform_s *trn, const float *m, vec
 }
 
 //False refuses the prop (a ledge not convex or degenerate): it keeps its triangles.
-static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const struct vbsp_phypieces_s *pc)
+static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const struct vbsp_phypieceset_s *pc,
+                                q2cbrush_t **outbrushes, unsigned int *outnum)
 {
 	const struct bihtransform_s *trn = &sp->transform;
 	size_t li, t, nb = 0;
@@ -982,8 +1002,8 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 	plugfuncs->Free(pl);
 	if (!ok || !nb)
 		return false;
-	sp->transform.phybrushes = brushes;
-	sp->transform.numphybrushes = nb;
+	*outbrushes = brushes;
+	*outnum = nb;
 	vbsp_stat_phypieces += nb;
 	return true;
 }
@@ -3024,6 +3044,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 	*/
 	clusterbound = prv->vis ? prv->vis->numclusters : count;
 
+	prv->leafflags = plugfuncs->GMalloc(&mod->memgroup, count);
 	if (!wide && ver == 19)
 	{
 		prv->leaflight = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * count);
@@ -3045,6 +3066,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
 			out->cluster = LittleLong(in->cluster);		//already signed; -1 = no cluster
 			out->area = LittleLong(in->areaflags) & 0x1ffff;	//low 17 bits; upper 15 are flags
+			prv->leafflags[i] = ((unsigned int)LittleLong(in->areaflags) >> 17) & 0xff;
 			out->firstleafbrush = LittleLong(in->firstleafbrush);
 			out->numleafbrushes = LittleLong(in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + LittleLong(in->firstleafface);
@@ -3063,6 +3085,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			if (out->cluster == 0xffff)
 				out->cluster = -1;
 			out->area = (unsigned short)LittleShort (in->area) & 0x1ff;	//upper part is flags.
+			prv->leafflags[i] = (unsigned short)LittleShort (in->area) >> 9;
 			out->firstleafbrush = (unsigned short)LittleShort (in->firstleafbrush);
 			out->numleafbrushes = (unsigned short)LittleShort (in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + (unsigned short)LittleShort(in->firstleafface);
@@ -7972,6 +7995,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	phypieces = 0;	//FTESurf Patch 764, sized as phyprobe is
 	phypiece = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*phypiece)*prv->numstaticprops) : NULL;
 	vbsp_stat_phyprops = vbsp_stat_phypieces = vbsp_stat_phyrefused = vbsp_stat_phyplanes = 0;
+	vbsp_stat_phyfixprops = vbsp_stat_phyfixrefused = 0;	//Patch 888
 
 	bihleafs = sub->num_brushes;
 	if (hl2_dispcollision->ival)
@@ -8121,13 +8145,25 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		//FTESurf Patch 764
 		prv->staticprops[i].transform.phybrushes = NULL;
 		prv->staticprops[i].transform.numphybrushes = 0;
+		prv->staticprops[i].transform.phyfixbrushes = NULL;	//Patch 888
+		prv->staticprops[i].transform.numphyfixbrushes = 0;
+		prv->staticprops[i].transform.phyfix = false;
 		if (hl2_propcollision->ival == 1 && phypiece)
 		{
 			struct vbsp_phypieces_s *pc = VBSP_PhyPieces(phypiece, &phypieces, l->data.mesh.model);
-			if (pc->ok && VBSP_PhyBrushes(mod, &prv->staticprops[i], pc))
+			struct bihtransform_s *trn = &prv->staticprops[i].transform;
+			if (pc->ok && VBSP_PhyBrushes(mod, &prv->staticprops[i], &pc->old, &trn->phybrushes, &trn->numphybrushes))
 				vbsp_stat_phyprops++;
 			else if (pc->ok)
 				vbsp_stat_phyrefused++;
+			if (pc->ok && pc->wrapped)
+			{	//Patch 888: refused or unusable leaves 0 brushes, and mover 9 traces the model's phyfixed tree
+				trn->phyfix = true;
+				if (pc->fix.numledges && VBSP_PhyBrushes(mod, &prv->staticprops[i], &pc->fix, &trn->phyfixbrushes, &trn->numphyfixbrushes))
+					vbsp_stat_phyfixprops++;
+				else
+					vbsp_stat_phyfixrefused++;
+			}
 		}
 
 		l->data.contents = ~0u; //yuck!
@@ -8153,9 +8189,12 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	phyprobe = NULL;
 	for (i = 0; i < phypieces; i++)
 	{	//FTESurf Patch 764
-		plugfuncs->Free(phypiece[i].xyz);
-		plugfuncs->Free(phypiece[i].idx);
-		plugfuncs->Free(phypiece[i].ledgestart);
+		plugfuncs->Free(phypiece[i].old.xyz);
+		plugfuncs->Free(phypiece[i].old.idx);
+		plugfuncs->Free(phypiece[i].old.ledgestart);
+		plugfuncs->Free(phypiece[i].fix.xyz);	//Patch 888
+		plugfuncs->Free(phypiece[i].fix.idx);
+		plugfuncs->Free(phypiece[i].fix.ledgestart);
 	}
 	plugfuncs->Free(phypiece);
 	phypiece = NULL;
@@ -8175,10 +8214,11 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	*/
 	if (prv->numstaticprops && hl2_propcollision->ival)
 		Con_DPrintf("%s: collision shapes -- %i .phy hull (%i tris), %i bbox, "
-			"%i render mesh (%i unusable of which %i jointed), %i models with no .phy\n",
+			"%i render mesh (%i unusable of which %i jointed), %i models with no .phy, "
+			"%i hulls unwrapped for mover 9\n",
 			mod->name, phy_stat_hull, phy_stat_tris, phy_stat_bbox,
 			phy_stat_rejected, phy_stat_rejected, phy_stat_jointed,
-			phy_stat_nofile);
+			phy_stat_nofile, phy_stat_unwrapped);	//Patch 888: the last
 
 	/*
 	FTESurf Patch 317.  The winding census for this map's .phy hulls, and the
@@ -8230,6 +8270,12 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			mod->name, vbsp_stat_phyprops, vbsp_stat_phypieces, vbsp_stat_phyplanes,
 			(unsigned)((vbsp_stat_phypieces*sizeof(q2cbrush_t) + vbsp_stat_phyplanes*(sizeof(mplane_t)+sizeof(q2cbrushside_t)))/1024),
 			vbsp_stat_phyrefused ? va("; %u kept their triangles (a piece not convex or flat)", vbsp_stat_phyrefused) : "");
+	//FTESurf Patch 888
+	if (vbsp_stat_phyfixprops || vbsp_stat_phyfixrefused)
+		Con_Printf("%s: %u static props' .phy hulls overflowed 16-bit indices; at pm_sourceversion 9 %u trace "
+			"their pieces read unwrapped%s.\n",
+			mod->name, vbsp_stat_phyfixprops + vbsp_stat_phyfixrefused, vbsp_stat_phyfixprops,
+			vbsp_stat_phyfixrefused ? va(", %u their unwrapped triangles", vbsp_stat_phyfixrefused) : "");
 
 	/*
 	FTESurf Patch 262, and a real Con_Printf rather than a DPrintf: this is the
@@ -9207,6 +9253,21 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	qbyte *surfvis, *entvis;
 
 	refdef = r_refdef;
+
+	//FTESurf Patch 880: Source draws the 3D sky only where the eye's leaf has 3D sky in its PVS
+	//(viewrender.cpp:4595); a toolsskybox2d leaf shows the 2D skybox. The main view tests its eye, a
+	//portal view its exit (IsSkyboxVisibleFromExitPortal, :4840-4843); a water view keeps its outer
+	//view's answer, as Source's bDrawSkybox. Surf_SetupFrame clears it. surf_tendies: every spawn SKY2D.
+	if (r_refdef->capturekind < 1)
+	{
+		r_refdef->skyroom_noleafsky = false;	//per view: a second stereo eye shares the main view's refdef
+		if (hl2_3dskyleaf->ival && prv->leafflags)
+		{
+			int eyeleaf = VBSP_PointLeafnum(mod, r_refdef->recurse ? r_refdef->pvsorigin : r_refdef->vieworg);
+			if (eyeleaf >= 0 && eyeleaf < mod->numleafs && !(prv->leafflags[eyeleaf] & 0x01))
+				r_refdef->skyroom_noleafsky = true;
+		}
+	}
 
 	if (vis->buffersize < mod->pvsbytes)
 		vis->buffer = plugfuncs->Realloc(vis->buffer, vis->buffersize=mod->pvsbytes);
@@ -12644,6 +12705,7 @@ qboolean VBSP_Init(void)
 		have, kept so the difference can be seen rather than argued about.
 		*/
 		hl2_areaportals = cvarfuncs->GetNVFDG("hl2_areaportals", "1", CVAR_MAPLATCH, "Initial state of a Source map's areaportals.\n0: closed, and opened only by gamecode -- the Quake 2 rule, which seals off every area a Source map has because nothing closes or opens them.\n1: open, which is what Source itself initialises them to (default).", MAPOPTIONS);
+		hl2_3dskyleaf = cvarfuncs->GetNVFDG("hl2_3dskyleaf", "1", 0, "FTESurf Patch 880. 1: the 3D sky is drawn only from a leaf whose PVS holds 3D sky (LEAF_FLAGS_SKY) -- the main view's eye, a portal view's exit -- as Source (viewrender.cpp:4595, :4840); elsewhere the 2D skybox shows, as in Momentum. 0: wherever sky is visible, as before.", MAPOPTIONS);
 		/*
 		FTESurf Build 10 -- the price of Source water and Source glass.
 

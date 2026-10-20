@@ -1,6 +1,6 @@
 !!cvardf r_glsl_turbscale_reflect=1	//simpler scaler
 !!cvardf r_glsl_turbscale_refract=1	//simpler scaler
-!!cvarf hl2_waterdebug=0	//P867: 1 refraction 2 +fog 3 reflection 4 fresnel 5 fog depth 6/7 normal 8/9 the bound maps
+!!cvarf hl2_waterdebug=0	//P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps
 !!permu REFLECTCUBEMASK
 !!samps diffuse normalmap
 !!samps	refract=0	//always present
@@ -137,9 +137,9 @@ float eyeDepth(float z)
 	return abs(m_projection[3][2] / max(ndc * m_projection[2][3] - m_projection[2][2], 0.000001));
 }
 
-float waterDepth(vec2 uv, float surfaceDepth)
+float waterDepth(vec2 uv, float surfaceDepthAtUV)
 {
-	return max(0.0, eyeDepth(texture2D(s_refractdepth, uv).r) - surfaceDepth);
+	return max(0.0, eyeDepth(texture2D(s_refractdepth, uv).r) - surfaceDepthAtUV);
 }
 #endif
 
@@ -183,13 +183,21 @@ void main (void)
 
 #ifdef DEPTH
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
+	// P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
+	// on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
+	float invs = 1.0 / surfaceDepth;
+	vec2 dstc = vec2(dFdx(stc.x), dFdy(stc.y));
+	vec2 invgrad = vec2(dFdx(invs), dFdy(invs)) * dstc / max(dstc * dstc, vec2(1e-12));
 	depth = waterDepth(stc, surfaceDepth);
+	// An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
+	// with none) sits on a downward plane, as 96,033 bottom faces and 7,346 such undersides do (census).
+	bool topside = norm.z > -0.5;	// not a sign test: overhanging or pitched faces round both ways
 #endif
 	// Source attenuates distortion by the normal map's alpha and, above water and
 	// without a $basetexture, by the refraction's fog depth (water_ps2x_helper.h:64-72).
 	// Its fog depth has no start term (common_ps_fxc.h CalcWaterFogAlpha).
-#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX)
-	float distortion = clamp(depth / float(FOGRANGE), 0.0, 1.0) * nsample.a;
+#if defined(DEPTH) && !defined(UNDERWATER) && !defined(BASETEX) && !defined(BLURREFRACT)	//:72-76
+	float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;
 #else
 	float distortion = nsample.a;
 #endif
@@ -199,21 +207,42 @@ void main (void)
 	vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;
 #ifdef DEPTH
 	// Reject foreground/above-water distortion instead of pulling pillars
-	// across the shoreline. Capture and surface share screen depth.
+	// across the shoreline: keep a sample only if it lies beyond the plane on its
+	// own ray. invr <= 0 is a ray that never meets the plane (above the horizon).
+	vec2 rc = clamp(refractUV, 0.0, 1.0);
+	float invr = invs + dot(rc - stc, invgrad);
 	if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||
-		texture2D(s_refractdepth, clamp(refractUV, 0.0, 1.0)).r <= gl_FragCoord.z)
+		invr <= 0.0 || eyeDepth(texture2D(s_refractdepth, rc).r) * invr <= 1.0)
+	{
 		refractUV = stc;
-	depth = waterDepth(clamp(refractUV, 0.0, 1.0), surfaceDepth);
+		rc = stc;
+		invr = invs;
+	}
+	depth = waterDepth(rc, 1.0 / invr);
 #endif
-	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb * vec3(TINT_REFR);
+	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;
 	vec3 dbg_refr = refr;
 #if defined(DEPTH) && !defined(UNDERWATER)
-	float fogw = clamp(depth / float(FOGRANGE), 0.0, 1.0);
+	float fogw = topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0;
 #else
 	float fogw = 1.0;	// Source: no depth below water, so the farthest value
 #endif
 #if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
-	refr = mix(refr, vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
+	// P877: the refraction view draws the world in height fog by this factor (viewrender.cpp:5772,
+	// lightmappedgeneric_ps2_3_x.h:592-598); the water lerps again below (water_ps2x_helper.h:180).
+	// Gamma space, unlike Source's linear: on boreas save 8 linear was 39/255 off Momentum's shot, gamma 12.
+	// Eye under water Source lerps by the surface's distance (:182-183), but our capture is already
+	// water-fogged there, so that lerp is left out.
+	if (topside)
+		refr = mix(refr, vec3(FOGTINT), fogw);
+#endif
+	// Only Source's blurred refraction is tinted (water_ps2x_helper.h:147; $blurrefract defaults 0).
+#ifdef BLURREFRACT
+	refr *= vec3(TINT_REFR);
+#endif
+#if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
+	if (topside)
+		refr = mix(refr, vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
 #endif
 #ifndef BASETEX
 	// Shallow water (fog depth under 0.05, fully by 0.1) shows no reflection.

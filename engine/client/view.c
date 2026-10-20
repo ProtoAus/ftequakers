@@ -391,12 +391,33 @@ cvar_t		v_contrastboost = CVARFCD("v_contrastboost", "1.0", CVAR_ARCHIVE, V_Gamm
 cvar_t		v_brightness = CVARAFCD("brightness", "0.0", "v_brightness", CVAR_ARCHIVE, V_Gamma_Callback, "Brightness is how much 'white' to add to each and every pixel on the screen.");
 cvar_t		v_shadows = CVARAFCD("shadows", "0", "v_shadows", CVAR_ARCHIVE, V_Gamma_Callback, "Lift OpenGL scene shadows, 0..1. Preserves the deepest blacks and highlights; 0 disables. Uses spatial dither, not a raised black floor.");
 
+//FTESurf Patch 883: R_ShutdownRenderer's Mod_Shutdown frees mod_known and cl.worldmodel points into it until
+//R_ApplyRenderer_Load reloads; VID_DeInit, window messages and the new renderer's loads ask in between, so
+//they get the answers taken before the free.
+static qboolean v_worldfreed, v_world_source, v_world_deluxe;
+void V_WorldFreed(qboolean freed)
+{
+	if (freed && !v_worldfreed)	//a second shutdown before the reload must not read the freed model
+	{
+		v_world_source = cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP);
+		v_world_deluxe = cl.worldmodel && cl.worldmodel->lightmaps.deluxemapping;
+	}
+	v_worldfreed = freed;
+}
+qboolean V_WorldIsSource(void)
+{
+	return v_worldfreed ? v_world_source : (cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP));
+}
+qboolean V_WorldHasDeluxe(void)
+{
+	return v_worldfreed ? v_world_deluxe : (cl.worldmodel && cl.worldmodel->lightmaps.deluxemapping);
+}
+
 qboolean V_UseSceneGamma(void)
 {
 	// Source scenes must not depend on OS gamma ramps (or brighten the HUD).
 	return vid_hardwaregamma.ival == 4 ||
-		(qrenderer == QR_OPENGL && (v_shadows.value > 0 ||
-		(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))));
+		(qrenderer == QR_OPENGL && (v_shadows.value > 0 || V_WorldIsSource()));
 }
 
 qbyte		gammatable[256];	// palette is sent through this

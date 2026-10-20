@@ -21,7 +21,7 @@ static plugfsfuncs_t *fsfuncs;
 galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
-                                     unsigned int contents);
+                                     unsigned int contents, galiasinfo_t **unwrapped);
 extern cvar_t *hl2_propcollision;
 extern cvar_t *hl2_phywinding;	//FTESurf Patch 317, registered by VBSP_Init beside hl2_dispwinding.
 extern cvar_t *hl2_rigidprops;	//FTESurf Patch 230, registered by VBSP_Init beside the others.
@@ -1494,7 +1494,7 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	  consumed inside PHY_ReadLedge, which runs exactly once, at model load.
 	*/
 	{
-		galiasinfo_t *collision = NULL;
+		galiasinfo_t *collision = NULL, *unwrapped = NULL;
 		int mode = hl2_propcollision ? hl2_propcollision->ival : 1;
 		int winding = hl2_phywinding ? hl2_phywinding->ival : 1;
 
@@ -1504,9 +1504,25 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			winding = 1;
 		if (mode != 0)		//0 is mod_vbsp's business (no prop leaves at all)
 			collision = Mod_PHY_CollisionMesh(mod, mode, winding, filefuncs, modfuncs,
-			                                  FTECONTENTS_BODY);
+			                                  FTECONTENTS_BODY, &unwrapped);
 
 		modfuncs->BIH_BuildAlias(mod, collision ? collision : mod->meshinfo);
+		//FTESurf Patch 888: a hull whose old indices wrapped also gets the tree mover 9
+		//traces (BIH_Trace swaps to it), in a twin freed with this model.
+		mod->phyfixed = NULL;
+		if (unwrapped)
+		{
+			model_t *twin = plugfuncs->GMalloc(&mod->memgroup, sizeof(*twin));
+			memset(twin, 0, sizeof(*twin));
+			Q_strlcpy(twin->name, mod->name, sizeof(twin->name));
+			twin->type = mod->type;
+			twin->loadstate = MLS_LOADED;
+			VectorCopy(mod->mins, twin->mins);
+			VectorCopy(mod->maxs, twin->maxs);
+			twin->radius = mod->radius;
+			modfuncs->BIH_BuildAlias(twin, unwrapped);
+			mod->phyfixed = twin;
+		}
 	}
 	return result;
 }

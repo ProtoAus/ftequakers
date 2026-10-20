@@ -1,5 +1,344 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 889 — Momentum's stand-in packs mounted last (fs.c + lobby content)
+
+**Problem:** surf_nuclear's spawn hub is Portal 2 static props. The lobbies have no Portal 2,
+so the server loaded none of them ("675 static props are not solid", 25 models unable) while a
+client that owns Portal 2 stood on them: an endless fall into the hub's own teleport and a
+prediction error every tick (Lex, lobby 2). P679 mounted only Momentum's mount/hl2_dir.vpk so
+that its other-game placeholder packs could not outrank a real game mounted later.
+
+**Change:** `FS_Addon_AutoSourceBase` also mounts Momentum's `mount/<game>_placeholder.vpk` for
+TF2, CS:S, CS:GO and Portal 2 when that game's content pack is missing (`fs_standins 1`; 2 =
+always, 0 = never). "Installed" means tf2_misc_dir.vpk / cstrike_pak_dir.vpk / portal2's
+pak01_dir.vpk / CS:GO's P679 pak01_dir.vpk probe, not the folder, which an uninstall leaves behind.
+Momentum mounts a game's fallback in that game's slot; ours all sit below every other path:
+`FS_AddPathHandle` inserts every tail-appended path above a stand-in (`FS_IsStandInPack`, the
+`_placeholder.vpk` tail), so a pack fs_automount, fs_load or a map's own pakfile mounts later still
+wins, and `FS_Addon_SinkStandIns` puts them back below the loose dirs P875 sinks at boot /
+fs_restart. Stand-ins hash at depth + 0x100000 (`FS_HashDepth`), so that insert above them keeps the
+incremental hash; review 1 found the first cut marked it stale, and every lookup of every load then
+scanned every archive. Where two stand-ins share a model the earlier one wins (cstrike/csgo share
+616 .phy, 614 differ; csgo/portal2 15, 14 differ; tf/csgo 1), not the game's own slot. Stand-ins
+hold models only (.mdl/.vvd/.vtx/.phy), drawn grey with momentum's models/placeholder material; for
+the 84 models the lobbies could not load (17 maps) the .phy bytes and .mdl hull bounds equal the
+real game's, so PHY_HullInsideModel decides as for an owner. Lobbies (no Steam): the tf/csgo/portal2
+packs in game/placeholders as the last fs_addons.txt line, shipped with a P889 Pi native so a map's
+pakfile ranks above them there too.
+
+**Verified:** 0 warnings in fs.c (client + dedicated, stamp git-7604-patch-875-5-gfe814786a).
+Warm second map (surf_nuclear after surf_utopia), the server's own fs_loadstats line: first cut
+with stand-ins 9528 ms, 48546 lookups missed the hash, hash STALE; this build with stand-ins 6292 ms,
+19237, valid; stand-ins off 5540 ms, 19228, valid; installed exe 5409 ms, 19247, valid (stand-ins add
+~36k indexed files: +0.75 s on that load, +1.1 s on surf_utopia's). surf_nuclear spawn: a
+Pi-like server (fs_automount 0, fs_standins 2) with an owner's client stands at -9135.6 with one
+3.7 u prederr in the spawn drop (control: 514 prederr lines, falling -9023..-9247); the server's
+unloadable hub models drop 25 -> 4, and those 4 have no .phy in real Portal 2 either. Owner client
+with stand-ins forced on: flocate walkway_end_b .mdl/.phy -> Portal 2's pak01 (1780 B, the stand-in's
+is 1904), `path` lists the automounted games, then the map pak, then the four stand-ins;
+materials/dev/water_normal.vtf -> hl2_textures_dir.vpk (P875). Non-owner client (stand-ins, no
+automount) against a server with Portal 2: 1 prederr line; the same on the installed client: 25.
+Offline: the 84 lobby-unloadable models with a stand-in .phy match the real game's bytes and hull
+bounds. 130 library map paks share 4,149 paths with the three Pi stand-ins (214 .phy differ on 67
+maps), so the lobbies need this native, not content alone.
+
+## Patch 887 — linear float cubemaps encoded for the gamma framebuffer (hl2 plugin)
+
+**Problem:** surf_demise's first ramp (Lex, save 3) drew its panels near-black where Momentum shows
+dark red. Each panel's underlay is UnlitGeneric with only `$envmap elly/fakeskies/sky_demise_05.hdr`
+and `$envmaptint [1 .1 .1]`; that cube is RGBA16161616F, linear light. Source writes the envmap term
+through an sRGB encode (vertexlitgeneric_dx9_helper.cpp, BaseVSShader.cpp); vmt/unlitreflect (and
+the vertexlit, lightmapped and imposter envmap terms, water, refract) add textureCube().rgb straight
+into the gamma framebuffer, so the underlay drew at about 12/255 red against Source's ~69, and
+little of that survives the pane above it. 414 materials on 45 maps name an .hdr cube (census over
+1,926 map paks), and baked `.hdr.vtf` env_cubemaps that P264 falls back to are the same format.
+
+**Change:** img_vtf.c encodes a float cube (flag 0x4000, IMAGE_FORMAT_RGBA16161616F) linear -> sRGB
+at load, in place, through a 65,536-entry half-to-half table built in VTF_Init (values over 1 keep
+rising). Alpha, 2D float textures and $hdr: sky faces (IF_HDRDECOMPRESS) are untouched. Skipped when
+vid_srgb is nonzero, where the framebuffer encodes. A developer line names each converted cube.
+
+**Verified:** 0 warnings in img_vtf.c (plugin build). The table against numpy's sRGB over every
+finite half: at most 1 ulp, 19 of 31,743 differ; half round trip exact; linear 0.059 -> 68.7/255.
+
+## Patch 888 — .phy hulls past 65,536 copied points traced as they are (Source mover 9)
+
+**Problem:** Lex's surf_pantheon save 1 stands ~300 u above ramp07 on a 6.1° plane. `pm_dispprobe 3`
+named a 4,600-u BIH_TRIANGLE of ramp07.mdl, whose real hull's longest edge is 2,402. PHY_ReadLedge
+copied a ledge's points afresh for every ledge, though a compact surface's ledges all index one shared
+array, and stored `(index_t)(firstvert + e)` with a 16-bit index_t: ramp07's 427 ledges over one
+679-point array made 171,827 copies, and from ledge 163 (triangle 652) the indices wrapped onto other
+ledges' points. P764's convex-piece builder got wrong pieces from the same parse and refused ramp07,
+which kept its wrapped triangles. Server and client parse alike, so prediction agreed with the phantom.
+400 packed .phy pass the limit in 105 of 1,926 Momentum maps: 771 solid static placements on 64 maps,
+74 solid prop_dynamic(_override) on 18. surf_axil's mramp_5 built 17.1M vertices (274 MB).
+
+**Change:** PMSRC_VERSION 9. The old layout stays what pins <= 8 replay -- every triangle, ledge start
+and bound as before -- but keeps only the first 65,536 copies, all a wrapped 16-bit index reaches; the
+bounds check reads every point as it is parsed. A hull whose old count passed 65,536 is parsed again
+with each distinct point array copied once (PHY_FixArrays: sorted by file offset, as far as any ledge
+reaches; refused past 65,536 points, which falls back to the render mesh). mod_hl2 builds that mesh
+into a twin model (model_t.phyfixed, appended; its group freed with the model's), mod_vbsp builds its
+pieces into bihtransform.phyfixbrushes and sets `phyfix`. com_bih's bih_phyfix, set by the Source
+mover at pmsrcver >= 9 as bih_phybrushes is at 7, makes BIH_Trace / PointContents / NativeContents
+trace the twin and a static prop sweep phyfixbrushes -- or its model's twin when those were refused.
+Outside the mover nothing changes (P764's rule), so QC traces still meet the wrapped triangles.
+pm_dettest adds `fixtrace` / `fixmover` (mover 9); the static-prop line reports overflowed hulls.
+MODPLUGFUNCS_VERSION 6, since bihtransform_s and model_t grew: the exe and every native plugin ship
+together, and a mismatched pair refuses to load rather than reading past a struct.
+
+**Verified:** offline, the old and new parsers in one harness over 143 .phy from six maps at windings
+0 and 1: the new old-layout output equals the old parser's point for point (triangles, ledge starts,
+bounds), 0 differences. All 28 overflowing hulls parse unwrapped: ramp07 679 points, longest edge
+2,402.1 (5,599.7 wrapped), its 1,712 triangles identical to the old parse through triangle 652 (ledge
+163, where the wrap begins); mramp_5 13,646 points (17,128,661 copies). Client, server and hl2 plugin
+build with no new warnings. Game arms (surf_pantheon at mover 9 against the installed build, pin-8
+replays of Lex's save 1 and an older run, surf_voyager's Momentum flight at 8 and 9, pm_dettest) are
+not run yet: no game runs while Lex is on the machine.
+
+## Patch 878 — Refract icicles occlude each other: Source's blend rule, model panes back to front (hl2 plugin + client exe)
+
+**Problem (Lex, 21 Oct):** since P866, surf_boreas save 9's icicles "show incorrect sorting, some
+icicles from behind show up in front". The Refract ones are props: `icicle_r01_x2` (two spikes in one
+mesh) and `icicle_refracttest01` (`project_tendies/models/ice_refracttest`: $normalmap + env_cubemap);
+`icicle_01`-`06` are UnlitGeneric `ice03` and were never involved.
+
+**Cause:** Source draws a Refract with a $normalmap and no $envmap through SetDefaultBlendingShadowState:
+$additive always blends, otherwise only a translucent one does ($alpha other than 1, $vertexalpha, or
+a normal VTF with 1- or 8-bit alpha and no $alphatest; BaseShader.cpp:499, 607-671). Every other
+Refract is opaque and writes depth unless $nowritez (refract_dx9_helper.cpp:96, 138; blending turns
+depth writes off, BaseShader.cpp:593-598). Ours drew the opaque ones as alpha 1 through `blendfunc
+blend` with no depth write, so of two overlapping icicles the later one covered the other. Source
+copies the screen only for model renderables (c_baseanimating.cpp:799; never for brushes,
+c_baseentity.cpp:1801-1804), draws them back to front, each after a fresh copy
+(viewrender.cpp:4316-4374), and skips them in its water views (:4360-4363). Our screen-copy panes
+sort NEAREST (gl_shader.c Shader_Finish) and went world list first, then models, as submitted.
+
+**Change:**
+- `VMT_RefractBlend` is Source's rule (opaque, blend, additive by alpha, additive), reading the normal
+  map's alpha from its VTF flags. Refract reads `$normalmap`'s own value: `$bumpmap` (not a Refract
+  key) overwrote it, and on 144 packed materials it names something else, 32 of them a cubemap.
+- Mode 1 (`vmt/refract`, hl2_refract 1): an opaque screen-copy pane asks for depth. Mode 0
+  (`vmt/refractflat`) takes the rule for `#ADDITIVE`/`#NOCOVER` and writes no depth. A
+  $basetexture pane keeps its old drawing.
+- `GLBE_SubmitNearest` (gl_backend.c, standard pass only): world batches first in their old order,
+  then the model list's other batches, then model panes back to front by centre, each binding (so
+  copying) the screen, then weapons and no-depth-test draws. A world or brush pane's depth write is
+  dropped, so only model panes write depth. A water capture skips model panes.
+- `r_nearestsort 0` keeps the submission order. `r_viewstats` prints the scene's screen copies and
+  the pixels they copied.
+
+**Verified:** (the first commit, on the installed exe with Lex's cfg) aimed at icicle_r01_x2 at fov 30,
+the control draws the rear spike over the front one; with depth writes the front one is whole. That
+view is identical across r_blendsort 0/1/2 in either build, so its 14,335 changed pixels are all the
+patch. Census of packed materials (patches resolved): 2,258 Refract on 430 maps; opaque by $envmap
+1,695, opaque with a normal map 272, blend 284, additive 7. Four review rounds; the third narrowed
+the patch to model panes after per-face world ordering showed seams, the fourth found only text. 6118b82df against the same exe
+with the installed plugin at r_nearestsort 0 (Lex's cfg, paused cameras, uncapped, control /
+subject / control / subject): at the icicle_r01_x2 zoom the control's rear spike cuts across the
+front one and this build's front one is whole (39,600-40,400 changed pixels against a run-to-run
+floor of 279-888); surf_boreas's icicle group shows the same in its crop. Screen copies per view are
+the same in both builds (save 9 7, the zoom 1, garden 5 1, spectra 20 4, gigapede 9 1, bhop_recharge
+2 and 1, shibboleth 1; 6.4 Mpx each at Lex's r_renderscale 2), and frame time is within the
+run-to-run drift (save 9 3.07 / 3.15 / 3.84 / 3.39 ms). surf_shibboleth's glass floor (91 glass_10
+faces) is unchanged (130-279 pixels, floor ~310): no seams. bhop_recharge's glass_blur_clear changes
+by 1,000-3,000 pixels (floor 65-214): its $normalmap, no longer the cubemap $bumpmap named. Save 9,
+garden 5, spectra 20 and gigapede 9 vary between runs of one build as much as between builds
+(animated water, lava, the copy's content), so they were judged by eye: no new artefact.
+
+**Limits:**
+- World and brush glass does not occlude by depth (it did not before P878 either), and it is drawn
+  before the model panes: a Refract prop behind a world window draws over it.
+- A nested view (a portal, the 3D sky, a water capture's world panes) samples the last top-level copy,
+  and an opaque pane draws it at alpha 1 (P866).
+- Anything in a blended or additive bucket in front of a screen-copy pane, including particles and
+  paint on the glass, is drawn before it, so it is copied and refracted rather than drawn over it,
+  and an additive pane adds it twice. Source draws it after the pane.
+- Model panes go one batch at a time, each with a whole-screen copy, as P866 already made them (the
+  refract program has no instanced variant). Vulkan and D3D11 get the depth write without the order
+  (the plugin's programs are GL-only).
+- `$masked` (Source's dest-alpha overlay) is ignored, as before; no packed material uses it.
+
+## Patch 877 — Source water's under-water haze (hl2 plugin)
+
+**Problem (Lex, 21 Oct):** surf_boreas save 8: "Momentum has a blue haze under the surface and ours is
+clearer." Source draws the above-water refraction view in height fog toward the water's `$fogcolor`
+and clears it to that colour (viewrender.cpp:5772-5773; lightmappedgeneric_ps2_3_x.h:592-598 lerps
+the colour by CalcWaterFogAlpha and writes the factor to alpha), then the water shader lerps toward
+the fog colour again by that alpha from 0.05 (water_ps2x_helper.h:180). Patch 867 computed the same
+factor from `$refractiondepth` -- `(scene depth - surface depth) / ($fogend - $fogstart)` is
+CalcWaterFogAlpha (common_ps_fxc.h:208-224) for an eye above the plane -- but did only the second
+lerp.
+
+**Change:** water.glsl does the refraction view's lerp, then (only under `$blurrefract 1`, the one
+path where Source applies it, water_ps2x_helper.h:147) `$refracttint`, then the water's lerp. The
+surface depth is taken on the refracted sample's own ray (1/depth's screen gradient), as Source's
+alpha was, and the shoreline rejection keeps a sample only beyond the plane on that same ray (a ray
+that never meets the plane rejects). Under `$blurrefract` the distortion is not fog-scaled (:72-76). A face on a
+downward plane (normal z below -0.5) -- Patch 233's stand-in for a missing `$bottommaterial`, or water
+with no bottom material -- takes no above-water terms (census of 1,741 readable library maps:
+104,925 top faces on upward planes; 96,033 bottom faces and 7,346 undersides of top materials on
+downward planes; 4,456 downward faces of 62 materials with no upward partner, unverified). Gamma
+space, not Source's linear: fitted on boreas save 8 from the measured untinted refraction and fog
+factor (hl2_waterdebug 1 and 5) against Momentum's surf_boreas0002, mean error over three open-water
+boxes 11.9/255 gamma, 38.9 linear, 13.6 for Patch 867's single lerp. Eye under water Source also
+lerps by the surface's distance (:182-183); ours does not, because our capture is already
+water-fogged there (BACKLOG). In the shader rather than a fogged capture: the factor needs only the
+depth the water already reads.
+
+**Verified:** builds with only the 3 warnings from unchanged lines; all 1,024 vmt/water (GLSL 110)
+and 2,048 vmt/wateranim (130) permutations compile offline on this RTX 2080 SUPER (a mutant fails
+256). Review round 1 (under-water third fog, undersides, the refracted ray's surface depth, the tint
+path): the under-water lerp removed and the capture's fog left to BACKLOG, the rest fixed. Round 2
+(the shoreline test on the old ray, blur distortion, the sign test): fixed. Round 3 (a ray above the
+horizon was kept at default gl_mindist): fixed; its float32 precision table is in BACKLOG.
+In game (de1ffb17d, Lex's cfg, installed exe e1cf5c31, subject/control/subject/control against the
+installed plugin, no shader errors in any log): boreas save 8's three water boxes (47,64,75)
+(42,54,62) (51,72,86) against Momentum's (38,56,69) (46,64,77) (40,63,79), mean error 8.7 and 8.8 on
+the two runs, the control 17.6 on both; the shoreline at a grazing angle (eye 64 above the water)
+fogged with its reflection, no unfogged band at this scale; garden save 4's canal teal (14.1% of
+pixels changed), save 5 2.8%; hl2_water 1 draws. Frame time p50 at boreas save 2, paused, two 4 s
+windows per arm: P877 2.96/2.76 and 2.82/2.75 ms, control 3.03/3.02 and 2.82/2.79 -- no cost visible
+beyond the spread between runs. Not measured: an eye under water and surf_aesthetic's underside
+from below -- the water on boreas and surf_aesthetic is a fail zone, and every probe was sent back
+to the stage start.
+
+## Patch 880 — the 3D sky from the sky camera's own vis and area, and only where Source draws it (client exe + hl2 plugin)
+
+**Problem (Lex, 21 Oct):** surf_tendies "window lowers fps": 900 fps in the start room looking away
+from the window (save 2), 90 looking slightly left at it (save 3); and "save 5 gets no skybox when
+outside looking at the skybox and 90fps, and save 6 which is next to save 5 ... 850fps". The window
+is ordinary LightmappedGeneric glass; the cost was the 3D sky seen through it. R_DrawSkyroom took the
+sky view's PVS from the scaled eye (sky_camera + eye/scale) and the hl2 plugin its area bits from that
+eye's leaf; at saves 3 and 5 that eye sits above the sky room's ceiling (z 14848) in solid: cluster
+-1, area 0 ("everything"), so the 3D sky drew the whole map from inside solid (installed exe, Lex's
+cfg: save 3 148 fps, 3D sky 4.78 ms / 440 draws; save 5 151 fps and grey walls where the sky is).
+Source draws the 3D sky with the sky camera's own vis and only its area (viewrender.cpp:4627-4630,
+4675), and only when the eye's leaf has 3D sky in its PVS (IsSkyboxVisibleFromPoint, :4595).
+
+**Change:** on a Source map (MDLF_SOURCEBSP) R_DrawSkyroom takes the sky view's pvsorigin from the sky
+camera and area bits holding the camera's area alone (all areas for the null area, as
+VBSP_WriteAreaBits), when the camera's leaf has a cluster; else, and on Quake 2/3 and FTE sky rooms, as
+before. The camera is the first sky_camera's origin from the entity lump (CSQC's choice), used when it
+agrees with CSQC's camera + eye/scale within a unit: that sum arrives float-rounded, and seven maps'
+cameras sit exactly on a floor plane (surf_santorini, santorini2, santorini3, santorini_ksf, tropic,
+tropic2, mesa_aether). The hl2 plugin keeps each leaf's flags; VBSP_PrepareFrame answers per view in an
+appended refdef_t field whether the eye's leaf has LEAF_FLAGS_SKY (vrad bakes the 3D-sky PVS test into
+it, utils/vrad/lightmap.cpp:1350-1470; maps without vrad keep it on every leaf): the main view from its
+eye, a portal view from its exit (IsSkyboxVisibleFromExitPortal, :4840-4843; a kitsune door tests its
+partner's), a water view keeps its outer view's answer (bDrawSkybox). skyroom_enabled stays CSQC's.
+`hl2_3dskyleaf 0` is the old rule. r_viewstats adds "3D skies from the sky camera". No CSQC change.
+
+**Verified:** Lex's cfg, paused, uncapped, against the installed exe: tendies save 3 148 -> 1,011 fps,
+save 5 151 -> 1,116 (the 2D sky with clouds and sun where the skyline was; Momentum shows its 2D sky
+there, every tendies spawn is SKY2D-only), save 6 978 -> 1,196, save 2 897 -> 968; the exe before P868
+is as broken. santorini walk: lump camera "from the camera" = "drawn"; a mutant without the lump read
+falls behind (~1% of frames). Leaf gate: surf_epithet's SKY2D-only point 3D sky 0 (control 1.00),
+garden save 3 kept. bhop_recharge's link2_1 door (unflagged room, flagged partner) pixel-identical to
+the installed exe (the main-view-only gate lost its 3D sky, 2.31% of pixels), 1.20 ms / 627 draws for
+its 3D sky against 3.09 / 1,098, 192 fps against 115; bhop_2shiny2shuckle's doors identical, no
+unfilled sky. Census: CSQC's parse and the engine's give bit-identical origins on all 237 sky_camera
+maps; 62 of 221 put the scaled eye outside the sky room from some spawn or teleport (61 in solid);
+leaf flags: 72 maps SKY at every point, 7 at none, 142 mixed. Four review rounds (rebuilt camera, null
+area, CoD1 passing the gate; then nothing; the gate inherited through portals, fixed per view; then
+nothing). Limits: the first sky_camera wins (Source: SF_SKY_MASTER, else the last constructed,
+SkyCamera.cpp:23-29); RT_PORTALCAMERA never sets pvsorigin (unused here); the mirror fallback re-tests
+at the mesh centre where Source inherits; with r_portalareas 0 a door view uses the near view's areas.
+
+## Patch 883 — vid_restart and ent_view crashes (exe)
+
+**Problem:** Lex: "vid_restart and ent_view crashes the game sometimes". The installed exe's own
+crash logger (crashaddr.txt beside it) held both, read with the symbols of a rebuild of its commit
+(function addresses checked equal: 13,367 of 13,720 first-six-byte prologues identical, the rest
+RIP-relative loads of shifted data). (1) `V_UseSceneGamma+0x47`, `mov 0x105(%rax)`: a renderer
+restart (vid_restart, a mode or fullscreen change) runs R_ShutdownRenderer, whose Mod_Shutdown frees
+mod_known while cl.worldmodel points into it until R_ApplyRenderer_Load reloads; VID_DeInit's
+GLAppActivate, window messages pumped during the new renderer's font load, and its texture uploads
+call V_UseSceneGamma, which read `cl.worldmodel->engineflags` from the freed (unmapped) block. The
+read came with 694bdd544 (P728, 15 Oct); it needs a map, `shadows 0` and OpenGL. (2)
+`BE_GenModelBatches+0xcd7` (BE_GenPolyBatches inlined) under CSQC renderscene: a scene polygon's
+`shader->sort` was garbage and indexed past the batch list. CLQ1_AddHoverBrushes (Patch 331,
+ent_view's dithered faces) kept its two shaders in statics registered once, and a renderer restart
+frees every shader. A review found two more of the same kind: the lamp shadow meshes (r_shadows 2
+prop shadows) keyed on the world model's address, which the restarted mod_known can repeat, so a
+second restart of a map could reuse meshes that reference the freed world; and Shader_LoadPermutation
+reading `cl.worldmodel->lightmaps.deluxemapping` while r_glsl_precache 1 compiles every permutation
+in the restart window.
+
+**Change:** view.c V_WorldFreed: R_ShutdownRenderer takes the world's answers (Source BSP,
+deluxemapping) before Mod_Shutdown, once, so a second shutdown before the reload never reads the
+freed model; V_WorldIsSource / V_WorldHasDeluxe serve them until R_ApplyRenderer_Load has set
+cl.worldmodel again (after the reload, and after the block for no world or a Quake 3 one).
+V_UseSceneGamma and Shader_LoadPermutation ask those. CLQ1_AddHoverBrushes looks its shaders up each
+frame it draws, as r_showbrushes does, and returns first when neither cvar names a model.
+Sh_FlushMapLights frees the lamp meshes and the address key, from Sh_Shutdown (the old context is
+still current there) and from Sh_LoadMapLights.
+
+**Verified:**
+- Rig, Lex's ftesurf.cfg read into each run, 1600x900 window. The control (a rebuild of the installed
+  exe's commit, laid out like it) died at the first `vid_restart` on poop at V_UseSceneGamma+0x47, here
+  through window messages pumped during the new renderer's font load. P883 ran every restart (two
+  in that arm, four in the lamp arm) and Patch 871's panel cache came back after them (`hudcache` why 0, ~130 redraws/s at hud_fps 144); the
+  screenshot after the restart has the HUD and the key strip.
+- `r_glsl_precache 1` then `vid_restart`: without the review fix, Shader_LoadPermutation+0x3d4
+  (`cmpl $0,0x5c4(%rax)`, the world's deluxemapping) on poop and on surf_sidistic; with it, passes.
+- ent_view on surf_sidistic (7 models in view, a hover on *1, then *2 after a restart): the build
+  without the cl_ents change did not crash in its one run. A check build printing each cached pointer
+  beside the shader registered under its name read, after the restart, fill cached ...850A0 registered
+  (null), lines cached ...7C060 registered ...601F7540: every frame drew with two freed shaders.
+  P883 drew it through the restart.
+- Lamp meshes: not reproduced. On surf_sidistic (671 lamps, r_shadows 2, props=0 cells=0) the
+  reloaded world came back at a new address after both restarts, so the old code reloaded the lamps
+  as well; P883 reloads them after every restart.
+- Two review rounds (lifetimes and call order): round 1 found the lamp meshes and the precache read;
+  round 2 found nothing but two comments the fix had made untrue.
+- The deploy exe itself: two restarts in the rig, the panel cache resumed, no crash record.
+
+**Live:** exe 8b8cb611 (git-7606-patch-883-0-g979e91eb0, built clean from 979e91eb0) in both installs
+since 2026-10-20 19:39:45Z UTC, .prev e1cf5c31. Client only: the lobbies are unchanged.
+
+**Left (BACKLOG "Renderer restart leftovers"):** with r_glsl_precache 1, a restart that changes
+r_deluxemapping compiles bump permutations against the old world's answer until a shader reload; a
+restart between CL_LoadModels stages leaves cl.model_precache pointing at freed models (upstream).
+
+## Patch 885 — the start-hop rule judges only hops in the start, once you stood there (qwprogs)
+
+**Problem:** Lex, surf_tendies: the route is one jump out of the start zone and a hop on the booster in
+the pit beyond it, and that hop made the run practice. SV_TimerJumpWatch judged every jump until the
+start settled (about a second airborne, a ramp, or a ground dwell), in the box or not.
+
+**Change:** a hop taken once the pre-move hull (run_t_lastorg, the launch test's point and hull) is
+outside the arm zone's box, and outside any START it is standing in (run_t_azone), is no longer
+judged -- if the attempt stood in the box for the initial-jump dwell while ARMED (run_t_boxrest,
+cleared by SV_TimerArm). Review 1 found the version without that latch let a player bhop beside a
+small start, cross it in the air (it arms, never lands) and hop on with the speed ranked; an unrested
+attempt keeps the old judgment. ARMED is unchanged.
+
+**Verified:** 0 warnings. `cfg/test/p885hop.cfg` / `p885walk.cfg` via `tools/p884arms.py` on
+surf_tendies with Lex's local zone: H (rest, one jump out, booster hop) control 4ab61a33 `practice 1`,
+fixed 89550455 `practice 0`; I (hop chain in the box) `hopped 1` on every build; W (run_prestrafe_time
+5, walk off unrested, hop outside) control `practice 1`, first cut d8a47ba9 `practice 0` (the hole),
+fixed `practice 1`. Two review lenses, then an integrity round on the fix. Left: a fly-through that
+lands on a ramp still ranks, as before (no exit cap: run_startcap 0); run_zone_hull_live 1's ducked
+corner; packet granularity (BACKLOG).
+
+## Patch 884 — a func_physbox with "notsolid" 1 is not solid (qwprogs)
+
+**Problem:** Lex, surf_lovetunnel save 10: stopped mid-map standing on a func_physbox. Source reads
+"notsolid" as m_bNotSolidToWorld and adds FSOLID_NOT_SOLID (physobj.cpp:382, :458); SV_SpawnBreakable
+made every physbox SOLID_BSP. Here *16 is the butterflies' motor axle (a 16-unit cube) and *17 beside
+it a 16 x 4112 x 4112 wall. 229 such boxes on 30 of 1,926 library maps.
+
+**Change:** func_physbox (and func_physbox_multiplayer through it) spawns SOLID_NOT when notsolid is
+set, relinked. No map sends Enable/Disable/Toggle to one (census), so SV_IOEnable's SOLID_BSP default
+for an unset vbsp_io_solid is not reached.
+
+**Verified:** 0 warnings. `cfg/test/p884phys.cfg`: ent_info on *16/*17 `solid BSP` (control
+4ab61a33) / `solid NOT` (fixed); at save 10's origin a second later z -696.0 / -1100.0. Physents
+digest moves on those maps (P790's class, the owed rule bump; a touched box HOLDs as `state` rather
+than `physents`). Debris (58/12 maps) and func_physbox_multiplayer's PUSHAWAY group (111/19) stay
+solid pending a Momentum check (BACKLOG).
+
 ## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
 
 **Problem:** nothing told a player what an update changed. The release records (tools/release0NN.md)
