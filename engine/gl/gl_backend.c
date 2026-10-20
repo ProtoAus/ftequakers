@@ -6486,7 +6486,6 @@ extern cvar_t r_waterviews;
 #define BE_WATERPLANES 128	//on-screen facing water planes weighed per view, each over all its batches before the
 							//choice (the library's most is 82 up-facing planes on a whole map); at 1 any more share
 #define BE_WATERPROBES 3	//traces per plane, from its heaviest meshes
-#define BE_WATERCLIP 48		//a face with more vertices than this is weighed unclipped
 typedef struct
 {
 	vec3_t eye;				//the view this was chosen for: a submit from anywhere else must not find it
@@ -6629,53 +6628,66 @@ static double GLBE_TriSolidAngle(const vec3_t p0, const vec3_t p1, const vec3_t 
 		(b[0]*c[0] + b[1]*c[1] + b[2]*c[2])*la;
 	return 2 * atan2(num, den);
 }
-//the solid angle of a convex face's part inside the view frustum -- the exact screen share, so a pool the eye
+//the solid angle of a face's part inside the view frustum -- the exact screen share, so a pool the eye
 //floats over outweighs a smaller water farther off however its faces are cut -- and that part's centre
+//(weighted by solid angle). Over the mesh's TRIANGLES: a warped water face is a subdivided grid, not a fan
+//in vertex order, and clipping a grid as one polygon multiplies the crossings past any fixed buffer.
 static double GLBE_FaceSolidAngle(const mesh_t *mesh, vec3_t centre)
 {
-	vec3_t buf[2][BE_WATERCLIP + MAXFRUSTUMPLANES + 1];
-	int n = mesh->numvertexes, i, k, o, p, cur = 0;
-	double sum = 0;
+	vec3_t buf[2][3 + MAXFRUSTUMPLANES + 1];	//a triangle clipped by each plane gains at most one vertex
+	const int cap = sizeof(buf[0]) / sizeof(buf[0][0]);
+	unsigned int t;
+	int i, k, o, p, n, cur;
+	double sum = 0, w;
+	vec3_t c;
 	VectorClear(centre);
-	if (n > BE_WATERCLIP)
-	{
-		for (i = 0; i < n; i++)
-			VectorAdd(centre, mesh->xyz_array[i], centre);
-		VectorScale(centre, 1.0f/n, centre);
-		for (i = 1; i + 1 < n; i++)	//a face is a convex fan
-			sum += GLBE_TriSolidAngle(mesh->xyz_array[0], mesh->xyz_array[i], mesh->xyz_array[i+1]);
-		return sum;
-	}
-	for (i = 0; i < n; i++)
-		VectorCopy(mesh->xyz_array[i], buf[0][i]);
-	for (p = 0; p < r_refdef.frustum_numplanes && n >= 3; p++)
-	{
-		const mplane_t *pl = &r_refdef.frustum[p];
-		vec3_t *in = buf[cur], *out = buf[cur^1];
-		for (o = 0, i = 0; i < n; i++)
-		{
-			const float *a = in[i], *b = in[(i+1)%n];
-			float da = DotProduct(a, pl->normal) - pl->dist, db = DotProduct(b, pl->normal) - pl->dist;
-			if (da >= 0)
-				VectorCopy(a, out[o++]);
-			if ((da >= 0) != (db >= 0))
-			{
-				float t = da / (da - db);
-				for (k = 0; k < 3; k++)
-					out[o][k] = a[k] + t * (b[k] - a[k]);
-				o++;
-			}
-		}
-		n = o;
-		cur ^= 1;
-	}
-	if (n < 3)
+	if (!mesh->indexes)
 		return 0;
-	for (i = 0; i < n; i++)
-		VectorAdd(centre, buf[cur][i], centre);
-	VectorScale(centre, 1.0f/n, centre);
-	for (i = 1; i + 1 < n; i++)
-		sum += GLBE_TriSolidAngle(buf[cur][0], buf[cur][i], buf[cur][i+1]);
+	for (t = 0; t + 2 < (unsigned int)mesh->numindexes; t += 3)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			unsigned int v = mesh->indexes[t+i];
+			if (v >= (unsigned int)mesh->numvertexes)
+				break;
+			VectorCopy(mesh->xyz_array[v], buf[0][i]);
+		}
+		if (i < 3)
+			continue;
+		for (n = 3, cur = 0, p = 0; p < r_refdef.frustum_numplanes && n >= 3; p++)
+		{
+			const mplane_t *pl = &r_refdef.frustum[p];
+			vec3_t *in = buf[cur], *out = buf[cur^1];
+			for (o = 0, i = 0; i < n; i++)
+			{
+				const float *a = in[i], *b = in[(i+1)%n];
+				float da = DotProduct(a, pl->normal) - pl->dist, db = DotProduct(b, pl->normal) - pl->dist;
+				if (da >= 0 && o < cap)
+					VectorCopy(a, out[o++]);
+				if ((da >= 0) != (db >= 0) && o < cap)
+				{
+					float f = da / (da - db);
+					for (k = 0; k < 3; k++)
+						out[o][k] = a[k] + f * (b[k] - a[k]);
+					o++;
+				}
+			}
+			n = o;
+			cur ^= 1;
+		}
+		if (n < 3)
+			continue;
+		for (w = 0, i = 1; i + 1 < n; i++)
+			w += GLBE_TriSolidAngle(buf[cur][0], buf[cur][i], buf[cur][i+1]);
+		if (w <= 0)
+			continue;
+		for (VectorClear(c), i = 0; i < n; i++)
+			VectorAdd(c, buf[cur][i], c);
+		VectorMA(centre, w / n, c, centre);
+		sum += w;
+	}
+	if (sum > 0)
+		VectorScale(centre, 1 / sum, centre);
 	return sum;
 }
 //the on-screen test both the weight and the capture skip use: some face's clipped polygon is not empty
