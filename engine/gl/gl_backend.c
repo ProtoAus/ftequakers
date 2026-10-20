@@ -1381,14 +1381,22 @@ void GLBE_EndShadowMap(int restorefbo)
 }
 #endif
 
+//FTESurf Patch 866: what temptexture's storage was allocated as (0 = none).
+static int be_currentw, be_currenth;
+static GLenum be_currentfmt;
+
 static void T_Gen_CurrentRender(int tmu)
 {
 	int vwidth, vheight;
 	int pwidth = vid.fbpwidth;
 	int pheight = vid.fbpheight;
 	GLenum fmt;
+	//FTESurf Patch 866: bind the last copy rather than leave the unit holding whatever it had.
 	if (r_refdef.recurse)
+	{
+		GL_MTBind(tmu, GL_TEXTURE_2D, TEXVALID(shaderstate.temptexture) ? shaderstate.temptexture : r_blackimage);
 		return;
+	}
 
 	if (sh_config.texture_non_power_of_two_pic)
 	{
@@ -1423,6 +1431,16 @@ static void T_Gen_CurrentRender(int tmu)
 		qglGenTextures(1, &shaderstate.temptexture->num);
 	}
 	GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
+	//FTESurf Patch 866: copy into the storage the last copy allocated; CopyTexImage2D
+	//reallocated it for every batch that samples the screen (Refract at hl2_refract 1).
+	if (be_currentw == vwidth && be_currenth == vheight && be_currentfmt == fmt)
+	{
+		qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, vwidth, vheight);
+		return;
+	}
+	be_currentw = vwidth;
+	be_currenth = vheight;
+	be_currentfmt = fmt;
 	qglCopyTexImage2D(GL_TEXTURE_2D, 0, fmt, 0, 0, vwidth, vheight, 0);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1778,6 +1796,7 @@ void GLBE_DestroyFBOs(void)
 		Image_DestroyTexture(shaderstate.temptexture);
 		shaderstate.temptexture = r_nulltex;
 	}
+	be_currentw = be_currenth = 0;	//FTESurf Patch 866: the next copy allocates
 
 	//shadowmapping stuff
 	if (shadow_fbo_id)

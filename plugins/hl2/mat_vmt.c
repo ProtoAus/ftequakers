@@ -891,6 +891,7 @@ typedef struct
 	shader's own #ifndef default is what silence should get.
 	*/
 	float refractamount, reflectamount;
+	float bluramount;	//FTESurf Patch 866
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -2052,6 +2053,9 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->refractamount = atof(value);
 			st->refractamount_set = true;
 		}
+		else if (!Q_strcasecmp(key, "$bluramount"))
+			st->bluramount = atof(value);	//FTESurf Patch 866: Refract's BLUR combo; water.glsl has no blur stage
+
 		else if (!Q_strcasecmp(key, "$refracttint"))
 			st->refracttint_set = VMT_ParseColour(value, st->refracttint);
 		else if (!Q_strcasecmp(key, "$reflecttexture"))
@@ -3899,10 +3903,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
 			size_t aoff = 0;
 			const char *nm = *st->normalmap ? st->normalmap : st->dudvmap;
-			//env_cubemap reflects only under hl2_envcubemap, as on every other class;
-			//the pass's REFLECTCUBEMASK gate does the runtime switches.
-			qboolean env = *st->envmap && *nm &&
-				(strcmp(st->envmap, "env_cubemap") || (hl2_envcubemap && hl2_envcubemap->ival));
+			//FTESurf Patch 866: env_cubemap reflects whatever hl2_envcubemap says -- on Refract
+			//the reflection is most of what makes the pane visible (surf_boreas's icicles);
+			//the pass's REFLECTCUBEMASK gate keeps r_reflectcube/r_envcubemap.
+			qboolean env = *st->envmap && *nm;
 
 			if (*nm)
 				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
@@ -3951,7 +3955,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			st->alphaval = 0;
 			if (env)
 			{
-				if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
+				if (!strcmp(st->envmap, "env_cubemap"))
 					st->wantenvcube = true;
 				Q_strlcatfz(script, &offset, sizeof(script),
 					"\t{\n"
@@ -3964,25 +3968,91 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 		else
 		{
-			if (*st->refracttinttexture)
-				Q_strlcpy(progargs, "#TINTTEXTURE", sizeof(progargs));
+			/*
+			FTESurf Patch 866: mode 1 is refract_ps20b on the screen copy (vmt/refract):
+			the warp is normal.xy * normal.a * $refractamount, the colour is times
+			$refracttint (and the tint texture), $bluramount 1 is Source's 9-tap blur,
+			and the $envmap term is added.  Blending follows refract_dx9_helper.cpp:143-147:
+			none with an $envmap (the alpha is the reflection amount), additive under
+			$additive, else by the normal map's alpha; $alphatest drops that blend unless
+			$alpha is fractional (BaseShader.cpp:617).  The tail's blend is cleared as
+			in mode 0.
+			*/
+			char args[1024], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16], refr[MAX_QPATH + 16];
+			size_t aoff = 0;
+			//DX9 Refract reads $normalmap only ($dudvmap is DX8's, and loads unsigned here)
+			const char *nm = st->normalmap;
+			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
+			qboolean add = st->additive && !st->envauthored;
 
+			if (*nm)
+				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
+			else
+				Q_strlcpy(bump, "$identitynormal", sizeof(bump));
+			//a real $basetexture is what Refract samples instead of the screen (refract_dx9_helper.cpp:240-247)
+			if (!st->basedefaulted)
+				Q_snprintfz(refr, sizeof(refr), "\"%s%s.vtf\"", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+			else
+				Q_strlcpy(refr, "$currentrender", sizeof(refr));
+			if (*st->refracttinttexture)
+				Q_snprintfz(tint, sizeof(tint), "\"%s%s.vtf\"", strcmp(st->refracttinttexture, "materials/")?"materials/":"", st->refracttinttexture);
+			else
+				Q_strlcpy(tint, "$whiteimage", sizeof(tint));
+
+			*args = 0;
+			if (st->refracttint_set)
+				Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
+			if (st->refractamount_set)
+			{
+				aoff = strlen(args);
+				Q_strlcatfz(args, &aoff, sizeof(args), "#REFRAMOUNT=%f", st->refractamount);
+			}
+			if (*st->refracttinttexture)
+				Q_strlcat(args, "#TINTTEX", sizeof(args));
+			if ((int)st->bluramount >= 1)	//an integer combo clamped to 0..1 (refract_dx9_helper.cpp:92-105)
+				Q_strlcat(args, "#BLUR", sizeof(args));
+			if (!*nm)
+				Q_strlcat(args, "#NOWARP", sizeof(args));
+			if (add)
+				Q_strlcat(args, "#ADDITIVE", sizeof(args));
+			if (st->alphatest)
+				Q_strlcat(args, "#ALPHATEST", sizeof(args));
+			if (st->nofog)
+				Q_strlcat(args, "#NOFOG", sizeof(args));
+			if (st->envauthored || (st->alphatest && !(st->alphaval > 0 && st->alphaval < 1)))
+				Q_strlcat(args, "#OPAQUE", sizeof(args));
+			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
+			{
+				double a = st->scrollangle * (3.14159265358979323846/180.0);
+				aoff = strlen(args);
+				Q_strlcatfz(args, &aoff, sizeof(args), "#SCROLL=%f,%f", st->scrollrate*cos(a), st->scrollrate*sin(a));
+			}
+			if (env)
+			{
+				if (!strcmp(st->envmap, "env_cubemap"))
+					st->wantenvcube = true;
+				Q_strlcat(args, envmaptint, sizeof(args));
+				Q_strlcat(args, envmapsat, sizeof(args));
+				if (st->envmapcontrast_set)
+				{
+					aoff = strlen(args);
+					Q_strlcatfz(args, &aoff, sizeof(args), "#ENVCONTRAST=%f", st->envmapcontrast);
+				}
+			}
+
+			//blendfunc before the maps (see mode 0); an opaque pane still sorts as
+			//blended, after what it shows: its alpha is 1 under #OPAQUE.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
 					"\t\tprogram \"vmt/refract%s\"\n"
-					"\t\tmap $currentrender\n"
-					"\t\tmap \"%s%s.vtf\"\n"
-				"\t}\n", progargs, strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
-		}
-
-		//rmode 2 has no normal to perturb and samples its texture through the
-		//pass, and rmode 0 maps both in its own passes.
-		if (rmode == 1)
-		{
-			if (*st->refracttinttexture)
-				Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->refracttinttexture, "materials/")?"materials/":"", st->refracttinttexture);
-
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+					"\t\tblendfunc %s\n"
+					"\t\tmap %s\n"
+					"\t\tmap %s\n"
+					"\t\tmap %s\n"
+				"\t}\n", args, add ? "GL_SRC_ALPHA GL_ONE" : "blend", refr, bump, tint);
+			st->translucent = 0;
+			st->additive = 0;
+			st->alphaval = 0;
 		}
 	}
 	/*

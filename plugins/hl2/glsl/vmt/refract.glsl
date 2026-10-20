@@ -1,51 +1,108 @@
 !!ver 110
-!!permu BUMP
-!!samps diffuse
-!!samps =BUMP normalmap
-!!samps refraction=0 dudvmap=1
+!!permu FOG
+!!permu FRAMEBLEND
+!!permu SKELETAL
+!!permu REFLECTCUBEMASK
+!!samps refraction=0 bump=1 tint=2
+!!samps =REFLECTCUBEMASK reflectcube
 
 #include "sys/defs.h"
 
+// FTESurf Patch 866: hl2_refract 1, Source's refract_ps20b.fxc on the screen copy:
+//   warp = normal.xy * normal.a * $refractamount (the old shader offset by the whole
+//   normalized normal, so surf_garden's fountain, $refractamount .02, smeared the screen);
+//   result = screen(warp) * $refracttint (* 2 tint texture) [+ $envmap term], alpha normal.a.
+// Gamma-space like refractflat.glsl: 2x linear is 2^(1/2.2) here.
+
+#ifndef REFRTINT
+#define REFRTINT 1.0,1.0,1.0
+#endif
+#ifndef REFRAMOUNT
+#define REFRAMOUNT 2.0
+#endif
+#ifndef SCROLL
+#define SCROLL 0.0,0.0
+#endif
+#ifndef ENVTINT
+#define ENVTINT 1.0,1.0,1.0
+#endif
+#ifndef ENVSAT
+#define ENVSAT 1.0,1.0,1.0
+#endif
+#ifndef ENVCONTRAST
+#define ENVCONTRAST 0.0
+#endif
+
 varying vec2 tex_c;
-varying mat3 invsurface;
 varying vec4 tf_c;
-varying vec3 eyeminusvertex;
+#ifdef REFLECTCUBEMASK
+varying vec3 incident;
+varying mat3 invsurface;
+#endif
 
 #ifdef VERTEX_SHADER
-	void main ()
-	{
-		invsurface[0] = v_svector;
-		invsurface[1] = v_tvector;
-		invsurface[2] = v_normal;
-		tf_c = ftetransform();
-		tex_c = v_texcoord;
-		gl_Position = tf_c;
-	}
+#include "sys/skeletal.h"
+void main()
+{
+	vec3 w, n, s, t;
+	gl_Position = tf_c = skeletaltransform_wnst(w, n, s, t);
+	tex_c = v_texcoord + e_time * vec2(SCROLL);
+#ifdef REFLECTCUBEMASK
+	incident = w - e_eyepos;
+	invsurface = mat3(s, t, n);
+#endif
+}
 #endif
 
 #ifdef FRAGMENT_SHADER
-	#include "sys/fog.h"
-	void main ( void )
-	{
-		vec2 refl_c;
-		vec3 refr_f;
-		vec3 dudv_f;
-		vec4 out_f = vec4( 1.0, 1.0, 1.0, 1.0 );
-
-		dudv_f = ( texture2D( s_dudvmap, tex_c).xyz);
-		dudv_f += ( texture2D( s_dudvmap, tex_c).xyz);
-		dudv_f -= 1.0 - ( 4.0 / 256.0 );
-		dudv_f = normalize( dudv_f );
-
-		// Reflection/View coordinates
-		refl_c = ( 1.0 + ( tf_c.xy / tf_c.w ) ) * 0.5;
-
-		refr_f = texture2D( s_refraction, refl_c + ( dudv_f.st) ).rgb;
-		out_f.rgb = refr_f;
-#ifdef TINTTEXTURE
-		out_f.rgb *= texture2D( s_diffuse, tex_c ).rgb;
+#include "sys/fog.h"
+void main()
+{
+	vec4 nrm = texture2D(s_bump, tex_c);
+#ifdef ALPHATEST
+	if (nrm.a < 0.5)
+		discard;
 #endif
-
-		gl_FragColor = out_f;
-	}
+	// Source's normal maps are DX: green is flipped (lightmapped.glsl).
+	vec3 tn = vec3(nrm.r, 1.0 - nrm.g, nrm.b) * 2.0 - 1.0;
+	vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;
+#ifdef NOWARP
+	vec2 rc = sc;	// no $normalmap: Source's DX9 Refract has nothing to warp by
+#else
+	vec2 rc = sc + tn.xy * (nrm.a * float(REFRAMOUNT));
+#endif
+#ifdef BLUR
+	// refract_ps20b's BLUR 1: nine taps from four bilinear ones, 1/512 apart.
+	const float bf = 1.0 / 512.0, hf = 0.5 / 512.0;
+	vec3 rgb = texture2D(s_refraction, rc - vec2(hf, hf)).rgb * 0.4444444
+	         + texture2D(s_refraction, rc + vec2(bf, -hf)).rgb * 0.2222222
+	         + texture2D(s_refraction, rc + vec2(-hf, bf)).rgb * 0.2222222
+	         + texture2D(s_refraction, rc + vec2(bf, bf)).rgb * 0.1111111;
+#else
+	vec3 rgb = texture2D(s_refraction, rc).rgb;
+#endif
+	vec3 tint = vec3(REFRTINT);
+#ifdef TINTTEX
+	tint *= 1.3703 * texture2D(s_tint, tex_c).rgb;
+#endif
+	rgb *= tint;
+#ifdef REFLECTCUBEMASK
+	vec3 ray = reflect(incident, normalize(invsurface * normalize(tn)));
+	ray = (m_model * vec4(ray, 0.0)).xyz;
+	vec3 spec = textureCube(s_reflectcube, ray).rgb * nrm.a * vec3(ENVTINT);
+	spec = mix(spec, spec * spec, float(ENVCONTRAST));
+	spec = mix(vec3(dot(spec, vec3(0.299, 0.587, 0.114))), spec, vec3(ENVSAT));
+	rgb += spec;
+#endif
+#if defined(NOFOG)
+	gl_FragColor = vec4(rgb, nrm.a);
+#elif defined(ADDITIVE)
+	gl_FragColor = vec4(fog3additive(rgb), nrm.a);	// additive fogs to black (BaseShader.cpp:775)
+#else
+	gl_FragColor = vec4(fog3(rgb), nrm.a);
+#endif
+#ifdef OPAQUE
+	gl_FragColor.a = 1.0;
+#endif
+}
 #endif
