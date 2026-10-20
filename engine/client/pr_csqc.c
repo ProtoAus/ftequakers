@@ -2408,6 +2408,9 @@ nogameaccess:
 	case VF_DRAWWORLD:
 		*r = !(r_refdef.flags&RDF_NOWORLDMODEL);
 		break;
+	case VF_RT_COVERAGE:
+		*r = r2d_coverage;
+		break;
 	case VF_ENGINESBAR:
 		*r = r_refdef.drawsbar;
 		break;
@@ -2719,6 +2722,11 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 
 	case VF_DRAWWORLD:
 		r_refdef.flags = (r_refdef.flags&~RDF_NOWORLDMODEL) | (*p?0:RDF_NOWORLDMODEL);
+		break;
+	case VF_RT_COVERAGE:	//FTESurf Patch 871: the 2D drawn before the switch keeps the blends it was queued with
+		if (R2D_Flush)
+			R2D_Flush();
+		r2d_coverage = !!*p;
 		break;
 	case VF_ENGINESBAR:
 		r_refdef.drawsbar = !!*p;
@@ -9370,6 +9378,13 @@ qboolean CSQC_DrawView(void)
 		}
 	}
 
+	//FTESurf Patch 871: a view that errored out inside its target must not leave coverage on
+	if (r2d_coverage)
+	{
+		if (R2D_Flush)
+			R2D_Flush();
+		r2d_coverage = 0;
+	}
 	if (*r_refdef.rt_destcolour[0].texname)
 	{
 		if (R2D_Flush)

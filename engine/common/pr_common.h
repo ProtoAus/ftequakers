@@ -913,6 +913,7 @@ typedef enum
 	VF_PIXELPSCALE		= 223,	//[dpi_x, dpi_y, dpi_y/dpi_x]
 	VF_PROJECTIONOFFSET	= 224,	//allows for off-axis projections.
 	VF_VRBASEORIENTATION= 225,	//specifies the worldspace coords+angles of the VR room space.
+	VF_RT_COVERAGE		= 226,	//FTESurf Patch 871: 2D drawn into a render target keeps its coverage in alpha
 	//WARNING: update fteqcc when new entries are added.
 
 

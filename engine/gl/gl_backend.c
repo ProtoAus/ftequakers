@@ -167,6 +167,7 @@ static struct {
 
 		texid_t tex_gbuf[GBUFFER_COUNT];
 		int fbo_current;	//the one currently being rendered to
+		int coverage;	//FTESurf Patch 871: the blend last sent split its alpha factors (r2d_coverage)
 		texid_t tex_sourcecol; /*this is used by $sourcecolour tgen*/
 		texid_t tex_sourcedepth;
 		texid_t tex_reflectcube;/*used where $reflectcube was invalid or failed*/
@@ -3362,6 +3363,11 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 
 
 	delta = sbits^shaderstate.shaderbits;
+	if ((r2d_coverage && shaderstate.force2d) != shaderstate.coverage)
+	{
+		shaderstate.coverage = r2d_coverage && shaderstate.force2d;
+		delta |= SBITS_BLEND_BITS;
+	}
 
 #ifdef FORCESTATE
 	delta |= ~0;
@@ -3401,7 +3407,14 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 			case SBITS_DSTBLEND_ONE_MINUS_DST_ALPHA>>4:	dst = GL_ONE_MINUS_DST_ALPHA;	break;
 			}
 			qglEnable(GL_BLEND);
-			qglBlendFunc(src, dst);
+			//FTESurf Patch 871: into a coverage target alpha is coverage -- a blend over the target adds
+			//to it, an additive one leaves it -- so the target composites as premultiplied.
+			if (shaderstate.coverage && qglBlendFuncSeparate && dst == GL_ONE_MINUS_SRC_ALPHA)
+				qglBlendFuncSeparate(src, dst, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+			else if (shaderstate.coverage && qglBlendFuncSeparate && dst == GL_ONE)
+				qglBlendFuncSeparate(src, dst, GL_ZERO, GL_ONE);
+			else
+				qglBlendFunc(src, dst);
 		}
 		else
 			qglDisable(GL_BLEND);

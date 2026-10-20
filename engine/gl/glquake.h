@@ -782,6 +782,9 @@ void GLBudget_Pop(int prev);
 void GLBudget_Reset(void);		//the context went away with its queries
 
 extern void (APIENTRY *qglDrawBuffers)(GLsizei n, GLsizei *ids);	//gl2
+#ifndef GL_STATIC
+extern void (APIENTRY *qglBlendFuncSeparate)(GLenum srgb, GLenum drgb, GLenum sa, GLenum da);	//gl1.4, FTESurf Patch 871
+#endif
 
 extern GLenum (APIENTRY *qglGetGraphicsResetStatus) (void);
 

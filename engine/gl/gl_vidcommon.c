@@ -253,6 +253,7 @@ void (APIENTRY * qglGetPointerv) (GLenum pname, GLvoid **parms);
 
 void (APIENTRY *qglDrawBuffers)(GLsizei n, GLsizei *ids);	//gl2
 #ifndef GL_STATIC
+void (APIENTRY *qglBlendFuncSeparate)(GLenum srgb, GLenum drgb, GLenum sa, GLenum da);	//gl1.4, FTESurf Patch 871
 void (APIENTRY *qglGenRenderbuffersEXT)(GLsizei n, GLuint *ids);
 void (APIENTRY *qglBindRenderbufferEXT)(GLenum target, GLuint id);
 void (APIENTRY *qglRenderbufferStorageEXT)(GLenum target, GLenum internalFormat, GLsizei width, GLsizei height);
@@ -3443,6 +3444,9 @@ void GL_ForgetPointers(void)
 	qglBindVertexArray = NULL;
 
 	qglDrawBuffers = NULL;
+#ifndef GL_STATIC
+	qglBlendFuncSeparate = NULL;
+#endif
 
 	qglLoadMatrixf = NULL;
 	qglPolygonMode = NULL;
@@ -3639,6 +3643,12 @@ qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 		qglDrawBuffers = (void *)getglext("glDrawBuffers");
 	else
 		qglDrawBuffers = NULL;
+#ifndef GL_STATIC
+	if (gl_config.gles ? gl_config.glversion >= 2 : gl_config.glversion >= 1.4)
+		qglBlendFuncSeparate = (void *)getglext("glBlendFuncSeparate");
+	else
+		qglBlendFuncSeparate = NULL;
+#endif
 
 	if (gl_config.gles && gl_config.glversion >= 2)
 	{

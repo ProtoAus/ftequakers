@@ -960,6 +960,7 @@ enum {
 };
 //sums of finished frames since the last call, in milliseconds; returns how many frames (0: none, or no timer queries)
 int R_BudgetGPUCollect(double ms[GPUB_MAX], double *total);
+extern int r2d_coverage;	//FTESurf Patch 871: CSQC's VF_RT_COVERAGE, set only while its 2D target is bound
 extern int r_speeds_timing;	//Patch 782: r_speeds >= 2 or r_budget, latched once per host frame
 
 enum {

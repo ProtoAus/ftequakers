@@ -80,7 +80,10 @@ void QCBUILTIN PF_CL_drawsetcliparea (pubprogfuncs_t *prinst, struct globalvars_
 	srect.height = G_FLOAT(OFS_PARM3) / (float)vid.fbvheight;
 	srect.dmin = -99999;
 	srect.dmax = 99999;
-	srect.y = (1-srect.y) - srect.height;
+	//FTESurf Patch 871: GL_Set2D flips a render target's projection, so there the rows already run
+	//top down. Only in coverage mode: Patch 837's graph cache flips its own clip.
+	if (!(r2d_coverage && *r_refdef.rt_destcolour[0].texname && strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")))
+		srect.y = (1-srect.y) - srect.height;
 	Plug_NativeUI_SetClip(prinst, &srect);
 	BE_Scissor(&srect);
 

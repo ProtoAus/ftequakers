@@ -40,6 +40,7 @@ vec2_t			draw_mesh_st[DRAW_QUADS];
 static avec4_t	draw_mesh_colors[DRAW_QUADS];
 index_t			r_quad_indexes[DRAW_QUADS*6];
 unsigned int	r2d_be_flags;
+int				r2d_coverage;	//FTESurf Patch 871: VF_RT_COVERAGE (gl_backend.c's 2D blends, pr_menu.c's clip)
 
 struct
 {

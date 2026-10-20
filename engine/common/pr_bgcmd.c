@@ -8580,6 +8580,7 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTE_CSQC_RENDERTARGETS",			NULL,	0,{NULL}, "VF_RT_DESTCOLOUR exists and can be used to redirect any rendering to a texture instead of the screen."},
 	{"FTE_CSQC_REVERB",					NULL,	1,{"setup_reverb"}, "Specifies that the mod can create custom reverb effects. Whether they will actually be used or not depends upon the sound driver."},
 #if defined(HAVE_CLIENT) && defined(WEBCLIENT)
+	{"FTESURF_2D_COVERAGE", NULL, 0,{NULL}, "setproperty(VF_RT_COVERAGE (226), 1) while a 2D render target is bound: a blend over the target adds to its alpha and an additive one leaves it, and drawsetcliparea is not mirrored there, so the target composites exactly with blendfunc gl_one gl_one_minus_src_alpha (FTESurf Patch 871)."},
 	{"FTESURF_HID_HTTP", NULL, 0,{NULL}, "Armed raw input journals use fixed-origin HTTPS only with separate default-off rec_hid_upload consent. Legacy raw uploads are disabled (FTESurf Patch 774)."},
 #endif
 #ifdef HAVE_CLIENT
