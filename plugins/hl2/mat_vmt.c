@@ -1257,6 +1257,35 @@ static qboolean VMT_ScrollsBump(const char *var, qboolean want2)
 	return false;
 }
 
+//FTESurf Patch 867: a Water material's AnimatedTexture on $normalmap (or $bumpmap,
+//its spelling here) -- vmt/water samples every frame from a 2D array.  Only when the
+//VTF that resolves really has frames: img_vtf.c makes a 2D array of numframes > 1 only,
+//and a single-frame map bound to the array sampler reads zero (a whole-screen mirror).
+static qboolean VMT_WaterAnimBump(const vmtstate_t *st)
+{
+	const char *s;
+	char path[MAX_QPATH];
+	unsigned char hdr[26];
+	vfsfile_t *f;
+	qboolean frames = false;
+	if (!hl2_animated || !hl2_animated->ival || st->animrate <= 0 || !*st->normalmap)
+		return false;
+	for (s = st->animvar; *s; s++)
+		if (!Q_strncasecmp(s, "normalmap", 9) || !Q_strncasecmp(s, "bumpmap", 7))
+			break;
+	if (!*s)
+		return false;
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+	f = fsfuncs->OpenVFS(path, "rb", FS_GAME);
+	if (f)
+	{
+		if (VFS_READ(f, hdr, sizeof(hdr)) == sizeof(hdr) && !memcmp(hdr, "VTF", 4))
+			frames = (hdr[24] | (hdr[25] << 8)) > 1;	//VTFFileHeader_t.frames
+		VFS_CLOSE(f);
+	}
+	return frames;
+}
+
 //The keys inside one `TextureScroll { }` proxy.  A sub-block here would be an
 //arithmetic proxy feeding a value in; we do not evaluate those, so it is
 //skipped exactly as before.
@@ -1428,11 +1457,24 @@ static char *VMT_ParseProxies(const char *fname, vmtstate_t *st, char *line)
 	com_tokentype_t ttype;
 	char key[MAX_OSPATH];
 	char value[MAX_OSPATH];
+	qboolean empty = true;
 	for(;line;)
 	{
 		line = cmdfuncs->ParseToken(line, key, sizeof(key), &ttype);
 		if (ttype == TTP_RAWTOKEN && !strcmp(key, "}"))
+		{
+			//FTESurf Patch 867: a patch's `replace { Proxies { } }` removes the included
+			//material's proxies in Source (surf_boreas's cubemap-patched water01).
+			if (empty)
+			{
+				st->animrate = 0;
+				*st->animvar = 0;
+				st->scrollrate = 0;
+				*st->scrollvar = 0;
+			}
 			break;
+		}
+		empty = false;
 		line = cmdfuncs->ParseToken(line, value, sizeof(value), &ttype);
 		if (ttype == TTP_RAWTOKEN && !strcmp(value, "{"))
 		{
@@ -3730,6 +3772,22 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					st->refracttint[0], st->refracttint[1], st->refracttint[2]);
 				Q_strlcat(progargs, t, sizeof(progargs));
 			}
+			else	//FTESurf Patch 867: water.cpp:29's default, not the shader's 0.7 0.8 0.7
+				Q_strlcat(progargs, "#TINT_REFR=1.0,1.0,1.0", sizeof(progargs));
+			//FTESurf Patch 867: the proxies that make Source water move -- a
+			//TextureScroll on $bumptransform and the AnimatedTexture on $normalmap
+			//(the frames are mapped in the pass below).
+			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
+			{
+				double a = st->scrollangle * (3.14159265358979323846/180.0);
+				Q_snprintfz(t, sizeof(t), "#BUMPSCROLL=%f,%f", st->scrollrate*cos(a), st->scrollrate*sin(a));
+				Q_strlcat(progargs, t, sizeof(progargs));
+			}
+			if (VMT_WaterAnimBump(st))
+			{
+				Q_snprintfz(t, sizeof(t), "#ANIMBUMP=%f", st->animrate);
+				Q_strlcat(progargs, t, sizeof(progargs));
+			}
 			if (st->reflecttint_set)
 			{
 				Q_snprintfz(t, sizeof(t), "#TINT_REFL=%f,%f,%f",
@@ -3835,7 +3893,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $reflection\n");
 			else
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
-			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n\t}\n");
+			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n");
+			if (VMT_WaterAnimBump(st))	//FTESurf Patch 867: sampler 3, every frame of the normal map
+				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
+					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");
 			//FTESurf Patch 868: Source water reflects entities only under $reflectentities.
 			if (!st->water_reflectents)
 				Q_strlcatfz(script, &offset, sizeof(script), "\tfte_reflectnoentities\n");

@@ -1,11 +1,14 @@
+!!ver 130-450
 !!cvardf r_glsl_turbscale_reflect=1	//simpler scaler
 !!cvardf r_glsl_turbscale_refract=1	//simpler scaler
+!!cvarf hl2_waterdebug=0	//P867: 1 refraction 2 +fog 3 reflection 4 fresnel 5 fog depth 6/7 normal 8/9 the bound maps
 !!permu REFLECTCUBEMASK
 !!samps diffuse normalmap
 !!samps	refract=0	//always present
 !!samps reflect=1
 !!samps =DEPTH refractdepth=2
 !!samps =REFLECTCUBEMASK reflectcube
+!!samps =ANIMBUMP bumpanim:2DArray=3
 !!permu FOG
 
 #include "sys/defs.h"
@@ -84,6 +87,17 @@
 #ifndef FOGRANGE
 #define FOGRANGE 1024.0
 #endif
+#ifndef BUMPSCROLL
+#define BUMPSCROLL 0.0,0.0
+#endif
+
+// FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
+// frames a second, whole frames, water.cpp:268) samples every layer from one frame.
+#ifdef ANIMBUMP
+#define BUMPSAMPLE(uv) texture2D(s_bumpanim, vec3(uv, bumplayer))
+#else
+#define BUMPSAMPLE(uv) texture2D(s_normalmap, uv)
+#endif
 
 varying vec2 tc;
 varying vec4 tf;
@@ -110,6 +124,7 @@ void main (void)
 
 #ifdef FRAGMENT_SHADER
 #include "sys/fog.h"
+uniform float cvar_hl2_waterdebug;
 
 #ifdef DEPTH
 // The depth capture uses the same non-oblique projection as the surface.
@@ -134,16 +149,23 @@ void main (void)
 	float fres;
 	float depth = 0.0;
 	stc = (1.0 + (tf.xy / tf.w)) * 0.5;
+#ifdef ANIMBUMP
+	float bumplayer = floor(mod(e_time * float(ANIMBUMP), float(textureSize(s_bumpanim, 0).z)));
+#endif
 
-	ntc = tc * float(TXSCALE1);
+	vec2 btc = tc * float(TXSCALE1);
+	// $bumptransform's TextureScroll moves the primary layer only (water_vs20.fxc:
+	// the extra layers are built from the untransformed base coordinate).
+	ntc = btc + e_time * vec2(BUMPSCROLL);
 	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 	// the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
-	n = texture2D(s_normalmap, ntc).xyz * 2.0 - 1.0;
+	vec4 nsample = BUMPSAMPLE(ntc);
+	n = nsample.xyz * 2.0 - 1.0;
 #ifdef MULTITEXTURE
 	// Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap.
-	vec2 tc1 = vec2(ntc.x + ntc.y, ntc.y - ntc.x) * 0.1;
-	vec3 n1 = texture2D(s_normalmap, tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
-	vec3 n2 = texture2D(s_normalmap, ntc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
+	vec2 tc1 = vec2(btc.x + btc.y, btc.y - btc.x) * 0.1;
+	vec3 n1 = BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
+	vec3 n2 = BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
 	n = (n + n1 + n2) / 3.0;
 #endif
 
@@ -160,11 +182,12 @@ void main (void)
 #ifdef DEPTH
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
 	depth = waterDepth(stc, surfaceDepth);
-	// Source attenuates distortion by the refraction capture's fog-depth.
-	// Do not attenuate the unit normal used for Fresnel/cubemap reflection.
-	float distortion = clamp(depth / float(FOGRANGE), 0.0, 1.0);
+	// Source attenuates distortion by the refraction capture's fog-depth (its alpha,
+	// water_ps2x_helper.h: reflectRefractScale *= waterFogDepthValue) and by the
+	// normal map's alpha. Do not attenuate the normal used for Fresnel/cubemap.
+	float distortion = clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0) * nsample.a;
 #else
-	float distortion = 1.0;
+	float distortion = nsample.a;
 #endif
 
 
@@ -179,9 +202,15 @@ void main (void)
 	depth = waterDepth(clamp(refractUV, 0.0, 1.0), surfaceDepth);
 #endif
 	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb * vec3(TINT_REFR);
+	vec3 dbg_refr = refr;
 #if defined(DEPTH) && !defined(NO_WATERFOG) && !defined(UNDERWATER)
-	refr = mix(refr, vec3(FOGTINT), clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0));
+	// Source: fog = saturate(fogdepth - 0.05); shallow water (fogdepth under 0.05,
+	// fully by 0.1) shows no reflection at all.
+	float fogw = clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0);
+	refr = mix(refr, vec3(FOGTINT), clamp(fogw - 0.05, 0.0, 1.0));
+	fres *= clamp((fogw - 0.05) * 20.0, 0.0, 1.0);
 #endif
+	vec3 dbg_fogged = refr;
 
 #ifdef LQWATER
 #ifdef REFLECTCUBEMASK
@@ -195,6 +224,24 @@ void main (void)
 #else
 	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
+
+	if (cvar_hl2_waterdebug > 0.5)
+	{
+		int dm = int(cvar_hl2_waterdebug + 0.5);
+		vec3 o = dbg_refr;
+		if (dm == 2) o = dbg_fogged;
+		else if (dm == 3) o = refl;
+		else if (dm == 4) o = vec3(fres);
+		else if (dm == 5) o = vec3(clamp((depth - float(FOGSTART)) / float(FOGRANGE), 0.0, 1.0));
+		else if (dm == 6) o = n * 0.5 + 0.5;
+		else if (dm == 7) o = worldnormal * 0.5 + 0.5;
+		else if (dm == 8) o = texture2D(s_normalmap, gl_FragCoord.xy / 256.0).rgb;
+#ifdef ANIMBUMP
+		else if (dm == 9) o = texture2D(s_bumpanim, vec3(gl_FragCoord.xy / 256.0, bumplayer)).rgb;
+#endif
+		gl_FragColor = vec4(o, 1.0);
+		return;
+	}
 
 	//interplate by fresnel
 	refr = mix(refr, refl, fres);
