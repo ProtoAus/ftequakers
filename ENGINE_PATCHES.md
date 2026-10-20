@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 876 — patch notes on the download page and the title menu (menu.dat + release tooling + site)
+
+**Problem:** nothing told a player what an update changed. The release records (tools/release0NN.md)
+are developer prose, the page lists only downloads, and the title menu's corner says "Update
+available" with nothing about what is in it.
+
+**Change:** PATCHNOTES.md holds player-facing dot points per patch, newest release first, under
+`## next` or `## <version> <yyyy-mm-dd>`. releaselib's ConvertFrom-PatchNotes reads it (printable
+ASCII, no `^`, one line a point, at most 250 characters, every patch at least one point, one `next`,
+versions strictly falling, real dates) and keeps the newest 12 releases, because the menu refuses a
+reply over 256 KiB. release.ps1's preflight refuses a release without a `next`, or without the live
+VERSION's section under it (a forgotten heading would file its patches under the new version); the
+render writes patchnotes.json beside update.json with `next` named the version. sitepage.ps1 renders
+released sections only and refuses one whose newest is not the live release. The page gains a
+right-hand panel that site.js fills from that file (below the hero under 1040 px). The title menu
+(m_update.qc MU_Notes*) asks for the file beside update.json only where the updater itself would ask
+(MU_NotesCan: gameupdate answered, so FTESurf's updater; update_enabled; update_consent 1; a feed
+ending /update.json under its https rule), the automatic showings also needing update_autocheck,
+and retries at the updater's 600 s. It shows the panel on the main screen while an update is pending
+("Update <v>", until Close for that version), once after one installs ("What's new in <v>" until
+Close sets ui_notes_seen), and from the corner's new Patch notes button: a list view (wheel, dragged
+bar), NEW / INSTALLED beside each release. ui_release_version can be set by a server, so it is
+shown or written into `seta` only when it is digits and two dots (MU_IsVer). AGENTS.md: a
+player-visible patch adds its points under `## next`. shipguard: data/story_me.txt (P854's runtime
+write) denied with its reason, which the 0.1.29 preflight needed.
+
+**Verified:** 0 warnings (three progs). test_releaselib.ps1 112 passed, 0 failed: 24 notes cases,
+and a mutant without the character guard fails its test. `release.ps1 -PreflightOnly -Bump patch`:
+"PATCHNOTES.md: 34 patches for 0.1.29", PASS. tools/p876notes.py, 19/19, a loopback server standing
+in for proto.bar. Subject in the real FTESurf profile (permission file "1", the updater live and its
+own update.json check 404ing): asked /patchnotes.json, parsed 2 releases / 181 items, showed "What's
+new in 0.1.29", took a scroll, Close hid it and wrote ui_notes_seen, nothing asked or shown after
+menu_restart, `ui_notes open` showed it again, no http URL without update_allow_insecure. No request
+from three controls: p744's inert profile (update_consent 1, updater not FTESurf's -- the profile in
+which the first build did ask), no permission file, and update_autocheck 0 (asked once, only after
+`ui_notes open`). Screenshots looked at: the panel on the right under the corner, clear of the menu
+and the scene. The page in headless Chrome at 1600, 1440 and 1100 px (beside the hero) and 390 / 320
+px (below it, no sideways overflow). Reviewed with two lenses (correctness and the release pipeline;
+consent and untrusted input) and a fix round; left open in BACKLOG: the notes are not covered by
+update.json's signature, the engine's JSON parser has no depth limit (pre-existing), and the pending
+title has not been seen in a rig (update_state is engine read-only).
+
 ## Patch 874 — env_sun and ropes drawn (csprogs)
 
 **Problem:** the entity census found env_sun on 247 maps and move_rope/keyframe_rope on 181, drawn by
