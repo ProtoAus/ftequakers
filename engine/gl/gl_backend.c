@@ -6663,7 +6663,10 @@ static double GLBE_FaceSolidAngle(const mesh_t *mesh, vec3_t centre)
 				const float *a = in[i], *b = in[(i+1)%n];
 				float da = DotProduct(a, pl->normal) - pl->dist, db = DotProduct(b, pl->normal) - pl->dist;
 				if (da >= 0 && o < cap)
-					VectorCopy(a, out[o++]);
+				{
+					VectorCopy(a, out[o]);	//not out[o++]: the macro names its target three times
+					o++;
+				}
 				if ((da >= 0) != (db >= 0) && o < cap)
 				{
 					float f = da / (da - db);
