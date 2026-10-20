@@ -23,6 +23,8 @@ mover at pmsrcver >= 9 as bih_phybrushes is at 7, makes BIH_Trace / PointContent
 trace the twin and a static prop sweep phyfixbrushes -- or its model's twin when those were refused.
 Outside the mover nothing changes (P764's rule), so QC traces still meet the wrapped triangles.
 pm_dettest adds `fixtrace` / `fixmover` (mover 9); the static-prop line reports overflowed hulls.
+MODPLUGFUNCS_VERSION 6, since bihtransform_s and model_t grew: the exe and every native plugin ship
+together, and a mismatched pair refuses to load rather than reading past a struct.
 
 **Verified:** offline, the old and new parsers in one harness over 143 .phy from six maps at windings
 0 and 1: the new old-layout output equals the old parser's point for point (triangles, ledge starts,
