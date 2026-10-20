@@ -207,16 +207,18 @@ void main (void)
 	vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;
 #ifdef DEPTH
 	// Reject foreground/above-water distortion instead of pulling pillars
-	// across the shoreline: a sample not beyond the plane on its own ray (a ray
-	// above the horizon extrapolates to a non-positive 1/depth and rejects too).
+	// across the shoreline: keep a sample only if it lies beyond the plane on its
+	// own ray. invr <= 0 is a ray that never meets the plane (above the horizon).
 	vec2 rc = clamp(refractUV, 0.0, 1.0);
+	float invr = invs + dot(rc - stc, invgrad);
 	if (any(lessThan(refractUV, vec2(0.0))) || any(greaterThan(refractUV, vec2(1.0))) ||
-		eyeDepth(texture2D(s_refractdepth, rc).r) <= 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001))
+		invr <= 0.0 || eyeDepth(texture2D(s_refractdepth, rc).r) * invr <= 1.0)
 	{
 		refractUV = stc;
 		rc = stc;
+		invr = invs;
 	}
-	depth = waterDepth(rc, 1.0 / max(invs + dot(rc - stc, invgrad), 0.000001));
+	depth = waterDepth(rc, 1.0 / invr);
 #endif
 	refr = texture2D(s_refract, clamp(refractUV, 0.0, 1.0)).rgb;
 	vec3 dbg_refr = refr;
