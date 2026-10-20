@@ -1,5 +1,68 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 864 — no water capture inside a water capture (client exe, GL)
+
+**Problem (Lex, 20 Oct):** surf_garden "runs at lower fps 200~ ... one stage drops it down to 50fps".
+Measured with his cfg (r_renderscale 2, hl2_water 2) on the installed exe, matched paused cameras:
+stage 5 facing the ponds p50 5.88 ms, `r_viewstats` 1 + 2 + 4 views and 7 3D skies a frame; the
+spawn 5.27 ms, 1 + 2 + 2. `r_portalrecursion 2`, raised for surf_kitsune's doors, is also the only
+limit on water reflection/refraction captures, so every pond seen in a pond's capture captured
+again. Source has one reflection target and never nests them. (The 45 fps reading did not
+reproduce: the worst measured there is 7.25 ms.)
+
+**Change:** `GLBE_GenerateBatchTextures` counts the non-portal captures (GLR_DrawPortal types 1/2/3)
+it is inside; a non-portal capture asked for inside one is skipped exactly as the recursion limit
+skips one (the caller drops the batch). Portals keep their depth, water seen through a portal still
+captures, and a portal seen in water still recurses. The counter resets at the main view.
+
+**Verified:** same arm, this exe against the installed one, installed plugin: stage 5 p50 5.88 ->
+2.74 ms, views 1+2+4 -> 1+2 (recursion 1 reads 2.72); spawn 5.27 -> 3.46 ms, 1+2+2 -> 1+2;
+timerefresh 360-degree sweeps 0.270 -> 0.196 s and 0.347 -> 0.264 s. Stage-5 screenshots identical
+bar the fps counter. One review: counter balanced, the reset cannot fire inside a capture, the early
+return leaves the state the recursion-limit return does. Limits: a DarkPlaces `dp_camera` +
+`dp_reflect` shader can still nest its reflection (no Source material makes one); a ripplemap-only
+batch inside a capture is dropped (none in the library); d3d/vk backends unchanged. Nested water is
+not drawn at all in a capture -- drawing it without its own capture would sample a black or wrong
+target. Arm: `C:\FTESurf-worktrees\p861-waternest-20261020T0540Z\tmp\p861garden.cfg`.
+
+## Patch 859 — Refract glass at `hl2_refract 0` is Source's tint and reflection, not a white or opaque pane (hl2 plugin)
+
+**Problem (Lex, 20 Oct):** surf_spectra's windows (func_reflective_glass, Glass_03) "bright white",
+surf_garden's fountain bright white, surf_gigapede's beautiful_glass/red "fullbright ... not glass like
+in momentum". All Source `Refract`. Mode 0 drew the pane's base texture with a blend and Refract has
+none: of 1,074 packed Refract materials (1,926 maps, pakfiles only) 907 on 386 maps name only a
+normal map, so the material's own name went in as a texture (white), and 149 on 86 maps name a
+`$refracttinttexture`, drawn as an opaque picture. Mode 2 dithered the same missing texture.
+
+**Change:** mode 0 is refract_ps20b.fxc minus the warp, in a new `vmt/refractflat`:
+- a pass multiplying the screen by `$refracttint` times the tint texture (Source's 2x in linear light
+  is 2^(1/2.2) here), drawn `GL_DST_COLOR GL_SRC_COLOR` at half the factor; without `$envmap` the
+  normal map's alpha is the coverage, `$alphatest` discards and (unless `$alpha` is fractional) drops
+  that blend as BaseShader does, `$additive` is Source's add (1 + f*a in linear light), and a
+  `$bumptransform` TextureScroll scrolls the normal map;
+- an additive pass for the `$envmap` term in Source's tint -> contrast -> saturation order, emitted
+  only where an env_cubemap reflects on any other class (`hl2_envcubemap`) and discarding outside
+  REFLECTCUBEMASK, so `r_reflectcube`/`r_envcubemap` gate it.
+The tail's translucent/additive/alpha are cleared (the Modulate arm's fix): its `progblendfunc`
+replaced the multiply on 298 materials. `blendfunc` goes before the maps: after two,
+Shaderpass_BlendFunc hands it to the last bundle, which never reaches GL (Patch 266's redirect).
+A real `$basetexture` (18 materials; Source shows it instead of the screen) keeps the old pass.
+Mode 2 falls back to mode 0 for a pane with no texture of its own; mode 1 is unchanged. A
+`$bumptransform2` scroll no longer takes the parsed scroll slot from another.
+
+**Verified:** conbridge with a copy of Lex's cfg, installed exe, this plugin against the installed
+one, `r_showshader` for each: surf_spectra save 020 white -> see-through glass with the cubemap's
+relief; surf_garden save 005 white -> the stone fountain behind a faint water tint; surf_gigapede
+save 009 opaque pink -> the lava wall behind seen through the pink tint; bhop_ceaseless
+cyanglasslowalpha (`$translucent $alpha 0.01`): opaque cyan + `progblendfunc` -> no progblendfunc,
+the black void behind it (shown with `r_drawentities 0`); surf_autosave rose_glass ($additive):
+the normal map drawn additively -> a faint brightening. Mode 2 emits the same shader. The first
+cut drew a flat tint (blend dropped by the bundle redirect): a pixel ratio of exactly 1.37 x 0.5
+against the control found it. Two review rounds (blend, base texture, reflection switches,
+`hl2_envmap 0` coverage, additive gamma, alphatest, bumptransform2), all fixed. Limits: no warp or
+blur (mode 1 has the warp), `$refractamount`/`$bluramount` unused at 0, panes now sort as blended
+instead of dithering in mode 2. Arm: `C:\FTESurf-worktrees\p859-refract-20261020T0454Z\tmp\arm.py`.
+
 ## Patch 856 — Story and Event mode, phase 2: one-run challenges, dates, medal toasts, a third list (surfd + qwprogs + csprogs + menu.dat)
 
 **Problem (Lex, 20 Oct, on the P854 design page):** "looks epic, start developing the backend and
