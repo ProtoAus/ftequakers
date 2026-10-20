@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 888 — .phy hulls past 65,536 copied points traced as they are (Source mover 9)
+
+**Problem:** Lex's surf_pantheon save 1 stands ~300 u above ramp07 on a 6.1° plane. `pm_dispprobe 3`
+named a 4,600-u BIH_TRIANGLE of ramp07.mdl, whose real hull's longest edge is 2,402. PHY_ReadLedge
+copied a ledge's points afresh for every ledge, though a compact surface's ledges all index one shared
+array, and stored `(index_t)(firstvert + e)` with a 16-bit index_t: ramp07's 427 ledges over one
+679-point array made 171,827 copies, and from ledge 163 (triangle 652) the indices wrapped onto other
+ledges' points. P764's convex-piece builder got wrong pieces from the same parse and refused ramp07,
+which kept its wrapped triangles. Server and client parse alike, so prediction agreed with the phantom.
+400 packed .phy pass the limit in 105 of 1,926 Momentum maps: 771 solid static placements on 64 maps,
+74 solid prop_dynamic(_override) on 18. surf_axil's mramp_5 built 17.1M vertices (274 MB).
+
+**Change:** PMSRC_VERSION 9. The old layout stays what pins <= 8 replay -- every triangle, ledge start
+and bound as before -- but keeps only the first 65,536 copies, all a wrapped 16-bit index reaches; the
+bounds check reads every point as it is parsed. A hull whose old count passed 65,536 is parsed again
+with each distinct point array copied once (PHY_FixArrays: sorted by file offset, as far as any ledge
+reaches; refused past 65,536 points, which falls back to the render mesh). mod_hl2 builds that mesh
+into a twin model (model_t.phyfixed, appended; its group freed with the model's), mod_vbsp builds its
+pieces into bihtransform.phyfixbrushes and sets `phyfix`. com_bih's bih_phyfix, set by the Source
+mover at pmsrcver >= 9 as bih_phybrushes is at 7, makes BIH_Trace / PointContents / NativeContents
+trace the twin and a static prop sweep phyfixbrushes -- or its model's twin when those were refused.
+Outside the mover nothing changes (P764's rule), so QC traces still meet the wrapped triangles.
+pm_dettest adds `fixtrace` / `fixmover` (mover 9); the static-prop line reports overflowed hulls.
+
+**Verified:** offline, the old and new parsers in one harness over 143 .phy from six maps at windings
+0 and 1: the new old-layout output equals the old parser's point for point (triangles, ledge starts,
+bounds), 0 differences. All 28 overflowing hulls parse unwrapped: ramp07 679 points, longest edge
+2,402.1 (5,599.7 wrapped), its 1,712 triangles identical to the old parse through triangle 652 (ledge
+163, where the wrap begins); mramp_5 13,646 points (17,128,661 copies). Client, server and hl2 plugin
+build with no new warnings. Game arms (surf_pantheon at mover 9 against the installed build, pin-8
+replays of Lex's save 1 and an older run, surf_voyager's Momentum flight at 8 and 9, pm_dettest) are
+not run yet: no game runs while Lex is on the machine.
+
 ## Patch 885 — the start-hop rule judges only hops in the start, once you stood there (qwprogs)
 
 **Problem:** Lex, surf_tendies: the route is one jump out of the start zone and a hop on the booster in
