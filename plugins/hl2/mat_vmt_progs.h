@@ -3075,7 +3075,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //            under REFLECTCUBEMASK, the engine's gate (r_reflectcube, r_envcubemap).
 // #TINTTEX: Source's 2*tex is in linear light; 2^(1/2.2) is the same factor here.
 // #ADDITIVE: $additive without $envmap adds the result to the screen: 1 + f*a, in linear light.
-// #NOCOVER: $alphatest without a fractional $alpha does not blend by the alpha.
+// #NOCOVER: Source does not blend this pane by the alpha (opaque, or additive ONE ONE; VMT_RefractBlend).
 
 "#ifndef REFRTINT\n"
 "#define REFRTINT 1.0,1.0,1.0\n"

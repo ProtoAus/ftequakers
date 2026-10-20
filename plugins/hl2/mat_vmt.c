@@ -1272,7 +1272,7 @@ static qboolean VMT_TextureHasAlpha(const char *name)
 FTESurf Patch 878: how Source blends a Refract.  With a $normalmap and no $envmap,
 SetDefaultBlendingShadowState on the normal map: $additive always, otherwise only when translucent
 -- $alpha other than 1, $vertexalpha, or a normal VTF with alpha and no $alphatest (BaseShader.cpp:
-499, 607-671).  Anything else is opaque and writes depth unless $nowritez (:138; blending turns it
+499, 607-671).  Anything else is opaque and writes depth unless $nowritez (refract_dx9_helper.cpp:138; blending turns it
 off, BaseShader.cpp:593-598); the engine keeps that depth for model panes only (gl_backend.c
 GLBE_SubmitNearest).  $bumpmap is not a Refract parameter.  $masked (a dest-alpha overlay,
 refract_dx9_helper.cpp:228-231, refract_ps20b.fxc:199-206) is not drawn as Source does; no packed
