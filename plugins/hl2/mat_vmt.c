@@ -942,6 +942,7 @@ typedef struct
 	char filefound;
 	char nobasetex;	//FTESurf Patch 190: the material named no $basetexture and there is nothing sane to guess at
 	char basedefaulted;	//FTESurf Patch 859: tex[0] is the material's own name, not a texture the VMT named
+	char envauthored;	//FTESurf Patch 859: the VMT named an $envmap (hl2_envmap 0 clears st->envmap)
 	char wireframe;	//FTESurf Patch 780: the Wireframe class or $wireframe -- MATERIAL_VAR_WIREFRAME, triangles drawn as lines
 	/*
 	FTESurf Patch 233: $bottommaterial, the material Source draws on the UNDERSIDE
@@ -1248,7 +1249,7 @@ static qboolean VMT_ScrollsBump(const char *var)
 {
 	const char *s;
 	for (s = var; *s; s++)
-		if (!Q_strncasecmp(s, "bumptransform", 13))
+		if (!Q_strncasecmp(s, "bumptransform", 13) && s[13] != '2')	//$bumptransform2 is the second normal map's
 			return true;
 	return false;
 }
@@ -2418,6 +2419,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	detail, it is the geometry the refraction is perturbed BY, and those paths
 	emit it unconditionally.  Turning it off there would write "materials/.vtf".
 	*/
+	st->envauthored = !!*st->envmap;	//FTESurf Patch 859: Refract's normal alpha means reflection, not coverage
 	if (hl2_envmap && !hl2_envmap->ival)
 		st->envmap[0] = st->envmapmask[0] = 0;
 	if (hl2_bumpmap && !hl2_bumpmap->ival &&
@@ -3870,6 +3872,17 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				strcmp(tex, "materials/")?"materials/":"", tex,
 				VMT_DitherScale((st->alphaval > 0 && st->alphaval < 1) ? st->alphaval : 0.25f));
 		}
+		else if (!rmode && !st->basedefaulted)
+		{
+			//A real $basetexture replaces the screen as what Refract shows
+			//(refract_dx9_helper.cpp:240-247): the plain translucency it always was.
+			Q_strlcatfz(script, &offset, sizeof(script),
+				"\t{\n"
+					"\t\tmap \"%s%s.vtf\"\n"
+					"\t\tblendfunc blend\n"
+				"\t}\n",
+				strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		}
 		else if (!rmode)
 		{
 			/*
@@ -3883,7 +3896,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
 			size_t aoff = 0;
 			const char *nm = *st->normalmap ? st->normalmap : st->dudvmap;
-			qboolean env = *st->envmap && *nm;
+			//env_cubemap reflects only under hl2_envcubemap, as on every other class;
+			//the pass's REFLECTCUBEMASK gate does the runtime switches.
+			qboolean env = *st->envmap && *nm &&
+				(strcmp(st->envmap, "env_cubemap") || (hl2_envcubemap && hl2_envcubemap->ival));
 
 			if (*nm)
 				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
@@ -3901,6 +3917,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcat(args, "#TINTTEX", sizeof(args));
 			if (st->alphatest)
 				Q_strlcat(args, "#ALPHATEST", sizeof(args));
+			if (st->additive && !st->envauthored)
+				Q_strlcat(args, "#ADDITIVE", sizeof(args));
 			if (st->nofog)
 				Q_strlcat(args, "#NOFOG", sizeof(args));
 			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar))
@@ -3918,7 +3936,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					"\t\tblendfunc GL_DST_COLOR GL_SRC_COLOR\n"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args, env ? "#ENVMAPPED" : "", bump, tint);
+				"\t}\n", args, st->envauthored ? "#ENVMAPPED" : "", bump, tint);
+			//The tail would turn these into a progblendfunc on pass 0 and replace the
+			//multiply (the Modulate arm's fix); $alpha is "unused" on Refract (refract.cpp:18).
+			st->translucent = 0;
+			st->additive = 0;
+			st->alphaval = 0;
 			if (env)
 			{
 				if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)

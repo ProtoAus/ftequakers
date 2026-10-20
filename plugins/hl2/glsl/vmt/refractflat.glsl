@@ -2,6 +2,7 @@
 !!permu FOG
 !!permu FRAMEBLEND
 !!permu SKELETAL
+!!permu REFLECTCUBEMASK
 !!samps bump=0 tint=1
 !!samps =ENVPASS reflectcube
 
@@ -11,8 +12,10 @@
 // framebuffer copy, so without the warp.  Two passes:
 //   default: screen *= mix(1, REFRTINT * tint, normal.a), drawn with GL_DST_COLOR
 //            GL_SRC_COLOR (2*src*dst), so the output is half the factor.
-//   ENVPASS: Source's cubemap term, added.  Gamma-space, as lightmapped.glsl's.
+//   ENVPASS: Source's cubemap term, added.  Gamma-space, as lightmapped.glsl's.  Only
+//            under REFLECTCUBEMASK, the engine's gate (r_reflectcube, r_envcubemap).
 // #TINTTEX: Source's 2*tex is in linear light; 2^(1/2.2) is the same factor here.
+// #ADDITIVE: $additive without $envmap adds the result to the screen: 1 + f*a.
 
 #ifndef REFRTINT
 #define REFRTINT 1.0,1.0,1.0
@@ -60,6 +63,9 @@ void main()
 		discard;
 #endif
 #ifdef ENVPASS
+#ifndef REFLECTCUBEMASK
+	discard;
+#endif
 	// Source's normal maps are DX: green is flipped (lightmapped.glsl).
 	vec3 tn = normalize(vec3(nrm.r, 1.0 - nrm.g, nrm.b) - 0.5);
 	vec3 ray = reflect(incident, normalize(invsurface * tn));
@@ -76,7 +82,10 @@ void main()
 #ifdef TINTTEX
 	f *= 1.3703 * texture2D(s_tint, tex_c).rgb;
 #endif
-#ifndef ENVMAPPED
+#if defined(ENVMAPPED)
+#elif defined(ADDITIVE)
+	f = vec3(1.0) + f * nrm.a;
+#else
 	f = mix(vec3(1.0), f, nrm.a);	// no $envmap: the alpha is coverage (refract_dx9_helper.cpp:143)
 #endif
 #ifndef NOFOG
