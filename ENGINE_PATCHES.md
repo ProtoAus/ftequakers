@@ -1,5 +1,61 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 863 — the HUD's own work a frame cut by a third, same picture (csprogs)
+
+**Problem (Lex's r_budget dumps, surf_sidistic, 20 Oct):** every HUD panel on, a run line and the
+strafe trainer: CSQC 1.0 ms of a 1.5 ms frame, CPU-bound. Measured on the rig with his cfg (no QC
+profiler; `r_budget_csqc 1` itself adds ~0.14 ms): all panels 0.53 ms against 0.18 with none (0.94
+against 0.59 ms frame); the trainer full of strafes 0.78-0.85 ms with a kept jump on show and up to
+1.1 ms in the air. A sampled profile split the panels' 0.35 ms as QC interpreter ~0.14, GL driver
+~0.11 (39 more draws, ~2.8 us each), text ~0.03, strings ~0.03. By QC instructions (profile_csqc,
+3 s): Font_Px 43M, _sui_round_draw 12M, Trn_Timeline 11M, HUD_EnergyRate 9M, HUD_UpdateTurn 7M.
+
+**Change (no draw call's arguments change; the key strip's order does):**
+- Font_Px: the last four answers kept (the ladders only ever parse the same constant strings), and
+  |d| inline instead of a fabs builtin per rung.
+- HUD_EnergyRate / HUD_UpdateTurn: the newest sample a window old is found from the oldest end
+  (1-3 steps) instead of walking 256 / 192 back, while every live sample was stored in time order
+  (ui_ehist_ok / ui_thist_ok count stores since the clock last stepped back); otherwise the old walk.
+- Trainer trace: its columns (place, size, colour) worked out again only when a tick lands
+  (trn_p_gen, bumped at every write to the tick arrays) or the panel moves, and drawn from stored
+  vectors -- ~60 rebuilds a second against hundreds of frames.
+- Key hint strip: its layout measured when its text, size or screen changes or KC_Refresh runs
+  (every 0.5 s), not twice a frame; every chip then every word, so the strip is 3 GL draws, not 2 an
+  item. No chip touches another item's words.
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; Lex's ftesurf.cfg read into each rig, never written;
+surf_sidistic, every panel on, `trainer feed` + turning keys for three kept jumps of six strafes,
+then strafing in the air; one exe for both builds):**
+- Control (= the installed csprogs, 4f49f974, byte for byte) against this build, alternated in four
+  runs: CSQC with a kept jump 0.75-0.81 ms against 0.62-0.76; in the air 0.89-1.18 against
+  0.70-0.90; QC instructions a frame -34%. Font_Px 45.8M -> 21M, the rings 17M -> 2.5M, the trace
+  16.9M -> 5M, Gfx_Field 2.4M -> 0.02M (per the same 3 s window).
+- Check build (`#define P863CHECK` atop sh_font.qc: each old computation beside its replacement,
+  counted): 0 mismatches in 3.5M Font_Px calls, 27,413 energy and turn ring scans, 21,702 trainer
+  frames (1.81M columns, kept and open, the tick ring shifting) and 27,413 key strip layouts.
+- Paused, one process, the strip drawn the old way and the new, twice each: identical but for the
+  fps counter's corner, which differs as much between two shots of one way. The strip overlaps the
+  trainer's last-jumps row in this layout.
+- One review (exactness): the key strip kept the old layout for up to 0.5 s after a rebind made
+  inside one cltime (a console command, cfg or bound key runs before the frame's clock moves), and
+  a font load or re-bake was outside its key; it now measures again when its text changes, on
+  Font_Init and on a renderer restart (ui_font_gen), and draws whole items when the gap between
+  them is under 6 px (hud_scale below ~1/3). Font_Px, the rings and the trace: nothing found.
+
+**Live:** the 12 lobbies and both installs since 2026-10-20 07:28Z: csprogs ea0fe712 (.prev 4f49f974),
+menu 7801ca1b (.prev 368d6040; sh_font.qc is in it), qwprogs unchanged (613468f1). FTESurf e751bbc9.
+pi_lobby_smoke on lobby 1 with the installed exe and with 0.1.28's: served ea0fe712, the board drew, no
+QC error. The menu opens and draws its text with the new menu.dat.
+
+**Known:** a font re-bake the csprogs is not told of (no renderer restart) shows the strip's old
+widths until its next 0.5 s refresh.
+
+**Left (BACKLOG "Frame time: CPU levers"):** a rounded box is still 7 drawsubpic, each looking its
+picture up by name in the engine (R_LoadShader: copy, COM_CleanUpPath, hash) -- now the largest QC
+self time; inlining its helpers ran more QC instructions and measured nothing, so it is not in this
+patch. Each switch between fill, mask and font is a GL draw. Redrawing fixed panels at a capped rate
+into a target would cut most of the rest, but moves pixels in time: Lex's call.
+
 ## Patch 862 — the CSQC trigger mirror predicts on a listen server too (client exe)
 
 **Problem (Lex, 20 Oct):** surf_garden offline "likes to judder on teleports to the next level";
