@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 887 — linear float cubemaps encoded for the gamma framebuffer (hl2 plugin)
+
+**Problem:** surf_demise's first ramp (Lex, save 3) drew its panels near-black where Momentum shows
+dark red. Each panel's underlay is UnlitGeneric with only `$envmap elly/fakeskies/sky_demise_05.hdr`
+and `$envmaptint [1 .1 .1]`; that cube is RGBA16161616F, linear light. Source writes the envmap term
+through an sRGB encode (vertexlitgeneric_dx9_helper.cpp, BaseVSShader.cpp); vmt/unlitreflect (and
+the vertexlit, lightmapped and imposter envmap terms, water, refract) add textureCube().rgb straight
+into the gamma framebuffer, so the underlay drew at about 12/255 red against Source's ~69, and
+little of that survives the pane above it. 414 materials on 45 maps name an .hdr cube (census over
+1,926 map paks), and baked `.hdr.vtf` env_cubemaps that P264 falls back to are the same format.
+
+**Change:** img_vtf.c encodes a float cube (flag 0x4000, IMAGE_FORMAT_RGBA16161616F) linear -> sRGB
+at load, in place, through a 65,536-entry half-to-half table built in VTF_Init (values over 1 keep
+rising). Alpha, 2D float textures and $hdr: sky faces (IF_HDRDECOMPRESS) are untouched. Skipped when
+vid_srgb is nonzero, where the framebuffer encodes. A developer line names each converted cube.
+
+**Verified:** 0 warnings in img_vtf.c (plugin build). The table against numpy's sRGB over every
+finite half: at most 1 ulp, 19 of 31,743 differ; half round trip exact; linear 0.059 -> 68.7/255.
+
 ## Patch 888 — .phy hulls past 65,536 copied points traced as they are (Source mover 9)
 
 **Problem:** Lex's surf_pantheon save 1 stands ~300 u above ramp07 on a 6.1° plane. `pm_dispprobe 3`
