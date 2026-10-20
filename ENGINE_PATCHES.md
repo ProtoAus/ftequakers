@@ -1,5 +1,57 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 871 — hud_fps: the strafe trainer, net, boarding and key-strip panels redrawn at a capped rate and pasted between (client exe + csprogs)
+
+**Problem (Lex, 20 Oct, after P863):** with every panel on and the strafe trainer full of strafes the
+HUD's code was still 0.65-0.77 ms of a 1.1-1.3 ms frame on surf_sidistic. He asked for the panels to
+be drawn a few hundred times a second into a picture pasted every frame, with a choice of rate.
+
+**Change:**
+- Engine: `setproperty(VF_RT_COVERAGE (226), 1)` while a 2D render target is bound makes 2D keep
+  coverage in the target's alpha -- glBlendFuncSeparate gives an over blend (dst ONE_MINUS_SRC_ALPHA)
+  alpha ONE/ONE_MINUS_SRC_ALPHA and an additive one ZERO/ONE, and a pass's maskalpha is ignored
+  (fill_trans masks it: translucent fills added colour but no coverage, and the scene showed through
+  hairlines by up to 12 levels until this) -- so the target pastes with gl_one gl_one_minus_src_alpha
+  as drawing directly would. drawsetcliparea is not mirrored in such a target (GL_Set2D flips its
+  projection; only in coverage mode, so Patch 837's own flip is untouched). The flag is cleared after
+  CSQC_UpdateView. Extension FTESURF_2D_COVERAGE. glBlendFuncSeparate is now loaded (GL 1.4).
+- csprogs (cl_hudcache.qc): `hud_fps` 0 (default: as before), N per second, -1 once an input frame.
+  Layer 0 is NM_Draw, Trn_Draw and the Boarding window; layer 1 the key strip and the
+  missing-graphics note -- the panels a read-only audit found do nothing but draw. Everything around
+  them still draws every frame in its old place, so the stacking is unchanged. The layers draw
+  directly without the extension (every released engine, Vulkan, D3D), with the HUD editor or any
+  cursor UI up, when 2D units are not physical pixels, and in a capturedemo of its own size.
+  `hudcache` prints the mode, why it draws directly, and redraw/paste counts. hud_edit's Display pane
+  has the row (Panel redraw: frame / 240 / 144 / 120 / 60 / tick).
+
+**Verified (PC: i9-9900K, RTX 2080 SUPER; Lex's ftesurf.cfg read into each rig, never written;
+surf_sidistic, every panel on, the trainer fed three jumps of six strafes):**
+- One process, 1 s windows alternated: CSQC with a kept jump 0.64-0.65 ms direct against 0.39-0.41
+  at 144/s and 0.37-0.38 at 60/s (frame 1.07-1.10 -> 0.81-0.86 ms); strafing in the air 0.66-0.77
+  against 0.41-0.43 (frame 1.13-1.29 -> 0.85-0.87). The paste costs the GPU ~0.02 ms.
+- Paused, one process, direct against pasted: inside the panels at most 2 levels (94k pixels by 1,
+  of which 16k differ between two direct shots of the same paused frame).
+- Behaviour, from `hudcache`'s own lines: at -1 ~67 redraws a second (the input frames); the HUD editor
+  open draws directly (why 4) and closed caches again; the installed exe (no FTESURF_2D_COVERAGE) draws
+  directly (why 2) whatever hud_fps says.
+- Two review rounds. Round 1: a renderer switch kept caching (the extension was listed for every
+  renderer and the answer was kept) -- now checked per call for OpenGL with glBlendFuncSeparate and
+  asked again after a restart; a QC error inside a layer left coverage on (cleared in CSQC_Shutdown);
+  a screenshot_mega/capture frame lost its HUD on redraw frames (getproperty(VF_RT_COVERAGE) is -1
+  while another target is bound, and the layers draw directly); hud_fps between 0 and 1 redrew every
+  frame (1/s floor); -1 froze without input frames (10/s floor). Round 2: nothing; the entry moved out
+  of the WEBCLIENT block.
+
+**Live:** exe e1cf5c31 (git-7599-patch-875-0-g1364ef815, ftesurf-eb's combined -Full build, carries
+engine 337589eb6) in both installs 09:41Z; csprogs 243bb4be (FTESurf main fdea7b24 with Patch 865
+reverted -- 865 was not deploy-ready; the qwprogs that build makes is the live 613468f1 byte for byte)
+in both installs (.prev 4b15a989) and on the 12 lobbies 10:25Z; menu 7801ca1b. pi_lobby_smoke on lobby 1
+with the installed exe and 0.1.28's: served 243bb4be, the board drew, no QC error.
+
+**Known:** vid_restart crashes the rig client with or without P871 (installed exe and csprogs, on
+surf_sidistic and on poop.bsp), so the restart path is untested. On a mega-screenshot frame where an
+earlier QC target switch already sent the rest of the HUD to the screen, the layers cache too.
+
 ## Patch 875 — Source games' loose files under their packs; VTF 7.6 multi-frame textures (client exe + hl2 plugin)
 
 **Problem (Lex, 20 Oct):** surf_garden's water "is static" with small strong ripples, boreas's
