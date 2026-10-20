@@ -6483,7 +6483,8 @@ static void GLBE_CaptureLog(batch_t *sub, shader_t *cs, const char *kind, batch_
 //once, for all of its batches together (r_waterviews).
 extern cvar_t r_waterviews;
 #define BE_WATERKINDS (SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH)
-#define BE_WATERPLANES 32	//the heaviest on-screen facing water planes weighed per view; at 1 the rest share too
+#define BE_WATERPLANES 128	//on-screen facing water planes weighed per view, each over all its batches before the
+							//choice (the library's most is 82 up-facing planes on a whole map); at 1 any more share
 #define BE_WATERPROBES 3	//traces per plane, from its heaviest meshes
 #define BE_WATERCLIP 48		//a face with more vertices than this is weighed unclipped
 typedef struct
@@ -6549,8 +6550,9 @@ static void GLBE_MeshBox(const mesh_t *mesh, vec3_t lo, vec3_t hi)
 #ifdef PLUGINS
 int Plug_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end);	//engine/common/plugin.c
 #endif
-//nothing opaque between the eye and the point: world brushes and displacements (the map plugin's occluder
-//tree, without static props -- a chain-link fence is a prop), else the world's movement trace; then the
+//nothing opaque between the eye and the point: world brushes and displacements that hide what is behind them
+//(the map plugin's occluder tree: no static props -- a chain-link fence is a prop -- and no light-only
+//toolsblocklight brushes, as Source's MASK_VISIBLE), else the world's movement trace; then the
 //brush entities that draw opaque (func_brush, func_wall, doors), walked as TraceLineR walks them, against
 //SOLID only: vbsp makes a non-opaque brush CONTENTS_WINDOW, so glass does not hide water. An invisible
 //solid brush (toolsinvisible) still does. An eye inside solid cannot tell: seen.
@@ -6835,24 +6837,13 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 			if (s < n)
 				w = GLBE_WaterWeigh(b, &p, &planes[s]);
 			else
-			{	//a slot only for a plane with water on screen; a full table drops its lightest for a heavier one
+			{	//a slot only for a plane with water on screen
 				memset(&probe, 0, sizeof(probe));
 				probe.p = p;
 				w = GLBE_WaterWeigh(b, &p, &probe);
-				if (w <= 0)
+				if (w <= 0 || n == BE_WATERPLANES)
 					continue;
-				if (n < BE_WATERPLANES)
-					s = n++;
-				else
-				{
-					for (s = 0, t = 1; t < n; t++)
-						if (planes[t].w < planes[s].w)
-							s = t;
-					if (planes[s].w >= w)
-						continue;
-				}
-				planes[s] = probe;
-				planes[s].w = 0;	//added below
+				planes[s = n++] = probe;
 			}
 			if (w > 0)
 			{

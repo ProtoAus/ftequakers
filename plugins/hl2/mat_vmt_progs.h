@@ -1836,12 +1836,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#include \"sys/defs.h\"\n"
 
 // Capture-free approximation: no scene/depth samplers, no screen-space warp.
-// FTESurf Patch 879: CHEAPOPAQUE ($forcecheap) also moves as Source's cheap water does: $bumptransform's
-// scroll on the primary layer, and P867's AnimatedTexture frames in vmt/waterbudgetanim (this file under
-// GLSL 130, built by the Makefile) -- a frame array that did not load falls back to the normal map.
-"#ifndef BUMPSCROLL\n"
-"#define BUMPSCROLL 0.0,0.0\n"
-"#endif\n"
+// FTESurf Patch 879: CHEAPOPAQUE ($forcecheap) moves as Source's cheap water does: P867's AnimatedTexture
+// frames in vmt/waterbudgetanim (this file under GLSL 130, built by the Makefile; a frame array that did not
+// load falls back to the normal map) and $scroll1/$scroll2, but no $bumptransform scroll --
+// watercheap_vs20.fxc:63-66 has it commented out; only the expensive path sets it (water.cpp:304).
 "#ifdef CHEAPANIM\n"
 "#define CHEAPBUMP(uv) (bumplayers > 0 ? texture2D(s_bumpanim, vec3(uv, bumplayer)) : texture2D(s_normalmap, uv))\n"
 "#else\n"
@@ -1901,11 +1899,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
 "float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(CHEAPANIM), float(bumplayers))) : 0.0;\n"
 "#endif\n"
-"#ifdef CHEAPOPAQUE\n"
-"vec3 n = CHEAPBUMP(ntc + e_time * vec2(BUMPSCROLL)).xyz * 2.0 - 1.0;\n"
-"#else\n"
-"vec3 n = texture2D(s_normalmap, ntc).xyz * 2.0 - 1.0;\n"
-"#endif\n"
+"vec3 n = CHEAPBUMP(ntc).xyz * 2.0 - 1.0;\n"
 "#ifdef MULTITEXTURE\n"
 "vec2 tc1 = vec2(ntc.x + ntc.y, ntc.y - ntc.x) * 0.1;\n"
 "vec3 n1 = CHEAPBUMP(tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;\n"
@@ -3453,12 +3447,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#include \"sys/defs.h\"\n"
 
 // Capture-free approximation: no scene/depth samplers, no screen-space warp.
-// FTESurf Patch 879: CHEAPOPAQUE ($forcecheap) also moves as Source's cheap water does: $bumptransform's
-// scroll on the primary layer, and P867's AnimatedTexture frames in vmt/waterbudgetanim (this file under
-// GLSL 130, built by the Makefile) -- a frame array that did not load falls back to the normal map.
-"#ifndef BUMPSCROLL\n"
-"#define BUMPSCROLL 0.0,0.0\n"
-"#endif\n"
+// FTESurf Patch 879: CHEAPOPAQUE ($forcecheap) moves as Source's cheap water does: P867's AnimatedTexture
+// frames in vmt/waterbudgetanim (this file under GLSL 130, built by the Makefile; a frame array that did not
+// load falls back to the normal map) and $scroll1/$scroll2, but no $bumptransform scroll --
+// watercheap_vs20.fxc:63-66 has it commented out; only the expensive path sets it (water.cpp:304).
 "#ifdef CHEAPANIM\n"
 "#define CHEAPBUMP(uv) (bumplayers > 0 ? texture2D(s_bumpanim, vec3(uv, bumplayer)) : texture2D(s_normalmap, uv))\n"
 "#else\n"
@@ -3518,11 +3510,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
 "float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(CHEAPANIM), float(bumplayers))) : 0.0;\n"
 "#endif\n"
-"#ifdef CHEAPOPAQUE\n"
-"vec3 n = CHEAPBUMP(ntc + e_time * vec2(BUMPSCROLL)).xyz * 2.0 - 1.0;\n"
-"#else\n"
-"vec3 n = texture2D(s_normalmap, ntc).xyz * 2.0 - 1.0;\n"
-"#endif\n"
+"vec3 n = CHEAPBUMP(ntc).xyz * 2.0 - 1.0;\n"
 "#ifdef MULTITEXTURE\n"
 "vec2 tc1 = vec2(ntc.x + ntc.y, ntc.y - ntc.x) * 0.1;\n"
 "vec3 n1 = CHEAPBUMP(tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;\n"

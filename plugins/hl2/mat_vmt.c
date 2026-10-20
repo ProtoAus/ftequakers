@@ -3872,7 +3872,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				"\tprogram \"vmt/watersheet#FOGTINT=%s#ALPHA=0.7\"\n"
 				"\t{\n\t\tblendfunc blend\n\t}\n", fog);
 		}
-		else if (st->water_cheap && *st->envmap)
+		else if (st->water_cheap && st->envauthored)	//authored, even if hl2_envmap 0 cleared it: then fog colour only
 		{
 			//FTESurf Patch 879: $forcecheap is Source's cheap water: DrawCheapWater with bBlend = !bForceCheap
 			//(water.cpp:493-518) binds no refraction and does not blend -- watercheap_ps20b's BLEND 0 is
