@@ -941,6 +941,7 @@ typedef struct
 	*/
 	char filefound;
 	char nobasetex;	//FTESurf Patch 190: the material named no $basetexture and there is nothing sane to guess at
+	char basedefaulted;	//FTESurf Patch 859: tex[0] is the material's own name, not a texture the VMT named
 	char wireframe;	//FTESurf Patch 780: the Wireframe class or $wireframe -- MATERIAL_VAR_WIREFRAME, triangles drawn as lines
 	/*
 	FTESurf Patch 233: $bottommaterial, the material Source draws on the UNDERSIDE
@@ -1238,6 +1239,16 @@ static qboolean VMT_ScrollsBase(const char *var)
 		return true;
 	for (s = var; *s; s++)
 		if (!Q_strncasecmp(s, "basetexture", 11))
+			return true;
+	return false;
+}
+
+//FTESurf Patch 859: a scroll on $bumptransform, which Refract's normal map reads.
+static qboolean VMT_ScrollsBump(const char *var)
+{
+	const char *s;
+	for (s = var; *s; s++)
+		if (!Q_strncasecmp(s, "bumptransform", 13))
 			return true;
 	return false;
 }
@@ -2342,6 +2353,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	if (!*st->tex[0].name)	//fill in a default...
 	{
 		size_t l;
+		st->basedefaulted = 1;
 		Q_strlcpy(st->tex[0].name, shortname, sizeof(st->tex[0].name));
 		l = strlen(st->tex[0].name);
 		if (l > 4 && (!Q_strcasecmp(st->tex[0].name+l-4, ".vmt") || !Q_strcasecmp(st->tex[0].name+l-4, ".vtf")))
@@ -3833,6 +3845,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		if (rmode < 0) rmode = 0;
 		if (rmode > 2) rmode = 2;
 		vmt_stat_refract++;
+		//FTESurf Patch 859: a pane with no picture of its own has nothing to dither,
+		//and its own name is not a texture (surf_spectra's Glass_03 drew white).
+		if (rmode == 2 && !*st->refracttinttexture && st->basedefaulted)
+			rmode = 0;
 
 		if (rmode == 2)
 		{
@@ -3857,20 +3873,64 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		else if (!rmode)
 		{
 			/*
-			Glass without the framebuffer copy.  $currentrender forces the
-			backend to snapshot the screen for every batch of this shader; at
-			0 the pane becomes ordinary translucency, which is what you see
-			through a window anyway once it is not warping.
+			FTESurf Patch 859: glass without the framebuffer copy is Source's Refract
+			minus the warp -- the screen times $refracttint (times the tint texture),
+			plus the $envmap term.  Both are passes of vmt/refractflat.  This was the
+			pane's base texture drawn with a blend, and a Refract material has none:
+			surf_spectra's Glass_03 and surf_garden's fountain drew their own names
+			(white), and surf_gigapede's tint texture drew as an opaque picture.
 			*/
+			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
+			size_t aoff = 0;
+			const char *nm = *st->normalmap ? st->normalmap : st->dudvmap;
+			qboolean env = *st->envmap && *nm;
+
+			if (*nm)
+				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
+			else
+				Q_strlcpy(bump, "$whiteimage", sizeof(bump));
+			if (*st->refracttinttexture)
+				Q_snprintfz(tint, sizeof(tint), "\"%s%s.vtf\"", strcmp(st->refracttinttexture, "materials/")?"materials/":"", st->refracttinttexture);
+			else
+				Q_strlcpy(tint, "$whiteimage", sizeof(tint));
+
+			*args = 0;
+			if (st->refracttint_set)
+				Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
+			if (*st->refracttinttexture)
+				Q_strlcat(args, "#TINTTEX", sizeof(args));
+			if (st->alphatest)
+				Q_strlcat(args, "#ALPHATEST", sizeof(args));
+			if (st->nofog)
+				Q_strlcat(args, "#NOFOG", sizeof(args));
+			if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar))
+			{
+				double a = st->scrollangle * (3.14159265358979323846/180.0);
+				aoff = strlen(args);
+				Q_strlcatfz(args, &aoff, sizeof(args), "#SCROLL=%f,%f", st->scrollrate*cos(a), st->scrollrate*sin(a));
+			}
+
+			//blendfunc before the maps: after two, Shaderpass_BlendFunc hands it to the
+			//last bundle, which never reaches GL (gl_shader.c, Patch 266's redirect).
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
-					"\t\tmap \"%s%s.vtf\"\n"
-					"\t\tblendfunc blend\n"
-				"\t}\n",
-				*st->refracttinttexture
-					? (strcmp(st->refracttinttexture, "materials/")?"materials/":"")
-					: (strcmp(st->tex[0].name, "materials/")?"materials/":""),
-				*st->refracttinttexture ? st->refracttinttexture : st->tex[0].name);
+					"\t\tprogram \"vmt/refractflat%s%s\"\n"
+					"\t\tblendfunc GL_DST_COLOR GL_SRC_COLOR\n"
+					"\t\tmap %s\n"
+					"\t\tmap %s\n"
+				"\t}\n", args, env ? "#ENVMAPPED" : "", bump, tint);
+			if (env)
+			{
+				if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
+					st->wantenvcube = true;
+				Q_strlcatfz(script, &offset, sizeof(script),
+					"\t{\n"
+						"\t\tprogram \"vmt/refractflat#ENVPASS%s%s%s%s\"\n"
+						"\t\tblendfunc add\n"
+						"\t\tmap %s\n"
+					"\t}\n", args, envmaptint, envmapsat,
+					st->envmapcontrast_set ? va("#ENVCONTRAST=%f", st->envmapcontrast) : "", bump);
+			}
 		}
 		else
 		{
@@ -3886,8 +3946,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 
 		//rmode 2 has no normal to perturb and samples its texture through the
-		//pass, so neither of these would ever be read.
-		if (rmode != 2)
+		//pass, and rmode 0 maps both in its own passes.
+		if (rmode == 1)
 		{
 			if (*st->refracttinttexture)
 				Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->refracttinttexture, "materials/")?"materials/":"", st->refracttinttexture);
