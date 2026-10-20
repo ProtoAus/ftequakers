@@ -477,6 +477,7 @@ typedef struct vbspinfo_s
 	model_t			*wl_trace_model;	//unregistered world-only light BIH; map-owned
 	model_t			*vis_trace_model;	//FTESurf Patch 799: draw-only occluders, built on first request
 	qboolean		vis_built;
+	qboolean		wl_tried;	//FTESurf Patch 879: the occluder tree was built, or asked for once
 	struct bihtransform_s *vis_tr;		//per prop, from its own entity (not staticprops[].transform)
 	qboolean		(*vis_basetrace)(struct model_s *model, int hulloverride, const framestate_t *framestate, const vec3_t axis[3], const vec3_t p1, const vec3_t p2, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int against, struct trace_s *trace);
 
@@ -7568,16 +7569,15 @@ static qboolean VBSP_MissReason(model_t *mod, const char *name, char *out, size_
  * separate world-only tree. No prop shadow meshes or inline movers are present;
  * this is world occlusion, not Source's full light cache or VRAD shadow scene.
  */
-static void VBSP_BuildLightBIH(model_t *mod)
+static void VBSP_BuildOccluderBIH(model_t *mod)
 {
 	vbspinfo_t *prv = mod->meshinfo;
 	cmodel_t *sub = &prv->cmodels[0];
 	struct bihleaf_s *leafs, *l;
 	struct bihnode_s *collisionnodes = mod->cnodes;
+	modelfuncs_t funcs = mod->funcs;	//FTESurf Patch 879: may be built late, after VBSP_TraceVisual took over
 	size_t i, j, count = sub->num_brushes;
 
-	//FTESurf Patch 879: built on every map, not only those with world lights: the renderer's water
-	//occlusion test traces it too (VBSP_OccluderTrace).
 	for (i = 0; i < prv->numdisplacements; i++)
 		count += prv->displacements[i].numindexes/3;
 	leafs = l = plugfuncs->Malloc(sizeof(*l)*(count ? count : 1));
@@ -7622,9 +7622,18 @@ static void VBSP_BuildLightBIH(model_t *mod)
 	VectorCopy(mod->mins, prv->wl_trace_model->mins);
 	VectorCopy(mod->maxs, prv->wl_trace_model->maxs);
 	mod->cnodes = collisionnodes;	//movement tree and its contents are unchanged
+	mod->funcs = funcs;
 	Con_DPrintf("%s: worldlight occluders %u brushes/displacement triangles (no props or movers)\n",
 		mod->name, (unsigned)(l-leafs));
 	plugfuncs->Free(leafs);
+}
+static void VBSP_BuildLightBIH(model_t *mod)
+{
+	vbspinfo_t *prv = mod->meshinfo;
+	if (!prv->numworldlights)
+		return;	//FTESurf Patch 879: otherwise the first VBSP_OccluderTrace builds it, client only
+	prv->wl_tried = true;
+	VBSP_BuildOccluderBIH(mod);
 }
 
 /* FTESurf Patch 799: what a glare's depth query sees and the movement tree does not -- static
@@ -10657,7 +10666,16 @@ static int QDECL VBSP_OccluderTrace(model_t *mod, const vec3_t start, const vec3
 	if (!mod || mod->loadstate != MLS_LOADED || mod->funcs.NativeTrace != VBSP_TraceVisual)
 		return -1;
 	prv = mod->meshinfo;
-	if (!prv || !prv->wl_trace_model || !prv->wl_trace_model->funcs.NativeTrace)
+	if (!prv)
+		return -1;
+	if (!prv->wl_tried && qrenderer != QR_NONE)
+	{	//built on the first trace that asks, on the main thread as the glare tree is (vis_built): a map
+		//with no capture water, and every renderer-less server, never pays (bhop_matches: 420,675 leaves,
+		//~26 MB kept)
+		prv->wl_tried = true;
+		VBSP_BuildOccluderBIH(mod);
+	}
+	if (!prv->wl_trace_model || !prv->wl_trace_model->funcs.NativeTrace)
 		return -1;
 	memset(&tr, 0, sizeof(tr));
 	prv->wl_trace_model->funcs.NativeTrace(prv->wl_trace_model, 0, NULLFRAMESTATE,
@@ -12626,7 +12644,7 @@ qboolean VBSP_Init(void)
 		hl2_cubemaps stays MAPLATCH: it decides what VBSP_LoadCubemaps puts in
 		mod->envmaps while the BSP is being read, which no shader flush revisits.
 		*/
-		hl2_water = cvarfuncs->GetNVFDG("hl2_water", "3", CVAR_SHADERSYSTEM, "How Source water is drawn, and what it costs.\n0: flat translucent -- a $fogcolor sheet, no extra scene render, but it still blends and still sorts.\n1: live refraction with approximate baked-cubemap reflection -- one extra scene render per batch.\n2: live refraction and reflection -- two extra scene renders per batch.\n3: dithered flat (default) -- an ordered dither of $fogcolor. No blend, no sort, no render target; writes depth.\n4: budget animated -- translucent fog-coloured water with normal-map animation and approximate baked-cubemap reflection. No reflection, refraction, depth capture or screen copy; still blends/sorts and does not write depth. Not depth-correct or Source-exact.", MAPOPTIONS);
+		hl2_water = cvarfuncs->GetNVFDG("hl2_water", "3", CVAR_SHADERSYSTEM, "How Source water is drawn, and what it costs.\n0: flat translucent -- a $fogcolor sheet, no extra scene render, but it still blends and still sorts.\n1: live refraction with approximate baked-cubemap reflection -- one extra scene render per batch.\n2: live refraction and reflection -- two extra scene renders per batch.\n3: dithered flat (default) -- an ordered dither of $fogcolor. No blend, no sort, no render target; writes depth.\n4: budget animated -- translucent fog-coloured water with normal-map animation and approximate baked-cubemap reflection. No reflection, refraction, depth capture or screen copy; still blends/sorts and does not write depth. Not depth-correct or Source-exact.\nAt 1 and 2 a material with $forcecheap (and an $envmap) draws as Source's cheap water instead: opaque $fogcolor to the cubemap by fresnel, animated, no extra scene render (FTESurf Patch 879).", MAPOPTIONS);
 		hl2_refract = cvarfuncs->GetNVFDG("hl2_refract", "2", CVAR_SHADERSYSTEM, "How Source's Refract materials (glass, windows) are drawn.\n0: no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.", MAPOPTIONS);
 		hl2_vertexcolor = cvarfuncs->GetNVFDG("hl2_vertexcolor", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 232: $vertexcolor / $vertexalpha on LightmappedGeneric and WorldVertexTransition materials -- the per-vertex tint and opacity a mapper paints onto a DISPLACEMENT (every other surface carries white at alpha 1, so this cannot change them).\n0: ignore both keys, which is what every build before P232 did.\n1: draw what the material asks for (default). 41 transition materials in 20 maps and 494 LightmappedGeneric ones in 111 maps carry them; surf_rise's ivy is the reported case.", MAPOPTIONS);
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);

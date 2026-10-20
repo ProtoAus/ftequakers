@@ -4,10 +4,22 @@
 !!permu REFLECTCUBEMASK
 !!samps =BUMP normalmap
 !!samps =REFLECTCUBEMASK reflectcube
+!!samps =CHEAPANIM bumpanim:2DArray=0
 
 #include "sys/defs.h"
 
 // Capture-free approximation: no scene/depth samplers, no screen-space warp.
+// FTESurf Patch 879: CHEAPOPAQUE ($forcecheap) also moves as Source's cheap water does: $bumptransform's
+// scroll on the primary layer, and P867's AnimatedTexture frames in vmt/waterbudgetanim (this file under
+// GLSL 130, built by the Makefile) -- a frame array that did not load falls back to the normal map.
+#ifndef BUMPSCROLL
+#define BUMPSCROLL 0.0,0.0
+#endif
+#ifdef CHEAPANIM
+#define CHEAPBUMP(uv) (bumplayers > 0 ? texture2D(s_bumpanim, vec3(uv, bumplayer)) : texture2D(s_normalmap, uv))
+#else
+#define CHEAPBUMP(uv) texture2D(s_normalmap, uv)
+#endif
 #ifndef FOGTINT
 #define FOGTINT 0.1,0.2,0.3
 #endif
@@ -58,11 +70,19 @@ void main ()
 	vec3 normal = normalize(geometricnormal);
 #ifdef BUMP
 	vec2 ntc = tc * float(TXSCALE1);
+#ifdef CHEAPANIM
+	int bumplayers = textureSize(s_bumpanim, 0).z;
+	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(CHEAPANIM), float(bumplayers))) : 0.0;
+#endif
+#ifdef CHEAPOPAQUE
+	vec3 n = CHEAPBUMP(ntc + e_time * vec2(BUMPSCROLL)).xyz * 2.0 - 1.0;
+#else
 	vec3 n = texture2D(s_normalmap, ntc).xyz * 2.0 - 1.0;
+#endif
 #ifdef MULTITEXTURE
 	vec2 tc1 = vec2(ntc.x + ntc.y, ntc.y - ntc.x) * 0.1;
-	vec3 n1 = texture2D(s_normalmap, tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
-	vec3 n2 = texture2D(s_normalmap, ntc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
+	vec3 n1 = CHEAPBUMP(tc1 + e_time * vec2(SCROLL1)).xyz * 2.0 - 1.0;
+	vec3 n2 = CHEAPBUMP(ntc.yx * 0.45 + e_time * vec2(SCROLL2)).xyz * 2.0 - 1.0;
 	n = (n + n1 + n2) / 3.0;
 #endif
 	normal = normalize(tangenttoworld * normalize(n));
@@ -75,7 +95,11 @@ void main ()
 	//(its FRESNEL combo), no refraction.
 	vec3 cheap = vec3(FOGTINT);
 #ifdef REFLECTCUBEMASK
+#ifdef NOFRESNEL
+	float f = float(REFLECTBLEND);	//$nofresnel: the FRESNEL combo off mixes by $reflectblendfactor
+#else
 	float f = pow(1.0 - clamp(dot(normal, viewdir), 0.0, 1.0), 5.0);
+#endif
 	cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, normal)).rgb * vec3(TINT_REFL), f);
 #endif
 	gl_FragColor = vec4(fog3(cheap), 1.0);

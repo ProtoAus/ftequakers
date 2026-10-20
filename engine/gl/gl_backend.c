@@ -6483,7 +6483,7 @@ static void GLBE_CaptureLog(batch_t *sub, shader_t *cs, const char *kind, batch_
 //once, for all of its batches together (r_waterviews).
 extern cvar_t r_waterviews;
 #define BE_WATERKINDS (SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH)
-#define BE_WATERPLANES 16	//distinct on-screen facing water planes weighed per view; more capture on their own
+#define BE_WATERPLANES 32	//the heaviest on-screen facing water planes weighed per view; at 1 the rest share too
 #define BE_WATERPROBES 3	//traces per plane, from its heaviest meshes
 #define BE_WATERCLIP 48		//a face with more vertices than this is weighed unclipped
 typedef struct
@@ -6505,8 +6505,8 @@ typedef struct
 	unsigned int helddone;
 } bewaterview_t;
 static bewaterview_t be_waterview[R_MAX_RECURSE];
-static plane_t be_waterlast;	//the top-level view's last choice (hysteresis)
-static qboolean be_waterlastvalid;
+static plane_t be_waterlast[MAX_SPLITS];	//each seat's world-drawing top-level view's last choice (hysteresis)
+static qboolean be_waterlastvalid[MAX_SPLITS];
 
 static qboolean GLBE_WaterSamePlane(const plane_t *a, const plane_t *b)
 {
@@ -6546,35 +6546,21 @@ static void GLBE_MeshBox(const mesh_t *mesh, vec3_t lo, vec3_t hi)
 			if (mesh->xyz_array[v][k] > hi[k]) hi[k] = mesh->xyz_array[v][k];
 		}
 }
-//any of its meshes inside the frustum (the walk culls per node, so a node's off-screen faces are listed)
-static qboolean GLBE_WaterOnScreen(const batch_t *b)
-{
-	unsigned int m;
-	vec3_t lo, hi;
-	for (m = b->firstmesh; m < b->meshes; m++)
-	{
-		const mesh_t *mesh = b->mesh[m];
-		if (!mesh || !mesh->xyz_array || mesh->numvertexes < 3)
-			continue;
-		GLBE_MeshBox(mesh, lo, hi);
-		if (!R_CullBox(lo, hi))
-			return true;
-	}
-	return false;
-}
 #ifdef PLUGINS
 int Plug_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end);	//engine/common/plugin.c
 #endif
 //nothing opaque between the eye and the point: world brushes and displacements (the map plugin's occluder
 //tree, without static props -- a chain-link fence is a prop), else the world's movement trace; then the
-//brush entities that draw opaque (func_brush, func_wall, doors), walked as TraceLineR walks them.
-//An eye inside solid cannot tell: seen.
+//brush entities that draw opaque (func_brush, func_wall, doors), walked as TraceLineR walks them, against
+//SOLID only: vbsp makes a non-opaque brush CONTENTS_WINDOW, so glass does not hide water. An invisible
+//solid brush (toolsinvisible) still does. An eye inside solid cannot tell: seen.
 static qboolean GLBE_WaterSeen(const vec3_t to)
 {
 	trace_t tr;
-	int i, r = -1;
+	int i, k, r = -1;
 	entity_t *pe;
-	vec3_t ts, te;
+	vec3_t ts, te, lo, hi;
+	float ext;
 	if (!cl.worldmodel)
 		return true;
 #ifdef PLUGINS
@@ -6588,6 +6574,11 @@ static qboolean GLBE_WaterSeen(const vec3_t to)
 	}
 	if (r > 0)
 		return false;
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = min(r_refdef.vieworg[k], to[k]);
+		hi[k] = max(r_refdef.vieworg[k], to[k]);
+	}
 	for (i = 0; i < cl_numvisedicts; i++)
 	{
 		pe = &cl_visedicts[i];
@@ -6595,10 +6586,20 @@ static qboolean GLBE_WaterSeen(const vec3_t to)
 			pe->model->loadstate != MLS_LOADED || !pe->model->funcs.NativeTrace ||
 			(pe->flags & (RF_ADDITIVE|RF_NODEPTHTEST|RF_TRANSLUCENT|RF_EXTERNALMODEL)))
 			continue;
+		for (ext = 0, k = 0; k < 3; k++)	//TraceLineR's trivial reject: the segment's box against the model's reach
+		{
+			ext = max(ext, fabs(pe->model->maxs[k]));
+			ext = max(ext, fabs(pe->model->mins[k]));
+		}
+		for (k = 0; k < 3; k++)
+			if (lo[k] > pe->origin[k] + ext || hi[k] < pe->origin[k] - ext)
+				break;
+		if (k < 3)
+			continue;
 		VectorSubtract(r_refdef.vieworg, pe->origin, ts);
 		VectorSubtract(to, pe->origin, te);
 		memset(&tr, 0, sizeof(tr));
-		pe->model->funcs.NativeTrace(pe->model, 0, &pe->framestate, pe->axis, ts, te, vec3_origin, vec3_origin, false, MASK_WORLDSOLID, &tr);
+		pe->model->funcs.NativeTrace(pe->model, 0, &pe->framestate, pe->axis, ts, te, vec3_origin, vec3_origin, false, FTECONTENTS_SOLID, &tr);
 		if (!tr.startsolid && tr.fraction < 1)
 			return false;
 	}
@@ -6626,47 +6627,71 @@ static double GLBE_TriSolidAngle(const vec3_t p0, const vec3_t p1, const vec3_t 
 		(b[0]*c[0] + b[1]*c[1] + b[2]*c[2])*la;
 	return 2 * atan2(num, den);
 }
-//the solid angle of a convex face's part inside the view frustum: the exact screen share, so a pool the eye
-//floats over outweighs a smaller water farther off however its faces are cut
-static double GLBE_FaceSolidAngle(const mesh_t *mesh)
+//the solid angle of a convex face's part inside the view frustum -- the exact screen share, so a pool the eye
+//floats over outweighs a smaller water farther off however its faces are cut -- and that part's centre
+static double GLBE_FaceSolidAngle(const mesh_t *mesh, vec3_t centre)
 {
 	vec3_t buf[2][BE_WATERCLIP + MAXFRUSTUMPLANES + 1];
 	int n = mesh->numvertexes, i, k, o, p, cur = 0;
 	double sum = 0;
+	VectorClear(centre);
 	if (n > BE_WATERCLIP)
 	{
+		for (i = 0; i < n; i++)
+			VectorAdd(centre, mesh->xyz_array[i], centre);
+		VectorScale(centre, 1.0f/n, centre);
 		for (i = 1; i + 1 < n; i++)	//a face is a convex fan
 			sum += GLBE_TriSolidAngle(mesh->xyz_array[0], mesh->xyz_array[i], mesh->xyz_array[i+1]);
 		return sum;
 	}
+	for (i = 0; i < n; i++)
+		VectorCopy(mesh->xyz_array[i], buf[0][i]);
+	for (p = 0; p < r_refdef.frustum_numplanes && n >= 3; p++)
 	{
-		for (i = 0; i < n; i++)
-			VectorCopy(mesh->xyz_array[i], buf[0][i]);
-		for (p = 0; p < r_refdef.frustum_numplanes && n >= 3; p++)
+		const mplane_t *pl = &r_refdef.frustum[p];
+		vec3_t *in = buf[cur], *out = buf[cur^1];
+		for (o = 0, i = 0; i < n; i++)
 		{
-			const mplane_t *pl = &r_refdef.frustum[p];
-			vec3_t *in = buf[cur], *out = buf[cur^1];
-			for (o = 0, i = 0; i < n; i++)
+			const float *a = in[i], *b = in[(i+1)%n];
+			float da = DotProduct(a, pl->normal) - pl->dist, db = DotProduct(b, pl->normal) - pl->dist;
+			if (da >= 0)
+				VectorCopy(a, out[o++]);
+			if ((da >= 0) != (db >= 0))
 			{
-				const float *a = in[i], *b = in[(i+1)%n];
-				float da = DotProduct(a, pl->normal) - pl->dist, db = DotProduct(b, pl->normal) - pl->dist;
-				if (da >= 0)
-					VectorCopy(a, out[o++]);
-				if ((da >= 0) != (db >= 0))
-				{
-					float t = da / (da - db);
-					for (k = 0; k < 3; k++)
-						out[o][k] = a[k] + t * (b[k] - a[k]);
-					o++;
-				}
+				float t = da / (da - db);
+				for (k = 0; k < 3; k++)
+					out[o][k] = a[k] + t * (b[k] - a[k]);
+				o++;
 			}
-			n = o;
-			cur ^= 1;
 		}
+		n = o;
+		cur ^= 1;
 	}
+	if (n < 3)
+		return 0;
+	for (i = 0; i < n; i++)
+		VectorAdd(centre, buf[cur][i], centre);
+	VectorScale(centre, 1.0f/n, centre);
 	for (i = 1; i + 1 < n; i++)
 		sum += GLBE_TriSolidAngle(buf[cur][0], buf[cur][i], buf[cur][i+1]);
 	return sum;
+}
+//the on-screen test both the weight and the capture skip use: some face's clipped polygon is not empty
+//(the walk culls per node, so a node's off-screen faces are listed)
+static qboolean GLBE_WaterOnScreen(const batch_t *b)
+{
+	unsigned int m;
+	vec3_t lo, hi, c;
+	for (m = b->firstmesh; m < b->meshes; m++)
+	{
+		const mesh_t *mesh = b->mesh[m];
+		if (!mesh || !mesh->xyz_array || mesh->numvertexes < 3)
+			continue;
+		GLBE_MeshBox(mesh, lo, hi);
+		if (!R_CullBox(lo, hi) && GLBE_FaceSolidAngle(mesh, c) > 0)
+			return true;
+	}
+	return false;
 }
 typedef struct
 {
@@ -6674,16 +6699,16 @@ typedef struct
 	float w;				//summed solid angle of its meshes inside the frustum
 	batch_t *b;				//the batch of its heaviest mesh
 	float bw;
-	vec3_t probe[BE_WATERPROBES];	//its heaviest meshes' centres, just off the surface on the eye's side
+	vec3_t probe[BE_WATERPROBES];	//its heaviest faces' on-screen centres, just off the surface on the eye's side
 	float pw[BE_WATERPROBES];
 	qboolean traced, seen;
 } bewaterplane_t;
-//weigh one batch's on-screen meshes into a plane's slot
+//weigh one batch's on-screen faces into a plane's slot
 static float GLBE_WaterWeigh(batch_t *b, const plane_t *p, bewaterplane_t *slot)
 {
 	float sum = 0, w;
 	unsigned int m;
-	int v, t;
+	int t;
 	for (m = b->firstmesh; m < b->meshes; m++)
 	{
 		mesh_t *mesh = b->mesh[m];
@@ -6693,14 +6718,10 @@ static float GLBE_WaterWeigh(batch_t *b, const plane_t *p, bewaterplane_t *slot)
 		GLBE_MeshBox(mesh, lo, hi);
 		if (R_CullBox(lo, hi))
 			continue;
-		w = GLBE_FaceSolidAngle(mesh);
+		w = GLBE_FaceSolidAngle(mesh, c);
 		if (w <= 0)
 			continue;
 		sum += w;
-		VectorCopy(mesh->xyz_array[0], c);
-		for (v = 1; v < mesh->numvertexes; v++)
-			VectorAdd(c, mesh->xyz_array[v], c);
-		VectorScale(c, 1.0f/mesh->numvertexes, c);
 		for (t = 0; t < BE_WATERPROBES; t++)	//keep the heaviest few as trace targets
 			if (w > slot->pw[t])
 			{
@@ -6775,7 +6796,7 @@ static void GLBE_WaterGather(bewaterview_t *wv, batch_t *first, const plane_t *p
 //before this view submits anything: pick its water
 static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 {
-	int level = r_refdef.recurse, i, n = 0, s, t, best, hidden = -1, kept = 0;
+	int level = r_refdef.recurse, i, n = 0, s, t, best, hidden = -1, kept = 0, seat = 0;
 	bewaterview_t *wv;
 	batch_t *b;
 	plane_t p;
@@ -6788,11 +6809,14 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 	wv->chosen = NULL;
 	wv->need = wv->needall = 0;
 	wv->helddone = 0;
-	//nothing here can capture: past the recursion limit, or inside a water capture (Patch 864)
+	if (r_refdef.playerview && r_refdef.playerview >= cl.playerview && r_refdef.playerview < cl.playerview + MAX_SPLITS)
+		seat = r_refdef.playerview - cl.playerview;
+	//nothing here can capture: past the recursion limit, or inside a water capture (Patch 864). A view
+	//without the world (the avatar card's renderscene) leaves the seat's hold alone.
 	if (!r_waterviews.ival || !worldbatches || level >= r_portalrecursion.ival || be_watercapture)
 	{
-		if (!level)
-			be_waterlastvalid = false;
+		if (!level && worldbatches)
+			be_waterlastvalid[seat] = false;
 		return;
 	}
 	VectorCopy(r_refdef.vieworg, wv->eye);
@@ -6811,13 +6835,24 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 			if (s < n)
 				w = GLBE_WaterWeigh(b, &p, &planes[s]);
 			else
-			{	//a slot only for a plane with water on screen
+			{	//a slot only for a plane with water on screen; a full table drops its lightest for a heavier one
 				memset(&probe, 0, sizeof(probe));
 				probe.p = p;
 				w = GLBE_WaterWeigh(b, &p, &probe);
-				if (w <= 0 || n == BE_WATERPLANES)
+				if (w <= 0)
 					continue;
-				planes[s = n++] = probe;
+				if (n < BE_WATERPLANES)
+					s = n++;
+				else
+				{
+					for (s = 0, t = 1; t < n; t++)
+						if (planes[t].w < planes[s].w)
+							s = t;
+					if (planes[s].w >= w)
+						continue;
+				}
+				planes[s] = probe;
+				planes[s].w = 0;	//added below
 			}
 			if (w > 0)
 			{
@@ -6847,11 +6882,11 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 		}
 		planes[top].w = -planes[top].w;	//tried
 	}
-	if (best >= 0 && !level && be_waterlastvalid)
+	if (best >= 0 && !level && be_waterlastvalid[seat])
 	{	//the top-level view keeps last frame's water while it still has half the best's share and is seen,
 		//so faces cut across a pool or a seam cannot flip the mirror plane frame to frame
 		for (s = 0; s < n; s++)
-			if (s != best && GLBE_WaterSamePlane(&planes[s].p, &be_waterlast))
+			if (s != best && GLBE_WaterSamePlane(&planes[s].p, &be_waterlast[seat]))
 			{
 				if (fabs(planes[s].w) >= 0.5f * fabs(planes[best].w) && GLBE_WaterPlaneSeen(&planes[s]))
 				{
@@ -6863,9 +6898,9 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 	}
 	if (!level)
 	{
-		be_waterlastvalid = best >= 0;
+		be_waterlastvalid[seat] = best >= 0;
 		if (best >= 0)
-			be_waterlast = planes[best].p;
+			be_waterlast[seat] = planes[best].p;
 	}
 	if (best < 0)
 		return;
