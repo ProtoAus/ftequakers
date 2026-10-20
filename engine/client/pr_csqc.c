@@ -10065,13 +10065,30 @@ qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta)
      the delta landed; it now matches by value (CSQC_PredictAngleCorrect).
 
   3. The listen server.  With a local server active the SSQC touch functions
-     run in the same process and the hook is skipped outright, which is the
-     Patch 240 precedent: prediction must be honestly ignorant rather than
-     right twice.
+     run in the same process and the hook was skipped outright, as Patch 240's
+     precedent.  Patch 862 runs it there too (CSQC_PredictListenGated).
 ===========================================================================
 */
 extern cvar_t cl_predict_qchook;
 extern cvar_t cl_predict_angleexact, cl_predict_angledebug;	/*cl_pred.c, Patch 396*/
+extern cvar_t cl_predict_listen;	/*cl_pred.c, Patch 862*/
+
+/*FTESurf Patch 862: the trigger mirror (this hook and its carrier ring) also runs on a
+  listen server.  Patch 335 gated it off as Patch 240's double apply, but nothing it
+  writes reaches the server: of the shared pmove it writes origin, velocity, onground
+  and basevelocity, and SV_RunCmd reloads all four from the edict for every command
+  (sv_user.c; basevelocity from run_basevelocity or cleared), while CSQC's state is
+  its own VM.  The view snap goes through the same Patch 396 reconciliation as against
+  a remote server.  The warp-op pre-move hook keeps its gate: on, a local !r/!m would
+  take the server's impulse path instead of its stringcmd.*/
+static qboolean CSQC_PredictListenGated(void)
+{
+#ifdef HAVE_SERVER
+	return sv.state != ss_dead && !cl_predict_listen.ival;
+#else
+	return false;
+#endif
+}
 
 /*FTESurf Patch 396: a snap keeps its absolute target and command sequence, so a server
   setangle is matched by value.  ENGINE_PATCHES.md has the timing cases.*/
@@ -10672,10 +10689,8 @@ void CSQC_PredictSaveBaseVel(int seat, int sequence)
 	int slot;
 	if ((unsigned int)seat >= MAX_SPLITS || !cl_predict_qchook.ival)
 		return;
-#ifdef HAVE_SERVER
-	if (sv.state != ss_dead)
+	if (CSQC_PredictListenGated())
 		return;
-#endif
 	slot = (unsigned int)sequence & (PRED_BVEL_RING - 1);
 	VectorCopy(pred_bv_held[seat], pred_bvring[seat][slot].held);
 	pred_bvring[seat][slot].armed = pred_bv_armed[seat];
@@ -10688,10 +10703,8 @@ void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious
 	int slot;
 	if (!csqcg.predmove_basevel || !cl_predict_qchook.ival)
 		return;
-#ifdef HAVE_SERVER
-	if (sv.state != ss_dead)
+	if (CSQC_PredictListenGated())
 		return;
-#endif
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return;
 
@@ -10743,16 +10756,11 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 		return;
 	if (!csqcg.predmove_org || !csqcg.predmove_vel || !csqcg.predmove_onground)
 		return;
-#ifdef HAVE_SERVER
-	/* Listen server: SSQC touches are the authority in this process, so the
-	   mirror must stay honestly ignorant rather than fire twice (the Patch 240
-	   precedent).  NOT sv.active: that field is never written anywhere in this
-	   tree -- every existing `if (sv.active)` on the client is dead code, which
-	   the p335a run proved by printing hook-alive on a live listen server.
-	   sv.state is the live one (sv_init.c:1820). */
-	if (sv.state != ss_dead)
+	/* Listen server: gated only at cl_predict_listen 0 (Patch 862, above).  NOT
+	   sv.active: that field is never written anywhere in this tree; sv.state is the
+	   live one (sv_init.c:1820). */
+	if (CSQC_PredictListenGated())
 		return;
-#endif
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return;
 
