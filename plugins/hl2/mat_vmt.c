@@ -893,7 +893,7 @@ typedef struct
 	float refractamount, reflectamount;
 	float bluramount;	//FTESurf Patch 866
 	qboolean blurrefract;	//FTESurf Patch 877: Water's BLURRY_REFRACT, the only path that applies $refracttint
-	qboolean nowritez, masked;	//FTESurf Patch 878: Refract's $nowritez, $masked
+	qboolean nowritez;	//FTESurf Patch 878: Refract's $nowritez
 	qboolean alpha_set;	//FTESurf Patch 878: $alpha was given (alphaval 0 also means unset)
 	char normalmapkey[MAX_QPATH];	//FTESurf Patch 878: $normalmap's own value; normalmap also takes $bumpmap
 	qboolean refractamount_set, reflectamount_set;
@@ -1269,19 +1269,19 @@ static qboolean VMT_TextureHasAlpha(const char *name)
 }
 
 /*
-FTESurf Patch 878: how Source blends a Refract.  $masked always, ONE_MINUS_SRC_ALPHA SRC_ALPHA
-(refract_dx9_helper.cpp:228-231); with a $normalmap and no $envmap, SetDefaultBlendingShadowState
-on the normal map: $additive always, otherwise only when translucent -- $alpha other than 1,
-$vertexalpha, or a normal VTF with alpha and no $alphatest (BaseShader.cpp:499, 607-671).  Anything
-else is opaque and writes depth unless $nowritez (:138; blending turns it off, BaseShader.cpp:593-598).
-$bumpmap is not a Refract parameter.
+FTESurf Patch 878: how Source blends a Refract.  With a $normalmap and no $envmap,
+SetDefaultBlendingShadowState on the normal map: $additive always, otherwise only when translucent
+-- $alpha other than 1, $vertexalpha, or a normal VTF with alpha and no $alphatest (BaseShader.cpp:
+499, 607-671).  Anything else is opaque and writes depth unless $nowritez (:138; blending turns it
+off, BaseShader.cpp:593-598); the engine keeps that depth for model panes only (gl_backend.c
+GLBE_SubmitNearest).  $bumpmap is not a Refract parameter.  $masked (a dest-alpha overlay,
+refract_dx9_helper.cpp:228-231, refract_ps20b.fxc:199-206) is not drawn as Source does; no packed
+material uses it.
 */
-enum {REFR_OPAQUE, REFR_BLEND, REFR_ADDALPHA, REFR_ADD, REFR_MASKED};
+enum {REFR_OPAQUE, REFR_BLEND, REFR_ADDALPHA, REFR_ADD};
 static int VMT_RefractBlend(const vmtstate_t *st)
 {
 	qboolean trans;
-	if (st->masked)
-		return REFR_MASKED;
 	if (!*st->normalmapkey || st->envauthored)
 		return REFR_OPAQUE;
 	trans = (st->alpha_set && st->alphaval != 1) || st->vertexalpha_on ||
@@ -2135,8 +2135,6 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->bluramount = atof(value);	//FTESurf Patch 866: Refract's BLUR combo; water.glsl has no blur stage
 		else if (!Q_strcasecmp(key, "$nowritez"))
 			st->nowritez = atoi(value) != 0;
-		else if (!Q_strcasecmp(key, "$masked"))
-			st->masked = atoi(value) != 0;
 
 		else if (!Q_strcasecmp(key, "$refracttint"))
 			st->refracttint_set = VMT_ParseColour(value, st->refracttint);
@@ -4017,7 +4015,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
 			size_t aoff = 0;
 			int rkind;
-			const char *nm = *st->normalmap ? st->normalmap : st->dudvmap;
+			const char *nm = *st->normalmapkey ? st->normalmapkey : st->dudvmap;	//Patch 878: not $bumpmap
 			//FTESurf Patch 866: env_cubemap reflects whatever hl2_envcubemap says -- on Refract
 			//the reflection is most of what makes the pane visible (surf_boreas's icicles);
 			//the pass's REFLECTCUBEMASK gate keeps r_reflectcube/r_envcubemap.
@@ -4156,9 +4154,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			}
 
 			//blendfunc before the maps (see mode 0).  On the screen copy the pane sorts NEAREST
-			//(gl_shader.c:6402), where GLBE_SubmitNearest draws panes back to front after all they
-			//can show; with a $basetexture it sorts blended.  An opaque pane has alpha 1 (#OPAQUE)
-			//and writes depth, as Source's does.
+			//(gl_shader.c Shader_Finish), where GLBE_SubmitNearest orders it; with a $basetexture it
+			//sorts blended and keeps its old drawing.  An opaque screen-copy pane has alpha 1
+			//(#OPAQUE) and asks for depth, which the engine keeps on models only.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
 					"\t\tprogram \"vmt/refract%s\"\n"
@@ -4168,9 +4166,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
 				"\t}\n", args,
-				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" :
-				rkind == REFR_MASKED ? "GL_ONE_MINUS_SRC_ALPHA GL_SRC_ALPHA" : "blend",
-				(rkind == REFR_OPAQUE && !st->nowritez) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
+				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" : "blend",
+				(rkind == REFR_OPAQUE && !st->nowritez && st->basedefaulted) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
 			st->translucent = 0;
 			st->additive = 0;
 			st->alphaval = 0;
