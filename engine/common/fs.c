@@ -9684,26 +9684,33 @@ Momentum's gameinfo mounts cstrike_pak_dir.vpk and cstrike/download, never cstri
 materials; ours put the whole cstrike dir above HL2 and Momentum's mount/hl2_dir.vpk, so Lex's
 community-pack cstrike/materials/dev/water_normal.vtf (1024^2, one frame) replaced HL2's animated
 256^2 one on 835 of 1,926 maps.  Census of his mounts: the 5 dev/water*.vtf are the only files
-in cstrike's loose dirs that a lower pack also has.  A loose dir is a Source game's when one of
-its own *_dir.vpk is mounted; the packs keep their order.  No locks: called inside the rebuild
-or automount, which hold fs_thread_mutex.
+in cstrike's loose dirs that a lower pack also has (plus 10 hl2 scripts/ files nothing reads yet).
+A loose dir is a Source game's when one of its own *_dir.vpk is mounted; the packs keep their
+order.  Boot and fs_restart only: FS_RemountAddons runs at the end of FS_ReloadPackFilesFlags,
+after COM_WorkerFullSync, so no loader walks the list.  Never after an automount: a game mounted
+mid-session only appends, so no winner a loaded model or the P197 cache relied on moves.
 */
 static cvar_t fs_sourceloose = CVARFD("fs_sourceloose", "1", CVAR_ARCHIVE, "ftesurf (P875): 1 = a mounted Source game's loose files (cstrike/materials and the like) rank below every pack, as Momentum mounts them; 0 = above them, the order before. Takes effect at fs_restart.");
 static qboolean FS_Addon_IsSourceLoose(const searchpath_t *sp)
 {
 	const searchpath_t *s;
+	const char *q;
 	size_t len = strlen(sp->logicalpath), l2;
+	while (len && (sp->logicalpath[len-1] == '/' || sp->logicalpath[len-1] == '\\'))
+		len--;	//an absolute fs_addons.txt line may end in a separator
 	if ((sp->flags & (SPF_ADDON|SPF_ISDIR)) != (SPF_ADDON|SPF_ISDIR) || !len)
 		return false;
 	for (s = com_searchpaths; s; s = s->next)
 	{
 		if (s == sp || (s->flags & SPF_ISDIR) || !(s->flags & SPF_ADDON))
 			continue;
+		q = s->logicalpath + len;
 		l2 = strlen(s->logicalpath);
-		if (l2 > len + 8 && !Q_strncasecmp(s->logicalpath, sp->logicalpath, len) &&
-			(s->logicalpath[len] == '/' || s->logicalpath[len] == '\\') &&
-			!strchr(s->logicalpath + len + 1, '/') && !strchr(s->logicalpath + len + 1, '\\') &&
-			!Q_strcasecmp(s->logicalpath + l2 - 8, "_dir.vpk"))
+		if (l2 <= len + 8 || Q_strncasecmp(s->logicalpath, sp->logicalpath, len) || (*q != '/' && *q != '\\'))
+			continue;
+		while (*q == '/' || *q == '\\')
+			q++;	//"<dir>/x_dir.vpk" or "<dir>//x_dir.vpk", never deeper
+		if (!strchr(q, '/') && !strchr(q, '\\') && !Q_strcasecmp(s->logicalpath + l2 - 8, "_dir.vpk"))
 			return true;
 	}
 	return false;
@@ -11326,7 +11333,6 @@ void FS_AutoMountForMap(const char *mapname)
 				Con_Printf("fs_automount: %s needs \"%s\"\n", want, wantspec[i]);
 				FS_Addon_MountHD(wantspec[i], ~0u);
 				FS_Addon_Mount(wantspec[i], ~0u);
-				FS_Addon_SinkSourceLoose();	//FTESurf Patch 875: its loose dir below every pack, the earlier ones too
 			}
 			if (fs_thread_mutex)
 				Sys_UnlockMutex(fs_thread_mutex);

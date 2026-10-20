@@ -471,19 +471,51 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 				other shape.  Entries stay smallest level first, then frame, then face -- the
 				uncompressed layout -- so each inflates to its level's size / entries a level.
 				*/
-				size_t total = 0, srcofs = 0, outofs = 0;
+				size_t total = 0, srcofs = 0, outofs = 0, comp = 0;
 				unsigned int k, j, n = (axclen - 4) / 4, per = n / nlevels;
-				if (n % nlevels || !per || (storedfaces * vtf->numframes) % per)
+				if (n % nlevels || !per || (storedfaces * vtf->numframes) % per || filedata > end)
 				{
 					Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary compression has %u entries for %u levels\n", fname, n, nlevels);
 					plugfuncs->Free(mips);
 					return NULL;
 				}
+				/*
+				Validate before allocating (the allocator Sys_Errors on failure, so a few-KB
+				hostile file in a map pak must not reach it): every entry lies in the file and
+				its zstd frame declares the size this level expects (all 22,266 of the mount's
+				frames declare one), the total is at most 8192x the compressed bytes (the
+				mount's worst real file, a black skybox face, is 6,228x; median 1.7x) and
+				at most 256 MB (its largest is 10 MB; an uncompressed 4096^2 RGBA16F chain
+				fits).
+				*/
 				for (k = 0; k < nlevels; k++)
 				{
-					w = vtf->width>>k;	if (!w) w = 1;
-					h = vtf->height>>k;	if (!h) h = 1;
-					total += (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes;
+					unsigned int lvl = nlevels-1-k;
+					size_t want;
+					unsigned long long decl;
+					w = vtf->width>>lvl;	if (!w) w = 1;
+					h = vtf->height>>lvl;	if (!h) h = 1;
+					want = (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * storedfaces * vtf->numframes;
+					total += want;
+					want /= per;
+					for (j = 0; j < per; j++)
+					{
+						size_t csize = AXC_LE32(axc + 8 + 4*(k*per + j));
+						if (csize > (size_t)(end - filedata) - comp)
+							break;
+						decl = ZSTD_getFrameContentSize(filedata + comp, csize);
+						if (decl == ZSTD_CONTENTSIZE_ERROR || (decl != ZSTD_CONTENTSIZE_UNKNOWN && decl != want))
+							break;
+						comp += csize;
+					}
+					if (j < per)
+						break;
+				}
+				if (k < nlevels || total > (size_t)256*1024*1024 || total / 8192 > comp)
+				{
+					Con_Printf(CON_ERROR"%s: VTF 7.6 auxiliary-compressed image does not match its header\n", fname);
+					plugfuncs->Free(mips);
+					return NULL;
 				}
 				axcraw = plugfuncs->Malloc(total);
 				for (k = 0; k < nlevels; k++)
