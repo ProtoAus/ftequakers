@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 898 — ALT+ENTER switches windowed <-> borderless; Patch 903 — a redirect line stays quiet (client exe)
+
+**Problem:** Lex: "can you make alt+enter work for fullscreen swapping". Nothing handled it: the key went
+to the binds, and `bind enter say` fills every modifier slot, so ALT+ENTER opened chat. Patch 903: every
+HTTP 301/302/303 printed `<url>: 302 Found (<Location>)` with Con_Printf. The zone mirror answers a map's
+zone file with a presigned R2 URL, so a ~600-character signed address landed in the console after "FTESurf
+CSQC loaded" on every map load, and in the logs players paste.
+
+**Change:** keys.c Key_Event, after the shift+escape console block and before CSQC, the menus or the console
+see the key: ALT+ENTER queues `fullscreen_toggle` (Patch 268, windowed <-> borderless) on the press and
+swallows the repeat and the release, unless the ALT slot holds a bind that differs from ENTER's own (a
+`bind ALT+ENTER ...` of the player's wins). `in_altenter` (archived, default 1) turns it off; a
+Con_DPrintf names the action. httpclient.c: the redirect line is Con_DPrintf and stops at the `?`
+(`...json?...)`); in this tree Con_DPrintf reaches stdout at developer 1 and the log at log_developer 1,
+never the console.
+
+**Verified:** client built (m-rel, no new warnings in the two files). Overlay roots with the P898 progs and
+cfg, the install mounted read-only, conbridge sessions at 1280x720 (art898/arm898.py). ALT+ENTER by window
+messages to the client: "ALT+ENTER: fullscreen_toggle", "Setting fullscreen windowed OpenGL", the window
+1038x614 -> the monitor's 1536x961 (logical); again: "Setting windowed mode 1280*720", back to 1038x614;
+with `bind ALT+ENTER "echo ..."` the echo ran and the window stayed. Each switch reloads the renderer,
+~7 s on surf_dune, as F11 does. Redirects, the same P898 csprogs fetching surf_dune's zones after a map load: the
+installed exe printed the full signed address at developer 0 (2 lines carrying X-Amz-Signature in its
+log); this exe printed nothing at developer 0 and, at developer 1 + log_developer 1,
+`.../surf_dune.json: 302 Found (https://<account>.r2.cloudflarestorage.com/ftesurf-public/objects/zones/<sha256>.json?...)`,
+with no X-Amz anywhere in its log.
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
