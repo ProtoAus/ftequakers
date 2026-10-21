@@ -20,17 +20,20 @@ disk), hl2_lt_baked_scale (multiplied into each prop once), hl2_hidetools (nodra
 hl2_areaportals (initial state), the two collision rows (physics, server, evidence).
 
 **Verified:** client + hl2 plugin built with no new warnings in the changed files; QC 0 warnings.
-Live-vs-loaded arm (art894/arm894.py, listen server on an overlay root: each row switched live, then loaded
-fresh at the same camera; control the installed P879 client 2b94393b + hl2 aec7a92e): Water live 3->2 matches
-a load at 2 on surf_garden's pond (0.16% of pixels against 1.51% between modes); Translucent and Env maps match a
-load each way at surf_demise save 3 (0.20-0.31% against 7.6% and 18.5%), where the control's live switch left the
-old look (7.54%) and never applied Env maps; Overlays match on surf_rise (103 of 105 re-placed live); Sprites
-re-run live ("1 of 1 drawn" / "none drawn"). A live rebuild re-parsed 284-310 materials in 50-355 ms. Not shown
-by the arm (views did not discriminate, or the map had none): Glass, Animated, Dither, Bump maps, Decals, Light
-shafts, the model-light rows -- their `*` stays.
-Limits: Mod_Batches_Build keeps a batch's cubemap only for a HASREFLECTCUBE shader and splits per plane only
-for a capturing one, both at load -- so hl2_envmap turned on after a map loaded with it off, and hl2_water
-switched into a capturing mode (1/2) after a non-capturing load, are what the arm decides.
+Live-vs-retry arm (art894/arm894.py, listen server on an overlay root: each row switched live, then
+`retry`'d at the same camera; control the installed P879 client 2b94393b + hl2 aec7a92e). A `retry` keeps the
+BSP, so it re-runs material generation but not Mod_Batches_Build; it is a material check, not a fresh load.
+Translucent and Env maps match the retry each way at surf_demise save 3 (0.20-0.31% of pixels against 7.6% and
+18.5% between the settings), where the control's live switch left the old look (7.54%) and never applied Env maps;
+Water live 3->2 matches on surf_garden's single-plane pond (0.16% against 1.51%); Overlays match on surf_rise (103
+of 105 re-placed live); Sprites re-run live ("1 of 1 drawn" / "none drawn"). A live rebuild re-parsed 284-310
+materials in 50-355 ms.
+Limits: Mod_Batches_Build (gl_model.c) splits water batches per plane only for a capturing shader and keeps a
+batch's cubemap only for a HASREFLECTCUBE one, both at map load -- a map LOADED with Env maps off and turned on, or
+loaded at Water 0/3/4 and switched to a capturing 1/2 on multi-plane water, was not exercised (the arm loaded with
+Env maps on and Water 2), so both rows keep their `*`. Translucent shows `*` on an engine without its renderer
+flag (a released exe), via cvar_type. Glass, Animated, Dither, Bump maps, Decals, Light shafts and the model-light
+rows were not shown by the arm and keep their `*`.
 
 ## Patch 895 — world and brush Refract panes share one screen copy per view (client exe)
 

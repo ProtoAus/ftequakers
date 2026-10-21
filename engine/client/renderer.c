@@ -906,17 +906,17 @@ static cvar_t hl2_dither_alpha_shaderpolicy = CVARFD("hl2_dither_alpha", "1", CV
 static cvar_t hl2_dither_force_shaderpolicy = CVARFD("hl2_dither_force", "0", CVAR_SHADERSYSTEM,
 	"Explicit coverage for dithered Source surfaces; 0 uses each material's derived coverage.");
 // Patch 894: the rest of the hud_gfx material rows, read only while a .vmt is turned into a shader,
-// so a change rebuilds materials without restarting the map. Defaults match the hl2 plugin's.
+// so a change rebuilds materials without restarting the map. Default, help and group as the plugin's.
 static cvar_t hl2_refract_shaderpolicy = CVARFD("hl2_refract", "2", CVAR_SHADERSYSTEM,
-	"Source Refract materials. 0: plain translucency. 1: refracting. 2: dithered. Changes rebuild materials without restarting the map.");
+	"How Source's Refract materials (glass, windows) are drawn.\n0: no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.");
 static cvar_t hl2_translucent_shaderpolicy = CVARFD("hl2_translucent", "1", CVAR_SHADERSYSTEM,
-	"$translucent world materials. 0: drawn opaque. 1: as authored. Changes rebuild materials without restarting the map.");
+	"$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).");
 static cvar_t hl2_animated_shaderpolicy = CVARFD("hl2_animated", "0", CVAR_SHADERSYSTEM,
-	"Source's AnimatedTexture proxy. Changes rebuild materials without restarting the map.");
+	"Source's AnimatedTexture proxy -- materials whose frames all live in one VTF (smoke, fire, screens, water).\n0: draw frame 0, which is what shipped before and what every one of these materials has always done (default).\n1: cycle them at the rate the material asks for. 3,342 materials across 741 maps carry the proxy, so this moves a large part of the library onto a separate GLSL 130 shader (vmt/animated) that nothing has exercised before -- which is why it is not on by default.");
 static cvar_t hl2_envmap_shaderpolicy = CVARFD("hl2_envmap", "1", CVAR_SHADERSYSTEM,
-	"Source $envmap reflections. Changes rebuild materials; turning them on after a map loaded with them off needs a reload for env_cubemap surfaces.");
+	"Source $envmap reflections on world and model materials, INCLUDING named skybox cubemaps.\n0: no reflections at all; env-mapped surfaces draw as plain diffuse+lightmap.\n1: normal (default). See also hl2_cubemaps, which leaves the shader path alone and only controls the map's own baked env_cubemaps.");
 static cvar_t hl2_bumpmap_shaderpolicy = CVARFD("hl2_bumpmap", "1", CVAR_SHADERSYSTEM,
-	"Source $bumpmap/$normalmap. Changes rebuild materials without restarting the map.");
+	"Load $bumpmap/$normalmap from Source materials.\n0: no normal maps -- flat lighting, and it also drops the per-pixel work that reads them.\n1: normal (default).");
 cvar_t r_waterstyle							= CVARFD ("r_waterstyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Changes how water, and teleporters are drawn. Possible values are:\n0: fastturb-style block colour.\n1: regular q1-style water.\n2: refraction(ripply and transparent)\n3: refraction with reflection at an angle\n4: ripplemapped without reflections (requires particle effects)\n5: ripples+reflections");
 cvar_t r_slimestyle							= CVARFD ("r_slimestyle", "", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only slime. If empty, defers to r_waterstyle.");
 cvar_t r_lavastyle							= CVARFD ("r_lavastyle", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "See r_waterstyle, but affects only lava. If empty, defers to r_waterstyle.");
@@ -1511,11 +1511,11 @@ void Renderer_Init(void)
 	Cvar_Register (&hl2_water_shaderpolicy, GRAPHICALNICETIES);
 	Cvar_Register (&hl2_dither_alpha_shaderpolicy, GRAPHICALNICETIES);
 	Cvar_Register (&hl2_dither_force_shaderpolicy, GRAPHICALNICETIES);
-	Cvar_Register (&hl2_refract_shaderpolicy, GRAPHICALNICETIES);
-	Cvar_Register (&hl2_translucent_shaderpolicy, GRAPHICALNICETIES);
-	Cvar_Register (&hl2_animated_shaderpolicy, GRAPHICALNICETIES);
-	Cvar_Register (&hl2_envmap_shaderpolicy, GRAPHICALNICETIES);
-	Cvar_Register (&hl2_bumpmap_shaderpolicy, GRAPHICALNICETIES);
+	Cvar_Register (&hl2_refract_shaderpolicy, "Map Cvar Options");
+	Cvar_Register (&hl2_translucent_shaderpolicy, "Map Cvar Options");
+	Cvar_Register (&hl2_animated_shaderpolicy, "Map Cvar Options");
+	Cvar_Register (&hl2_envmap_shaderpolicy, "Map Cvar Options");
+	Cvar_Register (&hl2_bumpmap_shaderpolicy, "Map Cvar Options");
 	Cvar_Register (&r_lavastyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_slimestyle, GRAPHICALNICETIES);
 	Cvar_Register (&r_telestyle, GRAPHICALNICETIES);
