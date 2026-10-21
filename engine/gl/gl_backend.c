@@ -7766,6 +7766,7 @@ typedef struct
 	const entity_t *group;
 	size_t sequence;
 	qboolean foreground;
+	qboolean planar;	// FTESurf Patch 900: a brush-entity face the plane refinement may prove
 } glblendface_t;
 
 static qboolean gl_blendtrace_pending;
@@ -7933,6 +7934,52 @@ static qboolean GLBE_BlendBrushEntity(const batch_t *batch)
 		!(e->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));
 }
 
+// A box centre is only along the view: parallel panes swap at shallow angles (bhop_eazy *16/*5 below
+// yaw 29 from save 14's eye). Their faces join the plane proof when the entity sits at the identity
+// transform (the proofs read mesh positions as world space) and its programs only transform positions:
+// vmt/lightmapped and vmt/unlit write gl_Position = ftetransform() and nothing else (lightmapped.glsl:148,
+// unlit.glsl:59). Anything else keeps the box centre.
+static qboolean GLBE_BlendFaceEligible(const batch_t *batch);
+static qboolean GLBE_BlendProgramPlanar(const program_t *prog)
+{
+	static const char *names[] = {"vmt/lightmapped", "vmt/unlit"};
+	size_t i, l;
+	if (!prog) return true;
+	if (!prog->name || prog->tess || prog->geom) return false;
+	for (i = 0; i < countof(names); i++)
+	{
+		l = strlen(names[i]);
+		if (!strncmp(prog->name, names[i], l) && (!prog->name[l] || prog->name[l] == '#'))
+			return true;
+	}
+	return false;
+}
+
+static qboolean GLBE_BlendShaderPlanar(const shader_t *shader)
+{
+	int p;
+	if (!shader || shader->numdeforms || !GLBE_BlendProgramPlanar(shader->prog) ||
+		shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
+		return false;
+	for (p = 0; p < shader->numpasses; p++)
+		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || !GLBE_BlendProgramPlanar(shader->passes[p].prog))
+			return false;
+	return true;
+}
+
+static qboolean GLBE_BlendEntityPlanar(const batch_t *batch, const float *matrix)
+{
+	int i;
+	if (!GLBE_BlendBrushEntity(batch) || !GLBE_BlendFaceEligible(batch) || batch->fog ||
+		(batch->flags & ~(BEF_FORCETRANSPARENT | BEF_NOSHADOWS | BEF_NODLIGHT | BEF_FORCECOLOURMOD)) ||
+		!GLBE_BlendShaderPlanar(batch->shader) || !GLBE_BlendShaderPlanar(batch->shader->remapto))
+		return false;
+	for (i = 0; i < 16; i++)
+		if (matrix[i] != ((i % 5) ? 0 : 1))
+			return false;
+	return true;
+}
+
 // Keep stock CSQC wire annotations in the legacy post-world layer. Their
 // centre depths are not glass-plane constraints; arbitrary shaders/models
 // remain conservative barriers. Opaque depth testing is unchanged.
@@ -8085,9 +8132,10 @@ static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_
 	qboolean nearspan = false, projected = false;
 	int v, t, j, k;
 	unsigned int ia, ib, ic;
-	if (!mesh || face->foreground || face->batch->ent != &r_worldentity ||
-		face->batch->buildmeshes || face->batch->flags ||
-		!GLBE_BlendPlaneShaderEligible(face->batch->shader) || !GLBE_BlendPlaneShaderEligible(face->batch->shader->remapto) ||
+	if (!mesh || face->foreground ||
+		(face->batch->ent == &r_worldentity ? face->batch->buildmeshes || face->batch->flags ||
+			!GLBE_BlendPlaneShaderEligible(face->batch->shader) || !GLBE_BlendPlaneShaderEligible(face->batch->shader->remapto) :
+			!face->planar) ||
 		mesh->xyz2_array || mesh->numbones || !mesh->xyz_array || !mesh->indexes ||
 		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
 		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
@@ -8609,6 +8657,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	float matrix[16], modelview[16];
 	const entity_t *group;
 	double groupdepth;
+	qboolean planar;
+	int firststatus = 0;
 
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
@@ -8668,10 +8718,12 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					faces[n].group = group;
 					faces[n].sequence = n;
 					faces[n].foreground = GLBE_BlendForeground(batch);
+					faces[n].planar = false;
 					n++;
 					continue;
 				}
-				cullworld = GLBE_BlendPlaneViewEligible() && GLBE_BlendWorldBatchEligible(batch);
+				planar = group && GLBE_BlendPlaneViewEligible() && GLBE_BlendEntityPlanar(batch, matrix);
+				cullworld = GLBE_BlendPlaneViewEligible() && (planar || GLBE_BlendWorldBatchEligible(batch));
 				if (cullworld && shaderstate.curentity != batch->ent)
 					GLBE_SelectEntity(batch->ent);
 				for (m = batch->firstmesh; m < batch->meshes; m++)
@@ -8689,6 +8741,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					faces[n].group = group;
 					faces[n].sequence = n;
 					faces[n].foreground = false;
+					faces[n].planar = planar;
 					n++;
 				}
 			}
@@ -8697,12 +8750,23 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	// skyroom views sort too: their r_origin is m_view's eye, and the portal oblique
 	// near clip rewrites only the projection z row.
 	if (GLBE_BlendViewEyeAgrees())
+	{
 		GLBE_BlendPlaneSort(faces, n, &stats);
+		// A failed sort leaves faces[] as it was. If entity faces cost it its budget or a
+		// consistent order, prove the world faces alone, as before Patch 900.
+		firststatus = stats.status;
+		if (stats.status < 0)
+		{
+			for (f = 0, m = 0; f < n; f++)
+				if (faces[f].planar) { faces[f].planar = false; m++; }
+			if (m) GLBE_BlendPlaneSort(faces, n, &stats);
+		}
+	}
 	if (trace)
 	{
-		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d recurse=%d\n",
+		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d recurse=%d first=%d\n",
 			(unsigned int)count, (unsigned int)n, (unsigned int)stats.admitted, stats.status,
-			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, r_refdef.recurse);
+			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, r_refdef.recurse, firststatus);
 		for (f = 0; f < n && f < GLBLEND_PLANE_FACES; f++)
 		{
 			batch_t *b = faces[f].batch;
@@ -8711,11 +8775,12 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			static const float zero[3] = {0};
 			const float *v = mesh && mesh->xyz_array && mesh->numvertexes ? mesh->xyz_array[0] : zero;
 			glblendplane_t plane;
-			Con_Printf("ALPHATRACE cmd=%u seq=%u world=%d mesh=%d verts=%u idx=%u vbo=%d flags=%x fog=%d cb=%d poly=%d safe=%d geom=%d depth=%.12g xyz=%.9g,%.9g,%.9g\n",
+			Con_Printf("ALPHATRACE cmd=%u seq=%u world=%d mesh=%d verts=%u idx=%u vbo=%d flags=%x fog=%d cb=%d poly=%d safe=%d geom=%d depth=%.12g xyz=%.9g,%.9g,%.9g facedepth=%.9g ent=%d planar=%d\n",
 				(unsigned int)f, (unsigned int)faces[f].sequence, b->ent == &r_worldentity, !!mesh,
 				mesh ? (unsigned int)mesh->numvertexes : 0, mesh ? (unsigned int)mesh->numindexes : 0,
 				!!b->vbo, (unsigned int)b->flags, !!b->fog, !!b->buildmeshes, b->buildmeshes == R_DB_Poly,
-				GLBE_BlendWorldBatchEligible(b), GLBE_BlendPlaneGeometry(&faces[f], &plane), faces[f].depth, v[0], v[1], v[2]);
+				GLBE_BlendWorldBatchEligible(b), GLBE_BlendPlaneGeometry(&faces[f], &plane), faces[f].depth, v[0], v[1], v[2],
+				faces[f].facedepth, b->ent == &r_worldentity ? 0 : b->ent->keynum, faces[f].planar);
 			Con_Printf("ALPHATRACE shader=%u flags=%x/%x prog=%d/%d passes=%d/%d deforms=%d/%d passprog=%d/%d bits=%x/%x\n",
 				(unsigned int)f, sh ? (unsigned int)sh->flags : 0, rs ? (unsigned int)rs->flags : 0,
 				sh && sh->prog, rs && rs->prog, sh ? sh->numpasses : 0, rs ? rs->numpasses : 0,
@@ -8850,6 +8915,7 @@ static void GLBE_SubmitBlendedWorld(batch_t *world)
 				faces[count].depth = 0;
 				faces[count].sequence = count;
 				faces[count].foreground = false;
+				faces[count].planar = false;
 				count++;
 			}
 			batch = batch->next;

@@ -417,7 +417,7 @@ cvar_t r_blendsort = CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
 	"Blended surface ordering.\n"
 	"0: emit order.\n"
 	"1: BSP walk order, refined across ordinary static world planes (default).\n"
-	"2: OpenGL global center-depth sort of plain world/static mesh faces; a brush entity sorts whole, at its box centre, as Source.\n"
+	"2: OpenGL global center-depth sort of plain world/static mesh faces; a brush entity sorts whole at its box centre, as Source, and its panes join the plane proof where it can order them.\n"
 	"Models/procedural/cache batches use coarse center-depth commands; weapon/depthhack draws follow them.\n"
 	"Capture/portal/sky batches remain immediate and unsorted; other backends use mode 1.");
 

@@ -117,6 +117,19 @@ int main(void) {
  quad(bx,0,10);GLBE_BlendPlaneSort(f,2,&st);assert(st.moved==0&&f[0].mesh==&a);
  quad(bx,0,20);glblendplane_t p,q;assert(GLBE_BlendPlaneGeometry(&f[0],&p));assert(GLBE_BlendPlaneGeometry(&f[1],&q));
  assert(GLBE_BlendPlaneSide(&p,&q)==1&&GLBE_BlendPlaneSide(&q,&p)==-1);
+ // Patch 900: a world pane between two brush-entity panes, the entity pair reversed by its baseline.
+ // Planar entity faces join the proof; without the flag they stay unadmitted and nothing moves.
+ {
+  entity_t brush;batch_t eb={.ent=&brush,.shader=&sh};float cx[4][3];quad(cx,0,30);
+  mesh_t c=a;c.xyz_array=cx;
+  glblendface_t e[3]={face(&eb,&c,0),face(&b,&z,1),face(&eb,&a,2)};
+  e[0].depth=5;e[2].depth=25;e[0].planar=e[2].planar=1;
+  qsort(e,3,sizeof(*e),GLBE_BlendFaceCompare);assert(e[0].mesh==&a&&e[2].mesh==&c);
+  GLBE_BlendPlaneSort(e,3,&st);
+  assert(st.status==1&&st.admitted==3&&e[0].mesh==&c&&e[1].mesh==&z&&e[2].mesh==&a);
+  e[0]=face(&eb,&a,0);e[1]=face(&b,&z,1);e[2]=face(&eb,&c,2);
+  GLBE_BlendPlaneSort(e,3,&st);assert(st.admitted==1&&st.moved==0&&e[0].mesh==&a&&e[2].mesh==&c);
+ }
  // Intersecting vertical pane straddles the other plane: no strict proof.
  bx[0][2]=bx[1][2]=5;bx[2][2]=bx[3][2]=15;bx[0][1]=bx[1][1]=bx[2][1]=bx[3][1]=1;
  assert(GLBE_BlendPlaneGeometry(&f[1],&q));assert(GLBE_BlendPlaneSide(&q,&p)==0&&GLBE_BlendPlaneSide(&p,&q)==0);
