@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 912 — instant provisional Story tasks and live progression (QC, surfd)
+
+**Problem:** Story task updates depended on the upload reply, and a decorative
+best-medal toast could omit simultaneous task advances. First-time unresolved
+identity, stale authority and unrelated acknowledgements could erase the local
+preview. Occupancy confused unavailable snapshots with zero; later chapters
+needed steadily increasing trophy gates.
+
+**Change:** Publish completion-side facts before submission through the existing
+client/menu path, keeping the stage-fill guard intact. Evaluate all locally
+known Story/Events criteria, scoped to the current connection/profile; never
+invent rank, placement or server authority. Reconcile only exact contributing
+request-bound acknowledgements and a fresh matching request/catalogue generation.
+Missing/coalesced acknowledgements expire conservatively. Export criteria, show
+fresh map occupancy or unavailable, and use strictly increasing later-chapter
+requirements derived from prior available trophies. Reuse the existing early
+preload. Shared qcc.cfg raises the compiler declaration allocation to163840
+for ordinary and standalone harness builds; other limits and VM formats stay.
+CSQC already uses FTE32, and the combined client exceeded131072 definitions.
+
+**Verified:** Native actual finish updates both lists before a held12-second HTTP
+reply; unresolved first-time self previews then expires; rejection reconciles to
+authority. Exact-ack/new-contribution controls exercise stale-GET fences. Real
+non-clean submission returns204 without acknowledging a different completion;
+its missing old reply resolves conservatively by expiry, not a fabricated ack.
+Independent review/rechecks clean. Combined source builds all three VMs with
+zero warnings; Story44 tests and full surfd suite pass (Windows file-mode
+subchecks skipped). Exact combined-DAT native smoke loads131081 CSQC global
+definitions/184046 scalar slots on the existing client, acts in the local poll
+and Story/Players/HUD draws; those two header counts are distinct. No new VM
+load/range error; pre-existing optional menu notices retained. Existing preload
+acts before first click. Gate curve is strictly increasing, excludes own/future
+chapter capacity, and can reclose previously accessible later chapters without
+removing earned progress. Matching client/server/menu/backend deployment required;
+not deployed over the guarded app without approval. No native binary, Build or
+release change; no official award or verification bypass.
+
 ## Patch 911 — startmarks and fresh stage resets (csprogs, qwprogs)
 
 **Problem:** Resets could not use a player's chosen point in a run's start box.
