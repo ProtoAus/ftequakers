@@ -1,5 +1,48 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 900 — r_blendsort 2 sorts a translucent brush entity whole, at its box centre, as Source (client exe)
+
+**Problem (Lex, 21 Oct, bhop_eazy saves 14/15):** the room's three parallel window slabs broke up at an
+angle -- the front pane fine, rectangles of the two behind it in the wrong tint; turning ten degrees left
+cleared it. Not P878/P894/P895: the installed exe (P895) and its .prev (P879) draw the same frame, it is
+clean at r_blendsort 1 or 0, and r_nearestsort 0 changes nothing. The panes are func_wall *4/*5/*16,
+rendermode 2, renderamt 100, a plain LightmappedGeneric glass, drawn solid until Patch 844 (20 Oct).
+
+**Cause:** mode 2 (P685) sorted each face of a brush entity by that face's own centre. VBSP cuts a long
+face at the lightmap limit, so each 1,120-unit slab face arrives in three pieces (x = -384/112/608/736;
+*5 at -224/-96/400/896). r_blendtrace at save 14: *4's right piece (depth 645-663) drew before the
+middle and left pieces of *5 (139-406) that it covers, so the rear pane was blended over the front.
+
+**Source:** draws every pane, back to front, but orders whole renderables: the leaf list walked backwards
+(viewrender.cpp:4323-4331), a leaf's translucent entities sorted by the centre of their render bounds
+along the view direction (clientleafsystem.cpp:1744-1795, per leaf at :1819); a brush entity is one
+`render->DrawBrushModelEx` call (c_baseentity.cpp:1953). The face order inside it is engine code, not
+in the SDK.
+
+**Change:** GLBE_SubmitBlendedFaces gives every blend command of a brush entity (not the world, not a
+weapon/depthhack entity) its model's box-centre depth through the entity matrix; the comparator keeps
+one entity's faces together, farthest first, so the order inside an entity is what it was. World faces,
+the plane refinement and models are unchanged. r_blendsort's help says so.
+
+**Verified:** exe 66a9e435 (git-7672-patch-895-1-g5f638e81a) with the installed plugins; control the
+installed f7523bbe; Lex's config (r_blendsort 2, r_renderscale 2). bhop_eazy from save 14's eye:
+r_blendtrace orders the 18 faces in three runs, *16 580.87, *5 550.13, *4 255.41 (box centres by hand
+580/549/254.5). The break-up is gone at save 14, yaw 10/20/27 and a grazing view (-330 -440 64, yaw
+12): 8.2/15.2/19.0/12.1% of the window band changed, and at yaw 20 nothing outside the window rows.
+Save 15, yaw 60/75 and a view from the far side are unchanged (<= 0.16% of the frame). The save-14
+pair is judged by eye: the first setpos after spawn did not land on the same camera. surf_pantheon
+start (P895's view, hl2_refract 1): 19.00 screen copies (175.10 Mpx) on both; frames differ 63,963 px,
+under P895's 78,645 floor. tools/test_gl_blend_planes.py passes; tools/test_gl_blend_faces.py does not
+compile on the base (about 30 names it does not declare -- the GPU budget, the NEAREST sort), not repaired.
+Not covered: one brush entity holding several overlapping panes keeps its per-face order inside.
+
+**Also (Lex: "does Glass Dithered do anything?"):** hl2_refract 2 dithers only a Refract pane with its own
+texture; P859 draws the rest as 0. In the 1,926-map library's paks, 168 of 1,047 Refract VMTs (95 maps)
+have one, 879 (387 maps) do not -- surf_boreas's two ice materials among them, which is why Dithered
+looked like Translucent there. Where it applies it shows at r_renderscale 2: bhop_ceaseless's CYAN GLASS,
+crop mean RGB 4/27/169 and pixel-to-pixel 65.5 dithered, 4/5/71 and 7.0 translucent. The gfx_menu option
+now reads "Dithered if textured" (csprogs); the cvar's help already said so.
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
