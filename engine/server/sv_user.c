@@ -474,6 +474,7 @@ cvar_t	sv_showpredloss		= CVARD("sv_showpredloss", "0", "Print messages whenever
 cvar_t	sv_cheatpc				= CVARD("sv_cheatpc", "125", "If the client tried to claim more than this percentage of time within any speed-cheat period, the client will be deemed to have cheated.");
 cvar_t	sv_cheatspeedchecktime	= CVARD("sv_cheatspeedchecktime", "30", "The interval between each speed-cheat check.");
 #endif
+cvar_t	sv_tickparts			= CVARFD("sv_tickparts", "1", CVAR_SERVERINFO, "FTESurf Patch 893: under pm_physicsmode 1, run a usercmd one Source tick per part, so QC -- trigger touches, limitmovement and slide, the recorder -- acts on every tick, as Source runs one usercmd a tick.");
 cvar_t	sv_playermodelchecks	= CVAR("sv_playermodelchecks", "0");
 cvar_t	sv_ping_ignorepl		= CVARD("sv_ping_ignorepl", "0", "If 1, ping times reported for players will ignore the effects of packetloss on ping times. 0 is slightly more honest, but less useful for connection diagnosis.");
 cvar_t	sv_protocol_nq			= CVARD("sv_protocol_nq", "", "Specifies the default protocol to use for new NQ clients. This is only relevent for clients that do not report their supported protocols. Supported values are\n0 = autodetect\n15 = vanilla\n666 = fitzquake\n999 = rmq protocol\nThe sv_bigcoords cvar forces upgrades as required.");
@@ -8450,6 +8451,36 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		kind = 0;
 	cmd = *ucmd;
 
+	//FTESurf Patch 893: one Source tick per part.  A command of several ticks ran QC once, so a
+	//trigger (a thin limit, a fail plate) entered and left between its first and last tick was never
+	//touched; Source runs one usercmd a tick.  A command of n >= 2 whole ticks runs as n parts, each a
+	//tick long (with any carry below a tick, one tick each) and the last also taking the remainder --
+	//never a part of no tick, whose row would sit on the next frame's tick with this command's angles.
+	//The parts keep the command's context (offset into it; the recorder marks offset > 0, fl 8), and
+	//only the first keeps the impulse, as the halving below does.
+	{
+		extern cvar_t pm_physicsmode, pm_ticrate;
+		float tickms = (pm_ticrate.value > 0 ? pm_ticrate.value : 0.015) * 1000;
+		int n = (tickms >= 1) ? (int)((ucmd->msec + 0.001f) / tickms) : 0;
+		if (sv_tickparts.ival && pm_physicsmode.ival == PHYSMODE_SOURCE && n >= 2)
+		{
+			usercmd_t part = *ucmd;
+			float off = offsetmsec;
+			int k;
+			for (k = 0; k < n - 1; k++)
+			{
+				usercmd_t one = part;
+				one.msec = tickms;
+				SV_RunCmdPart (&one, true, kind, totalmsec, off);
+				part.impulse = 0;
+				off += tickms;
+			}
+			part.msec = ucmd->msec - (n - 1) * tickms;
+			SV_RunCmdPart (&part, true, kind, totalmsec, off);
+			return;
+		}
+	}
+
 	// chop up very long commands
 	if (cmd.msec > 50)
 	{
@@ -10800,6 +10831,7 @@ void SV_UserInit (void)
 	Cvar_Register (&sv_cheatpc, cvargroup_servercontrol);
 	Cvar_Register (&sv_cheatspeedchecktime, cvargroup_servercontrol);
 #endif
+	Cvar_Register (&sv_tickparts, cvargroup_servercontrol);	//FTESurf Patch 893
 	Cvar_Register (&sv_showpredloss, cvargroup_servercontrol);
 	Cvar_Register (&sv_playermodelchecks, cvargroup_servercontrol);
 
