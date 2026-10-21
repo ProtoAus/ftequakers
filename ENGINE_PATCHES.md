@@ -1,5 +1,132 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 890 — per-map entity fixes (engine + cfg/maps/entfix_*.cfg)
+
+**Problem:** with Patch 881 surf_network2008_final's fail teleports fire -- into its CS:S round
+logic: a fall goes to a separation room and a team jail released every 20 s, and 30 s after the map
+loads a timer turns the start's own fall box into the jail too. Lex chose per-map fix files (the
+way KSF-style servers patch maps with Stripper:Source) over a rule: 91 library maps switch
+teleports from timers, but 30 of them for real mechanics.
+
+**Change:** Mod_LoadEntitiesBlob, where server and client both take a map's entities, applies
+cfg/maps/entfix_<map>.cfg (`sv_entfix`, default 1): Stripper's filter:/remove:, add: and modify:
+with match/replace/delete/insert, in file order. Keys match case-insensitively, values too with
+',' equal to the 0x1b output separator; a value written /like this/ is a '*' wildcard (Stripper's
+regex, cut down), any other is exact. Keys and values are copied whole, the output is capped at
+16 MB. The file is read only from a
+local directory (P841's rule: not a download, an addon mount, server temporaries or a followed
+link) and only up to 256 KB; a block that matches nothing is reported (how a stale fix shows after
+a map update); a malformed file is not applied. `*entfile` serverinfo carries the fix's identity --
+24 bits of a hash of the fix file's bytes (CRLF read as LF, as the parser does), xor a .ent's crc16 --
+rather than the fixed lump's crc, which
+the plugin's overlay synthesis also moves. The recording's new `entfile` header keeps it, and pm_verify
+refuses a file whose value differs from the loaded map's or is unreadable; an absent one reads as 0,
+the map's own lump (no install shipped a .ent before it).
+The cfg/maps folder already ships. surf_network2008_final's fix adds entfix_start at the zone's
+teleDestPos and points the twelve teleports into seperation1/mid_seperation at it; those and the
+seven into the spawn room beside the start (fall1, fall2, telect, telet) get velocitymode 1, so a fall
+stops dead as `!r` does rather than carrying its speed into the start; and two round-over relays lose
+their Enable outputs, so one player cannot reset everyone (AllToJailRelay, fired by anyone leaving the
+end room's door, opened the course-wide AllToJail for 0.5 s; the 666 kill button opened alltojail_pro
+over the leet area for good). No entity is removed or made solid, so no physent digest moves. tools/census/roundlogic.py lists the other
+maps (6 of the 91 have zones; the others need no fix until they do). Deploying a fix: a lobby keeps
+the world model across `map_restart`, the verifier reads its own cfg/maps, and any edit refuses older
+runs on that map -- ship it with a map change, to the verifier no later than the lobbies, QC first.
+
+**Verified:** the applier on the map's real lump: `0 removed, 1 added, 21 modified`, both relays
+without those outputs. FTESurf `cfg/test/p890fix.cfg` on the PC, over P888: `21 modified`, a
+`*entfile` key; no line and no key with `sv_entfix 0`. Drops from z 4800 into the start's fall box (to
+fall2 before the 30 s timer, 100 ms samples) arrive at -1260..-1272 u/s without the fix and at 0..-24
+with it, reaching the floor 5 samples against 13 later (three columns; a fourth missed the box). After the timer the fall box and Lex's rewind point end at entfix_start standing
+(P881 alone: the CT jail). `tools/test_entfix.py` compiles this applier with shims: 15/15 cases (the
+identity is 24 bits, moved by a comment, not by CRLF), failing with the separator or the exact/wildcard
+rule removed. `cfg/test/p882edge2.cfg`: a run with no `entfile` on a map with no fix MATCHes and PASSes,
+`entfile 4242` is refused as a different lump, `entfile x1` as unreadable. reccheck over the 337
+recordings of `ftesurf/data/runs`: 213 with faults before and after, output identical.
+
+## Patch 886 — ropes draw their Source material (csprogs)
+
+**Problem:** Lex asked whether ropes load their textures. Only when a texture had the material's own
+name: cable/cable and cable/rope drew, but the custom chains, string lights, banners and the unlit
+cable colours (single_chain, stringlight, kkorangebanner, green_unlit ...) logged "did not resolve
+... drawing it as no_texture" -- the rope asked for the bare name, which the Source material loader
+never sees (it answers names ending .vmt, as every prop's do).
+
+**Change:** cl_ropes.qc asks for `<material>.vmt` when materials/<material>.vmt opens (fopen, which
+reads inside a mounted .vpk; whichpack does not), and the bare name otherwise.
+
+**Verified:** FTESurf `cfg/test/p881net.cfg`'s R section: all nine rope materials load as
+`[shader] <name>.vmt` with no "did not resolve" line (before: five did not); `cfg/test/p890fix.cfg`'s
+screenshots: bhop_angst's green_unlit cables draw green (surf_despair's shot missed its chain; the load
+lines are the evidence for the other eight).
+
+## Patch 882 — trigger_momentum_limitmovement and trigger_momentum_slide (engine mover 10 + qwprogs)
+
+**Problem:** 124 limitmovement triggers on 38 of the library's 1,926 maps (surf_greek, surf_solace, surf_666,
+bhop_mom_training_beta, bhop_offstyles' one-key sections ...) and 2 slides (bhop_parallel,
+surf_rogue) did nothing: movement runs in the engine's mover, and nothing told it.
+
+**Change:** before each command's move, once its movetype is final, QC tests the limit and slide
+triggers the body overlaps where the move starts (spawnflags >> 13; BhopCooldown, absent 0.2 s; the
+slide's Stuck/Allowing/Disable keys in both spellings) and sets run_momlimit/run_momcool/run_momslide;
+that is where the last move's touches were, and after a warp it is the destination (Momentum's
+Teleport runs no touch pass, so there one command after a warp keeps the old limits). A jump the limit
+strips does not latch run_jumpcmd, and the client's prestrafe aid neither takes +forward for one nor
+holds it past 0.5 s on the ground (before that fix, jump and forward held in surf_journeys'
+jump-limited start stood the body still). run_momtriggers 0 (latched per run) leaves them inert. The engine
+reads them in SV_RunCmd (the replay bounds them the same way) and
+pins them (momlimit momcool momslide, appended: 73 names at pmsrcver 10). At mover 10 a limited key's
+move is cut (Momentum strips only the button bit, which would leave forward/side moving; the FGD says
+"prevent moving"), jump and duck are stripped and SPRINT strips CS's shift-walk (Momentum's IN_SPEED;
+its WALK flag is AHOP's IN_WALK and does nothing here), a bhop-limited jump is refused until
+ceil(cool / tick) ticks after landing (landticks, carried in pmsourcestate_t and written into `seed`;
+required for an exact replay at mover 10), and for a walking body a slide's flags join Patch 280's
+func_slide contact. Prediction reads the
+last move's values from stats 22-24 (Momentum likewise networks the mask; an edge mispredicts until it
+arrives). A pin is complete with every name its own version publishes, each once and none standing
+in for another (SV_PMPinNeed, SV_PMPinNamesBelow): 70 below mover 10, so every existing recording still
+replays exact; a mover-10 file on an older verifier is refused
+("not a mover this engine has"), not faulted. Callers of PM_PlayerMove that are not a player's own
+move zero the inputs. Known: the limits are read once per command, so a command of several ticks
+that enters a thin limit trigger partway is not limited until the next; 34 model-less zone-tool
+triggers on 8 maps are not built (both in FTESurf BACKLOG). Mover 10 is mover 9 (Patch 888) plus the
+limits; SV_PMSrcVer accepts both.
+
+**Verified:** 0 new warnings; pm_selftest passes with 15 new checks (cooldown ticks, refusal leaves jump
+unheld, key cuts per direction, mover 9 untouched), on this patch and on it over P888. FTESurf
+`cfg/test/p882lim.cfg` against the installed build: a jump limit keeps held +jump on the floor (control
+jumps to z 56.7), a bhop limit holds each landing 3-4 samples of 50 ms (control re-jumps at once),
+surf_rogue's slide keeps 30 u/s after +forward is released (control stops) and bhop_parallel's 260 u/s
+down its ramp (control stands). `p882rec2.cfg`, over P888: a mover-10 attempt (momlimit 64, cool 0.2)
+replays with an open loop of 0.004 u; the same file with the seed's landticks 0 diverges at its jump's
+row (the cooldown refuses it) and with landticks 0 and momlimit 0 does not -- the replay applies the
+pin's limits.
+`p882sim.cfg`: a pin-8 run EXACT on both engines; a mover-10 relabel without landticks is "carried
+state incomplete", with it EXACT; the installed engine says "not a mover this engine has" for both.
+`p882edge.cfg`: walking out of a jump limit writes a `pm` row (16 -> 0). Not shown by divergence: a
+`pm` row's own effect (the start drops away and the run is airborne, where no limit acts); it is applied
+by the same SV_PMPinApply as the header pin. Four review rounds (control flow and evidence, a cheater's
+gain); their landticks, pin-name, position, slide, bounds and prestrafe items are fixed here.
+
+## Patch 881 — Source triggers whose brushes are not solid fire (engine + csprogs)
+
+**Problem:** surf_network2008_final's fail teleports never fired (Lex). Their brushes are
+GRATE|TRANSLUCENT, which the hl2 plugin remaps to CLIP; the engine's SOLID_BSPTRIGGER touch test
+clipped the player against MASK_WORLDSOLID (SOLID|WINDOW), so it never overlapped. The client's
+trigger mirror and soundscape probes traced with `world` as the pass entity and the same blind spot.
+
+**Change:** World_TouchAllLinks clips a BSP trigger whose model is fg_new (VBSP, Doom 3, CoD) against
+every contents bit -- a Source trigger is its whole model; Quake maps keep MASK_WORLDSOLID. cl_triggers.qc
+and cl_soundscape.qc trace through TG_Probe, whose hitcontentsmaski is every bit. trigger_teleport
+does not ask find() for an empty target: for "" find() returns the first edict with no targetname,
+client slot 0, so a target-less teleport put the toucher on that player -- and with this patch every
+target-less Source teleport fires (820 on 178 of 1,926 maps). The QC ships with or before the engine.
+
+**Verified:** FTESurf `cfg/test/p881net.cfg` on surf_network2008_final: on the installed engine the
+body stood still inside the start's fall box and under Lex's 01:33 rewind point; with the patch the box
+teleports to the start (1952 4048 5152) and the rewind point's fall reaches the map's jail (6347 -1536
+5824). After the guard, Lex's rewind-point fall prints no PF_FindString warning (9 before).
+
 ## Patch 889 — Momentum's stand-in packs mounted last (fs.c + lobby content)
 
 **Problem:** surf_nuclear's spawn hub is Portal 2 static props. The lobbies have no Portal 2,
