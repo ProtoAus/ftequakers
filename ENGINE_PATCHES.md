@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 914 — run time continues while spectating or replaying (QC, readers)
+
+**Problem:** A held body stopped the run clock during spectating/replay. Simply
+adding elapsed time to mover ticks would falsify input chronology and saved data.
+
+**Change:** Track viewing duration on the server frame clock separately from
+physical input ticks, rounding accumulated time once. Version12 declares typed
+viewing edges and a closing equation; preserve legacy9/10/11 meanings. Carry time
+through warm/cold/streamed saves, rewind and stage exports; update replay, angle
+projection and census readers. Native parsing accepts supported zero-view12 and
+explicitly refuses positive viewing carry, with strict whole-token field bounds.
+No new native verification eligibility or physical-input history is invented.
+
+**Verified:** Actual held-body live stats advance with zero physical input and
+restore nonzero velocity. Repeated viewing, warm/cold buffered and streamed lower-
+epoch continuation, stage projection and kept-close controls act without new
+reader faults. Independent reviews close all reported findings. Parent merge
+preserves Story/resume deltas;3VM build has zero warnings, reader852/0,
+census7 and full surfd suite pass (Windows file-mode subchecks skipped). Same402REC/117pairedVIEW retain all per-file faults (275 faulty
+checks) with519 hashes stable at comparison boundaries. Windows native19 checks
+retain zero-view PASS45/45 and positive-view unsupported refusal; malformed old-
+pass/new-refuse controls act. Linux/native installation and matching backend/
+reader/writer rollout remain pending. No offline disconnected-time addition,
+Build bump or release. Existing positive-held simulation remains unsupported.
+
 ## Patch 913 — automatic resume only for clean whole-main runs (QC)
 
 **Problem:** Automatic resume could park or consume practice, segmented, bonus

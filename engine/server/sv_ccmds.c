@@ -5208,6 +5208,65 @@ malformed:
 	return "a malformed v11 closing clock";
 }
 
+/* Four whole whitespace-delimited v12 fields; capacity never creates a boundary. */
+static qboolean SV_RecSim_ViewFields(const char *s, char fields[4][64])
+{
+	int i, n, white;
+	for (i = 0; i < 4; i++)
+	{
+		while ((white = SV_RecSim_White(s))) s += white;
+		n = 0;
+		while (*s && !SV_RecSim_White(s))
+		{
+			if (n == 63) return false;
+			fields[i][n++] = *s++;
+		}
+		if (!n) return false;
+		fields[i][n] = 0;
+	}
+	while ((white = SV_RecSim_White(s))) s += white;
+	return !*s;
+}
+
+/* Round-trip writer %.9g fields to their authoritative QC float32 values. */
+static qboolean SV_RecSim_ViewFloat(const char *s, float *out)
+{
+	const char *p;
+	char *end;
+	float value;
+	if (!*s) return false;
+	for (p = s; *p; p++)
+		if ((*p < '0' || *p > '9') && *p != '+' && *p != '-' && *p != '.' && *p != 'e' && *p != 'E')
+			return false;
+	value = strtof(s, &end);
+	if (*end || !(value >= 0 && value <= FLT_MAX)) return false;
+	*out = value;
+	return true;
+}
+
+/* V12 writer-shaped resume/retry tokens authorize an epoch, never eligibility. */
+static qboolean SV_RecSim_ViewRestore(const char *line)
+{
+	const char *args = SV_RecSim_RecordArgs(line, "resume");
+	char slot[64], ticks[64], tail, *end;
+	unsigned long n;
+	if (args)
+	{
+		if (sscanf(args, "%63s %63s %c", slot, ticks, &tail) != 2) return false;
+		if (*slot < '0' || *slot > '9') return false;
+		n = strtoul(slot, &end, 10);
+		if (*end || n > 999) return false;
+	}
+	else
+	{
+		args = SV_RecSim_RecordArgs(line, "retry");
+		if (!args || sscanf(args, "%63s %c", ticks, &tail) != 1) return false;
+	}
+	if (*ticks < '0' || *ticks > '9') return false;
+	n = strtoul(ticks, &end, 10);
+	return !*end && n <= 0x7fffffffUL;
+}
+
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
@@ -5261,6 +5320,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	const char   *holdbad = NULL;
 	const char   *clockbad = NULL;
 	int           nclock = 0, nexcluded = 0;
+	int           viewcap = 0, viewowner = 0, nview = 0, endviews = -1;
+	float         viewwall = 0, viewtotal = 0, lastviewwall = 0, closingview = 0;
+	float         closeorigin = 0, closecarry = 0, closefrozen = 0;
+	qboolean      haveviewwall = false, haveclosingview = false;
+	const char   *viewbad = NULL;
 	int           nspec = 0, nspinside = 0, spinside_row = -1;
 	char          spinside_kind[16] = "";
 	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
@@ -5320,7 +5384,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		int cses = 0, ppmt = 0, pptk = 0, crst = 0, cgho = 0, gopen = 0;
 		int cspc = 0, sopen = 0;	/* Patch 380 */
 		float ppc = 0;
-		qboolean floorwin = false, openpause = false;
+		qboolean floorwin = false, openpause = false, viewpausevalid = false;
 		p = buf; end = buf + fsz; inbody = false;
 		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
 		{
@@ -5378,6 +5442,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					   to EXPLAIN the offset between the last padding sample and
 					   the first run sample, which would otherwise read as an
 					   unexplained 2-unit physics step. */
+					else if (!strncmp(ln, "viewclock", 9))
+					{
+						if (filever != 12 || strcmp(ln, "viewclock 1") || ++viewcap != 1)
+							viewbad = "a malformed or duplicate viewing-clock capability";
+					}
 					else if (!strncmp(ln, "startjit ", 9))
 						sscanf(ln+9, "%f %f %f %f", &sjrule,
 						       &sjoff[0], &sjoff[1], &sjoff[2]);
@@ -5385,7 +5454,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				continue;
 			}
 			/* Patch 380: nothing is written inside a held window. */
-			if (sopen && strncmp(ln, "spec ", 5) && pass == 0)
+			if (sopen && strncmp(ln, "spec ", 5) && strncmp(ln, "viewclock ", 10) && pass == 0)
 			{
 				if (spinside_row < 0)
 				{
@@ -5505,14 +5574,75 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				if (sscanf(ln+6, "%i %f", &inend_mt, &inend_carry) != 2)
 					inend_mt = -1;
 			}
+			else if (!strncmp(ln, "viewclock", 9))
+			{
+				if (pass == 0)
+				{
+					char fields[4][64];
+					const char *args = SV_RecSim_RecordArgs(ln, "viewclock");
+					float wall, total;
+					int own, on;
+					nview++;
+					if (filever != 12 || viewcap != 1 || !args ||
+					    !SV_RecSim_ViewFields(args, fields) ||
+					    (strcmp(fields[0], "spec") && strcmp(fields[0], "replay")) ||
+					    (strcmp(fields[1], "0") && strcmp(fields[1], "1")) ||
+					    !SV_RecSim_ViewFloat(fields[2], &wall) || !SV_RecSim_ViewFloat(fields[3], &total))
+						viewbad = "a malformed v12 viewing-clock edge";
+					else
+					{
+						own = !strcmp(fields[0], "spec") ? 1 : 2;
+						on = !strcmp(fields[1], "1");
+						if (haveviewwall && wall < lastviewwall)
+							viewbad = "a viewing-clock wall moving backwards";
+						if (on)
+						{
+							if (viewowner || total != viewtotal)
+								viewbad = "an overlapping or discontinuous viewing clock";
+							viewowner = own;
+							viewwall = wall;
+						}
+						else
+						{
+							float interval = wall - viewwall;
+							float expected = viewtotal + interval;
+							if (viewowner != own || total != expected)
+								viewbad = "an unmatched or inconsistent viewing-clock close";
+							viewowner = 0;
+							viewtotal = total;
+						}
+						lastviewwall = wall;
+						haveviewwall = true;
+					}
+				}
+			}
 			else if (clockargs)
 			{
 				if (pass == 0)
 				{
 					nclock++;
 					if (!clockbad)
-						clockbad = filever == 11 ? SV_RecSim_ClockRefusal(clockargs)
-						                        : "a v11 closing clock under another format";
+						{
+						if (filever == 12)
+						{
+							char fields[4][64];
+							char counted[256];
+							const char *args = SV_RecSim_RecordArgs(clockargs, "viewing");
+							if (!args || !SV_RecSim_ViewFields(args, fields) ||
+							    !SV_RecSim_ViewFloat(fields[3], &closingview))
+								clockbad = "a malformed v12 viewing closing clock";
+							else
+							{
+								haveclosingview = true;
+								closeorigin = atof(fields[0]); closecarry = atof(fields[1]); closefrozen = atof(fields[2]);
+								Q_snprintfz(counted, sizeof(counted), "counted %s %s %s", fields[0], fields[1], fields[2]);
+								clockbad = SV_RecSim_ClockRefusal(counted);
+							}
+						}
+						else
+							clockbad = filever == 11 ? SV_RecSim_ClockRefusal(clockargs)
+							                        : "a v11 closing clock under another format";
+					}
 				}
 			}
 			else if (!strncmp(ln, "hold", 4) && (!ln[4] || ln[4] == ' ' || ln[4] == '\t'))
@@ -5543,9 +5673,27 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				}
 			}
 			else if (!strncmp(ln, "end ", 4) && pass == 0)
-				{ haveend = true; endticks = atoi(ln+4); }
+				{
+					haveend = true; endticks = atoi(ln+4);
+					if (filever == 12)
+					{
+						int v[13], n;
+						char tail;
+						n = sscanf(ln+4, "%d %d %d %d %d %d %d %d %d %d %d %d %d %c", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &tail);
+						if (n != 13 || v[11] != nclock || v[12] != nview)
+							viewbad = "a malformed v12 trailer or inaccurate clock counts";
+						else endviews = v[12];
+					}
+				}
 			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
+			{
 				nresume++;
+				if (filever == 12 && SV_RecSim_ViewRestore(ln))
+				{
+					if (viewowner) viewbad = "a viewing window open across a restore";
+					else haveviewwall = false;
+				}
+			}
 			else if (!strncmp(ln, "mc ", 3) && pass == 0)
 			{	/* Patch 376: ring (what the device sent) against read (what the view used) */
 				int pk, row;
@@ -5654,7 +5802,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			}
 			else if (!strncmp(ln, "pause ", 6))
 			{
-				char why[16];
+				char why[16], tail;
 				floorwin = true;
 				if (openpause && pass == 0 && !sesbad)
 					sesbad = "a second `pause` before its `session`";
@@ -5662,15 +5810,20 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					ghostbad = "a ghost window open across a `pause` (a park un-ghosts first)";
 				if (sopen && pass == 0 && !specbad)
 					specbad = "a spec window open across a `pause` (a park releases first)";
+				viewpausevalid = !openpause && !viewowner;
 				openpause = true;
-				if (sscanf(ln+6, "%i %f %i %15s", &ppmt, &ppc, &pptk, why) != 4)
+				if (sscanf(ln+6, "%i %f %i %15s %c", &ppmt, &ppc, &pptk, why, &tail) != 4)
 				{
 					if (pass == 0 && !sesbad)
 						sesbad = "a malformed `pause`";
+					viewpausevalid = false;
 				}
 				else if (pass == 0)
 				{
 					npause++;
+					viewpausevalid = viewpausevalid && ppmt >= 0 && pptk >= 0 && ppc >= 0 && ppc < rate &&
+					    (!strcmp(why, "retry") || !strcmp(why, "load") || !strcmp(why, "drop") || !strcmp(why, "rotate") || !strcmp(why, "server"));
+					if (viewowner) viewbad = "a viewing window open across a pause";
 					if (strlen(pausewhys) + strlen(why) + 2 < sizeof(pausewhys))
 					{
 						if (*pausewhys)
@@ -5686,8 +5839,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			else if (!strncmp(ln, "session ", 8))
 			{
 				int sn, smt, stk;
+				char tail;
 				float scy;
-				if (sscanf(ln+8, "%i %i %f %i", &sn, &smt, &scy, &stk) != 4)
+				if (sscanf(ln+8, "%i %i %f %i %c", &sn, &smt, &scy, &stk, &tail) != 4)
 				{
 					if (pass == 0 && !sesbad)
 						sesbad = "a malformed `session`";
@@ -5699,6 +5853,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				}
 				else
 				{
+					if (pass == 0 && filever == 12 && viewpausevalid && sn == cses + 2 && stk == pptk && smt >= 0 && scy >= 0 && scy < rate)
+					{
+						if (viewowner) viewbad = "a viewing window open across a session";
+						else haveviewwall = false;
+					}
 					if (pass == 1 && cses < nses)
 					{
 						recsim_sess_t *s = &ses[cses];
@@ -5809,8 +5968,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
 	   its restarted counter.  Anything this replay cannot follow is refused. */
-	if (filever > 11)
-		sesbad = "a newer format (this verifier reads FTESURF-REC 11)";
+	if (filever > 12)
+		sesbad = "a newer format (this verifier reads FTESURF-REC 12)";
 	else if (!sesbad && npause && filever < 10)
 		sesbad = "a `pause` under a header below FTESURF-REC 10";
 	else if (!sesbad && !npause && filever == 10)
@@ -5949,9 +6108,18 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = holdbad;
 		else if (nexcluded)
 			refuse = "excluded-clock release inputs (not modelled)";
+		else if (viewbad)
+			refuse = viewbad;
+		else if (filever == 12 && (viewcap != 1 || viewowner || endviews < 0 || !haveclosingview || closingview != viewtotal))
+			refuse = "an incomplete or inconsistent v12 viewing clock";
+		else if (filever == 12 && (inend_mt < 0 ||
+		         endticks != floor((float)((float)((float)inend_mt - closeorigin) + closecarry) - closefrozen + 0.5f) + floor((float)closingview / (float)rate + 0.5f)))
+			refuse = "an inconsistent inclusive closing equation";
+		else if (filever == 12 && viewtotal > 0)
+			refuse = "positive viewing-wall carry (held-world replay not modelled)";
 		else if (clockbad)
 			refuse = clockbad;
-		else if (filever == 11 && nclock != 1)
+		else if (filever >= 11 && nclock != 1)
 			refuse = "missing or duplicate v11 closing clock";
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))
 			refuse = "a stage restart (these progs have no SV_VerifyRestart, Patch 369)";
