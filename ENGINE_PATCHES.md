@@ -39,6 +39,18 @@ state (AttachThreadInput + SetKeyboardState from the arm, so no input reaches an
 never echoed. Left: a player who ALT+TABs away within 30 s of a toggle with ALT held and comes back by
 clicking can find ALT still down in the engine (this thread never saw the release) until ALT is pressed.
 
+**Review round 2:** that re-press is gone, because a synthetic ALT down can stick (ALT+ENTER, ALT+TAB away,
+ALT released elsewhere, click back: ENTER toggles instead of `say`, and every ALT chord misfires).
+ClearAllStates is upstream's again. When ENTER arrives, ALT counts as held if keydown[] has it or, on
+Windows, GetKeyState(VK_MENU) < 0 for the client thread (INS_AltHeld, in_win.c); a player's own ALT+ENTER
+bind then runs as before. One session, ALT driven through the thread's key state as above,
+`bind enter "echo ..."`: (a) ALT held, ENTER twice: borderless and back, no echo; (b) ALT+ENTER, ALT
+released, ENTER: the echo, no toggle; (c) ALT down, WM_KILLFOCUS, ALT up in the key state while
+unfocused, WM_SETFOCUS, ENTER: the echo, no toggle. (d) As (c) with the thread's key state left down --
+a thread Windows did not resync on the way back -- ENTER toggled: the query is only as current as
+GetKeyState, which this arm cannot show Windows refreshing on refocus. Nothing is pressed by the
+engine, so a stale read lasts until the next ALT message the thread sees.
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
