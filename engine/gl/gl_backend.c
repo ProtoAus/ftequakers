@@ -6594,7 +6594,8 @@ void GLBE_WaterViewsNewMap(void)
 }
 //nothing opaque between the eye and the point: world brushes and displacements that hide what is behind them
 //(the map plugin's occluder tree: no static props -- a chain-link fence is a prop -- and no light-only
-//toolsblocklight brushes, as Source's MASK_VISIBLE), else the world's movement trace; then the
+//all-nodraw toolsblocklight brushes; Source's MASK_VISIBLE also skips OPAQUE brushes with any nodraw side
+//and see-through ones, which still hide water here), else the world's movement trace; then the
 //brush entities that draw opaque (func_brush, func_wall, doors), walked as TraceLineR walks them, against
 //SOLID only: vbsp makes a non-opaque brush CONTENTS_WINDOW, so glass does not hide water. An invisible
 //solid brush (toolsinvisible) still does. An eye inside solid cannot tell: seen.

@@ -40,9 +40,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //FTESurf Patch 799: a trace asking for the draw-only occluders too (VBSP_TraceVisual).  Only
 //CSQC's glare traces set it (cl_sprites.qc SPR_CONTENTS_VISUAL); Source leaves 0x400 unused.
 #define VBSP_CONTENTS_VISUAL 0x00000400u
-//FTESurf Patch 879: in Patch 509's occluder tree only, a brush that blocks light but not sight -- Source's
-//MASK_VISIBLE skips the CONTENTS_OPAQUE of an all-nodraw brush (toolsblocklight; bspflags.h:49,122, vbsp
-//textures.cpp:217-220). World-light traces ask for it, water-visibility traces do not.
+//FTESurf Patch 879: in Patch 509's occluder tree only, a brush that blocks light but not sight: an
+//OPAQUE-only brush with every side nodraw (toolsblocklight; vbsp textures.cpp:217-220). Narrower than
+//Source's CONTENTS_IGNORE_NODRAW_OPAQUE (bspflags.h:49,122), which skips one with ANY nodraw side; see
+//BACKLOG. World-light traces ask for it, water-visibility traces do not.
 #define VBSP_CONTENTS_LIGHTONLY 0x00000800u
 #ifdef HAVE_CLIENT
 #include "glquake.h"
@@ -10734,8 +10735,9 @@ static qboolean VBSP_WorldLightVisible(model_t *mod, const vec3_t point, const s
 
 /* FTESurf Patch 879: the renderer's water-occlusion test (gl_backend.c GLBE_WaterSeen) through Patch 509's
  * world-only tree: brushes and displacements, no props (a chain-link fence prop must not hide a pool), no
- * movers (the engine traces brush entities itself) and not the light-only toolsblocklight brushes (SOLID, not
- * VBSP_CONTENTS_LIGHTONLY). 1 blocked, 0 clear, -1 not one of our maps or no tree.
+ * movers (the engine traces brush entities itself) and not the all-nodraw light-only brushes (SOLID, not
+ * VBSP_CONTENTS_LIGHTONLY; narrower than Source's rule, see its #define). 1 blocked, 0 clear, -1 not one of
+ * our maps or no tree.
  */
 static int QDECL VBSP_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end)
 {
