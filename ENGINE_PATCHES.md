@@ -68,7 +68,11 @@ copies are the same in both -- 78,645 px, the run-to-run floor; no seam or missi
 r_nearestsort 0 control also reverts P878's order, so the screenshot diff measures P878 and P895 together;
 the copy counts (61 -> 19) are the clean measure of this patch. Numbers from the first cut, whose gate was
 the batch's entity alone; review 1 narrowed it to the plugin's Refract program on that path (so the water
-fallback, scripted $currentrender shaders and particles keep their own copies).
+fallback, scripted $currentrender shaders and particles keep their own copies). Its first cut read only
+shader->prog and shared nothing (61 / 61 copies on the integrated build): vmt/refract is a PASS program,
+passes[0].prog. Re-measured on the final exe e57f1466 (git-7660-patch-879-5-g0998c665b), pantheon start:
+19 / 61 / 19 copies, 2.47 / 6.65 / 2.41 ms, 271 / 129 / 282 fps. `developer 1` prints each shader's first
+answer ("P895: <shader> shares the view's copy" or why not).
 
 **Limits:** the 19 copies left at pantheon are model panes (Source copies those too). A brush pane now
 samples the screen as it was before the first brush pane, so a waterfall behind another waterfall is not
