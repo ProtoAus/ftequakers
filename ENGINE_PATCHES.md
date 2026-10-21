@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
+
+**Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
+already re-parses every live material when a CVAR_SHADERSYSTEM cvar changes (Shader_DoReload, the
+map-change path), but the plugin API masks that flag and Cvar_Get2 does not add it to an existing cvar,
+so only hl2_water and the dither pair (renderer-owned policies) ever triggered it. The model-light cache
+(r_modellight_seq) did not hash the plugin sampler's cvars, static props kept their light_known through
+hl2_lt_scale / hl2_lt_srgb_mag, and the decal/overlay/sprite loaders read their cvars once per map.
+
+**Change:** renderer-owned CVAR_SHADERSYSTEM policies for hl2_refract, hl2_translucent, hl2_animated,
+hl2_envmap and hl2_bumpmap (defaults as the plugin's); gl_rlight.c hashes hl2_lt_{scale,srgb_mag,min,face,
+dirsign,fold,worldlight}, found by name; VBSP_PrepareFrame drops static-prop lighting on hl2_lt_scale /
+hl2_lt_srgb_mag. csprogs keeps the map's decal and overlay handles (removedecal on a same-map reload; a map
+change has already wiped them) and re-runs Decal_LoadForMap / Sprite_LoadForMap when vbsp_decals,
+vbsp_overlays, vbsp_sprites, vbsp_spotlights or vbsp_lightglow differ from what the last load read.
+Stay map-load, with the reason on the row: hl2_cubemaps, hl2_favour_ldr, hl2_lt_baked (what is read off
+disk), hl2_lt_baked_scale (multiplied into each prop once), hl2_hidetools (nodraw faces dropped at BSP load),
+hl2_areaportals (initial state), the two collision rows (physics, server, evidence).
+
+**Verified:** client + hl2 plugin built with no new warnings in the changed files; QC 0 warnings.
+Live-vs-loaded arm (art894/arm894.py, listen server on an overlay root: each row switched live, then loaded
+fresh at the same camera; control the installed P879 client 2b94393b + hl2 aec7a92e): Water live 3->2 matches
+a load at 2 on surf_garden's pond (0.16% of pixels against 1.51% between modes); Translucent and Env maps match a
+load each way at surf_demise save 3 (0.20-0.31% against 7.6% and 18.5%), where the control's live switch left the
+old look (7.54%) and never applied Env maps; Overlays match on surf_rise (103 of 105 re-placed live); Sprites
+re-run live ("1 of 1 drawn" / "none drawn"). A live rebuild re-parsed 284-310 materials in 50-355 ms. Not shown
+by the arm (views did not discriminate, or the map had none): Glass, Animated, Dither, Bump maps, Decals, Light
+shafts, the model-light rows -- their `*` stays.
+Limits: Mod_Batches_Build keeps a batch's cubemap only for a HASREFLECTCUBE shader and splits per plane only
+for a capturing one, both at load -- so hl2_envmap turned on after a map loaded with it off, and hl2_water
+switched into a capturing mode (1/2) after a non-capturing load, are what the arm decides.
+
 ## Patch 895 — world and brush Refract panes share one screen copy per view (client exe)
 
 **Problem (Lex, 21 Oct):** surf_pantheon runs ~120 fps at his r_renderscale 2, and he keeps 2 for its
