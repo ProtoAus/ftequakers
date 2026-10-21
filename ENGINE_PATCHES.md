@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 909 — WOS-first boards and independent style filters (csprogs, menu, surfd reads)
+
+**Problem:** Map-load boards defaulted to all games; direction choices forced KSF,
+Segmented was a style/tab, abbreviations were unclear, and the manual KSF top-up
+button duplicated automated import operations. Expanded labels also needed a
+layout that did not steal switch clicks in narrow windows.
+
+**Change:** A new map and ordinary menu-board open start on WOS. Share a full-worded
+direction/query formatter between menu and client; source and segmentation remain
+independent. Existing clean/segmented Normal keys stay compatible. Accept the three
+segmented-direction query keys as exact read filters only: no run is relabelled,
+no submission eligibility or auto style detection is introduced. Remove both +100
+buttons, retain automation. Separate map title/filter summary, wrap measured controls
+and move table origin below them, preserving Segmented/refresh targets.
+
+**Verified:** All three QC targets build with zero warnings. Real-surfd fixture
+native smoke: 17/17 checks, all eight ranked style keys, explicit KSF selection,
+new-map WOS reset, menu WOS default, actual switch knob/label clicks at 640x480.
+Native narrow bounds: switch (48,156,150,26), refresh (508,156,84,26), disjoint;
+inspected narrow/wide screenshots. Board API regression suite exits 0, including
+exact-style isolation and unknown-key refusal. Independent review's narrow-window
+finding fixed and re-check clean. Backend live guarded-generation handoff needs
+separate operational approval; source validation is not deployment. No native
+binary, Build number or release change.
+
 ## Patch 908 — do not probe absent catalogue maps twice (menu.dat)
 
 **Problem:** P781's automatic catalogue load froze the menu shortly after its
