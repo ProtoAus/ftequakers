@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 908 — do not probe absent catalogue maps twice (menu.dat)
+
+**Problem:** P781's automatic catalogue load froze the menu shortly after its
+first frame. Native map-size lookup already reported missing maps, then QC
+opened every missing file again, repeating expensive mounted-filesystem scans.
+This was not F2 patch-notes information gathering.
+
+**Change:** Only use the fopen existence fallback when mapfilekb is unavailable.
+Keep map/thumbnail preloading and Story ladder/progress prefetch unchanged.
+
+**Verified:** Isolated native causal probes: 2,314 maps, 363 download offers,
+365 NEW badges and 44 wrong-build maps unchanged. Same-client control/subject
+catalogue preload 2,066/853 ms; redundant fallback 1,193/0 ms. Final uninstrumented
+build: 859 ms. Forced-unavailable-capability control still finds four present
+maps through fopen. Three QC targets build with zero warnings; fresh read-only
+review found no blocker. These are fixture preload measurements, not total boot
+or owner-install performance. Ordinary native disconnect/slot-reuse/empty-name
+roster controls passed; the reported intermittent ghost was NOT reproduced/fixed.
+No native binary, Build number or release change.
+
 ## Patch 907 — choose one release in F2's patch notes (menu.dat)
 
 **Problem:** The F2 notes page joined every published release into one long list.
