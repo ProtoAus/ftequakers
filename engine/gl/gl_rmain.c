@@ -699,6 +699,7 @@ R_RenderScene
 r_refdef must be set before the first call
 ================
 */
+int r_topviews;	//FTESurf Patch 879: top-level views begun (r_capturelog counts them)
 static void R_RenderScene_Internal(void)
 {
 	extern qboolean depthcleared;
@@ -714,6 +715,7 @@ static void R_RenderScene_Internal(void)
 		r_refdef.capturekind = 0;
 		r_refdef.insideportal = false;
 		r_vs_frames++;
+		r_topviews++;
 	}
 	else if (r_nestedents.ival && r_visdynamic < cl_numvisedicts)
 	{
@@ -1216,6 +1218,11 @@ static qboolean GLR_PortalPlane(batch_t *batch, plane_t *out, mesh_t **outmesh)
 	if (outmesh)
 		*outmesh = mesh;
 	return true;
+}
+qboolean r_capturemergevis;	//FTESurf Patch 879: GLR_DrawPortal's batch is a shared capture's (many meshes, maybe heights)
+qboolean GLR_BatchPlane(batch_t *batch, plane_t *out)	//FTESurf Patch 879: the plane a capture of this batch uses
+{
+	return GLR_PortalPlane(batch, out, NULL);
 }
 
 /*
@@ -1739,8 +1746,41 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 		for (i = 1; i < mesh->numvertexes; i++)
 			VectorAdd(r_refdef.pvsorigin, mesh->xyz_array[i], r_refdef.pvsorigin);
 		VectorScale(r_refdef.pvsorigin, 1.0/mesh->numvertexes, r_refdef.pvsorigin);
+		//FTESurf Patch 879: a shared capture's meshes span clusters (and heights): the union of the PVS
+		//just above each, as the refraction below unions the PVS just under each.
+		if (r_capturemergevis && batch->ent == &r_worldentity && cl.worldmodel && cl.worldmodel->funcs.ClusterPVS && !r_novis.ival)
+		{
+			int clust, j, first = true;
+			vec3_t point;
+			qbyte *merged = alloca((cl.worldmodel->numclusters>>3)+1);	//each cluster's PVS once
+			memset(merged, 0, (cl.worldmodel->numclusters>>3)+1);
+			r_refdef.forcevis = false;
+			r_refdef.forcedvis = NULL;
+			newvis.buffer = alloca(newvis.buffersize=cl.worldmodel->pvsbytes);
+			for (i = batch->firstmesh; i < batch->meshes; i++)
+			{
+				mesh_t *m = batch->mesh[i];
+				if (!m->xyz_array || !m->numvertexes || !m->normals_array)
+					continue;
+				VectorClear(point);
+				for (j = 0; j < m->numvertexes; j++)
+					VectorAdd(point, m->xyz_array[j], point);
+				VectorScale(point, 1.0f/m->numvertexes, point);
+				VectorMA(point, 0.1, m->normals_array[0], point);
+				clust = cl.worldmodel->funcs.ClusterForPoint(cl.worldmodel, point, NULL);
+				if (clust >= 0 && clust < cl.worldmodel->numclusters)
+				{
+					if (merged[clust>>3] & (1<<(clust&7)))
+						continue;
+					merged[clust>>3] |= 1<<(clust&7);
+				}
+				r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, first?PVM_REPLACE:PVM_MERGE);
+				r_refdef.forcevis = true;
+				first = false;
+			}
+		}
 		break;
-	
+
 	case 2:	/*fbo refraction (fucked depth, working clip plane)*/
 	case 3:	/*screen copy refraction (screen depth, fucked clip planes)*/
 		/*refraction image (same view, just with things culled*/
@@ -1753,9 +1793,11 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 
 		if (cl.worldmodel && cl.worldmodel->funcs.ClusterPVS && !r_novis.ival)
 		{
-			int clust, i, j;
+			int clust, i, j, first = true;
 			float d;
 			vec3_t point;
+			qbyte *merged = alloca((cl.worldmodel->numclusters>>3)+1);	//FTESurf Patch 879: each cluster's PVS once
+			memset(merged, 0, (cl.worldmodel->numclusters>>3)+1);
 			r_refdef.forcevis = false;
 			r_refdef.forcedvis = NULL;
 			newvis.buffer = alloca(newvis.buffersize=cl.worldmodel->pvsbytes);
@@ -1769,15 +1811,24 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 				for (j = 0; j < mesh->numvertexes; j++)
 					VectorAdd(point, mesh->xyz_array[j], point);
 				VectorScale(point, 1.0f/mesh->numvertexes, point);
-				d = DotProduct(point, plane.normal) - plane.dist;
-				d += 0.1;	//an epsilon on the far side
-				VectorMA(point, d, plane.normal, point);
+				if (batch->ent == &r_worldentity && mesh->normals_array)
+					VectorMA(point, -0.1, mesh->normals_array[0], point);	//FTESurf Patch 879: past its OWN surface (a shared capture's meshes span heights)
+				else
+				{
+					d = DotProduct(point, plane.normal) - plane.dist;
+					d += 0.1;	//an epsilon on the far side
+					VectorMA(point, d, plane.normal, point);
+				}
 
 				clust = cl.worldmodel->funcs.ClusterForPoint(cl.worldmodel, point, NULL);
-				if (i == batch->firstmesh)
-					r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, PVM_REPLACE);
-				else
-					r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, PVM_MERGE);
+				if (clust >= 0 && clust < cl.worldmodel->numclusters)
+				{
+					if (merged[clust>>3] & (1<<(clust&7)))
+						continue;
+					merged[clust>>3] |= 1<<(clust&7);
+				}
+				r_refdef.forcedvis = cl.worldmodel->funcs.ClusterPVS(cl.worldmodel, clust, &newvis, first?PVM_REPLACE:PVM_MERGE);
+				first = false;
 			}
 //			memset(newvis, 0xff, pvsbytes);
 		}

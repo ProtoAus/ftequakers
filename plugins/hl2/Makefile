@@ -11,7 +11,7 @@ all: mat_vmt_progs.h
 # builtin-program list a material loader exports is searched for every program
 # name in the engine (gl_shader.c:2743-2748), not only for the ones its own
 # materials ask for.  That is what lets a plugin ship a screen-space shader.
-VMTPROGSBASE=lightmapped refract transition unlit vertexlit water waterbudget watersheet rt flatdither animated emissive imposter twotexture ccorrect unlitreflect refractflat wateranim
+VMTPROGSBASE=lightmapped refract transition unlit vertexlit water waterbudget watersheet rt flatdither animated emissive imposter twotexture ccorrect unlitreflect refractflat wateranim waterbudgetanim
 VMTPROGS:=$(foreach p,$(VMTPROGSBASE),vmt/$p)
 VMTPROGSFILES:=$(foreach p,$(VMTPROGS),glsl/$p.glsl)
 mat_vmt_progs.h: $(VMTPROGSFILES)
@@ -21,3 +21,8 @@ mat_vmt_progs.h: $(VMTPROGSFILES)
 # AnimatedTexture frames), generated so the other water permutations keep their version.
 glsl/vmt/wateranim.glsl: glsl/vmt/water.glsl
 	echo '!!ver 130-450' > $@ && cat $< >> $@
+
+# waterbudgetanim: FTESurf Patch 879. vmt/waterbudget under GLSL 130 for $forcecheap water with
+# AnimatedTexture frames; its own !!ver line dropped.
+glsl/vmt/waterbudgetanim.glsl: glsl/vmt/waterbudget.glsl
+	(echo '!!ver 130-450'; grep -v '^!!ver' $<) > $@
