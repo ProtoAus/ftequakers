@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 911 — startmarks and fresh stage resets (csprogs, qwprogs)
+
+**Problem:** Resets could not use a player's chosen point in a run's start box.
+Returning there after noclip could also leave a genuinely fresh stage carrying
+old attempt state; indiscriminate clearing would instead lose counters or taint.
+Explicit resets outside the start also failed to advance the attempt counter.
+
+**Change:** Add map/player-scoped startmarks, keyed to the actual start box, with
+standing-room checks and safe ordinary-start fallback. Only a reset to that
+run's first leg uses its mark; later legs retain their ordinary destination.
+Prepare and publish that same destination through the existing predicted warp
+interface. Register bindable startmark and mom_start_mark_set commands; whitelist
+set/clear/status as static forwarded commands. Reset fresh stage-attempt state
+while preserving attempt/fail counters and non-noclip provenance; an outside-start
+reset advances the attempt once, and the next normal frame retains it. Clear markers
+on map/zone replacement and disconnect. No recording/save format change.
+
+**Verified:** Native lifecycle controls 40/0; prepared/published reset controls
+13/0. Acting predicted-reset discriminator: 0 corrections against 1 with
+prediction disabled. Real WALK finish produces a clean 332-tick stage PB with
+matching REC/VIEW, still present after main cancellation. A successful real
+running-save/recorder restore retains load refusal through native departure;
+matched noclip-only control still qualifies. Bare client commands produce ten
+forwarded actions and ten corresponding server responses; four malformed/extra
+argument cases forward nothing, including quoted command text. Required server
+review/rechecks and bounded client routing review clean. Combined tree's three
+VMs compile with zero warnings; reader suite 820/0, runs corpus unchanged at
+402 files/275 existing faults, focused recordings zero faults. Optional legacy
+save-prefix sweep encountered a pre-existing access denial, not a reader pass.
+Does not archive every non-PB attempt. No native binary, Build or release change.
+
 ## Patch 910 — spectator-to-recording handover (csprogs, qwprogs)
 
 **Problem:** Recorded runs refused to open while spectating. Simply dropping that
