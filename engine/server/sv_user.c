@@ -8359,6 +8359,8 @@ static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmse
 	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
 }
 
+static int sv_cmdlater;	//FTESurf Patch 893: this part is a later part of a usercmd split per tick
+
 static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec)
 {
 	edict_t		*ent;
@@ -8453,30 +8455,42 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 
 	//FTESurf Patch 893: one Source tick per part.  A command of several ticks ran QC once, so a
 	//trigger (a thin limit, a fail plate) entered and left between its first and last tick was never
-	//touched; Source runs one usercmd a tick.  A command of n >= 2 whole ticks runs as n parts, each a
-	//tick long (with any carry below a tick, one tick each) and the last also taking the remainder --
-	//never a part of no tick, whose row would sit on the next frame's tick with this command's angles.
-	//The parts keep the command's context (offset into it; the recorder marks offset > 0, fl 8), and
-	//only the first keeps the impulse, as the halving below does.
+	//touched; Source runs one usercmd a tick.  A command the mover will run as n >= 2 ticks (counted
+	//with the carry, as pm_source.c counts them) runs as n parts of exactly one tick each: the first
+	//completes the carried tick (+0.01 ms, so rounding cannot leave it short), the middle ones are a
+	//tick, the last takes the rest -- never a part of no tick or of two.  Only for progs that declare
+	//input_cmd_later: it is set on a later part, and the recorder marks that row (fl 8) so the angle
+	//check does not join it; older progs keep one part a command.  The parts keep the command's
+	//context, and only the first keeps the impulse, as the halving below does.
+	if (sv_tickparts.ival && svprogfuncs)
 	{
 		extern cvar_t pm_physicsmode, pm_ticrate;
-		float tickms = (pm_ticrate.value > 0 ? pm_ticrate.value : 0.015) * 1000;
-		int n = (tickms >= 1) ? (int)((ucmd->msec + 0.001f) / tickms) : 0;
-		if (sv_tickparts.ival && pm_physicsmode.ival == PHYSMODE_SOURCE && n >= 2)
+		float tick = pm_ticrate.value > 0 ? pm_ticrate.value : 0.015;
+		float gs = sv.gamespeed > 0 ? sv.gamespeed : 1;
+		float carry = host_client->pmsrc.msec_carry;
+		int n = (int)((carry + ucmd->msec * 0.001f * gs) / tick);
+		if (pm_physicsmode.ival == PHYSMODE_SOURCE && n >= 2 && PR_FindGlobal(svprogfuncs, "input_cmd_later", 0, NULL))
 		{
 			usercmd_t part = *ucmd;
-			float off = offsetmsec;
+			float tickms = tick * 1000 / gs;
+			float off = offsetmsec, left = ucmd->msec;
 			int k;
 			for (k = 0; k < n - 1; k++)
 			{
 				usercmd_t one = part;
-				one.msec = tickms;
+				one.msec = k ? tickms : ((tick - carry) * 1000 / gs + 0.01f);
+				if (one.msec > left)
+					one.msec = left;
+				sv_cmdlater = (k > 0);
 				SV_RunCmdPart (&one, true, kind, totalmsec, off);
 				part.impulse = 0;
-				off += tickms;
+				off += one.msec;
+				left -= one.msec;
 			}
-			part.msec = ucmd->msec - (n - 1) * tickms;
+			part.msec = left;
+			sv_cmdlater = 1;
 			SV_RunCmdPart (&part, true, kind, totalmsec, off);
+			sv_cmdlater = 0;
 			return;
 		}
 	}
@@ -8703,9 +8717,14 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 #endif
 			if (pr_global_ptrs->PlayerPreThink)
 			{
+				eval_t *later = PR_FindGlobal(svprogfuncs, "input_cmd_later", 0, NULL);	//FTESurf Patch 893
 				SV_PublishCmdContext(&cmd, kind, totalmsec, offsetmsec);
+				if (later)
+					later->_float = sv_cmdlater;
 				PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->PlayerPreThink);
 				SV_PublishCmdContext(NULL, 0, 0, 0);
+				if (later)
+					later->_float = 0;
 			}
 
 		if (progstype != PROG_QW)
