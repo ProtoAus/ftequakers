@@ -1761,6 +1761,15 @@ static int GLVID_SetMode (rendererstate_t *info, unsigned char *palette)
 
 // fix the leftover Alt from any Alt-Tab or the like that switched us away
 	ClearAllStates ();
+	//FTESurf Patch 898: after an ALT+ENTER toggle that clear drops the ALT still held for the next ENTER,
+	//which then ran ENTER's bind (`say`). Re-press it when this thread still has it down; queued behind
+	//the clear-all event, so it lands after it.
+	{
+		extern double key_altenter_time;
+		if (key_altenter_time && Sys_DoubleTime() - key_altenter_time < 30 && (GetKeyState(VK_MENU) & 0x8000))
+			IN_KeyEvent(0, true, K_LALT, 0);
+		key_altenter_time = 0;
+	}
 
 	gammaworks = FALSE;
 	if (vid_desktopgamma.value)
