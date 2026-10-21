@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 913 — automatic resume only for clean whole-main runs (QC)
+
+**Problem:** Automatic resume could park or consume practice, segmented, bonus
+or standalone-stage attempts; missing or invalid stored classification was not
+proof of a clean whole-main run.
+
+**Change:** Use the existing class/leg helpers at park, then nonmutating strict
+classification reads at offer, accept and expiry sweep. Require explicit valid
+integer-domain fields; reread before claiming or moving. Preserve ineligible and
+unknown slots, including expired ones, for explicit discard. Manual saves stay.
+
+**Verified:** Real walked recording parks; baseline14 assertions exposes seven
+expected gate failures, subject14/0. Eight stale offers refuse without moving or
+changing slot bytes; positive clean countdown acts, then fixture aborts safely.
+A focused actual out-of-domain classification control now refuses without
+mutation while valid clean remains accepted. Three VMs zero warnings; independent
+initial and numeric-closure reviews clean. This is the restrictive subset only:
+no offline elapsed-time addition or guessed cannot-beat-stage criterion. No
+native binary, Build or release change; matching deployment still pending.
+
 ## Patch 912 — instant provisional Story tasks and live progression (QC, surfd)
 
 **Problem:** Story task updates depended on the upload reply, and a decorative
