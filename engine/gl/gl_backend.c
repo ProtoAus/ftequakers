@@ -1389,8 +1389,10 @@ void GLBE_EndShadowMap(int restorefbo)
 static int be_currentw, be_currenth;
 static GLenum be_currentfmt;
 static qboolean be_nopanedepth;	//FTESurf Patch 878: a world or brush pane drawn now writes no depth (GLBE_SubmitNearest)
+static qboolean be_flatcopied;	//FTESurf Patch 895: this top-level view has copied the screen for a world/brush pane
 extern unsigned int r_vs_copies;
 extern double r_vs_copypixels;
+extern cvar_t r_nearestsort;
 
 static void T_Gen_CurrentRender(int tmu)
 {
@@ -1398,12 +1400,28 @@ static void T_Gen_CurrentRender(int tmu)
 	int pwidth = vid.fbpwidth;
 	int pheight = vid.fbpheight;
 	GLenum fmt;
+	const entity_t *ent;
+	qboolean flat = false;
 	//FTESurf Patch 866: bind the last copy rather than leave the unit holding whatever it had.
 	if (r_refdef.recurse)
 	{
 		GL_MTBind(tmu, GL_TEXTURE_2D, TEXVALID(shaderstate.temptexture) ? shaderstate.temptexture : r_blackimage);
 		return;
 	}
+	//FTESurf Patch 895: a world or brush pane reuses the view's copy -- Source's brushes never copy
+	//(c_baseentity.cpp:1801-1804), its model renderables do (c_baseanimating.cpp:799).  surf_pantheon's
+	//waterfalls took 61 full copies a frame.  r_nearestsort 0 keeps a copy per batch.
+	if (!shaderstate.force2d && r_nearestsort.ival && shaderstate.curbatch)
+	{
+		ent = shaderstate.curbatch->ent;
+		flat = !ent || ent == &r_worldentity || !ent->model || ent->model->type == mod_brush;
+		if (flat && be_flatcopied && TEXVALID(shaderstate.temptexture))
+		{
+			GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
+			return;
+		}
+	}
+	be_flatcopied |= flat;
 
 	if (sh_config.texture_non_power_of_two_pic)
 	{
@@ -9337,6 +9355,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 	//reset batches if we needed more mem, to avoid allocations mid-frame.
 	if (!r_refdef.recurse)
 	{
+		be_flatcopied = false;	//FTESurf Patch 895: each top-level view copies once for its world/brush panes
 		if (shaderstate.wbatch + 50 > shaderstate.maxwbatches)
 		{
 			int newm = shaderstate.wbatch + 100;
