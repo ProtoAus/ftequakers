@@ -9566,8 +9566,18 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			static int blend_live = -1, illumpos_live = -1;	//FTESurf Patch 780: both change solved data
 			int wantblend = (hl2_lt_blend && hl2_lt_blend->ival) ? 1 : 0;
 			int wantillumpos = (hl2_lt_illumpos && hl2_lt_illumpos->ival) ? 1 : 0;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live)
+			//FTESurf Patch 894: the encode's two hud_gfx rows land in the same cache.
+			static cvar_t *ltscale, *ltsrgb;
+			static float scale_live = -1, srgb_live = -1;
+			float wantscale, wantsrgb;
+			if (!ltscale) ltscale = cvarfuncs->GetNVFDG("hl2_lt_scale", "255", 0, "", "");
+			if (!ltsrgb) ltsrgb = cvarfuncs->GetNVFDG("hl2_lt_srgb_mag", "1", 0, "", "");
+			wantscale = ltscale ? ltscale->value : 255;
+			wantsrgb = ltsrgb ? ltsrgb->value : 1;
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live || wantscale != scale_live || wantsrgb != srgb_live)
 			{
+				scale_live = wantscale;
+				srgb_live = wantsrgb;
 				blend_live = wantblend;
 				illumpos_live = wantillumpos;
 				occlusion_live = wantocclusion;
