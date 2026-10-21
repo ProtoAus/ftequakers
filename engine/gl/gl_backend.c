@@ -7762,6 +7762,8 @@ typedef struct
 	batch_t *batch;
 	mesh_t *mesh; // NULL replays the whole batch, building procedural meshes only then.
 	double depth;
+	double facedepth;	// FTESurf Patch 900: the face's own depth; depth is its brush entity's when grouped
+	const entity_t *group;
 	size_t sequence;
 	qboolean foreground;
 } glblendface_t;
@@ -7864,6 +7866,20 @@ static double GLBE_BlendAreaDepth(const mesh_t *mesh, const float *matrix)
 }
 
 // Procedural commands must not build or retain the shared alias mesh until replay.
+static double GLBE_BlendModelDepth(const model_t *model, const float *matrix)
+{
+	double center[3] = {0, 0, 0};
+	int j;
+	if (model)
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(model->mins[j]) || IS_NAN(model->maxs[j]))
+				return 0;
+			center[j] = ((double)model->mins[j] + model->maxs[j]) * 0.5;
+		}
+	return GLBE_BlendCenterDepth(center, matrix);
+}
+
 static double GLBE_BlendBatchDepth(const batch_t *batch, const float *matrix)
 {
 	double center[3] = {0, 0, 0}, depth = 0;
@@ -7904,16 +7920,17 @@ static double GLBE_BlendBatchDepth(const batch_t *batch, const float *matrix)
 		if (count)
 			return depth / count;
 	}
-	if (model)
-	{
-		for (j = 0; j < 3; j++)
-		{
-			if (IS_NAN(model->mins[j]) || IS_NAN(model->maxs[j]))
-				return 0;
-			center[j] = ((double)model->mins[j] + model->maxs[j]) * 0.5;
-		}
-	}
-	return GLBE_BlendCenterDepth(center, matrix);
+	return GLBE_BlendModelDepth(model, matrix);
+}
+
+//FTESurf Patch 900: Source draws a translucent brush entity whole, ordered by its box centre
+//(clientleafsystem.cpp:1758-1766, c_baseentity.cpp:1953). Sorted per face, VBSP's lightmap-limit
+//pieces of one long pane interleaved with another pane's, and bhop_eazy's rear windows drew over the front.
+static qboolean GLBE_BlendBrushEntity(const batch_t *batch)
+{
+	const entity_t *e = batch->ent;
+	return e != &r_worldentity && e->model && e->model->type == mod_brush &&
+		!(e->flags & (RF_WEAPONMODEL | RF_DEPTHHACK));
 }
 
 // Keep stock CSQC wire annotations in the legacy post-world layer. Their
@@ -7938,6 +7955,10 @@ static int GLBE_BlendFaceCompare(const void *va, const void *vb)
 	if (a->foreground != b->foreground) return a->foreground ? 1 : -1;
 	if (a->depth > b->depth) return -1;
 	if (a->depth < b->depth) return 1;
+	// A grouped entity's faces share its depth: keep them together, farthest face first.
+	if (a->group != b->group) return (size_t)a->group < (size_t)b->group ? -1 : 1;
+	if (a->facedepth > b->facedepth) return -1;
+	if (a->facedepth < b->facedepth) return 1;
 	return (a->sequence > b->sequence) - (a->sequence < b->sequence);
 }
 
@@ -8586,6 +8607,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	qboolean cullworld, trace;
 	glblendplanestats_t stats = {0};
 	float matrix[16], modelview[16];
+	const entity_t *group;
+	double groupdepth;
 
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
@@ -8634,11 +8657,15 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			if (!GLBE_BlendBatchImmediate(batch) && batch->meshes > batch->firstmesh)
 			{
 				R_RotateForEntity(matrix, modelview, batch->ent, batch->ent->model);
+				group = GLBE_BlendBrushEntity(batch) ? batch->ent : NULL;
+				groupdepth = group ? GLBE_BlendModelDepth(group->model, matrix) : 0;
 				if (!GLBE_BlendFaceEligible(batch))
 				{
 					faces[n].batch = batch;
 					faces[n].mesh = NULL;
-					faces[n].depth = GLBE_BlendBatchDepth(batch, matrix);
+					faces[n].facedepth = GLBE_BlendBatchDepth(batch, matrix);
+					faces[n].depth = group ? groupdepth : faces[n].facedepth;
+					faces[n].group = group;
 					faces[n].sequence = n;
 					faces[n].foreground = GLBE_BlendForeground(batch);
 					n++;
@@ -8657,7 +8684,9 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;
-					faces[n].depth = GLBE_BlendAreaDepth(mesh, matrix);
+					faces[n].facedepth = GLBE_BlendAreaDepth(mesh, matrix);
+					faces[n].depth = group ? groupdepth : faces[n].facedepth;
+					faces[n].group = group;
 					faces[n].sequence = n;
 					faces[n].foreground = false;
 					n++;
