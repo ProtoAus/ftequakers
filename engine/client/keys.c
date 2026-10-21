@@ -68,6 +68,7 @@ cvar_t con_completionenter	= CVARD("con_completionenter", "0", "What ENTER does 
 //nettest: PgUp/PgDn page a whole console window. The mouse wheel is deliberately NOT affected.
 cvar_t con_pagelines		= CVARD("con_pagelines", "0", "How many lines PgUp/PgDn scroll the console by. 0 = one full console window minus con_pageoverlap. Set to 2 for the old fixed step. Does not affect the mouse wheel.");
 cvar_t con_pageoverlap		= CVARD("con_pageoverlap", "2", "Rows of context kept on screen when PgUp/PgDn scroll a full window. One of them is eaten by the ^^^^ backscroll marker row.");
+cvar_t in_altenter			= CVARFD("in_altenter", "1", CVAR_ARCHIVE, "FTESurf Patch 898: ALT+ENTER runs fullscreen_toggle (windowed <-> borderless) anywhere -- game, menus, console -- unless ALT+ENTER is bound to something other than ENTER's own bind. 0 leaves ALT+ENTER to the binds.");
 
 static int KeyModifier (unsigned int shift, unsigned int alt, unsigned int ctrl, unsigned int devbit)
 {
@@ -3960,6 +3961,7 @@ void Key_Init (void)
 	Cvar_Register (&con_completionenter, "Console controls");	//FTESurf Patch 226
 	Cvar_Register (&con_pagelines, "Console controls");
 	Cvar_Register (&con_pageoverlap, "Console controls");
+	Cvar_Register (&in_altenter, "Console controls");
 }
 
 qboolean Key_MouseShouldBeFree(void)
@@ -4049,6 +4051,37 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 			if (!Key_Dest_Has(kdm_console))	//don't toggle it when the console is already down. this allows typing blind to not care if its already active.
 				Con_ToggleConsole_Force();
 			return;
+		}
+	}
+
+	//FTESurf Patch 898: ALT+ENTER toggles fullscreen before CSQC, the menus or the console see it.
+	//`bind enter say` fills every modifier slot, so only an ALT+ENTER bind that differs from ENTER's
+	//counts as the user's own. The toggle's window rebuild (and any focus change) clears keydown[] with
+	//ALT still held, so on Windows the thread's key state is asked too -- nothing synthetic, nothing to stick.
+	if (key == K_ENTER && in_altenter.ival)
+	{
+		qboolean alt = !!(modifierstate & KEY_MODIFIER_ALT);
+#ifdef _WIN32
+		if (!alt)
+		{
+			qboolean INS_AltHeld (void);
+			alt = INS_AltHeld();
+			if (alt)
+				modifierstate |= KEY_MODIFIER_ALT;	//so a player's own ALT+ENTER bind is the one that runs
+		}
+#endif
+		if (alt)
+		{
+			const char *ab = keybindings[K_ENTER][KEY_MODIFIER_ALT], *pb = keybindings[K_ENTER][0];
+			if (!ab || !*ab || (pb && !strcmp(ab, pb)))
+			{
+				if (down && !wasdown)
+				{
+					Con_DPrintf("ALT+ENTER: fullscreen_toggle\n");
+					Cbuf_AddText("fullscreen_toggle\n", RESTRICT_LOCAL);
+				}
+				return;
+			}
 		}
 	}
 

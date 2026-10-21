@@ -2332,6 +2332,13 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 }
 #endif
 
+//FTESurf Patch 898: is ALT down in this thread's key state? keys.c asks when ENTER arrives, because a
+//window rebuild or a focus change clears keydown[] while ALT is still held.
+qboolean INS_AltHeld (void)
+{
+	return GetKeyState(VK_MENU) < 0;
+}
+
 /*
 ===================
 INS_ClearStates

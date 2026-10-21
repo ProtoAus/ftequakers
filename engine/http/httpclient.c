@@ -587,7 +587,14 @@ static qboolean HTTP_DL_Work(struct dl_download *dl)
 				if (nl)
 					*nl = '\0';
 				COM_TrimString(msg, trimmed, sizeof(trimmed));
-				Con_Printf(S_COLOR_GRAY "%s: %s %s (%s)\n", dl->url, buffer, trimmed, Location);
+				//FTESurf Patch 903: routine (the zone mirror answers 302 with a presigned R2 URL), so developer
+				//only, and never the query string: a signed URL does not belong in a log a player pastes.
+				{
+					char shown[256];
+					const char *q = strchr(Location, '?');
+					Q_strncpyz(shown, Location, q ? min((int)sizeof(shown), (int)(q - Location) + 1) : (int)sizeof(shown));
+					Con_DPrintf(S_COLOR_GRAY "%s: %s %s (%s%s)\n", dl->url, buffer, trimmed, shown, q ? "?..." : "");
+				}
 				if (!*Location)
 				{
 					Con_Printf("Server redirected to null location\n");

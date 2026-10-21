@@ -75,6 +75,57 @@ looked like Translucent there. Where it applies it shows at r_renderscale 2: bho
 crop mean RGB 4/27/169 and pixel-to-pixel 65.5 dithered, 4/5/71 and 7.0 translucent. The gfx_menu option
 now reads "Dithered if textured" (csprogs); the cvar's help already said so.
 
+## Patch 898 — ALT+ENTER switches windowed <-> borderless; Patch 903 — a redirect line stays quiet (client exe)
+
+**Problem:** Lex: "can you make alt+enter work for fullscreen swapping". Nothing handled it: the key went
+to the binds, and `bind enter say` fills every modifier slot, so ALT+ENTER opened chat. Patch 903: every
+HTTP 301/302/303 printed `<url>: 302 Found (<Location>)` with Con_Printf. The zone mirror answers a map's
+zone file with a presigned R2 URL, so a ~600-character signed address landed in the console after "FTESurf
+CSQC loaded" on every map load, and in the logs players paste.
+
+**Change:** keys.c Key_Event, after the shift+escape console block and before CSQC, the menus or the console
+see the key: ALT+ENTER queues `fullscreen_toggle` (Patch 268, windowed <-> borderless) on the press and
+swallows the repeat and the release, unless the ALT slot holds a bind that differs from ENTER's own (a
+`bind ALT+ENTER ...` of the player's wins). `in_altenter` (archived, default 1) turns it off; a
+Con_DPrintf names the action. httpclient.c: the redirect line is Con_DPrintf and stops at the `?`
+(`...json?...)`); in this tree Con_DPrintf reaches stdout at developer 1 and the log at log_developer 1,
+never the console.
+
+**Verified:** client built (m-rel, no new warnings in the two files). Overlay roots with the P898 progs and
+cfg, the install mounted read-only, conbridge sessions at 1280x720 (art898/arm898.py). ALT+ENTER by window
+messages to the client: "ALT+ENTER: fullscreen_toggle", "Setting fullscreen windowed OpenGL", the window
+1038x614 -> the monitor's 1536x961 (logical); again: "Setting windowed mode 1280*720", back to 1038x614;
+with `bind ALT+ENTER "echo ..."` the echo ran and the window stayed. Each switch reloads the renderer,
+~7 s on surf_dune, as F11 does. Redirects, the same P898 csprogs fetching surf_dune's zones after a map load: the
+installed exe printed the full signed address at developer 0 (2 lines carrying X-Amz-Signature in its
+log); this exe printed nothing at developer 0 and, at developer 1 + log_developer 1,
+`.../surf_dune.json: 302 Found (https://<account>.r2.cloudflarestorage.com/ftesurf-public/objects/zones/<sha256>.json?...)`,
+with no X-Amz anywhere in its log.
+
+**Review round 1:** the toggle rebuilds the window, and ClearAllStates runs three times on the way (the
+mode set's, the focus messages') and dropped the ALT still held, so a second ENTER ran ENTER's bind
+(`say`). The first fix re-pressed ALT after the mode set's clear only and measured no different from the
+control: the focus clears come after it. Now ClearAllStates itself re-presses ALT (queued behind its
+clear-all event) when this thread's key state still has it down, from an ALT+ENTER toggle until that ALT
+is released, for at most 30 s; a Con_DPrintf says so. Measured with ALT held in the client thread's key
+state (AttachThreadInput + SetKeyboardState from the arm, so no input reaches another window) and
+`bind enter "echo ..."`: the control and the first fix echoed on the second ENTER; this build printed
+"keys cleared, ALT held" three times per rebuild, toggled to borderless and back on the second ENTER, and
+never echoed. Left: a player who ALT+TABs away within 30 s of a toggle with ALT held and comes back by
+clicking can find ALT still down in the engine (this thread never saw the release) until ALT is pressed.
+
+**Review round 2:** that re-press is gone, because a synthetic ALT down can stick (ALT+ENTER, ALT+TAB away,
+ALT released elsewhere, click back: ENTER toggles instead of `say`, and every ALT chord misfires).
+ClearAllStates is upstream's again. When ENTER arrives, ALT counts as held if keydown[] has it or, on
+Windows, GetKeyState(VK_MENU) < 0 for the client thread (INS_AltHeld, in_win.c); a player's own ALT+ENTER
+bind then runs as before. One session, ALT driven through the thread's key state as above,
+`bind enter "echo ..."`: (a) ALT held, ENTER twice: borderless and back, no echo; (b) ALT+ENTER, ALT
+released, ENTER: the echo, no toggle; (c) ALT down, WM_KILLFOCUS, ALT up in the key state while
+unfocused, WM_SETFOCUS, ENTER: the echo, no toggle. (d) As (c) with the thread's key state left down --
+a thread Windows did not resync on the way back -- ENTER toggled: the query is only as current as
+GetKeyState, which this arm cannot show Windows refreshing on refocus. Nothing is pressed by the
+engine, so a stale read lasts until the next ALT message the thread sees.
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
