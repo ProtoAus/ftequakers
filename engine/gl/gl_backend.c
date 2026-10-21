@@ -1398,15 +1398,42 @@ extern cvar_t r_nearestsort;
 //blended (waterfallsoft's 8-bit alpha normal map) alike.  Not a particle (dummybatch), not a model.
 static qboolean GLBE_FlatRefractPane(void)
 {
+	static const shader_t *said[32];	//developer: each shader's first answer, once
+	static int nsaid;
 	const batch_t *b = shaderstate.curbatch;
 	const shader_t *sh = shaderstate.curshader;
 	const entity_t *ent;
-	if (!b || b == &shaderstate.dummybatch || !b->ent || !sh || !sh->prog || !sh->prog->name)
-		return false;
-	ent = b->ent;
-	if (ent != &r_worldentity && ent->model && ent->model->type != mod_brush)
-		return false;
-	return !strncmp(sh->prog->name, "vmt/refract", 11);
+	const program_t *prog = NULL;
+	const char *why = NULL;
+	int i;
+	if (!b || b == &shaderstate.dummybatch)
+		why = "dummy batch";
+	else if (!(ent = b->ent))
+		why = "no entity";
+	else if (ent != &r_worldentity && ent->model && ent->model->type != mod_brush)
+		why = "model entity";
+	else if (!sh)
+		why = "no shader";
+	else
+	{
+		prog = sh->prog ? sh->prog : sh->passes[0].prog;	//vmt/refract is a pass program
+		if (!prog || !prog->name)
+			why = "no program";
+		else if (strncmp(prog->name, "vmt/refract", 11))
+			why = "another program";
+	}
+	if (sh && developer.ival && nsaid < countof(said))
+	{
+		for (i = 0; i < nsaid && said[i] != sh; i++)
+			;
+		if (i == nsaid)
+		{
+			said[nsaid++] = sh;
+			Con_DPrintf("P895: %s %s (%s)\n", sh->name, why ? why : "shares the view's copy",
+				prog && prog->name ? prog->name : "-");
+		}
+	}
+	return !why;
 }
 
 static void T_Gen_CurrentRender(int tmu, qboolean pane)
