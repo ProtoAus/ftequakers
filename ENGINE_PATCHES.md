@@ -126,6 +126,85 @@ a thread Windows did not resync on the way back -- ENTER toggled: the query is o
 GetKeyState, which this arm cannot show Windows refreshing on refocus. Nothing is pressed by the
 engine, so a stale read lasts until the next ALT message the thread sees.
 
+## Patch 897 — play-time server prints stay off an offline player's console (qwprogs)
+
+**Problem:** server QC's `dprint` is builtin 25, which QW progs get as an unconditional print (pr_cmds.c,
+the HAVE_LEGACY row), so in an offline game -- the server inside the player's client -- every one reached
+the console at developer 0: Lex saw surf_boreas's rotbutton lines with developer 0.
+
+**Change:** the repeating rotbutton line is gone, and 77 routine play-time lines (entity actions, the
+recorder's per-run lines, receipts, hop tags, re-arms, saves, spectate, warp ops, zone fallbacks, the
+join/leave copy, the account mark) print through `SV_DevOn()`: developer or log_developer on, or a lobby
+(lobby_enable), whose log is read. Map-load lines, census-latched warnings and errors still print. Arms
+that grade a gated line set developer 1 (p477rewind's R18E now does, around that section only).
+
+**Verified:** FTESurf `cfg/test/p897quiet.cfg` (surf_greek, a zone-tool limit slab): developer 0 -- no
+momlimit and no said> line (the build without the patch: two momlimit lines and the said> join);
+developer 1 -- the line; the load line in both. A text census of every gated line's format pieces across
+tools/ and cfg/test found each consumer sets developer 1, log_developer 1 or lobby_enable; all 77 wraps
+add one `if` and a tab and nothing else (hunk check).
+
+## Patch 893 — Source mover commands run one tick per part (engine + qwprogs)
+
+**Problem:** a usercmd of several ticks (a low cl_netfps; 50 ms is five of a bhop map's 10 ms ticks) ran
+QC once -- PlayerPreThink, the recorder and the trigger touch pass at the command's end -- so a thin
+trigger entered and left between its first and last tick was never touched: a limitmovement zone (Patch
+882's known gap), a fail plate. Source runs one usercmd a tick.
+
+**Change:** under pm_physicsmode 1 (`sv_tickparts`, serverinfo, default 1, a locked movevar)
+SV_RunCmdPart runs a command the mover will run as n >= 2 ticks as n parts of exactly one tick: n is the
+mover's own count (carry + msec * gamespeed, its 1e-5 s epsilon, movevars.ticrate with its below-1-ms
+fallback), the first part completes the carried tick (+0.01 ms), the middle ones are a tick, the last the
+rest. Each part goes through PreThink, the mover and the touch pass, as the >50 ms halving already did:
+the speed budget charged once, the command context's offset per part, the impulse on the first only. A
+later part is neither split again nor halved; a carry past a changed tick is not split. Only for progs
+that declare `input_cmd_later`: the engine sets it during a later part's PreThink (a parameter of the
+part, so nothing outlives it), and the recorder marks that row `fl 8`; older progs keep one part a
+command. The header says `tickparts 0|1` as the engine decides it. reccheck takes an fl 8 row out of the
+one-frame angle join only in a `tickparts 1` file, only when it repeats the row before it (pk, moves,
+angles, bt) at that row's mt + 1, and at most ceil(0.5 / tickrate) in a row (a usercmd is at most 500
+ms); any other is joined and noted. It prints `split_rows`. A one-tick command, the mover and the replay
+are unchanged: no mover version. Split, a command past the mover's 8-tick cap runs whole (reachable only
+above gamespeed ~1.25). A low-rate client's own prediction still tests triggers once a command, and keeps
+a portal crossing's rotation for the command's remaining ticks where the server's later parts do not (FTESurf
+BACKLOG).
+
+**Verified:** FTESurf `cfg/test/p893tick.cfg`: bhop_cloudburst's 64-thick zone-tool teleport (Patch 892)
+crossed in noclip at 4000 u/s with 50 ms commands from eight staggered starts -- `sv_tickparts 1` caught
+8/8, `0` (sv_cheats on, value printed) 3/8, as the geometry predicts; without sv_cheats the lock puts `0`
+back to 1; a control QC without `input_cmd_later` 3/8 in both halves (no split). `p893rec.cfg` at cl_netfps
+23 with snapping off (commands of 40 and 50 ms on 15 ms ticks): 135 rows, every step one tick, 92 fl 8,
+none noted; the same arm with the part count taken from msec alone (the first cut): 53 of 132 steps two
+ticks. A float32 model of the split against the mover's loop: 0 parts of two ticks over 3.9M (the
+pre-epsilon count, 453 with fractional msec). test_reccheck 812/812, each conjunct of the exemption removed
+in turn failing the case aimed at it. Five review rounds.
+
+## Patch 892 — Momentum's zone-tool triggers exist (qwprogs + csprogs)
+
+**Problem:** Momentum's zone tool writes triggers with no brush and shapes them at map spawn -- a
+logic_auto's OnMapSpawn AddOutput "solid 2", then "mins ..." and "maxs ..." -- and every spawn function
+removed a model-less trigger. 195 never existed on 47 of the library's 1,926 maps: 133 teleports on 30
+(falls that went nowhere), 34 limitmovement zones on 8 (surf_greek's 25 checkpoint no-bhop zones), 21
+trigger_multiples with outputs on 13, 3 Momentum teleports, a push.
+
+**Change:** trigger_teleport (and Momentum's), trigger_push, trigger_multiple and the Momentum triggers
+stash a named model-less one -- its parsed fields in a char-31-separated record, the outputs raw, other
+strings unescaped on the way back (putentityfieldstring under QCGC keeps getentityfieldstring's escapes)
+-- and free its slot as the old removal did, so no lump entity renumbers (the `pe` digest); SV_LateSpawnAll
+re-creates them after the lump through their own spawn functions. SV_IOAddOutput's mins/maxs give a box
+(once; a lobby ignores a later reshape) and its solid makes it SOLID_TRIGGER (StartDisabled honoured). A
+box behind a filter this game cannot evaluate (filter_momentum_surface_collision, 64 boxes on ~14 maps) stays
+inert: surf_reverie's covers the whole map. Patch 882's limit test takes a box. A tool push is not
+networked. The client's trigger mirror builds the same boxes from the lump's OnMapSpawn rows and predicts
+them. Not done: 5 solid func_brush boxes on 3 maps (collision; FTESurf BACKLOG).
+
+**Verified:** FTESurf `cfg/test/p892tool.cfg`: surf_greek prints its tool limits' boxes and, inside
+checkpoint 0's slab, `momlimit Player: limit 64`; on bhop_cloudburst a body set inside a tool teleport
+arrives at bh7 (-3645 3268 385); surf_reverie's filtered box stays inert; surf_cannonball's two tool
+trigger_multiples come back with their outputs (entity I/O wired 14; control 12); `lump: last edict` on
+greek/cloudburst/reverie/voyager equals the build without the patch (215/35/96/750; review 1's cut, which
+kept the triggers in place, 236/42/97/751).
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
