@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 910 — spectator-to-recording handover (csprogs, qwprogs)
+
+**Problem:** Recorded runs refused to open while spectating. Simply dropping that
+refusal could borrow the wrong telemetry snapshot, and delayed spectator state
+could retake camera/column ownership after a rapid replay close.
+
+**Change:** Once a recording loads, restore the player's telemetry before replay
+borrows its snapshot. Retain a handover latch through replay close until server
+spectator release is acknowledged. A still-pending initial spectator request
+must enter first, so a pre-entry zero cannot masquerade as release acknowledgment.
+Failed opens leave spectating intact. Normalize the existing server handover's
+release reason to the already-valid leave value; no grammar relaxation.
+
+**Verified:** Independent native baseline/subject controls start with a real
+running recording and spectator target. Missing-file control preserves spectating.
+Supported packet-delay rapid-stop discriminator: old candidate reclaimed view in
+63/63 stale-state frames, fixed subject in 0/64, then safe acknowledged return.
+Pending-entry discriminator observes real zero spectator stat plus pending request,
+refuses without side effects, then opens the same recording after acknowledgment:
+9/9 checks. Three VM builds and combined board/handover build zero warnings; 820
+reader checks pass, focused native recordings have no structural faults. Required
+independent review/rechecks clean. Inclusive viewing-time clock remains separate,
+not implemented or verified by this patch. No native binary, Build or release.
+
 ## Patch 909 — WOS-first boards and independent style filters (csprogs, menu, surfd reads)
 
 **Problem:** Map-load boards defaulted to all games; direction choices forced KSF,
