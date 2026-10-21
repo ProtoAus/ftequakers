@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 907 — choose one release in F2's patch notes (menu.dat)
+
+**Problem:** The F2 notes page joined every published release into one long list.
+
+**Change:** A scrollable version list selects the installed release when present,
+otherwise the newest one. The reading pane wraps only that release. Selection
+resets its reading position and reuses the already permission-gated feed.
+
+**Verified:** Isolated QC build: all three progs, zero warnings. The existing
+`tools/p876notes.py` native client harness now selects an older release and back,
+checks scroll reset and no selection fetch, and retains the inactive-updater and
+no-permission negative controls: 20 checks passed. Inspected native screenshots of
+both releases. No recorder, engine binary, Build number or release change.
+
 ## Patch 906 — the client does not predict a zone-tool box it cannot judge (csprogs)
 
 **Problem:** Patch 892 leaves a zone-tool box inert on the server behind a filter it does not evaluate, but
