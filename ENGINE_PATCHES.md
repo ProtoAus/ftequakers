@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
+
+**Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
+already re-parses every live material when a CVAR_SHADERSYSTEM cvar changes (Shader_DoReload, the
+map-change path), but the plugin API masks that flag and Cvar_Get2 does not add it to an existing cvar,
+so only hl2_water and the dither pair (renderer-owned policies) ever triggered it. The model-light cache
+(r_modellight_seq) did not hash the plugin sampler's cvars, static props kept their light_known through
+hl2_lt_scale / hl2_lt_srgb_mag, and the decal/overlay/sprite loaders read their cvars once per map.
+
+**Change:** renderer-owned CVAR_SHADERSYSTEM policies for hl2_refract, hl2_translucent, hl2_animated,
+hl2_envmap and hl2_bumpmap (defaults as the plugin's); gl_rlight.c hashes hl2_lt_{scale,srgb_mag,min,face,
+dirsign,fold,worldlight}, found by name; VBSP_PrepareFrame drops static-prop lighting on hl2_lt_scale /
+hl2_lt_srgb_mag. csprogs keeps the map's decal and overlay handles (removedecal on a same-map reload; a map
+change has already wiped them) and re-runs Decal_LoadForMap / Sprite_LoadForMap when vbsp_decals,
+vbsp_overlays, vbsp_sprites, vbsp_spotlights or vbsp_lightglow differ from what the last load read.
+Stay map-load, with the reason on the row: hl2_cubemaps, hl2_favour_ldr, hl2_lt_baked (what is read off
+disk), hl2_lt_baked_scale (multiplied into each prop once), hl2_hidetools (nodraw faces dropped at BSP load),
+hl2_areaportals (initial state), the two collision rows (physics, server, evidence).
+
+**Verified:** client + hl2 plugin built with no new warnings in the changed files; QC 0 warnings.
+Live-vs-loaded arm (art894/arm894.py: each row switched live, then loaded fresh at the same camera) PENDING.
+Limits: Mod_Batches_Build keeps a batch's cubemap only for a HASREFLECTCUBE shader and splits per plane only
+for a capturing one, both at load -- so hl2_envmap turned on after a map loaded with it off, and hl2_water
+switched into a capturing mode (1/2) after a non-capturing load, are what the arm decides.
+
 ## Patch 879 — one water reflection and refraction per view, as Source (client exe)
 
 **Problem (Lex, 21 Oct):** "our method doesn't feel efficient, it drains way too much" -- surf_garden save 3
