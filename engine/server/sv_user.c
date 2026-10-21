@@ -474,6 +474,7 @@ cvar_t	sv_showpredloss		= CVARD("sv_showpredloss", "0", "Print messages whenever
 cvar_t	sv_cheatpc				= CVARD("sv_cheatpc", "125", "If the client tried to claim more than this percentage of time within any speed-cheat period, the client will be deemed to have cheated.");
 cvar_t	sv_cheatspeedchecktime	= CVARD("sv_cheatspeedchecktime", "30", "The interval between each speed-cheat check.");
 #endif
+cvar_t	sv_tickparts			= CVARFD("sv_tickparts", "1", CVAR_SERVERINFO, "FTESurf Patch 893: under pm_physicsmode 1, run a usercmd one Source tick per part, so QC -- trigger touches, limitmovement and slide, the recorder -- acts on every tick, as Source runs one usercmd a tick.");
 cvar_t	sv_playermodelchecks	= CVAR("sv_playermodelchecks", "0");
 cvar_t	sv_ping_ignorepl		= CVARD("sv_ping_ignorepl", "0", "If 1, ping times reported for players will ignore the effects of packetloss on ping times. 0 is slightly more honest, but less useful for connection diagnosis.");
 cvar_t	sv_protocol_nq			= CVARD("sv_protocol_nq", "", "Specifies the default protocol to use for new NQ clients. This is only relevent for clients that do not report their supported protocols. Supported values are\n0 = autodetect\n15 = vanilla\n666 = fitzquake\n999 = rmq protocol\nThe sv_bigcoords cvar forces upgrades as required.");
@@ -8358,7 +8359,8 @@ static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmse
 	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
 }
 
-static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec)
+//FTESurf Patch 893: later = a later part of a usercmd split per tick (a parameter, so nothing outlives it)
+static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec, qboolean later)
 {
 	edict_t		*ent;
 	int			i, n;
@@ -8450,18 +8452,60 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		kind = 0;
 	cmd = *ucmd;
 
+	//FTESurf Patch 893: one Source tick per part.  A command of several ticks ran QC once, so a
+	//trigger (a thin limit, a fail plate) entered and left between its first and last tick was never
+	//touched; Source runs one usercmd a tick.  A command the mover will run as n >= 2 ticks (counted
+	//with the carry, tick and epsilon of pm_source.c's loop) runs as n parts of exactly one tick: the first
+	//completes the carried tick (+0.01 ms, so rounding cannot leave it short), the middle ones are a
+	//tick, the last takes the rest -- never a part of no tick or of two.  Only for progs that declare
+	//input_cmd_later: it is set on a later part, and the recorder marks that row (fl 8) so the angle
+	//check does not join it; older progs keep one part a command.  The parts keep the command's
+	//context, and only the first keeps the impulse, as the halving below does.  A later part is one
+	//tick already: it is not split again (a held part runs no tick, so its carry stays and it would
+	//count two) nor halved.  sv_tickparts is a locked movevar (sv_phys.c), so it holds for a run.
+	if (sv_tickparts.ival > 0 && svprogfuncs && !later)
+	{
+		extern cvar_t pm_physicsmode;
+		float tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
+		float gs = sv.gamespeed > 0 ? sv.gamespeed : 1;
+		float carry = host_client->pmsrc.msec_carry;
+		int n = (int)((carry + ucmd->msec * 0.001f * gs + 1e-5f) / tick);	//PMSRC_TICK_EPSILON, pm_source.c:164
+		if (pm_physicsmode.ival == PHYSMODE_SOURCE && n >= 2 && carry >= 0 && carry < tick	//a carry past a changed tick: not split
+			&& PR_FindGlobal(svprogfuncs, "input_cmd_later", 0, NULL))
+		{
+			usercmd_t part = *ucmd;
+			float tickms = tick * 1000 / gs;
+			float off = offsetmsec, left = ucmd->msec;
+			int k;
+			for (k = 0; k < n - 1; k++)
+			{
+				usercmd_t one = part;
+				one.msec = k ? tickms : ((tick - carry) * 1000 / gs + 0.01f);
+				if (one.msec > left)
+					one.msec = left;
+				SV_RunCmdPart (&one, true, kind, totalmsec, off, k > 0);
+				part.impulse = 0;
+				off += one.msec;
+				left -= one.msec;
+			}
+			part.msec = left;
+			SV_RunCmdPart (&part, true, kind, totalmsec, off, true);
+			return;
+		}
+	}
+
 	// chop up very long commands
-	if (cmd.msec > 50)
+	if (cmd.msec > 50 && !later)
 	{
 		oldmsec = ucmd->msec;
 		// Preserve the existing integer split policy; P672 client splits differ.
 		firstmsec = oldmsec/2;
 		cmd.msec = firstmsec;
-		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec);
+		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec, later);
 		// Keep the branch budget locally: recursive calls overwrite shared cmd.
 		cmd.msec = oldmsec - firstmsec;
 		cmd.impulse = 0;
-		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec + firstmsec);
+		SV_RunCmdPart (&cmd, true, kind, totalmsec, offsetmsec + firstmsec, later);
 		return;
 	}
 
@@ -8672,9 +8716,14 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 #endif
 			if (pr_global_ptrs->PlayerPreThink)
 			{
+				eval_t *laterg = PR_FindGlobal(svprogfuncs, "input_cmd_later", 0, NULL);	//FTESurf Patch 893
 				SV_PublishCmdContext(&cmd, kind, totalmsec, offsetmsec);
+				if (laterg)
+					laterg->_float = later;
 				PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->PlayerPreThink);
 				SV_PublishCmdContext(NULL, 0, 0, 0);
+				if (laterg)
+					laterg->_float = 0;
 			}
 
 		if (progstype != PROG_QW)
@@ -9255,12 +9304,12 @@ Done after running a player command.
 // Existing callers are deliberately uncorrelatable (spawn, tick, gap-fill).
 void SV_RunCmd(usercmd_t *ucmd, qboolean recurse)
 {
-	SV_RunCmdPart(ucmd, recurse, 0, ucmd->msec, 0);
+	SV_RunCmdPart(ucmd, recurse, 0, ucmd->msec, 0, false);
 }
 
 static void SV_RunCmdNetwork(usercmd_t *ucmd, int kind)
 {
-	SV_RunCmdPart(ucmd, false, kind, ucmd->msec, 0);
+	SV_RunCmdPart(ucmd, false, kind, ucmd->msec, 0, false);
 }
 
 void SV_PostRunCmd(void)
@@ -10800,6 +10849,7 @@ void SV_UserInit (void)
 	Cvar_Register (&sv_cheatpc, cvargroup_servercontrol);
 	Cvar_Register (&sv_cheatspeedchecktime, cvargroup_servercontrol);
 #endif
+	Cvar_Register (&sv_tickparts, cvargroup_servercontrol);	//FTESurf Patch 893
 	Cvar_Register (&sv_showpredloss, cvargroup_servercontrol);
 	Cvar_Register (&sv_playermodelchecks, cvargroup_servercontrol);
 
