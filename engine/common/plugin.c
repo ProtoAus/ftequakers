@@ -129,6 +129,9 @@ typedef struct plugin_s {
 
 	//protocol-in-a-plugin
 	int (QDECL *connectionlessclientpacket)(const char *buffer, size_t size, netadr_t *from);
+
+	//FTESurf Patch 879: 1 blocked, 0 clear, -1 not this plugin's model (Plug_OccluderTrace)
+	int (QDECL *occludertrace)(model_t *mod, const vec3_t start, const vec3_t end);
 #endif
 	qboolean (QDECL *svmsgfunction)(int messagelevel);
 	qboolean (QDECL *chatmsgfunction)(int talkernum, int tpflags);
@@ -391,6 +394,8 @@ qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 		currentplug->sbarlevel[2] = function;
 	else if (!strcmp(name, "ConnectionlessClientPacket"))
 		currentplug->connectionlessclientpacket = function;
+	else if (!strcmp(name, "Mod_OccluderTrace"))	//FTESurf Patch 879
+		currentplug->occludertrace = function;
 	else if (!strcmp(name, "ServerMessageEvent"))
 		currentplug->svmsgfunction = function;
 	else if (!strcmp(name, "ChatMessageEvent"))
@@ -406,6 +411,20 @@ qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 		return 0;
 	return 1;
 }
+
+#ifndef SERVERONLY
+//FTESurf Patch 879: does a model's own opaque world (no props, no movers) block the line? A plugin that
+//loaded the model may know better than its movement trace. -1: no plugin answered.
+int Plug_OccluderTrace(model_t *mod, const vec3_t start, const vec3_t end)
+{
+	plugin_t *plug;
+	int r;
+	for (plug = plugs; plug; plug = plug->next)
+		if (plug->occludertrace && (r = plug->occludertrace(mod, start, end)) >= 0)
+			return r;
+	return -1;
+}
+#endif
 
 //retrieve a plugin's name
 static qboolean QDECL PlugBI_GetPluginName(int plugnum, char *outname, size_t namesize)

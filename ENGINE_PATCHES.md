@@ -1,5 +1,69 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 879 — one water reflection and refraction per view, as Source (client exe)
+
+**Problem (Lex, 21 Oct):** "our method doesn't feel efficient, it drains way too much" -- surf_garden save 3
+at ~194 fps, CPU-bound on draw calls, r_viewstats "views by depth 1.00 6.00", 3,880 of 4,945 draws in nested
+views. Every water batch rendered its own reflection and refraction, and Mod_Batches_Build (gl_model.c:3730)
+splits a capture shader's surfaces into one batch per plane: garden's stepped canal, loaded with hl2_water 2
+as Lex's game loads it, is one batch per step (3 heights in view at save 3, 4 at saves 1-2). surf_boreas's
+pond is one plane split into two batches (4 views at saves 2 and 8). Our rig arms exec'd Lex's cfg after the
+map load, when the water had been batched under hl2_water 3, so they never saw his state (the "2.2x a fresh
+client" of P868). Source renders one reflection and one refraction per view, for the one fog volume
+GetVisibleFogVolume picks (viewrender.cpp:2400-2420, DetermineWaterRenderInfo :2253), and every water
+material samples those same targets (water.cpp:259-266); its main view draws every water surface
+(DF_RENDER_WATER, :5453).
+
+**Change:** `r_waterviews` (default 1). Before a view submits anything, GLBE_WaterViewsBegin picks its water:
+each view reads its own eye's point contents (above water: level tops below the eye; in water: level
+undersides above it -- Mod_VBSP emits a water's underside whenever the eye is below its plane), weighs each
+such plane by the exact solid angle of its faces clipped to the frustum, and takes the heaviest whose top
+on-screen centres the eye can trace to past the world's opaque brushes, displacements and brush entities
+(the hl2 plugin's new Mod_OccluderTrace export over Patch 509's tree, built at map load when the world has level capture water, else on the first trace, and never on a dedicated server;
+static props, glass brush entities and all-nodraw light-only toolsblocklight brushes do not hide water; narrower than Source's MASK_VISIBLE, which also skips OPAQUE brushes with any nodraw side), so a pool behind a wall cannot set
+every other water's mirror plane (Source's own choice is engine-side; vvis only flags fog volumes). Each
+seat's world-drawing view keeps last frame's plane while it has half the best's share and is seen. The first water batch drawn
+captures it once: the union of what the on-screen water facing the eye samples, the chosen material's scale
+and $reflectentities, and every such water mesh for the PVS -- the reflection unions the PVS just above each
+mesh, the refraction just under each (GLR_DrawPortal now moves each world mesh's probe past its own surface).
+Every level water facing the same way then draws with it, as in Source; water facing the other way, sloped
+water, entity water and ripple shaders capture as before, and such a capture clears only the kinds it
+overwrote; a water batch with nothing in the frustum is skipped before any capture. `$forcecheap` water with an
+$envmap is now Source's cheap water (DrawCheapWater, water.cpp:493-518: opaque fog colour to the cubemap by
+(1-n.e)^5, or by $reflectblendfactor under $nofresnel; no refraction; its normal map's frames still
+play, and like Source's cheap water no $bumptransform scroll; vmt/waterbudget[anim]#CHEAPOPAQUE), and $forcecheap clears $forceexpensive as in Source -- 13 of the
+library's 16 map-pak $forcecheap materials; the 3 without an $envmap keep the refraction path. The PVS unions merge each cluster once. The state lives from Begin to the end of its
+GLBE_DrawWorld; views past r_portalrecursion or inside a water capture skip it. 2: one capture per plane over all of its batches. 0: per-batch captures as before (the $forcecheap material and the refraction probe apply in every mode).
+`r_capturelog N` prints each view's choice (and any plane rejected as hidden) and each capture and share.
+
+**Verified (bin_new12 = 145e7da70, P879 merged onto engine main e6d7ca9f4, exe 9fa7da1b; Lex's cfg exec'd before
+the load, 1920x1111, paused cameras, 21 Oct 00:22-00:44Z; same-base control = the installed e6d7ca9f4 exe a2ce8e61
+with its plugins):** nested views r_waterviews 0 -> 1, nested draws, p50 of the 2 s/4 s windows in ms (same build,
+same process; control in brackets): garden save 1 8 -> 2, 2830 -> 660, 5.89/5.93 -> 2.60/2.47 (5.21/5.20); save 2
+8 -> 2, 3480 -> 1020, 5.81/5.89 -> 2.61/2.64 (5.57/5.63); save 3 6 -> 2, 3879 -> 1381, 4.91/4.86 -> 2.69/2.60
+(4.64/4.73); saves 4-5 one plane already, unchanged; gs 6 -> 2, 4.65/4.59 -> 2.48/2.50; gu 8 -> 2, 5.88/5.81 ->
+2.62/2.76; h3144s 16 -> 2, 10654 -> 1672, 9.36/9.18 -> 2.29/2.52 (8.69/8.71); h2752 4 -> 2, 3.63/3.48 -> 2.92/3.00;
+gsn (an eye beside a wall) 20 -> 14, 15.94/16.18 -> 10.67/10.95; boreas save 2 4 -> 2, 4.23/4.23 -> 3.06/3.08; save 8
+4 -> 2, 4.13/4.11 -> 2.77/2.77; surf_fortum's $forcecheap water (fc) 7 -> 0 views, control 9.74/9.73 -> 1.25/1.26
+(vmt/waterbudgetanim#CHEAPOPAQUE#CHEAPANIM=30, normal-map array and reflectcube, no $refraction; the control's
+vmt/wateranim samples $refraction/$refractiondepth). Chosen planes 3384, 3400, 2928, 3144, 3400, 3144, 2752, 197,
+and the 5521 pool at gp. Mode 0 draws what the control draws at 11 of 14 cameras; g3 draws one less per view
+(899 vs 900, pictures identical, cause not found). w0 vs w1 pictures within the w0 vs w0b noise at every camera;
+fc's water is opaque with a hard far edge where the control's fades. Cross-process frame times at equal draws
+differ by up to 1 ms (boreas control 5.21 vs mode 0 4.23), so the in-process mode 0 / mode 1 pairs are the
+measure. Load: the occluder tree builds at load where world lights need it (bhop_matches 420,554 leaves,
+1,082 ms, as the control) and during the load for capture water without them (bhop_kiitovittu 111,453, 211 ms);
+surf_4plar builds none. Review rounds 1-6 (six, nine, six, eight, four findings, then none) fixed, but rounds 3-5's weights were garbage: the frustum clipper passed out[o++] to the VectorCopy macro, which names its target three times (fixed in 701b69f63; a crashing final run found it, no review did; the rewrite was then checked numerically against analytic solid angles to ~1e-16); the review of the
+load-time tree (five small items: log wording, the load gate, a comment) fixed in 9cb469efb, re-checked clean. Earlier round-2 build e80d24a88 measured the same
+shape (garden save 1 8 -> 2, 7.41/7.14 -> 2.92/3.18). Known: R_SetFrustum's "near" plane is GL's far plane with
+the infinite projection, so water closer than mindist is weighed though clipped. Not shown in a game: the
+under-water choice (garden's water is a fail zone that teleports the eye out; boreas's pond has no underside),
+and $forcecheap water animating (the shots are paused). The first frames at a water camera, logging alike
+(r_capturelog 0, log_developer 1; one run each): bhop_matches frames over 20 ms 24+67+32 ms against the control's
+121+42, bhop_kiitovittu 26+72+30 against 42+66+28 -- no added hitch. The engine's load line: bhop_matches "360
+level capture water faces; asked for at map load: the map plugin answered, 0.5 ms" (built for the world lights),
+bhop_kiitovittu "20 ... answered, 199.9 ms" (built by that ask), surf_4plar none.
+
 ## Patch 890 — per-map entity fixes (engine + cfg/maps/entfix_*.cfg)
 
 **Problem:** with Patch 881 surf_network2008_final's fail teleports fire -- into its CS:S round
