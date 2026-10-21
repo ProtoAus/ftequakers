@@ -28,16 +28,20 @@ together, farthest first -- the baseline. A brush entity at the identity transfo
 transform positions (vmt/lightmapped, vmt/unlit: `gl_Position = ftetransform()`, lightmapped.glsl:148,
 unlit.glsl:59) marks its faces planar: GLBE_BlendPlaneGeometry admits them, their back faces get the
 world's raster-empty cull, and the plane proof orders them by which side of each plane the eye is on.
-If the combined proof fails (budget, cycle, barrier) it reruns on the world faces alone, which is the
-old result, so world refinement cannot get worse. Moved or rotated entities and other programs keep
-the box centre. ALPHATRACE prints each face's own depth, entity number and planar flag, and the first
-attempt's status (`first=`). r_blendsort's help says so.
+The world-only proof always runs first -- the old call, entity faces as barriers. The proof with entity
+faces runs on a copy and replaces it only if it ordered at a pass no higher than the world-only run with
+the overlap budget intact, or if the world-only run had no order to protect (review 2: the overlap budget
+is shared and spent farthest first, and a cycle or barrier escalates to pass 2, which drops pass 0's
+verdicts -- either can leave world panes worse while the status still says ordered). Moved or rotated
+entities and other programs keep the box centre. ALPHATRACE prints each face's own depth, entity number
+and planar flag (1 in the kept proof, 2 set aside), the world run's `overlapfull`, and an `entities`
+line with the combined run's status, pass, work and `kept`. r_blendsort's help says so.
 
 **Verified:** Lex's config (r_blendsort 2, r_renderscale 2), installed plugins. Order of the three slabs
 from save 14's eye (10.16 -415.95 64.03) by r_blendtrace; correct is *16, *5, *4 at every yaw, the eye
 being in front of all three planes:
 
-| yaw | installed f7523bbe (per face) | box centre only (b18b4178e) | this patch a4d6041a (c0027bce3) |
+| yaw | installed f7523bbe (per face) | box centre only (b18b4178e) | this patch 0fe4a0c6 (79503b6fc) |
 |---|---|---|---|
 | 0 | | *5, *4, *16 -- wrong (*4/*16 tie 165.8) | *16, *5, *4; 8 admitted, status 1 |
 | 10 | | *5, *16, *4 -- wrong | *16, *5, *4; 8, status 1 |
@@ -48,11 +52,18 @@ being in front of all three planes:
 | 151 | | *16, *4, *5 -- wrong | *16, *5, *4; 6, status 1 |
 | 170 | | *4 only in view | *4 only |
 
-Every row of this patch passed on the first attempt (`first=1`). A whole-pane swap is a uniform tint,
+Every row of this patch with two panes in view kept the entity proof (pass 0, work 484-1,176, overlap
+budget intact; the world-only run admitted nothing there); review 1's exe a4d6041a gave the same orders.
+A whole-pane swap is a uniform tint,
 so the box-centre build's "break-up gone" by eye could not see it; this patch's yaw-20 and -27 frames are
 a deeper blue there. surf_pantheon start (P895's view, hl2_refract 1): 19.00 screen copies (175.10 Mpx),
-admitted 0 -- unchanged. tools/test_gl_blend_planes.py passes with a new case, a world pane between two
-entity panes their baseline reverses; it fails with entity admission forced off and forced on.
+admitted 0 -- unchanged. Dense scenes at spawn: surf_voyager's world proof admits 128 and stops on the
+face budget (status -1) in this build and the installed one alike; surf_joutsenlaulu's admits 101 and ends
+in a cycle at pass 2 (status -2, work 61,339). Neither has a planar entity pane in view, so the entity
+proof did not run there. tools/test_gl_blend_planes.py passes with new cases -- a world pane between two
+entity panes their baseline reverses, the program/shader/identity checks, and the keep rule; it fails with
+entity admission forced off or on, the keep rule always true, a prefix-only program match, and an
+always-identity matrix.
 tools/test_gl_blend_faces.py does not compile on the base (about 30 names it does not declare -- the GPU
 budget, the NEAREST sort), not repaired. Not found in a map: a world pane between entity panes (the
 unit case stands for it).
