@@ -68,7 +68,7 @@ cvar_t con_completionenter	= CVARD("con_completionenter", "0", "What ENTER does 
 //nettest: PgUp/PgDn page a whole console window. The mouse wheel is deliberately NOT affected.
 cvar_t con_pagelines		= CVARD("con_pagelines", "0", "How many lines PgUp/PgDn scroll the console by. 0 = one full console window minus con_pageoverlap. Set to 2 for the old fixed step. Does not affect the mouse wheel.");
 cvar_t con_pageoverlap		= CVARD("con_pageoverlap", "2", "Rows of context kept on screen when PgUp/PgDn scroll a full window. One of them is eaten by the ^^^^ backscroll marker row.");
-double key_altenter_time;	//FTESurf Patch 898: when ALT+ENTER last toggled; GLVID_SetMode re-presses a held ALT
+double key_altenter_time;	//FTESurf Patch 898: when ALT+ENTER last toggled; ClearAllStates re-presses a held ALT
 cvar_t in_altenter			= CVARFD("in_altenter", "1", CVAR_ARCHIVE, "FTESurf Patch 898: ALT+ENTER runs fullscreen_toggle (windowed <-> borderless) anywhere -- game, menus, console -- unless ALT+ENTER is bound to something other than ENTER's own bind. 0 leaves ALT+ENTER to the binds.");
 
 static int KeyModifier (unsigned int shift, unsigned int alt, unsigned int ctrl, unsigned int devbit)
@@ -4054,6 +4054,9 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 			return;
 		}
 	}
+
+	if ((key == K_LALT || key == K_RALT) && !down)
+		key_altenter_time = 0;	//FTESurf Patch 898: released, so ClearAllStates stops re-pressing it
 
 	//FTESurf Patch 898: ALT+ENTER toggles fullscreen before CSQC, the menus or the console see it.
 	//`bind enter say` fills every modifier slot, so only an ALT+ENTER bind that differs from ENTER's

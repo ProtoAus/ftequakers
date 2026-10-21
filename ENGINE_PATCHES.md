@@ -27,6 +27,18 @@ log); this exe printed nothing at developer 0 and, at developer 1 + log_develope
 `.../surf_dune.json: 302 Found (https://<account>.r2.cloudflarestorage.com/ftesurf-public/objects/zones/<sha256>.json?...)`,
 with no X-Amz anywhere in its log.
 
+**Review round 1:** the toggle rebuilds the window, and ClearAllStates runs three times on the way (the
+mode set's, the focus messages') and dropped the ALT still held, so a second ENTER ran ENTER's bind
+(`say`). The first fix re-pressed ALT after the mode set's clear only and measured no different from the
+control: the focus clears come after it. Now ClearAllStates itself re-presses ALT (queued behind its
+clear-all event) when this thread's key state still has it down, from an ALT+ENTER toggle until that ALT
+is released, for at most 30 s; a Con_DPrintf says so. Measured with ALT held in the client thread's key
+state (AttachThreadInput + SetKeyboardState from the arm, so no input reaches another window) and
+`bind enter "echo ..."`: the control and the first fix echoed on the second ENTER; this build printed
+"keys cleared, ALT held" three times per rebuild, toggled to borderless and back on the second ENTER, and
+never echoed. Left: a player who ALT+TABs away within 30 s of a toggle with ALT held and comes back by
+clicking can find ALT still down in the engine (this thread never saw the release) until ALT is pressed.
+
 ## Patch 894 — hud_gfx settings switch without a map reload (client exe + hl2 plugin + csprogs)
 
 **Problem:** Lex: settings on the hud_gfx page needed a map restart. 21 rows carried the `*`. The engine
