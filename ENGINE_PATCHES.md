@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 895 — world and brush Refract panes share one screen copy per view (client exe)
+
+**Problem (Lex, 21 Oct):** surf_pantheon runs ~120 fps at his r_renderscale 2, and he keeps 2 for its
+anti-aliasing. r_budget put 87% of the GPU frame (7 ms) in "Transparent & effects"; r_drawentities 0 took
+it to 0.3 ms and a map loaded at hl2_refract 0 to 0.8 ms. r_viewstats: 61 screen copies a frame, 562 Mpx
+(9.2 Mpx each at 2x) -- the map's blurred Refract waterfalls (watersource/waterfall*_nrm_teal), brush
+entities, each copying the whole screen before it draws (P866's per-batch T_Gen_CurrentRender).
+
+**Cause:** Source copies the screen only for model renderables (c_baseanimating.cpp:799, viewrender.cpp
+4160/4374); brushes and world surfaces never copy (c_baseentity.cpp:1801-1804) and sample the last copy.
+
+**Change:** T_Gen_CurrentRender: a world or brush pane binds the copy the first such pane of the top-level
+view took (be_flatcopied, reset in GLBE_DrawWorld); a model pane still copies fresh each (P878's order),
+nested views still bind the last top-level copy, 2D draws are untouched, the r_viewstats counter counts
+real copies only. r_nearestsort 0 keeps a copy per batch: the old order and cost, and the runtime control.
+Accepted, as in Source: a world pane no longer shows another world pane drawn earlier in the same view.
+
+**Verified:** exe 5100d6f0 (git-7657-patch-879-2-ge4c003552, on P879), Lex's r_renderscale 2, each view
+P895 / control (r_nearestsort 0) / P895 again, copies per frame and Transparent ms: surf_pantheon start
+19 / 61 / 19 copies (175 / 562 Mpx), 2.50 / 6.80 / 2.53 ms, 277 / 127 / 275 fps; surf_spectra save 20
+1 / 4 / 1, 0.22 / 0.65 / 0.22 ms; bhop_recharge's double pane 1 / 2 / 1, 0.15 / 0.32 / 0.15 ms; surf_boreas
+save 9 (model icicles) 7 / 7 / 7 and surf_garden save 5 1 / 1 / 1, unchanged as they should be. Matched
+screenshots: pantheon on/ctl differ in 184,659 px (scrolling waterfall foam, the overlay), garden -- whose
+copies are the same in both -- 78,645 px, the run-to-run floor; no seam or missing pane by eye.
+
+**Limits:** the 19 copies left at pantheon are model panes (Source copies those too). A brush pane now
+samples the screen as it was before the first brush pane, so a waterfall behind another waterfall is not
+seen through it (Source the same).
+
 ## Patch 879 — one water reflection and refraction per view, as Source (client exe)
 
 **Problem (Lex, 21 Oct):** "our method doesn't feel efficient, it drains way too much" -- surf_garden save 3
