@@ -931,6 +931,9 @@ typedef struct
 	char mod2x; /* modulate only */
 	char water_cheap; /* water only */
 	char water_expensive; /* water only */
+	char water_nofresnel; /* water only, FTESurf Patch 879: the cheap path's fresnel off */
+	char water_reflectblend_set; /* water only */
+	float water_reflectblend; /* water only: $reflectblendfactor, the cheap mix without fresnel */
 	char water_reflectents; /* FTESurf Patch 868: $reflectentities -- its reflection draws entities */
 	/*
 	FTESurf Patch 181: did the FILE turn up, regardless of whether it parsed.
@@ -2158,9 +2161,13 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$mod2x"))
 			st->mod2x = !!atoi(value);	//FTESurf Patch 767: Source reads the value; "$mod2x" "0" is off
 		else if (!Q_strcasecmp(key, "$forcecheap"))
-			st->water_cheap = 1;
+			st->water_cheap = !!atoi(value);	//FTESurf Patch 879: Source reads the value
 		else if (!Q_strcasecmp(key, "$forceexpensive"))
-			st->water_expensive = 1;
+			st->water_expensive = !!atoi(value);
+		else if (!Q_strcasecmp(key, "$nofresnel"))
+			st->water_nofresnel = !!atoi(value);
+		else if (!Q_strcasecmp(key, "$reflectblendfactor"))
+			st->water_reflectblend = atof(value), st->water_reflectblend_set = 1;
 		else if (!Q_strcasecmp(key, "$normalmap"))
 		{
 			Q_strlcpy(st->normalmap, value, sizeof(st->normalmap));
@@ -3738,7 +3745,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 		if (st->water_cheap)
 			Q_strlcpy(progargs, "#LQWATER", sizeof(progargs));
-		if (st->water_expensive)
+		if (st->water_expensive && !st->water_cheap)	//FTESurf Patch 879: $forcecheap clears it (water.cpp:96-99)
 			Q_strlcpy(progargs, "#HQWATER", sizeof(progargs));
 
 		/*
@@ -3919,6 +3926,30 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\tprogram \"vmt/watersheet#FOGTINT=%s#ALPHA=0.7\"\n"
 				"\t{\n\t\tblendfunc blend\n\t}\n", fog);
+		}
+		else if (st->water_cheap && st->envauthored)	//authored, even if hl2_envmap 0 cleared it: then fog colour only
+		{
+			//FTESurf Patch 879: $forcecheap is Source's cheap water: DrawCheapWater with bBlend = !bForceCheap
+			//(water.cpp:493-518) binds no refraction and does not blend -- watercheap_ps20b's BLEND 0 is
+			//opaque fog colour to the cubemap by (1-n.e)^5, or by $reflectblendfactor under $nofresnel.
+			//Nothing to capture, nothing to share. Undersides take it too (water.cpp has no case for them);
+			//without an $envmap Source draws neither pass (a bare Draw(), :520-525), so such water keeps the
+			//refraction path below.
+			char t[64];
+			qboolean anim = strstr(progargs, "#ANIMBUMP") != NULL;
+			if (!Q_strcasecmp(st->envmap, "env_cubemap") && (!hl2_envcubemap || hl2_envcubemap->ival))
+				st->wantenvcube = 1;
+			*t = 0;
+			if (st->water_nofresnel)
+				Q_snprintfz(t, sizeof(t), "#NOFRESNEL#REFLECTBLEND=%f", st->water_reflectblend_set ? st->water_reflectblend : 1.0f);
+			if (anim)	//P867's frames, from vmt/waterbudgetanim (GLSL 130): sampler 0 of this pass
+				Q_snprintfz(t+strlen(t), sizeof(t)-strlen(t), "#CHEAPANIM=%f", st->animrate);
+			Q_strlcatfz(script, &offset, sizeof(script),
+				"\t{\n\t\tprogram \"vmt/waterbudget%s%s#CHEAPOPAQUE%s\"\n", anim ? "anim" : "", progargs, t);
+			if (anim)
+				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
+					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");	//its shader-level maps: the tail below
 		}
 		else
 		{
