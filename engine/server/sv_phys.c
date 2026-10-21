@@ -2988,6 +2988,7 @@ reason: it is the only one of the three that means what it says.
 */
 extern cvar_t sv_cheats;
 extern cvar_t sv_gamespeed;	/*FTESurf Patch 294; declared sv_main.c:171, same idiom as sv_init.c:48*/
+extern cvar_t sv_tickparts;	/*FTESurf Patch 893; sv_user.c*/
 
 static cvar_t *pms_lockedmovevars[] =
 {
@@ -3016,6 +3017,7 @@ static cvar_t *pms_lockedmovevars[] =
 	&pm_fixedges,		&pm_fixrampbugs,	&pm_rampretrace,
 	&pm_ladders,		&pm_ladderdampen,	&pm_ladderangle,	//Patch 260
 	&pm_slide,												//Patch 280
+	&sv_tickparts,											//Patch 893: a run's rows say tickparts at open
 
 	/*FTE's anti-bunnyhop family. Having these off is a rule, not a taste.*/
 	&pm_bunnyspeedcap,	&pm_bunnyfriction,	&pm_ktjump,

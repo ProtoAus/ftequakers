@@ -8460,9 +8460,10 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	//tick, the last takes the rest -- never a part of no tick or of two.  Only for progs that declare
 	//input_cmd_later: it is set on a later part, and the recorder marks that row (fl 8) so the angle
 	//check does not join it; older progs keep one part a command.  The parts keep the command's
-	//context, and only the first keeps the impulse, as the halving below does.  The mover's 8-tick cap
-	//drops the excess of one call; split, a command over 8 ticks runs whole.
-	if (sv_tickparts.ival && svprogfuncs)
+	//context, and only the first keeps the impulse, as the halving below does.  A later part is one
+	//tick already: it is not split again (a held part runs no tick, so its carry stays and it would
+	//count two) nor halved.  sv_tickparts is a locked movevar (sv_phys.c), so it holds for a run.
+	if (sv_tickparts.ival > 0 && svprogfuncs && !later)
 	{
 		extern cvar_t pm_physicsmode;
 		float tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
@@ -8494,7 +8495,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	}
 
 	// chop up very long commands
-	if (cmd.msec > 50)
+	if (cmd.msec > 50 && !later)
 	{
 		oldmsec = ucmd->msec;
 		// Preserve the existing integer split policy; P672 client splits differ.
