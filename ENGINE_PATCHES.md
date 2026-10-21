@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 900 — r_blendsort 2 sorts a translucent brush entity whole, at its box centre, as Source (client exe)
+## Patch 900 — r_blendsort 2 orders brush-entity panes by eye side, else whole at the box centre (client exe)
 
 **Problem (Lex, 21 Oct, bhop_eazy saves 14/15):** the room's three parallel window slabs broke up at an
 angle -- the front pane fine, rectangles of the two behind it in the wrong tint; turning ten degrees left
@@ -12,29 +12,50 @@ rendermode 2, renderamt 100, a plain LightmappedGeneric glass, drawn solid until
 face at the lightmap limit, so each 1,120-unit slab face arrives in three pieces (x = -384/112/608/736;
 *5 at -224/-96/400/896). r_blendtrace at save 14: *4's right piece (depth 645-663) drew before the
 middle and left pieces of *5 (139-406) that it covers, so the rear pane was blended over the front.
+None of these faces reached the plane refinement: it admitted world faces only, and no face drawn with
+a program.
 
 **Source:** draws every pane, back to front, but orders whole renderables: the leaf list walked backwards
 (viewrender.cpp:4323-4331), a leaf's translucent entities sorted by the centre of their render bounds
 along the view direction (clientleafsystem.cpp:1744-1795, per leaf at :1819); a brush entity is one
-`render->DrawBrushModelEx` call (c_baseentity.cpp:1953). The face order inside it is engine code, not
-in the SDK.
+`render->DrawBrushModelEx` call (c_baseentity.cpp:1953). That key is a depth along the view only, so
+Source swaps parallel panes at shallow angles too: from save 14's eye *16 (rear) is nearer than *5 by
+box centre below yaw 29, and *4/*5 swap for yaw 151-180 (review 1, from the trace's own centres).
 
 **Change:** GLBE_SubmitBlendedFaces gives every blend command of a brush entity (not the world, not a
-weapon/depthhack entity) its model's box-centre depth through the entity matrix; the comparator keeps
-one entity's faces together, farthest first, so the order inside an entity is what it was. World faces,
-the plane refinement and models are unchanged. r_blendsort's help says so.
+weapon/depthhack entity) its model's box-centre depth, and the comparator keeps one entity's faces
+together, farthest first -- the baseline. A brush entity at the identity transform whose programs only
+transform positions (vmt/lightmapped, vmt/unlit: `gl_Position = ftetransform()`, lightmapped.glsl:148,
+unlit.glsl:59) marks its faces planar: GLBE_BlendPlaneGeometry admits them, their back faces get the
+world's raster-empty cull, and the plane proof orders them by which side of each plane the eye is on.
+If the combined proof fails (budget, cycle, barrier) it reruns on the world faces alone, which is the
+old result, so world refinement cannot get worse. Moved or rotated entities and other programs keep
+the box centre. ALPHATRACE prints each face's own depth, entity number and planar flag, and the first
+attempt's status (`first=`). r_blendsort's help says so.
 
-**Verified:** exe 66a9e435 (git-7672-patch-895-1-g5f638e81a) with the installed plugins; control the
-installed f7523bbe; Lex's config (r_blendsort 2, r_renderscale 2). bhop_eazy from save 14's eye:
-r_blendtrace orders the 18 faces in three runs, *16 580.87, *5 550.13, *4 255.41 (box centres by hand
-580/549/254.5). The break-up is gone at save 14, yaw 10/20/27 and a grazing view (-330 -440 64, yaw
-12): 8.2/15.2/19.0/12.1% of the window band changed, and at yaw 20 nothing outside the window rows.
-Save 15, yaw 60/75 and a view from the far side are unchanged (<= 0.16% of the frame). The save-14
-pair is judged by eye: the first setpos after spawn did not land on the same camera. surf_pantheon
-start (P895's view, hl2_refract 1): 19.00 screen copies (175.10 Mpx) on both; frames differ 63,963 px,
-under P895's 78,645 floor. tools/test_gl_blend_planes.py passes; tools/test_gl_blend_faces.py does not
-compile on the base (about 30 names it does not declare -- the GPU budget, the NEAREST sort), not repaired.
-Not covered: one brush entity holding several overlapping panes keeps its per-face order inside.
+**Verified:** Lex's config (r_blendsort 2, r_renderscale 2), installed plugins. Order of the three slabs
+from save 14's eye (10.16 -415.95 64.03) by r_blendtrace; correct is *16, *5, *4 at every yaw, the eye
+being in front of all three planes:
+
+| yaw | installed f7523bbe (per face) | box centre only (b18b4178e) | this patch a4d6041a (c0027bce3) |
+|---|---|---|---|
+| 0 | | *5, *4, *16 -- wrong (*4/*16 tie 165.8) | *16, *5, *4; 8 admitted, status 1 |
+| 10 | | *5, *16, *4 -- wrong | *16, *5, *4; 8, status 1 |
+| 20 | | *5 475.7, *16 423.8, *4 226.9 -- wrong | *16, *5, *4; 9, status 1 |
+| 27 | | *5, *16, *4 -- wrong | *16, *5, *4; 9, status 1 |
+| 34.41 (save 14) | pieces interleaved -- wrong | *16, *5, *4 | *16, *5, *4; 9, status 1 |
+| 60 | | *16, *5, *4 | *16, *5, *4; 9, status 1 |
+| 151 | | *16, *4, *5 -- wrong | *16, *5, *4; 6, status 1 |
+| 170 | | *4 only in view | *4 only |
+
+Every row of this patch passed on the first attempt (`first=1`). A whole-pane swap is a uniform tint,
+so the box-centre build's "break-up gone" by eye could not see it; this patch's yaw-20 and -27 frames are
+a deeper blue there. surf_pantheon start (P895's view, hl2_refract 1): 19.00 screen copies (175.10 Mpx),
+admitted 0 -- unchanged. tools/test_gl_blend_planes.py passes with a new case, a world pane between two
+entity panes their baseline reverses; it fails with entity admission forced off and forced on.
+tools/test_gl_blend_faces.py does not compile on the base (about 30 names it does not declare -- the GPU
+budget, the NEAREST sort), not repaired. Not found in a map: a world pane between entity panes (the
+unit case stands for it).
 
 **Also (Lex: "does Glass Dithered do anything?"):** hl2_refract 2 dithers only a Refract pane with its own
 texture; P859 draws the rest as 0. In the 1,926-map library's paks, 168 of 1,047 Refract VMTs (95 maps)
