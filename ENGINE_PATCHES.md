@@ -46,11 +46,17 @@ entities, each copying the whole screen before it draws (P866's per-batch T_Gen_
 **Cause:** Source copies the screen only for model renderables (c_baseanimating.cpp:799, viewrender.cpp
 4160/4374); brushes and world surfaces never copy (c_baseentity.cpp:1801-1804) and sample the last copy.
 
-**Change:** T_Gen_CurrentRender: a world or brush pane binds the copy the first such pane of the top-level
-view took (be_flatcopied, reset in GLBE_DrawWorld); a model pane still copies fresh each (P878's order),
-nested views still bind the last top-level copy, 2D draws are untouched, the r_viewstats counter counts
-real copies only. r_nearestsort 0 keeps a copy per batch: the old order and cost, and the runtime control.
-Accepted, as in Source: a world pane no longer shows another world pane drawn earlier in the same view.
+**Change:** T_Gen_CurrentRender, reached through $currentrender (not the refraction fallback): a world or
+brush batch drawn with the plugin's Refract program (vmt/refract) -- opaque in the NEAREST sort, or blended
+in the BLEND sort, as waterfallsoft is (its normal map has 8-bit alpha, P878's rule) -- copies only if this
+top-level view has not copied for one yet (be_flatcopied, reset in GLBE_DrawWorld); after that it binds the
+most recent copy -- the first flat pane's, or a model pane's if one copied since (GLBE_PickLate's flat
+panes draw after the model panes). A model pane still copies fresh each (P878's
+order), nested views still bind the last top-level copy, and every other $currentrender user -- the water
+fallback at r_refract_fbo 0, scripted shaders, particles, 2D -- keeps a copy per batch, as does
+r_nearestsort 0 (the old order and cost). The r_nearestsort help says so. Accepted: a world pane no longer
+shows another world pane drawn earlier in the same view; Source interleaves translucent world faces and
+entities leaf by leaf (viewrender.cpp:4316-4374), so it is the same there when no model copies in between.
 
 **Verified:** exe 5100d6f0 (git-7657-patch-879-2-ge4c003552, on P879), Lex's r_renderscale 2, each view
 P895 / control (r_nearestsort 0) / P895 again, copies per frame and Transparent ms: surf_pantheon start
@@ -58,7 +64,11 @@ P895 / control (r_nearestsort 0) / P895 again, copies per frame and Transparent 
 1 / 4 / 1, 0.22 / 0.65 / 0.22 ms; bhop_recharge's double pane 1 / 2 / 1, 0.15 / 0.32 / 0.15 ms; surf_boreas
 save 9 (model icicles) 7 / 7 / 7 and surf_garden save 5 1 / 1 / 1, unchanged as they should be. Matched
 screenshots: pantheon on/ctl differ in 184,659 px (scrolling waterfall foam, the overlay), garden -- whose
-copies are the same in both -- 78,645 px, the run-to-run floor; no seam or missing pane by eye.
+copies are the same in both -- 78,645 px, the run-to-run floor; no seam or missing pane by eye. The
+r_nearestsort 0 control also reverts P878's order, so the screenshot diff measures P878 and P895 together;
+the copy counts (61 -> 19) are the clean measure of this patch. Numbers from the first cut, whose gate was
+the batch's entity alone; review 1 narrowed it to the plugin's Refract program on that path (so the water
+fallback, scripted $currentrender shaders and particles keep their own copies).
 
 **Limits:** the 19 copies left at pantheon are model panes (Source copies those too). A brush pane now
 samples the screen as it was before the first brush pane, so a waterfall behind another waterfall is not

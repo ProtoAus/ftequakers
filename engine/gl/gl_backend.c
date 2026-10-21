@@ -1394,34 +1394,46 @@ extern unsigned int r_vs_copies;
 extern double r_vs_copypixels;
 extern cvar_t r_nearestsort;
 
-static void T_Gen_CurrentRender(int tmu)
+//FTESurf Patch 895: the plugin's Refract (vmt/refract) on a world or brush batch, opaque (NEAREST) or
+//blended (waterfallsoft's 8-bit alpha normal map) alike.  Not a particle (dummybatch), not a model.
+static qboolean GLBE_FlatRefractPane(void)
+{
+	const batch_t *b = shaderstate.curbatch;
+	const shader_t *sh = shaderstate.curshader;
+	const entity_t *ent;
+	if (!b || b == &shaderstate.dummybatch || !b->ent || !sh || !sh->prog || !sh->prog->name)
+		return false;
+	ent = b->ent;
+	if (ent != &r_worldentity && ent->model && ent->model->type != mod_brush)
+		return false;
+	return !strncmp(sh->prog->name, "vmt/refract", 11);
+}
+
+static void T_Gen_CurrentRender(int tmu, qboolean pane)
 {
 	int vwidth, vheight;
 	int pwidth = vid.fbpwidth;
 	int pheight = vid.fbpheight;
 	GLenum fmt;
-	const entity_t *ent;
-	qboolean flat = false;
 	//FTESurf Patch 866: bind the last copy rather than leave the unit holding whatever it had.
 	if (r_refdef.recurse)
 	{
 		GL_MTBind(tmu, GL_TEXTURE_2D, TEXVALID(shaderstate.temptexture) ? shaderstate.temptexture : r_blackimage);
 		return;
 	}
-	//FTESurf Patch 895: a world or brush pane reuses the view's copy -- Source's brushes never copy
-	//(c_baseentity.cpp:1801-1804), its model renderables do (c_baseanimating.cpp:799).  surf_pantheon's
-	//waterfalls took 61 full copies a frame.  r_nearestsort 0 keeps a copy per batch.
-	if (!shaderstate.force2d && r_nearestsort.ival && shaderstate.curbatch)
+	//FTESurf Patch 895: a world or brush Refract pane binds the view's most recent copy once one exists --
+	//Source's brushes never copy (c_baseentity.cpp:1801-1804), its model renderables do
+	//(c_baseanimating.cpp:799).  surf_pantheon's waterfalls took 61 a frame.  The water fallback at
+	//r_refract_fbo 0 (pane FALSE), scripted shaders, particles and r_nearestsort 0 copy per batch.
+	if (pane && r_nearestsort.ival && !shaderstate.force2d && GLBE_FlatRefractPane())
 	{
-		ent = shaderstate.curbatch->ent;
-		flat = !ent || ent == &r_worldentity || !ent->model || ent->model->type == mod_brush;
-		if (flat && be_flatcopied && TEXVALID(shaderstate.temptexture))
+		if (be_flatcopied && TEXVALID(shaderstate.temptexture))
 		{
 			GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
 			return;
 		}
+		be_flatcopied = true;
 	}
-	be_flatcopied |= flat;
 
 	if (sh_config.texture_non_power_of_two_pic)
 	{
@@ -1615,7 +1627,7 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 #endif
 
 	case T_GEN_CURRENTRENDER:
-		T_Gen_CurrentRender(tmu);
+		T_Gen_CurrentRender(tmu, true);
 		return;
 
 	case T_GEN_SOURCECOLOUR:
@@ -1648,7 +1660,7 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 		// Depth consumers must sample the capture they generated, even at r_refract_fbo 0.
 		if (!r_refract_fboival && !(shaderstate.curshader && (shaderstate.curshader->flags & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
 		{
-			T_Gen_CurrentRender(tmu);
+			T_Gen_CurrentRender(tmu, false);
 			return;
 		}
 		t = shaderstate.tex_refraction[r_refdef.recurse];
