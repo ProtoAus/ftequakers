@@ -243,16 +243,15 @@ void R_AnimateLight (void)
 		MLHASH_F(mod_lightpoint_distance.value);
 		{	//Patch 894: the hl2 plugin's sampler (VBSP_LightPointValues) reads these; found by name
 			//since the plugin owns them, so a hud_gfx change relights models without a reload.
+			//Looked up every frame: a gamedir change frees plugin-created cvars (Cvar_GamedirChange).
 			static const char *plugcvars[] = {"hl2_lt_scale", "hl2_lt_srgb_mag", "hl2_lt_min", "hl2_lt_face",
 				"hl2_lt_dirsign", "hl2_lt_fold", "hl2_lt_worldlight"};
-			static cvar_t *plug[countof(plugcvars)];
 			size_t k;
 			for (k = 0; k < countof(plugcvars); k++)
 			{
-				if (!plug[k])
-					plug[k] = Cvar_FindVar(plugcvars[k]);
-				if (plug[k])
-					MLHASH_F(plug[k]->value);
+				cvar_t *pv = Cvar_FindVar(plugcvars[k]);
+				if (pv)
+					MLHASH_F(pv->value);
 			}
 		}
 #ifdef RTLIGHTS
