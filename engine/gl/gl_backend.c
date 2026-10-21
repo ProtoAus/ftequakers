@@ -7766,7 +7766,7 @@ typedef struct
 	const entity_t *group;
 	size_t sequence;
 	qboolean foreground;
-	qboolean planar;	// FTESurf Patch 900: a brush-entity face the plane refinement may prove
+	int planar;	// FTESurf Patch 900: 1 a brush-entity face the plane proof admits; 2 planar, world-only proof kept
 } glblendface_t;
 
 static qboolean gl_blendtrace_pending;
@@ -7940,44 +7940,15 @@ static qboolean GLBE_BlendBrushEntity(const batch_t *batch)
 // vmt/lightmapped and vmt/unlit write gl_Position = ftetransform() and nothing else (lightmapped.glsl:148,
 // unlit.glsl:59). Anything else keeps the box centre.
 static qboolean GLBE_BlendFaceEligible(const batch_t *batch);
-static qboolean GLBE_BlendProgramPlanar(const program_t *prog)
-{
-	static const char *names[] = {"vmt/lightmapped", "vmt/unlit"};
-	size_t i, l;
-	if (!prog) return true;
-	if (!prog->name || prog->tess || prog->geom) return false;
-	for (i = 0; i < countof(names); i++)
-	{
-		l = strlen(names[i]);
-		if (!strncmp(prog->name, names[i], l) && (!prog->name[l] || prog->name[l] == '#'))
-			return true;
-	}
-	return false;
-}
-
-static qboolean GLBE_BlendShaderPlanar(const shader_t *shader)
-{
-	int p;
-	if (!shader || shader->numdeforms || !GLBE_BlendProgramPlanar(shader->prog) ||
-		shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
-		return false;
-	for (p = 0; p < shader->numpasses; p++)
-		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || !GLBE_BlendProgramPlanar(shader->passes[p].prog))
-			return false;
-	return true;
-}
-
+static qboolean GLBE_BlendShaderPlanar(const shader_t *shader);
+static qboolean GLBE_BlendMatrixIdentity(const float *m);
 static qboolean GLBE_BlendEntityPlanar(const batch_t *batch, const float *matrix)
 {
-	int i;
 	if (!GLBE_BlendBrushEntity(batch) || !GLBE_BlendFaceEligible(batch) || batch->fog ||
 		(batch->flags & ~(BEF_FORCETRANSPARENT | BEF_NOSHADOWS | BEF_NODLIGHT | BEF_FORCECOLOURMOD)) ||
 		!GLBE_BlendShaderPlanar(batch->shader) || !GLBE_BlendShaderPlanar(batch->shader->remapto))
 		return false;
-	for (i = 0; i < 16; i++)
-		if (matrix[i] != ((i % 5) ? 0 : 1))
-			return false;
-	return true;
+	return GLBE_BlendMatrixIdentity(matrix);
 }
 
 // Keep stock CSQC wire annotations in the legacy post-world layer. Their
@@ -8061,6 +8032,7 @@ typedef struct
 	unsigned int admitted, edges, work, moved;
 	int status; // 0 unchanged, 1 ordered, -1 budget, -2 cycle.
 	int pass; // mode2 graph: 0 overlap, 1 overlap-confirmed, 2 P742.
+	qboolean overlapfull; // GLBLEND_OVERLAP_WORK ran out: later pairs kept their hint
 } glblendplanestats_t;
 
 static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
@@ -8071,6 +8043,42 @@ static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
 		return false;
 	for (p = 0; p < shader->numpasses; p++)
 		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || shader->passes[p].prog)
+			return false;
+	return true;
+}
+
+static qboolean GLBE_BlendProgramPlanar(const program_t *prog)
+{
+	static const char *names[] = {"vmt/lightmapped", "vmt/unlit"};
+	size_t i, l;
+	if (!prog) return true;
+	if (!prog->name || prog->tess || prog->geom) return false;
+	for (i = 0; i < sizeof(names)/sizeof(names[0]); i++)
+	{
+		l = strlen(names[i]);
+		if (!strncmp(prog->name, names[i], l) && (!prog->name[l] || prog->name[l] == '#'))
+			return true;
+	}
+	return false;
+}
+
+static qboolean GLBE_BlendShaderPlanar(const shader_t *shader)
+{
+	int p;
+	if (!shader || shader->numdeforms || !GLBE_BlendProgramPlanar(shader->prog) ||
+		shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
+		return false;
+	for (p = 0; p < shader->numpasses; p++)
+		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || !GLBE_BlendProgramPlanar(shader->passes[p].prog))
+			return false;
+	return true;
+}
+
+static qboolean GLBE_BlendMatrixIdentity(const float *m)
+{
+	int i;
+	for (i = 0; i < 16; i++)
+		if (m[i] != ((i % 5) ? 0 : 1))
 			return false;
 	return true;
 }
@@ -8135,7 +8143,7 @@ static qboolean GLBE_BlendPlaneGeometry(const glblendface_t *face, glblendplane_
 	if (!mesh || face->foreground ||
 		(face->batch->ent == &r_worldentity ? face->batch->buildmeshes || face->batch->flags ||
 			!GLBE_BlendPlaneShaderEligible(face->batch->shader) || !GLBE_BlendPlaneShaderEligible(face->batch->shader->remapto) :
-			!face->planar) ||
+			face->planar != 1) ||
 		mesh->xyz2_array || mesh->numbones || !mesh->xyz_array || !mesh->indexes ||
 		mesh->numvertexes < 3 || mesh->numvertexes > GLBLEND_PLANE_VERTS ||
 		mesh->numindexes < 3 || mesh->numindexes > GLBLEND_PLANE_INDEXES || mesh->numindexes % 3)
@@ -8507,6 +8515,7 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	int ab, ba;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	stats->status = stats->pass = 0;
+	stats->overlapfull = false;
 	// The point-eye and divided screen bounds prove only perspective rays.
 	// Nonstandard modes may select an override program with different geometry.
 	if (!GLBE_BlendPlaneViewEligible())
@@ -8636,6 +8645,7 @@ rebuild:
 	stats->status = 1;
 done:
 	stats->work += owork;
+	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
 	if (projcount) BZ_Free(projcount);
 	if (projverts) BZ_Free(projverts);
 	if (proj) BZ_Free(proj);
@@ -8643,6 +8653,18 @@ done:
 	BZ_Free(pair);
 	BZ_Free(edges);
 	BZ_Free(planes);
+}
+
+// FTESurf Patch 900: the proof with brush-entity faces replaces the world-only one only if it costs the
+// world faces nothing: no higher pass (a cycle or barrier drops pass 0's overlap verdicts) and an overlap
+// budget that lasted (it is spent farthest first, so entity pairs can starve later world pairs).
+static qboolean GLBE_BlendKeepCombined(const glblendplanestats_t *world, const glblendplanestats_t *both)
+{
+	if (both->status != 1)
+		return false;
+	if (world->status != 1)
+		return true;	// no world order to protect
+	return both->pass <= world->pass && !both->overlapfull;
 }
 
 static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
@@ -8657,8 +8679,9 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	float matrix[16], modelview[16];
 	const entity_t *group;
 	double groupdepth;
-	qboolean planar;
-	int firststatus = 0;
+	qboolean planar, kept = false, combined = false;
+	glblendplanestats_t bstats = {0};
+	glblendface_t *both = NULL;
 
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
@@ -8751,22 +8774,32 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	// near clip rewrites only the projection z row.
 	if (GLBE_BlendViewEyeAgrees())
 	{
+		// The world-only proof is the old result; planar entity faces sit it out as barriers.
+		for (f = 0; f < n; f++)
+			if (faces[f].planar)
+			{
+				if (!both) { both = BZ_Malloc(n * sizeof(*both)); memcpy(both, faces, n * sizeof(*both)); }
+				faces[f].planar = 2;
+			}
 		GLBE_BlendPlaneSort(faces, n, &stats);
-		// A failed sort leaves faces[] as it was. If entity faces cost it its budget or a
-		// consistent order, prove the world faces alone, as before Patch 900.
-		firststatus = stats.status;
-		if (stats.status < 0)
+		if (both)
 		{
-			for (f = 0, m = 0; f < n; f++)
-				if (faces[f].planar) { faces[f].planar = false; m++; }
-			if (m) GLBE_BlendPlaneSort(faces, n, &stats);
+			GLBE_BlendPlaneSort(both, n, &bstats);
+			combined = true;
+			kept = GLBE_BlendKeepCombined(&stats, &bstats);
+			if (kept) memcpy(faces, both, n * sizeof(*faces));
+			BZ_Free(both);
 		}
 	}
 	if (trace)
 	{
-		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d recurse=%d first=%d\n",
+		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d recurse=%d\n",
 			(unsigned int)count, (unsigned int)n, (unsigned int)stats.admitted, stats.status,
-			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, r_refdef.recurse, firststatus);
+			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
+		if (combined)
+			Con_Printf("ALPHATRACE entities admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d kept=%d\n",
+				(unsigned int)bstats.admitted, bstats.status, (unsigned int)bstats.edges, (unsigned int)bstats.work,
+				(unsigned int)bstats.moved, bstats.pass, bstats.overlapfull, kept);
 		for (f = 0; f < n && f < GLBLEND_PLANE_FACES; f++)
 		{
 			batch_t *b = faces[f].batch;
