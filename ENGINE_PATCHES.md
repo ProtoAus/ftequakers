@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 929 — stable numbered lobby names (configuration)
+
+Problem: tier/mode names described initial rotations, not the map players chose.
+
+Change: rename the twelve configured servers Open Lobby #1 through #12. Keep
+ports, map pools, physics and cycle settings unchanged. No native code change.
+
+Verified: tools/test_lobby_names.py checks all twelve names and unique ports;
+base-to-subject diff contains only hostname substitutions. Existing QC baseline
+build (three VMs) has zero warnings. Initial test incorrectly expected per-lobby
+files to execute a map; corrected to check their actual lobby_maps contract.
+Live promotion/readback is recorded separately; this entry alone is not deploy
+or restart evidence.
+
 ## Patch 927 — mounted CS:S local-body movement Foley
 
 **Problem:** movement was silent even with mounted CS:S content: no footsteps,
