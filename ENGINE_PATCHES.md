@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 936 — retain 64px Steam portrait detail (QC/backend)
+
+Problem: the game reduced the already-kept 64px Steam JPEG to 32px before
+uploading it; larger profile/friends pictures magnified that discarded detail.
+The browser profile also carries the site's 12-hex public handle, not the
+lobby's 8-hex picture mark.
+
+Change: an explicit size=64 avatar response uses the kept source JPEG, with
+no additional Steam request or on-disk migration. The default endpoint and
+legacy text copies stay 32px. Reuse one bounded codec; cap source reads at
+64KiB and the derived-response LRU at 64 entries. Game/menu readers validate
+64px bodies and use separate disk/texture namespaces, preserving old caches
+and the same relative corner radius. The 64px route/menu also accepts the
+site's already-public profile handle under the same visibility/ban policy.
+No recorder, evidence, authentication, schema, native ABI or physics change.
+
+Verified: six new API controls cover exact source detail, legacy responses,
+conditional identities, public-handle aliasing, size/image bounds and file
+replacement; ban/collision/linked-mode controls remain. Actual Windows 64px
+transport, native texture dimensions and screenshot quadrants pass before and
+after renderer restart. A 32px control draws successfully but fails exactly
+the three 64px expectations; a visible no-picture control makes no request.
+Initial harness failures were stale output/consent/source-filter assumptions,
+not passes; repaired only isolated test setup, preserving product guards.
+Final three-VM build has zero warnings; the menu also draws the real fixture
+with a native 64x64 texture. Destination provenance is recorded separately.
+Subjective real-account portrait appearance remains owner acceptance, not a
+pixel count or performance claim. No native rebuild or pin/tag/Build change.
+
 ## Patch 934 — sorted local-console bindlist (native client)
 
 Problem: the owner could query an individual bind but not list the active
