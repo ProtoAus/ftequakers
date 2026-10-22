@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 930 — updated 100-slot Story and Event lists (data)
+
+Problem: the old lists omitted newly requested maps and compressed Events to
+25 positions, so its level numbers did not match the owner's list.
+
+Change: preserve all 100 positions in both lists, with canonical roster names
+and bonus tracks. Facility is 43 (the first repeated 44); Story 59 stays empty
+pending clarification of the joined Monkeys2/Whoknows3 name. Existing Story
+medal targets follow the map; new maps have bronze finish only. Later bars
+are recomputed with the existing 65%/70% policy, excluding untimed maps.
+No native, evidence, backend-code or protocol change.
+
+Verified: surfd/test_story.py 45 tests, including exact slot/bonus anchors,
+local completion criteria and reachable gates. story_push.py --check verifies
+every selected map against the live roster. Fourteen selected Story/Event
+maps still lack timing zones; Voyager/Fiellu via spots and max-fog enforcement
+remain explicitly pending, not claimed functional. Momentum is preferred by
+canonical roster names, with KSF-only fallback, not by relabelling geometry.
+Promotion and its exact revision are recorded in tools/p930-story-lists.md.
+
 ## Patch 929 — stable numbered lobby names (configuration)
 
 Problem: tier/mode names described initial rotations, not the map players chose.
