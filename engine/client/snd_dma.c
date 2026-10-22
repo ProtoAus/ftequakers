@@ -4256,7 +4256,11 @@ sfxcache_t *QDECL S_Raw_Locate(sfx_t *sfx, sfxcache_t *buf, ssamplepos_t start, 
 void QDECL S_Raw_Ended(sfx_t *sfx)
 {	//no longer playing anywhere...
 	streaming_t *s = sfx->decoder.buf;
-	s->inuse = false;	//let it get reused now.
+	// Last channel has released the data; slot reuse must not orphan it.
+	BZ_Free(s->data);
+	s->data = NULL;
+	s->length = 0;
+	s->inuse = false;	//publish reuse only after releasing the old allocation
 }
 void QDECL S_Raw_Purge(sfx_t *sfx)
 {	//flush all caches, will be re-read from disk (or not, because this is streamed)
