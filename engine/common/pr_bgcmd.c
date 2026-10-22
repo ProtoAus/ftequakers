@@ -5911,8 +5911,10 @@ void QCBUILTIN PF_buf_loadfile  (pubprogfuncs_t *prinst, struct globalvars_s *pr
 	const char *fname = PR_GetStringOfs(prinst, OFS_PARM0);
 	size_t bufno = G_FLOAT(OFS_PARM1)-BUFSTRBASE;
 	vfsfile_t *file;
-	char line[8192];
+	char line[8192], readbuf[65536];
 	const char *fallback;
+	size_t linelen = 0;
+	int got, i;
 
 	G_FLOAT(OFS_RETURN) = 0;
 
@@ -5933,8 +5935,27 @@ void QCBUILTIN PF_buf_loadfile  (pubprogfuncs_t *prinst, struct globalvars_s *pr
 	if (!file)
 		return;
 
-	while(VFS_GETS(file, line, sizeof(line)))
+	// Keep VFS_GETS's line-size and CR/EOF rules without a backend read per byte.
+	while ((got = VFS_READ(file, readbuf, sizeof(readbuf))) > 0)
 	{
+		for (i = 0; i < got; i++)
+		{
+			if (readbuf[i] != '\n')
+			{
+				line[linelen++] = readbuf[i];
+				if (linelen < sizeof(line)-1)
+					continue;
+			}
+			if (linelen && line[linelen-1] == '\r')
+				linelen--;
+			line[linelen] = 0;
+			PF_bufstr_add_internal(bufno, line, true);
+			linelen = 0;
+		}
+	}
+	if (linelen)
+	{
+		line[linelen] = 0;
 		PF_bufstr_add_internal(bufno, line, true);
 	}
 	VFS_CLOSE(file);

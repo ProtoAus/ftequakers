@@ -29,6 +29,38 @@ with a native 64x64 texture. Destination provenance is recorded separately.
 Subjective real-account portrait appearance remains owner acceptance, not a
 pixel count or performance claim. No native rebuild or pin/tag/Build change.
 
+## Patch 935 - opt-in Source weapon/Foley presentation and fast cold saves
+
+Problem: walking/crouching could emit steps, short contacts could miss hop cues,
+weapons used the wrong presentation defaults and natural give aliases were
+missing. Sprites could appear over hands; environment sampling used the
+viewmodel's artificial origin. A large cold saved-run restore stalled for seconds.
+
+Change: quiet Foley at/below 135 u/s and while crouched, scale its gain, and
+publish a cosmetic jump-contact counter so held bhops do not depend on one
+rendered grounded frame. Fresh Foley/model defaults are off; explicit weapon
+selection opts models in. Add bounded mounted model draw/idle/shot events,
+sound-script resolution and independent 54-degree viewmodel FOV. Keep existing
+map-damage gates/no PvP. Weapon-marked alias surfaces use the opaque weapon pass;
+cubemap/fog samples use the eye rather than the viewmodel origin. Batch
+buf_loadfile backend reads while preserving its append, 8191-byte split, blank,
+NUL and legacy CR/EOF behavior. No file format, mover, restore-admission or
+qualification rule changes; existing client-specific slow-load workarounds stay.
+
+Verified: factory-reset defaults, natural give aliases, 135/crouch quiet controls,
+speed gain, sparse-contact and held-jump hop counters pass in a real dedicated
+fixture. Mounted draw events produce callbacks; no new full-combat/ammo claim.
+Native sprite-over-weapon and eye-sample controls act and distinguish old/new
+rendering. Three progs compile with zero warnings; edited native units add no
+warnings. Actual large-save cold restore: 18.05 -> .23 seconds to the same body
+acknowledgment (both include an explicit 100ms query delay); server load profile
+17.925780 -> .120870 seconds, saved clock and shadow recording restored. Actual
+native control/candidate C functions match on 160 boundary/short-read cases and
+all 137016 recording rows. Original files/private copies remain byte-identical.
+Raw player data/profiles stay private. Human visual/aural feel, final clean-source
+integration, independent reviews and deployment provenance are recorded separately.
+P935 was reserved before P936; the QC highest-applied patch remains 936.
+
 ## Patch 934 — sorted local-console bindlist (native client)
 
 Problem: the owner could query an individual bind but not list the active

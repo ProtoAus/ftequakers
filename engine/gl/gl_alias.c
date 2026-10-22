@@ -2537,9 +2537,10 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 
 			b->buildmeshes = R_GAlias_DrawBatch;
 			b->ent = e;
-			b->envmap = Mod_CubemapForOrigin(cl.worldmodel, e->origin);
+			// Viewmodel origin is camera-local (usually zero), not a map position.
+			b->envmap = Mod_CubemapForOrigin(cl.worldmodel, (e->flags & RF_WEAPONMODEL)?r_refdef.vieworg:e->origin);
 #if defined(Q3BSPS) || defined(RFBSPS)
-			b->fog = Mod_FogForOrigin(cl.worldmodel, e->origin);
+			b->fog = Mod_FogForOrigin(cl.worldmodel, (e->flags & RF_WEAPONMODEL)?r_refdef.vieworg:e->origin);
 #endif
 			b->mesh = NULL;
 			b->firstmesh = 0;
@@ -2587,8 +2588,21 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			if ((e->flags & RF_NOSHADOW) || (clmodel->engineflags & MDLF_NOSHADOWS))
 				b->flags |= BEF_NOSHADOWS;
 			b->vbo = NULL;
-			b->next = batches[sort];
-			batches[sort] = b;
+			if (e->flags & RF_WEAPONMODEL)
+			{
+				batch_t **tail = &batches[SHADER_SORT_NEAREST];
+				// World glows may intentionally ignore depth. Draw held meshes LAST,
+				// not just with compressed depth, so those glows cannot cover the gun.
+				while (*tail)
+					tail = &(*tail)->next;
+				b->next = NULL;
+				*tail = b;
+			}
+			else
+			{
+				b->next = batches[sort];
+				batches[sort] = b;
+			}
 		}
 	}
 }

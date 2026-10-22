@@ -71,8 +71,8 @@ typedef struct
 	unsigned int _176;
 	unsigned int num_anims;
 	unsigned int ofs_anims;		//hl2mdlanim_t
-	unsigned int _188;
-	unsigned int _192;
+	unsigned int num_sequences;
+	unsigned int ofs_sequences;
 	unsigned int _196;
 	unsigned int _200;
 	unsigned int tex_count;
@@ -1246,6 +1246,79 @@ static qboolean Mod_ParseModelEvents(model_t *mod, galiasanimation_t *anims, uns
 }
 
 
+// Source v44/v48 sequence/event layouts (CSS SDK / SourceIO). Rendering uses
+// raw animations; a direct one-animation sequence supplies its sound events.
+typedef struct
+{
+	unsigned int base, name, activityname, flags, activity, weight;
+	unsigned int numevents, eventofs;
+	vec3_t bbmin, bbmax;
+	unsigned int numblends, animofs;
+	unsigned int remaining[37];
+} hl2mdlseqevents_t;
+typedef struct
+{
+	float cycle;
+	int code, type;
+	char options[64];
+	int nameofs;
+} hl2mdlevent_t;
+
+static qboolean HL2_EventSpan(size_t size, size_t offset, size_t count, size_t stride)
+{
+	return offset <= size && count <= (size-offset)/stride;
+}
+
+static void Mod_HL2_SequenceEvents(model_t *mod, const hl2mdlheader_t *h, size_t size, galiasanimation_t *anims, unsigned int numanims)
+{
+	size_t i, j, offset, eventofs, animofs;
+	unsigned int total = 0;
+	const qbyte *data = (const qbyte*)h;
+
+	if (size < sizeof(*h) || (h->version != 44 && h->version != 48) || h->num_sequences > 4096 ||
+		!HL2_EventSpan(size, h->ofs_sequences, h->num_sequences, sizeof(hl2mdlseqevents_t)))
+		return;
+	for (i = 0; i < h->num_sequences; i++)
+	{
+		hl2mdlseqevents_t sequence;
+		const hl2mdlseqevents_t *seq = &sequence;
+		short anim;
+		offset = h->ofs_sequences + i*sizeof(*seq);
+		memcpy(&sequence, data+offset, sizeof(sequence));
+		if (seq->numblends != 1 || seq->numevents > 128 ||
+			seq->eventofs > size-offset || seq->animofs > size-offset)
+			continue;
+		eventofs = offset+seq->eventofs;
+		animofs = offset+seq->animofs;
+		if (!HL2_EventSpan(size, eventofs, seq->numevents, sizeof(hl2mdlevent_t)) ||
+			!HL2_EventSpan(size, animofs, 1, sizeof(anim)))
+			continue;
+		memcpy(&anim, data+animofs, sizeof(anim));
+		if (anim < 0 || (unsigned int)anim >= numanims ||
+			!(anims[anim].rate > 0 && anims[anim].rate < 10000))
+			continue;
+		for (j = 0; j < seq->numevents && total < 4096; j++)
+		{
+			hl2mdlevent_t ev;
+			galiasevent_t *known;
+			float timestamp;
+			char options[65];
+			memcpy(&ev, data+eventofs+j*sizeof(ev), sizeof(ev));
+			if (!(ev.cycle >= 0 && ev.cycle <= 1)) continue;
+			memcpy(options, ev.options, 64);
+			options[64] = 0;
+			if (!*options) continue;
+			timestamp = ev.cycle*anims[anim].numposes/anims[anim].rate;
+			for (known = anims[anim].events; known; known = known->next)
+				if (known->code == ev.code && known->timestamp == timestamp && !strcmp(known->data, options)) break;
+			if (known) continue; // two sequences can reference the same raw animation
+			Mod_InsertEvent(&mod->memgroup, anims, numanims, anim,
+				ev.cycle*anims[anim].numposes, ev.code, options);
+			total++;
+		}
+	}
+}
+
 qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 {
 	hl2parsecontext_t ctx = {mod, buffer};
@@ -1448,7 +1521,9 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	galias = (galiasinfo_t*)mod->meshinfo;
 	if (galias)
 	{
-		Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations);
+		// Explicit sidecars retain precedence; do not double their custom cues.
+		if (!Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations))
+			Mod_HL2_SequenceEvents(mod, ctx.header, fsize, galias->ofsanimations, galias->numanimations);
 		VectorCopy(ctx.header->illumposition, galias->illumposition);	//FTESurf Patch 780
 		galias->hasillum = true;
 	}
