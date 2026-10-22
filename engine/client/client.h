@@ -919,6 +919,12 @@ typedef struct
 // sentcmds[cl.netchan.outgoing_sequence & UPDATE_MASK] = cmd
 	outframe_t	outframes[UPDATE_BACKUP];	//user inputs (cl.ackedmovesequence+1 to cl.movesequence are still pending)
 	inframe_t	inframes[UPDATE_BACKUP];	//server state (cl.validsequence is the most recent set)
+	// P924: authoritative phases outlive the latest stat while replay seeds an older snapshot.
+	struct {
+		unsigned int sequence, owner;
+		float carry;
+		qboolean valid;
+	} sourcephase[MAX_SPLITS][UPDATE_BACKUP];
 	lerpents_t	*lerpents;
 	int			maxlerpents;	//number of slots allocated.
 	int			lerpentssequence;
@@ -1613,7 +1619,7 @@ void	 CSQC_PlayerInfoChanged(int player);
 qboolean CSQC_Parse_Damage(int seat, float save, float take, vec3_t source);
 qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta);
 //FTESurf Patch 335: per-predicted-usercmd CSQC trigger hook.
-void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin);
+void	 CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin, float offsetmsec);
 void	 CSQC_PredictPortalAngles(int seat, const usercmd_t *cmd);
 void	 CSQC_PortalView(playerview_t *pv);
 int      CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec);
@@ -1651,7 +1657,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_UnconnectedInit() false
 #define CSQC_UseGamecodeLoadingScreen() false
 #define CSQC_Parse_SetAngles(seat,newangles,wasdelta) false
-#define CSQC_PredictPlayerMove(seat,cmd,preorigin)
+#define CSQC_PredictPlayerMove(seat,cmd,preorigin,offsetmsec)
 #define CSQC_PredictPortalAngles(seat,cmd)
 #define CSQC_PortalView(pv)
 #define CSQC_PredictPlayerPreMove(seat,cmd,offsetmsec) 0
@@ -1670,6 +1676,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 // cl_pred.c
 //
 void CL_InitPrediction (void);
+void CL_CacheSourcePhase(int seat, const char *text); // P924: packet-time phase history
 void CL_PredictMove (void);
 void CL_PredictUsercmd (int seat, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u);
 #ifdef Q2CLIENT

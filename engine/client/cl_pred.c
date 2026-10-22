@@ -442,12 +442,108 @@ CL_PredictUsercmd
   is keyed on the chain's sequences.  Set around the two calls in
   CL_PredictMovePNum and tested beside the hook.*/
 static qboolean cl_pred_localchain;
-static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared)
+/* P924: packet snapshots never contained msec_carry. A player's last rendered
+   prop is not an authoritative command's phase. One string stat keeps its tag
+   and value atomic even when the stat sender runs out of packet space. */
+void CL_CacheSourcePhase(int seat, const char *text)
+{
+	unsigned long owner, lo, hi;
+	unsigned int tag, slot;
+	const char *p;
+	char *end;
+	float phase, tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
+
+	if (seat < 0 || seat >= MAX_SPLITS || IS_NAN(tick) || !text || !*text || strlen(text) >= 64 ||
+		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1"))
+		return;
+	// strtoul overflow is defined and rejected by the bounds; scanf overflow is not.
+	p = text;
+	if (*p < '0' || *p > '9') return;
+	owner = strtoul(p, &end, 10);
+	if (*end != ':' || owner != (unsigned int)(cl.playerview[seat].playernum + 1)) return;
+	p = end + 1;
+	if (*p < '0' || *p > '9') return;
+	lo = strtoul(p, &end, 10);
+	if (*end != ':' || lo > 65535) return;
+	p = end + 1;
+	if (*p < '0' || *p > '9') return;
+	hi = strtoul(p, &end, 10);
+	if (*end != ':' || hi > 65535) return;
+	p = end + 1;
+	phase = strtof(p, &end);
+	if (end == p || *end || IS_NAN(phase) || phase < 0 || phase >= tick) return;
+	tag = ((unsigned int)hi << 16) | (unsigned int)lo;
+	slot = tag & UPDATE_MASK;
+	cl.sourcephase[seat][slot].sequence = tag;
+	cl.sourcephase[seat][slot].owner = owner;
+	cl.sourcephase[seat][slot].carry = phase;
+	cl.sourcephase[seat][slot].valid = true;
+}
+
+static void CL_PredictSourcePhase(int seat, int sequence, player_state_t *state)
+{
+	unsigned int slot, localowner = cl.playerview[seat].playernum + 1;
+	float phase, tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
+
+	if (movevars.physicsmode != PHYSMODE_SOURCE || IS_NAN(tick) ||
+		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1"))
+		return;
+	CL_CacheSourcePhase(seat, cl.playerview[seat].statsstr[STAT_FS_SOURCEPHASE]);
+	// Keep phases at receipt, including packets read between rendered frames.
+	slot = (unsigned int)sequence & UPDATE_MASK;
+	if (!cl.sourcephase[seat][slot].valid ||
+		cl.sourcephase[seat][slot].sequence != (unsigned int)sequence ||
+		cl.sourcephase[seat][slot].owner != localowner)
+		return;
+	phase = cl.sourcephase[seat][slot].carry;
+	if (phase < 0 || phase >= tick) return;
+	state->pmsrc.msec_carry = phase;
+}
+
+static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
 {
 	int preflags = 0;
 	vec3_t preorigin;
+
+	// P924: match SV_RunCmdPart's one-Source-tick parts, including carried time.
+	// fs_tickparts confirms the progs declares input_cmd_later; old progs opt out.
+	if (cl_pred_localchain && !later && movevars.physicsmode == PHYSMODE_SOURCE &&
+		strtol(InfoBuf_ValueForKey(&cl.serverinfo, "sv_tickparts"), NULL, 10) > 0 &&
+		strtol(InfoBuf_ValueForKey(&cl.serverinfo, "fs_tickparts"), NULL, 10) > 0)
+	{
+		float tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
+		float gs = cl.gamespeed > 0 ? cl.gamespeed : 1;
+		float carry = from->pmsrc.msec_carry;
+		float parts = (carry + u->msec * 0.001f * gs + 1e-5f) / tick;
+		// Server-controlled gamespeed must not bypass the mover's work bound.
+		// Normal wire commands fit; outliers use the existing eight-tick path.
+		if (!IS_NAN(parts) && parts >= 2 && parts < 33 && carry >= 0 && carry < tick)
+		{
+			int n = (int)parts;
+			player_state_t work[2], *src = from, *dst;
+			usercmd_t part = *u;
+			float tickms = tick * 1000 / gs;
+			float off = offsetmsec, left = u->msec;
+			int k;
+			for (k = 0; k < n - 1; k++)
+			{
+				usercmd_t one = part;
+				one.msec = k ? tickms : ((tick - carry) * 1000 / gs + 0.01f);
+				if (one.msec > left) one.msec = left;
+				dst = &work[k & 1];
+				CL_PredictUsercmdPart(pnum, entnum, src, dst, &one, off, carrier_cleared, k > 0);
+				src = dst;
+				part.impulse = 0;
+				off += one.msec;
+				left -= one.msec;
+			}
+			part.msec = left;
+			CL_PredictUsercmdPart(pnum, entnum, src, to, &part, off, carrier_cleared, true);
+			return;
+		}
+	}
 	// split up very long moves
-	if (u->msec > 50)
+	if (u->msec > 50 && !later)
 	{
 		player_state_t temp;
 		usercmd_t split;
@@ -458,14 +554,14 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		if (split.msec > 500)
 		{
 			split.msec = 500;
-			CL_PredictUsercmdPart (pnum, entnum, from, to, &split, offsetmsec, carrier_cleared);
+			CL_PredictUsercmdPart (pnum, entnum, from, to, &split, offsetmsec, carrier_cleared, later);
 		}
 		else
 		{
-			CL_PredictUsercmdPart (pnum, entnum, from, &temp, &split, offsetmsec, carrier_cleared);
+			CL_PredictUsercmdPart (pnum, entnum, from, &temp, &split, offsetmsec, carrier_cleared, later);
 			offsetmsec += split.msec;
 			split.msec = u->msec - split.msec;
-			CL_PredictUsercmdPart (pnum, entnum, &temp, to, &split, offsetmsec, carrier_cleared);
+			CL_PredictUsercmdPart (pnum, entnum, &temp, to, &split, offsetmsec, carrier_cleared, later);
 		}
 		return;
 	}
@@ -526,7 +622,9 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 			*carrier_cleared = true;
 		/* Clear before cash-out, and never restore sequence-1 after a clear
 		   in an earlier piece of this same logical input command. */
-		CSQC_PredictConsumeBaseVel(pnum, u->sequence, !*carrier_cleared);
+		/* P924: sequence-1 is the input's starting carrier, not each split
+		   piece's. Later pieces must consume the previous piece's touch state. */
+		CSQC_PredictConsumeBaseVel(pnum, u->sequence, !*carrier_cleared && offsetmsec == 0);
 	}
 	VectorCopy(pmove.origin, preorigin);
 	PM_PlayerMove (cl.gamespeed);
@@ -542,7 +640,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		if (preflags & PMPI_HOLD)
 			CSQC_PredictSaveBaseVel(pnum, u->sequence);
 		else
-			CSQC_PredictPlayerMove(pnum, u, preorigin);
+			CSQC_PredictPlayerMove(pnum, u, preorigin, offsetmsec);
 	}
 
 	to->waterjumptime = pmove.waterjumptime;
@@ -568,7 +666,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u)
 {
 	qboolean carrier_cleared = false;
-	CL_PredictUsercmdPart(pnum, entnum, from, to, u, 0, &carrier_cleared);
+	CL_PredictUsercmdPart(pnum, entnum, from, to, u, 0, &carrier_cleared, false);
 }
 
 //Used when cl_nopred is 1 to determine whether we are on ground, otherwise stepup smoothing code produces ugly jump physics
@@ -1530,6 +1628,7 @@ void CL_PredictMovePNum (int seat)
 			//FTESurf Patch 754: the posture the hull states, propagated or not (a
 			//resume after a no-prediction stretch seeds a zeroed pmsrc).  Our own
 			//predicted frames carry a matching hull, so this only acts on a snapshot.
+			CL_PredictSourcePhase(seat, from.frame, from.state);
 			PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);
 			cl_pred_localchain = true;	//FTESurf Patch 335
 			CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
@@ -1562,7 +1661,12 @@ void CL_PredictMovePNum (int seat)
 				if (cl_pendingcmd[seat].msec && !cls.demoplayback)
 					indcmd = cl_pendingcmd[seat], pt_extrap = 1;	//FTESurf Patch 269
 				else
-					indcmd = *to.cmd, pt_extrap = 2;
+				{
+					indcmd = *to.cmd;
+					// P924: a preview of the next input must not overwrite the completed input's rings.
+					indcmd.sequence = to.frame + 1;
+					pt_extrap = 2;
+				}
 				pt_msec = msec;
 				to.cmd = &indcmd;
 				to.time = simtime;
@@ -1589,6 +1693,7 @@ void CL_PredictMovePNum (int seat)
 					if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 						VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
 				}
+				CL_PredictSourcePhase(seat, from.frame, from.state);
 				PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);	//Patch 754
 //				Con_DPrintf(" extrap %i: %f-%f (%g)\n", toframe, fromtime, simtime, simtime-fromtime);
 				cl_pred_localchain = true;	//FTESurf Patch 335

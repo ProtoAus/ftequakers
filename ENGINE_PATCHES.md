@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 924 — static Source conveyor ground carry
+
+**Problem:** func_conveyor spawned solid but never supplied ground velocity;
+surf_parc_colore and surf_classics lost their authored belt boosts. A post-move
+prediction arm also lagged the authoritative CheckMovingGround operation.
+**Change:** Arm static movedir*speed before the existing basevelocity/ride
+handoff. Query actual pre-move ground contact, reacquiring a missing ground
+edict after placement; never infer carry from a nearby bbox. Mirror Source
+command parts with a 32-part work bound, preserve EveryTick versus enter-only
+setspeed and once-only semantics, and isolate preview carrier state. An atomic
+owner/command-tagged stat seeds the native sub-tick phase. No additional mover
+version, evidence grammar or ranked-policy change. Dynamic conveyor inputs and
+material animation are not implemented.
+**Verified:** Isolated Full native/plugin build and subsequent three-prog builds
+have zero new warnings. Real dedicated parc567/classics2500 belt and step-off
+checks use normal extrapolation and .25-unit correction reporting. Three quiet
+parc actors and a restored actor contrast with seven extra corrections in the
+conveyor-only disabled control. Compiled setspeed handler proves later-part
+EveryTick, duplicate suppression and enter-only control; extracted native guard
+checks ordinary/carried inputs,32/33 boundaries and100000 float-bit cases.
+Independent two-lens review found two P1s; both fixed and rechecked OK. Jump and
+once-pad physical acceptance remain unconfirmed; a non-acting input/pad rig is
+not a pass. Published P923 integration/build and deployment are still pending.
+Unpublished P921 reservation was renumbered forward to avoid a stale native
+minimum after P922/P923 shipped; its historical test artifacts retain P921.
+
 ## Patch 923 — recording-relative counters and bounded held continuation
 
 **Problem:** A new attempt could inherit cumulative counter history belonging to

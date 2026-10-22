@@ -260,9 +260,11 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.predinput_apply = csqcg.predinput_origin = csqcg.predinput_velocity = NULL;
 		csqcg.predinput_onground = csqcg.predinput_pmtype = csqcg.predinput_forceduck = NULL;
 		csqcg.predinput_sequence_lo = csqcg.predinput_sequence_hi = csqcg.predinput_held = NULL;
+		csqcg.CSQC_PredictGroundVelocity = 0;
+		csqcg.predground_active = NULL;
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
-		csqcg.predmove_bvfired = NULL;
+		csqcg.predmove_bvfired = csqcg.predmove_offset = NULL;
 		csqcg.predmove_onground = csqcg.predmove_pmtype = csqcg.predmove_buttons = csqcg.predmove_fixangle = NULL;
 		csqcg.predmove_mins = csqcg.predmove_maxs = csqcg.predmove_anglesnap = csqcg.predmove_cmdangles = NULL;
 		csqcg.input_sequence = NULL;
@@ -10716,6 +10718,42 @@ void CSQC_PredictSaveBaseVel(int seat, int sequence)
 	pred_bvring[seat][slot].used = true;
 }
 
+/* P924: probe the starting body, not pmove.groundent left by another replay
+   or by a command that ran no fixed tick. Match Source's ground quadrants. */
+static int CSQC_PredictGroundInfo(void)
+{
+	trace_t tr;
+	vec3_t end, mins, maxs;
+	float standable = movevars.standablenormal > 0 ? movevars.standablenormal : 0.7f;
+	int q;
+
+	VectorCopy(pmove.origin, end);
+	end[2] -= movevars.groundtracedist > 0 ? movevars.groundtracedist : 2;
+	tr = PM_PlayerTrace(pmove.origin, end, MASK_PLAYERSOLID);
+	if (movevars.groundquadrants && (tr.fraction == 1 || tr.plane.normal[2] < standable))
+	{
+		VectorCopy(pmove.player_mins, mins);
+		VectorCopy(pmove.player_maxs, maxs);
+		for (q = 0; q < 4; q++)
+		{
+			VectorCopy(mins, pmove.player_mins);
+			VectorCopy(maxs, pmove.player_maxs);
+			if (q & 1) pmove.player_mins[0] = (mins[0] + maxs[0]) * 0.5f;
+			else pmove.player_maxs[0] = (mins[0] + maxs[0]) * 0.5f;
+			if (q & 2) pmove.player_mins[1] = (mins[1] + maxs[1]) * 0.5f;
+			else pmove.player_maxs[1] = (mins[1] + maxs[1]) * 0.5f;
+			tr = PM_PlayerTrace(pmove.origin, end, MASK_PLAYERSOLID);
+			if (tr.fraction < 1 && tr.plane.normal[2] >= standable)
+				break;
+		}
+		VectorCopy(mins, pmove.player_mins);
+		VectorCopy(maxs, pmove.player_maxs);
+	}
+	if (tr.fraction == 1 || tr.plane.normal[2] < standable || tr.entnum < 0 || tr.entnum >= pmove.numphysent)
+		return -1;
+	return pmove.physents[tr.entnum].info;
+}
+
 void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious)
 {
 	int slot;
@@ -10743,6 +10781,33 @@ void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious
 		}
 	}
 
+	/* P924: the server's CheckMovingGround arms before this command's cash-out.
+	   Ground is an argument only; the trusted provider returns the carrier. */
+	if (csqcg.CSQC_PredictGroundVelocity && csqcg.predground_active && *csqcg.predground_active &&
+		pmove.pm_type == PM_NORMAL && pmove.onground)
+	{
+		int ground = CSQC_PredictGroundInfo();
+		if (ground > 0)
+		{
+			vec3_t velocity;
+			void *globals;
+			CSQC_ChangeLocalPlayer(seat);
+			globals = PR_globals(csqcprogs, PR_CURRENT);
+			((float *)globals)[OFS_PARM0] = seat;
+			((float *)globals)[OFS_PARM1] = sequence;
+			((float *)globals)[OFS_PARM2] = ground;
+			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_PredictGroundVelocity);
+			VectorCopy((float *)globals + OFS_RETURN, velocity);
+			if (!IS_NAN(velocity[0]) && !IS_NAN(velocity[1]) && !IS_NAN(velocity[2]) &&
+				(velocity[0] || velocity[1] || velocity[2]))
+			{
+				if (pred_bv_armed[seat]) VectorAdd(pred_bv_held[seat], velocity, pred_bv_held[seat]);
+				else VectorCopy(velocity, pred_bv_held[seat]);
+				pred_bv_armed[seat] = true;
+			}
+		}
+	}
+
 	/* (a) the cash-out: horizontal only, because (d) spent the Z already */
 	if (!pred_bv_armed[seat] &&
 		(pred_bv_held[seat][0] || pred_bv_held[seat][1] || pred_bv_held[seat][2]))
@@ -10765,7 +10830,7 @@ void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious
   more.  The angle-snap ring was already frame-surviving by design. */
 
 
-void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin)
+void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin, float offsetmsec)
 {
 	vec3_t oldorg, oldvel;
 	void *pr_globals;
@@ -10784,6 +10849,8 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 
 	CSQC_ChangeLocalPlayer(seat);
 
+	if (csqcg.predmove_offset)
+		*csqcg.predmove_offset = offsetmsec * 0.001f;
 	if (csqcg.predmove_org0)
 		VectorCopy(preorigin, csqcg.predmove_org0);
 	VectorCopy(pmove.origin, csqcg.predmove_org);

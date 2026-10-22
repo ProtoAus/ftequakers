@@ -6643,6 +6643,8 @@ static void CL_SetStatString (int pnum, int stat, const char *value)
 		if (cl.playerview[pnum].statsstr[stat])
 			Z_Free(cl.playerview[pnum].statsstr[stat]);
 		cl.playerview[pnum].statsstr[stat] = Z_StrDup(value);
+		if (stat == STAT_FS_SOURCEPHASE)
+			CL_CacheSourcePhase(pnum, cl.playerview[pnum].statsstr[stat]);
 	}
 }
 
