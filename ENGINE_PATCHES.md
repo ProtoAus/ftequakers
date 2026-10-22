@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 931 — basic CS:S knife, USP, Scout and Glock presentation
+
+**Problem:** no held weapons or idle/fire feedback, although map shooting uses
+SV_EntityDamage's existing button/breakable dispatcher. Save keys must not be
+stolen for selection, and presentation must not silently enable shared damage.
+
+**Change:** standard weapon/weaponframe stats carry validated knife/USP/Scout/
+Glock choice and single-press cadence. Knife reach80/capped25 damage; guns keep
+the existing long trace/damage cvar. Mounted client-only models use authored
+@sequence names and timing, correct right-hand mirroring, local fire/impact
+cues and mode/owner gates. surf_weapon selects without rebinding; cl_viewweapon
+hides and cl_viewweapon_left changes hand. No Valve assets are shipped; no new
+stat channel, PvP, ammo/ballistics claim, movement tuning, native pin or
+held-policy relaxation is introduced. Existing run_shoot/lobby_shoot gates remain unchanged.
+
+**Verified:** three VMs0 warnings; actual four model screenshots inspected,
+authored idle/fire frames and positive durations read back. USP one held press
+fires once; release/repress fires again; Scout rejects an early second press.
+Invalid choice and non-WALK selection leave the authoritative choice unchanged.
+Real bhop_badges *98: gate0 swipe leaves targetname empty; gate1 same swipe
+fires OnDamaged/upboost. At *100/200units, knife leaves default while USP changes
+it to sideboost. Original unprefixed-animation failure retained, not a pass.
+Human feel/listening, full CSS weapon behavior and fleet damage-policy choice
+remain separate. Native source/tag stays P924. tools/p931-css-weapons.md.
+
 ## Patch 930 — updated 100-slot Story and Event lists (data)
 
 Problem: the old lists omitted newly requested maps and compressed Events to
