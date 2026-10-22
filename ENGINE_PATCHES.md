@@ -1,5 +1,17 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 918 — point-filter the missing diffuse texture
+
+**Problem:** The owner's missing-texture checker inherited global linear texture
+filtering and softened when used as the shared fallback.
+**Change:** Mark only no_texture's diffuse image IF_NEAREST, including its PNG
+replacement. Preserve mipmaps, ordinary assets, gloss/normal placeholders and
+all owner image bytes.
+**Verified:** Existing asset suite 8/8; extracted actual GL sampler function passes
+an acting linear control and 10 nearest/global-mode cases (nearest min/mag,
+anisotropy 1). Native client/server/plugins build passes without new warnings.
+In-game visual acceptance remains owner-only; no global texture setting changed.
+
 ## Patch 917 — keep the ceiling eye limit in render space
 
 **Problem:** P916's eye offset belonged to the mover endpoint, but rendered feet
