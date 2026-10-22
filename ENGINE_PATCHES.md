@@ -1,5 +1,45 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 937 — optional local altitude tone and A/D drums
+
+Problem: the requested height-following sine and A/D percussion had no local
+instrument, independent enable switches or volume control.
+
+Change: synthesize a bounded signed16 mono CSQC stream using the existing raw
+audio builtins. A small heap buffer, continuous phases, local noise generator,
+limited lookahead and one fading tail avoid assets, global RNG changes or
+stored catch-up beats. Pitch observes native body altitude, recentered on
+enable/warps; A/D observe only events declined by existing UI/input consumers.
+Release latches clear before UI dispatch. Reuse local-body/watch/rewind/movement
+ownership gates. Both effects default off, with shared volume and diagnostics.
+Independent review found an existing native raw-buffer leak newly exercised by
+stop/restart: EOF marked the slot free, but reuse discarded its retained data.
+The ended callback now frees/clears it before publishing the slot reusable,
+under the existing last-channel/mixer callback contract. No input, body, timer,
+evidence, reader, native ABI or Build change. The client needs the fixed native
+binary; engine pin/tag advances for this native audio-only change.
+
+Functional checks: three VMs compile with zero warnings. A real dedicated/socket
+fixture ACTS: default-off inputs create no stream; A hold/repeat produces one
+kick, release permits another, D produces a snare, real chat typing does not
+trigger beats, returning from chat leaves no stuck latch, an actual jump changes
+the captured height and corresponding pitch, and disable drains/quiesces. The
+native mixer queue is positive while only this test client is muted; no run or
+consent file is written. The final zero-warning build also passes the acted
+volume0 control (all twelve native checks pass). Input/frame review found no
+issue. Lifecycle review's leak is reproduced by the exact old C callbacks:
+4096 acted reuse cycles orphan4095 buffers after final purge; the new callbacks
+balance4096 allocations/frees, including repeated EOF and final purge. This
+isolated ownership unit is not a mixer-thread or heap/RSS measurement. Repaired
+the switch-off fixture to snapshot an ACTIVE stream and disable in the same
+command-buffer pass, then require exactly one fade block. Full NoDeploy build
+has0 VM warnings and0 NEW native warnings (same74 as P934 full baseline). Both
+PEs carry clean5fd6c6790/patch-937 stamps. Fixed-native real-socket fixture
+passes13 controls, including active exact-one fade and3 drain/restarts. Follow-up
+independent lifecycle review closes P1/P2 with no issue; input/frame review also
+found no issue. Not deployed yet. Listening/performance/concurrency remain unclaimed. Listening, latency/volume feel and performance are not measured
+by these counters and remain owner acceptance before any such claim.
+
 ## Patch 936 — retain 64px Steam portrait detail (QC/backend)
 
 Problem: the game reduced the already-kept 64px Steam JPEG to 32px before
