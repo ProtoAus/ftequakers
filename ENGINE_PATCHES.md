@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 915 — explicit disconnected-clock boundaries (QC, readers, native)
+
+**Problem:** A parked clean whole-main run lost disconnected time. Adding it to
+physical input ticks would invent movement history; separate rounding could also
+admit a resumed timer beyond the exact float32 integral domain. Completed clean
+nonPB stages depended on keeping the whole main recording to remain watchable.
+
+**Change:** REC13 declares parked-time boundaries separately from viewing and
+physical chronology, with matched sessions and closing counters. Preserve older
+formats; native structural support accepts ordinary zero-carry13 but explicitly
+refuses parked-time simulation rather than granting verification. QC uses UTC
+day/second stamps, exact restored-clock projection and nonconsuming refusal;
+carry both edge counters through ordinary and rewind saves. Retain completed
+clean stages independently with collision-safe attempt names. Private lobby
+retrieval uses existing proven-account identity, per-file ownership/content seals
+and the existing per-client event transport, not GUID namespace guesses or a new
+public download permission. No rank, certification, consent or upload grant.
+
+**Verified:** Reader864/0 and stable baseline corpus faults/hashes; native39
+structural controls retain ordinary45/45 and explicit parked-time refusal, with
+malformed old-admitted/new-refused arms. Real buffered/streamed lower-epoch parks
+land without physical-tick invention. Targeted old guard8/8 admits the actual
+16777216 counterexample; new26/26 refuses with every slot byte retained, accepts
+last-valid16777215, and preserves two parked edges through actual snapshot,
+state application and finish. Archive lane31 socket controls act writer, two
+equal-duration attempts, cancelled main, byte-exact selection/playback, positive
+PB, different full proven-key/same namespace denial, mutation/rename/stale/expiry
+and cleanup. Account proof is a synthetic already-proven fixture precondition;
+its existing remote cryptography and human visual acceptance are not claimed.
+Matching clean Windows/Linux artifacts and consumer-before-writer deployment
+remain separate qualification steps. No Build bump or release.
+
 ## Patch 914 — run time continues while spectating or replaying (QC, readers)
 
 **Problem:** A held body stopped the run clock during spectating/replay. Simply
