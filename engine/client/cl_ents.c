@@ -8487,6 +8487,11 @@ void CL_SetSolidEntities (void)
 		{
 		case 0:
 			break;
+		case Q1CONTENTS_EMPTY:
+			// P919: match server AddEntityToPmove for authored skin=-1 illusionaries.
+			pent->nonsolid = true;
+			pent->forcecontentsmask = FTECONTENTS_EMPTY;
+			break;
 		case Q1CONTENTS_LADDER:
 			pent->nonsolid = true;
 			pent->forcecontentsmask = FTECONTENTS_LADDER;

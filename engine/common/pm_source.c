@@ -5540,6 +5540,32 @@ static void PMSrc_SelfTest_f (void)
 			PMSrc_Check("P917 below roof: no premature lowering", PMSrc_ClipRenderEye(raw, limit, -16), 64, 0);
 			PMSrc_Check("P917 no negative eye through discontinuity", PMSrc_ClipRenderEye(raw, limit, 256), 0, 0);
 		}
+		/* P919: the exact goldsrc2 *93 sheet bounds, translated as authored.
+		   The client decode test supplies nonsolid; exercise the real trace seam. */
+		{
+			physent_t savedbox = *box;
+			vec3_t savedorg;
+			float savedeye = pmove.viewheight;
+			trace_t sheet;
+			VectorCopy(pmove.origin, savedorg);
+			VectorSet(box->origin, 3638, -6200, 10047);
+			VectorSet(box->mins, -136, -2, -18);
+			VectorSet(box->maxs, 136, 2, 18);
+			VectorSet(pmove.origin, 3709.8f, -6198.3f, 10030);
+			sheet = PMSrc_TraceHull(pmove.origin, pmove.origin);
+			PMSrc_Check("P919 old solid sheet acts on body", sheet.startsolid || sheet.allsolid, 1, 0);
+			box->nonsolid = true;
+			sheet = PMSrc_TraceHull(pmove.origin, pmove.origin);
+			PMSrc_Check("P919 empty sheet no stuck body", sheet.startsolid || sheet.allsolid, 0, 0);
+			PMSrc_Check("P919 empty sheet trace is clear", sheet.fraction, 1, 0);
+			pmove.viewheight = 64;
+			PMSrc_ClipEye();
+			PMSrc_Check("P919 empty sheet no false head duck", pmove.viewheight, 64, 0);
+			PMSrc_Check("P919 trace does not move body", pmove.origin[2], 10030, 0);
+			VectorCopy(savedorg, pmove.origin);
+			*box = savedbox;
+			pmove.viewheight = savedeye;
+		}
 		pmove.onground = true;
 		pmove.viewheight = 64;
 		PMSrc_ClipEye();

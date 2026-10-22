@@ -1,5 +1,18 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 919 — predict EMPTY brush contents as nonsolid
+
+**Problem:** bhop_goldsrc2's decorative *93 illusionary explicitly has skin=-1.
+Snapshots encode negative-skin contents volumes as BSP; server AddEntityToPmove
+handled EMPTY as nonsolid, but the client's switch omitted EMPTY and collided.
+**Change:** Add only that missing client override, matching existing server
+behaviour. Do not make illusionaries solid or smooth over prediction errors.
+**Verified:** Actual old/client/server C-switch probe acts on the old mismatch and
+passes nine contents controls; five real trace checks at the authored sheet's
+bounds prove a solid control sticks while nonsolid body/eye traces pass. Native
+build and all prior selftests pass without new warnings. Owner save2 real-socket
+correction-count acceptance pending; no movement-version/evidence/server rule change.
+
 ## Patch 918 — point-filter the missing diffuse texture
 
 **Problem:** The owner's missing-texture checker inherited global linear texture
