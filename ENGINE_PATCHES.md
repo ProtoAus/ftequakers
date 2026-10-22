@@ -70,8 +70,17 @@ import/variant/native-byte contrast and reader/codec units pass. Fixed-input
 older405/120 absolute-count failure retained as a changed-dataset comparison.
 Two independent reviews plus raw-finding resolution PASS. P925/P928 transport
 identities/times retained; published929-931 integrated, functional policy hashes
-unchanged. Clean deployment and owner feel remain pending; limits and transport:
-tools/p928-ksf-ports.md in QC. No unrelated native-producer qualification claimed.
+unchanged. Clean3a8 DAT/LNO delivery to both Windows installs and acting installed
+online/cache controls passed. Pi first delivered240440a4 at18:44UTC; a concurrent
+P933-only replacement was caught by a cold client. Integrated1fdb668a preserves
+both features and exact current P933 SSQC/native. Its actual non-preseeded lobby
+CSQC86096e49 download and unrelated raw fence act; same-bit dedicated normalized/
+raw wall-clock controls advance10->11.66/11.80 with native fence intact. Original
+combined frame/trace clock failure retained, not called all-green. Schema20
+backend measured/published19:08UTC; live both-map197row/Leacon21517 source/byte
+readbacks and public HTTPS board200 pass. No native/reader/eligibility promotion.
+Subsequent social backend changes must preserve this feature. Owner feel remains
+pending; delivery preservation/limits: tools/p928-ksf-ports.md in QC.
 
 ## Patch 931 — basic CS:S knife, USP, Scout and Glock presentation
 
