@@ -1121,8 +1121,20 @@ static struct
 	char *ident;
 	qbyte *magic;
 	size_t magicsize;
+	uint64_t artifact_epoch;
 	qboolean (QDECL *load) (model_t *mod, void *buffer, size_t buffersize);
 } modelloaders[64];
+
+static uint64_t Mod_LoaderArtifactEpoch(void *module)
+{
+#ifdef PLUGINS
+	return module ? Plug_ArtifactFingerprint(module,NULL,NULL) : 0;
+#else
+	(void)module;
+	return 0;
+#endif
+}
+
 
 static void Mod_PrintFormats_f(void)
 {
@@ -1155,6 +1167,7 @@ int Mod_RegisterModelFormatText(void *module, const char *formatname, char *magi
 	modelloaders[free].magic = NULL;
 	modelloaders[free].magicsize = 0;
 	modelloaders[free].ident = Z_StrDup(magictext);
+	modelloaders[free].artifact_epoch = Mod_LoaderArtifactEpoch(module);
 	modelloaders[free].load = load;
 
 	return free+1;
@@ -1182,6 +1195,7 @@ int Mod_RegisterModelFormatMagic(void *module, const char *formatname, qbyte *ma
 	modelloaders[free].magic = magic;
 	modelloaders[free].magicsize = magicsize;
 	modelloaders[free].ident = NULL;
+	modelloaders[free].artifact_epoch = Mod_LoaderArtifactEpoch(module);
 	modelloaders[free].load = load;
 
 	return free+1;
@@ -1204,6 +1218,7 @@ void Mod_UnRegisterModelFormat(void *module, int idx)
 	modelloaders[idx].magic = 0;
 	modelloaders[idx].load = NULL;
 	modelloaders[idx].module = NULL;
+	modelloaders[idx].artifact_epoch = 0;
 
 	//FS_Restart will be needed
 }
@@ -1219,12 +1234,66 @@ void Mod_UnRegisterAllModelFormats(void *module)
 	}
 }
 
+/* The worker hands off only static source identity, never actor observations.
+ * Published/read solely on main; bounded eviction makes old models unavailable. */
+typedef struct
+{
+	model_t *model;
+	void *module, *code;
+	uint64_t loader_epoch, serial;
+	unsigned char bsp[32], plugin[32];
+} mod_source_artifact_t;
+static mod_source_artifact_t mod_source_artifacts[8];
+#ifdef PLUGINS
+static unsigned int mod_source_next;
+static uint64_t mod_source_serial = 1;
+#endif
+static void Mod_SourceArtifactFree(mod_source_artifact_t *source)
+{
+	volatile unsigned char *p;
+	size_t size = sizeof(*source);
+	if (!source) return;
+	p = (volatile unsigned char*)source; while (size--) *p++ = 0;
+	BZ_Free(source);
+}
+static void Mod_SourceArtifactForget(model_t *model)
+{
+	unsigned int i;
+	for (i = 0; i < countof(mod_source_artifacts); ++i)
+		if (mod_source_artifacts[i].model == model) memset(&mod_source_artifacts[i],0,sizeof(mod_source_artifacts[i]));
+}
+uint64_t Mod_HeldWorldArtifacts(model_t *world, unsigned char bsp[32], unsigned char plugin[32])
+{
+#ifdef PLUGINS
+	unsigned char actual[32];
+	unsigned int i;
+#endif
+	if (bsp) memset(bsp,0,32);
+	if (plugin) memset(plugin,0,32);
+	COM_AssertMainThread("Mod_HeldWorldArtifacts");
+	if (!world || !bsp || !plugin || world->loadstate != MLS_LOADED || world->type != mod_brush ||
+		world->submodelof || !(world->engineflags & MDLF_SOURCEBSP)) return 0;
+#ifdef PLUGINS
+	for (i = 0; i < countof(mod_source_artifacts); ++i)
+	{
+		mod_source_artifact_t *source = &mod_source_artifacts[i];
+		if (source->model != world || !source->serial || !source->module) continue;
+		if (Plug_ArtifactFingerprint(source->module,source->code,actual) != source->loader_epoch || memcmp(actual,source->plugin,32)) return 0;
+		memcpy(bsp,source->bsp,32); memcpy(plugin,source->plugin,32);
+		memset(actual,0,sizeof(actual));
+		return source->serial;
+	}
+#endif
+	return 0;
+}
+
 //main thread. :(
 void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 {
 	qboolean previouslyfailed;
 	model_t *mod = ctx;
 	enum mlverbosity_e verbose = b;
+	Mod_SourceArtifactForget(mod);
 #ifndef SERVERONLY
 	P_LoadedModel(mod);
 #endif
@@ -1293,6 +1362,29 @@ void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 	case MLV_SILENTSYNC:
 		break;
 	}
+}
+static void Mod_SourceModelLoaded(void *ctx, void *data, size_t a, size_t b)
+{
+	mod_source_artifact_t source = *(mod_source_artifact_t*)data;
+#ifdef PLUGINS
+	model_t *model = ctx;
+#endif
+	Mod_SourceArtifactFree(data);
+	Mod_ModelLoaded(ctx,NULL,a,b);
+#ifdef PLUGINS
+	if (a == MLS_LOADED && source.model == model && model->type == mod_brush && !model->submodelof &&
+		(model->engineflags & MDLF_SOURCEBSP) && source.module && source.loader_epoch &&
+		Plug_ArtifactFingerprint(source.module,source.code,source.plugin) == source.loader_epoch)
+	{
+		if (mod_source_serial) ++mod_source_serial;
+		if (mod_source_serial)
+		{
+			source.serial = mod_source_serial;
+			mod_source_artifacts[mod_source_next++ % countof(mod_source_artifacts)] = source;
+		}
+	}
+#endif
+	memset(&source,0,sizeof(source));
 }
 void Mod_SubmodelLoaded(model_t *mod, int state)
 {
@@ -1383,6 +1475,8 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 	model_t *mod = ctx;
 	enum mlverbosity_e verbose = a;
 	unsigned *buf = NULL;
+	mod_source_artifact_t *source = NULL;
+	qboolean (QDECL *loader)(model_t *mod, void *buffer, size_t buffersize);
 	char mdlbase[MAX_QPATH];
 	char *replstr;
 #ifdef DSPMODELS
@@ -1614,8 +1708,21 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 		}
 		if (i < countof(modelloaders))
 		{
-			if (!modelloaders[i].load(mod, buf, filesize))
+			loader = modelloaders[i].load;
+			if (modelloaders[i].module && modelloaders[i].artifact_epoch && !memcmp(buf,"VBSP",4))
 			{
+				source = BZF_Malloc(sizeof(*source));
+				if (source)
+				{
+					source->model = mod; source->module = modelloaders[i].module;
+					source->code = (void*)loader; source->loader_epoch = modelloaders[i].artifact_epoch;
+					if (CalcHash(&hash_sha2_256,source->bsp,32,(unsigned char*)buf,filesize) != 32)
+						{Mod_SourceArtifactFree(source); source = NULL;}
+				}
+			}
+			if (!loader(mod, buf, filesize))
+			{
+				Mod_SourceArtifactFree(source); source = NULL;
 				BZ_Free(buf);
 				continue;
 			}
@@ -1670,7 +1777,8 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 				Con_Printf("^5load^7 %6.0fms  %s\n", took, mod->name);
 		}
 
-		COM_AddWork(WG_MAIN, Mod_ModelLoaded, mod, NULL, MLS_LOADED, 0);
+		if (source) COM_AddWork(WG_MAIN,Mod_SourceModelLoaded,mod,source,MLS_LOADED,0);
+		else COM_AddWork(WG_MAIN, Mod_ModelLoaded, mod, NULL, MLS_LOADED, 0);
 		return;
 	}
 

@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #ifndef CLIENTONLY
 #include "pr_common.h"
+#include "sv_held_session.h"
 
 #include <ctype.h>
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+i*ge->edict_size)
@@ -158,7 +159,7 @@ int SV_PMPinNeed(const float *pin)
 	return SV_PMSrcVer(pin) >= 10 ? SV_PMPIN_COUNT : SV_PMPIN_COUNT_PRE882;
 }
 
-static void SV_PMPinFill(float *v)
+void SV_PMPinFill(float *v)
 {
 	float *o = v;
 	*o++ = movevars.sourceversion;	*o++ = movevars.physicsmode;	*o++ = pmove.pm_type;	*o++ = sv.gamespeed;
@@ -7593,7 +7594,7 @@ ucmd_t nqucmds[] =
 SV_ExecuteUserCommand
 ==================
 */
-void SV_ExecuteUserCommand (const char *s, qboolean fromQC)
+static void SV_ExecuteUserCommandBody (const char *s, qboolean fromQC)
 {
 	ucmd_t	*u;
 	client_t *oldhost = host_client;
@@ -7715,6 +7716,16 @@ void SV_ExecuteUserCommand (const char *s, qboolean fromQC)
 
 	host_client = oldhost;
 	SV_EndRedirect ();
+}
+
+void SV_ExecuteUserCommand (const char *s, qboolean fromQC)
+{
+	client_t *client = host_client;
+	SV_HeldSourceBoundary(client, fromQC ? HELD_EFFECT : HELD_COMMAND_ENTER);
+	if (!fromQC) SV_HeldSourceCommand(client,s,true);
+	SV_ExecuteUserCommandBody(s, fromQC);
+	if (!fromQC) SV_HeldSourceCommand(client,s,false);
+	SV_HeldSourceBoundary(client, fromQC ? HELD_EFFECT : HELD_COMMAND_EXIT);
 }
 
 int implevels[256];
@@ -8364,6 +8375,30 @@ Done before running a player command.  Clears the touch array
 qbyte *playertouch;
 size_t playertouchmax;
 
+/* Apply the actual QW per-client overrides to an already prepared base.
+ * Shared with pre-input capture so no later mover state is copied backward. */
+void SV_SetQWClientMoveVars(client_t *client)
+{
+	movevars.entgravity = client->entgravity/movevars.gravity;
+	movevars.maxspeed = client->maxspeed;
+	movevars.bunnyspeedcap = pm_bunnyspeedcap.value;
+	movevars.ktjump = pm_ktjump.value;
+	movevars.slidefix = (pm_slidefix.value != 0);
+	movevars.airstep = (pm_airstep.value != 0);
+	movevars.pground = (pm_pground.value != 0);
+	movevars.stepdown = (pm_stepdown.value != 0);
+	movevars.walljump = (pm_walljump.value);
+	movevars.slidyslopes = (pm_slidyslopes.value!=0);
+	movevars.bunnyfriction = (pm_bunnyfriction.value!=0);
+	movevars.autobunny = (pm_autobunny.value!=0);
+	movevars.watersinkspeed = *pm_watersinkspeed.string?pm_watersinkspeed.value:60;
+	movevars.flyfriction = *pm_flyfriction.string?pm_flyfriction.value:4;
+	movevars.edgefriction = *pm_edgefriction.string?pm_edgefriction.value:2;
+	movevars.coordtype = client->netchan.netprim.coordtype;
+	movevars.flags = MOVEFLAG_VALID|MOVEFLAG_NOGRAVITYONGROUND|(*pm_edgefriction.string?0:MOVEFLAG_QWEDGEBOX);
+	SV_SetSourceMoveVars();
+}
+
 void SV_PreRunCmd(void)
 {
 	size_t max = (sv.world.num_edicts+512+7)&~7;
@@ -8494,6 +8529,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 
 	if (SV_RunFullQCMovement(host_client, ucmd))
 	{
+		SV_HeldSourceBoundary(host_client, HELD_EFFECT);
 		return;
 	}
 
@@ -8560,6 +8596,8 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		return;
 	}
 
+	/* Count the real post-budget, final split piece before input installation. */
+	SV_HeldSourceBoundary(host_client, HELD_PIECE_BEGIN);
 	VALGRIND_MAKE_MEM_UNDEFINED(&pmove, sizeof(pmove));
 
 	host_frametime = ucmd->msec * 0.001;
@@ -8771,7 +8809,9 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 				SV_PublishCmdContext(&cmd, kind, totalmsec, offsetmsec);
 				if (laterg)
 					laterg->_float = later;
+				SV_HeldSourceBoundary(host_client, HELD_PRE_ENTER);
 				PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->PlayerPreThink);
+				SV_HeldSourceBoundary(host_client, HELD_PRE_EXIT);
 				SV_PublishCmdContext(NULL, 0, 0, 0);
 				if (laterg)
 					laterg->_float = 0;
@@ -8963,24 +9003,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	pmove.skipent = -1;
 	pmove.capsule = (sv_player->xv->geomtype == GEOMTYPE_CAPSULE);
 
-	movevars.entgravity = host_client->entgravity/movevars.gravity;
-	movevars.maxspeed = host_client->maxspeed;
-	movevars.bunnyspeedcap = pm_bunnyspeedcap.value;
-	movevars.ktjump = pm_ktjump.value;
-	movevars.slidefix = (pm_slidefix.value != 0);
-	movevars.airstep = (pm_airstep.value != 0);
-	movevars.pground = (pm_pground.value != 0);
-	movevars.stepdown = (pm_stepdown.value != 0);
-	movevars.walljump = (pm_walljump.value);
-	movevars.slidyslopes = (pm_slidyslopes.value!=0);
-	movevars.bunnyfriction = (pm_bunnyfriction.value!=0);
-	movevars.autobunny = (pm_autobunny.value!=0);
-	movevars.watersinkspeed = *pm_watersinkspeed.string?pm_watersinkspeed.value:60;
-	movevars.flyfriction = *pm_flyfriction.string?pm_flyfriction.value:4;
-	movevars.edgefriction = *pm_edgefriction.string?pm_edgefriction.value:2;
-	movevars.coordtype = host_client->netchan.netprim.coordtype;
-	movevars.flags				= MOVEFLAG_VALID|MOVEFLAG_NOGRAVITYONGROUND|(*pm_edgefriction.string?0:MOVEFLAG_QWEDGEBOX);
-	SV_SetSourceMoveVars();	//FTESurf: pm_source.c parameters
+	SV_SetQWClientMoveVars(host_client);
 
 // should already be folded into host_client->maxspeed
 //	if (sv_player->xv->hasted)
@@ -9027,7 +9050,9 @@ if (sv_player->v->health > 0 && before && !after )
 	Con_Printf ("player %s got stuck in playermove!!!!\n", host_client->name);
 }
 #else
+	SV_HeldSourceBoundary(host_client, HELD_MOVER_ENTER);
 	PM_PlayerMove (sv.gamespeed);
+	SV_HeldSourceBoundary(host_client, HELD_MOVER_EXIT);
 #endif
 	pmove.world = NULL;
 
@@ -9282,6 +9307,8 @@ if (sv_player->v->health > 0 && before && !after )
 	if (progstype == PROG_QW)
 		VectorCopy(new_vel, sv_player->v->velocity);
 
+	/* Observe the actually committed counter/Source state, before any touch. */
+	SV_HeldSessionMoved(host_client);
 
 	if (!host_client->spectator)
 	{
@@ -9386,7 +9413,11 @@ void SV_PostRunCmd(void)
 			pr_global_struct->self = EDICT_TO_PROG(svprogfuncs, sv_player);
 
 			if (pr_global_ptrs->PlayerPostThink)
+			{
+				SV_HeldSourceBoundary(host_client, HELD_POST_ENTER);
 				PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->PlayerPostThink);
+				SV_HeldSourceBoundary(host_client, HELD_POST_EXIT);
+			}
 
 			WPhys_RunNewmis (&sv.world);
 		}
@@ -9753,7 +9784,7 @@ SV_ExecuteClientMessage
 The current net_message is parsed for the given client
 ===================
 */
-void SV_ExecuteClientMessage (client_t *cl)
+static void SV_ExecuteClientMessageBody (client_t *cl)
 {
 	client_t *split = cl;
 	int		c;
@@ -10110,6 +10141,25 @@ void SV_ExecuteClientMessage (client_t *cl)
 	host_client = NULL;
 	sv_player = NULL;
 }
+void SV_ExecuteClientMessage (client_t *cl)
+{
+	SV_HeldSourceBoundary(cl, HELD_MESSAGE_ENTER);
+	SV_ExecuteClientMessageBody(cl);
+	SV_HeldSourceBoundary(cl, HELD_MESSAGE_EXIT);
+}
+
+void SV_HeldFrameBoundary(held_boundary_t boundary)
+{
+	int i;
+	for (i = 0; i < sv.allocated_client_slots; ++i)
+		SV_HeldSourceBoundary(&svs.clients[i], boundary);
+}
+
+void SV_HeldEffectAll(void)
+{
+	SV_HeldFrameBoundary(HELD_EFFECT);
+}
+
 #ifdef Q2SERVER
 static void SVQ2_ClientThink(q2edict_t *ed, usercmd_t *cmd)
 {

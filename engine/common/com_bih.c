@@ -2697,6 +2697,179 @@ void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, stru
 		return;
 	BIH_EnumCollision_r ((struct bihnode_s*)mod->cnodes, mins, maxs, en);
 }
+
+static qboolean BIH_HeldFinite(float value)
+{
+	unsigned int bits;
+	memcpy(&bits, &value, sizeof(bits));
+	return (bits & 0x7f800000u) != 0x7f800000u;
+}
+
+static qboolean BIH_HeldAirBoxEmpty_r(const struct bihnode_s *node,
+	const vec3_t mins, const vec3_t maxs, unsigned int depth, unsigned int *budget)
+{
+	const vec_t *a, *b, *c;
+	vec3_t tmins, tmaxs;
+	int i, axis;
+	if (!*budget || depth >= 64)
+		return false;
+	--*budget;
+	switch (node->type)
+	{
+	case BIH_GROUP:
+		if (node->group.numchildren < 0 || node->group.numchildren > 65536 || node->group.firstchild <= 0)
+			return false;
+		for (i = 0; i < node->group.numchildren; ++i)
+			if (!BIH_HeldAirBoxEmpty_r(node + node->group.firstchild + i, mins, maxs, depth + 1, budget))
+				return false;
+		return true;
+#ifdef BIH_USEBIH
+	case BIH_X:
+	case BIH_Y:
+	case BIH_Z:
+		axis = node->type - BIH_X;
+		if (node->bihnode.firstchild <= 0)
+			return false;
+		for (i = 0; i != 2; ++i)
+		{
+			if (!BIH_HeldFinite(node->bihnode.cmin[i]) || !BIH_HeldFinite(node->bihnode.cmax[i]) ||
+				node->bihnode.cmin[i] > node->bihnode.cmax[i])
+				return false;
+			if (node->bihnode.cmin[i] <= maxs[axis] && node->bihnode.cmax[i] >= mins[axis])
+				if (!BIH_HeldAirBoxEmpty_r(node + node->bihnode.firstchild + i, mins, maxs, depth + 1, budget))
+					return false;
+		}
+		return true;
+#endif
+	case BIH_BRUSH:
+		if (!node->data.brush || node->data.contents != (unsigned int)node->data.brush->contents)
+			return false;
+		if (!node->data.contents)
+			return true;
+		for (i = 0; i != 3; ++i)
+			if (!BIH_HeldFinite(node->data.brush->absmins[i]) || !BIH_HeldFinite(node->data.brush->absmaxs[i]) ||
+				node->data.brush->absmins[i] > node->data.brush->absmaxs[i])
+				return false;
+		return !BIH_BoundsIntersect(node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs);
+	case BIH_TRIANGLE:
+		if (!node->data.contents)
+			return true;
+		if (!node->data.tri.xyz || !node->data.tri.indexes)
+			return false;
+		a = node->data.tri.xyz[node->data.tri.indexes[0]];
+		b = node->data.tri.xyz[node->data.tri.indexes[1]];
+		c = node->data.tri.xyz[node->data.tri.indexes[2]];
+		for (i = 0; i != 3; ++i)
+			if (!BIH_HeldFinite(a[i]) || !BIH_HeldFinite(b[i]) || !BIH_HeldFinite(c[i]))
+				return false;
+		VectorCopy(a, tmins);
+		VectorCopy(a, tmaxs);
+		AddPointToBounds((vec_t*)b, tmins, tmaxs);
+		AddPointToBounds((vec_t*)c, tmins, tmaxs);
+		return !BIH_BoundsIntersect(tmins, tmaxs, mins, maxs);
+	default:
+		/* Includes props: never mistake an unloaded or opaque submodel for air. */
+		return false;
+	}
+}
+
+qboolean BIH_HeldAirBoxEmpty(model_t *mod, const vec3_t mins, const vec3_t maxs)
+{
+	unsigned int budget = 65536;
+	int i;
+	if (!mod || mod->loadstate != MLS_LOADED || !(mod->engineflags & MDLF_SOURCEBSP) || !mod->cnodes)
+		return false;
+#ifdef TERRAIN
+	if (mod->terrain)
+		return false;
+#endif
+	for (i = 0; i != 3; ++i)
+		if (!BIH_HeldFinite(mins[i]) || !BIH_HeldFinite(maxs[i]) || mins[i] > maxs[i])
+			return false;
+	return BIH_HeldAirBoxEmpty_r(mod->cnodes, mins, maxs, 0, &budget);
+}
+
+unsigned int BIH_HeldAirBoxTest(unsigned int *checks)
+{
+	model_t model;
+	struct bihnode_s nodes[66];
+	q2cbrush_t brush;
+	vec3_t mins = {-1,-1,-1}, maxs = {1,1,1};
+	unsigned int failures = 0, budget, nonfinite = 0x7fc00000u;
+#ifdef BIH_USEBIH
+	int j;
+#endif
+	int i;
+#define HELD_BOX_CHECK(x) do { ++*checks; if (!(x)) ++failures; } while (0)
+	*checks = 0;
+	memset(&model, 0, sizeof(model));
+	memset(nodes, 0, sizeof(nodes));
+	memset(&brush, 0, sizeof(brush));
+	model.cnodes = nodes;
+	model.loadstate = MLS_LOADED;
+	model.engineflags = MDLF_SOURCEBSP;
+	nodes[0].type = BIH_BRUSH;
+	nodes[0].data.brush = &brush;
+	nodes[0].data.contents = brush.contents = FTECONTENTS_SOLID;
+	VectorSet(brush.absmins, -2,-2,-2);
+	VectorSet(brush.absmaxs, 2,2,2);
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	VectorSet(brush.absmins, 4,4,4);
+	VectorSet(brush.absmaxs, 5,5,5);
+	HELD_BOX_CHECK(BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	brush.contents = FTECONTENTS_WATER;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	nodes[0].data.contents = brush.contents = FTECONTENTS_WATER;
+	HELD_BOX_CHECK(BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	VectorSet(brush.absmins, -2,-2,-2);
+	VectorSet(brush.absmaxs, 2,2,2);
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	nodes[0].type = BIH_MODEL;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	model.cnodes = NULL;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	model.cnodes = nodes;
+	model.engineflags = 0;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	model.engineflags = MDLF_SOURCEBSP;
+	model.loadstate = MLS_LOADING;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	model.loadstate = MLS_LOADED;
+	for (i = 0; i < 65; ++i)
+	{
+		nodes[i].type = BIH_GROUP;
+		nodes[i].group.firstchild = 1;
+		nodes[i].group.numchildren = 1;
+	}
+	nodes[65].type = BIH_BRUSH;
+	nodes[65].data.brush = &brush;
+	nodes[65].data.contents = brush.contents = 0;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	budget = 0;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty_r(nodes + 65, mins, maxs, 0, &budget));
+	budget = 1;
+	HELD_BOX_CHECK(BIH_HeldAirBoxEmpty_r(nodes + 65, mins, maxs, 0, &budget));
+	HELD_BOX_CHECK(budget == 0);
+#ifdef BIH_USEBIH
+	memset(nodes, 0, sizeof(nodes));
+	nodes[0].type = BIH_X;
+	nodes[0].bihnode.firstchild = 1;
+	for (j = 0; j != 2; ++j)
+	{
+		nodes[0].bihnode.cmin[j] = j ? -5 : 4;
+		nodes[0].bihnode.cmax[j] = j ? -4 : 5;
+		nodes[1 + j].type = BIH_MODEL;
+	}
+	HELD_BOX_CHECK(BIH_HeldAirBoxEmpty(&model, mins, maxs));
+	nodes[0].bihnode.cmin[0] = -.5f;
+	nodes[0].bihnode.cmax[0] = .5f;
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+#endif
+	memcpy(&mins[0], &nonfinite, sizeof(nonfinite));
+	HELD_BOX_CHECK(!BIH_HeldAirBoxEmpty(&model, mins, maxs));
+#undef HELD_BOX_CHECK
+	return failures;
+}
 #endif
 
 void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)

@@ -2,6 +2,9 @@
 //The biggest strength of this plugin system is that ALL interactions are performed via
 //named functions, this makes it *really* easy to port plugins from one engine to another.
 
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 #include "quakedef.h"
 #include <limits.h>
 #include "fs.h"
@@ -111,11 +114,149 @@ void Plug_RegisterBuiltin_(char *name, funcptr_t bi, int flags);
 #define PLUG_BIF_NEEDSRENDERER 4
 
 #include "netinc.h"
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__linux__)
+#include <dlfcn.h>
+#include <link.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+#endif
+
+static void Plug_ArtifactWipe(void *data, size_t size)
+{
+	volatile unsigned char *p = data;
+	while (size--) *p++ = 0;
+}
+/* Loaded image object only. No filename-only fallback on lookup/identity error. */
+static int Plug_ImageFingerprint(dllhandle_t *module, unsigned char digest[32])
+{
+#if defined(_WIN32) || defined(__linux__)
+	unsigned char block[65536];
+	uint64_t context[128], total = 0, size = 0;
+	int result = 0;
+#ifdef _WIN32
+	typedef DWORD (WINAPI *mapped_name_t)(HANDLE, LPVOID, LPWSTR, DWORD);
+	union {FARPROC generic; mapped_name_t call;} mapped;
+	wchar_t path[2048] = L"\\\\?\\GLOBALROOT";
+	size_t prefix = wcslen(path);
+	DWORD length, bytes;
+	HANDLE file = INVALID_HANDLE_VALUE;
+	BY_HANDLE_FILE_INFORMATION before, after;
+	mapped.generic = GetProcAddress(GetModuleHandleW(L"kernel32.dll"),"K32GetMappedFileNameW");
+	if (!mapped.generic) goto cleanup;
+	length = mapped.call(GetCurrentProcess(),module ? module : GetModuleHandleW(NULL),path+prefix,countof(path)-prefix);
+	if (!length || length >= countof(path)-prefix) goto cleanup;
+	path[prefix+length] = 0;
+	file = CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,
+		FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_SEQUENTIAL_SCAN,NULL);
+	if (file == INVALID_HANDLE_VALUE || GetFileType(file) != FILE_TYPE_DISK ||
+		!GetFileInformationByHandle(file,&before) || (before.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT)) ||
+		before.nFileSizeHigh) goto cleanup;
+	size = before.nFileSizeLow;
+#else
+	int file = -1;
+	FILE *maps = NULL;
+	struct stat before, after;
+	struct link_map *link = NULL;
+	char row[2048], permissions[5];
+	unsigned long long start, end, offset, inode;
+	unsigned int device_major, device_minor;
+	uintptr_t address;
+	int identity = 0;
+	ssize_t bytes;
+	if (module)
+	{
+		if (dlinfo(module,RTLD_DI_LINKMAP,&link) || !link || !link->l_name || !*link->l_name) goto cleanup;
+		file = open(link->l_name,O_RDONLY|O_CLOEXEC);
+		if (file < 0 || fstat(file,&before)) goto cleanup;
+		maps = fopen("/proc/self/maps","re"); if (!maps) goto cleanup;
+		address = (uintptr_t)link->l_ld;
+		while (fgets(row,sizeof(row),maps))
+		{
+			if (sscanf(row,"%llx-%llx %4s %llx %x:%x %llu",&start,&end,permissions,&offset,&device_major,&device_minor,&inode) != 7) continue;
+			if (address >= start && address < end)
+			{
+				identity = inode && inode == (unsigned long long)before.st_ino &&
+					device_major == major(before.st_dev) && device_minor == minor(before.st_dev);
+				break;
+			}
+		}
+		fclose(maps); maps = NULL;
+		if (!identity) goto cleanup;
+	}
+	else
+	{
+		file = open("/proc/self/exe",O_RDONLY|O_CLOEXEC);
+		if (file < 0 || fstat(file,&before)) goto cleanup;
+	}
+	if (!S_ISREG(before.st_mode) || before.st_size <= 0) goto cleanup;
+	size = before.st_size;
+#endif
+	if (!size || size > 256u*1024u*1024u || hash_sha2_256.contextsize > sizeof(context) || hash_sha2_256.digestsize != 32) goto cleanup;
+	hash_sha2_256.init(context);
+	while (total < size)
+	{
+		size_t amount = min((uint64_t)sizeof(block),size-total);
+#ifdef _WIN32
+		if (!ReadFile(file,block,amount,&bytes,NULL) || !bytes) goto cleanup;
+#else
+		bytes = read(file,block,amount); if (bytes <= 0) goto cleanup;
+#endif
+		hash_sha2_256.process(context,block,bytes); total += bytes;
+	}
+#ifdef _WIN32
+	if (!GetFileInformationByHandle(file,&after) || before.dwVolumeSerialNumber != after.dwVolumeSerialNumber ||
+		before.nFileIndexHigh != after.nFileIndexHigh || before.nFileIndexLow != after.nFileIndexLow ||
+		before.nFileSizeHigh != after.nFileSizeHigh || before.nFileSizeLow != after.nFileSizeLow ||
+		memcmp(&before.ftLastWriteTime,&after.ftLastWriteTime,sizeof(FILETIME))) goto cleanup;
+#else
+	if (fstat(file,&after) || before.st_dev != after.st_dev || before.st_ino != after.st_ino || before.st_size != after.st_size ||
+		before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
+		before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec) goto cleanup;
+#endif
+	hash_sha2_256.terminate(digest,context); result = 1;
+cleanup:
+#ifdef _WIN32
+	if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+	Plug_ArtifactWipe(path,sizeof(path));
+#else
+	if (maps) fclose(maps);
+	if (file >= 0) close(file);
+	Plug_ArtifactWipe(row,sizeof(row));
+#endif
+	Plug_ArtifactWipe(block,sizeof(block)); Plug_ArtifactWipe(context,sizeof(context));
+	if (!result) memset(digest,0,32);
+	return result;
+#else
+	memset(digest,0,32);
+	return 0;
+#endif
+}
+static int Plug_ImageContains(dllhandle_t *module, const void *code)
+{
+#ifdef _WIN32
+	MEMORY_BASIC_INFORMATION info;
+	return module && code && VirtualQuery(code,&info,sizeof(info)) == sizeof(info) &&
+		info.Type == MEM_IMAGE && info.AllocationBase == module;
+#elif defined(__linux__)
+	struct link_map *link = NULL;
+	Dl_info info;
+	return module && code && !dlinfo(module,RTLD_DI_LINKMAP,&link) && link && dladdr(code,&info) &&
+		info.dli_fbase == (void*)(uintptr_t)link->l_addr;
+#else
+	return 0;
+#endif
+}
 
 typedef struct plugin_s {
 	char *name;
 	char filename[MAX_OSPATH];
 	dllhandle_t *lib;
+	unsigned char artifact[32];
+	uint64_t artifact_epoch;
 
 	void (QDECL *tick)(double realtime, double gametime);
 #ifndef SERVERONLY
@@ -160,6 +301,32 @@ void Plug_Close(plugin_t *plug);
 
 
 static plugin_t *plugs;
+static uint64_t plug_artifact_epoch = 1;
+uint64_t Plug_ArtifactFingerprint(void *module, const void *code, unsigned char digest[32])
+{
+	static unsigned char engine[32];
+	static int engine_status;
+	plugin_t *plug;
+	if (digest) memset(digest,0,32);
+	COM_AssertMainThread("Plug_ArtifactFingerprint");
+	if (!module)
+	{
+		if (code) return 0;
+		if (!engine_status) engine_status = Plug_ImageFingerprint(NULL,engine) ? 1 : -1;
+		if (engine_status != 1) return 0;
+		if (digest) memcpy(digest,engine,32);
+		return 1;
+	}
+	/* Worker model loads carry the immutable registration epoch instead. */
+	for (plug = plugs; plug; plug = plug->next)
+		if (plug == module)
+		{
+			if (!plug->lib || !plug->artifact_epoch || (code && !Plug_ImageContains(plug->lib,code))) return 0;
+			if (digest) memcpy(digest,plug->artifact,32);
+			return plug->artifact_epoch;
+		}
+	return 0;
+}
 
 #ifdef USERBE
 #include "pr_common.h"
@@ -273,6 +440,9 @@ static plugin_t *Plug_Load(const char *file)
 	if (newplug->lib)
 	{
 		Con_DPrintf("Created plugin %s\n", file);
+		if (plug_artifact_epoch) ++plug_artifact_epoch;
+		if (plug_artifact_epoch && Plug_ImageFingerprint(newplug->lib,newplug->artifact))
+			newplug->artifact_epoch = plug_artifact_epoch;
 
 		currentplug = newplug;
 		success = initfunction(PlugBI_GetEngineInterface(plugcorefuncs_name, sizeof(plugcorefuncs_t)));

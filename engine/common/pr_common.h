@@ -382,6 +382,8 @@ void QCBUILTIN PF_strreplace (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 void QCBUILTIN PF_strireplace (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_randomvector (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 int PR_QCFile_From_VFS (pubprogfuncs_t *prinst, const char *name, vfsfile_t *f, qboolean write);
+int PR_QCFile_From_WriteStream(pubprogfuncs_t *prinst, const char *name, vfsfile_t *f);
+vfsfile_t *PR_QCFile_StreamVFS(pubprogfuncs_t *prinst, int handle, const char *name);
 int PR_QCFile_From_Buffer (pubprogfuncs_t *prinst, const char *name, void *buffer, size_t offset, size_t len);
 void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 

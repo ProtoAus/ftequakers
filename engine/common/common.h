@@ -713,6 +713,8 @@ qboolean FS_RemoveTree(searchpathfuncs_t *pathhandle, const char *fname);
 qboolean FS_Copy(const char *source, const char *dest, enum fs_relative relativesource, enum fs_relative relativedest);
 //qboolean FS_NativePath(const char *fname, enum fs_relative relativeto, char *out, int outlen);	//if you really need to fopen yourself
 qboolean FS_SystemPath(const char *fname, enum fs_relative relativeto, char *out, int outlen);	//if you really need to fopen yourself
+// Main-thread OS-private directory constructor; callback resolves actual native roots.
+qboolean FS_ValidateExternalDirectory(qboolean (*outside)(const char *root, void *context), void *context);
 qboolean FS_DisplayPath(const char *fname, enum fs_relative relativeto, char *out, int outlen);	//retrieves a string for user display. prefixes may be masked for privacy.
 qboolean FS_WriteFile (const char *filename, const void *data, int len, enum fs_relative relativeto);
 void *FS_MallocFile(const char *filename, enum fs_relative relativeto, qofs_t *filesize);

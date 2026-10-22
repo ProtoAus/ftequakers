@@ -3271,6 +3271,29 @@ qboolean FS_SystemPath(const char *fname, enum fs_relative relativeto, char *out
 {
 	return FS_NativePath(fname, relativeto, out, outlen, false);
 }
+qboolean FS_ValidateExternalDirectory(qboolean (*outside)(const char *root, void *context), void *context)
+{
+	searchpath_t *search;
+	unsigned int count = 0;
+	qboolean valid;
+	COM_AssertMainThread("FS_ValidateExternalDirectory");
+	if (!outside || !fs_thread_mutex || !com_searchpaths || !*com_gamepath) return false;
+	COM_WorkerLock();
+	Sys_LockMutex(fs_thread_mutex);
+	valid = outside(com_gamepath,context);
+	if (valid && com_homepathenabled && *com_homepath) valid = outside(com_homepath,context);
+	if (valid && host_parms.basedir && *host_parms.basedir) valid = outside(host_parms.basedir,context);
+	if (valid && host_parms.binarydir && *host_parms.binarydir) valid = outside(host_parms.binarydir,context);
+	for (search = com_searchpaths; valid && search; search = search->next)
+	{
+		if (++count > 4096) {valid = false; break;}
+		if (!(search->flags & SPF_ISDIR)) continue;
+		if ((search->flags & SPF_VIRTUAL) || !*search->logicalpath || !outside(search->logicalpath,context)) valid = false;
+	}
+	Sys_UnlockMutex(fs_thread_mutex);
+	COM_WorkerUnlock();
+	return valid;
+}
 qboolean FS_DisplayPath(const char *fname, enum fs_relative relativeto, char *out, int outlen)
 {
 	if (outlen)

@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 #ifndef CLIENTONLY
+#include "sv_held_session.h"
 extern int			total_loading_size, current_loading_size, loading_stage;
 char *T_GetString(int num);
 
@@ -679,6 +680,7 @@ void SV_UpdateMaxPlayers(int newmax)
 	if (newmax != svs.allocated_client_slots)
 	{
 		client_t *old = svs.clients;
+		SV_HeldSessionDropAll();
 		for (i = newmax; i < svs.allocated_client_slots; i++)
 		{
 			if (svs.clients[i].state)

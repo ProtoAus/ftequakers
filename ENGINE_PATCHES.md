@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 923 — recording-relative counters and bounded held continuation
+
+**Problem:** A new attempt could inherit cumulative counter history belonging to
+another recording. Failed selected recordings needed nondestructive private
+recovery, while optional typed held evidence required explicit compatibility
+with the current Source mover rather than an obsolete compiled-kernel profile.
+**Change:** Declare recording-relative counters in ordinary REC14/native REC15;
+retain legacy clock/counter semantics. Join bounded typed context/initial,
+coverage, execution/clock/terminal evidence to one closed source, with explicit
+unsupported/malformed/failure routing. Preserve failed selected source privately
+using identity checks and no-replace recovery, retaining existing policy/expiry.
+Keep the detailed collector opt-in. Review only mover11 for the narrow native
+profile: unchanged fixed schemas, complete zero assist suffix and independent
+live/context/model water-state fences. No old/future version bypass, general
+world coverage, historical reclassification or human/device attestation.
+**Verified:** Full isolated Windows engine/plugin/QC build, no NEW warnings;
+real mover11 native15 cold PASS45ticks42rows after producer/client exit,19 acting
+altered-evidence controls; physical374/0 with25native moves, ledger164/0,
+input66/0. Targeted source review OK with notes. Reader864/0; unchanged captured
+405REC/120VIEW corpus,275existing faulting files/276diagnostics, zero increase.
+Earlier Windows/ARM retention/calendar/error-latch134/0 receipts retained as
+prior-artifact evidence only. A stale synthetic footer failed before correction;
+current fixture now uses the required zero park trailer, no decoder relaxation.
+Final clean artifact/ARM gates and guarded rollout are separate, not claimed by
+these implementation checks. Scope/limits: tools/p923-recording-continuation.md
+in the QC repository. No release or Build-number decision implied.
+
 ## Patch 922 — Local filters, persistent scoreboard and quiet empty maps (QuakeC)
 
 **Problem:** Local hid the direction/Segmented row; TAB-up or another right-click

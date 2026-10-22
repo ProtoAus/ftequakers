@@ -433,8 +433,16 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,	NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		else if (write)	//FTESurf Patch 375: FILE_SHARE_READ, as the NT branch; sv_sys_win.c never sets WinNT, so the dedicated server always comes here
 			h = CreateFileA(osname, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,	NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		else if (read)	//FTESurf Patch 375: FILE_SHARE_WRITE, so a reader can copy a file another handle is still writing
-			h = CreateFileA(osname, GENERIC_READ,				FILE_SHARE_READ|FILE_SHARE_WRITE,	NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		else if (read)	//FTESurf Patch 375: a live recording can be read while another handle writes it
+		{
+			DWORD sharing = FILE_SHARE_READ|FILE_SHARE_WRITE;
+#ifdef _WIN64
+			// Dedicated servers leave WinNT unset. x64 is nevertheless NT, so
+			// match the wide reader when a native source owns DELETE access.
+			sharing |= FILE_SHARE_DELETE;
+#endif
+			h = CreateFileA(osname, GENERIC_READ, sharing, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		}
 		else
 			h = INVALID_HANDLE_VALUE;
 	}

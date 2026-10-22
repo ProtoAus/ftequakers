@@ -18,6 +18,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #include "quakedef.h"
+#include "com_bih.h"
+#include "sv_held_ledger.h"
+#include "sv_held_replay.h"
+#include "sv_held_coverage.h"
+#include "sv_held_file.h"
 #include "pr_common.h"
 #include "fs.h"
 #include "netinc.h"
@@ -5327,6 +5332,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	const char   *viewbad = NULL;
 	int           nspec = 0, nspinside = 0, spinside_row = -1;
 	char          spinside_kind[16] = "";
+	qboolean      mcsyntax = false;
 	int           nmc = 0, mcbad = 0, mcrow = -1;	/* Patch 376: the client's mouse counts */
 	float         mcdx = 0, mcdy = 0;
 	func_t        vf_restart = 0;
@@ -5364,6 +5370,62 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		{
 			RECSIM_REFUSE("recording contains invalid raw line bytes");
 			Con_Printf(CON_ERROR "pm_recsim: invalid raw recording line bytes.\n");
+			FS_FreeFile(buf);
+			return;
+		}
+	}
+	/* Native framing is a separate initial-only consumer, never the legacy ground/state
+	 * installing interpreter. Also refuse a downgraded header with a mandatory
+	 * native suffix instead of silently ignoring that suffix as legacy text. */
+	{
+		int declared_version = 0, native_recording, native_version, native_body = 0;
+		const char *scan, *line_end, *word;
+		unsigned int family;
+		size_t name_size;
+		held_trajectory_t trajectory = {0};
+		held_verify_result_t outcome;
+		sscanf(buf,"FTESURF-REC %d",&declared_version);
+		native_version = declared_version == HELD_PREVIOUS_NATIVE_REC_VERSION ? HELD_PREVIOUS_NATIVE_REC_VERSION : HELD_NATIVE_REC_VERSION;
+		native_recording = declared_version == HELD_NATIVE_REC_VERSION;
+		for (scan = buf; !native_recording && declared_version < HELD_NATIVE_REC_VERSION && scan < end; scan = line_end+1)
+		{
+			line_end = memchr(scan,'\n',end-scan); if (!line_end) line_end = end;
+			word = scan; while (word < line_end && (unsigned char)*word <= ' ') ++word;
+			if (line_end-word >= 5 && !memcmp(word,"begin",5) &&
+				(word+5 == line_end || (unsigned char)word[5] <= ' ')) native_body = 1;
+			if (native_body && word < line_end && *word == 'h' &&
+				!(line_end-word >= 4 && !memcmp(word,"hold",4) &&
+				(word+4 == line_end || (unsigned char)word[4] <= ' '))) native_recording = 1;
+			if (word < line_end && *word == 'h')
+				for (family = 0; family < HELD_RECORD_COUNT; ++family)
+				{
+					name_size = strlen(held_schemas[family].name);
+					if ((size_t)(line_end-word) >= name_size && !memcmp(word,held_schemas[family].name,name_size) &&
+						(word+name_size == line_end || (unsigned char)word[name_size] <= ' '))
+						{native_recording = 1; break;}
+				}
+			if (line_end == end) break;
+		}
+		if (native_recording)
+		{
+			outcome = SV_HeldVerifyRecording(buf,fsz,world,&trajectory);
+			if (verify)
+			{
+				switch (outcome)
+				{
+				case HELD_VERIFY_MATCH:
+					Con_Printf("VERIFY %s PASS ticks %.0f rows %u\n",fname,trajectory.ticks,trajectory.native_moves);
+					break;
+				case HELD_VERIFY_MISMATCH:
+					Con_Printf("VERIFY %s HOLD native REC%d body/clock reproduction disagrees\n",fname,native_version);
+					break;
+				case HELD_VERIFY_MALFORMED: RECSIM_REFUSE(va("malformed native REC%d evidence",native_version)); break;
+				case HELD_VERIFY_INCOMPLETE: RECSIM_REFUSE(va("incomplete native REC%d evidence",native_version)); break;
+				default: RECSIM_REFUSE(va("unsupported native REC%d context/evidence",native_version)); break;
+				}
+			}
+			else Con_Printf("pm_recsim: native REC%d result %u, ticks %.0f, executions %u\n",
+				native_version,(unsigned int)outcome,trajectory.ticks,trajectory.native_moves);
 			FS_FreeFile(buf);
 			return;
 		}
@@ -5444,7 +5506,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					   unexplained 2-unit physics step. */
 					else if (!strncmp(ln, "viewclock", 9))
 					{
-						if ((filever != 12 && filever != 13) || strcmp(ln, "viewclock 1") || ++viewcap != 1)
+						if ((filever != 12 && filever != 13 && filever != 14) || strcmp(ln, "viewclock 1") || ++viewcap != 1)
 							viewbad = "a malformed or duplicate viewing-clock capability";
 					}
 					else if (!strncmp(ln, "startjit ", 9))
@@ -5578,7 +5640,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			{
 				/* Patch 915: parked elapsed time is not a simulated movement span. */
 				if (pass == 0 && !sesbad)
-					sesbad = filever == 13 ? "parked-wall clock edges (not modelled)" : "a parked-wall edge outside recorder v13";
+					sesbad = (filever == 13 || filever == 14) ? "parked-wall clock edges (not modelled)" : "a parked-wall edge outside recorder v13/14";
 			}
 			else if (!strncmp(ln, "viewclock", 9))
 			{
@@ -5589,7 +5651,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					float wall, total;
 					int own, on;
 					nview++;
-					if ((filever != 12 && filever != 13) || viewcap != 1 || !args ||
+					if ((filever != 12 && filever != 13 && filever != 14) || viewcap != 1 || !args ||
 					    !SV_RecSim_ViewFields(args, fields) ||
 					    (strcmp(fields[0], "spec") && strcmp(fields[0], "replay")) ||
 					    (strcmp(fields[1], "0") && strcmp(fields[1], "1")) ||
@@ -5629,7 +5691,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 					nclock++;
 					if (!clockbad)
 						{
-						if (filever == 12 || filever == 13)
+						if (filever == 12 || filever == 13 || filever == 14)
 						{
 							char fields[4][64];
 							char counted[256];
@@ -5681,8 +5743,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			else if (!strncmp(ln, "end ", 4) && pass == 0)
 				{
 					haveend = true;
-					if (filever != 13) endticks = atoi(ln+4);
-					if (filever == 13)
+					if (filever != 13 && filever != 14) endticks = atoi(ln+4);
+					if (filever == 13 || filever == 14)
 					{
 						long v[14];
 						int n;
@@ -5702,7 +5764,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						}
 						while (*q == ' ' || *q == '\t') q++;
 						if (!valid || *q || v[11] != nclock || v[12] != nview || v[13] != 0)
-							viewbad = "a malformed v13 trailer or unsupported park/clock counts";
+							viewbad = "a malformed parked-clock trailer or unsupported park/clock counts";
 						else { endticks = (int)v[0]; endviews = (int)v[12]; }
 					}
 					else if (filever == 12)
@@ -5718,7 +5780,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
 			{
 				nresume++;
-				if ((filever == 12 || filever == 13) && SV_RecSim_ViewRestore(ln))
+				if ((filever == 12 || filever == 13 || filever == 14) && SV_RecSim_ViewRestore(ln))
 				{
 					if (viewowner) viewbad = "a viewing window open across a restore";
 					else haveviewwall = false;
@@ -5726,9 +5788,18 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			}
 			else if (!strncmp(ln, "mc ", 3) && pass == 0)
 			{	/* Patch 376: ring (what the device sent) against read (what the view used) */
-				int pk, row;
+				int pk, row, valid;
 				float rx, ry, ax, ay;
-				if (sscanf(ln+3, "%i %i %f %f %f %f", &pk, &row, &rx, &ry, &ax, &ay) == 6)
+				held_counts_t relative;
+				if (filever == 14)
+				{
+					valid = SV_HeldRelativeCountsParse(ln,strlen(ln),!nmc,&relative);
+					if (!valid) mcsyntax = true;
+					pk = relative.packet; row = relative.row;
+					rx = relative.ring[0]; ry = relative.ring[1]; ax = relative.read[0]; ay = relative.read[1];
+				}
+				else valid = sscanf(ln+3, "%i %i %f %f %f %f", &pk, &row, &rx, &ry, &ax, &ay) == 6;
+				if (valid)
 				{
 					nmc++;
 					if ((rx != ax || ry != ay) && mcbad++ == 0)
@@ -5885,7 +5956,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 				}
 				else
 				{
-					if (pass == 0 && (filever == 12 || filever == 13) && viewpausevalid && sn == cses + 2 && stk == pptk && smt >= 0 && scy >= 0 && scy < rate)
+					if (pass == 0 && (filever == 12 || filever == 13 || filever == 14) && viewpausevalid && sn == cses + 2 && stk == pptk && smt >= 0 && scy >= 0 && scy < rate)
 					{
 						if (viewowner) viewbad = "a viewing window open across a session";
 						else haveviewwall = false;
@@ -6000,8 +6071,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	}
 	/* Patch 367: v10 is read -- each session is reseeded from its own `seed` on
 	   its restarted counter.  Anything this replay cannot follow is refused. */
-	if (filever > 13)
-		sesbad = "a newer format (this verifier reads FTESURF-REC 13)";
+	if (filever > 14)
+		sesbad = "an unsupported format (ordinary through14, native15)";
+	else if (filever == 14 && mcsyntax)
+		sesbad = "malformed recording-relative mouse counts";
 	else if (!sesbad && npause && filever < 10)
 		sesbad = "a `pause` under a header below FTESURF-REC 10";
 	else if (!sesbad && !npause && filever == 10)
@@ -6142,12 +6215,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 			refuse = "excluded-clock release inputs (not modelled)";
 		else if (viewbad)
 			refuse = viewbad;
-		else if ((filever == 12 || filever == 13) && (viewcap != 1 || viewowner || endviews < 0 || !haveclosingview || closingview != viewtotal))
+		else if ((filever == 12 || filever == 13 || filever == 14) && (viewcap != 1 || viewowner || endviews < 0 || !haveclosingview || closingview != viewtotal))
 			refuse = "an incomplete or inconsistent v12 viewing clock";
-		else if ((filever == 12 || filever == 13) && (inend_mt < 0 ||
+		else if ((filever == 12 || filever == 13 || filever == 14) && (inend_mt < 0 ||
 		         endticks != floor((float)((float)((float)inend_mt - closeorigin) + closecarry) - closefrozen + 0.5f) + floor((float)closingview / (float)rate + 0.5f)))
 			refuse = "an inconsistent inclusive closing equation";
-		else if ((filever == 12 || filever == 13) && viewtotal > 0)
+		else if ((filever == 12 || filever == 13 || filever == 14) && viewtotal > 0)
 			refuse = "positive viewing-wall carry (held-world replay not modelled)";
 		else if (clockbad)
 			refuse = clockbad;
@@ -7085,6 +7158,120 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 	Z_Free(spc);
 }
 
+static void SV_HeldCoverageTest_f(void)
+{
+	unsigned int checks, failures;
+	failures = SV_HeldCoverageTest(&checks);
+	Con_Printf("held native coverage: %u checks, %u failures\n", checks, failures);
+}
+
+typedef struct
+{
+	vfsfile_t *file;
+	size_t size;
+} held_vfs_reader_t;
+static int Held_VFSRead(void *opaque, size_t offset, void *buffer, size_t size)
+{
+	held_vfs_reader_t *r = opaque;
+	if (size > 4096 || offset > r->size || size > r->size-offset ||
+		VFS_GETLEN(r->file) != (qofs_t)r->size || !VFS_SEEK(r->file,(qofs_t)offset)) return 0;
+	return VFS_READ(r->file,buffer,(int)size);
+}
+static void SV_HeldLedgerTest_f(void)
+{
+	unsigned int checks, failures;
+	if (Cmd_IsInsecure()) return;
+	if (Cmd_IsInsecure()) return;
+	if (Cmd_Argc() == 2 && !strcmp(Cmd_Argv(1), "zones"))
+	{
+		failures = SV_HeldZoneTest(&checks);
+		Con_Printf("held shared zones: %u checks, %u failures (component only, not admission)\n", checks, failures);
+		return;
+	}
+	if (Cmd_Argc() == 2 && !strcmp(Cmd_Argv(1), "clock"))
+	{
+		failures = SV_HeldReplayClockTest(&checks);
+		Con_Printf("held clock adapter: %u checks, %u failures (synthetic, not admission)\n", checks, failures);
+		return;
+	}
+	if (Cmd_Argc() == 2 && !strcmp(Cmd_Argv(1), "physics"))
+	{
+		unsigned int acted;
+		failures = SV_HeldPhysicalTest(&checks, &acted);
+		Con_Printf("held physical kernel: %u checks, %u failures, %u native moves (synthetic, not admission)\n", checks, failures, acted);
+		return;
+	}
+	if (Cmd_Argc() == 2)
+	{
+		held_witness_t witness;
+		held_vfs_reader_t reader;
+		vfsfile_t *file = FS_OpenVFS(Cmd_Argv(1), "rb", FS_GAME);
+		qofs_t size = file ? VFS_GETLEN(file) : 0;
+		char prefix[12], *data = NULL;
+		int result = 0;
+		memset(&witness,0,sizeof(witness));
+		reader.file = file; reader.size = size > 0 && (uint64_t)size <= SIZE_MAX ? (size_t)size:0;
+		if (reader.size >= sizeof(prefix) && Held_VFSRead(&reader,0,prefix,sizeof(prefix)) == sizeof(prefix))
+		{
+			if (!memcmp(prefix,"FTESURF-REC ",sizeof(prefix)))
+				result = SV_HeldRecordingRead(Held_VFSRead,&reader,reader.size,&witness,NULL,NULL,NULL);
+			else if (reader.size <= HELD_MAX_DETAIL)
+			{
+				data = BZF_Malloc(reader.size);
+				if (data && VFS_SEEK(file,0) && VFS_READ(file,data,reader.size) == reader.size && VFS_GETLEN(file) == size)
+					result = SV_HeldWitnessParse(data,reader.size,&witness);
+			}
+		}
+		if (data) {memset(data,0,reader.size); BZ_Free(data);}
+		memset(prefix,0,sizeof(prefix)); memset(&reader,0,sizeof(reader));
+		if (file) VFS_CLOSE(file);
+		Con_Printf("held witness syntax: %d state %u records %u (not replay/admission)\n",
+			result, witness.status, (unsigned int)witness.records);
+		memset(&witness, 0, sizeof(witness));
+		return;
+	}
+	if (Cmd_Argc() != 1) return;
+	failures = SV_HeldLedgerTest(&checks);
+	Con_Printf("held typed ledger: %u checks, %u failures\n", checks, failures);
+	failures = SV_HeldInputTest(&checks);
+	Con_Printf("held ordinary input decoder: %u checks, %u failures\n", checks, failures);
+}
+
+static void SV_HeldFileTest_f(void)
+{
+	unsigned int checks;
+	int failures;
+	if (Cmd_IsInsecure()) return;
+	failures = SV_HeldFileTest(&checks);
+	Con_Printf("held ordinary source file: %u checks, %d failures\n", checks, failures);
+	if (Cmd_Argc() == 2)
+	{
+		failures = SV_HeldStoreTest(Cmd_Argv(1),&checks);
+		Con_Printf("held nonserved filesystem sink: %u checks, %d failures (dummy bytes only)\n",checks,failures);
+	}
+}
+static void SV_HeldFileProbe_f(void)
+{
+	int result;
+	if (Cmd_IsInsecure()) return;
+	if (Cmd_Argc() != 2)
+	{
+		Con_Printf("pm_held_file_probe data/parts/held-file-test-<fixture>.rec\n");
+		return;
+	}
+	result = SV_HeldFileProbe(Cmd_Argv(1));
+	Con_Printf("held ordinary source probe: %d (1=created and retired, 0=refused, negative=error)\n", result);
+}
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+static void SV_HeldAirTest_f(void)
+{
+	unsigned int checks, failures;
+	failures = BIH_HeldAirBoxTest(&checks);
+	Con_Printf("held air geometry: %u checks, %u failures\n", checks, failures);
+}
+#endif
+
 static void SV_RecSim_f (void)
 {
 	SV_RecSim_Run(Cmd_Argv(1), atoi(Cmd_Argv(2)), false);
@@ -7254,6 +7441,18 @@ void SV_InitOperatorCommands (void)
 	                "architectures with the same map and diff the three lines.");
 
 	//FTESurf Patch 327 -- the anti-cheat plan's E3.  Needs the run's own map.
+	Cmd_AddCommandD("pm_held_coverage_test", SV_HeldCoverageTest_f,
+		"Runs synthetic independent dispatch/control census controls; not replay acceptance.");
+	Cmd_AddCommandD("pm_held_ledger_test", SV_HeldLedgerTest_f,
+		"Runs bounded synthetic typed-ledger controls; not held replay acceptance.");
+	Cmd_AddCommandD("pm_held_file_test", SV_HeldFileTest_f,
+		"Creates reserved synthetic ordinary sources under the active game write root; not replay acceptance.");
+	Cmd_AddCommandD("pm_held_file_probe", SV_HeldFileProbe_f,
+		"Probes create-new refusal in the reserved synthetic source namespace; not replay acceptance.");
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	Cmd_AddCommandD("pm_held_air_test", SV_HeldAirTest_f,
+		"Runs bounded synthetic geometry controls; not held replay acceptance.");
+#endif
 	Cmd_AddCommandD("pm_recsim", SV_RecSim_f,
 	                "FTESurf: re-simulate a recording's input trace (plan E3).  "
 	                "pm_recsim <file.rec> [stop after N packets].  Feeds the `in` "

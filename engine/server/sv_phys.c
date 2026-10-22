@@ -1659,7 +1659,11 @@ void SV_ProgStartFrame (void)
 #endif
 	{
 		if (pr_global_ptrs->StartFrame)
+		{
+			SV_HeldFrameBoundary(HELD_FRAME_ENTER);
 			PR_ExecuteProgram (svprogfuncs, *pr_global_ptrs->StartFrame);
+			SV_HeldFrameBoundary(HELD_FRAME_EXIT);
+		}
 	}
 }
 #endif

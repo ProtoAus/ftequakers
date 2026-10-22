@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #include <sys/types.h>
 #ifndef CLIENTONLY
+#include "sv_held_session.h"
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+(i)*ge->edict_size)
 
 #define INVIS_CHAR1 12
@@ -514,6 +515,7 @@ void SV_DropClient (client_t *drop)
 	sizebuf_t termmsg;
 	char termbuf[64];
 
+	SV_HeldSessionDropClient(drop);
 	/*drop the first in the chain first*/
 	if (drop->controller && drop->controller != drop)
 	{
@@ -6066,6 +6068,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&hostname,	cvargroup_serverinfo);
 	Cvar_Register (&deathmatch,	cvargroup_serverinfo);
 	Cvar_Register (&spawn,	cvargroup_servercontrol);
+	SV_HeldSessionInit();
 
 	//arguably cheats. Must be switched on to use.
 	Cvar_Register (&watervis,	cvargroup_serverinfo);

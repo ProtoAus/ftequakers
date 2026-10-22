@@ -460,6 +460,8 @@ enum serverprotocols_e
 #define SV_PMPIN_COUNT_PRE882 70	//Patch 882: the names a pin below mover 10 publishes (SV_PMPinNeed)
 #define SV_PMPIN_FIXRAMPBUGS 63	//Patch 492: "fixrampbugs" in that table; SV_PMPinFill checks the name
 
+#include "sv_held_coverage.h"
+
 typedef struct client_s
 {
 	client_conn_state_t	state;
@@ -493,6 +495,7 @@ typedef struct client_s
 	double			localtime;			// of last message
 	qboolean jump_held;
 	pmsourcestate_t	pmsrc;	//FTESurf: pm_source.c cross-command state (duck, tick carry)
+	held_coverage_t held_coverage; /* Inactive until an admitted recording bind. */
 	unsigned int	lockanglesseq;		//mod is spamming angle changes, don't do relative changes. outgoing sequence. v_angles isn't really known until netchan.incoming_acknowledged>=lockangles
 
 	float			maxspeed;			// localized maxspeed
@@ -1468,7 +1471,10 @@ void SV_New_f (void);
 
 void SV_PreRunCmd(void);
 void SV_RunCmd (usercmd_t *ucmd, qboolean recurse);
+void SV_SetQWClientMoveVars(client_t *client);
 void SV_PostRunCmd(void);
+void SV_HeldFrameBoundary(held_boundary_t boundary);
+void SV_HeldEffectAll(void);
 void SV_RunCmdCleanup(void);
 void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
 //FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
@@ -1481,10 +1487,14 @@ size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
 qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);
 int SV_PMPinParse(const char *text, float *v);
 void SV_PMPinApply(const float *v);
+void SV_PMPinFill(float *v);
 qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st);
 qboolean SV_PMStateHasLand(const char *text);	//Patch 882
 qboolean SV_PMStateHasWater(const char *text);	//Patch 916
 unsigned int SV_PhysentDigest(void);
+/* Loaded main SSQC bytes, exact VM/single-module only; unavailable is not zero. */
+int SV_HeldProgsFingerprint(unsigned char digest[32]);
+uint64_t SV_HeldProgsEpoch(void);
 
 void SV_SendClientPrespawnInfo(client_t *client);
 void SV_ClientProtocolExtensionsChanged(client_t *client);

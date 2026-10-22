@@ -9,6 +9,9 @@
 #include "sv_sql.h"
 #endif
 #include "fs.h"
+#ifndef CLIENTONLY
+#include "sv_held_file.h"
+#endif
 
 #include <ctype.h>
 
@@ -2892,6 +2895,32 @@ int PR_QCFile_From_VFS (pubprogfuncs_t *prinst, const char *name, vfsfile_t *f, 
 	else
 		return -1;
 }
+int PR_QCFile_From_WriteStream(pubprogfuncs_t *prinst, const char *name, vfsfile_t *f)
+{
+	int handle;
+	if (!prinst || !name || !f) return -1;
+	handle = PR_QCFile_From_VFS(prinst, name, f, true);
+	if (handle >= FIRST_QC_FILE_INDEX)
+		pf_fopen_files[handle - FIRST_QC_FILE_INDEX].accessmode = FRIK_FILE_WRITESTREAM;
+	return handle;
+}
+/* Native recorder fence: return only a currently VM-owned, named stream.
+ * The caller checks its own VFS subtype/ticket; no pointer saved before fclose
+ * may be dereferenced after the VM has released that stream. */
+vfsfile_t *PR_QCFile_StreamVFS(pubprogfuncs_t *prinst, int handle, const char *name)
+{
+	int i;
+	if (!prinst || !name || !*name || handle < FIRST_QC_FILE_INDEX)
+		return NULL;
+	i = handle - FIRST_QC_FILE_INDEX;
+	if (i >= MAX_QC_FILES)
+		return NULL;
+	if (pf_fopen_files[i].prinst != prinst || strcmp(pf_fopen_files[i].name, name))
+		return NULL;
+	if (pf_fopen_files[i].accessmode != FRIK_FILE_STREAM && pf_fopen_files[i].accessmode != FRIK_FILE_WRITESTREAM)
+		return NULL;
+	return pf_fopen_files[i].file;
+}
 int PR_QCFile_From_Buffer (pubprogfuncs_t *prinst, const char *name, void *buffer, size_t ofs, size_t len)
 {
 	int i;
@@ -3406,7 +3435,14 @@ void QCBUILTIN PF_fsize64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 			VFS_FLUSH(pf_fopen_files[fnum].file);
 			if (prinst->callargc>1 && G_INT64(OFS_PARM1) >= 0)
 			{
-				if (!VFS_TRUNCATEOS(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1)))
+				qboolean resized;
+#ifndef CLIENTONLY
+				int native = SV_HeldFileResize(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1));
+				resized = native < 0 ? VFS_TRUNCATEOS(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1)) : native != 0;
+#else
+				resized = VFS_TRUNCATEOS(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1));
+#endif
+				if (!resized)
 					PF_Warningf(prinst, "PF_fsize: cannot truncate %s\n", pf_fopen_files[fnum].name);
 				G_INT64(OFS_RETURN) = VFS_GETLEN(pf_fopen_files[fnum].file);
 				return;

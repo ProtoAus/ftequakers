@@ -139,6 +139,9 @@ struct bihenum_s
 	unsigned int props, propsnohull;	//out: BIH_MODEL leaves met, and those without hull pieces
 };
 void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, struct bihenum_s *en);
+/* Conservative VBSP air proof; false includes unknown shape or exhausted budget. */
+qboolean BIH_HeldAirBoxEmpty(model_t *mod, const vec3_t mins, const vec3_t maxs);
+unsigned int BIH_HeldAirBoxTest(unsigned int *checks);
 #endif
 void BIH_BuildAlias (model_t *mod, struct galiasinfo_s *meshes);
 
@@ -161,3 +164,10 @@ extern vec3_t		bih_probe_tri[3];
 extern vec3_t		bih_probe_modelorg;
 extern unsigned int	bih_probe_contents;
 extern unsigned int	bih_probe_seq;
+
+/* Native artifact ownership. Epochs are volatile, never recording fields.
+ * Module NULL selects the running engine; code is then NULL. Main thread only. */
+#ifdef PLUGINS
+uint64_t Plug_ArtifactFingerprint(void *module, const void *code, unsigned char digest[32]);
+#endif
+uint64_t Mod_HeldWorldArtifacts(model_t *world, unsigned char bsp[32], unsigned char plugin[32]);

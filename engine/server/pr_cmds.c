@@ -41,6 +41,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef CLIENTONLY
 
 #include "pr_common.h"
+#include "sv_held_file.h"
+#include "sv_held_session.h"
+#include "sv_held_session.h"
 
 //okay, so these are a quick but easy hack
 int PR_EnableEBFSBuiltin(const char *name, int binum);
@@ -662,6 +665,7 @@ static void QDECL SVPR_Event_Touch(world_t *w, wedict_t *s, wedict_t *o, trace_t
 	int oself = pr_global_struct->self;
 	int oother = pr_global_struct->other;
 
+	SV_HeldEffectAll();
 	if (trace)
 		set_trace_globals(w->progs, trace);
 
@@ -676,6 +680,7 @@ static void QDECL SVPR_Event_Touch(world_t *w, wedict_t *s, wedict_t *o, trace_t
 
 static void QDECL SVPR_Event_Think(world_t *w, wedict_t *s)
 {
+	SV_HeldEffectAll();
 	pr_global_struct->self = EDICT_TO_PROG(w->progs, s);
 	pr_global_struct->other = EDICT_TO_PROG(w->progs, w->edicts);
 	if (!s->v->think)
@@ -689,6 +694,7 @@ static qboolean QDECL SVPR_Event_ContentsTransition(world_t *w, wedict_t *ent, i
 	if (ent->xv->contentstransition)
 	{
 		void *pr_globals = PR_globals(w->progs, PR_CURRENT);
+		SV_HeldEffectAll();
 		pr_global_struct->self = EDICT_TO_PROG(w->progs, ent);
 		pr_global_struct->time = w->physicstime;
 		G_FLOAT(OFS_PARM0) = oldwatertype;
@@ -736,6 +742,39 @@ pbool PDECL PR_SSQC_CheckHeaderCrc(pubprogfuncs_t *inst, progsnum_t idx, int crc
 	}
 	return true;
 }
+/* Exact loaded bytes, not a later reopening of a mutable progs path. */
+static struct
+{
+	unsigned char digest[32];
+	char pending[MAX_QPATH];
+	void *vm;
+	unsigned int capturing, captured, valid;
+} held_progs_artifact;
+static uint64_t held_progs_epoch = 1;
+static void Held_ProgsInvalidate(void)
+{
+	memset(&held_progs_artifact,0,sizeof(held_progs_artifact));
+	if (held_progs_epoch) ++held_progs_epoch; /* Saturate unavailable on wrap. */
+}
+static int Held_ProgsAvailable(void)
+{
+	return held_progs_epoch && held_progs_artifact.valid && !held_progs_artifact.capturing &&
+		held_progs_artifact.vm == svprogfuncs && svprogfuncs &&
+		svs.gametype == GT_PROGS && progstype == PROG_QW &&
+		svs.numprogs == 1 && svs.progsnum[0] == 0;
+}
+int SV_HeldProgsFingerprint(unsigned char digest[32])
+{
+	if (!digest) return 0;
+	memset(digest,0,32);
+	if (!Held_ProgsAvailable()) return 0;
+	memcpy(digest,held_progs_artifact.digest,32);
+	return 1;
+}
+uint64_t SV_HeldProgsEpoch(void)
+{
+	return Held_ProgsAvailable() ? held_progs_epoch : 0;
+}
 static void *PDECL SSQC_PRReadFile (const char *path, qbyte *(PDECL *buf_get)(void *buf_ctx, size_t size), void *buf_ctx, size_t *size, pbool issource)
 {
 	flocation_t loc;
@@ -748,7 +787,20 @@ static void *PDECL SSQC_PRReadFile (const char *path, qbyte *(PDECL *buf_get)(vo
 			*size = loc.len;
 			buffer = buf_get(buf_ctx, *size);
 			if (buffer)
-				VFS_READ(file, buffer, *size);
+			{
+				int bytes = VFS_READ(file, buffer, *size);
+				if (held_progs_artifact.capturing && !issource && !strcmp(path,held_progs_artifact.pending))
+				{
+					int version = 0;
+					if (*size >= sizeof(version)) memcpy(&version,buffer,sizeof(version));
+					version = LittleLong(version);
+					if (*size > 0 && *size <= 64u*1024u*1024u && bytes == (int)*size &&
+						(version == 6 || version == 7) && !held_progs_artifact.captured &&
+						CalcHash(&hash_sha2_256,held_progs_artifact.digest,32,buffer,*size) == 32)
+						held_progs_artifact.captured = 1;
+					else held_progs_artifact.captured = 2;
+				}
+			}
 			VFS_CLOSE(file);
 		}
 		return buffer;
@@ -767,6 +819,7 @@ static int PDECL SSQC_PRFileSize (const char *path)
 
 void Q_SetProgsParms(qboolean forcompiler)
 {
+	Held_ProgsInvalidate();
 	progstype = PROG_NONE;
 	svprogparms.progsversion = PROGSTRUCT_VERSION;
 	svprogparms.ReadFile = SSQC_PRReadFile;//char *(*ReadFile) (char *fname, void *buffer, int *len);
@@ -838,6 +891,7 @@ void PR_Deinit(void)
 {
 	int i;
 
+	SV_HeldSessionDropAll();
 	PR_ClearThreads(svprogfuncs);
 #ifdef VM_Q1
 	Q1QVM_Shutdown(true);
@@ -1320,7 +1374,21 @@ static progsnum_t AddProgs(const char *name)
 
 //	svprogparms.autocompile = PR_COMPILECHANGED;
 
+	Held_ProgsInvalidate();
+	if (!svs.numprogs)
+	{
+		held_progs_artifact.capturing = 1;
+		Q_strncpyz(held_progs_artifact.pending,name,sizeof(held_progs_artifact.pending));
+	}
 	num = PR_LoadProgs (svprogfuncs, name);
+	if (held_progs_artifact.capturing && held_progs_artifact.captured == 1 && num == 0)
+	{
+		held_progs_artifact.valid = 1;
+		held_progs_artifact.vm = svprogfuncs;
+	}
+	held_progs_artifact.capturing = 0;
+	held_progs_artifact.captured = 0;
+	memset(held_progs_artifact.pending,0,sizeof(held_progs_artifact.pending));
 	sv.world.usesolidcorpse = (progstype != PROG_H2);
 	if (!i && num != -1)
 	{
@@ -11283,6 +11351,159 @@ static void QCBUILTIN PF_promptchoice_qex(pubprogfuncs_t *prinst, struct globalv
   gamecode decides what to do about it, because only the gamecode knows whether
   the caller needed entropy or just a number.
 */
+/* Fixed four-argument native source/control/close ABI. Pure op0 never opens a
+ * file or grants a namespace. An ordinary creator lease alone cannot publish. */
+static qboolean PF_HeldScalar(pubprogfuncs_t *prinst, edict_t *ent, const char *name, float *out)
+{
+	eval_t *v = prinst->GetEdictFieldValue(prinst, ent, name, ev_float, NULL);
+	unsigned int bits;
+	if (!v) return false;
+	memcpy(&bits, &v->_float, sizeof(bits));
+	if ((bits & 0x7f800000u) == 0x7f800000u) return false;
+	*out = v->_float;
+	return true;
+}
+static const char *PF_HeldString(pubprogfuncs_t *prinst, edict_t *ent, const char *name)
+{
+	eval_t *v = prinst->GetEdictFieldValue(prinst, ent, name, ev_string, NULL);
+	return v ? PR_GetString(prinst, v->string) : NULL;
+}
+static void QCBUILTIN PF_held_metadata(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	edict_t *ent;
+	client_t *client;
+	cvar_t *enabled, *recording, *port;
+	eval_t *fhfield;
+	const char *generationarg, *payload, *rid, *fieldsource, *generation, *p;
+	char expected[MAX_QPATH], identity[160], native_generation[33], native_payload[2*MAX_OSPATH];
+	float op, slot, serial, stream, fh, buf, mode, cap, partlob, phase;
+	unsigned int opbits;
+	int index, handle, selection;
+	vfsfile_t *file;
+	held_file_ticket_t *ticket = NULL;
+	held_source_owner_t owner;
+
+	RETURN_TSTRING("unsupported");
+	if (prinst != svprogfuncs || prinst->callargc != 4) return;
+	op = G_FLOAT(OFS_PARM1);
+	memcpy(&opbits, &op, sizeof(opbits));
+	if ((opbits & 0x7f800000u) == 0x7f800000u) return;
+	if (op == 0)
+	{
+		RETURN_TSTRING(SV_HeldSessionAvailable() ? "aircell1:1":"off");
+		return;
+	}
+	if (op == 6 && sizeof(void*) == 8)
+	{
+		cvar_t *root = Cvar_FindVar("sv_held_staging");
+		int removed;
+		ent = G_EDICT(prinst,OFS_PARM0);
+		generationarg = PR_GetStringOfs(prinst,OFS_PARM2);
+		payload = PR_GetStringOfs(prinst,OFS_PARM3);
+		/* Policy maintenance, never a client/source/publication capability. */
+		if (!ent || ent->entnum || !generationarg || !payload || strlen(generationarg) >= MAX_QPATH ||
+			(strcmp(payload,"map") && strcmp(payload,"all")) ||
+			(!strcmp(payload,"all") && *generationarg) || (!strcmp(payload,"map") && !*generationarg)) return;
+		removed = SV_HeldFileSweep(root ? root->string : "",generationarg);
+		if (removed < 0)
+		{
+			Con_Printf(CON_ERROR "held recovery retention ERROR; expiry incomplete, new held collection disabled\n");
+			RETURN_TSTRING("error");
+		}
+		else RETURN_TSTRING("ok");
+		return;
+	}
+	if ((op != 1 && op != 2 && op != 3 && op != 4 && op != 5) || sizeof(void*) != 8) return;
+	ent = G_EDICT(prinst, OFS_PARM0);
+	if (!ent) return;
+	index = ent->entnum - 1;
+	if (index < 0 || index >= sv.allocated_client_slots) return;
+	client = &svs.clients[index];
+	if (client->edict != ent || client->state != cs_spawned || client->userid <= 0) return;
+	generationarg = PR_GetStringOfs(prinst,OFS_PARM2); payload = PR_GetStringOfs(prinst,OFS_PARM3);
+	if (!generationarg || !payload || strlen(generationarg) >= sizeof(native_generation) || strlen(payload) >= sizeof(native_payload)) return;
+	Q_strncpyz(native_generation,generationarg,sizeof(native_generation)); Q_strncpyz(native_payload,payload,sizeof(native_payload));
+	generationarg = native_generation; payload = native_payload;
+	if (op != 1)
+	{
+		if (strlen(generationarg) != 32) return;
+		if (op == 2)
+		{
+			if (!strcmp(payload,"entry"))
+			{
+				selection = SV_HeldSessionSelect(client,generationarg);
+				if (selection != 1) return; /* Failed12 is already privacy-latched. */
+			}
+			if (SV_HeldSessionEvent(client,generationarg,payload)) RETURN_TSTRING("ok");
+		}
+		else if (op == 3)
+		{
+			if (SV_HeldSessionRequestClose(client,generationarg)) RETURN_TSTRING("pending");
+		}
+		else if (op == 4)
+		{
+			if (SV_HeldSessionAbort(client,generationarg)) RETURN_TSTRING("off");
+		}
+		else RETURN_TSTRING(SV_HeldSessionFinalize(client,generationarg,payload));
+		return;
+	}
+	if (*generationarg)
+	{
+		if (SV_HeldSessionBegin(client,generationarg,payload)) RETURN_TSTRING("pending");
+		return;
+	}
+	enabled = Cvar_FindVar("rec_held_metadata"); recording = Cvar_FindVar("rec_enable");
+	if (!enabled || !recording || client->spectator) return;
+	memcpy(&opbits,&enabled->value,sizeof(opbits));
+	if ((opbits & 0x7f800000u) == 0x7f800000u || enabled->value != 1) return;
+	memcpy(&opbits,&recording->value,sizeof(opbits));
+	if ((opbits & 0x7f800000u) == 0x7f800000u || recording->value == 0) return;
+	if (!PF_HeldScalar(prinst, ent, "run_t_slot", &slot) || slot < 0 || slot >= 2048 || (unsigned int)slot != slot ||
+	    !PF_HeldScalar(prinst, ent, "run_t_state", &phase) || phase != 2 ||
+	    !PF_HeldScalar(prinst, ent, "rec_rec_serial", &serial) || serial < 1 || serial > 16777215 || (unsigned int)serial != serial ||
+	    !PF_HeldScalar(prinst, ent, "rec_rec_stream", &stream) || stream != 1 ||
+	    !PF_HeldScalar(prinst, ent, "rec_rec_fh", &fh) || fh != -1 ||
+	    !PF_HeldScalar(prinst, ent, "rec_rec_buf", &buf) || buf != -1 ||
+	    !PF_HeldScalar(prinst, ent, "rec_rec_partlob", &partlob) || (partlob != 1 && partlob != 2) ||
+	    !PF_HeldScalar(prinst, ent, "rec_hm_mode", &mode) || mode != 0 ||
+	    !PF_HeldScalar(prinst, ent, "rec_hm_cap", &cap) || cap != 1) return;
+	generation = PF_HeldString(prinst, ent, "rec_hm_generation");
+	fieldsource = PF_HeldString(prinst, ent, "rec_hm_source");
+	rid = PF_HeldString(prinst, ent, "rec_rec_rid");
+	if (!generation || *generation || !fieldsource || !rid || !*rid || strlen(rid) > 95) return;
+	for (p = rid; *p; ++p)
+		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '-')) return;
+	if (partlob == 1)
+	{
+		port = Cvar_FindVar("sv_port");
+		if (!port || !*port->string || strlen(port->string) > 5) return;
+		for (p = port->string; *p; ++p) if (*p < '0' || *p > '9') return;
+		Q_snprintfz(expected, sizeof(expected), "data/parts/p%s-%u.rec", port->string, (unsigned int)slot);
+	}
+	else
+		Q_snprintfz(expected, sizeof(expected), "data/parts/%u.rec", (unsigned int)slot);
+	Q_snprintfz(identity, sizeof(identity), "%s %u", rid, (unsigned int)serial);
+	if (*generationarg || strcmp(fieldsource, expected) || strcmp(payload, identity)) return;
+	fhfield = prinst->GetEdictFieldValue(prinst, ent, "rec_rec_fh", ev_float, NULL);
+	if (!fhfield) return;
+	file = SV_HeldFileCreate(expected, &ticket);
+	if (!file) return;
+	memset(&owner, 0, sizeof(owner));
+	owner.vm = prinst; owner.client_uid = client->userid; owner.entity_index = ent->entnum;
+	owner.record_slot = (unsigned int)slot; owner.serial = (unsigned int)serial;
+	Q_strncpyz(owner.record, rid, sizeof(owner.record));
+	handle = SV_HeldFileSetOwner(ticket, &owner) ? PR_QCFile_From_WriteStream(prinst, expected, file) : -1;
+	if (handle < 0)
+	{
+		qboolean closed = VFS_CLOSE(file);
+		SV_HeldFileRetire(ticket, closed);  /* Only this newly created empty source. */
+		return;
+	}
+	fhfield->_float = handle;
+	SV_HeldFileRetire(ticket, false);      /* VM stream alone owns ordinary source. */
+	RETURN_TSTRING("off");               /* Source allocated; NO metadata admission. */
+}
+
 static void QCBUILTIN PF_fs_randomhex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	static const char hexd[] = "0123456789abcdef";
@@ -12498,6 +12719,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 //FTESurf Patch 419: the server VM gets the OS entropy the master-server code
 //already uses.  Numbered 0, so the gamecode reaches them by NAME (`#0:fs_...`)
 //and no FTE builtin number is claimed.
+	{"held_metadata", PF_held_metadata, 0, 0, 0, 0, D("string(entity player, float op, string generation, string payload)", "FTESurf internal recorder ABI. Capability remains off until complete held capture/replay is available; op1 can allocate an ordinary create-new source without metadata admission.")},
 	{"fs_randomhex",	PF_fs_randomhex,	0,		0,		0,		0,		D("string(float bytes)",	"FTESurf: `bytes` of OS entropy as lowercase hex, or \"\" if the OS refused. 1..64.")},
 	{"fs_randomf",		PF_fs_randomf,		0,		0,		0,		0,		D("float()",				"FTESurf: a uniform float in [0,1) from OS entropy, or -1 if the OS refused.")},
 	{"fexists",			PF_fexists,			0,		0,		0,		653,	D("float(string fname)",	"Returns true if it exists inside the default writable path. Use whichpack for greater portability.")},

@@ -917,6 +917,13 @@ SERVER_OBJS = 		\
 	sv_ents.o 		\
 	sv_send.o 		\
 	sv_user.o		\
+	sv_held_coverage.o	\
+	sv_held_clock.o		\
+	sv_held_ledger.o		\
+	sv_held_initial.o	\
+	sv_held_replay.o		\
+	sv_held_file.o		\
+	sv_held_session.o	\
 	sv_sql.o		\
 	sv_mvd.o		\
 	sv_ccmds.o 		\
@@ -2053,7 +2060,9 @@ $(OUT_DIR)/fteqcc.o : fteqcc.rc
 #	sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
 #	rm -f $@.$$$$
 
-$(OUT_DIR)/%.o $(OUT_DIR)/%.d : %.c
+# The dependency recipe below writes $@.d (foo.o.d), not foo.d. A phantom
+# %.d peer makes GNU make warn for every newly introduced C translation unit.
+$(OUT_DIR)/%.o : %.c
 ifneq ($(DEPCC),)
 	@-set -e; rm -f $@.d; \
 	 $(DEPCC) -MM $(ALL_CFLAGS) $< > $@.d.$$$$; \
