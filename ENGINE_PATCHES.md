@@ -37,8 +37,12 @@ has0 VM warnings and0 NEW native warnings (same74 as P934 full baseline). Both
 PEs carry clean5fd6c6790/patch-937 stamps. Fixed-native real-socket fixture
 passes13 controls, including active exact-one fade and3 drain/restarts. Follow-up
 independent lifecycle review closes P1/P2 with no issue; input/frame review also
-found no issue. Not deployed yet. Listening/performance/concurrency remain unclaimed. Listening, latency/volume feel and performance are not measured
-by these counters and remain owner acceptance before any such claim.
+found no issue. Delivered22Oct23:18UTC alongside P936: native5fd6c6790 in both
+Windows installs, compatible QC50e7d8f3 and backend3f97cf9c on12lobbies. Exact
+hashes, guarded worker/cold-client and preservation proof are in QC's
+tools/p936-p937-delivery.md; REC13/schema20/lobby native remain unchanged.
+Listening, latency/volume feel, concurrency/RSS and performance are not measured
+by these controls and remain unclaimed; ear/feel acceptance is owner-only.
 
 ## Patch 936 — retain 64px Steam portrait detail (QC/backend)
 
