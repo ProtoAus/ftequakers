@@ -1938,6 +1938,19 @@ static void PMSrc_SetDuckedEyeOffset (float fraction)
 	                   (PMSrc_ViewHeight() * (1.0f - fraction));
 }
 
+/* P917: expose the unclipped posture and world-space limit to rendering.
+   No filtering, new mover state, traces or physics/evidence changes. */
+float PMSrc_UnclippedViewHeight (void)
+{
+	float fraction = PMSrc_DuckFraction();
+	return PMSrc_DuckViewHeight() * fraction + PMSrc_ViewHeight() * (1.0f - fraction);
+}
+
+float PMSrc_ClipRenderEye (float rawheight, float worldlimit, float renderfeet)
+{
+	return max(0, min(rawheight, worldlimit - renderfeet));
+}
+
 /* P916: Source-derived 12-unit head clearance, view only. Sweep a valid body
    top rather than an eye-height top already inside a low roof (view > hull).
    This gives the same ceiling estimate without a startsolid blind spot. */
@@ -5511,6 +5524,22 @@ static void PMSrc_SelfTest_f (void)
 		PMSrc_Check("P916 airborne roof: 12 clearance", pmove.viewheight, 56, 0.04f);
 		PMSrc_Check("P916 roof: hull unchanged", pmove.player_maxs[2], 62, 0);
 		PMSrc_Check("P916 roof: body unchanged", pmove.origin[2], 0, 0);
+		{
+			float raw = PMSrc_UnclippedViewHeight();
+			float limit = pmove.origin[2] + pmove.viewheight;
+			float feet;
+			int sample;
+			PMSrc_Check("P917 raw posture stays 64", raw, 64, 0);
+			PMSrc_Check("P917 old endpoint eye demonstrably drifts", limit - (-2.5f + pmove.viewheight), 2.5f, 0);
+			for (sample = 0; sample < 16; sample++)
+			{
+				feet = -3.75f + sample * 0.25f;
+				PMSrc_Check("P917 roof world eye stays fixed", feet + PMSrc_ClipRenderEye(raw, limit, feet), limit, 0.00001f);
+			}
+			PMSrc_Check("P917 stair-smoothed feet share limit", 1.5f + PMSrc_ClipRenderEye(raw, limit, 1.5f), limit, 0.00001f);
+			PMSrc_Check("P917 below roof: no premature lowering", PMSrc_ClipRenderEye(raw, limit, -16), 64, 0);
+			PMSrc_Check("P917 no negative eye through discontinuity", PMSrc_ClipRenderEye(raw, limit, 256), 0, 0);
+		}
 		pmove.onground = true;
 		pmove.viewheight = 64;
 		PMSrc_ClipEye();

@@ -1127,6 +1127,8 @@ void CL_PredictMovePNum (int seat)
 	int			pt_extrap = 0;		/*0 none, 1 copied cl_pendingcmd, 2 copied the last sent cmd*/
 	float		pt_msec = 0;		/*the partial command's duration*/
 	float		pt_f = -1;			/*the blend fraction, -1 if no blend happened*/
+	qboolean	source_eye_clipped = false;
+	float		source_eye_raw = 0, source_eye_limit = 0;
 
 	simtime = CL_GetPredictionRealtime(pv);
 
@@ -1609,6 +1611,12 @@ void CL_PredictMovePNum (int seat)
 		if (movevars.physicsmode == PHYSMODE_SOURCE)
 		{
 			pv->viewheight = pmove.viewheight;
+			if (movevars.sourceversion >= 11 && pmove.pm_type == PM_NORMAL)
+			{
+				source_eye_raw = PMSrc_UnclippedViewHeight();
+				source_eye_clipped = (pmove.viewheight < source_eye_raw);
+				source_eye_limit = pmove.origin[2] + pmove.viewheight;
+			}
 			if (movevars.sourceversion >= 4)
 			{
 				VectorCopy(pmove.portaloffset, pv->portaloffset);
@@ -1947,6 +1955,12 @@ void CL_PredictMovePNum (int seat)
 		CL_CatagorizePosition(pv, to.state->origin);
 
 	CL_CalcCrouch (pv);
+	/* P917: the roof limit belongs to world space, not the last mover tick.
+	   Feet/stair interpolation must not turn it into a per-frame eye sawtooth.
+	   Do this after the legacy categorizer, which overwrites pmove.origin. */
+	if (source_eye_clipped)
+		pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw, source_eye_limit,
+			pv->simorg[2] + pv->crouch);
 	pv->waterlevel = pmove.waterlevel;
 	if (!DotProduct(pmove.gravitydir,pmove.gravitydir))
 		VectorSet(pmove.gravitydir, 0, 0, -1);

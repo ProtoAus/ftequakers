@@ -350,6 +350,8 @@ typedef struct {
 void PMSrc_SaveState(pmsourcestate_t *out);
 void PMSrc_LoadState(const pmsourcestate_t *in);
 void PMSrc_ReconcileHull(pmsourcestate_t *s, const vec3_t mins, const vec3_t maxs, float servereye);	//FTESurf Patch 754
+float PMSrc_UnclippedViewHeight(void);	//P917: current predicted posture, before roof clipping
+float PMSrc_ClipRenderEye(float rawheight, float worldlimit, float renderfeet);	//display only
 
 #define MOVEFLAG_VALID							0x80000000	//to signal that these are actually known. otherwise reserved.
 //#define MOVEFLAG_Q2AIRACCELERATE				0x00000001

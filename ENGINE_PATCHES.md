@@ -1,5 +1,17 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 917 — keep the ceiling eye limit in render space
+
+**Problem:** P916's eye offset belonged to the mover endpoint, but rendered feet
+were interpolated separately, producing a small vertical sawtooth under a roof.
+**Change:** Retain the clipped world-space eye limit, then apply it to the final
+interpolated/stair-smoothed feet. No temporal smoothing, physical movement,
+recorded state or mover-version change; unclipped/dead/noclip/old movers stay as before.
+**Verified:** Full isolated Windows client/server/plugin build, no new compiler
+warnings versus P916; all prior selftests plus 21 new real-roof/render-endpoint
+checks pass, including an acting old-expression drift, fixed absolute eye,
+normal eye below the roof and nonnegative bounds. Owner feel pending in lextest.md.
+
 ## Patch 916 — Source ceiling eye clearance and water-lip assist
 
 **Problem:** The standing eye is above the collision hull and could enter a low
