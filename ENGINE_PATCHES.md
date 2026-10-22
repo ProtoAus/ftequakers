@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 934 — sorted local-console bindlist (native client)
+
+Problem: the owner could query an individual bind but not list the active
+bindings in a readable order.
+
+Change: bindlist lists nonempty bindings alphabetically by key name, preserving
+modifier overrides, command execution levels and every alternate bindmap.
+Inherited modifier copies are collapsed using the same equality/level rule as
+config saving. Commands are quoted; the listing changes no binding. Reject
+insecure callers rather than exposing bindings through a server/QC request.
+No input dispatch, movement, recorder, server producer or permission change.
+
+Verified: Windows NoDeploy client/server/plugin build succeeds; keys.c emits
+no compiler warnings. Untouched ODE/mathlib dependency warnings remain explicit,
+not called a zero-total-warning build. Old native control creates/queries real
+synthetic fixtures but has no bindlist. New native shows seven sorted entries,
+Ctrl override, execution level30, quoted compound command and bindmap2. Saved
+binding directives are identical before/after; empty listing reports zero.
+Initial subject test expected level31, but the existing bindlevel clamps it to
+RESTRICT_MIN30; corrected the fixture expectation, not the product. Native
+clean-commit identity and destination hashes are recorded separately. No NanoPi
+native promotion: its independent producer qualification gate remains.
+
 ## Patch 933 — fresh compact browser friends and text selection (QC/backend)
 
 Problem: the browser's Friends panel stayed hidden, cards used three lines,

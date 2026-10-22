@@ -3686,6 +3686,93 @@ void Key_Bind_c(int argn, const char *partial, struct xcommandargcompletioncb_s 
 		}
 	}
 }
+typedef struct
+{
+	int keynum, modifier, bindmap;
+	const char *binding;
+	char name[64];
+} keybindlistrow_t;
+
+static int Key_BindListCompare (const void *left, const void *right)
+{
+	const keybindlistrow_t *a = left, *b = right;
+	int order = a->bindmap - b->bindmap;
+	if (!order)
+		order = Q_strcasecmp(a->name, b->name);
+	if (!order)
+		order = a->keynum - b->keynum;
+	if (!order)
+		order = a->modifier - b->modifier;
+	return order;
+}
+
+static void Key_BindList_f (void)
+{
+	keybindlistrow_t *rows, *row;
+	char *quoted;
+	const char *base, *binding;
+	size_t quotesize = 3, needed;
+	int key, modifier, count = 0, i, map = -1;
+
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("bindlist is available only from the local console.\n");
+		return;
+	}
+	if (Cmd_Argc() != 1)
+	{
+		Con_Printf("Usage: bindlist\n");
+		return;
+	}
+	rows = Z_Malloc(sizeof(*rows) * K_MAX * KEY_MODIFIERSTATES);
+	for (key = 0; key < K_MAX; key++)
+	{
+		base = keybindings[key][0];
+		for (modifier = 0; modifier < KEY_MODIFIERSTATES; modifier++)
+		{
+			binding = keybindings[key][modifier];
+			if (!binding || !*binding)
+				continue;
+			// Match config saving: inherited modifier copies are not extra binds.
+			if (modifier && modifier < KEY_MODIFIER_ALTBINDMAP && base &&
+				!strcmp(base, binding) && bindcmdlevel[key][modifier] == bindcmdlevel[key][0])
+				continue;
+			row = &rows[count++];
+			row->keynum = key;
+			row->modifier = modifier;
+			row->bindmap = (modifier & KEY_MODIFIER_ALTBINDMAP) ? (modifier & ~KEY_MODIFIER_ALTBINDMAP) + 1 : 0;
+			row->binding = binding;
+			Q_strncpyz(row->name, Key_KeynumToString(key, row->bindmap ? 0 : modifier), sizeof(row->name));
+			needed = strlen(binding) * 2 + 3;
+			if (needed > quotesize)
+				quotesize = needed;
+		}
+	}
+	qsort(rows, count, sizeof(*rows), Key_BindListCompare);
+	quoted = Z_Malloc(quotesize);
+	for (i = 0; i < count; i++)
+	{
+		row = &rows[i];
+		if (map != row->bindmap)
+		{
+			map = row->bindmap;
+			if (map)
+				Con_Printf("\nBindmap %i\n", map);
+			else
+				Con_Printf("\nBase bindings (inherited modifiers collapsed)\n");
+			Con_Printf("%-24s %s\n", "Key", "Command");
+		}
+		COM_QuotedString(row->binding, quoted, quotesize, false);
+		Con_Printf("%-24s %s", row->name, quoted);
+		if (bindcmdlevel[row->keynum][row->modifier] != RESTRICT_LOCAL)
+			Con_Printf("  (level %i)", bindcmdlevel[row->keynum][row->modifier]);
+		Con_Printf("\n");
+	}
+	Con_Printf("%i bound key entries.\n", count);
+	Z_Free(quoted);
+	Z_Free(rows);
+}
+
 /*
 ===================
 Key_Bind_f
@@ -3947,6 +4034,7 @@ void Key_Init (void)
 // register our functions
 //
 	Cmd_AddCommandAD ("bind",Key_Bind_f, Key_Bind_c, "Changes the action associated with each keyboard button. Use eg \"bind ctrl+shift+alt+k kill\" for special modifiers (should be used only after more basic modifiers).");
+	Cmd_AddCommandD ("bindlist", Key_BindList_f, "Lists currently bound keys alphabetically, including modifier overrides and alternate bindmaps. Does not change any bindings.");
 	Cmd_AddCommand ("in_bind",Key_Bind_f);
 	Cmd_AddCommand ("bindlevel",Key_Bind_f);
 	Cmd_AddCommandAD ("unbind",Key_Unbind_f, Key_Bind_c, NULL);
