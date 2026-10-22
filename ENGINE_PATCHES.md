@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 926 — rotated trigger prediction uses the server's brush geometry
+
+**Problem:** surf_me save9 changed the view before the map's teleport. The
+trigger mirror parsed brush angles but never assigned them to its probe edicts,
+and its broad phase used unrotated local mins/maxs. A rotated reset volume could
+therefore fire only on the client, applying its view snap before the body crossed.
+
+**Change (QC only):** retain authored trigger angles before linking the probe and
+use its engine-linked world absmin/absmax. No destination-angle rule, server
+movement, recorder, held coverage, format, pin or ranking policy changes.
+
+**Verified:** actual dedicated surf_me saved numeric pose/zero-input actor at
+100fps, normal extrapolation, correction threshold.25. Baseline ACTS: *32/tele4
+fires about.8s early, four4205..4257-unit mismatches, then a5352-unit real crossing
+correction. Subject: the same early point is outside, one actual teleport fires
+and its view-snap sequence matches the server acknowledgement exactly; none of
+those false-teleport/late-crossing errors remains. Both retain an unrelated
+sub-2-unit slope correction, not claimed fixed. Three VMs compile0 warnings.
+Owner feel and delivery remain separate. Native source/tag pin stays P924.
+Details: tools/p926-rotated-triggers.md.
+
 ## Patch 924 — static Source conveyor ground carry
 
 **Problem:** func_conveyor spawned solid but never supplied ground velocity;
