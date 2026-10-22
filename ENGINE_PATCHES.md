@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 933 — fresh compact browser friends and text selection (QC/backend)
+
+Problem: the browser's Friends panel stayed hidden, cards used three lines,
+last-seen rows looked online, presence omitted stage/bonus, and text fields
+had no double-click select-all.
+
+Change: browser-open requests refresh and reveals Friends. Two-line 64px
+cards center around the picture, fade offline rows and reserve green map +
+activity text for live mutual friends. Name opens an in-menu public profile
+preview using the existing game API; location separately asks to join.
+Lobby activity comes from authoritative timer fields, is bounded and volatile,
+and remains subject to existing relationship, heartbeat and session expiry.
+No schema, ranked-run/evidence, signing or permission change. Old six-field
+snapshots remain readable. SUI recognizes a second close click within 400ms
+and keeps select-all through release; slow clicks and normal drag stay intact.
+
+Verified: three VMs compile at zero warnings. Social API controls exercise
+stage/bonus changes, hashes, omission, worker cache loss, map change, unaccepted
+adds, blocking, bad labels, bounded memory and rollback. Native offline UI
+control versus subject proves actual double-click selection and replacement,
+slow-click preservation and automatic panel opening. The two-row cache fixture
+is read, but offline-consent screenshots do not certify live card/profile/join
+appearance; owner acceptance is pending in lextest.md. Destination hashes and
+fleet/backend promotion status are recorded separately. No native rebuild.
+
 ## Patch 932 — KSF playback across configured Momentum ports (QC/backend)
 
 **Problem:** imported times were shared across configured versions but recordings
