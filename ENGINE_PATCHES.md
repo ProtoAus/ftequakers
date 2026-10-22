@@ -97,9 +97,15 @@ acknowledgment (both include an explicit 100ms query delay); server load profile
 17.925780 -> .120870 seconds, saved clock and shadow recording restored. Actual
 native control/candidate C functions match on 160 boundary/short-read cases and
 all 137016 recording rows. Original files/private copies remain byte-identical.
-Raw player data/profiles stay private. Human visual/aural feel, final clean-source
-integration, independent reviews and deployment provenance are recorded separately.
-P935 was reserved before P936; the QC highest-applied patch remains 936.
+Raw player data/profiles stay private. Two independent follow-ups close the
+135.2-walk boundary and private-test exception findings; no native blocker.
+Final clean tagged restore acts with unchanged body/clock/shadow recording.
+Published P937's raw-buffer ownership fix is integrated without changing these
+P935 native code hunks; audio frame/key hooks do not mutate the Foley observer.
+Human feel and guarded destination/live provenance remain separate. Shared
+Windows/lobby delivery is coordinated with the pending P936/P937 rollout; no
+NanoPi native/recorder promotion is implied. P935 was reserved before P936/P937;
+the QC highest-applied patch remains 937.
 
 ## Patch 934 — sorted local-console bindlist (native client)
 
