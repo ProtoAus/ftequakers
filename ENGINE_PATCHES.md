@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 932 — KSF playback across configured Momentum ports (QC/backend)
+
+**Problem:** imported times were shared across configured versions but recordings
+were hidden/refused; an admitted pair would stop in the next-frame fence, and
+warm lookup used the board folder rather than the actual source folder.
+**Change:** bounded explicit board/menu-manifest families, never suffix guesses.
+One policy for original/normalized KSF, retained source versus loaded-map lifetime,
+actual-source cache hints and existing scoped recording IDs. Native/Momentum
+fences, source hash/BSP identity, imported/unverified status, replay-serving and
+native evidence remain unchanged. No native binary/pin/tag or Build-number change.
+**Verified:** three VMs0 warnings. Actual dedicated subject/control/JSON-cache
+actors25 cases pass: genuine normalized source10.0000->11.0865 and original
+binary10.0000->11.0538 on Momentum Chateau; source/unverified labels retained.
+Exact-header control acts; unrelated/suffix/missing refuse, native mismatch keeps
+its existing frame stop, map change clears playback. Empty-list pre-board refusal
+becomes allowed after accepted family metadata; one replay GET publishes exact
+source bytes and warm row lookup does not refetch. Screenshot inspected. Backend
+import/variant/native-byte contrast and reader/codec units pass. Fixed-input
+419REC/136VIEW old/new both283faulting/284diagnostics, no differing fault lists;
+older405/120 absolute-count failure retained as a changed-dataset comparison.
+Two independent reviews plus raw-finding resolution PASS. P925/P928 transport
+identities/times retained; published929-931 integrated, functional policy hashes
+unchanged. Clean deployment and owner feel remain pending; limits and transport:
+tools/p928-ksf-ports.md in QC. No unrelated native-producer qualification claimed.
+
 ## Patch 931 — basic CS:S knife, USP, Scout and Glock presentation
 
 **Problem:** no held weapons or idle/fire feedback, although map shooting uses
