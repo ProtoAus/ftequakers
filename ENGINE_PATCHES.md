@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 916 — Source ceiling eye clearance and water-lip assist
+
+**Problem:** The standing eye is above the collision hull and could enter a low
+roof. Source swimming was present, but its surface ledge-exit assist was missing.
+
+**Change:** Independently implement the public Source-derived Momentum rules:
+keep the eye 12 units below a ceiling (ground or air, no collision-hull change),
+and at waist-deep water probe 24 units forward, clear eye+8 headroom and a
+walkable landing. Reject backwards movement and descent faster than 180; apply
+Z 256 and a wall-normal XY 50 assist, carried for up to two seconds. Neither jump
+nor up is required for the lip check. The eye probe starts with a valid hull top
+so a roof between body and eye cannot hide behind a startsolid trace. Noclip is
+unchanged. Mover 11 gates both features; historical movers retain their rules.
+Carry timer/direction through prediction and save/record state. Require complete
+assist state for an exact v11 replay; accept old seeds without it as before.
+Reference: Momentum develop a299840b8571927efa275f5110a1a0192242016d,
+`CMomentumGameMovement::PlayerMove`, `CGameMovement::CheckWaterJump/WaterJump`.
+No claim of binary-identical CS:S behaviour or new verification eligibility.
+
+**Verified:** Full isolated Windows client/server/all-plugin build via
+`src/build.ps1 -Engine -Full -NoDeploy`, zero new warnings versus the baseline;
+all existing pm_selftest checks and 36 new real-trace/state checks pass, including
+actual upward/forward motion, grounded/air roofs, body/hull nonmutation, old
+mover/noclip controls, blocked/no/backwards ledges, held jump, state roundtrip,
+and malformed/nonfinite/partial state. The first state-text test incorrectly
+expected a bool instead of the writer's length; corrected the test, not product.
+`test_reccheck.py`: 852 checks, zero failed; unchanged reader sweep: 402 run files,
+271 existing faults. No increase is introduced by a Python reader change (none).
+Owner visual/feel acceptance and fleet rollout are not claimed by these checks.
+
 ## Patch 914 — run time continues while spectating or replaying (QC, readers)
 
 **Problem:** A held body stopped the run clock during spectating/replay. Simply

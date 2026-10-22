@@ -5787,7 +5787,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						VectorCopy(sv, seedvel);
 						seedground = sg;
 						/* Patch 882: at mover 10 the cooldown's clock is state too */
-						seedstate_ok = SV_PMStateParse(q, &seedstate) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q));
+						seedstate_ok = SV_PMStateParse(q, &seedstate) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
+							(SV_PMSrcVer(hdrpin) < 11 || SV_PMStateHasWater(q));
 					}
 					else if (cses && cses <= nses && !ses[cses-1].seeded)
 					{
@@ -5796,7 +5797,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 						VectorCopy(so, s->org);
 						VectorCopy(sv, s->vel);
 						s->ground = sg;
-						s->stateok = SV_PMStateParse(q, &s->st) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q));
+						s->stateok = SV_PMStateParse(q, &s->st) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
+							(SV_PMSrcVer(hdrpin) < 11 || SV_PMStateHasWater(q));
 					}
 				}
 			}

@@ -761,6 +761,8 @@ typedef struct
 								//or the client and server climb along different axes.
 	vec3_t		portaloffset; // transient view correction; carried through prediction replay
 	int			landticks;	//FTESurf Patch 882: ticks since landing, for PMLIM_BHOP's cooldown
+	float		waterjumpremaining;	//P916: Source water-lip assist, seconds
+	vec2_t		waterjumpdir;		//wall-normal XY push, not recomputed from view
 } pmsourcestate_t;
 
 // player move types

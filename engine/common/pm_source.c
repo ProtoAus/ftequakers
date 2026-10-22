@@ -488,6 +488,8 @@ void PMSrc_SaveState (pmsourcestate_t *out)
 	VectorCopy (pmove.srcladdernormal, out->srcladdernormal);
 	VectorCopy (pmove.portaloffset, out->portaloffset);
 	out->landticks       = pmove.landticks;		//Patch 882
+	out->waterjumpremaining = pmove.waterjumpremaining;
+	Vector2Copy(pmove.waterjumpdir, out->waterjumpdir);
 }
 
 void PMSrc_LoadState (const pmsourcestate_t *in)
@@ -506,6 +508,8 @@ void PMSrc_LoadState (const pmsourcestate_t *in)
 	VectorCopy (in->srcladdernormal, pmove.srcladdernormal);
 	VectorCopy (in->portaloffset, pmove.portaloffset);
 	pmove.landticks       = in->landticks;		//Patch 882
+	pmove.waterjumpremaining = in->waterjumpremaining;
+	Vector2Copy(in->waterjumpdir, pmove.waterjumpdir);
 }
 
 /*
@@ -1934,6 +1938,31 @@ static void PMSrc_SetDuckedEyeOffset (float fraction)
 	                   (PMSrc_ViewHeight() * (1.0f - fraction));
 }
 
+/* P916: Source-derived 12-unit head clearance, view only. Sweep a valid body
+   top rather than an eye-height top already inside a low roof (view > hull).
+   This gives the same ceiling estimate without a startsolid blind spot. */
+static void PMSrc_ClipEye (void)
+{
+	vec3_t end, savedmaxs;
+	float nominal, top;
+	trace_t tr;
+
+	if (movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL)
+		return;
+	nominal = pmove.ducked && !pmove.ducking ? PMSrc_DuckViewHeight() : PMSrc_ViewHeight();
+	VectorCopy(pmove.player_maxs, savedmaxs);
+	top = min(savedmaxs[2], nominal);
+	pmove.player_maxs[2] = top;
+	VectorCopy(pmove.origin, end);
+	end[2] += nominal + 12 - top;
+	tr = PMSrc_TraceHull(pmove.origin, end);
+	VectorCopy(savedmaxs, pmove.player_maxs);
+	if (tr.startsolid || tr.allsolid)
+		pmove.viewheight = min(pmove.viewheight, max(0, top - 12));
+	else if (tr.fraction < 1)
+		pmove.viewheight = min(pmove.viewheight, max(0, top + tr.endpos[2] - pmove.origin[2] - 12));
+}
+
 /* -------------------------------------------------------------- categorize */
 
 /*
@@ -2597,7 +2626,7 @@ static qboolean PMSrc_CheckJumpButton (void)
 		return false;
 	}
 
-	if (pmove.waterjumptime)
+	if (pmove.waterjumptime || (movevars.sourceversion >= 11 && pmove.waterjumpremaining > 0))
 		return false;
 
 	if (pmove.waterlevel >= 2)
@@ -3088,6 +3117,57 @@ static void PMSrc_WaterMove (void)
 	VectorSubtract(pmove.velocity, pmove.basevelocity, pmove.velocity);
 }
 
+/* P916: Source water-lip assist. These are speculative hull probes, not
+   movement: no portal traversal or mutation until all three tests succeed. */
+static void PMSrc_CheckWaterJump (void)
+{
+	vec3_t forward, flatvel, start, end;
+	vec2_t push;
+	trace_t tr;
+
+	if (pmove.waterjumpremaining > 0 || pmove.velocity[2] < -180)
+		return;
+	VectorSet(forward, pms_forward[0], pms_forward[1], 0);
+	if (!VectorNormalize(forward))
+		return;
+	VectorSet(flatvel, pmove.velocity[0], pmove.velocity[1], 0);
+	if (DotProduct(flatvel, forward) < 0)
+		return;
+	VectorCopy(pmove.origin, start);
+	start[2] += (pmove.player_mins[2] + pmove.player_maxs[2]) * 0.5f;
+	VectorMA(start, 24, forward, end);
+	tr = PMSrc_TraceHull(start, end);
+	if (tr.fraction == 1 || tr.startsolid || tr.allsolid)
+		return;
+	push[0] = -50 * tr.plane.normal[0];
+	push[1] = -50 * tr.plane.normal[1];
+	start[2] = pmove.origin[2] + pmove.viewheight + 8;
+	VectorMA(start, 24, forward, end);
+	tr = PMSrc_TraceHull(start, end);
+	if (tr.fraction != 1 || tr.startsolid || tr.allsolid)
+		return;
+	VectorCopy(end, start);
+	end[2] -= 1024;
+	tr = PMSrc_TraceHull(start, end);
+	if (tr.fraction == 1 || tr.startsolid || tr.allsolid || tr.plane.normal[2] < 0.7f)
+		return;
+	pmove.velocity[2] = 256;
+	pmove.oldbuttons |= BUTTON_JUMP;
+	pmove.waterjumpremaining = 2;
+	Vector2Copy(push, pmove.waterjumpdir);
+}
+
+static void PMSrc_WaterJump (void)
+{
+	pmove.waterjumpremaining = max(0, min(pmove.waterjumpremaining, 10) - pms_frametime);
+	if (!pmove.waterlevel)
+		pmove.waterjumpremaining = 0;
+	pmove.velocity[0] = pmove.waterjumpdir[0];
+	pmove.velocity[1] = pmove.waterjumpdir[1];
+	PMSrc_TryPlayerMove(NULL, NULL);
+	PMSrc_CategorizePosition();
+}
+
 /*
 ==================
 PMSrc_FullWalkMove   (cpp:2036)
@@ -3101,6 +3181,17 @@ static void PMSrc_FullWalkMove (void)
 
 	if (pmove.waterlevel < 2)
 		PMSrc_StartGravity ();
+
+	if (movevars.sourceversion >= 11)
+	{
+		if (pmove.waterjumpremaining > 0)
+		{
+			PMSrc_WaterJump();
+			return;
+		}
+		if (pmove.waterlevel == 2)
+			PMSrc_CheckWaterJump();
+	}
 
 	if (pmove.waterlevel >= 2)
 	{
@@ -3959,6 +4050,11 @@ void PMSrc_PlayerMove (float gamespeed)
 			break;
 		}
 		PMSrc_Tick ();
+		if (movevars.sourceversion >= 11)
+		{
+			PMSrc_SetDuckedEyeOffset(PMSrc_DuckFraction());
+			PMSrc_ClipEye();
+		}
 		avail -= tick;
 		iters++;
 	}
@@ -4002,6 +4098,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	/* ...and the eye height that goes with it.  Derived from the carried duck
 	   state rather than written during the ticks -- see PMSrc_DuckFraction. */
 	PMSrc_SetDuckedEyeOffset (PMSrc_DuckFraction ());
+	PMSrc_ClipEye();
 	bih_sourceclip = 0;
 	bih_phybrushes = 0;
 	bih_phyfix = 0;
@@ -4017,8 +4114,8 @@ void PMSrc_PlayerMove (float gamespeed)
 
   Expected values come from movementmath's test suite, re-derived for
   dt = 0.015 instead of its 1/128, plus the CS:S tunings from
-  gamemovement_momentummod.cpp.  These functions are all trace-free, so this
-  runs with no map loaded.
+  gamemovement_momentummod.cpp. P916 also traces synthetic box physents, so
+  this still runs with no map loaded.
 ================================================================================
 */
 static int pms_test_fails;
@@ -5385,6 +5482,127 @@ static void PMSrc_SelfTest_f (void)
 		pmove.momcool = savecool;	pmove.onground = saveog;	pmove.jump_held = savejh;
 		VectorCopy (v0, pmove.velocity);
 		pms_frametime = dt;
+	}
+
+	/* P916: real hull traces against owned synthetic physents, no map needed. */
+	{
+		playermove_t *saved = BZ_Malloc(sizeof(*saved));
+		pmsourcestate_t state;
+		physent_t *box;
+		vec3_t oldforward;
+		qboolean oldportals = pms_haveportals;
+		*saved = pmove;
+		VectorCopy(pms_forward, oldforward);
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.skipent = -1;
+		pmove.pm_type = PM_NORMAL;
+		VectorSet(pmove.player_mins, -16, -16, 0);
+		VectorSet(pmove.player_maxs, 16, 16, 62);
+		movevars.viewheight = 64;
+		movevars.duckviewheight = 47;
+		movevars.sourceversion = 11;
+		pms_haveportals = false;
+		pmove.numphysent = 1;
+		box = &pmove.physents[0];
+		VectorSet(box->mins, -128, -128, 68);
+		VectorSet(box->maxs, 128, 128, 100);
+		pmove.viewheight = 64;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 airborne roof: 12 clearance", pmove.viewheight, 56, 0.04f);
+		PMSrc_Check("P916 roof: hull unchanged", pmove.player_maxs[2], 62, 0);
+		PMSrc_Check("P916 roof: body unchanged", pmove.origin[2], 0, 0);
+		pmove.onground = true;
+		pmove.viewheight = 64;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 grounded roof", pmove.viewheight, 56, 0.04f);
+		box->mins[2] = 63;
+		pmove.viewheight = 64;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 roof between body and eye", pmove.viewheight, 51, 0.04f);
+		movevars.sourceversion = 10;
+		pmove.viewheight = 64;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 old mover: no eye clamp", pmove.viewheight, 64, 0);
+		movevars.sourceversion = 11;
+		pmove.pm_type = PM_SPECTATOR;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 noclip: no eye clamp", pmove.viewheight, 64, 0);
+		pmove.pm_type = PM_NORMAL;
+		pmove.viewheight = 45;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 transitioning eye never raised", pmove.viewheight, 45, 0);
+		pmove.numphysent = 0;
+		pmove.viewheight = 64;
+		PMSrc_ClipEye();
+		PMSrc_Check("P916 open space: normal eye", pmove.viewheight, 64, 0);
+
+		pmove.numphysent = 1;
+		VectorSet(box->mins, 32, -128, -128);
+		VectorSet(box->maxs, 200, 128, 64);
+		VectorSet(pms_forward, 1, 0, 0);
+		VectorClear(pmove.velocity);
+		pmove.cmd.buttons = 0;
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 ledge: assist without jump", pmove.waterjumpremaining, 2, 0);
+		PMSrc_Check("P916 ledge: Z impulse", pmove.velocity[2], 256, 0);
+		PMSrc_Check("P916 ledge: forward push", pmove.waterjumpdir[0], 50, 0);
+		PMSrc_SaveState(&state);
+		pmove.waterjumpremaining = 0;
+		pmove.waterjumpdir[0] = 0;
+		PMSrc_LoadState(&state);
+#ifdef HAVE_SERVER
+		{
+			char text[1024];
+			pmsourcestate_t parsed;
+			const char *base = "surfacefriction=1 ducktime=0 ducking=0 ducked=0 msec_carry=0 oldbuttons=0 stamina=0 rampoff=0 boardcount=0 rampcontact=0 srcladder=0 ladnx=0 ladny=0 ladnz=0 landticks=7";
+			PMSrc_Check("P916 assist text: write", SV_PMStateText(&state, text, sizeof(text)) > 0, 1, 0);
+			PMSrc_Check("P916 assist text: parse", SV_PMStateParse(text, &parsed), 1, 0);
+			PMSrc_Check("P916 assist text: has all state", SV_PMStateHasWater(text), 1, 0);
+			PMSrc_Check("P916 assist text: timer roundtrip", parsed.waterjumpremaining, 2, 0);
+			PMSrc_Check("P916 assist text: push roundtrip", parsed.waterjumpdir[0], 50, 0);
+			PMSrc_Check("P916 old state remains readable", SV_PMStateParse(base, &parsed), 1, 0);
+			PMSrc_Check("P916 old state has no assist", parsed.waterjumpremaining, 0, 0);
+			PMSrc_Check("P916 old state not exact at v11", SV_PMStateHasWater(base), 0, 0);
+			PMSrc_Check("P916 partial assist refused", SV_PMStateParse(va("%s wjtime=1", base), &parsed), 0, 0);
+			PMSrc_Check("P916 bad timer refused", SV_PMStateParse(va("%s wjtime=3 wjx=0 wjy=0", base), &parsed), 0, 0);
+			PMSrc_Check("P916 nonnumeric push refused", SV_PMStateParse(va("%s wjtime=1 wjx=bad wjy=0", base), &parsed), 0, 0);
+			PMSrc_Check("P916 infinite push refused", SV_PMStateParse(va("%s wjtime=1 wjx=inf wjy=0", base), &parsed), 0, 0);
+			PMSrc_Check("P916 NaN timer refused", SV_PMStateParse(va("%s wjtime=nan wjx=0 wjy=0", base), &parsed), 0, 0);
+		}
+#endif
+		PMSrc_Check("P916 assist state: timer", pmove.waterjumpremaining, 2, 0);
+		PMSrc_Check("P916 assist state: direction", pmove.waterjumpdir[0], 50, 0);
+		pmove.waterlevel = 2;
+		PMSrc_CheckJumpButton();
+		PMSrc_Check("P916 held jump cannot overwrite impulse", pmove.velocity[2], 256, 0);
+		pms_frametime = 0.015f;
+		PMSrc_WaterJump();
+		PMSrc_Check("P916 assist tick: timer decrements", pmove.waterjumpremaining, 1.985f, 0.0001f);
+		PMSrc_Check("P916 assist tick: actually moves up", pmove.origin[2], 3.84f, 0.001f);
+		PMSrc_Check("P916 assist tick: actually moves forward", pmove.origin[0], 0.75f, 0.001f);
+		VectorClear(pmove.origin);
+		pmove.waterjumpremaining = 0;
+		pmove.velocity[2] = -181;
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 fast descent: no assist", pmove.waterjumpremaining, 0, 0);
+		VectorSet(pmove.velocity, -10, 0, 0);
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 backwards: no assist", pmove.waterjumpremaining, 0, 0);
+		VectorClear(pmove.velocity);
+		VectorSet(pms_forward, -1, 0, 0);
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 facing away: no assist", pmove.waterjumpremaining, 0, 0);
+		VectorSet(pms_forward, 1, 0, 0);
+		box->maxs[2] = 90;
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 tall wall/headroom blocked: no assist", pmove.waterjumpremaining, 0, 0);
+		pmove.numphysent = 0;
+		PMSrc_CheckWaterJump();
+		PMSrc_Check("P916 no ledge: no assist", pmove.waterjumpremaining, 0, 0);
+		pmove = *saved;
+		BZ_Free(saved);
+		VectorCopy(oldforward, pms_forward);
+		pms_haveportals = oldportals;
 	}
 
 	/* --- restore -------------------------------------------------------- */

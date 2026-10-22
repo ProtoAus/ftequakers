@@ -146,7 +146,7 @@ int SV_PMSrcVer(const float *pin)
 	//Patch 813: v8 recovers a fraction-0 retrace onto a plane already clipped since the last progress.
 	//Patch 888: v9 traces .phy hulls whose old 16-bit indices wrapped as they are.
 	//Patch 882: v10 honours momlimit/momcool/momslide.
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10)
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }
@@ -207,13 +207,15 @@ size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz)
 {
 	static const char *names[] = {"surfacefriction", "ducktime", "ducking", "ducked",
 		"msec_carry", "oldbuttons", "stamina", "rampoff", "boardcount", "rampcontact",
-		"srcladder", "ladnx", "ladny", "ladnz", "landticks"};
+		"srcladder", "ladnx", "ladny", "ladnz", "landticks", "wjtime", "wjx", "wjy"};
 	float v[countof(names)];
 	v[0] = st->surfacefriction;	v[1] = st->ducktime;	v[2] = st->ducking;	v[3] = st->ducked;
 	v[4] = st->msec_carry;	v[5] = st->oldbuttons;	v[6] = st->stamina;	v[7] = st->rampoff;
 	v[8] = st->boardcount;	v[9] = st->rampcontact;	v[10] = st->srcladder;
 	VectorCopy(st->srcladdernormal, v+11);
 	v[14] = st->landticks;	//Patch 882
+	v[15] = st->waterjumpremaining;
+	Vector2Copy(st->waterjumpdir, v+16);
 	return SV_PMTokens(names, v, countof(names), out, outsz);
 }
 
@@ -348,6 +350,26 @@ qboolean SV_PMStateHasLand(const char *text)
 	return false;
 }
 
+//P916: old seeds omit the assist entirely; v11 must carry all three values.
+qboolean SV_PMStateHasWater(const char *text)
+{
+	const char *names[] = {"wjtime=", "wjx=", "wjy="};
+	int i;
+	for (i = 0; i < countof(names); i++)
+	{
+		const char *p = text;
+		while ((p = strstr(p, names[i])))
+		{
+			if (p == text || p[-1] == ' ')
+				break;
+			p += strlen(names[i]);
+		}
+		if (!p)
+			return false;
+	}
+	return true;
+}
+
 //pm_source's carried state from SV_PMStateText's tokens; false if any is missing.
 qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st)
 {
@@ -391,6 +413,35 @@ qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st)
 			}
 			p += 10;
 		}
+	}
+	{
+		const char *waternames[] = {"wjtime=", "wjx=", "wjy="};
+		float w[3] = {0, 0, 0};
+		int present = 0;
+		for (i = 0; i < countof(waternames); i++)
+		{
+			const char *p = text;
+			size_t n = strlen(waternames[i]);
+			while ((p = strstr(p, waternames[i])))
+			{
+				if (p == text || p[-1] == ' ')
+				{
+					char *end;
+					double val = strtod(p+n, &end);
+					w[i] = val;
+					if (end == p+n || (*end && *end != ' ' && *end != '\r' && *end != '\n') ||
+						IS_NAN(w[i]) || (i == 0 ? (w[i] < 0 || w[i] > 2) : fabs(w[i]) > 50))
+						return false;
+					present++;
+					break;
+				}
+				p += n;
+			}
+		}
+		if (present && present != 3)
+			return false;
+		st->waterjumpremaining = w[0];
+		Vector2Copy(w+1, st->waterjumpdir);
 	}
 	return found == (int)countof(names);
 }

@@ -1483,6 +1483,7 @@ int SV_PMPinParse(const char *text, float *v);
 void SV_PMPinApply(const float *v);
 qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st);
 qboolean SV_PMStateHasLand(const char *text);	//Patch 882
+qboolean SV_PMStateHasWater(const char *text);	//Patch 916
 unsigned int SV_PhysentDigest(void);
 
 void SV_SendClientPrespawnInfo(client_t *client);
