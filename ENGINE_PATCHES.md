@@ -32,9 +32,12 @@ issue. Lifecycle review's leak is reproduced by the exact old C callbacks:
 balance4096 allocations/frees, including repeated EOF and final purge. This
 isolated ownership unit is not a mixer-thread or heap/RSS measurement. Repaired
 the switch-off fixture to snapshot an ACTIVE stream and disable in the same
-command-buffer pass, then require exactly one fade block. NoDeploy native
-client/server/plugins and all three VMs build without warnings. Final pinned
-native live cycles and lifecycle re-review remain pending; not deployed. Listening, latency/volume feel and performance are not measured
+command-buffer pass, then require exactly one fade block. Full NoDeploy build
+has0 VM warnings and0 NEW native warnings (same74 as P934 full baseline). Both
+PEs carry clean5fd6c6790/patch-937 stamps. Fixed-native real-socket fixture
+passes13 controls, including active exact-one fade and3 drain/restarts. Follow-up
+independent lifecycle review closes P1/P2 with no issue; input/frame review also
+found no issue. Not deployed yet. Listening/performance/concurrency remain unclaimed. Listening, latency/volume feel and performance are not measured
 by these counters and remain owner acceptance before any such claim.
 
 ## Patch 936 — retain 64px Steam portrait detail (QC/backend)
