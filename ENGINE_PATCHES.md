@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 927 — mounted CS:S local-body movement Foley
+
+**Problem:** movement was silent even with mounted CS:S content: no footsteps,
+landing or water-motion feedback. Camera/head-duck offsets must not manufacture
+body travel, and a stationary belt rider must not sound like walking.
+
+**Change (client QC):** observe native simorg and actual local velocity/ground,
+world water and ownership/mode gates. Bound sampling, distance/spacing-limit
+steps, infer common texture families, and play mounted CS:S/shared WAVs only
+when present. cl_game_sfx controls volume; gameaudio_info reports queued calls.
+No Valve assets ship. No inputs, movement, server damage, evidence/held policy,
+native source/tag pin or qcbuild change.
+
+**Verified:** three VMs0 warnings. Dedicated100fps dune walk ACTS in both arms:
+disabled159-unit walk emits0 calls; enabled152-unit walk emits a CSS concrete
+step. Idle adds none; a real jump/land adds one landing. Parc's real24-unit pool
+ACTS: entry1 and crouched-swim2 callbacks with mounted wade WAVs/depth2; original
+owned zone restored byte-for-byte and own processes stopped. This certifies
+queued effects and assets, NOT audible balance/output. Water exit, hard-fall
+voice and other materials remain explicit human checks. tools/p927-css-foley.md.
+
 ## Patch 926 — rotated trigger prediction uses the server's brush geometry
 
 **Problem:** surf_me save9 changed the view before the map's teleport. The
