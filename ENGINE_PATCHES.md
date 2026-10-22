@@ -22,7 +22,12 @@ EveryTick, duplicate suppression and enter-only control; extracted native guard
 checks ordinary/carried inputs,32/33 boundaries and100000 float-bit cases.
 Independent two-lens review found two P1s; both fixed and rechecked OK. Jump and
 once-pad physical acceptance remain unconfirmed; a non-acting input/pad rig is
-not a pass. Published P923 integration/build and deployment are still pending.
+not a pass. Published P923 integration review found no issues; its held checks
+remain first in both callbacks and no coverage/schema rule changed. The clean
+merged Full build has zero new warnings; both maps retain acting carry and no
+post-placement corrections above .25. Native selftests and reader864/0 pass.
+Byte-identical P923/P924 readers retain the same diagnostics on the current
+419REC/126VIEW corpus. Deployment is recorded separately in the QC feature note.
 Unpublished P921 reservation was renumbered forward to avoid a stale native
 minimum after P922/P923 shipped; its historical test artifacts retain P921.
 
