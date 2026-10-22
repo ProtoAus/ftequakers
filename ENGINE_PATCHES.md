@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 920 — paused-run choice and count-in view lock (QuakeC)
+
+**Problem:** Paused runs offered only centred text/F2, with no clear No choice;
+mouse/native look could turn the view while the restored body counted in.
+**Change:** CSQC left details/1 Yes/2 No panel using the existing offer protocol.
+No is local dismissal, not discard. Latch answer repeats/releases and preserve
+F2. Pin native and outgoing view angles only during C, releasing on the resume
+event before a stale C key can overwrite the restored angle. No server claim,
+apply, recorder clock, evidence schema or movement change; engine pin unchanged.
+**Verified:** Three-prog build at zero warnings; actual dedicated-socket control
+turns 115.2 degrees during C, subject stays at 90 degrees then turns normally
+(107.5 degrees) after GO. No retains all three synthetic slot files byte-exact;
+repeat/release, fresh reconnect, Yes, post-offer F2 and vote-observer checks pass.
+Panel/dismissal/count screenshots inspected. Native keyboard-look is not owner
+physical-mouse feel; that and visual acceptance remain pending in lextest.md.
+
 ## Patch 919 — predict EMPTY brush contents as nonsolid
 
 **Problem:** bhop_goldsrc2's decorative *93 illusionary explicitly has skin=-1.
