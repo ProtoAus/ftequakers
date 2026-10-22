@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 922 — Local filters, persistent scoreboard and quiet empty maps (QuakeC)
+
+**Problem:** Local hid the direction/Segmented row; TAB-up or another right-click
+closed a pinned board. Story repeated zero-player labels on empty maps.
+**Change:** Keep direction and Segmented on Local, retain explicit All/Clean and
+Practice presets without relabeling recordings. Right-click pins until Esc,
+including search focus; ordinary hold/release remains a peek. Hide known-zero
+Story population and its blank detail row, preserving positive/unavailable.
+No backend, evidence, movement or native binary change; engine pins unchanged.
+**Verified:** Three product VMs compile with zero warnings. Actual-client
+control/subject cases: 19 checks per arm in legacy and native-requested modes;
+all38 subject checks pass and the old source fails the expected pin/filter/zero
+controls. Both fixture modes used the legacy renderer (native-requested reports
+failed1/handle0), not a painted native-panel pass. Practice/Segmented clicks,
+ordinary peek/release, repeated right-click, Esc with search focus, cursor release
+and the real menu formatter's 0/1/3/unavailable controls acted. Local screenshots
+inspected. Human feel and native-panel visual acceptance remain pending.
+P921 test transport/captures predate the concurrent conveyors claim; product
+metadata was moved forward before publication, without relabeling old evidence.
+
 ## Patch 920 — paused-run choice and count-in view lock (QuakeC)
 
 **Problem:** Paused runs offered only centred text/F2, with no clear No choice;
