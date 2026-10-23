@@ -103,13 +103,19 @@ native control/candidate C functions match on 160 boundary/short-read cases and
 all 137016 recording rows. Original files/private copies remain byte-identical.
 Raw player data/profiles stay private. Two independent follow-ups close the
 135.2-walk boundary and private-test exception findings; no native blocker.
-Final clean tagged restore acts with unchanged body/clock/shadow recording.
 Published P937's raw-buffer ownership fix is integrated without changing these
-P935 native code hunks; audio frame/key hooks do not mutate the Foley observer.
-Human feel and guarded destination/live provenance remain separate. Shared
-Windows/lobby delivery is coordinated with the pending P936/P937 rollout; no
-NanoPi native/recorder promotion is implied. P935 was reserved before P936/P937;
-the QC highest-applied patch remains 937.
+P935 code hunks. Actual delivered-cohort cold control17.92s ->.56s, same saved
+body/clock/checkpoints/shadow recorder and intact original/private input hashes.
+Delivered22Oct23:47Z: native3afdd0fa3/tag935 plus compatible21c087d1 to BOTH
+Windows installs/all12empty lobbies, preserving the already delivered P936/P937
+and writer13. ALL26Windows/native/plugin/progs hashes and live Pi DATs verified;
+all12original lobby native/HL2 cohorts unchanged. Fresh real-lobby download ACTS
+natural give/USP idle/draw callback, then actual jump ->contact1/hop-cue1.
+Configs preserved; player-data inventory preservation is metadata-only, not
+full-content hashing. Details/UTC/limits: FTESurf tools/p935-delivery.md.
+Human lighting/FOV/listening/load feel remains pending. No native/producer/
+consent promotion, release or Build bump. P935 reserved before P936/P937;
+highest-applied QC patch remains937. This delivery note moves no native pin/tag.
 
 ## Patch 934 — sorted local-console bindlist (native client)
 
