@@ -43,8 +43,12 @@ subject zero, then clearing modal delivers exactly once, with all10allocations
 freed. Native code build passes with no new warnings; not a live debugger test.
 Source checks preserve native gesture predicates/budgets, journal and abort paths.
 Both independent guard follow-ups close the remaining P2 with no new defects.
-Final stamped Full is pending; not deployed.
-Physical-device/full-widget/visual acceptance remains owner-only pending.
+Clean5734db88/patch-939 Full compiled client/server/five plugins with the same
+74-warning baseline. Two ZIP packaging locks were preserved and completed by
+the supported serial route (3repeated baseline warnings,0new). All7PEs fresh;
+EXEs exact clean stamp, resource ZIPs valid.18native/local-MENU Windows targets
+verified23Oct03:33Z; QW/CSQC/backend/lobbies unchanged. Both review follow-ups
+closed all named issues. Real-device/full-widget/visual checks remain pending.
 
 ## Patch 938 — cheaper live symbol and recording-context checks
 
