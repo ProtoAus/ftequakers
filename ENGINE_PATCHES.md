@@ -38,6 +38,10 @@ pose1.30991 at age378.81s remained inside its12.5833s cycle. Final builds and
 spawn/respawn checks are recorded in QC tools/p941-source-polish.md. Lighting
 parity remains OPEN: supplied CSS/Momentum BSPs differ; matched camera requested.
 Human feel/ear acceptance pending. Reserved before P942; native pin/tag unchanged.
+Delivery23Oct06:39UTC: clean feature4682406d rebuilt all3VMs0warnings with exact
+hashes; guarded eight-file QW/CSQC dual Windows swap and all12empty-gated Pi swaps
+verified. Cold real client downloaded exact5b1500f1 CSQC, drew9-column/type14 board,
+0faults. Native/MENU/configs retained. QC tools/p941-delivery.md records limits.
 
 ## Patch 940 — Source-style weapon motion and material footsteps
 
