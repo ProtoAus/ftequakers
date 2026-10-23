@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 943 — Source weapon controls, cosmetic kick and varied Foley
+
+Problem: attacks were edge-only with no secondary modes; USP defaulted silenced,
+Scout non-draw sound events were discarded, footsteps cycled and close jump
+contacts could double. Owner wants FOV75 and harmless knife-contact feedback.
+
+Change: QC-only held/alt knife, unsilenced USP attach/detach, Glock three-bullet
+burst/cooldown, bare equip names and event-driven Scout bolt. Reuse packed byte
+weapon events; server remains authoritative and unarmed does not fire. Knife
+misses whoosh; player contact returns before damage and restores trace dimensions.
+Random authored foot variants coalesce contacts inside120ms. Exact critically
+damped shot punch surrounds ONLY main scene render; input/aim/body/sidecars stay
+unmodified. Default FOV75 if unset, no preference/binding overwrite. No native /
+evidence/collection/PvP change. Lighting comparison is separate, not claimed fixed.
+
+Verified: source and native socket controls, failures and limits in QC
+ tools/p943-source-weapons.md. Baseline held knife1 vs candidate4; alternate2;
+USP authored silencer poses/events, Glock1 vs3both client/server, Scout Bolt
+actual cue, two-degree smooth pulse, quiet135.2u/s0new calls. Actual player tap
+thudded with both health100/dimensions2/1/target position unchanged. 100Hz/1000Hz
+analytic pulse states agree (not a sustained1000FPS claim). Final zero-warning
+build/provenance and delivery are recorded there; human ear/feel pending.
+
 ## Patch 942 — unambiguous verifier output attribution
 
 Problem: repeated VERIFY results for one path were last-line-wins, so ambiguous
