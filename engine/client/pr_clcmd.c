@@ -1100,6 +1100,10 @@ void CL_Paste_Flush(void)
 {
 	pasteanswer_t answer, *p;
 
+#ifdef TEXTEDITOR
+	if (editormodal)
+		return;	/*Renderer tails may run while the script debugger is paused.*/
+#endif
 	if (!(p = cl_paste_ready))
 		return;
 	cl_paste_ready = NULL;

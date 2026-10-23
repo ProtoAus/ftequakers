@@ -10,8 +10,9 @@ paste chord and one-per-press checks. Keep the bounded first-line filter and VM
 stamp. Outside either VM, service ready text before/between native input events
 after dispatch capabilities clear; retain the render-tail fallback. The menu
 receiver uses its own error boundary. The debugger's separate input entry keeps
-delivery disabled for its whole call, including a resume key. Erase/free the
-native queue before delivery. Teardown/disconnect cancel pending responses.
+delivery disabled for its whole call, including a resume key. The central service
+also defers while the editor is modal, covering every renderer's screen tail.
+Erase/free the native queue before delivery. Teardown/disconnect cancel pending responses.
 MENU QC now keeps paste blobs in the existing bounded edit queue, at their
 positions among keys, with selection replacement and the same ASCII/length
 limits. This QC correction is MENU-only; its client/server DATs are unchanged.
@@ -22,7 +23,7 @@ producer, physics, plugin ABI or Build change.
 
 Verified so far: exact old/new C manager controls use an in-memory ASCII provider,
 never the owner's OS clipboard. Old control acts with three prompts/accepted Y;
-new manager opens none and balances all nine allocations/frees. Queue/filtering,
+new manager opens none and balances allocations/frees. Queue/filtering,
 length, callback/epoch, disconnect and teardown cases act. Review rejected two
 ordering gaps; do not treat scheduler adapters as real QC proof. Exact native
 manager/menu receivers plus scheduler/draft adapters show control wrong in6/6
@@ -35,10 +36,14 @@ forget and full-last-slot coalescing correct. No OS clipboard calls. Three VMs
 compile with0warnings. Actual NoDeploy comparisons prove the MENU correction's
 server/client DATs identical. Full native/client/server/all-five-plugin rebuild
 after the input-header change has the exact same74-warning baseline multiset,
-zero NEW warnings. Source checks preserve native gesture predicates/budgets,
-journal logic and existing abort paths. Correction review follow-up and final
-stamped Full are pending; not deployed. Physical-device/full-widget/visual
-acceptance remains owner-only pending.
+zero NEW warnings. Two correction reviews closed the ordering/input-pump issues;
+one found a remaining modal render-tail route. A central-service guard fixes it.
+Exact manager C control compiled with TEXTEDITOR delivers early once while modal;
+subject zero, then clearing modal delivers exactly once, with all10allocations
+freed. Native code build passes with no new warnings; not a live debugger test.
+Source checks preserve native gesture predicates/budgets, journal and abort paths.
+Targeted guard follow-up and final stamped Full are pending; not deployed.
+Physical-device/full-widget/visual acceptance remains owner-only pending.
 
 ## Patch 937 — optional local altitude tone and A/D drums
 
