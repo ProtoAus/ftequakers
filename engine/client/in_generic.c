@@ -2484,7 +2484,7 @@ static void IN_JournalSynth_f(void)
 void CL_Paste_Flush(void);
 /*a 'pointer' is either a multitouch pointer, or a separate device
 note that mice use the keyboard button api, but separate devices*/
-void IN_Commands(void)
+static void IN_Commands_Internal(qboolean deliverpaste)
 {
 	struct eventlist_s *ev;
 
@@ -2556,7 +2556,8 @@ void IN_Commands(void)
 	if (in_jrn_buf && events_used != events_avail)
 		IN_Journal_Frame();
 
-	CL_Paste_Flush();	/*P938: an async answer precedes the next input, too*/
+	if (deliverpaste)
+		CL_Paste_Flush();	/*P938: an async answer precedes the next input, too*/
 	while (events_used != events_avail)
 	{
 		ev = &eventlist[events_used & (EVENTQUEUELENGTH-1)];
@@ -2761,8 +2762,18 @@ void IN_Commands(void)
 			break;
 		}
 		events_used++;
-		CL_Paste_Flush();	/*handler returned; real-key/VM capabilities are cleared*/
+		if (deliverpaste)
+			CL_Paste_Flush();	/*handler returned; real-key/VM capabilities are cleared*/
 	}
+}
+void IN_Commands(void)
+{
+	IN_Commands_Internal(true);
+}
+void IN_Commands_Editor(void)
+{
+	/*The paused VM has not returned, even when a resume key clears modal state.*/
+	IN_Commands_Internal(false);
 }
 
 /*FTESurf Patch 376: per seat, since the process began: what the ring delivered, what

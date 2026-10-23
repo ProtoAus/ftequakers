@@ -1273,7 +1273,7 @@ int QCLibEditor(pubprogfuncs_t *prfncs, const char *filename, int *line, int *st
 			scr_disabled_for_loading=false;
 			SCR_UpdateScreen();
 			Sys_SendKeyEvents();
-			IN_Commands ();
+			IN_Commands_Editor();
 			S_ExtraUpdate();
 
 #ifdef CLIENTONLY

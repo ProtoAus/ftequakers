@@ -27,6 +27,7 @@ float IN_DetermineMouseRate(void);
 void IN_Shutdown (void);
 
 void IN_Commands (void);
+void IN_Commands_Editor(void);
 // oportunity for devices to stick commands on the script buffer
 
 void IN_Touch_BlockGestures(unsigned int devid);	//prevents any gestures from being generated from the same touch event.
