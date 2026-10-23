@@ -16,8 +16,12 @@ Verified: actual native2/1/2 cuts/restores/recuts the same tree crowns. Dedicate
 old-CSQC control connects but stays2/clipped; changed CSQC applies1 and renders
 full crowns. Listen reentry1/2/1/1 across Kvas/other/Kvas/same-map reload includes
 three actual application logs; not merely stable old values. Three VMs0warnings.
-Owner Save1 view and delivery remain pending; QC tools/p948-kvas-sky.md records
-controls and limits. Boreas/Phantasia/Epiphany are not claimed fixed.
+Final explicit-strcmp source856d03f4 reproduces its tested artifact; BOTH Windows
+and12Pi lobbies carry finalCSQC67b40bdd/QWd2d507cc, authoritative13:31UTCreadback
+and cold actual downloaded code/drawn9-column board pass. QW's only difference is
+one compiler-date byte; native945 and existing MENU retained. Owner Save1 view
+remains pending; QC tools/p948-delivery.md records controls, failures and limits.
+Boreas/Phantasia/Epiphany are not claimed fixed.
 
 ## Patch 947 — load Autumnal's legitimate optional blacktop assets
 
