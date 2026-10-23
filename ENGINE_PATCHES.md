@@ -15,7 +15,11 @@ and its update adds exactly one row. Cold native control renders checker tops;
 subject automatically consumes the optional pack and renders the same surfaces
 at identical zero-velocity body/camera, with the512x512 BC1 texture loaded.
 No terms acceptance/submission; owned processes stopped and fixtures restored.
-Delivery receipt and remaining human check: QC tools/p947-autumnal.md.
+Three-VM NoDeploy builds0warnings. Generated cache delivered/hash-verified in
+both Windows installs23Oct11:17Z; primary differs only by the one row, second
+previously absent now has a minimal header+row. Protected native/progs/config/
+mount files unchanged, no Pi action. Owner visual check remains pending;
+receipt/limits: QC tools/p947-autumnal.md.
 
 ## Patch 946 — include Glock in cosmetic shot kick
 
