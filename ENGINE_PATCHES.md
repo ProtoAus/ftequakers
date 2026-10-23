@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 952 — resolve extensionless Source colour-correction tables
+
+Problem: Epiphany names materials/cc in its color_correction entity but embeds
+materials/cc.raw. Generic texture extension search does not invent that raw LUT
+name, so the active weight1 postprocess sampled a failed 3D texture and blacked
+out the world, while the separately drawn HUD remained visible. HDR faces/PVS
+were not the cause; disabling only colour correction immediately showed the world.
+
+Change: default an extensionless LUT basename to .raw in the colour-correction
+entity context only. Preserve explicit extensions and dotted parent directories,
+accept both path separators, keep bounded string copying. No generic texture
+search/decoder relaxation, global graphics disable, BSP replacement or assets.
+The existing .raw plus98304-byte decoder gate/RGBA8/PTI3D upload is unchanged.
+No movement, input/evidence API, recording, verifier, backend or data policy change.
+
+Verified: frozen native950 on the actual unmodified map, CC1black versus CC0 and
+explicit postprocess bypass visible; all PNGs/readbacks inspected. Same-content
+original versus one-entity-filename-only explicit.raw BSP control both exit0:
+black versus authored graded world, exact sampler path demonstrated. Only exact
+owned fixture removed; original map unchanged. Changed native on ORIGINAL map
+now gives the same graded CC1 world and distinct ungraded CC0 output, exit0,
+PNGs/sampler inspected. Incremental existing-entrypoint build:3VM0warnings,
+3inherited native warnings,0new sites against qualified950/P939 baseline.
+Standalone plugin LSP lacks real build context; compiler evidence is authoritative.
+Final clean tagged artifacts/destination behavior and owner acceptance still
+pending. Public commands/scope/limits: QC tools/p952-epiphany.md.
+
 ## Patch 950 — Phantasia glass and unsupported-material diagnostics
 
 Problem: both Phantasia builds use Refract_DX90 on the glass ramp props. Source
@@ -28,8 +55,11 @@ lacks standalone build defines/types; actual compiler, not those false diagnosti
 is the build evidence. A verbose first diagnostic timed out after its CSS proof;
 a later shader-remap control crashed after its completed mode arms. Both failures
 are retained, neither called a report pass; the bounded BSP-mutation control used
-the existing overlay entrypoint. Final clean tagged artifacts and guarded delivery
-are separate pending boundaries; no manual owner acceptance claimed. Public scope,
+the existing overlay entrypoint. Clean tag9f85d8787 subsequently completed the final CSS+Momentum control, both
+PNGs inspected. Full+serial packaging completion qualified7freshAMD64PEs/5valid
+ZIPs and exact clean EXE stamps; failed parallel ZIP evidence retained. Immutable
+950 staging preserved. Windows swap is held by the owner's running game, not
+called delivered; no manual owner acceptance claimed. Public scope,
 commands and limits: QC tools/p950-phantasia.md.
 
 ## Patch 949 — Boreas foreground mountain behind finite sky depth

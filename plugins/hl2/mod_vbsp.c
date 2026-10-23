@@ -1768,7 +1768,15 @@ static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, 
 		cc_seen++;
 		if (found < countof(cc))
 		{
+			const char *part = file, *p;
+			for (p = file; *p; p++)
+				if (*p == '/' || *p == '\\')
+					part = p + 1;
 			Q_strlcpy(cc[found].file, file, sizeof(cc[found].file));
+			//Source maps can omit .raw; the generic image search must not
+			//guess it for unrelated textures. Preserve explicit extensions.
+			if (!strchr(part, '.'))
+				Q_strlcat(cc[found].file, ".raw", sizeof(cc[found].file));
 			Q_strlcpy(cc[found].target, target, sizeof(cc[found].target));
 			cc[found].weight = weight;
 			cc[found].minfall = minfall;
