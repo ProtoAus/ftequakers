@@ -49,18 +49,24 @@ covers rearming and stage/save restores. CSQC scales outgoing command duration,
 carrying fractional milliseconds, after existing replay/hold early exits. Native
 Source fixed-tick movement and its counted timer consume the same duration.
 Ghost body commands are also scaled; fractional state and bare forwarding retain
-the local seat. Slow practice uses shipped cl_predict_extrapolate 0 (native partial
-extrapolation 1 is unsupported): select it before a bare request, enforce while
-slow, restore the previous value after the last slow seat's normal-speed ack or
-VM shutdown. Pending bare slow requests conservatively keep that mode selected
-until observed in stats or VM shutdown, including a refusal before any slow ack.
-Slow visual samples are spaced by >=one tick of simulated time;
-full input/event rows remain intact. Runtime spacing is reset/conservatively
-re-anchored at fresh open and stream/buffer prefix restoration. No new stored
-field, native code/API, saved clock/evidence format, reader, collection or schema
-change; native commit/tag stay at P953. Not a global world or audio clock.
+the local seat. An accepted slow request keeps this map connection in practice;
+restoring1 changes speed, not eligibility. A fresh map/reconnect clears old client
+commands before clean admission. Slow mode uses existing cl_nopred1, because even
+extrapolate0 can predict during packet gaps. Preserve/restore the exact previous
+cvar string only while owned, and reconcile removed seats from numclientseats.
+Pending bare requests conservatively retain the mode until observed or shutdown.
+Slow visual samples are spaced by >=one tick of simulated time; full input/event
+rows remain intact. All restored prefixes, including Multi-Session streams,
+re-anchor spacing. Native legacy replay derives event order from existing packet
+ordinals rather than optional visual samples; paired restarts inherit their
+relocation's phase. Missing samples no longer decide phase; where a sample
+exists, contradictory serialization is refused. Pre-v9 compatibility and existing
+seed windows remain. Native pin/tag move to954 for this decoder correction. No new native input API,
+producer/counter, stored clock/evidence column, grammar, detector/tolerance,
+collection or schema change. Not a global world or audio clock.
 
-Verified locally: three production VMs compiled with zero warnings. Real dedicated
+Prior local controls (r1/r2, not final revision acceptance): three production
+VMs compiled with zero warnings. Real dedicated
 socket/unchanged native P952 images and bhop_eazy: normal versus 0.5 measured
 counted-time ratio 0.506 and moving-body ratio 0.517, fixed 15ms tick. At 0.1,
 30/300 frame caps each count 22 ticks over 3.235 wall seconds (factor 0.102);
@@ -76,8 +82,11 @@ runtime controls prove ghost0.1 clock0.095 (normal slow0.103), prediction prefer
 1->0->1, and actually admitted second local seat: bare p2 setting/query remain on
 p2, p1 stays1, p2 moving/counting factor0.510. Initial split-disabled p2 wrapping
 was a fixture failure, not a seat pass. New production build all3VMs0warnings.
-Independent re-review still required before deployment. Earlier compiler/fixture/
-observer failures are retained, not feature passes. Reader864 checks pass;
+Second review identified queued-input admission, conservative prediction,
+removed-seat/string ownership and legacy event-order dependencies. The corrected
+revision above needs clean native/VM builds, acting controls and three distinct
+independent lenses before deployment. Earlier compiler/fixture/observer/review
+failures are retained, not feature passes. Prior reader864 checks pass;
 canonical corpus baseline430REC/126VIEW/294faulty files is retained, not a clean
 corpus claim. Revised validation, independent re-review and deployment pending.
 Owner feel/visual acceptance is not inferred from these measurements.

@@ -4685,13 +4685,15 @@ typedef struct
 	int    row;			/* Patch 347, v9: the `in` row whose move it followed; -1 = v8, bind by <mt> */
 	int    fl;			/* v9: 1 = FL_ONGROUND after it */
 	int    preseed;		/* Patch 367: written before session N's first row: imposed on its seed */
-	qboolean post;		/* Patch 369: written after its row's packet sample -- between packets (`!r`) */
+	qboolean post;		/* P954: after its input packet; visual samples are optional */
+	int samplepost;		/* parser-only: observed sample order, -1 in seed windows */
 } recsim_warp_t;
 /* Patch 369: a `restart` (SV_TimerRestartSeg) -- the zone latches reset.  Bound
    like a warp: the row before it, and whether it came after that packet's sample. */
 typedef struct
 {
 	int      row;
+	int      wbefore;       /* P954: its following relocation owns the packet phase */
 	qboolean post;
 } recsim_restart_t;
 /* Patch 373: a `ghost` edge.  A client command, so always between packets: it
@@ -5339,6 +5341,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	const char   *specbad = NULL;
 	const char   *holdbad = NULL;
 	const char   *clockbad = NULL;
+	const char   *phasebad = NULL;
 	int           nclock = 0, nexcluded = 0;
 	int           viewcap = 0, viewowner = 0, nview = 0, endviews = -1;
 	float         viewwall = 0, viewtotal = 0, lastviewwall = 0, closingview = 0;
@@ -5642,7 +5645,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						Q_strncpyz(w->kind, kb, sizeof(w->kind));
 					}
 					w->preseed = 0;
-					w->post = !floorwin && cin > 0 && csam > ins[cin-1].nsam;
+					w->samplepost = floorwin || !cin || w->row != cin-1
+						? -1 : csam > ins[cin-1].nsam;
+					/* PostThink advances the recorded packet ordinal before client-command
+					   relocations. Slow practice can omit the packet's visual sample. */
+					w->post = !floorwin && cin > 0 && (filever >= 9
+						? w->pk > ins[cin-1].pk : csam > ins[cin-1].nsam);
 					if (floorwin && w->mt >= 0)
 						{ w->row = cin; w->preseed = openpause ? cses + 1 : cses; }
 				}
@@ -5895,6 +5903,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				if (pass == 1 && crst < nrestart)
 				{
 					rst[crst].row = cin - 1;
+					rst[crst].wbefore = cwarp;
 					rst[crst].post = cin > 0 && csam > ins[cin-1].nsam;
 				}
 				crst++;
@@ -6210,6 +6219,38 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			           " diverge and that is the format, not the mover.\n",
 			           filever);
 	}
+	/* A restart comes from SV_TimerTeleported, immediately before its relocation.
+	   Its record has no packet column; use that existing warp's explicit phase. */
+	if (filever >= 9)
+	{
+		int postwarps = 0, postrestarts = 0;
+		for (i = 0; i < nrestart; i++)
+		{
+			int w = rst[i].wbefore;
+			if (w < nwarp && (wrp[w].row == rst[i].row || wrp[w].preseed))
+			{
+				rst[i].row = wrp[w].row;
+				rst[i].post = wrp[w].post;
+			}
+			postrestarts += rst[i].post;
+		}
+		for (i = 0; i < nwarp; i++)
+		{
+			int row = wrp[i].row;
+			postwarps += wrp[i].post;
+			/* An omitted sample says nothing; an existing one still constrains
+			   serialization. Never turn an order-corrupt legacy tape into a PASS. */
+			if (wrp[i].samplepost >= 0 && row >= 0 && row < nin)
+			{
+				int end = row+1 < nin ? ins[row+1].nsam : nsam;
+				if (end > ins[row].nsam && wrp[i].post != wrp[i].samplepost)
+					phasebad = "event packet phase contradicts body sample order";
+			}
+		}
+		if (nwarp || nrestart)
+			Con_Printf("  phases    packet ordinals: %i/%i post warps, %i/%i post restarts\n",
+				postwarps, nwarp, postrestarts, nrestart);
+	}
 	if (filever >= 8)
 	{
 		int npay = 0;
@@ -6238,6 +6279,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			refuse = "unfinished: no `inend`/`end`";
 		else if (nresume)
 			refuse = "a save-state resume or retry";
+		else if (phasebad)
+			refuse = phasebad;
 		else if (ghostbad)
 			refuse = ghostbad;
 		else if (specbad)
