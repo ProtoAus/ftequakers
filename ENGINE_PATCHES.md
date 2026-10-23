@@ -102,8 +102,29 @@ ordinals rather than optional visual samples; paired restarts inherit their
 relocation's phase. Missing samples no longer decide phase; where a sample
 exists, contradictory serialization is refused. Pre-v9 compatibility and existing
 seed windows remain. Native pin/tag move to954 for this decoder correction. No new native input API,
-producer/counter, stored clock/evidence column, grammar, detector/tolerance,
+producer/counter, stored clock/evidence column, grammar, native detector/tolerance,
 collection or schema change. Not a global world or audio clock.
+
+Current R5 correction/verification (supersedes older pending-status statements
+below): render reconciliation refreshes every actual local seat, restoring the
+native-selected seat and never switching in-progress input contexts. Fresh slow
+streams retain their first nonnegative pose; restored prefixes only reanchor.
+The structural reader treats an omitted board-packet pose as unobserved only for
+pinned counted practice/unfinished traces. Ranked/dense/no-trace contradictions,
+malformed boards and incomplete-file gates remain strict. The note grants no
+native physics/contact verdict or ranked admission. No stored evidence or native
+admission policy changes.
+
+Three VMs build with zero warnings; 877 reader checks pass. Canonical corpus
+430 REC/126 VIEW retains294 existing faulty files with zero new faults, comparing
+old/new readers on identical captured bytes. Genuine two-seat checks measure
+secondary0.500 while primary remains1; render catches its uncached slow ack even
+when native threaded input was initially on. The previous VM fails that guard
+falsifier. Fresh first pose is0.000 versus0.015 before; genuine native replay
+PASS45ticks/90rows. These are owned synthetic fixture checks, not performance or
+real-ramp contact certification. An extra hold fixture did not establish its
+prerequisite and is not a pass. Fresh review, clean-commit reproof and
+Windows/Pi delivery remain pending.
 
 Prior local controls (r1/r2, not final revision acceptance): three production
 VMs compiled with zero warnings. Real dedicated
