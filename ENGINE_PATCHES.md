@@ -21,6 +21,24 @@ finished with a tool-profile failure, so its recovered written audit is not a
 clean-workflow claim. Guarded immutable-runtime deployment remains pending;
 QC tools/p942-verifier-output.md records bounded evidence and delivery state.
 
+## Patch 941 — subtler weapons, unarmed spawns and real-map CSS footsteps
+
+Problem: owner found P940 motion excessive; Axiom's truncated collision name
+selected concrete, Momentum scripts displaced CSS samples, and idle stopped.
+
+Change: QC-only bob/sway defaults0.2; unarmed spawn and reset of unsupported
+weapon state; wrap the raw idle pose clock. Resolve full contact-polygon names,
+reuse a polygon only while the new point remains on it, and read mounted CSS
+foot aliases through scoped search handles. No body/aim/evidence/native change.
+
+Verified: real dedicated Axiom emitted CSS metal2 from its full cubemap VMT;
+quiet walking added0calls, metadata reads stayed14, repeated same-face steps
+kept1surface scan. Turning control0.937459 ->0.187492 at scale1 ->0.2; idle
+pose1.30991 at age378.81s remained inside its12.5833s cycle. Final builds and
+spawn/respawn checks are recorded in QC tools/p941-source-polish.md. Lighting
+parity remains OPEN: supplied CSS/Momentum BSPs differ; matched camera requested.
+Human feel/ear acceptance pending. Reserved before P942; native pin/tag unchanged.
+
 ## Patch 940 — Source-style weapon motion and material footsteps
 
 Problem: weapon presentation lacked walking rock/turning sway, while texture
