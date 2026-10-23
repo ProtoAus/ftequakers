@@ -409,6 +409,7 @@ typedef struct
 
 	unsigned int num_animations;
 	galiasanimation_t *ofs_animations;
+	qboolean weapon_animations; // included group's events/sidecar already resolved
 
 	unsigned numverts;
 	vec2_t *ofs_st_array;
@@ -1122,7 +1123,8 @@ static void Mod_HL2_ReadPose(hl2parsecontext_t *ctx, const hl2mdlanim_t *anim, i
 		}
 		else if (pose->flags & 0x20)
 		{	//apparently these are 21+21+21+1 bits each
-			quint64_t q64 = *(const quint64_t*)data;
+			quint64_t q64;
+			memcpy(&q64, data, sizeof(q64));
 			quat[0] = (((int)(q64>> 0)&((1<<21)-1))-(1<<20)) / (float)(1<<20);
 			quat[1] = (((int)(q64>>21)&((1<<21)-1))-(1<<20)) / (float)(1<<20);
 			quat[2] = (((int)(q64>>42)&((1<<21)-1))-(1<<20)) / (float)(1<<20);
@@ -1148,7 +1150,7 @@ static void Mod_HL2_ReadPose(hl2parsecontext_t *ctx, const hl2mdlanim_t *anim, i
 		else if (pose->flags & 0x10)
 			Vector4Set(quat, 0, 0, 0, 1);
 		else
-			VectorCopy(boneinfo[pose->bone].quat, quat);
+			memcpy(quat, boneinfo[pose->bone].quat, sizeof(quat));
 
 		if (pose->flags & 1)
 		{	//static data
@@ -1275,7 +1277,7 @@ static void Mod_HL2_SequenceEvents(model_t *mod, const hl2mdlheader_t *h, size_t
 	unsigned int total = 0;
 	const qbyte *data = (const qbyte*)h;
 
-	if (size < sizeof(*h) || (h->version != 44 && h->version != 48) || h->num_sequences > 4096 ||
+	if (size < sizeof(*h) || (h->version != 44 && h->version != 48 && h->version != 49) || h->num_sequences > 4096 ||
 		!HL2_EventSpan(size, h->ofs_sequences, h->num_sequences, sizeof(hl2mdlseqevents_t)))
 		return;
 	for (i = 0; i < h->num_sequences; i++)
@@ -1307,7 +1309,7 @@ static void Mod_HL2_SequenceEvents(model_t *mod, const hl2mdlheader_t *h, size_t
 			if (!(ev.cycle >= 0 && ev.cycle <= 1)) continue;
 			memcpy(options, ev.options, 64);
 			options[64] = 0;
-			if (!*options) continue;
+			if (!*options && ev.code != 5001) continue;
 			timestamp = ev.cycle*anims[anim].numposes/anims[anim].rate;
 			for (known = anims[anim].events; known; known = known->next)
 				if (known->code == ev.code && known->timestamp == timestamp && !strcmp(known->data, options)) break;
@@ -1318,6 +1320,8 @@ static void Mod_HL2_SequenceEvents(model_t *mod, const hl2mdlheader_t *h, size_t
 		}
 	}
 }
+
+#include "mod_hl2_weapon.h"
 
 qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 {
@@ -1337,6 +1341,15 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		".vvd"
 	};
 	galiasinfo_t *galias;
+
+	if (fsize < sizeof(*ctx.header) || ctx.header->num_bones > 256 ||
+		(ctx.header->ofs_bones & 3) || !HL2_EventSpan(fsize, ctx.header->ofs_bones, ctx.header->num_bones, sizeof(hl2mdlbone_t))) return false;
+	for (i = 0; i < ctx.header->num_bones; i++)
+	{
+		const hl2mdlbone_t *bone = (const hl2mdlbone_t*)((const qbyte*)buffer+ctx.header->ofs_bones)+i;
+		if (bone->parent < -1 || bone->parent >= (int)i ||
+			!HL2_BoundedName(buffer, fsize, ctx.header->ofs_bones+i*sizeof(*bone), bone->name_ofs)) return false;
+	}
 
 	for (i = 0; !vtx && i < countof(vtxpostfixes); i++)
 	{
@@ -1399,6 +1412,7 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			}
 			ctx.num_animations = a-ctx.ofs_animations;
 		}
+		Mod_HL2_IncludeWeaponAnimations(&ctx, fsize);
 	}
 
 
@@ -1522,7 +1536,7 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	if (galias)
 	{
 		// Explicit sidecars retain precedence; do not double their custom cues.
-		if (!Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations))
+		if (!ctx.weapon_animations && !Mod_ParseModelEvents(mod, galias->ofsanimations, galias->numanimations))
 			Mod_HL2_SequenceEvents(mod, ctx.header, fsize, galias->ofsanimations, galias->numanimations);
 		VectorCopy(ctx.header->illumposition, galias->illumposition);	//FTESurf Patch 780
 		galias->hasillum = true;
