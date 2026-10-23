@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 949 — Boreas foreground mountain behind finite sky depth
+
+Problem: native default2 writes a sky brush's finite depth in front of Boreas's
+foreground mountain, producing the owner's pale cutout. The old P265 branch fix
+alone does not override today's default2; no speculative trigger/material fix.
+
+Change: client-only render_surf_boreas.cfg selects existing native auto1. P948's
+map-ready layer applies it; the baseline restores2 elsewhere. No native pin/tag,
+VM, physics, evidence/body reader, sky permission, map or player-data change.
+
+Verified: current native945/P94867b at a read-only Save11-derived pose,
+synthetic DEMOTED placement, actual2/1/2 readbacks/screenshots: cut/full/cut.
+All three PNGs inspected; actual Momentum BSP load and server pose observed.
+Final automatic layer1/full, mounted Autumnal2, matching freshly native-written
+world CRC, no command/VM errors and clientexit0. Three VMs0warnings and exact
+P948 bytes. Earlier harness log/marker/alias/cvar-init-order failures retained,
+not turned into passes. Clean-source qualification, dual client-config delivery
+and owner in-game acceptance pending; QC tools/p949-boreas-sky.md has limits.
+
 ## Patch 948 — Kvas tree crowns and map-ready client render layers
 
 Problem: forced finite sky depth clips Kvas bonus4 trees. The existing client
