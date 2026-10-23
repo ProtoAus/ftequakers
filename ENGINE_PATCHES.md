@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 956 — retain each future verdict's recording identity
+
+Problem: verifier attempts already checked the consumed recording's identity,
+but historical verdict rows retained only code/version/result metadata. A later
+filing hash could not establish which bytes an old attempt actually consumed.
+
+Change: persist recording_sha256 with each future accepted, source-bound native
+terminal observation, in the same transaction as its verdict/checked update.
+ERROR and pre-verifier refusals remain unbound. Use the existing additive,
+idempotent per-attempt metadata migration with an empty unknown default; never
+reread/backfill old verdicts or replace filing identity. No native, raw collection,
+public/admin payload, badge/ranking/review/threshold, Build or release change.
+The existing schema20/profile and engine commit/tag pin are unchanged.
+
+Verified:24existing attribution controls pass on the original source;13new
+acting file/SQLite persistence/migration tests fail there. Changed source passes
+all60focused tests, including per-attempt companion/recheck identity, source and
+execution errors, legacy preservation/idempotence, simultaneous missing-column
+migration, real I/O propagation and atomic insert/checked rollback. The first
+subject run's rollback test assumed seen0 rather than the actual initial-1;
+that test failure is retained and now compares captured before-state, not a
+weaker assertion. Existing NoDeploy build3VM0warnings, reader864/0failed,
+board/sweep/evidence/receipt controls PASS. Unchanged selected runs corpus430:
+control294faults/subject294faults, all selected input bytes stable, increase0;
+the broader saves attempt met a protected historical ACL and is NOT a pass.
+ARM focused60 includes59pass/1platformskip. Actual installed native consumed the
+approved4418-tick legacy positive via the real authenticated runner into an
+isolated schema20 SQLite row: new digest matches, prior attempt stays unknown/
+unchanged, native exit0 and source images unchanged. Safety-only headless argv
+flags isolate that control; no normal live-cron/calibration claim. Qualified
+backend-only delivery and independent cutover review remain pending here.
+
 ## Patch 955 — CSS weapon presentation follow-up
 
 Problem: single Glock shots inherited a cosmetic kick that CSS does not have;
