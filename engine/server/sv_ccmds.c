@@ -254,6 +254,12 @@ static void SV_Fraglogfile_f (void)
 	char	name[MAX_OSPATH];
 	int		i;
 
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure file command: %s\n", Cmd_Argv(0));
+		return;
+	}
+
 	if (sv_fraglogfile)
 	{
 		Con_TPrintf ("Frag file logging off.\n");
@@ -2347,6 +2353,12 @@ static void SV_WriteIP_f (void)
 	char adr[MAX_ADR_SIZE];
 	char banflagtext[1024];
 	int i;
+
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("Blocking insecure file command: %s\n", Cmd_Argv(0));
+		return;
+	}
 
 	SV_KillExpiredBans();
 

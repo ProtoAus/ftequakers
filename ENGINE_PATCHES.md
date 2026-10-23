@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 953 — guard native local file-writer commands
+
+Problem: two server file-writer commands did not apply the existing local-command
+trust boundary before replacing the ban-list file or opening/closing a frag log.
+Command registration restrictions alone did not protect their handlers.
+
+Change: reject insecure command contexts at entry to both native handlers, before
+any file or logging-state operation. Reuse Cmd_IsInsecure and report an explicit
+refusal. Trusted operator behaviour is unchanged. No movement, input/evidence,
+recording, verifier, collection, schema, ranking or legacy-credit policy change.
+
+Verified: actual isolated dedicated native control demonstrated the old writes;
+the changed native explicitly refused both untrusted contexts, preserving its
+synthetic file and creating no frag log. A subsequent trusted operator control
+replaced its own synthetic file and created/closed an empty frag log. Caller and
+known-boundary controls acted; silence was not accepted. Final paced run quit0,
+no forced stop; own child reaped, both real install configs and seven supplied
+native images unchanged. The first run's functional assertions passed but its
+quit hit the native amplification limiter; that whole-test failure is retained.
+Pacing, not a raised/disabled limiter, fixed the test seam. Three VMs0warnings;
+initial Full74 inherited native warnings, no new site; preserved parallel ZIP
+failure followed by exact metadata recovery and same-source build continuation0.
+Standalone clangd with the explicit real compilation database:0 parser errors.
+This is a numeric native-context proof, not normal-client wire reachability.
+Exact-tag final Windows/Linux qualification and deployment are not claimed here.
+
 ## Patch 952 — resolve extensionless Source colour-correction tables
 
 Problem: Epiphany names materials/cc in its color_correction entity but embeds
