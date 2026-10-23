@@ -1078,150 +1078,46 @@ int CL_PasteLine(const char *utf8, unsigned int *out, int max)
 	}
 	return n;
 }
-/*
-  FTESurf Patch 667: THE QUESTION BEFORE A PASTE.  While a server is about, QC
-  is given clipboard text by nothing but this prompt's yes.  The game VM's
-  code is the server's; the menu VM, ours, can be fed keys and focus by
-  console lines, and a console line's level is hardening, not a wall (the
-  first cut leaned on it, and its review walked an alias through).  So a
-  chord alone moves nothing.
-  The prompt is the engine's: on the prompt stack, where every key-down but
-  the function keys is its own (keys.c, "prompts get the first chance"), and
-  DRAWN LAST OF ALL (CL_Paste_DrawLast, after the cursor and the debug
-  overlays, which cvars a server can set draw over prompts).
-  YES IS A DEVICE'S PRESS OF Y, by the letter the key types where it types a
-  Latin one and by its position otherwise, after the prompt has been SHOWN FOR
-  CL_PASTE_ARM:
-  counted in frames it was drawn, a frame's share capped, because a frame can
-  be made long and a key's own stamp is when the queue saw it; and drawn
-  within the last quarter second; and only where the console's type is a size
-  the question can be read at.  ANY OTHER PRESS IS A NO.  Not Enter: it is the
-  chat key, and the chord can come from play (a crouch held, a key on V).  The
-  answering key's repeats are nobody's (keys.c, key_pasteanswer): a held Enter
-  sent the draft it had pasted into.
-  It says how many characters, never which: the screen may be on a stream.
-*/
-#define CL_PASTE_MAX 256	/*characters of one paste*/
-#define CL_PASTE_ARM 0.35	/*seconds shown before a Y is a yes...*/
-#define CL_PASTE_FRAME 0.05	/*...of which one drawn frame is at most this*/
+/* P938: paste without an extra dialog. Both callers retain their native real
+   chord and one-per-press budget. Deliver outside either VM's execution, with
+   the original VM stamp; teardown cancels pending and queued responses. */
+#define CL_PASTE_MAX 256
 typedef void (*pastegive_t)(const unsigned int *text, int chars, unsigned int vm);
 typedef struct
 {
-	menu_t m;
 	pastegive_t give;
-	unsigned int vm;	/*the asker's own stamp, handed back with the text*/
-	double last;	/*when it was last drawn (0: not yet)*/
-	double shown;	/*seconds it has been on screen, by CL_PASTE_FRAME*/
+	unsigned int vm;
 	int chars;
 	unsigned int text[CL_PASTE_MAX];
-} pasteprompt_t;
-static pasteprompt_t *cl_paste;	/*the question that is up*/
-static unsigned int cl_paste_asked;	/*moves with every ask: a late answer is its own ask's or nobody's*/
-static pastegive_t cl_paste_give;	/*who the clipboard is being read for*/
+} pasteanswer_t;
+static pasteanswer_t *cl_paste_ready;
+static unsigned int cl_paste_asked;
+static pastegive_t cl_paste_give;
 static unsigned int cl_paste_vm;
-qboolean IN_RealKeyDown(void);	/*in_generic.c, Patch 625*/
-extern int key_pasteanswer;	/*keys.c*/
 
-/*The console type's height, or 0 where the question could not be read by it
-  (its cvars are a server's to set): under seven pixels, or the box off the screen.*/
-static float CL_Paste_Scale(void)
-{
-	float scale = Font_CharVHeight(font_console);
-	if (scale * vid.pixelheight < 7 * vid.height || 42 * scale > vid.width || 11 * scale > vid.height)
-		return 0;
-	return scale;
-}
-static void CL_Paste_Release(struct menu_s *gm, qboolean forced)
-{
-	if ((pasteprompt_t*)gm == cl_paste)
-		cl_paste = NULL;
-	memset(gm, 0, sizeof(pasteprompt_t));	/*the text is not left in freed memory*/
-	Z_Free(gm);
-}
-static qboolean CL_Paste_Key(struct menu_s *gm, qboolean isdown, unsigned int devid, int key, int unicode)
-{
-	pasteprompt_t *p = (pasteprompt_t*)gm;
-	unsigned int text[CL_PASTE_MAX];
-	pastegive_t give = p->give;
-	unsigned int vm = p->vm;
-	int chars = 0;
-	/*The character where the event has an ASCII letter (the Y key's POSITION is
-	  another letter on QWERTZ or Dvorak), the position where it has none (a
-	  Ctrl still held) or a letter of another alphabet.*/
-	int c = ((unicode >= 'a' && unicode <= 'z') || (unicode >= 'A' && unicode <= 'Z')) ? unicode : key;
-
-	if (!isdown)
-	{	/*Menu_KeyEvent gives a release to the prompt alone: the menu under it
-		  saw the chord's keys go down, and never saw them come up (its Shift
-		  stayed held after a Shift+Ins).  MP_KeyEvent drops what it never saw.*/
-		if (topmenu && topmenu != gm && topmenu->keyevent)
-			topmenu->keyevent(topmenu, false, devid, key, unicode);
-		return false;
-	}
-	if (!IN_RealKeyDown())
-		return true;	/*the chord's own auto-repeat, or nobody's key: not an answer*/
-	if ((c == 'y' || c == 'Y') && p->shown >= CL_PASTE_ARM
-		&& Sys_DoubleTime() - p->last <= 0.25 && CL_Paste_Scale())
-	{
-		chars = p->chars;
-		memcpy(text, p->text, sizeof(text[0])*chars);
-	}
-	key_pasteanswer = key;
-	Menu_Unlink(gm, false);	/*first: what is given below may not come back*/
-	if (chars)
-		give(text, chars, vm);
-	memset(text, 0, sizeof(text));
-	return true;
-}
-static void CL_Paste_Ink(pasteprompt_t *p, float scale)
-{
-	int w = 42*scale, h = 4.2*scale;
-	int x = ((int)vid.width - w)/2, y = (int)(vid.height*0.6);
-	char line[96];
-
-	R2D_ImageColours(0.06, 0.07, 0.10, 0.96);
-	R2D_FillBlock(x, y, w, h);
-	R2D_ImageColours(0.36, 0.62, 1.0, 1);
-	R2D_FillBlock(x, y, w, 2);
-	R2D_ImageColours(1, 1, 1, 1);
-	Q_snprintfz(line, sizeof(line), "Paste %i character%s from your clipboard?", p->chars, (p->chars == 1)?"":"s");
-	Draw_FunStringWidthFont(font_console, x, y + scale*0.9, line, w, 2, false);
-	Draw_FunStringWidthFont(font_console, x, y + scale*2.4, "Y: paste      any other key: no", w, 2, false);
-}
-static void CL_Paste_Draw(struct menu_s *gm)
-{
-	pasteprompt_t *p = (pasteprompt_t*)gm;
-	double now = Sys_DoubleTime();
-	float scale = CL_Paste_Scale();
-
-	if (!scale)
-	{	/*it cannot be read, so it is not asked*/
-		Menu_Unlink(gm, true);
-		return;
-	}
-	if (!p->last || now - p->last > 0.25)
-		p->shown = 0;	/*drawn for the first time, or again after something stood over it*/
-	else
-		p->shown += min(now - p->last, CL_PASTE_FRAME);
-	p->last = now;
-	CL_Paste_Ink(p, scale);
-}
-/*cl_screen.c, after everything else it draws: the question's ink again, on top.*/
+/* cl_screen.c's existing native tail, after both VMs have returned. */
 void CL_Paste_DrawLast(void)
 {
-	float scale;
-	if (cl_paste && promptmenu == &cl_paste->m && (scale = CL_Paste_Scale()))
-		CL_Paste_Ink(cl_paste, scale);
+	pasteanswer_t answer, *p;
+
+	if (!(p = cl_paste_ready))
+		return;
+	cl_paste_ready = NULL;
+	answer = *p;
+	memset(p, 0, sizeof(*p));
+	Z_Free(p);
+	answer.give(answer.text, answer.chars, answer.vm);
+	memset(&answer, 0, sizeof(answer));
 }
 static void CL_Paste_Got(void *ctx, const char *utf8)
 {
-	pasteprompt_t *p;
+	pasteanswer_t *p;
 	pastegive_t give = cl_paste_give;
 
 	if ((unsigned int)(size_t)ctx != cl_paste_asked || !give)
-		return;	/*an older ask's answer (X11 answers late, and cancels with NULL)*/
+		return;
 	cl_paste_give = NULL;
-	if (cl_paste || !CL_Paste_Scale())
+	if (cl_paste_ready)
 		return;
 	p = Z_Malloc(sizeof(*p));
 	p->chars = CL_PasteLine(utf8, p->text, CL_PASTE_MAX);
@@ -1232,31 +1128,32 @@ static void CL_Paste_Got(void *ctx, const char *utf8)
 	}
 	p->give = give;
 	p->vm = cl_paste_vm;
-	p->m.drawmenu = CL_Paste_Draw;
-	p->m.keyevent = CL_Paste_Key;
-	p->m.release = CL_Paste_Release;
-	p->m.cursor = &key_customcursor[kc_console];
-	p->m.persist = true;
-	cl_paste = p;
-	Menu_Push(&p->m, true);
+	cl_paste_ready = p;
 }
-/*Read the clipboard and put the question; `give` gets a yes, with `vm` as it
-  was handed in.  One question at a time.*/
+/* The caller has already spent its real-key paste budget. */
 void CL_PasteAsk(pastegive_t give, unsigned int vm)
 {
-	if (cl_paste)
+	if (!give || cl_paste_ready)
 		return;
 	cl_paste_give = give;
 	cl_paste_vm = vm;
 	Sys_Clipboard_PasteText(CBT_CLIPBOARD, CL_Paste_Got, (void*)(size_t)++cl_paste_asked);
 }
-/*A VM is going: its question and an answer not yet come go with it.*/
+/* NULL drops all responses on native disconnect, including the surviving menu. */
 void CL_PasteDrop(pastegive_t give)
 {
-	if (cl_paste_give == give)
+	if (!give || cl_paste_give == give)
+	{
 		cl_paste_give = NULL;
-	if (cl_paste && cl_paste->give == give)
-		Menu_Unlink(&cl_paste->m, true);
+		cl_paste_vm = 0;
+		cl_paste_asked++;
+	}
+	if (cl_paste_ready && (!give || cl_paste_ready->give == give))
+	{
+		memset(cl_paste_ready, 0, sizeof(*cl_paste_ready));
+		Z_Free(cl_paste_ready);
+		cl_paste_ready = NULL;
+	}
 }
 
 void QCBUILTIN PF_cl_clipboard_set(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)

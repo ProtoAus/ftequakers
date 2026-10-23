@@ -2569,11 +2569,13 @@ Sends a disconnect message to the server
 This is also called on Host_Error, so it shouldn't cause any errors
 =====================
 */
+void CL_PasteDrop(void (*give)(const unsigned int *text, int chars, unsigned int vm));
 void CL_Disconnect (const char *reason)
 {
 	qbyte	final[13];
 	int i;
 
+	CL_PasteDrop(NULL);	//cancel clipboard data before either VM or connection changes
 	if (reason)
 		Cvar_Set(&cl_disconnectreason, reason);
 
