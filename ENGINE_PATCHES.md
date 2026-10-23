@@ -48,7 +48,16 @@ practice/cheat funnels act before publishing the scalar; the level predicate
 covers rearming and stage/save restores. CSQC scales outgoing command duration,
 carrying fractional milliseconds, after existing replay/hold early exits. Native
 Source fixed-tick movement and its counted timer consume the same duration.
-No native code/API, saved clock/evidence format, reader, collection or schema
+Ghost body commands are also scaled; fractional state and bare forwarding retain
+the local seat. Slow practice uses shipped cl_predict_extrapolate 0 (native partial
+extrapolation 1 is unsupported): select it before a bare request, enforce while
+slow, restore the previous value after the last slow seat's normal-speed ack or
+VM shutdown. Pending bare slow requests conservatively keep that mode selected
+until observed in stats or VM shutdown, including a refusal before any slow ack.
+Slow visual samples are spaced by >=one tick of simulated time;
+full input/event rows remain intact. Runtime spacing is reset/conservatively
+re-anchored at fresh open and stream/buffer prefix restoration. No new stored
+field, native code/API, saved clock/evidence format, reader, collection or schema
 change; native commit/tag stay at P953. Not a global world or audio clock.
 
 Verified locally: three production VMs compiled with zero warnings. Real dedicated
@@ -58,8 +67,19 @@ counted-time ratio 0.506 and moving-body ratio 0.517, fixed 15ms tick. At 0.1,
 nonzero walk progress, whole-hull start exit and running recorder demonstrated.
 Second real player's scalar/attempt/body/clock remain normal. Immediate taint,
 rearm latch, active-run restore-to-1, invalid bounds/NaN/argument count controls
-pass. Earlier fixture/observer failures retained, not feature passes. Independent
-reviews, final clean build/reader controls and deployment still pending here.
+pass. Class0/watch1 normal versus slow and clean-save load/restore also pass.
+Review found ghost/seat/prediction-mode gaps and excess sample density; completed
+control66.465/s faults0 versus half-speed133.234/s faults1 confirmed the latter.
+Revised completed captures1/.5/.1 read at65.449/54.859/64.417 samples/s with zero
+faults each; reader/tolerances unchanged, every input/event row retained. Native
+runtime controls prove ghost0.1 clock0.095 (normal slow0.103), prediction preference
+1->0->1, and actually admitted second local seat: bare p2 setting/query remain on
+p2, p1 stays1, p2 moving/counting factor0.510. Initial split-disabled p2 wrapping
+was a fixture failure, not a seat pass. New production build all3VMs0warnings.
+Independent re-review still required before deployment. Earlier compiler/fixture/
+observer failures are retained, not feature passes. Reader864 checks pass;
+canonical corpus baseline430REC/126VIEW/294faulty files is retained, not a clean
+corpus claim. Revised validation, independent re-review and deployment pending.
 Owner feel/visual acceptance is not inferred from these measurements.
 
 ## Patch 953 — guard native local file-writer commands
