@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 940 — Source-style weapon motion and material footsteps
+
+Problem: weapon presentation lacked walking rock/turning sway, while texture
+name guesses alone could not follow mounted surface properties and sound aliases.
+
+Change: QC-only speed-scaled model bob and bounded facing lag, with reset gates
+and entity-local native-bob suppression; default viewmodel FOV70 preserves user
+choices. Resolve floor trace names through bounded cached VMT includes, surface
+inheritance and relevant sound-manifest aliases, alternating left/right WAVs.
+Keep quiet movement, safe missing-content fallback and explicit refresh. No camera,
+aim, movement, evidence/collection, native pin/tag, plugin ABI or Build change.
+
+Verified: three VMs0warnings; native dedicated-socket controls show nonzero model
+motion at260u/s, turning lag/settling and hide/re-enable reset, default70/override81.
+A metal-named floor's declaration selects wood/grating/glass/concrete WAVs; native
+trace-name control fixes empty world-entity texture lookup. Cyclic VMT fallback,
+mounted inheritance/left-right variants and unchanged metadata-read count on cache
+hits act;135.2u/s walking adds zero cues. Corrected an initial FILE_READNL misuse
+(the builtin returns a whole unadvanced file, not newline-preserving lines).
+Final FILE_READ rerun retains111profiles/67aliases and actual metal foot cues.
+Compatible server DAT is byte-identical. Ear/visual, actual warp/replay and precise
+CS:S parity remain unclaimed; owner check pending. Delivery recorded separately.
+
 ## Patch 939 — paste without a second confirmation
 
 Problem: the native confirmation interrupted every connected-game paste,
