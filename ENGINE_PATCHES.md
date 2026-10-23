@@ -16,12 +16,58 @@ unmodified. Default FOV75 if unset, no preference/binding overwrite. No native /
 evidence/collection/PvP change. Lighting comparison is separate, not claimed fixed.
 
 Verified: source and native socket controls, failures and limits in QC
- tools/p943-source-weapons.md. Baseline held knife1 vs candidate4; alternate2;
+tools/p943-source-weapons.md. Baseline held knife1 vs candidate4; alternate2;
 USP authored silencer poses/events, Glock1 vs3both client/server, Scout Bolt
 actual cue, two-degree smooth pulse, quiet135.2u/s0new calls. Actual player tap
 thudded with both health100/dimensions2/1/target position unchanged. 100Hz/1000Hz
 analytic pulse states agree (not a sustained1000FPS claim). Final zero-warning
 build/provenance and delivery are recorded there; human ear/feel pending.
+
+## Patch 945 — bind verifier results to the loaded recording bytes
+
+Problem: a path and pre/post file hashes did not identify the buffer consumed
+by the native verifier. An unavailable binding must not become player guilt.
+
+Change: pm_verify hashes its complete loaded buffer before parsing and echoes
+an invocation challenge. The backend requires one timely matching report,
+successful process exit and unchanged source bytes; ambiguity becomes retryable
+ERROR without ticks/counts. No recording format, mover, collector, schema,
+retention, access, threshold or historical-verdict change.
+
+Verified: seven real-file/SQLite controls fail11 baseline subcases; corrected
+input/identity/source/finish/counts suites pass47 tests. Windows NoDeploy builds
+have0new warnings;60acted physics rows match the unchanged native reference in
+the same current fixture. Real dedicated CLI binds full LF/CRLF inputs (both
+4418tick PASS), the complete NUL-suffix input (REFUSE), and a retained REC15
+input (context REFUSE, not trajectory acceptance). Final committed builds,
+ARM qualification and deployment remain pending; no security-complete claim.
+
+## Patch 944 — personal Max Fog event and whole-run tracking
+
+Problem: Event27's Zoomathon Max Fog entry was a finish-only label, without a
+fog mode or a way to distinguish a whole-fog finish from a late toggle.
+
+Change: targeted native gamecode fog locks for one player, explicit Story mode
+metadata, and a map/expiry/intent-scoped menu-to-CSQC request after active spawn.
+Fresh timer starts latch the mode; disabling clears that run's eligibility even
+if re-enabled. Full fresh lobby finishes snapshot an optional trusted fact;
+legacy/missing/partial/stage facts remain unknown. Additive Story schema and
+maxfog challenge support do not change the default gold criterion: one existing
+holder's legacy-credit policy awaits the owner. Ordinary launches/cancellation
+clear pending requests. No native pin/tag, body/input journal, reader, collector,
+movement or Build change; this is a server-reported mode, not pixel attestation.
+
+Verified: three VMs0warnings; real dedicated sockets render dense grey and restore
+authored air/sky/water fog; console fog0 is refused while locked. Actual walked
+full finishes POST whole/off-midrun/late-on facts1,0,0 to the stripped local sink.
+Wrong-map and expired launches prove explicit QC rejection with connected mode0.
+Backend51 tests include preserved legacy rows, duplicate completions, dated/full
+scope and immediate answer versus ladder agreement. Concurrent cron/gunicorn
+initializers serialize the additive column probe/ALTER; the old two-connection
+control raises duplicate-column while both protected imports preserve the row. Four pure transport tests
+prevent the old map-line rewrite from corrupting a cvar suffix. Native controls
+use synthetic OFFLINE fixtures, not online/ranked/physical-input acceptance.
+Delivery and owner visual acceptance are not yet claimed.
 
 ## Patch 942 — unambiguous verifier output attribution
 
