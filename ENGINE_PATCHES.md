@@ -67,7 +67,15 @@ initializers serialize the additive column probe/ALTER; the old two-connection
 control raises duplicate-column while both protected imports preserve the row. Four pure transport tests
 prevent the old map-line rewrite from corrupting a cvar suffix. Native controls
 use synthetic OFFLINE fixtures, not online/ranked/physical-input acceptance.
-Delivery and owner visual acceptance are not yet claimed.
+Delivery23Oct2026: dual Windows DAT/LNO verified08:04Z; owner-authorized force
+wave ships exact tested QW/CSQC to12lobbies. Backend-only qualified schema20 variant
+preserves79of80runtime files and P942 sweep. Actual worker/admission/importer,
+source/cron, native dependencies and unchanged game epochs are verified. At10:09Z
+live Event27 mode=maxfog, catalogueef89114c8a23, goldfinish/oneholder unchanged;
+all62legacy Story rows preserved with unknown maxfog. SQLite whole-step backup
+and independent product/adapter reviews precede cutover. Original failed suite
+and corrected test-proxy resolution remain distinct. No release/Build decision;
+owner menu/visual/second-client checks and legacy-credit policy remain pending.
 
 ## Patch 942 — unambiguous verifier output attribution
 
