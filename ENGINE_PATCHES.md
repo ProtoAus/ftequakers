@@ -24,8 +24,15 @@ now gives the same graded CC1 world and distinct ungraded CC0 output, exit0,
 PNGs/sampler inspected. Incremental existing-entrypoint build:3VM0warnings,
 3inherited native warnings,0new sites against qualified950/P939 baseline.
 Standalone plugin LSP lacks real build context; compiler evidence is authoritative.
-Final clean tagged artifacts/destination behavior and owner acceptance still
-pending. Public commands/scope/limits: QC tools/p952-epiphany.md.
+Final: exact-tag qualification refused cached950EXEstamps after successful
+incremental link. Supported Full/NoDeploy Jobs1 resolves revision-flag cache:
+7freshAMD64PEs/5validZIPs/2exactclean952stamps,3VM0warnings, exact74 inherited
+Full warning multiset,0new. Source d982f43de/tag952 pushed. BOTH Windows14native
+images delivered23Oct2026 17:03:39Z after game closed, hashes verified,33protected
+program/config/content/save hashes unchanged, backups retained, no kill/Pi/data/
+progs/backend operation. Installed-image actor controls: primary Epiphany and
+secondary CSS+Momentum Phantasia exit0, PNGs inspected, hashes rechecked. Not an
+owner manual pass; that stays pending. Public scope: QC tools/p952-epiphany.md.
 
 ## Patch 950 — Phantasia glass and unsupported-material diagnostics
 
@@ -58,8 +65,11 @@ are retained, neither called a report pass; the bounded BSP-mutation control use
 the existing overlay entrypoint. Clean tag9f85d8787 subsequently completed the final CSS+Momentum control, both
 PNGs inspected. Full+serial packaging completion qualified7freshAMD64PEs/5valid
 ZIPs and exact clean EXE stamps; failed parallel ZIP evidence retained. Immutable
-950 staging preserved. Windows swap is held by the owner's running game, not
-called delivered; no manual owner acceptance claimed. Public scope,
+950 staging preserved. Delivery subsequently completed WITH95223Oct2026 17:03:39Z,
+BOTH Windows14native images/hashes verified; final and installed-image CSS+MOM
+controls exit0, PNGs inspected. Protected bytes unchanged/backups retained, no
+owner game killed. Human acceptance pending. See952 receipt; no intermediate950
+swap/release or Pi/backend/data/progs operation. Public scope,
 commands and limits: QC tools/p950-phantasia.md.
 
 ## Patch 949 — Boreas foreground mountain behind finite sky depth
