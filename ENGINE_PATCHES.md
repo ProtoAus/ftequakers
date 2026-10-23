@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 948 — Kvas tree crowns and map-ready client render layers
+
+Problem: forced finite sky depth clips Kvas bonus4 trees. The existing client
+per-map override layer also ran too early on real sockets: an empty map key at
+WorldLoaded discarded the override, though listen-server checks passed.
+
+Change: Kvas uses existing native auto1, with native default2 restored by the
+baseline elsewhere. CSQC resets that baseline each world, then applies the
+existing layer once the server map matches the normalized native world model.
+Pending-only frame work adds no evidence/body reads or new commands/channels.
+No native, input, server sky permission, recorder format or physics change.
+
+Verified: actual native2/1/2 cuts/restores/recuts the same tree crowns. Dedicated
+old-CSQC control connects but stays2/clipped; changed CSQC applies1 and renders
+full crowns. Listen reentry1/2/1/1 across Kvas/other/Kvas/same-map reload includes
+three actual application logs; not merely stable old values. Three VMs0warnings.
+Owner Save1 view and delivery remain pending; QC tools/p948-kvas-sky.md records
+controls and limits. Boreas/Phantasia/Epiphany are not claimed fixed.
+
 ## Patch 947 — load Autumnal's legitimate optional blacktop assets
 
 Problem: the generated dependency catalogue omitted bhop_autumnal, leaving
