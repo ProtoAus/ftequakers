@@ -14,10 +14,13 @@ Verified: current native945/P94867b at a read-only Save11-derived pose,
 synthetic DEMOTED placement, actual2/1/2 readbacks/screenshots: cut/full/cut.
 All three PNGs inspected; actual Momentum BSP load and server pose observed.
 Final automatic layer1/full, mounted Autumnal2, matching freshly native-written
-world CRC, no command/VM errors and clientexit0. Three VMs0warnings and exact
-P948 bytes. Earlier harness log/marker/alias/cvar-init-order failures retained,
-not turned into passes. Clean-source qualification, dual client-config delivery
-and owner in-game acceptance pending; QC tools/p949-boreas-sky.md has limits.
+world CRC, no command/VM errors and clientexit0. Clean merged three VMs0warnings;
+QW/CSQC exact P948, menu only two published-release-version bytes different, not
+promoted. Earlier harness log/marker/alias/cvar-init-order failures retained,
+not turned into passes. Source d9050d84 published; BOTH Windows config hashes
+verified23Oct14:42:18Z with36protected files unchanged. No native/progs/backend/Pi
+swap or restart. Owner in-game acceptance remains pending; QC
+tools/p949-boreas-sky.md records exact delivery and limits.
 
 ## Patch 948 — Kvas tree crowns and map-ready client render layers
 
