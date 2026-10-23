@@ -36,6 +36,14 @@ reported attachment2 for all THREE actual CSS44 guns and its single-shot muzzle
 PNG was inspected, after another three-VM0warning build. Do not rely on the
 rejected version check. No human feel/audio/FPS claim. Provenance and
 deployment status: tools/p955-source-followup.md in the QC repo.
+Development delivery23Oct2026: clean product c36d16f2 rebuilt three VMs0warnings;
+BOTH Windows14targets verified20:33UTC,24protected native/config/identity hashes
+unchanged. Player-guarded ordinary progs/mesh promotion restarted all12EMPTY Pi
+units; target/predecessor hashes exact,548cfg/native hashes unchanged and12active
+units by20:35UTC. Fresh actual lobby client downloaded exact CSQC and drew board
+cols9/type14, no QC error, screenshot inspected, quit0. Terms were NOT accepted
+or bypassed; its board honestly shows that limit. Native953/Build89/release0.1.30
+unchanged. Engine log/file dates are local UTC+11, not UTC; originals retained.
 
 ## Patch 953 — guard native local file-writer commands
 
