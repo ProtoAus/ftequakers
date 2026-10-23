@@ -18,7 +18,12 @@ host change-and-restore detection. Sweep/board/ledger boundaries pass, reader864
 checks0failed and unchanged corpus floor419rec/283faulted files; three NoDeploy
 VMs0warnings. Two saved independent reports have no findings; the evidence child
 finished with a tool-profile failure, so its recovered written audit is not a
-clean-workflow claim. Guarded immutable-runtime deployment remains pending;
+clean-workflow claim. Delivered23Oct06:40:24UTC, verified06:40:27: guarded new
+runtime OPEN, predecessor CLOSED/drained,12lobbies healthy, native/readers/game
+processes unchanged and AI inactive. Actual scheduled route exits0; old CLOSED
+route refuses. Initial preflight backup timeout preceded every live mutation;
+existing whole-step API repaired the same snapshot, then reviewed continuation
+completed. No data restore, duplicate backup or implicit peer source deployment.
 QC tools/p942-verifier-output.md records bounded evidence and delivery state.
 
 ## Patch 941 — subtler weapons, unarmed spawns and real-map CSS footsteps
