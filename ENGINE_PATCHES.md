@@ -19,8 +19,10 @@ Verified: three VMs0warnings; real dedicated sockets render dense grey and resto
 authored air/sky/water fog; console fog0 is refused while locked. Actual walked
 full finishes POST whole/off-midrun/late-on facts1,0,0 to the stripped local sink.
 Wrong-map and expired launches prove explicit QC rejection with connected mode0.
-Backend50 tests include preserved legacy rows, duplicate completions, dated/full
-scope and immediate answer versus ladder agreement. Four pure transport tests
+Backend51 tests include preserved legacy rows, duplicate completions, dated/full
+scope and immediate answer versus ladder agreement. Concurrent cron/gunicorn
+initializers serialize the additive column probe/ALTER; the old two-connection
+control raises duplicate-column while both protected imports preserve the row. Four pure transport tests
 prevent the old map-line rewrite from corrupting a cvar suffix. Native controls
 use synthetic OFFLINE fixtures, not online/ranked/physical-input acceptance.
 Delivery and owner visual acceptance are not yet claimed.
