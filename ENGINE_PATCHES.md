@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 944 — personal Max Fog event and whole-run tracking
+
+Problem: Event27's Zoomathon Max Fog entry was a finish-only label, without a
+fog mode or a way to distinguish a whole-fog finish from a late toggle.
+
+Change: targeted native gamecode fog locks for one player, explicit Story mode
+metadata, and a map/expiry/intent-scoped menu-to-CSQC request after active spawn.
+Fresh timer starts latch the mode; disabling clears that run's eligibility even
+if re-enabled. Full fresh lobby finishes snapshot an optional trusted fact;
+legacy/missing/partial/stage facts remain unknown. Additive Story schema and
+maxfog challenge support do not change the default gold criterion: one existing
+holder's legacy-credit policy awaits the owner. Ordinary launches/cancellation
+clear pending requests. No native pin/tag, body/input journal, reader, collector,
+movement or Build change; this is a server-reported mode, not pixel attestation.
+
+Verified: three VMs0warnings; real dedicated sockets render dense grey and restore
+authored air/sky/water fog; console fog0 is refused while locked. Actual walked
+full finishes POST whole/off-midrun/late-on facts1,0,0 to the stripped local sink.
+Wrong-map and expired launches prove explicit QC rejection with connected mode0.
+Backend50 tests include preserved legacy rows, duplicate completions, dated/full
+scope and immediate answer versus ladder agreement. Four pure transport tests
+prevent the old map-line rewrite from corrupting a cvar suffix. Native controls
+use synthetic OFFLINE fixtures, not online/ranked/physical-input acceptance.
+Delivery and owner visual acceptance are not yet claimed.
+
 ## Patch 942 — unambiguous verifier output attribution
 
 Problem: repeated VERIFY results for one path were last-line-wins, so ambiguous
