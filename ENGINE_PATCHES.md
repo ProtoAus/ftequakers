@@ -37,6 +37,31 @@ PNG was inspected, after another three-VM0warning build. Do not rely on the
 rejected version check. No human feel/audio/FPS claim. Provenance and
 deployment status: tools/p955-source-followup.md in the QC repo.
 
+## Patch 954 — per-player practice slow motion
+
+Problem: players need slow-motion practice with a matching timer, not a different
+physics tick or a global server slowdown. Slowed input must not become a clean
+attempt after restoring speed or crossing a start/stage boundary.
+
+Change: QC host_timescale accepts 0.1..1, server-owned per player. Existing
+practice/cheat funnels act before publishing the scalar; the level predicate
+covers rearming and stage/save restores. CSQC scales outgoing command duration,
+carrying fractional milliseconds, after existing replay/hold early exits. Native
+Source fixed-tick movement and its counted timer consume the same duration.
+No native code/API, saved clock/evidence format, reader, collection or schema
+change; native commit/tag stay at P953. Not a global world or audio clock.
+
+Verified locally: three production VMs compiled with zero warnings. Real dedicated
+socket/unchanged native P952 images and bhop_eazy: normal versus 0.5 measured
+counted-time ratio 0.506 and moving-body ratio 0.517, fixed 15ms tick. At 0.1,
+30/300 frame caps each count 22 ticks over 3.235 wall seconds (factor 0.102);
+nonzero walk progress, whole-hull start exit and running recorder demonstrated.
+Second real player's scalar/attempt/body/clock remain normal. Immediate taint,
+rearm latch, active-run restore-to-1, invalid bounds/NaN/argument count controls
+pass. Earlier fixture/observer failures retained, not feature passes. Independent
+reviews, final clean build/reader controls and deployment still pending here.
+Owner feel/visual acceptance is not inferred from these measurements.
+
 ## Patch 953 — guard native local file-writer commands
 
 Problem: two server file-writer commands did not apply the existing local-command
