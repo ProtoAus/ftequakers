@@ -124,6 +124,7 @@ extern char vmt_stat_missing_name[VMT_MISSING_LIST][MAX_QPATH];
 extern int vmt_stat_unparsed;	//FTESurf Patch 181, found but would not parse -- a different fault
 extern char vmt_stat_unparsed_name[VMT_MISSING_LIST][MAX_QPATH];
 void Mat_VMT_ResetStats (void);
+int Mat_VMT_ReportUnsupported(void);
 extern cvar_t *hl2_water, *hl2_refract, *hl2_translucent;
 extern cvar_t *hl2_animated;	//FTESurf Patch 195, owned by mat_vmt.c like the rest
 extern cvar_t *hl2_vertexcolor;	//FTESurf Patch 232, likewise
@@ -12402,10 +12403,13 @@ static void VBSP_PropCensus_f(void)
 static void VBSP_Missing_f(void)
 {
 	int i, n;
+	int unsupported = Mat_VMT_ReportUnsupported();
 
 	if (!vmt_stat_missing && !vmt_stat_unparsed)
 	{
-		Con_Printf("hl2_missing: every material on the loaded map resolved.\n");
+		Con_Printf("hl2_missing: requested VMT files resolved and parsed%s.\n",
+			unsupported ? ", but unsupported shader fallbacks were observed" : "");
+		Con_Printf("This is not a complete sampled-image check; r_imagelist lists image load failures.\n");
 		return;
 	}
 
@@ -12916,7 +12920,7 @@ qboolean VBSP_Init(void)
 		//FTESurf Patch 231: and the list the warning is too short to print.
 		if (cmdfuncs)
 		{
-			cmdfuncs->AddCommand("hl2_missing", VBSP_Missing_f, "ftesurf (P231): list every material the loaded map failed to resolve, and every one that was found but would not parse. The map-load warning shows the first 24 of the first list; this shows all of both.");
+			cmdfuncs->AddCommand("hl2_missing", VBSP_Missing_f, "List missing or unparseable VMT files, plus unsupported shader fallbacks observed since world load, including streamed props. Unsupported classes need renderer support, not asset-pack mounts. This is not a complete sampled-image census; r_imagelist lists image load failures.");
 			cmdfuncs->AddCommand("prop_census", VBSP_PropCensus_f, "ftesurf (P257): what the last frame did with the map's static props -- how many drew, and how many each cull dropped. `prop_census <index>` or `prop_census <part of a model name>` reports one prop's verdict together with the fade, PVS and lighting state behind it. Use it when something is solid but not drawn.");
 			cmdfuncs->AddCommand("hl2_lightprobe", VBSP_LightProbe_f, "Report local direct lights, world occlusion and the six-face direct cube at x y z (linear RGB). No player data or scene changes.");
 			cmdfuncs->AddCommand("vbsp_pvsstat", VBSP_PvsStat_f, "ftesurf (P273): how many entity visibility tests ran since the last call, how many of those fell back to the whole-tree headnode descent, and how many nodes that descent touched. sv_perfdump says the visibility test is ~98% of the server's cost on a big Source map; this says whether the tree descent is why.");

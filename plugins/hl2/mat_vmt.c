@@ -261,6 +261,11 @@ char vmt_stat_missing_name[VMT_MISSING_LIST][MAX_QPATH];
 //mounted, the other wants this plugin to understand a key it does not.
 int vmt_stat_unparsed;
 char vmt_stat_unparsed_name[VMT_MISSING_LIST][MAX_QPATH];
+//Unsupported classes resolve and parse, but can still draw a missing-image fallback.
+static char vmt_unsupported_material[VMT_MISSING_LIST][MAX_QPATH];
+static char vmt_unsupported_class[VMT_MISSING_LIST][64];
+static int vmt_unsupported_count;
+static qboolean vmt_unsupported_overflow;
 
 /*
 FTESurf Patch 231: has this name already been counted?
@@ -292,6 +297,37 @@ static qboolean VMT_CensusSeen(char names[][MAX_QPATH], int count, const char *n
 		if (!Q_strcasecmp(names[i], name))
 			return true;
 	return false;
+}
+
+static void VMT_RecordUnsupported(const char *material, const char *type)
+{
+	int n = vmt_unsupported_count;
+	char name[MAX_QPATH];
+	Q_strlcpy(name, material, sizeof(name));
+	if (VMT_CensusSeen(vmt_unsupported_material, n, name))
+		return;
+	if (n >= VMT_MISSING_LIST)
+	{
+		vmt_unsupported_overflow = true;
+		return;
+	}
+	Q_strlcpy(vmt_unsupported_material[n], name, sizeof(vmt_unsupported_material[n]));
+	Q_strlcpy(vmt_unsupported_class[n], type, sizeof(vmt_unsupported_class[n]));
+	vmt_unsupported_count++;
+}
+
+int Mat_VMT_ReportUnsupported(void)
+{
+	int i;
+	if (vmt_unsupported_count)
+	{
+		Con_Printf("^3Unsupported shader fallbacks observed since world load (%i listed%s):\n",
+			vmt_unsupported_count, vmt_unsupported_overflow ? ", more not stored" : "");
+		for (i = 0; i < vmt_unsupported_count; i++)
+			Con_Printf("  %-24s %s\n", vmt_unsupported_class[i], vmt_unsupported_material[i]);
+		Con_Printf("These VMT files resolved; their shader classes need renderer support, not an asset-pack mount.\n");
+	}
+	return vmt_unsupported_count;
 }
 
 /*
@@ -505,7 +541,9 @@ void Mat_VMT_ResetStats(void)
 	vmt_stat_ignorez = 0;	//FTESurf Patch 290
 	vmt_stat_addprog = vmt_stat_addpass = 0;	//FTESurf Patch 300
 	vmt_stat_unknown = 0;
-	*vmt_stat_unknown_name[0] = 0;
+	memset(vmt_stat_unknown_name, 0, sizeof(vmt_stat_unknown_name));
+	vmt_unsupported_count = 0;
+	vmt_unsupported_overflow = false;
 	*vmt_stat_waterargs = 0;
 	*vmt_stat_waterfog = 0;	//FTESurf Patch 254
 	vmt_stat_waterfogstart = vmt_stat_waterfogend = 0;
@@ -1737,6 +1775,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 				line = VMT_ParseProxies(fname, st, line);
 				continue;
 			}
+			else if (st && !Q_strcasecmp(st->type, "Refract") && !Q_strcasecmp(key, "Refract_DX60"))
+				;	//The active DX90 shader must not consume the legacy fallback's keys.
 			else if (VMT_IsKnownIgnoredBlock(key))
 				;	//nettest: Source per-DX/HDR shader-variant sub-block (vertexlitgeneric_dx9, Proxies, …) — benign
 			else if (st)	//nettest: only warn about UNKNOWN blocks at the material TOP level. Nested sub-blocks recurse with st==NULL — e.g. every proxy entry inside "Proxies" (GaussianNoise/PlayerProximity/Add/Subtract/Multiply/Equals/Sine/Clamp/…). FTE handles no nested blocks, so they're all benign noise.
@@ -4476,6 +4516,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				if (u < 4 && !*vmt_stat_unknown_name[u])
 					Q_strlcpy(vmt_stat_unknown_name[u], st->type, sizeof(vmt_stat_unknown_name[u]));
 				vmt_stat_unknown++;
+				VMT_RecordUnsupported(shortname, st->type);
 				Con_DPrintf("[vmt] %s: shader class \"%s\" is not implemented -- drawing it as vmt/unlit\n",
 					shortname, st->type);
 			}
@@ -4879,6 +4920,10 @@ static qboolean VMT_ReadVMT(const char *fname, vmtstate_t *st)
 
 		line = file;
 		line = cmdfuncs->ParseToken(line, st->type, sizeof(st->type), &ttype);
+		//Source defines Refract as an alias of Refract_DX90. Normalize before
+		//parsing too: normal-map policy and every existing Refract mode use type.
+		if (!Q_strcasecmp(st->type, "Refract_DX90"))
+			Q_strlcpy(st->type, "Refract", sizeof(st->type));
 		line = cmdfuncs->ParseToken(line, token, sizeof(token), &ttype);
 		if (!strcmp(token, "{"))
 		{

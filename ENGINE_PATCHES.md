@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 950 — Phantasia glass and unsupported-material diagnostics
+
+Problem: both Phantasia builds use Refract_DX90 on the glass ramp props. Source
+aliases Refract to that class, but our dispatcher fell through to unlit, inventing
+a nonexistent diffuse image and drawing a checker. The VMT itself resolved, so
+the map-load missing-VMT count did not describe that visible failure.
+
+Change: normalize this explicit alias before parsing/generation; retain the
+existing full/flat/dithered Refract policies and ignore its legacy DX60 fallback
+block. Do not strip arbitrary class suffixes. hl2_missing now also reports a
+bounded, case-insensitively deduplicated material/class list of unsupported shader
+fallbacks observed since world load, including streamed props. Distinguish renderer
+support from missing asset packs and explicitly limit the VMT report's image
+coverage. Reset the list and all four legacy class-name slots at world load.
+No input, movement, recording format, verifier, collection or asset redistribution.
+
+Verified: same-CFG native945 control versus subject at a read-only Save1-derived
+DEMOTED pose in BOTH CSS and Momentum builds: checker versus authored tinted glass;
+all four PNGs inspected, wrappers exit0, actual refractflat/normal/tint readbacks.
+Full1 and flat0 also produced inspected PNGs/program readbacks. A separate synthetic
+one-VMT-class mutation of the actual BSP reports exactly one unsupported material
+across repeated prop registrations, then none after changing world; exit0. Original
+map/save unchanged; exact owned mutated BSP removed. Full/NoDeploy: three VMs0
+warnings; 74 inherited native warnings, no new warning site. LSP's plugin context
+lacks standalone build defines/types; actual compiler, not those false diagnostics,
+is the build evidence. A verbose first diagnostic timed out after its CSS proof;
+a later shader-remap control crashed after its completed mode arms. Both failures
+are retained, neither called a report pass; the bounded BSP-mutation control used
+the existing overlay entrypoint. Final clean tagged artifacts and guarded delivery
+are separate pending boundaries; no manual owner acceptance claimed. Public scope,
+commands and limits: QC tools/p950-phantasia.md.
+
 ## Patch 949 — Boreas foreground mountain behind finite sky depth
 
 Problem: native default2 writes a sky brush's finite depth in front of Boreas's
