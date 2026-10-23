@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 946 — include Glock in cosmetic shot kick
+
+Problem: P943's render-only pulse branch included USP/Scout but omitted Glock,
+leaving the owner's general pistol-recoil request incomplete.
+
+Change: add a half-strength (one-degree isolated peak) impulse to the existing
+per-bullet Glock path, including both scheduled burst follow-ups. Exact damping
+and scene-angle restoration stay shared; no server, aim, input, spread, movement,
+protocol, evidence, native binary, binding or native pin/tag change.
+
+Verified: three VMs0warnings; acted P943 burst/zero-pulse control, new native
+single -0.98269 then return,3-shot burst -1.93883 sample/pending0 then return;
+USP -1.96424 positive control, knife0; stored render/input angles0 throughout.
+Clean exact DAT and guarded fleet/cold provenance in QC tools/p946-glock-kick.md
+and tools/p946-delivery.md. Human feel/sustained1000FPS not claimed.
+
 ## Patch 943 — Source weapon controls, cosmetic kick and varied Foley
 
 Problem: attacks were edge-only with no secondary modes; USP defaulted silenced,
