@@ -42,7 +42,7 @@ was no visible muzzle flash or bare drop route.
 Change: keep Glock punch burst-only. Add two Scout render-only zoom levels,
 mounted CSS arc/zoom sound and shot/bolt auto-rezoom. Preserve equip state while
 held and render it in noclip; drop explicitly unarms. Render an original tiny
-quad using mounted CSS muzzle texture at the bounded v48 authored attachment,
+quad using mounted CSS muzzle texture at the bounded Source authored attachment,
 confirmed-shot/deduplicated and suppressed for silenced USP. Use CSS damage1..3
 for hard falls. No rig mutation or Valve asset redistribution. No native code,
 engine pin/tag, movement/input/evidence/schema, Build or release change. The
@@ -61,8 +61,21 @@ as failed; the final added CSQC route produced client/server weapon0 while the
 connection and health100 remained. A mesh-absent/CSQC-absent cold client received
 the exact original428-byte mesh over the socket; first-run consent blocks that
 actor's visual acceptance and was NOT simulated/bypassed. Render proof comes
-from the existing isolated actor. No human feel/audio/FPS claim. Provenance and
+from the existing isolated actor. A subsequent scope-off check also exposed an
+over-narrow exact48 metadata guard: actual installed CSS guns are44. The final
+reader accepts Source44..49's common bounded prefix. Final new socket actor
+reported attachment2 for all THREE actual CSS44 guns and its single-shot muzzle
+PNG was inspected, after another three-VM0warning build. Do not rely on the
+rejected version check. No human feel/audio/FPS claim. Provenance and
 deployment status: tools/p955-source-followup.md in the QC repo.
+Development delivery23Oct2026: clean product c36d16f2 rebuilt three VMs0warnings;
+BOTH Windows14targets verified20:33UTC,24protected native/config/identity hashes
+unchanged. Player-guarded ordinary progs/mesh promotion restarted all12EMPTY Pi
+units; target/predecessor hashes exact,548cfg/native hashes unchanged and12active
+units by20:35UTC. Fresh actual lobby client downloaded exact CSQC and drew board
+cols9/type14, no QC error, screenshot inspected, quit0. Terms were NOT accepted
+or bypassed; its board honestly shows that limit. Native953/Build89/release0.1.30
+unchanged. Engine log/file dates are local UTC+11, not UTC; originals retained.
 
 ## Patch 953 — guard native local file-writer commands
 
