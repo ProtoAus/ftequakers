@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 947 — load Autumnal's legitimate optional blacktop assets
+
+Problem: the generated dependency catalogue omitted bhop_autumnal, leaving
+existing concrete VMTs with missing CS:GO Source1 base textures on a cold load.
+
+Change: metadata-only map dependency repair through the existing generator.
+Its incremental mode preserves unrelated rows/annotations, requires an inspected
+SHA256 for existing outputs and publishes by atomic replacement. No global
+extra mount, native/VM change, content redistribution or player-data migration.
+
+Verified: six file controls pass normal/-O; actual CLI preview writes nothing
+and its update adds exactly one row. Cold native control renders checker tops;
+subject automatically consumes the optional pack and renders the same surfaces
+at identical zero-velocity body/camera, with the512x512 BC1 texture loaded.
+No terms acceptance/submission; owned processes stopped and fixtures restored.
+Delivery receipt and remaining human check: QC tools/p947-autumnal.md.
+
 ## Patch 946 — include Glock in cosmetic shot kick
 
 Problem: P943's render-only pulse branch included USP/Scout but omitted Glock,
