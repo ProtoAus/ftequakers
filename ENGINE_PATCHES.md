@@ -21,7 +21,12 @@ hits act;135.2u/s walking adds zero cues. Corrected an initial FILE_READNL misus
 (the builtin returns a whole unadvanced file, not newline-preserving lines).
 Final FILE_READ rerun retains111profiles/67aliases and actual metal foot cues.
 Compatible server DAT is byte-identical. Ear/visual, actual warp/replay and precise
-CS:S parity remain unclaimed; owner check pending. Delivery recorded separately.
+CS:S parity remain unclaimed; owner check pending. Delivered23Oct04:50–04:54UTC:
+BOTH Windows CSQC pairs hash-verified without native/MENU replacement; existing
+empty-fleet guard promoted the same DAT to all12Pi lobbies. Real cold client
+fetched that exact hash and drew the board with0faults. QW remains byte-identical;
+installed-code four-material/quiet/cache/map-reset controls pass. Receipt in
+QC tools/p940-delivery.md.
 
 ## Patch 939 — paste without a second confirmation
 
