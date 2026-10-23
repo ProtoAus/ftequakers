@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 938 — paste without a second confirmation
+## Patch 939 — paste without a second confirmation
 
 Problem: the native confirmation interrupted every connected-game paste,
 contrary to the requested always-accept text-field behavior.
@@ -42,7 +42,8 @@ Exact manager C control compiled with TEXTEDITOR delivers early once while modal
 subject zero, then clearing modal delivers exactly once, with all10allocations
 freed. Native code build passes with no new warnings; not a live debugger test.
 Source checks preserve native gesture predicates/budgets, journal and abort paths.
-Targeted guard follow-up and final stamped Full are pending; not deployed.
+Both independent guard follow-ups close the remaining P2 with no new defects.
+Final stamped Full is pending; not deployed.
 Physical-device/full-widget/visual acceptance remains owner-only pending.
 
 ## Patch 937 — optional local altitude tone and A/D drums

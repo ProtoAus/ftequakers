@@ -2557,7 +2557,7 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 		IN_Journal_Frame();
 
 	if (deliverpaste)
-		CL_Paste_Flush();	/*P938: an async answer precedes the next input, too*/
+		CL_Paste_Flush();	/*P939: an async answer precedes the next input, too*/
 	while (events_used != events_avail)
 	{
 		ev = &eventlist[events_used & (EVENTQUEUELENGTH-1)];

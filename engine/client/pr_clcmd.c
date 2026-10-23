@@ -1078,7 +1078,7 @@ int CL_PasteLine(const char *utf8, unsigned int *out, int max)
 	}
 	return n;
 }
-/* P938: paste without an extra dialog. Both callers retain their native real
+/* P939: paste without an extra dialog. Both callers retain their native real
    chord and one-per-press budget. Deliver outside either VM's execution, with
    the original VM stamp; teardown cancels pending and queued responses. */
 #define CL_PASTE_MAX 256
