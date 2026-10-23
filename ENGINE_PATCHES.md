@@ -72,12 +72,25 @@ ERROR without ticks/counts. No recording format, mover, collector, schema,
 retention, access, threshold or historical-verdict change.
 
 Verified: seven real-file/SQLite controls fail11 baseline subcases; corrected
-input/identity/source/finish/counts suites pass47 tests. Windows NoDeploy builds
-have0new warnings;60acted physics rows match the unchanged native reference in
-the same current fixture. Real dedicated CLI binds full LF/CRLF inputs (both
-4418tick PASS), the complete NUL-suffix input (REFUSE), and a retained REC15
-input (context REFUSE, not trajectory acceptance). Final committed builds,
-ARM qualification and deployment remain pending; no security-complete claim.
+input/identity/source/finish/counts suites pass47 tests on Windows. ARM has46PASS
+and one explicit Node-absent DOM skip; the unchanged DOM passes on Windows.
+Final tagged Windows Full/NoDeploy has74inherited/0NEW warnings; ARM build and
+all60named physics rows across5maps match the qualified Windows controls.
+Actual dedicated CLI binds complete LF/CRLF inputs (4418tick PASS), NUL-suffix
+REFUSE and retained REC15 context REFUSE (not trajectory acceptance). The
+existing documented pin7 replacement PASSes9194ticks/9192rows on old/new ARM;
+the known broken Boreas fixture remains HOLD, not relabelled or waived.
+
+Development-deployed23Oct2026: exact ten native images in BOTH Windows installs
+at11:33:28Z; Pi native pair and all12empty-lobby restarts plus guarded backend
+handoff complete11:44:29Z. Current peer VM/menu/config retained; backend79of80
+files unchanged, only reviewed Sweep plus qualified native dependency pins
+updated. Fresh workers pass cold/health/schema acceptance. Live12native versions
+and mapped-plugin identities verified; actual runtime caller binds an unchanged
+indexed recording to its full input SHA and PASS without a SQL reclassification.
+Installed Windows dedicated4418tick PASS+fresh binding confirmed11:54:10Z.
+Existing schema20/profile/collector/retention unchanged; AI remains stopped.
+No release/Build bump, historical-verdict binding or security-complete claim.
 
 ## Patch 944 — personal Max Fog event and whole-run tracking
 
