@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 955 — CSS weapon presentation follow-up
+
+Problem: single Glock shots inherited a cosmetic kick that CSS does not have;
+Scout lacked scope presentation, save holds caused a new equip animation,
+noclip hid held models, and hard falls used an HL2 rather than CSS cue. There
+was no visible muzzle flash or bare drop route.
+
+Change: keep Glock punch burst-only. Add two Scout render-only zoom levels,
+mounted CSS arc/zoom sound and shot/bolt auto-rezoom. Preserve equip state while
+held and render it in noclip; drop explicitly unarms. Render an original tiny
+quad using mounted CSS muzzle texture at the bounded v48 authored attachment,
+confirmed-shot/deduplicated and suppressed for silenced USP. Use CSS damage1..3
+for hard falls. No rig mutation or Valve asset redistribution. No native code,
+engine pin/tag, movement/input/evidence/schema, Build or release change. The
+experimental CS:GO knives/workshop are NOT part of this patch.
+
+Verified: clean isolated CSS-only candidate built three VMs with zero
+warnings on the existing entrypoint. Actual dedicated/client actor uses the
+qualified installed953 native, not the uncommitted experimental plugin. Single
+shot acted with kick0; burst acted with nonzero kick. Save hold/release changed
+movetype0/3 without changing draw-start1; noclip8 retained the drawn model.
+Both scope levels and burst muzzle pixels inspected; shot unscoped and restored
+zoom2 with authored bolt callback. Silenced USP shot incremented shots but not
+flashes; unsilenced USP pixels inspected. CSS fall assets all present and the
+cue resolved to damage3. Initial bare drop was Unknown command and is preserved
+as failed; the final added CSQC route produced client/server weapon0 while the
+connection and health100 remained. A mesh-absent/CSQC-absent cold client received
+the exact original428-byte mesh over the socket; first-run consent blocks that
+actor's visual acceptance and was NOT simulated/bypassed. Render proof comes
+from the existing isolated actor. No human feel/audio/FPS claim. Provenance and
+deployment status: tools/p955-source-followup.md in the QC repo.
+
 ## Patch 953 — guard native local file-writer commands
 
 Problem: two server file-writer commands did not apply the existing local-command
