@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 945 — bind verifier results to the loaded recording bytes
+
+Problem: a path and pre/post file hashes did not identify the buffer consumed
+by the native verifier. An unavailable binding must not become player guilt.
+
+Change: pm_verify hashes its complete loaded buffer before parsing and echoes
+an invocation challenge. The backend requires one timely matching report,
+successful process exit and unchanged source bytes; ambiguity becomes retryable
+ERROR without ticks/counts. No recording format, mover, collector, schema,
+retention, access, threshold or historical-verdict change.
+
+Verified: seven real-file/SQLite controls fail11 baseline subcases; corrected
+input/identity/source/finish/counts suites pass47 tests. Windows NoDeploy builds
+have0new warnings;60acted physics rows match the unchanged native reference in
+the same current fixture. Real dedicated CLI binds full LF/CRLF inputs (both
+4418tick PASS), the complete NUL-suffix input (REFUSE), and a retained REC15
+input (context REFUSE, not trajectory acceptance). Final committed builds,
+ARM qualification and deployment remain pending; no security-complete claim.
+
 ## Patch 944 — personal Max Fog event and whole-run tracking
 
 Problem: Event27's Zoomathon Max Fog entry was a finish-only label, without a

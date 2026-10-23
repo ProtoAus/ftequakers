@@ -5272,11 +5272,14 @@ static qboolean SV_RecSim_ViewRestore(const char *line)
 	return !*end && n <= 0x7fffffffUL;
 }
 
-static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
+static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const char *source_challenge)
 {
 	model_t      *world = sv.state?sv.world.worldmodel:NULL;
 	char         *buf, *p, *end, *ln;
 	size_t        fsz = 0;
+	qbyte         source_digest[32];
+	char          source_hex[65];
+	unsigned int  source_index;
 	char          line[4096];		/* Patch 347: a v9 `pmpin`/`pm` line is ~1.3 KB */
 	char          mapname[64];
 	unsigned int  filecrc = 0;
@@ -5360,6 +5363,24 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify)
 		RECSIM_REFUSE("cannot read the file");
 		Con_Printf(CON_ERROR "pm_recsim: cannot read \"%s\"\n", fname);
 		return;
+	}
+	/* P945: identify this exact loaded buffer, before validation/tokenization.
+	 * The loader's extra terminator is not an input byte. */
+	if (verify)
+	{
+		if (CalcHash(&hash_sha2_256, source_digest, sizeof(source_digest), (const qbyte *)buf, fsz) != sizeof(source_digest))
+		{
+			RECSIM_REFUSE("cannot bind recording source bytes");
+			FS_FreeFile(buf);
+			return;
+		}
+		for (source_index = 0; source_index < sizeof(source_digest); ++source_index)
+		{
+			source_hex[2*source_index] = "0123456789abcdef"[source_digest[source_index] >> 4];
+			source_hex[2*source_index+1] = "0123456789abcdef"[source_digest[source_index] & 15];
+		}
+		source_hex[64] = 0;
+		Con_Printf("VERIFY-INPUT %s SHA256 %s CHALLENGE %s\n", fname, source_hex, source_challenge?source_challenge:"-");
 	}
 	/* P842: do not admit a C-string prefix or join tokens across raw CR.
 	   The loader's appended terminator is outside fsz; CRLF and EOF CR are safe. */
@@ -7274,14 +7295,18 @@ static void SV_HeldAirTest_f(void)
 
 static void SV_RecSim_f (void)
 {
-	SV_RecSim_Run(Cmd_Argv(1), atoi(Cmd_Argv(2)), false);
+	SV_RecSim_Run(Cmd_Argv(1), atoi(Cmd_Argv(2)), false, NULL);
 }
 
 //FTESurf Patch 349: the verifier -- pm_recsim's exact open loop plus the live
 //timer's zone scan, ending in one VERIFY line.
 static void SV_RecVerify_f (void)
 {
-	SV_RecSim_Run(Cmd_Argv(1), 0, true);
+	const char *challenge = Cmd_Argv(2);
+	/* The private runner supplies a fresh128-bit token; legacy calls stay valid. */
+	if (strlen(challenge) != 33 || challenge[0] != 'b' || strspn(challenge, "0123456789abcdef") != 33)
+		challenge = NULL;
+	SV_RecSim_Run(Cmd_Argv(1), 0, true, challenge);
 }
 
 /* FTESurf Patch 346: print what each client's mover was handed on its last move --
