@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 942 — unambiguous verifier output attribution
+
+Problem: repeated VERIFY results for one path were last-line-wins, so ambiguous
+output could select a terminal verdict and counts observation.
+
+Change: the backend parser latches duplicate results as retryable ERROR, with
+unknown ticks and unavailable counts. Unique companion paths stay independent;
+existing retry/recheck, review and historical-verdict policy remain unchanged.
+No native/QC/format/collector/schema/retention/threshold/access change or pin move.
+
+Verified: seven new real-file/SQLite controls produce17 failing baseline subcases;
+corrected identity/source/finish/counts suites run38 tests with zero failures.
+Runner invocation, ordinary retry recovery and an independent companion act.
+This proves output attribution only, not immutable engine-input bytes or hostile
+host change-and-restore detection. Sweep/board/ledger boundaries pass, reader864
+checks0failed and unchanged corpus floor419rec/283faulted files; three NoDeploy
+VMs0warnings. Two saved independent reports have no findings; the evidence child
+finished with a tool-profile failure, so its recovered written audit is not a
+clean-workflow claim. Guarded immutable-runtime deployment remains pending;
+QC tools/p942-verifier-output.md records bounded evidence and delivery state.
+
 ## Patch 940 — Source-style weapon motion and material footsteps
 
 Problem: weapon presentation lacked walking rock/turning sway, while texture
