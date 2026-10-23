@@ -1095,8 +1095,8 @@ static unsigned int cl_paste_asked;
 static pastegive_t cl_paste_give;
 static unsigned int cl_paste_vm;
 
-/* cl_screen.c's existing native tail, after both VMs have returned. */
-void CL_Paste_DrawLast(void)
+/* After input dispatch returns and clears its capabilities, outside either VM. */
+void CL_Paste_Flush(void)
 {
 	pasteanswer_t answer, *p;
 
@@ -1108,6 +1108,11 @@ void CL_Paste_DrawLast(void)
 	Z_Free(p);
 	answer.give(answer.text, answer.chars, answer.vm);
 	memset(&answer, 0, sizeof(answer));
+}
+/* Existing render-tail fallback for asynchronous answers without further input. */
+void CL_Paste_DrawLast(void)
+{
+	CL_Paste_Flush();
 }
 static void CL_Paste_Got(void *ctx, const char *utf8)
 {

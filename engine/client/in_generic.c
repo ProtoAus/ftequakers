@@ -2481,6 +2481,7 @@ static void IN_JournalSynth_f(void)
 	Con_Printf("in_journal_synth: injected %i mouse and %i key events\n", n, (n+15)/16);
 }
 
+void CL_Paste_Flush(void);
 /*a 'pointer' is either a multitouch pointer, or a separate device
 note that mice use the keyboard button api, but separate devices*/
 void IN_Commands(void)
@@ -2555,6 +2556,7 @@ void IN_Commands(void)
 	if (in_jrn_buf && events_used != events_avail)
 		IN_Journal_Frame();
 
+	CL_Paste_Flush();	/*P938: an async answer precedes the next input, too*/
 	while (events_used != events_avail)
 	{
 		ev = &eventlist[events_used & (EVENTQUEUELENGTH-1)];
@@ -2759,6 +2761,7 @@ void IN_Commands(void)
 			break;
 		}
 		events_used++;
+		CL_Paste_Flush();	/*handler returned; real-key/VM capabilities are cleared*/
 	}
 }
 

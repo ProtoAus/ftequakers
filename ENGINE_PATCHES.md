@@ -6,27 +6,33 @@ Problem: the native confirmation interrupted every connected-game paste,
 contrary to the requested always-accept text-field behavior.
 
 Change: remove the extra modal question after the existing native real-device
-paste chord and one-per-press checks. Keep the same bounded first-line text
-filter and VM stamp. Queue the response until the native render tail, outside
-either VM's execution; erase/free the queue before delivering. VM teardown and
-native disconnect cancel pending and queued responses, including those for the
-surviving menu. No automatic/background clipboard access or new command/cvar
-route is added. The intentional policy change is that a qualifying paste gesture
-shares its text with the game UI without a second confirmation; this is not a
-claim of protection from deceptive server-supplied UI. No evidence format,
+paste chord and one-per-press checks. Keep the same bounded first-line filter
+and VM stamp. Outside either VM, service ready text before/between native input
+events after the dispatch capabilities clear; retain the render-tail fallback.
+The menu receiver applies under its own error boundary rather than waiting for
+a later draw. Erase/free the native queue before delivering. VM teardown and
+native disconnect cancel pending/queued responses, including the surviving menu.
+No automatic/background access or new command/cvar route is added. Intentionally,
+a qualifying paste gesture shares text with game UI without another approval;
+this does not claim protection from deceptive server UI. No evidence format,
 producer, physics, native ABI or Build change.
 
-Verified so far: exact old/new C manager controls use an in-memory ASCII
-clipboard, never the owner's OS clipboard. The old control acts with three
-prompts and an accepted Y; the new manager opens none, delivers only at the
-native tail, and balances all nine allocations/frees. Queue saturation,
-first-line/tab/control/length handling, unrelated and matching teardown,
-disconnect, stale async response and changed callback/epoch controls act.
-The native caller, receiver, input and key files are unchanged, also against the
-preceding5fd6c6790 cohort. Full NoDeploy build passes all three VMs with zero warnings
-and native with zero NEW warnings (the same74 as the full baseline). Independent
-input/lifecycle review is pending; not yet deployed. Physical-device paste and
-visual acceptance remain owner-only pending.
+Verified so far: exact old/new C manager controls use an in-memory ASCII provider,
+never the owner's OS clipboard. Old control acts with three prompts/accepted Y;
+new manager opens none and balances all nine allocations/frees. Queue, filtering,
+length, callback/epoch, disconnect and teardown cases act. Independent lifecycle
+review correctly rejected the first render-only draft: later input could overtake
+paste. The correction's actual C manager/menu receivers plus scheduler/draft
+adapters show the rejected control wrong in6/6 cases and subject correct6/6
+(type/submit and pre-existing async-ready, both receivers), including protected
+menu abort and active-VM non-reentry. This is not live QC/OS/device acceptance.
+Source checks preserve gesture predicates, budgets, journal logic and existing
+abort paths; only the reviewed service insertions/receiver entry are new. The
+pre-correction Full build passed three VMs with zero warnings/native same74
+baseline warnings. Correction code build passes all three VMs/native without
+warnings; all three changed objects are fresh and the new input service is
+linked. Review follow-up and final stamped Full are pending; not deployed.
+Physical-device/visual acceptance remains owner-only pending.
 
 ## Patch 937 — optional local altitude tone and A/D drums
 

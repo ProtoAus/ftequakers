@@ -2509,11 +2509,10 @@ qboolean IN_RealKeyDown(void);	/*in_generic.c, Patch 625*/
 int CL_PasteLine(const char *utf8, unsigned int *out, int max);	/*pr_clcmd.c*/
 void CL_PasteAsk(void (*give)(const unsigned int *text, int chars, unsigned int vm), unsigned int vm);
 void CL_PasteDrop(void (*give)(const unsigned int *text, int chars, unsigned int vm));
-/*NEITHER OF THESE TWO RUNS QC.  Windows calls the first with the clipboard
-  open, X11 some frames later from its event loop, the prompt calls the second
-  from Key_Event; a QC error leaves by longjmp (mp_abort), which only an entry
-  into this VM has set.  MP_Paste_Flush hands the line over: from the builtin
-  when the answer came at once, from the next MP_Draw when it did not.*/
+/* The OS callback only stages text. The connected manager calls its receiver
+   outside VM execution; apply under the menu's own error boundary before later
+   input can use the old field value. An active VM still stages for MP_Draw. */
+static void MP_Paste_Flush(void);
 static void MP_Paste_Got(void *ctx, const char *utf8)
 {	/*still nobody about: X11 answers frames later, and a connection can have been made*/
 	if ((unsigned int)(size_t)ctx == mp_pastevm && cls.state == ca_disconnected && !cls.demoplayback)
@@ -2525,6 +2524,15 @@ static void MP_PasteGive(const unsigned int *text, int chars, unsigned int vm)
 		return;
 	memcpy(mp_paste_text, text, sizeof(text[0])*chars);
 	mp_paste_chars = chars;
+	if (inmenuprogs || !menu_world.progs || !mpfuncs.inputevent)
+		return;
+	if (setjmp(mp_abort))
+		return;
+	inmenuprogs++;
+	MP_Paste_Flush();
+	inmenuprogs--;
+	if (R2D_Flush)
+		R2D_Flush();
 }
 static void MP_Paste_Flush(void)
 {
