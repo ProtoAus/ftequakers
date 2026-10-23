@@ -290,13 +290,32 @@ fdef_t *PDECL ED_FieldInfo (pubprogfuncs_t *ppf, unsigned int *count)
 ED_FindField
 ============
 */
+/* Reject the usual short-prefix mismatch without a strcmp call. Names remain
+ * live: the original forward scan still decides which definition wins. */
+#if defined(__GNUC__)
+__attribute__((always_inline))
+static inline
+#else
+qc_inlinestatic
+#endif
+pbool ED_NameMatches(const char *candidate, const char *name)
+{
+	unsigned int i;
+	for (i = 0; i < 4; ++i)
+	{
+		if (candidate[i] != name[i]) return false;
+		if (!name[i]) return true;
+	}
+	return !strcmp(candidate+4, name+4);
+}
+
 fdef_t *ED_FindField (progfuncs_t *progfuncs, const char *name)
 {
 	unsigned int			i;
 
 	for (i=0 ; i<prinst.numfields ; i++)
 	{
-		if (!strcmp(prinst.field[i].name, name) )
+		if (ED_NameMatches(prinst.field[i].name, name))
 			return &prinst.field[i];
 	}
 	return NULL;
@@ -316,7 +335,7 @@ ddef16_t *ED_FindGlobal16 (progfuncs_t *progfuncs, const char *name)
 	for (i=1 ; i<pr_progs->numglobaldefs ; i++)
 	{
 		def = &pr_globaldefs16[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 			return def;
 	}
 	return NULL;
@@ -329,7 +348,7 @@ ddef32_t *ED_FindGlobal32 (progfuncs_t *progfuncs, const char *name)
 	for (i=1 ; i<pr_progs->numglobaldefs ; i++)
 	{
 		def = &pr_globaldefs32[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 			return def;
 	}
 	return NULL;
@@ -364,7 +383,7 @@ ddef16_t *ED_FindGlobalFromProgs16 (progfuncs_t *progfuncs, progstate_t *ps, con
 	for (i=1 ; i<ps->progs->numglobaldefs ; i++)
 	{
 		def = &ps->globaldefs16[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 			return def;
 	}
 	return NULL;
@@ -377,7 +396,7 @@ ddef32_t *ED_FindGlobalFromProgs32 (progfuncs_t *progfuncs, progstate_t *ps, con
 	for (i=1 ; i<ps->progs->numglobaldefs ; i++)
 	{
 		def = &ps->globaldefs32[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 			return def;
 	}
 	return NULL;
@@ -391,7 +410,7 @@ ddef16_t *ED_FindTypeGlobalFromProgs16 (progfuncs_t *progfuncs, progstate_t *ps,
 	for (i=1 ; i<ps->progs->numglobaldefs ; i++)
 	{
 		def = &ps->globaldefs16[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 		{
 			if (ps->types)
 			{
@@ -415,7 +434,7 @@ ddef32_t *ED_FindTypeGlobalFromProgs32 (progfuncs_t *progfuncs, progstate_t *ps,
 	for (i=1 ; i<ps->progs->numglobaldefs ; i++)
 	{
 		def = &ps->globaldefs32[i];
-		if (!strcmp(def->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(def->s_name+progfuncs->funcs.stringtable,name))
 		{
 			if (ps->types)
 			{
@@ -502,7 +521,7 @@ mfunction_t *ED_FindFunction (progfuncs_t *progfuncs, const char *name, progsnum
 	for (i=1 ; i<pr_progstate[pnum].progs->numfunctions ; i++)
 	{
 		func = &pr_progstate[pnum].functions[i];
-		if (!strcmp(func->s_name+progfuncs->funcs.stringtable,name) )
+		if (ED_NameMatches(func->s_name+progfuncs->funcs.stringtable,name))
 			return func;
 	}
 	return NULL;

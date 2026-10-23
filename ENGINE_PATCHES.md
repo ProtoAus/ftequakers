@@ -46,6 +46,25 @@ Both independent guard follow-ups close the remaining P2 with no new defects.
 Final stamped Full is pending; not deployed.
 Physical-device/full-widget/visual acceptance remains owner-only pending.
 
+## Patch 938 — cheaper live symbol and recording-context checks
+
+Problem: symbol and clock-interface validation repeatedly compared unrelated
+names; retaining lookup results would change live definition semantics.
+
+Change: reject unequal current-name prefixes inside the original forward
+lookups. Clock-interface validation skips unrelated prefixes but still checks
+every matching declaration and duplicate. Preserve the existing legacy inline
+fallback outside GNU compilers. No retained lookup state, ABI, recording format,
+admission rule, collection scope or movement change.
+
+Verified: 728 actual-qclib checks across both definition formats, including
+current storage/bindings and mutable names; zero warnings. The actual helper
+also compiles/runs as C90 with the GNU macro undefined (not an MSVC test).
+A bounded ARM source recording and unchanged-byte normal cold verification
+PASS; the incompatible-artifact control REFUSEs. All temporary state was
+restored. These are bounded code/runtime controls, not overall FPS, long-run
+coverage, actual VM-reload testing or deployment provenance.
+
 ## Patch 937 — optional local altitude tone and A/D drums
 
 Problem: the requested height-following sine and A/D percussion had no local

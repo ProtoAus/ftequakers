@@ -184,8 +184,9 @@ static int Held_ClockContextCapture(held_clock_context_t *context)
 	if (!svprogfuncs || !svprogfuncs->FieldInfo) return 0;
 	fields = svprogfuncs->FieldInfo(svprogfuncs,&count);
 	if (!fields || !count || count > 65536) return 0;
+	/* All required names share this prefix; still inspect every duplicate. */
 	for (i = 0; i < count; ++i)
-		if (fields[i].name)
+		if (fields[i].name && !strncmp(fields[i].name,"run_t_view",10))
 			for (j = 0; j < countof(view_fields); ++j)
 				if (!strcmp(fields[i].name,view_fields[j]))
 				{
