@@ -24,7 +24,20 @@ initial Full74 inherited native warnings, no new site; preserved parallel ZIP
 failure followed by exact metadata recovery and same-source build continuation0.
 Standalone clangd with the explicit real compilation database:0 parser errors.
 This is a numeric native-context proof, not normal-client wire reachability.
-Exact-tag final Windows/Linux qualification and deployment are not claimed here.
+Final qualification/delivery (2026-10-23 UTC): clean tagged AMD64 Full/NoDeploy
+built three VMs0warnings and seven native images, with the same74 inherited
+warnings/no new site; both EXE stamps and five plugin ZIPs checked. ARM64 pair
+built with the same16 warning sites; all60 physics rows over five matched-fixture
+maps equal Windows, and both documented legacy controls PASS. Final native
+refusal/trusted controls and actual installed Windows operator/version smoke
+PASS; ten destination hashes across both installs verified,21 protected VM/menu/
+config files unchanged. All12empty Pi units restarted onto the qualified native
+and mapped HL2 plugin; destination/predecessor hashes, configs and28,612 existing
+protected files preserved. A backend-availability failure during the paired
+rollout is retained as failed; forward recovery restored the qualified service
+without native/data rollback. Actual worker/importer, health/board/API and fresh
+12-lobby directory postflight PASS. No schema, collection, Build or release bump;
+no owner manual, normal-client wire, hardware or new numerical-coverage claim.
 
 ## Patch 952 — resolve extensionless Source colour-correction tables
 
