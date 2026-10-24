@@ -56,8 +56,16 @@ are retained rather than treating initial failures as passes. Native mount
 argument/cooldown/permission/retained-versus-stale controls and generic-guard
 identity pass; saved mount bytes match. Actual full-chain clicks page to Talon,
 select it, and move the title500pixels without changing aim or the covered wear
-slider. Final clean-source/deployment receipts and human appearance/feel checks
-are recorded separately; no Pi native/progs transaction is implied here.
+slider. Clean committed Full/Jobs1 gives3VMs/0warnings, the same74native
+warning messages and7fresh PE/plugin-ZIP checks. Both Windows client/HL2/CSQC/
+shader targets were read back at2026-10-24T07:41:54Z; actual installed client
+processes and the preserved installed-server cohort render ready models.1315
+other measured file hashes remain unchanged; predecessor/.prev history retained.
+Source/native hashes and limits are in tools/p962-knife-workshop.md in FTESurf.
+Client-only CSQC on the exact old Pi QW bytes also passes a real socket control,
+but its fleet swap awaits coordination of another owner's bound predecessor.
+No Pi native/progs or public-release transaction was performed. Human expanded
+appearance/feel/audio acceptance remains pending in lextest.md.
 
 ## Patch 961 — game-running Friends presence from the main menu
 
