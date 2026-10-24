@@ -248,9 +248,15 @@ callbacks and cache/draft erase.60 real Flask Social tests pass, including body/
 target substitution, cross-connection/same-account replay refusal, privacy,
 blocks/bans, expiry, bounds and additive/idempotent migration. Existing account
 (24 CREATE-race boundaries), board, join and replay regressions pass. This is not
-owner visual acceptance or live two-client transport. Matching backend/client
-rollout and small human check remain pending; do not ship only the MENU heartbeat
-to an older service. Source/control details: tools/p963-menu-chat.md in FTESurf.
+owner visual acceptance or live two-client transport. Matching schema22 Social
+service verified24Oct2026 15:03:35Z; BOTH Windows MENU/LNO verified15:21:41Z.
+The80-input closure changes only the two reviewed Social files; historical values,
+canonical/worker/importer bindings and native/reader dependencies are preserved.
+HTTP200/all12directory entries pass; no game/native action. Both menu predecessors
+and13,011protected files retained unchanged. P963 human chat/layout checks remain
+pending; P961 lobby-side snapshot producer still needs its separate QC reload.
+Earlier bootstrap refusals remain failures, not passes. No old NativeClock gate
+was reused. Source/control/delivery details: tools/p963-menu-chat.md in FTESurf.
 
 ## Patch 962 — complete installed Legacy viewmodel workshop
 
@@ -326,11 +332,14 @@ presence refusal from a verified new proof; list/join still act and bad targets
 refuse. The real production freshness helper acts in an owned native VM with
 controlled40s renewal and20s failure expiry; mismatches/loading/cleared refuse.
 That helper arm uses a publisher counter, not full transport/UI acceptance.
-Final clean-commit build, development deployment and human visual/real-account
-acceptance are pending, not invented. Product status: tools/p961-menu-presence.md.
-Historical review artifacts used unpublished labelP959; this sole product number
-is961 after preserving canonical peer959/960 claims. P954's separate frozen Pi
-transaction is not part of this change and has not been retried.
+Final clean build/native proof passed. Matching schema22 service and BOTH
+Windows menus verified24Oct2026; connected-lobby CSQC still has the legacy
+seven-field producer. Its published eight-field upgrade compiles3VMs/0warnings,
+but fleet QC promotion and human visual/real-account acceptance remain OPEN.
+Product status: tools/p961-menu-presence.md. Historical review artifacts used
+unpublished labelP959; this sole product number is961 after preserving canonical
+peer959/960 claims. P954's separate native cutover was verified09:52:46Z and its
+completed approval/gates were not reused for this Social service delivery.
 
 ## Patch 958 — structured faults for invalid recording numbers
 
@@ -532,8 +541,19 @@ seed windows remain. Native pin/tag move to954 for this decoder correction. No n
 producer/counter, stored clock/evidence column, grammar, native detector/tolerance,
 collection or schema change. Not a global world or audio clock.
 
-Current R6 correction/verification (supersedes older pending-status statements
-below): entry below1 now requires authoritative negotiated quakeworld or
+Current delivery: R6 is reviewed and deployed to BOTH Windows installs/readers
+AND all12NanoPi lobbies. Coupled native/program/reader/backend/history live
+readback verified24Oct2026 09:52:46Z; qualified ARM native pair and80runtime
+inputs/canonical bindings match. Existing historical columns/values/bindings and
+effective configuration retained, no DB restore or AI action. Earlier lease/order
+refusals and recovery are preserved as historical failures, not the live state.
+Later P964 program and schema22 Social-only service deliveries are separate;
+the latter preserves native/reader dependencies and no game/native restart.
+Owner real-ramp/visual/feel acceptance remains pending. No Build/release bump.
+Source/UTC delivery receipt: FTESurf tools/p954-practice-clock.md. R6/R5 pending
+and max/tag labels below are historical, not a request to repeat this cutover.
+
+Historical R6 correction/verification: entry below1 requires authoritative negotiated quakeworld or
 quakeworld+ via the existing info key. Independent NQ/DP timestamp paths can
 publish a positive mover rate but ignore scaled duration, so are refused BEFORE
 taint/scalar mutation; query/normal1 and existing VR refusal remain. The reader
