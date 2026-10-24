@@ -8650,6 +8650,7 @@ qc_extension_t QSG_Extensions[] = {
 #endif
 #ifdef HAVE_CLIENT
 	{"FTESURF_2D_COVERAGE", check_2d_coverage, 0,{NULL}, "setproperty(VF_RT_COVERAGE (226), 1) while a 2D render target is bound: a blend over the target adds to its alpha and an additive one leaves it, and drawsetcliparea is not mirrored there, so the target composites exactly with blendfunc gl_one gl_one_minus_src_alpha (FTESurf Patch 871)."},
+	{"FTESURF_VIEWMODEL_FOV", NULL, 0,{NULL}, "setproperty(VF_VIEWMODEL_AFOV (227), degrees) changes only this scene's weapon projection: 0 restores normal settings, -1 inherits world FOV. No archived cvar or input change (FTESurf P970)."},
 	{"FTE_CSQC_HL2_WATER_BUDGET", check_hl2_waterbudget, 0,{NULL}, "Local programmable OpenGL renderer has the live hl2_water policy and a loaded material loader providing vmt/waterbudget. Mode 4 needs no scene captures; availability is not a driver-compilation guarantee."},
 #endif
 	{"FTE_CSQC_WINDOWCAPTION",			NULL,	1,{"setwindowcaption"}, "Provides csqc with the ability to change the window caption as displayed when running windowed or in the task bar when switched out."},

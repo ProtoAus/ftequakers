@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 970 — persist viewmodel setups and mirror the followed player
+
+Problem: the workshop only kept machine-local preferences, and first-person
+spectating did not carry the followed player's knife, hands, finish or inspect.
+Borrowing the observer's cvars would overwrite their setup; a watched weapon FOV
+also needs to stay separate from the observer's world projection and preferences.
+
+Change: a versioned bounded numeric catalog setup uses the existing proven lobby
+account capability for an additive schema23 account row, revision-checked saves
+and generation-bound loads. Newer local edits survive a late load. Public cosmetic
+replication omits editor position and drives a separate watched render context,
+authoritative weapon/mode/events and a bounded inspect variant/counter. The
+workshop gains account Save/Reload controls. CSV console payloads are quoted:
+QuakeC tokenize splits unquoted commas into punctuation tokens. Missing content
+cannot change the observer's selection. Replays and third/free cameras retain
+their separate ownership. No recorder, movement or evidence format change.
+
+Native support: FTESURF_VIEWMODEL_FOV exposes VF_VIEWMODEL_AFOV (227), a finite
+scene-local weapon projection override: zero restores normal settings, -1 uses
+world FOV, positive values below180 select weapon FOV. ClearRefdef resets it;
+world FOV, archived settings and input are not written. The compiler's view
+property type table recognizes the scalar. Engine-header changes require Full.
+
+Verified: Full Windows native build succeeds at Jobs1, with the same74 inherited
+warnings as its control; all three QC VMs build with zero warnings using the
+matching compiler. The65-test social suite and standalone account falsifier
+pass, including verified-capability ownership, stale revision refusal, corrupt
+row preservation, the revision ceiling and additive migration races. Two real
+Windows clients on a dedicated socket demonstrate the target's enabled Butterfly
+while the observer's own model is disabled, matching rendered setup and separate
+weapon FOV, unchanged own preferences, both shot counters advancing, and the
+same actual inspect clip. Third-person/target-disabled hide the model, re-enable
+resumes it, and leaving spectate restores the observer's own M9/preferences.
+Synthetic client transport controls reject a late clobber and restore all21
+fields on a clean load. Screenshots show the watched inspect and account panel;
+no QC/shader/property errors. These are agent checks, not owner acceptance or a
+real linked-account/live-cloud round trip. Clean final-artifact qualification,
+matching backend promotion and deployment are separate recorded operations.
+
 ## Patch 969 — confirm buffered save copies without losing warm rewinds
 
 Problem: a buffered prefix writer returned its memory line count without knowing

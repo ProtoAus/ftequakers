@@ -2310,6 +2310,9 @@ nogameaccess:
 	case VF_AFOV:
 		*r = r_refdef.afov;
 		break;
+	case VF_VIEWMODEL_AFOV:
+		*r = r_refdef.viewmodel_afov;
+		break;
 
 	case VF_SKYROOM_CAMERA:
 		if (r_refdef.skyroom_enabled)
@@ -2617,6 +2620,17 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 	case VF_AFOV:
 		r_refdef.afov = *p;
 		r_refdef.fov_x = r_refdef.fov_y = 0;
+		r_refdef.fovv_x = r_refdef.fovv_y = 0;
+		r_refdef.dirty |= RDFD_FOV;
+		break;
+
+	case VF_VIEWMODEL_AFOV:
+		if (!isfinite(*p) || *p < -1 || *p >= 180 || (*p < 0 && *p != -1))
+		{
+			G_FLOAT(OFS_RETURN) = false;
+			break;
+		}
+		r_refdef.viewmodel_afov = *p;
 		r_refdef.fovv_x = r_refdef.fovv_y = 0;
 		r_refdef.dirty |= RDFD_FOV;
 		break;

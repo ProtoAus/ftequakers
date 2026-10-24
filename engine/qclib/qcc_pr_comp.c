@@ -7248,6 +7248,7 @@ static void QCC_VerifyArgs_setviewprop (const char *funcname, QCC_ref_t **arglis
 //		{"VF_DP_CLEARSCENE",	201, ev_float},
 		{"VF_ACTIVESEAT",		202, ev_float, ev_float},
 		{"VF_AFOV",				203, ev_float},
+		{"VF_VIEWMODEL_AFOV",	227, ev_float},
 //		{"VF_SCREENVSIZE",		204, ev_vector},
 //		{"VF_SCREENPSIZE",		205, ev_vector},
 		{"VF_VIEWENTITY",		206, ev_float},

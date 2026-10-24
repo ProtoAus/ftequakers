@@ -1413,7 +1413,14 @@ void V_ApplyAFov(playerview_t *pv)
 		V_CalcAFov(afov, &r_refdef.fov_x, &r_refdef.fov_y, (r_refdef.vrect.width*r_refdef.pxrect.width)/vid.fbvwidth, (r_refdef.vrect.height*r_refdef.pxrect.height)/vid.fbvheight);
 	}
 
-	if (legacy || !r_refdef.fovv_x || !r_refdef.fovv_y)
+	if (r_refdef.viewmodel_afov < 0)
+	{
+		r_refdef.fovv_x = r_refdef.fov_x;
+		r_refdef.fovv_y = r_refdef.fov_y;
+	}
+	else if (r_refdef.viewmodel_afov > 0)
+		V_CalcAFov(r_refdef.viewmodel_afov, &r_refdef.fovv_x, &r_refdef.fovv_y, (r_refdef.vrect.width*r_refdef.pxrect.width)/vid.fbvwidth, (r_refdef.vrect.height*r_refdef.pxrect.height)/vid.fbvheight);
+	else if (legacy || !r_refdef.fovv_x || !r_refdef.fovv_y)
 	{
 		float afov = legacy ? v_csgo_viewmodel_fov.value : scr_fov_viewmodel.value;
 		if (afov)
@@ -1645,6 +1652,7 @@ void V_ClearRefdef(playerview_t *pv)
 	r_refdef.fov_y = 0;
 	r_refdef.fovv_x = 0;
 	r_refdef.fovv_y = 0;
+	r_refdef.viewmodel_afov = 0;
 	r_refdef.projectionoffset[0] = r_refdef.projectionoffset[1] = 0;
 
 	r_refdef.drawsbar = (cl.intermissionmode == IM_NONE);

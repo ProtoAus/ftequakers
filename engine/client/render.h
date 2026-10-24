@@ -305,6 +305,7 @@ typedef struct refdef_s
 
 	float		fov_x, fov_y, afov;
 	float		fovv_x, fovv_y;	//viewmodel fovs
+	float		viewmodel_afov;	//P970: scene-only override: 0=default, -1=world, >0=weapon AFOV
 	float		mindist, maxdist;	//maxdist may be 0, for 'infinite', in which case mindist probably isn't valid either.
 
 	qboolean	drawsbar;
