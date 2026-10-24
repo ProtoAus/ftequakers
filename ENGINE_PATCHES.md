@@ -69,8 +69,15 @@ Both source cohorts reproduce48lost comparisons out of64acting captured-byte and
 signed ordinary/view-only/recording-only controls before the correction; all64per
 cohort pass afterward, including matching counterparts, all movement axes and
 two input formats. Reader924/864, receipt268 and unchanged430-file corpus294faults
-are rechecked on corrected source. Delivery remains blocked on corrected rollout
-preflight review; no feature deployment is claimed here.
+are rechecked on corrected source. Both Windows reader installs were updated on
+24 Oct 2026 and each passed installed good/bad/good CLI continuation plus16acting
+captured-byte consequence controls, retaining their existing committed helpers.
+Corrected retained-cohort ARM78numeric/16boundary/16consequence controls pass.
+The Pi handoff stopped at predecessor drain before any reader/canonical swap;
+the original backend was restored through fresh guarded acceptance. Health,
+board/API,12unchanged lobby process epochs, AIoff, schema20 and every pre-existing
+verdict field pass recovery checks. The failed transaction remains retained and
+is not retried; Pi reader promotion is pending, not a deployment pass.
 
 ## Patch 957 — mounted Legacy knives and local finish workshop
 
