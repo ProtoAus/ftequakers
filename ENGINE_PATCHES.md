@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 969 — confirm buffered save copies without losing warm rewinds
+
+Problem: a buffered prefix writer returned its memory line count without knowing
+whether the file landed. A positive-size check also admits a stale file; returning
+zero on any disk failure instead breaks valid same-attempt memory rewinds.
+
+Change: read back the complete logical prefix and compare its count and every
+row. Preserve the memory mark; additive save metadata records confirmation
+separately. Consume that metadata only for cold buffered use, after the warm
+lineage branch; newly confirmed files must retain their stated row count.
+Multi-Session clears plain-save metadata; missing keys retain historical
+uncertainty, not retrospective confirmation. Stream copies/recording formats,
+native source/pin/tag, input collection, thresholds, Build and release unchanged.
+Warn on unconfirmed disk copies without discarding the current recording.
+
+Verified: preregistered actual native writer/key-writer/key-reader/Rewind API,
+12 control and 12 subject contexts, same retained dedicated image, zero compiler
+warnings. Normal/subset/empty/6000-byte rows act; blocked/stale copies keep warm
+memory but cannot be used cold; later count mismatch refuses; legacy metadata
+and separate-caller clearing act. Sprint output alone is intercepted, not file IO.
+Not full state-load, engine physics, signing/posting, performance or owner
+acceptance. Standard three-VM build/zero warnings; reader suite924 checks/zero
+failed. Runs430 plus126 paired views retain294 existing rec/view faults and all
+556 original hashes; protected default/save-prefix read failure unwaived.
+Independent source review and deployment pending. No byte seal, durable/atomic state-prefix pair, later same-count mutation or
+plaintext-save authentication claim. See tools/p969-save-prefix.md.
+
 ## Patch 967 — isolate the installed Legacy Original-knife texture
 
 Problem: CSS and Legacy use the same knife_t diffuse path with incompatible
