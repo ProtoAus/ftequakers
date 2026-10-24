@@ -67,8 +67,15 @@ resumes it, and leaving spectate restores the observer's own M9/preferences.
 Synthetic client transport controls reject a late clobber and restore all21
 fields on a clean load. Screenshots show the watched inspect and account panel;
 no QC/shader/property errors. These are agent checks, not owner acceptance or a
-real linked-account/live-cloud round trip. Clean final-artifact qualification,
-matching backend promotion and deployment are separate recorded operations.
+real linked-account/live-cloud round trip. Final role-compatible MENU8/CSQC8
+qualification passes18 controls; both Windows native/client sets installed and
+hash-verified24Oct2026, with four installed-byte render/fire checks. All12Pi
+lobbies received matching client/server/shaders from QC9b353d16 (including the
+published P971 retry fix); fresh cold client download matches ef252640c8ab and
+has no QC errors. Existing protected config/data checks and rollback copies pass.
+The account backend remains schema22: separately reviewed schema23 migration/
+witness promotion and real linked-account acceptance are still pending.
+See tools/p970-viewmodel-setup.md in the QC repo for source/delivery limits.
 
 ## Patch 969 — confirm buffered save copies without losing warm rewinds
 
