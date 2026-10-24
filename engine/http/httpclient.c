@@ -1470,7 +1470,18 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 		else
 #endif
 		{
-			if (!dl->poll(dl))
+			//FTESurf Patch 983: one poll is one socket read (about 32 KB through TLS),
+			//so a frame-polled download ran at a read per frame: 3.2 MB/s at 100 fps
+			//against curl's ~10 MB/s from R2. Drain what has arrived, up to 2 ms.
+			double until = Sys_DoubleTime() + 0.002;
+			size_t before;
+			qboolean alive;
+			do
+			{
+				before = dl->completed;
+				alive = dl->poll(dl);
+			} while (alive && dl->status == DL_ACTIVE && dl->completed != before && Sys_DoubleTime() < until);
+			if (!alive)
 			{
 				*link = dl->next;
 				DL_Close(dl);

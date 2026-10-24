@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 983 — frame-polled HTTP downloads drain what has arrived (native)
+
+Problem: HTTP_CL_Think polled each unthreaded download once a frame, and a
+poll is one socket read -- about 32 KB through TLS -- so map downloads ran at
+~32 KB x fps: 3.2 MB/s at 100 fps against curl's ~10 MB/s from R2.
+
+Change: the unthreaded branch polls again while the download is active and
+its byte count moved, up to 2 ms a frame. Threaded downloads are unchanged.
+
+Verified: owned rig, menu download from the live gateway, installed exe as
+control: surf_kitsune2 (20 MB, no gzip companion) 3.23 MB/s / 8.5 s ->
+9.58 MB/s / 3.5 s; surf_beginner_css (gzip companion) 4.5 s -> 2.5 s; both
+files hash to the Pi's build. Not measured: frame time while downloading.
+
+## Patch 981 — gzip companions for R2 maps; no 1 MiB/s fallback during a probe (tools, ops)
+
+Problem: maps went out raw (R2 objects carry no encoding) though 766 of 2,193
+BSPs are not LZMA-packed and gzip saves 40-60% on them. And while r2gateway's
+R2 probe was in flight every other request got 409, so a game client asking
+during the menu's mapshot burst got the Pi's copy at nginx's limit: measured
+exactly 1,048,576 B/s in the engine, 18.6 s for surf_beginner_css, while curl
+got ~10 MB/s from R2 for the same file.
+
+Change: tools/r2gzip.py reads r2mirror's state read-only; for each verified map
+whose 4 MB sample gzips by >= 5% and whose -9 body saves >= 10% it uploads
+objects/maps/<sha>.bsp.gz with Content-Encoding: gzip, verified by the stored
+and the gunzipped sha256; own state (rollback journal: the gateway reads it
+read-only under ProtectSystem=strict) and lock. r2gateway: optional gzip_state;
+a map request that accepts gzip and sends no Range goes to the companion
+(X-R2-Encoding: gzip, Vary); an in-flight probe answers with the last result.
+Pi: /srv/nvme/ftesurf-ops/r2gzip-7e (OWNER.md, cron 17,47 * * * *, 60 maps a
+pass), gateway code/config replaced with .pre981 backups and HUP'd.
+
+Verified: test_r2gzip 7/7, test_r2gateway 18/18 (3 new) in the Pi stage and on
+Windows. surf_beginner_css 17,958,137 -> 7,175,481 bytes on R2; live gateway:
+gzip -> X-R2-Encoding: gzip, none -> raw, Range -> raw. The released exe
+downloads it in 4.5 s (was 18.6) and the file hashes to the raw build; an LZMA
+map with no companion comes from R2 at 3.2 MB/s, not 1 MiB/s. Sample check on
+real maps: LZMA builds ~0.00, raw builds 0.40-0.61. Not changed: nginx's
+limit_rate for the true fallback (needs sudo), r2mirror itself.
+
 ## Patch 982 — r_mirrorworld, and labels that follow the mirrored view (native, reader)
 
 Problem: Source's r_mirrorworld did not exist. FTE's mirror is r_xflip (console
