@@ -63,8 +63,15 @@ ARM focused60 includes59pass/1platformskip. Actual installed native consumed the
 approved4418-tick legacy positive via the real authenticated runner into an
 isolated schema20 SQLite row: new digest matches, prior attempt stays unknown/
 unchanged, native exit0 and source images unchanged. Safety-only headless argv
-flags isolate that control; no normal live-cron/calibration claim. Qualified
-backend-only delivery and independent cutover review remain pending here.
+flags isolate that control; no normal live-cron/calibration claim. Two independent
+read-only storage/cutover reviews clear. Development backend deployed2026-10-24
+01:17UTC after a fresh mode0600 SQLite snapshot/quick_check. Exact2source changes
+in the80-input runtime;78inputs/native/readers/configs/schema20 unchanged. Actual
+loaded modules/column/default, guard admission, canonical bindings and importer
+readiness pass; all244old verdicts retain every old field and unknown bindings.
+All12lobbies and stoppedAI unchanged; no native/VM swap, restore or forced recheck.
+No natural postcutover verdict observed yet: future-write proof is isolated native
+SQLite, not live-cron or owner manual acceptance.
 
 ## Patch 955 — CSS weapon presentation follow-up
 
