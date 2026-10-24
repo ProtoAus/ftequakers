@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 971 - Refuse retry after recording preparation fails
+
+Problem: Retry ignored its recorder preparation result, so destructive failure
+could still write a point, arm a restart and carry an attempt onward without
+its expected recording.
+
+Change: Refuse before writing, arming or restarting. If the running attempt has
+lost its recorder, use the existing cancellation and rescan current zone
+occupancy; do not invent an entry edge. A refused preparation with a live stream
+retains it. Successful, buffered and deliberately unrecorded retry are unchanged.
+No recording format, native binary/pin/tag, classification policy or Build change.
+
+Verified: Actual production QC in the native dedicated VM, 8 prechange control
+and 8 subject arms, zero compile warnings. A real native file row-count failure
+acts; subject retains the point sentinel and never arms/queues restart. Lost
+recordings cancel and start/end/checkpoint occupancy remains latched. Successful
+stream conversion, buffered, unrecorded and idle controls still arm/queue retry.
+A synthetic selected12 live-stream refusal retains its stream and failure state.
+Only retry-module localcmd delivery and sprint output are intercepted: these are
+not real-client/map-restart, genuine capture, cold-parser or ranking acceptance
+measurements. Ordinary owner retry remains pending in lextest.md. Three-VM
+NoDeploy control/subject builds have zero NEW warnings (both retain the same two
+untouched P970 client F333 warnings with the installed compiler). Client/menu
+DAT bytes match. Reader 924/0; fresh runs corpus 472 plus162 paired views retains
+296 faults under byte-identical control/subject reader, all634 before/after hashes
+unchanged. This differs from the old 430/126 domain; it is not a claim that those
+old files still all match. Protected default/save-prefix access failure remains
+unwaived. Two fresh independent fix reviews: OK and OK with notes, no introduced
+findings. Notes retain synthetic-fixture limits and pending ordinary owner retry.
+No deployment claimed.
+
 ## Patch 970 — persist viewmodel setups and mirror the followed player
 
 Problem: the workshop only kept machine-local preferences, and first-person
