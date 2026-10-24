@@ -105,7 +105,27 @@ seed windows remain. Native pin/tag move to954 for this decoder correction. No n
 producer/counter, stored clock/evidence column, grammar, native detector/tolerance,
 collection or schema change. Not a global world or audio clock.
 
-Current R5 correction/verification (supersedes older pending-status statements
+Current R6 correction/verification (supersedes older pending-status statements
+below): entry below1 now requires authoritative negotiated quakeworld or
+quakeworld+ via the existing info key. Independent NQ/DP timestamp paths can
+publish a positive mover rate but ignore scaled duration, so are refused BEFORE
+taint/scalar mutation; query/normal1 and existing VR refusal remain. The reader
+validates all8 board numbers, finite values and time/counter domains before any
+sparse-contact note. A moving fzin release participates in pose coverage while
+remaining excluded from counted-angle epochs. No native API, field, producer,
+schema, collection, tolerance or admission changes.
+
+Three VMs0warnings;924reader checks pass. Same captured430REC/126VIEW retain294
+existing faulty files with0newfaults. Genuine non-QW admission with positive
+native rate0.015: previous VM accepts0.5; corrected direct/client requests refuse,
+authority stays1 without corrective restore, nopred stays unowned, and an actual
+clean running recorder/count progresses. Failed driver expected idle rather than
+the observed running state; immutable before/after evidence revalidated, not
+rewritten or rerun. No wall-factor claim from rounded timestamps. Supported QW
+half-speed completed recording also reads fault-free. Fresh review and fleet
+integration/deployment pending; native qualifiedc808 source unchanged.
+
+Historical R5 correction/verification (supersedes older pending-status statements
 below): render reconciliation refreshes every actual local seat, restoring the
 native-selected seat and never switching in-progress input contexts. Fresh slow
 streams retain their first nonnegative pose; restored prefixes only reanchor.
