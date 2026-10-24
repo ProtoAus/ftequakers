@@ -26,10 +26,16 @@ argument/cooldown/permission/retained-versus-stale controls and generic-guard
 identity pass; saved mount bytes match. Actual full-chain clicks page to Talon,
 select it, and move the title500pixels without changing aim or the covered wear
 slider. Clean committed Full/Jobs1 gives3VMs/0warnings, the same74native
-warning messages and7fresh PE/plugin-ZIP checks. Both Windows client/HL2/CSQC/
-shader targets were read back at2026-10-24T07:41:54Z; actual installed client
-processes and the preserved installed-server cohort render ready models.1315
-other measured file hashes remain unchanged; predecessor/.prev history retained.
+warning messages and7fresh PE/plugin-ZIP checks. Both Windows client/HL2/shader
+sets were read back at2026-10-24T07:41:54Z. Model-only checks missed a pending
+Friends protocol pair: main CSQC's eighth field is dropped by the preserved old
+MENU. Final client-only cohort7ebaca8b retains the exact pre-P961 two Friends
+components, with ALL P962/P954/P958 client components otherwise identical. Real
+old-MENU empty0/row1 controls act with its seven-field publisher; Talon/glove/
+sleeve/inspect also act without QC/shader errors. Corrected dual CSQC/lno/cache
+readback2026-10-24T08:44:44Z preserves1315other measured hashes and last-good.prev;
+superseded main CSQC/earlier history retained, not called social acceptance.
+No owner settings, server/MENU/backend or native-artifact change in that correction.
 Source/native hashes and limits are in tools/p962-knife-workshop.md in FTESurf.
 Client-only CSQC on the exact old Pi QW bytes also passes a real socket control,
 but its fleet swap awaits coordination of another owner's bound predecessor.
