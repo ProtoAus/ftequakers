@@ -21,14 +21,36 @@ caller paths, save-list/config writes, server protocol or evidence changes.
 Verified: existing build entrypoint compiles three VMs/zero warnings and native
 with zero new warning classes against the clean-source baseline's 74 existing
 warnings. Actual socket controls: readiness 0 cannot be set from console; extra
-helper arguments refuse; unmounted alias Not found. After mount readiness 1 and
-alias SHA
-matches the installed Legacy bytes, while normal SHA remains CSS. Original and
+helper arguments refuse; unmounted alias Not found. After mount readiness 1,
+the alias SHA matches the installed Legacy bytes, while normal SHA remains CSS. Original and
 default-T inspect render without the incompatible stripes; CSS/Talon and all
 three painted-style controls act, images inspected, no QC/shader errors. All
 owned actors stopped. This is Windows OpenGL agent inspection, not owner/manual
 acceptance or a public release. Final clean artifact/dual promotion are separate;
 account/spectator requests remain in scope. See tools/p967-original-texture.md.
+
+## Patch 968 — check visible-body finish forgiveness independently
+
+Problem: production finish forgiveness read the cleared engine carrier window,
+used global rather than mover maxspeed, discarded upward components and skipped
+already-settled starts. Historic P455's dwell is unmerged and not complete.
+
+Change: separate helper uses live latched carrier/existing cashout scale and
+mover cap/fallback; refuses upward body or carrier separately, airborne or held/
+frozen bodies. Invoke after fresh-hop cancellation outside start settlement.
+Same four tag/counter latches clear on a grant. No new fields, capture, threshold,
+format, native source/pin/tag, Build or release change.
+
+Verified: preregistered actual native full production JumpWatch,14control and
+14subject contexts with exact latches/counters, same native binary,0compiler
+warnings. Sprint IO only is redirected. Standard production3VMs/0warnings;
+parent direct review checks actual cashout source, fallback/hold/vertical polarity,
+fresh-hop cancellation and same four-latch grant; no independent/full-rule audit
+claimed. Not actual push-volume/engine cashout, socket input, cold/signing/posting,
+performance or human acceptance. Publication/compatible delivery pending. Future
+commitments and P455 round11 bank remain OPEN; this is the documented bounded
+alternative, not the abandoned dwell's completeness claim. See FTESurf
+tools/p968-finish-visible-body.md.
 
 ## Patch 966 — light viewmodel pieces and keep held models visible
 
@@ -53,6 +75,35 @@ agent inspection, not owner/manual acceptance, performance or full hold-physics
 verification. Original texture collision, account persistence and spectator
 mirroring remain separate in-scope work. See tools/p966-viewmodel-lighting-hold.md;
 final compatible artifact/delivery provenance and human checks are separate.
+
+## Patch 965 — bound older-save progress lookup before table access
+
+Problem: legacy save progress fallback combined an index check and zone-table
+reads in one boolean expression. QuakeC evaluates every operand, so absent or
+invalid armed-zone metadata could stop the server VM before restore completed.
+
+Change: nested scalar range/integer validation before reading zone tables.
+Keep matching twin-zone preference, otherwise find the saved leg's ordinary
+start; retain the existing final fallback. No new file format, eligibility,
+input collection, native pin/tag, Build or release change. This is not general
+malformed-save validation.
+
+Verified: retained actual native old-code control stops at the faulty lookup;
+that basic block remained unchanged through P964. Eight actual native production
+save-parser/progress-restore contexts cover missing, negative, current-count
+and backing-capacity bounds, fractional, matching twin and other-leg metadata.
+All restore and preserve the acting retry marker/slice anchors; the matching
+twin overrides ordinary first-region lookup as intended. Recorder IO remains
+acting stubs, not actual cold/signed/posting or human acceptance. Standard
+NoDeploy/Jobs8 production build:3VMs/0warnings. Both independent source reviews
+report no blockers; parent byte-hash acceptance matches frozen source.
+Windows server DAT/LNO installed in both installs24Oct2026at11:39:26Z,
+exact predecessor/.prev/history checks passed,11current protected components
+unchanged, no process signalled. Pi composition qualifies exact reviewed QW/
+current CS but remains NOT DEPLOYED: real directory refused connection before
+any staging or restart, actual P964 pair unchanged. No peer backend or old
+transaction was touched; fresh recovered-boundary proof is still required.
+See FTESurf tools/p965-legacy-progress.md.
 
 ## Patch 964 — restore stage tracking after save/retry
 
