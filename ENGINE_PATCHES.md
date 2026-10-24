@@ -29,7 +29,16 @@ exact deployed-cohort control is reused only after checking the entire selected
 input set and hashes against its immutable proof. Independent parser/authority
 inspection reports no findings; it does not attest execution or deployment.
 These are synthetic parser/consumer controls, not hardware/human calibration or
-live-cron acceptance. Implementation/build verified; deployments pending.
+live-cron acceptance. Consequence review found that movement validation must stay
+inside its row-local boundary, before counters commit; otherwise one rejected
+movement value could prevent remaining independent angles from being finalized.
+The correction retains format faults without promoting them into receipt guilt.
+Both source cohorts reproduce48lost comparisons out of64acting captured-byte and
+signed ordinary/view-only/recording-only controls before the correction; all64per
+cohort pass afterward, including matching counterparts, all movement axes and
+two input formats. Reader924/864, receipt268 and unchanged430-file corpus294faults
+are rechecked on corrected source. Delivery remains blocked on corrected rollout
+preflight review; no feature deployment is claimed here.
 
 ## Patch 957 — mounted Legacy knives and local finish workshop
 
