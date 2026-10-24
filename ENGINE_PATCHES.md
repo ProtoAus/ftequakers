@@ -68,10 +68,16 @@ readback2026-10-24T08:44:44Z preserves1315other measured hashes and last-good.pr
 superseded main CSQC/earlier history retained, not called social acceptance.
 No owner settings, server/MENU/backend or native-artifact change in that correction.
 Source/native hashes and limits are in tools/p962-knife-workshop.md in FTESurf.
-Client-only CSQC on the exact old Pi QW bytes also passes a real socket control,
-but its fleet swap awaits coordination of another owner's bound predecessor.
-No Pi native/progs or public-release transaction was performed. Human expanded
-appearance/feel/audio acceptance remains pending in lextest.md.
+Historical old-Pi control was not deployed: a separate clock rollout landed.
+Final Pi promotion24Oct10:33:49UTC uses the same clock-preserving7ebaca8b/CSQC
+552790cb as Windows plus two shaders, preserving554current native/QW/backend/
+config hashes and predecessor history.12positively empty units restarted once;
+final process epochs/direct statuses/fresh directory and real cold network-CSQC/
+HUD/scores pass. Optional fourth client hits a local-map CRC mismatch, not a
+pass/all12client CRC claim; failed/exited-client probes remain explicit. No Pi
+native/backend/public-release change by this promotion. Owner reports skin/
+FBI-sleeve red-light, Original texture and hold flicker issues; Neutral Preview's
+subtle style liked. Broader appearance/feel/audio acceptance remains in lextest.md.
 
 ## Patch 961 — game-running Friends presence from the main menu
 
