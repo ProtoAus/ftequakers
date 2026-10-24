@@ -25,7 +25,13 @@ acceptance. Standard three-VM build/zero warnings; reader suite924 checks/zero
 failed. Runs430 plus126 paired views retain294 existing rec/view faults and all
 556 original hashes; protected default/save-prefix read failure unwaived.
 Two fresh independent recorder reviews found no introduced issues (OK; OK with
-notes). Deployment pending. No byte seal, durable/atomic state-prefix pair, later same-count mutation or
+notes). Clean compatible Windows source7ea12fb6 is published; server DAT/LNO
+installed in BOTH Windows installs,4destination hashes/.prev/history and21fresh
+protected component hashes verified. No process signalled or owner gameplay
+acceptance claimed. Pi directory recovered but1player; cumulative source builds,
+client payload unchanged but compiler-banner local-date byte differs. Date-only
+client refresh vs exact-byte retention awaits owner choice; full hash/empty/pin
+gates remain, no stage/restart/phase/backend action. No byte seal, durable/atomic state-prefix pair, later same-count mutation or
 plaintext-save authentication claim. See tools/p969-save-prefix.md.
 
 ## Patch 967 — isolate the installed Legacy Original-knife texture
