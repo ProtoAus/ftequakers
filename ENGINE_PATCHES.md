@@ -205,8 +205,14 @@ Save writes, and differing older-client ACK does not autosave. The authority is
 synthetic, not real Steam acceptance. Social suite68 passes. An isolated copy of
 the effective ARM schema22 DB migrates/restarts at23 preserving all33 old
 persistent-table value digests and old object definitions; a changed account
-value is rejected. Live schema23 handoff, deployed bytes and owner acceptance
-are separate gates; see QC tools/p978-account-reload.md and lextest.md.
+value is rejected. Peer-compatible QC roleaa1fdc53 also passes all10 socket
+controls and was installed on both Windows installs/all12Pi; later P985
+integration retains Reload. Separately
+reviewed schema23 handoff completed24Oct2026 20:59:24Z and verified20:59:50Z,
+preserving all33 existing persistent tables/definitions/typed values except
+volatile lobby values. Public health, lobbies and documented browser board
+return200; backend did not change game identities/native/configs/AI. Real linked-Steam and owner visual acceptance
+remain pending; see QC tools/p978-account-reload.md and lextest.md.
 
 ## Patch 977 — movement cvars under sv_cheats 1 move the player at once; the lock lists what it restores (native)
 
@@ -439,8 +445,11 @@ hash-verified24Oct2026, with four installed-byte render/fire checks. All12Pi
 lobbies received matching client/server/shaders from QC9b353d16 (including the
 published P971 retry fix); fresh cold client download matches ef252640c8ab and
 has no QC errors. Existing protected config/data checks and rollback copies pass.
-The account backend remains schema22: separately reviewed schema23 migration/
-witness promotion and real linked-account acceptance are still pending.
+The separately reviewed schema23 account backend delivered24Oct2026 20:59Z;
+all33 existing persistent tables/definitions/typed values are preserved except
+volatile lobby values, and live health/board/lobby verification passes.
+Peer-compatible progs include P978's Reload correction; see its entry and QC tools/p978-account-reload.md.
+Real linked-Steam round-trip and owner visual acceptance remain pending.
 See tools/p970-viewmodel-setup.md in the QC repo for source/delivery limits.
 
 ## Patch 969 — confirm buffered save copies without losing warm rewinds
