@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 965 — bound older-save progress lookup before table access
+
+Problem: legacy save progress fallback combined an index check and zone-table
+reads in one boolean expression. QuakeC evaluates every operand, so absent or
+invalid armed-zone metadata could stop the server VM before restore completed.
+
+Change: nested scalar range/integer validation before reading zone tables.
+Keep matching twin-zone preference, otherwise find the saved leg's ordinary
+start; retain the existing final fallback. No new file format, eligibility,
+input collection, native pin/tag, Build or release change. This is not general
+malformed-save validation.
+
+Verified: retained actual native old-code control stops at the faulty lookup;
+that basic block remained unchanged through P964. Eight actual native production
+save-parser/progress-restore contexts cover missing, negative, current-count
+and backing-capacity bounds, fractional, matching twin and other-leg metadata.
+All restore and preserve the acting retry marker/slice anchors; the matching
+twin overrides ordinary first-region lookup as intended. Recorder IO remains
+acting stubs, not actual cold/signed/posting or human acceptance. Standard
+NoDeploy/Jobs8 production build:3VMs/0warnings. Both independent source reviews
+report no blockers; parent byte-hash acceptance matches frozen source.
+Deployment remains pending. See FTESurf
+tools/p965-legacy-progress.md.
+
 ## Patch 964 — restore stage tracking after save/retry
 
 Problem: a fresh player entity clears its previous stage cursor. Save/retry
