@@ -101,8 +101,8 @@ void SV_FS_ResetFieldCaches(void)
 /*
   FTESurf Patch 346 -- THE PIN: every value PM_PlayerMove is handed that the usercmd
   does not carry, snapshotted per move from the variables the mover actually reads
-  (movevars/pmove after SV_SetSourceMoveVars), never from cvars: five movevars are
-  latched at spawn and entgravity/maxspeed lag by a send frame.  One table, one
+  (movevars/pmove after SV_SetSourceMoveVars), never from cvars: entgravity/maxspeed
+  lag by a send frame (six movevars were spawn-latched until Patch 977).  One table, one
   order, one text form, shared by the recorder's infokeys and by pm_recsim.
   APPEND ONLY: a reader matches tokens by name, but the fill order is the table.
 */
@@ -579,6 +579,7 @@ extern cvar_t	pm_walljump;
 extern cvar_t	pm_watersinkspeed;
 extern cvar_t	pm_flyfriction;
 extern cvar_t	pm_edgefriction;
+extern cvar_t	sv_stopspeed, sv_accelerate, sv_airaccelerate, sv_wateraccelerate, sv_friction, sv_waterfriction;
 cvar_t sv_pushplayers = CVAR("sv_pushplayers", "0");
 
 //yes, realip cvars need to be fully initialised or realip will be disabled
@@ -8379,6 +8380,15 @@ size_t playertouchmax;
  * Shared with pre-input capture so no later mover state is copied backward. */
 void SV_SetQWClientMoveVars(client_t *client)
 {
+	//FTESurf Patch 977: these six were latched at spawn (SV_SetMoveVars), so one
+	//set under sv_cheats 1 read back but never moved anyone; gravity always followed.
+	//The lock keeps them canonical otherwise, and the pin still snapshots movevars.
+	movevars.stopspeed = sv_stopspeed.value;
+	movevars.accelerate = sv_accelerate.value;
+	movevars.airaccelerate = sv_airaccelerate.value;
+	movevars.wateraccelerate = sv_wateraccelerate.value;
+	movevars.friction = sv_friction.value;
+	movevars.waterfriction = sv_waterfriction.value;
 	movevars.entgravity = client->entgravity/movevars.gravity;
 	movevars.maxspeed = client->maxspeed;
 	movevars.bunnyspeedcap = pm_bunnyspeedcap.value;

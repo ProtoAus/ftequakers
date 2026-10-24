@@ -322,6 +322,8 @@ static void Lines_Project(const float *in, float *out)
 	tempv[0] /= tempv[3];
 	tempv[1] /= tempv[3];
 	tempv[2] /= tempv[3];
+	if (r_xflip.ival)	//Patch 982: as CS_ProjectPoint, so the strip stays under its labels
+		tempv[0] = -tempv[0];
 	out[0] = (1+tempv[0])/2;
 	out[1] = 1-(1+tempv[1])/2;
 	out[2] = tempv[2];

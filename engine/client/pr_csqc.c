@@ -2112,6 +2112,8 @@ static void CS_ProjectPoint(const float *in, float *out)
 	tempv[0] /= tempv[3];
 	tempv[1] /= tempv[3];
 	tempv[2] /= tempv[3];
+	if (r_xflip.ival)	//Patch 982: the view is drawn mirrored (gl_rmain.c swaps fov_l/fov_r); this matrix is not
+		tempv[0] = -tempv[0];
 
 	if (csqc_isdarkplaces)
 	{	/*sigh*/
@@ -2170,6 +2172,8 @@ static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars
 			ty = ((ty-r_refdef.vrect.y)/r_refdef.vrect.height);
 			ty = 1-ty;
 			v[0] = tx*2-1;
+			if (r_xflip.ival)	//Patch 982: undo the mirrored view, as CS_ProjectPoint applies it
+				v[0] = -v[0];
 			v[1] = ty*2-1;
 			v[2] = in[2]*2-1;	//gl projection matrix scales -1 to 1 (unlike d3d, which is 0 to 1)
 

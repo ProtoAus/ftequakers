@@ -1,5 +1,71 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 982 — r_mirrorworld, and labels that follow the mirrored view (native, reader)
+
+Problem: Source's r_mirrorworld did not exist. FTE's mirror is r_xflip (console
+name leftisright): the projection swaps fov_l/fov_r, culling flips, and mouse
+yaw, +left/+right and strafe are negated so screen-right stays right. Three
+gaps: the gamepad negated jlook[0]/jstrafe[0] (pitch and forward); CSQC's
+project/unproject build their own matrix without the flip, so every projected
+label sat on the unmirrored side; and tools/hidcheck.py's yaw identity used
+-m_yaw*sens with no mirror term, so a mirrored journal faulted every frame.
+
+Change: r_xflip is CVARAF("leftisright", ..., "r_mirrorworld") -- the journal
+and spectate code keep the primary name. Gamepad flips [1]. CS_ProjectPoint
+negates NDC x and unproject undoes it when r_xflip is set; so does the native
+line strip (Lines_Project). hidcheck: leftisright joins IDENTITY_CVARS ('c'
+records followed) and the header input table seeds the sign -- the engine gate's
+own term (IN_Journal_CheckIdentity) -- read as the cvar's .ival with a port of
+Q_atoi, which cannot fail: review 1 found float() let "abc" blind the identity
+and "0.5" flip it. Physics are unchanged, so no practice flag. (Written as 978;
+renumbered when a peer published 978 first.)
+
+Verified: rig: `r_mirrorworld 1` reads back `"leftisright" is "1"` (control:
+Unknown command); world band of the mirrored frame equals the flipped plain
+frame (mean abs diff 0.19 against 18.8 unflipped); ent_view labels follow the
+mirrored world on the subject and stay on the old side on the control
+(screenshots). test_hidcheck 278/278: case_leftisright_sign (declared and
+mid-run 'c' pass; both controls fault) and case_leftisright_engine_parse
+("abc", "", "0.5", " 1", "on" are 0: plain angles exact, mirrored fault); the
+original reader fails the declared cases, the float() one 10 parse checks. Corpus: 134 .hid, 3 faults old
+and new, 0 files differ (none mirrored). test_rcptcheck 268/268. Not done: the
+HUD's strafe bar/trainer/mouse pad draw world sides (BACKLOG).
+
+## Patch 980 — Story plays each level's own build; Momentum replays play on linked builds (menu, csprogs)
+
+Problem: Story launched through the map list's MOM/CS:S switch (ui_eff), so a
+player with surf_axiom or surf_kitsune switched to CS:S played Story/Event
+levels on surf_axiom_css / surf_kitsune_css, where medals (counted on the exact
+level name) never land and surf_axiom_css has no bonus 4. And a Momentum or
+native replay on a linked build stopped at its first frame (the map fence
+compares the header map), while KSF replays already played on linked ports.
+
+Change: ui_plain_only (set by Sty_Play around ui_launch_mode, carried across
+the name screen as ui_launch_plain) makes ui_selected_name use the row itself.
+Watch_Open applies KSF's rule to every other source: a run whose header map is
+MapPort_Match-linked to the loaded map plays on the loaded map with "geometry
+may differ". `ui_build <map>` also prints what Story would play.
+
+Verified: rig on surf_axiom_css with the live map list: a Momentum surf_axiom
+bonus-4 replay -- control (deployed P976 progs) "camera will fly through
+nothing" then "nothing loaded"; subject "on linked build", still loaded,
+screenshot shows it playing along the bonus. `ui_build surf_axiom css`: plays
+surf_axiom_css on both, subject adds "story plays surf_axiom". Not run: a real
+Story launch (the signed list fetch was not rigged).
+
+## Patch 979 — bindlist in natural key order, with a filter (native client)
+
+Problem: P934's bindlist sorted names as plain strings (F1, F10, F2) and took
+no argument.
+
+Change: Key_NaturalCompare -- digit runs compare as numbers, case-insensitive
+elsewhere -- orders each bindmap. `bindlist <text>` shows only rows whose key
+name or command contains it (Q_strcasestr) and says "N of M ... contain".
+
+Verified: dedicated-socket rig, F10/F2/F1 bound: control lists F1 F10 F2 and
+answers `bindlist echo` with usage; subject lists F1 F2 F10 and "3 of 40 bound
+key entries contain "echo"". 74-warning native baseline, none in keys.c.
+
 ## Patch 978 — Reload account settings without an implicit overwrite (QC, tests)
 
 Problem: after a same-account revision conflict, explicit Reload followed the
@@ -23,6 +89,29 @@ the effective ARM schema22 DB migrates/restarts at23 preserving all33 old
 persistent-table value digests and old object definitions; a changed account
 value is rejected. Live schema23 handoff, deployed bytes and owner acceptance
 are separate gates; see QC tools/p978-account-reload.md and lextest.md.
+
+## Patch 977 — movement cvars under sv_cheats 1 move the player at once; the lock lists what it restores (native)
+
+Problem: with sv_cheats 1, sv_gravity changed movement but sv_accelerate,
+sv_airaccelerate, sv_friction (and stopspeed, wateraccelerate, waterfriction)
+did not. The lock did not refuse them: SV_SetMoveVars latched those six into
+movevars at spawn only, and the per-command refresh skipped them, so the cvar
+and the HUD changed and the mover did not. Remote clients also predicted with
+the connect-time serverdata. `sv_cheats 0` said only "N cvars restored".
+
+Change: SV_SetQWClientMoveVars refreshes the six from their cvars every
+command (the lock keeps them canonical otherwise; the P346 pin still snapshots
+movevars, after it). CL_CheckServerInfo takes sv_accelerate/airaccelerate/
+friction/stopspeed from the serverinfo keys the mod's QC already publishes, on a
+remote server only (a listen server shares movevars). SV_LockMovementVars prints
+`  name "old" -> "new"` for each restore before the count.
+
+Verified: dedicated-socket rig, `sv_cheats 1; sv_accelerate 0`, 700 ms of
++forward: control horizontal 260 (the bug), subject 0. `sv_cheats 0` on the
+subject prints `sv_accelerate "0" -> "5"`; walking is 260 again. Lobbies run
+sv_cheats 0 (values equal to the latched ones), so the Pi's native is not
+rebuilt for this. Not measured: prediction error against a remote sv_cheats 1
+server.
 
 ## Patch 976 — tiers.txt takes KSF tiers from the directory's map list (data, tool)
 

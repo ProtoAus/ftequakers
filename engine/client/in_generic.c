@@ -3243,8 +3243,8 @@ void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float framet
 		VectorClear(jlook);
 		VectorClear(jstrafe);
 	}
-	if (r_xflip.ival)
-		jlook[0] *= -1, jstrafe[0] *= -1;
+	if (r_xflip.ival)	//Patch 982: [1] is yaw and side; [0] is pitch and forward
+		jlook[1] *= -1, jstrafe[1] *= -1;
 
 	if (in_speed.state[pnum] & 1)
 	{

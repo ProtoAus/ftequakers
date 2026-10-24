@@ -654,7 +654,7 @@ cvar_t	r_stereo_separation					= CVARD("r_stereo_separation", "4", "How far apar
 cvar_t	r_stereo_convergence				= CVARD("r_stereo_convergence", "0", "Nudges the angle of each eye inwards when using stereoscopic rendering.");
 cvar_t	r_stereo_method						= CVARFD("r_stereo_method", "0", CVAR_ARCHIVE, "Value 0 = Off.\nValue 1 = Attempt hardware acceleration. Requires vid_restart.\nValue 2 = red/cyan.\nValue 3 = red/blue.\nValue 4=red/green.\nValue 5=eye strain.");
 
-cvar_t	r_xflip = CVAR("leftisright", "0");
+cvar_t	r_xflip = CVARAF("leftisright", "0", "r_mirrorworld", 0);	//Patch 982: Source's name too
 
 extern cvar_t r_dodgytgafiles;
 extern cvar_t r_dodgypcxfiles;

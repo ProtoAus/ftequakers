@@ -3299,6 +3299,23 @@ void CL_CheckServerInfo(void)
 		movevars.edgefriction = *s?Q_atof(s):2;
 		if (!(movevars.flags&MOVEFLAG_VALID))
 			movevars.flags = (movevars.flags&~MOVEFLAG_QWEDGEBOX) | (*s?0:MOVEFLAG_QWEDGEBOX);
+		//FTESurf Patch 977: a remote server's live values (its QC publishes them on
+		//change) rather than the connect-time serverdata. A listen server writes the
+		//shared movevars itself, exactly, before every move. After the edge-box
+		//line above, which reads `s` as pm_edgefriction.
+#ifdef HAVE_SERVER
+		if (sv.state != ss_active)
+#endif
+		{
+			const char *v = InfoBuf_ValueForKey(&cl.serverinfo, "sv_accelerate");
+			if (*v) movevars.accelerate = Q_atof(v);
+			v = InfoBuf_ValueForKey(&cl.serverinfo, "sv_airaccelerate");
+			if (*v) movevars.airaccelerate = Q_atof(v);
+			v = InfoBuf_ValueForKey(&cl.serverinfo, "sv_friction");
+			if (*v) movevars.friction = Q_atof(v);
+			v = InfoBuf_ValueForKey(&cl.serverinfo, "sv_stopspeed");
+			if (*v) movevars.stopspeed = Q_atof(v);
+		}
 
 		//FTESurf: Counter-Strike: Source movement (engine/common/pm_source.c).
 		//The client MUST predict with byte-identical parameters or every ramp

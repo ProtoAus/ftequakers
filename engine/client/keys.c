@@ -3693,12 +3693,38 @@ typedef struct
 	char name[64];
 } keybindlistrow_t;
 
+//Patch 979: digit runs compare as numbers, so F2 lists before F10 and KP_9 before KP_10.
+static int Key_NaturalCompare (const char *a, const char *b)
+{
+	while (*a && *b)
+	{
+		if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b))
+		{
+			const char *ea, *eb;
+			while (*a == '0' && isdigit((unsigned char)a[1])) a++;
+			while (*b == '0' && isdigit((unsigned char)b[1])) b++;
+			for (ea = a; isdigit((unsigned char)*ea); ea++) ;
+			for (eb = b; isdigit((unsigned char)*eb); eb++) ;
+			if (ea - a != eb - b)
+				return (int)(ea - a) - (int)(eb - b);
+			for (; a < ea; a++, b++)
+				if (*a != *b)
+					return *a - *b;
+			continue;
+		}
+		if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+			return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+		a++, b++;
+	}
+	return (unsigned char)*a - (unsigned char)*b;
+}
+
 static int Key_BindListCompare (const void *left, const void *right)
 {
 	const keybindlistrow_t *a = left, *b = right;
 	int order = a->bindmap - b->bindmap;
 	if (!order)
-		order = Q_strcasecmp(a->name, b->name);
+		order = Key_NaturalCompare(a->name, b->name);
 	if (!order)
 		order = a->keynum - b->keynum;
 	if (!order)
@@ -3710,20 +3736,21 @@ static void Key_BindList_f (void)
 {
 	keybindlistrow_t *rows, *row;
 	char *quoted;
-	const char *base, *binding;
+	const char *base, *binding, *filter;
 	size_t quotesize = 3, needed;
-	int key, modifier, count = 0, i, map = -1;
+	int key, modifier, count = 0, shown = 0, i, map = -1;
 
 	if (Cmd_IsInsecure())
 	{
 		Con_Printf("bindlist is available only from the local console.\n");
 		return;
 	}
-	if (Cmd_Argc() != 1)
+	if (Cmd_Argc() > 2)
 	{
-		Con_Printf("Usage: bindlist\n");
+		Con_Printf("Usage: bindlist [text]  -- text limits it to keys or commands containing it\n");
 		return;
 	}
+	filter = Cmd_Argv(1);
 	rows = Z_Malloc(sizeof(*rows) * K_MAX * KEY_MODIFIERSTATES);
 	for (key = 0; key < K_MAX; key++)
 	{
@@ -3753,6 +3780,9 @@ static void Key_BindList_f (void)
 	for (i = 0; i < count; i++)
 	{
 		row = &rows[i];
+		if (*filter && !Q_strcasestr(row->name, filter) && !Q_strcasestr(row->binding, filter))
+			continue;
+		shown++;
 		if (map != row->bindmap)
 		{
 			map = row->bindmap;
@@ -3768,7 +3798,10 @@ static void Key_BindList_f (void)
 			Con_Printf("  (level %i)", bindcmdlevel[row->keynum][row->modifier]);
 		Con_Printf("\n");
 	}
-	Con_Printf("%i bound key entries.\n", count);
+	if (*filter)
+		Con_Printf("%i of %i bound key entries contain \"%s\".\n", shown, count, filter);
+	else
+		Con_Printf("%i bound key entries.\n", count);
 	Z_Free(quoted);
 	Z_Free(rows);
 }

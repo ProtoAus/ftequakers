@@ -3302,6 +3302,7 @@ void SV_LockMovementVars(void)
 {
 	cvar_t **v;
 	int n = 0;
+	char was[MAX_OSPATH];
 
 	if (!SV_MovementLocked())
 		return;
@@ -3311,8 +3312,12 @@ void SV_LockMovementVars(void)
 		const char *canon = SV_MovementCanonical(*v);
 		if (!canon || !strcmp((*v)->string, canon))
 			continue;
+		//Patch 977: name each one; Cvar_ForceSet frees the old string.
+		Q_strncpyz(was, (*v)->string, sizeof(was));
 		Cvar_ForceSet(*v, canon);
-		n++;
+		if (!n++)
+			Con_Printf("^5movement lock^7: restoring the ruleset default\n");
+		Con_Printf("  %s \"%s\" -> \"%s\"\n", (*v)->name, was, canon);
 	}
 
 	if (n)
