@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 985 - Refuse retry when its saved point cannot be confirmed
+
+Problem: Retry unconditionally armed/restarted after a void state writer.
+Buffered fclose has no success result; stale/missing state and explicitly
+unconfirmed buffered movement could therefore commit an incomplete retry.
+A successful destream alone did not establish a persisted point.
+
+Change: Snapshot complete reader-visible state rows from the native WRITE
+buffer, restore its producer cursor, close and compare same-size complete
+readback rows/EOF. Refuse invalid/no-progress/overlong native-reader output,
+never treat matching error sentinels as confirmation, and release only owned
+handles. The writer returns this result plus its buffered-prefix verdict,
+retained BEFORE SV_RecSaveKeys consumes/resets the global. Retry refuses before
+arming or requesting restart on failure, retaining a still-live recording.
+Other warm/legacy/MS callers retain their prior behavior. No payload key,
+forgiveness, eligibility, threshold, capture, native/tag/pin or Build change.
+This is immediate reader-visible readback, NOT byte sealing, cross-file
+atomicity, durability, authenticated pairing or later-mutation protection.
+
+Verified original standalone candidate: actual full production-QC native8control/
+8subject contexts, zero compile warnings. All4actual state/prefix directory/
+readonly failures arm in control and refuse in subject; current record buffers/
+state preserved. Writable buffered, successful stream destream, idle and
+intentionally unrecorded retry still act. Scoped command interception observes
+intent, NOT real client map_restart or rank/parser/signing/physics/human acceptance.
+Native helper blank/4094allow/4095refusal preserve complete producer/tail; actual
+same-size stale readonly target refuses. Initial wrong qctest namespace negative
+did NOT ACT, retained/corrected at real rebased data target; no product change
+followed that false premise. Stock matching-compiler3VM0warnings, exact original
+clientef252640 unchanged. Fresh full reader924/0 completed in121.69s; earlier120s
+timeout retained, not a pass. Same472rec+162views/634stable hashes retain296existing
+faults under identical reader/domain; protected default/save-prefix access fault
+unwaived. Both independent reviews OKwithnotes/no findings. These qualified the
+standalone source, NOT newer peer client/native changes. Latest published peer
+integration and final delivery pending; no P985 deployment claimed.
+
 ## Patch 984 — Momentum zones for CS:S/KSF builds that carry their own timer triggers (surfd, data)
 
 Problem: surf_axiom_css (and 32 more) timed only a main start/end from timer
