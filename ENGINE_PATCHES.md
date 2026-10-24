@@ -157,7 +157,11 @@ clean running recorder/count progresses. Failed driver expected idle rather than
 the observed running state; immutable before/after evidence revalidated, not
 rewritten or rerun. No wall-factor claim from rounded timestamps. Supported QW
 half-speed completed recording also reads fault-free. Fresh review and fleet
-integration/deployment pending; native qualifiedc808 source unchanged.
+integration/deployment pending. Native decoder code remains unchanged from the
+qualifiedc808 revision. Published P957's plugin/header changes are preserved in
+the combined source, not overwritten by the earlier bundle: final combined
+Windows/ARM64 artifacts require fresh full/stamp and affected cohort checks.
+The single reserved feature number remains954; product maximum stays957.
 
 Historical R5 correction/verification (supersedes older pending-status statements
 below): render reconciliation refreshes every actual local seat, restoring the
