@@ -1,5 +1,90 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 976 — tiers.txt takes KSF tiers from the directory's map list (data, tool)
+
+Problem: the map info box read "KSF tier ?" on maps KSF rates. maptiers.py took
+KSF main tiers only from data/ksf_roster.csv (929 rows, exact names), so 451 of
+the 1,376 KSF-rated rows in the directory's list had none: all 352 _css builds
+(surf_4am_css, surf_axiom_css), 17 KSF maps newer than the roster (surf_kraken,
+surf_lucid...) and 82 Momentum maps rated through a linked port (surf_aircontrol).
+
+Change: `--maplist` (required) reads a FTESURF-MAPDL list and sets each `dl`
+row's own column-9 KSF tier on its exact name -- the catalogue's explicit
+rating, no suffix stripped. It wins over the roster where KSF re-tiered:
+surf_expel 5->6, surf_secluded 4->5, surf_shambles 4->5, surf_techslop 6->7.
+tiers.txt regenerated from the live list: 2,776 -> 3,163 rated maps; the newer
+Momentum caches also moved 39 MOM legs and dropped sj_strafap.
+
+Verified: test_maptiers 15/15 (new: fill by exact name, re-tier, unsafe name,
+bad header). Owned rig, surf_axiom_css: shipped file "KSF tier ?", regenerated
+file `maprating_0_0 0,0,-,-,4,-,-` and "KSF tier 4" (screenshots). Lobbies load
+it on their next map; players without a lobby get it with the signed asset (P738).
+
+## Patch 975 — Friends load in a private local game (menu, csprogs)
+
+Problem: in a private local game (a listen server with no lobby_master, board
+"local") the Friends list never loaded. CSQC's list comes from the lobby's
+account relay (Social_Frame needs Account_On), so nothing arrived; the menu took
+only that snapshot whenever connected (clientstate 2) and asked the Friends
+service itself only while disconnected.
+
+Change: MF_Direct -- disconnected, or connected with serverkey("board") ==
+"local" -- replaces the clientstate()==1 tests in MF_Active, MF_Poll, MF_Reply,
+the join and Add-back choices and MF_Open's relay refresh. Presence stays
+disconnected-only (a friend should not see "Main menu" while you play). The
+in-game Friends tab says the list is under Play in a private game.
+`ui_menu_probe` prints friends_direct, board, req, wire and note.
+
+Verified: three VMs build (2 standing F333 warnings). Owned rig, consent 8,
+`map surf_dune` local game, Play opened: control (MF_Direct's connected branch
+FALSE) direct 0 board "local", no request, list -1; subject direct 1, the
+challenge round trip to play.proto.bar acted and stopped at friends_sign ("this
+install's signing key": the rig has none). Screenshot inspected. Not verified:
+a linked install's list and Join from a local game.
+
+## Patch 974 — Stage toast switch in hud_edit; a stale map search is selected, not wiped (QC)
+
+Problem: the stage toast (Results_DrawToast, top left above the splits) had a
+cvar, hud_results_toast, but no hud_edit row. And after launching a map the
+picker's search emptied itself on the next click, so a double-click on the old
+text found nothing to select: P933's select-all never acted there.
+
+Change: an HE_OptDef "Stage toast" row in the Splits pane (reset-all covers it;
+the banner tooltip names it). sui_text_select_all (sui_sys.qc) selects a focused
+field's text; the stale search calls it after the field's draw instead of
+clearing ms_query, so typing still replaces it. `ui_menu_probe search|stale`
+reads and arms the search for an arm.
+
+Verified: three VMs build (2 standing F333 warnings). Offline menu arm, control
+= the same menu with only the old clear restored: typed "dune", armed stale,
+double-click -> control "" caret 0 sel -1, subject "dune" caret 4 sel 0; typing
+then gives "x"/"y" in both. Screenshot shows the highlight. `hud_edit splits`
+screenshot shows the Stage toast row. Not seen: the toast hidden in a real run.
+
+## Patch 973 — resume offers that act, in the left-hand card (QC)
+
+Problem: pressing 1 on the resume offer often did nothing. Slots P913 keeps but
+will never resume (practice, stage, bonus) were still published as offers, so 1
+and F2 sent an accept that always refused; every refusal was PRINT_HIGH, which
+CSQC echoes to the console only (con_notifylines 0); and the client latched the
+answer, so a refused Yes hid the offer for good. The box was its own raw panel.
+
+Change: SV_MsCheck publishes no `O` key for a slot SV_MsSlotCleanMain rejects
+(it stays offered to !discard; a chat note 2 s after spawn, when CSQC can show
+it, says so). All resume replies are PRINT_CHAT. A Yes still offered 2.5 s later
+re-arms the box with "not resumed - see chat". The box is the digit-menu card
+(KeyMenu_Row, SaveLoc's pieces) at the save menu's place; cl_resume.qc compiles
+after cl_saveloc.qc. Accept/claim/apply, slot files and recordings unchanged.
+
+Verified: three VMs build (2 standing F333 warnings, cl_viewmodel.qc). Isolated
+dedicated socket, installed natives, P920's walked surf_dune slot in three
+variants; control = origin/main d994d0a5 progs. Bonus slot: control offers and
+takes 1 (took 1, refusal console-only), subject offers nothing (took 0) and the
+chat note draws. Refused slot (parked clock 250 days back): control's second 1
+is ignored (took 0), subject's is taken and refused again in chat, card shows
+the refusal row. Clean slot: both resume. Screenshots inspected. Not seen: a
+real lobby rejoin or the owner's own slots.
+
 ## Patch 972 - Preserve earned pending re-arm across exact retry
 
 Problem: A finish/reset can leave hopped-start forgiveness pending until ordinary
