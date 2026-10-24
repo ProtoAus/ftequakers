@@ -100,8 +100,15 @@ resumes it, and leaving spectate restores the observer's own M9/preferences.
 Synthetic client transport controls reject a late clobber and restore all21
 fields on a clean load. Screenshots show the watched inspect and account panel;
 no QC/shader/property errors. These are agent checks, not owner acceptance or a
-real linked-account/live-cloud round trip. Clean final-artifact qualification,
-matching backend promotion and deployment are separate recorded operations.
+real linked-account/live-cloud round trip. Final role-compatible MENU8/CSQC8
+qualification passes18 controls; both Windows native/client sets installed and
+hash-verified24Oct2026, with four installed-byte render/fire checks. All12Pi
+lobbies received matching client/server/shaders from QC9b353d16 (including the
+published P971 retry fix); fresh cold client download matches ef252640c8ab and
+has no QC errors. Existing protected config/data checks and rollback copies pass.
+The account backend remains schema22: separately reviewed schema23 migration/
+witness promotion and real linked-account acceptance are still pending.
+See tools/p970-viewmodel-setup.md in the QC repo for source/delivery limits.
 
 ## Patch 969 — confirm buffered save copies without losing warm rewinds
 
@@ -318,7 +325,9 @@ The80-input closure changes only the two reviewed Social files; historical value
 canonical/worker/importer bindings and native/reader dependencies are preserved.
 HTTP200/all12directory entries pass; no game/native action. Both menu predecessors
 and13,011protected files retained unchanged. P963 human chat/layout checks remain
-pending; P961 lobby-side snapshot producer still needs its separate QC reload.
+pending. P961's separate ordinary QC reload is now verified on all12lobbies;
+current newer published Windows/fleet eight-field programs are retained, actual
+cold network CSQC/load/board-render verified. No human chat pass is implied.
 Earlier bootstrap refusals remain failures, not passes. No old NativeClock gate
 was reused. Source/control/delivery details: tools/p963-menu-chat.md in FTESurf.
 
@@ -396,10 +405,18 @@ presence refusal from a verified new proof; list/join still act and bad targets
 refuse. The real production freshness helper acts in an owned native VM with
 controlled40s renewal and20s failure expiry; mismatches/loading/cleared refuse.
 That helper arm uses a publisher counter, not full transport/UI acceptance.
-Final clean build/native proof passed. Matching schema22 service and BOTH
-Windows menus verified24Oct2026; connected-lobby CSQC still has the legacy
-seven-field producer. Its published eight-field upgrade compiles3VMs/0warnings,
-but fleet QC promotion and human visual/real-account acceptance remain OPEN.
+Final clean build/native proof passed. Matching schema22 service, BOTH Windows
+menus and all12lobby eight-field producer/renewal now VERIFIED24Oct2026. The
+ordinary QC entrypoint compiled3VMs/0warnings and verified12new epochs/program
+hashes/predecessors, native8/runtime80 unchanged,29,850existing files unchanged.
+A subsequent independently published peer program cohort superseded those hashes;
+current9b353d16 fleet/source and actual downloaded CSQC/board-render are verified,
+not reverted. Both Windows retain newer compatible P970 native/program/shader/
+cache and C3 menus,14,618protected files unchanged. This task did not replace
+native binaries or repeat its12restarts. The first native-race refusal/stale-hash
+smoke assertion remain failures; actual retained cold download/load/render matches
+the verified current cohort. No terms acceptance/ranked-row query or human chat/
+presence/feel is claimed. Human visual/real-account acceptance remains OPEN.
 Product status: tools/p961-menu-presence.md. Historical review artifacts used
 unpublished labelP959; this sole product number is961 after preserving canonical
 peer959/960 claims. P954's separate native cutover was verified09:52:46Z and its
