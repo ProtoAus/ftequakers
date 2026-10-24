@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 972 - Preserve earned pending re-arm across exact retry
+
+Problem: A finish/reset can leave hopped-start forgiveness pending until ordinary
+rest. Save state carried the hopped bit but not that existing grant; exact retry
+restored the tag and erased the pending re-arm, so the next start stayed practice.
+
+Change: Carry the existing pending value in additive save-state metadata and
+restore valid1/2 only for exact retry1 with a saved hopped bit. Missing, invalid,
+extra-token or duplicate keys (including bare keys) add no grant. The optional
+grant also requires nonnegative native read-position/file-size values to match;
+a blank-line stop with an unread tail cannot hide a later duplicate. Ordinary
+load and Multi-Session2 retain separate behavior. No new clear/rest criterion, REC
+format, capture, native pin/tag or Build. This does not make state/prefix writes
+atomic or close the separate saved-row/future-output admission work.
+
+Verified: Native production writer/full parser+apply/jump-watch/next TimerStart,
+14 original controls and14 subjects, zero compile warnings, same retained native
+image/fixture/compiler. The blank-tail duplicate first ACTED against the reviewed
+candidate, then the corrected candidate suppressed it. Pending1/2 match untouched rest controls and become not-practice only on
+subject. Genuine hops, old/bad/duplicate metadata in either order, other modes,
+saved unhopped and slight upward-body refusal retain expected classifications.
+Synthetic explicit entity state is not genuine finish/reset/client/map restart,
+capture, full recording-parser or ranking acceptance. Owner check is pending in
+lextest.md. Matching published P970 compiler makes standard3VM NoDeploy0warnings;
+control exactly reproduces peer-published P971 Pi server2b0a8c94/clientef252640,
+and subject retains that exact client. Earlier old-compiler2F333 warnings were
+not new, and are now resolved by the correct existing tool, not source changes.
+Reader924/0. Fresh actual corpus472+162retains296faults under byte-identical reader,
+all634hashes unchanged during sweep; protected access failure remains unwaived.
+Initial independent reviews OK with notes; concrete EOF note reproduced/fixed.
+Both narrow follow-up reviews OK with notes, no findings. No deployment of this
+patch claimed.
+
 ## Patch 971 - Refuse retry after recording preparation fails
 
 Problem: Retry ignored its recorder preparation result, so destructive failure
