@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 961 — game-running Friends presence from the main menu
+
+Problem: a linked player was visible to mutual friends only while admitted on a
+lobby, not while their game was running at the main menu. Unchanged successful
+roster polls also did not renew the client/menu freshness clock.
+
+Change: add only the presence operation with target '-' to the existing fixed
+MENU-only Friends signing domain. It is not account/link consent, a receipt or a
+lobby capability. A ten-second, online-consent-gated menu heartbeat updates one
+short-lived SQL presence row per proven installation; additive schema21, replay
+cannot renew, current links/bans/relationships rechecked. A real lobby remains
+preferred/joinable; menu-only presence is mutual-friend-only without an address
+or Join. Reuse private friend_end hash confirmations to renew only completed,
+matching snapshots; failed/partial/cleared states retain expiry. Background
+presence has separate bounded budgets, retaining interactive and global limits.
+No movement, recorder, verifier, input/collection, Build or release change.
+
+Verified: independent source follow-up clears the initial P1 freshness and P2
+shared-budget findings. Existing Social suite plus focused controls53pass,
+including additive20->21/idempotence/history preservation, cross-connection SQL,
+revocation/replay, controlled50s unchanged polls and two-account NAT budgets.
+All3VMs compile with0warnings. Actual owned native controls distinguish old
+presence refusal from a verified new proof; list/join still act and bad targets
+refuse. The real production freshness helper acts in an owned native VM with
+controlled40s renewal and20s failure expiry; mismatches/loading/cleared refuse.
+That helper arm uses a publisher counter, not full transport/UI acceptance.
+Final clean-commit build, development deployment and human visual/real-account
+acceptance are pending, not invented. Product status: tools/p961-menu-presence.md.
+Historical review artifacts used unpublished labelP959; this sole product number
+is961 after preserving canonical peer959/960 claims. P954's separate frozen Pi
+transaction is not part of this change and has not been retried.
+
 ## Patch 958 — structured faults for invalid recording numbers
 
 Problem: some malformed or unrepresentable numeric file values could escape the
