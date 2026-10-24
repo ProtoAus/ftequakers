@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 963 — main-menu lobby chat and friend-only messages
+
+Problem: the disconnected main menu had Friends/presence, but no shared lobby
+conversation or private-message transport; the existing lobby capability must
+not be exported to MENU or used as a general signing oracle.
+
+Change: extend the fixed, disconnected MENU-only Friends domain with chat reads
+and message sends. A send binds recipient and exact UTF-8 text SHA256; ticket,
+installation link, ban, mutuality, live presence and existing bounds are checked.
+A short-lived SQL proof table consumes each send once across worker connections
+(additive schema22, no existing run/history rewrite). Shared messages respect
+blocks; DMs are sender/recipient-only and mutual-friend-only. Both expire after
+two minutes. Add an explicit Lobby chat screen, bounded visible-only polling,
+friend conversations and literal text rendering. No capability, key, proof or
+chat text in cvars/localcmd/disk cache. No automatic resend after ambiguity;
+retired/privacy-off replies cannot post, and closing erases drafts/cache.
+No recorder, movement, evidence, collector, tolerance, Build or release change.
+
+Verified: existing Jobs8 Engine/NoDeploy entrypoint passes, all3VMs zero warnings.
+Actual owned old/new native actors: old refuses new operations; new signs chat,
+public send and DM, Python verifies exact domain/target; list/join/presence still
+act, malformed targets/other domains refuse. Actual production MENU helpers
+exercise UTF-8 digest, room/DM filtering, literal markup, retired/privacy-off
+callbacks and cache/draft erase.60 real Flask Social tests pass, including body/
+target substitution, cross-connection/same-account replay refusal, privacy,
+blocks/bans, expiry, bounds and additive/idempotent migration. Existing account
+(24 CREATE-race boundaries), board, join and replay regressions pass. This is not
+owner visual acceptance or live two-client transport. Matching backend/client
+rollout and small human check remain pending; do not ship only the MENU heartbeat
+to an older service. Source/control details: tools/p963-menu-chat.md in FTESurf.
+
 ## Patch 961 — game-running Friends presence from the main menu
 
 Problem: a linked player was visible to mutual friends only while admitted on a
