@@ -25,8 +25,16 @@ with unchanged reader source. Recording IO remains acting test stubs, not full
 cold-replay, signed-stage posting, network or human acceptance. The broader
 save-prefix sweep's protected-fixture read failure is retained, not called
 clean. Both corrected-source reviews report no remaining blockers; the parent
-byte-hash acceptance matches the frozen source. Deployment remains pending. See FTESurf
-tools/p964-save-stage.md for the bounded source/evidence record.
+byte-hash acceptance matches the frozen source. Delivered24Oct2026UTC: both
+Windows server pairs10:36:43Z, all12Pi lobbies verified10:59:20Z, using separate
+public compositions b27a76f0/adecccc5 from byte-exact installed predecessors.
+Pi server equals reviewed main artifact; CS remains byte-identical. Actual
+empty socket/directory checks, staged/live/.prev hashes,12new active PIDs and
+12fresh socket/directory replies pass. Current canonical native-clock witness's
+8native/reader hashes are unchanged; no old backend transaction was reused.
+Native/client/menu/config/player data retained; no Build/release. Human HUD/ghost
+and actual cold/signed-stage acceptance remain pending. See FTESurf
+tools/p964-save-stage.md for the bounded source/evidence and delivery record.
 
 ## Patch 963 — main-menu lobby chat and friend-only messages
 
