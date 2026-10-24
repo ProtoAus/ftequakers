@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 984 — Momentum zones for CS:S/KSF builds that carry their own timer triggers (surfd, data)
+
+Problem: surf_axiom_css (and 32 more) timed only a main start/end from timer
+triggers baked into its BSP: mapwatch's zonefit refused to give it the Momentum
+map's zone file ("OWN-TIMER: timed already, a file would be a second rule").
+But the server reads a zone file first and builds zones from the triggers only
+when there is none (sv_zones.qc), so the file replaces that timing; the
+refusal just left those builds without stages and bonuses.
+
+Change: zonefit.fit no longer returns OWN-TIMER: such a target is FIT when the
+frame, regions and destinations fit, with "replaces its own timer triggers" in
+the reason. Applied once on the Pi under the mapwatch flock: the 33 targets
+whose mapwatch verdict was OWN-TIMER, donor zones and target build unchanged
+since measured, no zone file present, no lobby on the map -- 31 given
+(zones/online/<t>.json and the site copy clients fetch, fresh files only), 2
+still refused (surf_journeys_css NO-DESTS, surf_ravine_css SHIFTED 896 units).
+
+Verified: test_zonefit 0 failed (new: FIT with the reason; a shifted target
+with triggers is still SHIFTED; census copy agrees). Rig on surf_axiom_css:
+4 zones from the BSP triggers, 21 from the published file. The cron's mapwatch
+runs a sealed generation with the old rule (BACKLOG) until the next cutover.
+
 ## Patch 983 — frame-polled HTTP downloads drain what has arrived (native)
 
 Problem: HTTP_CL_Think polled each unthreaded download once a frame, and a
