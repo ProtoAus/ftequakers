@@ -21,8 +21,10 @@ claimed. Not actual push-volume/engine cashout, socket input, cold/signing/posti
 performance or human acceptance. Published QC100db5f7/engine32c7d106. Windows
 composition53c54f97 qualifies3VMs/0warnings, exact timer; server DAT/LNO installed
 both installs24Oct2026at12:28:27Z,4destinations/.prev/history and11fresh protected
-hashes pass, no process signalled/live reload claimed. Pi composition/promotion
-pending directory recovery: exact P964 pair remains, no .new/phase/restart or
+hashes pass, no process signalled/live reload claimed. Pi combined P968/P965
+composition8223a1c8 qualifies3VMs/0warnings: QW equals main, CS actual fleet;
+source base0577 was NEVER APPLIED. Promotion pending directory recovery: actual
+P964 pair remains, no .new/phase/restart or
 backend transaction. Future commitments and P455 round11 bank remain OPEN;
 this is the documented bounded
 alternative, not the abandoned dwell's completeness claim. See FTESurf
