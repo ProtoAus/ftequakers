@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 968 — check visible-body finish forgiveness independently
+
+Problem: production finish forgiveness read the cleared engine carrier window,
+used global rather than mover maxspeed, discarded upward components and skipped
+already-settled starts. Historic P455's dwell is unmerged and not complete.
+
+Change: separate helper uses live latched carrier/existing cashout scale and
+mover cap/fallback; refuses upward body or carrier separately, airborne or held/
+frozen bodies. Invoke after fresh-hop cancellation outside start settlement.
+Same four tag/counter latches clear on a grant. No new fields, capture, threshold,
+format, native source/pin/tag, Build or release change.
+
+Verified: preregistered actual native full production JumpWatch,14control and
+14subject contexts with exact latches/counters, same native binary,0compiler
+warnings. Sprint IO only is redirected. Standard production3VMs/0warnings;
+parent direct review checks actual cashout source, fallback/hold/vertical polarity,
+fresh-hop cancellation and same four-latch grant; no independent/full-rule audit
+claimed. Not actual push-volume/engine cashout, socket input, cold/signing/posting,
+performance or human acceptance. Publication/compatible delivery pending. Future
+commitments and P455 round11 bank remain OPEN; this is the documented bounded
+alternative, not the abandoned dwell's completeness claim. See FTESurf
+tools/p968-finish-visible-body.md.
+
 ## Patch 966 — light viewmodel pieces and keep held models visible
 
 Problem: installed bare hands and FBI sleeves use Source's Character material
