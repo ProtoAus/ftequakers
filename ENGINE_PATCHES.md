@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 966 — light viewmodel pieces and keep held models visible
+
+Problem: installed bare hands and FBI sleeves use Source's Character material
+class, which falls back unlit here; default VertexLitGeneric arms do not. The
+client preserved its weapon while save-load held but returned before submitting
+it to the scene, making it disappear until release.
+
+Change: generated metadata identifies installed Character diffuse/surface pairs
+for viewmodel pieces only. A matte defaultskin replacement applies ordinary
+model lighting after variant remaps, without changing the existing neutral AO
+glove program or redistributing assets. Keep held motion/fire suppression but
+allow MOVETYPE_NONE to submit the retained model; other unsupported movement
+states still return. No movement, hold, recorder, evidence or native change.
+
+Verified: three-VM NoDeploy build, zero warnings. Actual old-client socket control
+on surf_666 reproduces white Bare Hands/FBI Gray beside a red-lit knife and a
+missing held model. Subject draws red-lit hands/cloth, ordinary colour away from
+red, and a visible model with HUD held/movetype0 and draw-starts still1. Neutral
+Preview glove look remains; no QC/shader runtime errors. This is renderer-specific
+agent inspection, not owner/manual acceptance, performance or full hold-physics
+verification. Original texture collision, account persistence and spectator
+mirroring remain separate in-scope work. See tools/p966-viewmodel-lighting-hold.md;
+final compatible artifact/delivery provenance and human checks are separate.
+
 ## Patch 964 — restore stage tracking after save/retry
 
 Problem: a fresh player entity clears its previous stage cursor. Save/retry
