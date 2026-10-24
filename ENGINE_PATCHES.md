@@ -45,8 +45,13 @@ twin overrides ordinary first-region lookup as intended. Recorder IO remains
 acting stubs, not actual cold/signed/posting or human acceptance. Standard
 NoDeploy/Jobs8 production build:3VMs/0warnings. Both independent source reviews
 report no blockers; parent byte-hash acceptance matches frozen source.
-Deployment remains pending. See FTESurf
-tools/p965-legacy-progress.md.
+Windows server DAT/LNO installed in both installs24Oct2026at11:39:26Z,
+exact predecessor/.prev/history checks passed,11current protected components
+unchanged, no process signalled. Pi composition qualifies exact reviewed QW/
+current CS but remains NOT DEPLOYED: real directory refused connection before
+any staging or restart, actual P964 pair unchanged. No peer backend or old
+transaction was touched; fresh recovered-boundary proof is still required.
+See FTESurf tools/p965-legacy-progress.md.
 
 ## Patch 964 — restore stage tracking after save/retry
 
