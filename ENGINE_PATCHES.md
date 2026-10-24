@@ -101,11 +101,18 @@ are rechecked on corrected source. Both Windows reader installs were updated on
 24 Oct 2026 and each passed installed good/bad/good CLI continuation plus16acting
 captured-byte consequence controls, retaining their existing committed helpers.
 Corrected retained-cohort ARM78numeric/16boundary/16consequence controls pass.
-The Pi handoff stopped at predecessor drain before any reader/canonical swap;
-the original backend was restored through fresh guarded acceptance. Health,
-board/API,12unchanged lobby process epochs, AIoff, schema20 and every pre-existing
-verdict field pass recovery checks. The failed transaction remains retained and
-is not retried; Pi reader promotion is pending, not a deployment pass.
+The first Pi attempt stopped at predecessor drain before any reader/canonical
+swap; the unchanged original backend was restored through fresh guarded
+acceptance and that failed transaction remains retained. A separately reviewed,
+explicitly delegated second handoff reused the same prepared source and completed
+24 Oct 2026, verified07:15UTC. Actual installed Pi CLI continuation and16cached
+consumer controls pass in the real helper namespace. Live source/module/reader
+pins, canonical/cron/importer admission, health/board/API200,12unchanged lobby
+process epochs/AIoff, schema20 and every pre-existing verdict field pass. Only
+one external reader changed; backend80/native2/other5readers remain byte-identical.
+Both protected snapshots and the original failed record remain retained, with no
+data restore or game/native/AI/VM action. Both Windows installs and the Pi reader
+are development-deployed and verified; no release or hardware-calibration claim.
 
 ## Patch 957 — mounted Legacy knives and local finish workshop
 
