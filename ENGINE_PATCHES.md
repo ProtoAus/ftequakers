@@ -33,8 +33,27 @@ clientef252640 unchanged. Fresh full reader924/0 completed in121.69s; earlier120
 timeout retained, not a pass. Same472rec+162views/634stable hashes retain296existing
 faults under identical reader/domain; protected default/save-prefix access fault
 unwaived. Both independent reviews OKwithnotes/no findings. These qualified the
-standalone source, NOT newer peer client/native changes. Latest published peer
-integration and final delivery pending; no P985 deployment claimed.
+standalone source, NOT newer peer client/native changes.
+
+Final integration verified: published QCf6dca724 retains exact reviewed IO code,
+with inspected published peer account/menu/movement source preserved. Fresh
+8control+8subject+4helper native contexts ACTED under that program/current
+native/compiler tuple, stock3VM0warnings. Changed-source resume reader12/0;
+original full924reader/core/heldmeta bytes remain exact. Fresh634file identity
+check finds same472REC+162views,0missing/changed/added, so original296fault/no
+increase proof is retained, not redated or claimed a fresh full sweep.
+
+Windows delivered24Oct2026 20:30:56Z: both serverDAT hash2a9882a9 with matchingLNO,
+current/olderprev retained; CS7495db35/menu2ccef27b already equal final published
+source, matching cache installed without owner-temp cleanup. 1329protected
+component/config hashes and27065existing gamedir metadata rows unchanged.
+Initial4c65predecessor guard refused BEFORE copying when peer advanced; actual
+successor exactly matched independently rebuilt publishedaa1fdc53 control,
+not an unknown-hash refresh. No native/menu/config/tool/playerdata or process
+signalling/reload/human acceptance claim. Pi985NOTdelivered: required directory
+availability refuses; read-only diagnostic finds backend inactive. No own Pi
+gate/stage/restart/backend/DB operation; this blocks Pi promotion, not remaining
+source work. Full state/prefix pairing and saved-row/future-bank leaves stay OPEN.
 
 ## Patch 984 — Momentum zones for CS:S/KSF builds that carry their own timer triggers (surfd, data)
 
