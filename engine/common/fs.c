@@ -10174,10 +10174,15 @@ static char fs_automounted[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): resol
 static int fs_numautomounted;
 static char fs_automountwant[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P184): what the map now loading asked for
 static int fs_numautomountwant;
+// One fixed client asset request may retain its pack for this FS session.
+static char fs_knife_assets_path[MAX_OSPATH];
+static double fs_knife_assets_retry;
 static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
 {
 	fs_numautomounted = 0;
 	fs_numautomountwant = 0;
+	fs_knife_assets_path[0] = 0;
+	fs_knife_assets_retry = 0;
 }
 static qboolean FS_Addon_IsMounted(const char *syspath)
 {
@@ -11261,9 +11266,9 @@ void FS_AutoUnmountStale(void)
 			continue;
 		}
 
-		if (FS_Addon_IsListed(fs_automounted[i]))
-		{	//promoted to a permanent mount while we were not looking; it is not ours now.
-			Con_DPrintf("fs_automount: \"%s\" is in " FS_ADDONS_FILE " now, leaving it mounted\n", fs_automounted[i]);
+		if (!Q_strcasecmp(fs_automounted[i], fs_knife_assets_path) || FS_Addon_IsListed(fs_automounted[i]))
+		{	//Requested viewmodel assets or a listed pack belong to the session now.
+			Con_DPrintf("fs_automount: \"%s\" is retained by this session, leaving it mounted\n", fs_automounted[i]);
 			memmove(fs_automounted[i], fs_automounted[i+1], (fs_numautomounted-i-1)*sizeof(fs_automounted[0]));
 			fs_numautomounted--;
 			continue;
@@ -11584,6 +11589,45 @@ static void FS_Load_f(void)
 	Con_Printf("fs_load: \"%s\" mounted (low priority) and saved; auto-remounts next launch\n", arg);
 }
 
+#ifndef SERVERONLY
+// ONE installed asset pack, add-only/private. No caller path, save-list write,
+// exec, discovery dump or searchpath rebuild; generic fs commands stay guarded.
+static void FS_KnifeMount_f(void)
+{
+	static const char spec[] = "steam:Counter-Strike Global Offensive/csgo";
+	char path[MAX_OSPATH];
+	qboolean mounted;
+	double now;
+
+	if (Cmd_Argc() != 1)
+	{
+		Con_Printf("fs_knife_mount: takes no arguments\n");
+		return;
+	}
+	now = Sys_DoubleTime();
+	if (Cmd_IsInsecure() && now < fs_knife_assets_retry)
+		return;
+	fs_knife_assets_retry = now + 30;
+	if (!FS_Addon_ResolveEx(spec, path, sizeof(path), true))
+	{
+		Con_Printf("fs_knife_mount: installed CS:GO Legacy content not found\n");
+		return;
+	}
+	if (fs_thread_mutex && !Sys_LockMutex(fs_thread_mutex))
+		return;
+	mounted = FS_Addon_Mount(spec, ~0u);
+	if (mounted)
+	{
+		Q_strncpyz(fs_knife_assets_path, path, sizeof(fs_knife_assets_path));
+		fs_knife_assets_retry = now + 1;
+	}
+	if (fs_thread_mutex)
+		Sys_UnlockMutex(fs_thread_mutex);
+	if (mounted)
+		Con_Printf("fs_knife_mount: Legacy assets ready (session only, low priority)\n");
+}
+#endif
+
 static void FS_Unload_f(void)
 {
 	const char *arg;
@@ -11851,6 +11895,9 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommand("fs_showmanifest", FS_ShowManifest_f);
 	Cmd_AddCommand ("fs_flush", COM_RefreshFSCache_f);
 	Cmd_AddCommandD("fs_load",    FS_Load_f,    "nettest: mount an external game (steam:Game/dir, an absolute path, or a relative dir) at LOW priority for its assets/maps; saved + auto-remounted next launch.");
+#ifndef SERVERONLY
+	Cmd_AddCommandD("fs_knife_mount", FS_KnifeMount_f, "Request the one installed CS:GO Legacy pack for local viewmodels this session. No paths/arguments; no mount-list write.");
+#endif
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
 #ifdef FTESURF_STEAMLIBS

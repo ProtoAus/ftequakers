@@ -17,7 +17,13 @@ static qboolean HL2_WeaponPath(const char *name, char *normalized, size_t capaci
 	Q_strlcpy(normalized, name, capacity);
 	for (i = 0; normalized[i]; i++) if (normalized[i] == '\\') normalized[i] = '/';
 	length = strlen(normalized);
-	return length >= 27 && !strncmp(normalized, "models/weapons/v_knife_", 23) &&
+	return length >= 4 &&
+		(!strncmp(normalized, "models/weapons/v_knife_", 23) ||
+		 !strcmp(normalized, "models/weapons/v_knife.ani") ||
+		 !strcmp(normalized, "models/weapons/v_ct_knife_anim.mdl") ||
+		 !strcmp(normalized, "models/weapons/v_ct_knife_anim.ani") ||
+		 !strcmp(normalized, "models/weapons/v_t_knife_anim.mdl") ||
+		 !strcmp(normalized, "models/weapons/v_t_knife_anim.ani")) &&
 		!strstr(normalized, "..") && !strchr(normalized, ':') && !strcmp(normalized+length-4, suffix);
 }
 
@@ -180,21 +186,31 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 	const hl2mdlanim_t *anim;
 	const char *path, *name, *failure = "include path";
 	qbyte *data = NULL, *ani = NULL;
-	size_t size, anisize = 0, i, j, frame, totalposes = 0;
+	size_t size, anisize = 0, i, j, frame, totalposes = 0, count = 0;
 	unsigned int nameofs;
 	int map[256];
 	float *pose = NULL;
 	galiasanimation_t *animations;
 	char normalized[MAX_QPATH];
 	qboolean loaded = false;
+	qboolean inlinepose = (!strcmp(ctx->mod->name, "models/weapons/v_knife.mdl") ||
+		!strcmp(ctx->mod->name, "models/weapons/v_knife_gg.mdl"));
 
-	if (ctx->header->version != 49 || !ctx->header->num_bones || ctx->num_animations || !ctx->header->_336 ||
-		strncmp(ctx->mod->name, "models/weapons/v_knife_", 23)) return;
-	if (ctx->header->_336 != 1 || !HL2_EventSpan(parentsize, ctx->header->_340, 1, 8)) goto done;
-	memcpy(&nameofs, parent+ctx->header->_340+4, sizeof(nameofs));
-	path = HL2_BoundedName(parent, parentsize, ctx->header->_340, nameofs);
-	if (!HL2_WeaponPath(path, normalized, sizeof(normalized), ".mdl")) goto done;
-	data = HL2_WeaponFile(normalized, 16*1024*1024, &size);
+	if (ctx->header->version != 49 || !ctx->header->num_bones || ctx->num_animations) return;
+	if (inlinepose)
+	{
+		data = (qbyte*)parent;
+		size = parentsize;
+	}
+	else
+	{
+		if (!ctx->header->_336 || strncmp(ctx->mod->name, "models/weapons/v_knife_", 23)) return;
+		if (ctx->header->_336 != 1 || !HL2_EventSpan(parentsize, ctx->header->_340, 1, 8)) goto done;
+		memcpy(&nameofs, parent+ctx->header->_340+4, sizeof(nameofs));
+		path = HL2_BoundedName(parent, parentsize, ctx->header->_340, nameofs);
+		if (!HL2_WeaponPath(path, normalized, sizeof(normalized), ".mdl")) goto done;
+		data = HL2_WeaponFile(normalized, 16*1024*1024, &size);
+	}
 	failure = "included header";
 	if (!data || size < sizeof(*h)) goto done;
 	h = (hl2mdlheader_t*)data;
@@ -238,19 +254,27 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 	anim = (const hl2mdlanim_t*)(data+h->ofs_anims);
 	for (i = 0; i < h->num_anims; i++)
 	{
+		if (!HL2_BoundedName(data, size, h->ofs_anims+i*sizeof(*anim), anim[i].name_ofs)) goto done;
+		// Classic/Talon include an additive left-hand null clip, not an action.
+		// Never expose additive transforms as an absolute named-bone pose.
+		if (anim[i].loop & 4) continue;
 		if (!anim[i].numframes || anim[i].numframes > 4096 || !(anim[i].fps > 0 && anim[i].fps <= 240) ||
-			!(anim[i].loop & 64) || (anim[i].loop & ~67u) ||
-			!HL2_BoundedName(data, size, h->ofs_anims+i*sizeof(*anim), anim[i].name_ofs)) goto done;
+			!(anim[i].loop & 64) || (anim[i].loop & ~67u)) goto done;
+		count++;
 		totalposes += anim[i].numframes;
 		if (totalposes > (64*1024*1024)/(48*ctx->header->num_bones)) goto done;
 	}
+	if (!count) goto done;
 	pose = plugfuncs->Malloc(h->num_bones*48);
-	animations = plugfuncs->GMalloc(&ctx->mod->memgroup, sizeof(*animations)*h->num_anims);
-	memset(animations, 0, sizeof(*animations)*h->num_anims);
+	animations = plugfuncs->GMalloc(&ctx->mod->memgroup, sizeof(*animations)*count);
+	memset(animations, 0, sizeof(*animations)*count);
+	count = 0;
 	failure = "frame stream";
 	for (i = 0; i < h->num_anims; i++)
 	{
-		galiasanimation_t *a = &animations[i];
+		galiasanimation_t *a;
+		if (anim[i].loop & 4) continue;
+		a = &animations[count++];
 		a->skeltype = SKEL_RELATIVE;
 		a->numposes = anim[i].numframes;
 		a->loop = (anim[i].loop & 1) != 0;
@@ -267,14 +291,15 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 			for (j = 0; j < ctx->header->num_bones*12; j++) if (!isfinite(out[j])) goto done;
 		}
 	}
-	if (!Mod_ParseModelEvents(ctx->mod, animations, h->num_anims))
-		Mod_HL2_SequenceEvents(ctx->mod, h, size, animations, h->num_anims);
+	if (!Mod_ParseModelEvents(ctx->mod, animations, count))
+		Mod_HL2_SequenceEvents(ctx->mod, h, size, animations, count);
 	ctx->weapon_animations = true;
 	ctx->ofs_animations = animations;
-	ctx->num_animations = h->num_anims;
+	ctx->num_animations = count;
 	loaded = true;
-	Con_DPrintf("%s: imported %u named-bone animations\n", ctx->mod->name, h->num_anims);
+	Con_DPrintf("%s: imported %u named-bone animations\n", ctx->mod->name, (unsigned int)count);
 done:
-	if (!loaded) Con_Printf("%s: unsupported or invalid included weapon animations (%s)\n", ctx->mod->name, failure);
-	plugfuncs->Free(pose); plugfuncs->Free(ani); plugfuncs->Free(data);
+	if (!loaded) Con_Printf("%s: unsupported or invalid knife animations (%s)\n", ctx->mod->name, failure);
+	plugfuncs->Free(pose); plugfuncs->Free(ani);
+	if (data != parent) plugfuncs->Free(data);
 }

@@ -1385,7 +1385,10 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			memcpy(ctx.bones[i].inverse, in[i].inverse, sizeof(float)*12);	//use the provided value, but should match modfuncs->M3x4_Invert(ctx.basepose+12*i, ctx.bones[i].inverse);
 		}
 
-		if (ctx.header->num_anims)
+		Mod_HL2_IncludeWeaponAnimations(&ctx, fsize);
+		if (!strcmp(mod->name, "models/weapons/v_knife.mdl") || !strcmp(mod->name, "models/weapons/v_knife_gg.mdl"))
+			if (!ctx.weapon_animations) return false;
+		if (ctx.header->num_anims && !ctx.weapon_animations)
 		{
 			galiasanimation_t *a;
 			const hl2mdlanim_t *in = (const hl2mdlanim_t*)((const qbyte*)ctx.header + ctx.header->ofs_anims);
@@ -1412,7 +1415,6 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			}
 			ctx.num_animations = a-ctx.ofs_animations;
 		}
-		Mod_HL2_IncludeWeaponAnimations(&ctx, fsize);
 	}
 
 

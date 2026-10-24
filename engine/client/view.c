@@ -1368,8 +1368,30 @@ restart:
 		break;
 	}
 }
+static cvar_t v_csgo_viewmodel_fov = CVARFD("r_viewmodel_fov_csgo", "70", CVAR_ARCHIVE,
+	"Viewmodel-only FOV for mounted Legacy knives/arms; 0 inherits r_viewmodel_fov. Does not change aim/world FOV.");
+static qboolean V_HasLegacyViewmodel(void)
+{
+	int i;
+	const char *name;
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		if (!(cl_visedicts[i].flags & RF_WEAPONMODEL) || !cl_visedicts[i].model)
+			continue;
+		name = cl_visedicts[i].model->name;
+		if ((!Q_strncasecmp(name, "models/weapons/v_knife_", 23) &&
+			 Q_strcasecmp(name, "models/weapons/v_knife_t.mdl")) ||
+			!Q_strcasecmp(name, "models/weapons/v_knife.mdl") ||
+			!Q_strncasecmp(name, "models/weapons/v_models/arms/", 28) ||
+			!Q_strcasecmp(name, "models/weapons/ct_arms.mdl") ||
+			!Q_strcasecmp(name, "models/weapons/t_arms.mdl"))
+			return true;
+	}
+	return false;
+}
 void V_ApplyAFov(playerview_t *pv)
 {
+	qboolean legacy = V_HasLegacyViewmodel() && isfinite(v_csgo_viewmodel_fov.value) && v_csgo_viewmodel_fov.value > 0;
 	//explicit fov overrides aproximate fov.
 	//aproximate fov is our regular fov value. explicit is settable by gamecode for weird aspect ratios
 	if (!r_refdef.fov_x || !r_refdef.fov_y)
@@ -1391,9 +1413,9 @@ void V_ApplyAFov(playerview_t *pv)
 		V_CalcAFov(afov, &r_refdef.fov_x, &r_refdef.fov_y, (r_refdef.vrect.width*r_refdef.pxrect.width)/vid.fbvwidth, (r_refdef.vrect.height*r_refdef.pxrect.height)/vid.fbvheight);
 	}
 
-	if (!r_refdef.fovv_x || !r_refdef.fovv_y)
+	if (legacy || !r_refdef.fovv_x || !r_refdef.fovv_y)
 	{
-		float afov = scr_fov_viewmodel.value;
+		float afov = legacy ? v_csgo_viewmodel_fov.value : scr_fov_viewmodel.value;
 		if (afov)
 			V_CalcAFov(afov, &r_refdef.fovv_x, &r_refdef.fovv_y, (r_refdef.vrect.width*r_refdef.pxrect.width)/vid.fbvwidth, (r_refdef.vrect.height*r_refdef.pxrect.height)/vid.fbvheight);
 		else
@@ -3709,6 +3731,7 @@ void V_Init (void)
 	Cvar_Register (&cl_bobmodel_up, VIEWVARS);
 	Cvar_Register (&cl_bobmodel_speed, VIEWVARS);
 	Cvar_Register (&v_viewmodel_quake, VIEWVARS);
+	Cvar_Register (&v_csgo_viewmodel_fov, VIEWVARS);
 
 	Cvar_Register (&v_kicktime, VIEWVARS);
 	Cvar_Register (&v_kickroll, VIEWVARS);

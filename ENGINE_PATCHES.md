@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 962 — complete installed Legacy viewmodel workshop
+
+Problem: the stopped workshop follow-up exposed only two knives/two arm sets;
+other installed knives need different action clips, some arm materials are
+inventory templates, and Legacy presentation shared the generic viewmodel FOV.
+The first broad scan also used a sound-only existence helper for model paths.
+
+Change: scan installed metadata into bounded knife/hands/sleeves tables; keep
+path-based choices, validate actual model/idle availability and preserve selection
+on failure. Import supported inline/included named-bone action poses, excluding
+unused additive clips. Merge selectable hands and sleeve/watch poses, hide old
+embedded hands, use matte bare skin and clearly labelled neutral template-glove
+previews. Page and fit shared-theme selectors; retain title dragging and local
+finish controls. Add a fixed installed-Legacy, session-only mount action and
+Legacy-only default70 viewmodel FOV. General filesystem command guards, saved
+mounts, world FOV, server movement/evidence and player settings are unchanged.
+No licensed assets, inventory access, download, Build bump or release change.
+
+Verified: isolated three-VM builds have zero QC warnings. Acting socket-client
+controls select all24installed Legacy knife roots,18hand/arm sets and52sleeve/
+watch pieces; screenshots exposed inline/template issues and corrective checks
+are retained rather than treating initial failures as passes. Native mount
+argument/cooldown/permission/retained-versus-stale controls and generic-guard
+identity pass; saved mount bytes match. Actual full-chain clicks page to Talon,
+select it, and move the title500pixels without changing aim or the covered wear
+slider. Final clean-source/deployment receipts and human appearance/feel checks
+are recorded separately; no Pi native/progs transaction is implied here.
+
 ## Patch 961 — game-running Friends presence from the main menu
 
 Problem: a linked player was visible to mutual friends only while admitted on a
