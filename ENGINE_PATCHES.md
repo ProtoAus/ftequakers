@@ -32,6 +32,37 @@ Historical review artifacts used unpublished labelP959; this sole product number
 is961 after preserving canonical peer959/960 claims. P954's separate frozen Pi
 transaction is not part of this change and has not been retried.
 
+## Patch 958 — structured faults for invalid recording numbers
+
+Problem: some malformed or unrepresentable numeric file values could escape the
+recording/sidecar validators as Python exceptions or evade a numeric check. An
+exception could stop the CLI batch or leave a consumer with only an unavailable
+check rather than the existing format-fault result.
+
+Change: validate file numbers through one finite float32-representability helper,
+without rounding ordinary parsed values or rejecting finite printed maxima that
+round back into range. Preserve the same partial report, existing row-local
+sidecar checks and cohort-specific board validators. Only the dedicated numeric
+input exception is converted; unrelated internal/I/O failures still propagate.
+CLI diagnostics retain failure status and continue later files; sensitivity
+controls require a clean recording/sidecar baseline. No collector, format,
+durable metadata, native pin/tag, threshold, badge/ranking/review, historical
+recheck, Build or release change.
+
+Verified: both qualified source cohorts reproduce the original malformed-input
+failure, then pass78numeric controls with structured faults and no escapes or
+silent acceptance, plus16acting boundary/metadata/CLI controls each. Existing
+reader suites pass924checks on the public baseline and864on the retained deployed
+cohort; receipt consumer268checks pass against each actual reader namespace.
+Existing NoDeploy build produces three VMs with zero warnings. Selected runs
+corpus430is byte-stable:
+both control/subject comparisons retain294faulted files, increase0. The original
+exact deployed-cohort control is reused only after checking the entire selected
+input set and hashes against its immutable proof. Independent parser/authority
+inspection reports no findings; it does not attest execution or deployment.
+These are synthetic parser/consumer controls, not hardware/human calibration or
+live-cron acceptance. Implementation/build verified; deployments pending.
+
 ## Patch 957 — mounted Legacy knives and local finish workshop
 
 Problem: Butterfly/M9 v49 models put animations in named-bone include groups;
