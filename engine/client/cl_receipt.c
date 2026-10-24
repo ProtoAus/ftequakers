@@ -562,8 +562,8 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	return true;
 }
 
-/* Read-only menu proofs have a separate domain, never account/link consent,
-   receipts or lobby capabilities. The builtin exists only in the MENU VM. */
+/* Friends/menu-presence proofs have a separate domain, never account/link
+   consent, receipts or lobby capabilities. MENU VM only. */
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen)
 {
 	char msg[256], pubhex[65], sighex[129];
@@ -578,7 +578,7 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	for (p = nonce; *p; p++)
 		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
 			return false;
-	if (!strcmp(op, "list"))
+	if (!strcmp(op, "list") || !strcmp(op, "presence"))
 	{
 		if (strcmp(who, "-")) return false;
 	}
