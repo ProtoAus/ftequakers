@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 957 — mounted Legacy knives and local finish workshop
+
+Problem: Butterfly/M9 v49 models put animations in named-bone include groups;
+loading only their root model yields no usable clips. Their compressed frames
+also differ from the older codec. A prototype appeared to decode correctly but
+stretched hands because passing a [256][12] frame buffer through void* advanced
+by the entire array rather than by one bone matrix. CS:GO separates its arms
+from the held-weapon model, and there was no local finish editor.
+
+Change: import only the two exact knife families' bounded direct groups, map
+bones by name and bake supported in-file clips to ordinary matrix poses. Decode
+v49's quaternion64 and fixed48 lanes, rejecting unsupported/external streams;
+use an explicitly typed float[12] matrix pointer. Preserve root/included events,
+clip bounds, finite checks, group/frame limits and a 64MiB pose budget. Importer
+skips zero-bone models. The QC side loops actual clips, resolves mounted sound
+scripts, merges mounted CT arms by matching absolute bone transforms and adds
+inspect plus a small local finish workshop. Original/Fade/Web/Marble, seed,
+scale, rotation, fade amount and wear are cosmetic previews, not inventory or
+exact CS paint kits. Mounted licensed assets are never redistributed.
+
+Verified: synthetic native frame/quaternion controls and multi-frame storage
+control PASS from the delivery tree; they distinguish the previous opaque
+stride, overlap, non-finite/bounds and legacy-codec errors. Actual isolated
+socket actors showed complete stable M9/Butterfly idle/draw/inspect poses,
+16/13 imported clips and authored sound callbacks; classic CSS remains a
+control. Native screenshots inspected for both families, changing Fade amount,
+Web/Marble, seed/scale/rotation, wear and the actual workshop panel; close returns
+cursor claims to zero. A cold-unmounted actor correctly REFUSED CSQC fs_load:
+keep that trust boundary, require an explicit operator console mount and retain
+the current selection when content is absent. No automatic privileged mount.
+Human appearance/audio/control feel remains pending, not inferred from these
+controls. No mover, aim, player-damage policy, evidence/schema, Build or release
+change. Exact source/build/deployment status: QC tools/p957-legacy-knives.md.
+
 ## Patch 956 — retain each future verdict's recording identity
 
 Problem: verifier attempts already checked the consumed recording's identity,

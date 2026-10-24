@@ -580,7 +580,7 @@ endif
 # it exists and still relink nothing when it is rewritten.  Which means it lands
 # in $^, and a .h on the command line makes gcc build a precompiled header
 # instead of compiling, so the recipe takes $(filter %.c,$^) instead.
-$(PLUG_PREFIX)hl2$(PLUG_NATIVE_EXT): hl2/fs_vpk.c hl2/fs_vpk_vtmb.c hl2/fs_gma.c hl2/img_tth.c hl2/img_vtf.c hl2/img_ccraw.c hl2/mod_hl2.c hl2/mod_phy.c hl2/mat_vmt.c hl2/mod_vbsp.c hl2/LzmaDec.c hl2/hl2.c plugin.c hl2/mat_vmt_progs.h
+$(PLUG_PREFIX)hl2$(PLUG_NATIVE_EXT): hl2/fs_vpk.c hl2/fs_vpk_vtmb.c hl2/fs_gma.c hl2/img_tth.c hl2/img_vtf.c hl2/img_ccraw.c hl2/mod_hl2.c hl2/mod_phy.c hl2/mat_vmt.c hl2/mod_vbsp.c hl2/LzmaDec.c hl2/hl2.c plugin.c hl2/mat_vmt_progs.h hl2/mod_hl2_weapon.h
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -DMULTITHREAD $(HL2_ZSTD_CFLAGS) -o $@ -shared $(PLUG_CFLAGS) $(filter %.c,$^) $(PLUG_DEFFILE) $(PLUG_LDFLAGS_ZLIB) $(HL2_ZSTD_LDFLAGS) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,hl2,$@,HL2 Formats,Provides support for various formats used by Valve's Source engine.)
 NATIVE_PLUGINS+=hl2
