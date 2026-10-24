@@ -30,8 +30,22 @@ not new, and are now resolved by the correct existing tool, not source changes.
 Reader924/0. Fresh actual corpus472+162retains296faults under byte-identical reader,
 all634hashes unchanged during sweep; protected access failure remains unwaived.
 Initial independent reviews OK with notes; concrete EOF note reproduced/fixed.
-Both narrow follow-up reviews OK with notes, no findings. No deployment of this
-patch claimed.
+Both narrow follow-up reviews OK with notes, no findings.
+
+Delivery 24 Oct 2026: source d994d0a5 installed server-only in BOTH Windows installs
+17:36:32Z, all4DAT/LNO destinations/.prev verified,1329protected component/config
+hashes unchanged; no owner process or existing-session reload. Existing unknown
+successor was first refused BEFORE mutation, then attributed to the peer's
+published0c129e18/584b21bc27-target receipt; old compatible source was never used.
+Pi ordinary build.ps1 -Pi with the matching compiler deployed the exact same QW
+abef4e43/clientef252640 pair; the client bytes did not change. At18:00:14Z all12new
+PID/start epochs had positive player+spectator status and correct per-process
+namespace progs/native hashes; native/plugin unchanged,33767existing protected
+non-log/non-progs metadata rows unchanged (not a symlink-target/content claim).
+Current .prev preimages and older generations retained; no staging residue or
+held sweep lock. No backend/schema/admission/native change or new capture.
+Current-PID journal returned0records, so no log-based error-free-startup claim.
+Real finish/reset/retry and owner observation remain pending in lextest.md.
 
 ## Patch 971 - Refuse retry after recording preparation fails
 
@@ -62,7 +76,10 @@ unchanged. This differs from the old 430/126 domain; it is not a claim that thos
 old files still all match. Protected default/save-prefix access failure remains
 unwaived. Two fresh independent fix reviews: OK and OK with notes, no introduced
 findings. Notes retain synthetic-fixture limits and pending ordinary owner retry.
-No deployment claimed.
+Delivery: included in the later P972 source d994d0a5 / QWabef4e43 delivery to BOTH
+Windows installs and all12Pi lobbies, with unchanged client/native/config/data
+boundaries and preserved history detailed above. P971 reached Pi earlier through
+the peer's verified9b353d16 handoff; that did not make it a Windows deployment.
 
 ## Patch 970 — persist viewmodel setups and mirror the followed player
 
