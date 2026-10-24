@@ -47,8 +47,13 @@ warnings. Sprint IO only is redirected. Standard production3VMs/0warnings;
 parent direct review checks actual cashout source, fallback/hold/vertical polarity,
 fresh-hop cancellation and same four-latch grant; no independent/full-rule audit
 claimed. Not actual push-volume/engine cashout, socket input, cold/signing/posting,
-performance or human acceptance. Publication/compatible delivery pending. Future
-commitments and P455 round11 bank remain OPEN; this is the documented bounded
+performance or human acceptance. Published QC100db5f7/engine32c7d106. Windows
+composition53c54f97 qualifies3VMs/0warnings, exact timer; server DAT/LNO installed
+both installs24Oct2026at12:28:27Z,4destinations/.prev/history and11fresh protected
+hashes pass, no process signalled/live reload claimed. Pi composition/promotion
+pending directory recovery: exact P964 pair remains, no .new/phase/restart or
+backend transaction. Future commitments and P455 round11 bank remain OPEN;
+this is the documented bounded
 alternative, not the abandoned dwell's completeness claim. See FTESurf
 tools/p968-finish-visible-body.md.
 
