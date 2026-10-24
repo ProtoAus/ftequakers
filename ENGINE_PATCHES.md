@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 964 — restore stage tracking after save/retry
+
+Problem: a fresh player entity clears its previous stage cursor. Save/retry
+restored the running leg but tested that cleared cursor before reopening its
+stage slice, so a successful retry could continue without stage tracking.
+
+Change: reopen only a restored running leg within the restored segment count,
+after the existing retry/resume marker. Opening and stage-only legs are already
+running, so clear their second arm flag as ordinary run start does; later
+full-track stages retain their packet-resolved arming. Keep the existing
+dirty/stitch/cheat restoration. No recording format, physics, collection,
+ranking policy, native commit/tag pin, Build number or release change.
+
+Verified: existing NoDeploy/Jobs8 entrypoint compiles all three VMs with zero
+warnings. Actual native production-QC control/subject exercises the save parser,
+restore and stage-open code: the old predicate leaves the fresh cursor unset;
+the corrected candidate opens three restored contexts after the acting retry
+append. Independent review found false arming on opening/stage-only legs;
+native before/after controls reproduce that blocker and preserve later-stage
+arming while correcting both cases. Reader suite: 924 checks/0 failed; normal
+runs corpus: 430 files/294 existing faults, matching the documented baseline,
+with unchanged reader source. Recording IO remains acting test stubs, not full
+cold-replay, signed-stage posting, network or human acceptance. The broader
+save-prefix sweep's protected-fixture read failure is retained, not called
+clean. Both corrected-source reviews report no remaining blockers; the parent
+byte-hash acceptance matches the frozen source. Deployment remains pending. See FTESurf
+tools/p964-save-stage.md for the bounded source/evidence record.
+
 ## Patch 963 — main-menu lobby chat and friend-only messages
 
 Problem: the disconnected main menu had Friends/presence, but no shared lobby
