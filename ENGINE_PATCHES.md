@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 967 — isolate the installed Legacy Original-knife texture
+
+Problem: CSS and Legacy use the same knife_t diffuse path with incompatible
+texture/UV layouts. A low-priority Legacy mount therefore left the Original and
+default-T shapes drawing CSS's texture; flipping UVs would hide the wrong cause.
+Native fs_hash confirms the normal lookup reads CSS (87,528 bytes), while the
+installed Legacy texture is 1,398,360 bytes with different content.
+
+Change: one client-only read-only virtual texture name resolves only within the
+existing fixed, private Legacy mount family, with normal path-boundary/security/
+pure checks and no fallback. Ordinary lookup/mount priority remain untouched.
+Engine-maintained readonly readiness resets with the FS session and is set only
+when the fixed helper can locate that texture. Opted-in Original/default-T draw
+waits for that helper and uses its own diffuse under a lit preview shader, for
+Original/Fade/Web/Marble. Other roots keep their existing material names. Older
+clients warn instead of claiming support. No licensed files, arbitrary namespace,
+caller paths, save-list/config writes, server protocol or evidence changes.
+
+Verified: existing build entrypoint compiles three VMs/zero warnings and native
+with zero new warning classes against the clean-source baseline's 74 existing
+warnings. Actual socket controls: readiness 0 cannot be set from console; extra
+helper arguments refuse; unmounted alias Not found. After mount readiness 1,
+the alias SHA matches the installed Legacy bytes, while normal SHA remains CSS. Original and
+default-T inspect render without the incompatible stripes; CSS/Talon and all
+three painted-style controls act, images inspected, no QC/shader errors. All
+owned actors stopped. This is Windows OpenGL agent inspection, not owner/manual
+acceptance or a public release. Final clean artifact/dual promotion are separate;
+account/spectator requests remain in scope. See tools/p967-original-texture.md.
+
 ## Patch 968 — check visible-body finish forgiveness independently
 
 Problem: production finish forgiveness read the cleared engine carrier window,

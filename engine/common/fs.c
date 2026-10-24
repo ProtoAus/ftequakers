@@ -240,6 +240,11 @@ float fs_accessed_time;	//timestamp of read (does not include flocates, which sh
 //SPECIFIC game's copy of a same-named map loads (CS:S cs_assault over the higher-priority CS1.6 one) without
 //reordering/rebuilding the searchpaths.  Empty => today's plain highest-priority behaviour.
 char fs_preferhint[MAX_OSPATH];
+static char fs_knife_assets_path[MAX_OSPATH];
+#ifndef SERVERONLY
+static const char fs_knife_texture_alias[] = "materials/ftesurf/knife_legacy_t.vtf";
+static cvar_t fs_knife_texture = CVARFD("fs_knife_texture", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Engine-maintained readiness of the private installed Legacy Original-knife texture. No caller path or downloaded asset.");
+#endif
 
 static cvar_t fs_hidesyspaths		= CVARFD	("fs_hidesyspaths", IFWEB("0","1"), 0, "0: Show system paths in console prints that might appear in screenshots or video capture.\n1: Replace the start of filenames in console prints with generic prefixes that cannot leak private info like your operating system's user name.");
 static cvar_t com_fs_cache			= CVARFD	("fs_cache", IFMINIMAL("2","1"), CVAR_ARCHIVE, "0: Do individual lookups.\n1: Scan all files for accelerated lookups. This provides a performance boost on windows and avoids case sensitivity issues on linux.\n2: like 1, but don't bother checking for external changes (avoiding the cost of rebuild the cache).");
@@ -2406,8 +2411,10 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	char cleanpath[MAX_OSPATH];
 	flocation_t allownoloc;
 
-	void *pf;
+	void *pf = NULL;
 	unsigned int found = FF_NOTFOUND;
+	const char *preferhint = fs_preferhint;
+	qboolean knife_texture = false;
 
 	if (!loc)
 		loc = &allownoloc;
@@ -2438,7 +2445,19 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 		goto fail;
 	}
 
-	if (com_fs_cache.ival && !com_fschanged && !(lflags & FSLF_IGNOREPURE) && !*fs_preferhint)
+#ifndef SERVERONLY
+	// One fixed read-only alias: never let CSS's same-named diffuse win this lookup.
+	if (!strcmp(filename, fs_knife_texture_alias))
+	{
+		if (!*fs_knife_assets_path)
+			goto fail;
+		filename = "materials/models/weapons/v_models/knife_t/knife_t.vtf";
+		preferhint = fs_knife_assets_path;
+		knife_texture = true;
+	}
+#endif
+
+	if (com_fs_cache.ival && !com_fschanged && !(lflags & FSLF_IGNOREPURE) && !*preferhint)
 	{	//nettest (P26 Part 2): a prefer-hint bypasses the cache fast-path -- the hash keeps only the highest-
 		//priority hit per filename, which is exactly the copy the hint wants to OVERRIDE, so fall through to
 		//the full search (pf = NULL) and let the preferred-searchpath pass below pick the hinted game's copy.
@@ -2454,7 +2473,7 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	else
 		pf = NULL;
 
-	if (*fs_preferhint && found == FF_NOTFOUND && ((lflags & FSLF_IGNOREPURE) || fs_puremode < 2))
+	if (*preferhint && found == FF_NOTFOUND && ((lflags & FSLF_IGNOREPURE) || fs_puremode < 2))
 	{	//nettest (P26 Part 2): load a SPECIFIC game's copy -- search ONLY searchpaths whose logicalpath
 		//contains the hint (the resolved game dir), so e.g. CS:S cs_assault wins over the CS1.6 one.  On a
 		//miss this leaves found==FF_NOTFOUND and the normal pure/main loops below run as the fallback.
@@ -2465,10 +2484,20 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 			{	//match the hint at a PATH BOUNDARY so a game dir can't match a longer one that starts with it
 				//(e.g. ".../Call of Duty" must NOT match ".../Call of Duty 2").  The hint is a full resolved
 				//dir, so it matches at the start and must be followed by a separator or end-of-string.
-				const char *m = Q_strcasestr(search->logicalpath, fs_preferhint);
-				if (!m)
-					continue;
-				m += strlen(fs_preferhint);
+				const char *m;
+				if (knife_texture)
+				{
+					m = search->logicalpath;
+					if (Q_strncasecmp(m, preferhint, strlen(preferhint)))
+						continue;
+				}
+				else
+				{
+					m = Q_strcasestr(search->logicalpath, preferhint);
+					if (!m)
+						continue;
+				}
+				m += strlen(preferhint);
 				if (*m && *m != '/' && *m != '\\')
 					continue;
 			}
@@ -2487,6 +2516,10 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 			}
 		}
 	}
+
+	// A missing/private-pure-refused Legacy texture must never fall back to CSS.
+	if (knife_texture)
+		goto fail;
 
 	if (com_purepaths && found == FF_NOTFOUND && !(lflags & FSLF_IGNOREPURE))
 	{
@@ -10175,7 +10208,6 @@ static int fs_numautomounted;
 static char fs_automountwant[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P184): what the map now loading asked for
 static int fs_numautomountwant;
 // One fixed client asset request may retain its pack for this FS session.
-static char fs_knife_assets_path[MAX_OSPATH];
 static double fs_knife_assets_retry;
 static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
 {
@@ -10183,6 +10215,9 @@ static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the 
 	fs_numautomountwant = 0;
 	fs_knife_assets_path[0] = 0;
 	fs_knife_assets_retry = 0;
+#ifndef SERVERONLY
+	Cvar_ForceSet(&fs_knife_texture, "0");
+#endif
 }
 static qboolean FS_Addon_IsMounted(const char *syspath)
 {
@@ -11619,6 +11654,7 @@ static void FS_KnifeMount_f(void)
 	if (mounted)
 	{
 		Q_strncpyz(fs_knife_assets_path, path, sizeof(fs_knife_assets_path));
+		Cvar_ForceSet(&fs_knife_texture, FS_FLocateFile(fs_knife_texture_alias, FSLF_IFFOUND, NULL) ? "1" : "0");
 		fs_knife_assets_retry = now + 1;
 	}
 	if (fs_thread_mutex)
@@ -11897,6 +11933,7 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("fs_load",    FS_Load_f,    "nettest: mount an external game (steam:Game/dir, an absolute path, or a relative dir) at LOW priority for its assets/maps; saved + auto-remounted next launch.");
 #ifndef SERVERONLY
 	Cmd_AddCommandD("fs_knife_mount", FS_KnifeMount_f, "Request the one installed CS:GO Legacy pack for local viewmodels this session. No paths/arguments; no mount-list write.");
+	Cvar_Register(&fs_knife_texture, "Filesystem");
 #endif
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
