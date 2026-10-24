@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 978 — Reload account settings without an implicit overwrite (QC, tests)
+
+Problem: after a same-account revision conflict, explicit Reload followed the
+ordinary rebind rule and kept unsaved local choices. Acknowledging them at the
+fresh revision could then autosave over the newer cloud setup.
+
+Change: only an accepted server generation carries explicit Reload intent. It
+restores cloud unless an edit happens after begin; late edits stay local. The
+server suppresses Reload-triggered autosave even for a differing older-client
+acknowledgement; explicit Save remains a deliberate fresh-revision CAS. Add
+true22-to23, repeat/interrupted-start/value-preservation tests; update the board
+fixture's independent head-schema expectation23 (all13 failures were stale22).
+No native code/pin/tag, movement/record format, Build or release change.
+
+Verified: all three QC VMs compile with zero warnings. Real dedicated socket +
+loopback account proof/API fixture pass10 acted checks: correct advertised CSQC,
+initial restore, dirty Reload read-only, post-begin edit protection, explicit
+Save writes, and differing older-client ACK does not autosave. The authority is
+synthetic, not real Steam acceptance. Social suite68 passes. An isolated copy of
+the effective ARM schema22 DB migrates/restarts at23 preserving all33 old
+persistent-table value digests and old object definitions; a changed account
+value is rejected. Live schema23 handoff, deployed bytes and owner acceptance
+are separate gates; see QC tools/p978-account-reload.md and lextest.md.
+
 ## Patch 976 — tiers.txt takes KSF tiers from the directory's map list (data, tool)
 
 Problem: the map info box read "KSF tier ?" on maps KSF rates. maptiers.py took
