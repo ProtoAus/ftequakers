@@ -24,7 +24,8 @@ Not full state-load, engine physics, signing/posting, performance or owner
 acceptance. Standard three-VM build/zero warnings; reader suite924 checks/zero
 failed. Runs430 plus126 paired views retain294 existing rec/view faults and all
 556 original hashes; protected default/save-prefix read failure unwaived.
-Independent source review and deployment pending. No byte seal, durable/atomic state-prefix pair, later same-count mutation or
+Two fresh independent recorder reviews found no introduced issues (OK; OK with
+notes). Deployment pending. No byte seal, durable/atomic state-prefix pair, later same-count mutation or
 plaintext-save authentication claim. See tools/p969-save-prefix.md.
 
 ## Patch 967 — isolate the installed Legacy Original-knife texture
