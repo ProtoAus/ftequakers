@@ -562,8 +562,8 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	return true;
 }
 
-/* Friends/menu-presence proofs have a separate domain, never account/link
-   consent, receipts or lobby capabilities. MENU VM only. */
+/* Fixed Friends/menu operations: never account/link consent, receipts or lobby
+   capabilities. Message targets include the exact text SHA256. MENU VM only. */
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen)
 {
 	char msg[256], pubhex[65], sighex[129];
@@ -578,7 +578,7 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	for (p = nonce; *p; p++)
 		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
 			return false;
-	if (!strcmp(op, "list") || !strcmp(op, "presence"))
+	if (!strcmp(op, "list") || !strcmp(op, "presence") || !strcmp(op, "chat"))
 	{
 		if (strcmp(who, "-")) return false;
 	}
@@ -586,6 +586,22 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	{
 		if (strlen(who) != 8) return false;
 		for (p = who; *p; p++)
+			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+				return false;
+	}
+	else if (!strcmp(op, "message"))
+	{
+		const char *colon = strchr(who, ':');
+		if (!colon || strlen(colon + 1) != 64)
+			return false;
+		if (!(colon == who + 1 && who[0] == '-'))
+		{
+			if (colon != who + 8) return false;
+			for (p = who; p < colon; p++)
+				if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+					return false;
+		}
+		for (p = colon + 1; *p; p++)
 			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
 				return false;
 	}
