@@ -1122,7 +1122,6 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 		char *file = NULL;
 		char *url = NULL;
 		char *category = NULL;
-		qboolean cachevalid = true;
 		unsigned int flags = source->parseflags;
 
 		if (source->version > 2)	//v3 has an 'installed' token to say its enabled. v2 has a 'stale' token to say its old, which was weird and to try to avoid conflicts.
@@ -1362,10 +1361,8 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 
 			if (!file && p->extract != EXTRACT_ZIP)
 			{
-				if (FS_PathURLCache(url, pathname, sizeof(pathname)))
-					PM_AddDep(p, DEP_CACHEFILE, pathname+10);
-				else
-					cachevalid = false;
+				FS_PathURLCache(url, pathname, sizeof(pathname));
+				PM_AddDep(p, DEP_CACHEFILE, pathname+10);
 			}
 		}
 		else
@@ -1390,28 +1387,17 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 
 				if (!file && p->extract != EXTRACT_ZIP && source->nummirrors)
 				{
-					if (FS_PathURLCache(p->mirror[0], pathname, sizeof(pathname)))
-						PM_AddDep(p, DEP_CACHEFILE, pathname+10);
-					else
-						cachevalid = false;
+					FS_PathURLCache(p->mirror[0], pathname, sizeof(pathname));
+					PM_AddDep(p, DEP_CACHEFILE, pathname+10);
 				}
 			}
 		}
 
-		if (cachevalid)
-			PM_ValidateAuthenticity(p, source->validated);
+		PM_ValidateAuthenticity(p, source->validated);
 
 		Z_Free(file);
 		Z_Free(url);
 		Z_Free(category);
-		if (!cachevalid)
-		{
-			Con_Printf(CON_ERROR"%s: Invalid package cache name\n", p->name);
-			PM_FreePackage(p);
-			if (outpackage)
-				*outpackage = NULL;
-			return tokstart;
-		}
 	}
 	if (p->arch)
 	{

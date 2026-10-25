@@ -5209,14 +5209,11 @@ qboolean FS_PathURLCache(const char *url, char *path, size_t pathsize)
 {
 	char tmp[MAX_QPATH];
 	char *o = tmp;
-	char *const e = tmp + sizeof(tmp) - 1;
 	const char *i = url;
 	strcpy(o, "downloads/");
 	o += strlen(o);
 	while(*i)
 	{
-		if (o >= e)
-			return false;
 		if (*i == ':' || *i == '?' || *i == '*' || *i == '&')
 		{
 			if (i[0] == ':' && i[1] == '/' && i[2] == '/')
@@ -12073,17 +12070,14 @@ static void FS_DBus_Poll(int iarg, void *vctx)
 	struct openfile_s *ctx = vctx;
 	DBusMessage *msg;
 	DBusMessageIter args, opts, dict, var, uris;
-	const char *msgpath;
-	qboolean connected;
 
-	connected = dbus_connection_read_write(ctx->conn, 0);
+	dbus_connection_read_write(ctx->conn, 0);	//see if there's anything new, with no timeout so we don't lock up
 	msg = dbus_connection_pop_message(ctx->conn);
 
 	if (msg)
 	{	//something came back!
-		msgpath = dbus_message_get_path(msg);
 		if (dbus_message_is_signal(msg, "org.freedesktop.portal.Request", "Response") &&
-			msgpath && !strcmp(msgpath, ctx->replypath))
+			!strcmp(dbus_message_get_path(msg), ctx->replypath))
 		{	//okay, this is the one we're interested in.
 			if (dbus_message_iter_init(msg, &args) && dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_UINT32)
 			{
@@ -12129,90 +12123,101 @@ static void FS_DBus_Poll(int iarg, void *vctx)
 				}
 			}
 			dbus_message_unref(msg);
-			goto done;
+
+			dbus_connection_close(ctx->conn);
+			Z_Free((char*)ctx->replypath);
+			return; //can stop requeing now
 		}
 		dbus_message_unref(msg);
 	}
 
-	if (connected)
-	{
-		Cmd_AddTimer(0.2, FS_DBus_Poll, 0, ctx, sizeof(*ctx));
-		return;
-	}
-done:
-	dbus_connection_close(ctx->conn);
-	dbus_connection_unref(ctx->conn);
-	Z_Free(ctx->replypath);
+	Cmd_AddTimer(0.2, FS_DBus_Poll, 0, ctx, sizeof(*ctx));
 }
 void FS_OpenFilePicker_f(void)
 {
 	const char *parentwindow = "";
 	const char *title = "All Files";
-	const char *replypath;
-	DBusMessage *msg = NULL;
+	DBusMessage *msg;
 	DBusMessageIter args, opts;
-	struct openfile_s ctx = {NULL, NULL};
+	struct openfile_s ctx;
 	DBusError err;
-	DBusPendingCall *pending = NULL;
+	DBusPendingCall *pending;
 
-	if (FS_RefuseInsecure())
+	// initialiset the errors
+	dbus_error_init(&err);
+
+	// connect to the system bus and check for errors
+	ctx.conn = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+	if (dbus_error_is_set(&err))
+	{
+		fprintf(stderr, "Connection Error (%s)\n", err.message);
+		dbus_error_free(&err);
+	}
+	if (!ctx.conn)
 		return;
 
-	dbus_error_init(&err);
-	ctx.conn = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
-	if (!ctx.conn || dbus_error_is_set(&err))
-		goto done;
-	if (!dbus_bus_register(ctx.conn, &err))
-		goto done;
-
-	msg = dbus_message_new_method_call("org.freedesktop.portal.Desktop",
-				"/org/freedesktop/portal/desktop",
-				"org.freedesktop.portal.FileChooser", "OpenFile");
-	if (!msg)
-		goto done;
-	dbus_message_iter_init_append(msg, &args);
-	if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &parentwindow) ||
-		!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &title) ||
-		!dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "{sv}", &opts))
-		goto done;
-	if (!dbus_message_iter_close_container(&args, &opts))
-		goto done;
-
-	dbus_bus_add_match(ctx.conn, "type='signal',interface='org.freedesktop.portal.Request',member='Response'", &err);
-	if (dbus_error_is_set(&err))
-		goto done;
-	if (!dbus_connection_send_with_reply(ctx.conn, msg, &pending, -1) || !pending)
-		goto done;
-	dbus_message_unref(msg);
-	msg = NULL;
-	dbus_connection_flush(ctx.conn);
-	dbus_pending_call_block(pending);
-	msg = dbus_pending_call_steal_reply(pending);
-	if (msg)
-	if (dbus_message_get_type(msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN)
-	if (dbus_message_iter_init(msg, &args))
-	if (dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_OBJECT_PATH)
-	{
-		dbus_message_iter_get_basic(&args, &replypath);
-		ctx.replypath = Z_StrDup(replypath);
-	}
-
-done:
-	if (msg)
-		dbus_message_unref(msg);
-	if (pending)
-		dbus_pending_call_unref(pending);
+	// request our name on the bus
+	dbus_bus_register(ctx.conn, &err);
 	if (dbus_error_is_set(&err))
 		dbus_error_free(&err);
-	if (ctx.replypath)
+
+	// create a new method call and check for errors
+	msg = dbus_message_new_method_call(
+				"org.freedesktop.portal.Desktop", // target for the method call
+				"/org/freedesktop/portal/desktop", // object to call on
+				"org.freedesktop.portal.FileChooser", // interface to call on
+				"OpenFile"); // method name
+	if (msg)
 	{
+		dbus_message_iter_init_append(msg, &args);
+		dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &parentwindow);
+		dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &title);
+		dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "{sv}", &opts);
+		dbus_message_iter_close_container(&args, &opts);
+
+		//make sure we get the response (without getting any races)
+		dbus_bus_add_match(ctx.conn, "type='signal'"
+							/*",path='/org/freedesktop/portal/desktop/request/UNIQUE/TOKEN'"*/
+							",interface='org.freedesktop.portal.Request'"
+							",member='Response'", &err);
+
+		//now send our request
+		if (!dbus_connection_send_with_reply (ctx.conn, msg, &pending, -1) || !pending)
+		{
+			dbus_message_unref(msg);
+			msg = NULL;
+		}
+		else
+		{
+			dbus_message_unref(msg);
+			dbus_connection_flush(ctx.conn);
+			dbus_pending_call_block(pending);
+
+			//see if we got a reply
+			msg = dbus_pending_call_steal_reply(pending);
+			dbus_pending_call_unref(pending);
+		}
+	}
+	if (msg)
+	{	//read the object path from the response.
+		if (dbus_message_iter_init(msg, &args) && dbus_message_iter_get_arg_type(&args))
+		{
+			dbus_message_iter_get_basic(&args, &ctx.replypath);
+			ctx.replypath = Z_StrDup(ctx.replypath);
+		}
+
+		dbus_message_unref(msg);
+	}
+
+	if (dbus_error_is_set(&err))
+		dbus_error_free(&err);	//oops?
+	if (ctx.replypath)
+	{	//we sent a request, got a valid response... now we need the actual final result... which may take a while...
 		Cmd_AddTimer(0.2, FS_DBus_Poll, 0, &ctx, sizeof(ctx));
 		return;
 	}
-	if (ctx.conn)
-	{
-		dbus_connection_close(ctx.conn);
-		dbus_connection_unref(ctx.conn);
-	}
+
+	Z_Free(ctx.replypath);
+	dbus_connection_close(ctx.conn);
 }
 #endif
