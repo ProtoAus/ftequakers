@@ -4133,8 +4133,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			cheap water does.
 			*/
 			//FTESurf Patch 1020: mode 5 samples a copy of the view (colour and depth, taken after the opaque
-			//world -- sort underwater) instead of rendering refraction and reflection; #SCREEN reflects by
-			//marching that depth copy.
+			//world -- sort seethrough, below) instead of rendering refraction and reflection; #SCREEN reflects
+			//by marching that depth copy.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
 					"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
@@ -4151,8 +4151,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
 					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
 			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");
+			//After the opaque world, decals and see-through surfaces, before the unlit-decal and banner sorts
+			//that particles and Source fire smoke draw in without depth (underwater painted over them).
 			if (wmode == 5)
-				Q_strlcatfz(script, &offset, sizeof(script), "\tsort underwater\n");
+				Q_strlcatfz(script, &offset, sizeof(script), "\tsort seethrough\n");
 			//FTESurf Patch 868: Source water reflects entities only under $reflectentities.
 			if (!st->water_reflectents)
 				Q_strlcatfz(script, &offset, sizeof(script), "\tfte_reflectnoentities\n");

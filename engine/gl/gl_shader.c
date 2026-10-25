@@ -352,6 +352,24 @@ qboolean Material_RegisterLoader(void *module, plugmaterialloaderfuncs_t *driver
 }
 
 //Native query: a downloaded CSQC must not infer mode 4 from a plugin cvar.
+//FTESurf Patch 1020: hl2_water 5 -- this engine's $currentdepth and a loaded vmt/water that has the #SCREEN branch
+qboolean R_HL2WaterScreenSupported(void)
+{
+	size_t l;
+	const struct sbuiltin_s *progs;
+
+	if (qrenderer != QR_OPENGL || !sh_config.progs_supported)
+		return false;
+	for (l = 0; l < materialloader_count; l++)
+	{
+		if (!materialloader[l].funcs || !materialloader[l].funcs->builtinshaders)
+			continue;
+		for (progs = materialloader[l].funcs->builtinshaders; *progs->name; progs++)
+			if (progs->qrtype == QR_OPENGL && !strcmp(progs->name, "vmt/water") && progs->body && strstr(progs->body, "SCREEN"))
+				return true;
+	}
+	return false;
+}
 qboolean R_HL2WaterBudgetSupported(void)
 {
 	size_t l;

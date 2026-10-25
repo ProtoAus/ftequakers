@@ -1873,6 +1873,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // growing from 4 units; a hit samples the colour copy, a ray that leaves the screen or finds nothing the fog colour.
 "{\n"
 "vec3 rd = reflect(-viewdir, worldnormal);\n"
+"vec3 up = normalize(norm);\n"
+"rd = normalize(rd + up * max(0.0, 0.05 - dot(rd, up))); // a bumped normal never aims it under the plane\n"
 "vec3 rp = wpos;\n"
 "float rs = 4.0;\n"
 "vec2 huv = vec2(-1.0);\n"
@@ -3633,6 +3635,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // growing from 4 units; a hit samples the colour copy, a ray that leaves the screen or finds nothing the fog colour.
 "{\n"
 "vec3 rd = reflect(-viewdir, worldnormal);\n"
+"vec3 up = normalize(norm);\n"
+"rd = normalize(rd + up * max(0.0, 0.05 - dot(rd, up))); // a bumped normal never aims it under the plane\n"
 "vec3 rp = wpos;\n"
 "float rs = 4.0;\n"
 "vec2 huv = vec2(-1.0);\n"

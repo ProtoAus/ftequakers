@@ -302,6 +302,8 @@ void main (void)
 	// growing from 4 units; a hit samples the colour copy, a ray that leaves the screen or finds nothing the fog colour.
 	{
 		vec3 rd = reflect(-viewdir, worldnormal);
+		vec3 up = normalize(norm);
+		rd = normalize(rd + up * max(0.0, 0.05 - dot(rd, up)));	// a bumped normal never aims it under the plane
 		vec3 rp = wpos;
 		float rs = 4.0;
 		vec2 huv = vec2(-1.0);

@@ -769,6 +769,7 @@ void AddOcranaLEDsIndexed (qbyte *image, int h, int w);
 
 void Renderer_Init(void);
 qboolean R_HL2WaterBudgetSupported(void);
+qboolean R_HL2WaterScreenSupported(void);	//FTESurf Patch 1020
 void Renderer_Start(void);
 qboolean Renderer_Started(void);
 void R_ShutdownRenderer(qboolean videotoo);

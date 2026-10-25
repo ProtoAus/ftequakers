@@ -247,7 +247,8 @@ static struct {
 		polyoffset_t polyoffset; //mode-specific polygon offsets...
 
 		texid_t temptexture; //$current
-		texid_t tex_currentdepth;	//FTESurf Patch 1020: $currentdepth
+		texid_t tex_watercolour[R_MAX_RECURSE];	//FTESurf Patch 1020: screen water's copies of each level's view
+		texid_t tex_waterdepth[R_MAX_RECURSE];
 		texid_t fogtexture;
 		texid_t normalisationcubemap;
 		float fogfar;
@@ -1460,8 +1461,7 @@ static int be_currentw, be_currenth;
 static GLenum be_currentfmt;
 static qboolean be_nopanedepth;	//FTESurf Patch 878: a world or brush pane drawn now writes no depth (GLBE_SubmitNearest)
 static qboolean be_flatcopied;	//FTESurf Patch 895: this top-level view has copied the screen for a world/brush pane
-static qboolean be_watercopied, be_depthcopied;	//FTESurf Patch 1020: ...and its colour and depth for screen-space water
-							//(its own flag: a pane sorted after the water copies again and sees it)
+static qboolean be_watercopied[R_MAX_RECURSE], be_depthcopied[R_MAX_RECURSE];	//FTESurf Patch 1020: per level, per view
 //FTESurf Patch 1020: a shader that reads $currentdepth is screen-space water: all of a view's water shares one copy
 //of the colour and one of the depth, taken by the first batch (sorted underwater: after the opaque world)
 static qboolean GLBE_ScreenWater(void)
@@ -1537,16 +1537,7 @@ static void T_Gen_CurrentRender(int tmu, qboolean pane)
 	//Source's brushes never copy (c_baseentity.cpp:1801-1804), its model renderables do
 	//(c_baseanimating.cpp:799).  surf_pantheon's waterfalls took 61 a frame.  The water fallback at
 	//r_refract_fbo 0 (pane FALSE), scripted shaders, particles and r_nearestsort 0 copy per batch.
-	if (!shaderstate.force2d && GLBE_ScreenWater())
-	{
-		if (be_watercopied && TEXVALID(shaderstate.temptexture))
-		{
-			GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.temptexture);
-			return;
-		}
-		be_watercopied = true;
-	}
-	else if (pane && r_nearestsort.ival && !shaderstate.force2d && GLBE_FlatRefractPane())
+	if (pane && r_nearestsort.ival && !shaderstate.force2d && GLBE_FlatRefractPane())
 	{
 		if (be_flatcopied && TEXVALID(shaderstate.temptexture))
 		{
@@ -1608,45 +1599,64 @@ static void T_Gen_CurrentRender(int tmu, qboolean pane)
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-//FTESurf Patch 1020: the current framebuffer's depth, copied once per top-level view into a depth texture of the
-//frame's size; nested views (recurse) bind the last copy. A copy GL refuses (a depth format it will not convert)
-//says so once and binds white: depth 1 reads as far, so the water draws deep rather than wrong.
-static void T_Gen_CurrentDepth(int tmu)
+//FTESurf Patch 1020: screen water's copies of the view it is drawn in -- the viewport's rectangle of the bound
+//framebuffer, so a sky room, a portal or a capture copies its own camera at its own size -- once per view and
+//level (be_*copied, reset by GLBE_DrawWorld). The first copy after an allocation is checked for a GL error; a
+//refused depth copy says so and binds white (depth 1 reads as far: the water draws deep) until the next
+//reallocation or map.
+static qboolean be_waterdepthfailed;
+static void T_Gen_ScreenWater(int tmu, qboolean depth)
 {
-	static qboolean failed;
-	int w = vid.fbpwidth, h = vid.fbpheight;
-	if (r_refdef.recurse || be_depthcopied || failed)
+	int lvl = min(r_refdef.recurse, R_MAX_RECURSE-1);
+	texid_t *tex = depth ? &shaderstate.tex_waterdepth[lvl] : &shaderstate.tex_watercolour[lvl];
+	qboolean *done = depth ? &be_depthcopied[lvl] : &be_watercopied[lvl];
+	int x = r_refdef.pxrect.x, y = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + r_refdef.pxrect.height);
+	int w = max(1, r_refdef.pxrect.width), h = max(1, r_refdef.pxrect.height);
+	qboolean check = false;
+	if (depth && be_waterdepthfailed)
 	{
-		GL_MTBind(tmu, GL_TEXTURE_2D, failed ? r_whiteimage : (TEXVALID(shaderstate.tex_currentdepth) ? shaderstate.tex_currentdepth : r_whiteimage));
+		GL_MTBind(tmu, GL_TEXTURE_2D, r_whiteimage);
 		return;
 	}
-	be_depthcopied = true;
-	if (!TEXVALID(shaderstate.tex_currentdepth))
+	if (!TEXVALID(*tex))
 	{
-		TEXASSIGN(shaderstate.tex_currentdepth, Image_CreateTexture("***$currentdepth***", NULL, 0));
-		qglGenTextures(1, &shaderstate.tex_currentdepth->num);
-		shaderstate.tex_currentdepth->width = shaderstate.tex_currentdepth->height = 0;
+		TEXASSIGN(*tex, Image_CreateTexture(depth ? "***$waterdepth***" : "***$watercolour***", NULL, 0));
+		qglGenTextures(1, &(*tex)->num);
+		(*tex)->width = (*tex)->height = 0;
 	}
-	GL_MTBind(tmu, GL_TEXTURE_2D, shaderstate.tex_currentdepth);
-	while (qglGetError() != GL_NO_ERROR)
-		;
-	if (shaderstate.tex_currentdepth->width != w || shaderstate.tex_currentdepth->height != h)
+	GL_MTBind(tmu, GL_TEXTURE_2D, *tex);
+	if (*done)
+		return;
+	*done = true;
+	if ((*tex)->width != w || (*tex)->height != h)
 	{
-		shaderstate.tex_currentdepth->width = w;
-		shaderstate.tex_currentdepth->height = h;
-		qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24_ARB, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
-		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		while (qglGetError() != GL_NO_ERROR)
+			;
+		check = true;
+		(*tex)->width = w;
+		(*tex)->height = h;
+		if (depth)
+			qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24_ARB, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+		else
+			qglTexImage2D(GL_TEXTURE_2D, 0, (vid.flags&VID_FP16) ? GL_RGBA16F : ((vid.flags&VID_SRGB_FB) ? GL_SRGB8_EXT : GL_RGB),
+				w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, depth ? GL_NEAREST : GL_LINEAR);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, depth ? GL_NEAREST : GL_LINEAR);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
-	qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
-	r_vs_copies++, r_vs_copypixels += (double)w * h;
-	if (qglGetError() != GL_NO_ERROR)
+	qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, x, y, w, h);
+	if (!shaderstate.force2d)
+		r_vs_copies++, r_vs_copypixels += (double)w * h;
+	if (check && qglGetError() != GL_NO_ERROR)
 	{
-		failed = true;
-		Con_Printf(CON_WARNING "$currentdepth: this framebuffer's depth cannot be copied; screen-space water draws as deep\n");
-		GL_MTBind(tmu, GL_TEXTURE_2D, r_whiteimage);
+		(*tex)->width = (*tex)->height = 0;	//allocate (and check) again next time
+		if (depth)
+		{
+			be_waterdepthfailed = true;
+			Con_Printf(CON_WARNING "$currentdepth: this framebuffer's depth cannot be copied; screen-space water draws as deep\n");
+			GL_MTBind(tmu, GL_TEXTURE_2D, r_whiteimage);
+		}
 	}
 }
 
@@ -1790,10 +1800,13 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 #endif
 
 	case T_GEN_CURRENTRENDER:
-		T_Gen_CurrentRender(tmu, true);
+		if (!shaderstate.force2d && GLBE_ScreenWater())
+			T_Gen_ScreenWater(tmu, false);	//FTESurf Patch 1020
+		else
+			T_Gen_CurrentRender(tmu, true);
 		return;
 	case T_GEN_CURRENTDEPTH:
-		T_Gen_CurrentDepth(tmu);
+		T_Gen_ScreenWater(tmu, true);
 		return;
 
 	case T_GEN_SOURCECOLOUR:
@@ -1979,6 +1992,16 @@ void GLBE_DestroyFBOs(void)
 
 	for (i = 0; i < R_MAX_RECURSE; i++)
 	{
+		if (shaderstate.tex_watercolour[i])	//FTESurf Patch 1020
+		{
+			Image_DestroyTexture(shaderstate.tex_watercolour[i]);
+			shaderstate.tex_watercolour[i] = r_nulltex;
+		}
+		if (shaderstate.tex_waterdepth[i])
+		{
+			Image_DestroyTexture(shaderstate.tex_waterdepth[i]);
+			shaderstate.tex_waterdepth[i] = r_nulltex;
+		}
 		GLBE_FBO_Destroy(&shaderstate.fbo_reflectrefrac[i]);
 		if (shaderstate.tex_reflection[i])
 		{
@@ -6770,6 +6793,7 @@ void GLBE_WaterViewsNewMap(void)
 	for (i = 0; i < MAX_SPLITS; i++)
 		be_waterlastvalid[i] = false;	//planes of the old map
 	memset(be_capstamp, 0, sizeof(be_capstamp));	//FTESurf Patch 1018: the old map's captures
+	be_waterdepthfailed = false;	//FTESurf Patch 1020: a refused depth copy is tried again
 #ifdef PLUGINS
 	be_occluderasked = false;
 	if (!r_waterviews.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
@@ -10265,13 +10289,14 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 
 	TRACE(("GLBE_DrawWorld: %p\n", worldbatches));
 
+	if (r_refdef.recurse < R_MAX_RECURSE)	//FTESurf Patch 1020: this view's screen water copies afresh
+		be_watercopied[r_refdef.recurse] = be_depthcopied[r_refdef.recurse] = false;
 	//reset batches if we needed more mem, to avoid allocations mid-frame.
 	if (!r_refdef.recurse)
 	{
 		be_flatcopied = false;	//FTESurf Patch 895: each top-level view copies once for its world/brush panes
 		if (worldbatches)
 			be_seatviews[BE_Seat()]++;	//FTESurf Patch 1018: what a capture stamp is counted against
-		be_watercopied = be_depthcopied = false;	//FTESurf Patch 1020
 		if (shaderstate.wbatch + 50 > shaderstate.maxwbatches)
 		{
 			int newm = shaderstate.wbatch + 100;

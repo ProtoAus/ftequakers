@@ -903,6 +903,7 @@ static cvar_t hl2_water_shaderpolicy = CVARFD("hl2_water", "3", CVAR_SHADERSYSTE
 	"Source water mode. 0: flat translucent, no captures. 1: live refraction with baked reflection. "
 	"2: live refraction/reflection. 3: depth-writing dither (default). "
 	"4: budget animated, translucent fog colour/normals/approximate baked reflection, no captures or screen copy. "
+	"5: screen-space (Patch 1020): refraction from a copy of the view, reflection marched through its depth; no extra scene render, reflects only what is on screen. "
 	"Budget water is not depth-correct or Source-exact. Changes rebuild materials without restarting the map.");
 static cvar_t hl2_dither_alpha_shaderpolicy = CVARFD("hl2_dither_alpha", "1", CVAR_SHADERSYSTEM,
 	"Coverage multiplier for dithered Source surfaces. Water keeps a readable minimum unless force is set.");
