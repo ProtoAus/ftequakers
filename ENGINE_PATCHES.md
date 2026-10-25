@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1031 - refuse newer surfd schemas before connection writes (surfd only)
+
+Problem: startup treated a database newer than SCHEMA_VERSION as already migrated.
+The connection also switched journal mode and hardened permissions before any
+version compatibility decision. A newer service's database could therefore be
+opened and changed by older application code instead of being refused.
+
+Change: connect checks user_version before persistent PRAGMAs or permission
+hardening, closes the handle and raises for a newer schema. This covers startup,
+migrate and ordinary application connections. No schema version, table, signing,
+ranking, physics, game input or native binary change; engine pins stay put.
+
+Verified: fresh-process test_schema_compat.py has four acted controls: future
+schema full startup and direct connection refuse without changing file bytes or
+permissions; current-schema startup and a fresh database still work. The unchanged
+application fails both refusal controls; the subject passes all four. The missing
+guard was also observed in an isolated real-data rehearsal; corrected Linux
+qualification and live delivery remain separate, pending steps, not claims here.
+
 ## Patch 1020 - hl2_water 5: screen-space Source water, no extra scene renders (GL client, hl2 plugin, csprogs)
 
 Problem: Lex, 25 Oct, asked for cheaper refractive/reflective water at his r_renderscale 2 ("maybe
