@@ -571,9 +571,17 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	const char *p;
 
 	if (outlen) out[0] = 0;
-	if (cls.state != ca_disconnected || cls.demoplayback || CL_TryingToConnect())
+	if (cls.demoplayback)
 		return false;
 	if (!nonce || strlen(nonce) != 32 || !op || !who)
+		return false;
+	/*P1009: the two reads in any game -- their answer goes to the menu, never to
+	  the server.  An op that acts only disconnected, or in a loopback game whose
+	  server is this process: a remote server can drive the menu (stufftext
+	  ui_key/ui_click), so it must not get a signature that posts or joins.*/
+	if (strcmp(op, "list") && strcmp(op, "chat"))
+	if (cls.state != ca_disconnected || CL_TryingToConnect())
+	if (cls.state < ca_connected || cls.netchan.remote_address.type != NA_LOOPBACK)
 		return false;
 	for (p = nonce; *p; p++)
 		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
