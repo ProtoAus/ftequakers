@@ -1657,7 +1657,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_UnconnectedInit() false
 #define CSQC_UseGamecodeLoadingScreen() false
 #define CSQC_Parse_SetAngles(seat,newangles,wasdelta) false
-#define CSQC_PredictPlayerMove(seat,cmd,preorigin,offsetmsec)
+#define CSQC_PredictPlayerMove(seat,cmd,preorigin,offsetmsec,preground)
 #define CSQC_PredictPortalAngles(seat,cmd)
 #define CSQC_PortalView(pv)
 #define CSQC_PredictPlayerPreMove(seat,cmd,offsetmsec) 0
