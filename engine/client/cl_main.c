@@ -471,20 +471,25 @@ void CL_MakeActive(char *gamename)
 	cl.stillloading = true;
 
 	//kill sounds left over from the last map.
+	SCR_LoadTimesStage("purge sounds");
 	S_Purge(true);
 
 	//kill models left over from the last map.
+	SCR_LoadTimesStage("purge models");
 	Mod_Purge(MP_MAPCHANGED);
 	P_LoadedCensus("CL_MakeActive after Mod_Purge");
 
 	//and reload shaders now if needed (this was blocked earlier)
+	SCR_LoadTimesStage("shader reload");
 	shader_reload_why = "CL_ParseServerData/ca_active";
 	Shader_DoReload();
 	P_LoadedCensus("CL_MakeActive after Shader_DoReload");
 
 	//and now free any textures that were not still needed.
+	SCR_LoadTimesStage("purge images");
 	Image_Purge();
 	P_LoadedCensus("CL_MakeActive after Image_Purge");
+	SCR_LoadTimesEnd();
 
 	SCR_EndLoadingPlaque();
 	CL_UpdateWindowTitle();
@@ -4044,6 +4049,7 @@ void CL_Changing_f (void)
 		SCR_ImageName(mapname);
 	else
 		SCR_BeginLoadingPlaque();
+	SCR_LoadTimesBegin("server changing map");
 
 	S_StopAllSounds (true);
 	cl.intermissionmode = IM_NONE;

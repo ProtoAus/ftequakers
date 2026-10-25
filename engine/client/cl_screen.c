@@ -1416,6 +1416,7 @@ cvar_t	scr_showdisk_y	= CVAR("scr_showdisk_y", "0");
 cvar_t	scr_showobituaries = CVAR("scr_showobituaries", "0");
 
 cvar_t	scr_loadingrefresh = CVARD("scr_loadingrefresh", "0", "Force redrawing of the loading screen, in order to display EVERY resource that is loaded");
+cvar_t	scr_loadtimes = CVARD("scr_loadtimes", "0", "Print each stage of a map load that took this many milliseconds or more, and the load's total. A stage is the label the loading screen showed while the time passed (a model, a sound, newmap, csqc init, a wait on the server), from the server's map change to the first frame. 0 is off. (FTESurf Patch 1022)");
 cvar_t	scr_showloading	= CVAR("scr_showloading", "1");
 //things to configure the legacy loading screen
 cvar_t	scr_loadingscreen_picture = CVAR("scr_loadingscreen_picture", "gfx/loading");
@@ -1443,6 +1444,7 @@ void CLSCR_Init(void)
 
 	Cvar_Register(&con_stayhidden, cl_screengroup);
 	Cvar_Register(&scr_loadingrefresh, cl_screengroup);
+	Cvar_Register(&scr_loadtimes, cl_screengroup);
 	Cvar_Register(&scr_showloading, cl_screengroup);
 	Cvar_Register(&scr_loadingscreen_picture, cl_screengroup);
 	Cvar_Register(&scr_loadingscreen_scale, cl_screengroup);
@@ -3335,10 +3337,62 @@ void SCR_SetLoadingStage(int stage)
 	}
 	loading_stage = stage;
 }
+//FTESurf Patch 1022: scr_loadtimes.  A stage runs from its label to the next; a repeated label is
+//one stage, so a model loop split across frames sums.
+static double lt_begin, lt_mark, lt_small;
+static int lt_smalln, lt_stages;
+static char lt_label[128];
+void SCR_LoadTimesStage(const char *next)
+{
+	double now = Sys_DoubleTime(), ms;
+
+	if (!lt_begin)
+		return;
+	ms = (now - lt_mark) * 1000;
+	if (*lt_label)
+	{
+		lt_stages++;
+		if (ms >= scr_loadtimes.value)
+			Con_Printf("loadtime: %8.1f ms  %s\n", ms, lt_label);
+		else
+		{
+			lt_small += ms;
+			lt_smalln++;
+		}
+	}
+	Q_strncpyz(lt_label, next, sizeof(lt_label));
+	lt_mark = now;
+}
+//At the server's map change and again at its serverdata: the second marks the first's stage.
+void SCR_LoadTimesBegin(const char *label)
+{
+	if (scr_loadtimes.value <= 0)
+		lt_begin = 0;
+	else if (lt_begin)
+		SCR_LoadTimesStage(label);
+	else
+	{
+		lt_begin = lt_mark = Sys_DoubleTime();
+		lt_small = 0;
+		lt_smalln = lt_stages = 0;
+		Q_strncpyz(lt_label, label, sizeof(lt_label));
+	}
+}
+void SCR_LoadTimesEnd(void)
+{
+	if (!lt_begin)
+		return;
+	SCR_LoadTimesStage("");
+	Con_Printf("loadtime: %8.1f ms  TOTAL, %i stages (%i under %g ms: %.1f ms)\n",
+		(lt_mark - lt_begin) * 1000, lt_stages, lt_smalln, scr_loadtimes.value, lt_small);
+	lt_begin = 0;
+}
+
 void SCR_SetLoadingFile(char *str)
 {
 	if (loadingfile && !strcmp(loadingfile, str))
 		return;
+	SCR_LoadTimesStage(str);
 
 	if (loadingfile)
 		Z_Free(loadingfile);

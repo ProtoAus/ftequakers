@@ -315,6 +315,9 @@ enum
 int SCR_GetLoadingStage(void);
 void SCR_SetLoadingStage(int stage);
 void SCR_SetLoadingFile(char *str);
+void SCR_LoadTimesBegin(const char *label);	//FTESurf Patch 1022, scr_loadtimes
+void SCR_LoadTimesStage(const char *next);
+void SCR_LoadTimesEnd(void);
 
 /*fonts*/
 void Font_Init(void);

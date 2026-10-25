@@ -3694,6 +3694,7 @@ static void CLQW_ParseServerData (void)
 	}
 
 	Con_DPrintf ("Serverdata packet %s.\n", cls.demoplayback?"read":"received");
+	SCR_LoadTimesBegin("serverdata, old map cleared");	//FTESurf Patch 1022
 //
 // wipe the client_state_t struct
 //
@@ -4025,6 +4026,7 @@ static void CLQ2_ParseServerData (void)
 	cls.demohadkeyframe = true;	//assume that it did, so this stuff all gets recorded.
 
 	Con_DPrintf ("Serverdata packet %s.\n", cls.demoplayback?"read":"received");
+	SCR_LoadTimesBegin("serverdata, old map cleared");	//FTESurf Patch 1022
 //
 // wipe the client_state_t struct
 //
@@ -4444,6 +4446,7 @@ static void CLNQ_ParseServerData(void)		//Doesn't change gamedir - use with caut
 	char	*str = NULL;
 	int gametype;
 	Con_DPrintf ("Serverdata packet %s.\n", cls.demoplayback?"read":"received");
+	SCR_LoadTimesBegin("serverdata, old map cleared");	//FTESurf Patch 1022
 	SCR_SetLoadingStage(LS_CLIENT);
 	CL_ClearState (true);
 #ifdef QUAKEHUD
