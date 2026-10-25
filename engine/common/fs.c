@@ -5209,11 +5209,14 @@ qboolean FS_PathURLCache(const char *url, char *path, size_t pathsize)
 {
 	char tmp[MAX_QPATH];
 	char *o = tmp;
+	char *const e = tmp + sizeof(tmp) - 1;
 	const char *i = url;
 	strcpy(o, "downloads/");
 	o += strlen(o);
 	while(*i)
 	{
+		if (o >= e)
+			return false;
 		if (*i == ':' || *i == '?' || *i == '*' || *i == '&')
 		{
 			if (i[0] == ':' && i[1] == '/' && i[2] == '/')

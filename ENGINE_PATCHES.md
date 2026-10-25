@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 987 - Bound download cache names and honor conversion refusal
+
+Problem: URL-derived cache-name construction did not reserve space for its
+terminator. Two package-manager paths also consumed the name after conversion
+failure instead of refusing that package.
+
+Change: Bound each write within the cache-name buffer. Honor conversion failure
+in both implicit-cache package paths, release the unpublished package and parse
+temporaries, and preserve the parse cursor. Normal names and explicit-file/ZIP
+packages keep their existing behavior; other callers already check the result.
+
+Verified: Extracted production cache-name function: 247 ordinary/boundary checks
+on baseline, 257 on subject including refusal before cleaner/output mutation.
+Extracted production parser/free/dependency functions: baseline30/subject58 checks,
+valid direct/relative packages, refused implicit names, balanced allocations,
+no insertion/authentication on refusal, following package still parses, explicit
+file/ZIP unchanged (host operations and fixture tokenizer stubbed). Full Windows
+client, dedicated and standard plugins build through build.ps1 -Engine -NoDeploy;
+all QC modules 0 warnings, changed native translation units add no warnings over
+baseline. No desktop/download integration, Linux or deployment claim here.
+
 ## Patch 985 - Refuse retry when its saved point cannot be confirmed
 
 Problem: Retry unconditionally armed/restarted after a void state writer.
