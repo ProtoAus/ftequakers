@@ -265,7 +265,7 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
 		csqcg.predmove_bvfired = csqcg.predmove_offset = NULL;
-		csqcg.predmove_bvset = csqcg.predmove_bvsetflag = NULL;
+		csqcg.predmove_bvset = csqcg.predmove_bvsetflag = csqcg.predmove_wasground = NULL;
 		csqcg.predmove_onground = csqcg.predmove_pmtype = csqcg.predmove_buttons = csqcg.predmove_fixangle = NULL;
 		csqcg.predmove_mins = csqcg.predmove_maxs = csqcg.predmove_anglesnap = csqcg.predmove_cmdangles = NULL;
 		csqcg.input_sequence = NULL;
@@ -10849,7 +10849,7 @@ void CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious
   more.  The angle-snap ring was already frame-surviving by design. */
 
 
-void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin, float offsetmsec)
+void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorigin, float offsetmsec, qboolean preground)
 {
 	vec3_t oldorg, oldvel;
 	void *pr_globals;
@@ -10875,6 +10875,8 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 	VectorCopy(pmove.origin, csqcg.predmove_org);
 	VectorCopy(pmove.velocity, csqcg.predmove_vel);
 	*csqcg.predmove_onground = pmove.onground;
+	if (csqcg.predmove_wasground)	//FTESurf P1025: the pre-move hook does not run on a listen server
+		*csqcg.predmove_wasground = preground;
 	if (csqcg.predmove_mins)
 		VectorCopy(pmove.player_mins, csqcg.predmove_mins);
 	if (csqcg.predmove_maxs)

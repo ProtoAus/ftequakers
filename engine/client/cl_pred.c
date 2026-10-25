@@ -504,6 +504,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 {
 	int preflags = 0;
 	vec3_t preorigin;
+	qboolean preground;
 
 	// P924: match SV_RunCmdPart's one-Source-tick parts, including carried time.
 	// fs_tickparts confirms the progs declares input_cmd_later; old progs opt out.
@@ -627,6 +628,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		CSQC_PredictConsumeBaseVel(pnum, u->sequence, !*carrier_cleared && offsetmsec == 0);
 	}
 	VectorCopy(pmove.origin, preorigin);
+	preground = pmove.onground;
 	PM_PlayerMove (cl.gamespeed);
 	if (cl_pred_localchain && pmove.portalcrossings)
 		CSQC_PredictPortalAngles(pnum, u);
@@ -640,7 +642,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		if (preflags & PMPI_HOLD)
 			CSQC_PredictSaveBaseVel(pnum, u->sequence);
 		else
-			CSQC_PredictPlayerMove(pnum, u, preorigin, offsetmsec);
+			CSQC_PredictPlayerMove(pnum, u, preorigin, offsetmsec, preground);
 	}
 
 	to->waterjumptime = pmove.waterjumptime;

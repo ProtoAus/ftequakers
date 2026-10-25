@@ -1494,6 +1494,7 @@ static void Mod_LoadModelWorker (void *ctx, void *data, size_t a, size_t b)
 
 	//clear out any old state.
 	memset(&mod->loadstate+1, 0, sizeof(*mod) - (qintptr_t)(&((model_t*)NULL)->loadstate+1));
+	mod->engineflags &= ~MDLF_SOURCEPITCH;	//FTESurf Patch 1027: engineflags sits before loadstate; a reload may not be Source
 
 	if (!*mod->publicname)
 	{

@@ -2378,6 +2378,7 @@ downloadlist_t *CL_DownloadFailed(const char *name, qdownload_t *qdl, enum dlfai
 	//don't do this if we're just marking the file as unavailable for download.
 	if (qdl && (!stricmp(qdl->remotename, name) || !*name))
 	{
+		failed->flags |= qdl->flags & (DLLF_REQUIRED|DLLF_VERBOSE);	//FTESurf Patch 1026
 		DL_Abort(qdl, QDL_FAILED);
 	}
 
@@ -2711,6 +2712,11 @@ static void CL_ParseChunkedDownload(qdownload_t *dl)
 		if (flag < 0)
 		{
 			enum dlfailreason_e failreason;
+			if (flag == DLERR_REDIRECTFILE && !dl)
+			{
+				Con_DPrintf("ignoring redirect to \"%s\": not downloading\n", svname);	//FTESurf Patch 1026: read dl unchecked
+				return;
+			}
 			if (flag == DLERR_REDIRECTFILE)
 			{
 				failreason = DLFAIL_REDIRECTED;
@@ -2769,7 +2775,7 @@ static void CL_ParseChunkedDownload(qdownload_t *dl)
 			}
 			else //if (flag == DLERR_FILENOTFOUND)
 			{
-				if (!dl || (dl->flags & (DLLF_REQUIRED|DLLF_VERBOSE)))	//FTESurf Patch 1026, as CL_DownloadSize_f
+				if (!dl || stricmp(dl->remotename, svname) || (dl->flags & (DLLF_REQUIRED|DLLF_VERBOSE)))	//FTESurf Patch 1026, as CL_DownloadSize_f
 					Con_Printf("Couldn't find file \"%s\" on the server\n", svname);
 				else
 					Con_DPrintf("Couldn't find file \"%s\" on the server\n", svname);

@@ -1301,6 +1301,7 @@ enum
 	globalfloat (predmove_bvfired)			/*FTESurf P337: set nonzero when a continuous push fired this command, even if the net vector cancelled to zero -- the server's armed flag is set unconditionally by the touch (w)*/ \
 	globalvector(predmove_bvset)			/*FTESurf P1025: an AddOutput basevelocity write this command, the velocity it pays (w)*/ \
 	globalfloat (predmove_bvsetflag)		/*FTESurf P1025: nonzero when predmove_bvset is written; engine clears (w)*/ \
+	globalfloat (predmove_wasground)		/*FTESurf P1025: on the ground as this move began, for OnJump (ro)*/ \
 	globalfloat (predmove_onground)			/*FTESurf P335: rw*/ \
 	globalfloat (predground_active)			/*P924: opt in to ground-carrier probes on this map*/ \
 	globalvector(predmove_mins)				/*FTESurf P335: player hull (ro)*/ \

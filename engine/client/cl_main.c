@@ -5560,6 +5560,10 @@ void CL_DownloadSize_f(void)
 		//FTESurf Patch 1026: a file the game does without (a map's precached sound: bhop_ceaseless
 		//names plar/booster.wav and packs none) says so at developer 1; a required one is an error.
 		qboolean required = cls.download && !stricmp(cls.download->remotename, rname) && (cls.download->flags & (DLLF_REQUIRED|DLLF_VERBOSE));
+		//the not-found chunk usually lands first and has already failed (and freed) the download
+		for (dl = cl.faileddownloads; dl; dl = dl->next)
+			if (!strcmp(dl->rname, rname) && (dl->flags & (DLLF_REQUIRED|DLLF_VERBOSE)))
+				required = true;
 		dl = CL_DownloadFailed(rname, NULL, DLFAIL_SERVERFILE);
 		if (required || (dl->flags & (DLLF_REQUIRED|DLLF_VERBOSE)))
 			Con_Printf(CON_ERROR"Download of \"%s\" failed. Not found.\n", rname);

@@ -6859,7 +6859,7 @@ void CL_LinkPacketEntities (void)
 		//FTESurf Patch 1027: a Source model takes the map's pitch as Source does, nose-down
 		//(bhop_ceaseless's spider, "45 0 0", hung upside down).  Draw only: pmove already sees
 		//Source's pitch, its physent (CL_SetSolidEntities) and pmovetst.c flipping it once each.
-		if (model->type == mod_alias && !(model->engineflags & MDLF_SOURCEPITCH))
+		if (model && model->type == mod_alias && !(model->engineflags & MDLF_SOURCEPITCH))	//portals have no model
 			AngleVectorsMesh(angles, ent->axis[0], ent->axis[1], ent->axis[2]);
 		else
 			AngleVectors(angles, ent->axis[0], ent->axis[1], ent->axis[2]);
