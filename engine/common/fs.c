@@ -5293,6 +5293,32 @@ COM_Gamedir
 Sets the gamedir and path to a different directory.
 ================
 */
+//FTESurf Patch 1022: the fields a search-path rebuild is built from.  Equal, a rebuild remounts
+//the same paths: every Steam addon's VPKs unmounted and read again (~6 s, 245k files on Lex's PC).
+static qboolean FS_StrSame(const char *a, const char *b)
+{
+	return !strcmp(a?a:"", b?b:"");
+}
+static qboolean FS_Manifest_SamePaths(ftemanifest_t *a, ftemanifest_t *b)
+{
+	size_t i;
+	if (!a || !b)
+		return false;
+	if (a->homedirtype != b->homedirtype || !FS_StrSame(a->basedir, b->basedir) ||
+		!FS_StrSame(a->installation, b->installation) || !FS_StrSame(a->mainconfig, b->mainconfig) ||
+		!FS_StrSame(a->defaultexec, b->defaultexec) || !FS_StrSame(a->defaultoverrides, b->defaultoverrides))
+		return false;
+	for (i = 0; i < countof(a->gamepath); i++)
+		if (a->gamepath[i].flags != b->gamepath[i].flags || !FS_StrSame(a->gamepath[i].path, b->gamepath[i].path))
+			return false;
+	for (i = 0; i < countof(a->package); i++)
+		if (a->package[i].type != b->package[i].type || !FS_StrSame(a->package[i].path, b->package[i].path) ||
+			!FS_StrSame(a->package[i].prefix, b->package[i].prefix) || !FS_StrSame(a->package[i].condition, b->package[i].condition) ||
+			a->package[i].crcknown != b->package[i].crcknown || a->package[i].crc != b->package[i].crc)
+			return false;
+	return true;
+}
+
 void COM_Gamedir (const char *dir, const struct gamepacks *packagespaths)
 {
 	ftemanifest_t *man;
@@ -5324,7 +5350,14 @@ void COM_Gamedir (const char *dir, const struct gamepacks *packagespaths)
 		FS_Manifest_ParseTokens(man);
 		packagespaths++;
 	}
-	FS_ChangeGame(man, cfg_reload_on_gamedir.ival, false);
+	//FTESurf Patch 1022: every serverdata asks for the gamedir it already has (cl_parse.c).
+	if (man != fs_manifest && FS_Manifest_SamePaths(man, fs_manifest))
+	{
+		Con_DPrintf("gamedir \"%s\" unchanged, search paths kept\n", dir);
+		FS_Manifest_Free(man);
+	}
+	else
+		FS_ChangeGame(man, cfg_reload_on_gamedir.ival, false);
 
 #ifdef HAVE_SERVER
 	if (!*dir)
@@ -5637,6 +5670,26 @@ qboolean CL_ListFilesInPackage(searchpathfuncs_t *search, char *name, int (QDECL
 	return ret;
 }
 
+//FTESurf Patch 1022: a name in a server-pack list the filesystem could mount (a registered
+//archive extension).  A Source server lists only its map's .bsp, which nothing mounts.
+static qboolean FS_PureListMountable(const char *names)
+{
+	char nametok[MAX_QPATH], ext[16];
+	size_t i;
+	while (names)
+	{
+		names = COM_ParseOut(names, nametok, sizeof(nametok));
+		if (!*nametok)
+			continue;
+		COM_FileExtension(nametok, ext, sizeof(ext));
+		for (i = 0; i < countof(searchpathformats); i++)
+			if (searchpathformats[i].extension && searchpathformats[i].OpenNew &&
+				!Q_strcasecmp(ext, searchpathformats[i].extension))
+				return true;
+	}
+	return false;
+}
+
 void FS_PureMode(const char *gamedir, int puremode, char *purenamelist, char *purecrclist, char *refnamelist, char *refcrclist, int pureseed)
 {
 	ftemanifest_t *man;
@@ -5655,6 +5708,20 @@ void FS_PureMode(const char *gamedir, int puremode, char *purenamelist, char *pu
 				if ((!refnamelist && !fs_refnames) || !strcmp(fs_refnames?fs_refnames:"", refnamelist?refnamelist:""))
 					if ((!refcrclist && !fs_refcrcs) || !strcmp(fs_refcrcs?fs_refcrcs:"", refcrclist?refcrclist:""))
 						return;
+	}
+
+	//FTESurf Patch 1022: outside pure mode the lists only add packages from the download cache, so
+	//lists that name nothing mountable change no search path; a rebuild per map change cost ~6 s.
+	if (!gamedir && !puremode && !fs_puremode && !refnamelist && !refcrclist && !fs_refnames && !fs_refcrcs &&
+		!FS_PureListMountable(fs_purenames) && !FS_PureListMountable(purenamelist))
+	{
+		Z_Free(fs_purenames);
+		Z_Free(fs_purecrcs);
+		fs_purenames = purenamelist?Z_StrDup(purenamelist):NULL;
+		fs_purecrcs = purecrclist?Z_StrDup(purecrclist):NULL;
+		fs_pureseed = pureseed;
+		Con_DPrintf("server packs %s: nothing to mount, search paths kept\n", purenamelist?purenamelist:"(none)");
+		return;
 	}
 
 	Z_Free(fs_purenames);

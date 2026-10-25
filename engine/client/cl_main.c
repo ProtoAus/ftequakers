@@ -3243,9 +3243,12 @@ void CL_CheckServerInfo(void)
 	s = InfoBuf_ValueForKey(&cl.serverinfo, "allow_skybox");
 	if (!*s)
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "allow_skyboxes");
-	if (!*s)
-		cls.allow_unmaskedskyboxes = (cl.worldmodel && cl.worldmodel->fromgame != fg_quake);
-	else cls.allow_unmaskedskyboxes = !!atoi(s);
+	if (*s)
+		cls.allow_unmaskedskyboxes = !!atoi(s);
+	else if (cl.worldmodel)
+		cls.allow_unmaskedskyboxes = (cl.worldmodel->fromgame != fg_quake);
+	else	//FTESurf Patch 1022: map type not known yet (a map change's serverinfo); flipping it here
+		cls.allow_unmaskedskyboxes = oldskyboxes;	//and back at CL_LoadModels re-parsed every shader
 
 	s = InfoBuf_ValueForKey(&cl.serverinfo, "fbskins");
 	if (*s)
@@ -3544,7 +3547,10 @@ void CL_CheckServerInfo(void)
 	if (oldteamplay != cl.teamplay)
 		Skin_FlushPlayers();
 	if (oldwatervis != cls.allow_watervis || oldskyboxes != cls.allow_unmaskedskyboxes)
+	{
+		shader_needreload_why = "watervis/skybox permission";
 		Shader_NeedReload(false);
+	}
 
 	CSQC_ServerInfoChanged();
 
