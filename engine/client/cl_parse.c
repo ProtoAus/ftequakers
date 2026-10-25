@@ -861,7 +861,7 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 	dl->method = DL_QWPENDING;
 	dl->percent = 0;
 	dl->sizeunknown = true;
-	dl->flags = flags&DLLF_OVERWRITE;
+	dl->flags = flags&(DLLF_OVERWRITE|DLLF_REQUIRED|DLLF_VERBOSE);	//FTESurf Patch 1026: the failure lines read these
 
 	CL_DisenqueDownload(filename);
 
@@ -2769,7 +2769,7 @@ static void CL_ParseChunkedDownload(qdownload_t *dl)
 			}
 			else //if (flag == DLERR_FILENOTFOUND)
 			{
-				if (dl->flags & DLLF_REQUIRED)	//FTESurf Patch 1026, as CL_DownloadSize_f
+				if (!dl || (dl->flags & (DLLF_REQUIRED|DLLF_VERBOSE)))	//FTESurf Patch 1026, as CL_DownloadSize_f
 					Con_Printf("Couldn't find file \"%s\" on the server\n", svname);
 				else
 					Con_DPrintf("Couldn't find file \"%s\" on the server\n", svname);
@@ -5693,7 +5693,7 @@ static void CL_ParseStaticProt (int baselinetype)
 
 	VectorCopy (es.origin, ent->origin);
 	VectorCopy (es.angles, ent->angles);
-	if (ent->model && ent->model->type == mod_alias)
+	if (ent->model && ent->model->type == mod_alias && !(ent->model->engineflags & MDLF_SOURCEPITCH))	//FTESurf Patch 1027
 		AngleVectorsMesh(es.angles, ent->axis[0], ent->axis[1], ent->axis[2]);
 	else
 		AngleVectors(es.angles, ent->axis[0], ent->axis[1], ent->axis[2]);

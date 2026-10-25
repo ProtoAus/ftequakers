@@ -2446,7 +2446,7 @@ void CL_RotateAroundTag(entity_t *ent, int entnum, int parenttagent, int parentt
 			model = cl.model_precache[ps->modelindex];
 		else
 			model = NULL;
-		if (model && model->type == mod_alias)
+		if (model && model->type == mod_alias && !(model->engineflags & MDLF_SOURCEPITCH))	//FTESurf Patch 1027
 			AngleVectorsMesh(ang, axis[0], axis[1], axis[2]);
 		else
 			AngleVectors(ang, axis[0], axis[1], axis[2]);
@@ -3590,7 +3590,11 @@ void CLQ1_AddVisibleHulls(void)
 		//nettest Patch 64: these are SOLID_PHYSICS_TRIMESH/BOX (alias) props — build the viz
 		//basis with r_meshpitch (AngleVectorsMesh) like the collision + render, so the debug
 		//lines land on the actual collision surface when the prop is pitched/rolled.
-		AngleVectorsMesh(e->v->angles, axis[0], axis[1], axis[2]);
+		//FTESurf Patch 1027: a Source model is drawn, and pmove collides it, with Source's pitch.
+		if (mod->engineflags & MDLF_SOURCEPITCH)
+			AngleVectors(e->v->angles, axis[0], axis[1], axis[2]);
+		else
+			AngleVectorsMesh(e->v->angles, axis[0], axis[1], axis[2]);
 		VectorNegate(axis[1], axis[1]);
 
 		if (showdecomp && mod->numhulls > 0)
