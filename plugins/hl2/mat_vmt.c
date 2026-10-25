@@ -3876,7 +3876,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	{
 		int wmode = hl2_water?hl2_water->ival:3;
 		if (wmode < 0) wmode = 0;
-		if (wmode > 4) wmode = 4;
+		if (wmode > 5) wmode = 5;
 		vmt_stat_water++;
 
 		/*
@@ -4024,7 +4024,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			}
 			//Patch 990: flowmap water, on vmt/water only (wmode 1/2, not $forcecheap's opaque arm);
 			//defaults for keys a material leaves out are this patch's, not measured.
-			if (*st->flowmap && *st->normalmap && (wmode == 1 || wmode == 2) && !(st->water_cheap && st->envauthored))
+			if (*st->flowmap && *st->normalmap && (wmode == 1 || wmode == 2 || wmode == 5) && !(st->water_cheap && st->envauthored))
 			{
 				static const float fdef[7] = {1, 1, 0.2f, 1, 1, 1, 0.0002f};
 				float f[7];
@@ -4132,21 +4132,27 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			removes one whole scene render per batch and is what Source's own
 			cheap water does.
 			*/
+			//FTESurf Patch 1020: mode 5 samples a copy of the view (colour and depth, taken after the opaque
+			//world -- sort underwater) instead of rendering refraction and reflection; #SCREEN reflects by
+			//marching that depth copy.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
-					"\t\tprogram \"vmt/water%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
-					"\t\tmap $refraction\n", strstr(progargs, "#ANIMBUMP") ? "anim" : "", progargs);
+					"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
+					"\t\tmap %s\n", strstr(progargs, "#ANIMBUMP") ? "anim" : "", progargs, wmode == 5 ? "#SCREEN" : "",
+					wmode == 5 ? "$currentrender" : "$refraction");
 			//FTESurf Patch 868: #LQWATER ($forcecheap without $forceexpensive) reads the cubemap,
 			//never the capture.
-			if (wmode >= 2 && !strstr(progargs, "#LQWATER"))
+			if (wmode >= 2 && wmode != 5 && !strstr(progargs, "#LQWATER"))
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $reflection\n");
 			else
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
-			Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $refractiondepth\n");
+			Q_strlcatfz(script, &offset, sizeof(script), wmode == 5 ? "\t\tmap $currentdepth\n" : "\t\tmap $refractiondepth\n");
 			if (strstr(progargs, "#ANIMBUMP"))	//FTESurf Patch 867: sampler 3, every frame of the normal map
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
 					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
 			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");
+			if (wmode == 5)
+				Q_strlcatfz(script, &offset, sizeof(script), "\tsort underwater\n");
 			//FTESurf Patch 868: Source water reflects entities only under $reflectentities.
 			if (!st->water_reflectents)
 				Q_strlcatfz(script, &offset, sizeof(script), "\tfte_reflectnoentities\n");

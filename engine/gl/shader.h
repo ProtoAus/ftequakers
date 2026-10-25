@@ -307,6 +307,7 @@ typedef struct shaderpass_s {
 		T_GEN_GBUFFER5,		//one of the gbuffer images (deferred lighting).
 		T_GEN_GBUFFER6,		//one of the gbuffer images (deferred lighting).
 		T_GEN_GBUFFER7,		//one of the gbuffer images (deferred lighting).
+		T_GEN_CURRENTDEPTH,	//FTESurf Patch 1020: the current framebuffer's depth, copied once per top-level view (appended: no value moves)
 	} texgen;
 
 	enum {

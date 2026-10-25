@@ -1671,6 +1671,8 @@ static texid_t SelectPassTexture(const shaderpass_t *pass)
 
 	case T_GEN_SOURCECUBE:	//used for render-to-texture targets
 		return r_blackcubeimage;
+	case T_GEN_CURRENTDEPTH:	//FTESurf Patch 1020: GL only; white reads as far
+		return r_whiteimage;
 
 	case T_GEN_GBUFFER0:
 	case T_GEN_GBUFFER1:

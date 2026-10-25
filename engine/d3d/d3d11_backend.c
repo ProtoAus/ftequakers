@@ -1158,6 +1158,7 @@ static void SelectPassTexture(unsigned int tu, const shaderpass_t *pass)
 	case T_GEN_RIPPLEMAP:	//ripplemap image (water surface distortions-as-fbo)
 
 	case T_GEN_SOURCECUBE:	//used for render-to-texture targets
+	case T_GEN_CURRENTDEPTH:	//FTESurf Patch 1020: GL only
 		BindTexture(tu, r_nulltex);
 		break;
 	}

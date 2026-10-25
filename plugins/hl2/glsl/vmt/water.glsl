@@ -116,6 +116,9 @@ varying mat3 tangenttoworld;
 #ifdef FLOW
 varying vec2 wxy;
 #endif
+#ifdef SCREEN
+varying vec3 wpos;	//FTESurf Patch 1020: the reflection march starts here
+#endif
 
 #ifdef VERTEX_SHADER
 void main (void)
@@ -124,6 +127,9 @@ void main (void)
 	tf = ftetransform();
 #ifdef FLOW
 	wxy = (m_model * vec4(v_position.xyz, 1.0)).xy;
+#endif
+#ifdef SCREEN
+	wpos = (m_model * vec4(v_position.xyz, 1.0)).xyz;
 #endif
 	norm = normalize((m_model * vec4(v_normal, 0.0)).xyz);
 	eye = (m_model * vec4(e_eyepos - v_position.xyz, 0.0)).xyz;
@@ -291,6 +297,34 @@ void main (void)
 	//Baked reflection is only an approximation. Preserve water body colour
 	//at the horizon; full Fresnel replacement is reserved for live reflection.
 	fres *= 0.65;
+#elif defined(SCREEN) && defined(DEPTH)
+	// FTESurf Patch 1020: no reflection render -- march the reflected ray through the view's depth copy, steps
+	// growing from 4 units; a hit samples the colour copy, a ray that leaves the screen or finds nothing the fog colour.
+	{
+		vec3 rd = reflect(-viewdir, worldnormal);
+		vec3 rp = wpos;
+		float rs = 4.0;
+		vec2 huv = vec2(-1.0);
+		for (int ri = 0; ri < 24; ri++)
+		{
+			rp += rd * rs;
+			rs *= 1.35;
+			vec4 rc4 = m_projection * (m_view * vec4(rp, 1.0));
+			if (rc4.w <= 1.0)
+				break;
+			vec2 ruv = rc4.xy / rc4.w * 0.5 + 0.5;
+			if (ruv.x < 0.0 || ruv.y < 0.0 || ruv.x > 1.0 || ruv.y > 1.0)
+				break;
+			float sd = eyeDepth(texture2D(s_refractdepth, ruv).r);
+			if (rc4.w > sd + 0.5)
+			{
+				if (rc4.w - sd < rs * 2.0)
+					huv = ruv;
+				break;
+			}
+		}
+		refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);
+	}
 #else
 	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif

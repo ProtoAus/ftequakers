@@ -3816,6 +3816,11 @@ static qboolean Shaderpass_MapGen (parsestate_t *ps, shaderpass_t *pass, char *t
 		pass->texgen = T_GEN_CURRENTRENDER;
 		shader->flags |= SHADER_HASCURRENTRENDER;
 	}
+	else if (!Q_stricmp (tname, "$currentdepth"))
+	{	//FTESurf Patch 1020: screen-space water's depth, beside $currentrender
+		pass->texgen = T_GEN_CURRENTDEPTH;
+		shader->flags |= SHADER_HASCURRENTRENDER;
+	}
 	else if (!Q_stricmp (tname, "$sourcecolour"))
 	{
 		pass->texgen = T_GEN_SOURCECOLOUR;
@@ -9040,6 +9045,7 @@ static char *Shader_DecomposeSubPass(char *o, shader_t *s, shaderpass_t *p, qboo
 	case T_GEN_TRANSMISSION:	Shader_DecomposeSubPassMap(o, s, "map $transmission", s->defaulttextures[0].transmission); break;
 	case T_GEN_THICKNESS:		Shader_DecomposeSubPassMap(o, s, "map $thickness", s->defaulttextures[0].thickness); break;
 	case T_GEN_CURRENTRENDER:	sprintf(o, "map $currentrender "); break;
+	case T_GEN_CURRENTDEPTH:	sprintf(o, "map $currentdepth"); break;
 	case T_GEN_SOURCECOLOUR:	sprintf(o, "map $sourcecolour"); break;
 	case T_GEN_SOURCEDEPTH:		sprintf(o, "map $sourcedepth"); break;
 	case T_GEN_REFLECTION:		sprintf(o, "map $reflection"); break;
