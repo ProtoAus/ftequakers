@@ -732,6 +732,7 @@ struct shader_s
 
 	qboolean wireframe;	//FTESurf Patch 780: `fte_wireframe` -- GL draws the triangles as lines (Source's MATERIAL_VAR_WIREFRAME). flags has no bit left.
 	qboolean reflectnoents;	//FTESurf Patch 868: `fte_reflectnoentities` -- Source water with no $reflectentities: its reflection draws only the world. Appended: plugins read shader_t by offset.
+	qboolean materialnofog;	//Authored policy; keep the shared prefix and full flag word unchanged.
 
 	//arranged as a series of vec4s
 /*	struct

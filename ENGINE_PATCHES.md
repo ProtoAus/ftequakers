@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1003 - authored no-fog on program-less Source materials (hl2 plugin, GL client)
+
+Problem: $nofog only added #NOFOG to a VMT's explicit program. Plain passes still
+received GL fixed-function distance fog, including Source's intentionally no-fog
+Wireframe class. The key parser also treated an explicit $nofog 0 as true.
+
+Change: parse the numeric boolean; emit fte_materialnofog as a top-level material
+policy alongside existing explicit-program #NOFOG. Append its boolean after the
+existing shader policy fields rather than consuming an occupied flag bit or moving
+the plugin-visible prefix. GL skips fixed-function fog setup and the fog permutation
+for that material, including automatic-program fallback. Ordinary fog, 2D/sky rules,
+wireframe's forced no-fog and the ignored legacy RTCW nofog directive are unchanged.
+No global fog setting, movement, input, recording, verifier or schema change.
+
+Verified: full -Engine -Full -NoDeploy baseline and subject builds, same 74 existing
+compiler diagnostics and zero new ones. Actual-source C controls compile with
+-Werror: baseline32 / subject33 checks, both ordinary-fog controls ACT; baseline
+incorrectly fogs authored no-fog while subject skips it. Linear/exp/exp2, fog-end
+cleanup, GL permutation, parser/emitter0/1, wireframe policy, setter and source reset/
+append contracts pass. clangd database regenerated; standalone plugin/header LSP
+inference is incomplete, so actual compiler results are authoritative.
+Limits: C/source controls, not a real-window or material-reload visual pass. Human
+GL acceptance and deployment are separate; other render backends are not qualified.
+
 ## Patch 1002 - func_lod's Solid and fade, Momentum's AddSpeed inputs, filters found as Source finds them, DMX 3-5 particle files (qwprogs, csprogs, tools)
 
 Problem: bhop_ceaseless, Lex's list of 25 Oct. func_lod's "Solid" key adds FSOLID_NOT_SOLID

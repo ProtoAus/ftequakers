@@ -2179,7 +2179,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$selfillumtint"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$nofog"))
-			st->nofog = 1;
+			st->nofog = !!atoi(value);
 		else if (!Q_strcasecmp(key, "$wireframe"))
 			st->wireframe = !!atoi(value);	//FTESurf Patch 780
 		else if (!Q_strcasecmp(key, "$nomip"))
@@ -2531,7 +2531,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	fte_wireframe turning its triangles into lines.  It was the unknown-class
 	fallback: the material's own name as a texture, i.e. the missing checker.
 	surf_666's spawn is dev_nyro/blends/wire_white, {73 73 73} on 8 displacements.
-	Unlit, not vertex-lit; nofog reaches only the program arms, so the plain pass fogs.
+	Unlit, not vertex-lit; the common material policy below also carries no-fog to plain passes.
 	*/
 	if (!Q_strcasecmp(st->type, "Wireframe") || !Q_strcasecmp(st->type, "Wireframe_DX9") || !Q_strcasecmp(st->type, "Wireframe_DX8"))
 	{
@@ -4789,6 +4789,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 	if (st->wireframe)
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tfte_wireframe\n");	//FTESurf Patch 780
+	if (st->nofog)
+		Q_strlcatfz(script, &offset, sizeof(script), "\tfte_materialnofog\n");
 
 	if (*st->fullbrightmap)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s%s.vtf\"\n", strcmp(st->fullbrightmap, "materials/")?"materials/":"", st->fullbrightmap);

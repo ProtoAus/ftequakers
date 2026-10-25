@@ -4650,7 +4650,7 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	  (1-f)*fogcolour lift from a negative fogstart.  Fixing only the
 	  fixed-function path would leave the bug alive wherever there is a program,
 	  i.e. exactly where the renderer is going.*/
-	if (r_refdef.globalfog.density && !shaderstate.force2d)
+	if (r_refdef.globalfog.density && !shaderstate.force2d && !shaderstate.curshader->materialnofog)
 		perm |= PERMUTATION_FOG;
 //	if (TEXLOADED(shaderstate.curtexnums->bump) && shaderstate.curbatch->lightmap[0] >= 0 && lightmap[shaderstate.curbatch->lightmap[0]]->hasdeluxe)
 //		perm |= PERMUTATION_DELUXE;
@@ -5590,6 +5590,8 @@ static qboolean BE_ProglessFogBegin(void)
 		return false;
 	if (shaderstate.curshader->prog)
 		return false;	//has a program; PERMUTATION_FOG already covers it.
+	if (shaderstate.curshader->materialnofog)
+		return false;	//authored no-fog policy also applies without a program.
 	if (shaderstate.curshader->flags & SHADER_SKY)
 		return false;	//sky is not at a distance.
 	if (!qglFogi || !qglFogf || !qglFogfv)
