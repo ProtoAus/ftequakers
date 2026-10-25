@@ -334,8 +334,8 @@ enum hllumps_e
 //	VLUMP_FOO			= 27,
 //	VLUMP_FOO			= 28,
 //	VLUMP_FOO			= 29,
-//	VLUMP_FOO			= 30,
-//	VLUMP_FOO			= 31,
+	VLUMP_VERTNORMALS	= 30,	//FTESurf Patch 1023: VRAD's smoothed vertex normals...
+	VLUMP_VERTNORMALINDICES = 31,	//...one index per face vertex, faces in lump order
 	VLUMP_DISP_LMALPHA	= 32,
 	VLUMP_DISP_VERTS	= 33,
 	VLUMP_DISP_LMCOORDS	= 34,
@@ -475,6 +475,9 @@ typedef struct vbspinfo_s
 
 	q2mapsurface_t	*surfaces;
 	dispinfo_t		**surfdisp;
+	vec3_t			*vertnormals;		//FTESurf Patch 1023, VBSP_LoadVertNormals
+	unsigned int	*vertnormalidx;
+	unsigned int	*surfvn;			//[numsurfaces] first vertnormalidx entry; NULL: plane normals
 
 	int				numleafbrushes;
 	q2cbrush_t		**leafbrushes;
@@ -4098,6 +4101,59 @@ static void VBSP_RepackLighting(model_t *mod, qbyte *mod_base, vlump_t *lumps)
 }
 #endif
 
+#ifdef HAVE_CLIENT
+//FTESurf Patch 1023: see VBSP_VertNormal.  Lumps that do not index every face vertex are left out.
+static void VBSP_LoadVertNormals(model_t *mod, qbyte *mod_base, vlump_t *lumps)
+{
+	vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
+	vlump_t *ln = &lumps[VLUMP_VERTNORMALS], *li = &lumps[VLUMP_VERTNORMALINDICES];
+	const qbyte *in = mod_base + li->fileofs;
+	const float *inn = (const float*)(mod_base + ln->fileofs);
+	size_t nn = ln->filelen / sizeof(vec3_t), need = 0, w, i;
+	unsigned int first;
+
+	for (i = 0; i < (size_t)mod->numsurfaces; i++)
+		need += mod->surfaces[i].numedges;
+	if (!nn || !need || !li->filelen)
+		return;
+	if ((size_t)li->filelen == need * 2)
+		w = 2;
+	else if ((size_t)li->filelen == need * 4)
+		w = 4;
+	else
+	{
+		Con_Printf("VBSP: %s keeps plane normals: %u vertex-normal index bytes for %u face vertices\n",
+			mod->name, (unsigned)li->filelen, (unsigned)need);
+		return;
+	}
+	prv->vertnormalidx = plugfuncs->GMalloc(&mod->memgroup, need * sizeof(*prv->vertnormalidx));
+	for (i = 0; i < need; i++, in += w)
+	{
+		prv->vertnormalidx[i] = in[0] | (in[1] << 8) | ((w == 4) ? (in[2] << 16) | ((unsigned int)in[3] << 24) : 0);
+		if (prv->vertnormalidx[i] >= nn)
+		{
+			Con_Printf("VBSP: %s keeps plane normals: vertex-normal index %u of %u\n",
+				mod->name, prv->vertnormalidx[i], (unsigned)nn);
+			return;
+		}
+	}
+	prv->vertnormals = plugfuncs->GMalloc(&mod->memgroup, nn * sizeof(*prv->vertnormals));
+	for (i = 0; i < nn; i++)
+	{
+		prv->vertnormals[i][0] = LittleFloat(inn[i*3+0]);
+		prv->vertnormals[i][1] = LittleFloat(inn[i*3+1]);
+		prv->vertnormals[i][2] = LittleFloat(inn[i*3+2]);
+	}
+	prv->surfvn = plugfuncs->GMalloc(&mod->memgroup, mod->numsurfaces * sizeof(*prv->surfvn));
+	for (first = 0, i = 0; i < (size_t)mod->numsurfaces; i++)
+	{
+		prv->surfvn[i] = first;
+		first += mod->surfaces[i].numedges;
+	}
+	Con_DPrintf("VBSP: %s %u vertex normals over %u face vertices\n", mod->name, (unsigned)nn, (unsigned)need);
+}
+#endif
+
 static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, int version)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -4431,6 +4487,24 @@ static float VBSP_MissingTC(float raw, const float *vecs, float tile)
 	return len ? (raw - vecs[3]) / (len * tile) : 0;
 }
 
+//FTESurf Patch 1023: a face vertex's normal is VRAD's (Mod_LoadVertNormalIndices: one index per
+//vertex, faces in lump order), so smoothing groups smooth envmap, specular and the bumped
+//lightmap basis across faceted brushes as Source draws them (bhop_ceaseless's tube was flat facets).
+//Unit length and in front of the face, else the plane's: VRAD writes zero for faces it skips.
+static const float *VBSP_VertNormal(vbspinfo_t *prv, model_t *mod, msurface_t *surf, int v)
+{
+	const float *n;
+	float l;
+
+	if (!prv->surfvn)
+		return surf->plane->normal;
+	n = prv->vertnormals[prv->vertnormalidx[prv->surfvn[surf - mod->surfaces] + v]];
+	l = DotProduct(n, n);
+	if (l < 0.9 || l > 1.1 || DotProduct(n, surf->plane->normal) <= 0)
+		return surf->plane->normal;
+	return n;
+}
+
 static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -4553,10 +4627,8 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 		}
 
 		//figure out the texture directions, for bumpmapping and stuff
-// 		if (surf->flags & SURF_PLANEBACK)
-// 			VectorNegate(surf->plane->normal, mesh->normals_array[i]);
-// 		else
-		VectorCopy(surf->plane->normal, mesh->normals_array[i]);
+		//A Source face's plane is its own (side only names the node's), so no SURF_PLANEBACK negate.
+		VectorCopy(VBSP_VertNormal(prv, mod, surf, i), mesh->normals_array[i]);
 		VectorCopy(surf->texinfo->vecs[0], mesh->snormals_array[i]);
 		VectorNegate(surf->texinfo->vecs[1], mesh->tnormals_array[i]);
 		//the s+t vectors are axis-aligned, so fiddle them so they're normal aligned instead
@@ -11965,6 +12037,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		VBSP_LoadEntities							(mod, mod_base, header.lumps);	//VBSP_LoadTexInfo so nTexInfo resolves to a material name
 	noerrors = noerrors && VBSP_LoadFaces			(mod, mod_base, header.lumps, header.version);
 #ifdef HAVE_CLIENT
+	if (noerrors && haverenderer && header.version != 17)	//Patch 1023; v17 faces are another layout
+		VBSP_LoadVertNormals					(mod, mod_base, header.lumps);
 	if (noerrors && haverenderer)	//FTESurf Patch 268 D1: needs texinfo, faces and the lighting lump; before displacements only because nothing later moves samples or extents
 		VBSP_ProbeLightmapStride				(mod);
 #endif
