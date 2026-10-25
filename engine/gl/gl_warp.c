@@ -409,9 +409,11 @@ static qboolean R_SkyCameraOrigin(vec3_t out)
 	return have;
 }
 
+int r_skyroomlevel = -1;	//FTESurf Patch 1018: the recursion level the 3D sky room is drawing at, else -1
 qboolean R_DrawSkyroom(shader_t *skyshader)
 {
 	float vmat[16];
+	int oldskyroomlevel;
 	refdef_t oldrefdef;
 	int oldarea = r_viewarea, oldcluster[2] = {r_viewcluster,r_viewcluster2};
 //	extern cvar_t r_ignoreentpvs; //legacy value is 1...
@@ -426,6 +428,8 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 
 	oldrefdef = r_refdef;
 	r_refdef.recurse+=1;
+	oldskyroomlevel = r_skyroomlevel;
+	r_skyroomlevel = r_refdef.recurse;	//FTESurf Patch 1018: its water samples the outer view's targets
 	{	//FTESurf Patch 850: the sky room's own props, not again the outer views' (R_RenderScene_Internal)
 		extern cvar_t r_nestedents;
 		extern int r_visdynamic;
@@ -606,6 +610,7 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 	r_viewcluster = oldcluster[0];
 	r_viewcluster2 = oldcluster[1];
 	r_refdef = oldrefdef;
+	r_skyroomlevel = oldskyroomlevel;
 
 	/*broken stuff*/
 	AngleVectors (r_refdef.viewangles, vpn, vright, vup);

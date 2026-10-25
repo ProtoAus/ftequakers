@@ -25,6 +25,8 @@ extern cvar_t r_multidraw;	//FTESurf Patch 831
 extern cvar_t r_instancing;	//FTESurf Patch 831
 extern cvar_t r_skyroomneed;	//FTESurf Patch 850
 extern cvar_t r_waterskyroom, r_waterforcereflectentities;	//FTESurf Patch 868
+extern cvar_t r_waterskyroomcapture;	//FTESurf Patch 1018
+extern int r_skyroomlevel;
 int r_capturenoents;	//FTESurf Patch 868: the reflection capture being rendered draws only the world
 int r_noentsfirstvisedict;	//...and the firstvisedict it replaced, for a 3D sky drawn inside it
 extern unsigned int r_vs_skydrawn, r_vs_skyskipped;
@@ -298,6 +300,43 @@ static struct {
 	int maxwbatches;
 	batch_t *wbatches;
 } shaderstate;
+//FTESurf Patch 1018: water in the 3D sky room samples the outer view's targets (Source's skybox water samples
+//the main view's; it renders targets for the eye's view only) -- when that view captured water this frame or
+//the last; otherwise it captures its own, as before, rather than sample nothing.
+extern int r_topviews;	//gl_rmain.c (r_framecount is never advanced)
+static int be_watercapview[R_MAX_RECURSE];	//r_topviews + 1 at each level's last water capture; 0 = never
+static qboolean BE_SkyroomSharesWater(unsigned int shaderflags)
+{
+	return r_refdef.recurse && r_refdef.recurse == r_skyroomlevel && !r_waterskyroomcapture.ival &&
+		!(shaderflags & (SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) &&
+		be_watercapview[r_refdef.recurse-1] && be_watercapview[r_refdef.recurse-1] >= r_topviews;	//this view or the last
+}
+//FTESurf Patch 1018: a water capture's size -- the frame at its scale, then r_watertargetsize per axis
+extern cvar_t r_watertargetsize;
+static void BE_WaterCaptureRect(float scale, qboolean portal)
+{
+	float cw = 1, ch = 1;
+	int pw = max(1, vid.fbpwidth * scale), ph = max(1, vid.fbpheight * scale);
+	if (!portal && r_watertargetsize.ival > 0)
+	{
+		if (pw > r_watertargetsize.ival)
+			cw = (float)r_watertargetsize.ival / pw, pw = r_watertargetsize.ival;
+		if (ph > r_watertargetsize.ival)
+			ch = (float)r_watertargetsize.ival / ph, ph = r_watertargetsize.ival;
+	}
+	r_refdef.vrect.x = 0;
+	r_refdef.vrect.y = 0;
+	r_refdef.vrect.width = max(1, vid.fbvwidth * scale * cw);
+	r_refdef.vrect.height = max(1, vid.fbvheight * scale * ch);
+	r_refdef.pxrect.x = 0;
+	r_refdef.pxrect.y = 0;
+	r_refdef.pxrect.width = pw;
+	r_refdef.pxrect.height = ph;
+}
+static int BE_WaterTargetLevel(void)
+{
+	return BE_SkyroomSharesWater(shaderstate.curshader ? shaderstate.curshader->flags : 0) ? r_refdef.recurse - 1 : r_refdef.recurse;
+}
 
 static texnums_t r_nulltexnums;	//nettest: zeroed fallback for shaderstate.curtexnums when a shader is registered-but-not-yet-generated (defaulttextures==NULL, e.g. a Source prop's GLSL material on first frame). TEXLOADED() on all-zero texids is false, so every downstream deref (BE_RenderMeshProgram/DrawPass) safely binds nothing instead of NULL-faulting.
 
@@ -1664,7 +1703,7 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 		t = shaderstate.tex_sourcedepth;
 		break;
 	case T_GEN_REFLECTION:
-		t = shaderstate.tex_reflection[r_refdef.recurse];
+		t = shaderstate.tex_reflection[BE_WaterTargetLevel()];
 		break;
 	case T_GEN_REFRACTION:
 		/* FTESurf Patch 210: a portal must read the texture the portal was
@@ -1690,10 +1729,10 @@ static void Shader_BindTextureForPass(int tmu, const shaderpass_t *pass)
 			T_Gen_CurrentRender(tmu, false);
 			return;
 		}
-		t = shaderstate.tex_refraction[r_refdef.recurse];
+		t = shaderstate.tex_refraction[BE_WaterTargetLevel()];
 		break;
 	case T_GEN_REFRACTIONDEPTH:
-		t = shaderstate.tex_refractiondepth[r_refdef.recurse];
+		t = shaderstate.tex_refractiondepth[BE_WaterTargetLevel()];
 		break;
 	case T_GEN_RIPPLEMAP:
 		t = shaderstate.tex_ripplemap[r_refdef.recurse];
@@ -7068,6 +7107,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		be_watercapture = 0;	//the main view: nothing left counted by an aborted frame
 	if (be_watercapture && !(bs->flags & SHADER_HASPORTAL))
 		return false;
+	//FTESurf Patch 1018: water in the 3D sky room draws with the outer view's targets (BE_SkyroomSharesWater)
+	if (BE_SkyroomSharesWater(bs->flags))
+		return true;
 	//these flags require rendering some view as an fbo
 	//(BEM_DEPTHDARK is used when lightmap scale is 0, but still shows any emissive stuff)
 	if (shaderstate.mode != BEM_STANDARD && shaderstate.mode != BEM_DEPTHDARK)
@@ -7160,14 +7202,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				qglGenTextures(1, &shaderstate.tex_reflection[r_refdef.recurse]->num);
 		}
 
-		r_refdef.vrect.x = 0;
-		r_refdef.vrect.y = 0;
-		r_refdef.vrect.width = max(1, vid.fbvwidth * renderscale);
-		r_refdef.vrect.height = max(1, vid.fbvheight * renderscale);
-		r_refdef.pxrect.x = 0;
-		r_refdef.pxrect.y = 0;
-		r_refdef.pxrect.width = max(1, vid.fbpwidth * renderscale);
-		r_refdef.pxrect.height = max(1, vid.fbpheight * renderscale);
+		BE_WaterCaptureRect(renderscale, false);
 		if (shaderstate.tex_reflection[r_refdef.recurse]->width!=r_refdef.pxrect.width || shaderstate.tex_reflection[r_refdef.recurse]->height!=r_refdef.pxrect.height)
 		{
 			shaderstate.tex_reflection[r_refdef.recurse]->width = r_refdef.pxrect.width;
@@ -7192,6 +7227,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		qglClearColor(0, 0, 0, 1);
 		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		GLBE_CaptureLog(batch, cs, "reflect", cb);
+		be_watercapview[r_refdef.recurse] = r_topviews + 1;
 		be_watercapture++;
 		r_capturenoents = cs->reflectnoents && !r_waterforcereflectentities.ival;	//Patch 868
 		r_capturemergevis = cb != batch;
@@ -7212,14 +7248,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			float renderscale = min(1, cs->portalfboscale);
 			vrect_t ovrect = r_refdef.vrect;
 			pxrect_t oprect = r_refdef.pxrect;
-			r_refdef.vrect.x = 0;
-			r_refdef.vrect.y = 0;
-			r_refdef.vrect.width = max(1, vid.fbvwidth * renderscale);
-			r_refdef.vrect.height = max(1, vid.fbvheight * renderscale);
-			r_refdef.pxrect.x = 0;
-			r_refdef.pxrect.y = 0;
-			r_refdef.pxrect.width = max(1, vid.fbpwidth * renderscale);
-			r_refdef.pxrect.height = max(1, vid.fbpheight * renderscale);
+			BE_WaterCaptureRect(renderscale, (cf & SHADER_HASPORTAL) != 0);
 
 			if (!shaderstate.tex_refraction[r_refdef.recurse])
 			{
@@ -7331,6 +7360,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			else
 			{
 				GLBE_CaptureLog(batch, cs, (cf & SHADER_HASREFRACTDEPTH)?"refract+depth":"refract", cb);
+				be_watercapview[r_refdef.recurse] = r_topviews + 1;
 				be_watercapture++;
 				GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, ((cf & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
 				be_watercapture--;
@@ -7344,6 +7374,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		else
 		{
 			GLBE_CaptureLog(batch, cs, "refractcopy", cb);
+			be_watercapview[r_refdef.recurse] = r_topviews + 1;
 			be_watercapture++;	//a portal never gets here: it forces the FBO branch
 			GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, 3);
 			be_watercapture--;
