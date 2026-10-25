@@ -23,6 +23,7 @@
 #ifndef SCROLL
 #define SCROLL 0.0,0.0
 #endif
+//Patch 990: Source's Sine proxy on $refractamount (min, max, period), proxies.cpp CSineProxy
 #ifndef ENVTINT
 #define ENVTINT 1.0,1.0,1.0
 #endif
@@ -69,7 +70,13 @@ void main()
 #ifdef NOWARP
 	vec2 rc = sc;	// no $normalmap: Source's DX9 Refract has nothing to warp by
 #else
-	vec2 rc = sc + tn.xy * (nrm.a * float(REFRAMOUNT));
+#ifdef REFRSINE
+	vec3 rs = vec3(REFRSINE);
+	float amount = mix(rs.x, rs.y, sin(6.2831853 * e_time / rs.z) * 0.5 + 0.5);
+#else
+	float amount = float(REFRAMOUNT);
+#endif
+	vec2 rc = sc + tn.xy * (nrm.a * amount);
 #endif
 #ifdef BLUR
 	// refract_ps20b's BLUR 1: nine taps from four bilinear ones, 1/512 apart.

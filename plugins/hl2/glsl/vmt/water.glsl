@@ -8,6 +8,7 @@
 !!samps =DEPTH refractdepth=2
 !!samps =REFLECTCUBEMASK reflectcube
 !!samps =ANIMBUMP bumpanim:2DArray=3
+!!samps =FLOW upper lower
 !!permu FOG
 
 #include "sys/defs.h"
@@ -89,6 +90,10 @@
 #ifndef BUMPSCROLL
 #define BUMPSCROLL 0.0,0.0
 #endif
+// Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
+// SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
+// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
 // frames a second, whole frames, water.cpp:268) samples every layer from one frame.
@@ -106,12 +111,18 @@ varying vec4 tf;
 varying vec3 norm;
 varying vec3 eye;
 varying mat3 tangenttoworld;
+#ifdef FLOW
+varying vec2 wxy;
+#endif
 
 #ifdef VERTEX_SHADER
 void main (void)
 {
 	tc = v_texcoord.st;
 	tf = ftetransform();
+#ifdef FLOW
+	wxy = (m_model * vec4(v_position.xyz, 1.0)).xy;
+#endif
 	norm = normalize((m_model * vec4(v_normal, 0.0)).xyz);
 	eye = (m_model * vec4(e_eyepos - v_position.xyz, 0.0)).xyz;
 	// VBSP negates the texture V axis when building its T attribute.
@@ -162,7 +173,18 @@ void main (void)
 	ntc = btc + e_time * vec2(BUMPSCROLL);
 	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 	// the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
+#ifdef FLOW
+	vec4 fl = vec4(FLOW);
+	vec3 ft = vec3(FLOWTIME);
+	vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;
+	vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;
+	float ti = (e_time * ft.x + texture2D(s_lower, vec2(wxy.x, -wxy.y) * ft.z).g) / (ft.y * 2.0);
+	vec4 nsample = mix(BUMPSAMPLE(nuv + floor(ti) * 0.311 + fract(ti) * fl.z * flow),
+	                   BUMPSAMPLE(nuv + floor(ti + 0.5) * 0.311 + 0.5 + fract(ti + 0.5) * fl.z * flow),
+	                   abs(2.0 * fract(ti) - 1.0));	//each layer weighs 0 at its own wrap
+#else
 	vec4 nsample = BUMPSAMPLE(ntc);
+#endif
 #ifdef MULTITEXTURE
 	// Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap;
 	// the alpha averages with them (water_ps2x_helper.h:42-45).
@@ -170,6 +192,9 @@ void main (void)
 	nsample = (nsample + BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)) + BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2))) / 3.0;
 #endif
 	n = nsample.xyz * 2.0 - 1.0;
+#ifdef FLOW
+	n.xy *= fl.w;
+#endif
 
 #ifdef RIPPLEMAP
 	n += texture2D(s_ripplemap, stc).rgb*3.0;

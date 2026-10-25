@@ -9661,7 +9661,9 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			sent = &prv->staticprops[i];
 			src = &sent->ent;
 
-			if (sent->fademaxdist)
+			//Patch 990: only a positive FadeMaxDist fades (vbsp staticprop.cpp:650 m_FadesOut); VBSP++ writes
+			//-1 for "never", and bhop_ceaseless's 27 gates were culled at every distance.
+			if (sent->fademaxdist > 0)
 			{
 				VectorSubtract(refdef->vieworg, src->origin, disp);
 				d = VectorLength(disp);
@@ -12320,7 +12322,7 @@ static void VBSP_PropCensus_f(void)
 			sent->nocollide ? "  <-- NOT SOLID: the model ships no .phy" : "");
 		Con_Printf("    fade               : min %g max %g%s\n",
 			sent->fademindist, sent->fademaxdist,
-			sent->fademaxdist ? "" : " (none; hl2_propdist applies)");
+			sent->fademaxdist > 0 ? "" : " (none; hl2_propdist applies)");
 		Con_Printf("    area               : areanum %i, areanum2 %i, headnode %i%s\n",
 			src->pvscache.areanum, src->pvscache.areanum2, src->pvscache.headnode,
 			(sent->nareas > 2) ? "  <-- box spans more areas than the 2 slots hold" : "");

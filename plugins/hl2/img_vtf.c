@@ -427,9 +427,23 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 
 		So: seven for the stride, six for what we upload.
 		*/
+		//Patch 990: a pre-7.5 cube saved without the spheremap has 6. firstframe 0xffff says so
+		//(VTFLib's GetFaceCount), and so does a chain that fills exactly 6 faces and not 7.
+		//Library census: 51 marked files fit 6, 30 unmarked fit 6, 40,701 fit 7, none marked fit 7.
 		storedfaces = faces;
-		if (mips->type==PTI_CUBE && vtf->major == 7 && vtf->minor < 5)
+		if (mips->type==PTI_CUBE && vtf->major == 7 && vtf->minor < 5 && vtf->firstframe != 0xffff)
+		{
+			size_t chain = 0;
+			for (miplevel = 0; miplevel < vtf->mipmapcount; miplevel++)
+			{
+				w = vtf->width>>miplevel;	if (!w) w = 1;
+				h = vtf->height>>miplevel;	if (!h) h = 1;
+				chain += (size_t)((w+bw-1)/bw) * ((h+bh-1)/bh) * ((d+bd-1)/bd) * bb * vtf->numframes;
+			}
 			storedfaces = 7;
+			if (filedata <= end && chain && (size_t)(end - filedata) == chain*6)
+				storedfaces = 6;
+		}
 
 		/*
 		Patch 195: an array is one mip PER LEVEL, `frames` layers deep -- not one

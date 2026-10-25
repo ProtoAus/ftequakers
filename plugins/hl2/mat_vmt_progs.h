@@ -418,6 +418,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef SCROLL\n"
 "#define SCROLL 0.0,0.0\n"
 "#endif\n"
+//Patch 990: Source's Sine proxy on $refractamount (min, max, period), proxies.cpp CSineProxy
 "#ifndef ENVTINT\n"
 "#define ENVTINT 1.0,1.0,1.0\n"
 "#endif\n"
@@ -464,7 +465,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef NOWARP\n"
 "vec2 rc = sc; // no $normalmap: Source's DX9 Refract has nothing to warp by\n"
 "#else\n"
-"vec2 rc = sc + tn.xy * (nrm.a * float(REFRAMOUNT));\n"
+"#ifdef REFRSINE\n"
+"vec3 rs = vec3(REFRSINE);\n"
+"float amount = mix(rs.x, rs.y, sin(6.2831853 * e_time / rs.z) * 0.5 + 0.5);\n"
+"#else\n"
+"float amount = float(REFRAMOUNT);\n"
+"#endif\n"
+"vec2 rc = sc + tn.xy * (nrm.a * amount);\n"
 "#endif\n"
 "#ifdef BLUR\n"
 // refract_ps20b's BLUR 1: nine taps from four bilinear ones, 1/512 apart.
@@ -1562,6 +1569,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =DEPTH refractdepth=2\n"
 "!!samps =REFLECTCUBEMASK reflectcube\n"
 "!!samps =ANIMBUMP bumpanim:2DArray=3\n"
+"!!samps =FLOW upper lower\n"
 "!!permu FOG\n"
 
 "#include \"sys/defs.h\"\n"
@@ -1643,6 +1651,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef BUMPSCROLL\n"
 "#define BUMPSCROLL 0.0,0.0\n"
 "#endif\n"
+// Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
+// SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
+// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
 // frames a second, whole frames, water.cpp:268) samples every layer from one frame.
@@ -1660,12 +1672,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "varying vec3 norm;\n"
 "varying vec3 eye;\n"
 "varying mat3 tangenttoworld;\n"
+"#ifdef FLOW\n"
+"varying vec2 wxy;\n"
+"#endif\n"
 
 "#ifdef VERTEX_SHADER\n"
 "void main (void)\n"
 "{\n"
 "tc = v_texcoord.st;\n"
 "tf = ftetransform();\n"
+"#ifdef FLOW\n"
+"wxy = (m_model * vec4(v_position.xyz, 1.0)).xy;\n"
+"#endif\n"
 "norm = normalize((m_model * vec4(v_normal, 0.0)).xyz);\n"
 "eye = (m_model * vec4(e_eyepos - v_position.xyz, 0.0)).xyz;\n"
 // VBSP negates the texture V axis when building its T attribute.
@@ -1716,7 +1734,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "ntc = btc + e_time * vec2(BUMPSCROLL);\n"
 // Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 // the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
+"#ifdef FLOW\n"
+"vec4 fl = vec4(FLOW);\n"
+"vec3 ft = vec3(FLOWTIME);\n"
+"vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;\n"
+"vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;\n"
+"float ti = (e_time * ft.x + texture2D(s_lower, vec2(wxy.x, -wxy.y) * ft.z).g) / (ft.y * 2.0);\n"
+"vec4 nsample = mix(BUMPSAMPLE(nuv + floor(ti) * 0.311 + fract(ti) * fl.z * flow),\n"
+"BUMPSAMPLE(nuv + floor(ti + 0.5) * 0.311 + 0.5 + fract(ti + 0.5) * fl.z * flow),\n"
+"abs(2.0 * fract(ti) - 1.0)); //each layer weighs 0 at its own wrap\n"
+"#else\n"
 "vec4 nsample = BUMPSAMPLE(ntc);\n"
+"#endif\n"
 "#ifdef MULTITEXTURE\n"
 // Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap;
 // the alpha averages with them (water_ps2x_helper.h:42-45).
@@ -1724,6 +1753,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "nsample = (nsample + BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)) + BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2))) / 3.0;\n"
 "#endif\n"
 "n = nsample.xyz * 2.0 - 1.0;\n"
+"#ifdef FLOW\n"
+"n.xy *= fl.w;\n"
+"#endif\n"
 
 "#ifdef RIPPLEMAP\n"
 "n += texture2D(s_ripplemap, stc).rgb*3.0;\n"
@@ -3014,6 +3046,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu FRAMEBLEND\n"
 "!!permu SKELETAL\n"
 "!!samps reflectcube\n"
+"!!samps =BASE diffuse\n"
+"!!samps =DETAILMASK upper\n"
+"!!samps =ENVFROMMASK reflectmask\n"
 
 "#include \"sys/defs.h\"\n"
 
@@ -3032,11 +3067,24 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef ALPHA\n"
 "#define ALPHA 1.0\n"
 "#endif\n"
+"#ifndef SCROLL\n"
+"#define SCROLL 0.0,0.0\n"
+"#endif\n"
+"#ifndef DETAILSCALE\n"
+"#define DETAILSCALE 4.0\n"
+"#endif\n"
+"#ifndef DETAILSCROLL\n"
+"#define DETAILSCROLL 0.0,0.0\n"
+"#endif\n"
 
-// UnlitGeneric without a base texture: black albedo plus its reflection.
-// Unlike WindowImposter, the surface normal determines the sample direction.
+// UnlitGeneric with an $envmap: base x $color plus the reflection (vertexlit_and_unlit_generic_ps2x.fxc
+// :361-467). Without #BASE the base is Source's TEXTURE_BLACK (vertexlitgeneric_dx9_helper.cpp:938-941).
+// $color never scales the reflection (Patch 990: bhop_ceaseless's $color2 {0 0 0} props drew black).
 "varying vec3 incident;\n"
 "varying vec3 normal;\n"
+"#ifdef BASE\n"
+"varying vec2 tex_c;\n"
+"#endif\n"
 "#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
 "varying vec4 vertex_colour;\n"
 "#endif\n"
@@ -3049,6 +3097,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "gl_Position = skeletaltransform_wnst(w, n, s, t);\n"
 "incident = w - e_eyepos;\n"
 "normal = n;\n"
+"#ifdef BASE\n"
+"tex_c = v_texcoord;\n"
+"#endif\n"
 "#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
 "vertex_colour = v_colour;\n"
 "#endif\n"
@@ -3062,14 +3113,41 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 ray = reflect(incident, normalize(normal));\n"
 "ray = (m_model * vec4(ray, 0.0)).xyz;\n"
 "vec3 rgb = textureCube(s_reflectcube, ray).rgb;\n"
+"float alpha = float(ALPHA);\n"
+"#ifdef BASE\n"
+"vec4 base = texture2D(s_diffuse, tex_c + e_time * vec2(SCROLL));\n"
+"#ifdef DETAILMASK\n"
+//$detailblendmode 9, TCOMBINE_MASK_BASE_BY_DETAIL_ALPHA (common_ps_fxc.h:730)
+"base.a *= texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a; //BaseVSShader.cpp:351-357 scales the scroll too\n"
+"#endif\n"
+"#ifdef MASKLT\n"
+"if (base.a < float(MASK))\n"
+"discard;\n"
+"#endif\n"
+"#ifdef ENVFROMMASK\n"
+"rgb *= texture2D(s_reflectmask, tex_c).rgb;\n"
+"#endif\n"
+"#ifdef ENVFROMBASE\n"
+"rgb *= 1.0 - base.a; //\"this blows!\" -- Source's own comment on the inverted mask\n"
+"#endif\n"
+"#endif\n"
 "vec3 grey = vec3(dot(rgb, vec3(0.2126, 0.7152, 0.0722)));\n"
 "rgb = mix(grey, rgb, vec3(ENVSAT));\n"
 "rgb = mix(rgb, rgb * rgb, float(ENVCONTRAST));\n"
-"rgb *= vec3(ENVTINT) * vec3(COLOR) * e_colourident.rgb;\n"
+"rgb *= vec3(ENVTINT) * e_colourident.rgb;\n"
+"#ifdef BASE\n"
+"base.rgb *= vec3(COLOR);\n"
 "#ifdef VERTEXCOL\n"
+"base.rgb *= vertex_colour.rgb;\n"
+"#endif\n"
+"rgb += base.rgb;\n"
+"#ifndef ENVFROMBASE\n"
+"alpha *= base.a;\n"
+"#endif\n"
+"#elif defined(VERTEXCOL)\n"
 "rgb *= vertex_colour.rgb;\n"
 "#endif\n"
-"vec4 result = vec4(rgb, float(ALPHA) * e_colourident.a);\n"
+"vec4 result = vec4(rgb, alpha * e_colourident.a);\n"
 "#ifdef VERTEXALPHA\n"
 "result.a *= vertex_colour.a;\n"
 "#endif\n"
@@ -3202,6 +3280,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =DEPTH refractdepth=2\n"
 "!!samps =REFLECTCUBEMASK reflectcube\n"
 "!!samps =ANIMBUMP bumpanim:2DArray=3\n"
+"!!samps =FLOW upper lower\n"
 "!!permu FOG\n"
 
 "#include \"sys/defs.h\"\n"
@@ -3283,6 +3362,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef BUMPSCROLL\n"
 "#define BUMPSCROLL 0.0,0.0\n"
 "#endif\n"
+// Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
+// SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
+// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
 // frames a second, whole frames, water.cpp:268) samples every layer from one frame.
@@ -3300,12 +3383,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "varying vec3 norm;\n"
 "varying vec3 eye;\n"
 "varying mat3 tangenttoworld;\n"
+"#ifdef FLOW\n"
+"varying vec2 wxy;\n"
+"#endif\n"
 
 "#ifdef VERTEX_SHADER\n"
 "void main (void)\n"
 "{\n"
 "tc = v_texcoord.st;\n"
 "tf = ftetransform();\n"
+"#ifdef FLOW\n"
+"wxy = (m_model * vec4(v_position.xyz, 1.0)).xy;\n"
+"#endif\n"
 "norm = normalize((m_model * vec4(v_normal, 0.0)).xyz);\n"
 "eye = (m_model * vec4(e_eyepos - v_position.xyz, 0.0)).xyz;\n"
 // VBSP negates the texture V axis when building its T attribute.
@@ -3356,7 +3445,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "ntc = btc + e_time * vec2(BUMPSCROLL);\n"
 // Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 // the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
+"#ifdef FLOW\n"
+"vec4 fl = vec4(FLOW);\n"
+"vec3 ft = vec3(FLOWTIME);\n"
+"vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;\n"
+"vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;\n"
+"float ti = (e_time * ft.x + texture2D(s_lower, vec2(wxy.x, -wxy.y) * ft.z).g) / (ft.y * 2.0);\n"
+"vec4 nsample = mix(BUMPSAMPLE(nuv + floor(ti) * 0.311 + fract(ti) * fl.z * flow),\n"
+"BUMPSAMPLE(nuv + floor(ti + 0.5) * 0.311 + 0.5 + fract(ti + 0.5) * fl.z * flow),\n"
+"abs(2.0 * fract(ti) - 1.0)); //each layer weighs 0 at its own wrap\n"
+"#else\n"
 "vec4 nsample = BUMPSAMPLE(ntc);\n"
+"#endif\n"
 "#ifdef MULTITEXTURE\n"
 // Source water_vs20 / watercheap_vs20 extra layers, including scale/axis swap;
 // the alpha averages with them (water_ps2x_helper.h:42-45).
@@ -3364,6 +3464,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "nsample = (nsample + BUMPSAMPLE(tc1 + e_time * vec2(SCROLL1)) + BUMPSAMPLE(btc.yx * 0.45 + e_time * vec2(SCROLL2))) / 3.0;\n"
 "#endif\n"
 "n = nsample.xyz * 2.0 - 1.0;\n"
+"#ifdef FLOW\n"
+"n.xy *= fl.w;\n"
+"#endif\n"
 
 "#ifdef RIPPLEMAP\n"
 "n += texture2D(s_ripplemap, stc).rgb*3.0;\n"
