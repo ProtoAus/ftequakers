@@ -921,6 +921,8 @@ static void FS_OpenFilePicker_f(void)
 		{"Mods", "fmf"},
 		{"All Files", "*"},
 	};
+	if (Cmd_IsInsecure())
+		return;
 	SDL_ShowOpenFileDialog(FS_OpenFilePicked, NULL, sdlwindow, exts, countof(exts), NULL, true);
 }
 

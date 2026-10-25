@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 995 - Keep the SDL3 file picker local
+
+Problem: The SDL3 backend's sys_openfile handler did not enforce command
+provenance, unlike the corrected DBus backend.
+
+Change: Return on Cmd_IsInsecure before the existing SDL dialog call; preserve
+all local callback/window/filter/multiselect arguments. No SDL API was changed.
+
+Verified: Actual handler and restriction macros, fake dialog boundary: baseline18
+checks/6 dialog calls, subject10/2 calls. Local requests ACT in either order;
+insecure/server requests never enter SDL. Windows client/server/standard-plugins
+NoDeploy build passes all3QC0warnings, no new native warnings; it excludes SDL3.
+Full SDL3 SDK/platform build and real desktop acceptance remain untested because
+the SDK is absent here. LSP lacks SDL headers, not a native build-clean claim.
+No deployed images, existing command channels or broader privileges changed.
+
 ## Patch 989 - Validate picker replies and release DBus ownership
 
 Problem: Missing/incorrect portal replies could leave an uninitialized path;
