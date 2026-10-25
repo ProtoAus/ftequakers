@@ -989,6 +989,7 @@ Returns true if the file exists, returns false if it triggered a download.
 
 qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localname, unsigned int flags)
 {	//returns false if we don't have the file yet.
+	char fname[MAX_OSPATH];	//FTESurf Patch 1015: filename may point here past the web block
 	COM_AssertMainThread("CL_CheckOrEnqueDownloadFile");
 	if (flags & DLLF_NONGAME)
 	{
@@ -1038,7 +1039,6 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		//filename and localname already hold both, and a third call wrote over filename while reading it
 		//("https://play.proto.bar/play.proto.bar/less.bsp" for maps/bhop_ceaseless.bsp).
 		static char weburl[MAX_OSPATH*2];
-		char fname[MAX_OSPATH];
 		const char *dlURL = InfoBuf_ValueForKey(&cl.serverinfo, "sv_dlURL");
 		Q_strncpyz(fname, filename, sizeof(fname));
 		filename = fname;

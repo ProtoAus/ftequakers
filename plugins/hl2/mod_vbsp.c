@@ -3028,7 +3028,7 @@ static void VBSP_LoadLeafWater (model_t *mod, qbyte *mod_base, vlump_t *l)
 			Q_strlcpy(seen[j % 16].mat, mat, sizeof(seen[0].mat));
 			k = Mat_VMT_UnderwaterOverlay(mat, ov, sizeof(ov));
 			Q_strlcpy(seen[j % 16].res, k < 0 ? "" : "none", sizeof(seen[0].res));
-			if (k > 0 && strlen(ov) + 11 < MAX_QPATH)	//R_LoadShader keeps 63 characters of a name
+			if (k > 0 && strlen(ov) + 11 < MAX_QPATH)	//R_LoadShader keeps MAX_QPATH-1 of a name
 			{
 				if (Mat_VMT_OverlayScript(ov, script, sizeof(script)))
 					Q_snprintfz(seen[j % 16].res, sizeof(seen[0].res), "ftesurf/uw/%s", ov);
