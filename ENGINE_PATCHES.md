@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 997 - Reuse the least-recently-used empty lobby atomically
+
+Problem: The allocator repeatedly chose the lowest-numbered vacancy; concurrent
+requests could overwrite an assignment selected outside the write transaction.
+
+Change: Backend schema24 adds one lobby-local integer recency sequence, not UTC
+or player history. Occupied heartbeats and successful requests advance it; idle
+heartbeats do not. Select oldest use/node among live unclaimed empty lobbies,
+inside the same short write transaction as claim and recency. Preserve all
+occupied/stale/claimed exclusions, map validation, rate limits and public shapes.
+DDL/stamp commit together; old rows start unknown and existing data is retained.
+No lobby termination/spawn, player-data deletion, native/Build or receipt change.
+
+Verified: Actual baseline/subject Flask request/claim/heartbeat control selects
+node27510 vs older-used27520. Extended join suite covers same-second/clock
+rollback order, coalescing/distinct/exhausted concurrent asks, claim/use rollback,
+schema23 data retention/repeat and interruption rollback/recovery. Heartbeat,
+board (including migration races) and all68Social tests pass. Explicit board
+head-schema expectation updated to24, not weakened. No live backend migration,
+Pi deployment, public load/performance or whole anti-cheat completion claim.
+Native pin/tag stay patch-995; guarded schema24 promotion remains separate.
+
 ## Patch 995 - Keep the SDL3 file picker local
 
 Problem: The SDL3 backend's sys_openfile handler did not enforce command
