@@ -1545,6 +1545,7 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	}
 
 	mod->type = mod_alias;
+	mod->engineflags |= MDLF_SOURCEPITCH;	//FTESurf Patch 1027
 	mod->radius = RadiusFromBounds(mod->mins, mod->maxs);
 
 	/*

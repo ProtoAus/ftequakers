@@ -1210,6 +1210,7 @@ typedef struct model_s
 #define MDLF_NOLERP		     0x0800 // doesn't lerp, ever. for dodgy models that don't scale to nothingness before jumping.
 #define MDLF_RECALCULATERAIN 0x1000 // particles changed, recalculate any sky polys
 #define MDLF_SOURCEBSP      0x2000 // Patch 538: VBSP-only water appearance (fg_new also includes CoD/Doom).
+#define MDLF_SOURCEPITCH    0x4000 // Patch 1027: a Source studio model, drawn with Source's pitch (cl_ents.c)
 
 //============================================================================
 #endif	// __MODEL__

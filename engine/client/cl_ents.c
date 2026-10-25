@@ -5808,7 +5808,7 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 			stat->ent.model = clmodel;
 
 			//figure out the correct axis for the model
-			if (clmodel && clmodel->type == mod_alias && (cls.protocol == CP_QUAKEWORLD || cls.protocol == CP_NETQUAKE))
+			if (clmodel && clmodel->type == mod_alias && !(clmodel->engineflags & MDLF_SOURCEPITCH) && (cls.protocol == CP_QUAKEWORLD || cls.protocol == CP_NETQUAKE))
 			{	//q2 is fixed, but q1 pitches the wrong way, and hexen2 rolls the wrong way too.
 				AngleVectorsMesh(stat->state.angles, stat->ent.axis[0], stat->ent.axis[1], stat->ent.axis[2]);
 			}
@@ -6852,7 +6852,10 @@ void CL_LinkPacketEntities (void)
 		}
 
 		VectorCopy(angles, ent->angles);
-		if (model->type == mod_alias)
+		//FTESurf Patch 1027: a Source model takes the map's pitch as Source does, nose-down
+		//(bhop_ceaseless's spider, "45 0 0", hung upside down).  Draw only: pmove already sees
+		//Source's pitch, its physent (CL_SetSolidEntities) and pmovetst.c flipping it once each.
+		if (model->type == mod_alias && !(model->engineflags & MDLF_SOURCEPITCH))
 			AngleVectorsMesh(angles, ent->axis[0], ent->axis[1], ent->axis[2]);
 		else
 			AngleVectors(angles, ent->axis[0], ent->axis[1], ent->axis[2]);
