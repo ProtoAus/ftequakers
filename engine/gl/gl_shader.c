@@ -1696,8 +1696,12 @@ static qboolean Shader_ParseProgramCvar(char *script, char **cvarnames, int *cva
 			script++;
 
 		out = body;
-		while (out < com_token+countof(body)-1 && *script != '\n' && !(script[0] == '/' && script[1] == '/')) 
+		//FTESurf Patch 1019: bounded by body (was com_token, an unrelated global: on a stack above it the loop
+		//copied nothing), stopped at a CR too, and trailing blanks before a // comment dropped ("0\r", "512 ").
+		while (out < body+countof(body)-1 && *script != '\n' && *script != '\r' && !(script[0] == '/' && script[1] == '/'))
 			*out++ = *script++;
+		while (out > body && (out[-1] == ' ' || out[-1] == '\t'))
+			out--;
 		*out++ = 0;
 		ref = Cvar_Get(cvarnames[0], body, 0, "GLSL Variables");
 	}

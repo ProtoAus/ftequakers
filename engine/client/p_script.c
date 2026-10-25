@@ -1489,7 +1489,10 @@ void P_ParticleEffect_f(void)
 			VectorSet(ptype->orbitaxis, 0, 0, 1);
 			if (Cmd_Argc() > 4)
 				VectorSet(ptype->orbitaxis, atof(Cmd_Argv(2)), atof(Cmd_Argv(3)), atof(Cmd_Argv(4)));
-			if (!VectorNormalize(ptype->orbitaxis))
+			else if (Cmd_Argc() > 2)
+				Con_DPrintf("%s.%s: orbit axis needs x y z; using 0 0 1\n", ptype->config, ptype->name);
+			if (!isfinite(ptype->orbitrate) || !isfinite(ptype->orbitaxis[0]) || !isfinite(ptype->orbitaxis[1]) ||
+				!isfinite(ptype->orbitaxis[2]) || !VectorNormalize(ptype->orbitaxis))
 				ptype->orbitrate = 0;
 		}
 		else if (!strcmp(var, "rotationspeed"))
@@ -2117,6 +2120,14 @@ parsefluid:
 				VectorSet(ptype->shellbias, 1, 1, 1);
 				if (Cmd_Argc() > 6)
 					VectorSet(ptype->shellbias, atof(Cmd_Argv(4)), atof(Cmd_Argv(5)), atof(Cmd_Argv(6)));
+				else if (Cmd_Argc() > 4)
+					Con_DPrintf("%s.%s: shell bias needs x y z; using 1 1 1\n", ptype->config, ptype->name);
+				if (!isfinite(ptype->spawnparam1) || !isfinite(ptype->spawnparam2) || !isfinite(ptype->shellbias[0]) ||
+					!isfinite(ptype->shellbias[1]) || !isfinite(ptype->shellbias[2]))
+				{
+					ptype->spawnparam1 = ptype->spawnparam2 = 0;
+					VectorSet(ptype->shellbias, 1, 1, 1);
+				}
 			}
 		}
 		else if (!strcmp(var, "type"))
@@ -7304,7 +7315,7 @@ static void PScript_DrawParticleTypes (void)
 	particle_t		*p, *kill;
 	clippeddecal_t *d, *dkill;
 	ramp_t *ramp;
-	float grav;
+	float grav, orbitc, orbits;
 	vec3_t friction;
 	scenetris_t *scenetri;
 	float dist;
@@ -7721,6 +7732,9 @@ static void PScript_DrawParticleTypes (void)
 		}
 
 		grav = type->gravity*pframetime;
+		//FTESurf Patch 1017: sinf/cosf -- this file's sin/cos are 256-step table macros, which truncate a frame's turn to 0
+		orbitc = cosf(type->orbitrate*pframetime);
+		orbits = sinf(type->orbitrate*pframetime);
 		friction[0] = 1 - type->friction[0]*pframetime;
 		friction[1] = 1 - type->friction[1]*pframetime;
 		friction[2] = 1 - type->friction[2]*pframetime;
@@ -7795,8 +7809,6 @@ static void PScript_DrawParticleTypes (void)
 			if (type->orbitrate)
 			{	//FTESurf Patch 1017: about the effect's origin, the velocity with it (Source turns the previous position too)
 				vec3_t d;
-				//sinf/cosf: this file's sin/cos are 256-step table macros, which truncate one frame's turn to 0
-				float orbita = type->orbitrate*pframetime, orbitc = cosf(orbita), orbits = sinf(orbita);
 				VectorSubtract(p->org, p->orbitorg, d);
 				PScript_OrbitTurn(d, type->orbitaxis, orbitc, orbits);
 				VectorAdd(p->orbitorg, d, p->org);
