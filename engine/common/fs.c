@@ -5350,11 +5350,20 @@ void COM_Gamedir (const char *dir, const struct gamepacks *packagespaths)
 		FS_Manifest_ParseTokens(man);
 		packagespaths++;
 	}
-	//FTESurf Patch 1022: every serverdata asks for the gamedir it already has (cl_parse.c).
-	if (man != fs_manifest && FS_Manifest_SamePaths(man, fs_manifest))
+	//FTESurf Patch 1022: every serverdata asks for the gamedir it already has (cl_parse.c).  Not
+	//in pure mode (the temporary-pack flush above dropped com_purepaths, which only the rebuild
+	//restores), not with packages or a pending fs_changemod command (FS_ChangeGame runs that).
+	//The rebuild's shader rescan is still wanted: a new map's pak or automount can redefine a
+	//material the last map left live under the same name (R_LoadShader hands that one back).
+	if (man != fs_manifest && !packagespaths && !fs_puremode && !fs_loadedcommand &&
+		FS_Manifest_SamePaths(man, fs_manifest))
 	{
 		Con_DPrintf("gamedir \"%s\" unchanged, search paths kept\n", dir);
 		FS_Manifest_Free(man);
+#ifdef HAVE_CLIENT
+		shader_needreload_why = "map change (search paths kept)";
+		Shader_NeedReload(true);
+#endif
 	}
 	else
 		FS_ChangeGame(man, cfg_reload_on_gamedir.ival, false);

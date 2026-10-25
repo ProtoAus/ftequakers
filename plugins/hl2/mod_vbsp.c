@@ -4114,7 +4114,7 @@ static void VBSP_LoadVertNormals(model_t *mod, qbyte *mod_base, vlump_t *lumps)
 
 	for (i = 0; i < (size_t)mod->numsurfaces; i++)
 		need += mod->surfaces[i].numedges;
-	if (!nn || !need || !li->filelen)
+	if (!nn || !need || !li->filelen || nn > need)	//more normals than face vertices is no VRAD lump
 		return;
 	if ((size_t)li->filelen == need * 2)
 		w = 2;
@@ -4491,16 +4491,22 @@ static float VBSP_MissingTC(float raw, const float *vecs, float tile)
 //vertex, faces in lump order), so smoothing groups smooth envmap, specular and the bumped
 //lightmap basis across faceted brushes as Source draws them (bhop_ceaseless's tube was flat facets).
 //Unit length and in front of the face, else the plane's: VRAD writes zero for faces it skips.
+//Water and portal surfaces keep the plane's: GLR_PortalPlane takes their reflection and clip
+//plane from the first vertex normal, and VRAD smooths a shore corner into it.
 static const float *VBSP_VertNormal(vbspinfo_t *prv, model_t *mod, msurface_t *surf, int v)
 {
 	const float *n;
 	float l;
+	shader_t *sh;
 
-	if (!prv->surfvn)
+	if (!prv->surfvn || (surf->flags & SURF_DRAWTURB))
+		return surf->plane->normal;
+	sh = surf->texinfo->texture ? surf->texinfo->texture->shader : NULL;
+	if (sh && (sh->flags & (SHADER_HASREFRACT|SHADER_HASREFLECT|SHADER_HASPORTAL)))
 		return surf->plane->normal;
 	n = prv->vertnormals[prv->vertnormalidx[prv->surfvn[surf - mod->surfaces] + v]];
 	l = DotProduct(n, n);
-	if (l < 0.9 || l > 1.1 || DotProduct(n, surf->plane->normal) <= 0)
+	if (!(l >= 0.9 && l <= 1.1 && DotProduct(n, surf->plane->normal) > 0))	//NaN fails it too
 		return surf->plane->normal;
 	return n;
 }

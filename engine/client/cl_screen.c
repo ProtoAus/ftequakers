@@ -3368,7 +3368,7 @@ void SCR_LoadTimesBegin(const char *label)
 {
 	if (scr_loadtimes.value <= 0)
 		lt_begin = 0;
-	else if (lt_begin)
+	else if (lt_begin && Sys_DoubleTime() - lt_mark < 120)
 		SCR_LoadTimesStage(label);
 	else
 	{
