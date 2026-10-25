@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 988 - Require local provenance for the DBus file picker
+
+Problem: The DBus-backed file-picker command did not enforce the existing
+filesystem command-provenance check before starting a desktop portal request.
+
+Change: Reuse FS_RefuseInsecure at handler entry, before DBus initialization,
+connection, request construction or timer scheduling. Trusted local requests
+keep their existing behavior. No broader filesystem or command privilege change.
+
+Verified: Exact production handler/helper with fake DBus/host APIs: baseline12
+and subject12 checks; the baseline sends/schedules for both provenance classes,
+while subject refuses insecure requests before any DBus call and still sends/
+schedules local requests in both invocation orders. Production handler/helper
+also compile against Linux DBus SDK 1.12.20 with -Wall -Wextra -Werror and no
+warnings. Windows translation-unit syntax checks add no baseline warnings;
+HAVE_DBUS is not part of that Windows build. No live desktop picker, error-path
+repair, SDL-backend, deployment or complete client-security audit claim here.
+
 ## Patch 987 - Bound download cache names and honor conversion refusal
 
 Problem: URL-derived cache-name construction did not reserve space for its

@@ -12146,6 +12146,9 @@ void FS_OpenFilePicker_f(void)
 	DBusError err;
 	DBusPendingCall *pending;
 
+	if (FS_RefuseInsecure())
+		return;
+
 	// initialiset the errors
 	dbus_error_init(&err);
 
