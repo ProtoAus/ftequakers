@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 989 - Validate picker replies and release DBus ownership
+
+Problem: Missing/incorrect portal replies could leave an uninitialized path;
+private connection references leaked, and a disconnected poll kept scheduling.
+
+Change: Initialize ownership, admit only a method-return object path, stop on
+request-construction errors, and release message/pending/connection references.
+Transfer the path/connection to polling only for a valid reply; finish or
+connection loss releases both. Preserve healthy waits and local provenance.
+
+Verified: Actual constructor/poll/helper with fake API outcomes: baseline16 and
+subject271 acting checks, including ordinary marker delivery, every constructor
+failure boundary, wrong/empty replies, disconnect, healthy/unrelated-message
+requeue and insecure early refusal. Baseline only receives a valid reply; its
+missing unref discriminates. Actual functions compile against Linux DBus SDK;
+Windows client/server/standard-plugins NoDeploy build, all3QC0warnings, no new
+native warnings. No live desktop, SDL, deployment or full-security closure claim.
+
 ## Patch 988 - Require local provenance for the DBus file picker
 
 Problem: The DBus-backed file-picker command did not enforce the existing
