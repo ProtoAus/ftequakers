@@ -1,5 +1,63 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1001 - A ramp touchdown's numbers are the tick before contact (QC)
+
+Lex (25 Oct): "make the speed/energy for touching down on a ramp, 1 tick earlier
+before the ramp contact, that's the speed/units we want." The run line's landing
+mark (LN_E_LAND onto SEG_RAMP) stays where contact was seen -- its time, place and
+sample index are p449mark's rule and the run-line graders' -- and its numbers now
+come from the sample before: ln_pv for speed and vz, and a new per-mark energy
+height ln_eh (ln_po's z) so E = z + |v|^2/2g is that sample's. Other marks are
+unchanged (ln_eh = their own z). Verified: surf_ace replay (`replay marks 0`),
+28 of 28 touchdowns at the same time and place on both builds, speed -69 u/s mean
+(-303 to +24), every energy higher, no other mark's label changed. The Boarding
+panel's "enter" is untouched (already the arrival speed before the clip).
+
+## Patch 1000 - Player profiles in private games (QC)
+
+Lex (25 Oct): "allow profiles to load in private lobbies". A private game has no
+master to prove accounts, so *phash was the guid's digest, which the board does not
+know ("This server keeps no profile for you"). With Account_On() false the host now
+publishes each player's userinfo `_smark` (an underscore key: the server reads it,
+other clients and demos do not) as *phash with *pself 1 (Account_Mark,
+Account_SelfFrame every 2 s; spectators clear both). The client keeps its mark in
+cl_self_mark from a proving lobby's *ahash (Av_SelfMark, hex-checked; cleared when a
+ranked lobby reports the install unlinked) or the menu's signed chat `me`
+(MC_SelfMark), and sets `_smark` at menu start. Another player's self-reported
+profile says "private game: their own account claim"; nothing ranks or files evidence
+by *phash. Verified: rig with no master -- control "This server keeps no profile for
+you"; subject *phash 2da02252 *pself 1, Proto's 2224 times and picture.
+
+## Patch 999 - The map list's load at launch, 722 -> 278 ms in its frame (QC)
+
+Lex (25 Oct): "The game really lags when loading in the update data when launching
+the game." Timed (menu instrumented, the install's 2,324 maps and catalogue):
+ui_load_maps 818 ms in one frame, 457 of it mapfilekb -- mostly misses through every
+mount for the 377 offered maps not on disk -- and it runs again when the catalogue
+changes. A name ui_load_maps' own search never listed is now absent without asking
+(ui_mapseen); an installed row's wrong-build check runs 64 rows a frame afterwards
+(ui_dlkb_step, refiltering if a row turns out wrong). Verified: 722 -> 278 ms, the
+same 377 offered and 46 wrong builds. Not touched: the updater's QKU_Apply still
+hashes every manifest file on the main thread when an update installs (BACKLOG).
+
+## Patch 998 - No server stutter when a stage completes (QC)
+
+Lex (25 Oct): "when someone completes a stage ... upload just that stage data right
+away on another thread or something so ... the game doesn't slow down". A stage close
+on a streamed recording (lobbies always stream) copied the whole part file to a
+temporary, loaded it and sliced the stage, inside one server frame. Measured
+(Windows, instrumented, listen and dedicated): ~45-58 ms per stage close whatever the
+run's length -- the cost was the file round trips (15-24 ms), the write and seal, and
+the archive prune (~12 ms), not the bytes. Change: SV_RecPut keeps the open stage's
+lines in memory (rec_st_tail, reset with run_st_line by SV_StageByteMark) and
+SV_StageWrite slices those when the part file grew by exactly their bytes since
+run_st_byte (else the byte-offset copy, then the whole prefix); the prune runs on the
+player's next tick (SV_StagePruneDue); the client finds a stage's first sidecar frame
+by bisection (Rec_ViewFirstAt; 9 ms over 12,090 lines before, ~2 ms flat after).
+Verified: 44-58 -> ~28 ms per stage close (instrumented), stage files pass reccheck,
+the deferred prune removes the slower file as before. Reviews: evidence, two rounds,
+no defect (the second added the byte-count gate and a 16384-line cap).
+
 ## Patch 997 - Reuse the least-recently-used empty lobby atomically
 
 Problem: The allocator repeatedly chose the lowest-numbered vacancy; concurrent
@@ -21,6 +79,17 @@ board (including migration races) and all68Social tests pass. Explicit board
 head-schema expectation updated to24, not weakened. No live backend migration,
 Pi deployment, public load/performance or whole anti-cheat completion claim.
 Native pin/tag stay patch-995; guarded schema24 promotion remains separate.
+
+## Patch 996 - The main menu's public chat announces records and bests (surfd, menu)
+
+Lex (25 Oct): "announce when someone PB, their PB time, and when someone WR, same
+with main menu lobby chat." (Lobbies already announced joins, leaves and other
+players' online bests -- Patch 371.) surfd's submit_run now says a world record, a
+personal best or a first finish -- full clean runs on the ranked board, as
+Lobby_SayBoardPB -- into the @menu room from the player's account as "* ...":
+social.announce, one line per player per room lifetime except a new record (a record
+improved again inside it is paced too); typed text may not start with "* "; the menu
+draws room lines so as the board's. Tests: test_social, test_ranked P996 section.
 
 ## Patch 995 - Keep the SDL3 file picker local
 
@@ -65,7 +134,10 @@ are unchanged, so a save carrying speed still keeps its taint and a mid-run save
 still resumes a segmented run. SV_SaveLocPlace (load and every held tick) lifts an
 origin at most 0.0001 under a START/STAGE bottom onto it (SL_BoxFloor).
 
-Verified (controls/p989_arm.py, conbridge rig, control = origin/main 421885d3):
+Review (integrity, two rounds, no break): a held load compared the body with the
+unlifted row and re-placed it every tick (545 re-places in a held load, the view
+pinned); the hold now compares with SL_BoxFloor too (0 re-places). SV_ZoneStartAt
+had no callers left and went. Verified (controls/p989_arm.py, conbridge rig, control = origin/main 421885d3):
 surf_dune stage 2: control after-load armed/segmented, leaving running/segmented;
 subject armed/clean, running/clean. bhop_eazy start at a 64.03125 bottom: control
 armed/segmented az -1, running/segmented; subject armed/clean az 0, running/clean.
@@ -83,7 +155,9 @@ list request as at the title screen, and the first relayed snapshot takes over
 writes no presence, so friends still see the lobby. Verified (controls/p987_menu.py):
 board "ranked" with an unanswering master -- control friends_direct=0 and no request;
 subject friends_direct=1, challenge fetched and signing attempted (the rig's identity
-is unlinked, so it ends "Friends identity unavailable").
+is unlinked, so it ends "Friends identity unavailable"). Review: the fallback waits
+MF_RELAY_WAIT (8 s) for the relay, which every map change resets, and a direct join
+keeps direct mode until answered.
 
 ## Patch 991 - Play screen: one ESC, the profile's times, a link underline (QC)
 
@@ -102,6 +176,8 @@ font was "messed up" and it showed one map time; underline a friend's map on hov
 Verified (controls/p987_menu.py): control profile shows smeared text and one row of
 Proto's 2224; subject 12 rows ("Best 12 of 2224"); one ESC -> active 0; the underline
 is the only diff between hovered and plain shots and spans the map name only.
+Review: under 1180 px Friends is a modal drawer over the map list, and ESC still
+hides it first there (ui_create_esc step 5).
 
 ## Patch 989 - Validate picker replies and release DBus ownership
 
