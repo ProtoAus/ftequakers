@@ -18,6 +18,15 @@ warnings. Windows translation-unit syntax checks add no baseline warnings;
 HAVE_DBUS is not part of that Windows build. No live desktop picker, error-path
 repair, SDL-backend, deployment or complete client-security audit claim here.
 
+Pinned cumulative verification (2026-10-25): clean native60d606265/QC814ddbca
+full Windows client/dedicated/standard-plugins NoDeploy build passes, all3QC
+modules0warnings; all74native warning occurrences match the prior full build,
+no new warning payloads. Supported Linux x64 build passes BUILDINFO and every
+ELF/soname gate. Eleven native/build-info artifacts retained with SHA256/source
+provenance. No Windows install or Pi byte changed: the owner's primary game
+remains running and was not signalled. These source/build results are NOT a
+release, actual desktop/download integration or rule-8 completion claim.
+
 ## Patch 987 - Bound download cache names and honor conversion refusal
 
 Problem: URL-derived cache-name construction did not reserve space for its
