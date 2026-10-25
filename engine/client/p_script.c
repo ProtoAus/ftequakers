@@ -4901,9 +4901,11 @@ static void PScript_AddDecals(void *vctx, vec3_t *fte_restrict points, size_t nu
 		vec[0] = vec[2]*ptype->rgbrandsync[0] + frandom()*(1-ptype->rgbrandsync[0]);
 		vec[1] = vec[2]*ptype->rgbrandsync[1] + frandom()*(1-ptype->rgbrandsync[1]);
 		vec[2] = vec[2]*ptype->rgbrandsync[2] + frandom()*(1-ptype->rgbrandsync[2]);
-		d->rgba[0] += vec[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*d->die;
-		d->rgba[1] += vec[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*d->die;
-		d->rgba[2] += vec[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*d->die;
+		//FTESurf Patch 1012: pre-ageing (die = randdie*frandom) stops at rgbchangetime like the per-frame
+		//update; uncapped, a particle born past the window kept a colour beyond its target forever.
+		d->rgba[0] += vec[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*min(d->die, ptype->rgbchangetime);
+		d->rgba[1] += vec[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*min(d->die, ptype->rgbchangetime);
+		d->rgba[2] += vec[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*min(d->die, ptype->rgbchangetime);
 
 		d->die = particletime + ptype->die - d->die;
 
@@ -5296,9 +5298,9 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 				p->org[1] = p->org[2]*ptype->rgbrandsync[1] + frandom()*(1-ptype->rgbrandsync[1]);
 				p->org[2] = p->org[2]*ptype->rgbrandsync[2] + frandom()*(1-ptype->rgbrandsync[2]);
 
-				p->rgba[0] += p->org[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*p->die;
-				p->rgba[1] += p->org[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*p->die;
-				p->rgba[2] += p->org[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*p->die;
+				p->rgba[0] += p->org[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*min(p->die, ptype->rgbchangetime);
+				p->rgba[1] += p->org[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*min(p->die, ptype->rgbchangetime);
+				p->rgba[2] += p->org[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*min(p->die, ptype->rgbchangetime);
 
 #if 0
 				PScript_ApplyOrgVel(p->org, p->vel, org, axis, i, pcount, ptype);
@@ -6117,9 +6119,9 @@ static void P_ParticleTrailSpawn (vec3_t startpos, vec3_t end, part_type_t *ptyp
 		p->org[1] = p->org[2]*ptype->rgbrandsync[1] + frandom()*(1-ptype->rgbrandsync[1]);
 		p->org[2] = p->org[2]*ptype->rgbrandsync[2] + frandom()*(1-ptype->rgbrandsync[2]);
 
-		p->rgba[0] += p->org[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*p->die;
-		p->rgba[1] += p->org[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*p->die;
-		p->rgba[2] += p->org[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*p->die;
+		p->rgba[0] += p->org[0]*ptype->rgbrand[0] + ptype->rgbchange[0]*min(p->die, ptype->rgbchangetime);
+		p->rgba[1] += p->org[1]*ptype->rgbrand[1] + ptype->rgbchange[1]*min(p->die, ptype->rgbchangetime);
+		p->rgba[2] += p->org[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*min(p->die, ptype->rgbchangetime);
 
 		VectorClear (p->vel);
 		if (ptype->emittime < 0)
