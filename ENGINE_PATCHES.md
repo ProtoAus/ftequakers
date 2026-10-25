@@ -1,5 +1,100 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1011 - The server reads the style a run is surfing; the timer names it (QC)
+
+Problem: Lex (25 Oct, third list) wants runs of other styles, detected automatically.
+Change: per command while RUNNING and airborne, SV_StyleFrame counts fast air (400+ u/s) by the
+quarter of facing against travel, and air ticks with a lone strafe key. Most common quarter wins;
+sideways and half-sideways also need no lone strafe key (0.5% slack). STAT_FS_STYLE 183; the timer
+says sideways / half-sideways / backwards. `cmd timer` prints the counts. Display only.
+Measured: 45 imported KSF replays -- facing median ~1 forward, ~44 half-sideways, ~89.5 sideways,
+~179 backwards; lone strafe keys 0.0% in all 24 sideways/half-sideways runs; two surf_kepler
+backwards runs only 64-81% backwards (a majority rule, not "always"). Rig, noclip at sv_maxspeed
+900: +forward -> forward, +back -> backwards, +forward+moveright -> half-sideways,
++moveright -> forward (a lone strafe key). Sideways itself cannot be flown in noclip.
+Filing runs by style (flags bits, reader re-derivation, boards) and a TAS board: FTESurf
+tools/plan-styles-tas.md.
+
+## Patch 1010 - The main menu's lobby chat in a game (QC, surfd)
+
+Problem: Lex: can main menu lobby chat work in game; why is everything splintered.
+Change: surfd's poll takes a per-player room cursor (rack, kept by the lobby: no schema change,
+apart from the DM ack) and returns the room's new lines without the reader's own, blocked senders,
+or board lines from someone in the same lobby (Patch 371 said those); -1 joins at the newest line.
+A lobby's action 'message' to '-' posts to the room (the menu's text rules, '* ' refused, its own
+rate bucket, an empty note). sv_social relays friend_room lines and sends the cursor; the game
+shows them as [everyone] (board lines as board), the team-chat key opens a draft to everyone and
+TAB swaps lobby/everyone. The menu's Lobby chat reads in a game; in a lobby it refuses to send
+(review: a server could fake the relay's cvar and take the text) and points to the game's chat.
+Verified: test_social room cursor / own lines / blocks / post controls / same-lobby board line;
+72 social tests. The relay needs a linked lobby: not exercised on the rig.
+
+## Patch 1009 - friends_sign reads in any game; the menu's Friends list loads in a game (engine, QC)
+
+Problem: the menu's direct Friends path (P975, P992) could not work while connected: CL_FriendsSign
+refused every connected state (P741), and P975's verification read the refusal as the rig having no
+signing key (it had one: fskey is created when absent).
+Change: CL_FriendsSign signs list and chat (reads, answered to the menu) in any connection state;
+join, presence and message only disconnected or over loopback. A cvar bridge to the in-game tab
+was built and removed in review: any server could read the cvars (friends with presence), and the
+game's commands never reach the menu (Patch 667). The in-game tab in a private game points to
+ESC > Play.
+Verified (rig, owned): exe git-7843 (P1009) vs installed patch-983 exe, Play's friends probe in a
+remote (UDP) game and a loopback game: subject reaches the service ("Link Steam on a lobby once",
+the rig key is unlinked) both times; control "Friends identity unavailable" both times.
+
+## Patch 1008 - Armed on the timer; standing in the box re-arms (QC)
+
+Problem: Lex: show Armed when ready to record a main/stage/bonus; bunnyhopping or noclipping in the
+start zone un-arms it, and returning to the zone and stopping below 289 arms it again.
+Change: STAT_FS_ARMSTATE 182 (armed / hopped / noclip / cheats / stuck), computed per packet; the
+timer's word is armed or 'not armed - <how>' (beside 'stopped' too). run_rearmspeed 290: a hopped
+or dirty armed attempt re-arms (SV_TimerArm, still the taint's one clear site, then
+SV_TimerForgiveHop) when SV_TimerRearmRest holds: SV_TimerFinishForgive's tests (this tick grounded,
+no hold, no ghost, MOVETYPE_WALK, nothing upward, speed with carrier below the cap) and, for a dirty
+attempt, standing no higher than the ground-snapped `!r` spot. Velocity kept: below the cap it is a
+walk-out start's. Never a hand-over's carried taint (run_t_carried). Inside !startok.
+Verified (rig, surf_dune): hop -> armstate 2 -> rest -> 'the hopped start is forgiven' -> armed;
+noclip under sv_cheats -> 4 -> off, cheats off, rest -> 'clean again' -> walk out runs clean.
+Control: no re-arm, the walk-out run practice. Mutant (the !r height - 40): no re-arm, practice.
+Review: three lenses, then two integrity rounds.
+
+## Patch 1007 - Rewind energy is the HUD's own number at that moment (QC)
+
+Problem: Lex: why does energy report 'e line'. It was energy from the line's first sample.
+Change: each trail raw sample may carry the speedometer's zero as a 15th field (older files and
+replay prefixes have 14); rewind reads the cursor's own and says 'e'.
+Verified (rig, surf_dune, a setpos stage teleport): zero 15052 at 0.3 s and 13200 at 10.2 s, the
+live zero logged in stage 2 13200; the line's start would have read 15082.
+
+## Patch 1006 - Rewind reaches past a stage start, and back half an hour (QC)
+
+Problem: Lex: on surf_kitsune rewind stops at the stage start; rewind the whole run; and the
+3 s countdown on the resume.
+Change: a stage teleport in a running run continues the trail (a break, not Trail_Open), drawn from
+the stage's first sample unless rewinding. Server: rows RW_CAP.. of the ring block keep the first
+dense sample of each 64-tick bucket (~29 min), read where the dense two minutes have nothing.
+hud_rewind_countdown's day-old 0 (P784 -> P808) moves to 3.
+Verified (rig): subject's line 0 -> 11.16 s, seek 0.3 s lands at 0.315 in stage 1; control's line
+starts at 8.175 (stage 2). sl_saveat 4.5 s into a 2:15 run: subject saves at 0:04.800, control
+'nothing kept'.
+
+## Patch 1005 - F1 on the results card no longer takes the mouse (QC)
+
+Problem: Lex: there is nothing to click. Change: F1 falls through; `results` opens the card without
+a cursor (the banner makes way via ui_bn_cardask).
+
+## Patch 1004 - Resume: a real view lock, no F2, loading and reasons on the card (QC)
+
+Problem: Lex: the resume view lock let the mouse move for a frame; remove F2 and its hint; no
+'view locked' text; 'still checking' should be a loading line on the card.
+Change: the resume lock swallows mouse deltas through R and C, and a server angle landing after the
+latch becomes it. F2 gone. A Yes during the account check waits ('W', retried while the proof is in
+flight, 30 s cap); refusals reach the card as a private stuffcmd (resume_why), not userinfo.
+Verified (rig): offer line without '(or F2)', card without the hint, 'RESUMING IN n'; yaw held
+through the count-in with +right held, equal after GO (subject and control). Not exercised: the
+mouse itself, the W wait and reasons (need an account lobby).
+
 ## Patch 1015 - map-load download errors: the web url overwrote its own name, and a Source map's pak was asked for (GL client)
 
 Problem: Lex, 25 Oct, every load of bhop_ceaseless printed "Downloading
