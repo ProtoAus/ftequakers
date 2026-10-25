@@ -92,7 +92,7 @@
 #endif
 // Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
 // SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
-// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// FLOWPARMS = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
 // interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
@@ -174,7 +174,7 @@ void main (void)
 	// Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 	// the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
 #ifdef FLOW
-	vec4 fl = vec4(FLOW);
+	vec4 fl = vec4(FLOWPARMS);	// bare #FLOW gates the samplers: a 0 first value would not
 	vec3 ft = vec3(FLOWTIME);
 	vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;
 	vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;

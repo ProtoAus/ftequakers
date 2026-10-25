@@ -3,7 +3,9 @@
 !!permu FRAMEBLEND
 !!permu SKELETAL
 !!permu REFLECTCUBEMASK
-!!samps refraction=0 bump=1 tint=2
+!!samps refraction=0 tint=2
+!!samps !ANIMBUMP bump=1
+!!samps =ANIMBUMP bumpanim:2DArray=1
 !!samps =REFLECTCUBEMASK reflectcube
 
 #include "sys/defs.h"
@@ -59,7 +61,13 @@ void main()
 #include "sys/fog.h"
 void main()
 {
+#ifdef ANIMBUMP
+	// Patch 990: AnimatedTexture frames, whole frames at ANIMBUMP a second (vmt/refractanim, GLSL 130).
+	int bumplayers = textureSize(s_bumpanim, 0).z;
+	vec4 nrm = texture2D(s_bumpanim, vec3(tex_c, bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0));
+#else
 	vec4 nrm = texture2D(s_bump, tex_c);
+#endif
 #ifdef ALPHATEST
 	if (nrm.a < 0.5)
 		discard;

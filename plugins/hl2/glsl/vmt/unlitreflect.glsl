@@ -33,6 +33,9 @@
 #ifndef DETAILSCROLL
 #define DETAILSCROLL 0.0,0.0
 #endif
+#ifndef DETAILBLEND
+#define DETAILBLEND 1.0
+#endif
 
 // UnlitGeneric with an $envmap: base x $color plus the reflection (vertexlit_and_unlit_generic_ps2x.fxc
 // :361-467). Without #BASE the base is Source's TEXTURE_BLACK (vertexlitgeneric_dx9_helper.cpp:938-941).
@@ -72,17 +75,18 @@ void main()
 	vec3 rgb = textureCube(s_reflectcube, ray).rgb;
 	float alpha = float(ALPHA);
 #ifdef BASE
-	vec4 base = texture2D(s_diffuse, tex_c + e_time * vec2(SCROLL));
+	vec2 btc = tex_c + e_time * vec2(SCROLL);
+	vec4 base = texture2D(s_diffuse, btc);
 #ifdef DETAILMASK
-	//$detailblendmode 9, TCOMBINE_MASK_BASE_BY_DETAIL_ALPHA (common_ps_fxc.h:730)
-	base.a *= texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a;	//BaseVSShader.cpp:351-357 scales the scroll too
+	//$detailblendmode 9, TCOMBINE_MASK_BASE_BY_DETAIL_ALPHA (common_ps_fxc.h:730), lerped by $detailblendfactor
+	base.a = mix(base.a, base.a * texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a, float(DETAILBLEND));	//BaseVSShader.cpp:351-357 scales the scroll too
 #endif
-#ifdef MASKLT
+#if defined(MASKLT) && !defined(ENVFROMBASE)	//base alpha as the mask turns the alpha test off
 	if (base.a < float(MASK))
 		discard;
 #endif
 #ifdef ENVFROMMASK
-	rgb *= texture2D(s_reflectmask, tex_c).rgb;
+	rgb *= texture2D(s_reflectmask, btc).rgb;	//at the base's coordinates (ps2x.fxc:331)
 #endif
 #ifdef ENVFROMBASE
 	rgb *= 1.0 - base.a;	//"this blows!" -- Source's own comment on the inverted mask
@@ -92,6 +96,9 @@ void main()
 	rgb = mix(grey, rgb, vec3(ENVSAT));
 	rgb = mix(rgb, rgb * rgb, float(ENVCONTRAST));
 	rgb *= vec3(ENVTINT) * e_colourident.rgb;
+#ifdef ADDALPHA
+	rgb *= float(ADDALPHA);	//an additive $alpha, folded into COLOR for the base (mat_vmt.c)
+#endif
 #ifdef BASE
 	base.rgb *= vec3(COLOR);
 #ifdef VERTEXCOL

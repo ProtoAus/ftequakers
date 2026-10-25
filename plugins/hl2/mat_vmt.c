@@ -884,6 +884,8 @@ typedef struct
 	char  detail[MAX_QPATH];
 	float detailscale;
 	int   detailblendmode;
+	float detailblendfactor;
+	qboolean detailblendfactor_set;
 	float detscrollrate;
 	float detscrollangle;
 	//Patch 990: Sine -> $refractamount, as min, max, period (VMT_ResolveProxies).
@@ -1387,21 +1389,21 @@ static qboolean VMT_ScrollsBump(const char *var, qboolean want2)
 //its spelling here) -- vmt/water samples every frame from a 2D array.  Only when the
 //VTF that resolves really has frames: img_vtf.c makes a 2D array of numframes > 1 only,
 //and a single-frame map bound to the array sampler reads zero (a whole-screen mirror).
-static qboolean VMT_WaterAnimBump(const vmtstate_t *st)
+static qboolean VMT_AnimBump(const vmtstate_t *st, const char *nm)
 {
 	const char *s;
 	char path[MAX_QPATH];
 	unsigned char hdr[26];
 	vfsfile_t *f;
 	qboolean frames = false;
-	if (!hl2_animated || !hl2_animated->ival || st->animrate <= 0 || !*st->normalmap)
+	if (!hl2_animated || !hl2_animated->ival || st->animrate <= 0 || !*nm)
 		return false;
 	for (s = st->animvar; *s; s++)
 		if (!Q_strncasecmp(s, "normalmap", 9) || !Q_strncasecmp(s, "bumpmap", 7))
 			break;
 	if (!*s)
 		return false;
-	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(nm, "materials/")?"materials/":"", nm);
 	f = fsfuncs->OpenVFS(path, "rb", FS_GAME);
 	if (f)
 	{
@@ -1411,6 +1413,7 @@ static qboolean VMT_WaterAnimBump(const vmtstate_t *st)
 	}
 	return frames;
 }
+#define VMT_WaterAnimBump(st) VMT_AnimBump(st, (st)->normalmap)	//Patch 990: Refract passes its own key
 
 //The keys inside one `TextureScroll { }` proxy.  A sub-block here would be an
 //arithmetic proxy feeding a value in; we do not evaluate those, so it is
@@ -2186,11 +2189,14 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$detail"))
 			Q_strlcpy(st->detail, value, sizeof(st->detail));	//Patch 990
 		else if (!Q_strcasecmp(key, "$detailscale"))
-			st->detailscale = atof(value);
+			VMT_ParseVec3(value, &st->detailscale, 1);	//"[2 2]" too: the first
 		else if (!Q_strcasecmp(key, "$detailtint"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$detailblendfactor"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+		{
+			st->detailblendfactor = atof(value);
+			st->detailblendfactor_set = true;
+		}
 		else if (!Q_strcasecmp(key, "$detailblendmode"))
 			st->detailblendmode = atoi(value);
 
@@ -2822,6 +2828,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			c[0] *= st->alphaval; c[1] *= st->alphaval; c[2] *= st->alphaval;
 			havecolour = true;
 			havealpha = false;
+			//Patch 990: unlitreflect's reflection is not scaled by $color, so it takes the fold here
+			Q_snprintfz(t, sizeof(t), "#ADDALPHA=%f", st->alphaval);
+			Q_strlcat(progargs, t, sizeof(progargs));
 		}
 
 		if (havecolour)
@@ -3187,17 +3196,24 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char extra[256] = "";
 		size_t eoff = 0;
 		qboolean detmask = *st->detail && st->detailblendmode == 9;
-		if (st->vertexcolor)
-			VMT_AddVertexColourArgs(progargs, sizeof(progargs));
+		if (st->vertexcolor)	//each on its own, as the pass's rgbGen / alphaGen vertex were
+			Q_strlcat(progargs, "#VERTEXCOL", sizeof(progargs));
+		if (st->vertexalpha)
+			Q_strlcat(progargs, "#VERTEXALPHA", sizeof(progargs));
 		if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
 			st->wantenvcube = true;
 		if (st->envfrombase)
+		{	//base alpha is the mask, so Source drops the alpha test (vertexlitgeneric_dx9_helper.cpp:328-330)
 			Q_strlcatfz(extra, &eoff, sizeof(extra), "#ENVFROMBASE");
+			st->alphatest = 0;
+		}
 		else if (*st->envmapmask)
 			Q_strlcatfz(extra, &eoff, sizeof(extra), "#ENVFROMMASK");
 		if (detmask)
 		{
 			Q_strlcatfz(extra, &eoff, sizeof(extra), "#DETAILMASK#DETAILSCALE=%f", st->detailscale > 0 ? st->detailscale : 4.0f);
+			if (st->detailblendfactor_set)
+				Q_strlcatfz(extra, &eoff, sizeof(extra), "#DETAILBLEND=%f", st->detailblendfactor);
 			if (st->detscrollrate != 0)
 			{
 				double a = st->detscrollangle * (3.14159265358979323846/180.0);
@@ -4011,7 +4027,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					f[k] = st->flow_set[k] ? st->flow[k] : fdef[k];
 				if (f[1] <= 0) f[1] = 1;
 				if (f[5] <= 0) f[5] = 1;
-				Q_snprintfz(t, sizeof(t), "#FLOW=%f,%f,%f,%f#FLOWTIME=%f,%f,%f", f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+				Q_snprintfz(t, sizeof(t), "#FLOW#FLOWPARMS=%f,%f,%f,%f#FLOWTIME=%f,%f,%f", f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
 				Q_strlcat(progargs, t, sizeof(progargs));
 				vmt_stat_flowwater++;
 			}
@@ -4140,7 +4156,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		{
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
-			if (strstr(progargs, "#FLOW="))	//Patch 990: shader-scoped slots the water pass's program reads
+			if (strstr(progargs, "#FLOW#"))	//Patch 990: shader-scoped slots the water pass's program reads
 			{
 				Q_strlcatfz(script, &offset, sizeof(script), "\tuppermap \"%s%s.vtf\"\n", strcmp(st->flowmap, "materials/")?"materials/":"", st->flowmap);
 				if (*st->flownoise)
@@ -4288,6 +4304,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
 			int rkind = VMT_RefractBlend(st);
 			qboolean add = rkind == REFR_ADD || rkind == REFR_ADDALPHA;
+			qboolean animbump;
 
 			if (*nm)
 				Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
@@ -4315,6 +4332,15 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			{
 				aoff = strlen(args);
 				Q_strlcatfz(args, &aoff, sizeof(args), "#REFRSINE=%f,%f,%f", st->refrsine[0], st->refrsine[1], st->refrsine[2]);
+			}
+			//Patch 990: an AnimatedTexture on $normalmap -- every frame from a 2D array in vmt/refractanim
+			//(P867's water path); bhop_ceaseless's sword-floor ripple is 60 frames at 30 a second.
+			animbump = *nm && VMT_AnimBump(st, nm);
+			if (animbump)
+			{
+				aoff = strlen(args);
+				Q_strlcatfz(args, &aoff, sizeof(args), "#ANIMBUMP=%f", st->animrate);
+				Q_snprintfz(bump, sizeof(bump), "\"$2darray:%s%s.vtf\"", strcmp(nm, "materials/")?"materials/":"", nm);
 			}
 			if (*st->refracttinttexture)
 				Q_strlcat(args, "#TINTTEX", sizeof(args));
@@ -4355,13 +4381,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			//(#OPAQUE) and asks for depth, which the engine keeps on models only.
 			Q_strlcatfz(script, &offset, sizeof(script),
 				"\t{\n"
-					"\t\tprogram \"vmt/refract%s\"\n"
+					"\t\tprogram \"vmt/refract%s%s\"\n"
 					"\t\tblendfunc %s\n"
 					"%s"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
 					"\t\tmap %s\n"
-				"\t}\n", args,
+				"\t}\n", animbump ? "anim" : "", args,
 				rkind == REFR_ADDALPHA ? "GL_SRC_ALPHA GL_ONE" : rkind == REFR_ADD ? "GL_ONE GL_ONE" : "blend",
 				(rkind == REFR_OPAQUE && !st->nowritez && st->basedefaulted) ? "\t\tdepthwrite\n" : "", refr, bump, tint);
 			st->translucent = 0;
@@ -4751,7 +4777,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 
 	if (st->decal) {
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset 1\n");
+		//Patch 990: a $decal Refract one step nearer than other decals: bhop_ceaseless's ripple, the
+		//swirl decal and the floor share z 11616, and at equal bias the ripple flickered over the swirl.
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset %d\n", !Q_strcasecmp(st->vmtclass, "Refract") ? 2 : 1);
 		Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
 	}
 	if (st->wireframe)

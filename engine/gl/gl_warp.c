@@ -109,7 +109,7 @@ cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "4", CVAR_ARC
 //Patch 990: Source draws a sky face as a hole, so a prop poking through one is still drawn
 //(bhop_ceaseless's spawn roof rises 100 units past its sky ceiling). The mask keeps hiding what is
 //far behind the sky (Patch 296) but is written this many times farther from the eye than the face.
-cvar_t r_sky_forcedepth_scale				= CVARFD ("r_sky_forcedepth_scale", "2", CVAR_ARCHIVE, "Writes r_sky_forcedepth's sky mask this many times farther from the eye than the sky surface, on the same pixels, so a model poking through a sky brush (as Source draws it) is not cut off while the level far behind the sky stays hidden. 1: the mask is written at the sky surface, as before Patch 990.");
+cvar_t r_sky_forcedepth_scale				= CVARFD ("r_sky_forcedepth_scale", "2", CVAR_ARCHIVE, "Writes r_sky_forcedepth's sky mask this many times farther from the eye than the sky surface, on the same pixels, so a model poking through a sky brush (as Source draws it) is not cut off while the level far behind the sky stays hidden. Source maps only. 1: the mask is written at the sky surface, as before Patch 990.");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;
@@ -1211,7 +1211,8 @@ static void GL_SkyForceDepth(batch_t *batch)
 	if ((r_sky_forcedepth.ival || !cls.allow_unmaskedskyboxes) && batch->texture)	//allow a little extra fps.
 	{
 		BE_SelectMode(BEM_DEPTHONLY);
-		if (r_sky_forcedepth_scale.value > 1 && batch->ent == &r_worldentity)
+		if (r_sky_forcedepth_scale.value > 1 && batch->ent == &r_worldentity &&
+		    r_worldentity.model && r_worldentity.model->fromgame == fg_new)	//Quake/HL clip at the sky
 		{	//Patch 990: scaled about the eye, each point stays on its own ray (R_DrawSkyMesh's trick)
 			static entity_t pushent;
 			batch_t b = *batch;

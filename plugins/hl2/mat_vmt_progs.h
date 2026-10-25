@@ -398,7 +398,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu FRAMEBLEND\n"
 "!!permu SKELETAL\n"
 "!!permu REFLECTCUBEMASK\n"
-"!!samps refraction=0 bump=1 tint=2\n"
+"!!samps refraction=0 tint=2\n"
+"!!samps !ANIMBUMP bump=1\n"
+"!!samps =ANIMBUMP bumpanim:2DArray=1\n"
 "!!samps =REFLECTCUBEMASK reflectcube\n"
 
 "#include \"sys/defs.h\"\n"
@@ -454,7 +456,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#include \"sys/fog.h\"\n"
 "void main()\n"
 "{\n"
+"#ifdef ANIMBUMP\n"
+// Patch 990: AnimatedTexture frames, whole frames at ANIMBUMP a second (vmt/refractanim, GLSL 130).
+"int bumplayers = textureSize(s_bumpanim, 0).z;\n"
+"vec4 nrm = texture2D(s_bumpanim, vec3(tex_c, bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0));\n"
+"#else\n"
 "vec4 nrm = texture2D(s_bump, tex_c);\n"
+"#endif\n"
 "#ifdef ALPHATEST\n"
 "if (nrm.a < 0.5)\n"
 "discard;\n"
@@ -1653,7 +1661,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 // Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
 // SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
-// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// FLOWPARMS = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
 // interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
@@ -1735,7 +1743,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 // the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
 "#ifdef FLOW\n"
-"vec4 fl = vec4(FLOW);\n"
+"vec4 fl = vec4(FLOWPARMS); // bare #FLOW gates the samplers: a 0 first value would not\n"
 "vec3 ft = vec3(FLOWTIME);\n"
 "vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;\n"
 "vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;\n"
@@ -3076,6 +3084,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef DETAILSCROLL\n"
 "#define DETAILSCROLL 0.0,0.0\n"
 "#endif\n"
+"#ifndef DETAILBLEND\n"
+"#define DETAILBLEND 1.0\n"
+"#endif\n"
 
 // UnlitGeneric with an $envmap: base x $color plus the reflection (vertexlit_and_unlit_generic_ps2x.fxc
 // :361-467). Without #BASE the base is Source's TEXTURE_BLACK (vertexlitgeneric_dx9_helper.cpp:938-941).
@@ -3115,17 +3126,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 rgb = textureCube(s_reflectcube, ray).rgb;\n"
 "float alpha = float(ALPHA);\n"
 "#ifdef BASE\n"
-"vec4 base = texture2D(s_diffuse, tex_c + e_time * vec2(SCROLL));\n"
+"vec2 btc = tex_c + e_time * vec2(SCROLL);\n"
+"vec4 base = texture2D(s_diffuse, btc);\n"
 "#ifdef DETAILMASK\n"
-//$detailblendmode 9, TCOMBINE_MASK_BASE_BY_DETAIL_ALPHA (common_ps_fxc.h:730)
-"base.a *= texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a; //BaseVSShader.cpp:351-357 scales the scroll too\n"
+//$detailblendmode 9, TCOMBINE_MASK_BASE_BY_DETAIL_ALPHA (common_ps_fxc.h:730), lerped by $detailblendfactor
+"base.a = mix(base.a, base.a * texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a, float(DETAILBLEND)); //BaseVSShader.cpp:351-357 scales the scroll too\n"
 "#endif\n"
-"#ifdef MASKLT\n"
+"#if defined(MASKLT) && !defined(ENVFROMBASE) //base alpha as the mask turns the alpha test off\n"
 "if (base.a < float(MASK))\n"
 "discard;\n"
 "#endif\n"
 "#ifdef ENVFROMMASK\n"
-"rgb *= texture2D(s_reflectmask, tex_c).rgb;\n"
+"rgb *= texture2D(s_reflectmask, btc).rgb; //at the base's coordinates (ps2x.fxc:331)\n"
 "#endif\n"
 "#ifdef ENVFROMBASE\n"
 "rgb *= 1.0 - base.a; //\"this blows!\" -- Source's own comment on the inverted mask\n"
@@ -3135,6 +3147,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "rgb = mix(grey, rgb, vec3(ENVSAT));\n"
 "rgb = mix(rgb, rgb * rgb, float(ENVCONTRAST));\n"
 "rgb *= vec3(ENVTINT) * e_colourident.rgb;\n"
+"#ifdef ADDALPHA\n"
+"rgb *= float(ADDALPHA); //an additive $alpha, folded into COLOR for the base (mat_vmt.c)\n"
+"#endif\n"
 "#ifdef BASE\n"
 "base.rgb *= vec3(COLOR);\n"
 "#ifdef VERTEXCOL\n"
@@ -3364,7 +3379,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 // Patch 990: $flowmap water (s_upper flow, s_lower noise), after Valve's Portal 2 flow (Vlachos,
 // SIGGRAPH 2010): two normal layers half an interval apart, each scrolled along the flow vector.
-// FLOW = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
+// FLOWPARMS = worlduvscale, normaluvscale, uvscrolldistance, bumpstrength; FLOWTIME = timescale,
 // interval seconds, noise scale. Normal and noise follow world XY; the flowmap the face's UVs.
 
 // FTESurf Patch 867: Source's AnimatedTexture on $normalmap ($bumpframe at #ANIMBUMP
@@ -3446,7 +3461,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Source water_vs20 / watercheap_ps20b: decode RGB normally, without
 // the old +4/256 Z/XY bias. A neutral normal must remain surface-normal.
 "#ifdef FLOW\n"
-"vec4 fl = vec4(FLOW);\n"
+"vec4 fl = vec4(FLOWPARMS); // bare #FLOW gates the samplers: a 0 first value would not\n"
 "vec3 ft = vec3(FLOWTIME);\n"
 "vec2 flow = texture2D(s_upper, tc * fl.x).rg * 2.0 - 1.0;\n"
 "vec2 nuv = vec2(wxy.x, -wxy.y) / fl.y;\n"
@@ -3712,6 +3727,133 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 // Scene fog affects colour, not the authored/translucent coverage.
 "gl_FragColor = vec4(fog3(colour), alpha);\n"
+"}\n"
+"#endif\n"
+},
+#endif
+#ifdef GLQUAKE
+{QR_OPENGL, 110, "vmt/refractanim",
+"!!ver 130-450\n"
+"!!permu FOG\n"
+"!!permu FRAMEBLEND\n"
+"!!permu SKELETAL\n"
+"!!permu REFLECTCUBEMASK\n"
+"!!samps refraction=0 tint=2\n"
+"!!samps !ANIMBUMP bump=1\n"
+"!!samps =ANIMBUMP bumpanim:2DArray=1\n"
+"!!samps =REFLECTCUBEMASK reflectcube\n"
+
+"#include \"sys/defs.h\"\n"
+
+// FTESurf Patch 866: hl2_refract 1, Source's refract_ps20b.fxc on the screen copy:
+//   warp = normal.xy * normal.a * $refractamount (the old shader offset by the whole
+//   normalized normal, so surf_garden's fountain, $refractamount .02, smeared the screen);
+//   result = screen(warp) * $refracttint (* 2 tint texture) [+ $envmap term], alpha normal.a.
+// Gamma-space like refractflat.glsl: 2x linear is 2^(1/2.2) here.
+
+"#ifndef REFRTINT\n"
+"#define REFRTINT 1.0,1.0,1.0\n"
+"#endif\n"
+"#ifndef REFRAMOUNT\n"
+"#define REFRAMOUNT 2.0\n"
+"#endif\n"
+"#ifndef SCROLL\n"
+"#define SCROLL 0.0,0.0\n"
+"#endif\n"
+//Patch 990: Source's Sine proxy on $refractamount (min, max, period), proxies.cpp CSineProxy
+"#ifndef ENVTINT\n"
+"#define ENVTINT 1.0,1.0,1.0\n"
+"#endif\n"
+"#ifndef ENVSAT\n"
+"#define ENVSAT 1.0,1.0,1.0\n"
+"#endif\n"
+"#ifndef ENVCONTRAST\n"
+"#define ENVCONTRAST 0.0\n"
+"#endif\n"
+
+"varying vec2 tex_c;\n"
+"varying vec4 tf_c;\n"
+"#ifdef REFLECTCUBEMASK\n"
+"varying vec3 incident;\n"
+"varying mat3 invsurface;\n"
+"#endif\n"
+
+"#ifdef VERTEX_SHADER\n"
+"#include \"sys/skeletal.h\"\n"
+"void main()\n"
+"{\n"
+"vec3 w, n, s, t;\n"
+"gl_Position = tf_c = skeletaltransform_wnst(w, n, s, t);\n"
+"tex_c = v_texcoord + e_time * vec2(SCROLL);\n"
+"#ifdef REFLECTCUBEMASK\n"
+"incident = w - e_eyepos;\n"
+"invsurface = mat3(s, t, n);\n"
+"#endif\n"
+"}\n"
+"#endif\n"
+
+"#ifdef FRAGMENT_SHADER\n"
+"#include \"sys/fog.h\"\n"
+"void main()\n"
+"{\n"
+"#ifdef ANIMBUMP\n"
+// Patch 990: AnimatedTexture frames, whole frames at ANIMBUMP a second (vmt/refractanim, GLSL 130).
+"int bumplayers = textureSize(s_bumpanim, 0).z;\n"
+"vec4 nrm = texture2D(s_bumpanim, vec3(tex_c, bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0));\n"
+"#else\n"
+"vec4 nrm = texture2D(s_bump, tex_c);\n"
+"#endif\n"
+"#ifdef ALPHATEST\n"
+"if (nrm.a < 0.5)\n"
+"discard;\n"
+"#endif\n"
+// Source's normal maps are DX: green is flipped (lightmapped.glsl).
+"vec3 tn = vec3(nrm.r, 1.0 - nrm.g, nrm.b) * 2.0 - 1.0;\n"
+"vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;\n"
+"#ifdef NOWARP\n"
+"vec2 rc = sc; // no $normalmap: Source's DX9 Refract has nothing to warp by\n"
+"#else\n"
+"#ifdef REFRSINE\n"
+"vec3 rs = vec3(REFRSINE);\n"
+"float amount = mix(rs.x, rs.y, sin(6.2831853 * e_time / rs.z) * 0.5 + 0.5);\n"
+"#else\n"
+"float amount = float(REFRAMOUNT);\n"
+"#endif\n"
+"vec2 rc = sc + tn.xy * (nrm.a * amount);\n"
+"#endif\n"
+"#ifdef BLUR\n"
+// refract_ps20b's BLUR 1: nine taps from four bilinear ones, 1/512 apart.
+"const float bf = 1.0 / 512.0, hf = 0.5 / 512.0;\n"
+"vec3 rgb = texture2D(s_refraction, rc - vec2(hf, hf)).rgb * 0.4444444\n"
+"+ texture2D(s_refraction, rc + vec2(bf, -hf)).rgb * 0.2222222\n"
+"+ texture2D(s_refraction, rc + vec2(-hf, bf)).rgb * 0.2222222\n"
+"+ texture2D(s_refraction, rc + vec2(bf, bf)).rgb * 0.1111111;\n"
+"#else\n"
+"vec3 rgb = texture2D(s_refraction, rc).rgb;\n"
+"#endif\n"
+"vec3 tint = vec3(REFRTINT);\n"
+"#ifdef TINTTEX\n"
+"tint *= 1.3703 * texture2D(s_tint, tex_c).rgb;\n"
+"#endif\n"
+"rgb *= tint;\n"
+"#ifdef REFLECTCUBEMASK\n"
+"vec3 ray = reflect(incident, normalize(invsurface * normalize(tn)));\n"
+"ray = (m_model * vec4(ray, 0.0)).xyz;\n"
+"vec3 spec = textureCube(s_reflectcube, ray).rgb * nrm.a * vec3(ENVTINT);\n"
+"spec = mix(spec, spec * spec, float(ENVCONTRAST));\n"
+"spec = mix(vec3(dot(spec, vec3(0.299, 0.587, 0.114))), spec, vec3(ENVSAT));\n"
+"rgb += spec;\n"
+"#endif\n"
+"#if defined(NOFOG)\n"
+"gl_FragColor = vec4(rgb, nrm.a);\n"
+"#elif defined(ADDITIVE)\n"
+"gl_FragColor = vec4(fog3additive(rgb), nrm.a); // additive fogs to black (BaseShader.cpp:775)\n"
+"#else\n"
+"gl_FragColor = vec4(fog3(rgb), nrm.a);\n"
+"#endif\n"
+"#ifdef OPAQUE\n"
+"gl_FragColor.a = 1.0;\n"
+"#endif\n"
 "}\n"
 "#endif\n"
 },
