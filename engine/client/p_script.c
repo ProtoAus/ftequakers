@@ -122,6 +122,7 @@ typedef struct particle_s
 	} state;
 // drivers never touch the following fields
 	float		rotationspeed;
+	vec3_t		orbitorg;	//FTESurf Patch 1017: what an orbit type turns about (its effect's origin)
 } particle_t;
 
 typedef struct clippeddecal_s
@@ -288,6 +289,9 @@ typedef struct part_type_s {
 
 	float rotationstartmin, rotationstartrand;
 	float rotationmin, rotationrand;
+	float orbitrate;	//FTESurf Patch 1017: radians/sec about orbitaxis through the effect's origin
+	vec3_t orbitaxis;
+	vec3_t shellbias;	//FTESurf Patch 1017: SM_SHELL's direction scale, world x y z
 
 	float scaledelta;
 	float countextra;
@@ -328,6 +332,7 @@ typedef struct part_type_s {
 		SM_FIELD, //field = synced field (brightfield, etc)
 		SM_DISTBALL, // uneven distributed ball
 		SM_MESHSURFACE, //distributed roughly evenly over the surface of the mesh
+		SM_SHELL,	//FTESurf Patch 1017: Source's sphere shell, world-aligned: radius spawnparam1..2, bias shellbias
 		SM_FIXMEWARNING,	//for people to use to mark placeholder effects.
 	} spawnmode;
 
@@ -1478,6 +1483,15 @@ void P_ParticleEffect_f(void)
 			else
 				ptype->rotationstartrand = 0;
 		}
+		else if (!strcmp(var, "orbit"))
+		{	//FTESurf Patch 1017: orbit <degrees/sec> [axis x y z]: Source's Movement Rotate Particle Around Axis
+			ptype->orbitrate = atof(value)*M_PI/180;
+			VectorSet(ptype->orbitaxis, 0, 0, 1);
+			if (Cmd_Argc() > 4)
+				VectorSet(ptype->orbitaxis, atof(Cmd_Argv(2)), atof(Cmd_Argv(3)), atof(Cmd_Argv(4)));
+			if (!VectorNormalize(ptype->orbitaxis))
+				ptype->orbitrate = 0;
+		}
 		else if (!strcmp(var, "rotationspeed"))
 		{
 			ptype->rotationmin = atof(value)*M_PI/180;
@@ -2082,6 +2096,8 @@ parsefluid:
 			}
 			else if (!strcmp(value, "distball"))
 				ptype->spawnmode = SM_DISTBALL;
+			else if (!strcmp(value, "shell"))
+				ptype->spawnmode = SM_SHELL;
 			else if (!strcmp(value, "box"))
 				ptype->spawnmode = SM_BOX;
 			else
@@ -2095,6 +2111,12 @@ parsefluid:
 				if (Cmd_Argc()>3)
 					ptype->spawnparam2 = atof(Cmd_Argv(3));
 				ptype->spawnparam1 = atof(Cmd_Argv(2));
+			}
+			if (ptype->spawnmode == SM_SHELL)
+			{	//FTESurf Patch 1017: spawnmode shell <min> <max> [bias x y z]
+				VectorSet(ptype->shellbias, 1, 1, 1);
+				if (Cmd_Argc() > 6)
+					VectorSet(ptype->shellbias, atof(Cmd_Argv(4)), atof(Cmd_Argv(5)), atof(Cmd_Argv(6)));
 			}
 		}
 		else if (!strcmp(var, "type"))
@@ -2683,6 +2705,9 @@ qboolean PScript_Query(int typenum, int body, char *outstr, int outstrlen)
 		case SM_MESHSURFACE:
 			Q_strncatz(outstr, va("spawnmode meshsurface\n"), outstrlen);
 			break;
+		case SM_SHELL:
+			Q_strncatz(outstr, va("spawnmode shell %g %g %g %g %g\n", ptype->spawnparam1, ptype->spawnparam2, ptype->shellbias[0], ptype->shellbias[1], ptype->shellbias[2]), outstrlen);
+			break;
 		case SM_FIXMEWARNING:
 			Q_strncatz(outstr, va("placeholder\n"), outstrlen);
 			break;
@@ -2737,6 +2762,8 @@ qboolean PScript_Query(int typenum, int body, char *outstr, int outstrlen)
 			Q_strncatz(outstr, va("rotationstart %g %g\n", ptype->rotationstartmin*180/M_PI, (ptype->rotationstartmin+ptype->rotationstartrand)*180/M_PI), outstrlen);
 		if (ptype->rotationmin || ptype->rotationrand || all)
 			Q_strncatz(outstr, va("rotationspeed %g %g\n", ptype->rotationmin*180/M_PI, (ptype->rotationmin+ptype->rotationrand)*180/M_PI), outstrlen);
+		if (ptype->orbitrate || all)
+			Q_strncatz(outstr, va("orbit %g %g %g %g\n", ptype->orbitrate*180/M_PI, ptype->orbitaxis[0], ptype->orbitaxis[1], ptype->orbitaxis[2]), outstrlen);
 
 		if (ptype->flags & (PT_TROVERWATER | PT_TRUNDERWATER))
 		{
@@ -4500,6 +4527,49 @@ static vec2_t	avelocities[NUMVERTEXNORMALS];
 
 
 
+//FTESurf Patch 1017: a uniform direction scaled by shellbias at radius spawnparam1..spawnparam2,
+//world-aligned like Source's Position Within Sphere Random, written into the effect's frame so the
+//axis-relative apply after the switch puts it back in world space. ofsvec (spawnvel's multiplier) is
+//box mode's random cube, so spawnvel keeps its spread meaning.
+static void PScript_ShellOffset(part_type_t *ptype, vec3_t axis[3], vec3_t ofsvec, vec3_t arsvec)
+{
+	vec3_t u;
+	float r;
+	int n;
+	for (n = 0; n < 16; n++)
+	{
+		u[0] = crandom();
+		u[1] = crandom();
+		u[2] = crandom();
+		r = DotProduct(u, u);
+		if (r <= 1 && r > 0.0025)
+			break;
+	}
+	u[0] *= ptype->shellbias[0];
+	u[1] *= ptype->shellbias[1];
+	u[2] *= ptype->shellbias[2];
+	if (!VectorNormalize(u))
+		VectorSet(u, 1, 0, 0);
+	r = ptype->spawnparam1 + frandom()*(ptype->spawnparam2 - ptype->spawnparam1);
+	arsvec[0] = DotProduct(u, axis[0])*r;
+	arsvec[1] = DotProduct(u, axis[1])*r;
+	arsvec[2] = DotProduct(u, axis[2])*r;
+	ofsvec[0] = crandom();
+	ofsvec[1] = crandom();
+	ofsvec[2] = crandom();
+}
+
+//FTESurf Patch 1017: v turned about the unit axis k by the angle whose cosine and sine are c and s.
+static void PScript_OrbitTurn(vec3_t v, const vec3_t k, float c, float s)
+{
+	vec3_t kxv;
+	float kv = DotProduct(k, v);
+	CrossProduct(k, v, kxv);
+	v[0] = v[0]*c + kxv[0]*s + k[0]*kv*(1-c);
+	v[1] = v[1]*c + kxv[1]*s + k[1]*kv*(1-c);
+	v[2] = v[2]*c + kxv[2]*s + k[2]*kv*(1-c);
+}
+
 static void PScript_ApplyOrgVel(vec3_t oorg, vec3_t ovel, vec3_t eforg, vec3_t axis[3], int pno, int pmax, part_type_t *ptype)
 {
 	vec3_t ofsvec, arsvec;
@@ -4682,6 +4752,9 @@ static void PScript_ApplyOrgVel(vec3_t oorg, vec3_t ovel, vec3_t eforg, vec3_t a
 			arsvec[1] = ofsvec[1]*ptype->areaspread;
 			arsvec[2] = ofsvec[2]*ptype->areaspreadvert;
 		}
+		break;
+	case SM_SHELL:
+		PScript_ShellOffset(ptype, axis, ofsvec, arsvec);
 		break;
 	default: // SM_BALL, SM_CIRCLE
 		ofsvec[0] = hrandom();
@@ -5441,6 +5514,9 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 						arsvec[2] = ofsvec[2]*ptype->areaspreadvert;
 					}
 					break;
+				case SM_SHELL:
+					PScript_ShellOffset(ptype, axis, ofsvec, arsvec);
+					break;
 				default: // SM_BALL, SM_CIRCLE
 					{
 						ofsvec[0] = hrandom();
@@ -5522,6 +5598,7 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 				P_UpdateParticleTexAnim(ptype, p, 0);
 
 				VectorCopy(p->org, p->oldorg);
+				VectorCopy(org, p->orbitorg);
 			}
 		}
 
@@ -6325,6 +6402,7 @@ static void P_ParticleTrailSpawn (vec3_t startpos, vec3_t end, part_type_t *ptyp
 		p->die = particletime + ptype->die - p->die;
 		p->birthtime = particletime;
 		p->lifetime = p->die - particletime;
+		VectorCopy(p->org, p->orbitorg);	//FTESurf Patch 1017: a trail particle turns about its own spawn point
 		P_UpdateParticleTexAnim(ptype, p, 0);
 		VectorCopy(p->org, p->oldorg);
 	}
@@ -7712,6 +7790,17 @@ static void PScript_DrawParticleTypes (void)
 				VectorInterpolate(p->org, type->viewspacefrac, tmp, p->org);
 				Matrix4x4_CM_Transform3x3(viewtranslation, p->vel, tmp);
 				VectorInterpolate(p->vel, type->viewspacefrac, tmp, p->vel);
+			}
+
+			if (type->orbitrate)
+			{	//FTESurf Patch 1017: about the effect's origin, the velocity with it (Source turns the previous position too)
+				vec3_t d;
+				//sinf/cosf: this file's sin/cos are 256-step table macros, which truncate one frame's turn to 0
+				float orbita = type->orbitrate*pframetime, orbitc = cosf(orbita), orbits = sinf(orbita);
+				VectorSubtract(p->org, p->orbitorg, d);
+				PScript_OrbitTurn(d, type->orbitaxis, orbitc, orbits);
+				VectorAdd(p->orbitorg, d, p->org);
+				PScript_OrbitTurn(p->vel, type->orbitaxis, orbitc, orbits);
 			}
 
 			p->angle += p->rotationspeed*pframetime;
