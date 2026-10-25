@@ -10,13 +10,16 @@ could checkpoint an ahead WAL into the main file and remove the retained log.
 Change: inspect an existing database's logical version through a read-only URI,
 including committed WAL, before opening RW. Keep that reader through the RW
 version recheck; on rejection close RW before RO. On success release RO before
-supported DELETE-to-WAL setup. Fresh/in-memory databases still initialize normally.
-This covers startup, migration and ordinary connections. No schema version,
+supported DELETE-to-WAL setup. UNC filenames use an empty URI authority while
+retaining escaping; ordinary drive/POSIX paths stay unchanged. Fresh/in-memory
+databases still initialize normally. This covers startup, migration and ordinary connections. No schema version,
 legacy table, signing/ranking, physics/input or native binary change; pins stay put.
 
-Verified: seven fresh-process compatibility cases pass on Windows and Linux:
+Verified: eight fresh-process compatibility cases pass on Windows and Linux:
 full/direct ahead refusal, fresh/current startup, committed-ahead WAL, an upgrade
-between RO/RW checks, and a closed WAL-mode ahead file. Existing main/committed-WAL
+between RO/RW checks, a closed WAL-mode ahead file, and escaped UNC/drive/POSIX
+filenames at the actual RO call (construction only, no share accessed). The prior
+URI implementation fails that acting UNC control. Existing main/committed-WAL
 bytes and modes are preserved on refusal; the simple-RW guard fails both acted
 WAL controls. The original unguarded app accepts both full/direct ahead controls.
 The exact candidate passes 648 existing API/source fixture checks plus the named
