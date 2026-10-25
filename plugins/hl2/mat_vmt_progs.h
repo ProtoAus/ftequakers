@@ -1571,6 +1571,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 {QR_OPENGL, 110, "vmt/water",
 "!!cvardf r_glsl_turbscale_reflect=1 //simpler scaler\n"
 "!!cvardf r_glsl_turbscale_refract=1 //simpler scaler\n"
+//FTESurf Patch 1019: refraction offset falls off past this many units; 0 = Source's constant (own line: a trailing comment lands in the default)
+"!!cvarf hl2_waterrefractfalloff=512\n"
 "!!cvarf hl2_waterdebug=0 //P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps\n"
 "!!permu REFLECTCUBEMASK\n"
 "!!samps diffuse normalmap\n"
@@ -1709,6 +1711,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef FRAGMENT_SHADER\n"
 "#include \"sys/fog.h\"\n"
 "uniform float cvar_hl2_waterdebug;\n"
+"uniform float cvar_hl2_waterrefractfalloff;\n"
 
 "#ifdef DEPTH\n"
 // The depth capture uses the same non-oblique projection as the surface.
@@ -1800,7 +1803,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 
 //refraction image (and water fog, if possible)
-"vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;\n"
+// FTESurf Patch 1019: Source's offset is constant on screen; past hl2_waterrefractfalloff units it is held to
+// a fixed size on the plane instead. At bhop_ceaseless save 25 (1900 units, $refractamount 1) the constant one
+// drew 16+ pixels of noise where Lex's Momentum shot is calm (fine-line energy 19.5 -> 14.1, Momentum 12.9).
+"float rfall = cvar_hl2_waterrefractfalloff > 0.0 ? min(1.0, cvar_hl2_waterrefractfalloff / max(tf.w, 1.0)) : 1.0;\n"
+"vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion * rfall;\n"
 "#ifdef DEPTH\n"
 // Reject foreground/above-water distortion instead of pulling pillars
 // across the shoreline: keep a sample only if it lies beyond the plane on its
@@ -3290,6 +3297,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!ver 130-450\n"
 "!!cvardf r_glsl_turbscale_reflect=1 //simpler scaler\n"
 "!!cvardf r_glsl_turbscale_refract=1 //simpler scaler\n"
+//FTESurf Patch 1019: refraction offset falls off past this many units; 0 = Source's constant (own line: a trailing comment lands in the default)
+"!!cvarf hl2_waterrefractfalloff=512\n"
 "!!cvarf hl2_waterdebug=0 //P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps\n"
 "!!permu REFLECTCUBEMASK\n"
 "!!samps diffuse normalmap\n"
@@ -3428,6 +3437,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef FRAGMENT_SHADER\n"
 "#include \"sys/fog.h\"\n"
 "uniform float cvar_hl2_waterdebug;\n"
+"uniform float cvar_hl2_waterrefractfalloff;\n"
 
 "#ifdef DEPTH\n"
 // The depth capture uses the same non-oblique projection as the surface.
@@ -3519,7 +3529,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 
 //refraction image (and water fog, if possible)
-"vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion;\n"
+// FTESurf Patch 1019: Source's offset is constant on screen; past hl2_waterrefractfalloff units it is held to
+// a fixed size on the plane instead. At bhop_ceaseless save 25 (1900 units, $refractamount 1) the constant one
+// drew 16+ pixels of noise where Lex's Momentum shot is calm (fine-line energy 19.5 -> 14.1, Momentum 12.9).
+"float rfall = cvar_hl2_waterrefractfalloff > 0.0 ? min(1.0, cvar_hl2_waterrefractfalloff / max(tf.w, 1.0)) : 1.0;\n"
+"vec2 refractUV = stc + n.st * float(STRENGTH_REFR) * float(r_glsl_turbscale_refract) * distortion * rfall;\n"
 "#ifdef DEPTH\n"
 // Reject foreground/above-water distortion instead of pulling pillars
 // across the shoreline: keep a sample only if it lies beyond the plane on its
