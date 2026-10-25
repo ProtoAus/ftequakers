@@ -1034,7 +1034,14 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 
 	if (flags & DLLF_ALLOWWEB)
 	{
+		//FTESurf Patch 1015: the url is built in weburl from a copy, not with va(): va() has two buffers,
+		//filename and localname already hold both, and a third call wrote over filename while reading it
+		//("https://play.proto.bar/play.proto.bar/less.bsp" for maps/bhop_ceaseless.bsp).
+		static char weburl[MAX_OSPATH*2];
+		char fname[MAX_OSPATH];
 		const char *dlURL = InfoBuf_ValueForKey(&cl.serverinfo, "sv_dlURL");
+		Q_strncpyz(fname, filename, sizeof(fname));
+		filename = fname;
 		if (!*dlURL)
 			dlURL = cls.downloadurl;
 		if (!*dlURL)
@@ -1044,7 +1051,8 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		flags &= ~(DLLF_TRYWEB|DLLF_ALLOWWEB);
 		if (*dlURL && (flags & DLLF_NONGAME) && !strncmp(filename, "package/", 8))
 		{	//filename is something like: package/GAMEDIR/foo.pk3
-			filename = va("%s%s%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"), filename+8);
+			Q_snprintfz(weburl, sizeof(weburl), "%s%s%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"), filename+8);
+			filename = weburl;
 			flags |= DLLF_TRYWEB|DLLF_ALLOWWEB;
 		}
 		else if (*dlURL)
@@ -1053,7 +1061,8 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 			if (!strncmp(filename, "pics/../", 8))
 				filename += 8;
 #endif
-			filename = va("%s%s%s/%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"), FS_GetGamedir(true), filename);
+			Q_snprintfz(weburl, sizeof(weburl), "%s%s%s/%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"), FS_GetGamedir(true), filename);
+			filename = weburl;
 			flags |= DLLF_TRYWEB|DLLF_ALLOWWEB;
 		}
 		else if (*cl_download_mapsrc.string &&
@@ -1067,11 +1076,12 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 			if (strncmp(cl_download_mapsrc.string, "http://", 7) && strncmp(cl_download_mapsrc.string, "https://", 8))
 			{
 				Con_Printf("%s: Scheme not specified, assuming https.\n", cl_download_mapsrc.name);
-				filename = va("https://%s/%s", cl_download_mapsrc.string, filename+5);
+				Q_snprintfz(weburl, sizeof(weburl), "https://%s/%s", cl_download_mapsrc.string, filename+5);
 			}
 			else
 #endif
-				filename = va("%s%s", cl_download_mapsrc.string, filename+5);
+				Q_snprintfz(weburl, sizeof(weburl), "%s%s", cl_download_mapsrc.string, filename+5);
+			filename = weburl;
 			flags |= DLLF_TRYWEB|DLLF_ALLOWWEB;
 		}
 	}

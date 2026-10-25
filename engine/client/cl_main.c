@@ -3147,6 +3147,10 @@ void CL_PakDownloads(int mode)
 		sep = strchr(pname, '/');
 		if (!sep || strchr(sep+1, '/'))
 			continue;	//don't try downloading weird ones here... paks inside paks is screwy stuff!
+		//FTESurf Patch 1015: a Source map's own pak (maps/<name>.bsp) is the map, which comes by its own route
+		//(cl_download_mapsrc); asked for here it was refused on every load ("Server permissions deny").
+		if (!Q_strcasecmp(COM_GetFileExtension(pname, NULL), ".bsp"))
+			continue;
 
 		if ((mode&3) != 2)
 		{
