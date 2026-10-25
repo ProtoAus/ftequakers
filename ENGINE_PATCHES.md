@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1015 - map-load download errors: the web url overwrote its own name, and a Source map's pak was asked for (GL client)
+
+Problem: Lex, 25 Oct, every load of bhop_ceaseless printed "Downloading
+https://play.proto.bar/play.proto.bar/less.bsp to maps/dlcache/bhop_ceaseless.bsp.97ca938c", a 404,
+then "Server permissions deny downloading file package/maps/dlcache/...". Two defects.
+CL_CheckOrEnqueDownloadFile built the web url with a third va() while filename and localname
+already held va()'s two buffers (VA_BUFFERS 2), so the call overwrote filename as it read
+filename+8. And CL_PakDownloads asked for every referenced pack, which on a Source map includes
+the map's embedded pak (maps/<name>.bsp): CL_CheckDLFile looks for it under a gamedir called
+"maps", never finds it, and the server refuses it.
+
+Change: the url is formatted into a static buffer from a stack copy of filename, in all three
+branches (package/, sv_dlURL, cl_download_mapsrc). CL_PakDownloads skips .bsp packs; a map comes
+through cl_download_mapsrc.
+
+Verified: rig, bhop_ceaseless on a local server: a client from before this patch (17:54 run) logs
+the doubled url and the refused package/maps/dlcache request; this build logs no download line at
+all for the same map and server. Rig logs from 18 Oct show the same doubled url, so the fault predates
+these patches. Review: the stack copy moved to function scope (filename can point at it after the
+web block). No new warnings.
+
+Limits: sound/plar/booster.wav still 404s and is reported missing; the map references it but
+never shipped it, so it is missing everywhere.
+
 ## Patch 1014 - func_areaportalwindow panes fade instead of popping (hl2 plugin, GL client)
 
 Problem: bhop_ceaseless, Lex's second list of 25 Oct, saves 19-20 and 23-24: a window pane
@@ -11,15 +35,19 @@ depth write of its opaque shader, so particles and glass behind a fading pane (a
 tunnel door, vmt/unlitreflect, which did fade) failed the depth test until it vanished.
 
 Change: imposter.glsl multiplies its alpha by e_colourident.a. gl_backend.c: a BEF_FORCETRANSPARENT
-pass on a brush entity (a pane, a fading func_lod) writes no depth; models keep theirs.
+pass on a brush entity other than the world (a pane, a fading func_lod) writes no depth; models and
+r_worldentity's batches (translucent sprites, csqc polygons) keep theirs.
 
 Verified: bhop_ceaseless, walking at areaportal1 from 1100, 900, 700, 500, 312 and 200 units: the
 control (installed build) shows the pane opaque at every step but 200 and the tunnel at 200 only;
-P1014 shows the tunnel faintly at 700, more at 500, clearly at 312, fully at 200. At save 23 the
-control's gradient disappears with r_drawentities 0, the pane. No new warnings.
+P1014 shows the tunnel faintly at 700, more at 500, clearly at 312, fully at 200 (rechecked at 700
+and 312 after the review's world-entity exclusion). At save 23 the control's gradient disappears
+with r_drawentities 0, the pane. No new warnings.
 
 Limits: models fading by entity alpha still write depth; Source's translucency limit is honoured
-as before (both panes here are 0).
+as before (both panes here are 0). Content drawn after a fading pane and behind it is not dimmed
+by it (no depth to test against); with an old hl2 plugin the pane stays opaque in its fade band
+while what is behind it shows through.
 
 ## Patch 1013 - Source's $underwateroverlay drawn underwater (hl2 plugin, GL client)
 
@@ -28,61 +56,76 @@ ran, where Source draws the water's $underwateroverlay (a Refract warp of the wh
 with none, no warp. mat_vmt.c parsed and discarded the key.
 
 Change: mod_vbsp.c keeps each leaf's leafwaterid and reads LUMP_LEAFWATERDATA (36): each water
-volume's surface texinfo resolves to its overlay through the material or, as HL2-family water
-writes it, its $bottommaterial (Mat_VMT_UnderwaterOverlay). An overlay with a $normalmap becomes a
-post-process, ftesurf/uw/<overlay>, served from Shader_LoadVMT as P288's grade is: vmt/uwoverlay,
-refract.glsl's warp, blur, tint and $bumptransform scroll on $sourcecolour. VBSP_PrepareFrame
-publishes the main view's volume in r_underwateroverlay (engine cvar, set only on change): empty
-(not a Source water volume, or an old plugin: the engine's warp as before), "none" (water without an
-overlay: no warp, as Source) or the shader name; GLR_RenderView uses it in place of underwaterwarp,
-keeping the engine's warp for a shader that cannot draw (P290). hl2_underwateroverlay 0 (read at
-map load) restores the engine's warp everywhere. r_waterwarp 0 still turns every warp off.
+volume's surface material (the texinfo's full name; the 32-byte collision name would cut 49% of the
+library's water volumes) resolves to its overlay from its $bottommaterial when it names one, else
+from the material (Mat_VMT_UnderwaterOverlay). An overlay with a $normalmap becomes a post-process,
+ftesurf/uw/<overlay>, served from Shader_LoadVMT as P288's grade is: vmt/uwoverlay, refract.glsl's
+warp, blur, tint and $bumptransform scroll on $sourcecolour. VBSP_PrepareFrame publishes the main
+view's volume in r_underwateroverlay (engine cvar, set only on change): empty (not a Source water
+volume, a surface material that cannot be read, an overlay name past MAX_QPATH, or an old plugin:
+the engine's warp as before), "none" (water without an overlay: no warp and no fov wobble, as
+Source; RDF_UNDERWATER stays set, so underwater fog is chosen as before) or the shader name;
+GLR_RenderView uses it in place of underwaterwarp, keeping the engine's warp for a shader that
+cannot draw (P290). hl2_underwateroverlay 0 (read at map load) restores the engine's warp
+everywhere. r_waterwarp 0 still turns every warp off.
 
 Verified: bhop_ceaseless: "8 water volumes, 3 with an underwater overlay" (the three water_cheap
 volumes, nature/water_coast01_beneath -> effects/water_warp01; liquids/water_beneath is in no mount,
 HL2's, CS:S's or Momentum's). Eye in volume 0: r_underwateroverlay "none"; in volume 3:
 "ftesurf/uw/effects/water_warp01", whose registered script is program
-vmt/uwoverlay#REFRAMOUNT=0.04#BLUR#SCROLL=0.0707,0.0707 with the scene and water_coast01_normal.
-Looking down at the static floor there: no-warp vs no-warp 1 s apart 0.0% of pixels, overlay vs
-no-warp 49.2%, overlay vs itself 1 s apart 55.9% (it moves), overlay vs the engine's warp 54.9%.
-No new warnings.
+vmt/uwoverlay#REFRAMOUNT=0.04#BLUR#SCROLL=0.0707,0.0707 with the scene and water_coast01_normal;
+both values again with the review build. Looking down at the static floor there (first build):
+no-warp vs no-warp 1 s apart 0.0% of pixels, overlay vs no-warp 49.2%, overlay vs itself 1 s apart
+55.9% (it moves), overlay vs the engine's warp 54.9%. No new warnings.
 
 Limits: Source's Refract blur is the 4-tap one refract.glsl already uses; the overlay is drawn
-before the HUD and with the viewmodel inside it.
+before the HUD and with the viewmodel inside it. The bottom-material-first order follows Source's
+fog-volume material swap as recalled; that engine code is not in the SDK. The published value
+lags one frame (read before VBSP_PrepareFrame), so entering water draws one frame of the old
+state.
 
-## Patch 1012 - .pcf colour over life, Source's default rates and draw distances, spawn volumes placed per particle, PVS culling (csprogs, tools)
+## Patch 1012 - .pcf colour over life, Source's default rates and draw distances, spawn volumes placed per particle, start angles (csprogs, tools, GL client)
 
 Problem: bhop_ceaseless, Lex's lists of 25 Oct: particle colour never changed over life (Color
 Fade untranslated); startboost1, butterfly and spiral never drew (no "maximum draw distance" is
 stored when it is Source's 100000, pcf.py read 0, cl_emit.qc culled at any distance); the boost
 strips drew one clump or nothing (purpleboost4's emitter stores no emission_rate, Source's 100, read
 as 0 and refused; purpleboost5's 256 x 5056 box baked as spawnorg's 1138 square); redrain stood in a
-column (416 x 16 box) and spiral's ring (distance_bias 1 1 0) became a ball; info_particle_system
-emitted out of the eye's PVS, where Source transmits nothing. surf_boreas' bake predated P1002's
-materials/ image path: tendies_endparticle04's tesla_glow drew FTE's built-in ball (the BACKLOG's
-"saturated dome").
+column (416 x 16 box) and spiral's ring (distance_bias 1 1 0) became a ball; redbooster's drops fell
+at random angles (FTE's default start angle is random, Source's 0). surf_boreas' bake predated
+P1002's materials/ image path: tendies_endparticle04's tesla_glow drew FTE's built-in ball (the
+BACKLOG's "saturated dome").
 
-Change: pcf.py: Color Fade becomes rgbdelta over the longest life, ending at rgbdeltatime (FTE
-pre-ages shorter lives into that timeline, alphadelta's convention); emission_rate defaults to 100
-and the draw distance to 100000; Position Within Box Random (world-aligned, Source's default frame)
-and Position Within Sphere Random (shell, distance_bias, outward speed) go out as eight new index
-columns and the block's spawnorg is 0. cl_emit.qc places each particle in that volume (an older
-18-column line keeps the old path) and skips an info_particle_system outside the eye's PVS
-(checkpvs, one probe entity; vbsp_emit_pvs 0 = distance only). bhop_ceaseless and surf_boreas
-re-baked.
+Change: pcf.py: Color Fade becomes rgbdelta from birth to fade_end_time, spread over the longest life
+and ending at an explicit rgbdeltatime (FTE pre-ages shorter lives into that timeline, alphadelta's
+convention); emission_rate defaults to 100 and the draw distance to 100000; Position Within Box
+Random (world-aligned, Source's default frame) and Position Within Sphere Random (shell,
+distance_bias with distance_bias_absolute_value, outward speed) go out as eight new index columns and
+the block's spawnorg is 0; every block writes rotationstart (45 + Source's angle: FTE's angle 0 is a
+diamond, its own effectinfo importer adds 45 too) and Rotation Spin Roll's rotationspeed.
+cl_emit.qc places each particle in that volume (an older 18-column line keeps the old path).
+p_script.c: a pre-aged particle's colour change stops at rgbchangetime, as the per-frame update
+does; uncapped, one born past the window kept a colour beyond its target (crystal: 37.5% of its
+particles). bhop_ceaseless and surf_boreas re-baked. A first cut also skipped info_particle_system
+out of the eye's PVS; review found Momentum transmits them always (particle_system.cpp,
+FL_EDICT_ALWAYS) and it is gone.
 
-Verified: test_pcf_resources 33/33 (six new: rate and draw distance defaults, box and ring
-columns, colour rates; the old pcf.py fails five), particlecoverage 9/9. bhop_ceaseless now bakes
-23 of 23 systems (22 before). Rig at Lex's saves, control the installed build and bake: save 14 big
-blue circles over the start room (none before), save 15 purple dots by the butterflies (none), save
-16 dots along both rails of the boost strip (a clump), save 21 circles across the whole wall (a
-column), saves 19-20 spiral's cyan dots round the tunnel (none). gatelight turns warm to blue,
-crystal green to pink over a blue-perlin image. surf_boreas end room with children on: a compact
-glow where the dome was. No QC warnings.
+Verified: test_pcf_resources 36/36 (rate and draw distance defaults, box and ring columns, the index
+line's 26 columns, colour rates including a later start, the absolute bias, start angles; the
+first pcf.py fails five), particlecoverage 10/10. bhop_ceaseless bakes 23 of 23 systems (22
+before). Rig at Lex's saves, control the installed build and bake: save 14 big blue circles over
+the start room (none before), save 15 purple dots by the butterflies (none), save 16 dots along
+both rails of the boost strip (a clump), save 21 circles across the whole wall (a column), saves
+19-20 spiral's cyan dots round the tunnel (none), save 28 redbooster's drops upright (random
+angles). gatelight turns warm to blue, crystal green to pink over a blue-perlin image. surf_boreas
+end room with children on: a compact glow where the dome was. No QC warnings.
 
 Limits: Movement Rotate Particle Around Axis is not translated (spiral and butterfly do not orbit);
-a Color Fade starting after birth starts at birth and is linear; the PVS cull covers
-info_particle_system only; child systems stay off by default.
+Color Fade easing is drawn linear; a sphere's bias "in local system" is drawn in the world frame;
+the spin direction of a non-zero Source angle is not checked against Source; child systems stay off
+by default. FTE's particle quad mirrors a sprite vertically at any angle (texture t1 at the bottom),
+symmetric sprites unaffected. A non-CDECAL decal's colour window runs 20 s longer (its die += 20,
+older than this patch; pcf.py emits no decals).
 
 ## Patch 1003 - authored no-fog on program-less Source materials (hl2 plugin, GL client)
 
