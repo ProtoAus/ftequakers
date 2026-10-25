@@ -90,6 +90,8 @@ Lobby_SayBoardPB -- into the @menu room from the player's account as "* ...":
 social.announce, one line per player per room lifetime except a new record (a record
 improved again inside it is paced too); typed text may not start with "* "; the menu
 draws room lines so as the board's. Tests: test_social, test_ranked P996 section.
+Deployed 25 Oct 04:48:30Z as backend generation 806d1484 (live c35fd034 + this change only), a new
+guard root beside P970's; procedure in ftesurf tools/surfd-generation-p996.md.
 
 ## Patch 995 - Keep the SDL3 file picker local
 
