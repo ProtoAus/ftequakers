@@ -1,23 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1031 - refuse newer surfd schemas before connection writes (surfd only)
+## Patch 1031 - refuse newer surfd schemas before application writes (surfd only)
 
 Problem: startup treated a database newer than SCHEMA_VERSION as already migrated.
-The connection also switched journal mode and hardened permissions before any
-version compatibility decision. A newer service's database could therefore be
-opened and changed by older application code instead of being refused.
+Connection setup could change its journal/permissions first. A simple read/write
+version check was also insufficient: reading then closing the last RW handle
+could checkpoint an ahead WAL into the main file and remove the retained log.
 
-Change: connect checks user_version before persistent PRAGMAs or permission
-hardening, closes the handle and raises for a newer schema. This covers startup,
-migrate and ordinary application connections. No schema version, table, signing,
-ranking, physics, game input or native binary change; engine pins stay put.
+Change: inspect an existing database's logical version through a read-only URI,
+including committed WAL, before opening RW. Keep that reader through the RW
+version recheck; on rejection close RW before RO. On success release RO before
+supported DELETE-to-WAL setup. Fresh/in-memory databases still initialize normally.
+This covers startup, migration and ordinary connections. No schema version,
+legacy table, signing/ranking, physics/input or native binary change; pins stay put.
 
-Verified: fresh-process test_schema_compat.py has four acted controls: future
-schema full startup and direct connection refuse without changing file bytes or
-permissions; current-schema startup and a fresh database still work. The unchanged
-application fails both refusal controls; the subject passes all four. The missing
-guard was also observed in an isolated real-data rehearsal; corrected Linux
-qualification and live delivery remain separate, pending steps, not claims here.
+Verified: seven fresh-process compatibility cases pass on Windows and Linux:
+full/direct ahead refusal, fresh/current startup, committed-ahead WAL, an upgrade
+between RO/RW checks, and a closed WAL-mode ahead file. Existing main/committed-WAL
+bytes and modes are preserved on refusal; the simple-RW guard fails both acted
+WAL controls. The original unguarded app accepts both full/direct ahead controls.
+The exact candidate passes 648 existing API/source fixture checks plus the named
+social-announcement unit test. An isolated retained on-host database image also
+passes full 23-to-24 and idempotent startup: all 34 persistent legacy tables' typed
+values/schema/objects and the exact lobby column metadata are preserved. An actual
+account-value counter is rejected/restored, ahead startup refuses, and denial of
+the exact lobby ALTER leaves schema23 and all fault-fixture values unchanged.
+
+Limits: SQLite read-only access may create an EMPTY WAL/SHM coordination cache or
+update SHM read marks; file-namespace/SHM byte immutability is not promised. The
+stronger initial namespace prediction failed and was retained, not called a pass;
+the explicit cold-WAL case verifies unchanged main pages/mode and no new log data.
+This guard does not replace exclusion of concurrent schema migrations/old writers.
+Offline proof is not live authority, migration, deployment or complete cutover.
 
 ## Patch 1020 - hl2_water 5: screen-space Source water, no extra scene renders (GL client, hl2 plugin, csprogs)
 
