@@ -265,6 +265,7 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
 		csqcg.predmove_org0 = csqcg.predmove_org = csqcg.predmove_vel = csqcg.predmove_basevel = NULL;
 		csqcg.predmove_bvfired = csqcg.predmove_offset = NULL;
+		csqcg.predmove_bvset = csqcg.predmove_bvsetflag = NULL;
 		csqcg.predmove_onground = csqcg.predmove_pmtype = csqcg.predmove_buttons = csqcg.predmove_fixangle = NULL;
 		csqcg.predmove_mins = csqcg.predmove_maxs = csqcg.predmove_anglesnap = csqcg.predmove_cmdangles = NULL;
 		csqcg.input_sequence = NULL;
@@ -10890,6 +10891,8 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 		VectorClear(csqcg.predmove_basevel);
 	if (csqcg.predmove_bvfired)
 		*csqcg.predmove_bvfired = 0;
+	if (csqcg.predmove_bvsetflag)
+		*csqcg.predmove_bvsetflag = 0;
 
 	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 	((float *)pr_globals)[OFS_PARM0] = seat;
@@ -10934,6 +10937,12 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 			VectorCopy(csqcg.predmove_basevel, pred_bv_held[seat]);
 			pred_bv_armed[seat] = true;
 		}
+		/*FTESurf Patch 1025: the server's AddOutput basevelocity -- an overwrite of the held
+		  carrier that leaves the armed flag alone, after this command's touches (an OnEndTouch
+		  fired in the next PreThink, or an OnStartTouch in this command's touch).  The server
+		  stores it divided by the cash-out's scale so the next command pays exactly this.*/
+		if (csqcg.predmove_bvset && csqcg.predmove_bvsetflag && *csqcg.predmove_bvsetflag)
+			VectorScale(csqcg.predmove_bvset, 1 / (1 + movevars.ticrate * 0.5f), pred_bv_held[seat]);
 		CSQC_PredictSaveBaseVel(seat, cmd->sequence);
 	}
 }

@@ -8658,6 +8658,7 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTESURF_VIEWMODEL_FOV", NULL, 0,{NULL}, "setproperty(VF_VIEWMODEL_AFOV (227), degrees) changes only this scene's weapon projection: 0 restores normal settings, -1 inherits world FOV. No archived cvar or input change (FTESurf P970)."},
 	{"FTE_CSQC_HL2_WATER_BUDGET", check_hl2_waterbudget, 0,{NULL}, "Local programmable OpenGL renderer has the live hl2_water policy and a loaded material loader providing vmt/waterbudget. Mode 4 needs no scene captures; availability is not a driver-compilation guarantee."},
 	{"FTE_CSQC_HL2_WATER_SCREEN", check_hl2_waterscreen, 0,{NULL}, "FTESurf Patch 1020: hl2_water 5 (screen-space Source water) works here: GL with $currentdepth and a material loader whose vmt/water has the SCREEN branch."},
+	{"FTESURF_PREDICT_BVSET", NULL, 0,{NULL}, "FTESurf Patch 1025: CSQC_PredictPlayerMove may write predmove_bvset/predmove_bvsetflag, an AddOutput basevelocity the next predicted command pays exactly, as the server's carrier does."},
 #endif
 	{"FTE_CSQC_WINDOWCAPTION",			NULL,	1,{"setwindowcaption"}, "Provides csqc with the ability to change the window caption as displayed when running windowed or in the task bar when switched out."},
 	{"FTE_ENT_SKIN_CONTENTS",			NULL,	0,{NULL}, "self.skin = CONTENTS_WATER; makes a brush entity into water. use -16 for a ladder."},

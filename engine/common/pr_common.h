@@ -1299,6 +1299,8 @@ enum
 	globalvector(predmove_vel)				/*FTESurf P335: velocity after PM_PlayerMove; QC may rewrite (rw)*/ \
 	globalvector(predmove_basevel)			/*FTESurf P335: this command's net trigger_push write; the engine holds it across commands as the mirror of the server's .run_basevel and pays the Patch 249 cash-out (w)*/ \
 	globalfloat (predmove_bvfired)			/*FTESurf P337: set nonzero when a continuous push fired this command, even if the net vector cancelled to zero -- the server's armed flag is set unconditionally by the touch (w)*/ \
+	globalvector(predmove_bvset)			/*FTESurf P1025: an AddOutput basevelocity write this command, the velocity it pays (w)*/ \
+	globalfloat (predmove_bvsetflag)		/*FTESurf P1025: nonzero when predmove_bvset is written; engine clears (w)*/ \
 	globalfloat (predmove_onground)			/*FTESurf P335: rw*/ \
 	globalfloat (predground_active)			/*P924: opt in to ground-carrier probes on this map*/ \
 	globalvector(predmove_mins)				/*FTESurf P335: player hull (ro)*/ \
