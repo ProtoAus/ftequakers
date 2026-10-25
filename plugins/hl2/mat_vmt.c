@@ -5126,36 +5126,40 @@ const char *VBSP_ColourCorrectScript(const char *name);	//FTESurf Patch 288, mod
 
 /*
 FTESurf Patch 1013: Source's $underwateroverlay. A leaf names its water by the SURFACE material's
-texinfo (dleafwaterdata_t), and the key sits on that material or, as HL2-family water writes it,
-on its $bottommaterial. mod_vbsp.c resolves one per water volume at map load and publishes the
-eye's in r_underwateroverlay; the engine draws it in place of its own underwater warp.
+texinfo (dleafwaterdata_t); with the eye in the volume Source reads the overlay from that
+material's $bottommaterial when it has one, else from the material itself. mod_vbsp.c resolves
+one per volume at map load and publishes the eye's in r_underwateroverlay. Returns -1 when the
+surface material cannot be read (the engine's warp stays), 0 for no overlay, 1 with out set.
 */
-qboolean Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize)
+int Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize)
 {
 	vmtstate_t *st = plugfuncs->Malloc(sizeof(*st));
 	char bottom[MAX_QPATH];
-	qboolean ok;
+	int r = -1;
 
 	*out = 0;
 	memset(st, 0, sizeof(*st));
-	ok = VMT_ReadVMT(material, st);
+	if (VMT_ReadVMT(material, st))
+	{
+		r = 0;
+		if (*st->bottommaterial)
+		{
+			VMT_BottomNormalise(st->bottommaterial, bottom, sizeof(bottom));
+			memset(st, 0, sizeof(*st));
+			if (!VMT_ReadVMT(bottom, st))
+				*st->underwateroverlay = 0;	//a missing bottom material has no overlay (liquids/water_beneath)
+		}
+		if (*st->underwateroverlay)
+		{
+			VMT_BottomNormalise(st->underwateroverlay, out, outsize);	//no materials/, no extension
+			Q_strlwr(out);
+			r = 1;
+		}
+	}
 	if (st->sourcefile)
 		plugfuncs->Free(st->sourcefile);
-	if (ok && !*st->underwateroverlay && *st->bottommaterial)
-	{
-		VMT_BottomNormalise(st->bottommaterial, bottom, sizeof(bottom));
-		memset(st, 0, sizeof(*st));
-		ok = VMT_ReadVMT(bottom, st);
-		if (st->sourcefile)
-			plugfuncs->Free(st->sourcefile);
-	}
-	if (ok && *st->underwateroverlay)
-	{
-		VMT_BottomNormalise(st->underwateroverlay, out, outsize);	//no materials/, no extension
-		Q_strlwr(out);
-	}
 	plugfuncs->Free(st);
-	return *out != 0;
+	return r;
 }
 
 //The overlay's post-process: refract.glsl's warp, blur, tint and $bumptransform scroll on the scene

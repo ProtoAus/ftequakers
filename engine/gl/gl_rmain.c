@@ -60,6 +60,7 @@ extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
 extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
+static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
 
@@ -594,7 +595,7 @@ static void R_SetupGL (const float eyematrix[12]/*can be null*/, const vec4_t fo
 					fovv_y *= -1;
 					r_refdef.flipcull ^= SHADER_CULL_FLIP;
 				}
-				else if ((r_refdef.flags & RDF_UNDERWATER) && !(r_refdef.flags & RDF_WATERWARP))
+				else if ((r_refdef.flags & RDF_UNDERWATER) && !(r_refdef.flags & RDF_WATERWARP) && !r_uwnowarp)
 				{
 					fov_x *= 1 + (((sin(cl.time * 4.7) + 1) * 0.015) * r_waterwarp.value);
 					fov_y *= 1 + (((sin(cl.time * 3.0) + 1) * 0.015) * r_waterwarp.value);
@@ -2822,6 +2823,7 @@ void GLR_RenderView (void)
 	}
 
 	//check if we can do underwater warp
+	r_uwnowarp = false;
 	if (cls.protocol != CP_QUAKE2)	//quake2 tells us directly
 	{
 		if (r_viewcontents & FTECONTENTS_FLUID)
@@ -2832,13 +2834,13 @@ void GLR_RenderView (void)
 	if (r_refdef.flags & RDF_UNDERWATER)
 	{
 		extern cvar_t r_projection;
-		qboolean nowarp = false;
 		//FTESurf Patch 1013: a Source water volume draws its $underwateroverlay, or no warp when it has none
 		//(the hl2 plugin names it per frame). A shader that cannot draw keeps the engine's warp (Patch 290).
+		//"none" leaves RDF_UNDERWATER set: the fog choice below reads it.
 		if (*r_underwateroverlay.string && cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))
 		{
 			if (!strcmp(r_underwateroverlay.string, "none"))
-				nowarp = true;
+				r_uwnowarp = true;
 			else
 			{
 				shader_t *s = R_RegisterCustom(NULL, r_underwateroverlay.string, SUF_NONE, NULL, NULL);
@@ -2846,9 +2848,9 @@ void GLR_RenderView (void)
 					uwpostproc = s;
 			}
 		}
-		if (!r_waterwarp.value || r_projection.ival || nowarp)
+		if (!r_waterwarp.value || r_projection.ival)
 			r_refdef.flags &= ~RDF_UNDERWATER;	//no warp at all
-		else if (r_waterwarp.value > 0 && uwpostproc)
+		else if (r_waterwarp.value > 0 && uwpostproc && !r_uwnowarp)
 			r_refdef.flags |= RDF_WATERWARP;	//try fullscreen warp instead if we can
 	}
 

@@ -3425,7 +3425,8 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 							| (SBITS_SRCBLEND_SRC_ALPHA | SBITS_DSTBLEND_ONE_MINUS_SRC_ALPHA | SBITS_ATEST_GT0);
 			//FTESurf Patch 1014: a fading brush entity (a func_areaportalwindow pane, func_lod) keeps no depth,
 			//or the particles and glass behind it fail the depth test until it stops drawing, then pop in.
-			if (shaderstate.curentity && shaderstate.curentity->model && shaderstate.curentity->model->type == mod_brush)
+			if (shaderstate.curentity && shaderstate.curentity != &r_worldentity &&	//world batches: sprites, csqc polys
+				shaderstate.curentity->model && shaderstate.curentity->model->type == mod_brush)
 				sbits &= ~SBITS_MISC_DEPTHWRITE;
 		}
 

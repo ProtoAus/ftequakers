@@ -159,7 +159,7 @@ this file performs on the census with it.  See VMT_BottomRecord in mat_vmt.c for
 link is and why a name rule could not have produced it.
 */
 const char *Mat_VMT_BottomParent(const char *name);
-qboolean Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize);	//FTESurf Patch 1013
+int Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize);	//FTESurf Patch 1013
 qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size);
 qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
@@ -2986,7 +2986,8 @@ typedef struct
 /*
 FTESurf Patch 1013: each water volume's underwater overlay, from the leaf water lump's surface
 texinfo -- Source finds the eye's volume the same way. Mat_VMT_UnderwaterOverlay follows the
-material to its $bottommaterial; an overlay that cannot draw (no $normalmap) reads as "none".
+material to its $bottommaterial; an overlay that cannot draw (no $normalmap) reads as "none", a
+surface material that cannot be read as "" (the engine's own warp).
 */
 typedef struct
 {
@@ -3002,7 +3003,7 @@ static void VBSP_LoadLeafWater (model_t *mod, qbyte *mod_base, vlump_t *l)
 	char mat[MAX_QPATH], ov[MAX_QPATH], *h;
 	static char script[4096];
 	struct { char mat[MAX_QPATH]; char res[MAX_QPATH+16]; } seen[16];	//volumes repeat a few materials
-	int i, j, n, nseen = 0, overlays = 0;
+	int i, j, k, n, nseen = 0, overlays = 0;
 
 	vbsp_uwlast[0] = 0;
 	cvarfuncs->ForceSetString("r_underwateroverlay", "");	//machine-set and kept across maps, as r_colourcorrection
@@ -3017,7 +3018,7 @@ static void VBSP_LoadLeafWater (model_t *mod, qbyte *mod_base, vlump_t *l)
 		Q_strlcpy(prv->wateroverlay[i], "none", sizeof(prv->wateroverlay[i]));
 		if (ti < 0 || ti >= mod->numtexinfo)
 			continue;
-		Q_strlcpy(mat, prv->surfaces[ti].rname, sizeof(mat));
+		Q_strlcpy(mat, mod->texinfo[ti].texture->name, sizeof(mat));	//not surfaces[].rname: 32 bytes cut half the library's names
 		if ((h = strchr(mat, '#')))
 			*h = 0;	//#WARP
 		for (j = 0; j < nseen && strcmp(seen[j].mat, mat); j++)
@@ -3025,14 +3026,20 @@ static void VBSP_LoadLeafWater (model_t *mod, qbyte *mod_base, vlump_t *l)
 		if (j == nseen)
 		{
 			Q_strlcpy(seen[j % 16].mat, mat, sizeof(seen[0].mat));
-			Q_strlcpy(seen[j % 16].res, "none", sizeof(seen[0].res));
-			if (Mat_VMT_UnderwaterOverlay(mat, ov, sizeof(ov)) && Mat_VMT_OverlayScript(ov, script, sizeof(script)))
-				Q_snprintfz(seen[j % 16].res, sizeof(seen[0].res), "ftesurf/uw/%s", ov);
+			k = Mat_VMT_UnderwaterOverlay(mat, ov, sizeof(ov));
+			Q_strlcpy(seen[j % 16].res, k < 0 ? "" : "none", sizeof(seen[0].res));
+			if (k > 0 && strlen(ov) + 11 < MAX_QPATH)	//R_LoadShader keeps 63 characters of a name
+			{
+				if (Mat_VMT_OverlayScript(ov, script, sizeof(script)))
+					Q_snprintfz(seen[j % 16].res, sizeof(seen[0].res), "ftesurf/uw/%s", ov);
+			}
+			else if (k > 0)
+				Q_strlcpy(seen[j % 16].res, "", sizeof(seen[0].res));
 			if (nseen < 16)
 				nseen++;
 		}
 		Q_strlcpy(prv->wateroverlay[i], seen[j % 16].res, sizeof(prv->wateroverlay[i]));
-		if (strcmp(prv->wateroverlay[i], "none"))
+		if (*prv->wateroverlay[i] && strcmp(prv->wateroverlay[i], "none"))
 			overlays++;
 	}
 	Con_DPrintf("%s: %i water volumes, %i with an underwater overlay\n", mod->name, n, overlays);
