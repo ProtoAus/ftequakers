@@ -16,6 +16,71 @@ Full SDL3 SDK/platform build and real desktop acceptance remain untested because
 the SDK is absent here. LSP lacks SDL headers, not a native build-clean claim.
 No deployed images, existing command channels or broader privileges changed.
 
+## Patch 994 - Results card without the "F1 cursor" hint (QC)
+
+Lex (25 Oct): remove "F1 for cursor" from the card shown on a map/bonus/stage
+finish. cl_results.qc draws only "ESC close"; the card has no click targets and
+F1 still takes the cursor. Client-only, no evidence or board change.
+
+## Patch 993 - A save loaded at rest in a START or STAGE box arms clean (QC)
+
+Lex (25 Oct): "loading a save in a startzone of a stage/map/bonus shouldn't make
+it segmented ... until you hit reset."
+
+Problem, measured on the shipped build: SV_SaveApplyState's at-rest arm (Build 47,
+Patch 435) asked SV_ZoneStartAt, which is START only, so a save taken standing in
+a stage box loaded `segmented` with the stage marked stitched, and leaving the box
+ran a segmented stage (surf_dune stage 2). And state.txt's `origin %.4f` put a body
+saved standing on a box whose bottom is its floor up to 0.00005 below it, outside
+the box, where the arm never fires (Patch 415's measurement; it bites below
+|z| ~1024, where float32 does not absorb the rounding): bhop_eazy's start with a
+64.03125 bottom loaded segmented with the arm zone -1.
+
+Change: the gate takes a START or STAGE box (SL_ArmBoxAt) -- walking into a stage
+box off the clock already arms a stage run (SV_TimerTryArm); the other five
+conditions (not voided, not RUNNING, row speed under 1 u/s, same map, grounded)
+are unchanged, so a save carrying speed still keeps its taint and a mid-run save
+still resumes a segmented run. SV_SaveLocPlace (load and every held tick) lifts an
+origin at most 0.0001 under a START/STAGE bottom onto it (SL_BoxFloor).
+
+Verified (controls/p989_arm.py, conbridge rig, control = origin/main 421885d3):
+surf_dune stage 2: control after-load armed/segmented, leaving running/segmented;
+subject armed/clean, running/clean. bhop_eazy start at a 64.03125 bottom: control
+armed/segmented az -1, running/segmented; subject armed/clean az 0, running/clean.
+surf_dune start: clean in both (no regression).
+
+## Patch 992 - Friends in an online lobby whose relay never publishes (QC)
+
+Lex (25 Oct): "the play menu friends list doesn't load when you're in a lobby".
+In an online lobby the menu only copied CSQC's relayed snapshot, which needs a
+Steam-linked account proven on that lobby and a reachable master; without it the
+count stayed -1 and the panel waited forever. MF_Direct now also answers TRUE
+connected to a non-local board while ui_friends_count < 0: the menu signs its own
+list request as at the title screen, and the first relayed snapshot takes over
+(MF_Mode flips; rows from the other source read stale until replaced). The list op
+writes no presence, so friends still see the lobby. Verified (controls/p987_menu.py):
+board "ranked" with an unanswering master -- control friends_direct=0 and no request;
+subject friends_direct=1, challenge fetched and signing attempted (the rig's identity
+is unlinked, so it ends "Friends identity unavailable").
+
+## Patch 991 - Play screen: one ESC, the profile's times, a link underline (QC)
+
+Lex (25 Oct): ESC should close the menu, not the Friends tab first; the profile's
+font was "messed up" and it showed one map time; underline a friend's map on hover.
+
+- ESC on the create screen no longer hides Friends; after a leaderboard panel or a
+  join in flight it closes the menu when connected (ui_create_esc step 4) and goes
+  back to main when not. The test twins print the new step.
+- m_profile.qc: `min(6, json_get_length(rows))` passed an int through min's untyped
+  `...` slot, read as a denormal: one row, always. Through a float; up to 12 rows.
+  The figures were 14 px (no baked size: a scaled 16 atlas); now 16, one row per time
+  with mono right-aligned times as on the leaderboard.
+- The online friend's map is underlined while hovered (sui_is_hovered on mf_join).
+- ui_profile_probe <8hex> opens a profile and reports rows; ui_menu_probe prints active.
+Verified (controls/p987_menu.py): control profile shows smeared text and one row of
+Proto's 2224; subject 12 rows ("Best 12 of 2224"); one ESC -> active 0; the underline
+is the only diff between hovered and plain shots and spans the map name only.
+
 ## Patch 989 - Validate picker replies and release DBus ownership
 
 Problem: Missing/incorrect portal replies could leave an uninitialized path;
@@ -81,6 +146,20 @@ file/ZIP unchanged (host operations and fixture tokenizer stubbed). Full Windows
 client, dedicated and standard plugins build through build.ps1 -Engine -NoDeploy;
 all QC modules 0 warnings, changed native translation units add no warnings over
 baseline. No desktop/download integration, Linux or deployment claim here.
+
+## Patch 986 - xhair4 replaces xhair3 in the crosshair cycle (QC, asset)
+
+Lex (25 Oct): a new 42x42 CS:S-style crosshair, xhair4.png, replaces xhair3;
+make sure it still centres. Slot 3 draws gfx/crosshairs/xhair4 at its native width
+(measured with drawgetimagesize at init; hud_crosshair_size keeps the 32 px files'
+ratio), or xhair3 on an install without the file. Both put the sight's centre pixel
+at width/2 - 1, so `rint((scr - size) / 2)` lands them on the same pixel. Tracked in
+git and in the release's crosshair folder.
+
+Verified (controls/p986_xhair.py, on-minus-off pixel diff, 1280x720): control xhair3
+column 344-374 / row 624-654 around (639, 359); subject xhair4 column 339-379 / row
+619-659, the same centre, 28 lit pixels through it (two 14 px arms); without the
+file, identical to the control.
 
 ## Patch 985 - Refuse retry when its saved point cannot be confirmed
 
