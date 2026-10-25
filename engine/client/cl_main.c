@@ -5557,8 +5557,14 @@ void CL_DownloadSize_f(void)
 	size = Cmd_Argv(2);
 	if (!strcmp(size, "e"))
 	{
-		Con_Printf(CON_ERROR"Download of \"%s\" failed. Not found.\n", rname);
-		CL_DownloadFailed(rname, NULL, DLFAIL_SERVERFILE);
+		//FTESurf Patch 1026: a file the game does without (a map's precached sound: bhop_ceaseless
+		//names plar/booster.wav and packs none) says so at developer 1; a required one is an error.
+		qboolean required = cls.download && !stricmp(cls.download->remotename, rname) && (cls.download->flags & DLLF_REQUIRED);
+		dl = CL_DownloadFailed(rname, NULL, DLFAIL_SERVERFILE);
+		if (required || (dl->flags & DLLF_REQUIRED))
+			Con_Printf(CON_ERROR"Download of \"%s\" failed. Not found.\n", rname);
+		else
+			Con_DPrintf("Download of \"%s\" failed. Not found.\n", rname);
 	}
 	else if (!strcmp(size, "p"))
 	{

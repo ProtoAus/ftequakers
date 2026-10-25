@@ -812,7 +812,12 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 					Q_strncpyz(wdl->localname, localname+8, sizeof(wdl->localname));
 			}
 			if (!(flags & DLLF_TEMPORARY))
-				Con_TPrintf ("Downloading %s to %s...\n", wdl->url, wdl->localname);
+			{
+				if (flags & (DLLF_REQUIRED|DLLF_VERBOSE))	//FTESurf Patch 1026: an optional file quietly
+					Con_TPrintf ("Downloading %s to %s...\n", wdl->url, wdl->localname);
+				else
+					Con_DPrintf ("Downloading %s to %s...\n", wdl->url, wdl->localname);
+			}
 			wdl->qdownload.flags = flags;
 
 			CL_DisenqueDownload(filename);
@@ -831,7 +836,12 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 	Q_strncpyz(dl->remotename, filename, sizeof(dl->remotename));
 	Q_strncpyz(dl->localname, localname, sizeof(dl->localname));
 	if (!(flags & DLLF_TEMPORARY))
-		Con_TPrintf ("Downloading %s...\n", dl->localname);
+	{
+		if (flags & (DLLF_REQUIRED|DLLF_VERBOSE))	//FTESurf Patch 1026
+			Con_TPrintf ("Downloading %s...\n", dl->localname);
+		else
+			Con_DPrintf ("Downloading %s...\n", dl->localname);
+	}
 
 	// download to a temp name, and only rename
 	// to the real name when done, so if interrupted
@@ -2759,7 +2769,10 @@ static void CL_ParseChunkedDownload(qdownload_t *dl)
 			}
 			else //if (flag == DLERR_FILENOTFOUND)
 			{
-				Con_Printf("Couldn't find file \"%s\" on the server\n", svname);
+				if (dl->flags & DLLF_REQUIRED)	//FTESurf Patch 1026, as CL_DownloadSize_f
+					Con_Printf("Couldn't find file \"%s\" on the server\n", svname);
+				else
+					Con_DPrintf("Couldn't find file \"%s\" on the server\n", svname);
 				failreason = DLFAIL_SERVERFILE;
 			}
 
