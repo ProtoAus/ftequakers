@@ -3196,14 +3196,19 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char extra[256] = "";
 		size_t eoff = 0;
 		qboolean detmask = *st->detail && st->detailblendmode == 9;
-		if (st->vertexcolor)	//each on its own, as the pass's rgbGen / alphaGen vertex were
+		if (st->vertexcolor)	//each on its own, as Source keys them ($vertexcolor alone no longer brings alpha)
 			Q_strlcat(progargs, "#VERTEXCOL", sizeof(progargs));
 		if (st->vertexalpha)
 			Q_strlcat(progargs, "#VERTEXALPHA", sizeof(progargs));
 		if (!strcmp(st->envmap, "env_cubemap") && hl2_envcubemap && hl2_envcubemap->ival)
 			st->wantenvcube = true;
 		if (st->envfrombase)
-		{	//base alpha is the mask, so Source drops the alpha test (vertexlitgeneric_dx9_helper.cpp:328-330)
+		{	//base alpha is the mask, so Source drops the alpha test (vertexlitgeneric_dx9_helper.cpp:328-330);
+			//#MASK leaves the name too, or the depth and rtlight overrides still discard (gl_shader.c:6083)
+			char *m = strstr(progargs, "#MASK=");
+			char *e = m ? strstr(m, "#MASKLT") : NULL;
+			if (e)
+				memmove(m, e + 7, strlen(e + 7) + 1);
 			Q_strlcatfz(extra, &eoff, sizeof(extra), "#ENVFROMBASE");
 			st->alphatest = 0;
 		}

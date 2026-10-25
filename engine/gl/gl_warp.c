@@ -1212,7 +1212,7 @@ static void GL_SkyForceDepth(batch_t *batch)
 	{
 		BE_SelectMode(BEM_DEPTHONLY);
 		if (r_sky_forcedepth_scale.value > 1 && batch->ent == &r_worldentity &&
-		    r_worldentity.model && r_worldentity.model->fromgame == fg_new)	//Quake/HL clip at the sky
+		    r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP))	//other maps clip at the sky
 		{	//Patch 990: scaled about the eye, each point stays on its own ray (R_DrawSkyMesh's trick)
 			static entity_t pushent;
 			batch_t b = *batch;

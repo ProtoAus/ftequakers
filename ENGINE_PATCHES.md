@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1002 - func_lod's Solid and fade, Momentum's AddSpeed inputs, filters found by class, DMX 3-5 particle files (qwprogs, csprogs, tools)
+## Patch 1002 - func_lod's Solid and fade, Momentum's AddSpeed inputs, filters found as Source finds them, DMX 3-5 particle files (qwprogs, csprogs, tools)
 
 Problem: bhop_ceaseless, Lex's list of 25 Oct. func_lod's "Solid" key adds FSOLID_NOT_SOLID
 when nonzero (func_lod.cpp KeyValue, FStrEq caseless); func_lod was func_wall (P257's note read
@@ -22,26 +22,34 @@ SV_IOAddSpeed adds the amount along the current velocity (horizontal, vertical o
 map's own directionalbooster.nut is the same formula) through the basevelocity carrier, the
 cash-out's (1 + tick/2) divided out, so the recorder writes a ride and the verifier replays it;
 with no direction it adds nothing. cl_triggers.qc classes the three with ModifySpeed, so their
-triggers stay server-only. SV_FindFilter takes the first filter_* entity so named, else the old
-lookup (trigger filters and filter_multi children). dmx.py reads encodings 2-5 (srctools'
+triggers stay server-only. SV_FindFilter is Source's Activate lookup: the first entity so named,
+clients skipped (Activate runs before any rename), and a non-filter there is no filter -- for
+trigger filters, filter_multi children and the zone-tool gate. csprogs' lump signature counts
+func_lods (63 of the 80 func_lod maps have no door or window to tell a stale lump by). dmx.py reads encodings 2-5 (srctools'
 layout); pcf.py bakes 22 of bhop_ceaseless's 23 systems.
 
 Verified: bhop_ceaseless arms, subject progs beside the installed ones (sv_progs,
 sv_csqc_progname): ent_info *23 `solid NOT` (control `solid BSP`); client "func_lod: 198 drawn
 here" (control none); at a viewpoint with 57 func_lods inside 1,800 units and 57 at 2,400-4,000,
-subject and control differ only by the far rings. AddHorizontalSpeed on the map's own route
-(renamed on leaving the start volume, the slot over *336): the filter resolves to
-filter_activator_name 'meow' (before: the player) and the input arrives; with a direction
-(debug-only fake) the carrier pays exactly +500.0 horizontal. dmx.py lands on EOF. 0 new QC
+subject and control differ only by the far rings. AddHorizontalSpeed, no instrumentation: renamed on
+leaving the start volume, the player drifts at 30 u/s into *5 under *336's plate (the tunnel over
+the start pool) and the server prints `addhorizontalspeed 500 along '0 30 0'` and `paid #1 ...
+h +500.0`; viewpos 530 u/s (control 30, into the pool). surf_metalpipes' b1_pt2_tele teleport,
+which names itself (the library's one filter shadowed by an earlier non-filter, census of 1,925
+maps): standing in it teleports (the first cut of this patch skipped to the later name filter and
+refused). dmx.py lands on EOF. 0 new QC
 warnings. The physents digest moves on the 44 func_lod maps, the P790/P884 class and its owed
-rule bump (BACKLOG): a file whose body touched one HOLDs as `state`. Filter outcomes change where
-the first toucher already bore the filter's name; the fallback still fails open, so the change can
-only refuse what Source's first-entity lookup let through. pcf.py writes materials/<image> for a
-particle image with no same-named .vmt (the loader never probes materials/; they drew white).
+rule bump (BACKLOG): a file whose body touched one HOLDs as `state`. Filter outcomes change only where a
+player already bore the filter's name at first touch, which Source's Activate never sees. pcf.py
+writes materials/<image> for a particle image with no same-named .vmt (the loader never probes
+materials/; they drew the white default or, named *glow*, the built-in ball): r_imagelist loads
+all five of bhop_ceaseless's images (one before) and the sword's particles are pink.
 
 Limits: pcf's Color Fade (20), rotate-around-axis (5) and rotation are not translated;
 info_particle_system Start/Stop inputs are not mirrored. AddSpeed shares the carrier, so a push or
-conveyor in the same command replaces it (no library user is near one).
+conveyor in the same command replaces it (no library user is near one). The client's filter table
+holds filters only, so on surf_metalpipes it reads the shadowed name filter (UNKNOWN: server-only).
+surf_boreas' installed bake predates the materials/ fix (BACKLOG).
 
 ## Patch 990 - bhop_ceaseless's colour: 6-face cubes, unlit reflections, a roof through the sky, gates, rain, flow water (hl2 plugin, client)
 
@@ -67,16 +75,21 @@ with a swirl decal and the floor at equal decal bias (flicker).
 Change: img_vtf.c: a pre-7.5 cube has 6 faces when firstframe is 0xffff (VTFLib's
 GetFaceCount) or its chain fills exactly 6 faces and not 7. unlitreflect: the reflection is not
 scaled by $color; #BASE (UnlitGeneric base + $envmap) is base x $color plus the reflection, with
-$basealphaenvmapmask as 1 - base alpha, $envmapmask, alpha test, the base scroll and
-$detailblendmode 9 (base alpha x detail alpha at $detailscale, on its own scroll, which
-BaseVSShader.cpp:351-357 scales too). A $detailtexturetransform TextureScroll has its own slot.
+$basealphaenvmapmask as 1 - base alpha (which drops the alpha test, from the name too, so depth
+and rtlight passes do not discard; vertexlitgeneric_dx9_helper.cpp:328-330), $envmapmask at the
+base's scrolled coordinates, alpha test, $vertexcolor and $vertexalpha each on its own, the base
+scroll and $detailblendmode 9 (base alpha x detail alpha at $detailscale, lerped by
+$detailblendfactor, on its own scroll, which BaseVSShader.cpp:351-357 scales too). An additive
+$alpha folded into #COLOR also scales the reflection (#ADDALPHA). A $detailtexturetransform TextureScroll has its own slot.
 Sine on $refractamount is refract.glsl #REFRSINE; an AnimatedTexture on a Refract's $normalmap
-draws every frame from a 2D array (vmt/refractanim, P867's water path), and a $decal Refract
+draws every frame from a 2D array (vmt/refractanim, P867's water path; a flat normal while the
+array is absent), and a $decal Refract
 takes polygonOffset 2 over other decals' 1. Water with $flowmap at hl2_water 1/2: two
 normal layers half an interval apart, each scrolled along the flow vector, from the material's
-$flow_* values (Valve's Portal 2 flow as published; SDK 2013 has no flow source). mod_vbsp.c:
-only FadeMaxDist > 0 fades. gl_warp.c: r_sky_forcedepth_scale (2) writes the sky mask that many
-times farther from the eye on the same pixels (R_DrawSkyMesh's scale about the eye), so a prop
+$flow_* values (Valve's Portal 2 flow as published; SDK 2013 has no flow source); a bare #FLOW
+gates the samplers and #FLOWPARMS carries the values. mod_vbsp.c:
+only FadeMaxDist > 0 fades. gl_warp.c: r_sky_forcedepth_scale (2) writes a Source map's (MDLF_SOURCEBSP) sky
+mask that many times farther from the eye on the same pixels (R_DrawSkyMesh's scale about the eye), so a prop
 poking through a sky brush draws while the far level stays hidden; 1 is the old mask.
 
 Verified: library census (1,925 map paks): pre-7.5 cubes fitting 6 faces, 51 with firstframe
@@ -84,14 +97,17 @@ Verified: library census (1,925 map paks): pre-7.5 cubes fitting 6 faces, 51 wit
 spots, the installed exe with this plugin against the installed plugin (task root artifacts):
 the truncated lines gone; cracks, gradients, labels, chains, dragon, tree, roof crystals,
 palm-room floor and gates drawn; the roof hole at r_sky_forcedepth_scale 1 and none at 2 in one
-run; water frames 1 s apart change 25%, 10.7% and 5% of pixels (0.5%, 0.6%, 0.1% before);
+run; water frames 1 s apart change 23.5%, 14.8% and 7.0% of pixels (0.5%, 0.6%, 0.1% before);
 r_showshader shows #BASE, #DETAILMASK, #REFRSINE and #FLOW; the ripple, frames 0.2 s apart,
 changes 23.7% of pixels (0.06% before) and holds still across three shifted cameras. surf_fantasy's spawn (P296's case)
-at scale 1 and 2, four yaws: only motes and a sprite differ, windows show sky. No new warnings.
+at scale 1 and 2, four yaws: only motes and a sprite differ, windows show sky. After review round
+2's fixes the nine spots match the round-1 build but for water motion (spawnup 0.00%). No new
+warnings.
 Flow's exact texture mapping is not compared with Momentum.
 
 Limits: $underwateroverlay is still not drawn (the engine's own warp runs instead); this water
-reads brighter than Momentum's (BACKLOG).
+reads brighter than Momentum's; an additive UnlitGeneric with a base and $envmap still takes the
+unlit arm, without its reflection (BACKLOG).
 
 ## Patch 1001 - A ramp touchdown's numbers are the tick before contact (QC)
 

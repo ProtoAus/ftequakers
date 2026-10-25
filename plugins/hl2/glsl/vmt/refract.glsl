@@ -64,7 +64,9 @@ void main()
 #ifdef ANIMBUMP
 	// Patch 990: AnimatedTexture frames, whole frames at ANIMBUMP a second (vmt/refractanim, GLSL 130).
 	int bumplayers = textureSize(s_bumpanim, 0).z;
-	vec4 nrm = texture2D(s_bumpanim, vec3(tex_c, bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0));
+	vec4 nrm = vec4(0.5, 0.5, 1.0, 1.0);	// flat while the array is absent: an incomplete texture reads 0 = full warp
+	if (bumplayers > 0)
+		nrm = texture2D(s_bumpanim, vec3(tex_c, floor(mod(e_time * float(ANIMBUMP), float(bumplayers)))));
 #else
 	vec4 nrm = texture2D(s_bump, tex_c);
 #endif
