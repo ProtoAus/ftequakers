@@ -103,8 +103,11 @@ Verified: Actual handler and restriction macros, fake dialog boundary: baseline1
 checks/6 dialog calls, subject10/2 calls. Local requests ACT in either order;
 insecure/server requests never enter SDL. Windows client/server/standard-plugins
 NoDeploy build passes all3QC0warnings, no new native warnings; it excludes SDL3.
-Full SDL3 SDK/platform build and real desktop acceptance remain untested because
-the SDK is absent here. LSP lacks SDL headers, not a native build-clean claim.
+Initial verification had no SDL3 SDK. Follow-up uses official SDL3 3.2.10
+headers/API declarations with -Wall -Wextra -Werror: actual handler/macros retain
+baseline18checks/6calls and subject10/2, including both positive local controls.
+Only the dialog implementation is spied; SDK types are not redeclared. This is
+real-header/type compatibility, not a full SDL3 engine-platform or desktop pass.
 No deployed images, existing command channels or broader privileges changed.
 
 ## Patch 994 - Results card without the "F1 cursor" hint (QC)
