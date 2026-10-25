@@ -1,5 +1,89 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1014 - func_areaportalwindow panes fade instead of popping (hl2 plugin, GL client)
+
+Problem: bhop_ceaseless, Lex's second list of 25 Oct, saves 19-20 and 23-24: a window pane
+(areaportal1, FadeStartDist 256, FadeDist 1024) stayed fully opaque until it stopped drawing at
+256 units, then the tunnel behind it appeared at once. cl_portal.qc (P799) sets the pane's alpha
+from Source's RemapValClamped, but vmt/imposter (WindowImposter, areaportal1's
+fakesky_colorenmap) never multiplied by the entity alpha, and a forced-transparent entity kept the
+depth write of its opaque shader, so particles and glass behind a fading pane (areaportal2, the
+tunnel door, vmt/unlitreflect, which did fade) failed the depth test until it vanished.
+
+Change: imposter.glsl multiplies its alpha by e_colourident.a. gl_backend.c: a BEF_FORCETRANSPARENT
+pass on a brush entity (a pane, a fading func_lod) writes no depth; models keep theirs.
+
+Verified: bhop_ceaseless, walking at areaportal1 from 1100, 900, 700, 500, 312 and 200 units: the
+control (installed build) shows the pane opaque at every step but 200 and the tunnel at 200 only;
+P1014 shows the tunnel faintly at 700, more at 500, clearly at 312, fully at 200. At save 23 the
+control's gradient disappears with r_drawentities 0, the pane. No new warnings.
+
+Limits: models fading by entity alpha still write depth; Source's translucency limit is honoured
+as before (both panes here are 0).
+
+## Patch 1013 - Source's $underwateroverlay drawn underwater (hl2 plugin, GL client)
+
+Problem: bhop_ceaseless, Lex's list of 25 Oct: under Source water the engine's own underwater warp
+ran, where Source draws the water's $underwateroverlay (a Refract warp of the whole screen) or,
+with none, no warp. mat_vmt.c parsed and discarded the key.
+
+Change: mod_vbsp.c keeps each leaf's leafwaterid and reads LUMP_LEAFWATERDATA (36): each water
+volume's surface texinfo resolves to its overlay through the material or, as HL2-family water
+writes it, its $bottommaterial (Mat_VMT_UnderwaterOverlay). An overlay with a $normalmap becomes a
+post-process, ftesurf/uw/<overlay>, served from Shader_LoadVMT as P288's grade is: vmt/uwoverlay,
+refract.glsl's warp, blur, tint and $bumptransform scroll on $sourcecolour. VBSP_PrepareFrame
+publishes the main view's volume in r_underwateroverlay (engine cvar, set only on change): empty
+(not a Source water volume, or an old plugin: the engine's warp as before), "none" (water without an
+overlay: no warp, as Source) or the shader name; GLR_RenderView uses it in place of underwaterwarp,
+keeping the engine's warp for a shader that cannot draw (P290). hl2_underwateroverlay 0 (read at
+map load) restores the engine's warp everywhere. r_waterwarp 0 still turns every warp off.
+
+Verified: bhop_ceaseless: "8 water volumes, 3 with an underwater overlay" (the three water_cheap
+volumes, nature/water_coast01_beneath -> effects/water_warp01; liquids/water_beneath is in no mount,
+HL2's, CS:S's or Momentum's). Eye in volume 0: r_underwateroverlay "none"; in volume 3:
+"ftesurf/uw/effects/water_warp01", whose registered script is program
+vmt/uwoverlay#REFRAMOUNT=0.04#BLUR#SCROLL=0.0707,0.0707 with the scene and water_coast01_normal.
+Looking down at the static floor there: no-warp vs no-warp 1 s apart 0.0% of pixels, overlay vs
+no-warp 49.2%, overlay vs itself 1 s apart 55.9% (it moves), overlay vs the engine's warp 54.9%.
+No new warnings.
+
+Limits: Source's Refract blur is the 4-tap one refract.glsl already uses; the overlay is drawn
+before the HUD and with the viewmodel inside it.
+
+## Patch 1012 - .pcf colour over life, Source's default rates and draw distances, spawn volumes placed per particle, PVS culling (csprogs, tools)
+
+Problem: bhop_ceaseless, Lex's lists of 25 Oct: particle colour never changed over life (Color
+Fade untranslated); startboost1, butterfly and spiral never drew (no "maximum draw distance" is
+stored when it is Source's 100000, pcf.py read 0, cl_emit.qc culled at any distance); the boost
+strips drew one clump or nothing (purpleboost4's emitter stores no emission_rate, Source's 100, read
+as 0 and refused; purpleboost5's 256 x 5056 box baked as spawnorg's 1138 square); redrain stood in a
+column (416 x 16 box) and spiral's ring (distance_bias 1 1 0) became a ball; info_particle_system
+emitted out of the eye's PVS, where Source transmits nothing. surf_boreas' bake predated P1002's
+materials/ image path: tendies_endparticle04's tesla_glow drew FTE's built-in ball (the BACKLOG's
+"saturated dome").
+
+Change: pcf.py: Color Fade becomes rgbdelta over the longest life, ending at rgbdeltatime (FTE
+pre-ages shorter lives into that timeline, alphadelta's convention); emission_rate defaults to 100
+and the draw distance to 100000; Position Within Box Random (world-aligned, Source's default frame)
+and Position Within Sphere Random (shell, distance_bias, outward speed) go out as eight new index
+columns and the block's spawnorg is 0. cl_emit.qc places each particle in that volume (an older
+18-column line keeps the old path) and skips an info_particle_system outside the eye's PVS
+(checkpvs, one probe entity; vbsp_emit_pvs 0 = distance only). bhop_ceaseless and surf_boreas
+re-baked.
+
+Verified: test_pcf_resources 33/33 (six new: rate and draw distance defaults, box and ring
+columns, colour rates; the old pcf.py fails five), particlecoverage 9/9. bhop_ceaseless now bakes
+23 of 23 systems (22 before). Rig at Lex's saves, control the installed build and bake: save 14 big
+blue circles over the start room (none before), save 15 purple dots by the butterflies (none), save
+16 dots along both rails of the boost strip (a clump), save 21 circles across the whole wall (a
+column), saves 19-20 spiral's cyan dots round the tunnel (none). gatelight turns warm to blue,
+crystal green to pink over a blue-perlin image. surf_boreas end room with children on: a compact
+glow where the dome was. No QC warnings.
+
+Limits: Movement Rotate Particle Around Axis is not translated (spiral and butterfly do not orbit);
+a Color Fade starting after birth starts at birth and is linear; the PVS cull covers
+info_particle_system only; child systems stay off by default.
+
 ## Patch 1003 - authored no-fog on program-less Source materials (hl2 plugin, GL client)
 
 Problem: $nofog only added #NOFOG to a VMT's explicit program. Plain passes still

@@ -159,6 +159,8 @@ this file performs on the census with it.  See VMT_BottomRecord in mat_vmt.c for
 link is and why a name rule could not have produced it.
 */
 const char *Mat_VMT_BottomParent(const char *name);
+qboolean Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize);	//FTESurf Patch 1013
+qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size);
 qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
 static cvar_t *hl2_bottommaterial;
@@ -338,7 +340,7 @@ enum hllumps_e
 	VLUMP_DISP_VERTS	= 33,
 	VLUMP_DISP_LMCOORDS	= 34,
 	VLUMP_GAMELUMP		= 35,
-//	VLUMP_FOO			= 36,
+	VLUMP_LEAFWATERDATA	= 36,	//FTESurf Patch 1013: dleafwaterdata_t, a water volume's surface texinfo
 //	VLUMP_FOO			= 37,
 //	VLUMP_FOO			= 38,
 //	VLUMP_FOO			= 39,
@@ -504,6 +506,9 @@ typedef struct vbspinfo_s
 	} *texinfo;
 
 	qbyte			*leafflags;			//FTESurf Patch 880: dleaf_t's flags (LEAF_FLAGS_SKY 0x01, SKY2D 0x04), [numleafs]
+	int				*leafwater;			//FTESurf Patch 1013: dleaf_t's leafwaterid, [numleafs], -1 = no water volume
+	char			(*wateroverlay)[MAX_QPATH+16];	//...per volume: "none" or ftesurf/uw/<overlay> (VBSP_LoadLeafWater)
+	int				numwater;
 	int				numareas;
 	int				floodvalid;
 	int				lastreportedarea;	//FTESurf Build 8: edge-detects the area print in VBSP_PrepareFrame
@@ -1637,6 +1642,7 @@ THERE, which is why every one of those has a number in the census line.
 #define CC_KEY			64
 
 static cvar_t *hl2_colourcorrection;	//registered beside hl2_twoframes
+static cvar_t *hl2_underwateroverlay;	//FTESurf Patch 1013, registered beside hl2_colourcorrection
 static char  cc_shader[MAX_QPATH];		//"" when this map has no grade
 static char  cc_script[1024];			//handed to the material loader on demand
 static float cc_w[CC_MAX];				//the accepted weights, in pass order
@@ -2977,6 +2983,61 @@ typedef struct
 	int				leafwaterid;
 } strata_dleaf_t;
 
+/*
+FTESurf Patch 1013: each water volume's underwater overlay, from the leaf water lump's surface
+texinfo -- Source finds the eye's volume the same way. Mat_VMT_UnderwaterOverlay follows the
+material to its $bottommaterial; an overlay that cannot draw (no $normalmap) reads as "none".
+*/
+typedef struct
+{
+	float	surfacez, minz;
+	short	surfacetexinfo;
+	short	pad;
+} hl2dleafwater_t;
+static char vbsp_uwlast[MAX_QPATH+16];	//what r_underwateroverlay was last set to
+static void VBSP_LoadLeafWater (model_t *mod, qbyte *mod_base, vlump_t *l)
+{
+	vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
+	const hl2dleafwater_t *in = (const void*)(mod_base + l->fileofs);
+	char mat[MAX_QPATH], ov[MAX_QPATH], *h;
+	static char script[4096];
+	struct { char mat[MAX_QPATH]; char res[MAX_QPATH+16]; } seen[16];	//volumes repeat a few materials
+	int i, j, n, nseen = 0, overlays = 0;
+
+	vbsp_uwlast[0] = 0;
+	cvarfuncs->ForceSetString("r_underwateroverlay", "");	//machine-set and kept across maps, as r_colourcorrection
+	if (!hl2_underwateroverlay || !hl2_underwateroverlay->ival || !l->filelen || l->filelen % sizeof(*in))
+		return;
+	n = l->filelen / sizeof(*in);
+	prv->wateroverlay = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->wateroverlay) * n);
+	prv->numwater = n;
+	for (i = 0; i < n; i++)
+	{
+		int ti = LittleShort(in[i].surfacetexinfo);
+		Q_strlcpy(prv->wateroverlay[i], "none", sizeof(prv->wateroverlay[i]));
+		if (ti < 0 || ti >= mod->numtexinfo)
+			continue;
+		Q_strlcpy(mat, prv->surfaces[ti].rname, sizeof(mat));
+		if ((h = strchr(mat, '#')))
+			*h = 0;	//#WARP
+		for (j = 0; j < nseen && strcmp(seen[j].mat, mat); j++)
+			;
+		if (j == nseen)
+		{
+			Q_strlcpy(seen[j % 16].mat, mat, sizeof(seen[0].mat));
+			Q_strlcpy(seen[j % 16].res, "none", sizeof(seen[0].res));
+			if (Mat_VMT_UnderwaterOverlay(mat, ov, sizeof(ov)) && Mat_VMT_OverlayScript(ov, script, sizeof(script)))
+				Q_snprintfz(seen[j % 16].res, sizeof(seen[0].res), "ftesurf/uw/%s", ov);
+			if (nseen < 16)
+				nseen++;
+		}
+		Q_strlcpy(prv->wateroverlay[i], seen[j % 16].res, sizeof(prv->wateroverlay[i]));
+		if (strcmp(prv->wateroverlay[i], "none"))
+			overlays++;
+	}
+	Con_DPrintf("%s: %i water volumes, %i with an underwater overlay\n", mod->name, n, overlays);
+}
+
 static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int ver)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -3021,6 +3082,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 
 	mod->leafs = out;
 	mod->numleafs = count;
+	prv->leafwater = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->leafwater) * count);
 
 	/*
 	FTESurf Patch 277(b) (Patch 273's open item b) -- A LEAF'S CLUSTER IS MAP DATA AND WAS NEVER CHECKED.
@@ -3081,6 +3143,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			out->numleafbrushes = LittleLong(in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + LittleLong(in->firstleafface);
 			out->nummarksurfaces = LittleLong(in->numleaffaces);
+			prv->leafwater[i] = LittleLong(in->leafwaterid);
 		}
 		else
 		{
@@ -3100,6 +3163,7 @@ static qboolean VBSP_LoadLeafs (model_t *mod, qbyte *mod_base, vlump_t *l, int v
 			out->numleafbrushes = (unsigned short)LittleShort (in->numleafbrushes);
 			out->firstmarksurface = mod->marksurfaces + (unsigned short)LittleShort(in->firstleafface);
 			out->nummarksurfaces = (unsigned short)LittleShort(in->numleaffaces);
+			prv->leafwater[i] = (short)LittleShort(in->leafwaterid);
 
 			if (lightpoint)
 			{
@@ -9277,6 +9341,19 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (eyeleaf >= 0 && eyeleaf < mod->numleafs && !(prv->leafflags[eyeleaf] & 0x01))
 				r_refdef->skyroom_noleafsky = true;
 		}
+		if (!r_refdef->recurse)
+		{	//FTESurf Patch 1013: the main view's water volume names the engine's underwater post-process
+			const char *uw = "";
+			int leaf = VBSP_PointLeafnum(mod, r_refdef->vieworg);
+			if (prv->wateroverlay && leaf >= 0 && leaf < mod->numleafs &&
+				prv->leafwater[leaf] >= 0 && prv->leafwater[leaf] < prv->numwater)
+				uw = prv->wateroverlay[prv->leafwater[leaf]];
+			if (strcmp(uw, vbsp_uwlast))
+			{
+				Q_strlcpy(vbsp_uwlast, uw, sizeof(vbsp_uwlast));
+				cvarfuncs->ForceSetString("r_underwateroverlay", uw);
+			}
+		}
 	}
 
 	if (vis->buffersize < mod->pvsbytes)
@@ -11891,6 +11968,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	noerrors = noerrors && VBSP_LoadBrushes			(mod, mod_base, &header.lumps[VLUMP_BRUSHES]);
 	noerrors = noerrors && VBSP_LoadLeafBrushes		(mod, mod_base, &header.lumps[VLUMP_LEAFBRUSHES]);
 	noerrors = noerrors && VBSP_LoadLeafs			(mod, mod_base, &header.lumps[VLUMP_LEAFS], header.version);
+	if (noerrors && haverenderer)
+		VBSP_LoadLeafWater							(mod, mod_base, &header.lumps[VLUMP_LEAFWATERDATA]);	//FTESurf Patch 1013
 	noerrors = noerrors && VBSP_LoadNodes			(mod, mod_base, &header.lumps[VLUMP_NODES]);
 	noerrors = noerrors && VBSP_LoadSubmodels		(mod, mod_base, &header.lumps[VLUMP_MODELS]);
 	noerrors = noerrors && VBSP_LoadAreas			(mod, mod_base, &header.lumps[VLUMP_AREAS]);
@@ -12846,6 +12925,7 @@ qboolean VBSP_Init(void)
 		how a wrong LUT is told apart from a right LUT applied too strongly.
 		*/
 		hl2_colourcorrection = cvarfuncs->GetNVFDG("hl2_colourcorrection", "1", CVAR_SHADERSYSTEM, "Source's color_correction entities -- a 32x32x32 lookup table applied to the whole frame, which is how a Source map's author set its colour.  FTE has never applied any of them, so every graded map in the library has been rendering ungraded.\nOnly the global form is implemented (minfalloff/maxfalloff -1, which is the common idiom); a correction with a real distance falloff, and color_correction_volume entirely, are counted and declined in the map's census line.\n0: no grade, the way every build before this one looked.  Live -- it takes effect on the current frame, and 0 is bit-for-bit the ungraded scene.\n1: apply the map's own grade (default).  Going from 0 to 1 needs a map load if the map was loaded with it off, because the shader is generated then.\nFractional values scale the grade: .5 is half of it.", MAPOPTIONS);
+		hl2_underwateroverlay = cvarfuncs->GetNVFDG("hl2_underwateroverlay", "1", 0, "Source's $underwateroverlay: while the eye is in a water volume, its material's overlay (a Refract warp of the whole screen) replaces the engine's own underwater warp, and water without one draws no warp, as Source does.\n0: the engine's r_waterwarp everywhere, as before Patch 1013.  Read at map load.", MAPOPTIONS);	//FTESurf Patch 1013
 
 		cvarfuncs->GetNVFDG("hl2_colour_hue", "-999", CVAR_ARCHIVE, "Source scene hue rotation in degrees, after the map's LUT. -999 = map default (light blue on surf_sidistic, original elsewhere); 0 = original hue and saturation. Live; HUD is not graded. Set hl2_colour_hue_strength 0 to disable the hue change.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_colour_hue_strength", "1", CVAR_ARCHIVE, "Blend strength of the Source hue rotation, clamped 0..1. 0 leaves the authored scene unchanged; 1 applies the full shift.", MAPOPTIONS);

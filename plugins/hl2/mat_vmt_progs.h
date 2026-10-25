@@ -2542,7 +2542,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "void main ()\n"
 "{\n"
-"vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA));\n"
+//Patch 1014: a func_areaportalwindow pane fades by its entity alpha (cl_portal.qc APW_Predraw)
+"vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA) * e_colourident.a);\n"
 "imposter_f.rgb *= vec3(COLOR);\n"
 //FTESurf Patch 299: fog the colour, leave the alpha to the blender.
 //fog4() multiplies by regularcolour.a, which on a Source material is a
@@ -3858,6 +3859,66 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef OPAQUE\n"
 "gl_FragColor.a = 1.0;\n"
 "#endif\n"
+"}\n"
+"#endif\n"
+},
+#endif
+#ifdef GLQUAKE
+{QR_OPENGL, 110, "vmt/uwoverlay",
+"!!ver 110\n"
+"!!samps screen=0 bump=1\n"
+
+"#include \"sys/defs.h\"\n"
+
+// FTESurf Patch 1013: Source's $underwateroverlay, a Refract material over the whole screen while
+// the eye is in that water, drawn as the post-process in place of underwaterwarp. refract.glsl's
+// warp, blur and tint (Patch 866), sampling the scene ($sourcecolour) instead of a screen copy.
+
+"#ifndef REFRTINT\n"
+"#define REFRTINT 1.0,1.0,1.0\n"
+"#endif\n"
+"#ifndef REFRAMOUNT\n"
+"#define REFRAMOUNT 2.0\n"
+"#endif\n"
+"#ifndef SCROLL\n"
+"#define SCROLL 0.0,0.0\n"
+"#endif\n"
+
+"varying vec2 stc;\n"
+"varying vec2 btc;\n"
+
+"#ifdef VERTEX_SHADER\n"
+"void main()\n"
+"{\n"
+"stc = vec2(v_texcoord.x, 1.0 - v_texcoord.y); // $sourcecolour is an FBO: other way up (ccorrect.glsl)\n"
+"btc = v_texcoord + e_time * vec2(SCROLL);\n"
+"gl_Position = ftetransform();\n"
+"}\n"
+"#endif\n"
+
+"#ifdef FRAGMENT_SHADER\n"
+"uniform vec4 e_rendertexturescale;\n"
+"void main()\n"
+"{\n"
+"vec4 nrm = texture2D(s_bump, btc);\n"
+"vec3 tn = vec3(nrm.r, 1.0 - nrm.g, nrm.b) * 2.0 - 1.0; // DX normal map: green flipped\n"
+"#ifdef REFRSINE\n"
+"vec3 rs = vec3(REFRSINE);\n"
+"float amount = mix(rs.x, rs.y, sin(6.2831853 * e_time / rs.z) * 0.5 + 0.5);\n"
+"#else\n"
+"float amount = float(REFRAMOUNT);\n"
+"#endif\n"
+"vec2 rc = (stc + tn.xy * (nrm.a * amount)) * e_rendertexturescale.st;\n"
+"#ifdef BLUR\n"
+"const float bf = 1.0 / 512.0, hf = 0.5 / 512.0;\n"
+"vec3 rgb = texture2D(s_screen, rc - vec2(hf, hf)).rgb * 0.4444444\n"
+"+ texture2D(s_screen, rc + vec2(bf, -hf)).rgb * 0.2222222\n"
+"+ texture2D(s_screen, rc + vec2(-hf, bf)).rgb * 0.2222222\n"
+"+ texture2D(s_screen, rc + vec2(bf, bf)).rgb * 0.1111111;\n"
+"#else\n"
+"vec3 rgb = texture2D(s_screen, rc).rgb;\n"
+"#endif\n"
+"gl_FragColor = vec4(rgb * vec3(REFRTINT), 1.0);\n"
 "}\n"
 "#endif\n"
 },

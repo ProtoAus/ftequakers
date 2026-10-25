@@ -59,6 +59,7 @@ extern cvar_t	r_stereo_convergence;
 extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
+extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
 
@@ -2778,6 +2779,7 @@ void GLR_RenderView (void)
 	texid_t sourcedepth = r_nulltex;
 	shader_t *custompostproc = NULL;
 	shader_t *ccpostproc = NULL;	//FTESurf Patch 288
+	shader_t *uwpostproc = scenepp_waterwarp;	//FTESurf Patch 1013
 	float renderscale;	//extreme, but whatever
 	int oldfbo = 0;
 	qboolean forcedfb = false;
@@ -2830,9 +2832,23 @@ void GLR_RenderView (void)
 	if (r_refdef.flags & RDF_UNDERWATER)
 	{
 		extern cvar_t r_projection;
-		if (!r_waterwarp.value || r_projection.ival)
+		qboolean nowarp = false;
+		//FTESurf Patch 1013: a Source water volume draws its $underwateroverlay, or no warp when it has none
+		//(the hl2 plugin names it per frame). A shader that cannot draw keeps the engine's warp (Patch 290).
+		if (*r_underwateroverlay.string && cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))
+		{
+			if (!strcmp(r_underwateroverlay.string, "none"))
+				nowarp = true;
+			else
+			{
+				shader_t *s = R_RegisterCustom(NULL, r_underwateroverlay.string, SUF_NONE, NULL, NULL);
+				if (s && s->prog && s->numpasses)
+					uwpostproc = s;
+			}
+		}
+		if (!r_waterwarp.value || r_projection.ival || nowarp)
 			r_refdef.flags &= ~RDF_UNDERWATER;	//no warp at all
-		else if (r_waterwarp.value > 0 && scenepp_waterwarp)
+		else if (r_waterwarp.value > 0 && uwpostproc)
 			r_refdef.flags |= RDF_WATERWARP;	//try fullscreen warp instead if we can
 	}
 
@@ -3233,7 +3249,7 @@ void GLR_RenderView (void)
 	}
 	else
 	{
-		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_WATERWARP, scenepp_waterwarp, "rt/$waterwarped");
+		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_WATERWARP, uwpostproc, "rt/$waterwarped");
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_CUSTOMPOSTPROC, custompostproc, "rt/$postproced");
 		// Author grade follows custom effects; user exposure sees the final graded
 		// blacks, not the LUT's input values. Keep it before AA and bloom compositing.

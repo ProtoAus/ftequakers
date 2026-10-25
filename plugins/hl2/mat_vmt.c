@@ -1017,6 +1017,7 @@ typedef struct
 	between the two exists -- see VMT_BottomRecord.
 	*/
 	char bottommaterial[MAX_QPATH];
+	char underwateroverlay[MAX_QPATH];	//FTESurf Patch 1013: see Mat_VMT_UnderwaterOverlay
 
 	/*
 	FTESurf: the material's proxy graph, as parsed, before it is resolved into
@@ -2324,7 +2325,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$abovewater"))
 			st->water_below = !atoi(value);
 		else if (!Q_strcasecmp(key, "$underwateroverlay"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			Q_strlcpy(st->underwateroverlay, value, sizeof(st->underwateroverlay));	//FTESurf Patch 1013
 		else if (!Q_strcasecmp(key, "$reflectentities"))
 			st->water_reflectents = !!atoi(value);	//FTESurf Patch 868
 		else if (!Q_strcasecmp(key, "$scale"))
@@ -5123,6 +5124,82 @@ static void VMT_EmissiveMappingScale(const char *name, char *args, size_t argsiz
 
 const char *VBSP_ColourCorrectScript(const char *name);	//FTESurf Patch 288, mod_vbsp.c
 
+/*
+FTESurf Patch 1013: Source's $underwateroverlay. A leaf names its water by the SURFACE material's
+texinfo (dleafwaterdata_t), and the key sits on that material or, as HL2-family water writes it,
+on its $bottommaterial. mod_vbsp.c resolves one per water volume at map load and publishes the
+eye's in r_underwateroverlay; the engine draws it in place of its own underwater warp.
+*/
+qboolean Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize)
+{
+	vmtstate_t *st = plugfuncs->Malloc(sizeof(*st));
+	char bottom[MAX_QPATH];
+	qboolean ok;
+
+	*out = 0;
+	memset(st, 0, sizeof(*st));
+	ok = VMT_ReadVMT(material, st);
+	if (st->sourcefile)
+		plugfuncs->Free(st->sourcefile);
+	if (ok && !*st->underwateroverlay && *st->bottommaterial)
+	{
+		VMT_BottomNormalise(st->bottommaterial, bottom, sizeof(bottom));
+		memset(st, 0, sizeof(*st));
+		ok = VMT_ReadVMT(bottom, st);
+		if (st->sourcefile)
+			plugfuncs->Free(st->sourcefile);
+	}
+	if (ok && *st->underwateroverlay)
+	{
+		VMT_BottomNormalise(st->underwateroverlay, out, outsize);	//no materials/, no extension
+		Q_strlwr(out);
+	}
+	plugfuncs->Free(st);
+	return *out != 0;
+}
+
+//The overlay's post-process: refract.glsl's warp, blur, tint and $bumptransform scroll on the scene
+//($sourcecolour) instead of a screen copy. False when nothing can warp (no $normalmap).
+qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
+{
+	vmtstate_t *st = plugfuncs->Malloc(sizeof(*st));
+	char args[512] = "";
+	size_t aoff = 0;
+	qboolean ok;
+
+	memset(st, 0, sizeof(*st));
+	ok = VMT_ReadVMT(overlay, st);
+	if (ok)
+		VMT_ResolveProxies(st);
+	ok = ok && *st->normalmapkey;
+	if (ok)
+	{
+		if (st->refracttint_set)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
+		if (st->refractamount_set)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRAMOUNT=%f", st->refractamount);
+		if (st->refrsine_set)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRSINE=%f,%f,%f", st->refrsine[0], st->refrsine[1], st->refrsine[2]);
+		if ((int)st->bluramount >= 1)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#BLUR");
+		if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
+		{
+			double a = st->scrollangle * (3.14159265358979323846/180.0);
+			Q_strlcatfz(args, &aoff, sizeof(args), "#SCROLL=%f,%f", st->scrollrate*cos(a), st->scrollrate*sin(a));
+		}
+		//No opening brace: a loader's script starts inside the shader body (see mod_vbsp.c's colour grade).
+		Q_snprintfz(script, size,
+			"\tprogram \"vmt/uwoverlay%s\"\n"
+			"\t{\n\t\tmap $sourcecolour\n\t\tnodepthtest\n\t}\n"
+			"\t{\n\t\tmap \"%s%s.vtf\"\n\t}\n"
+			"}\n", args, strcmp(st->normalmapkey, "materials/")?"materials/":"", st->normalmapkey);
+	}
+	if (st->sourcefile)
+		plugfuncs->Free(st->sourcefile);
+	plugfuncs->Free(st);
+	return ok;
+}
+
 static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	vmtstate_t st;
@@ -5150,6 +5227,14 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			LoadMaterialString(ps, cc);
 			return true;
 		}
+	}
+	if (!Q_strncasecmp(filename, "ftesurf/uw/", 11))
+	{	//FTESurf Patch 1013: the underwater overlay mod_vbsp.c names in r_underwateroverlay
+		static char uw[4096];
+		if (!Mat_VMT_OverlayScript(filename + 11, uw, sizeof(uw)))
+			return false;
+		LoadMaterialString(ps, uw);
+		return true;
 	}
 
 	memset(&st, 0, sizeof(st));

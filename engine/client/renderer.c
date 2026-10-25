@@ -502,6 +502,7 @@ moment they load a graded map.
 Not CVAR_ARCHIVE: saving a per-map generated shader name into config.cfg would
 apply one map's grade to the next one loaded.
 */
+cvar_t r_underwateroverlay					= CVARFD("r_underwateroverlay", "", 0, "Names the post-process drawn in place of the underwater warp while the eye is in a Source water volume.  Set by the hl2 plugin each frame from the volume's $underwateroverlay; \"none\" means that water has none and draws no warp, as Source does; empty leaves the engine's own warp.");	//FTESurf Patch 1013
 cvar_t r_colourcorrection					= CVARAD("r_colourcorrection", "", "r_colorcorrection", "Names the shader used by the colour-correction post-process stage.  Set by the hl2 plugin from a Source map's color_correction entities; setting it by hand is supported but it is overwritten at the next map load.  Switch the feature off with hl2_colourcorrection 0, which is what leaves this empty.");
 cvar_t r_wallcolour							= CVARAF ("r_wallcolour", "128 128 128",
 													  "r_wallcolor", CVAR_RENDERERCALLBACK|CVAR_SHADERSYSTEM);//FIXME: broken
@@ -1537,6 +1538,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
 	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288
+	Cvar_Register (&r_underwateroverlay, GRAPHICALNICETIES);	//FTESurf Patch 1013
 	Cvar_Register (&r_fxaa, GRAPHICALNICETIES);
 	Cvar_Register (&r_graphics, GRAPHICALNICETIES);
 	Cvar_Register (&r_renderscale, GRAPHICALNICETIES);

@@ -86,7 +86,8 @@ void main ()
 
 void main ()
 {
-	vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA));
+	//Patch 1014: a func_areaportalwindow pane fades by its entity alpha (cl_portal.qc APW_Predraw)
+	vec4 imposter_f = vec4(textureCube(s_reflectcube, cubedir).rgb, float(ALPHA) * e_colourident.a);
 	imposter_f.rgb *= vec3(COLOR);
 	//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
 	//fog4() multiplies by regularcolour.a, which on a Source material is a
