@@ -1,5 +1,138 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1020 - hl2_water 5: screen-space Source water, no extra scene renders (GL client, hl2 plugin, csprogs)
+
+Problem: Lex, 25 Oct, asked for cheaper refractive/reflective water at his r_renderscale 2 ("maybe
+an option for screen space reflections"). Live water (hl2_water 1/2) renders the scene again for its
+refraction and again for its reflection: on bhop_ceaseless's start room ~1.6 ms of a 3.0 ms frame
+and ~430 of 718 draws, CPU-bound.
+
+Change: hl2_water 5. The water draws from copies of the view instead of captures: colour (its
+$currentrender) and depth (a new $currentdepth texgen, T_GEN_CURRENTDEPTH appended to the enum so no
+value moves; GL only, Vulkan/D3D11 bind white/null). Screen water keeps its own copies, per
+recursion level and of the viewport's rectangle, so a 3D sky room, a portal or a capture copies its
+own camera at its own size, once per view and level; the plugin scripts `sort seethrough`, after
+the opaque world, decals and see-through surfaces and before the unlit-decal and banner sorts that
+particles and Source fire smoke draw in without depth. Refraction, depth fog and the offset
+rejection read the copies as they read the capture; the reflection (water.glsl #SCREEN) marches the
+reflected ray, kept above the plane, through the depth copy -- 24 steps from 4 units growing x1.35
+-- and samples the colour copy where it hits, the fog colour where the ray leaves the screen. A
+refused depth copy says so, reads as far and retries after a reallocation or a map.
+FTE_CSQC_HL2_WATER_SCREEN advertises it, and the graphics menu lists Screen-space only then (an
+archived 5 on an older client falls back to Dithered, as Budget does).
+
+Verified: rig, bhop_ceaseless, 1280x720, Lex's cfg: start room 3.03 -> 1.42 ms a frame (718 -> 292
+draws) at renderscale 2, 2.88 -> 1.38 at 1; looking down over it 3.30 -> 1.91 (2), 3.18 -> 1.55 (1);
+after the review fixes 2.77 -> 1.32 in the room. Screens: the same water at both scales, a little
+darker where the reflected ray finds nothing on screen; bhop_somp_island's sky-room ocean on the
+horizon draws as water in four directions. No shader compile errors, no copy warning, no new
+warnings.
+
+Limits: the reflection shows only what is on screen (Source's planar reflection sees behind the
+camera); translucent things under the water (blended and additive surfaces, a second water plane,
+see-through surfaces sorted after it) are not in its refraction and its depth hides them; a fading
+brush entity's water keeps the see-through sort (the forced-transparent move only takes opaque
+shaders). It is a choice beside 1/2, not a default.
+
+## Patch 1019 - Source water's refraction offset falls off with distance; GLSL cvar defaults parsed in bounds (hl2 plugin, GL client)
+
+Problem: bhop_ceaseless save 25, Lex's list of 25 Oct: the start-room water seen from 1900 units
+above drew horizontal lines and speckle (he called it moire) where his Momentum shot from the same
+spot is calm. Source's water offsets the refraction lookup by a constant screen fraction
+($refractamount x the normal, water_ps2x_helper.h:87-91), whatever the distance; this material has
+$refractamount 1, so at 1900 units the offset was 16+ pixels of noise, and samples landing on the
+walls and the platform read as zero water depth, losing fog and reflection in thin runs that lie
+horizontal because the depth gradient runs up the screen at pitch 89. Separately, a GLSL `!!cvarf`
+default was copied up to com_token+sizeof(body), an unrelated global, so with the stack above it
+(Linux) nothing was copied; on Windows it kept a CR ("0\r") or the blanks before a // comment.
+
+Change: hl2_waterrefractfalloff (default 512): past that eye depth the offset is held to a fixed
+size on the plane (x min(1, falloff / w)); 0 is Source's constant offset; nearer water is
+unchanged. gl_shader.c bounds the default by its own buffer, stops at CR and drops trailing blanks.
+
+Verified: rig at save 25, one exe, falloff 0 vs 512: fine-line energy on open water 19.5/16.6 ->
+14.1/9.6 (Lex's Momentum shot 12.9/5.0); 500 units up 4.2/5.6 -> 4.2/5.4. Shader variant arms ruled
+out the depth decode, the ripple mesh, capture scale, r_waterviews, $flow_bumpstrength and the
+Fresnel normal; offset off removed the lines (37.9 -> 8.5 in the fog-factor view). Defaults now
+read "512" and "0". No new warnings.
+
+Limits: the water still reads more cyan than Momentum's (G 125 vs 45 on open water) with the
+offset off too; that is the water colour, not the offset. Momentum's own formula is not known; the
+512 is fitted to one shot.
+
+## Patch 1018 - 3D sky room water shares the main view's targets; water captures capped at Source's 1024 (GL client)
+
+Problem: Lex, 25 Oct: reflective and refractive water costs a lot at his r_renderscale 2, the GPU
+mostly waiting on the CPU. Measured on bhop_ceaseless at his settings (hl2_water 2, 1280x720 rig
+window, r_budget_dump): the main view's reflection is ~1.1-1.2 ms and ~265 draws, refraction
+0.2-0.4 ms, all CPU-bound; and looking down over the start room the 3D sky room's own water
+(liquids/water_ocean_blue_skybox) rendered its own reflection and refraction every frame -- the sky
+room scene twice more, 1.4 ms of GPU -- although Source renders water targets for the eye's view
+only (viewrender.cpp DetermineWaterRenderInfo) and skybox water samples those. Water captures were
+also sized from the renderscaled frame (1920x1200 at renderscale 2 on a 1920x1200 screen) where
+Source's are 1024x1024 (baseclientrendertargets.h iWaterTextureSize).
+
+Change: in the sky room (r_skyroomlevel, set by R_DrawSkyroom) a water batch skips its captures and
+its reflection, refraction and refraction-depth texgens bind the outer level's targets -- per kind,
+when the same splitscreen seat captured that kind there in this world view or its last and the
+target exists (stamps clear at map load); otherwise it captures as before, and r_capturelog says
+"skyshare" when it shares. r_waterskyroomcapture 1 restores its own captures. r_watertargetsize
+(default 1024, 0 = no cap) caps each axis of a water capture; portal refractions keep full size.
+
+Verified: bhop_ceaseless, looking down over the start room: 4.31/4.56 -> 3.25/3.25 ms a frame, GPU
+3.13 -> 1.99, sky room 1.42 -> 0.31 ms; the start room itself unchanged (no sky room); capture log:
+the sky room's level-1 reflect and refract+depth gone; screens match apart from water motion.
+bhop_somp_island (sky room ocean on the horizon): four directions with and without, the distant
+ocean drawn the same. Target cap at renderscale 3: GPU 2.85/2.80 -> 2.64/2.56 ms in the room,
+2.71/2.48 -> 2.43/2.36 over it; at renderscale 2 it trims 1280 to 1024 columns with no measurable
+time. After review (per-kind, per-seat stamps): 4.23/4.17 -> 3.26 ms, "level 1 skyshare" logged.
+No new warnings.
+
+Limits: the sky room's water samples the outer level's last capture (one frame old), so it reflects
+the main plane's image, as Source's does; shallow sky-room water looks different shared than
+captured, and switches when the main water's capture lapses (Source never captures, so never
+switches); stereo eyes share one seat. The capped refraction depth stays NEAREST, so shoreline fog
+is blockier at high render scales. The main view's reflection is the rest of the cost: P1020.
+
+## Patch 1017 - particles orbit their emitter: orbit and spawnmode shell (GL client, tools, csprogs)
+
+Problem: bhop_ceaseless, Lex: the butterfly's particles should circle it. .pcf's Movement Rotate
+Particle Around Axis (butterfly 50 degrees a second, spiral 180, gatelight 500, stars 10 about X;
+52 systems in 26 library files) had no r_part equivalent, and since P1012 a sphere's volume is placed
+by cl_emit.qc, which hands the engine each particle's own point rather than a centre to turn about.
+
+Change: p_script.c: `orbit <degrees/sec> [x y z]` turns each particle and its velocity about its
+effect's origin, recorded per particle at spawn (both spawn paths); `spawnmode shell <min> <max>
+[bias x y z]` places Source's world-aligned sphere shell around that origin, its spawnvel spread as
+box mode's. The turn uses sinf/cosf: this file's sin/cos are 256-step table macros (p_script.c:101),
+which truncated one frame's 0.016 rad to 0. Non-finite or partial arguments disable or default.
+pcf.py writes them for orbiting systems (a rate of 0 is none), an orbiting volume's centre offset as
+orgbias so it still turns about the control point (bhop_collective's 12 sit 208-288 off theirs), and
+index shape 3 = the cull radius only; cl_emit.qc reads it.
+
+Verified: rig A/B on one exe, the butterfly block spawning at +-150 x at rest: orbit 90 draws a ring
+of discs round the butterfly, no orbit one pile; a debug print showed centre and radius right and
+the table sin at 0 before the sinf fix; still a ring after the review fixes. Real bake at Lex's
+saves 15, 17, 20: butterfly, gatelight and spiral drawn. test_pcf_resources 41/41; the library's
+209 .pcf bake byte-identical outside orbit blocks (reviewer's sweep). No new warnings.
+
+Limits: Source's spin direction is from recollection (MatrixBuildRotationAboutAxis), not read; an
+orbit on a blended sprite trail is not carried (reported; none in the library); a local-space axis
+is drawn in the world frame. Bakes with these keywords need this engine: an older one reads shell
+as a zero box and every orbiting system collapses to its emitter.
+
+## Patch 1016 - ent_info says why a class has no server entity (qwprogs)
+
+Problem: Lex pasted ent_info calling info_particle_system "removed at spawn (unimplemented class)";
+cl_emit.qc draws every baked one, and color_correction (read by the hl2 plugin) got the same line.
+
+Change: those two are named for what handles them; a class whose spawn function exists says its
+spawn function or the map removed it; the rest keep the old line.
+
+Verified: rig, bhop_ceaseless: the installed build called info_particle_system, light, logic_script,
+point_viewcontrol and color_correction unimplemented; this build gives the bake line and the plugin
+line for the two. QC 0 warnings.
+
 ## Patch 1011 - The server reads the style a run is surfing; the timer names it (QC)
 
 Problem: Lex (25 Oct, third list) wants runs of other styles, detected automatically.
