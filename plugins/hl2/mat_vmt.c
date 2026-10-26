@@ -4342,6 +4342,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			size_t aoff = 0;
 			int rkind;
 			const char *nm = *st->normalmapkey ? st->normalmapkey : st->dudvmap;	//Patch 878: not $bumpmap
+			if (*st->normalmapkey && !VMT_OwnImageExists(st->normalmapkey))
+				nm = "";	//Patch 1045: not installed is none (see the mode 1 arm)
 			//FTESurf Patch 866: env_cubemap reflects whatever hl2_envcubemap says -- on Refract
 			//the reflection is most of what makes the pane visible (surf_boreas's icicles);
 			//the pass's REFLECTCUBEMASK gate keeps r_reflectcube/r_envcubemap.
@@ -4418,8 +4420,10 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			*/
 			char args[1024], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16], refr[MAX_QPATH + 16];
 			size_t aoff = 0;
-			//DX9 Refract reads $normalmap only ($dudvmap is DX8's and loads unsigned here; $bumpmap is not its key)
-			const char *nm = st->normalmapkey;
+			//DX9 Refract reads $normalmap only ($dudvmap is DX8's and loads unsigned here; $bumpmap is not its key).
+			//Patch 1045: one that is not installed is none -- as a pass map it would bind the missing checker as
+			//normals (surf_hourglass's TF2 water without TF2: streaks at the screen edge, smeared rocks).
+			const char *nm = (*st->normalmapkey && VMT_OwnImageExists(st->normalmapkey)) ? st->normalmapkey : "";
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
 			int rkind = VMT_RefractBlend(st);
 			qboolean add = rkind == REFR_ADD || rkind == REFR_ADDALPHA;
@@ -5296,7 +5300,7 @@ qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
 	ok = VMT_ReadVMT(overlay, st);
 	if (ok)
 		VMT_ResolveProxies(st);
-	ok = ok && *st->normalmapkey;
+	ok = ok && *st->normalmapkey && VMT_OwnImageExists(st->normalmapkey);	//Patch 1045: no checker as normals
 	if (ok)
 	{
 		if (st->refracttint_set)
