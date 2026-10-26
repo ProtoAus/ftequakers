@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1041 - props honour rendermode/renderamt and the Alpha input (qwprogs)
+
+Problem: Lex, 26 Oct: surf_hourglass's vortex sits on an opaque white square. The square is prop_dynamic
+backdrops (succbg*.mdl) at rendermode 2, renderamt 0, which a timeline button fades in with Alpha 255.
+Only brushes had a render-state adapter (P844); a prop honoured "Don't Render" and nothing else, and Alpha
+at a prop was dropped. Library: 278 props on 24 maps carry mode 1, 2, 4 or 5, 57 of them at 0.
+
+Change (src/server/sv_entities.qc): SV_PropRenderState applies SV_BrushRenderMode to a prop at spawn, on
+Alpha, and through SV_BrushRenderState on Enable/TurnOn (alpha from renderamt, EF_NODRAW at 0, as
+C_BaseEntity::ShouldDraw), taking back only the EF_NODRAW it set; TurnOff and Disable clear vbsp_rmhide so
+the hide is I/O's. Collision is untouched.
+
+Verified (rig, surf_hourglass at Lex's save 2, qwprogs swapped): near-white pixels 15,103 -> 273, the
+vortex drawn without the square. One review round (control flow, consequences): no defect; nothing but
+drawing reads the state (sv_ents.c, cl_ents.c, CL_SetSolidEntities, the recorder, saves). Limits: a
+missing renderamt reads 0 where Source has 255 (no library map omits it); func_brush's TurnOff and a
+solid prop's Disable predate this (BACKLOG).
+
 ## Patch 1040 - a noclip speed change prints no prederr lines (GL client)
 
 Problem: Lex, 26 Oct: Shift+wheel (P1029) changes pm_noclipspeed mid-flight and prints prederr lines. The
