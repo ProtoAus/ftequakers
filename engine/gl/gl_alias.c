@@ -2234,8 +2234,13 @@ int R_GAlias_InstanceColours(batch_t *b)
 	galiasinfo_t *inf;
 	unsigned int surfnum;
 	int t;
-	if (qrenderer != QR_OPENGL || !e->vertlightbytes)
+	if (qrenderer != QR_OPENGL)
 		return -1;
+	if (!e->vertlightbytes)
+	{	//FTESurf Patch 1047: no bake at all (a prop_dynamic) draws without VC and never reads the pool,
+		//so any texel serves; GLBE_SubmitInstancedRun keeps such props out of baked runs
+		return e->vertlightcolors ? -1 : 0;	//VC needs vertlight (gl_backend.c, the VC permutation)
+	}
 	for (inf = Mod_Extradata(e->model), surfnum = 0; inf; inf = inf->nextsurf, surfnum++)
 		if (surfnum == b->user.alias.surfrefs[0])
 			break;
@@ -2246,6 +2251,24 @@ int R_GAlias_InstanceColours(batch_t *b)
 #else
 	return -1;
 #endif
+}
+
+//FTESurf Patch 1047: skin on the GPU when every program the shader draws with has SKELETAL.  The hl2
+//plugin's VertexLitGeneric puts its program in a pass, and a test of the shader-level program alone
+//skinned every skeletal Source model on the CPU each frame, with no VBO.
+static qboolean R_GAlias_ShaderSkeletal(const shader_t *s)
+{
+	int p;
+	if (s->remapto)
+		s = s->remapto;
+	if (s->prog)
+		return !!(s->prog->supportedpermutations & PERMUTATION_SKELETAL);
+	if (!s->numpasses)
+		return false;
+	for (p = 0; p < s->numpasses; p += max(1, s->passes[p].numMergedPasses))
+		if (!s->passes[p].prog || !(s->passes[p].prog->supportedpermutations & PERMUTATION_SKELETAL))
+			return false;
+	return true;
 }
 
 void R_GAlias_DrawBatch(batch_t *batch)
@@ -2276,7 +2299,7 @@ void R_GAlias_DrawBatch(batch_t *batch)
 		{
 			if (batch->user.alias.surfrefs[0] == surfnum)
 			{
-				/*needrecolour =*/ Alias_GAliasBuildMesh(&mesh, &batch->vbo, inf, surfnum, e, batch->shader->prog && (batch->shader->prog->supportedpermutations & PERMUTATION_SKELETAL));
+				/*needrecolour =*/ Alias_GAliasBuildMesh(&mesh, &batch->vbo, inf, surfnum, e, R_GAlias_ShaderSkeletal(batch->shader));
 				//nettest: override this surface's colour attribute with the prop instance's baked
 				//per-vertex multiplier. Colours are in GLOBAL vertex order, so slice by the surface's
 				//firstvert; the mesh's (local, 0-based) indices then address it correctly. The VC

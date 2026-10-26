@@ -7643,6 +7643,9 @@ static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
 	const float *proj, *cube;
 	vec3_t eye;
 	size_t bytes = (size_t)count*INST_TEXELS*16;
+	qboolean baked = false;
+	static float firstbones[256*12];	//the first member's pose: a run draws every member with it
+	int firstnb = 0;
 
 	if (inst_cap < (size_t)count*INST_TEXELS*4)
 	{
@@ -7656,6 +7659,23 @@ static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
 	{
 		b->buildmeshes(b);
 		vc = (b->meshes == 1) ? R_GAlias_InstanceColours(b) : -1;
+		//FTESurf Patch 1047: the run's permutation is the first member's, VC or not, so a member with
+		//the other bake state cannot share it (vertlightbytes means something only after buildmeshes)
+		if (i == 0)
+		{
+			baked = !!b->ent->vertlightbytes;
+			firstnb = (b->vbo && b->vbo->bones) ? b->vbo->numbones : 0;
+			if (firstnb > 256)
+				vc = -1;
+			else if (firstnb)
+				memcpy(firstbones, b->vbo->bones, sizeof(float)*12*firstnb);
+		}
+		else if (vc >= 0 && !!b->ent->vertlightbytes != baked)
+			vc = -1;
+		else if (vc >= 0 && ((b->vbo && b->vbo->bones) ? b->vbo->numbones : 0) != firstnb)
+			vc = -1;
+		else if (vc >= 0 && firstnb && memcmp(b->vbo->bones, firstbones, sizeof(float)*12*firstnb))
+			vc = -1;	//posed otherwise (an animating prop_dynamic): the bones are one set of uniforms
 		if (vc < 0)
 		{
 			if (inst_report == host_framecount)
