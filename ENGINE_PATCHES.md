@@ -13,19 +13,26 @@ their scheduling marker from existing operator-partial reads. Completion keeps
 the first fault/reason, observation/signing time, signature, identity and key
 sightings; only measured content/readiness advances. A deferred BLIND placeholder
 is not an angle measurement. Repeated I/O retains history and queue rotation;
-explicit reread retains its existing semantics. Completed receipts, replacement
+a new explicit reread retires only automatic completion authority and keeps
+published reevaluation semantics. Existing mode-1 operator reads remain in flight.
+Completed receipts, replacement
 sources and historical unknowns gain no automatic full-reread permission. No
 schema, native/recorder/reader format, threshold, ranking or collection change.
 
-**Verified:** New signed real-reader fixture: 83 checks/0 failures; unchanged
-published control fails 31 checks with all 11 initial-fault controls acting.
+**Verified:** Final signed real-reader fixture: 96 checks/0 failures; the SAME
+fixture on published control fails 30 checks, with all 11 initial-fault controls
+acting. A repaired-recording explicit-reread discriminator passes published base,
+fails the first candidate twice, and passes the corrected candidate.
 Late HID/view/recording, identity, metrics and sweep suites pass. Angle-reason
 suite retains exactly its one published-baseline epoch diagnostic failure; the
 initial-partial expectation alone changes with the feature. Reader 924/0; same
 497-record/167-view current corpus hashes, 305 faults in both control and subject
 (no increase). Standard isolated NoDeploy build: all three VMs/0 warnings.
-Candidate independent review and deployment are separate pending gates; no live
-runtime or native writer/compiler audit changed during qualification.
+Three independent read-only flow/history/adversarial reviews found no issues on
+the corrected clean commit after the explicit-reread regression was fixed and
+retested. Deployment remains separate: no live runtime or native writer/compiler
+audit changed during qualification. No historical backfill, completed-source
+replacement or global hard-budget guarantee is implied.
 
 ## Patch 1051 - goto_start goes to the start of the track you are on (csprogs, qwprogs)
 
