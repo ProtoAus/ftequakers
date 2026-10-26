@@ -439,6 +439,7 @@ typedef struct detailcell_s
 {
 	vec3_t mins, maxs;
 	entity_t ent;
+	void *mesh;		//ent.model's meshinfo when built: another map's build into the entry changes it
 } detailcell_t;
 
 typedef struct vbspinfo_s
@@ -9707,7 +9708,17 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 		return;
 	Q_snprintfz(tag, sizeof(tag), "detail %08x %u", hash, (unsigned)first);
 	held = (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING) ? (galiasinfo_t*)m->meshinfo : NULL;
-	if (!held || m->type != mod_alias || strcmp(held->surfacename, tag))
+	if (held && (m->type != mod_alias || strcmp(held->surfacename, tag)))
+	{	//another map's cell, still loaded (a load in flight at the map change): building into it would
+		//leak its VBOs and queue a second Mod_ModelLoaded, so this map takes a name of its own
+		m = modfuncs->BeginSubmodelLoad(va("*detail/%u/%08x", (unsigned)prv->numdetailcells, hash));
+		if (!m)
+			return;
+		held = (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING) ? (galiasinfo_t*)m->meshinfo : NULL;
+		if (held && (m->type != mod_alias || strcmp(held->surfacename, tag)))
+			return;
+	}
+	if (!held)
 	{
 		galiasinfo_t *g = plugfuncs->GMalloc(&m->memgroup, sizeof(*g));
 		galiasskin_t *skin = plugfuncs->GMalloc(&m->memgroup, sizeof(*skin));
@@ -9771,6 +9782,7 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 	ent->light_known = 1;	//vmt/detail carries the map's baked light per vertex
 	VectorSet(ent->light_avg, 1, 1, 1);
 	VBSP_FindTouchedLeafs(world, &ent->pvscache, c->mins, c->maxs);
+	c->mesh = m->meshinfo;
 	prv->numdetailcells++;
 }
 
@@ -9809,9 +9821,6 @@ static void VBSP_DetailBuild(model_t *mod)
 	}
 	objs = plugfuncs->Malloc(sizeof(*objs)*nobj);
 	memcpy(objs, d, sizeof(*objs)*nobj);			//the lump need not be aligned
-	for (i = 0; i < prv->detailrawsize; i++)
-		hash = (hash ^ prv->detailraw[i]) * 16777619u;
-
 	//Source: cl_detailfade 400 and cl_detaildist 1200, each lowered to the controller's (detailobjectsystem.cpp:1520)
 	prv->detailfade = 400;
 	prv->detailmaxd = 1200;
@@ -9831,6 +9840,10 @@ static void VBSP_DetailBuild(model_t *mod)
 		memmove(mat, mat+10, strlen(mat+10)+1);
 	modfuncs->StripExtension(mat, mat, sizeof(mat));
 	Q_snprintfz(shader, sizeof(shader), "ftesurf/detail/%g/%g/%s", prv->detailmaxd, prv->detailfade, mat);
+	for (i = 0; i < prv->detailrawsize; i++)
+		hash = (hash ^ prv->detailraw[i]) * 16777619u;
+	for (i = 0; shader[i]; i++)
+		hash = (hash ^ (qbyte)shader[i]) * 16777619u;
 
 	//cells: DETAIL_CELL cubes, objects in lump order inside each (bFlipped alternates by lump index)
 	keys = plugfuncs->Malloc(sizeof(*keys)*nobj);
@@ -9928,10 +9941,11 @@ static void VBSP_DetailDraw(model_t *mod, const qbyte *surfvis, int area)
 		vec3_t n;
 		int a;
 
-		if (!c->ent.model || c->ent.model->loadstate != MLS_LOADED)
+		if (!c->ent.model || c->ent.model->loadstate != MLS_LOADED || c->ent.model->meshinfo != c->mesh)
 		{
-			if (c->ent.model && c->ent.model->loadstate == MLS_NOTLOADED)
-				prv->detailbuilt = false;	//purged (vid_restart): rebuilt next frame
+			if (c->ent.model && (c->ent.model->loadstate == MLS_NOTLOADED ||
+				(c->ent.model->loadstate == MLS_LOADED && c->ent.model->meshinfo != c->mesh)))
+				prv->detailbuilt = false;	//purged (vid_restart) or rebuilt by another map: rebuilt next frame
 			vbsp_detailstat.notloaded += !refdef->recurse;
 			continue;
 		}
