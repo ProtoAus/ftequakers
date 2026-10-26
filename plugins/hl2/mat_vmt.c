@@ -2543,13 +2543,13 @@ static void VMT_AddVertexColourArgs(char *progargs, size_t progargssize)
 static qboolean VMT_OwnImageExists(const char *name)
 {
 	static const char *pre[] = {"", "textures/", "override/"};
-	static const char *ext[] = {"vtf", "dds", "ktx", "tga", "png", "jpg", "pcx"};
+	static const char *ext[] = {".vtf", ".dds", ".ktx", ".tga", ".png", ".jpg", ".pcx", ""};
 	size_t i, j;
 	for (i = 0; i < countof(pre); i++)
 		for (j = 0; j < countof(ext); j++)
-			if (fsfuncs->LocateFile(va("%smaterials/%s.%s", pre[i], name, ext[j]), FSLF_IFFOUND, NULL))
+			if (fsfuncs->LocateFile(va("%smaterials/%s%s", pre[i], name, ext[j]), FSLF_IFFOUND, NULL))
 				return true;
-	return false;
+	return fsfuncs->LocateFile(va("dds/materials/%s.dds", name), FSLF_IFFOUND, NULL);	//image.c's dds/ tree
 }
 
 //FTESurf Patch 1039: the base texture as a shader image name -- $whiteimage when the material has
@@ -2881,8 +2881,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		const char *cval = *st->color2 ? st->color2 : st->color;
 		float c[3] = {1,1,1};
 		qboolean havecolour = (*cval && VMT_ParseColour(cval, c));
-		qboolean havealpha = (st->alphaval > 0 && st->alphaval < 1) &&
-			!(st->nobasetex && !Q_strcasecmp(st->type, "Water"));	//P1039: water.glsl's ALPHA is its base layer
+		qboolean havealpha = (st->alphaval > 0 && st->alphaval < 1);
 		char t[128];
 
 		/*
@@ -4230,11 +4229,22 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			//FTESurf Patch 1020: mode 5 samples a copy of the view (colour and depth, taken after the opaque
 			//world -- sort seethrough, below) instead of rendering refraction and reflection; #SCREEN reflects
 			//by marching that depth copy.
-			Q_strlcatfz(script, &offset, sizeof(script),
-				"\t{\n"
-					"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
-					"\t\tmap %s\n", strstr(progargs, "#ANIMBUMP") ? "anim" : "", progargs, wmode == 5 ? "#SCREEN" : "",
-					wmode == 5 ? "$currentrender" : "$refraction");
+			{
+				//P1039: water.glsl's ALPHA is its base layer, which Source draws only with a $basetexture
+				//(vmt/waterbudget's ALPHA is its opacity, and keeps it)
+				char wargs[sizeof(progargs)], *a, *e;
+				Q_strlcpy(wargs, progargs, sizeof(wargs));
+				if (st->nobasetex && (a = strstr(wargs, "#ALPHA=")))
+				{
+					e = strchr(a+1, '#');
+					memmove(a, e ? e : a+strlen(a), strlen(e ? e : a+strlen(a))+1);
+				}
+				Q_strlcatfz(script, &offset, sizeof(script),
+					"\t{\n"
+						"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
+						"\t\tmap %s\n", strstr(progargs, "#ANIMBUMP") ? "anim" : "", wargs, wmode == 5 ? "#SCREEN" : "",
+						wmode == 5 ? "$currentrender" : "$refraction");
+			}
 			//FTESurf Patch 868: #LQWATER ($forcecheap without $forceexpensive) reads the cubemap,
 			//never the capture.
 			if (wmode >= 2 && wmode != 5 && !strstr(progargs, "#LQWATER"))

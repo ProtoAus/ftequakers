@@ -439,7 +439,7 @@ typedef struct detailcell_s
 {
 	vec3_t mins, maxs;
 	entity_t ent;
-	void *mesh;		//ent.model's meshinfo when built: another map's build into the entry changes it
+	char tag[32];	//the content tag its entry holds: another map's build into the entry changes it
 } detailcell_t;
 
 typedef struct vbspinfo_s
@@ -9704,19 +9704,21 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 	char tag[64];
 	size_t k;
 
-	if (!m)
-		return;
 	Q_snprintfz(tag, sizeof(tag), "detail %08x %u", hash, (unsigned)first);
-	held = (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING) ? (galiasinfo_t*)m->meshinfo : NULL;
+	held = (m && (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING)) ? (galiasinfo_t*)m->meshinfo : NULL;
 	if (held && (m->type != mod_alias || strcmp(held->surfacename, tag)))
 	{	//another map's cell, still loaded (a load in flight at the map change): building into it would
 		//leak its VBOs and queue a second Mod_ModelLoaded, so this map takes a name of its own
 		m = modfuncs->BeginSubmodelLoad(va("*detail/%u/%08x", (unsigned)prv->numdetailcells, hash));
-		if (!m)
-			return;
-		held = (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING) ? (galiasinfo_t*)m->meshinfo : NULL;
+		held = (m && (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING)) ? (galiasinfo_t*)m->meshinfo : NULL;
 		if (held && (m->type != mod_alias || strcmp(held->surfacename, tag)))
-			return;
+			m = NULL;
+	}
+	if (!m)
+	{	//nothing to build under: the index still advances, or every later cell would retry these names
+		memset(c, 0, sizeof(*c));
+		prv->numdetailcells++;
+		return;
 	}
 	if (!held)
 	{
@@ -9782,8 +9784,15 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 	ent->light_known = 1;	//vmt/detail carries the map's baked light per vertex
 	VectorSet(ent->light_avg, 1, 1, 1);
 	VBSP_FindTouchedLeafs(world, &ent->pvscache, c->mins, c->maxs);
-	c->mesh = m->meshinfo;
+	Q_strlcpy(c->tag, tag, sizeof(c->tag));
 	prv->numdetailcells++;
+}
+
+//the cell's entry still holds this cell (another map may have rebuilt it since)
+static qboolean VBSP_DetailOwn(const detailcell_t *c)
+{
+	const model_t *m = c->ent.model;
+	return m->type == mod_alias && m->meshinfo && !strcmp(((const galiasinfo_t*)m->meshinfo)->surfacename, c->tag);
 }
 
 static void VBSP_DetailBuild(model_t *mod)
@@ -9941,10 +9950,10 @@ static void VBSP_DetailDraw(model_t *mod, const qbyte *surfvis, int area)
 		vec3_t n;
 		int a;
 
-		if (!c->ent.model || c->ent.model->loadstate != MLS_LOADED || c->ent.model->meshinfo != c->mesh)
+		if (!c->ent.model || c->ent.model->loadstate != MLS_LOADED || !VBSP_DetailOwn(c))
 		{
 			if (c->ent.model && (c->ent.model->loadstate == MLS_NOTLOADED ||
-				(c->ent.model->loadstate == MLS_LOADED && c->ent.model->meshinfo != c->mesh)))
+				(c->ent.model->loadstate == MLS_LOADED && !VBSP_DetailOwn(c))))
 				prv->detailbuilt = false;	//purged (vid_restart) or rebuilt by another map: rebuilt next frame
 			vbsp_detailstat.notloaded += !refdef->recurse;
 			continue;
