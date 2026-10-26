@@ -5284,6 +5284,32 @@ qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
 	return ok;
 }
 
+//FTESurf Patch 1038: a detail-prop cell's skin, "<maxd>/<fade>/<material>" after "ftesurf/detail/"
+//(mod_vbsp.c VBSP_DetailBuild): the material's base texture under vmt/detail's billboard program.
+static qboolean Mat_VMT_DetailScript(const char *args, char *script, size_t size)
+{
+	vmtstate_t *st;
+	const char *s = strchr(args, '/'), *mat = s ? strchr(s + 1, '/') : NULL;
+	float maxd = atof(args), fade = s ? atof(s + 1) : 0;
+	qboolean ok;
+
+	if (!mat || maxd <= 0)
+		return false;
+	st = plugfuncs->Malloc(sizeof(*st));
+	memset(st, 0, sizeof(*st));
+	ok = VMT_ReadVMT(mat + 1, st) && *st->tex[0].name;
+	if (ok)
+		Q_snprintfz(script, size,
+			"\tprogram \"vmt/detail#MAXD=%g#FADE=%g\"\n"
+			"\tdiffusemap \"%s%s.vtf\"\n"
+			"\tcull disable\n\tsurfaceparm nodlight\n\tsurfaceparm noshadows\n\tsurfaceparm nomarks\n"
+			"}\n", maxd, fade, strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+	if (st->sourcefile)
+		plugfuncs->Free(st->sourcefile);
+	plugfuncs->Free(st);
+	return ok;
+}
+
 static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	vmtstate_t st;
@@ -5320,6 +5346,14 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 		if (!Mat_VMT_OverlayScript(filename + 11, uw, sizeof(uw)))
 			return false;
 		LoadMaterialString(ps, uw);
+		return true;
+	}
+	if (!Q_strncasecmp(filename, "ftesurf/detail/", 15))
+	{	//FTESurf Patch 1038
+		char det[1024];
+		if (!Mat_VMT_DetailScript(filename + 15, det, sizeof(det)))
+			return false;
+		LoadMaterialString(ps, det);
 		return true;
 	}
 
