@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1035 - env_sprite flipbooks cycle at the entity's framerate; framerate 0 is a still frame (hl2 plugin, csprogs)
+
+Problem: Patch 1034 cycles every multi-frame Sprite at Source's env_sprite default 10, but the rate is the
+entity's (exit1 on bhop_goldsrc2 is authored at 40), and Source starts no animation at all for framerate
+0 (sprite.cpp:560). A shader is per material, so one material at two rates needs two shaders.
+
+Fix: cl_sprites.qc asks for "ftesurf/spranim/<rate>/<material>" when the env_sprite's rate is not 10;
+Shader_LoadVMT (plugins/hl2/mat_vmt.c) parses the real VMT, keeps the full name as the shader's identity
+and feeds <rate> to the AnimatedTexture synthesis; 0 skips it (still frame). hl2_sprite_framerate 0 puts
+everything back at 10. The csprogs asks only when checkcommand("hl2_spranim") is 1: an older plugin cannot
+resolve the name and the sprite vanishes. A cvar was the first gate and review broke it: cfg_save writes
+every cvar's description as a trailing `//` comment and `set` reads it back (cvar.c Cvar_WriteVariables,
+cmd.c Cmd_set_f), so a dump replayed on an older plugin passed both a value and a description test; a
+config can make an alias (checkcommand 2) but not a command. CVAR_NOSAVE is no help either: plugin.c masks
+plugin cvar flags to ARCHIVE|CHEAT|SEMICHEAT. hl2_spranim lists the flipbooks drawn at their own rate.
+
+Verified (conbridge, hash-swapped plugin + csprogs, bhop_goldsrc2): exit1's shader reads
+vmt/animated#ANIMRATE=40 and hl2_spranim lists it; the dump's own hl2_sprite_framerate line exec'd on the
+patch-1034 plugin keeps exit1 drawn and cycling at 10 (region diff 4.95, wall 0.00), as does an alias
+named hl2_spranim; surf_tequila's prefixed single-frame glow04 (rate 20) is pixel-identical to the
+deployed build in a matched shot. Census: 434 env_sprites on 30 maps take a prefixed name; no map's count
+of distinct sprite materials rises. Two review rounds. Limit: hl2_spranim's list is never reset (BACKLOG).
+
 ## Patch 1033 - func_lod fades at the mapper's distance; hl2_imposter 2, Source's blended WindowImposter (opt-in) (csprogs, hl2 plugin)
 
 Problem: Lex, 26 Oct, bhop_ceaseless save 33: "a line through the func_lod which it's rendering in, it's
