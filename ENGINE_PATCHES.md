@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1033 - func_lod fades at the mapper's distance; hl2_imposter 2, Source's blended WindowImposter (opt-in) (csprogs, hl2 plugin)
+
+Problem: Lex, 26 Oct, bhop_ceaseless save 33: "a line through the func_lod which it's rendering in, it's
+not fading in the whole func_lod as one piece". Two things. (1) P1002 faded every func_lod on its
+DisappearMinDist/MaxDist when present, and all 198 here carry the editor's 2000/2200 beside the
+DisappearDist plar tuned (400-2000). Momentum's CFunc_LOD::KeyValue writes DisappearDist into min/max
+(max = D + 800) and the pair into the same fields, so the last key wins, and every library func_lod with
+both lists DisappearDist last. (2) The line itself: the map's fake sky is a never-solid func_brush (*443,
+678 faces) of WindowImposter around the play area, and the lattice func_lods reach past it. Ours draws the
+imposter opaque, writing depth, so each func_lod is cut where it crosses the fake sky; with it removed the
+line goes, and forcing every func_lod opaque or half-transparent does not move it.
+
+Change: csprogs: LOD_Spawn takes DisappearDist (+800) before the min/max pair (234 func_lods on 7 maps
+change: bhop_ceaseless 198, bhop_plars_hell 28). Plugin: hl2_imposter 2 emits WindowImposter blended
+with no depth writes, as windowimposter_dx90.cpp does, at sort seethrough so a fading func_lod blends over
+it whole. The default stays 1.
+
+Verified: rig, save 33: mode 1 cut, mode 2 none; approaching func_lod *27 at mode 2 its panels fade in
+whole. surf_monolith bonus 4 (Patch 263's fake-sky room) and nine bhop_ceaseless saves look the same in
+both modes. Review: at mode 2 every blended surface behind an imposter draws over it (55 of the 87 maps
+drawing imposter faces have blended content right behind one); the rig shows orange particles through
+bhop_ceaseless's areaportal1 pane at tp5. Hence opt-in: Source sorts those back to front. A func_lod at
+full opacity is cut at mode 2 as well.
+
+Limits: what Momentum shows at save 33 is not known; lextest asks Lex for a Momentum screenshot there.
+
 ## Patch 1034 - env_sprite flipbooks animate (exit signs, smoke, screens) (hl2 plugin)
 
 Problem: Lex, 26 Oct: an env_sprite with a multi-frame VTF (exit1 is 25 frames at 40fps) renders frozen
