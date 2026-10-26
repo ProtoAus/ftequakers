@@ -859,7 +859,7 @@ typedef struct
 	points at something other than the base texture.
 	*/
 	float animrate;
-	float spriterate;	//FTESurf Patch 1035: an env_sprite's own framerate, from a "ftesurf/spranim/<rate>/" name (Shader_LoadVMT); 0 = none
+	float spriterate;	//FTESurf Patch 1035: an env_sprite's own framerate, from a "ftesurf/spranim/<rate>/" name (Shader_LoadVMT); 0 = none, -1 = still
 	char animvar[64];
 	char animpass;	//the program went into a pass, so progblendfunc must not also be emitted
 	/*
@@ -1315,6 +1315,19 @@ static qboolean VMT_ScrollsBase(const char *var)
 		if (!Q_strncasecmp(s, "basetexture", 11))
 			return true;
 	return false;
+}
+
+//FTESurf Patch 1035: flipbooks synthesized at an env_sprite's own rate, for hl2_spranim.  The command
+//existing is also what cl_sprites.qc tests before asking for such a name (see VBSP_Init).
+#define VMT_SPRANIM_LIST 32
+static struct { char name[MAX_QPATH]; float rate; } vmt_spranim[VMT_SPRANIM_LIST];
+static int vmt_spranim_n;
+void Mat_VMT_SprAnim_f(void)
+{
+	int i;
+	Con_Printf("%i env_sprite flipbook shader(s) at their own framerate\n", vmt_spranim_n);
+	for (i = 0; i < vmt_spranim_n && i < VMT_SPRANIM_LIST; i++)
+		Con_Printf("  %s at %g\n", vmt_spranim[i].name, vmt_spranim[i].rate);
 }
 
 //FTESurf: frame count of a VTF basetexture (numframes = VTF header offset 24, little-endian
@@ -3025,11 +3038,20 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	sprites keep their path.  The rate is the env_sprite's own framerate when cl_sprites.qc names
 	it (Patch 1035, "ftesurf/spranim/<rate>/" via Shader_LoadVMT), else Source's default 10.
 	*/
-	if (hl2_animated && hl2_animated->ival && !Q_strcasecmp(st->type, "Sprite") &&
+	if (hl2_animated && hl2_animated->ival && !Q_strcasecmp(st->type, "Sprite") && st->spriterate >= 0 &&
 	    *st->tex[0].name && st->animrate <= 0 && VMT_VTFFrames(st->tex[0].name) > 1)
 	{
 		Q_strlcpy(st->animvar, "$basetexture", sizeof(st->animvar));
 		st->animrate = (st->spriterate > 0) ? st->spriterate : 10;
+		if (st->spriterate > 0)
+		{
+			if (vmt_spranim_n < VMT_SPRANIM_LIST)
+			{
+				Q_strlcpy(vmt_spranim[vmt_spranim_n].name, shortname, sizeof(vmt_spranim[0].name));
+				vmt_spranim[vmt_spranim_n].rate = st->spriterate;
+			}
+			vmt_spranim_n++;
+		}
 	}
 
 	if (st->nodraw)
@@ -5302,15 +5324,17 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	}
 
 	//FTESurf Patch 1035: "ftesurf/spranim/<rate>/<material>" is cl_sprites.qc asking for an env_sprite
-	//flipbook at its own framerate (gated on hl2_sprite_framerate, mod_vbsp.c).  <material> is the real
-	//VMT and <rate> feeds the AnimatedTexture synthesis; the full name stays the shader's identity, so
-	//each rate is its own shader.
+	//flipbook at its own framerate (see hl2_spranim, mod_vbsp.c).  <material> is the real VMT and <rate>
+	//feeds the AnimatedTexture synthesis; the full name stays the shader's identity, so each rate is its
+	//own shader.  Rate 0 is a still frame, as Source starts no animation then (sprite.cpp:560).
 	if (!Q_strncasecmp(filename, "ftesurf/spranim/", 16))
 	{
 		const char *slash = strchr(filename + 16, '/');
 		spriterate = atof(filename + 16);
-		if (!slash || spriterate <= 0)
+		if (!slash || spriterate < 0)
 			return false;
+		if (!spriterate)
+			spriterate = -1;
 		vmtname = slash + 1;
 	}
 
@@ -5380,13 +5404,13 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 		//gfx/loading are QUAKE's own console and loading-screen images, probed on every
 		//map by the engine's 2D code.  They are not Source materials, no VPK will ever
 		//hold one, and they were 13 constant entries in the running list on every map.
-		size_t fl = strlen(filename);
-		const char *ext = fsfuncs->GetExtension(filename, NULL);
-		if ((fl < 5 || strcmp(filename+fl-5, "_glsl")) &&
-		    strchr(filename, '/') &&
-		    strncmp(filename, "tools/", 6) &&
-		    strncmp(filename, "sky/", 4) &&
-		    strncmp(filename, "gfx/", 4) &&
+		size_t fl = strlen(vmtname);
+		const char *ext = fsfuncs->GetExtension(vmtname, NULL);
+		if ((fl < 5 || strcmp(vmtname+fl-5, "_glsl")) &&
+		    strchr(vmtname, '/') &&
+		    strncmp(vmtname, "tools/", 6) &&
+		    strncmp(vmtname, "sky/", 4) &&
+		    strncmp(vmtname, "gfx/", 4) &&
 		    !(*ext && strcmp(ext, ".vmt")))
 		{
 			//FTESurf Patch 181: a material that WAS found and would not parse is
@@ -5394,19 +5418,19 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			//a missing asset pack -- see vmtstate_t::filefound.
 			if (st.filefound)
 			{
-				if (!VMT_CensusSeen(vmt_stat_unparsed_name, vmt_stat_unparsed, filename))
+				if (!VMT_CensusSeen(vmt_stat_unparsed_name, vmt_stat_unparsed, vmtname))
 				{
 					if (vmt_stat_unparsed < VMT_MISSING_LIST)
-						Q_strlcpy(vmt_stat_unparsed_name[vmt_stat_unparsed], filename, MAX_QPATH);
+						Q_strlcpy(vmt_stat_unparsed_name[vmt_stat_unparsed], vmtname, MAX_QPATH);
 					vmt_stat_unparsed++;
 				}
 			}
 			else
 			{
-				if (!VMT_CensusSeen(vmt_stat_missing_name, vmt_stat_missing, filename))
+				if (!VMT_CensusSeen(vmt_stat_missing_name, vmt_stat_missing, vmtname))
 				{
 					if (vmt_stat_missing < VMT_MISSING_LIST)
-						Q_strlcpy(vmt_stat_missing_name[vmt_stat_missing], filename, MAX_QPATH);
+						Q_strlcpy(vmt_stat_missing_name[vmt_stat_missing], vmtname, MAX_QPATH);
 					vmt_stat_missing++;
 				}
 			}

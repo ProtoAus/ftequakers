@@ -153,6 +153,7 @@ extern char  vmt_stat_waterfog[64];
 extern float vmt_stat_waterfogstart, vmt_stat_waterfogend;
 extern int   vmt_stat_waterfog_set;
 void Mat_VMT_KeyCensus_f (void);
+void Mat_VMT_SprAnim_f (void);	//FTESurf Patch 1035
 /*
 FTESurf Patch 233: the $bottommaterial link mat_vmt.c now keeps, and the two operations
 this file performs on the census with it.  See VMT_BottomRecord in mat_vmt.c for what the
@@ -12801,13 +12802,14 @@ qboolean VBSP_Init(void)
 		hl2_animated = cvarfuncs->GetNVFDG("hl2_animated", "0", CVAR_SHADERSYSTEM, "Source's AnimatedTexture proxy -- materials whose frames all live in one VTF (smoke, fire, screens, water).\n0: draw frame 0, which is what shipped before and what every one of these materials has always done (default).\n1: cycle them at the rate the material asks for. 3,342 materials across 741 maps carry the proxy, so this moves a large part of the library onto a separate GLSL 130 shader (vmt/animated) that nothing has exercised before -- which is why it is not on by default.", MAPOPTIONS);
 
 		/*
-		FTESurf Patch 1035: also how a csprogs knows it may ask for "ftesurf/spranim/<rate>/<material>"
-		(mat_vmt.c Shader_LoadVMT).  cl_sprites.qc tests its DESCRIPTION, which only this registration
-		attaches: a cfg_save full dump writes it as `set`, and replayed on an older plugin a value test made
-		exit1 vanish (measured, 26 Oct).  Set before this registers, it reads absent -- rate 10, safe.
-		Not CVAR_NOSAVE: plugin.c masks plugin cvar flags to ARCHIVE|CHEAT|SEMICHEAT.
+		FTESurf Patch 1035: hl2_spranim EXISTING is how cl_sprites.qc knows it may ask for
+		"ftesurf/spranim/<rate>/<material>" (mat_vmt.c Shader_LoadVMT); an older plugin cannot resolve
+		that and the sprite vanishes.  Not a cvar: a cfg_save dump writes every cvar with its description
+		as a `//` comment and `set` reads both back, so a dump replayed on an older plugin faked a cvar
+		test (review, 26 Oct).  checkcommand() reads 1 only for a real command; a config makes aliases.
 		*/
-		cvarfuncs->GetNVFDG("hl2_sprite_framerate", "1", 0, "env_sprite flipbooks (several frames in one VTF, no AnimatedTexture proxy) cycle at the env_sprite's own framerate keyvalue.\n1: each at its own rate (default).\n0: all at Source's default 10.\nNeeds hl2_animated 1; takes effect on the next map load.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_sprite_framerate", "1", 0, "env_sprite flipbooks (several frames in one VTF, no AnimatedTexture proxy) cycle at the env_sprite's own framerate keyvalue, and framerate 0 shows a still frame, as Source.\n1: each at its own rate (default).\n0: all at Source's default 10.\nNeeds hl2_animated 1; takes effect on the next map load.", MAPOPTIONS);
+		cmdfuncs->AddCommand("hl2_spranim", Mat_VMT_SprAnim_f, "Lists the env_sprite flipbooks drawn at their own framerate (hl2_sprite_framerate) since the plugin loaded.");
 
 		hl2_propdist = cvarfuncs->GetNVFDG("hl2_propdist", "0", CVAR_ARCHIVE, "Maximum draw distance, in units, for static props that declare NO fade distance of their own -- which on some maps is all of them (surf_demise: 2350 of 2350, median distance from the start 24,185 units, and drawing them costs 4.11M of the frame's 5.2M draw indices).\n0: no limit -- draw every prop at any distance (default, and what shipped before).\n>0: skip props further away than this. Source applies its own r_propsmaxdist in the same situation, so a limit here is closer to the map author's intent than none; the trade is that distant scenery disappears, which on a wide-open map is part of the view. Props that set their own fade distance are unaffected either way.", MAPOPTIONS);
 
