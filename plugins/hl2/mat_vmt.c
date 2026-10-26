@@ -2538,6 +2538,20 @@ static void VMT_AddVertexColourArgs(char *progargs, size_t progargssize)
 	Q_strlcat(progargs, "#VERTEXALPHA", progargssize);
 }
 
+//FTESurf Patch 1039: whether the engine's image search (image.c tex_path/tex_extensions) would find
+//materials/<name> -- as named, under textures/ or override/, in any extension it tries.
+static qboolean VMT_OwnImageExists(const char *name)
+{
+	static const char *pre[] = {"", "textures/", "override/"};
+	static const char *ext[] = {"vtf", "dds", "ktx", "tga", "png", "jpg", "pcx"};
+	size_t i, j;
+	for (i = 0; i < countof(pre); i++)
+		for (j = 0; j < countof(ext); j++)
+			if (fsfuncs->LocateFile(va("%smaterials/%s.%s", pre[i], name, ext[j]), FSLF_IFFOUND, NULL))
+				return true;
+	return false;
+}
+
 //FTESurf Patch 1039: the base texture as a shader image name -- $whiteimage when the material has
 //none (Source binds TEXTURE_WHITE, so $color/$color2 alone give a flat colour).
 static const char *VMT_BaseImage(const vmtstate_t *st)
@@ -2666,7 +2680,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		//FTESurf Patch 1039: and a material with no $basetexture and no texture of its own name is a
 		//flat colour in Source, not a missing picture -- surf_bossfight's VertexLitGeneric { $color2 }
 		//window frame and lamp drew the checker.
-		else if (!fsfuncs->LocateFile(va("materials/%s.vtf", st->tex[0].name), FSLF_IFFOUND, NULL))
+		else if (!VMT_OwnImageExists(st->tex[0].name))
 			st->nobasetex = 1;
 	}
 
@@ -2867,7 +2881,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		const char *cval = *st->color2 ? st->color2 : st->color;
 		float c[3] = {1,1,1};
 		qboolean havecolour = (*cval && VMT_ParseColour(cval, c));
-		qboolean havealpha = (st->alphaval > 0 && st->alphaval < 1);
+		qboolean havealpha = (st->alphaval > 0 && st->alphaval < 1) &&
+			!(st->nobasetex && !Q_strcasecmp(st->type, "Water"));	//P1039: water.glsl's ALPHA is its base layer
 		char t[128];
 
 		/*
@@ -3918,7 +3933,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	{
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset 1\n");
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"%s\"\n", VMT_BaseImage(st));
 
 		if (!st->mod2x) {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_src_color\n");
@@ -3938,7 +3953,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		   for $additive: surf_board_this wraps stage 1 in
 		   Modulate { lody/rainbow $additive 1 }, which washed its sky yellow. */
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\t\tmap \"%s\"\n", VMT_BaseImage(st));
 
 		if (st->mod2x) {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_src_color\n");
@@ -4892,7 +4907,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	if (*st->fullbrightmap)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s%s.vtf\"\n", strcmp(st->fullbrightmap, "materials/")?"materials/":"", st->fullbrightmap);
 	else if (st->selfillum == 1)
-		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s\"\n", VMT_BaseImage(st));
 
 	if (*st->envmapmask)
 		Q_strlcatfz(script, &offset, sizeof(script),	"\treflectmask \"%s%s.vtf\"\n", strcmp(st->envmapmask, "materials/")?"materials/":"", st->envmapmask);
