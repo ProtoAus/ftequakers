@@ -1312,6 +1312,27 @@ static qboolean VMT_ScrollsBase(const char *var)
 	return false;
 }
 
+//FTESurf: frame count of a VTF basetexture (numframes = VTF header offset 24, little-endian
+//uint16).  Peeked so the Sprite-animation synthesis fires only on a real flipbook and leaves
+//every single-frame sprite on its existing path.  0 when the file is missing or too short.
+static int VMT_VTFFrames(const char *basetex)
+{
+	char path[MAX_QPATH];
+	qbyte *file;
+	size_t sz = 0;
+	int n = 0;
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf",
+		Q_strncasecmp(basetex, "materials/", 10) ? "materials/" : "", basetex);
+	file = fsfuncs->LoadFile(path, &sz);
+	if (file)
+	{
+		if (sz >= 26 && file[0]=='V' && file[1]=='T' && file[2]=='F' && file[3]==0)
+			n = file[24] | (file[25] << 8);
+		plugfuncs->Free(file);
+	}
+	return n;
+}
+
 //Patch 990: the $flow_* keys water.glsl reads, in FLOW/FLOWTIME order; -1 for any other.
 static int VMT_FlowKey(const char *k)
 {
@@ -2991,6 +3012,21 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 	Q_strlcatfz(script, &offset, sizeof(script), "\n");
 
+	/*
+	FTESurf: an env_sprite drives a flipbook from the ENTITY's framerate and carries no
+	AnimatedTexture proxy (exit1.vmt is a bare "Sprite" + $basetexture, a 25-frame VTF).
+	Give a multi-frame Sprite the same proxy the world path uses so the shared vmt/animated
+	dispatch below cycles it.  Narrowed to real flipbooks by the frame peek so single-frame
+	sprites keep their path.  Rate 10 is a placeholder (Source's env_sprite default); the
+	per-entity rate is threaded from cl_sprites.qc.
+	*/
+	if (hl2_animated && hl2_animated->ival && !Q_strcasecmp(st->type, "Sprite") &&
+	    *st->tex[0].name && st->animrate <= 0 && VMT_VTFFrames(st->tex[0].name) > 1)
+	{
+		Q_strlcpy(st->animvar, "$basetexture", sizeof(st->animvar));
+		st->animrate = 10;
+	}
+
 	if (st->nodraw)
 	{
 		Q_strlcatfz(script, &offset, sizeof(script), "\tsurfaceparm nodraw\n");
@@ -3025,6 +3061,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	else if (hl2_animated && hl2_animated->ival && st->animrate > 0 &&
 	         VMT_ScrollsBase(st->animvar) && *st->tex[0].name &&
 	         (!Q_strcasecmp(st->type, "LightmappedGeneric") || !Q_strcasecmp(st->type, "UnlitGeneric") ||
+	          !Q_strcasecmp(st->type, "Sprite") ||	//FTESurf: env_sprite flipbooks (exit1 etc.)
 	          /*
 	          A WorldVertexTransition with no $basetexture2 is a lightmapped
 	          material wearing the wrong type name -- Patch 187 already draws it
@@ -3052,7 +3089,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		"the flipbook is too dim", not as a lighting bug, and it is exactly the
 		class of thing a screenshot of the smoke could never show.
 		*/
-		qboolean animunlit = !Q_strcasecmp(st->type, "UnlitGeneric");
+		qboolean animunlit = !Q_strcasecmp(st->type, "UnlitGeneric") || !Q_strcasecmp(st->type, "Sprite");	//FTESurf: a sprite is unlit -- keep it off the lightmap (the lit path binds s_lightmap it has no coords for)
 		Q_snprintfz(anim, sizeof(anim), "#ANIMRATE=%f", st->animrate);
 		Q_strlcat(progargs, anim, sizeof(progargs));
 		if (animunlit)
