@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1053 — complete interrupted initial receipt observations
+
+**Problem:** An initial receipt read could store an independent fault while a
+signed sibling read failed. Its later automatic journal-only retry never
+completed the unmeasured angle/recording observation; only an explicit full
+reread could repair that gap.
+
+**Change:** Capture only those new interrupted initial observations as
+known-signature full retries on the existing bounded durable queue. Distinguish
+their scheduling marker from existing operator-partial reads. Completion keeps
+the first fault/reason, observation/signing time, signature, identity and key
+sightings; only measured content/readiness advances. A deferred BLIND placeholder
+is not an angle measurement. Repeated I/O retains history and queue rotation;
+explicit reread retains its existing semantics. Completed receipts, replacement
+sources and historical unknowns gain no automatic full-reread permission. No
+schema, native/recorder/reader format, threshold, ranking or collection change.
+
+**Verified:** New signed real-reader fixture: 83 checks/0 failures; unchanged
+published control fails 31 checks with all 11 initial-fault controls acting.
+Late HID/view/recording, identity, metrics and sweep suites pass. Angle-reason
+suite retains exactly its one published-baseline epoch diagnostic failure; the
+initial-partial expectation alone changes with the feature. Reader 924/0; same
+497-record/167-view current corpus hashes, 305 faults in both control and subject
+(no increase). Standard isolated NoDeploy build: all three VMs/0 warnings.
+Candidate independent review and deployment are separate pending gates; no live
+runtime or native writer/compiler audit changed during qualification.
+
 ## Patch 1051 - goto_start goes to the start of the track you are on (csprogs, qwprogs)
 
 Problem: players report goto_start "just does reset and doesn't go to stage 1". Patch 848 sent it to `!m`
