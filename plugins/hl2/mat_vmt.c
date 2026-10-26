@@ -5320,7 +5320,7 @@ qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
 		if (st->refractamount_set && !gone)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRAMOUNT=%f", st->refractamount);
-		if (st->refrsine_set)
+		if (st->refrsine_set && !gone)	//uwoverlay.glsl's REFRSINE branch does not read REFRAMOUNT
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRSINE=%f,%f,%f", st->refrsine[0], st->refrsine[1], st->refrsine[2]);
 		if ((int)st->bluramount >= 1)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#BLUR");

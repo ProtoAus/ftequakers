@@ -7770,8 +7770,8 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 	{	//one frame's report, every view of it
 		inst_report = host_framecount;
 		Cvar_ForceSet(&r_instancing, "1");
-		Con_Printf("r_instancing: gates: cvar %i broken %i mode %i (standard %i) DrawElementsInstanced %i TexBuffer %i fakeshadows %i lights %i\n",
-			r_instancing.ival, inst_broken, shaderstate.mode, BEM_STANDARD, qglDrawElementsInstanced!=NULL, qglTexBuffer!=NULL, r_fakeshadows, Sh_AnyLightToDraw());
+		Con_Printf("r_instancing: gates: cvar %i broken %i (skinned %i) mode %i (standard %i) DrawElementsInstanced %i TexBuffer %i fakeshadows %i lights %i\n",
+			r_instancing.ival, inst_broken, inst_broken_skel, shaderstate.mode, BEM_STANDARD, qglDrawElementsInstanced!=NULL, qglTexBuffer!=NULL, r_fakeshadows, Sh_AnyLightToDraw());
 	}
 	for (batch = sortlist; batch && batch != end; batch = batch->next)
 	{
