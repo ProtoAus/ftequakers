@@ -1,5 +1,158 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1028 - info_particle_system answers Start and Stop (qwprogs, csprogs)
+
+Problem: Lex, 26 Oct: bhop_ceaseless's button at the start (OnIn `info_particle_system,Stop`, OnOut
+Start) does nothing. cl_emit.qc draws every particle system from the entity lump and the server kept no
+entity for the class, so the outputs reached nothing (97 of the map's 99 systems are named
+info_particle_system); a system that starts off (start_active 0) was never built either.
+
+Change: info_particle_system stashes its targetname, origin, effect_name and start_active and frees its
+slot (SV_LateStash); SV_LateSpawnAll re-creates it after the lump, so no later solid is renumbered (the
+physent digest numbers entities). Start, Stop, StopPlayEndCap, DestroyImmediately and Kill set its
+state; from the first input it is a CSQC entity sent whatever the PVS (ENTWIRE_PSYSSTATE: origin,
+effect_name, on), matched on the client to every emitter the system started, children included; a later
+emitter walk reapplies it. Start-off systems are built stopped. ent_info shows the state.
+
+Verified: rig, bhop_ceaseless: the button stops all 97 (client "stopped by the server" per system; the
+start room's boost glows go out). Review: the first version kept its edict at spawn (renumbering) and
+marked children only when the parent emitter was added; both fixed. The per-system dprints need
+developer 2 (97 lines a press).
+
+Limits: a stopped system's particles finish their life (DestroyImmediately cannot take them back).
+
+## Patch 1027 - a Source model draws with the map's pitch (GL client, hl2 plugin)
+
+Problem: Lex, 26 Oct: bhop_ceaseless's spider (prop_dynamic, "angles" "45 0 0") is rotated the wrong
+way. A networked mesh model's axis comes from AngleVectorsMesh, which applies r_meshpitch -1 (Quake's
+alias convention), so every pitched Source prop drew tipped the other way; seen from below the spider's
+thread pointed at the floor. Collision was right: pmove's physents flip the pitch once
+(CL_SetSolidEntities, sv_user.c) and pmovetst.c once more.
+
+Change: Mod_LoadHL2Model sets MDLF_SOURCEPITCH; the packet-entity and static-entity draws, an
+attachment's parent axis, CL_ParseStatic and r_showhull give such models AngleVectors' axis. Static
+props are the plugin's, CSQC-drawn models the QC's: both unchanged.
+
+Verified: rig: the spider hangs from its thread, body down; the installed build upside down. Review: a
+first, QuakeC fix (negate .angles) would have moved player collision onto a mirror-tipped hull on 4,227
+pitched solid props across 254 maps and changed recorded runs' physent digests; withdrawn. Round 2 found CL_ParseStatic, the attachment parent and r_showhull still on the old axis;
+round 3 that MDLF_SOURCEPITCH survived a reload (engineflags sits before the worker's memset) and
+that the packet-entity axis read a portal's NULL model (upstream).
+
+Limits: the server's coarse box and QC traces against a pitched mesh prop flip once (world.c), as
+before this patch; player movement is right.
+
+## Patch 1026 - an optional download the server lacks is a developer line (client)
+
+Problem: Lex, 26 Oct: joining bhop_ceaseless prints "Download of "sound/plar/booster.wav" failed. Not
+found." Its ambient_generic booster_snd1 names a sound no pack has; the server precaches it, so each
+client tried the web mirror (404), then the server, and printed five lines.
+
+Change: a download queued without DLLF_REQUIRED or DLLF_VERBOSE (a precached sound) prints its
+"Downloading", web-404 and not-found lines at developer 1; required ones and `download` stay at 0. The
+game-server path keeps both flags in the in-flight download (it kept only DLLF_OVERWRITE).
+Skipping the precache on the server was rejected in review: the lobbies mount less than players own.
+
+Verified: rig with sound: installed client five booster.wav lines, this one none at developer 0;
+`download sound/p1026/not_there.wav` prints "Couldn't find file" and, since round 3, the red
+"Download of ... failed" too. Review round 2: required
+downloads from the game server had gone quiet, and the not-found branch read a NULL download; fixed.
+Round 3: the failed entry keeps an in-flight download's level (the not-found chunk usually lands
+before the dlsize reply, which then printed a required file's red line at developer 1); a chunked
+not-found naming another file is loud; a chunked redirect with no download running is ignored (it
+read the NULL download, upstream since 2017).
+
+## Patch 1025 - boost pads fire on the tick you leave them, pay what they say, and are predicted (qwprogs, csprogs, GL client)
+
+Problem: Lex, 26 Oct: a prederr on every bhop_ceaseless boost pad ("origin off by 12.56" in Z). The pad
+writes `!activator AddOutput basevelocity 0 0 1250` on OnEndTouch. The server synthesised end-touch
+from a 0.03 s sweep needing two absent windows (0.06-0.09 s after the last touch) and the client mirror
+demoted triggers whose outputs move the player. Momentum's replays (data/momentum/bhop_ceaseless/main
+0009523, 0015460) show the boost the tick after the feet leave the 4-unit trigger, and exactly the
+authored amount (400 ... 1250), where the cash-out paid (1 + tick/2) of it.
+
+Change, server: each player lists the triggers it touched (eight, movement triggers with no outputs
+included) and PlayerPreThink ends one on the command, or tick part, after the first move that did
+not touch it, after the jump edge and before the carrier is cashed; a spectate hold is no evidence,
+a filter that rejects an overlap keeps a touch it let in (Source's touch link ignores filters), a
+disabled trigger ends on the next command, a spent trigger_once (SUB_Remove pending) silently. The
+sweep leaves listed touches to that edge (a gap in commands no longer ends one) and still ends the
+rest: past eight, bots, a disconnect. AddOutput basevelocity divides the cash-out scale out (as
+AddSpeed). fs_endedge serverinfo follows vbsp_mp; the .rec header carries `endedge 1|0` (0: vbsp_mp 0
+or a slot past 32).
+Change, engine: predmove_bvset/predmove_bvsetflag let the prediction hook write an unarmed carrier
+(FTESURF_PREDICT_BVSET); predmove_wasground gives the hook the move's starting ground (the warp-op
+pre-move hook, which the QC first used, does not run on a listen server).
+Change, csprogs: on an fs_endedge server with that engine, delay-0 basevelocity rows at the activator
+from a trigger_multiple's OnStartTouch, OnEndTouch or OnJump no longer demote it; they are paid through
+predmove_bvset, end-touch is exact per tick part, and a chain restart seeds each slot's in-state from
+a 64-command ring of what the last replay of the ack left, trusted when that replay ended within a
+unit of the server's state.
+
+Verified: rig, save-31 pad, sv_minping 60: installed 3 of 3 boosted jumps with a prederr (12.6-37.7)
+and +1256.2; this build 0 prederr over 8 jumps at 250 fps and 8 at 50 fps, +1250.0 on the end edge.
+Standing on it at cl_maxfps 10: the build before the sweep change launched the player 4 of 4 times,
+after it 0. Walking off its side at cl_maxfps 25: per-command "seen" 8 of 8 with a 37.5 prederr, per
+tick part 0 of 8. OnJump pad *266: 5 of 5 with 5.5 before, 0 of 5. Demoted triggers on the map
+22 -> 4. tools/p786trig.py v2 passes (also --countdown 0.5); p753warpop --more 32/8 as the installed
+build. Final build: walking off at cl_maxfps 25 0 of 8, standing at
+cl_maxfps 10 0 launches, 250 and 50 fps 0 of 16; OnJump pad *266 on a listen server 5 of 5 with a
+5.5-11 prederr on the build before predmove_wasground, 0 of 5 with it.
+Reviews: eight rounds. The first cut read touches per usercmd, paid pushes' and teleports'
+OnStartTouch rows, published fs_endedge before vbsp_mp was latched; a later cut dropped a disabled
+trigger to the sweep (and never ended it on the client) and let a one-command filter reject end a
+touch; three client seeding attempts lost or doubled an END around a Disable or a teleport at the ack
+before the ring.
+
+Limits: the server's start cap can trim a horizontal END boost the client does not trim (as for
+pushes); a teleport inside one command's touch loop and an anti-speedcheat drop move END by a command;
+the ring is rejected after an unpredicted server-only teleport and trusted for an error under a unit
+across a boundary (BACKLOG); a reset on an OnEndTouch pad pays the boost at the start (as before).
+
+## Patch 1024 - func_lod: no change
+
+Lex/plar: func_lod should appear whole, "not a line across the brush" (save 30). P1002 fades each whole
+by its box centre, exactly Source 2013's ComputeDistanceFade; no line reproduced in the rig. BACKLOG.
+
+## Patch 1023 - Source brush faces shade with VRAD's smoothed vertex normals (hl2 plugin)
+
+Problem: plar (the author of bhop_ceaseless), via Lex: "this tube doesn't smooth envmap" (save 19). Every
+brush vertex took its plane normal; lumps 30/31 were never read, so smoothing groups did nothing. The
+map smooths 3,179 of its 21,740 faces; the tube's carry normals up to 6.5 degrees off their planes.
+
+Change: VBSP_LoadVertNormals reads both lumps (16/32-bit indices by size, every index range-checked,
+faces in lump order as Mod_LoadVertNormalIndices). A vertex takes VRAD's normal when unit length and in
+front of its face; water (warp) and refract/reflect/portal surfaces keep the plane's (GLR_PortalPlane
+reads the first vertex normal).
+
+Verified: rig, save 19 looking down the tube: smooth cubemap, faceted on the installed build.
+
+## Patch 1022 - lobby map changes keep the search paths; scr_loadtimes (client)
+
+Problem: Lex, 26 Oct: bhop_ceaseless -> surf_666 on a lobby is "super long". scr_loadtimes (new) put
+~9.5 s of a 21 s change into the client rebuilding its filesystem twice: serverdata's COM_Gamedir with
+the gamedir it already has, and FS_PureMode on a server-pack list that changes every map
+(*maps/<map>.bsp), each unmounting and re-reading every Steam addon's VPKs (245k files).
+
+Change: COM_Gamedir keeps the search paths when the new manifest's paths, packages and configs equal the
+current one (not in pure mode, with packages, or with fs_changemod pending), still asking for the shader
+rescan the rebuild did; FS_PureMode outside pure mode stores lists naming nothing mountable without a
+rebuild; allow_unmaskedskyboxes keeps its value until the map type is known.
+
+Verified: rig, developer 0, three changes each: 21.0-21.2 -> 11.4-12.0 s (4.3-5.9 s is the local
+server's own load; on a lobby the Pi's); the shader rescan 0.21-0.31 s. A TF2/Portal 2 automount map
+draws and reports as before. Review: shader redefinitions, pure servers and fs_changemod handled.
+
+## Patch 1021 - save-lock steps on a lobby walk from the newest save (qwprogs)
+
+Problem: Lex, 26 Oct: on a lobby the save menu read 29/29 and next/previous alternated between two
+saves. P899 keeps a joining player's cursor on the newest row until their own sl_ command; P759's
+predicted steps never cleared that, so every step's load was followed by the cursor snapping back.
+
+Change: the warp-op load and steps clear rec_sl_auto after their charge, as the stringcmds do.
+
+Verified: tools arm (fixture lobby, warp ops): installed cursor 3/3/3, this build 2, 1, 2.
+
 ## Patch 1031 - refuse newer surfd schemas before application writes (surfd only)
 
 Problem: startup treated a database newer than SCHEMA_VERSION as already migrated.
