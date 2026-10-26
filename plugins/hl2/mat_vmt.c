@@ -2538,6 +2538,17 @@ static void VMT_AddVertexColourArgs(char *progargs, size_t progargssize)
 	Q_strlcat(progargs, "#VERTEXALPHA", progargssize);
 }
 
+//FTESurf Patch 1039: the base texture as a shader image name -- $whiteimage when the material has
+//none (Source binds TEXTURE_WHITE, so $color/$color2 alone give a flat colour).
+static const char *VMT_BaseImage(const vmtstate_t *st)
+{
+	static char img[MAX_QPATH+16];
+	if (st->nobasetex)
+		return "$whiteimage";
+	Q_snprintfz(img, sizeof(img), "%s%s.vtf", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+	return img;
+}
+
 static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char *shortname, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	size_t offset = 0;
@@ -2651,6 +2662,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		that was never a texture.
 		*/
 		if (*st->envmap)
+			st->nobasetex = 1;
+		//FTESurf Patch 1039: and a material with no $basetexture and no texture of its own name is a
+		//flat colour in Source, not a missing picture -- surf_bossfight's VertexLitGeneric { $color2 }
+		//window frame and lamp drew the checker.
+		else if (!fsfuncs->LocateFile(va("materials/%s.vtf", st->tex[0].name), FSLF_IFFOUND, NULL))
 			st->nobasetex = 1;
 	}
 
@@ -3249,7 +3265,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			VMT_AddVertexColourArgs(progargs, sizeof(progargs));
 		Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		//The blend itself still comes from the shared tail: st->additive makes it
 		//write `progblendfunc add` (:3913), which is the top-level spelling and the
 		//only pass-state directive a program with no pass block can use.
@@ -3293,7 +3309,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcpy(st->type, "vmt/unlitreflect#BASE", sizeof(st->type));
 		Q_strlcatfz(script, &offset, sizeof(script), "\tprogram \"%s%s%s%s%s%s\"\n",
 			st->type, extra, progargs, envmaptint, envmapsat, envmapcontrast);
-		Q_strlcatfz(script, &offset, sizeof(script), "\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script), "\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		if (detmask)
 			Q_strlcatfz(script, &offset, sizeof(script), "\tuppermap \"%s%s.vtf\"\n", strcmp(st->detail, "materials/")?"materials/":"", st->detail);
 	}
@@ -3315,7 +3331,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		else if (st->nobasetex)	//FTESurf Patch 190, see the fallback at the top of this function
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap $whiteimage\n");
 		else
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s\"\n", VMT_BaseImage(st));
 
 		if (st->vertexcolor)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\rrgbGen vertex\n");
@@ -3427,7 +3443,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s%s\"\n", st->type, progargs,
 				envsrcspec?envmaptint:"", envsrcspec?envmapsat:"", envsrcspec?envmapcontrast:"");
 		}
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		if (*st->tex[1].name)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tuppermap \"%s%s.vtf\"\n", strcmp(st->tex[1].name, "materials/")?"materials/":"", st->tex[1].name);
 		//$blendmodulatetexture rides in on `lowermap`: S_LOWERMAP/s_lower
@@ -3685,7 +3701,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		above has to be a one-sampler special case.
 		*/
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		//$texture2 rides on `uppermap`: S_UPPERMAP/s_upper is a real default
 		//sampler slot that nothing on this material type uses.  The same trick
 		//Patch 251 plays with s_specular for $bumpmap2 and Patch 187 with
@@ -3702,7 +3718,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	{
 
 		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s\"\n", VMT_BaseImage(st));
 
 		if (st->mod2x) {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_src_color\n");
@@ -3753,7 +3769,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		VMT_AddVertexColourArgs(progargs, sizeof(progargs));
 		Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		vmt_stat_addprog++;
 	}
 	else if (!Q_strcasecmp(st->type, "Sprite"))
@@ -3793,7 +3809,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		is referenced by a sprite ENTITY, and nothing spawns those yet.
 		*/
 		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s\"\n", VMT_BaseImage(st));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\rrgbGen vertex\n");
 		if (st->vertexalpha || st->translucent || st->alphaval)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\ralphaGen vertex\n");
@@ -3869,7 +3885,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		everything drawn after it.
 		*/
 		Q_strlcatfz(script, &offset, sizeof(script), "{\n");
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s\"\n", VMT_BaseImage(st));
 		if (st->vertexcolor || !*st->color)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
 		if (st->vertexalpha || st->translucent || st->additive)
@@ -3894,7 +3910,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	{
 		Q_strlcpy(st->type, "vmt/vertexlit", sizeof(st->type));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset 1\n");
 		st->decal = 0;
 	}
@@ -4232,7 +4248,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		*/
 		if (wmode != 3 && wmode != 4)
 		{
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
 			if (strstr(progargs, "#FLOW#"))	//Patch 990: shader-scoped slots the water pass's program reads
 			{
@@ -4648,7 +4664,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 
 
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 
 		if (*st->normalmap) {
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
@@ -4705,7 +4721,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s%s\"\n", st->type, progargs, envmaptint, envmapsat, envmapcontrast);
 
 
-		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 
 		if (*st->normalmap)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
@@ -4761,7 +4777,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			/* the default should just be unlit, let's not make any assumptions - eukara*/
 			Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
-			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		}
 	}
 
