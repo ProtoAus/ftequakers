@@ -703,7 +703,7 @@ typedef struct vbspinfo_s
 	float			detailfadestart, detailfadeend;	//env_detail_controller's; -1 = none
 	float			detailmaxd, detailfade;		//as Source sets cl_detaildist / cl_detailfade from them
 	qboolean		detailbuilt;
-	size_t			numdetailcells;
+	size_t			numdetailcells, maxdetailcells;
 	detailcell_t	*detailcells;
 
 	unsigned int contentsremap[32];
@@ -1982,7 +1982,7 @@ static void VBSP_LoadDetailKeys(model_t *mod, const qbyte *entdata, size_t entle
 	for (data = text; ; )
 	{
 		char classname[64] = "", mat[MAX_QPATH] = "";
-		float fmin = 400, fmax = 1200;	//the FGD's defaults
+		float fmin = 0, fmax = 0;	//a key the controller lacks is 0 in Source, not the FGD default
 
 		data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL);
 		if (!data)
@@ -9503,7 +9503,7 @@ one rigid mesh made once, and vmt/detail turns and fades the sprites on the GPU,
 per visible cell and no per-object work.  Detail MODELS (type 0: 5,367 objects on 10 maps) are not
 drawn; lightstyles are not applied; sway and player avoidance are off as Source's cvars default them.
 */
-#define DETAIL_CELL		512
+#define DETAIL_CELL		1024	//cells are model-table entries (gl_model.c MAX_MOD_KNOWN 8192, shared)
 #define DETAIL_MAXVERTS	16000	//index_t may be 16 bits
 
 typedef struct
@@ -9619,13 +9619,25 @@ static void VBSP_DetailObject(detailmesh_t *m, const detailobjlump_t *o, const f
 			VBSP_DetailQuad(m, p, NULL, st, rgba);
 		}
 		else
-		{	//facing the viewer: Source's dx is the viewer's LEFT, so x offsets are negated
+		{	//facing the viewer: Source's dx is the viewer's LEFT, so x offsets are negated.  A sprite
+			//Source sends down its fast path (DetailObjectIsFastSprite) is a symmetric quad round a fixed
+			//point instead (GetSpriteMiddleBottomPosition: (ul.x+lr.x)/2 along -x), so an off-centre
+			//rectangle does not swing round its origin as the view turns.
+			float x0 = -ul[0], x1 = -lr[0];
+			vec3_t a;
+			VectorCopy(o->origin, a);
+			if (o->orientation == 2 && !o->lightstylecount && !o->shapeangle && !o->shapesize && !o->sway)
+			{
+				a[0] -= (ul[0] + lr[0]) / 2;
+				x0 = (lr[0] - ul[0]) / 2;
+				x1 = -x0;
+			}
 			for (i = 0; i < 4; i++)
-				VectorCopy(o->origin, p[i]);
-			VectorSet(off[0], -ul[0], ul[1], o->orientation == 1);
-			VectorSet(off[1], -ul[0], lr[1], o->orientation == 1);
-			VectorSet(off[2], -lr[0], lr[1], o->orientation == 1);
-			VectorSet(off[3], -lr[0], ul[1], o->orientation == 1);
+				VectorCopy(a, p[i]);
+			VectorSet(off[0], x0, ul[1], o->orientation == 1);
+			VectorSet(off[1], x0, lr[1], o->orientation == 1);
+			VectorSet(off[2], x1, lr[1], o->orientation == 1);
+			VectorSet(off[3], x1, ul[1], o->orientation == 1);
 			VBSP_DetailQuad(m, p, off, st, rgba);
 		}
 	}
@@ -9683,14 +9695,19 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 							const detailkey_t *keys, size_t first, size_t count, unsigned int nverts)
 {
 	detailcell_t *c = &prv->detailcells[prv->numdetailcells];
-	model_t *m = modfuncs->BeginSubmodelLoad(va("*detail/%08x/%u", hash, (unsigned)prv->numdetailcells));
+	//Named by index, so every map shares the same few model-table entries (an entry is never freed
+	//before vid_restart); the surface name says whose cell it holds.
+	model_t *m = modfuncs->BeginSubmodelLoad(va("*detail/%u", (unsigned)prv->numdetailcells));
+	galiasinfo_t *held;
 	entity_t *ent = &c->ent;
+	char tag[64];
 	size_t k;
 
 	if (!m)
 		return;
-	//Not when it is loaded (the same lump on a reload) or still loading (built on an earlier frame).
-	if (m->loadstate != MLS_LOADED && m->loadstate != MLS_LOADING)
+	Q_snprintfz(tag, sizeof(tag), "detail %08x %u", hash, (unsigned)first);
+	held = (m->loadstate == MLS_LOADED || m->loadstate == MLS_LOADING) ? (galiasinfo_t*)m->meshinfo : NULL;
+	if (!held || m->type != mod_alias || strcmp(held->surfacename, tag))
 	{
 		galiasinfo_t *g = plugfuncs->GMalloc(&m->memgroup, sizeof(*g));
 		galiasskin_t *skin = plugfuncs->GMalloc(&m->memgroup, sizeof(*skin));
@@ -9711,7 +9728,7 @@ static void VBSP_DetailCell(model_t *world, vbspinfo_t *prv, const char *shader,
 				VBSP_DetailObject(&dm, o, sprdict + o->model*8, keys[k].idx & 1);
 		}
 
-		Q_strlcpy(g->surfacename, "detail", sizeof(g->surfacename));
+		Q_strlcpy(g->surfacename, tag, sizeof(g->surfacename));
 		g->numverts = dm.nv;
 		g->ofs_skel_xyz = dm.xyz;
 		g->ofs_skel_norm = dm.norm;
@@ -9803,6 +9820,12 @@ static void VBSP_DetailBuild(model_t *mod)
 		prv->detailfade = min(prv->detailfade, prv->detailfadestart);
 		prv->detailmaxd = min(prv->detailmaxd, prv->detailfadeend);
 	}
+	if (prv->detailmaxd <= 0)
+	{
+		plugfuncs->Free(objs);
+		plugfuncs->Free(sprdict);
+		return;
+	}
 	Q_strlcpy(mat, prv->detailmaterial, sizeof(mat));
 	if (!Q_strncasecmp(mat, "materials/", 10))
 		memmove(mat, mat+10, strlen(mat+10)+1);
@@ -9832,7 +9855,11 @@ static void VBSP_DetailBuild(model_t *mod)
 		}
 		v += ov;
 	}
-	prv->detailcells = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->detailcells)*maxcells);
+	if (maxcells > prv->maxdetailcells)
+	{
+		prv->detailcells = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->detailcells)*maxcells);
+		prv->maxdetailcells = maxcells;
+	}
 
 	for (first = 0, nverts = 0, i = 0; i <= (size_t)nobj; i++)
 	{
