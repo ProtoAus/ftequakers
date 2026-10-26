@@ -26,9 +26,13 @@ lists, invalid source, linked8/public12-hex identity, a record at rank1206,
 wrong name/source/style/leg exclusions, global displayed rank versus filtered
 position, and absolute paging after seeking. Existing completion-pool46/0,
 board all-pass and web0-failed; JS/Python syntax and diff checks pass. Limits:
-first-page work is reduced, but no actual-client frame-time claim; owner/peer
-processes blocked the quiet-window UI rig and were left untouched. Visual/input,
-real Steam/friends/chat and owner feel remain pending in lextest.md. Optional
+first-page work is reduced, but no actual-client frame-time claim. The initial
+busy window cleared without interrupting owner/peer processes. Isolated offline
+old-Home -> Maps control and new Home -> Maps -> Settings -> Home subject then
+passed;1920x1111 screenshots inspected (not the initially requested1280x720).
+This falsified a missing Maps screen switch/preparation-order bug; fixed before
+final qualification. Real populated UI, Steam/friends/chat, completion UI and
+owner feel remain pending in lextest.md. Optional
 headless-browser launcher produced no DOM/screenshot/request and is NOT a pass.
 Not deployed: live backend promotion requires coordination with its existing
 owner-guarded cohort; no maintenance/ownership checks were bypassed. See public
