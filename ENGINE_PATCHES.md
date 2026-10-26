@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1037 - response contexts on by default; context-filtered triggers are the server's (qwprogs, csprogs)
+
+Problem: Patch 1036 shipped behind vbsp_contexts 0, the fail-open that pins a player at bhop_tealbox's
+spawn and opens bhop_2shiny2shuckle's stage-2 door without flint and iron. Switching it on alone breaks
+prediction: the client mirror (cl_triggers.qc) failed filter_activator_context open, so it predicted
+triggers the server now refused. Live csprogs 0e222115 with contexts on, tealbox, walking inside the
+spawn teleport: 24 prederr lines (20-119 u) and 2516 refused client teleports in 3 reps; bhop_whitebox,
+2 of 2 crossings into setspeed *14 predicted a (0 260 300) launch the server did not give (vz 0.00).
+
+Change (FTESurf main 7b3074f1): vbsp_contexts is registered with default 1 beside its one read
+(SV_EntityIOBuild); a cfg's `set vbsp_contexts 0` is the kill switch. A process that ran Patch 1036's
+progs keeps the "" its unregistered cvar() read created, so the default lands on a restart. Client: at
+load a filter is judged twice, as if the server ignores contexts and as if it judges them; a slot that
+passes only the first way is skipped at touch time while serverinfo fs_contexts is not "0" (read per
+frame and at load; absent counts as on); one that fires rows of its own, or a trigger_multiple, is
+demoted. Per frame because fs_contexts is a fullserverinfo stufftext that can land after
+CSQC_WorldLoaded: a load-time read saw it absent on tealbox while the server had it on (2628 refused
+client teleports), the race Patch 285 measured for *csprogs. The client does not use STAT_FS_CTX.
+A mirror of the contexts themselves (seeded from STAT_FS_CTX, delay-0 rows replayed) was built and
+reviewed, not shipped: most writers are delayed rows, trigger_userinput, logic chains and save loads,
+which the client cannot see, and storing the rows overflowed TIO_MAX on 24 maps. BACKLOG has the list.
+
+Verified (shipping build qwprogs 6c7adb36, csprogs 8b8731c4; rig, exe 9d009302, sv_minping 60, 3 reps,
+server default): tealbox 0 prederr, 0 client teleports, 47 slots left to the server; whitebox *138 ->
+*14 the server reports vbsp_contexts 1, 0 client setspeed fires, 0 prederr; contexts 0: tealbox 0
+prederr with 2712 client teleports (both sides fail open), whitebox's wall-walk prederr (4 lines) the
+same as the old client's (4). Deployed both installs and lobbies 1-12 (restarted): all 12 report
+fs_contexts 1 by rcon serverinfo; pi_lobby_smoke lobby 1, 0 failures. Five review rounds (the mirror's
+8 findings, then the load-time rule, its read, the per-frame gate with N1 -- the first replay precedes
+Trig_Frame -- and the rebase). Limits: these triggers act one round trip late; servers older than
+Patch 1036 publish no key, so the client leaves those triggers to them too.
+
 ## Patch 1041 - props honour rendermode/renderamt and the Alpha input (qwprogs)
 
 Problem: Lex, 26 Oct: surf_hourglass's vortex sits on an opaque white square. The square is prop_dynamic
