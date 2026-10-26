@@ -1590,7 +1590,21 @@ void CL_PredictMovePNum (int seat)
 				  promise is "a snap-back is a bug" has to be a NUMBER somebody
 				  can quote, not a vibe.  One line per acked command, gated on
 				  cl_prederror (units, 0 = off).*/
-				if (cl_prederror.value > 0)
+				/*FTESurf Patch 1040: not while noclipping within 0.3 s of a noclip speed change (P1029's
+				  Shift+wheel).  The server applies pm_noclipspeed at whichever command it runs next and the
+				  client re-predicts every unacked command at the new speed, so one or two commands in flight
+				  disagree by construction (5.2 or 10.4 units between 4x and 6x, measured, hosted game or not);
+				  only a per-command speed would remove it.  Noclip voids the run, and this line is for
+				  disagreements nobody has explained.*/
+				static float pt_ncspeed;
+				static double pt_ncchanged = -1;
+				if (movevars.noclipspeed != pt_ncspeed)
+				{
+					pt_ncspeed = movevars.noclipspeed;
+					pt_ncchanged = realtime;
+				}
+				if (cl_prederror.value > 0 &&
+					!((from.state->pm_type == PM_SPECTATOR || from.state->pm_type == PM_OLD_SPECTATOR) && realtime - pt_ncchanged < 0.3))
 				{
 					static int pt_err_lastseq[MAX_SPLITS];
 					vec3_t perr;
@@ -2121,18 +2135,6 @@ void CL_PredictMovePNum (int seat)
 void CL_PredictMove (void)
 {
 	int i;
-
-#ifdef HAVE_SERVER
-	//FTESurf Patch 1040: in a game this client hosts, predict noclip at the speed the server flies it NOW.
-	//The server reads pm_noclipspeed into movevars for every command (SV_SetQWClientMoveVars); the client
-	//took it from serverinfo, a frame later, so a Shift+wheel change mid-flight (P1029) re-predicted the
-	//commands in flight at the old speed and printed prederr lines.  A remote server still has only serverinfo.
-	if (sv.state == ss_active && NET_IsLoopBackAddress(&cls.netchan.remote_address))
-	{
-		extern cvar_t pm_noclipspeed;
-		movevars.noclipspeed = pm_noclipspeed.value > 0 ? pm_noclipspeed.value : 4;
-	}
-#endif
 
 	// Set up prediction for other players
 	CL_SetUpPlayerPrediction(false);
