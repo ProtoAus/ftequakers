@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1054 - tabbed Home, personal leaderboard seek and completion sources (QC/web)
+
+**Problem:** The initial menu separated lobbies/social/progress, while lobbies
+occupied map-list space. Finding one's imported/native record required scrolling;
+large first replies added loading/decoding work. Completion combined native and
+imported finishes without an explicit WOS-only view.
+
+**Change:** Home presents the lobby grid, native WOS figures, per-tier completion
+and official own Story/Event progress, alongside existing Friends and public/DM
+chat. Persistent tabs give Maps its own space. Only an explicit unlinked response
+shows the Steam-link call to action. Both board interfaces seek the current
+public identity within the selected map/build/leg/source/style/name filters and
+retain absolute paging offsets; no match does not widen filters. First pages and
+prefetches are bounded to40 rather than100 rows. Profile completion offers
+WOS/Everything in-game and on the website, including source-aware tier lists and
+identical known enabled map populations. No native/API/evidence-format change;
+engine commit/tag pins and qcbuild remain unchanged.
+
+**Verified:** Isolated standard pwsh7 NoDeploy build: server/menu0 warnings, CSQC
+only its two existing untouched setproperty227 warnings (no new warnings).
+Synthetic completion/seek controls pass: imported-only/native/both/stage cases,
+game/web equality, surf/bhop split, unchanged denominator, source-specific tier
+lists, invalid source, linked8/public12-hex identity, a record at rank1206,
+wrong name/source/style/leg exclusions, global displayed rank versus filtered
+position, and absolute paging after seeking. Existing completion-pool46/0,
+board all-pass and web0-failed; JS/Python syntax and diff checks pass. Limits:
+first-page work is reduced, but no actual-client frame-time claim; owner/peer
+processes blocked the quiet-window UI rig and were left untouched. Visual/input,
+real Steam/friends/chat and owner feel remain pending in lextest.md. Optional
+headless-browser launcher produced no DOM/screenshot/request and is NOT a pass.
+Not deployed: live backend promotion requires coordination with its existing
+owner-guarded cohort; no maintenance/ownership checks were bypassed. See public
+FTESurf tools/p1054-home-leaderboard.md for source and delivery limits.
+
 ## Patch 1052 - explicit local TAS practice and retained ancestry (QuakeC, tools, surfd)
 
 Problem: slow practice and rewind exist, but TAS use has no explicit retained label or
@@ -23,9 +57,10 @@ inheritance, native observe/join, run_class 0, fresh reconnect/load. Acting runn
 recording TAS survived rewind and exact retry; completed local cheat.rec retained the
 TAS envelope and passed the recording reader. Two-client clean/running-TAS/armed-TAS
 watched-snapshot acceptance: 9 checks passed with actual server-side save flags.
-Independent review found additional save writers/masks/target ancestry before promotion. Limits: no stepping/editor/optimizer/signatures/public
-TAS board yet; no new native semantics, engine commit/tag pin or qcbuild. Manual feel/
-labels pending owner check. Detailed implementation/promotion: tools/p1052-tas.md in QC.
+Independent review found additional save writers/masks/target ancestry before promotion.
+Limits: no stepping/editor/optimizer/signatures/public TAS board yet; no new native
+semantics, engine commit/tag pin or qcbuild. Manual feel/labels pending owner check.
+Detailed implementation/promotion: tools/p1052-tas.md in QC.
 
 ## Patch 1053 — complete interrupted initial receipt observations
 
