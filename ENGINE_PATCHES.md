@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1036 - response contexts: AddContext/RemoveContext/ClearContext and filter_activator_context, default off (qwprogs)
+
+Problem: Lex, 26 Oct: bhop_orgrimmar prints "AddContext is not implemented". 80 library maps put 10,069
+triggers behind a filter_activator_context, nearly all the momentum_tools bhop port (_mom_leftground);
+the filter was freed at spawn and the inputs censused, so every one failed open. Measured effects of
+failing open: bhop_2shiny2shuckle's stage-2 door opens without flint and iron; bhop_tealbox teleports a
+player every tick at spawn (ftesurf-2c, P1037).
+
+Change (src/server/sv_entities.qc, sv_saveloc.qc, sv_rewindstate.qc, sv_timer.qc, sv_main.qc), written
+from Momentum's own source (baseentity.cpp AddContext/HasContext/InputRemoveContext, AI_Criteria.cpp
+SplitContext, filters.cpp CFilterContext, matchers.cpp): a per-entity "key:value\n" list; the inputs;
+the filter (HasContext's key-as-pattern, GetContextValue by exact name, '*'/'?' anywhere, `any`,
+Negated); the ResponseContext keyvalue (last wins, parsed on first use). The filter is SV_LateStash'ed
+so no edict renumbers (the physent digest). Contexts are map progress like targetname: cleared on
+respawn, carried by saves, rewinds, the resume park and retry (`contexts 1` + `context k v` lines,
+written only while live). Gated on vbsp_contexts (default 0 = the fail-open that shipped), latched at
+map load with vbsp_entity_io; serverinfo fs_contexts and string stat STAT_FS_CTX 184 feed the client
+mirror (P1037); .rec header `contexts 0|1`; ent_io counts.
+
+Verified (rig, bhop_2shiny2shuckle, qwprogs swapped): lump last edict #1357 on the deployed build and
+on the new one at 0 and 1; the plates add rr and rl, respawn clears, sl_load restores; the stage-2 door
+stays shut at 1 (context filters 0 pass / 504 fail; no env_shake) and opens at 0 as before; serverinfo
+fs_contexts 0/1; a save at 0 has no marker, at 1 the marker and both entries. test_reccheck 924, 0
+failed. Three review rounds (fidelity; consequences): stash, saves, header key, matcher fixes. Limits:
+"@/" regex values; contexts are not cleared at a run's arm (shared with targetname, BACKLOG).
+
 ## Patch 1035 - env_sprite flipbooks cycle at the entity's framerate; framerate 0 is a still frame (hl2 plugin, csprogs)
 
 Problem: Patch 1034 cycles every multi-frame Sprite at Source's env_sprite default 10, but the rate is the
