@@ -1,5 +1,14 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1049 - func_conveyor and func_illusionary ignore their angles, as Source (qwprogs, csprogs)
+
+From Patch 1048's review: CFuncConveyor's base is CFuncWall, whose Spawn zeroes the angles (direction is
+movedir, converted first), and CFuncIllusionary::Spawn zeroes them too (bmodels.cpp:308). 18 rotated solid
+conveyors on 6 maps (deathrun_forest 10) and 25 rotated illusionaries on 2 (bhop_shust_extension 21, surf_me
+4) now face as Source has them; our conveyor speed already came from movedir. ent_view's hull overlay draws
+func_wall, func_wall_toggle, func_conveyor and func_illusionary unrotated. Verified: both maps load with no QC
+error; lobby smoke 0 failures. The browser run viewer still applies map angles (BACKLOG).
+
 ## Patch 1048 - func_wall ignores its angles, as Source (qwprogs)
 
 Problem: Lex, 26 Oct, bhop_goldsrc2: the sparking object on the wall is missing. It is func_wall *80, a
