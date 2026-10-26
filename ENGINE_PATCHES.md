@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1034 - env_sprite flipbooks animate (exit signs, smoke, screens) (hl2 plugin)
+
+Problem: Lex, 26 Oct: an env_sprite with a multi-frame VTF (exit1 is 25 frames at 40fps) renders frozen
+on frame 0. Source drives a sprite flipbook from the env_sprite's framerate, not from a VMT
+AnimatedTexture proxy, so a bare "Sprite" VMT set nothing and the Patch-195 flipbook path never claimed
+it; routing it there naively then multiplied it by a lightmap it has no coords for, which still froze it.
+
+Fix (plugins/hl2/mat_vmt.c): synthesize the AnimatedTexture proxy for a multi-frame Sprite basetexture
+(VMT_VTFFrames peeks the VTF header's numframes so only a real flipbook is touched and single-frame
+sprites keep their path), add "Sprite" to the animate dispatch's type list, and mark a Sprite animunlit
+so it takes vmt/animated's #UNLIT path off the lightmap. The additive blend comes from cl_sprites.qc's
+DRAWFLAG_ADD, so no blend or shader change is needed.
+
+Verified on bhop_goldsrc2 (conbridge, static scene, sprite-region pixel diff over 2.3s): Xsmoke1 15-frame
+= 6.65 vs 0.00 for the patch-1028 control; exit1 animates (1.39); single-frame flare1 = 0.00, unchanged.
+Rate is Source's env_sprite default 10; the per-entity rate (exit1 = 40) is a follow-up that threads the
+framerate from cl_sprites.qc.
+
 ## Patch 1028 - info_particle_system answers Start and Stop (qwprogs, csprogs)
 
 Problem: Lex, 26 Oct: bhop_ceaseless's button at the start (OnIn `info_particle_system,Stop`, OnOut
