@@ -1,5 +1,111 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1048 - func_wall ignores its angles, as Source (qwprogs)
+
+Problem: Lex, 26 Oct, bhop_goldsrc2: the sparking object on the wall is missing. It is func_wall *80, a
+14x16x22 panel with angles 0 90 0. CFuncWall::Spawn sets its angles to zero (bmodels.cpp:49), and
+CFuncWallToggle's is CFuncWall's first; ours kept them, so the brush model's absolute coordinates turned 90
+degrees about the world origin -- drawn and solid somewhere else.
+
+Fix (src/server/sv_entities.qc): func_wall (not the aliases that call it: func_lod, the button stand-ins)
+and func_wall_toggle zero their angles before setmodel. Library: 9 func_walls with non-zero angles on 2 maps
+(deathrun_forest 8, goldsrc2 1), 0 func_wall_toggles; their collision moves to where Source has it (beta).
+
+Verified (rig, goldsrc2 at the panel, qwprogs and csprogs swapped): the green/red panel is drawn on the wall
+with P1046's sparks coming off it; the deployed build shows bare wall there.
+
+## Patch 1047 - skeletal Source props skin on the GPU, and unbaked props instance (GL client)
+
+Problem: Lex, 26 Oct: surf_hourglass's save 3 view runs at 70-80 fps ("sounds like instancing issue?").
+r_budget: CPU-bound, 10.8 ms of 12.4 in draw calls, r_drawentities 0 gives 522 fps. R_GAlias_DrawBatch asked
+for GPU skinning only when the shader-level program had SKELETAL; the hl2 plugin's VertexLitGeneric puts its
+program in a pass, so every skeletal Source model (the map's 176 prop_dynamic, viewmodels) was skinned on
+the CPU every frame with no VBO, and P831's instancing refused every prop without baked VRAD colours.
+
+Change:
+- engine/gl/gl_alias.c R_GAlias_ShaderSkeletal: GPU skinning when every program the shader draws with has
+  SKELETAL (the rule GLBE_InstanceShader uses for INSTANCED, remapto followed).
+- engine/gl/gl_backend.c GLBE_SubmitInstancedRun: props with no bake join (they draw without VC and never
+  read the pool); a run never mixes baked and unbaked members, never takes a member with no VBO (a
+  CPU-skinned pose of its own), and joins only members whose bone matrices equal the first's (the bones are
+  one set of uniforms: an animating prop draws alone). A program that cannot take SKELETAL|INSTANCED turns off
+  skinned runs only (inst_broken_skel), not instancing for every prop.
+- engine/shaders/glsl/crepuscular_opaque.glsl skins (SKELETAL, FRAMEBLEND, as depthonly): GPU-skinned props
+  drew their sun-ray occluder in the rest pose. r_bishaders.h took only that entry -- regenerating the
+  header without a Vulkan toolchain drops every Vulkan blob.
+
+Verified (rig, Lex's r_renderscale 2, uncapped): hourglass s3 80 -> 407 fps (frame 12.49 -> 2.45 ms, GPU
+10.1 -> 1.1), r_instancing 2 "cannot join" 81 -> 0; props pixel-identical CPU against GPU skinned and
+instancing on against off (differences only in the animated water, the sky and the overlay).
+surf_imaginarium (153 animated prop_dynamic) 178 -> 191 fps, same picture; the knife and USP viewmodels
+identical. Three review rounds: CPU-skinned members in a run, the occluder pose, the compile-failure scope.
+Untested: SKELETAL|INSTANCED on a GPU other than this PC's RTX 2080 SUPER (a failure turns skinned runs off).
+
+## Patch 1046 - env_spark sparks as often as Source (csprogs)
+
+Problem: Lex, 26 Oct, bhop_goldsrc2: "spark is much lesser than momentum mod". cl_emit.qc read MaxDelay 0 as
+one burst every 3 s and any other value as one every MaxDelay, 4 + 3 x Magnitude particles a burst.
+
+Change (src/client/cl_emit.qc): CEnvSpark::SparkThink re-arms at 0.1 + random(0, MaxDelay) (EnvSpark.cpp:119),
+so the rate is 1 / (0.1 + MaxDelay/2) -- ten a second at 0 -- and a burst is FX_ElectricSpark's 2-4 x
+Magnitude^2 big and 16-32 x Magnitude small sparks (fx_sparks.cpp:332, 383), mean 3 M^2 + 24 M. Sparks have
+their own budget (EM_SPARK_BUDGET 1500 a second, all sparks in range, reported by emit_list): charged per
+spawn against the shared 2000, one Magnitude 5 spark (surf_nightmare) took 1950 of it.
+
+Verified (rig, goldsrc2 at the spark, csprogs swapped): a continuous shower where the deployed build shows a
+spark every few seconds. Two review rounds (the shared budget). Limit: a fixed beat, not Source's random
+interval.
+
+## Patch 1045 - a Refract whose normal map is not installed draws without warp (hl2 plugin)
+
+Problem: Lex, 26 Oct: surf_hourglass's water is "very inaccurate and bad". It is a Refract whose only texture
+is $normalmap water/tfwater001_normal (TF2's). Refract binds it as a pass map, so without TF2 the missing
+checker became the normals: at hl2_refract 1 the screen's left edge smeared into the water and the rocks drew
+ghosted.
+
+Fix (plugins/hl2/mat_vmt.c): after the fill, normalmapgone records a $normalmap the image search
+(VMT_OwnImageExists: its paths and extensions) cannot find, and an uninstalled $dudvmap is cleared; the Refract
+arms that bind the map treat it as none ($identitynormal, #NOWARP; mode 0 falls back to $dudvmap), while
+VMT_RefractBlend still reads the authored key, so the blend is as before. The underwater overlay keeps its tint
+and blur with REFRAMOUNT 0 and no REFRSINE ($identitynormal decodes to a small offset there). P1042 makes the
+map mount TF2 where it is installed.
+
+Verified (owned rig, Lex's saves 1 and 4, hl2_refract 1): without TF2 the old plugin streaks and ghosts and
+this one draws the water clean; with TF2 the ripples are unchanged. Four review rounds.
+
+## Patch 1044 - env_smokestack smoke drawn with its own numbers (csprogs)
+
+Problem: Lex, 26 Oct, bhop_orgrimmar: "particles not accurate to momentum mod, smoke blowing". A growing
+smokestack drew a colour-bucket block normalised to full brightness, 1.2-1.8 s, on a dot: the map's
+rendercolor 42 42 42, renderamt 100, 6 s columns came out as short white dots.
+
+Change (src/client/cl_emit.qc): a stack in particle/SmokeStack.vmt with EndSize > StartSize (651 of the
+library's 727 growing stacks) gets an r_part block per look (60 in the library, 5 at most on one map), from
+c_smokestack.cpp: life JetLength/Speed, StartSize to EndSize (each lerp ramp entry carries the size: the ramp
+sets it every frame), renderamt/255 times the cosine rise and squared fall, rendercolor scaled for the
+fallback texture's mid grey; QC places each puff on the ring of BaseSpread with +-SpreadSpeed along the jet's
+right and forward. emit_list reports the looks. Not drawn: env_particlelight (8 in the library).
+
+Verified (rig, orgrimmar near Lex's save 3, csprogs swapped): emit_list "1 smoke looks of its own, 1
+answering"; a grey column billows up from each brazier where the deployed build shows dots. Two review rounds
+(the first cut never grew: the ramp's size). Whether it matches Momentum's look waits on Lex.
+
+## Patch 1043 - bhop_goldsrc2's func_physbox removed until physics exists (cfg/maps entity fix)
+
+Lex, 26 Oct: "Disable these func_physboxes for now, we don't have the box3d plugin loaded." Its 39 are movable
+crates Source drops at spawn; here they hung frozen and solid where placed (24 in a closed pit under a
+teleport, 15 in the air over stage 8), none named or wired. cfg/maps/entfix_bhop_goldsrc2.cfg filters them
+(P890's applier on the real lump and the rig: 39 removed, nothing else; *entfile set). The other 642 solid
+movable physboxes on 75 maps are untouched. It removes solid entities: the physent digest moves and earlier
+goldsrc2 runs are refused (beta, Lex). One review round (consequences): no route opens.
+
+## Patch 1042 - mapdeps.py follows $normalmap and the flow maps (tools)
+
+tools/mapdeps.py's TEXKEYS lacked $normalmap and P990's $flowmap/$flow_noise_texture, which mat_vmt.c loads,
+so surf_hourglass (TF2 water normal map) got no dep line. Library, same disk, old against new tool: +26 lines
+on 25 maps, none removed. The install catalogue took those maps' rows through --update-map (digest-checked):
+surf_hourglass now mounts TF2 (rig: fs_automount_state 1, the normal map found in tf2_textures_dir.vpk).
+
 ## Patch 1037 - response contexts on by default; context-filtered triggers are the server's (qwprogs, csprogs)
 
 Problem: Patch 1036 shipped behind vbsp_contexts 0, the fail-open that pins a player at bhop_tealbox's
