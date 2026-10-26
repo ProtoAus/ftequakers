@@ -1,5 +1,59 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1040 - a noclip speed change prints no prederr lines (GL client)
+
+Problem: Lex, 26 Oct: Shift+wheel (P1029) changes pm_noclipspeed mid-flight and prints prederr lines. The
+server applies the new speed at whichever command it runs next and the client re-predicts every unacked
+command at the new speed, so one or two commands in flight disagree by construction (5.2 or 10.4 units
+between 4x and 6x). A first cut read the cvar directly in a hosted game: 19 -> 16 lines, dropped.
+
+Fix (engine/client/cl_pred.c): the prederr print is skipped while noclipping (acked pm_type PM_SPECTATOR or
+PM_OLD_SPECTATOR) within 0.3 s of a movevars.noclipspeed change. Noclip voids the run; the prediction itself
+is unchanged.
+
+Verified (rig, hosted bhop_monster_jam, noclip, +forward, pm_noclipspeed toggled 4/6 sixteen times at
+0.3 s): installed exe 18 prederr lines, this exe 0. One review round, nothing found. Limit: the wheel on a
+remote lobby is untested (BACKLOG, P1029).
+
+## Patch 1039 - a VMT with no $basetexture draws white, as Source (hl2 plugin)
+
+Problem: Lex, 26 Oct: surf_bossfight's window frame, lamp and radiator draw the missing checker. They are
+VertexLitGeneric { $color2 } with no $basetexture; the plugin took the material's own name as the texture,
+where Source binds TEXTURE_WHITE (vertexlitgeneric_dx9_helper.cpp, lightmappedgeneric_dx9_helper.cpp).
+
+Fix (plugins/hl2/mat_vmt.c): nobasetex also covers a material with no $basetexture whose own name the
+engine's image search would not find (VMT_OwnImageExists: as named, textures/, override/, dds/, every
+default extension); VMT_BaseImage gives $whiteimage then, at all base-texture emits including Modulate,
+DecalModulate and $selfillum 1. vmt/water drops #ALPHA (its base layer) then; vmt/waterbudget keeps it
+(its opacity).
+
+Verified (rig, surf_bossfight at Lex's save 2, plugin swapped): the plugin's own report went from 3
+materials drawing the missing checker (masog/surf_christmas3/lit_black, masog/surf_map_of_the_day/lit_gray1,
+masog/surf_polonia/yeslitgray) to 0; white frame, grey radiator, dark lamp. Three review rounds. Limit: a
+material with no $basetexture but a same-named texture still uses it, where Source draws white.
+
+## Patch 1038 - Source detail props (grass) (hl2 plugin)
+
+Problem: Lex, 26 Oct: bhop_monster_jam has no grass. The BSP's detail objects (game lump dprp) were never
+read: 66 library maps carry 864,045 of them.
+
+Change (plugins/hl2/mod_vbsp.c, mat_vmt.c, glsl/vmt/detail.glsl), written from detailobjectsystem.cpp:
+sprites, crosses and tris; the lump is built on the first frame that draws it into 1024-unit cells of at
+most 16,000 vertices, each a rigid alias model named *detail/<n>. The names are shared by every map
+(model-table entries are never freed before vid_restart, MAX_MOD_KNOWN 8192: three dense maps with per-map
+names hit Sys_Error); the surface name carries a content tag (lump, material, distances) that decides
+reuse, and an entry is only built while unloaded. fromgame is fg_new (gl_shader.c consults no plugin
+material loader for fg_quake). vmt/detail turns billboards to the viewer, Source's fast-sprite centring,
+bFlipped alternating by lump index, colour pow(c*2^exp/255, 1/2.2), alpha test 0.5 and a dithered fade in
+squared distance; cl_detaildist 1200 / cl_detailfade 400 lowered by env_detail_controller (keys default 0,
+as Source). Cells cull by distance, PVS and frustum. hl2_detail 0 turns it off; detail_census prints the
+main view's counts.
+
+Verified (rig): monster_jam 7,700 objects, 62 cells in 6 ms, drawn at Lex's save; monster_jam -> blacktop
+-> monster_jam in one session 62 / 186 / 62 cells, drawn on return; vid_restart rebuilds and draws; surf_castle
+279,380 objects. Four review rounds. Limits: model-type detail objects are not drawn (1,342 on 2 maps); no
+sway, shape angles or lightstyles.
+
 ## Patch 1036 - response contexts: AddContext/RemoveContext/ClearContext and filter_activator_context, default off (qwprogs)
 
 Problem: Lex, 26 Oct: bhop_orgrimmar prints "AddContext is not implemented". 80 library maps put 10,069
