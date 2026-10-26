@@ -35,8 +35,11 @@ was reachable from a cvar.  Now:
 
   hl2_imposter 0  WindowImposter draws nodraw -- whatever is behind it shows
                   through, which on a fake-sky slab is the map's REAL sky
-               1  Source's behaviour: the $envmap cubemap, sampled by view
-                  direction, opaque  (DEFAULT)  -- FTESurf Patch 263
+               1  the $envmap cubemap, sampled by view direction, opaque
+                  and writing depth  -- FTESurf Patch 263
+               2  as 1, blended with no depth writes like Source's
+                  windowimposter_dx90.cpp, ahead of other blended surfaces
+                  (DEFAULT)  -- FTESurf Patch 1033
 
 BUILD 12: WHY DITHER IS THE CHEAP ONE, not a compromise.  Mode 0 removed the
 render target but left a BLENDED surface, and a blend is not free: it cannot
@@ -4512,6 +4515,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tsurfaceparm nodraw\n");
 		else
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"vmt/imposter%s\"\n", progargs);
+		//FTESurf Patch 1033: 2 = Source's state (windowimposter_dx90.cpp blends and writes no depth), ahead of
+		//other blended surfaces, so a fading func_lod outside bhop_ceaseless's fake sky is not cut by it.
+		if (hl2_imposter && hl2_imposter->ival == 2)
+		{
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tsort seethrough\n");
+			st->translucent = 1;
+		}
 	}
 	/*
 	FTESurf Patch 236: a LIGHTMAPPED material does not stop being lightmapped
