@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1052 - explicit local TAS practice and retained ancestry (QuakeC, tools, surfd)
+
+Problem: slow practice and rewind exist, but TAS use has no explicit retained label or
+staged editor/contributor contract. Older position-only save transformations cannot
+silently drop assisted ancestry and then call the result human or ordinary segmented.
+
+Change: tas on/off/status/speed reuses per-player P954 pacing and guards. TF_TAS bit22
+retains the local practice/cheat envelope through saves, rewind, demotion, retry and
+native observe/join. Replay/view placement can raise restrictions without asserting
+trusted capture. Old TAS gift/mirror transfers are refused/omitted until ancestry can
+be preserved; protected/incomplete lists retain data. Reader validates the envelope;
+backend independently excludes TAS from human/segmented admission and certification.
+Labels identify TAS; tools/plan-tas.md stages tick advance, timeline re-simulation,
+optimization, signed contribution history and a separate verifier/board.
+
+Verified: isolated clean-base/subject build, no new warnings (same two existing client
+property warnings); reader 930 checks zero failed; board suite zero failures; canonical
+497 recordings/167 sidecars: same 306 existing faults, no increase or mutation. Real
+client/dedicated-server controls exercised clean/TAS saves, speed/refusal/off, clean-load
+inheritance, native observe/join, run_class 0, fresh reconnect/load. Acting running and
+recording TAS survived rewind and exact retry; completed local cheat.rec retained the
+TAS envelope and passed the recording reader. Two-client clean/running-TAS/armed-TAS
+watched-snapshot acceptance: 9 checks passed with actual server-side save flags.
+Independent review found additional save writers/masks/target ancestry before promotion. Limits: no stepping/editor/optimizer/signatures/public
+TAS board yet; no new native semantics, engine commit/tag pin or qcbuild. Manual feel/
+labels pending owner check. Detailed implementation/promotion: tools/p1052-tas.md in QC.
+
 ## Patch 1053 — complete interrupted initial receipt observations
 
 **Problem:** An initial receipt read could store an independent fault while a
