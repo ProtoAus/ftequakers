@@ -859,6 +859,7 @@ typedef struct
 	points at something other than the base texture.
 	*/
 	float animrate;
+	float spriterate;	//FTESurf Patch 1035: an env_sprite's own framerate, from a "ftesurf/spranim/<rate>/" name (Shader_LoadVMT); 0 = none
 	char animvar[64];
 	char animpass;	//the program went into a pass, so progblendfunc must not also be emitted
 	/*
@@ -3021,14 +3022,14 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	AnimatedTexture proxy (exit1.vmt is a bare "Sprite" + $basetexture, a 25-frame VTF).
 	Give a multi-frame Sprite the same proxy the world path uses so the shared vmt/animated
 	dispatch below cycles it.  Narrowed to real flipbooks by the frame peek so single-frame
-	sprites keep their path.  Rate 10 is a placeholder (Source's env_sprite default); the
-	per-entity rate is threaded from cl_sprites.qc.
+	sprites keep their path.  The rate is the env_sprite's own framerate when cl_sprites.qc names
+	it (Patch 1035, "ftesurf/spranim/<rate>/" via Shader_LoadVMT), else Source's default 10.
 	*/
 	if (hl2_animated && hl2_animated->ival && !Q_strcasecmp(st->type, "Sprite") &&
 	    *st->tex[0].name && st->animrate <= 0 && VMT_VTFFrames(st->tex[0].name) > 1)
 	{
 		Q_strlcpy(st->animvar, "$basetexture", sizeof(st->animvar));
-		st->animrate = 10;
+		st->animrate = (st->spriterate > 0) ? st->spriterate : 10;
 	}
 
 	if (st->nodraw)
@@ -5264,6 +5265,8 @@ qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
 static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*LoadMaterialString)(parsestate_t *ps, const char *script))
 {
 	vmtstate_t st;
+	const char *vmtname = filename;
+	float spriterate = 0;
 
 	/*
 	FTESurf Patch 288: the colour-correction post-process, which is not a
@@ -5298,9 +5301,22 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 		return true;
 	}
 
+	//FTESurf Patch 1035: "ftesurf/spranim/<rate>/<material>" is cl_sprites.qc asking for an env_sprite
+	//flipbook at its own framerate (gated on hl2_sprite_framerate, mod_vbsp.c).  <material> is the real
+	//VMT and <rate> feeds the AnimatedTexture synthesis; the full name stays the shader's identity, so
+	//each rate is its own shader.
+	if (!Q_strncasecmp(filename, "ftesurf/spranim/", 16))
+	{
+		const char *slash = strchr(filename + 16, '/');
+		spriterate = atof(filename + 16);
+		if (!slash || spriterate <= 0)
+			return false;
+		vmtname = slash + 1;
+	}
+
 	memset(&st, 0, sizeof(st));
 	st.savefile = NULL;//ps->saveshaderbody;
-	if (!VMT_ReadVMT(filename, &st))
+	if (!VMT_ReadVMT(vmtname, &st))
 	{
 		/*
 		FTESurf build 11: COUNT THE MISSES, and remember the first name.
@@ -5405,7 +5421,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	//only thing in the map that knows which water that underside belongs to.  Recorded
 	//here rather than in VMT_ParseBlock because that recurses through patch/include
 	//chains whose intermediate states are not materials in their own right.
-	VMT_BottomRecord(filename, st.bottommaterial);
+	VMT_BottomRecord(vmtname, st.bottommaterial);
 
 	//FTESurf: the proxy graph is complete only once every include and patch has
 	//been folded in, so it is compiled into coefficients HERE and not inside
@@ -5413,7 +5429,8 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	//and whose Subtract comes from the patch that includes it is a real shape.
 	VMT_ResolveProxies(&st);
 
-	Shader_GenerateFromVMT(ps, &st, filename, LoadMaterialString);
+	st.spriterate = spriterate;	//Patch 1035: set after the parse, which owns the rest of st
+	Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 	return true;
 }
 

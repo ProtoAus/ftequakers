@@ -12800,6 +12800,15 @@ qboolean VBSP_Init(void)
 		*/
 		hl2_animated = cvarfuncs->GetNVFDG("hl2_animated", "0", CVAR_SHADERSYSTEM, "Source's AnimatedTexture proxy -- materials whose frames all live in one VTF (smoke, fire, screens, water).\n0: draw frame 0, which is what shipped before and what every one of these materials has always done (default).\n1: cycle them at the rate the material asks for. 3,342 materials across 741 maps carry the proxy, so this moves a large part of the library onto a separate GLSL 130 shader (vmt/animated) that nothing has exercised before -- which is why it is not on by default.", MAPOPTIONS);
 
+		/*
+		FTESurf Patch 1035: also how a csprogs knows it may ask for "ftesurf/spranim/<rate>/<material>"
+		(mat_vmt.c Shader_LoadVMT).  cl_sprites.qc tests its DESCRIPTION, which only this registration
+		attaches: a cfg_save full dump writes it as `set`, and replayed on an older plugin a value test made
+		exit1 vanish (measured, 26 Oct).  Set before this registers, it reads absent -- rate 10, safe.
+		Not CVAR_NOSAVE: plugin.c masks plugin cvar flags to ARCHIVE|CHEAT|SEMICHEAT.
+		*/
+		cvarfuncs->GetNVFDG("hl2_sprite_framerate", "1", 0, "env_sprite flipbooks (several frames in one VTF, no AnimatedTexture proxy) cycle at the env_sprite's own framerate keyvalue.\n1: each at its own rate (default).\n0: all at Source's default 10.\nNeeds hl2_animated 1; takes effect on the next map load.", MAPOPTIONS);
+
 		hl2_propdist = cvarfuncs->GetNVFDG("hl2_propdist", "0", CVAR_ARCHIVE, "Maximum draw distance, in units, for static props that declare NO fade distance of their own -- which on some maps is all of them (surf_demise: 2350 of 2350, median distance from the start 24,185 units, and drawing them costs 4.11M of the frame's 5.2M draw indices).\n0: no limit -- draw every prop at any distance (default, and what shipped before).\n>0: skip props further away than this. Source applies its own r_propsmaxdist in the same situation, so a limit here is closer to the map author's intent than none; the trade is that distant scenery disappears, which on a wide-open map is part of the view. Props that set their own fade distance are unaffected either way.", MAPOPTIONS);
 
 		hl2_rigidprops = cvarfuncs->GetNVFDG("hl2_rigidprops", "1", CVAR_MAPLATCH, "Load models compiled $staticprop as rigid geometry instead of as one-bone skeletal models.\n0: what shipped before -- every Source model carries bone weights, so com_mesh.c's rigid static-VBO path is unreachable and any prop surface whose material is not VertexLitGeneric is re-skinned on the CPU and re-uploaded every frame.\n1: emit no skinning data for a model studiomdl has already flattened (default). Measured: 73 of 73 prop models on surf_demise, 54 of 54 on surf_garden and 220 of 238 on ahop_coast are one-bone $staticprop with no animations, so the skinning they pay for is an identity transform. Models with a real rig -- ragdolls, NPCs, viewmodels -- are unaffected either way.", MAPOPTIONS);
