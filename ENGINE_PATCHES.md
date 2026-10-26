@@ -1,5 +1,61 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1051 - goto_start goes to the start of the track you are on (csprogs, qwprogs)
+
+Problem: players report goto_start "just does reset and doesn't go to stage 1". Patch 848 sent it to `!m`
+only while the timer was RUNNING past the run's first segment, else `!r`. An idle timer resets run_t_seg to
+0, so goto_start read "stage 1" wherever you were while `!r` went to the latched leg (run_leg_seg, kept until
+the map changes): after a void, armed in a stage start, finished, or on a run begun at a later stage, it
+landed on that stage's start.
+
+Change (FTESurf main 528c5ebe; cl_warpop.qc, sv_player.qc, sv_main.qc, sh_defs.qc): goto_start decides from
+`!r`'s own latched leg, published as STAT_FS_LEGTRACK 185 / STAT_FS_LEGSEG 186. Where that leg is its
+track's first segment it is `!r` (startmark, save in the box, a standing `!s 1`); else `!m` or `!b N`,
+predicted as before. A client that cannot predict (spectating, replays) sends `cmd zone_start`, the same
+rule on the server with the player's own leg. reset is unchanged.
+
+Verified (rig, surf_kitsune, exe e28907a1): from the main start goto_start stays at `!r`'s spot, the same
+as the live client; armed at stage 3 it lands at the main start (0 u), where the live csprogs ad9f518c
+stays at stage 3. Two review rounds: a first cut chose from the timer's track and state, and sent a bhop
+player to the other track after a finish, skipped startmarks after a finish or void, and followed a
+spectated player's track; the leg stats remove all three. Deployed both installs and lobbies 1-12
+(qwprogs fa93d213, csprogs 9b926b67), smoke lobby 1 0 failures. Limits: a run begun at a later stage
+restarts from stage 1 on goto_start.
+
+## Patch 1050 - fail teleports get their destination: SetRemoteDestination, TriggerWithParameter (qwprogs, csprogs)
+
+Problem: Lex, 26 Oct: bhop_tealbox's and bhop_whitebox's fail triggers do not teleport the player. Those
+maps (and greenbox, greybox, peribox: 298 teleports on 5 maps) give their fail teleports no target;
+checkpoints set it at runtime with trigger_teleport's SetRemoteDestination, directly or through a
+logic_relay's TriggerWithParameter -> OnTriggerParameter whose rows carry an empty parameter that takes
+the relay's value. Momentum's shipped server.dll has all three names (the game-develop source snapshot
+predates them). This server had none of them and no value passthrough, so every touch printed
+"trigger_teleport: no destination ''" and the player stayed on the fail floor.
+
+Change (FTESurf main 528c5ebe; sv_entities.qc, sv_player.qc, sv_zones.qc, cl_triggers.qc): output rows
+with no parameter deliver the value they were fired with (COutputEvent::FireOutput), handed down
+SV_FireOutput -> SV_IODeliver (re-armed per target) -> SV_ApplyInput (consumed, cleared) and kept in a
+delayed row's timer. logic_relay TriggerWithParameter fires OnTriggerParameter behind Trigger's gates
+(SV_IORelayFire; the refire wait is OnTrigger's max delay, as logicrelay.cpp has it). trigger_teleport
+SetRemoteDestination sets the destination: from a player, that player's own (vbsp_tpdest, keyed by
+teleport name, read at the touch), so one player's checkpoint does not move another's fail teleport on a
+lobby; otherwise the map's .target. SV_TpDestReset on respawn and on the !r/!m/!s/!b warps that move,
+once the map has used SetRemoteDestination: the entries go and SV_TouchRelocate ends the player's
+touches, so the checkpoint they stand in writes its entry again, and an entry from an earlier run cannot
+send a fresh one forward (greenbox disables its checkpoints map-wide). The client records
+SetRemoteDestination as stateful, so a predicted teleport it aims at is left to the server.
+
+Verified (rig, exe e28907a1, developer 1): spawn, checkpoint 1's setter, drop onto a fail floor, then
+respawn and drop again. whitebox lands at cp1 (-672 -1088 65), after the respawn at the spawn; tealbox
+(through the relay) at tele_cp1 (2880 2000 33), then tele_spawn. A respawn while still standing in the
+start lands at the spawn on both (a build that cleared without relocating left the player on the floor,
+385 "no destination"). The live qwprogs d6497c53 leaves the player on the floor with 384 / 389 "no
+destination" lines. Four review rounds (no value leak, no change for maps without these inputs; then the
+stale entry across a restart, a reset stranded inside the start, a dropped relay refire, the respawn
+order). Deployed both installs and lobbies 1-12 (qwprogs fa93d213, csprogs 9b926b67), smoke lobby 1 0
+failures. Limits (BACKLOG): the relay's refire lockout is map-wide; saves and resume do not carry the
+destination; the client does not predict these teleports.
+
 ## Patch 1049 - func_conveyor and func_illusionary ignore their angles, as Source (qwprogs, csprogs)
 
 From Patch 1048's review: CFuncConveyor's base is CFuncWall, whose Spawn zeroes the angles (direction is
