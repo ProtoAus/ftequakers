@@ -2239,7 +2239,8 @@ int R_GAlias_InstanceColours(batch_t *b)
 	if (!e->vertlightbytes)
 	{	//FTESurf Patch 1047: no bake at all (a prop_dynamic) draws without VC and never reads the pool,
 		//so any texel serves; GLBE_SubmitInstancedRun keeps such props out of baked runs
-		return e->vertlightcolors ? -1 : 0;	//VC needs vertlight (gl_backend.c, the VC permutation)
+		//VC needs vertlight (gl_backend.c, the VC permutation); no VBO is a CPU-skinned pose of its own
+		return (e->vertlightcolors || !b->vbo) ? -1 : 0;
 	}
 	for (inf = Mod_Extradata(e->model), surfnum = 0; inf; inf = inf->nextsurf, surfnum++)
 		if (surfnum == b->user.alias.surfrefs[0])

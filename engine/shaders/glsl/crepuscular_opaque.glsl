@@ -1,8 +1,13 @@
+!!permu FRAMEBLEND
+!!permu SKELETAL
 //opaque surfaces are drawn to the render target to mask out skies
+//FTESurf Patch 1047: skinned, as depthonly.glsl -- Source props are GPU-skinned now
+#include "sys/defs.h"
 #ifdef VERTEX_SHADER
+#include "sys/skeletal.h"
 void main ()
 {
-	gl_Position = ftetransform();
+	gl_Position = skeletaltransform();
 }
 #endif
 #ifdef FRAGMENT_SHADER

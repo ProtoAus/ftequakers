@@ -7579,12 +7579,14 @@ static size_t inst_bufsize, inst_bufused;	//bytes
 static float *inst_data;
 static size_t inst_cap;					//floats
 static qboolean inst_broken;			//a program had no INSTANCED permutation: off until a restart
+static qboolean inst_broken_skel;		//FTESurf Patch 1047: the same for a skinned run, which costs only those
 static int inst_report = -1;			//host_framecount whose runs print (r_instancing 2)
 static void GLBE_InstanceReset(void)
 {	//the context, and so its objects, are new (GLBE_Init)
 	inst_buf = inst_tex = 0;
 	inst_bufsize = inst_bufused = 0;
 	inst_broken = false;
+	inst_broken_skel = false;
 }
 extern int host_framecount;
 GLuint VertLightPool_Texture(void);
@@ -7665,7 +7667,7 @@ static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
 		{
 			baked = !!b->ent->vertlightbytes;
 			firstnb = (b->vbo && b->vbo->bones) ? b->vbo->numbones : 0;
-			if (firstnb > 256)
+			if (firstnb > 256 || (firstnb && inst_broken_skel))
 				vc = -1;
 			else if (firstnb)
 				memcpy(firstbones, b->vbo->bones, sizeof(float)*12*firstnb);
@@ -7745,8 +7747,12 @@ static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
 	if (inst_report == host_framecount)
 		Con_Printf("r_instancing: %s x%i%s\n", first->shader->name, count, be_instancefailed?" -- NO INSTANCED PERMUTATION, drawn one by one":"");
 	if (be_instancefailed)
-	{	//drawn as the first prop alone: the program could not take the run. Off until a restart.
-		inst_broken = true;
+	{	//drawn as the first prop alone: the program could not take the run. Off until a restart --
+		//for skinned runs only when it was one (SKELETAL|INSTANCED is a combination P1047 added)
+		if (firstnb)
+			inst_broken_skel = true;
+		else
+			inst_broken = true;
 		return 1;
 	}
 	return count;

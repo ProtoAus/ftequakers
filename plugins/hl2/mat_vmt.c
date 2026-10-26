@@ -959,6 +959,7 @@ typedef struct
 	qboolean nowritez;	//FTESurf Patch 878: Refract's $nowritez
 	qboolean alpha_set;	//FTESurf Patch 878: $alpha was given (alphaval 0 also means unset)
 	char normalmapkey[MAX_QPATH];	//FTESurf Patch 878: $normalmap's own value; normalmap also takes $bumpmap
+	qboolean normalmapgone;			//FTESurf Patch 1045: normalmapkey names a file that is not installed
 	qboolean refractamount_set, reflectamount_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
@@ -2685,8 +2686,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 	//FTESurf Patch 1045: a Refract's $normalmap or $dudvmap that is not installed is none -- bound as a pass
 	//map it was the missing checker as normals (surf_hourglass's TF2 water without TF2: edge streaks, ghosts)
-	if (*st->normalmapkey && !VMT_OwnImageExists(st->normalmapkey))
-		*st->normalmapkey = 0;
+	//(a flag rather than clearing the key: VMT_RefractBlend still reads the authored $normalmap)
+	st->normalmapgone = *st->normalmapkey && !VMT_OwnImageExists(st->normalmapkey);
 	if (*st->dudvmap && !VMT_OwnImageExists(st->dudvmap))
 		*st->dudvmap = 0;
 
@@ -4347,7 +4348,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[512], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16];
 			size_t aoff = 0;
 			int rkind;
-			const char *nm = *st->normalmapkey ? st->normalmapkey : st->dudvmap;	//Patch 878: not $bumpmap
+			const char *nm = (*st->normalmapkey && !st->normalmapgone) ? st->normalmapkey : st->dudvmap;	//Patch 878: not $bumpmap
 			//FTESurf Patch 866: env_cubemap reflects whatever hl2_envcubemap says -- on Refract
 			//the reflection is most of what makes the pane visible (surf_boreas's icicles);
 			//the pass's REFLECTCUBEMASK gate keeps r_reflectcube/r_envcubemap.
@@ -4425,7 +4426,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			char args[1024], bump[MAX_QPATH + 16], tint[MAX_QPATH + 16], refr[MAX_QPATH + 16];
 			size_t aoff = 0;
 			//DX9 Refract reads $normalmap only ($dudvmap is DX8's and loads unsigned here; $bumpmap is not its key)
-			const char *nm = st->normalmapkey;
+			const char *nm = st->normalmapgone ? "" : st->normalmapkey;
 			qboolean env = !!*st->envmap;	//env_cubemap too, as in mode 0
 			int rkind = VMT_RefractBlend(st);
 			qboolean add = rkind == REFR_ADD || rkind == REFR_ADDALPHA;
@@ -5306,14 +5307,18 @@ qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size)
 	if (ok)
 	{
 		char bump[MAX_QPATH + 16];
-		//Patch 1045: an uninstalled normal map warps nothing, but the overlay still tints and blurs
-		if (VMT_OwnImageExists(st->normalmapkey))
+		//Patch 1045: an uninstalled normal map warps nothing (REFRAMOUNT 0: $identitynormal decodes to a
+		//small offset in uwoverlay.glsl), but the overlay still tints and blurs
+		qboolean gone = !VMT_OwnImageExists(st->normalmapkey);
+		if (!gone)
 			Q_snprintfz(bump, sizeof(bump), "\"%s%s.vtf\"", strcmp(st->normalmapkey, "materials/")?"materials/":"", st->normalmapkey);
 		else
 			Q_strlcpy(bump, "$identitynormal", sizeof(bump));
+		if (gone)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRAMOUNT=0");
 		if (st->refracttint_set)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
-		if (st->refractamount_set)
+		if (st->refractamount_set && !gone)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRAMOUNT=%f", st->refractamount);
 		if (st->refrsine_set)
 			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRSINE=%f,%f,%f", st->refrsine[0], st->refrsine[1], st->refrsine[2]);

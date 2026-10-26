@@ -1658,11 +1658,16 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 #endif
 #ifdef GLQUAKE
 {QR_OPENGL, 110, "crepuscular_opaque",
+"!!permu FRAMEBLEND\n"
+"!!permu SKELETAL\n"
 //opaque surfaces are drawn to the render target to mask out skies
+//FTESurf Patch 1047: skinned, as depthonly.glsl -- Source props are GPU-skinned now
+"#include \"sys/defs.h\"\n"
 "#ifdef VERTEX_SHADER\n"
+"#include \"sys/skeletal.h\"\n"
 "void main ()\n"
 "{\n"
-"gl_Position = ftetransform();\n"
+"gl_Position = skeletaltransform();\n"
 "}\n"
 "#endif\n"
 "#ifdef FRAGMENT_SHADER\n"
