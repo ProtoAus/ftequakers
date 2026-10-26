@@ -2122,6 +2122,18 @@ void CL_PredictMove (void)
 {
 	int i;
 
+#ifdef HAVE_SERVER
+	//FTESurf Patch 1040: in a game this client hosts, predict noclip at the speed the server flies it NOW.
+	//The server reads pm_noclipspeed into movevars for every command (SV_SetQWClientMoveVars); the client
+	//took it from serverinfo, a frame later, so a Shift+wheel change mid-flight (P1029) re-predicted the
+	//commands in flight at the old speed and printed prederr lines.  A remote server still has only serverinfo.
+	if (sv.state == ss_active && NET_IsLoopBackAddress(&cls.netchan.remote_address))
+	{
+		extern cvar_t pm_noclipspeed;
+		movevars.noclipspeed = pm_noclipspeed.value > 0 ? pm_noclipspeed.value : 4;
+	}
+#endif
+
 	// Set up prediction for other players
 	CL_SetUpPlayerPrediction(false);
 
