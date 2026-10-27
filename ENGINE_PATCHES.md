@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1057 - Bigger Home lobbies and taller Friends (menu only)
+
+**Problem:** Owner accepted P1056 visually, but requested larger lobby images,
+less stat-panel height and more Friends space than chat. Also reported5-10s
+launches; no startup cause or native fix was assumed.
+
+**Change:** Reserve210..252px for compact stats and give the remainder to a
+three-column lobby grid. Adaptive16:9 image slots replace64x36 thumbs; all12
+cells and all stat rows remain. Friends gets58% of right-panel height; compact
+embedded chat keeps room/messages/input/status/privacy separate. Add optional
+`ui_menu_probe boot` MENU-phase elapsed diagnostics, not a whole-executable timer.
+No native, pin/tag, qcbuild, server, API or evidence change. The separately
+authorized optional CS:GO mount preference is backed up and changed only after
+its actual on-demand map test; saved ftesurf.cfg/player data remain untouched.
+
+**Verified:** Isolated NoDeploy build server/menu0 warnings; same two untouched
+CSQC setproperty227 warnings, zero new. Real-client populated local fixture at
+actual1280x720,1920x1111,800x600:12/12 targets,9 populated WOS/Everything rows,
+Story2/4/Event1/3, all bounds fit. Thumbnail slots129x73/183x103/69x39; lobbies
+taller than stats and Friends taller than chat.64-cell/legacy/offline also pass;
+screenshots inspected, including small chat. These are synthetic layout checks,
+not real linked acceptance. Owner P1057 feel check remains pending.
+
+Separate fresh-launch config comparison, same installed engine/plugin/menu,
+2326-map catalogue and real native mount-resolution control: primary's extra
+CS:GO entry ON9.469s, OFF4.437s, ON again9.406s. Timer is process start to first
+successful populated MENU probe, not first pixel/cold-cache or owner benchmark.
+MENU init273..278ms, first draw77..114ms, catalogue322..339ms in qualified arms;
+the extra~5s is not accounted for by the new layout. Inputs stayed unchanged.
+Owner then authorized on-demand IF verified: surf_cavediver loaded with the full
+CS:GO pack absent beforehand, native state4->1/spec CS:GO, new searchpaths and an
+inspected textured in-game screenshot. Only then removed the one active CS:GO
+line in the primary fs_addons.txt, with adjacent rollback and16 other protected
+hashes unchanged (2026-10-27T04:32:03Z). Secondary absence preserved. This proves
+one declared-dependency case, not undeclared/all custom maps or an owner benchmark.
+Initial missing helper/index-artifact assumptions were tooling failures, retained
+separately; final control used actual fs_steamlibs resolution. See FTESurf
+`tools/p1057-home-balance.md` for evidence and separate menu installation receipt.
+
 ## Patch 1056 - Home fits the full lobby directory and stats (menu only)
 
 **Problem:** P1054's two-column lobby list hid rows behind scrolling and its tier
