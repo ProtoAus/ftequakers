@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1068 -- Consistent menu glass over a loaded map (mod side)
+
+**Problem:** screen renderers painted ui_backdrop after the shell had pushed its
+panel-sized coordinate frame, producing a large square and tab-dependent dark
+regions. Glass was enabled only while disconnected Milk was active, and the
+panel highlight was deliberately top-only. The owner also wanted more tint.
+
+**Change:** MENU draws its backdrop once at full-screen root coordinates before
+shell frames. Map-photo fallbacks never replace a live world. MENU opts into
+glass in every context (HUD default remains opaque), adds a complete rounded
+rim and increases panel/well tint. No native engine, movement or schema change.
+
+**Verified:** build.ps1 -NoDeploy -Jobs8 passes, MENU/server0warnings and the same
+2 pre-existing CSQC F333/227 warnings. Existing runtime transport exercised
+installed-control and subject Settings/Maps disconnected and hosted; actual
+1920x1111 captures and active/client/glass probes pass,8captures retained and
+inspected. The control reproduces the square and opaque in-game panel; subject
+removes it and reports glass1 over a real loaded map. Milk was disabled for
+this stable visual control; default-Milk/online feel awaits owner acceptance.
+No backend-card, lobby-native rollout or performance claim. Native source pin
+and tag remain P1066; tools/p1068-menu-glass.md records scope and limits.
+
 ## Patch 1067 -- Refuse malformed save confirmation before legacy fallback
 
 **Problem:** The full save reader skipped short rows before recorder parsing,
