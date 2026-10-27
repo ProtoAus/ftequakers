@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1070 -- Group lobby text and load sharper directory photos (mod side)
+
+**Problem:** Home stretched128x72 atlas cells and separated12px lobby/title counts
+at the top from a map name at the bottom. Its catalogue-row lookup could also
+cache a miss before catalogue loading, delaying available pictures.
+
+**Change:** Group larger lobby/map/count text in a centred block, retaining a
+compact layout and full-card click targets. At most16large cards use existing
+local pictures or async, readiness-checked960px web photos keyed by the directory
+map name, without requiring catalogue UUID loading. Fixed trusted photo route,
+map-name validation and online consent remain required; retain atlas/no-image
+fallbacks and dense64-lobby layout. Probe files only on map/consent changes,
+release unused pictures and account for shared URLs. No native/schema change.
+
+**Verified:** Isolated QC build passes with MENU/server0warnings and the same2
+old CSQC F333/227 warnings. Real public web route returns960x540JPEG. Fixture-
+routed native control reproduces old layout; subject1920x1111draws12/12cards and
+12ready960px photos with6deduplicated transfers. Last-card hover, missing-photo
+fallback/shared-URL retention and acting offline gate pass. Crops inspected.
+Oversized fixture correctly failed the unchanged native131072-byte limit; fixed
+the fixture, not the limit. Owner/live feel and numerical latency remain pending.
+No backend-native rollout or live account-stat claim. tools/p1070-lobby-cards.md.
+
 ## Patch 1069 -- Require integral recorder generations and rewind coordinates
 
 **Problem:** Range-only saved-generation checks accepted malformed numeric
