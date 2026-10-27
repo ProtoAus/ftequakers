@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1058 - Crisp floating Home and persistent development menu
+
+**Problem:** Home used11/18/22px sizes off the UI font ladder; owner wanted a
+floating navigation bar. Reboot restored the release MENU: its exact signed
+0.1.31 BLAKE2b-256 hash/size and native updater timestamps identify the current
+overwrite. Prior peer/stale-build attribution was not established and is withdrawn.
+
+**Change:** Use native12/20/24 sizes and separated compact figure rows. Center a
+rounded header above the main frame with12px gap and no double gutter. Default
+source builds compile development mode, preserving signed checks but requiring
+explicit F2 Install release to replace MENU; explicit -ReleaseVersion builds
+retain automatic installation. Native verification/transport/protection, consent,
+ledgers, owner configs, on-demand CS:GO and native/engine pins are unchanged by
+this patch; published P1055 integration must retain its existing pin.
+
+**Verified:** Standard dev and -ReleaseVersion NoDeploy builds: server/menu0
+warnings, same two untouched CSQC setproperty227 warnings, zero new. Populated
+real-client exact1280x720/1920x1111/800x600: floating inset/gap,12/12 targets,
+9 populated tier rows, both mode cards, bounds/switches,64/legacy/offline pass;
+screenshots inspected, native-size text visibly improved, owner feel pending.
+Production-signed LOOPBACK-only fixtures used actual launcher baseline adoption,
+not a fabricated ledger. Native release-mode control auto-installed the old
+published MENU; dev reached available but fetched0 objects and kept bytes,
+consent and ledgers across two fresh processes. Explicit real GUI action then
+installed the signed old MENU. Initial helper/launcher-state/manual-driver
+failures are retained, not passes; valid automatic arms reused and corrected
+manual action finished against exact fresh fixture inputs. No production feed
+published or signing material printed. Actual owner fresh-launch acceptance and
+all-platform/native regression are not claimed. See FTESurf
+`tools/p1058-home-crisp-persistence.md` and separate dual menu-only UTC receipt.
+
 ## Patch 1057 - Bigger Home lobbies and taller Friends (menu only)
 
 **Problem:** Owner accepted P1056 visually, but requested larger lobby images,
