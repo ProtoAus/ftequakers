@@ -31,6 +31,13 @@ published or signing material printed. Actual owner fresh-launch acceptance and
 all-platform/native regression are not claimed. See FTESurf
 `tools/p1058-home-crisp-persistence.md` and separate dual menu-only UTC receipt.
 
+**Installed:** BOTH Windows MENU files at2026-10-27T06:01:02Z; source QC7fef551c,
+byte-identical clean merged/tested MENU SHA2566d52df34 (582498 bytes). Both live
+and adjacent rollback hashes verified; all36 current protected present/absent
+entries unchanged, including consent/updater metadata/configs/native and gameplay
+binaries. Short claim released, foreign processes exited naturally (none killed).
+This is menu-only local delivery, not an API/site/server/native promotion.
+
 ## Patch 1057 - Bigger Home lobbies and taller Friends (menu only)
 
 **Problem:** Owner accepted P1056 visually, but requested larger lobby images,
