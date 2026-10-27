@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1062 -- glass menu scenes and source-separated map cards (MENU/API only)
+
+**Problem:** The owner wanted translucent windows and section-based Milk scenes,
+larger map cards/actions, completion and four separately scoped times. P1059
+removed the filter controls as well as their collapse button. Quit tested the
+`ui_synth` function pointer rather than calling it.
+
+**Change:** MENU opts into tinted glass chrome only while Milk is active; text
+remains opaque/native-sized, HUD defaults and the in-game/unsupported fallback
+stay unchanged. Main/Maps/Story/Event/Settings select profiles0..4; profile4
+explicitly reuses shader0, not a nonexistent shader. Maps no longer cover Milk
+with the selected map JPEG. Compact native12 filter chips remain visible.
+128/160px cards carry larger thumbnails/actions and completion fade. An in-memory,
+identity-separated60s cache requests at most16 visible maps through the existing
+board transport/rate bucket. Integer milliseconds keep WOS ranked vs ranked+
+Momentum+KSF clean-main records distinct; local/community PBs are not relabelled.
+Unknown/stale/offline states stay explicit. Quit calls its synthetic guard; the
+remaining Settings Music entry is removed. No native code/pin, gameplay progs,
+evidence/schema/consent change or release/build-number bump.
+
+**Verified:** NoDeploy MENU/server0 warnings; same two untouched CSQC227 warnings,
+zero new. Synthetic SQLite route17 checks, existing completion46 and board328
+checks pass. Real-client three-size800x600/1280x720/1920x1111 matrix, five browser
+swaps plus Settings: glass/actual station0..4, integer four-time and Complete
+positive controls, import-only/incomplete rows, active tier filtering/reset,
+selection/draft/sidebar invariants, one full compact card, bounded batches,
+Milk-off opaque fallback and wanted-but-blocked offline requests all acted.
+Screenshots inspected; no authenticated social, real launch, subjective audio or
+live WR claim. The serving API remains unavailable, so the new endpoint is not
+fleet-deployed. Native desktop-capture silence with a muted render session is
+still under investigation separately; active capture alone is not a pass.
+
 ## Patch 1061 - Rewind paused TAS by exact retained movement ticks
 
 **Problem:** The existing rewind cursor advances through sampled line positions,
