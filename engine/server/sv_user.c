@@ -25,8 +25,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef CLIENTONLY
 #include "pr_common.h"
 #include "sv_held_session.h"
+#include "sv_tas.h"
 
-#include <ctype.h>
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+i*ge->edict_size)
 #define Q2NUM_FOR_EDICT(ent) (((char *)ent - (char *)ge->edicts) / ge->edict_size)
 hull_t *SV_HullForEntity (edict_t *ent, int hullnum, vec3_t mins, vec3_t maxs, vec3_t offset);
@@ -73,8 +73,16 @@ evalc_t	evalc_pmhold;		//FTESurf Patch 380
 evalc_t	evalc_momlimit, evalc_momcool, evalc_momslide;	//FTESurf Patch 882
 evalc_t	evalc_lpdob, evalc_lpdfb;	//FTESurf Patch 802: sv_ents.c's portal cameras
 
+// P1055: optional VM protocol; caches, including misses, reset on every progs load.
+enum { TAS_PAUSED, TAS_USED, TAS_PENDING, TAS_DONE, TAS_READY, TAS_FAULT,
+	TAS_KEY, TAS_GHOST, TAS_RESUME, TAS_HOLD, TAS_SAVEHOLD, TAS_WATCHHOLD,
+	TAS_VIEWOWNER, TAS_FIELDS };
+static evalc_t evalc_tas[TAS_FIELDS];
+static void SV_TASInvalidate(client_t *cl);
+
 void SV_FS_ResetFieldCaches(void)
 {
+	memset(evalc_tas, 0, sizeof(evalc_tas));
 	memset(&evalc_lpdob,     0, sizeof(evalc_lpdob));		//FTESurf Patch 802
 	memset(&evalc_lpdfb,     0, sizeof(evalc_lpdfb));
 	memset(&evalc_pmepoch,   0, sizeof(evalc_pmepoch));		//FTESurf Patch 346
@@ -485,6 +493,7 @@ unsigned int SV_PhysentDigest(void)
 
 void QDECL SV_NQPhysicsUpdate(cvar_t *var, char *oldvalue)
 {
+	unsigned int i;
 	if (svs.gametype != GT_PROGS)
 		var->ival = 0;	//nope, not a thing.
 	else
@@ -502,6 +511,11 @@ void QDECL SV_NQPhysicsUpdate(cvar_t *var, char *oldvalue)
 				var->ival = 1;
 		}
 	}
+	// P1055: world-frame physics bypasses command admission, even without a
+	// new client packet. Do not leave cached readiness or a live grant behind.
+	if (var->ival && sv.state == ss_active)
+		for (i = 0; i < sv.allocated_client_slots; ++i)
+			SV_TASInvalidate(&svs.clients[i]);
 }
 
 extern cvar_t dpcompat_nopreparse;
@@ -8455,6 +8469,79 @@ static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmse
 	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
 }
 
+static void SV_TASInvalidate(client_t *cl)
+{
+	static const char *const names[] = {"run_tas_ready", "run_tas_paused", "run_tas_pending"};
+	static const int fields[] = {TAS_READY, TAS_PAUSED, TAS_PENDING};
+	unsigned int i;
+	eval_t *f;
+	if (svs.gametype != GT_PROGS || !svprogfuncs || !cl->edict || sv.state != ss_active)
+		return;
+	for (i = 0; i < countof(fields); ++i)
+	{
+		f = svprogfuncs->GetEdictFieldValue(svprogfuncs, cl->edict, names[i], ev_float, &evalc_tas[fields[i]]);
+		if (f) f->_float = 0;
+	}
+}
+
+// P1055: raw command debit precedes this gate. Blocked input never enters
+// per-command PreThink or the mover; neither carry nor movement state is consumed.
+static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f)
+{
+	static const char *const names[TAS_FIELDS] = {"run_tas_paused", "run_tas_used",
+		"run_tas_pending", "run_tas_done", "run_tas_ready", "run_tas_fault",
+		"run_tas_cmdkey", "rec_gh_on", "run_ms_phase", "run_pmhold",
+		"rec_sl_hold", "rec_wt_hold", "run_t_viewowner"};
+	extern cvar_t pm_physicsmode, pm_ticrate;
+	uint32_t previous = 0;
+	int i, valid, fresh, supported, bodyfree;
+	enum sv_tas_action action;
+
+	if (svs.gametype != GT_PROGS || !svprogfuncs)
+		return SV_TAS_NORMAL;
+	for (i = 0; i < TAS_FIELDS; ++i)
+	{
+		f[i] = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, names[i],
+			i == TAS_KEY ? ev_vector : ev_float, &evalc_tas[i]);
+		if (!f[i])
+			return SV_TAS_NORMAL; // old QC/mods: no protocol, no behavior change
+	}
+	supported = !sv_nqplayerphysics.ival &&
+		!PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY) &&
+		host_client->protocol == SCP_QUAKEWORLD &&
+		!(host_client->fteprotocolextensions2 & PEXT2_VRINPUTS) &&
+		SV_TASClockSupported(pm_physicsmode.ival == PHYSMODE_SOURCE,
+			pm_ticrate.value > 0 ? pm_ticrate.value : SV_TAS_TICK,
+			sv.gamespeed, host_client->pmsrc.msec_carry);
+	valid = f[TAS_KEY]->_vector[2] == 1 &&
+		isfinite(f[TAS_KEY]->_vector[0]) && isfinite(f[TAS_KEY]->_vector[1]) &&
+		f[TAS_KEY]->_vector[0] >= 0 && f[TAS_KEY]->_vector[0] <= 65535 &&
+		f[TAS_KEY]->_vector[1] >= 0 && f[TAS_KEY]->_vector[1] <= 65535 &&
+		floorf(f[TAS_KEY]->_vector[0]) == f[TAS_KEY]->_vector[0] &&
+		floorf(f[TAS_KEY]->_vector[1]) == f[TAS_KEY]->_vector[1];
+	if (valid)
+		previous = (uint32_t)f[TAS_KEY]->_vector[0] | ((uint32_t)f[TAS_KEY]->_vector[1] << 16);
+	else if (f[TAS_KEY]->_vector[2] != 0)
+		supported = false;
+	f[TAS_READY]->_float = supported;
+	fresh = SV_TASFresh(cmd->sequence, previous, valid);
+	bodyfree = sv_player->v->movetype == MOVETYPE_WALK && sv_player->v->health > 0 &&
+		!f[TAS_HOLD]->_float && !f[TAS_SAVEHOLD]->_float && !f[TAS_WATCHHOLD]->_float &&
+		!f[TAS_VIEWOWNER]->_float && !f[TAS_GHOST]->_float && !f[TAS_RESUME]->_float;
+	action = SV_TASPlan(f[TAS_PAUSED]->_float != 0, f[TAS_USED]->_float > 0,
+		supported, bodyfree, kind == 1, fresh, cmd->impulse,
+		f[TAS_PENDING]->_float, f[TAS_DONE]->_float);
+	if (kind == 1 && fresh)
+	{
+		f[TAS_KEY]->_vector[0] = cmd->sequence & 0xffffu;
+		f[TAS_KEY]->_vector[1] = cmd->sequence >> 16;
+		f[TAS_KEY]->_vector[2] = 1;
+	}
+	if (action == SV_TAS_CANCEL)
+		f[TAS_PAUSED]->_float = f[TAS_PENDING]->_float = 0;
+	return action;
+}
+
 //FTESurf Patch 893: later = a later part of a usercmd split per tick (a parameter, so nothing outlives it)
 static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec, qboolean later)
 {
@@ -8463,6 +8550,10 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	int			oldmsec, firstmsec;
 	qboolean jumpable;
 	qboolean held = false;	//FTESurf Patch 380
+	qboolean tas_step = false;
+	usercmd_t tas_cmd;
+	eval_t *tas[TAS_FIELDS];
+	enum sv_tas_action tas_action;
 	vec3_t new_vel;
 	vec3_t old_vel;
 
@@ -8537,6 +8628,25 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 #endif
 	}
 
+	tas_action = SV_TASCommandPlan(ucmd, kind, tas);
+	if (tas_action == SV_TAS_BLOCK)
+	{
+		eval_t *laterg = PR_FindGlobal(svprogfuncs, "input_cmd_later", 0, NULL);
+		SV_PublishCmdContext(NULL, 0, 0, 0);
+		if (laterg) laterg->_float = 0;
+		return;
+	}
+	if (tas_action == SV_TAS_STEP)
+	{
+		tas_cmd = *ucmd;
+		tas_cmd.msec = 15; // exactly one Source tick; validated carry is retained
+		ucmd = &tas_cmd;
+		tas_step = true;
+		// An effective TAS command is NOT the decoded command's duration/provenance.
+		kind = 0;
+		totalmsec = offsetmsec = 0;
+		later = false;
+	}
 	if (SV_RunFullQCMovement(host_client, ucmd))
 	{
 		SV_HeldSourceBoundary(host_client, HELD_EFFECT);
@@ -8560,7 +8670,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	//context, and only the first keeps the impulse, as the halving below does.  A later part is one
 	//tick already: it is not split again (a held part runs no tick, so its carry stays and it would
 	//count two) nor halved.  sv_tickparts is a locked movevar (sv_phys.c), so it holds for a run.
-	if (sv_tickparts.ival > 0 && svprogfuncs && !later)
+	if (!tas_step && sv_tickparts.ival > 0 && svprogfuncs && !later)
 	{
 		extern cvar_t pm_physicsmode;
 		float tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
@@ -9064,6 +9174,21 @@ if (sv_player->v->health > 0 && before && !after )
 	PM_PlayerMove (sv.gamespeed);
 	SV_HeldSourceBoundary(host_client, HELD_MOVER_EXIT);
 #endif
+	if (tas_step)
+	{
+		if (movevars.physicsmode == PHYSMODE_SOURCE && pmove.ticksrun == 1)
+		{
+			tas[TAS_DONE]->_float += 1;
+			tas[TAS_PENDING]->_float = max(0, tas[TAS_PENDING]->_float - 1);
+		}
+		else if (held || sv_player->v->movetype != MOVETYPE_WALK || !tas[TAS_PAUSED]->_float)
+			tas[TAS_PAUSED]->_float = tas[TAS_PENDING]->_float = 0;
+		else
+		{
+			tas[TAS_PENDING]->_float = 0;
+			tas[TAS_FAULT]->_float = 1; // fail closed; status, never a false completion
+		}
+	}
 	pmove.world = NULL;
 
 	if (host_client->state && host_client->protocol != SCP_BAD)
@@ -10006,6 +10131,7 @@ static void SV_ExecuteClientMessageBody (client_t *cl)
 				{
 					if (sv_nqplayerphysics.ival || split->state < cs_spawned)
 					{
+						SV_TASInvalidate(split);
 						//store the info for the physics code to pick up the next time it ticks.
 						//yeah, nq sucks.
 						split->isindependant = false;

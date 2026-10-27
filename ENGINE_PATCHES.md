@@ -27,6 +27,42 @@ Menu-only dual Windows promotion uses checked hashes/rollback copies; no server,
 API, CSQC/SSQC, config or player data is changed. See FTESurf
 `tools/p1056-home-fit.md` and the task's UTC installation receipt.
 
+## Patch 1055 - authoritative TAS movement pause and fixed-tick advance
+
+**Problem:** Explicit TAS practice and slow pacing did not provide a real paused
+movement boundary or exact single-tick advance. Client-chosen packet durations
+cannot authorize a movement grant, and shared world time must not be paused.
+
+**Change:** Optional complete native/QC field protocol admits bounded grants
+only on the independent QW Source15ms clock with valid carry and an eligible
+body. Raw command debit stays first; blocked commands do not enter per-command
+QC/movement. A fresh grant substitutes15ms, bypasses splitting and clears decoded
+provenance rather than relabelling synthetic duration. Only one actual Source
+tick acknowledges completion. Freshness, exact integral tickets and bounded
+queues prevent repeated consumption. NQ bypass immediately invalidates controls.
+QC adds pause/play/step/status, dedicated stats and per-seat prediction guards;
+validated zone placements, successful loads and ghost entry cancel live controls.
+Existing retained TAS ancestry and normal/segmented exclusion remain unchanged.
+The shader-generator banner is regenerated from a relative source path only.
+
+**Verified:** Standard isolated Windows full native build, zero new warnings
+against57unique baseline warnings; QC server/menu0, client same2old property227
+warnings. Actual-C admission167checks; reader930/0; canonical497RECs/167VIEWs
+retain306historical faults. Dedicated-socket old/native controls act: static
+pause and clock/carry preservation, actual1/7ticks at three configured render/net
+pairs, duplicate/exact-million-ticket handling, recorder flush, other-player
+motion, jump/release,128drain, live NQ invalidation, actual30ms-clock refusal and
+validated direct-warp/off cancellation. A completed TAS REC reads with0faults.
+Old/new bhop_eazy native regression matches11digests; open-loop replay reproduces
+52/52stored packet poses at file precision. Both native verifiers retain HOLD
+for the same57physent-digest mismatches after another player changed the world.
+Three independent final reviews found no remaining source blocker. Retained
+fixture failures are not relabelled passes. Limits: movement driver only, not
+world snapshots/dynamic parity; no new VIEW capture, human-input or selected12
+native PASS claim. Editor/optimizer/signatures/public TAS boards remain planned.
+Windows promotion, Linux/fleet qualification and owner feel are separate states.
+See FTESurf tools/p1055-tas-step.md for controls and evidence boundaries.
+
 ## Patch 1054 - tabbed Home, personal leaderboard seek and completion sources (QC/web)
 
 **Problem:** The initial menu separated lobbies/social/progress, while lobbies
