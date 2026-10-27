@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1075 -- Consume finish forgiveness after the native command (QC)
+
+**Problem:** The automatic finish/reset-forgiveness check ran before all of the
+current native command's synchronous work had completed.
+
+**Change:** Request only when the unchanged P968 body/hold predicates qualify;
+consume at a later existing native EndFrame, require the same positive VM-local
+admission, and recheck those predicates. Consume stale/invalid requests without
+forgiving another admission. No cached frame stamp, new dwell/speed threshold,
+captured field/format, native ABI/pin/tag, qcbuild, Build or release change.
+Authored effects keep working. Published P1074 work is preserved. Persistent
+logical/world/body state and obligations beyond this frame remain OPEN; not
+complete P455/Rule8.
+
+**Verified:** Published P1074 baseline fe9ebe1e, five acted native dedicated-socket
+control/subject cases: late physical effect, clean positive, changed admission,
+invalid admission, later hold. Same observed phase/no intervening EndFrame and
+actual native ground/rest required. Instrumented production-helper calls and
+synthetic timer labels, not natural finishes, hardware, reconnect, new recordings
+or rank proof. Full stock3VM0warnings (unchanged c24 compiler); raw reader930/0,
+actual exit0 retained. Initial fixture/logging failures remain private and are not
+passes. Independent review, final corpus and delivery recorded separately; no
+fleet/human acceptance inferred. Public qualification: tools/p1075-command-fence.md.
+
 ## Patch 1074 -- Author the next TAS ticks in a workshop
 
 **Problem:** Paused TAS still used live controls and free mouse look. There was
