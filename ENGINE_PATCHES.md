@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1069 -- Require integral recorder generations and rewind coordinates
+
+**Problem:** Range-only saved-generation checks accepted malformed numeric
+indices, which could skip a generation cut; a non-whole row mark could also enter
+a matching warm-buffer rewind. These coordinates are already integer indices.
+
+**Change:** Express the existing generation range positively, require whole
+indices and reject non-whole row marks before dispatch. Keep current valid warm
+matches and independently confirmed cold recovery. No new recorded field,
+format, gameplay threshold, forgiveness, native ABI/pin/tag or Build change.
+P1068 is another session's published menu work; preserve its UI and delivery.
+
+**Verified:** Production full writer/real rewind cut/new-tail/full reader native
+control14 and subject14, zero warnings, unchanged dedicated image. Invalid warm
+matches refuse while valid current generation and independent confirmed cold
+copy controls survive. Synthetic entities/minimal rows, sprint only intercepted;
+not real input, signed/rank, client restart or full native-stream proof. Standard
+isolated3VM build zero warnings; reader930/0. Unchanged full503REC/167pairedVIEW/
+10unpairedVIEW source+input hashes reuse exact control/subject reports312findings/
+311faulted, zero increase. Server-only deployment recorded separately. No atomic/
+durable/authenticated save-pair or later content-mutation claim.
+
 ## Patch 1068 -- Consistent menu glass over a loaded map (mod side)
 
 **Problem:** screen renderers painted ui_backdrop after the shell had pushed its
