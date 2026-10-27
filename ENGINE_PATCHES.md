@@ -35,6 +35,17 @@ unchanged during build, no fixture in production; QWda35b1ec/LNOa75ae4cc.
 Correction-review disposition/publication/delivery recorded separately. Peer
 published P1070/reserved P1071 and native1066 pins preserved.
 
+**Delivery2026-10-27T21:10:37Z:** Independent evidence-correction review accepted
+actualheld guard/control with no issue, productsource unchanged. Exact published
+QCb0f404fc/ledger21a0d573, finalstock3VM0, QWda35b1ec/LNOa75ae4cc BOTHWindows;
+PiQWsame/prevf094 retained. Short sharedflock actual12freshZEROplayer boundary,
+all12 ordinary restarts ONCE/newPID/nativeimages unchanged/NEW appspawn logs/no
+selectedQCerrors/everyheartbeat lowerbound AFTERLASTrestart; local+public200/
+directory12/maxage3. Stageconsumed/lockreleased. ProtectedCSa043/peerUI/native
+binaries/backend/config/owner/playerdata, no ownerclient/backend signal, no
+forcedbusyrestart/Build/release. Human clean-run pending; fullRule8 staysOPEN.
+Final provenance/coverage limits: tools/p1073-button-callbacks.md.
+
 ## Patch 1072 -- Keep queued player-origin I/O tied to its admission (QC)
 
 **Problem:** A queued player-origin output retained its activator but not the
@@ -72,7 +83,7 @@ native/backend/config/owner/player data unchanged. Short existing sweep lock,
 actual12fresh/zero-player boundary, all12 normal bare-unit restarts ONCE; each
 new PID/native image unchanged/new app-log positive/no selected QCerror, all12
 heartbeat lower-bound AFTER last restart, public/local health200+directory12.
-No forced busy restart, backend/native signal, Build/release. Human clean-run
+No forced busy restart, backend signal or native-binary deployment, Build/release. Human clean-run
 check pending; final delivered provenance/limits in tools/p1072-delayed-io.md.
 
 ## Patch 1070 -- Group lobby text and load sharper directory photos (mod side)
