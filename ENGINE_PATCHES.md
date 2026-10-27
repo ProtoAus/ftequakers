@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1059 - Plain floating navigation and a shared browser sidebar
+
+**Problem:** Owner wanted original bold white navigation without a backing slab,
+compact update info at screen-top-left, no Music UI, and Maps/Story/Event to swap
+only the main panel while Friends/chat persist. Maps had size/filter/friend
+switches and a second centered gutter instead of filling the remainder.
+
+**Change:** Shared browser frame/sidebar and active Friends/chat scope; page
+changes preserve draft/profile selection. Native24/32 display-face white nav,
+no panel/chip backdrop; compact hint at12,12 outside translated frames. Maps
+fills left canvas,128x72 thumbs and20px native names, compact112px rows on narrow
+canvases; remove old filter strip/switches and Music entry/autoplay. Keep search,
+metadata, build/launch/download/leaderboard gates and development update policy.
+No native/audio-capture code, engine pin/tag/qcbuild, consent or saved config edit.
+
+**Verified:** NoDeploy menu/server0 warnings, same two untouched CSQC227 warnings,
+zero new. Real-client1280x720/800x600/1920x1111: all four pages, invariant sidebar,
+bounded full-left maps, actual row selection, unsent draft preserved, pictures
+inspected. Final saved Filters1 case retired the old strip too. Fourteen populated
+arms passed; last1920 Event->Home separate mouse down/up was displaced by real
+desktop motion (both took0), retained as input-driver failure, not a pass.
+Only the missed callback was recovered with an atomic numeric click; valid arms
+reused. Initial Filters0 candidate's15 full swaps also retained. No authenticated
+Friends/DM-send, all-platform or owner feel claim. See FTESurf
+`tools/p1059-shared-browser.md` for scope and separate actual delivery receipt.
+
+**Other requests:** Backend8084 absent and other cohort's admission CLOSED;12
+native lobby units run and public UDP27510 responds. Recovery owner handoff
+requested, no guard/data/process/service mutation. Both installed native clients
+have loopback controls; owner status source1/support1/active1/available1/packets27416
+but RMS0 proves analyser silence, not missing support or a repaired native bug.
+Actual audible-music/default endpoint and known-audio control remain to diagnose.
+MENU removal preserves that opt-in; no native audio patch or config edit claimed.
+
 ## Patch 1058 - Crisp floating Home and persistent development menu
 
 **Problem:** Home used11/18/22px sizes off the UI font ladder; owner wanted a
