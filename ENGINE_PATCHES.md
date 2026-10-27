@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1073 -- Preserve active button callback source lineage (QC)
+
+**Problem:** Button completion/return retained a mutable activator but not the
+admission/taint that armed the actual callback. Ordinary delayed I/O lineage did
+not cover this asynchronous lifetime; ignored Use can change the activator
+without replacing pending work.
+
+**Change:** Scope the complete Press/Use/Damage gesture and carry its provenance
+through the actual native button Top/Return/Home callbacks. Store one VM-local
+callback pointer beside the existing source snapshot. Preserve ltime deadlines,
+state guards, output counts, dynamic activators and authored effects. Rejected
+input does not retag pending work; actual replacement scheduling replaces it.
+Owner-selected practice/unranked, not cancellation, uses existing actual-body
+write hooks. No captured field/format, native ABI/pin/tag, threshold, Build or
+release change. Persistent logical/world/body/carrier state beyond the active
+callback and native same-command completion remain OPEN; not full Rule8.
+
+**Verified:** Clean frozen source954de018 vs2471f03c independently reviewed by3
+lenses, no product issue. Native production control14/subject14 ACTED, same
+compiler/image/fixture/runner, exact effects/running states and restored enclosing
+context. Original held case was actually a missing-target refusal due to cosmetic
+rename ordering; preserved/archive, not credited. Corrected SAME fixture runs
+controle0385624/subject22c9f07a deliver teleport before rename, all14 ACTED and
+held body stays put/clean; current/world/cancellation controls stay clean.
+Case13 proves canceled physical callback plus acted cosmetic replacement, not
+clean arbitrary replacement physics or complete world-state retirement. Synthetic
+bodies/sprint interception, no real client/reconnect/record/rank or human claim.
+Reader raw stdout930/0; postread CP1252/UTF8 mismatch retained, exit not persisted.
+Fresh entire680-file REC/VIEW domain and reader hashes equal retained independent
+503REC/167paired/10unpaired reports312findings311faulted, zero increase; reuse,
+not a new sweep. Final stock3VM0warnings (same c24 compiler), allQC/SRC inputs
+unchanged during build, no fixture in production; QWda35b1ec/LNOa75ae4cc.
+Correction-review disposition/publication/delivery recorded separately. Peer
+published P1070/reserved P1071 and native1066 pins preserved.
+
 ## Patch 1072 -- Keep queued player-origin I/O tied to its admission (QC)
 
 **Problem:** A queued player-origin output retained its activator but not the
