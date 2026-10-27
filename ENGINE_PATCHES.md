@@ -21,8 +21,21 @@ actual native ground/rest required. Instrumented production-helper calls and
 synthetic timer labels, not natural finishes, hardware, reconnect, new recordings
 or rank proof. Full stock3VM0warnings (unchanged c24 compiler); raw reader930/0,
 actual exit0 retained. Initial fixture/logging failures remain private and are not
-passes. Independent review, final corpus and delivery recorded separately; no
-fleet/human acceptance inferred. Public qualification: tools/p1075-command-fence.md.
+passes. Three independent frozen-source reviews SOURCE OK, no product issues;
+corrected review wording records admission/flag invalidation, not explicit pending
+field clearing. Fresh entire680-file corpus503REC/167pairedVIEW/10unpairedVIEW:
+312 findings311 faulted reports, unchanged from retained independent control.
+
+**Delivery2026-10-27T22:52:13Z:** Reviewed QC4259c582 server-only stock QW
+f75f3b4150f61f53e6e12f3884ee046695e3ff40aa21651da5ddc7f6143b10fd.
+BOTH Windows DAT/LNO pairs exact with `.prev`, no owner process stopped. All12 Pi
+fresh-empty including actual status7 spectators at swap; one ordinary restart
+each, new PID/positive fresh spawn and heartbeat, no selected startup QC errors.
+All12 actual PID-namespace QW hashes match; local/public health200/directory12.
+Short sweep lock released; no native/client/menu/backend/config or Build/release
+change. Preapply quoting failure caused no swap/process action; same staged file
+used, not a new attempt name. Human clean-run acceptance remains pending; not
+new recording/rank proof or full Rule8. Public qualification: tools/p1075-command-fence.md.
 
 ## Patch 1074 -- Author the next TAS ticks in a workshop
 
