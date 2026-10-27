@@ -67,6 +67,7 @@ static const GUID vislb_capture_iid = {0xC8ADBD64,0xE71E,0x48a0,{0xA4,0xDE,0x18,
 static int VISLB_Open(double now)
 {
 	WAVEFORMATEX *f;
+	GUID session;
 	int tag;
 	HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
 	if (SUCCEEDED(hr)) vislb.couninit = 1;
@@ -93,7 +94,9 @@ static int VISLB_Open(double now)
 	vislb.bytes = f->wBitsPerSample/8;
 	if (!f->nChannels || f->nChannels > 32 || f->nBlockAlign != f->nChannels*vislb.bytes ||
 		f->nSamplesPerSec < 8000 || f->nSamplesPerSec > 192000) goto fail;
-	if (FAILED(vislb.client->lpVtbl->Initialize(vislb.client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000, 0, f, NULL))) goto fail;
+	// Do not inherit mute/volume from the game's rendering session.
+	if (FAILED(CoCreateGuid(&session))) goto fail;
+	if (FAILED(vislb.client->lpVtbl->Initialize(vislb.client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000, 0, f, &session))) goto fail;
 	if (FAILED(vislb.client->lpVtbl->GetService(vislb.client, &vislb_capture_iid, (void**)&vislb.capture))) goto fail;
 	if (FAILED(vislb.client->lpVtbl->Start(vislb.client))) goto fail;
 	VISLB_Clear();

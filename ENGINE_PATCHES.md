@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1064 -- Windows visualizer capture ignores the game's mute
+
+**Problem:** Windows-output visualization received packets but analyzed silence
+when the game rendering session had volume0/mute1. Passing a NULL session GUID
+to loopback Initialize joined that session. A positive external-output control
+and a normal-sound versus nosound client distinguished this from absent input.
+
+**Change:** Create a fresh capture-only audio session per open attempt. Keep
+render volume/mute unchanged, local opt-in unchanged and the existing COM close,
+retry, endpoint, PCM, analyzer and non-Windows fallback paths. No microphone,
+raw audio recording, volume-setting override, backend or evidence change.
+
+**Verified:** Direct production-header old/new control with positive external
+input and the same test process's silent muted render: old66packets/RMS0, new
+67packets/RMS.006300; render remains volume0/mute1. Independent captures are
+nonzero in both arms. New Windows session regression and existing PCM/analyzer/
+close/reset/fallback tests compile with -Wall -Wextra -Werror and pass. Full
+-NoDeploy native/client/server/matched-plugin build passes; warnings are in
+untouched sources, not the changed header. Real normal-sound client reports
+source1/active1/nonzero RMS, source0 closes with zero RMS, source1 reopens and
+recovers nonzero RMS. The isolated client's render was unmuted; the explicit
+muted-render regression is the direct production-header control above.
+Human visual reactivity is pending; numeric capture is not a subjective pass.
+Local dual-install provenance and post-swap checks are recorded separately.
+No surfd action, NanoPi deployment, release or qcbuild bump.
+
 ## Patch 1062 -- glass menu scenes and source-separated map cards (MENU/API only)
 
 **Problem:** The owner wanted translucent windows and section-based Milk scenes,
