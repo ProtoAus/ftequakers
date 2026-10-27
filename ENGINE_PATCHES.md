@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1060 - Retain bounded lobby history across heartbeat gaps
+
+**Problem:** Heartbeat expiry and full-capacity cleanup deleted lobby rows,
+including their persistent least-recently-used rotation timestamps. The first
+heartbeat after downtime could erase the other lobbies' history.
+
+**Change:** Retain lobby rows; the existing TTL still filters the live directory.
+Unknown identities are refused at the200-node bound without evicting history;
+known identities can still heartbeat. An explicit immediate write transaction
+retains the old reaper's serialization across capacity checks and inserts. No
+schema change, client/engine binary change or engine commit/tag pin move.
+
+**Verified:** Clean actor-baseline old-code control ACTED: stale12 rows lost
+history and full stale capacity admitted another identity. Corrected real
+Flask/SQLite checks retain all12 rows after the first and all heartbeats, expose
+only fresh lobbies, update a known node at capacity, refuse an unknown node
+without eviction, and admit only one of two concurrent identities at199 rows.
+The existing surfd and join suites pass on Linux, including LRU selection,
+assignment atomicity and repeatable23-to24 migration. The inspected main-base
+retention, surfd and join suites also pass; all eight schema-compatibility
+controls pass, including ahead-schema/WAL refusal and native URI handling.
+No live deployment or production-data acceptance claimed.
+
 ## Patch 1059 - Plain floating navigation and a shared browser sidebar
 
 **Problem:** Owner wanted original bold white navigation without a backing slab,
