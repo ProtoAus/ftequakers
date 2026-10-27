@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1072 -- Keep queued player-origin I/O tied to its admission (QC)
+
+**Problem:** A queued player-origin output retained its activator but not the
+admission/taint that caused it. Later delivery could apply a physics change to a
+fresh attempt, or a dynamically named different body, without its original cause.
+
+**Change:** Owner selected practice/unranked, not cancellation. VM-local admission
+identities and captured source taint survive delayed and synchronous nested I/O;
+checks run at the supported actual player physics writes. Preserve effects and
+existing practice classification. True admission boundaries mint identities;
+same-box occupancy reconciliation and refused saves preserve them. Integer
+exhaustion cannot alias an earlier identity. No new captured field, recording
+format, native ABI/pin/tag, gameplay threshold, Build or release change. Preserve
+peer P1070 menu and reserved P1071 work; this is one claim after max+1 inspection.
+
+**Verified:** Same native/compiler, full production I/O/timer/body helpers,
+control25/subject25 ACTED with exact effects and preserved running/armed states.
+Current/world/cosmetic/held-teleport controls stay clean; actual recipient, nested
+world activator, serial exhaustion, same-box/refused-save identity+latch and
+existing recursion-cap/context restore pass. Synthetic bodies, sprint intercepted;
+not genuine input/client/reconnect, successful save/retry, full record/rank or
+human acceptance. Stock3VM0warnings, fresh reader930/0; exact unchanged full503REC/
+167pairedVIEW/10unpairedVIEW reader+input/report hashes retain312findings311faulted,
+zero increase. Three independent final reviews OK with notes after two v1
+false-taint regressions were fixed; original reviewer timeouts and harness
+failures retained, not passed. Latest published menu integration leaves every
+reviewed source byte/server dependency unchanged. Final artifact/deployment is
+recorded separately. Persistent map/button/timer/pad/body/carrier commitments and
+native same-command completion remain OPEN; this is NOT full Rule-8 closure.
+
 ## Patch 1070 -- Group lobby text and load sharper directory photos (mod side)
 
 **Problem:** Home stretched128x72 atlas cells and separated12px lobby/title counts
