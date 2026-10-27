@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1056 - Home fits the full lobby directory and stats (menu only)
+
+**Problem:** P1054's two-column lobby list hid rows behind scrolling and its tier
+list could hide lower stats in short windows. A populated fixture also exposed
+an int JSON length passed through MENU min's untyped tail, loading only Tier1.
+
+**Change:** Fit-to-screen, non-scrolling lobby and tier grids; all summary,
+standard tier/Unrated and Story/Event cards remain present. Missing data is
+explicitly unknown. Normalize the JSON length before clamping, retain loaded
+figures during refresh with visible failure state, and reuse the existing board
+GET interface. Move Home update hints into the tab strip and wrap narrow chat
+status. No native/evidence/API change, engine pin/tag or qcbuild bump.
+
+**Verified:** Standard isolated NoDeploy build: server/menu0 warnings; the same
+baseline two untouched CSQC setproperty227 warnings, zero new. Old populated
+P1054 control fetched12 but did not hold the last lobby action. Corrected subject
+at exact1280x720,1920x1111 and800x600:12/12 lobbies,9/9 populated WOS/Everything
+rows, Story2/4 and Event1/3, all bottom bounds fit, source clicks and last lobby
+acted.64/64 stress cells fit at800x600 as numbered-only targets; no full metadata
+claim at that density. Legacy and offline service cases keep all labels with
+unknown native values rather than invented zero. Screenshots inspected; initial
+size and decoder failures retained. Actual owner P1054 "yes it works" is recorded
+as human menu acceptance only; P1056 visual feel/real linked acceptance pending.
+Menu-only dual Windows promotion uses checked hashes/rollback copies; no server,
+API, CSQC/SSQC, config or player data is changed. See FTESurf
+`tools/p1056-home-fit.md` and the task's UTC installation receipt.
+
 ## Patch 1054 - tabbed Home, personal leaderboard seek and completion sources (QC/web)
 
 **Problem:** The initial menu separated lobbies/social/progress, while lobbies
