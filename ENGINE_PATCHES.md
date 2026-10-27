@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1065 -- Edit captured TAS inputs and recalculate the affected tail
+
+**Problem:** Exact pause/step/back preserves a line but cannot change its commands
+and calculate the resulting movement. Replaying live input or a QC packet index
+would substitute commands, lose carried movement state and miscount executions.
+
+**Change:** Add bounded movement-input metadata to native TAS checkpoints and a
+trusted-VM-only128-row staging/execution queue. Preserve exact signed aim words
+and compact jump/duck/walk bits before mover filtering; bind input availability
+only after successful movement and publication of the resulting native count.
+Restores rebind metadata to current counters, never transport/DONE/history.
+Overlay stored commands before QC input consumers, keep entity/body/retained aim
+coherent across pending setangle, and publish completion only on actual success.
+Cancellation is unconditional, terminal and independent of supported/alive gates.
+Matching QC adds inputs/replay/edit, inclusive range selection, lexical numeric
+validation and a local immutable tail copy. Validate every exact warm prefix/input
+and cumulative headroom before restore; use the warm-only writer, verify recorder
+lineage after go, then begin/fill/arm native storage. No staged tape survives a
+placement. All assistance stays TAS; no human/segmented admission or file import.
+
+**Verified:** Actual production C headers100236 checks0failed with strict compile
+warnings. Real dedicated-socket distinct-input unchanged replay matches printed
+pose/velocity/carry/hull/eye despite opposing live input. Edited side/jump/duck
+slices match directly simulated identical inputs; yaw90 matches world-equivalent
+direct input, first retained/entity aim agrees and a one-row45-degree tail acts.
+Only selected command fields/rows change. Render/net30/20 and240/144 preserve the
+exact affected count; malformed values, missing prefix and duplicate requests do
+not move. Active step conflicts refuse; play/off cancels and an actually applied
+unsupported clock faults terminally, with no revival on supported return. An
+edited attempt finishes as TAS and its REC is reader-clean. Reader suite930/0;
+current497REC/167paired+10unpairedVIEW corpus is identity-identical to its control,
+with no increase over306existing findings/305faulted reports. Standard Windows
+builds retain only existing warnings. Delivery/clean-source provenance is recorded
+separately; tools/p1065-tas-inputs.md describes use and scope.
+
+**Limits:** Current rules/shared world and at most128 affected ticks. No world
+rewind, all-map/dynamic/water/ladder or bit-identical full-state claim. Passive
+cursor telemetry is omitted, not movement input; replay clears live extras.
+No project persistence, undo/branch GUI, optimization or new evidence grammar.
+Human camera/input feel remains pending. No surfd/service operation, live-lobby
+rollout, public release or QC Build bump is implied by this source entry.
+
 ## Patch 1064 -- Windows visualizer capture ignores the game's mute
 
 **Problem:** Windows-output visualization received packets but analyzed silence

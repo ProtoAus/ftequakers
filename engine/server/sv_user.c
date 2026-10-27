@@ -8480,6 +8480,7 @@ static void SV_TASInvalidate(client_t *cl)
 	eval_t *f;
 	if (svs.gametype != GT_PROGS || !svprogfuncs || !cl->edict || sv.state != ss_active)
 		return;
+	SV_TASInputCancel(cl->edict); // P1065: no tape can outlive legacy/protocol invalidation
 	for (i = 0; i < countof(fields); ++i)
 	{
 		f = svprogfuncs->GetEdictFieldValue(svprogfuncs, cl->edict, names[i], ev_float, &evalc_tas[fields[i]]);
@@ -8508,7 +8509,10 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 		f[i] = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, names[i],
 			i == TAS_KEY ? ev_vector : ev_float, &evalc_tas[i]);
 		if (!f[i])
+		{
+			if (SV_TASTapeGuard(host_client, sv_player, 0, 0, 0) < 0) return SV_TAS_BLOCK;
 			return SV_TAS_NORMAL; // old QC/mods: no protocol, no behavior change
+		}
 	}
 	supported = !sv_nqplayerphysics.ival &&
 		!PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY) &&
@@ -8532,6 +8536,8 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 	bodyfree = sv_player->v->movetype == MOVETYPE_WALK && sv_player->v->health > 0 &&
 		!f[TAS_HOLD]->_float && !f[TAS_SAVEHOLD]->_float && !f[TAS_WATCHHOLD]->_float &&
 		!f[TAS_VIEWOWNER]->_float && !f[TAS_GHOST]->_float && !f[TAS_RESUME]->_float;
+	if (SV_TASTapeGuard(host_client, sv_player, supported, bodyfree,
+		kind == 1 && fresh && cmd->impulse) < 0) return SV_TAS_BLOCK;
 	action = SV_TASPlan(f[TAS_PAUSED]->_float != 0, f[TAS_USED]->_float > 0,
 		supported, bodyfree, kind == 1, fresh, cmd->impulse,
 		f[TAS_PENDING]->_float, f[TAS_DONE]->_float);
@@ -8569,6 +8575,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	qboolean held = false;	//FTESurf Patch 380
 	qboolean tas_step = false;
 	usercmd_t tas_cmd;
+	sv_tas_input_t tas_input;
 	eval_t *tas[TAS_FIELDS];
 	enum sv_tas_action tas_action;
 	vec3_t new_vel;
@@ -8657,6 +8664,8 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	{
 		tas_cmd = *ucmd;
 		tas_cmd.msec = 15; // exactly one Source tick; validated carry is retained
+		SV_TASTapeOverlay(host_client, sv_player, &tas_cmd);
+		SV_TASInputCapture(&tas_cmd, &tas_input); // supplied input, before mover limits
 		ucmd = &tas_cmd;
 		tas_step = true;
 		// An effective TAS command is NOT the decoded command's duration/provenance.
@@ -8664,6 +8673,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		totalmsec = offsetmsec = 0;
 		later = false;
 	}
+	if (!tas_step) SV_TASInputInvalidate(host_client);
 	if (SV_RunFullQCMovement(host_client, ucmd))
 	{
 		SV_HeldSourceBoundary(host_client, HELD_EFFECT);
@@ -9345,6 +9355,9 @@ if (sv_player->v->health > 0 && before && !after )
 			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movecarry", ev_float, &evalc_mcarry);
 			if (ev)
 				ev->_float = pmove.msec_carry;
+			if (tas_step)
+				SV_TASInputComplete(host_client, sv_player, &tas_input,
+					movevars.physicsmode == PHYSMODE_SOURCE && pmove.ticksrun == 1);
 
 			//FTESurf Patch 346: the pin's epoch, the physent digest, and the
 			//portal crossings the mover committed (with their post-move state).

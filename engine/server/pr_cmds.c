@@ -11560,7 +11560,34 @@ static void QCBUILTIN PF_tas_rewind(pubprogfuncs_t *prinst, struct globalvars_s 
 	G_FLOAT(OFS_RETURN) = SV_TASRewind(G_EDICT(prinst, OFS_PARM0), slot, token, op);
 }
 
+// P1065: movement-only input words and bounded staging, trusted server VM only.
+static void QCBUILTIN PF_tas_input(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float slot, token, field;
+	VectorClear(G_VECTOR(OFS_RETURN));
+	if (prinst != svprogfuncs || prinst->callargc != 4) return;
+	slot = G_FLOAT(OFS_PARM1); token = G_FLOAT(OFS_PARM2); field = G_FLOAT(OFS_PARM3);
+	if (!(slot >= 0 && slot < 4000 && floorf(slot) == slot) ||
+		!(token >= 1 && token <= 16000000 && floorf(token) == token) ||
+		!(field >= 0 && field <= 3 && floorf(field) == field)) return;
+	SV_TASInput(G_EDICT(prinst, OFS_PARM0), slot, token, field, G_VECTOR(OFS_RETURN));
+}
+
+static void QCBUILTIN PF_tas_tape(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float op;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (prinst != svprogfuncs || prinst->callargc != 7) return;
+	op = G_FLOAT(OFS_PARM1);
+	if (!(op >= 0 && op <= 6 && floorf(op) == op)) return;
+	G_FLOAT(OFS_RETURN) = SV_TASTape(G_EDICT(prinst, OFS_PARM0), op,
+		G_FLOAT(OFS_PARM2), G_FLOAT(OFS_PARM3), G_VECTOR(OFS_PARM4),
+		G_VECTOR(OFS_PARM5), G_FLOAT(OFS_PARM6));
+}
+
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
+	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3. Not hardware evidence or file import.")},
+	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only bounded movement replay: cancel0, validate1, preflight2, begin3, put4, arm5, status6. No transport/world restore or human eligibility.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "TAS-only bounded native movement checkpoints: capture0, probe1, apply2. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},
 
