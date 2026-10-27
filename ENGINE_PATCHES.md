@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1067 -- Refuse malformed save confirmation before legacy fallback
+
+**Problem:** The full save reader skipped short rows before recorder parsing,
+while the existing prefix-confirmation key was recognized only at exact arity.
+Present malformed confirmation could therefore look like absent legacy metadata
+and cold-restore a prefix instead of being explicitly unconfirmed.
+
+**Change:** Recognize that known field before the generic short-row skip and
+accept confirmation only with its existing exact arity/value. Guard other short
+recorder keys without changing unknown-key handling. Matching warm memory stays
+first; missing historical metadata retains its existing behavior. No new stored
+field, recording grammar, forgiveness, native ABI/pin/tag or Build change.
+
+**Verified:** Identical native production full-writer/full-reader/rewind fixtures
+on published control and subject,16 acted cases each, zero compile warnings.
+Control reproduces malformed cold acceptance; subject refuses it while preserving
+missing/valid cold restoration, explicit failure and all8 matching warm cases.
+Synthetic entities/minimal rows, sprint only intercepted: not real input, signed
+proof, verifier/rank acceptance or a client map restart. Standard isolated Windows
+build: all3 VMs, zero warnings. Reader930/0; SAME hash-bound503REC/167pairedVIEW/
+10unpairedVIEW corpus has identical full control/subject reports,312 findings on
+311 reports, zero increase. Deployment recorded separately. No atomic/durable/
+authenticated pairing or later same-count content-mutation claim.
+
 ## Patch 1066 -- Preserve TAS view angles and refuse incomplete stream restores
 
 **Problem:** P1065 replay set fixangle before movement but put model-scaled pitch
