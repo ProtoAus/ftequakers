@@ -30,6 +30,16 @@ reviewed source byte/server dependency unchanged. Final artifact/deployment is
 recorded separately. Persistent map/button/timer/pad/body/carrier commitments and
 native same-command completion remain OPEN; this is NOT full Rule-8 closure.
 
+**Delivery2026-10-27T20:04:05Z:** QCfae8bd6d/ledger04c4ebab exact pushed,
+clean source-bound final3VM0warnings, QWf0943780/previous1fa6df95 retained.
+Server DAT/LNO BOTH Windows installs, QW-only Pi; protected peer menu/client,
+native/backend/config/owner/player data unchanged. Short existing sweep lock,
+actual12fresh/zero-player boundary, all12 normal bare-unit restarts ONCE; each
+new PID/native image unchanged/new app-log positive/no selected QCerror, all12
+heartbeat lower-bound AFTER last restart, public/local health200+directory12.
+No forced busy restart, backend/native signal, Build/release. Human clean-run
+check pending; final delivered provenance/limits in tools/p1072-delayed-io.md.
+
 ## Patch 1070 -- Group lobby text and load sharper directory photos (mod side)
 
 **Problem:** Home stretched128x72 atlas cells and separated12px lobby/title counts
