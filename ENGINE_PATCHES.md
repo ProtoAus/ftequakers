@@ -124,8 +124,9 @@ The shader-generator banner is regenerated from a relative source path only.
 
 **Verified:** Standard isolated Windows full native build, zero new warnings
 against57unique baseline warnings; QC server/menu0, client same2old property227
-warnings. Actual-C admission167checks; reader930/0; canonical497RECs/167VIEWs
-retain306historical faults. Dedicated-socket old/native controls act: static
+warnings. Actual-C admission167checks; reader930/0; canonical497RECs/167paired
+VIEWs retain306historical faults. The final all-VIEW sweep also checks10unpaired
+sidecars (177total), with the same fault count and stable source files. Dedicated-socket old/native controls act: static
 pause and clock/carry preservation, actual1/7ticks at three configured render/net
 pairs, duplicate/exact-million-ticket handling, recorder flush, other-player
 motion, jump/release,128drain, live NQ invalidation, actual30ms-clock refusal and
@@ -137,7 +138,15 @@ Three independent final reviews found no remaining source blocker. Retained
 fixture failures are not relabelled passes. Limits: movement driver only, not
 world snapshots/dynamic parity; no new VIEW capture, human-input or selected12
 native PASS claim. Editor/optimizer/signatures/public TAS boards remain planned.
-Windows promotion, Linux/fleet qualification and owner feel are separate states.
+Follow-up uses bounded actual-step ACKs for paused packet work and caps the
+ordinary clock plus grants before float32 unit loss. All39live socket cases and
+930reader checks pass. Clean QCabc62390/native2e9260645 payloads are installed
+in BOTH Windows installs, with16post-install socket checks and predecessor
+payloads retained; owner config/menu/player data were not replaced. Portable
+Linuxx86_64 passes all10platform gates. Native AArch64 server compiles at the same
+pin and passes167actual-header checks; full ARM gameplay/parity is NOT claimed.
+Three precision-follow-up reviews are source-only. Public fleet promotion and
+owner feel remain pending, separate from compilation and Windows installation.
 See FTESurf tools/p1055-tas-step.md for controls and evidence boundaries.
 
 ## Patch 1054 - tabbed Home, personal leaderboard seek and completion sources (QC/web)
