@@ -442,14 +442,14 @@ static float PMSrc_StaminaRecovery (void)
 	return movevars.staminarecovery > 0 ? movevars.staminarecovery : PMSRC_STAMINA_RECOVERY;
 }
 
-static float PMSrc_StaminaRatio (void)
+static float PMSrc_StaminaRatioFor (float stamina)
 {
 	float ratio;
 
-	if (!PMSrc_StaminaEnabled() || pmove.stamina <= 0)
+	if (!PMSrc_StaminaEnabled() || stamina <= 0)
 		return 1.0f;
 
-	ratio = (PMSRC_STAMINA_MAX - ((pmove.stamina / 1000.0f) * PMSrc_StaminaRecovery()))
+	ratio = (PMSRC_STAMINA_MAX - ((stamina / 1000.0f) * PMSrc_StaminaRecovery()))
 	        / PMSRC_STAMINA_MAX;
 
 	if (ratio < 0)
@@ -457,6 +457,11 @@ static float PMSrc_StaminaRatio (void)
 	else if (ratio > 1)
 		ratio = 1;
 	return ratio;
+}
+
+static float PMSrc_StaminaRatio (void)
+{
+	return PMSrc_StaminaRatioFor(pmove.stamina);
 }
 
 /* cost is in STAMINA_MAX units; the pool is in milliseconds. */
@@ -2465,19 +2470,24 @@ static void PMSrc_FinishUnDuck (void)
   what it derives is a pure function of the button, so reading the bit is
   identical and needs nothing added to pmsourcestate_t.
 */
-static float PMSrc_EffectiveMaxSpeed (void)
+/* P1074: readonly input-state query; never borrow a previous player's pmove. */
+float PMSrc_MaxSpeedForInputs (int pm_type, int buttons, float stamina)
 {
 	float ms = movevars.maxspeed > 0 ? movevars.maxspeed : 250;
-	qboolean spec = (pmove.pm_type == PM_SPECTATOR ||
-					 pmove.pm_type == PM_OLD_SPECTATOR);
+	qboolean spec = (pm_type == PM_SPECTATOR || pm_type == PM_OLD_SPECTATOR);
 
-	if (!spec && PMSrc_StaminaEnabled () && pmove.stamina > 0)
-		ms *= PMSrc_StaminaRatio ();
+	if (!spec && PMSrc_StaminaEnabled () && stamina > 0)
+		ms *= PMSrc_StaminaRatioFor (stamina);
 
-	if (!spec && movevars.walkspeed > 0 && (pmove.cmd.buttons & BUTTON_SPEED))
+	if (!spec && movevars.walkspeed > 0 && (buttons & BUTTON_SPEED))
 		ms *= movevars.walkspeed;
 
 	return ms;
+}
+
+static float PMSrc_EffectiveMaxSpeed (void)
+{
+	return PMSrc_MaxSpeedForInputs(pmove.pm_type, pmove.cmd.buttons, pmove.stamina);
 }
 
 /*

@@ -15,7 +15,11 @@ enum sv_tas_tape_state {
 };
 enum sv_tas_tape_op {
 	SV_TAPE_CANCEL, SV_TAPE_VALIDATE, SV_TAPE_CHECK, SV_TAPE_BEGIN,
-	SV_TAPE_PUT, SV_TAPE_ARM, SV_TAPE_STATUS
+	SV_TAPE_PUT, SV_TAPE_ARM, SV_TAPE_STATUS,
+	SV_TAPE_PLANCAP = 8, SV_TAPE_PLANSET = 9
+};
+enum sv_tas_plan_mode {
+	SV_PLAN_LIVE, SV_PLAN_PRESET, SV_PLAN_LEFT, SV_PLAN_RIGHT
 };
 
 typedef struct {

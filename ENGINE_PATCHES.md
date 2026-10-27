@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1074 -- Author the next TAS ticks in a workshop
+
+**Problem:** Paused TAS still used live controls and free mouse look. There was
+no window to choose upcoming inputs or hold a direction for repeated air help.
+
+**Change:** Add a single-seat own-body workshop, validated full-draft configure/
+advance transactions, manual movement/aim/buttons and persistent left/right AIR
+selection after actual native TAS admission. Choose quantized yaw for the current
+horizontal air-acceleration gain using this body's effective speed/walk/stamina,
+friction and acceleration inputs; retain presets at contacts, transitions, zero
+speed, near clamps and differing custom server/mover caps. This is not future
+QC/collision/route search. Preserve per-command head carry and settle executed
+assists after PostThink/new-missile callbacks; new drafts, context loss, replay,
+placement and cancellation cannot revive an old plan. Preserve exact angle words
+through CLI/GUI and legal pitch endpoints. Default paused physical mouse lock is
+own-seat only, deliberately switchable, and never blocks authored camera updates.
+Ordinary mover speed calculation is extracted without changing its behavior.
+Planner protocol capability1071 stays stable; publication patch is1074. No new
+recording grammar, world snapshots, project persistence, signatures or TAS boards.
+
+**Verified:** Full native build adds no warnings (same74); QC retains only2old
+F333 warnings. Actual-C objective/guard suite983/0 compares quantized selection
+against exhaustive real AIR acceleration and acting per-axis/pre-server-clamp
+counterexamples. Dedicated-socket production controls exercise manual aim/buttons,
+sustained left/right turns/gain, replay/rewind and invalid/stale/cancel boundaries.
+Controlled actual bhop PostThink teleport and real cached-stat UI sequence prove
+old stale-heading/wrong-draft behavior and corrected execution; no mocked stats or
+body assignment. Tiny-yaw capture, imported +/-89 pitch and393219float32 threshold
+roundtrips pass; normal Source selftests and unchanged930reader/full corpus proof
+remain valid. Independent source reviews cleared the implemented corrections.
+These are bounded/headless checks, not rendered acceptance, all-map parity or a
+global fastest-line claim. Final stamped/pinned artifacts and destination proof
+are recorded separately in tools/p1074-tas-workshop.md. No Build/release bump.
+
 ## Patch 1073 -- Preserve active button callback source lineage (QC)
 
 **Problem:** Button completion/return retained a mutable activator but not the
