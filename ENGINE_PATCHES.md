@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
+
+**Problem:** A recurring timer's later native callback did not retain the
+admission that scheduled it.
+
+**Change:** Reuse existing VM-local bank metadata and callback scope. Changed
+schedules/actual off-on transitions replace scheduled ownership; an unchanged
+enabled schedule does not. Preserve the public think identity used by existing
+FireTimer/ResetTimer/RefireTime gates, original callback body/recurrence/oscillator
+outputs and actual physical effect. Existing actual-body checks mark the affected
+later attempt practice, not cancellation. No new captured field/format, native
+API/pin/tag, device collection, gameplay/dwell threshold, qcbuild, Build or release.
+Persistent interval/phase/other logical contributors across replacements and full
+world/body commitment bank remain OPEN; not complete P455/Rule8.
+
+**Verified:** Published QC632f2b58 baseline, nine ACTED native control/subject
+cases: old admission, clean current/world, unchanged schedule, actual off/on,
+original timer-input acceptance, oscillator, accepted changed deadline and a
+recipient distinct from source/unrelated player. Effect/counts/recurrence/state
+preserved; only affected recipient practices. Explicit synthetic bodies/timer
+labels, not client/input/HID/real ground/reconnect/natural finish/new record/rank
+or measured performance. Stock3VM0warnings/c24; raw reader930/0 actual exit0.
+Pre-runtime fixture API/compile failures retained privately, not passes. Final
+corpus/three fresh frozen reviews/publication/delivery remain separate gates.
+Public scope: tools/p1076-timer-callbacks.md. No delivery claimed here.
+
 ## Patch 1075 -- Consume finish forgiveness after the native command (QC)
 
 **Problem:** The automatic finish/reset-forgiveness check ran before all of the
