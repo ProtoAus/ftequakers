@@ -21,6 +21,19 @@ static int SV_TASClockSupported(int source, float tick, float gamespeed, float c
 		carry < SV_TAS_TICK - SV_TAS_EPSILON;
 }
 
+/* QC's timeline arithmetic must still resolve each native tick. */
+static int SV_TASRewindCount(double ticks)
+{
+	return ticks >= 0 && ticks < SV_TAS_MAX_DONE && ticks == floor(ticks);
+}
+
+/* P1061: only an explicitly owned rewind pin keeps the pause. Other holds
+ * retain the original cancellation/escape policy. */
+static int SV_TASRewindHold(int paused, int marked, int ownpin, int alive, int watch, int impulse)
+{
+	return paused && marked && ownpin && alive && watch && !impulse;
+}
+
 /* Natural command sequences are uint32, not decimal float counters. Only the
  * two exact 16-bit words cross QC. Ordinary play never uses this filter. */
 static int SV_TASFresh(uint32_t sequence, uint32_t previous, int valid)

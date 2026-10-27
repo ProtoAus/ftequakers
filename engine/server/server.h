@@ -1476,6 +1476,8 @@ void SV_PostRunCmd(void);
 void SV_HeldFrameBoundary(held_boundary_t boundary);
 void SV_HeldEffectAll(void);
 void SV_RunCmdCleanup(void);
+void SV_TASRewindClear(void);
+float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned int op);
 void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
 //FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
 extern const char *sv_pmpin_names[SV_PMPIN_COUNT];

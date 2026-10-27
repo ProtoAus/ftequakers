@@ -82,6 +82,7 @@ static void SV_TASInvalidate(client_t *cl);
 
 void SV_FS_ResetFieldCaches(void)
 {
+	SV_TASRewindClear();
 	memset(evalc_tas, 0, sizeof(evalc_tas));
 	memset(&evalc_lpdob,     0, sizeof(evalc_lpdob));		//FTESurf Patch 802
 	memset(&evalc_lpdfb,     0, sizeof(evalc_lpdfb));
@@ -8469,6 +8470,8 @@ static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmse
 	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
 }
 
+#include "sv_tas_rewind.inc"
+
 static void SV_TASInvalidate(client_t *cl)
 {
 	static const char *const names[] = {"run_tas_ready", "run_tas_paused", "run_tas_pending"};
@@ -8495,6 +8498,7 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 	extern cvar_t pm_physicsmode, pm_ticrate;
 	uint32_t previous = 0;
 	int i, valid, fresh, supported, bodyfree;
+	eval_t *rewindpin;
 	enum sv_tas_action action;
 
 	if (svs.gametype != GT_PROGS || !svprogfuncs)
@@ -8531,6 +8535,19 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 	action = SV_TASPlan(f[TAS_PAUSED]->_float != 0, f[TAS_USED]->_float > 0,
 		supported, bodyfree, kind == 1, fresh, cmd->impulse,
 		f[TAS_PENDING]->_float, f[TAS_DONE]->_float);
+	// P1061: our own rewind pin is a paused body, not an unrelated takeover.
+	// It consumes no move budget; transactional impulses must still escape.
+	if (action == SV_TAS_CANCEL)
+	{
+		rewindpin = SV_TASRewindField(sv_player, "run_tas_rwpin", ev_float);
+		if (rewindpin)
+		if (SV_TASRewindHold(f[TAS_PAUSED]->_float != 0, f[TAS_USED]->_float > 0,
+			rewindpin->_float == 1 && sv_player->v->movetype == MOVETYPE_NONE &&
+			!f[TAS_SAVEHOLD]->_float && !f[TAS_VIEWOWNER]->_float &&
+			!f[TAS_GHOST]->_float && !f[TAS_RESUME]->_float,
+			sv_player->v->health > 0, f[TAS_WATCHHOLD]->_float != 0, cmd->impulse))
+			action = SV_TAS_BLOCK;
+	}
 	if (kind == 1 && fresh)
 	{
 		f[TAS_KEY]->_vector[0] = cmd->sequence & 0xffffu;

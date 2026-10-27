@@ -11547,7 +11547,21 @@ static void QCBUILTIN PF_fs_randomf (pubprogfuncs_t *prinst, struct globalvars_s
 	G_FLOAT(OFS_RETURN) = (float)(v >> 8) / 16777216.0f;
 }
 
+// P1061: bounded VM-only handles, not a string/file checkpoint parser.
+static void QCBUILTIN PF_tas_rewind(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float slot, token, op;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (prinst != svprogfuncs || prinst->callargc != 4) return;
+	slot = G_FLOAT(OFS_PARM1); token = G_FLOAT(OFS_PARM2); op = G_FLOAT(OFS_PARM3);
+	if (!(slot >= 0 && slot < 4000 && floorf(slot) == slot) ||
+		!(token >= 0 && token <= 16000000 && floorf(token) == token) ||
+		!(op >= 0 && op <= 2 && floorf(op) == op)) return;
+	G_FLOAT(OFS_RETURN) = SV_TASRewind(G_EDICT(prinst, OFS_PARM0), slot, token, op);
+}
+
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
+	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "TAS-only bounded native movement checkpoints: capture0, probe1, apply2. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},
 
 #ifndef SERVERONLY

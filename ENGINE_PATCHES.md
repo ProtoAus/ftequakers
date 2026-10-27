@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1061 - Rewind paused TAS by exact retained movement ticks
+
+**Problem:** The existing rewind cursor advances through sampled line positions,
+not necessarily adjacent physics ticks. Loading a pose alone also misses Source
+jump/duck/carry state. Replay viewing adds elapsed time, and an ordinary hold's
+release can exclude the first explicitly granted movement tick.
+
+**Change:** Add a VM-only bounded native movement-checkpoint store with map,
+connection and slot/token identity. Matching QC retains each granted TAS step,
+selects only an exact retained tick and uses the existing recorder-prefix/load
+path, then restores native movement state and remains paused. Native movement,
+completion, request and freshness counters are not rewound. Reject unsupported
+clocks, moving-carrier captures and native counter ranges without single-tick QC
+precision. Only an explicitly owned TAS rewind pin preserves pause and excludes
+replay-viewing time; ordinary viewer/hold/impulse policies remain unchanged.
+Settle thaw accounting before the next grant. Add `tas back [1..128]`, integer
+tick navigation in paused TAS rewind, and timeline/hull/eye status.
+
+**Verified:** Actual-C admission helper182 checks, reader930 checks, zero failed.
+Real dedicated-socket walk/start controls act before pause; direct back1/back7
+restore the requested logical tick without reducing native counters, and repeat
+flat/airborne endpoints at printed precision. UI control31 checks: exact head,
+one-tick cursor, wall-wait/no movement, paused go with no countdown/free tick,
+first forward logical/native delta1, acting duck eye/hull and duck/unduck parity,
+render/net30/20 and240/144, and actual finish after off retaining TAS ancestry.
+Its produced REC/VIEW reader has zero faults. Existing corpus497 RECs,
+167 paired/10 unpaired VIEWs retains306 findings. Old-native control refuses back
+without movement and still advances a forward tick. No new compiler warnings.
+
+**Limits:** Warm, bounded movement history, not persistent project checkpoints.
+Live packets can cover uncaptured intermediate ticks; those refuse, never choose
+a nearby pose or invent a recorder prefix. Preview geometry is interpolated.
+World/rules remain current; no moving-world rollback or all-map parity claim.
+Input-timeline editing, downstream recalculation, project export and TAS boards
+remain planned. Human rewind/aim feel and deployment are recorded separately.
+
 ## Patch 1060 - Retain bounded lobby history across heartbeat gaps
 
 **Problem:** Heartbeat expiry and full-capacity cleanup deleted lobby rows,
