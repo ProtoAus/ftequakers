@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1066 -- Preserve TAS view angles and refuse incomplete stream restores
+
+**Problem:** P1065 replay set fixangle before movement but put model-scaled pitch
+in .angles. The wire sender selected that model pitch, and the pending fixangle
+also suppressed mover-produced view angles at rotated portals. Native warm restore
+had the same model/view wire mismatch. REC14 stream snapshots lacked historical
+mover-command state, yet editor preflight could accept them and a failed restore
+could cancel the active recording.
+
+**Change:** Native warm restore preserves historical model angles and emits the
+full restored view through the standard reliable sender without leaving its own
+fixangle pending. Replay does not manufacture an early fixangle; genuine QC angle
+corrections keep ordinary ownership. Its camera notification follows ordinary
+mover/portal view publication and uses full view angles. QC refuses REC14 stream
+edits/replay and tick-back before ticket/pin/placement/recorder mutation; buffered
+REC14 remains supported. Historical stream support is explicitly deferred, not
+faked using current-head metadata.
+
+**Verified:** Real-socket headless control/subject checks reproduced all three
+P1065 failures. Corrected unchanged nonzero-pitch replay, pitch30 edits and
+nonzero-pitch one-tick back agree with actual client view within ordinary angle
+wire quantization. A real linked-portal counter increment proves both direct and
+replayed 90-degree crossings; resulting body/velocity/view agree. Stream edit and
+tick-back refuse while preserving running/recording state, serial, row count,
+byte extent, body/velocity, request and pin. Observer-only SSQC telemetry; no new
+production debug RPC. Human rendered camera feel remains unconfirmed.
+
 ## Patch 1065 -- Edit captured TAS inputs and recalculate the affected tail
 
 **Problem:** Exact pause/step/back preserves a line but cannot change its commands

@@ -8573,7 +8573,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	int			oldmsec, firstmsec;
 	qboolean jumpable;
 	qboolean held = false;	//FTESurf Patch 380
-	qboolean tas_step = false;
+	qboolean tas_step = false, tas_replay = false;
 	usercmd_t tas_cmd;
 	sv_tas_input_t tas_input;
 	eval_t *tas[TAS_FIELDS];
@@ -8664,7 +8664,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	{
 		tas_cmd = *ucmd;
 		tas_cmd.msec = 15; // exactly one Source tick; validated carry is retained
-		SV_TASTapeOverlay(host_client, sv_player, &tas_cmd);
+		tas_replay = SV_TASTapeOverlay(host_client, sv_player, &tas_cmd);
 		SV_TASInputCapture(&tas_cmd, &tas_input); // supplied input, before mover limits
 		ucmd = &tas_cmd;
 		tas_step = true;
@@ -9458,6 +9458,10 @@ if (sv_player->v->health > 0 && before && !after )
 			VectorAngles(fwd, up, sv_player->v->angles, true);
 		}
 	}
+
+	// P1066: replay camera notification follows mover/portal aim publication, not model pitch.
+	if (tas_replay && !sv_player->v->fixangle)
+		SV_SendFixAngle(host_client, NULL, FIXANGLE_FIXED, true);
 
 	pmove.player_mins[0] = -16;
 	pmove.player_mins[1] = -16;

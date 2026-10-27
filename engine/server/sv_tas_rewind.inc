@@ -172,7 +172,9 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 	TAS_RESTORE_FIELD("run_momcool", momcool);
 	TAS_RESTORE_FIELD("run_momslide", momslide);
 #undef TAS_RESTORE_FIELD
-	e->v->fixangle = 1;
+	// This restore owns its notification; keep historical body angles off the wire.
+	e->v->fixangle = FIXANGLE_NO;
+	SV_SendFixAngle(cl, NULL, FIXANGLE_FIXED, true);
 	World_LinkEdict(&sv.world, (wedict_t*)e, false);
 	return 1;
 }
@@ -409,12 +411,9 @@ static int SV_TASTapeOverlay(client_t *cl, edict_t *e, usercmd_t *cmd)
 	for (i = 0; i < 3; ++i)
 	{
 		cmd->angles[i] = in->angle[i];
-		e->v->v_angle[i] = SHORT2ANGLE(cmd->angles[i]); // coherent even with pending fixangle
+		if (!e->v->fixangle) // genuine QC corrections retain ordinary angle ownership
+			e->v->v_angle[i] = SHORT2ANGLE(cmd->angles[i]);
 	}
-	// Keep the standard body pitch/yaw convention without discarding setangle.
-	e->v->angles[PITCH] = r_meshpitch.value * e->v->v_angle[PITCH] / 3;
-	e->v->angles[YAW] = e->v->v_angle[YAW];
-	e->v->fixangle = 1; // each admitted replay aim, including the final head, reaches the camera
 	return 1;
 }
 
