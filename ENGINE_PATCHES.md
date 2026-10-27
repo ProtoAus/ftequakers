@@ -10,7 +10,9 @@ schedules/actual off-on transitions replace scheduled ownership; an unchanged
 enabled schedule does not. Preserve the public think identity used by existing
 FireTimer/ResetTimer/RefireTime gates, original callback body/recurrence/oscillator
 outputs and actual physical effect. Existing actual-body checks mark the affected
-later attempt practice, not cancellation. No new captured field/format, native
+recipient's practice state/flag, not cancellation. Otherwise clean/nonsegmented/
+nonshadow attempts become unranked practice; pre-existing segmented/shadow tier
+precedence is unchanged, NOT an all-tier-unranked claim. No new captured field/format, native
 API/pin/tag, device collection, gameplay/dwell threshold, qcbuild, Build or release.
 Persistent interval/phase/other logical contributors across replacements and full
 world/body commitment bank remain OPEN; not complete P455/Rule8.
@@ -22,8 +24,12 @@ recipient distinct from source/unrelated player. Effect/counts/recurrence/state
 preserved; only affected recipient practices. Explicit synthetic bodies/timer
 labels, not client/input/HID/real ground/reconnect/natural finish/new record/rank
 or measured performance. Stock3VM0warnings/c24; raw reader930/0 actual exit0.
-Pre-runtime fixture API/compile failures retained privately, not passes. Final
-corpus/three fresh frozen reviews/publication/delivery remain separate gates.
+Pre-runtime fixture API/compile failures retained privately, not passes. Three
+fresh frozen reviews SOURCE OK/no product issues; qualification narrowed for
+pre-existing segmented/shadow precedence. Pure actual-source classifier probe
+confirms that limit, not actual endpoint/receipt acceptance. Fresh full680-file
+corpus503REC/167pairedVIEW/10unpaired:312 findings311faulted, increase0 against
+retained independent control. Publication/delivery remain separate pending gates.
 Public scope: tools/p1076-timer-callbacks.md. No delivery claimed here.
 
 ## Patch 1075 -- Consume finish forgiveness after the native command (QC)
