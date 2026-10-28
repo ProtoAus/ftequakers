@@ -3897,6 +3897,30 @@ void QCBUILTIN PF_search_begin (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 		G_FLOAT(OFS_RETURN) = -1;
 		return;
 	}
+	if (flags & QCSEARCH_MULTISEARCH)
+	{
+		/*P1090 review 2: a multisearch is ':'-separated patterns (FS_EnumerateFilesEach),
+		  so each is checked on its own; a cut-off part keeps the segments that matter.*/
+		char part[MAX_OSPATH];
+		const char *b, *e;
+		size_t n;
+		for (b = pattern; ; b = e + 1)
+		{
+			e = strchr(b, ':');
+			n = e ? (size_t)(e - b) : strlen(b);
+			if (n >= sizeof(part))
+				n = sizeof(part) - 1;
+			memcpy(part, b, n);
+			part[n] = 0;
+			if (QC_TasprojDenied(prinst, part, true))
+			{
+				G_FLOAT(OFS_RETURN) = -1;
+				return;
+			}
+			if (!e)
+				break;
+		}
+	}
 
 	for (j = 0; j < numpr_searches; j++)
 		if (!pr_searches[j].fromprogs)

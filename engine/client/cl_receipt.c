@@ -673,6 +673,29 @@ qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *
 		Con_Printf("tasrev_sign: this game code is not one file with a name. Refused.\n");
 		return false;
 	}
+#ifndef CLIENTONLY
+	{
+		/*P1090 review 2: a hosted game still takes its CSQC from the download cache when one
+		  matches the served file's md4 and size (CSQC_FindMainProgs), and any server can fill
+		  that cache: the VM must be the very bytes this game serves.*/
+		extern cvar_t sv_csqc_progname;
+		qbyte digest[32];
+		char hex[65] = "";
+		size_t len;
+		qbyte *data = (sv.state && *sv_csqc_progname.string) ? FS_LoadMallocFile(sv_csqc_progname.string, &len) : NULL;
+		if (data)
+		{
+			CalcHash(&hash_sha2_256, digest, sizeof(digest), data, len);
+			BZ_Free(data);
+			CL_Receipt_Hex(hex, sizeof(hex), digest, sizeof(digest), true);
+		}
+		if (strcmp(hex, acct_vm_code))
+		{
+			Con_Printf("tasrev_sign: this game code is not the file this game serves. Refused.\n");
+			return false;
+		}
+	}
+#endif
 	if (!CL_Receipt_IsHex(sha, 64) || !CL_Receipt_IsHex(mapcrc, 8)
 		|| !parent || (strcmp(parent, "-") && !CL_Receipt_IsHex(parent, 64)))
 		return false;
