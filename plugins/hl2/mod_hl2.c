@@ -1542,6 +1542,8 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			Mod_HL2_SequenceEvents(mod, ctx.header, fsize, galias->ofsanimations, galias->numanimations);
 		VectorCopy(ctx.header->illumposition, galias->illumposition);	//FTESurf Patch 780
 		galias->hasillum = true;
+		galias->mdlchecksum = (int)ctx.header->revisionid;	//FTESurf Patch 1096: studiohdr_t::checksum
+		galias->haschecksum = true;
 	}
 
 	mod->type = mod_alias;

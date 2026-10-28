@@ -283,6 +283,11 @@ typedef struct galiasinfo_s
 	//a model from when the map names no lighting origin.  First surface only; hasillum 0 elsewhere.
 	qboolean hasillum;
 	vec3_t illumposition;
+	//FTESurf Patch 1096: APPEND-ONLY.  studiohdr_t::checksum, which VRAD writes into every sp_N.vhv it
+	//bakes for this model (vradstaticprops.cpp:1570): a bake carrying another is not this model's.
+	//First surface only; haschecksum 0 elsewhere and for every non-Source model.
+	qboolean haschecksum;
+	int mdlchecksum;
 } galiasinfo_t;
 
 struct terrainfuncs_s;

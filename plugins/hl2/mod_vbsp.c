@@ -627,6 +627,7 @@ typedef struct vbspinfo_s
 	size_t	lit_baked;	//FTESurf Patch 163: props lit from their own sp_N.vhv
 	size_t	lit_vc;		//FTESurf Patch 259: ...of which these kept it PER VERTEX
 	size_t	lit_vcverts;	//...totalling this many vertices, i.e. 4 bytes each
+	size_t	lit_foreign;	//FTESurf Patch 1096: bakes dropped at first light for another model's checksum
 	struct staticprop_s
 	{
 		float fademindist;
@@ -639,6 +640,10 @@ typedef struct vbspinfo_s
 		//THIS prop instance, 0..255 in the same gamma space res_ambient uses.
 		vec3_t	baked;
 		qboolean hasbaked;
+		//FTESurf Patch 1096: the bake's own checksum, compared with the model's once it has loaded.
+		int		vhvchecksum;
+		qboolean vhvchecked;
+		qboolean vhvforeign;	//...and found to be another model's: dropped, as Source drops it
 		/*
 		FTESurf Patch 262: this prop asked to be solid and got no BIH leaf, because
 		it wants a hull and its model ships no .phy.  Recorded per prop rather than
@@ -5436,6 +5441,7 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 			}
 		}
 	}
+	sent->vhvchecksum = h->checksum;	//FTESurf Patch 1096
 	plugfuncs->Free(f);
 	sent->hasbaked = true;
 	return true;
@@ -5952,6 +5958,7 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		lit with its neighbour's bake.
 		*/
 		sent->hasbaked = false;
+		sent->vhvchecked = sent->vhvforeign = false;	//FTESurf Patch 1096
 		sent->vcraw = NULL;			//FTESurf Patch 259
 		sent->vcrawverts = 0;
 		sent->vc = NULL;
@@ -10543,6 +10550,33 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				*/
 				vec3_t tmp, sample;
 
+				/*
+				FTESurf Patch 1096: a bake VRAD made for ANOTHER model is not this
+				prop's lighting.  VRAD stamps each sp_N.vhv with its model's
+				studiohdr checksum; a map whose prop list or models changed after
+				VRAD ran keeps the old files.  surf_pantheon: 791 of its 820 bakes
+				carry another checksum, and painting them gave identical pillars
+				different colours and stripes.  Dropped here, once, the first frame
+				the model is loaded -- the prop then lights like an unbaked one.
+				*/
+				if (sent->hasbaked && !sent->vhvchecked && src->model &&
+					src->model->loadstate == MLS_LOADED && src->model->meshinfo)
+				{
+					const galiasinfo_t *g = (const galiasinfo_t*)src->model->meshinfo;
+					sent->vhvchecked = true;
+					if (g->haschecksum && g->mdlchecksum != sent->vhvchecksum)
+					{
+						sent->hasbaked = false;
+						sent->vhvforeign = true;
+						if (sent->vcraw)
+							plugfuncs->Free(sent->vcraw);
+						sent->vcraw = NULL;
+						sent->vcrawverts = 0;
+						sent->vcgain = 1;
+						prv->lit_foreign++;
+					}
+				}
+
 				VBSP_PropSamplePoint(mod, sent, sample);
 
 				VectorCopy(src->origin, tmp);
@@ -12993,6 +13027,9 @@ static void VBSP_PropCensus_f(void)
 		//FTESurf Patch 259.  Of the props that DREW, how many drew from VRAD's
 		//per-vertex bake.  This is the line that says the feature is on: the
 		//load-time count says only that the files were read.
+		if (prv->lit_foreign)
+			Con_Printf("  %6u bake(s) dropped at first light: made for another model (checksum)\n",
+					   (unsigned)prv->lit_foreign);
 		if (vbsp_propstat.vcdrawn || vbsp_propstat.vcdeclined)
 		{
 			Con_Printf("  %6u of the drawn props used VRAD's per-vertex bake\n", vbsp_propstat.vcdrawn);
@@ -13085,7 +13122,9 @@ static void VBSP_PropCensus_f(void)
 			vec3_t sp;
 			VBSP_PropSamplePoint(mod, sent, sp);
 			Con_Printf("    lighting           : %s, sampled at %.1f %.1f %.1f (%s)\n",
-				sent->hasbaked ? "VRAD baked (.vhv)" : "leaf ambient cube",
+				sent->hasbaked ? "VRAD baked (.vhv)" :
+				sent->vhvforeign ? "leaf ambient cube -- its .vhv is another model's (checksum), dropped" :
+				"leaf ambient cube",
 				sp[0], sp[1], sp[2],
 				(sent->authoredlight && !memcmp(sp, sent->lightorg, sizeof(vec3_t))) ? "map's lighting origin" :
 				memcmp(sp, src->origin, sizeof(vec3_t)) ? "model illumposition" :
