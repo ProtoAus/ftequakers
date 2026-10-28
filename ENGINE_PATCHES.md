@@ -29,8 +29,17 @@ fresh frozen reviews SOURCE OK/no product issues; qualification narrowed for
 pre-existing segmented/shadow precedence. Pure actual-source classifier probe
 confirms that limit, not actual endpoint/receipt acceptance. Fresh full680-file
 corpus503REC/167pairedVIEW/10unpaired:312 findings311faulted, increase0 against
-retained independent control. Publication/delivery remain separate pending gates.
-Public scope: tools/p1076-timer-callbacks.md. No delivery claimed here.
+retained independent control. Reviewed product523ead9c/ledger9f4ef94f published
+with qualification QC8614273d/engine4873ff3d, no changed product source afterward.
+Delivered2026-10-27T23:59:23Z: exact stock QW1d2df5ec + LNO BOTH Windows, immediate
+P1075 .prev and protected roles unchanged, no Windows process action. Pi QW-only,
+all12 positive status7 empty including spectators at boundary AND immediately
+before each once-only ordinary restart; new PIDs/same native/fresh positive app
+spawn/heartbeats AFTER LAST restart, exact actual PID namespaces and local/public
+health200/directory12. No forced busy drop, backend/native/client/UI/config/data/
+Build/release operation; stage consumed/short lock released. Human ordinary-map/
+natural clean-run acceptance PENDING. Full-bank/cross-tier limits above remain.
+Public scope and exact artifact: tools/p1076-timer-callbacks.md.
 
 ## Patch 1075 -- Consume finish forgiveness after the native command (QC)
 
