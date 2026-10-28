@@ -3463,8 +3463,8 @@ void TP_UpdateAutoStatus(void)
 	}
 	strcpy(vars.autoteamstatus, newstatus);
 
-	if (strchr(tp_autostatus.string, ';'))
-		return;	//don't take risks
+	if (strpbrk(tp_autostatus.string, ";\n\r"))
+		return;	//don't take risks (Patch 1086: CSQC's cvar_set can put a newline here)
 
 	if (tp_autostatus.latched_string)
 		return;

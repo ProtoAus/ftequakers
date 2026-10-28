@@ -3975,7 +3975,9 @@ void Key_WriteBindings (vfsfile_t *f)
 		for (m = 0; m < KEY_MODIFIER_ALTBINDMAP; m++)
 		{
 			binding = keybindings[i][m|KEY_MODIFIER_ALTBINDMAP];
-			if (binding && *binding)
+			/*Patch 1086: in_bind carries no level, so a game-code bind (setkeybind into a
+			  bindmap is RESTRICT_INSECURE) would come back from the config as a local one.*/
+			if (binding && *binding && bindcmdlevel[i][m|KEY_MODIFIER_ALTBINDMAP] == RESTRICT_LOCAL)
 			{
 				s = va("%s", Key_KeynumToString(i, 0));
 				//quote it as required
