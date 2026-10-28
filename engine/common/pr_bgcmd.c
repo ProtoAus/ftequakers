@@ -2655,10 +2655,10 @@ qboolean QC_FixFileName(const char *name, const char **result, const char **fall
 	//Deliberately additive rather than replacing "data/": that prefix is what every other FTE mod
 	//uses and what this engine's own docs promise (server/pr_cmds.c:12303).
 	//
-	//Security: this widens the QC write sandbox by exactly one directory. The exposure is
-	//unchanged in practice -- QC could already write configs under data/ and the menu already
-	//execs one of them -- and the read sandbox (QC_PathRequiresSandbox, which hides *.cfg at the
-	//gamedir root and under configs/) is untouched.
+	//Security: this widens the QC write sandbox by exactly one directory, and cfg/default.cfg
+	//is exec'd at local level every boot -- so CSQC may not change it (QC_CfgChangeDenied,
+	//Patch 1086). The read sandbox (QC_PathRequiresSandbox, which hides *.cfg at the gamedir
+	//root and under configs/) is untouched.
 	if (!strncmp(name, "data/", 5) || !strncmp(name, "cfg/", 4))
 	{
 		*fallbackread = NULL;	//don't be weird.
@@ -2676,6 +2676,22 @@ qboolean QC_FixFileName(const char *name, const char **result, const char **fall
 
 	}
 	return true;
+}
+
+/*Patch 1086: CSQC is whatever the server sent, and cfg/ is exec'd at local level
+  (cfg/default.cfg every boot), so CSQC may read cfg/ but not write, copy into,
+  rename or remove it.  Ours never writes there; menu QC owns settings/server.cfg.*/
+static qboolean QC_CfgChangeDenied(pubprogfuncs_t *prinst, const char *fixedname)
+{
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	extern world_t csqc_world;
+	if (prinst == csqc_world.progs && !strnicmp(fixedname, "cfg/", 4))
+	{
+		Con_Printf("qcfopen(\"%s\"): csqc may not change cfg/\n", fixedname);
+		return true;
+	}
+#endif
+	return false;
 }
 
 void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -2735,6 +2751,9 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		Con_Printf("qcfopen(\"%s\"): Access denied\n", name);
 		return;
 	}
+	if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READNL && fmode != FRIK_FILE_MMAP_READ
+	    && fmode != FRIK_FILE_READ_DELAY && QC_CfgChangeDenied(prinst, name))
+		return;
 
 	Q_strncpyz(pf_fopen_files[i].name, name, sizeof(pf_fopen_files[i].name));
 
@@ -3511,7 +3530,7 @@ void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 	G_FLOAT(OFS_RETURN) = -1;
 	if (QC_FixFileName(srcname, &srcname, &fallbackread))
 	{
-		if (QC_FixFileName(dstname, &dstname, &fallbackwrite))
+		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname))
 		{
 			src = FS_OpenVFS(srcname, "rb", FS_GAME);
 			if (!src)
@@ -3578,7 +3597,8 @@ void QCBUILTIN PF_fcopyrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 	const char *fallback;
 	vfsfile_t *src, *dst;
 	G_INT(OFS_RETURN) = -1;
-	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback) || !QC_FixFileName(dstname, &dstname, &fallback))
+	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback) || !QC_FixFileName(dstname, &dstname, &fallback)
+	    || QC_CfgChangeDenied(prinst, dstname))
 		return;
 	src = FS_OpenVFS(srcname, "rb", FS_GAMEONLY);
 	if (!src)
@@ -3628,8 +3648,8 @@ void QCBUILTIN PF_frename (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	const char *dstname = PR_GetStringOfs(prinst, OFS_PARM1);
 	const char *fallbackread, *fallbackwrite; //not actually used, but present because QC_FixFileName wants a fallback
 	G_FLOAT(OFS_RETURN) = -1; //some kind of dodgy path problem
-	if (QC_FixFileName(srcname, &srcname, &fallbackread))
-		if (QC_FixFileName(dstname, &dstname, &fallbackwrite))
+	if (QC_FixFileName(srcname, &srcname, &fallbackread) && !QC_CfgChangeDenied(prinst, srcname))
+		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname))
 		{
 			if (FS_Rename(srcname, dstname, FS_GAMEONLY))
 				G_FLOAT(OFS_RETURN) = 0;
@@ -3642,7 +3662,7 @@ void QCBUILTIN PF_fremove (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	const char *fname = PR_GetStringOfs(prinst, OFS_PARM0);
 	const char *fallbackread; //not actually used, but present because QC_FixFileName wants a fallback
 	G_FLOAT(OFS_RETURN) = -1; //some kind of dodgy path problem
-	if (QC_FixFileName(fname, &fname, &fallbackread))
+	if (QC_FixFileName(fname, &fname, &fallbackread) && !QC_CfgChangeDenied(prinst, fname))
 	{
 		if (FS_Remove(fname, FS_GAMEONLY))
 			G_FLOAT(OFS_RETURN) = 0;

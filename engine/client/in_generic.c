@@ -844,7 +844,7 @@ void IN_Init(void)
 	Cvar_Register (&in_jrn484_badframes, "input controls");
 	Cvar_Register (&in_jrn484_skipped, "input controls");
 	Cmd_AddCommandD ("in_journal_begin", IN_JournalBegin_f, "Start an in-memory journal of raw input events.  Discards any journal already open.");
-	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal under data/ and close it.  With no path, discard it.");
+	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal to data/...*.hid and close it.  With no path, discard it.");
 	Cmd_AddCommandD ("in_journal_note", IN_JournalNote_f, "Append a comment line to the open input journal.");
 	Cmd_AddCommandD ("in_journal_synth", IN_JournalSynth_f, "in_journal_synth <n> -- inject n synthetic input events, for testing.  Marks the journal as synthetic, which makes it inadmissible.");
 
@@ -2349,11 +2349,16 @@ static void IN_JournalEnd_f(void)
 	/*Patch 1086: and only under a journal's own name.  CSQC's localcmd and server
 	  stufftext share RESTRICT_INSECURE, so a level test would also refuse our own
 	  recorder (which writes .hid only); without this any server's code could write a
-	  journal over a saved zone file or a save.*/
+	  journal over a saved zone file or a save.  Tested whole: a name the namelocal copy
+	  would cut is refused, not truncated to a different file.  Lowercase, as rec_ul_arm.
+	  Nor may game code or server text replace a journal on disk -- an archived PB's must
+	  keep matching its signed digest; the recorder's names are nonce- or tick-stamped.*/
 	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5)
-	    || strlen(name) < 9 || Q_strcasecmp(name + strlen(name) - 4, ".hid"))
+	    || strlen(name) < 9 || strlen(name) >= sizeof(namelocal)
+	    || strcmp(name + strlen(name) - 4, ".hid")
+	    || (Cmd_IsInsecure() && COM_FCheckExists(name)))
 	{
-		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid\n", Cmd_Argv(1));
+		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid, and game code may not replace one\n", Cmd_Argv(1));
 		IN_Journal_Digest(false);	/*complete bytes; nobody kept them*/
 		IN_Journal_Drop();
 		return;
@@ -2471,7 +2476,7 @@ static void IN_JournalSynth_f(void)
 	  the pointer a real press is judged by (P1081's zone dialog), so local console only.*/
 	if (Cmd_IsInsecure())
 	{
-		Con_Printf("%s: not allowed (from server)\n", Cmd_Argv(0));
+		Con_Printf("%s: local console only\n", Cmd_Argv(0));
 		return;
 	}
 	if (n < 1)
