@@ -10281,6 +10281,7 @@ static void FS_UseAddons_f(void)
 //     our stale record still said the pack was ours to throw away.  The drop pass
 //     therefore re-checks fs_addons.txt at the moment it is about to unmount.
 #define FS_MAPDEPS_FILE "data/mapdeps.txt"
+#define FS_MAPDEPS_NET "data/mapdeps.net.txt"	//ftesurf (P1099): the menu's copy from the Pi
 #define FS_MAXAUTOMOUNT 8
 static char fs_automounted[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): resolved syspaths this code mounted
 static int fs_numautomounted;
@@ -11399,9 +11400,31 @@ void FS_AutoUnmountStale(void)
 	//ftesurf (P186): last, so SPF_HARVEST is computed from the set that survived the drop.
 	FS_Cache_BeginMap();
 }
+//ftesurf (P1099): a mapdeps file's "# stamp YYYYMMDDHHMMSS" (UTC) from its first lines,
+//or "" when it has none -- which sorts before every stamp.
+static void FS_MapDepsStamp(const char *file, char out[15])
+{
+	int n, i;
+	out[0] = 0;
+	for (n = 0; file && *file && n < 40; n++)
+	{
+		if (!strncmp(file, "# stamp ", 8))
+		{
+			for (i = 0; i < 14 && file[8+i] >= '0' && file[8+i] <= '9'; i++)
+				out[i] = file[8+i];
+			out[i == 14 ? 14 : 0] = 0;
+			return;
+		}
+		file = strchr(file, '\n');
+		if (file)
+			file++;
+	}
+}
 void FS_AutoMountForMap(const char *mapname)
 {
-	char *file, *line, *nl, *e, *spec;
+	char *file, *net, *line, *nl, *e, *spec;
+	char stampfile[15], stampnet[15];
+	qboolean netonly = false;
 	char tmp[MAX_QPATH], want[MAX_QPATH];
 	char wantspec[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): the specs this map asks for...
 	char wantpath[FS_MAXAUTOMOUNT][MAX_OSPATH];	//...each resolved, so it can be compared against fs_automounted[]
@@ -11442,6 +11465,24 @@ void FS_AutoMountForMap(const char *mapname)
 		return;
 
 	file = FS_LoadMallocFile(FS_MAPDEPS_FILE, NULL);
+	//ftesurf (P1099): the menu writes the Pi's table beside the shipped one, which the
+	//launcher would put back if edited.  The newer stamp wins; the menu's copy may only
+	//name Steam games without "..", as any other spec mounts any directory.
+	net = FS_LoadMallocFile(FS_MAPDEPS_NET, NULL);
+	if (net)
+	{
+		FS_MapDepsStamp(file, stampfile);
+		FS_MapDepsStamp(net, stampnet);
+		if (strcmp(stampnet, stampfile) > 0)
+		{
+			if (file)
+				BZ_Free(file);
+			file = net;
+			netonly = true;
+		}
+		else
+			BZ_Free(net);
+	}
 	if (!file)
 		return;
 
@@ -11473,7 +11514,7 @@ void FS_AutoMountForMap(const char *mapname)
 		spec = e;
 		for (e = spec + strlen(spec); e > spec && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
 			*--e = 0;
-		if (!*spec)
+		if (!*spec || (netonly && (strncmp(spec, "steam:", 6) || strstr(spec, ".."))))
 			continue;
 
 		//ftesurf (P183): collect, don't mount yet.  Resolving here as well as in
