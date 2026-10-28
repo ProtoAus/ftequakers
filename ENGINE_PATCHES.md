@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1082 -- TAS projects: save a line to disk, reload and verify it (QC)
+
+**Problem:** TAS work lived only in the warm session (a ~60 s rewind ring, in-memory
+undo/redo); leaving the map or reconnecting lost every edit. TAS plan Stage 3.
+
+**Change:** `tas project save/load/list/diff/status/close`, `tas cp add/del/list` and a
+project strip in the Timeline tab (sv_tasproject.qc). A project = one ordinary TAS save as
+its base (exact rewind writer) + data/tasproj/<map>/<name>.tasp: map/zone/ruleset identity,
+the base save's sha256 and exact origin/velocity, every input after it, checkpoints,
+revision, parent. Inputs come from the recorder's `in` rows (the rewind ring samples once
+per PACKET, so it has gaps): bounded by rec_rec_lines, move counters consecutive except
+across a go/load record, spot-checked against tas_input. Load = pre-checked base save,
+state.txt rounding undone (<= 0.0002), TAS pause, <=128-tick native tape chunks, checkpoint
+states compared: "reproduced" or "DIVERGED at T (max D)". Refused in lobbies and with
+rec_stream. Also cl_banner: a TAS run's tail stage reads TAS. No native, reader or format change.
+
+**Verified:** three review rounds. Round 1 found a first save after a full ring crashing the
+server (measured on the reviewed build: "SV_Error: runaway loop error" after 4096 ticks;
+fixed: one ring pass, 0.58 s), silent overwrites, unaligned harvest, branch mixing; round 2
+an anchor read across cuts and unbounded spot-checks; round 3 project-file quirks only. No
+round found a path to an untainted run. Final arm 38/38 (map-restart cold loads, fork/diff/
+revert, refusals, cross-cut and back-to-h0 first saves); control on main saves nothing;
+0.1.32 release client 175/175 with this csprogs. Limit, measured: the engine carries the
+connection's sub-tick ms carry into a replay; 2-3 of 5 cold loads of a duck-then-jump line
+end 0.7225 off at tick 277/281 and say DIVERGED (BACKLOG: an engine op to set it). A
+`reconnect` leaves the old body solid in the world (cmd stuck: hit 'player').
+
 ## Patch 1080 -- Sort the Maps list by completion (menu, surfd)
 
 **Problem:** the owner asked to sort maps by completion, with unknown never
