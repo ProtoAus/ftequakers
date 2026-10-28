@@ -5376,7 +5376,8 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 
 	//FTESurf P1099: a picture named by its URL (the menu's map thumbnails) is no VMT, and
 	//"materials/http:/..." made the Windows FS print an alternative-data-stream error.
-	if (strstr(filename, "://"))
+	//':' not "://": the shader name arrives with its double slash already collapsed.
+	if (strchr(filename, ':'))
 		return false;
 
 	/*
