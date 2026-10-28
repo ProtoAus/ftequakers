@@ -22,6 +22,12 @@ four bonus ratings. mapwatch never swaps it in (--updates replaces `mom` only).
 **Verified:** two independent generations byte-identical (ea774409); all 3,170
 rows pass SV_MapTierInit's accept rules in a parser mirror (3 tokens, prefix,
 7 fields, row < 64, track/leg 0..99, one of them 0); test_maptiers 15/15.
+Server-only arm, own basedir, installed fteqwsv64 (de0099ac) + fteplug_hl2
+(83303920) + qwprogs (1d2df5ec), graded from the server's log: the shipped file
+publishes only `mapratings v1:surf_midnight`; the new one adds `maprating_0_0
+0,0,4,sugg,4,-,-` and 1_0..4_0. Installed both Windows installs and the Pi
+game dir 2026-10-28T04:21:38Z, all three ea774409; lobbies read it on their
+next map. No client screenshot: the in-game box is the owner's check.
 
 ## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
 
