@@ -1216,6 +1216,16 @@ void SV_SaveLevelCache(const char *savedir, qboolean dontharmgame)
 }
 
 //mapchange is true for Q2's map-change autosaves.
+/*Patch 1086: SV_Loadgame runs each line of the cvar block at RESTRICT_RCON, and a server or
+  CSQC can set these cvars, so a newline or quote in a value was a new command.  Quoted with
+  escapes, and bounded so the loader's VFS_GETS (MAX_LOCALINFO_STRING) never splits a line.*/
+static const char *SV_SaveVarValue(const char *v, char *buf, size_t bufsize)
+{
+	if (strlen(v) > 1024)
+		v = "";
+	return COM_QuotedString(v, buf, bufsize, false);
+}
+
 void SV_Savegame (const char *savename, qboolean mapchange)
 {
 	client_t *cl;
@@ -1225,6 +1235,7 @@ void SV_Savegame (const char *savename, qboolean mapchange)
 	int len;
 	levelcache_t *cache;
 	char *savefilename;
+	char qv[1024*2+4];
 
 	if (!sv.state || sv.state == ss_clustermode)
 	{
@@ -1331,27 +1342,27 @@ void SV_Savegame (const char *savename, qboolean mapchange)
 	InfoBuf_WriteToFile(f, &svs.localinfo, NULL, 0);
 
 	VFS_PRINTF (f, "\n{\n");	//all game vars. FIXME: Should save the ones that have been retrieved/set by progs.
-	VFS_PRINTF (f, "skill			\"%s\"\n",	skill.string);
-	VFS_PRINTF (f, "deathmatch		\"%s\"\n",	deathmatch.string);
-	VFS_PRINTF (f, "coop			\"%s\"\n",	coop.string);
-	VFS_PRINTF (f, "teamplay		\"%s\"\n",	teamplay.string);
+	VFS_PRINTF (f, "skill			%s\n",	 SV_SaveVarValue(skill.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "deathmatch		%s\n",	 SV_SaveVarValue(deathmatch.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "coop			%s\n",	 SV_SaveVarValue(coop.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "teamplay		%s\n",	 SV_SaveVarValue(teamplay.string, qv, sizeof(qv)));
 
-	VFS_PRINTF (f, "nomonsters		\"%s\"\n",	nomonsters.string);
-	VFS_PRINTF (f, "gamecfg\t		\"%s\"\n",	gamecfg.string);
-	VFS_PRINTF (f, "scratch1		\"%s\"\n",	scratch1.string);
-	VFS_PRINTF (f, "scratch2		\"%s\"\n",	scratch2.string);
-	VFS_PRINTF (f, "scratch3		\"%s\"\n",	scratch3.string);
-	VFS_PRINTF (f, "scratch4		\"%s\"\n",	scratch4.string);
-	VFS_PRINTF (f, "savedgamecfg\t	\"%s\"\n",	savedgamecfg.string);
-	VFS_PRINTF (f, "saved1			\"%s\"\n",	saved1.string);
-	VFS_PRINTF (f, "saved2			\"%s\"\n",	saved2.string);
-	VFS_PRINTF (f, "saved3			\"%s\"\n",	saved3.string);
-	VFS_PRINTF (f, "saved4			\"%s\"\n",	saved4.string);
-	VFS_PRINTF (f, "temp1			\"%s\"\n",	temp1.string);
-	VFS_PRINTF (f, "noexit			\"%s\"\n",	noexit.string);
-	VFS_PRINTF (f, "pr_maxedicts\t	\"%s\"\n",	pr_maxedicts.string);
-	VFS_PRINTF (f, "progs			\"%s\"\n",	pr_ssqc_progs.string);
-	VFS_PRINTF (f, "set nextserver		\"%s\"\n",	Cvar_Get("nextserver", "", 0, "")->string);
+	VFS_PRINTF (f, "nomonsters		%s\n",	 SV_SaveVarValue(nomonsters.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "gamecfg\t		%s\n",	 SV_SaveVarValue(gamecfg.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "scratch1		%s\n",	 SV_SaveVarValue(scratch1.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "scratch2		%s\n",	 SV_SaveVarValue(scratch2.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "scratch3		%s\n",	 SV_SaveVarValue(scratch3.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "scratch4		%s\n",	 SV_SaveVarValue(scratch4.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "savedgamecfg\t	%s\n",	 SV_SaveVarValue(savedgamecfg.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "saved1			%s\n",	 SV_SaveVarValue(saved1.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "saved2			%s\n",	 SV_SaveVarValue(saved2.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "saved3			%s\n",	 SV_SaveVarValue(saved3.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "saved4			%s\n",	 SV_SaveVarValue(saved4.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "temp1			%s\n",	 SV_SaveVarValue(temp1.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "noexit			%s\n",	 SV_SaveVarValue(noexit.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "pr_maxedicts\t	%s\n",	 SV_SaveVarValue(pr_maxedicts.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "progs			%s\n",	 SV_SaveVarValue(pr_ssqc_progs.string, qv, sizeof(qv)));
+	VFS_PRINTF (f, "set nextserver		%s\n",	 SV_SaveVarValue(Cvar_Get("nextserver", "", 0, "")->string, qv, sizeof(qv)));
 	VFS_PRINTF (f, "}\n");
 
 	SV_SaveLevelCache(savename, true);	//add the current level.
