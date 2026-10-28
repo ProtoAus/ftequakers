@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1090 -- TAS revision author statements (engine client, QC, tools)
+
+**Problem:** TAS plan 5.2. A revision (P1089's hash) needs its author's signed claim of the ticks
+it supplied, for public credit later (Lex: Steam-linked signing, public credits), and nothing a
+server sends may obtain, forge or tamper with one.
+
+**Change:** engine: `tasrev_sign` (CSQC) signs FTESURF-TASREV 1 (sha, parent, mapcrc, ticks, code)
+with fskey on one real key press, only in a loopback game whose CSQC is this connection's and the
+very bytes SV_SpawnServer served (sv_csqc_sha256; sv_csqc_progname is now CVAR_NOTFROMSERVER, so a
+server cannot point a later hosted game at a cached csprogs). QC_TasprojDenied refuses CSQC every
+file builtin under data/tasproj (segments matched as the file system resolves them; search and
+multisearch patterns). QC: .tasp version 2 `supply` (an exact diff against the parent's own rows;
+never a tick at or before the parent's base); revisions kept by hash and statements write-once
+beside them; a save after a detach or close in the same attempt stays the loaded revision's child;
+only the host's saves are signable; every copy is read back before it replaces anything; a diff too
+long for one QC call is refused. tools/tasrev.py mirrors the reader and verifies statements.
+
+**Verified:** p1090_sign_socket.py 47/47 on the shipped exe (a real click via a window moved under a
+still pointer: engine refuses a console call; click beside the chip signs nothing; the twin verifies
+the statement under the client's fskey and refuses every altered field; junk, stale-claim and guest
+statements refused; fork/reload/close/stopped-load lineage exact; a loaded foreign revision refuses);
+remote 11/11 (the earlier remote run measured the engine's own loopback refusal before the client
+gate existed); P1086 exe control asks for the engine. p1090_csqcprobe.py 8/8 (reads, five search
+forms, fexists, whichpack, copy/rename/remove/write all refused, nothing changed on disk) against a
+P1086 control where the same CSQC reads, lists, copies, deletes and plants. tas_project_socket.py
+60/60 (game and twin agree on 41 mutations; a 96000-row read; a too-long diff refused) against a
+control without the guard: `SV_Error: runaway loop error`. Five review rounds (evidence lost per
+name, detach/close roots, CSQC file access, cached csprogs, a CSQC-settable cvar, FILE_APPEND
+rewrites, silent FILE_WRITE failures, two strict reads per call, guest provenance); deferred items
+in BACKLOG, server-text specifics private. Stamp git-7970-patch-1090-0-g5d5557d82.
+
 ## Patch 1089 -- TAS project revision hash (QC, tools)
 
 **Problem:** TAS plan 5.1. Signed collaborative revisions (Lex: Steam-linked signing, public
