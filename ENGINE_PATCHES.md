@@ -44,11 +44,22 @@ No native API/pin/tag, evidence grammar, qcbuild/Build, public service/lobby nat
 enablement or persisted/cold-restorable project claim. Usage/limits:
 `tools/p1077-tas-timeline.md` in the mod repository.
 
-**Verified:** Initial stock three-VM compilation, zero new warnings (two existing
-client setproperty warnings). Initial actual production socket control: distinct
-movement/aim/button rows, selected-field-only range edit, changed endpoint and
-completed undo. Full frozen reviews, runtime qualification, commit-only build,
-installation/hashes and owner rendered/feel acceptance remain pending.
+**Fixed before shipping (QC 0b4d90ed):** the workshop had never drawn, P1074
+included. `getproperty(VF_ACTIVESEAT) != 0` compiled to `OP_NE_I64` over the
+return pair and a 0/1.0 constant pair, so TASUI_Draw returned every frame; the
+console paths and headless arms all passed around it. The page event
+was 40, sv_archive's `AR_EV_ROW`, so every archive row would have parsed as a
+TAS page; now 50. History arrays gained the slot bound.
+
+**Verified:** commit build (fteqcc c24ede65) 0 warnings in all three progs, no
+`*_I64` opcode in any function. Rendered production-socket arm on that exact
+build: 175 checks, 0 failed (rows, field-only range edit, undo/redo to exact
+input and endpoint, LIFO, redo discard, stale refusal, step detach, 8-deep cap),
+6010 workshop frames drawn and the table seen in the screenshot. The unfixed
+build failed that drawing check with 0 frames. Two independent reviews (flow and
+abuse; evidence and cheater gain) found the event collision and no path that
+loses the TAS marker; a third read the fixes and found none. Open
+low items are in BACKLOG.md. Owner feel pending.
 
 ## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
 
