@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1088 -- TAS optimizer: a constant turn for exit speed (QC)
+
+**Problem:** TAS plan Stage 4b; Lex 28 Oct wanted optimizer goals total time, exit speed,
+immediate speed, and per ramp a constant strafe rate, boarding angle and end-of-ramp flick
+("do what you can"). P1074's AIR help is the per-tick (immediate) one; nothing searched.
+
+**Change:** `tas optimize <ticks 4..128> <left|right>` (and two TAS-panel chips at 32):
+from the paused head H, one constant yaw rate turned from the current view while strafing
+that way at 450, scored by horizontal speed at H + ticks. Range 0..2*asin(30/v) clamped
+1..45 deg/tick; 9-point grid, 10 golden-section steps, then the best played, paused there.
+Each candidate is a TAS back to H plus a native tape (src/server/sv_tasoptimize.qc); idle
+paused frames drive it from inside PlayerPostThink's paused return. The client forwards the
+action (its tas handler drops unknown ones).
+
+**Verified:** p1088_optimize_socket.py 12/12 on the shipped bytes: from 76 u/s in the air
+straight strafe 81.8, best 13.388 deg/tick 162.0 u/s over 24 ticks, best inside the range,
+repeatable from the same tick, works straight after a pause, tas play stops it. First cuts
+measured wrong: a fixed 0..8 range put the best on its edge; a 540-degree tape was refused
+until yaw wrap; the idle-frame hook was missing. One review (server safety): no server harm;
+fixed a fresh-pause tape refusal (pre-fix FAILs), up-front start-tick checks, play/off stop.
+Live 09:50Z (installs) / ~09:55Z (lobbies, where REC14 streams refuse it) from main 1953e5b7:
+qw 16e685e8, cs 27a38f84. BACKLOG "TAS optimizer (P1088)" holds the other goals.
+
+## Patch 1087 -- TAS comparison line, ghost and deltas; a TAS back keeps the trail (csprogs)
+
+**Problem:** Stage 4a (Lex: ghost + deltas first). A TAS back or timeline edit also EMPTIED
+the live trail: the go's save has no trail file and Trail_Load's failure ran Trail_Trim(-1);
+STAT_FS_SAVETICKS is the save cursor's tick (read 0 at the edge), not the restored tick.
+
+**Change:** the load edge of a TAS go leaves the line; the clock-back trim (STAT_FS_TIMERTICKS)
+keeps it to the restored tick and first copies the cut branch into new pooled line slot 69,
+drawn pink. The race ghost runs it alone at your run clock; the TAS panel prints "+t s here,
++v u/s" (Cmp_Match). Project loads (client-stamped) and non-TAS loads drop it.
+
+**Verified:** p1087_compare_socket.py 13/13 (prefix 185 of 301 points kept; line ticks
+71..121; ghost on the old tick-121 sample; 3849 pink pixels, looked at; project/plain loads
+drop it). Controls: main 7ae351cf kept 26 of 303 points; pre-review-fix build FAILs the
+project-load drop. One review (regression): no change to play without TAS. Live with P1088.
+
 ## Patch 1086 -- Server text and server code kept from local-only commands (client)
 
 **Problem:** P1081's consent review: `in_journal_synth` (a test helper; no QC
@@ -63,6 +102,25 @@ under data/; the particle-set loader's level; Windows aux/COM superscript names;
 SV_Error rather than a refusal on an over-long first line of a non-save file.
 The plugin step's zip packaging failed on four of nine -Full builds ("zip I/O
 error: Device or resource busy", at -Jobs 8 and 4); the exes always built.
+
+## Patch 1085 -- func_bhop TimeLimit counts mover ticks, not server time (QC)
+
+**Problem:** P1082 cold reloads of a bhop_eazy line ended 0.7225 off at tick 277 in 2-3 of 5
+loads. First blamed on the engine's sub-tick carry; arm12 falsified it (carry 0.014 before an
+exact AND a diverged load) before any engine op shipped. Per-tick dumps showed SV_BhopFrame
+timing the dwell on server `time`: at tick 132 elapsed was 0.110 (teleport) or 0.0999 (one
+tick later), so identical inputs teleported a tick apart.
+
+**Change:** the dwell is (run_movetick - latch) * run_movetickrate (+1e-4: 10 ticks of float
+0.01 reach 0.1), as Source's per-tick curtime; server time stays the fallback without a mover
+rate. SV_TASGo and a project load clear the latch: no native checkpoint is taken grounded on
+an entity, so a restored tick is never mid-dwell. Teleport after 7 ticks at 66 tick, 10 at 100.
+
+**Verified:** tas_project_socket.py --exact 46/46: every reload exact, 12 single steps equal
+one 12-tick request (landing 123, teleport 130); main 8134b64f FAILs (teleport one tick after
+landing on wall time). Two reviews (control flow; ranked/evidence: no verifier re-derives the
+dwell, the recorder writes the warp): none ranks or corrupts. Live 28 Oct 08:25Z installs, ~08:30Z
+lobbies (main edabb672, qw f3f4d64e); bhop_eazy lobby smoke PASS.
 
 ## Patch 1084 -- Stats page in the main menu; native lobby fonts (menu, csprogs)
 
