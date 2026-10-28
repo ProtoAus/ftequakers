@@ -2112,6 +2112,17 @@ static void SV_LoadgameCvarLine(const char *line)
 	Cvar_Set(var, Cmd_Argv(1));
 }
 
+/*Patch 1086: a line that fills the buffer was split by VFS_GETS and its tail read as the next
+  line -- with a server-set serverinfo value over 32k (skill, sv_progs...) that could stand in
+  for the {} block or the level list.  No line the writer emits comes near it: refuse the save.*/
+static char *SV_LoadGets(vfsfile_t *f, char *buf, size_t size)
+{
+	char *r = VFS_GETS(f, buf, size-1);
+	if (r && strlen(buf) >= size-2)
+		SV_Error("Corrupt saved game: overlong line\n");
+	return r;
+}
+
 //Attempts to load a named saved game.
 qboolean SV_Loadgame (const char *unsafe_savename)
 {
@@ -2197,7 +2208,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 	MP_Toggle(0);
 #endif
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	version = atoi(str);
 	if (version < SAVEGAME_VERSION_FTE_HUB || version >= SAVEGAME_VERSION_FTE_HUB+GT_MAX)
 	{
@@ -2211,7 +2222,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 	}
 
 	gametype = version - SAVEGAME_VERSION_FTE_HUB;
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 #ifndef SERVERONLY
 	if (!cls.state)
 #endif
@@ -2219,7 +2230,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 
 
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	slots = atoi(str);
 
 	if (slots < 1 || slots > countof(lp))
@@ -2231,7 +2242,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 
 	for (cl = svs.clients, clnum=0; clnum < slots; cl++,clnum++)
 	{
-		VFS_GETS(f, str, sizeof(str)-1);
+		SV_LoadGets(f, str, sizeof(str));
 		str[sizeof(cl->namebuf)-1] = '\0';
 		for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 			*trim='\0';
@@ -2243,10 +2254,10 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 
 		if (*str)
 		{
-			VFS_GETS(f, str, sizeof(str)-1);
+			SV_LoadGets(f, str, sizeof(str));
 			if (*str == '{')
 			{
-				while(VFS_GETS(f, str, sizeof(str)-1))
+				while(SV_LoadGets(f, str, sizeof(str)))
 				{
 					if (*str == '}')
 						break;
@@ -2285,7 +2296,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 	SV_LoadPlayers(lp, slots);
 
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 		*trim='\0';
 	for (trim = str; *trim <= ' ' && *trim; trim++)
@@ -2294,7 +2305,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 	InfoBuf_Clear(&svs.info, false);
 	InfoBuf_FromString(&svs.info, str, true);
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 		*trim='\0';
 	for (trim = str; *trim <= ' ' && *trim; trim++)
@@ -2303,7 +2314,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 	InfoBuf_Clear(&svs.localinfo, false);
 	InfoBuf_FromString(&svs.localinfo, str, true);
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 		*trim='\0';
 	for (trim = str; *trim <= ' ' && *trim; trim++)
@@ -2312,7 +2323,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 		SV_Error("Corrupt saved game\n");
 	while(1)
 	{
-		if (!VFS_GETS(f, str, sizeof(str)-1))
+		if (!SV_LoadGets(f, str, sizeof(str)))
 			SV_Error("Corrupt saved game\n");
 		for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 			*trim='\0';
@@ -2326,7 +2337,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 
 	SV_FlushLevelCache();
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 		*trim='\0';
 	for (trim = str; *trim <= ' ' && *trim; trim++)
@@ -2335,7 +2346,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 		SV_Error("Corrupt saved game\n");
 	while(1)
 	{
-		if (!VFS_GETS(f, str, sizeof(str)-1))
+		if (!SV_LoadGets(f, str, sizeof(str)))
 			SV_Error("Corrupt saved game\n");
 		for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 			*trim='\0';
@@ -2359,14 +2370,14 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 		svs.levcache = cache;
 	}
 
-	VFS_GETS(f, str, sizeof(str)-1);
+	SV_LoadGets(f, str, sizeof(str));
 	for (trim = str+strlen(str)-1; trim>=str && *trim <= ' '; trim--)
 		*trim='\0';
 	for (trim = str; *trim <= ' ' && *trim; trim++)
 		;
 
 	//serverflags is reset on restart, so we need to read the value as it was at the start of the current map.
-	VFS_GETS(f, filename, sizeof(filename)-1);
+	SV_LoadGets(f, filename, sizeof(filename));
 	svs.serverflags = atof(filename);
 
 	VFS_CLOSE(f);
