@@ -29,6 +29,27 @@ publishes only `mapratings v1:surf_midnight`; the new one adds `maprating_0_0
 game dir 2026-10-28T04:21:38Z, all three ea774409; lobbies read it on their
 next map. No client screenshot: the in-game box is the owner's check.
 
+## Patch 1077 -- Retained-input TAS timeline and bounded revisions (QC)
+
+**Problem:** The next-input workshop could author future ticks, but retained
+inputs still required console edits and offered no bounded undo/redo.
+
+**Change:** Own-body reliable eight-row pages, exact displayed-head bindings,
+range/field editor and eight before/after effective-input tail revisions. Undo
+and redo use the existing guarded prefix/cut/native replay and only a completed
+replay exposes history. New edits discard redo. Missing/stale/interrupted or
+unsupported history refuses; no approximate placement. Existing escape controls,
+TAS ancestry, streaming/capability guards and shared-world limits are unchanged.
+No native API/pin/tag, evidence grammar, qcbuild/Build, public service/lobby native
+enablement or persisted/cold-restorable project claim. Usage/limits:
+`tools/p1077-tas-timeline.md` in the mod repository.
+
+**Verified:** Initial stock three-VM compilation, zero new warnings (two existing
+client setproperty warnings). Initial actual production socket control: distinct
+movement/aim/button rows, selected-field-only range edit, changed endpoint and
+completed undo. Full frozen reviews, runtime qualification, commit-only build,
+installation/hashes and owner rendered/feel acceptance remain pending.
+
 ## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
 
 **Problem:** A recurring timer's later native callback did not retain the
