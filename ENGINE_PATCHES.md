@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1084 -- Stats page in the main menu; native lobby fonts (menu, csprogs)
+
+**Problem:** Lex 28 Oct: the lobby cards' player count rendered soft; the stats
+switch should default to World of Surf and say so; clicking the stats from the
+main menu should give hud_player's Stats page. P1070 drew the count (and the
+medium layout's title) at 14 px, off the UI ladder (sh_font.qc FONT_UI_SIZES 8..32
+in fours), so it was resampled. The Home switch defaulted to WOS but any reply
+without WOS figures (every reply before the 74e060d7 generation) forced
+Everything for the session; hud_player's page defaulted to Everything outright.
+
+**Change:** lobby text on 16 px rungs. Home and client/cl_profile.qc: World of
+Surf unless the player picked a source this session, labelled "World of Surf".
+The whole Home stats panel opens SCREEN_STATS, which hosts cl_profile.qc itself
+-- compiled into the menu behind m_statshim.qc's six CSQC names (cltime,
+ui_consent_ver, itos, SteamPic_Draw -> MP_Draw, Chat_Fit -> ui_fit_text, a dead
+sui_text_event: menu fields read keys in sui_text_input) -- with its search,
+breakdown, tier lists and rows; a row's board opens the menu's own leaderboard.
+
+**Verified:** builds 0 new warnings (the probe build's 25 errors were exactly
+those six names). Real client, loopback fixture, production hosts patched out
+(p1084-stats-smoke.py): Home source 0 native 1; panel click -> page for me,
+state OK, 3 runs, source WOS; typed search sent `players=`, picking the hit
+showed that player; Back to me; ESC home. Screenshots looked at (cards 16 px,
+switch, page). Not checked: a real Steam-linked account, the board hand-off.
+
 ## Patch 1083 -- Ranked runs use the standard move size (QC/tools)
 
 Problem: cl_forwardspeed/sidespeed/upspeed and cl_movespeedkey were pinned to nothing
