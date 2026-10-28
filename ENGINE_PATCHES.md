@@ -20,6 +20,10 @@ run_movebound 0; main judges ok; 450 ok in both. Two reviews found the pad-on-ke
 a stale resume reason and the shared off switch; a second round found stale load
 values and the clamp's skew; all fixed. The third round found no integrity defect;
 its strict residuals are in BACKLOG.
+**Delivered:** both Windows installs QW/CS d272394d/86a99387 at 2026-10-28T07:13:30Z;
+all 12 Pi lobbies 07:14:34Z, each restarted once while empty, same native, fresh
+heartbeats; .prev = P1082's 155a6a3d/d0abcfb9. The Pi's reccheck predates the `move`
+word (a note there until it is refreshed).
 
 ## Patch 1082 -- TAS projects: save a line to disk, reload and verify it (QC)
 
