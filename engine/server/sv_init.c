@@ -48,6 +48,7 @@ extern cvar_t	sv_cheats;
 extern cvar_t	sv_bigcoords;
 extern cvar_t	sv_gamespeed;
 extern cvar_t	sv_csqc_progname;
+char sv_csqc_sha256[65];	/*P1090: the csprogs this map served, lowercase hex; "" for none*/
 extern cvar_t	sv_calcphs;
 extern cvar_t	sv_playerslots, maxclients, maxspectators;
 extern cvar_t	sv_nqplayerphysics; //auto setting needs updating on map changes
@@ -1241,9 +1242,16 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 		file = COM_LoadTempFile(csprogsname, 0, &fsz);
 	else
 		file = NULL;
+	sv_csqc_sha256[0] = 0;
 	if (file)
 	{
 		char text[64];
+		qbyte digest[32];
+		/*P1090: the served bytes' sha256, for tasrev_sign (cl_receipt.c): the cvar that named
+		  them is any CSQC's to change afterwards*/
+		CalcHash(&hash_sha2_256, digest, sizeof(digest), file, fsz);
+		Base16_EncodeBlock((const char*)digest, sizeof(digest), (qbyte*)sv_csqc_sha256, sizeof(sv_csqc_sha256));
+		sv_csqc_sha256[64] = 0;
 		sv.csqcchecksum = CalcHashInt(&hash_md4, file, fsz);
 		sprintf(text, "0x%x", sv.csqcchecksum);
 		InfoBuf_SetValueForStarKey(&svs.info, "*csprogs", text);
