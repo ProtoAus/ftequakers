@@ -5374,6 +5374,11 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	const char *vmtname = filename;
 	float spriterate = 0;
 
+	//FTESurf P1099: a picture named by its URL (the menu's map thumbnails) is no VMT, and
+	//"materials/http:/..." made the Windows FS print an alternative-data-stream error.
+	if (strstr(filename, "://"))
+		return false;
+
 	/*
 	FTESurf Patch 288: the colour-correction post-process, which is not a
 	material and has no file.
