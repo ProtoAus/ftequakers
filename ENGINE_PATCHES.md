@@ -1,5 +1,16 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1079 -- Declare inherited-effect exclusion across run tiers (QC/tools)
+
+Problem: existing practice marking does not override segmented/shadow precedence.
+Change: one derived TF_BANKTAINT bit in existing flags; actual recipient exclusion
+and reader/board handling. Current otherwise eligible segmented/shadow source
+admissions retain their tier. Internal reason bits distinguish these from expired
+or otherwise ineligible causes without changing map effects or ownership lifetime.
+No new raw input/identity/hardware/header field, native pin or Build change.
+Verified: PENDING candidate; preregistered native/reader/HTTP controls, full corpus,
+three frozen reviews and consumer-before-producer development delivery required.
+
 ## Patch 1078 -- Tiers for maps newer than tiers.txt (data)
 
 **Problem:** surf_midnight showed tier 4 in the menu's map list but "MOM tier ? |
