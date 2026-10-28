@@ -8,8 +8,8 @@ and reader/board handling. Current otherwise eligible segmented/shadow source
 admissions retain their tier. Internal reason bits distinguish these from expired
 or otherwise ineligible causes without changing map effects or ownership lifetime.
 The spectator pose stream masks bit23 (its signed 24-bit field would clamp to all
-lower bits, TAS included); client labels, the finish tag and admin flag words treat
-it as practice. No new raw input/identity/hardware/header field, native pin or Build change.
+lower bits, TAS included) and there reads as practice; client labels and admin flag
+words treat it as practice. Recording tags/retention are unchanged. No new raw input/identity/hardware/header field, native pin or Build change.
 Verified: PENDING candidate; preregistered native/reader/HTTP controls, full corpus,
 three frozen reviews and consumer-before-producer development delivery required.
 
