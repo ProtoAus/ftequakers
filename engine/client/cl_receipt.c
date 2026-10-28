@@ -625,6 +625,59 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	return true;
 }
 
+static qboolean CL_Receipt_IsHex(const char *s, size_t len)
+{
+	size_t i;
+	if (!s || strlen(s) != len)
+		return false;
+	for (i = 0; i < len; i++)
+		if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+			return false;
+	return true;
+}
+
+/*
+  P1090: a TAS project revision's author statement (TAS plan 5.2).  sha is the revision's
+  P1089 hash, which covers its parent, map and inputs, so the statement checks offline;
+  ticks is the input span this revision supplies over its parent.  Audience surfd, like
+  FRIENDS.  Only in a game this process hosts (projects are local) and only under a key
+  press, so a remote server's CSQC cannot collect one behind some other prompt.
+*/
+#define TASREV_MAXTICK	16777215	/*the last tick a QC float holds exactly*/
+qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *mapcrc,
+							   int from, int to, qboolean keyed, char *out, size_t outlen)
+{
+	char msg[320], pubhex[65], sighex[129];
+	qbyte sig[64];
+
+	if (outlen) out[0] = 0;
+	if (!keyed)
+	{
+		Con_Printf("tasrev_sign: signed only under a key press. Refused.\n");
+		return false;
+	}
+	if (cls.demoplayback || cls.state < ca_connected || cls.netchan.remote_address.type != NA_LOOPBACK)
+	{
+		Con_Printf("tasrev_sign: only in a game this client hosts. Refused.\n");
+		return false;
+	}
+	if (!CL_Receipt_IsHex(sha, 64) || !CL_Receipt_IsHex(mapcrc, 8)
+		|| !parent || (strcmp(parent, "-") && !CL_Receipt_IsHex(parent, 64)))
+		return false;
+	if (from < 1 || to < from || to > TASREV_MAXTICK)
+		return false;
+	if (!CL_Receipt_Key())
+		return false;
+	Q_snprintfz(msg, sizeof(msg), "FTESURF-TASREV 1\nserver play.proto.bar:443\nsha %s\nparent %s\nmapcrc %s\nticks %i %i\n",
+				sha, parent, mapcrc, from, to);
+	Ed25519_Sign(sig, (const qbyte *)msg, strlen(msg), rcpt_sk);
+	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
+	CL_Receipt_Hex(sighex, sizeof(sighex), sig, sizeof(sig), true);
+	Q_snprintfz(out, outlen, "%s %s", pubhex, sighex);
+	Con_DPrintf("tasrev_sign: %.8s ticks %i..%i\n", sha, from, to);
+	return true;
+}
+
 /*
   Patch 625: THE SIGN-IN PAGE, IN THE PLAYER'S BROWSER.  Game code cannot name
   an address: it supplies the opener it made for a link (24 lowercase hex) and

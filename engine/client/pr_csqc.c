@@ -6817,6 +6817,7 @@ static void QCBUILTIN PF_ui_native_gamefocus(pubprogfuncs_t *prinst, struct glob
 static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_acct_random (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_acct_browse (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void CL_Receipt_VM(qboolean made);
 void CL_Receipt_VMCode(const void *data, size_t len);
 static qboolean csqc_realkey;	/*and its two budgets: see CSQC_KeyPress*/
@@ -7310,6 +7311,7 @@ static struct {
 	{"acct_sign",				PF_cl_acct_sign,				0},		//FTESurf Patch 625: string(string nonce, float kind)
 	{"acct_random",				PF_cl_acct_random,			0},		//FTESurf Patch 625: string(float bytes)
 	{"acct_browse",				PF_cl_acct_browse,			0},		//FTESurf Patch 625: float(string opener)
+	{"tasrev_sign",				PF_cl_tasrev_sign,			0},		//FTESurf P1090: string(string sha, string parent, string mapcrc, float from, float to)
 
 	{"getinputstate",			PF_cs_getinputstate,			345},	// #345 float(float framenum) getinputstate (EXT_CSQC)
 	{"setsensitivityscaler",	PF_cs_setsensitivityscaler, 	346},	// #346 void(float sens) setsensitivityscaler (EXT_CSQC)
@@ -9571,6 +9573,27 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 			csqc_realkey_signs--;
 	}
 	if (kind && CL_Receipt_AcctSign(PR_GetStringOfs(prinst, OFS_PARM0), kind, keyed, out, sizeof(out)))
+		RETURN_TSTRING(out);
+	else
+		RETURN_TSTRING("");
+}
+/*P1090: string(string sha, string parent, string mapcrc, float from, float to) tasrev_sign:
+  `<pub> <sig>`, or "".  Spends this press's one signature, as acct_sign's link kinds do.*/
+qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *mapcrc,
+							   int from, int to, qboolean keyed, char *out, size_t outlen);
+static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	char out[256];
+	float a = G_FLOAT(OFS_PARM3), b = G_FLOAT(OFS_PARM4);
+	qboolean keyed = CSQC_RealKey() && csqc_realkey_signs >= 1;
+
+	if (keyed)
+		csqc_realkey_signs--;
+	/*a NaN, a fraction or anything past a float's exact integers is no tick*/
+	if (!(a >= 1 && a <= 16777215 && a == (int)a) || !(b >= 1 && b <= 16777215 && b == (int)b))
+		RETURN_TSTRING("");
+	else if (CL_Receipt_TasRevSign(PR_GetStringOfs(prinst, OFS_PARM0), PR_GetStringOfs(prinst, OFS_PARM1),
+								   PR_GetStringOfs(prinst, OFS_PARM2), (int)a, (int)b, keyed, out, sizeof(out)))
 		RETURN_TSTRING(out);
 	else
 		RETURN_TSTRING("");
