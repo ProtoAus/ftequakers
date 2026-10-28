@@ -10,8 +10,16 @@ or otherwise ineligible causes without changing map effects or ownership lifetim
 The spectator pose stream masks bit23 (its signed 24-bit field would clamp to all
 lower bits, TAS included) and there reads as practice; client labels and admin flag
 words treat it as practice. Recording tags/retention are unchanged. No new raw input/identity/hardware/header field, native pin or Build change.
-Verified: PENDING candidate; preregistered native/reader/HTTP controls, full corpus,
-three frozen reviews and consumer-before-producer development delivery required.
+Verified: three VMs 0 warnings (fteqcc c24ede65; QC 99bd8169 qwprogs 3e14e81f);
+test_reccheck 939/0; surfd test_board pass. Native control/subject pairs on synthetic
+bodies (production helpers, not HID/natural finish/ranking): 14 eligibility cases
+(current segmented authors stay segmented, expired/ineligible sources latch the bit,
+16777215 exact, saved flag re-latches); pose/say arms -- unfixed pose sent 8388737
+as 8388607 with TAS set, fixed sends practice only; no repeated practice say. Three
+independent reviews (logic, evidence readers, cheater gain) plus two fix rounds; the
+pose clamp and an RT_LAST retention loss were found and fixed there. Reach into
+segmented/shadow via recurring timers and named targets is in BACKLOG (census owed).
+Board backend not yet live (old surfd boards these runs as segmented, as before).
 
 ## Patch 1078 -- Tiers for maps newer than tiers.txt (data)
 
