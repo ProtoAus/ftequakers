@@ -11401,10 +11401,14 @@ void FS_AutoUnmountStale(void)
 	FS_Cache_BeginMap();
 }
 //ftesurf (P1099): a mapdeps file's "# stamp YYYYMMDDHHMMSS" (UTC) from its first lines,
-//or "" when it has none -- which sorts before every stamp.
+//or "" when it has none -- which sorts before every stamp.  One dated after tomorrow (UTC)
+//is none too, as the menu's Mmm_Stamp reads it, so no copy outranks every later table.
 static void FS_MapDepsStamp(const char *file, char out[15])
 {
 	int n, i;
+	char cap[15];
+	time_t t = time(NULL) + 86400;
+	struct tm *tm = gmtime(&t);	//main thread only
 	out[0] = 0;
 	for (n = 0; file && *file && n < 40; n++)
 	{
@@ -11413,6 +11417,8 @@ static void FS_MapDepsStamp(const char *file, char out[15])
 			for (i = 0; i < 14 && file[8+i] >= '0' && file[8+i] <= '9'; i++)
 				out[i] = file[8+i];
 			out[i == 14 ? 14 : 0] = 0;
+			if (!tm || !strftime(cap, sizeof(cap), "%Y%m%d235959", tm) || strcmp(out, cap) > 0)
+				out[0] = 0;
 			return;
 		}
 		file = strchr(file, '\n');
@@ -11420,11 +11426,23 @@ static void FS_MapDepsStamp(const char *file, char out[15])
 			file++;
 	}
 }
+//ftesurf (P1099): the mounts either table may name -- tools/mapdeps.py's ADDONS, as the
+//menu's Mmm_KnownMount takes them, and the Momentum stand-in 0.1.32's table still names.
+//Any other spec mounts any directory, and CSQC reached the shipped table too (review 2).
+static qboolean FS_MapDepsNetSpec(const char *spec)
+{
+	static const char *const known[] = {"steam:Team Fortress 2/tf", "steam:Counter-Strike Global Offensive/csgo",
+		"steam:Portal 2/portal2", "steam:Portal/portal", "steam:Momentum Mod Playtest/mount"};
+	size_t i;
+	for (i = 0; i < countof(known); i++)
+		if (!strcmp(spec, known[i]))
+			return true;
+	return false;
+}
 void FS_AutoMountForMap(const char *mapname)
 {
 	char *file, *net, *line, *nl, *e, *spec;
 	char stampfile[15], stampnet[15];
-	qboolean netonly = false;
 	char tmp[MAX_QPATH], want[MAX_QPATH];
 	char wantspec[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): the specs this map asks for...
 	char wantpath[FS_MAXAUTOMOUNT][MAX_OSPATH];	//...each resolved, so it can be compared against fs_automounted[]
@@ -11466,9 +11484,14 @@ void FS_AutoMountForMap(const char *mapname)
 
 	file = FS_LoadMallocFile(FS_MAPDEPS_FILE, NULL);
 	//ftesurf (P1099): the menu writes the Pi's table beside the shipped one, which the
-	//launcher would put back if edited.  The newer stamp wins; the menu's copy may only
-	//name Steam games without "..", as any other spec mounts any directory.
+	//launcher would put back if edited.  The newer stamp wins.  The menu's copy must start
+	//with the table's header; either table may name only FS_MapDepsNetSpec's games.
 	net = FS_LoadMallocFile(FS_MAPDEPS_NET, NULL);
+	if (net && strncmp(net, "FTESURF-MAPDEPS 1", 17))
+	{
+		BZ_Free(net);
+		net = NULL;
+	}
 	if (net)
 	{
 		FS_MapDepsStamp(file, stampfile);
@@ -11478,7 +11501,6 @@ void FS_AutoMountForMap(const char *mapname)
 			if (file)
 				BZ_Free(file);
 			file = net;
-			netonly = true;
 		}
 		else
 			BZ_Free(net);
@@ -11514,7 +11536,7 @@ void FS_AutoMountForMap(const char *mapname)
 		spec = e;
 		for (e = spec + strlen(spec); e > spec && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'); )
 			*--e = 0;
-		if (!*spec || (netonly && (strncmp(spec, "steam:", 6) || strstr(spec, ".."))))
+		if (!*spec || !FS_MapDepsNetSpec(spec))
 			continue;
 
 		//ftesurf (P183): collect, don't mount yet.  Resolving here as well as in

@@ -23,6 +23,29 @@ spec with `..` 0, a valid spec stamped older than the shipped file 0, the valid 
 URL thumbnails (no atlas pages in the root): 12 lobby cards drawn from 12 requests; the ADS line
 printed once with the "://" check and 0 times with ':'. 0 new warnings in fs.c or mat_vmt.c.
 
+**Review 1:** CSQC (server-supplied) could write data/mapdeps.net.txt, since QC may write anywhere
+in data/. QC_CfgChangeDenied now also refuses CSQC the menu's two tables and its spool
+(QC_MenuTable: segments as QC_TasprojSeg reads them, and any '~' name directly in data/, for 8.3
+short names), so fopen-for-write, fcopy, frename and fremove all refuse. fs.c now takes from the
+menu's copy only a file headed `FTESURF-MAPDEPS 1`, only the menu's four specs, and treats a stamp
+more than a day ahead of the clock as none. Arms: a test csprogs tried each spelling at
+CSQC_Init. This build refused data/mapdeps.net.txt, mapdeps.net.txt (prefixed to data/), a trailing
+dot, a doubled slash, data/mapmeta.net.txt, data/mapmedia.tmp and data/MAPDEP~1.TXT, and fcopy,
+frename and fremove onto them (-1); an ordinary data/ file and reading stayed allowed.
+`DATA/MAPDEPS.NET.TXT` opened data/DATA/MAPDEPS.NET.TXT, another file. The installed exe (control)
+opened every one. Net file with steam:Half-Life 2/hl2, with no header, or stamped 99999999999999:
+state 0 each; the valid file: 1.
+
+**Review 2:** the launcher-managed data/map* tables were not refused to CSQC either, and
+fs_automount took any spec from data/mapdeps.txt -- older than P1099, closed here (the private
+tree has the detail: checkpoints/p1099-maptables-csqc-20261029.md). QC_MenuTable now covers every
+data/map* table (our csprogs only reads them), matching the first segment after data/ whatever
+follows; CL_EnqueDownload refuses those names (downloads/ is a search path); FS_MapDepsNetSpec
+applies to both tables (the four ADDONS plus `steam:Momentum Mod Playtest/mount`, which 0.1.32's
+table names 55 times); the stamp cap is the end of tomorrow (UTC), the menu's own day test. Arms,
+CSQC sent by a dedicated server: this build refused each route and kept data/maps/zones/local/
+(ours) and reads open; the installed exe, as control, refused none of them.
+
 ## Patch 1096 -- A static prop's VRAD bake made for another model is dropped (hl2 plugin)
 
 **Problem:** Lex, 29 Oct: surf_pantheon's identical columns drew brown, grey and black, striped

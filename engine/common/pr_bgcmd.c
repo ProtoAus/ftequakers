@@ -2678,9 +2678,41 @@ qboolean QC_FixFileName(const char *name, const char **result, const char **fall
 	return true;
 }
 
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+static qboolean QC_TasprojSeg(const char **s, const char *word, qboolean pattern);
+/*P1099: the map tables in data/ -- the launcher's and the menu's copies from the Pi; fs_automount
+  mounts what data/mapdeps*.txt names -- and the menu's spool.  The first segment after data/ is
+  read as QC_TasprojSeg reads it, whatever follows (a directory of that name would block the
+  menu), and one with '~' may be a table by its 8.3 short name.  Our csprogs only reads them;
+  CL_EnqueDownload refuses them too (precache_file).*/
+qboolean QC_MenuTable(const char *name)
+{
+	static const char *const tables[] = {"mapdeps.txt", "mapdeps.net.txt", "mapmeta.txt", "mapmeta.net.txt",
+		"mapmedia.tmp", "mapdl.txt", "mapdl.net.txt", "mapdl.net.tmp", "mapmeta_override.txt",
+		"mapparticles.txt", "mapwr.txt"};
+	const char *s = name, *seg;
+	size_t i;
+	if (!name || !QC_TasprojSeg(&s, "data", false))
+		return false;
+	while (*s == '/' || *s == '\\' || *s == ' ')
+		s++;
+	for (seg = s; *s && *s != '/' && *s != '\\'; s++)
+		if (*s == '~')
+			return true;
+	for (i = 0; i < countof(tables); i++)
+	{
+		s = seg;
+		if (QC_TasprojSeg(&s, tables[i], false))
+			return true;
+	}
+	return false;
+}
+#endif
+
 /*Patch 1086: CSQC is whatever the server sent, and cfg/ is exec'd at local level
   (cfg/default.cfg every boot), so CSQC may read cfg/ but not write, copy into,
-  rename or remove it.  Ours never writes there; menu QC owns settings/server.cfg.*/
+  rename or remove it.  Ours never writes there; menu QC owns settings/server.cfg.
+  P1099: nor the menu's map tables (QC_MenuTable).*/
 static qboolean QC_CfgChangeDenied(pubprogfuncs_t *prinst, const char *fixedname)
 {
 #if defined(CSQC_DAT) && !defined(SERVERONLY)
@@ -2688,6 +2720,11 @@ static qboolean QC_CfgChangeDenied(pubprogfuncs_t *prinst, const char *fixedname
 	if (prinst == csqc_world.progs && !strnicmp(fixedname, "cfg/", 4))
 	{
 		Con_Printf("qcfopen(\"%s\"): csqc may not change cfg/\n", fixedname);
+		return true;
+	}
+	if (prinst == csqc_world.progs && fixedname && QC_MenuTable(fixedname))
+	{
+		Con_Printf("qcfopen(\"%s\"): csqc may not change the map tables\n", fixedname);
 		return true;
 	}
 #endif
