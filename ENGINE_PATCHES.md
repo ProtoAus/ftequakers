@@ -55,10 +55,13 @@ end 0.7225 off at tick 277/281 and say DIVERGED (BACKLOG: an engine op to set it
 **Deployed (2026-10-28):** both Windows installs 07:05:17Z (qwprogs 155a6a3d, csprogs
 d0abcfb9; .prev 3e14e81f / 70536e99; menu.dat untouched). Lobbies: `build.ps1 -Pi` from a
 clean worktree at ftesurf 8f07c96e, same two hashes live, .prev 3e14e81f / 70536e99, all 12
-active; pi_lobby_smoke on lobby 4 with the 0.1.32 client passed. On that lobby (B7 native,
-P1066) the 0.1.32 client gets `run_tas_ready 0` -- "pause/step requires the P1055 engine...";
-the same client is ready against a Windows P1074 server and the lobby cvars are Source/0.015,
-so TAS (and these projects, which also refuse in lobbies) stays off there for now.
+active; pi_lobby_smoke on lobby 4 with the 0.1.32 client passed. TAS on the lobbies (B7,
+P1066), 0.1.32 client: bhop lobbies 4/5 run the map's 100-tick clock (live pm_ticrate 0.01,
+read by ftesurf-aa), so TAS refuses there by design (15 ms only) -- an earlier line here blamed
+the ARM native; that was wrong. On surf_beginner (27520, 0.015): pause, a 20-tick step
+(`native 1`) and the timeline page work; an edit refuses "REC14 stream editing is
+unsupported" (lobbies stream recordings; BACKLOG "Historical REC14 streamed rewind state");
+projects refuse as designed.
 
 ## Patch 1080 -- Sort the Maps list by completion (menu, surfd)
 
