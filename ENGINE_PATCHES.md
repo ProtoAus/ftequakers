@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1080 -- Sort the Maps list by completion (menu, surfd)
+
+**Problem:** the owner asked to sort maps by completion, with unknown never
+treated as incomplete. P1062's cards know `complete` only for the 16 visible
+maps a batch carries, which cannot order the whole list.
+
+**Change:** surfd `/api/board?completed=<player>` (read-only, board rate bucket,
+`runs_player` index) returns every map name with a clean main finish: a ranked
+run on the build, or a Momentum/KSF run on its base map -- `game_mapcards`'
+`complete`, shared through `_game_player`. Unknown player is `player_known:
+false`, not an empty "nothing done". Menu: a Sort chip row (tier / incomplete
+first / completed first, `ui_maps_compsort`, archived) wraps the stable counting
+sort as an outer bucket, tier order kept within. The list is fetched only while a
+completion sort is on, refreshed after 60 s, backed off 30 s; a failed refresh
+keeps a known list, and an unknown/unavailable one is a single last bucket, so
+the list stays in tier order and the chip row says why.
+
+**Verified:** test_mapcards 24/24, including the completed list equal to each
+card's `complete` over native, import-only, variant-through-base and excluded
+(community/TAS/bonus) maps; a mutant without the variant rule fails it.
+test_board, test_home_completion, test_completion_pool, test_web pass. Real
+client, loopback fixture, production hosts patched out of the fixture menu copy
+(`p1080-compsort-smoke.py`, menu 716c14a3 = the commit): tier order 1634 rows,
+no request; incomplete first 556/1078/0 unknown ascending, first incomplete;
+completed first, first complete; unlinked and 500 both 1634 unknown in tier
+order with the note shown (screenshots looked at). One independent review: the
+backend predicate matched the cards route exactly; it found the menu re-sorting
+(and jumping to the top) on every unchanged 60 s refresh, and sorting a two-build
+row by its plain name while the card shows the effective build. Fixed (mcd_ver
+moves only on a real change, data re-sorts keep the scroll, the sort keys on
+ui_eff); arm on menu ee999eab: wheel scroll 256, unchanged refresh 256/ver 2,
+changed list re-sorted 256/ver 3. Live board answer waits on the generation.
+
 ## Patch 1079 -- Declare inherited-effect exclusion across run tiers (QC/tools)
 
 Problem: existing practice marking does not override segmented/shadow precedence.
