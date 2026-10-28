@@ -6038,7 +6038,8 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 	//the gap between the two numbers is the only signal that a map's props are
 	//falling back to the ambient cube, and that is the case worth seeing.
 	if (prv->numstaticprops)
-		Con_Printf("props: %u of %u lit from VRAD's baked vertex lighting\n",
+		Con_Printf("props: %u of %u lit from VRAD's baked vertex lighting (read; a bake made for another\n"
+				   "       model is dropped at first light -- prop_census counts those)\n",
 			(unsigned)prv->lit_baked, (unsigned)prv->numstaticprops);
 	//FTESurf Patch 259.  Says the mode rather than leaving it to be inferred, and
 	//states the price in the same line: this is the only allocation in the plugin
@@ -10560,7 +10561,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				the model is loaded -- the prop then lights like an unbaked one.
 				*/
 				if (sent->hasbaked && !sent->vhvchecked && src->model &&
-					src->model->loadstate == MLS_LOADED && src->model->meshinfo)
+					src->model->loadstate == MLS_LOADED && src->model->meshinfo &&
+					(src->model->engineflags & MDLF_SOURCEPITCH))	//Mod_LoadHL2Model's: its galiasinfo_t has the fields
 				{
 					const galiasinfo_t *g = (const galiasinfo_t*)src->model->meshinfo;
 					sent->vhvchecked = true;
@@ -13024,12 +13026,12 @@ static void VBSP_PropCensus_f(void)
 					   "         from a bounding box at first draw; %u of those ended up on the weaker\n"
 					   "         headnode visibility test rather than a cluster list.\n",
 					   vbsp_propstat.leafoverflow, vbsp_propstat.headnodetested);
+		if (prv->lit_foreign)	//FTESurf Patch 1096
+			Con_Printf("  %6u bake(s) dropped at first light: made for another model (checksum)\n",
+					   (unsigned)prv->lit_foreign);
 		//FTESurf Patch 259.  Of the props that DREW, how many drew from VRAD's
 		//per-vertex bake.  This is the line that says the feature is on: the
 		//load-time count says only that the files were read.
-		if (prv->lit_foreign)
-			Con_Printf("  %6u bake(s) dropped at first light: made for another model (checksum)\n",
-					   (unsigned)prv->lit_foreign);
 		if (vbsp_propstat.vcdrawn || vbsp_propstat.vcdeclined)
 		{
 			Con_Printf("  %6u of the drawn props used VRAD's per-vertex bake\n", vbsp_propstat.vcdrawn);

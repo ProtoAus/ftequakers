@@ -285,7 +285,8 @@ typedef struct galiasinfo_s
 	vec3_t illumposition;
 	//FTESurf Patch 1096: APPEND-ONLY.  studiohdr_t::checksum, which VRAD writes into every sp_N.vhv it
 	//bakes for this model (vradstaticprops.cpp:1570): a bake carrying another is not this model's.
-	//First surface only; haschecksum 0 elsewhere and for every non-Source model.
+	//First surface only, and only on models Mod_LoadHL2Model made (MDLF_SOURCEPITCH): an exe older
+	//than this field allocates its own models without it.
 	qboolean haschecksum;
 	int mdlchecksum;
 } galiasinfo_t;

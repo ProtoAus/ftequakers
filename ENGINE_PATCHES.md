@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1096 -- A static prop's VRAD bake made for another model is dropped (hl2 plugin)
+
+**Problem:** Lex, 29 Oct: surf_pantheon's identical columns drew brown, grey and black, striped
+down the flutes. VRAD stamps each sp_N.vhv with its model's studiohdr checksum
+(vradstaticprops.cpp:1570); a map whose prop list or models changed after VRAD ran ships bakes for
+other models, and the plugin painted them anyway. On surf_pantheon 791 of its 820 bakes carry a
+checksum that is not their model's (props 319/321 one model's 1050-vertex bake, 320/322 another's
+168-vertex, two-mesh bake, all four awningpillar.mdl); demise's 2350 and garden's 381 all match. Library census (Momentum's folder, models packed in
+the map only): 668 maps carry bakes, 47 have mismatched ones (5,259 props), 13 mostly so --
+surf_kitsune2 1361/1389, bhop_vagabond 574/575, surf_milkyway 191/191, surf_valpect 156/156.
+
+**Change:** the hl2 loader keeps studiohdr_t::checksum on the model's first surface (two fields
+APPENDED to galiasinfo_t, read only by the plugin, so the shipped exe is unchanged); the prop
+remembers its .vhv's. At the prop's first light (its model is MLS_LOADED there) a mismatch clears
+hasbaked and frees the unscattered colours, so the prop lights from the leaf ambient cube like an
+unbaked one. prop_census counts the drops and names them on the prop.
+
+**Verified:** surf_pantheon on the PC, the same three poses before/after: before, the columns at
+saves 9 and 10 were brown, grey and black-striped; after, even marble, one warm column left whose
+bake does match its model. prop_census: "79 bake(s) dropped at first light: made for another model
+(checksum)" after those poses. Plugin-only build from patch-1090 + this commit; 0 new warnings.
+
 ## Patch 1090 -- TAS revision author statements (engine client, QC, tools)
 
 **Problem:** TAS plan 5.2. A revision (P1089's hash) needs its author's signed claim of the ticks
