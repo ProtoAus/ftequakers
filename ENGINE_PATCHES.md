@@ -88,6 +88,19 @@ abuse; evidence and cheater gain) found the event collision and no path that
 loses the TAS marker; a third read the fixes and found none. Open
 low items are in BACKLOG.md. Owner feel pending.
 
+**Deployed:** both Windows installs 2026-10-28T04:30:47Z (qwprogs 4b303813, csprogs
+a4d7cf8a). Server QC reached the lobbies inside P1079's QW 3e14e81f (04:57:51Z).
+Lobby csprogs, owner-approved, 04:59:23Z: `build.ps1 -Pi` from a clean worktree at
+ftesurf 99bd8169 (fteqcc c24ede65): csprogs 70536e99 (was a043b93b = P1065's client
+source, rebuilt byte-exact), qwprogs rebuilt byte-identical 3e14e81f, all 12 restarted
+empty. `-Pi` had set qwprogs.dat.prev to the live file; restored to P1076 1d2df5ec.
+Same csprogs in both installs 05:04:49Z (.prev a4d7cf8a). It also carries P1068
+(inert in CSQC) and P1074. Release client 0.1.32 (17f7ec60): the P1077 arm passed
+175/175 against a TAS server; pi_lobby_smoke on lobby 4 passed (served csprogs, board,
+no QC error) once the rig carried the Pi's exact bhop_eazy.bsp -- with this PC's CS:S
+copies the lobby kicks it as "modified" (the 03:07 smoke on the old csprogs too). TAS
+stays refused on the lobbies until their native carries P1055+ (live 4a149d79).
+
 ## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
 
 **Problem:** A recurring timer's later native callback did not retain the
