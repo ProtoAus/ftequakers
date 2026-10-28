@@ -2346,9 +2346,14 @@ static void IN_JournalEnd_f(void)
 		return;
 	}
 
-	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5))
+	/*Patch 1086: and only under a journal's own name.  CSQC's localcmd and server
+	  stufftext share RESTRICT_INSECURE, so a level test would also refuse our own
+	  recorder (which writes .hid only); without this any server's code could write a
+	  journal over a saved zone file or a save.*/
+	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5)
+	    || strlen(name) < 9 || Q_strcasecmp(name + strlen(name) - 4, ".hid"))
 	{
-		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/\n", Cmd_Argv(1));
+		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid\n", Cmd_Argv(1));
 		IN_Journal_Digest(false);	/*complete bytes; nobody kept them*/
 		IN_Journal_Drop();
 		return;
@@ -2462,6 +2467,13 @@ static void IN_JournalSynth_f(void)
 	int n = (Cmd_Argc() > 1) ? atoi(Cmd_Argv(1)) : 1;
 	int i;
 
+	/*Patch 1086: test-only, and no QC uses it.  From CSQC or stufftext the events move
+	  the pointer a real press is judged by (P1081's zone dialog), so local console only.*/
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s: not allowed (from server)\n", Cmd_Argv(0));
+		return;
+	}
 	if (n < 1)
 		n = 1;
 	if (n > 100000)
