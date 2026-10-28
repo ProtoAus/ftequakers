@@ -2694,6 +2694,41 @@ static qboolean QC_CfgChangeDenied(pubprogfuncs_t *prinst, const char *fixedname
 	return false;
 }
 
+/*P1090: TAS projects (data/tasproj/) carry signed credit and CSQC is whatever the server
+  sent: it may not open (reading included), list, locate, copy, rename or remove anything
+  there.  A segment is read as the file system resolves it -- either separator, empty
+  segments and leading spaces dropped (FS_GetCleanPath), case and trailing dots/spaces
+  ignored (Windows) -- and a search pattern's wildcards count as matching.*/
+static qboolean QC_TasprojSeg(const char **s, const char *word, qboolean pattern)
+{
+	char seg[256];
+	const char *b, *e;
+	while (**s == '/' || **s == '\\' || **s == ' ')
+		(*s)++;
+	for (b = *s; **s && **s != '/' && **s != '\\'; (*s)++)
+		;
+	for (e = *s; e > b && (e[-1] == '.' || e[-1] == ' '); e--)
+		;
+	if (e - b >= (int)sizeof(seg))
+		return pattern;	/*no real segment is that long; a pattern that long may still match*/
+	memcpy(seg, b, e - b);
+	seg[e - b] = 0;
+	return pattern ? wildcmp(seg, word) : !Q_strcasecmp(seg, word);
+}
+static qboolean QC_TasprojDenied(pubprogfuncs_t *prinst, const char *name, qboolean pattern)
+{
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	extern world_t csqc_world;
+	const char *s = name;
+	if (prinst == csqc_world.progs && name && QC_TasprojSeg(&s, "data", pattern) && QC_TasprojSeg(&s, "tasproj", pattern))
+	{
+		Con_Printf("qcfopen(\"%s\"): csqc may not use data/tasproj/\n", name);
+		return true;
+	}
+#endif
+	return false;
+}
+
 void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char *name = PR_GetStringOfs(prinst, OFS_PARM0);
@@ -2753,6 +2788,8 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 	}
 	if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READNL && fmode != FRIK_FILE_MMAP_READ
 	    && fmode != FRIK_FILE_READ_DELAY && QC_CfgChangeDenied(prinst, name))
+		return;
+	if (QC_TasprojDenied(prinst, name, false) || QC_TasprojDenied(prinst, fallbackread, false))
 		return;
 
 	Q_strncpyz(pf_fopen_files[i].name, name, sizeof(pf_fopen_files[i].name));
@@ -3528,9 +3565,11 @@ void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 	char buffer[65536];
 	int sz;
 	G_FLOAT(OFS_RETURN) = -1;
-	if (QC_FixFileName(srcname, &srcname, &fallbackread))
+	if (QC_FixFileName(srcname, &srcname, &fallbackread) && !QC_TasprojDenied(prinst, srcname, false)
+		&& !QC_TasprojDenied(prinst, fallbackread, false))
 	{
-		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname))
+		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname)
+			&& !QC_TasprojDenied(prinst, dstname, false))
 		{
 			src = FS_OpenVFS(srcname, "rb", FS_GAME);
 			if (!src)
@@ -3598,7 +3637,7 @@ void QCBUILTIN PF_fcopyrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 	vfsfile_t *src, *dst;
 	G_INT(OFS_RETURN) = -1;
 	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback) || !QC_FixFileName(dstname, &dstname, &fallback)
-	    || QC_CfgChangeDenied(prinst, dstname))
+	    || QC_CfgChangeDenied(prinst, dstname) || QC_TasprojDenied(prinst, srcname, false) || QC_TasprojDenied(prinst, dstname, false))
 		return;
 	src = FS_OpenVFS(srcname, "rb", FS_GAMEONLY);
 	if (!src)
@@ -3631,7 +3670,7 @@ void QCBUILTIN PF_fappendrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 		PF_Warningf(prinst, "PF_fappendrange: not an open write stream\n");
 		return;
 	}
-	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback))
+	if (ofs < 0 || len < 0 || !QC_FixFileName(srcname, &srcname, &fallback) || QC_TasprojDenied(prinst, srcname, false))
 		return;
 	src = FS_OpenVFS(srcname, "rb", FS_GAMEONLY);
 	if (!src)
@@ -3648,8 +3687,8 @@ void QCBUILTIN PF_frename (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	const char *dstname = PR_GetStringOfs(prinst, OFS_PARM1);
 	const char *fallbackread, *fallbackwrite; //not actually used, but present because QC_FixFileName wants a fallback
 	G_FLOAT(OFS_RETURN) = -1; //some kind of dodgy path problem
-	if (QC_FixFileName(srcname, &srcname, &fallbackread) && !QC_CfgChangeDenied(prinst, srcname))
-		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname))
+	if (QC_FixFileName(srcname, &srcname, &fallbackread) && !QC_CfgChangeDenied(prinst, srcname) && !QC_TasprojDenied(prinst, srcname, false))
+		if (QC_FixFileName(dstname, &dstname, &fallbackwrite) && !QC_CfgChangeDenied(prinst, dstname) && !QC_TasprojDenied(prinst, dstname, false))
 		{
 			if (FS_Rename(srcname, dstname, FS_GAMEONLY))
 				G_FLOAT(OFS_RETURN) = 0;
@@ -3662,7 +3701,7 @@ void QCBUILTIN PF_fremove (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	const char *fname = PR_GetStringOfs(prinst, OFS_PARM0);
 	const char *fallbackread; //not actually used, but present because QC_FixFileName wants a fallback
 	G_FLOAT(OFS_RETURN) = -1; //some kind of dodgy path problem
-	if (QC_FixFileName(fname, &fname, &fallbackread) && !QC_CfgChangeDenied(prinst, fname))
+	if (QC_FixFileName(fname, &fname, &fallbackread) && !QC_CfgChangeDenied(prinst, fname) && !QC_TasprojDenied(prinst, fname, false))
 	{
 		if (FS_Remove(fname, FS_GAMEONLY))
 			G_FLOAT(OFS_RETURN) = 0;
@@ -3675,7 +3714,7 @@ void QCBUILTIN PF_fexists (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	const char *srcname = PR_GetStringOfs(prinst, OFS_PARM0);
 	flocation_t loc;
 
-	int depth = FS_FLocateFile(srcname, FSLF_DEPTH_INEXPLICIT, &loc);
+	int depth = QC_TasprojDenied(prinst, srcname, false) ? 0 : FS_FLocateFile(srcname, FSLF_DEPTH_INEXPLICIT, &loc);
 
 	if (depth == 1)
 		G_FLOAT(OFS_RETURN) = true;		//exists and should be in the writable path.
@@ -3704,7 +3743,7 @@ void QCBUILTIN PF_whichpack (pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 	unsigned int flags = prinst->callargc>1?G_FLOAT(OFS_PARM1):WP_REFERENCE;
 	flocation_t loc;
 
-	if (FS_FLocateFile(srcname, FSLF_IFFOUND, &loc))
+	if (!QC_TasprojDenied(prinst, srcname, false) && FS_FLocateFile(srcname, FSLF_IFFOUND, &loc))
 	{
 		srcname = FS_WhichPackForLocation(&loc, flags);
 		if (srcname == NULL)
@@ -3850,6 +3889,11 @@ void QCBUILTIN PF_search_begin (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 	if (!*pattern || (*pattern == '.' && pattern[1] == '.') || *pattern == '/' || *pattern == '\\' || (!(flags&QCSEARCH_MULTISEARCH)&&strchr(pattern, ':')))
 	{
 		PF_Warningf(prinst, "PF_search_begin: bad search pattern \"%s\"\n", pattern);
+		G_FLOAT(OFS_RETURN) = -1;
+		return;
+	}
+	if (QC_TasprojDenied(prinst, pattern, true))
+	{
 		G_FLOAT(OFS_RETURN) = -1;
 		return;
 	}
@@ -4024,7 +4068,7 @@ void QCBUILTIN PF_search_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 	}
 	s = &pr_searches[handle];
 
-	if (num < 0 || num >= s->entries)
+	if (num < 0 || num >= s->entries || QC_TasprojDenied(prinst, s->entry[num].name, false))
 		return;
 	if (PF_search_getloc(&loc, s, num))
 		G_FLOAT(OFS_RETURN) = PF_fopen_search (prinst, s->entry[num].name, &loc);
@@ -4067,7 +4111,7 @@ void QCBUILTIN PF_callfunction (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 void QCBUILTIN PF_loadfromfile (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char	*filename = PR_GetStringOfs(prinst, OFS_PARM0);
-	const char *file = COM_LoadTempFile(filename, 0, NULL);
+	const char *file = QC_TasprojDenied(prinst, filename, false) ? NULL : COM_LoadTempFile(filename, 0, NULL);
 
 	size_t size;
 
@@ -5948,6 +5992,8 @@ void QCBUILTIN PF_buf_loadfile  (pubprogfuncs_t *prinst, struct globalvars_s *pr
 		Con_Printf("qcfopen: Access denied: %s\n", fname);
 		return;
 	}
+	if (QC_TasprojDenied(prinst, fname, false) || QC_TasprojDenied(prinst, fallback, false))
+		return;
 
 	file = FS_OpenVFS(fname, "rb", FS_GAME);
 	if (!file && fallback)

@@ -641,13 +641,15 @@ static qboolean CL_Receipt_IsHex(const char *s, size_t len)
   P1089 hash, which covers its parent, map and inputs, so the statement checks offline;
   ticks is the input span this revision supplies over its parent.  Audience surfd, like
   FRIENDS.  Only in a game this process hosts (projects are local) and only under a key
-  press, so a remote server's CSQC cannot collect one behind some other prompt.
+  press, so a remote server's CSQC cannot collect one behind some other prompt.  The VM
+  checks are acct_sign's: the code must be this connection's, one file, and its sha256 is
+  the `code` line, so a cached or packed csprogs is named in what it asked for.
 */
 #define TASREV_MAXTICK	16777215	/*the last tick a QC float holds exactly*/
 qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *mapcrc,
 							   int from, int to, qboolean keyed, char *out, size_t outlen)
 {
-	char msg[320], pubhex[65], sighex[129];
+	char msg[400], pubhex[65], sighex[129];
 	qbyte sig[64];
 
 	if (outlen) out[0] = 0;
@@ -661,6 +663,16 @@ qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *
 		Con_Printf("tasrev_sign: only in a game this client hosts. Refused.\n");
 		return false;
 	}
+	if (!acct_vm_live || !NET_CompareAdr(&acct_vm_adr, &cls.netchan.remote_address))
+	{
+		Con_Printf("tasrev_sign: this game code is not the connected server's. Refused.\n");
+		return false;
+	}
+	if (strlen(acct_vm_code) != 64 || acct_vm_mixed)
+	{
+		Con_Printf("tasrev_sign: this game code is not one file with a name. Refused.\n");
+		return false;
+	}
 	if (!CL_Receipt_IsHex(sha, 64) || !CL_Receipt_IsHex(mapcrc, 8)
 		|| !parent || (strcmp(parent, "-") && !CL_Receipt_IsHex(parent, 64)))
 		return false;
@@ -668,12 +680,12 @@ qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *
 		return false;
 	if (!CL_Receipt_Key())
 		return false;
-	Q_snprintfz(msg, sizeof(msg), "FTESURF-TASREV 1\nserver play.proto.bar:443\nsha %s\nparent %s\nmapcrc %s\nticks %i %i\n",
-				sha, parent, mapcrc, from, to);
+	Q_snprintfz(msg, sizeof(msg), "FTESURF-TASREV 1\nserver play.proto.bar:443\nsha %s\nparent %s\nmapcrc %s\nticks %i %i\ncode %s\n",
+				sha, parent, mapcrc, from, to, acct_vm_code);
 	Ed25519_Sign(sig, (const qbyte *)msg, strlen(msg), rcpt_sk);
 	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
 	CL_Receipt_Hex(sighex, sizeof(sighex), sig, sizeof(sig), true);
-	Q_snprintfz(out, outlen, "%s %s", pubhex, sighex);
+	Q_snprintfz(out, outlen, "%s %s %s", pubhex, sighex, acct_vm_code);
 	Con_DPrintf("tasrev_sign: %.8s ticks %i..%i\n", sha, from, to);
 	return true;
 }

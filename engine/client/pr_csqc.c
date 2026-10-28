@@ -9578,17 +9578,19 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 		RETURN_TSTRING("");
 }
 /*P1090: string(string sha, string parent, string mapcrc, float from, float to) tasrev_sign:
-  `<pub> <sig>`, or "".  Spends this press's one signature, as acct_sign's link kinds do.*/
+  `<pub> <sig> <code>`, or "".  Spends this press's one signature, as acct_sign's link kinds do.*/
 qboolean CL_Receipt_TasRevSign(const char *sha, const char *parent, const char *mapcrc,
 							   int from, int to, qboolean keyed, char *out, size_t outlen);
 static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
-	char out[256];
+	char out[320];	/*64 + 128 + 64 hex and two spaces*/
 	float a = G_FLOAT(OFS_PARM3), b = G_FLOAT(OFS_PARM4);
 	qboolean keyed = CSQC_RealKey() && csqc_realkey_signs >= 1;
 
 	if (keyed)
 		csqc_realkey_signs--;
+	if (prinst->numprogs != 1)
+		CL_Receipt_VMCode(NULL, 0);	/*as acct_sign: a second progs file has no one name*/
 	/*a NaN, a fraction or anything past a float's exact integers is no tick*/
 	if (!(a >= 1 && a <= 16777215 && a == (int)a) || !(b >= 1 && b <= 16777215 && b == (int)b))
 		RETURN_TSTRING("");
