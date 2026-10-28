@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1099 -- fs_automount reads the menu's newer mount table; URL pictures skip the VMT loader
+
+**Problem:** Lex, 29 Oct: new maps should show up correctly between releases. The menu now fetches
+the Pi's data/mapdeps.txt once a session (FTESurf src/menu/m_mapmedia.qc), but it cannot rewrite
+the shipped file: the launcher hashes every managed file at launch and re-fetches an altered one.
+And the menu's URL thumbnails reached the hl2 plugin's Shader_LoadVMT, which probed
+"materials/http:/..." and made the Windows FS print an alternative-data-stream error.
+
+**Change:** the menu writes data/mapdeps.net.txt; FS_AutoMountForMap reads whichever of it and
+data/mapdeps.txt has the greater `# stamp YYYYMMDDHHMMSS` (UTC; none sorts first). From the menu's
+copy only `steam:` specs without ".." are taken, since a relative or absolute spec mounts any
+directory and `Sys_SteamHasFile` joins `..` straight under the Steam library. Shader_LoadVMT
+returns false for a name containing ':' -- not "://": the name arrives as "http:/..." with its
+double slash collapsed, and the first cut still printed the error.
+
+**Verified:** arm root rig1099 (copies only), shipped table without surf_hellenic's TF2 line, a
+local server holding one with it. Test exe: the menu wrote the net file mid-session, `map
+surf_hellenic` mounted TF2's four packs, fs_automount_state 1. The installed exe (control, same
+files): state 0. Test exe, net file rewritten by hand between loads: a relative spec 0, a steam:
+spec with `..` 0, a valid spec stamped older than the shipped file 0, the valid spec newer 1.
+URL thumbnails (no atlas pages in the root): 12 lobby cards drawn from 12 requests; the ADS line
+printed once with the "://" check and 0 times with ':'. 0 new warnings in fs.c or mat_vmt.c.
+
 ## Patch 1096 -- A static prop's VRAD bake made for another model is dropped (hl2 plugin)
 
 **Problem:** Lex, 29 Oct: surf_pantheon's identical columns drew brown, grey and black, striped
