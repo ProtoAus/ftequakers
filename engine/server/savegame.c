@@ -1215,17 +1215,17 @@ void SV_SaveLevelCache(const char *savedir, qboolean dontharmgame)
 	FS_FlushFSHashWritten(name);
 }
 
-//mapchange is true for Q2's map-change autosaves.
-/*Patch 1086: SV_Loadgame runs each line of the cvar block at RESTRICT_RCON, and a server or
-  CSQC can set these cvars, so a newline or quote in a value was a new command.  Quoted with
-  escapes, and bounded so the loader's VFS_GETS (MAX_LOCALINFO_STRING) never splits a line.*/
+/*Patch 1086: a server or CSQC can set these cvars, so a newline or quote in a value split the
+  line.  Quoted with escapes, and capped so the escaped line fits VFS_PRINTF's 2048-byte buffer
+  (2*900+4 plus the name); SV_LoadgameCvarLine parses it back without executing it.*/
 static const char *SV_SaveVarValue(const char *v, char *buf, size_t bufsize)
 {
-	if (strlen(v) > 1024)
+	if (strlen(v) > 900)
 		v = "";
 	return COM_QuotedString(v, buf, bufsize, false);
 }
 
+//mapchange is true for Q2's map-change autosaves.
 void SV_Savegame (const char *savename, qboolean mapchange)
 {
 	client_t *cl;
@@ -2085,6 +2085,33 @@ static qboolean SV_Loadgame_Legacy(const char *savename, const char *filename, v
 }
 #endif
 
+/*Patch 1086: the cvar block is SV_Savegame's fixed list, but its values are whatever a server
+  or CSQC set.  Each line used to run through Cmd_ExecuteString at RESTRICT_RCON, with $ macro
+  expansion; now it is parsed without expansion and only a listed cvar is set.*/
+static void SV_LoadgameCvarLine(const char *line)
+{
+	static const char *names[] = {"skill", "deathmatch", "coop", "teamplay", "nomonsters", "gamecfg",
+		"scratch1", "scratch2", "scratch3", "scratch4", "savedgamecfg", "saved1", "saved2", "saved3",
+		"saved4", "temp1", "noexit", "pr_maxedicts", "progs", NULL};
+	cvar_t *var;
+	int i;
+
+	Cmd_TokenizeString(line, false, false);
+	if (Cmd_Argc() == 3 && !strcmp(Cmd_Argv(0), "set") && !strcmp(Cmd_Argv(1), "nextserver"))
+	{
+		Cvar_Set(Cvar_Get("nextserver", "", 0, ""), Cmd_Argv(2));
+		return;
+	}
+	for (i = 0; names[i] && Q_strcasecmp(names[i], Cmd_Argv(0)); i++)
+		;
+	if (Cmd_Argc() != 2 || !names[i] || !(var = Cvar_FindVar(names[i])))
+	{
+		Con_DPrintf("loadgame: skipped a line of the cvar block\n");
+		return;
+	}
+	Cvar_Set(var, Cmd_Argv(1));
+}
+
 //Attempts to load a named saved game.
 qboolean SV_Loadgame (const char *unsafe_savename)
 {
@@ -2294,7 +2321,7 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 		if (!strcmp(str, "}"))
 			break;
 		else if (*str)
-			Cmd_ExecuteString(str, RESTRICT_RCON);
+			SV_LoadgameCvarLine(str);
 	}
 
 	SV_FlushLevelCache();
