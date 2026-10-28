@@ -2351,14 +2351,14 @@ static void IN_JournalEnd_f(void)
 	  recorder (which writes .hid only); without this any server's code could write a
 	  journal over a saved zone file or a save.  Tested whole: a name the namelocal copy
 	  would cut is refused, not truncated to a different file.  Lowercase, as rec_ul_arm.
-	  Nor may game code or server text replace a journal on disk -- an archived PB's must
-	  keep matching its signed digest; the recorder's names are nonce- or tick-stamped.*/
+	  No "may not replace" rule: CSQC can rewrite any data/ file itself, Windows path
+	  aliases (8.3 names, trailing dots) defeat an existence test, and it would refuse an
+	  honest PB journal whose stamped name already exists (review round 2).*/
 	if (!QC_FixFileName(Cmd_Argv(1), &name, &fallback) || strncmp(name, "data/", 5)
 	    || strlen(name) < 9 || strlen(name) >= sizeof(namelocal)
-	    || strcmp(name + strlen(name) - 4, ".hid")
-	    || (Cmd_IsInsecure() && COM_FCheckExists(name)))
+	    || strcmp(name + strlen(name) - 4, ".hid"))
 	{
-		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid, and game code may not replace one\n", Cmd_Argv(1));
+		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid\n", Cmd_Argv(1));
 		IN_Journal_Digest(false);	/*complete bytes; nobody kept them*/
 		IN_Journal_Drop();
 		return;

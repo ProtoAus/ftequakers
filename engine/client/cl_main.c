@@ -498,10 +498,23 @@ void CL_MakeActive(char *gamename)
 	if (sv_demoAutoRecord.ival && !sv.mvdrecording && !cls.demorecording && !cls.demoplayback && MVD_CheckSpace(false))
 	{	//don't auto-record if we're already recording... or playing a different demo.
 		extern cvar_t sv_demoAutoPrefix;
-		char timestamp[64];
+		char timestamp[64], dir[MAX_QPATH], file[MAX_QPATH], *c;
 		time_t tm = time(NULL);
 		strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", localtime(&tm));
-		Cbuf_AddText(va("record %s%s%s%s_%s\n", sv_demoDir.string, *sv_demoDir.string?"/":"", sv_demoAutoPrefix.string, host_mapname.string, timestamp), RESTRICT_LOCAL);
+		/*Patch 1086: a server can set all three strings (stufftext cvars, its map name) and
+		  this line runs at local level, so a ';' or newline in them was a local command.
+		  Name characters only (no '.', so no ".."); '/' only in sv_demoDir, never leading.*/
+		Q_strncpyz(dir, sv_demoDir.string, sizeof(dir));
+		Q_snprintfz(file, sizeof(file), "%s%s_%s", sv_demoAutoPrefix.string, host_mapname.string, timestamp);
+		for (c = dir; *c; c++)
+			if (!isalnum((unsigned char)*c) && *c != '_' && *c != '-' && *c != '/')
+				*c = '_';
+		for (c = file; *c; c++)
+			if (!isalnum((unsigned char)*c) && *c != '_' && *c != '-')
+				*c = '_';
+		for (c = dir; *c == '/'; c++)
+			;
+		Cbuf_AddText(va("record %s%s%s\n", c, *c?"/":"", file), RESTRICT_LOCAL);
 	}
 #endif
 
