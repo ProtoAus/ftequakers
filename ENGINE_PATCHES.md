@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1089 -- TAS project revision hash (QC, tools)
+
+**Problem:** TAS plan 5.1. Signed collaborative revisions (Lex: Steam-linked signing, public
+credits) need a revision identity that the game and a game-less backend compute alike, and that
+one load behaviour cannot carry many of.
+
+**Change:** a hash chain over a revision's canonical lines (h0 = sha256("FTESURF-TASREV-CANON
+1"); save time, revision counter, origin, parent name and revsha left out; base without its
+local save id). A file counts only if it is exactly what the writer writes: key order, bytes,
+spacing, %.0f/%.9g values (no -0), 8-hex checksums, required assist line (SV_TASPLineCanon).
+`parentsha` names the previous revision while a save stays on the project's line; `revsha`
+follows `end`. The writer goes through `<path>.new`, the strict reader and a rename, so a
+refused save never replaces the last revision. tools/tasrev.py mirrors the reader (stricter:
+no CR, nothing after the last line); tools/test_tasrev.py's 31 mutations agree with the game.
+
+**Verified:** tas_project_socket.py --exact --tasrev 59/59 (game and twin agree on all 31
+mutations; a refused save keeps the file byte for byte; a 96000-row revision reads without a
+runaway and hashes alike; the full-length SAVE path is not measured). Four review rounds (fgets
+4095 split hiding rows, malleable forms, a looser twin, exponent floats breaking read-back,
+write-in-place); controls fail on the fixed cases. Live 11:30Z installs / ~11:35Z lobbies from
+main 8b8976de (qw b2f8f3db); lobby smoke PASS.
+
 ## Patch 1088 -- TAS optimizer: a constant turn for exit speed (QC)
 
 **Problem:** TAS plan Stage 4b; Lex 28 Oct wanted optimizer goals total time, exit speed,
