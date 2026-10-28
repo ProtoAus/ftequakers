@@ -20,6 +20,12 @@ independent reviews (logic, evidence readers, cheater gain) plus two fix rounds;
 pose clamp and an RT_LAST retention loss were found and fixed there. Reach into
 segmented/shadow via recurring timers and named targets is in BACKLOG (census owed).
 Board backend not yet live (old surfd boards these runs as segmented, as before).
+**Delivered (server progs only):** both Windows installs QW/LNO 3e14e81f/a40dad96 at
+2026-10-28T04:56:54Z (.prev = P1077's 4b303813); all 12 Pi lobbies QW 3e14e81f at
+04:57:51Z, each restarted once while empty, same native, fresh heartbeats, .prev =
+P1076 1d2df5ec. P1077's server QC went out with it (its owner agreed). csprogs and
+surfd unchanged here: the client labels arrive with the next csprogs deploy and the
+board rule with the next backend generation.
 
 ## Patch 1078 -- Tiers for maps newer than tiers.txt (data)
 
