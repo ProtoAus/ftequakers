@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1078 -- Tiers for maps newer than tiers.txt (data)
+
+**Problem:** surf_midnight showed tier 4 in the menu's map list but "MOM tier ? |
+KSF tier ?" in game. The info box and scoreboard read the SERVER's
+maps/tiers.txt (P723), and that file -- identical on the Pi, both installs and
+main (1a033e53, 3,163 maps, 24 Oct) -- predates the map; the menu reads the
+live directory row instead. Six other newer maps had the same gap.
+
+**Change:** tiers.txt regenerated with tools/maptiers.py from the live
+/api/board?maps=1 list, data/ksf_roster.csv and the Momentum caches of 27 Oct:
+3,163 -> 3,170 maps, none dropped. Added surf_midnight, surf_frequency,
+surf_shoria_css, surf_solitude_css, sj_bright, bhop_anomalous, bhop_2020_aux;
+surf_blink, surf_diverge, surf_neoplasma and surf_not_so_funhouse left Momentum
+Beta (sugg -> rank, blink's bonuses renumbered upstream); sj_covenant MOM 2 -> 3.
+surf_midnight's MOM 4 (suggested) is Momentum's Beta port (submission 2491,
+bb8c3e65), not the KSF build the lobbies run (1b6fa0db): MOM rows are keyed by
+name, as for every map. Same mapper (nao) and KSF's b_count 4 matches the port's
+four bonus ratings. mapwatch never swaps it in (--updates replaces `mom` only).
+
+**Verified:** two independent generations byte-identical (ea774409); all 3,170
+rows pass SV_MapTierInit's accept rules in a parser mirror (3 tokens, prefix,
+7 fields, row < 64, track/leg 0..99, one of them 0); test_maptiers 15/15.
+
 ## Patch 1076 -- Preserve recurring timer scheduled-callback lineage (QC)
 
 **Problem:** A recurring timer's later native callback did not retain the
