@@ -23,7 +23,10 @@ those six names). Real client, loopback fixture, production hosts patched out
 (p1084-stats-smoke.py): Home source 0 native 1; panel click -> page for me,
 state OK, 3 runs, source WOS; typed search sent `players=`, picking the hit
 showed that player; Back to me; ESC home. Screenshots looked at (cards 16 px,
-switch, page). Not checked: a real Steam-linked account, the board hand-off.
+switch, page). Live 07:19Z from main 2702665d: both installs and all 12 lobbies
+(qw 8134b64f, cs 7ae351cf, menu 587d416c), .prev kept; ftesurf-8b's lobby smoke
+on 27520 loaded the served csprogs, drew the board, no QC error. Not checked: a
+real Steam-linked account, the board hand-off, the in-game Stats chip.
 
 ## Patch 1083 -- Ranked runs use the standard move size (QC/tools)
 
