@@ -2360,6 +2360,13 @@ qboolean SV_Loadgame (const char *unsafe_savename)
 
 void SV_Loadgame_f (void)
 {
+	/*Patch 1086: a save's {} block runs at RESTRICT_RCON, above every insecure source,
+	  and CSQC can write a file under data/ for it to name.*/
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s: local console only\n", Cmd_Argv(0));
+		return;
+	}
 #ifdef HAVE_CLIENT
 	if (!Renderer_Started() && !isDedicated)
 	{

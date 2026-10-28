@@ -1131,7 +1131,7 @@ void SV_Map_f (void)
 			if (sep && *mangled != '@' && strncmp(mangled, "file:", 5) && strncmp(mangled, "http:", 5) && strncmp(mangled, "https:", 5))	//nettest (P26 Part 2): '@spec/map' is our prefer-hint form, not a package, even though the spec contains ':'
 			{
 				*sep++ = 0;
-				if (Cmd_FromGamecode())
+				if (Cmd_FromGamecode() || Cmd_IsInsecure())	//Patch 1086: CSQC's localcmd is insecure, not "gamecode"
 				{
 					Con_TPrintf ("switching packages via %s command is blocked from gamecode, just in case.\n", Cmd_Argv(0));
 					sv.mapchangelocked = false;

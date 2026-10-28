@@ -28,7 +28,9 @@ cvar_t rcon_level			= CVAR("rcon_level", "20");
 cvar_t cmd_maxbuffersize	= CVAR("cmd_maxbuffersize", "65536");
 #ifdef HAVE_LEGACY
 cvar_t dpcompat_set         = CVAR("dpcompat_set", "0");
-cvar_t dpcompat_console     = CVARD("dpcompat_console", "0", "Enables hacks to emulate DP's console.");
+//Patch 1086: not from a server or CSQC -- it changes COM_QuotedString's escapes, which the
+//config writers rely on, so a quote in a saved bind/cvar/alias could close early.
+cvar_t dpcompat_console     = CVARFD("dpcompat_console", "0", CVAR_NOTFROMSERVER, "Enables hacks to emulate DP's console.");
 #else
 static const cvar_t dpcompat_set = {0};
 static const cvar_t dpcompat_console = {0};
