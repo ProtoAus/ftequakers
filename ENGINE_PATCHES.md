@@ -1,5 +1,69 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1086 -- Server text and server code kept from local-only commands (client)
+
+**Problem:** P1081's consent review: `in_journal_synth` (a test helper; no QC
+calls it) ran from any source, so a server's stufftext or CSQC could inject
+pointer events, and `in_journal_end` wrote a journal to any data/ name. CSQC's
+localcmd and stufftext share RESTRICT_INSECURE, so the recorder's own begin/end
+cannot be gated by level. Seven review rounds then found routes by which a
+server reached a level above RESTRICT_INSECURE anyway, without a click: CSQC
+could write cfg/default.cfg (exec'd every boot; the quakers cfg/ write prefix);
+the auto-record line, the demo loop and tp_autostatus built local commands from
+strings a server sets; game-code bindmap binds were saved without their level;
+`load` ran a save's {} block at RESTRICT_RCON, and the savegame writer stored
+cvar values unquoted (a newline became a command; an over-long serverinfo line
+split into fake sections); dpcompat_console, which changes the config writers'
+quoting, was settable by a server; `map pkg:map` was open to CSQC.
+
+**Change:**
+- in_generic.c: `in_journal_synth` refuses Cmd_IsInsecure(); `in_journal_end`
+  writes only a whole (under 128 bytes, never truncated), lowercase
+  `data/...*.hid` name -- every recorder exit and cfg/test arm is one. A "may not
+  replace" rule was tried and dropped (round 2: Windows path aliases defeat the
+  existence test, CSQC can rewrite data/ itself, and it refused honest PB names).
+- pr_bgcmd.c QC_CfgChangeDenied: CSQC may read cfg/ but not write, copy into,
+  rename or remove it. Ours never writes there; menu QC keeps it.
+- cl_main.c: the auto-record name is [A-Za-z0-9_-] (and '/' in the directory);
+  `startdemos`/`demos` local only, a loop name outside [A-Za-z0-9_./-] stops it.
+  zqtp.c: tp_autostatus refuses newlines too. keys.c: only local bindmap binds
+  are saved.
+- savegame.c: `load`/`loadgame` local only (rcon passes); the cvar block's values
+  are written with COM_QuotedString, capped at 900 chars, and read back by
+  SV_LoadgameCvarLine (no execution, no $ expansion, listed cvars only); a line
+  that fills the read buffer is a corrupt save.
+- cmd.c: dpcompat_console CVAR_NOTFROMSERVER. sv_ccmds.c: `map pkg:map` refused
+  for insecure callers too.
+
+**Verified:** -Full build, stamp git-7962-patch-1086-0-ge7e2df742 (16 copies,
+one value), client 4546724b, 79 build warning lines as before, none in the
+changed files. Only client/listen-server code changed from patch-1074; plugins
+unchanged. Real server + client (conbridge), graded on the client's own lines,
+the round-1 build (1b3e8cecd) as control:
+- server `stuffcmd`: synth refused (patch-1074: injected); `.json` end refused;
+  `.hid` written; a 131-char `.hid` name refused (control: truncated file
+  written); `startdemos`, `load` refused (control: accepted); `dpcompat_console
+  1` refused (control: took effect).
+- local `startdemos "x;echo P1086"` + `demos`: loop stopped (control: the echo ran).
+- `sv_demoAutoPrefix "x;echo P1086INJECT;"` + reconnect: recorded under a
+  sanitised name (control: recorded demos/x and the echo ran).
+- listen server, `cl_saveroot_test cfg/p1086`, `retry`: our CSQC's fremove under
+  cfg/ refused, file kept (control: deleted, and its Seq_Retry wrote cfg/).
+- listen server, saved1 set to a value with a newline, `save` + `load`: one
+  escaped line in info.fsv, nothing ran, the save loaded (control: split line,
+  the echo ran).
+Seven review rounds (predicate/evidence, hostile-server, then each fix alone);
+round 8 found no defect. Installed both Windows installs 09:50Z (.prev = the
+round-1 exe 0af34335, .pre1086 = patch-1074 4e4a5262).
+Not checked: tp_autostatus, bindmap saving and `map pkg:map` by reading only;
+the Linux client (next release).
+Left open (FTESurf BACKLOG): click-to-run server text (console links, kick/ban
+menu, server browser); CSQC cvar_set persisting e.g. rec_hid; csprogs writing
+under data/; the particle-set loader's level; Windows aux/COM superscript names;
+SV_Error rather than a refusal on an over-long first line of a non-save file.
+The plugin step's zip packaging failed on four of nine -Full builds ("zip I/O
+error: Device or resource busy", at -Jobs 8 and 4); the exes always built.
+
 ## Patch 1084 -- Stats page in the main menu; native lobby fonts (menu, csprogs)
 
 **Problem:** Lex 28 Oct: the lobby cards' player count rendered soft; the stats
