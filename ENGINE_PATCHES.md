@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1083 -- Ranked runs use the standard move size (QC/tools)
+
+Problem: cl_forwardspeed/sidespeed/upspeed and cl_movespeedkey were pinned to nothing
+(Patch 493 only marked moves over a 2000 evidence bound), and cl_netfps was matched to
+the tick only at map load. Owner rule, 28 Oct: a run off the standard settings is not
+ranked.
+Change: CSQC_Input_Frame scales the move vector to at most RUN_MOVE_STD 450 per axis
+(direction kept), so raised settings and the engine's pad-on-key sum / x360 walk scaling
+cannot exceed it. SV_MoveBoundFrame
+latches TF_NOPROFILE and PW_MOVE ("move") the moment an axis exceeds 450, independent of
+the run_movebound evidence switch; SV_ProfileWhy reports it at the finish. surfd needs
+no change (TF_NOPROFILE already uncertifies). Net_MatchTicrate runs every frame.
+sv_mintic/sv_maxtic/run_starthop are server cvars on the official servers, the only
+ones that rank, so they are not pinned here.
+Verified: 3 VMs 0 warnings, test_reccheck 945/0, board pass. Native arms (main vs
+P1083, synthetic running bodies): 451/900 latch and judge `move`, also at
+run_movebound 0; main judges ok; 450 ok in both. Two reviews found the pad-on-key sum,
+a stale resume reason and the shared off switch; a second round found stale load
+values and the clamp's skew; all fixed. The third round found no integrity defect;
+its strict residuals are in BACKLOG.
+
 ## Patch 1082 -- TAS projects: save a line to disk, reload and verify it (QC)
 
 **Problem:** TAS work lived only in the warm session (a ~60 s rewind ring, in-memory
