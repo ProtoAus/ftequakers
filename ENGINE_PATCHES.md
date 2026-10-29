@@ -20,8 +20,18 @@ post-output carrier-clear counterpart added, parent parked/restored ONLYowned
 source for23baseline, no input implementation/evidence waiver. FullNoDeploy
 SS/menu0/2oldCSF333/zeroNEW; gravity14/reader949-0; same527REC167VIEW wholepaths/
 bytes/diagnostics328faultyREC7faultyVIEW/zero introduced, NOTfaultfree. No authored
-BSP/native mover/prediction/finishedrecord/rank/human claim. Reviews/deployment
-pending; see tools/p1126-claim.md.
+BSP/native mover/prediction/finishedrecord/rank/human claim. Bothfreshindependent
+read-onlyreviews noissues on exactruntimeQC360b6a15/engineDOCa29923f12, exactpublished;
+Git-less child provenance qualified. Normalbuild0NEW; BOTHWindows6DAT/LNO+actualprev/
+originalpreprevrollback, PiQWc945e77e3150/CSfa9bb6d39634+prev/rollback/12freshsame-native/
+healthy12/empty verified2026-10-29 20:22:27.669399UTC, nonforce. All16347/142Windows+
+35144Pi protectedpathsbytes unchanged/none missing/zero newPi. Backendfiles/unit/AI/
+native/config unchanged. Frozen6/rollbackretained, unchangedclient/native/CS/MENU
+reuses priorserved/drawn proof NOTnewGUI/wire/mover/elapsedclock/finishedrecord/
+rank/human acceptance. ZIP101ownedfilesverified, only9files/oneNoDeployroot retired,
+92minimalrigfilesretained+archived/0owngames/links/gates. ExactOWNcanonicalclaim
+retired originalhash/publishednumberguard/originalretained. No native/backend/
+config/Build/release action. See tools/p1126-claim.md.
 
 ## Patch 1125 — retain gravity activation through an owed exit reset
 
