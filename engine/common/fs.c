@@ -11400,6 +11400,40 @@ void FS_AutoUnmountStale(void)
 	//ftesurf (P186): last, so SPF_HARVEST is computed from the set that survived the drop.
 	FS_Cache_BeginMap();
 }
+//ftesurf (P1102): a data/map* table, read only from the gamedir's own loose files -- the write
+//gamedir, then the install's when a home dir is in use -- never a package, downloads/ or a
+//server's pure path, any of which a server can make hold one.
+vfsfile_t *FS_OpenTableVFS(const char *name)
+{
+	char path[MAX_OSPATH];
+	vfsfile_t *f = FS_OpenVFS(name, "rb", FS_GAMEONLY);
+	if (!f && com_homepathenabled && *gamedirfile
+	    && Q_snprintfz(path, sizeof(path), "%s%s/%s", com_gamepath, gamedirfile, name) < (int)sizeof(path))
+		f = FS_OpenVFS(path, "rb", FS_SYSTEM);
+	return f;
+}
+static char *FS_LoadTable(const char *name)
+{
+	vfsfile_t *f = FS_OpenTableVFS(name);
+	qofs_t len;
+	char *buf = NULL;
+	if (!f)
+		return NULL;
+	len = VFS_GETLEN(f);
+	if (len < 4*1024*1024)
+	{
+		buf = BZ_Malloc(len + 1);
+		if (VFS_READ(f, buf, len) == (int)len)
+			buf[len] = 0;
+		else
+		{
+			BZ_Free(buf);
+			buf = NULL;
+		}
+	}
+	VFS_CLOSE(f);
+	return buf;
+}
 //ftesurf (P1099): a mapdeps file's "# stamp YYYYMMDDHHMMSS" (UTC) from its first lines,
 //or "" when it has none -- which sorts before every stamp.  One dated after tomorrow (UTC)
 //is none too, as the menu's Mmm_Stamp reads it, so no copy outranks every later table.
@@ -11419,6 +11453,11 @@ static void FS_MapDepsStamp(const char *file, char out[15])
 			out[i == 14 ? 14 : 0] = 0;
 			if (!tm || !strftime(cap, sizeof(cap), "%Y%m%d235959", tm) || strcmp(out, cap) > 0)
 				out[0] = 0;
+			//P1102: the fields the menu's Mmm_Stamp also checks, so badges and mounts agree
+#define D2(o) ((out[o]-'0')*10 + (out[(o)+1]-'0'))
+			if (out[0] && (D2(4) < 1 || D2(4) > 12 || D2(6) < 1 || D2(6) > 31 || D2(8) > 23 || D2(10) > 59 || D2(12) > 59))
+				out[0] = 0;
+#undef D2
 			return;
 		}
 		file = strchr(file, '\n');
@@ -11482,11 +11521,11 @@ void FS_AutoMountForMap(const char *mapname)
 	if (!*want)
 		return;
 
-	file = FS_LoadMallocFile(FS_MAPDEPS_FILE, NULL);
+	file = FS_LoadTable(FS_MAPDEPS_FILE);
 	//ftesurf (P1099): the menu writes the Pi's table beside the shipped one, which the
 	//launcher would put back if edited.  The newer stamp wins.  The menu's copy must start
 	//with the table's header; either table may name only FS_MapDepsNetSpec's games.
-	net = FS_LoadMallocFile(FS_MAPDEPS_NET, NULL);
+	net = FS_LoadTable(FS_MAPDEPS_NET);
 	if (net && strncmp(net, "FTESURF-MAPDEPS 1", 17))
 	{
 		BZ_Free(net);

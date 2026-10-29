@@ -719,6 +719,7 @@ qboolean FS_DisplayPath(const char *fname, enum fs_relative relativeto, char *ou
 qboolean FS_WriteFile (const char *filename, const void *data, int len, enum fs_relative relativeto);
 void *FS_MallocFile(const char *filename, enum fs_relative relativeto, qofs_t *filesize);
 vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_relative relativeto);
+vfsfile_t *FS_OpenTableVFS(const char *name);	//ftesurf (P1102): a data/map* table from the gamedir's own loose files only
 vfsfile_t *FS_OpenTemp(void);
 vfsfile_t *FS_OpenTCP(const char *name, int defaultport, qboolean assumetls);
 

@@ -2707,6 +2707,13 @@ qboolean QC_MenuTable(const char *name)
 	}
 	return false;
 }
+//ftesurf (P1102): a path into data/, its first segment read as QC_TasprojSeg reads it.  No
+//server download belongs there, and a download's .tmp name could be one of the tables.
+qboolean QC_DataPath(const char *name)
+{
+	const char *s = name;
+	return name && QC_TasprojSeg(&s, "data", false) && (*s == '/' || *s == '\\');
+}
 #endif
 
 /*Patch 1086: CSQC is whatever the server sent, and cfg/ is exec'd at local level
@@ -2828,6 +2835,27 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		return;
 	if (QC_TasprojDenied(prinst, name, false) || QC_TasprojDenied(prinst, fallbackread, false))
 		return;
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	//ftesurf (P1102): any VM reads a map table only from the gamedir's own loose files, and
+	//only as FILE_READ (all ours use): a package, downloads/ or a server's path could hold one.
+	if (QC_MenuTable(name) && (fmode == FRIK_FILE_READ || fmode == FRIK_FILE_READ_DELAY
+	                           || fmode == FRIK_FILE_READNL || fmode == FRIK_FILE_MMAP_READ || fmode == FRIK_FILE_MMAP_RW))
+	{
+		if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READ_DELAY)
+			return;
+		Q_strncpyz(pf_fopen_files[i].name, name, sizeof(pf_fopen_files[i].name));
+		pf_fopen_files[i].accessmode = FRIK_FILE_READ_DELAY;
+		pf_fopen_files[i].file = FS_OpenTableVFS(name);
+		pf_fopen_files[i].ofs = 0;
+		if (pf_fopen_files[i].file)
+		{
+			pf_fopen_files[i].len = VFS_GETLEN(pf_fopen_files[i].file);
+			G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
+			pf_fopen_files[i].prinst = prinst;
+		}
+		return;
+	}
+#endif
 
 	Q_strncpyz(pf_fopen_files[i].name, name, sizeof(pf_fopen_files[i].name));
 

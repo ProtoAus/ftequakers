@@ -548,7 +548,7 @@ int CL_IsDownloading(const char *localname)
 //note: this will overwrite existing files.
 //returns true if the download is going to be downloaded after the call.
 #ifdef CSQC_DAT
-qboolean QC_MenuTable(const char *name);	//ftesurf (P1099), pr_bgcmd.c
+qboolean QC_DataPath(const char *name);	//ftesurf (P1102), pr_bgcmd.c
 #endif
 qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned int flags)
 {
@@ -577,7 +577,7 @@ qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned 
 	COM_FileExtension(localname, ext, sizeof(ext));
 	if (!stricmp(ext, "dll") || !stricmp(ext, "so") || strchr(localname, '\\') || strchr(localname, ':') || strstr(localname, "..")
 #ifdef CSQC_DAT
-	    || QC_MenuTable(localname)	//ftesurf (P1099): downloads/ is a search path
+	    || QC_DataPath(localname)	//ftesurf (P1099, P1102): nothing downloaded goes in data/
 #endif
 	    )
 	{
