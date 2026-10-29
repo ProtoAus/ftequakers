@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1102 -- The map tables are read only from the gamedir's own loose files (client, fs)
+
+**Problem:** P1099's last review: a copy of data/mapdeps.net.txt, mapmeta.net.txt or mapdl.net.txt
+could still come from a package or a download a server provides, read wherever the loose gamedir
+had none (detail in the private tree, checkpoints/p1099-maptables-csqc-20261029.md, item 5).
+
+**Change:** FS_OpenTableVFS opens a data/map* table from the write gamedir, then the install's
+when a home dir is in use -- never a package, downloads/ or a server's pure path.
+FS_AutoMountForMap reads both mount tables through it; PF_fopen opens a QC_MenuTable name only
+that way and only as FILE_READ. CL_EnqueDownload refuses any path into data/ (QC_DataPath). The
+stamp reader checks month, day, hour, minute and second, as the menu's does.
+
+**Verified:** arm root rig1101 (copies), consent removed so the menu fetches nothing. A package in
+downloads/ holding both .net tables: the installed exe's menu read its mapmeta.net.txt and mounted
+TF2 for surf_hellenic from its mount table; this build read data/mapmeta.txt and mounted nothing. A
+loose net table: mounted (twice); stamped hour 24: nothing. A test csprogs' precache_file of a
+data/ name: "Denying download". 0 new warnings; one stamp, git-7980-patch-1090-10-g5178bbd60.
+
+## Patch 1101 -- rec_terms is the engine's, and a server may not set it (client)
+
+**Problem:** rec_terms, the menu's mirror of data/consent.txt that every online gate in menu and
+csprogs reads, was a plain QC cvar, so a server could change the value those gates read
+(measured; detail in the private tree, checkpoints/p1099-maptables-csqc-20261029.md, item 4).
+
+**Change:** registered in cl_receipt.c beside rec_upload and rec_hid_upload, CVAR_NOTFROMSERVER,
+not saved. The menu sets it with localcmd_local (cvar_set refuses such cvars).
+
+**Verified:** same arm, consent on and off: this build printed "Server tried setting rec_terms cvar"
+and kept 8 / 0; the installed exe, as control, did not. The menu still sets 8 at boot.
+
 ## Patch 1099 -- fs_automount reads the menu's newer mount table; URL pictures skip the VMT loader
 
 **Problem:** Lex, 29 Oct: new maps should show up correctly between releases. The menu now fetches
