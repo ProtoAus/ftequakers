@@ -5737,8 +5737,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 							char fields[4][64];
 							char counted[256];
 							const char *args = SV_RecSim_RecordArgs(clockargs, "viewing");
-							if (!args || !SV_RecSim_ViewFields(args, fields) ||
-							    !SV_RecSim_ViewFloat(fields[3], &closingview))
+							if (!args)
+								clockbad = (!strcmp(clockargs, "sampled") || !strcmp(clockargs, "pending") || !strcmp(clockargs, "kept"))
+									? "a non-counted/kept v12 closing clock (not modelled)"
+									: "a malformed v12 viewing closing clock";
+							else if (!SV_RecSim_ViewFields(args, fields) ||
+							         !SV_RecSim_ViewFloat(fields[3], &closingview))
 								clockbad = "a malformed v12 viewing closing clock";
 							else
 							{
@@ -6291,6 +6295,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			refuse = "excluded-clock release inputs (not modelled)";
 		else if (viewbad)
 			refuse = viewbad;
+		/* P1103: preserve the parsed closing-clock reason before absence/equation
+		   checks can hide it. This only selects which refusal to report. */
+		else if (clockbad)
+			refuse = clockbad;
 		else if ((filever == 12 || filever == 13 || filever == 14) && (viewcap != 1 || viewowner || endviews < 0 || !haveclosingview || closingview != viewtotal))
 			refuse = "an incomplete or inconsistent v12 viewing clock";
 		else if ((filever == 12 || filever == 13 || filever == 14) && (inend_mt < 0 ||
@@ -6298,8 +6306,6 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			refuse = "an inconsistent inclusive closing equation";
 		else if ((filever == 12 || filever == 13 || filever == 14) && viewtotal > 0)
 			refuse = "positive viewing-wall carry (held-world replay not modelled)";
-		else if (clockbad)
-			refuse = clockbad;
 		else if (filever >= 11 && nclock != 1)
 			refuse = "missing or duplicate v11 closing clock";
 		else if (nrestart && !(svprogfuncs && (vf_restart = PR_FindFunction(svprogfuncs, "SV_VerifyRestart", PR_ANY))))

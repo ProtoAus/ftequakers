@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1103 -- Preserve closing-clock refusal diagnostics (native verifier)
+
+**Problem:** Recorder 12--14 can legitimately close with sampled, pending or kept
+clock accounting. The native verifier does not model those modes, but reported
+an incomplete viewing clock instead. Parsed malformed and unsupported physical
+clock reasons could likewise be hidden by later completeness/equation checks.
+Ordinary zero-carry REC11--14 controls already pass; this is not a fix for a
+false refusal of those eligible recordings.
+
+**Change:** Classify the three exact writer fallback modes as unsupported, and
+report an existing parsed closing-clock refusal before viewing-clock absence or
+equation diagnostics. All acceptance, arithmetic, count and unsupported-carry
+gates remain unchanged; no general held/parked replay support is added.
+
+**Verified:** Three independent source/contract reviews. Exact unmodified base
+105901357 and the candidate dedicated target each pass 58 native controls using
+identical input/map/plugin/progs/config bytes: zero verdict changes, four known
+PASS controls retain 45 ticks/45 rows, and 30 reasons change as predicted. Cases
+include matched duplicate/missing counts, mixed-mode ordering, malformed fields,
+positive frozen/viewing carry and zero/positive parked edges. The recording reader
+suite passes 945 checks; the same-byte corpus retains its per-file fault lists.
+Incremental baseline/candidate native builds produce no warnings; LSP has only
+pre-existing warnings outside the change.
+
+**Limits:** Dedicated Windows verifier qualified only. The full native entrypoint
+first hit an empty static dependency cache, then missing system Opus/Speex headers;
+those failures are retained, not repaired through unrelated source edits. No full
+client/plugin qualification, fleet deployment, Linux build or release is claimed.
+
 ## Patch 1102 -- The map tables are read only from the gamedir's own loose files (client, fs)
 
 **Problem:** P1099's last review: a copy of data/mapdeps.net.txt, mapmeta.net.txt or mapdl.net.txt
