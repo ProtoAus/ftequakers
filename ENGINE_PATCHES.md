@@ -20,7 +20,18 @@ native move. FullNoDeploySS/menu0/2oldCSF333/zeroNEW; teleport22regression pass.
 Reader949/0; same527REC167VIEW whole paths/bytes/diagnostics328faultyREC7faultyVIEW,
 zero introduced/notfaultfree. Spawn/start metadata clears source-inspected, no
 actual lifecycle/geometry/mover/prediction/finished-rank/human acceptance claim.
-Reviews/deployment pending; see tools/p1125-claim.md.
+Both fresh read-only reviews noissues on exact runtimeQC85a2a9a0/engineDOCf4d17212d,
+published exact; Git-less child provenance qualified. Normalbuild0NEW;
+BOTHWindows6DAT/LNO+prev, PiQWb6fefe276fa8/CSfa9bb6d39634+actualprev/12freshsame-native/
+healthy12/empty verified2026-10-29 19:34:19.661883UTC, nonforce. All16347/142Windows+
+35108Pi oldprotectedpathsbytesunchanged/none missing;6newREC5 existingmomentum
+namespace preserved(35114after), narrowheader/stat/domain check/NOTexactwriter
+attribution. Backendfiles/unit/AI/native/configunchanged. Frozen6/rollbackretained;
+unchangedclient/native/CS/MENU reuses priorserved/drawn proof, not newGUI/wire/
+move/lifecycle/finishedrecord/rank/human proof. ZIP91ownedfiles verified, only9files/
+oneNoDeployroot retired,82minimalrigfilesretained+archived/0owngames/links/gates.
+ExactOWNcanonicalclaim retired originalhash/publishednumberguard, originalretained.
+No native/backend/config/Build/release action. See tools/p1125-claim.md.
 
 ## Patch 1124 — retain teleport activation through actual body-value use
 
