@@ -23,8 +23,21 @@ nativebaseline/subject pass unchanged. FullNoDeploySS/menu0/2oldCSF333/zeroNEW,
 speed10 andinput26/5cashouts regressions/reader949-0; same527REC167VIEW entire
 pathsbytesdiagnostics328faultyREC7faultyVIEW/zero introduced NOTfaultfree. Stored
 futurecallbacks invokedBEFOREdeadline, NOTelapsedclock/scheduler/nativeMove/BSP/
-prediction/freshfinishedrecord/rank/human/fullbank proof. Reviews/deploy pending.
-See tools/p1128-claim.md.
+prediction/freshfinishedrecord/rank/human/fullbank proof. Bothfreshindependent
+read-onlyreviews noissues exactruntimeQC613a8af2/engineDOC6e4159f9d/exactpublished,
+parentGitprovenancequalified. Normalbuild0NEW, BOTHWindows6DAT/LNO+actualprev/
+originalpreprevrollback/PiQW4bcd14fdee02/CSfa9bb6d39634+prev/rollback/12freshsame-native/
+healthy12/empty verified2026-10-29 21:46:18.391923UTC, nonforce. All16347/142Windows+
+35189Pi oldprotectedpathsbytesunchanged/none missing;2newREC5 existingmomentum
+namespace preserved/narrowheaderstatdomain+stablehashcheck/writerUNATTRIBUTED
+(35191after), notgeneralaudit. Firstwrong data/runs prefix diagnostic failedbefore
+writes; actualdata/momentum frompriorboundaryevidence, failurestderrretained.
+Backendfiles/unit/AI/native/configunchanged/no native/backend/config/Build/release
+action. Frozen6/rollbackretained, unchangedCS/MENU/native/clientsource priorserved/
+drawnchainreuse NOTnewGUI/wire/move/elapsedclock/finishedrank/humanproof. ZIP121
+ownedfilesverified/ONLY9filesoneNoDeployrootretired/112minimalrigretained+archived/
+0owngames/links/gates; exactOWNcanonicalcfg retired originalhash/publicnumber/
+untrackedguard/originalretained. See tools/p1128-claim.md.
 
 ## Patch 1127 — price immediate gravity/carrier inputs by actual value
 
