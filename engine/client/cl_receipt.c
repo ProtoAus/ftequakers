@@ -891,8 +891,9 @@ static cvar_t rcpt_hid_upload = CVARFD("rec_hid_upload", "0", CVAR_ARCHIVE|CVAR_
 	"Native confirmed permission is still required; evidence already received is not deleted.");
 //ftesurf (P1101): the menu's mirror of data/consent.txt, read by every online gate in menu and
 //csprogs. A plain QC cvar until now: a server's `seta rec_terms 8` set an override cvar() read.
-static cvar_t rcpt_terms = CVARFD("rec_terms", "0", CVAR_NOTFROMSERVER,
-	"The terms version accepted in data/consent.txt, set by the menu at boot and on acceptance. Not saved; a server may not set it.");
+//-1 until the menu publishes it, so a launch without the menu still reads consent.txt (Rec_TermsReport).
+static cvar_t rcpt_terms = CVARFD("rec_terms", "-1", CVAR_NOTFROMSERVER|CVAR_NOSAVE,
+	"The terms version accepted in data/consent.txt, set by the menu at boot and on acceptance; -1 before it has. Not saved; a server may not set it.");
 
 #ifdef WEBCLIENT
 #define HID_HTTP_HEAD 1024

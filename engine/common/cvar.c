@@ -565,6 +565,9 @@ void Cvar_LockDefaults_f(void)
 		{
 			if (cmd->flags & (CVAR_NOSET | CVAR_CHEAT))
 				continue;
+			//ftesurf (P1101): a server may not re-default what it may not set (see Cvar_Reset_f)
+			if ((cmd->flags & CVAR_NOTFROMSERVER) && Cmd_IsInsecure())
+				continue;
 
 			if (strcmp(cmd->string, cmd->defaultstr))
 			{
@@ -786,6 +789,8 @@ void Cvar_Reset_f (void)
 				continue;
 			if (cmd->flags & CVAR_NORESET)
 				continue;
+			if ((cmd->flags & CVAR_NOTFROMSERVER) && Cmd_IsInsecure())
+				continue;	//ftesurf (P1101): a server may not reset what it may not set
 
 			// reset cvar to default only if its okay to do so
 			if (cmd->defaultstr)

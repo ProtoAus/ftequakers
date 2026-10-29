@@ -4392,6 +4392,15 @@ static void Cmd_set_f(void)
 		forceflags |= 0;
 	}
 
+	//ftesurf (P1101): refused before Cvar_Get2, which would first merge a server's `u`/`s` flag in
+	{
+		cvar_t *was = Cvar_FindVar(name);
+		if (was && (was->flags & CVAR_NOTFROMSERVER) && Cmd_IsInsecure())
+		{
+			Con_Printf ("Server tried setting %s cvar\n", was->name);
+			return;
+		}
+	}
 	var = Cvar_Get2 (name, text, CVAR_TEAMPLAYTAINT|forceflags, desc, "Custom variables");
 
 	mark = If_Token_GetMark();
