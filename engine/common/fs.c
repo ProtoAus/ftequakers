@@ -11400,17 +11400,12 @@ void FS_AutoUnmountStale(void)
 	//ftesurf (P186): last, so SPF_HARVEST is computed from the set that survived the drop.
 	FS_Cache_BeginMap();
 }
-//ftesurf (P1102): a data/map* table, read only from the gamedir's own loose files -- the write
-//gamedir, then the install's when a home dir is in use -- never a package, downloads/ or a
-//server's pure path, any of which a server can make hold one.
+//ftesurf (P1102): a data/map* table, read only from the gamedir's own loose files -- FS_GAMEONLY
+//tries the home dir, then the install's -- never a package, downloads/ or a server's pure path,
+//any of which a server can make hold one.
 vfsfile_t *FS_OpenTableVFS(const char *name)
 {
-	char path[MAX_OSPATH];
-	vfsfile_t *f = FS_OpenVFS(name, "rb", FS_GAMEONLY);
-	if (!f && com_homepathenabled && *gamedirfile
-	    && Q_snprintfz(path, sizeof(path), "%s%s/%s", com_gamepath, gamedirfile, name) < (int)sizeof(path))
-		f = FS_OpenVFS(path, "rb", FS_SYSTEM);
-	return f;
+	return FS_OpenVFS(name, "rb", FS_GAMEONLY);
 }
 static char *FS_LoadTable(const char *name)
 {
@@ -11446,6 +11441,8 @@ static void FS_MapDepsStamp(const char *file, char out[15])
 	out[0] = 0;
 	for (n = 0; file && *file && n < 40; n++)
 	{
+		if (*file == '\n' || (file[0] == '\r' && file[1] == '\n'))
+			break;	//P1102: a blank line ends the search, as fgets ends the menu's Mmm_Stamp
 		if (!strncmp(file, "# stamp ", 8))
 		{
 			for (i = 0; i < 14 && file[8+i] >= '0' && file[8+i] <= '9'; i++)
