@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1120 — retain effective boost-enable lineage (QC)
+
+**Problem:** An accepted push Enable could outlive its source admission; later
+actual pushes had no retained cause to check. Queued/active I/O was insufficient.
+
+**Change:** Reuse existing cause slots for actual off->on push enables. Preserve
+same-value inputs. Bind that cause before touch outputs and resolve its source
+at the actual body/carrier write through the unchanged bank policy. One-shots
+require an effective nonzero impulse or real ground clear, not rejected-impulse
+bookkeeping (nor nonzero final velocity). Current and
+world sources remain exempt, including a different CURRENT clean author. No
+new capture, flag, format, tier rule, native pin or Build change.
+
+**Verified:** Fifteen acting native-QC output/input/push units; rejected-candidate
+witness/fixed physical effects/input counts/identities exactly match; only its two
+no-value exclusions disappear. Original policy-body/wrapper equivalence checked.
+Only bank notifications intercepted; not native geometry/contact/cashout or
+finished-rank acceptance. Initial reviews BLOCKED pre-clamp false positive;
+never published/deployed. Rounded output, wrong one-shot-origin prediction and
+native-change guard retained; observations corrected, no owner binary restore.
+Redesigned full isolated SS/menu0warnings, two unchanged CSF333 warnings/zeroNEW;
+reader949/0, identical504REC/167pairedVIEW unchanged faults. Re-review/delivery
+pending. This
+closes only direct enable-state delivery, NOT all config/phase or
+transitive logical/world accounting.
+
 ## Patch 1118 — validate one saved-state snapshot before placement (QC)
 
 **Problem:** Normal load placed the selected body before the full state reader
@@ -36,7 +62,7 @@ empty status7/healthy12 at29Oct11:28:10Z; noPiForce. Existing protected byte
 counts16198/142Windows,34737Pi unchanged; backend launchers/unit unchanged.
 Fresh client at11:31:51Z downloads exactCS and draws9cols/type14, noQCerror,
 exit0. Screenshot inspected: visible board, nozone/time rows, terms unaccepted;
-not ranked/zone/HID/consent/world-visual or load-feel acceptance. No owner process
+not ranked/zone/HID/consent/world-visual or load-feel acceptance. No owner Windows client
 signal, native/backend/schema/threshold, Build or release deployment. Exact
 source/artifacts/predecessor/prior-prev and proof privately retained; no rebuild
 for this documentation. Public provenance/limits: tools/p1118-claim.md.
