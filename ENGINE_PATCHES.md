@@ -29,8 +29,17 @@ structurally checked without inventing matching recordings. Initial fixture/
 compiler/grader failures retained, not relabelled. General writer/compiler audit
 remains owner-deferred; broader viewing/parked replay is separate, not complete.
 
-**Delivery:** Pending inspected feature commit and normal dual-Windows/Pi progs
-promotion. No native/backend/schema/threshold, Build or release action claimed.
+**Delivery:** RuntimeQC f6bfdb9bc98f and this log e54355342eb4 pushed by exactSHA.
+Clean normal build: bothWindows threeVM/LNO and predecessors hash-verified; Pi
+QWc537e5e5/CS3cca1ed6 plus.prev, all12once-restarted fresh/same-native actors,
+empty status7/healthy12 at29Oct11:28:10Z; noPiForce. Existing protected byte
+counts16198/142Windows,34737Pi unchanged; backend launchers/unit unchanged.
+Fresh client at11:31:51Z downloads exactCS and draws9cols/type14, noQCerror,
+exit0. Screenshot inspected: visible board, nozone/time rows, terms unaccepted;
+not ranked/zone/HID/consent/world-visual or load-feel acceptance. No owner process
+signal, native/backend/schema/threshold, Build or release deployment. Exact
+source/artifacts/predecessor/prior-prev and proof privately retained; no rebuild
+for this documentation. Public provenance/limits: tools/p1118-claim.md.
 
 ## Patch 1114 -- Map and file downloads run on a download thread (client, http)
 
