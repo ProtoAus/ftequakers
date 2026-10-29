@@ -19,8 +19,19 @@ world replacement, fresh3x, neutral/normalized inputs and base0 no-value stay cl
 Not real socket/movement/EndFrame grant/held-save/rank or whole-bank acceptance.
 Full NoDeploy SS/menu0warnings/same2oldCSF333/zeroNEW; reader949/0, fresh504REC/
 167pairedVIEW identical bytes/305faultyREC/7faultyVIEW, NOT fault-free. Clean-commit
-independent reviews/delivery pending. See tools/p1121-claim.md; broader body/world/
-config/phase/multi-source bank OPEN.
+independent reviews BOTHclear. PublishedQC1c48565df323/ledger013a435f64d2, normal
+build plus BOTHWindows6DAT/LNO+.prev and Pi exactQW172a66da8aa1/CSfa9bb6d39634
+verified2026-10-29 15:34:19UTC;12freshsame-native actors/healthy12, unchanged Pi
+config/native/backend. PiForce announced/preapproved for2connectedclients. Same
+CS/MENU/native as P1120 live draw; reuse acceptance, no redundant GUI run or new
+rank/feel claim. Active-runtime data NOT an all-bytes-unchanged pass: primary16
+cache/friends/config differences preserved, Pi2temporarypaths absent/1REC changed
+beforeupload, no completedpath missing. Strict guards/failures retained, not
+relabeled; exact temp finalization/config writer unproved. No playerdata restore/
+delete/repair restart. Immutable original/.prev rollback retained;59owned
+filesZIPverified,9disposable files/oneNoDeploy root retired,50fileminimalrig retained.
+See tools/p1121-claim.md; broader body/world/config/phase/multi-source bank OPEN.
+No native/backend/Build/release action. Human movement/status/ranking pending.
 
 ## Patch 1120 — retain effective boost-enable lineage (QC)
 
