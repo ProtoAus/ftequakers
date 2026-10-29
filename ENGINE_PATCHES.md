@@ -24,10 +24,30 @@ suite passes 945 checks; the same-byte corpus retains its per-file fault lists.
 Incremental baseline/candidate native builds produce no warnings; LSP has only
 pre-existing warnings outside the change.
 
-**Limits:** Dedicated Windows verifier qualified only. The full native entrypoint
-first hit an empty static dependency cache, then missing system Opus/Speex headers;
-those failures are retained, not repaired through unrelated source edits. No full
-client/plugin qualification, fleet deployment, Linux build or release is claimed.
+**Initial publication limits:** At source commit85b1d3838 only the dedicated
+Windows target was qualified. The full entrypoint first hit an empty static
+cache, then missing system Opus/Speex headers. Those failures remain retained.
+
+**29 October qualification/delivery follow-up (runtime source still85b1d3838):**
+The documented isolated `makelibs` route repaired the prerequisites without
+changing shared tools or unrelated source; the normal full Windows build passed.
+All10 native destinations/.prev predecessors and17 protected progs/menu/config
+files verified at2026-10-29T07:21:39Z. Actual installed server/HL2 module paths
+pass58 controls. No QC/menu/config/player-data, Build decision or release change.
+Client51771d77, server626b43d6, HL25f229e3c; full hashes/provenance are recorded
+in FTESurf's tools/p1103-claim.md and private deployment evidence.
+
+ARM dedicated/HL2 builds and58 clock controls match Windows; all60 full-fixture
+physics rows match with acting prop/wrapped-hull controls. An initial minimal
+manifest/config arm mismatched10 mover rows and remains excluded; using the
+established full fixture restores parity without weakening the comparator.
+Reader0e420a5e passes949 checks, with no corpus fault increases on the same bytes.
+ARM lobby/backend promotion is NOT done: the older public pin2 compatibility
+fixture currently HOLDs on the same physents under both predecessor and candidate
+in this context. Recover a qualified compatible legacy fixture/acting PASS before
+promotion; no waiver, evidence rewrite, unrelated-code fix or general held/parked
+replay support is claimed. This follow-up changes documentation only, not the
+already-qualified runtime source/tag/artifact identities.
 
 ## Patch 1102 -- The map tables are read only from the gamedir's own loose files (client, fs)
 
