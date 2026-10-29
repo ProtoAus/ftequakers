@@ -42,12 +42,29 @@ physics rows match with acting prop/wrapped-hull controls. An initial minimal
 manifest/config arm mismatched10 mover rows and remains excluded; using the
 established full fixture restores parity without weakening the comparator.
 Reader0e420a5e passes949 checks, with no corpus fault increases on the same bytes.
-ARM lobby/backend promotion is NOT done: the older public pin2 compatibility
-fixture currently HOLDs on the same physents under both predecessor and candidate
-in this context. Recover a qualified compatible legacy fixture/acting PASS before
-promotion; no waiver, evidence rewrite, unrelated-code fix or general held/parked
-replay support is claimed. This follow-up changes documentation only, not the
-already-qualified runtime source/tag/artifact identities.
+The inherited public pin2 HOLD was isolated to its world profile: changing ONLY
+current captured QW to the qualified archived program restores4418tick/4418row
+PASS on both Windows natives. ARM predecessor/candidate also pass pin2 and the
+documented P813 pin7 replacement9194ticks/9192rows. Original HOLDs remain failed;
+this declares a historical world, not current-QW or pin1 compatibility. No old QW
+was deployed and no recording/gate/product code was changed for qualification.
+
+ARM native-only deployment is now verified2026-10-29T09:05:36Z: the exact server
+4a085b77/HL22043eeb2 pair runs in all12fresh actors with actual plugin mapped-inode
+proof, positive empty status7 boundaries including spectators and one ordinary
+restart each. All34029 pre-existing protected files/configs unchanged;6 new files
+preserved. Initial postflight wrapper API mismatch remains failed/retained;
+read-only recovery proves the original12actors without repeated swap/restart.
+All12live version replies match, and two distinct early closing-clock refusals
+act at09:13:16Z. A first loose-file hash visibility failure remains retained;
+source-reviewed fs_flush makes the two exact temporary probes visible, with
+verified file removal/cache refresh afterwards, no remount/restart/cvar change.
+
+The active plain-API backend has no native dependency pins: generation, manifest,
+launchers/unit and health stayed unchanged. No backend handoff/schema/threshold,
+AI, QC/menu/config, Build or release action. Exact rollback/predecessors retained;
+sweep lock released, no maintenance gate. General held/parked replay remains OPEN.
+These follow-ups change documentation only, not qualified source/tag/artifacts.
 
 ## Patch 1102 -- The map tables are read only from the gamedir's own loose files (client, fs)
 
