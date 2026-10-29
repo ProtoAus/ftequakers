@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1125 — retain gravity activation through an owed exit reset
+
+**Problem:** Gravity activation and its touch-owned delayed reset outlive their
+admissions without a value-use check; volume re-authoring is not entry identity.
+
+**Change:** QC-only effective activation snapshot before reentrant outputs,
+normalized profile comparison after outputs, dedicated three VM-only body reset
+cause fields and matching existing ownership clears. Existing0=1/physics/persist/
+filter/order and bank policy unchanged. No capture/format/flag/tier/native pin,
+backend/Build/release change; full body/logical/config/multisource bank still open.
+
+**Verified:** Same14 paired actual-QC input/touch/frame units, actual values/IDs
+identical; only3entry/7final existing ancestry changes. Currentforeign/world/
+disabled/0-vs1/reentrant/no-value controls act. Pending reset keeps entry cause
+through first-frame and volume re-authoring; same-value entry/later-value reset
+priced only at reset. Normalization by existing C source inspection, not measured
+native move. FullNoDeploySS/menu0/2oldCSF333/zeroNEW; teleport22regression pass.
+Reader949/0; same527REC167VIEW whole paths/bytes/diagnostics328faultyREC7faultyVIEW,
+zero introduced/notfaultfree. Spawn/start metadata clears source-inspected, no
+actual lifecycle/geometry/mover/prediction/finished-rank/human acceptance claim.
+Reviews/deployment pending; see tools/p1125-claim.md.
+
 ## Patch 1124 — retain teleport activation through actual body-value use
 
 **Problem:** Teleport activation could outlive its source admission without a
