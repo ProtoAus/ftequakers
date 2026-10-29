@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1126 — retain reversal/catapult activation through value use
+
+**Problem:** Direct Momentum reversal/catapult activation can outlive admission
+without a check at later velocity/ground/carrier writes.
+
+**Change:** QC-only four actual classnames; freeze before reentrant TouchEntered,
+pass tuple to the shared writer's only two callers, compare actual own values
+before original RecWarp. No new VM field/common policy/trajectory/threshold/
+repeat/order/capture/format/flag/tier/native pin/backend/Build/release change.
+One activation contributor, not full body/config/logical/multisource closure.
+
+**Verified:** Same23 paired actual-QC I/O/helper/touch units, all actual values/IDs
+identical, only12 intended existing ancestry changes. Currentforeign/world/
+no-value/rejection/onlyCheck/callback/throttled controls act. Controlled deadline
+is NOTelapsed-clock proof. Original22's unsupported guessed setter exposed a
+wrong fixture expectation; failure preserved, candidate source unchanged. Supported
+post-output carrier-clear counterpart added, parent parked/restored ONLYowned
+source for23baseline, no input implementation/evidence waiver. FullNoDeploy
+SS/menu0/2oldCSF333/zeroNEW; gravity14/reader949-0; same527REC167VIEW wholepaths/
+bytes/diagnostics328faultyREC7faultyVIEW/zero introduced, NOTfaultfree. No authored
+BSP/native mover/prediction/finishedrecord/rank/human claim. Reviews/deployment
+pending; see tools/p1126-claim.md.
+
 ## Patch 1125 — retain gravity activation through an owed exit reset
 
 **Problem:** Gravity activation and its touch-owned delayed reset outlive their
