@@ -41,6 +41,35 @@ signal, native/backend/schema/threshold, Build or release deployment. Exact
 source/artifacts/predecessor/prior-prev and proof privately retained; no rebuild
 for this documentation. Public provenance/limits: tools/p1118-claim.md.
 
+## Patch 1116 -- A finish's journal hash and upload leave the main thread (client)
+
+Every lobby finish with journal uploads on hashed the whole input journal on the frame the run
+ended, and again when the server asked for it, then posted it with frame polls. Measured with
+tools/p1116finish.py (FTESurf repo; a local lobby, a 3.2 MB journal, developer 0): two command
+frames of 20.0-20.6 ms and 16.8-16.9 ms per finish; fixed, both are gone (the largest command
+frame left is 9.5 ms: the journal write and two signatures). The HTTPS handshake also left the
+main thread (P1114 measured that at 62.6 ms in one frame for a download).
+
+- The journal keeps a SHA-256 state fed every 16 KB as it grows (IN_Journal_Raw), so
+  in_journal_end hashes only the tail: 5.9 ms -> 0.0 ms at 1.6 MB. Fed and freed on the main
+  thread only. It falls back to a whole-buffer hash at close (the old cost) when a journal saw
+  cl_threadedphysics (its thread appends with no lock against the main thread's: review 2), when
+  the synth mark lands in hashed bytes or comes from another thread, and for the failed-write
+  path's second digest.
+- The file is written to the digest's length and nothing is appended after `end`, so it cannot
+  outrun its receipt; COM_WriteFile now fails a short write (disk full), for every caller.
+- rec_ul_http reads and hashes the armed journal on a loader thread, signs it back on the main
+  thread and posts it on a download thread (HTTP_CL_Thread; the reply goes to a VFSPIPE, as
+  image downloads do). One read at a time (review 1: a cancel did not stop a queued read, so a
+  server's arm/request/disarm loop could queue unbounded 64 MiB reads); a cancel bumps a
+  generation and the late job is dropped.
+- Developer prints: in_journal_end's digest/write ms, rec_sign's ms, rec_ul_send's read/hash
+  (loader thread)/sign ms, P1114's poll totals for /api/hid.
+- Checked: each receipt's signed hid digest equals sha256 of the staged file and of the bytes the
+  receiver got, with threaded physics off (running hash) and on (6.2 ms whole-buffer), and on a
+  64-byte-step build (rehash path); a build dropping one byte from the running hash fails it.
+  Three review rounds; the last found nothing new.
+
 ## Patch 1114 -- Map and file downloads run on a download thread (client, http)
 
 A download cl_parse.c starts with HTTP_CL_Get (a map from the menu's Download button, a map or

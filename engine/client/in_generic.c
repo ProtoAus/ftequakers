@@ -1054,6 +1054,15 @@ static cvar_t		*in_jrn_rcv[MAX_JRN_TRACKEDCVARS];	/*Patch 312: render AND input*
 static int			in_jrn_rcvmod[MAX_JRN_TRACKEDCVARS];
 static int			in_jrn_rcvcount;
 static qboolean		in_jrn_full, in_jrn_synth;
+/*Patch 1116: SHA-256 of in_jrn_buf[0, in_jrn_hashed), fed as the journal grows, so its
+  close hashes a tail instead of the whole run on the frame the run ends (5.9 ms for
+  1.6 MB, measured). NULL, or in_jrn_rehash, means hash the whole buffer at close.
+  Fed and freed on the main thread only. cl_threadedphysics appends from its own thread with
+  no lock against this one (review 2), so a journal that saw it is hashed whole at close.*/
+static void			*in_jrn_hctx;
+static size_t		in_jrn_hashed;
+static qboolean		in_jrn_rehash;	//a byte below in_jrn_hashed changed (the synth mark)
+#define IN_JRN_HASHSTEP 16384
 static float		in_jrn_lastabs[MAXPOINTERS][2];
 static qboolean		in_jrn_haveabs[MAXPOINTERS];
 
@@ -1076,6 +1085,8 @@ static void IN_Journal_Raw(const char *s)
 
 	if (!in_jrn_buf)
 		return;
+	if (runningindepphys)
+		in_jrn_rehash = true;
 
 	if (in_jrn_len + l > in_jrn_cap)
 	{
@@ -1092,6 +1103,12 @@ static void IN_Journal_Raw(const char *s)
 
 	memcpy(in_jrn_buf+in_jrn_len, s, l);
 	in_jrn_len += l;
+	if (in_jrn_hctx && !in_jrn_rehash && in_jrn_len >= in_jrn_hashed + IN_JRN_HASHSTEP && Sys_IsMainThread())
+	{
+		size_t end = in_jrn_len;
+		hash_sha2_256.process(in_jrn_hctx, in_jrn_buf + in_jrn_hashed, end - in_jrn_hashed);
+		in_jrn_hashed = end;
+	}
 }
 
 /*Every line goes through here so nothing can forget the delta.  Clamped at 0:
@@ -1201,15 +1218,29 @@ static qbyte		in_jrn_digest[32];
 static size_t		in_jrn_digestlen;
 static qboolean		in_jrn_digestkept;
 static qboolean		in_jrn_digestok;
+static double		in_jrn_digestms;	//Patch 1116: its main-thread cost, for the end prints
 
 static void IN_Journal_Digest(qboolean kept)
 {
+	double t0 = Sys_DoubleTime();
+	size_t end = in_jrn_len;
 	in_jrn_digestok = false;
-	if (!in_jrn_buf || !in_jrn_len)
+	in_jrn_digestms = 0;
+	if (!in_jrn_buf || !end)
 		return;
-	CalcHash(&hash_sha2_256, in_jrn_digest, sizeof(in_jrn_digest),
-			 (const qbyte*)in_jrn_buf, in_jrn_len);
-	in_jrn_digestlen = in_jrn_len;
+	if (in_jrn_hctx && !in_jrn_rehash && end >= in_jrn_hashed)
+	{	//the state is spent here; a second digest (the failed-write path) hashes the whole buffer
+		hash_sha2_256.process(in_jrn_hctx, in_jrn_buf + in_jrn_hashed, end - in_jrn_hashed);
+		hash_sha2_256.terminate(in_jrn_digest, in_jrn_hctx);
+	}
+	else
+		CalcHash(&hash_sha2_256, in_jrn_digest, sizeof(in_jrn_digest),
+				 (const qbyte*)in_jrn_buf, end);
+	if (in_jrn_hctx)
+		BZ_Free(in_jrn_hctx);
+	in_jrn_hctx = NULL;
+	in_jrn_digestms = (Sys_DoubleTime() - t0) * 1000;
+	in_jrn_digestlen = end;
 	in_jrn_digestkept = kept;
 	in_jrn_digestok = true;
 }
@@ -1232,6 +1263,11 @@ void IN_Journal_Drop(void)
 		BZ_Free(in_jrn_buf);
 	in_jrn_buf = NULL;
 	in_jrn_len = in_jrn_cap = 0;
+	if (in_jrn_hctx)
+		BZ_Free(in_jrn_hctx);
+	in_jrn_hctx = NULL;
+	in_jrn_hashed = 0;
+	in_jrn_rehash = false;
 	in_jrn_full = in_jrn_synth = false;
 	in_jrn_events = in_jrn_frames = in_jrn_hidden = 0;
 	memset(in_jrn_haveabs, 0, sizeof(in_jrn_haveabs));
@@ -2104,6 +2140,8 @@ static void IN_JournalBegin_f(void)
 		in_jrn_cap = in_jrn_max + 1024;
 	in_jrn_buf = BZ_Malloc(in_jrn_cap);
 	in_jrn_len = 0;
+	in_jrn_hctx = BZ_Malloc(hash_sha2_256.contextsize);
+	hash_sha2_256.init(in_jrn_hctx);
 	in_jrn_base = in_jrn_last = Sys_DoubleTime();
 	in_jrn_dropreported = in_jrn_dropbase = in_jrn_dropped;
 	/*Patch 306: clamped, so a backend that never counts leaves a 0 baseline and the
@@ -2245,7 +2283,8 @@ static void IN_JournalEnd_f(void)
 	const char *name, *fallback;
 	char namelocal[MAX_QPATH];	/*Patch 490: a copy that survives COM_WriteFile*/
 	char tail[192];	/*Patch 468: ten trailer fields*/
-	double now;
+	double now, writems;
+	size_t wlen;
 	qboolean discard;	/*Patch 417: decided here, acted on after the trailer*/
 
 	if (!in_jrn_buf)
@@ -2327,6 +2366,7 @@ static void IN_JournalEnd_f(void)
 	in_jrn_full = false;
 	in_jrn_max = in_jrn_cap;
 	IN_Journal_Line(now, "end", tail);
+	in_jrn_full = true;	//Patch 1116: a threaded-physics line after `end` would make the file outrun its digest
 
 	/*Deliberately NOT Cmd_IsInsecure()-guarded, unlike condump: CSQC has to be able
 	  to call this and localcmd is RESTRICT_INSECURE by construction, so an exec-level
@@ -2339,9 +2379,9 @@ static void IN_JournalEnd_f(void)
 	  difference between the two, and it is recorded rather than implied.*/
 	if (discard)
 	{
-		Con_DPrintf("in_journal_end: discarded, %u events / %u frames\n",
-			in_jrn_events, in_jrn_frames);
 		IN_Journal_Digest(false);
+		Con_DPrintf("in_journal_end: discarded, %u events / %u frames, %uk, digest %.1f ms\n",
+			in_jrn_events, in_jrn_frames, (unsigned)(in_jrn_len/1024), in_jrn_digestms);
 		IN_Journal_Drop();
 		return;
 	}
@@ -2385,15 +2425,19 @@ static void IN_JournalEnd_f(void)
 	  know which file was lost.*/
 	Q_snprintfz(namelocal, sizeof(namelocal), "%s", name);
 	name = namelocal;
-	if (!COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, in_jrn_len))
+	writems = Sys_DoubleTime();
+	wlen = in_jrn_digestok ? in_jrn_digestlen : in_jrn_len;	//Patch 1116: the signed bytes, exactly
+	if (!COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, wlen))	//false on a short write too (P1116)
 	{
 		/*A `kept 1` digest for a file that is not there would be the one kind
 		  of commitment nobody can ever check and everybody would believe.*/
 		Con_Printf(CON_WARNING"in_journal_end: %s was not written\n", name);
 		IN_Journal_Digest(false);
 	}
-	Con_DPrintf("in_journal_end: %s, %u events / %u frames / %u dropped / %u hidden, %uk\n",
-		name, in_jrn_events, in_jrn_frames, in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden, (unsigned)(in_jrn_len/1024));
+	writems = (Sys_DoubleTime() - writems) * 1000;
+	Con_DPrintf("in_journal_end: %s, %u events / %u frames / %u dropped / %u hidden, %uk, digest %.1f ms, write %.1f ms\n",
+		name, in_jrn_events, in_jrn_frames, in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden, (unsigned)(in_jrn_len/1024),
+		in_jrn_digestms, writems);
 	IN_Journal_Drop();
 }
 
@@ -2451,7 +2495,13 @@ void IN_Journal_MarkSynth(const char *source)
 	{
 		char *at = strstr(in_jrn_buf, "\nsynth 0\n");
 		if (at)
+		{
+			//Patch 1116: flagged before the write. Off the main thread a hash step may be
+			//reading these bytes now (review 2), so a plugin's mark always rehashes.
+			if (!Sys_IsMainThread() || (size_t)(at + 7 - in_jrn_buf) < in_jrn_hashed)
+				in_jrn_rehash = true;
 			at[7] = '1';
+		}
 	}
 	in_jrn_synth = true;
 

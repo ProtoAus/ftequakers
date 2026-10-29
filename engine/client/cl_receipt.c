@@ -254,6 +254,7 @@ static void CL_Receipt_Sign_f(void)
 	size_t hidlen = 0;
 	const char *nonce;
 	int ticks, i;
+	double t0;
 
 	if (Cmd_Argc() < 4)
 	{
@@ -345,6 +346,7 @@ static void CL_Receipt_Sign_f(void)
 	  its digest onto every run after it.
 	*/
 	havehid = atoi(Cmd_Argv(4)) ? IN_Journal_LastDigest(hid, &hidlen, &kept) : false;
+	t0 = Sys_DoubleTime();
 	haveview = CL_Receipt_ViewDigest(Cmd_Argv(3), view);
 
 	CL_Receipt_Hex(hidhex, sizeof(hidhex), hid, 32, havehid);
@@ -391,7 +393,8 @@ static void CL_Receipt_Sign_f(void)
 	CL_SendClientCommand(true, "rec_rcpt %s %i %s %u %i %s %s \"%s\"",
 						 pubhex, ticks, hidhex, (unsigned)hidlen, kept ? 1 : 0,
 						 viewhex, sighex, svname);
-	Con_DPrintf("rec_sign: %s on %s hid %s view %s\n", nonce, svname, hidhex, viewhex);
+	Con_DPrintf("rec_sign: %s on %s hid %s view %s, %.1f ms\n", nonce, svname, hidhex, viewhex,
+		(Sys_DoubleTime() - t0) * 1000);	//Patch 1116: the view digest and the signature
 }
 
 /*
@@ -901,11 +904,32 @@ static cvar_t rcpt_terms = CVARFD("rec_terms", "-1", CVAR_NOTFROMSERVER|CVAR_NOS
 static struct dl_download *rcpt_http;
 static double rcpt_http_until;
 static char rcpt_http_reply[128];
+//Patch 1116: the journal is read and hashed on a loader thread and signed back on this one;
+//the POST runs on a download thread. A cancel bumps the generation and the job is dropped.
+struct rcpt_job_s
+{
+	unsigned int gen;
+	char path[MAX_OSPATH], nonce[33], map[65], runid[97], url[128];
+	char *body;
+	qofs_t size;
+	qbyte digest[32];
+	double readms, hashms;
+	qboolean ok;
+};
+static unsigned int rcpt_http_gen;
+static qboolean rcpt_http_pending;
+static int rcpt_http_jobs;		//queued or reading, cancelled or not: one at a time (review 1: a cancel does not stop a read)
 static cvar_t rcpt_http_test = CVARFD("rec_hid_testurl", "", CVAR_NOTFROMSERVER,
 	"Local diagnostic only: a http://127.0.0.1:PORT/api/hid journal receiver. Empty uses the official HTTPS collector. Never accepts a remote URL.");
 
 static void CL_Receipt_HTTPCancel(void)
 {
+	if (rcpt_http_pending)
+	{
+		rcpt_http_pending = false;
+		rcpt_http_gen++;
+		Con_Printf("rec_ul_send: journal HTTP cancelled\n");
+	}
 	if (rcpt_http)
 	{
 		struct dl_download *dl = rcpt_http;
@@ -947,16 +971,103 @@ static qboolean CL_Receipt_HTTPName(const char *s, size_t maxlen, qboolean map)
 	return n && n <= maxlen;
 }
 
-static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const char *map, const char *runid)
+static void CL_Receipt_HTTPStart(void *ctx, void *data, size_t a, size_t b)
 {
-	vfsfile_t *file;
-	qofs_t size;
-	char *body, statement[512], pubhex[65], sighex[129], hex[65];
-	const char *url = "https://play.proto.bar/api/hid";
-	qbyte digest[32], signature[64];
+	struct rcpt_job_s *job = ctx;
+	char statement[512], pubhex[65], sighex[129], hex[65];
+	qbyte signature[64];
+	double t0 = Sys_DoubleTime();
 	size_t n;
 
-	if (rcpt_http || !CL_Receipt_HTTPName(map, 64, true) || !CL_Receipt_HTTPName(runid, 96, false) || strlen(nonce) != 32)
+	rcpt_http_jobs--;
+	if (job->gen != rcpt_http_gen)
+	{	//cancelled while it was being read: the cancel has already said so
+		BZ_Free(job->body);
+		BZ_Free(job);
+		return;
+	}
+	rcpt_http_pending = false;
+	if (!job->ok || !rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || !CL_Receipt_Key())
+	{
+		Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
+		BZ_Free(job->body);
+		BZ_Free(job);
+		return;
+	}
+	CL_Receipt_Hex(hex, sizeof(hex), job->digest, sizeof(job->digest), true);
+	Q_snprintfz(statement, sizeof(statement), "FTESURF-HID 1\nmap %s\nrunid %s\nnonce %s\nhid %s %u\n",
+		job->map, job->runid, job->nonce, hex, (unsigned)job->size);
+	Ed25519_Sign(signature, (const qbyte*)statement, strlen(statement), rcpt_sk);
+	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
+	CL_Receipt_Hex(sighex, sizeof(sighex), signature, sizeof(signature), true);
+	Q_snprintfz(job->body, HID_HTTP_HEAD, "%spub %s\nsig %s\n", statement, pubhex, sighex);
+	n = strlen(job->body);
+	memset(job->body + n, ' ', HID_HTTP_HEAD - n);
+	job->body[HID_HTTP_HEAD - 1] = '\n';
+	rcpt_http = HTTP_CL_Get(job->url, NULL, CL_Receipt_HTTPDone);
+	if (!rcpt_http)
+	{
+		Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
+		BZ_Free(job->body);
+		BZ_Free(job);
+		return;
+	}
+	rcpt_http->isquery = true;
+	rcpt_http->sizelimit = 512;
+	rcpt_http->headerlimit = 8192;
+	rcpt_http->identityonly = true;
+	/*The HTTP client's existing redirect guard rejects the FIRST redirect.
+	  A collector may never forward this body to another host or plaintext.*/
+	rcpt_http->redircount = 11;
+	Q_strncpyz(rcpt_http->postmimetype, "application/octet-stream", sizeof(rcpt_http->postmimetype));
+	rcpt_http->postdata = job->body;
+	rcpt_http->postlen = HID_HTTP_HEAD + job->size;
+	rcpt_http->file = VFSPIPE_Open(1, false);	//the reply, so it can be threaded (HTTPDone reads it)
+	rcpt_http_until = Sys_DoubleTime() + 300;
+	Q_snprintfz(rcpt_http_reply, sizeof(rcpt_http_reply), "stored %s %u\n", hex, (unsigned)job->size);
+	Con_Printf("rec_ul_send: journal HTTP started (%u bytes)\n", (unsigned)job->size);
+	Con_DPrintf("rec_ul_send: read %.1f ms, hash %.1f ms on a loader thread, sign %.1f ms\n",
+		job->readms, job->hashms, (Sys_DoubleTime() - t0) * 1000);
+	BZ_Free(job);
+	HTTP_CL_Thread(rcpt_http);	//frame-polled if every download thread is busy
+}
+
+static void CL_Receipt_HTTPRead(void *ctx, void *data, size_t a, size_t b)
+{
+	struct rcpt_job_s *job = ctx;
+	double t0 = Sys_DoubleTime(), t1;
+	vfsfile_t *file = FS_OpenVFS(job->path, "rb", FS_GAME);
+
+	if (file)
+	{
+		job->size = VFS_GETLEN(file);
+		/*One bounded owned buffer, transferred to HTTP (not copied by Put).
+		  The HTTP transport has its own bounded send buffer; no journal-sized
+		  allocation or traffic touches the game netchan.*/
+		if (job->size > 0 && job->size <= HID_HTTP_MAX)
+		{
+			job->body = BZ_Malloc(HID_HTTP_HEAD + job->size);
+			if (VFS_READ(file, job->body + HID_HTTP_HEAD, job->size) == job->size)
+			{
+				t1 = Sys_DoubleTime();
+				CalcHash(&hash_sha2_256, job->digest, sizeof(job->digest), (const qbyte*)job->body + HID_HTTP_HEAD, job->size);
+				job->readms = (t1 - t0) * 1000;
+				job->hashms = (Sys_DoubleTime() - t1) * 1000;
+				job->ok = true;
+			}
+		}
+		VFS_CLOSE(file);
+	}
+	COM_AddWork(WG_MAIN, CL_Receipt_HTTPStart, job, NULL, 0, 0);
+}
+
+static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const char *map, const char *runid)
+{
+	struct rcpt_job_s *job;
+	const char *url = "https://play.proto.bar/api/hid";
+	size_t n;
+
+	if (rcpt_http || rcpt_http_pending || rcpt_http_jobs || !CL_Receipt_HTTPName(map, 64, true) || !CL_Receipt_HTTPName(runid, 96, false) || strlen(nonce) != 32)
 		return false;
 	for (n = 0; n < 32; n++)
 		if (!((nonce[n] >= '0' && nonce[n] <= '9') || (nonce[n] >= 'a' && nonce[n] <= 'f')))
@@ -968,62 +1079,24 @@ static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const c
 		if (strncmp(rcpt_http_test.string, "http://127.0.0.1:", 17))
 			return false;
 		port = strtoul(rcpt_http_test.string + 17, &end, 10);
-		if (!port || port > 65535 || strcmp(end, "/api/hid"))
+		if (!port || port > 65535 || strcmp(end, "/api/hid") || strlen(rcpt_http_test.string) >= sizeof(job->url))
 			return false;
 		url = rcpt_http_test.string;
 	}
 	if (!CL_Receipt_Key())
 		return false;
-	file = FS_OpenVFS(path, "rb", FS_GAME);
-	if (!file)
-		return false;
-	size = VFS_GETLEN(file);
-	if (size <= 0 || size > HID_HTTP_MAX)
-	{
-		VFS_CLOSE(file);
-		return false;
-	}
-	/*One bounded owned buffer, transferred to HTTP (not copied by Put).
-	  The HTTP transport has its own bounded send buffer; no journal-sized
-	  allocation or traffic touches the game netchan.*/
-	body = BZ_Malloc(HID_HTTP_HEAD + size);
-	if (VFS_READ(file, body + HID_HTTP_HEAD, size) != size)
-	{
-		VFS_CLOSE(file);
-		BZ_Free(body);
-		return false;
-	}
-	VFS_CLOSE(file);
-	CalcHash(&hash_sha2_256, digest, sizeof(digest), (const qbyte*)body + HID_HTTP_HEAD, size);
-	CL_Receipt_Hex(hex, sizeof(hex), digest, sizeof(digest), true);
-	Q_snprintfz(statement, sizeof(statement), "FTESURF-HID 1\nmap %s\nrunid %s\nnonce %s\nhid %s %u\n",
-		map, runid, nonce, hex, (unsigned)size);
-	Ed25519_Sign(signature, (const qbyte*)statement, strlen(statement), rcpt_sk);
-	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
-	CL_Receipt_Hex(sighex, sizeof(sighex), signature, sizeof(signature), true);
-	Q_snprintfz(body, HID_HTTP_HEAD, "%spub %s\nsig %s\n", statement, pubhex, sighex);
-	n = strlen(body);
-	memset(body + n, ' ', HID_HTTP_HEAD - n);
-	body[HID_HTTP_HEAD - 1] = '\n';
-	rcpt_http = HTTP_CL_Get(url, NULL, CL_Receipt_HTTPDone);
-	if (!rcpt_http)
-	{
-		BZ_Free(body);
-		return false;
-	}
-	rcpt_http->isquery = true;
-	rcpt_http->sizelimit = 512;
-	rcpt_http->headerlimit = 8192;
-	rcpt_http->identityonly = true;
-	/*The HTTP client's existing redirect guard rejects the FIRST redirect.
-	  A collector may never forward this body to another host or plaintext.*/
-	rcpt_http->redircount = 11;
-	Q_strncpyz(rcpt_http->postmimetype, "application/octet-stream", sizeof(rcpt_http->postmimetype));
-	rcpt_http->postdata = body;
-	rcpt_http->postlen = HID_HTTP_HEAD + size;
+	job = BZ_Malloc(sizeof(*job));
+	memset(job, 0, sizeof(*job));
+	job->gen = rcpt_http_gen;
+	Q_strncpyz(job->path, path, sizeof(job->path));
+	Q_strncpyz(job->nonce, nonce, sizeof(job->nonce));
+	Q_strncpyz(job->map, map, sizeof(job->map));
+	Q_strncpyz(job->runid, runid, sizeof(job->runid));
+	Q_strncpyz(job->url, url, sizeof(job->url));
+	rcpt_http_pending = true;	//before the queue: with no loader thread it runs inline
+	rcpt_http_jobs++;
 	rcpt_http_until = Sys_DoubleTime() + 300;
-	Q_snprintfz(rcpt_http_reply, sizeof(rcpt_http_reply), "stored %s %u\n", hex, (unsigned)size);
-	Con_Printf("rec_ul_send: journal HTTP started (%u bytes)\n", (unsigned)size);
+	COM_AddWork(WG_LOADER, CL_Receipt_HTTPRead, job, NULL, 0, 0);
 	return true;
 }
 #endif
@@ -1031,7 +1104,7 @@ static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const c
 void CL_Receipt_Think(void)
 {
 #ifdef WEBCLIENT
-	if (rcpt_http && (!rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || Sys_DoubleTime() >= rcpt_http_until))
+	if ((rcpt_http || rcpt_http_pending) && (!rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || Sys_DoubleTime() >= rcpt_http_until))
 		CL_Receipt_HTTPCancel();
 #endif
 }

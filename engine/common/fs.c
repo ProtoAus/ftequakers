@@ -2025,8 +2025,8 @@ qboolean COM_WriteFile (const char *filename, enum fs_relative fsroot, const voi
 	vfs = FS_OpenVFS(filename, "wb", fsroot);
 	if (vfs)
 	{
-		VFS_WRITE(vfs, data, len);
-		success = VFS_CLOSE(vfs);
+		success = VFS_WRITE(vfs, data, len) == len;	//FTESurf Patch 1116: a short write (disk full) is a failure
+		success = VFS_CLOSE(vfs) && success;
 
 		if (fsroot >= FS_GAME)
 			FS_FlushFSHashWritten(filename);
