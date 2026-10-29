@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1121 — retain persistent speed-effect source until actual cap use
+
+**Problem:** ModifySpeed charges its input once, but its persistent multiplier
+was later reused without checking the original admission.
+
+**Change:** QC-only. Dedicated VM-local source slots follow the independently
+assigned scalar; spawn clears both. Keep immediate attribution and the existing
+CURRENT/world policy. At real PlayerPreThink cap use, compute the unchanged result
+first and price only a changed cap. Equal explicit scalar assignment replaces its
+property cause, not already-earned body debt. No callback-slot alias, context
+swap/join, new captured field/format/flag/policy, native pin or Build change.
+
+**Verified:** SAME qualified native/compiler/fixture ten paired public-I/O and
+FULL-PreThink controls ACT. All factors/caps/input counts/source identities match;
+only expired2x gains existing3/8388609/notice1. Current/world, equal independent
+world replacement, fresh3x, neutral/normalized inputs and base0 no-value stay clean.
+Not real socket/movement/EndFrame grant/held-save/rank or whole-bank acceptance.
+Full NoDeploy SS/menu0warnings/same2oldCSF333/zeroNEW; reader949/0, fresh504REC/
+167pairedVIEW identical bytes/305faultyREC/7faultyVIEW, NOT fault-free. Clean-commit
+independent reviews/delivery pending. See tools/p1121-claim.md; broader body/world/
+config/phase/multi-source bank OPEN.
+
 ## Patch 1120 — retain effective boost-enable lineage (QC)
 
 **Problem:** An accepted push Enable could outlive its source admission; later
