@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1118 — validate one saved-state snapshot before placement (QC)
+
+**Problem:** Normal load placed the selected body before the full state reader
+could reject it, leaving the previous settled clean admission on failure. The
+light identity read and full application also reopened the same path separately.
+
+**Change:** Capture complete rows with the existing native byte/row helper, then
+check selected identity and the existing view-clock predicate before any mode,
+recorder, body or run-state mutation. Commit those same caller-owned rows without
+another state-file open. The three-argument retry/resume API prepares/validates
+before commit too. Preserve legacy empty-line and unread-tail grant rules, valid
+KEEP speed, existing recording-failure containment and the shared zone-latch tail.
+No new state/capture format, field, taint/tier policy, native code or native pin.
+
+**Verified:** Acting baseline/subject production-loader seam; five normal-load
+controls preserve valid moving/rest classifications and speed while rejecting bad
+state without moving the old body. Fourteen existing grant/malformed/duplicate/
+unread-tail/upright cases pass through the current deferred FinishFrame helper
+(synthetic empty-I/O phase, not native newmis-drain proof). A prepared-API unit
+mutates the real disk file, independently rejects its new rows, then applies the
+original valid buffer with saved speed and segmented classification. This is not
+a measured normal-entrypoint race/open count or a real ranked-finish acceptance.
+Two independent implementation reviews OK. Fixed full build: server/menu zero
+warnings; two unchanged upstream client F333 property227 warnings, zero NEW.
+Reader949/0; unchanged504REC/167pairedVIEW fault counts, ten current orphan views
+structurally checked without inventing matching recordings. Initial fixture/
+compiler/grader failures retained, not relabelled. General writer/compiler audit
+remains owner-deferred; broader viewing/parked replay is separate, not complete.
+
+**Delivery:** Pending inspected feature commit and normal dual-Windows/Pi progs
+promotion. No native/backend/schema/threshold, Build or release action claimed.
+
 ## Patch 1114 -- Map and file downloads run on a download thread (client, http)
 
 A download cl_parse.c starts with HTTP_CL_Get (a map from the menu's Download button, a map or
